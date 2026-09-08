@@ -1,4 +1,4 @@
-import { useCallback, useId, useMemo, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useMemo, type ReactNode } from 'react'
 import {
   CommandsRegistry,
   type ICommandService,
@@ -134,9 +134,20 @@ export function ContextMenu({
   }, [menuId, contextKeyService, groupFilter, runCommand])
 
   const uid = useId()
-  const { state, onRowEnter, onCancelClose, onEscape } = useMenuNavigation(rows, autoFocusFirst)
+  const hasRows = rows.length > 0
+  const { state, onRowEnter, onCancelClose, onEscape } = useMenuNavigation(
+    rows,
+    autoFocusFirst,
+    hasRows,
+  )
 
-  if (rows.length === 0) return null
+  // An empty menu never opens: report the close so the host drops its state
+  // instead of keeping this null-rendering component mounted forever.
+  useEffect(() => {
+    if (!hasRows) onClose()
+  }, [hasRows, onClose])
+
+  if (!hasRows) return null
 
   return (
     <AnchoredSurface x={anchor.x} y={anchor.y} onClose={onClose} onEscape={onEscape}>

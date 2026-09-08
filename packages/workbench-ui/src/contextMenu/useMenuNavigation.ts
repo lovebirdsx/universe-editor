@@ -44,6 +44,13 @@ export interface MenuNavigation {
 export function useMenuNavigation(
   rows: readonly RowModel[],
   autoFocusFirst: boolean,
+  /**
+   * Master switch for the window-level keyboard listener. Menus that resolved
+   * to zero rows never render, so they must not arm navigation — otherwise the
+   * capture-phase listener stays up (nothing can ever close the menu) and
+   * swallows ArrowUp/ArrowDown from whatever view raised it.
+   */
+  enabled = true,
 ): MenuNavigation {
   // Lazy initializer: `rows` is final on the first render (both flavours resolve
   // synchronously), so the opening highlight lands on the right row without an
@@ -161,6 +168,7 @@ export function useMenuNavigation(
   // capture, so registering here runs first; stopping propagation also keeps the
   // arrow keys away from whatever tree or list the menu was opened from.
   useEffect(() => {
+    if (!enabled) return
     const onKeyDown = (e: KeyboardEvent): void => {
       // Mid-composition Enter commits an IME candidate; it is not ours to take.
       if (e.isComposing || e.altKey || e.ctrlKey || e.metaKey) return
@@ -216,7 +224,7 @@ export function useMenuNavigation(
     }
     window.addEventListener('keydown', onKeyDown, true)
     return () => window.removeEventListener('keydown', onKeyDown, true)
-  }, [cancelClose, collapse, expand])
+  }, [enabled, cancelClose, collapse, expand])
 
   return { state, onRowEnter, onCancelClose: cancelClose, onEscape }
 }

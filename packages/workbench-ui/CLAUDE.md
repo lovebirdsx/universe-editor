@@ -7,7 +7,7 @@ Workbench 风格 React UI 基础设施。**依赖 React，不依赖 Electron**�
 | 模块 | 用途 |
 |---|---|
 | `ContextViewService` | Floating UI 定位 + Portal 渲染的浮层服务 |
-| `ContextMenu` | MenuRegistry 驱动的右键菜单（消费 `MenuId.*` 注册的条目，`args` 透传命令参数）；键盘导航走 window capture + 虚拟焦点；传 `renderIcon` 即为每行渲染定宽图标插槽（不传则无插槽，外观不变）；传 `autoFocusFirst` 即开菜单就高亮首项（只给键盘打开的菜单用，鼠标打开保持无高亮） |
+| `ContextMenu` | MenuRegistry 驱动的右键菜单（消费 `MenuId.*` 注册的条目，`args` 透传命令参数）；键盘导航走 window capture + 虚拟焦点；传 `renderIcon` 即为每行渲染定宽图标插槽（不传则无插槽，外观不变）；传 `autoFocusFirst` 即开菜单就高亮首项（只给键盘打开的菜单用，鼠标打开保持无高亮）。**解析出 0 行 = 菜单不打开**：渲染 null 并立即回拨 `onClose()` 让宿主清掉打开状态——空菜单绝不留存（否则 window capture 的导航监听常驻，会把 ArrowUp/Down 从唤出它的树上吞掉；左右键因 expand/collapse 落空而放行，症状是「上下死、左右活」） |
 | `ListMenu` | **items 驱动**的右键菜单：菜单项在打开时由视图自己算（异步拉来的 transition、按 worktree 禁用的 rename、带快捷键提示的行……），塞不进 MenuRegistry 的静态 `when` 模型时用它。与 `ContextMenu` 共用同一套 `useMenuNavigation` + `MenuRows`，键盘行为/DOM 完全一致，不会各自漂移。item 支持 `hint`（右对齐次要文字）/ `danger` / `disabled`（可见但惰性：变暗、方向键跳过、Enter 与点击均无效）/ `kind: 'submenu'`；选中项会**先关菜单再执行** run |
 | `HoverService` | delay 触发 / keyboard-accessible 的 hover popup |
 | `TooltipProvider` | 全局委托 tooltip：元素挂 `data-tooltip="…"` 即得主题化气泡；普通 `title` 属性也会被接管（悬停期间暂存到 `data-tooltip-native-title` 抑制原生气泡，离开后还原；iframe/webview 除外），editor 在 `main.tsx` 根部挂载 |

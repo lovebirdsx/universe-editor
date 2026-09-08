@@ -539,6 +539,40 @@ describe('ContextMenu submenus', () => {
     })
   })
 
+  describe('empty menu', () => {
+    it('renders nothing, reports the close, and leaves arrow keys alone', () => {
+      const root = asMenuId('test.empty.filtered')
+      track(
+        MenuRegistry.addMenuItem(root, { command: 'hidden.cmd', title: 'Hidden', when: 'nope' }),
+      )
+
+      const onClose = vi.fn()
+      render(
+        <ContextMenu
+          menuId={root}
+          anchor={{ x: 0, y: 0 }}
+          commandService={makeCommandService([])}
+          contextKeyService={makeContextKeyService([])}
+          onClose={onClose}
+        />,
+      )
+
+      expect(screen.queryByRole('menu')).toBeNull()
+      // An empty menu never opens, so the host is told to drop its state right
+      // away instead of keeping a null-rendering component mounted.
+      expect(onClose).toHaveBeenCalled()
+
+      // Regression: the navigation listener used to stay armed on an empty menu
+      // and swallow ArrowUp/ArrowDown at the window capture phase (Left/Right
+      // slipped through), leaving the tree underneath dead to vertical keys.
+      const down = new KeyboardEvent('keydown', { key: 'ArrowDown', cancelable: true })
+      act(() => {
+        window.dispatchEvent(down)
+      })
+      expect(down.defaultPrevented).toBe(false)
+    })
+  })
+
   describe('renderIcon', () => {
     const iconSlots = (): (string | null)[] =>
       Array.from(document.querySelectorAll('[role="menuitem"]')).map(

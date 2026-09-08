@@ -54,6 +54,23 @@ describe('ListMenu', () => {
     expect(screen.queryByRole('menu')).toBeNull()
   })
 
+  it('reports the close and leaves arrow keys alone when empty', () => {
+    const { onClose } = renderMenu([])
+
+    // An empty menu never opens, so the host is told to drop its state right
+    // away instead of keeping a null-rendering component mounted.
+    expect(onClose).toHaveBeenCalled()
+
+    // Regression: the navigation listener used to stay armed on an empty menu
+    // and swallow ArrowUp/ArrowDown at the window capture phase (Left/Right
+    // slipped through), leaving the tree underneath dead to vertical keys.
+    const down = new KeyboardEvent('keydown', { key: 'ArrowDown', cancelable: true })
+    act(() => {
+      window.dispatchEvent(down)
+    })
+    expect(down.defaultPrevented).toBe(false)
+  })
+
   describe('autoFocusFirst', () => {
     it('highlights the first row on open so Enter runs it straight away', () => {
       const run = vi.fn()

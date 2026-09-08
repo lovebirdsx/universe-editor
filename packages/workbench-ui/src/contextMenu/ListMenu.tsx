@@ -13,7 +13,7 @@
  *  that is still on screen.
  *--------------------------------------------------------------------------------------------*/
 
-import { useId, useMemo, type ReactNode } from 'react'
+import { useEffect, useId, useMemo, type ReactNode } from 'react'
 import type { ContextViewAnchor } from '../contextView/IContextViewService.js'
 import { AnchoredSurface } from '../overlay/AnchoredSurface.js'
 import type { RowModel } from './menuModel.js'
@@ -101,9 +101,20 @@ export function ListMenu({
 }: ListMenuProps) {
   const rows = useMemo(() => toRows(items, onClose, ''), [items, onClose])
   const uid = useId()
-  const { state, onRowEnter, onCancelClose, onEscape } = useMenuNavigation(rows, autoFocusFirst)
+  const hasRows = rows.length > 0
+  const { state, onRowEnter, onCancelClose, onEscape } = useMenuNavigation(
+    rows,
+    autoFocusFirst,
+    hasRows,
+  )
 
-  if (rows.length === 0) return null
+  // An empty menu never opens: report the close so the host drops its state
+  // instead of keeping this null-rendering component mounted forever.
+  useEffect(() => {
+    if (!hasRows) onClose()
+  }, [hasRows, onClose])
+
+  if (!hasRows) return null
 
   return (
     <AnchoredSurface x={anchor.x} y={anchor.y} onClose={onClose} onEscape={onEscape}>
