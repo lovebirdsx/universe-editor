@@ -8,9 +8,11 @@ import {
   IStorageService,
   type IUserDataFileChange,
   IUserDataFilesService,
+  IUriIdentityService,
   InstantiationService,
   ServiceCollection,
   URI,
+  UriIdentityService,
   UserDataFile,
 } from '@universe-editor/platform'
 import { UserSettingsSync, USER_SETTINGS_KEY } from '../UserSettingsSync.js'
@@ -77,8 +79,8 @@ class FakeUserData implements IUserDataFilesService {
     this.files.set(file, JSON.stringify(obj, null, 2))
     return true
   }
-  async getFileUri(_file: UserDataFile): Promise<URI | null> {
-    return URI.file('/fake/path')
+  async getFileUri(file: UserDataFile): Promise<URI | null> {
+    return URI.file(`/fake/${file}`)
   }
   fire(file: UserDataFile, source: 'self' | 'external' = 'external'): void {
     this._emitter.fire({ file, source })
@@ -97,6 +99,7 @@ function makeInstance(
   services.set(IConfigurationService, config)
   services.set(IStorageService, storage)
   services.set(IUserDataFilesService, files)
+  services.set(IUriIdentityService, new UriIdentityService('linux'))
   const inst = new InstantiationService(services)
   const sync = inst.createInstance(UserSettingsSync)
   return { sync, config }

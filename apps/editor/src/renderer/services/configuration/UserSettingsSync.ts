@@ -4,6 +4,16 @@
  *  project settings. Watches the files for external edits and hot-reloads the
  *  matching layer. Programmatic update() calls round-trip through setValue()
  *  so user comments and formatting in settings.json are preserved.
+ *
+ *  Editing a user-data file *inside the workbench* and saving it writes the
+ *  file through IFileService (FileEditorInput.save), which bypasses the
+ *  UserDataMainService atomic-write path — and the main-side fs.watch on the
+ *  user-data directory is unreliable on Windows for plain overwrites (events
+ *  get coalesced/dropped), so the in-memory layer silently stayed stale until
+ *  a window reload. We therefore also subscribe to DidSaveNotification and
+ *  reload the matching layer on every in-workbench save of a user-data file.
+ *  This reload is idempotent with the watcher-driven one (loadLayer diffs by
+ *  content and only fires for effective changes).
  *--------------------------------------------------------------------------------------------*/
 
 import { parse, type ParseError } from 'jsonc-parser'
@@ -15,10 +25,13 @@ import {
   IConfigurationService,
   InstantiationType,
   IStorageService,
+  IUriIdentityService,
   IUserDataFilesService,
   registerSingleton,
+  URI,
   UserDataFile,
 } from '@universe-editor/platform'
+import { DidSaveNotification } from '../extensions/DidSaveNotification.js'
 
 export const USER_SETTINGS_KEY = 'workbench.userSettings'
 
@@ -69,6 +82,7 @@ export class UserSettingsSync extends Disposable implements IUserSettingsSyncSer
     @IConfigurationService private readonly _config: IConfigurationService,
     @IStorageService private readonly _storage: IStorageService,
     @IUserDataFilesService private readonly _files: IUserDataFilesService,
+    @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
   ) {
     super()
   }
@@ -99,6 +113,20 @@ export class UserSettingsSync extends Disposable implements IUserSettingsSyncSer
         } else if (file === UserDataFile.VSCodeUserSettings) {
           void this._reloadVSCodeUserLayer()
         }
+      }),
+    )
+
+    // In-workbench saves of a user-data file bypass UserDataMainService's
+    // atomic-write path (FileEditorInput.save writes via IFileService), and the
+    // main-side fs.watch is unreliable on Windows for those plain overwrites —
+    // so the file changed on disk without any onDidChangeFile reaching us and
+    // the layer went stale until a window reload. Reload the matching layer on
+    // every save notification whose URI is one of our user-data files. Idempotent
+    // with the watcher path: a save that the watcher did see just re-reads the
+    // same content and loadLayer fires nothing.
+    this._register(
+      DidSaveNotification.register((uri) => {
+        void this._reloadLayerForSavedUri(uri)
       }),
     )
 
@@ -166,6 +194,34 @@ export class UserSettingsSync extends Disposable implements IUserSettingsSyncSer
       this._config.loadLayer(ConfigurationTarget.VSCodeUser, data)
     } finally {
       this._suspendWriteBack = false
+    }
+  }
+
+  /**
+   * Reload the layer backing a just-saved user-data file, if `uri` is one of
+   * them. Called from DidSaveNotification: an in-workbench save writes through
+   * IFileService, bypassing the atomic-write self-notification, and the
+   * main-side fs.watch can silently miss those overwrites on Windows.
+   */
+  private async _reloadLayerForSavedUri(uri: URI): Promise<void> {
+    const candidates: Array<{ file: UserDataFile; reload: () => Promise<void> }> = [
+      { file: UserDataFile.Settings, reload: () => this._reloadUserLayer() },
+      { file: UserDataFile.ProjectSettings, reload: () => this._reloadProjectLayer() },
+      { file: UserDataFile.VSCodeSettings, reload: () => this._reloadVSCodeLayer() },
+      { file: UserDataFile.VSCodeUserSettings, reload: () => this._reloadVSCodeUserLayer() },
+    ]
+    const key = this._uriIdentity.getComparisonKey(uri)
+    for (const { file, reload } of candidates) {
+      let fileUri: URI | null = null
+      try {
+        fileUri = await this._files.getFileUri(file)
+      } catch {
+        continue
+      }
+      if (fileUri && this._uriIdentity.getComparisonKey(fileUri) === key) {
+        await reload()
+        return
+      }
     }
   }
 

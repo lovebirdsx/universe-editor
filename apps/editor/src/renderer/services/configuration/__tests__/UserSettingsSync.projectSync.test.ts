@@ -8,12 +8,15 @@ import {
   IStorageService,
   type IUserDataFileChange,
   IUserDataFilesService,
+  IUriIdentityService,
   InstantiationService,
   ServiceCollection,
   URI,
+  UriIdentityService,
   UserDataFile,
 } from '@universe-editor/platform'
 import { UserSettingsSync } from '../UserSettingsSync.js'
+import { DidSaveNotification } from '../../extensions/DidSaveNotification.js'
 
 class FakeStorage implements IStorageService {
   declare readonly _serviceBrand: undefined
@@ -66,8 +69,8 @@ class FakeUserData implements IUserDataFilesService {
     this.files.set(file, JSON.stringify(obj, null, 2))
     return true
   }
-  async getFileUri(_file: UserDataFile): Promise<URI | null> {
-    return URI.file('/fake/path')
+  async getFileUri(file: UserDataFile): Promise<URI | null> {
+    return URI.file(`/fake/${file}`)
   }
   fire(file: UserDataFile, source: 'self' | 'external' = 'external'): void {
     this._emitter.fire({ file, source })
@@ -84,6 +87,7 @@ function makeInstance(files: FakeUserData): {
   services.set(IConfigurationService, config)
   services.set(IStorageService, storage)
   services.set(IUserDataFilesService, files)
+  services.set(IUriIdentityService, new UriIdentityService('linux'))
   const inst = new InstantiationService(services)
   const sync = inst.createInstance(UserSettingsSync)
   return { sync, config }
@@ -155,6 +159,53 @@ describe('UserSettingsSync — Project layer', () => {
         'editor.tabSize'
       ],
     ).toBe(8)
+    sync.dispose()
+    config.dispose()
+  })
+
+  it('in-workbench save of project settings.json reloads the Project layer', async () => {
+    const files = new FakeUserData()
+    const { sync, config } = makeInstance(files)
+    await sync.initialize()
+    expect(config.get('terminal.integrated.cwd')).toBeUndefined()
+
+    // Simulate FileEditorInput.save(): the file is written through IFileService
+    // (bypassing UserDataMainService's atomic-write self-notification), then
+    // DidSaveNotification fires with the saved URI.
+    files.files.set(
+      UserDataFile.ProjectSettings,
+      '{ "terminal.integrated.cwd": "${workspaceFolder}/src" }',
+    )
+    DidSaveNotification.notify(URI.file(`/fake/${UserDataFile.ProjectSettings}`))
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(
+      (config.getLayerSnapshot(ConfigurationTarget.Project) as Record<string, unknown>)[
+        'terminal.integrated.cwd'
+      ],
+    ).toBe('${workspaceFolder}/src')
+    sync.dispose()
+    config.dispose()
+  })
+
+  it('in-workbench save of an unrelated file does not reload any layer', async () => {
+    const files = new FakeUserData()
+    const { sync, config } = makeInstance(files)
+    await sync.initialize()
+
+    files.files.set(UserDataFile.ProjectSettings, '{ "editor.tabSize": 8 }')
+    DidSaveNotification.notify(URI.file('/some/other/file.ts'))
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(
+      (config.getLayerSnapshot(ConfigurationTarget.Project) as Record<string, unknown>)[
+        'editor.tabSize'
+      ],
+    ).toBeUndefined()
     sync.dispose()
     config.dispose()
   })
