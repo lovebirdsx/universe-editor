@@ -842,6 +842,101 @@ describe('PerforceClient.runReconcileScan', () => {
     expect(groupRows(client)).toEqual([{ path: `${LOCAL}/in-b.txt`, letter: 'RM' }])
   })
 
+  // --- ⑤b scope-change re-preheat --------------------------------------------
+  //
+  // A scope (or exclusion) change must cancel an in-flight round and re-preheat
+  // the new scope in the SAME session — otherwise a giant repo keeps scanning
+  // the old scope for tens of minutes after the user re-focuses. These drive the
+  // armed path (`scheduleReconcileScan`): a direct `runReconcileScan` never sets
+  // the armed flag, so the reset helper's guard would no-op on it.
+
+  it('a scope change mid-scan cancels the in-flight round and re-preheats the new scope', async () => {
+    const disk = fakeDisk()
+    const client = await makeClient(
+      {
+        reconcile: (filespec) => {
+          if (filespec === `${LOCAL}/A/...`) return [{ rel: 'in-a.txt' }]
+          if (filespec === `${LOCAL}/C/...`) return [{ rel: 'in-c.txt' }]
+          return undefined
+        },
+        reconcileHold: (filespec) => filespec === `${LOCAL}/B/...`,
+      },
+      disk,
+    )
+    client.setReconcileScope([`${LOCAL}/A`, `${LOCAL}/B`])
+    client.scheduleReconcileScan()
+    // A completes and checkpoints; B is held open in flight.
+    await vi.waitFor(() => expect(disk.store.size).toBe(1))
+
+    // Re-focus onto C: the reset aborts the held B child and disarms.
+    client.setReconcileScope([`${LOCAL}/C`])
+    await client.whenReconcileScanSettled()
+    // Let any settle-triggered replay round finish so no background scan leaks
+    // into the next test (the scan is fire-and-forget, not auto-disposed).
+    await nextMacrotask()
+    await client.whenReconcileScanSettled()
+
+    // B was killed exactly once (never re-walked); C was scanned by the re-armed round.
+    const specs = reconcileScans().map((argv) => argv[argv.length - 1])
+    expect(specs.filter((s) => s === `${LOCAL}/B/...`)).toHaveLength(1)
+    expect(specs).toContain(`${LOCAL}/C/...`)
+    // The scope change cleared the old drift; only C's row was merged this session.
+    expect(scannedDirs(client)).toEqual([`${LOCAL}/C`])
+    expect(driftFiles(client)).toEqual([`${LOCAL}/in-c.txt`])
+    // Checkpoints on disk include A under the OLD fingerprint (orphaned) and C under the new.
+    const keys = [...disk.store.keys()]
+    expect(keys.some((k) => k.endsWith(`${LOCAL}/A`))).toBe(true)
+    expect(keys.some((k) => k.endsWith(`${LOCAL}/C`))).toBe(true)
+  })
+
+  it('a scope change after the scan completed re-preheats the new scope', async () => {
+    const client = await makeClient({
+      reconcile: (filespec) => {
+        if (filespec === `${LOCAL}/A/...`) return [{ rel: 'in-a.txt' }]
+        if (filespec === `${LOCAL}/B/...`) return [{ rel: 'in-b.txt' }]
+        return undefined
+      },
+    })
+    client.setReconcileScope([`${LOCAL}/A`])
+    client.scheduleReconcileScan()
+    await client.whenReconcileScanSettled()
+    expect(reconcileScans()).toHaveLength(1)
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/in-a.txt`, letter: 'RM' }])
+
+    // No round in flight: the reset's own schedule re-arms immediately.
+    client.setReconcileScope([`${LOCAL}/B`])
+    await client.whenReconcileScanSettled()
+
+    expect(reconcileScans()).toHaveLength(2)
+    expect(scannedDirs(client)).toEqual([`${LOCAL}/B`])
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/in-b.txt`, letter: 'RM' }])
+  })
+
+  it('an exclusion change re-preheats under a new fingerprint without clearing unrelated drift', async () => {
+    const disk = fakeDisk()
+    const client = await makeClient({ reconcile: () => [{ rel: 'a.txt' }] }, disk)
+    client.setReconcileScope([LOCAL])
+    client.scheduleReconcileScan()
+    await client.whenReconcileScanSettled()
+    expect(reconcileScans()).toHaveLength(1)
+    expect(driftFiles(client)).toEqual([`${LOCAL}/a.txt`])
+
+    // The exclusion moves the checkpoint fingerprint, so the armed round re-preheats…
+    client.setReconcileExcludes([`${LOCAL}/ignored`])
+    await client.whenReconcileScanSettled()
+    // Let any settle-triggered replay round finish so no background scan leaks
+    // into the next test (the scan is fire-and-forget, not auto-disposed).
+    await nextMacrotask()
+    await client.whenReconcileScanSettled()
+
+    // …but the drift set is NOT cleared (exclusions filter at assign time): the row survives.
+    expect(fullScanScans().length).toBeGreaterThanOrEqual(2)
+    expect(driftFiles(client)).toEqual([`${LOCAL}/a.txt`])
+    // Two checkpoints under two different fingerprints.
+    const fps = [...disk.store.keys()].map((k) => k.split(':')[0])
+    expect(new Set(fps).size).toBe(2)
+  })
+
   // --- ⑥ cancellation ---------------------------------------------------------
 
   it('stops on cancel; completed checkpoints survive', async () => {
@@ -2403,11 +2498,13 @@ describe('PerforceClient.runReconcileScan', () => {
       externalChangeDebounceMs: 0,
     })
     client.setReconcileScope([`${LOCAL}/sub`])
+    // Applied before the scan so the exclusion takes effect in the same round —
+    // setting it AFTER a settled armed scan would (deliberately) re-preheat.
+    client.setReconcileExcludes([`${LOCAL}/sub/excluded`])
     client.scheduleReconcileScan()
     await client.whenReconcileScanSettled()
     expect(reconcileScans()).toHaveLength(1)
 
-    client.setReconcileExcludes([`${LOCAL}/sub/excluded`])
     wt.fire('change', `${LOCAL}/outside/a.txt`)
     wt.fire('change', `${LOCAL}/sub/excluded/b.txt`)
     await nextMacrotask()

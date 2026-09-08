@@ -625,16 +625,18 @@ export class PerforceClient {
    *  a submit, owns its own failure reporting and must not be killed). */
   private _reconcileScanCancelSource: AbortController | undefined
   /** Whether the scan for this session has been armed. Set when the scan is
-   *  scheduled and cleared when the connection drops ({@link _goOffline}) — a
-   *  scan that never finished because the server went away must be able to
-   *  re-arm when the connection comes back, because the un-scanned directories
-   *  have no checkpoints to resume from. That is the ONLY re-arm: an external
-   *  file change deliberately does not clear this, because its narrow query
-   *  already published the drift for this session (see
-   *  {@link _flushExternalChanges}) and the invalidated checkpoint is there for
-   *  the NEXT one. A user-initiated cancel keeps it set: that is a deliberate
-   *  "stop scanning this session", and completed checkpoints survive for the
-   *  next one. */
+   *  scheduled and cleared on two occasions: when the connection drops
+   *  ({@link _goOffline}) — a scan that never finished because the server went
+   *  away must be able to re-arm when the connection comes back, because the
+   *  un-scanned directories have no checkpoints to resume from — and when the
+   *  reconcile scope or its exclusions change
+   *  ({@link _resetReconcileScanForScopeChange}), so the new scope re-preheats.
+   *  Those are the ONLY re-arms: an external file change deliberately does not
+   *  clear this, because its narrow query already published the drift for this
+   *  session (see {@link _flushExternalChanges}) and the invalidated checkpoint
+   *  is there for the NEXT one. A user-initiated cancel keeps it set: that is a
+   *  deliberate "stop scanning this session", and completed checkpoints survive
+   *  for the next one. */
   private _reconcileScanArmed = false
   /** Configured ceiling for one directory batch (`perforce.reconcileScan.maxBatchDurationMs`). */
   private _reconcileScanMaxBatchMs = RECONCILE_SCAN_DEFAULT_MAX_BATCH_MS
@@ -1021,6 +1023,7 @@ export class PerforceClient {
     // reason. Dropping the rows keeps the panel from listing files the user just
     // scoped out.
     this._clearDrift()
+    this._resetReconcileScanForScopeChange()
   }
 
   /**
@@ -1039,6 +1042,7 @@ export class PerforceClient {
     // so a narrowed exclusion list re-admits rows already in the set and a widened
     // one drops them — one reassignment is the whole update.
     this._scheduleDriftApply()
+    this._resetReconcileScanForScopeChange()
   }
 
   /** Cap on rows shown in the drift group (`perforce.reconcileLimit`). */
@@ -2847,17 +2851,53 @@ export class PerforceClient {
   }
 
   /**
+   * The reconcile scope (or its exclusions) changed: the checkpoint fingerprint
+   * moved, so an in-flight round is answering a question nobody asked any more —
+   * and, since the round computes each directory's checkpoint key lazily, letting
+   * it finish would write old-scope answers under NEW-fingerprint keys and burn
+   * tens of minutes on directories the new scope may not even contain. Abort it
+   * (completed checkpoints survive but the fingerprint change orphans them),
+   * disarm, and re-arm for the new scope.
+   *
+   * Uses the pinned per-scan source ({@link _reconcileScanCancelSource}), NOT
+   * {@link cancelBusy}: a scope change is config-driven, not a user cancel, and
+   * must not abort an in-flight submit or other cancellable work. This mirrors
+   * the targeted abort {@link _goOffline} performs.
+   *
+   * The re-arm while the aborted round is still settling is deferred to that
+   * round's settle: `scheduleReconcileScan`'s singleton guard swallows an
+   * immediate schedule by design, and the settle re-arms because this left the
+   * armed flag false (see the `finally` in {@link scheduleReconcileScan}). The
+   * immediate `scheduleReconcileScan()` here covers the no-round-in-flight case.
+   *
+   * A client that never armed its scan this session (the initial configuration
+   * apply, tests driving {@link runReconcileScan} directly) is left alone — the
+   * refresh tail remains the only arming point for the first scan, which is what
+   * keeps the scan options (batch ceiling) applied before it starts.
+   */
+  private _resetReconcileScanForScopeChange(): void {
+    if (!this._reconcileScanArmed && !this._backgroundReconcileScan) return
+    this._reconcileScanCancelSource?.abort()
+    this._reconcileScanArmed = false
+    this._log?.(`[perforce] reconcile-scan: scope changed; resetting for the new scope`)
+    this.scheduleReconcileScan()
+  }
+
+  /**
    * Arm the once-per-session background reconcile scan. Called from the refresh
    * tail like the other background scans, but unlike them it does not re-arm
    * while armed: the scan checkpoints every completed directory, so a finished
    * scan (or a user-cancelled one, whose checkpoints survive) has nothing left
-   * to do until the next session. Only going offline legitimately re-arms it
-   * ({@link _goOffline} disarms it) so the un-scanned directories — which have
-   * no checkpoints — are picked up when the connection comes back. An external
-   * file change notably does NOT re-arm: it is answered by a narrow per-file
-   * query instead ({@link _flushExternalChanges}), because re-walking a
-   * directory to learn what a handful of paths already reported is the cost
-   * that design exists to avoid.
+   * to do until the next session. Re-arming happens only when the armed flag is
+   * cleared — by going offline ({@link _goOffline}) so the un-scanned
+   * directories are picked up on reconnect, or by a reconcile-scope / exclusion
+   * change ({@link _resetReconcileScanForScopeChange}) so the new scope
+   * re-preheats; in the in-flight case the reset aborts and disarms, and the
+   * settling round's `finally` below re-arms. An external file change notably
+   * does NOT re-arm: it is answered by a narrow per-file query instead
+   * ({@link _flushExternalChanges}), because re-walking a directory to learn
+   * what a handful of paths already reported is the cost that design exists to
+   * avoid.
    */
   scheduleReconcileScan(): void {
     if (this._reconcileScanArmed) return
@@ -2901,6 +2941,17 @@ export class PerforceClient {
         this._externalPatchedPaths.clear()
         for (const path of stale) {
           if (!patched.has(path)) this._invalidateReconcileScanFor(path)
+        }
+        // A scope change during the round disarmed it
+        // ({@link _resetReconcileScanForScopeChange}); that is the signal to
+        // re-arm for the new scope. Runs AFTER the invalidation replay above so
+        // the new round reads the checkpoints the replay just invalidated, and
+        // after the singleton was cleared so the schedule is not swallowed. A
+        // user cancel and a normal completion keep armed set (no re-arm); going
+        // offline disarms too, but the connection guard in scheduleReconcileScan
+        // swallows the re-arm until the refresh after reconnect re-arms it.
+        if (!this._disposed && !this._reconcileScanArmed) {
+          this.scheduleReconcileScan()
         }
       })
     this._backgroundReconcileScan = run
@@ -3287,6 +3338,10 @@ export class PerforceClient {
             // directly instead of spawning the doomed parent batch (the
             // post-hoc slow/timeout split below stays as the backstop).
             const prediction = await this._predictReconcileScanBatch(dir, priorElapsedMs, signal)
+            // Re-check after the local awaits above (file count / readdir): a
+            // scope-change abort that landed during them must not write a split
+            // marker under the new fingerprint from this orphaned round.
+            if (this._disposed || signal.aborted) return
             if (prediction.action === 'split') {
               const subdirs = await this._listSubdirs(dir)
               if (subdirs.length > 0) {
