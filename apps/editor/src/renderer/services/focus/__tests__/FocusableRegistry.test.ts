@@ -2,7 +2,7 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *--------------------------------------------------------------------------------------------*/
 
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { IFocusableElement } from '@universe-editor/platform'
 import { FocusableRegistry } from '../FocusableRegistry.js'
 
@@ -83,5 +83,76 @@ describe('FocusableRegistry', () => {
     registry.register('a', () => null, { fallback: true })
     registry.register('b', () => null)
     expect(fired).toEqual(['a', 'b'])
+  })
+})
+
+describe('FocusableRegistry — focus handover to a late primary', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  const body = () => ({ focus: vi.fn(), contains: () => false })
+  const tree = () => ({ focus: vi.fn() })
+
+  it('focuses a primary that registers while its view’s fallback holds focus', () => {
+    const registry = new FocusableRegistry()
+    const b = body()
+    registry.register('v', () => b as never, { fallback: true })
+    vi.stubGlobal('document', { activeElement: b })
+
+    const t = tree()
+    registry.register('v', () => t as never)
+
+    expect(t.focus).toHaveBeenCalledTimes(1)
+    expect(b.focus).not.toHaveBeenCalled()
+  })
+
+  it('leaves focus alone when focus is not on the fallback', () => {
+    const registry = new FocusableRegistry()
+    registry.register('v', () => body() as never, { fallback: true })
+    const elsewhere = { focus: vi.fn() }
+    vi.stubGlobal('document', { activeElement: elsewhere })
+
+    const t = tree()
+    registry.register('v', () => t as never)
+
+    expect(t.focus).not.toHaveBeenCalled()
+  })
+
+  it('treats a descendant of the fallback as the view holding focus', () => {
+    const registry = new FocusableRegistry()
+    const child = { focus: vi.fn() }
+    const b = { focus: vi.fn(), contains: (n: unknown) => n === child }
+    registry.register('v', () => b as never, { fallback: true })
+    vi.stubGlobal('document', { activeElement: child })
+
+    const t = tree()
+    registry.register('v', () => t as never)
+
+    expect(t.focus).toHaveBeenCalledTimes(1)
+  })
+
+  it('scopes the handover to the same view id', () => {
+    const registry = new FocusableRegistry()
+    const b = body()
+    registry.register('a', () => b as never, { fallback: true })
+    vi.stubGlobal('document', { activeElement: b })
+
+    const t = tree()
+    registry.register('b', () => t as never)
+
+    expect(t.focus).not.toHaveBeenCalled()
+  })
+
+  it('never hands focus on fallback registration or when the primary resolves null', () => {
+    const registry = new FocusableRegistry()
+    const b = body()
+    registry.register('v', () => b as never, { fallback: true })
+    vi.stubGlobal('document', { activeElement: b })
+
+    registry.register('v', () => null)
+    const t = tree()
+    registry.register('w', () => t as never, { fallback: true })
+
+    expect(t.focus).not.toHaveBeenCalled()
+    expect(b.focus).not.toHaveBeenCalled()
   })
 })

@@ -7,6 +7,13 @@
  *  whenever the primary is absent or currently resolves to null — views that
  *  register a tree only once they have content would otherwise be unfocusable
  *  in their empty state.
+ *
+ *  When a *primary* registers while the view's fallback currently owns DOM
+ *  focus, focus is handed over to the primary. That closes the race where
+ *  focusView() lands on the fallback because the view's real content was
+ *  still loading (e.g. Commit Changes fetching its payload), and the content
+ *  arrives after focusView() already returned: without the handover, focus
+ *  would stay stranded on the container body forever.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -34,6 +41,9 @@ export class FocusableRegistry extends Disposable implements IFocusableRegistry 
   ): IDisposable {
     const map = options?.fallback ? this._fallbacks : this._entries
     map.set(viewId, getter)
+    if (!options?.fallback) {
+      this._handFocusToPrimaryIfParkedOnFallback(viewId, getter)
+    }
     this._onDidChange.fire(viewId)
     const token: IDisposable = toDisposable(() => {
       if (map.get(viewId) === getter) {
@@ -44,6 +54,28 @@ export class FocusableRegistry extends Disposable implements IFocusableRegistry 
     })
     this._register(token)
     return token
+  }
+
+  /**
+   * The view's own focusable content just mounted. If the view's fallback
+   * (the ViewBody wrapper) currently holds DOM focus — i.e. focusView() had
+   * to settle for the placeholder while the content was still loading — move
+   * focus onto the real target so keyboard navigation works. Focus anywhere
+   * else (another view, the editor, the graph) is left alone.
+   */
+  private _handFocusToPrimaryIfParkedOnFallback(
+    viewId: string,
+    primary: FocusableElementGetter,
+  ): void {
+    if (typeof document === 'undefined') return
+    const active = document.activeElement
+    if (!active) return
+    const fallbackEl = this._fallbacks.get(viewId)?.()
+    if (!fallbackEl) return
+    if (fallbackEl !== active && fallbackEl.contains?.(active) !== true) return
+    const el = primary()
+    if (!el) return
+    ;(el as { focus?(): void } | null)?.focus?.()
   }
 
   get(viewId: string): FocusableElementGetter | undefined {
