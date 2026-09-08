@@ -190,7 +190,8 @@ async function run(args, { timeoutMs = 60_000, maxStdout = 4 * MS, echo = true }
       for (const line of shown) {
         console.log(`    | ${line.length > 160 ? line.slice(0, 157) + '...' : line}`)
       }
-      if (lines.length > shown.length) console.log(`    | … ${lines.length - shown.length} more line(s)`)
+      if (lines.length > shown.length)
+        console.log(`    | … ${lines.length - shown.length} more line(s)`)
     }
     if (stderr.trim()) {
       const errLines = stderr.trimEnd().split(/\r?\n/).slice(0, 3)
@@ -331,7 +332,9 @@ async function probeRootScan(mine, subdirs) {
   console.log(`  filespec (exact product bytes): ${fs}`)
   const r = await reconcileDir(fs, { timeoutMs: ROOT_TIMEOUT_MS })
   console.log(`  exit=${r.exitCode} elapsed=${r.elapsedMs}ms timedOut=${r.timedOut}`)
-  console.log(`  stdout=${r.stdoutBytes} bytes, records=${r.count} (depotFile lines=${countDepotLines(r.stdout)})`)
+  console.log(
+    `  stdout=${r.stdoutBytes} bytes, records=${r.count} (depotFile lines=${countDepotLines(r.stdout)})`,
+  )
   console.log(`  action tally: ${fmtTally(actionTally(r.records))}`)
   if (r.stderr.trim())
     console.log(`  stderr head: ${r.stderr.trim().split(/\r?\n/)[0]?.slice(0, 160)}`)
@@ -388,7 +391,10 @@ async function probeSubdirTimings(mine, subdirs) {
   console.log(
     `  ceiling summary: ${overCount}/${results.length} probed subdirs exceed ${CEILING_MS}ms (each would split one level deeper)`,
   )
-  if (slowest) console.log(`  slowest subdir: [${slowest.rel}] ${slowest.elapsedMs}ms ${slowest.count} records`)
+  if (slowest)
+    console.log(
+      `  slowest subdir: [${slowest.rel}] ${slowest.elapsedMs}ms ${slowest.count} records`,
+    )
   return results
 }
 
@@ -401,22 +407,34 @@ async function probeFilespecSyntax(mine, subResults) {
     return undefined
   }
   const rel = base.rel
-  console.log(`  baseline: [${rel}] local product form, ${base.elapsedMs}ms, ${base.count} records (from A)`)
+  console.log(
+    `  baseline: [${rel}] local product form, ${base.elapsedMs}ms, ${base.count} records (from A)`,
+  )
   console.log(`    filespec was: ${base.fs}`)
 
   const fwdFs = `${base.dir.replace(/\\/g, '/')}/...`
   const fwd = await reconcileDir(fwdFs)
-  console.log(`  forward-slash form ${fwdFs}: exit=${fwd.exitCode} ${fwd.elapsedMs}ms records=${fwd.count}`)
-  console.log(`    counts match baseline: ${fwd.count === base.count ? 'YES' : `NO (${base.count} vs ${fwd.count})`}`)
+  console.log(
+    `  forward-slash form ${fwdFs}: exit=${fwd.exitCode} ${fwd.elapsedMs}ms records=${fwd.count}`,
+  )
+  console.log(
+    `    counts match baseline: ${fwd.count === base.count ? 'YES' : `NO (${base.count} vs ${fwd.count})`}`,
+  )
 
   const clientFs = `//${mine.client}/${rel}/...`
   const client = await reconcileDir(clientFs)
-  console.log(`  client form ${clientFs}: exit=${client.exitCode} ${client.elapsedMs}ms records=${client.count}`)
-  console.log(`    counts match baseline: ${client.count === base.count ? 'YES' : `NO (${base.count} vs ${client.count})`}`)
+  console.log(
+    `  client form ${clientFs}: exit=${client.exitCode} ${client.elapsedMs}ms records=${client.count}`,
+  )
+  console.log(
+    `    counts match baseline: ${client.count === base.count ? 'YES' : `NO (${base.count} vs ${client.count})`}`,
+  )
 
   // Depot syntax: derive the depot dir from a record (clientFile strip) and
   // cross-check with `p4 where` on the dir filespec.
-  const sample = base.records.find((r) => typeof r.clientFile === 'string' && r.clientFile.startsWith('//'))
+  const sample = base.records.find(
+    (r) => typeof r.clientFile === 'string' && r.clientFile.startsWith('//'),
+  )
   let depotFs
   if (sample) {
     const relPath = sample.clientFile.replace(/^\/\/[^/]+\//, '')
@@ -429,11 +447,15 @@ async function probeFilespecSyntax(mine, subResults) {
   if (depotFs) {
     const depot = await reconcileDir(depotFs)
     console.log(`  depot form: exit=${depot.exitCode} ${depot.elapsedMs}ms records=${depot.count}`)
-    console.log(`    counts match baseline: ${depot.count === base.count ? 'YES' : `NO (${base.count} vs ${depot.count})`}`)
+    console.log(
+      `    counts match baseline: ${depot.count === base.count ? 'YES' : `NO (${base.count} vs ${depot.count})`}`,
+    )
   }
   const where = await run(['-ztag', 'where', base.fs], { timeoutMs: 30_000, echo: false })
   const whereDepot = where.stdout.match(/\.\.\. depotFile (.*)/)?.[1]
-  console.log(`  p4 where on the dir filespec: exit=${where.exitCode} depotFile=${whereDepot ?? '(absent)'}`)
+  console.log(
+    `  p4 where on the dir filespec: exit=${where.exitCode} depotFile=${whereDepot ?? '(absent)'}`,
+  )
 
   const spaceDir = findDir(WORKSPACE, hasSpace)
   if (!spaceDir) {
@@ -442,10 +464,16 @@ async function probeFilespecSyntax(mine, subResults) {
     const sRel = relOf(spaceDir, WORKSPACE)
     const sFs = buildScopeFilespec(spaceDir, true)
     const sRun = await reconcileDir(sFs)
-    console.log(`  space path [${sRel}]: local ${sFs} → exit=${sRun.exitCode} ${sRun.elapsedMs}ms records=${sRun.count}`)
+    console.log(
+      `  space path [${sRel}]: local ${sFs} → exit=${sRun.exitCode} ${sRun.elapsedMs}ms records=${sRun.count}`,
+    )
     const sClient = await reconcileDir(`//${mine.client}/${sRel}/...`)
-    console.log(`  space path [${sRel}]: client //${mine.client}/${sRel}/... → exit=${sClient.exitCode} ${sClient.elapsedMs}ms records=${sClient.count}`)
-    console.log(`    space-path counts agree: ${sRun.count === sClient.count ? 'YES' : `NO (${sRun.count} vs ${sClient.count})`}`)
+    console.log(
+      `  space path [${sRel}]: client //${mine.client}/${sRel}/... → exit=${sClient.exitCode} ${sClient.elapsedMs}ms records=${sClient.count}`,
+    )
+    console.log(
+      `    space-path counts agree: ${sRun.count === sClient.count ? 'YES' : `NO (${sRun.count} vs ${sClient.count})`}`,
+    )
   }
   return base
 }
@@ -474,14 +502,19 @@ async function probeRecordShape(mine, base) {
   let onDisk = 0
   for (const r of samples) {
     if (typeof r.clientFile !== 'string' || !r.clientFile.startsWith('//')) continue
-    const local = join(mine.root, r.clientFile.replace(/^\/\/[^/]+\//, '').split('/').join(sep))
+    const local = join(
+      mine.root,
+      r.clientFile
+        .replace(/^\/\/[^/]+\//, '')
+        .split('/')
+        .join(sep),
+    )
     const exists = existsSync(local)
     checked++
     if (exists) onDisk++
     console.log(`    translated to ${local} → exists on disk: ${exists}`)
   }
-  if (checked > 0)
-    console.log(`  translation lands on real files: ${onDisk}/${checked}`)
+  if (checked > 0) console.log(`  translation lands on real files: ${onDisk}/${checked}`)
 
   console.log(`  -- -Mj vs -ztag on [${base.rel}] (the execRecords primary/fallback path)`)
   const mj = await run(['-Mj', 'reconcile', '-n', '-a', '-e', '-d', base.fs], {
@@ -522,15 +555,24 @@ async function probeEmptyCleanDir(mine, subResults) {
     const rel = relOf(t.dir, WORKSPACE)
     const fs = buildScopeFilespec(t.dir, true)
     console.log(`  -- ${t.kind}: [${rel}] filespec ${fs}`)
-    const plain = await run(['reconcile', '-n', '-a', '-e', '-d', fs], { timeoutMs: 30_000, echo: false })
+    const plain = await run(['reconcile', '-n', '-a', '-e', '-d', fs], {
+      timeoutMs: 30_000,
+      echo: false,
+    })
     console.log(
       `    plain: exit=${plain.exitCode} ${plain.elapsedMs}ms stdout=${JSON.stringify(plain.stdout.trim())} stderr=${JSON.stringify(plain.stderr.trim())}`,
     )
-    const mj = await run(['-Mj', 'reconcile', '-n', '-a', '-e', '-d', fs], { timeoutMs: 30_000, echo: false })
+    const mj = await run(['-Mj', 'reconcile', '-n', '-a', '-e', '-d', fs], {
+      timeoutMs: 30_000,
+      echo: false,
+    })
     console.log(
       `    -Mj:   exit=${mj.exitCode} ${mj.elapsedMs}ms stdout=${JSON.stringify(mj.stdout.trim().slice(0, 200))} stderr=${JSON.stringify(mj.stderr.trim())}`,
     )
-    const zt = await run(['-ztag', 'reconcile', '-n', '-a', '-e', '-d', fs], { timeoutMs: 30_000, echo: false })
+    const zt = await run(['-ztag', 'reconcile', '-n', '-a', '-e', '-d', fs], {
+      timeoutMs: 30_000,
+      echo: false,
+    })
     console.log(
       `    -ztag: exit=${zt.exitCode} ${zt.elapsedMs}ms stdout=${JSON.stringify(zt.stdout.trim().slice(0, 200))} stderr=${JSON.stringify(zt.stderr.trim())}`,
     )
@@ -573,7 +615,9 @@ async function main() {
   }
 
   const subdirs = listDirectSubdirs(WORKSPACE)
-  console.log(`direct subdirectories of the workspace: ${subdirs.length} (${subdirs.map((d) => relOf(d, WORKSPACE)).join(', ')})`)
+  console.log(
+    `direct subdirectories of the workspace: ${subdirs.length} (${subdirs.map((d) => relOf(d, WORKSPACE)).join(', ')})`,
+  )
 
   await probeRootScan(mine, subdirs)
   const subResults = await probeSubdirTimings(mine, subdirs)

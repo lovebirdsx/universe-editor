@@ -2,11 +2,10 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *
  *  FocusScopeStatusContribution — a left-aligned status-bar entry describing the
- *  focus state: a folder icon plus the count of focused folders ("$(folder) 3")
- *  while folders are focused, or the same icon with 0 when the toggle is on but
- *  the set is empty. Clicking it opens the focus management picker (remove a
- *  folder / add folders / exit). The entry disappears entirely only when focus
- *  is off.
+ *  focus state: a folder icon plus the count of focused entries ("$(folder) 3")
+ *  while any are focused, or the same icon with 0 when the toggle is on but the
+ *  set is empty. Clicking it opens the focus management picker (remove an entry /
+ *  add entries / exit). The entry disappears entirely only when focus is off.
  *
  *  The empty-but-enabled state keeps its prominent background and its own
  *  tooltip because it is otherwise invisible: nothing is filtered, so the
@@ -15,15 +14,15 @@
  *  a `false`-cancelled project layer both reach it.
  *
  *  Also publishes two global context keys:
- *    - `focusScopeActive` — focus resolves to at least one folder. Gates "Add to
- *      Focus", which is indistinguishable from "Focus on This Folder" until
- *      there is an existing set to add to.
+ *    - `focusScopeActive` — focus resolves to at least one entry. Gates "Add to
+ *      Focus", which is indistinguishable from "Focus on This" until there is an
+ *      existing set to add to.
  *    - `focusScopeEnabled` — the toggle itself. Gates "Exit Focus Mode", which
  *      must stay reachable in the empty-but-enabled state precisely because that
  *      is the state the user needs a way out of.
  *
  *  Owned here rather than in ContextKeyContribution because the focus lifecycle
- *  already lives in this file; the per-row `explorerResourceIsFocusFolder` key
+ *  already lives in this file; the per-row `explorerResourceIsFocusEntry` key
  *  is scoped to the Explorer context menu and stays there.
  *--------------------------------------------------------------------------------------------*/
 
@@ -81,14 +80,14 @@ export class FocusScopeStatusContribution extends Disposable implements IWorkben
       priority: 11,
     } as const
 
-    const count = this._focusScope.folders.length
+    const count = this._focusScope.entries.length
     if (count === 0) {
       return {
         ...base,
         text: '$(folder) 0',
         tooltip: localize(
           'status.focusScope.tooltip.empty',
-          'Focus mode is on but no folders are focused, so nothing is filtered. Click to add a folder or turn focus off.',
+          'Focus mode is on but nothing is focused, so nothing is filtered. Click to add an entry or turn focus off.',
         ),
         kind: 'prominent',
       }
@@ -98,8 +97,8 @@ export class FocusScopeStatusContribution extends Disposable implements IWorkben
       text: `$(folder) ${count}`,
       tooltip: localize(
         'status.focusScope.tooltip',
-        'Focusing on:\n{folderList}\n\nClick to manage focused folders.',
-        { folderList: this._focusScope.folders.join('\n') },
+        'Focusing on:\n{folderList}\n\nClick to manage focused entries.',
+        { folderList: this._focusScope.entries.join('\n') },
       ),
     }
   }

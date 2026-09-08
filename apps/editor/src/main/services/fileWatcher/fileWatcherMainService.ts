@@ -113,6 +113,13 @@ interface WatchPlan {
   /** Whether the root also needs a non-recursive watch for its own files. */
   readonly rootFilesOnly: boolean
   /**
+   * Individual files needing an exact-hit watch (a focus entry may name one).
+   * Already folded against `recursive`/`rootFilesOnly`: nothing here is covered
+   * by a recursive target, and no root-level file survives when rootFilesOnly
+   * already reports it.
+   */
+  readonly files: readonly string[]
+  /**
    * The focus scopes this plan was resolved from, before declared in-workspace
    * folder interests were folded in. Carried on the plan so re-resolving (a
    * later interest, an exclude change) starts from the original request rather
@@ -137,7 +144,10 @@ function collapseNestedPaths(paths: readonly string[]): string[] {
 
 function samePlanValue(a: WatchPlan, b: WatchPlan): boolean {
   return (
-    a.root === b.root && a.rootFilesOnly === b.rootFilesOnly && sameSet(a.recursive, b.recursive)
+    a.root === b.root &&
+    a.rootFilesOnly === b.rootFilesOnly &&
+    sameSet(a.recursive, b.recursive) &&
+    sameSet(a.files, b.files)
   )
 }
 
@@ -240,6 +250,11 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
   // interests). Re-resolving a plan needs the request, not the result: folding
   // the interests back in as scopes would make them permanent.
   private _currentScopes: readonly string[] = []
+  // The exact-hit focus files of the live plan (already folded against the
+  // recursive targets). Kept as intent — like `_currentRootFilesOnly` — because
+  // a dir whose fs.watch failed still needs to compare equal to avoid
+  // re-subscribe loops.
+  private _currentFiles: readonly string[] = []
   private _currentIgnore: string[] = []
   private _pending = new Map<string, FileChangeType>()
   private _remotePending = new Map<string, { resource: URI; type: FileChangeType }>()
@@ -313,6 +328,17 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
       }
       scopes.push(fsPath)
     }
+    const files: string[] = []
+    for (const file of options?.files ?? []) {
+      const uri = reviveUri(file)
+      if (uri.scheme !== 'file') continue
+      const fsPath = uri.fsPath
+      if (!isUnder(fsPath, rootFsPath)) {
+        this._logger.warn(`ignoring watch file outside workspace: ${fsPath}`)
+        continue
+      }
+      files.push(fsPath)
+    }
     const targets = [...scopes]
     // Declared in-workspace folder interests join the plan as their own targets.
     // Focus narrows what the *workbench* scans, but an extension that asked to
@@ -332,12 +358,22 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
     // then the root's own files are already covered recursively.
     const coversRoot = recursive.length === 0 || recursive.some((p) => samePath(p, rootFsPath))
     if (coversRoot) {
-      return { root: rootFsPath, recursive: [rootFsPath], rootFilesOnly: false, scopes }
+      return { root: rootFsPath, recursive: [rootFsPath], rootFilesOnly: false, files: [], scopes }
     }
+    const rootFilesOnly = options?.includeRootFiles === true
+    // Fold away files a recursive target already reports; a root-level file is
+    // also dropped when the rootFilesOnly watch covers it — either shape would
+    // double-report the event.
+    const keptFiles = files.filter(
+      (fsPath) =>
+        !recursive.some((target) => isUnder(fsPath, target)) &&
+        !(rootFilesOnly && samePath(dirname(fsPath), rootFsPath)),
+    )
     return {
       root: rootFsPath,
       recursive,
-      rootFilesOnly: options?.includeRootFiles === true,
+      rootFilesOnly,
+      files: [...new Set(keptFiles)].sort(),
       scopes,
     }
   }
@@ -346,7 +382,8 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
     return (
       this._rootFsPath === plan.root &&
       sameSet([...this._watchIds.keys()].sort(), plan.recursive) &&
-      this._currentRootFilesOnly === plan.rootFilesOnly
+      this._currentRootFilesOnly === plan.rootFilesOnly &&
+      sameSet(this._currentFiles, plan.files)
     )
   }
 
@@ -360,6 +397,7 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
       root,
       recursive: [...this._watchIds.keys()].sort(),
       rootFilesOnly: this._currentRootFilesOnly,
+      files: this._currentFiles,
       scopes: this._currentScopes,
     }
   }
@@ -627,6 +665,7 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
     const plan = this._resolvePlan(URI.file(root), {
       scopes: this._currentScopes.map((p) => URI.file(p)),
       includeRootFiles: this._currentRootFilesOnly,
+      files: this._currentFiles.map((p) => URI.file(p)),
     })
     if (this._samePlan(plan) && this._scheduledSubscribe === null) return
     await this._scheduleSubscribe(plan, this._currentIgnore)
@@ -752,6 +791,16 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
     return this._extraFolderWatchers.size
   }
 
+  // For tests: how many focus-file dir watches (real + placeholder) are armed.
+  // Event-collecting tests gate writes on these so the watch is armed before
+  // the fs change it must observe.
+  get _focusFileDirWatcherCount(): number {
+    return this._focusFileDirWatchers.size
+  }
+  get _focusFilePlaceholderCount(): number {
+    return this._focusFilePlaceholderWatchers.size
+  }
+
   private _scheduleSubscribe(plan: WatchPlan, ignore: string[]): Promise<void> {
     const existing = this._scheduledSubscribe
     if (existing && samePlanValue(existing.plan, plan)) {
@@ -841,6 +890,7 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
     this._rootFsPath = plan.root
     this._currentIgnore = ignore
     this._currentScopes = plan.scopes
+    this._currentFiles = plan.files
     this._watchIds.clear()
     this._extraWatchIds.clear()
     for (const [target, id] of nextIds) {
@@ -848,6 +898,7 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
       if (id !== this._watchId) this._extraWatchIds.add(id)
     }
     this._syncRootFilesWatcher(plan)
+    this._syncFocusFilesWatchers(plan)
 
     for (const id of staleIds) {
       await this._unwatchQuietly(id)
@@ -958,6 +1009,218 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
     }
   }
 
+  // Exact-hit focus file watches: parentDir → { watcher, files, paths }.
+  // `files` maps each watched file's comparison key to its last observed
+  // existence so the dir-level callback can classify added/deleted rather than
+  // flattening every event to 'modified'; `paths` carries key → real path for
+  // the enqueue/existsSync calls (mirrors `_extraDirWatchers`; kept separate
+  // because these follow the plan lifecycle, not watchOutOfWorkspace). Keys are
+  // comparison keys, not raw fsPaths: fs.watch reports events with
+  // platform-native separators while plan.files arrive as URI.fsPath (forward
+  // slashes on win32), and a raw-string lookup would miss every Windows event.
+  private readonly _focusFileDirWatchers = new Map<
+    string,
+    { watcher: FSWatcher; files: Map<string, boolean>; paths: Map<string, string> }
+  >()
+  // A file whose parent directory does not exist yet cannot be watched — park
+  // a non-recursive watch on the nearest existing ancestor instead; once the
+  // parent appears the placeholder swaps for the real dir watch (mirrors
+  // `_watchExtraFolderPlaceholder`). Keyed by the *file's parent dir*, so the
+  // swap can rebuild the real watch from `_currentFiles`.
+  private readonly _focusFilePlaceholderWatchers = new Map<string, FSWatcher>()
+
+  /**
+   * Arm or retire the exact-hit watches for plan.files: group by parent dir,
+   * watch each such dir non-recursively, and filter events to exact hits. Plain
+   * node:fs only — the counts here are small and a native recursive watch per
+   * file would be absurd.
+   */
+  private _syncFocusFilesWatchers(plan: WatchPlan): void {
+    const wanted = new Map<string, Set<string>>()
+    for (const fsPath of plan.files) {
+      const dir = dirname(fsPath)
+      const set = wanted.get(dir) ?? new Set<string>()
+      set.add(fsPath)
+      wanted.set(dir, set)
+    }
+
+    for (const [dir, entry] of this._focusFileDirWatchers) {
+      if (!wanted.has(dir)) {
+        try {
+          entry.watcher.close()
+        } catch {
+          // ignore
+        }
+        this._focusFileDirWatchers.delete(dir)
+        this._logger.info(`unwatch focus files dir ${dir}`)
+      }
+    }
+    for (const [dir, w] of this._focusFilePlaceholderWatchers) {
+      if (!wanted.has(dir)) {
+        try {
+          w.close()
+        } catch {
+          // ignore
+        }
+        this._focusFilePlaceholderWatchers.delete(dir)
+        this._logger.info(`unwatch focus files placeholder ${dir}`)
+      }
+    }
+
+    for (const [dir, fileSet] of wanted) {
+      if (this._focusFileDirWatchers.has(dir)) {
+        // Reconcile the file set against the existing watcher: a plan change
+        // may add or drop files while the dir watch itself survives.
+        const entry = this._focusFileDirWatchers.get(dir)!
+        const mergedFiles = new Map<string, boolean>()
+        const mergedPaths = new Map<string, string>()
+        for (const f of fileSet) {
+          const key = this._pathKey(f)
+          mergedFiles.set(key, entry.files.get(key) ?? existsSync(f))
+          mergedPaths.set(key, f)
+        }
+        entry.files = mergedFiles
+        entry.paths = mergedPaths
+        continue
+      }
+      this._watchFocusFileDir(dir, fileSet)
+    }
+  }
+
+  private _pathKey(fsPath: string): string {
+    return getPathComparisonKey(fsPath, normalizePlatform(platform))
+  }
+
+  private _watchFocusFileDir(dir: string, fileSet: ReadonlySet<string>): void {
+    this._closeFocusFilePlaceholder(dir)
+    if (!existsSync(dir)) {
+      this._watchFocusFilesPlaceholder(dir)
+      return
+    }
+    try {
+      const w = fsWatch(dir, { recursive: false, persistent: false }, (event, filename) => {
+        const entry = this._focusFileDirWatchers.get(dir)
+        if (!entry) return
+        // Exact-hit filter: the parent dir carries churn of every sibling, but
+        // only the focus files may surface — anything else would resurrect
+        // events the focus scope deliberately hid. The lookup goes through the
+        // comparison key: fs.watch reports the event path with platform-native
+        // separators while `files` is keyed from URI.fsPath (forward slashes on
+        // win32), so a raw string `has` would miss on every Windows event.
+        if (filename) {
+          const abs = join(dir, filename)
+          if (!entry.files.has(this._pathKey(abs))) return
+        }
+        for (const [key, knownExists] of entry.files) {
+          const filePath = entry.paths.get(key)!
+          const exists = existsSync(filePath)
+          entry.files.set(key, exists)
+          if (exists && knownExists) this._enqueue(filePath, 'modified')
+          else if (exists) this._enqueue(filePath, 'added')
+          else if (knownExists) this._enqueue(filePath, 'deleted')
+        }
+      })
+      w.on('error', (err) => {
+        this._logger.warn(
+          `focus files watcher error ${dir}`,
+          err instanceof Error ? err.message : String(err),
+        )
+        if (this._focusFileDirWatchers.get(dir)?.watcher === w) {
+          this._focusFileDirWatchers.delete(dir)
+        }
+        this._watchFocusFilesPlaceholder(dir)
+      })
+      const initialFiles = new Map<string, boolean>()
+      const initialPaths = new Map<string, string>()
+      for (const f of fileSet) {
+        const key = this._pathKey(f)
+        initialFiles.set(key, existsSync(f))
+        initialPaths.set(key, f)
+      }
+      this._focusFileDirWatchers.set(dir, {
+        watcher: w,
+        files: initialFiles,
+        paths: initialPaths,
+      })
+      this._logger.info(`watch focus files dir ${dir} (${fileSet.size} files)`)
+    } catch (err) {
+      this._logger.warn(
+        `watch focus files dir failed ${dir}`,
+        err instanceof Error ? (err as Error).message : String(err),
+      )
+      this._watchFocusFilesPlaceholder(dir)
+    }
+  }
+
+  /** fs.watch throws on a missing dir, so park on the nearest existing
+   *  ancestor; when the dir appears, swap for the real watch. Multi-level
+   *  gaps (root/Deep/Nested with both missing) are handled by re-parking on
+   *  every ancestor event: the first mkdir brings the gap one level closer,
+   *  the re-park follows it down until the dir itself exists. */
+  private _watchFocusFilesPlaceholder(dir: string): void {
+    if (this._focusFileDirWatchers.has(dir) || this._focusFilePlaceholderWatchers.has(dir)) return
+    let ancestor = dirname(dir)
+    while (ancestor !== dirname(ancestor) && !existsSync(ancestor)) {
+      ancestor = dirname(ancestor)
+    }
+    if (!existsSync(ancestor)) return
+    try {
+      const w = fsWatch(ancestor, { recursive: false, persistent: false }, () => {
+        if (this._focusFilePlaceholderWatchers.get(dir) !== w) return
+        // Unrelated churn in the ancestor must not retire the placeholder —
+        // only re-evaluate. If the dir exists now, swap to the real watch;
+        // otherwise re-park in case the gap narrowed by one level.
+        this._closeFocusFilePlaceholder(dir)
+        if (existsSync(dir)) {
+          const fileSet = new Set(this._currentFiles.filter((f) => samePath(dirname(f), dir)))
+          if (fileSet.size > 0) this._watchFocusFileDir(dir, fileSet)
+        } else {
+          this._watchFocusFilesPlaceholder(dir)
+        }
+      })
+      w.on('error', () => {
+        if (this._focusFilePlaceholderWatchers.get(dir) === w) {
+          this._focusFilePlaceholderWatchers.delete(dir)
+        }
+      })
+      this._focusFilePlaceholderWatchers.set(dir, w)
+      this._logger.info(`watch focus files placeholder ${dir} via ${ancestor}`)
+    } catch {
+      // The ancestor vanished between existsSync and fsWatch — give up quietly;
+      // a later plan re-resolve re-arms.
+    }
+  }
+
+  private _closeFocusFilePlaceholder(dir: string): void {
+    const w = this._focusFilePlaceholderWatchers.get(dir)
+    if (!w) return
+    this._focusFilePlaceholderWatchers.delete(dir)
+    try {
+      w.close()
+    } catch {
+      // ignore
+    }
+  }
+
+  private _teardownFocusFilesWatchers(): void {
+    for (const [, entry] of this._focusFileDirWatchers) {
+      try {
+        entry.watcher.close()
+      } catch {
+        // ignore
+      }
+    }
+    this._focusFileDirWatchers.clear()
+    for (const [, w] of this._focusFilePlaceholderWatchers) {
+      try {
+        w.close()
+      } catch {
+        // ignore
+      }
+    }
+    this._focusFilePlaceholderWatchers.clear()
+  }
+
   private async _teardown(): Promise<void> {
     this._cancelScheduledSubscribe()
     this._resetPending()
@@ -969,8 +1232,10 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
     this._rootFsPath = null
     this._currentIgnore = []
     this._currentScopes = []
+    this._currentFiles = []
     this._currentRootFilesOnly = false
     this._closeRootFilesWatcher()
+    this._teardownFocusFilesWatchers()
     // Unconditionally clear every id this window ever armed, plus `_watchId`
     // even after a failed watch (where it never entered the map): a
     // crash-restart would otherwise replay a subscription we no longer want.

@@ -26,6 +26,7 @@ import {
 } from '@universe-editor/extension-api'
 import type { WorkingTreeChangeDto } from '@universe-editor/extensions-common'
 import { createHash } from 'node:crypto'
+import { existsSync } from 'node:fs'
 import { chmod, readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import { basename, join, relative } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -81,6 +82,7 @@ import { carveReconcileFilespecs } from './reconcileCarve.js'
 import {
   norm,
   isUnderAny,
+  isScopeFile,
   containsAny,
   scopeKey,
   collapseScopeDirs,
@@ -474,6 +476,26 @@ function normalizeScopeDirs(paths: readonly string[]): string[] {
   return collapseScopeDirs(paths)
 }
 
+/**
+ * Normalize a caller-supplied scope-file list: trailing separators stripped and
+ * case-insensitive duplicates collapsed (the same canonicalization
+ * {@link normalizeScopeDirs} applies). NO nesting collapse — a file never
+ * "contains" another scope entry, so the directory ancestor-collapse would only
+ * ever drop a genuinely distinct file.
+ */
+function normalizeScopeFiles(paths: readonly string[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const p of paths) {
+    const trimmed = p.replace(/[/\\]+$/, '')
+    const key = scopeKey(trimmed)
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(trimmed)
+  }
+  return out
+}
+
 /** Coerce the `readonly string[] | string | undefined` a scope setter accepts
  *  into a plain list. */
 function asScopeList(localPaths: readonly string[] | string | undefined): readonly string[] {
@@ -519,6 +541,14 @@ export interface PerforceClientOptions {
   /** Overrides {@link EXTERNAL_CHANGE_DEBOUNCE_MS}; tests pass 0 so the
    *  coalesced flush is a single deterministic macrotask. */
   readonly externalChangeDebounceMs?: number
+  /**
+   * Whether a scope file currently exists on disk, consulted by the reconcile
+   * scan's per-file phase to skip querying a vanished file (a missing file has
+   * no drift to report, and asking p4 about it is a wasted spawn). Defaults to
+   * `node:fs.existsSync`; tests inject an in-memory answer because their client
+   * root (`X:/p4ws/main`) does not exist on the real filesystem.
+   */
+  readonly scopeFileExists?: (absolutePath: string) => boolean
 }
 
 export class PerforceClient {
@@ -599,6 +629,12 @@ export class PerforceClient {
    *  folders (or the opened folder) so a query never reports a file the user
    *  deliberately scoped out (see {@link setReconcileScope}). */
   private _reconcileScopeDirs: readonly string[] = []
+  /** Scope entries that resolve to a single FILE, not a directory (a focus
+   *  entry like `Source/Client/Run.bat`). Unlike the directories these are never
+   *  walked recursively — each is re-verified fresh every session by a narrow
+   *  per-file `reconcile -n` and never checkpointed (see
+   *  {@link setReconcileScope}). Empty when no focus entry is a file. */
+  private _reconcileScopeFiles: readonly string[] = []
   /** Local directories excluded from reconcile discovery and the background
    *  scan (see {@link setReconcileExcludes}). Empty means nothing is excluded. */
   private _reconcileExcludeDirs: readonly string[] = []
@@ -655,6 +691,8 @@ export class PerforceClient {
   private readonly _watchRoot: string | undefined
   /** Debounce delay for external file events ({@link EXTERNAL_CHANGE_DEBOUNCE_MS}). */
   private readonly _externalChangeDebounceMs: number
+  /** Whether a scope file exists on disk ({@link PerforceClientOptions.scopeFileExists}). */
+  private readonly _scopeFileExists: (absolutePath: string) => boolean
   /** The live RPC working-tree watcher, if {@link _createFileSystemWatcher} was
    *  provided. */
   private _workingTreeWatcher: FileSystemWatcher | undefined
@@ -733,6 +771,7 @@ export class PerforceClient {
     this._createFileSystemWatcher = options.createFileSystemWatcher
     this._watchRoot = options.watchRoot
     this._externalChangeDebounceMs = options.externalChangeDebounceMs ?? EXTERNAL_CHANGE_DEBOUNCE_MS
+    this._scopeFileExists = options.scopeFileExists ?? existsSync
     this._p4 = new P4Service(root, gate, connection, this._log)
     this._now = cacheOptions.now ?? Date.now
     this._cache = new P4Cache(this._now, cacheOptions.disk, cacheOptions.enabled)
@@ -832,17 +871,32 @@ export class PerforceClient {
   }
 
   /** Local paths of the drift rows the group currently displays — the exact
-   *  `_applyDriftGroup` filter (clientFile known, not opened, not excluded),
-   *  sorted the same way. Group-header actions (collect-all, revert-all
-   *  uncollected) act on what the user sees, nothing more. */
+   *  `_applyDriftGroup` filter, sorted the same way. Group-header actions
+   *  (collect-all, revert-all uncollected) act on what the user sees, nothing
+   *  more. */
   driftGroupPaths(): string[] {
     const out: string[] = []
     for (const row of this._driftFiles.values()) {
-      const p = row.clientFile
-      if (p !== undefined && !this._openedPaths.has(norm(p)) && !this._isExcluded(p)) out.push(p)
+      if (this._isDisplayableDriftRow(row) && row.clientFile !== undefined) out.push(row.clientFile)
     }
     out.sort()
     return out
+  }
+
+  /**
+   * The one predicate both the drift group's rendered rows and
+   * {@link driftGroupPaths}' action targets filter on, so a row can never be
+   * displayed yet unreachable by the group-header actions (or the reverse).
+   */
+  private _isDisplayableDriftRow(row: ReconcileFile): boolean {
+    if (row.clientFile === undefined) return false
+    if (this._openedPaths.has(norm(row.clientFile))) return false
+    if (this._isExcluded(row.clientFile)) return false
+    // Defense in depth: a row must also be in the current scope. Both-empty
+    // (unfocused) makes `_isInReconcileScope` unconditionally true, so the
+    // whole-client behaviour is unchanged; a narrowed scope retracts rows a
+    // stale checkpoint or a cross-source merge would otherwise resurrect.
+    return this._isInReconcileScope(row.clientFile)
   }
 
   /**
@@ -1019,12 +1073,29 @@ export class PerforceClient {
   /** Narrow the on-demand working-tree hint to the given local directories, so a
    *  query never reports a file the user deliberately scoped out. A directory
    *  nested under another is dropped, since the shallowest one already covers its
-   *  files. `undefined` or an empty list restores the whole-client default. */
-  setReconcileScope(localPaths: readonly string[] | string | undefined): void {
+   *  files. `undefined` or an empty list restores the whole-client default.
+   *
+   *  `scopeFiles` carries the focus entries that resolve to a single file rather
+   *  than a directory. The two buckets are updated in ONE step (one clear + one
+   *  scan reset) so a scope change never lands as a half-applied dirs-only update
+   *  that briefly widens a file-only focus to the whole client. Scope files are
+   *  matched by exact path ({@link isScopeFile}), not directory containment. */
+  setReconcileScope(
+    localPaths: readonly string[] | string | undefined,
+    scopeFiles?: readonly string[],
+  ): void {
     const paths = asScopeList(localPaths)
     const nextDirs = paths.length === 0 ? [] : normalizeScopeDirs(paths)
-    if (sameScopeDirs(this._reconcileScopeDirs, nextDirs)) return
+    const nextFiles =
+      scopeFiles === undefined || scopeFiles.length === 0 ? [] : normalizeScopeFiles(scopeFiles)
+    if (
+      sameScopeDirs(this._reconcileScopeDirs, nextDirs) &&
+      sameScopeDirs(this._reconcileScopeFiles, nextFiles)
+    ) {
+      return
+    }
     this._reconcileScopeDirs = nextDirs
+    this._reconcileScopeFiles = nextFiles
     // Every row in the drift set answers a question about the old scope, and the
     // checkpoint fingerprint already orphans the persisted answers for the same
     // reason. Dropping the rows keeps the panel from listing files the user just
@@ -1108,13 +1179,17 @@ export class PerforceClient {
   }
 
   /** Whether a local path falls inside the current reconcile discovery scope.
-   *  The whole-client default (no scope dirs) matches everything; a narrowed
-   *  scope matches only paths equal to or under one of its directories. An
-   *  excluded path never matches, whatever the scope — exclusion wins. */
+   *  The whole-client default (no scope dirs AND no scope files) matches
+   *  everything; a narrowed scope matches a directory entry by containment
+   *  ({@link isUnderAny}) and a file entry by exact path ({@link isScopeFile}).
+   *  An excluded path never matches, whatever the scope — exclusion wins. */
   private _isInReconcileScope(localPath: string): boolean {
     if (this._isExcluded(localPath)) return false
-    if (this._reconcileScopeDirs.length === 0) return true
-    return isUnderAny(localPath, this._reconcileScopeDirs)
+    if (this._reconcileScopeDirs.length === 0 && this._reconcileScopeFiles.length === 0) return true
+    return (
+      isUnderAny(localPath, this._reconcileScopeDirs) ||
+      isScopeFile(localPath, this._reconcileScopeFiles)
+    )
   }
 
   /** Whether `localPath` equals or sits under an excluded directory. */
@@ -1439,9 +1514,11 @@ export class PerforceClient {
    * depends on `action`, which the rendered hint cannot recover.
    *
    * `covered` is the subset of `paths` the query actually examined (opened and
-   * out-of-scope paths are dropped before spawning). It matters to the caller:
-   * "examined and not in `rows`" is the only defensible reading of "clean", and
-   * treating an unexamined path as clean would write a lie into a checkpoint.
+   * out-of-scope paths are dropped before spawning, and paths whose batch
+   * failed to run are dropped after). It matters to the caller: "examined and
+   * not in `rows`" is the only defensible reading of "clean", and treating an
+   * unexamined path as clean would write a lie into a checkpoint — or delete a
+   * drift row the query never even looked at.
    *
    * Each returned row's `clientFile` is rewritten to the caller's own spelling,
    * for the reasons in {@link checkWorkingTree}'s echo note.
@@ -1460,8 +1537,17 @@ export class PerforceClient {
     }
     if (requested.size === 0) return empty
 
-    const fresh = await this._rescanReconcilePaths([...requested.values()])
+    const { files: fresh, failed } = await this._rescanReconcilePaths([...requested.values()])
     if (this._disposed) return empty
+
+    // A failed batch examined nothing, so its paths are not "covered" — drop them
+    // or the caller would read them as clean and erase real drift rows.
+    if (failed.length > 0) {
+      this._log?.(
+        `[perforce] reconcile query: ${failed.length} path(s) failed to scan; their drift rows are kept`,
+      )
+      for (const p of failed) requested.delete(scopeKey(p))
+    }
 
     const rows: ReconcileFile[] = []
     for (const file of fresh) {
@@ -1536,12 +1622,22 @@ export class PerforceClient {
    * answer is deterministic rather than dependent on completion order. A batch
    * that fails is logged where relevant and contributes nothing rather than
    * sinking the whole scan.
+   *
+   * `failed` carries the paths whose batch could not run (spawn error, non-timeout
+   * non-zero exit, cancellation). The caller needs it to tell "examined and
+   * clean" apart from "never examined": deleting a drift row for a failed path
+   * would report a lie as clean (the extension's hard rule: a failed query logs,
+   * it never resolves as clean). Timed-out batches are NOT failed — a timeout
+   * still streamed a lower-bound answer, and the timeout itself is conclusive
+   * for the in-flight-race tradeoff the channel already accepts.
    */
-  private async _rescanReconcilePaths(paths: readonly string[]): Promise<ReconcileFile[]> {
+  private async _rescanReconcilePaths(
+    paths: readonly string[],
+  ): Promise<{ files: ReconcileFile[]; failed: readonly string[] }> {
     const batches = chunkByLength(paths)
     const perBatch = await Promise.all(
-      batches.map(async (batch): Promise<ReconcileFile[]> => {
-        if (this._disposed) return []
+      batches.map(async (batch): Promise<{ files: ReconcileFile[]; failed: readonly string[] }> => {
+        if (this._disposed) return { files: [], failed: [] }
         // No `recoverPartialOnTimeout` here: this serves `checkWorkingTree`, whose
         // contract is "which of exactly these paths drifted" — a partial answer
         // would let the renderer pin the un-covered paths as clean forever (the
@@ -1549,10 +1645,11 @@ export class PerforceClient {
         // as clean under the channel's existing lower-bound tradeoff; later
         // invalidation (file events / provider refresh / workspace switch) — not a
         // retry — is what corrects that cache entry.
-        return (await this._reconcileScanBatch(batch))?.files ?? []
+        const res = await this._reconcileScanBatch(batch)
+        return res === undefined ? { files: [], failed: batch } : { files: res.files, failed: [] }
       }),
     )
-    return perBatch.flat()
+    return { files: perBatch.flatMap((b) => b.files), failed: perBatch.flatMap((b) => b.failed) }
   }
 
   /**
@@ -3258,17 +3355,28 @@ export class PerforceClient {
    * static reserve keeps the interactive slot free.
    */
   async runReconcileScan(): Promise<void> {
+    // Files-only focus (a focus entry naming one file, no directory entries) sets
+    // `_reconcileScopeDirs` empty while `_reconcileScopeFiles` is non-empty. Falling
+    // back to `[this.root]` there would re-walk the whole depot — the exact
+    // narrowing the user asked to avoid — so the root fallback only applies when
+    // BOTH buckets are empty (unfocused = the whole-client default documented on
+    // setReconcileScope), and the per-file phase below stands on its own.
     const rawScopeDirs =
-      this._reconcileScopeDirs.length > 0 ? [...this._reconcileScopeDirs] : [this.root]
+      this._reconcileScopeDirs.length > 0
+        ? [...this._reconcileScopeDirs]
+        : this._reconcileScopeFiles.length > 0
+          ? []
+          : [this.root]
     const scopeDirs = rawScopeDirs.filter((d) => !this._isExcluded(d))
-    if (scopeDirs.length === 0) {
-      this._log?.(`[perforce] reconcile-scan: every scope dir is excluded; nothing to scan`)
+    if (scopeDirs.length === 0 && this._reconcileScopeFiles.length === 0) {
+      this._log?.(`[perforce] reconcile-scan: no scope dirs and no scope files; nothing to scan`)
       return
     }
     await this._withBusy(localize('perforce.busy.scan', 'Scanning workspace'), async () => {
       await this._cancellable(async (signal) => {
         this._log?.(
           `[perforce] reconcile-scan: ${scopeDirs.length} scope dir(s), ` +
+            `${this._reconcileScopeFiles.length} scope file(s), ` +
             `${this._reconcileScanMaxBatchMs}ms batch ceiling`,
         )
         const queue: string[] = [...scopeDirs]
@@ -3553,6 +3661,28 @@ export class PerforceClient {
             // it (immutable namespace mirrors to disk).
             await this._cache.wrap(P4CacheNs.reconcileScan, key, async () => JSON.stringify(entry))
             this._setScanProgress(done, pending, undefined, driftFound)
+          }
+          // Per-file fresh verification: each scope FILE (a focus entry that names
+          // one file, not a directory) is re-examined every session by a narrow
+          // `reconcile -n` and NEVER checkpointed. A file entry fed to the
+          // directory phase instead would become the filespec `<file>/...` — a
+          // no-such-file p4 answers as clean (exit 0, empty) — and that empty
+          // answer would be checkpointed forever, so the file's real drift would
+          // never be re-queried (the bug this phase exists to kill). The query is
+          // per-session and uncached precisely so "clean now" and "drifted now"
+          // both reflect the disk at this moment.
+          if (this._reconcileScopeFiles.length > 0) {
+            if (this._disposed || signal.aborted || this._connection !== 'connected') return
+            const existing = this._reconcileScopeFiles.filter((p) => this._scopeFileExists(p))
+            if (existing.length > 0) {
+              this._log?.(
+                `[perforce] reconcile-scan: verifying ${existing.length} scope file(s) fresh (uncached)`,
+              )
+              const { covered, rows } = await this._queryWorkingTreeRows(existing)
+              if (this._disposed || signal.aborted) return
+              this._applyDriftFromWatcher(covered, rows)
+              driftFound += rows.length
+            }
           }
           if (signal.aborted) {
             this._log?.('[perforce] reconcile-scan cancelled; checkpoints kept')
@@ -3859,12 +3989,7 @@ export class PerforceClient {
   private _applyDriftGroup(): void {
     if (this._disposed) return
     const rows = [...this._driftFiles.values()]
-      .filter(
-        (row) =>
-          row.clientFile !== undefined &&
-          !this._openedPaths.has(norm(row.clientFile)) &&
-          !this._isExcluded(row.clientFile),
-      )
+      .filter((row) => this._isDisplayableDriftRow(row))
       .sort((a, b) => (a.clientFile! < b.clientFile! ? -1 : a.clientFile! > b.clientFile! ? 1 : 0))
     const truncated = rows.length > this._reconcileLimit
     if (truncated !== this._driftTruncated) {

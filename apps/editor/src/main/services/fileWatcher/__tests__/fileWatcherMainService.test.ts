@@ -963,3 +963,215 @@ describe('FileWatcherMainService focus scopes', () => {
     expect(released.has(clientId as number)).toBe(true)
   })
 })
+
+// Focus files: a focus entry may name a single file, which no recursive
+// subscription can cover. The main side arms a non-recursive fs.watch per
+// parent dir, filtered to exact hits; a file whose parent does not exist yet is
+// parked on the nearest existing ancestor until the dir appears.
+describe('FileWatcherMainService focus files', () => {
+  let nextId: number
+  function createStubHost() {
+    nextId = 1
+    return {
+      allocateId: () => nextId++,
+      watch: vi.fn(async (_id: number, _dir: string, _ignore: readonly string[]) => {}),
+      unwatch: vi.fn(async (_id: number) => {}),
+      onFileEvents: new Emitter<never>().event,
+      onWatchError: new Emitter<never>().event,
+      onDidRestart: new Emitter<void>().event,
+    }
+  }
+
+  let host: ReturnType<typeof createStubHost>
+  let svc: FileWatcherMainService
+  let rootDir: string
+
+  beforeEach(async () => {
+    host = createStubHost()
+    svc = new FileWatcherMainService(host as unknown as WatcherProcessClient)
+    rootDir = await fs.mkdtemp(join(tmpdir(), 'universe-editor-focusfile-'))
+  })
+
+  afterEach(async () => {
+    await svc.unwatch()
+    svc.dispose()
+    await fs.rm(rootDir, { recursive: true, force: true })
+  })
+
+  async function collectEvents() {
+    const events: IFileChangeEvent[] = []
+    const sub = svc.onDidChangeFiles((b) => events.push(...b))
+    return {
+      events,
+      stop: () => sub.dispose(),
+      // Non-recursive fs.watch delivery is fast but still async; poll with the
+      // synchronous flush so a debounced batch is seen.
+      async waitForFile(fsPath: string, types: readonly string[]) {
+        await vi.waitFor(
+          () => {
+            svc._flushForTests()
+            const matched = events.find((e) => normPath(reviveFsPath(e)) === normPath(fsPath))
+            expect(matched).toBeDefined()
+            expect(types).toContain(matched?.type)
+          },
+          { timeout: 5000, interval: 20 },
+        )
+      },
+    }
+  }
+
+  // Writing before the dir watch is armed is a guaranteed miss on every
+  // platform: fs.watch delivery latency is real even if small. Gate on the
+  // service's own armed count, not on a sleep.
+  async function waitForFocusDirArmed(count: number) {
+    await vi.waitFor(
+      () => {
+        expect(svc._focusFileDirWatcherCount).toBe(count)
+      },
+      { timeout: 5000, interval: 10 },
+    )
+  }
+
+  it('emits an event for a focused file, but not for its siblings', async () => {
+    const scopeDir = join(rootDir, 'Client')
+    const focusFile = join(rootDir, 'Run.bat')
+    const sibling = join(rootDir, 'Other.bat')
+    await fs.mkdir(scopeDir)
+    await fs.writeFile(focusFile, 'echo hi')
+    await fs.writeFile(sibling, 'echo bye')
+
+    await svc.watch(URI.file(rootDir), {
+      scopes: [URI.file(scopeDir)],
+      files: [URI.file(focusFile)],
+    })
+    await waitForFocusDirArmed(1)
+    const c = await collectEvents()
+    await fs.writeFile(focusFile, 'echo changed')
+    await c.waitForFile(focusFile, ['modified'])
+
+    c.events.length = 0
+    await fs.writeFile(sibling, 'echo changed')
+    await new Promise((r) => setTimeout(r, NO_EVENT_WINDOW_MS))
+    svc._flushForTests()
+    c.stop()
+    expect(c.events.find((e) => normPath(reviveFsPath(e)) === normPath(sibling))).toBeUndefined()
+  })
+
+  it('classifies create and delete of a focused file by existence transitions', async () => {
+    const scopeDir = join(rootDir, 'Client')
+    const focusFile = join(rootDir, 'Run.bat')
+    await fs.mkdir(scopeDir)
+
+    await svc.watch(URI.file(rootDir), {
+      scopes: [URI.file(scopeDir)],
+      files: [URI.file(focusFile)],
+    })
+    await waitForFocusDirArmed(1)
+    const c = await collectEvents()
+    await fs.writeFile(focusFile, 'echo hi')
+    await c.waitForFile(focusFile, ['added', 'modified'])
+
+    c.events.length = 0
+    await fs.rm(focusFile)
+    await c.waitForFile(focusFile, ['deleted'])
+    c.stop()
+  })
+
+  it('folds a file already covered by a recursive scope away', async () => {
+    const scopeDir = join(rootDir, 'Client')
+    await fs.mkdir(scopeDir)
+    const covered = join(scopeDir, 'inside.txt')
+    const plan = (
+      svc as unknown as {
+        _resolvePlan(root: URI, options?: unknown): { files: readonly string[] }
+      }
+    )._resolvePlan(URI.file(rootDir), {
+      scopes: [URI.file(scopeDir)],
+      files: [URI.file(covered)],
+    })
+    expect(plan.files).toEqual([])
+  })
+
+  it('folds a root-level file away when includeRootFiles covers it', async () => {
+    const scopeDir = join(rootDir, 'Client')
+    await fs.mkdir(scopeDir)
+    const rootFile = join(rootDir, 'Run.bat')
+    const plan = (
+      svc as unknown as {
+        _resolvePlan(root: URI, options?: unknown): { files: readonly string[] }
+      }
+    )._resolvePlan(URI.file(rootDir), {
+      scopes: [URI.file(scopeDir)],
+      includeRootFiles: true,
+      files: [URI.file(rootFile)],
+    })
+    expect(plan.files).toEqual([])
+  })
+
+  it('re-resolving the plan keeps the focus files (no silent drop on exclude change)', async () => {
+    const scopeDir = join(rootDir, 'Client')
+    const focusFile = join(rootDir, 'Run.bat')
+    await fs.mkdir(scopeDir)
+    await fs.writeFile(focusFile, 'echo hi')
+    await svc.watch(URI.file(rootDir), {
+      scopes: [URI.file(scopeDir)],
+      files: [URI.file(focusFile)],
+    })
+    await waitForFocusDirArmed(1)
+    // An exclude change re-resolves the plan internally; the focus file watch
+    // must survive it and still deliver events.
+    await svc.setExcludes(['**/node_modules/**'])
+    await waitForFocusDirArmed(1)
+    const c = await collectEvents()
+    await fs.writeFile(focusFile, 'echo changed')
+    await c.waitForFile(focusFile, ['modified'])
+    c.stop()
+  })
+
+  it('parks a placeholder for a file whose parent dir is missing, then swaps on creation', async () => {
+    const scopeDir = join(rootDir, 'Client')
+    const missingDir = join(rootDir, 'Deep', 'Nested')
+    const focusFile = join(missingDir, 'Run.bat')
+    await fs.mkdir(scopeDir)
+
+    await svc.watch(URI.file(rootDir), {
+      scopes: [URI.file(scopeDir)],
+      files: [URI.file(focusFile)],
+    })
+    // The parent dir does not exist: the placeholder watches an ancestor.
+    await vi.waitFor(
+      () => {
+        expect(svc._focusFilePlaceholderCount).toBe(1)
+      },
+      { timeout: 5000, interval: 10 },
+    )
+    const c = await collectEvents()
+    // Creating the dir must swap the placeholder for the real watch; writing
+    // the file then reports.
+    await fs.mkdir(missingDir, { recursive: true })
+    await waitForFocusDirArmed(1)
+    await fs.writeFile(focusFile, 'echo hi')
+    await c.waitForFile(focusFile, ['added', 'modified'])
+    c.stop()
+  })
+
+  it('dedupes an identical plan that carries focus files (same set, different order)', async () => {
+    const scopeDir = join(rootDir, 'Client')
+    const fileA = join(rootDir, 'A.bat')
+    const fileB = join(rootDir, 'B.bat')
+    await fs.mkdir(scopeDir)
+    await fs.writeFile(fileA, 'a')
+    await fs.writeFile(fileB, 'b')
+    await svc.watch(URI.file(rootDir), {
+      scopes: [URI.file(scopeDir)],
+      files: [URI.file(fileA), URI.file(fileB)],
+    })
+    const before = host.watch.mock.calls.length
+    // Same file set in a different order must NOT trigger a re-subscribe.
+    await svc.watch(URI.file(rootDir), {
+      scopes: [URI.file(scopeDir)],
+      files: [URI.file(fileB), URI.file(fileA)],
+    })
+    expect(host.watch).toHaveBeenCalledTimes(before)
+  })
+})

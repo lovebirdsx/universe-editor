@@ -365,6 +365,54 @@ describe('TextSearchService', () => {
     expect(afterDash).toEqual(['token', '.'])
   })
 
+  it('falls back to . for an empty scanPaths so ripgrep never reads stdin', () => {
+    // rg without positional arguments searches stdin; the spawned child's stdin
+    // pipe is never closed, so the process would hang forever. The "focused but
+    // nothing to scan" state is expressed by skipping the spawn entirely, never
+    // by passing zero positional arguments.
+    const args = buildRgArgs({ ...baseQuery('/ws', 'token'), scanPaths: [] })
+    const afterDash = args.slice(args.indexOf('--') + 1)
+    expect(afterDash).toEqual(['token', '.'])
+  })
+
+  it('returns an empty result for an empty scanPaths without root files', async () => {
+    const root = await makeTempRoot()
+    await writeFile(path.join(root, 'README.md'), 'empty-scan-token\n')
+
+    const svc = new TextSearchService()
+    try {
+      const complete = await svc.search({
+        ...baseQuery(root, 'empty-scan-token'),
+        scanPaths: [],
+      })
+      expect(complete.results).toEqual([])
+      expect(complete.progress.totalMatches).toBe(0)
+    } finally {
+      svc.dispose()
+    }
+  }, 15_000)
+
+  it('scans only root files for an empty scanPaths with rootFilesInScope', async () => {
+    const root = await makeTempRoot()
+    await mkdir(path.join(root, 'Client'), { recursive: true })
+    await writeFile(path.join(root, 'Client', 'a.ts'), 'empty-scan-token\n')
+    await writeFile(path.join(root, 'README.md'), 'empty-scan-token\n')
+
+    const svc = new TextSearchService()
+    try {
+      const complete = await svc.search({
+        ...baseQuery(root, 'empty-scan-token'),
+        scanPaths: [],
+        rootFilesInScope: true,
+      })
+      expect(complete.results.map((r) => path.normalize(URI.revive(r.resource)!.fsPath))).toEqual([
+        path.normalize(path.join(root, 'README.md')),
+      ])
+    } finally {
+      svc.dispose()
+    }
+  }, 15_000)
+
   it('lets ripgrep honour ignore files when useIgnoreFiles is on', () => {
     const args = buildRgArgs({ ...baseQuery('/ws', 'token'), useIgnoreFiles: true })
     expect(args).not.toContain('--no-ignore')

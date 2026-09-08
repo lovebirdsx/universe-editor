@@ -204,7 +204,7 @@ export class ExplorerMenuContribution extends Disposable implements IWorkbenchCo
       MenuRegistry.addMenuItem(MenuId.ExplorerContext, {
         command: FocusOnFolderAction.ID,
         icon: 'focus',
-        when: 'explorerResourceIsFolder && !explorerResourceIsRoot && !explorerResourceIsFocusFolder',
+        when: '!explorerResourceIsRoot && !explorerResourceIsFocusEntry',
         group: '7_focus',
         order: 1,
       }),
@@ -215,7 +215,7 @@ export class ExplorerMenuContribution extends Disposable implements IWorkbenchCo
       MenuRegistry.addMenuItem(MenuId.ExplorerContext, {
         command: AddFolderToFocusAction.ID,
         icon: 'add',
-        when: 'explorerResourceIsFolder && !explorerResourceIsRoot && !explorerResourceIsFocusFolder && focusScopeActive',
+        when: '!explorerResourceIsRoot && !explorerResourceIsFocusEntry && focusScopeActive',
         group: '7_focus',
         order: 2,
       }),
@@ -224,7 +224,7 @@ export class ExplorerMenuContribution extends Disposable implements IWorkbenchCo
       MenuRegistry.addMenuItem(MenuId.ExplorerContext, {
         command: RemoveFolderFromFocusAction.ID,
         icon: 'remove',
-        when: 'explorerResourceIsFolder && !explorerResourceIsRoot && explorerResourceIsFocusFolder',
+        when: '!explorerResourceIsRoot && explorerResourceIsFocusEntry',
         group: '7_focus',
         order: 3,
       }),

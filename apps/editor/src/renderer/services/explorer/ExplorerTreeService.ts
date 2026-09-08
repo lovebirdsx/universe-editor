@@ -798,6 +798,7 @@ export class ExplorerTreeService extends Disposable {
           excludes: this._exclude.currentWatcherGlobs,
           scopes: this._focus.scanRoots,
           includeRootFiles: this._focus.rootFilesInScope,
+          files: this._focus.fileWatchPaths,
         })
         .then(() => {
           // parcel only reports changes after the subscription is live; the

@@ -4,6 +4,7 @@ import {
   collapseScopeDirs,
   commonAncestorDir,
   containsAny,
+  isScopeFile,
   isUnderAny,
   norm,
   respellUnderRoot,
@@ -82,6 +83,37 @@ describe('scopeKey', () => {
     } else {
       expect(scopeKey('/ws/Client/')).toBe('/ws/Client')
     }
+  })
+})
+
+describe('isScopeFile', () => {
+  it('matches only an exact path, never a child', () => {
+    expect(isScopeFile('C:/ws/Run.bat', ['C:/ws/Run.bat'])).toBe(true)
+    expect(isScopeFile('C:/ws/Run.bat/x', ['C:/ws/Run.bat'])).toBe(false)
+    expect(isScopeFile('C:/ws/Sub/Run.bat', ['C:/ws/Run.bat'])).toBe(false)
+  })
+
+  it('matches any of the files, not just the first', () => {
+    expect(isScopeFile('C:/ws/b.bat', ['C:/ws/a.bat', 'C:/ws/b.bat'])).toBe(true)
+  })
+
+  it('never matches on a bare prefix (Run must not match Run2)', () => {
+    expect(isScopeFile('C:/ws/Run2.bat', ['C:/ws/Run.bat'])).toBe(false)
+    expect(isScopeFile('C:/ws/Run.bat', ['C:/ws/Run2.bat'])).toBe(false)
+  })
+
+  it('is drive-letter case-insensitive and slash-insensitive', () => {
+    expect(isScopeFile('c:/ws/Run.bat', ['C:\\ws\\Run.bat'])).toBe(true)
+  })
+
+  it('matches nothing for an empty file list', () => {
+    expect(isScopeFile('C:/ws/Run.bat', [])).toBe(false)
+  })
+
+  it('follows the host case policy for the path segments', () => {
+    const insensitive = process.platform === 'win32' || process.platform === 'darwin'
+    expect(isScopeFile('C:/ws/run.bat', ['C:/ws/Run.bat'])).toBe(insensitive)
+    expect(isScopeFile('C:/ws/RUN.BAT', ['C:/ws/Run.bat'])).toBe(insensitive)
   })
 })
 

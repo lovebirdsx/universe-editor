@@ -618,7 +618,9 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
               excludes: filter.excludeGlobs ?? [],
               ignore: filter.dirNames,
               useIgnoreFiles: this._exclude.getUseIgnoreFiles(),
-              ...(focus.scanPaths ? { scanPaths: focus.scanPaths } : {}),
+              // An explicitly empty scanPaths is "focused on nothing yet" —
+              // forward it as [] rather than dropping it into a full-tree scan.
+              ...(focus.scanPaths !== undefined ? { scanPaths: focus.scanPaths } : {}),
               rootFilesInScope: focus.rootFilesInScope,
             },
             cts.token,

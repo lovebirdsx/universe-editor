@@ -820,9 +820,11 @@ describe('PerforceClient.runReconcileScan', () => {
     const disk = fakeDisk()
     const client = await makeClient(
       {
+        // Each mock row's rel sits UNDER the scanned directory (see the
+        // scope-change suite note): the drift group filters out-of-scope rows.
         reconcile: (filespec) => {
-          if (filespec === `${LOCAL}/A/...`) return [{ rel: 'in-a.txt' }]
-          if (filespec === `${LOCAL}/B/...`) return [{ rel: 'in-b.txt' }]
+          if (filespec === `${LOCAL}/A/...`) return [{ rel: 'A/in-a.txt' }]
+          if (filespec === `${LOCAL}/B/...`) return [{ rel: 'B/in-b.txt' }]
           return undefined
         },
       },
@@ -839,7 +841,7 @@ describe('PerforceClient.runReconcileScan', () => {
     expect(reconcileScans()).toHaveLength(2)
     // The scope change dropped the old drift set; only B's row survives.
     expect(scannedDirs(client)).toEqual([`${LOCAL}/B`])
-    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/in-b.txt`, letter: 'RM' }])
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/B/in-b.txt`, letter: 'RM' }])
   })
 
   // --- ⑤b scope-change re-preheat --------------------------------------------
@@ -854,9 +856,12 @@ describe('PerforceClient.runReconcileScan', () => {
     const disk = fakeDisk()
     const client = await makeClient(
       {
+        // Each mock row's rel must sit UNDER the scanned directory — a real
+        // `reconcile -n <dir>/...` never reports a file outside that subtree, and
+        // the drift group's scope filter now retracts such out-of-scope rows.
         reconcile: (filespec) => {
-          if (filespec === `${LOCAL}/A/...`) return [{ rel: 'in-a.txt' }]
-          if (filespec === `${LOCAL}/C/...`) return [{ rel: 'in-c.txt' }]
+          if (filespec === `${LOCAL}/A/...`) return [{ rel: 'A/in-a.txt' }]
+          if (filespec === `${LOCAL}/C/...`) return [{ rel: 'C/in-c.txt' }]
           return undefined
         },
         reconcileHold: (filespec) => filespec === `${LOCAL}/B/...`,
@@ -882,7 +887,7 @@ describe('PerforceClient.runReconcileScan', () => {
     expect(specs).toContain(`${LOCAL}/C/...`)
     // The scope change cleared the old drift; only C's row was merged this session.
     expect(scannedDirs(client)).toEqual([`${LOCAL}/C`])
-    expect(driftFiles(client)).toEqual([`${LOCAL}/in-c.txt`])
+    expect(driftFiles(client)).toEqual([`${LOCAL}/C/in-c.txt`])
     // Checkpoints on disk include A under the OLD fingerprint (orphaned) and C under the new.
     const keys = [...disk.store.keys()]
     expect(keys.some((k) => k.endsWith(`${LOCAL}/A`))).toBe(true)
@@ -892,8 +897,8 @@ describe('PerforceClient.runReconcileScan', () => {
   it('a scope change after the scan completed re-preheats the new scope', async () => {
     const client = await makeClient({
       reconcile: (filespec) => {
-        if (filespec === `${LOCAL}/A/...`) return [{ rel: 'in-a.txt' }]
-        if (filespec === `${LOCAL}/B/...`) return [{ rel: 'in-b.txt' }]
+        if (filespec === `${LOCAL}/A/...`) return [{ rel: 'A/in-a.txt' }]
+        if (filespec === `${LOCAL}/B/...`) return [{ rel: 'B/in-b.txt' }]
         return undefined
       },
     })
@@ -901,7 +906,7 @@ describe('PerforceClient.runReconcileScan', () => {
     client.scheduleReconcileScan()
     await client.whenReconcileScanSettled()
     expect(reconcileScans()).toHaveLength(1)
-    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/in-a.txt`, letter: 'RM' }])
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/A/in-a.txt`, letter: 'RM' }])
 
     // No round in flight: the reset's own schedule re-arms immediately.
     client.setReconcileScope([`${LOCAL}/B`])
@@ -909,7 +914,7 @@ describe('PerforceClient.runReconcileScan', () => {
 
     expect(reconcileScans()).toHaveLength(2)
     expect(scannedDirs(client)).toEqual([`${LOCAL}/B`])
-    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/in-b.txt`, letter: 'RM' }])
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/B/in-b.txt`, letter: 'RM' }])
   })
 
   it('an exclusion change re-preheats under a new fingerprint without clearing unrelated drift', async () => {
@@ -935,6 +940,219 @@ describe('PerforceClient.runReconcileScan', () => {
     // Two checkpoints under two different fingerprints.
     const fps = [...disk.store.keys()].map((k) => k.split(':')[0])
     expect(new Set(fps).size).toBe(2)
+  })
+
+  // --- ⑤c scope FILES (focus entries that name one file, not a directory) ------
+  //
+  // A focus entry can point at a file (`Source/Client/Run.bat`). Such an entry
+  // must NEVER reach the recursive directory phase — `reconcile -n <file>/...` is
+  // a no-such-file p4 answers as clean (exit 0, empty), and checkpointing that
+  // empty answer would pin the file's drift verdict forever. Instead each scope
+  // file is re-verified fresh every session by a narrow per-file `reconcile -n`
+  // that is never checkpointed.
+
+  it('a scope file is verified fresh every session and never checkpointed', async () => {
+    const disk = fakeDisk()
+    const runBat = `${LOCAL}/Source/Client/Run.bat`
+    // The client's root doesn't exist on the real filesystem, so inject the
+    // scope-file existence probe: Run.bat exists, anything else does not.
+    const exists = { scopeFileExists: (p: string) => p === runBat }
+    const client = await makeClient(
+      {
+        reconcile: (filespec) => {
+          // The per-file query carries the file path itself (no `/...`).
+          if (filespec === runBat) return [{ rel: 'Source/Client/Run.bat' }]
+          return undefined
+        },
+      },
+      disk,
+      undefined,
+      exists,
+    )
+    client.setReconcileScope([LOCAL], [runBat])
+    await client.runReconcileScan()
+
+    // The file was reported as drift via the narrow per-file query.
+    expect(groupRows(client)).toEqual([{ path: runBat, letter: 'RM' }])
+    // The only checkpoint on disk is the directory phase's — the scope file
+    // itself was NEVER checkpointed (a checkpointed "clean" would freeze it).
+    for (const key of disk.store.keys()) {
+      expect(key.endsWith(runBat)).toBe(false)
+    }
+    // The narrow query carried the exact file path, never a `<file>/...` wildcard.
+    const fileScans = narrowScans().filter((a) => a.some((x) => x === runBat))
+    expect(fileScans.length).toBeGreaterThanOrEqual(1)
+    expect(fullScanScans().some((a) => a.some((x) => x.startsWith(runBat)))).toBe(false)
+
+    // A second session re-runs the narrow query rather than replaying a verdict:
+    // the spawn count for the file grows, and the disk still holds no file key.
+    const before = narrowScans().filter((a) => a.some((x) => x === runBat)).length
+    const second = await makeClient(
+      {
+        reconcile: (filespec) => {
+          if (filespec === runBat) return [{ rel: 'Source/Client/Run.bat' }]
+          return undefined
+        },
+      },
+      disk,
+      undefined,
+      exists,
+    )
+    second.setReconcileScope([LOCAL], [runBat])
+    await second.runReconcileScan()
+    expect(narrowScans().filter((a) => a.some((x) => x === runBat)).length).toBeGreaterThan(before)
+    for (const key of disk.store.keys()) {
+      expect(key.endsWith(runBat)).toBe(false)
+    }
+  })
+
+  it('a missing scope file spawns no per-file query and reports nothing', async () => {
+    // resolveFocusScope keeps a MISSING entry in `files` (never guessing it was a
+    // directory). The scan's existence gate then skips the query entirely — a
+    // vanished file has no drift to report.
+    const gone = `${LOCAL}/Gone/Thing.txt`
+    const client = await makeClient({ reconcile: () => [{ rel: 'a.txt' }] }, undefined, undefined, {
+      scopeFileExists: () => false,
+    })
+    client.setReconcileScope([LOCAL], [gone])
+    await client.runReconcileScan()
+
+    expect(narrowScans().some((a) => a.some((x) => x === gone))).toBe(false)
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/a.txt`, letter: 'RM' }])
+  })
+
+  it('the drift group retracts a row a stale merge left outside the current scope', async () => {
+    // Defense in depth: whatever ends up in `_driftFiles`, the group only renders
+    // rows inside the current scope. A file-only focus narrows the client to
+    // `isScopeFile` matching, so a directory-scan row under the root is out of scope.
+    const runBat = `${LOCAL}/Source/Client/Run.bat`
+    const client = await makeClient(
+      {
+        reconcile: (filespec) => {
+          if (filespec === runBat) return [{ rel: 'Source/Client/Run.bat' }]
+          if (filespec === `${LOCAL}/...`) return [{ rel: 'elsewhere.txt' }]
+          return undefined
+        },
+      },
+      undefined,
+      undefined,
+      { scopeFileExists: (p) => p === runBat },
+    )
+    // File-only focus: dirs empty, files=[Run.bat]. The recursive phase is
+    // skipped entirely (no dirs-or-root fallback — that would re-walk the whole
+    // depot); only the per-file phase runs, so the group never sees a row for
+    // anything but the scope file.
+    client.setReconcileScope([], [runBat])
+    await client.runReconcileScan()
+
+    const rendered = groupRows(client).map((r) => r.path)
+    expect(rendered).toContain(runBat)
+    expect(rendered).not.toContain(`${LOCAL}/elsewhere.txt`)
+    // The root recursive filespec must not be scanned at all — that is the whole
+    // point of file-only focus.
+    expect(fullScanScans().some((a) => a.some((x) => x === `${LOCAL}/...`))).toBe(false)
+  })
+
+  it('an unfocused client still falls back to the whole-client root scan', async () => {
+    // Regression: the files-only narrowing made the `[this.root]` fallback
+    // conditional — and briefly conditioned it on dirs being non-empty, so an
+    // UNFOCUSED client (both buckets empty) scanned nothing at all. Empty scope
+    // sets mean the whole-client default, not "no scan". The production caller
+    // (applyReconcileScope) passes `[root]` explicitly even when unfocused, so
+    // this is the defence-in-depth branch: a client whose scope was never set
+    // must still scan the whole client.
+    const client = await makeClient({
+      reconcile: (filespec) => (filespec === `${ROOT}/...` ? [{ rel: 'a.txt' }] : undefined),
+    })
+    await client.runReconcileScan()
+
+    expect(fullScanScans().some((a) => a.some((x) => x === `${ROOT}/...`))).toBe(true)
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/a.txt`, letter: 'RM' }])
+  })
+
+  it('file-only focus skips the directory phase instead of falling back to the root', async () => {
+    // Regression: `runReconcileScan` used to fall back to `[this.root]` whenever
+    // `_reconcileScopeDirs` was empty — with a files-only focus that re-walked
+    // the whole depot (minutes on a large workspace), the exact narrowing the
+    // focus exists to avoid. Now an empty dirs set with non-empty files runs
+    // only the per-file phase.
+    const runBat = `${LOCAL}/Source/Client/Run.bat`
+    const client = await makeClient(
+      {
+        reconcile: (filespec) => {
+          if (filespec === runBat) return [{ rel: 'Source/Client/Run.bat' }]
+          if (filespec === `${LOCAL}/...`) return [{ rel: 'elsewhere.txt' }]
+          return undefined
+        },
+      },
+      undefined,
+      undefined,
+      { scopeFileExists: (p) => p === runBat },
+    )
+    client.setReconcileScope([], [runBat])
+    await client.runReconcileScan()
+
+    // Zero recursive spawns — the root fallback is gone.
+    expect(fullScanScans()).toHaveLength(0)
+    // The per-file phase still ran and published the file's drift.
+    expect(narrowScans().filter((a) => a.some((x) => x === runBat)).length).toBeGreaterThanOrEqual(
+      1,
+    )
+    expect(groupRows(client)).toEqual([{ path: runBat, letter: 'RM' }])
+  })
+
+  it('a failed per-file query keeps the file drift row instead of reading it clean', async () => {
+    // Regression: `_queryWorkingTreeRows` used to mark every requested path as
+    // "covered" even when its batch failed to run — the apply step then deleted
+    // the file's existing drift row, reading a failure as clean (the extension's
+    // hard rule: a failed query logs, it never resolves as clean).
+    const runBat = `${LOCAL}/Source/Client/Run.bat`
+    let failQueries = false
+    const make = () =>
+      makeClient(
+        {
+          reconcile: (filespec) => {
+            if (filespec === runBat && !failQueries) return [{ rel: 'Source/Client/Run.bat' }]
+            return undefined
+          },
+          reconcileExit: (filespec) => (filespec === runBat && failQueries ? 1 : undefined),
+          reconcileStderr: () => 'Connection refused',
+        },
+        undefined,
+        undefined,
+        { scopeFileExists: (p) => p === runBat },
+      )
+    const client = await make()
+    client.setReconcileScope([], [runBat])
+    await client.runReconcileScan()
+    expect(groupRows(client)).toEqual([{ path: runBat, letter: 'RM' }])
+
+    // Every subsequent per-file query fails: the drift row must SURVIVE.
+    failQueries = true
+    await client.runReconcileScan()
+    expect(groupRows(client)).toEqual([{ path: runBat, letter: 'RM' }])
+  })
+
+  it('the scope gate matches a file by exact path, never a sibling prefix', async () => {
+    // `Run.bat` must be answerable but `Run2.bat` refused at the scope gate — the
+    // file counterpart of the directory boundary. `_queryWorkingTreeRows` drops an
+    // out-of-scope path BEFORE spawning, so Run2 produces neither a spawn nor a hint.
+    const runBat = `${LOCAL}/Source/Client/Run.bat`
+    const run2 = `${LOCAL}/Source/Client/Run2.bat`
+    const client = await makeClient({
+      reconcile: (filespec) => {
+        if (filespec === runBat) return [{ rel: 'Source/Client/Run.bat' }]
+        if (filespec === run2) return [{ rel: 'Source/Client/Run2.bat' }]
+        return undefined
+      },
+    })
+    // Scope ONLY Run.bat.
+    client.setReconcileScope([], [runBat])
+    const hints = await client.checkWorkingTree([runBat, run2])
+
+    // Only the exact scope file came back; Run2 was filtered pre-spawn.
+    expect(hints.map((h) => h.path)).toEqual([runBat])
+    expect(narrowScans().some((a) => a.some((x) => x === run2))).toBe(false)
   })
 
   // --- ⑥ cancellation ---------------------------------------------------------
@@ -2992,5 +3210,50 @@ describe('PerforceClient.driftGroupPaths', () => {
     await client.runReconcileScan()
 
     expect(client.driftGroupPaths()).toEqual([])
+  })
+
+  it('drops rows outside the current scope, mirroring the group filter', async () => {
+    // Regression: `driftGroupPaths` filtered on opened/excluded only, so a
+    // group-header collect-all would gather rows the narrowed group itself no
+    // longer renders. The action targets must be exactly what the user sees.
+    const client = await makeClient({ reconcile: () => [] }, fakeDisk())
+    client.setReconcileScope([`${LOCAL}/other`])
+
+    // Seed a drift row outside the scope directly (a stale checkpoint merge is
+    // the real-world source of such a row; `_clearDrift` on the scope change
+    // above makes a scan-then-narrow sequence useless for this).
+    ;(
+      client as unknown as {
+        _applyDriftFromWatcher(
+          covered: readonly string[],
+          rows: readonly { clientFile?: string; depotFile: string; action: string; rev: string }[],
+        ): void
+      }
+    )._applyDriftFromWatcher(
+      [`${LOCAL}/other/in-scope.txt`, `${LOCAL}/elsewhere/out.txt`],
+      [
+        {
+          clientFile: `${LOCAL}/other/in-scope.txt`,
+          depotFile: '//depot/branch_x/other/in-scope.txt',
+          action: 'edit',
+          rev: '1',
+        },
+        {
+          clientFile: `${LOCAL}/elsewhere/out.txt`,
+          depotFile: '//depot/branch_x/elsewhere/out.txt',
+          action: 'edit',
+          rev: '1',
+        },
+      ],
+    )
+
+    // Both rows are in `_driftFiles`…
+    expect(driftFiles(client).sort()).toEqual([
+      `${LOCAL}/elsewhere/out.txt`,
+      `${LOCAL}/other/in-scope.txt`,
+    ])
+    // …but the action targets exclude the out-of-scope one, exactly like the
+    // rendered group does.
+    expect(client.driftGroupPaths()).toEqual([`${LOCAL}/other/in-scope.txt`])
   })
 })

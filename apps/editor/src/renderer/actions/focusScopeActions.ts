@@ -37,25 +37,24 @@ import { IFocusScopeService } from '../services/focus/FocusScopeService.js'
 import { resolveContextOperations } from './fileActionsCommon.js'
 
 /**
- * Workspace-relative paths of the directories a focus command should act on.
- * Files are skipped: focus is a whitelist of directories, and a mixed
- * file/directory selection should not silently fail the whole command.
+ * Workspace-relative paths of the resources a focus command should act on.
+ * Focus entries may name a single file as well as a directory, so both kinds
+ * are kept; only the workspace root itself is dropped.
  */
-function resolveFocusFolders(
+function resolveFocusEntries(
   accessor: ServicesAccessor,
   tree: ExplorerTreeService,
   args: unknown[],
 ): string[] {
   const root = tree.root
   if (!root) return []
-  const folders: string[] = []
+  const entries: string[] = []
   for (const operation of resolveContextOperations(accessor, tree, args)) {
-    if (!operation.isDirectory) continue
     const rel = relativeTo(root, operation.resource)
     if (rel === '') continue
-    folders.push(rel)
+    entries.push(rel)
   }
-  return folders
+  return entries
 }
 
 export class FocusOnFolderAction extends Action2 {
@@ -63,16 +62,16 @@ export class FocusOnFolderAction extends Action2 {
   constructor() {
     super({
       id: FocusOnFolderAction.ID,
-      title: localize2('action.focusScope.focusFolder.title', 'Focus on This Folder'),
+      title: localize2('action.focusScope.focusFolder.title', 'Focus on This'),
       category: localize2('command.category.view', 'View'),
     })
   }
   override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
     const tree = accessor.get(IExplorerTreeService)
     const focusScope = accessor.get(IFocusScopeService)
-    const folders = resolveFocusFolders(accessor, tree, args)
-    if (folders.length === 0) return
-    await focusScope.setFolders(folders)
+    const entries = resolveFocusEntries(accessor, tree, args)
+    if (entries.length === 0) return
+    await focusScope.setFolders(entries)
   }
 }
 
@@ -88,9 +87,9 @@ export class AddFolderToFocusAction extends Action2 {
   override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
     const tree = accessor.get(IExplorerTreeService)
     const focusScope = accessor.get(IFocusScopeService)
-    const folders = resolveFocusFolders(accessor, tree, args)
-    if (folders.length === 0) return
-    await focusScope.addFolders(folders)
+    const entries = resolveFocusEntries(accessor, tree, args)
+    if (entries.length === 0) return
+    await focusScope.addFolders(entries)
   }
 }
 
@@ -106,9 +105,9 @@ export class RemoveFolderFromFocusAction extends Action2 {
   override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
     const tree = accessor.get(IExplorerTreeService)
     const focusScope = accessor.get(IFocusScopeService)
-    const folders = resolveFocusFolders(accessor, tree, args)
-    if (folders.length === 0) return
-    await focusScope.removeFolders(folders)
+    const entries = resolveFocusEntries(accessor, tree, args)
+    if (entries.length === 0) return
+    await focusScope.removeFolders(entries)
   }
 }
 
@@ -132,17 +131,18 @@ export class ClearFocusScopeAction extends Action2 {
 }
 
 /**
- * Browse for folders to focus. Unlike the Explorer context-menu commands this
+ * Browse for paths to focus. Unlike the Explorer context-menu commands this
  * works while focus is already narrow: the file dialog lists directories
  * straight from IFileService, so the folders focus is currently hiding are still
  * reachable — and it accepts a typed path, which beats scrolling a large tree.
+ * Files are selectable too: a focus entry may name one file.
  */
 export class AddFoldersToFocusAction extends Action2 {
   static readonly ID = 'workbench.action.focusScope.addFolders'
   constructor() {
     super({
       id: AddFoldersToFocusAction.ID,
-      title: localize2('action.focusScope.addFolders.title', 'Add Folders to Focus...'),
+      title: localize2('action.focusScope.addFolders.title', 'Add to Focus...'),
       category: localize2('command.category.view', 'View'),
       f1: true,
     })
@@ -173,9 +173,9 @@ export class AddFoldersToFocusAction extends Action2 {
     }
 
     const picked = await fileDialog.showOpenDialog({
-      title: localize('focusScope.dialog.title', 'Add Folders to Focus'),
+      title: localize('focusScope.dialog.title', 'Add to Focus'),
       defaultUri: root,
-      canSelectFiles: false,
+      canSelectFiles: true,
       canSelectFolders: true,
       canSelectMany: true,
       openLabel: localize('focusScope.dialog.confirm', 'Focus'),
@@ -185,9 +185,9 @@ export class AddFoldersToFocusAction extends Action2 {
     const inside: string[] = []
     let skipped = 0
     for (const uri of picked) {
-      // A focus folder is a workspace-relative subfolder by definition, so
-      // neither an outside path (`relativePath` → null) nor the root itself
-      // (`''`, which means "focus everything") can become one.
+      // A focus entry is a workspace-relative path by definition, so neither an
+      // outside path (`relativePath` → null) nor the root itself (`''`, which
+      // means "focus everything") can become one.
       // normalizeFocusFolders would drop both silently, and a command that
       // appears to do nothing is worse than one that says what it skipped.
       const rel = uriIdentity.relativePath(root, uri)
@@ -202,7 +202,7 @@ export class AddFoldersToFocusAction extends Action2 {
         severity: Severity.Warning,
         message: localize(
           'focusScope.dialog.skipped',
-          'Skipped {count} selection(s): a focus folder must be a subfolder of the open folder.',
+          'Skipped {count} selection(s): a focus entry must be inside the open folder.',
           { count: skipped },
         ),
       })
@@ -221,7 +221,7 @@ export class ManageFocusScopeAction extends Action2 {
   constructor() {
     super({
       id: ManageFocusScopeAction.ID,
-      title: localize2('action.focusScope.manage.title', 'Manage Focused Folders'),
+      title: localize2('action.focusScope.manage.title', 'Manage Focused Entries'),
       category: localize2('command.category.view', 'View'),
       precondition: 'focusScopeEnabled',
       f1: true,
@@ -233,20 +233,20 @@ export class ManageFocusScopeAction extends Action2 {
     const focusScope = accessor.get(IFocusScopeService)
     const commands = accessor.get(ICommandService)
 
-    const folders = focusScope.folders
+    const entries = focusScope.entries
     const removeLabel = localize('focusScope.manage.remove', 'Remove from focus')
-    const items: QuickPickInput<FocusManageItem>[] = folders.map((folder) => ({
-      id: `remove:${folder}`,
-      label: folder,
+    const items: QuickPickInput<FocusManageItem>[] = entries.map((entry) => ({
+      id: `remove:${entry}`,
+      label: entry,
       description: removeLabel,
-      action: { kind: 'remove', folder } as const,
+      action: { kind: 'remove', entry } as const,
     }))
     if (items.length > 0) {
       items.push({ type: 'separator', id: 'focusScope.manage.sep' } satisfies IQuickPickSeparator)
     }
     items.push({
       id: 'add',
-      label: localize('focusScope.manage.add', 'Add Folders...'),
+      label: localize('focusScope.manage.add', 'Add...'),
       action: { kind: 'add' } as const,
     })
     items.push({
@@ -257,18 +257,15 @@ export class ManageFocusScopeAction extends Action2 {
 
     const chosen = await quickInput.pick(items, {
       placeholder:
-        folders.length > 0
-          ? localize('focusScope.manage.placeholder', 'Focused folders — pick one to remove')
-          : localize(
-              'focusScope.manage.placeholderEmpty',
-              'Focus mode is on with no folders focused',
-            ),
+        entries.length > 0
+          ? localize('focusScope.manage.placeholder', 'Focused entries — pick one to remove')
+          : localize('focusScope.manage.placeholderEmpty', 'Focus mode is on with nothing focused'),
     })
     if (!chosen) return
 
     switch (chosen.action.kind) {
       case 'remove':
-        await focusScope.removeFolders([chosen.action.folder])
+        await focusScope.removeFolders([chosen.action.entry])
         return
       case 'add':
         await commands.executeCommand(AddFoldersToFocusAction.ID)
@@ -282,7 +279,7 @@ export class ManageFocusScopeAction extends Action2 {
 
 interface FocusManageItem extends IQuickPickItem {
   readonly action:
-    | { readonly kind: 'remove'; readonly folder: string }
+    | { readonly kind: 'remove'; readonly entry: string }
     | { readonly kind: 'add' }
     | { readonly kind: 'exit' }
 }

@@ -318,12 +318,12 @@ describe('focusScopeActions', () => {
       expect(h.focusScope.folders).toEqual(['lib'])
     })
 
-    it('skips files in a mixed selection', async () => {
+    it('keeps files in a mixed selection — a focus entry may name a file', async () => {
       const h = makeHarness()
       await waitForRootChildren(h)
       h.tree.setSelection([h.src, h.mainTs], h.src)
       await run(h, FocusOnFolderAction.ID, { target: h.src, isDirectory: true })
-      expect(h.focusScope.folders).toEqual(['src'])
+      expect(h.focusScope.folders).toEqual(['src', 'main.ts'])
     })
 
     it('no-ops when the target is the workspace root', async () => {
@@ -394,11 +394,11 @@ describe('focusScopeActions', () => {
       expect(h.focusScope.folders).toEqual(['src', 'lib', 'Tools/Editor'])
     })
 
-    it('browses folders only, starting at the workspace root', async () => {
+    it('browses folders and files, starting at the workspace root', async () => {
       const h = makeHarness({ dialogResult: [URI.file('/ws/lib')] })
       await run(h, AddFoldersToFocusAction.ID)
       const opts = h.fileDialog.openCalls[0]
-      expect(opts?.canSelectFiles).toBe(false)
+      expect(opts?.canSelectFiles).toBe(true)
       expect(opts?.canSelectFolders).toBe(true)
       expect(opts?.canSelectMany).toBe(true)
       expect(opts?.defaultUri?.toString()).toBe(URI.file('/ws').toString())
@@ -441,12 +441,12 @@ describe('focusScopeActions', () => {
   })
 
   describe('ManageFocusScopeAction', () => {
-    it('offers each focused folder, then add and exit', async () => {
+    it('offers each focused entry, then add and exit', async () => {
       const h = makeHarness({ focusFolders: ['src', 'lib'] })
       await run(h, ManageFocusScopeAction.ID)
       const shown = h.quickInput.shownItems[0] ?? []
       const labels = shown.map((item) => ('label' in item ? item.label : '<sep>'))
-      expect(labels).toEqual(['src', 'lib', '<sep>', 'Add Folders...', 'Exit Focus Mode'])
+      expect(labels).toEqual(['src', 'lib', '<sep>', 'Add...', 'Exit Focus Mode'])
     })
 
     it('removes the picked folder', async () => {
@@ -488,7 +488,7 @@ describe('focusScopeActions', () => {
       await run(h, ManageFocusScopeAction.ID)
       const shown = h.quickInput.shownItems[0] ?? []
       const labels = shown.map((item) => ('label' in item ? item.label : '<sep>'))
-      expect(labels).toEqual(['Add Folders...', 'Exit Focus Mode'])
+      expect(labels).toEqual(['Add...', 'Exit Focus Mode'])
     })
   })
 })

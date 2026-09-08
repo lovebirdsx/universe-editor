@@ -205,6 +205,93 @@ describe('FileSearchService', () => {
     expect(complete.results.map((r) => r.relativePath).sort()).toEqual(['Client/a.ts', 'README.md'])
   })
 
+  it('enumerates nothing for an empty scanPaths without rootFilesInScope', async () => {
+    const root = await makeRoot()
+    await writeFile(root, 'Client/a.ts')
+    await writeFile(root, 'README.md')
+
+    const service = await makeService()
+    const complete = await service.search({
+      root: URI.file(root),
+      pattern: '',
+      matchAll: true,
+      scanPaths: [],
+      maxResults: 10,
+    })
+
+    // 空数组是「聚焦但无可扫路径」的显式信号，绝不能回退成全量枚举。
+    expect(complete.results).toEqual([])
+  })
+
+  it('enumerates only root files for an empty scanPaths with rootFilesInScope', async () => {
+    const root = await makeRoot()
+    await writeFile(root, 'Client/a.ts')
+    await writeFile(root, 'README.md')
+
+    const service = await makeService()
+    const complete = await service.search({
+      root: URI.file(root),
+      pattern: '',
+      matchAll: true,
+      scanPaths: [],
+      rootFilesInScope: true,
+      maxResults: 10,
+    })
+
+    expect(complete.results.map((r) => r.relativePath)).toEqual(['README.md'])
+  })
+
+  it('uses a distinct listing cache key for empty versus absent scanPaths', async () => {
+    const root = await makeRoot()
+    await writeFile(root, 'Client/a.ts')
+    await writeFile(root, 'README.md')
+
+    const cacheDir = path.join(await makeRoot(), 'listings')
+    const service = new FileSearchService(undefined, { cacheDir })
+    services.push(service)
+
+    // 未聚焦（scanPaths 缺席）与聚焦无可扫（[]）是两个语义状态：前者枚举
+    // 整个工作区，后者只剩根文件。共享缓存键会把全量清单错发给聚焦查询。
+    const focused = await service.search({
+      root: URI.file(root),
+      pattern: 'a',
+      scanPaths: [],
+      rootFilesInScope: true,
+      maxResults: 10,
+    })
+    expect(focused.results.map((r) => r.relativePath)).toEqual(['README.md'])
+
+    const unfocused = await service.search({
+      root: URI.file(root),
+      pattern: 'a',
+      rootFilesInScope: true,
+      maxResults: 10,
+    })
+    expect(unfocused.results.map((r) => r.relativePath).sort()).toEqual([
+      'Client/a.ts',
+      'README.md',
+    ])
+
+    const listings = (await fs.readdir(cacheDir)).filter((n) => n.endsWith('.list'))
+    expect(listings).toHaveLength(2)
+  })
+
+  it('scores nothing for an empty scanPaths even when the pattern matches root files', async () => {
+    const root = await makeRoot()
+    await writeFile(root, 'Client/main.ts')
+    await writeFile(root, 'main.md')
+
+    const service = await makeService()
+    const complete = await service.search({
+      root: URI.file(root),
+      pattern: 'main',
+      scanPaths: [],
+      maxResults: 10,
+    })
+
+    expect(complete.results).toEqual([])
+  })
+
   it('scores only files inside the scan paths', async () => {
     const root = await makeRoot()
     await writeFile(root, 'Client/main.ts')

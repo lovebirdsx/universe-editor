@@ -164,7 +164,9 @@ interface ListingSpec {
   readonly excludes: readonly string[]
   readonly ignore: readonly string[]
   readonly maxDepth: number
-  readonly scanPaths: readonly string[]
+  // undefined = 未聚焦（全量枚举）；已定义（含空数组）= 聚焦，空数组由调用方在
+  // 编排层跳过主枚举（聚焦但无可扫路径，只剩 rootFiles 浅枚举）。
+  readonly scanPaths: readonly string[] | undefined
   readonly rootFilesInScope: boolean
   readonly useIgnoreFiles: boolean
 }
@@ -198,7 +200,8 @@ function fileListArgs(spec: ListingSpec): string[] {
     if (!name) continue
     args.push('-g', `!**/${name}`, '-g', `!**/${name}/**`)
   }
-  if (spec.scanPaths.length > 0) args.push(...spec.scanPaths)
+  // rg `--files` 无位置参数时从 cwd 全量枚举——聚焦（含空 scanPaths）时绝不回退。
+  if (spec.scanPaths !== undefined && spec.scanPaths.length > 0) args.push(...spec.scanPaths)
   return args
 }
 
@@ -208,7 +211,9 @@ function listingKey(spec: ListingSpec): string {
     excludes: [...spec.excludes].sort(),
     ignore: [...spec.ignore].sort(),
     maxDepth: spec.maxDepth,
-    scanPaths: [...spec.scanPaths].sort(),
+    // JSON.stringify 省略 undefined 值但保留 []：缺席（未聚焦全量）与空数组
+    // （聚焦无可扫）天然是两个不同的缓存键，绝不会共享同一份磁盘清单。
+    scanPaths: spec.scanPaths === undefined ? undefined : [...spec.scanPaths].sort(),
     rootFilesInScope: spec.rootFilesInScope,
     // Part of the key: the two settings produce different file sets, so sharing
     // one cached listing between them would serve the previous setting's result.
@@ -272,7 +277,7 @@ export class FileSearchService extends Disposable implements IFileSearchService 
       excludes: query.excludes ?? [],
       ignore: query.ignore ?? [],
       maxDepth: query.maxDepth ?? DEFAULT_MAX_DEPTH,
-      scanPaths: query.scanPaths ?? [],
+      scanPaths: query.scanPaths,
       rootFilesInScope: query.rootFilesInScope === true,
       useIgnoreFiles: query.useIgnoreFiles === true,
     }
@@ -313,19 +318,25 @@ export class FileSearchService extends Disposable implements IFileSearchService 
     }
 
     if (matchAll) {
-      const res = await this._runRgLines({
-        args: fileListArgs(spec),
-        cwd: spec.rootFsPath,
-        cap: maxResults,
-        token,
-        deadlineAt,
-        label: 'list',
-      })
-      let lines = res.lines
-      let capped = res.capped
-      stopReason = res.stopReason ?? (res.capped ? 'maxResults' : null)
+      // scanPaths 已定义但为空 = 聚焦却无可扫路径（聚焦条目全是 rootFilesInScope
+      // 覆盖的根级文件）：主枚举整体跳过，只留根文件浅枚举，绝不能回退全量。
+      let lines: string[] = []
+      let capped = false
+      if (spec.scanPaths === undefined || spec.scanPaths.length > 0) {
+        const res = await this._runRgLines({
+          args: fileListArgs(spec),
+          cwd: spec.rootFsPath,
+          cap: maxResults,
+          token,
+          deadlineAt,
+          label: 'list',
+        })
+        lines = res.lines
+        capped = res.capped
+        stopReason = res.stopReason ?? (res.capped ? 'maxResults' : null)
+      }
       // 聚焦时根的直接文件在任何 scan path 之外，需要一次独立的浅层枚举补上。
-      if (spec.rootFilesInScope && spec.scanPaths.length > 0 && stopReason === null) {
+      if (spec.rootFilesInScope && spec.scanPaths !== undefined && stopReason === null) {
         const rootRes = await this._runRgLines({
           args: fileListArgs({ ...spec, scanPaths: [], maxDepth: 1 }),
           cwd: spec.rootFsPath,
@@ -550,14 +561,19 @@ export class FileSearchService extends Disposable implements IFileSearchService 
         const tmpPath = path.join(this._cacheDir, `${entry.key}-${stamp}.building`)
         const finalPath = path.join(this._cacheDir, `${entry.key}-${stamp}.list`)
         const fh = await fs.open(tmpPath, 'w')
-        const exit = await this._collectToFile(fh, fileListArgs(spec), spec.rootFsPath)
+        // 聚焦且 scanPaths 为空时主枚举整体跳过（聚焦但无可扫路径），清单只由
+        // 根文件浅枚举构成；undefined（未聚焦）则照常全量。
+        const exit =
+          spec.scanPaths === undefined || spec.scanPaths.length > 0
+            ? await this._collectToFile(fh, fileListArgs(spec), spec.rootFsPath)
+            : { code: 0 as number | null, stderr: '' }
         // 聚焦时根的直接文件在任何 scan path 之外：主清单写完后追加一次浅层枚举。
         let rootExit: RgCollectExit | undefined
         if (
           exit.error === undefined &&
           exit.code !== null &&
           spec.rootFilesInScope &&
-          spec.scanPaths.length > 0
+          spec.scanPaths !== undefined
         ) {
           rootExit = await this._collectToFile(
             fh,

@@ -10,7 +10,7 @@
  * `..` are dropped rather than clamped — clamping would turn a typo into "focus
  * everything".
  */
-import { collapseScopeDirs } from './pathUtil.js'
+import { collapseScopeDirs, isUnderAny } from './pathUtil.js'
 
 /** The subset of `workspace.focusEnabled` / `workspace.focusFolders` the
  *  reconcile scope cares about. */
@@ -111,6 +111,60 @@ export function resolveFocusScopeDirs(config: FocusScopeConfig, workspaceRoot: s
   }
   const root = workspaceRoot.replace(/\\/g, '/').replace(/\/+$/, '')
   return collapseDirs(rels).map((rel) => `${root}/${rel}`)
+}
+
+/** Stat shape the split resolver needs — injected so the function stays pure
+ *  and unit-testable without touching the disk. Mirrors the subset of the
+ *  host `workspace.fs.stat` result the split actually reads. */
+export interface FocusEntryStat {
+  readonly isDirectory: boolean
+}
+
+/**
+ * Resolve the focus configuration into absolute local DIRECTORIES and FILES
+ * separately. `resolveFocusScopeDirs` treats every entry as a directory, which
+ * misroutes a file entry (`Source/Client/Run.bat`) into a recursive `<file>/...`
+ * reconcile filespec that p4 answers as no-such-file (exit 0, empty) — and the
+ * empty answer is checkpointed as "clean" forever, so the file's real drift is
+ * never re-examined. The caller stats each entry on disk: a directory entry
+ * joins the recursive scan scope, a file entry joins a per-file narrow query
+ * scope that is re-verified fresh every session and never checkpointed.
+ *
+ * `dirs` collapse to their shallowest ancestors (`A` + `A/B` → `A`), and a file
+ * entry that already sits under a resolved directory is dropped (the recursive
+ * scan covers it). A MISSING entry (`stat` returns undefined) is kept in
+ * `files` — the per-file query tolerates a vanished path the way the watcher
+ * tolerates deletes, whereas guessing "it was a directory" would resurrect the
+ * bad filespec this split exists to kill. Returns empty buckets when focus is
+ * disabled or empty.
+ */
+export async function resolveFocusScope(
+  config: FocusScopeConfig,
+  workspaceRoot: string,
+  stat: (absolutePath: string) => Promise<FocusEntryStat | undefined>,
+): Promise<{ dirs: string[]; files: string[] }> {
+  if (!config.enabled) return { dirs: [], files: [] }
+  const root = workspaceRoot.replace(/\\/g, '/').replace(/\/+$/, '')
+  const rels: string[] = []
+  for (const key of Object.keys(config.folders)) {
+    if (config.folders[key] !== true) continue
+    const rel = canonicalRelative(key)
+    if (rel === undefined) continue
+    rels.push(rel)
+  }
+  const abs = rels.map((rel) => `${root}/${rel}`)
+  const stats = await Promise.all(abs.map((p) => stat(p)))
+  const dirCandidates: string[] = []
+  const fileCandidates: string[] = []
+  for (let i = 0; i < abs.length; i++) {
+    const p = abs[i]!
+    const s = stats[i]
+    if (s !== undefined && s.isDirectory) dirCandidates.push(p)
+    else fileCandidates.push(p)
+  }
+  const dirs = collapseDirs(dirCandidates)
+  const files = fileCandidates.filter((p) => !isUnderAny(p, dirs))
+  return { dirs, files }
 }
 
 /**

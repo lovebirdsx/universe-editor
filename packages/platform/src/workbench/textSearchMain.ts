@@ -16,9 +16,14 @@ export interface ITextSearchMainQuery extends ITextSearchQuery {
   /** Ripgrep `--threads`; 0/absent = automatic (CPU cores − 2). */
   readonly threads?: number
   /**
-   * Workspace-relative directories to search instead of the whole root
-   * (ripgrep positional arguments). Results resolve against `root`. Absent or
-   * empty = search the whole root.
+   * Workspace-relative paths to search instead of the whole root (ripgrep
+   * positional arguments — may name directories *or single files*; a focus
+   * entry may be one file). Results resolve against `root`. **Absent** = the
+   * workspace is not focused: search the whole root. **Defined but empty** =
+   * focused with nothing scannable (e.g. the only focus entries are root-level
+   * files covered by `rootFilesInScope`): the main scan is skipped and only the
+   * root-files pass may run. The distinction matters — folding `[]` into the
+   * unfocused default would silently search everything the focus hid.
    */
   readonly scanPaths?: readonly string[]
   /**

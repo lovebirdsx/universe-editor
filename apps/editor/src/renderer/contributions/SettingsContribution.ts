@@ -409,7 +409,7 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
             additionalProperties: { type: 'boolean' },
             description: localize(
               'settings.workspace.focusFolders.description',
-              'Workspace-relative folders to focus on, e.g. `{ "Client": true }`. Paths, not glob patterns — they are handed straight to the file scanner and watcher. Set an entry to false to cancel one inherited from a lower settings layer. Only takes effect when `workspace.focusEnabled` is on.',
+              'Workspace-relative folders or individual files to focus on, e.g. `{ "Client": true, "Source/Client/Run.bat": true }`. Paths, not glob patterns — they are handed straight to the file scanner and watcher; an entry naming a file is treated as a file (watched directly, covered by search, and reconciled per-file by Perforce). Set an entry to false to cancel one inherited from a lower settings layer. Only takes effect when `workspace.focusEnabled` is on.',
             ),
           },
           'workspace.focusShowRootFiles': {

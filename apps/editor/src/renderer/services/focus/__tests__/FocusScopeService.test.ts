@@ -9,6 +9,8 @@ import {
   Emitter,
   URI,
   UriIdentityService,
+  type IFileChangeEvent,
+  type IFileStat,
   type IWorkspace,
   type IWorkspaceService,
 } from '@universe-editor/platform'
@@ -39,11 +41,54 @@ function makeWorkspace(folder: URI | null = ROOT) {
   }
 }
 
-function makeService(platform: 'win32' | 'linux' = 'linux') {
+/** A minimal stat stub: kinds by workspace-relative path, missing => reject. */
+function makeFileService(kinds: Readonly<Record<string, 'directory' | 'file'>>) {
+  const mutable = { ...kinds }
+  return {
+    kinds: mutable,
+    service: {
+      async stat(resource: URI) {
+        const rel = resource.path.replace(/^\/repo\/?/, '')
+        const kind = mutable[rel]
+        if (kind === undefined) throw new Error(`ENOENT: ${rel}`)
+        return { isDirectory: kind === 'directory' } as IFileStat
+      },
+    },
+  }
+}
+
+function makeFileWatcher() {
+  const onDidChangeFiles = new Emitter<readonly IFileChangeEvent[]>()
+  return {
+    service: { onDidChangeFiles: onDidChangeFiles.event },
+    fire(events: readonly IFileChangeEvent[]) {
+      onDidChangeFiles.fire(events)
+    },
+  }
+}
+
+function makeService(
+  platform: 'win32' | 'linux' = 'linux',
+  kinds?: Readonly<Record<string, 'directory' | 'file'>>,
+) {
   const config = new ConfigurationService()
   const workspace = makeWorkspace()
-  const svc = new FocusScopeService(config, workspace.service, new UriIdentityService(platform))
-  return { config, workspace, svc }
+  const files = makeFileService(kinds ?? {})
+  const watcher = makeFileWatcher()
+  const svc = new FocusScopeService(
+    config,
+    workspace.service,
+    new UriIdentityService(platform),
+    kinds ? (files.service as never) : undefined,
+    kinds ? (watcher.service as never) : undefined,
+  )
+  return { config, workspace, svc, files, watcher }
+}
+
+/** Flush the pending stat microtasks so a classification round lands. */
+async function flushClassification() {
+  // Microtasks only — never a macrotask, so the flush works under fake timers.
+  for (let i = 0; i < 10; i++) await Promise.resolve()
 }
 
 function enableFocus(config: ConfigurationService, folders: Record<string, unknown>) {
@@ -349,7 +394,13 @@ describe('FocusScopeService writes', () => {
   it('matches focus folders case-insensitively on win32', async () => {
     const config = new ConfigurationService()
     const workspace = makeWorkspace()
-    const svc = new FocusScopeService(config, workspace.service, new UriIdentityService('win32'))
+    const svc = new FocusScopeService(
+      config,
+      workspace.service,
+      new UriIdentityService('win32'),
+      undefined,
+      undefined,
+    )
 
     await svc.setFolders(['Client'])
     expect(svc.isFocusFolder('client')).toBe(true)
@@ -369,5 +420,145 @@ describe('FocusScopeService writes', () => {
     expect(svc.isFocusFolder('Tools')).toBe(false)
     expect(svc.isFocusFolder('Tools/Editor/src')).toBe(false)
     expect(svc.isFocusFolder('.')).toBe(false)
+  })
+})
+
+describe('FocusScopeService file-kind classification', () => {
+  it('optimistically treats entries as directories, then corrects via stat', async () => {
+    const { config, svc } = makeService('linux', {
+      Client: 'directory',
+      'Source/Run.bat': 'file',
+    })
+    enableFocus(config, { Client: true, 'Source/Run.bat': true })
+
+    // First frame: bit-identical to the pre-classification behaviour — every
+    // entry a directory, so nothing waits on the disk.
+    expect(svc.folders).toEqual(['Client', 'Source/Run.bat'])
+    expect(svc.files).toEqual([])
+
+    await flushClassification()
+    expect(svc.folders).toEqual(['Client'])
+    expect(svc.files).toEqual(['Source/Run.bat'])
+    expect(svc.pendingFiles).toEqual([])
+  })
+
+  it('lands a missing entry in pendingFiles', async () => {
+    const { config, svc } = makeService('linux', { Client: 'directory' })
+    enableFocus(config, { Client: true, 'Later.txt': true })
+
+    await flushClassification()
+    expect(svc.folders).toEqual(['Client'])
+    expect(svc.files).toEqual([])
+    expect(svc.pendingFiles).toEqual(['Later.txt'])
+  })
+
+  it('does not fire a second change when every entry is a directory', async () => {
+    const { config, svc } = makeService('linux', { Client: 'directory' })
+    enableFocus(config, { Client: true })
+
+    const listener = vi.fn()
+    svc.onDidChange(listener)
+    await flushClassification()
+    expect(listener).not.toHaveBeenCalled()
+  })
+
+  it('fires once when the correction actually changes the buckets', async () => {
+    const { config, svc } = makeService('linux', { 'Source/Run.bat': 'file' })
+    enableFocus(config, { 'Source/Run.bat': true })
+
+    const listener = vi.fn()
+    svc.onDidChange(listener)
+    await flushClassification()
+    expect(listener).toHaveBeenCalledTimes(1)
+  })
+
+  it('scopes the focus file itself while keeping siblings out', async () => {
+    const { config, svc } = makeService('linux', { 'Source/Run.bat': 'file' })
+    enableFocus(config, { 'Source/Run.bat': true })
+    await flushClassification()
+
+    expect(svc.isVisible('Source/Run.bat', false)).toBe(true)
+    expect(svc.isVisible('Source', true)).toBe(true) // skeleton, stays reachable
+    expect(svc.isVisible('Source/Other.bat', false)).toBe(false)
+    expect(svc.isFocusFile('Source/Run.bat')).toBe(true)
+    expect(svc.isFocusEntry('Source/Run.bat')).toBe(true)
+    expect(svc.isFocusFolder('Source/Run.bat')).toBe(false)
+  })
+
+  it('scanPaths mixes folders and files; fileWatchPaths covers files + pending', async () => {
+    const { config, svc } = makeService('linux', {
+      Client: 'directory',
+      'Source/Run.bat': 'file',
+    })
+    enableFocus(config, { Client: true, 'Source/Run.bat': true, 'Later.txt': true })
+    await flushClassification()
+
+    expect(svc.scanPaths).toEqual(['Client', 'Source/Run.bat'])
+    expect(svc.fileWatchPaths.map((u) => u.path)).toEqual([
+      '/repo/Source/Run.bat',
+      '/repo/Later.txt',
+    ])
+  })
+
+  it('drops a root-level focus file from scanPaths when rootFilesInScope covers it', async () => {
+    const { config, svc } = makeService('linux', { 'Run.bat': 'file' })
+    enableFocus(config, { 'Run.bat': true })
+    await flushClassification()
+
+    expect(svc.rootFilesInScope).toBe(true)
+    // The root enumeration already reports it; a positional argument would double it.
+    expect(svc.scanPaths).toEqual([])
+
+    config.update('workspace.focusShowRootFiles', false, ConfigurationTarget.User)
+    await flushClassification()
+    expect(svc.scanPaths).toEqual(['Run.bat'])
+  })
+
+  it('reclassifies when the watcher reports an entry changed kind', async () => {
+    vi.useFakeTimers()
+    try {
+      const { config, svc, files, watcher } = makeService('linux', { Later: 'file' })
+      enableFocus(config, { Later: true })
+      await vi.runAllTimersAsync()
+      expect(svc.files).toEqual(['Later'])
+
+      // The file is replaced by a directory on disk; only the watcher can tell.
+      files.kinds['Later'] = 'directory'
+      watcher.fire([{ type: 'deleted', resource: URI.file('/repo/Later/x.ts') }])
+      await vi.runAllTimersAsync()
+      expect(svc.folders).toEqual(['Later'])
+      expect(svc.files).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('ignores watcher events that touch no focus entry', async () => {
+    vi.useFakeTimers()
+    try {
+      const { config, svc, watcher } = makeService('linux', { Client: 'directory' })
+      enableFocus(config, { Client: true })
+      await vi.runAllTimersAsync()
+
+      const listener = vi.fn()
+      svc.onDidChange(listener)
+      watcher.fire([{ type: 'modified', resource: URI.file('/repo/Engine/a.ts') }])
+      await vi.runAllTimersAsync()
+      expect(listener).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a config change during stat discards the stale classification', async () => {
+    const { config, svc } = makeService('linux', { 'a.txt': 'file', 'b.txt': 'file' })
+    enableFocus(config, { 'a.txt': true })
+    // Change the configuration before the first classification can land: the
+    // in-flight round observed ['a.txt'] but must not land over ['b.txt'].
+    enableFocus(config, { 'b.txt': true })
+    await flushClassification()
+
+    expect(svc.entries).toEqual(['b.txt'])
+    expect(svc.files).toEqual(['b.txt'])
   })
 })

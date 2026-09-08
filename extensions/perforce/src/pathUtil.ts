@@ -55,6 +55,23 @@ export function containsAny(parentDir: string, dirs: readonly string[]): boolean
   return dirs.some((d) => isUnderAny(d, [parentDir]))
 }
 
+/**
+ * Whether `path` EXACTLY equals one of `files`, using {@link scopeKey} for
+ * identity — the file counterpart of {@link isUnderAny}, for scope entries that
+ * name a single file rather than a directory. No directory-boundary logic:
+ * `A` matches only `A` itself, never `A/B` (that is `isUnderAny`'s answer for
+ * the directory the entry resolves to). Empty `files` matches nothing.
+ * Pure, so unit-testable without spawning p4.
+ */
+export function isScopeFile(path: string, files: readonly string[]): boolean {
+  if (files.length === 0) return false
+  const key = scopeKey(path)
+  for (const file of files) {
+    if (key === scopeKey(file)) return true
+  }
+  return false
+}
+
 /** Convert a host-shaped file URI (scheme `file`, path like `/D:/a/b.txt` on
  *  Windows or `/a/b` on posix) to an OS filesystem path. Returns undefined for
  *  non-file URIs (e.g. an untitled or virtual document). Pure, so unit-testable

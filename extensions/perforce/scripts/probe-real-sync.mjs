@@ -185,8 +185,7 @@ const showSyncVerdict = (title, res) => {
   )
   if (summary.unrecognized) {
     const b = bucketSyncLines(res.stdout)
-    for (const line of b.unrecognized)
-      console.log(`    UNRECOGNIZED-LINE: |${line.slice(0, 160)}|`)
+    for (const line of b.unrecognized) console.log(`    UNRECOGNIZED-LINE: |${line.slice(0, 160)}|`)
   }
   return summary
 }
@@ -198,8 +197,7 @@ const showResolveVerdict = (title, res) => {
   )
   if (summary.unrecognized) {
     const b = bucketResolveLines(res.stdout)
-    for (const line of b.unrecognized)
-      console.log(`    UNRECOGNIZED-LINE: |${line.slice(0, 160)}|`)
+    for (const line of b.unrecognized) console.log(`    UNRECOGNIZED-LINE: |${line.slice(0, 160)}|`)
   }
   return summary
 }
@@ -437,7 +435,11 @@ function fatal(msg) {
 async function discoverConnection() {
   const info = await run(['info'], { cwd: WORKSPACE, phase: 'workspace-ro', echo: false })
   const grab = (k) => info.stdout.match(new RegExp(`^${k}: (.*)`, 'm'))?.[1]?.trim()
-  const ambient = { client: grab('Client name'), user: grab('User name'), root: grab('Client root') }
+  const ambient = {
+    client: grab('Client name'),
+    user: grab('User name'),
+    root: grab('Client root'),
+  }
   AMBIENT_CLIENT = ambient.client ?? ''
   console.log(
     `ambient (read-only source): user=${ambient.user} client=${ambient.client} root=${ambient.root}`,
@@ -445,7 +447,9 @@ async function discoverConnection() {
   if (info.exitCode !== 0 || !ambient.client)
     fatal('p4 info failed — is p4 logged in and the server reachable?')
   if (ambient.root && resolve(ambient.root).toLowerCase() !== resolve(WORKSPACE).toLowerCase())
-    fatal('resolved client root does not match the workspace dir; aborting to avoid probing the wrong client')
+    fatal(
+      'resolved client root does not match the workspace dir; aborting to avoid probing the wrong client',
+    )
 
   const cfgName = process.env['P4CONFIG'] || '.p4config'
   let cfgFile
@@ -466,16 +470,21 @@ async function discoverConnection() {
       const m = line.match(/^([A-Za-z0-9_]+)\s*=\s*(.*)$/)
       if (m && m[1] in cfg) cfg[m[1]] = m[2].trim()
     }
-    console.log(`connection config copied from ${cfgFile} (keys P4PORT/P4USER/P4CHARSET; values not echoed)`)
+    console.log(
+      `connection config copied from ${cfgFile} (keys P4PORT/P4USER/P4CHARSET; values not echoed)`,
+    )
   } else {
     for (const key of ['P4PORT', 'P4USER', 'P4CHARSET']) {
       const r = await run(['set', key], { cwd: WORKSPACE, phase: 'workspace-ro', echo: false })
       const m = r.stdout.match(new RegExp(`^${key}=(.*)$`, 'm'))
       cfg[key] = (m?.[1] ?? '').replace(/\s*\(.*\)\s*$/, '').trim()
     }
-    console.log(`connection config taken from 'p4 set <key>' (no P4CONFIG file found; values not echoed)`)
+    console.log(
+      `connection config taken from 'p4 set <key>' (no P4CONFIG file found; values not echoed)`,
+    )
   }
-  if (!cfg.P4PORT || !cfg.P4USER) fatal('could not discover P4PORT/P4USER — cannot build the temp P4CONFIG')
+  if (!cfg.P4PORT || !cfg.P4USER)
+    fatal('could not discover P4PORT/P4USER — cannot build the temp P4CONFIG')
   return { ambient, cfgName, cfg }
 }
 
@@ -493,12 +502,20 @@ async function cleanStaleClients() {
   }
   console.log(`stale tmp_probe_* client(s) found: ${stale.join(', ')} — reverting + deleting`)
   for (const name of stale) {
-    await run(['-c', name, 'revert', '//...'], { cwd: tempRoot, phase: 'temp', label: 'stale revert' })
+    await run(['-c', name, 'revert', '//...'], {
+      cwd: tempRoot,
+      phase: 'temp',
+      label: 'stale revert',
+    })
     // Plain -d first: measured, `-f` is permission-denied for non-admins here.
     const d = await run(['-c', name, 'client', '-d', name], { cwd: tempRoot, phase: 'temp' })
     if (d.exitCode !== 0) {
-      const d2 = await run(['-c', name, 'client', '-d', '-f', name], { cwd: tempRoot, phase: 'temp' })
-      if (d2.exitCode !== 0) console.log(`!! could not delete stale client ${name} (owner/admin needed?)`)
+      const d2 = await run(['-c', name, 'client', '-d', '-f', name], {
+        cwd: tempRoot,
+        phase: 'temp',
+      })
+      if (d2.exitCode !== 0)
+        console.log(`!! could not delete stale client ${name} (owner/admin needed?)`)
     }
   }
 }
@@ -511,7 +528,9 @@ async function discoverDepotDir() {
   })
   const depot = w.stdout.match(/\.\.\. depotFile (.*)/)?.[1]?.replace(/\/+$/, '')
   if (!depot || !depot.startsWith('//'))
-    fatal(`could not map ${WORKSPACE}/${NARROW} to a depot dir (not in client view?) — pass --narrow pointing at a dir that exists in the workspace`)
+    fatal(
+      `could not map ${WORKSPACE}/${NARROW} to a depot dir (not in client view?) — pass --narrow pointing at a dir that exists in the workspace`,
+    )
   return depot
 }
 
@@ -540,7 +559,9 @@ async function discoverConflictFiles(depotDir) {
     if (headRev >= 2 && /^text/.test(headType)) {
       take(PINNED_FILE, headRev, depotDir !== undefined && PINNED_FILE.startsWith(`${depotDir}/`))
     } else {
-      console.log(`  !! pinned file is not a multi-rev text file (headRev=${headRev} type=${headType})`)
+      console.log(
+        `  !! pinned file is not a multi-rev text file (headRev=${headRev} type=${headType})`,
+      )
     }
     return out
   }
@@ -554,7 +575,11 @@ async function discoverConflictFiles(depotDir) {
       label: `files scan ${scope}`,
     })
     const cands = ztagBlocks(r.stdout)
-      .map((b) => ({ depotFile: field(b, 'depotFile'), rev: Number(field(b, 'rev')), type: field(b, 'type') ?? '' }))
+      .map((b) => ({
+        depotFile: field(b, 'depotFile'),
+        rev: Number(field(b, 'rev')),
+        type: field(b, 'type') ?? '',
+      }))
       .filter((c) => c.depotFile && c.rev >= 2 && /^text/.test(c.type))
     console.log(`  ${scope}: ${cands.length} multi-rev text candidate(s) in the first 2000 records`)
     for (const c of cands) {
@@ -575,7 +600,9 @@ async function discoverConflictFiles(depotDir) {
     }
   }
   if (out.length === 0)
-    console.log('  !! no multi-rev text file found — conflict scenarios skipped (recorded as unverified)')
+    console.log(
+      '  !! no multi-rev text file found — conflict scenarios skipped (recorded as unverified)',
+    )
   return out
 }
 
@@ -631,7 +658,9 @@ async function cleanup() {
     })
   }
   if (d.exitCode !== 0) {
-    console.error(`!! CLIENT DELETE FAILED (exit ${d.exitCode}) — manual cleanup required: p4 -c ${clientName} client -d ${clientName}`)
+    console.error(
+      `!! CLIENT DELETE FAILED (exit ${d.exitCode}) — manual cleanup required: p4 -c ${clientName} client -d ${clientName}`,
+    )
   } else {
     console.log(`  client ${clientName} deleted (exit 0)`)
   }
@@ -642,7 +671,9 @@ async function cleanup() {
     label: 'verify deletion',
   })
   const remaining = [...check.stdout.matchAll(/\.\.\. client (.*)/g)].map((m) => m[1])
-  console.log(`  remaining tmp_probe_* clients: ${remaining.length === 0 ? 'NONE' : remaining.join(', ')}`)
+  console.log(
+    `  remaining tmp_probe_* clients: ${remaining.length === 0 ? 'NONE' : remaining.join(', ')}`,
+  )
   makeWritableTree(tempRoot)
   try {
     rmSync(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
@@ -768,7 +799,9 @@ async function scenarioS3Clobber(depotFile, local, headRev) {
   })
   showSyncVerdict('sync -f clobber parse', r2)
   const restored = !readFileSync(local, 'utf8').includes('--probe-local-draft--')
-  console.log(`  local draft overwritten by -f: ${restored ? 'YES (content restored)' : 'NO (draft survived!)'}`)
+  console.log(
+    `  local draft overwritten by -f: ${restored ? 'YES (content restored)' : 'NO (draft survived!)'}`,
+  )
   return { r1, r2 }
 }
 
@@ -836,7 +869,11 @@ async function scenarioS5aResolveKeptOpenState(local) {
   })
   const keys = [...rFstat.stdout.matchAll(/^\.\.\. (\w+)(?: |$)/gm)].map((m) => m[1])
   console.log(`  fstat keys: [${keys.join(', ')}]`)
-  await run(['-c', clientName, 'resolve', '-n'], { cwd: tempRoot, phase: 'temp', label: 'resolve -n preview' })
+  await run(['-c', clientName, 'resolve', '-n'], {
+    cwd: tempRoot,
+    phase: 'temp',
+    label: 'resolve -n preview',
+  })
   const rSyncUnresolved = await run(['-c', clientName, 'sync', local], {
     cwd: tempRoot,
     phase: 'temp',
@@ -895,15 +932,30 @@ async function scenarioS5bResolveRealConflict(depotFile, local, headRev) {
   // to head, resolve scheduled, merge base = the opened rev) → write the
   // overlapping local edit. No depot writes, no shelves.
   const buildConflict = async (label) => {
-    await run(['-c', clientName, 'revert', local], { cwd: tempRoot, phase: 'temp', echo: false, label: `${label}: revert` })
+    await run(['-c', clientName, 'revert', local], {
+      cwd: tempRoot,
+      phase: 'temp',
+      echo: false,
+      label: `${label}: revert`,
+    })
     await run(['-c', clientName, 'sync', `${depotFile}#${headRev - 1}`], {
       cwd: tempRoot,
       phase: 'temp',
       echo: false,
       label: `${label}: sync #N-1`,
     })
-    await run(['-c', clientName, 'edit', local], { cwd: tempRoot, phase: 'temp', echo: false, label: `${label}: edit` })
-    await run(['-c', clientName, 'sync', local], { cwd: tempRoot, phase: 'temp', echo: false, label: `${label}: keptOpen sync` })
+    await run(['-c', clientName, 'edit', local], {
+      cwd: tempRoot,
+      phase: 'temp',
+      echo: false,
+      label: `${label}: edit`,
+    })
+    await run(['-c', clientName, 'sync', local], {
+      cwd: tempRoot,
+      phase: 'temp',
+      echo: false,
+      label: `${label}: keptOpen sync`,
+    })
     // Open for edit ⇒ read-only bit cleared ⇒ the write succeeds.
     writeFileSync(local, conflictContent)
   }
@@ -937,26 +989,45 @@ async function scenarioS5bResolveRealConflict(depotFile, local, headRev) {
     label: 'resolve -am on a genuine conflict',
   })
   showResolveVerdict('resolve -am (conflict) parse', rAm)
-  console.log(`  KEY CLAIM: -am with files left unresolved exits ${rAm.exitCode} (phase-5 premise: exit 0)`)
+  console.log(
+    `  KEY CLAIM: -am with files left unresolved exits ${rAm.exitCode} (phase-5 premise: exit 0)`,
+  )
   const rFstat2 = await run(['-c', clientName, '-ztag', 'fstat', local], {
     cwd: tempRoot,
     phase: 'temp',
     echo: false,
     label: 'fstat after skipped -am',
   })
-  console.log(`  after skipped -am: fstat unresolvedKeyPresent=${rFstat2.stdout.includes('... unresolved')}`)
+  console.log(
+    `  after skipped -am: fstat unresolvedKeyPresent=${rFstat2.stdout.includes('... unresolved')}`,
+  )
 
   // Rewrite the local file as head + an appended line: a cleanly mergeable
   // edit (base #N-1, our delta touches a fresh line) — then -am should land.
-  await run(['-c', clientName, 'revert', local], { cwd: tempRoot, phase: 'temp', echo: false, label: 'mergeable: revert' })
+  await run(['-c', clientName, 'revert', local], {
+    cwd: tempRoot,
+    phase: 'temp',
+    echo: false,
+    label: 'mergeable: revert',
+  })
   await run(['-c', clientName, 'sync', `${depotFile}#${headRev - 1}`], {
     cwd: tempRoot,
     phase: 'temp',
     echo: false,
     label: 'mergeable: sync #N-1',
   })
-  await run(['-c', clientName, 'edit', local], { cwd: tempRoot, phase: 'temp', echo: false, label: 'mergeable: edit' })
-  await run(['-c', clientName, 'sync', local], { cwd: tempRoot, phase: 'temp', echo: false, label: 'mergeable: keptOpen sync' })
+  await run(['-c', clientName, 'edit', local], {
+    cwd: tempRoot,
+    phase: 'temp',
+    echo: false,
+    label: 'mergeable: edit',
+  })
+  await run(['-c', clientName, 'sync', local], {
+    cwd: tempRoot,
+    phase: 'temp',
+    echo: false,
+    label: 'mergeable: keptOpen sync',
+  })
   writeFileSync(local, headContent + '--probe-auto-merge-append--\n')
   const rAm2 = await run(['-c', clientName, 'resolve', '-am', local], {
     cwd: tempRoot,
@@ -964,7 +1035,9 @@ async function scenarioS5bResolveRealConflict(depotFile, local, headRev) {
     label: 'resolve -am on a mergeable edit',
   })
   showResolveVerdict('resolve -am (mergeable) parse', rAm2)
-  console.log(`  after mergeable -am: local content == head+append: ${readNorm() === headContent.replace(/\r\n/g, '\n') + '--probe-auto-merge-append--\n' ? 'YES' : 'NO'}`)
+  console.log(
+    `  after mergeable -am: local content == head+append: ${readNorm() === headContent.replace(/\r\n/g, '\n') + '--probe-auto-merge-append--\n' ? 'YES' : 'NO'}`,
+  )
 
   await buildConflict('-ay setup')
   const rAy = await run(['-c', clientName, 'resolve', '-ay', local], {
@@ -973,7 +1046,9 @@ async function scenarioS5bResolveRealConflict(depotFile, local, headRev) {
     label: 'resolve -ay (accept yours)',
   })
   showResolveVerdict('resolve -ay parse', rAy)
-  console.log(`  after -ay: local content == our conflicting edit: ${readNorm() === conflictContent.replace(/\r\n/g, '\n') ? 'YES' : 'NO'}`)
+  console.log(
+    `  after -ay: local content == our conflicting edit: ${readNorm() === conflictContent.replace(/\r\n/g, '\n') ? 'YES' : 'NO'}`,
+  )
 
   await buildConflict('-at setup')
   const rAt = await run(['-c', clientName, 'resolve', '-at', local], {
@@ -982,7 +1057,9 @@ async function scenarioS5bResolveRealConflict(depotFile, local, headRev) {
     label: 'resolve -at (accept theirs)',
   })
   showResolveVerdict('resolve -at parse', rAt)
-  console.log(`  after -at: local content == depot head: ${readNorm() === headContent.replace(/\r\n/g, '\n') ? 'YES' : 'NO'}`)
+  console.log(
+    `  after -at: local content == depot head: ${readNorm() === headContent.replace(/\r\n/g, '\n') ? 'YES' : 'NO'}`,
+  )
 }
 
 /** Measured on this server: unshelving a full-file-replacement shelf does NOT
@@ -992,14 +1069,23 @@ async function scenarioS5bResolveRealConflict(depotFile, local, headRev) {
  *  conflict scenarios (S5b) therefore use the keptOpen-sync builder instead. */
 async function scenarioS5cUnshelveObservation(depotFile, local, headRev) {
   tag('S5c shelve+unshelve — unshelve does NOT schedule a resolve on this server')
-  await run(['-c', clientName, 'revert', local], { cwd: tempRoot, phase: 'temp', echo: false, label: 'revert to clean state' })
+  await run(['-c', clientName, 'revert', local], {
+    cwd: tempRoot,
+    phase: 'temp',
+    echo: false,
+    label: 'revert to clean state',
+  })
   await run(['-c', clientName, 'sync', `${depotFile}#${headRev - 1}`], {
     cwd: tempRoot,
     phase: 'temp',
     echo: false,
     label: 'sync down to #N-1',
   })
-  await run(['-c', clientName, 'edit', local], { cwd: tempRoot, phase: 'temp', label: 'open for edit (full replacement)' })
+  await run(['-c', clientName, 'edit', local], {
+    cwd: tempRoot,
+    phase: 'temp',
+    label: 'open for edit (full replacement)',
+  })
   writeFileSync(local, '--probe-shelf-v1--\n--probe-shelf-second-line--\n')
   // `p4 shelve` WITHOUT -c pops the CL-spec editor and blocks forever here
   // (this machine's P4EDITOR is node, which then crashes on the spec file) —
@@ -1012,7 +1098,9 @@ async function scenarioS5cUnshelveObservation(depotFile, local, headRev) {
   })
   const shelvedCl = rChange.stdout.match(/Change (\d+) created/)?.[1]
   if (!shelvedCl) {
-    console.log(`  !! could not create a numbered changelist (exit ${rChange.exitCode}) — S5c aborted (recorded as unverified)`)
+    console.log(
+      `  !! could not create a numbered changelist (exit ${rChange.exitCode}) — S5c aborted (recorded as unverified)`,
+    )
     return
   }
   SHELVED_CLS.push(shelvedCl)
@@ -1027,8 +1115,16 @@ async function scenarioS5cUnshelveObservation(depotFile, local, headRev) {
     phase: 'temp',
     label: 'shelve the replacement edit',
   })
-  await run(['-c', clientName, 'revert', local], { cwd: tempRoot, phase: 'temp', label: 'revert after shelve' })
-  await run(['-c', clientName, 'sync', local], { cwd: tempRoot, phase: 'temp', label: 'sync to head' })
+  await run(['-c', clientName, 'revert', local], {
+    cwd: tempRoot,
+    phase: 'temp',
+    label: 'revert after shelve',
+  })
+  await run(['-c', clientName, 'sync', local], {
+    cwd: tempRoot,
+    phase: 'temp',
+    label: 'sync to head',
+  })
   const rUnshelve = await run(['-c', clientName, 'unshelve', '-s', shelvedCl, local], {
     cwd: tempRoot,
     phase: 'temp',
@@ -1058,7 +1154,11 @@ async function scenarioS6OpenForAdd() {
   tag('S6 open-for-add fstat — haveRev absent vs string "none" (status bar action===add premise)')
   const newLocal = join(tempRoot, 'probe_new_file.txt')
   writeFileSync(newLocal, 'probe add content\n')
-  await run(['-c', clientName, 'add', newLocal], { cwd: tempRoot, phase: 'temp', label: 'add a brand-new file' })
+  await run(['-c', clientName, 'add', newLocal], {
+    cwd: tempRoot,
+    phase: 'temp',
+    label: 'add a brand-new file',
+  })
   for (const mode of ['-ztag', '-Mj']) {
     const r = await run(['-c', clientName, mode, 'fstat', newLocal], {
       cwd: tempRoot,
@@ -1094,25 +1194,48 @@ async function scenarioS6OpenForAdd() {
     label: 'opened record of the add (haveRev "none" string lives here?)',
   })
   const block = ztagBlocks(rOpened.stdout)[0] ?? ''
-  console.log(`  opened: haveRev=${block.match(/\.\.\. haveRev (.*)/)?.[1] ?? 'ABSENT'} action=${field(block, 'action')}`)
-  await run(['-c', clientName, 'revert', newLocal], { cwd: tempRoot, phase: 'temp', label: 'revert the add' })
+  console.log(
+    `  opened: haveRev=${block.match(/\.\.\. haveRev (.*)/)?.[1] ?? 'ABSENT'} action=${field(block, 'action')}`,
+  )
+  await run(['-c', clientName, 'revert', newLocal], {
+    cwd: tempRoot,
+    phase: 'temp',
+    label: 'revert the add',
+  })
   try {
     rmSync(newLocal, { force: true })
   } catch {}
 }
 
-async function scenarioS7MixedTranscript(conflictDepotFile, conflictLocal, conflictHeadRev, extraDepotFile, extraLocal, extraHeadRev) {
+async function scenarioS7MixedTranscript(
+  conflictDepotFile,
+  conflictLocal,
+  conflictHeadRev,
+  extraDepotFile,
+  extraLocal,
+  extraHeadRev,
+) {
   tag('S7 mixed transcript: clobber + keptOpen/must-resolve in one sync run')
   // File A: sync #N-1 → edit → modify → the sync will refuse it as opened and
   // print the must-resolve reminder (measured in S4).
-  await run(['-c', clientName, 'revert', conflictLocal], { cwd: tempRoot, phase: 'temp', echo: false, label: 'reset conflict file' })
+  await run(['-c', clientName, 'revert', conflictLocal], {
+    cwd: tempRoot,
+    phase: 'temp',
+    echo: false,
+    label: 'reset conflict file',
+  })
   await run(['-c', clientName, 'sync', `${conflictDepotFile}#${conflictHeadRev - 1}`], {
     cwd: tempRoot,
     phase: 'temp',
     echo: false,
     label: 'conflict file back to #N-1',
   })
-  await run(['-c', clientName, 'edit', conflictLocal], { cwd: tempRoot, phase: 'temp', echo: false, label: 're-open conflict file' })
+  await run(['-c', clientName, 'edit', conflictLocal], {
+    cwd: tempRoot,
+    phase: 'temp',
+    echo: false,
+    label: 're-open conflict file',
+  })
   writeFileSync(conflictLocal, '--probe-mixed-open--\n', { flag: 'a' })
   // File B: sync #N-1 → writable + modified (clobber victim).
   if (extraDepotFile && extraLocal && extraHeadRev) {
@@ -1153,9 +1276,8 @@ async function main() {
 
   const { ambient, cfgName, cfg } = await discoverConnection()
   await cleanStaleClients()
-  const depotDir = PINNED_FILE && PINNED_FILE.startsWith('//')
-    ? undefined
-    : await discoverDepotDir()
+  const depotDir =
+    PINNED_FILE && PINNED_FILE.startsWith('//') ? undefined : await discoverDepotDir()
   const multiRev = await discoverConflictFiles(depotDir)
   const conflict = multiRev[0]
   const extra = multiRev[1]
@@ -1172,8 +1294,13 @@ async function main() {
 
   const viewLines = []
   if (depotDir) viewLines.push(`${depotDir}/... //${clientName}/...`)
-  for (const f of multiRev) if (!f.inDir) viewLines.push(`${f.depotFile} //${clientName}/${basename(f.depotFile)}`)
-  if (PINNED_FILE && PINNED_FILE.startsWith('//') && !multiRev.some((f) => f.depotFile === PINNED_FILE))
+  for (const f of multiRev)
+    if (!f.inDir) viewLines.push(`${f.depotFile} //${clientName}/${basename(f.depotFile)}`)
+  if (
+    PINNED_FILE &&
+    PINNED_FILE.startsWith('//') &&
+    !multiRev.some((f) => f.depotFile === PINNED_FILE)
+  )
     viewLines.push(`${PINNED_FILE} //${clientName}/${basename(PINNED_FILE)}`)
   if (viewLines.length === 0) fatal('no view mapping (need --narrow mapping or --file)')
   const localOf = (f) =>
@@ -1212,12 +1339,19 @@ async function main() {
     writeFileSync(join(tempRoot, cfgName), cfgLines.join('\n') + '\n')
   }
   if (created.exitCode !== 0) {
-    console.error('!! client creation refused by the server (protect settings?) — recorded as blocked; nothing was written anywhere')
+    console.error(
+      '!! client creation refused by the server (protect settings?) — recorded as blocked; nothing was written anywhere',
+    )
     await cleanup()
     return
   }
   CLIENT_CREATED = true
-  const verify = await run(['-ztag', 'info'], { cwd: tempRoot, phase: 'temp', echo: false, label: 'verify temp client' })
+  const verify = await run(['-ztag', 'info'], {
+    cwd: tempRoot,
+    phase: 'temp',
+    echo: false,
+    label: 'verify temp client',
+  })
   const vGrab = (k) => verify.stdout.match(new RegExp(`\\.\\.\\. ${k} (.*)`))?.[1]?.trim()
   console.log(
     `  verified: client=${vGrab('clientName')} user=${vGrab('userName')} root=${vGrab('clientRoot')}${vGrab('clientName') === clientName ? ' ✓' : ' ✗ MISMATCH — aborting'}`,

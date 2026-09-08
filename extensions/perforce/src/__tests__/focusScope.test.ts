@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { resolveExcludeDirs, resolveFocusScopeDirs } from '../focusScope.js'
+import { resolveExcludeDirs, resolveFocusScope, resolveFocusScopeDirs } from '../focusScope.js'
 
 const ROOT = process.platform === 'win32' ? 'C:/ws' : '/ws'
 
@@ -14,6 +14,25 @@ function exclude(values: string[]): string[] {
 /** A platform-shaped absolute path rooted under a scratch directory. */
 function abs(p: string): string {
   return process.platform === 'win32' ? `C:/abs/${p}` : `/abs/${p}`
+}
+
+/**
+ * Split-resolve `folders` against an in-memory disk shape. `dirs`/`files` list
+ * the workspace-relative paths the stat should report as directories / files;
+ * anything else stat reports as missing (undefined).
+ */
+function split(
+  enabled: boolean,
+  folders: Record<string, unknown>,
+  shape: { dirs?: string[]; files?: string[] },
+): Promise<{ dirs: string[]; files: string[] }> {
+  const dirSet = new Set((shape.dirs ?? []).map((d) => `${ROOT}/${d}`))
+  const fileSet = new Set((shape.files ?? []).map((f) => `${ROOT}/${f}`))
+  return resolveFocusScope({ enabled, folders }, ROOT, async (p) => {
+    if (dirSet.has(p)) return { isDirectory: true }
+    if (fileSet.has(p)) return { isDirectory: false }
+    return undefined
+  })
 }
 
 describe('resolveFocusScopeDirs', () => {
@@ -83,6 +102,73 @@ describe('resolveFocusScopeDirs', () => {
     } else {
       expect(dirs).toEqual([`${ROOT}/Client`, `${ROOT}/client/Tools`])
     }
+  })
+})
+
+describe('resolveFocusScope', () => {
+  it('returns empty buckets when focus is disabled', async () => {
+    expect(await split(false, { Client: true }, { dirs: ['Client'] })).toEqual({
+      dirs: [],
+      files: [],
+    })
+  })
+
+  it('routes a directory entry to dirs and a file entry to files', async () => {
+    const { dirs, files } = await split(
+      true,
+      { Client: true, 'Source/Client/Run.bat': true },
+      { dirs: ['Client'], files: ['Source/Client/Run.bat'] },
+    )
+    expect(dirs).toEqual([`${ROOT}/Client`])
+    expect(files).toEqual([`${ROOT}/Source/Client/Run.bat`])
+  })
+
+  it('keeps a MISSING entry in files, never guessing it was a directory', async () => {
+    // A vanished path fed to the directory phase would build `<file>/...` — the
+    // no-such-file p4 answers as clean and that empty answer would be
+    // checkpointed forever. Keeping it in files routes it to the per-file query
+    // that tolerates a vanished path.
+    const { dirs, files } = await split(true, { 'Gone/Thing.txt': true }, {})
+    expect(dirs).toEqual([])
+    expect(files).toEqual([`${ROOT}/Gone/Thing.txt`])
+  })
+
+  it('drops a file entry nested under a resolved directory', async () => {
+    // The recursive scan of `Client` already covers `Client/Run.bat`; reporting
+    // both would double-scan the file.
+    const { dirs, files } = await split(
+      true,
+      { Client: true, 'Client/Run.bat': true },
+      { dirs: ['Client'], files: ['Client/Run.bat'] },
+    )
+    expect(dirs).toEqual([`${ROOT}/Client`])
+    expect(files).toEqual([])
+  })
+
+  it('collapses nested directory entries but never files into them', async () => {
+    const { dirs, files } = await split(
+      true,
+      { Client: true, 'Client/Tools': true, 'Client/Tools/x.bat': true },
+      { dirs: ['Client', 'Client/Tools'], files: ['Client/Tools/x.bat'] },
+    )
+    expect(dirs).toEqual([`${ROOT}/Client`])
+    expect(files).toEqual([])
+  })
+
+  it('drops entries addressing the root or escaping it from both buckets', async () => {
+    const { dirs, files } = await split(true, { '.': true, '../outside': true }, {})
+    expect(dirs).toEqual([])
+    expect(files).toEqual([])
+  })
+
+  it('ignores keys whose value is not exactly true in both buckets', async () => {
+    const { dirs, files } = await split(
+      true,
+      { Client: false, 'Run.bat': 'true', Other: 1 },
+      { dirs: ['Client'], files: ['Run.bat', 'Other'] },
+    )
+    expect(dirs).toEqual([])
+    expect(files).toEqual([])
   })
 })
 

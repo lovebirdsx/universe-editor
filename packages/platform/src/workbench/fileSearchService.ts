@@ -19,9 +19,12 @@ export interface IFileSearchQuery {
   /** Wall-clock budget for the walk; partial results are returned on expiry. */
   readonly timeoutMs?: number
   /**
-   * Workspace-relative directories to enumerate instead of the whole root
-   * (ripgrep positional arguments). Results resolve against `root`. Absent or
-   * empty = enumerate the whole root.
+   * Workspace-relative paths to enumerate instead of the whole root (ripgrep
+   * positional arguments — may name directories *or single files*; a focus
+   * entry may be one file). Results resolve against `root`. **Absent** = not
+   * focused: enumerate the whole root. **Defined but empty** = focused with
+   * nothing to enumerate beyond what `rootFilesInScope` covers — the two are
+   * distinct states and the cache key keeps them apart.
    */
   readonly scanPaths?: readonly string[]
   /**

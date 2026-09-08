@@ -13,7 +13,8 @@
  *  on the "clean file has no hint" zero-assertion alone.
  *--------------------------------------------------------------------------------------------*/
 
-import { writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { test, expect, waitForPerforceCommands } from '../fixtures/perforceApp.js'
 import { evaluateWhenRestored } from '@universe-editor/e2e-harness'
 import type { Page } from '@playwright/test'
@@ -132,5 +133,72 @@ test.describe('@p1 perforce working-tree hint', () => {
       expect(diff?.original).toBe(driftedFile.content)
       expect(diff?.modified).toBe(DRIFTED_CONTENT)
     })
+  })
+
+  // Repro for the reported bug: a focus-folder entry naming a FILE (not a
+  // directory) — `workspace.focusFolders: { "Source/Client/Run.bat": true }` —
+  // was consumed as a directory all the way down. Perforce then ran
+  // `reconcile -n <file>/...` (an illegal wildcard hanging off a file name), got
+  // an exit-0 empty result, and checkpointed the file as a clean empty directory
+  // — so its real drift never surfaced, and a stale drift row could resurrect
+  // every session. The fix classifies the entry as a file and reconciles it
+  // per-file (narrow query, no checkpoint). This test drives exactly that: focus
+  // enabled with a single file entry, the file drifted on disk → the RM hint
+  // must still appear (the per-file scan found it).
+  test('a focus entry naming a file still surfaces its drift via the per-file scan @regression', async ({
+    page,
+    workbench,
+    perforce,
+  }) => {
+    test.setTimeout(120_000)
+    await evaluateWhenRestored(page)
+
+    // Seed focus settings BEFORE opening the workspace: focusEnabled with the
+    // drifted file as a single-file focus entry. Settings live in
+    // `<workspace>/.universe-editor/settings.json`.
+    const settingsDir = join(perforce.clientRoot, '.universe-editor')
+    mkdirSync(settingsDir, { recursive: true })
+    writeFileSync(
+      join(settingsDir, 'settings.json'),
+      JSON.stringify({
+        'workspace.focusEnabled': true,
+        'workspace.focusFolders': { [driftedFile.relPath]: true },
+      }),
+      'utf8',
+    )
+
+    // Drift the focused file so the per-file reconcile has something to find.
+    writeFileSync(perforce.file(driftedFile.relPath), DRIFTED_CONTENT, 'utf8')
+
+    await workbench.openWorkspace(perforce.openDir)
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getScmSourceControlCount()), {
+        timeout: 60_000,
+        message: 'perforce extension should register a source control for the workspace',
+      })
+      .toBeGreaterThan(0)
+    await waitForPerforceCommands(workbench)
+
+    // The focused file row renders (focus keeps it visible); its drift must be
+    // discovered even though the scope entry is a file, not a directory.
+    await workbench.showExplorer()
+    await expect(page.locator('[role="treeitem"]', { hasText: driftedFile.relPath })).toBeVisible({
+      timeout: 30_000,
+    })
+
+    let rearms = 0
+    await expect
+      .poll(
+        async () => {
+          const hint = await hintFor(page, driftedFile.relPath)
+          if (hint?.letter !== 'RM' && rearms < 5) {
+            rearms++
+            writeFileSync(perforce.file(driftedFile.relPath), DRIFTED_CONTENT, 'utf8')
+          }
+          return hint
+        },
+        { timeout: 60_000, intervals: [500, 1000] },
+      )
+      .toEqual(expect.objectContaining({ letter: 'RM' }))
   })
 })

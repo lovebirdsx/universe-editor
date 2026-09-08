@@ -100,13 +100,12 @@ export function ExplorerContextMenu({
       ? encodeScmProviderIds(resolveScmProviderIds(sourceControls, scmPath))
       : ''
 
-  // Whether the clicked directory is itself a configured focus folder — swaps
-  // the "Focus on This Folder" / "Add to Focus" entries for "Remove from Focus".
+  // Whether the clicked resource is itself a configured focus entry (folder or
+  // file) — swaps the "Focus on This" / "Add to Focus" entries for "Remove from
+  // Focus". Files are checked too: a focus entry may name a single file.
   const focusScopeService = useOptionalService(IFocusScopeService)
-  const explorerResourceIsFocusFolder =
-    isDirectory &&
-    !isRoot &&
-    (focusScopeService?.isFocusFolder(relativeTo(rootResource, resource)) ?? false)
+  const explorerResourceIsFocusEntry =
+    !isRoot && (focusScopeService?.isFocusEntry(relativeTo(rootResource, resource)) ?? false)
 
   // Multi-select support (SCM parity): the second arg mirrors ScmView's
   // `(primary, selection)` convention — an array of `{ resource, isDirectory }`
@@ -140,7 +139,7 @@ export function ExplorerContextMenu({
   const scopedContext = useScopedContextKey(contextKeyService, {
     explorerResourceIsFolder: isDirectory,
     explorerResourceIsRoot: isRoot,
-    explorerResourceIsFocusFolder,
+    explorerResourceIsFocusEntry,
     resourceScheme,
     resourceExtname,
     resourceScmProvider,

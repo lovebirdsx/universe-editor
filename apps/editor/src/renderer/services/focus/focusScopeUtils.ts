@@ -29,6 +29,24 @@ import type { IUriIdentityService } from '@universe-editor/platform'
 export type FocusClassification = 'inScope' | 'skeleton' | 'out'
 
 /**
+ * Disk-kind of a focus entry as observed by a stat call. `'missing'` is not an
+ * error — the user may focus a file they create later, or one that exists only
+ * after a sync — so it is carried rather than dropped.
+ */
+export type FocusEntryKind = 'directory' | 'file' | 'missing'
+
+/**
+ * The three buckets a focus entry lands in once the disk has spoken. `folders`
+ * and `files` participate in scoping; `pendingFiles` only gets a watcher so the
+ * bucket can be corrected when the entry appears.
+ */
+export interface FocusEntryBuckets {
+  readonly folders: readonly string[]
+  readonly files: readonly string[]
+  readonly pendingFiles: readonly string[]
+}
+
+/**
  * Root-level directories focus never hides, whatever the focus set says.
  *
  * These hold the editor's own configuration — `.universe-editor/settings.json`
@@ -97,10 +115,11 @@ export function classifyFocusPath(
   relPath: string,
   isDirectory: boolean,
   folders: readonly string[],
+  files: readonly string[],
   showRootFiles: boolean,
   uriIdentity: Pick<IUriIdentityService, 'getPathComparisonKey'>,
 ): FocusClassification {
-  if (folders.length === 0) return 'inScope'
+  if (folders.length === 0 && files.length === 0) return 'inScope'
 
   const rel = canonicalizeRelativePath(relPath)
   // The workspace root itself.
@@ -122,9 +141,24 @@ export function classifyFocusPath(
     if (key === folder || isUnder(key, folder)) return 'inScope'
   }
 
+  // A focus *file* matches by exact identity only — it names one file, not a
+  // subtree. A directory carrying the same path is not the entry (the disk said
+  // file), and a sibling file must not inherit scope from it.
+  const fileKeys = files.map((file) => folderKey(file, uriIdentity))
+  if (!isDirectory) {
+    for (const file of fileKeys) {
+      if (key === file) return 'inScope'
+    }
+  }
+
   if (isDirectory) {
+    // Ancestors of either kind of entry stay reachable as skeletons, so a
+    // focus file nested several levels down is still reachable in the tree.
     for (const folder of folderKeys) {
       if (isUnder(folder, key)) return 'skeleton'
+    }
+    for (const file of fileKeys) {
+      if (isUnder(file, key)) return 'skeleton'
     }
     return 'out'
   }
@@ -143,10 +177,63 @@ export function isFocusVisible(
   relPath: string,
   isDirectory: boolean,
   folders: readonly string[],
+  files: readonly string[],
   showRootFiles: boolean,
   uriIdentity: Pick<IUriIdentityService, 'getPathComparisonKey'>,
 ): boolean {
-  return classifyFocusPath(relPath, isDirectory, folders, showRootFiles, uriIdentity) !== 'out'
+  return (
+    classifyFocusPath(relPath, isDirectory, folders, files, showRootFiles, uriIdentity) !== 'out'
+  )
+}
+
+/**
+ * Split normalized focus entries into directory / file / missing buckets by
+ * asking the disk. `stat` is injected so the helper stays pure and testable;
+ * it must resolve to the entry's kind and may reject — a rejected stat is
+ * treated as `'missing'`, never as fatal.
+ *
+ * A file entry nested under a focused *directory* is folded away: the recursive
+ * directory subscription and ripgrep scan already cover it, and keeping it
+ * would double-report every event and search hit. Entries under a focused
+ * *file* are impossible by definition, so no other folding applies.
+ */
+export async function classifyFocusEntries(
+  entries: readonly string[],
+  stat: (relPath: string) => Promise<FocusEntryKind>,
+  uriIdentity: Pick<IUriIdentityService, 'getPathComparisonKey'>,
+): Promise<FocusEntryBuckets> {
+  const kinds = await Promise.all(
+    entries.map(async (entry): Promise<FocusEntryKind> => {
+      try {
+        return await stat(entry)
+      } catch {
+        return 'missing'
+      }
+    }),
+  )
+
+  const folderKeys = kinds
+    .map((kind, i) => (kind === 'directory' ? folderKey(entries[i]!, uriIdentity) : undefined))
+    .filter((key): key is string => key !== undefined)
+
+  const folders: string[] = []
+  const files: string[] = []
+  const pendingFiles: string[] = []
+
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i]!
+    const kind = kinds[i]!
+    if (kind === 'directory') {
+      folders.push(entry)
+      continue
+    }
+    const key = folderKey(entry, uriIdentity)
+    if (folderKeys.some((ancestor) => isUnder(key, ancestor))) continue
+    if (kind === 'file') files.push(entry)
+    else pendingFiles.push(entry)
+  }
+
+  return { folders, files, pendingFiles }
 }
 
 /**

@@ -14,6 +14,7 @@ import {
   workspace,
   window,
   ProgressLocation,
+  FileType,
   type ExtensionContext,
 } from '@universe-editor/extension-api'
 import type {
@@ -61,7 +62,7 @@ import {
 import { buildScopeFilespec, buildSyncFilespecs, type SyncScopeTarget } from './p4Filespec.js'
 import { carveReconcileFilespecs, carveReconcileTargets } from './reconcileCarve.js'
 import { clSpecOf, graphSyncNeedsConfirm, resolveCommonClient } from './graphSync.js'
-import { resolveFocusScopeDirs, resolveExcludeDirs } from './focusScope.js'
+import { resolveFocusScope, resolveExcludeDirs } from './focusScope.js'
 import { registerSwarmCommands } from './swarm/swarmCommands.js'
 import { createSwarmLogger } from './swarm/swarmLog.js'
 import { createPerforceTimelineCommands, PerforceTimelineProvider } from './timelineProvider.js'
@@ -521,17 +522,51 @@ export async function activate(context: ExtensionContext): Promise<void> {
   // non-empty, else the opened folder — so a huge depot is never walked as
   // `//...`. This bounds the Explorer working-tree hint channel
   // (`checkWorkingTree`); SCM operations stay whole-client.
+  //
+  // Focus entries are split by what they resolve to ON DISK: a directory joins
+  // the recursive scan scope, a single file joins a per-file narrow query scope
+  // (`setReconcileScope`'s second bucket) that is re-verified fresh every
+  // session and never checkpointed. Treating a file as a directory would build
+  // the filespec `<file>/...` — a no-such-file p4 answers as clean (exit 0,
+  // empty) — and checkpointing that empty answer would pin the file's drift
+  // verdict forever. `scopeApplySeq` makes a later config apply win over an
+  // earlier one still awaiting its stats (the stat round-trips are async, so
+  // two rapid config events could otherwise resolve out of order).
+  let scopeApplySeq = 0
   const applyReconcileScope = async (target: PerforceClient): Promise<void> => {
+    const seq = ++scopeApplySeq
     const scopeCfg = workspace.getConfiguration('workspace')
     const enabled = await scopeCfg.get('focusEnabled', false)
     const folders = await scopeCfg.get<Record<string, unknown>>('focusFolders', {})
-    const dirs = resolveFocusScopeDirs({ enabled, folders }, root)
-    target.setReconcileScope(dirs.length > 0 ? dirs : root)
+    const { dirs, files } = await resolveFocusScope({ enabled, folders }, root, async (p) => {
+      try {
+        const s = await workspace.fs.stat(p)
+        return { isDirectory: s.type === FileType.Directory }
+      } catch {
+        return undefined // missing / unreadable — kept in `files` (see resolveFocusScope)
+      }
+    })
+    // A later apply already superseded this one; drop the stale resolution.
+    if (seq !== scopeApplySeq) return
+    // `scoped` is true whenever ANY focus entry survived — dirs or files. Only
+    // then does the scope narrow; with zero surviving entries (focus disabled
+    // or every entry dropped) fall back to the opened folder so the hint
+    // channel keeps its old whole-folder behaviour. Critically, a focus of ONLY
+    // files yields dirs=[] files=[…]: the client must see that narrow file-only
+    // scope (`_isInReconcileScope` then matches by `isScopeFile`), not the whole
+    // root — passing `root` here would defeat the very narrowing the user asked
+    // for and re-walk the depot the focus was meant to avoid.
+    const scoped = dirs.length > 0 || files.length > 0
+    target.setReconcileScope(scoped ? dirs : root, scoped ? files : [])
     // A scope-less "get latest" follows the same folders: pulling the whole
     // client mapping when the user only opened one subtree is both slow and
     // surprising. Per-file/folder gets pass their own scope and ignore this.
+    // (Sync stays directory-or-root: a file entry is not a sync scope.)
     target.setSyncScope(dirs.length > 0 ? dirs : root)
-    log(`[perforce] reconcile scope: ${dirs.length > 0 ? dirs.join(', ') : '<opened folder>'}`)
+    log(
+      `[perforce] reconcile scope: ${dirs.length} dirs, ${files.length} files` +
+        (dirs.length === 0 && files.length === 0 ? ' (<opened folder>)' : ''),
+    )
   }
   const applyReconcileScopeAll = async (): Promise<void> => {
     for (const c of mgr.all) await applyReconcileScope(c)

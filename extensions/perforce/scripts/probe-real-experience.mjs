@@ -443,7 +443,14 @@ async function discover() {
     // per-dir sum OVERCOUNTS what the product will report). Only this form
     // predicts the product's count, cap flag and decoration set.
     const syncCombo = await runP4(
-      ['-ztag', 'sync', '-n', '-m', String(BEHIND_PROBE), ...workspaceLayer.dirs.map((d) => `${d}/...#head`)],
+      [
+        '-ztag',
+        'sync',
+        '-n',
+        '-m',
+        String(BEHIND_PROBE),
+        ...workspaceLayer.dirs.map((d) => `${d}/...#head`),
+      ],
       { timeoutMs: 120_000, echo: false },
     )
     userFocus.behind = (syncCombo.stdout.match(/\.\.\. depotFile/g) ?? []).length
@@ -471,7 +478,14 @@ async function discover() {
     }
     // Product-form others probe: ONE `opened -a -m 301 <dirs>` (no #head).
     const othersCombo = await runP4(
-      ['-ztag', 'opened', '-a', '-m', String(OTHERS_PROBE), ...workspaceLayer.dirs.map((d) => `${d}/...`)],
+      [
+        '-ztag',
+        'opened',
+        '-a',
+        '-m',
+        String(OTHERS_PROBE),
+        ...workspaceLayer.dirs.map((d) => `${d}/...`),
+      ],
       { timeoutMs: 60_000, echo: false },
     )
     userFocus.others = (othersCombo.stdout.match(/\.\.\. depotFile/g) ?? []).length
@@ -806,7 +820,9 @@ async function readRendererFocus(ctx) {
     enabled: window.__E2E__.getConfigurationValue('workspace.focusEnabled'),
     folders: window.__E2E__.getConfigurationValue('workspace.focusFolders'),
   }))
-  const dirs = Object.entries(cfg.folders ?? {}).filter(([, v]) => v === true).map(([k]) => k)
+  const dirs = Object.entries(cfg.folders ?? {})
+    .filter(([, v]) => v === true)
+    .map(([k]) => k)
   return { enabled: cfg.enabled === true, dirs }
 }
 
@@ -834,7 +850,11 @@ async function ensureProjectLayer(ctx, expect, dir = WORKSPACE, retries = 2) {
       console.log(
         `  ensureProjectLayer: renderer focus enabled=${cfg.enabled} dirs=${cfg.dirs.length} ≠ expected enabled=${wantEnabled} dirs=${wantDirs} after ${retries + 1} tries — project-layer race persists`,
       )
-      return { ok: false, settled, refreshBaseline: await ctx.channelCount(/refresh total (\d+)ms/) }
+      return {
+        ok: false,
+        settled,
+        refreshBaseline: await ctx.channelCount(/refresh total (\d+)ms/),
+      }
     }
     console.log(
       `  ensureProjectLayer: renderer focus enabled=${cfg.enabled} dirs=${cfg.dirs.length} ≠ expected enabled=${wantEnabled} dirs=${wantDirs} — close+reopen (retry ${i + 1}/${retries})`,
@@ -843,7 +863,11 @@ async function ensureProjectLayer(ctx, expect, dir = WORKSPACE, retries = 2) {
     await sleep(800)
     const s = await openWorkspaceAndSettle(ctx, dir)
     if (!s) {
-      return { ok: false, settled, refreshBaseline: await ctx.channelCount(/refresh total (\d+)ms/) }
+      return {
+        ok: false,
+        settled,
+        refreshBaseline: await ctx.channelCount(/refresh total (\d+)ms/),
+      }
     }
     settled = s
     await sleep(1_200)
@@ -933,7 +957,10 @@ async function scenarioC1(disco) {
       enabled: disco.workspaceLayer.enabled,
       dirs: disco.workspaceLayer.dirs,
     })
-    if (!proj.ok) throw new Error('project layer did not settle — aborting (scenario needs the real focus scope)')
+    if (!proj.ok)
+      throw new Error(
+        'project layer did not settle — aborting (scenario needs the real focus scope)',
+      )
     const settledAt = proj.settled?.rendererAt ?? opened.rendererAt
     const firstRefresh = await ctx.waitCount(/refresh total (\d+)ms/, proj.refreshBaseline)
     console.log(
@@ -1082,7 +1109,9 @@ async function scenarioC1(disco) {
 
 async function scenarioC1b(disco) {
   if (!C1B_DIR) {
-    console.log(`C1b skipped — pass --c1b-dir <relDir> (a big subtree whose sync -n exceeds the 20s ceiling)`)
+    console.log(
+      `C1b skipped — pass --c1b-dir <relDir> (a big subtree whose sync -n exceeds the 20s ceiling)`,
+    )
     return null
   }
   const dir = join(WORKSPACE, C1B_DIR)
@@ -1169,7 +1198,10 @@ async function scenarioC2(disco) {
       enabled: disco.workspaceLayer.enabled,
       dirs: disco.workspaceLayer.dirs,
     })
-    if (!proj.ok) throw new Error('project layer did not settle — aborting (scenario needs the real focus scope)')
+    if (!proj.ok)
+      throw new Error(
+        'project layer did not settle — aborting (scenario needs the real focus scope)',
+      )
     const settledAt = proj.settled?.rendererAt ?? opened.rendererAt
     const dump = async (label) => {
       console.log(`  -- diagnostics ${label}`)
@@ -1251,7 +1283,10 @@ async function scenarioC3a(disco) {
       enabled: disco.workspaceLayer.enabled,
       dirs: disco.workspaceLayer.dirs,
     })
-    if (!proj.ok) throw new Error('project layer did not settle — aborting (scenario needs the real focus scope)')
+    if (!proj.ok)
+      throw new Error(
+        'project layer did not settle — aborting (scenario needs the real focus scope)',
+      )
     await ctx.waitCount(/refresh total (\d+)ms/, proj.refreshBaseline, { timeoutMs: 180_000 })
     await printFocusState(ctx)
     const behind = await ctx.waitStatus(/files behind/, { timeoutMs: 90_000 })
@@ -1318,9 +1353,7 @@ async function scenarioC3a(disco) {
       await page.evaluate((f) => window.__E2E__.openFileUri(f), rel(revealTarget))
     }
     await sleep(2_500)
-    const decoratedRows = await page
-      .locator('[role="treeitem"]', { hasText: '↓' })
-      .count()
+    const decoratedRows = await page.locator('[role="treeitem"]', { hasText: '↓' }).count()
     const visibleRows = await page.locator('[role="treeitem"]').count()
     console.log(
       `  explorer after reveal: ${visibleRows} rendered rows, ${decoratedRows} carrying grey '↓'`,
@@ -1375,9 +1408,7 @@ async function scenarioC3a(disco) {
       )
       await page.evaluate((f) => window.__E2E__.openFileUri(f), rel(densestFile))
       await sleep(2_500)
-      const greyRows = await page
-        .locator('[role="treeitem"]', { hasText: '↓' })
-        .count()
+      const greyRows = await page.locator('[role="treeitem"]', { hasText: '↓' }).count()
       const rowsNow = await page.locator('[role="treeitem"]').count()
       console.log(
         `  explorer in behind dir: ${rowsNow} rendered rows, ${greyRows} carrying grey '↓' (dir has ${densest.count} behind)`,
@@ -1416,7 +1447,10 @@ async function scenarioC3b(disco) {
       enabled: disco.workspaceLayer.enabled,
       dirs: disco.workspaceLayer.dirs,
     })
-    if (!proj.ok) throw new Error('project layer did not settle — aborting (scenario needs the real focus scope)')
+    if (!proj.ok)
+      throw new Error(
+        'project layer did not settle — aborting (scenario needs the real focus scope)',
+      )
     await ctx.waitCount(/refresh total (\d+)ms/, proj.refreshBaseline, { timeoutMs: 180_000 })
     await printFocusState(ctx)
     const behind = await ctx.waitStatus(/files behind/, { timeoutMs: 90_000 })

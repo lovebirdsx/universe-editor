@@ -39,6 +39,17 @@ export interface IWatchOptions {
    * the root itself uncovered.
    */
   readonly includeRootFiles?: boolean
+
+  /**
+   * Individual files under `folder` to watch, each becoming an exact-hit watch:
+   * the parent directory is watched non-recursively and events are filtered to
+   * the listed paths. A focus entry may name a single file (see
+   * IFocusScopeService), which no recursive directory subscription can cover.
+   * Files already covered by a recursive `scopes` target are folded away by the
+   * main side, and a file whose parent directory does not exist yet is parked
+   * on the nearest existing ancestor until it appears.
+   */
+  readonly files?: readonly URI[]
 }
 
 export interface IFileWatcherService {

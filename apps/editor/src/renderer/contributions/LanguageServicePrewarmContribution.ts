@@ -182,7 +182,7 @@ export class LanguageServicePrewarmContribution
           matchAll: true,
           ignore: TSCONFIG_IGNORE_DIRS,
           maxResults: 5000,
-          ...(this._focus.active ? { scanPaths: [...this._focus.folders] } : {}),
+          ...(this._focus.active ? { scanPaths: [...this._focus.scanPaths] } : {}),
           rootFilesInScope: this._focus.rootFilesInScope,
         },
         token,

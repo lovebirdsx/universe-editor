@@ -141,7 +141,11 @@ export class TextSearchService implements ITextSearchService {
         // the globs.
         useIgnoreFiles:
           opts.useExcludeSettings === false ? false : this._exclude.getUseIgnoreFiles(),
-        ...(this._focus.active ? { scanPaths: [...this._focus.folders] } : {}),
+        // scanPaths mixes focus folders and focus files (ripgrep positional
+        // arguments take either). Forward the array even when empty — active
+        // with nothing scannable is not the same as unfocused, which is what
+        // omitting the property would tell the main side.
+        ...(this._focus.active ? { scanPaths: [...this._focus.scanPaths] } : {}),
         rootFilesInScope: this._focus.rootFilesInScope,
       })
       opts.onProgress?.(complete.progress)

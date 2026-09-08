@@ -57,12 +57,14 @@ export interface MentionFileFocus {
 /** Derive the mention focus inputs from a focus-scope-shaped source. */
 export function focusScopeForMention(scope: {
   readonly active: boolean
-  readonly folders: readonly string[]
+  readonly scanPaths: readonly string[]
   readonly rootFilesInScope: boolean
   readonly fingerprint: string
 }): MentionFileFocus {
   return {
-    ...(scope.active ? { scanPaths: [...scope.folders] } : {}),
+    // Forward the array even when empty: active-with-nothing-scannable is not
+    // unfocused, which is what omitting the property would mean downstream.
+    ...(scope.active ? { scanPaths: [...scope.scanPaths] } : {}),
     rootFilesInScope: scope.rootFilesInScope,
     fingerprint: scope.fingerprint,
   }
@@ -145,7 +147,9 @@ export async function loadWorkspaceFiles(
       ignore: dirNames,
       maxResults: MAX_FILES,
       useIgnoreFiles,
-      ...(focus?.scanPaths && focus.scanPaths.length > 0 ? { scanPaths: focus.scanPaths } : {}),
+      // An explicitly empty scanPaths is "focused on nothing yet" and must
+      // reach the main side as [] — dropping it would re-scan the whole tree.
+      ...(focus?.scanPaths !== undefined ? { scanPaths: focus.scanPaths } : {}),
       ...(focus ? { rootFilesInScope: focus.rootFilesInScope } : {}),
     },
     token,

@@ -3,6 +3,11 @@
  *  Test helper: an IFocusScopeService with focus mode off unless folders are
  *  given. Lets tests that construct focus-aware services (search / quick open /
  *  file listing) wire a predictable scope without real configuration.
+ *
+ *  The fake mirrors the real service's three-bucket split by convention rather
+ *  than by stat: `files` are passed explicitly, everything else in the entry
+ *  set is treated as a directory. Tests that need a pending entry use
+ *  `pendingFiles`.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -21,35 +26,73 @@ const HOST_PLATFORM: HostPlatform =
     ? process.platform
     : 'unknown'
 
+export interface FakeFocusScopeOptions {
+  readonly folders?: readonly string[]
+  readonly files?: readonly string[]
+  readonly pendingFiles?: readonly string[]
+  readonly root?: URI | null
+  readonly showRootFiles?: boolean
+}
+
 export class FakeFocusScopeService implements IFocusScopeService {
   declare readonly _serviceBrand: undefined
   private readonly _onDidChange = new Emitter<void>()
   readonly onDidChange: Event<void> = this._onDidChange.event
 
   private _enabled: boolean
+  private _folders: readonly string[]
+  private _files: readonly string[]
+  private _pendingFiles: readonly string[]
+  private readonly _root: URI | null
+  private readonly _showRootFiles: boolean
   // Case policy pinned to the host, matching what the real DI graph binds — the
   // fake is used by cross-platform tests, so folding case unconditionally would
   // make a linux run disagree with production on the same assertion.
   private readonly _uriIdentity = new UriIdentityService(HOST_PLATFORM)
 
   constructor(
-    private _folders: readonly string[] = [],
-    private readonly _root: URI | null = null,
-    private readonly _showRootFiles = true,
+    folders: readonly string[] | FakeFocusScopeOptions = [],
+    root: URI | null = null,
+    showRootFiles = true,
   ) {
-    this._enabled = _folders.length > 0
+    if (isArrayForm(folders)) {
+      this._folders = folders.map(normalize)
+      this._files = []
+      this._pendingFiles = []
+      this._root = root
+      this._showRootFiles = showRootFiles
+    } else {
+      this._folders = (folders.folders ?? []).map(normalize)
+      this._files = (folders.files ?? []).map(normalize)
+      this._pendingFiles = (folders.pendingFiles ?? []).map(normalize)
+      this._root = folders.root ?? null
+      this._showRootFiles = folders.showRootFiles ?? true
+    }
+    this._enabled = this.entries.length > 0
   }
 
   get active(): boolean {
-    return this._enabled && this._folders.length > 0
+    return this._enabled && this.entries.length > 0
   }
 
   get enabled(): boolean {
     return this._enabled
   }
 
+  get entries(): readonly string[] {
+    return [...this._folders, ...this._files, ...this._pendingFiles]
+  }
+
   get folders(): readonly string[] {
     return this._folders
+  }
+
+  get files(): readonly string[] {
+    return this._files
+  }
+
+  get pendingFiles(): readonly string[] {
+    return this._pendingFiles
   }
 
   get showRootFiles(): boolean {
@@ -63,12 +106,33 @@ export class FakeFocusScopeService implements IFocusScopeService {
     return this._folders.map((rel) => URI.joinPath(root, rel))
   }
 
+  get scanPaths(): readonly string[] {
+    if (!this.active) return []
+    // Same root-level-file rule as the real service: a root enumeration under
+    // rootFilesInScope already covers it, so forwarding it would double-report.
+    return [
+      ...this._folders,
+      ...this._files.filter((rel) => !(this.rootFilesInScope && !rel.includes('/'))),
+    ]
+  }
+
+  get fileWatchPaths(): readonly URI[] {
+    const root = this._root
+    if (!root || !this.active) return []
+    return [...this._files, ...this._pendingFiles].map((rel) => URI.joinPath(root, rel))
+  }
+
   get rootFilesInScope(): boolean {
     return this.active && this._showRootFiles
   }
 
   get fingerprint(): string {
-    return JSON.stringify([this._showRootFiles, this._folders])
+    return JSON.stringify([
+      this._showRootFiles,
+      this._folders,
+      this._files.map((rel) => 'f:' + rel),
+      this._pendingFiles.map((rel) => 'p:' + rel),
+    ])
   }
 
   isVisible(relPath: string, isDirectory: boolean): boolean {
@@ -77,6 +141,7 @@ export class FakeFocusScopeService implements IFocusScopeService {
       relPath,
       isDirectory,
       this._folders,
+      this._files,
       this._showRootFiles,
       this._uriIdentity,
     )
@@ -84,6 +149,14 @@ export class FakeFocusScopeService implements IFocusScopeService {
 
   isFocusFolder(relPath: string): boolean {
     return this._folders.includes(normalize(relPath))
+  }
+
+  isFocusFile(relPath: string): boolean {
+    return this._files.includes(normalize(relPath))
+  }
+
+  isFocusEntry(relPath: string): boolean {
+    return this.isFocusFolder(relPath) || this.isFocusFile(relPath)
   }
 
   // The write side keeps state in memory only: tests that drive it are asserting
@@ -97,7 +170,9 @@ export class FakeFocusScopeService implements IFocusScopeService {
 
   async setFolders(relPaths: readonly string[]): Promise<void> {
     this._folders = relPaths.map(normalize).filter((rel) => rel.length > 0)
-    this._enabled = this._folders.length > 0
+    this._files = []
+    this._pendingFiles = []
+    this._enabled = this.entries.length > 0
     this._onDidChange.fire()
   }
 
@@ -122,6 +197,8 @@ export class FakeFocusScopeService implements IFocusScopeService {
    */
   setEnabledWithNoFolders(): void {
     this._folders = []
+    this._files = []
+    this._pendingFiles = []
     this._enabled = true
     this._onDidChange.fire()
   }
@@ -129,4 +206,11 @@ export class FakeFocusScopeService implements IFocusScopeService {
 
 function normalize(relPath: string): string {
   return relPath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
+}
+
+// `Array.isArray`'s own type predicate (`arg is any[]`) does not narrow a
+// `readonly string[]` union member, so discriminate explicitly: `Array.isArray`
+// is still the correct runtime check, the guard just needs a manual signature.
+function isArrayForm(value: readonly string[] | FakeFocusScopeOptions): value is readonly string[] {
+  return Array.isArray(value)
 }

@@ -195,13 +195,10 @@ test.describe('@p1 perforce changelist', () => {
         scmResourceGroupId: 'default',
       })
       await expect
-        .poll(
-          () => page.evaluate((s) => window.__E2E__!.getScmGroupIdsForResource(s), tracked),
-          {
-            timeout: 30_000,
-            message: 'the file should belong to no changelist group after revert -k',
-          },
-        )
+        .poll(() => page.evaluate((s) => window.__E2E__!.getScmGroupIdsForResource(s), tracked), {
+          timeout: 30_000,
+          message: 'the file should belong to no changelist group after revert -k',
+        })
         .toEqual([])
     })
   })
@@ -289,9 +286,7 @@ test.describe('@p1 perforce changelist', () => {
         })
         .toEqual(['default'])
 
-      const header = page
-        .locator('[role="treeitem"]', { hasText: 'Default' })
-        .first()
+      const header = page.locator('[role="treeitem"]', { hasText: 'Default' }).first()
       await expect(header).toBeVisible({ timeout: 30_000 })
       await header.click({ button: 'right' })
       const menu = page.getByRole('menu')
@@ -299,9 +294,7 @@ test.describe('@p1 perforce changelist', () => {
       // The unified Revert (perforce.revert) replaced the old Revert All entry
       // on the default group; revertChangelist is now cl:N-only.
       await expect(menu.getByText('Revert', { exact: true })).toBeVisible()
-      await expect(
-        menu.getByText('Revert All Files in Changelist', { exact: true }),
-      ).toHaveCount(0)
+      await expect(menu.getByText('Revert All Files in Changelist', { exact: true })).toHaveCount(0)
       await page.keyboard.press('Escape')
       await expect(menu).toBeHidden()
     })

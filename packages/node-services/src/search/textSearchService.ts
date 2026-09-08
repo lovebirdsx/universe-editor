@@ -132,7 +132,11 @@ export function buildRgArgs(query: ITextSearchMainQuery): string[] {
     args.push(query.pattern)
   }
   // 多个位置参数一次 spawn：rg 输出的 path 相对 cwd，解析无需感知扫描范围。
-  const scanPaths = query.scanPaths && query.scanPaths.length > 0 ? [...query.scanPaths] : ['.']
+  // `undefined` = 未聚焦 → 全量扫根。空数组也回退 '.'：rg 无位置参数时会改从
+  // stdin 读（spawn 的 stdin 是未关闭的 pipe，进程将永远挂起），所以「聚焦但
+  // 无可扫」绝不能靠不传位置参数表达——由编排层直接跳过该 spawn 实现。
+  const scanPaths =
+    query.scanPaths === undefined || query.scanPaths.length === 0 ? ['.'] : [...query.scanPaths]
   args.push(...scanPaths)
   return args
 }
@@ -479,8 +483,11 @@ export class TextSearchService extends Disposable implements ITextSearchMainServ
         )
       })
 
-    const spawns: { args: string[]; label: string }[] = [{ args, label: 'scan' }]
-    if (query.rootFilesInScope === true && (query.scanPaths?.length ?? 0) > 0) {
+    // scanPaths 已定义但为空 = 聚焦却无可扫路径（聚焦条目全是 rootFilesInScope
+    // 覆盖的根级文件）：主扫描整体跳过，只留根文件补扫，绝不能回退全量。
+    const spawns: { args: string[]; label: string }[] =
+      query.scanPaths === undefined || query.scanPaths.length > 0 ? [{ args, label: 'scan' }] : []
+    if (query.rootFilesInScope === true && query.scanPaths !== undefined) {
       spawns.push({
         args: buildRgArgs({
           ...query,
@@ -491,6 +498,13 @@ export class TextSearchService extends Disposable implements ITextSearchMainServ
         }),
         label: 'rootFiles',
       })
+    }
+    // 聚焦且 scanPaths 为空、rootFilesInScope 也关：明确无可扫范围，直接空结果。
+    if (spawns.length === 0) {
+      this._sessions.delete(query.sessionId)
+      const progress = progressOf(0, 0, 0, undefined)
+      emitProgress(true)
+      return { results: [], progress, durationMs: Date.now() - startedAt }
     }
 
     let searchError: Error | undefined

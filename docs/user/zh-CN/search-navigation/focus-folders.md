@@ -54,7 +54,7 @@
 | 设置项 | 默认值 | 作用 |
 | --- | --- | --- |
 | `workspace.focusEnabled` | `false` | 聚焦模式总开关 |
-| `workspace.focusFolders` | `{}` | 聚焦目录集合：键是工作区相对路径，值为 `true` 才生效 |
+| `workspace.focusFolders` | `{}` | 聚焦集合：键是工作区相对路径（**可以是目录，也可以是单个文件**），值为 `true` 才生效 |
 | `workspace.focusShowRootFiles` | `true` | 是否仍显示工作区根目录下的直接文件（README、构建脚本这类人人要碰的文件） |
 
 手写 JSON 示例：
@@ -64,10 +64,13 @@
   "workspace.focusEnabled": true,
   "workspace.focusFolders": {
     "Client": true,
-    "Tools/Editor": true
+    "Tools/Editor": true,
+    "Source/Client/Run.bat": true
   }
 }
 ```
+
+条目既可以是目录，也可以是**单个文件**（如上面的 `Source/Client/Run.bat`）。文件条目按文件处理：它在文件树里可见、被文件监听直接跟踪、纳入搜索与 `Ctrl+P` 范围；Perforce 会对它做逐文件的改动检查（见下文 [Perforce 用户注意](#perforce-用户注意)）。指向一个**当前不存在**的路径的条目会被当作「待定的文件」持续监听，一旦该文件落盘即纳入聚焦。
 
 `workspace.focusFolders` 的写法和 `files.exclude` 一致，所以也继承那套层级语义：**高优先层可以用 `false` 取消低优先层的条目**。例如你在用户设置里聚焦了 `Client` 和 `Server`，某个项目的工作区设置里写 `"Server": false`，那么打开该项目时就只剩 `Client`。
 
@@ -110,6 +113,8 @@
 ## Perforce 用户注意
 
 聚焦对 Perforce 用户有一份额外收益：[收集改动（reconcile）](../perforce/daily-workflow.md#收集改动reconcile)的改动徽标检查范围会收窄到聚焦目录——超大 depot 上只查你关心的那部分，扫描成本因此与聚焦范围、而非整个 depot 的规模挂钩。
+
+聚焦条目也可以是**单个文件**。文件条目的改动检查走逐文件的窄查询：每次会话都对它现查一次 reconcile，不复用目录扫描的持久化检查点。这保证文件条目永远基于磁盘真值判定——不会因为一个文件被误当目录扫描而把「干净」的旧结果无限回放。
 
 但 **SCM 操作本身不跟随聚焦**：已签出文件列表（`p4 opened`）、整个 changelist 的还原与搁置仍是全 client 范围，不会因为开了聚焦就变成部分操作。聚焦只影响"扫描"，不影响签出状态的管理。
 

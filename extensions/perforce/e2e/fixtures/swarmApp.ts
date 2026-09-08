@@ -333,10 +333,7 @@ export const test = base.extend<SwarmFixtures>({
     // teardown timeout").
     let finalizeForensics: (testInfo: TestInfo) => Promise<void>
     try {
-      finalizeForensics = installFailureForensics(
-        await app.firstWindow(),
-        swarmBackend.userDataDir,
-      )
+      finalizeForensics = installFailureForensics(await app.firstWindow(), swarmBackend.userDataDir)
     } catch (err) {
       await closeApp(app)
       throw err
