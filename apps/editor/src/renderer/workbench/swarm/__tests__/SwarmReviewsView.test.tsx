@@ -1,16 +1,23 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  CommandsRegistry,
   ICommandService,
   IConfigurationService,
   IDialogService,
   IEditorService,
+  INotificationService,
   IOpenerService,
   IQuickInputService,
   IStorageService,
+  IUriIdentityService,
+  IWorkspaceService,
   InstantiationService,
-  observableValue,
   ServiceCollection,
+  UriIdentityService,
+  URI,
+  observableValue,
+  type ICommand,
   type IObservable,
 } from '@universe-editor/platform'
 import {
@@ -18,6 +25,7 @@ import {
   type SwarmDashboardResult,
   type SwarmReviewDetailDto,
   type SwarmReviewDto,
+  type SwarmReviewFileDto,
 } from '@universe-editor/extensions-common'
 import { ServicesContext } from '../../useService.js'
 import {
@@ -26,9 +34,11 @@ import {
 } from '../../../services/extensions/ScmService.js'
 import {
   requestSwarmReviewsRefresh,
+  swarmReviewDetailCache,
   swarmReviewsViewState,
 } from '../../../services/swarm/swarmViewState.js'
 import { swarmIgnoreStore } from '../../../services/swarm/swarmIgnoreStore.js'
+import { swarmApplyStore } from '../../../services/swarm/swarmApplyStore.js'
 import { swarmReviewsUiStore } from '../../../services/swarm/swarmReviewsUiStore.js'
 import { buildSwarmReviewUrl } from '../../../services/swarm/swarmReviewUrl.js'
 import { swarmChangesViewState } from '../swarmChangesViewState.js'
@@ -59,10 +69,17 @@ interface FakeServicesOptions {
   sourceControls?: readonly IScmSourceControlModel[]
 }
 
+interface FakeServicesResult {
+  instantiation: InstantiationService
+  openEditor: ReturnType<typeof vi.fn>
+  dialog: { confirm: ReturnType<typeof vi.fn> }
+  notifications: { notify: ReturnType<typeof vi.fn> }
+}
+
 function createServices(
   executeCommand: ReturnType<typeof vi.fn>,
   options: FakeServicesOptions = {},
-): { instantiation: InstantiationService; openEditor: ReturnType<typeof vi.fn> } {
+): FakeServicesResult {
   const {
     configValues = { 'perforce.swarm.url': 'https://swarm.example.test/' },
     sourceControls = [{ id: 'perforce' } as unknown as IScmSourceControlModel],
@@ -74,12 +91,18 @@ function createServices(
     get: (key: string) => configValues[key],
     onDidChangeConfiguration: () => ({ dispose: () => {} }),
   } as never)
-  services.set(IDialogService, {
+  const dialog = {
     _serviceBrand: undefined,
     confirm: vi.fn().mockResolvedValue({ confirmed: true }),
-  } as never)
+  }
+  services.set(IDialogService, dialog as never)
   const openEditor = vi.fn().mockResolvedValue(undefined)
   services.set(IEditorService, { _serviceBrand: undefined, openEditor } as never)
+  const notifications = {
+    _serviceBrand: undefined,
+    notify: vi.fn(),
+  }
+  services.set(INotificationService, notifications as never)
   services.set(IOpenerService, {
     _serviceBrand: undefined,
     open: vi.fn().mockResolvedValue(true),
@@ -96,6 +119,11 @@ function createServices(
     remove: vi.fn().mockResolvedValue(undefined),
     onDidChangeWorkspaceScope: () => ({ dispose: () => {} }),
   } as never)
+  services.set(IUriIdentityService, new UriIdentityService('win32'))
+  services.set(IWorkspaceService, {
+    _serviceBrand: undefined,
+    current: { folder: URI.file('C:/workspace') },
+  } as never)
   const sourceControlsObs: IObservable<readonly IScmSourceControlModel[]> = observableValue(
     'sourceControls',
     sourceControls,
@@ -107,7 +135,7 @@ function createServices(
     setExtHost() {},
     resetSourceControls() {},
   } as never)
-  return { instantiation: new InstantiationService(services), openEditor }
+  return { instantiation: new InstantiationService(services), openEditor, dialog, notifications }
 }
 
 /** The tree container is the keyboard target; every nav test drives it. */
@@ -120,6 +148,9 @@ afterEach(() => {
   swarmReviewsViewState.dashboard = null
   swarmReviewsViewState.transitions = {}
   swarmReviewsViewState.transitionsSeenUpdated = {}
+  swarmReviewDetailCache.clear()
+  swarmApplyStore.setIncludeOutside(false)
+  swarmApplyStore.setIntoChangelist(true)
   for (const id of swarmIgnoreStore.list()) swarmIgnoreStore.unignore(id)
   swarmChangesViewState._resetForTests()
   for (const key of ['needsAction', 'ignored', 'authored'] as const) {
@@ -308,6 +339,204 @@ describe('SwarmReviewsView', () => {
     await new Promise((resolve) => setTimeout(resolve, 50))
     expect(executeCommand).not.toHaveBeenCalledWith(SwarmCommands.dashboard, expect.anything())
     expect(screen.queryByTestId('swarm-needs-action-filter')).toBeNull()
+  })
+})
+
+describe('SwarmReviewsView apply to local', () => {
+  const detailWithArchive: SwarmReviewDetailDto = {
+    id: '1001',
+    state: 'needsReview',
+    stateLabel: 'Needs Review',
+    author: 'alice',
+    description: 'Fix the renderer',
+    updated: 1,
+    versions: [
+      { version: 1, change: '2001', pending: true, time: 1 },
+      { version: 2, change: '2002', archiveChange: '2999', pending: true, time: 2 },
+    ],
+    participants: [],
+    transitions: [],
+    commentCount: 0,
+    openTaskCount: 0,
+    testStatus: 'none',
+  }
+
+  const detailWithoutArchive: SwarmReviewDetailDto = {
+    ...detailWithArchive,
+    versions: [{ version: 1, change: '2001', pending: true, time: 1 }],
+  }
+
+  const files: SwarmReviewFileDto[] = [
+    {
+      status: 'M',
+      path: 'src/editor/a.ts',
+      depotFile: '//depot/src/editor/a.ts',
+      baseRevision: '1',
+      localPath: 'C:/workspace/src/editor/a.ts',
+    },
+    {
+      status: 'A',
+      path: 'src/runtime/b.ts',
+      depotFile: '//depot/src/runtime/b.ts',
+      baseRevision: null,
+      localPath: 'C:/workspace/src/runtime/b.ts',
+    },
+  ]
+
+  function registerCommand(id: string, handler: ICommand['handler']) {
+    return CommandsRegistry.registerCommand({ id, handler })
+  }
+
+  /** Forwards host commands to the real registry (so waitForSwarmCommand sees
+   *  them) and answers the view's own data commands inline. */
+  function hybridExecuteCommand() {
+    return vi.fn(async (command: string, ...args: unknown[]) => {
+      const cmd = CommandsRegistry.getCommand(command)
+      if (cmd) return cmd.handler({ get: () => undefined } as never, ...args)
+      if (command === SwarmCommands.dashboard) return dashboard
+      if (command === SwarmCommands.getTransitions) return []
+      return undefined
+    })
+  }
+
+  async function clickApplyToLocal(executeCommand: ReturnType<typeof vi.fn>) {
+    const services = createServices(executeCommand)
+    render(
+      <ServicesContext.Provider value={services.instantiation}>
+        <SwarmReviewsView />
+      </ServicesContext.Provider>,
+    )
+    const row = await screen.findByTestId('swarm-review-row')
+    fireEvent.contextMenu(row, { clientX: 20, clientY: 30 })
+    const item = await screen.findByRole('menuitem', { name: 'Apply to Local' })
+    fireEvent.click(item)
+    return services
+  }
+
+  it('offers Apply to Local between the Open group and Ignore in the row menu', async () => {
+    const executeCommand = hybridExecuteCommand()
+    render(
+      <ServicesContext.Provider value={createServices(executeCommand).instantiation}>
+        <SwarmReviewsView />
+      </ServicesContext.Provider>,
+    )
+    const row = await screen.findByTestId('swarm-review-row')
+    fireEvent.contextMenu(row, { clientX: 20, clientY: 30 })
+    await screen.findByRole('menuitem', { name: 'Apply to Local' })
+    const labels = Array.from(document.querySelectorAll('[role="menuitem"]')).map(
+      (el) => el.textContent,
+    )
+    const applyIdx = labels.indexOf('Apply to Local')
+    const browserIdx = labels.indexOf('Open Review in Browser')
+    const ignoreIdx = labels.indexOf('Ignore Review')
+    expect(applyIdx).toBeGreaterThan(browserIdx)
+    expect(applyIdx).toBeLessThan(ignoreIdx)
+  })
+
+  it('applies the cached latest version without re-fetching the review', async () => {
+    swarmReviewDetailCache.set('1001', detailWithArchive)
+    const applyToLocal = registerCommand(SwarmCommands.applyToLocal, () => ({
+      applied: ['//depot/src/editor/a.ts', '//depot/src/runtime/b.ts'],
+      skipped: [],
+    }))
+    const describeVersion = registerCommand(SwarmCommands.describeVersion, () => files)
+    const getReview = registerCommand(SwarmCommands.getReview, () => detailWithArchive)
+    const executeCommand = hybridExecuteCommand()
+    try {
+      await clickApplyToLocal(executeCommand)
+
+      await waitFor(() =>
+        expect(executeCommand).toHaveBeenCalledWith(SwarmCommands.describeVersion, {
+          change: '2999',
+          immutable: true,
+        }),
+      )
+      await waitFor(() =>
+        expect(executeCommand).toHaveBeenCalledWith(SwarmCommands.applyToLocal, {
+          change: '2999',
+          depotFiles: ['//depot/src/editor/a.ts', '//depot/src/runtime/b.ts'],
+          intoChangelist: true,
+        }),
+      )
+      // The detail cache answered — getReview never hit the wire.
+      expect(executeCommand).not.toHaveBeenCalledWith(SwarmCommands.getReview, expect.anything())
+    } finally {
+      applyToLocal.dispose()
+      describeVersion.dispose()
+      getReview.dispose()
+    }
+  })
+
+  it('fetches a cold review and caches it before describing', async () => {
+    const applyToLocal = registerCommand(SwarmCommands.applyToLocal, () => ({
+      applied: ['//depot/src/editor/a.ts', '//depot/src/runtime/b.ts'],
+      skipped: [],
+    }))
+    const describeVersion = registerCommand(SwarmCommands.describeVersion, () => files)
+    const getReview = registerCommand(SwarmCommands.getReview, () => detailWithArchive)
+    const executeCommand = hybridExecuteCommand()
+    try {
+      await clickApplyToLocal(executeCommand)
+
+      await waitFor(() =>
+        expect(executeCommand).toHaveBeenCalledWith(SwarmCommands.getReview, { reviewId: '1001' }),
+      )
+      await waitFor(() => expect(swarmReviewDetailCache.get('1001')).toBe(detailWithArchive))
+      await waitFor(() =>
+        expect(executeCommand).toHaveBeenCalledWith(SwarmCommands.applyToLocal, expect.anything()),
+      )
+    } finally {
+      applyToLocal.dispose()
+      describeVersion.dispose()
+      getReview.dispose()
+    }
+  })
+
+  it('uses the author changelist without the immutable flag when the latest version has no archive shelf', async () => {
+    const applyToLocal = registerCommand(SwarmCommands.applyToLocal, () => ({
+      applied: ['//depot/src/editor/a.ts', '//depot/src/runtime/b.ts'],
+      skipped: [],
+    }))
+    const describeVersion = registerCommand(SwarmCommands.describeVersion, () => files)
+    const getReview = registerCommand(SwarmCommands.getReview, () => detailWithoutArchive)
+    const executeCommand = hybridExecuteCommand()
+    try {
+      await clickApplyToLocal(executeCommand)
+
+      await waitFor(() =>
+        expect(executeCommand).toHaveBeenCalledWith(SwarmCommands.describeVersion, {
+          change: '2001',
+        }),
+      )
+      await waitFor(() =>
+        expect(executeCommand).toHaveBeenCalledWith(SwarmCommands.applyToLocal, {
+          change: '2001',
+          depotFiles: ['//depot/src/editor/a.ts', '//depot/src/runtime/b.ts'],
+          intoChangelist: true,
+        }),
+      )
+    } finally {
+      applyToLocal.dispose()
+      describeVersion.dispose()
+      getReview.dispose()
+    }
+  })
+
+  it('toasts when the review is unavailable and never applies', async () => {
+    const getReview = registerCommand(SwarmCommands.getReview, () => undefined)
+    const executeCommand = hybridExecuteCommand()
+    try {
+      const { notifications } = await clickApplyToLocal(executeCommand)
+
+      await waitFor(() =>
+        expect(notifications.notify).toHaveBeenCalledWith(
+          expect.objectContaining({ message: expect.stringContaining('unavailable') }),
+        ),
+      )
+      expect(executeCommand).not.toHaveBeenCalledWith(SwarmCommands.applyToLocal, expect.anything())
+    } finally {
+      getReview.dispose()
+    }
   })
 })
 

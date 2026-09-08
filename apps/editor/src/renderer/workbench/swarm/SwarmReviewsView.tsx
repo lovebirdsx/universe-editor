@@ -44,10 +44,14 @@ import {
   IConfigurationService,
   IDialogService,
   IEditorService,
+  INotificationService,
   IOpenerService,
   IQuickInputService,
   IStorageService,
+  IUriIdentityService,
+  IWorkspaceService,
   ConfigurationTarget,
+  Severity,
   derivedOpts,
   localize,
 } from '@universe-editor/platform'
@@ -70,17 +74,22 @@ import {
 import {
   SwarmCommands,
   type SwarmDashboardResult,
+  type SwarmDescribeVersionRequest,
   type SwarmGetReviewRequest,
   type SwarmReviewDetailDto,
   type SwarmReviewDto,
+  type SwarmReviewFileDto,
   type SwarmTransitionDto,
   type SwarmTransitionRequest,
 } from '@universe-editor/extensions-common'
 import { relativeTime } from '../../relativeTime.js'
 import { SwarmReviewEditorInput } from '../../services/editor/SwarmReviewEditorInput.js'
+import { waitForSwarmCommand } from '../../services/swarm/swarmCommandReady.js'
+import { applySwarmReviewToLocal } from '../../services/swarm/swarmApplyToLocal.js'
 import {
   resolveSwarmReviewsRefresh,
   swarmNeedsActionCount,
+  swarmReviewDetailCache,
   swarmReviewsViewState,
   swarmReviewEvents,
   trackSwarmRefreshConsumer,
@@ -212,10 +221,13 @@ export function SwarmReviewsView() {
   const configuration = useService(IConfigurationService)
   const dialog = useService(IDialogService)
   const editorService = useService(IEditorService)
+  const notifications = useService(INotificationService)
   const opener = useService(IOpenerService)
   const quickInput = useService(IQuickInputService)
   const scmService = useService(IScmService)
   const storage = useService(IStorageService)
+  const uriIdentity = useService(IUriIdentityService)
+  const workspaceService = useService(IWorkspaceService)
 
   const [dashboard, setDashboard] = useState<SwarmDashboardResult | null>(
     swarmReviewsViewState.dashboard,
@@ -594,6 +606,91 @@ export function SwarmReviewsView() {
     [commands, dialog, reload],
   )
 
+  // Context-menu entry: apply the LATEST version to the workspace. The list row
+  // only carries the summary DTO, so fetch the detail (cache-first) and its
+  // files, then hand off to the shared confirm/apply flow. The menu is a
+  // transient overlay — every failure surface is a toast, not a component slot.
+  const applyToLocalReview = useCallback(
+    async (review: SwarmReviewDto) => {
+      try {
+        const ready = await waitForSwarmCommand(SwarmCommands.getReview)
+        if (!ready) {
+          notifications.notify({
+            severity: Severity.Info,
+            message: localize(
+              'swarm.commands.unavailable',
+              'Swarm is unavailable. Check the Perforce extension and connection.',
+            ),
+          })
+          return
+        }
+        const detail =
+          swarmReviewDetailCache.get(review.id) ??
+          (await commands.executeCommand<SwarmReviewDetailDto | undefined>(
+            SwarmCommands.getReview,
+            { reviewId: review.id } satisfies SwarmGetReviewRequest,
+          ))
+        if (!detail) {
+          notifications.notify({
+            severity: Severity.Info,
+            message: localize('swarm.review.unavailable', 'Review #{0} is unavailable.', {
+              0: review.id,
+            }),
+          })
+          return
+        }
+        swarmReviewDetailCache.set(review.id, detail)
+        const latest = detail.versions[detail.versions.length - 1]
+        const change = latest?.archiveChange ?? latest?.change ?? null
+        if (!latest || !change) {
+          notifications.notify({
+            severity: Severity.Info,
+            message: localize(
+              'swarm.apply.nothing',
+              'Nothing to apply: no mapped file of this version is inside the workspace.',
+            ),
+          })
+          return
+        }
+        const files = await commands.executeCommand<SwarmReviewFileDto[]>(
+          SwarmCommands.describeVersion,
+          {
+            change,
+            ...(latest.archiveChange !== undefined ? { immutable: true } : {}),
+          } satisfies SwarmDescribeVersionRequest,
+        )
+        if (!files?.length) {
+          notifications.notify({
+            severity: Severity.Info,
+            message: localize(
+              'swarm.apply.nothing',
+              'Nothing to apply: no mapped file of this version is inside the workspace.',
+            ),
+          })
+          return
+        }
+        await applySwarmReviewToLocal(
+          { reviewId: review.id, change, files },
+          {
+            commands,
+            dialog,
+            notifications,
+            storage,
+            uriIdentity,
+            workspaceService,
+            onError: (message) => notifications.notify({ severity: Severity.Error, message }),
+          },
+        )
+      } catch (e: unknown) {
+        notifications.notify({
+          severity: Severity.Error,
+          message: e instanceof Error ? e.message : String(e),
+        })
+      }
+    },
+    [commands, dialog, notifications, storage, uriIdentity, workspaceService],
+  )
+
   const createMenuItems = useCallback(
     (
       review: SwarmReviewDto,
@@ -625,6 +722,12 @@ export function SwarmReviewsView() {
             ] satisfies SwarmReviewMenuItem[])
           : []),
         { kind: 'separator' },
+        {
+          kind: 'item',
+          icon: 'cloud-download',
+          label: localize('swarm.applyToLocal', 'Apply to Local'),
+          run: () => void applyToLocalReview(review),
+        },
         swarmIgnoreStore.isIgnored(review.id)
           ? {
               kind: 'item',
@@ -669,6 +772,7 @@ export function SwarmReviewsView() {
       ]
     },
     [
+      applyToLocalReview,
       applyTransition,
       obliterateReview,
       openReview,

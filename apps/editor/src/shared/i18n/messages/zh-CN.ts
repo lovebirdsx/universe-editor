@@ -476,6 +476,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.swarm.pollTick': 'Swarm 轮询',
   'action.swarm.refreshReviews': '刷新 Swarm 审核',
   'action.swarm.showReviews': '显示 Swarm 审核',
+  'swarm.applyToLocal': '应用到本地',
 
   // --- Dialogs ---
   'dialog.default.cancel': '取消',

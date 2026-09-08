@@ -21,9 +21,7 @@ import {
   IStorageService,
   IUriIdentityService,
   IWorkspaceService,
-  Severity,
   StorageScope,
-  URI,
   type IEditorInput,
   localize,
 } from '@universe-editor/platform'
@@ -31,8 +29,6 @@ import { Button, IconButton, Spinner, cx } from '@universe-editor/workbench-ui'
 import {
   SwarmCommands,
   type SwarmAddCommentRequest,
-  type SwarmApplyToLocalRequest,
-  type SwarmApplyToLocalResult,
   type SwarmCommentDto,
   type SwarmDescribeVersionRequest,
   type SwarmGetReviewRequest,
@@ -48,6 +44,7 @@ import {
 import { useObservable, useService } from '../useService.js'
 import { SwarmReviewEditorInput } from '../../services/editor/SwarmReviewEditorInput.js'
 import { openSwarmFileDiff } from '../../services/swarm/openSwarmFileDiff.js'
+import { applySwarmReviewToLocal } from '../../services/swarm/swarmApplyToLocal.js'
 import { waitForSwarmCommand } from '../../services/swarm/swarmCommandReady.js'
 import { buildSwarmReviewUrl } from '../../services/swarm/swarmReviewUrl.js'
 import {
@@ -60,8 +57,6 @@ import {
   type SwarmReviewFilesViewMode,
 } from '../../services/swarm/swarmViewState.js'
 import { swarmIgnoreStore } from '../../services/swarm/swarmIgnoreStore.js'
-import { swarmApplyStore } from '../../services/swarm/swarmApplyStore.js'
-import { planApplyToLocal } from '../../services/swarm/swarmApplyPlan.js'
 import { SwarmReviewFiles } from './SwarmReviewFiles.js'
 import styles from './SwarmReviewEditor.module.css'
 
@@ -83,12 +78,6 @@ const STATE_CLASS: Record<string, string | undefined> = {
 /** Transition state keys that irreversibly commit the shelved change. */
 function isCommitTransition(state: string): boolean {
   return state.includes('commit')
-}
-
-/** Join the first few skipped/unmapped paths for dialog/notification wording. */
-function formatPathList(paths: readonly string[], max = 3): string {
-  const head = paths.slice(0, max).join(', ')
-  return paths.length > max ? `${head} and ${paths.length - max} more` : head
 }
 
 export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
@@ -427,189 +416,24 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
   // Apply the selected version's files to the workspace via `p4 unshelve -f`
   // (host-side command). The immutable archive snapshot (selectedChange) is the
   // source, so a re-shelved author changelist can't drift what gets applied.
-  // `-f` overwrites local copies — including unopened hand-edited files (the
-  // point of the feature); files p4 refuses (already open, stale base) come
-  // back in `skipped`.
-  const applyToLocal = useCallback(async () => {
+  // The confirm/plan/send/toast flow is shared with the Reviews view's context
+  // menu entry (swarmApplyToLocal.ts).
+  const applyToLocal = useCallback(() => {
     const change = selectedChange
     const versionFiles = files
     if (!reviewId || busy || !change || !versionFiles?.length) return
-    await swarmApplyStore.attach(storage)
-    const includeOutside = swarmApplyStore.includeOutside
-    const intoChangelist = swarmApplyStore.intoChangelist
-    const folder = workspaceService.current?.folder
-    const plan = planApplyToLocal(
-      versionFiles,
-      includeOutside,
-      (fsPath) => folder !== undefined && uriIdentity.isEqualOrParent(URI.file(fsPath), folder),
+    return applySwarmReviewToLocal(
+      { reviewId, change, files: versionFiles },
+      {
+        commands,
+        dialog,
+        notifications,
+        storage,
+        uriIdentity,
+        workspaceService,
+        onError: setError,
+      },
     )
-    if (plan.depotFiles.length === 0) {
-      // Nothing p4 could restore: every file is unmapped (not in the client
-      // view — the review targets another stream/branch) or mapped outside the
-      // workspace with the toggle off. The unmapped case gets its own wording
-      // since no checkbox can fix it.
-      const unmappedOnly = plan.unmappedPaths.length > 0 && plan.outsidePaths.length === 0
-      const message = unmappedOnly
-        ? localize(
-            'swarm.apply.nothing.mismatch',
-            'Cannot apply this review: its files belong to a different stream/branch than the current workspace.',
-          )
-        : localize(
-            'swarm.apply.nothing',
-            'Nothing to apply: no mapped file of this version is inside the workspace.',
-          )
-      notifications.notify({ severity: Severity.Info, message, sticky: true })
-      return
-    }
-    const detailParts: string[] = [
-      localize(
-        'swarm.apply.detail',
-        'This replaces the local content of {0} file(s) with the review version.',
-        { 0: String(plan.depotFiles.length) },
-      ),
-    ]
-    if (plan.outsidePaths.length > 0) {
-      detailParts.push(
-        localize(
-          'swarm.apply.detail.outside',
-          '{0} file(s) outside the workspace will be skipped: {1}',
-          {
-            0: String(plan.outsidePaths.length),
-            1: formatPathList(plan.outsidePaths),
-          },
-        ),
-      )
-    }
-    if (plan.unmappedPaths.length > 0) {
-      detailParts.push(
-        localize(
-          'swarm.apply.detail.unmapped',
-          '{0} file(s) belong to a different stream/branch and cannot be applied.',
-          { 0: String(plan.unmappedPaths.length) },
-        ),
-      )
-    }
-    detailParts.push(
-      localize(
-        'swarm.apply.detail.skippedNote',
-        'Files already open or out of date will be skipped and reported.',
-      ),
-    )
-    const res = await dialog.confirm({
-      type: 'warning',
-      message: localize('swarm.apply.confirm', 'Apply review #{0} to local files?', {
-        0: reviewId,
-      }),
-      detail: detailParts.join('\n'),
-      primaryButton: localize('swarm.applyToLocal', 'Apply to Local'),
-      checkboxes: [
-        {
-          label: localize('swarm.apply.checkbox', 'Also replace files outside the workspace'),
-          initiallyChecked: includeOutside,
-        },
-        {
-          label: localize(
-            'swarm.apply.checkbox.changelist',
-            'Open applied files in the default changelist',
-          ),
-          initiallyChecked: intoChangelist,
-        },
-      ],
-    })
-    if (!res.confirmed) return
-    // The checkboxes can change which files are in scope and how they land —
-    // re-plan with the final values before persisting/sending.
-    const outsideChecked = res.checkboxChecked?.[0] ?? includeOutside
-    const changelistChecked = res.checkboxChecked?.[1] ?? intoChangelist
-    const finalPlan = planApplyToLocal(
-      versionFiles,
-      outsideChecked,
-      (fsPath) => folder !== undefined && uriIdentity.isEqualOrParent(URI.file(fsPath), folder),
-    )
-    swarmApplyStore.setIncludeOutside(outsideChecked)
-    swarmApplyStore.setIntoChangelist(changelistChecked)
-    if (finalPlan.depotFiles.length === 0) {
-      notifications.notify({
-        severity: Severity.Info,
-        message: localize('swarm.apply.nothingApplied', 'No files were applied.'),
-      })
-      return
-    }
-    setBusy(true)
-    try {
-      const result = await commands.executeCommand<SwarmApplyToLocalResult>(
-        SwarmCommands.applyToLocal,
-        {
-          change,
-          depotFiles: finalPlan.depotFiles,
-          intoChangelist: changelistChecked,
-        } satisfies SwarmApplyToLocalRequest,
-      )
-      const applied = result?.applied.length ?? 0
-      const skipped = result?.skipped ?? []
-      const keptOpen = result?.keptOpen ?? []
-      if (applied === 0 && skipped.length === 0) {
-        notifications.notify({
-          severity: Severity.Info,
-          message: localize('swarm.apply.nothingApplied', 'No files were applied.'),
-        })
-      } else if (skipped.length === 0) {
-        notifications.notify({
-          severity: Severity.Info,
-          message: changelistChecked
-            ? localize('swarm.apply.done', 'Applied {0} file(s) to the workspace.', {
-                0: String(applied),
-              })
-            : localize(
-                'swarm.apply.done.noChangelist',
-                'Applied {0} file(s) to the workspace (not opened in a changelist).',
-                { 0: String(applied) },
-              ),
-        })
-      } else {
-        // INotification has no detail field — the first few skipped entries go
-        // into the message; the host-side logger.warn carries the full list.
-        const preview = skipped
-          .slice(0, 3)
-          .map((s) => `${s.depotFile} — ${s.reason}`)
-          .join('\n')
-        notifications.notify({
-          severity: Severity.Warning,
-          message: localize(
-            'swarm.apply.doneWithSkipped',
-            'Applied {0} file(s); {1} skipped:\n{2}{3}',
-            {
-              0: String(applied),
-              1: String(skipped.length),
-              2: preview,
-              3: skipped.length > 3 ? `\n…and ${skipped.length - 3} more` : '',
-            },
-          ),
-        })
-      }
-      if (keptOpen.length > 0) {
-        const keptPreview = keptOpen
-          .slice(0, 3)
-          .map((s) => `${s.depotFile} — ${s.reason}`)
-          .join('\n')
-        notifications.notify({
-          severity: Severity.Warning,
-          message: localize(
-            'swarm.apply.keptOpen',
-            '{0} file(s) could not be removed from the default changelist and remain open:\n{1}{2}',
-            {
-              0: String(keptOpen.length),
-              1: keptPreview,
-              2: keptOpen.length > 3 ? `\n…and ${keptOpen.length - 3} more` : '',
-            },
-          ),
-        })
-      }
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setBusy(false)
-    }
   }, [
     busy,
     commands,

@@ -365,6 +365,7 @@ test.describe('@p1 swarm reviews', () => {
       await expect(page.locator('[role="menuitem"][data-active]')).toHaveCount(0)
       await expect(menu.getByRole('menuitem', { name: 'Approve', exact: true })).toBeVisible()
       await expect(menu.getByRole('menuitem', { name: 'Open Review in Browser' })).toBeVisible()
+      await expect(menu.getByRole('menuitem', { name: 'Apply to Local' })).toBeVisible()
       await expect(menu.getByRole('menuitem', { name: 'Copy Review Name' })).toBeVisible()
       await expect(menu.getByRole('menuitem', { name: 'Copy Review Link' })).toBeVisible()
       await menu.getByRole('menuitem', { name: 'Open Review', exact: true }).click()

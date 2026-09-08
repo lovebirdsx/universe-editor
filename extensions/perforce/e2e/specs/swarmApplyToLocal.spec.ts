@@ -67,6 +67,51 @@ test.describe('@p1 swarm apply to local', () => {
     expect(state.opened['//depot/src/runtime/b.ts']?.change).toBe('default')
   })
 
+  test('applies the latest version from the row context menu without opening the review', async ({
+    page,
+    swarm,
+    swarmBackend,
+  }) => {
+    test.setTimeout(60_000)
+    const aTs = join(swarmBackend.clientRoot, 'src', 'editor', 'a.ts')
+    const bTs = join(swarmBackend.clientRoot, 'src', 'runtime', 'b.ts')
+    const baselineA = readFileSync(aTs, 'utf8')
+
+    // The list row carries no version context — the menu entry must fetch the
+    // detail + file list itself and target the latest version (change 900).
+    await page.locator('[data-testid="activitybar-item-workbench.view.swarm"]').click()
+    const view = page.locator('[data-testid="swarm-reviews-view"]')
+    await expect(view).toBeVisible()
+    await swarm.waitForRequest(
+      (r: { method: string; path: string }) => r.method === 'GET' && r.path === 'reviews',
+    )
+    const row = view
+      .locator('[data-testid="swarm-review-row"]', { hasText: 'Add greeting' })
+      .first()
+    await row.click({ button: 'right' })
+    await page.getByRole('menuitem', { name: 'Apply to Local' }).click()
+
+    const dialog = page.locator('[role="dialog"]')
+    await expect(dialog).toBeVisible()
+    await expect(dialog).toContainText('replaces the local content')
+    await dialog.getByRole('button', { name: 'Apply to Local' }).click()
+
+    await expect(page.locator('[data-testid="notification-toast-item"]')).toContainText(
+      'Applied 2 file(s)',
+    )
+    await expect
+      .poll(() => readFileSync(aTs, 'utf8'), { timeout: 10_000 })
+      .toContain('export const line60 = 60 + 1')
+    expect(readFileSync(aTs, 'utf8')).not.toBe(baselineA)
+    expect(readFileSync(bTs, 'utf8')).toBe('export const b = 2\n')
+
+    const state = JSON.parse(readFileSync(swarmBackend.stateFile, 'utf8')) as {
+      opened: Record<string, { action: string; change: string }>
+    }
+    expect(state.opened['//depot/src/editor/a.ts']?.change).toBe('default')
+    expect(state.opened['//depot/src/runtime/b.ts']?.change).toBe('default')
+  })
+
   test('writes files to disk without opening them when the changelist checkbox is off', async ({
     page,
     swarm,
