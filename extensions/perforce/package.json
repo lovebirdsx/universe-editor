@@ -502,7 +502,7 @@
         },
         {
           "command": "perforce.revertChangelist",
-          "when": "scmProvider == perforce && (scmResourceGroup == default || scmResourceGroup =~ /^cl:/)",
+          "when": "scmProvider == perforce && scmResourceGroup =~ /^cl:/",
           "group": "2_revert@2",
           "icon": "discard"
         },
@@ -523,6 +523,30 @@
           "when": "scmProvider == perforce && scmResourceGroup =~ /^cl:/",
           "group": "3_swarm@2",
           "icon": "sync"
+        },
+        {
+          "command": "perforce.reconcile",
+          "when": "scmProvider == perforce && scmResourceGroup == reconcile",
+          "group": "2_move@1",
+          "icon": "add"
+        },
+        {
+          "command": "perforce.reconcileIntoNewChangelist",
+          "when": "scmProvider == perforce && scmResourceGroup == reconcile",
+          "group": "2_move@2",
+          "icon": "new-file"
+        },
+        {
+          "command": "perforce.revert",
+          "when": "scmProvider == perforce && scmResourceGroup == reconcile",
+          "group": "inline@1",
+          "icon": "discard"
+        },
+        {
+          "command": "perforce.revert",
+          "when": "scmProvider == perforce && scmResourceGroup == default",
+          "group": "inline@1",
+          "icon": "discard"
         }
       ],
       "scm/resourceFolder/context": [

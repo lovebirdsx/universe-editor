@@ -2802,3 +2802,62 @@ describe('㉑ reconcile-scan checkpoint 跨 session 持久化（真磁盘）', (
     expect(fullScanScans()).toHaveLength(0)
   })
 })
+
+describe('PerforceClient.driftGroupPaths', () => {
+  beforeEach(() => {
+    installScmBridge()
+    spawnMock.mockReset()
+    readdirMock.mockReset()
+    readdirMock.mockImplementation(async () => [])
+    calls.length = 0
+    groups.length = 0
+    reconcileGroupThrow = false
+    heldChildren.length = 0
+    currentClock = undefined
+    windowMock.showErrorMessage.mockClear()
+  })
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>)[BRIDGE_KEY]
+  })
+
+  it('returns only the rows the group renders: not opened, not excluded, sorted', async () => {
+    const client = await makeClient(
+      {
+        opened: () => [{ rel: 'opened.txt' }],
+        reconcile: () => [
+          { rel: 'zeta.txt' },
+          { rel: 'opened.txt' },
+          { rel: 'excluded/e.txt' },
+          { rel: 'alpha.txt' },
+        ],
+      },
+      fakeDisk(),
+    )
+    // Scan WITHOUT the exclusion first so excluded/e.txt is merged into
+    // _driftFiles; the carve would otherwise keep p4 from ever reporting it,
+    // and the `_isExcluded` filter inside driftGroupPaths would go untested.
+    client.setReconcileScope([LOCAL])
+    await client.refresh()
+    await client.runReconcileScan()
+    client.setReconcileExcludes([`${LOCAL}/excluded`])
+
+    // opened.txt is dropped (still opened), excluded/e.txt is dropped (excluded
+    // dir); the rest come back sorted by local path, matching _applyDriftGroup.
+    expect(client.driftGroupPaths()).toEqual([`${LOCAL}/alpha.txt`, `${LOCAL}/zeta.txt`])
+  })
+
+  it('returns an empty list when every drift row is opened or excluded', async () => {
+    const client = await makeClient(
+      {
+        opened: () => [{ rel: 'a.txt' }],
+        reconcile: (spec) => (spec.endsWith('...') ? [{ rel: 'a.txt' }] : []),
+      },
+      fakeDisk(),
+    )
+    client.setReconcileScope([LOCAL])
+    await client.refresh()
+    await client.runReconcileScan()
+
+    expect(client.driftGroupPaths()).toEqual([])
+  })
+})

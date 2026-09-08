@@ -24,7 +24,7 @@
 
 import { test, expect, DEFAULT_SEEDS, waitForPerforceCommands } from '../fixtures/perforceApp.js'
 import { evaluateWhenRestored, type WorkbenchPO } from '@universe-editor/e2e-harness'
-import { writeFileSync } from 'node:fs'
+import { writeFileSync, readFileSync } from 'node:fs'
 import type { Page } from '@playwright/test'
 
 const tracked = DEFAULT_SEEDS[0]!.relPath
@@ -203,6 +203,107 @@ test.describe('@p1 perforce changelist', () => {
           },
         )
         .toEqual([])
+    })
+  })
+
+  test.describe('group-header context menus', () => {
+    // A drifted file lands in the resident `reconcile` ("Changes") group; an
+    // opened file lands in `default`. The two group headers grew right-click
+    // menus + a hover Revert icon this round — these journeys right-click the
+    // headers themselves (the menu's only entry point).
+    test.use({ p4Seeds: { files: DEFAULT_SEEDS } })
+
+    test('the Changes group header collects and reverts the whole drift set @regression', async ({
+      page,
+      workbench,
+      perforce,
+    }) => {
+      test.setTimeout(120_000)
+      // Drift the file on disk WITHOUT opening it — the reconcile scan surfaces
+      // it as a `reconcile` group row.
+      writeFileSync(perforce.file(tracked), 'locally edited content\n', 'utf8')
+      await openScmWorkspace(page, workbench, perforce.openDir)
+
+      await expect
+        .poll(() => page.evaluate((s) => window.__E2E__!.getScmGroupIdsForResource(s), tracked), {
+          timeout: 30_000,
+          message: 'the drifted file should sit in the reconcile group',
+        })
+        .toEqual(['reconcile'])
+
+      await test.step('right-click offers Collect ×2 + Revert', async () => {
+        const header = page.locator('[role="treeitem"]', { hasText: 'Changes' }).first()
+        await expect(header).toBeVisible({ timeout: 30_000 })
+        await header.click({ button: 'right' })
+        const menu = page.getByRole('menu')
+        await expect(menu).toBeVisible({ timeout: 10_000 })
+        await expect(menu.getByText('Collect Changes', { exact: true })).toBeVisible()
+        await expect(menu.getByText('Collect into New Changelist…', { exact: true })).toBeVisible()
+        await expect(menu.getByText('Revert', { exact: true })).toBeVisible()
+        await page.keyboard.press('Escape')
+        await expect(menu).toBeHidden()
+      })
+
+      await test.step('Revert from the header discards the whole drift set', async () => {
+        const header = page.locator('[role="treeitem"]', { hasText: 'Changes' }).first()
+        await header.click({ button: 'right' })
+        const menu = page.getByRole('menu')
+        await menu.getByText('Revert', { exact: true }).click()
+
+        // Uncollected-only confirm wording (`p4 clean` discards the drift).
+        const dialog = page.getByRole('dialog')
+        await expect(dialog).toBeVisible({ timeout: 30_000 })
+        await dialog.getByRole('button', { name: 'Revert' }).click()
+
+        // The drift is gone: the row leaves every group and the disk content is
+        // back on the have revision.
+        await expect
+          .poll(() => page.evaluate((s) => window.__E2E__!.getScmGroupIdsForResource(s), tracked), {
+            timeout: 30_000,
+            message: 'the reverted file should belong to no group',
+          })
+          .toEqual([])
+        await expect
+          .poll(() => readFileSync(perforce.file(tracked), 'utf8'), {
+            timeout: 30_000,
+            message: 'the disk content should be restored to the have revision',
+          })
+          .toBe(DEFAULT_SEEDS[0]!.content)
+      })
+    })
+
+    test('the default group header offers Revert but no longer Revert All @regression', async ({
+      page,
+      workbench,
+      perforce,
+    }) => {
+      test.setTimeout(120_000)
+      await openScmWorkspace(page, workbench, perforce.openDir)
+
+      // Open the file for edit — it lands in the default changelist.
+      await workbench.runCommand('perforce.edit', { resourceUri: perforce.file(tracked) })
+      await expect
+        .poll(() => page.evaluate((s) => window.__E2E__!.getScmGroupIdsForResource(s), tracked), {
+          timeout: 30_000,
+          message: 'the opened file should sit in the default group',
+        })
+        .toEqual(['default'])
+
+      const header = page
+        .locator('[role="treeitem"]', { hasText: 'Default' })
+        .first()
+      await expect(header).toBeVisible({ timeout: 30_000 })
+      await header.click({ button: 'right' })
+      const menu = page.getByRole('menu')
+      await expect(menu).toBeVisible({ timeout: 10_000 })
+      // The unified Revert (perforce.revert) replaced the old Revert All entry
+      // on the default group; revertChangelist is now cl:N-only.
+      await expect(menu.getByText('Revert', { exact: true })).toBeVisible()
+      await expect(
+        menu.getByText('Revert All Files in Changelist', { exact: true }),
+      ).toHaveCount(0)
+      await page.keyboard.press('Escape')
+      await expect(menu).toBeHidden()
     })
   })
 })

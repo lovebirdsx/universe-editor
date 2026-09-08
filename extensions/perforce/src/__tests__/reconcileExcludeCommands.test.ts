@@ -70,7 +70,7 @@ const windowMock = vi.hoisted(() => ({
   ),
   showErrorMessage: vi.fn(async () => undefined as string | undefined),
   showQuickPick: vi.fn(async () => undefined),
-  showInputBox: vi.fn(async () => undefined),
+  showInputBox: vi.fn(async () => undefined as string | undefined),
   withProgress: vi.fn(
     async (_opts: unknown, fn: (progress: unknown, token: unknown) => Promise<unknown>) =>
       fn({ report: vi.fn() }, { onCancellationRequested: vi.fn(() => ({ dispose: vi.fn() })) }),
@@ -162,6 +162,9 @@ interface FakeClient {
   changelistOf: Mock
   reconcileInto: Mock
   reopen: Mock
+  driftGroupPaths: Mock
+  pathsInChangelist: Mock
+  newChangelist: Mock
 }
 
 /** A client whose exclusion predicates are the real pathUtil ones, fed by
@@ -207,6 +210,9 @@ function makeFakeClient(): FakeClient {
   fake.changelistOf = vi.fn(() => undefined)
   fake.reconcileInto = vi.fn(async () => {})
   fake.reopen = vi.fn(async () => {})
+  fake.driftGroupPaths = vi.fn(() => [] as string[])
+  fake.pathsInChangelist = vi.fn(() => [] as string[])
+  fake.newChangelist = vi.fn(async () => undefined as string | undefined)
   return fake
 }
 
@@ -562,5 +568,102 @@ describe('perforce.reopenTo exclusion gating', () => {
     ])
     expect(fake.reconcileInto).toHaveBeenCalledWith('5', [`${ROOT}/a.txt`])
     expect(fake.reopen).toHaveBeenCalledWith('5', [join(ROOT, 'gen', 'b.txt')])
+  })
+})
+
+/** Group-header invocations carry `{rootUri, sourceControlId, scmResourceGroupId}`
+ *  and NO resourceUri / selection. The handlers must fan out over the group's
+ *  own rows — and must NOT hijack file rows in the same group (those DO carry a
+ *  resourceUri). */
+describe('group-header fan-out', () => {
+  const GROUP_ARG = { rootUri: ROOT, sourceControlId: 'perforce', scmResourceGroupId: 'reconcile' }
+  const DRIFT = [`${ROOT}/a.txt`, `${ROOT}/dir/b.txt`]
+
+  it('perforce.reconcile collects every drift path the group shows', async () => {
+    fake.driftGroupPaths.mockReturnValue(DRIFT)
+    await runCommand('perforce.reconcile', GROUP_ARG)
+    expect(fake.driftGroupPaths).toHaveBeenCalled()
+    expect(fake.reconcile).toHaveBeenCalledWith(DRIFT)
+  })
+
+  it('perforce.reconcile on a file row in the reconcile group stays per-file', async () => {
+    // Regression: the group branch must not swallow file rows, which carry a
+    // resourceUri even though their scmResourceGroupId is also 'reconcile'.
+    await runCommand('perforce.reconcile', { resourceUri: `${ROOT}/a.txt` })
+    expect(fake.driftGroupPaths).not.toHaveBeenCalled()
+    expect(fake.reconcile).toHaveBeenCalledWith([`${ROOT}/a.txt`])
+  })
+
+  it('perforce.reconcileIntoNewChangelist collects every drift path into the new changelist', async () => {
+    fake.driftGroupPaths.mockReturnValue(DRIFT)
+    windowMock.showInputBox.mockResolvedValueOnce('my new changelist')
+    fake.newChangelist.mockResolvedValueOnce('42')
+    await runCommand('perforce.reconcileIntoNewChangelist', GROUP_ARG)
+    expect(fake.newChangelist).toHaveBeenCalledWith('my new changelist')
+    expect(fake.reconcileInto).toHaveBeenCalledWith('42', DRIFT)
+  })
+
+  it('perforce.reconcileIntoNewChangelist does nothing when the description is cancelled', async () => {
+    fake.driftGroupPaths.mockReturnValue(DRIFT)
+    windowMock.showInputBox.mockResolvedValueOnce(undefined)
+    await runCommand('perforce.reconcileIntoNewChangelist', GROUP_ARG)
+    expect(fake.newChangelist).not.toHaveBeenCalled()
+    expect(fake.reconcileInto).not.toHaveBeenCalled()
+  })
+
+  it('perforce.revert on the reconcile group header discards via clean only', async () => {
+    fake.driftGroupPaths.mockReturnValue(DRIFT)
+    windowMock.showWarningMessage.mockResolvedValue(BTN_REVERT)
+    await runCommand('perforce.revert', GROUP_ARG)
+    expect(fake.revert).not.toHaveBeenCalled()
+    expect(fake.revertReconcile).toHaveBeenCalledWith(DRIFT)
+    const message = windowMock.showWarningMessage.mock.calls[0]?.[0] ?? ''
+    expect(message).toContain(
+      localize(
+        'perforce.revert.discardMany',
+        'Discard working-tree changes for {0} files? This cannot be undone.',
+        { 0: String(DRIFT.length) },
+      ),
+    )
+  })
+
+  it('perforce.revert on a changelist group header reverts its own files (not the active editor)', async () => {
+    // Regression: the group branch used to fall back to the active editor's
+    // file via resolveTargetPaths, reverting an unrelated path.
+    fake.pathsInChangelist.mockReturnValue([`${ROOT}/opened.txt`])
+    windowMock.showWarningMessage.mockResolvedValue(BTN_REVERT)
+    await runCommand('perforce.revert', {
+      rootUri: ROOT,
+      sourceControlId: 'perforce',
+      scmResourceGroupId: 'cl:7',
+    })
+    expect(fake.pathsInChangelist).toHaveBeenCalledWith('7')
+    expect(fake.revert).toHaveBeenCalledWith([`${ROOT}/opened.txt`])
+    expect(fake.revertReconcile).not.toHaveBeenCalled()
+  })
+
+  it('perforce.revert on a default changelist group header reverts the default files', async () => {
+    fake.pathsInChangelist.mockReturnValue([`${ROOT}/d1.txt`, `${ROOT}/d2.txt`])
+    windowMock.showWarningMessage.mockResolvedValue(BTN_REVERT)
+    await runCommand('perforce.revert', {
+      rootUri: ROOT,
+      sourceControlId: 'perforce',
+      scmResourceGroupId: 'default',
+    })
+    expect(fake.pathsInChangelist).toHaveBeenCalledWith('default')
+    expect(fake.revert).toHaveBeenCalledWith([`${ROOT}/d1.txt`, `${ROOT}/d2.txt`])
+  })
+
+  it('perforce.revert on a file row in a changelist group stays per-file', async () => {
+    // Regression: the group-header fix must not hijack file rows, which carry a
+    // resourceUri alongside their scmResourceGroupId.
+    fake.openedStateAmong.mockResolvedValueOnce(new Map([[norm(`${ROOT}/a.txt`), '3']]))
+    windowMock.showWarningMessage.mockResolvedValue(BTN_REVERT)
+    await runCommand('perforce.revert', {
+      resourceUri: `${ROOT}/a.txt`,
+      scmResourceGroupId: 'cl:3',
+    })
+    expect(fake.pathsInChangelist).not.toHaveBeenCalled()
+    expect(fake.revert).toHaveBeenCalledWith([`${ROOT}/a.txt`])
   })
 })

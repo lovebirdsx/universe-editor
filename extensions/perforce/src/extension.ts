@@ -1053,6 +1053,18 @@ export async function activate(context: ExtensionContext): Promise<void> {
     commands.registerCommand('perforce.reconcile', async (...args: unknown[]) => {
       const arg0 = args[0] as { isDirectory?: boolean } | undefined
       const selection = selectionTargets(args[1])
+      // Group header of the Changes (reconcile) group: collect every drift row
+      // the group shows. The header arg carries no resourceUri — file rows in
+      // that same group DO carry one and keep their per-path handling below.
+      const groupId = (args[0] as { scmResourceGroupId?: string } | undefined)?.scmResourceGroupId
+      if (groupId === RECONCILE_GROUP_ID && resourcePath(args[0]) === undefined) {
+        const client = mgr.resolveClient(args[0])
+        if (!client) return
+        const paths = client.driftGroupPaths()
+        if (paths.length === 0) return
+        await client.reconcile(paths)
+        return
+      }
       // Explorer multi-select: one filespec per element, directories carved
       // around excluded subtrees. SCM folder rows keep the single recursive
       // `<dir>/...` filespec (see reconcileUsesSelection).
@@ -1103,6 +1115,24 @@ export async function activate(context: ExtensionContext): Promise<void> {
     // open yet, so `reopen` would no-op on them; `reconcile -c` opens them for
     // their on-disk action straight into the new changelist.
     commands.registerCommand('perforce.reconcileIntoNewChangelist', async (...args: unknown[]) => {
+      // Group header of the Changes (reconcile) group: collect every drift row
+      // the group shows into the new changelist. The header arg carries no
+      // resourceUri — file rows keep their per-path resolution below.
+      const groupId = (args[0] as { scmResourceGroupId?: string } | undefined)?.scmResourceGroupId
+      if (groupId === RECONCILE_GROUP_ID && resourcePath(args[0]) === undefined) {
+        const target = mgr.resolveClient(args[0])
+        if (!target) return
+        const paths = target.driftGroupPaths()
+        if (paths.length === 0) return
+        const description = await window.showInputBox({
+          prompt: localize('perforce.newChangelist.prompt', 'New changelist description'),
+        })
+        if (description === undefined) return
+        const created = await target.newChangelist(description)
+        if (!created) return
+        await target.reconcileInto(created, paths)
+        return
+      }
       const paths = await resolveTargetPaths(args)
       if (paths.length === 0) return
       const target = mgr.resolveClient({ resourceUri: paths[0]! })
@@ -1459,19 +1489,50 @@ export async function activate(context: ExtensionContext): Promise<void> {
       // else goes per-file, with directory entries merged into `directories`.
       let plan: RevertPlan
       let target: PerforceClient | undefined
-      if (groupChangelistId(args[0]) !== undefined) {
-        const paths = await resolveTargetPaths(args)
-        if (paths.length === 0) return
-        const client = mgr.resolveClient({ resourceUri: paths[0]! })
+      const revertGroupId = (args[0] as { scmResourceGroupId?: string } | undefined)
+        ?.scmResourceGroupId
+      if (revertGroupId === RECONCILE_GROUP_ID && resourcePath(args[0]) === undefined) {
+        // Group header of the Changes (reconcile) group: every row is an
+        // unopened drift file, so revert = `p4 clean`. The shared confirm /
+        // execute pipeline below routes a clean-only plan through
+        // `revertReconcile`.
+        const client = mgr.resolveClient(args[0])
         if (!client) return
         target = client
+        const driftPaths = client.driftGroupPaths()
+        if (driftPaths.length === 0) return
+        plan = { opened: [], unopened: driftPaths }
+      } else if (groupChangelistId(args[0]) !== undefined) {
         const groupCl = groupChangelistId(args[0])!
-        plan = {
-          opened: paths.map((p) => {
-            const changelist = knownChangelist(client.changelistOf(p) ?? groupCl)
-            return changelist === undefined ? { path: p } : { path: p, changelist }
-          }),
-          unopened: [],
+        // Group headers carry no resourceUri — take the changelist's own files
+        // and route by the header's rootUri. File/folder rows DO carry a
+        // resourceUri and keep their per-path resolution below.
+        if (resourcePath(args[0]) === undefined) {
+          const client = mgr.resolveClient(args[0])
+          if (!client) return
+          target = client
+          const paths = client.pathsInChangelist(groupCl)
+          if (paths.length === 0) return
+          plan = {
+            opened: paths.map((p) => {
+              const changelist = knownChangelist(client.changelistOf(p) ?? groupCl)
+              return changelist === undefined ? { path: p } : { path: p, changelist }
+            }),
+            unopened: [],
+          }
+        } else {
+          const paths = await resolveTargetPaths(args)
+          if (paths.length === 0) return
+          const client = mgr.resolveClient({ resourceUri: paths[0]! })
+          if (!client) return
+          target = client
+          plan = {
+            opened: paths.map((p) => {
+              const changelist = knownChangelist(client.changelistOf(p) ?? groupCl)
+              return changelist === undefined ? { path: p } : { path: p, changelist }
+            }),
+            unopened: [],
+          }
         }
       } else if (
         isRevertDirectoryTarget(

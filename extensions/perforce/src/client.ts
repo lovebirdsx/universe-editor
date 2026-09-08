@@ -822,6 +822,20 @@ export class PerforceClient {
     return this._driftByScanDir
   }
 
+  /** Local paths of the drift rows the group currently displays — the exact
+   *  `_applyDriftGroup` filter (clientFile known, not opened, not excluded),
+   *  sorted the same way. Group-header actions (collect-all, revert-all
+   *  uncollected) act on what the user sees, nothing more. */
+  driftGroupPaths(): string[] {
+    const out: string[] = []
+    for (const row of this._driftFiles.values()) {
+      const p = row.clientFile
+      if (p !== undefined && !this._openedPaths.has(norm(p)) && !this._isExcluded(p)) out.push(p)
+    }
+    out.sort()
+    return out
+  }
+
   /**
    * The drift group's rendered rows, for the same tests (see {@link scanDrift}).
    * The group is a resident SCM resource group whose rows are whole-array
