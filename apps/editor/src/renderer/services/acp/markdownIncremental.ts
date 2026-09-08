@@ -80,12 +80,30 @@ function countLines(text: string): number {
   return n
 }
 
-/** Shift every block node's `line` by `delta`, preserving node shape. */
+/**
+ * Shift every block node's `line` by `delta`, preserving node shape. Container
+ * blocks (blockquote / list items) hold nested blocks whose `line` is absolute
+ * within the text segment this parse saw, so the shift recurses into them —
+ * shifting only the top level would leave nested blocks behind and break the
+ * byte-for-byte equivalence with `parseMarkdown(fullText)`.
+ */
 function offsetLines(nodes: readonly MdNode[], delta: number): readonly MdNode[] {
   if (delta === 0) return nodes
-  return nodes.map((node) =>
-    node.line !== undefined ? { ...node, line: node.line + delta } : node,
-  )
+  return nodes.map((node) => {
+    const shifted = node.line !== undefined ? { ...node, line: node.line + delta } : node
+    if (shifted.type === 'blockquote') {
+      return { ...shifted, children: offsetLines(shifted.children, delta) }
+    }
+    if (shifted.type === 'list') {
+      return {
+        ...shifted,
+        items: shifted.items.map((item) =>
+          item.children ? { ...item, children: offsetLines(item.children, delta) } : item,
+        ),
+      }
+    }
+    return shifted
+  })
 }
 
 /**

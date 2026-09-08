@@ -64,7 +64,10 @@ export function previewTopForLine(entries: readonly LineEntry[], line: number): 
 
 /** Source line (1-based) currently at the top of the preview viewport. */
 export function lineForPreviewTop(entries: readonly LineEntry[], scrollTop: number): number {
-  return Math.round(
+  // floor, not round: control points are sparse (one per block start), so inside
+  // a tall block the interpolated line can cross the NEXT heading's start and
+  // round() would jump the Outline's active heading one section early.
+  return Math.floor(
     interpolate(
       entries.map((e) => ({ key: e.top, value: e.line })),
       scrollTop,

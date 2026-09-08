@@ -212,7 +212,7 @@ describe('parseMarkdown — block layer', () => {
                   { inline: [text('a')], checked: null },
                   { inline: [text('b')], checked: null },
                 ],
-                line: 0,
+                line: 1,
               },
             ],
           },
@@ -258,7 +258,7 @@ describe('parseMarkdown — block layer', () => {
     if (list.type !== 'list') throw new Error('expected list')
     expect(list.items).toHaveLength(2)
     expect(list.items[0]?.children).toEqual<readonly MdNode[]>([
-      { type: 'code_fence', lang: 'ts', code: 'const x = 1', line: 0 },
+      { type: 'code_fence', lang: 'ts', code: 'const x = 1', line: 1 },
     ])
   })
 
@@ -268,7 +268,7 @@ describe('parseMarkdown — block layer', () => {
     if (list.type !== 'list') throw new Error('expected list')
     expect(list.items[0]?.inline).toEqual([text('p1')])
     expect(list.items[0]?.children).toEqual<readonly MdNode[]>([
-      { type: 'paragraph', children: [text('p2')], line: 1 },
+      { type: 'paragraph', children: [text('p2')], line: 2 },
     ])
   })
 
@@ -338,7 +338,7 @@ describe('parseMarkdown — block layer', () => {
           { type: 'paragraph', children: [text('outer')], line: 0 },
           {
             type: 'blockquote',
-            children: [{ type: 'paragraph', children: [text('inner')], line: 0 }],
+            children: [{ type: 'paragraph', children: [text('inner')], line: 1 }],
             line: 1,
           },
         ],
@@ -361,6 +361,97 @@ describe('parseMarkdown — block layer', () => {
         line: 0,
       },
     ])
+  })
+})
+
+// The preview's scroll map (collectEntries) assumes every data-line grows with
+// its pixel top; nested blocks must therefore carry ABSOLUTE source lines, not
+// the line offset inside their container's re-parsed slice. A nested block with
+// a small relative line but a large pixel top is a backwards control point that
+// breaks the piecewise interpolation and makes the Outline's active heading lag
+// behind the viewport. These cases pin every nested shape to absolute lines.
+describe('parseMarkdown — absolute source line of nested blocks', () => {
+  it('blockquote children keep absolute lines when the quote starts below the doc head', () => {
+    expect(parseMarkdown('para\n\n> q\n> r')).toEqual<readonly MdNode[]>([
+      { type: 'paragraph', children: [text('para')], line: 0 },
+      {
+        type: 'blockquote',
+        children: [
+          {
+            type: 'paragraph',
+            children: [text('q'), { type: 'softbreak' }, text('r')],
+            line: 2,
+          },
+        ],
+        line: 2,
+      },
+    ])
+  })
+
+  it('nested sublist keeps absolute lines when the list starts below the doc head', () => {
+    const nodes = parseMarkdown('para\n\n- a\n  - b')
+    expect(nodes[0]).toEqual<MdNode>({ type: 'paragraph', children: [text('para')], line: 0 })
+    const list = nodes[1]!
+    if (list.type !== 'list') throw new Error('expected list')
+    expect(list.line).toBe(2)
+    expect(list.items[0]?.children?.[0]).toMatchObject({ type: 'list', line: 3 })
+  })
+
+  it('tracks absolute lines across three nesting levels', () => {
+    const nodes = parseMarkdown('- a\n  - b\n    - c')
+    const top = nodes[0]!
+    if (top.type !== 'list') throw new Error('expected list')
+    expect(top.line).toBe(0)
+    const b = top.items[0]?.children?.[0]
+    if (b?.type !== 'list') throw new Error('expected nested list')
+    expect(b.line).toBe(1)
+    expect(b.items[0]?.children?.[0]).toMatchObject({ type: 'list', line: 2 })
+  })
+
+  it('blockquote nested in a list item keeps absolute lines', () => {
+    const nodes = parseMarkdown('- x\n  > q\n  > r')
+    const list = nodes[0]!
+    if (list.type !== 'list') throw new Error('expected list')
+    expect(list.line).toBe(0)
+    expect(list.items[0]?.children?.[0]).toEqual<MdNode>({
+      type: 'blockquote',
+      children: [
+        {
+          type: 'paragraph',
+          children: [text('q'), { type: 'softbreak' }, text('r')],
+          line: 1,
+        },
+      ],
+      line: 1,
+    })
+  })
+
+  it('list nested in a blockquote keeps absolute lines when the quote starts below the doc head', () => {
+    expect(parseMarkdown('para\n\n> intro\n>\n> - a')).toEqual<readonly MdNode[]>([
+      { type: 'paragraph', children: [text('para')], line: 0 },
+      {
+        type: 'blockquote',
+        children: [
+          { type: 'paragraph', children: [text('intro')], line: 2 },
+          {
+            type: 'list',
+            ordered: false,
+            items: [{ inline: [text('a')], checked: null }],
+            line: 4,
+          },
+        ],
+        line: 2,
+      },
+    ])
+  })
+
+  it('childStart skips lazy continuation lines before the first child block', () => {
+    const nodes = parseMarkdown('- a\ncont\n  - b')
+    const list = nodes[0]!
+    if (list.type !== 'list') throw new Error('expected list')
+    // 'cont' (line 1) is a lazy continuation of the item text, not a child block;
+    // the nested sublist starts on source line 2.
+    expect(list.items[0]?.children?.[0]).toMatchObject({ type: 'list', line: 2 })
   })
 })
 

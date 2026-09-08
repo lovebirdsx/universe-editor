@@ -35,9 +35,32 @@ describe('previewTopForLine', () => {
 })
 
 describe('lineForPreviewTop', () => {
-  it('maps a pixel top back to a rounded source line', () => {
+  it('maps a pixel top back to a source line', () => {
     expect(lineForPreviewTop(entries, 100)).toBe(5)
     expect(lineForPreviewTop(entries, 50)).toBe(3)
+  })
+
+  it('floors instead of rounding so a tall block keeps its own section', () => {
+    // Regression: blocks are sparse (one data-line control point per block
+    // start), so inside the lower half of a tall block (a long list / table) the
+    // interpolated source line crosses the NEXT heading's start. Math.round then
+    // reports a line in the next section's symbol range and the Outline's active
+    // heading jumps one section early; floor keeps the line anchored to the
+    // block the viewport top is actually inside.
+    // A 10-line block at line 5 (top 100) whose pixels span up to the next block
+    // at line 15 (top 400):
+    const sparse: LineEntry[] = [
+      { line: 1, top: 0 },
+      { line: 5, top: 100 },
+      { line: 15, top: 400 },
+    ]
+    // scrollTop 395 is still inside the line-5 block (100..400 px):
+    // interpolate → 5 + (295/300)*10 = 14.83 → floor 14 (still the line-5
+    // section), whereas round would report 15 (the next section).
+    expect(lineForPreviewTop(sparse, 395)).toBe(14)
+    // The switch happens exactly when the next block's top is reached:
+    // interpolate(400) hits the (400→15) control point → precisely 15.
+    expect(lineForPreviewTop(sparse, 400)).toBe(15)
   })
 
   it('clamps outside the mapped pixel range', () => {

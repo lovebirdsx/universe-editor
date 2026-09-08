@@ -114,8 +114,20 @@ export interface ParseMarkdownOptions {
  * Parse a markdown string into an array of block-level nodes. Pure — no React,
  * no DOM. Safe to call repeatedly; results can be cached upstream by message
  * id since the AST is stable for a stable input.
+ *
+ * `lineOffset` is internal: container blocks (blockquote / list items) re-parse
+ * their dedented body with the body's 0-based start line in the ORIGINAL source
+ * so every nested block keeps an ABSOLUTE source `line`. External callers leave
+ * it at 0. This matters because the preview's scroll map interpolates between
+ * `data-line` control points and assumes they grow monotonically with pixel
+ * position — a nested block carrying a small relative line would be a backwards
+ * control point and break the Outline's active-heading tracking.
  */
-export function parseMarkdown(input: string, options?: ParseMarkdownOptions): readonly MdNode[] {
+export function parseMarkdown(
+  input: string,
+  options?: ParseMarkdownOptions,
+  lineOffset = 0,
+): readonly MdNode[] {
   const lines = input.replace(/\r\n?/g, '\n').split('\n')
   const out: MdNode[] = []
   let i = 0
@@ -128,7 +140,7 @@ export function parseMarkdown(input: string, options?: ParseMarkdownOptions): re
         out.push({
           type: 'frontmatter',
           entries: parseFrontmatterEntries(lines.slice(1, j)),
-          line: 0,
+          line: lineOffset,
         })
         i = j + 1
         break
@@ -167,7 +179,7 @@ export function parseMarkdown(input: string, options?: ParseMarkdownOptions): re
         type: 'code_fence',
         lang: fence.lang,
         code: codeLines.join('\n'),
-        line: blockStart,
+        line: blockStart + lineOffset,
       })
       continue
     }
@@ -180,7 +192,7 @@ export function parseMarkdown(input: string, options?: ParseMarkdownOptions): re
         type: 'heading',
         level,
         children: parseInline(heading[2] ?? ''),
-        line: blockStart,
+        line: blockStart + lineOffset,
       })
       i++
       continue
@@ -188,7 +200,7 @@ export function parseMarkdown(input: string, options?: ParseMarkdownOptions): re
 
     // Horizontal rule — three or more of the same char, optional spaces.
     if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
-      out.push({ type: 'hr', line: blockStart })
+      out.push({ type: 'hr', line: blockStart + lineOffset })
       i++
       continue
     }
@@ -203,7 +215,11 @@ export function parseMarkdown(input: string, options?: ParseMarkdownOptions): re
         buf.push((lines[i] ?? '').replace(/^\s*>\s?/, ''))
         i++
       }
-      out.push({ type: 'blockquote', children: parseMarkdown(buf.join('\n')), line: blockStart })
+      out.push({
+        type: 'blockquote',
+        children: parseMarkdown(buf.join('\n'), undefined, lineOffset + blockStart),
+        line: blockStart + lineOffset,
+      })
       continue
     }
 
@@ -244,6 +260,9 @@ export function parseMarkdown(input: string, options?: ParseMarkdownOptions): re
         i++
         const continuationLines: string[] = []
         const childLines: string[] = []
+        // Original source line (0-based, within this parse's input) of the first
+        // child block; childLines[k] corresponds to source line childStart + k.
+        let childStart = -1
         let sawChild = false
         while (i < lines.length) {
           const nextLine = lines[i] ?? ''
@@ -254,6 +273,7 @@ export function parseMarkdown(input: string, options?: ParseMarkdownOptions): re
             let j = i + 1
             while (j < lines.length && (lines[j] ?? '').trim() === '') j++
             if (j < lines.length && indentOf(lines[j] ?? '') >= markerWidth) {
+              if (childStart === -1) childStart = i
               for (; i < j; i++) childLines.push('')
               sawChild = true
               continue
@@ -261,6 +281,7 @@ export function parseMarkdown(input: string, options?: ParseMarkdownOptions): re
             break
           }
           if (indentOf(nextLine) >= markerWidth) {
+            if (childStart === -1) childStart = i
             childLines.push(nextLine.slice(markerWidth))
             sawChild = true
             i++
@@ -276,7 +297,7 @@ export function parseMarkdown(input: string, options?: ParseMarkdownOptions): re
           i++
         }
         const children = childLines.some((l) => l.trim() !== '')
-          ? parseMarkdown(childLines.join('\n'))
+          ? parseMarkdown(childLines.join('\n'), undefined, lineOffset + childStart)
           : undefined
         const taskMatch = /^\[([ xX])\]\s+(.*)$/.exec(firstLine)
         const leadingText = taskMatch ? (taskMatch[2] ?? '') : firstLine
@@ -292,7 +313,7 @@ export function parseMarkdown(input: string, options?: ParseMarkdownOptions): re
         ordered,
         ...(startMatch ? { start: Number(startMatch[1]) } : {}),
         items,
-        line: blockStart,
+        line: blockStart + lineOffset,
       })
       continue
     }
@@ -312,7 +333,7 @@ export function parseMarkdown(input: string, options?: ParseMarkdownOptions): re
         rows.push(splitTableRow(cur, cols))
         i++
       }
-      out.push({ type: 'table', align, header, rows, line: blockStart })
+      out.push({ type: 'table', align, header, rows, line: blockStart + lineOffset })
       continue
     }
 
@@ -333,7 +354,11 @@ export function parseMarkdown(input: string, options?: ParseMarkdownOptions): re
       para.push(cur)
       i++
     }
-    out.push({ type: 'paragraph', children: parseInline(para.join('\n')), line: blockStart })
+    out.push({
+      type: 'paragraph',
+      children: parseInline(para.join('\n')),
+      line: blockStart + lineOffset,
+    })
   }
   return out
 }

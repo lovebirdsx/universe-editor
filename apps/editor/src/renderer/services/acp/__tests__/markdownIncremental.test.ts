@@ -45,6 +45,15 @@ describe('parseMarkdownStreaming — equivalence with parseMarkdown', () => {
     'unterminated fence': 'text\n\n```ts\nconst a = 1',
     'empty html anchor':
       'bold **CookSystem** fields <a id="tbl-cook"></a>\n\n| a |\n| --- |\n| 1 |',
+    // Safe split point (blank after a sealed block) followed by a nested
+    // structure in the tail: the nested blocks' absolute lines must be shifted
+    // by the tail offset too, not just the tail's top-level blocks.
+    'nested sublist after sealed paragraph': 'para\n\n- a\n  - b\n\n- c',
+    'nested sublist after sealed blockquote': 'intro\n\n> q\n> r\n\n- item\n  - child',
+    // The blockquote branch of offsetLines: a blockquote (with children) landing
+    // in the tail must have its children's lines shifted by the tail offset.
+    'blockquote after sealed paragraph': 'para\n\n> q\n> r',
+    'blockquote with list after sealed paragraph': 'para\n\n> intro\n>\n> - a',
   }
 
   for (const [name, input] of Object.entries(cases)) {
@@ -65,6 +74,19 @@ describe('parseMarkdownStreaming — line numbers', () => {
     const cache = createMarkdownStreamCache()
     const result = parseMarkdownStreaming(input, cache)
     expect(result.map((n) => (n as { line?: number }).line)).toEqual([0, 2, 4])
+  })
+
+  it('shifts nested block lines by the tail offset, not just top-level blocks', () => {
+    // 'para' seals at the blank after it; the tail list (with a nested sublist)
+    // is parsed separately and must have BOTH its own line and the nested
+    // sublist's line shifted to absolute source lines (2 and 3).
+    const input = 'para\n\n- a\n  - b'
+    const cache = createMarkdownStreamCache()
+    const result = parseMarkdownStreaming(input, cache)
+    const list = result[1]!
+    if (list.type !== 'list') throw new Error('expected list')
+    expect(list.line).toBe(2)
+    expect(list.items[0]?.children?.[0]).toMatchObject({ type: 'list', line: 3 })
   })
 })
 
