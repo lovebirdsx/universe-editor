@@ -90,6 +90,7 @@ export function useEditorGroupScopedContextKey(group: IEditorGroup): IContextKey
         active instanceof DiffEditorInput && active.openableResource !== undefined,
       )
       s.set('activeEditorGroupLocked', group.isLocked)
+      s.set('activeEditorIsPinned', active !== undefined && group.isSticky(active))
       s.set('resourceScheme', resource?.scheme ?? '')
       s.set('resourceScmProvider', scmProvider)
       s.set('scmActiveResourceHasChanges', hasDirtyDiffChanges || hasScmChanges)

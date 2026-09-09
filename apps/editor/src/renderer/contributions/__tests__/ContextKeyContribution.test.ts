@@ -139,6 +139,9 @@ interface FakeGroup {
   editors: FakeEditor[]
   isFirst(e: FakeEditor): boolean
   isLast(e: FakeEditor): boolean
+  isSticky(e: FakeEditor): boolean
+  _stickies?: Set<FakeEditor>
+  _setActive(e: FakeEditor): void
   onDidChangeModel: Emitter<void>['event']
   onDidActiveEditorChange: Emitter<void>['event']
   _modelEmitter: Emitter<void>
@@ -149,7 +152,8 @@ function makeGroup(index: number, editors: FakeEditor[]): FakeGroup {
   const modelEmitter = new Emitter<void>()
   const activeEmitter = new Emitter<void>()
   const arr = [...editors]
-  return {
+  let active: FakeEditor | undefined = arr[0]
+  const group: FakeGroup = {
     index,
     get count() {
       return arr.length
@@ -158,15 +162,21 @@ function makeGroup(index: number, editors: FakeEditor[]): FakeGroup {
       return arr
     },
     get activeEditor() {
-      return arr[0]
+      return active
     },
     isFirst: (e: FakeEditor) => arr.indexOf(e) === 0,
     isLast: (e: FakeEditor) => arr.indexOf(e) === arr.length - 1,
+    isSticky: (e: FakeEditor) => group._stickies?.has(e) === true,
+    _setActive(e: FakeEditor) {
+      active = e
+      activeEmitter.fire()
+    },
     onDidChangeModel: modelEmitter.event,
     onDidActiveEditorChange: activeEmitter.event,
     _modelEmitter: modelEmitter,
     _activeEmitter: activeEmitter,
   }
+  return group
 }
 
 function makeGroupsStub(groups: FakeGroup[] = [makeGroup(0, [])]) {
@@ -594,6 +604,31 @@ describe('ContextKeyContribution', () => {
       makeWorkspaceStub() as never,
     )
     expect(ctx.get('activeEditorIsDirty')).toBe(true)
+    ctx.dispose()
+  })
+
+  it('activeEditorIsPinned reflects the sticky state of the active editor', () => {
+    const ctx = new ContextKeyService()
+    const a = { id: 'a' }
+    const b = { id: 'b' }
+    const g0 = makeGroup(0, [a, b])
+    g0._stickies = new Set([a])
+    const groups = makeGroupsStub([g0])
+    contribution = new ContextKeyContribution(
+      ctx,
+      makeHostStub('win32') as never,
+      makeLayoutStub() as never,
+      makeEditorStub() as never,
+      groups as never,
+      new LifecycleService(),
+      makeLanguageFeaturesStub() as never,
+      makeWorkspaceStub() as never,
+    )
+    // a is active and sticky.
+    expect(ctx.get('activeEditorIsPinned')).toBe(true)
+    // Stickiness follows the active editor: activating b flips the key off.
+    g0._setActive(b)
+    expect(ctx.get('activeEditorIsPinned')).toBe(false)
     ctx.dispose()
   })
 

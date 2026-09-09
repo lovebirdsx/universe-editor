@@ -542,6 +542,14 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       (services.editorGroupsService.activeGroup?.editors ?? [])
         .map((e) => e.resource?.toString())
         .filter((u): u is string => u !== undefined),
+    getActiveGroupEditorFlags: () => {
+      const group = services.editorGroupsService.activeGroup
+      return (group?.editors ?? []).map((e) => ({
+        uri: e.resource?.toString(),
+        sticky: group.isSticky(e),
+        preview: group.previewEditor === e,
+      }))
+    },
     setActiveEditorCursor: (lineNumber: number, column: number) => {
       const monaco = getActiveTextEditor(services.editorGroupsService)?.editor
       if (!monaco) return false

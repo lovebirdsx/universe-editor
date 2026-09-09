@@ -25,6 +25,7 @@ export type EditorGroupModelChangeKind =
   | 'pin'
   | 'previewReplace'
   | 'lock'
+  | 'sticky'
 
 export interface IEditorGroupModelChangeEvent {
   kind: EditorGroupModelChangeKind
@@ -49,6 +50,12 @@ export interface IOpenEditorOptions {
    * takes the slot beside it.
    */
   pinned?: boolean
+  /**
+   * Stick the editor: move it into the sticky region at the front of the tab
+   * row (VSCode's "Pin Editor"). Implies `pinned` — a sticky editor never
+   * occupies the preview slot.
+   */
+  sticky?: boolean
   /** Open without moving keyboard focus to the editor (default: false). */
   preserveFocus?: boolean
 }
@@ -73,13 +80,19 @@ export interface IEditorGroupModel {
    * group can still be re-activated. Mirrors VSCode's `IEditorGroup.isLocked`.
    */
   readonly isLocked: boolean
+  /**
+   * Number of sticky editors at the front of the tab row (`editors[0..n)`).
+   * Sticky editors are protected from keyboard/middle-click close and skipped
+   * by the bulk close commands. Mirrors VSCode's sticky tabs.
+   */
+  readonly stickyCount: number
 
   readonly onDidChangeModel: Event<IEditorGroupModelChangeEvent>
   readonly onDidActiveEditorChange: Event<void>
 
   openEditor(editor: EditorInput, options?: IOpenEditorOptions): void
   closeEditor(editor: EditorInput): boolean
-  closeAllEditors(): void
+  closeAllEditors(options?: { excludeSticky?: boolean }): void
   /**
    * Remove `editor` from this group without disposing it. The caller takes
    * ownership and is expected to re-attach it to another group (e.g. drag-to-
@@ -90,6 +103,13 @@ export interface IEditorGroupModel {
   setActive(editor: EditorInput, options?: { preserveFocus?: boolean }): void
   pinEditor(editor: EditorInput): void
   isPinned(editor: EditorInput): boolean
+  /** Stick the editor (front of the tab row). Implies pinned. */
+  stickEditor(editor: EditorInput): void
+  /** Unstick the editor; it becomes the first non-sticky editor. */
+  unstickEditor(editor: EditorInput): void
+  isSticky(editor: EditorInput): boolean
+  /** The most-recently-used non-sticky editor, if any (keyboard close-skip target). */
+  getNextNonStickyMruEditor(): EditorInput | undefined
   /** Lock or unlock this group. No-op if already in the requested state. */
   lock(locked: boolean): void
 
@@ -113,6 +133,8 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
   private _lastActivationPreservedFocus = false
   private _locked = false
   private readonly _mru: EditorInput[] = []
+  /** Index of the last sticky editor; `editors[0.._sticky]` is the sticky region. */
+  private _sticky = -1
   /**
    * Owns the lifetime of editors that belong to this group: each `openEditor`
    * parents the input here so the leak tracker can root through the model to
@@ -156,6 +178,10 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
     return this._locked
   }
 
+  get stickyCount(): number {
+    return this._sticky + 1
+  }
+
   lock(locked: boolean): void {
     if (this._locked === locked) return
     this._locked = locked
@@ -164,15 +190,19 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
 
   openEditor(editor: EditorInput, options?: IOpenEditorOptions): void {
     const activate = options?.activate !== false
-    const pinned = options?.pinned !== false
+    const makeSticky = options?.sticky === true
+    const pinned = options?.pinned !== false || makeSticky
     this._lastActivationPreservedFocus = options?.preserveFocus === true
     const existing = this.findEditor(editor)
 
     if (existing) {
       // Re-opening an editor that's already in the group. If this call asks
       // for pinned and the existing entry currently occupies the preview slot,
-      // promote it (clear the slot + fire 'pin').
-      if (pinned && this._previewEditor === existing) {
+      // promote it (clear the slot + fire 'pin'). Sticky implies pinned, so
+      // sticking first also clears the slot.
+      if (makeSticky) {
+        this.stickEditor(existing)
+      } else if (pinned && this._previewEditor === existing) {
         this._previewEditor = undefined
         this._onDidChangeModel.fire({ kind: 'pin', editor: existing })
       }
@@ -230,11 +260,20 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
       }
     }
 
+    // The sticky region is a prefix: a sticky insert lands at its end, and any
+    // non-sticky insert is clamped to just past it. Deliberate divergence from
+    // VSCode: when the caller passes an explicit `index` together with
+    // `sticky: true`, the index is ignored in favor of appending to the region
+    // (VSCode would splice at the index and then fix the cursor; no caller
+    // here ever combines the two, so we keep the single append path).
     const insertIndex = options?.index ?? this._editors.length
-    const clampedIndex = Math.max(0, Math.min(insertIndex, this._editors.length))
+    const clampedIndex = makeSticky
+      ? this._sticky + 1
+      : Math.max(Math.max(0, Math.min(insertIndex, this._editors.length)), this._sticky + 1)
     this._editors.splice(clampedIndex, 0, editor)
     this._editorStore.add(editor)
     this._mru.unshift(editor)
+    if (makeSticky) this._sticky++
     if (!pinned) this._previewEditor = editor
 
     this._onDidChangeModel.fire({ kind: 'open', editor, newIndex: clampedIndex })
@@ -252,6 +291,7 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
     if (index === -1) return false
 
     const target = this._editors[index]!
+    if (index <= this._sticky) this._sticky--
     this._editors.splice(index, 1)
     const mruIdx = this._mru.indexOf(target)
     if (mruIdx !== -1) this._mru.splice(mruIdx, 1)
@@ -275,6 +315,7 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
     if (index === -1) return false
 
     const target = this._editors[index]!
+    if (index <= this._sticky) this._sticky--
     this._editors.splice(index, 1)
     const mruIdx = this._mru.indexOf(target)
     if (mruIdx !== -1) this._mru.splice(mruIdx, 1)
@@ -291,14 +332,28 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
     return true
   }
 
-  closeAllEditors(): void {
-    if (this._editors.length === 0) return
-    const closed = [...this._editors]
-    this._editors.length = 0
-    this._mru.length = 0
-    this._previewEditor = undefined
+  closeAllEditors(options?: { excludeSticky?: boolean }): void {
+    const excludeSticky = options?.excludeSticky === true
+    const closed = excludeSticky ? this._editors.slice(this._sticky + 1) : [...this._editors]
+    if (closed.length === 0) return
+    if (excludeSticky) {
+      // The sticky region is a prefix and survives whole, so the cursor stays.
+      this._editors.length = this._sticky + 1
+      for (const editor of closed) {
+        const mruIdx = this._mru.indexOf(editor)
+        if (mruIdx !== -1) this._mru.splice(mruIdx, 1)
+        if (this._previewEditor === editor) this._previewEditor = undefined
+      }
+    } else {
+      this._editors.length = 0
+      this._mru.length = 0
+      this._previewEditor = undefined
+      this._sticky = -1
+    }
     this._onDidChangeModel.fire({ kind: 'close', editor: undefined })
-    this._setActiveInternal(undefined)
+    if (this._activeEditor && !this._editors.includes(this._activeEditor)) {
+      this._setActiveInternal(this._mru[0] ?? this._editors[0])
+    }
     for (const editor of closed) this._editorStore.delete(editor)
   }
 
@@ -308,9 +363,21 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
     const target = Math.max(0, Math.min(toIndex, this._editors.length - 1))
     if (target === oldIndex) return
 
+    // Crossing the sticky boundary by drag/keyboard move flips sticky state,
+    // same as VSCode: moving into the region sticks, moving out unsticks.
+    let stickyChanged = false
+    if (oldIndex <= this._sticky && target > this._sticky) {
+      this._sticky--
+      stickyChanged = true
+    } else if (oldIndex > this._sticky && target <= this._sticky) {
+      this._sticky++
+      stickyChanged = true
+    }
+
     const [moved] = this._editors.splice(oldIndex, 1)
     this._editors.splice(target, 0, moved!)
     this._onDidChangeModel.fire({ kind: 'move', editor: moved!, oldIndex, newIndex: target })
+    if (stickyChanged) this._onDidChangeModel.fire({ kind: 'sticky', editor: moved! })
   }
 
   setActive(editor: EditorInput, options?: { preserveFocus?: boolean }): void {
@@ -344,6 +411,36 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
     const existing = this.findEditor(editor)
     if (!existing) return false
     return this._previewEditor !== existing
+  }
+
+  isSticky(editor: EditorInput): boolean {
+    const index = this.indexOf(editor)
+    return index !== -1 && index <= this._sticky
+  }
+
+  stickEditor(editor: EditorInput): void {
+    const existing = this.findEditor(editor)
+    if (!existing) return
+    const index = this._editors.indexOf(existing)
+    if (index <= this._sticky) return // can only stick a non-sticky editor
+    this.pinEditor(existing) // sticky implies pinned: clear the preview slot
+    this.moveEditor(existing, this._sticky + 1) // target is outside the region — no cursor drift
+    this._sticky++
+    this._onDidChangeModel.fire({ kind: 'sticky', editor: existing })
+  }
+
+  unstickEditor(editor: EditorInput): void {
+    const existing = this.findEditor(editor)
+    if (!existing) return
+    const index = this._editors.indexOf(existing)
+    if (index > this._sticky) return // can only unstick a sticky editor
+    this.moveEditor(existing, this._sticky) // first non-sticky position
+    this._sticky--
+    this._onDidChangeModel.fire({ kind: 'sticky', editor: existing })
+  }
+
+  getNextNonStickyMruEditor(): EditorInput | undefined {
+    return this._mru.find((e) => !this.isSticky(e))
   }
 
   getEditorByIndex(index: number): EditorInput | undefined {

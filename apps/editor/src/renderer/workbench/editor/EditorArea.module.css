@@ -210,6 +210,28 @@
   opacity: 1;
 }
 
+/* Unpin button occupying the close slot of a sticky tab (VSCode parity). */
+.pinBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.75;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.pinBtn:hover {
+  opacity: 1;
+  background: var(--vscode-toolbar-hoverBackground, rgba(90, 93, 94, 0.31));
+}
+
 .tabTooltip {
   display: flex;
   flex-direction: column;

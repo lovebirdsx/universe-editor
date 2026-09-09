@@ -27,6 +27,8 @@ interface Props {
   readonly editorId: string
   readonly editorType: string
   readonly resource: URI | null
+  /** Whether the clicked tab is sticky — gates the Pin/Unpin menu entry pair. */
+  readonly sticky: boolean
   /** Raised with the ContextMenu key — the menu opens on its first entry. */
   readonly keyboard: boolean
   readonly commandService: ICommandService
@@ -41,6 +43,7 @@ export function EditorTabContextMenu({
   editorId,
   editorType,
   resource,
+  sticky,
   keyboard,
   commandService,
   contextKeyService,
@@ -50,6 +53,9 @@ export function EditorTabContextMenu({
   const scopedContext = useScopedContextKey(contextKeyService, {
     activeEditorType: editorType,
     resourceScheme,
+    // Explicit boolean both ways: the clicked tab's pin state, not whatever the
+    // root context last synced for the active editor.
+    activeEditorIsPinned: sticky,
   })
   const memory = useContextMenuMemory()
 

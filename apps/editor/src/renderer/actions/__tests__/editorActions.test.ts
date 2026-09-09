@@ -23,6 +23,7 @@ import {
   buildRecentTargetPickItems,
   computeInitialSelectionIndex,
   CloseActiveEditorAction,
+  CloseActivePinnedEditorAction,
   CloseAllEditorsAction,
   CloseEditorsInGroupAction,
   CloseEditorsToTheLeftAction,
@@ -39,6 +40,7 @@ import {
   MoveEditorLeftInGroupAction,
   MoveEditorRightInGroupAction,
   NextEditorAction,
+  PinEditorAction,
   PreviousEditorAction,
   QuickOpenRecentEditorAction,
   QuickOpenRecentEditorReverseAction,
@@ -46,6 +48,7 @@ import {
   SplitEditorLeftAction,
   SplitEditorRightAction,
   SplitEditorUpAction,
+  UnpinEditorAction,
 } from '../editorActions.js'
 import { resolveTargetEditor } from '../editorActionHelpers.js'
 import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
@@ -630,6 +633,77 @@ describe('Built-in editor Action2s', () => {
         (i) => 'command' in i && i.command === SplitEditorRightAction.ID,
       ),
     ).toBe(true)
+  })
+
+  describe('sticky (pinned) tab protection', () => {
+    it('PinEditor / UnpinEditor share the Ctrl+K Shift+Enter chord', () => {
+      disposables.push(registerAction2(PinEditorAction))
+      disposables.push(registerAction2(UnpinEditorAction))
+      // The first stroke enters chord mode; the second resolves to one of the
+      // two actions (the when-clauses make them mutually exclusive at runtime).
+      const first = KeybindingsRegistry.resolveKeystroke('ctrl+k')
+      expect(first).toMatchObject({ kind: 'enter-chord', pending: ['ctrl+k'] })
+      const second = KeybindingsRegistry.resolveKeystroke('shift+enter', undefined, ['ctrl+k'])
+      expect(second.kind).toBe('execute')
+      expect(
+        second.kind === 'execute' &&
+          [PinEditorAction.ID, UnpinEditorAction.ID].includes(second.command),
+      ).toBe(true)
+    })
+
+    it('keyboard CloseActiveEditor skips a sticky tab and activates the next non-sticky editor', async () => {
+      const svc = new EditorGroupsService()
+      const s = new TestEditor('s')
+      const a = new TestEditor('a')
+      svc.activeGroup.openEditor(a)
+      svc.activeGroup.openEditor(s)
+      svc.activeGroup.stickEditor(s)
+      svc.activeGroup.setActive(s)
+
+      await exec(CloseActiveEditorAction, svc)
+
+      expect(svc.activeGroup.editors).toHaveLength(2)
+      expect(svc.activeGroup.activeEditor).toBe(a)
+    })
+
+    it('a menu close (arg present) force-closes a sticky tab', async () => {
+      const svc = new EditorGroupsService()
+      const s = new TestEditor('s')
+      svc.activeGroup.openEditor(s)
+      svc.activeGroup.stickEditor(s)
+
+      await execWithArg(CloseActiveEditorAction, svc, {
+        groupId: svc.activeGroup.id,
+        resource: s.resource.toJSON(),
+      })
+
+      expect(svc.activeGroup.editors).toHaveLength(0)
+    })
+
+    it('CloseActivePinnedEditor closes the sticky active editor and sits in the palette', async () => {
+      const svc = new EditorGroupsService()
+      const s = new TestEditor('s')
+      const a = new TestEditor('a')
+      svc.activeGroup.openEditor(s)
+      svc.activeGroup.openEditor(a)
+      svc.activeGroup.stickEditor(s)
+      svc.activeGroup.setActive(s)
+
+      disposables.push(registerAction2(CloseActivePinnedEditorAction))
+      expect(
+        MenuRegistry.getMenuItems(MenuId.CommandPalette).some(
+          (i) => 'command' in i && i.command === CloseActivePinnedEditorAction.ID,
+        ),
+      ).toBe(true)
+
+      const inst = makeAccessor(svc)
+      await inst.invokeFunction(async (accessor) => {
+        await CommandsRegistry.getCommand(CloseActivePinnedEditorAction.ID)!.handler(accessor)
+      })
+
+      expect(svc.activeGroup.editors).toHaveLength(1)
+      expect(svc.activeGroup.editors[0]).toBe(a)
+    })
   })
 })
 

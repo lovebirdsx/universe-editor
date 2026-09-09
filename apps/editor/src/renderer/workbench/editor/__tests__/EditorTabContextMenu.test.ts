@@ -26,6 +26,11 @@ import {
 import { RevealInExplorerAction, RevealInOSExplorerAction } from '../../../actions/revealActions.js'
 import { ReopenWithAction } from '../../../actions/editorResolverActions.js'
 import {
+  CloseActiveEditorAction,
+  PinEditorAction,
+  UnpinEditorAction,
+} from '../../../actions/editorActions.js'
+import {
   RenameAgentSessionAction,
   RevealAgentSessionInOSAction,
 } from '../../../actions/agentSessionActions.js'
@@ -57,11 +62,15 @@ function register(): void {
 }
 
 function menuCommandsFor(overrides: Record<string, unknown>): string[] {
+  return menuGroupsFor(overrides).map(([command]) => command)
+}
+
+function menuGroupsFor(overrides: Record<string, unknown>): [string, string][] {
   const ctx = new ContextKeyService().createScoped(overrides)
   disposables.push(ctx)
   return MenuRegistry.getMenuItems(MenuId.EditorTabContext, ctx)
-    .filter((e): e is { command: string } => 'command' in e)
-    .map((e) => e.command)
+    .filter((e): e is { command: string; group?: string } => 'command' in e)
+    .map((e) => [e.command, e.group ?? ''])
 }
 
 // Path commands that require an on-disk `file:` resource.
@@ -141,5 +150,36 @@ describe('EditorTabContext menu — per-tab gating', () => {
     register()
     const commands = menuCommandsFor({ resourceScheme: 'file', activeEditorType: 'file' })
     expect(commands).not.toContain(RevealAgentSessionInOSAction.ID)
+  })
+})
+
+describe('EditorTabContext menu — pin/unpin gating', () => {
+  // Pin and Unpin are gated on the per-tab `activeEditorIsPinned` override, so
+  // right-clicking a non-active tab must offer exactly the entry matching that
+  // tab's sticky state, never the active editor's. The actions also carry the
+  // `hasActiveEditor` precondition, so the override must seed it as if the tab
+  // were active.
+  it('a non-sticky tab offers Pin Editor and hides Unpin, grouped under 3_preview', () => {
+    disposables.push(
+      registerAction2(PinEditorAction),
+      registerAction2(UnpinEditorAction),
+      registerAction2(CloseActiveEditorAction),
+    )
+    const groups = new Map(menuGroupsFor({ activeEditorIsPinned: false, hasActiveEditor: true }))
+    expect(groups.get(PinEditorAction.ID)).toBe('3_preview')
+    expect(groups.has(UnpinEditorAction.ID)).toBe(false)
+    // Close stays available on a non-sticky tab.
+    expect(groups.has(CloseActiveEditorAction.ID)).toBe(true)
+  })
+
+  it('a sticky tab offers Unpin Editor and hides Pin, grouped under 3_preview', () => {
+    disposables.push(
+      registerAction2(PinEditorAction),
+      registerAction2(UnpinEditorAction),
+      registerAction2(CloseActiveEditorAction),
+    )
+    const groups = new Map(menuGroupsFor({ activeEditorIsPinned: true, hasActiveEditor: true }))
+    expect(groups.get(UnpinEditorAction.ID)).toBe('3_preview')
+    expect(groups.has(PinEditorAction.ID)).toBe(false)
   })
 })

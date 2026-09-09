@@ -241,6 +241,178 @@ describe('EditorGroupsService serialization', () => {
     dst.dispose()
   })
 
+  // --- Sticky tabs -----------------------------------------------------------
+
+  it('toJSON omits the sticky field when nothing is sticky', () => {
+    const svc = new EditorGroupsService()
+    svc.activeGroup.openEditor(new FakeEditorInput())
+    const json = svc.toJSON()
+    if (json.grid.root.type === 'branch') {
+      const leaf = json.grid.root.children?.[0]
+      if (leaf?.type === 'leaf' && leaf.data) {
+        expect('sticky' in leaf.data).toBe(false)
+      }
+    }
+    svc.dispose()
+  })
+
+  it('toJSON records the sticky cursor (index of the last sticky editor)', () => {
+    const svc = new EditorGroupsService()
+    const a = new FakeEditorInput()
+    const b = new OtherEditorInput()
+    svc.activeGroup.openEditor(a)
+    svc.activeGroup.openEditor(b)
+    svc.activeGroup.openEditor(new FakeEditorInput())
+    svc.activeGroup.stickEditor(b)
+
+    const json = svc.toJSON()
+    if (json.grid.root.type === 'branch') {
+      const leaf = json.grid.root.children?.[0]
+      if (leaf?.type === 'leaf' && leaf.data) {
+        expect(leaf.data.sticky).toBe(0)
+      }
+    }
+    svc.dispose()
+  })
+
+  it('restore round-trips sticky order and state', () => {
+    const src = new EditorGroupsService()
+    const a = new FakeEditorInput()
+    const b = new OtherEditorInput()
+    const c = new FakeEditorInput()
+    src.activeGroup.openEditor(a)
+    src.activeGroup.openEditor(b)
+    src.activeGroup.openEditor(c)
+    src.activeGroup.stickEditor(a)
+    src.activeGroup.stickEditor(b)
+    const json = src.toJSON()
+    src.dispose()
+
+    const dst = new EditorGroupsService()
+    dst.restore(json)
+    const g = dst.groups[0]!
+    expect(g.stickyCount).toBe(2)
+    expect(g.isSticky(g.editors[0]!)).toBe(true)
+    expect(g.isSticky(g.editors[1]!)).toBe(true)
+    expect(g.isSticky(g.editors[2]!)).toBe(false)
+    dst.dispose()
+  })
+
+  it('restore shifts the sticky cursor when a sticky entry fails to deserialize', () => {
+    const state: ISerializedEditorGroupsState = {
+      grid: {
+        root: {
+          type: 'branch',
+          size: 1,
+          children: [
+            {
+              type: 'leaf',
+              size: 1,
+              data: {
+                editors: [
+                  { typeId: FakeEditorInput.TYPE_ID, data: null },
+                  { typeId: 'unknown.type.never.registered', data: null },
+                  { typeId: OtherEditorInput.TYPE_ID, data: null },
+                ],
+                activeIndex: 0,
+                sticky: 1,
+              },
+            },
+          ],
+        },
+        orientation: 0, // Horizontal
+        width: 800,
+        height: 600,
+      },
+      activeGroupId: 0,
+    }
+    const dst = new EditorGroupsService()
+    dst.restore(state)
+    const g = dst.groups[0]!
+    expect(g.count).toBe(2)
+    // The un-deserializable entry sat at sticky index 1; only the first survives sticky.
+    expect(g.stickyCount).toBe(1)
+    expect(g.isSticky(g.editors[0]!)).toBe(true)
+    expect(g.isSticky(g.editors[1]!)).toBe(false)
+    dst.dispose()
+  })
+
+  it('restore collapses the sticky region when consecutive sticky entries fail to deserialize', () => {
+    const state: ISerializedEditorGroupsState = {
+      grid: {
+        root: {
+          type: 'branch',
+          size: 1,
+          children: [
+            {
+              type: 'leaf',
+              size: 1,
+              data: {
+                // Serialized form: Fake, a, b all sticky (sticky=2), Other not.
+                editors: [
+                  { typeId: FakeEditorInput.TYPE_ID, data: null },
+                  { typeId: 'unknown.type.a', data: null },
+                  { typeId: 'unknown.type.b', data: null },
+                  { typeId: OtherEditorInput.TYPE_ID, data: null },
+                ],
+                activeIndex: 0,
+                sticky: 2,
+              },
+            },
+          ],
+        },
+        orientation: 0, // Horizontal
+        width: 800,
+        height: 600,
+      },
+      activeGroupId: 0,
+    }
+    const dst = new EditorGroupsService()
+    dst.restore(state)
+    const g = dst.groups[0]!
+    expect(g.count).toBe(2)
+    // Each skip inside the sticky region shifts the boundary once; comparing
+    // against the serialized index (VSCode's own check) would only shift it
+    // for the first skip and wrongly stick the trailing OtherEditorInput.
+    expect(g.stickyCount).toBe(1)
+    expect(g.isSticky(g.editors[0]!)).toBe(true)
+    expect(g.isSticky(g.editors[1]!)).toBe(false)
+    dst.dispose()
+  })
+
+  it('moveEditor carries sticky state across groups', () => {
+    const svc = new EditorGroupsService()
+    const a = new FakeEditorInput()
+    svc.activeGroup.openEditor(a)
+    svc.activeGroup.stickEditor(a)
+    const second = svc.addGroup(svc.activeGroup, GroupDirection.Right)
+
+    svc.moveEditor(a, second)
+
+    expect(svc.groups[0]?.count).toBe(0)
+    expect(second.isSticky(a)).toBe(true)
+    expect(second.stickyCount).toBe(1)
+    svc.dispose()
+  })
+
+  it('copyEditor drops sticky state by default (VSCode #99035) and honors an override', () => {
+    const svc = new EditorGroupsService()
+    const a = new FakeEditorInput()
+    const b = new FakeEditorInput()
+    svc.activeGroup.openEditor(a)
+    svc.activeGroup.openEditor(b)
+    svc.activeGroup.stickEditor(a)
+    const second = svc.addGroup(svc.activeGroup, GroupDirection.Right)
+
+    svc.copyEditor(a, second)
+    svc.copyEditor(b, second, { sticky: true })
+
+    expect(second.isSticky(a)).toBe(false)
+    expect(second.isSticky(b)).toBe(true)
+    expect(second.editors[0]).toBe(b)
+    svc.dispose()
+  })
+
   // --- FileEditorInput round-trip via accessor ----------------------------
 
   describe('FileEditorInput round-trip', () => {

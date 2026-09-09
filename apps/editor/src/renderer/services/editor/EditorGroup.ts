@@ -72,6 +72,9 @@ export class EditorGroup implements IEditorGroup, IGridView {
   get isLocked() {
     return this.model.isLocked
   }
+  get stickyCount() {
+    return this.model.stickyCount
+  }
   lock(locked: boolean): void {
     this.model.lock(locked)
   }
@@ -91,8 +94,8 @@ export class EditorGroup implements IEditorGroup, IGridView {
   detachEditor(editor: EditorInput): boolean {
     return this.model.detachEditor(editor)
   }
-  closeAllEditors(): void {
-    this.model.closeAllEditors()
+  closeAllEditors(options?: { excludeSticky?: boolean }): void {
+    this.model.closeAllEditors(options)
   }
   moveEditor(editor: EditorInput, toIndex: number): void {
     this.model.moveEditor(editor, toIndex)
@@ -105,6 +108,18 @@ export class EditorGroup implements IEditorGroup, IGridView {
   }
   isPinned(editor: EditorInput): boolean {
     return this.model.isPinned(editor)
+  }
+  stickEditor(editor: EditorInput): void {
+    this.model.stickEditor(editor)
+  }
+  unstickEditor(editor: EditorInput): void {
+    this.model.unstickEditor(editor)
+  }
+  isSticky(editor: EditorInput): boolean {
+    return this.model.isSticky(editor)
+  }
+  getNextNonStickyMruEditor(): EditorInput | undefined {
+    return this.model.getNextNonStickyMruEditor()
   }
   getEditorByIndex(index: number) {
     return this.model.getEditorByIndex(index)

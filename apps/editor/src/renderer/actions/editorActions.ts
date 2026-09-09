@@ -11,6 +11,7 @@ import {
   type EditorInput,
   GroupDirection,
   GroupLocation,
+  GroupsOrder,
   IConfigurationService,
   IContextKeyService,
   IDialogService,
@@ -18,6 +19,7 @@ import {
   type IEditorGroup,
   IFocusStackService,
   ILayoutService,
+  ILoggerService,
   IQuickInputService,
   type IQuickPickItem,
   IViewDescriptorService,
@@ -102,6 +104,122 @@ export class CloseActiveEditorAction extends Action2 {
   override async run(accessor: ServicesAccessor, arg?: unknown): Promise<void> {
     const target = resolveTargetEditor(accessor, arg)
     if (!target) return
+    const { group, editor } = target
+    // Keyboard / command-palette invocation skips a sticky tab instead of
+    // closing it (VSCode `preventPinnedEditorClose: keyboardAndMouse`,
+    // hardcoded): activate the next non-sticky editor instead. A menu click
+    // (which carries an arg) still closes — that is the explicit escape hatch.
+    if (arg === undefined && group.isSticky(editor)) {
+      activateNextNonStickyEditor(accessor, group)
+      return
+    }
+    await closeEditorWithConfirm(editor, group, accessor.get(IDialogService))
+  }
+}
+
+/**
+ * Ctrl+W on a sticky tab lands here: hand focus to the most-recently-used
+ * non-sticky editor in this group, else in the most recently active group
+ * that has one; do nothing when the whole workbench is sticky-only.
+ */
+function activateNextNonStickyEditor(accessor: ServicesAccessor, group: IEditorGroup): void {
+  const inGroup = group.getNextNonStickyMruEditor()
+  if (inGroup) {
+    group.setActive(inGroup)
+    return
+  }
+  const groups = accessor.get(IEditorGroupsService)
+  for (const g of groups.getGroups(GroupsOrder.MostRecentlyActive)) {
+    if (g === group) continue
+    const candidate = g.getNextNonStickyMruEditor()
+    if (candidate) {
+      activateGroupAndFocus(
+        groups,
+        g,
+        accessor.get(IContextKeyService),
+        accessor.get(IFocusStackService),
+      )
+      g.setActive(candidate)
+      return
+    }
+  }
+}
+
+export class PinEditorAction extends Action2 {
+  static readonly ID = 'workbench.action.pinEditor'
+  constructor() {
+    super({
+      id: PinEditorAction.ID,
+      icon: 'pin',
+      title: localize2('action.pinEditor.title', 'Pin Editor'),
+      category: localize2('command.category.view', 'View'),
+      keybinding: { primary: ['ctrl+k', 'shift+enter'], when: '!activeEditorIsPinned' },
+      precondition: 'hasActiveEditor',
+      menu: {
+        id: MenuId.EditorTabContext,
+        group: '3_preview',
+        order: 10,
+        when: '!activeEditorIsPinned',
+      },
+      f1: false,
+    })
+  }
+  override run(accessor: ServicesAccessor, arg?: unknown): void {
+    const target = resolveTargetEditor(accessor, arg)
+    if (!target) return
+    target.group.stickEditor(target.editor)
+    accessor
+      .get(ILoggerService)
+      .createLogger({ id: 'editorPin', name: 'Editor Pin' })
+      .debug(`pinEditor id=${target.editor.id} group=${target.group.id}`)
+  }
+}
+
+export class UnpinEditorAction extends Action2 {
+  static readonly ID = 'workbench.action.unpinEditor'
+  constructor() {
+    super({
+      id: UnpinEditorAction.ID,
+      icon: 'pin-off',
+      title: localize2('action.unpinEditor.title', 'Unpin Editor'),
+      category: localize2('command.category.view', 'View'),
+      keybinding: { primary: ['ctrl+k', 'shift+enter'], when: 'activeEditorIsPinned' },
+      precondition: 'hasActiveEditor',
+      menu: {
+        id: MenuId.EditorTabContext,
+        group: '3_preview',
+        order: 10,
+        when: 'activeEditorIsPinned',
+      },
+      f1: false,
+    })
+  }
+  override run(accessor: ServicesAccessor, arg?: unknown): void {
+    const target = resolveTargetEditor(accessor, arg)
+    if (!target) return
+    target.group.unstickEditor(target.editor)
+    accessor
+      .get(ILoggerService)
+      .createLogger({ id: 'editorPin', name: 'Editor Pin' })
+      .debug(`unpinEditor id=${target.editor.id} group=${target.group.id}`)
+  }
+}
+
+/** Command-palette escape hatch (VSCode parity): close a sticky active editor. */
+export class CloseActivePinnedEditorAction extends Action2 {
+  static readonly ID = 'workbench.action.closeActivePinnedEditor'
+  constructor() {
+    super({
+      id: CloseActivePinnedEditorAction.ID,
+      title: localize2('action.closeActivePinnedEditor.title', 'Close Active Pinned Editor'),
+      category: localize2('command.category.view', 'View'),
+      precondition: 'hasActiveEditor && activeEditorIsPinned',
+      f1: true,
+    })
+  }
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const target = resolveTargetEditor(accessor, undefined)
+    if (!target) return
     await closeEditorWithConfirm(target.editor, target.group, accessor.get(IDialogService))
   }
 }
@@ -127,7 +245,7 @@ export class CloseOtherEditorsAction extends Action2 {
     const target = resolveTargetEditor(accessor, arg)
     if (!target) return
     const { group, editor } = target
-    const others = group.editors.filter((e) => e !== editor)
+    const others = group.editors.filter((e) => e !== editor && !group.isSticky(e))
     await closeEditorsWithConfirm(others, group, accessor.get(IDialogService))
   }
 }
@@ -155,7 +273,8 @@ export class CloseEditorsToTheRightAction extends Action2 {
     const { group, editor } = target
     const idx = group.indexOf(editor)
     if (idx === -1) return
-    await closeEditorsWithConfirm(group.editors.slice(idx + 1), group, accessor.get(IDialogService))
+    const toTheRight = group.editors.slice(idx + 1).filter((e) => !group.isSticky(e))
+    await closeEditorsWithConfirm(toTheRight, group, accessor.get(IDialogService))
   }
 }
 
@@ -181,7 +300,8 @@ export class CloseEditorsToTheLeftAction extends Action2 {
     const { group, editor } = target
     const idx = group.indexOf(editor)
     if (idx <= 0) return
-    await closeEditorsWithConfirm(group.editors.slice(0, idx), group, accessor.get(IDialogService))
+    const toTheLeft = group.editors.slice(0, idx).filter((e) => !group.isSticky(e))
+    await closeEditorsWithConfirm(toTheLeft, group, accessor.get(IDialogService))
   }
 }
 
@@ -205,7 +325,7 @@ export class CloseUnmodifiedEditorsAction extends Action2 {
     const target = resolveTargetEditor(accessor, arg)
     if (!target) return
     const { group } = target
-    const unmodified = group.editors.filter((e) => !e.isDirty)
+    const unmodified = group.editors.filter((e) => !e.isDirty && !group.isSticky(e))
     await closeEditorsWithConfirm(unmodified, group, accessor.get(IDialogService))
   }
 }
@@ -230,7 +350,7 @@ export class CloseEditorsInGroupAction extends Action2 {
     const target = resolveTargetEditor(accessor, arg)
     if (!target) return
     await closeEditorsWithConfirm(
-      [...target.group.editors],
+      target.group.editors.filter((e) => !target.group.isSticky(e)),
       target.group,
       accessor.get(IDialogService),
     )
@@ -254,6 +374,7 @@ export class CloseAllEditorsAction extends Action2 {
     const dialogService = accessor.get(IDialogService)
     for (const g of groups.groups) {
       for (const e of [...g.editors]) {
+        if (g.isSticky(e)) continue
         const ok = await closeEditorWithConfirm(e, g, dialogService)
         if (!ok) return
       }
@@ -319,6 +440,10 @@ function moveActiveEditorInGroup(accessor: ServicesAccessor, delta: -1 | 1): voi
   if (index === -1 || target < 0 || target >= group.count) return
 
   group.moveEditor(active, target)
+  // A preview editor must never end up inside the sticky region (crossing the
+  // boundary by move would otherwise leave it occupying the preview slot while
+  // sticky) — pin it on any keyboard move, same as VSCode.
+  group.pinEditor(active)
 }
 
 export class MoveEditorLeftInGroupAction extends Action2 {
@@ -559,7 +684,9 @@ function splitInDirection(accessor: ServicesAccessor, direction: GroupDirection)
   const active = source.activeEditor
   if (!active) return
   const newGroup = groups.addGroup(source, direction)
-  groups.copyEditor(cloneEditorInputForSplit(active, accessor), newGroup)
+  groups.copyEditor(cloneEditorInputForSplit(active, accessor), newGroup, {
+    sticky: source.isSticky(active),
+  })
   activateGroupAndFocus(
     groups,
     newGroup,

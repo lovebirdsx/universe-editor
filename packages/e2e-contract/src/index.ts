@@ -643,6 +643,16 @@ export interface E2EProbe {
   /** URIs of every editor in the active group, in tab order. */
   getActiveGroupEditorUris(): readonly string[]
   /**
+   * Per-editor flags for the active group, in tab order. `sticky` is the
+   * pinned (VSCode sticky-tab) flag; `preview` is the single preview-slot flag.
+   * Lets specs assert the pin/unpin UI contract without peeking at the model.
+   */
+  getActiveGroupEditorFlags(): readonly {
+    uri: string | undefined
+    sticky: boolean
+    preview: boolean
+  }[]
+  /**
    * Move the active Monaco editor's cursor to the given (1-based) line/column
    * and synchronously emit cursor + selection events. Used by E2E specs to
    * exercise HistoryContribution's debounced cursor recorder without typing.

@@ -284,6 +284,9 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
       false,
     )
     const activeEditorIsDirty = contextKeyService.createKey<boolean>('activeEditorIsDirty', false)
+    // VSCode-compatible name: means "the active editor is sticky-pinned"
+    // (sticky tabs), not the preview-slot sense of `pinned`.
+    const activeEditorIsPinned = contextKeyService.createKey<boolean>('activeEditorIsPinned', false)
     const activeEditorGroupLocked = contextKeyService.createKey<boolean>(
       'activeEditorGroupLocked',
       false,
@@ -303,6 +306,7 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
       activeEditorIsFirstInGroup.set(activeEditor !== undefined && active.isFirst(activeEditor))
       activeEditorIsLastInGroup.set(activeEditor !== undefined && active.isLast(activeEditor))
       activeEditorIsDirty.set(activeEditor?.isDirty === true)
+      activeEditorIsPinned.set(activeEditor !== undefined && active.isSticky(activeEditor))
     }
 
     // Subscribe to all group / editor mutations.

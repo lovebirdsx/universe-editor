@@ -275,16 +275,22 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
     const src = this._findGroupContaining(editor)
     if (!src) return
     if (src === target) return
+    const sticky = src.isSticky(editor)
     src.detachEditor(editor)
     // If the target already holds a same-id editor (e.g. a split clone),
     // openEditor keeps the existing one and disposes this orphan for us — no
     // extra guard needed here.
-    ;(target as EditorGroup).openEditor(editor)
+    ;(target as EditorGroup).openEditor(editor, { sticky })
     this._logger.info(`moveEditor id=${editor.id} from=${src.id} to=${target.id}`)
   }
 
-  copyEditor(editor: EditorInput, target: IEditorGroup): void {
-    ;(target as EditorGroup).openEditor(editor)
+  copyEditor(editor: EditorInput, target: IEditorGroup, options?: { sticky?: boolean }): void {
+    // VSCode parity (issue #99035): a plain copy does NOT travel the sticky
+    // flag — split/drag-drop paths that mean to preserve it pass
+    // `options.sticky` explicitly (editorGroupView.ts copyForSplit precedent).
+    ;(target as EditorGroup).openEditor(editor, {
+      sticky: options?.sticky ?? false,
+    })
     this._logger.info(`copyEditor id=${editor.id} to=${target.id}`)
   }
 
@@ -343,6 +349,7 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
             e instanceof DiffEditorInput ? e.serializeForPersistence() : (e.serialize?.() ?? null),
         })),
         activeIndex: activeIdx >= 0 ? activeIdx : 0,
+        ...(group.stickyCount > 0 ? { sticky: group.stickyCount - 1 } : {}),
         ...(group.isLocked ? { locked: true } : {}),
         ...(Object.keys(viewStates).length > 0 && { viewStates }),
       }
@@ -413,11 +420,25 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
       const target = leafGroups[index]!
       if (index > 0) this._onDidAddGroup.fire(target)
       const hydrated: EditorInput[] = []
+      let restoredSticky = leaf.data.sticky
       for (const e of leaf.data.editors) {
         const input = EditorRegistry.deserialize(e.typeId, e.data, accessor)
-        if (input) hydrated.push(input)
+        if (input) {
+          hydrated.push(input)
+        } else if (restoredSticky !== undefined && hydrated.length <= restoredSticky) {
+          // A skipped entry inside the sticky region shifts the boundary.
+          // Compare against `hydrated.length` (survivors), not the serialized
+          // index — consecutive skips each collapse the region by one, which
+          // VSCode's own `index <= data.sticky` check gets wrong.
+          restoredSticky--
+        }
       }
-      hydrated.forEach((input) => target.openEditor(input, { activate: false }))
+      hydrated.forEach((input, i) =>
+        target.openEditor(input, {
+          activate: false,
+          sticky: restoredSticky !== undefined && i <= restoredSticky,
+        }),
+      )
       const activeIdx = Math.min(leaf.data.activeIndex, hydrated.length - 1)
       if (activeIdx >= 0 && hydrated[activeIdx]) target.setActive(hydrated[activeIdx]!)
       // Apply the exact locked state (the reused seed group may carry a stale lock).

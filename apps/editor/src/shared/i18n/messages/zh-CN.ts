@@ -128,10 +128,12 @@ export const ZH_CN_MESSAGES: MessageMap = {
 
   // --- Editor tabs ---
   'editorTab.close': '关闭 {name}',
+  'editorTab.tooltip.pinned': '已固定',
   'editorTab.tooltip.preview': '预览',
   'editorTab.tooltip.readonly': '只读',
   'editorTab.tooltip.unsavedChanges': '未保存的更改',
   'editorTab.tooltip.untitled': '未保存文件',
+  'editorTab.unpin': '取消固定 {name}',
   'editorTabs.scrollLeft': '向左滚动标签页',
   'editorTabs.scrollRight': '向右滚动标签页',
 
@@ -243,6 +245,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.clearRecentFiles.title': '清除最近打开的文件',
   'action.clearRecentWorkspaces.title': '清除最近打开的项',
   'action.closeActiveEditor.title': '关闭编辑器',
+  'action.closeActivePinnedEditor.title': '关闭固定的编辑器',
   'action.closeAllEditors.title': '关闭所有编辑器',
   'action.closeEditorsInGroup.title': '关闭组内所有编辑器',
   'action.closeEditorsToTheLeft.title': '关闭左侧编辑器',
@@ -374,6 +377,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.peekDeclaration.title': '速览声明',
   'action.peekDefinition.title': '速览定义',
   'action.peekImplementation.title': '速览实现',
+  'action.pinEditor.title': '固定标签',
   'action.peekReferences.title': '速览引用',
   'action.peekTypeDefinition.title': '速览类型定义',
   'action.previousEditor.title': '打开上一个编辑器',
@@ -441,6 +445,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.toggleTerminal.title': '切换终端',
   'action.toggleWordWrap.title': '切换自动换行',
   'action.undo.title': '撤销',
+  'action.unpinEditor.title': '取消固定标签',
   'action.zoomIn.title': '放大',
   'action.zoomOut.title': '缩小',
   'action.zoomReset.title': '重置缩放',

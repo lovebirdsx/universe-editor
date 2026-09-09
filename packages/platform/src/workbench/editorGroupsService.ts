@@ -89,7 +89,12 @@ export interface IEditorGroupsService {
   removeGroup(group: IEditorGroup | number): void
   moveGroup(group: IEditorGroup, location: IEditorGroup, direction: GroupDirection): IEditorGroup
   moveEditor(editor: EditorInput, target: IEditorGroup): void
-  copyEditor(editor: EditorInput, target: IEditorGroup): void
+  /**
+   * Copy `editor` into `target`. The copy is NOT sticky by default (VSCode
+   * issue #99035); split/drag-drop callers that preserve the sticky state
+   * pass `options.sticky` explicitly.
+   */
+  copyEditor(editor: EditorInput, target: IEditorGroup, options?: { sticky?: boolean }): void
   setGroupOrientation(orientation: GroupOrientation): void
   arrangeGroups(arrangement: GroupsArrangement, group?: IEditorGroup): void
 }

@@ -20,6 +20,8 @@ export interface ISerializedEditorInputData {
 export interface ISerializedEditorGroupData {
   readonly editors: readonly ISerializedEditorInputData[]
   readonly activeIndex: number
+  /** Index of the last sticky editor (`editors[0..sticky]` is the sticky region), VSCode-style. */
+  readonly sticky?: number
   readonly locked?: boolean
   readonly viewStates?: Readonly<Record<string, unknown>>
 }

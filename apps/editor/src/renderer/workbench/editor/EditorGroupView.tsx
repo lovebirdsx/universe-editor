@@ -85,7 +85,7 @@ import { ToggleEditorGroupLockAction } from '../../actions/editorActions.js'
 import { FileIcon } from '../files/fileIconTheme.js'
 import { resolveAgentIcon } from '../agents/agentIcon.js'
 import { AcpSessionEditorInput } from '../../services/acp/session/acpSessionEditorInput.js'
-import { ChevronLeft, ChevronRight, Folder, GitBranch, Lock } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Folder, GitBranch, Lock, Pin } from 'lucide-react'
 import styles from './EditorArea.module.css'
 
 const EMPTY_DECORATIONS: IObservable<IScmDecorationsSnapshot> = observableValue(
@@ -106,6 +106,7 @@ interface TabMenuState {
   readonly editorId: string
   readonly editorType: string
   readonly resource: URI | null
+  readonly sticky: boolean
   /** Raised with the ContextMenu key — the menu opens on its first entry. */
   readonly keyboard: boolean
 }
@@ -187,11 +188,15 @@ function isReadonlyEditor(input: EditorInput): boolean {
 function getEditorTabStatusLabels(
   input: EditorInput,
   isPreview: boolean,
+  isSticky: boolean,
   scmTooltip: string | undefined,
 ): string[] {
   const statuses: string[] = []
   if (input.isDirty) {
     statuses.push(localize('editorTab.tooltip.unsavedChanges', 'Unsaved changes'))
+  }
+  if (isSticky) {
+    statuses.push(localize('editorTab.tooltip.pinned', 'Pinned'))
   }
   if (isPreview) {
     statuses.push(localize('editorTab.tooltip.preview', 'Preview'))
@@ -271,7 +276,7 @@ function useGroupVersion(group: IEditorGroup): string {
       return () => combined.dispose()
     },
     () =>
-      `${group.editors.map((e) => e.id).join(',')}:${group.activeEditor?.id ?? ''}:${group.previewEditor?.id ?? ''}:${group.editors.map((e) => (e.isDirty ? '1' : '0')).join('')}:${group.editors.map((e) => e.label).join('|')}:${group.isLocked ? 'L' : ''}:${group.activationId}`,
+      `${group.editors.map((e) => e.id).join(',')}:${group.activeEditor?.id ?? ''}:${group.previewEditor?.id ?? ''}:${group.editors.map((e) => (e.isDirty ? '1' : '0')).join('')}:${group.editors.map((e) => e.label).join('|')}:${group.isLocked ? 'L' : ''}:${group.activationId}:${group.stickyCount}`,
   )
 }
 
@@ -292,8 +297,10 @@ const EditorTab = memo(function EditorTab({
   isGroupActive,
   hasInputFocus,
   isPreview,
+  isSticky,
   onActivate,
   onPin,
+  onUnpin,
   onClose,
   onContextMenu,
   onMenuKeyDown,
@@ -305,8 +312,10 @@ const EditorTab = memo(function EditorTab({
   isGroupActive: boolean
   hasInputFocus: boolean
   isPreview: boolean
+  isSticky: boolean
   onActivate: () => void
   onPin: () => void
+  onUnpin: () => void
   onClose: () => void
   onContextMenu: (e: ReactMouseEvent) => void
   onMenuKeyDown: (e: ReactKeyboardEvent) => void
@@ -360,7 +369,7 @@ const EditorTab = memo(function EditorTab({
   )
   const { hoverProps, HoverPopup } = useHover()
   const resourceTooltip = formatEditorResourceForHover(input)
-  const statusLabels = getEditorTabStatusLabels(input, isPreview, deco?.tooltip)
+  const statusLabels = getEditorTabStatusLabels(input, isPreview, isSticky, deco?.tooltip)
 
   const fullyActive = isActive && isGroupActive && hasInputFocus
   const tabClass = [
@@ -448,16 +457,32 @@ const EditorTab = memo(function EditorTab({
       <span className={styles['tabLabel']} style={labelStyle}>
         {input.label}
       </span>
-      <button
-        className={styles['closeBtn']}
-        onClick={(e) => {
-          e.stopPropagation()
-          onClose()
-        }}
-        aria-label={localize('editorTab.close', 'Close {name}', { name: input.label })}
-      >
-        ×
-      </button>
+      {isSticky ? (
+        // A sticky tab has no close affordance; its close slot carries the
+        // unpin button instead (VSCode parity).
+        <button
+          className={styles['pinBtn']}
+          data-testid="editor-tab-unpin"
+          onClick={(e) => {
+            e.stopPropagation()
+            onUnpin()
+          }}
+          aria-label={localize('editorTab.unpin', 'Unpin {name}', { name: input.label })}
+        >
+          <Pin size={12} aria-hidden="true" />
+        </button>
+      ) : (
+        <button
+          className={styles['closeBtn']}
+          onClick={(e) => {
+            e.stopPropagation()
+            onClose()
+          }}
+          aria-label={localize('editorTab.close', 'Close {name}', { name: input.label })}
+        >
+          ×
+        </button>
+      )}
       <HoverPopup>
         <div className={styles['tabTooltip']} data-testid="editor-tab-hover">
           <div className={styles['tabTooltipTitle']}>{input.label}</div>
@@ -538,6 +563,9 @@ export const EditorGroupView = memo(function EditorGroupView({
           tabBar.dataset['lastDropX'] ? Number(tabBar.dataset['lastDropX']) : 0,
         )
         group.moveEditor(editor, newIndex)
+        // Same guard as the keyboard move command: a preview tab must never
+        // land inside the sticky region still holding the preview slot.
+        group.pinEditor(editor)
       } else {
         const sourceGroup = groupsService.getGroup(sourceGroupId)
         if (sourceGroup) groupsService.moveEditor(editor, group)
@@ -574,7 +602,9 @@ export const EditorGroupView = memo(function EditorGroupView({
     // semantics as the Split Editor command — so both groups stay populated.
     if (sourceGroupId === group.id && sourceGroup.editors.length === 1) {
       instantiationService.invokeFunction((accessor) => {
-        groupsService.copyEditor(cloneEditorInputForSplit(editor, accessor), newGroup)
+        groupsService.copyEditor(cloneEditorInputForSplit(editor, accessor), newGroup, {
+          sticky: sourceGroup.isSticky(editor),
+        })
       })
       return
     }
@@ -930,10 +960,17 @@ export const EditorGroupView = memo(function EditorGroupView({
                 isGroupActive={isActiveGroup}
                 hasInputFocus={hasInputFocus}
                 isPreview={group.previewEditor === e}
+                isSticky={group.isSticky(e)}
                 showDropIndicator={dropIndex === idx}
                 onActivate={() => group.setActive(e)}
                 onPin={() => group.pinEditor(e)}
-                onClose={() => void closeEditorWithConfirm(e, group, dialogService)}
+                onUnpin={() => group.unstickEditor(e)}
+                onClose={() => {
+                  // A sticky tab ignores the middle-click close gesture
+                  // (VSCode `preventPinnedEditorClose: keyboardAndMouse`).
+                  if (group.isSticky(e)) return
+                  void closeEditorWithConfirm(e, group, dialogService)
+                }}
                 onContextMenu={(ev) => {
                   ev.preventDefault()
                   // We opened the menu from keydown; swallow Chromium's keyup
@@ -947,6 +984,7 @@ export const EditorGroupView = memo(function EditorGroupView({
                     editorId: e.id,
                     editorType: e.typeId,
                     resource: tabContextMenuResource(e),
+                    sticky: group.isSticky(e),
                     keyboard: isKeyboardContextMenu(ev),
                   })
                 }}
@@ -1022,6 +1060,7 @@ export const EditorGroupView = memo(function EditorGroupView({
           editorId={tabMenu.editorId}
           editorType={tabMenu.editorType}
           resource={tabMenu.resource}
+          sticky={tabMenu.sticky}
           keyboard={tabMenu.keyboard}
           commandService={commandService}
           contextKeyService={contextKeyService}

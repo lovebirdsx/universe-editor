@@ -52,6 +52,7 @@ import {
 } from './layoutActions.js'
 import {
   CloseActiveEditorAction,
+  CloseActivePinnedEditorAction,
   CloseAllEditorsAction,
   CloseEditorsInGroupAction,
   CloseEditorsToTheLeftAction,
@@ -78,6 +79,7 @@ import {
   MoveEditorToPreviousGroupAction,
   MoveEditorToRightGroupAction,
   NextEditorAction,
+  PinEditorAction,
   PreviousEditorAction,
   QuickOpenRecentEditorAction,
   QuickOpenRecentEditorReverseAction,
@@ -89,6 +91,7 @@ import {
   ToggleEditorGroupLockAction,
   ToggleMinimapAction,
   ToggleWordWrapAction,
+  UnpinEditorAction,
 } from './editorActions.js'
 import {
   ConfigureDisplayLanguageAction,
@@ -457,6 +460,11 @@ registerAction2(CloseEditorsToTheLeftAction)
 registerAction2(CloseUnmodifiedEditorsAction)
 registerAction2(CloseEditorsInGroupAction)
 registerAction2(ReopenClosedEditorAction)
+registerAction2(CloseActivePinnedEditorAction)
+
+// Editor — pin (sticky tabs)
+registerAction2(PinEditorAction)
+registerAction2(UnpinEditorAction)
 
 // Editor — tab navigation
 registerAction2(NextEditorAction)

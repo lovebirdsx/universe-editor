@@ -100,6 +100,7 @@ const SEEDED_CONTEXT_KEYS: readonly string[] = [
   'activeEditorIsFirstInGroup',
   'activeEditorIsLastInGroup',
   'activeEditorIsDirty',
+  'activeEditorIsPinned',
   'activeEditorGroupLocked',
   'workbenchReady',
   'workbenchRestored',
