@@ -904,6 +904,10 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
   }, [result, filteredChanges, deferredQuery])
 
   const graphWidth = layout?.width ?? GRID.offsetX * 2
+  // Filtering drops parents outside the result set, so the layout draws dangling
+  // lines to nothing — carry no topology, just noise. Hide the lanes entirely.
+  const isCompact = deferredQuery.trim() !== ''
+  const effectiveGraphWidth = isCompact ? GRID.offsetX * 2 : graphWidth
   const selected = useMemo(() => new Set(selection), [selection])
 
   // ContextMenu key / Shift+F10 (or Ctrl+Enter) on the selected row: a changelist
@@ -1110,7 +1114,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
           }}
         >
           <div className={styles['header']}>
-            <span className={styles['graphSpacer']} style={{ width: graphWidth }} />
+            <span className={styles['graphSpacer']} style={{ width: effectiveGraphWidth }} />
             <span className={styles['headerDescription']}>
               {localize('gitGraph.header.description', 'Description')}
             </span>
@@ -1129,26 +1133,28 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
           <div className={styles['canvas']} style={{ height: layout.height }}>
             <svg
               className={styles['graphSvg']}
-              width={graphWidth}
+              width={effectiveGraphWidth}
               height={layout.height}
               aria-hidden="true"
             >
-              {layout.paths.map((p, i) => (
-                <path
-                  key={i}
-                  d={p.d}
-                  fill="none"
-                  stroke={p.isCommitted ? PALETTE[0] : '#808080'}
-                  strokeWidth={2}
-                  {...(p.isCommitted ? {} : { strokeDasharray: '2' })}
-                />
-              ))}
+              {!isCompact &&
+                layout.paths.map((p, i) => (
+                  <path
+                    key={i}
+                    d={p.d}
+                    fill="none"
+                    stroke={p.isCommitted ? PALETTE[0] : '#808080'}
+                    strokeWidth={2}
+                    {...(p.isCommitted ? {} : { strokeDasharray: '2' })}
+                  />
+                ))}
               {layout.vertices.map((v) => {
+                const cx = isCompact ? GRID.offsetX : v.cx
                 if (v.isUncommitted) {
                   return (
                     <circle
                       key={v.id}
-                      cx={v.cx}
+                      cx={cx}
                       cy={v.cy}
                       r={4}
                       fill="none"
@@ -1161,7 +1167,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
                 return v.isCurrent ? (
                   <circle
                     key={v.id}
-                    cx={v.cx}
+                    cx={cx}
                     cy={v.cy}
                     r={4}
                     className={styles['nodeCurrent']}
@@ -1169,7 +1175,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
                     strokeWidth={2}
                   />
                 ) : (
-                  <circle key={v.id} cx={v.cx} cy={v.cy} r={4} fill={PALETTE[0]} />
+                  <circle key={v.id} cx={cx} cy={v.cy} r={4} fill={PALETTE[0]} />
                 )
               })}
             </svg>
@@ -1178,7 +1184,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
               className={styles['rows']}
               style={
                 {
-                  '--graph-width': `${graphWidth}px`,
+                  '--graph-width': `${effectiveGraphWidth}px`,
                   '--col-author': `${columnWidths.author}px`,
                   '--col-date': `${columnWidths.date}px`,
                 } as CSSProperties

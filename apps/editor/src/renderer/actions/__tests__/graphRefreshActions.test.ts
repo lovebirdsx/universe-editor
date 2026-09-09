@@ -15,7 +15,11 @@ import { perforceGraphViewState } from '../../services/perforceGraph/perforceGra
 import { PerforceGraphEditorInput } from '../../services/editor/PerforceGraphEditorInput.js'
 import { GitGraphRefreshAction } from '../gitGraphActions.js'
 import { GoToFileSymbolAction } from '../gotoSymbolActions.js'
-import { PerforceGraphRefreshAction } from '../perforceGraphActions.js'
+import {
+  PerforceGraphFocusSearchAction,
+  PerforceGraphRefreshAction,
+} from '../perforceGraphActions.js'
+import { FindInFileAction } from '../searchActions.js'
 import { OpenRecentAction } from '../workspaceActions.js'
 
 async function runCommand(id: string): Promise<void> {
@@ -68,7 +72,7 @@ describe('graph refresh actions', () => {
     disposables.push(registerAction2(PerforceGraphRefreshAction))
     const ctx = new ContextKeyService()
     const activeEditorId = ctx.createKey<string>('activeEditorId', undefined)
-    const activeEditorType = ctx.createKey<string>('activeEditorType', undefined)
+    const activeEditorTypeId = ctx.createKey<string>('activeEditorTypeId', undefined)
     try {
       activeEditorId.set('universe:/gitGraph')
       expect(KeybindingsRegistry.resolveKeystroke('ctrl+shift+r', ctx)).toMatchObject({
@@ -76,12 +80,12 @@ describe('graph refresh actions', () => {
         command: GitGraphRefreshAction.ID,
       })
       activeEditorId.reset()
-      activeEditorType.set('perforceGraph')
+      activeEditorTypeId.set('perforceGraph')
       expect(KeybindingsRegistry.resolveKeystroke('ctrl+shift+r', ctx)).toMatchObject({
         kind: 'execute',
         command: PerforceGraphRefreshAction.ID,
       })
-      activeEditorType.reset()
+      activeEditorTypeId.reset()
       expect(KeybindingsRegistry.resolveKeystroke('ctrl+shift+r', ctx).kind).not.toBe('execute')
     } finally {
       ctx.dispose()
@@ -93,7 +97,7 @@ describe('graph refresh actions', () => {
     disposables.push(registerAction2(OpenRecentAction))
     const ctx = new ContextKeyService()
     const activeEditorId = ctx.createKey<string>('activeEditorId', undefined)
-    const activeEditorType = ctx.createKey<string>('activeEditorType', undefined)
+    const activeEditorTypeId = ctx.createKey<string>('activeEditorTypeId', undefined)
     try {
       activeEditorId.set('universe:/gitGraph')
       expect(KeybindingsRegistry.resolveKeystroke('ctrl+r', ctx)).toMatchObject({
@@ -101,15 +105,41 @@ describe('graph refresh actions', () => {
         command: GoToFileSymbolAction.ID,
       })
       activeEditorId.reset()
-      activeEditorType.set('perforceGraph')
+      activeEditorTypeId.set('perforceGraph')
       expect(KeybindingsRegistry.resolveKeystroke('ctrl+r', ctx)).toMatchObject({
         kind: 'execute',
         command: GoToFileSymbolAction.ID,
       })
-      activeEditorType.reset()
+      activeEditorTypeId.reset()
       expect(KeybindingsRegistry.resolveKeystroke('ctrl+r', ctx)).toMatchObject({
         kind: 'execute',
         command: OpenRecentAction.ID,
+      })
+    } finally {
+      ctx.dispose()
+    }
+  })
+
+  it('ctrl+f resolves to Perforce focus-search in the graph, else to file Find', () => {
+    disposables.push(registerAction2(PerforceGraphFocusSearchAction))
+    disposables.push(registerAction2(FindInFileAction))
+    const ctx = new ContextKeyService()
+    const activeEditorTypeId = ctx.createKey<string>('activeEditorTypeId', undefined)
+    try {
+      activeEditorTypeId.set('perforceGraph')
+      expect(KeybindingsRegistry.resolveKeystroke('ctrl+f', ctx)).toMatchObject({
+        kind: 'execute',
+        command: PerforceGraphFocusSearchAction.ID,
+      })
+      // A scoped history tab bakes its scope into the id, so gating must be on
+      // the root type key — never a fixed `activeEditorId`.
+      activeEditorTypeId.reset()
+      // FindInFileAction additionally gates on `hasActiveEditor`.
+      const hasActiveEditor = ctx.createKey<boolean>('hasActiveEditor', false)
+      hasActiveEditor.set(true)
+      expect(KeybindingsRegistry.resolveKeystroke('ctrl+f', ctx)).toMatchObject({
+        kind: 'execute',
+        command: FindInFileAction.ID,
       })
     } finally {
       ctx.dispose()

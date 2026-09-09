@@ -176,8 +176,8 @@ export class PerforceGraphFocusSearchAction extends Action2 {
       id: PerforceGraphFocusSearchAction.ID,
       title: localize2('action.perforceGraph.focusSearch', 'Focus Search'),
       category: CATEGORY,
-      keybinding: { primary: 'ctrl+f', when: "activeEditorType == 'perforceGraph'" },
-      precondition: "activeEditorType == 'perforceGraph'",
+      keybinding: { primary: 'ctrl+f', when: "activeEditorTypeId == 'perforceGraph'" },
+      precondition: "activeEditorTypeId == 'perforceGraph'",
       f1: true,
     })
   }
@@ -201,10 +201,10 @@ export class PerforceGraphRefreshAction extends Action2 {
       // (unscoped) so the graph's change list is reachable through it.
       keybinding: {
         primary: 'ctrl+shift+r',
-        when: "activeEditorType == 'perforceGraph'",
+        when: "activeEditorTypeId == 'perforceGraph'",
         weight: KeybindingWeight.WorkbenchContrib + 50,
       },
-      precondition: "activeEditorType == 'perforceGraph'",
+      precondition: "activeEditorTypeId == 'perforceGraph'",
       f1: true,
     })
   }
