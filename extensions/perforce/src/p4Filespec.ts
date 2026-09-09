@@ -40,6 +40,27 @@ export interface SyncScopeTarget {
   readonly isDirectory: boolean
 }
 
+/**
+ * A refused file checked in the force-get picker, reduced to what the sync
+ * filespec needs. The picker's items carry extra fields (label/labelColor/…)
+ * that ride along invisibly; only `depotFile` + `rev` reach the command line.
+ */
+export interface ForceGetPick {
+  readonly depotFile: string
+  readonly rev: string
+}
+
+/**
+ * Turn the checked force-get items into per-file sync filespecs
+ * (`escaped depotFile#rev`). The `#rev` pins the exact revision the run was
+ * refused on, so a `-f` sync can never drift to a newer `#head` than the one
+ * the user just saw refused. Escaping happens before the suffix is appended so
+ * a literal `#`/`%` in a path is encoded, not re-read as the rev separator.
+ */
+export function buildForceGetFilespecs(files: readonly ForceGetPick[]): string[] {
+  return files.map((f) => `${escapeFilespecPath(f.depotFile)}#${f.rev}`)
+}
+
 /** Strict containment on scope keys: `path` sits *under* `dir` (not equal to
  *  it), directory-boundary aware so `A` never matches `AB`. */
 function isStrictlyUnder(path: string, dir: string): boolean {

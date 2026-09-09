@@ -209,6 +209,33 @@ describe('PerforceClient.sync', () => {
     expect(lastSyncArgv()).toEqual(['sync', '-f', `${LOCAL}#head`])
   })
 
+  it('serial sync (the default) carries no --parallel flag', async () => {
+    const client = await makeClient(() => ({ stdout: '' }))
+
+    await client.sync('#head')
+
+    expect(lastSyncArgv()).toEqual(['sync', '//...#head'])
+  })
+
+  it('threads > 0 prepends --parallel=threads=N', async () => {
+    const client = await makeClient(() => ({ stdout: '' }))
+    client.setSyncParallelThreads(4)
+
+    await client.sync('#head', { onProgress: () => {} })
+
+    expect(lastSyncArgv()).toEqual(['sync', '--parallel=threads=4', '//...#head'])
+  })
+
+  it('a 0 thread count syncs serially even after being set', async () => {
+    const client = await makeClient(() => ({ stdout: '' }))
+    client.setSyncParallelThreads(4)
+    client.setSyncParallelThreads(0)
+
+    await client.sync('#head')
+
+    expect(lastSyncArgv()).toEqual(['sync', '//...#head'])
+  })
+
   it('classifies a clobber refusal so the caller can offer to collect first', async () => {
     const client = await makeClient(() => ({
       stderr: `${LOCAL} - can't clobber writable file ${LOCAL}`,
@@ -324,6 +351,51 @@ describe('PerforceClient.sync', () => {
     expect(log.mock.calls.flat().join('\n')).not.toContain('not parseable')
   })
 
+  // Measured on P4D 2024.2 under `--parallel` on an `allwrite noclobber` client:
+  // the same stdout/exit-0 refusal channel carries a DIFFERENT wording when the
+  // file in the way is untracked (no have-table record). Counted into its own
+  // bucket so the caller offers a force get, never "Collect Changes" (there is
+  // no local modification to collect or diff — the orphan just sits at the path).
+  it('counts an untracked-orphan refusal separately, not as nothing to do', async () => {
+    const log = vi.fn<(msg: string) => void>()
+    respond(
+      makeHandler(() => ({
+        stdout: `//depot/branch_x/b.uasset#1 - can't overwrite existing file ${ROOT_FWD}/b.uasset\n`,
+        exit: 0,
+      })),
+    )
+    const client = await PerforceClient.create(
+      ROOT,
+      {},
+      new ConcurrencyGate(4),
+      { enabled: true, workspaceTtlMs: 4000 },
+      { log },
+    )
+    expect(client).toBeDefined()
+
+    const res = await client!.sync('#head')
+
+    expect(res.ok).toBe(true)
+    expect(res.summary?.refusedOverwrite).toBe(1)
+    expect(res.summary?.refusedModified).toBe(0)
+    expect(res.summary?.applied).toBe(0)
+    // Recognized now, so it must not fall into "we don't know what happened".
+    expect(res.summary?.unrecognized).toBe(false)
+    expect(res.summary?.upToDate).toBe(false)
+    // An orphan-in-the-way must NOT be offered as a diff-able refusal — there is
+    // no local modification, so it stays out of refusedFiles.
+    expect(res.refusedFiles).toEqual([])
+    // ...and lands in its own bucket instead, depot path + revision + local path
+    // all carried out for the force-get picker.
+    expect(res.refusedOverwriteFiles).toHaveLength(1)
+    expect(res.refusedOverwriteFiles[0]).toMatchObject({
+      depotFile: '//depot/branch_x/b.uasset',
+      rev: '1',
+      action: 'not updated',
+    })
+    expect(log.mock.calls.flat().join('\n')).not.toContain('not parseable')
+  })
+
   it('carries the refused paths out so the caller can offer to diff them', async () => {
     const client = await makeClient(() => ({
       stdout: `//depot/branch_x/a.json#69 - can't update modified file ${LOCAL}\n`,
@@ -338,6 +410,8 @@ describe('PerforceClient.sync', () => {
       action: 'not updated',
     })
     expect(res.refusedFiles[0]!.clientFile?.replace(/\\/g, '/')).toBe(LOCAL)
+    // A locally-modified refusal is NOT an orphan — the buckets stay separate.
+    expect(res.refusedOverwriteFiles).toEqual([])
   })
 
   it('does not let an up-to-date notice bury a refusal in the same run', async () => {
@@ -622,5 +696,55 @@ describe('PerforceClient.sync onProgress', () => {
     } finally {
       spy.mockRestore()
     }
+  })
+})
+
+describe('PerforceClient.sync live progress', () => {
+  it('runs no `sync -n` dry run — the download starts immediately', async () => {
+    // A pre-flight count walks the same server comparison as the sync itself;
+    // on a wide scope that's close to a minute spent "counting" before the
+    // first byte moves, so the sync goes straight to the transfer.
+    const client = await makeClient(() => ({ stdout: '' }))
+
+    await client.sync('#head', { onProgress: () => {} })
+
+    expect(spawned.filter((a) => subcommand(a) === 'sync' && a.includes('-n'))).toHaveLength(0)
+  })
+
+  it('exposes the running count on status.syncProgress and clears it when done', async () => {
+    const client = await makeClient(() => ({
+      stdout: [
+        `//depot/branch_x/a.cpp#3 - updated as ${ROOT_FWD}/a.cpp`,
+        `//depot/branch_x/b.h#7 - added as ${ROOT_FWD}/b.h`,
+      ].join('\n'),
+    }))
+    const seen: number[] = []
+    const sub = client.onDidChange(() => {
+      const p = client.status.syncProgress
+      if (p) seen.push(p.done)
+    })
+    try {
+      await client.sync('#head', { onProgress: () => {} })
+    } finally {
+      sub.dispose()
+    }
+
+    // Intermediate frames may be coalesced by the throttle — the invariant is
+    // the final count and the cleared state afterwards.
+    expect(seen.at(-1)).toBe(2)
+    // Cleared on every exit so the bar never shows a stale count.
+    expect(client.status.syncProgress).toBeUndefined()
+  })
+
+  it('clears the progress even when the run is cancelled', async () => {
+    const client = await makeClient(() => {
+      client.cancelBusy()
+      return { stdout: '', stderr: 'was cancelled', exit: 1 }
+    })
+
+    const res = await client.sync('#head', { onProgress: () => {} })
+
+    expect(res.cancelled).toBe(true)
+    expect(client.status.syncProgress).toBeUndefined()
   })
 })

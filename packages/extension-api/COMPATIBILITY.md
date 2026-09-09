@@ -358,6 +358,15 @@ preflight 守护。扩展在自己的 `package.json` 里用 `engines.universe` �
   文件。配套：宿主校验版本改读运行时 `UNIVERSE_APP_VERSION`；版本不兼容的扩展
   从「静默跳过」改为「禁用 + 通知」；市场安装/更新自动选兼容版本。
 
+- `0.14.0` — 向后兼容的新增（minor，2026-09-09）：`window.showQuickPick` 多选表面。
+  除注明外均为纯新增，不改既有签名：
+  - `QuickPickOptions` 新增可选字段 `canPickMany` / `title` / `okLabel`；
+    `QuickPickItem` 新增可选字段 `picked`（多选时预选）与 `labelColor`
+    （语义色 id，如 `'modified'` / `'orphan'`，由工作台映射为主题化颜色）。
+  - 多选重载：`options.canPickMany: true` 时返回 `Promise<T[] | undefined>`
+    （勾选集，取消为 `undefined`）；`okLabel` 支持 `{0}` 计数占位随勾选实时
+    替换。本地过滤的多选面板中 Enter/OK = 确认整个勾选集，全不勾时 OK 禁用。
+
 ## 激活事件清单（activation events）
 
 扩展在 `package.json` 的 `activationEvents` 声明唤醒时机。手写字符串易拼错（拼错则

@@ -34,6 +34,9 @@ function makeWiring(log: string[]): SwitchClientWiring {
     applyOpenedByOthersOptions: async (c) => {
       log.push(`applyOpenedByOthersOptions:${c.root}`)
     },
+    applySyncParallelThreads: async (c) => {
+      log.push(`applySyncParallelThreads:${c.root}`)
+    },
     startPolling: (c, s) => log.push(`startPolling:${c.root}:${s}`),
     setSwarmAvailable: (c, a) => log.push(`setSwarmAvailable:${c.root}:${a}`),
   }
@@ -70,6 +73,7 @@ describe('wireSwitchedClient', () => {
       // Background-check option BEFORE the first refresh: the refresh tail's
       // scheduled check reads it and would silently skip on defaults.
       'applyOpenedByOthersOptions:X:/p4ws/branch_a',
+      'applySyncParallelThreads:X:/p4ws/branch_a',
       'refresh',
       'startPolling:X:/p4ws/branch_a:120',
       'setSwarmAvailable:X:/p4ws/branch_a:true',

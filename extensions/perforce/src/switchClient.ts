@@ -26,6 +26,7 @@ export interface SwitchClientWiring {
   applyScopes(client: PerforceClient): Promise<void>
   applyExcludes(client: PerforceClient): Promise<void>
   applyOpenedByOthersOptions(client: PerforceClient): Promise<void>
+  applySyncParallelThreads(client: PerforceClient): Promise<void>
   startPolling(client: PerforceClient, seconds: number): void
   setSwarmAvailable(client: PerforceClient, available: boolean): void
 }
@@ -57,6 +58,7 @@ export async function wireSwitchedClient(
   await wiring.applyScopes(client)
   await wiring.applyExcludes(client)
   await wiring.applyOpenedByOthersOptions(client)
+  await wiring.applySyncParallelThreads(client)
   void client.refresh()
   wiring.startPolling(client, cfg.refreshIntervalSec)
   wiring.setSwarmAvailable(client, cfg.swarmAvailable)

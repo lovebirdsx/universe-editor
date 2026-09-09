@@ -39,6 +39,21 @@ export interface IQuickPickItem {
   readonly keywords?: readonly string[]
   readonly highlights?: IQuickPickItemHighlights
   /**
+   * Optional semantic color for the item's label text. The value is a semantic
+   * id (e.g. `'modified'` / `'orphan'`), NOT a concrete color — the renderer
+   * maps it to a theme-aware CSS class (`var(--vscode-*)`), keeping the platform
+   * layer free of hardcoded colors. Used by pickers that mix item sources and
+   * need the user to tell them apart at a glance (e.g. the perforce force-get
+   * picker: modified files vs untracked orphans).
+   */
+  readonly labelColor?: string
+  /**
+   * Multi-select pickers only: start the item checked (preselected). Read once
+   * to seed the picker's initial `selectedItems`; afterwards the live selection
+   * lives on `selectedItems`, not here. Ignored by single-pick.
+   */
+  readonly picked?: boolean
+  /**
    * Inline buttons rendered at the right edge of the item row, revealed on
    * hover/focus (VSCode parity: the command palette's "Configure Keybinding"
    * gear). Triggering one fires the picker's `onDidTriggerItemButton`; the
@@ -319,7 +334,13 @@ export interface IQuickPick<T extends IQuickPickItem> extends IDisposable {
    */
   readonly onDidTriggerItemButton: Event<IQuickPickItemButtonEvent<T>>
   /** Fires when the confirm (OK) button is clicked, or Enter falls through with
-   *  no selectable item. Carries the modifier held at that moment. */
+   *  no selectable item. Carries the modifier held at that moment.
+   *
+   *  The renderer confirms-then-closes synchronously: after firing this event it
+   *  immediately hides the panel (unless `keepOpenOnAccept`). Handlers must
+   *  therefore settle their result synchronously inside the listener — an `await`
+   *  before resolving means the hide fires `onDidHide` first and a "cancelled"
+   *  (`undefined`) result wins over the real one. */
   readonly onDidTriggerOk: Event<IKeyMods>
 
   show(): void

@@ -36,7 +36,7 @@ import { PerforceClient, type P4CacheOptions } from './client.js'
 import type { SyncPreviewFile } from './syncParser.js'
 import { P4CacheDisk } from './p4CacheDisk.js'
 import { ClientManager } from './clientManager.js'
-import { P4StatusBarController } from './p4StatusBar.js'
+import { formatScanElapsed, P4StatusBarController } from './p4StatusBar.js'
 import { AutoEditController } from './autoEdit.js'
 import { notifyP4Failure, setP4OutputShower, isMissingCli } from './p4Error.js'
 import {
@@ -59,7 +59,12 @@ import {
   revertActionsOf,
   type RevertPlan,
 } from './revertPlan.js'
-import { buildScopeFilespec, buildSyncFilespecs, type SyncScopeTarget } from './p4Filespec.js'
+import {
+  buildForceGetFilespecs,
+  buildScopeFilespec,
+  buildSyncFilespecs,
+  type SyncScopeTarget,
+} from './p4Filespec.js'
 import { carveReconcileFilespecs, carveReconcileTargets } from './reconcileCarve.js'
 import { clSpecOf, graphSyncNeedsConfirm, resolveCommonClient } from './graphSync.js'
 import { resolveFocusScope, resolveExcludeDirs } from './focusScope.js'
@@ -256,6 +261,7 @@ export type RefusedSyncButton = 'collect' | 'diff' | 'force' | 'resolve'
 
 export function refusedSyncButtons(state: {
   refusedModified: number
+  refusedOverwrite: number
   mustResolve: number
   /** False once this run already forced — a second force would refuse the same way. */
   allowForce: boolean
@@ -264,6 +270,10 @@ export function refusedSyncButtons(state: {
   if (state.refusedModified > 0) {
     out.push('collect', 'diff')
     if (state.allowForce) out.push('force')
+  } else if (state.refusedOverwrite > 0 && state.allowForce) {
+    // An untracked orphan has no local modification to collect or diff — the
+    // only remedy that moves it is a force get, so it is the only button.
+    out.push('force')
   }
   if (state.mustResolve > 0) out.push('resolve')
   return out
@@ -282,6 +292,62 @@ async function confirmForceGet(): Promise<boolean> {
     BTN_FORCE,
   )
   return confirm === BTN_FORCE
+}
+
+/**
+ * Per-file force-get: let the user check which refused files to overwrite,
+ * then run `sync -f` scoped to exactly those files. Replaces the old
+ * whole-scope `-f` re-run, which on a wide scope (e.g. `//...` on a game depot)
+ * would re-transfer gigabytes for a handful of refused files — and silently
+ * overwrite every other locally-modified file in that scope.
+ *
+ * The two refusal buckets are merged into one picker: `refusedFiles` (locally
+ * modified, `labelColor: 'modified'`) and `refusedOverwriteFiles` (untracked
+ * orphans, `labelColor: 'orphan'`). All items start checked; the user un-checks
+ * what to keep. The title doubles as the confirmation (it spells out that the
+ * checked files' local copies will be destroyed), so no second modal follows.
+ *
+ * Returns the filespecs to sync, or undefined when the user cancelled or
+ * unchecked everything. Each filespec is `escapeFilespecPath(depotFile)#rev` —
+ * the `#rev` pins the exact revision the run was refused on, so a `-f` sync
+ * can never drift to a newer `#head` than the one the user just saw refused.
+ */
+async function pickForceGetFiles(
+  refusedModified: readonly SyncPreviewFile[],
+  refusedOverwrite: readonly SyncPreviewFile[],
+): Promise<readonly string[] | undefined> {
+  // `showQuickPick` returns the same item objects the caller passed in (the
+  // wire round-trips an index, not the payload), so the extra `depotFile`/`rev`
+  // fields ride along even though `QuickPickItem` doesn't declare them.
+  const items = [
+    ...refusedModified.map((f) => ({
+      label: displayName(f.depotFile),
+      description: `${f.depotFile}#${f.rev}`,
+      picked: true,
+      labelColor: 'modified',
+      depotFile: f.depotFile,
+      rev: f.rev,
+    })),
+    ...refusedOverwrite.map((f) => ({
+      label: displayName(f.depotFile),
+      description: `${f.depotFile}#${f.rev}`,
+      picked: true,
+      labelColor: 'orphan',
+      depotFile: f.depotFile,
+      rev: f.rev,
+    })),
+  ]
+  if (items.length === 0) return undefined
+  const picked = await window.showQuickPick(items, {
+    canPickMany: true,
+    title: localize(
+      'perforce.sync.forcePickTitle',
+      'Force-get overwrites the checked files with the depot version. Uncollected local changes and untracked placeholder files will be lost, and cannot be undone. (Yellow = locally modified, purple = untracked same-name file)',
+    ),
+    okLabel: localize('perforce.sync.forcePickOk', 'Force Get Selected ({0})'),
+  })
+  if (picked === undefined || picked.length === 0) return undefined
+  return buildForceGetFilespecs(picked)
 }
 
 /**
@@ -585,6 +651,23 @@ export async function activate(context: ExtensionContext): Promise<void> {
   )
 
   /**
+   * Parallel sync transfer (`p4 sync --parallel=threads=N`). Hot-applied like
+   * `maxConcurrent` — a mid-edit change reaches the next sync without a reload.
+   */
+  const applySyncParallelThreads = async (target: PerforceClient): Promise<void> => {
+    target.setSyncParallelThreads(await cfg.get('syncParallelThreads', 4))
+  }
+  for (const c of mgr.all) await applySyncParallelThreads(c)
+  context.subscriptions.push(
+    workspace.onDidChangeConfiguration((e) => {
+      if (!e.affectsConfiguration('perforce.syncParallelThreads')) return
+      void (async () => {
+        for (const c of mgr.all) await applySyncParallelThreads(c)
+      })()
+    }),
+  )
+
+  /**
    * Background reconcile scan: the per-directory batch ceiling that drives the
    * adaptive split. Applied before the first refresh so the scan the refresh
    * tail schedules already sees the configured ceiling.
@@ -740,9 +823,10 @@ export async function activate(context: ExtensionContext): Promise<void> {
   /**
    * Run a sync and report the outcome.
    *
-   * The whole run sits inside a cancellable notification progress. The bar is
-   * indeterminate and only the running file count moves: an invented total that
-   * finishes at 40% is worse than no total at all.
+   * The whole run sits inside a cancellable notification progress. No pre-flight
+   * count is taken (on a wide scope that dry run costs close to a minute before
+   * the first byte moves), so the bar stays indeterminate and the message pairs
+   * the running file count with the elapsed clock.
    */
   const runSync = async (
     target: PerforceClient,
@@ -762,7 +846,11 @@ export async function activate(context: ExtensionContext): Promise<void> {
         title:
           spec === '#head'
             ? localize('perforce.sync.progressTitleHead', 'Getting the latest revision')
-            : localize('perforce.sync.progressTitle', 'Getting {0}', { 0: spec }),
+            : spec === ''
+              ? // Per-file force-get: each scope filespec already carries its own
+                // `#rev`, so there is no shared spec to name in the title.
+                localize('perforce.sync.progressTitlePicked', 'Getting the selected files')
+              : localize('perforce.sync.progressTitle', 'Getting {0}', { 0: spec }),
         cancellable: true,
       },
       async (progress, token) => {
@@ -779,12 +867,18 @@ export async function activate(context: ExtensionContext): Promise<void> {
             const now = Date.now()
             if (!force && now - reportedAt < PROGRESS_REPORT_INTERVAL_MS) return
             reportedAt = now
-            progress.report({
-              message: localize('perforce.sync.progressFiles', '{0} file(s){1}', {
-                0: String(done),
-                1: file ? ` · ${file}` : '',
-              }),
+            const suffix = file ? ` · ${file}` : ''
+            // The bare count alone reads as stalled on a wide sync, so pair it
+            // with the elapsed time (mirrors the status bar).
+            const startedAt = target.status.syncProgress?.startedAt
+            const elapsed =
+              startedAt !== undefined ? ` · ${formatScanElapsed(now - startedAt)}` : ''
+            const message = localize('perforce.sync.progressFiles', '{0} file(s){1}{2}', {
+              0: String(done),
+              1: elapsed,
+              2: suffix,
             })
+            progress.report({ message })
           }
           let lastDone = 0
           const run = await target.sync(spec, {
@@ -882,7 +976,8 @@ export async function activate(context: ExtensionContext): Promise<void> {
       (summary.applied === 0 &&
         summary.keptOpen === 0 &&
         summary.mustResolve === 0 &&
-        summary.refusedModified === 0)
+        summary.refusedModified === 0 &&
+        summary.refusedOverwrite === 0)
     if (summary?.upToDate && nothingHappened) {
       await window.showInformationMessage(
         localize('perforce.sync.upToDate', 'Already at the latest revision.'),
@@ -921,9 +1016,18 @@ export async function activate(context: ExtensionContext): Promise<void> {
         ),
       )
     }
+    if (summary.refusedOverwrite > 0) {
+      parts.push(
+        localize(
+          'perforce.sync.refusedOverwrite',
+          '{0} file(s) not updated — an untracked file with the same name is already on disk',
+          { 0: String(summary.refusedOverwrite) },
+        ),
+      )
+    }
     // "Updated 0 file(s)" is worth saying on its own, but next to a refusal it is
     // noise — there the refusal already is the story.
-    if (summary.applied > 0 || summary.refusedModified === 0) {
+    if (summary.applied > 0 || (summary.refusedModified === 0 && summary.refusedOverwrite === 0)) {
       parts.push(
         localize('perforce.sync.applied', 'Updated {0} file(s)', { 0: String(summary.applied) }),
       )
@@ -955,6 +1059,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
     }
     const kinds = refusedSyncButtons({
       refusedModified: summary.refusedModified,
+      refusedOverwrite: summary.refusedOverwrite,
       mustResolve: summary.mustResolve,
       allowForce: options.force !== true,
     })
@@ -967,7 +1072,12 @@ export async function activate(context: ExtensionContext): Promise<void> {
     if (kind === 'collect') await collectScope()
     else if (kind === 'diff') await openRefusedDiff(target, res.refusedFiles)
     else if (kind === 'force') {
-      if (await confirmForceGet()) await runSync(target, spec, { ...options, force: true })
+      // Per-file force: the refusal already names every file it skipped, so a
+      // whole-scope `-f` re-run would re-transfer the entire scope for a
+      // handful of files. Let the user check which to overwrite, then sync
+      // exactly those (the picker's title is the confirmation).
+      const specs = await pickForceGetFiles(res.refusedFiles, res.refusedOverwriteFiles)
+      if (specs !== undefined) await runSync(target, '', { ...options, force: true, scope: specs })
     } else if (kind === 'resolve') {
       await commands.executeCommand('perforce.resolveChangelist', { rootUri: target.root })
     }
@@ -1017,6 +1127,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
         applyScopes: applyReconcileScope,
         applyExcludes: applyReconcileExcludes,
         applyOpenedByOthersOptions,
+        applySyncParallelThreads,
         startPolling: (c, seconds) => c.startPolling(seconds),
         setSwarmAvailable: (c, available) => c.setSwarmAvailable(available),
       },

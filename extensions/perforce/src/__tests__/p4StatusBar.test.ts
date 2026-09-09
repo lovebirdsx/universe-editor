@@ -410,6 +410,130 @@ describe('P4StatusBarController setVisible', () => {
   })
 })
 
+describe('P4StatusBarController sync progress', () => {
+  beforeEach(() => {
+    mocks.item.text = ''
+    mocks.item.tooltip = ''
+    mocks.item.command = ''
+    mocks.item.showProgress = undefined
+    mocks.item.show.mockClear()
+    mocks.item.hide.mockClear()
+    mocks.revItem.text = ''
+    mocks.revItem.tooltip = ''
+    mocks.revItem.command = ''
+    mocks.revItem.show.mockClear()
+    mocks.revItem.hide.mockClear()
+    mocks.activeEditor = undefined
+    mocks.editorListener = undefined
+  })
+
+  it('renders the running count, current file and elapsed with the busy label', () => {
+    const controller = new P4StatusBarController({
+      active: makeClient({
+        clientName: 'testuser_dev_branch_xyz',
+        busy: 'Syncing',
+        busyCancellable: true,
+        syncProgress: {
+          done: 421,
+          currentFile: 'a.cpp',
+          startedAt: Date.now() - 73_000,
+        },
+      }),
+    } as never)
+    controller.refresh()
+
+    // No total is ever shown: the pre-flight count that would produce one costs
+    // a full server-side walk on a wide scope, so the sync starts downloading
+    // immediately — a rising count + clock is the "it's alive" signal instead.
+    expect(mocks.item.text).toBe('$(server) …branch_xyz: Syncing 421 · 1m 13s $(sync~spin)')
+    expect(mocks.item.text.endsWith('$(sync~spin)')).toBe(true)
+    expect(mocks.item.tooltip).toContain('Syncing testuser_dev_branch_xyz')
+    expect(mocks.item.tooltip).toContain('Synced 421 files')
+    expect(mocks.item.tooltip).toContain('Current: a.cpp')
+    expect(mocks.item.tooltip).toContain('1m 13s elapsed')
+    expect(mocks.item.tooltip).toContain('\n\nClick to cancel')
+    expect(mocks.item.command).toBe('perforce.cancelBusy')
+    controller.dispose()
+  })
+
+  it('renders a bare done count plus elapsed', () => {
+    const controller = new P4StatusBarController({
+      active: makeClient({
+        clientName: 'client-1',
+        busy: 'Syncing',
+        busyCancellable: false,
+        syncProgress: { done: 421, startedAt: Date.now() - 5_000 },
+      }),
+    } as never)
+    controller.refresh()
+
+    expect(mocks.item.text).toBe('$(server) client-1: Syncing 421 · 5s $(sync~spin)')
+    expect(mocks.item.tooltip).toContain('Synced 421 files')
+    expect(mocks.item.tooltip).not.toContain('Current:')
+    expect(mocks.item.tooltip).not.toContain('Click to cancel')
+    expect(mocks.item.command).toBe('perforce-graph.view')
+    controller.dispose()
+  })
+
+  it('wins over scanProgress when both are in flight', () => {
+    // A sync triggers a refresh, which can overlap the reconcile scan; the sync
+    // count is the more actionable number, so it takes the slot.
+    const controller = new P4StatusBarController({
+      active: makeClient({
+        clientName: 'client-1',
+        busy: 'Syncing',
+        busyCancellable: false,
+        scanProgress: { done: 3, pending: 9, driftFound: 1, startedAt: Date.now() },
+        syncProgress: { done: 7, startedAt: Date.now() },
+      }),
+    } as never)
+    controller.refresh()
+
+    expect(mocks.item.text).toBe('$(server) client-1: Syncing 7 · 0s $(sync~spin)')
+    controller.dispose()
+  })
+
+  it('advances the elapsed clock on a 1s heartbeat while the sync is quiet, and stops it when the sync ends', () => {
+    // p4 --parallel can hold stdout for a minute or more between bursts; the
+    // elapsed clock is computed at render time, so without a heartbeat both the
+    // count and the clock would freeze for the whole gap. The heartbeat
+    // re-renders every second so the clock keeps moving (the count only moves
+    // when p4 actually prints a line).
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(1_000_000)
+      const status = {
+        clientName: 'client-1',
+        busy: 'Syncing',
+        busyCancellable: false,
+        syncProgress: { done: 421, startedAt: Date.now() - 5_000 },
+      }
+      const controller = new P4StatusBarController({
+        active: { status, onDidChange: vi.fn(() => ({ dispose: vi.fn() })) },
+      } as never)
+      controller.refresh()
+      expect(mocks.item.text).toBe('$(server) client-1: Syncing 421 · 5s $(sync~spin)')
+
+      // No new line from p4 (the count stays at 421), but the heartbeat ticks —
+      // the clock must advance on its own. advanceTimersByTime moves both the
+      // interval timer and the fake Date clock.
+      vi.advanceTimersByTime(3_000)
+      expect(mocks.item.text).toBe('$(server) client-1: Syncing 421 · 8s $(sync~spin)')
+
+      // Sync ends (syncProgress cleared): the next tick stops the heartbeat, so
+      // no further renders happen on the timer.
+      delete (status as Record<string, unknown>).syncProgress
+      vi.advanceTimersByTime(1_000)
+      const textAfterClear = mocks.item.text
+      vi.advanceTimersByTime(6_000)
+      expect(mocks.item.text).toBe(textAfterClear)
+      controller.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
 describe('truncateClientName', () => {
   it('returns short names unchanged', () => {
     expect(truncateClientName('ws_xyz')).toBe('ws_xyz')

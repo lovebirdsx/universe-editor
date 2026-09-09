@@ -225,6 +225,11 @@ export type ExtHostMessageSeverity = 'info' | 'warning' | 'error'
 
 export interface IExtHostQuickPickOptions {
   placeHolder?: string
+  title?: string
+  /** OK button label in multi-select mode; supports a `{0}` live-count placeholder. */
+  okLabel?: string
+  /** Multi-select: confirm a checked set (returns `number[]`) instead of one index. */
+  canPickMany?: boolean
 }
 
 export interface IExtHostQuickPickItemDto {
@@ -232,6 +237,10 @@ export interface IExtHostQuickPickItemDto {
   description?: string
   detail?: string
   iconId?: string
+  /** Multi-select: start the item checked. */
+  picked?: boolean
+  /** Semantic color id for the label (e.g. `'modified'` / `'orphan'`). */
+  labelColor?: string
 }
 
 export interface IExtHostInputBoxOptions {
@@ -302,11 +311,15 @@ export interface IMainThreadWindow {
    * Show a quick pick of plain strings or rich items; resolves to the selected
    * entry's index in `items` (or undefined when dismissed). The caller maps the
    * index back to its original item.
+   *
+   * With `options.canPickMany`, resolves to the indices of the checked set
+   * (empty array when the user confirms with nothing checked) instead of a
+   * single index.
    */
   $showQuickPick(
     items: Array<string | IExtHostQuickPickItemDto>,
     options?: IExtHostQuickPickOptions,
-  ): Promise<number | undefined>
+  ): Promise<number | number[] | undefined>
   $showInputBox(options?: IExtHostInputBoxOptions): Promise<string | undefined>
   /** Create or update the status-bar entry for `handle`. */
   $setStatusBarEntry(handle: number, entry: IExtHostStatusBarEntryDto): Promise<void>

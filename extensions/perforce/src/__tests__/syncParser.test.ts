@@ -6,6 +6,7 @@ import {
   parseSyncPreview,
   parseSyncPreviewRecord,
   parseSyncPreviewTotal,
+  parseSyncOverwriteRefused,
   parseSyncRefused,
   syncLineFile,
 } from '../syncParser.js'
@@ -167,6 +168,7 @@ describe('parseSyncOutput', () => {
       keptOpen: 1,
       mustResolve: 1,
       refusedModified: 0,
+      refusedOverwrite: 0,
       upToDate: false,
       unrecognized: false,
     })
@@ -178,6 +180,7 @@ describe('parseSyncOutput', () => {
       keptOpen: 0,
       mustResolve: 0,
       refusedModified: 0,
+      refusedOverwrite: 0,
       upToDate: true,
       unrecognized: false,
     })
@@ -189,6 +192,7 @@ describe('parseSyncOutput', () => {
       keptOpen: 0,
       mustResolve: 0,
       refusedModified: 0,
+      refusedOverwrite: 0,
       upToDate: false,
       unrecognized: false,
     })
@@ -201,6 +205,7 @@ describe('parseSyncOutput', () => {
       keptOpen: 0,
       mustResolve: 0,
       refusedModified: 0,
+      refusedOverwrite: 0,
       upToDate: false,
       unrecognized: true,
     })
@@ -244,6 +249,24 @@ describe('parseSyncOutput', () => {
       keptOpen: 0,
       mustResolve: 0,
       refusedModified: 1,
+      refusedOverwrite: 0,
+      upToDate: false,
+      unrecognized: false,
+    })
+  })
+
+  // Measured on P4D 2024.2 under `--parallel`: the same `allwrite noclobber`
+  // client refuses an UNTRACKED file already on disk with a different wording.
+  // These files have no have-table record, so there is no local modification to
+  // collect or diff — the count feeds the force-get remedy instead.
+  it('counts an untracked-orphan refusal separately and does not call it unrecognized', () => {
+    const out = "//depot/branch_x/b.uasset#1 - can't overwrite existing file X:/p4ws/main/b.uasset"
+    expect(parseSyncOutput(out, '')).toEqual({
+      applied: 0,
+      keptOpen: 0,
+      mustResolve: 0,
+      refusedModified: 0,
+      refusedOverwrite: 1,
       upToDate: false,
       unrecognized: false,
     })
@@ -271,7 +294,7 @@ describe('parseSyncOutput', () => {
 })
 
 describe('classifySyncLine', () => {
-  it('classifies the four sync line kinds', () => {
+  it('classifies the five sync line kinds', () => {
     expect(classifySyncLine('//depot/branch_x/a.cpp#3 - updated as X:/p4ws/main/a.cpp')).toBe(
       'applied',
     )
@@ -286,6 +309,11 @@ describe('classifySyncLine', () => {
         "//depot/branch_x/a.json#69 - can't update modified file X:/p4ws/main/a.json",
       ),
     ).toBe('refused')
+    expect(
+      classifySyncLine(
+        "//depot/branch_x/b.uasset#1 - can't overwrite existing file X:/p4ws/main/b.uasset",
+      ),
+    ).toBe('refusedOverwrite')
   })
 
   it('returns undefined for an unrecognized line', () => {
@@ -312,6 +340,14 @@ describe('classifySyncLine', () => {
         "//depot/branch_x/a.json#69 - can't update modified file X:/p4ws/main/a.json",
       ),
     ).toBe('refused')
+  })
+
+  it('does not mistake an untracked-orphan refusal for an applied one', () => {
+    expect(
+      classifySyncLine(
+        "//depot/branch_x/b.uasset#1 - can't overwrite existing file X:/p4ws/main/b.uasset",
+      ),
+    ).toBe('refusedOverwrite')
   })
 })
 
@@ -376,6 +412,49 @@ describe('parseSyncRefused', () => {
       "//depot/branch_x/a.json#69 - can't update modified file X:\\p4ws\\main\\a.json",
     )
     expect(files[0]?.clientFile).toBe('X:\\p4ws\\main\\a.json')
+  })
+})
+
+describe('parseSyncOverwriteRefused', () => {
+  const LINE = "//depot/branch_x/x.uasset#1 - can't overwrite existing file X:/p4ws/main/x.uasset"
+
+  it('extracts the depot path, revision and local path', () => {
+    expect(parseSyncOverwriteRefused(LINE)).toEqual([
+      {
+        depotFile: '//depot/branch_x/x.uasset',
+        clientFile: 'X:/p4ws/main/x.uasset',
+        action: 'not updated',
+        rev: '1',
+      },
+    ])
+  })
+
+  it('keeps the orphan refusals separate from the modified ones', () => {
+    const mixed = [
+      LINE,
+      "//depot/branch_x/a.json#69 - can't update modified file X:/p4ws/main/a.json",
+    ].join('\n')
+    expect(parseSyncOverwriteRefused(mixed).map((f) => f.depotFile)).toEqual([
+      '//depot/branch_x/x.uasset',
+    ])
+    expect(parseSyncRefused(mixed).map((f) => f.depotFile)).toEqual(['//depot/branch_x/a.json'])
+  })
+
+  it('tolerates CRLF and surrounding whitespace, and handles a CJK local path', () => {
+    const out = [
+      `  ${LINE}  `,
+      "\t//depot/branch_x/中文.wav#2 - can't overwrite existing file X:\\p4ws\\main\\中文.wav",
+    ].join('\r\n')
+    const files = parseSyncOverwriteRefused(out)
+    expect(files.map((f) => f.rev)).toEqual(['1', '2'])
+    expect(files[1]?.clientFile).toBe('X:\\p4ws\\main\\中文.wav')
+  })
+
+  it('returns an empty list when nothing was refused this way', () => {
+    expect(
+      parseSyncOverwriteRefused('//depot/branch_x/a.cpp#3 - updated as X:/p4ws/main/a.cpp'),
+    ).toEqual([])
+    expect(parseSyncOverwriteRefused('')).toEqual([])
   })
 })
 

@@ -162,6 +162,14 @@ function isSelectable(item: QuickPickInput<IQuickPickItem> | undefined): item is
   return item !== undefined && !isSeparator(item)
 }
 
+// `IQuickPickItem.labelColor` is a semantic id, mapped to a CSS class here so the
+// platform layer never carries a concrete color. Unknown ids render uncolored.
+function labelColorClass(labelColor: string | undefined): string {
+  if (labelColor === 'modified') return styles['itemLabelModified'] ?? ''
+  if (labelColor === 'orphan') return styles['itemLabelOrphan'] ?? ''
+  return ''
+}
+
 // A picker-wide `onItemRemove` handler opts every row into the remove affordance;
 // an item sets `removable: false` to opt back out (e.g. the Ctrl+Tab switcher's
 // view rows, which have nothing to close).
@@ -711,6 +719,25 @@ export function QuickPickPanel({
       // receives focus after the panel closes (typically the Monaco editor), which
       // would otherwise cause an unwanted newline insertion.
       e.preventDefault()
+      // Locally-filtered multi-select (the perforce force-get picker): Enter
+      // confirms the WHOLE checked set, same as the OK button — there is no
+      // "accept the focused row" concept, the checked set IS the answer. The
+      // file dialog (filterExternally) is exempt: there Enter toggles the focused
+      // row's checkbox / navigates, and only its OK button confirms the set.
+      if (canSelectMany && !filterExternally) {
+        // Mirror the OK button's disabled guard: confirming an empty set is a
+        // no-op the user almost certainly didn't intend (a force sync over zero
+        // files). Esc still cancels.
+        if (selectedItems.length === 0) return
+        state.onOk?.({ ctrl: e.ctrlKey, alt: e.altKey })
+        // The `onOk` contract only fires the event — the consumer owns the
+        // lifecycle — but nothing on the multi-select confirm path ever hides
+        // the panel (`_pickMany.done` only disposes, which does not hide). So
+        // mirror `accept()`'s "confirm closes the panel" here, gated on the
+        // same keepOpenOnAccept flag.
+        if (!state.keepOpenOnAccept) onClose()
+        return
+      }
       // The rendered list lags the input by design (useDeferredValue): typing then
       // hitting Enter before the low-priority re-render commits would accept a row
       // filtered by a STALE query (word mode sorts alphabetically, so e.g. "Focus
@@ -799,9 +826,20 @@ export function QuickPickPanel({
             type="button"
             className={styles['okButton']}
             data-testid="quick-input-ok"
+            // Locally-filtered multi-select with nothing checked: confirming an
+            // empty set is a no-op the user almost certainly didn't intend (the
+            // force-get picker would run a force sync over zero files), so disable
+            // the button instead of letting them commit an empty selection. The
+            // file dialog (filterExternally) is exempt: there an empty checked set
+            // legitimately falls back to resolving the typed path. Esc still cancels.
+            disabled={canSelectMany && !filterExternally && selectedItems.length === 0}
             onClick={() => {
               if (state.onOk) {
                 state.onOk({ ctrl: false, alt: false })
+                // Same as the Enter path: the `onOk` contract only fires the
+                // event, no consumer ever hides the panel, so mirror
+                // `accept()`'s "confirm closes the panel" here.
+                if (!state.keepOpenOnAccept) onClose()
                 return
               }
               const item = sortedFiltered[focusedIdx]
@@ -861,7 +899,17 @@ export function QuickPickPanel({
                       }`}
                       role="option"
                       aria-selected={focused}
-                      onClick={(e) => accept([item], { ctrl: e.ctrlKey, alt: e.altKey })}
+                      // Locally-filtered multi-select: clicking the row toggles its
+                      // checkbox (VSCode parity), NOT accept — accept would close the
+                      // whole picker (and, for consumers with no onDidAccept handler,
+                      // silently resolve `undefined` as if cancelled). The file dialog
+                      // (filterExternally) keeps accept-on-row-click: there clicking a
+                      // row navigates into a folder / accepts the path.
+                      onClick={(e) =>
+                        canSelectMany && !filterExternally
+                          ? toggleChecked(item)
+                          : accept([item], { ctrl: e.ctrlKey, alt: e.altKey })
+                      }
                       // Host-managed selection (file dialog): mouse hover must not
                       // move focus, or a stray mousemove over the re-rendered list
                       // after navigation would autocomplete the path input. Keyboard
@@ -903,7 +951,7 @@ export function QuickPickPanel({
                       <span
                         className={`${styles['itemLabel']} ${
                           hasStatusColumn ? styles['itemLabelCapped'] : ''
-                        }`}
+                        } ${labelColorClass(item.labelColor)}`}
                       >
                         {renderHighlightedText(item.label, item.highlights?.label)}
                       </span>

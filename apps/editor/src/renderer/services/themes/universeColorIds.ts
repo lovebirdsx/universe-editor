@@ -614,6 +614,21 @@ export const UNIVERSE_COLOR_DEFINITIONS: readonly UniverseColorDefinition[] = [
     'Background color of activated input option toggles (e.g. match case).',
     'color-toggle-active-bg',
   ),
+  // Quick-pick semantic label colors (`IQuickPickItem.labelColor`): let a picker
+  // tint item labels by source/meaning (e.g. perforce force-get: a locally
+  // modified file vs an untracked orphan occupying the path).
+  d(
+    'picker.modifiedLabel',
+    '#e2c08d',
+    '#895503',
+    'Label color for quick-pick items flagged `modified` (locally modified content).',
+  ),
+  d(
+    'picker.orphanLabel',
+    '#c586c0',
+    '#a31592',
+    'Label color for quick-pick items flagged `orphan` (untracked file occupying a path).',
+  ),
   d(
     'inputValidation.errorBorder',
     '#be1100',

@@ -483,7 +483,7 @@ export class ExtensionService implements IExtensionHostBridge {
   showQuickPick(
     items: readonly (string | QuickPickItem)[],
     options?: QuickPickOptions,
-  ): Promise<string | QuickPickItem | undefined> {
+  ): Promise<string | QuickPickItem | (string | QuickPickItem)[] | undefined> {
     const wireItems = items.map((it) =>
       typeof it === 'string'
         ? it
@@ -492,11 +492,15 @@ export class ExtensionService implements IExtensionHostBridge {
             ...(it.description !== undefined ? { description: it.description } : {}),
             ...(it.detail !== undefined ? { detail: it.detail } : {}),
             ...(it.iconId !== undefined ? { iconId: it.iconId } : {}),
+            ...(it.picked !== undefined ? { picked: it.picked } : {}),
+            ...(it.labelColor !== undefined ? { labelColor: it.labelColor } : {}),
           },
     )
-    return this._mainThreadWindow
-      .$showQuickPick(wireItems, options)
-      .then((index) => (index === undefined ? undefined : items[index]))
+    return this._mainThreadWindow.$showQuickPick(wireItems, options).then((result) => {
+      if (result === undefined) return undefined
+      if (Array.isArray(result)) return result.map((index) => items[index]!)
+      return items[result]
+    })
   }
 
   showInputBox(options?: InputBoxOptions): Promise<string | undefined> {

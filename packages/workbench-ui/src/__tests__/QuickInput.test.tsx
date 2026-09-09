@@ -1254,4 +1254,114 @@ describe('QuickPickPanel multi-select (canSelectMany)', () => {
     expect(onSelectionChange).not.toHaveBeenCalled()
     expect(onAccept).not.toHaveBeenCalled()
   })
+
+  it('Enter confirms the checked set and closes the panel (locally-filtered)', () => {
+    const onOk = vi.fn()
+    const onAccept = vi.fn()
+    const onClose = vi.fn()
+    render(
+      <QuickPickPanel
+        state={makeMultiState({
+          selectedItems: [multiItems[0]!, multiItems[2]!],
+          okLabel: 'Force Get',
+          onOk,
+          onAccept,
+        })}
+        onClose={onClose}
+      />,
+    )
+    fireEvent.keyDown(screen.getByTestId('quick-input-field'), { key: 'Enter' })
+    // Confirming goes through onOk (the whole checked set IS the answer), never
+    // onAccept, and the panel must close — the `onOk` contract only fires the
+    // event, so without an explicit close the panel stayed on screen.
+    expect(onOk).toHaveBeenCalledOnce()
+    expect(onAccept).not.toHaveBeenCalled()
+    expect(onClose).toHaveBeenCalledOnce()
+  })
+
+  it('Enter with nothing checked is a no-op (matches the disabled OK button)', () => {
+    const onOk = vi.fn()
+    const onClose = vi.fn()
+    render(
+      <QuickPickPanel
+        state={makeMultiState({ selectedItems: [], okLabel: 'Force Get', onOk })}
+        onClose={onClose}
+      />,
+    )
+    const okButton = screen.getByTestId('quick-input-ok') as HTMLButtonElement
+    expect(okButton.disabled).toBe(true)
+    fireEvent.keyDown(screen.getByTestId('quick-input-field'), { key: 'Enter' })
+    expect(onOk).not.toHaveBeenCalled()
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('clicking the OK button confirms the checked set and closes the panel', () => {
+    const onOk = vi.fn()
+    const onClose = vi.fn()
+    render(
+      <QuickPickPanel
+        state={makeMultiState({ selectedItems: [multiItems[1]!], okLabel: 'Force Get', onOk })}
+        onClose={onClose}
+      />,
+    )
+    fireEvent.click(screen.getByTestId('quick-input-ok'))
+    expect(onOk).toHaveBeenCalledOnce()
+    expect(onClose).toHaveBeenCalledOnce()
+  })
+
+  it('clicking a row toggles its checkbox instead of accepting (locally-filtered)', () => {
+    const onSelectionChange = vi.fn()
+    const onAccept = vi.fn()
+    const onClose = vi.fn()
+    render(
+      <QuickPickPanel state={makeMultiState({ onSelectionChange, onAccept })} onClose={onClose} />,
+    )
+    // Click the row body (role=option), not the checkbox span. Clicking the row
+    // used to call accept([item]) → onDidAccept + onClose, which cancelled the
+    // whole pick for consumers with no onDidAccept handler.
+    fireEvent.click(screen.getAllByRole('option')[0]!)
+    expect(onSelectionChange).toHaveBeenCalledWith([multiItems[0]])
+    expect(onAccept).not.toHaveBeenCalled()
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('clicking a row still accepts in an externally-filtered multi-select picker (file dialog)', () => {
+    // The row-click → toggleCheckbox branch is gated on `!filterExternally`: the
+    // file dialog's rows accept (navigate into a folder / pick the path), and an
+    // empty checked set legitimately falls back to the typed path. Guards against
+    // someone dropping the `!filterExternally` half of the condition.
+    const onSelectionChange = vi.fn()
+    const onAccept = vi.fn()
+    render(
+      <QuickPickPanel
+        state={makeMultiState({ filterExternally: true, onSelectionChange, onAccept })}
+        onClose={() => undefined}
+      />,
+    )
+    fireEvent.click(screen.getAllByRole('option')[0]!)
+    expect(onAccept).toHaveBeenCalledWith([multiItems[0]], { ctrl: false, alt: false })
+    expect(onSelectionChange).not.toHaveBeenCalled()
+  })
+
+  it('Enter on a keepOpenOnAccept multi-select picker fires onOk without closing', () => {
+    // keepOpenOnAccept means the consumer owns the lifecycle (it calls hide()
+    // itself), so the confirm path must NOT close the panel — mirrors accept()'s
+    // `if (!keepOpenOnAccept) onClose()` gate.
+    const onOk = vi.fn()
+    const onClose = vi.fn()
+    render(
+      <QuickPickPanel
+        state={makeMultiState({
+          selectedItems: [multiItems[0]!],
+          okLabel: 'Apply',
+          keepOpenOnAccept: true,
+          onOk,
+        })}
+        onClose={onClose}
+      />,
+    )
+    fireEvent.keyDown(screen.getByTestId('quick-input-field'), { key: 'Enter' })
+    expect(onOk).toHaveBeenCalledOnce()
+    expect(onClose).not.toHaveBeenCalled()
+  })
 })

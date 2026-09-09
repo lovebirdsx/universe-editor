@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildForceGetFilespecs,
   buildLevelFilespec,
   buildScopeFilespec,
   buildSyncFilespecs,
@@ -169,5 +170,31 @@ describe('buildSyncFilespecs', () => {
         { path: 'X:/ws/a.txt', isDirectory: false },
       ]),
     ).toEqual(['X:/ws/b.txt', 'X:/ws/src/...', 'X:/ws/a.txt'])
+  })
+})
+
+describe('buildForceGetFilespecs', () => {
+  it('pins each checked file to its refused revision', () => {
+    expect(
+      buildForceGetFilespecs([
+        { depotFile: '//depot/branch_x/a.json', rev: '69' },
+        { depotFile: '//depot/branch_x/b.uasset', rev: '1' },
+      ]),
+    ).toEqual(['//depot/branch_x/a.json#69', '//depot/branch_x/b.uasset#1'])
+  })
+
+  it('escapes metacharacters in the path before the rev separator is appended', () => {
+    // A literal `#` in the depot path must be encoded — left raw it would read
+    // as the rev separator and corrupt the suffix.
+    expect(buildForceGetFilespecs([{ depotFile: '//depot/branch_x/a#b.txt', rev: '3' }])).toEqual([
+      '//depot/branch_x/a%23b.txt#3',
+    ])
+    expect(
+      buildForceGetFilespecs([{ depotFile: '//depot/branch_x/100% file@2.txt', rev: '7' }]),
+    ).toEqual(['//depot/branch_x/100%25 file%402.txt#7'])
+  })
+
+  it('returns an empty list for no checked files', () => {
+    expect(buildForceGetFilespecs([])).toEqual([])
   })
 })

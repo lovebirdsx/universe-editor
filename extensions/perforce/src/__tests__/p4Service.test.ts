@@ -73,6 +73,7 @@ const {
   INTERACTIVE_COMMAND_TIMEOUT_MS,
   INTERACTIVE_EXEC,
   INTERACTIVE_CONTENT_EXEC,
+  CONTENT_TRANSFER_EXEC,
   RECOVER_PARTIAL_TIMEOUT_MAX_BYTES,
   createRecoverLineCollector,
 } = await import('../p4Service.js')
@@ -824,6 +825,30 @@ describe('interactive command tight timeout', () => {
     expect(INTERACTIVE_CONTENT_EXEC.timeoutMs).toBeUndefined()
   })
 
+  it('CONTENT_TRANSFER_EXEC disarms the watchdog with no priority (background transfer)', () => {
+    // `timeoutMs: 0` is what leaves the SpawnWatchdog unarmed; a content transfer
+    // (sync/submit/…) legitimately runs far past `commandTimeout` and must not be
+    // killed mid-write. No `priority`: a large transfer holding the gate's
+    // reserved interactive slot would starve interactive reads.
+    expect(CONTENT_TRANSFER_EXEC.timeoutMs).toBe(0)
+    expect(CONTENT_TRANSFER_EXEC.priority).toBeUndefined()
+  })
+
+  it('a content-transfer command (timeoutMs: 0) is NOT killed while streaming', async () => {
+    const svc = makeService()
+    const p = svc.exec(['sync'], { ...CONTENT_TRANSFER_EXEC })
+    await flush()
+    // Far past any watchdog horizon — with the watchdog armed (a finite timeoutMs)
+    // this span would have killed the child; disarmed, it must not.
+    await new Promise((r) => setTimeout(r, 60))
+    expect(child.killed).toBe(false)
+    child.stdout.emit('data', Buffer.from('done\n'))
+    child.emit('close', 0)
+    const result = await p
+    expect(result.exitCode).toBe(0)
+    expect(result.stderr).not.toMatch(/timed out/)
+  })
+
   it('a hung interactive command is killed at its timeoutMs and resolves a failure', async () => {
     const svc = makeService()
     // Same options shape as the baseline/gutter read paths, with a small timeout
@@ -840,11 +865,13 @@ describe('interactive command tight timeout', () => {
   })
 })
 
-// Per-line stdout streaming for `p4 sync` progress. Best-effort UI signal only:
-// the buffered result stays authoritative, so every case below also asserts the
-// full stdout is intact. The callback runs from the async data/close handlers, so
-// a throwing consumer must be swallowed — never let it escape into an uncaught
-// exception (host-crash red line).
+// Per-line stdout streaming for `p4 sync` progress. On the streaming path the
+// buffered stdout is skipped entirely (a giant sync would otherwise grow it
+// toward the V8 string cap for nothing — the streamed lines are the record), so
+// every case below asserts the streamed lines AND that `result.stdout` stays
+// empty. The callback runs from the async data/close handlers, so a throwing
+// consumer must be swallowed — never let it escape into an uncaught exception
+// (host-crash red line).
 describe('P4Service._spawn onStdoutLine streaming', () => {
   let child: FakeChildProcess
   beforeEach(() => {
@@ -864,7 +891,7 @@ describe('P4Service._spawn onStdoutLine streaming', () => {
     child.emit('close', 0)
     const result = await p
     expect(lines).toEqual(['file1.txt'])
-    expect(result.stdout).toBe('file1.txt\n')
+    expect(result.stdout).toBe('')
   })
 
   it('reassembles a line split across chunks before calling back once', async () => {
@@ -877,7 +904,7 @@ describe('P4Service._spawn onStdoutLine streaming', () => {
     child.emit('close', 0)
     const result = await p
     expect(lines).toEqual(['hello world'])
-    expect(result.stdout).toBe('hello world\n')
+    expect(result.stdout).toBe('')
   })
 
   it('strips a \\r\\n line ending', async () => {
@@ -889,7 +916,7 @@ describe('P4Service._spawn onStdoutLine streaming', () => {
     child.emit('close', 0)
     const result = await p
     expect(lines).toEqual(['a', 'b'])
-    expect(result.stdout).toBe('a\r\nb\r\n')
+    expect(result.stdout).toBe('')
   })
 
   it('flushes a trailing line without a newline on close', async () => {
@@ -901,10 +928,10 @@ describe('P4Service._spawn onStdoutLine streaming', () => {
     child.emit('close', 0)
     const result = await p
     expect(lines).toEqual(['done', 'last'])
-    expect(result.stdout).toBe('done\nlast')
+    expect(result.stdout).toBe('')
   })
 
-  it('a throwing callback does not break exec — it still resolves with full stdout', async () => {
+  it('a throwing callback does not break exec — it still resolves normally', async () => {
     const logs: string[] = []
     const svc = new P4Service('/repo', new ConcurrencyGate(4), undefined, (m) => logs.push(m))
     const p = svc.exec(['sync'], {
@@ -917,8 +944,28 @@ describe('P4Service._spawn onStdoutLine streaming', () => {
     child.emit('close', 0)
     const result = await p
     expect(result.exitCode).toBe(0)
-    expect(result.stdout).toBe('line1\nline2\n')
+    expect(result.stdout).toBe('')
     expect(logs.some((l) => l.includes('boom'))).toBe(true)
+  })
+
+  it('a streaming run never trips the output cap, however large the output', async () => {
+    const svc = makeService()
+    const lines: string[] = []
+    // A tiny cap that any buffered run would blow through: streaming skips the
+    // buffer, so the cap simply doesn't apply to this path.
+    const p = svc.exec(['sync'], {
+      onStdoutLine: (l) => lines.push(l),
+      maxOutputBytes: 16,
+    })
+    await flush()
+    // Far more than 16 bytes once joined — this is what overflowed before.
+    for (let i = 0; i < 8; i++) child.stdout.emit('data', Buffer.from('file-number-' + i + '\n'))
+    child.emit('close', 0)
+    const result = await p
+    expect(lines.length).toBe(8)
+    // Not the "exceeded NMB and was aborted" failure an overflow would produce.
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toBe('')
   })
 
   it('behaves as before when onStdoutLine is omitted (no callback, full stdout)', async () => {
@@ -1197,6 +1244,26 @@ describe('P4Service execRecords partial recovery on timeout', () => {
     const res = await p
     expect(res.result.timedOut).toBe(true)
     expect(res.records).toEqual([{ depotFile: '//depot/a.txt' }])
+  })
+
+  it('keeps the buffered stdout for a caller onStdoutLine without recovery (normal exit)', async () => {
+    // `execRecords` reads `result.stdout` for collapse detection even when a
+    // streaming hook is attached — the leg must force `keepStdout: true` or the
+    // hook would flip exec into buffer-skipping and records would parse empty.
+    const svc = makeService()
+    const lines: string[] = []
+    const p = svc.execRecords(RECONCILE, { onStdoutLine: (l) => lines.push(l) })
+    await flush()
+    child.stdout.emit('data', Buffer.from(ROW))
+    child.emit('close', 0)
+    const res = await p
+    expect(res.result.exitCode).toBe(0)
+    expect(lines).toEqual([
+      '{"depotFile":"//depot/a.txt","clientFile":"//client/a.txt","action":"edit"}',
+    ])
+    expect(res.records).toEqual([
+      { depotFile: '//depot/a.txt', clientFile: '//client/a.txt', action: 'edit' },
+    ])
   })
 
   it('composes with a caller onStdoutLine instead of replacing it', async () => {

@@ -78,6 +78,15 @@
   background: var(--vscode-workbench-accentHover, #0a86f0);
 }
 
+.okButton:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.okButton:disabled:hover {
+  background: var(--vscode-workbench-accent, #0070e0);
+}
+
 .input {
   flex: 1;
   height: 40px;
@@ -177,6 +186,18 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Semantic label colors (`IQuickPickItem.labelColor`): the value is a semantic
+   id, mapped here to a theme-aware `--vscode-*` variable so the platform layer
+   never hardcodes a hex. Used by pickers that mix item sources and need the
+   user to tell them apart (e.g. perforce force-get: modified vs orphan). */
+.itemLabelModified {
+  color: var(--vscode-picker-modifiedLabel, #e2c08d);
+}
+
+.itemLabelOrphan {
+  color: var(--vscode-picker-orphanLabel, #c586c0);
 }
 
 /* When the row has a trailing status column, the label sizes to its content

@@ -106,7 +106,7 @@ export { InlayHintKind } from 'vscode-languageserver-types'
  *  version space); the host checks `engines.universe` against its own runtime
  *  version. Bumping is governed by COMPATIBILITY.md — keep in sync with
  *  package.json (release.mjs syncs both; publish preflight enforces it). */
-export const version = '0.13.8'
+export const version = '0.14.0'
 
 export { CancellationTokenSource, Disposable, EventEmitter } from './util.js'
 export type { CancellationToken, Event } from './util.js'
@@ -182,6 +182,25 @@ export interface StatusBarItem {
 
 export interface QuickPickOptions {
   placeHolder?: string
+  /**
+   * Title rendered above the input box. Use it to carry the picker's framing —
+   * e.g. a confirmation warning or a legend explaining item colors — so a
+   * multi-select picker doesn't need a separate confirm dialog stacked on top.
+   */
+  title?: string
+  /**
+   * Label of the confirmation (OK) button shown in multi-select mode. The
+   * button accepts the whole checked set; supports a `{0}` placeholder for the
+   * live checked count.
+   */
+  okLabel?: string
+  /**
+   * When true, the picker shows a checkbox per row and the user confirms a set
+   * of items instead of picking one. The return type changes to an array (see
+   * the {@link WindowApi.showQuickPick} overloads). Items with `picked: true`
+   * start checked (e.g. "select all by default").
+   */
+  canPickMany?: boolean
 }
 
 /** A richer quick-pick entry with secondary text. */
@@ -190,6 +209,18 @@ export interface QuickPickItem {
   description?: string
   detail?: string
   iconId?: string
+  /**
+   * Multi-select only: start the item checked. Lets a picker default to
+   * "everything selected" so the user un-checks what to skip.
+   */
+  picked?: boolean
+  /**
+   * Semantic color for the label text, used to tell items of different sources
+   * apart at a glance. The value is a semantic id (e.g. `'modified'` /
+   * `'orphan'`), NOT a concrete color — the renderer maps it to a theme-aware
+   * color. Pair it with a legend in `title` so the meaning is discoverable.
+   */
+  labelColor?: string
 }
 
 export interface InputBoxOptions {
@@ -282,6 +313,10 @@ export interface WindowApi {
   showWarningMessage(message: string, ...items: string[]): Promise<string | undefined>
   showErrorMessage(message: string, ...items: string[]): Promise<string | undefined>
   showQuickPick(items: readonly string[], options?: QuickPickOptions): Promise<string | undefined>
+  showQuickPick<T extends QuickPickItem>(
+    items: readonly (T | string)[],
+    options?: QuickPickOptions & { canPickMany: true },
+  ): Promise<T[] | undefined>
   showQuickPick<T extends QuickPickItem>(
     items: readonly T[],
     options?: QuickPickOptions,
@@ -1465,7 +1500,7 @@ interface IExtensionHostBridge {
   showQuickPick(
     items: readonly (string | QuickPickItem)[],
     options?: QuickPickOptions,
-  ): Promise<string | QuickPickItem | undefined>
+  ): Promise<string | QuickPickItem | (string | QuickPickItem)[] | undefined>
   showInputBox(options?: InputBoxOptions): Promise<string | undefined>
   createStatusBarItem(alignment: StatusBarAlignment, priority: number): StatusBarItem
   setStatusBarMessage(text: string, arg?: number | Promise<unknown>): Disposable

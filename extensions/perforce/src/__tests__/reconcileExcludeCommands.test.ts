@@ -147,6 +147,7 @@ interface FakeClient {
   setReconcileScanOptions: Mock
   setReconcileLimit: Mock
   setOpenedByOthersOptions: Mock
+  setSyncParallelThreads: Mock
   setSyncScope: Mock
   setReconcileExcludes: Mock
   dispose: Mock
@@ -184,6 +185,7 @@ function makeFakeClient(): FakeClient {
   fake.setReconcileScanOptions = vi.fn()
   fake.setReconcileLimit = vi.fn()
   fake.setOpenedByOthersOptions = vi.fn()
+  fake.setSyncParallelThreads = vi.fn()
   fake.setSyncScope = vi.fn((dirs: readonly string[] | string) => {
     fake.syncScopeDirs = typeof dirs === 'string' ? [dirs] : [...dirs]
     fake.syncScopes = fake.syncScopeDirs.map((d) => `${d}/...`)
@@ -201,6 +203,7 @@ function makeFakeClient(): FakeClient {
     cancelled: false,
     summary: undefined,
     refusedFiles: [],
+    refusedOverwriteFiles: [],
     error: undefined,
   }))
   fake.openedStateAmong = vi.fn(async () => new Map())
@@ -351,6 +354,7 @@ describe('collect changes after a refused get', () => {
     cancelled: false,
     summary: undefined,
     refusedFiles: [],
+    refusedOverwriteFiles: [],
     error: { kind: 'clobber', suggestion: "can't update modified file" },
   }
 

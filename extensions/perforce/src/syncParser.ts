@@ -6,12 +6,15 @@
  * merge transcripts that mix landed and skipped files even when it exits 0 —
  * hence the two counters in {@link ResolveRunSummary}.
  *
- * Two refusal shapes exist and neither may be dropped on the floor: an
+ * Three refusal shapes exist and none may be dropped on the floor: an
  * `allwrite noclobber` client refuses a locally-modified file per file
  * (`- can't update modified file`, stdout, exit 0, run continues — counted by
  * {@link SyncRunSummary.refusedModified} and extracted by
- * {@link parseSyncRefused}), while a `noallwrite` client aborts the whole run
- * (`can't clobber writable file`, stderr, exit 1 — classified in `p4Error.ts`).
+ * {@link parseSyncRefused}), refuses an untracked file already on disk per file
+ * (`- can't overwrite existing file`, stdout, exit 0, run continues — counted by
+ * {@link SyncRunSummary.refusedOverwrite}), while a `noallwrite` client aborts
+ * the whole run (`can't clobber writable file`, stderr, exit 1 — classified in
+ * `p4Error.ts`).
  *
  * Verified against P4D 2024.2 (see `e2e/fixtures/PROBE-FINDINGS.md`).
  */
@@ -120,6 +123,16 @@ export interface SyncRunSummary {
    */
   readonly refusedModified: number
   /**
+   * Files p4 skipped because an UNTRACKED file already sits at the target path —
+   * the `allwrite noclobber` client's per-file refusal `- can't overwrite
+   * existing file` (measured on P4D 2024.2 under `--parallel`: stdout, exit 0,
+   * run continues). Distinct from {@link refusedModified}: `p4 have` has no
+   * record of these files, so there is no local "modification" to diff or
+   * collect — the remedy is a force get (or the user removing the orphan), never
+   * "Collect Changes".
+   */
+  readonly refusedOverwrite: number
+  /**
    * True when p4 reported `file(s) up-to-date.`. Measured on P4D 2024.2: this
    * arrives on **stderr with exit 0** — nothing to do, not a failure.
    */
@@ -142,22 +155,27 @@ const UP_TO_DATE_LINE = /file\(s\) up-to-date/i
 // that one needs `updated`/`updating`/… right after ` - `, and here the word
 // there is `can't`.
 const REFUSED_MODIFIED_LINE = / - can't update modified file /i
+// The untracked-orphan refusal. Same `allwrite noclobber` client and channel as
+// REFUSED_MODIFIED_LINE, but the file is NOT in the have table — so there is no
+// local modification to collect or diff, and it gets its own counter so the
+// caller can offer force-get instead of the modified-file remedies.
+const REFUSED_OVERWRITE_LINE = / - can't overwrite existing file /i
 
 /**
  * What one line of `p4 sync` stdout means. `file(s) up-to-date.` has no kind
  * here — that is a whole-run verdict spanning stdout + stderr, not a line
  * outcome.
  */
-export type SyncLineKind = 'applied' | 'keptOpen' | 'mustResolve' | 'refused'
+export type SyncLineKind = 'applied' | 'keptOpen' | 'mustResolve' | 'refused' | 'refusedOverwrite'
 
 /**
  * Classify one line of `p4 sync` stdout, or undefined when nothing matches.
  *
- * Applies the four counting patterns in the same order
- * {@link parseSyncOutput} uses (applied → keptOpen → mustResolve → refused),
- * so a streaming progress counter and the final summary share one source of
- * truth instead of each writing its own copy of the rules. The line is
- * trimmed here — callers may pass raw, unterminated chunks.
+ * Applies the five counting patterns in the same order
+ * {@link parseSyncOutput} uses (applied → keptOpen → mustResolve → refused →
+ * refusedOverwrite), so a streaming progress counter and the final summary share
+ * one source of truth instead of each writing its own copy of the rules. The
+ * line is trimmed here — callers may pass raw, unterminated chunks.
  */
 export function classifySyncLine(line: string): SyncLineKind | undefined {
   const trimmed = line.trim()
@@ -166,6 +184,7 @@ export function classifySyncLine(line: string): SyncLineKind | undefined {
   if (KEPT_OPEN_LINE.test(trimmed)) return 'keptOpen'
   if (MUST_RESOLVE_LINE.test(trimmed)) return 'mustResolve'
   if (REFUSED_MODIFIED_LINE.test(trimmed)) return 'refused'
+  if (REFUSED_OVERWRITE_LINE.test(trimmed)) return 'refusedOverwrite'
   return undefined
 }
 
@@ -174,12 +193,14 @@ export function parseSyncOutput(stdout: string, stderr: string): SyncRunSummary 
   let keptOpen = 0
   let mustResolve = 0
   let refusedModified = 0
+  let refusedOverwrite = 0
   for (const raw of stdout.split(/\r?\n/)) {
     const kind = classifySyncLine(raw)
     if (kind === 'applied') applied++
     else if (kind === 'keptOpen') keptOpen++
     else if (kind === 'mustResolve') mustResolve++
     else if (kind === 'refused') refusedModified++
+    else if (kind === 'refusedOverwrite') refusedOverwrite++
   }
   const upToDate = UP_TO_DATE_LINE.test(`${stdout}\n${stderr}`)
   const unrecognized =
@@ -188,8 +209,17 @@ export function parseSyncOutput(stdout: string, stderr: string): SyncRunSummary 
     keptOpen === 0 &&
     mustResolve === 0 &&
     refusedModified === 0 &&
+    refusedOverwrite === 0 &&
     !upToDate
-  return { applied, keptOpen, mustResolve, refusedModified, upToDate, unrecognized }
+  return {
+    applied,
+    keptOpen,
+    mustResolve,
+    refusedModified,
+    refusedOverwrite,
+    upToDate,
+    unrecognized,
+  }
 }
 
 // The depot path leads every sync line (`//depot/branch_x/a.cpp[#3]`, with a
@@ -232,6 +262,31 @@ export function parseSyncRefused(stdout: string, clientRoot?: string): SyncPrevi
   const out: SyncPreviewFile[] = []
   for (const raw of stdout.split(/\r?\n/)) {
     const match = REFUSED_EXTRACT.exec(raw.trim())
+    if (!match) continue
+    const depotFile = match[1]
+    const rev = match[2]
+    if (!depotFile || !rev) continue
+    const rawClientFile = match[3] ?? ''
+    const clientFile =
+      rawClientFile && clientRoot ? clientToLocalPath(rawClientFile, clientRoot) : rawClientFile
+    out.push({ depotFile, clientFile, action: 'not updated', rev })
+  }
+  return out
+}
+
+/**
+ * The refused-overwrite lines as structured files — same shape and channel as
+ * {@link parseSyncRefused}, but for the untracked-orphan refusal. Kept separate
+ * from it: these files are NOT in the have table, so they must never flow into
+ * the collect/diff remedies; the caller lists them in the force-get picker with
+ * their own label color.
+ */
+const REFUSED_OVERWRITE_EXTRACT = /^(.*?)#(\d+) - can't overwrite existing file (.*)$/i
+
+export function parseSyncOverwriteRefused(stdout: string, clientRoot?: string): SyncPreviewFile[] {
+  const out: SyncPreviewFile[] = []
+  for (const raw of stdout.split(/\r?\n/)) {
+    const match = REFUSED_OVERWRITE_EXTRACT.exec(raw.trim())
     if (!match) continue
     const depotFile = match[1]
     const rev = match[2]

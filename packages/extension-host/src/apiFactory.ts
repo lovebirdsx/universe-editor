@@ -159,7 +159,7 @@ export interface IExtensionHostBridge {
   showQuickPick(
     items: readonly (string | QuickPickItem)[],
     options?: QuickPickOptions,
-  ): Promise<string | QuickPickItem | undefined>
+  ): Promise<string | QuickPickItem | (string | QuickPickItem)[] | undefined>
   showInputBox(options?: InputBoxOptions): Promise<string | undefined>
   createStatusBarItem(alignment: StatusBarAlignment, priority: number): StatusBarItem
   setStatusBarMessage(text: string, arg?: number | Promise<unknown>): Disposable

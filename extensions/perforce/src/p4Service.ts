@@ -58,6 +58,9 @@ export interface P4ExecOptions {
    * TCP to a P4P gateway) holds its ConcurrencyGate slot forever — and with it
    * every later command, including the Swarm credential lookups that gate all
    * Swarm HTTP (the 44-minute poll wedge). Overrides the service default.
+   * `0` (or `Infinity`) disarms the watchdog — reserved for content-transfer
+   * commands via {@link CONTENT_TRANSFER_EXEC}, which must stay cancellable
+   * through `signal` instead.
    */
   readonly timeoutMs?: number
   /**
@@ -75,12 +78,23 @@ export interface P4ExecOptions {
    */
   readonly priority?: P4Priority
   /**
-   * Called once per complete stdout line as it arrives. Best-effort UI signal
-   * only — the authoritative output is still the buffered result. A throwing
-   * callback is swallowed and logged, never re-thrown, so it can't crash the
-   * extension host from the async data/close handlers.
+   * Called once per complete stdout line as it arrives. On this path the buffered
+   * stdout is **skipped entirely** — the streamed lines are the record, and the
+   * caller never reads `result.stdout` afterwards, so accumulating it would only
+   * grow toward the V8 string cap for nothing (a wide `sync` is what overflowed
+   * the old 256MB cap). Set {@link P4ExecOptions.keepStdout} when a consumer needs
+   * the stream AND the buffered text. A throwing callback is swallowed and
+   * logged, never re-thrown, so it can't crash the extension host from the async
+   * data/close handlers.
    */
   readonly onStdoutLine?: (line: string) => void
+  /**
+   * Keep buffering stdout even when {@link onStdoutLine} is set. For consumers
+   * that read the buffered result after the run — {@link execRecords}' partial
+   * recovery, whose fallback detection parses `result.stdout`. Without it the
+   * buffer is skipped (the default) and `result.stdout` comes back empty.
+   */
+  readonly keepStdout?: boolean
   /**
    * Opt-in recovery of the stdout a timed-out command already streamed: when set,
    * {@link execRecords} collects the complete lines as they arrive and, if the
@@ -172,6 +186,23 @@ export const INTERACTIVE_EXEC: P4ExecOptions = {
  * service's default (`options?.timeoutMs ?? this._defaultTimeoutMs` in `_spawn`).
  */
 export const INTERACTIVE_CONTENT_EXEC: P4ExecOptions = { priority: 'interactive' }
+
+/**
+ * Content-transfer mutations whose duration scales with the bytes moved
+ * (`sync` / `submit` / `shelve` / `unshelve` / `revert` / `clean`): exempt from
+ * `perforce.commandTimeout` entirely. `timeoutMs: 0` leaves the SpawnWatchdog
+ * unarmed (`Number.isFinite(0) && 0 > 0` is false), matching the `0` = unlimited
+ * semantics of the setting itself — a whole-repo sync legitimately runs tens of
+ * minutes, and a deadline that kills it mid-transfer is the "hung forever" guard
+ * misfiring on "slow but healthy".
+ *
+ * **Only commands reachable through `client._cancellable` may use this** — with
+ * no watchdog, the user-facing cancel (status-bar spinner / progress
+ * notification → `cancelBusy` → `signal`) is the *only* way to stop a genuinely
+ * stuck transfer. No `priority`: these are background mutations, and a large one
+ * holding the gate's reserved interactive slot would starve interactive reads.
+ */
+export const CONTENT_TRANSFER_EXEC: P4ExecOptions = { timeoutMs: 0 }
 
 /** Module-level default applied to every new P4Service (set once at activate
  *  from `perforce.commandTimeout`; tests omit it and get the constant). */
@@ -603,7 +634,12 @@ export class P4Service {
     recover: boolean,
   ): Promise<{ result: P4ExecResult; collected: string }> {
     if (!recover) {
-      return { result: await this.exec(argv, options), collected: '' }
+      // A caller `onStdoutLine` (rare — sync-style streaming) would otherwise
+      // flip exec into the buffer-skipping mode and this leg's collapse
+      // detection would parse an empty stdout forever. execRecords always reads
+      // `result.stdout`, so the buffer must be kept regardless of streaming.
+      const kept = options?.onStdoutLine !== undefined ? { ...options, keepStdout: true } : options
+      return { result: await this.exec(argv, kept), collected: '' }
     }
     const collector = createRecoverLineCollector(RECOVER_PARTIAL_TIMEOUT_MAX_BYTES, (msg) =>
       this._log?.(msg),
@@ -615,7 +651,10 @@ export class P4Service {
           userLine(line)
         }
       : collector.onLine
-    const result = await this.exec(argv, { ...options, onStdoutLine })
+    // The stream is only the recovery side-channel here: the caller still reads
+    // `result.stdout` (the collapse detection and the non-timeout parse both use
+    // it), so the buffer must be kept even though a streaming hook is attached.
+    const result = await this.exec(argv, { ...options, onStdoutLine, keepStdout: true })
     return { result, collected: collector.text() }
   }
 
@@ -765,10 +804,13 @@ export class P4Service {
       const stderr: Buffer[] = []
       let stdoutBytes = 0
       let overflowed = false
-      // Per-line stdout streaming for progress UI. Best-effort only: the buffered
-      // result stays authoritative. `carry` holds the bytes since the last newline
-      // so a line split across chunks isn't emitted until it completes.
+      // Per-line stdout streaming for progress UI. `carry` holds the bytes since
+      // the last newline so a line split across chunks isn't emitted until it
+      // completes. The buffered stdout is skipped on this path (the streamed
+      // lines are the record) unless `keepStdout` asks for both — see the data
+      // handler below.
       const onStdoutLine = options?.onStdoutLine
+      const skipStdout = onStdoutLine !== undefined && options?.keepStdout !== true
       let carry = ''
       // Cancellation: kill the child and remember why, so `close` can resolve a
       // cancelled failure instead of a confusing "killed with no output" result.
@@ -787,17 +829,24 @@ export class P4Service {
       const detachSignal = (): void => signal?.removeEventListener('abort', onAbort)
       proc.stdout.on('data', (chunk: Buffer) => {
         if (overflowed) return
-        stdoutBytes += chunk.length
-        if (stdoutBytes > maxBytes) {
-          // Abort rather than accumulate into a string V8 can't build. Kill the
-          // child so p4 stops streaming; the `close` handler resolves the error.
-          overflowed = true
-          stdout.length = 0
-          carry = ''
-          proc.kill()
-          return
+        // A streaming consumer (onStdoutLine) gets each line as it lands and the
+        // caller never reads the buffered stdout afterwards, so accumulating it
+        // would only grow toward the V8 string cap for nothing. Skip the buffer
+        // on that path — the streamed lines are the authoritative record —
+        // unless `keepStdout` says a consumer reads the buffer too.
+        if (!skipStdout) {
+          stdoutBytes += chunk.length
+          if (stdoutBytes > maxBytes) {
+            // Abort rather than accumulate into a string V8 can't build. Kill the
+            // child so p4 stops streaming; the `close` handler resolves the error.
+            overflowed = true
+            stdout.length = 0
+            carry = ''
+            proc.kill()
+            return
+          }
+          stdout.push(chunk)
         }
-        stdout.push(chunk)
         if (onStdoutLine) {
           carry += chunk.toString('utf8')
           const lines = carry.split(/\r?\n/)

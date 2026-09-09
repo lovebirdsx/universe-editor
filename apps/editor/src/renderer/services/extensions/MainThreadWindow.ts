@@ -136,7 +136,7 @@ export class MainThreadWindow extends Disposable implements IMainThreadWindow {
   $showQuickPick(
     items: Array<string | IExtHostQuickPickItemDto>,
     options?: IExtHostQuickPickOptions,
-  ): Promise<number | undefined> {
+  ): Promise<number | number[] | undefined> {
     const picks: IQuickPickItem[] = items.map((it, index) =>
       typeof it === 'string'
         ? { id: String(index), label: it }
@@ -146,11 +146,55 @@ export class MainThreadWindow extends Disposable implements IMainThreadWindow {
             ...(it.description !== undefined ? { description: it.description } : {}),
             ...(it.detail !== undefined ? { detail: it.detail } : {}),
             ...(it.iconId !== undefined ? { iconId: it.iconId } : {}),
+            ...(it.labelColor !== undefined ? { labelColor: it.labelColor } : {}),
+            ...(it.picked !== undefined ? { picked: it.picked } : {}),
           },
     )
+    if (options?.canPickMany === true) {
+      return this._pickMany(picks, options)
+    }
     return this._quickInput
       .pick(picks, options?.placeHolder !== undefined ? { placeholder: options.placeHolder } : {})
       .then((selected) => (selected ? Number(selected.id) : undefined))
+  }
+
+  /**
+   * Multi-select pick: checkboxes per row, `picked` items start checked, and the
+   * OK button / Enter confirm the whole checked set (resolving to its indices).
+   * The `{0}` placeholder in `okLabel` is substituted with the live checked
+   * count, so a label like "Force Get Selected ({0})" tracks the selection.
+   */
+  private _pickMany(
+    picks: IQuickPickItem[],
+    options: IExtHostQuickPickOptions,
+  ): Promise<number[] | undefined> {
+    const okTemplate = options.okLabel
+    const formatOk = (count: number): string | undefined =>
+      okTemplate === undefined ? undefined : okTemplate.replace('{0}', String(count))
+
+    const qp = this._quickInput.createQuickPick<IQuickPickItem>()
+    qp.canSelectMany = true
+    qp.title = options.title
+    qp.placeholder = options.placeHolder
+    qp.items = picks
+    qp.selectedItems = picks.filter((p) => p.picked === true)
+    qp.okLabel = formatOk(qp.selectedItems.length)
+
+    return new Promise((resolve) => {
+      const done = (value: number[] | undefined): void => {
+        qp.dispose()
+        resolve(value)
+      }
+      qp.onDidChangeSelection((selected) => {
+        qp.selectedItems = selected
+        qp.okLabel = formatOk(selected.length)
+      })
+      qp.onDidTriggerOk(() => {
+        done(qp.selectedItems.map((it) => Number(it.id)))
+      })
+      qp.onDidHide(() => done(undefined))
+      qp.show()
+    })
   }
 
   $showInputBox(options?: IExtHostInputBoxOptions): Promise<string | undefined> {

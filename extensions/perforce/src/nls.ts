@@ -114,7 +114,10 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.syncPrompt.rev': '修订号',
   'perforce.btn.forceSync': '强制拉取',
   'perforce.sync.forceConfirm':
-    '强制拉取会覆盖本地文件，即使 Perforce 认为它们已是最新。其中未收集的改动将丢失，且此操作不可撤销。',
+    '强制拉取会覆盖本地文件，即使 Perforce 认为它们已是最新。其中未收集的改动（包括未被跟踪的同名文件）将丢失，且此操作不可撤销。',
+  'perforce.sync.forcePickTitle':
+    '强制拉取将用 depot 版本覆盖勾选的文件，其中未收集的本地修改与未被跟踪的占位文件将丢失，且不可撤销。（黄色 = 有本地修改，紫色 = 未被跟踪的同名文件）',
+  'perforce.sync.forcePickOk': '强制拉取所选 ({0})',
   'perforce.sync.failed': '拉取版本失败。{0}',
   'perforce.btn.collectChanges': '收集改动',
   // reconcile（收集改动）—— 排除目录拦截
@@ -122,6 +125,7 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.reconcile.carveFailed': '部分目录无法读取，其中的文件已被跳过。',
   'perforce.sync.upToDate': '已是最新版本。',
   'perforce.sync.refusedModified': '{0} 个文件未更新——它们有尚未收集的本地修改',
+  'perforce.sync.refusedOverwrite': '{0} 个文件未更新——本地已存在未被跟踪的同名文件，已被跳过',
   'perforce.btn.viewRefusedDiff': '查看差异',
   'perforce.sync.refusedPickDiff': '选择一个文件查看它未收集的本地修改',
   'perforce.sync.refusedNoLocalPath': '无法显示差异：被跳过的文件没有映射到当前工作区。',
@@ -135,7 +139,13 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.copyDepotPath.notControlled': '该文件不在 depot 中。',
   'perforce.sync.progressTitleHead': '拉取最新版本',
   'perforce.sync.progressTitle': '拉取 {0}',
-  'perforce.sync.progressFiles': '{0} 个文件{1}',
+  'perforce.sync.progressTitlePicked': '拉取所选文件',
+  'perforce.sync.progressFiles': '{0} 个文件{1}{2}',
+  // 状态栏 sync 进度 tooltip
+  'perforce.status.syncing': '正在拉取 {0}',
+  'perforce.status.syncCounts': '已拉取 {0} 个文件',
+  'perforce.status.syncCurrent': '当前：{0}',
+  'perforce.status.syncElapsed': '已耗时 {0}',
   // graph 合并历史（多选查看历史，extension.ts 的 perforce-graph.getChanges）
   'perforce.graph.multiClient': '所选路径不属于同一个 Perforce 工作区，无法合并查看它们的历史。',
   // graph sync（sync to change，extension.ts 的 perforce-graph.syncToChange）

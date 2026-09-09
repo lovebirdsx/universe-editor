@@ -68,6 +68,11 @@ export class P4StatusBarController {
   /** Hidden by `setVisible(false)` while the SCM selection points at another
    *  provider; every render short-circuits so nothing can re-show the items. */
   private _visible = true
+  /** 1s ticker that re-renders while a sync is in flight. The elapsed clock is
+   *  computed at render time (`Date.now() - startedAt`), so without it the count
+   *  AND the clock both freeze for the whole gap between p4's stdout bursts —
+   *  which under `--parallel` can be a minute or more. */
+  private _syncHeartbeat: ReturnType<typeof setInterval> | undefined
 
   constructor(private readonly _mgr: ClientManager) {
     this._item = window.createStatusBarItem(StatusBarAlignment.Left, 100)
@@ -108,15 +113,42 @@ export class P4StatusBarController {
     this.refresh()
   }
 
+  /** Arm or stop the sync heartbeat. Armed exactly while a streaming sync is
+   *  showing: each tick re-renders so the elapsed clock advances even when p4
+   *  hasn't printed a line in a while. This is a pure repaint — the client's
+   *  data is unchanged, only the render-time `Date.now() - startedAt` moves —
+   *  so it lives here, not in the client's `_emitChange` (which means "state
+   *  changed"). */
+  private _setSyncHeartbeat(active: boolean): void {
+    if (active && this._syncHeartbeat === undefined) {
+      this._syncHeartbeat = setInterval(() => this._render(), 1000)
+    } else if (!active && this._syncHeartbeat !== undefined) {
+      clearInterval(this._syncHeartbeat)
+      this._syncHeartbeat = undefined
+    }
+  }
+
   private _render(): void {
-    if (!this._visible) return
+    if (!this._visible) {
+      this._setSyncHeartbeat(false)
+      return
+    }
     const client = this._mgr.active
     if (!client) {
+      this._setSyncHeartbeat(false)
       this._item.hide()
       return
     }
-    const { clientName, connection, openedCount, busy, busyCancellable, scanProgress } =
-      client.status
+    const {
+      clientName,
+      connection,
+      openedCount,
+      busy,
+      busyCancellable,
+      scanProgress,
+      syncProgress,
+    } = client.status
+    this._setSyncHeartbeat(syncProgress !== undefined)
     if (busy) {
       // A long-running p4 operation is in flight — show a spinner + its label so
       // the user sees the client isn't stalled (mirrors git's syncing indicator).
@@ -127,6 +159,40 @@ export class P4StatusBarController {
       // would also appear on the left and we'd get one on each side.
       this._item.showProgress = undefined
       const short = truncateClientName(clientName)
+      if (syncProgress) {
+        // No total is ever shown: the pre-flight count that would produce one
+        // costs a full server-side walk on a wide scope, so a sync starts
+        // downloading immediately instead. The bare count alone reads as
+        // stalled, so the body pairs it with the elapsed time — a rising clock
+        // is the "it's alive" signal a missing total removes.
+        const count = `${syncProgress.done} · ${formatScanElapsed(Date.now() - syncProgress.startedAt)}`
+        this._item.text = `$(server) ${short}: ${busy} ${count} $(sync~spin)`
+        const lines = [
+          localize('perforce.status.syncing', 'Syncing {0}', { 0: clientName }),
+          localize('perforce.status.syncCounts', 'Synced {0} files', { 0: syncProgress.done }),
+        ]
+        if (syncProgress.currentFile !== undefined) {
+          lines.push(
+            localize('perforce.status.syncCurrent', 'Current: {0}', {
+              0: syncProgress.currentFile,
+            }),
+          )
+        }
+        lines.push(
+          localize('perforce.status.syncElapsed', '{0} elapsed', {
+            0: formatScanElapsed(Date.now() - syncProgress.startedAt),
+          }),
+        )
+        if (busyCancellable) {
+          lines.push('', localize('perforce.status.clickToCancel', 'Click to cancel'))
+          this._item.command = 'perforce.cancelBusy'
+        } else {
+          this._item.command = 'perforce-graph.view'
+        }
+        this._item.tooltip = lines.join('\n')
+        this._item.show()
+        return
+      }
       if (scanProgress) {
         const total = scanProgress.done + scanProgress.pending
         this._item.text = `$(server) ${short}: ${scanProgress.done}/${total} $(sync~spin)`
@@ -304,6 +370,7 @@ export class P4StatusBarController {
   }
 
   dispose(): void {
+    this._setSyncHeartbeat(false)
     this._clientSub?.dispose()
     this._editorSub?.dispose()
     this._item.dispose()

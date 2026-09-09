@@ -51,7 +51,8 @@ Perforce 文件同样支持行内 **Blame（溯源）**，与 Git 共用同一�
 | `perforce.refreshInterval` | 轮询刷新间隔（秒，最小 10，`0` 关闭） | 关 |
 | `perforce.openedByOthers.autoCheck` | 后台「他人占用」扫描 + 灰字 | 开 |
 | `perforce.openedByOthers.intervalSec` | 两次「他人占用」扫描的最小间隔秒数（最小 30） | 300 |
-| `perforce.commandTimeout` | 单个 p4 进程最长存活秒数，超时强杀（`0` 不限制）。约束「永久挂死」而非「执行慢」——卡死在冻结网络盘上的 p4 不会再无限期占住并发槽 | 600 |
+| `perforce.commandTimeout` | 单个 p4 进程最长存活秒数，超时强杀（`0` 不限制）。约束「永久挂死」而非「执行慢」——卡死在冻结网络盘上的 p4 不会再无限期占住并发槽。**不约束内容传输命令**（sync/submit/shelve/unshelve/revert/clean，它们随字节数增长且可取消） | 600 |
+| `perforce.syncParallelThreads` | `p4 sync` 并行拉取线程数（`--parallel=threads=N`，`0` 串行）。需服务器开 `net.parallel.max`，不支持时 p4 静默回落串行 | 4 |
 | `perforce.cache.enabled` | 缓存 p4 结果以减少服务器往返 | 开 |
 | `perforce.cache.workspaceTtl` | 工作区状态缓存有效期（毫秒，`0` 关闭工作区缓存） | 4000 |
 | `perforce.cache.diskLimitMb` | 不可变历史数据磁盘缓存上限（MB，`0` 关闭落盘） | 50 |

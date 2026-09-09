@@ -57,7 +57,7 @@ Universe Editor **不提供 `vscode` 模块的兼容层（shim），也不承诺
 | VSCode API | Universe 等价物 | 状态 |
 |---|---|---|
 | `window.showInformationMessage` / `showWarningMessage` / `showErrorMessage` | 同名 | 对齐（仅基础重载；无 `modal` 选项与 `MessageItem` 对象） |
-| `window.showQuickPick` | 同名 | 部分对齐：`string[]` 与 `QuickPickItem[]` 两重重载；`QuickPickItem` 仅 `label/description/detail/iconId`；无 `canPickMany`、无 item 按钮等复杂管道 |
+| `window.showQuickPick` | 同名 | 部分对齐：`string[]` 与 `QuickPickItem[]` 重载 + `canPickMany: true` 多选重载（返回 `T[]`）；`QuickPickItem` 有 `label/description/detail/iconId/picked/labelColor`；`QuickPickOptions` 有 `placeHolder/title/okLabel/canPickMany`；无 item 按钮等复杂管道 |
 | `window.createQuickPick` / `createInputBox` | — | 缺失（暂无计划；多数场景 `showQuickPick` / `showInputBox` 已够） |
 | `window.showInputBox` | 同名 | 部分对齐：仅 `placeHolder/prompt/value`；无 `password/validateInput` |
 | `window.createStatusBarItem` | 同名 | 对齐（`text` 支持 `$(icon~spin)` 内联旋转——转圈出现在 codicon 所在位置；另有 Universe 扩展字段 `showProgress`，把转圈固定显示在条目最左；无 `name/color`） |
