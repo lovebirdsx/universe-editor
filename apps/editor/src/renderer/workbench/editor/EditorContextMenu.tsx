@@ -21,6 +21,7 @@ import { ContextMenu } from '@universe-editor/workbench-ui'
 import type { monaco } from './monaco/MonacoLoader.js'
 import { basenameOfResource, extensionOfBasename } from '../files/resourceInfo.js'
 import { renderMenuIcon } from '../icons/menuIcon.js'
+import { useContextMenuMemory } from '../contextMenu/useContextMenuMemory.js'
 import { useScopedContextKey } from '../useScopedContextKey.js'
 
 interface Props {
@@ -58,6 +59,7 @@ export function EditorContextMenu({
     editorLangId: editor.getModel()?.getLanguageId() ?? '',
     editorReadonly: isReadonly,
   })
+  const memory = useContextMenuMemory()
 
   return (
     <ContextMenu
@@ -66,6 +68,10 @@ export function EditorContextMenu({
       args={[resource]}
       renderIcon={renderMenuIcon}
       autoFocusFirst={keyboard}
+      {...(memory ? { memory } : {})}
+      // copy/paste-style commands only exist in the selection bucket — keep
+      // the two shapes from overwriting each other's last pick.
+      contextTag={selection !== null && !selection.isEmpty() ? 'selection' : 'noSelection'}
       commandService={commandService}
       contextKeyService={scopedContext}
       onClose={onClose}

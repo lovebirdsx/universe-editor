@@ -743,12 +743,14 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
       const items: GitGraphMenuItem[] = [
         {
           kind: 'item',
+          id: 'copyId',
           icon: 'copy',
           label: localize('perforceGraph.copyId', 'Copy changelist number'),
           run: () => void navigator.clipboard?.writeText(id),
         },
         {
           kind: 'item',
+          id: 'copyMessage',
           icon: 'copy',
           label: localize('gitGraph.copyMessage', 'Copy commit message'),
           run: () => void navigator.clipboard?.writeText(change.body || change.message),
@@ -756,6 +758,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
         { kind: 'sep' },
         {
           kind: 'item',
+          id: 'sendToAgentChat',
           icon: 'sparkle',
           label: localize('gitGraph.sendToAgentChat', 'Send to Agent Chat'),
           run: () =>
@@ -780,6 +783,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
         if (onlyFile !== undefined) {
           items.push({
             kind: 'item',
+            id: 'openChanges',
             icon: 'compare-changes',
             label: localize('perforceGraph.openChanges', 'Open Changes'),
             run: () => void openScopedFileDiff(id),
@@ -788,6 +792,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
         items.push(
           {
             kind: 'item',
+            id: 'getThisRevision',
             icon: 'cloud-download',
             label: localize('perforceGraph.getThisRevision', 'Get This Revision'),
             run: () =>
@@ -799,6 +804,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
           },
           {
             kind: 'item',
+            id: 'getLatestRevision',
             icon: 'cloud-download',
             label: localize('perforceGraph.getLatestRevision', 'Get Latest Revision'),
             run: () => {
@@ -820,6 +826,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
           { kind: 'sep' },
           {
             kind: 'item',
+            id: 'getThisRevision',
             icon: 'cloud-download',
             label: localize('perforceGraph.getThisRevision', 'Get This Revision'),
             run: () =>
@@ -831,6 +838,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
           },
           {
             kind: 'item',
+            id: 'getRevision',
             icon: 'cloud-download',
             label: localize('perforceGraph.getRevision', 'Get Revision…'),
             run: () =>
@@ -853,7 +861,13 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
           },
         )
       }
-      setMenu({ x: e.clientX, y: e.clientY, items, keyboard: isKeyboardContextMenu(e) })
+      setMenu({
+        x: e.clientX,
+        y: e.clientY,
+        items,
+        keyboard: isKeyboardContextMenu(e),
+        contextTag: 'changelist',
+      })
     },
     [commands, openScopedFileDiff, scope, wholeRepo, result, setSyncDialog],
   )

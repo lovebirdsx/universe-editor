@@ -699,6 +699,8 @@ export function SwarmReviewsView() {
       const url = reviewUrl(review.id)
       const transitionItems: SwarmReviewMenuItem[] = allowedTransitions.map((transition) => ({
         kind: 'item',
+        // Server-supplied label is the only identity a transition has.
+        id: `transition:${transition.label}`,
         icon: isDangerousTransition(transition.state) ? 'discard' : 'check',
         label: transition.label,
         danger: isDangerousTransition(transition.state),
@@ -707,6 +709,7 @@ export function SwarmReviewsView() {
       return [
         {
           kind: 'item',
+          id: 'open',
           icon: 'open-preview',
           label: localize('swarm.menu.open', 'Open Review'),
           run: () => openReview(review.id),
@@ -715,6 +718,7 @@ export function SwarmReviewsView() {
           ? ([
               {
                 kind: 'item',
+                id: 'openBrowser',
                 icon: 'open-with',
                 label: localize('swarm.menu.openBrowser', 'Open Review in Browser'),
                 run: () => void opener.open(url, { fromUserGesture: true }),
@@ -724,6 +728,7 @@ export function SwarmReviewsView() {
         { kind: 'separator' },
         {
           kind: 'item',
+          id: 'applyToLocal',
           icon: 'cloud-download',
           label: localize('swarm.applyToLocal', 'Apply to Local'),
           run: () => void applyToLocalReview(review),
@@ -731,12 +736,14 @@ export function SwarmReviewsView() {
         swarmIgnoreStore.isIgnored(review.id)
           ? {
               kind: 'item',
+              id: 'unignore',
               icon: 'eye',
               label: localize('swarm.menu.unignore', 'Unignore Review'),
               run: () => unignoreReview(review.id),
             }
           : {
               kind: 'item',
+              id: 'ignore',
               icon: 'eye-off',
               label: localize('swarm.menu.ignore', 'Ignore Review'),
               run: () => ignoreReview(review),
@@ -747,6 +754,7 @@ export function SwarmReviewsView() {
         { kind: 'separator' },
         {
           kind: 'item',
+          id: 'copyName',
           icon: 'copy',
           label: localize('swarm.menu.copyName', 'Copy Review Name'),
           run: () => void navigator.clipboard?.writeText(swarmReviewName(review)),
@@ -755,6 +763,7 @@ export function SwarmReviewsView() {
           ? ([
               {
                 kind: 'item',
+                id: 'copyLink',
                 icon: 'copy',
                 label: localize('swarm.menu.copyLink', 'Copy Review Link'),
                 run: () => void navigator.clipboard?.writeText(url),
@@ -764,6 +773,7 @@ export function SwarmReviewsView() {
         { kind: 'separator' },
         {
           kind: 'item',
+          id: 'obliterate',
           icon: 'trash',
           label: localize('swarm.obliterate.action', 'Obliterate Review'),
           danger: true,

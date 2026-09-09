@@ -259,4 +259,186 @@ describe('ListMenu', () => {
       expect(onClose).toHaveBeenCalledTimes(1)
     })
   })
+
+  describe('memory (last executed)', () => {
+    function makeMemory(initial?: Record<string, string>) {
+      const map = new Map(Object.entries(initial ?? {}))
+      return {
+        get: (scope: string, contextTag: string | undefined) =>
+          map.get(`${scope}|${contextTag ?? ''}`),
+        set: (scope: string, contextTag: string | undefined, itemId: string) => {
+          map.set(`${scope}|${contextTag ?? ''}`, itemId)
+        },
+      }
+    }
+
+    function twoItems(): readonly ListMenuEntry[] {
+      return [
+        { kind: 'item', id: 'a', label: 'First', run: vi.fn() },
+        { kind: 'item', id: 'b', label: 'Second', run: vi.fn() },
+      ]
+    }
+
+    function renderWithMemory(
+      items: readonly ListMenuEntry[],
+      memory: ReturnType<typeof makeMemory>,
+      props: { autoFocusFirst?: boolean; contextTag?: string } = {},
+    ) {
+      const onClose = vi.fn()
+      render(
+        <ListMenu
+          items={items}
+          anchor={{ x: 0, y: 0 }}
+          memory={memory}
+          memoryKey="test.list"
+          onClose={onClose}
+          {...(props.autoFocusFirst === undefined ? {} : { autoFocusFirst: props.autoFocusFirst })}
+          {...(props.contextTag === undefined ? {} : { contextTag: props.contextTag })}
+        />,
+      )
+      return { onClose }
+    }
+
+    it('pre-highlights the remembered row when opened by keyboard', () => {
+      const memory = makeMemory({ 'test.list|': 'b' })
+      renderWithMemory(twoItems(), memory, { autoFocusFirst: true })
+
+      expect(activeLabel(rootMenu())).toBe('Second')
+    })
+
+    it('falls back to the first row when the remembered id is gone', () => {
+      const memory = makeMemory({ 'test.list|': 'no.such.id' })
+      renderWithMemory(twoItems(), memory, { autoFocusFirst: true })
+
+      expect(activeLabel(rootMenu())).toBe('First')
+    })
+
+    it('falls back to the first row when the remembered row turned disabled', () => {
+      const memory = makeMemory({ 'test.list|': 'a' })
+      renderWithMemory(
+        [
+          { kind: 'item', id: 'a', label: 'First', disabled: true, run: vi.fn() },
+          { kind: 'item', id: 'b', label: 'Second', run: vi.fn() },
+        ],
+        memory,
+        { autoFocusFirst: true },
+      )
+
+      expect(activeLabel(rootMenu())).toBe('Second')
+    })
+
+    it('leaves mouse-opened menus unhighlighted even when memory has a hit', () => {
+      const memory = makeMemory({ 'test.list|': 'b' })
+      renderWithMemory(twoItems(), memory)
+
+      expect(rootMenu().getAttribute('aria-activedescendant')).toBeNull()
+    })
+
+    it('scopes memory by contextTag', () => {
+      const memory = makeMemory({
+        'test.list|file': 'b',
+        'test.list|directory': 'a',
+      })
+
+      const first = renderWithMemory(twoItems(), memory, {
+        autoFocusFirst: true,
+        contextTag: 'file',
+      })
+      expect(activeLabel(rootMenu())).toBe('Second')
+      expect(first.onClose).not.toHaveBeenCalled()
+      cleanup()
+
+      renderWithMemory(twoItems(), memory, { autoFocusFirst: true, contextTag: 'directory' })
+      expect(activeLabel(rootMenu())).toBe('First')
+    })
+
+    it('records the picked item into memory (double-written under the tag-less bucket)', () => {
+      const memory = makeMemory()
+      renderWithMemory(twoItems(), memory, { autoFocusFirst: true, contextTag: 'file' })
+
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Second' }))
+      expect(memory.get('test.list', 'file')).toBe('b')
+      // The tag-less bucket powers the cross-contextTag fallback on next open.
+      expect(memory.get('test.list', undefined)).toBe('b')
+    })
+
+    it('borrows the memoryKey-level memory when the contextTag bucket is empty', () => {
+      const memory = makeMemory({ 'test.list|': 'b' })
+      renderWithMemory(twoItems(), memory, { autoFocusFirst: true, contextTag: 'directory' })
+
+      expect(activeLabel(rootMenu())).toBe('Second')
+    })
+
+    it('ignores the memoryKey-level memory when the item is absent from this menu', () => {
+      const memory = makeMemory({ 'test.list|': 'other' })
+      renderWithMemory([{ kind: 'item', id: 'only', label: 'Only', run: vi.fn() }], memory, {
+        autoFocusFirst: true,
+        contextTag: 'directory',
+      })
+
+      expect(activeLabel(rootMenu())).toBe('Only')
+    })
+
+    it('stays silent when memory is set without a memoryKey', () => {
+      const memory = makeMemory()
+      const onClose = vi.fn()
+      render(
+        <ListMenu
+          items={twoItems()}
+          anchor={{ x: 0, y: 0 }}
+          memory={memory}
+          autoFocusFirst
+          onClose={onClose}
+        />,
+      )
+
+      expect(activeLabel(rootMenu())).toBe('First')
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Second' }))
+      expect(memory.get('test.list', undefined)).toBeUndefined()
+    })
+
+    it('restores onto the nested row itself when the remembered id is in a submenu', () => {
+      const memory = makeMemory({ 'test.list|': 'nested' })
+      renderWithMemory(
+        [
+          { kind: 'item', id: 'top', label: 'Top', run: vi.fn() },
+          {
+            kind: 'submenu',
+            id: 'more',
+            label: 'More',
+            children: [{ kind: 'item', id: 'nested', label: 'Nested', run: vi.fn() }],
+          },
+        ],
+        memory,
+        { autoFocusFirst: true },
+      )
+
+      const submenu = screen.getByTestId('context-menu-submenu')
+      expect(activeLabel(submenu)).toBe('Nested')
+      expect(screen.getByRole('menuitem', { name: 'More' }).getAttribute('aria-expanded')).toBe(
+        'true',
+      )
+    })
+
+    it('runs the remembered nested item on a bare Enter', () => {
+      const run = vi.fn()
+      const memory = makeMemory({ 'test.list|': 'nested' })
+      renderWithMemory(
+        [
+          { kind: 'item', id: 'top', label: 'Top', run: vi.fn() },
+          {
+            kind: 'submenu',
+            id: 'more',
+            label: 'More',
+            children: [{ kind: 'item', id: 'nested', label: 'Nested', run }],
+          },
+        ],
+        memory,
+        { autoFocusFirst: true },
+      )
+
+      press('Enter')
+      expect(run).toHaveBeenCalledTimes(1)
+    })
+  })
 })

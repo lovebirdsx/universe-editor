@@ -1000,15 +1000,18 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
           x: e.clientX,
           y: e.clientY,
           keyboard: isKeyboardContextMenu(e),
+          contextTag: 'stash',
           items: [
             {
               kind: 'item',
+              id: 'stashApply',
               icon: 'stash',
               label: localize('gitGraph.stash.apply', 'Apply stash…'),
               run: () => runOp(GitGraphCommands.stashApply, selector),
             },
             {
               kind: 'item',
+              id: 'stashPop',
               icon: 'stash',
               label: localize('gitGraph.stash.pop', 'Pop stash…'),
               run: () => runOp(GitGraphCommands.stashPop, selector),
@@ -1016,6 +1019,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
             { kind: 'sep' },
             {
               kind: 'item',
+              id: 'stashDrop',
               icon: 'trash',
               label: localize('gitGraph.stash.drop', 'Drop stash…'),
               danger: true,
@@ -1037,6 +1041,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
             { kind: 'sep' },
             {
               kind: 'item',
+              id: 'copyHash',
               icon: 'copy',
               label: localize('gitGraph.copyHash', 'Copy commit hash'),
               run: () => void navigator.clipboard?.writeText(hash),
@@ -1048,6 +1053,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
       const items: GitGraphMenuItem[] = [
         {
           kind: 'item',
+          id: 'checkoutCommit',
           icon: 'checkout',
           label: localize('gitGraph.checkoutCommit', 'Checkout this commit…'),
           run: async () => {
@@ -1063,18 +1069,21 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
         },
         {
           kind: 'item',
+          id: 'cherryPick',
           icon: 'cherry-pick',
           label: localize('gitGraph.cherryPick', 'Cherry-pick…'),
           run: () => runOp(GitGraphCommands.cherrypick, hash),
         },
         {
           kind: 'item',
+          id: 'cherryPickToBranch',
           icon: 'cherry-pick',
           label: localize('gitGraph.cherryPickToBranch', 'Cherry-pick to branch…'),
           run: () => openCherryPickToBranch(hash),
         },
         {
           kind: 'item',
+          id: 'revert',
           icon: 'discard',
           label: localize('gitGraph.revert', 'Revert…'),
           run: () => runOp(GitGraphCommands.revert, hash),
@@ -1082,18 +1091,21 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
         { kind: 'sep' },
         {
           kind: 'item',
+          id: 'mergeCurrent',
           icon: 'merge',
           label: localize('gitGraph.mergeCurrent', 'Merge into current branch…'),
           run: () => runOp(GitGraphCommands.merge, hash),
         },
         {
           kind: 'item',
+          id: 'rebaseCurrentCommit',
           icon: 'merge',
           label: localize('gitGraph.rebaseCurrentCommit', 'Rebase current branch on this commit…'),
           run: () => runOp(GitGraphCommands.rebase, hash),
         },
         {
           kind: 'item',
+          id: 'resetCurrentCommit',
           icon: 'reset',
           label: localize('gitGraph.resetCurrentCommit', 'Reset current branch to this commit…'),
           danger: true,
@@ -1119,6 +1131,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
         { kind: 'sep' },
         {
           kind: 'item',
+          id: 'createBranchHere',
           icon: 'create-branch',
           label: localize('gitGraph.createBranchHere', 'Create branch here…'),
           run: async () => {
@@ -1130,6 +1143,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
         },
         {
           kind: 'item',
+          id: 'createTagHere',
           icon: 'tag',
           label: localize('gitGraph.createTagHere', 'Create tag here…'),
           run: async () => {
@@ -1142,12 +1156,14 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
         { kind: 'sep' },
         {
           kind: 'item',
+          id: 'copyHash',
           icon: 'copy',
           label: localize('gitGraph.copyHash', 'Copy commit hash'),
           run: () => void navigator.clipboard?.writeText(hash),
         },
         {
           kind: 'item',
+          id: 'copyMessage',
           icon: 'copy',
           label: localize('gitGraph.copyMessage', 'Copy commit message'),
           run: async () => {
@@ -1158,6 +1174,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
         { kind: 'sep' },
         {
           kind: 'item',
+          id: 'sendToAgentChat',
           icon: 'sparkle',
           label: localize('gitGraph.sendToAgentChat', 'Send to Agent Chat'),
           run: () =>
@@ -1167,7 +1184,13 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
             }),
         },
       ]
-      setMenu({ x: e.clientX, y: e.clientY, items, keyboard: isKeyboardContextMenu(e) })
+      setMenu({
+        x: e.clientX,
+        y: e.clientY,
+        items,
+        keyboard: isKeyboardContextMenu(e),
+        contextTag: 'commit',
+      })
     },
     [commands, dialog, runOp, openCherryPickToBranch, fullMessages],
   )
@@ -1179,12 +1202,14 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
       const items: GitGraphMenuItem[] = [
         {
           kind: 'item',
+          id: 'checkout',
           icon: 'checkout',
           label: localize('gitGraph.checkout', 'Checkout'),
           run: () => runOp(GitGraphCommands.checkout, name),
         },
         {
           kind: 'item',
+          id: 'copyBranchName',
           icon: 'copy',
           label: localize('gitGraph.copyBranchName', 'Copy branch name'),
           run: () => void navigator.clipboard?.writeText(name),
@@ -1192,12 +1217,14 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
         { kind: 'sep' },
         {
           kind: 'item',
+          id: 'mergeCurrent',
           icon: 'merge',
           label: localize('gitGraph.mergeCurrent', 'Merge into current branch…'),
           run: () => runOp(GitGraphCommands.merge, name),
         },
         {
           kind: 'item',
+          id: 'rebaseCurrentBranch',
           icon: 'merge',
           label: localize('gitGraph.rebaseCurrentBranch', 'Rebase current branch on branch…'),
           run: () => runOp(GitGraphCommands.rebase, name),
@@ -1205,6 +1232,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
         { kind: 'sep' },
         {
           kind: 'item',
+          id: 'rename',
           icon: 'edit',
           label: localize('gitGraph.rename', 'Rename…'),
           run: async () => {
@@ -1219,18 +1247,21 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
         },
         {
           kind: 'item',
+          id: 'pull',
           icon: 'pull',
           label: localize('gitGraph.pull', 'Pull'),
           run: () => runOp(GitGraphCommands.pull, name, 'default'),
         },
         {
           kind: 'item',
+          id: 'pullRebase',
           icon: 'pull',
           label: localize('gitGraph.pullRebase', 'Pull (Rebase)'),
           run: () => runOp(GitGraphCommands.pull, name, 'rebase'),
         },
         {
           kind: 'item',
+          id: 'pullAutostash',
           icon: 'pull',
           label: localize('gitGraph.pullAutostash', 'Pull (Autostash)'),
           run: () => runOp(GitGraphCommands.pull, name, 'autostash'),
@@ -1238,12 +1269,14 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
         { kind: 'sep' },
         {
           kind: 'item',
+          id: 'push',
           icon: 'push',
           label: localize('gitGraph.push', 'Push…'),
           run: () => runOp(GitGraphCommands.pushBranch, name, 'origin'),
         },
         {
           kind: 'item',
+          id: 'pushForce',
           icon: 'push',
           label: localize('gitGraph.pushForce', 'Push (Force)…'),
           danger: true,
@@ -1265,6 +1298,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
         { kind: 'sep' },
         {
           kind: 'item',
+          id: 'delete',
           icon: 'trash',
           label: localize('common.deleteWithEllipsis', 'Delete…'),
           danger: true,
@@ -1286,7 +1320,13 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
           },
         },
       ]
-      setMenu({ x: e.clientX, y: e.clientY, items, keyboard: isKeyboardContextMenu(e) })
+      setMenu({
+        x: e.clientX,
+        y: e.clientY,
+        items,
+        keyboard: isKeyboardContextMenu(e),
+        contextTag: 'branch',
+      })
     },
     [dialog, runOp],
   )
@@ -1298,6 +1338,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
       const items: GitGraphMenuItem[] = [
         {
           kind: 'item',
+          id: 'checkoutLocalBranch',
           icon: 'checkout',
           label: localize('gitGraph.checkoutLocalBranch', 'Checkout as local branch…'),
           run: async () => {
@@ -1344,6 +1385,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
         },
         {
           kind: 'item',
+          id: 'copyBranchName',
           icon: 'copy',
           label: localize('gitGraph.copyBranchName', 'Copy branch name'),
           run: () => void navigator.clipboard?.writeText(name),
@@ -1351,6 +1393,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
         { kind: 'sep' },
         {
           kind: 'item',
+          id: 'deleteRemoteBranch',
           icon: 'trash',
           label: localize('gitGraph.deleteRemoteBranch', 'Delete remote branch…'),
           danger: true,
@@ -1372,7 +1415,13 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
           },
         },
       ]
-      setMenu({ x: e.clientX, y: e.clientY, items, keyboard: isKeyboardContextMenu(e) })
+      setMenu({
+        x: e.clientX,
+        y: e.clientY,
+        items,
+        keyboard: isKeyboardContextMenu(e),
+        contextTag: 'remote',
+      })
     },
     [commands, dialog, runOp],
   )
@@ -1384,6 +1433,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
       const items: GitGraphMenuItem[] = [
         {
           kind: 'item',
+          id: 'pushTag',
           icon: 'push',
           label: localize('gitGraph.pushTag', 'Push tag…'),
           run: () => runOp(GitGraphCommands.pushTag, name, 'origin'),
@@ -1391,6 +1441,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
         { kind: 'sep' },
         {
           kind: 'item',
+          id: 'deleteTag',
           icon: 'trash',
           label: localize('gitGraph.deleteTag', 'Delete tag…'),
           danger: true,
@@ -1404,7 +1455,13 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
           },
         },
       ]
-      setMenu({ x: e.clientX, y: e.clientY, items, keyboard: isKeyboardContextMenu(e) })
+      setMenu({
+        x: e.clientX,
+        y: e.clientY,
+        items,
+        keyboard: isKeyboardContextMenu(e),
+        contextTag: 'tag',
+      })
     },
     [dialog, runOp],
   )
@@ -1512,6 +1569,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
       if (!isCurrent) {
         items.push({
           kind: 'item',
+          id: 'open',
           icon: 'git-worktree',
           label: localize('gitGraph.worktree.open', 'Open worktree'),
           run: () => void commands.executeCommand(GitGraphCommands.openWorktree, path, false),
@@ -1519,6 +1577,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
       }
       items.push({
         kind: 'item',
+        id: 'openNewWindow',
         icon: 'empty-window',
         label: localize('gitGraph.worktree.openNewWindow', 'Open worktree in new window'),
         run: () => void commands.executeCommand(GitGraphCommands.openWorktree, path, true),
@@ -1527,6 +1586,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
         { kind: 'sep' },
         {
           kind: 'item',
+          id: 'copyPath',
           icon: 'copy',
           label: localize('gitGraph.worktree.copyPath', 'Copy worktree path'),
           run: () => void navigator.clipboard?.writeText(path),
@@ -1542,6 +1602,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
           { kind: 'sep' },
           {
             kind: 'item',
+            id: 'syncToThis',
             icon: 'sync',
             label: localize('gitGraph.worktree.syncToThis', 'Sync worktrees to {branch}…', {
               branch,
@@ -1551,6 +1612,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
           },
           {
             kind: 'item',
+            id: 'forceSyncToThis',
             icon: 'sync',
             label: localize(
               'gitGraph.worktree.forceSyncToThis',
@@ -1570,6 +1632,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
           { kind: 'sep' },
           {
             kind: 'item',
+            id: 'delete',
             icon: 'trash',
             label: localize('gitGraph.worktree.delete', 'Delete worktree…'),
             danger: true,
@@ -1591,7 +1654,13 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
           },
         )
       }
-      setMenu({ x: e.clientX, y: e.clientY, items, keyboard: isKeyboardContextMenu(e) })
+      setMenu({
+        x: e.clientX,
+        y: e.clientY,
+        items,
+        keyboard: isKeyboardContextMenu(e),
+        contextTag: 'worktree',
+      })
     },
     [allWorktrees, commands, dialog, runOp],
   )
@@ -1617,8 +1686,10 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
       x: e.clientX,
       y: e.clientY,
       keyboard,
+      contextTag: 'overflow',
       items: entries.map((entry) => ({
         kind: 'item' as const,
+        id: entry.key,
         label: entry.menuLabel,
         icon: entry.menuIcon,
         run: () => entry.onMenu(anchor),

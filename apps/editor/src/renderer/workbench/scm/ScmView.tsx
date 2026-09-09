@@ -482,6 +482,7 @@ const ScmFileRow = memo(function ScmFileRow({
       scope: rowScope,
       run,
       keyboard: isKeyboardContextMenu(e),
+      contextTag: 'file',
     })
   }
   const openChange = (): void => {
@@ -615,6 +616,7 @@ const ScmFolderRow = memo(function ScmFolderRow({
       scope: folderScope,
       run,
       keyboard: isKeyboardContextMenu(e),
+      contextTag: 'directory',
     })
   }
 
@@ -724,6 +726,7 @@ const ScmGroupRow = memo(function ScmGroupRow({
       scope: groupScope,
       run: runGroup,
       keyboard: isKeyboardContextMenu(e),
+      contextTag: 'group',
     })
   }
 

@@ -14,6 +14,7 @@
 import { ListMenu, type ListMenuEntry } from '@universe-editor/workbench-ui'
 import { localize } from '@universe-editor/platform'
 import { renderMenuIcon } from '../icons/menuIcon.js'
+import { useContextMenuMemory } from '../contextMenu/useContextMenuMemory.js'
 import {
   EnablementState,
   type IExtensionEntry,
@@ -42,12 +43,14 @@ function buildItems(entry: IExtensionEntry, h: ExtensionActionsMenuHandlers): Li
   const items: ListMenuEntry[] = []
   const viewDetails: ListMenuEntry = {
     kind: 'item',
+    id: 'viewDetails',
     icon: 'eye',
     label: localize('extensions.viewDetails', 'View Details'),
     run: () => h.onOpen(entry),
   }
   const uninstall: ListMenuEntry = {
     kind: 'item',
+    id: 'uninstall',
     icon: 'trash',
     label: localize('extensions.uninstall', 'Uninstall'),
     danger: true,
@@ -65,6 +68,7 @@ function buildItems(entry: IExtensionEntry, h: ExtensionActionsMenuHandlers): Li
     return [
       {
         kind: 'item',
+        id: 'installInRemote',
         icon: 'remote',
         label: localize('extensions.installInRemote', 'Install in Remote'),
         run: () => h.onInstallInRemote(entry),
@@ -84,6 +88,7 @@ function buildItems(entry: IExtensionEntry, h: ExtensionActionsMenuHandlers): Li
     if (entry.enabled) {
       items.push({
         kind: 'item',
+        id: 'disable',
         icon: 'disable',
         label: localize('extensions.disable', 'Disable'),
         run: set(EnablementState.DisabledGlobally),
@@ -91,6 +96,7 @@ function buildItems(entry: IExtensionEntry, h: ExtensionActionsMenuHandlers): Li
       if (h.hasWorkspace) {
         items.push({
           kind: 'item',
+          id: 'disableWorkspace',
           icon: 'disable',
           label: localize('extensions.disableWorkspace', 'Disable (Workspace)'),
           run: set(EnablementState.DisabledWorkspace),
@@ -99,6 +105,7 @@ function buildItems(entry: IExtensionEntry, h: ExtensionActionsMenuHandlers): Li
     } else {
       items.push({
         kind: 'item',
+        id: 'enable',
         icon: 'check',
         label: localize('extensions.enable', 'Enable'),
         run: set(EnablementState.EnabledGlobally),
@@ -106,6 +113,7 @@ function buildItems(entry: IExtensionEntry, h: ExtensionActionsMenuHandlers): Li
       if (h.hasWorkspace) {
         items.push({
           kind: 'item',
+          id: 'enableWorkspace',
           icon: 'check',
           label: localize('extensions.enableWorkspace', 'Enable (Workspace)'),
           run: set(EnablementState.EnabledWorkspace),
@@ -129,12 +137,16 @@ export function ExtensionActionsMenu({
   handlers: ExtensionActionsMenuHandlers
   onClose: () => void
 }) {
+  const memory = useContextMenuMemory()
+
   return (
     <ListMenu
       items={buildItems(state.entry, handlers)}
       anchor={{ x: state.x, y: state.y }}
       renderIcon={renderMenuIcon}
       autoFocusFirst={state.keyboard === true}
+      {...(memory ? { memory } : {})}
+      memoryKey="extensions.actions"
       onClose={onClose}
     />
   )

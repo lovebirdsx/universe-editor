@@ -834,6 +834,7 @@ function ChatScroll({
       y: e.clientY,
       args: [{ sessionId: session.id, ...(target ? { target } : {}) }],
       keyboard: isKeyboardContextMenu(e),
+      ...(target !== undefined ? { contextTag: target.kind } : {}),
     })
   }
 

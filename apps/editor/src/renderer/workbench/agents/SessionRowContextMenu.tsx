@@ -10,10 +10,14 @@
 import { useMemo } from 'react'
 import { ListMenu, type ListMenuEntry } from '@universe-editor/workbench-ui'
 import { renderMenuIcon } from '../icons/menuIcon.js'
+import { useContextMenuMemory } from '../contextMenu/useContextMenuMemory.js'
 
 export type SessionRowMenuItem =
   | {
       readonly kind: 'item'
+      /** Stable identity for the "last executed" memory — the default
+       *  label+position fallback shifts the moment the item set changes shape. */
+      readonly id: string
       readonly label: string
       readonly icon?: string
       readonly danger?: boolean
@@ -38,6 +42,7 @@ export function SessionRowContextMenu({
   state: SessionRowContextMenuState
   onClose: () => void
 }) {
+  const memory = useContextMenuMemory()
   const items = useMemo<readonly ListMenuEntry[]>(
     () =>
       state.items.map(
@@ -46,6 +51,7 @@ export function SessionRowContextMenu({
             ? { kind: 'separator' }
             : {
                 kind: 'item',
+                id: item.id,
                 label: item.label,
                 icon: item.icon,
                 danger: item.danger === true,
@@ -61,6 +67,8 @@ export function SessionRowContextMenu({
       items={items}
       anchor={{ x: state.x, y: state.y }}
       autoFocusFirst={state.keyboard}
+      {...(memory ? { memory } : {})}
+      memoryKey="agents.sessionRow"
       renderIcon={renderMenuIcon}
       onClose={onClose}
     />

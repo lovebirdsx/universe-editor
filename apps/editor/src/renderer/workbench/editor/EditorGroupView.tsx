@@ -19,6 +19,7 @@ import {
   useState,
   type ComponentType,
   type DragEvent as ReactDragEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from 'react'
 import {
@@ -50,7 +51,11 @@ import {
 } from '@universe-editor/platform'
 import {
   DragSessionContext,
+  dispatchKeyboardContextMenu,
   dragContainsResources,
+  isContextMenuKey,
+  isKeyboardContextMenu,
+  isKeyupContextMenuSupplement,
   useHover,
   useDragHandle,
   useDropTarget,
@@ -101,6 +106,8 @@ interface TabMenuState {
   readonly editorId: string
   readonly editorType: string
   readonly resource: URI | null
+  /** Raised with the ContextMenu key — the menu opens on its first entry. */
+  readonly keyboard: boolean
 }
 
 export interface EditorGroupViewProps {
@@ -289,6 +296,7 @@ const EditorTab = memo(function EditorTab({
   onPin,
   onClose,
   onContextMenu,
+  onMenuKeyDown,
   groupId,
   showDropIndicator,
 }: {
@@ -301,6 +309,7 @@ const EditorTab = memo(function EditorTab({
   onPin: () => void
   onClose: () => void
   onContextMenu: (e: ReactMouseEvent) => void
+  onMenuKeyDown: (e: ReactKeyboardEvent) => void
   groupId: number
   showDropIndicator: boolean
 }) {
@@ -386,6 +395,11 @@ const EditorTab = memo(function EditorTab({
       }}
       role="tab"
       aria-selected={isActive}
+      // Roving tabindex: only the active tab is a Tab stop (a stop per tab
+      // would bury the editor behind the whole strip); the ContextMenu key
+      // wiring below therefore only ever fires from the focused active tab.
+      tabIndex={isActive ? 0 : -1}
+      onKeyDown={onMenuKeyDown}
       data-drop-before={showDropIndicator ? 'true' : undefined}
       {...hoverProps}
       {...dragHandleProps}
@@ -922,6 +936,10 @@ export const EditorGroupView = memo(function EditorGroupView({
                 onClose={() => void closeEditorWithConfirm(e, group, dialogService)}
                 onContextMenu={(ev) => {
                   ev.preventDefault()
+                  // We opened the menu from keydown; swallow Chromium's keyup
+                  // replay or the menu re-opens at the tab center with the
+                  // keyboard flag flipped off.
+                  if (isKeyupContextMenuSupplement(ev)) return
                   setTabMenu({
                     x: ev.clientX,
                     y: ev.clientY,
@@ -929,7 +947,16 @@ export const EditorGroupView = memo(function EditorGroupView({
                     editorId: e.id,
                     editorType: e.typeId,
                     resource: tabContextMenuResource(e),
+                    keyboard: isKeyboardContextMenu(ev),
                   })
+                }}
+                onMenuKeyDown={(ev) => {
+                  if (!isContextMenuKey(ev) || ev.repeat) return
+                  ev.preventDefault()
+                  ev.stopPropagation()
+                  // The synthetic event bubbles into onContextMenu above, so
+                  // the keyboard mark rides along with no duplicate logic.
+                  dispatchKeyboardContextMenu(ev.currentTarget as HTMLElement, true)
                 }}
               />
             ))}
@@ -995,6 +1022,7 @@ export const EditorGroupView = memo(function EditorGroupView({
           editorId={tabMenu.editorId}
           editorType={tabMenu.editorType}
           resource={tabMenu.resource}
+          keyboard={tabMenu.keyboard}
           commandService={commandService}
           contextKeyService={contextKeyService}
           onClose={() => setTabMenu(null)}

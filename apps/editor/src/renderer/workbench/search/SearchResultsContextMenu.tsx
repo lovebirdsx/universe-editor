@@ -10,8 +10,12 @@
 import { useMemo } from 'react'
 import { ListMenu, type ListMenuEntry } from '@universe-editor/workbench-ui'
 import { renderMenuIcon } from '../icons/menuIcon.js'
+import { useContextMenuMemory } from '../contextMenu/useContextMenuMemory.js'
 
 export interface SearchMenuItem {
+  /** Stable identity for the "last executed" memory — the default
+   *  label+position fallback shifts the moment the item set changes shape. */
+  readonly id: string
   readonly label: string
   readonly icon?: string
   readonly run: () => void
@@ -32,10 +36,12 @@ export function SearchResultsContextMenu({
   state: SearchContextMenuState
   onClose: () => void
 }) {
+  const memory = useContextMenuMemory()
   const items = useMemo<readonly ListMenuEntry[]>(
     () =>
       state.items.map((item) => ({
         kind: 'item',
+        id: item.id,
         label: item.label,
         icon: item.icon,
         run: item.run,
@@ -48,6 +54,8 @@ export function SearchResultsContextMenu({
       items={items}
       anchor={{ x: state.x, y: state.y }}
       autoFocusFirst={state.keyboard}
+      {...(memory ? { memory } : {})}
+      memoryKey="search.results"
       renderIcon={renderMenuIcon}
       onClose={onClose}
     />

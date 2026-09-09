@@ -46,6 +46,7 @@ import { IExtensionHostClientService } from '../../services/extensions/Extension
 import { ITreeViewsService } from '../../services/extensions/TreeViewsService.js'
 import { resolveIcon } from '../icons/icon-map.js'
 import { renderMenuIcon } from '../icons/menuIcon.js'
+import { useContextMenuMemory } from '../contextMenu/useContextMenuMemory.js'
 import type { IViewComponentProps } from '../../services/views/ViewComponentRegistry.js'
 import styles from './ExtensionTreeView.module.css'
 
@@ -214,6 +215,8 @@ export function ExtensionTreeView({ viewId }: IViewComponentProps) {
     })
   }, [])
 
+  const memory = useContextMenuMemory()
+
   const ariaLabel = useMemo(
     () => localize('extensionTreeView.label', 'Extension view: {viewId}', { viewId: viewId ?? '' }),
     [viewId],
@@ -314,6 +317,12 @@ export function ExtensionTreeView({ viewId }: IViewComponentProps) {
           contextKeyService={menu.scoped}
           renderIcon={renderMenuIcon}
           autoFocusFirst={menu.keyboard}
+          {...(memory ? { memory } : {})}
+          // ViewItemContext is shared by every extension view, so the exact-tag
+          // bucket folds the viewId in — a pick in one view never collides with
+          // the same-named contextValue of another. (The documented tag-less
+          // fallback bucket stays shared on purpose.)
+          contextTag={`${viewId}|${menu.item.contextValue ?? ''}`}
           onClose={closeMenu}
         />
       )}

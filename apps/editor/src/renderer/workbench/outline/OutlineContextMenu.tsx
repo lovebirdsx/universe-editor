@@ -10,10 +10,14 @@
 import { useMemo } from 'react'
 import { ListMenu, type ListMenuEntry } from '@universe-editor/workbench-ui'
 import { renderMenuIcon } from '../icons/menuIcon.js'
+import { useContextMenuMemory } from '../contextMenu/useContextMenuMemory.js'
 
 export type OutlineMenuItem =
   | {
       readonly kind: 'item'
+      /** Stable identity for the "last executed" memory — the default
+       *  label+position fallback shifts the moment the item set changes shape. */
+      readonly id: string
       readonly label: string
       readonly icon?: string
       readonly disabled?: boolean
@@ -22,6 +26,7 @@ export type OutlineMenuItem =
   | { readonly kind: 'sep' }
   | {
       readonly kind: 'submenu'
+      readonly id: string
       readonly label: string
       readonly icon?: string
       readonly children: readonly OutlineMenuItem[]
@@ -41,6 +46,7 @@ function toEntries(items: readonly OutlineMenuItem[]): ListMenuEntry[] {
     if (item.kind === 'submenu') {
       return {
         kind: 'submenu',
+        id: item.id,
         label: item.label,
         icon: item.icon,
         children: toEntries(item.children),
@@ -48,6 +54,7 @@ function toEntries(items: readonly OutlineMenuItem[]): ListMenuEntry[] {
     }
     return {
       kind: 'item',
+      id: item.id,
       label: item.label,
       icon: item.icon,
       disabled: item.disabled === true,
@@ -63,6 +70,7 @@ export function OutlineContextMenu({
   state: OutlineContextMenuState
   onClose: () => void
 }) {
+  const memory = useContextMenuMemory()
   const items = useMemo(() => toEntries(state.items), [state.items])
 
   return (
@@ -70,6 +78,8 @@ export function OutlineContextMenu({
       items={items}
       anchor={{ x: state.x, y: state.y }}
       autoFocusFirst={state.keyboard}
+      {...(memory ? { memory } : {})}
+      memoryKey="outline"
       renderIcon={renderMenuIcon}
       onClose={onClose}
     />

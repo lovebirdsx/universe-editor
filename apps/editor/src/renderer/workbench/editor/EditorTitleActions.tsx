@@ -24,6 +24,7 @@ import { ContextMenu } from '@universe-editor/workbench-ui'
 import { MoreHorizontal } from 'lucide-react'
 import { useService } from '../useService.js'
 import { renderMenuIcon } from '../icons/menuIcon.js'
+import { useContextMenuMemory } from '../contextMenu/useContextMenuMemory.js'
 import { ViewTitleActions } from '../viewContainerHeader/ViewTitleActions.js'
 import { useEditorGroupScopedContextKey } from './useEditorGroupScopedContextKey.js'
 import styles from '../viewContainerHeader/ViewTitleActions.module.css'
@@ -59,6 +60,7 @@ export function EditorTitleActions({ group }: { group: IEditorGroup }) {
   const hasOverflow = useHasOverflow(ctx)
   const btnRef = useRef<HTMLButtonElement>(null)
   const [menu, setMenu] = useState<{ x: number; y: number; keyboard: boolean } | null>(null)
+  const memory = useContextMenuMemory()
 
   const label = localize('editorTitle.moreActions', 'More Actions…')
 
@@ -94,6 +96,7 @@ export function EditorTitleActions({ group }: { group: IEditorGroup }) {
           anchor={menu}
           args={[{ groupId: group.id }]}
           autoFocusFirst={menu.keyboard}
+          {...(memory ? { memory } : {})}
           commandService={commandService}
           contextKeyService={ctx}
           groupFilter={(g) => g !== NAVIGATION_GROUP}

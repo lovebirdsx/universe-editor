@@ -77,3 +77,34 @@ export function stepIndex(
   }
   return undefined
 }
+
+/**
+ * Resolve a row id to its index path from the root (length 1 = a top-level
+ * row), descending into submenus. Only enabled item rows match — a remembered
+ * id that now sits on a disabled or vanished row resolves to `undefined`, so
+ * the caller falls back to its default opening highlight. Shared by both menu
+ * flavours' "last executed" restore.
+ */
+export function findRowPathById(
+  rows: readonly RowModel[],
+  id: string,
+): readonly number[] | undefined {
+  const findAtLevel = (
+    levelRows: readonly RowModel[],
+    trail: readonly number[],
+  ): readonly number[] | undefined => {
+    for (let i = 0; i < levelRows.length; i++) {
+      const row = levelRows[i]
+      if (row === undefined) continue
+      if (row.kind === 'item' && row.id === id && row.disabled !== true) {
+        return [...trail, i]
+      }
+      if (row.kind === 'submenu') {
+        const nested = findAtLevel(row.children, [...trail, i])
+        if (nested !== undefined) return nested
+      }
+    }
+    return undefined
+  }
+  return findAtLevel(rows, [])
+}

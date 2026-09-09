@@ -14,10 +14,14 @@
 import { useMemo } from 'react'
 import { ListMenu, type ListMenuEntry } from '@universe-editor/workbench-ui'
 import { renderMenuIcon } from '../icons/menuIcon.js'
+import { useContextMenuMemory } from '../contextMenu/useContextMenuMemory.js'
 
 export type GitGraphMenuItem =
   | {
       readonly kind: 'item'
+      /** Stable identity for the "last executed" memory — the default
+       *  label+position fallback shifts the moment the item set changes shape. */
+      readonly id: string
       readonly label: string
       readonly icon?: string
       readonly danger?: boolean
@@ -31,6 +35,9 @@ export interface GitGraphMenuState {
   readonly items: GitGraphMenuItem[]
   /** Raised with the keyboard, so the menu opens with the first entry highlighted. */
   readonly keyboard: boolean
+  /** Coarse shape of the clicked target ('commit' | 'stash' | 'branch' | …): the
+   *  buckets keep one ref kind's history from restoring into another's menu. */
+  readonly contextTag: string
 }
 
 export function GitGraphContextMenu({
@@ -40,6 +47,7 @@ export function GitGraphContextMenu({
   state: GitGraphMenuState
   onClose: () => void
 }) {
+  const memory = useContextMenuMemory()
   const items = useMemo<readonly ListMenuEntry[]>(
     () =>
       state.items.map((item) =>
@@ -47,6 +55,7 @@ export function GitGraphContextMenu({
           ? { kind: 'separator' }
           : {
               kind: 'item',
+              id: item.id,
               label: item.label,
               icon: item.icon,
               danger: item.danger === true,
@@ -61,6 +70,9 @@ export function GitGraphContextMenu({
       items={items}
       anchor={{ x: state.x, y: state.y }}
       autoFocusFirst={state.keyboard}
+      {...(memory ? { memory } : {})}
+      memoryKey="gitGraph"
+      contextTag={state.contextTag}
       renderIcon={renderMenuIcon}
       onClose={onClose}
     />

@@ -6,6 +6,7 @@
 
 import { type ICommandService, type IContextKeyService, MenuId } from '@universe-editor/platform'
 import { ContextMenu } from '@universe-editor/workbench-ui'
+import { useContextMenuMemory } from '../contextMenu/useContextMenuMemory.js'
 import { renderMenuIcon } from '../icons/menuIcon.js'
 
 export interface AgentChatContextMenuState {
@@ -16,6 +17,9 @@ export interface AgentChatContextMenuState {
    *  its first row highlighted (VSCode parity), since a keyboard user has no
    *  pointer to aim. */
   readonly keyboard?: boolean
+  /** Coarse target shape (`image` / `path` / `text` / chip kind) the "last
+   *  executed" memory is bucketed under — see ContextMenu's `contextTag`. */
+  readonly contextTag?: string
 }
 
 interface Props {
@@ -35,6 +39,8 @@ export function AgentChatContextMenu({
   menuId,
   onClose,
 }: Props) {
+  const memory = useContextMenuMemory()
+
   return (
     <ContextMenu
       menuId={menuId ?? MenuId.AcpChatContext}
@@ -43,6 +49,8 @@ export function AgentChatContextMenu({
       commandService={commandService}
       {...(contextKeyService !== undefined ? { contextKeyService } : {})}
       autoFocusFirst={state.keyboard ?? false}
+      {...(memory ? { memory } : {})}
+      {...(state.contextTag !== undefined ? { contextTag: state.contextTag } : {})}
       renderIcon={renderMenuIcon}
       onClose={onClose}
     />

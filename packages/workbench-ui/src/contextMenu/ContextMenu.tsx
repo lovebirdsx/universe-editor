@@ -10,24 +10,27 @@ import {
 import type { ContextViewAnchor } from '../contextView/IContextViewService.js'
 import { AnchoredSurface } from '../overlay/AnchoredSurface.js'
 import type { RowModel } from './menuModel.js'
+import { findRowPathById } from './menuModel.js'
 import { MenuRows } from './menuRows.js'
 import { useMenuNavigation } from './useMenuNavigation.js'
 
 /**
- * Sync, in-memory view of "the last command this menu ran, per context tag".
+ * Sync, in-memory view of "the last item this menu ran, per context tag".
  * Implementations bridge to whatever persistence they like (the editor caches
  * `IStorageService` in memory and writes through in the background) — reads
  * must be synchronous because the opening highlight is chosen in a `useState`
  * initializer with no room for a round-trip.
  *
- * Lookup is two-level: `ContextMenu` first asks for `menuId + contextTag`,
- * then falls back to `menuId + undefined` (the tag-less bucket). For the
- * fallback to ever hit, implementations should therefore also record each
- * pick under `undefined` — see `ContextMenu`'s `memory` prop.
+ * `scope` identifies the menu: `ContextMenu` passes its `MenuId` string,
+ * `ListMenu` passes its caller-supplied `memoryKey`. Lookup is two-level: the
+ * menu first asks for `scope + contextTag`, then falls back to
+ * `scope + undefined` (the tag-less bucket). For the fallback to ever hit,
+ * implementations should therefore also record each pick under `undefined` —
+ * see the `memory` prop on `ContextMenu`/`ListMenu`.
  */
 export interface IContextMenuMemory {
-  get(menuId: MenuId, contextTag: string | undefined): string | undefined
-  set(menuId: MenuId, contextTag: string | undefined, commandId: string): void
+  get(scope: string, contextTag: string | undefined): string | undefined
+  set(scope: string, contextTag: string | undefined, itemId: string): void
 }
 
 export interface ContextMenuProps {
@@ -115,8 +118,8 @@ export function ContextMenu({
       // onto this row. Fire-and-forget: the command's success is unknown and
       // irrelevant — the user picked it, that is the signal. Double-write:
       // the tag-less bucket powers the cross-tag fallback (see `memory`).
-      memory?.set(menuId, contextTag, commandId)
-      if (contextTag !== undefined) memory?.set(menuId, undefined, commandId)
+      memory?.set(String(menuId), contextTag, commandId)
+      if (contextTag !== undefined) memory?.set(String(menuId), undefined, commandId)
       onClose()
       if (executeCommand) executeCommand(commandId)
       else void commandService.executeCommand(commandId, ...args)
@@ -194,28 +197,12 @@ export function ContextMenu({
   // Enter runs it straight away.
   const initialActivePath = useMemo((): readonly number[] | undefined => {
     if (!autoFocusFirst || memory === undefined) return undefined
+    const scope = String(menuId)
     const remembered =
-      memory.get(menuId, contextTag) ??
-      (contextTag === undefined ? undefined : memory.get(menuId, undefined))
+      memory.get(scope, contextTag) ??
+      (contextTag === undefined ? undefined : memory.get(scope, undefined))
     if (remembered === undefined) return undefined
-    const findAtLevel = (
-      levelRows: readonly RowModel[],
-      trail: readonly number[],
-    ): readonly number[] | undefined => {
-      for (let i = 0; i < levelRows.length; i++) {
-        const row = levelRows[i]
-        if (row === undefined) continue
-        if (row.kind === 'item' && row.id === remembered && row.disabled !== true) {
-          return [...trail, i]
-        }
-        if (row.kind === 'submenu') {
-          const nested = findAtLevel(row.children, [...trail, i])
-          if (nested !== undefined) return nested
-        }
-      }
-      return undefined
-    }
-    return findAtLevel(rows, [])
+    return findRowPathById(rows, remembered)
   }, [autoFocusFirst, memory, menuId, contextTag, rows])
   const { state, onRowEnter, onCancelClose, onEscape } = useMenuNavigation(
     rows,

@@ -322,6 +322,7 @@ export function OutlineView() {
       return [
         {
           kind: 'item',
+          id: 'goToSymbol',
           icon: 'go-to-file',
           label: localize('outline.goToSymbol', 'Go to Symbol'),
           run: () => outlineService.revealSymbol(symbol),
@@ -329,6 +330,7 @@ export function OutlineView() {
         { kind: 'sep' },
         {
           kind: 'item',
+          id: 'goToDefinition',
           icon: 'go-to-definition',
           label: localize('outline.goToDefinition', 'Go to Definition'),
           disabled: !isFile,
@@ -336,6 +338,7 @@ export function OutlineView() {
         },
         {
           kind: 'item',
+          id: 'goToTypeDefinition',
           icon: 'go-to-definition',
           label: localize('outline.goToTypeDefinition', 'Go to Type Definition'),
           disabled: !isFile,
@@ -343,6 +346,7 @@ export function OutlineView() {
         },
         {
           kind: 'item',
+          id: 'goToImplementation',
           icon: 'go-to-definition',
           label: localize('outline.goToImplementation', 'Go to Implementations'),
           disabled: !isFile,
@@ -350,6 +354,7 @@ export function OutlineView() {
         },
         {
           kind: 'item',
+          id: 'goToReferences',
           icon: 'go-to-file',
           label: localize('outline.goToReferences', 'Go to References'),
           disabled: !isFile,
@@ -372,6 +377,7 @@ export function OutlineView() {
           model.setExpansion(collectExpandableIds([node]).map((id) => [id, value] as const))
         items.push({
           kind: 'item',
+          id: expanded ? 'collapse' : 'expand',
           icon: expanded ? 'collapse-all' : 'expand-all',
           label: expanded
             ? localize('outline.collapse', 'Collapse')
@@ -380,6 +386,7 @@ export function OutlineView() {
         })
         items.push({
           kind: 'item',
+          id: expanded ? 'collapseSubtree' : 'expandSubtree',
           icon: expanded ? 'collapse-all' : 'expand-all',
           label: expanded
             ? localize('outline.collapseSubtree', 'Collapse Subtree')
@@ -390,12 +397,14 @@ export function OutlineView() {
       }
       items.push({
         kind: 'item',
+        id: 'expandAll',
         icon: 'expand-all',
         label: localize('outline.expandAll', 'Expand All'),
         run: () => outlineViewState.requestExpandAll(),
       })
       items.push({
         kind: 'item',
+        id: 'collapseAll',
         icon: 'collapse-all',
         label: localize('outline.collapseAll', 'Collapse All'),
         run: () => outlineViewState.requestCollapseAll(),
@@ -403,6 +412,7 @@ export function OutlineView() {
       items.push({ kind: 'sep' })
       items.push({
         kind: 'submenu',
+        id: 'goTo',
         icon: 'go-to-file',
         label: localize('outline.goTo', 'Go to'),
         children: buildGotoItems(node.symbol),
@@ -421,12 +431,14 @@ export function OutlineView() {
       items: [
         {
           kind: 'item',
+          id: 'expandAll',
           icon: 'expand-all',
           label: localize('outline.expandAll', 'Expand All'),
           run: () => outlineViewState.requestExpandAll(),
         },
         {
           kind: 'item',
+          id: 'collapseAll',
           icon: 'collapse-all',
           label: localize('outline.collapseAll', 'Collapse All'),
           run: () => outlineViewState.requestCollapseAll(),

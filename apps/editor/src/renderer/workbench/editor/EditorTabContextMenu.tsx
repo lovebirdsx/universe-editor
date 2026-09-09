@@ -17,6 +17,7 @@ import {
 } from '@universe-editor/platform'
 import { ContextMenu } from '@universe-editor/workbench-ui'
 import { renderMenuIcon } from '../icons/menuIcon.js'
+import { useContextMenuMemory } from '../contextMenu/useContextMenuMemory.js'
 import { useScopedContextKey } from '../useScopedContextKey.js'
 
 interface Props {
@@ -26,6 +27,8 @@ interface Props {
   readonly editorId: string
   readonly editorType: string
   readonly resource: URI | null
+  /** Raised with the ContextMenu key — the menu opens on its first entry. */
+  readonly keyboard: boolean
   readonly commandService: ICommandService
   readonly contextKeyService: IContextKeyService
   readonly onClose: () => void
@@ -38,6 +41,7 @@ export function EditorTabContextMenu({
   editorId,
   editorType,
   resource,
+  keyboard,
   commandService,
   contextKeyService,
   onClose,
@@ -47,6 +51,7 @@ export function EditorTabContextMenu({
     activeEditorType: editorType,
     resourceScheme,
   })
+  const memory = useContextMenuMemory()
 
   const args = useMemo(
     () => [{ groupId, editorId, resource: resource?.toJSON() ?? undefined }],
@@ -61,6 +66,11 @@ export function EditorTabContextMenu({
       commandService={commandService}
       contextKeyService={scopedContext}
       renderIcon={renderMenuIcon}
+      autoFocusFirst={keyboard}
+      {...(memory ? { memory } : {})}
+      // Text / diff / settings tabs expose different command sets; bucket the
+      // memory per type so a diff tab doesn't restore onto a text-only entry.
+      contextTag={editorType}
       onClose={onClose}
     />
   )

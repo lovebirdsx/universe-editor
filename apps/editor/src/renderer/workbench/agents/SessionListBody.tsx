@@ -897,6 +897,7 @@ export function SessionListBody({
               if (!isPending) {
                 items.push({
                   kind: 'item',
+                  id: entry.pinned === true ? 'unpin' : 'pin',
                   icon: entry.pinned === true ? 'pin-off' : 'pin',
                   label:
                     entry.pinned === true
@@ -906,6 +907,7 @@ export function SessionListBody({
                 })
                 items.push({
                   kind: 'item',
+                  id: entry.archived === true ? 'unarchive' : 'archive',
                   icon: entry.archived === true ? 'archive-restore' : 'archive',
                   label:
                     entry.archived === true
@@ -916,6 +918,7 @@ export function SessionListBody({
                 if (onRename) {
                   items.push({
                     kind: 'item',
+                    id: 'rename',
                     icon: 'edit',
                     label: localize('acp.sessions.renameMenu', 'Rename Session'),
                     run: onRename,
@@ -923,6 +926,7 @@ export function SessionListBody({
                 }
                 items.push({
                   kind: 'item',
+                  id: 'reveal',
                   icon: 'reveal',
                   label: localize('acp.sessions.revealTranscript', 'Open Session Location'),
                   disabled: !hasTranscript || revealUnsupported,
@@ -932,6 +936,7 @@ export function SessionListBody({
               }
               items.push({
                 kind: 'item',
+                id: 'remove',
                 icon: 'trash',
                 label: localize('acp.sessions.removeMenu', 'Delete Session'),
                 danger: true,

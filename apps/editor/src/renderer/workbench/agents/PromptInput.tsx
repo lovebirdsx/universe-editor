@@ -1245,6 +1245,7 @@ export function PromptInput({
       y: e.clientY,
       args: [{ sessionId: session.id, target }],
       keyboard: isKeyboardContextMenu(e),
+      contextTag: menuKind,
     })
   }
 

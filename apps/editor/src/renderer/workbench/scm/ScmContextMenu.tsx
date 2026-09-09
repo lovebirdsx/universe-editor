@@ -16,6 +16,7 @@
 import { ICommandService, IContextKeyService, type MenuId } from '@universe-editor/platform'
 import { ContextMenu } from '@universe-editor/workbench-ui'
 import { renderMenuIcon } from '../icons/menuIcon.js'
+import { useContextMenuMemory } from '../contextMenu/useContextMenuMemory.js'
 import { useScopedContextKey } from '../useScopedContextKey.js'
 import { useService } from '../useService.js'
 
@@ -30,6 +31,9 @@ export interface ScmContextMenuState {
   /** The row menu was raised with the ContextMenu key, so it opens with the
    *  first entry highlighted. */
   readonly keyboard: boolean
+  /** Coarse row shape (`'file' | 'directory' | 'group'`) the "last executed"
+   *  memory is bucketed under — see ContextMenu's `contextTag`. */
+  readonly contextTag?: string
 }
 
 /** `navigation` items render as inline row buttons, so the menu omits them. */
@@ -44,9 +48,10 @@ export function ScmContextMenu({
 }) {
   const commandService = useService(ICommandService)
   const contextKeyService = useService(IContextKeyService)
-  const { anchor, menuId, scope, run, keyboard } = state
+  const { anchor, menuId, scope, run, keyboard, contextTag } = state
 
   const scopedContext = useScopedContextKey(contextKeyService, scope)
+  const memory = useContextMenuMemory()
 
   return (
     <ContextMenu
@@ -58,6 +63,8 @@ export function ScmContextMenu({
       groupFilter={withoutNavigation}
       renderIcon={renderMenuIcon}
       autoFocusFirst={keyboard}
+      {...(memory ? { memory } : {})}
+      {...(contextTag !== undefined ? { contextTag } : {})}
       onClose={onClose}
     />
   )

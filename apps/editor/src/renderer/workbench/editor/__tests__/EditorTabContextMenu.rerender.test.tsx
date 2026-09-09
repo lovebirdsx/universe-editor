@@ -82,6 +82,7 @@ function Harness() {
         editorId="editor-1"
         editorType="file"
         resource={URI.file('D:/foo.txt')}
+        keyboard={false}
         commandService={stubCommand}
         contextKeyService={ctx}
         onClose={() => {}}

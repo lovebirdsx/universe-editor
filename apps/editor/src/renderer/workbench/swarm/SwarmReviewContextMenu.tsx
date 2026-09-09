@@ -9,6 +9,7 @@
 
 import { ListMenu, type ListMenuEntry } from '@universe-editor/workbench-ui'
 import { renderMenuIcon } from '../icons/menuIcon.js'
+import { useContextMenuMemory } from '../contextMenu/useContextMenuMemory.js'
 
 export type SwarmReviewMenuItem = ListMenuEntry
 
@@ -28,11 +29,15 @@ export function SwarmReviewContextMenu({
   state: SwarmReviewContextMenuState
   onClose: () => void
 }) {
+  const memory = useContextMenuMemory()
+
   return (
     <ListMenu
       items={state.items}
       anchor={{ x: state.x, y: state.y }}
       autoFocusFirst={state.keyboard}
+      {...(memory ? { memory } : {})}
+      memoryKey="swarm.review"
       renderIcon={renderMenuIcon}
       onClose={onClose}
     />

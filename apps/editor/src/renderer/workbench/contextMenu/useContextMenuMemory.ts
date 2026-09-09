@@ -8,7 +8,7 @@
  *  row again, which is the pre-feature behaviour anyway).
  *--------------------------------------------------------------------------------------------*/
 
-import { IStorageService, type MenuId } from '@universe-editor/platform'
+import { IStorageService } from '@universe-editor/platform'
 import type { IContextMenuMemory } from '@universe-editor/workbench-ui'
 import { useOptionalService } from '../useService.js'
 
@@ -17,8 +17,8 @@ const STORAGE_KEY = 'contextMenu.lastExecuted'
 /** Serializable shape persisted under `STORAGE_KEY`. */
 type PersistedMemory = Record<string, string>
 
-function bucketKey(menuId: MenuId, contextTag: string | undefined): string {
-  return `${String(menuId)}|${contextTag ?? ''}`
+function bucketKey(scope: string, contextTag: string | undefined): string {
+  return `${scope}|${contextTag ?? ''}`
 }
 
 class StorageBackedContextMenuMemory implements IContextMenuMemory {
@@ -50,12 +50,12 @@ class StorageBackedContextMenuMemory implements IContextMenuMemory {
     return this._loadPromise
   }
 
-  get(menuId: MenuId, contextTag: string | undefined): string | undefined {
-    return this._cache[bucketKey(menuId, contextTag)]
+  get(scope: string, contextTag: string | undefined): string | undefined {
+    return this._cache[bucketKey(scope, contextTag)]
   }
 
-  set(menuId: MenuId, contextTag: string | undefined, commandId: string): void {
-    this._cache[bucketKey(menuId, contextTag)] = commandId
+  set(scope: string, contextTag: string | undefined, itemId: string): void {
+    this._cache[bucketKey(scope, contextTag)] = itemId
     // Persist in the background. No debounce: writes are tiny and the volume
     // is bounded by how fast a user can pick menu items.
     void this._storage.set(STORAGE_KEY, this._cache)
@@ -63,18 +63,20 @@ class StorageBackedContextMenuMemory implements IContextMenuMemory {
 }
 
 /**
- * Module-level singleton: every context menu in the workbench must read/write
- * the same cache, otherwise a command picked from one menu would not be
- * remembered when another component raises that same menu later. Created lazily
- * on first call so the `IStorageService` lookup happens inside the DI tree.
+ * One memory instance per IStorageService: every context menu in the workbench
+ * must read/write the same cache, otherwise a command picked from one menu
+ * would not be remembered when another component raises that same menu later.
+ * The production container holds a single storage service, so this behaves as
+ * a singleton; unit tests bind a fresh stub per suite and get fresh instances
+ * for free — a plain module singleton would leak picks across them.
  *
- * `preload` fires the moment the singleton is created (not in an effect) so
+ * `preload` fires the moment the instance is created (not in an effect) so
  * the cache starts warming before the first menu ever opens — by the time the
  * user presses the ContextMenu key, the round-trip is usually already done.
  * The first-ever open can still race the load; it falls back to the first row
  * for that one menu, then every subsequent open hits the warm cache.
  */
-let shared: StorageBackedContextMenuMemory | undefined
+const shared = new WeakMap<IStorageService, StorageBackedContextMenuMemory>()
 
 /**
  * Resolve the shared `IContextMenuMemory` backed by `IStorageService`.
@@ -85,9 +87,12 @@ let shared: StorageBackedContextMenuMemory | undefined
  */
 export function useContextMenuMemory(): IContextMenuMemory | undefined {
   const storage = useOptionalService(IStorageService)
-  if (storage !== undefined && shared === undefined) {
-    shared = new StorageBackedContextMenuMemory(storage)
-    void shared.preload()
+  if (storage === undefined) return undefined
+  let memory = shared.get(storage)
+  if (memory === undefined) {
+    memory = new StorageBackedContextMenuMemory(storage)
+    void memory.preload()
+    shared.set(storage, memory)
   }
-  return shared
+  return memory
 }

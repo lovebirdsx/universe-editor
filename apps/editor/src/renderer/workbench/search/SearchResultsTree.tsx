@@ -348,23 +348,27 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
       const items: SearchMenuItem[] = []
       if (n.kind === 'match') {
         items.push({
+          id: 'copy',
           icon: 'copy',
           label: localize('search.menu.copy', 'Copy'),
           run: () => void navigator.clipboard?.writeText(n.match.preview.trim()),
         })
         if (onDismissMatch)
           items.push({
+            id: 'remove',
             icon: 'remove',
             label: localize('search.menu.remove', 'Remove'),
             run: () => dismissNode(n),
           })
       } else if (n.kind === 'file') {
         items.push({
+          id: 'copyPath',
           icon: 'copy',
           label: localize('search.menu.copyPath', 'Copy Path'),
           run: () => void navigator.clipboard?.writeText(resourceDisplayPath(n.resource)),
         })
         items.push({
+          id: 'copyAll',
           icon: 'copy',
           label: localize('search.menu.copyAll', 'Copy All'),
           run: () =>
@@ -374,12 +378,14 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
         })
         if (onDismissFile)
           items.push({
+            id: 'remove',
             icon: 'remove',
             label: localize('search.menu.remove', 'Remove'),
             run: () => dismissNode(n),
           })
       } else {
         items.push({
+          id: 'copyPath',
           icon: 'copy',
           label: localize('search.menu.copyPath', 'Copy Path'),
           run: () => void navigator.clipboard?.writeText(n.relPath),

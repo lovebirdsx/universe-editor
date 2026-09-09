@@ -16,14 +16,21 @@
 import { useEffect, useId, useMemo, type ReactNode } from 'react'
 import type { ContextViewAnchor } from '../contextView/IContextViewService.js'
 import { AnchoredSurface } from '../overlay/AnchoredSurface.js'
+import type { IContextMenuMemory } from './ContextMenu.js'
 import type { RowModel } from './menuModel.js'
+import { findRowPathById } from './menuModel.js'
 import { MenuRows } from './menuRows.js'
 import { useMenuNavigation } from './useMenuNavigation.js'
 
 export interface IListMenuItem {
   readonly kind: 'item'
   readonly label: string
-  /** Optional id for React keys; defaults to the label + position. */
+  /**
+   * Optional id for React keys; defaults to the label + position. Menus that
+   * wire up `memory` must pass a stable explicit id per item — the default
+   * embeds the row's position, so a remembered id silently stops resolving the
+   * moment the item set changes shape.
+   */
   readonly id?: string | undefined
   readonly icon?: string | undefined
   /** Trailing secondary text, e.g. a keybinding hint. */
@@ -59,11 +66,34 @@ export interface ListMenuProps {
    * pointer that isn't there.
    */
   readonly autoFocusFirst?: boolean
+  /**
+   * Remembers the last item this menu ran and pre-highlights it the next time
+   * the menu is opened *by keyboard* (`autoFocusFirst`) — the `ContextMenu`
+   * `memory` prop's counterpart for item-driven menus. Takes effect only when
+   * `memoryKey` is also set (it plays the role `MenuId` plays there).
+   */
+  readonly memory?: IContextMenuMemory | undefined
+  /**
+   * Identifies this menu in the memory store (e.g. `'keybindings'`). Required
+   * for `memory` to take effect; keep it stable and unique across menus.
+   */
+  readonly memoryKey?: string | undefined
+  /**
+   * Free-form context discriminator (e.g. the clicked row's shape) so "last
+   * executed" is remembered per target rather than globally across the menu.
+   * Omitted = one bucket for the whole `memoryKey`.
+   */
+  readonly contextTag?: string | undefined
   readonly renderIcon?: ((icon: string | undefined) => ReactNode) | undefined
   readonly onClose: () => void
 }
 
-function toRows(items: readonly ListMenuEntry[], onClose: () => void, prefix: string): RowModel[] {
+function toRows(
+  items: readonly ListMenuEntry[],
+  onClose: () => void,
+  prefix: string,
+  recordPicked: ((id: string) => void) | undefined,
+): RowModel[] {
   return items.map((entry, index): RowModel => {
     if (entry.kind === 'separator') return { kind: 'separator', id: `${prefix}sep-${index}` }
     const id = entry.id ?? `${prefix}${entry.label}-${index}`
@@ -73,7 +103,7 @@ function toRows(items: readonly ListMenuEntry[], onClose: () => void, prefix: st
         id,
         label: entry.label,
         icon: entry.icon,
-        children: toRows(entry.children, onClose, `${id}/`),
+        children: toRows(entry.children, onClose, `${id}/`, recordPicked),
       }
     }
     return {
@@ -85,6 +115,10 @@ function toRows(items: readonly ListMenuEntry[], onClose: () => void, prefix: st
       danger: entry.danger === true,
       disabled: entry.disabled === true,
       run: () => {
+        // Record before closing so the next keyboard-opened menu restores onto
+        // this row (same fire-and-forget + double-write contract as
+        // ContextMenu's `memory`).
+        recordPicked?.(id)
         onClose()
         entry.run()
       },
@@ -96,16 +130,41 @@ export function ListMenu({
   items,
   anchor,
   autoFocusFirst = false,
+  memory,
+  memoryKey,
+  contextTag,
   renderIcon,
   onClose,
 }: ListMenuProps) {
-  const rows = useMemo(() => toRows(items, onClose, ''), [items, onClose])
+  const recordPicked = useMemo(() => {
+    if (memory === undefined || memoryKey === undefined) return undefined
+    return (id: string) => {
+      memory.set(memoryKey, contextTag, id)
+      if (contextTag !== undefined) memory.set(memoryKey, undefined, id)
+    }
+  }, [memory, memoryKey, contextTag])
+  const rows = useMemo(
+    () => toRows(items, onClose, '', recordPicked),
+    [items, onClose, recordPicked],
+  )
   const uid = useId()
   const hasRows = rows.length > 0
+  // Same restore contract as ContextMenu: keyboard-opened menus only, exact
+  // contextTag bucket first then the tag-less one, id resolved to a row path
+  // (submenu children open expanded with the highlight on the nested row).
+  const initialActivePath = useMemo((): readonly number[] | undefined => {
+    if (!autoFocusFirst || memory === undefined || memoryKey === undefined) return undefined
+    const remembered =
+      memory.get(memoryKey, contextTag) ??
+      (contextTag === undefined ? undefined : memory.get(memoryKey, undefined))
+    if (remembered === undefined) return undefined
+    return findRowPathById(rows, remembered)
+  }, [autoFocusFirst, memory, memoryKey, contextTag, rows])
   const { state, onRowEnter, onCancelClose, onEscape } = useMenuNavigation(
     rows,
     autoFocusFirst,
     hasRows,
+    initialActivePath,
   )
 
   // An empty menu never opens: report the close so the host drops its state

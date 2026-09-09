@@ -13,6 +13,7 @@ import { ICommandService, IContextKeyService, MenuId } from '@universe-editor/pl
 import { ContextMenu } from '@universe-editor/workbench-ui'
 import type { RemoteConnectionStateDto } from '../../../shared/ipc/remoteStatusService.js'
 import { renderMenuIcon } from '../icons/menuIcon.js'
+import { useContextMenuMemory } from '../contextMenu/useContextMenuMemory.js'
 import { useScopedContextKey } from '../useScopedContextKey.js'
 import { useService } from '../useService.js'
 
@@ -49,6 +50,7 @@ export function RemoteContextMenu({ state, onClose }: Props) {
   })
 
   const args = useMemo(() => [state.target.arg], [state.target.arg])
+  const memory = useContextMenuMemory()
 
   return (
     <ContextMenu
@@ -59,6 +61,8 @@ export function RemoteContextMenu({ state, onClose }: Props) {
       contextKeyService={scoped}
       renderIcon={renderMenuIcon}
       autoFocusFirst={state.keyboard === true}
+      {...(memory ? { memory } : {})}
+      contextTag={kind}
       onClose={onClose}
     />
   )

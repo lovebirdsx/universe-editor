@@ -14,8 +14,15 @@ import {
   localize,
   MenuId,
 } from '@universe-editor/platform'
-import { ContextMenu } from '@universe-editor/workbench-ui'
+import {
+  ContextMenu,
+  dispatchKeyboardContextMenu,
+  isContextMenuKey,
+  isKeyboardContextMenu,
+  isKeyupContextMenuSupplement,
+} from '@universe-editor/workbench-ui'
 import { renderMenuIcon } from '../icons/menuIcon.js'
+import { useContextMenuMemory } from '../contextMenu/useContextMenuMemory.js'
 import { useService } from '../useService.js'
 import {
   IProcessMonitorService,
@@ -29,12 +36,15 @@ interface ContextMenuState {
   readonly item: IProcessItem
   readonly x: number
   readonly y: number
+  /** Raised with the ContextMenu key — the menu opens on its first entry. */
+  readonly keyboard: boolean
 }
 
 export function ProcessExplorerEditor(_props: { input: IEditorInput }) {
   const processMonitor = useService(IProcessMonitorService)
   const commandService = useService(ICommandService)
   const contextKeyService = useService(IContextKeyService)
+  const memory = useContextMenuMemory()
   const [snapshot, setSnapshot] = useState<IProcessSnapshot | null>(null)
   const [collapsed, setCollapsed] = useState<ReadonlySet<number>>(new Set())
   const [menu, setMenu] = useState<ContextMenuState | null>(null)
@@ -108,9 +118,25 @@ export function ProcessExplorerEditor(_props: { input: IEditorInput }) {
                 data-pid={item.pid}
                 data-role={item.role ?? ''}
                 className={item.load > 90 ? styles['highLoad'] : undefined}
-                onContextMenu={(e) => {
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (!isContextMenuKey(e) || e.repeat) return
                   e.preventDefault()
-                  setMenu({ item, x: e.clientX, y: e.clientY })
+                  e.stopPropagation()
+                  // The synthetic event bubbles into onContextMenu below.
+                  dispatchKeyboardContextMenu(e.currentTarget as HTMLElement, true)
+                }}
+                onContextMenu={(e) => {
+                  // No list host swallows Chromium's keyup-supplement event for
+                  // us — drop it or the same keystroke re-anchors the menu.
+                  if (isKeyupContextMenuSupplement(e)) return
+                  e.preventDefault()
+                  setMenu({
+                    item,
+                    x: e.clientX,
+                    y: e.clientY,
+                    keyboard: isKeyboardContextMenu(e),
+                  })
                 }}
               >
                 <td title={item.cmd}>
@@ -150,6 +176,8 @@ export function ProcessExplorerEditor(_props: { input: IEditorInput }) {
           commandService={commandService}
           contextKeyService={contextKeyService}
           renderIcon={renderMenuIcon}
+          autoFocusFirst={menu.keyboard}
+          {...(memory ? { memory } : {})}
           onClose={() => setMenu(null)}
         />
       )}

@@ -47,6 +47,7 @@ import { mergeTimelineItems } from '../../services/timeline/timelineMerge.js'
 import { FileIcon } from '../files/fileIconTheme.js'
 import { resolveIcon } from '../icons/icon-map.js'
 import { renderMenuIcon } from '../icons/menuIcon.js'
+import { useContextMenuMemory } from '../contextMenu/useContextMenuMemory.js'
 import { FileDiff, GitCommitHorizontal, Waypoints, type LucideIcon } from 'lucide-react'
 import { timelineViewState } from './timelineViewState.js'
 import styles from './TimelineView.module.css'
@@ -307,6 +308,8 @@ export function TimelineView() {
     })
   }, [])
 
+  const memory = useContextMenuMemory()
+
   if (!uri || schemeProviders.length === 0) {
     return (
       <div className={styles['empty']}>
@@ -457,6 +460,8 @@ export function TimelineView() {
           contextKeyService={menu.scoped}
           renderIcon={renderMenuIcon}
           autoFocusFirst={menu.keyboard}
+          {...(memory ? { memory } : {})}
+          contextTag={menu.item.contextValue ?? ''}
           onClose={closeMenu}
         />
       )}
