@@ -315,6 +315,25 @@ describe('ToolCallCard', () => {
     expect(screen.getByTestId('acp-subagent-message').getAttribute('data-role')).toBe('thought')
   })
 
+  it('renders a sub-agent user message verbatim (no markdown)', () => {
+    renderCard(
+      makeCall({
+        kind: 'other',
+        children: [
+          {
+            kind: 'message',
+            id: 'sm1',
+            message: { ...makeChildMessage('do **this** now'), role: 'user' },
+          },
+        ],
+      }),
+    )
+    const msg = screen.getByTestId('acp-subagent-message')
+    expect(within(msg).getByTestId('acp-plaintext').textContent).toBe('do **this** now')
+    expect(within(msg).queryByTestId('acp-markdown')).toBeNull()
+    expect(msg.querySelector('strong')).toBeNull()
+  })
+
   it('folds a sub-agent message on click in standalone usage', () => {
     renderCard(
       makeCall({

@@ -133,11 +133,12 @@ describe('StickyUserMessageBar', () => {
     )
     expect(screen.getByText('Hello world')).toBeTruthy()
     expect(screen.getByTestId('acp-user-bar')).toBeTruthy()
-    const md = screen.getByTestId('acp-markdown')
-    expect(md.textContent).toContain('Hello world')
+    // User prompts render verbatim (variant="plain"), not through markdown.
+    const plain = screen.getByTestId('acp-plaintext')
+    expect(plain.textContent).toContain('Hello world')
     fireEvent.click(screen.getByTestId('acp-collapsible-toggle'))
-    // Collapsed: summary text shows, full markdown body is not mounted.
-    expect(screen.queryByTestId('acp-markdown')).toBeNull()
+    // Collapsed: summary text shows, the full body is not mounted.
+    expect(screen.queryByTestId('acp-plaintext')).toBeNull()
   })
 
   it('shows the first user message when several exist', () => {

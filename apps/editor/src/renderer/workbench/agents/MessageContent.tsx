@@ -1,10 +1,13 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  MessageContent — render a sequence of ACP content blocks as React elements.
- *  Text blocks go through the markdown parser; image blocks become inline
- *  images (data: URI is safe — the agent never gets to embed a remote URL);
- *  resource / resource_link blocks become file-open buttons when the URI is a
- *  workspace file, or visible labels otherwise.
+ *  Text blocks go through the markdown parser by default; user messages pass
+ *  variant="plain" instead (matching mainstream agents: a user's prompt renders
+ *  verbatim — newlines kept, no `**`/`#`/link interpretation), while assistant
+ *  output keeps full markdown. Image blocks become inline images (data: URI is
+ *  safe — the agent never gets to embed a remote URL); resource / resource_link
+ *  blocks become file-open buttons when the URI is a workspace file, or visible
+ *  labels otherwise.
  *
  *  Slash-command artifacts: agents (notably Claude Code) replay locally-handled
  *  slash commands back through `user_message_chunk` as XML-wrapped text. We
@@ -33,6 +36,13 @@ interface MessageContentProps {
    * accumulated text on every chunk. Off for settled messages and tool output.
    */
   readonly streaming?: boolean
+  /**
+   * 'markdown' (default) renders text blocks through the markdown parser;
+   * 'plain' renders them verbatim with `white-space: pre-wrap` (user messages —
+   * the prompt should look exactly like what was typed). Non-text blocks and
+   * slash-command badges render identically under both variants.
+   */
+  readonly variant?: 'markdown' | 'plain'
 }
 
 type NonTextBlock = Exclude<ContentBlock, { type: 'text' }>
@@ -81,13 +91,19 @@ function groupBlocks(blocks: readonly ContentBlock[]): readonly BlockGroup[] {
 export const MessageContent = memo(function MessageContent({
   blocks,
   streaming,
+  variant,
 }: MessageContentProps) {
   const groups = useMemo(() => groupBlocks(blocks), [blocks])
   return (
     <div className={styles['messageBody']}>
       {groups.map((g, i) =>
         g.type === 'text-run' ? (
-          <TextRunSegments key={i} text={g.text} streaming={streaming ?? false} />
+          <TextRunSegments
+            key={i}
+            text={g.text}
+            streaming={streaming ?? false}
+            plain={variant === 'plain'}
+          />
         ) : g.type === 'image-row' ? (
           <ImageRow key={i} images={g.images} />
         ) : (
@@ -98,18 +114,38 @@ export const MessageContent = memo(function MessageContent({
   )
 })
 
-function TextRunSegments({ text, streaming }: { text: string; streaming: boolean }) {
+function TextRunSegments({
+  text,
+  streaming,
+  plain,
+}: {
+  text: string
+  streaming: boolean
+  plain: boolean
+}) {
   const segments = useMemo(() => parseCommandWrappers(text), [text])
   return (
     <>
       {segments.map((seg, i) =>
         seg.type === 'command' ? (
           <CommandInvocationBadge key={i} invocation={seg.invocation} />
+        ) : plain ? (
+          <PlainTextBlock key={i} text={seg.text} />
         ) : (
           <MarkdownBlock key={i} text={seg.text} streaming={streaming} />
         ),
       )}
     </>
+  )
+}
+
+// User-prompt text under variant="plain": verbatim, whitespace-preserving, and
+// safe for long unbroken strings (URLs) inside the clamped user card.
+function PlainTextBlock({ text }: { text: string }) {
+  return (
+    <div className={styles['plainTextBlock']} data-testid="acp-plaintext">
+      {text}
+    </div>
   )
 }
 

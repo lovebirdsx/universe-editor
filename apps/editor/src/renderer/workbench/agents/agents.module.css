@@ -297,6 +297,13 @@
   flex-direction: column;
 }
 
+/* User-prompt text under MessageContent variant="plain": verbatim rendering
+   (no markdown), wrapping like the terminal-output precedent in this file. */
+.plainTextBlock {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* Rewind / Fork hover affordances, pinned to the top-right of the user turn.
    Hidden until the message row (or a button) is hovered / focused, mirroring the
    session-row delete/rename reveal. */

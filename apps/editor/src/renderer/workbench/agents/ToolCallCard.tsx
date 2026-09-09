@@ -543,7 +543,10 @@ function SubMessage({
         ...(depth !== undefined ? { 'data-sticky-depth': String(depth) } : {}),
       }}
     >
-      <MessageContent blocks={message.blocks} />
+      <MessageContent
+        blocks={message.blocks}
+        {...(message.role === 'user' ? { variant: 'plain' as const } : {})}
+      />
     </CollapsibleSlot>
   )
 }

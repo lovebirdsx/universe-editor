@@ -59,6 +59,17 @@ function renderContent(blocks: readonly ContentBlock[], resolver?: IEditorResolv
   )
 }
 
+function renderPlain(blocks: readonly ContentBlock[]) {
+  const services = new ServiceCollection()
+  services.set(IEditorResolverService, makeEditorResolver())
+  const inst = new InstantiationService(services)
+  return render(
+    <ServicesContext.Provider value={inst}>
+      <MessageContent blocks={blocks} variant="plain" />
+    </ServicesContext.Provider>,
+  )
+}
+
 describe('MessageContent', () => {
   it('renders an empty container when no blocks', () => {
     const { container } = renderContent([])
@@ -310,5 +321,58 @@ describe('MessageContent', () => {
       },
     ])
     expect(screen.getAllByTestId('acp-command-badge')).toHaveLength(2)
+  })
+
+  describe('variant="plain" (user messages)', () => {
+    it('renders markdown syntax verbatim without inline formatting', () => {
+      const { container } = renderPlain([{ type: 'text', text: 'a **bold** and *em* text' }])
+      const plain = screen.getByTestId('acp-plaintext')
+      expect(plain.textContent).toBe('a **bold** and *em* text')
+      expect(screen.queryByTestId('acp-markdown')).toBeNull()
+      expect(container.querySelector('strong')).toBeNull()
+      expect(container.querySelector('em')).toBeNull()
+    })
+
+    it('does not turn ATX headings or links into elements', () => {
+      const { container } = renderPlain([
+        { type: 'text', text: '# not a heading\n[not a link](https://example.com)' },
+      ])
+      expect(container.querySelector('h1')).toBeNull()
+      expect(container.querySelector('a')).toBeNull()
+      expect(screen.getByTestId('acp-plaintext').textContent).toBe(
+        '# not a heading\n[not a link](https://example.com)',
+      )
+    })
+
+    it('preserves newlines via the pre-wrap block', () => {
+      renderPlain([{ type: 'text', text: 'line one\nline two\nline three' }])
+      const plain = screen.getByTestId('acp-plaintext')
+      expect(plain.textContent).toBe('line one\nline two\nline three')
+      expect(plain.className).toContain('plainTextBlock')
+    })
+
+    it('still strips slash-command wrappers into badges', () => {
+      renderPlain([
+        {
+          type: 'text',
+          text:
+            '<command-name>/model</command-name>\n' +
+            '<command-message>model</command-message>\n' +
+            '<command-args>default</command-args>\n' +
+            '<local-command-stdout>Set model to claude-sonnet-4-6</local-command-stdout>',
+        },
+      ])
+      expect(screen.getByTestId('acp-command-badge').textContent).toContain('/model default')
+      expect(screen.queryByText(/<command-name>/)).toBeNull()
+    })
+
+    it('renders image and resource blocks identically to the markdown variant', () => {
+      renderPlain([
+        { type: 'image', mimeType: 'image/png', data: 'YWJjZA==' },
+        { type: 'resource_link', uri: 'file:///workspace/foo.ts', name: 'foo.ts' },
+      ])
+      expect(screen.getByTestId('acp-image-block')).toBeTruthy()
+      expect(screen.getByTestId('acp-resource-link')).toBeTruthy()
+    })
   })
 })

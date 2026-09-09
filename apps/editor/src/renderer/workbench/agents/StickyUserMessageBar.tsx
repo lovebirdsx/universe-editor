@@ -175,7 +175,7 @@ export function StickyUserMessageBar({
             contexts={message.selectionContexts ?? []}
             onReveal={revealSelection}
           />
-          <MessageContent blocks={message.blocks} />
+          <MessageContent blocks={message.blocks} variant="plain" />
         </div>
       </CollapsibleSlot>
       {menu && (

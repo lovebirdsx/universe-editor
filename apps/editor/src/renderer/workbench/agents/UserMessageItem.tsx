@@ -115,7 +115,7 @@ export const UserMessageItem = memo(function UserMessageItem({
         >
           <div ref={innerRef} className={styles['userMessageContent']}>
             <SelectionContextChips contexts={selectionContexts ?? []} onReveal={revealSelection} />
-            <MessageContent blocks={blocks} />
+            <MessageContent blocks={blocks} variant="plain" />
           </div>
         </div>
         {session !== undefined && messageId !== undefined && autoRetry !== true && (
