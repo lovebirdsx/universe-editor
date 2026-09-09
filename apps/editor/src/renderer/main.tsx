@@ -567,6 +567,7 @@ async function bootstrapWorkbench(): Promise<void> {
       editorGroupsService,
       telemetry,
       loggerService.createLogger({ id: 'editor', name: 'Editor' }),
+      services.get(IUriIdentityService) as IUriIdentityService,
     ),
   )
   const outputService = workbenchStore.add(instantiation.createInstance(OutputService))

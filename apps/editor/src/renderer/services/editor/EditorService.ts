@@ -16,6 +16,7 @@ import {
   NullLogger,
   ITelemetryService,
   IOpenEditorServiceOptions,
+  IUriIdentityService,
   URI,
   derived,
   observableValue,
@@ -77,6 +78,7 @@ export class EditorService extends Disposable implements IEditorService {
     groupsService?: IEditorGroupsService,
     private readonly _telemetry?: ITelemetryService,
     private readonly _logger: ILogger = new NullLogger(),
+    private readonly _uriIdentity?: IUriIdentityService,
   ) {
     super()
     this._groupsService = groupsService ?? new EditorGroupsService()
@@ -121,7 +123,7 @@ export class EditorService extends Disposable implements IEditorService {
 
   openEditor(input: IEditorInput, options?: IOpenEditorServiceOptions): void {
     const activeGroup = this._groupsService.activeGroup
-    const existing = activeGroup.editors.find((e) => e.id === input.id)
+    const existing = activeGroup.editors.find((e) => this._matchesExisting(e, input))
     // A brand-new editor lands in the lock-aware target group; re-activating one
     // already in the active group stays put.
     const group = existing ? activeGroup : this._groupsService.activeGroupForOpen
@@ -182,6 +184,25 @@ export class EditorService extends Disposable implements IEditorService {
       this._sync()
       this._logger.info(`closeEditor id=${id} type=${target.typeId}`)
     }
+  }
+
+  /**
+   * Dedup gate for {@link openEditor}: first the fast path (strict `id`
+   * equality, which covers every non-file identity), then a platform-aware
+   * fallback for `file:` resources so that e.g. `e:/ws/a.ts` and `E:/ws/a.ts`
+   * on win32 are recognised as the same physical file. Without the injected
+   * {@link IUriIdentityService} (tests that bare-`new` the service) the
+   * fallback is skipped and behaviour matches the original `id`-only check.
+   */
+  private _matchesExisting(existing: IEditorInput, input: IEditorInput): boolean {
+    if (existing.id === input.id) return true
+    if (!this._uriIdentity) return false
+    if (!(existing instanceof EditorInput) || !(input instanceof EditorInput)) return false
+    const a = existing.resource
+    const b = input.resource
+    if (!a || !b) return false
+    if (a.scheme !== 'file' || b.scheme !== 'file') return false
+    return this._uriIdentity.isEqual(a, b)
   }
 
   closeAllEditors(): void {

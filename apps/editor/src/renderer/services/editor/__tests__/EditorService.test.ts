@@ -13,6 +13,7 @@ import {
   InstantiationService,
   ServiceCollection,
   URI,
+  UriIdentityService,
   type IFileService as IFileServiceType,
 } from '@universe-editor/platform'
 import { EditorService } from '../EditorService.js'
@@ -50,6 +51,25 @@ function makeEnv() {
   const inst = new InstantiationService(services)
   const groupsService = new EditorGroupsService()
   const editorService = new EditorService(groupsService)
+  return { inst, groupsService, editorService }
+}
+
+/**
+ * Like {@link makeEnv} but injects a platform-aware {@link UriIdentityService}
+ * into EditorService, so file: URI comparison follows the host platform's
+ * case-sensitivity rules (win32/darwin fold, linux preserves).
+ */
+function makeEnvWithUriIdentity(platform: 'win32' | 'linux') {
+  const services = new ServiceCollection()
+  services.set(IFileService, makeFs())
+  const inst = new InstantiationService(services)
+  const groupsService = new EditorGroupsService()
+  const editorService = new EditorService(
+    groupsService,
+    undefined,
+    undefined,
+    new UriIdentityService(platform),
+  )
   return { inst, groupsService, editorService }
 }
 
@@ -142,5 +162,64 @@ describe('EditorService.openEditor with FileEditorInput', () => {
     expect(stored.resource?.scheme).toBe('file')
 
     input.dispose()
+  })
+})
+
+describe('EditorService.openEditor 盘符大小写去重', () => {
+  // Bug 现场：Explorer 侧工作区树根是 URI.file('e:/ws')（小写盘符），
+  // SCM 侧 resourceUri 是裸 host fs-path 经 fsPathToWorkspaceUri 转成大写盘符。
+  // 两个入口都汇到 EditorService.openEditor，但去重第一关 `e.id === input.id`
+  // 是逐字符严格相等，file:///e:/... ≠ file:///E:/...，导致同一物理文件打开两次。
+
+  it('复现: win32 下小写 e:/ 与大写 E:/ 的同一文件不应重复打开', () => {
+    const { inst, groupsService, editorService } = makeEnvWithUriIdentity('win32')
+    const lower = URI.file('e:/ws/src/common/ICommonBt.ts')
+    const upper = URI.file('E:/ws/src/common/ICommonBt.ts')
+    const input1 = inst.createInstance(FileEditorInput, lower)
+    const input2 = inst.createInstance(FileEditorInput, upper)
+
+    editorService.openEditor(input1, { pinned: true })
+    editorService.openEditor(input2, { pinned: true })
+
+    // 修复前：两个 tab 并存（length === 2）
+    // 修复后：视为同一文件，只保留一个 tab
+    expect(groupsService.activeGroup.editors).toHaveLength(1)
+
+    input1.dispose()
+    input2.dispose()
+  })
+
+  it('防回归: linux 下大小写不同仍视为两个文件', () => {
+    const { inst, groupsService, editorService } = makeEnvWithUriIdentity('linux')
+    const lower = URI.file('/ws/Main.ts')
+    const upper = URI.file('/ws/main.ts')
+    const input1 = inst.createInstance(FileEditorInput, lower)
+    const input2 = inst.createInstance(FileEditorInput, upper)
+
+    editorService.openEditor(input1, { pinned: true })
+    editorService.openEditor(input2, { pinned: true })
+
+    // linux 文件系统大小写敏感，两个文件应当并存
+    expect(groupsService.activeGroup.editors).toHaveLength(2)
+
+    input1.dispose()
+    input2.dispose()
+  })
+
+  it('防回归: 未注入 IUriIdentityService 时行为与现状一致（仍按 id 判等）', () => {
+    const { inst, groupsService, editorService } = makeEnv()
+    const lower = URI.file('e:/ws/a.ts')
+    const upper = URI.file('E:/ws/a.ts')
+    const input1 = inst.createInstance(FileEditorInput, lower)
+    const input2 = inst.createInstance(FileEditorInput, upper)
+
+    editorService.openEditor(input1, { pinned: true })
+    editorService.openEditor(input2, { pinned: true })
+
+    // 无注入时回退到 id 字符串判等，大小写不同 → 两个 tab
+    expect(groupsService.activeGroup.editors).toHaveLength(2)
+
+    input1.dispose()
+    input2.dispose()
   })
 })
