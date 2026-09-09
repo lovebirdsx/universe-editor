@@ -407,12 +407,15 @@ test.describe('@p1 perforce sync', () => {
       /**
        * Drive one file's get through refusal → Force Get → confirmation, and
        * assert the head revision really landed on top of the local draft.
-       * Both refusal shapes reach the same two-step flow, so they share it.
+       * The second confirmation differs by refusal shape: the stdout shape
+       * lands on the per-file force picker (its title is the confirmation),
+       * while the stderr clobber shape still gets the old warning modal.
        */
       const forceGet = async (
         relPath: string,
         refusalText: string,
         head: string,
+        confirm: 'picker' | 'modal',
       ): Promise<void> => {
         writeFileSync(perforce.file(relPath), LOCAL_DRAFT, 'utf8')
         // Fire-and-forget: the command parks on the refusal dialog.
@@ -429,8 +432,17 @@ test.describe('@p1 perforce sync', () => {
 
         // The second confirmation is the whole safety story: `sync -f` silently
         // discards work p4 just refused to touch, so it never runs off one click.
-        await expect(dialog).toContainText('This cannot be undone', { timeout: 30_000 })
-        await dialog.getByRole('button', { name: 'Force Get' }).click()
+        if (confirm === 'picker') {
+          const picker = page.getByTestId('quick-input')
+          await expect(picker).toBeVisible({ timeout: 30_000 })
+          await expect(picker).toContainText('Force-get overwrites the checked files')
+          await expect(picker).toContainText('cannot be undone')
+          // All refused files start checked; OK confirms the force get.
+          await picker.getByTestId('quick-input-ok').click()
+        } else {
+          await expect(dialog).toContainText('This cannot be undone', { timeout: 30_000 })
+          await dialog.getByRole('button', { name: 'Force Get' }).click()
+        }
 
         await expect
           .poll(() => readFileSync(perforce.file(relPath), 'utf8'), {
@@ -441,11 +453,11 @@ test.describe('@p1 perforce sync', () => {
       }
 
       await test.step('the stdout refusal shape (`can’t update modified file`)', async () => {
-        await forceGet(refused.relPath, 'not updated', REFUSED_HEAD)
+        await forceGet(refused.relPath, 'not updated', REFUSED_HEAD, 'picker')
       })
 
       await test.step('the stderr clobber shape (`Can’t clobber writable file`)', async () => {
-        await forceGet(clobbered.relPath, 'Get revision failed', CLOBBERED_HEAD)
+        await forceGet(clobbered.relPath, 'Get revision failed', CLOBBERED_HEAD, 'modal')
       })
     })
   })

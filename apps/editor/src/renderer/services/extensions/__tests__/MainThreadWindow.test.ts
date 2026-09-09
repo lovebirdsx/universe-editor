@@ -8,6 +8,7 @@ import {
   CancellationTokenSource,
   DisposableStore,
   DisposableTracker,
+  Emitter,
   ProgressLocation,
   Severity,
   StatusBarAlignment,
@@ -23,6 +24,7 @@ import {
   type IProgressService,
   type IProgressStep,
   type IQuickInputService,
+  type IQuickPickItem,
   type IStatusBarService,
   type IStatusBarEntry,
   type IStatusBarEntryAccessor,
@@ -408,6 +410,113 @@ describe('MainThreadWindow progress — leak tracking', () => {
     await mt.$startProgress(1, { location: 15, cancellable: true })
     expect(tracker.computeLeakingDisposables()).toBeUndefined()
     await mt.$endProgress(1)
+    expect(tracker.computeLeakingDisposables()).toBeUndefined()
+  })
+})
+
+describe('MainThreadWindow multi-select quick pick', () => {
+  let tracker: DisposableTracker
+
+  beforeEach(() => {
+    tracker = new DisposableTracker()
+    setDisposableTracker(tracker)
+  })
+
+  afterEach(() => {
+    setDisposableTracker(null)
+  })
+
+  /**
+   * Minimal IQuickPick stand-in with real Emitters: the leak guard needs the
+   * subscriptions to be genuine tracked disposables, not vi.fn() stubs.
+   */
+  function fakeQuickPick(): {
+    service: IQuickInputService
+    qp: {
+      selectedItems: readonly IQuickPickItem[]
+      okLabel: string | undefined
+      fireOk: () => void
+      fireHide: () => void
+      disposed: boolean
+    }
+  } {
+    const onDidChangeSelection = new Emitter<IQuickPickItem[]>()
+    const onDidTriggerOk = new Emitter<void>()
+    const onDidHide = new Emitter<void>()
+    const qp = {
+      selectedItems: [] as readonly IQuickPickItem[],
+      okLabel: undefined as string | undefined,
+      disposed: false,
+      fireOk: () => onDidTriggerOk.fire(),
+      fireHide: () => onDidHide.fire(),
+      onDidChangeSelection: onDidChangeSelection.event,
+      onDidTriggerOk: onDidTriggerOk.event,
+      onDidHide: onDidHide.event,
+      show: () => undefined,
+      dispose: () => {
+        qp.disposed = true
+        onDidChangeSelection.dispose()
+        onDidTriggerOk.dispose()
+        onDidHide.dispose()
+      },
+    }
+    const service = {
+      createQuickPick: () => qp,
+    } as unknown as IQuickInputService
+    return { service, qp }
+  }
+
+  it('starts `picked` items checked, counts them in okLabel, and disposes subscriptions on OK', async () => {
+    const { service, qp } = fakeQuickPick()
+    const root = markAsSingleton(new DisposableStore())
+    const mt = root.add(makeWindow({ quickInput: service }))
+
+    const pending = mt.$showQuickPick(
+      [{ label: 'a', picked: true }, { label: 'b', picked: true }, { label: 'c' }],
+      { canPickMany: true, okLabel: 'Force Get Selected ({0})' },
+    )
+
+    expect(qp.selectedItems.map((it) => it.label)).toEqual(['a', 'b'])
+    expect(qp.okLabel).toBe('Force Get Selected (2)')
+
+    qp.fireOk()
+    await expect(pending).resolves.toEqual([0, 1])
+    expect(qp.disposed).toBe(true)
+    root.dispose()
+    expect(tracker.computeLeakingDisposables()).toBeUndefined()
+  })
+
+  it('tracks the checked count as the selection changes', async () => {
+    const { service, qp } = fakeQuickPick()
+    const root = markAsSingleton(new DisposableStore())
+    const mt = root.add(makeWindow({ quickInput: service }))
+
+    const pending = mt.$showQuickPick([{ label: 'a', picked: true }, { label: 'b' }], {
+      canPickMany: true,
+      okLabel: 'Force Get Selected ({0})',
+    })
+    expect(qp.okLabel).toBe('Force Get Selected (1)')
+
+    // Simulate the user un-checking the pre-picked row: the consumer mirrors
+    // the proposed set back and the okLabel follows.
+    qp.selectedItems = []
+    qp.okLabel = undefined
+    qp.fireHide()
+    await expect(pending).resolves.toBeUndefined()
+    root.dispose()
+    expect(tracker.computeLeakingDisposables()).toBeUndefined()
+  })
+
+  it('resolves undefined and leaves no leaks when dismissed', async () => {
+    const { service, qp } = fakeQuickPick()
+    const root = markAsSingleton(new DisposableStore())
+    const mt = root.add(makeWindow({ quickInput: service }))
+
+    const pending = mt.$showQuickPick([{ label: 'a', picked: true }], { canPickMany: true })
+    qp.fireHide()
+    await expect(pending).resolves.toBeUndefined()
+    expect(qp.disposed).toBe(true)
+    root.dispose()
     expect(tracker.computeLeakingDisposables()).toBeUndefined()
   })
 })

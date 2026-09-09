@@ -15,6 +15,7 @@ import {
   DeferredPromise,
   Disposable,
   DisposableMap,
+  DisposableStore,
   IDialogService,
   IFileDialogService,
   INotificationService,
@@ -181,18 +182,27 @@ export class MainThreadWindow extends Disposable implements IMainThreadWindow {
     qp.okLabel = formatOk(qp.selectedItems.length)
 
     return new Promise((resolve) => {
+      // `qp.dispose()` only disposes the QuickPick's own emitters — the three
+      // subscriptions below are separate tracked disposables, so they need
+      // their own store or they leak past every settle path.
+      const subs = new DisposableStore()
       const done = (value: number[] | undefined): void => {
+        subs.dispose()
         qp.dispose()
         resolve(value)
       }
-      qp.onDidChangeSelection((selected) => {
-        qp.selectedItems = selected
-        qp.okLabel = formatOk(selected.length)
-      })
-      qp.onDidTriggerOk(() => {
-        done(qp.selectedItems.map((it) => Number(it.id)))
-      })
-      qp.onDidHide(() => done(undefined))
+      subs.add(
+        qp.onDidChangeSelection((selected) => {
+          qp.selectedItems = selected
+          qp.okLabel = formatOk(selected.length)
+        }),
+      )
+      subs.add(
+        qp.onDidTriggerOk(() => {
+          done(qp.selectedItems.map((it) => Number(it.id)))
+        }),
+      )
+      subs.add(qp.onDidHide(() => done(undefined)))
       qp.show()
     })
   }
