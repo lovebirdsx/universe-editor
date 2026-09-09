@@ -22,10 +22,13 @@
  *     the preview and the get, the View Diff button really opens the have-vs-local
  *     diff, and the Collect Changes button really collects. Unparsed, that shape
  *     made the get claim "already at the latest revision" for a file several
- *     revisions behind.
+ *     revisions behind. The refusal leaves the file in the Changes (drift) group —
+ *     only a successful get may retract it.
  *  6. Force Get is the escape hatch on BOTH refusal shapes: it only runs after a
  *     second confirmation, and then it really overwrites the uncollected local
- *     work with the head revision.
+ *     work with the head revision. Because the file then matches its new have
+ *     revision, the force get also retracts the file's Changes (drift) row — the
+ *     regression guard for a force get leaving the overwritten file listed.
  *--------------------------------------------------------------------------------------------*/
 
 import { readFileSync, writeFileSync } from 'node:fs'
@@ -387,6 +390,17 @@ test.describe('@p1 perforce sync', () => {
           })
           .toEqual({ original: REFUSED_HAVE, modified: REFUSED_DRAFT })
         await expect(dialog).toHaveCount(0)
+
+        // THE drift guard: the refusal left the local work on disk untouched, so
+        // the Changes row must still be there — only a successful (force) get may
+        // retract it. This pins the refused-set difference that keeps a refused
+        // file's drift out of the sync's subtraction.
+        await expect
+          .poll(() => groupIds(refused.relPath), {
+            timeout: 30_000,
+            message: 'a refused get must leave the file in the Changes group',
+          })
+          .toEqual(['reconcile'])
       })
     })
   })
@@ -400,24 +414,44 @@ test.describe('@p1 perforce sync', () => {
       perforce,
     }) => {
       test.setTimeout(120_000)
+      // Drift both files BEFORE the workspace opens so the startup reconcile
+      // scan discovers them deterministically — a write after open races the
+      // watcher (and the refusal needs the local draft to exist on disk).
+      writeFileSync(perforce.file(refused.relPath), LOCAL_DRAFT, 'utf8')
+      writeFileSync(perforce.file(clobbered.relPath), LOCAL_DRAFT, 'utf8')
       await openSyncWorkspace(page, workbench, perforce.openDir)
 
       const dialog = page.getByRole('dialog')
+      const groupIds = (suffix: string) =>
+        page.evaluate((s) => window.__E2E__!.getScmGroupIdsForResource(s), suffix)
 
       /**
        * Drive one file's get through refusal → Force Get → confirmation, and
        * assert the head revision really landed on top of the local draft.
-       * The second confirmation differs by refusal shape: the stdout shape
-       * lands on the per-file force picker (its title is the confirmation),
-       * while the stderr clobber shape still gets the old warning modal.
+       * Both refusal shapes reach the same two-step flow, so they share it.
+       *
+       * The drift-group pair of assertions is the regression guard for the bug
+       * where a force get left the (now overwritten) file in the Changes group:
+       * before the get the local draft IS drift, after it the file matches its
+       * new have revision and the row must go away on its own.
        */
       const forceGet = async (
         relPath: string,
         refusalText: string,
         head: string,
-        confirm: 'picker' | 'modal',
+        confirmation: 'picker' | 'modal',
       ): Promise<void> => {
-        writeFileSync(perforce.file(relPath), LOCAL_DRAFT, 'utf8')
+        // The drift row must exist before the get: the file we force over IS
+        // the locally-modified draft (written pre-open, found by the startup
+        // reconcile scan). Without it the regression guard below asserts
+        // nothing.
+        await expect
+          .poll(() => groupIds(relPath), {
+            timeout: 30_000,
+            message: 'the locally-modified draft should be discovered into the Changes group',
+          })
+          .toEqual(['reconcile'])
+
         // Fire-and-forget: the command parks on the refusal dialog.
         void page
           .evaluate(
@@ -430,18 +464,27 @@ test.describe('@p1 perforce sync', () => {
         await expect(dialog).toContainText(refusalText)
         await dialog.getByRole('button', { name: 'Force Get' }).click()
 
-        // The second confirmation is the whole safety story: `sync -f` silently
-        // discards work p4 just refused to touch, so it never runs off one click.
-        if (confirm === 'picker') {
-          const picker = page.getByTestId('quick-input')
-          await expect(picker).toBeVisible({ timeout: 30_000 })
-          await expect(picker).toContainText('Force-get overwrites the checked files')
-          await expect(picker).toContainText('cannot be undone')
-          // All refused files start checked; OK confirms the force get.
-          await picker.getByTestId('quick-input-ok').click()
+        // The second confirmation's SHAPE depends on the refusal. The stdout
+        // shape (per-file refusal) opens the force-get PICKER: its title spells
+        // out that the checked files' local copies will be destroyed, and
+        // `sync -f` runs only when the pick is accepted with the file still
+        // checked. The stderr clobber shape aborted the run with exit 1, so the
+        // stdout-parsed refused list is empty and there is no per-file picker —
+        // it falls back to a confirm MODAL that re-runs the original scope with
+        // `-f`. Both are the same "never off one click" guarantee, just with a
+        // different second surface.
+        await expect(dialog).toContainText('cannot be undone', { timeout: 30_000 })
+        if (confirmation === 'picker') {
+          await dialog.getByRole('button', { name: /Force Get Selected/ }).click()
         } else {
-          await expect(dialog).toContainText('This cannot be undone', { timeout: 30_000 })
-          await dialog.getByRole('button', { name: 'Force Get' }).click()
+          await expect(dialog).toContainText('Perforce thinks they are current')
+          // Re-scope to the button: the refusal dialog carried a "Force Get"
+          // too, so a bare name query hits both rows while the refusal is
+          // still fading out.
+          await dialog
+            .getByRole('button', { name: 'Force Get', exact: true })
+            .last()
+            .click()
         }
 
         await expect
@@ -450,6 +493,15 @@ test.describe('@p1 perforce sync', () => {
             message: 'the forced get should overwrite the local draft with the head revision',
           })
           .toBe(head)
+        // THE regression guard: the file now matches its have revision, so the
+        // drift row must be retracted — before the fix it survived to end of
+        // session because sync never ran the drift-removal path.
+        await expect
+          .poll(() => groupIds(relPath), {
+            timeout: 30_000,
+            message: 'a force get should retract the overwritten file from the Changes group',
+          })
+          .toEqual([])
       }
 
       await test.step('the stdout refusal shape (`can’t update modified file`)', async () => {

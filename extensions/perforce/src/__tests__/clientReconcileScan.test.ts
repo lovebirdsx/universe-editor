@@ -210,6 +210,9 @@ interface RespondOptions {
   /** Override the `p4 clean` (revert) exit code / stderr — a failed mutate. */
   cleanExit?: number | undefined
   cleanStderr?: string
+  /** Full control of a `p4 sync` reply: raw stdout/stderr lines (the sync-drift
+   *  tests hand the server-printed applied / refused lines verbatim). */
+  sync?: (argv: string[]) => { stdout?: string; stderr?: string; exit?: number }
 }
 
 const calls: string[][] = []
@@ -320,6 +323,14 @@ function handle(
       return { stdout: '', stderr: opts.cleanStderr ?? 'clean failed', exit }
     }
     return { stdout: '' }
+  }
+  if (cmd === 'sync') {
+    const reply = opts.sync?.(argv) ?? {}
+    return {
+      stdout: reply.stdout ?? '',
+      ...(reply.stderr !== undefined ? { stderr: reply.stderr } : {}),
+      ...(reply.exit !== undefined ? { exit: reply.exit } : {}),
+    }
   }
   // changes / fstat / describe — succeed silently with no records.
   return { stdout: '' }
@@ -3255,5 +3266,211 @@ describe('PerforceClient.driftGroupPaths', () => {
     // …but the action targets exclude the out-of-scope one, exactly like the
     // rendered group does.
     expect(client.driftGroupPaths()).toEqual([`${LOCAL}/other/in-scope.txt`])
+  })
+})
+
+/**
+ * `sync` is the one pull entry point that does NOT route through `_mutate`, so it
+ * never ran `_removeDriftUnder`. A force-get rewrites the local file to match its
+ * (new) have revision — any drift row for it is stale — but the row survived to
+ * the end of the session: the watcher's own writes are suppressed, and the
+ * reconcile scan is armed once per session. These tests lock the fix: the sync
+ * run subtracts exactly the files p4 reported as applied, and only those.
+ */
+describe('PerforceClient.sync and the drift set', () => {
+  beforeEach(() => {
+    installScmBridge()
+    spawnMock.mockReset()
+    readdirMock.mockReset()
+    readdirMock.mockImplementation(async () => [])
+    calls.length = 0
+    groups.length = 0
+    reconcileGroupThrow = false
+    heldChildren.length = 0
+    currentClock = undefined
+  })
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>)[BRIDGE_KEY]
+  })
+
+  /** The sync argv seen so far. */
+  function syncCalls(): string[][] {
+    return calls.filter((a) => subcommand(a) === 'sync')
+  }
+
+  /** Seed `a.txt` into the drift set via a reconcile scan, returning the client. */
+  async function clientWithDrift(
+    sync: RespondOptions['sync'],
+    rels: string[] = ['a.txt'],
+  ): Promise<PerforceClientInstance> {
+    const client = await makeClient({
+      reconcile: () => rels.map((rel) => ({ rel, action: 'edit' })),
+      ...(sync !== undefined ? { sync } : {}),
+    })
+    client.setReconcileScope([LOCAL])
+    await client.runReconcileScan()
+    return client
+  }
+
+  it('removes a drift row when a force get overwrites it (the reported bug)', async () => {
+    const client = await clientWithDrift(() => ({
+      stdout: `//depot/branch_x/a.txt#1 - refreshing ${LOCAL}/a.txt\n`,
+    }))
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/a.txt`, letter: 'RM' }])
+
+    const result = await client.syncFiles([`${LOCAL}/a.txt`], '#head', { force: true })
+
+    expect(result.ok).toBe(true)
+    // The force flag actually reached p4.
+    expect(syncCalls().some((a) => a.includes('-f'))).toBe(true)
+    // The row is gone from both the rendered group and the underlying drift set.
+    expect(groupRows(client)).toEqual([])
+    expect(driftFiles(client)).toEqual([])
+  })
+
+  it('keeps a drift row p4 refused to overwrite', async () => {
+    const client = await clientWithDrift(() => ({
+      stdout: `//depot/branch_x/a.txt#1 - can't update modified file ${LOCAL}/a.txt\n`,
+    }))
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/a.txt`, letter: 'RM' }])
+
+    // Non-force get: the allwrite/noclobber client refuses the locally-modified file.
+    const result = await client.syncFiles([`${LOCAL}/a.txt`], '#head')
+
+    expect(result.ok).toBe(true)
+    expect(result.refusedFiles).toHaveLength(1)
+    // The file on disk was NOT rewritten, so the drift must survive.
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/a.txt`, letter: 'RM' }])
+    expect(driftFiles(client)).toEqual([`${LOCAL}/a.txt`])
+  })
+
+  it('removes only the applied rows from a mixed-scope drift set', async () => {
+    const client = await clientWithDrift(
+      () => ({ stdout: `//depot/branch_x/a.txt#1 - refreshing ${LOCAL}/a.txt\n` }),
+      ['a.txt', 'b.txt'],
+    )
+    expect(
+      groupRows(client)
+        .map((r) => r.path)
+        .sort(),
+    ).toEqual([`${LOCAL}/a.txt`, `${LOCAL}/b.txt`])
+
+    // The sync touched only a.txt; b.txt was never on the wire.
+    await client.syncFiles([`${LOCAL}/a.txt`], '#head', { force: true })
+
+    expect(driftFiles(client)).toEqual([`${LOCAL}/b.txt`])
+  })
+
+  it('leaves the drift set alone on an up-to-date early exit', async () => {
+    const client = await clientWithDrift(() => ({
+      stdout: '',
+      stderr: 'file(s) up-to-date.\n',
+    }))
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/a.txt`, letter: 'RM' }])
+    const narrowBefore = narrowScans().length
+
+    const result = await client.syncFiles([`${LOCAL}/a.txt`], '#head', { force: true })
+
+    expect(result.ok).toBe(true)
+    // applied === 0, so nothing is removed and the fallback narrow query must NOT
+    // fire (no parse gap to backfill).
+    expect(driftFiles(client)).toEqual([`${LOCAL}/a.txt`])
+    expect(narrowScans().length).toBe(narrowBefore)
+  })
+
+  it('removes drift on the streaming (onProgress) path too', async () => {
+    const client = await clientWithDrift(() => ({
+      stdout: `//depot/branch_x/a.txt#1 - refreshing ${LOCAL}/a.txt\n`,
+    }))
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/a.txt`, letter: 'RM' }])
+
+    // runSync always streams: the summary is accumulated line-by-line and the
+    // buffered stdout never materializes. This is the production hot path.
+    const result = await client.sync('#head', { onProgress: () => {} })
+
+    expect(result.ok).toBe(true)
+    expect(result.summary?.applied).toBe(1)
+    expect(driftFiles(client)).toEqual([])
+  })
+
+  it('does not delete a real drift row when an applied line extracts to a junk path', async () => {
+    // `- updating as` with no trailing path is a degenerate line: extraction
+    // succeeds but the "path" is the literal word `as`, which matches no drift
+    // key. The row for the file actually on disk must survive — subtracting by
+    // junk would be the destructive "delete too much" failure.
+    const client = await clientWithDrift(() => ({
+      stdout: '//depot/branch_x/a.txt#1 - updating as \n',
+    }))
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/a.txt`, letter: 'RM' }])
+
+    await client.syncFiles([`${LOCAL}/a.txt`], '#head', { force: true })
+
+    expect(driftFiles(client)).toEqual([`${LOCAL}/a.txt`])
+  })
+
+  it('revalidates remaining drift via a narrow reconcile when asked (the gap fallback)', async () => {
+    // The count-vs-extraction gap that triggers `_revalidateDriftAfterSync` is not
+    // reachable through real sync text (the counter and the extractor share one
+    // verb table), so drive the fallback directly, the same way the scope test
+    // above drives `_applyDriftFromWatcher`. The directory scan seeds the row; the
+    // narrow per-file re-query then reports the file clean (a filespec that names
+    // the file directly), and the row is dropped.
+    const client = await makeClient({
+      reconcile: (filespec) =>
+        filespec.endsWith('/a.txt') ? [] : [{ rel: 'a.txt', action: 'edit' }],
+    })
+    client.setReconcileScope([LOCAL])
+    await client.runReconcileScan()
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/a.txt`, letter: 'RM' }])
+    const narrowBefore = narrowScans().length
+
+    await (
+      client as unknown as { _revalidateDriftAfterSync(): Promise<void> }
+    )._revalidateDriftAfterSync()
+
+    expect(narrowScans().length).toBeGreaterThan(narrowBefore)
+    expect(driftFiles(client)).toEqual([])
+  })
+
+  it('keeps drift rows when the fallback narrow query fails', async () => {
+    // A failed narrow query reports "unknown", and unknown must never be recorded
+    // as "clean" — the row is kept for the next scan to settle.
+    const client = await makeClient({
+      reconcile: (filespec) =>
+        filespec.endsWith('/a.txt') ? undefined : [{ rel: 'a.txt', action: 'edit' }],
+      reconcileExit: (filespec) => (filespec.endsWith('/a.txt') ? 1 : undefined),
+      reconcileStderr: () => 'reconcile -n boom',
+    })
+    client.setReconcileScope([LOCAL])
+    await client.runReconcileScan()
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/a.txt`, letter: 'RM' }])
+
+    await (
+      client as unknown as { _revalidateDriftAfterSync(): Promise<void> }
+    )._revalidateDriftAfterSync()
+
+    expect(driftFiles(client)).toEqual([`${LOCAL}/a.txt`])
+  })
+
+  it('removes rows applied before the run was cancelled', async () => {
+    // Emit one applied line, then never close: cancelBusy kills the run, but the
+    // file p4 already reported IS on disk matching its have revision. Driven on
+    // the streaming path (onProgress) — the applied row is collected as it
+    // arrives, so it survives the abort; a buffered run's stdout is lost with the
+    // killed child and has nothing to subtract.
+    const client = await makeClient({
+      reconcile: () => [{ rel: 'a.txt', action: 'edit' }],
+      sync: () => ({ stdout: `//depot/branch_x/a.txt#1 - refreshing ${LOCAL}/a.txt\n`, exit: 0 }),
+    })
+    client.setReconcileScope([LOCAL])
+    await client.runReconcileScan()
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/a.txt`, letter: 'RM' }])
+
+    const pending = client.sync('#head', { force: true, onProgress: () => {} })
+    client.cancelBusy()
+    const result = await pending
+
+    expect(result.cancelled).toBe(true)
+    expect(driftFiles(client)).toEqual([])
   })
 })

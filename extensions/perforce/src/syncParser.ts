@@ -300,6 +300,54 @@ export function parseSyncOverwriteRefused(stdout: string, clientRoot?: string): 
 }
 
 /**
+ * The applied lines as structured files — the server's own per-file record of
+ * what a sync actually rewrote (`<depot>#<rev> - <verb>[ as] <local>`). The
+ * client subtracts these from the working-tree drift set: a file p4 just
+ * overwrote matches its (new) have revision, so any drift row for it is stale.
+ * Refused rows are NOT in this list by construction (their verbs differ), but
+ * the caller still differences against the refused lists because a clobber
+ * refusal prints `- updating <local>` before failing (see {@link APPLIED_LINE}).
+ *
+ * `( as)?` and the verb table mirror {@link APPLIED_LINE} — `updated as
+ * <local>` carries `as`, `refreshing <local>` / `deleted <local>` do not. `#rev`
+ * is optional so extraction never narrows the set the counter accepted.
+ */
+const APPLIED_EXTRACT =
+  /^(.+?)(?:#(\d+))? - (updated|added|deleted|refreshing|refreshed|updating)(?: as)? (.+)$/i
+
+export function parseSyncAppliedLine(
+  line: string,
+  clientRoot?: string,
+): SyncPreviewFile | undefined {
+  const trimmed = line.trim()
+  // Classify first, extract second: counting and extraction share one rule, so
+  // a line the summary counted is never one this function declined (and the
+  // caller's `appliedFiles.length < summary.applied` gap check stays honest).
+  if (classifySyncLine(trimmed) !== 'applied') return undefined
+  const match = APPLIED_EXTRACT.exec(trimmed)
+  if (!match) return undefined
+  const depotFile = match[1]
+  if (!depotFile) return undefined
+  const rawClientFile = match[4] ?? ''
+  return {
+    depotFile,
+    rev: match[2] ?? '',
+    action: (match[3] ?? '').toLowerCase(),
+    clientFile:
+      rawClientFile && clientRoot ? clientToLocalPath(rawClientFile, clientRoot) : rawClientFile,
+  }
+}
+
+export function parseSyncApplied(stdout: string, clientRoot?: string): SyncPreviewFile[] {
+  const out: SyncPreviewFile[] = []
+  for (const raw of stdout.split(/\r?\n/)) {
+    const file = parseSyncAppliedLine(raw, clientRoot)
+    if (file) out.push(file)
+  }
+  return out
+}
+
+/**
  * Tally of a `p4 resolve -am` run. `-am` exits 0 even when some files are left
  * unresolved — a silent-failure trap — so landed and skipped files are counted
  * separately for the caller to surface.

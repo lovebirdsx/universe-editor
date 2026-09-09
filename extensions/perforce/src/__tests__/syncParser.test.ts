@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   classifySyncLine,
   parseResolveOutput,
+  parseSyncApplied,
+  parseSyncAppliedLine,
   parseSyncOutput,
   parseSyncPreview,
   parseSyncPreviewRecord,
@@ -455,6 +457,85 @@ describe('parseSyncOverwriteRefused', () => {
       parseSyncOverwriteRefused('//depot/branch_x/a.cpp#3 - updated as X:/p4ws/main/a.cpp'),
     ).toEqual([])
     expect(parseSyncOverwriteRefused('')).toEqual([])
+  })
+})
+
+describe('parseSyncApplied', () => {
+  it('extracts depot path, rev, verb and local path from `updated as`', () => {
+    expect(
+      parseSyncAppliedLine('//depot/branch_x/a.cpp#3 - updated as X:\\p4ws\\main\\a.cpp'),
+    ).toEqual({
+      depotFile: '//depot/branch_x/a.cpp',
+      clientFile: 'X:\\p4ws\\main\\a.cpp',
+      action: 'updated',
+      rev: '3',
+    })
+  })
+
+  it('extracts the no-`as` verbs (`refreshing`, `deleted`) — the force-get shape', () => {
+    expect(parseSyncAppliedLine('//depot/branch_x/x#3 - refreshing X:/p4ws/main/x')).toEqual({
+      depotFile: '//depot/branch_x/x',
+      clientFile: 'X:/p4ws/main/x',
+      action: 'refreshing',
+      rev: '3',
+    })
+    expect(parseSyncAppliedLine('//depot/branch_x/y#2 - deleted X:/p4ws/main/y')).toEqual({
+      depotFile: '//depot/branch_x/y',
+      clientFile: 'X:/p4ws/main/y',
+      action: 'deleted',
+      rev: '2',
+    })
+    expect(parseSyncAppliedLine('//depot/branch_x/z#5 - added as X:/p4ws/main/z')?.action).toBe(
+      'added',
+    )
+  })
+
+  it('keeps a local path with spaces together', () => {
+    const file = parseSyncAppliedLine(
+      '//depot/branch_x/my dir/a.cpp#7 - updated as X:/p4ws/main/my dir/a.cpp',
+    )
+    expect(file?.clientFile).toBe('X:/p4ws/main/my dir/a.cpp')
+    expect(file?.depotFile).toBe('//depot/branch_x/my dir/a.cpp')
+  })
+
+  it('tolerates a missing revision (the counter accepted the line, so must extraction)', () => {
+    expect(parseSyncAppliedLine('//depot/branch_x/x - refreshing X:/p4ws/main/x')).toEqual({
+      depotFile: '//depot/branch_x/x',
+      clientFile: 'X:/p4ws/main/x',
+      action: 'refreshing',
+      rev: '',
+    })
+  })
+
+  it('extracts nothing from refusal / kept-open / must-resolve / up-to-date lines', () => {
+    const negatives = [
+      "//depot/branch_x/a.json#69 - can't update modified file X:/p4ws/main/a.json",
+      "//depot/branch_x/x.uasset#1 - can't overwrite existing file X:/p4ws/main/x.uasset",
+      "//depot/branch_x/b.cpp#4 - is opened and can't be replaced",
+      '//depot/branch_x/c.cpp#2 - must resolve #4 before submitting',
+      'X:/p4ws/main/... - file(s) up-to-date.',
+      '',
+    ]
+    for (const line of negatives) {
+      expect(parseSyncAppliedLine(line), line).toBeUndefined()
+    }
+    expect(parseSyncApplied(negatives.join('\n'))).toEqual([])
+  })
+
+  it('counts exactly the lines the summary counts (extraction and counting share one rule)', () => {
+    const stdout = [
+      '//depot/branch_x/a.cpp#3 - updated as X:/p4ws/main/a.cpp',
+      '//depot/branch_x/b.cpp#1 - refreshing X:/p4ws/main/b.cpp',
+      "//depot/branch_x/c.json#69 - can't update modified file X:/p4ws/main/c.json",
+      '//depot/branch_x/d.cpp#4 - is opened and not being changed',
+      '//depot/branch_x/e.cpp#2 - deleted X:/p4ws/main/e.cpp',
+    ].join('\n')
+    expect(parseSyncApplied(stdout)).toHaveLength(parseSyncOutput(stdout, '').applied)
+    expect(parseSyncApplied(stdout).map((f) => f.depotFile)).toEqual([
+      '//depot/branch_x/a.cpp',
+      '//depot/branch_x/b.cpp',
+      '//depot/branch_x/e.cpp',
+    ])
   })
 })
 

@@ -92,6 +92,8 @@ import {
 import { type OpenedTarget } from './revertPlan.js'
 import {
   classifySyncLine,
+  parseSyncApplied,
+  parseSyncAppliedLine,
   parseSyncOutput,
   parseSyncOverwriteRefused,
   parseSyncPreview,
@@ -2781,6 +2783,12 @@ export class PerforceClient {
       // counted outcome, so it doesn't touch `done`.
       let sawUpToDateLine = false
       const outcomeLines: string[] = []
+      // The applied lines as structured rows, kept so the success tail can subtract
+      // exactly the files p4 rewrote from the drift set (see `_removeDriftForSyncRun`).
+      // Only the streaming path needs a running list — the buffered path re-parses
+      // stdout whole — and only on a streaming run is the line otherwise gone once
+      // counted.
+      const appliedRows: SyncPreviewFile[] = []
       // Lines classifySyncLine couldn't place. Logged whole and as they arrive —
       // a `--parallel` run whose output shape differs from serial would otherwise
       // leave the bar at `Syncing 0` with no trace of what p4 said, and the end
@@ -2801,8 +2809,11 @@ export class PerforceClient {
               }
               return
             }
-            if (kind === 'applied') applied++
-            else {
+            if (kind === 'applied') {
+              applied++
+              const row = parseSyncAppliedLine(line, this.root)
+              if (row) appliedRows.push(row)
+            } else {
               if (kind === 'keptOpen') keptOpen++
               else if (kind === 'mustResolve') mustResolve++
               else if (kind === 'refused') refusedModified++
@@ -2838,8 +2849,19 @@ export class PerforceClient {
         this._clearSyncProgress()
         if (cancelled) {
           // The user asked for this — log it, don't toast it, and still refresh so
-          // the view reflects whatever landed before the abort.
+          // the view reflects whatever landed before the abort. Whatever p4 already
+          // reported as applied IS on disk matching its have revision, so those
+          // drift rows are subtracted exactly as on a clean exit.
           this._log?.('[perforce] sync cancelled by user')
+          // Whatever p4 already reported as applied IS on disk matching its have
+          // revision, so those drift rows are subtracted exactly as on a clean
+          // exit. Streaming runs collected them on the way through; a buffered run
+          // re-parses the partial stdout.
+          this._removeDriftForSyncRun(
+            onStdoutLine ? appliedRows : parseSyncApplied(result.stdout, this.root),
+            [],
+            [],
+          )
           await this._refreshAfterMutation()
           this._clearBehindDecorations()
           return {
@@ -2868,6 +2890,7 @@ export class PerforceClient {
         const refusedOverwriteFiles = onStdoutLine
           ? parseSyncOverwriteRefused(outcomeLines.join('\n'), this.root)
           : parseSyncOverwriteRefused(result.stdout, this.root)
+        const appliedFiles = onStdoutLine ? appliedRows : parseSyncApplied(result.stdout, this.root)
         // Zero counted lines on a streaming run means the bar sat at `Syncing 0`
         // the whole run; the per-line log above already captured what p4 actually
         // said, so all that's left is to say so once.
@@ -2926,6 +2949,21 @@ export class PerforceClient {
             `${summary.mustResolve} need resolve, ${summary.refusedModified} refused (locally modified), ` +
             `${summary.refusedOverwrite} refused (untracked file in the way)`,
         )
+        // A sync only ever REMOVES drift, never adds it: a file p4 rewrote now
+        // matches its (new) have revision, so its drift row is stale; a file p4
+        // refused was left on disk untouched, so its row must survive. Subtract
+        // exactly the server-reported applied set — never the sync targets, which
+        // include up-to-date files that still carry real drift.
+        this._removeDriftForSyncRun(appliedFiles, refusedFiles, refusedOverwriteFiles)
+        if (appliedFiles.length < summary.applied) {
+          // A line the counter accepted but extraction couldn't place: the drift
+          // row for that file is still standing, so re-ask reconcile about what's
+          // left instead of guessing at the gap.
+          this._log?.(
+            `[perforce] sync: ${summary.applied - appliedFiles.length} applied line(s) yielded no local path; revalidating the drift rows`,
+          )
+          await this._revalidateDriftAfterSync()
+        }
         // A sync rewrites have-revisions across the scope, so every path-keyed
         // cache entry (fstat/print/filelog) is potentially stale — full clear.
         this._invalidateWorkspaceState()
@@ -4166,6 +4204,63 @@ export class PerforceClient {
       if (kept.length !== keys.length) this._driftByScanDir.set(dir, kept)
     }
     this._scheduleDriftApply()
+  }
+
+  /**
+   * Subtract the drift rows a successful sync just resolved. `applied` is p4's own
+   * per-file record of what it rewrote — the authoritative answer to "which files
+   * now match their have revision". The refused lists are differenced out because
+   * an `allwrite noclobber` run prints `- updating <local>` before refusing, so the
+   * verb alone is not proof the file landed.
+   *
+   * Joins on the local path via {@link scopeKey}: the drift set is keyed by the
+   * caller-spelled local path, and `applied`/`refused` rows carry the p4-reported
+   * spelling — same file, possibly different case on Windows/macOS.
+   */
+  private _removeDriftForSyncRun(
+    applied: readonly SyncPreviewFile[],
+    refused: readonly SyncPreviewFile[],
+    refusedOverwrite: readonly SyncPreviewFile[],
+  ): void {
+    if (applied.length === 0 || this._driftFiles.size === 0) return
+    const refusedKeys = new Set(
+      [...refused, ...refusedOverwrite]
+        .filter((r) => r.clientFile !== undefined)
+        .map((r) => scopeKey(r.clientFile!)),
+    )
+    this._removeDriftUnder(
+      applied
+        .filter((r) => r.clientFile !== undefined && !refusedKeys.has(scopeKey(r.clientFile)))
+        .map((r) => r.clientFile!),
+    )
+  }
+
+  /**
+   * Fallback for a count/extraction mismatch: when the summary counted more applied
+   * lines than could be resolved to local paths, re-ask `reconcile -n` about the
+   * rows still standing (the watcher flush's exact shape) rather than guess at the
+   * gap. Over the narrow-query budget the defer-to-next-scan answer is the honest
+   * one — a sync scope can be the whole workspace.
+   */
+  private async _revalidateDriftAfterSync(): Promise<void> {
+    if (this._disposed || this._connection !== 'connected') return
+    const candidates = [...this._driftFiles.values()]
+      .map((r) => r.clientFile)
+      .filter((p): p is string => p !== undefined)
+    if (candidates.length === 0) return
+    if (candidates.length > MAX_EXTERNAL_NARROW_PATHS) {
+      this._log?.(
+        `[perforce] sync: ${candidates.length} drift rows exceed the ${MAX_EXTERNAL_NARROW_PATHS}-path narrow-query budget; deferring to the next scan`,
+      )
+      return
+    }
+    try {
+      const { covered, rows } = await this._queryWorkingTreeRows(candidates)
+      if (this._disposed) return
+      this._applyDriftFromWatcher(covered, rows)
+    } catch (err) {
+      this._log?.(`[perforce] sync drift revalidation failed: ${String(err)}`)
+    }
   }
 
   /** Drop the whole drift set — the scope changed, so every row in it answers a
