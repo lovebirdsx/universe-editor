@@ -37,6 +37,18 @@ function activeLabel(menu: HTMLElement): string | null {
   return id === null ? null : (menu.ownerDocument.getElementById(id)?.textContent ?? null)
 }
 
+/**
+ * Lets Floating UI finish positioning the surface. Submenu panels stay hidden
+ * until then (they would otherwise measure against a surface still parked at
+ * `translate(0, 0)`), so any assertion on a panel's own geometry has to wait —
+ * as it does in life, where a panel is hovered open long after the menu landed.
+ */
+async function settleSurface(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve()
+  })
+}
+
 describe('ContextMenu submenus', () => {
   const disposables: { dispose(): void }[] = []
 
@@ -263,7 +275,7 @@ describe('ContextMenu submenus', () => {
     expect(executed).toEqual([['deepest.cmd']])
   })
 
-  it('positions a submenu panel without crashing on all-zero rects', () => {
+  it('positions a submenu panel without crashing on all-zero rects', async () => {
     const root = asMenuId('test.submenu.rects.root')
     const sub = asMenuId('test.submenu.rects.child')
     track(MenuRegistry.addSubmenuItem(root, { submenu: sub, title: 'More' }))
@@ -277,6 +289,7 @@ describe('ContextMenu submenus', () => {
         onClose={vi.fn()}
       />,
     )
+    await settleSurface()
 
     fireEvent.mouseEnter(screen.getByText('More'))
     const panel = screen.getByTestId('context-menu-submenu')
@@ -286,7 +299,7 @@ describe('ContextMenu submenus', () => {
     expect(panel.style.left).toBe('0px')
   })
 
-  it('caps the panel height to the viewport so a tall submenu scrolls', () => {
+  it('caps the panel height to the viewport so a tall submenu scrolls', async () => {
     const root = asMenuId('test.submenu.cap.root')
     const sub = asMenuId('test.submenu.cap.child')
     track(MenuRegistry.addSubmenuItem(root, { submenu: sub, title: 'More' }))
@@ -300,6 +313,7 @@ describe('ContextMenu submenus', () => {
         onClose={vi.fn()}
       />,
     )
+    await settleSurface()
 
     fireEvent.mouseEnter(screen.getByText('More'))
     const panel = screen.getByTestId('context-menu-submenu')
@@ -951,6 +965,36 @@ describe('ContextMenu submenus', () => {
 
       fireEvent.keyDown(window, { key: 'Enter' })
       expect(executed).toEqual([['nested.cmd']])
+    })
+
+    it('waits for the surface to be positioned before placing a pre-expanded panel', async () => {
+      const root = asMenuId('test.memory.nested.placement')
+      const sub = asMenuId('test.memory.nested.placement.child')
+      track(MenuRegistry.addSubmenuItem(root, { submenu: sub, title: 'More' }))
+      track(MenuRegistry.addMenuItem(sub, { command: 'nested.cmd', title: 'Nested' }))
+      const memory = makeMemory({ [`${root}|`]: 'nested.cmd' })
+
+      render(
+        <ContextMenu
+          menuId={root}
+          anchor={{ x: 400, y: 300 }}
+          commandService={makeCommandService([])}
+          autoFocusFirst
+          memory={memory}
+          onClose={vi.fn()}
+        />,
+      )
+
+      // Restoring onto a remembered *submenu* row mounts the panel in the very
+      // first commit — the one where Floating UI still has the surface at
+      // `translate(0, 0)`. Measuring then would anchor the panel to that stale
+      // origin and, once the real transform landed, leave it pushed off-screen
+      // by the anchor coordinates with nothing to re-place it.
+      const panel = screen.getByTestId('context-menu-submenu')
+      expect(panel.style.visibility).toBe('hidden')
+
+      await settleSurface()
+      expect(screen.getByTestId('context-menu-submenu').style.visibility).toBe('')
     })
   })
 })

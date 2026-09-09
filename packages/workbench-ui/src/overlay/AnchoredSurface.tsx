@@ -24,6 +24,7 @@ import {
   FloatingPortal,
   type Placement,
 } from '@floating-ui/react'
+import { AnchoredSurfacePositionedContext } from './anchoredSurfaceContext.js'
 
 export interface AnchoredSurfaceProps {
   /** Viewport point the surface is anchored to (e.g. click / caret coordinates). */
@@ -58,7 +59,7 @@ export function AnchoredSurface({
   surfaceProps,
   children,
 }: AnchoredSurfaceProps) {
-  const { refs, floatingStyles, context } = useFloating({
+  const { refs, floatingStyles, context, isPositioned } = useFloating({
     open: true,
     onOpenChange: (open) => {
       if (!open) onClose?.()
@@ -149,7 +150,16 @@ export function AnchoredSurface({
         }}
         {...getFloatingProps(restSurfaceProps)}
       >
-        {children}
+        {/*
+          Floating UI positions asynchronously: this element sits at
+          `translate(0, 0)` on the first commit. `fixed` descendants that place
+          themselves against real viewport coordinates must not measure until
+          the transform has landed, or they bake in the anchor offset — see
+          `AnchoredSurfacePositionedContext`.
+        */}
+        <AnchoredSurfacePositionedContext value={isPositioned}>
+          {children}
+        </AnchoredSurfacePositionedContext>
       </div>
     </FloatingPortal>
   )

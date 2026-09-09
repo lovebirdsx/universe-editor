@@ -5,8 +5,16 @@
  *  Shared by the context-menu submenu panels and the SCM title overflow menu.
  *--------------------------------------------------------------------------------------------*/
 
-import { useCallback, useLayoutEffect, useState, type CSSProperties, type RefObject } from 'react'
+import {
+  useCallback,
+  useContext,
+  useLayoutEffect,
+  useState,
+  type CSSProperties,
+  type RefObject,
+} from 'react'
 import type { IViewportSize } from './anchorLayout.js'
+import { AnchoredSurfacePositionedContext } from './anchoredSurfaceContext.js'
 
 /** Keep-away margin from the viewport edges, matching `AnchoredSurface`'s padding. */
 const VIEWPORT_MARGIN = 8
@@ -41,6 +49,15 @@ const HIDDEN_STYLE: CSSProperties = { top: 0, left: 0, visibility: 'hidden' }
  * And the panel follows its surroundings: it re-measures on window resize and on
  * any ancestor scrolling, so a panel hanging off a row inside a scrollable menu
  * does not stay behind when that row moves.
+ *
+ * Measuring is held off until the enclosing `AnchoredSurface` reports its first
+ * Floating UI pass done (`AnchoredSurfacePositionedContext`); until then the
+ * panel stays hidden. Both readings above come from the surface — the parent
+ * row's rect via `compute`, and the origin correction — and the surface is
+ * still parked at `translate(0, 0)` on the first commit, with nothing firing
+ * once it moves. A panel that renders together with its surface (a submenu
+ * opened pre-expanded by the keyboard) would otherwise keep the stale offset
+ * and land off-screen.
  */
 export function useTransformFreePlacement<T extends IPlacementOrigin>(
   ref: RefObject<HTMLElement | null>,
@@ -49,6 +66,7 @@ export function useTransformFreePlacement<T extends IPlacementOrigin>(
   const [placed, setPlaced] = useState<
     { readonly placement: T; readonly style: CSSProperties } | undefined
   >(undefined)
+  const surfacePositioned = useContext(AnchoredSurfacePositionedContext)
 
   const measure = useCallback(() => {
     const el = ref.current
@@ -84,6 +102,7 @@ export function useTransformFreePlacement<T extends IPlacementOrigin>(
   }, [ref, compute])
 
   useLayoutEffect(() => {
+    if (!surfacePositioned) return
     measure()
     const win = ref.current?.ownerDocument.defaultView
     if (!win) return
@@ -95,7 +114,7 @@ export function useTransformFreePlacement<T extends IPlacementOrigin>(
       win.removeEventListener('resize', measure)
       win.removeEventListener('scroll', measure, true)
     }
-  }, [ref, measure])
+  }, [ref, measure, surfacePositioned])
 
   return placed ?? { placement: undefined, style: HIDDEN_STYLE }
 }
