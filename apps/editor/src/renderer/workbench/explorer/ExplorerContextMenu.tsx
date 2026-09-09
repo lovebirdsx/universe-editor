@@ -24,6 +24,7 @@ import {
 } from '../../services/extensions/ScmService.js'
 import { scmHostPath } from '../../services/scm/scmHostPath.js'
 import { renderMenuIcon } from '../icons/menuIcon.js'
+import { useContextMenuMemory } from '../contextMenu/useContextMenuMemory.js'
 import { useRemoteAuthority } from '../useRemoteAuthority.js'
 import { useScopedContextKey } from '../useScopedContextKey.js'
 import { useObservable, useOptionalService } from '../useService.js'
@@ -158,6 +159,13 @@ export function ExplorerContextMenu({
     ]
   }, [resource, rootResource, isDirectory, contextSelection])
 
+  const memory = useContextMenuMemory()
+  // Coarse target shape — the granularity "last executed" is remembered at.
+  // Files and directories rarely share follow-up intent (rename a file → the
+  // next right-click is likelier on another file than on a folder).
+  const contextTag =
+    state.target === null ? 'blank' : isRoot ? 'root' : isDirectory ? 'directory' : 'file'
+
   return (
     <ContextMenu
       menuId={MenuId.ExplorerContext}
@@ -167,6 +175,8 @@ export function ExplorerContextMenu({
       {...(scopedContext ? { contextKeyService: scopedContext } : {})}
       renderIcon={renderMenuIcon}
       autoFocusFirst={state.keyboard ?? false}
+      {...(memory ? { memory } : {})}
+      contextTag={contextTag}
       onClose={onClose}
     />
   )

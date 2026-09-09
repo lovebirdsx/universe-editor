@@ -51,14 +51,62 @@ export function useMenuNavigation(
    * swallows ArrowUp/ArrowDown from whatever view raised it.
    */
   enabled = true,
+  /**
+   * Opening highlight override for keyboard-raised menus, as the index path
+   * from the root down to the target row (length 1 = a top-level row). Every
+   * prefix must land on a submenu row — those panels open expanded — and the
+   * final row must be navigable. When the path is missing or stale the hook
+   * falls back to the first row. Ignored for mouse-opened menus
+   * (`autoFocusFirst === false`), which stay unhighlighted. The caller resolves
+   * "last executed command id" to a path; the hook itself stays id-agnostic.
+   */
+  initialActivePath?: readonly number[] | undefined,
 ): MenuNavigation {
   // Lazy initializer: `rows` is final on the first render (both flavours resolve
   // synchronously), so the opening highlight lands on the right row without an
   // extra effect + re-render.
   const [state, setState] = useState<MenuState>(() => {
     if (!autoFocusFirst) return INITIAL_STATE
-    const first = stepIndex(rows, undefined, 1)
-    return first === undefined ? INITIAL_STATE : { open: [], active: { level: 0, index: first } }
+    // A caller-supplied path (e.g. the last-executed row, possibly nested) takes
+    // precedence, falling back to the first navigable row when missing or stale.
+    // Walk the path against the row tree: each prefix step must be a submenu
+    // (its panel opens expanded), the final step any navigable row. A path into
+    // a submenu lands directly on the nested row — Enter runs it straight away.
+    let requested: MenuActive | undefined
+    let requestedOpen: readonly number[] = []
+    if (initialActivePath !== undefined && initialActivePath.length > 0) {
+      let levelRows: readonly RowModel[] = rows
+      let level = 0
+      let valid = true
+      while (valid && level < initialActivePath.length) {
+        const index = initialActivePath[level]
+        const row = index === undefined ? undefined : levelRows[index]
+        const navigable =
+          row !== undefined &&
+          row.kind !== 'separator' &&
+          !(row.kind === 'item' && row.disabled === true)
+        if (!navigable || row === undefined) {
+          valid = false
+        } else if (level === initialActivePath.length - 1) {
+          requested = { level, index: index as number }
+          break
+        } else if (row.kind === 'submenu') {
+          levelRows = row.children
+          level++
+        } else {
+          // A non-final step on a plain item: the path claims it has children,
+          // it does not — stale memory from an older menu shape.
+          valid = false
+        }
+      }
+      if (!valid) requested = undefined
+      else requestedOpen = initialActivePath.slice(0, -1)
+    }
+    if (requested === undefined) {
+      const first = stepIndex(rows, undefined, 1)
+      return first === undefined ? INITIAL_STATE : { open: [], active: { level: 0, index: first } }
+    }
+    return { open: requestedOpen, active: requested }
   })
   const stateRef = useRef(state)
   stateRef.current = state

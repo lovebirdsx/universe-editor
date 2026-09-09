@@ -1,0 +1,93 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Universe Editor Authors. All rights reserved.
+ *  useContextMenuMemory — bridges the workbench-ui `IContextMenuMemory` port to
+ *  `IStorageService`. Reads are served synchronously from an in-memory cache so
+ *  the menu's opening highlight can be chosen in a `useState` initializer; the
+ *  cache is warmed once on first use and writes go through in the background
+ *  (fire-and-forget — a lost write only means the next menu opens on the first
+ *  row again, which is the pre-feature behaviour anyway).
+ *--------------------------------------------------------------------------------------------*/
+
+import { IStorageService, type MenuId } from '@universe-editor/platform'
+import type { IContextMenuMemory } from '@universe-editor/workbench-ui'
+import { useOptionalService } from '../useService.js'
+
+const STORAGE_KEY = 'contextMenu.lastExecuted'
+
+/** Serializable shape persisted under `STORAGE_KEY`. */
+type PersistedMemory = Record<string, string>
+
+function bucketKey(menuId: MenuId, contextTag: string | undefined): string {
+  return `${String(menuId)}|${contextTag ?? ''}`
+}
+
+class StorageBackedContextMenuMemory implements IContextMenuMemory {
+  private _cache: PersistedMemory = {}
+  private _loadPromise: Promise<void> | undefined
+
+  constructor(private readonly _storage: IStorageService) {}
+
+  /**
+   * Warm the in-memory cache. Idempotent: only the first call goes to storage.
+   *
+   * Merge semantics: if `set` ran while the load was in flight (a fast picker
+   * on the very first menu), those entries survive — a wholesale overwrite
+   * would permanently drop them, and the next `set` would persist the hole.
+   */
+  async preload(): Promise<void> {
+    this._loadPromise ??= this._storage
+      .get<PersistedMemory>(STORAGE_KEY)
+      .then((loaded) => {
+        // Cache wins on conflicts — entries written during the load are newer
+        // than whatever was on disk.
+        this._cache = { ...(loaded ?? {}), ...this._cache }
+      })
+      .catch(() => {
+        // A transient IPC failure leaves the feature off for this session.
+        // Still flag the load as done so a later transient success can't
+        // clobber entries written in the meantime.
+      })
+    return this._loadPromise
+  }
+
+  get(menuId: MenuId, contextTag: string | undefined): string | undefined {
+    return this._cache[bucketKey(menuId, contextTag)]
+  }
+
+  set(menuId: MenuId, contextTag: string | undefined, commandId: string): void {
+    this._cache[bucketKey(menuId, contextTag)] = commandId
+    // Persist in the background. No debounce: writes are tiny and the volume
+    // is bounded by how fast a user can pick menu items.
+    void this._storage.set(STORAGE_KEY, this._cache)
+  }
+}
+
+/**
+ * Module-level singleton: every context menu in the workbench must read/write
+ * the same cache, otherwise a command picked from one menu would not be
+ * remembered when another component raises that same menu later. Created lazily
+ * on first call so the `IStorageService` lookup happens inside the DI tree.
+ *
+ * `preload` fires the moment the singleton is created (not in an effect) so
+ * the cache starts warming before the first menu ever opens — by the time the
+ * user presses the ContextMenu key, the round-trip is usually already done.
+ * The first-ever open can still race the load; it falls back to the first row
+ * for that one menu, then every subsequent open hits the warm cache.
+ */
+let shared: StorageBackedContextMenuMemory | undefined
+
+/**
+ * Resolve the shared `IContextMenuMemory` backed by `IStorageService`.
+ *
+ * Returns `undefined` when no `IStorageService` is bound (unit tests rendering
+ * a menu outside `<Workbench>`): the menu then simply behaves as if the feature
+ * were off — opening on the first row, recording nothing.
+ */
+export function useContextMenuMemory(): IContextMenuMemory | undefined {
+  const storage = useOptionalService(IStorageService)
+  if (storage !== undefined && shared === undefined) {
+    shared = new StorageBackedContextMenuMemory(storage)
+    void shared.preload()
+  }
+  return shared
+}

@@ -722,4 +722,235 @@ describe('ContextMenu submenus', () => {
       expect(activeLabel(menu)).toBe('Second')
     })
   })
+
+  describe('memory (last executed)', () => {
+    function twoGroups(id: string) {
+      const root = asMenuId(id)
+      track(MenuRegistry.addMenuItem(root, { command: 'a.cmd', title: 'First', group: '1_a' }))
+      track(MenuRegistry.addMenuItem(root, { command: 'b.cmd', title: 'Second', group: '2_b' }))
+      return root
+    }
+
+    function makeMemory(initial?: Record<string, string>) {
+      const map = new Map(Object.entries(initial ?? {}))
+      return {
+        get: (menuId: MenuId, contextTag: string | undefined) =>
+          map.get(`${String(menuId)}|${contextTag ?? ''}`),
+        set: (menuId: MenuId, contextTag: string | undefined, commandId: string) => {
+          map.set(`${String(menuId)}|${contextTag ?? ''}`, commandId)
+        },
+      }
+    }
+
+    it('pre-highlights the remembered row when opened by keyboard', () => {
+      const root = twoGroups('test.memory.hit')
+      const memory = makeMemory({ [`${root}|`]: 'b.cmd' })
+
+      render(
+        <ContextMenu
+          menuId={root}
+          anchor={{ x: 0, y: 0 }}
+          commandService={makeCommandService([])}
+          autoFocusFirst
+          memory={memory}
+          onClose={vi.fn()}
+        />,
+      )
+
+      expect(activeLabel(screen.getByRole('menu'))).toBe('Second')
+    })
+
+    it('falls back to the first row when the remembered command is gone', () => {
+      const root = twoGroups('test.memory.miss')
+      const memory = makeMemory({ [`${root}|`]: 'no.such.cmd' })
+
+      render(
+        <ContextMenu
+          menuId={root}
+          anchor={{ x: 0, y: 0 }}
+          commandService={makeCommandService([])}
+          autoFocusFirst
+          memory={memory}
+          onClose={vi.fn()}
+        />,
+      )
+
+      expect(activeLabel(screen.getByRole('menu'))).toBe('First')
+    })
+
+    it('leaves mouse-opened menus unhighlighted even when memory has a hit', () => {
+      const root = twoGroups('test.memory.mouse')
+      const memory = makeMemory({ [`${root}|`]: 'b.cmd' })
+
+      render(
+        <ContextMenu
+          menuId={root}
+          anchor={{ x: 0, y: 0 }}
+          commandService={makeCommandService([])}
+          memory={memory}
+          onClose={vi.fn()}
+        />,
+      )
+
+      expect(activeLabel(screen.getByRole('menu'))).toBeNull()
+    })
+
+    it('scopes memory by contextTag', () => {
+      const root = twoGroups('test.memory.tag')
+      const memory = makeMemory({
+        [`${root}|file`]: 'b.cmd',
+        [`${root}|directory`]: 'a.cmd',
+      })
+
+      const { unmount } = render(
+        <ContextMenu
+          menuId={root}
+          anchor={{ x: 0, y: 0 }}
+          commandService={makeCommandService([])}
+          autoFocusFirst
+          memory={memory}
+          contextTag="file"
+          onClose={vi.fn()}
+        />,
+      )
+      expect(activeLabel(screen.getByRole('menu'))).toBe('Second')
+      unmount()
+
+      render(
+        <ContextMenu
+          menuId={root}
+          anchor={{ x: 0, y: 0 }}
+          commandService={makeCommandService([])}
+          autoFocusFirst
+          memory={memory}
+          contextTag="directory"
+          onClose={vi.fn()}
+        />,
+      )
+      expect(activeLabel(screen.getByRole('menu'))).toBe('First')
+    })
+
+    it('records the picked command into memory', () => {
+      const root = twoGroups('test.memory.record')
+      const memory = makeMemory()
+
+      render(
+        <ContextMenu
+          menuId={root}
+          anchor={{ x: 0, y: 0 }}
+          commandService={makeCommandService([])}
+          autoFocusFirst
+          memory={memory}
+          contextTag="file"
+          onClose={vi.fn()}
+        />,
+      )
+
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Second' }))
+      expect(memory.get(root, 'file')).toBe('b.cmd')
+      // Double-written under the tag-less bucket too — that is what powers the
+      // cross-contextTag fallback on the next open.
+      expect(memory.get(root, undefined)).toBe('b.cmd')
+    })
+
+    it('borrows the menuId-level memory when the contextTag bucket is empty', () => {
+      const root = twoGroups('test.memory.tagfallback')
+      // Only the tag-less bucket is populated: the user picked "Second" on a
+      // *file* earlier, and now opens the menu on a *directory* for the first
+      // time — the directory menu offers the same command, so it wins.
+      const memory = makeMemory({ [`${root}|`]: 'b.cmd' })
+
+      render(
+        <ContextMenu
+          menuId={root}
+          anchor={{ x: 0, y: 0 }}
+          commandService={makeCommandService([])}
+          autoFocusFirst
+          memory={memory}
+          contextTag="directory"
+          onClose={vi.fn()}
+        />,
+      )
+
+      expect(activeLabel(screen.getByRole('menu'))).toBe('Second')
+    })
+
+    it('ignores the menuId-level memory when the command is absent from this menu', () => {
+      const root = asMenuId('test.memory.tagfallback.miss')
+      track(MenuRegistry.addMenuItem(root, { command: 'only.cmd', title: 'Only', group: '1_a' }))
+      // "other.cmd" was picked under a different contextTag whose menu offered
+      // it; *this* menu does not, so the open falls back to the first row.
+      const memory = makeMemory({ [`${root}|`]: 'other.cmd' })
+
+      render(
+        <ContextMenu
+          menuId={root}
+          anchor={{ x: 0, y: 0 }}
+          commandService={makeCommandService([])}
+          autoFocusFirst
+          memory={memory}
+          contextTag="directory"
+          onClose={vi.fn()}
+        />,
+      )
+
+      expect(activeLabel(screen.getByRole('menu'))).toBe('Only')
+    })
+
+    it('restores onto the nested row itself when the remembered command is in a submenu', () => {
+      const root = asMenuId('test.memory.nested')
+      const sub = asMenuId('test.memory.nested.child')
+      track(MenuRegistry.addMenuItem(root, { command: 'top.cmd', title: 'Top', group: '1_a' }))
+      track(MenuRegistry.addSubmenuItem(root, { submenu: sub, title: 'More', group: '2_b' }))
+      track(MenuRegistry.addMenuItem(sub, { command: 'nested.cmd', title: 'Nested' }))
+      const memory = makeMemory({ [`${root}|`]: 'nested.cmd' })
+
+      render(
+        <ContextMenu
+          menuId={root}
+          anchor={{ x: 0, y: 0 }}
+          commandService={makeCommandService([])}
+          autoFocusFirst
+          memory={memory}
+          onClose={vi.fn()}
+        />,
+      )
+
+      // The remembered row lives inside a submenu: the menu opens with that
+      // panel already expanded and the highlight on the nested row itself, so
+      // Enter runs it straight away. The virtual focus (`aria-activedescendant`)
+      // lives on the deepest level only; the root menu instead marks the submenu
+      // parent as its expanded row (`aria-expanded`) so the highlight reads as a
+      // breadcrumb leading down to the command.
+      const submenu = screen.getByTestId('context-menu-submenu')
+      expect(activeLabel(submenu)).toBe('Nested')
+      expect(screen.getByRole('menuitem', { name: 'More' }).getAttribute('aria-expanded')).toBe(
+        'true',
+      )
+    })
+
+    it('runs the remembered nested command on a bare Enter', () => {
+      const root = asMenuId('test.memory.nested.enter')
+      const sub = asMenuId('test.memory.nested.enter.child')
+      track(MenuRegistry.addMenuItem(root, { command: 'top.cmd', title: 'Top', group: '1_a' }))
+      track(MenuRegistry.addSubmenuItem(root, { submenu: sub, title: 'More', group: '2_b' }))
+      track(MenuRegistry.addMenuItem(sub, { command: 'nested.cmd', title: 'Nested' }))
+      const executed: unknown[][] = []
+      const memory = makeMemory({ [`${root}|`]: 'nested.cmd' })
+
+      render(
+        <ContextMenu
+          menuId={root}
+          anchor={{ x: 0, y: 0 }}
+          commandService={makeCommandService(executed)}
+          autoFocusFirst
+          memory={memory}
+          onClose={vi.fn()}
+        />,
+      )
+
+      fireEvent.keyDown(window, { key: 'Enter' })
+      expect(executed).toEqual([['nested.cmd']])
+    })
+  })
 })

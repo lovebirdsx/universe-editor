@@ -13,6 +13,23 @@ import type { RowModel } from './menuModel.js'
 import { MenuRows } from './menuRows.js'
 import { useMenuNavigation } from './useMenuNavigation.js'
 
+/**
+ * Sync, in-memory view of "the last command this menu ran, per context tag".
+ * Implementations bridge to whatever persistence they like (the editor caches
+ * `IStorageService` in memory and writes through in the background) — reads
+ * must be synchronous because the opening highlight is chosen in a `useState`
+ * initializer with no room for a round-trip.
+ *
+ * Lookup is two-level: `ContextMenu` first asks for `menuId + contextTag`,
+ * then falls back to `menuId + undefined` (the tag-less bucket). For the
+ * fallback to ever hit, implementations should therefore also record each
+ * pick under `undefined` — see `ContextMenu`'s `memory` prop.
+ */
+export interface IContextMenuMemory {
+  get(menuId: MenuId, contextTag: string | undefined): string | undefined
+  set(menuId: MenuId, contextTag: string | undefined, commandId: string): void
+}
+
 export interface ContextMenuProps {
   menuId: MenuId
   anchor: ContextViewAnchor
@@ -47,6 +64,26 @@ export interface ContextMenuProps {
    * action under a pointer that isn't there.
    */
   autoFocusFirst?: boolean
+  /**
+   * Remembers the last command this menu ran and pre-highlights it the next
+   * time the menu is opened *by keyboard* (`autoFocusFirst`). Omit to keep the
+   * "first row" default. Mouse-opened menus are unaffected: with no opening
+   * highlight there is nothing to restore into.
+   *
+   * Lookup is per `menuId + contextTag`, falling back to the tag-less
+   * `menuId` bucket when the exact tag was never recorded — so e.g. picking
+   * "Copy Name" on a file lets the *directory* menu (never used before) open
+   * on "Copy Name" too, as long as that command exists there. Every pick is
+   * therefore recorded twice: under its `contextTag` and under `undefined`.
+   */
+  memory?: IContextMenuMemory
+  /**
+   * Free-form context discriminator supplied by the host (e.g. Explorer's
+   * `'file' | 'directory' | 'root'`) so "last executed" is remembered per
+   * target shape rather than globally across the menu. Omitted = one bucket
+   * for the whole `menuId`.
+   */
+  contextTag?: string
   onClose: () => void
 }
 
@@ -68,15 +105,23 @@ export function ContextMenu({
   groupFilter,
   renderIcon,
   autoFocusFirst = false,
+  memory,
+  contextTag,
   onClose,
 }: ContextMenuProps) {
   const runCommand = useCallback(
     (commandId: string) => {
+      // Record before closing so the *next* keyboard-opened menu can restore
+      // onto this row. Fire-and-forget: the command's success is unknown and
+      // irrelevant — the user picked it, that is the signal. Double-write:
+      // the tag-less bucket powers the cross-tag fallback (see `memory`).
+      memory?.set(menuId, contextTag, commandId)
+      if (contextTag !== undefined) memory?.set(menuId, undefined, commandId)
       onClose()
       if (executeCommand) executeCommand(commandId)
       else void commandService.executeCommand(commandId, ...args)
     },
-    [onClose, executeCommand, commandService, args],
+    [onClose, executeCommand, commandService, args, memory, menuId, contextTag],
   )
 
   const rows = useMemo<RowModel[]>(() => {
@@ -135,10 +180,48 @@ export function ContextMenu({
 
   const uid = useId()
   const hasRows = rows.length > 0
+  // Resolve the remembered command id to a row *path* while we still see the
+  // rows — the navigation hook itself stays id-agnostic. Only consulted for
+  // keyboard-opened menus: mouse-opened ones have no opening highlight to
+  // override, and looking the store up would be wasted work. Lookup tries the
+  // exact `contextTag` bucket first, then the tag-less `menuId` bucket; the
+  // existence check baked into the path walk is what makes the fallback safe —
+  // a command remembered from a *different* target shape (say "Copy Name" on a
+  // file) only wins here if the current menu actually offers it, otherwise the
+  // open silently falls back to the first row. The path runs from the root all
+  // the way down to a nested command's own row, so a remembered submenu child
+  // opens with every panel expanded and the highlight on the command itself —
+  // Enter runs it straight away.
+  const initialActivePath = useMemo((): readonly number[] | undefined => {
+    if (!autoFocusFirst || memory === undefined) return undefined
+    const remembered =
+      memory.get(menuId, contextTag) ??
+      (contextTag === undefined ? undefined : memory.get(menuId, undefined))
+    if (remembered === undefined) return undefined
+    const findAtLevel = (
+      levelRows: readonly RowModel[],
+      trail: readonly number[],
+    ): readonly number[] | undefined => {
+      for (let i = 0; i < levelRows.length; i++) {
+        const row = levelRows[i]
+        if (row === undefined) continue
+        if (row.kind === 'item' && row.id === remembered && row.disabled !== true) {
+          return [...trail, i]
+        }
+        if (row.kind === 'submenu') {
+          const nested = findAtLevel(row.children, [...trail, i])
+          if (nested !== undefined) return nested
+        }
+      }
+      return undefined
+    }
+    return findAtLevel(rows, [])
+  }, [autoFocusFirst, memory, menuId, contextTag, rows])
   const { state, onRowEnter, onCancelClose, onEscape } = useMenuNavigation(
     rows,
     autoFocusFirst,
     hasRows,
+    initialActivePath,
   )
 
   // An empty menu never opens: report the close so the host drops its state
