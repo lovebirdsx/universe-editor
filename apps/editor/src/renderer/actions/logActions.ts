@@ -27,7 +27,7 @@ import {
 import { ILogFilesService, type LogFileDescriptor } from '../../shared/ipc/services.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
-import { revealOutputPanel } from '../services/output/revealOutputPanel.js'
+import { OUTPUT_VIEW_ID, revealOutputPanel } from '../services/output/revealOutputPanel.js'
 import { sortOutputChannelNames } from '../services/output/outputChannelSort.js'
 import { IOutputModelService } from '../services/output/OutputModelService.js'
 
@@ -212,6 +212,11 @@ export class ShowOutputChannelAction extends Action2 {
     })
     if (!selected?.id) return
     outputService.setActiveChannel(selected.id)
+    // Flush pending content so `hasContent` turns true and OutputView mounts
+    // LogOutputView (registering its focusable primary) before we reveal —
+    // otherwise a first-opened channel has no primary and focusView() strands
+    // keyboard focus on the ViewBody fallback container.
+    outputService.getChannel(selected.id)?.flushNow()
     revealOutputPanel(layoutService, viewsService)
   }
 }
@@ -398,7 +403,10 @@ export class ToggleOutputAction extends Action2 {
       layout.setVisible(PartId.Panel, false)
     } else {
       layout.setVisible(PartId.Panel, true)
-      layout.getPart(PartId.Panel)?.focus()
+      // Focus the Output view itself (its registered focusable is the Monaco
+      // editor), not just the panel container — otherwise arrow keys / text
+      // selection stay dead until the user clicks into the log.
+      void layout.focusView(OUTPUT_VIEW_ID)
     }
   }
 }

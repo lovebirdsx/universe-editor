@@ -50,6 +50,7 @@ function makeLayoutService() {
     _serviceBrand: undefined,
     setVisible: vi.fn(),
     getPart: vi.fn(() => ({ focus: vi.fn() })),
+    focusView: vi.fn().mockResolvedValue(true),
   }
 }
 

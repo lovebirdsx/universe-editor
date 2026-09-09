@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { act, render, screen } from '@testing-library/react'
 import {
   IConfigurationService,
   IOutputService,
@@ -55,9 +55,32 @@ function renderOutputView(outputService = new OutputService(makeStorage())) {
 }
 
 describe('OutputView', () => {
-  it('shows the empty state when no channel has content', () => {
+  it('shows the empty state when there is no active channel at all', () => {
     renderOutputView()
     expect(screen.getByText('No output.')).toBeTruthy()
+  })
+
+  it('mounts the editor for an active channel that has no content yet (Bug: empty channel never mounts LogOutputView → focus strands on the ViewBody fallback)', async () => {
+    // Repro for the first-open-of-an-empty-channel focus bug: an active channel
+    // with no content has `activeChannelHasContent === false`. If OutputView
+    // gates the editor on that flag, LogOutputView never mounts for an empty
+    // channel → no focusable primary is ever registered → focusView() strands
+    // keyboard focus on the ViewBody fallback container. VSCode parity: an
+    // output channel is always a focusable read-only editor, even when empty.
+    const outputService = new OutputService(makeStorage())
+    outputService.createChannel('empty-channel')
+    outputService.setActiveChannel('empty-channel')
+    renderOutputView(outputService)
+
+    // The editor must mount (not the "No output." placeholder) even though the
+    // channel is empty, so its focusable primary exists for focusView().
+    await act(async () => {
+      await Promise.resolve()
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(screen.queryByText('No output.')).toBeNull()
   })
 
   it('does not embed a toolbar (toolbar lives in the shared header now)', () => {

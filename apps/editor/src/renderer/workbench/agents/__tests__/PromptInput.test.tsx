@@ -516,6 +516,16 @@ function getTextarea(): HTMLTextAreaElement {
   return screen.getByTestId('acp-prompt-input') as HTMLTextAreaElement
 }
 
+// The stub editor's real keyboard-focus element: with `editContext: true` the
+// focus host is the `native-edit-context` div, NOT the `acp-prompt-input`
+// textarea (that textarea only exists in the stub as a fireEvent driver for the
+// model). Focus assertions must target this element to match production.
+function getFocusHost(): HTMLElement {
+  const el = document.querySelector('.native-edit-context')
+  if (!el) throw new Error('native-edit-context focus host not mounted')
+  return el as HTMLElement
+}
+
 function setPromptHistory(entries: readonly string[]): void {
   act(() => {
     stubHistoryEntries.set(entries, undefined)
@@ -1650,36 +1660,36 @@ describe('PromptInput — @@ / @# file picker triggers', () => {
 // ---------------------------------------------------------------------------
 
 describe('PromptInput — focus handoff', () => {
-  it('exposes focus() on the widget handle to focus the textarea', () => {
+  it('exposes focus() on the widget handle to focus the editor focus host', () => {
     const handleRef = makeHandleRef()
     renderWithServices(<PromptInput session={makeSession()} handleRef={handleRef} />)
-    const ta = getTextarea()
-    expect(document.activeElement).not.toBe(ta)
+    const host = getFocusHost()
+    expect(document.activeElement).not.toBe(host)
     act(() => {
       handleRef.current.focus()
     })
-    expect(document.activeElement).toBe(ta)
+    expect(document.activeElement).toBe(host)
   })
 
-  it('focuses the textarea when the active session id changes', () => {
+  it('focuses the editor focus host when the active session id changes', () => {
     const first = makeSession({ id: 's1' })
     const { rerender } = renderWithServices(<PromptInput session={first} />)
-    const ta = getTextarea()
+    const host = getFocusHost()
     // Initial mount must NOT auto-focus — we don't want to steal focus from
     // whatever click opened the panel.
-    expect(document.activeElement).not.toBe(ta)
+    expect(document.activeElement).not.toBe(host)
     const second = makeSession({ id: 's2' })
     rerender(<PromptInput session={second} />)
-    expect(document.activeElement).toBe(ta)
+    expect(document.activeElement).toBe(host)
   })
 
   it('does not refocus when the same session re-renders', () => {
     const session = makeSession()
     const { rerender } = renderWithServices(<PromptInput session={session} />)
-    const ta = getTextarea()
-    expect(document.activeElement).not.toBe(ta)
+    const host = getFocusHost()
+    expect(document.activeElement).not.toBe(host)
     rerender(<PromptInput session={session} />)
-    expect(document.activeElement).not.toBe(ta)
+    expect(document.activeElement).not.toBe(host)
   })
 
   // Regression: the prompt editor (editContext: true, no DOM-editable focus host)
@@ -1691,13 +1701,13 @@ describe('PromptInput — focus handoff', () => {
   it('sets acpPromptInputFocused (not editorTextFocus) while the prompt editor holds focus, clears on blur', () => {
     const contextKeyService = new ContextKeyService()
     renderWithServices(<PromptInput session={makeSession()} />, { contextKeyService })
-    const ta = getTextarea()
+    const host = getFocusHost()
 
     expect(contextKeyService.get('acpPromptInputFocused')).not.toBe(true)
-    act(() => ta.focus())
+    act(() => host.focus())
     expect(contextKeyService.get('acpPromptInputFocused')).toBe(true)
     expect(contextKeyService.get('editorTextFocus')).not.toBe(true)
-    act(() => ta.blur())
+    act(() => host.blur())
     expect(contextKeyService.get('acpPromptInputFocused')).toBe(false)
   })
 })

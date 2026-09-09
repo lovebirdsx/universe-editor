@@ -205,4 +205,30 @@ describe('restoreWorkbenchFocus', () => {
     expect(document.activeElement).toBe(editorTarget)
     expect(context.get('terminalFocus')).toBe(true)
   })
+
+  it('keeps a panel view the user already focused (e.g. the Output editor)', async () => {
+    const context = new ContextKeyService()
+    const panel = document.createElement('div')
+    panel.setAttribute('data-testid', 'part-panel')
+    const viewBody = document.createElement('div')
+    viewBody.setAttribute('data-view-id', 'workbench.view.output.main')
+    const editorTextarea = document.createElement('textarea')
+    viewBody.appendChild(editorTextarea)
+    panel.appendChild(viewBody)
+    document.body.appendChild(panel)
+    editorTextarea.focus()
+
+    const { layout, focusView } = makeLayoutService()
+
+    const result = await restoreWorkbenchFocus(
+      makeGroupsService(makeGroup(1)),
+      layout,
+      context,
+      makeViewsService('workbench.view.explorer'),
+    )
+
+    expect(result).toEqual({ target: 'kept', ok: true })
+    expect(document.activeElement).toBe(editorTextarea)
+    expect(focusView).not.toHaveBeenCalled()
+  })
 })

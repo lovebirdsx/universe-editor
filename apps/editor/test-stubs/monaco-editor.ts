@@ -113,6 +113,7 @@ function makeModel(initial: string, language: string, uri: unknown) {
     getLanguageId: () => currentLanguage,
     getLineCount: () => lines().length,
     getLineContent: (n: number) => lines()[n - 1] ?? '',
+    getLineMaxColumn: (n: number) => (lines()[n - 1] ?? '').length + 1,
     getLinesContent: () => lines(),
     getOffsetAt: (pos: Position) => positionToOffset(value, pos),
     getPositionAt: (offset: number) => offsetToPosition(value, offset),
@@ -477,8 +478,26 @@ export enum EditorOption {
   lineHeight = 66,
 }
 
+export enum ScrollType {
+  Smooth = 0,
+  Immediate = 1,
+}
+
+export enum CursorChangeReason {
+  NotSet = 0,
+  ContentFlush = 1,
+  RecoverFromMarkers = 2,
+  Explicit = 3,
+  Paste = 4,
+  Undo = 5,
+  Redo = 6,
+}
+
 const noopDisposable = { dispose: () => {} }
-const listen = (set: Set<() => void>, cb: () => void) => {
+const listen = <Args extends unknown[]>(
+  set: Set<(...args: Args) => void>,
+  cb: (...args: Args) => void,
+) => {
   set.add(cb)
   return { dispose: () => set.delete(cb) }
 }
@@ -490,20 +509,66 @@ export function _setTargetAtClientPointForTests(position: Position | null): void
   targetAtClientPoint = position === null ? null : { position }
 }
 
-// PromptMonacoEditor-flavoured fake editor: mounts a real textarea so component
-// tests can fireEvent against it, and bridges to a provided/created model.
+// Scroll-geometry test hook: LogOutputView's smart-scroll logic reads
+// getScrollTop/getScrollHeight/getLayoutInfo().height. The defaults below keep
+// `isScrolledToBottom` true (0 + 200 >= 100 - 20); tests override per call to
+// simulate a mid-scroll position. `_fireScrollChangeForTests` drives the
+// editor's onDidScrollChange listeners as a real wheel/scroll would.
+let scrollGeometry = { scrollTop: 0, scrollHeight: 100, viewportHeight: 200 }
+export function _setScrollGeometryForTests(g: {
+  scrollTop: number
+  scrollHeight: number
+  viewportHeight: number
+}): void {
+  scrollGeometry = g
+}
+export function _resetScrollGeometryForTests(): void {
+  scrollGeometry = { scrollTop: 0, scrollHeight: 100, viewportHeight: 200 }
+}
+let scrollListeners: Set<() => void> | null = null
+export function _fireScrollChangeForTests(): void {
+  for (const l of scrollListeners ? [...scrollListeners] : []) l()
+}
+
+// PromptMonacoEditor-flavoured fake editor. Mirrors the real monaco 0.55
+// `editContext: true` DOM shape (see nativeEditContext.js): the keyboard-focus
+// element is a `div.native-edit-context` (tabindex=0, FocusTracker + keydown
+// bound there), while the `textarea.ime-text-area` is a `tabindex=-1`
+// aria-hidden IME composition placeholder that must NOT receive focus. The
+// legacy `acp-prompt-input` textarea is kept on top so prompt tests can keep
+// driving the model via fireEvent against it (it stands in for the real
+// editor's text pipeline, which the stub does not emulate).
 function makePromptEditor(
   container: HTMLElement,
   options: { model?: ReturnType<typeof makeModel> },
 ) {
   const model = options.model ?? makeModel('', 'plaintext', undefined)
+
+  // Real editContext-mode focus/keyboard target.
+  const nativeEditContext = container.ownerDocument.createElement('div')
+  nativeEditContext.setAttribute('class', 'native-edit-context')
+  nativeEditContext.setAttribute('tabindex', '0')
+  container.appendChild(nativeEditContext)
+
+  // IME composition placeholder — focusable element tests must NOT land here.
+  const imeTextArea = container.ownerDocument.createElement('textarea')
+  imeTextArea.setAttribute('class', 'ime-text-area')
+  imeTextArea.setAttribute('readonly', 'true')
+  imeTextArea.setAttribute('tabindex', '-1')
+  imeTextArea.setAttribute('aria-hidden', 'true')
+  container.appendChild(imeTextArea)
+
+  // Prompt-driving textarea (legacy test hook).
   const ta = container.ownerDocument.createElement('textarea')
   ta.setAttribute('data-testid', 'acp-prompt-input')
   ta.value = model.getValue()
   container.appendChild(ta)
 
   const contentListeners = new Set<() => void>()
-  const cursorListeners = new Set<() => void>()
+  const cursorListeners = new Set<(e: {
+    position: Position
+    reason: CursorChangeReason
+  }) => void>()
   const focusListeners = new Set<() => void>()
   const blurListeners = new Set<() => void>()
   const commands = new Map<number, () => void>()
@@ -521,10 +586,10 @@ function makePromptEditor(
   ta.addEventListener('input', syncFromTextarea)
   ta.addEventListener('change', syncFromTextarea)
   ta.addEventListener('keyup', () => {
-    for (const l of cursorListeners) l()
+    fireCursorChange(CursorChangeReason.Explicit)
   })
   ta.addEventListener('click', () => {
-    for (const l of cursorListeners) l()
+    fireCursorChange(CursorChangeReason.Explicit)
   })
   ta.addEventListener('focus', () => {
     for (const l of focusListeners) l()
@@ -541,9 +606,23 @@ function makePromptEditor(
       }
     }
   })
+  // Focus/blur bridge: the real editContext-mode FocusTracker watches the
+  // native-edit-context div, so mirror its DOM focus into the editor's focus
+  // listeners (the legacy acp-prompt-input textarea listeners above stay as a
+  // fallback for tests that drive it directly).
+  nativeEditContext.addEventListener('focus', () => {
+    for (const l of focusListeners) l()
+  })
+  nativeEditContext.addEventListener('blur', () => {
+    for (const l of blurListeners) l()
+  })
 
   const getPosition = (): Position =>
     offsetToPosition(model.getValue(), ta.selectionStart ?? model.getValue().length)
+
+  const fireCursorChange = (reason: CursorChangeReason): void => {
+    for (const l of cursorListeners) l({ position: getPosition(), reason })
+  }
 
   // Output-view support: the editor starts on the bridge model but LogOutputView
   // swaps per-channel models via setModel. The textarea stays bound to the
@@ -557,15 +636,23 @@ function makePromptEditor(
     },
     saveViewState: () => null,
     restoreViewState: () => {},
-    onDidScrollChange: () => noopDisposable,
+    onDidScrollChange: (cb: () => void) => {
+      scrollListeners ??= new Set()
+      return listen(scrollListeners, cb)
+    },
     getContainerDomNode: () => container,
     getValue: () => model.getValue(),
-    focus: () => ta.focus(),
+    // Real editContext-mode editor.focus() lands on the native-edit-context div
+    // (NativeEditContext.focus() → FocusTracker.focus() → domNode.focus()); its
+    // DOM focus listener above bridges this into the editor's focus listeners.
+    focus: () => {
+      nativeEditContext.focus()
+    },
     getPosition,
     setPosition: (pos: Position) => {
       const off = positionToOffset(model.getValue(), pos)
       ta.setSelectionRange(off, off)
-      for (const l of cursorListeners) l()
+      fireCursorChange(CursorChangeReason.NotSet)
     },
     getOption: () => 18,
     getContentHeight: () => 60,
@@ -586,6 +673,7 @@ function makePromptEditor(
     }),
     onDidChangeModelContent: (cb: () => void) => listen(contentListeners, cb),
     onDidChangeCursorPosition: (cb: () => void) => listen(cursorListeners, cb),
+    onDidChangeModelDecorations: () => noopDisposable,
     onDidFocusEditorText: (cb: () => void) => listen(focusListeners, cb),
     onDidBlurEditorText: (cb: () => void) => listen(blurListeners, cb),
     onDidFocusEditorWidget: () => noopDisposable,
@@ -595,9 +683,11 @@ function makePromptEditor(
     onKeyDown: () => noopDisposable,
     updateOptions: () => {},
     revealLine: () => {},
-    getScrollTop: () => 0,
-    getScrollHeight: () => 100,
-    getLayoutInfo: () => ({ height: 200 }),
+    revealPositionInCenterIfOutsideViewport: () => {},
+    getDomNode: () => container,
+    getScrollTop: () => scrollGeometry.scrollTop,
+    getScrollHeight: () => scrollGeometry.scrollHeight,
+    getLayoutInfo: () => ({ height: scrollGeometry.viewportHeight }),
     dispose: () => {
       contentListeners.clear()
       cursorListeners.clear()
@@ -605,6 +695,8 @@ function makePromptEditor(
       blurListeners.clear()
       commands.clear()
       ta.remove()
+      imeTextArea.remove()
+      nativeEditContext.remove()
     },
   }
 }
@@ -620,6 +712,8 @@ export const editor = {
   setTheme: () => {},
   addKeybindingRule: () => {},
   EditorOption,
+  ScrollType,
+  CursorChangeReason,
   TrackedRangeStickiness: {
     AlwaysGrowsWhenTypingAtEdges: 0,
     NeverGrowsWhenTypingAtEdges: 1,

@@ -45,15 +45,16 @@ function fakeOutputService(): {
 function fakeLayoutService(): {
   service: ILayoutService
   setVisible: ReturnType<typeof vi.fn>
-  focus: ReturnType<typeof vi.fn>
+  focusView: ReturnType<typeof vi.fn>
 } {
-  const focus = vi.fn()
+  const focusView = vi.fn().mockResolvedValue(true)
   const setVisible = vi.fn()
   const service = {
     setVisible,
-    getPart: () => ({ focus }),
+    focusView,
+    getPart: () => ({ focus: vi.fn() }),
   } as unknown as ILayoutService
-  return { service, setVisible, focus }
+  return { service, setVisible, focusView }
 }
 
 function fakeViewsService(): {
@@ -80,7 +81,7 @@ describe('MainThreadOutput', () => {
     // when it was hidden. show() must also reveal the panel.
     expect(views.openViewContainer).toHaveBeenCalled()
     expect(layout.setVisible).toHaveBeenCalledWith(PartId.Panel, true)
-    expect(layout.focus).toHaveBeenCalled()
+    expect(layout.focusView).toHaveBeenCalledWith('workbench.view.output.main')
   })
 
   it('$showOutputChannel on an unknown handle does nothing', async () => {

@@ -59,6 +59,19 @@ export async function restoreWorkbenchFocus(
     return { target: 'kept', ok: true }
   }
 
+  // Nor steal a view outside the sidebar the user already focused — e.g. the
+  // Output editor focused via toggleOutput mid-restore-window. Restoring to
+  // Explorer would rip keyboard focus out of the panel the user is typing in.
+  const activeElement2 = globalThis.document?.activeElement
+  if (
+    activeElement2 instanceof HTMLElement &&
+    activeElement2.closest('[data-view-id]') !== null &&
+    activeElement2.closest('[data-testid="part-sidebar"]') === null
+  ) {
+    syncEditorFocusContext(contextKeyService)
+    return { target: 'kept', ok: true }
+  }
+
   const ok = await layoutService.focusView(EXPLORER_TREE_VIEW_ID, { source: 'restore' })
   syncEditorFocusContext(contextKeyService)
   return { target: 'explorer', ok }

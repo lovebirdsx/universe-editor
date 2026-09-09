@@ -86,6 +86,9 @@ function makeLayoutService() {
     setVisible: vi.fn(),
     getPart: vi.fn(() => ({ focus })),
     focus,
+    // revealOutputPanel now focuses the Output view (so the Monaco log editor
+    // receives keyboard focus), not the bare panel part.
+    focusView: vi.fn().mockResolvedValue(true),
   }
 }
 
@@ -216,7 +219,7 @@ describe('ErrorLogAutoRevealContribution', () => {
     expect(output.activeChannel?.getText()).toBe('[10:00:00] [error] boom\n')
     expect(views.openViewContainer).toHaveBeenCalledWith('workbench.view.output')
     expect(layout.setVisible).toHaveBeenCalledWith(PartId.Panel, true)
-    expect(layout.focus).toHaveBeenCalledTimes(1)
+    expect(layout.focusView).toHaveBeenCalledWith('workbench.view.output.main')
     contribution.dispose()
   })
 
@@ -265,7 +268,7 @@ describe('ErrorLogAutoRevealContribution', () => {
     expect(output.activeChannelName.get()).toBeUndefined()
     expect(layout.setVisible).not.toHaveBeenCalled()
     expect(views.openViewContainer).not.toHaveBeenCalled()
-    expect(layout.focus).not.toHaveBeenCalled()
+    expect(layout.focusView).not.toHaveBeenCalled()
 
     // 门控返回 false 不置位 _hasRevealed：面板关掉后来 error 仍正常揭示，
     // one-shot 机会不被面板常开期间的首条 error 消费掉

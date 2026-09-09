@@ -11,12 +11,18 @@ import {
   normalizeFontFamily,
 } from '../../../services/configuration/fontDefaults.js'
 import { useService, useObservable } from '../../useService.js'
+import type { IViewComponentProps } from '../../../services/views/ViewComponentRegistry.js'
 import { LogOutputView } from './LogOutputView.js'
 import styles from './OutputView.module.css'
 
-export function OutputView() {
+export function OutputView({ viewId }: IViewComponentProps) {
   const configService = useService(IConfigurationService)
-  const hasContent = useObservable(useService(IOutputService).activeChannelHasContent)
+  // Gate on whether a channel is active, not on whether it has content: an
+  // output channel is always a focusable read-only editor (VSCode parity), even
+  // when empty. Gating on content meant a first-opened empty channel never
+  // mounted LogOutputView, so no focusable primary was ever registered and
+  // focusView() stranded keyboard focus on the ViewBody fallback container.
+  const hasActiveChannel = useObservable(useService(IOutputService).activeChannelName) !== undefined
 
   const [fontSize, setFontSize] = useState(
     () => configService.get<number>('output.fontSize') ?? OUTPUT_FONT_SIZE_DEFAULT,
@@ -47,8 +53,8 @@ export function OutputView() {
   return (
     <div className={styles['outputView']}>
       <div className={styles['content']}>
-        {hasContent ? (
-          <LogOutputView fontSize={fontSize} fontFamily={fontFamily} />
+        {hasActiveChannel ? (
+          <LogOutputView fontSize={fontSize} fontFamily={fontFamily} viewId={viewId} />
         ) : (
           <div className={styles['empty']} style={{ fontSize: `${fontSize}px`, fontFamily }}>
             {localize('output.empty', 'No output.')}
