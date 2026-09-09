@@ -1,173 +1,46 @@
 # extensions/perforce/src/swarm/CLAUDE.md
 
-> 本文是 `extensions/perforce/CLAUDE.md` 的子域文档（Swarm 代码审核子模块），原为其「Helix Swarm 集成」章。p4 插件基座（分层架构 / 连接红线 / 密钥红线 / `-Mj`·`-ztag` 坑）见 [`../../CLAUDE.md`](../../CLAUDE.md)。
+> 本文是 `extensions/perforce/CLAUDE.md` 的子域文档（Swarm 代码审核子模块），原为其「Helix Swarm 集成」章。p4 插件基座（分层架构 / 连接红线 / 密钥红线 / `-Mj`·`-ztag` 坑）见 [`../../CLAUDE.md`](../../CLAUDE.md)。案例细节（真实 bug 叙事 / 修复 / 回归单测）拆在 `cases-*.md`（文末索引）。
 
 ## Helix Swarm（P4 Code Review）集成
 
-**Helix Swarm** 是 Perforce 官方的 web 代码审核系统。本集成把审核流程搬进编辑器，对标 GitHub PR：**发起审核 → 看列表/状态 → 打分（vote）+ 评论 → 改状态（transition）→ 行内评论 + 任务**。它是 `extensions/perforce` 插件的一个**子模块**（`src/swarm/`），复用 p4 插件的连接 / 认证 / spawn 基础设施。
+**Helix Swarm** 是 Perforce 官方 web 代码审核系统。本集成把审核流程搬进编辑器，对标 GitHub PR：**发起审核 → 看列表/状态 → 打分 + 评论 → 改状态 → 行内评论 + 任务**；是 `extensions/perforce` 插件的**子模块**（`src/swarm/`），复用 p4 插件的连接 / 认证 / spawn 基础设施。
 
-> 先读上文「扩展内置 Perforce（p4）插件」节（分层架构、`P4Service`/`client`、连接红线、密钥红线、`-Mj`/`-ztag` 坑）——本节只讲 **Swarm 特有**的东西：REST 客户端、审核领域模型、审核 UI、认证。
+> 先读父文档（分层架构、`P4Service`/`client`、连接红线、密钥红线、`-Mj`/`-ztag` 坑）——本节只讲 **Swarm 特有**的东西：REST 客户端、审核领域模型、审核 UI、认证。
 
 ### Swarm 领域模型（先建立心智模型，别拍脑袋）
 
 - **review ↔ shelved changelist**：一个 review 追踪一个**搁置（shelved）的 changelist**。发起审核 = 把 CL `p4 shelve` 后 `POST /reviews`。
-- **version（版本）**：每次重新 shelve 到同一个 review = 新增一个 **version**。`review.versions[]` 每项有 `{ rev, change, pending, time }`——`change` 是那个版本对应的 changelist 号，**diff 就靠它取快照**（见下"diff 数据源铁律"）。⚠️ **`rev` 不唯一**：未 approve 前的多次 re-shelve 全部报同一个 rev（rev 只在 approve 时递增），版本身份必须用数组位置 / `change`，绝不能把 `rev` 当唯一键（SwarmReviewEditor 曾因此把选择器卡在最老 shelf）。
-- **状态机是服务器权威的，绝不客户端计算**：state = `needsReview` / `needsRevision` / `approved` / `rejected` / `archived`。**合法的下一步永远 `GET /reviews/{id}/transitions` 问服务器**（它按当前用户 + 规则算），拿到 `{ state: label }` 映射后渲染成按钮。绝不在客户端硬编码"从 X 能到 Y"。`approved:commit`（Approve and Commit）是带 `:commit` 后缀的特殊 transition。
-- **task 状态机**：评论可标记为 task（`comment` → `open` → `addressed` → `verified`），不能跳级（`open`→`verified` 必须先 `addressed`）。这是**客户端**的合法迁移集（`SwarmInlineThread.tsx` 的 `nextTaskStates()`），因为 Swarm 对 taskState 迁移不做服务器校验。
+- **version（版本）**：每次重新 shelve 到同一个 review = 新增一个 **version**。`versions[]` 每项 `{ rev, change, pending, time }`——`change` 是版本对应的 changelist 号，**diff 就靠它取快照**（见红线 17）。⚠️ **`rev` 不唯一**：未 approve 前多次 re-shelve 都报同一个 rev（只在 approve 时递增），版本身份必须用数组位置 / `change`，**绝不能把 `rev` 当唯一键**（曾因此把选择器卡在最老 shelf）。
+- **状态机是服务器权威的，绝不客户端计算**：state = `needsReview`/`needsRevision`/`approved`/`rejected`/`archived`。**合法下一步永远 `GET /reviews/{id}/transitions` 问服务器**（按当前用户 + 规则算），拿 `{ state: label }` 映射渲染按钮，绝不客户端硬编码"从 X 能到 Y"。`approved:commit`（Approve and Commit）是带 `:commit` 后缀的特殊 transition。
+- **task 状态机**：评论可标记为 task（`comment` → `open` → `addressed` → `verified`），**不能跳级**（`open`→`verified` 必须先 `addressed`）。这是**客户端**的合法迁移集（`SwarmInlineThread.tsx` 的 `nextTaskStates()`），Swarm 对 taskState 迁移不做服务器校验。
 - **vote**：`up` / `down` / `clear`。
 
-### 📋 dashboard「Needs My Action」铁律：`participants=me` 不展开 group/project
+### 红线速查（每条一句话结论；完整叙事见 cases）
 
-`SwarmClient._loadDashboard` 本地推导 needsAction（**故意不调 `dashboards/action`**：v9-only、部分 Swarm 部署此接口返回 504）。但 **Swarm 的 `reviews?participants=<me>` 过滤器只匹配 individual participant（被单独指派为 reviewer、或已投票/评论的人），绝不展开 group/project 成员**。于是纯通过 Swarm project（如 `swarm-project-example`）或 group 关联、用户还没个人参与的 review，`participants=me` **永远查不到**（实测穷尽翻 600 条不出现），从不进 needsAction——投票后才变 individual participant，但那时往往已 approved 被状态过滤掉，表现为「从来不出现」。
-
-- **补法**：`perforce.swarm.needsActionAuthors`（发起者集合，持久化配置）非空时，`_loadDashboard` 并发多发一路 `listReviews({ author: [...authors], state: ['needsReview','needsRevision'] })`，其 open review 并入 needsAction（`deriveNeedsAction` 按 id 去重合并 authored+participating+byAuthor）。空集=仅 participants（旧行为）。dashboard command handler 从 `workspace.getConfiguration('perforce').get('swarm.needsActionAuthors')` 读配置传入；in-flight 合并 key 须纳入 authors 签名。
-- **实测确认的过滤器语义**（v9，别再逐个试）：`author[]=a&author[]=b`、`state[]=needsReview&state[]=needsRevision` 都是**精确 OR**；`author=` 命中该作者全部 review。而 **`group=` 参数被服务端忽略**（不同 group 返回相同集合）；`project=<name>`（= `swarm-project-<name>` 去前缀）**真生效**但一个 project 就可能包含大量 review、并集过大直接并入会淹没列表——所以走 author 白名单而非 project/group 展开。
-
-### Activity Bar 角标 + 状态栏计数（Needs My Action 计数）
-
-`swarmViewState.ts` 的 `swarmNeedsActionCount`（模块单例 observable）是唯一计数源，两个写入方、两个读取方：
-
-- **写入①`SwarmReviewNotificationContribution.refresh()`**（后台轮询，view 关闭也在跑）：`_computeDisplayed` 算出**侧栏分组口径**的列表（filterNeedsAction + ignore split，**不排除自己 authored 的、不含关键词**），`.set(displayed.length)`；通知集再从中排除 authored（两种口径一处算，别分叉）。
-- **写入②`SwarmReviewsView` 的 effect**（view 挂载期间）：`needsActionActive.length` 变更即写回（vote/ignore/过滤后即时更新）。
-- **读取①`SwarmActivityContribution`**（`ActivityBarBadgeContributions.ts`，AfterRestore 注册）：autorun 读计数 → `IActivityService.showActivity('workbench.view.swarm', {count})`，0 时撤角标。ActivityBar 已按容器通用渲染 `activitybar-badge-<containerId>` testid，无需改渲染层。
-- **读取②底部状态栏**（`swarmStatusBar.ts`）：**被动显示 renderer 推送值**——同一 autorun 里 `executeCommand(SwarmCommands.setStatusCount, count)` 推给 host（先 `CommandsRegistry.getCommand` 判存在，perforce 缺席不刷 warn）。**host 绝不自己从 dashboard 推计数**：author 白名单/approvable/ignore 全在 renderer，host 自算必然分叉（真实 bug：侧栏 0、状态栏 30）。`SwarmStatusBarController` 只剩 `setCount` + `refresh()`（可用性 show/hide），不再有 startPolling；`perforce.swarm.pollInterval`（>0 秒，floor 10s）改作 `SwarmNotificationPoller` 的 tick 间隔，一条管线同时驱动通知/角标/状态栏。间隔解析在 `resolveSwarmPollIntervalMs`（纯函数）：`UNIVERSE_SWARM_POLL_INTERVAL_MS` env（e2e 专用，**绕过 10s floor**，host-tick 驱动的 spec 不必每相位等满一个产品间隔）> 配置秒数（floor 10s）> 默认 60s。
-
-**后台轮询总开关 `perforce.swarm.backgroundPoll.enabled`（默认关）**：整条轮询管线（host `SwarmNotificationPoller` tick + renderer `SwarmReviewNotificationContribution` 的 60s backstop/初始 prime）都受它门控。renderer 侧 `_syncPolling()` 读配置即时启停并订阅变更（粗粒度 `affectsConfiguration('perforce.swarm')`）；host 无 config-change 事件，故 renderer 在启动与每次变更时经 `SwarmCommands.setBackgroundPoll` 把**完整轮询快照 `{enabled, pollIntervalSeconds, configured}`** 推给 host（命令未注册=host 激活竞态时 250ms 退避重试上限 20 次，不再静默跳过；interval 换算 + `UNIVERSE_SWARM_POLL_INTERVAL_MS` env 全部留在 host 侧，renderer 只推 raw seconds；host 激活时也并行自读一次配置兜底填充 configured 缓存）。关闭瞬间 `swarmNeedsActionCount.set(0)` 清掉残留角标。两个相关 e2e spec（swarmReviewNotification*/）必须用 `swarmExtraSettings` 显式开启。
-
-**泄漏测试坑**：该计数 observable 是模块单例，前一个测试未 dispose 的 contribution 会在后一个（装 DisposableTracker 的）测试里继续响应 `.set()` 产生无父链 badge handle → 误报泄漏。非泄漏断言的测试用完必须 `store.dispose()`。
-
-### Ignore / Unignore + 按 ID 打开（纯渲染层，不碰 host/API）
-
-- **ignore 是纯客户端概念**：`services/swarm/swarmIgnoreStore.ts` 模块级单例（Emitter 永不 dispose，对标 `swarmViewState`）。持 `Set<id>` + `Map<id, SwarmReviewDto 快照>`，`attach(storage)` 惰性加载（幂等，view 与 editor 都 mount 时只load一次），GLOBAL 持久化 key `swarm.ignoredReviews`/`swarm.ignoredReviewMeta`。dashboard 数据源不变（host 不感知 ignore），**渲染时**用纯函数 `splitIgnored(reviews, ignoredIds)` 把 needsAction 分流出 IGNORED 组。
-- **meta 快照是必需兜底**：被 ignore 的 review 若某次 dashboard 不再返回（作者移出 needsActionAuthors 白名单等），IGNORED 组靠 `getMeta(id)` 仍能渲染 + 提供 unignore。IGNORED 组空时不显示组头。
-- **侧栏 + 详情页双向同步**：都订阅 `swarmIgnoreStore.onDidChange`；侧栏右键菜单据 `isIgnored` 显示 Ignore/Unignore，详情页 header 同理。ignore 时详情页用 `detail`（DetailDto）拼一份精简 `SwarmReviewDto` 传入（DetailDto 无 upVotes/downVotes，从 participants 现算）。
-- **按 ID 打开**：`OpenSwarmReviewByIdAction`（`swarm.openReviewById`，renderer Action2）——`f1:true` + `MenuId.ViewTitle`(`when: view == workbench.view.swarm.reviews`, icon `go-to-file`)，`IQuickInputService.input({validateInput})` 取数字 id → `openEditor(new SwarmReviewEditorInput(id))`。命令 id **不进**扩展 package.json（renderer Action2 遮蔽护栏）。
-- **IGNORED 受 reviewWindowDays 约束自动清理**：`SwarmViewContribution` 在 store hydrate 后 + 配置变更时调 `swarmIgnoreStore.pruneExpired(windowDays)`，按 meta 快照的 `updated` 删过期项（`updated===0` 缺失永不删、`windowDays<=0` 不删，对齐 dashboard 窗口语义；判定纯函数 `expiredIgnoredIds`）。删除走 store 的 delete+persist+fire，所有消费方（侧栏/详情页/角标/通知）经 onDidChange 收敛。被清理的 review 理论上回到 Needs My Action，但 dashboard 同样按窗口过滤，故实际不可见。
-- **测试坑**：给 `SwarmReviewsView` 加了 `useService(IStorageService)`，其组件测试的 `createServices` 必须补注册 IStorageService（否则 useService 抛错，整个测试文件挂）。store 单测用 `vi.resetModules()` + 普通 `import` 隔离单例，**不能**用 `import(url?t=random)`（vitest 报 "Unknown variable dynamic import"）。
-
-### UI 状态持久化（侧栏 + 详情页记忆，纯渲染层）
-
-三条独立机制，别混：
-
-- **侧栏折叠 + keyword（跨重启）**：`services/swarm/swarmReviewsUiStore.ts` 模块级单例（对标 `swarmIgnoreStore`：`attach(storage)` 幂等 + 同步 `isReady` + `onDidChange`，GLOBAL key `swarm.reviewsView.collapsed`/`swarm.reviewsView.keyword`）。`SwarmReviewsView` 的 collapsed/keyword 初值读它、变更写回。**筛选条件（author/approvable/hideApproved）不在这里**——那三个走 `perforce.swarm.*` config（settings.json，`SwarmConfigurationContribution`），是用户配置不是视图临时态。
-- **消除 IGNORED 闪烁的根因修复**：ignore store 若在 view mount 后才异步 hydrate，dashboard 内存缓存命中时首帧 `list()` 返空 → 被 ignore 的 review 先闪现在 Needs My Action。修法两层：① `SwarmViewContribution` 注入 `IStorageService`，在 **BlockStartup** 阶段就 `swarmIgnoreStore.attach` + `swarmReviewsUiStore.attach`（app 启动即 hydrate，早于 view mount）；② store 加同步 `isReady`，view 用 `ignoreReady` gate 首帧不渲染分组作双保险。加了 store 的 `isReady` 后其单测补断言。
-- **详情页版本/滚动/草稿（仅跨 tab 切换，内存）**：`swarmViewState.ts` 的 `_reviewEditorStates: Map<reviewId, {selectedVersion,compareVersion,versionsFingerprint,commentDraft,filesScrollTop}>`（对标 `swarmReviewDetailCache`，**不跨重启**）。`SwarmReviewEditor` **用 useRef 读一次**初值（避免自身 scroll 写入 churn restore effect），三个 state 各一 effect 写回。文件列表滚动位置：`SwarmReviewFiles` 加 `initialScrollTop`/`onScrollTopChange` props，经 `Tree` 的 `rootRef` 拿容器、**capture 阶段** listen scroll（同时覆盖非虚拟=root 滚动与虚拟>200=内层 scroller）。Files 显示形式（list/tree）另走 GLOBAL storage（既有，未动）。测试坑：Map 是模块单例，`SwarmReviewEditor.test.tsx` 共用 reviewId '1001' 会串状态，须导出 `clearSwarmReviewEditorStates()` 在 before/afterEach 清。**版本选择的指纹失效协议**：`versionsFingerprint` 记录该选择针对的 versions 列表（指纹 = `fingerprintSwarmVersions(versions)` = 版本数 + 末版本的 `archiveChange ?? change`，**绝不用 rev**——re-shelve 同 rev）；`load()` 拿到新 detail 时指纹不同（re-shelve 追加了 version）即把选择跳到最新版本、compare 重置回 depot base 并持久化新指纹，指纹相同才保留记忆的选择——否则旧选择解析到旧版本的 archiveChange，重开/常开 tab 的 diff 永远停在旧快照。
-
-
-### 三层技术栈（自底向上）
-
-| 层 | 文件 | 职责 |
-|---|---|---|
-| wire 类型 | `packages/extensions-common/src/contracts/swarm.ts` | renderer↔扩展共享 DTO（`SwarmReviewDto`/`SwarmReviewDetailDto`(含 `transitions`)/`SwarmDashboardResult`/`SwarmVoteRequest`/`SwarmTransitionRequest`(含 `commit?`)/`SwarmAddCommentRequest`(含 `context?`+`content?`)/`SwarmAddChangeRequest`/`SwarmUpdateReviewRequest`…）+ `SwarmCommands` 命令 id 常量。**必须**在 `index.ts` re-export |
-| HTTP 客户端 | `extensions/perforce/src/swarm/swarmApi.ts` | 薄 REST 层：`get/post/patch`，拼 `/api/v{N}/…` URL，塞 Authorization header。**认了 `UNIVERSE_SWARM_BASE_URL` env 覆盖**（e2e fake server 用）。日志只打 URL + 状态码，**绝不打 body/header** |
-| 认证 | `extensions/perforce/src/swarm/swarmAuth.ts` | `resolveTicket`（`p4 login -p` 取 ticket）+ `buildBasicAuth`（`Basic base64(user:secret)`）+ `resolveSwarmCredential`。**密钥红线见下** |
-| 解析 | `extensions/perforce/src/swarm/swarmParser.ts` | Swarm JSON → DTO 的**纯函数**（`parseReviewList`/`parseReviewDetail`/`parseTransitions`/`parseComments`…）。可对 fixture 单测 |
-| 客户端编排 | `extensions/perforce/src/swarm/swarmClient.ts` | `SwarmClient`：每个审核操作一个方法（`dashboard`/`listReviews`/`getReview`/`vote`/`transition`/`addComment`…）。组合 api + parser。持有 `SwarmClientConfig {baseUrl, apiVersion, user}` |
-| 命令注册 | `extensions/perforce/src/swarm/swarmCommands.ts` | 注册全部 `perforce.swarm.*` 命令（`commands.registerCommand`）；`guard()` 把「未配置/未授权」失败映射成安全回退值；`SwarmClient` 按 config+active-client 签名**懒重建** |
-| 状态栏 + 轮询 | `extensions/perforce/src/swarm/swarmStatusBar.ts` + `swarmNotificationPoller.ts` | 状态栏**被动显示** renderer 推送的分组口径计数（见上「Activity Bar 角标 + 状态栏计数」），host 只管用性 show/hide；轮询定时器在 host（`SwarmNotificationPoller`，Chromium 不节流），每 tick poke renderer `_workbench.swarmPollTick`，`start()` **立即 tick 一次**再进入间隔循环（renderer 自 prime 常撞 host 激活竞态而 no-op，无即时 tick 则基线要等满一个间隔、新 review 最坏两个间隔才通知）；`setIntervalMs` 运行中可重排（renderer 的 `setEnabled(true)` 推送可能先于异步配置读取执行）；**tick 链路红线：`_isConfigured` 是同步缓存读（renderer 经 `setBackgroundPoll` 推送 `{enabled, pollIntervalSeconds, configured}` 填充 + 激活兜底并行 RPC 自填），poke fire-and-forget 带 30s ack watchdog——任何"先 await renderer 再 poke"的前置依赖都会在窗口深度后台时把驱动静默卡死（见下「第四环」案例）**；**新审核通知不在这里**——由 renderer 的 `contributions/SwarmReviewNotificationContribution.ts` 自带 60s 轮询兜底（首轮只 prime 基线不通知），以侧栏**最终显示**列表（作者/仅可审批/ignore 过滤后）为准发桌面通知；**窗口聚焦时 main 侧 `hostMainService.notify` 会门控掉 OS toast（`shown:false`），此时必须回退应用内 `INotificationService` toast（带打开动作）**——上升沿在发通知前已记入 `_known` 基线只消费一次，静默丢弃会导致该审核永远不再通知（曾是真 bug） |
-| 审核列表侧栏 | `apps/editor/src/renderer/workbench/swarm/SwarmReviewsView.tsx` | Swarm Reviews viewlet：分组 + 关键词过滤 + 点开详情；`getTransitions` 驱动可审批图标与右键操作，菜单含打开/网页/复制/transition/obliterate |
-| 审核详情主编辑区 | `apps/editor/src/renderer/workbench/swarm/SwarmReviewEditor.tsx` | 头部（审核网页链接/状态/作者/参与者/vote/transition/Update/Obliterate）+ 描述 + 版本选择器 + 文件列表 + review 级评论面板 |
-| 文件 diff 编辑区 | `apps/editor/src/renderer/workbench/swarm/SwarmDiffEditor.tsx` + `SwarmInlineCommentController.ts` + `SwarmInlineThread.tsx` | Monaco diff + 行内评论（view-zone + overlay widget 托 React，对标 `InlineDirtyDiffController`） |
-| 输入/状态/动作/贡献 | `services/editor/SwarmReviewEditorInput.ts` · `services/editor/SwarmDiffEditorInput.ts` · `services/swarm/swarmViewState.ts` · `actions/swarmActions.ts` · `contributions/SwarmViewContribution.ts` | 两个 EditorInput（见"身份隔离"）· view-state 单例 · Action2 · view 容器贡献 |
-
-### 命令清单（`SwarmCommands`，全 `perforce.swarm.*`）
-
-`ping` / `requestReview` / `updateReviewFromChangelist` / `listReviews` / `dashboard` / `getReview` / `getTransitions` / `createReview` / `vote` / `transition` / `obliterateReview` / `addChange` / `updateReview` / `listComments` / `addComment` / `setTaskState` / `getFileContent` / `describeVersion` / `applyToLocal`。
-
-- `getTransitions` 是列表与详情共用的服务器权威能力查询；列表里的“可 Approve”蓝色勾和右键状态操作都只能由它驱动。
-- `obliterateReview` 走 `POST reviews/{id}/obliterate`，与 archived transition 不同，会永久删除审核。renderer 必须先做不可逆确认，服务端仍负责最终权限校验。
-- `applyToLocal`（详情页 Apply to Local 按钮）是**纯 p4 数据命令**（`p4 unshelve -s <change> -f <筛选后的 depot 文件>`），**不走 `guard()`**——guard 构造 SwarmClient、401→login、失败 toast 全是 Swarm REST 语义。入参 change 同样走 `archiveChange ?? change` 不可变快照铁律（renderer 传的是 `selectedChange`，别重新推导）。整批失败时逐文件重试，p4 拒绝的（已打开/基线过期）进 `skipped[]` 报告；renderer 侧弹确认框（含「工作区外文件」与「在默认 changelist 中打开」两个持久化开关，store 在 `services/swarm/swarmApplyStore.ts`），分类纯函数 `swarmApplyPlan.ts` 带单测。**「在默认 changelist 中打开」关闭时**（请求带 `intoChangelist:false`）：unshelve 成功后对 applied 文件追加 `p4 revert -k`（`client.ts` `_unopenFilesKeepContent`，批量失败逐文件重试，失败项进 `keptOpen[]` = 留在 default CL、内容不丢）——内容写盘但不签出，磁盘内容因此偏离 depot，会在资源管理器按需显示 `RC` 徽标（「待收集」常驻分组已删除，无需也不应主动扫描）。**已提交（approve:commit）的 change 无 shelf 可 unshelve**（p4 报 `already committed`）→ 回退 `_applyCommittedChange`：`p4 where` 解析本地路径 →（`intoChangelist` 时先 `p4 edit` 签出进 default CL 并解除只读）→ `p4 print <depot>@=<change>` 拿提交快照（`execBinary` 保二进制）→ 写盘（未签出只读文件 EPERM 时 chmod 666 重试）；edit/print/写盘失败进 `skipped`，此路径 `keptOpen` 恒空。reason 提取统一走模块级 `firstStderrLine`。fake-p4 的 `unshelve` case 对 `state.submitted` 里的 change 报同款错误。
-
-- **数据命令全走 `commands.registerCommand`（host 侧），renderer 用 `commands.executeCommand(SwarmCommands.xxx, arg)` 跨 JSON 边界调**。这些命令 **`requestReview`/`updateReviewFromChangelist`/`ping` 之外都不进 package.json `commands` 数组**——它们是纯数据 RPC，renderer 直接按 id 执行即可，无需声明（且声明会触发头号坑，见下）。
-- **只有 `perforce.swarm.ping` / `perforce.swarm.requestReview` / `perforce.swarm.updateReviewFromChangelist` 进 package.json**（`ping` 是命令面板自检；后两者贡献到 SCM changelist 组头右键菜单 `3_swarm@1/@2`，都是**扩展宿主有真 handler** 的命令）。
-- **`updateReview`（详情页 Update Review 按钮驱动，请求已带 reviewId）与 `updateReviewFromChangelist`（从 changelist 组头出发、先 QuickPick 选一个 review 再重新 shelve 关联新版本）是两条路径，别混**。候选排序是纯函数 `swarm/swarmReviewPick.ts`（`buildReviewPicks`：过滤已关闭、needsRevision 置顶、newest 次序），带单测。
-
-### ⚠️ SwarmApi 的 fetch 必须有 per-request 超时（网关挂起卡死 poll 闩锁）
-
-**真实 bug（前台也零通知）**：`fetch()` 自身**没有可用的默认超时**（undici 的 `headersTimeout` ≈300s）。部署里 Swarm 前面挡着一个会 504 慢端点的网关，它**接受连接但永不回包** → `SwarmApi` 的 dashboard fetch 挂起数分钟 → renderer `SwarmReviewNotificationContribution.refresh()` 的串行 `_running` 闩锁一直被占 → 之后每个 poll tick 都在 `if (this._running) return` 处丢弃 → **前台后台全静默**（侧栏不受影响：它的 dashboard 走不同 in-flight key）。
-
-- **修复**：`SwarmApiOptions.timeoutMs`（默认 30s，`resolveSwarmRequestTimeoutMs`：显式 option > `UNIVERSE_SWARM_REQUEST_TIMEOUT_MS` env（e2e 用）> 默认）。`_once` 里 `AbortSignal.timeout(this._timeoutMs)` 与调用方 signal 经 `AbortSignal.any` 组合后**无条件**传给 fetch。
-- **失败分类靠 `errorName()` 结构读 name，别用 `instanceof Error`**：fetch abort/timeout 的 reject reason 是 DOMException（不保证 `instanceof Error`）。`AbortError`（调用方主动取消）与 `TimeoutError`（超时）都包装成 `SwarmError(Network)`——**不重试**（`isTransient` 不含 Network；超时请求可能已被服务端处理，POST 重试有重复应用风险），由下一个 poll tick 自然恢复。
-- **e2e 回归**：`swarmReviewNotificationHung.spec.ts`——fake server `setHang(true)` 挂起 GET /reviews 两个 poll 周期，解除后新 review 必须仍通知（修复前闩锁卡死、恒不通知）。fake-swarm.mjs 的 `/__control__/set-hang` 端点即为此加。
-- 单测：`swarmApi.test.ts` 的 `SwarmApi request timeout`（挂起 mock 监听 `init.signal` abort 后 reject `signal.reason`，忠实模拟 undici）。
-
-### ⚠️ fetch 超时不覆盖 fetch 之前：p4 凭据探针是第二卡点（44 分钟闩锁卡死）
-
-上一节的 fetch 超时只覆盖 HTTP 层。**真实 bug（44 分钟零通知）**：挂死的 p4 进程（冻结的网络盘 / P4P 网关半开 TCP）让 `SwarmClient._auth()` 的 `login -s` + `tickets` 两个 spawn 永不返回——fetch 根本没发出，AbortSignal.timeout 从未启动。日志铁证：poll 挂 44 分钟后「**成功**」完成（无 warn、无超时）⟹ 卡点在 fetch 之前。放大器：每次 HTTP 请求都重跑 2 个 p4 spawn（无凭据缓存），一轮 poll = 2·(3+N) 次 spawn 挤 4 槽 ConcurrencyGate。修复是三层纵深：
-
-1. **根因——`P4Service._spawn` 加超时**（`perforce.commandTimeout`，默认 600s，`0` 不限）：`SpawnWatchdog` 到点 `kill()`，close 时 resolve 成失败结果（**绝不从异步回调 throw**，见主 CLAUDE.md 的宿主崩溃红线）。凭据探针单独用 15s 紧超时（`swarmAuth.ts` 的 `CREDENTIAL_PROBE_TIMEOUT_MS`）——它们小、只读、每轮 poll 都跑，挂 10 分钟才杀毫无意义。
-2. **放大器——`SwarmClient` 凭据短缓存**：`_auth()` 结果缓存 5 分钟（`CREDENTIAL_TTL_MS`）+ in-flight 合并（dashboard 并行 3 路请求共享一次探针）；失败（未登录）只缓存 30s（`CREDENTIAL_FAILURE_TTL_MS`）让重新登录快速恢复。ticket 中途失效由 **401 → `invalidateCredential()`** 兜底（guard 的 401 分支调用），缓存永不过期错认。
-3. **兜底——renderer poll 闩锁加 deadline**：`SwarmReviewNotificationContribution.refresh()` 的 dashboard RPC 用 `withDeadline`（120s）、每个 `getTransitions`（60s）——RPC 层没有全局超时，任何一层再失守闩锁也会在 2 分钟内自愈（warn 日志 + 当失败 tick 处理）。**transitions 失败不得缓存 `[]`**：`filterNeedsAction` 对「未加载」乐观保留、对「已加载但无 Approve」过滤——失败时留 `undefined`（下轮重试），缓存 `[]` 会把该 review 静默移出通知范围并污染侧栏共享的 transitions 缓存。
-
-- 单测：`swarmClient.test.ts` 的 `SwarmClient credential cache`（TTL 命中 / in-flight 合并 / 过期重探 / invalidate / 失败短缓存）、`swarmCommands.test.ts`（401 调 invalidateCredential）、renderer `SwarmReviewNotificationContribution.test.ts` 的 `a dashboard RPC that never settles`（fake timers 推过 deadline → 闩锁释放、下 tick 恢复通知；transitions 挂起 → 该 review 乐观保留仍通知）。
-
-### ⚠️ 轮询驱动的调用用 `guard()` 的 `silent`（静默 + rethrow，绝不弹 UI 也绝不吞 fallback）
-
-`guard()` 默认在失败时弹 UI 并返回 fallback：401 分支 `await window.showErrorMessage(..., 'Login')`（**带 item 的模态确认**，promise 等用户点击才 settle），generic 分支弹错误 toast。**窗口在后台时模态无人可点 → 永不 settle**；后台 poll 每次失败弹 toast 是纯噪音。
-
-- **真实 bug（通宵零通知）**：`SwarmNotificationPoller` 每 tick 驱动 `dashboard`；Swarm ticket 过期后某次 tick 命中 401 → guard 在后台窗口弹出看不见的模态 → renderer 的 `_running` 闩锁永久 true → 之后每个 tick 都被丢弃。19:49 最后一次通知后 3.8 小时零通知；切回窗口手动刷新才恢复。
-- **次生 bug（失败 fallback 吞错）**：guard 失败时返回**空 dashboard** fallback，renderer `_notifyNew([])` 把它当「零 review」→ `_known` 基线被清空 → 恢复后下一个健康 tick 把**所有**已知 review 当新的重发一遍（幻影爆发）。
-- **修复**：`guard(label, op, fallback, { silent: true })`——poll 驱动的 `dashboard` 传 true，**任何**失败只记日志并 **rethrow**（renderer poll 的 catch 本就静默吞掉，`_known` 不动；侧栏 `load()` 的 catch 显示错误状态，比假空列表更真实）。交互命令（vote/transition/createReview 等用户当场能点确认的）保持默认弹 UI + 返回 fallback。
-- **判别准则**：凡是「定时器 / 后台 tick / 无用户在场」驱动的 Swarm 调用都传 `silent: true`；只有用户主动点按钮触发的才走默认。给新的 poll/后台数据命令接线时照此办。
-- 回归单测：`__tests__/swarmCommands.test.ts`（401/Network 失败 rethrow、不弹任何 UI、立即 settle）；renderer 侧 `SwarmReviewNotificationContribution.test.ts`（dashboard reject 后 `_running` 闩锁释放、`_known` 基线保留、下一 tick 照常通知且无幻影爆发）。
-
-### ⚠️ OS toast 的焦点门控必须考虑「人不在场」（整夜聚焦窗口零 OS 通知）
-
-检测链路（poller → dashboard → renderer 决策）全部健康也可能颗粒无收：**真实 bug（第三环）**——renderer 日志三次 `notifying N new review(s)` 全部跟着 `OS toast gated (window focused...) → in-app fallback`，其中一次在深夜 00:07。根因在 main 侧 `MainHostService.notify()` 的门控只看 `win.isFocused()`：**Windows 在用户锁屏 / 离开后仍保持最后前台窗口的 focused 状态**，于是「焦点停在某个工作区窗口 + 人走了」= 每条新 review 的 OS toast 都被吞，只剩后台窗口里没人看的 in-app toast。多窗口更放大：只有 swarm 工作区那个窗口的焦点状态说了算。
-
-- **修复（main 侧 `hostMainService.ts`）**：gate 条件 = `isFocused() && !_isUserAway()`；`_isUserAway()` 用 `powerMonitor.getSystemIdleState(120)` —— `locked` / `idle`（≥2 分钟无键鼠输入）视为不在场，照发 OS toast（进系统通知中心 + flashFrame）；`active` / `unknown` 保守视为在场维持原门控。所有 `IHostService.notify` 调用方（swarm + agent 通知）同时受益。**E2E 下探针冻结为「在场」**（无人值守 CI 恒 idle，会把聚焦窗口的 in-app fallback spec 全翻到 OS toast 路径）；`UNIVERSE_E2E_REAL_IDLE=1` 可 opt-in 真实探测。
-- **诊断铁证是「缺失的日志行」**：host.log 只有 agent 的 `notify shown`、没有同时段 swarm 的 —— skipped 分支当时是 debug 级不落盘，只能反证。已把两个 skipped 分支（focused / unsupported）升为 **info**：`notify skipped (window focused, user present)`，之后排查直接看 host.log 的明示决策。
-- 回归单测：`apps/editor/src/main/__tests__/services/hostMainService.test.ts` 的 `focused window with the user away`（locked / idle → shown；unknown → 保守 gate）。
-
-### ⚠️ poller tick 链路绝不前置 await renderer（2.5 小时静默停摆，第四环）
-
-**真实 bug（2026-08，一上午零通知）**：host poller 的 `_tick()` 先 `await this._isConfigured()`（`readSwarmConfig()` = 4 条串行 `_workbench.getConfiguration` RPC，每条都要 renderer 应答）再 `await executeCommand(TICK)`。窗口深度后台（完全遮挡 + 多窗重负载）时 renderer 迟迟不应答，**RPC 不 reject 就不进 catch**——11:40 后 2.5 小时零 poke、零 warn，host timer 与 renderer backstop 两个驱动同归于尽；14:13 手动切窗解冻，积压 RPC 一口气跑完，3 个 review 一次性通知。e2e 从未拦住：当时 `backgroundThrottling: false` 仅 e2e 开启，e2e 环境天然不经历节流，是盲区。
-
-- **修复（三层）**：
-  1. **tick 链路零前置 await**：`_isConfigured` 改**同步缓存读**（`boolean | undefined`；`undefined` = 缓存未填 **fail-open 照 poke**——poke 无害，renderer 自有 dashboard 命令存在性防御；`false` = skip）。缓存双路填充：激活兜底（原 6 条串行 RPC 并成一轮 `Promise.all`）+ renderer `setBackgroundPoll` 推送。
-  2. **poke fire-and-forget + ack watchdog**：`executeCommand(TICK)` 不再裸 await——30s 无应答打 warn `poll tick not acknowledged by renderer within 30s`（每分钟至多一条，只警告不取消；reject 由 `.catch` 兜住防 host unhandled rejection），恢复后 info `poll tick ack restored`。
-  3. **生产窗口全局 `backgroundThrottling: false`**（`windowMainService.ts`，对齐 VSCode `windowImpl.ts`），从机制上消灭"renderer 被节流"整类 bug；`UNIVERSE_E2E_THROTTLE=1` 语义反转为"显式 opt-in 节流场景验证"。renderer 另加 `visibilitychange` 补 tick（visible 且距上次成功 poll 超一个 interval 即 refresh），把"切窗即见"从节流解除的副作用变成显式保证。**侧栏列表本身另有一层同主题保证**：poll rising edge 发出的视图软刷新（`requestSwarmReviewsRefresh(false)`）是本 renderer 进程内的一次性信号——视图未挂载即被静默丢弃、也到不了别的窗口——故 contribution 在 window focus 时节流（5s）补发一次 soft 刷新，确保「切到窗口看到的列表就是最新」（soft 命中被 poll 保鲜的 host 侧 60s TTL 缓存，代价极低）。
-- **观测补课（本次"死无对证"的两个缺口）**：poller 生命周期行（start / re-arm / stop / ack 超时 / ack 恢复）同时按语义级别 `console.info`/`console.warn` 镜像——host 的 stdoutProtection 把所有 console.* 重定向到 stderr 并打级别标签，main 按标签路由回对应日志级别并落进会话根 `extensionHost.log`（红线：**绝不写 stdout，那是 RPC 通道**；常态行**不许用 `console.error`**，否则在日志里被误标成 error；`poll tick failed` 这类 renderer 状态噪音不镜像）；renderer tick handler 记录上次 tick 时刻，gap > 3×interval 打 info `tick gap <N>s` 到 `swarmNotify` logger。
-- **红线重申**：poller tick 路径**不得引入任何对 renderer 的前置 await**（配置读取、健康探测、握手——一律不许）。需要 renderer 状态时走"renderer 推送 + host 缓存"模式。
-- **回归**：poller 单测（poke 永不 settle 时 tick 不停摆 + watchdog warn + ack 恢复 + stderr 镜像断言）、`swarmCommands.test.ts` 的 setBackgroundPoll payload 套件、renderer contribution 单测（推送 retry / 粗粒度配置重推 / visibilitychange 补 tick / tick gap）、e2e `swarmReviewNotificationThrottled.spec.ts`（`UNIVERSE_E2E_THROTTLE=1` 真实节流 + minimize，通知必达）。
-
-### ⚠️ transitions 判定缓存必须按 `updated` 失效（投票翻案永不通知，第五环）
-
-**真实 bug（2026-08，窗口后台 7 个 review 延迟 53~193 分钟才通知）**：与前四环不同，驱动链路完全健康——三个事件时刻全部落在 60s tick 网格上、`extensionHost.log` 零 ack 超时、后台窗口成功 `notify shown` 有实锤。这次断在**数据过滤层**：`needsActionApprovableOnly: true` 时 poll 靠 `swarmReviewsViewState.transitions`（renderer 模块单例，与侧栏共享）判「可批准」，而旧逻辑 `if (cache[review.id]) return` **一旦有值就永不重拉**。该 Swarm 部署的 workflow 在投票条件满足前不开放 `approved` 转移 → 新 review 首拉 verdict =「不可批」被过滤；组员投票后服务器已可批（且 `updated` 已 bump），但缓存钉死旧 verdict → **永不通知**。只有手动刷新侧栏（`load(force)` 全量重拉进共享缓存）才翻案，而翻案时人必在窗口前 → OS toast 被焦点门控吞成 in-app → 体感「后台永远不通知」。前四环修不到它的原因：都在修驱动层，而 `poll ok: N actionable` 当时是 debug 级不落盘——**过滤发生在暗处，0 actionable 与 0 候选无从区分**。
-
-- **修复（缓存失效协议）**：`swarmReviewsViewState.transitionsSeenUpdated` 记录每个 entry 拉取时的 `review.updated`（vote / re-shelve / 评论都会 bump 它，dashboard 每 tick 带回最新值）。stamp 移动 = stale → 重拉且 **`getTransitions(id, force=true, silent=true)` 穿透 host 侧 60s TTL 缓存**（`swarmClient.getTransitions(force)` 先 invalidate 再 wrap，否则 TTL 会把旧 verdict 原样回吐）；**首拉（无 entry）不 force**——没有旧 verdict 要冲掉，吃 TTL 缓存省服务器请求；**失败不写 seenUpdated**（cache 保留旧值防误报，下一 tick 因仍 stale 自动重试）。稳态（updated 不动）零额外请求；翻案最迟 1 个 tick 可见。侧栏 `SwarmReviewsView.loadTransitions` 同一协议（挂载/手动刷新路径也自动翻新），staleIds 清理同步清 seenUpdated。
-- **观测补课**：`poll ok` 现在带**过滤明细** `N actionable (pool P, dropped: A author-filtered, B not-approvable, C ignored, D authored)`，且**计数指纹变化即升 info**（稳态仍 debug 零噪音）——下次「有 poll ok 但不通知」直接看哪个桶吃掉了 review。
-- **附带修复（补推）**：`setBackgroundPoll` 推送重试预算 20×250ms=5s，冷启动 host 实测 11s+ 可能耗尽 → host 首个 tick 到达（证明命令面已活）时检测到预算曾耗尽即重置并补推一次，否则 host driver 拿着过期 enabled/interval 快照跑到下次配置变更。
-- **已知权衡（不改）**：dashboard 白名单池实测数百个 open review，`max: 50` 截断——Swarm 按 id 降序返回（新的在前），新 review 不受截断影响；扩池只影响「陈年 review 突然翻案」的边角，不值得每 tick 多拉 4 页。
-- **回归**：`SwarmReviewNotificationContribution.test.ts`「fifth incident」套件（updated bump + verdict 翻转 → 必须通知【修复前红】；updated 不动不重拉且首拉不 force；重拉失败保 stale 下轮重试；补推用例）；`swarmClient.test.ts` 的 `getTransitions(force)` 穿透 + re-prime 用例；`SwarmReviewsView.test.tsx` 首拉 `force=false` 断言。
-
-### 🔍 通知链路的日志观测点（排查「收不到通知」先看这三处）
-
-- **main 侧（`host.log`，会话根目录）**：每次 OS toast 的**最终决策**——`notify shown title=...`（弹了）/ `notify skipped (window focused, user present)`（焦点门控吞掉）/ `notify skipped (notifications unsupported)`，全部 info 默认可见。renderer 说 `notifying` 但系统没弹，第一站看这里。
-- **host 侧（Swarm 输出频道 + `extensionHost.log` 会话根目录）**：poller 启停（info）/ tick 节奏（debug）/ tick 失败（warn）；guard 的 `cmd` scope 有每次 dashboard 的 start/ok/failed（poll 静默失败带 `(silent)` 标签）；`api` scope 有每个 HTTP 请求的状态 + 耗时 + 重试；`auth` scope 有凭据解析失败与 invalidate。默认安静，开 `perforce.swarm.trace` 后 debug 全量（tick 心跳、请求/响应细节）。**poller 的五类生命周期行同时镜像进 `extensionHost.log`**（stderr 转发，`[stderr <handle>] [swarm poll] …` 前缀）：`poll driver every Ns` / `re-armed` / `stopped` / **`poll tick not acknowledged by renderer within 30s`** / `poll tick ack restored`——输出频道重启即失，镜像行是跨重启可考的铁证。
-- **renderer 侧（`swarmNotify` logger，窗口私有日志 `window-<id>/`）**：poll 启停 / 基线 prime / **闩锁丢弃（`poll tick dropped: previous refresh still running`——闩锁卡死的第一信号，连续出现即 bug）** / poll 失败 warn（catch 不再静默）/ **分相位计时 + 过滤明细（`poll ok in Xms (dashboard Yms, transitions Zms): N actionable (pool P, dropped: ...)`——卡 dashboard 相位指向 host 侧 p4 凭据探针，卡 transitions 相位指向逐 review 的 getTransitions；相位 >30s 升级为 `slow phase —` info；计数指纹变化的 tick 升 info，稳态 debug）** / deadline 触发的 `did not settle within` warn / **`tick gap <N>s (host driver stalled or renderer was throttled)`——host tick 超过 3×interval 才到达，直接给出停摆时长** / 窗口可见时的补 tick（`window visible after Ns without a successful poll → catch-up tick`）/ 通知决策（`notifying N new review(s): #ids`）/ OS toast 被门控走应用内 fallback。常规节奏是 debug 级，关键事件 info/warn 默认可见。
-- 判读套路：先看 renderer 有没有 tick 进来（无 → host poller / RPC 问题，看 `extensionHost.log` 有没有 `poll driver every` 与连续的 `not acknowledged`——**连续 `not acknowledged` = renderer 被节流/挂起；`tick gap` = 停摆时长实锤**）；有 tick 但全是 dropped（→ 上一次 refresh 卡住，看相位计时卡在哪个阶段 + host `api`/`auth` scope 是否有挂起/超时请求）；有 poll ok 但无 notifying（→ 过滤口径问题：看 `dropped:` 明细哪个桶吃掉了 review——author 白名单 / not-approvable（transitions verdict，第五环）/ ignore / authored）；有 notifying 但系统没弹（→ main 侧 host.log 看 shown/skipped 决策，focused+present 被吞属焦点门控语义，见上节）。
-
-### ⚠️ 头号坑：renderer Action2 命令绝不能进扩展 `commands` 数组
-
-打开审核列表 / 打开某审核的命令（`swarm.openReviews` / `swarm.openReview`）**handler 在 renderer 的 Action2**（`swarmActions.ts`）。它们**绝不能**写进 `extensions/perforce/package.json` 的 `contributes.commands` 数组。
-
-- **后果**：`contributes.commands` 会在扩展宿主侧注册一个同名、**无 handler** 的命令，执行时遮蔽 renderer Action2 → `executeCommand` **静默返回 undefined、不抛错、界面无反应**，极难排查。
-- **host→renderer 只能走 `_workbench.*` 前缀**：状态栏 toast 要打开审核，用的是 `_workbench.openSwarmReview` / `_workbench.openSwarmReviews`（`WorkbenchOpenSwarmReview(s)Action`），因为 host 只被允许回调 `_workbench.*` 命名空间（见 `MainThreadCommands.ts` 的 `HOST_INVOKABLE_PREFIX`）。数据命令（host→自身）不受此限。
-
-（通用护栏见 memory `renderer-action-shadowed-by-extension-command-decl`。）
-
-### 🔒 密钥红线（比 p4 更敏感，重申）
-
-ticket / token / password **只存在于内存 + Authorization header**，**绝不**进：`settings.json` / `perforce.*` 配置 / wire DTO / 日志。
-
-- `resolveTicket` 走 `p4 login -p`（打印 ticket 到 stdout，**不写文件**——on-disk ticket 由 p4 CLI 自己的 P4TICKETS 管，我们不碰）。
-- `swarmApi` 日志**只打 URL + HTTP 状态码**，绝不打 request/response body 或 Authorization header。
-- 独立 token 路径（Swarm SSO / API token）若要做，走 `ISecretStorageService`（对标 AI provider 密钥），**绝不进 renderer/settings**——在 `swarmAuth.ts` 按 `authMode === 'token'` 分支。
+1. **fetch 必须 per-request 超时**（第一环）：`SwarmApi` 无条件给 fetch 传 `AbortSignal.timeout`（默认 30s），否则网关挂起卡死 poll 闩锁、前后台全静默；失败分类用 `errorName()` 读 name，Network 不重试。
+2. **fetch 超时不覆盖 fetch 之前：p4 凭据探针是第二卡点**：挂死的 p4 spawn 照样卡死 poll——`_spawn` 加超时（凭据探针 15s 紧超时）+ 凭据短缓存 + renderer 闩锁 deadline。**transitions 失败不得缓存 `[]`**：失败留 `undefined` 下轮重试，缓存 `[]` 会把该 review 静默移出通知范围并污染共享缓存。
+3. **guard silent 判别准则**：定时器 / 后台 tick / 无用户在场 → `silent: true`（失败只记日志并 rethrow，绝不弹 UI 也绝不吞 fallback）；用户主动点按钮 → 默认。
+4. **OS toast 焦点门控须考虑人不在场**（第三环）：gate = `isFocused() && !_isUserAway()`（powerMonitor idle/locked 判离场），否则人走后窗口仍 focused = 整夜零 OS 通知。
+5. **poller tick 绝不前置 await renderer**（第四环）：`_isConfigured` 必须同步缓存读（fail-open 照 poke）、poke fire-and-forget + 30s ack watchdog；tick 路径**绝不写 stdout**（那是 RPC 通道），常态行不许 `console.error`。
+6. **transitions 缓存必须按 `updated` 失效**（第五环）：stamp 移动 = stale → `getTransitions(force=true, silent=true)` 穿透 host 60s TTL 缓存；首拉不 force、失败不写 seenUpdated。
+7. **收不到通知排查**：先看三处日志观测点（main `host.log` 最终决策 / host `extensionHost.log`+输出频道 / renderer `swarmNotify`），判读套路见 cases。
+8. **dashboard 铁律**：`participants=me` **不展开 group/project**——纯 project/group 关联、未个人参与的 review 永远查不到；补法是 `perforce.swarm.needsActionAuthors` 白名单并发多查一路 author 过滤（精确 OR 语义，`group=` 被服务端忽略）。
+9. **计数单一来源 + host 绝不自己推**：`swarmNeedsActionCount` 模块单例是唯一计数源；**host 绝不自己从 dashboard 推计数**——author 白名单/approvable/ignore 全在 renderer，自算必分叉（真实 bug：侧栏 0、状态栏 30）。
+10. **ignore 是纯客户端概念**：`swarmIgnoreStore` 模块单例 + GLOBAL 持久化，dashboard 数据源不变，渲染时 `splitIgnored` 分流（meta 快照是必需兜底）。
+11. **UI 状态持久化三条机制别混**：侧栏折叠/keyword（`swarmReviewsUiStore` GLOBAL，跨重启）/ 筛选条件（`perforce.swarm.*` config）/ 详情页版本/滚动/草稿（内存 Map，仅跨 tab）。
+12. **版本指纹协议**：指纹 = 版本数 + 末版本 `archiveChange ?? change`，**绝不用 rev**；指纹不同即跳最新版本、compare 重置回 depot base，否则 diff 永远停在旧快照。
+13. **头号坑**：renderer Action2 命令**绝不能进扩展 package.json `commands` 数组**（遮蔽 → `executeCommand` 静默返回 undefined、不抛错）；host→renderer 只能走 `_workbench.*` 前缀。memory `[[renderer-action-shadowed-by-extension-command-decl]]`。
+14. **密钥红线**：ticket/token/password 只存内存 + Authorization header，**绝不**进 wire DTO / 日志（`swarmApi` 日志只打 URL+状态码）；settings.json / `perforce.*` 配置同父文档红线；独立 token 路径走 `ISecretStorageService`。
+15. **REST 铁律**：comments 是 topic-based（`comments?topic=reviews/{id}`），不是嵌套资源（嵌套 404）；reviews 系列相反全是嵌套路径。对照表见下节。
+16. **状态永远问服务器**：加任何「改状态」入口先 GET transitions 拿合法集，别自己算。
+17. **diff 铁律**：两侧都从 p4 快照读，**绝不用工作区文件**；`describeVersion` 入参 change 必须 `archiveChange ?? change`；路径必须批量走 `p4 where`，不能从 depot/display path 猜。
+18. **行内锚定**：`context.content` = 锚定行 + 前 4 行原文（Swarm API 硬要求）。
+19. **测试红线**：计数 observable 模块单例，非泄漏断言测试用完必须 `store.dispose()`；store 单测用 `vi.resetModules()`+普通 import 隔离，**不能**用 `import(url?t=random)`。
 
 ### 🛣️ REST 路径铁律：comments 是 topic-based，不是嵌套资源
 
-Swarm 的 comment 端点**不挂在 review 下**——它是独立的 topic-based 资源。写成嵌套路径会 404（`GET /api/v9/comments/reviews/100913 → Swarm resource not found`）。
+Swarm 的 comment 端点**不挂在 review 下**——写成嵌套路径会 404（`GET /api/v9/comments/reviews/100913 → Swarm resource not found`）。
 
 | 操作 | ✅ 正确（v9） | ❌ 错误（会 404） |
 |---|---|---|
@@ -176,41 +49,33 @@ Swarm 的 comment 端点**不挂在 review 下**——它是独立的 topic-base
 | 改评论 / task 状态 | `PATCH comments/{id}` | `POST comments/{id}/edit` |
 
 - **reviews 系列相反，全是嵌套路径且正确**：`reviews/{id}`、`.../transitions`、`.../vote`、`.../state`、`.../changes`。别把 comments 的心智模型套到 reviews 上。
-- fake server（`fake-swarm.mjs`）也按 topic-based 匹配：`GET comments` 读 `?topic=`，`POST comments` 从 body.topic 取 id，`PATCH comments/{id}` 处理编辑。
-- 路径由单测固化（`swarmClient.test.ts` 的 `SwarmClient comment endpoints`），断言完整 URL + method + body，回归在单测就挂，不用等真服务器。
 
-### 📐 diff 数据源铁律
+### 文件地图（文件 → 一句话职责）
 
-**diff 两侧都从 p4 快照读取，绝不用工作区文件**（`getFileContent` 命令 → `client.printRevision(...)`）：
+| 文件 | 职责 |
+|---|---|
+| `packages/extensions-common/src/contracts/swarm.ts` | renderer↔扩展共享 DTO（ReviewDto/DetailDto(含 transitions)/DashboardResult/VoteRequest/TransitionRequest(含 commit?)/AddCommentRequest(含 context?+content?)/…）+ `SwarmCommands` 命令 id 常量；**必须**在 `index.ts` re-export |
+| `extensions/perforce/src/swarm/swarmApi.ts` | 薄 REST 层（get/post/patch，拼 `/api/v{N}/…` URL + Authorization header）；**认了 `UNIVERSE_SWARM_BASE_URL` env 覆盖**（e2e fake server）；日志只打 URL+状态码 |
+| `extensions/perforce/src/swarm/swarmAuth.ts` | `resolveTicket`（`p4 login -p` 取 ticket）+ `buildBasicAuth` + `resolveSwarmCredential`（密钥红线） |
+| `extensions/perforce/src/swarm/swarmParser.ts` | Swarm JSON → DTO 的**纯函数**（`parseReviewList`/`parseReviewDetail`/`parseTransitions`/`parseComments`…），可对 fixture 单测 |
+| `extensions/perforce/src/swarm/swarmClient.ts` | `SwarmClient`：每个审核操作一个方法（`dashboard`/`listReviews`/`getReview`/`vote`/`transition`/`addComment`…），组合 api + parser；持 `SwarmClientConfig {baseUrl, apiVersion, user}` |
+| `extensions/perforce/src/swarm/swarmCommands.ts` | 注册全部 `perforce.swarm.*` 命令；`guard()` 把「未配置/未授权」失败映射成安全回退值；`SwarmClient` 按 config+active-client 签名懒重建 |
+| `extensions/perforce/src/swarm/swarmStatusBar.ts` + `swarmNotificationPoller.ts` | 状态栏**被动显示** renderer 推送计数，host 只管用性 show/hide；轮询定时器在 host（Chromium 不节流），每 tick poke renderer（红线见速查 5）；新审核通知由 renderer `SwarmReviewNotificationContribution.ts` 60s 轮询兜底，以侧栏**最终显示**列表为准；窗口聚焦时 OS toast 被门控必须回退应用内 toast——上升沿已入 `_known` 基线只消费一次 |
+| `extensions/perforce/package.json` | 只有 `ping`/`requestReview`/`updateReviewFromChangelist` 进 commands（头号坑） |
+| `apps/editor/src/renderer/workbench/swarm/` | 全部 React UI：`SwarmReviewsView.tsx`（分组+关键词+详情，`getTransitions` 驱动可审批/右键操作）/ `SwarmReviewEditor.tsx`（头部+版本选择器+文件列表+评论面板）/ `SwarmDiffEditor.tsx`+`SwarmInlineCommentController.ts`+`SwarmInlineThread.tsx`（Monaco diff+行内评论，view-zone+overlay widget）/ `SwarmChangesView.tsx`（SWARM CHANGES） |
+| `apps/editor/src/renderer/services/editor/SwarmReviewEditorInput.ts` · `SwarmDiffEditorInput.ts` · `services/swarm/swarmViewState.ts` | 两个 EditorInput（身份隔离，见下）/ view-state 单例 |
+| `apps/editor/src/renderer/actions/swarmActions.ts` | Action2（openReviews/openReview + `_workbench.*` 双胞胎） |
+| `apps/editor/src/renderer/contributions/SwarmViewContribution.ts` | view 容器注册（+ ignore store prune / BlockStartup hydrate） |
+| `extensions/perforce/e2e/fixtures/fake-swarm.mjs` · `swarmApp.ts` · `fake-p4.mjs` | e2e fake server + fixture |
+| `extensions/perforce/e2e/specs/swarmReview.spec.ts` | e2e 冒烟（`@p1`） |
 
-- 首版默认比较是 **base(0) → v1**，不是「空 → v1」：`p4 describe -S -s <change>` 的 `rev#` 是 shelved 文件的 depot 基线 revision；非新增文件左侧读 `${depotFile}#${rev}`，新增文件左侧才为空。否则所有 v1 edit 都会显示成整文件新增。
-- **多 version 时默认左侧仍是 depot 基线(0)，不是「上一个 version」**：文件列表按 shelf vs 基线算，若默认拿上一 version 作左侧，一个在版本间没变、但相对基线有改动的文件会显示成空 diff（列表说改了、diff 两边一样，自相矛盾）。对标 GitHub PR 单文件默认对 base diff。用户可用 Compare 下拉显式选更早 version 做版本间比较。右侧读 `${depotFile}@=${versionChange}`；删除文件右侧为空。
-- Swarm version 有 `archiveChange` 时优先用它作为不可变快照，回退 `change`。作者 changelist 会被重新 shelve，不能拿它代表旧 version。
-- `#revision` 可进 immutable print cache；`@=<pending-change>` 可被 reshelve 原地替换，不能进永久缓存——**但 `@=<archiveChange>` 不可变**，renderer 请求带 `immutable: true`（`SwarmFileContentRequest.immutable`），`printRevision/printRevisionBytes(spec, immutable)` 据此走 `P4CacheNs.print`（bytes 以 `bytes:` 前缀 key + base64 存字符串缓存）。打开已存在的 immutable diff tab 还会被 renderer 短路（`openFileDiff` 查 `editorService.openEditors`，零 p4 流量）；diff model 另有 `diffModelCache` LRU（容量 8，全文校验防 pending re-shelve 脏读），关闭重开免 createModel+tokenize+diff 计算。
-- **绝不用工作区当前文件当右侧**——它会随本地编辑漂移，行号对不上 Swarm 评论锚点。
-- 文件列表 / 版本元数据走 `describeVersion`（pending shelf 用 `p4 describe -S -s <change>`，报表型命令走 `execRecords()` 防 `-Mj` 塌陷，见上文 p4 插件节）。**`describeVersion` 的入参 change 也必须走 `archiveChange ?? change`**：作者的 `version.change`（如 100452）可能被 re-shelve/清空，直接用它会让文件列表时有时无、内容漂移成空；archive shelf（如 100475）才是不可变快照。这条与右侧内容 `changeForVersion` 是同一铁律的两个消费点，别只修一处。
-- 侧栏 **SWARM CHANGES** 视图（`renderer/workbench/swarm/SwarmChangesView.tsx`）是这条铁律的第三个消费点：它跟随 SWARM REVIEWS 的选中行，按 `getReview` → 取 `versions[last]` 的 `archiveChange ?? change` → `describeVersion` 取数，恒与 depot 基线(0) 对比，与详情页的 version/compare 选择器解耦。archive shelf 不可变，所以强制刷新（review mutate）时**不给它带 `force`**，只给 pending 快照带。
-- “打开文件”目标是当前 client 的工作区副本，路径必须批量走 `p4 where <depotFile...>`；不能从 depot/display path 猜本地路径。无映射时 DTO 传 `localPath:null`，标题栏隐藏该动作。
+### 命令分界（host / renderer）
 
-### diff 编辑器基础能力接入
-
-- `SwarmDiffEditorInput` 必须继承通用 `DiffEditorInput`（仍覆写自己的 `typeId/id/resource`），这样 `isInDiffEditor`、`diffEditorHasOpenableFile` 与标准标题栏 Action2 才能识别：打开文件 / 上一个差异 / 下一个差异。
-- `SwarmDiffEditor` 在 `setModel` 后用 `EditorGroupContext` 的 group id 注册 `DiffEditorRegistry`，cleanup 对称 unregister；否则标准导航、焦点与 e2e diff 探针都找不到 live Monaco 实例。
-- 首次 `onDidUpdateDiff` 一次性调用 `revealFirstDiff()` 并立即注销监听；不能在 `setModel` 后同步 `goToDiff()`，此时 diff/layout 尚未计算完成。
-
-### 行内评论锚定（Swarm API 要求）
-
-- Monaco 空 view-zone 占位撑出评论条带 + overlay widget 托 React root（`createRoot`），逐锚点一套，对标 `InlineDirtyDiffController`（见 `apps/editor/src/renderer/workbench/scm/CLAUDE.md` 的 dirty-diff 案例）。
-- `SwarmAddCommentRequest.context` 里 `content` = **锚定行 + 前 4 行原文**：Swarm 用它在文件漂移后**重新锚定**评论（API 硬要求，不是可选优化）。
-- 提交评论时 `side`（left/right）→ 映射成 `context.rightLine`/`leftLine` + `version`；review 级评论则无 `context`。
-- host 侧 `addComment` handler 会把顶层 `content` 折进 `context.content`（Swarm 要的是 `context.content`）。
-
-### 编辑器身份隔离（同类多 tab 必做）
-
-两个 EditorInput 都覆写 `id` 让不同审核 / 不同 diff = 不同 tab（见 memory `editor-input-identity-isolation`）：
-
-- `SwarmReviewEditorInput`：`TYPE_ID='swarmReview'`，`resource = universe:/swarmReview/{id}`，`id` 含 reviewId。
-- `SwarmDiffEditorInput`：继承 `DiffEditorInput`；`TYPE_ID='swarmDiff'`，`id = swarmDiff:{reviewId}:{depotFile}:{left}-{right}`，`resource` scheme `swarm-diff` + query 带 `l=/r=` 版本。**transient（不 deserialize）**——审核 diff 是临时视图，重启不恢复。
+- 全部命令 id 走 `SwarmCommands` 常量（`perforce.swarm.*`）。**数据命令全走 `commands.registerCommand`（host 侧），renderer 用 `executeCommand(SwarmCommands.xxx, arg)` 跨 JSON 边界调**；**只有 `ping` / `requestReview` / `updateReviewFromChangelist` 进 package.json**（`ping` 是命令面板自检；后两者贡献到 SCM changelist 组头右键菜单，都是扩展宿主有真 handler 的命令）。其余声明会触发头号坑。
+- `getTransitions` 是列表与详情共用的服务器权威能力查询；列表里的「可 Approve」蓝色勾和右键状态操作都只能由它驱动。
+- `obliterateReview` 走 `POST reviews/{id}/obliterate`，永久删除审核；renderer 必须先做不可逆确认，服务端仍负责最终权限校验。
+- `updateReview`（详情页按钮，请求已带 reviewId）与 `updateReviewFromChangelist`（changelist 组头出发、先 QuickPick 选 review 再重新 shelve）是两条路径，别混；候选排序纯函数 `swarm/swarmReviewPick.ts`（`buildReviewPicks`）。
+- `applyToLocal`（详情页 Apply to Local 按钮）是**纯 p4 数据命令**，**不走 `guard()`**；入参 change 同样走 `archiveChange ?? change` 不可变快照铁律（renderer 传的是 `selectedChange`，别重新推导）。完整流程 → [cases-apply-to-local.md](cases-apply-to-local.md)
 
 ### 注册套路
 
@@ -223,57 +88,25 @@ Swarm 的 comment 端点**不挂在 review 下**——它是独立的 topic-base
 
 **深链接**：`universe-editor://swarm/review/<id>` → `swarm.openReview`（`shared/deepLink.ts` 解析 + `DEEP_LINK_ALLOWED_COMMANDS` 白名单，见 `apps/editor/src/renderer/services/opener/CLAUDE.md`）。
 
-### e2e 套路（fake Swarm REST server）
-
-本机 / CI 无真 Swarm 服务器，用纯 Node fake server 端到端跑：
-
-- `extensions/perforce/e2e/fixtures/fake-swarm.mjs`——依赖 free 的 `node:http` server，内存审核模型 `{1001:{…}}`，把 baseUrl 写进 `UNIVERSE_SWARM_FAKE_PORTFILE`，请求逐行记进 `UNIVERSE_SWARM_FAKE_LOG`。**认证无条件放行**（凭据链路由单测覆盖）。改端点在这里加 case。
-- `extensions/perforce/e2e/fixtures/swarmApp.ts`——Playwright fixture：拉起 fake-swarm + fake-p4，seed 配置（`swarm.enabled/url/apiVersion`），暴露 `swarm.requests()` / `swarm.waitForRequest()`。
-- `extensions/perforce/e2e/fixtures/fake-p4.mjs`——`login` case 在 `-p` 时打印假 ticket。
-- `extensions/perforce/e2e/specs/swarmReview.spec.ts`（`@p1`）——开 view → 载 dashboard → 开审核 → vote → transition → 断言 fake server 记录到的请求 body。
-
-#### e2e 必踩的四个坑（本次实测踩全）
-
-1. **e2e 跑预构建产物**：改 renderer 必 `pnpm --filter @universe-editor/editor build`，改扩展必 `pnpm --filter @universe-editor/perforce build`，否则用旧 bundle（"view 不渲染"最常见就是这个）。
-2. **`runCommand('swarm.openReviews')` 冷启动会 race `ViewsService.reconcileFromStorage`**：命令刚设的 active 容器被 storage 恢复覆盖 → view 不渲染。e2e **点 Activity Bar 项**（`[data-testid="activitybar-item-workbench.view.swarm"]`）打开，这才是健壮的用户路径。
-3. **命令激活 race + 按钮文案匹配**：
-   - 视图首次 mount 时扩展宿主命令可能**尚未注册**，`executeCommand` 返回 `undefined`。`SwarmReviewsView` 的 `load()` 遇 `undefined` **重试（250ms 退避，最多 20 次）**而非缓存空 dashboard——否则列表永远空。
-   - 按钮内含图标 span（如 `↑Vote Up`），`getByText('Vote Up',{exact:true})` **匹配不到**；用 `getByRole('button',{name:'Vote Up'})`。
-4. **别在 `expect.poll` 的驱动循环里断言尚未渲染的 locator**：`locator.textContent()` 会自动等待元素出现，把 poll 的第一轮卡死在自己的超时上（轮询还没成功、元素还不存在的死锁）。先沿用"快速 probe（如 `getSwarmNotifyDiag().lastActionable`）驱动轮询直到成功"，再用 `await expect(badge).toHaveText(...)` 断言。
+**编辑器身份隔离（同类多 tab 必做）**：两个 EditorInput 都覆写 `id` 让不同审核 / 不同 diff = 不同 tab（memory `[[editor-input-identity-isolation]]`）——`SwarmReviewEditorInput`（`id` 含 reviewId，`resource = universe:/swarmReview/{id}`）；`SwarmDiffEditorInput`（`id = swarmDiff:{reviewId}:{depotFile}:{left}-{right}`，**transient**——重启不恢复）。
 
 ### 验证
 
 ```bash
-## 改了 extensions-common 后先重建（pnpm dev 下 watcher 自动）
-pnpm --filter @universe-editor/extensions-common build
-pnpm --filter @universe-editor/perforce build
-pnpm --filter @universe-editor/editor build   # e2e 前必做
-
-pnpm check   # lint + typecheck + 全量单测 + docs:check
-pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts specs/smoke.swarmReview.spec.ts
+cd extensions/perforce && UNIVERSE_E2E_NO_TAG_FILTER=1 npx playwright test -c e2e/playwright.config.ts swarmReview.spec.ts   # Swarm 冒烟
 ```
 
-改了用户可见文案/交互，同步 `docs/user/zh-CN/perforce/swarm-code-review.md`（`pnpm docs:check` 校验内链）。
-
-### 关键参考路径
-
-- `packages/extensions-common/src/contracts/swarm.ts` —— wire 类型 + `SwarmCommands` 常量（改完 re-export）
-- `extensions/perforce/src/swarm/swarmApi.ts` —— HTTP 层（`UNIVERSE_SWARM_BASE_URL` 覆盖）
-- `extensions/perforce/src/swarm/swarmAuth.ts` —— 认证（密钥红线）
-- `extensions/perforce/src/swarm/swarmParser.ts`（+ `__tests__/swarmParser.test.ts`）—— 纯解析
-- `extensions/perforce/src/swarm/swarmClient.ts` —— 审核操作编排（搜 `dashboard`）
-- `extensions/perforce/src/swarm/swarmCommands.ts` —— 命令注册（搜 `guard`）
-- `extensions/perforce/src/swarm/swarmStatusBar.ts` —— 状态栏被动显示 renderer 推送计数（通知在 renderer `SwarmReviewNotificationContribution.ts`）
-- `extensions/perforce/package.json` —— 只有 `ping`/`requestReview` 进 commands（头号坑）
-- `apps/editor/src/renderer/workbench/swarm/` —— 全部 React UI（列表/详情/diff/行内评论）
-- `apps/editor/src/renderer/actions/swarmActions.ts` —— Action2（openReviews/openReview + `_workbench.*` 双胞胎）
-- `apps/editor/src/renderer/contributions/SwarmViewContribution.ts` —— view 容器
-- `extensions/perforce/e2e/fixtures/fake-swarm.mjs` · `swarmApp.ts` —— e2e fake server + fixture
-- `extensions/perforce/e2e/specs/swarmReview.spec.ts` —— e2e 冒烟
+改了用户可见文案/交互，同步 `docs/user/zh-CN/perforce/swarm-code-review.md`（`pnpm docs:check` 校验内链）。e2e 套路（fake Swarm server + 三坑）→ [cases-e2e.md](cases-e2e.md)；e2e 栈通用约定 → `../../e2e/CLAUDE.md`。
 
 ### 其它
 
-- **状态永远问服务器**：加任何"改状态"入口前，先 `GET transitions` 拿合法集，别自己算。
-- **report 型 p4 命令走 `execRecords()`**（`describe -s` / `where` 等），防 `-Mj` 塌成 `{data:...}` blob（见上文 p4 插件节）。
-- **连接 `-p` 绝不从 `p4 info` 的 serverAddress 推**；只在 `perforce.port` 显式设置才传（同 p4 通用红线）。
-- 加新审核操作：wire DTO（extensions-common）→ parser 纯函数 + 单测 → client 方法 → command 注册 → renderer `executeCommand` 调用，五步走，别跳层。
+- **report 型 p4 命令走 `execRecords()`**（防 `-Mj` 塌陷，见父文档）。
+- 加新审核操作五步走，别跳层：wire DTO（extensions-common）→ parser 纯函数 + 单测 → client 方法 → command 注册 → renderer `executeCommand` 调用。
+
+## 案例索引（从本文件拆出，按需读对应一份）
+
+- **通知链五环 + guard silent + 日志观测点**：[cases-notification-chain.md](cases-notification-chain.md)
+- **Activity Bar 角标 / Ignore / UI 状态持久化**：[cases-renderer-state.md](cases-renderer-state.md)
+- **diff 数据源铁律 / diff 编辑器 / 行内评论锚定**：[cases-diff.md](cases-diff.md)
+- **applyToLocal**：[cases-apply-to-local.md](cases-apply-to-local.md)
+- **e2e 套路与三坑**：[cases-e2e.md](cases-e2e.md)

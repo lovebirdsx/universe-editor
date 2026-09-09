@@ -1,6 +1,6 @@
 ---
 name: claude-md-size-guard
-description: CLAUDE.md 15KB 硬预算守护已接入 pnpm check；perforce 豁免待移除
+description: CLAUDE.md 15KB 硬预算守护已接入 pnpm check；EXEMPT 已清空全仓生效
 metadata:
   type: project
 ---
@@ -9,4 +9,4 @@ metadata:
 
 **Why:** CLAUDE.md 膨胀稀释「路由+红线」信号；瘦身手法=拆子文档/删代码自证/去重/删历史编年，红线留一句话结论。
 
-**How to apply:** 写 CLAUDE.md 时自觉控长；`EXEMPT` 集合里 `extensions/perforce/**` 两项是并行 session 瘦身期间的临时豁免，对方完成后应移除（脚本注释里已写明）。
+**How to apply:** 写 CLAUDE.md 时自觉控长；`EXEMPT` 集合当前为空（perforce 两份已达标并移出豁免），未来有临时豁免需求时在脚本里加条目并注明原因。

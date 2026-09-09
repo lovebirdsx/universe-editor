@@ -52,7 +52,10 @@ test('恰好等于阈值不超标（边界 > 而非 >=）', () => {
 test('豁免名单内文件即使超标也不列出', () => {
   const root = makeRepo()
   writeClaudeMd(root, 'extensions/perforce/CLAUDE.md', 100_000)
-  const { oversize } = checkClaudeMdSize({ repoRoot: root })
+  const { oversize } = checkClaudeMdSize({
+    repoRoot: root,
+    exempt: new Set(['extensions/perforce/CLAUDE.md']),
+  })
   assert.deepEqual(oversize, [])
 })
 

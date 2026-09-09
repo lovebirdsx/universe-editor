@@ -27,12 +27,8 @@ const CHECK_ONLY = process.argv.slice(2).includes('--check')
 
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'out', '.turbo', 'vendor'])
 
-// 豁免名单：因故暂无法压到预算内的文件，各附原因。
-// extensions/perforce/** 由另一 session 并行瘦身中，完成后应从此名单移除。
-const EXEMPT = new Set([
-  'extensions/perforce/CLAUDE.md',
-  'extensions/perforce/src/swarm/CLAUDE.md',
-])
+// 豁免名单：因故暂无法压到预算内的文件，各附原因。当前无豁免——全仓硬限制生效。
+const EXEMPT = new Set([])
 
 function fmt(p) {
   return p.replace(/\\/g, '/')
