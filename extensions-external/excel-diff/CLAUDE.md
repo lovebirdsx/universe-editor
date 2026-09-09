@@ -1,26 +1,24 @@
 # extensions-external/excel-diff/CLAUDE.md
 
-Excel Viewer & Diff 插件的代码家：一个 **out-of-workspace 扩展**（不在 pnpm workspace 内，自带 npm 工具链 + `node_modules`，手动 `.vsix` 安装，同 `extensions-external/pdf` 的构建套路）。本文含该案例的完整上下文——内核 webview-diff 通路 + Excel 扩展 + SCM 复用（案例：Excel Viewer & Diff 插件，处理相关任务前通读）。
+Excel Viewer & Diff 插件的代码家：一个 **out-of-workspace 扩展**（不在 pnpm workspace 内，自带 npm 工具链 + `node_modules`，手动 `.vsix` 安装，同 `extensions-external/pdf` 的构建套路）。本文含该案例的完整上下文——内核 webview-diff 通路 + Excel 扩展 + SCM 复用（处理相关任务前通读）。
 
-## Excel Viewer & Diff 插件 / webview-diff 内核通路
+## 三部分组成（改动前先判断动的是哪部分）
 
-一个"用扩展的 webview 渲染 **双内容对比**"的完整实例。由三部分组成，改动前先判断你动的是哪部分：
-
-1. **内核 webview-diff 通路**（extension-api 五层 + version bump）——让扩展的 custom editor 除了「按 glob 绑单文件打开」外，还能被内核用**两份字节**命令式打开成一个 diff tab。这是本仓库此前缺的能力（对等 VSCode 的"命令式 createWebviewPanel + 传两个 URI"）。
+1. **内核 webview-diff 通路**（extension-api 五层 + version bump）——让 custom editor 除「按 glob 绑单文件打开」外，还能被内核用**两份字节**命令式打开成一个 diff tab（对等 VSCode 的"命令式 createWebviewPanel + 传两个 URI"）。
 2. **Excel 扩展**（`extensions-external/excel-diff`）——SheetJS 解析 + 自绘表格；单文件预览与 diff 共用一个 viewType，靠 `panel.diffContext` 区分。
 3. **SCM 复用**（git / perforce）——各自 `openChange` 加 `.xlsx` 分支，用二进制 baseline 调 `_workbench.openWebviewDiff`。
 
-> ⚠️ **第一原则**：webview 单文件预览基建（iframe/CSP/焦点/asWebviewUri/五层 RPC）已由 `apps/editor/src/renderer/workbench/webview/CLAUDE.md` 完整覆盖且已修好一堆坑。本文只加"**diff 维度**"这一薄层。做任何 webview 相关改动前，先读那个文档建立基建认知——本文不重复它的坑（CSP 继承、iframe 焦点、切 tab 白屏、allowRoots 竞态都在那）。
+> ⚠️ **第一原则**：webview 单文件预览基建（iframe/CSP/焦点/asWebviewUri/五层 RPC）已由 `apps/editor/src/renderer/workbench/webview/CLAUDE.md` 完整覆盖且已修好一堆坑。本文只加"**diff 维度**"这一薄层。做 webview 改动前先读那个文档——本文不重复它的坑（CSP 继承、iframe 焦点、切 tab 白屏、allowRoots 竞态都在那）。
 >
-> ⚠️ **第二原则**：diff 内容走 **"内容直传"（base64 字节按值传）**，不走虚拟文件 scheme。这是刻意对齐既有 `_workbench.openDiff`（text 版）的设计——让 git blob / p4 print / 磁盘文件三种来源统一成"两份字节"，SCM 扩展只要能拿到字节就无缝复用同一个 diff 编辑器，不关心字节从哪来。
+> ⚠️ **第二原则**：diff 内容走 **"内容直传"（base64 字节按值传）**，不走虚拟文件 scheme。刻意对齐既有 `_workbench.openDiff`（text 版）——让 git blob / p4 print / 磁盘文件三种来源统一成"两份字节"，SCM 扩展只要能拿到字节就无缝复用同一个 diff 编辑器。
 
 ### 核心设计决策（照抄前先理解）
 
-- **单 viewType 承载预览 + diff**：`universe.excel` 一个 viewType。`resolveCustomEditor` 里 `panel.diffContext` 有 → 渲染双栏 diff，无 → 单文件预览。custom editor manifest 的 glob 只负责"单文件打开"；diff 由命令 `_workbench.openWebviewDiff` 触发，**不经 glob/resolver**（像 openDiff 一样直接 `new WebviewDiffInput` + `openEditor`）。
-- **资源管理器 compare 菜单统一（不自建扩展命令）**：扩展**不再**注册 `excel.selectForCompare`/`excel.compareWithSelected`，而是**复用内核原生**的「选择以进行比较 / 与所选项进行比较 / 比较所选文件」（`selectForCompare`/`compareSelected`/`workbench.files.action.compareFiles`）。做法=manifest 的 `customEditors[]` 声明 `supportsDiff: true`；内核 `openFileDiff`（`fileCompareActions.ts`）在建 `DiffEditorInput` 前先 `IEditorResolverService.resolveEditors(right)[0]`，命中 `info.supportsDiff && info.viewType` 则读**二进制**（`IFileService.readFile`，内核侧直接返回 `Uint8Array`）建 `WebviewDiffInput`，否则回退文本 diff。viewType/supportsDiff 由 `IEditorResolverInfo` 携带（`ExtensionsContribution._registerCustomEditor` 注册时透传）。**未声明 supportsDiff 的 custom editor（如 pdf）自动走文本回退，不受影响**。CustomEditorHost 的 diff 分支自带 `activateByEvent`，无需 action 侧再激活。
-- **解析在扩展侧（node），webview 是纯 painter**：SheetJS 在扩展进程解析（字节在这里已到手），把**结构化 JSON 模型**塞进初始 HTML 的 `<script type="application/json">`，webview 只读它画表格。SheetJS **bundle 进 node 扩展**（`extension.js` ~1.9MB），不发浏览器构建、不进 webview。
+- **单 viewType 承载预览 + diff**：`universe.excel` 一个 viewType。`resolveCustomEditor` 里 `panel.diffContext` 有 → 双栏 diff，无 → 单文件预览。manifest 的 glob 只负责"单文件打开"；diff 由命令 `_workbench.openWebviewDiff` 触发，**不经 glob/resolver**（像 openDiff 一样直接 `new WebviewDiffInput` + `openEditor`）。
+- **compare 菜单统一（不自建扩展命令）**：扩展**不再**注册 `excel.selectForCompare`/`excel.compareWithSelected`，**复用内核原生**「选择以进行比较 / 与所选项进行比较 / 比较所选文件」（`selectForCompare`/`compareSelected`/`workbench.files.action.compareFiles`）。做法=manifest `customEditors[]` 声明 `supportsDiff: true`；内核 `openFileDiff`（`fileCompareActions.ts`）建 `DiffEditorInput` 前先 `resolveEditors(right)[0]`，命中 `supportsDiff && viewType` 则读**二进制**（`IFileService.readFile`，内核侧直接返回 `Uint8Array`）建 `WebviewDiffInput`，否则回退文本 diff。viewType/supportsDiff 由 `IEditorResolverInfo` 携带（`_registerCustomEditor` 注册时透传）。**未声明 supportsDiff 的 custom editor（如 pdf）自动走文本回退，不受影响**。diff 分支自带 `activateByEvent`，无需 action 侧再激活。
+- **解析在扩展侧（node），webview 是纯 painter**：SheetJS 在扩展进程解析，把**结构化 JSON 模型**塞进初始 HTML 的 `<script type="application/json">`，webview 只读它画表格。SheetJS **bundle 进 node 扩展**（`extension.js` ~1.9MB），不发浏览器构建、不进 webview。
 - **`WebviewDiffInput` 是 transient（无 deserialize）**：它持内存字节（git HEAD blob / p4 have-rev 可能不在磁盘），像 `DiffEditorInput` 一样窗口恢复时丢弃 tab。**别**给它加 deserialize（无处取回字节）。
-- **SCM 复用必须走二进制 baseline**：git/p4 现有 text diff 用 utf8 解码，会**损坏 xlsx 字节**。必须新增二进制读取路径（`gitExecBinary` / p4 `execBinary`），返回 `Buffer`，base64 后传。
+- **SCM 复用必须走二进制 baseline**：git/p4 现有 text diff 用 utf8 解码，会**损坏 xlsx 字节**。必须新增二进制读取路径（git `gitExecBinary` / p4 `execBinary`），返回 `Buffer`，base64 后传。
 
 ### 五层架构（内核 webview-diff 通路，改 API 才碰）
 
@@ -30,22 +28,18 @@ Excel Viewer & Diff 插件的代码家：一个 **out-of-workspace 扩展**（�
 ① 契约  packages/extension-api/src/webview.ts
         WebviewDiffContext { leftUri, rightUri, left/right: Uint8Array, title }
         WebviewPanel.diffContext?（可选新增字段）
-        ⚠️ 纯类型新增 → minor bump：index.ts version 0.3.0→0.4.0 + package.json 同步 +
-           COMPATIBILITY.md 变更记录。契约快照 index.test.ts **无需改**（只加可选字段/接口，
-           无新 runtime export / namespace 方法）——这点区别于加新 window.* 方法。
+        ⚠️ 纯类型新增 → minor bump（version + package.json + COMPATIBILITY.md 变更记录）；
+           契约快照 index.test.ts **无需改**（只加可选字段/接口，无新 runtime export——区别于加新 window.* 方法）
 ② 协议  packages/extensions-common/src/protocol/rpc.ts
         IWebviewDiffContextDto { leftUri, rightUri, leftBase64, rightBase64, title }
         （字节 base64 保证 JSON-safe 过 ProxyChannel）
         $resolveCustomEditor 增可选 diff?: IWebviewDiffContextDto 末位参数
 ③ host   packages/extension-host/src/hostWebviews.ts
         reviveDiffContext(dto)：base64 → Buffer → Uint8Array
-        HostWebviewPanel.diffContext（⚠️ exactOptionalPropertyTypes：必须是真 optional
-           字段 readonly diffContext?，构造器里 `if (diffContext) this.diffContext = ...`
-           条件赋值，**不能**声明成 `readonly diffContext?: X` 却在构造器参数用 `X`——见坑①）
+        HostWebviewPanel.diffContext（⚠️ exactOptionalPropertyTypes：真 optional 字段 + 构造器条件赋值，见坑①）
         extensionService.ts resolveCustomEditor 透传 diff；bootstrap.ts $resolveCustomEditor 补参
 ④ renderer  apps/editor/src/renderer/
-        services/extensions/WebviewService.ts  openPanel(viewType, resource, diff?) 末位加 diff，
-           透传给 extHost.$resolveCustomEditor
+        services/extensions/WebviewService.ts  openPanel(viewType, resource, diff?) 末位加 diff，透传给 $resolveCustomEditor
         services/editor/WebviewDiffInput.ts（新建）typeId='webviewDiff'，
            id = `webviewDiff:${viewType}:${leftUri}↔${rightUri}`，transient，focus() 走 WebviewFocusRegistry
         workbench/editor/CustomEditorHost.tsx  resolveOpenArgs(input) 分派两种输入类型
@@ -60,25 +54,20 @@ Excel Viewer & Diff 插件的代码家：一个 **out-of-workspace 扩展**（�
 ```
 
 #### resourceExtname 上下文键（顺带补的内核能力）
-资源管理器右键 `when` 子句此前无 `resourceExtname`（VSCode 标准键）。在
-`apps/editor/src/renderer/workbench/explorer/ExplorerContextMenu.tsx` 的 `createScoped({...})` 里
-加了 `resourceExtname`（`extnameOf(resource)` = 带点小写扩展名如 `.xlsx`）。任何扩展的 explorer 菜单
-`when` 现在都能 `resourceExtname == .xlsx || ...`（`||` Or 表达式 contextKeyExpr 支持）。
+
+资源管理器右键 `when` 子句此前无 `resourceExtname`（VSCode 标准键）。在 `apps/editor/src/renderer/workbench/explorer/ExplorerContextMenu.tsx` 的 `createScoped({...})` 里加了 `resourceExtname`（`extnameOf(resource)` = 带点小写扩展名如 `.xlsx`）。任何扩展的 explorer 菜单 `when` 现在都能 `resourceExtname == .xlsx || ...`（`||` Or 表达式支持）。
 
 ### Excel 扩展（`extensions-external/excel-diff`，照抄 pdf 但有关键差异）
 
-骨架照抄 `extensions-external/pdf`（out-of-workspace 构建套路见 `extensions-external/pdf/CLAUDE.md`），**差异点**：
-
 ```
 extensions-external/excel-diff/
-  src/extension.ts   provider：resolveCustomEditor 判 panel.diffContext；
-                     compare 命令 excel.selectForCompare / excel.compareWithSelected（扩展内部存选中态，
+  src/extension.ts   provider：resolveCustomEditor 判 panel.diffContext；compare 命令
+                     excel.selectForCompare / excel.compareWithSelected（扩展内部存选中态，
                      读两文件字节 → _workbench.openWebviewDiff）
   src/parse.ts       SheetJS：parseWorkbook(bytes) → WorkbookModel（逐 sheet dense 2-D string 网格；
                      cellText 优先取格式化文本 w，回退 v）
-  src/diff.ts        diffWorkbooks(left,right)：按 sheet 名匹配；每 sheet 走 LCS 行对齐
-                     （alignRows dp 回溯）→ 删+紧跟插合并为 modified（changedColumns 标单元格级差异）；
-                     added/removed/equal 分类 + changeCount
+  src/diff.ts        diffWorkbooks(left,right)：按 sheet 名匹配；每 sheet 走 LCS 行对齐（dp 回溯）
+                     → 删+紧跟插合并为 modified（changedColumns 标单元格级差异）+ 分类 + changeCount
   assets/viewer.html 模板：<!--HEAD--> 注 CSP+css，<!--BODY_SCRIPT--> 注 payload script + viewer.mjs
   assets/viewer.mjs  纯 painter：读 #excel-payload JSON → 画单文件表格 or 双栏 diff（sheet 标签 +
                      变更计数 badge + 「只看差异」过滤 + 增删改高亮）
@@ -102,7 +91,7 @@ extensions-external/excel-diff/
 
 ### 已知坑
 
-1. **`exactOptionalPropertyTypes` 下 optional 字段**（TS2420/TS2379）：`HostWebviewPanel.diffContext` 声明成 `readonly diffContext?: WebviewDiffContext`，构造器参数 `diffContext?: X` 后**条件赋值** `if (diffContext) this.diffContext = diffContext`。直接 `readonly diffContext?: X` 当构造器参数（`T | undefined` 派生）会被判"incorrectly implements interface"。这是本仓库 strict 三件套的通病。
+1. **`exactOptionalPropertyTypes` 下 optional 字段**（TS2420/TS2379）：`HostWebviewPanel.diffContext` 声明 `readonly diffContext?: WebviewDiffContext`，构造器参数 `diffContext?: X` 后**条件赋值** `if (diffContext) this.diffContext = diffContext`。直接 `readonly diffContext?: X` 当构造器参数（`T | undefined` 派生）会被判 "incorrectly implements interface"。这是本仓库 strict 三件套的通病。
 2. **命令白名单**：`_workbench.openWebviewDiff` 靠 `_workbench.` 前缀在 `MainThreadCommands.ts` 的 `HOST_INVOKABLE_PREFIX` 自动放行——扩展经 `commands.executeCommand` 能调。换非 `_workbench.` 前缀的命令名会被拒。
 3. **SCM 二进制 baseline**：git `gitExecBinary`（stdout 收 Buffer 不 utf8 decode，stderr 仍 text）；p4 `execBinary` + `BaselineProvider.getHaveContentBytes`（**不进** string print 缓存）。用现成的 text `getHaveContent` / `gitExec` 读 xlsx 会静默损坏字节 → webview 里 SheetJS 解析报错。
 4. **CustomEditorHost 复用两输入**：`resolveOpenArgs` 分派；effect 依赖 `[webviewService, extensionHost, input]`（不是旧的 `customInput`）。漏改依赖 → 切换 diff/单文件 tab 不重挂。
@@ -113,14 +102,11 @@ extensions-external/excel-diff/
 ### 验证
 
 ```bash
-pnpm check                                    # lint+typecheck+test（47 tasks），仅看错误
+pnpm check                                    # lint+typecheck+test，仅看错误
 pnpm build                                    # e2e 跑 out/ 产物，改 renderer/main 后必重建
 cd apps/editor && pnpm exec playwright test -c e2e/playwright.config.ts specs/smoke.webviewDiff.spec.ts
-                                              # 守护 _workbench.openWebviewDiff → WebviewDiffInput →
-                                              # CustomEditorHost 传 diffContext → 扩展解码渲染两侧（内联扩展，不装真 SheetJS）
 # 扩展侧：cd extensions-external/excel-diff && npm install && node esbuild.config.mjs && node scripts/pack.mjs
 # diff 算法快验：esbuild bundle src/diff.ts → import data:URL → 跑上面两个场景断言
-pnpm docs:check                               # 动了 docs/user 后校验死链
 ```
 
 E2E 范例 `apps/editor/e2e/specs/smoke.webviewDiff.spec.ts`：内联极简 diff-capable 扩展（读 `panel.diffContext`、`TextDecoder` 解码 left/right 写进 iframe），`runCommand('_workbench.openWebviewDiff', payload)` 触发，poll `getActiveEditorTypeId()==='webviewDiff'`，`frameLocator` 断言两侧文本渲染。**不装真 SheetJS**（headless 稳定），只守护内核通路。
@@ -132,9 +118,9 @@ E2E 范例 `apps/editor/e2e/specs/smoke.webviewDiff.spec.ts`：内联极简 diff
 - **SCM 复用**：`extensions/git/src/{gitService.ts(gitExecBinary),repository.ts(_openSpreadsheetChange)}` / `extensions/perforce/src/{p4Service.ts(execBinary),baselineProvider.ts(getHaveContentBytes),client.ts(_openSpreadsheetChange)}`
 - **resourceExtname**：`apps/editor/src/renderer/workbench/explorer/ExplorerContextMenu.tsx`
 - **用户文档**：`docs/user/zh-CN/customization/extensions.md`（"扩展可以提供的自定义预览"节）
-- 相关：**`apps/editor/src/renderer/workbench/webview/CLAUDE.md`**（webview 单文件预览基建 + 全部 iframe/CSP/焦点坑，**必读前置**）、skill [create-extension]（扩展骨架）、`extensions/perforce/CLAUDE.md`（p4 扩展全景）、skill [fix-disposable-leak]（panel/iframe 生命周期）
-- 相关 memory：[[editor-input-identity-isolation]]（EditorInput id 隔离，WebviewDiffInput 的 id 命名空间遵它）、[[realpath-uri-ipc-revive]]（wire URI revive）
+- 相关：**`apps/editor/src/renderer/workbench/webview/CLAUDE.md`**（webview 单文件预览基建 + 全部 iframe/CSP/焦点坑，**必读前置**）、skill [create-extension]、`extensions/perforce/CLAUDE.md`（p4 扩展全景）、skill [fix-disposable-leak]、memory [[editor-input-identity-isolation]]（EditorInput id 隔离，WebviewDiffInput 的 id 命名空间遵它）、[[realpath-uri-ipc-revive]]（wire URI revive）
 
 ### 其它
-- 后续用本 skill 发现新经验，需同步更新本文件。
+
+- 后续用本 skill 发现新经验，同步更新本文件。
 - 扩展目前需手动 `.vsix` 安装（同 pdf，未进内置扩展列表）。

@@ -103,6 +103,7 @@
 
 ## 工程约定 / 护栏
 
+- [CLAUDE.md 15KB 硬预算守护](claude-md-size-guard.md) — `pnpm claude-md:check` 已接入 check；瘦身手法=拆子文档/删代码自证/去重；perforce 豁免待移除
 - [win32 spawnSync shell:true 吞 ^](win32-spawnsync-cmd-caret-escaping.md) — shell:true+args 触发 DEP0190 且裸 ^ 被吞；改显式 cmd /d /s /c + caret 转义（^^），中间参数包引号会字面进 argv 不可靠，空格无解须显式报错
 - [ESLint 路径身份护栏](eslint-path-identity-guardrails.md) — 禁手写 fsPath 折叠/路径身份键；flat config 替换非合并
 - [SCM 门控须按主机作用域](scm-host-scoped-path-gating.md) — 线上契约是裸 host 路径；一律走 scmHostPath，禁裸 scheme==='file' 门控与裸 fsPath 查表（曾致远程 gitignore 变暗失效 + 跨主机误命中）

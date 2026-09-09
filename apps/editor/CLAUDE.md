@@ -1,111 +1,63 @@
 # apps/editor/CLAUDE.md
 
-Electron 43 桌面应用，VSCode 范式的 workbench。本目录是项目核心，套路最多——下面 5 个"我想做 X"段落直接抄就行。
+Electron 43 桌面应用，VSCode 范式的 workbench。「套路 A~I」可直接抄；细节拆在 `cases-*.md`。
 
 ## 三端边界（electron-vite）
 
-| 端 | 目录 | 职责 |
-|---|---|---|
-| main | `src/main/` | Node 进程；业务逻辑抽到独立类（如 `FileSystemMainService`），便于不依赖 Electron 单测；通过 `bootstrapWindowIpc` 把服务注册为 IPC channel |
-| preload | `src/preload/` | 只通过 `contextBridge.exposeInMainWorld` 暴露白名单 API（一般只暴露 IPC 桥） |
-| renderer | `src/renderer/` | React 19 UI；从 `main.tsx` 启动；通过 `ProxyChannel.toService` 拿到 main 端服务 |
-| shared | `src/shared/` | 跨端常量：`ipc/channelNames.ts`、消息类型 |
+main `src/main/`（Node，业务逻辑抽独立类，经 `bootstrapWindowIpc` 注册 IPC）/ preload `src/preload/`（`contextBridge` 白名单）/ renderer `src/renderer/`（React，`main.tsx` 启动，`ProxyChannel.toService` 拿服务）/ shared `src/shared/`（`ipc/channelNames.ts`）。产物 `out/`（勿改）。
 
-产物在 `out/{main,preload,renderer}`（electron-vite 约定，勿改）。
+## 用户数据目录与启动配置
 
-## 用户数据目录
+main 入口（`index.ts`）在 service 实例化前调 `applyProductIdentity()` 切 `userData`：
 
-main 进程入口（`src/main/index.ts`）在所有 service 实例化前调用 `applyProductIdentity()`（`src/main/productPaths.ts`），按运行模式切换 `app.setName` / `app.setPath('userData', ...)` / `app.setAppUserModelId`：
+- 任何模式可用 `UNIVERSE_USER_DATA_DIR=<absolute>` 或原生 `--user-data-dir=<absolute>` 覆盖（**CLI 优先**）。
+- CLI/env/配置读取收口 `EnvironmentMainService`（`src/main/environment/`），优先级 `cli > env > file > default`；新增启动期配置加声明项。
+- **构建期注入 settings 默认值（configurationDefaults）**：内网地址不进仓库，打包期注入出厂默认（高于 `schema.default`、低于可写层）；renderer 在 `new ConfigurationService()` **之前** `registerDefaultOverrides`；`build/product.json` **刻意不放占位值**。
 
-| 模式 | 判定 | userData 目录（Win） | AppUserModelId |
-|---|---|---|---|
-| 发布版 | `import.meta.env.DEV === false` 且无环境变量 | `%APPDATA%/Universe Editor` | `io.universe.editor` |
-| dev | `import.meta.env.DEV === true` | `%APPDATA%/Universe Editor - Dev` | `io.universe.editor.dev` |
-| E2E | `UNIVERSE_E2E=1` | `%APPDATA%/Universe Editor - E2E` | `io.universe.editor.e2e` |
-| 扩展开发宿主 | 存在 `--extension-development-path`（优先级低于 E2E） | `%APPDATA%/Universe Editor - ExtDev` | `io.universe.editor.extdev` |
-
-任何模式都可用 `UNIVERSE_USER_DATA_DIR=<absolute>` 或 Electron 原生 `--user-data-dir=<absolute>` CLI 参数覆盖 userData 目录（CLI 优先；productName 仍按 dev/e2e 决定）。E2E fixture 给每个 Playwright worker 分配 tmp 目录即依赖此机制。darwin/linux 走平台标准目录（`~/Library/Application Support` 或 `XDG_CONFIG_HOME || ~/.config`）。
-
-CLI 参数 / 环境变量 / 部署配置文件的读取统一收口到 `EnvironmentMainService`（`src/main/environment/`），它在 `index.ts` 最顶部构造（早于任何 `app.getPath('userData')`），基于 platform 的 `ConfigResolver` + cli/env/file 可插拔来源（机制见 `packages/platform/src/configuration/sources/`），优先级 `cli > env > file > default`。声明表在 `environment/configItems.ts`。新增"既能命令行又能环境变量配"的启动期配置时加一条声明项，不要再散落 `process.env[...]`。
-
-**`--help` / `--version`**：在 `index.ts` 构造完 `environmentService` 后、任何初始化（console 拦截器、单实例锁）之前命中即 `app.exit(0)`，输出走真实 stdout（GUI 打包版双击启动无控制台时不可见，dev/重定向场景可见）。`--help` 文本由 `environment/configItems.ts` 的 `CLI_OPTIONS` 自动生成；让某个 flag 出现在帮助里，给它的 `ConfigItem` 补 `description`（可选 `cliAlias` 短选项、`args` 值占位符）即可，无需改渲染代码。
-
-**自动更新服务器（发布版可配置）**：feed url 打包默认在 `electron-builder.yml` 的 `publish.url`；发布版（`app.isPackaged`）可在运行时覆盖而不必重新打包——`--update-url=<url>` / `UNIVERSE_UPDATE_URL` / `<userData>/update-config.json` 的 `updateUrl` 字段（仅覆盖 url，channel 仍打包默认）。dev/E2E 不应用 override，仍走 `dev-app-update.yml`。
-
-**构建期注入 settings 默认值（`configurationDefaults`）**：内网服务地址（Swarm、问题上报）不进仓库，但打包版要开箱可用——机制是 `product.json` 的 `configurationDefaults`（一个 `{ "<settings key>": <value> }` 扁平对象），它作为**出厂默认值**参与配置合并：优先级高于配置项自己的 `schema.default`，**低于所有可写层**（VSCodeUser / User / Project / Memory），所以用户 settings.json 照常覆盖、Reset 回落到注入值。
-
-链路（四跳，契约在 `src/shared/productDefaults.ts`）：`.env` → 打包 stage 写进 `resources/product.json` → `EnvironmentMainService.configurationDefaults`（env `UNIVERSE_CONFIGURATION_DEFAULTS` 优先于 product.json）→ 窗口 argv `--ue-configuration-defaults=<base64 json>`（base64 而非裸 JSON：这是唯一一个值会含 `"` 与空格的 argv 旗标，由 Chromium 写、Node 读，base64 绕开两边的引号规则；顺带让注入的内网地址不出现在系统进程列表里） → preload `window.ipc.configurationDefaults` → renderer `main.tsx` 在 `new ConfigurationService()` **之前** `ConfigurationRegistry.registerDefaultOverrides(...)`。注册在 registry 而非直接写 Default 层，因为扩展的 `contributes.configuration` 异步注册会全量重算该层。扩展宿主侧无需改动：`workspace.getConfiguration` 经 RPC 读的就是含 Default 层的合并值。
-
-加一个可注入的 key = 两步：① `scripts/lib/productDefaults.mjs` 的 `CONFIGURATION_DEFAULTS_ENV_MAP` 加一行 `{ env, setting }`；② `.env.example` 加一行注释掉的说明。dev/`dev:run` 由启动脚本读 `.env` 透传同一个 env 变量，无需另配。`build/product.json` **刻意不放占位值**——假地址会让功能「看起来已配置」然后诡异失败。
-
-所有 `app.getPath('userData')` 调用点自动跟随，不需要单独传路径。E2E 用专用目录避免污染本地开发数据。
+模式判定表、`--help` 生成、自动更新 feed url 覆盖见 [cases-user-data-dir.md](cases-user-data-dir.md)。
 
 ## renderer 目录归类规则
 
-`src/renderer/` 下五个一级目录承载不同性质的代码，**新文件务必按下表归位**：
+| 目录 | 收什么 |
+|---|---|
+| `services/<feature>/` | `*Service.ts` / `*Registry.ts` / `*Input.ts` / helper / 纯函数 |
+| `contributions/` | 所有 `implements IWorkbenchContribution` 的类（文件名不带 Contribution 也算） |
+| `actions/` | 所有 `Action2`，**文件名必须复数** `*Actions.ts` 按业务域聚合 |
+| `workbench/<feature>/` | `.tsx` 视图、`.module.css`、Hook、Context |
+| `ipc/` | renderer 端 IPC bootstrap |
 
-| 目录 | 收什么 | 不收什么 |
-|---|---|---|
-| `services/<feature>/` | 所有 `*Service.ts` / `*Registry.ts` / `*Input.ts` / 业务 helper / 与平台无关的纯函数；同级 `__tests__/` 放测试 | React 组件、React Hook、`.module.css` |
-| `contributions/` | 所有 `implements IWorkbenchContribution` 的类（即便文件名不带 Contribution，例如 `ExternalChangeWatcher.ts`）；同级 `__tests__/` 放测试 | 服务、Action、视图 |
-| `actions/` | 所有 `Action2` 子类，**文件名必须复数** `*Actions.ts` 并按业务域聚合（`fileSaveActions.ts` / `fileOpenActions.ts` / `layoutActions.ts` …），不要为单个 Action 起独立文件；同级 `__tests__/` 放测试 | Action 之外的服务/视图 |
-| `workbench/<feature>/` | `.tsx` 视图组件、`.module.css` 样式、React Hook（`useXxx.ts(x)`）、React Context；同级 `__tests__/` 放测试 | `*Service.ts` / `*Input.ts` / Contribution |
-| `ipc/` | renderer 端 IPC bootstrap | — |
-
-应用入口位于 `main.tsx`，应用级 helper（`errors.ts` / `global.d.ts`）放在 `renderer/` 根。E2E 探针在 `renderer/e2e/`。
-
-新增模块时先问"它是不是 IWorkbenchContribution"，是 → `contributions/`；否则问"它是不是 Service/Registry/Input"，是 → `services/`；否则问"它是不是 Action2"，是 → `actions/`；都不是就是视图层 → `workbench/`。
-
-### 通用 UI 走 workbench-ui
-
-原子控件（Button/IconButton/Input/Checkbox/Badge/Spinner）、布局件（Sash/GridLayout/CollapsibleSlot）、浮层（FocusScopeOverlay/PopoverList/ContextMenu）、反馈类（Notifications/QuickInput/ProgressDialog/Confirm·PromptDialog）的**展示部分都在 `packages/workbench-ui`**（纯组件，吃数据 + 回调，无 DI、无 Portal）。`workbench/<feature>/` 下只保留**薄 wrapper**：`useService`/`useObservable` 订阅 → `createPortal` → 拍平成 props，并注入图标解析等应用细节（如 `QuickInputPortal`/`DialogHost`/`ProgressDialogHost`/`NotificationsToast`）。wrapper 文件名/导出名/`data-testid` 保持不变，e2e 选择器零改动。
-
-新增通用控件时优先在 workbench-ui 沉淀，不要在 feature 目录里再写一份 `<button>`+`.module.css`。设计 token（间距/圆角/字号/阴影）来自 `@universe-editor/workbench-ui/tokens.css`（已在 `main.tsx` 入口引入）。**渐进迁移项**（尚未收编、属技术债）：Diff/Terminal/SCM/Config/Search 的 `.iconBtn` 等局部按钮、SessionsPopover/ConfigOptionsBar 等交互模型不同的弹窗、未触及旧 css 的 token 化——动到相关文件时顺手迁移即可。
+同级 `__tests__/` 放测试。**通用 UI 走 workbench-ui**（`packages/workbench-ui` 纯组件、无 DI），`workbench/<feature>/` 只留薄 wrapper（文件名/导出名/`data-testid` 不变）。
 
 ## 嵌套知识地图
 
-`src/` 下各子系统的 CLAUDE.md 是「处理该域任务前通读」的上下文地图。本表只做索引，定位语照抄各文件头部：
+各子系统 CLAUDE.md 是「处理该域任务前通读」的上下文地图：
 
-| 子域文档 | 定位 |
-|---|---|
-| [services/acp/CLAUDE.md](src/renderer/services/acp/CLAUDE.md) | ACP 协议客户端层 + 输入框药丸引用案例 |
-| [services/acp/session/CLAUDE.md](src/renderer/services/acp/session/CLAUDE.md) | ACP 会话子系统（生命周期/历史/恢复/书签）+ rewind 案例 |
-| [workbench/agentSettings/claude/CLAUDE.md](src/renderer/workbench/agentSettings/claude/CLAUDE.md) | Claude agent 设置面板内容本体 |
-| [workbench/agentSettings/codex/CLAUDE.md](src/renderer/workbench/agentSettings/codex/CLAUDE.md) | Codex agent 设置面板（凭据模型与 Claude 不同） |
-| [services/ai/CLAUDE.md](src/renderer/services/ai/CLAUDE.md) | 内联补全 + NES 生成层 + AI 模型门面客户端 |
-| [workbench/ai/CLAUDE.md](src/renderer/workbench/ai/CLAUDE.md) | AI 设置页面壳（AI/Agents 双组导航） |
-| [main/services/ai/CLAUDE.md](src/main/services/ai/CLAUDE.md) | AI Debug 调用记录 + 离线回放 |
-| [main/services/extensionManagement/CLAUDE.md](src/main/services/extensionManagement/CLAUDE.md) | 插件市场与扩展管理分发链路（不碰加载运行时） |
-| [main/services/clipboard/CLAUDE.md](src/main/services/clipboard/CLAUDE.md) | 文件剪贴板 main 侧实现（所有权模型 + 三平台 OS backend + 远端物化） |
-| [services/explorer/CLAUDE.md](src/renderer/services/explorer/CLAUDE.md) | explorer 状态源 + 文件操作撤销编排 |
-| [services/opener/CLAUDE.md](src/renderer/services/opener/CLAUDE.md) | IOpenerService 三档 + 深链接案例 |
-| [services/views/CLAUDE.md](src/renderer/services/views/CLAUDE.md) | View/ViewContainer 系统运行时核心 |
-| [services/configurationResolver/CLAUDE.md](src/renderer/services/configurationResolver/CLAUDE.md) | `${...}` 配置变量替换 + 终端 cwd 回退 |
-| [services/dialogs/CLAUDE.md](src/renderer/services/dialogs/CLAUDE.md) | SimpleFileDialog 纯键盘文件选择对话框 |
-| [services/dnd/CLAUDE.md](src/renderer/services/dnd/CLAUDE.md) | 资源拖放读取/落点（抽象在 workbench-ui） |
-| [services/themes/CLAUDE.md](src/renderer/services/themes/CLAUDE.md) | 颜色/图标主题系统（扩展点/注册表/CSS 变量/Monaco/TextMate 桥/系统暗色联动） |
-| [workbench/files/CLAUDE.md](src/renderer/workbench/files/CLAUDE.md) | 文件图标系统 + 语言解析 |
-| [workbench/markdown/CLAUDE.md](src/renderer/workbench/markdown/CLAUDE.md) | markdown 渲染/语言特性/预览增强 |
-| [workbench/outline/CLAUDE.md](src/renderer/workbench/outline/CLAUDE.md) | outline 视图层（服务主干在 languageFeatures） |
-| [workbench/scm/CLAUDE.md](src/renderer/workbench/scm/CLAUDE.md) | SCM 视图 + dirty-diff 内联 peek 案例 |
-| [workbench/webview/CLAUDE.md](src/renderer/workbench/webview/CLAUDE.md) | webview 基建五层架构 + 已知坑 |
-| [e2e/CLAUDE.md](e2e/CLAUDE.md) | Playwright 冒烟栈 + `__E2E__` 探针约定 |
-
-## bootstrap 链路（renderer 端）
-
-`src/renderer/main.tsx` 顺序：
-1. 建 `ServiceCollection`，塞 `LifecycleService`、`ContextKeyService`、`IIpcService`
-2. **每个跨进程服务**通过 `ProxyChannel.toService<IFoo>(ipc.getChannel('foo'))` 绑接口
-3. 创建 `InstantiationService`（同时自注册为 `IInstantiationService`）
-4. 纯 renderer 服务直 `new`，依赖其他服务的走 `instantiation.createInstance(...)`
-5. `import './contributions/index.js'`（副作用：注册到 `ContributionsRegistry`）
-6. `instantiation.createInstance(ContributionService)`——按 `WorkbenchPhase` 实例化贡献
-7. `lifecycle.setPhase(LifecyclePhase.Ready)` → 触发 `BlockRestore`
-8. `createRoot(...).render(<Workbench />)`
+- [services/acp](src/renderer/services/acp/CLAUDE.md) — ACP 协议客户端
+- [services/acp/session](src/renderer/services/acp/session/CLAUDE.md) — 会话生命周期
+- [workbench/agentSettings/claude](src/renderer/workbench/agentSettings/claude/CLAUDE.md) — Claude agent 面板
+- [workbench/agentSettings/codex](src/renderer/workbench/agentSettings/codex/CLAUDE.md) — Codex agent 面板
+- [services/ai](src/renderer/services/ai/CLAUDE.md) — 内联补全/NES/门面
+- [workbench/ai](src/renderer/workbench/ai/CLAUDE.md) — AI 设置页面壳
+- [main/services/ai](src/main/services/ai/CLAUDE.md) — AI Debug + 回放
+- [main/services/extensionManagement](src/main/services/extensionManagement/CLAUDE.md) — 扩展管理分发
+- [main/services/clipboard](src/main/services/clipboard/CLAUDE.md) — 文件剪贴板 main 侧
+- [services/explorer](src/renderer/services/explorer/CLAUDE.md) — explorer 状态源
+- [services/opener](src/renderer/services/opener/CLAUDE.md) — IOpenerService 三档
+- [services/views](src/renderer/services/views/CLAUDE.md) — View/ViewContainer 运行时
+- [services/configurationResolver](src/renderer/services/configurationResolver/CLAUDE.md) — 配置变量替换
+- [services/dialogs](src/renderer/services/dialogs/CLAUDE.md) — SimpleFileDialog
+- [services/dnd](src/renderer/services/dnd/CLAUDE.md) — 资源拖放
+- [services/themes](src/renderer/services/themes/CLAUDE.md) — 主题系统
+- [workbench/files](src/renderer/workbench/files/CLAUDE.md) — 文件图标 + 语言解析
+- [workbench/markdown](src/renderer/workbench/markdown/CLAUDE.md) — markdown 渲染/预览
+- [workbench/outline](src/renderer/workbench/outline/CLAUDE.md) — outline 视图
+- [workbench/scm](src/renderer/workbench/scm/CLAUDE.md) — SCM 视图 + dirty-diff
+- [workbench/webview](src/renderer/workbench/webview/CLAUDE.md) — webview 基建五层
+- [e2e](e2e/CLAUDE.md) — Playwright 冒烟栈
 
 ## 套路 A：加一个 Action2（命令 + 快捷键）
 
-**文件归位**：`src/renderer/actions/<domain>Actions.ts`（**复数**，按业务域归类，如 `fileSaveActions.ts` / `fileOpenActions.ts` / `layoutActions.ts` / `editorActions.ts`）。同一域内可放多个 Action 类；不要为单个 Action 新建独立文件。
+归位：`renderer/actions/<domain>Actions.ts`（**复数**，按业务域归类）。
 
 ```ts
 import { Action2, ILayoutService, PartId, type ServicesAccessor } from '@universe-editor/platform'
@@ -118,8 +70,8 @@ export class MyAction extends Action2 {
       title: '做我的事',
       category: 'View',
       keybinding: { primary: 'ctrl+shift+m' },
-      precondition: 'hasActiveEditor',   // 可选，ContextKey 表达式
-      f1: true,                          // 命令面板可见
+      precondition: 'hasActiveEditor', // 可选
+      f1: true,
     })
   }
   override run(accessor: ServicesAccessor): void {
@@ -128,54 +80,40 @@ export class MyAction extends Action2 {
 }
 ```
 
-**注册**：在 `src/renderer/actions/index.ts` 对应分组里加 `registerAction2(MyAction)`。
-
-参考：`src/renderer/actions/layoutActions.ts`、`src/renderer/actions/searchActions.ts`
+**注册**：`actions/index.ts` 对应分组加 `registerAction2(MyAction)`。
 
 ## 套路 B：加一个 ViewContainer / View（侧栏标签页）
 
-三处必改：
+两处必改：
 
-**1. Container 注册**：在 `src/renderer/contributions/BuiltInViewContainersContribution.ts` 构造函数里加：
 ```ts
+// 1. Container：BuiltInViewContainersContribution.ts 构造函数
 this._register(
   ViewContainerRegistry.registerViewContainer({
-    id: 'workbench.view.myThing',
-    label: 'My Thing',
-    icon: 'lightbulb',
-    order: 3,
-    location: ViewContainerLocation.SideBar,
+    id: 'workbench.view.myThing', label: 'My Thing', icon: 'lightbulb',
+    order: 3, location: ViewContainerLocation.SideBar,
   }),
 )
-```
 
-**2. View 描述符**：在 `src/renderer/contributions/BuiltInViewsContribution.ts` 里加：
-```ts
+// 2. View + 组件单点注册：BuiltInViewsContribution.ts
+//    registerViewWithComponent 一次完成描述符 + 组件绑定（componentKey 由 id 派生），
+//    扩展才需用底层 ViewRegistry.registerView + ViewComponentRegistry.register
 this._register(
-  ViewRegistry.registerView({
-    id: 'workbench.view.myThing.main',
-    name: 'My Thing',
-    containerId: 'workbench.view.myThing',
-    componentKey: 'myThing.main',
-    order: 1,
-  }),
+  registerViewWithComponent(
+    { id: 'workbench.view.myThing.main', name: 'My Thing',
+      containerId: 'workbench.view.myThing', icon: 'lightbulb', order: 1 },
+    MyThingView,
+  ),
 )
 ```
 
-**3. 组件映射**：在 `src/renderer/contributions/ViewComponentsContribution.ts` 里把 `componentKey` 绑到组件：
-```ts
-this._register(ViewComponentRegistry.register('myThing.main', MyThingView))
-```
-
-新建 `src/renderer/workbench/myThing/MyThingView.tsx` 写 React 组件，用 `useService(IFooService)` 拿服务。
-
-参考：`src/renderer/workbench/search/SearchView.tsx`
+新建 `workbench/myThing/MyThingView.tsx`（`useService(IFooService)` 拿服务）。
 
 ## 套路 C：加一个跨进程 ProxyChannel 服务
 
-**1. 通道名**：`src/shared/ipc/channelNames.ts` 的 `ServiceChannels` 加一行 `MyService: 'myService'`。
+**1. 通道名**：`shared/ipc/channelNames.ts` 的 `ServiceChannels` 加 `MyService: 'myService'`。
 
-**2. 接口**：`src/shared/ipc/services.ts`（或新建文件，复杂服务建议下沉到 platform）：
+**2. 接口**：`shared/ipc/services.ts`（复杂服务下沉 platform）：
 ```ts
 export interface IMyService {
   readonly _serviceBrand: undefined
@@ -184,21 +122,16 @@ export interface IMyService {
 export const IMyService = createDecorator<IMyService>('myService')
 ```
 
-**3. main 端实现**：`src/main/services/myService/myMainService.ts` 写 `class MyMainService implements IMyService`；需要 logger 时用可选 `@ILoggerService` 注入 + `createNamedLogger`（DI 物化时注入真 logger，单测手动 `new` 省略即回退 `NullLogger`，零改动）。application 单例走 root 容器：在 `src/main/services/main-services.ts` 加 `registerSingleton(IMyService, new SyncDescriptor(MyMainService, [], false))`（容器物化 + `will-quit` 统一 dispose），并把 `myService` 加进 `ApplicationServices`（`window/scopedServicesFactory.ts`）和 `getOrCreateServices()`（`index.ts`）里的 `invokeFunction` 组装表。然后在 `src/main/ipc/registerMainServices.ts` 里：
+**3. main 端实现**：`main/services/myService/myMainService.ts` 写 `class MyMainService implements IMyService`。单例：`main-services.ts` 加 `registerSingleton(IMyService, new SyncDescriptor(MyMainService, [], false))`，并把 `myService` 加进 `ApplicationServices` 与 `getOrCreateServices()` 表；`registerMainServices.ts`：
 ```ts
 server.registerChannel(ServiceChannels.MyService, ProxyChannel.fromService(app.myService))
 ```
-> 依赖运行时 `BrowserWindow` 的 per-window 服务仍由 `windowMainService.createWindow()` 手动构造，不走 root 容器。
+> per-window 服务由 `windowMainService.createWindow()` 构造，不走 root 容器。
 
-**4. renderer 端绑定**：`src/renderer/main.tsx`：
+**4. renderer 端绑定**：`renderer/main.tsx`：
 ```ts
-services.set(
-  IMyService,
-  ProxyChannel.toService<IMyService>(ipcService.getChannel(ServiceChannels.MyService)),
-)
+services.set(IMyService, ProxyChannel.toService<IMyService>(ipcService.getChannel(ServiceChannels.MyService)))
 ```
-
-参考：`src/main/ipc/registerMainServices.ts`、`src/main/services/files/fileSystemMainService.ts`
 
 ## 套路 D：加一个 Contribution（生命周期挂钩）
 
@@ -208,62 +141,40 @@ export class MyContribution extends Disposable implements IWorkbenchContribution
     super()
     this._register(autorun((r) => {
       const active = editorService.activeEditor.read(r)
-      // 响应 active 变化
     }))
   }
 }
 ```
 
-**注册**：在 `src/renderer/contributions/index.ts` 选合适相位：
+**注册**：`renderer/contributions/index.ts`：
 ```ts
 ContributionsRegistry.registerContribution(
-  'workbench.contrib.myThing',
-  MyContribution,
-  WorkbenchPhase.AfterRestore,   // 或 BlockStartup / BlockRestore / Eventually
+  'workbench.contrib.myThing', MyContribution, WorkbenchPhase.AfterRestore,
 )
 ```
 
-相位选择：
-- `BlockStartup`：必须在任何 UI 渲染前跑（ContextKey 默认、ViewContainer 注册、配置 schema）
-- `BlockRestore`：UI 挂载前（恢复编辑器组等会影响首屏的逻辑）
-- `AfterRestore`：UI 已挂载（状态栏、外部文件 watcher 等）
-- `Eventually`：空闲期（统计、预热）
-
-参考：`src/renderer/contributions/index.ts`
+相位：`BlockStartup`（UI 渲染前：ContextKey 默认/ViewContainer/schema）→ `BlockRestore`（挂载前）→ `AfterRestore`（状态栏/watcher）→ `Eventually`（空闲）。
 
 ## 套路 E：加一个 StatusBar 条目
 
-`addEntry` 返回 accessor，存起来后续 `update`/`dispose`：
+`addEntry` 返回 accessor，可 `update`/`dispose`：
 ```ts
 const entry = statusBarService.addEntry({
-  text: '$(search) 搜索中…',
-  tooltip: '...',
-  alignment: StatusBarAlignment.Right,
-  priority: 100,
+  text: '$(search) 搜索中…', alignment: StatusBarAlignment.Right, priority: 100,
 })
-// 后续更新
-entry.update({ text: '完成', alignment: StatusBarAlignment.Right, priority: 100 })
-// 不再需要时
+entry.update({ text: '完成' })
 entry.dispose()
 ```
 
-要点：**生命周期由你管**。React 组件里放 `useRef` 持 accessor，`useEffect` cleanup 里 dispose；Contribution 里放成员字段，`_hide()` 时 dispose。
-
-参考：`src/renderer/contributions/FileEditorStatusContribution.ts`、`src/renderer/workbench/search/useSearchEngine.ts`
+要点：**生命周期由你管**。React 组件 `useRef` 持 accessor、`useEffect` cleanup dispose；Contribution 成员字段、`_hide()` dispose。
 
 ## 右键菜单图标：新增菜单项一律写 `icon`
 
-图标 id 是**不透明字符串**，在渲染时经 `workbench/icons/icon-map.ts` 的 `resolveIcon` 查表（container 图标从 `containerIcons.ts` 并入同一张表）。**表里没有 → 返回 undefined → 静默不渲染**，typo 不报错，所以：
-
-- 新增菜单项时写 `icon: '<id>'`（Action2 的 `desc.icon` / `MenuRegistry.addMenuItem` 的 `icon` / ListMenu item 的 `icon` / 扩展 manifest 的 `menus[].icon`；扩展的 `commands[].icon` 会被同命令的无 icon 菜单项继承，VSCode 同款）；id 不在表里就先去 `icon-map.ts` 补 `id → LucideIcon`。
-- 菜单宿主渲染图标是 opt-in 的：`<ContextMenu>` / `<ListMenu>` **必须传 `renderIcon={renderMenuIcon}`**（`workbench/icons/menuIcon.tsx` 的唯一共享实现，不要各写一份）——`workbench-ui` 刻意不依赖图标库，不传就没有图标插槽。
-- 新写右键菜单一律用共享的 `ContextMenu`（MenuId 驱动）或 `ListMenu`（items 驱动），不要自己画 `<ul role="menu">`：键盘导航、Escape、outside-press、图标插槽、danger/disabled 都是白拿的。
-- ⚠️ `registerAction2` 会把 `desc.icon` 撒到该 Action2 声明的**每一个** menu 槽位——给挂在 Menubar 上的命令加图标会整组开启图标列。
-- 护栏：`workbench/icons/__tests__/iconCoverage.test.ts` 扫源码与扩展 manifest 断言 id 可解析，并断言 Menubar 保持无图标。
+图标 id 经 `workbench/icons/icon-map.ts` 的 `resolveIcon` 查表——**表里没有 → 静默不渲染**；`<ContextMenu>`/`<ListMenu>` **必须传 `renderIcon={renderMenuIcon}`**（`menuIcon.tsx` 唯一共享实现）。⚠️ `registerAction2` 会把 `desc.icon` 撒到其声明的**每一个** menu 槽位——Menubar 命令加图标会整组开启图标列。
 
 ## 套路 F：加一个 E2E 冒烟场景
 
-冒烟栈在 `apps/editor/e2e/`：Playwright + `_electron`，spec 通过 `window.__E2E__` 探针调服务，不戳 DOM。三层安全门：`UNIVERSE_E2E=1` → main argv `--enable-e2e-probe` → preload 经 `contextBridge` 暴露——production 构建天然剥除。
+冒烟栈在 `apps/editor/e2e/`：Playwright + `_electron`，spec 经 `window.__E2E__` 探针调服务，不戳 DOM（`UNIVERSE_E2E=1` 开启，production 剥除）。
 
 **1. 新建 spec**：`apps/editor/e2e/specs/smoke.myThing.spec.ts`
 ```ts
@@ -277,154 +188,62 @@ test.describe('@p0 my thing', () => {
 })
 ```
 
-**2. 复用 fixture / PO**：`fixtures/electronApp.ts` 启动 Electron + 等探针装配；`pages/WorkbenchPO.ts` 聚合 ActivityBar / SideBar / StatusBar / QuickInput / EditorArea / Panel 六个 PO，外加 `runCommand` / `getContextKey` / `lifecyclePhase` 三个直通探针的快捷方法。
+**2. 定位优先级**：ARIA role → `data-testid`（`part-<id>` / `activitybar-item-<id>` / `view-<id>` / `quick-input` / `statusbar-entry-<id>`）→ 命令 + ContextKey → CSS class。**禁止**断言 Monaco 内部 DOM（状态走 `getActiveEditorUri()`）。
 
-**3. 定位优先级**：ARIA role → `data-testid`（约定 `part-<id>` / `activitybar-item-<id>` / `view-<id>` / `quick-input` / `statusbar-entry-<id>`）→ 命令 + ContextKey（最稳定）→ CSS class（兜底）。**禁止**断言 Monaco 内部 DOM 结构；要拿编辑器状态走 `getActiveEditorUri()`。
+**3. 探针 API 不够用**：先扩 `src/shared/e2e/contract.ts`，再实现 `src/renderer/e2e/probe.ts`；保持白名单原则。
 
-**4. 探针 API 不够用**：先扩 `src/shared/e2e/contract.ts` 契约，再在 `src/renderer/e2e/probe.ts` 实现。保持白名单原则——不暴露 fs/exec/任意 IPC 给 spec。
-
-**5. 跑**：
-```bash
-pnpm --filter @universe-editor/editor build      # e2e 跑的是 out/ 产物
-pnpm --filter @universe-editor/editor e2e
-pnpm --filter @universe-editor/editor e2e:smoke  # 只跑 @p0 冒烟（日常交互改动首选）
-pnpm --filter @universe-editor/editor e2e:ui     # 本地交互调试
-pnpm e2e specs/smoke.myThing.spec.ts             # 显式只跑指定 spec（--grep 走 e2eg）
-```
-
-**标签**：`@p0` 核心冒烟（`e2e:smoke` 的选中集，**不与 @serial/@flaky/@perf/@visual 同标**）；`@p0`/`@p1` 失败均阻塞 CI。CI 在 ubuntu + windows 双跑（`.github/workflows/ci.yml` 的 `e2e` job）。
-
-**踩坑**：
-- 部件可见性走 ContextKey + `expect.poll(...)`，不要 `toBeVisible()`——Allotment.Pane 用 CSS visibility 隐藏后代，DOM 可见性会误判
-- 长任务命令（如 `showCommands` 内部 await 用户输入）必须 fire-and-forget：`page.evaluate(() => { void window.__E2E__!.runCommand(id) })`，否则死锁
-- spec 内**禁止** mock 任何 main/renderer 服务；单测内**禁止** spawn Electron——边界严格分开
-
-参考：`apps/editor/e2e/specs/smoke.startup.spec.ts`、`smoke.output.spec.ts`、`smoke.commandPalette.spec.ts`
+**跑**：`pnpm e2e:smoke`（只跑 @p0）/ `pnpm e2e specs/<x>.spec.ts`。fixture 选型、tag 矩阵、踩坑见 `apps/editor/e2e/CLAUDE.md`。
 
 ## 套路 G：加一个性能打点 / 启动耗时检测
 
-仿 VSCode Startup Performance 的三层基建，新增检测点时按层对号入座：
+1. **加打点**：`shared/perf/marks.ts` 的 `PerfMarks` 加常量（`code/<proc>/<event>` 约定），打点处 `mark(PerfMarks.xxx)`（来自 `@universe-editor/platform`）。
+2. **main 端 marks 走 IPC**：已由 `IPerformanceMarksService` + `ServiceChannels.Performance` 暴露，main 只 `mark()`。
+3. **聚合/计算**：renderer `ITimerService`（`services/performance/TimerService.ts`）合并 marks，`getStartupMetrics()` 按 `MILESTONES` 算耗时；新里程碑加进 MILESTONES。
+4. **展示**：Developer: Startup Performance 命令；状态栏警示由 `StartupPerformanceStatusContribution` 控制。
 
-**底层打点工具**（`packages/platform/src/base/performance.ts`）：`mark(name)` / `getMarks()` / `clearMarks()`，跨进程通用，两端 `startTime` 均为 epoch 毫秒可直接合并。
-
-**1. 加打点**：先在 `src/shared/perf/marks.ts` 的 `PerfMarks` 加一个名字常量（`code/<proc>/<event>` 约定），再在打点处 `import { mark } from '@universe-editor/platform'` + `import { PerfMarks } from '<相对>/shared/perf/marks.js'`，调用 `mark(PerfMarks.xxx)`。main 与 renderer 都可打点。
-
-```ts
-// shared/perf/marks.ts
-export const PerfMarks = {
-  // ...
-  rendererDidMount: 'code/renderer/didMount',
-} as const
-// 打点处
-mark(PerfMarks.rendererDidMount)
-```
-
-2. main 端 marks 走 IPC：main 进程的 marks 已通过 IPerformanceMarksService（shared/ipc/services.ts）+ ServiceChannels.Performance 暴露给 renderer。main 端只要 mark()，无需再接线。
-
-3. 聚合 / 计算：renderer 的 ITimerService（src/renderer/services/performance/TimerService.ts）合并两端 marks，getStartupMetrics() 按 MILESTONES 列表算各阶段耗时。加新里程碑只需把它加进 MILESTONES；新增其它 metrics 计算也集中在此服务。
-
-4. 展示：命令 Developer: Startup Performance（actions/performanceActions.ts）打开只读编辑器 StartupPerformanceEditor；状态栏警示入口由 StartupPerformanceStatusContribution 控制，默认关闭。开启 `performance.startupWarning.enabled` 后，发布模式超过 `performance.startupWarning.releaseThresholdMs`（默认 1000ms）显示，dev 模式超过 `performance.startupWarning.developmentThresholdMs`（默认 4000ms）显示。
-
-参考：`packages/platform/src/base/performance.ts`、`src/renderer/services/performance/TimerService.ts`、`src/renderer/contributions/StartupPerformanceStatusContribution.ts`
-
-
-要点：底层 `mark()` 是通用基建，未来加任何性能检测都从「往 `PerfMarks` 加常量 + 打点」起步;跨进程聚合统一走 `ITimerService`。
-
-**运行时响应性监控（常驻保底）**：`IInteractionPerfService`（`services/performance/InteractionPerfService.ts`）用 Event Timing + LoAF 双 observer 常驻采集，慢交互（≥ `performance.responsiveness.warnThresholdMs`，默认 200ms）写单行 warn 到窗口日志 `interactionPerf.log`（三段分解 + 相位/脚本归因 + O(1) 上下文）；`recordPerfPhase(name, fn)`（`services/performance/perfPhases.ts`）是给热路径反应加相位归因的统一入口——包上即自动进入慢交互与切 tab 两份报告。会话聚合经命令 Developer: Interaction Performance 查看；配置门控见 `InteractionPerfContribution`。
-
-**交互卡顿排查（agent 自助采集）**：`e2e/specs/smoke.interactionPerfReport.spec.ts`（@perf）用真实键鼠把典型编辑手势跑一遍（quick open/打字/大文件滚动/切 tab/搜索/资源管理器点击/保存等），产出 `e2e/test-results/interaction-perf-report.{json,md}`——慢交互按场景窗口归桶，含三段分解与相位/LoAF 归因，直接喂给 agent 定位卡顿。跑法：`pnpm --filter @universe-editor/editor e2eg "drives an editing tour"`。要对着**用户指定的真实文件夹**采集（真实 watcher/索引/搜索负载），用 `smoke.interactionPerfCollect.spec.ts`：`UNIVERSE_PERF_WORKSPACE=<目录> [UNIVERSE_PERF_THRESHOLD_MS=50] pnpm --filter @universe-editor/editor e2eg "drives the editing tour against a user-picked folder"`（写操作只落自清理的探针文件，报告为 `interaction-perf-collect.{json,md}`）。完整排查流程（定性 JS 瓶颈 vs 渲染管线 vs 环境噪音）见 skill `analyze-interaction-performance`。
+任何性能检测都从「往 `PerfMarks` 加常量 + 打点」起步；响应性监控/卡顿报告见 [cases-interaction-perf.md](cases-interaction-perf.md) 和 skill `analyze-interaction-performance`。
 
 ## 套路 H：加一个语言特性（DocumentSymbol / Definition / Reference / Outline）
 
-语言特性走**薄门面 `ILanguageFeaturesService`**（`services/languageFeatures/`）：注册时一边存进镜像表（供 Outline 枚举），一边转发给 `monaco.languages.register*Provider`——所以注册一个 provider 即同时点亮 **Outline 视图** 和 Monaco 内置的 **F12 跳转定义 / Shift+F12 查看引用 peek**，无需自己写 UI。
+语言特性走**薄门面 `ILanguageFeaturesService`**（`services/languageFeatures/`）：注册时一边存镜像表（供 Outline 枚举），一边转发 `monaco.languages.register*Provider`——一个 provider 即点亮 **Outline 视图** 与 **F12/Shift+F12 peek**。
 
-**给某语言加 provider**（如已支持的 markdown）：
+1. 在 `services/languageFeatures/<lang>/` 写 provider（实现 `monaco.languages.DocumentSymbolProvider` 等）。
+2. 在 `contributions/LanguageFeaturesContribution.ts` 的 `MonacoLoader.ensureInitialized().then(...)` 里 `this._register(langFeatures.registerXxxProvider('<lang>', new XxxProvider()))`。**必须等 Monaco 就绪**。
 
-1. 在 `services/languageFeatures/<lang>/` 写 provider（实现 `monaco.languages.DocumentSymbolProvider` 等，纯逻辑抽成可单测纯函数）。
-2. 在 `contributions/LanguageFeaturesContribution.ts` 的 `MonacoLoader.ensureInitialized().then(...)` 里 `this._register(langFeatures.registerXxxProvider('<lang>', new XxxProvider()))`。**必须等 Monaco 就绪**，否则门面转发报错。
-
-Outline 数据由 `IOutlineService` 统一产出（`outline` / `activeSymbol` 两个 observable），`OutlineView`（侧栏，容器 `workbench.view.outline` 在第二侧栏）与 `Breadcrumbs`（`FileEditor` 顶部）共享消费。DocumentSymbol 的 `range`/`selectionRange` 用 1-based lineNumber；跳转走 `outlineService.revealSymbol`（内部 `FileEditorRegistry.get` + `setPosition` + reveal）。
-
-参考：`services/languageFeatures/LanguageFeaturesService.ts`、`OutlineService.ts`、`markdown/markdown*Provider.ts`
+Outline 数据由 `IOutlineService` 产出，`OutlineView` 与 `Breadcrumbs` 共享；跳转走 `outlineService.revealSymbol`。
 
 ## 套路 I：加一个 AI provider（协议）
 
-AI 服务分三层：platform 出契约（`IAiModelService` 门面 + `IAiModelProvider` provider 接口 + `AiModelRegistry` **按协议注册**），main 出实现（`AiModelMainService` 持注册表、读 `aiSettings.json`、把 provider 流"泵"成 `requestId` 维度的 chunk 事件），renderer 出门面客户端（`AiModelClientService` 把事件重组回干净 `AsyncIterable`）。**消费方只依赖 `IAiModelService`**，拿到 `AsyncIterable` + 可随时取消的 `result`。
-
-**数据模型：单层 `providers[]`**（`packages/platform/src/ai/aiProviderEntry.ts`）：每个条目是一个网关端点 `AiProviderEntry`：
-- `{ id, extends?, baseUrl?, apiKey?, defaultProtocol?, protocolMap?, pricingSource?, usageSource? }`。`id` 全局唯一、不能含 `/`，也是它名下所有模型 id 的第一段。
-- **`extends`**：继承另一个条目（同一网关的多个入口）。`protocolMap` **整体替换**，其余标量字段（baseUrl/apiKey/defaultProtocol/pricingSource/usageSource）覆盖。环引用 / 指向不存在的 id / 继承深度 >8 都会产出 `AiProviderIssue` 并**跳过该 provider**（不静默丢弃），问题经 `IAiModelService.getProviderIssues()` 暴露，管理页卡片上显示徽标。
-- **`protocolMap`**：`协议 → 模型列表`。**空数组 `[]` = 从该 provider 的端点拉模型（discover）；非空数组 = 直接就是这些模型，完全不碰网络**。元素是字符串（简写，按同名查顶层 `models` 知识库；查不到即裸模型，降级不报错）或对象 `{ id, ref, capabilities?, … }`（`id` 是线上真实模型名，`ref` 指向知识库 key，自身字段覆盖知识库；**能力只能置 false 不能加 true**，翻译链路有损）。
-- 模型 id 三段 = `providerId/protocol/channelModel`（例：`acme-gbl/anthropic-messages/acme-chat-pro`，第三段保留剩余 `/`）。helper 在 `packages/platform/src/ai/aiModelConfiguration.ts`（`composeModelId` / `parseModelRef` / `bareModelName`）。
-- 协议枚举 `AiWireProtocol = 'openai-chat' | 'openai-responses' | 'anthropic-messages' | 'ollama'`（`aiModelTypes.ts`）。`openai-responses` 是 agent-only 桩：管理页可见并打「Agent-only」徽标，但模型 picker 与 schema enum 里不可选（`isEditorSelectable` 排除）。
-- **8 个字段全部有图形入口**，在 `renderer/workbench/ai/providerCard/`（三态 protocolMap / extends / pricing·usage source / 模板化新建）。改 UI 前先读 `renderer/workbench/ai/CLAUDE.md` 的文件地图；`protocolMap` 三态语法与 ref 归一化的纯函数在 `shared/ai/protocolMapEdit.ts`。
-
-**配置来源 `aiSettings.json`**：位于 `<configDir>/aiSettings.json`（configDir 默认 = userData），顶层 `{ models?, providers[], modelSettings?, activeModels?, agentSettings? }`（`AiSettingsFile`，`aiModelConfiguration.ts`；`agentSettings` **已废弃、不再被读取**，只为存量文件不报 schema 错而保留声明）。main 读文件 → `parseSettings`（jsonc）→ `mergeModelKnowledge(BUILTIN_MODEL_KNOWLEDGE, models)` → `resolveProviderEntries(providers, knowledge)` → `registry.setProviders(...)`，监听文件变更热重载。`models` 是**模型知识库**（跨网关不变的内在属性 name/family/vendor/nativeProtocol/maxInputTokens/maxOutputTokens/capabilities/supportsReasoningEffort，**不含 pricing**），内置部分在 `shared/ai/catalog/modelKnowledge.ts` 的 `BUILTIN_MODEL_KNOWLEDGE`，用户 `models` 按 key 逐字段合并覆盖。**用户层读写走专门 API，绝不经合并视图**：`IAiModelService.getUserModelKnowledge()`（返回**用户自己的 `models` 层**，不是 merge 后的视图）与 `updateModelKnowledge(models)`（**整层替换**；空 map 会 `delete` 顶层 `models` key），写盘收口在 main 的 `SettingsWrite` 的 `models` 分支。重命名知识 key 要同时改 `models` 与 `providers[]`（protocolMap 里的显式 `ref`），走 `updateModelKnowledgeAndProviders(models, providers)` **一次原子写**——分两次写中间失败会留下悬空 ref。这样图形化编辑只物化用户改过的字段（物化-on-touch），把合并视图写回去会 pin 死未来的内置目录升级——详见 `renderer/workbench/ai/CLAUDE.md`。`modelSettings` 是 per-model 参数（键 = 三段 id）。`activeModels.{chat,inlineCompletion,commit,sessionTitle}` 存各功能的活跃模型 id，经门面 `get/setActiveModel(kind)` 读写，**不进 settings.json**。检测到旧两层格式标志（`providerTypes` / `providers[].type` / `groups`）→ `isLegacySettingsFormat()` 返回 true，配置按空处理、管理页顶部 banner 提示手工重建，**旧文件不改写**。
+AI 服务三层：platform 契约（`IAiModelService` / `IAiModelProvider` / `AiModelRegistry` **按协议注册**）、main 实现（`AiModelMainService` 读 `aiSettings.json`）、renderer 门面（`AiModelClientService` → `AsyncIterable`）。**消费方只依赖 `IAiModelService`**。细节见 [cases-ai-provider-data-model.md](cases-ai-provider-data-model.md)；管理页 UI 改前先读 `renderer/workbench/ai/CLAUDE.md`。
 
 **加一个新协议 provider = 一个文件 + 一行注册**：
 
-1. 在 `main/services/ai/providers/` 写 `XxxProvider implements IAiModelProvider`（`packages/platform/src/ai/aiModelProvider.ts`），三个方法都吃**解析后的运行时上下文 `AiProviderRuntime`**（`{ id, protocol, baseUrl?, apiKey? }`）：`listModels(provider, token)` / `sendRequest(messages, options, provider, token)` / `provideTokenCount(modelId, text, provider, token)`。`listModels` **只在 protocolMap 声明了 `[]`（discover）时被调用**；声明了明确列表则 registry 直接照单全收、不碰网络。baseUrl 取 `provider.baseUrl ?? 默认`；密钥取 `provider.apiKey`；`sendRequest` 读 `options.modelConfiguration` 映射到请求体。用 `AsyncIterableSource` + `DeferredPromise` 产流，监听 `token.onCancellationRequested` 中止 fetch，HTTP 状态映射到 `AiErrorCode`。参考 `anthropicMessagesProvider.ts` / `openAiChatProvider.ts` / `ollamaProvider.ts`；`openAiResponsesProvider.ts` 的 `sendRequest` 仍是**桩**（仅供 agent 派生，`isEditorSelectable` 排除它），但 `listModels` 是**真实探测**（`GET {baseUrl}/models`）——agent 认证面板的 Test 按钮靠它证明网关有应答。
-2. 在 `AiModelMainService._registerBuiltInProviders` 加一行 `this._register(this._registry.registerProvider('<protocol>', new XxxProvider()))`（**无构造参数**，密钥/baseUrl 都从 `AiProviderRuntime` 走）。
-3. 若想给 `aiSettings.json` 结构提供补全/校验，schema 在 `renderer/contributions/AiConfigurationContribution.ts`（`JSONContributionRegistry.registerSchema` + `schemaFileMatchForUri(UserDataFile.AiSettings)`；`activeModels` 四个 slot 的 enum 随可用模型动态刷新，用 `isEditorSelectable` 过滤）。
+1. 在 `main/services/ai/providers/` 写 `XxxProvider implements IAiModelProvider`（`platform/ai/aiModelProvider.ts`），三方法吃 `AiProviderRuntime`（`{ id, protocol, baseUrl?, apiKey? }`）：`listModels`（**仅 discover 时调用**）/ `sendRequest` / `provideTokenCount`。用 `AsyncIterableSource` + `DeferredPromise` 产流，`token.onCancellationRequested` 中止 fetch，HTTP 映射 `AiErrorCode`。
+2. 在 `AiModelMainService._registerBuiltInProviders` 加一行 `this._register(this._registry.registerProvider('<protocol>', new XxxProvider()))`（**无构造参数**）。
+3. （可选）`aiSettings.json` 的 schema 在 `renderer/contributions/AiConfigurationContribution.ts`。
 
-**加一个价格 / 用量来源**：远端来源接口在 `packages/platform/src/ai/aiRemoteSources.ts`（`IAiPricingSource.fetchRates` / `IAiAccountUsageSource.fetchUsage` + `AiRemoteSourceRegistry`）。实现放 `main/services/ai/remote/`：`httpJsonPricingSource.ts`（id `http-json`）/ `httpJsonUsageSource.ts`（id `http-json`）/ `catalogPricingSource.ts`（id `catalog`，**同步**读内置官方价目表、不发网络），复用纯函数 `shared/ai/parseRemoteJson.ts`（点路径取值 / 数组或对象两种形态 / unit 换算 / 坏条目跳过），在 `AiModelMainService._registerBuiltInRemoteSources` 注册一行。两条硬约束：**热路径同步读缓存**（renderer 经 `IAiRateMirror` 镜像读本地缓存，绝不挂网络/IPC）、**远端拉取失败静默降级**（返回 `undefined`，`remoteCoordinator` 保留旧缓存，绝不影响真实 AI 请求）。缓存落 `<userData>/Cache/aiRemoteCache.json`（`remoteCache.ts`，易变数据，不随 configDir 迁移），双 TTL：费率 24h / 用量 5min。官方订阅额度（claude.ai / ChatGPT）走 ACP agent 的 `subscription_usage` 扩展方法（`renderer/services/usage/subscriptionUsage.ts` 的 `normalizeSubscriptionUsage`），**不经** `IAiAccountUsageSource`。
+**加价格/用量来源**：接口 `aiRemoteSources.ts`，实现放 `main/services/ai/remote/`，注册一行；硬约束：**热路径同步读缓存**、**远端失败静默降级**。
 
-**会话开销 vs 账号费用（两个概念，绝不互相兜底）**：
-| | 会话开销 | 账号费用 / 额度 |
-|---|---|---|
-| 粒度 | per session | per **provider**（额度跟 key 走） |
-| 性质 | 本地估算：token × 费率 | 上游权威数字 |
-| 来源 | 该 provider 的 `pricingSource` | `IAiAccountUsageSource` |
-| 查不到 | 显示「—」+ 引导填费率 | 显示「不可用」，绝不用估算值冒充 |
+**红线**：
+- **密钥绝不进日志、绝不进 AI Debug 记录**；明文存 `aiSettings.json` 的 `apiKey`（POSIX `chmod 0600`），UI 一律掩码。
+- **费率单一来源，绝不兜底**（未声明 `pricingSource` 就是「费率未知」）；**会话开销与账号费用绝不互兜底**。
+- **🔴 生效凭据是反查出来的，不是编辑器声明的**：agent 自己的配置文件是唯一真相（编辑器不持久化 `agentSettings.<agent>.authentication`）；判定走纯函数 `agentActiveAuth.ts`。
 
-实现：`renderer/services/usage/AccountUsageService.ts`（per-agent 读账号费用）+ `renderer/services/usage/subscriptionUsage.ts` 的 `resolveUsageDisplay`（四态 `'subscription' | 'account' | 'unavailable' | 'hidden'`，优先级注释就在函数上方）+ `workbench/agents/UsageIndicator.tsx`。
-
-**费率解析：单一来源，绝不兜底**（`src/shared/ai/resolveProviderPricing.ts` 的 `resolveModelPricing`）：费率只由该 provider 的 `pricingSource` 决定——`catalog`（`options.vendor` 查内置官方价目表 `OFFICIAL_CATALOGS`）或 `http-json`（读网关价目表缓存）。**未声明 pricingSource 就是「费率未知」，绝不跨 provider 兜底套官方价**（中转网关有折扣/加价/换币种，套官方价直接记错账）——「费率未知」是 UI 的一个状态，不是编出来的数字。`AiPricingOrigin = 'catalog' | 'gateway'`（`aiModelPricing.ts`）。
-
-**密钥策略（2026-08 变更）**：`ISecretStorageService` 与它所在的 platform secret 模块已整体下线（目录已删除）。API key 现在**明文存在 `aiSettings.json` provider 条目的 `apiKey` 字段**（用户明确决策：跨机器同步），写文件后 POSIX 上 `chmod 0600`（Windows 跳过）。仍有效的红线：**密钥绝不进日志、绝不进 AI Debug 记录**；UI 一律掩码显示（前 4 后 4，`src/shared/ai/maskKey.ts`）。命令 `ai.setApiKey` / `ai.clearApiKey` id 未变，提示文案已改为「明文存储」。
-
-**官方 vs 网关判定（agent 认证用）**：内置「协议 → 官方 baseUrl」对照表 `shared/ai/officialEndpoints.ts`（`OFFICIAL_BASE_URLS` + `isOfficialEndpoint`），无需用户配任何字段。`shared/ai/providerDerivation.ts` 据此派生 per-CLI 凭据：`deriveClaudeAuth`（官方端点 → `ANTHROPIC_API_KEY`；网关 → `ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_BASE_URL`）、`deriveCodexGateway`（→ `{ baseUrl, apiKey, providerName }`）。
-
-**🔴 生效凭据是反查出来的，不是编辑器声明的**：`agent 自己的配置文件即唯一真相`（claude: `settings.json` 的 env + `.credentials.json`；codex: `config.toml` + `auth.json`），编辑器**不再持久化** `agentSettings.<agent>.authentication`（该块已废弃，schema 里只留 `deprecationMessage`）。判定走纯函数 `shared/ai/agentActiveAuth.ts` 的 `resolveClaudeActiveAuth` / `resolveCodexActiveAuth`：把每个 provider 条目**正向派生**一遍再与盘上值逐字比对，产出 `AgentActiveAuth = { kind: 'subscription'|'provider'|'none', providerId? }`。三条硬约束：① claude 侧严格按 SDK 的 `AUTH_TOKEN(+BASE_URL) > API_KEY > OAuth` 优先级，**匹配失败绝不 fall through**（此时生效的就是那个未知网关）；② baseUrl **逐字比对不做 URL 归一化**（写盘值与反查值同源，归一化只会造假不匹配）；③ 歧义（两条目同 baseUrl+key）按 aiSettings.json 文件序**确定性 first-match**——盘上只有 key，区分哪条是信息论意义上不可能的，所以要求答案稳定而非随机；反查是纯函数、无 logger，不额外告警。`kind:'provider'` 而 `providerId` 缺席 = 外部/手写凭据，**刻意不归属任何 provider**（开销显示「—」，账号用量 hidden）——硬猜会把钱记到别人账上。**所有读都带 `authority`**，因此本地与远端工作区的订阅/网关费用天然分开。模型选择从所选 provider 的候选里挑，但**只写 agent 自己的配置文件**（claude: `settings.json` 的 `model` / `env.CLAUDE_CODE_SUBAGENT_MODEL`；codex: `config.toml` 的 `model`），编辑器侧不镜像——原因见 `workbench/agentSettings/claude/CLAUDE.md`。
-
-**已落地 provider（按协议）**：`ollama`（本地，无需 key，`/api/chat` NDJSON 流）、`openai-chat`（baseUrl 可指向任何 OpenAI 兼容端点，`/chat/completions` SSE 流，无 key 时省略 auth 头）、`anthropic-messages`（`/v1/messages` SSE，system prompt 是顶层字段）、`openai-responses`（`sendRequest` 为桩、仅供 agent 派生；`listModels` 真实探测 `GET /models` 供 Test 按钮用）。改密钥/配置后由 main 显式 `setProviders` 失效注册表缓存、重新枚举模型并 `fire onDidChangeModels`。
-
-**模型选择 UI**：命令 `ai.pickModel`（QuickPick，状态栏 AI 快捷设置 `workbench/statusbar/AiStatusBarButtons.tsx` 的下拉里各功能行触发）、`ai.manageModels`（图形化管理页 `workbench/ai/AiSettingsEditor.tsx`，虚拟 `AiSettingsEditorInput`；AI 组四分类：供应商配置 / 模型配置（顶层 `models` 知识库，`AiModelKnowledgePanel`）/ 功能模型 / MCP 服务器）、`ai.openSettingsJson`（直接编辑 `aiSettings.json`）。
-
-参考：`packages/platform/src/ai/*`、`main/services/ai/aiModelMainService.ts`、`renderer/services/ai/aiModelClientService.ts`、`renderer/workbench/ai/AiSettingsEditor.tsx`、`renderer/workbench/ai/AiProvidersPanel.tsx`
 
 ## 编辑器输入三件套
 
-- **`FileEditorInput`**：editor input 描述（URI + 元数据），可序列化恢复
-- **`MonacoModelRegistry`**：URI → Monaco `ITextModel` 的注册表；模型独立于编辑器实例（多分屏共享同一模型）
-- **`FileEditorRegistry`**：`FileEditorInput` → 当前挂载的 Monaco editor 实例；状态栏/搜索高亮通过它找编辑器
-
-打开文件流程：`editorService.openEditor(new FileEditorInput(uri))` → React `FileEditorComponent` 挂载 → 注册到 `FileEditorRegistry` → 状态栏 contribution 拿光标位置。
+**`FileEditorInput`**（input 描述）/ **`MonacoModelRegistry`**（URI → Monaco `ITextModel`，多分屏共享）/ **`FileEditorRegistry`**（`FileEditorInput` → 挂载的 editor 实例）。打开：`editorService.openEditor(new FileEditorInput(uri))` → 挂载 → 注册进 `FileEditorRegistry`。
 
 ## 测试边界
 
-`vitest.config.ts` 有三个 project：
-- **main**（node 环境）：覆盖 `src/main/**`、`src/shared/**`
-- **renderer-node**（node 环境）：覆盖 `src/renderer/**/*.test.ts` 中**不依赖 DOM/Monaco** 的纯逻辑测试（绝大多数 service/纯函数）。无 react 插件、无 Monaco 预热，跑得最快
-- **renderer-dom**（happy-dom）：覆盖所有 `*.test.tsx` + 少量确实依赖 DOM/Monaco 的 `*.test.ts`（在配置顶部 `rendererDomTests` 数组里显式登记）。Monaco 走桩 + `beforeAll` 预热
-
-**新增 renderer 测试默认进 renderer-node**。只有当测试用到 `document`/`window`/Monaco 时才把它加进 `rendererDomTests`——若忘了加，会在 node 环境直接报 `document is not defined` 而 fail loud（不会静默劣化），按提示补进数组即可。
-
-`pnpm --filter @universe-editor/editor test:unit` 聚合跑 3 个 project；`test:main` / `test:renderer-node` / `test:renderer-dom` 按 project 单独跑；`test:integration` 跑集成。根 `pnpm test` 走 turbo 并行调度这 4 个任务。
-
-E2E 冒烟独立于 vitest，跑的是 `out/` 产物——见**套路 F**。
+`vitest.config.ts` 三个 project：**main**（node）、**renderer-node**（node，不依赖 DOM/Monaco 的 `*.test.ts`，**新增 renderer 测试默认进这里**）、**renderer-dom**（happy-dom，`*.test.tsx` + 依赖 DOM/Monaco 的 `*.test.ts`，`rendererDomTests` 登记；忘了加 fail loud）。
 
 ## 常见踩坑
 
-- **Monaco 是 dynamic import**：测试里 mock 掉或用 `_resetForTests()` 清状态（见 `MonacoModelRegistry._resetForTests`）。
-- **改了 platform 后**：renderer 看到的是 `packages/platform/dist/`；`pnpm dev` 下 watcher 自动重建，否则手动 `pnpm --filter @universe-editor/platform build`。
-- **新增 platform API**：必须先在 `packages/platform/src/index.ts` re-export，否则 apps 编译不通过。
-- **ContextKey 表达式**：写字符串如 `'hasActiveEditor'` 会在 Action2 内部 `ContextKeyExpr.deserialize`；先确保 key 已在 `ContextKeyContribution` 里 seed。
-- **ContextKey 有两个求值域，别搞混**：菜单 `when`（`MenuId.EditorTitle` 等）走 **per-group scoped** ctx（`useEditorGroupScopedContextKey`），而 keybinding 的 `when` 与 Action2 的 `precondition` 走 **root** ctx（`useGlobalKeybindingHandler` / `CommandsQuickAccessProvider`；precondition 还会被 AND 进 CommandPalette 菜单项）。`ScopedContextKeyService.set()` **只写本地、不外溢到父级**，所以只写 scoped 的 key 在键位解析里恒为 `<unset>`——症状指纹是「标题栏按钮能点、快捷键没反应、命令面板也搜不到」。keybinding 需要的 key 必须在 root 上也 seed 一份（`isInDiffEditor` / `diffEditorHasOpenableFile` 就是双写范例）。e2e 探针 `getContextKey` 读的正是 root，所以这类分裂**只有 e2e 能守住**，单测拿 root 服务直接断言是测不出来的。
-- **URI 经 IPC 后**：`fm.resource` 是 `UriComponents` 而非 `URI` 实例，需要 `URI.revive(fm.resource) as URI`。
-- **扩展的 `window.show*Message(msg, ...items)` 走 `IConfirmOptions.buttons`**：`MainThreadWindow.$showMessage` 把每个 item 原样放进 `buttons`，回执读 `IConfirmResult.choiceIndex`。曾经它把 items 拆进 `primaryButton/secondaryButton/cancelButton` 三个槽——第 4 项起被静默丢弃，且两项时点第二项返回 `undefined`（扩展侧的 `picked === BTN_X` 永不成立，按钮看起来「点了没反应」）。给对话框加按钮形态时保持这条：**每个 item 都是动作，取消是额外追加的那一个**。
+- **ContextKey 有两个求值域，别搞混**：菜单 `when` 走 per-group scoped ctx，keybinding `when` 与 Action2 `precondition` 走 **root** ctx；`ScopedContextKeyService.set()` **只写本地不外溢**——只写 scoped 的 key 在键位解析恒为 `<unset>`，症状「标题栏能点、快捷键没反应、命令面板搜不到」。keybinding 需要的 key 必须在 root 也 seed（`isInDiffEditor` 双写范例）；这类分裂**只有 e2e 能守住**。排查见 skill [fix-keybinding-not-firing]。
+- **URI 经 IPC 后**：`fm.resource` 是 `UriComponents` 而非 `URI` 实例，需 `URI.revive(fm.resource) as URI`。
+- **扩展的 `window.show*Message(msg, ...items)` 走 `IConfirmOptions.buttons`**：每个 item 都是动作，取消是额外追加的那一个；回执读 `choiceIndex`。勿回退三槽按钮形态（第 4 项起静默丢弃）。
 
 ## 其它
 
-- 如果是对标vscode的功能，请确保默认按键和command id和其保持一致
-- 如果是向用户展示文本，请考虑本地化（使用localize）
+- 对标 vscode 的功能保持默认按键和 command id 一致；向用户展示文本考虑本地化（localize）
