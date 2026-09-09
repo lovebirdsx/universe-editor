@@ -34,6 +34,8 @@ import type {
 } from '@universe-editor/extension-api'
 import { consoleTsLogger, type TsLogger } from './logger.js'
 import type {
+  CodeAction,
+  CodeActionContext,
   CodeLens,
   CompletionItem,
   CompletionList,
@@ -44,6 +46,7 @@ import type {
   Hover,
   Location,
   Position,
+  Range,
   SemanticTokens,
   SignatureHelp,
   SymbolInformation,
@@ -864,6 +867,25 @@ export class LspClient {
     return this._request(conn, 'textDocument/codeLens', this._doc(uri))
   }
 
+  async provideCodeActions(
+    uri: string,
+    range: Range,
+    context: { readonly only?: readonly string[] },
+  ): Promise<CodeAction[] | null> {
+    const conn = await this._ready()
+    // The wire layer doesn't ferry diagnostics; save-time source actions
+    // (organizeImports/fixAll) don't need them. LSP requires the field, so send [].
+    const lspContext: CodeActionContext = {
+      diagnostics: [],
+      ...(context.only ? { only: [...context.only] } : {}),
+    }
+    return this._request(conn, 'textDocument/codeAction', {
+      ...this._doc(uri),
+      range,
+      context: lspContext,
+    })
+  }
+
   async resolveCodeLens(lens: CodeLens): Promise<CodeLens | null> {
     const conn = await this._ready()
     const resolved = await this._request<CodeLens | null>(conn, 'codeLens/resolve', lens)
@@ -1206,6 +1228,23 @@ export class LspClient {
           publishDiagnostics: { relatedInformation: true, versionSupport: true },
           diagnostic: { dynamicRegistration: false, relatedDocumentSupport: false },
           codeLens: {},
+          codeAction: {
+            // Literal support lets the server return CodeAction objects (kind +
+            // edit) instead of bare Commands, which source actions
+            // (organizeImports / fixAll) need.
+            codeActionLiteralSupport: {
+              codeActionKind: {
+                valueSet: [
+                  '',
+                  'quickfix',
+                  'refactor',
+                  'source',
+                  'source.organizeImports',
+                  'source.fixAll',
+                ],
+              },
+            },
+          },
           semanticTokens: {
             // We only use whole-document tokens; the server still advertises its
             // legend in the initialize response, which we read to decode `data`.

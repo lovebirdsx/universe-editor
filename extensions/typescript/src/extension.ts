@@ -561,6 +561,11 @@ function registerProviders(context: ExtensionContext, client: LspClient, log: Ts
       provideCodeLenses: forServerDocs((doc) => client.provideCodeLenses(uriString(doc.uri))),
       resolveCodeLens: (lens) => client.resolveCodeLens(lens),
     }),
+    languages.registerCodeActionsProvider(TS_JS_LANGUAGES, {
+      provideCodeActions: forServerDocs((doc, range, context) =>
+        client.provideCodeActions(uriString(doc.uri), range, context),
+      ),
+    }),
   )
 
   // Semantic tokens re-color TextMate's guesses with real type info from tsserver

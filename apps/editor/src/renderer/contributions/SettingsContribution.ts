@@ -317,6 +317,18 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
               'Controls whether the semanticHighlighting is shown for the languages that support it.',
             ),
           },
+          'editor.codeActionsOnSave': {
+            type: 'object',
+            default: {},
+            additionalProperties: {
+              type: ['string', 'boolean'],
+              enum: ['always', 'explicit', 'never', true, false],
+            },
+            description: localize(
+              'settings.editor.codeActionsOnSave.description',
+              'Code actions to run on save, keyed by action kind (e.g. "source.organizeImports", "source.fixAll"). "always" runs on every save, "explicit" only on explicit saves, "never" disables the kind.',
+            ),
+          },
         },
       }),
     )

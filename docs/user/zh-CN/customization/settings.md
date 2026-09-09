@@ -10,6 +10,7 @@
 - [用户设置 vs 工作区设置](#用户设置-vs-工作区设置)
 - [直接编辑 JSON](#直接编辑-json)
 - [在设置值里使用变量](#在设置值里使用变量)
+- [保存时自动修复代码](#保存时自动修复代码)
 - [从 VSCode 沿用设置](#从-vscode-沿用设置)
 - [配置目录管理](#配置目录管理)
 - [下一步](#下一步)
@@ -138,6 +139,35 @@
 - `path` 可以写成数组——作为回退链，第一个真实存在的路径生效；也可以只写 shell 名（如 `"pwsh"`），编辑器会在 `PATH` 里查找。
 - 每个 profile 还支持 `args`（启动参数数组）与 `env`（附加环境变量）。
 - Windows 上不想让 WSL 发行版出现在菜单里，把 `terminal.integrated.useWslProfiles` 设为 `false`。
+
+## 保存时自动修复代码
+
+编辑器支持在保存文件时自动运行「代码操作」（Code Action），典型用法是让 TypeScript / JavaScript 在保存时自动整理 import 顺序、或自动修复可修复的问题。用 `editor.codeActionsOnSave` 配置，键是操作种类，值控制何时运行：
+
+```json
+{
+  "editor.codeActionsOnSave": {
+    // 保存时自动排序并清理未使用的 import
+    "source.organizeImports": "always",
+    // 保存时自动修复（如可自动修复的 lint 问题）
+    "source.fixAll": "explicit"
+  }
+}
+```
+
+每个键的取值：
+
+| 值 | 含义 |
+| --- | --- |
+| `"always"` | 每次保存都运行（含自动保存） |
+| `"explicit"` 或 `true` | 仅在显式保存（`Ctrl+S`、全部保存）时运行 |
+| `"never"` 或 `false` | 不运行该种类（可用于显式排除） |
+
+- 操作种类支持层级匹配：配 `"source"` 会覆盖 `source.organizeImports`、`source.fixAll` 等所有 `source.*`。
+- 配置了多个种类时，`source.fixAll` 类操作会先于其它 source 操作执行。
+- 单个操作失败不会阻塞保存，也不影响其它操作。
+
+> 提示：该功能依赖对应语言提供代码操作。内置 TypeScript 插件已支持 `source.organizeImports` 与 `source.fixAll`。
 
 ## 从 VSCode 沿用设置
 

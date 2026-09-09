@@ -54,6 +54,7 @@ import { MonacoKeybindingSyncContribution } from '../MonacoKeybindingSyncContrib
 import { MonacoDefaultKeybindingOverrideContribution } from '../MonacoDefaultKeybindingOverrideContribution.js'
 import { DocumentSyncContribution } from '../DocumentSyncContribution.js'
 import { WillSaveParticipantContribution } from '../WillSaveParticipantContribution.js'
+import { CodeActionsOnSaveContribution } from '../CodeActionsOnSaveContribution.js'
 import { DidSaveNotificationContribution } from '../DidSaveNotificationContribution.js'
 import { MarkdownPasteContribution } from '../MarkdownPasteContribution.js'
 import { MarkdownDropContribution } from '../MarkdownDropContribution.js'
@@ -480,6 +481,16 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.willSaveParticipant',
   WillSaveParticipantContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Run configured source code actions (editor.codeActionsOnSave, e.g.
+// source.organizeImports / source.fixAll) before each save, after the will-save
+// listeners so those edits are already in the model. AfterRestore so monaco's
+// code-action registry is live.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.codeActionsOnSave',
+  CodeActionsOnSaveContribution,
   WorkbenchPhase.AfterRestore,
 )
 

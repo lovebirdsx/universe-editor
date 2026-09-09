@@ -226,3 +226,50 @@ declare module 'monaco-editor/esm/vs/base/common/errors.js' {
   export const errorHandler: { unexpectedErrorHandler: (e: unknown) => void }
 }
 
+// HierarchicalKind — dot-separated code-action kind with prefix containment
+// (`source` contains `source.organizeImports`). No shipped .d.ts; consumed by
+// CodeActionsOnSaveContribution to build kind filters.
+declare module 'monaco-editor/esm/vs/base/common/hierarchicalKind.js' {
+  export class HierarchicalKind {
+    constructor(value: string)
+    readonly value: string
+    equals(other: HierarchicalKind): boolean
+    contains(other: HierarchicalKind): boolean
+    intersects(other: HierarchicalKind): boolean
+    append(...parts: string[]): HierarchicalKind
+  }
+}
+
+// CancellationToken.None — shared no-op token for the code-action query (we run
+// synchronously-in-line with the save, no external cancellation source).
+declare module 'monaco-editor/esm/vs/base/common/cancellation.js' {
+  export const CancellationToken: { readonly None: unknown }
+  export class CancellationTokenSource {
+    cancel(): void
+    dispose(): void
+  }
+}
+
+// getCodeActions — monaco's internal collector that picks matching providers,
+// runs them, and kind-filters the results. No shipped .d.ts; consumed by
+// CodeActionsOnSaveContribution so the on-save path reuses monaco's own
+// provider-selection / filtering instead of reimplementing it.
+declare module 'monaco-editor/esm/vs/editor/contrib/codeAction/browser/codeAction.js' {
+  import type { editor, languages, IRange } from 'monaco-editor'
+  export interface CodeActionItemLike {
+    readonly action: languages.CodeAction
+  }
+  export interface CodeActionSetLike {
+    readonly validActions: readonly CodeActionItemLike[]
+    dispose(): void
+  }
+  export function getCodeActions(
+    registry: unknown,
+    model: editor.ITextModel,
+    rangeOrSelection: IRange,
+    trigger: unknown,
+    progress: unknown,
+    token: unknown,
+  ): Promise<CodeActionSetLike>
+}
+
