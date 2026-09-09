@@ -17,9 +17,11 @@ function fakeSession(opts: {
   elicitation?: AcpPendingElicitation
   permission?: AcpPendingPermission
   backgroundTasks?: number
+  dormant?: boolean
 }): IAcpSession {
   return {
     status: observableValue<AcpSessionStatus>('s', opts.status),
+    isDormant: observableValue<boolean>('d', opts.dormant ?? false),
     pendingElicitation: observableValue<AcpPendingElicitation | undefined>('e', opts.elicitation),
     pendingPermission: observableValue<AcpPendingPermission | undefined>('p', opts.permission),
     backgroundTaskCount: observableValue<number>('b', opts.backgroundTasks ?? 0),
@@ -62,6 +64,35 @@ describe('computeSessionDisplayStatus', () => {
     expect(
       computeSessionDisplayStatus(fakeSession({ status: 'closed', elicitation: ELICITATION })),
     ).toBe('closed')
+  })
+
+  it("derives 'dormant' for an idle-reaped session (closed + dormant)", () => {
+    expect(computeSessionDisplayStatus(fakeSession({ status: 'closed', dormant: true }))).toBe(
+      'dormant',
+    )
+  })
+
+  it('keeps a user-closed session as closed', () => {
+    expect(computeSessionDisplayStatus(fakeSession({ status: 'closed', dormant: false }))).toBe(
+      'closed',
+    )
+  })
+
+  it('terminal seal outranks ask and background even when dormant', () => {
+    expect(
+      computeSessionDisplayStatus(
+        fakeSession({
+          status: 'closed',
+          dormant: true,
+          elicitation: ELICITATION,
+          backgroundTasks: 2,
+        }),
+      ),
+    ).toBe('dormant')
+  })
+
+  it('ignores the dormant flag while the session is not closed', () => {
+    expect(computeSessionDisplayStatus(fakeSession({ status: 'idle', dormant: true }))).toBe('idle')
   })
 
   it("derives 'background' when idle with background tasks in flight", () => {

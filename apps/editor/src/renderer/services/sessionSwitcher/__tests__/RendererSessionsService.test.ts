@@ -31,6 +31,7 @@ import {
   type IAcpSession,
   type IAcpSessionService as IAcpSessionServiceType,
 } from '../../acp/session/acpSessionService.js'
+import type { AcpSessionStatus } from '../../acp/session/acpSession.js'
 import {
   IAcpChatWidgetService,
   type IAcpChatWidgetService as IAcpChatWidgetServiceType,
@@ -128,12 +129,21 @@ function makeHistory(): IAcpSessionHistoryServiceType {
   } as unknown as IAcpSessionHistoryServiceType
 }
 
-function makeSession(id: string, agentId = 'fake'): IAcpSession {
+function makeSession(
+  id: string,
+  opts: { agentId?: string; status?: AcpSessionStatus; dormant?: boolean } = {},
+): IAcpSession {
   return {
     id,
-    agentId,
+    agentId: opts.agentId ?? 'fake',
     title: `Session ${id}`,
+    status: observableValue<AcpSessionStatus>('test.status', opts.status ?? 'idle'),
+    isDormant: observableValue<boolean>('test.dormant', opts.dormant ?? false),
+    pendingElicitation: observableValue<unknown>('test.elicitation', undefined),
+    pendingPermission: observableValue<unknown>('test.permission', undefined),
+    backgroundTaskCount: observableValue<number>('test.btc', 0),
     sessionIdOnAgent: observableValue<string | undefined>('test.sid', id),
+    ensureAwake: vi.fn(() => Promise.resolve('ready')),
   } as unknown as IAcpSession
 }
 
@@ -200,5 +210,50 @@ describe('RendererSessionsService', () => {
     expect(h.sessions.setActive).not.toHaveBeenCalled()
     expect(h.location.setLocation).not.toHaveBeenCalled()
     expect(h.editor.opened).toHaveLength(0)
+  })
+
+  it('reveal wakes a dormant session in the background', async () => {
+    const h = makeHarness()
+    const session = makeSession('s1', { status: 'closed', dormant: true })
+    h.sessions.add(session)
+
+    await h.svc.reveal('s1')
+
+    expect(vi.mocked(session.ensureAwake)).toHaveBeenCalledOnce()
+    expect(h.editor.opened).toHaveLength(1)
+  })
+
+  it('reveal leaves an awake session untouched', async () => {
+    const h = makeHarness()
+    const session = makeSession('s1')
+    h.sessions.add(session)
+
+    await h.svc.reveal('s1')
+
+    expect(vi.mocked(session.ensureAwake)).not.toHaveBeenCalled()
+  })
+
+  describe('listSessions', () => {
+    it('includes a dormant session with the dormant display status', async () => {
+      const h = makeHarness()
+      h.sessions.add(makeSession('s1', { status: 'closed', dormant: true }))
+
+      const list = await h.svc.listSessions()
+
+      expect(list).toEqual([
+        { sessionId: 's1', title: 'Session s1', status: 'dormant', agentId: 'fake' },
+      ])
+    })
+
+    it('excludes a genuinely closed session but keeps live ones', async () => {
+      const h = makeHarness()
+      h.sessions.add(makeSession('gone', { status: 'closed' }))
+      h.sessions.add(makeSession('live', { status: 'running' }))
+
+      const list = await h.svc.listSessions()
+
+      expect(list.map((s) => s.sessionId)).toEqual(['live'])
+      expect(list[0]!.status).toBe('running')
+    })
   })
 })

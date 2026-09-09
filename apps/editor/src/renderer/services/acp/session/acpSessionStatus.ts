@@ -9,14 +9,19 @@
  *  machine. Likewise `'background'` surfaces "the turn settled but
  *  `run_in_background` tasks are still executing on the agent" — the prompt
  *  RPC is done, so the core status reads `idle`, yet killing the session would
- *  kill real work. Precedence: closed (terminal) > ask > core status >
+ *  kill real work. `'dormant'` splits the terminal `'closed'` seal in two: the
+ *  idle reaper stops an agent process to free memory, which seals the session
+ *  to `'closed'` with {@link IAcpSession.isDormant} set — the session object,
+ *  timeline and durable id stay intact and wake on use, so the switcher and
+ *  the window title must keep surfacing it instead of treating it as gone.
+ *  Precedence: closed/dormant (terminal seal) > ask > core status >
  *  background (idle only).
  *--------------------------------------------------------------------------------------------*/
 
 import type { IReader } from '@universe-editor/platform'
 import type { AcpSessionStatus, IAcpSession } from './acpSession.js'
 
-export type AcpSessionDisplayStatus = AcpSessionStatus | 'ask' | 'background'
+export type AcpSessionDisplayStatus = AcpSessionStatus | 'ask' | 'background' | 'dormant'
 
 /**
  * True when a resident session is still usable — i.e. `status === 'closed'` does
@@ -40,25 +45,27 @@ export function isResidentLive(session: IAcpSession, r?: IReader): boolean {
 }
 
 /**
- * Derive the display status. When an elicitation or permission is pending (and
- * the session is not closed) the session is waiting on the user → `'ask'`;
- * when the core status is idle but background tasks are still in flight →
- * `'background'`; otherwise it mirrors `session.status`. Pass the autorun
- * `IReader` to keep the subscription live; omit it for a one-shot snapshot.
+ * Derive the display status. A sealed (`'closed'`) session splits into
+ * `'dormant'` (idle-reaped, wakes on use) vs `'closed'` (gone); when an
+ * elicitation or permission is pending the session is waiting on the user →
+ * `'ask'`; when the core status is idle but background tasks are still in
+ * flight → `'background'`; otherwise it mirrors `session.status`. Pass the
+ * autorun `IReader` to keep the subscription live; omit it for a one-shot
+ * snapshot.
  */
 export function computeSessionDisplayStatus(
   session: IAcpSession,
   r?: IReader,
 ): AcpSessionDisplayStatus {
   const status = r ? session.status.read(r) : session.status.get()
+  if (status === 'closed') {
+    return (r ? session.isDormant.read(r) : session.isDormant.get()) ? 'dormant' : 'closed'
+  }
   const pendingElicitation = r
     ? session.pendingElicitation.read(r)
     : session.pendingElicitation.get()
   const pendingPermission = r ? session.pendingPermission.read(r) : session.pendingPermission.get()
-  if (
-    status !== 'closed' &&
-    (pendingElicitation !== undefined || pendingPermission !== undefined)
-  ) {
+  if (pendingElicitation !== undefined || pendingPermission !== undefined) {
     return 'ask'
   }
   const backgroundTasks = r

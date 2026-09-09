@@ -37,7 +37,8 @@ export type SessionSortMode = 'created' | 'updated'
  *  - `in_progress`: connecting / running / background tasks still executing
  *  - `input_needed`: waiting on the user (a pending question or permission → `ask`)
  *  - `failed`: errored
- *  - `completed`: idle / closed, and any non-live history row (no live status)
+ *  - `completed`: idle / closed / dormant (idle-reaped, wakes on use), and any
+ *    non-live history row (no live status)
  */
 export type SessionStatusBucket = 'completed' | 'in_progress' | 'input_needed' | 'failed'
 

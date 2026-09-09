@@ -47,6 +47,10 @@ export class RendererSessionsService implements IRendererSessionsService {
     const session = this._sessions.getById(sessionId)
     if (!session) return Promise.resolve()
     this._sessions.setActive(sessionId)
+    // Asleep: activate instantly off the resident instance and bring its
+    // process back in the background — the editor may already be mounted, so
+    // nothing else would wake it until the next prompt.
+    if (session.isDormant.get()) void session.ensureAwake()
     this._chatLocation.setLocation('editor')
     this._editor.openEditor(
       this._instantiation.createInstance(

@@ -52,18 +52,20 @@ function makeWorkspaceStub(initial: IWorkspace | null = null): IWorkspaceService
 
 function makeSessionStub(id: string, title: string, status: AcpSessionStatus = 'idle') {
   const statusObs = observableValue<AcpSessionStatus>('test.status', status)
+  const dormantObs = observableValue<boolean>('test.dormant', false)
   const pendingElicitation = observableValue<unknown>('test.elicitation', undefined)
   const pendingPermission = observableValue<unknown>('test.permission', undefined)
   const session = {
     id,
     title,
     status: statusObs,
+    isDormant: dormantObs,
     pendingElicitation,
     pendingPermission,
     backgroundTaskCount: observableValue<number>('test.btc', 0),
     sessionIdOnAgent: observableValue<string | undefined>('test.sid', id),
   } as unknown as IAcpSession
-  return { session, statusObs, pendingElicitation, pendingPermission }
+  return { session, statusObs, dormantObs, pendingElicitation, pendingPermission }
 }
 
 function makeAcpStubs() {
@@ -233,6 +235,27 @@ describe('WindowTitleContribution', () => {
 
     acp.activeSession.set(undefined, undefined)
     expect(document.title).toBe(`myProject - ${URI.file('/tmp').fsPath}`)
+
+    contribution.dispose()
+  })
+
+  it('keeps the session segment with a moon symbol while the session is dormant', () => {
+    const ws = makeWorkspaceStub({ folder: URI.file('/tmp/myProject'), name: 'myProject' })
+    const { contribution, acp } = makeContribution(ws)
+    const { session, statusObs, dormantObs } = makeSessionStub('s1', '修复登录Bug', 'idle')
+
+    acp.activeSession.set(session, undefined)
+    expect(document.title).toBe('myProject — ○ 修复登录Bug')
+
+    // Idle reaper seals the session: dormant first, then status closed.
+    dormantObs.set(true, undefined)
+    statusObs.set('closed', undefined)
+    expect(document.title).toBe('myProject — ☾ 修复登录Bug')
+
+    // Waking goes through connecting back to idle.
+    dormantObs.set(false, undefined)
+    statusObs.set('connecting', undefined)
+    expect(document.title).toBe('myProject — ◌ 修复登录Bug')
 
     contribution.dispose()
   })

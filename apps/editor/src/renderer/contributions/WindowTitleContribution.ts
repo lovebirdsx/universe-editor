@@ -13,9 +13,10 @@
  *  Electron mirrors `document.title` onto the native window title, surfaced
  *  even with `frame: false`. The status symbol maps AcpSessionStatus to a
  *  geometric shape:
- *  ● running · ○ idle · ◌ connecting · ✕ errored · ◆ ask (closed → no session
- *  segment); background (agent still executing run_in_background tasks) shares
- *  running's ● because the session is still busy.
+ *  ● running · ○ idle · ◌ connecting · ✕ errored · ◆ ask · ☾ dormant (idle-reaped,
+ *  wakes on use; closed → no session segment); background (agent still
+ *  executing run_in_background tasks) shares running's ● because the session
+ *  is still busy.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -49,6 +50,7 @@ const STATUS_SYMBOL: Record<AcpSessionDisplayStatus, string> = {
   errored: '✕',
   ask: '◆',
   background: '●',
+  dormant: '☾',
   closed: '',
 }
 

@@ -12,6 +12,7 @@ import {
   Hourglass,
   Loader2,
   MessageCircleQuestion,
+  Moon,
   type LucideIcon,
 } from 'lucide-react'
 import type { JSX } from 'react'
@@ -41,6 +42,7 @@ const ICON_MAP: Record<string, SessionStatusIconComponent> = {
   errored: plain(CircleX),
   ask: plain(MessageCircleQuestion),
   background: plain(Hourglass),
+  dormant: plain(Moon),
   closed: plain(CircleDashed),
 }
 

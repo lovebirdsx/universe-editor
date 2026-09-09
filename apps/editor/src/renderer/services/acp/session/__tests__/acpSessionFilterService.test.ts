@@ -65,6 +65,7 @@ describe('statusBucketFor', () => {
     expect(statusBucketFor('errored')).toBe('failed')
     expect(statusBucketFor('idle')).toBe('completed')
     expect(statusBucketFor('closed')).toBe('completed')
+    expect(statusBucketFor('dormant')).toBe('completed')
   })
 })
 
