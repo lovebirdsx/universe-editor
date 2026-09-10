@@ -6,12 +6,12 @@
 
 | 任务 | 必读 |
 |---|---|
-| Perforce Graph（历史图谱） | [`docs/graph.md`](docs/graph.md) |
+| Perforce Graph（历史图谱） | [`extensions/perforce/docs/graph.md`](extensions/perforce/docs/graph.md) |
 | Helix Swarm（代码审核） | [`src/swarm/CLAUDE.md`](src/swarm/CLAUDE.md) |
-| 收集修改 / Explorer 改动徽标 / 落后灰字 | [`docs/reconcile.md`](docs/reconcile.md) |
-| 菜单贡献 / when 子句 / 图标 / 多选拖放 | [`docs/menus.md`](docs/menus.md) |
+| 收集修改 / Explorer 改动徽标 / 落后灰字 | [`extensions/perforce/docs/reconcile.md`](extensions/perforce/docs/reconcile.md) |
+| 菜单贡献 / when 子句 / 图标 / 多选拖放 | [`extensions/perforce/docs/menus.md`](extensions/perforce/docs/menus.md) |
 | e2e / fake-p4 | [`e2e/CLAUDE.md`](e2e/CLAUDE.md) |
-| 任何 p4 命令行为 / 解析 | [`docs/pitfalls.md`](docs/pitfalls.md)（13 条踩坑完整叙事） |
+| 任何 p4 命令行为 / 解析 | [`extensions/perforce/docs/pitfalls.md`](extensions/perforce/docs/pitfalls.md)（13 条踩坑完整叙事） |
 
 > 先读 skill `create-extension`（插件通用骨架、manifest 贡献点、engines 红线、NLS）——本文档只讲 p4 特有的东西。
 
@@ -29,7 +29,7 @@
 
 **加一个新 p4 能力的典型路径**：`client.ts` 加一个方法（多半一行 `this._mutate(...)`）→ `extension.ts` 注册对应命令 → `package.json` 加 command + menu 项 + nls 两文件。若要新解析逻辑，先在纯解析模块写 + 单测。
 
-## 五条必读红线（每条判据一句；完整叙事见 [docs/pitfalls.md](docs/pitfalls.md)）
+## 五条必读红线（每条判据一句；完整叙事见 [extensions/perforce/docs/pitfalls.md](extensions/perforce/docs/pitfalls.md)）
 
 1. **密钥/ticket 绝不落盘、不进日志、不经 RPC 明文传**。登录只把密码经 **stdin** 喂给 `p4 login`；ticket 由 `p4` 自身按 `P4TICKETS` 机制保存，插件**不自管凭据**。
 2. **连接 `-p` 端口绝不从 `p4 info` 的 `serverAddress` 推导**（那是服务器自报的内部 bind 地址，代理后端常不可路由）。只在 `perforce.port` 显式设置才传 `-p`，否则省略 `-p` 让 p4 按 cwd 自解析 P4CONFIG；`-c`（client）必须传。
@@ -37,7 +37,7 @@
 4. **`_spawn` 的异步回调（`data`/`close`/watchdog/onStdoutLine）绝不 throw**——异常冒泡成 `uncaughtException` 会杀掉整个 extension host。p4 命令失败是一等公民（resolve 失败结果），宿主崩溃不是。巨量 stdout 边收边计字节、超 256MB 即杀进程。
 5. **SCM 分组模型与 git 根本不同**：p4 是「一个文件属于恰好一个 pending changelist」→ 动态分组（默认组 + 每个编号 CL + 每个 CL 的搁置组），`_applyGroups()` 用 `DesiredGroup[]` 对账而非全量重建。命令路由靠**每个 client 唯一的 root 最长前缀**命中（`clientManager.ts`），路径比较统一走 `pathUtil.ts` `norm()`。
 
-其余坑（sync 拒绝三形态、clientFile 是 client 语法、`-Mj` 塌陷、blame describe 挂死、搁置扇出、流式通道、unresolved 信号、中文路径 argv 乱码）一律见 [docs/pitfalls.md](docs/pitfalls.md)。
+其余坑（sync 拒绝三形态、clientFile 是 client 语法、`-Mj` 塌陷、blame describe 挂死、搁置扇出、流式通道、unresolved 信号、中文路径 argv 乱码）一律见 [extensions/perforce/docs/pitfalls.md](extensions/perforce/docs/pitfalls.md)。
 
 ## 操作方法约定（`client.ts`）
 
@@ -46,7 +46,7 @@
 - **缓存失效按文件**（`_invalidateAfterMutation`）：小批量（≤64 且无 `/...`）逐条 `_cache.invalidateFile(p)` 并显式清 `P4CacheNs.opened`；空 paths/批量/目录递归 → `invalidateWorkspace()`。
 - **取消能力三层管道**：`P4ExecOptions.signal`（abort 即 kill + resolve 失败）→ `client._cancellable(fn)`（压 `_cancelSources` 栈 + 上报 `busyCancellable`）→ UI 状态栏 spinner 点取消（`perforce.cancelBusy`，**运行时命令，不进 `contributes.commands`**）。取消后不弹错误 toast。
 - 破坏性操作（delete/revert/submit 等）在 `extension.ts` 命令层 `showWarningMessage` 二次确认，**不要**塞进 client 方法。**submit 直达 depot 不可撤销**，确认框文案须注明。
-- **还原三档别混**：`revert`（统一入口）、`revertChangelist`（整组，破坏性需确认）、`revertUnchanged`（`revert -a`，安全无需确认）；`moveToReconcile`（`revert -k`）是「移出 Changelist」，不是还原。详见 [docs/reconcile.md](docs/reconcile.md)。
+- **还原三档别混**：`revert`（统一入口）、`revertChangelist`（整组，破坏性需确认）、`revertUnchanged`（`revert -a`，安全无需确认）；`moveToReconcile`（`revert -k`）是「移出 Changelist」，不是还原。详见 [extensions/perforce/docs/reconcile.md](extensions/perforce/docs/reconcile.md)。
 
 ## 宿主泛化：p4/git 共用一个无偏见 host
 
@@ -93,4 +93,4 @@ pnpm check                                       # lint+typecheck+全测+docs:ch
 
 - 项目开发期，**不考虑向后兼容**——改 p4 模型/契约放手改。
 - 关键逻辑保留调试输出（走 `log`→Perforce output channel / `console.error`，**stdout 是 RPC 通道不能占**）。
-- 发现新经验：p4 命令行为/解析坑 → 更新 `docs/pitfalls.md`；Graph/Swarm/菜单/reconcile 专项 → 更新对应子文件；只有「每条 p4 任务都必读」的才回写本文件。
+- 发现新经验：p4 命令行为/解析坑 → 更新 `extensions/perforce/docs/pitfalls.md`；Graph/Swarm/菜单/reconcile 专项 → 更新对应子文件；只有「每条 p4 任务都必读」的才回写本文件。
