@@ -166,12 +166,24 @@ describe('URI — workspace-relative path derivation', () => {
     'src/über.ts',
   ]
 
+  /**
+   * The absolute path `path.join(root, rel)` yields, minus the POSIX quirk this
+   * suite pins down: POSIX `path.join` collapses the `//` of a UNC root, which
+   * would silently drop the host and make the expectation disagree with the
+   * very same root on Windows (win32 keeps `\\host\share`).
+   */
+  function absolutePathOf(root: string, rel: string): string {
+    if (!root.startsWith('//')) return path.join(root, rel)
+    return `${root.replace(/\/+$/, '')}/${rel}`
+  }
+
   it('matches deriving the URI from the absolute path', () => {
     for (const root of roots) {
       for (const rel of rels) {
         const derived = URI.joinPath(URI.file(root), rel)
-        const absolute = URI.file(path.join(root, rel))
+        const absolute = URI.file(absolutePathOf(root, rel))
         expect(derived.toString(), `root=${root} rel=${rel}`).toBe(absolute.toString())
+        expect(derived.authority, `root=${root} rel=${rel}`).toBe(absolute.authority)
       }
     }
   })

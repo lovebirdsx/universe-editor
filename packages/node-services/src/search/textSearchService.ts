@@ -5,7 +5,6 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { spawn } from 'node:child_process'
-import path from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import {
   createNamedLogger,
@@ -351,7 +350,7 @@ export class TextSearchService extends Disposable implements ITextSearchMainServ
     const addMatch = (data: RgMatchData): void => {
       if (limitHit === 'matches') return
       const relPath = bytesOrTextToString(data.path).replace(/\\/g, '/')
-      const resource = URI.file(path.join(root.fsPath, relPath))
+      const resource = URI.joinPath(root, relPath)
       const key = resource.toString()
       const line = bytesOrTextToString(data.lines).replace(/\r?\n$/, '')
       const submatches =

@@ -470,10 +470,10 @@ export class FileSearchService extends Disposable implements IFileSearchService 
           if (score < 0) continue
           matchesFound++
           if (score < scoreFloor) continue
-          const abs = path.join(spec.rootFsPath, rel)
+          const resource = URI.joinPath(root, rel)
           scored.push({
-            resource: URI.file(abs),
-            fsPath: abs,
+            resource,
+            fsPath: resource.fsPath,
             relativePath: rel,
             basename: base,
             score,

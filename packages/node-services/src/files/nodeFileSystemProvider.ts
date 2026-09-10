@@ -230,7 +230,9 @@ export class NodeFileSystemProvider implements IFileSystemProvider {
     try {
       const real = await this._realpathString(uri.fsPath)
       this._logger.debug(`realpath ${uri.fsPath} -> ${real}`)
-      return URI.file(real)
+      // Keep the input's scheme and authority: the string round-trip through
+      // `fs.realpath` cannot carry them, and `URI.file` would drop a UNC host.
+      return uri.with({ path: real })
     } catch (err) {
       const mapped = mapError(err, 'realpath failed')
       this._logger.warn(`realpath failed ${uri.fsPath} code=${mapped.code}`, mapped.message)
@@ -455,6 +457,8 @@ export class NodeFileSystemProvider implements IFileSystemProvider {
     this._logger.debug(
       `listRecursive ${root.fsPath} files=${results.length} maxFiles=${maxFiles} maxDepth=${maxDepth}`,
     )
-    return results.map((p) => URI.file(p))
+    // Same reason as `realpath`: the walk works on strings, so re-attach the
+    // root's authority instead of re-deriving it (which drops a UNC host).
+    return results.map((p) => root.with({ path: p }))
   }
 }
