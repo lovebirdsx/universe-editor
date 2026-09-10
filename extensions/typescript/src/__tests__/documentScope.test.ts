@@ -115,6 +115,9 @@ vi.mock('../lspClient.js', () => ({
     resolveCodeLens(...args: unknown[]) {
       return this.record('resolveCodeLens', args)
     }
+    provideCodeActions(...args: unknown[]) {
+      return this.record('provideCodeActions', args)
+    }
     provideWorkspaceSymbols() {
       return Promise.resolve([])
     }
@@ -151,6 +154,7 @@ vi.mock('@universe-editor/extension-api', async (importOriginal) => {
         return { dispose() {} }
       },
       registerCodeLensProvider: capture('codeLens'),
+      registerCodeActionsProvider: capture('codeActions'),
       registerDocumentSemanticTokensProvider: capture('semanticTokens'),
     },
     window: {
