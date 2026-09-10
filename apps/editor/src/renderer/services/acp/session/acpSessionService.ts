@@ -737,6 +737,19 @@ export class AcpSessionService
   }
 
   /**
+   * Last-resort cwd when neither the picker, the remembered value, nor an open
+   * folder yields one (empty window): the user's home directory. Same semantic
+   * as agent deep links (`resolveAgentDeepLinkCwd`). Only reachable for local
+   * sessions — an empty window always has an undefined authority, and the
+   * remembered-cwd gate accepts only the local memory there.
+   */
+  private _homeCwd(): string | undefined {
+    const ipc = typeof window !== 'undefined' ? window.ipc : undefined
+    const home = ipc?.home
+    return typeof home === 'string' && home.length > 0 ? home : undefined
+  }
+
+  /**
    * Default cwd for sessions created without an explicit one: the directory
    * the most recent session was created with, when it still belongs to this
    * window — same host (authority) and inside the open folder. Stale
@@ -825,7 +838,7 @@ export class AcpSessionService
     const collapseModes = this._config.get<Record<string, string>>('acp.defaultCollapseModes') ?? {}
     const initialCollapseMode: CollapseMode =
       (collapseModes[resolvedAgentId] as CollapseMode | undefined) ?? 'default'
-    const cwd = options?.cwd ?? this._rememberedCwd() ?? this._currentCwd()
+    const cwd = options?.cwd ?? this._rememberedCwd() ?? this._currentCwd() ?? this._homeCwd()
     const authority = options?.authority ?? this._currentAuthority()
     if (cwd !== undefined) {
       this._lastSessionCwd.remember(cwd, authority)
@@ -1546,7 +1559,7 @@ export class AcpSessionService
         })
         try {
           const entry = this._history.get(sid)
-          const cwd = entry?.cwd ?? this._currentCwd()
+          const cwd = entry?.cwd ?? this._currentCwd() ?? this._homeCwd()
           const authority = entry?.authority ?? this._currentAuthority()
           // An EMPTY session (created but never messaged) has no agent-side
           // transcript, so `session/resume` can only answer resourceNotFound —

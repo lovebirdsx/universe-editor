@@ -627,6 +627,17 @@ describe('AcpSessionService', () => {
     expect(client.connected[0]!.agent.newSessionCalls[0]!.cwd).toBe('/tmp/deep-link-cwd')
   })
 
+  it('createSession in an empty window falls back to the user home as cwd', async () => {
+    vi.stubGlobal('window', { ipc: { home: '/home/testuser' } })
+    try {
+      const session = await svc.createSession()
+      await session.whenConnected()
+      expect(client.connected[0]!.agent.newSessionCalls[0]!.cwd).toBe('/home/testuser')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('createSession without options reuses the cwd remembered from the previous create', async () => {
     const lastSessionCwd = stubLastSessionCwdServiceForTest()
     const folderSvc = new AcpSessionService(
