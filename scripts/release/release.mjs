@@ -116,6 +116,7 @@ function run(command, args, options) {
     cwd,
     stdio: 'inherit',
     shell: shouldUseShell(command),
+    ...(options?.env ? { env: options.env } : {}),
   })
   if (result.error) die(`执行失败: ${printable}\n  ${result.error.message}`)
   if (result.status !== 0) die(`命令返回非零退出码 (${result.status}): ${printable}`)
@@ -503,14 +504,26 @@ function packageRelease(args, dryRun) {
   run('pnpm', ['--filter', '@universe-editor/editor', script], { dryRun })
 }
 
+// .env.prod 里的 UE_SERVER_* 部署路径（如 /srv/auth/market-key.pem）不该泄漏进
+// 测试子进程——server/gallery 测试 fixture 自带临时密钥，env 优先级高于 CLI 缺省，
+// 不剥离会让 server.mjs 回落到部署机路径而启动失败（本地文件不存在）。
+function testEnv() {
+  const env = { ...process.env }
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('UE_SERVER_')) delete env[key]
+  }
+  return env
+}
+
 function runChecks(args, dryRun) {
   if (args.skipCheck) {
     log('校验: 跳过 pnpm check / test:release')
     return
   }
-  run('pnpm', ['check'], { dryRun })
-  run('pnpm', ['test:release'], { dryRun })
-  if (args.e2e && !args.skipE2e) run('pnpm', ['e2e'], { dryRun })
+  const env = testEnv()
+  run('pnpm', ['check'], { dryRun, env })
+  run('pnpm', ['test:release'], { dryRun, env })
+  if (args.e2e && !args.skipE2e) run('pnpm', ['e2e'], { dryRun, env })
 }
 
 function assertTagAtHead(tag) {
