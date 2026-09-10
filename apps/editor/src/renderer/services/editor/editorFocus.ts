@@ -20,6 +20,41 @@ export function syncEditorFocusContext(contextKeyService: IContextKeyService): v
   if (!hasEditorFocus) contextKeyService.set('editorTextFocus', false)
 }
 
+/**
+ * Mirror Monaco widget focus onto the global `editorFocus` key. Without it the key
+ * keeps whatever the last writer left behind (syncEditorFocusContext is DOM-based,
+ * so focus moving between Monaco widgets and non-Monaco surfaces usually — not
+ * reliably — lands on the right value), and the global Escape binding
+ * (`!editorFocus`, FocusActiveEditorGroupAction) then steals Escape from Monaco's
+ * own handling (close find widget, cancel multi-cursor, dismiss IntelliSense),
+ * which only fires while the event is allowed to bubble.
+ *
+ * Blur recomputes from the DOM instead of writing false, so focus moving from one
+ * Monaco widget to another stays correct. `onBlur` runs from the same microtask,
+ * for callers that need to reclaim focus once the DOM move has settled. Dispose
+ * recomputes too: a removed writer must not leave the key stuck true.
+ */
+export function bridgeEditorFocus(
+  editor: monaco.editor.IStandaloneCodeEditor,
+  contextKeyService: IContextKeyService,
+  onBlur?: () => void,
+): IDisposable {
+  const focusSub = editor.onDidFocusEditorWidget(() => contextKeyService.set('editorFocus', true))
+  const blurSub = editor.onDidBlurEditorWidget(() => {
+    queueMicrotask(() => {
+      syncEditorFocusContext(contextKeyService)
+      onBlur?.()
+    })
+  })
+  return {
+    dispose: () => {
+      focusSub.dispose()
+      blurSub.dispose()
+      syncEditorFocusContext(contextKeyService)
+    },
+  }
+}
+
 /** Minimal shape of Monaco's SuggestController exposed for visibility tracking. */
 interface SuggestModelLike {
   readonly onDidSuggest: monaco.IEvent<unknown>

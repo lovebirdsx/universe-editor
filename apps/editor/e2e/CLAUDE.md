@@ -125,6 +125,7 @@ pnpm --filter @universe-editor/editor test:visual    # 视觉基线（仅 Linux 
 > 排查「CI 偶发挂、本地稳过」的 flaky 有专门 skill **`fix-ci-e2e-flake`**——它的案例库是 flaky 知识的单一事实源。遇到 flaky 先查它。
 
 - **E2E 默认静默不抢焦点**：`isE2E` 时主进程窗口 `showInactive()`、其余 `focus()` 降级（`UNIVERSE_E2E_SHOW=1` 恢复完整 show/focus）。
+- **驱动焦点前先等启动焦点落定**：启动焦点恢复晚于 `waitForRestored()`，要补 `await workbench.waitForBootstrapFocusSettled()`，否则中途抢焦点、用例偶发失败且像回归（先例 `smoke.outputFind`）；断言“焦点到位”用 `focusedView`，别只看 `editorFocus`。
 - **core suite 是用例级并行（`fullyParallel`）**：同一 spec 文件里的用例可能被拆到不同 worker 同时跑，**文件内用例不得共享可变资源**（module 级固定端口/路径/beforeAll 服务）——确需共享的文件加 `test.describe.configure({ mode: 'default' })` 退回文件内串行（先例 `smoke.update.spec.ts`）。扩展 suite 仍是文件级调度（每用例冷启一个 Electron）；机制见 `playwrightConfig.ts` 的 `fullyParallel` 注释。
 - **产物 build 已自动兜底**：`pnpm --filter <ext> e2e`（及 `e2ea`/`e2eg`/`e2e:regression`/`e2e:ui`）前置了 `scripts/e2e/ensure-e2e-build.mjs`，裸跑也先 turbo build 宿主+扩展+上游。唯一例外：直接 `npx playwright test` 绕开 npm 脚本——先 `pnpm build` 或改走 `pnpm e2e:ext`。
 - **异步 ACP 会话**：`sendAcpPrompt` 的 await **不等** echo 流式回复渲染完。依赖 timeline 高度/滚动的断言前，先 `expect.poll` 等消息数到位 + 高度收敛（见 skill `fix-ci-e2e-flake` 案例 15/34/41）。

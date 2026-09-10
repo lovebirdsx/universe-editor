@@ -530,6 +530,20 @@ export function _fireScrollChangeForTests(): void {
   for (const l of scrollListeners ? [...scrollListeners] : []) l()
 }
 
+// Every editor `editor.create()` has produced, mirroring monaco's own
+// CodeEditorService registry. `getFocusedMonacoEditor()` walks it; disposed
+// editors drop out because React removes their container from the document.
+const createdEditors: Array<ReturnType<typeof makePromptEditor>> = []
+
+/** Wall-clock-free record of `getAction(id).run()` calls, per command id. */
+const actionRuns: string[] = []
+export function _getActionRunsForTests(): readonly string[] {
+  return actionRuns
+}
+export function _resetActionRunsForTests(): void {
+  actionRuns.length = 0
+}
+
 // PromptMonacoEditor-flavoured fake editor. Mirrors the real monaco 0.55
 // `editContext: true` DOM shape (see nativeEditContext.js): the keyboard-focus
 // element is a `div.native-edit-context` (tabindex=0, FocusTracker + keydown
@@ -565,12 +579,14 @@ function makePromptEditor(
   container.appendChild(ta)
 
   const contentListeners = new Set<() => void>()
-  const cursorListeners = new Set<(e: {
-    position: Position
-    reason: CursorChangeReason
-  }) => void>()
+  const cursorListeners = new Set<(e: { position: Position; reason: CursorChangeReason }) => void>()
   const focusListeners = new Set<() => void>()
   const blurListeners = new Set<() => void>()
+  // `editorFocus` (widget) vs `editorTextFocus` (text): the find widget and
+  // IntelliSense set the former while the code input sets both. The stub drives
+  // both off the same DOM focus until a test needs them separated.
+  const widgetFocusListeners = new Set<() => void>()
+  const widgetBlurListeners = new Set<() => void>()
   const commands = new Map<number, () => void>()
 
   model.onDidChangeContent(() => {
@@ -612,9 +628,11 @@ function makePromptEditor(
   // fallback for tests that drive it directly).
   nativeEditContext.addEventListener('focus', () => {
     for (const l of focusListeners) l()
+    for (const l of widgetFocusListeners) l()
   })
   nativeEditContext.addEventListener('blur', () => {
     for (const l of blurListeners) l()
+    for (const l of widgetBlurListeners) l()
   })
 
   const getPosition = (): Position =>
@@ -676,8 +694,15 @@ function makePromptEditor(
     onDidChangeModelDecorations: () => noopDisposable,
     onDidFocusEditorText: (cb: () => void) => listen(focusListeners, cb),
     onDidBlurEditorText: (cb: () => void) => listen(blurListeners, cb),
-    onDidFocusEditorWidget: () => noopDisposable,
-    onDidBlurEditorWidget: () => noopDisposable,
+    onDidFocusEditorWidget: (cb: () => void) => listen(widgetFocusListeners, cb),
+    onDidBlurEditorWidget: (cb: () => void) => listen(widgetBlurListeners, cb),
+    // Real semantics (codeEditorWidget.js): false while no model is attached,
+    // otherwise true when DOM focus sits anywhere inside the editor (the text
+    // input, the find widget, an overflow widget) — hence `contains`, mirroring
+    // FocusTracker's isWidgetFocused() rather than an activeElement equality.
+    hasWidgetFocus: () =>
+      current !== null && container.contains(container.ownerDocument.activeElement),
+    getAction: (id: string) => ({ run: () => actionRuns.push(id) }),
     onDidContentSizeChange: () => noopDisposable,
     onDidDispose: () => noopDisposable,
     onKeyDown: () => noopDisposable,
@@ -693,6 +718,8 @@ function makePromptEditor(
       cursorListeners.clear()
       focusListeners.clear()
       blurListeners.clear()
+      widgetFocusListeners.clear()
+      widgetBlurListeners.clear()
       commands.clear()
       ta.remove()
       imeTextArea.remove()
@@ -705,8 +732,12 @@ export const editor = {
   createModel: (text: string, language: string, uri: unknown) => makeModel(text, language, uri),
   setModelLanguage: (model: ReturnType<typeof makeModel>, languageId: string) =>
     model._setLanguage(languageId),
-  create: (container: HTMLElement, options?: { model?: ReturnType<typeof makeModel> }) =>
-    makePromptEditor(container, options ?? {}),
+  create: (container: HTMLElement, options?: { model?: ReturnType<typeof makeModel> }) => {
+    const ed = makePromptEditor(container, options ?? {})
+    createdEditors.push(ed)
+    return ed
+  },
+  getEditors: () => createdEditors.filter((ed) => ed.getDomNode().isConnected),
   getModel: () => null,
   defineTheme: () => {},
   setTheme: () => {},

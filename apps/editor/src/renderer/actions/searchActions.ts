@@ -14,15 +14,24 @@ import {
   localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
-import { getActiveTextEditor } from '../services/editor/activeTextEditor.js'
+import { getActiveTextEditor, getFocusedMonacoEditor } from '../services/editor/activeTextEditor.js'
 import { IExplorerTreeService } from '../services/explorer/ExplorerTreeService.js'
 import { folderIncludesForSearch } from '../services/search/folderIncludes.js'
 import { IQuickTextSearchService } from '../services/search/QuickTextSearchService.js'
+import type { monaco } from '../workbench/editor/monaco/MonacoLoader.js'
 import { searchSession } from '../workbench/search/searchSession.js'
 import { searchViewState } from '../workbench/search/searchViewState.js'
 import { EXPLORER_FOCUS_WHEN, resolvePrimaryTarget } from './fileActionsCommon.js'
 
 const SEED_TEXT_MAX_LENGTH = 200
+
+/**
+ * `editorFocus` covers editors outside any group (the Output panel's log editor
+ * writes it through LogOutputView); `hasActiveEditor` keeps the palette entries
+ * listed when focus sits in a quick input but a file is open. Mirrors VSCode's
+ * `editorFocus || editorIsOpen`.
+ */
+const FIND_PRECONDITION = 'editorFocus || hasActiveEditor'
 
 /** Single-line selection text from the active editor, for seeding the search box. */
 function readEditorSelection(accessor: ServicesAccessor): string {
@@ -119,11 +128,26 @@ export class QuickTextSearchAction extends Action2 {
   }
 }
 
+/**
+ * Where the Find family acts. The focused Monaco editor wins — that is what
+ * makes Ctrl+F work in the Output panel's log editor (and in diff sides / peek
+ * previews), matching VSCode's `getFocusedCodeEditor() || getActiveCodeEditor()`.
+ * Falling back to the active file editor keeps every existing entry point
+ * (command palette, keybinding while a non-Monaco surface holds focus) working.
+ */
+export function resolveFindTargetEditor(
+  groups: IEditorGroupsService,
+  focused: monaco.editor.ICodeEditor | undefined,
+): monaco.editor.ICodeEditor | undefined {
+  return focused ?? getActiveTextEditor(groups)?.editor
+}
+
 function runActiveMonacoAction(accessor: ServicesAccessor, actionId: string): void {
-  const groups = accessor.get(IEditorGroupsService)
-  const active = getActiveTextEditor(groups)
-  const action = active?.editor.getAction(actionId)
-  if (action) void action.run()
+  const editor = resolveFindTargetEditor(
+    accessor.get(IEditorGroupsService),
+    getFocusedMonacoEditor(),
+  )
+  void editor?.getAction(actionId)?.run()
 }
 
 export class FindInFileAction extends Action2 {
@@ -134,7 +158,7 @@ export class FindInFileAction extends Action2 {
       title: localize2('action.find.title', 'Find'),
       category: localize2('command.category.editor', 'Editor'),
       keybinding: { primary: 'ctrl+f' },
-      precondition: 'hasActiveEditor',
+      precondition: FIND_PRECONDITION,
       f1: true,
     })
   }
@@ -151,7 +175,7 @@ export class FindReplaceInFileAction extends Action2 {
       title: localize2('action.replace.title', 'Replace'),
       category: localize2('command.category.editor', 'Editor'),
       keybinding: { primary: 'ctrl+h' },
-      precondition: 'hasActiveEditor',
+      precondition: FIND_PRECONDITION,
       f1: true,
     })
   }
@@ -168,7 +192,7 @@ export class FindNextAction extends Action2 {
       title: localize2('action.findNext.title', 'Find Next'),
       category: localize2('command.category.editor', 'Editor'),
       keybinding: { primary: 'f3' },
-      precondition: 'hasActiveEditor',
+      precondition: FIND_PRECONDITION,
       f1: true,
     })
   }
@@ -185,7 +209,7 @@ export class FindPreviousAction extends Action2 {
       title: localize2('action.findPrevious.title', 'Find Previous'),
       category: localize2('command.category.editor', 'Editor'),
       keybinding: { primary: 'shift+f3' },
-      precondition: 'hasActiveEditor',
+      precondition: FIND_PRECONDITION,
       f1: true,
     })
   }

@@ -26,8 +26,10 @@ import {
   FindInFilesAction,
   FindInFolderAction,
   FindNextAction,
+  FindPreviousAction,
   FindReplaceInFileAction,
   QuickTextSearchAction,
+  resolveFindTargetEditor,
 } from '../searchActions.js'
 import { IExplorerTreeService } from '../../services/explorer/ExplorerTreeService.js'
 import { IQuickTextSearchService } from '../../services/search/QuickTextSearchService.js'
@@ -433,5 +435,59 @@ describe('Monaco single-file find wrappers', () => {
         }),
       ),
     ).resolves.not.toThrow()
+  })
+
+  it('FindPreviousAction (Shift+F3) triggers previousMatchFindAction', async () => {
+    disposables.push(registerAction2(FindPreviousAction))
+    expect(KeybindingsRegistry.resolveKeybinding('shift+f3')).toBe(FindPreviousAction.ID)
+    const { inst, runSpy } = setup({ actionId: 'editor.action.previousMatchFindAction' })
+    await inst.invokeFunction((accessor) => {
+      CommandsRegistry.getCommand(FindPreviousAction.ID)!.handler(accessor)
+    })
+    expect(runSpy).toHaveBeenCalledTimes(1)
+  })
+
+  describe('resolveFindTargetEditor', () => {
+    // The Find family must follow the DOM focus, not the active editor tab:
+    // that is what makes Ctrl+F land on the Output panel's log editor instead of
+    // the file editor above it (VSCode's getFocusedCodeEditor()).
+    function makeGroups(activeEditor: unknown): IEditorGroupsService {
+      return {
+        _serviceBrand: undefined,
+        activeGroup: { id: 1, activeEditor },
+      } as never
+    }
+
+    function makeFileInput(): FileEditorInput {
+      const services = new ServiceCollection()
+      services.set(IFileService, stubFs() as never)
+      const input = new InstantiationService(services).createInstance(
+        FileEditorInput,
+        URI.file('/ws/a.ts'),
+      )
+      disposables.push({ dispose: () => input.dispose() })
+      return input
+    }
+
+    it('prefers the focused Monaco editor over the active file editor', () => {
+      const input = makeFileInput()
+      const fileEditor = { getAction: vi.fn() }
+      FileEditorRegistry.register(input, fileEditor as never)
+      const focused = { getAction: vi.fn() }
+
+      expect(resolveFindTargetEditor(makeGroups(input), focused as never)).toBe(focused)
+    })
+
+    it('falls back to the active file editor when nothing Monaco holds focus', () => {
+      const input = makeFileInput()
+      const fileEditor = { getAction: vi.fn() }
+      FileEditorRegistry.register(input, fileEditor as never)
+
+      expect(resolveFindTargetEditor(makeGroups(input), undefined)).toBe(fileEditor)
+    })
+
+    it('returns undefined when neither exists', () => {
+      expect(resolveFindTargetEditor(makeGroups(null), undefined)).toBeUndefined()
+    })
   })
 })

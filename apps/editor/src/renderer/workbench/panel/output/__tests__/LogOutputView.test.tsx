@@ -4,15 +4,23 @@
  *  stub editor only mirrors a textarea for prompt-style tests).
  *--------------------------------------------------------------------------------------------*/
 
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, render } from '@testing-library/react'
 import * as monacoStub from 'monaco-editor'
 import {
+  CommandsRegistry,
+  IContextKeyService,
+  IEditorGroupsService,
   IFocusableRegistry,
+  IFileService,
+  IInstantiationService,
   IOutputService,
   InstantiationService,
   ServiceCollection,
+  URI,
+  registerAction2,
   type FocusableElementGetter,
+  type IDisposable,
   type IStorageService,
 } from '@universe-editor/platform'
 import { OutputService } from '../../../../services/output/OutputService.js'
@@ -20,6 +28,9 @@ import {
   IOutputModelService,
   OutputModelService,
 } from '../../../../services/output/OutputModelService.js'
+import { FileEditorInput } from '../../../../services/editor/FileEditorInput.js'
+import { FileEditorRegistry } from '../../../../services/editor/FileEditorRegistry.js'
+import { FindInFileAction } from '../../../../actions/searchActions.js'
 import { ServicesContext } from '../../../useService.js'
 import { LogOutputView, isScrolledToBottom } from '../LogOutputView.js'
 
@@ -27,16 +38,23 @@ import { LogOutputView, isScrolledToBottom } from '../LogOutputView.js'
 // (vitest aliases `monaco-editor` to the stub at runtime). Typecheck resolves
 // `monaco-editor` to the real package types, which lack them — hence the
 // `as unknown as` narrowing, same pattern as PromptInput.test.tsx.
-const { _fireScrollChangeForTests, _resetScrollGeometryForTests, _setScrollGeometryForTests } =
-  monacoStub as unknown as {
-    _fireScrollChangeForTests(): void
-    _resetScrollGeometryForTests(): void
-    _setScrollGeometryForTests(g: {
-      scrollTop: number
-      scrollHeight: number
-      viewportHeight: number
-    }): void
-  }
+const {
+  _fireScrollChangeForTests,
+  _resetScrollGeometryForTests,
+  _setScrollGeometryForTests,
+  _getActionRunsForTests,
+  _resetActionRunsForTests,
+} = monacoStub as unknown as {
+  _fireScrollChangeForTests(): void
+  _resetScrollGeometryForTests(): void
+  _setScrollGeometryForTests(g: {
+    scrollTop: number
+    scrollHeight: number
+    viewportHeight: number
+  }): void
+  _getActionRunsForTests(): readonly string[]
+  _resetActionRunsForTests(): void
+}
 
 function makeStorage(): IStorageService {
   return {
@@ -48,12 +66,18 @@ function makeStorage(): IStorageService {
   } as unknown as IStorageService
 }
 
-function setup(viewId?: string, opts?: { wrapInViewBody?: boolean }) {
+function setup(
+  viewId?: string,
+  opts?: { wrapInViewBody?: boolean; contextKeys?: IContextKeyService },
+) {
   const output = new OutputService(makeStorage())
   const models = new OutputModelService(output, makeStorage())
   const services = new ServiceCollection()
   services.set(IOutputService, output)
   services.set(IOutputModelService, models)
+  // Left unbound unless a test asks for it: the bridge must stay a soft
+  // dependency so the view keeps working without the context-key subsystem.
+  if (opts?.contextKeys) services.set(IContextKeyService, opts.contextKeys)
   const registered = new Map<string, FocusableElementGetter>()
   const registry = {
     register: vi.fn((id: string, getter: FocusableElementGetter) => {
@@ -69,7 +93,7 @@ function setup(viewId?: string, opts?: { wrapInViewBody?: boolean }) {
       <LogOutputView fontSize={13} fontFamily="monospace" viewId={viewId} />
     </ServicesContext.Provider>
   )
-  render(
+  const view = render(
     opts?.wrapInViewBody && viewId ? (
       // Stand-in for the production ViewBody fallback container: the element
       // focusView() lands on when the primary getter can't resolve yet.
@@ -80,7 +104,7 @@ function setup(viewId?: string, opts?: { wrapInViewBody?: boolean }) {
       body
     ),
   )
-  return { output, models, registry, registered }
+  return { output, models, registry, registered, view }
 }
 
 async function settle() {
@@ -257,6 +281,149 @@ describe('LogOutputView', () => {
     // The editor is now live but focus is still parked on the fallback. The view
     // must notice and reclaim focus into Monaco.
     expect(document.activeElement).toBe(nativeEditContext)
+  })
+})
+
+describe('LogOutputView editorFocus bridge', () => {
+  // The global Escape binding bows out on `editorFocus`, and Monaco's own find
+  // widget closes the editor on Escape. If the Output editor never claims the
+  // key, Escape jumps to the editor group instead of closing the find widget.
+  // FileEditor maintains it for group editors; this view has to do the same.
+  function makeContextKeyService() {
+    const values = new Map<string, unknown>()
+    const service = {
+      _serviceBrand: undefined,
+      get: (key: string) => values.get(key),
+      set: vi.fn((key: string, value: unknown) => {
+        values.set(key, value)
+      }),
+    }
+    return { service, values }
+  }
+
+  async function mountFocused() {
+    const ctx = makeContextKeyService()
+    const { output, view } = setup('workbench.view.output.main', {
+      contextKeys: ctx.service as unknown as IContextKeyService,
+    })
+    output.createChannel('main').append('x')
+    await settle()
+    const nativeEditContext = document.querySelector('.native-edit-context') as HTMLElement
+    expect(nativeEditContext).toBeTruthy()
+    return { ctx, view, nativeEditContext }
+  }
+
+  it('claims editorFocus while the log editor holds DOM focus', async () => {
+    const { ctx, view, nativeEditContext } = await mountFocused()
+
+    act(() => nativeEditContext.focus())
+    expect(ctx.values.get('editorFocus')).toBe(true)
+
+    view.unmount()
+  })
+
+  it('releases editorFocus on blur (recomputed from the DOM, not hardcoded)', async () => {
+    const { ctx, view, nativeEditContext } = await mountFocused()
+    act(() => nativeEditContext.focus())
+    expect(ctx.values.get('editorFocus')).toBe(true)
+
+    act(() => nativeEditContext.blur())
+    await settle()
+    expect(ctx.values.get('editorFocus')).toBe(false)
+
+    view.unmount()
+  })
+
+  it('does not leave editorFocus stuck true when the view unmounts while focused', async () => {
+    const { ctx, view, nativeEditContext } = await mountFocused()
+    act(() => nativeEditContext.focus())
+    expect(ctx.values.get('editorFocus')).toBe(true)
+
+    view.unmount()
+    expect(ctx.values.get('editorFocus')).toBe(false)
+  })
+})
+
+describe('Output editor claims the Find commands', () => {
+  // Bug: Ctrl+F in the Output panel opened the find widget in the *file editor
+  // above* (or did nothing). The Find actions resolved their target through
+  // `getActiveTextEditor()` — the active group's editor — which the Output
+  // editor is not. They must follow the DOM focus instead, like VSCode's
+  // `getFocusedCodeEditor()`. This mounts the real view, focuses it and runs the
+  // real Find command, so it covers the whole chain: view focus → editorFocus →
+  // getFocusedMonacoEditor() → resolveFindTargetEditor().
+  const disposables: IDisposable[] = []
+
+  beforeEach(() => {
+    _resetActionRunsForTests()
+  })
+
+  afterEach(() => {
+    while (disposables.length > 0) disposables.pop()?.dispose()
+    FileEditorRegistry._resetForTests()
+  })
+
+  function stubFs() {
+    return {
+      _serviceBrand: undefined,
+      async readFile() {
+        return new Uint8Array()
+      },
+      async stat() {
+        throw new Error('not used')
+      },
+    }
+  }
+
+  it('routes Ctrl+F to the Output editor, never to the active file editor', async () => {
+    const ctx = {
+      _serviceBrand: undefined,
+      get: () => undefined,
+      set: vi.fn(),
+    }
+    const output = new OutputService(makeStorage())
+    const models = new OutputModelService(output, makeStorage())
+    const services = new ServiceCollection()
+    services.set(IOutputService, output)
+    services.set(IOutputModelService, models)
+    services.set(IContextKeyService, ctx as unknown as IContextKeyService)
+    services.set(IFocusableRegistry, {
+      register: () => ({ dispose: () => {} }),
+      get: () => null,
+    } as unknown as IFocusableRegistry)
+    services.set(IFileService, stubFs() as never)
+    const instantiation = new InstantiationService(services)
+    services.set(IInstantiationService, instantiation)
+    // A file editor is open and registered: the pre-fix bug was opening ITS find
+    // widget while the user was looking at the Output panel.
+    const fileInput = instantiation.createInstance(FileEditorInput, URI.file('/ws/a.ts'))
+    disposables.push({ dispose: () => fileInput.dispose() })
+    const fileGetAction = vi.fn(() => ({ run: vi.fn() }))
+    FileEditorRegistry.register(fileInput, { getAction: fileGetAction } as never)
+    services.set(IEditorGroupsService, {
+      _serviceBrand: undefined,
+      activeGroup: { id: 1, activeEditor: fileInput },
+    } as never)
+    disposables.push(registerAction2(FindInFileAction))
+
+    render(
+      <ServicesContext.Provider value={instantiation}>
+        <LogOutputView fontSize={13} fontFamily="monospace" viewId="workbench.view.output.main" />
+      </ServicesContext.Provider>,
+    )
+    output.createChannel('main').append('needle\n')
+    await settle()
+
+    const nativeEditContext = document.querySelector('.native-edit-context') as HTMLElement
+    act(() => nativeEditContext.focus())
+    expect(ctx.set).toHaveBeenCalledWith('editorFocus', true)
+
+    await instantiation.invokeFunction((accessor) => {
+      CommandsRegistry.getCommand(FindInFileAction.ID)!.handler(accessor)
+    })
+
+    expect(_getActionRunsForTests()).toEqual(['actions.find'])
+    expect(fileGetAction).not.toHaveBeenCalled()
   })
 })
 

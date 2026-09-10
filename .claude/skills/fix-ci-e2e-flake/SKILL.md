@@ -50,6 +50,7 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 - 纯黑页+probe 恒无+业务无关 spec 同轮随机挂=bootstrap RPC 被 gate 丢弃 → 案例 33
 - 本机裸 `electron.launch` 报 `Process failed to launch!`（exitCode=9）、CI 正常=本机环境 → 案例 28；**CI Windows** 同报错+ICU 加载失败/文件被占用+同窗口多 worker 齐挂=runner 文件锁窗口，harness `launchElectron` 已内建重试 → 案例 72；**CI Linux** 报 `spawn ETXTBSY` 栈在 launchElectron 内=瞬时守卫正则不匹配新变体 / Windows 重试耗尽仍挂=锁窗口超预算（Defender 排除根治）/ Windows 报 `Electron failed to install correctly`=同族新变体（已并入守卫）→ 案例 72b；报错**无 `electron.launch:` 前缀**+trace error 条目早于重试留痕=playwright 内部游离 promise unhandledRejection 击穿守卫（已 pnpm patch playwright-core）→ 案例 72c
 - 失败仅集中 DnD 类且重跑能过=headless 手势时序 → 案例 46；锁屏时剪贴板用例必败 → 案例 47
+- **WSL/Xvfb** 下 `smoke.terminalLink` 折行用例 initial+retry 确定性挂、失败在「fixture 得先折行」的前置断言上、`git stash -u`+build 回 HEAD 复跑同挂=本机环境差异（不打 tag，以 CI 为准）→ 案例 87
 - chord 用例卡 `defocusEditor` 等 focus 变 false+retry 秒过=defocus 时序噪声（观察中）→ 案例 48
 - 列表相等断言 received 是 expected 前缀子集+采样点为固定 sleep=增量渲染截半，poll 到收敛 → 案例 49
 - sash 拖拽/尺寸持久化 spec，reload 后目标 pane 高度稳定卡等分值=异步 reconcile 落后于 Allotment 首次布局、preferredSize 挂载后是 no-op → 案例 50；**修完同断言再挂**=等分值经 onChange→debounce 落盘污染磁盘，恢复路径修得再好读的也是脏值，须收窄落盘权到用户动作 → 案例 50b；**再挂且诊断现场 mem==DOM==贪心值**（磁盘干净）=mem 记账被 onChange 覆盖、storedSizesKey/target 读脏 mem 锁死，恢复目标必须读独立的 persisted 权威源（save 序列化也走它）+settle 窗口内持续校验 → 案例 50c

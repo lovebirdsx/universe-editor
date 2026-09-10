@@ -73,8 +73,8 @@
 
 | 操作 | 快捷键 |
 | --- | --- |
-| 文件内查找 | `Ctrl+F` |
-| 文件内替换 | `Ctrl+H` |
+| 编辑器内查找（含输出面板日志区） | `Ctrl+F` |
+| 编辑器内替换（输出面板只读，无反应） | `Ctrl+H` |
 | 查找下一个 / 上一个 | `F3` / `Shift+F3` |
 | 全局搜索（在文件中查找） | `Ctrl+Shift+F` |
 | 在文件夹中查找（资源管理器聚焦、选中文件夹时） | `Shift+Alt+F` |
@@ -84,6 +84,8 @@
 | 转到定义 | `F12` |
 | 速览定义 | `Alt+F12` |
 | 转到引用 | `Shift+F12` |
+
+> 查找类快捷键作用于**当前聚焦的编辑器**（文件编辑器或输出面板日志区），见 [单文件内查找与替换](../search-navigation/find-in-file.md)。
 
 > 更多见 [搜索与导航 · 全局搜索与替换](../search-navigation/global-search.md) 与 [符号与定义跳转](../search-navigation/symbols-and-definitions.md)。
 

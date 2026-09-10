@@ -72,6 +72,7 @@ import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
 import { DiffEditorRegistry } from '../services/editor/DiffEditorRegistry.js'
 import { MonacoLoader, type monaco } from '../workbench/editor/monaco/MonacoLoader.js'
 import type { IOutputModelService } from '../services/output/OutputModelService.js'
+import { revealOutputPanel } from '../services/output/revealOutputPanel.js'
 import { DirtyDiffPeekRegistry } from '../workbench/scm/dirtyDiff/DirtyDiffPeekRegistry.js'
 import { AcpPromptDraftCache } from '../services/acp/session/acpPromptDraftCache.js'
 import { swarmNotificationE2E } from '../services/swarm/swarmNotificationE2E.js'
@@ -96,6 +97,7 @@ import {
   type E2EDirtyDiffDecoration,
   type E2EEditorDecoration,
   type E2EExtensionUpdate,
+  type E2EFindWidgetState,
   type E2EInstalledExtension,
   type E2EMarker,
   type E2ENotification,
@@ -202,6 +204,46 @@ function findOutputEditor(): monaco.editor.ICodeEditor | undefined {
   return MonacoLoader.peek()
     ?.editor.getEditors()
     .find((ed) => ed.getModel()?.uri.scheme === 'output')
+}
+
+/**
+ * The active group's editor (a file editor or an untitled buffer) — the editor
+ * the Find commands used to resolve to before they followed the focus, and the
+ * one a regression would wrongly reveal the find widget in. Resolved through the
+ * active input rather than "the first non-output editor": an unrelated editor
+ * mounted earlier (agents prompt, peek preview) must not stand in for it and
+ * turn the assertion vacuous.
+ */
+function findFileEditor(groups: IEditorGroupsService): monaco.editor.ICodeEditor | undefined {
+  return getActiveTextEditor(groups)?.editor
+}
+
+/**
+ * Minimal shape of Monaco's FindController/FindReplaceState, as already narrowed
+ * in services/editor/editorFocus.ts for the `findWidgetVisible` bridge.
+ */
+interface FindControllerLike {
+  getState(): {
+    readonly isRevealed: boolean
+    readonly matchesCount: number
+    readonly currentMatch: number | null
+    readonly searchString: string
+  } | null
+}
+
+function readFindState(
+  editor: monaco.editor.ICodeEditor | undefined,
+): E2EFindWidgetState | undefined {
+  const state = (
+    editor?.getContribution('editor.contrib.findController') as FindControllerLike | undefined
+  )?.getState()
+  if (!state) return undefined
+  return {
+    isRevealed: state.isRevealed,
+    matchesCount: state.matchesCount,
+    currentMatch: state.currentMatch,
+    searchString: state.searchString,
+  }
 }
 
 /**
@@ -890,6 +932,11 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
         if (isVisible(line)) visible.push(model.getLineContent(line))
       }
       return visible
+    },
+    getOutputFindState: () => readFindState(findOutputEditor()),
+    getFileEditorFindState: () => readFindState(findFileEditor(services.editorGroupsService)),
+    focusOutputView: () => {
+      revealOutputPanel(services.layoutService, services.viewsService)
     },
     logToChannel: (channelId, channelName, level, message) => {
       const logger = services.loggerService.createLogger({ id: channelId, name: channelName })

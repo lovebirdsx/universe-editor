@@ -9,11 +9,17 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { IOutputService, localize, type IDisposable } from '@universe-editor/platform'
+import {
+  IContextKeyService,
+  IOutputService,
+  localize,
+  type IDisposable,
+} from '@universe-editor/platform'
 import type { monaco } from '../../editor/monaco/MonacoLoader.js'
 import { MonacoLoader } from '../../editor/monaco/MonacoLoader.js'
 import { IOutputModelService } from '../../../services/output/OutputModelService.js'
-import { useObservable, useService } from '../../useService.js'
+import { bridgeEditorFocus } from '../../../services/editor/editorFocus.js'
+import { useObservable, useOptionalService, useService } from '../../useService.js'
 import { useViewFocusable } from '../../useViewFocusable.js'
 import styles from './LogOutputView.module.css'
 
@@ -37,6 +43,7 @@ export function LogOutputView({
 }) {
   const outputService = useService(IOutputService)
   const outputModels = useService(IOutputModelService)
+  const contextKeyService = useOptionalService(IContextKeyService)
   const activeChannelName = useObservable(outputService.activeChannelName)
   const autoScroll = useObservable(outputModels.autoScroll)
 
@@ -175,6 +182,19 @@ export function LogOutputView({
       ed.focus()
     }
   }, [editorReady, viewId])
+
+  // Bridge Monaco widget focus → `editorFocus`, the same way FileEditor does for
+  // group editors. Without it the key keeps whatever value the last file-editor
+  // blur left behind, and the global Escape binding (`!editorFocus`) then steals
+  // Escape from Monaco's own find widget instead of letting it close.
+  useEffect(() => {
+    const ed = editorRef.current
+    // Optional service: keeps view component tests independent of the context
+    // key subsystem (same rationale as useViewFocusable's).
+    if (!editorReady || !ed || !contextKeyService) return
+    const focusBridge = bridgeEditorFocus(ed, contextKeyService)
+    return () => focusBridge.dispose()
+  }, [editorReady, contextKeyService])
 
   // Switch models when the active channel changes; save/restore per-channel
   // view state so scroll position survives the round-trip.

@@ -46,6 +46,7 @@ import {
   bridgeSuggestWidgetVisible,
   bridgeFindWidgetVisible,
   bridgeEditorColumnSelection,
+  bridgeEditorFocus,
   focusStandaloneEditor,
   syncEditorFocusContext,
 } from '../../services/editor/editorFocus.js'
@@ -202,26 +203,20 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     // binding (FocusActiveEditorGroupAction) bows out while Monaco has focus and
     // Monaco's own ESC handling (cancel multi-cursor, close find widget, dismiss
     // IntelliSense) can fire via event bubbling.
-    const focusSub = ed.onDidFocusEditorWidget(() => {
-      contextKeyService.set('editorFocus', true)
-    })
-    const blurSub = ed.onDidBlurEditorWidget(() => {
-      queueMicrotask(() => {
-        syncEditorFocusContext(contextKeyService)
-        // Chromium's default behavior after a click on a non-focusable element
-        // (e.g. a tab div) moves focus to document.body. Reclaim it only if the
-        // user hasn't moved focus elsewhere — focusStack.getTop() is the source
-        // of truth because FocusTracker observed any real navigation already.
-        if (document.activeElement !== document.body) return
-        if (group === null) return
-        if (groupsService.activeGroup !== group) return
-        if (groupsService.activeGroup.activeEditor !== fileInputRef.current) return
-        const top = focusStackService.getTop()
-        if (top && top.partId !== PartId.EditorArea) return
-        if (top && top.groupId !== undefined && top.groupId !== group.id) return
-        ed.focus()
-        syncEditorFocusContext(contextKeyService)
-      })
+    const editorFocusSub = bridgeEditorFocus(ed, contextKeyService, () => {
+      // Chromium's default behavior after a click on a non-focusable element
+      // (e.g. a tab div) moves focus to document.body. Reclaim it only if the
+      // user hasn't moved focus elsewhere — focusStack.getTop() is the source
+      // of truth because FocusTracker observed any real navigation already.
+      if (document.activeElement !== document.body) return
+      if (group === null) return
+      if (groupsService.activeGroup !== group) return
+      if (groupsService.activeGroup.activeEditor !== fileInputRef.current) return
+      const top = focusStackService.getTop()
+      if (top && top.partId !== PartId.EditorArea) return
+      if (top && top.groupId !== undefined && top.groupId !== group.id) return
+      ed.focus()
+      syncEditorFocusContext(contextKeyService)
     })
     // Bridge: `editorTextFocus` tracks focus on the code input area itself (the
     // textarea), distinct from `editorFocus` which is true for any monaco widget
@@ -291,8 +286,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       dropContainer.removeEventListener('dragover', armDropIntoEditorOnShift, true)
       dropContainer.removeEventListener('contextmenu', onContextMenu)
       hoverGuard.dispose()
-      focusSub.dispose()
-      blurSub.dispose()
+      editorFocusSub.dispose()
       textFocusSub.dispose()
       textBlurSub.dispose()
       modelChangeSub.dispose()

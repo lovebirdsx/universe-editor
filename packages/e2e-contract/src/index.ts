@@ -487,6 +487,19 @@ export interface E2ETerminalLink {
   readonly endY: number
 }
 
+/**
+ * Snapshot of a Monaco editor's find widget (the Ctrl+F overlay), read from its
+ * find controller rather than from rendered DOM.
+ */
+export interface E2EFindWidgetState {
+  readonly isRevealed: boolean
+  /** Total matches for the current search string; 0 when none. */
+  readonly matchesCount: number
+  /** 1-based index of the highlighted match, or `null` when there is none. */
+  readonly currentMatch: number | null
+  readonly searchString: string
+}
+
 export interface E2EProbe {
   /** Resolves once the workbench has reached LifecyclePhase.Ready. */
   whenReady(): Promise<void>
@@ -942,6 +955,20 @@ export interface E2EProbe {
    * filter that was computed but never applied still shows up here.
    */
   getVisibleOutputLines(): readonly string[]
+  /**
+   * Find-widget state of the Output panel's Monaco editor, or `undefined` while
+   * that editor isn't mounted. Reads the editor's find controller — service
+   * state, not rendered DOM.
+   */
+  getOutputFindState(): E2EFindWidgetState | undefined
+  /**
+   * Find-widget state of the active group's editor (a file editor or untitled
+   * buffer), or `undefined` if none is mounted. Exists so a spec can assert
+   * Ctrl+F did *not* open that editor's find widget.
+   */
+  getFileEditorFindState(): E2EFindWidgetState | undefined
+  /** Show the Output panel and hand it keyboard focus (as `toggleOutput` does). */
+  focusOutputView(): void
   /**
    * Log through the renderer's ILoggerService, so the entry travels the real
    * path (IPC → main log file → onDidAppendEntry → the aggregated "All"
