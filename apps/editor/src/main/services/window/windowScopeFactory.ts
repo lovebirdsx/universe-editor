@@ -15,6 +15,9 @@
 
 import type { BrowserWindow } from 'electron'
 import { DisposableStore } from '@universe-editor/platform'
+import { parse as parseJsonc } from 'jsonc-parser'
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import type { IRendererLifecycleService } from '../../../shared/ipc/lifecycleService.js'
 import { bootstrapWindowIpc } from '../../ipc/registerMainServices.js'
 import { MainHostService } from '../host/hostMainService.js'
@@ -53,6 +56,20 @@ export interface WindowScopeResult {
   readonly workspace: WorkspaceMainService
   readonly windowStorage: MainStorageService
   readonly rendererLifecycle: IRendererLifecycleService
+}
+
+// Read window.zoomLevel from the same settings.json the renderer's config service
+// serves (there is no main-side IConfigurationService; updateMainService reads this
+// file directly too). Falls back to 1 (100%) when the file is missing/unparseable
+// or the value is not a positive finite number.
+async function readConfiguredZoomFactor(configDir: string): Promise<number> {
+  try {
+    const text = await readFile(join(configDir, 'settings.json'), 'utf8')
+    const value: unknown = parseJsonc(text)?.['window.zoomLevel']
+    return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 1
+  } catch {
+    return 1
+  }
 }
 
 /**
@@ -104,6 +121,7 @@ export async function createWindowScopedServices(opts: {
   )
   // Hot-reload user settings/keybindings when the config directory changes.
   disposables.add(appServices.configLocation.onDidChangeConfigDir((dir) => userData.relocate(dir)))
+  const configuredZoomFactor = await readConfiguredZoomFactor(configDir)
   const host = disposables.add(
     new MainHostService(
       win,
@@ -112,8 +130,15 @@ export async function createWindowScopedServices(opts: {
       {
         getRendererLifecycle: () => callbacks.getRendererLifecycle(win.id),
       },
+      configuredZoomFactor,
     ),
   )
+  // Apply the configured window.zoomLevel as soon as the renderer is ready, before
+  // first paint, so the window never flashes at 100% then jumps to the configured
+  // scale. did-finish-load is the same renderer-ready signal the show path uses.
+  if (configuredZoomFactor !== 1) {
+    win.webContents.once('did-finish-load', () => host.applyConfiguredZoom())
+  }
   const logChannel = new MainLogChannelService(logService, win.id)
   const logFiles = new LogFilesMainService(logService, win.id)
   const terminal = disposables.add(

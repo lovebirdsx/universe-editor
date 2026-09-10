@@ -10,6 +10,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { resolve } from 'node:path'
 import { loadEnv } from '../../../scripts/lib/env.mjs'
 import { collectConfigurationDefaults } from '../../../scripts/lib/productDefaults.mjs'
+import { wslElectronArgs } from '../../../scripts/lib/wslElectronArgs.mjs'
 
 const APP_ROOT = resolve(import.meta.dirname, '..')
 const REPO_ROOT = resolve(APP_ROOT, '../..')
@@ -62,7 +63,23 @@ const remoteWatch = spawn(process.execPath, [REMOTE_SERVER_ESBUILD, '--watch', '
   env: cleanEnv,
 })
 
-const child = spawn(process.execPath, [ELECTRON_VITE_BIN, 'dev', ...process.argv.slice(2)], {
+// WSLg 下注入 Wayland flags 修复 DPI 缩放（见 scripts/lib/wslElectronArgs.mjs 头注释）。
+// electron-vite dev 把 `--` 之后的参数透传给 electron（cli.js → ELECTRON_CLI_ARGS）；
+// 用户已自带 `--` 段时插到其后合并两边 args（不能用 ELECTRON_CLI_ARGS 环境变量——会被覆盖）。
+const userArgs = process.argv.slice(2)
+const electronViteArgs = [ELECTRON_VITE_BIN, 'dev', ...userArgs]
+const wsl = wslElectronArgs()
+if (wsl.active) {
+  const separatorIndex = userArgs.indexOf('--')
+  if (separatorIndex === -1) {
+    electronViteArgs.push('--', ...wsl.args)
+  } else {
+    electronViteArgs.splice(2 + separatorIndex + 1, 0, ...wsl.args)
+  }
+  console.log(`[dev] WSLg Wayland: injecting ${wsl.args.join(' ')} (${wsl.reason})`)
+}
+
+const child = spawn(process.execPath, electronViteArgs, {
   cwd: APP_ROOT,
   stdio: 'inherit',
   env: {

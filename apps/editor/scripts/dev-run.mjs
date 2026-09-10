@@ -34,6 +34,7 @@ import { createRequire } from 'node:module'
 import { loadEnv } from '../../../scripts/lib/env.mjs'
 import { inputDirsFor } from '../../../scripts/lib/editorBundlePackages.mjs'
 import { collectConfigurationDefaults } from '../../../scripts/lib/productDefaults.mjs'
+import { wslElectronArgs } from '../../../scripts/lib/wslElectronArgs.mjs'
 
 const APP_ROOT = resolve(import.meta.dirname, '..')
 const REPO_ROOT = resolve(APP_ROOT, '../..')
@@ -122,6 +123,7 @@ const GLOBAL_INPUTS = [
   'apps/editor/tsconfig.web.json',
   'apps/editor/src/shared',
   'scripts/lib/editorBundlePackages.mjs',
+  'scripts/lib/wslElectronArgs.mjs',
   ...ENV_INPUTS,
   'pnpm-lock.yaml',
 ]
@@ -261,7 +263,13 @@ const electronExe = createRequire(import.meta.url)('electron')
 }
 
 const t0 = Date.now()
-const child = spawn(electronExe, [OUT_DEV, ...electronArgs], {
+// WSLg 下注入 Wayland flags 修复 DPI 缩放（见 scripts/lib/wslElectronArgs.mjs 头注释）。
+// 注入放在 electronArgs 之前：Chromium 对重复 switch 取最后值，用户显式传参仍可覆盖。
+const wsl = wslElectronArgs()
+if (wsl.active) {
+  console.log(`[dev-run] WSLg Wayland: injecting ${wsl.args.join(' ')} (${wsl.reason})`)
+}
+const child = spawn(electronExe, [OUT_DEV, ...(wsl.active ? wsl.args : []), ...electronArgs], {
   cwd: APP_ROOT,
   stdio: 'inherit',
   env: {

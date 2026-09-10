@@ -35,7 +35,8 @@ vi.mock('electron', async () => {
   }
 })
 
-const { MainHostService } = await import('../hostMainService.js')
+const { MainHostService, zoomFactorToLevel, zoomLevelToFactor } =
+  await import('../hostMainService.js')
 
 class FakeWindow extends EventEmitter {
   readonly id = 7
@@ -225,6 +226,55 @@ describe('MainHostService', () => {
     win.zoomLevel = -8
     await svc.zoomOut()
     expect(win.zoomLevel).toBe(-8)
+    svc.dispose()
+  })
+
+  it('converts between zoom factor and level at the log(1.2) boundary', () => {
+    expect(zoomFactorToLevel(1)).toBe(0)
+    expect(zoomFactorToLevel(1.25)).toBeCloseTo(Math.log(1.25) / Math.log(1.2), 10)
+    expect(zoomFactorToLevel(1.44)).toBeCloseTo(2, 10)
+    expect(zoomLevelToFactor(0)).toBe(1)
+    expect(zoomLevelToFactor(1)).toBeCloseTo(1.2, 10)
+    expect(zoomLevelToFactor(zoomFactorToLevel(1.25))).toBeCloseTo(1.25, 10)
+  })
+
+  it('guards zoom factor conversion against non-positive / non-finite input', () => {
+    expect(zoomFactorToLevel(0)).toBe(0)
+    expect(zoomFactorToLevel(-1.25)).toBe(0)
+    expect(zoomFactorToLevel(Number.NaN)).toBe(0)
+    expect(zoomFactorToLevel(Number.POSITIVE_INFINITY)).toBe(0)
+  })
+
+  it('applyConfiguredZoom sets the level derived from the configured factor', () => {
+    const svc = new MainHostService(win.asWin(), () => {}, undefined, undefined, 1.25)
+    svc.applyConfiguredZoom()
+    expect(win.zoomLevel).toBeCloseTo(zoomFactorToLevel(1.25), 10)
+    svc.dispose()
+  })
+
+  it('applyConfiguredZoom is a no-op when the window is destroyed', () => {
+    const svc = new MainHostService(win.asWin(), () => {}, undefined, undefined, 1.25)
+    win.destroy()
+    svc.applyConfiguredZoom()
+    expect(win.zoomLevel).toBe(0)
+    svc.dispose()
+  })
+
+  it('resetZoom returns to the configured factor, not to 0', async () => {
+    const svc = new MainHostService(win.asWin(), () => {}, undefined, undefined, 1.25)
+    svc.applyConfiguredZoom()
+    await svc.zoomIn()
+    expect(win.zoomLevel).toBeCloseTo(zoomFactorToLevel(1.25) + 1, 10)
+    await svc.resetZoom()
+    expect(win.zoomLevel).toBeCloseTo(zoomFactorToLevel(1.25), 10)
+    svc.dispose()
+  })
+
+  it('resetZoom still lands on 0 when no factor is configured', async () => {
+    const svc = new MainHostService(win.asWin())
+    await svc.zoomIn()
+    await svc.resetZoom()
+    expect(win.zoomLevel).toBe(0)
     svc.dispose()
   })
 })

@@ -68,6 +68,7 @@ vi.mock('electron', () => ({
       webContents: {
         toggleDevTools: vi.fn(),
         on: vi.fn(),
+        once: vi.fn(),
         removeListener: vi.fn(),
         openDevTools: vi.fn(),
         isDevToolsOpened: vi.fn().mockReturnValue(false),
@@ -91,7 +92,7 @@ vi.mock('electron', () => ({
 }))
 
 // Import after mocks
-const { WindowMainService } = await import('../windowMainService.js')
+const { WindowMainService, READY_TO_SHOW_TIMEOUT_MS } = await import('../windowMainService.js')
 const { bootstrapWindowIpc } = await import('../../../ipc/registerMainServices.js')
 const { LogMainService } = await import('../../log/logMainService.js')
 const { WorkspaceMainService } = await import('../../workspace/workspaceMainService.js')
@@ -131,6 +132,15 @@ function grabReadyToShowHandler(): () => void {
   }
   const call = win.once.mock.calls.find(([event]) => event === 'ready-to-show')
   if (!call) throw new Error('no ready-to-show handler registered')
+  return call[1] as () => void
+}
+
+function grabDidFinishLoadHandler(): () => void {
+  const win = vi.mocked(BrowserWindow).mock.results.at(-1)?.value as {
+    webContents: { once: { mock: { calls: Array<[string, (...args: never[]) => void]> } } }
+  }
+  const call = win.webContents.once.mock.calls.find(([event]) => event === 'did-finish-load')
+  if (!call) throw new Error('no did-finish-load handler registered')
   return call[1] as () => void
 }
 
@@ -580,6 +590,149 @@ describe('WindowMainService', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  describe('ready-to-show timeout fallback', () => {
+    // The timer is registered inside createWindow, so fake timers must be armed
+    // BEFORE `await svc.createWindow()` — unlike the confirmShutdown tests above
+    // which arm after. All awaits inside createWindow resolve on microtasks from
+    // the mocks, so fake timers never block them.
+    function makeWarnLogger(opts: ReturnType<typeof makeOpts>): ReturnType<typeof vi.fn> {
+      const warn = vi.fn()
+      vi.spyOn(opts.logService, 'createLogger').mockReturnValue({
+        level: 0,
+        trace: vi.fn(),
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn,
+        error: vi.fn(),
+        flush: vi.fn(),
+        dispose: vi.fn(),
+      } as never)
+      return warn
+    }
+
+    it('shows on did-finish-load (the WSLg-reliable signal) without waiting for ready-to-show', async () => {
+      // Under WSLg the renderer finishes in ~1s but the compositor never commits a
+      // first frame, so ready-to-show is lost; did-finish-load must show the window.
+      vi.useFakeTimers()
+      try {
+        const opts = makeOpts()
+        const info = vi.fn()
+        vi.spyOn(opts.logService, 'createLogger').mockReturnValue({
+          level: 0,
+          trace: vi.fn(),
+          debug: vi.fn(),
+          info,
+          warn: vi.fn(),
+          error: vi.fn(),
+          flush: vi.fn(),
+          dispose: vi.fn(),
+        } as never)
+        const svc = makeService(opts)
+        await svc.createWindow()
+
+        grabDidFinishLoadHandler()()
+        expect(lastWindow().show).toHaveBeenCalledTimes(1)
+        expect(info).toHaveBeenCalledWith(expect.stringContaining('reason=load'))
+
+        // A late ready-to-show and the now-cleared timeout must not double-show.
+        grabReadyToShowHandler()()
+        await vi.advanceTimersByTimeAsync(60_000)
+        expect(lastWindow().show).toHaveBeenCalledTimes(1)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('force-shows with a warning when neither ready-to-show nor did-finish-load fires', async () => {
+      vi.useFakeTimers()
+      try {
+        const opts = makeOpts()
+        const warn = makeWarnLogger(opts)
+        const svc = makeService(opts)
+        await svc.createWindow()
+
+        await vi.advanceTimersByTimeAsync(READY_TO_SHOW_TIMEOUT_MS)
+
+        expect(lastWindow().show).toHaveBeenCalledTimes(1)
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('timeout'))
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('shows once on the normal ready-to-show path with no warning', async () => {
+      vi.useFakeTimers()
+      try {
+        const opts = makeOpts()
+        const warn = makeWarnLogger(opts)
+        const svc = makeService(opts)
+        await svc.createWindow()
+
+        grabReadyToShowHandler()()
+        expect(lastWindow().show).toHaveBeenCalledTimes(1)
+        expect(warn).not.toHaveBeenCalled()
+
+        // Timer must have been cleared — advancing far past the budget must not
+        // produce a second show nor a phantom timeout warning.
+        await vi.advanceTimersByTimeAsync(60_000)
+        expect(lastWindow().show).toHaveBeenCalledTimes(1)
+        expect(warn).not.toHaveBeenCalled()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('does not double-show when ready-to-show arrives after the timeout fired', async () => {
+      vi.useFakeTimers()
+      try {
+        const svc = makeService()
+        await svc.createWindow()
+        await vi.advanceTimersByTimeAsync(READY_TO_SHOW_TIMEOUT_MS)
+        expect(lastWindow().show).toHaveBeenCalledTimes(1)
+
+        grabReadyToShowHandler()()
+        expect(lastWindow().show).toHaveBeenCalledTimes(1)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('never force-shows a window that was closed before the timeout', async () => {
+      vi.useFakeTimers()
+      try {
+        const opts = makeOpts()
+        const warn = makeWarnLogger(opts)
+        const svc = makeService(opts)
+        await svc.createWindow()
+
+        svc.markQuitConfirmed()
+        grabLastWindowCloseHandler()({ preventDefault: () => {} })
+
+        await vi.advanceTimersByTimeAsync(READY_TO_SHOW_TIMEOUT_MS + 1000)
+        expect(lastWindow().show).not.toHaveBeenCalled()
+        expect(warn).not.toHaveBeenCalled()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('uses showInactive on the timeout path under silentE2E', async () => {
+      vi.useFakeTimers()
+      try {
+        const opts = { ...makeOpts(), silentE2E: true }
+        const svc = makeService(opts)
+        await svc.createWindow()
+
+        await vi.advanceTimersByTimeAsync(READY_TO_SHOW_TIMEOUT_MS)
+
+        expect(lastWindow().showInactive).toHaveBeenCalledTimes(1)
+        expect(lastWindow().show).not.toHaveBeenCalled()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
   })
 
   describe('closeWindowsForRemoteAuthority', () => {

@@ -124,6 +124,12 @@ export interface WindowMainServiceOptions {
 // can't stall quit indefinitely. On timeout the veto is released (app proceeds).
 const CONFIRM_SHUTDOWN_TIMEOUT_MS = 10_000
 
+// Under WSLg (Wayland + software rendering, no /dev/dri) the compositor may never
+// commit a first frame on a warm relaunch, so ready-to-show does not fire; the
+// did-finish-load listener below covers that. Should both signals be lost, force-show
+// after this budget rather than leave a hidden window invisible forever.
+export const READY_TO_SHOW_TIMEOUT_MS = 4_000
+
 export class WindowMainService implements IWindowMainService {
   private readonly _windows = new Map<number, WindowEntry>()
   private _quitting = false
@@ -352,14 +358,26 @@ export class WindowMainService implements IWindowMainService {
       void appServices.extensionHost.stopAllForWindow(win.id)
     })
 
-    win.once('ready-to-show', () => {
+    // Assigned after loadURL below; read by showWindow's cleanup. Declaration
+    // must precede showWindow's closure even though assignment happens later.
+    let readyToShowTimer: ReturnType<typeof setTimeout> | undefined = undefined
+    let shown = false
+    const showWindow = (reason: 'ready' | 'load' | 'timeout'): void => {
+      if (shown || win.isDestroyed()) return
+      shown = true
+      if (readyToShowTimer !== undefined) clearTimeout(readyToShowTimer)
       if (uiState) applyWindowState(win, uiState)
       if (this._opts.silentE2E) win.showInactive()
       else win.show()
       if (opts?.devToolsOpen) win.webContents.openDevTools()
       mark(PerfMarks.mainDidShowWindow)
-      logger.info(`readyToShow id=${win.id} silent=${this._opts.silentE2E}`)
-    })
+      logger.info(`readyToShow id=${win.id} reason=${reason} silent=${this._opts.silentE2E}`)
+    }
+    win.once('ready-to-show', () => showWindow('ready'))
+    // did-finish-load fires on the main frame's onload without waiting for the
+    // compositor's first-frame commit — the reliable readiness signal under WSLg,
+    // where ready-to-show can be lost even though the renderer finished ~1s in.
+    win.webContents.once('did-finish-load', () => showWindow('load'))
 
     // Per-window services — each window gets its own workspace stack so opening
     // a folder in one window does not affect the others. GLOBAL state (state.json,
@@ -485,6 +503,18 @@ export class WindowMainService implements IWindowMainService {
         logger.error(`loadURL(app shell) failed id=${win.id}`, err)
       })
     }
+
+    // Started after loadURL (not at the once() registrations above) so the budget
+    // measures only first-paint, not the createWindowScopedServices await nor the
+    // dev-only 3s debugger wait.
+    readyToShowTimer = setTimeout(() => {
+      if (shown || win.isDestroyed()) return
+      logger.warn(
+        `ready-to-show timeout id=${win.id} after ${READY_TO_SHOW_TIMEOUT_MS}ms; forcing show`,
+      )
+      showWindow('timeout')
+    }, READY_TO_SHOW_TIMEOUT_MS)
+    disposables.add({ dispose: () => clearTimeout(readyToShowTimer) })
 
     return win.id
   }

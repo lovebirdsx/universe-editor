@@ -72,6 +72,20 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
 }
 
+// window.zoomLevel is stored as a display factor (1 = 100%, 1.25 = 125%) because
+// that's what users think in; Chromium's zoom level is logarithmic
+// (level = log(factor) / log(1.2)), so the two must be converted at the boundary.
+const ZOOM_FACTOR_BASE = 1.2
+
+export function zoomFactorToLevel(factor: number): number {
+  if (!Number.isFinite(factor) || factor <= 0) return 0
+  return Math.log(factor) / Math.log(ZOOM_FACTOR_BASE)
+}
+
+export function zoomLevelToFactor(level: number): number {
+  return Math.pow(ZOOM_FACTOR_BASE, level)
+}
+
 // nativeTheme is process-global while host services are per-window: subscribing
 // per window stacks one 'updated' listener per window and trips Node's
 // MaxListenersExceededWarning past 10 windows. Share one upstream subscription
@@ -129,9 +143,25 @@ export class MainHostService implements IHostServiceWire, IDisposable {
     private readonly _createNewWindow: (options?: IOpenNewWindowOptions) => void = () => {},
     private readonly _logger: ILogger = new NullLogger(),
     private readonly _restartHooks?: RestartHooks,
+    configuredZoomFactor = 1,
   ) {
+    this._configuredZoomFactor = configuredZoomFactor
     _win.on('maximize', this._onMaximize)
     _win.on('unmaximize', this._onUnmaximize)
+  }
+
+  // The factor `window.zoomLevel` was set to at startup; resetZoom returns here
+  // (not to hardcoded 0) so a configured 125% survives Ctrl+0.
+  private _configuredZoomFactor = 1
+
+  /** Apply the configured zoom factor ahead of first paint (called at did-finish-load). */
+  applyConfiguredZoom(): void {
+    if (this._win.isDestroyed()) return
+    const level = clamp(zoomFactorToLevel(this._configuredZoomFactor), ZOOM_MIN, ZOOM_MAX)
+    this._win.webContents.setZoomLevel(level)
+    this._logger.info(
+      `applyConfiguredZoom factor=${this._configuredZoomFactor} level=${level} id=${this._win.id}`,
+    )
   }
 
   isDarkColorScheme(): Promise<boolean> {
@@ -200,7 +230,9 @@ export class MainHostService implements IHostServiceWire, IDisposable {
   }
 
   resetZoom(): Promise<void> {
-    return this._applyZoom(() => 0)
+    // Reset returns to the configured factor (window.zoomLevel), not to 0, so a
+    // user-configured 125% survives Ctrl+0.
+    return this._applyZoom(() => zoomFactorToLevel(this._configuredZoomFactor))
   }
 
   private _applyZoom(next: (current: number) => number): Promise<void> {
