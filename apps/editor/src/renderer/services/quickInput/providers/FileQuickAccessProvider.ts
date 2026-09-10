@@ -79,9 +79,11 @@ const CHUNK_BUDGET_MS = 8
 // kept top slice under a static comparator, so the final top results are
 // unaffected — this only bounds the final sort.
 const COMPACT_ROWS_AT = 8_192
-// 截断清单的兜底搜索按击键防抖：连续输入时只有停顿后的最终 pattern 会真正
-// 打到主进程（上一次在飞的搜索由 seq/CTS 取消），避免每个字符都 spawn rg。
-const FALLBACK_DEBOUNCE_MS = 200
+// 击键 → 搜索的停顿闸门（对齐 VSCode TYPING_SEARCH_DELAY）：大池分块扫描与主进程
+// 兜底搜索都等这个停顿才启动，连续击键时只有停顿后的最终 pattern 真正花费 CPU/IO。
+// 取代原先只包住兜底搜索的 FALLBACK_DEBOUNCE_MS——只有一个闸门，两个延迟不会叠加；
+// 小池同步过滤、空输入 MRU 与"预热未落地"的兜底分支都不受它影响（零延迟）。
+const SEARCH_DEBOUNCE_MS = 200
 
 const yieldToMain = (): Promise<void> => {
   const scheduler = (globalThis as { scheduler?: { yield?: () => Promise<void> } }).scheduler
@@ -576,14 +578,14 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     // hits — cached-pool results stay instant, files outside the cache become
     // findable again. Complete listings never pay this walk.
     let fallbackCts: CancellationTokenSource | undefined
-    let fallbackTimer: ReturnType<typeof setTimeout> | undefined
+    let searchTimer: ReturnType<typeof setTimeout> | undefined
     let localRows: ScoredRow[] | undefined
     let fallbackRows: ScoredRow[] | undefined
     let fallbackPending = false
     disposables.add(
       toDisposable(() => {
         fallbackCts?.dispose(true)
-        if (fallbackTimer !== undefined) clearTimeout(fallbackTimer)
+        if (searchTimer !== undefined) clearTimeout(searchTimer)
       }),
     )
 
@@ -600,46 +602,44 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       void prependExactPathMatch(pattern, mySeq, items)
     }
 
+    // 兜底搜索只在停顿闸门（runSearch 入口）过去之后才被调用，这里直接启动。
+    // busy 由闸门调度时就点亮：合并结果尚不完整，进度条如实反映。
     const runFallbackSearch = (pattern: string, mySeq: number): void => {
       if (listingComplete) return
-      // busy 在防抖等待期就点亮：合并结果尚不完整，进度条如实反映。
       fallbackPending = true
-      fallbackTimer = setTimeout(() => {
-        fallbackTimer = undefined
-        if (mySeq !== seq || token.isCancellationRequested) return
-        const cts = new CancellationTokenSource(token)
-        fallbackCts = cts
-        void this._fileSearch
-          .search(
-            {
-              root,
-              pattern,
-              maxResults: GO_TO_FILE_MAX_RESULTS,
-              excludes: filter.excludeGlobs ?? [],
-              ignore: filter.dirNames,
-              useIgnoreFiles: this._exclude.getUseIgnoreFiles(),
-              // An explicitly empty scanPaths is "focused on nothing yet" —
-              // forward it as [] rather than dropping it into a full-tree scan.
-              ...(focus.scanPaths !== undefined ? { scanPaths: focus.scanPaths } : {}),
-              rootFilesInScope: focus.rootFilesInScope,
-            },
-            cts.token,
-          )
-          .then((complete) => {
-            if (mySeq !== seq || token.isCancellationRequested) return
-            fallbackRows = complete.results.map((m) => ({
-              score: m.score,
-              path: m.relativePath,
-              entry: { uri: m.resource.toString(), relPath: m.relativePath, name: m.basename },
-            }))
-          })
-          .catch(() => undefined)
-          .then(() => {
-            if (mySeq !== seq) return
-            fallbackPending = false
-            renderMerged(pattern, mySeq)
-          })
-      }, FALLBACK_DEBOUNCE_MS)
+      const cts = new CancellationTokenSource(token)
+      fallbackCts = cts
+      void this._fileSearch
+        .search(
+          {
+            root,
+            pattern,
+            maxResults: GO_TO_FILE_MAX_RESULTS,
+            excludes: filter.excludeGlobs ?? [],
+            ignore: filter.dirNames,
+            useIgnoreFiles: this._exclude.getUseIgnoreFiles(),
+            // An explicitly empty scanPaths is "focused on nothing yet" —
+            // forward it as [] rather than dropping it into a full-tree scan.
+            ...(focus.scanPaths !== undefined ? { scanPaths: focus.scanPaths } : {}),
+            rootFilesInScope: focus.rootFilesInScope,
+          },
+          cts.token,
+        )
+        .then((complete) => {
+          if (mySeq !== seq || token.isCancellationRequested) return
+          const hits = 'results' in complete ? complete.results : []
+          fallbackRows = hits.map((m) => ({
+            score: m.score,
+            path: m.relativePath,
+            entry: { uri: m.resource.toString(), relPath: m.relativePath, name: m.basename },
+          }))
+        })
+        .catch(() => undefined)
+        .then(() => {
+          if (mySeq !== seq) return
+          fallbackPending = false
+          renderMerged(pattern, mySeq)
+        })
     }
 
     // When the query looks like a path (contains a separator), probe the exact
@@ -663,6 +663,26 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       picker.items = [pick, ...rest].slice(0, GO_TO_FILE_MAX_RESULTS)
     }
 
+    // 真正执行一次搜索：窄池 → 兜底搜索 → 同步/分块过滤。被 runSearch 在停顿
+    // 闸门过去之后（贵路径）或立即（便宜路径）调用。
+    const runSearchNow = (pattern: string, mySeq: number): void => {
+      const pool = candidatePool(pattern)
+      runFallbackSearch(pattern, mySeq)
+      if (pool.length <= SYNC_FILTER_LIMIT) {
+        localRows = recordPerfPhase('quickOpen.filterFiles', () => filterPoolSync(pattern, pool))
+        renderMerged(pattern, mySeq)
+        return
+      }
+      picker.busy = true
+      void recordPerfPhaseAsync('quickOpen.filterFiles', () =>
+        filterPoolChunked(pattern, pool, mySeq),
+      ).then((rows) => {
+        if (rows === undefined || mySeq !== seq || token.isCancellationRequested) return
+        localRows = rows
+        renderMerged(pattern, mySeq)
+      })
+    }
+
     const runSearch = (value: string): void => {
       // Emitter 是快照派发（VSCode parity）：前缀翻转的这次击键里，本监听器可能在
       // controller 已 dispose 本 provider 之后仍被本次 fire 调用。disposeActiveProvider
@@ -672,9 +692,9 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       const mySeq = ++seq
       fallbackCts?.dispose(true)
       fallbackCts = undefined
-      if (fallbackTimer !== undefined) {
-        clearTimeout(fallbackTimer)
-        fallbackTimer = undefined
+      if (searchTimer !== undefined) {
+        clearTimeout(searchTimer)
+        searchTimer = undefined
       }
       localRows = undefined
       fallbackRows = undefined
@@ -699,21 +719,32 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
         void prependExactPathMatch(pattern, mySeq, editorOnly)
         return
       }
+      // 便宜路径零延迟：同步内存过滤是微秒级，是这个 picker 的核心体验。注意
+      // 防抖窗内不更新 lastCompleted，所以窗内后续击键仍走贵判定（只重置计时器）；
+      // 停顿后扫描完成才写入窄池——"输入→停顿→收窄→继续输入"时后续扩展字符落回
+      // 同步快路径，这正是收窄机制与防抖互补的地方。
       const pool = candidatePool(pattern)
-      runFallbackSearch(pattern, mySeq)
-      if (pool.length <= SYNC_FILTER_LIMIT) {
-        localRows = recordPerfPhase('quickOpen.filterFiles', () => filterPoolSync(pattern, pool))
-        renderMerged(pattern, mySeq)
+      if (listingComplete && pool.length <= SYNC_FILTER_LIMIT) {
+        runSearchNow(pattern, mySeq)
         return
       }
+      // 贵路径（大池分块扫描 / 需要主进程兜底搜索）：输入停顿后才启动。busy 在
+      // 等待期就点亮；先把列表换成当前 query 的同步 editor 命中——等的是防抖窗，
+      // 不能让按回车的用户打开一个不属于当前 query 的上轮项（面板的
+      // filterExternally 不过滤，残留行可被直接接受）。editor 命中为空也不退回
+      // 上轮结果：input 列表按"这份清单就是这个 query 的现状"理解，静默拖旧
+      // 结果比显示空更误导。
       picker.busy = true
-      void recordPerfPhaseAsync('quickOpen.filterFiles', () =>
-        filterPoolChunked(pattern, pool, mySeq),
-      ).then((rows) => {
-        if (rows === undefined || mySeq !== seq || token.isCancellationRequested) return
-        localRows = rows
-        renderMerged(pattern, mySeq)
-      })
+      const editorOnly = matchEditors(pattern)
+        .sort(compareScoredRows)
+        .slice(0, GO_TO_FILE_MAX_RESULTS)
+        .flatMap((h) => (h.pick ? [h.pick] : []))
+      picker.items = editorOnly
+      searchTimer = setTimeout(() => {
+        searchTimer = undefined
+        if (mySeq !== seq || token.isCancellationRequested) return
+        runSearchNow(pattern, mySeq)
+      }, SEARCH_DEBOUNCE_MS)
     }
 
     disposables.add(picker.onDidChangeValue(runSearch))

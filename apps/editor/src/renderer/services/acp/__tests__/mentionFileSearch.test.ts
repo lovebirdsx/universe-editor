@@ -31,28 +31,43 @@ function relativePath(root: URI, abs: string): string {
       : norm
 }
 
-function fakeFileSearch(paths: readonly string[]): IFileSearchService {
+/** 模拟主进程：`relPaths` 一律 `/` 分隔，截断且调用方要求丢弃时整份为空。 */
+function fakeFileSearch(paths: readonly string[], limitHit = false): IFileSearchService {
   return {
     _serviceBrand: undefined,
     async search(query) {
+      const relPaths =
+        limitHit && query.omitTruncatedListing === true
+          ? []
+          : paths.map((abs) => relativePath(query.root, abs))
       return {
-        results: paths.map((abs) => {
-          const rel = relativePath(query.root, abs)
-          const name = rel.split('/').pop() ?? rel
-          return {
-            resource: URI.file(abs),
-            fsPath: abs,
-            relativePath: rel,
-            basename: name,
-            score: 0,
-          }
-        }),
-        limitHit: false,
+        relPaths,
+        limitHit,
         filesWalked: paths.length,
         directoriesWalked: 1,
         durationMs: 0,
+        ...(limitHit ? { stopReason: 'maxResults' as const } : {}),
       }
     },
+  }
+}
+
+/** `fakeFileSearch` plus a walk counter, for the cache-behaviour cases. */
+function countingFake(
+  paths: readonly string[],
+  limitHit = false,
+): { readonly fs: IFileSearchService; readonly calls: () => number } {
+  let calls = 0
+  const base = fakeFileSearch(paths, limitHit)
+  return {
+    fs: {
+      _serviceBrand: undefined,
+      async search(query, token) {
+        calls++
+        return base.search(query, token)
+      },
+    },
+    calls: () => calls,
   }
 }
 
@@ -71,135 +86,54 @@ describe('loadWorkspaceFiles', () => {
 
   it('marks a limit-hit walk incomplete and caches that flag', async () => {
     const root = URI.file('/repo')
-    const fs = {
-      _serviceBrand: undefined,
-      async search() {
-        return {
-          results: [
-            {
-              resource: URI.file('/repo/a.ts'),
-              fsPath: '/repo/a.ts',
-              relativePath: 'a.ts',
-              basename: 'a.ts',
-              score: 0,
-            },
-          ],
-          limitHit: true,
-          filesWalked: 1,
-          directoriesWalked: 1,
-          durationMs: 0,
-          stopReason: 'maxResults' as const,
-        }
-      },
-    } satisfies IFileSearchService
+    const { fs } = countingFake(['/repo/a.ts'], true)
     const listing = await loadWorkspaceFiles(root, fs)
     expect(listing.complete).toBe(false)
-    // The truncated listing is still cached (better than nothing), but the
-    // completeness flag must survive the cache so consumers can fall back.
+    // 巨型工作区的截断清单被整份丢弃（renderer 不持有残缺子集），但"未走完"这个
+    // 事实必须随缓存活下来，消费方才能改走击键兜底搜索。
     expect(peekWorkspaceFiles(root)?.complete).toBe(false)
-    expect(peekWorkspaceFiles(root)?.entries).toHaveLength(1)
+    expect(peekWorkspaceFiles(root)?.entries).toHaveLength(0)
   })
 
-  it('normalizes Windows-style paths to forward slashes', async () => {
+  it('derives the display name and URI from the nested relative path', async () => {
     const root = URI.file('C:/repo')
-    const fs = fakeFileSearch(['C:\\repo\\src\\main.ts'])
+    const { fs } = countingFake(['C:/repo/src/deep/main.ts'])
     const { entries } = await loadWorkspaceFiles(root, fs)
-    expect(entries[0]?.relPath).toBe('src/main.ts')
+    expect(entries[0]?.relPath).toBe('src/deep/main.ts')
+    expect(entries[0]?.name).toBe('main.ts')
+    expect(entries[0]?.uri).toBe(URI.file('C:/repo/src/deep/main.ts').toString())
   })
 
   it('caches results within the TTL window', async () => {
     const root = URI.file('/repo')
-    let calls = 0
-    const fs = {
-      _serviceBrand: undefined,
-      async search() {
-        calls++
-        return {
-          results: [
-            {
-              resource: URI.file('/repo/a.ts'),
-              fsPath: '/repo/a.ts',
-              relativePath: 'a.ts',
-              basename: 'a.ts',
-              score: 0,
-            },
-          ],
-          limitHit: false,
-          filesWalked: 1,
-          directoriesWalked: 1,
-          durationMs: 0,
-        }
-      },
-    } satisfies IFileSearchService
+    const { fs, calls } = countingFake(['/repo/a.ts'])
     await loadWorkspaceFiles(root, fs)
     await loadWorkspaceFiles(root, fs)
-    expect(calls).toBe(1)
+    expect(calls()).toBe(1)
   })
 
   it('invalidateMentionFileCache forces a re-walk', async () => {
     const root = URI.file('/repo')
-    let calls = 0
-    const fs = {
-      _serviceBrand: undefined,
-      async search() {
-        calls++
-        return {
-          results: [
-            {
-              resource: URI.file('/repo/a.ts'),
-              fsPath: '/repo/a.ts',
-              relativePath: 'a.ts',
-              basename: 'a.ts',
-              score: 0,
-            },
-          ],
-          limitHit: false,
-          filesWalked: 1,
-          directoriesWalked: 1,
-          durationMs: 0,
-        }
-      },
-    } satisfies IFileSearchService
+    const { fs, calls } = countingFake(['/repo/a.ts'])
     await loadWorkspaceFiles(root, fs)
     invalidateMentionFileCache(root)
     await loadWorkspaceFiles(root, fs)
-    expect(calls).toBe(2)
+    expect(calls()).toBe(2)
   })
 
   it('peekWorkspaceFiles returns the stale listing past the TTL without re-walking', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     try {
       const root = URI.file('/repo')
-      let calls = 0
-      const fs = {
-        _serviceBrand: undefined,
-        async search() {
-          calls++
-          return {
-            results: [
-              {
-                resource: URI.file('/repo/a.ts'),
-                fsPath: '/repo/a.ts',
-                relativePath: 'a.ts',
-                basename: 'a.ts',
-                score: 0,
-              },
-            ],
-            limitHit: false,
-            filesWalked: 1,
-            directoriesWalked: 1,
-            durationMs: 0,
-          }
-        },
-      } satisfies IFileSearchService
+      const { fs, calls } = countingFake(['/repo/a.ts'])
       await loadWorkspaceFiles(root, fs)
-      expect(calls).toBe(1)
+      expect(calls()).toBe(1)
 
       // Past the TTL the listing is stale, but peeking still serves it
       // instantly (stale-while-revalidate) and triggers no walk.
       vi.setSystemTime(Date.now() + 60 * 60_000)
       expect(peekWorkspaceFiles(root)?.entries.map((e) => e.relPath)).toEqual(['a.ts'])
-      expect(calls).toBe(1)
+      expect(calls()).toBe(1)
     } finally {
       vi.useRealTimers()
     }
@@ -219,7 +153,7 @@ describe('loadWorkspaceFiles', () => {
         calls++
         seenToken = token
         return {
-          results: [],
+          relPaths: [],
           limitHit: true,
           filesWalked: 0,
           directoriesWalked: 0,
@@ -254,7 +188,7 @@ describe('loadWorkspaceFiles', () => {
           rootFilesInScope: query.rootFilesInScope,
         })
         return {
-          results: [],
+          relPaths: [],
           limitHit: false,
           filesWalked: 0,
           directoriesWalked: 0,
@@ -291,7 +225,7 @@ describe('loadWorkspaceFiles', () => {
         calls++
         seen.push(query.useIgnoreFiles)
         return {
-          results: [],
+          relPaths: [],
           limitHit: false,
           filesWalked: 0,
           directoriesWalked: 0,
@@ -325,7 +259,7 @@ describe('loadWorkspaceFiles', () => {
       async search(query) {
         seenScanPaths = query.scanPaths
         return {
-          results: [],
+          relPaths: [],
           limitHit: false,
           filesWalked: 0,
           directoriesWalked: 0,

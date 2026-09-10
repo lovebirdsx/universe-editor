@@ -152,7 +152,7 @@ export function useMarkdownFileLink(
               }
             : {}),
         })
-        const hits = result.results
+        const hits = 'results' in result ? result.results : []
         if (hits.length === 0) return { kind: 'missing' }
         if (hits.length === 1) return { kind: 'open', uri: URI.revive(hits[0]!.resource) as URI }
         // Several matches: let the user disambiguate in Go to File, prefilled.

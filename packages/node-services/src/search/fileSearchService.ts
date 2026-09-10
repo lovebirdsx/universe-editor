@@ -31,7 +31,9 @@ import {
   type CancellationToken,
   type IDisposable,
   type IFileSearchComplete,
+  type IFileSearchListing,
   type IFileSearchMatch,
+  type IFileSearchMatches,
   type IFileSearchQuery,
   type ILogger,
   type ILoggerService as ILoggerServiceType,
@@ -59,6 +61,10 @@ const LISTING_TTL_MS = 5 * 60_000
 const LISTING_SWEEP_AGE_MS = 7 * 24 * 60 * 60_000
 const SCORE_YIELD_EVERY = 4096
 const STDERR_LIMIT = 100_000
+// 打分查询等磁盘清单的预算：清单缺失时后台已经在构建，查询线程只等这么久——
+// 超过就放弃本次兜底（本次靠 exact-path 探测+少量结果顶上，清单后台继续构建、
+// 下一次击键再用），避免一次击键把主进程阻塞在整个 rg 枚举期间（大工作区 30s+）。
+const LISTING_WAIT_MS = 5_000
 
 function reviveUri(value: RawUri): URI {
   if (value instanceof URI) return value
@@ -169,6 +175,9 @@ interface ListingSpec {
   readonly scanPaths: readonly string[] | undefined
   readonly rootFilesInScope: boolean
   readonly useIgnoreFiles: boolean
+  // 正向 glob 过滤（rg `-g`）。用来把"全树枚举再筛文件名"降成 rg 侧过滤，
+  // 例如只为找 tsconfig*.json 而枚举整个工作区。
+  readonly glob: readonly string[] | undefined
 }
 
 interface RgCollectExit {
@@ -192,13 +201,35 @@ function fileListArgs(spec: ListingSpec): string[] {
     '--threads',
     String(resolveSearchThreads(undefined)),
   )
-  for (const exclude of spec.excludes.flatMap(expandExcludeGlob)) {
-    args.push('-g', `!${exclude}`)
-  }
-  for (const raw of spec.ignore) {
-    const name = normalizeGlob(raw)
-    if (!name) continue
-    args.push('-g', `!**/${name}`, '-g', `!**/${name}/**`)
+  // 正向 glob 走 --iglob（大小写不敏感）：它是"预筛"，调用方还会再精确过滤一次
+  // （如 tsconfig 的 /i 正则）——预筛比后置过滤窄就会把后置过滤救不回的文件静默丢掉
+  // （实测 rg 15 在 Windows 上 `-g 'tsconfig*.json'` 不匹配 `TsConfig.json`）。
+  // 注意 rg 的优先级规则：`--iglob` 集合恒定压过 `-g` 集合（与命令行顺序无关，
+  // 实测 rg 15），所以一旦走了 --iglob，负向排除也必须用 --iglob '!...' 才能生效——
+  // 代价是排除也变大小写不敏感（排除面变宽，对 search.exclude 是可接受的保守方向）；
+  // 同族内多个 glob 取"最后一个匹配生效"，正向排负向前，排除才不会被白名单复活。
+  if (spec.glob !== undefined && spec.glob.length > 0) {
+    for (const raw of spec.glob) {
+      const pattern = normalizeGlob(raw)
+      if (pattern) args.push('--iglob', pattern)
+    }
+    for (const exclude of spec.excludes.flatMap(expandExcludeGlob)) {
+      args.push('--iglob', `!${exclude}`)
+    }
+    for (const raw of spec.ignore) {
+      const name = normalizeGlob(raw)
+      if (!name) continue
+      args.push('--iglob', `!**/${name}`, '--iglob', `!**/${name}/**`)
+    }
+  } else {
+    for (const exclude of spec.excludes.flatMap(expandExcludeGlob)) {
+      args.push('-g', `!${exclude}`)
+    }
+    for (const raw of spec.ignore) {
+      const name = normalizeGlob(raw)
+      if (!name) continue
+      args.push('-g', `!**/${name}`, '-g', `!**/${name}/**`)
+    }
   }
   // rg `--files` 无位置参数时从 cwd 全量枚举——聚焦（含空 scanPaths）时绝不回退。
   if (spec.scanPaths !== undefined && spec.scanPaths.length > 0) args.push(...spec.scanPaths)
@@ -215,6 +246,7 @@ function listingKey(spec: ListingSpec): string {
     // （聚焦无可扫）天然是两个不同的缓存键，绝不会共享同一份磁盘清单。
     scanPaths: spec.scanPaths === undefined ? undefined : [...spec.scanPaths].sort(),
     rootFilesInScope: spec.rootFilesInScope,
+    glob: spec.glob === undefined ? undefined : [...spec.glob].sort(),
     // Part of the key: the two settings produce different file sets, so sharing
     // one cached listing between them would serve the previous setting's result.
     useIgnoreFiles: spec.useIgnoreFiles,
@@ -243,6 +275,12 @@ interface RgLinesResult {
 export interface FileSearchServiceOptions {
   /** 覆盖清单缓存目录（测试注入临时目录用）。 */
   readonly cacheDir?: string
+  /**
+   * 打分查询在"清单尚未落盘"时的等待上限（毫秒，默认 {@link LISTING_WAIT_MS}）。
+   * 可注入是为了让测试真正覆盖钳制分支：跑一个 > 上限的查询 timeout，
+   * 观察它是否在上限处收兵而不是等到自己的 deadline。
+   */
+  readonly listingWaitMs?: number
 }
 
 export class FileSearchService extends Disposable implements IFileSearchService {
@@ -250,6 +288,7 @@ export class FileSearchService extends Disposable implements IFileSearchService 
 
   private readonly _logger: ILogger
   private readonly _cacheDir: string
+  private readonly _listingWaitMs: number
   private readonly _listings = new Map<string, ListingEntry>()
   private readonly _procs = new Set<ChildProcess>()
 
@@ -257,6 +296,7 @@ export class FileSearchService extends Disposable implements IFileSearchService 
     super()
     this._logger = createNamedLogger(loggerService, { id: 'fileSearch', name: 'File Search' })
     this._cacheDir = options?.cacheDir ?? path.join(os.tmpdir(), 'universe-editor-file-listings')
+    this._listingWaitMs = options?.listingWaitMs ?? LISTING_WAIT_MS
     void this._sweepStaleListings()
   }
 
@@ -280,6 +320,7 @@ export class FileSearchService extends Disposable implements IFileSearchService 
       scanPaths: query.scanPaths,
       rootFilesInScope: query.rootFilesInScope === true,
       useIgnoreFiles: query.useIgnoreFiles === true,
+      glob: query.glob,
     }
 
     let stopReason: StopReason | null = null
@@ -290,12 +331,17 @@ export class FileSearchService extends Disposable implements IFileSearchService 
     if (token?.isCancellationRequested) stopReason = 'canceled'
     else if (Date.now() >= deadlineAt) stopReason = 'timeout'
     if (stopReason !== null) {
-      return this._complete(root, pattern, [], 0, {
-        matchesFound,
-        filesWalked,
-        startedAt,
-        stopReason,
-      })
+      // 预算耗尽发生在走查之前：没有 capped，但它同样说明这是巨型工作区，
+      // 提前把磁盘清单建好（取消则不必——调用方已经不要结果了）。
+      if (matchAll && stopReason === 'timeout') this._kickBackgroundBuild(spec)
+      return matchAll
+        ? this._completeListing(root.fsPath, [], { filesWalked, startedAt, stopReason })
+        : this._complete(root, pattern, [], 0, {
+            matchesFound,
+            filesWalked,
+            startedAt,
+            stopReason,
+          })
     }
 
     if (
@@ -350,24 +396,25 @@ export class FileSearchService extends Disposable implements IFileSearchService 
         stopReason = rootRes.stopReason ?? (rootRes.capped ? 'maxResults' : null)
       }
       filesWalked = lines.length
-      for (const line of lines) {
-        const rel = normalizeRel(line)
-        const abs = path.join(spec.rootFsPath, rel)
-        scored.push({
-          resource: URI.file(abs),
-          fsPath: abs,
-          relativePath: rel,
-          basename: rel.slice(rel.lastIndexOf('/') + 1),
-          score: 0,
-        })
-        matchesFound++
-      }
-      // 清单被截断说明这是巨型工作区：renderer 之后的每次击键都会走打分兜底，
-      // 提前把磁盘清单建好（后台，不阻塞本次调用）。
-      if (capped) this._kickBackgroundBuild(spec)
-    } else if (pattern.length > 0) {
+      // 清单没走完说明这是巨型工作区：renderer 之后的每次击键都会走打分兜底，
+      // 提前把磁盘清单建好（后台，不阻塞本次调用）。超时同样要建——否则第一次
+      // 交互式兜底搜索会自己在调用里等完整个构建（分钟级）。
+      if (capped || stopReason === 'timeout') this._kickBackgroundBuild(spec)
+      // 调用方用不了残缺子集时必须整份丢弃（模糊过滤会把"子集外"呈现成"搜不到"），
+      // 十万条路径本来也不必跨 IPC —— 它正是巨型工作区堵住 renderer 主线程的原因。
+      const relPaths =
+        stopReason !== null && query.omitTruncatedListing === true ? [] : lines.map(normalizeRel)
+      return this._completeListing(root.fsPath, relPaths, {
+        filesWalked,
+        startedAt,
+        stopReason,
+      })
+    }
+    if (pattern.length > 0) {
       const listing = await this._ensureListingForQuery(spec, token, deadlineAt)
       if (listing === 'canceled' || listing === 'timeout') {
+        // timeout 这里两种来源：构建失败(null 已被排除)或清单等待超时——后者只是慢，
+        // 不打 error。清单后台继续构建，下一次击键再用。
         stopReason = listing
       } else if (listing === null) {
         // 清单构建失败（rg 不可用等）：只剩 exact-path 探测结果，标记截断。
@@ -495,8 +542,9 @@ export class FileSearchService extends Disposable implements IFileSearchService 
 
   /**
    * 拿到可用的清单文件：磁盘上有（含跨重启残留）就直接用，过期则先用旧的、
-   * 后台重建；完全没有时同步等待构建（打分查询没有清单无从谈起——renderer
-   * 侧的本地缓存池仍在即时出结果，这里的等待只体现为 busy 条）。
+   * 后台重建；完全没有时后台立即起构建，但本次查询最多等 {@link FileSearchServiceOptions.listingWaitMs}——
+   * 大工作区首次构建要 30s+，把每次击键的兜底搜索都绑在这个等待上会把输入
+   * 延迟放大到秒级。等不到就返回 'timeout' 让调用方走「清单不可用」降级。
    */
   private async _ensureListingForQuery(
     spec: ListingSpec,
@@ -512,12 +560,14 @@ export class FileSearchService extends Disposable implements IFileSearchService 
       return entry.file
     }
     const building = entry.building ?? this._build(entry, spec)
+    // 查询等待预算取二者较小：清单等待上限 vs 本次搜索自己的 deadline。
+    const waitDeadline = Math.min(deadlineAt, Date.now() + this._listingWaitMs)
     let sub: IDisposable | undefined
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
       return await new Promise<ListingFile | null | 'canceled' | 'timeout'>((resolve) => {
         sub = token?.onCancellationRequested(() => resolve('canceled'))
-        timer = setTimeout(() => resolve('timeout'), Math.max(0, deadlineAt - Date.now()))
+        timer = setTimeout(() => resolve('timeout'), Math.max(0, waitDeadline - Date.now()))
         building.then(
           (file) => resolve(file),
           () => resolve(null),
@@ -806,9 +856,9 @@ export class FileSearchService extends Disposable implements IFileSearchService 
       startedAt: number
       stopReason: StopReason | null
     },
-  ): IFileSearchComplete {
+  ): IFileSearchMatches {
     const { matchesFound, filesWalked, startedAt, stopReason } = stats
-    const complete: IFileSearchComplete = {
+    const complete: IFileSearchMatches = {
       results: limited,
       limitHit: stopReason !== null || uniqueMatches > limited.length,
       filesWalked,
@@ -820,6 +870,38 @@ export class FileSearchService extends Disposable implements IFileSearchService 
       `fileSearch root=${root.fsPath} pattern=${pattern} results=${limited.length} ` +
       `limitHit=${complete.limitHit} matches=${matchesFound} candidates=${filesWalked} ` +
       `ms=${complete.durationMs}` +
+      (stopReason !== null ? ` stop=${stopReason}` : '')
+    if (stopReason === 'timeout') {
+      this._logger.warn(summary)
+    } else {
+      this._logger.debug(summary)
+    }
+    return complete
+  }
+
+  private _completeListing(
+    rootFsPath: string,
+    relPaths: readonly string[],
+    stats: {
+      filesWalked: number
+      startedAt: number
+      stopReason: StopReason | null
+    },
+  ): IFileSearchListing {
+    const { filesWalked, startedAt, stopReason } = stats
+    // matchAll 没有 exact-path 探测，也不做 dedup 淘汰：每个枚举到的文件都进了
+    // relPaths，所以截断与否完全由 stopReason 决定。
+    const complete: IFileSearchListing = {
+      relPaths,
+      limitHit: stopReason !== null,
+      filesWalked,
+      directoriesWalked: 0,
+      durationMs: Date.now() - startedAt,
+      ...(stopReason !== null ? { stopReason } : {}),
+    }
+    const summary =
+      `fileSearch listing root=${rootFsPath} entries=${relPaths.length} ` +
+      `limitHit=${complete.limitHit} ms=${complete.durationMs}` +
       (stopReason !== null ? ` stop=${stopReason}` : '')
     if (stopReason === 'timeout') {
       this._logger.warn(summary)

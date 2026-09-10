@@ -398,8 +398,9 @@ describe('FileSearchMainService remote routing', () => {
       const result = await svc.search({ root: remote('host', '/home/user'), pattern: 'a' })
       expect(received[0]!.scheme).toBe('file')
       expect(received[0]!.path).toBe('/home/user')
-      expect(result.results[0]!.resource.scheme).toBe(REMOTE_SCHEME)
-      expect(result.results[0]!.resource.authority).toBe('host')
+      const hits = 'results' in result ? result.results : []
+      expect(hits[0]!.resource.scheme).toBe(REMOTE_SCHEME)
+      expect(hits[0]!.resource.authority).toBe('host')
     } finally {
       h.cleanup()
     }

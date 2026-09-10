@@ -589,6 +589,8 @@ export class ChannelServer extends Disposable implements IChannelServer {
  *
  * `decodeInstrument` optionally wraps each decode so the embedder can attribute
  * its wall time (e.g. the renderer records a perf phase for slow decodes).
+ * The second parameter carries the raw frame byte length so slow-frame
+ * reports can name the payload size instead of an unattributed "ipc.decode".
  */
 export class ChannelPair extends Disposable {
   readonly client: ChannelClient
@@ -596,7 +598,7 @@ export class ChannelPair extends Disposable {
 
   constructor(
     protocol: IMessagePassingProtocol,
-    decodeInstrument?: (run: () => IpcMessage) => IpcMessage,
+    decodeInstrument?: (run: () => IpcMessage, bytes: number) => IpcMessage,
     codec: IpcCodec = defaultCodec,
   ) {
     super()
@@ -605,7 +607,7 @@ export class ChannelPair extends Disposable {
     this._register(
       protocol.onMessage((data) => {
         const msg = decodeInstrument
-          ? decodeInstrument(() => codec.decode(data))
+          ? decodeInstrument(() => codec.decode(data), data.byteLength)
           : codec.decode(data)
         if (msg.type === 'response' || msg.type === 'event') {
           this.client.handleMessage(msg)
@@ -661,7 +663,7 @@ export class IpcService extends Disposable implements IIpcService {
 
   constructor(
     protocol: IMessagePassingProtocol,
-    decodeInstrument?: (run: () => IpcMessage) => IpcMessage,
+    decodeInstrument?: (run: () => IpcMessage, bytes: number) => IpcMessage,
     codec: IpcCodec = defaultCodec,
   ) {
     super()

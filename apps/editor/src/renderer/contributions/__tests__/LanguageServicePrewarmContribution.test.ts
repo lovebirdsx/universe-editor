@@ -18,24 +18,12 @@ import {
   IWorkspaceService,
   URI,
   type IFileSearchComplete,
-  type IFileSearchMatch,
   type IWorkspace,
 } from '@universe-editor/platform'
 import { type IExtensionDescriptionDto } from '@universe-editor/extensions-common'
 import { LanguageServicePrewarmContribution } from '../LanguageServicePrewarmContribution.js'
 import { IExtensionHostClientService } from '../../services/extensions/ExtensionHostClientService.js'
 import { FakeFocusScopeService } from '../../services/focus/testing/fakeFocusScopeService.js'
-
-function fileMatch(relativePath: string): IFileSearchMatch {
-  const basename = relativePath.split('/').pop() ?? relativePath
-  return {
-    resource: URI.file('/w/' + relativePath),
-    fsPath: '/w/' + relativePath,
-    relativePath,
-    basename,
-    score: 0,
-  }
-}
 
 function setup(prewarm?: string[], tsconfigPaths: string[] = []) {
   const config = new ConfigurationService()
@@ -66,7 +54,7 @@ function setup(prewarm?: string[], tsconfigPaths: string[] = []) {
     _serviceBrand: undefined,
     search: (): Promise<IFileSearchComplete> =>
       Promise.resolve({
-        results: tsconfigPaths.map(fileMatch),
+        relPaths: tsconfigPaths,
         limitHit: false,
         filesWalked: 0,
         directoriesWalked: 0,

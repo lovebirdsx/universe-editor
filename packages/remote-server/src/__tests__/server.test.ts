@@ -231,8 +231,14 @@ describe('createRemoteServer', () => {
 
       const fileSearch = getClient<IFileSearchService>(RemoteChannels.FileSearch)
       const fileResult = await fileSearch.search({ root: URI.file(root), pattern: 'alpha' })
+      if (!('results' in fileResult)) throw new Error('expected a scored result')
       expect(fileResult.results.length).toBe(1)
       expect(fileResult.results[0]!.basename).toBe('alpha.ts')
+
+      // 清单形态也过同一条 wire：只回相对路径（远端 server 与 main 共享 node-services）。
+      const listing = await fileSearch.search({ root: URI.file(root), pattern: '', matchAll: true })
+      if (!('relPaths' in listing)) throw new Error('expected a listing result')
+      expect([...listing.relPaths].sort()).toEqual(['alpha.ts', 'beta.txt'])
     } finally {
       dispose()
     }

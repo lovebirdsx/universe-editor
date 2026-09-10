@@ -47,6 +47,7 @@ import {
   type IFileDialogService as IFileDialogServiceType,
   type IFileService as IFileServiceType,
   type IFileSearchComplete,
+  type IFileSearchMatches,
   type IFileSearchService as IFileSearchServiceType,
   type IFileWatcherService as IFileWatcherServiceType,
   type IHostService as IHostServiceType,
@@ -552,7 +553,7 @@ function makeFileSearch(fs: ReturnType<typeof makeFs>): IFileSearchServiceType &
       const excludeMatcher = makeExcludeMatcher(
         Object.fromEntries((query.excludes ?? []).map((glob) => [glob, true])),
       )
-      const matches: IFileSearchComplete['results'] = [...fs.files]
+      const matches: IFileSearchMatches['results'] = [...fs.files]
         .map((raw) => URI.parse(raw))
         .filter((uri) => {
           const name = uri.fsPath.split(/[/\\]/).at(-1) ?? uri.fsPath

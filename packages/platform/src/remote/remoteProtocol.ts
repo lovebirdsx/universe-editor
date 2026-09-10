@@ -47,8 +47,13 @@ import type { WatcherHostRequest, WatcherHostResponse } from '../files/watcherPr
  * event — clients on older protocol versions do not know the event name.
  * v8 → v9: the agentConfig channel gains the `onDidChangeClaudeMcpConfig` /
  * `onDidChangeCodexMcpConfig` events — same unknown-event-name reasoning.
+ * v9 → v10: the fileSearch channel's `matchAll` result switches from
+ * `results: IFileSearchMatch[]` to `relPaths: string[]` — an older daemon's
+ * reply would read as an empty listing on a newer client rather than erroring.
+ * Remote-workspace users must restart the daemon after upgrading: an old
+ * daemon fails the handshake with `protocol version 9 != 10`.
  */
-export const REMOTE_PROTOCOL_VERSION = 9
+export const REMOTE_PROTOCOL_VERSION = 10
 
 /** Scheme of remote workspace resources: `remote-ssh://<authority>/<path>`. */
 export const REMOTE_SCHEME = 'remote-ssh'

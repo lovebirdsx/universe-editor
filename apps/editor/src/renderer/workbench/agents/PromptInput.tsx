@@ -213,6 +213,8 @@ export function PromptInput({
   // False when the warm-up walk was truncated (listing is a subset of the
   // workspace) — mentions then also run a per-keystroke fallback search.
   const [filesComplete, setFilesComplete] = useState(true)
+  /** (root, focus fingerprint) of the last settled scan; see `scanKey`. */
+  const [scannedKey, setScannedKey] = useState<string | null>(null)
   const [mentionFallback, setMentionFallback] = useState<readonly MentionFileEntry[]>([])
   const [hashSuggestions, setHashSuggestions] = useState<{
     readonly symbol: readonly ContextSuggestionItem[]
@@ -670,21 +672,34 @@ export function PromptInput({
     [text, caret, slashOpen, hashOpen],
   )
 
+  // 扫描结果按 (root, 焦点指纹) 记账：一次已完成的扫描（哪怕结果是空的）不再重跑。
+  // 不能用「列表非空」当判据——截断的巨型工作区会刻意返回空清单，效果循环会空转。
+  const scanKey = workspaceRoot ? `${workspaceRoot.toString()}|${focusFingerprint}` : null
+
   // A focus-scope change partitions the mention cache; drop the stale listing
-  // so the scan effect re-runs under the new scope.
+  // so the scan effect re-runs under the new scope. `scannedKey` must be cleared
+  // too: switching back to an already-scanned scope would otherwise look
+  // "settled" and the cleared list would never be refilled.
   useEffect(() => {
     mentionScanSeqRef.current++
     setFiles([])
-    setFilesComplete(true)
+    setFilesComplete(false)
+    setScannedKey(null)
   }, [focusFingerprint])
 
   // Lazily kick off the workspace file scan the first time `@` is typed.
   useEffect(() => {
-    if (mentionQuery === null || files.length > 0 || filesLoading) return
-    if (!workspaceRoot) return
+    if (
+      mentionQuery === null ||
+      workspaceRoot === undefined ||
+      scannedKey === scanKey ||
+      filesLoading
+    ) {
+      return
+    }
     // A scan started under the previous focus scope must not land: its entries
     // would overwrite the cleared list AND restore its own `complete` flag, and
-    // since a non-empty list stops this effect from re-running, the stale scope
+    // since a settled scan stops this effect from re-running, the stale scope
     // would stick for the rest of the session.
     const seq = mentionScanSeqRef.current
     setFilesLoading(true)
@@ -703,18 +718,23 @@ export function PromptInput({
         if (seq !== mentionScanSeqRef.current) return
         setFiles(listing.entries)
         setFilesComplete(listing.complete)
+        setScannedKey(scanKey)
       })
       .catch(() => {
         if (seq !== mentionScanSeqRef.current) return
         setFiles([])
+        // 结算这次失败：不记账的话守卫永远不成立，IPC 持续拒绝会变成紧循环重试。
+        // 下一次 scope/工作区变化会给出新的 scanKey，届时自然重扫。
+        setScannedKey(scanKey)
       })
       .finally(() => {
-        if (seq !== mentionScanSeqRef.current) return
+        // 即使被新 scope 取代也必须释放：否则下面的守卫永远挡住接替的那次扫描。
         setFilesLoading(false)
       })
   }, [
     mentionQuery,
-    files.length,
+    scanKey,
+    scannedKey,
     filesLoading,
     workspaceRoot,
     fileSearch,
@@ -745,6 +765,9 @@ export function PromptInput({
             maxResults: 30,
             ignore: exclude.getDirNameIgnores(),
             excludes: exclude.getSearchExcludeGlobs(),
+            // 与清单扫描同源：否则两者算出不同的磁盘清单缓存键，兜底搜索要再建
+            // 一份全量清单，且会列出被 .gitignore 忽略的文件。
+            useIgnoreFiles: exclude.getUseIgnoreFiles(),
             // An explicitly empty scanPaths is "focused on nothing yet" —
             // forward it as [] rather than dropping it into a full-tree scan.
             ...(focus.scanPaths !== undefined ? { scanPaths: focus.scanPaths } : {}),
@@ -754,8 +777,9 @@ export function PromptInput({
         )
         .then((complete) => {
           if (seq !== mentionFallbackSeqRef.current) return
+          const hits = 'results' in complete ? complete.results : []
           setMentionFallback(
-            complete.results.map((m) => ({
+            hits.map((m) => ({
               uri: m.resource.toString(),
               relPath: m.relativePath,
               name: m.basename,

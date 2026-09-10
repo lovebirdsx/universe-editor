@@ -161,6 +161,12 @@ interface FakeFileSearch extends IFileSearchServiceType {
   resolveAll(): void
 }
 
+/** 主进程清单里的路径形态：相对 root、`/` 分隔。 */
+function relativePathFor(fsPath: string, rootPath: string): string {
+  const norm = fsPath.replace(/\\/g, '/')
+  return norm.startsWith(rootPath + '/') ? norm.slice(rootPath.length + 1) : norm
+}
+
 function makeFileSearch(root: URI): FakeFileSearch {
   const calls: FakeFileSearch['calls'] = []
   const resolvers: Array<() => void> = []
@@ -194,22 +200,34 @@ function makeFileSearch(root: URI): FakeFileSearch {
             if (query.matchAll || pattern.length === 0) return true
             return uri.fsPath.replace(/\\/g, '/').toLowerCase().includes(pattern)
           })
-        const results = all.slice(0, max).map((uri, i) => {
-          const norm = uri.fsPath.replace(/\\/g, '/')
-          const relativePath = norm.startsWith(rootPath + '/')
-            ? norm.slice(rootPath.length + 1)
-            : norm
+        const limited = all.slice(0, max)
+        // 主进程对 matchAll 的契约：只回相对路径；且调用方要求丢弃截断子集时
+        // （omitTruncatedListing）整份为空 —— renderer 不持有残缺清单。
+        if (query.matchAll) {
+          const truncated = all.length > limited.length
           return {
-            resource: uri,
-            fsPath: uri.fsPath,
-            relativePath,
-            basename: relativePath.split('/').at(-1) ?? relativePath,
-            score: 1000 - i,
+            relPaths:
+              truncated && query.omitTruncatedListing === true
+                ? []
+                : limited.map((uri) => relativePathFor(uri.fsPath, rootPath)),
+            limitHit: truncated,
+            filesWalked: all.length,
+            directoriesWalked: 1,
+            durationMs: 1,
           }
-        })
+        }
         return {
-          results,
-          limitHit: all.length > max,
+          results: limited.map((uri, i) => {
+            const relativePath = relativePathFor(uri.fsPath, rootPath)
+            return {
+              resource: uri,
+              fsPath: uri.fsPath,
+              relativePath,
+              basename: relativePath.split('/').at(-1) ?? relativePath,
+              score: 1000 - i,
+            }
+          }),
+          limitHit: all.length > limited.length,
           filesWalked: all.length,
           directoriesWalked: 1,
           durationMs: 1,
@@ -1001,6 +1019,173 @@ describe('FileQuickAccessProvider — large listing (chunked filter + narrowing)
 })
 
 // ---------------------------------------------------------------------------
+// Typing debounce (SEARCH_DEBOUNCE_MS): expensive paths wait for a typing pause
+// ---------------------------------------------------------------------------
+
+describe('FileQuickAccessProvider — typing debounce', () => {
+  const LARGE = 6000
+  // vi.waitFor 的轮询窗口：防抖闸门 200ms，必须给 waitFor 留出闸门之外的轮询余量，
+  // 否则第一条轮询赶在闸门触发前执行、把「未发布」的断言误判为失败。
+  const waitOpts = { timeout: 2_000, interval: 20 } as const
+
+  beforeEach(() => {
+    invalidateMentionFileCache()
+  })
+  afterEach(() => {
+    invalidateMentionFileCache()
+    vi.restoreAllMocks()
+  })
+
+  it('small listings filter synchronously, no debounce delay', async () => {
+    const { provider, fileSearch } = setup()
+    fileSearch.resultPaths = Array.from({ length: 100 }, (_, i) => `/ws/x${i}.ts`)
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    picker.fireValue('x')
+    // 小池同步路径：击键处理返回时结果已落地，busy 从未亮起。
+    expect(picker.items).toHaveLength(100)
+    expect(picker.busy).toBe(false)
+  })
+
+  it('replaces stale rows with synchronously filtered editor hits on entering the debounce window', async () => {
+    // 大池击键进防抖窗时 picker 还显示上一轮内容（如 MRU/编辑器行）；
+    // filterExternally 面板不过滤，窗内按回车会接受不属于当前 query 的残留项。
+    // 进窗时立即把列表换成按当前 query 同步过滤的 editor 命中（此处为不匹配，
+    // 即清空），闸门过后才是文件结果。
+    const unrelated = new FakeEditorInput('settings', undefined, 'Settings')
+    const { provider, fileSearch } = setup({ openEditors: [unrelated] })
+    fileSearch.resultPaths = Array.from({ length: LARGE }, (_, i) => `/ws/x${i}.ts`)
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+    expect(picker.items.map((i) => (i as IQuickPickItem).label)).toContain('Settings')
+
+    picker.fireValue('x')
+    expect(picker.busy).toBe(true)
+    expect(picker.items.some((i) => (i as IQuickPickItem).label === 'Settings')).toBe(false)
+
+    await vi.waitFor(() => expect(picker.busy).toBe(false), waitOpts)
+    expect(picker.items.length).toBeGreaterThan(0)
+  })
+
+  it('clearing the query during the debounce window cancels the pending search', async () => {
+    const { provider, fileSearch } = setup()
+    fileSearch.resultPaths = Array.from({ length: LARGE }, (_, i) => `/ws/x${i}.ts`)
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    picker.fireValue('x')
+    expect(picker.busy).toBe(true)
+    // 闸门过去前清空：立即回到空查询列表，且不再发布 'x' 的结果。
+    picker.fireValue('')
+    expect(picker.busy).toBe(false)
+
+    await vi.waitFor(() => expect(fileSearch.calls.length).toBe(1)) // 只有开屏预热
+    expect(picker.items.some((i) => (i as IQuickPickItem).label.startsWith('x'))).toBe(false)
+  })
+
+  it('publishes only the final pattern when keystrokes land inside the window', async () => {
+    const { provider, fileSearch } = setup()
+    fileSearch.resultPaths = Array.from({ length: LARGE }, (_, i) => `/ws/x${i}.ts`)
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    picker.fireValue('x')
+    picker.fireValue('x1')
+    picker.fireValue('x12')
+    // 闸门未过：列表未被改写，busy 亮起。
+    expect(picker.items).toHaveLength(0)
+    expect(picker.busy).toBe(true)
+
+    await vi.waitFor(() => expect(picker.busy).toBe(false), waitOpts)
+    // 只有最终 pattern 花费扫描：'x12' 命中的恰是文件名同时含 1 和 2 的那批
+    // （x12.ts/x120.ts/x1200.ts…），若中途的 'x'/'x1' 也发布过，最后一屏会是 512 条。
+    expect(picker.items.length).toBeGreaterThan(0)
+    expect(picker.items.length).toBeLessThan(512)
+    for (const item of picker.items) {
+      const label = (item as IQuickPickItem).label
+      expect(label.includes('1') && label.includes('2')).toBe(true)
+    }
+  })
+
+  it('truncated listing: the fallback search stays off the wire until the pause', async () => {
+    const { provider, fileSearch } = setup()
+    fileSearch.truncateAt = 2
+    fileSearch.resultPaths = ['/ws/a.ts', '/ws/b.ts', '/ws/c.ts']
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+    expect(fileSearch.calls).toHaveLength(1) // 开屏预热（被截断）
+
+    picker.fireValue('c')
+    // 停顿前：既不跑兜底搜索，内存池（截断后只剩 a/b）也未发布。
+    expect(fileSearch.calls).toHaveLength(1)
+    expect(picker.busy).toBe(true)
+
+    await vi.waitFor(
+      () => expect(fileSearch.calls.some((c) => c.matchAll !== true)).toBe(true),
+      waitOpts,
+    )
+    await vi.waitFor(() => expect(picker.busy).toBe(false), waitOpts)
+    // 兜底搜索（全树打分，不受 truncateAt 截断）把清单外的 c.ts 找了回来。
+    expect(picker.items.map((i) => (i as IQuickPickItem).label)).toContain('c.ts')
+    expect(fileSearch.calls.filter((c) => c.matchAll !== true)).toHaveLength(1)
+  })
+
+  it('publishes nothing when the token is cancelled inside the debounce window', async () => {
+    const { provider, fileSearch } = setup()
+    fileSearch.resultPaths = Array.from({ length: LARGE }, (_, i) => `/ws/x${i}.ts`)
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    const { token } = run(provider, picker)
+    await flushPromises()
+
+    picker.fireValue('x')
+    token.isCancellationRequested = true
+    // 闸门回调真正跑过一遍之后，列表仍未被改写。
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(picker.items).toHaveLength(0)
+  })
+
+  it('publishes nothing when disposables fire inside the debounce window', async () => {
+    const { provider, fileSearch } = setup()
+    fileSearch.resultPaths = Array.from({ length: LARGE }, (_, i) => `/ws/x${i}.ts`)
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    const { disposables } = run(provider, picker)
+    await flushPromises()
+
+    picker.fireValue('x')
+    disposables.dispose()
+    // disposables 清掉了定时器：闸门永远不会触发。
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(picker.items).toHaveLength(0)
+  })
+
+  it('fallback query is debounced once per pause, not once per keystroke', async () => {
+    const { provider, fileSearch } = setup()
+    fileSearch.truncateAt = 2
+    fileSearch.resultPaths = ['/ws/a.ts', '/ws/b.ts', '/ws/c1.ts', '/ws/c12.ts']
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    picker.fireValue('c')
+    picker.fireValue('c1')
+    picker.fireValue('c12')
+    await vi.waitFor(
+      () => expect(fileSearch.calls.some((c) => c.matchAll !== true)).toBe(true),
+      waitOpts,
+    )
+    await vi.waitFor(() => expect(picker.busy).toBe(false), waitOpts)
+    // 三次击键只换来一次兜底搜索（最终 pattern），不是三次。
+    expect(fileSearch.calls.filter((c) => c.matchAll !== true)).toHaveLength(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Truncated listings: the cached pool is a subset of the workspace, so typing
 // must also fall back to a scored main-process search (regression: on a
 // multi-million-file workspace files outside the 100k warm-up cap could never
@@ -1033,7 +1218,7 @@ describe('FileQuickAccessProvider — truncated listing (main-search fallback)',
     expect(picker.items.map((i) => (i as IQuickPickItem).label)).toEqual(['iaction.ts'])
   })
 
-  it('shows cached hits instantly, then merges fallback hits deduped by resource', async () => {
+  it('drops the truncated listing entirely and serves every hit from the fallback search', async () => {
     const { provider, fileSearch } = setup()
     fileSearch.resultPaths = ['/ws/xa.ts', '/ws/xb.ts', '/ws/xc.ts']
     fileSearch.truncateAt = 2
@@ -1042,8 +1227,9 @@ describe('FileQuickAccessProvider — truncated listing (main-search fallback)',
     await flushPromises()
 
     picker.fireValue('x')
-    // 缓存池命中即时可见；兜底搜索还在防抖/在飞（busy 亮起）。
-    expect(picker.items.map((i) => (i as IQuickPickItem).label)).toEqual(['xa.ts', 'xb.ts'])
+    // 截断清单被整份丢弃（残缺子集会把"子集外"显示成"搜不到"）：没有即时缓存命中，
+    // busy 亮起等兜底搜索补齐。
+    expect(picker.items).toEqual([])
     expect(picker.busy).toBe(true)
 
     await vi.waitFor(() => expect(picker.busy).toBe(false))

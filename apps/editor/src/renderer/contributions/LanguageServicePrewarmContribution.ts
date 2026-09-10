@@ -182,14 +182,19 @@ export class LanguageServicePrewarmContribution
           matchAll: true,
           ignore: TSCONFIG_IGNORE_DIRS,
           maxResults: 5000,
+          // rg 侧先按文件名粗筛。没有它，枚举会把整个工作区读进来（十万级）
+          // 再在这里过滤，还会撞上 maxResults 触发一份全盘清单的后台构建。
+          // glob 是大小写不敏感的 --iglob 预筛（比后置正则宽：`tsconfig*.json` 还会
+          // 命中 `tsconfigx.json` 这类），所以下面的 basename 正则仍保留（原语义带 /i）。
+          glob: ['tsconfig*.json'],
           ...(this._focus.active ? { scanPaths: [...this._focus.scanPaths] } : {}),
           rootFilesInScope: this._focus.rootFilesInScope,
         },
         token,
       )
-      const paths = complete.results
-        .filter((m) => /^tsconfig(\..+)?\.json$/i.test(m.basename))
-        .map((m) => m.relativePath.replace(/\\/g, '/'))
+      const relPaths = 'relPaths' in complete ? complete.relPaths : []
+      const paths = relPaths
+        .filter((rel) => /^tsconfig(\..+)?\.json$/i.test(rel.slice(rel.lastIndexOf('/') + 1)))
         .sort()
       return paths.slice(0, MAX_TSCONFIGS)
     } catch {

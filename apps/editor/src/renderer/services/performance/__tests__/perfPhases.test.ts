@@ -1,10 +1,12 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   _resetPerfPhasesForTests,
+  formatBytes,
   getRecordedPhases,
   recordPerfPhase,
   recordPerfPhaseAsync,
   samplesInWindow,
+  slowPhaseInstrument,
   type PerfSample,
 } from '../perfPhases.js'
 
@@ -85,5 +87,47 @@ describe('samplesInWindow', () => {
       sample('after', 600, 10), // starts past the window end → out
     ]
     expect(samplesInWindow(samples, 100, 500).map((s) => s.name)).toEqual(['straddling', 'inside'])
+  })
+})
+
+describe('slowPhaseInstrument', () => {
+  it('records nothing while under the threshold', () => {
+    const instrumented = slowPhaseInstrument('ipc.decode', 5)
+    instrumented(() => undefined)
+    expect(getRecordedPhases()).toHaveLength(0)
+  })
+
+  it('appends the lazily-evaluated detail only when the threshold fires', () => {
+    vi.useFakeTimers()
+    try {
+      const detail = vi.fn(() => '(14.2MB)')
+      const instrumented = slowPhaseInstrument('ipc.decode', 5, detail)
+      // Fast frame: detail must not even be evaluated.
+      instrumented(() => undefined)
+      expect(detail).not.toHaveBeenCalled()
+      expect(getRecordedPhases()).toHaveLength(0)
+
+      // Slow frame: the sample name carries the detail suffix.
+      instrumented(() => vi.advanceTimersByTime(10))
+      expect(detail).toHaveBeenCalledTimes(1)
+      const phases = getRecordedPhases()
+      expect(phases).toHaveLength(1)
+      expect(phases[0]?.name).toBe('ipc.decode (14.2MB)')
+      expect(phases[0]?.duration).toBeGreaterThanOrEqual(5)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('formatBytes', () => {
+  it('formats bytes across the B/KB/MB boundaries', () => {
+    expect(formatBytes(0)).toBe('0B')
+    expect(formatBytes(320)).toBe('320B')
+    expect(formatBytes(1023)).toBe('1023B')
+    expect(formatBytes(1024)).toBe('1.0KB')
+    expect(formatBytes(615 * 1024)).toBe('615.0KB')
+    expect(formatBytes(1024 * 1024)).toBe('1.0MB')
+    expect(formatBytes(Math.round(14.2 * 1024 * 1024))).toBe('14.2MB')
   })
 })

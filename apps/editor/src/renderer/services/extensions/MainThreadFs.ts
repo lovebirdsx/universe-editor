@@ -297,9 +297,10 @@ export class MainThreadFs implements IMainThreadFs {
               ? [entry]
               : this._foldExcludeForEngine(entry, includeBase, platform),
           )
+    const searchRoot = includeBase ?? this._rootUri()
     const complete = await this._fileSearch.search(
       {
-        root: includeBase ?? this._rootUri(),
+        root: searchRoot,
         pattern: '',
         matchAll: true,
         excludes: engineExcludes,
@@ -308,18 +309,21 @@ export class MainThreadFs implements IMainThreadFs {
       },
       token,
     )
+    // matchAll 只会得到清单形态；万一不是，空结果比抛出更适合扩展 API。
+    const relPaths = 'relPaths' in complete ? complete.relPaths : []
     if (complete.limitHit) {
       this._logger.warn(
         `findFiles enumeration truncated at the ${FIND_FILES_ENUMERATION_CAP}-entry cap ` +
-          `(${complete.results.length} results walked, stopReason: ${complete.stopReason ?? 'maxResults'}); ` +
+          `(${relPaths.length} results walked, stopReason: ${complete.stopReason ?? 'maxResults'}); ` +
           'results beyond the cap were dropped',
       )
     }
     const matches = compileGlobMatcher(typeof include === 'string' ? include : include.pattern)
     const out: string[] = []
-    for (const match of complete.results) {
-      if (!matches(match.relativePath)) continue
-      out.push(match.fsPath)
+    // 派生出的 fsPath 是 URI 形态（正斜杠）；下游 Uri.file() 会归一，端到端不变。
+    for (const rel of relPaths) {
+      if (!matches(rel)) continue
+      out.push(URI.joinPath(searchRoot, rel).fsPath)
       if (maxResults !== null && out.length >= maxResults) break
     }
     return out

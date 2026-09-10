@@ -325,7 +325,7 @@ describe('MainThreadFs', () => {
     }
 
     function fakeSearch(
-      matches: Array<{ fsPath: string; relativePath: string }>,
+      relPaths: readonly string[],
     ): IFileSearchService & { lastQueryExcludes: () => readonly string[] | undefined } {
       let excludes: readonly string[] | undefined
       return {
@@ -334,20 +334,12 @@ describe('MainThreadFs', () => {
           excludes = query.excludes
           // The real engine prunes `query.excludes` during the walk, before its
           // own maxResults cap — excluded entries never consume the cap.
-          const candidates = matches.filter(
-            (m) => !enginePruned(m.relativePath, query.excludes ?? []),
-          )
+          const candidates = relPaths.filter((rel) => !enginePruned(rel, query.excludes ?? []))
           const cap = query.maxResults ?? Number.POSITIVE_INFINITY
           const limited = candidates.slice(0, cap)
           const truncated = candidates.length > limited.length
           const complete: IFileSearchComplete = {
-            results: limited.map((m) => ({
-              resource: URI.file(m.fsPath),
-              fsPath: m.fsPath,
-              relativePath: m.relativePath,
-              basename: m.relativePath.split('/').pop() ?? '',
-              score: 0,
-            })),
+            relPaths: limited,
             limitHit: truncated,
             filesWalked: candidates.length,
             directoriesWalked: 0,
@@ -361,11 +353,7 @@ describe('MainThreadFs', () => {
     }
 
     it('filters the live enumeration by the include glob', async () => {
-      const search = fakeSearch([
-        { fsPath: '/repo/src/a.ts', relativePath: 'src/a.ts' },
-        { fsPath: '/repo/src/a.css', relativePath: 'src/a.css' },
-        { fsPath: '/repo/README.md', relativePath: 'README.md' },
-      ])
+      const search = fakeSearch(['src/a.ts', 'src/a.css', 'README.md'])
       const fs = makeFs('/repo', allowPolicy, fakeFiles({}), search)
       expect(await fs.$findFiles('**/*.ts', null, null)).toEqual(['/repo/src/a.ts'])
     })
@@ -385,11 +373,7 @@ describe('MainThreadFs', () => {
     })
 
     it('truncates at maxResults after glob filtering', async () => {
-      const search = fakeSearch([
-        { fsPath: '/repo/a.ts', relativePath: 'a.ts' },
-        { fsPath: '/repo/b.md', relativePath: 'b.md' },
-        { fsPath: '/repo/c.ts', relativePath: 'c.ts' },
-      ])
+      const search = fakeSearch(['a.ts', 'b.md', 'c.ts'])
       const fs = makeFs('/repo', allowPolicy, fakeFiles({}), search)
       expect(await fs.$findFiles('*.ts', [], 1)).toEqual(['/repo/a.ts'])
     })
@@ -406,22 +390,7 @@ describe('MainThreadFs', () => {
         search: (query: IFileSearchQuery) => {
           roots.push(query.root.fsPath)
           const complete: IFileSearchComplete = {
-            results: [
-              {
-                resource: URI.file('/repo/src/a.ts'),
-                fsPath: '/repo/src/a.ts',
-                relativePath: 'a.ts',
-                basename: 'a.ts',
-                score: 0,
-              },
-              {
-                resource: URI.file('/repo/src/deep/b.ts'),
-                fsPath: '/repo/src/deep/b.ts',
-                relativePath: 'deep/b.ts',
-                basename: 'b.ts',
-                score: 0,
-              },
-            ],
+            relPaths: ['a.ts', 'deep/b.ts'],
             limitHit: false,
             filesWalked: 2,
             directoriesWalked: 1,
@@ -482,10 +451,10 @@ describe('MainThreadFs', () => {
 
     it('scopes a RelativePattern exclude to its own base', async () => {
       const search = fakeSearch([
-        { fsPath: '/repo/generated/a.ts', relativePath: 'generated/a.ts' },
-        { fsPath: '/repo/generated/deep/b.ts', relativePath: 'generated/deep/b.ts' },
-        { fsPath: '/repo/src/generated/keep.ts', relativePath: 'src/generated/keep.ts' },
-        { fsPath: '/repo/src/c.ts', relativePath: 'src/c.ts' },
+        'generated/a.ts',
+        'generated/deep/b.ts',
+        'src/generated/keep.ts',
+        'src/c.ts',
       ])
       const fs = makeFs('/repo', allowPolicy, fakeFiles({}), search)
       const exclude: IRelativePatternDto = {
@@ -497,10 +466,7 @@ describe('MainThreadFs', () => {
     })
 
     it('prunes string excludes in the engine (defaults are not mixed in)', async () => {
-      const search = fakeSearch([
-        { fsPath: '/repo/node_modules/pkg/index.ts', relativePath: 'node_modules/pkg/index.ts' },
-        { fsPath: '/repo/src/a.ts', relativePath: 'src/a.ts' },
-      ])
+      const search = fakeSearch(['node_modules/pkg/index.ts', 'src/a.ts'])
       const fs = makeFs('/repo', allowPolicy, fakeFiles({}), search, () => ['**/dist/**'])
       const result = await fs.$findFiles('**/*.ts', ['**/node_modules/**', '*.log'], null)
       expect(search.lastQueryExcludes()).toEqual(['**/node_modules/**', '*.log'])
@@ -508,11 +474,7 @@ describe('MainThreadFs', () => {
     })
 
     it('prunes directories named by a slashless exclude at any depth', async () => {
-      const search = fakeSearch([
-        { fsPath: '/repo/node_modules/pkg/index.ts', relativePath: 'node_modules/pkg/index.ts' },
-        { fsPath: '/repo/lib/node_modules/x.ts', relativePath: 'lib/node_modules/x.ts' },
-        { fsPath: '/repo/src/a.ts', relativePath: 'src/a.ts' },
-      ])
+      const search = fakeSearch(['node_modules/pkg/index.ts', 'lib/node_modules/x.ts', 'src/a.ts'])
       const fs = makeFs('/repo', allowPolicy, fakeFiles({}), search)
       expect(await fs.$findFiles('**/*.ts', ['node_modules'], null)).toEqual(['/repo/src/a.ts'])
     })
@@ -547,7 +509,7 @@ describe('MainThreadFs', () => {
           seen.roots.push(query.root.fsPath)
           seen.excludes = query.excludes
           const complete: IFileSearchComplete = {
-            results: [],
+            relPaths: [],
             limitHit: false,
             filesWalked: 0,
             directoriesWalked: 0,
@@ -567,7 +529,7 @@ describe('MainThreadFs', () => {
     })
 
     it('drops a RelativePattern exclude whose base lies outside the enumeration root', async () => {
-      const search = fakeSearch([{ fsPath: '/repo/src/a.ts', relativePath: 'src/a.ts' }])
+      const search = fakeSearch(['src/a.ts'])
       const fs = makeFs('/repo', allowPolicy, fakeFiles({}), search)
       const result = await fs.$findFiles(
         '**/*.ts',
@@ -583,11 +545,8 @@ describe('MainThreadFs', () => {
       // by renderer-side post-filtering they ate the whole engine-side cap and
       // the real hit was silently truncated away (plus a misleading warn).
       const matches = [
-        ...Array.from({ length: 100_000 }, (_, i) => ({
-          fsPath: `/repo/node_modules/${i}.ts`,
-          relativePath: `node_modules/${i}.ts`,
-        })),
-        { fsPath: '/repo/src/keep.ts', relativePath: 'src/keep.ts' },
+        ...Array.from({ length: 100_000 }, (_, i) => `node_modules/${i}.ts`),
+        'src/keep.ts',
       ]
       const warn = vi.fn()
       const logger = { ...new NullLogger(), warn } as unknown as ILogger
@@ -605,7 +564,7 @@ describe('MainThreadFs', () => {
         search: (_query: IFileSearchQuery, token?: unknown) => {
           seenToken = token
           const complete: IFileSearchComplete = {
-            results: [],
+            relPaths: [],
             limitHit: false,
             filesWalked: 0,
             directoriesWalked: 0,
@@ -628,7 +587,7 @@ describe('MainThreadFs', () => {
         _serviceBrand: undefined,
         search: () => {
           const complete: IFileSearchComplete = {
-            results: [],
+            relPaths: [],
             limitHit: true,
             filesWalked: 100_000,
             directoriesWalked: 5_000,
@@ -820,17 +779,9 @@ describe('MainThreadFs', () => {
         search: (query: IFileSearchQuery) => {
           roots.push(query.root)
           const complete: IFileSearchComplete = {
-            results: [
-              {
-                resource: remoteUri('/home/user/repo/src/a.ts'),
-                // The remote search channel reports server-native fs paths, which
-                // are exactly what the remote-hosted extension expects back.
-                fsPath: '/home/user/repo/src/a.ts',
-                relativePath: 'src/a.ts',
-                basename: 'a.ts',
-                score: 0,
-              },
-            ],
+            // The remote search channel reports server-native relative paths, which
+            // are exactly what the remote-hosted extension expects back.
+            relPaths: ['src/a.ts'],
             limitHit: false,
             filesWalked: 1,
             directoriesWalked: 1,
@@ -866,7 +817,7 @@ describe('MainThreadFs', () => {
         search: (query: IFileSearchQuery) => {
           roots.push(query.root)
           const complete: IFileSearchComplete = {
-            results: [],
+            relPaths: [],
             limitHit: false,
             filesWalked: 0,
             directoriesWalked: 0,
@@ -1025,7 +976,7 @@ describe('MainThreadFs', () => {
           search: (query: IFileSearchQuery) => {
             roots.push(query.root)
             return Promise.resolve({
-              results: [],
+              relPaths: [],
               limitHit: false,
               filesWalked: 0,
               directoriesWalked: 0,
@@ -1059,7 +1010,7 @@ function fakeSearchRecorder(): IFileSearchService & { ran: () => boolean } {
     search: () => {
       ran = true
       return Promise.resolve({
-        results: [],
+        relPaths: [],
         limitHit: false,
         filesWalked: 0,
         directoriesWalked: 0,

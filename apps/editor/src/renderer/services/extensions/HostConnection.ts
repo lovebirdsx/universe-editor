@@ -68,7 +68,7 @@ import type { IRemoteStatusService } from '../../../shared/ipc/remoteStatusServi
 import type { IAcpPathPolicy } from '../acp/acpPathPolicy.js'
 import type { IExcludeService } from '../exclude/ExcludeService.js'
 import type { IOutOfWorkspaceWatchService } from '../files/outOfWorkspaceWatchService.js'
-import { slowPhaseInstrument } from '../performance/perfPhases.js'
+import { slowPhaseInstrument, formatBytes } from '../performance/perfPhases.js'
 import { MainThreadCommands, type CommandOwnershipLedger } from './MainThreadCommands.js'
 import { MainThreadAi } from './MainThreadAi.js'
 import { MainThreadEditor } from './MainThreadEditor.js'
@@ -84,7 +84,7 @@ import type { IScmService } from './ScmService.js'
 import type { ITimelineService } from '../timeline/TimelineService.js'
 import type { ITreeViewsService } from './TreeViewsService.js'
 import type { IWebviewService } from './WebviewService.js'
-import type { IAiModelService } from '@universe-editor/platform'
+import type { IAiModelService, IpcMessage } from '@universe-editor/platform'
 
 export interface HostConnectionDeps {
   readonly host: IExtensionHostService
@@ -148,6 +148,11 @@ export interface HostConnectionDeps {
   readonly onUnexpectedError: (error: SerializedError) => void
 }
 
+// Hoisted out of the connection setup: the wrapper is constant per frame;
+// only the byte length varies (carried by the lazily-evaluated detail).
+const rpcDecodeSlow = (bytes: number) =>
+  slowPhaseInstrument('extHost.rpcDecode', 5, () => `(${formatBytes(bytes)})`)
+
 export class HostConnection extends Disposable {
   readonly commands: IExtHostCommands
   readonly extensions: IExtHostExtensions
@@ -201,8 +206,11 @@ export class HostConnection extends Disposable {
     // Decode each frame ONCE and route by type: language-service responses for a
     // large file are multi-MB frames, and a second parse (client + server each
     // decoding everything) doubles the main-thread stall on every tab switch.
-    // Slow decodes surface as an `extHost.rpcDecode` phase in the perf reports.
-    const pair = store.add(new ChannelPair(protocol, slowPhaseInstrument('extHost.rpcDecode')))
+    // Slow decodes surface as an `extHost.rpcDecode` phase in the perf reports,
+    // with the frame byte length attached so the offending payload is attributable.
+    const rpcDecodeWithSize = (run: () => IpcMessage, bytes: number): IpcMessage =>
+      rpcDecodeSlow(bytes)(run)
+    const pair = store.add(new ChannelPair(protocol, rpcDecodeWithSize))
     const { client, server } = pair
 
     this.commands = ProxyChannel.toService<IExtHostCommands>(

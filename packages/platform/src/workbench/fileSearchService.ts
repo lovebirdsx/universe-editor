@@ -19,6 +19,26 @@ export interface IFileSearchQuery {
   /** Wall-clock budget for the walk; partial results are returned on expiry. */
   readonly timeoutMs?: number
   /**
+   * ripgrep `--iglob` (case-insensitive) prefilter. Name-only alternates (e.g.
+   * `tsconfig*.json`) let a caller enumerate an entire tree for a handful of
+   * files without paying for the full listing. Case-insensitivity makes the
+   * prefilter broader than the caller's intent, so the caller must still
+   * filter the returned paths precisely.
+   */
+  readonly glob?: readonly string[]
+  /**
+   * `matchAll` only: drop the listing entirely when the walk did not finish
+   * (`limitHit: true` — `maxResults` cap, timeout or cancellation) instead of
+   * returning the partial subset. Callers that cannot use an arbitrary subset —
+   * a fuzzy filter would silently "not find" files outside it — take this to
+   * keep a hundred-thousand-entry payload off the IPC wire.
+   *
+   * Note the implication runs one way only: dropping guarantees an empty
+   * `relPaths`, but `limitHit: true` without this flag still returns whatever
+   * the walk managed to enumerate.
+   */
+  readonly omitTruncatedListing?: boolean
+  /**
    * Workspace-relative paths to enumerate instead of the whole root (ripgrep
    * positional arguments — may name directories *or single files*; a focus
    * entry may be one file). Results resolve against `root`. **Absent** = not
@@ -48,8 +68,7 @@ export interface IFileSearchMatch {
   readonly score: number
 }
 
-export interface IFileSearchComplete {
-  readonly results: readonly IFileSearchMatch[]
+export interface IFileSearchCompleteBase {
   readonly limitHit: boolean
   readonly filesWalked: number
   readonly directoriesWalked: number
@@ -57,6 +76,24 @@ export interface IFileSearchComplete {
   /** Why the walk ended early, when it did not run to completion. */
   readonly stopReason?: 'maxResults' | 'timeout' | 'canceled'
 }
+
+/** Scored name search (`matchAll` absent). */
+export interface IFileSearchMatches extends IFileSearchCompleteBase {
+  readonly results: readonly IFileSearchMatch[]
+}
+
+/**
+ * Whole-workspace listing (`matchAll: true`). Only workspace-relative paths
+ * (`/`-separated) cross the wire: `basename` falls out of the last segment and
+ * the absolute URI from joining `root`, so shipping them per entry would
+ * duplicate the same path three times over — the payload is what makes a
+ * hundred-thousand-file workspace block the renderer's main thread.
+ */
+export interface IFileSearchListing extends IFileSearchCompleteBase {
+  readonly relPaths: readonly string[]
+}
+
+export type IFileSearchComplete = IFileSearchMatches | IFileSearchListing
 
 export interface IFileSearchService {
   readonly _serviceBrand: undefined

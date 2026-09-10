@@ -134,14 +134,9 @@ afterEach(() => {
 
 const stubFileSearch: IFileSearchServiceType = {
   _serviceBrand: undefined,
-  async search() {
-    return {
-      results: [],
-      limitHit: false,
-      filesWalked: 0,
-      directoriesWalked: 0,
-      durationMs: 0,
-    }
+  async search(query) {
+    const stats = { limitHit: false, filesWalked: 0, directoriesWalked: 0, durationMs: 0 }
+    return query.matchAll ? { ...stats, relPaths: [] } : { ...stats, results: [] }
   },
 } as IFileSearchServiceType
 
@@ -308,33 +303,63 @@ function makeWorkspaceService(folder: URI): IWorkspaceServiceType {
   } as unknown as IWorkspaceServiceType
 }
 
+function toRel(abs: string, rootPath: string): string {
+  const norm = abs.replace(/\\/g, '/')
+  if (norm.startsWith(rootPath + '/')) return norm.slice(rootPath.length + 1)
+  if (norm.startsWith(rootPath)) return norm.slice(rootPath.length)
+  return norm
+}
+
 function makeFileSearch(paths: readonly string[]): IFileSearchServiceType {
   return {
     _serviceBrand: undefined,
     async search(query) {
       const rootPath = query.root.fsPath.replace(/\\/g, '/').replace(/\/$/, '')
-      return {
-        results: paths.map((abs) => {
-          const norm = abs.replace(/\\/g, '/')
-          const rel = norm.startsWith(rootPath + '/')
-            ? norm.slice(rootPath.length + 1)
-            : norm.startsWith(rootPath)
-              ? norm.slice(rootPath.length)
-              : norm
-          const name = rel.split('/').pop() ?? rel
-          return {
-            resource: URI.file(abs),
-            fsPath: abs,
-            relativePath: rel,
-            basename: name,
-            score: 0,
-          }
-        }),
+      const stats = {
         limitHit: false,
         filesWalked: paths.length,
         directoriesWalked: 1,
         durationMs: 0,
       }
+      if (query.matchAll) {
+        return { ...stats, relPaths: paths.map((abs) => toRel(abs, rootPath)) }
+      }
+      return {
+        ...stats,
+        results: paths.map((abs) => {
+          const rel = toRel(abs, rootPath)
+          return {
+            resource: URI.file(abs),
+            fsPath: abs,
+            relativePath: rel,
+            basename: rel.split('/').pop() ?? rel,
+            score: 0,
+          }
+        }),
+      }
+    },
+  }
+}
+
+/** `makeFileSearch` whose calls stay in flight until `resolveAll()` — lets a test
+ *  interleave a focus-scope change with a walk that has not settled yet. */
+function makeDeferredFileSearch(paths: readonly string[]): {
+  readonly svc: IFileSearchServiceType
+  resolveAll: () => void
+} {
+  const base = makeFileSearch(paths)
+  const resolvers: Array<() => void> = []
+  return {
+    svc: {
+      _serviceBrand: undefined,
+      search(query, token) {
+        return new Promise((resolve) => {
+          resolvers.push(() => void base.search(query, token).then(resolve))
+        })
+      },
+    } as IFileSearchServiceType,
+    resolveAll() {
+      while (resolvers.length > 0) resolvers.pop()?.()
     },
   }
 }
@@ -381,6 +406,7 @@ function renderWithServices(
     quickInput?: IQuickInputServiceType
     config?: IConfigurationServiceType
     dialog?: IDialogServiceType
+    focus?: IFocusScopeService
     widget?: IAcpChatWidgetService
   } = {},
 ) {
@@ -389,7 +415,7 @@ function renderWithServices(
   services.set(IFileSearchService, opts.fileSearch ?? stubFileSearch)
   services.set(IWorkspaceService, opts.workspace ?? stubWorkspaceService)
   services.set(IExcludeService, new FakeExcludeService())
-  services.set(IFocusScopeService, new FakeFocusScopeService())
+  services.set(IFocusScopeService, opts.focus ?? new FakeFocusScopeService())
   services.set(IConfigurationService, opts.config ?? stubConfigurationService)
   services.set(IDialogService, opts.dialog ?? stubDialogService)
   services.set(IAcpPromptHistoryService, stubHistoryService)
@@ -1109,6 +1135,64 @@ describe('PromptInput — @-mention popover', () => {
     expect(options.length).toBeGreaterThanOrEqual(3)
   })
 
+  it('refills the listing after the focus scope switches away and back mid-walk', async () => {
+    // 回归：scope 变更会清空清单，若不同时清掉"已扫描"记账，趁中间那次扫描还在飞
+    // 就切回原 scope 时，记账里仍是原 scope 的旧值 → 判定"已结算"而永不重扫 ——
+    // @ 列表永久为空，兜底搜索也被 complete 挡住。
+    const focus = new FakeFocusScopeService(['src'])
+    const deferred = makeDeferredFileSearch(FILES)
+    renderWithServices(<PromptInput session={makeSession()} />, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+      fileSearch: deferred.svc,
+      focus,
+    })
+    const ta = getTextarea()
+    typeAt(ta, '@')
+    await act(async () => {
+      deferred.resolveAll()
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    expect(screen.getAllByRole('option').length).toBeGreaterThanOrEqual(3)
+
+    // 切到 lib（它的扫描仍在飞，不 resolve），随即切回 src。
+    await act(async () => {
+      await focus.setFolders(['lib'])
+    })
+    await act(async () => {
+      await focus.setFolders(['src'])
+    })
+    await act(async () => {
+      deferred.resolveAll()
+      await new Promise((r) => setTimeout(r, 0))
+    })
+
+    expect(screen.getAllByRole('option').length).toBeGreaterThanOrEqual(3)
+  })
+
+  it('does not re-walk in a tight loop when the listing search keeps rejecting', async () => {
+    // 失败的扫描也要记账：否则依赖变化让 effect 立刻重跑，IPC 持续拒绝（远端断连）
+    // 会变成"拒绝 → setState → 再拒绝"的紧循环。
+    let calls = 0
+    const fileSearch = {
+      _serviceBrand: undefined,
+      search: () => {
+        calls++
+        return Promise.reject(new Error('ipc down'))
+      },
+    } as unknown as IFileSearchServiceType
+    renderWithServices(<PromptInput session={makeSession()} />, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+      fileSearch,
+    })
+    const ta = getTextarea()
+    typeAt(ta, '@')
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+
+    expect(calls).toBe(1)
+  })
+
   it('filters the file list as the user keeps typing', async () => {
     renderWithServices(<PromptInput session={makeSession()} />, {
       workspace: makeWorkspaceService(URI.file('/repo')),
@@ -1193,10 +1277,21 @@ describe('PromptInput — @-mention popover', () => {
       _serviceBrand: undefined,
       async search(query) {
         calls.push({ pattern: query.pattern, matchAll: query.matchAll })
-        const paths = query.matchAll
+        const matchAll = query.matchAll === true
+        const paths = matchAll
           ? ['/repo/src/main.ts']
           : ['/repo/deep/nested/iaction.ts'].filter((p) => p.includes(query.pattern))
+        const stats = {
+          limitHit: matchAll,
+          filesWalked: paths.length,
+          directoriesWalked: 1,
+          durationMs: 0,
+          ...(matchAll ? { stopReason: 'maxResults' as const } : {}),
+        }
+        // 截断时实现整份丢弃（omitTruncatedListing），renderer 不持有残缺子集。
+        if (matchAll) return { ...stats, relPaths: [] }
         return {
+          ...stats,
           results: paths.map((abs) => {
             const rel = abs.slice('/repo/'.length)
             return {
@@ -1207,11 +1302,6 @@ describe('PromptInput — @-mention popover', () => {
               score: 100,
             }
           }),
-          limitHit: query.matchAll === true,
-          filesWalked: paths.length,
-          directoriesWalked: 1,
-          durationMs: 0,
-          ...(query.matchAll === true ? { stopReason: 'maxResults' as const } : {}),
         }
       },
     }

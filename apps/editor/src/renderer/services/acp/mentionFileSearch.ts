@@ -41,6 +41,13 @@ export interface MentionFileFilter {
    * Absent = false, matching the behaviour from before the setting existed.
    */
   readonly useIgnoreFiles?: boolean
+  /**
+   * Wall-clock budget for the walk. The idle prewarm passes one so a
+   * pathological tree cannot spend minutes enumerating files nobody is
+   * waiting for; expiry yields an empty listing flagged `limitHit` (the partial
+   * subset is dropped main-side, see `omitTruncatedListing`).
+   */
+  readonly timeoutMs?: number
 }
 
 /**
@@ -78,9 +85,9 @@ const MAX_FILES = 100_000
 const CACHE_TTL_MS = 5 * 60_000
 
 /** The cached workspace listing plus whether the walk saw the whole tree.
- *  `complete: false` means the walk stopped early (MAX_FILES / timeout), so the
- *  entries are an arbitrary subset — consumers that must find *any* file (e.g.
- *  Ctrl+P) need a fallback search for what the subset misses. */
+ *  `complete: false` means the walk stopped early (MAX_FILES / timeout); the
+ *  truncated subset is dropped main-side, so `entries` is empty and consumers
+ *  that must find *any* file (e.g. Ctrl+P) rely on the fallback search alone. */
 export interface WorkspaceFileListing {
   readonly entries: readonly MentionFileEntry[]
   readonly complete: boolean
@@ -147,6 +154,11 @@ export async function loadWorkspaceFiles(
       ignore: dirNames,
       maxResults: MAX_FILES,
       useIgnoreFiles,
+      // 被 maxResults 截断说明这是巨型工作区：残缺子集会让模糊过滤把"子集外"
+      // 显示成"搜不到"，而十万条路径本身也要跨 IPC 堵住 renderer 主线程。
+      // 丢弃后由 FileQuickAccessProvider 的击键兜底搜索接管。
+      omitTruncatedListing: true,
+      ...(filter?.timeoutMs !== undefined ? { timeoutMs: filter.timeoutMs } : {}),
       // An explicitly empty scanPaths is "focused on nothing yet" and must
       // reach the main side as [] — dropping it would re-scan the whole tree.
       ...(focus?.scanPaths !== undefined ? { scanPaths: focus.scanPaths } : {}),
@@ -154,13 +166,14 @@ export async function loadWorkspaceFiles(
     },
     token,
   )
-  const entries = complete.results.map((match) => {
-    return {
-      uri: match.resource.toString(),
-      relPath: match.relativePath,
-      name: match.basename,
-    }
-  })
+  // uri 预计算而非惰性派生：FileQuickAccessProvider 的 scanPool 每次击键都要对
+  // 整个池读 entry.uri 做编辑器去重，把派生搬进热路径会得不偿失。
+  const relPaths = 'relPaths' in complete ? complete.relPaths : []
+  const entries = relPaths.map((rel) => ({
+    uri: URI.joinPath(root, rel).toString(),
+    relPath: rel,
+    name: rel.slice(rel.lastIndexOf('/') + 1),
+  }))
   const listing: WorkspaceFileListing = { entries, complete: !complete.limitHit }
   // A cancelled walk returns whatever partial listing it had; caching it would
   // serve an arbitrarily truncated workspace for the whole TTL.

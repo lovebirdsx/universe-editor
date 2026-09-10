@@ -54,8 +54,8 @@ ContributionsRegistry.registerContribution(
 )
 
 // Keeps the shared workspace file listing (Ctrl+P / @-mention cache) fresh via
-// watcher invalidation, and idle-prewarms it so the first quick open of a
-// session doesn't pay the full disk walk.
+// watcher invalidation, and pre-warms it shortly after the workspace is ready so
+// the first quick open of a session doesn't pay the full disk walk.
 ContributionsRegistry.registerContribution(
   'workbench.contrib.workspaceFileListing',
   WorkspaceFileListingContribution,

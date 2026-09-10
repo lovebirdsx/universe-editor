@@ -55,21 +55,39 @@ export async function recordPerfPhaseAsync<T>(name: string, fn: () => Promise<T>
  *  perf phase only when a single frame's (de)serialization blocked the main
  *  thread noticeably, so a slow tab switch caused by a multi-MB RPC payload
  *  shows up attributed in the tab-switch / interaction reports instead of as
- *  an anonymous long task. */
-export function slowPhaseInstrument(name: string, minMs = 5): <T>(run: () => T) => T {
+ *  an anonymous long task.
+ *
+ *  `detail` is a cheap string evaluated only when the threshold fires — use it
+ *  to carry frame size / channel hints so "ipc.decode 615ms" becomes
+ *  "ipc.decode 615ms (14.2MB)" instead of an unattributed blob. */
+export function slowPhaseInstrument(
+  name: string,
+  minMs = 5,
+  detail?: () => string,
+): <T>(run: () => T) => T {
   return (run) => {
     const startTime = performance.now()
     try {
       return run()
     } finally {
       const duration = performance.now() - startTime
-      if (duration >= minMs) pushPerfPhaseSample(name, startTime, duration)
+      if (duration >= minMs) {
+        const suffix = detail ? ` ${detail()}` : ''
+        pushPerfPhaseSample(`${name}${suffix}`, startTime, duration)
+      }
     }
   }
 }
 
 export function getRecordedPhases(): readonly PerfSample[] {
   return phaseSamples
+}
+
+/** 人类可读的字节数（慢帧归因用）：14.2MB / 615KB / 320B。 */
+export function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)}MB`
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)}KB`
+  return `${bytes}B`
 }
 
 export function _resetPerfPhasesForTests(): void {

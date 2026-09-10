@@ -60,6 +60,7 @@
 
 ## 性能 / 疑难根因
 
+- [Ctrl+P 巨型工作区卡顿根治](ctrlp-giant-workspace-listing-perf.md) — 慢在 IPC decode 不在业务；DTO 判别联合只传 relPaths+截断整份丢弃+预热预算+200ms 输入防抖；红线=rg --iglob 恒定压 -g（负向排除须同族）、createInstance 尾随普通参数后禁再注入
 - [子 agent 莫名「被拒绝」停住](acp-synthetic-user-rejected-denial.md) — CLI 把任意非 interrupt 的 tool-queue abort 兜底成 user-rejected；判据=时间差 18~43ms 为伪造、>450ms 为真人；已加 syntheticDenial 拦截但改不了 CLI 内部历史
 - [AI provider 面板保存慢/列表闪空](ai-panel-getmodels-blocking-latency.md) — 根因=getModels 在线枚举被绑进 reload 的 Promise.all；修=快读先落地+枚举后台化+registry 按内容指纹保留缓存
 - [单个死 provider 端点拖垮每次 AI 调用](ai-request-blocked-by-dead-provider-endpoint.md) — 热路径全量枚举=把所有端点串成 AND；修=按 modelId 定向解析+per-endpoint 2.5s+仅超时冷却 30s

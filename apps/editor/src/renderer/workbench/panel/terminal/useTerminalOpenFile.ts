@@ -64,7 +64,7 @@ export function useResolveTerminalFile(): (absolutePath: string) => Promise<URI 
             maxResults: 10,
           })
 
-          const first = result.results[0]
+          const first = 'results' in result ? result.results[0] : undefined
           if (first) return URI.revive(first.resource) as URI
           logger.warn(`cannot resolve terminal link: ${absolutePath}`)
           return null

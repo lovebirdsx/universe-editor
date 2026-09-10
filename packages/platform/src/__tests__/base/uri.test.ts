@@ -2,6 +2,7 @@
  *  Tests for packages/platform/src/base/uri.ts.
  *--------------------------------------------------------------------------------------------*/
 
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   URI,
@@ -145,6 +146,44 @@ describe('URI — joinPath()', () => {
   it('throws when base has no path', () => {
     const base = URI.from({ scheme: 'mailto' })
     expect(() => URI.joinPath(base, 'sub')).toThrow(/cannot call joinPath on URI without path/)
+  })
+})
+
+describe('URI — workspace-relative path derivation', () => {
+  /**
+   * Gate for the file-search listing contract: the main process ships only
+   * workspace-relative paths (`/`-separated, no leading `./` or `/` — see
+   * `normalizeRel`) and every consumer rebuilds the absolute URI from the root.
+   * That is only safe if the two derivations agree byte for byte.
+   */
+  const roots = ['/repo', '/repo/', 'C:/repo', 'C:/repo/', '//host/share', '//host/share/']
+  const rels = [
+    'a.ts',
+    'src/a.ts',
+    'src/deep/a.ts',
+    'src/my file.ts',
+    'src/文件 名.ts',
+    'src/über.ts',
+  ]
+
+  it('matches deriving the URI from the absolute path', () => {
+    for (const root of roots) {
+      for (const rel of rels) {
+        const derived = URI.joinPath(URI.file(root), rel)
+        const absolute = URI.file(path.join(root, rel))
+        expect(derived.toString(), `root=${root} rel=${rel}`).toBe(absolute.toString())
+      }
+    }
+  })
+
+  it('keeps a non-file scheme so remote roots survive the derivation', () => {
+    // Remote workspaces hand the search service a `remote-ssh:` root; joining the
+    // relative path must stay on that scheme (URI.file would send it to the disk).
+    const root = URI.from({ scheme: 'remote-ssh', authority: 'host', path: '/home/u/repo' })
+    const derived = URI.joinPath(root, 'src/a.ts')
+    expect(derived.scheme).toBe('remote-ssh')
+    expect(derived.authority).toBe('host')
+    expect(derived.fsPath).toBe('/home/u/repo/src/a.ts')
   })
 })
 
