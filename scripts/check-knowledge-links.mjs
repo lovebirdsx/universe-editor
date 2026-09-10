@@ -118,6 +118,9 @@ function pathExists(candidate, baseDir) {
   const cleaned = candidate.replace(/[:#].*$/, '').replace(/\/+$/, '')
   if (!cleaned) return true
   if (/(^|\/)(out|dist|node_modules)(\/|$)/.test(cleaned)) return true
+  // 优先按仓库根锚定解析；找不到再回退到相对当前文档目录（markdown 链接语义，
+  // 与 LSP 一致，如 extensions/perforce/CLAUDE.md 里的 `docs/graph.md`）。
+  // 两处都不存在才算死链，校验严格性不变。
   const full = candidate.startsWith('references/')
     ? join(baseDir, cleaned)
     : join(REPO_ROOT, cleaned)
@@ -125,6 +128,14 @@ function pathExists(candidate, baseDir) {
   if (cleaned.endsWith('.js')) {
     const stem = full.slice(0, -3)
     if (existsSync(`${stem}.ts`) || existsSync(`${stem}.tsx`)) return true
+  }
+  if (!candidate.startsWith('references/')) {
+    const local = join(baseDir, cleaned)
+    if (existsSync(local)) return true
+    if (cleaned.endsWith('.js')) {
+      const stem = local.slice(0, -3)
+      if (existsSync(`${stem}.ts`) || existsSync(`${stem}.tsx`)) return true
+    }
   }
   return false
 }
