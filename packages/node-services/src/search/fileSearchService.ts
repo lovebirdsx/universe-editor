@@ -718,7 +718,8 @@ export class FileSearchService extends Disposable implements IFileSearchService 
       let settled = false
 
       const append = (chunk: string): void => {
-        if (stopReason !== null || capped) return
+        // settle 之后仍可能有迟到 data 事件挂在已 resolve 的 lines 上，直接丢弃。
+        if (settled || stopReason !== null || capped) return
         const data = remainder + chunk
         const parts = data.split(/\r?\n/)
         remainder = parts.pop() ?? ''
@@ -776,7 +777,10 @@ export class FileSearchService extends Disposable implements IFileSearchService 
         this._logger.warn(`fileSearch rg(${label}) error: ${err.message}`)
         finish()
       })
-      child.on('exit', (code) => {
+      // 结算挂在 'close' 而非 'exit'：'exit' 只表示子进程退出，stdout 数据可能还
+      // 在 pipe 里没派发到 JS——高负载机器上两路预过滤 rg 同一事件循环批次处理 exit
+      // 时，会拿到空数组导致搜索偶发返回空；'close' 保证 stdio 全部关闭、stdout 排空。
+      child.on('close', (code) => {
         if (
           stopReason === null &&
           !capped &&
