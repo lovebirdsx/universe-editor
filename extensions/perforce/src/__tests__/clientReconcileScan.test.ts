@@ -211,8 +211,10 @@ interface RespondOptions {
   cleanExit?: number | undefined
   cleanStderr?: string
   /** Full control of a `p4 sync` reply: raw stdout/stderr lines (the sync-drift
-   *  tests hand the server-printed applied / refused lines verbatim). */
-  sync?: (argv: string[]) => { stdout?: string; stderr?: string; exit?: number }
+   *  tests hand the server-printed applied / refused lines verbatim). `hold`
+   *  keeps the child open until `releaseHeld()` — a suspension test needs the
+   *  run to outlive its own writes. */
+  sync?: (argv: string[]) => { stdout?: string; stderr?: string; exit?: number; hold?: boolean }
 }
 
 const calls: string[][] = []
@@ -330,6 +332,7 @@ function handle(
       stdout: reply.stdout ?? '',
       ...(reply.stderr !== undefined ? { stderr: reply.stderr } : {}),
       ...(reply.exit !== undefined ? { exit: reply.exit } : {}),
+      ...(reply.hold === true ? { hold: true } : {}),
     }
   }
   // changes / fstat / describe — succeed silently with no records.
@@ -2805,6 +2808,49 @@ describe('PerforceClient.runReconcileScan', () => {
     // …but self-mutation suppression means nothing is asked about them again.
     expect(narrowScans()).toHaveLength(before)
     expect(fullScanScans()).toHaveLength(1)
+  })
+
+  it("a held sync's own write flood never reaches the narrow query, and applied rows still leave the drift set", async () => {
+    // A whole-workspace sync outlives the 5s self-mutation window, so its late
+    // writes are dropped by the sync-lifecycle suspension instead — and counted
+    // for the status bar. Its own writes must never become narrow queries, and
+    // a pre-existing drift row the sync did NOT rewrite must survive untouched
+    // (the dropped watcher event is not re-derived this session — known gap).
+    const wt = makeFakeWatcher()
+    const client = await makeClient(
+      {
+        opened: () => [],
+        reconcile: (spec) =>
+          spec.endsWith(`${LOCAL}/...`) ? [{ rel: 'a.txt' }, { rel: 'b.txt' }] : [],
+        sync: () => ({
+          stdout: `//depot/branch_x/a.txt#3 - updated as ${LOCAL}/a.txt`,
+          hold: true,
+        }),
+      },
+      fakeDisk(),
+      fakeClock(),
+      { createFileSystemWatcher: () => wt.watcher, watchRoot: ROOT, externalChangeDebounceMs: 0 },
+    )
+    client.setReconcileScope([LOCAL])
+    client.scheduleReconcileScan()
+    await client.whenReconcileScanSettled()
+    expect(driftFiles(client)).toEqual([`${LOCAL}/a.txt`, `${LOCAL}/b.txt`])
+
+    const run = client.sync('#head', { onProgress: () => {} })
+    await vi.waitFor(() => expect(heldChildren.length).toBe(1))
+    const before = narrowScans().length
+    wt.fire('change', `${LOCAL}/a.txt`)
+    wt.fire('change', `${LOCAL}/b.txt`)
+    await nextMacrotask()
+    await client.whenExternalFlushSettled()
+    expect(narrowScans()).toHaveLength(before)
+
+    releaseHeld()
+    const res = await run
+    expect(res.ok).toBe(true)
+    // a.txt's row is subtracted (p4 rewrote it); b.txt's survives — its event
+    // was dropped by the suspension and is only re-derived next session.
+    expect(driftFiles(client)).toEqual([`${LOCAL}/b.txt`])
   })
 
   it('does not query on external events while offline', async () => {

@@ -246,6 +246,23 @@ export interface SyncProgress {
   readonly currentFile?: string
   /** `_now()` at sync start, for the status bar's elapsed readout. */
   readonly startedAt: number
+  /**
+   * Working-tree watcher events observed since this sync armed — the "the disk
+   * is being written" signal that fills p4's stdout silence under `--parallel`
+   * (p4 flushes per batch, so `done` can freeze for minutes on a wide sync).
+   *
+   * Deliberately a LOWER BOUND and never authoritative: the renderer's file
+   * watcher truncates each push at 5000 events and applies `files.watcherExclude`,
+   * so the true write count is always >= this. Omitted while zero — also the
+   * honest rendering when there is no watcher at all (remote workspace / no
+   * watchRoot).
+   *
+   * When syncs overlap (the status bar, the Explorer and the graph can each
+   * start one) the counter is shared across the overlap and resets only when
+   * the LAST suspension releases — matching how `done` / `startedAt` already
+   * describe the run that armed first.
+   */
+  readonly diskWrites?: number
 }
 
 export interface P4CacheOptions {
@@ -446,6 +463,16 @@ const MAX_EXTERNAL_NARROW_PATHS = 2000
  * {@link PerforceClient._flushExternalChanges}).
  */
 const SELF_MUTATION_SUPPRESS_MS = 5000
+
+/**
+ * The tail suppression window armed when a sync releases its full-lifecycle
+ * suspension ({@link PerforceClient._endExternalSuspend}). The sync's own writes
+ * reach the watcher late (RPC forwarding is not synchronous with the child's
+ * writes), so without a fresh window the write flood would re-enter the pipeline
+ * as "external drift" the moment the suspension lifts. Named separately from
+ * {@link SELF_MUTATION_SUPPRESS_MS} so a wide-sync tail can be tuned on its own.
+ */
+const SYNC_TAIL_SUPPRESS_MS = 5000
 
 /** What a `p4 sync` run reports back — see {@link PerforceClient.sync}. */
 export interface SyncRunResult {
@@ -759,6 +786,20 @@ export class PerforceClient {
   /** `_now()` until which the watcher ignores events — the plugin's own
    *  disk mutations (see {@link SELF_MUTATION_SUPPRESS_MS}). */
   private _suppressExternalUntil = 0
+  /** Depth of nested sync-lifecycle suspensions of external-drift handling
+   *  (see {@link _beginExternalSuspend}). A counter, not a flag: runSync is
+   *  reachable from the status bar, the Explorer, the graph and the timeline,
+   *  and `_busyOps` is a stack — a flag would be released by whichever sync
+   *  finished first. */
+  private _externalSuspendCount = 0
+  /** Watcher events observed while a sync-lifecycle suspension is armed — the
+   *  status bar's disk-liveness counter (see {@link SyncProgress.diskWrites}).
+   *  Reset when the suspension depth goes 0 → 1. */
+  private _syncDiskWrites = 0
+  /** Watcher events dropped over the suspension's whole lifetime, logged at
+   *  release so a real machine can quantify the blind window (see
+   *  {@link _endExternalSuspend}). */
+  private _syncDroppedEvents = 0
   /** Grey ✎ markers (files other clients have open), keyed by {@link scopeKey}'d
    *  local path, published by {@link _publishSupplementaryDecorations}. */
   private readonly _othersDecorations = new Map<string, SourceControlSupplementaryDecoration>()
@@ -1080,8 +1121,20 @@ export class PerforceClient {
       done,
       ...(currentFile !== undefined ? { currentFile } : {}),
       startedAt,
+      ...(this._syncDiskWrites > 0 ? { diskWrites: this._syncDiskWrites } : {}),
     }
     this._bumpSyncProgress()
+  }
+
+  /** One watcher-reported write while a sync is in flight. No-op without a
+   *  streaming sync (nothing to attribute it to), and cheap by design — this
+   *  runs inside the async watcher callback, which must never throw. Reuses
+   *  {@link _setSyncProgress} so the 200ms emit throttle and the `startedAt` /
+   *  `currentFile` fields are inherited, not reimplemented. */
+  private _bumpSyncDiskWrites(): void {
+    if (this._syncProgress === undefined) return
+    this._syncDiskWrites++
+    this._setSyncProgress(this._syncProgress.done, this._syncProgress.currentFile)
   }
 
   private _bumpSyncProgress(): void {
@@ -2761,155 +2814,229 @@ export class PerforceClient {
     const args = ['sync', ...parallel, ...(options?.force === true ? ['-f'] : []), ...targets]
     const onProgress = options?.onProgress
     this._suppressExternalChanges()
-    return this._withBusy(localize('perforce.busy.sync', 'Syncing'), async () => {
-      // When streaming, the authoritative summary is accumulated line-by-line as
-      // p4 emits it — the buffered stdout never materializes (p4Service skips it
-      // entirely on this path), so `parseSyncOutput` would see an empty string.
-      // Non-applied outcome lines are also kept verbatim: on a non-zero exit the
-      // error classifier/toast reads stdout+stderr, and stdout is empty here, so
-      // these lines are the only record of what p4 said on that channel. Only the
-      // non-applied outcomes are kept — applied lines are the bulk of a wide sync
-      // and are counted, not stored — so the list is bounded by the run's
-      // exceptional files, not its size.
-      let applied = 0
-      let keptOpen = 0
-      let mustResolve = 0
-      let refusedModified = 0
-      let refusedOverwrite = 0
-      // Measured on P4D 2024.2 the "file(s) up-to-date." notice arrives on
-      // stderr, but parseSyncOutput checks BOTH channels — so the streaming
-      // path watches stdout for it too, keeping the same whole-run verdict
-      // however a future server reports it. It is a whole-run verdict, not a
-      // counted outcome, so it doesn't touch `done`.
-      let sawUpToDateLine = false
-      const outcomeLines: string[] = []
-      // The applied lines as structured rows, kept so the success tail can subtract
-      // exactly the files p4 rewrote from the drift set (see `_removeDriftForSyncRun`).
-      // Only the streaming path needs a running list — the buffered path re-parses
-      // stdout whole — and only on a streaming run is the line otherwise gone once
-      // counted.
-      const appliedRows: SyncPreviewFile[] = []
-      // Lines classifySyncLine couldn't place. Logged whole and as they arrive —
-      // a `--parallel` run whose output shape differs from serial would otherwise
-      // leave the bar at `Syncing 0` with no trace of what p4 said, and the end
-      // of a long run is too late to learn the first refusal's wording. Capped so
-      // a pathological transcript can't flood the output channel.
-      let unrecognizedLogged = 0
-      const MAX_UNRECOGNIZED_LOGGED = 20
-      const doneCount = (): number =>
-        applied + keptOpen + mustResolve + refusedModified + refusedOverwrite
-      const onStdoutLine = onProgress
-        ? (line: string): void => {
-            const kind = classifySyncLine(line)
-            if (kind === undefined) {
-              if (/file\(s\) up-to-date/i.test(line)) sawUpToDateLine = true
-              else if (unrecognizedLogged < MAX_UNRECOGNIZED_LOGGED) {
-                unrecognizedLogged++
-                this._log?.(`[perforce] sync: unrecognized stdout line: ${line}`)
+    // Suspend external-drift handling for the sync's whole lifecycle: its own
+    // write flood would otherwise leak past the 5s window (a wide sync far
+    // outlives it) and pile narrow `reconcile -n` queries onto the same
+    // background concurrency slots the sync itself is using. Watcher events
+    // during the suspension are counted for the status bar's disk readout and
+    // dropped from the drift pipeline — the follow-up refresh and the next
+    // session's reconcile scan cover them.
+    this._beginExternalSuspend()
+    try {
+      // The await is load-bearing: without it the finally below would release
+      // the suspension the moment this function returns, before the sync settles.
+      return await this._withBusy(localize('perforce.busy.sync', 'Syncing'), async () => {
+        // When streaming, the authoritative summary is accumulated line-by-line as
+        // p4 emits it — the buffered stdout never materializes (p4Service skips it
+        // entirely on this path), so `parseSyncOutput` would see an empty string.
+        // Non-applied outcome lines are also kept verbatim: on a non-zero exit the
+        // error classifier/toast reads stdout+stderr, and stdout is empty here, so
+        // these lines are the only record of what p4 said on that channel. Only the
+        // non-applied outcomes are kept — applied lines are the bulk of a wide sync
+        // and are counted, not stored — so the list is bounded by the run's
+        // exceptional files, not its size.
+        let applied = 0
+        let keptOpen = 0
+        let mustResolve = 0
+        let refusedModified = 0
+        let refusedOverwrite = 0
+        // Measured on P4D 2024.2 the "file(s) up-to-date." notice arrives on
+        // stderr, but parseSyncOutput checks BOTH channels — so the streaming
+        // path watches stdout for it too, keeping the same whole-run verdict
+        // however a future server reports it. It is a whole-run verdict, not a
+        // counted outcome, so it doesn't touch `done`.
+        let sawUpToDateLine = false
+        const outcomeLines: string[] = []
+        // The applied lines as structured rows, kept so the success tail can subtract
+        // exactly the files p4 rewrote from the drift set (see `_removeDriftForSyncRun`).
+        // Only the streaming path needs a running list — the buffered path re-parses
+        // stdout whole — and only on a streaming run is the line otherwise gone once
+        // counted.
+        const appliedRows: SyncPreviewFile[] = []
+        // Lines classifySyncLine couldn't place. Logged whole and as they arrive —
+        // a `--parallel` run whose output shape differs from serial would otherwise
+        // leave the bar at `Syncing 0` with no trace of what p4 said, and the end
+        // of a long run is too late to learn the first refusal's wording. Capped so
+        // a pathological transcript can't flood the output channel.
+        let unrecognizedLogged = 0
+        const MAX_UNRECOGNIZED_LOGGED = 20
+        const doneCount = (): number =>
+          applied + keptOpen + mustResolve + refusedModified + refusedOverwrite
+        const onStdoutLine = onProgress
+          ? (line: string): void => {
+              const kind = classifySyncLine(line)
+              if (kind === undefined) {
+                if (/file\(s\) up-to-date/i.test(line)) sawUpToDateLine = true
+                else if (unrecognizedLogged < MAX_UNRECOGNIZED_LOGGED) {
+                  unrecognizedLogged++
+                  this._log?.(`[perforce] sync: unrecognized stdout line: ${line}`)
+                }
+                return
               }
-              return
+              if (kind === 'applied') {
+                applied++
+                const row = parseSyncAppliedLine(line, this.root)
+                if (row) appliedRows.push(row)
+              } else {
+                if (kind === 'keptOpen') keptOpen++
+                else if (kind === 'mustResolve') mustResolve++
+                else if (kind === 'refused') refusedModified++
+                else refusedOverwrite++
+                outcomeLines.push(line)
+              }
+              const file = syncLineFile(line)
+              this._setSyncProgress(doneCount(), file)
+              onProgress({ done: doneCount(), file })
             }
-            if (kind === 'applied') {
-              applied++
-              const row = parseSyncAppliedLine(line, this.root)
-              if (row) appliedRows.push(row)
-            } else {
-              if (kind === 'keptOpen') keptOpen++
-              else if (kind === 'mustResolve') mustResolve++
-              else if (kind === 'refused') refusedModified++
-              else refusedOverwrite++
-              outcomeLines.push(line)
-            }
-            const file = syncLineFile(line)
-            this._setSyncProgress(doneCount(), file)
-            onProgress({ done: doneCount(), file })
-          }
-        : undefined
-      try {
-        const { value: result, cancelled } = await this._cancellable(async (signal) => {
-          // Seed the bar immediately — with no pre-flight count, the first line
-          // can take a while on a wide scope (and `--parallel` may hold stdout
-          // longer still), and without this frame the bar sits on the bare
-          // fallback label for that whole span.
-          if (onStdoutLine) this._setSyncProgress(0, undefined)
-          return this._p4.exec(args, {
-            // Sync moves content: its runtime scales with the bytes fetched, so
-            // CONTENT_TRANSFER_EXEC disarms the `commandTimeout` watchdog that
-            // would otherwise kill a healthy whole-repo pull at 600s. The signal
-            // from `_cancellable` is the only stop now.
-            signal,
-            ...CONTENT_TRANSFER_EXEC,
-            ...(onStdoutLine ? { onStdoutLine } : {}),
+          : undefined
+        try {
+          const { value: result, cancelled } = await this._cancellable(async (signal) => {
+            // Seed the bar immediately — with no pre-flight count, the first line
+            // can take a while on a wide scope (and `--parallel` may hold stdout
+            // longer still), and without this frame the bar sits on the bare
+            // fallback label for that whole span.
+            if (onStdoutLine) this._setSyncProgress(0, undefined)
+            return this._p4.exec(args, {
+              // Sync moves content: its runtime scales with the bytes fetched, so
+              // CONTENT_TRANSFER_EXEC disarms the `commandTimeout` watchdog that
+              // would otherwise kill a healthy whole-repo pull at 600s. The signal
+              // from `_cancellable` is the only stop now.
+              signal,
+              ...CONTENT_TRANSFER_EXEC,
+              ...(onStdoutLine ? { onStdoutLine } : {}),
+            })
           })
-        })
-        // Clear as soon as the p4 run settles — the count belongs to the
-        // "Syncing" label, and the follow-up refresh runs under its own busy
-        // label ("Refreshing"). The finally below still covers the throws
-        // between here and there (classify, parse, cache invalidation).
-        this._clearSyncProgress()
-        if (cancelled) {
-          // The user asked for this — log it, don't toast it, and still refresh so
-          // the view reflects whatever landed before the abort. Whatever p4 already
-          // reported as applied IS on disk matching its have revision, so those
-          // drift rows are subtracted exactly as on a clean exit.
-          this._log?.('[perforce] sync cancelled by user')
-          // Whatever p4 already reported as applied IS on disk matching its have
-          // revision, so those drift rows are subtracted exactly as on a clean
-          // exit. Streaming runs collected them on the way through; a buffered run
-          // re-parses the partial stdout.
-          this._removeDriftForSyncRun(
-            onStdoutLine ? appliedRows : parseSyncApplied(result.stdout, this.root),
-            [],
-            [],
-          )
-          await this._refreshAfterMutation()
-          this._clearBehindDecorations()
-          return {
-            ok: false,
-            cancelled: true,
-            summary: undefined,
-            refusedFiles: [],
-            refusedOverwriteFiles: [],
-            error: undefined,
-          }
-        }
-        const summary: SyncRunSummary = onStdoutLine
-          ? {
-              applied,
-              keptOpen,
-              mustResolve,
-              refusedModified,
-              refusedOverwrite,
-              upToDate: sawUpToDateLine || /file\(s\) up-to-date/i.test(result.stderr),
-              unrecognized: false,
+          // Clear as soon as the p4 run settles — the count belongs to the
+          // "Syncing" label, and the follow-up refresh runs under its own busy
+          // label ("Refreshing"). The finally below still covers the throws
+          // between here and there (classify, parse, cache invalidation).
+          this._clearSyncProgress()
+          if (cancelled) {
+            // The user asked for this — log it, don't toast it, and still refresh so
+            // the view reflects whatever landed before the abort. Whatever p4 already
+            // reported as applied IS on disk matching its have revision, so those
+            // drift rows are subtracted exactly as on a clean exit.
+            this._log?.('[perforce] sync cancelled by user')
+            // Whatever p4 already reported as applied IS on disk matching its have
+            // revision, so those drift rows are subtracted exactly as on a clean
+            // exit. Streaming runs collected them on the way through; a buffered run
+            // re-parses the partial stdout.
+            this._removeDriftForSyncRun(
+              onStdoutLine ? appliedRows : parseSyncApplied(result.stdout, this.root),
+              [],
+              [],
+            )
+            await this._refreshAfterMutation()
+            this._clearBehindDecorations()
+            return {
+              ok: false,
+              cancelled: true,
+              summary: undefined,
+              refusedFiles: [],
+              refusedOverwriteFiles: [],
+              error: undefined,
             }
-          : parseSyncOutput(result.stdout, result.stderr)
-        const refusedFiles = onStdoutLine
-          ? parseSyncRefused(outcomeLines.join('\n'), this.root)
-          : parseSyncRefused(result.stdout, this.root)
-        const refusedOverwriteFiles = onStdoutLine
-          ? parseSyncOverwriteRefused(outcomeLines.join('\n'), this.root)
-          : parseSyncOverwriteRefused(result.stdout, this.root)
-        const appliedFiles = onStdoutLine ? appliedRows : parseSyncApplied(result.stdout, this.root)
-        // Zero counted lines on a streaming run means the bar sat at `Syncing 0`
-        // the whole run; the per-line log above already captured what p4 actually
-        // said, so all that's left is to say so once.
-        if (onStdoutLine && doneCount() === 0 && !sawUpToDateLine && unrecognizedLogged > 0) {
+          }
+          const summary: SyncRunSummary = onStdoutLine
+            ? {
+                applied,
+                keptOpen,
+                mustResolve,
+                refusedModified,
+                refusedOverwrite,
+                upToDate: sawUpToDateLine || /file\(s\) up-to-date/i.test(result.stderr),
+                unrecognized: false,
+              }
+            : parseSyncOutput(result.stdout, result.stderr)
+          const refusedFiles = onStdoutLine
+            ? parseSyncRefused(outcomeLines.join('\n'), this.root)
+            : parseSyncRefused(result.stdout, this.root)
+          const refusedOverwriteFiles = onStdoutLine
+            ? parseSyncOverwriteRefused(outcomeLines.join('\n'), this.root)
+            : parseSyncOverwriteRefused(result.stdout, this.root)
+          const appliedFiles = onStdoutLine
+            ? appliedRows
+            : parseSyncApplied(result.stdout, this.root)
+          // Zero counted lines on a streaming run means the bar sat at `Syncing 0`
+          // the whole run; the per-line log above already captured what p4 actually
+          // said, so all that's left is to say so once.
+          if (onStdoutLine && doneCount() === 0 && !sawUpToDateLine && unrecognizedLogged > 0) {
+            this._log?.(
+              `[perforce] sync: ${unrecognizedLogged} unrecognized line(s) logged above; none counted`,
+            )
+          }
+          // Measured on P4D 2024.2: "file(s) up-to-date." arrives on **stderr with
+          // exit 0**. Checked before the exit code so the outcome is the same however
+          // a given server reports it — a future non-zero variant must not read as a
+          // failure, and this one must not read as "applied 0 files, something's off".
+          if (
+            summary.upToDate &&
+            summary.applied === 0 &&
+            summary.refusedModified === 0 &&
+            summary.refusedOverwrite === 0
+          ) {
+            this._log?.('[perforce] sync: already up to date')
+            return {
+              ok: true,
+              cancelled: false,
+              summary,
+              refusedFiles,
+              refusedOverwriteFiles,
+              error: undefined,
+            }
+          }
+          if (result.exitCode !== 0) {
+            // Streaming runs have no buffered stdout, so give the classifier the
+            // outcome lines collected on the way through — a `must resolve` abort
+            // would otherwise be invisible (it prints to stdout, not stderr).
+            const errorInput = onStdoutLine
+              ? { ...result, stdout: outcomeLines.join('\n') }
+              : result
+            const error = classifySyncError(errorInput)
+            this._log?.(`[perforce] sync failed (${error.kind}): ${p4ErrorText(errorInput)}`)
+            await this._refreshAfterMutation()
+            this._clearBehindDecorations()
+            return {
+              ok: false,
+              cancelled: false,
+              summary,
+              refusedFiles,
+              refusedOverwriteFiles,
+              error,
+            }
+          }
+          if (summary.unrecognized) {
+            // Exit 0 with output we couldn't account for: never silent — the counts
+            // shown to the user would otherwise read as "nothing happened".
+            this._log?.(
+              `[perforce] sync: output not parseable, reporting as unknown — ${result.stdout.trim().slice(0, 500)}`,
+            )
+          }
           this._log?.(
-            `[perforce] sync: ${unrecognizedLogged} unrecognized line(s) logged above; none counted`,
+            `[perforce] sync ${spec}: ${summary.applied} applied, ${summary.keptOpen} kept open, ` +
+              `${summary.mustResolve} need resolve, ${summary.refusedModified} refused (locally modified), ` +
+              `${summary.refusedOverwrite} refused (untracked file in the way)`,
           )
-        }
-        // Measured on P4D 2024.2: "file(s) up-to-date." arrives on **stderr with
-        // exit 0**. Checked before the exit code so the outcome is the same however
-        // a given server reports it — a future non-zero variant must not read as a
-        // failure, and this one must not read as "applied 0 files, something's off".
-        if (
-          summary.upToDate &&
-          summary.applied === 0 &&
-          summary.refusedModified === 0 &&
-          summary.refusedOverwrite === 0
-        ) {
-          this._log?.('[perforce] sync: already up to date')
+          // A sync only ever REMOVES drift, never adds it: a file p4 rewrote now
+          // matches its (new) have revision, so its drift row is stale; a file p4
+          // refused was left on disk untouched, so its row must survive. Subtract
+          // exactly the server-reported applied set — never the sync targets, which
+          // include up-to-date files that still carry real drift.
+          this._removeDriftForSyncRun(appliedFiles, refusedFiles, refusedOverwriteFiles)
+          if (appliedFiles.length < summary.applied) {
+            // A line the counter accepted but extraction couldn't place: the drift
+            // row for that file is still standing, so re-ask reconcile about what's
+            // left instead of guessing at the gap.
+            this._log?.(
+              `[perforce] sync: ${summary.applied - appliedFiles.length} applied line(s) yielded no local path; revalidating the drift rows`,
+            )
+            await this._revalidateDriftAfterSync()
+          }
+          // A sync rewrites have-revisions across the scope, so every path-keyed
+          // cache entry (fstat/print/filelog) is potentially stale — full clear.
+          this._invalidateWorkspaceState()
+          this._clearBehindDecorations()
+          await this._refreshAfterMutation()
           return {
             ok: true,
             cancelled: false,
@@ -2918,71 +3045,19 @@ export class PerforceClient {
             refusedOverwriteFiles,
             error: undefined,
           }
+        } finally {
+          // Backstop for the throws between the settle and here (classify, parse,
+          // cache invalidation): the bar must never show a stale count.
+          this._clearSyncProgress()
         }
-        if (result.exitCode !== 0) {
-          // Streaming runs have no buffered stdout, so give the classifier the
-          // outcome lines collected on the way through — a `must resolve` abort
-          // would otherwise be invisible (it prints to stdout, not stderr).
-          const errorInput = onStdoutLine ? { ...result, stdout: outcomeLines.join('\n') } : result
-          const error = classifySyncError(errorInput)
-          this._log?.(`[perforce] sync failed (${error.kind}): ${p4ErrorText(errorInput)}`)
-          await this._refreshAfterMutation()
-          this._clearBehindDecorations()
-          return {
-            ok: false,
-            cancelled: false,
-            summary,
-            refusedFiles,
-            refusedOverwriteFiles,
-            error,
-          }
-        }
-        if (summary.unrecognized) {
-          // Exit 0 with output we couldn't account for: never silent — the counts
-          // shown to the user would otherwise read as "nothing happened".
-          this._log?.(
-            `[perforce] sync: output not parseable, reporting as unknown — ${result.stdout.trim().slice(0, 500)}`,
-          )
-        }
-        this._log?.(
-          `[perforce] sync ${spec}: ${summary.applied} applied, ${summary.keptOpen} kept open, ` +
-            `${summary.mustResolve} need resolve, ${summary.refusedModified} refused (locally modified), ` +
-            `${summary.refusedOverwrite} refused (untracked file in the way)`,
-        )
-        // A sync only ever REMOVES drift, never adds it: a file p4 rewrote now
-        // matches its (new) have revision, so its drift row is stale; a file p4
-        // refused was left on disk untouched, so its row must survive. Subtract
-        // exactly the server-reported applied set — never the sync targets, which
-        // include up-to-date files that still carry real drift.
-        this._removeDriftForSyncRun(appliedFiles, refusedFiles, refusedOverwriteFiles)
-        if (appliedFiles.length < summary.applied) {
-          // A line the counter accepted but extraction couldn't place: the drift
-          // row for that file is still standing, so re-ask reconcile about what's
-          // left instead of guessing at the gap.
-          this._log?.(
-            `[perforce] sync: ${summary.applied - appliedFiles.length} applied line(s) yielded no local path; revalidating the drift rows`,
-          )
-          await this._revalidateDriftAfterSync()
-        }
-        // A sync rewrites have-revisions across the scope, so every path-keyed
-        // cache entry (fstat/print/filelog) is potentially stale — full clear.
-        this._invalidateWorkspaceState()
-        this._clearBehindDecorations()
-        await this._refreshAfterMutation()
-        return {
-          ok: true,
-          cancelled: false,
-          summary,
-          refusedFiles,
-          refusedOverwriteFiles,
-          error: undefined,
-        }
-      } finally {
-        // Backstop for the throws between the settle and here (classify, parse,
-        // cache invalidation): the bar must never show a stale count.
-        this._clearSyncProgress()
-      }
-    })
+      })
+    } finally {
+      // Paired with the arm below `_withBusy`: if `_withBusy`'s own emit (or
+      // anything in the callback) throws before the settle, the suspension must
+      // not outlive the run — this finally is the single release point on every
+      // path (success / cancel / throw).
+      this._endExternalSuspend()
+    }
   }
 
   /** Sync a specific set of local paths to `spec` (defaults to `#head`). Used by
@@ -3423,8 +3498,18 @@ export class PerforceClient {
   private _onExternalFileEvent(path: string): void {
     if (this._disposed) return
     if (this._connection !== 'connected') return
-    if (this._now() < this._suppressExternalUntil) return
     if (!path) return
+    if (this._externalSuspendCount > 0) {
+      // The sync's own write flood. Count it (the bar's liveness signal — p4
+      // stdout goes quiet for minutes under `--parallel`), then drop it
+      // outright: never the pending set, never a narrow query. Counting sits
+      // before the scope guard because its semantics are "the workspace is
+      // being written", not "there is in-scope drift".
+      this._syncDroppedEvents++
+      this._bumpSyncDiskWrites()
+      return
+    }
+    if (this._now() < this._suppressExternalUntil) return
     if (!this._isInReconcileScope(path)) return
     this._externalChangePending.add(path)
     this._scheduleExternalInvalidation()
@@ -3490,6 +3575,12 @@ export class PerforceClient {
       this._externalFlushDeferred = false
       return
     }
+    // A sync-lifecycle suspension is armed: keep the queue (only pre-sync paths
+    // can be in it — the suspension drops new events at the watcher entry) and
+    // let the release re-arm the timer. Never reschedule here, or a long sync
+    // would run a narrow query per debounce tick — exactly the flood this
+    // suspension exists to stop.
+    if (this._externalSuspendCount > 0) return
     if (
       this._now() < this._suppressExternalUntil &&
       !this._externalFlushDeferred &&
@@ -3594,8 +3685,36 @@ export class PerforceClient {
    *  the workspace writes it causes (they are the mutation's own effect, already
    *  covered by {@link _invalidateAfterMutation} + the post-mutation refresh —
    *  the watcher must not pile a second round on top). */
-  private _suppressExternalChanges(): void {
-    this._suppressExternalUntil = this._now() + SELF_MUTATION_SUPPRESS_MS
+  private _suppressExternalChanges(ms: number = SELF_MUTATION_SUPPRESS_MS): void {
+    this._suppressExternalUntil = this._now() + ms
+  }
+
+  /** Arm the sync-lifecycle suspension of external-drift handling. Nested calls
+   *  stack (see {@link _externalSuspendCount}); the disk counter resets only on
+   *  the 0 → 1 transition so overlapping syncs share one count, matching how
+   *  `done` / `startedAt` are already shared. */
+  private _beginExternalSuspend(): void {
+    if (this._externalSuspendCount === 0) {
+      this._syncDiskWrites = 0
+      this._syncDroppedEvents = 0
+    }
+    this._externalSuspendCount++
+  }
+
+  /** Release one level of the sync-lifecycle suspension. At depth 0 the tail
+   *  window is re-armed (this run's own writes reach the watcher late via RPC)
+   *  and any external changes queued BEFORE the sync are re-queried. */
+  private _endExternalSuspend(): void {
+    if (this._externalSuspendCount > 0) this._externalSuspendCount--
+    if (this._externalSuspendCount > 0) return
+    if (this._disposed) return
+    this._log?.(
+      `[perforce] sync: released external-change suspension (${this._syncDroppedEvents} watcher event(s) dropped)`,
+    )
+    this._suppressExternalChanges(SYNC_TAIL_SUPPRESS_MS)
+    if (this._externalChangePending.size > 0) {
+      this._scheduleExternalInvalidation()
+    }
   }
 
   /**
@@ -5583,6 +5702,11 @@ export class PerforceClient {
       this._syncProgressTimer = undefined
     }
     this._syncProgress = undefined
+    // A disposed client must not re-arm timers from a late release, and the
+    // counters have nothing left to describe.
+    this._externalSuspendCount = 0
+    this._syncDiskWrites = 0
+    this._syncDroppedEvents = 0
     // A coalesced drift assignment must never fire into a disposed client either.
     if (this._driftApplyTimer !== undefined) {
       clearTimeout(this._driftApplyTimer)

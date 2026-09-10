@@ -12,6 +12,7 @@
 - [`opened`/`reconcile -n` 的 `clientFile` 是 client 语法](#openedreconcile--n-的-clientfile-是-client-语法不是本地路径踩过)
 - [sync 拒绝有三个形态](#sync-拒绝有三个形态只解析一个就会谎报已是最新踩过)
 - [`P4Service` 首条流式通道：`onStdoutLine`](#p4service-首条流式通道p4execoptionsonstdoutlinesync-进度条数据源)
+- [`--parallel` 下 stdout 突发输出 → 状态栏数字冻结数分钟](#--parallel-下-stdout-成突发输出--状态栏数字冻结数分钟真机实测)
 - [unresolved 信号只认 `fstat -Ru`](#unresolved-信号只认-fstat--ruopened-从不报真机实测)
 - [巨量 stdout 会撑爆 V8 字符串上限 → 宿主崩溃](#巨量-stdout-会撑爆-v8-字符串上限--扩展宿主崩溃踩过)
 - [p4 子进程永不退出 → 宿主无限挂起](#p4-子进程永不退出--宿主无限挂起44-分钟闩锁卡死)
@@ -111,6 +112,15 @@
 - **UI 侧 150ms 节流**（`extension.ts` 的 `PROGRESS_REPORT_INTERVAL_MS`）：p4 每文件一行，不节流就是上万条 RPC。本扩展**首次用** `window.withProgress`（`ProgressLocation.Notification`，不定形态 + `cancellable`）；取消按钮路由到 `target.cancelBusy()`，与状态栏 spinner 同一 abort 机制，不搞两套。状态栏侧另有一条 200ms 节流（`client.ts` `_bumpSyncProgress`，镜像 `_setScanProgress`）。
 - **无预扫、无总数**：sync **不做** `sync -n` 预扫计数（宽 scope 上预扫本身要走同款服务器比对、最坏近一分钟却一个字节不传——纯开销），进度条直接显示「已处理 N · 已用时」的不定形态（状态栏 `…branch_xyz: Syncing 421 · 1m 23s` + 通知条同款）。**绝不编总数**（编一个到 40% 就停的总数比没有总数更糟）。「预览将要拉取的内容」命令（`previewSync`，`sync -n` 列文件）是用户主动触发的只读预演，与此无关、保留。
 - **syncProgress 生命周期**：`ClientStatus.syncProgress` 在 `_cancellable` settle 后立即 `_clearSyncProgress()`（success/failure/cancel 三路径同一时点），finally 只兜底 classify/parse 段的 throw——计数与 "Syncing" 标签同生共死，收尾 refresh（"Refreshing" 标签）期间绝不残留 sync 计数。非流式 sync（如 Explorer 单文件 `syncFiles`）从未 set 过该字段，`_clearSyncProgress` 有早退守卫不触发空 emit。
+
+## ⚠️ `--parallel` 下 stdout 成突发输出 → 状态栏数字冻结数分钟（真机实测）
+
+真机巨型仓库（游戏仓库、大块二进制资源）根目录拉取：`p4 sync --parallel=threads=N` 传输大文件期间**不输出任何行**，一批完成才 flush——状态栏的「已处理数」会整段冻结（几分钟到 10 分钟+），与 `-I` 进度指示互斥：`p4 help sync` 明说 *"Requesting progress indicators causes the --parallel flag to be ignored"*（`-I` 会退化成串行传输，大仓库不可接受，已否决）。
+
+- **对策 A（已落地）**：sync 期间状态栏叠加**文件监视器磁盘写入计数**（`SyncProgress.diskWrites`）：挂起分支里对每个 watcher 事件计数并复用 `_bumpSyncProgress` 的 200ms 节流。它是**下限近似值**——renderer 每批截断 5000 事件（`MainThreadFileEvents.MAX_EVENTS_PER_BATCH`）+ `files.watcherExclude`，真实写入数恒 ≥ 计数；与 p4 计数**不同源**，UI 上两个数字分开呈现（`Syncing 421 · disk +567 · 3m20s`），tooltip 说明近似语义。计数在 scope guard 之前（语义是「工作区正在被写」，不是「有漂移」），重置在挂起 arm（深度 0→1）时、**不在** `_clearSyncProgress`（那里清零会让最后一次渲染归零）。
+- **对策 B（已落地）**：sync 生命周期**挂起外部漂移处理**（`_beginExternalSuspend`/`_endExternalSuspend`，`_externalSuspendCount` 计数非布尔——`_busyOps` 是栈、runSync 可被状态栏/Explorer/graph/timeline 并发触发）。5s 自变更窗口（`SELF_MUTATION_SUPPRESS_MS`）对整仓 sync 必然过期，其后续写入全被当外部漂移 → reconcile 窄查询洪流与 sync 竞争 background 并发槽。挂起期事件只计数、绝不进 `_externalChangePending`；`_flushExternalChanges` 顶部挂起分支保留队列**不重排定时器**；释放时重新 arm 尾巴窗口（`SYNC_TAIL_SUPPRESS_MS`，晚到的 RPC 事件回流）并补跑一次 sync 前入队的窄查询。
+- **已知缺口（有意为之）**：挂起期间被丢弃的**外部**改动本 session 内不会被 re-derive——sync 后 refresh 只跑 `opened`/`changes`/`fstat`（不走工作区树），drift 只由每 session 一次的 reconcile 扫描 + 窄查询写入；成功路径 `_invalidateWorkspaceState()` 丢 checkpoint → 下次 session 重扫覆盖。Explorer 的 RC 徽标走 renderer 独立链（`ScmWorkingTreeHintService` + `checkWorkingTree`），不受影响。释放日志 `released external-change suspension (N watcher event(s) dropped)` 是量化盲区的判据。
+- **诊断法**：状态栏数字冻结 ≠ UI 卡死。看 Perforce 输出频道：sync 期间持续有 reconcile 批 spawn（洪流）或完全没有新行（`--parallel` 静默期）都指向这里；真机验证判据=冻结期间 `磁盘 +N` 是否还在跳动。
 
 ## ⚠️ unresolved 信号只认 `fstat -Ru`——`opened` 从不报（真机实测）
 

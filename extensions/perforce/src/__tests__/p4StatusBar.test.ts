@@ -475,6 +475,47 @@ describe('P4StatusBarController sync progress', () => {
     controller.dispose()
   })
 
+  it('pairs the count with the watcher disk writes when present', () => {
+    const controller = new P4StatusBarController({
+      active: makeClient({
+        clientName: 'client-1',
+        busy: 'Syncing',
+        busyCancellable: false,
+        syncProgress: { done: 421, diskWrites: 567, startedAt: Date.now() - 5_000 },
+      }),
+    } as never)
+    controller.refresh()
+
+    expect(mocks.item.text).toBe('$(server) client-1: Syncing 421 · disk +567 · 5s $(sync~spin)')
+    expect(mocks.item.tooltip).toContain('Synced 421 files')
+    expect(mocks.item.tooltip).toContain('Disk writes seen by the file watcher: 567')
+    controller.dispose()
+  })
+
+  it('keeps the disk segment across heartbeat re-renders', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(1_000_000)
+      const controller = new P4StatusBarController({
+        active: makeClient({
+          clientName: 'client-1',
+          busy: 'Syncing',
+          busyCancellable: false,
+          syncProgress: { done: 421, diskWrites: 567, startedAt: Date.now() - 5_000 },
+        }),
+      } as never)
+      controller.refresh()
+      vi.advanceTimersByTime(3_000)
+
+      // A pure repaint: p4 printed nothing, the data is unchanged, the disk
+      // segment survives the tick alongside the advanced clock.
+      expect(mocks.item.text).toBe('$(server) client-1: Syncing 421 · disk +567 · 8s $(sync~spin)')
+      controller.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('wins over scanProgress when both are in flight', () => {
     // A sync triggers a refresh, which can overlap the reconcile scan; the sync
     // count is the more actionable number, so it takes the slot.

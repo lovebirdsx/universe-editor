@@ -146,6 +146,9 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.status.syncCounts': '已拉取 {0} 个文件',
   'perforce.status.syncCurrent': '当前：{0}',
   'perforce.status.syncElapsed': '已耗时 {0}',
+  'perforce.status.syncDisk': '磁盘 +{0}',
+  'perforce.status.syncDiskTooltip':
+    '文件监视观察到的磁盘写入：{0} 个（近似值；监视事件分批上报且可能被截断）',
   // graph 合并历史（多选查看历史，extension.ts 的 perforce-graph.getChanges）
   'perforce.graph.multiClient': '所选路径不属于同一个 Perforce 工作区，无法合并查看它们的历史。',
   // graph sync（sync to change，extension.ts 的 perforce-graph.syncToChange）

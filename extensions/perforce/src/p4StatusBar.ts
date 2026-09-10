@@ -164,13 +164,30 @@ export class P4StatusBarController {
         // costs a full server-side walk on a wide scope, so a sync starts
         // downloading immediately instead. The bare count alone reads as
         // stalled, so the body pairs it with the elapsed time — a rising clock
-        // is the "it's alive" signal a missing total removes.
-        const count = `${syncProgress.done} · ${formatScanElapsed(Date.now() - syncProgress.startedAt)}`
+        // is the "it's alive" signal a missing total removes. Under
+        // `--parallel` p4's stdout also goes quiet for minutes at a time, so a
+        // disk-write counter (watcher-observed, approximate) keeps the body
+        // moving through those gaps.
+        const elapsed = formatScanElapsed(Date.now() - syncProgress.startedAt)
+        const disk = syncProgress.diskWrites
+        const count =
+          disk !== undefined && disk > 0
+            ? `${syncProgress.done} · ${localize('perforce.status.syncDisk', 'disk +{0}', { 0: disk })} · ${elapsed}`
+            : `${syncProgress.done} · ${elapsed}`
         this._item.text = `$(server) ${short}: ${busy} ${count} $(sync~spin)`
         const lines = [
           localize('perforce.status.syncing', 'Syncing {0}', { 0: clientName }),
           localize('perforce.status.syncCounts', 'Synced {0} files', { 0: syncProgress.done }),
         ]
+        if (disk !== undefined && disk > 0) {
+          lines.push(
+            localize(
+              'perforce.status.syncDiskTooltip',
+              'Disk writes seen by the file watcher: {0} (approximate; the watcher batches and may truncate events)',
+              { 0: disk },
+            ),
+          )
+        }
         if (syncProgress.currentFile !== undefined) {
           lines.push(
             localize('perforce.status.syncCurrent', 'Current: {0}', {
@@ -180,7 +197,7 @@ export class P4StatusBarController {
         }
         lines.push(
           localize('perforce.status.syncElapsed', '{0} elapsed', {
-            0: formatScanElapsed(Date.now() - syncProgress.startedAt),
+            0: elapsed,
           }),
         )
         if (busyCancellable) {

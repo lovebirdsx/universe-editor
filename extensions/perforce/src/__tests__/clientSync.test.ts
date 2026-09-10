@@ -7,6 +7,9 @@
  */
 import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { FileSystemWatcher } from '@universe-editor/extension-api'
+import type { PerforceClientOptions, P4CacheOptions } from '../client.js'
+type PerforceClientInstance = import('../client.js').PerforceClient
 
 class FakeChildProcess extends EventEmitter {
   readonly stdout = new EventEmitter()
@@ -83,11 +86,21 @@ function subcommand(argv: string[]): string | undefined {
 /** Every argv the client spawned, for asserting what a command actually ran. */
 const spawned: string[][] = []
 
-function respond(handler: (argv: string[]) => Reply): void {
+/** Spawns whose close is held back for the test to settle (see `finishHeld`). */
+const heldChildren: FakeChildProcess[] = []
+
+function respond(
+  handler: (argv: string[]) => Reply,
+  hold: (argv: string[]) => boolean = () => false,
+): void {
   spawnMock.mockImplementation((...args: unknown[]) => {
     const argv = (args[1] as string[]) ?? []
     spawned.push(argv)
     const child = new FakeChildProcess()
+    if (hold(argv)) {
+      heldChildren.push(child)
+      return child
+    }
     queueMicrotask(() => {
       const reply = handler(argv)
       if (reply.stdout) child.stdout.emit('data', Buffer.from(reply.stdout))
@@ -96,6 +109,62 @@ function respond(handler: (argv: string[]) => Reply): void {
     })
     return child
   })
+}
+
+/** Emit output on the oldest held spawn and close it, settling its caller. */
+function finishHeld(reply: Reply = { stdout: '', exit: 0 }): void {
+  const child = heldChildren.shift()
+  expect(child).toBeDefined()
+  if (reply.stdout) child!.stdout.emit('data', Buffer.from(reply.stdout))
+  if (reply.stderr) child!.stderr.emit('data', Buffer.from(reply.stderr))
+  child!.emit('close', reply.exit ?? 0)
+}
+
+function fakeClock(): { now: () => number; advance: (ms: number) => void } {
+  let t = 1000
+  return { now: () => t, advance: (ms) => (t += ms) }
+}
+
+/** A controllable `FileSystemWatcher` fake: its three events can be fired by the
+ *  test with a filesystem path, mirroring git's `repositoryWatcher.test.ts`. */
+interface FakeWatcherController {
+  readonly watcher: FileSystemWatcher
+  readonly dispose: ReturnType<typeof vi.fn>
+  fire(kind: 'create' | 'change' | 'delete', path: string): void
+}
+
+function makeFakeWatcher(): FakeWatcherController {
+  const listeners = {
+    create: new Set<(uri: { fsPath: string }) => void>(),
+    change: new Set<(uri: { fsPath: string }) => void>(),
+    delete: new Set<(uri: { fsPath: string }) => void>(),
+  }
+  const dispose = vi.fn()
+  const watcher = {
+    ignoreCreateEvents: false,
+    ignoreChangeEvents: false,
+    ignoreDeleteEvents: false,
+    onDidCreate: (fn: (uri: { fsPath: string }) => void) => {
+      listeners.create.add(fn)
+      return { dispose: () => listeners.create.delete(fn) }
+    },
+    onDidChange: (fn: (uri: { fsPath: string }) => void) => {
+      listeners.change.add(fn)
+      return { dispose: () => listeners.change.delete(fn) }
+    },
+    onDidDelete: (fn: (uri: { fsPath: string }) => void) => {
+      listeners.delete.add(fn)
+      return { dispose: () => listeners.delete.delete(fn) }
+    },
+    dispose,
+  }
+  return {
+    watcher: watcher as unknown as FileSystemWatcher,
+    dispose,
+    fire(kind, path) {
+      for (const fn of [...listeners[kind]]) fn({ fsPath: path })
+    },
+  }
 }
 
 const DISCOVERY = `... clientName testclient\n... clientRoot ${ROOT}\n... userName testuser\n\n`
@@ -110,12 +179,23 @@ function makeHandler(syncReply: (argv: string[]) => Reply): (argv: string[]) => 
   }
 }
 
-async function makeClient(syncReply: (argv: string[]) => Reply = () => ({ stdout: '' })) {
-  respond(makeHandler(syncReply))
-  const client = await PerforceClient.create(ROOT, {}, new ConcurrencyGate(4), {
-    enabled: true,
-    workspaceTtlMs: 4000,
-  })
+async function makeClient(
+  syncReply: (argv: string[]) => Reply = () => ({ stdout: '' }),
+  options: PerforceClientOptions = {},
+  cacheOptions: Partial<P4CacheOptions> = {},
+  holdSync = false,
+): Promise<PerforceClientInstance> {
+  respond(
+    makeHandler(syncReply),
+    holdSync ? (argv) => subcommand(argv) === 'sync' && !argv.includes('-n') : undefined,
+  )
+  const client = await PerforceClient.create(
+    ROOT,
+    {},
+    new ConcurrencyGate(4),
+    { enabled: true, workspaceTtlMs: 4000, ...cacheOptions },
+    options,
+  )
   expect(client).toBeDefined()
   return client!
 }
@@ -141,6 +221,7 @@ beforeEach(() => {
   installBridge()
   spawnMock.mockReset()
   spawned.length = 0
+  heldChildren.length = 0
   vi.clearAllMocks()
   mocks.executeCommand.mockResolvedValue(undefined)
 })
@@ -746,5 +827,288 @@ describe('PerforceClient.sync live progress', () => {
 
     expect(res.cancelled).toBe(true)
     expect(client.status.syncProgress).toBeUndefined()
+  })
+})
+
+describe('PerforceClient.sync watcher activity & suspension', () => {
+  const WATCH_OPTS: PerforceClientOptions = { watchRoot: ROOT, externalChangeDebounceMs: 0 }
+  const track = async (p: Promise<PerforceClientInstance>): Promise<PerforceClientInstance> => {
+    const c = await p
+    made.push(c)
+    return c
+  }
+  // Settle-time refreshes fire a reconcile scan that outlives the test; dispose
+  // every client so a previous test's scan can't spawn into this one's `spawned`.
+  const made: PerforceClientInstance[] = []
+  afterEach(async () => {
+    for (const c of made.splice(0)) c.dispose()
+    await new Promise((r) => setTimeout(r, 0))
+  })
+  const pending = (client: PerforceClientInstance): Set<string> =>
+    (client as unknown as { _externalChangePending: Set<string> })._externalChangePending
+  const suspendCount = (client: PerforceClientInstance): number =>
+    (client as unknown as { _externalSuspendCount: number })._externalSuspendCount
+  const droppedEvents = (client: PerforceClientInstance): number =>
+    (client as unknown as { _syncDroppedEvents: number })._syncDroppedEvents
+  /** Narrow `reconcile -n <files>` spawns — excludes the scan's recursive
+   *  `<dir>/...` batches, which settle-time refreshes also fire. */
+  const narrowQueries = (): string[][] =>
+    spawned
+      .filter((a) => subcommand(a) === 'reconcile')
+      .filter((a) => !a.some((arg) => /[/\\](\.\.\.|\*)$/.test(arg)))
+
+  it('counts watcher events as disk writes while the sync runs', async () => {
+    const wt = makeFakeWatcher()
+    const client = await track(
+      makeClient(
+        () => ({ stdout: '' }),
+        { createFileSystemWatcher: () => wt.watcher, ...WATCH_OPTS },
+        {},
+        true,
+      ),
+    )
+    const run = client.sync('#head', { onProgress: () => {} })
+    await vi.waitFor(() => expect(heldChildren.length).toBe(1))
+
+    // Seed frame: armed with nothing written yet, the field is omitted — the
+    // honest zero, not a falsy placeholder the bar would still print.
+    expect(client.status.syncProgress?.done).toBe(0)
+    expect(client.status.syncProgress?.diskWrites).toBeUndefined()
+
+    wt.fire('change', `${ROOT_FWD}/a.cpp`)
+    wt.fire('create', `${ROOT_FWD}/Content/b.bin`)
+    wt.fire('delete', `${ROOT_FWD}/c.ini`)
+
+    expect(client.status.syncProgress?.diskWrites).toBe(3)
+    expect(client.status.syncProgress?.done).toBe(0)
+    expect(droppedEvents(client)).toBe(3)
+
+    finishHeld({ stdout: `//depot/branch_x/a.cpp#3 - updated as ${ROOT_FWD}/a.cpp` })
+    const res = await run
+    expect(res.ok).toBe(true)
+    expect(client.status.syncProgress).toBeUndefined()
+  })
+
+  it('drops watcher events from the drift pipeline while suspended', async () => {
+    const clock = fakeClock()
+    const wt = makeFakeWatcher()
+    const client = await track(
+      makeClient(
+        () => ({ stdout: '' }),
+        { createFileSystemWatcher: () => wt.watcher, ...WATCH_OPTS },
+        { now: clock.now },
+        true,
+      ),
+    )
+    const run = client.sync('#head', { onProgress: () => {} })
+    await vi.waitFor(() => expect(heldChildren.length).toBe(1))
+
+    // Past the 5s self-mutation window armed at spawn, so the suspension —
+    // not the window — is the only thing keeping this event out.
+    clock.advance(5001)
+    wt.fire('change', `${ROOT_FWD}/a.cpp`)
+
+    expect(pending(client).size).toBe(0)
+    expect(
+      (client as unknown as { _externalChangeTimer: ReturnType<typeof setTimeout> | undefined })
+        ._externalChangeTimer,
+    ).toBeUndefined()
+
+    finishHeld()
+    await run
+  })
+
+  it('defers a pre-sync external change to after the sync', async () => {
+    const clock = fakeClock()
+    const wt = makeFakeWatcher()
+    const client = await track(
+      makeClient(
+        () => ({ stdout: '' }),
+        { createFileSystemWatcher: () => wt.watcher, ...WATCH_OPTS },
+        { now: clock.now },
+        true,
+      ),
+    )
+    wt.fire('change', `${ROOT_FWD}/a.cpp`)
+    expect(pending(client).size).toBe(1)
+
+    const run = client.sync('#head', { onProgress: () => {} })
+    await vi.waitFor(() => expect(heldChildren.length).toBe(1))
+    // Past the spawn-time 5s window, the debounce flush fires during the
+    // suspension: the suspension alone — not the window's deferral branch —
+    // must be what keeps the queue from being queried.
+    clock.advance(5001)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(narrowQueries().length).toBe(0)
+
+    finishHeld()
+    await run
+    // Release re-arms the tail window and re-schedules the batch; past the
+    // window it goes out exactly once.
+    clock.advance(5001)
+    await vi.waitFor(() => expect(narrowQueries().length).toBe(1))
+    expect(narrowQueries()).toHaveLength(1)
+  })
+
+  it('releases on settle: late events resume the normal pipeline', async () => {
+    const clock = fakeClock()
+    const wt = makeFakeWatcher()
+    const client = await track(
+      makeClient(
+        () => ({ stdout: '' }),
+        { createFileSystemWatcher: () => wt.watcher, ...WATCH_OPTS },
+        { now: clock.now },
+        true,
+      ),
+    )
+    const run = client.sync('#head', { onProgress: () => {} })
+    await vi.waitFor(() => expect(heldChildren.length).toBe(1))
+    finishHeld()
+    await run
+    expect(suspendCount(client)).toBe(0)
+
+    // Past the tail window the sync armed on release, events flow again.
+    clock.advance(5001)
+    wt.fire('change', `${ROOT_FWD}/a.cpp`)
+    expect(pending(client).size).toBe(1)
+    await vi.waitFor(() => expect(narrowQueries().length).toBe(1))
+  })
+
+  it('keeps the release-time tail window over a sync that outlives the spawn window', async () => {
+    const clock = fakeClock()
+    const wt = makeFakeWatcher()
+    const client = await track(
+      makeClient(
+        () => ({ stdout: '' }),
+        { createFileSystemWatcher: () => wt.watcher, ...WATCH_OPTS },
+        { now: clock.now },
+        true,
+      ),
+    )
+    const run = client.sync('#head', { onProgress: () => {} })
+    await vi.waitFor(() => expect(heldChildren.length).toBe(1))
+
+    // A wide sync far outlives the 5s self-mutation window armed at spawn —
+    // the suspension, not that window, suppresses writes through the run.
+    clock.advance(60_000)
+    wt.fire('change', `${ROOT_FWD}/during.cpp`)
+    expect(pending(client).size).toBe(0)
+
+    finishHeld()
+    await run
+    expect(suspendCount(client)).toBe(0)
+
+    // The tail window armed at release covers the watcher's RPC lag: events
+    // right after the settle are still suppressed…
+    wt.fire('change', `${ROOT_FWD}/late.cpp`)
+    expect(pending(client).size).toBe(0)
+
+    // …and past it the pipeline resumes.
+    clock.advance(5001)
+    wt.fire('change', `${ROOT_FWD}/after.cpp`)
+    expect(pending(client).size).toBe(1)
+    await vi.waitFor(() => expect(narrowQueries().length).toBe(1))
+  })
+
+  it('releases on cancel', async () => {
+    const wt = makeFakeWatcher()
+    const client = await track(
+      makeClient(
+        () => ({ stdout: '' }),
+        { createFileSystemWatcher: () => wt.watcher, ...WATCH_OPTS },
+        {},
+        true,
+      ),
+    )
+    const run = client.sync('#head', { onProgress: () => {} })
+    await vi.waitFor(() => expect(heldChildren.length).toBe(1))
+    client.cancelBusy()
+    finishHeld({ exit: 1 })
+
+    const res = await run
+    expect(res.cancelled).toBe(true)
+    expect(suspendCount(client)).toBe(0)
+    expect(client.status.syncProgress).toBeUndefined()
+  })
+
+  it('is inert for a non-streaming sync', async () => {
+    const clock = fakeClock()
+    const wt = makeFakeWatcher()
+    const client = await track(
+      makeClient(
+        () => ({ stdout: '' }),
+        { createFileSystemWatcher: () => wt.watcher, ...WATCH_OPTS },
+        { now: clock.now },
+        true,
+      ),
+    )
+    const run = client.sync('#head')
+    await vi.waitFor(() => expect(heldChildren.length).toBe(1))
+
+    clock.advance(5001)
+    wt.fire('change', `${ROOT_FWD}/a.cpp`)
+
+    // No streaming progress to attribute the count to: nothing to read, no throw.
+    expect(client.status.syncProgress).toBeUndefined()
+    expect(pending(client).size).toBe(0)
+
+    finishHeld()
+    await run
+    expect(suspendCount(client)).toBe(0)
+  })
+
+  it('keeps the suspension armed until the LAST overlapping sync settles', async () => {
+    const clock = fakeClock()
+    const wt = makeFakeWatcher()
+    const client = await track(
+      makeClient(
+        () => ({ stdout: '' }),
+        { createFileSystemWatcher: () => wt.watcher, ...WATCH_OPTS },
+        { now: clock.now },
+        true,
+      ),
+    )
+    const first = client.sync('#head', { onProgress: () => {} })
+    await vi.waitFor(() => expect(heldChildren.length).toBe(1))
+    const second = client.sync('#head', { onProgress: () => {} })
+    await vi.waitFor(() => expect(heldChildren.length).toBe(2))
+    expect(suspendCount(client)).toBe(2)
+
+    clock.advance(5001)
+    finishHeld()
+    await first
+    expect(suspendCount(client)).toBe(1)
+    // Still held by the second sync — past the first's spawn-time window, only
+    // the depth-1 suspension keeps this out.
+    wt.fire('change', `${ROOT_FWD}/a.cpp`)
+    expect(pending(client).size).toBe(0)
+
+    finishHeld()
+    await second
+    expect(suspendCount(client)).toBe(0)
+  })
+
+  it('releases on failure (non-zero exit)', async () => {
+    const clock = fakeClock()
+    const wt = makeFakeWatcher()
+    const client = await track(
+      makeClient(
+        () => ({ stdout: '' }),
+        { createFileSystemWatcher: () => wt.watcher, ...WATCH_OPTS },
+        { now: clock.now },
+        true,
+      ),
+    )
+    const run = client.sync('#head', { onProgress: () => {} })
+    await vi.waitFor(() => expect(heldChildren.length).toBe(1))
+    finishHeld({ stderr: 'upgrade your client', exit: 1 })
+
+    const res = await run
+    expect(res.ok).toBe(false)
+    expect(suspendCount(client)).toBe(0)
+
+    clock.advance(5001)
+    wt.fire('change', `${ROOT_FWD}/a.cpp`)
+    expect(pending(client).size).toBe(1)
   })
 })
