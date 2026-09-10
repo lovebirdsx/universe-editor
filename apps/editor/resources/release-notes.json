@@ -1,5 +1,39 @@
 [
   {
+    "version": "0.14.0",
+    "date": "2026-09-10",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "支持 editor.codeActionsOnSave",
+          "支持编辑器sticky",
+          "session中用户输入的消息，采用plaintext渲染",
+          "通过快捷键打开的右键菜单，能够聚焦上次选择的项",
+          "工作区在创建session时自动以上次session中所在目录来创建"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "没有打开目录时，session使用用户目录作为dir，避免报错",
+          "编辑器打开文件按平台大小写规则去重",
+          "p4修复force get后的文件不从Changes自动移除",
+          "休眠的会话也能显示在（alt+s）会话列表"
+        ]
+      },
+      {
+        "type": "other",
+        "title": "其他变更",
+        "items": [
+          "瘦身所有 >15KB 的 CLAUDE.md，新增 15K 尺寸守护"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.13.8",
     "date": "2026-09-08",
     "groups": [
