@@ -58,7 +58,11 @@ import {
 import { IScmService } from '../../services/extensions/ScmService.js'
 import { useObservable, useService } from '../useService.js'
 import { useViewFocusable } from '../useViewFocusable.js'
-import { SWARM_REVIEWS_VIEW_ID } from '../../actions/swarmActions.js'
+import {
+  OpenSwarmReviewByIdAction,
+  RefreshSwarmReviewsAction,
+  SWARM_REVIEWS_VIEW_ID,
+} from '../../actions/swarmActions.js'
 import {
   IconButton,
   Input,
@@ -824,6 +828,36 @@ export function SwarmReviewsView() {
     [createMenuItems, loadTransitions],
   )
 
+  // Group headers offer the same entries as the view title bar.
+  const openGroupMenu = useCallback(
+    (event: ReactMouseEvent) => {
+      event.preventDefault()
+      event.stopPropagation()
+      setMenu({
+        x: event.clientX,
+        y: event.clientY,
+        items: [
+          {
+            kind: 'item',
+            id: 'openReviewById',
+            icon: 'go-to-file',
+            label: localize('action.swarm.openReviewById', 'Open Swarm Review by ID…'),
+            run: () => void commands.executeCommand(OpenSwarmReviewByIdAction.ID),
+          },
+          {
+            kind: 'item',
+            id: 'refreshReviews',
+            icon: 'refresh',
+            label: localize('action.swarm.refreshReviews', 'Refresh Swarm Reviews'),
+            run: () => void commands.executeCommand(RefreshSwarmReviewsAction.ID),
+          },
+        ],
+        keyboard: isKeyboardContextMenu(event),
+      })
+    },
+    [commands],
+  )
+
   const kw = keyword.trim().toLowerCase()
   const filterKeyword = (reviews: SwarmReviewDto[]): SwarmReviewDto[] =>
     kw
@@ -971,6 +1005,7 @@ export function SwarmReviewsView() {
           className={className}
           style={ctx.style}
           onClick={ctx.onClickRow}
+          onContextMenu={openGroupMenu}
         >
           {ctx.node.expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
           <span className={styles['sectionTitle']}>{node.label}</span>

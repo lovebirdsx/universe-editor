@@ -16,7 +16,8 @@ export type SwarmReviewMenuItem = ListMenuEntry
 export interface SwarmReviewContextMenuState {
   readonly x: number
   readonly y: number
-  readonly reviewId: string
+  /** Set for review rows — used to match the async transitions update to the open menu. */
+  readonly reviewId?: string
   readonly items: readonly SwarmReviewMenuItem[]
   /** Raised with the ContextMenu key, so it opens with the first entry highlighted. */
   readonly keyboard: boolean
@@ -37,7 +38,7 @@ export function SwarmReviewContextMenu({
       anchor={{ x: state.x, y: state.y }}
       autoFocusFirst={state.keyboard}
       {...(memory ? { memory } : {})}
-      memoryKey="swarm.review"
+      memoryKey={state.reviewId !== undefined ? 'swarm.review' : 'swarm.reviewGroup'}
       renderIcon={renderMenuIcon}
       onClose={onClose}
     />

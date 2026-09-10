@@ -215,6 +215,7 @@ export class RefreshSwarmReviewsAction extends Action2 {
       id: RefreshSwarmReviewsAction.ID,
       title: localize2('action.swarm.refreshReviews', 'Refresh Swarm Reviews'),
       category: CATEGORY,
+      f1: true,
       icon: 'refresh',
       menu: [
         {
