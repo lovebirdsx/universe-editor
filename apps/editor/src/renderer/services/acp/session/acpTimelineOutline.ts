@@ -64,6 +64,11 @@ const TOOL_KIND_ORDER = [
 
 const TOOL_KIND_BASE = 100
 
+// A sub-agent card is not a tool kind — the wire kind stays `think` / `other` and
+// the sub-agent marker rides in `_meta` — so it gets its own sentinel just past
+// the tool range. The graph sentinels start at 200, so there is room.
+const ACP_SUBAGENT_KIND = TOOL_KIND_BASE + TOOL_KIND_ORDER.length
+
 function encodeMessageKind(role: AcpMessageRole): number {
   const i = MESSAGE_ROLE_ORDER.indexOf(role)
   return i >= 0 ? i : 1 // default to `agent`
@@ -74,12 +79,15 @@ function encodeToolKind(kind: string): number {
   return TOOL_KIND_BASE + (i >= 0 ? i : TOOL_KIND_ORDER.indexOf('other'))
 }
 
-/** Decode an acp.session DocumentSymbol.kind back into the role / tool-kind it encodes. */
-export function decodeAcpOutlineKind(
-  kind: number,
-):
+/** What an acp.session DocumentSymbol.kind encodes. */
+export type AcpOutlineRow =
   | { readonly type: 'message'; readonly role: AcpMessageRole }
-  | { readonly type: 'tool'; readonly kind: string } {
+  | { readonly type: 'tool'; readonly kind: string }
+  | { readonly type: 'subagent' }
+
+/** Decode an acp.session DocumentSymbol.kind back into the row it encodes. */
+export function decodeAcpOutlineKind(kind: number): AcpOutlineRow {
+  if (kind === ACP_SUBAGENT_KIND) return { type: 'subagent' }
   if (kind >= TOOL_KIND_BASE) {
     return { type: 'tool', kind: TOOL_KIND_ORDER[kind - TOOL_KIND_BASE] ?? 'other' }
   }
@@ -113,6 +121,7 @@ function itemKind(item: TimelineItem | AcpChildItem): number {
   if (item.kind === 'message') return encodeMessageKind(item.message.role)
   if (item.kind === 'compaction') return encodeToolKind('other')
   if (item.kind === 'resurrection') return encodeToolKind('other')
+  if (item.call.subagent === true) return ACP_SUBAGENT_KIND
   return encodeToolKind(item.call.kind)
 }
 

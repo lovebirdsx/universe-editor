@@ -53,9 +53,10 @@ import {
   isKeepPlanning,
   isSyntheticDenial,
   keepPlanningFeedback,
+  toolCallKindLabel,
   tryPrettyJson,
 } from './toolCallDisplay.js'
-import { roleIcon, toolKindIcon } from './timelineIcons.js'
+import { roleIcon, toolCallIcon } from './timelineIcons.js'
 import { buildStickyKey } from './stickyScroll.js'
 import { resolveCollapsed, type CollapseState } from './timelineCollapse.js'
 import styles from './agents.module.css'
@@ -464,8 +465,8 @@ export const ToolCallCard = memo(function ToolCallCard({
   return (
     <CollapsibleSlot
       as="li"
-      icon={toolKindIcon(call.kind)}
-      kindLabel={call.kind}
+      icon={toolCallIcon(call)}
+      kindLabel={toolCallKindLabel(call)}
       title={titleNode}
       summary={titleNode}
       statusIcon={<ToolCallStatusIcon status={effectiveStatus} />}

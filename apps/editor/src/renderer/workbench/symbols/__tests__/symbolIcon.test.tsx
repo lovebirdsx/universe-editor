@@ -66,7 +66,7 @@ describe('SymbolIcon', () => {
     expect(container.querySelector('.codicon-symbol-string')).not.toBeNull()
   })
 
-  it('tints agent-session rows by category for at-a-glance scanning', () => {
+  it('tints agent-session rows by role, leaving tool rows neutral', () => {
     const msg = (id: string, role: 'user' | 'agent' | 'thought'): TimelineItem => ({
       kind: 'message',
       id,
@@ -84,10 +84,13 @@ describe('SymbolIcon', () => {
     // Each category's kind, read off a single-item outline (conversation grouping
     // would otherwise nest agent/tool rows under the user turn).
     const kindOf = (item: TimelineItem): number => timelineToOutline([item]).roots[0]!.kind
-    // A lucide glyph (svg) tinted via the color prop, never a codicon span.
-    expect(strokeOf(kindOf(msg('m1', 'user')))).toBe('var(--vscode-symbolIcon-variableForeground)') // user
-    expect(strokeOf(kindOf(msg('m2', 'agent')))).toBe('var(--vscode-symbolIcon-functionForeground)') // agent
-    expect(strokeOf(kindOf(tool('t1', 'delete')))).toBe('var(--vscode-errorForeground)') // delete
-    expect(strokeOf(kindOf(tool('t2', 'execute')))).toBe('var(--vscode-badge-successBackground)') // execute
+    const NEUTRAL = 'var(--vscode-symbolIcon-defaultForeground)'
+    // A lucide glyph (svg) tinted via the color prop, never a codicon span. The
+    // role/tool hues are guarded across both surfaces in acpGlyphs.test.tsx.
+    expect(strokeOf(kindOf(msg('m1', 'user')))).toBe('var(--vscode-symbolIcon-variableForeground)')
+    expect(strokeOf(kindOf(msg('m2', 'agent')))).toBe('var(--vscode-symbolIcon-functionForeground)')
+    expect(strokeOf(kindOf(msg('m3', 'thought')))).toBe(NEUTRAL)
+    expect(strokeOf(kindOf(tool('t1', 'delete')))).toBe(NEUTRAL)
+    expect(strokeOf(kindOf(tool('t2', 'execute')))).toBe(NEUTRAL)
   })
 })

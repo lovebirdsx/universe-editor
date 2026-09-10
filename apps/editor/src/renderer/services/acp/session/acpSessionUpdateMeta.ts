@@ -115,6 +115,33 @@ export function readSyntheticDenial(update: SessionUpdate): boolean {
 }
 
 /**
+ * Read the fork's sub-agent marker: true when this tool call is a sub-agent
+ * card rather than an ordinary tool call. Two wire shapes, one meaning —
+ * claude stamps `_meta.claudeCode.subagent: true` on Agent/Task tool uses (the
+ * very calls whose `kind` is `think`, i.e. otherwise indistinguishable from a
+ * thought row), codex stamps a `_meta.codex.subagent` object on its
+ * subAgentActivity items (whose `kind` is only `other`). The codex details are
+ * dropped on purpose: the fork already folds the agent path into the card
+ * title, and the raw input still carries them. Returns false when absent or
+ * malformed.
+ */
+export function readSubagent(update: SessionUpdate): boolean {
+  const meta = (
+    update as {
+      _meta?: {
+        claudeCode?: { subagent?: unknown } | null
+        codex?: { subagent?: unknown } | null
+      } | null
+    }
+  )._meta
+  if (meta?.claudeCode?.subagent === true) return true
+  const codex = meta?.codex?.subagent
+  // A bare `true` is accepted too: the marker's only job here is to be truthy,
+  // so a future codex simplification must not silently drop the glyph.
+  return codex === true || (codex != null && typeof codex === 'object')
+}
+
+/**
  * Read the config ids our claude fork declares as actually changed on a
  * `config_option_update` (`_meta['universe-editor/changedConfigIds']`). The
  * resume-time model reconciliation broadcasts the whole bag after correcting

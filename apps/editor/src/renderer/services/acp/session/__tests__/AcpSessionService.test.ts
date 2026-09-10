@@ -1570,6 +1570,82 @@ describe('AcpSessionService', () => {
     expect(s.toolCalls.get()[0]?.syntheticDenial).toBe(true)
   })
 
+  describe('sub-agent cards', () => {
+    function taskCall(id: string, meta: Record<string, unknown> = {}): SessionNotification {
+      return {
+        sessionId: 'agent-1',
+        update: {
+          sessionUpdate: 'tool_call',
+          toolCallId: id,
+          title: 'Sub task',
+          kind: 'think',
+          status: 'in_progress',
+          _meta: meta,
+        },
+      }
+    }
+
+    it('marks only the call the fork flagged as a sub-agent launch', async () => {
+      const s = await svc.createSession()
+      await s.whenConnected()
+      const conn = client.connected[0]!
+
+      conn.sink.onSessionUpdate(
+        taskCall('tc1', { claudeCode: { toolName: 'Task', subagent: true } }),
+      )
+      conn.sink.onSessionUpdate(taskCall('tc2', { claudeCode: { toolName: 'Bash' } }))
+
+      const byId = new Map(s.toolCalls.get().map((c) => [c.id, c]))
+      expect(byId.get('tc1')?.subagent).toBe(true)
+      expect(byId.get('tc2')?.subagent).toBeUndefined()
+    })
+
+    it('carries the marker across updates that omit it', async () => {
+      const s = await svc.createSession()
+      await s.whenConnected()
+      const conn = client.connected[0]!
+
+      conn.sink.onSessionUpdate(taskCall('tc1', { claudeCode: { subagent: true } }))
+      // A plain status update — no `_meta` at all.
+      conn.sink.onSessionUpdate({
+        sessionId: 'agent-1',
+        update: { sessionUpdate: 'tool_call_update', toolCallId: 'tc1', status: 'completed' },
+      })
+      // The fork's bare `_meta`-only restamp: carries the stats, not the marker.
+      conn.sink.onSessionUpdate({
+        sessionId: 'agent-1',
+        update: {
+          sessionUpdate: 'tool_call_update',
+          toolCallId: 'tc1',
+          _meta: { '_universe/subagentStats': { inputTokens: 10, outputTokens: 2 } },
+        },
+      })
+
+      const [call] = s.toolCalls.get()
+      expect(call?.subagent).toBe(true)
+      expect(call?.subagentStats?.inputTokens).toBe(10)
+    })
+
+    it('adopts a marker that only arrives on a later update', async () => {
+      const s = await svc.createSession()
+      await s.whenConnected()
+      const conn = client.connected[0]!
+
+      conn.sink.onSessionUpdate(taskCall('tc1'))
+      expect(s.toolCalls.get()[0]?.subagent).toBeUndefined()
+
+      conn.sink.onSessionUpdate({
+        sessionId: 'agent-1',
+        update: {
+          sessionUpdate: 'tool_call_update',
+          toolCallId: 'tc1',
+          _meta: { codex: { subagent: { threadId: 'th-1', path: 'root', activity: 'started' } } },
+        },
+      })
+      expect(s.toolCalls.get()[0]?.subagent).toBe(true)
+    })
+  })
+
   describe('concurrent steering prompts', () => {
     const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 10))
 

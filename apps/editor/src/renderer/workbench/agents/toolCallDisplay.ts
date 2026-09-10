@@ -142,6 +142,18 @@ export function isSyntheticDenial(call: AcpToolCall): boolean {
 }
 
 /**
+ * 卡片头的 kind tooltip。子 agent 卡在 wire 上的 kind 仍是 `think`（claude）/
+ * `other`（codex）——那是它从工具继承来的 kind，不是它的身份，照原样显示会误导；
+ * 标记为「Sub Agent」，与输入行子 agent 模型选择器同词。
+ */
+export function toolCallKindLabel(call: {
+  readonly kind: string
+  readonly subagent?: true
+}): string {
+  return call.subagent === true ? localize('acp.subagent.label', 'Sub Agent') : call.kind
+}
+
+/**
  * 从「继续规划」工具调用里提取用户填写的 steering 意见；无意见（默认文案或空）时
  * 返回 undefined。用户意见走 deny message 通道落盘，故回放与实时同源，均从此读取。
  */

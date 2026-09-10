@@ -115,6 +115,20 @@ function renderCard(call: AcpToolCall, config: Record<string, unknown> = {}) {
 }
 
 describe('ToolCallCard', () => {
+  it('labels a sub-agent card as such, keeping the wire kind on the row', () => {
+    // claude reports Agent/Task as `think`: the header tooltip must say what the
+    // card actually is, while `data-kind` keeps the wire value for selectors.
+    renderCard(makeCall({ kind: 'think', subagent: true, title: 'Explore the repo' }))
+    const header = screen.getByTestId('acp-collapsible-toggle')
+    expect(header.getAttribute('data-tooltip')).toBe('Sub Agent')
+    expect(header.closest('li')?.getAttribute('data-kind')).toBe('think')
+  })
+
+  it('labels an ordinary tool card with its wire kind', () => {
+    renderCard(makeCall({ kind: 'read' }))
+    expect(screen.getByTestId('acp-collapsible-toggle').getAttribute('data-tooltip')).toBe('read')
+  })
+
   it('collapses a read card by default and expands on click', () => {
     renderCard(makeCall({ kind: 'read', blocks: [{ type: 'text', text: 'file contents here' }] }))
     expect(screen.queryByTestId('acp-markdown')).toBeNull()

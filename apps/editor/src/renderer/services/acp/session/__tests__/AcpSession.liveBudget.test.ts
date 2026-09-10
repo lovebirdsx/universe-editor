@@ -50,15 +50,18 @@ function createSession(liveIngestionBudget = LIVE_BUDGET): AcpSession {
   )
 }
 
-function terminalToolCall(id: string, text: string): SessionUpdate {
+function terminalToolCall(id: string, text: string, subagent = false): SessionUpdate {
   return {
     sessionUpdate: 'tool_call',
     toolCallId: id,
     title: 'execute',
-    kind: 'execute',
+    kind: subagent ? 'think' : 'execute',
     status: 'in_progress',
     content: [],
-    _meta: { terminal_output: { data: text } },
+    _meta: {
+      terminal_output: { data: text },
+      ...(subagent ? { claudeCode: { subagent: true } } : {}),
+    },
   }
 }
 
@@ -122,6 +125,20 @@ describe('AcpSession — live resident budget', () => {
     expect(warn).toHaveBeenCalled()
     expect(String(warn.mock.calls[0]?.[0])).toContain('s1')
     expect(String(warn.mock.calls[0]?.[0])).toContain('4800')
+  })
+
+  it('keeps the sub-agent marker on a trimmed card', () => {
+    // A long-running sub-agent is exactly the card the trim loop reaches first,
+    // and dropping the marker would flip its glyph back mid-run.
+    session = createSession()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    session.applyUpdate(terminalToolCall('tc-a', 'x'.repeat(800), true))
+    session.applyUpdate(terminalToolCall('tc-b', 'y'.repeat(800)))
+
+    const calls = session.toolCalls.get()
+    expect(calls[0]?.memoryTrimmed).toBe(true)
+    expect(calls[0]?.subagent).toBe(true)
   })
 
   it('keeps trimming the oldest card until the tally is back under budget', () => {

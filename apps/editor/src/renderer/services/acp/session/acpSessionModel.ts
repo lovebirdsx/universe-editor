@@ -138,6 +138,15 @@ export interface AcpToolCall {
    */
   readonly mcpTool?: string
   /**
+   * True when this card spawned a sub-agent rather than being an ordinary tool
+   * call. Neither fork encodes it in `kind` — claude maps Agent/Task to `think`,
+   * the same string a thought row carries — and it cannot be derived from
+   * {@link subagentStats} either (stats are pushed late, and a resumed
+   * sub-agent card may carry none). Drives the card's sub-agent glyph.
+   * Absent for ordinary tools.
+   */
+  readonly subagent?: true
+  /**
    * Per-sub-agent token/model/cost tally for a sub-agent-spawning tool call
    * (Task/Agent). Accumulated by the agent fork across the sub-agent's messages
    * and forwarded on the parent card via `_meta._universe/subagentStats`; the

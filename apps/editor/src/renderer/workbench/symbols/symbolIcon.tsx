@@ -3,42 +3,26 @@
  *  Single source of truth for symbol icons across the Outline view, breadcrumbs
  *  and the Go to Symbol quick picks. Each Monaco 0-based SymbolKind maps to a
  *  VSCode codicon glyph plus a semantic color (callable = purple, data = blue,
- *  type = orange), mirroring VSCode's symbolIcon theming.
+ *  type = orange), mirroring VSCode's symbolIcon theming. Agent-session rows are
+ *  the exception: their role / tool-call glyphs come from `acpGlyphs`, shared
+ *  with the chat timeline so both surfaces read identically.
  *
  *  Markdown headings are SymbolKind.String (14); in markdown files they render as
  *  a `#` (lucide Hash) instead of the codicon, matching the heading convention.
  *--------------------------------------------------------------------------------------------*/
 
 import type { ReactNode } from 'react'
-import {
-  Bot,
-  Brain,
-  CircleHelp,
-  FilePen,
-  FileText,
-  FolderInput,
-  Globe,
-  Hash,
-  Repeat,
-  Search,
-  Terminal,
-  Trash2,
-  User,
-  Wrench,
-} from 'lucide-react'
+import { Hash } from 'lucide-react'
 import {
   ACP_OUTLINE_LANGUAGE_ID,
   decodeAcpOutlineKind,
 } from '../../services/acp/session/acpTimelineOutline.js'
+import { outlineRowGlyphSpec, renderAcpGlyph } from './acpGlyphs.js'
 
 const CALLABLE = 'var(--vscode-symbolIcon-functionForeground)'
 const VARIABLE = 'var(--vscode-symbolIcon-variableForeground)'
 const TYPE = 'var(--vscode-symbolIcon-classForeground)'
 const DEFAULT = 'var(--vscode-symbolIcon-defaultForeground)'
-// Extra hues for agent-session rows, reusing existing dual-theme tokens so the
-// timeline glyphs stay legible in light and dark: destructive = red, run = green.
-const DANGER = 'var(--vscode-errorForeground)'
-const SUCCESS = 'var(--vscode-badge-successBackground)'
 
 interface SymbolIconSpec {
   readonly codicon: string
@@ -92,44 +76,10 @@ function HashIcon({ size }: { size: number }): ReactNode {
 }
 
 // Agent-session outline rows encode a message role / tool-call kind in their
-// SymbolKind (see acpTimelineOutline). Render the matching timeline glyph, tinted
-// by category so the outline is scannable at a glance.
+// SymbolKind (see acpTimelineOutline). Glyphs and tints come from `acpGlyphs`,
+// the table the chat timeline draws from too.
 function AcpOutlineIcon({ kind, size }: { kind: number; size: number }): ReactNode {
-  const decoded = decodeAcpOutlineKind(kind)
-  if (decoded.type === 'message') {
-    switch (decoded.role) {
-      case 'user':
-        return <User size={size} color={VARIABLE} />
-      case 'agent':
-        return <Bot size={size} color={CALLABLE} />
-      case 'thought':
-        return <Brain size={size} color={DEFAULT} />
-    }
-  }
-  switch (decoded.kind) {
-    case 'read':
-      return <FileText size={size} color={VARIABLE} />
-    case 'edit':
-      return <FilePen size={size} color={TYPE} />
-    case 'delete':
-      return <Trash2 size={size} color={DANGER} />
-    case 'move':
-      return <FolderInput size={size} color={TYPE} />
-    case 'search':
-      return <Search size={size} color={CALLABLE} />
-    case 'execute':
-      return <Terminal size={size} color={SUCCESS} />
-    case 'think':
-      return <Brain size={size} color={DEFAULT} />
-    case 'fetch':
-      return <Globe size={size} color={VARIABLE} />
-    case 'switch_mode':
-      return <Repeat size={size} color={CALLABLE} />
-    case 'other':
-      return <Wrench size={size} color={DEFAULT} />
-    default:
-      return <CircleHelp size={size} color={DEFAULT} />
-  }
+  return renderAcpGlyph(outlineRowGlyphSpec(decodeAcpOutlineKind(kind)), size)
 }
 
 function CodiconIcon({ spec, size }: { spec: SymbolIconSpec; size: number }): ReactNode {

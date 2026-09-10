@@ -26,6 +26,7 @@ function tool(
   title: string,
   kind: string,
   children?: readonly AcpChildItem[],
+  subagent = false,
 ): ToolNode {
   const call: AcpToolCall = {
     id,
@@ -36,6 +37,7 @@ function tool(
     blocks: [],
     diffs: [],
     ...(children ? { children } : {}),
+    ...(subagent ? { subagent: true as const } : {}),
   }
   return { kind: 'toolCall', id, call }
 }
@@ -169,6 +171,16 @@ describe('acpTimelineOutline', () => {
 
     const { roots: unknown } = timelineToOutline([tool('t2', 'y', 'totally-made-up')])
     expect(decodeAcpOutlineKind(unknown[0]!.kind)).toEqual({ type: 'tool', kind: 'other' })
+  })
+
+  it('gives a sub-agent card its own row kind, leaving plain think rows alone', () => {
+    // claude reports Agent/Task as `think`, so the marker — not the kind — is what
+    // sets the sub-agent row apart.
+    const { roots } = timelineToOutline([tool('t1', 'Task', 'think', undefined, true)])
+    expect(decodeAcpOutlineKind(roots[0]!.kind)).toEqual({ type: 'subagent' })
+
+    const { roots: markerless } = timelineToOutline([tool('t2', 'ponder', 'think')])
+    expect(decodeAcpOutlineKind(markerless[0]!.kind)).toEqual({ type: 'tool', kind: 'think' })
   })
 
   it('returns empty maps and roots for an empty timeline', () => {

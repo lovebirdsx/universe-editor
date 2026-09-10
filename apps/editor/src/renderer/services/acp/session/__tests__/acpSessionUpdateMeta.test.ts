@@ -9,6 +9,7 @@ import type { SessionUpdate } from '@agentclientprotocol/sdk'
 import {
   extractModelBreakdown,
   readFileChanges,
+  readSubagent,
   readSubagentStats,
   readSyntheticDenial,
 } from '../acpSessionUpdateMeta.js'
@@ -155,6 +156,56 @@ describe('readSyntheticDenial', () => {
     ).toBe(false)
     expect(readSyntheticDenial(update({}))).toBe(false)
     expect(readSyntheticDenial(update({ claudeCode: null }))).toBe(false)
+  })
+})
+
+describe('readSubagent', () => {
+  function update(meta: Record<string, unknown>): SessionUpdate {
+    return {
+      sessionUpdate: 'tool_call',
+      toolCallId: 'tc-1',
+      _meta: meta,
+    } as unknown as SessionUpdate
+  }
+
+  it('reads the claude marker, set on Agent/Task calls only', () => {
+    expect(readSubagent(update({ claudeCode: { subagent: true } }))).toBe(true)
+    expect(readSubagent(update({ claudeCode: { toolName: 'Task', subagent: true } }))).toBe(true)
+  })
+
+  it('reads the codex marker, whose shape is an object', () => {
+    expect(
+      readSubagent(
+        update({
+          codex: { subagent: { threadId: 'th-1', path: 'root/explore', activity: 'started' } },
+        }),
+      ),
+    ).toBe(true)
+    // A bare `true` is accepted too — the marker only ever has to be truthy here.
+    expect(readSubagent(update({ codex: { subagent: true } }))).toBe(true)
+  })
+
+  it('returns false for an ordinary tool call', () => {
+    expect(readSubagent(update({ claudeCode: { toolName: 'Bash' } }))).toBe(false)
+    expect(readSubagent(update({ codex: { collaboration: { tool: 'spawn_agent' } } }))).toBe(false)
+  })
+
+  it('returns false for a malformed marker', () => {
+    expect(readSubagent(update({ claudeCode: { subagent: false } }))).toBe(false)
+    expect(readSubagent(update({ claudeCode: { subagent: 'yes' } }))).toBe(false)
+    expect(readSubagent(update({ codex: { subagent: null } }))).toBe(false)
+    expect(readSubagent(update({ codex: { subagent: 'started' } }))).toBe(false)
+  })
+
+  it('returns false when _meta or both fork blocks are missing', () => {
+    expect(
+      readSubagent({
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tc-1',
+      } as unknown as SessionUpdate),
+    ).toBe(false)
+    expect(readSubagent(update({}))).toBe(false)
+    expect(readSubagent(update({ claudeCode: null, codex: null }))).toBe(false)
   })
 })
 

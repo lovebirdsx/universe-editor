@@ -95,6 +95,7 @@ import {
   readMcpTool,
   readMessageId,
   readParentToolUseId,
+  readSubagent,
   readSubagentStats,
   readSyntheticDenial,
   readTerminalOutput,
@@ -277,7 +278,9 @@ function messageHeavyBytes(message: AcpMessage): number {
  * kind / locations / diff paths / children) so the timeline still renders a
  * recognisable card marked `memoryTrimmed`. Children keep their own shells but
  * are trimmed too — `toolCallHeavyBytes` counts them, so leaving them intact
- * would report bytes the trim never actually released. */
+ * would report bytes the trim never actually released. The surviving fields are
+ * listed explicitly: a new `AcpToolCall` field that must outlive a trim has to
+ * be added below. */
 function trimToolCall(call: AcpToolCall): AcpToolCall {
   const children = call.children?.map(
     (child): AcpChildItem =>
@@ -301,6 +304,7 @@ function trimToolCall(call: AcpToolCall): AcpToolCall {
     ...(call.mcpServer !== undefined ? { mcpServer: call.mcpServer } : {}),
     ...(call.mcpTool !== undefined ? { mcpTool: call.mcpTool } : {}),
     ...(call.locations !== undefined ? { locations: call.locations } : {}),
+    ...(call.subagent === true ? { subagent: true } : {}),
     ...(call.subagentStats !== undefined ? { subagentStats: call.subagentStats } : {}),
     ...(call.startedAt !== undefined ? { startedAt: call.startedAt } : {}),
     ...(call.durationMs !== undefined ? { durationMs: call.durationMs } : {}),
@@ -3034,6 +3038,7 @@ export class AcpSession extends Disposable implements IAcpSession {
         // card and don't get their own timer.
         const startedAt = effectiveParent == null ? Date.now() : undefined
         const stats = readSubagentStats(update)
+        const subagent = readSubagent(update)
         this._upsertToolCall(
           {
             id: update.toolCallId,
@@ -3048,6 +3053,7 @@ export class AcpSession extends Disposable implements IAcpSession {
             ...(mcpServer !== undefined ? { mcpServer } : {}),
             ...(mcpTool !== undefined ? { mcpTool } : {}),
             ...(startedAt !== undefined ? { startedAt } : {}),
+            ...(subagent ? { subagent: true } : {}),
             ...(stats !== undefined ? { subagentStats: this._priceSubagentStats(stats) } : {}),
           },
           effectiveParent,
@@ -3086,6 +3092,10 @@ export class AcpSession extends Disposable implements IAcpSession {
         const stats = readSubagentStats(update)
         const subagentStats =
           stats !== undefined ? this._priceSubagentStats(stats) : existing?.subagentStats
+        // The fork pushes bare `_meta`-only updates carrying just the stats tally
+        // (no `claudeCode` block), so a non-carrying read would flip the card back
+        // to an ordinary tool glyph the moment the first tally lands.
+        const subagent = readSubagent(update) || existing?.subagent === true
         // Carry the start timestamp forward and settle a frozen duration at the
         // terminal status. Only top-level cards carry a timer (see `tool_call`).
         const startedAt = existing?.startedAt
@@ -3116,6 +3126,7 @@ export class AcpSession extends Disposable implements IAcpSession {
           ...(locations !== undefined ? { locations } : {}),
           ...(mcpServer !== undefined ? { mcpServer } : {}),
           ...(mcpTool !== undefined ? { mcpTool } : {}),
+          ...(subagent ? { subagent: true } : {}),
           ...(subagentStats !== undefined ? { subagentStats } : {}),
           ...(startedAt !== undefined ? { startedAt } : {}),
           ...(durationMs !== undefined ? { durationMs } : {}),
