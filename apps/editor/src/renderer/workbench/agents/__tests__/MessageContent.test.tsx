@@ -333,12 +333,11 @@ describe('MessageContent', () => {
       expect(container.querySelector('em')).toBeNull()
     })
 
-    it('does not turn ATX headings or links into elements', () => {
+    it('does not parse ATX headings or markdown link syntax', () => {
       const { container } = renderPlain([
         { type: 'text', text: '# not a heading\n[not a link](https://example.com)' },
       ])
       expect(container.querySelector('h1')).toBeNull()
-      expect(container.querySelector('a')).toBeNull()
       expect(screen.getByTestId('acp-plaintext').textContent).toBe(
         '# not a heading\n[not a link](https://example.com)',
       )
@@ -373,6 +372,124 @@ describe('MessageContent', () => {
       ])
       expect(screen.getByTestId('acp-image-block')).toBeTruthy()
       expect(screen.getByTestId('acp-resource-link')).toBeTruthy()
+    })
+
+    it('linkifies a bare URL while keeping surrounding text verbatim', () => {
+      const { container } = renderPlain([
+        { type: 'text', text: 'See https://example.com/a?b=1 for details' },
+      ])
+      const plain = screen.getByTestId('acp-plaintext')
+      expect(plain.textContent).toBe('See https://example.com/a?b=1 for details')
+      const link = container.querySelector('a')!
+      expect(link.getAttribute('href')).toBe('https://example.com/a?b=1')
+      expect(link.textContent).toBe('https://example.com/a?b=1')
+      expect(link.getAttribute('target')).toBe('_blank')
+      expect(link.getAttribute('rel')).toBe('noopener noreferrer')
+    })
+
+    it('linkifies multiple URLs and strips trailing CJK punctuation', () => {
+      const { container } = renderPlain([
+        { type: 'text', text: '请看https://example.com。还有 https://a.example.com/b, 完' },
+      ])
+      const plain = screen.getByTestId('acp-plaintext')
+      expect(plain.textContent).toBe('请看https://example.com。还有 https://a.example.com/b, 完')
+      const links = [...container.querySelectorAll('a')]
+      expect(links.map((l) => l.getAttribute('href'))).toEqual([
+        'https://example.com',
+        'https://a.example.com/b',
+      ])
+    })
+
+    it('linkifies the bare URL inside markdown link syntax without parsing the syntax', () => {
+      const { container } = renderPlain([
+        { type: 'text', text: '[not a link](https://example.com)' },
+      ])
+      const plain = screen.getByTestId('acp-plaintext')
+      // The syntax characters stay literal text; only the bare URL is a link.
+      expect(plain.textContent).toBe('[not a link](https://example.com)')
+      const link = container.querySelector('a')!
+      expect(link.getAttribute('href')).toBe('https://example.com')
+    })
+
+    it('does not linkify a URL glued to a preceding word char', () => {
+      const { container } = renderPlain([
+        { type: 'text', text: 'foohttps://example.com and xhttps://example.com' },
+      ])
+      expect(container.querySelector('a')).toBeNull()
+    })
+
+    it('opens a clicked link in a new window instead of navigating', () => {
+      const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
+      try {
+        const { container } = renderPlain([{ type: 'text', text: 'go https://example.com now' }])
+        const link = container.querySelector('a')!
+        fireEvent.click(link)
+        expect(openSpy).toHaveBeenCalledWith('https://example.com', '_blank', 'noopener,noreferrer')
+      } finally {
+        openSpy.mockRestore()
+      }
+    })
+
+    it('linkifies a URL at the very start and end of the text', () => {
+      const { container } = renderPlain([
+        { type: 'text', text: 'https://a.example.com mid https://b.example.com' },
+      ])
+      const links = [...container.querySelectorAll('a')]
+      expect(links.map((l) => l.getAttribute('href'))).toEqual([
+        'https://a.example.com',
+        'https://b.example.com',
+      ])
+      expect(screen.getByTestId('acp-plaintext').textContent).toBe(
+        'https://a.example.com mid https://b.example.com',
+      )
+    })
+
+    it('matches an uppercase scheme and strips trailing ASCII punctuation', () => {
+      const { container } = renderPlain([
+        { type: 'text', text: 'See HTTPS://EXAMPLE.COM/A, then http://b.example.com.' },
+      ])
+      const links = [...container.querySelectorAll('a')]
+      expect(links.map((l) => l.getAttribute('href'))).toEqual([
+        'HTTPS://EXAMPLE.COM/A',
+        'http://b.example.com',
+      ])
+    })
+
+    it('linkifies a Unix absolute path with a :line:col suffix', () => {
+      renderPlain([{ type: 'text', text: 'check /home/user/src/foo.ts:10:5 please' }])
+      const plain = screen.getByTestId('acp-plaintext')
+      expect(plain.textContent).toBe('check /home/user/src/foo.ts:10:5 please')
+      const link = screen.getByTestId('md-filepath')
+      expect(link.textContent).toBe('/home/user/src/foo.ts:10:5')
+    })
+
+    it('linkifies a Windows drive path', () => {
+      renderPlain([{ type: 'text', text: String.raw`open C:\Users\dev\foo.ts now` }])
+      expect(screen.getByTestId('md-filepath').textContent).toBe(String.raw`C:\Users\dev\foo.ts`)
+    })
+
+    it('a path directly after a CJK char links whole (CJK-aware relative path)', () => {
+      // The CJK prefix is swallowed into the relative path — the intended
+      // markdown behavior (`见项目/子级/结构` starts at `见`, not at `项`).
+      renderPlain([{ type: 'text', text: '见src/foo/bar.ts' }])
+      expect(screen.getByTestId('md-filepath').textContent).toBe('见src/foo/bar.ts')
+    })
+
+    it('linkifies a relative path only when it carries a directory separator', () => {
+      renderPlain([{ type: 'text', text: 'edit src/foo/bar.ts and package.json' }])
+      const links = screen.getAllByTestId('md-filepath')
+      expect(links).toHaveLength(1)
+      expect(links[0]!.textContent).toBe('src/foo/bar.ts')
+      expect(screen.getByTestId('acp-plaintext').textContent).toBe(
+        'edit src/foo/bar.ts and package.json',
+      )
+    })
+
+    it('clicking a file-path link resolves through the file-link pipeline without crashing', () => {
+      renderPlain([{ type: 'text', text: 'open src/foo/bar.ts' }])
+      // With only IEditorResolverService registered, resolution reports
+      // "missing" (no file service) — the click must not throw.
+      fireEvent.click(screen.getByTestId('md-filepath'))
     })
   })
 })

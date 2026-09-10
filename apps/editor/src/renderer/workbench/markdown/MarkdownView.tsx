@@ -178,7 +178,9 @@ function useMarkdownNodes(
   return parseMarkdownStreaming(text, cacheRef.current)
 }
 
-const FileLinkContext = createContext<
+// Also consumed by MessageContent's plaintext variant: bare file paths in user
+// prompts render as links driven by the same openFileLink pipeline.
+export const FileLinkContext = createContext<
   (
     path: string,
     line?: number,

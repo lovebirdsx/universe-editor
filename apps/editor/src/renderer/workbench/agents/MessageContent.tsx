@@ -3,8 +3,9 @@
  *  MessageContent — render a sequence of ACP content blocks as React elements.
  *  Text blocks go through the markdown parser by default; user messages pass
  *  variant="plain" instead (matching mainstream agents: a user's prompt renders
- *  verbatim — newlines kept, no `**`/`#`/link interpretation), while assistant
- *  output keeps full markdown. Image blocks become inline images (data: URI is
+ *  verbatim — newlines kept, no `**`/`#`/link interpretation — with only bare
+ *  URLs and file paths turned into clickable links), while assistant output
+ *  keeps full markdown. Image blocks become inline images (data: URI is
  *  safe — the agent never gets to embed a remote URL); resource / resource_link
  *  blocks become file-open buttons when the URI is a workspace file, or visible
  *  labels otherwise.
@@ -18,11 +19,14 @@
  *  tag and its close tag across separate text blocks.
  *--------------------------------------------------------------------------------------------*/
 
-import { memo, useMemo, type ReactNode } from 'react'
+import { memo, useContext, useMemo, type ReactNode } from 'react'
 import { IEditorResolverService, IWorkspaceService, URI } from '@universe-editor/platform'
 import type { ContentBlock } from '@agentclientprotocol/sdk'
 import { parseCommandWrappers } from '../../services/acp/commandWrapper.js'
-import { MarkdownView } from '../markdown/MarkdownView.js'
+import { matchFilePathAt } from '../../services/acp/filePathLink.js'
+import { matchBareUrl } from '../../services/acp/markdownRenderer.js'
+import { FileLinkContext, MarkdownView } from '../markdown/MarkdownView.js'
+import { useMarkdownFileLink } from '../markdown/useMarkdownFileLink.js'
 import { useOptionalService, useService } from '../useService.js'
 import { CommandInvocationBadge } from './CommandInvocationBadge.js'
 import { ChatImage } from './ChatImage.js'
@@ -39,8 +43,9 @@ interface MessageContentProps {
   /**
    * 'markdown' (default) renders text blocks through the markdown parser;
    * 'plain' renders them verbatim with `white-space: pre-wrap` (user messages —
-   * the prompt should look exactly like what was typed). Non-text blocks and
-   * slash-command badges render identically under both variants.
+   * the prompt should look exactly like what was typed), with one exception:
+   * bare http(s) URLs and bare file paths become clickable links. Non-text
+   * blocks and slash-command badges render identically under both variants.
    */
   readonly variant?: 'markdown' | 'plain'
 }
@@ -140,13 +145,115 @@ function TextRunSegments({
 }
 
 // User-prompt text under variant="plain": verbatim, whitespace-preserving, and
-// safe for long unbroken strings (URLs) inside the clamped user card.
+// safe for long unbroken strings (URLs/paths) inside the clamped user card.
+// Bare http(s) URLs and bare file paths become clickable links — the text stays
+// exactly as typed, only the affordance is added. Everything else (including
+// markdown link syntax) stays literal.
 function PlainTextBlock({ text }: { text: string }) {
+  const workspaceService = useOptionalService(IWorkspaceService)
+  // The same openFileLink pipeline markdown links use (FilePathLink in
+  // MarkdownView): existing paths open instantly, a directory opens as a folder
+  // window, several fuzzy hits hand off to Go to File, none → notification.
+  const openFileLink = useMarkdownFileLink(workspaceService?.current?.folder, false)
+  const segments = useMemo(() => linkifyPlainText(text), [text])
   return (
     <div className={styles['plainTextBlock']} data-testid="acp-plaintext">
-      {text}
+      <FileLinkContext.Provider value={openFileLink}>
+        {segments.map((seg, i) =>
+          seg.type === 'url' ? (
+            <a
+              key={i}
+              href={seg.text}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => {
+                e.preventDefault()
+                // Same external-URL exit as SafeLink in MarkdownView: Electron's
+                // window-open handler routes http(s) to shell.openExternal.
+                window.open(seg.text, '_blank', 'noopener,noreferrer')
+              }}
+            >
+              {seg.text}
+            </a>
+          ) : seg.type === 'filepath' ? (
+            <PlainFilePathLink key={i} seg={seg} />
+          ) : (
+            <span key={i}>{seg.text}</span>
+          ),
+        )}
+      </FileLinkContext.Provider>
     </div>
   )
+}
+
+function PlainFilePathLink({ seg }: { seg: PlainFilePathSegment }) {
+  const openFileLink = useContext(FileLinkContext)
+  const label = seg.text
+  const onClick = (e: React.MouseEvent<HTMLAnchorElement>): void => {
+    e.preventDefault()
+    openFileLink(seg.path, seg.line, seg.col, seg.endLine, {
+      toSide: e.ctrlKey || e.metaKey,
+    })
+  }
+  return (
+    <a href={label} onClick={onClick} data-testid="md-filepath">
+      {label}
+    </a>
+  )
+}
+
+type PlainFilePathSegment = {
+  readonly type: 'filepath'
+  /** Full matched text including any `:line:col` suffix — what the user sees. */
+  readonly text: string
+  readonly path: string
+  readonly line?: number
+  readonly col?: number
+  readonly endLine?: number
+}
+type PlainSegment = { readonly type: 'text' | 'url'; readonly text: string } | PlainFilePathSegment
+
+// Left-to-right scan reusing the markdown renderer's bare-URL and bare-path
+// matchers (same order as parseInline: URL first), so both renderers agree on
+// what counts as a link — CJK termination, trailing punctuation, mid-word
+// guards, and the `/`-prefix guard that keeps a URL's path tail out.
+function linkifyPlainText(text: string): readonly PlainSegment[] {
+  const out: PlainSegment[] = []
+  let buf = ''
+  const flush = (): void => {
+    if (buf.length > 0) {
+      out.push({ type: 'text', text: buf })
+      buf = ''
+    }
+  }
+  let i = 0
+  while (i < text.length) {
+    const url = matchBareUrl(text, i)
+    if (url) {
+      flush()
+      out.push({ type: 'url', text: url })
+      i += url.length
+      continue
+    }
+    const fp = matchFilePathAt(text, i)
+    if (fp) {
+      flush()
+      out.push({
+        type: 'filepath',
+        text: fp.full,
+        path: fp.path,
+        ...(fp.line !== undefined ? { line: fp.line } : {}),
+        ...(fp.col !== undefined ? { col: fp.col } : {}),
+        ...(fp.endLine !== undefined ? { endLine: fp.endLine } : {}),
+      })
+      i += fp.full.length
+      continue
+    }
+    buf += text[i]!
+    i++
+  }
+  flush()
+  return out
 }
 
 function BlockNode({ block }: { block: NonTextBlock }) {

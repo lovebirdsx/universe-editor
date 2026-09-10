@@ -304,6 +304,17 @@
   overflow-wrap: anywhere;
 }
 
+/* Bare URLs inside plain user text: same link colour as the markdown
+   renderer's .mdLink so links read identically across both variants. */
+.plainTextBlock a {
+  color: var(--vscode-badge-progressBackground, #4fa6e2);
+  text-decoration: none;
+}
+
+.plainTextBlock a:hover {
+  text-decoration: underline;
+}
+
 /* Rewind / Fork hover affordances, pinned to the top-right of the user turn.
    Hidden until the message row (or a button) is hovered / focused, mirroring the
    session-row delete/rename reveal. */

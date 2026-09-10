@@ -921,7 +921,9 @@ const EMPTY_ANCHOR_RE = /^<a\s+(?:id|name)\s*=\s*"([^"<]+)"\s*><\/a\s*>/i
 // non-ASCII through would swallow the trailing prose into the link.
 const BARE_URL_RE = /^(https?:\/\/[^\s<>()\u007f-\uffff]*[^\s<>().,;:!?\u007f-\uffff])/i
 
-function matchBareUrl(text: string, i: number): string | null {
+// Also exported for plaintext linkification (user-prompt rendering in
+// MessageContent variant="plain"), which recognizes bare URLs only.
+export function matchBareUrl(text: string, i: number): string | null {
   // Avoid matching mid-word like `foohttp://...`
   if (i > 0 && /[A-Za-z0-9_/.~%-]/.test(text[i - 1] ?? '')) return null
   const slice = text.slice(i)
