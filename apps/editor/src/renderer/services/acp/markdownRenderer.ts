@@ -609,7 +609,9 @@ export function parseInline(text: string): readonly MdInline[] {
       const close = text.indexOf('>', i + 1)
       if (close !== -1) {
         const candidate = text.slice(i + 1, close).trim()
-        if (isSafeHref(candidate) || looksLikeFilePath(candidate)) {
+        // '/'-initial candidates are XML closing tags (`</summary>`), not
+        // angle-wrapped paths — keep the angle brackets visible.
+        if (isSafeHref(candidate) || (!candidate.startsWith('/') && looksLikeFilePath(candidate))) {
           flush()
           out.push({
             type: 'link',

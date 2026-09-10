@@ -240,6 +240,9 @@ export function matchFilePathAt(text: string, i: number): FilePathMatch | null {
   // e.g. the `/path` part of `https://host/path` — not a path start. (Interior
   // positions of a real match are never probed: the parser jumps past a match.)
   if (i > 0 && text[i - 1] === '/') return null
+  // A preceding '<' means we're inside an XML/HTML-style closing tag
+  // (`</summary>`): the '/' is tag syntax, not a path start.
+  if (i > 0 && text[i - 1] === '<') return null
   const slice = text.slice(i)
   const atPrefixed = slice.startsWith('@')
   const m = atPrefixed ? AT_FILE_PATH_AT_RE.exec(slice) : FILE_PATH_AT_RE.exec(slice)

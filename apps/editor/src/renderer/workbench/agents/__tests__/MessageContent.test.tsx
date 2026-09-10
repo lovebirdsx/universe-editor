@@ -323,6 +323,19 @@ describe('MessageContent', () => {
     expect(screen.getAllByTestId('acp-command-badge')).toHaveLength(2)
   })
 
+  it('renders agent notification XML literally and links only the embedded path', () => {
+    // Regression: `<task-notification>…</task-notification>`-style text — the
+    // closing tags are markup, not absolute paths; only the real path inside
+    // the body becomes a link.
+    const input =
+      '<task-notification><summary>build failed: src/foo.ts:10:5</summary></task-notification>'
+    const { container } = renderContent([{ type: 'text', text: input }])
+    const links = screen.getAllByTestId('md-filepath')
+    expect(links).toHaveLength(1)
+    expect(links[0]!.textContent).toBe('src/foo.ts:10:5')
+    expect(container.textContent).toBe(input)
+  })
+
   describe('variant="plain" (user messages)', () => {
     it('renders markdown syntax verbatim without inline formatting', () => {
       const { container } = renderPlain([{ type: 'text', text: 'a **bold** and *em* text' }])
@@ -461,6 +474,17 @@ describe('MessageContent', () => {
       expect(plain.textContent).toBe('check /home/user/src/foo.ts:10:5 please')
       const link = screen.getByTestId('md-filepath')
       expect(link.textContent).toBe('/home/user/src/foo.ts:10:5')
+    })
+
+    it('keeps XML closing tags literal while linking the embedded path', () => {
+      // Same regression as the markdown variant, for the plain-text pipeline.
+      const input =
+        '<task-notification><summary>build failed: src/foo.ts:10:5</summary></task-notification>'
+      renderPlain([{ type: 'text', text: input }])
+      const links = screen.getAllByTestId('md-filepath')
+      expect(links).toHaveLength(1)
+      expect(links[0]!.textContent).toBe('src/foo.ts:10:5')
+      expect(screen.getByTestId('acp-plaintext').textContent).toBe(input)
     })
 
     it('linkifies a Windows drive path', () => {

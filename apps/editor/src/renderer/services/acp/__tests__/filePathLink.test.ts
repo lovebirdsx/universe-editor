@@ -136,6 +136,21 @@ describe('matchFilePathAt', () => {
     expect(matchFilePathAt('/etc/app/config', 0)?.path).toBe('/etc/app/config')
   })
 
+  it('does NOT start a path right after `<` (XML closing tag)', () => {
+    // Regression: in `<task-notification>…</task-notification>`-style text the
+    // '/' of a closing tag is tag syntax, not the root of an absolute path.
+    expect(matchFilePathAt('</summary>', 1)).toBeNull()
+    expect(matchFilePathAt('</task-notification>', 1)).toBeNull()
+    expect(matchFilePathAt('</etc/app/config>', 1)).toBeNull()
+    expect(matchFilePathAt('</a/b.ts>', 1)).toBeNull()
+  })
+
+  it('still matches a single-segment absolute name when NOT adjacent to `<`', () => {
+    // Pins the trade-off boundary: only the `<`+`/` shape is guarded; a bare
+    // `/summary` in prose keeps matching as an absolute directory path.
+    expect(matchFilePathAt('/summary', 0)?.path).toBe('/summary')
+  })
+
   it('does NOT match a bare filename without a dir separator', () => {
     expect(matchFilePathAt('package.json', 0)).toBeNull()
     expect(matchFilePathAt('index.ts', 0)).toBeNull()

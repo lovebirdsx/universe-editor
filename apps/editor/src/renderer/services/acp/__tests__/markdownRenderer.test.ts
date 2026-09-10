@@ -692,6 +692,40 @@ describe('parseInline — inline layer', () => {
     ])
   })
 
+  it('renders XML-like notification tags literally, linking only the embedded path', () => {
+    // Regression: `<task-notification>…</task-notification>`-style text — the
+    // closing tags are markup, not absolute paths; only the real path inside
+    // the body becomes a link.
+    const input =
+      '<task-notification><summary>build failed: src/foo.ts:10:5</summary></task-notification>'
+    expect(parseInline(input)).toEqual<readonly MdInline[]>([
+      text('<task-notification><summary>build failed: '),
+      { type: 'filepath', path: 'src/foo.ts', line: 10, col: 5 },
+      text('</summary></task-notification>'),
+    ])
+    // Note: inlineToText drops the location suffix of filepath nodes (the same
+    // visible-text behavior as a `(path:10:5)` markdown link whose label is
+    // just the path), so it cannot be used for a round-trip assertion here.
+    expect(inlineToText(parseInline(input))).toBe(
+      '<task-notification><summary>build failed: src/foo.ts</summary></task-notification>',
+    )
+  })
+
+  it('does not turn an XML closing tag into an autolink', () => {
+    expect(parseInline('see </summary> for details')).toEqual<readonly MdInline[]>([
+      text('see </summary> for details'),
+    ])
+    expect(parseInline('</task-notification>')).toEqual<readonly MdInline[]>([
+      text('</task-notification>'),
+    ])
+  })
+
+  it('still autolinks angle-wrapped relative paths', () => {
+    expect(parseInline('<./a/b.md>')).toEqual<readonly MdInline[]>([
+      { type: 'link', href: './a/b.md', children: [text('./a/b.md')] },
+    ])
+  })
+
   it('parses autolinks <url> only for safe schemes', () => {
     expect(parseInline('see <https://example.com>')).toEqual<readonly MdInline[]>([
       text('see '),
