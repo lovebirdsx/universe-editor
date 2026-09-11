@@ -37,7 +37,7 @@
 4. **`_spawn` 的异步回调（`data`/`close`/watchdog/onStdoutLine）绝不 throw**——异常冒泡成 `uncaughtException` 会杀掉整个 extension host。p4 命令失败是一等公民（resolve 失败结果），宿主崩溃不是。巨量 stdout 边收边计字节、超 256MB 即杀进程。
 5. **SCM 分组模型与 git 根本不同**：p4 是「一个文件属于恰好一个 pending changelist」→ 动态分组（默认组 + 每个编号 CL + 每个 CL 的搁置组），`_applyGroups()` 用 `DesiredGroup[]` 对账而非全量重建。命令路由靠**每个 client 唯一的 root 最长前缀**命中（`clientManager.ts`），路径比较统一走 `pathUtil.ts` `norm()`。
 
-其余坑（sync 拒绝三形态、clientFile 是 client 语法、`-Mj` 塌陷、blame describe 挂死、搁置扇出、流式通道、`--parallel` stdout 突发冻结、unresolved 信号、中文路径 argv 乱码）一律见 [docs/pitfalls.md](docs/pitfalls.md)。
+其余坑（sync 拒绝三形态、clientFile 是 client 语法、`-Mj` 塌陷、blame describe 挂死、搁置扇出、流式通道、`--parallel` stdout 突发冻结 + 进程 IO 速率探针、unresolved 信号、中文路径 argv 乱码）一律见 [docs/pitfalls.md](docs/pitfalls.md)。
 
 ## 操作方法约定（`client.ts`）
 
@@ -79,6 +79,7 @@ pnpm check                                       # lint+typecheck+全测+docs:ch
 ## 关键参考路径
 
 - `extensions/perforce/src/p4Service.ts` —— CLI 封装 + env 净化 + `-Mj`/`-ztag` + 并发门 + watchdog + argfile
+- `extensions/perforce/src/processIo.ts` —— sync 期间按 pid 采样 p4 进程树 IO（Windows 常驻 PowerShell/WMI、Linux `/proc`、`UNIVERSE_P4_IO_PROBE` 测试缝）+ 定宽速率格式化
 - `extensions/perforce/src/client.ts` —— PerforceClient：分组对账 + `_mutate` + 全操作方法 + reconcile + checkWorkingTree/checkBehind + getHeadContent/getBlame/openChange
 - `extensions/perforce/src/revertPlan.ts` —— 统一 Revert 分类 + 确认文案（纯函数）
 - `extensions/perforce/src/extension.ts` —— activate + 全命令注册 + 路由 helper（`uriToFsPath` 修 explorer 传参）

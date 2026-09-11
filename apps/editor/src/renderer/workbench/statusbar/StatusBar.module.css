@@ -34,6 +34,10 @@
   background: transparent;
   font-size: inherit;
   gap: 4px;
+  /* Digits share one advance width, so an entry whose number changes every
+     second (the sync read rate) can't shift its neighbours. Proportional digits
+     would widen "111KB/s" against "000KB/s" and shove the whole row sideways. */
+  font-variant-numeric: tabular-nums;
 }
 
 .item.clickable {

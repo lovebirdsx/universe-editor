@@ -32,6 +32,15 @@ if (!STATE_PATH) {
   process.exit(1)
 }
 
+/** Block for `ms` without touching the event loop — the fake is synchronous by
+ *  design (see the `process.exitCode = main()` note at the bottom, which exists
+ *  so buffered stdout drains). Used to model the silent server-side walk a wide
+ *  sync spends its first minutes in. */
+function sleepSync(ms) {
+  if (!(ms > 0)) return
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
 /**
  * @typedef {{ rev: number, content: string, revisions?: Record<string, string>,
  *   haveRev?: number, haveContent?: string, headAction?: string,
@@ -850,6 +859,12 @@ function main() {
       }
       // Real sync. The clobber fault aborts the whole run like real p4 (exit 1);
       // `-f` overrides it.
+      // `UNIVERSE_P4_FAKE_SYNC_START_MS` holds the run open before it prints
+      // anything, which is what a wide sync really does: p4 walks the depot
+      // server-side for minutes with silent stdout. The status-bar I/O spec needs
+      // that window to observe a run whose `done` is still 0.
+      const startDelayMs = Number(process.env.UNIVERSE_P4_FAKE_SYNC_START_MS ?? '0')
+      if (startDelayMs > 0) sleepSync(startDelayMs)
       const clobber = plans.find((p) => state.files[p.depotFile].clobber === true)
       if (clobber && !force) {
         process.stderr.write(

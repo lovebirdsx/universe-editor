@@ -152,6 +152,13 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.status.syncDisk': '磁盘 +{0}',
   'perforce.status.syncDiskTooltip':
     '文件监视观察到的磁盘写入：{0} 个（近似值；监视事件分批上报且可能被截断）',
+  'perforce.status.syncTarget': '目标：{0}',
+  'perforce.status.lastSyncTarget': '上次拉取：{0}',
+  'perforce.status.syncTargetHead': '最新版本',
+  'perforce.status.syncTargetPicked': '所选文件',
+  'perforce.status.syncTargetChangelist': 'changelist {0}',
+  'perforce.status.syncIoTooltip':
+    'p4 进程 IO：读取 {0}，写入 {1} —— 速率取两者之和（取自操作系统进程计数器，含网络接收与中转临时文件，不等于落盘量）',
   // graph 合并历史（多选查看历史，extension.ts 的 perforce-graph.getChanges）
   'perforce.graph.multiClient': '所选路径不属于同一个 Perforce 工作区，无法合并查看它们的历史。',
   // graph sync（sync to change，extension.ts 的 perforce-graph.syncToChange）

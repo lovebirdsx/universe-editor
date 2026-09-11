@@ -324,6 +324,8 @@ export const test = base.extend<SwarmFixtures>({
         UNIVERSE_P4_PATH: FAKE_P4,
         UNIVERSE_P4_FAKE_STATE: swarmBackend.stateFile,
         UNIVERSE_SWARM_BASE_URL: swarmBackend.baseUrl,
+        // Same reason as perforceApp: no real OS sampler under the fake p4.
+        UNIVERSE_P4_IO_PROBE: 'off',
         ...swarmExtraEnv,
       },
     })

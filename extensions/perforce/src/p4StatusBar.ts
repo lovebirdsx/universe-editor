@@ -30,7 +30,9 @@ import {
 import type { ClientManager } from './clientManager.js'
 import { uriToFsPath } from './pathUtil.js'
 import { asRev, type FstatInfo } from './fstatParser.js'
+import { formatBytes, formatIoRate, RateWindow } from './processIo.js'
 import { localize } from './nls.js'
+import type { PerforceClient, SyncProgress } from './client.js'
 
 /** Truncate a long client name for the busy status-bar text: keep at most `max`
  *  chars of the tail, but never slice mid-word — when the cut lands inside a
@@ -58,6 +60,30 @@ export function formatScanElapsed(elapsedMs: number): string {
   return `${m}m ${s}s`
 }
 
+/** The human name of a sync's target, for the status-bar tooltip. `spec` is the
+ *  raw revision suffix {@link PerforceClient.sync} was called with, or `''` for
+ *  the per-file force get (each filespec then carries its own `#rev`).
+ *
+ *  The raw spec is what the run actually pulls, so an unrecognized form passes
+ *  through verbatim rather than being dressed up: `#4` is already the clearest
+ *  name for itself, and inventing one would risk naming a revision the run isn't
+ *  fetching. */
+export function syncTargetLabel(spec: string): string {
+  // `=== ''` first, and identity-based: the empty spec is a REAL value (the
+  // per-file get) that happens to be falsy — a truthiness test would mislabel it.
+  if (spec === '') return localize('perforce.status.syncTargetPicked', 'the selected files')
+  // Case-insensitive: the revision prompt passes what the user typed through, so
+  // `#HEAD` reaches here as readily as `#head` and names the same thing.
+  if (spec.toLowerCase() === '#head') {
+    return localize('perforce.status.syncTargetHead', 'the latest revision')
+  }
+  const changelist = /^@(\d+)$/.exec(spec)?.[1]
+  if (changelist !== undefined) {
+    return localize('perforce.status.syncTargetChangelist', 'changelist {0}', { 0: changelist })
+  }
+  return spec
+}
+
 export class P4StatusBarController {
   private readonly _item: StatusBarItem
   private readonly _revItem: StatusBarItem
@@ -73,6 +99,15 @@ export class P4StatusBarController {
    *  AND the clock both freeze for the whole gap between p4's stdout bursts —
    *  which under `--parallel` can be a minute or more. */
   private _syncHeartbeat: ReturnType<typeof setInterval> | undefined
+  /** I/O-rate window (read + write) for the sync body, sampled at RENDER time
+   *  (see {@link _syncRateText}) — same idiom as the elapsed clock: a pure
+   *  repaint can move the number, so no new client event is needed to make it
+   *  decay. */
+  private readonly _syncRate = new RateWindow()
+  /** Which sync run {@link _syncRate} belongs to; a new run resets it. */
+  private _syncRateRun: number | undefined
+  /** Which client {@link _syncRate} was measured on (see {@link refresh}). */
+  private _syncRateOwner: PerforceClient | undefined
 
   constructor(private readonly _mgr: ClientManager) {
     this._item = window.createStatusBarItem(StatusBarAlignment.Left, 100)
@@ -88,6 +123,15 @@ export class P4StatusBarController {
    *  changes or a new client is added. */
   refresh(): void {
     const client = this._mgr.active
+    // The window belongs to one client's run: a re-point at another workspace
+    // must not difference the new client's totals against the old one's. Scoped
+    // to an actual change of client — a plain re-render (the SCM selection came
+    // back to this repo) must keep the live window, or the body blinks to
+    // `000KB/s` for a frame while a sync is running.
+    if (this._syncRateOwner !== client) {
+      this._syncRateOwner = client
+      this._dropSyncRate()
+    }
     this._clientSub?.dispose()
     this._clientSub = client?.onDidChange(() => {
       this._render()
@@ -128,6 +172,47 @@ export class P4StatusBarController {
     }
   }
 
+  /** The p4 process I/O rate for the sync body — READ + WRITE — or undefined
+   *  when this run has no sampler (the body then falls back to the watcher count).
+   *
+   *  Both sides, because they move in different phases: reads climb while p4
+   *  pulls from the server, writes while it lands the files in the workspace. A
+   *  read-only rate decays to `000KB/s` in that second phase — the bar then reads
+   *  as stalled exactly while the disk is being written, the false signal this
+   *  readout exists to remove. The token is a sum, so it stays alive while either
+   *  side moves; the tooltip still reports the split.
+   *
+   *  Computed here rather than in the client because it is a function of `now`:
+   *  pushing the current cumulative byte count on every render is what lets the
+   *  window slide off a stalled transfer and decay to `000KB/s` from the 1s
+   *  heartbeat alone, with no further events from p4. */
+  private _syncRateText(progress: SyncProgress): string | undefined {
+    const read = progress.ioReadBytes
+    if (read === undefined) {
+      this._dropSyncRate()
+      return undefined
+    }
+    if (this._syncRateRun !== progress.startedAt) {
+      this._syncRateRun = progress.startedAt
+      this._syncRate.reset()
+    }
+    const now = Date.now()
+    // Both sides are published together (see `_setSyncProgress`), so the `?? 0`
+    // only covers a hand-built DTO. The sum is monotone as long as either side
+    // is, so the window's difference still measures a rate.
+    this._syncRate.push(now, read + (progress.ioWriteBytes ?? 0))
+    // One sample has no span to difference over yet. That is a real zero — the
+    // run just started with a sampler attached — not "no rate at all", so the
+    // token keeps its width instead of blinking out of the body.
+    return formatIoRate(this._syncRate.rateAt(now) ?? 0)
+  }
+
+  private _dropSyncRate(): void {
+    if (this._syncRateRun === undefined) return
+    this._syncRateRun = undefined
+    this._syncRate.reset()
+  }
+
   private _render(): void {
     if (!this._visible) {
       this._setSyncHeartbeat(false)
@@ -147,6 +232,7 @@ export class P4StatusBarController {
       busyCancellable,
       scanProgress,
       syncProgress,
+      lastSyncSpec,
     } = client.status
     this._setSyncHeartbeat(syncProgress !== undefined)
     if (busy) {
@@ -163,22 +249,51 @@ export class P4StatusBarController {
         // No total is ever shown: the pre-flight count that would produce one
         // costs a full server-side walk on a wide scope, so a sync starts
         // downloading immediately instead. The bare count alone reads as
-        // stalled, so the body pairs it with the elapsed time — a rising clock
-        // is the "it's alive" signal a missing total removes. Under
-        // `--parallel` p4's stdout also goes quiet for minutes at a time, so a
-        // disk-write counter (watcher-observed, approximate) keeps the body
-        // moving through those gaps.
+        // stalled, so the body pairs it with a live signal — under `--parallel`
+        // p4's stdout goes quiet for minutes at a time, and even before that it
+        // spends the first minutes server-side without touching a workspace file.
+        // Two sources fill that, in this order: the p4 process's own read rate
+        // when a sampler is attached (moves from the first server round-trip),
+        // else the watcher-observed disk count (moves only once files land).
         const elapsed = formatScanElapsed(Date.now() - syncProgress.startedAt)
         const disk = syncProgress.diskWrites
+        const rate = this._syncRateText(syncProgress)
+        const middle =
+          rate ??
+          (disk !== undefined && disk > 0
+            ? localize('perforce.status.syncDisk', 'disk +{0}', { 0: disk })
+            : undefined)
         const count =
-          disk !== undefined && disk > 0
-            ? `${syncProgress.done} · ${localize('perforce.status.syncDisk', 'disk +{0}', { 0: disk })} · ${elapsed}`
+          middle !== undefined
+            ? `${syncProgress.done} · ${middle} · ${elapsed}`
             : `${syncProgress.done} · ${elapsed}`
         this._item.text = `$(server) ${short}: ${busy} ${count} $(sync~spin)`
         const lines = [
           localize('perforce.status.syncing', 'Syncing {0}', { 0: clientName }),
+          // Which revision this run is pulling, right under the title line: the
+          // notification spells it out once and is gone, and "which changelist
+          // did I just get?" is exactly what a tooltip is asked afterwards.
+          ...(lastSyncSpec !== undefined
+            ? [
+                localize('perforce.status.syncTarget', 'Target: {0}', {
+                  0: syncTargetLabel(lastSyncSpec),
+                }),
+              ]
+            : []),
           localize('perforce.status.syncCounts', 'Synced {0} files', { 0: syncProgress.done }),
         ]
+        if (syncProgress.ioReadBytes !== undefined) {
+          lines.push(
+            localize(
+              'perforce.status.syncIoTooltip',
+              'p4 process I/O: read {0}, wrote {1} (OS process counters — includes network receive and staged temporary files, so not a disk-write figure)',
+              {
+                0: formatBytes(syncProgress.ioReadBytes),
+                1: formatBytes(syncProgress.ioWriteBytes ?? 0),
+              },
+            ),
+          )
+        }
         if (disk !== undefined && disk > 0) {
           lines.push(
             localize(
@@ -272,11 +387,23 @@ export class P4StatusBarController {
       this._item.text = `$(server) ${short} ${openedCount}`
     }
     // Spell the count out in words — plus the graph is what a click opens, which
-    // the label alone doesn't say.
-    this._item.tooltip = `${localize('perforce.status.tooltip', 'Perforce: {0} · {1} opened', {
-      0: clientName,
-      1: String(openedCount),
-    })}\n${localize('perforce.status.openGraph', 'Open Perforce Graph')}`
+    // the label alone doesn't say. The target line sits between them: it is the
+    // only place a sync's target survives its run (the notification is gone by
+    // then), and the action hint stays last, as in the sync branch.
+    this._item.tooltip = [
+      localize('perforce.status.tooltip', 'Perforce: {0} · {1} opened', {
+        0: clientName,
+        1: String(openedCount),
+      }),
+      ...(lastSyncSpec !== undefined
+        ? [
+            localize('perforce.status.lastSyncTarget', 'Last pull: {0}', {
+              0: syncTargetLabel(lastSyncSpec),
+            }),
+          ]
+        : []),
+      localize('perforce.status.openGraph', 'Open Perforce Graph'),
+    ].join('\n')
     this._item.show()
   }
 
@@ -388,6 +515,7 @@ export class P4StatusBarController {
 
   dispose(): void {
     this._setSyncHeartbeat(false)
+    this._dropSyncRate()
     this._clientSub?.dispose()
     this._editorSub?.dispose()
     this._item.dispose()

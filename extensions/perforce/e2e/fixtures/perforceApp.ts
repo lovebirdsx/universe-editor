@@ -338,11 +338,21 @@ export interface P4SubmittedSeed {
   }[]
 }
 
-export const test = base.extend<PerforceFixtures & { p4Seeds: P4SeedConfig; openSubdir: string }>({
+export const test = base.extend<
+  PerforceFixtures & {
+    p4Seeds: P4SeedConfig
+    openSubdir: string
+    p4ExtraEnv: Record<string, string>
+  }
+>({
   p4Seeds: [{ files: DEFAULT_SEEDS }, { option: true }],
   // Relative subdir to open instead of the client root ('' = open the root) —
   // reproducing "open a deep folder of a huge p4 client".
   openSubdir: ['', { option: true }],
+  // Extra environment for the launched app. Needed by the sync I/O rate spec,
+  // which points `UNIVERSE_P4_IO_PROBE` at a deterministic fake sampler and
+  // slows the fake p4 down so the run is observable while it is in flight.
+  p4ExtraEnv: [{}, { option: true }],
   // The seeded depot/workspace is a first-class fixture: both electronApp (which
   // launches the app against its state file) and the `perforce` harness read it
   // from here, so nothing has to be smuggled onto the ElectronApplication handle.
@@ -368,7 +378,7 @@ export const test = base.extend<PerforceFixtures & { p4Seeds: P4SeedConfig; open
       fileUrl: (relPath: string) => `file:///${abs(relPath).replace(/^\/+/, '')}`,
     })
   },
-  electronApp: async ({ p4Workspace }, use) => {
+  electronApp: async ({ p4Workspace, p4ExtraEnv }, use) => {
     const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-p4-'))
     seedBaselineUserData(userDataDir)
     const app = await launchApp({
@@ -379,6 +389,11 @@ export const test = base.extend<PerforceFixtures & { p4Seeds: P4SeedConfig; open
       env: {
         UNIVERSE_P4_PATH: FAKE_P4,
         UNIVERSE_P4_FAKE_STATE: p4Workspace.stateFile,
+        // No OS process sampler in the fake-p4 environment: it is per-platform,
+        // unpinnable and would make every timing assertion here nondeterministic.
+        // The rate's own spec overrides this with a scripted probe.
+        UNIVERSE_P4_IO_PROBE: 'off',
+        ...p4ExtraEnv,
       },
     })
     await use(app)

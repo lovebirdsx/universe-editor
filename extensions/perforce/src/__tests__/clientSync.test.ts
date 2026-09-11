@@ -15,6 +15,7 @@ class FakeChildProcess extends EventEmitter {
   readonly stdout = new EventEmitter()
   readonly stderr = new EventEmitter()
   readonly stdin = { end: vi.fn() }
+  pid: number | undefined = 4242
   kill(): boolean {
     return true
   }
@@ -22,6 +23,33 @@ class FakeChildProcess extends EventEmitter {
 
 const spawnMock = vi.fn<(...args: unknown[]) => FakeChildProcess>()
 vi.mock('node:child_process', () => ({ spawn: (...args: unknown[]) => spawnMock(...args) }))
+
+/** The sync I/O sampler, faked: the real one spawns a platform process (WMI
+ *  poller / `/proc` reader), which a unit test has no business doing. The fake
+ *  hands the test the callbacks so samples, failures and disposal are driven
+ *  deterministically — the wiring under test is the client's, not the sampler's. */
+interface FakeIoProbe {
+  readonly pid: number
+  readonly dispose: ReturnType<typeof vi.fn>
+  readonly sample: (read: number, write: number) => void
+  readonly fail: (reason: string, kind: 'missing' | 'transient') => void
+}
+const ioMock = vi.hoisted(() => ({ probes: [] as unknown[], available: true }))
+
+vi.mock('../processIo.js', () => ({
+  createP4IoProbe: (pid: number, options: Record<string, unknown>) => {
+    if (!ioMock.available) return undefined
+    const probe: FakeIoProbe = {
+      pid,
+      dispose: vi.fn(),
+      sample: (read, write) => (options.onSample as (s: unknown) => void)({ read, write }),
+      fail: (reason, kind) =>
+        (options.onUnavailable as (r: string, k: string) => void)(reason, kind),
+    }
+    ioMock.probes.push(probe)
+    return probe
+  },
+}))
 
 const mocks = vi.hoisted(() => ({
   executeCommand: vi.fn(),
@@ -125,6 +153,13 @@ function fakeClock(): { now: () => number; advance: (ms: number) => void } {
   return { now: () => t, advance: (ms) => (t += ms) }
 }
 
+/** `sync` reaches `spawn` through the concurrency gate, so the child (and with it
+ *  the sampler) exists a few microtasks later; two macrotask ticks settle it. */
+const flush = async (): Promise<void> => {
+  await new Promise((r) => setTimeout(r, 0))
+  await new Promise((r) => setTimeout(r, 0))
+}
+
 /** A controllable `FileSystemWatcher` fake: its three events can be fired by the
  *  test with a filesystem path, mirroring git's `repositoryWatcher.test.ts`. */
 interface FakeWatcherController {
@@ -222,6 +257,8 @@ beforeEach(() => {
   spawnMock.mockReset()
   spawned.length = 0
   heldChildren.length = 0
+  ioMock.probes.length = 0
+  ioMock.available = true
   vi.clearAllMocks()
   mocks.executeCommand.mockResolvedValue(undefined)
 })
@@ -774,9 +811,187 @@ describe('PerforceClient.sync onProgress', () => {
       const call = spy.mock.calls.find(([args]) => Array.isArray(args) && args[0] === 'sync')
       expect(call).toBeDefined()
       expect(call![1]).not.toHaveProperty('onStdoutLine')
+      // The sampler rides the same path: a non-streaming sync publishes no
+      // progress, so there is nothing for a sample to update.
+      expect(call![1]).not.toHaveProperty('onSpawn')
+      expect(ioMock.probes).toHaveLength(0)
     } finally {
       spy.mockRestore()
     }
+  })
+})
+
+describe('PerforceClient sync I/O sampler', () => {
+  const probes = (): {
+    pid: number
+    dispose: ReturnType<typeof vi.fn>
+    sample: (r: number, w: number) => void
+    fail: (reason: string, kind: 'missing' | 'transient') => void
+  }[] => ioMock.probes as never
+
+  it('samples the spawned p4 and accumulates its deltas on syncProgress', async () => {
+    const client = await makeClient(() => ({ stdout: '' }), {}, {}, true)
+    const run = client.sync('#head', { onProgress: () => {} })
+    await flush()
+
+    // Attached to the child that was actually spawned, before any output.
+    expect(probes()).toHaveLength(1)
+    expect(probes()[0]!.pid).toBe(4242)
+    // Present from the first frame — with zero — so the bar switches to the rate
+    // form during the silent server walk, not at the first transferred byte.
+    expect(client.status.syncProgress?.ioReadBytes).toBe(0)
+
+    probes()[0]!.sample(4096, 12)
+    expect(client.status.syncProgress?.ioReadBytes).toBe(4096)
+    expect(client.status.syncProgress?.ioWriteBytes).toBe(12)
+    probes()[0]!.sample(1024, 0)
+    expect(client.status.syncProgress?.ioReadBytes).toBe(5120)
+
+    finishHeld()
+    await run
+  })
+
+  it('keeps the DTO free of ioReadBytes when the platform has no sampler', async () => {
+    ioMock.available = false
+    const client = await makeClient(() => ({ stdout: '' }), {}, {}, true)
+    const run = client.sync('#head', { onProgress: () => {} })
+    await flush()
+
+    expect(probes()).toHaveLength(0)
+    // `undefined` (not 0) is what tells the bar to fall back to the watcher
+    // count instead of freezing at a rate it can no longer update.
+    expect(client.status.syncProgress).toBeDefined()
+    expect(client.status.syncProgress?.ioReadBytes).toBeUndefined()
+    expect(client.status.syncProgress?.ioWriteBytes).toBeUndefined()
+
+    finishHeld()
+    await run
+  })
+
+  it('releases the sampler when the sync ends', async () => {
+    const client = await makeClient(() => ({ stdout: '' }), {}, {}, true)
+    const run = client.sync('#head', { onProgress: () => {} })
+    await flush()
+    expect(probes()[0]!.dispose).not.toHaveBeenCalled()
+
+    finishHeld()
+    await run
+
+    expect(probes()[0]!.dispose).toHaveBeenCalled()
+    expect(client.status.syncProgress).toBeUndefined()
+  })
+
+  it('releases the sampler when the client is disposed mid-sync', async () => {
+    const client = await makeClient(() => ({ stdout: '' }), {}, {}, true)
+    const run = client.sync('#head', { onProgress: () => {} })
+    await flush()
+
+    client.dispose()
+    expect(probes()[0]!.dispose).toHaveBeenCalled()
+    finishHeld()
+    await run
+  })
+
+  it('drops back to the watcher count for the run when a sampler stalls', async () => {
+    const client = await makeClient(() => ({ stdout: '' }), {}, {}, true)
+    const run = client.sync('#head', { onProgress: () => {} })
+    await flush()
+    probes()[0]!.sample(4096, 12)
+    expect(client.status.syncProgress?.ioReadBytes).toBe(4096)
+
+    // A frozen readout decays to a permanent 000KB/s — the false "stalled"
+    // signal the rate exists to remove — so the field goes away instead.
+    probes()[0]!.fail('no output for 15000ms', 'transient')
+    expect(probes()[0]!.dispose).toHaveBeenCalled()
+    expect(client.status.syncProgress?.ioReadBytes).toBeUndefined()
+
+    finishHeld()
+    await run
+
+    // Transient means *this run*, not this machine: a stalled sampler (a busy
+    // WMI provider, a transfer that went quiet) must not cost every later sync
+    // in the session its rate readout.
+    const second = client.sync('#head', { onProgress: () => {} })
+    await flush()
+    expect(probes()).toHaveLength(2)
+    expect(client.status.syncProgress?.ioReadBytes).toBe(0)
+    finishHeld()
+    await second
+  })
+
+  it('latches the session off, and stops sampling, once the source is missing', async () => {
+    const client = await makeClient(() => ({ stdout: '' }), {}, {}, true)
+    const run = client.sync('#head', { onProgress: () => {} })
+    await flush()
+    probes()[0]!.sample(4096, 12)
+
+    // Spawn failure / a sampler that never executed a line: nothing on this
+    // machine can be sampled, so retrying would only pay for a doomed process.
+    probes()[0]!.fail('EPERM', 'missing')
+    expect(client.status.syncProgress?.ioReadBytes).toBeUndefined()
+
+    finishHeld()
+    await run
+
+    const second = client.sync('#head', { onProgress: () => {} })
+    await flush()
+    expect(probes()).toHaveLength(1)
+    expect(client.status.syncProgress?.ioReadBytes).toBeUndefined()
+    finishHeld()
+    await second
+  })
+})
+
+describe('PerforceClient lastSyncSpec', () => {
+  it('names the target from the first frame and keeps naming it after the run', async () => {
+    const client = await makeClient(() => ({ stdout: '' }), {}, {}, true)
+    expect(client.status.lastSyncSpec).toBeUndefined()
+    expect(Object.hasOwn(client.status, 'lastSyncSpec')).toBe(false)
+
+    const run = client.sync('@4521', { onProgress: () => {} })
+    await flush()
+    // Published before p4 has printed anything, so the bar can name the target
+    // while the run is still in its silent server-side walk.
+    expect(client.status.lastSyncSpec).toBe('@4521')
+
+    finishHeld()
+    await run
+
+    // The run-scoped DTO is gone; the target is not — that is the whole point of
+    // this field being client-level rather than a SyncProgress member.
+    expect(client.status.syncProgress).toBeUndefined()
+    expect(client.status.lastSyncSpec).toBe('@4521')
+  })
+
+  it('carries the empty spec of a per-file get instead of dropping it', async () => {
+    // `''` means "each filespec has its own #rev" (the force get), so it is a
+    // real target that happens to be falsy — a truthiness test anywhere on this
+    // path would silently hide the most common get of all.
+    const client = await makeClient(() => ({ stdout: '' }))
+    await client.sync('', { scope: [`${ROOT_FWD}/a.cpp#3`] })
+
+    expect(client.status.lastSyncSpec).toBe('')
+    expect(Object.hasOwn(client.status, 'lastSyncSpec')).toBe(true)
+  })
+
+  it('lets the last started run win, and does not resurrect an older one', async () => {
+    const client = await makeClient(() => ({ stdout: '' }), {}, {}, true)
+    const first = client.sync('@1', { onProgress: () => {} })
+    await flush()
+    const second = client.sync('@2', { onProgress: () => {} })
+    await flush()
+
+    // Overlapping syncs share the run counters, so there is no single "the" run;
+    // the label follows what the user asked for last.
+    expect(client.status.lastSyncSpec).toBe('@2')
+
+    // Settling the older run first must not put its spec back on the bar.
+    finishHeld()
+    await first
+    expect(client.status.lastSyncSpec).toBe('@2')
+    finishHeld()
+    await second
+    expect(client.status.lastSyncSpec).toBe('@2')
   })
 })
 

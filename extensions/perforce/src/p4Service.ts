@@ -78,6 +78,17 @@ export interface P4ExecOptions {
    */
   readonly priority?: P4Priority
   /**
+   * Called once with the child's pid right after a successful `spawn`, before any
+   * output arrives. Lets a caller sample the process itself rather than its
+   * output — the sync I/O probe reads the child's OS I/O counters, which keep
+   * climbing while p4 is still querying the server and printing nothing.
+   *
+   * Not called when the spawn failed (a pid-less child emits `error` instead), and
+   * a throwing callback is swallowed and logged like {@link onStdoutLine}: it runs
+   * from an async context where an escape would kill the extension host.
+   */
+  readonly onSpawn?: (pid: number) => void
+  /**
    * Called once per complete stdout line as it arrives. On this path the buffered
    * stdout is **skipped entirely** — the streamed lines are the record, and the
    * caller never reads `result.stdout` afterwards, so accumulating it would only
@@ -794,6 +805,16 @@ export class P4Service {
         return
       }
       const maxBytes = options?.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES
+      if (options?.onSpawn !== undefined && typeof proc.pid === 'number' && proc.pid > 0) {
+        // Before the watchdog and the output handlers: a consumer that fails here
+        // must not disturb the command (red line 4 — async-callback exceptions
+        // kill the whole extension host).
+        try {
+          options.onSpawn(proc.pid)
+        } catch (err) {
+          this._log?.(`  onSpawn callback failed: ${String(err)}`)
+        }
+      }
       const watchdog = new SpawnWatchdog(
         proc,
         options?.timeoutMs ?? this._defaultTimeoutMs,

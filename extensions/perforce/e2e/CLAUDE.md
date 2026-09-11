@@ -11,10 +11,11 @@ Perforce 扩展的端到端测试。本目录的测试**无需真 p4d 服务器*
 - `extensions/perforce/e2e/fixtures/perforceApp.ts`：cold-launch fixture（开 workspace 会重启宿主，不能用 shared 实例），`test.use({ p4Seeds:{files:[...]}, openSubdir })` 定制，`perforce` fixture 给 `clientRoot`/`openDir`/`file()`。spec 在 `extensions/perforce/e2e/specs/`（如 `perforceWorkingTreeHint.spec.ts`，改盘上文件 → 断言 Explorer 出 `RM` 徽标 → `perforce.openChange` 打开 diff）。**⚠️ Playwright option fixture 的值不能是裸数组**（会被当 tuple 只取首元素 → `seeds is not iterable`），故种子包一层对象 `P4SeedConfig{files}`。
 - 改了扩展 `src/` 后 e2e 用的是 `dist/`：先 `pnpm --filter @universe-editor/perforce build`；改了 app 侧（renderer/main）先 `pnpm --filter @universe-editor/editor build`（e2e 跑 `out/`）。**⚠️ 单跑某个 spec 必须带 `UNIVERSE_E2E_NO_TAG_FILTER=1`**（在 `extensions/perforce` 目录下 `npx playwright test -c e2e/playwright.config.ts perforceWorkingTreeHint`）——默认 pass 的 grepInvert 排除 `@regression`/`@serial` 等 tag，p4 spec 基本全带 `@regression`，不带该 env 会报 "No tests found"（机制见 `packages/e2e-harness/src/playwrightConfig.ts`）。
 
-## 两个必踩坑
+## 三个必踩坑
 
 1. **e2e 跑 `out/main/index.js` 预构建产物**：改 renderer 后必须 `pnpm --filter @universe-editor/editor build`，改扩展后 `pnpm --filter @universe-editor/perforce build`，否则 e2e 用旧产物。
 2. **`getByText('Perforce Graph')` 子串匹配**会同时命中标题 span 和 "Perforce Graph is unavailable…" 错误文案 → strict-mode violation。断言标题用 `{ exact: true }`。
+3. **后段断言别钉只在前段成立的时序前提**：`perforceSyncIoRate.spec.ts` 靠 `UNIVERSE_P4_FAKE_SYNC_START_MS` 造静默窗口，若后段断言写成 `Syncing 0 · <非零速率>`（`done` 必须仍是 0），慢机器一旦把前面几步拖过窗口，p4 开始打印 → 正则**永不可能**命中，失败信息还指向错误的方向。后段只断言它真正要守的性质（这里＝速率非零），静默窗口留足预算（`setTimeout` ≥ 各步超时之和）。
 
 ## 验证
 

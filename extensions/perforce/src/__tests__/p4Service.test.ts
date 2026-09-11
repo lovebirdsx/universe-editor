@@ -57,6 +57,7 @@ class FakeChildProcess extends EventEmitter {
   readonly stdout = new EventEmitter()
   readonly stderr = new EventEmitter()
   readonly stdin = { end: vi.fn() }
+  pid: number | undefined = 4242
   killed = false
   kill(): boolean {
     this.killed = true
@@ -659,6 +660,58 @@ describe('P4Service._spawn cancellation via AbortSignal', () => {
     // The listener was detached on close — a later abort must not kill anything.
     source.abort()
     expect(child.killed).toBe(false)
+  })
+})
+
+describe('P4Service._spawn onSpawn handoff', () => {
+  let child: FakeChildProcess
+  beforeEach(() => {
+    child = new FakeChildProcess()
+    spawnMock.mockReturnValue(child)
+  })
+  afterEach(() => {
+    spawnMock.mockReset()
+  })
+
+  it('hands the child pid over once, before any output arrives', async () => {
+    const svc = makeService()
+    const pids: number[] = []
+    const p = svc.exec(['sync', '//depot/branch_x/...'], { onSpawn: (pid) => pids.push(pid) })
+    await flush()
+    // The probe needs the pid from the very first tick — p4 can stay silent for
+    // minutes while it walks the depot, which is the whole reason for sampling it.
+    expect(pids).toEqual([4242])
+    child.stdout.emit('data', Buffer.from('x\n'))
+    child.emit('close', 0)
+    await p
+    expect(pids).toEqual([4242])
+  })
+
+  it('resolves the command normally when the callback throws', async () => {
+    const svc = makeService()
+    const p = svc.exec(['info'], {
+      onSpawn: () => {
+        throw new Error('probe exploded')
+      },
+    })
+    await flush()
+    child.stdout.emit('data', Buffer.from('ok'))
+    child.emit('close', 0)
+    const result = await p
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toBe('ok')
+  })
+
+  it('stays silent when the spawn produced no pid', async () => {
+    const svc = makeService()
+    child.pid = undefined
+    const pids: number[] = []
+    const p = svc.exec(['info'], { onSpawn: (pid) => pids.push(pid) })
+    await flush()
+    child.emit('error', new Error('spawn p4 ENOENT'))
+    await expect(p).rejects.toThrow(/ENOENT/)
+    await flush()
+    expect(pids).toEqual([])
   })
 })
 

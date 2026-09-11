@@ -50,6 +50,12 @@ import {
 } from './clientDiscovery.js'
 import { parseOpened, parsePending, filterOpenedByOthers } from './openedParser.js'
 import {
+  createP4IoProbe,
+  type P4IoProbe,
+  type P4IoProbeFailureKind,
+  type P4IoSample,
+} from './processIo.js'
+import {
   groupChangelists,
   countOpened,
   changelistIdFromGroupId,
@@ -235,6 +241,17 @@ export interface ClientStatus {
   /** Structured progress of the in-flight sync, or undefined when no sync is
    *  running. Drives the status bar's `N/M files` readout and tooltip. */
   readonly syncProgress?: SyncProgress
+  /** The revision spec the most recently STARTED sync is pulling — `#head`,
+   *  `#4`, `@12345`, `@2026/08/01`, or `''` for the per-file force get (each
+   *  filespec carries its own `#rev` there).
+   *
+   *  The one sync field that OUTLIVES its run: {@link SyncProgress} is
+   *  run-scoped, so it cannot tell the user what the last pull was once the run
+   *  has ended. The status bar names the target from this both while the run is
+   *  in flight and after it, so a user who missed the completion notification
+   *  can still see it. Absent until this client's first sync; a later sync
+   *  overwrites it, nothing clears it. */
+  readonly lastSyncSpec?: string
 }
 
 /** Structured progress of the in-flight sync, exposed on
@@ -263,6 +280,30 @@ export interface SyncProgress {
    * describe the run that armed first.
    */
   readonly diskWrites?: number
+  /**
+   * Bytes the sync's p4 process tree has READ since this run armed — the
+   * "p4 is talking to the server" signal, sampled from the OS process I/O
+   * counters so it climbs from the first server round-trip, long before a single
+   * workspace file is touched (which is the window {@link diskWrites} cannot
+   * fill) and through every `--parallel` stdout gap.
+   *
+   * Present — zero included — exactly while a sampler is running for this run;
+   * omitted when there is none (macOS, no PowerShell/WMI, a sampler that died),
+   * which is how the status bar tells "sampling, nothing yet" from "no sampler"
+   * and falls back to the watcher count. A LOWER BOUND like `diskWrites`: it
+   * counts every read the process makes (network receive plus anything p4 stages
+   * locally), so it is a liveness signal, not an on-disk transfer figure.
+   *
+   * Shared across overlapping syncs (one sampler each, summed) and reset on the
+   * same 0 → 1 suspension transition as `diskWrites`.
+   */
+  readonly ioReadBytes?: number
+  /** The same run's cumulative write side, omitted together with
+   *  {@link ioReadBytes}. Feeds the status bar's rate together with the read
+   *  side: the two move in different phases (reads while p4 pulls from the
+   *  server, writes while it lands the files in the workspace), so a read-only
+   *  rate decays to zero exactly while the disk is busy. */
+  readonly ioWriteBytes?: number
 }
 
 export interface P4CacheOptions {
@@ -796,6 +837,28 @@ export class PerforceClient {
    *  status bar's disk-liveness counter (see {@link SyncProgress.diskWrites}).
    *  Reset when the suspension depth goes 0 → 1. */
   private _syncDiskWrites = 0
+  /** Bytes read/written by the sync's p4 process tree since the current
+   *  suspension armed (see {@link SyncProgress.ioReadBytes}), and whether this
+   *  run has a sampler at all — the presence bit that decides whether the DTO
+   *  carries them. Both reset on the same 0 → 1 transition as
+   *  {@link _syncDiskWrites}. */
+  private _syncIoReadBytes = 0
+  private _syncIoWriteBytes = 0
+  private _syncIoActive = false
+  /** Live samplers, one per spawned p4 (see {@link _onSyncP4Spawn}), released
+   *  when the suspension releases and in {@link dispose}. */
+  private readonly _syncIoProbes = new Map<number, P4IoProbe>()
+  /** Latched once a sampler reports that this machine has no usable source at all
+   *  (no PowerShell/WMI, no `/proc`): later syncs in the session skip the respawn
+   *  and keep the watcher count, rather than paying a doomed process each time.
+   *  Only the `'missing'` failure kind latches — a sampler that ran and then
+   *  stalled is this run's bad luck, and the next sync gets a fresh one. */
+  private _syncIoSourceMissing = false
+  /** The spec of the most recently started sync (see
+   *  {@link ClientStatus.lastSyncSpec}). Deliberately NOT reset on the 0 → 1
+   *  suspension arm or on release: the status bar still names the target after
+   *  the run ends. */
+  private _lastSyncSpec: string | undefined
   /** Watcher events dropped over the suspension's whole lifetime, logged at
    *  release so a real machine can quantify the blind window (see
    *  {@link _endExternalSuspend}). */
@@ -936,6 +999,9 @@ export class PerforceClient {
       busyCancellable: this._cancelSources.length > 0,
       ...(this._scanProgress !== undefined ? { scanProgress: this._scanProgress } : {}),
       ...(this._syncProgress !== undefined ? { syncProgress: this._syncProgress } : {}),
+      // `!== undefined`, not truthiness: `''` is a real spec (the per-file force
+      // get) and dropping it would hide the most common get of all.
+      ...(this._lastSyncSpec !== undefined ? { lastSyncSpec: this._lastSyncSpec } : {}),
     }
   }
 
@@ -1122,6 +1188,9 @@ export class PerforceClient {
       ...(currentFile !== undefined ? { currentFile } : {}),
       startedAt,
       ...(this._syncDiskWrites > 0 ? { diskWrites: this._syncDiskWrites } : {}),
+      ...(this._syncIoActive
+        ? { ioReadBytes: this._syncIoReadBytes, ioWriteBytes: this._syncIoWriteBytes }
+        : {}),
     }
     this._bumpSyncProgress()
   }
@@ -1160,6 +1229,94 @@ export class PerforceClient {
     if (this._syncProgress === undefined && this._syncProgressTimer === undefined) return
     this._syncProgress = undefined
     this._flushSyncProgress()
+  }
+
+  /**
+   * A p4 child of a streaming sync just spawned: attach an I/O sampler to it.
+   *
+   * Called from p4Service's spawn path, so it never throws (red line 4) and
+   * treats "this platform has no source" as a non-event rather than an error —
+   * `createP4IoProbe` returning undefined just means the bar keeps showing the
+   * watcher count.
+   */
+  private _onSyncP4Spawn(pid: number): void {
+    if (this._disposed || this._syncIoSourceMissing) return
+    // Keyed by pid so a retry of the same spawn can't stack two samplers.
+    if (this._syncIoProbes.has(pid)) return
+    const probe = createP4IoProbe(pid, {
+      onSample: (sample) => this._onSyncIoSample(sample),
+      onUnavailable: (reason, kind) => this._onSyncIoUnavailable(reason, kind),
+      log: (message) => this._log?.(message),
+    })
+    if (probe === undefined) return
+    this._syncIoProbes.set(pid, probe)
+    this._syncIoActive = true
+    // Publish the (still zero) field now: the bar switches to the rate form the
+    // moment a sampler exists, which is what fills the silent first minutes —
+    // waiting for the first sample would leave the watcher count on screen for
+    // exactly the window this feature is for.
+    if (this._syncProgress !== undefined) {
+      this._setSyncProgress(this._syncProgress.done, this._syncProgress.currentFile)
+    }
+  }
+
+  /** One sampler tick. Accumulated, not assigned: overlapping syncs each have
+   *  their own sampler and the run's readout is their sum. Runs from an async
+   *  stdout/timer callback — never throws. */
+  private _onSyncIoSample(sample: P4IoSample): void {
+    if (this._disposed) return
+    this._syncIoReadBytes += sample.read
+    this._syncIoWriteBytes += sample.write
+    if (this._syncProgress === undefined) return
+    this._setSyncProgress(this._syncProgress.done, this._syncProgress.currentFile)
+  }
+
+  /** A sampler stopped reporting, with the reason and the one distinction the
+   *  fallback turns on.
+   *
+   *  Either way the rate stops being published at once: a frozen readout decays
+   *  to a permanent `000KB/s`, which reads as "stalled" — the exact false signal
+   *  the rate exists to remove. The watcher count keeps moving while p4 writes,
+   *  so the bar falls back to it. Silent by design: a rate is an extra signal,
+   *  not something the user asked for and then lost, so it must never toast.
+   *
+   *  `'missing'` — the sampler never started on this machine — latches the whole
+   *  session off so later syncs don't pay for a doomed process. `'transient'` —
+   *  a stall, a wedged WMI query, a sampler that died mid-run — releases only the
+   *  samplers of the current run; the next sync starts a fresh one. */
+  private _onSyncIoUnavailable(reason: string, kind: P4IoProbeFailureKind): void {
+    if (kind === 'missing') {
+      if (this._syncIoSourceMissing) return
+      this._syncIoSourceMissing = true
+    } else if (!this._syncIoActive) {
+      // Already fallen back for this run (or none was running) — one log line
+      // per run, not one per failed sampler.
+      return
+    }
+    this._log?.(`[perforce] sync I/O rate unavailable (${reason}); showing the watcher count`)
+    const hadSampler = this._syncIoActive
+    this._stopSyncIoProbes()
+    if (hadSampler && this._syncProgress !== undefined) {
+      this._setSyncProgress(this._syncProgress.done, this._syncProgress.currentFile)
+    }
+  }
+
+  /** Release every sampler and forget the run's byte totals. The samplers also
+   *  end on their own when the p4 they sample exits — this is the belt to that
+   *  braces (cancel/watchdog kills, host shutdown, a sampler that outlived its
+   *  process's disappearance). */
+  private _stopSyncIoProbes(): void {
+    for (const probe of this._syncIoProbes.values()) {
+      try {
+        probe.dispose()
+      } catch {
+        // best-effort: a failing dispose must not break the sync teardown
+      }
+    }
+    this._syncIoProbes.clear()
+    this._syncIoActive = false
+    this._syncIoReadBytes = 0
+    this._syncIoWriteBytes = 0
   }
 
   /**
@@ -2808,6 +2965,12 @@ export class PerforceClient {
       onProgress?: (progress: { done: number; file: string | undefined }) => void
     },
   ): Promise<SyncRunResult> {
+    // Recorded before the run starts, so the status bar can name the target from
+    // the first frame — and still name it after the run ends. Last started wins:
+    // the counters in SyncProgress are shared across overlapping syncs (see
+    // `diskWrites`), so there is no single "the" run to match, and the get the
+    // user most recently asked for is the label they are looking for.
+    this._lastSyncSpec = spec
     const targets = this._syncTargets(spec, options?.scope)
     const parallel =
       this._syncParallelThreads > 0 ? [`--parallel=threads=${this._syncParallelThreads}`] : []
@@ -2909,7 +3072,11 @@ export class PerforceClient {
               // from `_cancellable` is the only stop now.
               signal,
               ...CONTENT_TRANSFER_EXEC,
-              ...(onStdoutLine ? { onStdoutLine } : {}),
+              // Both are streaming-path only: a non-streaming sync publishes no
+              // progress at all, so there would be nothing for a sample to update.
+              ...(onStdoutLine
+                ? { onStdoutLine, onSpawn: (pid: number) => this._onSyncP4Spawn(pid) }
+                : {}),
             })
           })
           // Clear as soon as the p4 run settles — the count belongs to the
@@ -3709,6 +3876,9 @@ export class PerforceClient {
     if (this._externalSuspendCount === 0) {
       this._syncDiskWrites = 0
       this._syncDroppedEvents = 0
+      this._syncIoReadBytes = 0
+      this._syncIoWriteBytes = 0
+      this._syncIoActive = false
     }
     this._externalSuspendCount++
   }
@@ -3723,6 +3893,9 @@ export class PerforceClient {
     this._log?.(
       `[perforce] sync: released external-change suspension (${this._syncDroppedEvents} watcher event(s) dropped)`,
     )
+    // Every sampler of this run belongs to the run that just ended. A probe whose
+    // p4 is still alive would only keep polling; one whose p4 is gone self-exits.
+    this._stopSyncIoProbes()
     this._suppressExternalChanges(SYNC_TAIL_SUPPRESS_MS)
     if (this._externalChangePending.size > 0) {
       this._scheduleExternalInvalidation()
@@ -5719,6 +5892,9 @@ export class PerforceClient {
     this._externalSuspendCount = 0
     this._syncDiskWrites = 0
     this._syncDroppedEvents = 0
+    // Release the OS sampler processes explicitly: their own end-of-life depends
+    // on observing p4 exit, which a shutdown mid-sync may outrun.
+    this._stopSyncIoProbes()
     // A coalesced drift assignment must never fire into a disposed client either.
     if (this._driftApplyTimer !== undefined) {
       clearTimeout(this._driftApplyTimer)
