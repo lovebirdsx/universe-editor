@@ -1,5 +1,29 @@
 [
   {
+    "version": "0.14.1",
+    "date": "2026-09-11",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "完善p4对于force sync的支持",
+          "output面板支持搜索",
+          "优化agent的图标样式，并和outline中进行统一"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "outline中打开子agent的消息，session中能够正确展开",
+          "修复output面板ctrl+f会被git/perforce graph抢走的bug",
+          "md预览避免将 </node>形式的xml标签识别成路径"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.14.0",
     "date": "2026-09-10",
     "groups": [
