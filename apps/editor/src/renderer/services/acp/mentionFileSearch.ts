@@ -17,6 +17,7 @@
 
 import { URI, type CancellationToken, type IFileSearchService } from '@universe-editor/platform'
 import { compareByScoreThenPath, fuzzyMatchField } from '@universe-editor/workbench-ui'
+import { BoundedCache } from '../memory/boundedCache.js'
 
 export interface MentionFileEntry {
   /** Absolute file:// URI (the value stored on the AcpContentBlock.resource_link). */
@@ -98,7 +99,41 @@ interface _Cache {
   readonly listing: WorkspaceFileListing
   readonly timestamp: number
 }
-const _cache = new Map<string, _Cache>()
+
+/**
+ * Entries and bytes are both capped, and the cap is what actually bounds this cache.
+ * The key carries the focus fingerprint, so every scope change is a new key and the
+ * TTL alone never removed anything: a session that walked the tree focused and then
+ * unfocused kept every listing for the life of the window. One listing is up to
+ * `MAX_FILES` paths with a precomputed URI each, so the ceiling is not theoretical.
+ */
+const MAX_CACHED_LISTINGS = 4
+const MAX_CACHED_LISTING_BYTES = 192 * 1024 * 1024
+
+function measureListing(entry: _Cache): number {
+  let bytes = 0
+  for (const file of entry.listing.entries) {
+    bytes += (file.uri.length + file.relPath.length + file.name.length) * 2
+  }
+  return bytes
+}
+
+const _cache = new BoundedCache<_Cache>(
+  measureListing,
+  MAX_CACHED_LISTINGS,
+  MAX_CACHED_LISTING_BYTES,
+)
+
+/** Bytes the cached listings hold, for the memory-pressure waterline. */
+export function mentionFileCacheStats(): { entries: number; bytes: number } {
+  const stats = _cache.stats()
+  return { entries: stats.entries, bytes: stats.bytes }
+}
+
+/** Release cached listings oldest-first until under `maxBytes`. Returns bytes freed. */
+export function releaseMentionFileCache(maxBytes: number): number {
+  return _cache.releaseTo(maxBytes)
+}
 
 function cacheKey(
   root: URI,

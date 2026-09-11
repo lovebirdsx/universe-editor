@@ -342,3 +342,27 @@ export function formatProcessList(root: ProcessItem): string {
   visit(root, 0)
   return lines.join('\n')
 }
+
+/** Depth-first flatten, heaviest first — the order you want when hunting a runaway process. */
+export function flattenProcessTree(root: ProcessItem): ProcessItem[] {
+  const items: ProcessItem[] = []
+  const visit = (item: ProcessItem): void => {
+    items.push(item)
+    item.children?.forEach(visit)
+  }
+  visit(root)
+  return items.sort((a, b) => b.mem - a.mem)
+}
+
+/**
+ * One-line memory/CPU summary of a process tree. Single line on purpose: it shares the
+ * process-metrics log with the app-metrics line, and a multi-line dump every few seconds
+ * would bury the curve it exists to make readable.
+ */
+export function formatProcessTreeMemory(items: readonly ProcessItem[]): string {
+  return items
+    .map(
+      (item) => `${item.name}#${item.pid}=${Math.round(item.mem / MB)}MB/${Math.round(item.load)}%`,
+    )
+    .join(' | ')
+}

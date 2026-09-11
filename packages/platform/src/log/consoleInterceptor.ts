@@ -57,6 +57,13 @@ export interface ConsoleInterceptorOptions {
    * The original console output (stdout/DevTools) is never affected.
    */
   readonly reclassify?: (text: string, level: LogLevel) => LogLevel
+  /**
+   * Optional hook to drop an entry entirely. For messages that repeat too fast to read
+   * (see {@link LogFloodFold}): a retry loop printing one line per attempt buries the
+   * entries that would explain it. Called before `reclassify` — a suppressed entry is
+   * never reclassified.
+   */
+  readonly suppress?: (text: string, level: LogLevel) => boolean
 }
 
 /**
@@ -89,6 +96,7 @@ export function installConsoleInterceptor(options: ConsoleInterceptorOptions): I
       reentrant = true
       try {
         const text = formatArgs(args)
+        if (options.suppress?.(text, level)) return
         const effective = options.reclassify?.(text, level) ?? level
         switch (effective) {
           case LogLevel.Trace:

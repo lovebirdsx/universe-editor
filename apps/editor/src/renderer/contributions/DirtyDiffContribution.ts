@@ -54,6 +54,9 @@ import { IScmService, resolveScmProviderId } from '../services/extensions/ScmSer
 import { scmViewState } from '../workbench/scm/scmViewState.js'
 import { MonacoLoader, type monaco } from '../workbench/editor/monaco/MonacoLoader.js'
 import { recordPerfPhase } from '../services/performance/perfPhases.js'
+import { BoundedCache } from '../services/memory/boundedCache.js'
+import { IMemoryPressureService } from '../services/memory/memoryPressureService.js'
+import { MemoryPressureLevel } from '../services/memory/memoryPressureLevels.js'
 import { normalizeColor } from '../services/themes/colorThemeData.js'
 import { InlineDirtyDiffController } from '../workbench/scm/dirtyDiff/InlineDirtyDiffController.js'
 import {
@@ -105,6 +108,23 @@ function headCacheKey(providerId: string | undefined, path: string): string {
 }
 
 /**
+ * Entry and byte caps for the HEAD cache. Each entry is a whole file's HEAD text plus
+ * its pre-split lines — two copies, so a single 10MB file costs ~40MB of UTF-16.
+ * Entries were only ever dropped when the SCM snapshot moved, which on a repo nobody
+ * commits to means never: the cache grew with every file the user opened.
+ */
+const MAX_HEAD_CACHE_ENTRIES = 32
+const MAX_HEAD_CACHE_BYTES = 64 * 1024 * 1024
+
+/** `null` marks "no HEAD revision" and costs nothing; only real content is charged. */
+function measureHeadContent(head: HeadContent | null): number {
+  if (!head) return 0
+  let bytes = head.text.length * 2
+  for (const line of head.lines) bytes += line.length * 2
+  return bytes
+}
+
+/**
  * Fallback marks colors, used only when the active theme resolves nothing for the
  * registered ids (they always have registry defaults, so this is belt-and-braces).
  * Upper-case to match `normalizeColor`'s output.
@@ -145,7 +165,11 @@ export class DirtyDiffContribution
   private readonly _tooLargeLogged = new Set<string>()
 
   /** HEAD content per provider+path slot; null = no HEAD revision (new file). */
-  private readonly _headCache = new Map<string, HeadContent | null>()
+  private readonly _headCache = new BoundedCache<HeadContent | null>(
+    measureHeadContent,
+    MAX_HEAD_CACHE_ENTRIES,
+    MAX_HEAD_CACHE_BYTES,
+  )
   private readonly _inflight = new Map<string, Promise<HeadContent | null>>()
   /** Last SCM snapshot (files + per-provider HEAD revisions), for HEAD-cache invalidation. */
   private _prevScmSnapshot: ScmHeadSnapshot | undefined
@@ -161,11 +185,26 @@ export class DirtyDiffContribution
     @IThemeService private readonly _themeService: IThemeService,
     @IConfigurationService private readonly _configurationService: IConfigurationService,
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
+    @IMemoryPressureService memoryPressure: IMemoryPressureService,
   ) {
     super()
 
     this._colors = this._resolveColors()
     this._visibility = this._resolveVisibility()
+
+    // Registered here rather than by MemoryPressureContribution: the cache is private
+    // to this class, and the caps above only bound the steady state — under real heap
+    // pressure the HEAD text of the file being edited is worth giving up too, since
+    // the next refresh re-fetches it in one round trip.
+    this._register(
+      memoryPressure.registerReleaser({
+        id: 'dirtyDiff.headCache',
+        release: (level) =>
+          this._headCache.releaseTo(
+            level === MemoryPressureLevel.Critical ? 0 : Math.floor(MAX_HEAD_CACHE_BYTES / 2),
+          ),
+      }),
+    )
 
     this._logger = loggerService.createLogger({ id: 'dirtyDiff', name: 'Dirty Diff' })
     this._peekVisible = contextKeyService.createKey<boolean>(DIRTY_DIFF_PEEK_VISIBLE, false)

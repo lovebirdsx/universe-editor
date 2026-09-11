@@ -92,7 +92,12 @@ vi.mock('electron', () => ({
 }))
 
 // Import after mocks
-const { WindowMainService, READY_TO_SHOW_TIMEOUT_MS } = await import('../windowMainService.js')
+const {
+  WindowMainService,
+  READY_TO_SHOW_TIMEOUT_MS,
+  CRASH_RELOAD_TIMEOUT_MS,
+  CRASH_STORM_WINDOW_MS,
+} = await import('../windowMainService.js')
 const { bootstrapWindowIpc } = await import('../../../ipc/registerMainServices.js')
 const { LogMainService } = await import('../../log/logMainService.js')
 const { WorkspaceMainService } = await import('../../workspace/workspaceMainService.js')
@@ -294,6 +299,114 @@ describe('WindowMainService', () => {
       grabRenderProcessGoneHandler()(undefined, { reason: 'oom' })
       expect(acpStopAll).toHaveBeenCalledWith(id)
       expect(extHostStopAll).toHaveBeenCalledWith(id)
+    })
+
+    describe('unanswered-dialog recovery', () => {
+      /** The dialog is window-modal, so an answer that never comes is a black window. */
+      const neverAnswered = (): void => {
+        vi.mocked(dialog.showMessageBox).mockImplementation(
+          () => new Promise<never>(() => undefined),
+        )
+      }
+      const lastWindowMock = (): { reload: ReturnType<typeof vi.fn> } =>
+        vi.mocked(BrowserWindow).mock.results.at(-1)?.value as never
+
+      it('reloads on its own once the deadline passes', async () => {
+        const svc = makeService()
+        await svc.createWindow()
+        const win = lastWindowMock()
+        vi.useFakeTimers()
+        try {
+          neverAnswered()
+          grabRenderProcessGoneHandler()(undefined, { reason: 'oom' })
+
+          expect(win.reload).not.toHaveBeenCalled()
+          vi.advanceTimersByTime(CRASH_RELOAD_TIMEOUT_MS)
+          expect(win.reload).toHaveBeenCalledTimes(1)
+        } finally {
+          vi.useRealTimers()
+        }
+      })
+
+      it('a click before the deadline wins — the deadline does not fire again', async () => {
+        vi.mocked(dialog.showMessageBox).mockResolvedValue({ response: 0, checkboxChecked: false })
+        const svc = makeService()
+        await svc.createWindow()
+        const win = lastWindowMock()
+        vi.useFakeTimers()
+        try {
+          grabRenderProcessGoneHandler()(undefined, { reason: 'crashed' })
+          for (let i = 0; i < 5; i++) await Promise.resolve()
+          expect(win.reload).toHaveBeenCalledTimes(1)
+
+          vi.advanceTimersByTime(CRASH_RELOAD_TIMEOUT_MS * 2)
+          // A second reload here would mean the user's answer raced the timer.
+          expect(win.reload).toHaveBeenCalledTimes(1)
+        } finally {
+          vi.useRealTimers()
+        }
+      })
+
+      it('stops auto-reloading a window that keeps crashing', async () => {
+        const svc = makeService()
+        await svc.createWindow()
+        const win = lastWindowMock()
+        vi.useFakeTimers()
+        try {
+          neverAnswered()
+          const handler = grabRenderProcessGoneHandler()
+          // Each reload re-runs the restore work that killed the renderer, so a
+          // window that keeps dying gets a couple of automatic attempts and then
+          // waits for a person — a reload loop is harder to escape than a black window.
+          for (let i = 0; i < 3; i++) {
+            handler(undefined, { reason: 'oom' })
+            vi.advanceTimersByTime(CRASH_RELOAD_TIMEOUT_MS)
+          }
+          expect(win.reload).toHaveBeenCalledTimes(2)
+        } finally {
+          vi.useRealTimers()
+        }
+      })
+
+      it('does not count crashes older than the storm window', async () => {
+        const svc = makeService()
+        await svc.createWindow()
+        const win = lastWindowMock()
+        vi.useFakeTimers()
+        try {
+          neverAnswered()
+          const handler = grabRenderProcessGoneHandler()
+          // Three lone crashes spread over a quarter of an hour is an app left
+          // running for days, not a storm — it must keep recovering by itself.
+          for (let i = 0; i < 3; i++) {
+            handler(undefined, { reason: 'oom' })
+            vi.advanceTimersByTime(CRASH_STORM_WINDOW_MS)
+          }
+          expect(win.reload).toHaveBeenCalledTimes(3)
+
+          handler(undefined, { reason: 'oom' })
+          vi.advanceTimersByTime(CRASH_RELOAD_TIMEOUT_MS)
+          expect(win.reload).toHaveBeenCalledTimes(4)
+        } finally {
+          vi.useRealTimers()
+        }
+      })
+
+      it('a failing dialog during a storm must not become a back door into the loop', async () => {
+        vi.mocked(dialog.showMessageBox).mockRejectedValue(new Error('window is gone'))
+        const svc = makeService()
+        await svc.createWindow()
+        const win = lastWindowMock()
+        const handler = grabRenderProcessGoneHandler()
+        for (let i = 0; i < 3; i++) {
+          handler(undefined, { reason: 'oom' })
+          for (let tick = 0; tick < 5; tick++) await Promise.resolve()
+        }
+        // Two automatic attempts land before the threshold; the third crash is a storm,
+        // where reloading is what keeps the loop going — a rejected dialog must not
+        // reload past the backoff.
+        expect(win.reload).toHaveBeenCalledTimes(2)
+      })
     })
   })
 

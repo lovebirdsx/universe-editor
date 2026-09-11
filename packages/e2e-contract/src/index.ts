@@ -339,6 +339,35 @@ export interface E2EInteractionPerfSlowEntry {
   readonly context: { readonly target: string; readonly editor: string }
 }
 
+/** One cache's contribution to a forced memory release; see
+ *  E2EProbe.getMemoryPressure. */
+export interface E2EMemoryRelease {
+  readonly id: string
+  readonly freed: number
+  readonly error?: string
+}
+
+/**
+ * Renderer memory watermark state, plus the result of forcing a release. Exists so a
+ * spec can prove the two assumptions the watermark design rests on: that
+ * `performance.memory` is readable inside a real Electron renderer, and that the caches
+ * registered themselves as releasers.
+ */
+export interface E2EMemoryPressure {
+  /** `normal` | `elevated` | `critical`. */
+  readonly level: string
+  /** One-line summary the service writes to the log. */
+  readonly describe: string
+  readonly releaserIds: readonly string[]
+  /** Raw V8 heap reading, or null when `performance.memory` is unavailable. */
+  readonly usedBytes: number | null
+  readonly limitBytes: number | null
+  /** What the forced release at `level` freed. Empty when nothing could be given back. */
+  readonly release: readonly E2EMemoryRelease[]
+  /** Bytes the forced release returned in total. */
+  readonly releasedBytes: number
+}
+
 /** Session snapshot of the interaction-responsiveness floor; see
  *  E2EProbe.getInteractionPerfSummary. */
 export interface E2EInteractionPerfSummary {
@@ -1528,6 +1557,11 @@ export interface E2EProbe {
    * interactions ≥16ms are sampled (Event Timing duration threshold).
    */
   getInteractionPerfSummary(): E2EInteractionPerfSummary
+  /**
+   * Snapshot the renderer memory watermark, optionally forcing a release first.
+   * `forceLevel` is `elevated` | `critical`; omit it to observe without releasing.
+   */
+  getMemoryPressure(forceLevel?: 'elevated' | 'critical'): Promise<E2EMemoryPressure>
   /**
    * Drive one poll cycle of the Swarm review-notification contribution
    * synchronously (its own timer is 60s — far too slow for a spec). Resolves once

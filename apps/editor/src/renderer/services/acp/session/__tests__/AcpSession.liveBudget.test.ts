@@ -14,15 +14,21 @@ import type { SessionUpdate } from '@agentclientprotocol/sdk'
 import { AcpSession, memoryTrimmedNotice } from '../acpSession.js'
 import { AcpResidentBudget } from '../acpResidentBudget.js'
 import {
+  MAX_ORPHAN_PARENT_ENTRIES,
   MAX_TOOL_CALL_PARENT_ENTRIES,
+  USER_PROMPT_MEDIA_CAP,
   VIEW_MODEL_OVERHEAD_FACTOR,
   estimateUpdateCost,
 } from '../acpContentLimits.js'
+import type { PromptImage } from '../../promptImage.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
 
 const LIVE_BUDGET = 2048 * VIEW_MODEL_OVERHEAD_FACTOR
 
-function createSession(liveIngestionBudget = LIVE_BUDGET): AcpSession {
+function createSession(
+  liveIngestionBudget = LIVE_BUDGET,
+  residentBudget = new AcpResidentBudget(Number.MAX_SAFE_INTEGER),
+): AcpSession {
   return new AcpSession(
     's1',
     'codex',
@@ -46,7 +52,7 @@ function createSession(liveIngestionBudget = LIVE_BUDGET): AcpSession {
     // A private budget per session: these tests deliberately drive the resident
     // tally over budget, which would reconcile against — and trim — any other
     // session sharing the process-wide default.
-    new AcpResidentBudget(Number.MAX_SAFE_INTEGER),
+    residentBudget,
   )
 }
 
@@ -93,6 +99,18 @@ function editToolCall(id: string, path: string, newText: string): SessionUpdate 
     status: 'completed',
     content: [{ type: 'diff', path, oldText: null, newText }],
   }
+}
+
+/**
+ * The budget's red line: the tally the trim decrements must agree with a fresh walk of
+ * what the session actually holds. The tally is what the shared budget reads, so a
+ * traversal that measured one structure and released another would keep reporting a
+ * number nobody could ever reconcile — the session reads as under budget while the heap
+ * keeps growing.
+ */
+function expectTallyMatchesMeasurement(s: AcpSession): void {
+  const priv = s as unknown as { _residentBytes: number; _measureResidentBytes(): number }
+  expect(priv._residentBytes).toBe(priv._measureResidentBytes())
 }
 
 describe('AcpSession — live resident budget', () => {
@@ -155,6 +173,7 @@ describe('AcpSession — live resident budget', () => {
     expect(calls[1]?.memoryTrimmed).toBe(true)
     expect(calls[2]?.memoryTrimmed).toBeUndefined()
     expect(calls[2]?.text).toBe('z'.repeat(800))
+    expectTallyMatchesMeasurement(session)
   })
 
   it('trims old heavy messages when they are the oldest content', () => {
@@ -349,5 +368,124 @@ describe('AcpSession — tool-call parent index bound', () => {
     session.applyUpdate(lateUpdate('child-0'))
     expect(session.toolCalls.get().some((c) => c.id === 'child-0')).toBe(true)
     expect(parentSlot()?.children?.length).toBe(childrenBefore)
+  })
+})
+
+describe('AcpSession — accounting gaps', () => {
+  let session: AcpSession | undefined
+
+  afterEach(() => {
+    session?.dispose()
+    session = undefined
+    vi.restoreAllMocks()
+  })
+
+  /** A prompt image big enough to matter, shaped like what the prompt UI builds. */
+  function promptImage(id: string, dataBase64: string): PromptImage {
+    return { id, mimeType: 'image/png', dataBase64, byteSize: dataBase64.length }
+  }
+
+  it('charges a locally appended user message, so its images reach the trimmer', async () => {
+    // `applyUpdate` charges as it ingests; a message the user sends never passes
+    // through it. Without an explicit charge, a session where the user attached a
+    // screenshot every turn grew with nothing watching it — and because the trim can
+    // only release what it measured, it could not have reclaimed those bytes either.
+    const budget = new AcpResidentBudget(Number.MAX_SAFE_INTEGER)
+    session = createSession(Number.MAX_SAFE_INTEGER, budget)
+    const before = budget.totalBytes()
+
+    void session.sendPrompt('look', undefined, undefined, [promptImage('i1', 'A'.repeat(40000))])
+
+    expect(budget.totalBytes()).toBeGreaterThan(before)
+  })
+
+  it('releases a charged user message rather than leaving the tally high', async () => {
+    const budget = new AcpResidentBudget(0)
+    session = createSession(Number.MAX_SAFE_INTEGER, budget)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    void session.sendPrompt('look', undefined, undefined, [promptImage('i1', 'A'.repeat(40000))])
+
+    const [message] = session.messages.get()
+    expect(message?.memoryTrimmed).toBe(true)
+    // The tracer for "measure and release agree": everything heavy was released, so
+    // the tally the measure would recompute is zero.
+    expect(budget.totalBytes()).toBe(0)
+  })
+
+  it('caps an oversized user attachment instead of blanking a legitimate one', async () => {
+    const budget = new AcpResidentBudget(Number.MAX_SAFE_INTEGER)
+    session = createSession(Number.MAX_SAFE_INTEGER, budget)
+
+    void session.sendPrompt('look', undefined, undefined, [
+      promptImage('small', 'A'.repeat(3 * 1024 * 1024)),
+      promptImage('huge', 'B'.repeat(USER_PROMPT_MEDIA_CAP + 1)),
+    ])
+
+    const blocks = session.messages.get()[0]?.blocks ?? []
+    const media = blocks.filter((b) => b.type === 'image')
+    // A 3MB screenshot is what the prompt UI lets the user attach on purpose —
+    // blanking it would be a visible regression, so only the 8MB+ one is dropped.
+    expect(media[0]?.type === 'image' && media[0].data.length).toBe(3 * 1024 * 1024)
+    expect(media[1]?.type === 'image' && media[1].data).toBe('')
+    expect(media[1]?.type === 'image' && media[1]._meta?.['universe-editor/truncated']).toBe(true)
+  })
+
+  it('charges, measures and releases children stashed for a parent that never landed', () => {
+    // Orphans live off-timeline, so a measure that walked only the timeline reported
+    // 0 for megabytes the trimmer could actually have freed — and the `freed === 0`
+    // branch then latched that wrong number in. Release must walk the same stash.
+    const budget = new AcpResidentBudget(0)
+    session = createSession(Number.MAX_SAFE_INTEGER, budget)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    session.applyUpdate(childToolCall('ghost', 'c1', 'c'.repeat(800)))
+    expect(session.timeline.get()).toHaveLength(0)
+
+    // Adopting the parent later is the only way to see the stashed child — and it
+    // must arrive already trimmed, which only happens if the orphan stash was both
+    // charged and walked by the release traversal.
+    session.applyUpdate(terminalToolCall('ghost', 'p'))
+    const adopted = session.toolCalls.get().find((c) => c.id === 'ghost')
+    const child = adopted?.children?.[0]
+    expect(child?.kind).toBe('toolCall')
+    if (child?.kind !== 'toolCall') throw new Error('expected an adopted tool-call child')
+    expect(child.call.memoryTrimmed).toBe(true)
+    expect(child.call.text).toBe('')
+    expect(budget.totalBytes()).toBe(0)
+    expectTallyMatchesMeasurement(session)
+  })
+
+  it('evicts the oldest orphan parents and gives their bytes back', () => {
+    const budget = new AcpResidentBudget(Number.MAX_SAFE_INTEGER)
+    session = createSession(Number.MAX_SAFE_INTEGER, budget)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    // The first orphan is far larger than every later one, so once the cap starts
+    // evicting, losing it must outweigh each new small arrival.
+    session.applyUpdate(childToolCall('ghost0', 'c0', 'x'.repeat(40000)))
+    const peak = budget.totalBytes()
+    for (let i = 1; i <= MAX_ORPHAN_PARENT_ENTRIES + 2; i++) {
+      session.applyUpdate(childToolCall(`ghost${i}`, `c${i}`, 'y'.repeat(20)))
+    }
+    expect(budget.totalBytes()).toBeLessThan(peak)
+    // Eviction charges the same bytes it releases, so the tally stays reconcilable.
+    expectTallyMatchesMeasurement(session)
+
+    // Children live on the timeline slot, not the toolCalls lane — read there.
+    const adopted = (id: string): readonly unknown[] | undefined => {
+      const slot = session?.timeline.get().find((it) => it.kind === 'toolCall' && it.id === id)
+      return slot?.kind === 'toolCall' ? slot.call.children : undefined
+    }
+
+    // The evicted parent's children are gone for good...
+    session.applyUpdate(terminalToolCall('ghost0', 'p'))
+    expect(adopted('ghost0')).toBeUndefined()
+
+    // ...while a recent one is still there to be adopted.
+    const newest = `ghost${MAX_ORPHAN_PARENT_ENTRIES + 2}`
+    session.applyUpdate(terminalToolCall(newest, 'p'))
+    expect(adopted(newest)).toHaveLength(1)
+    expect(warn).not.toHaveBeenCalled()
   })
 })

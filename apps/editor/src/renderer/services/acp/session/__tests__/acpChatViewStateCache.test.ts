@@ -55,4 +55,24 @@ describe('AcpChatViewStateCache', () => {
       { key: 't:def', size: 64 },
     ])
   })
+
+  it('drops the least recently saved sessions rather than growing without bound', () => {
+    for (let i = 0; i < 20; i++) {
+      AcpChatViewStateCache.save(`s${i}`, { scrollTop: i, stuck: false, focusedKey: null })
+    }
+    expect(AcpChatViewStateCache.load('s0')).toBeUndefined()
+    expect(AcpChatViewStateCache.load('s19')?.scrollTop).toBe(19)
+  })
+
+  it('a re-save keeps a session alive past the cap', () => {
+    AcpChatViewStateCache.save('early', { scrollTop: 1, stuck: false, focusedKey: null })
+    for (let i = 0; i < 15; i++) {
+      AcpChatViewStateCache.save(`s${i}`, { scrollTop: i, stuck: false, focusedKey: null })
+    }
+    // Touching it before the cap is reached must not leave it queued for eviction.
+    AcpChatViewStateCache.save('early', { scrollTop: 2, stuck: false, focusedKey: null })
+    AcpChatViewStateCache.save('late', { scrollTop: 3, stuck: false, focusedKey: null })
+    expect(AcpChatViewStateCache.load('early')?.scrollTop).toBe(2)
+    expect(AcpChatViewStateCache.load('s0')).toBeUndefined()
+  })
 })

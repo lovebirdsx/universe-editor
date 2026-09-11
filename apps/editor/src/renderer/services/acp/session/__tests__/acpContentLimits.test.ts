@@ -20,11 +20,13 @@ import {
   TOOL_TEXT_BLOCK_CAP,
   TOOL_TEXT_BLOCK_HEAD,
   TOOL_TEXT_BLOCK_TAIL,
+  USER_PROMPT_MEDIA_CAP,
   capContentBlock,
   capMessageBlocksTail,
   capRawInput,
   capTerminalOutputTail,
   capToolCallBlocks,
+  capUserPromptBlocks,
   estimateUpdateCost,
   truncateDiffSideText,
   truncateToolTextBlock,
@@ -192,6 +194,35 @@ describe('capContentBlock', () => {
     if (capped.type !== 'image') throw new Error('expected image block')
     expect(capped._meta?.origin).toBe('agent-x')
     expect(capped._meta?.['universe-editor/truncated']).toBe(true)
+  })
+})
+
+describe('capUserPromptBlocks', () => {
+  it('leaves an attachment the prompt UI allows untouched', () => {
+    // 2–5MB screenshots are exactly what a user attaches on purpose, so the
+    // agent-side MEDIA_DATA_CAP must not reach them.
+    const block: ContentBlock = {
+      type: 'image',
+      data: 'A'.repeat(5 * 1024 * 1024),
+      mimeType: 'image/png',
+    }
+    const blocks = [block]
+    expect(capUserPromptBlocks(blocks)).toBe(blocks)
+  })
+
+  it('still bounds an attachment far past what the UI would produce', () => {
+    const capped = capUserPromptBlocks([
+      { type: 'image', data: 'A'.repeat(USER_PROMPT_MEDIA_CAP + 1), mimeType: 'image/png' },
+    ])
+    const media = capped[0]
+    if (media?.type !== 'image') throw new Error('expected image block')
+    expect(media.data).toBe('')
+    expect(media._meta?.['universe-editor/truncated']).toBe(true)
+  })
+
+  it('passes text blocks through untouched', () => {
+    const text: ContentBlock = { type: 'text', text: 'look at this' }
+    expect(capUserPromptBlocks([text])[0]).toBe(text)
   })
 })
 

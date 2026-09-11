@@ -47,6 +47,14 @@ export interface IAcpResidentBudget {
   totalBytes(): number
   /** Bring the total back under budget, trimming oldest-ingesting holders first. */
   reconcile(origin: string): void
+  /**
+   * Trim every holder down to `fraction` of its current estimate, oldest-ingesting
+   * first, and return the bytes released. Answers a different question than
+   * {@link reconcile}: not "we are over the ceiling" but "the heap as a whole is in
+   * trouble", applied as the same proportional haircut wherever the total happens to
+   * sit. The renderer memory watermark drives this (see `IMemoryPressureService`).
+   */
+  releaseFraction(fraction: number): number
 }
 
 export class AcpResidentBudget implements IAcpResidentBudget {
@@ -75,6 +83,7 @@ export class AcpResidentBudget implements IAcpResidentBudget {
     if (total <= this._budget) return
     this._reconciling = true
     let released = 0
+    let trimmed = 0
     try {
       // Oldest ingestion first. The session that just ingested sorts last, so
       // the foreground conversation is the last to lose content.
@@ -86,6 +95,7 @@ export class AcpResidentBudget implements IAcpResidentBudget {
         const freed = holder.trimToward(target)
         if (freed <= 0) continue
         released += freed
+        trimmed++
         total -= freed
       }
     } finally {
@@ -94,9 +104,39 @@ export class AcpResidentBudget implements IAcpResidentBudget {
     if (released > 0) {
       console.warn(
         `[acp] shared resident budget exceeded (${origin}): released ${released} bytes ` +
-          `across ${this._holders.size} sessions, now ${total}/${this._budget}`,
+          `from ${trimmed} of ${this._holders.size} sessions, now ${total}/${this._budget}`,
       )
     }
+  }
+
+  releaseFraction(fraction: number): number {
+    if (this._reconciling) return 0
+    this._reconciling = true
+    let released = 0
+    // Counts the sessions that actually gave something back — the registered total is a
+    // different number, and "who released" is the only thing this line is read for.
+    let trimmed = 0
+    try {
+      const ordered = [...this._holders].sort((a, b) => a.lastIngestAt() - b.lastIngestAt())
+      for (const holder of ordered) {
+        const current = holder.residentBytes()
+        const target = Math.max(0, Math.floor(current * fraction))
+        if (target >= current) continue
+        const freed = holder.trimToward(target)
+        if (freed <= 0) continue
+        released += freed
+        trimmed++
+      }
+    } finally {
+      this._reconciling = false
+    }
+    if (released > 0) {
+      console.warn(
+        `[acp] memory pressure: released ${released} bytes from ${trimmed} of ` +
+          `${this._holders.size} sessions (trimmed to ${Math.round(fraction * 100)}%)`,
+      )
+    }
+    return released
   }
 }
 

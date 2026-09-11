@@ -63,6 +63,7 @@ import { inputTokensIncludeCached } from '../../../../shared/ai/catalog/index.js
 import {
   LIVE_INGESTION_BUDGET,
   MAX_AVAILABLE_COMMANDS,
+  MAX_ORPHAN_PARENT_ENTRIES,
   MAX_PLAN_ENTRIES,
   MAX_PLAN_ENTRY_CHARS,
   MAX_TOOL_CALL_PARENT_ENTRIES,
@@ -71,6 +72,7 @@ import {
   capRawInput,
   capTerminalOutputTail,
   capToolCallBlocks,
+  capUserPromptBlocks,
   estimateRawInputBytes,
   estimateUpdateCost,
   withViewModelOverhead,
@@ -2762,11 +2764,13 @@ export class AcpSession extends Disposable implements IAcpSession {
       }
     }
     let released = 0
-    // Bound the loop by the number of slots: a trim must strictly reduce the
-    // remaining heavy content, but if a future measure/release pair ever
-    // disagreed, an unbounded `while` would spin the main thread instead of
-    // merely overrunning the budget.
-    for (let guard = this._timeline.length + 1; guard > 0; guard--) {
+    // Bound the loop by the number of slots that can hold heavy content: a trim
+    // must strictly reduce the remaining heavy content, but if a future
+    // measure/release pair ever disagreed, an unbounded `while` would spin the
+    // main thread instead of merely overrunning the budget. Orphans count —
+    // `_trimOldestHeavyItem` releases through them last, so a bound that only
+    // counted timeline slots would cut the loop short and leave the budget over.
+    for (let guard = this._timeline.length + this._orphanItemCount() + 1; guard > 0; guard--) {
       if (this._residentBytes <= targetBytes) break
       const freed = this._trimOldestHeavyItem()
       if (freed === 0) {
@@ -2791,20 +2795,46 @@ export class AcpSession extends Disposable implements IAcpSession {
     return released
   }
 
-  /** Ground truth for {@link _residentBytes}: what the timeline actually holds
-   * right now, measured by the same traversal the trim releases through. */
+  /** Ground truth for {@link _residentBytes}: what the session actually holds
+   * right now, measured by the same traversal the trim releases through — the
+   * timeline plus the orphan stash, because content stashed for a parent card
+   * that has not landed is just as resident as content on a card that has. A
+   * measure that skipped the stash would report 0 for megabytes the trim below
+   * can actually free, and the `freed === 0` branch would latch that wrong
+   * number in. */
   private _measureResidentBytes(): number {
     let bytes = 0
     for (const slot of this._timeline) {
       if (slot.kind === 'toolCall') bytes += toolCallHeavyBytes(slot.call)
       else if (slot.kind === 'message') bytes += messageHeavyBytes(slot.message)
     }
+    for (const children of this._orphanChildren.values()) {
+      bytes += this._childrenHeavyBytes(children)
+    }
     return withViewModelOverhead(bytes)
   }
 
+  /** Raw child-list bytes, matching `toolCallHeavyBytes`/`messageHeavyBytes`. The one
+   * function the timeline measure, the orphan measure and the orphan-cap eviction all
+   * charge through — a second copy would let one of them drift and take the tally with
+   * it. */
+  private _childrenHeavyBytes(children: readonly AcpChildItem[]): number {
+    let bytes = 0
+    for (const child of children) {
+      bytes +=
+        child.kind === 'toolCall'
+          ? toolCallHeavyBytes(child.call)
+          : messageHeavyBytes(child.message)
+    }
+    return bytes
+  }
+
   /** Trim the oldest timeline slot that still holds heavy content, returning the
-   * released byte count (0 when nothing left to release). Charged at the same
-   * overhead factor the ingestion side used — see `withViewModelOverhead`. */
+   * released byte count (0 when nothing left to release). Falling through to the
+   * orphan stash matters: content stashed for a parent card that never landed is
+   * measured (see `_measureResidentBytes`) and so must be releasable, or the loop
+   * below would report 0 with megabytes still held. Charged at the same overhead
+   * factor the ingestion side used — see `withViewModelOverhead`. */
   private _trimOldestHeavyItem(): number {
     for (let i = 0; i < this._timeline.length; i++) {
       const slot = this._timeline[i]
@@ -2820,6 +2850,35 @@ export class AcpSession extends Disposable implements IAcpSession {
         const freed = withViewModelOverhead(messageHeavyBytes(slot.message))
         if (freed === 0) continue
         this._replaceMessage(slot.message.id, trimMessage(slot.message))
+        return freed
+      }
+    }
+    return this._trimOrphanHeavyItem()
+  }
+
+  /** Release the first heavy child of the oldest orphan parent, returning the bytes
+   * released. Ordered by the stash's insertion order (oldest parent first), which is
+   * as close to oldest-first as a bucket with no timestamps gets. */
+  private _trimOrphanHeavyItem(): number {
+    for (const [parentId, children] of this._orphanChildren) {
+      for (let i = 0; i < children.length; i++) {
+        const child = children[i]
+        if (child === undefined) continue
+        const freed = withViewModelOverhead(
+          child.kind === 'toolCall'
+            ? toolCallHeavyBytes(child.call)
+            : messageHeavyBytes(child.message),
+        )
+        if (freed === 0) continue
+        const trimmed: AcpChildItem =
+          child.kind === 'toolCall'
+            ? { kind: 'toolCall', id: child.id, call: trimToolCall(child.call) }
+            : { kind: 'message', id: child.id, message: trimMessage(child.message) }
+        this._orphanChildren.set(parentId, [
+          ...children.slice(0, i),
+          trimmed,
+          ...children.slice(i + 1),
+        ])
         return freed
       }
     }
@@ -3600,9 +3659,12 @@ export class AcpSession extends Disposable implements IAcpSession {
     this._materializePendingStreamingMerge(this._batchedTx())
     const id = `m${++this._msgCounter}`
     // Image (or other) blocks lead, then the text block. Skip an empty text
-    // block so an image-only message doesn't carry a blank paragraph.
+    // block so an image-only message doesn't carry a blank paragraph. Leading
+    // blocks are capped here rather than upstream: they are user attachments,
+    // which arrive at whatever size the prompt UI allowed.
+    const cappedLeading = capUserPromptBlocks(leadingBlocks)
     const textBlocks: readonly ContentBlock[] = text.length > 0 ? [{ type: 'text', text }] : []
-    const blocks: readonly ContentBlock[] = [...leadingBlocks, ...textBlocks]
+    const blocks: readonly ContentBlock[] = [...cappedLeading, ...textBlocks]
     const message: AcpMessage = {
       id,
       role,
@@ -3617,6 +3679,17 @@ export class AcpSession extends Disposable implements IAcpSession {
     }
     this._messages = [...this._messages, message]
     this._upsertMessageInTimeline(message)
+    // Charge the new message against the resident budget. Inbound updates go
+    // through `applyUpdate`, which charges as it ingests; a locally appended
+    // message never passes that path, so without this a user attaching images
+    // every turn grew the heap with nothing watching it — and the trim loop,
+    // which only ever releases what it measured, could not have reclaimed it
+    // either. Trim before the commit below so any release rides the same
+    // transaction (`_releaseResidentDownTo` writes to it without committing).
+    this._residentBytes += withViewModelOverhead(messageHeavyBytes(message))
+    this._lastIngestAt = Date.now()
+    this._trimLiveResidentContent()
+    this._residentBudget.reconcile(`session ${this.id}`)
     // Atomic + synchronous: write both observables on the batched tx then commit
     // immediately. Folding in any chunk tx already pending keeps messages and
     // timeline from being observed in a torn intermediate state (e.g. a
@@ -4027,6 +4100,14 @@ export class AcpSession extends Disposable implements IAcpSession {
     return this._orphanChildren.get(parentId) ?? []
   }
 
+  /** Stashed child items across every orphan parent. Feeds the trim loop's bound —
+   * see `_releaseResidentDownTo`. */
+  private _orphanItemCount(): number {
+    let count = 0
+    for (const children of this._orphanChildren.values()) count += children.length
+    return count
+  }
+
   private _findChildToolCall(parentId: string, id: string): AcpToolCall | undefined {
     const child = this._childrenOf(parentId).find((c) => c.kind === 'toolCall' && c.id === id)
     return child && child.kind === 'toolCall' ? child.call : undefined
@@ -4036,7 +4117,23 @@ export class AcpSession extends Disposable implements IAcpSession {
   private _setChildren(parentId: string, children: readonly AcpChildItem[]): void {
     const idx = this._timeline.findIndex((it) => it.kind === 'toolCall' && it.id === parentId)
     if (idx === -1) {
+      // delete-then-set so a parent that keeps receiving children keeps its place at
+      // the young end, and the cap below evicts genuinely stale stashes.
+      this._orphanChildren.delete(parentId)
       this._orphanChildren.set(parentId, children)
+      while (this._orphanChildren.size > MAX_ORPHAN_PARENT_ENTRIES) {
+        const oldest = this._orphanChildren.keys().next()
+        if (oldest.done) break
+        const evicted = this._orphanChildren.get(oldest.value)
+        this._orphanChildren.delete(oldest.value)
+        // Evicted content is real released memory, so it must come off the tally
+        // through the same function that put it on — otherwise the books stay high
+        // and the shared budget takes the difference out of other sessions.
+        if (evicted) {
+          const freed = withViewModelOverhead(this._childrenHeavyBytes(evicted))
+          this._residentBytes = Math.max(0, this._residentBytes - freed)
+        }
+      }
       return
     }
     const slot = this._timeline[idx]

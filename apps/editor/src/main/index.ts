@@ -13,11 +13,14 @@ import {
   ILoggerService,
   IFileSearchService,
   IFileService,
+  formatIpcFrameAlert,
   isEqualOrParentResource,
   localize,
+  LogFloodFold,
   LogLevel,
   mark,
   normalizePlatform,
+  setIpcFrameDiagnostics,
   URI,
 } from '@universe-editor/platform'
 import { version as EXTENSION_API_VERSION } from '@universe-editor/extension-api'
@@ -32,7 +35,11 @@ import {
   resolveAgentDeepLinkCwd,
   type DeepLinkTarget,
 } from '../shared/deepLink.js'
-import { installMainProtocolDispatcher } from './ipc/electronProtocol.js'
+import {
+  FRAME_SEND_FAILURE_PATTERN,
+  installMainProtocolDispatcher,
+  markRendererFramesUnreachable,
+} from './ipc/electronProtocol.js'
 import { parseFileToOpen } from './cliArgs.js'
 import { resolveFromRepo } from './repoPaths.js'
 import { getAppVersion } from './appVersion.js'
@@ -277,6 +284,20 @@ const errorSink = new ErrorSinkMainService(
 )
 installMainErrorHandlers(mainLogger, (event, error) => errorSink.recordLocal(event, error))
 
+// Frame-guard sink. Installed here because this is the first point where both the file
+// logger and the structured error sink exist, and it is still well before any IPC server
+// is registered — so no frame can be refused unobserved. A refused frame is a real
+// functional failure (a file that will not open), not just a perf note, so it goes to the
+// structured sink as well as the log.
+setIpcFrameDiagnostics({
+  onWarn: (info) => mainLogger.warn(`[ipc] ${formatIpcFrameAlert(info)}`),
+  onOversized: (info) => {
+    const message = `[ipc] ${formatIpcFrameAlert(info)}`
+    mainLogger.error(message)
+    errorSink.recordLocal('ipcFrameTooLarge', new Error(message))
+  },
+})
+
 // Route console.* through the log system so ad-hoc console output and
 // third-party library noise reach the Console channel (and therefore the
 // Output panel) without requiring stdout/DevTools to be open.
@@ -288,14 +309,40 @@ const consoleLogger = logMainService.createLogger({ id: 'console', name: 'Consol
 // they don't trip error-level consumers (ErrorLogAutoRevealContribution would
 // pop the Output panel on launch).
 const NODE_DEPRECATION_RE = /^\(node:\d+\) \[DEP\d+\] DeprecationWarning:/
+// A frame that died without an observable event makes every send print
+// "Error sending from webFrameMain" — 225 identical entries in the shipped crash, enough
+// to bury the real cause and (since log entries are forwarded to the renderer over the
+// same protocol) to keep the failing send alive on its own. Each occurrence also closes
+// every protocol gate, so the loop stops at its source instead of relying on the fold.
+// Folded by a constant key rather than the line itself: Electron appends a varying tail
+// (the frame's own error text), and a key that changes with it would fold nothing.
+const FRAME_SEND_FAILURE_KEY = 'frame-send-failure'
+const frameSendFold = new LogFloodFold(1000)
 const consoleInterceptor = installConsoleInterceptor({
   logger: consoleLogger,
   reclassify: (text, level) =>
     level === LogLevel.Error && NODE_DEPRECATION_RE.test(text) ? LogLevel.Warning : level,
+  suppress: (text, level) => {
+    if (level !== LogLevel.Error || !FRAME_SEND_FAILURE_PATTERN.test(text)) return false
+    markRendererFramesUnreachable()
+    const outcome = frameSendFold.admit(FRAME_SEND_FAILURE_KEY, Date.now())
+    if (outcome.folded > 0) {
+      mainLogger.warn(`[ipc] ${outcome.folded} further frame-send failures suppressed`)
+    }
+    return !outcome.log
+  },
 })
 
 installChildProcessGoneLogging(mainLogger, (event, error) => errorSink.recordLocal(event, error))
-const processMetricsLogging = installProcessMetricsLogging(logMainService)
+const processMetricsLogging = installProcessMetricsLogging(logMainService, {
+  // Late-bound: the process monitor is a DI service built lazily on first use, and this
+  // timer is installed before the container exists. Until it is up, the tree walk is
+  // simply skipped — the app-metrics loop still records the curve.
+  listProcessTree: () =>
+    applicationServices
+      ? applicationServices.processMonitor.resolveProcesses().then((s) => s.root)
+      : Promise.resolve(undefined),
+})
 
 const e2eEnabled = environmentService.isE2E
 // E2E 静默模式：多 worker 并行冷启动不抢前台焦点。UNIVERSE_E2E_SHOW=1 关闭，恢复有头调试。

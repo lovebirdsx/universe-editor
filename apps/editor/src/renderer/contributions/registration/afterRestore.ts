@@ -21,6 +21,7 @@ import { ScmSelectedRepoContribution } from '../ScmSelectedRepoContribution.js'
 import { CommitChangesViewResetContribution } from '../CommitChangesViewResetContribution.js'
 import { GitGraphViewResetContribution } from '../GitGraphViewResetContribution.js'
 import { MergeConflictContribution } from '../MergeConflictContribution.js'
+import { MemoryPressureContribution } from '../MemoryPressureContribution.js'
 import { DirtyDiffContribution } from '../DirtyDiffContribution.js'
 import { ExternalChangeWatcher } from '../ExternalChangeWatcher.js'
 import { GlobalDragAndDropContribution } from '../GlobalDragAndDropContribution.js'
@@ -223,6 +224,15 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.dirtyDiff',
   DirtyDiffContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Renderer heap watermark. AfterRestore rather than Eventually: the point is to have
+// been watching the whole time, so the first sample lands before the user can do
+// anything expensive.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.memoryPressure',
+  MemoryPressureContribution,
   WorkbenchPhase.AfterRestore,
 )
 

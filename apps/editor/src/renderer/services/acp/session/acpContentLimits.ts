@@ -97,15 +97,39 @@ export const MEDIA_TRUNCATED_META_KEY = 'universe-editor/truncated'
  * marker so downstream consumers can tell the data was dropped on purpose.
  * Multi-MB base64 strings are the single largest payload in a replayed
  * session history. Every other block type passes through by reference.
+ *
+ * `cap` is a parameter because the right bound depends on who produced the block —
+ * see {@link USER_PROMPT_MEDIA_CAP}.
  */
-export function capContentBlock(block: ContentBlock): ContentBlock {
+export function capContentBlock(block: ContentBlock, cap: number = MEDIA_DATA_CAP): ContentBlock {
   if (block.type !== 'image' && block.type !== 'audio') return block
-  if (block.data.length <= MEDIA_DATA_CAP) return block
+  if (block.data.length <= cap) return block
   return {
     ...block,
     data: '',
     _meta: { ...block._meta, [MEDIA_TRUNCATED_META_KEY]: true },
   }
+}
+
+/**
+ * Cap for media the *user* attached to a prompt. Deliberately far above
+ * {@link MEDIA_DATA_CAP}: that one bounds what an agent streams back, where a 2MB
+ * image is already unusual, while this one bounds what the user deliberately
+ * attached through the prompt UI — blanking a 5MB screenshot they chose to send
+ * would be a visible regression dressed up as a defence.
+ *
+ * The bound is still needed rather than left to the resident budget alone: these
+ * blocks sit on the message for the life of the session, and the budget's only
+ * remedy is releasing the whole card, which costs the user their message text too.
+ */
+export const USER_PROMPT_MEDIA_CAP = 8 * 1024 * 1024
+
+/** {@link capContentBlock} at the user-prompt media cap. Text blocks pass through. */
+export function capUserPromptBlocks(blocks: readonly ContentBlock[]): readonly ContentBlock[] {
+  const oversized = (b: ContentBlock): boolean =>
+    (b.type === 'image' || b.type === 'audio') && b.data.length > USER_PROMPT_MEDIA_CAP
+  if (!blocks.some(oversized)) return blocks
+  return blocks.map((b) => capContentBlock(b, USER_PROMPT_MEDIA_CAP))
 }
 
 export const MESSAGE_TEXT_CAP = 1024 * 1024
@@ -217,6 +241,15 @@ export const MAX_AVAILABLE_COMMANDS = 200
  * end-of-life signal, so the map is bounded FIFO rather than pruned.
  */
 export const MAX_TOOL_CALL_PARENT_ENTRIES = 5000
+
+/**
+ * Cap on the parents whose children are stashed because their own card has not
+ * landed yet. Normally a stash entry lives for milliseconds — the child update
+ * arrives just before the parent's — so this only ever binds on a pathological
+ * ordering. It is not the memory bound (the resident budget covers these bytes
+ * through the same traversal that releases them); it bounds the map itself.
+ */
+export const MAX_ORPHAN_PARENT_ENTRIES = 64
 
 /** UTF-16 byte size of a string: `length` counts code units, each 2 bytes. */
 function utf16Bytes(s: string): number {

@@ -15,6 +15,11 @@ import {
   type ILogChannel,
   type ILogger,
 } from '@universe-editor/platform'
+import {
+  flattenProcessTree,
+  formatProcessTreeMemory,
+  type ProcessItem,
+} from './services/processMonitor/processList.js'
 
 /**
  * Keep minidumps locally under <userData>/Crashes. Must run after
@@ -80,6 +85,29 @@ export function processMetricsIntervalMs(heapUsed: number, rendererBusy = false)
     : PROCESS_METRICS_NORMAL_INTERVAL_MS
 }
 
+/** Cadence of the hosted-process tree walk while every hosted process is small. */
+export const PROCESS_TREE_NORMAL_INTERVAL_MS = 60_000
+/** …and once one of them is over {@link HOSTED_PROCESS_WARN_BYTES}. */
+export const PROCESS_TREE_BUSY_INTERVAL_MS = 15_000
+
+/**
+ * Working set of a spawned Node child (extension host, ACP agent) above which the tree
+ * line logs at warn. These processes are `child_process.spawn`ed, so they are absent
+ * from `app.getAppMetrics()` entirely — the shipped crash had a 3.71GB extension host
+ * that never appeared on the memory curve, and its death arrived as an unexplained
+ * "silent" abort. Same order of magnitude as {@link TAB_WORKING_SET_WARN_BYTES}.
+ */
+export const HOSTED_PROCESS_WARN_BYTES = 2 * 1024 * 1024 * 1024
+
+export interface ProcessMetricsOptions {
+  /**
+   * Reads the full process tree rooted at the main process. Injected because it needs
+   * services that do not exist yet when this is installed, and omitted entirely in
+   * tests / contexts without a process monitor.
+   */
+  readonly listProcessTree?: () => Promise<ProcessItem | undefined>
+}
+
 /**
  * `app.getAppMetrics()` only reports OS working-set — the main process can sit
  * at 160MB working set while its V8 heap is 2.6GB and seconds from aborting.
@@ -101,16 +129,24 @@ export function formatMainHeapSample(mem: {
  * mid-stream with no memory evidence at all; these compact lines are the only
  * way to reconstruct a memory growth curve (e.g. a workspace walk leaking)
  * from a diagnostic bundle after the fact.
+ *
+ * Two independent loops: `app.getAppMetrics()` (Electron's own children) and a
+ * process-tree walk (everything else, which is where the spawned Node children hide).
+ * They have separate cadences because the tree walk is far more expensive.
  */
-export function installProcessMetricsLogging(loggerService: {
-  createLogger(channel: ILogChannel): ILogger
-}): IDisposable {
+export function installProcessMetricsLogging(
+  loggerService: {
+    createLogger(channel: ILogChannel): ILogger
+  },
+  options: ProcessMetricsOptions = {},
+): IDisposable {
   const logger = createNamedLogger(loggerService, {
     id: 'processMetrics',
     name: 'Process Metrics',
   })
   let disposed = false
   let timer: ReturnType<typeof setTimeout> | undefined
+  let treeTimer: ReturnType<typeof setTimeout> | undefined
   const sample = (): void => {
     let heapUsed = 0
     let rendererBusy = false
@@ -155,8 +191,45 @@ export function installProcessMetricsLogging(loggerService: {
     }
   }
   sample()
+
+  const sampleTree = async (): Promise<void> => {
+    let heavy = false
+    try {
+      const root = await options.listProcessTree?.()
+      if (root) {
+        const items = flattenProcessTree(root)
+        const line = `hosted-processes cnt=${items.length} ${formatProcessTreeMemory(items)}`
+        // The main process has its own heap line above; counting its RSS as a runaway
+        // hosted child would fire the warning on every healthy launch.
+        const over = items.filter(
+          (item) => item.pid !== process.pid && item.mem > HOSTED_PROCESS_WARN_BYTES,
+        )
+        if (over.length > 0) {
+          heavy = true
+          logger.warn(
+            `${line} — above ${Math.round(HOSTED_PROCESS_WARN_BYTES / 1024 / 1024)}MB: ${over.map((item) => `${item.name}#${item.pid}`).join(', ')}`,
+          )
+        } else {
+          logger.info(line)
+        }
+      }
+    } catch {
+      // Best-effort, and the walk spawns a native helper / `ps` — a failure here must
+      // never take down the process it is trying to observe.
+    }
+    if (!disposed) {
+      treeTimer = setTimeout(
+        () => void sampleTree(),
+        heavy ? PROCESS_TREE_BUSY_INTERVAL_MS : PROCESS_TREE_NORMAL_INTERVAL_MS,
+      )
+      treeTimer.unref()
+    }
+  }
+  if (options.listProcessTree) void sampleTree()
+
   return toDisposable(() => {
     disposed = true
     if (timer !== undefined) clearTimeout(timer)
+    if (treeTimer !== undefined) clearTimeout(treeTimer)
   })
 }

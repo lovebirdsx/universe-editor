@@ -9,6 +9,7 @@
 ## 诊断
 
 - [错误收集与诊断机制](error-diagnostics.md) — errors.jsonl 结构化错误收集（指纹折叠 / 脱敏）、崩溃闭环、「报告问题」与诊断包导出链路。
+- [内存压力与 IPC 帧闸门](memory-pressure.md) — renderer 堆水位与缓存释放、IPC 帧体量上限与崩溃前帧记录、崩溃恢复链路（EPIPE / IPC 洪流 / 延迟 reload）。
 - [Bug 录制（bug recording）](bug-recording.md) — 录制操作步骤流 + 关键截图 + 会话日志成 zip 证据包（面向 AI 阅读的时间线、三档脱敏、崩溃兜底导出）。
 
 ## 构建与发布

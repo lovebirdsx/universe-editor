@@ -31,11 +31,13 @@ const {
   MAIN_HEAP_WARN_BYTES,
   MAIN_HEAP_BUSY_BYTES,
   TAB_WORKING_SET_WARN_BYTES,
+  HOSTED_PROCESS_WARN_BYTES,
   PROCESS_METRICS_NORMAL_INTERVAL_MS,
   PROCESS_METRICS_BUSY_INTERVAL_MS,
   processMetricsIntervalMs,
   installProcessMetricsLogging,
 } = await import('../crashMonitoring.js')
+type ProcessItem = import('../services/processMonitor/processList.js').ProcessItem
 
 describe('formatMainHeapSample', () => {
   it('formats heapUsed/heapTotal/external/rss in rounded MB', () => {
@@ -146,5 +148,119 @@ describe('installProcessMetricsLogging', () => {
 
   it('TAB_WORKING_SET_WARN_BYTES is 2GB — under the kill point, with room to react', () => {
     expect(TAB_WORKING_SET_WARN_BYTES).toBe(2 * 1024 * 1024 * 1024)
+  })
+
+  describe('hosted process tree', () => {
+    const node = (
+      name: string,
+      pid: number,
+      mb: number,
+      children?: ProcessItem[],
+    ): ProcessItem => ({
+      name,
+      cmd: name,
+      pid,
+      ppid: 0,
+      load: 1,
+      mem: mb * 1024 * 1024,
+      ...(children ? { children } : {}),
+    })
+
+    function installWithTree(root: ProcessItem, lines: string[]): { dispose: () => void } {
+      return installProcessMetricsLogging(
+        {
+          createLogger: () =>
+            ({
+              info: (line: string) => lines.push(line),
+              warn: (line: string) => lines.push(line),
+            }) as never,
+        },
+        { listProcessTree: async () => root },
+      )
+    }
+
+    it('logs the tree, because app metrics cannot see spawned Node children', async () => {
+      // The shipped crash had a 3.71GB extension host that never appeared on the
+      // memory curve: it is child_process.spawn'ed, so getAppMetrics() omits it.
+      const lines: string[] = []
+      const disposable = installWithTree(
+        node('main', process.pid, 200, [node('extension-host', 77, 3800)]),
+        lines,
+      )
+      try {
+        await vi.waitFor(() => {
+          expect(lines.some((l) => l.startsWith('hosted-processes'))).toBe(true)
+        })
+        expect(lines.some((l) => l.includes('extension-host#77=3800MB'))).toBe(true)
+        expect(lines.some((l) => l.includes('cnt=2'))).toBe(true)
+      } finally {
+        disposable.dispose()
+      }
+    })
+
+    it('warns on a heavy hosted process but not on the main process itself', async () => {
+      const lines: string[] = []
+      // Main's RSS is large in absolute terms but is already covered by the
+      // main-heap line; flagging it here would fire the warning on every launch.
+      const disposable = installWithTree(
+        node('main', process.pid, 3000, [
+          node('acp-agent', 99, HOSTED_PROCESS_WARN_BYTES / 1024 / 1024 + 1),
+        ]),
+        lines,
+      )
+      try {
+        await vi.waitFor(() => {
+          expect(lines.some((l) => l.includes('— above'))).toBe(true)
+        })
+        const warn = lines.find((l) => l.includes('— above'))!
+        const flagged = warn.slice(warn.indexOf('— above'))
+        expect(flagged).toContain('acp-agent#99')
+        expect(flagged).not.toContain('main#')
+      } finally {
+        disposable.dispose()
+      }
+    })
+
+    it('never touches the process tree when no source is injected', async () => {
+      const lines: string[] = []
+      const disposable = installProcessMetricsLogging({
+        createLogger: () =>
+          ({
+            info: (line: string) => lines.push(line),
+            warn: (line: string) => lines.push(line),
+          }) as never,
+      })
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 0))
+        expect(lines.some((l) => l.startsWith('hosted-processes'))).toBe(false)
+      } finally {
+        disposable.dispose()
+      }
+    })
+
+    it('survives a failing walk — it is observing, not participating', async () => {
+      const lines: string[] = []
+      const disposable = installProcessMetricsLogging(
+        {
+          createLogger: () =>
+            ({
+              info: (line: string) => lines.push(line),
+              warn: (line: string) => lines.push(line),
+            }) as never,
+        },
+        {
+          listProcessTree: () => Promise.reject(new Error('tasklist unavailable')),
+        },
+      )
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 0))
+        // The sync app-metrics sample still ran; the walk's failure added no line
+        // and, more importantly, no unhandled rejection.
+        expect(lines.some((l) => l.startsWith('main-heap '))).toBe(true)
+        expect(lines.some((l) => l.startsWith('hosted-processes'))).toBe(false)
+      } finally {
+        disposable.dispose()
+      }
+    })
   })
 })

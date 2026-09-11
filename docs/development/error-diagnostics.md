@@ -92,9 +92,11 @@ renderer 未捕获异常 / 服务埋点                main 进程异常
 - **minidump**：`crashReporter.start({ uploadToServer: false })`，dump 在 `<userData>/Crashes/`（纯本地）。
 - **异常退出哨兵**：`session-sentinel.json`（arm/will-quit disarm）。下次启动发现残留 → `readAbnormalExitReport` 关联该时段的 dump → 写 main.log + `errorSink.recordLocal('abnormalExit', ...)`，并把报告交给 `DiagnosticsMainService`；renderer `AbnormalExitNotificationContribution`（AfterRestore）**消费一次**弹出 sticky 警告 +「打开崩溃目录」action（多窗口只有第一个提示）。
 - **连续崩溃计数与跳过恢复**：哨兵 JSON 带 `priorAbnormalExits`（arm 时写入当前 streak），残留被读出时 `consecutiveAbnormalExits = prior + 1`，正常退出删哨兵即归零——无额外状态文件。`shouldOfferRestoreSkip`（阈值 2）判定命中且会话列表有待恢复工作区时，main 在 `restoreSession` 前弹原生对话框提供「跳过恢复（打开空窗口）」，选跳过则清空 sessionList 以空窗口启动（recent 列表不动，目录仍可重进）；默认按钮为正常恢复，**E2E 下跳过弹框**（原生模态会卡死驱动）。用于打破「恢复的工作区本身导致崩溃（如海量文件目录 OOM）」的死循环。
-- **renderer 崩溃**：`render-process-gone`（非 clean-exit）→ 记 errors.jsonl（`renderProcessGone`，source=`renderer:<id>`）+ 模态对话框「重新加载 / 关闭窗口」，`._crashHandled` 去抖防崩溃风暴叠弹窗；**E2E 跳过模态框**（崩溃直接挂测试，不挡驱动）。GPU/utility 进程死亡走 `child-process-gone` 同样入 sink。
+- **renderer 崩溃**：`render-process-gone`（非 clean-exit）→ 记 errors.jsonl（`renderProcessGone`，source=`renderer:<id>`）+ 模态对话框「重新加载 / 关闭窗口」，`_crashHandled` 去抖防崩溃风暴叠弹窗；**E2E 跳过模态框**（崩溃直接挂测试，不挡驱动）。对话框是**窗口模态**，没人点就永远不 resolve（曾出现黑屏 15 分钟），因此 20s 无人应答即自动重载（`CRASH_RELOAD_TIMEOUT_MS`）；5 分钟内崩 3 次（`CRASH_STORM_THRESHOLD`）则不再自动重载、只留对话框——重载会重跑把它搞崩的恢复流程，风暴下自动重载比黑屏更难收拾。GPU/utility 进程死亡走 `child-process-gone` 同样入 sink。
 - **unresponsive**：仅日志（Windows 锁屏会误报，不弹窗）。
-- **内存增长曲线**：`processMetrics` 日志通道每 120s 采一行 `pid=… type=… mem=…MB cpu=…%`（`app.getAppMetrics()`，OS 工作集）+ 一行 `main-heap heapUsed=…MB heapTotal=…MB external=…MB rss=…MB`（main 自身 `process.memoryUsage()`；工作集看不到 V8 堆膨胀——main OOM 时工作集可能只有百余 MB）。`heapUsed` 超 1.5GB 时该行升级为 warn。
+- **内存增长曲线**：`processMetrics` 日志通道每 30s 采一行（`heapUsed` 超 512MB 或某个 renderer 工作集超 2GB 时加密到 10s）：`pid=… type=… mem=…MB cpu=…%`（`app.getAppMetrics()`，OS 工作集）+ `main-heap heapUsed=…MB heapTotal=…MB external=…MB rss=…MB`（main 自身 `process.memoryUsage()`；工作集看不到 V8 堆膨胀——main OOM 时工作集可能只有百余 MB）。`heapUsed` 超 1.5GB 时该行升级为 warn。
+- **托管进程树**：`app.getAppMetrics()` **只覆盖 Electron 自己的子进程**。extension-host / acp-agent 是 `child_process.spawn` 的 Node 进程，根本不在其中——一次线上崩溃里 3.71GB 的 extension host 因此在内存曲线上完全不可见。故另有每 60s（有进程超 2GB 时 15s）一行的 `hosted-processes cnt=… name#pid=…MB/…%`，走 `processMonitor` 的进程树（含 `ProcessRoleRegistry` 角色名）。
+- **renderer 堆水位**：见 [memory-pressure.md](memory-pressure.md)。
 
 ## 「报告问题」链路
 
@@ -104,7 +106,7 @@ renderer 未捕获异常 / 服务埋点                main 进程异常
 2. provider 支持附件时（tracker）QuickPick 询问是否附带诊断包；随后 `buildIssueUrl(providerId, payload)` 在 **main 端**完成上传与拼 URL，renderer 只负责 `opener.open(url)`。URL 超 7500 字符时两个 provider 都降级为粘贴提示（VSCode 同款）。
 3. **tracker provider**（`main/services/issueReporter/providers/trackerProvider.ts`）：附带时先 `createDiagnosticsZip()`（与 `exportDiagnosticsZip()` 同产物但不弹文件管理器），再按所配置服务的上传接口 POST 上传 zip，拼 `addPost` 预填 URL（board/category/content/attachments 参数；标题留空由用户在页面填）。端点与板块走 `issueReporter.tracker.serverUrl/appUrl/board/category` 设置（默认值见 `shared/issueReporter.ts` 的 `TrackerDefaults`；`serverUrl` / `appUrl` 默认为空 = 未配置，此时上报流程抛「not configured」错误，需先配置），由 renderer 读配置经 `providerOptions` 传给 main。上传失败 → 错误通知 +「不附带诊断包直接打开」降级 action。
 4. **GitHub provider**：纯拼 `issues/new?body=...`，不支持附件。
-5. `exportDiagnosticsZip()`（独立命令 `workbench.action.exportDiagnostics`）：`<userData>/diagnostics/universe-diagnostics-<ts>.zip`，含 `sysinfo.md` + 最近 2 session 的 `errors-*.jsonl` + 各日志文件**尾部 512KB** + `crash-dumps.txt`（dump 清单，行尾标注 included/skipped）+ `crashes/` 下**最新最多 2 个 dump 本体**（单文件 64MB 上限，读失败静默跳过）。E2E 下不弹系统文件管理器（`revealInShell`）。
+5. `exportDiagnosticsZip()`（独立命令 `workbench.action.exportDiagnostics`）：`<userData>/diagnostics/universe-diagnostics-<ts>.zip`，含 `sysinfo.md` + 最近 2 session 的 `errors-*.jsonl` + 各日志文件**尾部 512KB** + `crash-dumps.txt`（dump 清单，行尾标注 included/skipped）+ `crashes/` 下**最新最多 2 个 dump 本体**（单文件 64MB 上限，读失败静默跳过）+ `processes.txt`（进程树）+ `memory.txt`（main 堆 + 托管进程树内存）+ `ipc-frames.txt`（main 侧 IPC 帧环形记录，见 [memory-pressure.md](memory-pressure.md)）。E2E 下不弹系统文件管理器（`revealInShell`）。
 
 **加新上报目标**：实现 `IIssueReporterProvider`（platform `issueReporter/`），在 `IssueReporterMainService` 构造函数里加一行 `registerProvider`；若需要设置项，在 `shared/issueReporter.ts` 加键 + `SettingsContribution` 的 `issueReporter` 节点加 schema + `reportIssue.ts` 的 payload 组装处补 `providerOptions`。
 

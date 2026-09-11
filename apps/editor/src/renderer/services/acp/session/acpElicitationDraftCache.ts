@@ -28,6 +28,13 @@ export function elicitationDraftKey(
   return toolCallId != null && toolCallId !== '' ? toolCallId : `msg:${hashString(message)}`
 }
 
+/**
+ * Distinct (session, request) drafts kept at once. Each holds one card's worth of form
+ * text, so the entries are individually small — the cap is here to bound the *count*,
+ * since nothing else ever removed an entry for a session the user simply abandoned.
+ */
+const MAX_DRAFT_ENTRIES = 32
+
 class AcpElicitationDraftCacheImpl {
   private readonly _map = new Map<string, ElicitationDraftValues>()
 
@@ -36,7 +43,16 @@ class AcpElicitationDraftCacheImpl {
   }
 
   save(sessionId: string, requestKey: string, values: ElicitationDraftValues): void {
-    this._map.set(this.key(sessionId, requestKey), values)
+    const key = this.key(sessionId, requestKey)
+    // Re-inserting refreshes recency, so the entry dropped at the cap is the one the
+    // user was least recently filling in.
+    this._map.delete(key)
+    this._map.set(key, values)
+    while (this._map.size > MAX_DRAFT_ENTRIES) {
+      const oldest = this._map.keys().next()
+      if (oldest.done) break
+      this._map.delete(oldest.value)
+    }
   }
 
   load(sessionId: string, requestKey: string): ElicitationDraftValues | undefined {

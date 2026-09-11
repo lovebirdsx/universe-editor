@@ -44,6 +44,18 @@ export interface DiagnosticsMainServiceOptions {
   /** Process tree snapshot for the zip; injected so tests stay electron-light. */
   readonly collectProcesses?: () => Promise<string>
   /**
+   * Main-side IPC frame ring (recent frames + the largest ever seen). Synchronous on
+   * purpose: the case it exists for is a renderer that died mid-frame, and a renderer
+   * cannot report what it was decoding when it ran out of memory — this side can.
+   */
+  readonly readIpcFrames?: () => string
+  /**
+   * Memory snapshot beyond what `app.getAppMetrics()` can see: the main V8 heap, and
+   * the spawned Node children (extension host, ACP agents) that are absent from the app
+   * metrics entirely.
+   */
+  readonly collectMemory?: () => Promise<string>
+  /**
    * Whether exports reveal themselves via shell.showItemInFolder. Disabled in
    * E2E: popping an Explorer/Finder window mid-test serves no one.
    */
@@ -149,6 +161,12 @@ export class DiagnosticsMainService extends Disposable implements IDiagnosticsSe
 
     const processList = await this._options.collectProcesses?.().catch(() => undefined)
     zip.addFile('processes.txt', Buffer.from(processList ?? '(process list unavailable)\n', 'utf8'))
+
+    const memory = await this._options.collectMemory?.().catch(() => undefined)
+    zip.addFile('memory.txt', Buffer.from(memory ?? '(memory snapshot unavailable)\n', 'utf8'))
+
+    const frames = this._options.readIpcFrames?.()
+    zip.addFile('ipc-frames.txt', Buffer.from(frames ?? '(ipc frame record unavailable)\n', 'utf8'))
 
     await fs.mkdir(this._options.diagnosticsDir, { recursive: true })
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)

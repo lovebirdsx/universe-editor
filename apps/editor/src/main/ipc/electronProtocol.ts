@@ -41,6 +41,42 @@ export function installMainProtocolDispatcher(): void {
   ipcMain.on(IPC_PROTOCOL_CHANNEL, onIncoming)
 }
 
+/**
+ * Electron's own `webFrameMain.send` failure text. It is the *only* symptom a
+ * gone-too-early frame produces: the send neither throws nor reports through any API, it
+ * just console.errors once per attempt. Matching on it is how the console interceptor
+ * turns that symptom into a gate closure — see `markRendererFramesUnreachable`.
+ */
+export const FRAME_SEND_FAILURE_PATTERN = /Error sending from web(FrameMain|Contents)/
+
+/**
+ * How long a gate stays shut on suspicion alone. The failure text names no window, so the
+ * suspicion is applied to every window at once — a latched-forever gate would therefore
+ * deafen healthy windows too (their event pushes are dropped with no replay until they
+ * happen to send something). Bounding it caps that collateral at one rejected turn: a
+ * healthy window reopens on its next `dom-ready`/`did-finish-load`, a dead one costs a
+ * single failed send per window instead of one per event-loop turn.
+ */
+export const FRAME_UNREACHABLE_LATCH_MS = 30_000
+
+/**
+ * Close every window's protocol gate. Called when a frame-send failure is observed —
+ * positive proof that a renderer is unreachable despite no `render-process-gone` having
+ * arrived (the shipped crash had a ~48s window of exactly this, producing 225 failed
+ * sends and a self-sustaining log loop).
+ *
+ * Deliberately does NOT fire `onDidClose`: that tears down ChannelServer subscriptions,
+ * which is right for a *confirmed* dead renderer (`render-process-gone`) but not for one
+ * inferred from a log line. Closing the gate alone already stops the retry loop — the
+ * send short-circuits before touching Electron — and a frame that turns out to be alive
+ * reopens it on its next inbound message, with its subscriptions intact.
+ */
+export function markRendererFramesUnreachable(): void {
+  for (const protocol of senderProtocols.values()) {
+    protocol.markFrameUnreachable()
+  }
+}
+
 export class ElectronProtocol implements IMessagePassingProtocol {
   private readonly _emitter = new Emitter<Uint8Array>()
   readonly onMessage: Event<Uint8Array> = this._emitter.event
@@ -66,6 +102,13 @@ export class ElectronProtocol implements IMessagePassingProtocol {
   // send→error→log→send loop that pins CPU and floods the disk. Closing this
   // gate the instant the frame goes away is what breaks that loop at the source.
   private _frameAlive = true
+  /**
+   * Deadline until which document lifecycle events must not reopen the gate: after a crash
+   * the old frame keeps emitting `dom-ready`-class events for a while, and each reopen
+   * costs another failed send. Bounded rather than boolean — see
+   * {@link FRAME_UNREACHABLE_LATCH_MS} for why.
+   */
+  private _suspectDeadUntil = 0
   private readonly _frameListeners: Array<{
     event: string
     handler: (...args: unknown[]) => void
@@ -89,6 +132,7 @@ export class ElectronProtocol implements IMessagePassingProtocol {
     // frame is dead until an explicit reload rebuilds it.
     bind('render-process-gone', () => {
       this._frameAlive = false
+      this._suspectDeadUntil = Date.now() + FRAME_UNREACHABLE_LATCH_MS
       this._closeEmitter.fire()
     })
     // Close the gate only for a MAIN-frame navigation (a reload). `did-start-loading`
@@ -107,36 +151,74 @@ export class ElectronProtocol implements IMessagePassingProtocol {
     })
     // The new frame is ready to receive once the document commits. dom-ready fires
     // for the main frame's document; did-finish-load when the main navigation ends.
+    // Both are refused while the dead-frame latch is running: they cannot tell a fresh
+    // frame from a dying one, and the crash path is exactly where a late one reopens a
+    // gate that should stay shut. An inbound message is the strongest proof and clears
+    // the latch outright; past its deadline the gate reopens here as well, so a window
+    // that never speaks first cannot stay deaf.
     bind('dom-ready', () => {
-      this._frameAlive = true
+      if (!this._suspectDead()) this._frameAlive = true
     })
     bind('did-finish-load', () => {
-      this._frameAlive = true
+      if (!this._suspectDead()) this._frameAlive = true
     })
+  }
+
+  private _suspectDead(): boolean {
+    return Date.now() < this._suspectDeadUntil
+  }
+
+  /** Gate-closure entry point for the observed-send-failure path. */
+  markFrameUnreachable(): void {
+    this._frameAlive = false
+    this._suspectDeadUntil = Date.now() + FRAME_UNREACHABLE_LATCH_MS
   }
 
   acceptMessage(data: Uint8Array): void {
     if (this._disposed) return
     // A message from the renderer proves the new frame is already executing IPC.
     // This can happen before dom-ready, so reopen the gate before ChannelServer
-    // synchronously sends the response to this request.
+    // synchronously sends the response to this request. It is also the only signal
+    // strong enough to clear the dead-frame latch — nothing else distinguishes a live
+    // frame from a dead one.
     this._frameAlive = true
+    this._suspectDeadUntil = 0
     this._emitter.fire(data)
   }
 
+  /**
+   * Whether the WebContents still has a usable main frame. Waits for no event: the
+   * shipped crash went ~48s before `render-process-gone` arrived, during which an
+   * event-driven gate stayed open and every send failed. `isCrashed()` and the frame's
+   * own `isDestroyed()`/`detached` are the cheap checks that answer it immediately.
+   */
+  private _liveFrame(): boolean {
+    if (this._webContents.isDestroyed() || this._webContents.isCrashed()) return false
+    const frame = this._webContents.mainFrame
+    return frame != null && !frame.isDestroyed() && !frame.detached
+  }
+
   send(data: Uint8Array): void {
-    if (this._disposed || !this._frameAlive || this._webContents.isDestroyed()) return
+    // Gate already shut — a navigation is in flight, or the frame is known dead.
+    // Drop quietly: treating this as fresh evidence would latch `_suspectDead` and
+    // the lifecycle event that is supposed to reopen the gate would be refused.
+    if (this._disposed || !this._frameAlive) return
+    if (!this._liveFrame()) {
+      // Latch rather than re-probe every send: the failure mode is a *flood*, and a
+      // per-send probe would still emit one attempt per event-loop turn until an
+      // event finally arrived.
+      this.markFrameUnreachable()
+      return
+    }
     try {
       // Electron's structured clone serializes Buffer well; wrap to avoid losing typed-array identity.
       this._webContents.send(IPC_PROTOCOL_CHANNEL, Buffer.from(data))
     } catch {
-      // Belt-and-suspenders: even with the _frameAlive gate a send can still race
-      // a frame teardown that fired no observable event. Electron then throws
-      // "Render frame was disposed before WebFrameMain could be accessed"; the
-      // message is bound for a frame that no longer exists, so dropping it is
-      // correct. Flip the gate closed so subsequent sends short-circuit here
-      // instead of repeating the throw.
-      this._frameAlive = false
+      // Not the crash path — Electron 43's webFrameMain.send catches internally and
+      // console.errors instead of throwing (that text is what the interceptor folds,
+      // see FRAME_SEND_FAILURE_PATTERN). Kept for the frame-teardown race that does
+      // still surface synchronously.
+      this.markFrameUnreachable()
     }
   }
 

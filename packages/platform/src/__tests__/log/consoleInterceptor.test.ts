@@ -137,6 +137,31 @@ describe('installConsoleInterceptor', () => {
     ])
   })
 
+  it('drops entries the suppress hook rejects, before reclassify sees them', () => {
+    const logger = new RecordingLogger()
+    const reclassified: string[] = []
+    const reclassify = (text: string, level: LogLevel): LogLevel => {
+      reclassified.push(text)
+      return level
+    }
+    vi.spyOn(getOriginalConsole(), 'error').mockImplementation(() => {})
+    const disposable = installConsoleInterceptor({
+      logger,
+      reclassify,
+      suppress: (text) => text.includes('fold me'),
+    })
+    try {
+      console.error('fold me')
+      console.error('keep me')
+    } finally {
+      disposable.dispose()
+      vi.restoreAllMocks()
+    }
+    expect(logger.entries).toEqual([{ level: LogLevel.Error, message: 'keep me' }])
+    // A suppressed entry is never reclassified — no point doing level work on it.
+    expect(reclassified).toEqual(['keep me'])
+  })
+
   it('dispose restores the previous console methods', () => {
     const logger = new RecordingLogger()
     const originalLog = console.log

@@ -1,4 +1,5 @@
 export * from './ipc.js'
+export * from './ipcFrameGuard.js'
 export * from './proxyChannel.js'
 export * from './socket.js'
 export * from './frame.js'

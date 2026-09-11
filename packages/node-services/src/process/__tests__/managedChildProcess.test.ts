@@ -146,6 +146,104 @@ describe('ManagedChildProcess', () => {
     managed.dispose()
   })
 
+  describe('stdin errors', () => {
+    const epipe = (): NodeJS.ErrnoException =>
+      Object.assign(new Error('write EPIPE'), { code: 'EPIPE' })
+
+    it('absorbs a stream error instead of letting it kill the process', () => {
+      const managed = new ManagedChildProcess(child.asChild())
+      // Without a listener Node turns this into an uncaughtException — the shipped
+      // crash was `write EPIPE at writeStdin` taking down the main process.
+      expect(() => child.stdin.emit('error', epipe())).not.toThrow()
+      managed.dispose()
+    })
+
+    it('logs the errno once, not once per failed write', () => {
+      const warn = vi.fn()
+      const managed = new ManagedChildProcess(child.asChild(), {
+        label: 'agent-1',
+        logger: { warn } as never,
+      })
+      child.stdin.emit('error', epipe())
+      child.stdin.emit('error', epipe())
+
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(warn.mock.calls[0]?.[0]).toContain('agent-1')
+      expect(warn.mock.calls[0]?.[0]).toContain('EPIPE')
+      managed.dispose()
+    })
+
+    it('rejects later writes with the documented code rather than the raw errno', async () => {
+      const managed = new ManagedChildProcess(child.asChild())
+      child.stdin.emit('error', epipe())
+
+      await expect(managed.writeStdin('data')).rejects.toMatchObject({
+        code: 'CHILD_STDIN_NOT_WRITABLE',
+      })
+      managed.dispose()
+    })
+
+    it('does not report a stdin error as a child exit', () => {
+      const managed = new ManagedChildProcess(child.asChild())
+      const exits: ManagedExit[] = []
+      managed.onDidExit((e) => exits.push(e))
+
+      child.stdin.emit('error', epipe())
+      // A broken stdin pipe is not the process exiting; the exit event still owns
+      // that, and folding the two together would settle the exit twice.
+      expect(exits).toEqual([])
+      expect(managed.exited).toBe(false)
+      managed.dispose()
+    })
+
+    it('normalizes a write-callback failure so callers have one branch', async () => {
+      const managed = new ManagedChildProcess(child.asChild())
+      child.stdin.write = (_data: string, _enc: string, cb: (err?: Error | null) => void) => {
+        cb(epipe())
+        return false
+      }
+      await expect(managed.writeStdin('data')).rejects.toMatchObject({
+        code: 'CHILD_STDIN_NOT_WRITABLE',
+      })
+      managed.dispose()
+    })
+
+    it('stops listening for exit once disposed, but keeps absorbing stdin errors', () => {
+      const managed = new ManagedChildProcess(child.asChild())
+      managed.dispose()
+      // A SIGKILLed child can still fail its stdin, and an `'error'` with no listener is
+      // an uncaughtException — this one listener has to outlive dispose.
+      expect(() => child.stdin.emit('error', epipe())).not.toThrow()
+      expect(child.listenerCount('exit')).toBe(0)
+      expect(child.listenerCount('error')).toBe(0)
+    })
+
+    it('settles an in-flight write when the failure arrives only as a stream error', async () => {
+      const managed = new ManagedChildProcess(child.asChild())
+      // Node does not guarantee the write callback runs for a failed write, so a
+      // callback-only promise would hang the caller forever.
+      child.stdin.write = () => false
+      const pending = managed.writeStdin('data')
+      child.stdin.emit('error', epipe())
+
+      await expect(pending).rejects.toMatchObject({ code: 'CHILD_STDIN_NOT_WRITABLE' })
+      managed.dispose()
+    })
+
+    it('leaves no rejecter behind when the write itself throws', async () => {
+      const managed = new ManagedChildProcess(child.asChild())
+      child.stdin.write = () => {
+        throw new Error('write after end')
+      }
+      await expect(managed.writeStdin('data')).rejects.toThrow(/write after end/)
+
+      // Nothing is left holding the promise's reject: a later stream error must not
+      // try to settle a write that is long gone.
+      child.stdin.emit('error', epipe())
+      managed.dispose()
+    })
+  })
+
   it('dispose sends SIGKILL to a still-running child', () => {
     const managed = new ManagedChildProcess(child.asChild())
     managed.dispose()

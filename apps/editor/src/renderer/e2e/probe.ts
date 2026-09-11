@@ -65,6 +65,12 @@ import type { ILanguageFeaturesService } from '../services/languageFeatures/Lang
 import type { IOutlineService } from '../services/languageFeatures/OutlineService.js'
 import type { ITimerService } from '../services/performance/TimerService.js'
 import type { IInteractionPerfService } from '../services/performance/InteractionPerfService.js'
+import type { IMemoryPressureService } from '../services/memory/memoryPressureService.js'
+import {
+  MEMORY_PRESSURE_LEVEL_NAMES,
+  MemoryPressureLevel,
+} from '../services/memory/memoryPressureLevels.js'
+import { readHeapSample } from '../services/memory/rendererHeapSample.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import { getActiveTextEditor } from '../services/editor/activeTextEditor.js'
@@ -163,6 +169,7 @@ export interface E2EProbeServices {
   readonly aiModelService: IAiModelService
   readonly timerService: ITimerService
   readonly interactionPerfService: IInteractionPerfService
+  readonly memoryPressureService: IMemoryPressureService
   readonly explorerTreeService: ExplorerTreeService
   readonly fileService: IFileService
   readonly textSearchMainService: ITextSearchMainService
@@ -2178,6 +2185,34 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
           loafs: entry.report.loafs,
           context: entry.report.context,
         })),
+      }
+    },
+    // The renderer's own heap is normally invisible from outside, and the whole point of
+    // the watermark is to notice it before V8 aborts. A spec that only asserted the
+    // service exists would prove nothing: `performance.memory` being readable inside a
+    // real Electron renderer is an assumption worth failing a test over.
+    getMemoryPressure: async (forceLevel) => {
+      const service = services.memoryPressureService
+      const forced =
+        forceLevel === 'elevated'
+          ? MemoryPressureLevel.Elevated
+          : forceLevel === 'critical'
+            ? MemoryPressureLevel.Critical
+            : undefined
+      const release = forced === undefined ? [] : service.release(forced)
+      const sample = readHeapSample()
+      return {
+        level: MEMORY_PRESSURE_LEVEL_NAMES[service.level.get()] ?? 'unknown',
+        describe: service.describe(),
+        releaserIds: service.releaserIds(),
+        usedBytes: sample?.used ?? null,
+        limitBytes: sample?.limit ?? null,
+        release: release.map((entry) => ({
+          id: entry.id,
+          freed: entry.freed,
+          ...(entry.error !== undefined ? { error: entry.error } : {}),
+        })),
+        releasedBytes: release.reduce((sum, entry) => sum + entry.freed, 0),
       }
     },
     driveSwarmNotificationPoll: async () => {

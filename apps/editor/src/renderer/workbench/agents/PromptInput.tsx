@@ -520,6 +520,14 @@ export function PromptInput({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []) // mount only — session.id is stable for this component instance
 
+  // Pin this session's draft while its input is on screen, so the memory watermark
+  // cannot evict the draft the user is about to come back to just because they typed
+  // in another session more recently.
+  useEffect(() => {
+    AcpPromptDraftCache.pin(session.id)
+    return () => AcpPromptDraftCache.unpin(session.id)
+  }, [session.id])
+
   // Persist the unsent draft (text + range-tracked refs + attached contexts +
   // attached images) per session so switching tabs / sessions and coming back
   // restores it (see AcpPromptDraftCache). Kept alive while any is non-empty so a

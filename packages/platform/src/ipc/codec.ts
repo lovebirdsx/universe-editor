@@ -11,6 +11,7 @@
 
 import { URI, type UriComponents } from '../base/uri.js'
 import { U8_TAG, base64ToBytes, bytesToBase64, type IpcCodec, type IpcMessage } from './ipc.js'
+import { assertIpcFrameWithinLimit } from './ipcFrameGuard.js'
 import type { IURITransformer } from './uriIpc.js'
 
 const U8_REF = '$u8ref'
@@ -43,7 +44,9 @@ export function createJsonCodec(transformer?: IURITransformer): IpcCodec {
       }
       return value
     }
-    return new TextEncoder().encode(JSON.stringify(msg, replacer))
+    const bytes = new TextEncoder().encode(JSON.stringify(msg, replacer))
+    assertIpcFrameWithinLimit(bytes.byteLength)
+    return bytes
   }
 
   function decode(data: Uint8Array): IpcMessage {
@@ -60,6 +63,7 @@ export function createJsonCodec(transformer?: IURITransformer): IpcCodec {
       }
       return value
     }
+    assertIpcFrameWithinLimit(data.byteLength)
     return JSON.parse(new TextDecoder().decode(data), reviver) as IpcMessage
   }
 
@@ -124,10 +128,15 @@ export function createBinaryCodec(transformer?: IURITransformer): IpcCodec {
       out.set(a, offset)
       offset += a.length
     }
+    assertIpcFrameWithinLimit(out.byteLength)
     return out
   }
 
   function decode(data: Uint8Array): IpcMessage {
+    // Checked before the header is trusted: `attachmentCount` and the per-attachment
+    // lengths come off the wire, and a bogus pair would have `subarray` hand back
+    // views over the whole frame before any length is validated.
+    assertIpcFrameWithinLimit(data.byteLength)
     const jsonByteLength = readU32(data, 0)
     const attachmentCount = readU32(data, 4)
 

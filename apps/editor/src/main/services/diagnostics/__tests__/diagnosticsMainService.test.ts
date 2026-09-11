@@ -225,6 +225,70 @@ describe('DiagnosticsMainService', () => {
     expect(zip.readAsText('processes.txt')).toBe('(process list unavailable)\n')
   })
 
+  it('createDiagnosticsZip packs the main-side IPC frame record', async () => {
+    // The renderer that OOMs mid-frame cannot report what it was decoding; main can,
+    // and this file is where that answer has to survive into the bundle.
+    const withFrames = new DiagnosticsMainService({
+      crashDumpsDir: crashDir,
+      logRoot,
+      diagnosticsDir,
+      mode: 'release',
+      readIpcFrames: () =>
+        'frames seen=3 largest=120MB\n1234ms out 120MB request channel=fileSearch cmd=findFiles',
+    })
+    try {
+      const zip = new AdmZip(await withFrames.createDiagnosticsZip())
+      const text = zip.readAsText('ipc-frames.txt')
+      expect(text).toContain('seen=3')
+      expect(text).toContain('cmd=findFiles')
+    } finally {
+      withFrames.dispose()
+    }
+  })
+
+  it('createDiagnosticsZip degrades ipc-frames.txt rather than omitting it', async () => {
+    // A missing attachment reads as "nothing to see"; an explicit placeholder reads
+    // as "this build could not tell you", which is a different conclusion.
+    const zip = new AdmZip(await service.createDiagnosticsZip())
+    expect(zip.getEntries().map((e) => e.entryName)).toContain('ipc-frames.txt')
+    expect(zip.readAsText('ipc-frames.txt')).toBe('(ipc frame record unavailable)\n')
+  })
+
+  it('createDiagnosticsZip packs the injected memory snapshot', async () => {
+    const withMemory = new DiagnosticsMainService({
+      crashDumpsDir: crashDir,
+      logRoot,
+      diagnosticsDir,
+      mode: 'release',
+      collectMemory: () =>
+        Promise.resolve(
+          'main-heap heapUsed=200MB\nhosted-processes cnt=2 extension-host#77=3800MB\n',
+        ),
+    })
+    try {
+      const zip = new AdmZip(await withMemory.createDiagnosticsZip())
+      expect(zip.readAsText('memory.txt')).toContain('extension-host#77=3800MB')
+    } finally {
+      withMemory.dispose()
+    }
+  })
+
+  it('createDiagnosticsZip degrades memory.txt when collectMemory throws', async () => {
+    const failing = new DiagnosticsMainService({
+      crashDumpsDir: crashDir,
+      logRoot,
+      diagnosticsDir,
+      mode: 'release',
+      collectMemory: () => Promise.reject(new Error('tasklist exploded')),
+    })
+    try {
+      const zip = new AdmZip(await failing.createDiagnosticsZip())
+      expect(zip.readAsText('memory.txt')).toBe('(memory snapshot unavailable)\n')
+    } finally {
+      failing.dispose()
+    }
+  })
+
   it('createDiagnosticsZip packs the newest 2 dumps into crashes/ and annotates the listing', async () => {
     seedDump('oldest.dmp', 'old', new Date('2026-08-01T00:00:00Z'))
     seedDump('middle.dmp', 'mid', new Date('2026-08-02T00:00:00Z'))

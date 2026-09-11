@@ -22,6 +22,7 @@ import { app, shell } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { ILoggerService, createNamedLogger } from '@universe-editor/platform'
+import { formatIpcFrames } from '@universe-editor/platform'
 import { IFileService } from '@universe-editor/platform'
 import { IFileSearchService } from '@universe-editor/platform'
 import { IMainStorageService } from '../storage.js'
@@ -104,6 +105,8 @@ import { ILogMainService } from './log/logMainService.js'
 import { IssueReporterMainService } from './issueReporter/issueReporterMainService.js'
 import { IProcessMonitorService } from '../../shared/ipc/processMonitorService.js'
 import { ProcessMonitorMainService } from './processMonitor/processMonitorMainService.js'
+import { flattenProcessTree, formatProcessTreeMemory } from './processMonitor/processList.js'
+import { formatMainHeapSample } from '../crashMonitoring.js'
 import { IWatcherProcessService, WatcherProcessClient } from '@universe-editor/node-services'
 import { createWatcherUtilityTransportFactory } from './fileWatcher/watcherUtilityTransport.js'
 import {
@@ -301,6 +304,14 @@ registerSingletonFactory(IDiagnosticsService, (acc) => {
       mode: process.env['UNIVERSE_E2E'] === '1' ? 'e2e' : app.isPackaged ? 'release' : 'dev',
       revealInShell: process.env['UNIVERSE_E2E'] !== '1',
       collectProcesses: () => processMonitor.formatProcessList(),
+      readIpcFrames: () => formatIpcFrames(),
+      collectMemory: async () => {
+        const lines = [formatMainHeapSample(process.memoryUsage())]
+        const snapshot = await processMonitor.resolveProcesses()
+        const items = flattenProcessTree(snapshot.root)
+        lines.push(`hosted-processes cnt=${items.length} ${formatProcessTreeMemory(items)}`)
+        return lines.join('\n') + '\n'
+      },
       listExtensions: async () => {
         const [installed, builtin] = await Promise.all([
           extensionManagement.getInstalled(),

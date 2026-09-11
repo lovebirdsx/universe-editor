@@ -126,6 +126,23 @@ export class ManagedChildProcess extends Disposable {
   private _forced = false
   private _treeKilled = false
   private _killTimer: ReturnType<typeof setTimeout> | undefined
+  /**
+   * Last error seen on the child's stdin. Node emits `'error'` on the stream for a
+   * failed write *in addition* to invoking the write callback, and an `'error'` with
+   * no listener becomes an `uncaughtException` that takes the whole main process
+   * down — the shipped crash was exactly this (`write EPIPE at writeStdin`). Held so
+   * later writes can reject with the documented code instead of writing into a
+   * broken pipe again.
+   */
+  private _stdinError: NodeJS.ErrnoException | undefined
+  /**
+   * Reject functions of writes still waiting on their callback. Node may report a failed
+   * write *only* as a stream `'error'` (never through the callback), and a promise that
+   * never settles is a hung caller rather than a surfaced failure — which is the shape
+   * this whole path exists to avoid.
+   */
+  private readonly _pendingWrites = new Set<(err: Error) => void>()
+  private _disposed = false
 
   constructor(
     private readonly _child: ChildProcessWithoutNullStreams,
@@ -139,11 +156,49 @@ export class ManagedChildProcess extends Disposable {
     this._killTree = options.killTree ?? defaultTreeKiller
     this._shutdownMark = options.shutdownMark
 
-    _child.stdout.on('data', (data: Buffer) => this._onStdout.fire(data))
-    _child.stderr.on('data', (data: Buffer) => this._onStderr.fire(data))
-    _child.on('error', (err) => this._settleExit({ code: null, signal: null, error: err.message }))
-    _child.on('exit', (code, signal) => this._settleExit({ code, signal }))
+    _child.stdout.on('data', this._onStdoutData)
+    _child.stderr.on('data', this._onStderrData)
+    _child.stdin.on('error', this._onStdinError)
+    _child.on('error', this._onChildError)
+    _child.on('exit', this._onChildExit)
   }
+
+  private readonly _onStdoutData = (data: Buffer): void => this._onStdout.fire(data)
+
+  private readonly _onStderrData = (data: Buffer): void => this._onStderr.fire(data)
+
+  private readonly _onStdinError = (err: NodeJS.ErrnoException): void => {
+    if (!this._stdinError) {
+      this._stdinError = err
+      // Still absorbed after dispose (that is the point of keeping the listener), but
+      // no longer worth a log line — the shutdown path is already tearing down.
+      if (!this._disposed) {
+        this._logger?.warn(
+          `ManagedChildProcess(${this._label}): stdin error ${err.code ?? err.message} — the child can no longer accept input`,
+        )
+      }
+    }
+    this._failPendingWrites()
+  }
+
+  /** Settle every in-flight write the stream error may have swallowed. */
+  private _failPendingWrites(): void {
+    if (this._pendingWrites.size === 0) return
+    const reason = this._stdinError?.code ?? this._stdinError?.message ?? 'unknown'
+    const error = childProcessError(
+      `ManagedChildProcess(${this._label}): stdin write failed (${reason})`,
+      CHILD_STDIN_NOT_WRITABLE_CODE,
+    )
+    const pending = [...this._pendingWrites]
+    this._pendingWrites.clear()
+    for (const reject of pending) reject(error)
+  }
+
+  private readonly _onChildError = (err: Error): void =>
+    this._settleExit({ code: null, signal: null, error: err.message })
+
+  private readonly _onChildExit = (code: number | null, signal: NodeJS.Signals | null): void =>
+    this._settleExit({ code, signal })
 
   get pid(): number | undefined {
     return this._child.pid
@@ -163,6 +218,16 @@ export class ManagedChildProcess extends Disposable {
       )
     }
     const stdin = this._child.stdin
+    // A stdin that already errored (EPIPE, ECONNRESET) is never coming back: reject
+    // rather than hand the write to a dead pipe that will only error again.
+    if (this._stdinError) {
+      return Promise.reject(
+        childProcessError(
+          `ManagedChildProcess(${this._label}): stdin failed (${this._stdinError.code ?? this._stdinError.message})`,
+          CHILD_STDIN_NOT_WRITABLE_CODE,
+        ),
+      )
+    }
     // Defend against the narrow race where the child died after spawn but before
     // its exit/error event reached us — stdin can already be destroyed.
     if (stdin.destroyed || stdin.writable === false) {
@@ -174,10 +239,35 @@ export class ManagedChildProcess extends Disposable {
       )
     }
     return new Promise<void>((resolve, reject) => {
-      stdin.write(data, 'utf8', (err) => {
-        if (err) reject(err)
-        else resolve()
-      })
+      // Registered so a failure delivered only as a stream 'error' still settles this
+      // promise; the callback below deregisters it either way.
+      const onStreamError = (err: Error): void => reject(err)
+      this._pendingWrites.add(onStreamError)
+      const settle = (): void => {
+        this._pendingWrites.delete(onStreamError)
+      }
+      try {
+        stdin.write(data, 'utf8', (err) => {
+          settle()
+          // Normalized to the documented "child can no longer accept input" code so
+          // callers have one branch to write; the errno stays in the message. The
+          // callback is not a reliable error channel on its own (Node may deliver the
+          // failure only as a stream 'error'), which is why _onStdinError exists.
+          if (err) {
+            reject(
+              childProcessError(
+                `ManagedChildProcess(${this._label}): stdin write failed (${(err as NodeJS.ErrnoException).code ?? err.message})`,
+                CHILD_STDIN_NOT_WRITABLE_CODE,
+              ),
+            )
+          } else resolve()
+        })
+      } catch (err) {
+        // A write into an already-closing stream can still throw synchronously; the
+        // promise settles by itself, but the rejecter must not be left behind.
+        settle()
+        throw err
+      }
     })
   }
 
@@ -273,10 +363,20 @@ export class ManagedChildProcess extends Disposable {
   }
 
   override dispose(): void {
+    this._disposed = true
     if (this._killTimer) {
       clearTimeout(this._killTimer)
       this._killTimer = undefined
     }
+    // Detach before killing: a SIGKILL reaping the child can still deliver a final
+    // stdout flush or exit, and firing into a disposed emitter is noise at best.
+    // stdin's `'error'` is the exception — it stays attached. An `'error'` with no
+    // listener is an uncaughtException, so detaching it would hand the shutdown path
+    // back the very crash this listener was added to absorb.
+    this._child.stdout.off('data', this._onStdoutData)
+    this._child.stderr.off('data', this._onStderrData)
+    this._child.off('error', this._onChildError)
+    this._child.off('exit', this._onChildExit)
     if (!this._exited) {
       // dispose() runs on the app-quit path (will-quit → service dispose), which
       // is synchronous. Use a blocking tree-kill so the main process cannot exit

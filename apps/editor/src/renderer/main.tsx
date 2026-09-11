@@ -92,7 +92,11 @@ import { AiModelClientService } from './services/ai/aiModelClientService.js'
 import { IAiRateMirror } from './services/ai/aiRateMirror.js'
 import { initializeRendererNls } from '../shared/i18n/bootstrap.js'
 import { DISPOSABLE_LEAK_REPORT_KEY, E2E_PROBE_ENABLED_KEY } from '../shared/e2e/contract.js'
-import { createRendererIpcService } from './ipc/bootstrap.js'
+import { bindIpcFrameLog, createRendererIpcService } from './ipc/bootstrap.js'
+import {
+  IMemoryPressureService,
+  MemoryPressureService,
+} from './services/memory/memoryPressureService.js'
 import { registerProxyChannelServices } from './ipc/registerProxyServices.js'
 import { installRendererErrorHandlers, isBenignError } from './errors.js'
 import {
@@ -396,6 +400,18 @@ async function bootstrapWorkbench(): Promise<void> {
   )
   const loggerService = workbenchStore.add(new RendererLoggerService(logChannelProxy))
   services.set(ILoggerService, loggerService)
+  // A named logger rather than the service: what is bound here is a sink for frame
+  // alerts, and a file-backed ILogger is what gives them a channel in the Output panel.
+  bindIpcFrameLog(loggerService.createLogger({ id: 'ipc', name: 'IPC' }))
+
+  // Renderer heap watermark. Constructed explicitly rather than through the DI
+  // descriptor path: it takes test seams as an options bag, and a trailing plain
+  // parameter on an injected constructor silently misaligns every service argument
+  // after it (see WorkspaceFileListingContribution). Contributions inject it by token.
+  services.set(
+    IMemoryPressureService,
+    workbenchStore.add(new MemoryPressureService(loggerService, telemetry)),
+  )
   window.addEventListener('beforeunload', () => {
     void loggerService.flush()
   })
@@ -962,6 +978,7 @@ async function bootstrapWorkbench(): Promise<void> {
     aiModelService,
     timerService: instantiation.invokeFunction((a) => a.get(ITimerService)),
     interactionPerfService,
+    memoryPressureService: services.get(IMemoryPressureService) as IMemoryPressureService,
     explorerTreeService,
     fileService: services.get(IFileService) as IFileService,
     textSearchMainService: services.get(ITextSearchMainService) as ITextSearchMainService,

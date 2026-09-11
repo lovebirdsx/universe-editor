@@ -15,6 +15,12 @@ import { Emitter, Event } from '../base/event.js'
 import { URI, type UriComponents } from '../base/uri.js'
 import { CancellationToken, CancellationTokenSource } from '../base/cancellation.js'
 import { CancellationError } from '../base/errors.js'
+import {
+  IPC_FRAME_TOO_LARGE_CODE,
+  IpcFrameTooLargeError,
+  assertIpcFrameWithinLimit,
+  reportIpcFrame,
+} from './ipcFrameGuard.js'
 
 // -------- Transport abstraction --------
 
@@ -236,10 +242,20 @@ export function setIpcEncodeInstrument(instrument: (<T>(run: () => T) => T) | un
 
 function encode(msg: IpcMessage): Uint8Array {
   const run = () => new TextEncoder().encode(JSON.stringify(msg, replacer))
-  return encodeInstrument ? encodeInstrument(run) : run()
+  const data = encodeInstrument ? encodeInstrument(run) : run()
+  // Refuse on the way out as well as on the way in. A peer that cannot decode the
+  // frame would die holding it, and the sender is the only side that still has the
+  // context to name what it was.
+  assertIpcFrameWithinLimit(data.byteLength)
+  return data
 }
 
 function decode(data: Uint8Array): IpcMessage {
+  // Must be checked here rather than at the call sites: `ChannelClient` /
+  // `ChannelServer` autodispatch and `ChannelPair` all funnel through the codec, so
+  // this is the one place no inbound path can slip past. The crash this guards
+  // against happened inside the `JSON.parse` below — by then it is too late.
+  assertIpcFrameWithinLimit(data.byteLength)
   return JSON.parse(new TextDecoder().decode(data), reviver) as IpcMessage
 }
 
@@ -290,6 +306,77 @@ function reviveWireError(wire: WireError | string | undefined): Error {
   return err
 }
 
+function frameChannel(msg: IpcMessage): string {
+  return 'channel' in msg ? msg.channel : ''
+}
+
+function frameName(msg: IpcMessage): string {
+  switch (msg.type) {
+    case 'request':
+      return msg.command
+    case 'event':
+    case 'subscribe':
+    case 'unsubscribe':
+      return msg.event
+    default:
+      return ''
+  }
+}
+
+/**
+ * Decode one inbound frame, or `undefined` when the guard refused it.
+ *
+ * Swallowing the refusal is the point, not an oversight: the frame cannot be decoded
+ * either way, and letting it escape would surface as an `Emitter` listener error —
+ * a bare `console.error` with no channel, no size, no name, once per frame. The
+ * refusal is reported to the guard's sink instead, which is the only place that can
+ * say what was dropped. Recording lives here rather than at each call site so the
+ * autodispatch paths, which mount their own `protocol.onMessage`, are covered exactly
+ * like the `ChannelPair` path.
+ *
+ * A failed decode for any *other* reason still throws: malformed JSON is a protocol
+ * bug, and those should stay loud.
+ */
+function decodeInbound(
+  codec: IpcCodec,
+  data: Uint8Array,
+  instrument?: (run: () => IpcMessage, bytes: number) => IpcMessage,
+): IpcMessage | undefined {
+  let msg: IpcMessage
+  try {
+    msg = instrument ? instrument(() => codec.decode(data), data.byteLength) : codec.decode(data)
+  } catch (err) {
+    if (!(err instanceof IpcFrameTooLargeError)) throw err
+    reportIpcFrame('in', data.byteLength, 'unparsed', '', '')
+    return undefined
+  }
+  reportIpcFrame('in', data.byteLength, msg.type, frameChannel(msg), frameName(msg))
+  return msg
+}
+
+/**
+ * Encode one outbound frame, or hand back the oversize error that refused it so the
+ * caller can choose its degradation. The frame — not a boolean — is the success value
+ * so the payload is serialized exactly once; returns the error object rather than
+ * throwing so the happy path allocates nothing extra.
+ */
+function encodeOutbound(
+  codec: IpcCodec,
+  msg: IpcMessage,
+  channel: string,
+  name: string,
+): Uint8Array | IpcFrameTooLargeError {
+  let frame: Uint8Array
+  try {
+    frame = codec.encode(msg)
+  } catch (err) {
+    if (!(err instanceof IpcFrameTooLargeError)) throw err
+    reportIpcFrame('out', err.bytes, msg.type, channel, name)
+    return err
+  }
+  return frame
+}
+
 /**
  * Client side: sends requests over a protocol and routes responses back to callers.
  * Also receives event messages and fires them on local Emitters.
@@ -318,8 +405,35 @@ export class ChannelClient extends Disposable implements IChannelClient {
     // decoded messages itself — decoding every frame twice on multi-MB payloads
     // is exactly the main-thread stall the pair exists to avoid.
     if (autoDispatch) {
-      this._register(_protocol.onMessage((data) => this.handleMessage(this._codec.decode(data))))
+      this._register(
+        _protocol.onMessage((data) => {
+          const msg = decodeInbound(this._codec, data)
+          if (msg) this.handleMessage(msg)
+        }),
+      )
     }
+  }
+
+  /**
+   * Encode and send one frame, settling the caller instead of hanging when the
+   * payload is refused. A refused `request` rejects its pending promise with the
+   * guard's error: an outbound frame the peer could never decode is a caller-visible
+   * failure, and a promise that simply never settles shows up as "the UI froze",
+   * which is far harder to trace back to a size limit.
+   */
+  private _send(msg: IpcMessage, channel: string, name: string): void {
+    const frame = encodeOutbound(this._codec, msg, channel, name)
+    if (frame instanceof IpcFrameTooLargeError) {
+      if (msg.type === 'request') {
+        const pending = this._pendingRequests.get(msg.id)
+        if (pending) {
+          this._pendingRequests.delete(msg.id)
+          pending.reject(frame)
+        }
+      }
+      return
+    }
+    this._protocol.send(frame)
   }
 
   handleMessage(msg: IpcMessage): void {
@@ -360,7 +474,7 @@ export class ChannelClient extends Disposable implements IChannelClient {
             if (!pending) return
             client._pendingRequests.delete(id)
             if (!client._disposed) {
-              client._protocol.send(client._codec.encode({ type: 'cancel', id }))
+              client._send({ type: 'cancel', id }, channelName, 'cancel')
             }
             pending.reject(new CancellationError())
           })
@@ -377,15 +491,17 @@ export class ChannelClient extends Disposable implements IChannelClient {
               reject(e)
             },
           })
-          client._protocol.send(
-            client._codec.encode({
+          client._send(
+            {
               type: 'request',
               id,
               channel: channelName,
               command,
               arg,
               ...(token !== undefined ? { hasToken: true as const } : {}),
-            }),
+            },
+            channelName,
+            command,
           )
         })
       },
@@ -398,17 +514,17 @@ export class ChannelClient extends Disposable implements IChannelClient {
               if (client._disposed) {
                 return
               }
-              client._protocol.send(
-                client._codec.encode({ type: 'subscribe', channel: channelName, event, arg }),
+              client._send(
+                { type: 'subscribe', channel: channelName, event, arg },
+                channelName,
+                event,
               )
             },
             onDidRemoveLastListener: () => {
               if (client._disposed) {
                 return
               }
-              client._protocol.send(
-                client._codec.encode({ type: 'unsubscribe', channel: channelName, event }),
-              )
+              client._send({ type: 'unsubscribe', channel: channelName, event }, channelName, event)
             },
           })
           client._eventEmitters.set(key, emitter)
@@ -454,7 +570,12 @@ export class ChannelServer extends Disposable implements IChannelServer {
   ) {
     super()
     if (autoDispatch) {
-      this._register(_protocol.onMessage((data) => this.handleMessage(this._codec.decode(data))))
+      this._register(
+        _protocol.onMessage((data) => {
+          const msg = decodeInbound(this._codec, data)
+          if (msg) this.handleMessage(msg)
+        }),
+      )
     }
     // A dead peer (renderer frame gone) cannot receive anything, but every
     // firing emitter would still encode its payload only for the protocol's
@@ -468,6 +589,35 @@ export class ChannelServer extends Disposable implements IChannelServer {
 
   registerChannel(channelName: string, channel: IChannel): void {
     this._channels.set(channelName, channel)
+  }
+
+  /**
+   * Encode and send one frame, degrading an over-limit payload instead of letting it
+   * through. A refused `response` is replaced by a small error response carrying
+   * `IPC_FRAME_TOO_LARGE`, so the caller's promise rejects with something actionable
+   * rather than never settling. An `event` has no pending caller to settle, so it can
+   * only be dropped — the guard records it so the next crash report can name it.
+   */
+  private _send(msg: IpcMessage, channel: string, name: string): void {
+    const frame = encodeOutbound(this._codec, msg, channel, name)
+    if (frame instanceof IpcFrameTooLargeError) {
+      if (msg.type === 'response') {
+        const target = name.length > 0 ? `${channel}.${name}` : channel
+        this._protocol.send(
+          this._codec.encode({
+            type: 'response',
+            id: msg.id,
+            error: {
+              name: 'IpcFrameTooLargeError',
+              message: `'${target}' produced a ${frame.bytes}-byte reply, over the ${frame.limit}-byte IPC frame limit`,
+              code: IPC_FRAME_TOO_LARGE_CODE,
+            },
+          }),
+        )
+      }
+      return
+    }
+    this._protocol.send(frame)
   }
 
   handleMessage(msg: IpcMessage): void {
@@ -487,12 +637,14 @@ export class ChannelServer extends Disposable implements IChannelServer {
     const channel = this._channels.get(channelName)
 
     if (!channel) {
-      this._protocol.send(
-        this._codec.encode({
+      this._send(
+        {
           type: 'response',
           id,
           error: { name: 'ChannelNotFoundError', message: `Channel '${channelName}' not found` },
-        }),
+        },
+        channelName,
+        command,
       )
       return
     }
@@ -504,12 +656,10 @@ export class ChannelServer extends Disposable implements IChannelServer {
       channel
         .call(command, arg)
         .then((data) => {
-          this._protocol.send(this._codec.encode({ type: 'response', id, data }))
+          this._send({ type: 'response', id, data }, channelName, command)
         })
         .catch((err: unknown) => {
-          this._protocol.send(
-            this._codec.encode({ type: 'response', id, error: serializeError(err) }),
-          )
+          this._send({ type: 'response', id, error: serializeError(err) }, channelName, command)
         })
       return
     }
@@ -525,13 +675,11 @@ export class ChannelServer extends Disposable implements IChannelServer {
       .call(command, arg, cts.token)
       .then((data) => {
         finish()
-        this._protocol.send(this._codec.encode({ type: 'response', id, data }))
+        this._send({ type: 'response', id, data }, channelName, command)
       })
       .catch((err: unknown) => {
         finish()
-        this._protocol.send(
-          this._codec.encode({ type: 'response', id, error: serializeError(err) }),
-        )
+        this._send({ type: 'response', id, error: serializeError(err) }, channelName, command)
       })
   }
 
@@ -548,7 +696,7 @@ export class ChannelServer extends Disposable implements IChannelServer {
       event,
       arg,
     )((data) => {
-      this._protocol.send(this._codec.encode({ type: 'event', channel: channelName, event, data }))
+      this._send({ type: 'event', channel: channelName, event, data }, channelName, event)
     })
     this._eventSubscriptions.set(key, sub)
   }
@@ -606,9 +754,8 @@ export class ChannelPair extends Disposable {
     this.server = this._register(new ChannelServer(protocol, false, codec))
     this._register(
       protocol.onMessage((data) => {
-        const msg = decodeInstrument
-          ? decodeInstrument(() => codec.decode(data), data.byteLength)
-          : codec.decode(data)
+        const msg = decodeInbound(codec, data, decodeInstrument)
+        if (!msg) return
         if (msg.type === 'response' || msg.type === 'event') {
           this.client.handleMessage(msg)
         } else {

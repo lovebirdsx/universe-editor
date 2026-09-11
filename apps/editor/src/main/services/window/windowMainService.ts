@@ -130,6 +130,26 @@ const CONFIRM_SHUTDOWN_TIMEOUT_MS = 10_000
 // after this budget rather than leave a hidden window invisible forever.
 export const READY_TO_SHOW_TIMEOUT_MS = 4_000
 
+/**
+ * How long the crash dialog waits for an answer before reloading on its own. The dialog
+ * is window-modal, so an unanswered one leaves the user staring at a black window: the
+ * shipped crash report shows 15m21s of exactly that, because the old recovery put
+ * `win.reload()` inside the promise's `.then()` and nobody ever clicked.
+ *
+ * Long enough that a considered click wins the race; short enough that walking away
+ * recovers the window instead of losing the session.
+ */
+export const CRASH_RELOAD_TIMEOUT_MS = 20_000
+
+/** Window over which crashes are counted for the storm check. */
+export const CRASH_STORM_WINDOW_MS = 5 * 60_000
+/**
+ * Crashes within {@link CRASH_STORM_WINDOW_MS} at which auto-recovery stops. Reloading a
+ * window that keeps dying re-runs the restore work that killed it, so past this point the
+ * dialog waits for a person — a reload loop is harder to escape than a black window.
+ */
+export const CRASH_STORM_THRESHOLD = 3
+
 export class WindowMainService implements IWindowMainService {
   private readonly _windows = new Map<number, WindowEntry>()
   private _quitting = false
@@ -149,6 +169,13 @@ export class WindowMainService implements IWindowMainService {
    * OOMing session restore). In-memory only — a real app restart resets it.
    */
   private readonly _lastRenderCrash = new Map<number, IWindowRenderCrashInfo>()
+  /**
+   * Crash timestamps per window, trimmed to {@link CRASH_STORM_WINDOW_MS}. A window that
+   * keeps dying is not recoverable by reloading it again — each reload re-runs the very
+   * restore work that killed it — so past {@link CRASH_STORM_THRESHOLD} the recovery stops
+   * reloading on its own and waits for a person.
+   */
+  private readonly _crashTimes = new Map<number, number[]>()
   private readonly _sessionStore = new WindowSessionStore(() => this._windows.values())
   private _hasCreatedFirstWindow = false
   /** Window id that last had OS focus (or was programmatically focused). */
@@ -296,12 +323,21 @@ export class WindowMainService implements IWindowMainService {
     // (draggable) but blank — the content process is gone. Without this the user
     // is stuck at a black window with no way back. `clean-exit` is a normal
     // teardown (e.g. reload) and must be ignored; anything else (crashed / oom /
-    // killed) offers a one-click reload. `_crashHandled` de-bounces the dialog so
+    // killed) opens a recovery dialog. `_crashHandled` de-bounces the dialog so
     // a crash storm never stacks multiple prompts. E2E skips the native modal —
     // it would block the driver; a crash there must fail the test, not stall it.
     win.webContents.on('render-process-gone', (_event, details) => {
       if (details.reason === 'clean-exit') return
-      this._lastRenderCrash.set(win.id, { reason: details.reason, at: Date.now() })
+      const now = Date.now()
+      this._lastRenderCrash.set(win.id, { reason: details.reason, at: now })
+      // Only crashes inside the window count — an app left running for days with an
+      // occasional crash is not storming, and locking it out of auto-recovery would
+      // leave the next lone crash stuck behind a dialog.
+      const recentCrashes = (this._crashTimes.get(win.id) ?? []).filter(
+        (at) => now - at < CRASH_STORM_WINDOW_MS,
+      )
+      recentCrashes.push(now)
+      this._crashTimes.set(win.id, recentCrashes)
       roleRegistration?.dispose()
       roleRegistration = undefined
       const line = `render-process-gone id=${win.id} reason=${details.reason} exitCode=${details.exitCode ?? 'n/a'}`
@@ -317,6 +353,22 @@ export class WindowMainService implements IWindowMainService {
       if (this._crashHandled.has(win.id)) return
       this._crashHandled.add(win.id)
       if (win.isDestroyed()) return
+      const storming = recentCrashes.length >= CRASH_STORM_THRESHOLD
+      // One action per crash, whichever arrives first — the dialog answer or the
+      // auto-reload deadline. Without this, a user who clicks at the 20s mark would
+      // both reload and close.
+      let settled = false
+      let reloadTimer: ReturnType<typeof setTimeout> | undefined
+      if (!storming) {
+        reloadTimer = setTimeout(() => {
+          reloadTimer = undefined
+          if (settled || win.isDestroyed()) return
+          settled = true
+          this._crashHandled.delete(win.id)
+          logger.warn(`crash reload id=${win.id} reason=dialog-timeout`)
+          win.reload()
+        }, CRASH_RELOAD_TIMEOUT_MS)
+      }
       void dialog
         .showMessageBox(win, {
           type: 'error',
@@ -325,14 +377,23 @@ export class WindowMainService implements IWindowMainService {
           cancelId: 1,
           title: localize('crash.title', 'The editor window has crashed'),
           message: localize('crash.title', 'The editor window has crashed'),
-          detail: localize(
-            'crash.detail',
-            'The renderer process exited unexpectedly ({reason}). Reloading restores the window; any ongoing tasks may have been interrupted.',
-            { reason: details.reason },
-          ),
+          detail: storming
+            ? localize(
+                'crash.detail.storm',
+                'The renderer process exited unexpectedly ({reason}), {count} times in the last few minutes. Reloading automatically is paused — the window will not recover on its own until you choose.',
+                { reason: details.reason, count: recentCrashes.length },
+              )
+            : localize(
+                'crash.detail',
+                'The renderer process exited unexpectedly ({reason}). Reloading restores the window; any ongoing tasks may have been interrupted.',
+                { reason: details.reason },
+              ),
         })
         .then((result) => {
           this._crashHandled.delete(win.id)
+          if (reloadTimer !== undefined) clearTimeout(reloadTimer)
+          if (settled) return
+          settled = true
           if (win.isDestroyed()) return
           if (result.response === 0) {
             logger.info(`crash reload id=${win.id}`)
@@ -343,8 +404,24 @@ export class WindowMainService implements IWindowMainService {
             win.close()
           }
         })
-        .catch(() => {
+        .catch((err: unknown) => {
           this._crashHandled.delete(win.id)
+          if (reloadTimer !== undefined) clearTimeout(reloadTimer)
+          if (settled || win.isDestroyed()) return
+          settled = true
+          // A storm is exactly the case where reloading re-runs the restore work that
+          // keeps killing the renderer, so a dialog that failed to open must not become
+          // a back door into that loop. The black window is the lesser evil here: the
+          // abnormal-exit counter offers "skip restore" on the next start.
+          if (storming) {
+            logger.error(`crash dialog failed during a storm id=${win.id} err=${String(err)}`)
+            return
+          }
+          // Otherwise the dialog failed (a destroyed window, typically), so no answer is
+          // coming and no deadline is armed — recover directly rather than leave the
+          // black window in place.
+          logger.warn(`crash reload id=${win.id} reason=dialog-error err=${String(err)}`)
+          win.reload()
         })
     })
 
@@ -466,6 +543,7 @@ export class WindowMainService implements IWindowMainService {
       this._allowClose.delete(win.id)
       this._crashHandled.delete(win.id)
       this._lastRenderCrash.delete(win.id)
+      this._crashTimes.delete(win.id)
       // The top window fell to the fallback chain; let pending consumers re-check.
       if (this._lastFocusedWindowId === win.id) {
         this._lastFocusedWindowId = undefined

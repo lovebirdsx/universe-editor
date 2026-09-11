@@ -57,11 +57,24 @@ export interface AcpChatViewState {
   contentExpandedKeys?: readonly string[]
 }
 
+/**
+ * Sessions whose scroll state is kept. A state carries the virtualizer's per-slot
+ * measurement array, which grows with the timeline, so an entry is not free even though
+ * the value looks like UI trivia.
+ */
+const MAX_VIEW_STATES = 16
+
 class AcpChatViewStateCacheImpl {
   private readonly _map = new Map<string, AcpChatViewState>()
 
   save(sessionId: string, state: AcpChatViewState): void {
+    this._map.delete(sessionId)
     this._map.set(sessionId, state)
+    while (this._map.size > MAX_VIEW_STATES) {
+      const oldest = this._map.keys().next()
+      if (oldest.done) break
+      this._map.delete(oldest.value)
+    }
   }
 
   load(sessionId: string): AcpChatViewState | undefined {
