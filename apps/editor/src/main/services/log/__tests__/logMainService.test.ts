@@ -327,14 +327,14 @@ describe('LogMainService', () => {
     expect(content).toContain(exact)
   })
 
-  it('drops from the head when the write queue exceeds the 16MB byte budget', async () => {
-    const svc = new LogMainService()
+  it('drops from the head when the write queue exceeds the byte budget', async () => {
+    const svc = new LogMainService({ maxBufferBytes: 64 * 1024 })
     const logger = svc.createLogger({ id: 'bytecap', name: 'ByteCap' })
-    // 300 x ~64KB lines ≈ 19MB — over the 16MB queue byte budget but far under
+    // 200 x ~1KB lines ≈ 200KB — over the 64KB queue byte budget but far under
     // the 10000-line cap, so only the byte budget can be responsible for drops.
     // The enqueue loop is synchronous, so no debounced flush can drain mid-way.
-    const big = 'z'.repeat(64 * 1024)
-    for (let i = 0; i < 300; i++) {
+    const big = 'z'.repeat(1024)
+    for (let i = 0; i < 200; i++) {
       logger.info(`flood-${i} ${big}`)
     }
 
@@ -342,15 +342,27 @@ describe('LogMainService', () => {
       _writeQueue: Array<{ line: string }>
       _queuedBytes: number
     }
-    expect(inner._queuedBytes).toBeLessThanOrEqual(16 * 1024 * 1024)
+    // Well under the ~200KB enqueued: the budget held. Not pinned to exactly
+    // 64KB — the drop marker is appended after the check, so it nudges the
+    // total back over by a line's worth.
+    expect(inner._queuedBytes).toBeLessThan(128 * 1024)
 
     logger.flush()
     const logFile = join(tmpDir, 'logs', svc.getSessionId(), 'bytecap.log')
-    const content = await waitForFileContains(logFile, 'dropped')
-    expect(content).toMatch(/dropped \d+ buffered log entries, \d+ bytes/)
+    // Wait for the newest line, not the drop marker: markers are scattered
+    // through the queue, so polling for one can catch a half-written file that
+    // already has a marker but not yet the lines queued behind it.
+    const content = await waitForFileContains(logFile, 'flood-199 ')
+    // Assert over booleans rather than `content` itself: the file is MB-scale in
+    // production-sized runs, and a failing diff that big takes GitHub Actions
+    // minutes to write out — enough to blow the job's timeout.
+    expect(
+      /dropped \d+ buffered log entries, \d+ bytes/.test(content),
+      'drop marker should report dropped lines and bytes',
+    ).toBe(true)
     // The oldest lines were sacrificed; the newest survived.
-    expect(content).not.toContain('flood-0 ')
-    expect(content).toContain('flood-299 ')
+    expect(content.includes('flood-0 '), 'the oldest line should have been dropped').toBe(false)
+    expect(content.includes('flood-199 '), 'the newest line should have survived').toBe(true)
   })
 
   it('normal log volume stays below the byte budget and drops nothing', async () => {

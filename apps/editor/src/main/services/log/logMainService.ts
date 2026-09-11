@@ -106,6 +106,7 @@ class FileLogger extends AbstractLogger {
     maxLevel: LogLevel,
     windowId: number | undefined,
   ) => void
+  private readonly _maxBufferBytes: number
   private _writeQueue: Array<{ readonly level: LogLevel; readonly line: string }> = []
   private _queuedBytes = 0
   private _pendingFlush: ReturnType<typeof setTimeout> | null = null
@@ -128,6 +129,7 @@ class FileLogger extends AbstractLogger {
       windowId: number | undefined,
     ) => void,
     windowId: number | undefined,
+    maxBufferBytes: number,
   ) {
     super(level)
     // Renderer-originated channels are written under window-<id>/ so each
@@ -137,6 +139,7 @@ class FileLogger extends AbstractLogger {
     this._channelId = channelId
     this._windowId = windowId
     this._onChunk = onChunk
+    this._maxBufferBytes = maxBufferBytes
     this._logPath = join(this._sessionDir, `${channelId}.log`)
   }
 
@@ -168,10 +171,10 @@ class FileLogger extends AbstractLogger {
       }
       this._pushDropMarker(`dropped ${dropped} buffered log entries`)
     }
-    if (this._queuedBytes > MAX_BUFFER_BYTES) {
+    if (this._queuedBytes > this._maxBufferBytes) {
       let droppedLines = 0
       let droppedBytes = 0
-      while (this._queuedBytes > MAX_BUFFER_BYTES) {
+      while (this._queuedBytes > this._maxBufferBytes) {
         const head = this._writeQueue.shift()
         if (!head) break
         this._queuedBytes -= head.line.length
@@ -290,6 +293,15 @@ class FileLogger extends AbstractLogger {
 // LogFilesMainService — broader than ILoggerService, so it gets its own id.
 export const ILogMainService = createDecorator<LogMainService>('logMainService')
 
+/**
+ * Production leaves these at the module defaults. Tests inject a small
+ * `maxBufferBytes` to exercise drop-from-head without materialising a 16MB
+ * payload — slow on CI, and long enough to let a poller read a half-written file.
+ */
+export interface LogMainServiceOptions {
+  maxBufferBytes?: number
+}
+
 export class LogMainService implements ILoggerService {
   declare readonly _serviceBrand: undefined
 
@@ -297,6 +309,7 @@ export class LogMainService implements ILoggerService {
   private readonly _sessionId: string
   private readonly _sessionDir: string
   private readonly _sessionStartedAt: string
+  private readonly _maxBufferBytes: number
   private _level: LogLevel = LogLevel.Info
   private _timestampFormat: string = LOG_TIMESTAMP_FORMAT_DEFAULT
   private readonly _loggers = new Map<string, FileLogger>()
@@ -304,8 +317,9 @@ export class LogMainService implements ILoggerService {
   private readonly _onDidAppendEntry = new Emitter<LogAppendEvent>()
   readonly onDidAppendEntry: Event<LogAppendEvent> = this._onDidAppendEntry.event
 
-  constructor() {
+  constructor(options: LogMainServiceOptions = {}) {
     this._logDir = join(app.getPath('userData'), 'logs')
+    this._maxBufferBytes = options.maxBufferBytes ?? MAX_BUFFER_BYTES
     const now = new Date()
     this._sessionId = formatSessionId(now)
     this._sessionDir = join(this._logDir, this._sessionId)
@@ -345,7 +359,14 @@ export class LogMainService implements ILoggerService {
     const key = windowId === undefined ? channelId : `${windowId}:${channelId}`
     let logger = this._loggers.get(key)
     if (!logger) {
-      logger = new FileLogger(this._sessionDir, channelId, this._level, this._fireAppend, windowId)
+      logger = new FileLogger(
+        this._sessionDir,
+        channelId,
+        this._level,
+        this._fireAppend,
+        windowId,
+        this._maxBufferBytes,
+      )
       logger.setTimestampFormat(this._timestampFormat)
       this._loggers.set(key, logger)
     }
