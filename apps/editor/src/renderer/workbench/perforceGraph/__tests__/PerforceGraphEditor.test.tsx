@@ -7,7 +7,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import {
   Event,
   ICommandService,
@@ -24,6 +24,7 @@ import {
   type P4GraphChangeDetailsDto,
   type P4GraphLoadResult,
   type P4GraphRepoDto,
+  type P4GraphSyncScopeDto,
 } from '@universe-editor/extensions-common'
 import { IScmService } from '../../../services/extensions/ScmService.js'
 import {
@@ -43,7 +44,13 @@ import { PerforceGraphEditor } from '../PerforceGraphEditor.js'
 
 const REPO: P4GraphRepoDto = { root: 'C:/ws/main', name: 'alice-ws' }
 
-function makeResult(pendingCount = 0): P4GraphLoadResult {
+/** Candidates `getSyncScopes` answers with (drives the "Get Revision…" dialog). */
+const SYNC_SCOPES: readonly P4GraphSyncScopeDto[] = [
+  { name: 'assets', path: 'X:/p4ws/main/assets' },
+  { name: 'src', path: 'X:/p4ws/main/src' },
+]
+
+function makeResult(pendingCount = 0, haveChange: string | null = null): P4GraphLoadResult {
   return {
     changes: [
       {
@@ -69,6 +76,7 @@ function makeResult(pendingCount = 0): P4GraphLoadResult {
     headClient: 'alice-ws',
     moreAvailable: false,
     pendingCount,
+    haveChange,
   }
 }
 
@@ -92,17 +100,19 @@ function makeDetails(): P4GraphChangeDetailsDto {
   }
 }
 
-function makeCommandService(): ICommandService {
+function makeCommandService(haveChange: string | null = null): ICommandService {
   return {
     _serviceBrand: undefined,
     executeCommand: vi.fn(async (id: string) => {
       switch (id) {
         case PerforceGraphCommands.getChanges:
-          return makeResult()
+          return makeResult(0, haveChange)
         case PerforceGraphCommands.getRepos:
           return [REPO]
         case PerforceGraphCommands.getChangeDetails:
           return makeDetails()
+        case PerforceGraphCommands.getSyncScopes:
+          return SYNC_SCOPES
         default:
           return undefined
       }
@@ -149,8 +159,8 @@ function makeViewServices(services: ServiceCollection): {
   return { openViewContainer, setViewCollapsed }
 }
 
-function renderEditor() {
-  const commandService = makeCommandService()
+function renderEditor(haveChange: string | null = null, input?: PerforceGraphEditorInput) {
+  const commandService = makeCommandService(haveChange)
   const storageService = makeStorageService()
   const services = new ServiceCollection()
   services.set(ICommandService, commandService)
@@ -160,10 +170,15 @@ function renderEditor() {
   const instantiation = new InstantiationService(services)
   const utils = render(
     <ServicesContext.Provider value={instantiation}>
-      <PerforceGraphEditor input={{} as never} />
+      <PerforceGraphEditor input={input ?? ({} as never)} />
     </ServicesContext.Provider>,
   )
   return { commandService, storageService, ...viewServices, ...utils }
+}
+
+/** Unscoped render plus a graph scope on the input — the scoped tab's shape. */
+function renderScopedEditor(paths: readonly GraphScopePath[]) {
+  return renderEditor(null, new PerforceGraphEditorInput(normalizeGraphScopeSelection(paths)))
 }
 
 async function flush(): Promise<void> {
@@ -656,6 +671,7 @@ describe('PerforceGraphEditor merged (multi-select) history', () => {
       headClient: null,
       moreAvailable: false,
       pendingCount: 0,
+      haveChange: null,
       error: 'multiClient',
     }
     renderMerged(multiClient)
@@ -770,4 +786,162 @@ describe('PerforceGraphEditor merged (multi-select) history', () => {
     expect(first.files.map((f) => f.path)).toEqual(['depot/branch_x/a.txt'])
     expect(second.files.map((f) => f.path)).toEqual(['depot/branch_x/lib/x.ts'])
   })
+})
+
+describe('PerforceGraphEditor sync badge', () => {
+  const TOOLTIP =
+    'The newest changelist synced to this workspace. Changes newer than this row are not synced yet.'
+
+  it('badges only the row holding the workspace have point', async () => {
+    const { container } = renderEditor('4519')
+    await flush()
+
+    const synced = container.querySelector('[data-id="4519"]') as HTMLElement
+    const newer = container.querySelector('[data-id="4521"]') as HTMLElement
+    expect(within(synced).getByText('Synced')).toBeTruthy()
+    expect(within(newer).queryByText('Synced')).toBeNull()
+  })
+
+  it('explains the badge in its tooltip', async () => {
+    const { container } = renderEditor('4519')
+    await flush()
+
+    const badge = within(container.querySelector('[data-id="4519"]') as HTMLElement).getByText(
+      'Synced',
+    )
+    expect(badge.getAttribute('data-tooltip')).toBe(TOOLTIP)
+  })
+
+  it('summarises the sync point in the toolbar', async () => {
+    renderEditor('4519')
+    await flush()
+
+    expect(screen.getByText(/Synced to #4519/)).toBeTruthy()
+  })
+
+  it('shows no badge when the sync point is unknown', async () => {
+    renderEditor(null)
+    await flush()
+
+    expect(screen.queryByText('Synced')).toBeNull()
+  })
+
+  it('keeps the toolbar line, and drops the badge, for a paged-out sync point', async () => {
+    // 4400 is older than the loaded page: the marker is never paged in for (the
+    // badge only labels a rendered row), so the toolbar line is the one signal
+    // that survives.
+    const { container } = renderEditor('4400')
+    await flush()
+
+    expect(container.querySelectorAll('[data-id]').length).toBe(2)
+    expect(screen.queryByText('Synced')).toBeNull()
+    expect(screen.getByText(/Synced to #4400/)).toBeTruthy()
+  })
+})
+
+describe('PerforceGraphEditor re-reads after a get', () => {
+  function openChangeMenu(container: HTMLElement): void {
+    fireEvent.contextMenu(container.querySelector('[data-id="4521"]')!)
+  }
+
+  const SCOPED = [{ path: 'X:/p4ws/main', isDirectory: true }] as const
+
+  /**
+   * Every entry point that issues a get must re-read the graph itself: a `p4 sync`
+   * advances have revisions without touching `p4 opened`, so the SCM observable the
+   * auto-refresh rides on may never emit, and the sync badge keeps naming the old
+   * row. Each case asserts the get reached the extension AND that a second
+   * `getChanges` followed — the 5 payloads differ but share the one helper.
+   */
+  const CASES: readonly {
+    name: string
+    render: () => { commandService: ICommandService; container: HTMLElement }
+    /** Picks the menu entry (or triggers the dialog). */
+    act: (container: HTMLElement) => void
+    /** Follow-up that needs the previous flush to have settled (dialog opened). */
+    confirm?: () => void
+    command: string
+    args: readonly unknown[]
+  }[] = [
+    {
+      name: 'whole-repo Get This Revision',
+      render: () => renderEditor(),
+      act: (c) => {
+        openChangeMenu(c)
+        fireEvent.click(screen.getByText('Get This Revision'))
+      },
+      command: PerforceGraphCommands.syncToChange,
+      args: [expect.objectContaining({ change: '4521', wholeRepo: false })],
+    },
+    {
+      name: 'scoped Get This Revision',
+      render: () => renderScopedEditor(SCOPED),
+      act: (c) => {
+        openChangeMenu(c)
+        fireEvent.click(screen.getByText('Get This Revision'))
+      },
+      command: PerforceGraphCommands.syncToChange,
+      args: [expect.objectContaining({ change: '4521', scopePaths: SCOPED })],
+    },
+    {
+      name: 'scoped Get Latest Revision',
+      render: () => renderScopedEditor(SCOPED),
+      act: (c) => {
+        openChangeMenu(c)
+        fireEvent.click(screen.getByText('Get Latest Revision'))
+      },
+      command: 'perforce.syncLatest',
+      args: [
+        expect.objectContaining({ resourceUri: 'X:/p4ws/main', isDirectory: true }),
+        expect.anything(),
+      ],
+    },
+    {
+      name: 'Force Get from the change menu',
+      render: () => renderEditor(),
+      act: (c) => {
+        openChangeMenu(c)
+        fireEvent.click(screen.getByText('Force Get (Overwrite Local Files)'))
+      },
+      command: PerforceGraphCommands.syncToChange,
+      args: [expect.objectContaining({ change: '4521', force: true })],
+    },
+    {
+      name: 'Get Revision… dialog confirm',
+      render: () => renderEditor(),
+      act: (c) => {
+        openChangeMenu(c)
+        fireEvent.click(screen.getByText('Get Revision…'))
+      },
+      // The dialog's confirm button is the go-ahead; candidates come preselected.
+      confirm: () => {
+        const dialog = screen.getByTestId('perforceGraph-syncDialog')
+        fireEvent.click(within(dialog).getByText(/^Get Revision \(/))
+      },
+      command: PerforceGraphCommands.syncToChange,
+      args: [expect.objectContaining({ change: '4521', confirmed: true })],
+    },
+  ]
+
+  for (const testCase of CASES) {
+    it(`revalidates the graph once "${testCase.name}" resolves`, async () => {
+      const { commandService, container } = testCase.render()
+      await flush()
+      const getChangesCalls = (): number =>
+        (commandService.executeCommand as ReturnType<typeof vi.fn>).mock.calls.filter(
+          (c) => c[0] === PerforceGraphCommands.getChanges,
+        ).length
+      expect(getChangesCalls()).toBe(1)
+
+      testCase.act(container)
+      await flush()
+      if (testCase.confirm) {
+        testCase.confirm()
+        await flush()
+      }
+
+      expect(commandService.executeCommand).toHaveBeenCalledWith(testCase.command, ...testCase.args)
+      expect(getChangesCalls()).toBe(2)
+    })
+  }
 })

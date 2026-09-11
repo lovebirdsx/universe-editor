@@ -49,6 +49,13 @@ export interface SeedFile {
    *  `content` stays the have revision at #1. */
   readonly headRev?: number
   readonly headContent?: string
+  /** The revision the workspace has synced when it is not #1 (or 0 = never
+   *  synced, which leaves the client's have list empty). Defaults to 1 under
+   *  `headRev`, i.e. the pre-existing "seeded content is the have revision"
+   *  shape. */
+  readonly haveRev?: number
+  /** Content of the {@link haveRev} revision; defaults to `content`. */
+  readonly haveContent?: string
   /** Per-revision historical contents, keyed by revision number. Read by the
    *  fake when printing or syncing a specific sub-head revision — without it,
    *  every sub-head revision falls back to the head content. */
@@ -187,14 +194,19 @@ function seedWorkspace(
         ? {
             rev: seed.headRev,
             content: seed.headContent ?? seed.content,
-            haveRev: 1,
-            haveContent: seed.content,
+            haveRev: seed.haveRev ?? 1,
+            haveContent: seed.haveContent ?? seed.content,
             ...(seed.revisions ? { revisions: seed.revisions } : {}),
             ...faults,
           }
         : {
             rev: 1,
             content: seed.content,
+            // Only when a spec asks for it: absent, the entry keeps its old shape
+            // (head == have == #1) and every existing seed is unaffected.
+            ...(seed.haveRev !== undefined
+              ? { haveRev: seed.haveRev, haveContent: seed.haveContent ?? seed.content }
+              : {}),
             ...(seed.revisions ? { revisions: seed.revisions } : {}),
             ...faults,
           }

@@ -153,11 +153,17 @@ function ColumnResizer({ onResize }: { onResize: (deltaX: number) => void }) {
 const ChangeRow = memo(function ChangeRow({
   change,
   selected,
+  isHave,
   onRowClick,
   onChangeMenu,
 }: {
   change: P4GraphChangeDto
   selected: boolean
+  /** This row is the workspace's local sync point (see
+   *  `P4GraphLoadResult.haveChange`). A bare boolean, not the id or the whole
+   *  result: the memo above only earns its keep if the prop is stable for rows
+   *  the badge doesn't move between. */
+  isHave: boolean
   onRowClick: (id: string, e: MouseEvent) => void
   onChangeMenu: (change: P4GraphChangeDto, e: MouseEvent) => void
 }) {
@@ -171,6 +177,22 @@ const ChangeRow = memo(function ChangeRow({
     >
       <span className={styles['graphSpacer']} />
       <span className={styles['description']}>
+        {isHave && (
+          // Sits where Git Graph puts a branch badge — left of the message, right
+          // of the lane. Reuses the shared badge styles; `.badge` alone is only
+          // the ellipsis base, so the `.badgeTag` modifier supplies the pill.
+          <span className={styles['refs']}>
+            <span
+              className={`${styles['badge']} ${styles['badgeTag']}`}
+              data-tooltip={localize(
+                'perforceGraph.haveBadge.tooltip',
+                'The newest changelist synced to this workspace. Changes newer than this row are not synced yet.',
+              )}
+            >
+              {localize('perforceGraph.haveBadge', 'Synced')}
+            </span>
+          </span>
+        )}
         <span className={styles['message']} data-tooltip={change.body || change.message}>
           {change.message}
         </span>
@@ -549,6 +571,24 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
       })
   }, [commands, loadErrorFor])
 
+  // A get started from the graph (row menu, force-get, the scope dialog) must
+  // revalidate itself: a plain get rewrites have revisions without touching
+  // `p4 opened`, so the SCM observable that drives the auto-refresh may never
+  // emit and the sync badge would stay on the old row. Unconditional on the
+  // outcome — a cancelled sync still left files on disk, and re-reading a
+  // "nothing to do" get is free (the stale entries are behind the cache TTL).
+  const getThenRevalidate = useCallback(
+    (id: string, ...args: unknown[]): void => {
+      void Promise.resolve(commands.executeCommand(id, ...args))
+        .catch(() => {
+          // The sync path reports its own failures; this only keeps the chain
+          // from ending in an unhandled rejection.
+        })
+        .then(() => revalidate())
+    },
+    [commands, revalidate],
+  )
+
   useEffect(() => {
     const start = (): (() => void) | undefined => {
       if (view.result) {
@@ -755,7 +795,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
         danger: true,
         label: localize('perforceGraph.forceGet', 'Force Get (Overwrite Local Files)'),
         run: () =>
-          void commands.executeCommand(PerforceGraphCommands.syncToChange, {
+          getThenRevalidate(PerforceGraphCommands.syncToChange, {
             ...payload,
             force: true,
           }),
@@ -816,7 +856,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
             icon: 'cloud-download',
             label: localize('perforceGraph.getThisRevision', 'Get This Revision'),
             run: () =>
-              void commands.executeCommand(PerforceGraphCommands.syncToChange, {
+              getThenRevalidate(PerforceGraphCommands.syncToChange, {
                 change: id,
                 scopePaths: paths.map((p) => ({ path: p.path, isDirectory: p.isDirectory })),
                 isLatest: id === result?.head,
@@ -834,7 +874,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
                 resourceUri: p.path,
                 isDirectory: p.isDirectory,
               }))
-              void commands.executeCommand('perforce.syncLatest', selectionArgs[0], selectionArgs)
+              getThenRevalidate('perforce.syncLatest', selectionArgs[0], selectionArgs)
             },
           },
           { kind: 'sep' },
@@ -855,7 +895,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
             icon: 'cloud-download',
             label: localize('perforceGraph.getThisRevision', 'Get This Revision'),
             run: () =>
-              void commands.executeCommand(PerforceGraphCommands.syncToChange, {
+              getThenRevalidate(PerforceGraphCommands.syncToChange, {
                 change: id,
                 wholeRepo,
                 isLatest: id === result?.head,
@@ -896,7 +936,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
         contextTag: 'changelist',
       })
     },
-    [commands, openScopedFileDiff, scope, wholeRepo, result, setSyncDialog],
+    [commands, openScopedFileDiff, scope, wholeRepo, result, setSyncDialog, getThenRevalidate],
   )
 
   // Pending changes node, followed by the real changes.
@@ -945,6 +985,10 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
   }, [result, filteredChanges, deferredQuery])
 
   const graphWidth = layout?.width ?? GRID.offsetX * 2
+  // The row the badge lands on, or null when the sync point is unknown (nothing
+  // synced yet, or the probe failed). A PENDING_ID (`'*'`) can never equal a
+  // numeric changelist id, so the synthetic row needs no special case.
+  const haveChange = result?.haveChange ?? null
   // Filtering drops parents outside the result set, so the layout draws dangling
   // lines to nothing — carry no topology, just noise. Hide the lanes entirely.
   const isCompact = deferredQuery.trim() !== ''
@@ -1085,6 +1129,21 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
             {result.headClient
               ? localize('perforceGraph.onClient', ' · {client}', { client: result.headClient })
               : ''}
+            {result.haveChange && (
+              // The row badge only exists for a loaded row; this line is the one
+              // signal that survives the sync point being paged out, filtered
+              // away, or scrolled off.
+              <span
+                data-tooltip={localize(
+                  'perforceGraph.haveBadge.tooltip',
+                  'The newest changelist synced to this workspace. Changes newer than this row are not synced yet.',
+                )}
+              >
+                {localize('perforceGraph.syncedTo', ' · Synced to #{change}', {
+                  change: result.haveChange,
+                })}
+              </span>
+            )}
           </span>
         )}
         <span className={styles['toolbarSpacer']} />
@@ -1236,6 +1295,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
                   key={c.id}
                   change={c}
                   selected={selected.has(c.id)}
+                  isHave={c.id === haveChange}
                   onRowClick={onRowClick}
                   onChangeMenu={openChangeMenu}
                 />
@@ -1274,7 +1334,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
           onConfirm={(paths) => {
             const d = syncDialog
             setSyncDialog(null)
-            void commands.executeCommand(PerforceGraphCommands.syncToChange, {
+            getThenRevalidate(PerforceGraphCommands.syncToChange, {
               change: d.change,
               isLatest: d.isLatest,
               confirmed: true,

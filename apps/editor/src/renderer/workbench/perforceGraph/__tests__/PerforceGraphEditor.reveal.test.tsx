@@ -46,6 +46,7 @@ function resultWith(changes: P4GraphChangeDto[], moreAvailable: boolean): P4Grap
     headClient: 'alice-ws',
     moreAvailable,
     pendingCount: 0,
+    haveChange: null,
   }
 }
 

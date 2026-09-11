@@ -188,6 +188,21 @@ function contentAt(known, rev) {
   return known.content
 }
 
+/** True when a change is in the client's have list: some file it touched is
+ *  synced to at least the revision that change produced. `haveRev: 0` on a seed
+ *  models a file that was never synced, which makes the have list empty — the
+ *  state a fresh workspace starts in. */
+function changeInHaveList(state, id) {
+  const touched = state.submitted?.[String(id)]
+  if (!touched) return false
+  return Object.keys(touched).some((depotFile) => {
+    const known = state.files[depotFile]
+    if (!known) return false
+    const rev = Number(touched[depotFile].rev)
+    return Number.isFinite(rev) && rev <= Number(haveRevOf(known))
+  })
+}
+
 /** True when a depot file falls under the given `opened` filespecs (`//...`,
  *  `<dir>/...`, or explicit paths). No specs = whole client. */
 function openedInScope(state, scopes, depotFile) {
@@ -472,11 +487,20 @@ function main() {
       const status = argAfter(rest, '-s')
       // Every non-flag filespec, not just the first: merged (multi-select) history
       // passes N of them and real `p4 changes` answers their UNION.
-      const files = rest.filter((a, idx) => {
+      const raw = rest.filter((a, idx) => {
         if (a.startsWith('-')) return false
         const prev = rest[idx - 1]
         return prev !== '-s' && prev !== '-c' && prev !== '-m'
       })
+      // `<spec>@<client>` is p4's have-list revision specifier: it asks which
+      // changes are already synced here (the graph's sync badge). Strip the suffix
+      // BEFORE scoping — left on, it matches no file and every such query would
+      // answer "nothing synced".
+      const clientSuffix = `@${state.client}`
+      const haveScoped = raw.some((f) => f.endsWith(clientSuffix))
+      const files = raw.map((f) =>
+        f.endsWith(clientSuffix) ? f.slice(0, -clientSuffix.length) : f,
+      )
       if (status === 'submitted' || files.length > 0) {
         const max = argAfter(rest, '-m')
         const entries = Object.entries(state.changeMeta ?? {})
@@ -497,7 +521,8 @@ function main() {
                 )
               })
             : entries
-        const limited = max !== undefined ? scoped.slice(0, Number(max)) : scoped
+        const listed = haveScoped ? scoped.filter(({ id }) => changeInHaveList(state, id)) : scoped
+        const limited = max !== undefined ? listed.slice(0, Number(max)) : listed
         emit(
           limited.map(({ id, m }) => ({
             change: String(id),

@@ -114,6 +114,7 @@ import { buildNewChangeSpec, replaceDescription, parseDescription } from './chan
 import { parseAnnotate, buildBlameResult, type P4BlameResult } from './blameSource.js'
 import {
   parseChangesList,
+  parseLatestChangeId,
   dedupeChangesNewestFirst,
   parseChangeDescribe,
   parseWhereLocalPaths,
@@ -390,6 +391,16 @@ const CHECK_IGNORE_TIMEOUT_MS = 20_000
  *  files can legitimately outrun the tight interactive budget, but must still die
  *  before it wedges the gate. */
 const CHECK_BEHIND_TIMEOUT_MS = 20_000
+
+/**
+ * Budget for the graph's have-point probe (`p4 changes -m 1 <spec>@<client>`).
+ * Interactive priority — it decides a first-screen badge, and a background slot
+ * would make its arrival unpredictable — but a far tighter clock than
+ * {@link INTERACTIVE_EXEC}: it is auxiliary information riding in the same
+ * `Promise.all` as the history list, so a slow server may cost the first screen
+ * this budget and no more. A healthy `changes -m 1` is an indexed lookup.
+ */
+const HAVE_CHANGE_EXEC: P4ExecOptions = { priority: 'interactive', timeoutMs: 5_000 }
 
 /**
  * Default ceiling for one directory batch of the background reconcile scan
@@ -5536,6 +5547,78 @@ export class PerforceClient {
     return json === undefined
       ? null
       : (JSON.parse(json) as { changes: GraphChangeMeta[]; moreAvailable: boolean })
+  }
+
+  /**
+   * The newest submitted change that is already in this workspace's have list for
+   * `scopes` — the graph's "local sync point". Reads `@<clientName>`, p4's
+   * have-list revision specifier, so a get done outside the editor (P4V, the CLI)
+   * counts too.
+   *
+   * `scopes` must be the SAME filespecs the caller listed with: the renderer
+   * badges the row whose id comes back, and a differently scoped probe can name a
+   * change the list does not contain (badge silently never shows).
+   *
+   * Returns null whenever the answer cannot be established — nothing synced for
+   * the scope yet, or the query failed/timed out — because the badge is an
+   * enhancement riding alongside the listing: it must never surface an error nor
+   * hold up the history.
+   */
+  async getGraphHaveChange(scopes: readonly string[]): Promise<string | null> {
+    // A bare `@` means nothing, and the suffix position is the only place a
+    // client name may appear (see below) — so refuse rather than emit one.
+    if (this._clientName.length === 0) return null
+    // No filespec means no place to hang `@<client>`, so the command would
+    // degrade to a depot-global `-m 1` — the newest change anywhere, which is
+    // the opposite of a have point. Worse, it would answer successfully and thus
+    // cache. Callers shouldn't produce an empty list (a selection that scopes to
+    // nothing takes the whole-repo branch upstream), so this is a floor, not a
+    // case to handle gracefully.
+    if (scopes.length === 0) return null
+    // Sorted key, same reason as `getGraphChanges`: the caller's selection order
+    // must not fan the same probe into several cache entries. No `maxChanges`
+    // component — this is always `-m 1`.
+    const key = [...scopes].sort().join('\n')
+    try {
+      const json = await this._cache.wrap(P4CacheNs.haveChange, key, async () => {
+        // The client name is appended AFTER escaping: `escapeFilespecPath` turns a
+        // literal `@` in a path into `%40`, so the suffix can only be added here
+        // (same rule as `buildForceGetFilespecs`'s `#rev`). The name itself needs
+        // no escaping — p4 restricts client names to `[A-Za-z0-9_.-]`, none of
+        // which are filespec metacharacters; escaping it would corrupt a `%`.
+        const specs = scopes.map((s) => `${s}@${this._clientName}`)
+        const res = await this._p4.execRecords(
+          ['changes', '-s', 'submitted', '-m', '1', ...specs],
+          HAVE_CHANGE_EXEC,
+        )
+        if (res.result.exitCode !== 0) {
+          const stderr = res.result.stderr.trim()
+          this._log?.(
+            `[perforce] graph have point query failed (exit ${res.result.exitCode})${
+              stderr ? `: ${stderr.slice(0, 200)}` : ''
+            }; no sync badge`,
+          )
+          // undefined = "don't cache": a failure must be retried, not remembered.
+          return undefined
+        }
+        // An empty answer IS an answer ("nothing synced for this scope"), so it
+        // caches: otherwise every revalidate pays a doomed round trip.
+        const id = parseLatestChangeId(res.records)
+        this._log?.(
+          `[perforce] graph have point: ${id ? `#${id}` : 'none'} (${scopes.length} filespec(s))`,
+        )
+        return JSON.stringify({ id })
+      })
+      return json === undefined ? null : (JSON.parse(json) as { id: string | null }).id
+    } catch (err) {
+      // `P4Service` only rejects when the spawn itself fails (p4 missing). This
+      // runs inside the graph load's `Promise.all`, where a throw would take the
+      // whole listing down with it.
+      this._log?.(
+        `[perforce] graph have point skipped: ${err instanceof Error ? err.message : String(err)}`,
+      )
+      return null
+    }
   }
 
   /** Count files currently open in the workspace (the synthetic pending node),

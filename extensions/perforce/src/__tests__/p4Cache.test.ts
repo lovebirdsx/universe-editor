@@ -12,6 +12,31 @@ function fakeClock(): { now: () => number; advance: (ms: number) => void } {
   return { now: () => t, advance: (ms) => (t += ms) }
 }
 
+/** True when a freshly filled `ns` entry has expired after advancing `ms`. */
+async function expiredAfter(ns: string, ms: number): Promise<boolean> {
+  const clock = fakeClock()
+  const cache = new P4Cache(clock.now)
+  registerP4CacheNamespaces(cache, 4000)
+  let fetches = 0
+  const read = (): Promise<string | undefined> => cache.wrap(ns, 'k', async () => `v${++fetches}`)
+  await read()
+  clock.advance(ms)
+  await read()
+  return fetches === 2
+}
+
+/** The smallest advance (ms) at which `ns` refetches, by bisection. */
+async function expiryBoundary(ns: string): Promise<number> {
+  let lo = 0
+  let hi = 600_000
+  while (lo + 1 < hi) {
+    const mid = Math.floor((lo + hi) / 2)
+    if (await expiredAfter(ns, mid)) hi = mid
+    else lo = mid
+  }
+  return hi
+}
+
 /** In-memory disk backend spy. */
 function fakeDisk(): P4CacheDiskBackend & { store: Map<string, string>; reads: number } {
   const store = new Map<string, string>()
@@ -263,6 +288,33 @@ describe('registerP4CacheNamespaces', () => {
     for (const ns of Object.values(P4CacheNs)) {
       await expect(cache.wrap(ns, 'k', async () => 'v')).resolves.toBe('v')
     }
+  })
+
+  it('lets a workspace invalidation drop the graph have point (it moves on sync)', async () => {
+    // A successful `p4 sync` calls `invalidateWorkspace()`; the badge's probe
+    // must be re-read after it, exactly like the history listing it labels.
+    const cache = new P4Cache()
+    registerP4CacheNamespaces(cache, 4000)
+    let fetches = 0
+    const read = () => cache.wrap(P4CacheNs.haveChange, 'k', async () => `#${++fetches}`)
+    expect(await read()).toBe('#1')
+    expect(await read()).toBe('#1')
+    cache.invalidateWorkspace()
+    expect(await read()).toBe('#2')
+  })
+
+  it('expires the have point exactly when the listing it labels expires', async () => {
+    // Same TTL as `changesSubmitted` is a red line, not a detail: they are filled
+    // by the same load and must age together, or the badge annotates a listing it
+    // no longer matches. Asserted as an equality of boundaries so any future edit
+    // to one of the two numbers fails here.
+    const boundary = await expiryBoundary(P4CacheNs.changesSubmitted)
+    // Guards the search ceiling: a TTL raised past it would make the bisection
+    // return a boundary that is not one, and the two assertions below would then
+    // compare nothing meaningful.
+    expect(boundary).toBeLessThan(600_000)
+    expect(await expiredAfter(P4CacheNs.haveChange, boundary)).toBe(true)
+    expect(await expiredAfter(P4CacheNs.haveChange, boundary - 1)).toBe(false)
   })
 })
 

@@ -64,6 +64,20 @@ export function parseChangesList(records: readonly Record<string, unknown>[]): G
 }
 
 /**
+ * The changelist id of `p4 changes -m 1 …` — the single newest record — or null
+ * when the query returned nothing (nothing synced for the scope yet). Scans past
+ * a record without a `change` field rather than trusting the first one, the same
+ * tolerance {@link parseChangesList} has.
+ */
+export function parseLatestChangeId(records: readonly Record<string, unknown>[]): string | null {
+  for (const record of records) {
+    const id = asString(record['change'])
+    if (id) return id
+  }
+  return null
+}
+
+/**
  * Collapse a merged (multi-filespec) listing: one changelist can be reported
  * once per filespec it touched. Keeps the first occurrence of each id and
  * re-sorts newest-first by numeric changelist so the single-lane parent chain

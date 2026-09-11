@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   parseChangesList,
   parseChangeDescribe,
+  parseLatestChangeId,
   statusFromAction,
   fileDiffRevs,
   parseWhereLocalPaths,
@@ -45,6 +46,24 @@ describe('parseChangesList', () => {
   it('skips records without a change id and defaults empty fields', () => {
     const changes = parseChangesList([{ user: 'x' }, { change: '7' }])
     expect(changes).toEqual([{ id: '7', author: '', client: '', date: 0, message: '', body: '' }])
+  })
+})
+
+describe('parseLatestChangeId', () => {
+  it('returns the first change id', () => {
+    expect(parseLatestChangeId([{ change: '4521', user: 'alice' }])).toBe('4521')
+  })
+
+  it('returns null for an empty record set (nothing ever synced)', () => {
+    expect(parseLatestChangeId([])).toBeNull()
+  })
+
+  it('scans past a record without a change id', () => {
+    expect(parseLatestChangeId([{ user: 'x' }, { change: '7' }])).toBe('7')
+  })
+
+  it('takes the newest of several records, not the last', () => {
+    expect(parseLatestChangeId([{ change: '4521' }, { change: '4519' }])).toBe('4521')
   })
 })
 

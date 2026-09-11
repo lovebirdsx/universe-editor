@@ -342,6 +342,12 @@ export const P4CacheNs = {
   opened: 'opened',
   /** `changes -s submitted -m N //...` — the graph history list (grows). */
   changesSubmitted: 'changesSubmitted',
+  /** `changes -s submitted -m 1 <filespec…>@<client>` — the newest change in the
+   *  workspace's have list for the graph's scope (the "local sync point" the
+   *  graph badges). Moves on `p4 sync`, hence TTL — and deliberately the same TTL
+   *  as {@link changesSubmitted}: the two are read in one graph load, so they must
+   *  age out together or the badge would label a list it no longer matches. */
+  haveChange: 'haveChange',
   /** `describe -S -s <pendingCL>` — mutable because a shelf can be replaced. */
   shelvedDescribe: 'shelvedDescribe',
   /** `describe -S -s <archiveShelfCL>` — immutable: an archive shelf is a
@@ -384,6 +390,10 @@ export function registerP4CacheNamespaces(cache: P4Cache, workspaceTtlMs: number
   cache.register(P4CacheNs.shelvedDescribe, { kind: 'ttl', ttlMs: workspaceTtlMs })
   cache.register(P4CacheNs.archiveDescribe, { kind: 'immutable', persist: false })
   cache.register(P4CacheNs.changesSubmitted, {
+    kind: 'ttl',
+    ttlMs: Math.max(workspaceTtlMs, 20_000),
+  })
+  cache.register(P4CacheNs.haveChange, {
     kind: 'ttl',
     ttlMs: Math.max(workspaceTtlMs, 20_000),
   })

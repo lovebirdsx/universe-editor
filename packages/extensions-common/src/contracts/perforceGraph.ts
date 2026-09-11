@@ -73,6 +73,15 @@ export interface P4GraphLoadResult {
   /** Number of files currently open in the workspace (the synthetic "pending" node). */
   pendingCount: number
   /**
+   * Newest submitted change that is already in the workspace's have list for this
+   * scope — the "local sync point" the graph badges. Read from
+   * `p4 changes -s submitted -m 1 <filespec…>@<clientName>`, so a sync done
+   * outside the editor (P4V, the CLI) moves it too. Null when it cannot be
+   * determined (nothing ever synced, or the query failed) — the renderer then
+   * shows no badge.
+   */
+  haveChange: string | null
+  /**
    * Root of the client this result was read from. The renderer echoes it back on
    * `getChangeDetails` / `openFileDiff` so those reads land on the same client —
    * a scoped graph resolves its client by path (`resolveContaining`), which need

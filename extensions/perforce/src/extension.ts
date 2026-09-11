@@ -2237,6 +2237,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
                 headClient: null,
                 moreAvailable: false,
                 pendingCount: 0,
+                haveChange: null,
                 error: 'multiClient',
               } satisfies P4GraphLoadResult
             }
@@ -2253,9 +2254,15 @@ export async function activate(context: ExtensionContext): Promise<void> {
           }
           if (!target) return null
 
-          const [listing, pendingCount] = await Promise.all([
+          // The have-point probe takes the very same `scopes` array the listing
+          // used — not a rebuilt one. The renderer badges the row whose id comes
+          // back, so a differently scoped probe (a re-built filespec, the other
+          // side of the wholeRepo branch) can name a change this list does not
+          // contain, and the badge would silently never show.
+          const [listing, pendingCount, haveChange] = await Promise.all([
             target.getGraphChanges(max, scopes),
             target.getPendingCount(pendingScopes),
+            target.getGraphHaveChange(scopes),
           ])
           if (!listing) return null
           const { moreAvailable } = listing
@@ -2278,6 +2285,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
             headClient: target.clientName,
             moreAvailable,
             pendingCount,
+            haveChange,
             clientRoot: target.root,
           } satisfies P4GraphLoadResult
         }),
