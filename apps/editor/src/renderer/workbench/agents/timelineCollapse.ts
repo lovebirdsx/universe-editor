@@ -3,11 +3,12 @@
  *  Collapse resolution for timeline cards — shared by ChatBody (top-level slots)
  *  and ToolCallCard (nested sub-agent cards) so a single override store keyed by
  *  (possibly composite) sticky keys drives folding everywhere: chevron clicks,
- *  Alt+F, the sticky-scroll overlay, and persistence.
+ *  Alt+F, the sticky-scroll overlay, outline reveals, and persistence.
  *--------------------------------------------------------------------------------------------*/
 
 import type { CollapseMode } from '../../services/acp/session/acpChatViewStateCache.js'
 import type { AcpChildItem, TimelineItem } from '../../services/acp/session/acpSession.js'
+import { findByStickyKey } from './stickyScroll.js'
 import { createdFilePath } from './toolCallDisplay.js'
 
 export interface CollapseState {
@@ -55,4 +56,67 @@ export function nextCollapseMode(mode: CollapseMode): CollapseMode {
     case 'expanded':
       return 'default'
   }
+}
+
+/**
+ * Resolve every ancestor of a composite key (`t:task/t:sub/m:sm2` → `t:task`,
+ * `t:task/t:sub`), outermost first, each paired with the item it resolves to.
+ * `undefined` when any segment on the way is missing — the key is stale, so the
+ * whole chain (including the target) is gone. The shared walk behind every
+ * reveal: a folded card does not mount its body, so nothing under it exists in
+ * the DOM.
+ */
+function resolveAncestors(
+  timeline: readonly TimelineItem[],
+  key: string,
+): { key: string; item: TimelineItem | AcpChildItem }[] | undefined {
+  const segments = key.split('/')
+  const ancestors: { key: string; item: TimelineItem | AcpChildItem }[] = []
+  let prefix = segments[0] ?? key
+  for (let i = 0; i < segments.length - 1; i++) {
+    if (i > 0) prefix = `${prefix}/${segments[i]}`
+    const item = findByStickyKey(timeline, prefix)
+    if (!item) return undefined
+    ancestors.push({ key: prefix, item })
+  }
+  return ancestors
+}
+
+/**
+ * The ancestors of a composite key that are currently folded, outermost first —
+ * exactly the cards blocking a reveal of `key`. Empty when every ancestor is
+ * already expanded, and when `key` resolves to nothing (a stale key reveals no
+ * target, so the caller must not touch the fold state). Multi-level paths
+ * collect every folded ancestor, so one reveal unfolds the whole chain. The
+ * target itself is never included: a folded target still renders its own row.
+ */
+export function foldedAncestorKeys(
+  timeline: readonly TimelineItem[],
+  key: string,
+  state: CollapseState,
+): string[] {
+  if (!findByStickyKey(timeline, key)) return []
+  const ancestors = resolveAncestors(timeline, key) ?? []
+  return ancestors
+    .filter(({ key: prefix, item }) => resolveCollapsed(prefix, item, state))
+    .map(({ key: prefix }) => prefix)
+}
+
+/**
+ * Walk a composite key's ancestor chain and return the nearest still-visible
+ * key: the first folded ancestor (its header stays rendered) — or the key
+ * itself when every ancestor is expanded. Unresolvable segments (stale keys) are
+ * left untouched, so the caller keeps the key it had.
+ */
+export function visibleFocusKey(
+  timeline: readonly TimelineItem[],
+  key: string,
+  state: CollapseState,
+): string {
+  const ancestors = resolveAncestors(timeline, key)
+  if (!ancestors) return key
+  for (const { key: prefix, item } of ancestors) {
+    if (resolveCollapsed(prefix, item, state)) return prefix
+  }
+  return key
 }

@@ -2237,4 +2237,58 @@ describe('ChatBody — sub-agent keyboard navigation', () => {
     expect(container.querySelector('[data-testid="acp-subagent-timeline"]')).toBeNull()
     expect(slotEl(container, 't:task').className).toContain(focusedClass)
   })
+
+  // Repro for the reported outline bug: a folded card does not mount its body
+  // (CollapsibleSlot), so a nested target has no DOM node to land on — revealing
+  // it from the Outline silently left the card folded and the picked row hidden.
+  // The reveal must unfold every blocking ancestor on the way in, like clicking a
+  // symbol inside a folded region in a code editor.
+  it('expands folded ancestors when the outline reveals a nested item', () => {
+    const { container } = renderChatWithWidget(
+      makeSession('s-sub-reveal', navItems([childMessage('sm1', 'sub one')])),
+    )
+    expect(container.querySelector('[data-testid="acp-subagent-timeline"]')).toBeNull()
+
+    const controller = AcpSessionOutlineRegistry.get('s-sub-reveal')!
+    act(() => {
+      controller.scrollToKey('t:task/m:sm1')
+    })
+
+    expect(container.querySelector('[data-testid="acp-subagent-timeline"]')).not.toBeNull()
+    expect(stickyEl(container, 't:task/m:sm1').className).toContain(focusedClass)
+    expect(controller.getActiveKey()).toBe('t:task/m:sm1')
+  })
+
+  it('expands the whole ancestor chain of a deeply nested target', () => {
+    const nestedTask = {
+      kind: 'toolCall',
+      id: 'sub',
+      call: makeTaskCall('sub', [childMessage('sm2', 'deep one')]),
+    } as const
+    const { container } = renderChatWithWidget(
+      makeSession('s-sub-deep', navItems([childMessage('sm1', 'sub one'), nestedTask])),
+    )
+    expect(container.querySelector('[data-testid="acp-subagent-timeline"]')).toBeNull()
+
+    const controller = AcpSessionOutlineRegistry.get('s-sub-deep')!
+    act(() => {
+      controller.scrollToKey('t:task/t:sub/m:sm2')
+    })
+
+    expect(stickyEl(container, 't:task/m:sm1')).toBeTruthy()
+    expect(stickyEl(container, 't:task/t:sub/m:sm2').className).toContain(focusedClass)
+  })
+
+  // A stale key (the card is gone) must not expand anything on its way — there is
+  // no target to reveal, so the timeline's fold state stays as the user left it.
+  it('leaves the fold state alone when the revealed key is stale', () => {
+    const { container } = renderChatWithWidget(
+      makeSession('s-sub-stale', navItems([childMessage('sm1', 'sub one')])),
+    )
+    const controller = AcpSessionOutlineRegistry.get('s-sub-stale')!
+    act(() => {
+      controller.scrollToKey('t:gone/m:sm1')
+    })
+    expect(container.querySelector('[data-testid="acp-subagent-timeline"]')).toBeNull()
+  })
 })

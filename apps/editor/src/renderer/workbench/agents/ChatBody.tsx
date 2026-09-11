@@ -97,7 +97,12 @@ import {
   type IAcpSessionOutlineController,
 } from '../../services/acp/session/acpSessionOutlineRegistry.js'
 import { ISessionBookmarkService } from '../../services/acp/session/sessionBookmarkService.js'
-import { resolveCollapsed, type CollapseState } from './timelineCollapse.js'
+import {
+  foldedAncestorKeys,
+  resolveCollapsed,
+  visibleFocusKey,
+  type CollapseState,
+} from './timelineCollapse.js'
 import { ContentExpansionProvider, type ContentExpansionStore } from './chatContentExpansion.js'
 import { estimateWrappedLinesUpTo } from './contentOverflow.js'
 import { shouldAdjustTimelineScrollOnSizeChange } from './timelineVirtualScroll.js'
@@ -1197,8 +1202,19 @@ function ChatScroll({
     const controller: IAcpSessionOutlineController = {
       timeline: session.timeline,
       // Clicking an outline row selects the matching session item (so its
-      // highlight and the outline's stay in lockstep), then scrolls it in.
+      // highlight and the outline's stay in lockstep), then scrolls it in. A
+      // folded card does not mount its body, so a nested target has no DOM to land
+      // on — unfold its blocking ancestors first (the outline equivalent of
+      // clicking a symbol inside a folded region in a code editor).
       scrollToKey: (key) => {
+        const folded = foldedAncestorKeys(timelineRef.current, key, collapseRef.current)
+        if (folded.length > 0) {
+          setOverrides((prev) => {
+            const next = new Map(prev)
+            for (const ancestor of folded) next.set(ancestor, false)
+            return next
+          })
+        }
         setFocusedKey(key)
         focusedKeyRef.current = key
         persist()
@@ -2036,26 +2052,6 @@ function collectChildKeys(timeline: readonly TimelineItem[], parentKey: string):
 // `t:p/m:c` → `t:p`; multi-level composites drop their last segment.
 function parentKeyOf(key: string): string {
   return key.slice(0, key.lastIndexOf('/'))
-}
-
-// Walk a composite key's ancestor chain and return the nearest still-visible
-// key: the first collapsed ancestor (its header stays rendered) — or the key
-// itself when every ancestor is expanded. Unresolvable segments (stale keys) are
-// left untouched; the move handler's stale fallback deals with those.
-function visibleFocusKey(
-  timeline: readonly TimelineItem[],
-  key: string,
-  collapse: CollapseState,
-): string {
-  const segments = key.split('/')
-  let prefix = segments[0] ?? key
-  for (let i = 0; i < segments.length - 1; i++) {
-    if (i > 0) prefix = `${prefix}/${segments[i]}`
-    const item = findByStickyKey(timeline, prefix)
-    if (!item) return key
-    if (resolveCollapsed(prefix, item, collapse)) return prefix
-  }
-  return key
 }
 
 // Deepest slot key under the pointer: sub-agent children carry only

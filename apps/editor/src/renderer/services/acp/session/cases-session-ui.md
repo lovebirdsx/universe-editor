@@ -21,3 +21,7 @@
 ## 卡片折叠有两层，别混
 
 ①**外层卡片折叠**（整个 message/tool_call slot 收起）走 `timelineCollapse.ts` 的 `overrides` + `session.collapseMode`，持久化进 `AcpChatViewStateCache.collapse`；②**内层内容折叠**（长用户消息过 `COLLAPSED_MAX_PX` 夹高 / execute 终端输出过高时的 "Expand/Collapse" 按钮）是叶子组件 `UserMessageItem`/`TerminalOutput` 的展开态。内层态历史上是组件本地 `useState`，切 session/切 tab/虚拟化滚屏（卸载重挂载）即丢——修法：`chatContentExpansion.tsx`（context store `{expandedKeys, toggle}`）由 `ChatBody` 提供并折进 `AcpChatViewStateCache.contentExpandedKeys` 持久化；叶子按稳定 `contentKey` 读写（用户消息 `msg:<slotKey>`、终端 `term:<stickyKey>`），无 store/key 时退回本地 state（如 `ToolCallList` 独立用法）。context 消费者随 store 变化自动重渲染，绕过 `TimelineSlot` 的 memo，无需改 memo。
+
+**从外部 reveal 一个（可能嵌套的）卡片前，必须先展开遮住它的祖先**：外层折叠的卡片由 `CollapsibleSlot` 只在 `!collapsed` 时渲染 body，子卡片根本没有 DOM，`querySelector('[data-sticky-key=…]')` 恒空、`scrollIntoView` 无从谈起。`timelineCollapse.ts` 的 `foldedAncestorKeys`（收集全部折叠祖先）与 `visibleFocusKey`（收敛到最近的折叠祖先）共用同一条祖先链遍历 `resolveAncestors`；`ChatBody.scrollToKey`（Outline Enter/点击、书签跳转的共同入口）先展开再滚。同族的 `moveLevel('in')` 早已内置"折叠就先展开，再按一次才进入"。**注意目标自身的折叠不展开**——折叠卡片仍渲染 header 行，reveal 落点就是那里。
+
+"折叠 → 无 DOM → reveal 无从落点"还有一个**未修的同类成因**：无可渲染内容的子消息 `SubMessage` 直接 `return null`（主 timeline 的 `TimelineSlot` 同理），而 `acpTimelineOutline` 仍按模型建符号——这类行在 Outline 里以 role 名兜底显示（如 `agent`），点击只能退化到父卡片。
