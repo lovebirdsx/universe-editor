@@ -6,17 +6,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   Emitter,
   Event,
-  LogLevel,
-  NullLogger,
   StorageScope,
   URI,
-  type ILogger,
-  type ILoggerService,
   type IStorageService,
   type IWorkspace,
   type IWorkspaceService,
 } from '@universe-editor/platform'
 import { McpServerEnablementService } from '../mcpServerEnablementService.js'
+import { StubLoggerService } from '../../../__tests__/_helpers/stubLoggerService.js'
 
 const STORAGE_KEY = 'acp.mcpServerEnablement'
 
@@ -67,17 +64,6 @@ class FakeWorkspaceService implements IWorkspaceService {
   async closeFolder(): Promise<void> {}
   async clearRecent(): Promise<void> {}
   async removeRecent(): Promise<void> {}
-}
-
-class StubLoggerService implements ILoggerService {
-  declare readonly _serviceBrand: undefined
-  createLogger(): ILogger {
-    return new NullLogger()
-  }
-  setLevel(): void {}
-  getLevel(): LogLevel {
-    return LogLevel.Info
-  }
 }
 
 function makeWorkspace(path = '/work'): IWorkspace {

@@ -26,17 +26,13 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   Emitter,
-  LogLevel,
   NoopTelemetryService,
-  NullLogger,
   observableValue,
   Severity,
   StorageScope,
   UriIdentityService,
 } from '@universe-editor/platform'
 import type {
-  ILogger,
-  ILoggerService,
   INotification,
   INotificationHandle,
   INotificationService,
@@ -86,6 +82,7 @@ import type { IAcpAgentRegistry } from '../../acpAgentRegistry.js'
 import { createInMemoryAcpPair } from '../../testing/inMemoryAcpPair.js'
 import type { IAcpSession } from '../acpSession.js'
 import { ISubProjectService, type SubProjectScope } from '../acpSubProjectService.js'
+import { StubLoggerService } from '../../../../__tests__/_helpers/stubLoggerService.js'
 
 const FAKE_URI_IDENTITY = new UriIdentityService('linux')
 
@@ -106,17 +103,6 @@ class FakeWorkspaceService implements IWorkspaceService {
   async closeFolder(): Promise<void> {}
   async clearRecent(): Promise<void> {}
   async removeRecent(): Promise<void> {}
-}
-
-class StubLoggerService implements ILoggerService {
-  declare readonly _serviceBrand: undefined
-  createLogger(): ILogger {
-    return new NullLogger()
-  }
-  setLevel(): void {}
-  getLevel(): LogLevel {
-    return LogLevel.Info
-  }
 }
 
 class StubNotificationService implements INotificationService {

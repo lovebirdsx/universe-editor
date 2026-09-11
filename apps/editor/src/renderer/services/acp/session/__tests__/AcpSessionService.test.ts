@@ -14,9 +14,7 @@ import {
   ConfigurationTarget,
   Emitter,
   Event,
-  LogLevel,
   NoopTelemetryService,
-  NullLogger,
   observableValue,
   Severity,
   StorageScope,
@@ -25,8 +23,6 @@ import {
 } from '@universe-editor/platform'
 import type {
   IConfigurationService,
-  ILogger,
-  ILoggerService,
   INotification,
   INotificationHandle,
   INotificationService,
@@ -109,6 +105,7 @@ import { stubLastSessionCwdServiceForTest } from './stubLastSessionCwdService.js
 import type { IAcpModelCandidateService } from '../../acpModelCandidateService.js'
 import { stubWindowsService } from './stubWindowsService.js'
 import type { IEnvironmentSnapshotService } from '../../../../../shared/ipc/environmentSnapshotService.js'
+import { StubLoggerService } from '../../../../__tests__/_helpers/stubLoggerService.js'
 
 class FakeAgentRegistry implements IAcpAgentRegistry {
   declare readonly _serviceBrand: undefined
@@ -189,17 +186,6 @@ class StubNotificationService implements INotificationService {
   toggleCenter(): void {}
   markAllAsRead(): void {}
   cancelProgress(): void {}
-}
-
-class StubLoggerService implements ILoggerService {
-  declare readonly _serviceBrand: undefined
-  createLogger(): ILogger {
-    return new NullLogger()
-  }
-  setLevel(): void {}
-  getLevel(): LogLevel {
-    return LogLevel.Info
-  }
 }
 
 class StubPermissionHandler implements IAcpPermissionHandler {

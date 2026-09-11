@@ -6,18 +6,15 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   Emitter,
   Event,
-  LogLevel,
   NoopTelemetryService,
-  NullLogger,
   StorageScope,
   URI,
-  type ILogger,
-  type ILoggerService,
   type IStorageService,
   type IWorkspace,
   type IWorkspaceService,
 } from '@universe-editor/platform'
 import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
+import { StubLoggerService } from '../../../../__tests__/_helpers/stubLoggerService.js'
 
 class FakeStorage implements IStorageService {
   declare readonly _serviceBrand: undefined
@@ -74,17 +71,6 @@ class FakeWorkspaceService implements IWorkspaceService {
 
 function makeFakeWorkspace(path: string): IWorkspace {
   return { folder: URI.file(path), name: path }
-}
-
-class StubLoggerService implements ILoggerService {
-  declare readonly _serviceBrand: undefined
-  createLogger(): ILogger {
-    return new NullLogger()
-  }
-  setLevel(): void {}
-  getLevel(): LogLevel {
-    return LogLevel.Info
-  }
 }
 
 interface MakeOptions {

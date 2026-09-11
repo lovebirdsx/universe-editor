@@ -6,8 +6,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   Event,
-  LogLevel,
-  NullLogger,
   URI,
   UriIdentityService,
   normalizeFsPath,
@@ -17,13 +15,12 @@ import {
   type IEditorService,
   type IFileService,
   type IFileStat,
-  type ILogger,
-  type ILoggerService,
   type IWorkspace,
   type IWorkspaceService,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../../../editor/FileEditorInput.js'
 import { AcpSubProjectService } from '../acpSubProjectService.js'
+import { StubLoggerService } from '../../../../__tests__/_helpers/stubLoggerService.js'
 
 function makeFakeWorkspace(path: string): IWorkspace {
   return { folder: URI.file(path), name: path }
@@ -71,17 +68,6 @@ function makeFileService(
     },
     stat,
   } as unknown as IFileService
-}
-
-class StubLoggerService implements ILoggerService {
-  declare readonly _serviceBrand: undefined
-  createLogger(): ILogger {
-    return new NullLogger()
-  }
-  setLevel(): void {}
-  getLevel(): LogLevel {
-    return LogLevel.Info
-  }
 }
 
 function makeEditorService(): {

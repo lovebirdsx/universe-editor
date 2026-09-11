@@ -12,9 +12,7 @@ import {
   Emitter,
   Event,
   LifecycleService,
-  LogLevel,
   NoopTelemetryService,
-  NullLogger,
   observableValue,
   UriIdentityService,
   type IDisposable,
@@ -22,8 +20,6 @@ import {
 import type {
   IConfigurationService,
   IFileService,
-  ILogger,
-  ILoggerService,
   INotification,
   INotificationHandle,
   INotificationService,
@@ -60,6 +56,7 @@ import type {
   TerminalOutputResponse,
   WaitForTerminalExitResponse,
 } from '@agentclientprotocol/sdk'
+import { StubLoggerService } from '../../../__tests__/_helpers/stubLoggerService.js'
 
 interface InMemoryAcpHostHarness extends IDisposable {
   readonly host: IAcpHostService
@@ -257,17 +254,6 @@ class StubNotificationService implements INotificationService {
   clearAll(): void {}
   toggleCenter(): void {}
   markAllAsRead(): void {}
-}
-
-class StubLoggerService implements ILoggerService {
-  declare readonly _serviceBrand: undefined
-  createLogger(): ILogger {
-    return new NullLogger()
-  }
-  setLevel(): void {}
-  getLevel(): LogLevel {
-    return LogLevel.Info
-  }
 }
 
 interface FakeTerminalService extends IAcpTerminalService {

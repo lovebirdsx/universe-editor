@@ -6,16 +6,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   Emitter,
-  LogLevel,
-  NullLogger,
   URI,
   observableValue,
   type ICommandService,
   type IFileChangeEvent,
   type IFileService,
   type IFileWatcherService,
-  type ILogger,
-  type ILoggerService,
   type IObservable,
   type IUriIdentityService,
 } from '@universe-editor/platform'
@@ -29,17 +25,7 @@ import { type IAcpSessionService } from '../../services/acp/session/acpSessionSe
 import { type IAcpSession } from '../../services/acp/session/acpSessionModel.js'
 import { type IScmService } from '../../services/extensions/ScmService.js'
 import { noteSelfWrite, resetSelfWritesForTests } from '../../services/editor/selfWriteRegistry.js'
-
-class StubLoggerService implements ILoggerService {
-  declare readonly _serviceBrand: undefined
-  createLogger(): ILogger {
-    return new NullLogger()
-  }
-  setLevel(): void {}
-  getLevel(): LogLevel {
-    return LogLevel.Info
-  }
-}
+import { StubLoggerService } from '../../__tests__/_helpers/stubLoggerService.js'
 
 function makeWatcher(): { watcher: IFileWatcherService; emitter: Emitter<IFileChangeEvent[]> } {
   const emitter = new Emitter<IFileChangeEvent[]>()

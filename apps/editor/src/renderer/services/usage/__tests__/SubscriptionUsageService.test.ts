@@ -11,12 +11,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   Emitter,
-  LogLevel,
-  NullLogger,
   observableValue,
   StorageScope,
-  type ILogger,
-  type ILoggerService,
   type IConfigurationChangeEvent,
   type IConfigurationService,
   type IStorageService,
@@ -24,6 +20,7 @@ import {
 import { SubscriptionUsageService } from '../SubscriptionUsageService.js'
 import { ACP_EXT_METHODS } from '../../acp/session/acpExtMethods.js'
 import type { IAcpSession, IAcpSessionService } from '../../acp/session/acpSessionService.js'
+import { StubLoggerService } from '../../../__tests__/_helpers/stubLoggerService.js'
 
 const STORAGE_KEY = 'acp.subscriptionUsage'
 
@@ -53,17 +50,6 @@ class FakeConfiguration implements Partial<IConfigurationService> {
   readonly onDidChangeConfiguration = this._onDidChange.event
   get<T>(key: string): T | undefined {
     return this.values.get(key) as T | undefined
-  }
-}
-
-class StubLoggerService implements ILoggerService {
-  declare readonly _serviceBrand: undefined
-  createLogger(): ILogger {
-    return new NullLogger()
-  }
-  setLevel(): void {}
-  getLevel(): LogLevel {
-    return LogLevel.Info
   }
 }
 

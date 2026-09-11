@@ -18,36 +18,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   Emitter,
-  LogLevel,
-  NullLogger,
   type AiAccountUsage,
   type Event,
   type IAiModelService,
   type IConfigurationChangeEvent,
   type IConfigurationService,
-  type ILogger,
-  type ILoggerService,
 } from '@universe-editor/platform'
 import { USAGE_TTL_MS } from '../../../../shared/ai/aiRemoteTtls.js'
 import { AccountUsageService } from '../AccountUsageService.js'
 import type { IAcpSessionProviderContext } from '../../acp/session/acpSessionProviderContext.js'
+import { StubLoggerService } from '../../../__tests__/_helpers/stubLoggerService.js'
 
 const REFRESH_INTERVAL_KEY = 'ai.accountUsage.refreshIntervalMs'
 const FETCHED_AT = 1_700_000_000_000
 
 function usage(kind: AiAccountUsage['kind'] = 'balance'): AiAccountUsage {
   return { kind, remainingUSD: 12.5, fetchedAt: FETCHED_AT }
-}
-
-class StubLoggerService implements ILoggerService {
-  declare readonly _serviceBrand: undefined
-  createLogger(): ILogger {
-    return new NullLogger()
-  }
-  setLevel(): void {}
-  getLevel(): LogLevel {
-    return LogLevel.Info
-  }
 }
 
 class FakeConfiguration implements Partial<IConfigurationService> {

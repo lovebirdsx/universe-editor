@@ -15,9 +15,7 @@ import {
   InstantiationService,
   IUriIdentityService,
   IWorkspaceService,
-  LogLevel,
   NoopTelemetryService,
-  NullLogger,
   ServiceCollection,
   StorageScope,
   observableValue,
@@ -29,8 +27,6 @@ import {
   type IEditorGroupsService,
   type IEditorService,
   type IInstantiationService,
-  type ILogger,
-  type ILoggerService,
   type IObservable,
   type IStorageService,
 } from '@universe-editor/platform'
@@ -46,6 +42,7 @@ import {
   type AcpSessionHistoryEntry,
   type IAcpSessionHistoryService as IAcpSessionHistoryServiceType,
 } from '../acpSessionHistory.js'
+import { StubLoggerService } from '../../../../__tests__/_helpers/stubLoggerService.js'
 
 class FakeStorage implements IStorageService {
   declare readonly _serviceBrand: undefined
@@ -59,17 +56,6 @@ class FakeStorage implements IStorageService {
   }
   async remove(key: string): Promise<void> {
     this.store.delete(key)
-  }
-}
-
-class StubLoggerService implements ILoggerService {
-  declare readonly _serviceBrand: undefined
-  createLogger(): ILogger {
-    return new NullLogger()
-  }
-  setLevel(): void {}
-  getLevel(): LogLevel {
-    return LogLevel.Info
   }
 }
 

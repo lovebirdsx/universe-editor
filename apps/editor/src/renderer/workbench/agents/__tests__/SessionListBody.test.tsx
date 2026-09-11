@@ -14,9 +14,7 @@ import {
   Event,
   InstantiationService,
   ServiceCollection,
-  LogLevel,
   NoopTelemetryService,
-  NullLogger,
   REMOTE_SCHEME,
   StorageScope,
   URI,
@@ -29,8 +27,6 @@ import {
   IStorageService,
   IUriIdentityService,
   IWorkspaceService,
-  type ILogger,
-  type ILoggerService,
   type ISettableObservable,
   type IStorageService as IStorageServiceType,
   type IWorkspace as IWorkspaceType,
@@ -58,6 +54,7 @@ import {
 } from '../../../services/acp/acpAgentRegistry.js'
 import { SessionListBody } from '../SessionListBody.js'
 import { ServicesContext } from '../../useService.js'
+import { StubLoggerService } from '../../../__tests__/_helpers/stubLoggerService.js'
 
 afterEach(() => cleanup())
 
@@ -80,17 +77,6 @@ class FakeStorage implements IStorageServiceType {
   }
   async remove(key: string, scope: StorageScope = StorageScope.GLOBAL): Promise<void> {
     this.buckets.get(scope)!.delete(key)
-  }
-}
-
-class StubLoggerService implements ILoggerService {
-  declare readonly _serviceBrand: undefined
-  createLogger(): ILogger {
-    return new NullLogger()
-  }
-  setLevel(): void {}
-  getLevel(): LogLevel {
-    return LogLevel.Info
   }
 }
 

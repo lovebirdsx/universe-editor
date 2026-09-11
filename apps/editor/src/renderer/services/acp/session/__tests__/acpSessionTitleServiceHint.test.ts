@@ -11,8 +11,6 @@ import {
   AiError,
   AiErrorCode,
   Event,
-  LogLevel,
-  NullLogger,
   Severity,
   StorageScope,
   observableValue,
@@ -21,8 +19,6 @@ import type {
   AiModelMetadata,
   IAiModelService,
   ICommandService,
-  ILogger,
-  ILoggerService,
   INotification,
   INotificationHandle,
   INotificationService,
@@ -31,6 +27,7 @@ import type {
   IStorageService,
 } from '@universe-editor/platform'
 import { AcpSessionTitleService } from '../acpSessionTitleService.js'
+import { StubLoggerService } from '../../../../__tests__/_helpers/stubLoggerService.js'
 
 const NO_MODEL_HINT_KEY = 'acp.sessionTitle.noModelHintShown'
 const OUTPUT_LIMIT_HINT_KEY = 'acp.sessionTitle.outputLimitHintShown'
@@ -92,17 +89,6 @@ class StubNotificationService implements INotificationService {
   clearAll(): void {}
   toggleCenter(): void {}
   markAllAsRead(): void {}
-}
-
-class StubLoggerService implements ILoggerService {
-  declare readonly _serviceBrand: undefined
-  createLogger(): ILogger {
-    return new NullLogger()
-  }
-  setLevel(): void {}
-  getLevel(): LogLevel {
-    return LogLevel.Info
-  }
 }
 
 function stubAiModel(options: {

@@ -11,12 +11,8 @@ import {
   ConfigurationService,
   ConfigurationTarget,
   Event,
-  LogLevel,
-  NullLogger,
   StorageScope,
   UriIdentityService,
-  type ILogger,
-  type ILoggerService,
   type IStorageService,
 } from '@universe-editor/platform'
 import type {
@@ -28,6 +24,7 @@ import {
   LEGACY_MCP_BRIDGE_CLEANED_KEY,
   LegacyMcpBridgeCleanupContribution,
 } from '../LegacyMcpBridgeCleanupContribution.js'
+import { StubLoggerService } from '../../__tests__/_helpers/stubLoggerService.js'
 
 const EXEC_PATH = 'C:\\App\\Universe Editor.exe'
 const URI_IDENTITY = new UriIdentityService('win32')
@@ -50,17 +47,6 @@ class FakeStorage implements IStorageService {
   }
   async remove(key: string): Promise<void> {
     this.store.delete(key)
-  }
-}
-
-class StubLoggerService implements ILoggerService {
-  declare readonly _serviceBrand: undefined
-  createLogger(): ILogger {
-    return new NullLogger()
-  }
-  setLevel(): void {}
-  getLevel(): LogLevel {
-    return LogLevel.Info
   }
 }
 

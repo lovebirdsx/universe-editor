@@ -14,38 +14,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   Emitter,
   NoopTelemetryService,
-  NullLogger,
   REMOTE_SCHEME,
   StorageScope,
   URI,
   UriIdentityService,
 } from '@universe-editor/platform'
-import type {
-  ILogger,
-  ILoggerService,
-  IStorageService,
-  IWorkspace,
-  IWorkspaceService,
-  LogLevel,
-} from '@universe-editor/platform'
+import type { IStorageService, IWorkspace, IWorkspaceService } from '@universe-editor/platform'
 import {
   AcpLastSessionCwdService,
   IAcpLastSessionCwdService,
   rememberedCwdForWindow,
 } from '../acpLastSessionCwdService.js'
+import { StubLoggerService } from '../../../../__tests__/_helpers/stubLoggerService.js'
 
 const URI_IDENTITY = new UriIdentityService('linux')
-
-class StubLoggerService implements ILoggerService {
-  declare readonly _serviceBrand: undefined
-  createLogger(): ILogger {
-    return new NullLogger()
-  }
-  setLevel(): void {}
-  getLevel(): LogLevel {
-    return 1 as LogLevel
-  }
-}
 
 /**
  * Workspace-swap capable storage: `store` is the currently active bucket.

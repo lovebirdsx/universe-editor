@@ -5,14 +5,10 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   Event,
-  LogLevel,
-  NullLogger,
   type AiModelPricing,
   type AiProviderEntry,
   type AiRemoteSourceSpec,
   type IAiModelService,
-  type ILogger,
-  type ILoggerService,
 } from '@universe-editor/platform'
 import {
   AcpSessionProviderContext,
@@ -23,6 +19,7 @@ import type { IAiRateMirror } from '../../../ai/aiRateMirror.js'
 import type { IClaudeConfigService } from '../../../../../shared/ipc/claudeConfigService.js'
 import type { ICodexConfigService } from '../../../../../shared/ipc/codexConfigService.js'
 import type { IExchangeRateService } from '../../../../../shared/ipc/services.js'
+import { StubLoggerService } from '../../../../__tests__/_helpers/stubLoggerService.js'
 
 const GATEWAY_PRICING: AiModelPricing = { input: 3, output: 4 }
 
@@ -98,17 +95,6 @@ describe('priceSessionModel', () => {
 
 const CLAUDE = 'claude-code'
 const CODEX = 'codex'
-
-class StubLoggerService implements ILoggerService {
-  declare readonly _serviceBrand: undefined
-  createLogger(): ILogger {
-    return new NullLogger()
-  }
-  setLevel(): void {}
-  getLevel(): LogLevel {
-    return LogLevel.Info
-  }
-}
 
 const PROVIDER_ENTRIES: readonly AiProviderEntry[] = [
   {

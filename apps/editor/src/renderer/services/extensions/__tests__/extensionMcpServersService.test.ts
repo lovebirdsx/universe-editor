@@ -12,11 +12,7 @@ import {
   ConfigurationTarget,
   Emitter,
   Event,
-  LogLevel,
-  NullLogger,
   URI,
-  type ILogger,
-  type ILoggerService,
   type IWorkspaceTrustManagementService,
 } from '@universe-editor/platform'
 import type { IExtensionDescriptionDto } from '@universe-editor/extensions-common'
@@ -25,17 +21,7 @@ import type {
   IEnvironmentSnapshotService,
 } from '../../../../shared/ipc/environmentSnapshotService.js'
 import { ExtensionMcpServersService } from '../extensionMcpServersService.js'
-
-class StubLoggerService implements ILoggerService {
-  declare readonly _serviceBrand: undefined
-  createLogger(): ILogger {
-    return new NullLogger()
-  }
-  setLevel(): void {}
-  getLevel(): LogLevel {
-    return LogLevel.Info
-  }
-}
+import { StubLoggerService } from '../../../__tests__/_helpers/stubLoggerService.js'
 
 class FakeTrustService implements IWorkspaceTrustManagementService {
   declare readonly _serviceBrand: undefined

@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it, vi } from 'vitest'
-import { NoopTelemetryService, type ILoggerService } from '@universe-editor/platform'
+import { NoopTelemetryService } from '@universe-editor/platform'
 import {
   MEMORY_SAMPLE_INTERVAL_MS,
   MEMORY_SAMPLE_INTERVAL_PRESSURED_MS,
@@ -11,29 +11,15 @@ import {
 } from '../memoryPressureService.js'
 import { MemoryPressureLevel } from '../memoryPressureLevels.js'
 import type { MemorySample } from '../memoryPressureLevels.js'
+import { StubLoggerService } from '../../../__tests__/_helpers/stubLoggerService.js'
 
 const GIB = 1024 * 1024 * 1024
-
-function makeLogger(): ILoggerService {
-  return {
-    level: 0,
-    onDidChangeLogLevel: () => ({ dispose: () => {} }),
-    setLevel: () => {},
-    trace: () => {},
-    debug: () => {},
-    info: () => {},
-    warn: () => {},
-    error: () => {},
-    flush: () => {},
-    dispose: () => {},
-  } as unknown as ILoggerService
-}
 
 /** A sampler the test drives by hand, plus the timer queue it schedules onto. */
 function harness() {
   let sample: MemorySample | undefined = { used: 0, limit: 4 * GIB }
   const timers: { run: () => void; ms: number }[] = []
-  const service = new MemoryPressureService(makeLogger(), new NoopTelemetryService(), {
+  const service = new MemoryPressureService(new StubLoggerService(), new NoopTelemetryService(), {
     readSample: () => sample,
     setTimer: (run, ms) => {
       const handle = { run, ms }

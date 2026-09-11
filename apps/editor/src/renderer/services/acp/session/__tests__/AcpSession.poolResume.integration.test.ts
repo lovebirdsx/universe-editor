@@ -20,9 +20,7 @@ import {
   Emitter,
   Event,
   LifecycleService,
-  LogLevel,
   NoopTelemetryService,
-  NullLogger,
   observableValue,
   StorageScope,
   UriIdentityService,
@@ -30,8 +28,6 @@ import {
 import type {
   IConfigurationService,
   IFileService,
-  ILogger,
-  ILoggerService,
   INotification,
   INotificationHandle,
   INotificationService,
@@ -95,6 +91,7 @@ import { stubAcpModelCandidateService } from './stubAcpModelCandidateService.js'
 import { stubSubProjectService } from './stubSubProjectService.js'
 import { stubLastSessionCwdServiceForTest } from './stubLastSessionCwdService.js'
 import { stubWindowsService } from './stubWindowsService.js'
+import { StubLoggerService } from '../../../../__tests__/_helpers/stubLoggerService.js'
 
 const FAKE_URI_IDENTITY = new UriIdentityService('linux')
 
@@ -292,17 +289,6 @@ class StubNotificationService implements INotificationService {
   clearAll(): void {}
   toggleCenter(): void {}
   markAllAsRead(): void {}
-}
-
-class StubLoggerService implements ILoggerService {
-  declare readonly _serviceBrand: undefined
-  createLogger(): ILogger {
-    return new NullLogger()
-  }
-  setLevel(): void {}
-  getLevel(): LogLevel {
-    return LogLevel.Info
-  }
 }
 
 class StubProgressService implements IProgressService {

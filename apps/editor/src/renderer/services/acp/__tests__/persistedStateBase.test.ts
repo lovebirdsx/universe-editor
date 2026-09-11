@@ -6,18 +6,15 @@ import { describe, expect, it } from 'vitest'
 import {
   Emitter,
   Event,
-  LogLevel,
   NoopTelemetryService,
-  NullLogger,
   StorageScope,
   URI,
-  type ILogger,
-  type ILoggerService,
   type IStorageService,
   type IWorkspace,
   type IWorkspaceService,
 } from '@universe-editor/platform'
 import { PersistedStateBase } from '../persistedStateBase.js'
+import { StubLoggerService } from '../../../__tests__/_helpers/stubLoggerService.js'
 
 class FakeStorage implements IStorageService {
   declare readonly _serviceBrand: undefined
@@ -56,17 +53,6 @@ class FakeWorkspaceService implements IWorkspaceService {
   async closeFolder(): Promise<void> {}
   async clearRecent(): Promise<void> {}
   async removeRecent(): Promise<void> {}
-}
-
-class StubLoggerService implements ILoggerService {
-  declare readonly _serviceBrand: undefined
-  createLogger(): ILogger {
-    return new NullLogger()
-  }
-  setLevel(): void {}
-  getLevel(): LogLevel {
-    return LogLevel.Info
-  }
 }
 
 class TestState extends PersistedStateBase<{ entries: string[] }> {
