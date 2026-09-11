@@ -34,7 +34,9 @@
   - 超限的 **event** 只能丢弃，但留下记录。
   - 挂死 promise 在 UI 上表现为"卡住不动"，比报错难查得多。
 - **崩溃前帧记录**：64 槽预分配环形缓冲（不用 `push/shift`，避免在最不该分配时分配）+ 4 个抗驱逐的持久标量（共见帧数 / 警戒数 / 超限数 / 最大帧及其标签）。突发小帧会把 tail 挤掉，而"本进程发出过的最大帧"恰是崩溃后最想问的问题。
-- **告警折叠**：同一 `(direction, channel, name)` 1s 窗口内只上报一次并携带 `suppressed` 计数。
+- **成功发出的出站大帧也记录**（不只是被拒的）。只记拒绝会让 `ipc-frames.txt` 出现「`warned>=32MiB=0` 与 renderer 日志里 47.6MB 的入站帧同时存在」这种自相矛盾的读数——main 侧看不到自己发过的大帧，也就无法与 renderer 的 `ipc.log` 对上。热路径成本是一次 `byteLength >=` 整数比较（不取时间、不建对象）；**不允许**扩展成每帧记录。
+- **每帧带 `type` 与 `#id`**：`response` 帧在 wire 上**只有 `id`**（没有 `channel`），所以 `frameChannel`/`frameName` 对它恒为空。渲染侧不靠改协议解决，而是由**发起方**回答：`ChannelClient` 的 `_pendingRequests` 存下请求的 `channel`/`command`，一个 `frameTargetFor(msg)` 只对 `response` 做一次 Map 查找（零分配），`decodeInbound` 用它补全标签。于是告警从 `large inbound ipc frame 47.6MB` 变成 `… (response fileService.readFile #42)`，与 main 侧 ring 的 `#42` 对得上；解析不出也退化成 `(response #42)`，仍强于裸行。
+- **告警折叠**：同一 `(direction, channel, name)` 1s 窗口内只上报一次并携带 `suppressed` 计数。出站 warn 同样折叠（发送侧告警天然来自循环，一行一帧会把自己埋掉），折叠状态与 oversized 那份分开，避免互相重置窗口；入站 warn 维持**逐帧上报**。
 - **落点分进程注入**（platform 是纯 Node 包，不能碰 Electron）：renderer 在 `renderer/ipc/bootstrap.ts`，main 在 `main/index.ts`。renderer 侧只有 `ILogger`（`bindIpcFrameLog`，晚绑定——首个帧早于文件日志器存在），main 侧走 `mainLogger` + `errorSink.recordLocal`。`ITelemetryService` 不在这条链上，它只服务**内存水位**（见下文 `_snapshot`）。
 
 > renderer 的 `direction:'out'` 是它自己发的；**main 的 `direction:'out'` 才是 renderer 必须 decode 的那些帧**。renderer OOM 时来不及上报，所以 main 侧的 ring 才是权威答案——诊断包里的 `ipc-frames.txt` 就是它。
@@ -44,6 +46,9 @@
 - `memoryPressureLevels.ts`：纯函数阈值/迟滞。口径是**绝对字节为纲 + limit 比例为底**（`max(绝对值, 比例×limit)`），比例同时封顶；`limit < 512MB` 视为不可信，回落 4GB cage。迟滞 0.85 防贴阈值抖动。
 - `memoryPressureService.ts`：分级 `normal / elevated / critical`，超阈值按 priority 跑注册的 releaser。每个 releaser 容错、**必须返回真实释放字节**（否则归因日志不可读）。`critical` 时**先落诊断快照再释放**——释放前的状态才是现场。
 - 采样器用**自重排 `setTimeout`，绝不用 `requestIdleCallback`**：主线程被 GC 挤占时永远不会 idle，恰恰是最需要采样的时刻。正常 5s、受压 1s。
+- **堆曲线要送到 main 才能在崩溃后活下来**（`rendererHeapReporter.ts`）：renderer 是它自己 V8 堆的唯一观测者，而 `processMetrics.log` 由 main 写——不送出去，曲线就与它所描述的进程同生共死。上报走已有的 `IDiagnosticsService` 通道（不新开通道），**复用采样器自己的定时循环**（不另起 timer），节流 30s / 受压 5s，`_reportedAt` 初值 0 使**首个读数必上报**（启动两分钟就崩的场景正是 30s 节流会整段漏掉的）。上报是 fire-and-forget 且吞掉 rejection——它绝不能带走唯一的堆观测者。
+- **落盘格式**：`renderer-heap window=1 used=3200MB limit=4096MB usedPct=78.1 level=critical holders=acp:412MB,monaco:38MB(12)`，写进**与 `main-heap` 同一个** `processMetrics.log`（同一时间线）。main 侧 32 槽预分配 ring：平时是 16 分钟，受压后同一只 ring 变成 160 秒的密集崩溃前窗口。`level` 先过白名单正则再落日志（防换行注入），`used` 非有限/≤0 的样本**丢弃而不是写 0**——写 0 会读成"堆很健康"，正是最不该在出事报告上出现的结论。被丢的样本计入 `dropped=N`（0 时省略）：否则"从没有过曲线"和"每一条都被拒"是同一份文件，而这是两个相反的结论。
+- **`holders=` 是判定而非数值**：`acp` 取 `sharedResidentBudget.totalBytes()`（O(1)），`monaco` 取 `editor.getModels()` 的条数与 `getValueLength()` 之和。**若已知持有者之和远小于 `used`，结论就是"元凶不在已知持有者里"**，这直接把搜索范围推出嫌疑圈——比数值本身更有用。判据的方向性要注意：`monaco` 按每条线 2 字节（UTF-16 上界）**高估**，所以它单独就能把差值抹平，即这份判据偏保守（倾向于"嫌疑人已覆盖"）。窗口号由 `createWindowScopedDiagnostics` 在 main 侧盖章（照 `createWindowScopedErrorSink` 先例），renderer 伪造不了。
 - `boundedCache.ts`：通用 LRU + 条数上限 + 字节预算 + pin。**measure 函数同时用于准入与释放报告**——两个数字不一致的缓存会让内存日志谎报堆的去向。
 
 注册的 releaser（`MemoryPressureContribution`）：
@@ -70,8 +75,8 @@
 
 ## 诊断包里的相关文件
 
-- `ipc-frames.txt`：main 侧帧环形记录 + 统计 + 最大帧标签。
-- `memory.txt`：main 堆（`formatMainHeapSample`）+ 托管进程树内存（`hosted-processes cnt=… name#pid=…MB/…%`）。
+- `ipc-frames.txt`：main 侧帧环形记录 + 统计 + 最大帧标签。每行/标签形如 `out response fileService.readFile #42`；`#id` 是把它与 renderer 侧告警对上、再与那次请求对上三者的唯一把手。
+- `memory.txt`：main 堆（`formatMainHeapSample`）+ 托管进程树内存（`hosted-processes cnt=… name#pid=…MB/…%`）+ **renderer 堆曲线尾部 32 条**（`renderer-heap samples=32 (newest first)`，最新在前）。曲线进 zip 而不是只留在日志里，是因为日志尾部有 512KiB 截断，会恰好丢掉慢速爬升最早的那几条。
 - `sysinfo.md` / 日志尾部：renderer 侧的 `[memory] …` 行（水位变化时打印 `describe()` + 最近 12 帧）。
 - 详见 [error-diagnostics.md](error-diagnostics.md)。
 
@@ -81,8 +86,12 @@
 - **`VIEW_MODEL_OVERHEAD_FACTOR = 3` 系数不改**。它是记账单位，改成动态值会让同一卡片在 measure 与 release 拿到不同系数，账永远配不平。实测改由水位服务提供，职责分离。
 - **硬上限可能误伤合法大帧**（用户把 `acp.prompt.image.maxSizeMB` 调到 50 → 约 340MB 帧）。这是刻意取舍：该帧 decode 峰值约 1.2GB，本就会 OOM。回滚 = 改一个常量。
 - **同一份用户 prompt 可能被记两次**：本地 append 走 `_appendMessage` 的显式记账，agent 若把该消息回显成 `user_message_chunk`，`applyUpdate` 会再按 `estimateUpdateCost` 记一次。方向是保守的（提前 trim，不会漏记），且 `_releaseResidentDownTo` 在 `freed === 0` 时用 `_measureResidentBytes()` 重算兜底，账不会永久漂高。真要收口需要按 messageId 去重记账，改动面大于收益。
+- **`holders` 只覆盖已知持有者**：`acp` 与 `monaco` 之外的堆（`output` 通道、diff 缓存、webview、第三方库的字符串）不计。这不是缺陷而是判据的一半——"已知持有者之和 vs `used`"的差值本身就是结论。补 `output` 需要 `IOutputService` 暴露通道枚举，留作后续；崩溃栈落在 `OutputModelService._applyFlush ← ModelRawLineChanged` 的那份报告说明它值得补。上一条提到的高估方向同样作用于这个差值。
+- **32 槽 ring 不按窗口分割**：多窗口下每个窗口各自上报，共用同一只 ring（≈每窗口 16 条）。判定依据是"崩溃的那个窗口在最后一刻的曲线"，共用 ring 在最坏情况下仍保留它最近的若干条。真要多窗口精读再按窗口分桶。
+- **renderer 侧自己的帧 ring 不进诊断包**：renderer OOM 时来不及落盘，只有 main 侧那份能活到导出。**出站热路径只加一次比较**是硬约束：任何"顺便做点别的"的改动都要先证明它不分配。
+
 
 ## 验证
 
-- 单测：`packages/platform/src/__tests__/ipc/ipcFrameGuard.test.ts`、`ipcFrameGate.test.ts`、`log/logFloodFold.test.ts`；`apps/editor/src/renderer/services/memory/__tests__/`（阈值/迟滞/缓存归还字节）、`AcpSession.liveBudget.test.ts`（trim 后 `_residentBytes === _measureResidentBytes()`）。
-- e2e：`@p0` `apps/editor/e2e/specs/smoke.memoryPressure.spec.ts`——**直接验证"`performance.memory` 在真实 Electron renderer 里可读"这个核心假设**、releaser 已注册、强制释放有归因。
+- 单测：`packages/platform/src/__tests__/ipc/ipcFrameGuard.test.ts`、`ipcFrameGate.test.ts`、`log/logFloodFold.test.ts`；`apps/editor/src/renderer/services/memory/__tests__/`（阈值/迟滞/缓存归还字节、上报节流与"首个读数必上报"、holder 采集容错）、`rendererHeapReporter.test.ts`、`main/services/diagnostics/__tests__/`（`renderer-heap` 行格式、非法样本被丢、ring 满 32 淘汰最旧、窗口号盖章）、`AcpSession.liveBudget.test.ts`（trim 后 `_residentBytes === _measureResidentBytes()`）。
+- e2e：`@p0` `apps/editor/e2e/specs/smoke.memoryPressure.spec.ts`——**直接验证"`performance.memory` 在真实 Electron renderer 里可读"这个核心假设**、releaser 已注册、强制释放有归因，以及**堆曲线真的抵达 main 的 `processMetrics.log`**。最后一条是必需的：上报是 fire-and-forget，方法名写错或通道没注册会被完全静默吞掉，产出的报告与"这个构建本来就没有曲线"无法区分。

@@ -18,6 +18,7 @@ function makeDiagnostics(report: AbnormalExitInfo | null): IDiagnosticsService &
     collectIssueReport: () => Promise.resolve(''),
     exportDiagnosticsZip: () => Promise.resolve(''),
     createDiagnosticsZip: () => Promise.resolve(''),
+    reportRendererHeapSample: () => Promise.resolve(),
   }
 }
 

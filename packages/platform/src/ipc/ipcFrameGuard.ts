@@ -82,22 +82,26 @@ export interface IpcFrameRecord {
   readonly channel: string
   /** Command / event name within the channel; empty when unknown. */
   readonly name: string
+  /** Request id, or `0` for frames that carry none (events, unparsed). */
+  readonly id: number
 }
 
 export interface IpcFrameSizeInfo {
   readonly bytes: number
   readonly direction: 'in' | 'out'
+  readonly type: string
   readonly channel: string
   readonly name: string
+  readonly id: number
+  /**
+   * Repeats of this same target folded away since the previous report. Absent on the
+   * first report; the durable counter holds the true total either way.
+   */
+  readonly suppressed?: number
 }
 
 export interface IpcFrameOversizedInfo extends IpcFrameSizeInfo {
   readonly limit: number
-  /**
-   * Refusals of this same target folded away since the previous report. Absent on the
-   * first report; the durable counter holds the true total either way.
-   */
-  readonly suppressed?: number
 }
 
 export interface IpcFrameDiagnosticsOptions {
@@ -130,26 +134,35 @@ export function setIpcFrameDiagnostics(options: IpcFrameDiagnosticsOptions | und
  * information, only noise.
  */
 const ALERT_FOLD_WINDOW_MS = 1000
-let alertKey = ''
-let alertSince = 0
-let alertSuppressed = 0
+
+type AlertFold = { key: string; since: number; suppressed: number }
+
+function createAlertFold(): AlertFold {
+  return { key: '', since: 0, suppressed: 0 }
+}
+
+// One fold per alert tier. Sharing a single fold would let an inbound refusal reset an
+// outbound warn's window (or vice versa), so a steady oversize plus a burst of large
+// sends would report neither correctly.
+const refusedFold = createAlertFold()
+const warnFold = createAlertFold()
 
 /** `undefined` = stay quiet; otherwise how many occurrences were folded since last time. */
-function admitAlert(key: string): number | undefined {
+function admitAlert(fold: AlertFold, key: string): number | undefined {
   const at = now()
-  if (key !== alertKey) {
-    alertKey = key
-    alertSince = at
-    alertSuppressed = 0
+  if (key !== fold.key) {
+    fold.key = key
+    fold.since = at
+    fold.suppressed = 0
     return 0
   }
-  if (at - alertSince >= ALERT_FOLD_WINDOW_MS) {
-    const suppressed = alertSuppressed
-    alertSince = at
-    alertSuppressed = 0
+  if (at - fold.since >= ALERT_FOLD_WINDOW_MS) {
+    const suppressed = fold.suppressed
+    fold.since = at
+    fold.suppressed = 0
     return suppressed
   }
-  alertSuppressed++
+  fold.suppressed++
   return undefined
 }
 
@@ -167,13 +180,14 @@ type MutableFrameRecord = {
   type: string
   channel: string
   name: string
+  id: number
 }
 const ring: MutableFrameRecord[] = []
 let ringCursor = 0
 let ringFilled = 0
 
 for (let i = 0; i < RING_SIZE; i++) {
-  ring.push({ ts: 0, direction: 'in', bytes: 0, type: '', channel: '', name: '' })
+  ring.push({ ts: 0, direction: 'in', bytes: 0, type: '', channel: '', name: '', id: 0 })
 }
 
 // Durable scalars, immune to ring eviction. The interesting question after a crash is
@@ -199,6 +213,7 @@ export function reportIpcFrame(
   type: string,
   channel: string,
   name: string,
+  id = 0,
 ): void {
   framesSeen++
   // Tracked for every frame, not just the flagged ones: "what is the largest frame this
@@ -206,27 +221,46 @@ export function reportIpcFrame(
   // that stayed under the warn line is still the answer.
   if (bytes > largestBytes) {
     largestBytes = bytes
-    largestLabel = labelFor(direction, type, channel, name)
+    largestLabel = labelFor(direction, type, channel, name, id)
   }
   const verdict = classifyIpcFrame(bytes)
   if (verdict !== 'ok') {
     if (verdict === 'oversized') {
       oversizedFrames++
-      const key = `${direction}|${channel}|${name}`
-      const suppressed = admitAlert(key)
+      const suppressed = admitAlert(refusedFold, `${direction}|${channel}|${name}`)
       if (suppressed !== undefined) {
         diagnostics?.onOversized?.({
           bytes,
           direction,
+          type,
           channel,
           name,
+          id,
           limit: IPC_FRAME_MAX_BYTES,
           ...(suppressed > 0 ? { suppressed } : {}),
         })
       }
     } else {
       warnedFrames++
-      diagnostics?.onWarn?.({ bytes, direction, channel, name })
+      if (direction === 'out') {
+        // Outbound warns come from a send loop by construction (the renderer is the
+        // receiver of every one of them), so they fold like refusals. Inbound warns keep
+        // reporting per frame.
+        const suppressed = admitAlert(warnFold, `${direction}|${channel}|${name}`)
+        if (suppressed !== undefined) {
+          diagnostics?.onWarn?.({
+            bytes,
+            direction,
+            type,
+            channel,
+            name,
+            id,
+            ...(suppressed > 0 ? { suppressed } : {}),
+          })
+        }
+      } else {
+        diagnostics?.onWarn?.({ bytes, direction, type, channel, name, id })
+      }
     }
   }
   const slot = ring[ringCursor]
@@ -237,14 +271,34 @@ export function reportIpcFrame(
     slot.type = type
     slot.channel = channel
     slot.name = name
+    slot.id = id
   }
   ringCursor = (ringCursor + 1) % RING_SIZE
   if (ringFilled < RING_SIZE) ringFilled++
 }
 
-function labelFor(direction: string, type: string, channel: string, name: string): string {
-  const target = name.length > 0 ? `${channel}.${name}` : channel
-  return `${direction} ${type} ${target}`
+/**
+ * `channel.name #id`, degrading through `channel.name` / `channel`, and prefixed with the
+ * message kind. Frames that answer a request carry no channel on the wire, so for those
+ * the kind plus the request id is all there is unless the sender knows better (see the
+ * client-side label lookup in `ipc.ts`).
+ */
+export function frameTarget(type: string, channel: string, name: string, id: number): string {
+  const base = name.length > 0 ? `${channel}.${name}` : channel
+  // `Number.isFinite` rather than `id <= 0`: the id comes off the wire, and a malformed
+  // frame would otherwise print `#undefined` on the one line that has to stay greppable.
+  if (!Number.isFinite(id) || id <= 0) return base.length > 0 ? `${type} ${base}` : type
+  return base.length > 0 ? `${type} ${base} #${id}` : `${type} #${id}`
+}
+
+function labelFor(
+  direction: string,
+  type: string,
+  channel: string,
+  name: string,
+  id: number,
+): string {
+  return `${direction} ${frameTarget(type, channel, name, id)}`
 }
 
 export interface IpcFrameStats {
@@ -283,14 +337,13 @@ export function snapshotIpcFrames(): readonly IpcFrameRecord[] {
  * of what a future reader greps for, and two copies would drift.
  */
 export function formatIpcFrameAlert(info: IpcFrameSizeInfo | IpcFrameOversizedInfo): string {
-  const target = info.name.length > 0 ? `${info.channel}.${info.name}` : info.channel
-  const where = target.length > 0 ? ` (${target})` : ''
+  const where = ` (${frameTarget(info.type, info.channel, info.name, info.id)})`
   const size = `${(info.bytes / MIB).toFixed(1)}MB`
+  const folded = info.suppressed ? `, +${info.suppressed} more folded` : ''
   if ('limit' in info) {
-    const folded = info.suppressed ? `, +${info.suppressed} more folded` : ''
     return `refused ${info.direction}bound ipc frame ${size}, over the ${(info.limit / MIB).toFixed(0)}MB limit${where}${folded}`
   }
-  return `large ${info.direction}bound ipc frame ${size}${where}`
+  return `large ${info.direction}bound ipc frame ${size}${where}${folded}`
 }
 
 /** Human-readable dump for a crash report: the durable summary, then the recent tail. */
@@ -304,19 +357,22 @@ export function formatIpcFrames(limit = 24): string {
   const shown = limit > 0 ? frames.slice(Math.max(0, frames.length - limit)) : frames
   if (shown.length === 0) return `${headline}\nno ipc frames recorded`
   const lines = shown.map((f) => {
-    const target = f.name.length > 0 ? `${f.channel}.${f.name}` : f.channel
-    return `  ${new Date(f.ts).toISOString()} ${f.direction} ${Math.round(f.bytes / KIB)}KiB ${f.type} ${target}`
+    const target = frameTarget(f.type, f.channel, f.name, f.id)
+    return `  ${new Date(f.ts).toISOString()} ${f.direction} ${Math.round(f.bytes / KIB)}KiB ${target}`
   })
   return `${headline}\n${lines.join('\n')}`
 }
 
-/** Test seam: drop the ring, the counters, the fold window and the installed sinks. */
+/** Test seam: drop the ring, the counters, the fold windows and the installed sinks. */
 export function resetIpcFrameDiagnosticsForTests(nowOverride?: () => number): void {
   diagnostics = undefined
   clock = nowOverride ?? Date.now
-  alertKey = ''
-  alertSince = 0
-  alertSuppressed = 0
+  refusedFold.key = ''
+  refusedFold.since = 0
+  refusedFold.suppressed = 0
+  warnFold.key = ''
+  warnFold.since = 0
+  warnFold.suppressed = 0
   ringCursor = 0
   ringFilled = 0
   framesSeen = 0
@@ -326,9 +382,11 @@ export function resetIpcFrameDiagnosticsForTests(nowOverride?: () => number): vo
   largestLabel = ''
   for (const slot of ring) {
     slot.ts = 0
+    slot.direction = 'in'
     slot.bytes = 0
     slot.type = ''
     slot.channel = ''
     slot.name = ''
+    slot.id = 0
   }
 }

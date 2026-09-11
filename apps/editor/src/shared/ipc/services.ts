@@ -228,6 +228,32 @@ export const IErrorSinkService = createDecorator<IErrorSinkService>('errorSinkSe
 
 // -------- Diagnostics (abnormal-exit report, crash dumps, system info) --------
 
+/**
+ * A resident holder of large strings inside the renderer, measured on the same
+ * overhead-adjusted scale the holder's own budget already uses. Reported next to the
+ * heap sample so a crash package can answer "who was holding the 3GB" rather than only
+ * "the heap was 3GB" — the dumps show 92-97% of it in `lo_space`, i.e. giant strings.
+ */
+export interface WireHeapHolder {
+  readonly name: string
+  readonly bytes: number
+  /** Entries held, when a count says something the byte total does not. */
+  readonly count?: number
+}
+
+/**
+ * One renderer heap reading. Only the renderer can see its own V8 heap, and it can die
+ * mid-crash — so the window id and the receive time are stamped by main, which is what
+ * lets the record outlive the window it describes.
+ */
+export interface WireRendererHeapSample {
+  readonly used: number
+  readonly limit: number
+  /** Watermark level name: normal | elevated | critical. */
+  readonly level: string
+  readonly holders: readonly WireHeapHolder[]
+}
+
 /** Structured form of the previous session's abnormal exit (sentinel + crashpad). */
 export interface AbnormalExitInfo {
   readonly previousSessionId: string
@@ -265,6 +291,12 @@ export interface IDiagnosticsService {
    * attachment).
    */
   createDiagnosticsZip(): Promise<string>
+  /**
+   * One renderer heap reading. Goes to main's processMetrics channel — which is written
+   * by a process that does not crash with the renderer, so the growth curve survives it —
+   * and into a small ring that the diagnostics zip ships as `memory.txt`.
+   */
+  reportRendererHeapSample(sample: WireRendererHeapSample): Promise<void>
 }
 
 export const IDiagnosticsService = createDecorator<IDiagnosticsService>('diagnosticsService')

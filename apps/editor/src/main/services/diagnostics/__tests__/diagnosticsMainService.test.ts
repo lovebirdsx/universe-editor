@@ -16,6 +16,8 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { AbstractLogger, LogLevel, type ILoggerService } from '@universe-editor/platform'
+import type { WireRendererHeapSample } from '../../../../shared/ipc/services.js'
 
 declare const __APP_VERSION__: string
 
@@ -33,7 +35,8 @@ vi.mock('electron', () => ({
   },
 }))
 
-const { DiagnosticsMainService } = await import('../diagnosticsMainService.js')
+const { DiagnosticsMainService, createWindowScopedDiagnostics, formatRendererHeapSample } =
+  await import('../diagnosticsMainService.js')
 
 describe('DiagnosticsMainService', () => {
   let root: string
@@ -283,7 +286,11 @@ describe('DiagnosticsMainService', () => {
     })
     try {
       const zip = new AdmZip(await failing.createDiagnosticsZip())
-      expect(zip.readAsText('memory.txt')).toBe('(memory snapshot unavailable)\n')
+      // Containment, not equality: the degraded snapshot still carries the renderer heap
+      // tail, and a build that can answer "what was the heap doing" must not be
+      // indistinguishable from one that cannot.
+      expect(zip.readAsText('memory.txt')).toContain('(memory snapshot unavailable)')
+      expect(zip.readAsText('memory.txt')).toContain('renderer-heap')
     } finally {
       failing.dispose()
     }
@@ -356,5 +363,226 @@ describe('DiagnosticsMainService', () => {
     } finally {
       spy.mockRestore()
     }
+  })
+})
+
+const MIB = 1024 * 1024
+
+/** Captures what would reach `<userData>/logs/<session>/processMetrics.log`. */
+const logSink: { channel: string; message: string }[] = []
+
+class RecordingLogger extends AbstractLogger {
+  constructor(private readonly _channel: string) {
+    super()
+  }
+  protected override _log(_level: LogLevel, message: string): void {
+    logSink.push({ channel: this._channel, message })
+  }
+}
+
+const recordingLoggerService: ILoggerService = {
+  _serviceBrand: undefined,
+  createLogger: (channel) => new RecordingLogger(channel.id),
+  setLevel: () => {},
+  getLevel: () => LogLevel.Info,
+}
+
+describe('DiagnosticsMainService — renderer heap samples', () => {
+  const sample = (used: number, level = 'normal') => ({
+    used,
+    limit: 4 * 1024 * MIB,
+    level,
+    holders: [],
+  })
+
+  let heapService: InstanceType<typeof DiagnosticsMainService>
+  let heapRoot: string
+
+  beforeEach(() => {
+    logSink.length = 0
+    heapRoot = mkdtempSync(join(tmpdir(), 'diagnostics-heap-test-'))
+    heapService = new DiagnosticsMainService(
+      {
+        crashDumpsDir: join(heapRoot, 'Crashes'),
+        logRoot: join(heapRoot, 'logs'),
+        diagnosticsDir: join(heapRoot, 'diagnostics'),
+        mode: 'release',
+      },
+      recordingLoggerService,
+    )
+  })
+
+  afterEach(() => {
+    heapService.dispose()
+    rmSync(heapRoot, { recursive: true, force: true })
+  })
+
+  const heapLines = (): string[] =>
+    logSink.filter((l) => l.message.startsWith('renderer-heap')).map((l) => l.message)
+
+  it('writes the curve into the same channel the main heap uses', async () => {
+    // Same channel id on purpose: the renderer's curve has to land on the main-heap
+    // timeline of processMetrics.log, not in a file nobody would think to open.
+    await heapService.reportRendererHeapSample(sample(3200 * MIB, 'critical'))
+    expect(logSink.map((l) => l.channel)).toEqual(['processMetrics'])
+    expect(heapLines()).toEqual([
+      'renderer-heap window=0 used=3200MB limit=4096MB usedPct=78.1 level=critical',
+    ])
+  })
+
+  it('keeps the newest 32 readings and drops the rest', async () => {
+    for (let i = 1; i <= 40; i++) await heapService.reportRendererHeapSample(sample(i * MIB))
+    const zip = new AdmZip(await heapService.createDiagnosticsZip())
+    const lines = zip
+      .readAsText('memory.txt')
+      .split('\n')
+      .filter((l) => l.includes('used='))
+    expect(lines).toHaveLength(32)
+    // Newest first, so the tail of the ramp reads off the top of the file.
+    expect(lines[0]).toContain('used=40MB')
+    expect(lines[31]).toContain('used=9MB')
+  })
+
+  it('drops readings that cannot be true instead of clamping them', async () => {
+    // A zeroed sample would read as "the heap was fine" on exactly the report where it
+    // was not, and a holder name carrying a newline would forge log lines.
+    for (const used of [Number.NaN, 0, -1, Number.POSITIVE_INFINITY]) {
+      await heapService.reportRendererHeapSample(sample(used))
+    }
+    expect(heapLines()).toEqual([])
+
+    await heapService.reportRendererHeapSample({
+      used: 900 * MIB,
+      limit: Number.NaN,
+      level: 'critical\n[error] forged',
+      holders: [
+        { name: 'acp', bytes: 412 * MIB, count: 3 },
+        { name: 'bad\nname', bytes: 1 * MIB },
+        { name: 'bad bytes', bytes: Number.NaN },
+        { name: 'huge name that is far too long to be a holder', bytes: 1 * MIB },
+      ],
+    })
+    expect(heapLines()).toEqual([
+      'renderer-heap window=0 used=900MB limit=0MB level=unknown holders=acp:412MB(3)',
+    ])
+  })
+
+  it('caps the holder breakdown so a sample cannot grow the line without bound', async () => {
+    const holders = Array.from({ length: 12 }, (_v, i) => ({ name: `h${i}`, bytes: MIB }))
+    await heapService.reportRendererHeapSample({ ...sample(900 * MIB), holders })
+    const [line] = heapLines()
+    expect(line?.match(/h\d+:\d+MB/g)).toHaveLength(8)
+  })
+
+  it('bounds the scan itself, not just what it keeps', async () => {
+    // The names are renderer-supplied, and 128MB of frame fits an arbitrary number of
+    // them: the loop has to be bounded by entries *read*, not entries *accepted*.
+    const junk = Array.from({ length: 5000 }, () => ({ name: 'bad name', bytes: MIB }))
+    await heapService.reportRendererHeapSample({
+      ...sample(900 * MIB),
+      holders: [...junk, { name: 'acp', bytes: MIB }],
+    })
+    // The reading itself still lands; only the attribution is (deliberately) given up.
+    expect(heapLines()).toEqual([
+      'renderer-heap window=0 used=900MB limit=4096MB usedPct=22.0 level=normal',
+    ])
+  })
+
+  it('keeps the reading when the payload lost its holder list', async () => {
+    // A skewed sender must not cost the heap reading: iterating `undefined` throws, and
+    // the throw is swallowed on the far side of IPC, leaving nothing at all.
+    await heapService.reportRendererHeapSample({
+      used: 900 * MIB,
+      limit: 4 * 1024 * MIB,
+      level: 'normal',
+    } as unknown as WireRendererHeapSample)
+    await heapService.reportRendererHeapSample({
+      ...sample(901 * MIB),
+      holders: 'acp' as unknown as [],
+    })
+    expect(heapLines()).toHaveLength(2)
+  })
+
+  it('accepts a holder name up to the cap and rejects anything longer', async () => {
+    await heapService.reportRendererHeapSample({
+      ...sample(900 * MIB),
+      holders: [
+        { name: 'a'.repeat(32), bytes: MIB },
+        { name: 'b'.repeat(33), bytes: MIB },
+      ],
+    })
+    expect(heapLines()[0]).toContain(`holders=${'a'.repeat(32)}:1MB`)
+    expect(heapLines()[0]).not.toContain('b'.repeat(33))
+  })
+
+  it('counts rejected readings, so a broken sender cannot look like an absent one', async () => {
+    // `no samples recorded` alone is ambiguous: it is the same file whether the build
+    // never had a curve or every report was thrown away.
+    await heapService.reportRendererHeapSample(sample(Number.NaN))
+    await heapService.reportRendererHeapSample(sample(0))
+    const empty = new AdmZip(await heapService.createDiagnosticsZip())
+    expect(empty.readAsText('memory.txt')).toContain('renderer-heap no samples recorded dropped=2')
+
+    await heapService.reportRendererHeapSample(sample(900 * MIB))
+    const withOne = new AdmZip(await heapService.createDiagnosticsZip())
+    expect(withOne.readAsText('memory.txt')).toContain(
+      'renderer-heap samples=1 dropped=2 (newest first)',
+    )
+  })
+
+  it('stamps the window the wrapper was built for, not one the caller supplied', async () => {
+    const scoped = createWindowScopedDiagnostics(heapService, 7)
+    await scoped.reportRendererHeapSample(sample(3 * 1024 * MIB))
+    expect(heapLines()[0]).toContain('window=7')
+  })
+
+  it('orders a partly filled ring newest first', async () => {
+    // The ring starts empty, and the wrapping cursor only means "oldest" once it is
+    // full — reading it early would put the oldest sample at the top.
+    for (const used of [10 * MIB, 20 * MIB, 30 * MIB]) {
+      await heapService.reportRendererHeapSample(sample(used))
+    }
+    const zip = new AdmZip(await heapService.createDiagnosticsZip())
+    const lines = zip
+      .readAsText('memory.txt')
+      .split('\n')
+      .filter((l) => l.includes('used='))
+    expect(lines.map((l) => /used=(\d+)MB/.exec(l)?.[1])).toEqual(['30', '20', '10'])
+  })
+
+  it('reports the absence of samples rather than an empty file', async () => {
+    const zip = new AdmZip(await heapService.createDiagnosticsZip())
+    expect(zip.readAsText('memory.txt')).toContain('renderer-heap no samples recorded')
+  })
+})
+
+describe('formatRendererHeapSample', () => {
+  const base = { window: 1, used: 3200 * MIB, limit: 4096 * MIB, level: 'critical' }
+
+  it('prints the watermark, the level and the holder breakdown', () => {
+    expect(
+      formatRendererHeapSample({
+        ...base,
+        holders: [
+          { name: 'acp', bytes: 412 * MIB, count: 2 },
+          { name: 'monaco', bytes: 38 * MIB },
+        ],
+      }),
+    ).toBe(
+      'renderer-heap window=1 used=3200MB limit=4096MB usedPct=78.1 level=critical ' +
+        'holders=acp:412MB(2),monaco:38MB',
+    )
+  })
+
+  it('omits the holder segment when nothing could be attributed', () => {
+    // The absence is the finding: it says the culprit is outside the known holders,
+    // which is a different lead from a line that never had the field.
+    expect(formatRendererHeapSample({ ...base, holders: [] })).not.toContain('holders=')
+  })
+
+  it('omits the percentage when the heap limit never reported one', () => {
+    expect(formatRendererHeapSample({ ...base, limit: 0, holders: [] })).toContain(
+      'limit=0MB level=',
+    )
   })
 })

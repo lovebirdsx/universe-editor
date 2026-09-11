@@ -17,6 +17,7 @@ import { CancellationToken, CancellationTokenSource } from '../base/cancellation
 import { CancellationError } from '../base/errors.js'
 import {
   IPC_FRAME_TOO_LARGE_CODE,
+  IPC_FRAME_WARN_BYTES,
   IpcFrameTooLargeError,
   assertIpcFrameWithinLimit,
   reportIpcFrame,
@@ -310,6 +311,21 @@ function frameChannel(msg: IpcMessage): string {
   return 'channel' in msg ? msg.channel : ''
 }
 
+/**
+ * Requests, responses and cancels all carry an id; events do not. Unlike channel and
+ * name, this survives on frames that answer a request — which is the only handle a
+ * reader of the log has on a large response, since the wire carries no channel on it.
+ */
+function frameId(msg: IpcMessage): number {
+  return 'id' in msg ? msg.id : 0
+}
+
+/** What a response frame is answering, as reconstructed by the client that asked. */
+export interface IpcFrameTarget {
+  readonly channel: string
+  readonly name: string
+}
+
 function frameName(msg: IpcMessage): string {
   switch (msg.type) {
     case 'request':
@@ -341,6 +357,7 @@ function decodeInbound(
   codec: IpcCodec,
   data: Uint8Array,
   instrument?: (run: () => IpcMessage, bytes: number) => IpcMessage,
+  resolveLabel?: (msg: IpcMessage) => IpcFrameTarget | undefined,
 ): IpcMessage | undefined {
   let msg: IpcMessage
   try {
@@ -350,7 +367,19 @@ function decodeInbound(
     reportIpcFrame('in', data.byteLength, 'unparsed', '', '')
     return undefined
   }
-  reportIpcFrame('in', data.byteLength, msg.type, frameChannel(msg), frameName(msg))
+  let channel = frameChannel(msg)
+  let name = frameName(msg)
+  // A response carries only the id of the request it answers, so the party that issued
+  // that request is the only one that can say what the payload is. Everyone else falls
+  // back to the bare id — still enough to line the frame up with a sender-side record.
+  if (msg.type === 'response' && resolveLabel) {
+    const target = resolveLabel(msg)
+    if (target) {
+      channel = target.channel
+      name = target.name
+    }
+  }
+  reportIpcFrame('in', data.byteLength, msg.type, channel, name, frameId(msg))
   return msg
 }
 
@@ -371,8 +400,17 @@ function encodeOutbound(
     frame = codec.encode(msg)
   } catch (err) {
     if (!(err instanceof IpcFrameTooLargeError)) throw err
-    reportIpcFrame('out', err.bytes, msg.type, channel, name)
+    reportIpcFrame('out', err.bytes, msg.type, channel, name, frameId(msg))
     return err
+  }
+  // Successful sends have to be recorded here too, or the question "what is the largest
+  // frame this process ever put on the wire" is answered only for the frames the peer
+  // refused — which is how a report ends up with `warned=0 largest=4MiB` sitting next to
+  // the receiver's `large inbound ipc frame 47.6MB` for the very same frame. Selecting by
+  // size keeps every send's cost at one integer compare; `reportIpcFrame` itself stays
+  // off the steady path.
+  if (frame.byteLength >= IPC_FRAME_WARN_BYTES) {
+    reportIpcFrame('out', frame.byteLength, msg.type, channel, name, frameId(msg))
   }
   return frame
 }
@@ -386,7 +424,7 @@ export class ChannelClient extends Disposable implements IChannelClient {
   private _disposed = false
   private readonly _pendingRequests = new Map<
     number,
-    { resolve: (v: unknown) => void; reject: (e: Error) => void }
+    { resolve: (v: unknown) => void; reject: (e: Error) => void } & IpcFrameTarget
   >()
   private readonly _eventEmitters = new Map<string, Emitter<unknown>>()
   // Owns the cancellation subscriptions of in-flight requests. Deliberately a
@@ -407,7 +445,7 @@ export class ChannelClient extends Disposable implements IChannelClient {
     if (autoDispatch) {
       this._register(
         _protocol.onMessage((data) => {
-          const msg = decodeInbound(this._codec, data)
+          const msg = decodeInbound(this._codec, data, undefined, (m) => this.frameTargetFor(m))
           if (msg) this.handleMessage(msg)
         }),
       )
@@ -434,6 +472,19 @@ export class ChannelClient extends Disposable implements IChannelClient {
       return
     }
     this._protocol.send(frame)
+  }
+
+  /**
+   * The request a response frame answers, when this client is the one that issued it.
+   * A response carries no channel on the wire, so without this the most a large-frame
+   * alert can say about it is `response #42` — and "who asked for that payload" is
+   * exactly the question. Returns the pending entry rather than a copy: one map lookup,
+   * no allocation, and the entry is still live because `handleMessage` removes it only
+   * after the frame has been decoded and recorded.
+   */
+  frameTargetFor(msg: IpcMessage): IpcFrameTarget | undefined {
+    if (msg.type !== 'response') return undefined
+    return this._pendingRequests.get(msg.id)
   }
 
   handleMessage(msg: IpcMessage): void {
@@ -482,6 +533,8 @@ export class ChannelClient extends Disposable implements IChannelClient {
             client._inflightCancelListeners.add(cancelListener)
           }
           client._pendingRequests.set(id, {
+            channel: channelName,
+            name: command,
             resolve: (v) => {
               if (cancelListener) client._inflightCancelListeners.delete(cancelListener)
               resolve(v as T)
@@ -754,7 +807,9 @@ export class ChannelPair extends Disposable {
     this.server = this._register(new ChannelServer(protocol, false, codec))
     this._register(
       protocol.onMessage((data) => {
-        const msg = decodeInbound(codec, data, decodeInstrument)
+        const msg = decodeInbound(codec, data, decodeInstrument, (m) =>
+          this.client.frameTargetFor(m),
+        )
         if (!msg) return
         if (msg.type === 'response' || msg.type === 'event') {
           this.client.handleMessage(msg)

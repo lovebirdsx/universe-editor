@@ -4,7 +4,7 @@
 
 ## 功能实现进展
 
-- [renderer OOM 治理：IPC 帧闸门 + 堆水位 + 崩溃链路](renderer-oom-ipc-frame-gate.md) — 巨型字符串撑爆 lo_space；Electron send 不抛只 console.error、闩锁须有截止时间、dispose 摘 stdin error 监听=还回崩溃、退避须覆盖 catch、折叠键要常量
+- [renderer OOM 治理：IPC 帧闸门 + 堆水位 + 崩溃链路](renderer-oom-ipc-frame-gate.md) — 巨型字符串撑爆 lo_space；Electron send 不抛只 console.error、闩锁须有截止时间、dispose 摘 stdin error 监听=还回崩溃、退避须覆盖 catch、折叠键要常量；观测侧：成功路径不记录=报告自相矛盾、response 帧无 channel 须发起方回填、fire-and-forget 观测须有 e2e 哨兵、"看不见"与"被拒"要可区分
 - [Perforce Explorer「远端有更新 ↓」装饰恢复](perforce-explorer-behind-decoration-restore.md) — pull 停问+push 装饰双通道缺一不可；✎/↓ 共享槽位须按路径合并；失败≠clean 保留标记；sync 清场靠渲染重触发
 - [Perforce Graph/History/Timeline Get Revision](perforce-graph-get-revision-feature.md) — 六入口@CL/#rev 移 have 版本 + 两处 force(-f) 恒确认（图谱右键 / Explorer「拉取版本…」后四档，红 labelColor，共用 confirmForceGet(spec,scopeText)）；后缀只由 _syncTargets 转义后拼；多选取材 resolveContaining 跨 client 严校验；e2e 种子造正向升版，force 判据只能靠 refused 种子
 - [Explorer 删除到回收站 + Ctrl+Z 撤销](explorer-trash-and-undo-feature.md) — shell.trashItem+IUndoRedoService；useTrash 须先问 provider 能力位，远端降级须显式非静默

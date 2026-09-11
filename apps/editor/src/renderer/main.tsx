@@ -45,6 +45,7 @@ import {
   ContributionService,
   IContributionService,
   ILoggerService,
+  createNamedLogger,
   INotificationService,
   IUndoRedoService,
   UndoRedoService,
@@ -67,6 +68,7 @@ import {
 import { ServiceChannels } from '../shared/ipc/channelNames.js'
 import { PerfMarks } from '../shared/perf/marks.js'
 import {
+  IDiagnosticsService,
   IDisposableLeakService,
   IErrorSinkService,
   ILogChannelService,
@@ -97,6 +99,8 @@ import {
   IMemoryPressureService,
   MemoryPressureService,
 } from './services/memory/memoryPressureService.js'
+import { createRendererHeapReporter } from './services/memory/rendererHeapReporter.js'
+import { sharedResidentBudget } from './services/acp/session/acpResidentBudget.js'
 import { registerProxyChannelServices } from './ipc/registerProxyServices.js'
 import { installRendererErrorHandlers, isBenignError } from './errors.js'
 import {
@@ -143,7 +147,7 @@ import {
   IRemoteExplorerService,
   RemoteExplorerService,
 } from './services/remote/RemoteExplorerService.js'
-import { setMonacoLoaderLogger } from './workbench/editor/monaco/MonacoLoader.js'
+import { MonacoLoader, setMonacoLoaderLogger } from './workbench/editor/monaco/MonacoLoader.js'
 import { restoreWorkbenchFocus } from './services/focus/workbenchFocusRestorer.js'
 import {
   IRecentFilesService,
@@ -254,6 +258,21 @@ import { installE2EProbeIfEnabled } from './e2e/probe.js'
 // Install global error handlers before any async work.
 setUnexpectedErrorHandler((e) => console.error('[renderer] unexpected error:', e))
 installRendererErrorHandlers()
+
+/**
+ * Text held by live Monaco models, reported as an upper bound in bytes (two per code
+ * unit). One of the crash packages died inside a model edit — `ModelRawLineChanged ←
+ * applyEdits` — so the text in models is a first-class suspect, and over-reporting a
+ * suspect is the safer error. `peek()` so that taking a heap sample never forces monaco
+ * to load.
+ */
+function measureMonacoModels(): { bytes: number; count: number } | undefined {
+  const models = MonacoLoader.peek()?.editor.getModels()
+  if (!models || models.length === 0) return undefined
+  let bytes = 0
+  for (const model of models) bytes += model.getValueLength() * 2
+  return { bytes, count: models.length }
+}
 
 async function bootstrapWorkbench(): Promise<void> {
   mark(PerfMarks.rendererWillStartBootstrap)
@@ -410,7 +429,18 @@ async function bootstrapWorkbench(): Promise<void> {
   // after it (see WorkspaceFileListingContribution). Contributions inject it by token.
   services.set(
     IMemoryPressureService,
-    workbenchStore.add(new MemoryPressureService(loggerService, telemetry)),
+    workbenchStore.add(
+      new MemoryPressureService(loggerService, telemetry, {
+        reportSample: createRendererHeapReporter(
+          () => services.get(IDiagnosticsService) as IDiagnosticsService,
+          [
+            { name: 'acp', measure: () => ({ bytes: sharedResidentBudget.totalBytes() }) },
+            { name: 'monaco', measure: measureMonacoModels },
+          ],
+          createNamedLogger(loggerService, { id: 'memory', name: 'Memory' }),
+        ),
+      }),
+    ),
   )
   window.addEventListener('beforeunload', () => {
     void loggerService.flush()

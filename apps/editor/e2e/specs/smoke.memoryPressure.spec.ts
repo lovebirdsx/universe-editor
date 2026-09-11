@@ -13,11 +13,35 @@
  *    - the caches registered themselves as releasers, and releasing returns a real byte
  *      count rather than a plausible-looking zero
  *    - the thresholds derived from the real heap limit sit under it
+ *    - the reading survives the renderer that took it, i.e. it actually reaches main's
+ *      log file over IPC (a fire-and-forget hop that fails silently by construction)
  *
  *  `describe()` and the byte readings are what the spec asserts on, not internals.
  *--------------------------------------------------------------------------------------------*/
 
+import { readFileSync, readdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { test, expect } from '../fixtures/sharedApp.js'
+
+/**
+ * The heap curve main writes down for the renderer, from the newest log session. The
+ * file is per-session, and the session dir name is a sortable timestamp.
+ */
+function readProcessMetrics(logsRoot: string): string {
+  let sessions: string[]
+  try {
+    sessions = readdirSync(logsRoot)
+  } catch {
+    return ''
+  }
+  const newest = sessions.sort().at(-1)
+  if (newest === undefined) return ''
+  try {
+    return readFileSync(join(logsRoot, newest, 'processMetrics.log'), 'utf8')
+  } catch {
+    return ''
+  }
+}
 
 test.describe('@p0 renderer memory pressure', () => {
   test('reads the renderer heap — performance.memory is available', async ({ page }) => {
@@ -77,5 +101,29 @@ test.describe('@p0 renderer memory pressure', () => {
     // The probe still answers, i.e. the release did not wedge the renderer.
     const phase = await page.evaluate(() => window.__E2E__!.getLifecyclePhase())
     expect(['Ready', 'Restored', 'Eventually']).toContain(phase)
+  })
+
+  test('the heap curve reaches main, where it can outlive the renderer', async ({
+    electronApp,
+  }) => {
+    // The report is fire-and-forget, so a typo in the method name or an unregistered
+    // channel would swallow every reading silently — leaving a crash package that
+    // looks exactly like a build that never had a heap curve. Only the far end of the
+    // real IPC round trip can tell the difference.
+    const userDataDir = await electronApp.evaluate(({ app }) => app.getPath('userData'))
+    const logsRoot = join(userDataDir, 'logs')
+
+    // Sampled on the watermark's own 5s cadence (plus the file logger's flush
+    // debounce), so this cannot be an immediate read.
+    await expect
+      .poll(() => readProcessMetrics(logsRoot), { timeout: 30_000, intervals: [500] })
+      .toContain('renderer-heap window=')
+
+    const line = readProcessMetrics(logsRoot)
+      .split('\n')
+      .find((l) => l.includes('renderer-heap window='))
+    expect(line).toContain('used=')
+    expect(line).toContain('limit=')
+    expect(line).toContain('level=')
   })
 })

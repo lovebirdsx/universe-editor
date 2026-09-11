@@ -10,6 +10,7 @@ import {
   IpcFrameTooLargeError,
   assertIpcFrameWithinLimit,
   classifyIpcFrame,
+  formatIpcFrameAlert,
   formatIpcFrames,
   ipcFrameStats,
   reportIpcFrame,
@@ -22,7 +23,13 @@ import {
 
 const report = (
   bytes: number,
-  over: Partial<{ direction: 'in' | 'out'; type: string; channel: string; name: string }> = {},
+  over: Partial<{
+    direction: 'in' | 'out'
+    type: string
+    channel: string
+    name: string
+    id: number
+  }> = {},
 ): void =>
   reportIpcFrame(
     over.direction ?? 'out',
@@ -30,6 +37,7 @@ const report = (
     over.type ?? 'response',
     over.channel ?? 'fileSearch',
     over.name ?? 'search',
+    over.id ?? 0,
   )
 
 beforeEach(() => resetIpcFrameDiagnosticsForTests())
@@ -124,14 +132,23 @@ describe('reportIpcFrame', () => {
     report(IPC_FRAME_WARN_BYTES, { channel: 'b', name: 'big' })
     report(IPC_FRAME_MAX_BYTES + 1, { channel: 'c', name: 'huge', direction: 'in' })
     expect(warned).toEqual([
-      { bytes: IPC_FRAME_WARN_BYTES, direction: 'out', channel: 'b', name: 'big' },
+      {
+        bytes: IPC_FRAME_WARN_BYTES,
+        direction: 'out',
+        type: 'response',
+        channel: 'b',
+        name: 'big',
+        id: 0,
+      },
     ])
     expect(oversized).toEqual([
       {
         bytes: IPC_FRAME_MAX_BYTES + 1,
         direction: 'in',
+        type: 'response',
         channel: 'c',
         name: 'huge',
+        id: 0,
         limit: IPC_FRAME_MAX_BYTES,
       },
     ])
@@ -186,6 +203,107 @@ describe('oversized report folding', () => {
     report(huge, { direction: 'out', channel: 'file', name: 'read' })
     report(huge, { direction: 'in', channel: 'file', name: 'read' })
     expect(seen).toHaveLength(2)
+  })
+})
+
+describe('frames that answer a request', () => {
+  it('carries the request id, which is the only handle the wire gives on a response', () => {
+    report(2048, { type: 'response', channel: '', name: '', id: 42 })
+    const [latest] = snapshotIpcFrames()
+    expect(latest?.id).toBe(42)
+    expect(ipcFrameStats().largestLabel).toBe('out response #42')
+  })
+
+  it('names the channel and command once the receiver resolved the request', () => {
+    report(2048, { type: 'response', channel: 'fileService', name: 'readFile', id: 42 })
+    expect(ipcFrameStats().largestLabel).toBe('out response fileService.readFile #42')
+    expect(formatIpcFrames(1)).toContain('response fileService.readFile #42')
+  })
+
+  it('degrades to the bare kind rather than a trailing space when nothing is known', () => {
+    report(2048, { type: 'unparsed', channel: '', name: '', id: 0 })
+    expect(ipcFrameStats().largestLabel).toBe('out unparsed')
+  })
+
+  it('leaves frames with no id unadorned', () => {
+    report(2048, { type: 'event', channel: 'acpHost', name: 'onStdout' })
+    expect(ipcFrameStats().largestLabel).toBe('out event acpHost.onStdout')
+  })
+
+  it('degrades a malformed id rather than printing it', () => {
+    // The id comes off the wire. `id <= 0` alone would let `#undefined` onto the one
+    // line whose whole job is to stay greppable.
+    report(2048, { type: 'response', channel: '', name: '', id: Number.NaN })
+    expect(ipcFrameStats().largestLabel).toBe('out response')
+  })
+})
+
+describe('formatIpcFrameAlert', () => {
+  const BASE: IpcFrameSizeInfo = {
+    bytes: 47.6 * 1024 * 1024,
+    direction: 'in',
+    type: 'response',
+    channel: '',
+    name: '',
+    id: 0,
+  }
+  const alert = (over: Partial<IpcFrameOversizedInfo>): string =>
+    formatIpcFrameAlert({ ...BASE, ...over })
+
+  it('names the request a large response body answers', () => {
+    expect(alert({ channel: 'fileService', name: 'readFile', id: 42 })).toBe(
+      'large inbound ipc frame 47.6MB (response fileService.readFile #42)',
+    )
+  })
+
+  it('falls back to the kind and id when the receiver could not resolve the request', () => {
+    // The line this replaces read `large inbound ipc frame 47.6MB` and nothing else —
+    // the single most important alert in the package named nothing at all.
+    expect(alert({ id: 42 })).toBe('large inbound ipc frame 47.6MB (response #42)')
+  })
+
+  it('still names frames that never had a channel', () => {
+    expect(alert({ type: 'unparsed' })).toBe('large inbound ipc frame 47.6MB (unparsed)')
+  })
+
+  it('keeps the refusal wording and its folded multiplier', () => {
+    expect(alert({ id: 7, limit: IPC_FRAME_MAX_BYTES, suppressed: 225 })).toBe(
+      'refused inbound ipc frame 47.6MB, over the 128MB limit (response #7), +225 more folded',
+    )
+  })
+})
+
+describe('warn report folding', () => {
+  const collectWarns = (): IpcFrameSizeInfo[] => {
+    const seen: IpcFrameSizeInfo[] = []
+    setIpcFrameDiagnostics({ onWarn: (i) => seen.push(i) })
+    return seen
+  }
+
+  it('folds a burst of large sends into one report with the multiplier', () => {
+    // A send-side report is by construction a loop (one payload per call), which is
+    // exactly the shape that buried its own signal before the refusal tier was folded.
+    let at = 0
+    resetIpcFrameDiagnosticsForTests(() => at)
+    const seen = collectWarns()
+    for (let i = 0; i < 30; i++) {
+      report(IPC_FRAME_WARN_BYTES, { direction: 'out', channel: 'acpHost', name: 'onStdout' })
+    }
+    expect(seen).toHaveLength(1)
+
+    at = 1500
+    report(IPC_FRAME_WARN_BYTES, { direction: 'out', channel: 'acpHost', name: 'onStdout' })
+    expect(seen).toHaveLength(2)
+    expect(seen[1]?.suppressed).toBe(29)
+    expect(ipcFrameStats().warned).toBe(31)
+  })
+
+  it('reports every large inbound frame, folded or not', () => {
+    const seen = collectWarns()
+    for (let i = 0; i < 5; i++) {
+      report(IPC_FRAME_WARN_BYTES, { direction: 'in', channel: 'acpHost', name: 'onStdout' })
+    }
+    expect(seen).toHaveLength(5)
   })
 })
 

@@ -102,11 +102,27 @@ export const MEMORY_SAMPLE_INTERVAL_MS = 5_000
 /** Tighter cadence once a line is crossed, so the ramp is visible before it is fatal. */
 export const MEMORY_SAMPLE_INTERVAL_PRESSURED_MS = 1_000
 
+/**
+ * How often a reading is pushed to main. Deliberately slower than sampling: this is the
+ * curve that has to outlive the process, not the one that drives releasing, and main
+ * keeps it in a 32-slot ring. Under pressure it tightens, so the same ring covers the
+ * last few minutes densely instead of the last half hour sparsely.
+ */
+export const RENDERER_HEAP_REPORT_INTERVAL_MS = 30_000
+export const RENDERER_HEAP_REPORT_INTERVAL_PRESSURED_MS = 5_000
+
 export interface MemoryPressureServiceOptions {
   readonly readSample?: () => MemorySample | undefined
   /** Test seam: the clock behind the cadence. */
   readonly setTimer?: (run: () => void, ms: number) => unknown
   readonly clearTimer?: (handle: unknown) => void
+  /**
+   * Hand one reading to main, throttled. Absent = no reporting, which is what the tests
+   * and any embedder without a diagnostics channel get.
+   */
+  readonly reportSample?: (sample: MemorySample, level: MemoryPressureLevel) => void
+  /** Test seam: the clock behind the report throttle. */
+  readonly now?: () => number
 }
 
 export class MemoryPressureService extends Disposable implements IMemoryPressureService {
@@ -133,6 +149,13 @@ export class MemoryPressureService extends Disposable implements IMemoryPressure
   private readonly _readSample: () => MemorySample | undefined
   private readonly _setTimer: (run: () => void, ms: number) => unknown
   private readonly _clearTimer: (handle: unknown) => void
+  private readonly _reportSample:
+    | ((sample: MemorySample, level: MemoryPressureLevel) => void)
+    | undefined
+  private readonly _now: () => number
+  // 0 rather than Date.now() so the first reading is always reported: a crash two minutes
+  // after launch is exactly the case a 30s-throttled curve would otherwise miss entirely.
+  private _reportedAt = 0
 
   private _order = 0
   // Seeded from the assumed cage, then replaced by the process's real limit on the
@@ -159,6 +182,8 @@ export class MemoryPressureService extends Disposable implements IMemoryPressure
       ((handle) => {
         clearTimeout(handle as ReturnType<typeof setTimeout>)
       })
+    this._reportSample = options.reportSample
+    this._now = options.now ?? Date.now
   }
 
   registerReleaser(releaser: IMemoryReleaser): IDisposable {
@@ -202,6 +227,24 @@ export class MemoryPressureService extends Disposable implements IMemoryPressure
     }
   }
 
+  private _maybeReport(sample: MemorySample, level: MemoryPressureLevel): void {
+    const report = this._reportSample
+    if (!report) return
+    const at = this._now()
+    const interval =
+      level === MemoryPressureLevel.Normal
+        ? RENDERER_HEAP_REPORT_INTERVAL_MS
+        : RENDERER_HEAP_REPORT_INTERVAL_PRESSURED_MS
+    if (at - this._reportedAt < interval) return
+    this._reportedAt = at
+    try {
+      report(sample, level)
+    } catch {
+      // The reporter reaches across IPC. A throw here would take down the only observer
+      // of this heap — the very thing the report exists to describe.
+    }
+  }
+
   sample(): MemoryPressureLevel {
     const sample = this._readSample()
     if (!sample) {
@@ -222,6 +265,9 @@ export class MemoryPressureService extends Disposable implements IMemoryPressure
       limit: sample.limit,
       thresholds: this._thresholds,
     })
+    // Reported before the early return and before `release()`: the reading that matters
+    // is the one taken while the heap was still in the state being described.
+    this._maybeReport(sample, next)
     if (next === previous) return next
 
     this._level.set(next, undefined)

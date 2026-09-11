@@ -25,6 +25,7 @@ import { Emitter, type Event } from '../../base/event.js'
 import {
   IPC_FRAME_MAX_BYTES,
   IPC_FRAME_TOO_LARGE_CODE,
+  IPC_FRAME_WARN_BYTES,
   IpcFrameTooLargeError,
   assertIpcFrameWithinLimit,
   ipcFrameStats,
@@ -47,6 +48,27 @@ const refusingCodec: IpcCodec = {
 
 const flushMicrotasks = async (n = 5): Promise<void> => {
   for (let i = 0; i < n; i++) await Promise.resolve()
+}
+
+/**
+ * A warn-sized frame without materialising 32MiB. Every guard reads `byteLength` before
+ * touching the payload and the transport forwards the object untouched, so shadowing the
+ * accessor with an own property is enough to make a real, decodable frame look large.
+ */
+const withByteLength = (frame: Uint8Array, byteLength: number): Uint8Array => {
+  Object.defineProperty(frame, 'byteLength', { value: byteLength })
+  return frame
+}
+
+const LARGE = '__force_large__'
+
+/** Inflates the reported size of any frame whose JSON carries the marker. */
+const inflatingCodec: IpcCodec = {
+  encode(msg: IpcMessage): Uint8Array {
+    const frame = defaultCodec.encode(msg)
+    return JSON.stringify(msg).includes(LARGE) ? withByteLength(frame, IPC_FRAME_WARN_BYTES) : frame
+  },
+  decode: (data) => defaultCodec.decode(data),
 }
 
 /**
@@ -174,5 +196,79 @@ describe('receive-side refusal', () => {
     expect(ipcFrameStats()).toMatchObject({ oversized: 1, seen: 1 })
 
     pair.dispose()
+  })
+})
+
+describe('large-frame recording', () => {
+  it('records a large reply the server actually sent, not only the ones it refused', async () => {
+    const [clientProto, serverProto] = InMemoryMessagePassingProtocol.createPair()
+    const server = new ChannelServer(serverProto, true, inflatingCodec)
+    const client = new ChannelClient(clientProto, true, inflatingCodec)
+    server.registerChannel('big', createChannelFromObject({ get: () => LARGE }))
+
+    await expect(client.getChannel('big').call('get')).resolves.toBe(LARGE)
+
+    // Without this the headline says `warned=0 largest=4MiB` while the receiver's log
+    // carries `large inbound ipc frame 47.6MB` for the very same frame.
+    const sent = snapshotIpcFrames().filter((f) => f.direction === 'out')
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toMatchObject({ type: 'response', channel: 'big', name: 'get', id: 1 })
+    expect(ipcFrameStats().largestBytes).toBe(IPC_FRAME_WARN_BYTES)
+    expect(ipcFrameStats().largestLabel).toBe('out response big.get #1')
+
+    client.dispose()
+    server.dispose()
+  })
+
+  it('names the request a large reply answers, using the pending request', async () => {
+    const [clientProto, serverProto] = InMemoryMessagePassingProtocol.createPair()
+    const server = new ChannelServer(serverProto, true, inflatingCodec)
+    const client = new ChannelClient(clientProto, true, inflatingCodec)
+    server.registerChannel('big', createChannelFromObject({ get: () => LARGE }))
+
+    await expect(client.getChannel('big').call('get')).resolves.toBe(LARGE)
+
+    // A response carries no channel on the wire; the caller that issued the request is
+    // the only party that can name the payload, and it does so before settling.
+    const received = snapshotIpcFrames().filter((f) => f.direction === 'in')
+    expect(received.at(-1)).toMatchObject({ type: 'response', channel: 'big', name: 'get' })
+
+    client.dispose()
+    server.dispose()
+  })
+
+  it('falls back to the bare id when the reply answers a request this peer never made', async () => {
+    const [clientProto, serverProto] = InMemoryMessagePassingProtocol.createPair()
+    const client = new ChannelClient(clientProto, true, inflatingCodec)
+    const server = new ChannelServer(serverProto, true, inflatingCodec)
+
+    clientProto.send(inflatingCodec.encode({ type: 'response', id: 999, data: LARGE }))
+    await flushMicrotasks()
+
+    expect(snapshotIpcFrames().at(-1)).toMatchObject({
+      direction: 'in',
+      type: 'response',
+      channel: '',
+      name: '',
+      id: 999,
+    })
+
+    client.dispose()
+    server.dispose()
+  })
+
+  it('leaves sends under the warn line off the ring entirely', async () => {
+    const [clientProto, serverProto] = InMemoryMessagePassingProtocol.createPair()
+    const server = new ChannelServer(serverProto)
+    const client = new ChannelClient(clientProto)
+    server.registerChannel('math', createChannelFromObject({ add: (a) => (a as number) + 1 }))
+
+    await expect(client.getChannel('math').call('add', 1)).resolves.toBe(2)
+
+    // The send path pays one integer compare per frame and nothing else.
+    expect(snapshotIpcFrames().filter((f) => f.direction === 'out')).toHaveLength(0)
+
+    client.dispose()
+    server.dispose()
   })
 })
