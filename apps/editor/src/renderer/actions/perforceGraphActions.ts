@@ -176,7 +176,15 @@ export class PerforceGraphFocusSearchAction extends Action2 {
       id: PerforceGraphFocusSearchAction.ID,
       title: localize2('action.perforceGraph.focusSearch', 'Focus Search'),
       category: CATEGORY,
-      keybinding: { primary: 'ctrl+f', when: "activeEditorTypeId == 'perforceGraph'" },
+      // The focus gate lives on the keybinding only, so the graph yields Ctrl+F
+      // to whichever Monaco holds focus (the Output panel's log editor above
+      // all) while still owning it whenever no Monaco editor does.
+      keybinding: {
+        primary: 'ctrl+f',
+        when: "activeEditorTypeId == 'perforceGraph' && !editorFocus",
+      },
+      // Deliberately looser than the keybinding: keeps the palette entry listed
+      // as the fallback route to the graph's search box while Ctrl+F is taken.
       precondition: "activeEditorTypeId == 'perforceGraph'",
       f1: true,
     })

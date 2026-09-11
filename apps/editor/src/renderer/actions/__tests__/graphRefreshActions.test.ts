@@ -13,7 +13,7 @@ import {
 import { gitGraphViewState } from '../../services/gitGraph/gitGraphViewState.js'
 import { perforceGraphViewState } from '../../services/perforceGraph/perforceGraphViewState.js'
 import { PerforceGraphEditorInput } from '../../services/editor/PerforceGraphEditorInput.js'
-import { GitGraphRefreshAction } from '../gitGraphActions.js'
+import { GitGraphFocusSearchAction, GitGraphRefreshAction } from '../gitGraphActions.js'
 import { GoToFileSymbolAction } from '../gotoSymbolActions.js'
 import {
   PerforceGraphFocusSearchAction,
@@ -120,22 +120,55 @@ describe('graph refresh actions', () => {
     }
   })
 
-  it('ctrl+f resolves to Perforce focus-search in the graph, else to file Find', () => {
-    disposables.push(registerAction2(PerforceGraphFocusSearchAction))
+  it('ctrl+f reaches a graph only while no Monaco widget holds focus', () => {
+    // Registration order mirrors actions/index.ts: FindInFileAction (626) →
+    // GitGraphFocusSearchAction (673) → PerforceGraphFocusSearchAction (679).
+    // Both graphs register last, so at the shared default weight they win every
+    // tie — which is the bug: an active graph tab used to claim Ctrl+F even
+    // while the Output panel's Monaco owned the keyboard.
     disposables.push(registerAction2(FindInFileAction))
+    disposables.push(registerAction2(GitGraphFocusSearchAction))
+    disposables.push(registerAction2(PerforceGraphFocusSearchAction))
     const ctx = new ContextKeyService()
+    const activeEditorId = ctx.createKey<string>('activeEditorId', undefined)
     const activeEditorTypeId = ctx.createKey<string>('activeEditorTypeId', undefined)
+    const hasActiveEditor = ctx.createKey<boolean>('hasActiveEditor', false)
+    // Seeded false by ContextKeyContribution, flipped true by bridgeEditorFocus /
+    // syncEditorFocusContext while a Monaco widget — the Output panel's log
+    // editor included — holds DOM focus. Created explicitly on purpose: an unset
+    // key makes `!editorFocus` evaluate true and would hide the regression.
+    const editorFocus = ctx.createKey<boolean>('editorFocus', false)
     try {
+      activeEditorId.set('universe:/gitGraph')
+      expect(KeybindingsRegistry.resolveKeystroke('ctrl+f', ctx)).toMatchObject({
+        kind: 'execute',
+        command: GitGraphFocusSearchAction.ID,
+      })
+      // Output focused while the graph tab stays active: the graph yields.
+      editorFocus.set(true)
+      expect(KeybindingsRegistry.resolveKeystroke('ctrl+f', ctx)).toMatchObject({
+        kind: 'execute',
+        command: FindInFileAction.ID,
+      })
+      editorFocus.set(false)
+
+      // A scoped history tab bakes its scope into the id, so the Perforce twin
+      // gates on the root type key — never a fixed `activeEditorId`.
+      activeEditorId.reset()
       activeEditorTypeId.set('perforceGraph')
       expect(KeybindingsRegistry.resolveKeystroke('ctrl+f', ctx)).toMatchObject({
         kind: 'execute',
         command: PerforceGraphFocusSearchAction.ID,
       })
-      // A scoped history tab bakes its scope into the id, so gating must be on
-      // the root type key — never a fixed `activeEditorId`.
+      editorFocus.set(true)
+      expect(KeybindingsRegistry.resolveKeystroke('ctrl+f', ctx)).toMatchObject({
+        kind: 'execute',
+        command: FindInFileAction.ID,
+      })
+      editorFocus.set(false)
       activeEditorTypeId.reset()
-      // FindInFileAction additionally gates on `hasActiveEditor`.
-      const hasActiveEditor = ctx.createKey<boolean>('hasActiveEditor', false)
+
+      // No graph tab: Find still wins through its open-editor fallback.
       hasActiveEditor.set(true)
       expect(KeybindingsRegistry.resolveKeystroke('ctrl+f', ctx)).toMatchObject({
         kind: 'execute',

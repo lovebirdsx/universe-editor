@@ -144,6 +144,45 @@ test.describe('output find', () => {
     ).not.toBe(true)
   })
 
+  test('Ctrl+F with an active Git Graph tab still opens the Output find widget @regression', async ({
+    workbench,
+    page,
+  }) => {
+    await workbench.waitForRestored()
+    // The one-shot startup focus restore lands after LifecyclePhase.Restored and
+    // would otherwise yank focus out of the panel mid-test.
+    await workbench.waitForBootstrapFocusSettled()
+    // Git Graph is a core editor — its component is renderer-registered — so it
+    // opens on the baseline `extensions: []`: no repo, no git extension, no cold
+    // boot. Its Ctrl+F binding keys off the active *tab* (`activeEditorId`),
+    // which is what used to claim the key while the panel owned the focus.
+    await workbench.runCommand('git-graph.view')
+    await expect
+      .poll(() => workbench.getActiveEditorUri(), { timeout: 15_000 })
+      .toBe('universe:/gitGraph')
+    // Without the git extension the graph's initial query stays gated on command
+    // registration, so the body sits in its loading state. The toolbar — and
+    // with it the search input Ctrl+F used to steal focus for — still renders.
+    await expect(page.locator('[data-testid="gitGraph-editor"]')).toBeVisible()
+
+    await seedChannel(page)
+    await focusOutput(page)
+
+    await page.keyboard.press('ControlOrMeta+f')
+
+    // Find follows DOM focus, not the active tab: the Output's own find widget
+    // opens and the panel keeps the keyboard.
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getOutputFindState()?.isRevealed), {
+        timeout: 10_000,
+      })
+      .toBe(true)
+    expect(await page.evaluate(() => window.__E2E__!.getContextKey('focusedView'))).toBe(
+      OUTPUT_VIEW_ID,
+    )
+    expect(await page.evaluate(() => window.__E2E__!.getContextKey('editorFocus'))).toBe(true)
+  })
+
   test('Ctrl+H is a no-op in the read-only Output log @p1', async ({ workbench, page }) => {
     await workbench.waitForRestored()
     // The one-shot startup focus restore lands after LifecyclePhase.Restored and
