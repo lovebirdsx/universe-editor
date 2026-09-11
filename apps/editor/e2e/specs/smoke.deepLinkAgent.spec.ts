@@ -20,12 +20,11 @@
  *  smoke.deepLinkAgentWorkspace.spec.ts.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { ElectronApplication, Page } from '@playwright/test'
 import { test, expect } from '../fixtures/sharedApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ECHO_AGENT_PATH = resolve(__dirname, '..', '..', 'src', 'test-fixtures', 'echoAgent.cjs')
@@ -59,7 +58,7 @@ test.describe('@p1 deep link — agent', () => {
     await workbench.waitForRestored()
     // Agent deep links route by workspace, so each test opens one first and
     // points the link's `cwd` at it (forward slashes, like an external caller).
-    const wsDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-deeplink-'))
+    const wsDir = mkTempDir('universe-editor-e2e-deeplink-')
     wsFs = wsDir.replace(/\\/g, '/')
     await workbench.openWorkspace(wsDir)
     await installEchoAgent(page)

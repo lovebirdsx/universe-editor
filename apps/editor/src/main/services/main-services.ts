@@ -21,6 +21,7 @@ import {
 import { app, shell } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
+import { getTempRoot } from '@universe-editor/temp-root'
 import { ILoggerService, createNamedLogger } from '@universe-editor/platform'
 import { formatIpcFrames } from '@universe-editor/platform'
 import { IFileService } from '@universe-editor/platform'
@@ -289,8 +290,8 @@ registerSingletonFactory(IFileClipboardService, (acc) => {
   return new FileClipboardMainService(
     acc.get(IFileService),
     loggerService,
-    createOsClipboardBackend(process.platform, app.getPath('temp'), logger),
-    join(app.getPath('temp'), 'universe-editor', 'clipboard'),
+    createOsClipboardBackend(process.platform, getTempRoot(), logger),
+    join(getTempRoot(), 'universe-editor', 'clipboard'),
   )
 })
 registerSingletonFactory(IDiagnosticsService, (acc) => {

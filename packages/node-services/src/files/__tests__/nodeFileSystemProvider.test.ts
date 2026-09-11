@@ -6,16 +6,16 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { promises as fs } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { FileSystemError, URI } from '@universe-editor/platform'
 import { NodeFileSystemProvider } from '../nodeFileSystemProvider.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 describe('NodeFileSystemProvider read-size backstop', () => {
   let dir: string
 
   beforeEach(async () => {
-    dir = await fs.mkdtemp(join(tmpdir(), 'universe-editor-nfsp-'))
+    dir = mkTempDir('universe-editor-nfsp-')
   })
 
   afterEach(async () => {
@@ -65,7 +65,7 @@ describe('NodeFileSystemProvider readFileHead', () => {
   let dir: string
 
   beforeEach(async () => {
-    dir = await fs.mkdtemp(join(tmpdir(), 'universe-editor-nfsp-head-'))
+    dir = mkTempDir('universe-editor-nfsp-head-')
   })
 
   afterEach(async () => {
@@ -111,7 +111,7 @@ describe('NodeFileSystemProvider trash capability', () => {
   })
 
   it('rejects useTrash without a hook instead of deleting permanently', async () => {
-    const dir = await fs.mkdtemp(join(tmpdir(), 'universe-editor-nfsp-trash-'))
+    const dir = mkTempDir('universe-editor-nfsp-trash-')
     const file = join(dir, 'keep.txt')
     await fs.writeFile(file, 'data', 'utf8')
     try {
@@ -131,7 +131,7 @@ describe('NodeFileSystemProvider read-failure log throttling', () => {
   let dir: string
 
   beforeEach(async () => {
-    dir = await fs.mkdtemp(join(tmpdir(), 'universe-editor-nfsp-log-'))
+    dir = mkTempDir('universe-editor-nfsp-log-')
   })
 
   afterEach(async () => {

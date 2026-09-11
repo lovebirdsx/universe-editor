@@ -42,6 +42,10 @@ export { AcpTimelinePO } from './pages/AcpTimelinePO.js'
 
 export { defineE2EConfig, type E2EConfigOptions } from './playwrightConfig.js'
 
+// 转发而非要求每个 spec 各自声明依赖：所有 e2e 套件（含 extensions-external 与
+// create-extension 模板）都已经从这个 barrel 取东西，临时目录走同一个入口。
+export { mkTempDir, effectiveTempRoot, TEMP_PREFIXES } from '@universe-editor/temp-root'
+
 export type {
   E2EDisposableLeakReport,
   E2EOpenWindow,

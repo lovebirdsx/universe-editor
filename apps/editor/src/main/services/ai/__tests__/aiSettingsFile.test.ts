@@ -6,10 +6,10 @@
  *  providers and a per-model config back to back) loses one at random.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 const renameMock = vi.hoisted(() => vi.fn())
 
@@ -27,7 +27,7 @@ let path: string
 beforeEach(async () => {
   const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
   renameMock.mockImplementation(actual.rename)
-  dir = await mkdtemp(join(tmpdir(), 'ue-aisettings-'))
+  dir = mkTempDir('ue-aisettings-')
   path = join(dir, 'aiSettings.json')
 })
 

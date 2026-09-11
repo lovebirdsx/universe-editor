@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { scanExtensions, scanSingleExtension } from '../extensionScanner.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 let dir: string
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'ue-scan-'))
+  dir = mkTempDir('ue-scan-')
 })
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true })
@@ -42,7 +42,7 @@ describe('scanExtensions', () => {
 
   it('follows a symlinked/junctioned extension dir (dev/e2e --extensionDevelopmentPath model)', async () => {
     // A real extension outside the scan dir, linked in as a directory symlink.
-    const outside = await mkdtemp(join(tmpdir(), 'ue-scan-ext-'))
+    const outside = mkTempDir('ue-scan-ext-')
     await mkdir(join(outside, 'linked-ext'), { recursive: true })
     await writeFile(
       join(outside, 'linked-ext', 'package.json'),

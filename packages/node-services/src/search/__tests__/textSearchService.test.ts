@@ -3,8 +3,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it } from 'vitest'
-import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
-import { tmpdir, cpus } from 'node:os'
+import { mkdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { cpus } from 'node:os'
 import path from 'node:path'
 import { DisposableTracker, setDisposableTracker, URI } from '@universe-editor/platform'
 import {
@@ -15,11 +15,12 @@ import {
   resolveRipgrepDiskPath,
   TextSearchService,
 } from '../textSearchService.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 const tempRoots: string[] = []
 
 async function makeTempRoot(): Promise<string> {
-  const root = await mkdtemp(path.join(tmpdir(), 'ue-text-search-'))
+  const root = mkTempDir('ue-text-search-')
   tempRoots.push(root)
   return root
 }

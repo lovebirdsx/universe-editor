@@ -16,11 +16,11 @@
 import {
   createColdAppTest,
   resolveEditorBuild,
+  mkTempDir,
 } from '../../../../packages/e2e-harness/dist/index.js'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { mkdtempSync, symlinkSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { symlinkSync } from 'node:fs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const extRoot = resolve(__dirname, '../..')
@@ -29,7 +29,7 @@ const { appRoot, mainEntry } = resolveEditorBuild()
 // Isolated user-extensions dir holding a single junction → this extension. A
 // junction (dir symlink) works on Windows + CI Linux alike; the type arg is
 // ignored off Windows. Scanning follows it and reads the real dist/ in place.
-const userExtensionsDir = mkdtempSync(join(tmpdir(), 'ue2-pdf-ext-'))
+const userExtensionsDir = mkTempDir('ue2-pdf-ext-')
 symlinkSync(extRoot, join(userExtensionsDir, 'universe-pdf'), 'junction')
 
 export const test = createColdAppTest({

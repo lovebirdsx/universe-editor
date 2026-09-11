@@ -23,19 +23,20 @@ import { pathToFileURL } from 'url'
 import { dirname, resolve, join } from 'path'
 import { fileURLToPath } from 'url'
 import { existsSync } from 'fs'
-import { tmpdir } from 'os'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = resolve(__dirname, '..')
+const { mkTempDir } = await import('./lib/temp-root.mjs')
 // Resolve deps (esbuild, monaco-editor) from apps/editor where they are installed.
 const require = createRequire(join(REPO_ROOT, 'apps/editor/package.json'))
 
 // --- locate inputs -------------------------------------------------------------
 
 const vscodeArg = process.argv[2]
-const VS = resolve(
-  vscodeArg ? vscodeArg : join(REPO_ROOT, '..', 'vscode', 'src', 'vs'),
-).replace(/\\/g, '/')
+const VS = resolve(vscodeArg ? vscodeArg : join(REPO_ROOT, '..', 'vscode', 'src', 'vs')).replace(
+  /\\/g,
+  '/',
+)
 
 if (!existsSync(join(VS, 'editor/common/config/editorOptions.ts'))) {
   console.error(
@@ -92,7 +93,7 @@ const res = await esbuild.build({
   logLevel: 'silent',
 })
 
-const bundlePath = join(tmpdir(), `editor-options-dump.${process.pid}.mjs`)
+const bundlePath = join(mkTempDir('ue-editor-schema-'), 'editor-options-dump.mjs')
 writeFileSync(bundlePath, res.outputFiles[0].text)
 const { DUMP } = await import(pathToFileURL(bundlePath).href)
 
@@ -289,7 +290,9 @@ function renderSchema(flatKey, schema, indent) {
   if (schema.properties !== undefined) {
     lines.push(`${pad2}properties: {`)
     for (const [k, v] of Object.entries(schema.properties)) {
-      lines.push(`${'  '.repeat(indent + 2)}${jsLiteral(k)}: ${renderSchema(`${flatKey}.${k}`, v, indent + 2)},`)
+      lines.push(
+        `${'  '.repeat(indent + 2)}${jsLiteral(k)}: ${renderSchema(`${flatKey}.${k}`, v, indent + 2)},`,
+      )
     }
     lines.push(`${pad2}},`)
   }
@@ -354,7 +357,9 @@ const scalarCount = keys.filter((k) => {
 }).length
 
 console.log(`[gen-editor-schema] emitted ${keys.length} keys (${scalarCount} scalar)`)
-console.log(`[gen-editor-schema]   skipped ${skippedExisting} hand-written, ${skippedExcluded} excluded`)
+console.log(
+  `[gen-editor-schema]   skipped ${skippedExisting} hand-written, ${skippedExcluded} excluded`,
+)
 console.log(`[gen-editor-schema]   ${Object.keys(nls).length} nls strings`)
 console.log(`[gen-editor-schema] wrote ${OUT_SCHEMA}`)
 console.log(`[gen-editor-schema] wrote ${OUT_NLS}`)

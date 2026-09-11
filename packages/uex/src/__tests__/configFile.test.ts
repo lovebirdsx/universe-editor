@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import * as path from 'node:path'
 import { uexConfigPath, readUexConfig, writeUexConfig } from '../lib/configFile.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 function tempConfigPath(): string {
-  return path.join(mkdtempSync(path.join(tmpdir(), 'uex-cfg-')), '.uex', 'config.json')
+  return path.join(mkTempDir('uex-cfg-'), '.uex', 'config.json')
 }
 
 describe('uexConfigPath', () => {

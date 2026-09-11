@@ -8,12 +8,12 @@
  *  an OS protocol launch.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync, readFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test, expect } from '../fixtures/electronApp.js'
 import { expectNoLeaks, evaluateWhenRestored } from '../pages/WorkbenchPO.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ECHO_AGENT_PATH = resolve(__dirname, '..', '..', 'src', 'test-fixtures', 'echoAgent.cjs')
@@ -26,8 +26,8 @@ test.describe('@p1 deep link — agent workspace routing', () => {
   }) => {
     await workbench.waitForRestored()
 
-    const rootA = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-dlws-a-'))
-    const rootB = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-dlws-b-'))
+    const rootA = mkTempDir('universe-editor-e2e-dlws-a-')
+    const rootB = mkTempDir('universe-editor-e2e-dlws-b-')
     const rootAFs = rootA.replace(/\\/g, '/')
     const rootBFs = rootB.replace(/\\/g, '/')
     await workbench.openWorkspace(rootA)

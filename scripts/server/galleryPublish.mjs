@@ -275,7 +275,10 @@ export function createGalleryApi(deps) {
     if (Number.isFinite(declared) && declared > maxVsixSize) {
       throw new ApiError(413, `vsix exceeds the ${maxVsixSize}-byte upload limit`)
     }
-    const tmpVsix = join(tmpdir(), `upload-${randomUUID()}.vsix`)
+    // 服务端产物（esbuild 打成 dist/server.js 后在服务器跑），刻意不引 @universe-editor/temp-root：
+    // 服务器上没有仓库根，getTempRoot() 也会退化成 os.tmpdir()，引入只会给 server:bundle 加一条构建期依赖边。
+    // 这里一次只有一个上传暂存包、用完即删，不是堆积源。
+    const tmpVsix = join(tmpdir(), `upload-${randomUUID()}.vsix`) // temp-root:allow
     try {
       await streamUpload(req, tmpVsix)
 

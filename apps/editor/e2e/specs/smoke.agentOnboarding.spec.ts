@@ -9,13 +9,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { test, expect } from '@playwright/test'
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   ENABLED_EXTENSIONS_ENV,
   INITIAL_SETTINGS,
   launchElectron,
+  mkTempDir,
 } from '@universe-editor/e2e-harness'
 import { APP_ROOT, MAIN_ENTRY, closeApp } from '../fixtures/electronApp.js'
 import { expectNoLeaks } from '../pages/WorkbenchPO.js'
@@ -25,7 +25,7 @@ test.describe('@p1 first-run agent onboarding', () => {
     // Self-launched cold boot: leave room for the graceful-close + force-kill
     // teardown under full-suite parallel load (see smoke.viewSizes).
     test.setTimeout(120_000)
-    const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-onboarding-'))
+    const userDataDir = mkTempDir('universe-editor-e2e-onboarding-')
     // Baseline settings (language pin, manual update, WSL probe off), but
     // intentionally do NOT seed welcome.agentOnboarding.seen so the first-run
     // reveal fires.

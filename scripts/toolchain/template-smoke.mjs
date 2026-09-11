@@ -12,17 +12,10 @@
  * Usage: node scripts/toolchain/template-smoke.mjs [--keep]
  */
 import { spawnSync } from 'node:child_process'
-import {
-  mkdtempSync,
-  existsSync,
-  readFileSync,
-  writeFileSync,
-  rmSync,
-  readdirSync,
-} from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, readFileSync, writeFileSync, rmSync, readdirSync } from 'node:fs'
 import * as path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { mkTempDir } from '../lib/temp-root.mjs'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const keep = process.argv.includes('--keep')
@@ -78,7 +71,7 @@ function pack(pkg, destDir) {
 async function main() {
   for (const pkg of PACKAGES) assertDist(pkg)
 
-  const tmp = mkdtempSync(path.join(tmpdir(), 'ue-toolchain-smoke-'))
+  const tmp = mkTempDir('ue-toolchain-smoke-')
   console.log(`smoke workspace: ${tmp}`)
   try {
     const tarballDir = path.join(tmp, 'tarballs')

@@ -12,13 +12,13 @@
  *  reopen A → assert no broken-link marker remains.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, expect } from '../fixtures/markdownApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 function writeWorkspace(): { dir: string; aPath: string; bPath: string; subDir: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-mdmove-'))
+  const dir = mkTempDir('universe-editor-e2e-mdmove-')
   const subDir = join(dir, 'sub')
   mkdirSync(subDir)
   const aPath = join(dir, 'a.md')

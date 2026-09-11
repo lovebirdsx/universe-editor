@@ -2,6 +2,7 @@ import { configDefaults, defineConfig } from 'vitest/config'
 
 export default defineConfig({
   test: {
+    globalSetup: ['@universe-editor/temp-root/vitest-setup'],
     silent: 'passed-only',
     // Template e2e specs import @universe-editor/e2e-harness, which this
     // package doesn't depend on. Template unit tests (*.test.ts) are still

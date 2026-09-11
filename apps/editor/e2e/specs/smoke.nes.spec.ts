@@ -12,15 +12,15 @@
  *  InlineCompletionService / nesEditParser / RecentEditsTracker.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, expect } from '../fixtures/sharedApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 const JUMP = 'ai.inlineCompletion.jump'
 
 function writeWorkspace(): { dir: string; filePath: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-nes-'))
+  const dir = mkTempDir('universe-editor-e2e-nes-')
   const filePath = join(dir, 'a.txt')
   writeFileSync(filePath, 'line one\nline two\nline three\n')
   return { dir: dir.replace(/\\/g, '/'), filePath: filePath.replace(/\\/g, '/') }

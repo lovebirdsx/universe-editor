@@ -14,9 +14,9 @@
 
 import * as path from 'node:path'
 import * as fs from 'node:fs/promises'
-import * as os from 'node:os'
 import AdmZip from 'adm-zip'
 import { test, expect } from '../fixtures/electronApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 const VIEW_TYPE = 'e2eWebviewPanel.view'
 const MARKER = 'e2e-webview-panel-rendered'
@@ -88,7 +88,7 @@ test.describe('@p1 webview panel (createWebviewPanel)', () => {
   test('creates, renders, reveals and disposes an extension-owned webview tab', async ({
     workbench,
   }) => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-webview-panel-'))
+    const tmpDir = mkTempDir('ue2-webview-panel-')
     const vsixPath = await makeWebviewPanelVsix(tmpDir)
     const otherPath = path.join(tmpDir, 'other.txt')
     await fs.writeFile(otherPath, 'plain text to switch away to')
@@ -149,7 +149,7 @@ test.describe('@p1 webview panel (createWebviewPanel)', () => {
   test('fires onDidChangeViewState when the panel tab hides and re-shows', async ({
     workbench,
   }) => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-webview-panel-vs-'))
+    const tmpDir = mkTempDir('ue2-webview-panel-vs-')
     const vsixPath = await makeWebviewPanelVsix(tmpDir)
     const otherPath = path.join(tmpDir, 'other.txt')
     await fs.writeFile(otherPath, 'plain text to switch away to')

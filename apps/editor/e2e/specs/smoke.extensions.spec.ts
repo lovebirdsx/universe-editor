@@ -12,9 +12,8 @@
 import * as path from 'node:path'
 import * as fs from 'node:fs/promises'
 import * as nodeFs from 'node:fs'
-import * as os from 'node:os'
 import AdmZip from 'adm-zip'
-import { createColdAppTest } from '@universe-editor/e2e-harness'
+import { createColdAppTest, mkTempDir } from '@universe-editor/e2e-harness'
 import { APP_ROOT, MAIN_ENTRY, test, expect } from '../fixtures/electronApp.js'
 
 const EXTENSIONS_CONTAINER = 'workbench.view.extensions'
@@ -56,7 +55,7 @@ test.describe('@p1 extensions', () => {
     workbench,
   }) => {
     const commandId = 'e2eSample.hello'
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-ext-'))
+    const tmpDir = mkTempDir('ue2-ext-')
     const vsixPath = await makeVsix(tmpDir, commandId)
 
     await workbench.waitForRestored()
@@ -195,9 +194,7 @@ const INCOMPAT_COMMAND_ID = 'e2eIncompat.hello'
 const INCOMPAT_DEV_EXT_ID = 'universe.e2e-incompat'
 
 function makeIncompatibleDevExtensionDir(): string {
-  const dir = nodeFs.realpathSync.native(
-    nodeFs.mkdtempSync(path.join(os.tmpdir(), 'ue2-incompat-')),
-  )
+  const dir = nodeFs.realpathSync.native(mkTempDir('ue2-incompat-'))
   nodeFs.writeFileSync(
     path.join(dir, 'package.json'),
     JSON.stringify({

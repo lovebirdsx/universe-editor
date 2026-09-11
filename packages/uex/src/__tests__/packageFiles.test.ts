@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import * as path from 'node:path'
 import { listPackageFiles } from '../lib/packageFiles.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 function makeExtension(): string {
-  const dir = mkdtempSync(path.join(tmpdir(), 'uex-ls-'))
+  const dir = mkTempDir('uex-ls-')
   mkdirSync(path.join(dir, 'dist', 'nested'), { recursive: true })
   writeFileSync(path.join(dir, 'package.json'), '{}')
   writeFileSync(path.join(dir, 'dist', 'extension.js'), '')

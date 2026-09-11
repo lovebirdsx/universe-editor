@@ -16,10 +16,10 @@
 
 import * as path from 'node:path'
 import * as fs from 'node:fs/promises'
-import * as os from 'node:os'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test, expect } from '../fixtures/sharedApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ECHO_AGENT_PATH = resolve(__dirname, '..', '..', 'src', 'test-fixtures', 'echoAgent.cjs')
@@ -66,7 +66,7 @@ test.describe('@p1 session editor drag overlay', () => {
     page,
     workbench,
   }) => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-sedo-'))
+    const tmpDir = mkTempDir('ue2-sedo-')
     await fs.writeFile(path.join(tmpDir, 'a.txt'), 'x')
     await openSessionInEditor(page, workbench, tmpDir)
 
@@ -121,7 +121,7 @@ test.describe('@p1 session editor drag overlay', () => {
     page,
     workbench,
   }) => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-sedo2-'))
+    const tmpDir = mkTempDir('ue2-sedo2-')
     await fs.writeFile(path.join(tmpDir, 'a.txt'), 'x')
     await openSessionInEditor(page, workbench, tmpDir)
 

@@ -12,11 +12,11 @@
  *       只读预览。
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdirSync, mkdtempSync, realpathSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, realpathSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test, expect } from '../fixtures/sharedApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ECHO_AGENT_PATH = resolve(__dirname, '..', '..', 'src', 'test-fixtures', 'echoAgent.cjs')
@@ -37,9 +37,7 @@ test.describe('@p1 agents — sub-project session scope', () => {
   }) => {
     await workbench.waitForRestored()
 
-    const wsDir = realpathSync.native(
-      mkdtempSync(join(tmpdir(), 'universe-editor-e2e-subproject-')),
-    )
+    const wsDir = realpathSync.native(mkTempDir('universe-editor-e2e-subproject-'))
     const subDir = join(wsDir, ...SUB_SEGMENTS)
     mkdirSync(subDir, { recursive: true })
     await workbench.openWorkspace(wsDir)

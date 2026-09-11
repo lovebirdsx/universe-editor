@@ -27,11 +27,20 @@
  *  surface as a per-test retry storm, so we throw once with the fix spelled out.
  *  On WSL a real DISPLAY already exists, so the same failures degrade to a warning
  *  and fall back to that display instead.
+ *
+ *  The same "runs before workers fork" property is what makes this the place to
+ *  point TEMP/TMP/TMPDIR at a per-run temp root: spec-level mkdtemp, the fixtures
+ *  in ./fixtures.ts, playwright-core's own `playwright-artifacts-*` dirs and every
+ *  Electron we launch all inherit it, and teardown deletes the whole tree. Without
+ *  it each of those leaves a random-suffixed directory under the user's %TEMP% —
+ *  which on Windows sits inside the user profile and is what made logins take
+ *  minutes after enough e2e runs.
  *--------------------------------------------------------------------------------------------*/
 
 import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import net from 'node:net'
+import { createRunRoot, installRunTempEnv, removeRunRoot } from '@universe-editor/temp-root'
 
 // Screen geometry matches CI's `xvfb-run --server-args="-screen 0 1280x1024x24"`.
 const XVFB_SCREEN = '1280x1024x24'
@@ -174,7 +183,32 @@ function startCandidate(displayNumber: number): Promise<ChildProcess | undefined
 }
 
 export default async function globalSetup(): Promise<(() => void) | undefined> {
-  if (process.platform !== 'linux') return
+  // 先立 run 根：它必须在任何 worker / Electron 起来之前生效，且与 Xvfb 互不依赖。
+  const runRoot = createRunRoot('ue-e2e')
+  installRunTempEnv(runRoot)
+  console.log(`[e2e] 临时根 ${runRoot}`)
+
+  let stopXvfb: (() => void) | undefined
+  try {
+    stopXvfb = await setupXvfb()
+  } catch (err) {
+    // Xvfb 起不来时整趟会失败，但 run 根不该留给下一次运行。
+    removeRunRoot(runRoot)
+    throw err
+  }
+
+  const teardowns: Array<() => void> = [() => removeRunRoot(runRoot)]
+  if (stopXvfb) teardowns.push(stopXvfb)
+
+  return () => {
+    // 后进先出：先收 Xvfb，再删 run 根（Xvfb 的临时 socket 也在 TEMP 语义之外，顺序其实无关，
+    // 但保持与 setup 相反的顺序更不容易踩坑）。
+    for (const teardown of teardowns.reverse()) teardown()
+  }
+}
+
+async function setupXvfb(): Promise<(() => void) | undefined> {
+  if (process.platform !== 'linux') return undefined
   // Falsy (not `!== undefined`): `DISPLAY= pnpm e2e` sets an EMPTY string, and
   // Electron treats an empty DISPLAY as missing ("Missing X server or $DISPLAY"), so
   // we must too — this also keeps the check consistent with linux-preflight's

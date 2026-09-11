@@ -1,12 +1,12 @@
 import { bench, beforeAll, afterAll, describe } from 'vitest'
 import { vi } from 'vitest'
 import { promises as fs } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { URI } from '@universe-editor/platform'
+import { getTempRoot, mkTempDir } from '@universe-editor/temp-root'
 
 vi.mock('electron', () => ({
-  app: { getPath: vi.fn(() => tmpdir()), on: vi.fn(), quit: vi.fn() },
+  app: { getPath: vi.fn(() => getTempRoot()), on: vi.fn(), quit: vi.fn() },
   ipcMain: { handle: vi.fn(), on: vi.fn() },
 }))
 
@@ -32,7 +32,7 @@ async function createFiles(dir: string, count: number): Promise<void> {
 }
 
 beforeAll(async () => {
-  tmpDir = await fs.mkdtemp(join(tmpdir(), 'ue-bench-dir-'))
+  tmpDir = mkTempDir('ue-bench-dir-')
   dir1k = join(tmpDir, 'dir-1k')
   dir10k = join(tmpDir, 'dir-10k')
   await fs.mkdir(dir1k)

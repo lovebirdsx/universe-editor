@@ -7,12 +7,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { afterEach, beforeAll, afterAll, describe, expect, it } from 'vitest'
 import { REMOTE_PROTOCOL_VERSION, type IRemoteDaemonInfo } from '@universe-editor/platform'
 import { buildBootstrapBundle, type BuiltBootstrap } from './helpers/buildBootstrap.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 const INFO_PREFIX = 'UNIVERSE_REMOTE_DAEMON_INFO='
 
@@ -49,7 +49,7 @@ afterEach(async () => {
 })
 
 async function makeTempDir(): Promise<string> {
-  const dir = await mkdtemp(path.join(tmpdir(), 'ue-bootstrap-'))
+  const dir = mkTempDir('ue-bootstrap-')
   tempDirs.push(dir)
   return dir
 }

@@ -41,7 +41,6 @@
 
 import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, unlinkSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { createInterface as createPromptInterface } from 'node:readline/promises'
 import { StringDecoder } from 'node:string_decoder'
@@ -58,6 +57,7 @@ import {
 import { SERVER_ENV_FILE } from './serverEnv.mjs'
 import { isValidDeployUser } from './setup.mjs'
 import { loadEnv } from '../lib/env.mjs'
+import { getTempRoot } from '../lib/temp-root.mjs'
 
 export { parseArgs }
 
@@ -560,7 +560,7 @@ async function main() {
   }
 
   console.log('🗜️  打包首装产物')
-  const tgzLocal = join(tmpdir(), `${staging}.tgz`)
+  const tgzLocal = join(getTempRoot(), `${staging}.tgz`)
   run('tar', ['-czf', tgzLocal, '-C', serverDir, ...buildTarFileList({ withEnv })], {
     timeoutMs: TIMEOUT_MS.tar,
   })

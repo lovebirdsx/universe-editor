@@ -3,15 +3,15 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as path from 'node:path'
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { readExtensionIconDataUrl } from '../extensionIcon.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 let root: string
 
 beforeEach(async () => {
-  root = await mkdtemp(path.join(tmpdir(), 'ext-icon-'))
+  root = mkTempDir('ext-icon-')
 })
 
 afterEach(async () => {

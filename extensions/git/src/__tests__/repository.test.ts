@@ -1,6 +1,5 @@
 import { execFile } from 'node:child_process'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -10,6 +9,7 @@ import {
   parseWorktrees,
   Repository,
 } from '../repository.js'
+import { getTempRoot, mkTempDir } from '@universe-editor/temp-root'
 
 interface FakeCommand {
   readonly command: string
@@ -125,7 +125,7 @@ async function commitFile(repo: string, content: string, message: string): Promi
 }
 
 async function createRemoteBackedRepo(): Promise<{ root: string; local: string; other: string }> {
-  const root = await mkdtemp(join(tmpdir(), 'ue-git-repo-'))
+  const root = mkTempDir('ue-git-repo-')
   tmpRoots.push(root)
   const remote = join(root, 'remote.git')
   const local = join(root, 'local')
@@ -326,7 +326,7 @@ describe('Repository remote state refresh', () => {
 
 describe('Repository submodule update callback', () => {
   async function createRepoWithSubmoduleMarker(): Promise<string> {
-    const root = await mkdtemp(join(tmpdir(), 'ue-git-submodule-'))
+    const root = mkTempDir('ue-git-submodule-')
     tmpRoots.push(root)
     await git(['init', root])
     await writeFile(join(root, '.gitmodules'), '')
@@ -348,7 +348,7 @@ describe('Repository submodule update callback', () => {
 
   it('does not notify when the update fails', async () => {
     // No repository at all — `git submodule update` exits non-zero.
-    const root = await mkdtemp(join(tmpdir(), 'ue-git-nosubmodule-'))
+    const root = mkTempDir('ue-git-nosubmodule-')
     tmpRoots.push(root)
     const onSubmodulesUpdated = vi.fn()
     const repo = new Repository(root, undefined, { onSubmodulesUpdated })
@@ -381,7 +381,7 @@ describe('Repository submodule update callback', () => {
 
 describe('Repository.checkIgnore', () => {
   async function createPlainRepo(): Promise<string> {
-    const root = await mkdtemp(join(tmpdir(), 'ue-git-checkignore-'))
+    const root = mkTempDir('ue-git-checkignore-')
     tmpRoots.push(root)
     await git(['init', root])
     return root
@@ -420,7 +420,7 @@ describe('Repository.checkIgnore', () => {
     const repo = new Repository(root)
     try {
       await expect(
-        repo.checkIgnore([join(tmpdir(), 'elsewhere-xyz', '.eslintcache')]),
+        repo.checkIgnore([join(getTempRoot(), 'elsewhere-xyz', '.eslintcache')]),
       ).resolves.toEqual([])
     } finally {
       repo.dispose()
@@ -428,7 +428,7 @@ describe('Repository.checkIgnore', () => {
   })
 
   it('degrades to "nothing ignored" when git check-ignore fails', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'ue-git-notrepo-'))
+    const root = mkTempDir('ue-git-notrepo-')
     tmpRoots.push(root)
     const repo = new Repository(root) // no `git init` — check-ignore exits 128
     try {

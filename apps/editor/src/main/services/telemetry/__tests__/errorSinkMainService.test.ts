@@ -2,8 +2,7 @@
  *  Tests for apps/editor/src/main/services/telemetry/errorSinkMainService.ts
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -12,6 +11,7 @@ import {
   type ErrorJsonlRecord,
 } from '../errorSinkMainService.js'
 import type { WireErrorRecord } from '../../../../shared/ipc/services.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 function makeError(message: string, frameFile = 'D:\\app\\src\\thing\\doer.ts', line = 10): Error {
   const err = new Error(message)
@@ -38,7 +38,7 @@ describe('ErrorSinkMainService', () => {
   let sink: ErrorSinkMainService
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'error-sink-test-'))
+    dir = mkTempDir('error-sink-test-')
     filePath = join(dir, 'errors.jsonl')
     sink = new ErrorSinkMainService({
       sessionDir: dir,

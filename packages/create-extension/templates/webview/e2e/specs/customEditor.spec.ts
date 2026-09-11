@@ -1,12 +1,12 @@
 import { test, expect } from '../fixtures/app.mjs'
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 test.describe('@p1 __name__', () => {
   test('opens a .__name__ file in its read-only custom editor', async ({ page, workbench }) => {
     test.slow()
-    const dir = mkdtempSync(join(tmpdir(), 'ues-__name__-'))
+    const dir = mkTempDir('ues-__name__-')
     const filePath = join(dir, 'sample.__name__')
     writeFileSync(filePath, 'preview me', 'utf8')
 

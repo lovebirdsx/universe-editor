@@ -5,15 +5,15 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, statSync, utimesSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { normalizeFutureMtimes, TOLERANCE_MS } from '../ensure-fresh-mtimes.mjs'
+import { mkTempDir } from '../../lib/temp-root.mjs'
 
 const HOUR_MS = 3600_000
 
 function makeTree(files) {
-  const root = mkdtempSync(join(tmpdir(), 'fresh-mtimes-'))
+  const root = mkTempDir('fresh-mtimes-')
   const now = new Date()
   for (const [rel, offsetMs] of Object.entries(files)) {
     const abs = join(root, rel)

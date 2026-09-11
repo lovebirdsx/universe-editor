@@ -6,10 +6,10 @@
  *  alongside b.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, expect } from '../fixtures/sharedApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 test.describe('@p0 history navigation', () => {
   test('GoBack after preview-replacing the previous file reuses the slot (no duplicate tab) @regression', async ({
@@ -18,7 +18,7 @@ test.describe('@p0 history navigation', () => {
   }) => {
     await workbench.waitForRestored()
 
-    const tmpDir = mkdtempSync(join(tmpdir(), 'universe-editor-history-'))
+    const tmpDir = mkTempDir('universe-editor-history-')
     const fileA = join(tmpDir, 'a.txt')
     const fileB = join(tmpDir, 'b.txt')
     writeFileSync(fileA, Array.from({ length: 60 }, (_, i) => `line ${i + 1} in a`).join('\n'))
@@ -96,7 +96,7 @@ test.describe('@p0 history navigation', () => {
   }) => {
     await workbench.waitForRestored()
 
-    const tmpDir = mkdtempSync(join(tmpdir(), 'universe-editor-history-open-'))
+    const tmpDir = mkTempDir('universe-editor-history-open-')
     const fileA = join(tmpDir, 'a.txt')
     const fileB = join(tmpDir, 'b.txt')
     writeFileSync(fileA, 'content of a\n')
@@ -137,7 +137,7 @@ test.describe('@p0 history navigation', () => {
   test('GoBack across a non-text editor (Settings) returns to it', async ({ page, workbench }) => {
     await workbench.waitForRestored()
 
-    const tmpDir = mkdtempSync(join(tmpdir(), 'universe-editor-history-settings-'))
+    const tmpDir = mkTempDir('universe-editor-history-settings-')
     const fileA = join(tmpDir, 'a.txt')
     writeFileSync(fileA, 'content of a\n')
 

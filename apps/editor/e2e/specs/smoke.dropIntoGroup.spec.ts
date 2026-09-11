@@ -9,8 +9,8 @@
 
 import * as path from 'node:path'
 import * as fs from 'node:fs/promises'
-import * as os from 'node:os'
 import { test, expect } from '../fixtures/sharedApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 async function tryCleanup(dir: string): Promise<void> {
   try {
@@ -105,7 +105,7 @@ test.describe('@p1 drop into a specific group', () => {
     page,
     workbench,
   }) => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-dropgrp-'))
+    const tmpDir = mkTempDir('ue2-dropgrp-')
     await fs.writeFile(path.join(tmpDir, 'left.ts'), 'const l = 1\n')
     await fs.writeFile(path.join(tmpDir, 'right.ts'), 'const r = 1\n')
     await fs.writeFile(path.join(tmpDir, 'target.ts'), 'const t = 2\n')
@@ -163,7 +163,7 @@ test.describe('@p1 drop into a specific group', () => {
     page,
     workbench,
   }) => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-dropgrp2-'))
+    const tmpDir = mkTempDir('ue2-dropgrp2-')
     await fs.writeFile(path.join(tmpDir, 'shared.ts'), 'const s = 1\n')
     await fs.writeFile(path.join(tmpDir, 'other.ts'), 'const o = 1\n')
     const rootFs = tmpDir.replace(/\\/g, '/')
@@ -218,7 +218,7 @@ test.describe('@p1 drop into a specific group', () => {
     page,
     workbench,
   }) => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-dropgrp3-'))
+    const tmpDir = mkTempDir('ue2-dropgrp3-')
     await fs.writeFile(path.join(tmpDir, 'a.ts'), 'const a = 1\n')
     await fs.writeFile(path.join(tmpDir, 'b.ts'), 'const b = 1\n')
     await fs.writeFile(path.join(tmpDir, 'c.ts'), 'const c = 1\n')

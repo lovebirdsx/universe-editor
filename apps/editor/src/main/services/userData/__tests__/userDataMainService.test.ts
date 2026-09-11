@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   Emitter,
@@ -11,6 +10,7 @@ import {
   type IUserDataFileChange,
   type IWorkspace,
 } from '@universe-editor/platform'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 let currentUserData = ''
 
@@ -67,7 +67,7 @@ describe('UserDataMainService', () => {
   let tmp: string
 
   beforeEach(async () => {
-    tmp = await fs.mkdtemp(join(tmpdir(), 'ued-userdata-'))
+    tmp = mkTempDir('ued-userdata-')
     currentUserData = join(tmp, 'userData')
     await fs.mkdir(currentUserData, { recursive: true })
   })

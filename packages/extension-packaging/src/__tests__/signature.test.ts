@@ -1,7 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import { generateKeyPairSync, sign, createPublicKey, createHash } from 'node:crypto'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { rm, writeFile } from 'node:fs/promises'
 import * as path from 'node:path'
 import {
   hashVsixFile,
@@ -9,6 +8,7 @@ import {
   VsixSignatureError,
   type IVsixSignature,
 } from '../signature.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 const KEY_ID = 'market-test'
 
@@ -40,7 +40,7 @@ describe('verifyVsixSignature', () => {
   const keys = { [KEY_ID]: publicX }
 
   beforeEach(async () => {
-    dir = await mkdtemp(path.join(tmpdir(), 'vsix-sign-'))
+    dir = mkTempDir('vsix-sign-')
     vsixPath = path.join(dir, 'ext.vsix')
     await writeFile(vsixPath, payload)
   })

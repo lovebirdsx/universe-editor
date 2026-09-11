@@ -8,12 +8,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { seedBaselineUserData } from '@universe-editor/e2e-harness'
+import { mkTempDir, seedBaselineUserData } from '@universe-editor/e2e-harness'
 
 export const GENERATED_MESSAGE = 'feat: add greeting'
 
@@ -57,7 +56,7 @@ export function startMockOllama(): Promise<MockOllama> {
  * activeModels unset and let resolveModelId() fall through to the first model.
  */
 export function seedAiUserData(prefix: string, ollamaUrl: string): string {
-  const userDataDir = mkdtempSync(join(tmpdir(), prefix))
+  const userDataDir = mkTempDir(prefix)
   seedBaselineUserData(userDataDir)
   writeFileSync(
     join(userDataDir, 'aiSettings.json'),
@@ -77,7 +76,7 @@ function git(cwd: string, ...args: string[]): void {
 
 /** A real git repo with one uncommitted change, so there is a diff to summarize. */
 export function createDirtyRepo(prefix: string): string {
-  const repoDir = mkdtempSync(join(tmpdir(), prefix))
+  const repoDir = mkTempDir(prefix)
   git(repoDir, 'init')
   git(repoDir, 'config', 'user.email', 'e2e@example.com')
   git(repoDir, 'config', 'user.name', 'E2E')

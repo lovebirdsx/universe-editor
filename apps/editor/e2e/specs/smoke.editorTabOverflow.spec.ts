@@ -13,15 +13,15 @@
 
 import * as path from 'node:path'
 import * as fs from 'node:fs/promises'
-import * as os from 'node:os'
 import { test, expect } from '../fixtures/sharedApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 test.describe('@p1 editor tab overflow scroll', () => {
   test('overflowing tabs show scroll arrows and respond to the wheel @regression', async ({
     page,
     workbench,
   }) => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-taboverflow-'))
+    const tmpDir = mkTempDir('ue2-taboverflow-')
     const names: string[] = []
     // Long names + enough files to guarantee the tab bar overflows at any
     // reasonable window width.

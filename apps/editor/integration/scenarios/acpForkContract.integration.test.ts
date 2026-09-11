@@ -34,9 +34,7 @@
  *  below (pure editor self-consistency, reads no fork) always runs.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { rmSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   ACP_EXT_METHODS,
@@ -53,6 +51,7 @@ import {
   withTimeout,
 } from '../fixtures/realForkConnection.js'
 import type { SessionConfigOption } from '@agentclientprotocol/sdk'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 // Handshake + newSession over a real subprocess: allow generous headroom (fork
 // cold-start + SDK model list ~1.3s observed) so CI machines don't flake.
@@ -190,7 +189,7 @@ function handshakeSuite(fork: ForkId) {
     let connection: RealForkConnection
 
     beforeEach(() => {
-      cwd = mkdtempSync(join(tmpdir(), `acp-contract-${fork}-`))
+      cwd = mkTempDir(`acp-contract-${fork}-`)
       connection = spawnForkConnection(fork, cwd)
     })
 
@@ -331,7 +330,7 @@ describe.skipIf(!claudeExtReady)('claude ext-method wire contract (real dist)', 
   let sessionId: string
 
   beforeEach(async () => {
-    cwd = mkdtempSync(join(tmpdir(), 'acp-contract-claude-ext-'))
+    cwd = mkTempDir('acp-contract-claude-ext-')
     connection = spawnForkConnection('claude', cwd)
     await withTimeout(
       connection.conn.initialize(CLIENT_INIT_PARAMS),

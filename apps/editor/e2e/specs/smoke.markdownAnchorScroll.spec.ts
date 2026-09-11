@@ -18,16 +18,16 @@
  *  几何断言依赖真实布局，happy-dom 单测不可测 —— 必须在真实 Electron 里跑。
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, expect } from '../fixtures/sharedApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 const PREVIEW = '[data-testid="markdown-preview"]'
 const ANCHOR_ID = 'jump-target'
 
 function writeAnchorMarkdown(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-mdanchor-'))
+  const dir = mkTempDir('universe-editor-e2e-mdanchor-')
   const file = join(dir, 'anchor.md')
   const filler = (n: number, tag: string) =>
     Array.from({ length: n }, (_, i) => `filler ${tag} paragraph ${i}\n`).join('\n')
@@ -41,7 +41,7 @@ function writeAnchorMarkdown(): string {
 }
 
 function writeCrossFileDocs(): { a: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-mdxfile-'))
+  const dir = mkTempDir('universe-editor-e2e-mdxfile-')
   const filler = (n: number, tag: string) =>
     Array.from({ length: n }, (_, i) => `filler ${tag} paragraph ${i}\n`).join('\n')
   const a = join(dir, 'a.md')

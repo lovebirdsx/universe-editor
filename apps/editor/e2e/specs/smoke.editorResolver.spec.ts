@@ -11,17 +11,17 @@
  *    4. 断言 getActiveEditorTypeId() === 'file'
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, expect } from '../fixtures/sharedApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 test.describe('@p1 editorResolver', () => {
   test('resolves .dummy file to dummyEditor via resolver', async ({ page, workbench }) => {
     await workbench.waitForRestored()
 
     // Create a temp .dummy file on disk.
-    const tmpDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-resolver-'))
+    const tmpDir = mkTempDir('universe-editor-e2e-resolver-')
     const dummyFile = join(tmpDir, 'test.dummy')
     writeFileSync(dummyFile, '')
     // Normalise to forward slashes (URI.file normalises internally, but let's be explicit).
@@ -44,7 +44,7 @@ test.describe('@p1 editorResolver', () => {
   test('"Reopen With..." switches from dummyEditor back to file', async ({ page, workbench }) => {
     await workbench.waitForRestored()
 
-    const tmpDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-reopen-'))
+    const tmpDir = mkTempDir('universe-editor-e2e-reopen-')
     const dummyFile = join(tmpDir, 'chart.dummy')
     writeFileSync(dummyFile, '')
     const dummyFsPath = dummyFile.replace(/\\/g, '/')

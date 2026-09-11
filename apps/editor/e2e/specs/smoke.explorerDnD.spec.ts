@@ -4,8 +4,8 @@
 
 import * as path from 'node:path'
 import * as fs from 'node:fs/promises'
-import * as os from 'node:os'
 import { test, expect } from '../fixtures/sharedApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 test.describe('@p1 explorer drag-and-drop', () => {
   // @flaky: HTML5 drag-and-drop gesture delivery is timing-sensitive under
@@ -15,7 +15,7 @@ test.describe('@p1 explorer drag-and-drop', () => {
   // fix-ci-e2e-flake 案例 46.
   test('drag file to subdirectory moves it', { tag: '@flaky' }, async ({ workbench }) => {
     // Create a temp workspace with one file and one subdirectory.
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-dnd-'))
+    const tmpDir = mkTempDir('ue2-dnd-')
     await fs.writeFile(path.join(tmpDir, 'file.txt'), 'hello')
     await fs.mkdir(path.join(tmpDir, 'subdir'))
 

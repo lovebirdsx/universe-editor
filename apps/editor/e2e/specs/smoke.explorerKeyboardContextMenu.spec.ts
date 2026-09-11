@@ -16,8 +16,8 @@
 
 import * as path from 'node:path'
 import * as fs from 'node:fs/promises'
-import * as os from 'node:os'
 import { test, expect } from '../fixtures/sharedApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 // After a workspace change the workbench opens a ~1.5s window during which it
 // restores focus to the active editor on any editor/group change (see
@@ -39,7 +39,7 @@ test.describe('@p1 explorer keyboard context menu', () => {
     workbench,
     page,
   }) => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-kcm-'))
+    const tmpDir = mkTempDir('ue2-kcm-')
     await fs.writeFile(path.join(tmpDir, 'alpha.txt'), 'a')
     await fs.writeFile(path.join(tmpDir, 'beta.txt'), 'b')
 

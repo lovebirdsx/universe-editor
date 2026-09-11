@@ -8,7 +8,6 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { promises as fsp } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   ChannelClient,
@@ -26,6 +25,7 @@ import {
   type InMemoryWatcherTransport,
 } from '@universe-editor/node-services'
 import { createExplorerTree, waitFor, type FakeWorkspaceService } from '../fixtures/explorerTree.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 const WATCHER_CHANNEL = 'fileWatcher'
 
@@ -40,7 +40,7 @@ describe('Explorer external file creation through IPC (integration)', () => {
   let ws: FakeWorkspaceService
 
   beforeEach(async () => {
-    rootDir = await fsp.mkdtemp(join(tmpdir(), 'universe-editor-explorer-ipc-'))
+    rootDir = mkTempDir('universe-editor-explorer-ipc-')
     watcherTransports = []
     watcherClient = new WatcherProcessClient(() => {
       const t = createInMemoryWatcherTransport()

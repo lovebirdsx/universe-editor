@@ -9,13 +9,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { app } from 'electron'
 import { promises as fs } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { URI } from '@universe-editor/platform'
 import { createStorage } from '../../src/main/storage.js'
 import { MainStorageService } from '../../src/main/services/storage/storageMainService.js'
 import { RecentWorkspacesMainService } from '../../src/main/services/workspace/recentWorkspacesMainService.js'
 import { WorkspaceMainService } from '../../src/main/services/workspace/workspaceMainService.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 const noopDialog = { showOpenFolderDialog: vi.fn(async () => null) }
 
@@ -30,7 +30,7 @@ interface TwoWindows {
 }
 
 async function createTwoWindows(): Promise<TwoWindows> {
-  const userDataDir = await fs.mkdtemp(join(tmpdir(), 'ue-perwindow-'))
+  const userDataDir = mkTempDir('ue-perwindow-')
   vi.mocked(app.getPath).mockReturnValue(userDataDir)
 
   // Single GLOBAL backend shared by both windows (mirrors getDefaultStorage()).

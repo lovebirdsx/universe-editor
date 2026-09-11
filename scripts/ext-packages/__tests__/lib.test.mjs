@@ -6,8 +6,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { SDK_PACKAGE_DIRS, SDK_VERSION_COUPLINGS } from '../../lib/sdk-packages.mjs'
@@ -31,6 +30,7 @@ import {
   topologicalOrder,
   unexpectedChanges,
 } from '../lib.mjs'
+import { mkTempDir } from '../../lib/temp-root.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const repoRoot = join(__dirname, '..', '..', '..')
@@ -329,7 +329,7 @@ test('checkVersionConstants 全一致通过、漂移报错含期望值', () => {
 })
 
 test('generateSdkVersions 从 package.json+catalog 生成、幂等、含生成头注释', () => {
-  const root = mkdtempSync(join(tmpdir(), 'sdk-gen-'))
+  const root = mkTempDir('sdk-gen-')
   for (const dir of [
     'packages/extension-api',
     'packages/uex',

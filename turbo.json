@@ -64,7 +64,8 @@
     "test": {
       "dependsOn": ["^build"],
       "outputLogs": "new-only",
-      "outputs": []
+      "outputs": [],
+      "env": ["UNIVERSE_TMP_ROOT"]
     },
     // editor 的 test 拆成 4 个 turbo 任务并行调度：原 editor#test 单任务串行跑完 vitest
     // 3 project（main/renderer-node/renderer-dom）+ integration，CI 上 267s 卡瓶颈，其他
@@ -87,6 +88,7 @@
     "@universe-editor/editor#test:main": {
       "dependsOn": ["^build"],
       "outputLogs": "new-only",
+      "env": ["UNIVERSE_TMP_ROOT"],
       "inputs": [
         "src/main/**",
         "src/shared/**",
@@ -99,6 +101,7 @@
     "@universe-editor/editor#test:renderer-node": {
       "dependsOn": ["^build"],
       "outputLogs": "new-only",
+      "env": ["UNIVERSE_TMP_ROOT"],
       "inputs": [
         "src/renderer/**",
         "src/shared/**",
@@ -111,6 +114,7 @@
     "@universe-editor/editor#test:renderer-dom": {
       "dependsOn": ["^build"],
       "outputLogs": "new-only",
+      "env": ["UNIVERSE_TMP_ROOT"],
       "inputs": [
         "src/renderer/**",
         "src/shared/**",
@@ -125,6 +129,7 @@
     "@universe-editor/editor#test:integration": {
       "dependsOn": ["^build"],
       "outputLogs": "new-only",
+      "env": ["UNIVERSE_TMP_ROOT"],
       "inputs": [
         "integration/**",
         "!integration/node_modules/**",
@@ -145,7 +150,8 @@
         "UNIVERSE_E2E",
         "UNIVERSE_E2E_INCLUDE_REGRESSION",
         "UNIVERSE_E2E_ONLY_TAG",
-        "UNIVERSE_E2E_ONLY_TAG_INVERT"
+        "UNIVERSE_E2E_ONLY_TAG_INVERT",
+        "UNIVERSE_TMP_ROOT"
       ]
     },
     "e2ea": {
@@ -157,7 +163,8 @@
         "UNIVERSE_E2E",
         "UNIVERSE_E2E_INCLUDE_REGRESSION",
         "UNIVERSE_E2E_ONLY_TAG",
-        "UNIVERSE_E2E_ONLY_TAG_INVERT"
+        "UNIVERSE_E2E_ONLY_TAG_INVERT",
+        "UNIVERSE_TMP_ROOT"
       ]
     },
     "lint": {

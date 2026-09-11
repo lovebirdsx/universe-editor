@@ -6,10 +6,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { access, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { mkdtemp } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
 import * as path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 let userData = ''
 
@@ -55,7 +54,7 @@ async function stagePrefetch(version: string): Promise<void> {
 
 describe('ClaudeBinaryMainService.forceDownload', () => {
   beforeEach(async () => {
-    userData = await mkdtemp(path.join(tmpdir(), 'universe-editor-claude-fd-'))
+    userData = mkTempDir('universe-editor-claude-fd-')
   })
 
   afterEach(async () => {

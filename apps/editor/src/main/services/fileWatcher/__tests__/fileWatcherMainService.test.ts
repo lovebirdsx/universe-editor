@@ -6,7 +6,6 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join, sep as pathSep } from 'node:path'
 import { Emitter, URI, type IFileChangeEvent } from '@universe-editor/platform'
 import { FileWatcherMainService } from '../fileWatcherMainService.js'
@@ -15,6 +14,7 @@ import {
   createInMemoryWatcherTransport,
   type InMemoryWatcherTransport,
 } from '@universe-editor/node-services'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 function reviveFsPath(c: {
   readonly resource: import('@universe-editor/platform').UriComponents
@@ -57,7 +57,7 @@ describe('FileWatcherMainService', () => {
   let svc: FileWatcherMainService
 
   beforeEach(async () => {
-    root = await fs.mkdtemp(join(tmpdir(), 'universe-editor-fw-'))
+    root = mkTempDir('universe-editor-fw-')
     transports = []
     client = new WatcherProcessClient(() => {
       const t = createInMemoryWatcherTransport()
@@ -203,7 +203,7 @@ describe('FileWatcherMainService', () => {
     'emits events for out-of-workspace files registered via watchOutOfWorkspace',
     async () => {
       // Create a separate tmpdir (simulates a path outside the workspace root).
-      const outRoot = await fs.mkdtemp(join(tmpdir(), 'universe-editor-out-'))
+      const outRoot = mkTempDir('universe-editor-out-')
       const file = join(outRoot, 'external.txt')
       await fs.writeFile(file, 'initial')
       try {
@@ -251,7 +251,7 @@ describe('FileWatcherMainService', () => {
   it(
     'emits events for files nested under an out-of-workspace folder watch',
     async () => {
-      const outRoot = await fs.mkdtemp(join(tmpdir(), 'universe-editor-outdir-'))
+      const outRoot = mkTempDir('universe-editor-outdir-')
       const nested = join(outRoot, 'deep', 'deeper')
       await fs.mkdir(nested, { recursive: true })
       const file = join(nested, 'watched.log')
@@ -283,7 +283,7 @@ describe('FileWatcherMainService', () => {
   })
 
   it('a folder nested under an already-watched folder collapses into the parent watch', async () => {
-    const outRoot = await fs.mkdtemp(join(tmpdir(), 'universe-editor-outdir-'))
+    const outRoot = mkTempDir('universe-editor-outdir-')
     try {
       await svc.addOutOfWorkspaceFolder(URI.file(outRoot))
       await svc.addOutOfWorkspaceFolder(URI.file(join(outRoot, 'child')))
@@ -294,7 +294,7 @@ describe('FileWatcherMainService', () => {
   })
 
   it('removing the parent re-arms a still-declared nested child', async () => {
-    const outRoot = await fs.mkdtemp(join(tmpdir(), 'universe-editor-outdir-'))
+    const outRoot = mkTempDir('universe-editor-outdir-')
     try {
       await svc.addOutOfWorkspaceFolder(URI.file(outRoot))
       await svc.addOutOfWorkspaceFolder(URI.file(join(outRoot, 'child')))
@@ -309,7 +309,7 @@ describe('FileWatcherMainService', () => {
   })
 
   it('clearOutOfWorkspaceFolders clears armed folder watches', async () => {
-    const outRoot = await fs.mkdtemp(join(tmpdir(), 'universe-editor-outdir-'))
+    const outRoot = mkTempDir('universe-editor-outdir-')
     try {
       await svc.addOutOfWorkspaceFolder(URI.file(outRoot))
       expect(svc._extraFolderWatcherCount).toBe(1)
@@ -323,7 +323,7 @@ describe('FileWatcherMainService', () => {
   it(
     'a folder created after the watch armed still gets watched (parent placeholder)',
     async () => {
-      const outRoot = await fs.mkdtemp(join(tmpdir(), 'universe-editor-outdir-'))
+      const outRoot = mkTempDir('universe-editor-outdir-')
       const missing = join(outRoot, 'not-yet')
       try {
         await svc.addOutOfWorkspaceFolder(URI.file(missing))
@@ -349,7 +349,7 @@ describe('FileWatcherMainService', () => {
   it(
     'classifies a created entry under an out-of-workspace folder watch as added',
     async () => {
-      const outRoot = await fs.mkdtemp(join(tmpdir(), 'universe-editor-outdir-'))
+      const outRoot = mkTempDir('universe-editor-outdir-')
       try {
         await svc.addOutOfWorkspaceFolder(URI.file(outRoot))
         // mkdir emits a bare rename event — no content write follows to
@@ -373,7 +373,7 @@ describe('FileWatcherMainService', () => {
   it(
     'classifies a removed file under an out-of-workspace folder watch as deleted',
     async () => {
-      const outRoot = await fs.mkdtemp(join(tmpdir(), 'universe-editor-outdir-'))
+      const outRoot = mkTempDir('universe-editor-outdir-')
       const file = join(outRoot, 'doomed.txt')
       await fs.writeFile(file, 'x')
       try {
@@ -396,7 +396,7 @@ describe('FileWatcherMainService', () => {
   it(
     'keeps in-place changes under an out-of-workspace folder watch as modified',
     async () => {
-      const outRoot = await fs.mkdtemp(join(tmpdir(), 'universe-editor-outdir-'))
+      const outRoot = mkTempDir('universe-editor-outdir-')
       const file = join(outRoot, 'stable.txt')
       await fs.writeFile(file, 'v1')
       try {
@@ -419,7 +419,7 @@ describe('FileWatcherMainService', () => {
   it(
     'emits a deleted event when an out-of-workspace watched file is removed',
     async () => {
-      const outRoot = await fs.mkdtemp(join(tmpdir(), 'universe-editor-out-'))
+      const outRoot = mkTempDir('universe-editor-out-')
       const file = join(outRoot, 'external.txt')
       await fs.writeFile(file, 'initial')
       try {
@@ -442,8 +442,8 @@ describe('FileWatcherMainService', () => {
   it(
     'emits an added event when an out-of-workspace watched file appears after arming',
     async () => {
-      const outRoot = await fs.mkdtemp(join(tmpdir(), 'universe-editor-out-'))
-      const staging = await fs.mkdtemp(join(tmpdir(), 'universe-editor-stage-'))
+      const outRoot = mkTempDir('universe-editor-out-')
+      const staging = mkTempDir('universe-editor-stage-')
       const file = join(outRoot, 'later.txt')
       try {
         // A rename-in delivers a bare rename event — unlike writeFile it is
@@ -470,7 +470,7 @@ describe('FileWatcherMainService', () => {
   it(
     'keeps an atomic-save (rename over) of an out-of-workspace watched file as modified',
     async () => {
-      const outRoot = await fs.mkdtemp(join(tmpdir(), 'universe-editor-out-'))
+      const outRoot = mkTempDir('universe-editor-out-')
       const file = join(outRoot, 'external.txt')
       const temp = join(outRoot, 'external.txt.tmp')
       await fs.writeFile(file, 'initial')
@@ -496,7 +496,7 @@ describe('FileWatcherMainService', () => {
   it(
     'keeps the parent placeholder through unrelated churn until the watched folder appears',
     async () => {
-      const outRoot = await fs.mkdtemp(join(tmpdir(), 'universe-editor-outdir-'))
+      const outRoot = mkTempDir('universe-editor-outdir-')
       const missing = join(outRoot, 'not-yet')
       try {
         await svc.addOutOfWorkspaceFolder(URI.file(missing))
@@ -906,8 +906,8 @@ describe('FileWatcherMainService focus scopes', () => {
     // Real dirs: the out-of-workspace path arms a genuine fs.watch, which needs
     // the path (or at least its parent) to exist.
     vi.useRealTimers()
-    const realRoot = await fs.mkdtemp(join(tmpdir(), 'universe-editor-focus-'))
-    const outside = await fs.mkdtemp(join(tmpdir(), 'universe-editor-outside-'))
+    const realRoot = mkTempDir('universe-editor-focus-')
+    const outside = mkTempDir('universe-editor-outside-')
     await fs.mkdir(join(realRoot, 'Client', 'Deep'), { recursive: true })
     try {
       await svc.watch(URI.file(realRoot), { scopes: [URI.file(join(realRoot, 'Client'))] })
@@ -989,7 +989,7 @@ describe('FileWatcherMainService focus files', () => {
   beforeEach(async () => {
     host = createStubHost()
     svc = new FileWatcherMainService(host as unknown as WatcherProcessClient)
-    rootDir = await fs.mkdtemp(join(tmpdir(), 'universe-editor-focusfile-'))
+    rootDir = mkTempDir('universe-editor-focusfile-')
   })
 
   afterEach(async () => {

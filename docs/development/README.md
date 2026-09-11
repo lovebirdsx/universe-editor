@@ -4,7 +4,7 @@
 
 ## 测试
 
-- [测试](testing.md) — 单元 / 集成 / E2E 三层测试，E2E 内核·插件分离与最小扩展集启动、tag 体系、CI affected 选择性执行。
+- [测试](testing.md) — 单元 / 集成 / E2E 三层测试，E2E 内核·插件分离与最小扩展集启动、tag 体系、CI affected 选择性执行、临时目录策略（`temp-root` / `pnpm tmp:clean`）。
 
 ## 诊断
 

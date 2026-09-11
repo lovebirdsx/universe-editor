@@ -17,12 +17,11 @@
 
 import * as path from 'node:path'
 import * as fs from 'node:fs/promises'
-import * as os from 'node:os'
 import { generateKeyPairSync } from 'node:crypto'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createServer, type AddressInfo } from 'node:net'
 import AdmZip from 'adm-zip'
-import { createColdAppTest, expect } from '@universe-editor/e2e-harness'
+import { createColdAppTest, expect, mkTempDir } from '@universe-editor/e2e-harness'
 import { APP_ROOT, MAIN_ENTRY } from '../fixtures/electronApp.js'
 
 const REPO_ROOT = path.resolve(APP_ROOT, '..', '..')
@@ -159,7 +158,7 @@ test.describe('@p1 extensions gallery', () => {
   test.describe.configure({ mode: 'default' })
 
   test.beforeAll(async () => {
-    stageDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-gallery-'))
+    stageDir = mkTempDir('ue2-gallery-')
     const vsixPath = await makeVsix(stageDir)
     const keyFile = path.join(stageDir, 'market-key.pem')
     await fs.writeFile(keyFile, PRIVATE_PEM)

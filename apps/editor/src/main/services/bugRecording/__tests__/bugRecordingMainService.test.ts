@@ -3,8 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import AdmZip from 'adm-zip'
-import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { readFile, rm, writeFile, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -13,6 +12,7 @@ import {
   type BugRecordingMainServiceOptions,
 } from '../bugRecordingMainService.js'
 import type { LogMainService } from '../../log/logMainService.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 const SESSION_ID = '20260828T101500'
 
@@ -69,7 +69,7 @@ describe('BugRecordingMainService', () => {
   let logMain: LogMainService
 
   beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), 'ue-bugrec-'))
+    root = mkTempDir('ue-bugrec-')
     logRoot = join(root, 'logs')
     sessionDir = join(logRoot, SESSION_ID)
     recordingsDir = join(root, 'bug-recordings')

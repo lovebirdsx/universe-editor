@@ -24,16 +24,17 @@
   "dependencies": {
     "@lydell/node-pty": "catalog:",
     "@parcel/watcher": "catalog:",
-    "@universe-editor/extensions-common": "workspace:*",
     "@universe-editor/extension-packaging": "workspace:*",
+    "@universe-editor/extensions-common": "workspace:*",
     "@universe-editor/platform": "workspace:*",
+    "@universe-editor/temp-root": "workspace:*",
     "@vscode/ripgrep": "catalog:",
     "smol-toml": "catalog:",
     "tar": "catalog:"
   },
   "devDependencies": {
-    "@universe-editor/config-ts": "workspace:*",
     "@types/node": "catalog:",
+    "@universe-editor/config-ts": "workspace:*",
     "eslint": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"

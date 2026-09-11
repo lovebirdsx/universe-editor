@@ -5,11 +5,11 @@
  *  the index travels back (never the auth.json secrets).
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { RemoteAgentConfigService } from '../agentConfigService.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 const tempRoots: string[] = []
 
@@ -22,7 +22,7 @@ afterEach(async () => {
 })
 
 async function makeService(): Promise<{ svc: RemoteAgentConfigService; dir: string }> {
-  const dir = await mkdtemp(join(tmpdir(), 'ue-agent-config-'))
+  const dir = mkTempDir('ue-agent-config-')
   tempRoots.push(dir)
   const svc = new RemoteAgentConfigService(undefined, {
     codexConfigPath: join(dir, 'config.toml'),

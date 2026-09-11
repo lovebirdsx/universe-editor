@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import { promises as fs } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createStorage, workspaceIdFromUri, workspaceStoragePath } from '../storage.js'
+import { getTempRoot, mkTempDir } from '@universe-editor/temp-root'
 
 // Stub electron app.getPath() — workspaceStoragePath uses it. We don't import
 // the real module in the test; cheap stub so the function is callable in node.
 vi.mock('electron', () => ({
-  app: { getPath: () => tmpdir() },
+  app: { getPath: () => getTempRoot() },
 }))
 
 // Gate fs.mkdir: a storage write starts with mkdir, so holding it makes the
@@ -41,7 +41,7 @@ describe('createStorage', () => {
   let file: string
 
   beforeEach(async () => {
-    const dir = await fs.mkdtemp(join(tmpdir(), 'universe-editor-storage-'))
+    const dir = mkTempDir('universe-editor-storage-')
     file = join(dir, 'state.json')
   })
 
@@ -189,7 +189,7 @@ describe('createStorage — write coalescing', () => {
   let writeFileSpy: MockInstance<typeof fs.writeFile>
 
   beforeEach(async () => {
-    const dir = await fs.mkdtemp(join(tmpdir(), 'universe-editor-storage-'))
+    const dir = mkTempDir('universe-editor-storage-')
     file = join(dir, 'state.json')
     gate = makeWriteGate()
     writeFileSpy = vi.spyOn(fs, 'writeFile')

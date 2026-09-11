@@ -27,8 +27,7 @@ import {
   type PlaywrightWorkerOptions,
 } from '@playwright/test'
 import { join } from 'node:path'
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { realpathSync, rmSync } from 'node:fs'
 import {
   WorkbenchPO,
   expectNoExtHostUnhandledRejections,
@@ -47,6 +46,16 @@ import { installFailureForensics } from './forensics.js'
 // Lives in launch.ts (launchAppReady needs it); re-exported so existing deep
 // imports from this module keep working.
 export { waitForProbe } from './launch.js'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
+
+/**
+ * Fixture teardown 的目录删除。退避给得比 removeDirWithRetry 默认值宽（≈4s）：Windows 上刚
+ * 退出的 Electron / git / p4 子进程常常还攥着句柄，而这是每个 test 唯一的收尾机会——删不掉
+ * 就成了要等 24h TTL 才回收的残留。清理是卫生问题不是断言，失败只告警。
+ */
+function teardownDir(dir: string): void {
+  if (!removeDirWithRetry(dir, 20, 200)) console.warn(`[e2e] teardown failed for ${dir}`)
+}
 
 export interface AppFixtureConfig {
   /** Editor package root (dev launch only). */
@@ -157,37 +166,33 @@ export function createColdAppTest(config: AppFixtureConfig): E2ETest {
       }
       // realpathSync.native: CI Windows tmpdir can be an 8.3 short path; normalize
       // to the long form so path comparisons inside the app agree.
-      const dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'universe-editor-e2e-ws-')))
+      const dir = realpathSync.native(mkTempDir('universe-editor-e2e-ws-'))
       workspaceSeeder.seed(dir)
       const posix = dir.replace(/\\/g, '/')
       await use({ dir: posix, file: (rel) => `${posix}/${rel}` })
+      // electronApp depends on this fixture, so its teardown (closeApp) has
+      // already run — the process tree is dead and this is pure hygiene.
+      teardownDir(dir)
     },
     scratchDir: async ({}, use) => {
       const dirs: string[] = []
       await use((prefix = 'universe-editor-e2e-scratch-') => {
         // realpathSync.native: CI Windows tmpdir can be an 8.3 short path (same
         // normalization as launchWorkspace).
-        const dir = realpathSync.native(mkdtempSync(join(tmpdir(), prefix)))
+        const dir = realpathSync.native(mkTempDir(prefix))
         dirs.push(dir)
         return dir
       })
       // Runs after electronApp's closeApp (electronApp depends on this fixture):
       // the process tree is dead, so the retries only absorb OS release lag.
-      // Cleanup is hygiene, not an assertion — warn instead of failing the test.
-      for (const dir of dirs) {
-        try {
-          rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
-        } catch (err) {
-          console.warn(`[e2e] scratchDir cleanup failed for ${dir}: ${String(err)}`)
-        }
-      }
+      for (const dir of dirs) teardownDir(dir)
     },
     electronApp: [
       async ({ launchWorkspace, scratchDir }, use, testInfo) => {
         // Ordering-only dependency: scratchDir must set up before (→ tear down
         // after) the app, so its cleanup sees a dead process tree.
         void scratchDir
-        const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-'))
+        const userDataDir = mkTempDir('universe-editor-e2e-')
         seedBaselineUserData(userDataDir)
         // launchAppReady covers the launch-succeeded-but-no-window failure mode:
         // it retries the whole chain once, and on failure reaps the half-dead
@@ -207,6 +212,9 @@ export function createColdAppTest(config: AppFixtureConfig): E2ETest {
         await use(app)
         await closeApp(app)
         await finalizeForensics(testInfo)
+        // After finalizeForensics: it still reads the log tail out of userDataDir
+        // on the failure path. closeApp above means nothing holds the dir open.
+        teardownDir(userDataDir)
       },
       // Own budget: the worst-case launchAppReady path is launch-layer retries
       // (~40s) + 2×30s firstWindow waits + a force-kill closeApp on the failed
@@ -360,7 +368,7 @@ export function createSharedAppTest(config: AppFixtureConfig): SharedE2ETest {
   return base.extend<SharedE2EFixtures, SharedWorkerFixtures>({
     sharedApp: [
       async ({}, use: (app: WorkerApp) => Promise<void>) => {
-        const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-shared-'))
+        const userDataDir = mkTempDir('universe-editor-e2e-shared-')
         seedBaselineUserData(userDataDir)
         await wipeWorkspacesDir(userDataDir)
         // Same launch-succeeded-but-no-window guard as the cold fixture — on
@@ -375,6 +383,9 @@ export function createSharedAppTest(config: AppFixtureConfig): SharedE2ETest {
         // veto needs a confirm dialog no one can answer headlessly). Bound it and
         // force-kill, exactly as the cold-launch fixture does.
         await closeApp(app)
+        // Worker-scoped: this runs once, after the last test in this worker —
+        // forensics for each test already copied what it needed out of here.
+        teardownDir(userDataDir)
       },
       // Own budget, decoupled from the 30s worker-teardown default: a worker can
       // host several shared apps (one per shared fixture type it touched), and

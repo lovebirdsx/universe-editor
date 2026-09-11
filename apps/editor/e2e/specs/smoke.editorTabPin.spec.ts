@@ -15,12 +15,12 @@
  *   7. Sticky state survives a window reload (persisted cursor)
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test as coldTest, expect } from '../fixtures/electronApp.js'
 import { test as sharedTest } from '../fixtures/sharedApp.js'
 import type { Page } from '@playwright/test'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 type EditorFlags = readonly { uri: string | undefined; sticky: boolean; preview: boolean }[]
 
@@ -48,7 +48,7 @@ async function withTempFiles<T>(
   names: readonly string[],
   fn: (dir: string) => Promise<T>,
 ): Promise<T> {
-  const dir = mkdtempSync(join(tmpdir(), 'universe-editor-tabpin-'))
+  const dir = mkTempDir('universe-editor-tabpin-')
   for (const name of names) writeFileSync(join(dir, name), name)
   try {
     return await fn(dir.replace(/\\/g, '/'))

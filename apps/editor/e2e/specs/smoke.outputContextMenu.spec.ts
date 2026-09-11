@@ -14,10 +14,10 @@
  *  service and mask the bug.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, expect } from '../fixtures/sharedApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 const LEFT_CONTENT = 'left file\nalpha\nbeta\ngamma'
 const RIGHT_CONTENT = 'right file\ndelta\nepsilon\nzeta'
@@ -30,7 +30,7 @@ function fsPathToUriComponents(fsPath: string) {
 
 test.describe('@p1 output context menu', () => {
   test('right-click works after a diff editor was created and closed', async ({ workbench }) => {
-    const dir = mkdtempSync(join(tmpdir(), 'ue2-outputctx-'))
+    const dir = mkTempDir('ue2-outputctx-')
     const leftPath = join(dir, 'left.txt')
     const rightPath = join(dir, 'right.txt')
     writeFileSync(leftPath, LEFT_CONTENT, 'utf8')

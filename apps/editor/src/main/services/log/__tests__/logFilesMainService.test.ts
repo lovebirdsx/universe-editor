@@ -5,9 +5,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { shell } from 'electron'
 import { promises as fs } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { LogLevel } from '@universe-editor/platform'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 const { mockGetPath, mockOpenPath } = vi.hoisted(() => ({
   mockGetPath: vi.fn((_name: string): string => ''),
@@ -41,7 +41,7 @@ describe('LogFilesMainService', () => {
   const WINDOW_ID = 7
 
   beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(join(tmpdir(), 'ue-log-files-test-'))
+    tmpDir = mkTempDir('ue-log-files-test-')
     mockGetPath.mockReturnValue(tmpDir)
     logService = new LogMainService()
     service = new LogFilesMainService(logService, WINDOW_ID)

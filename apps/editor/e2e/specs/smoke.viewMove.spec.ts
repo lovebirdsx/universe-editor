@@ -10,14 +10,14 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { test, expect } from '@playwright/test'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   ENABLED_EXTENSIONS_ENV,
   INITIAL_SETTINGS,
   INITIAL_STATE,
   launchElectron,
+  mkTempDir,
 } from '@universe-editor/e2e-harness'
 import { MAIN_ENTRY, APP_ROOT, closeApp } from '../fixtures/electronApp.js'
 import { expectNoLeaks, evaluateWhenRestored } from '../pages/WorkbenchPO.js'
@@ -93,8 +93,8 @@ test.describe('@p0 view move persistence', () => {
     // Self-launched cold boot: leave room for the graceful-close + force-kill
     // teardown under full-suite parallel load (see smoke.viewSizes).
     test.setTimeout(120_000)
-    const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-viewmove-'))
-    const workspaceFolder = mkdtempSync(join(tmpdir(), 'universe-editor-ws-viewmove-'))
+    const userDataDir = mkTempDir('universe-editor-viewmove-')
+    const workspaceFolder = mkTempDir('universe-editor-ws-viewmove-')
     try {
       seedGlobalState(userDataDir, workspaceFolder)
       const { app, page } = await launchWithState(userDataDir)
@@ -156,8 +156,8 @@ test.describe('@p0 view move persistence', () => {
 
   test('moving a view to a location generates a recyclable container', async () => {
     test.setTimeout(120_000)
-    const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-viewgen-'))
-    const workspaceFolder = mkdtempSync(join(tmpdir(), 'universe-editor-ws-viewgen-'))
+    const userDataDir = mkTempDir('universe-editor-viewgen-')
+    const workspaceFolder = mkTempDir('universe-editor-ws-viewgen-')
     try {
       seedGlobalState(userDataDir, workspaceFolder)
       const { app, page } = await launchWithState(userDataDir)
@@ -206,8 +206,8 @@ test.describe('@p0 view move persistence', () => {
 
   test('merging a view container folds all its views into the target and persists', async () => {
     test.setTimeout(120_000)
-    const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-viewmerge-'))
-    const workspaceFolder = mkdtempSync(join(tmpdir(), 'universe-editor-ws-viewmerge-'))
+    const userDataDir = mkTempDir('universe-editor-viewmerge-')
+    const workspaceFolder = mkTempDir('universe-editor-ws-viewmerge-')
     try {
       seedGlobalState(userDataDir, workspaceFolder)
       const { app, page } = await launchWithState(userDataDir)

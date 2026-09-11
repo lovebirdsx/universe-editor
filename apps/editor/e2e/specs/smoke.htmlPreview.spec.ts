@@ -6,10 +6,10 @@
  *  且预览视图（iframe 宿主）实际挂载。
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, expect } from '../fixtures/sharedApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 const HTML_DOC = `<!DOCTYPE html>
 <html>
@@ -24,7 +24,7 @@ test.describe('@p1 html preview', () => {
   }) => {
     await workbench.waitForRestored()
 
-    const tmpDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-html-'))
+    const tmpDir = mkTempDir('universe-editor-e2e-html-')
     const htmlFile = join(tmpDir, 'index.html')
     writeFileSync(htmlFile, HTML_DOC)
     writeFileSync(join(tmpDir, 'style.css'), 'h1{color:red}')

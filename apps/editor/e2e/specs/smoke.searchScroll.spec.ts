@@ -8,10 +8,10 @@
  *  rowCount × rowHeight and scrollTop reaches the bottom deterministically.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, expect } from '../fixtures/sharedApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 const SEARCH = 'workbench.view.search'
 const NEEDLE = 'search-scroll-needle'
@@ -20,7 +20,7 @@ const NEEDLE = 'search-scroll-needle'
 const MATCH_LINES = 600
 
 function writeWorkspace(): { dir: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-searchscroll-'))
+  const dir = mkTempDir('universe-editor-e2e-searchscroll-')
   const lines = Array.from({ length: MATCH_LINES }, (_, i) => `${NEEDLE} occurrence ${i + 1}`)
   writeFileSync(join(dir, 'big.txt'), lines.join('\n'), 'utf8')
   return { dir }

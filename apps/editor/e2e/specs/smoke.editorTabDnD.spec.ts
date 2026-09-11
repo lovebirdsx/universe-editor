@@ -4,13 +4,13 @@
 
 import * as path from 'node:path'
 import * as fs from 'node:fs/promises'
-import * as os from 'node:os'
 import { test, expect } from '../fixtures/sharedApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 test.describe('@p1 editor tab drag-and-drop', () => {
   test('drag tab to another group moves the editor', async ({ workbench }) => {
     // Create a temp workspace with two files.
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-tabdnd-'))
+    const tmpDir = mkTempDir('ue2-tabdnd-')
     const alphaPath = path.join(tmpDir, 'alpha.txt')
     const betaPath = path.join(tmpDir, 'beta.txt')
     await fs.writeFile(alphaPath, 'alpha')
@@ -127,7 +127,7 @@ test.describe('@p1 editor tab drag-and-drop', () => {
   })
 
   test('drag the only tab to an edge splits into a second group', async ({ workbench }) => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-tabdnd-solo-'))
+    const tmpDir = mkTempDir('ue2-tabdnd-solo-')
     const soloPath = path.join(tmpDir, 'solo.txt')
     await fs.writeFile(soloPath, 'solo')
 

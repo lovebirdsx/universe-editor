@@ -8,10 +8,8 @@
  *    4. `openWorkspaceSettings` with workspace open activates the Workspace tab.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { test, expect } from '../fixtures/sharedApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 test.describe('@p1 workspace settings UX', () => {
   test('openWorkspaceSettings opens Settings editor', async ({ workbench }) => {
@@ -70,7 +68,7 @@ test.describe('@p1 workspace settings UX', () => {
     workbench,
   }) => {
     await workbench.waitForRestored()
-    const tmpDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-ws-settings-'))
+    const tmpDir = mkTempDir('universe-editor-e2e-ws-settings-')
     await workbench.openWorkspace(tmpDir)
     await expect.poll(() => workbench.getCurrentWorkspacePath(), { timeout: 5000 }).toBeTruthy()
 

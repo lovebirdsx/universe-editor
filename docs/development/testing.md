@@ -149,6 +149,34 @@ export TURBO_CACHE_DIR="$HOME/.cache/turbo-universe"
 - **代价**：目录只增不减，磁盘涨了直接删整个目录即可（等于清缓存）。
 - 不写进仓库配置（`turbo.json` 的 `cacheDir` 是仓库相对路径且对所有人生效），机器级偏好留给各自的 shell 环境。
 
+## 临时目录策略
+
+测试套件（尤其 e2e）每个用例都要建 workspace / userDataDir / HOME 之类的一次性目录，量级是每轮上千个。默认落 `os.tmpdir()` 时，Windows 上就是 `%TEMP%`——**在用户 profile 内**，登录时 User Profile Service 要遍历它，几十万条目能把登录拖到分钟级。因此临时根被统一收口。
+
+**单一真相源**：`@universe-editor/temp-root`。`scripts/**` 是根目录裸 node 脚本（无构建步骤，解析不到 workspace 包），保留一份等价实现 `scripts/lib/temp-root.mjs`；两份的 `TEMP_PREFIXES` 与默认根算法由 `scripts/__tests__/temp-root-drift.test.mjs` 守护，改一边必须同步另一边。
+
+**根的位置**（`getTempRoot()`）：`UNIVERSE_TMP_ROOT` 环境变量 → win32 且 cwd 在仓库内时取仓库所在卷的 `<volume>/UniverseTmp`（与仓库同卷，临时文件 rename 进仓库不跨卷触发 EXDEV）→ 其余（非 win32、或仓外进程如打包版编辑器，cwd 可能是 System32 之类）一律 `os.tmpdir()`，绝不按 cwd 的卷根建目录。显式配置的 `UNIVERSE_TMP_ROOT` 建不出目录会直接抛错——静默退回 profile 正是要根治的问题；默认根建不出则告警并回退。
+
+**runner 层一次覆盖**，不需要逐个调用点改造：vitest 的 `globalSetup: ['@universe-editor/temp-root/vitest-setup']` 与 e2e 的 `packages/e2e-harness/src/globalSetup.ts` 各建一个运行专属 run 根（`ue-run-*` / `ue-e2e-*`）并写 `TEMP`/`TMP`/`TMPDIR` 与 `UNIVERSE_TMP_RUN_ROOT`。globalSetup 在 worker fork 之前执行，改动被所有 worker 与被拉起的子进程（Electron / git / p4）继承，于是各处 `os.tmpdir()` 自动跟随。整轮结束时删掉整个 run 根，单次运行对临时根是净零的；被 `process.exit()` 跳过的收尾由 `process.once('exit')` 兜底。
+
+> `UNIVERSE_TMP_RUN_ROOT` 是 runner 交接给子进程的显式标记，`mkTempDir` 无条件采信它。没有它就只能从继承来的 `TEMP` 反推，而「反推」对 cwd 落在别的卷上的子进程会失效——它算出的基准根与 run 根不同卷，于是把继承来的 TEMP 判成「不是我们的」，静默写回 profile。
+
+写测试时用 `mkTempDir('<prefix>-')` 取代 `mkdtempSync(join(tmpdir(), ...))`；`scripts/check-temp-root.mjs`（已接入 `pnpm check`）会拒绝裸调 `os.tmpdir()`——它会剥掉行尾注释与字符串字面量再匹配，所以文案里提到 `os.tmpdir()` 不会误报。确属「查询宿主环境描述」而非「我们要写文件」的调用（目前只有 `packages/remote-server` 握手里的 `tmpDir`），在该行加 `temp-root:allow` 注释豁免。
+
+**新增往临时根写东西的调用点，要把前缀登记进 `TEMP_PREFIXES`**——护栏拦得住裸 `tmpdir()`，但拦不住一个没登记的新前缀，它只会让残留无法被清理。`scripts/__tests__/temp-root-drift.test.mjs` 会扫全仓 `mkTempDir('<字面量>-')` 反查漏登记。前缀同时也是清理命令的允许清单，所以**只清一级条目里自己建的、且 mtime 超过 TTL 的那些**（目录与散文件都收，剪贴板中转文件 / p4 argfile 这类就写在根一级），绝不递归清空 `os.tmpdir()`。
+
+```bash
+pnpm tmp:clean --dry-run                  # 先看会删什么（默认 24h TTL，同时扫临时根与 %TEMP%）
+pnpm tmp:clean                            # 实跑，收敛历史残留
+pnpm tmp:clean --max-age-hours 0          # 连刚生成的也清（用于人工核对）
+```
+
+崩溃 / 强杀（含 turbo 在别的任务失败时取消同级任务）留下的 run 根不会自我回收，由上一条命令按 TTL 兜底。**清空用户 `%TEMP%` 是运维动作，不要写进代码**——清理入口只认 `TEMP_PREFIXES` 里的前缀。
+
+生产代码同样走 `getTempRoot()`：搜索的 listing 缓存（`fileSearchService`）、p4 的 argfile、远端部署的中转包与 `cwd`。编辑器主进程**不设** `UNIVERSE_TMP_ROOT`——否则编辑器内终端会看到被改写的 `$env:TEMP`，那是对用户可见的行为变更。
+
+`TEMP_LIVE_DIR_NAMES` 里的目录名（`universe-editor` 剪贴板暂存树、`universe-editor-file-listings` 搜索缓存）在临时根下**一律跳过**：它们是「建一次、之后只在里面增删」，自身 mtime 创建即冻结，按 TTL 判会被误判成陈旧。缓存自身的回收由各自的模块负责（如 `fileSearchService` 的定期清扫 + 字节预算）。
+
 ## flaky 排查
 
 「CI 偶发挂、本地稳过」的排查流程、案例库（含已知环境 flake 登记）全部收敛在 skill **`fix-ci-e2e-flake`**（按需加载）。遇 flaky 先查它，别当回归改产品代码。

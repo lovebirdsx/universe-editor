@@ -14,8 +14,8 @@
 
 import * as path from 'node:path'
 import * as fs from 'node:fs/promises'
-import * as os from 'node:os'
 import { test, expect } from '../fixtures/sharedApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 // After a workspace change the workbench opens a ~1.5s window during which it
 // restores focus to the active editor on any editor/group change (see
@@ -30,7 +30,7 @@ test.describe('@p1 explorer selection feedback', () => {
     workbench,
     page,
   }) => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-sel-'))
+    const tmpDir = mkTempDir('ue2-sel-')
     await fs.writeFile(path.join(tmpDir, 'alpha.txt'), 'a')
     await fs.writeFile(path.join(tmpDir, 'beta.txt'), 'b')
 
@@ -65,7 +65,7 @@ test.describe('@p1 explorer selection feedback', () => {
   })
 
   test('right-click selects the clicked row @regression', async ({ workbench, page }) => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-sel-ctx-'))
+    const tmpDir = mkTempDir('ue2-sel-ctx-')
     await fs.writeFile(path.join(tmpDir, 'alpha.txt'), 'a')
     await fs.writeFile(path.join(tmpDir, 'beta.txt'), 'b')
 

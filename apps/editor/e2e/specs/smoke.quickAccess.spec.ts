@@ -8,10 +8,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as fs from 'node:fs/promises'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import { URI } from '@universe-editor/platform'
 import { expect, test } from '../fixtures/sharedApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 async function placeholderOf(input: import('@playwright/test').Locator): Promise<string | null> {
   return input.getAttribute('placeholder')
@@ -120,7 +120,7 @@ test.describe('@p0 quick access', () => {
     // stale valueSelection and the panel re-applied it over the just-typed
     // text — so every further keystroke replaced again ('#Test' → i → '#i' →
     // n → '#n' instead of '#in').
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-quickaccess-'))
+    const tmpDir = mkTempDir('ue2-quickaccess-')
     await fs.writeFile(path.join(tmpDir, 'a.ts'), 'const TestValue = 1\n')
     await workbench.waitForRestored()
     await workbench.openWorkspace(tmpDir)
@@ -158,7 +158,7 @@ test.describe('@p0 quick access', () => {
   })
 
   test('ctrl+enter opens the picked file to the side', async ({ page, workbench }) => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-quickside-'))
+    const tmpDir = mkTempDir('ue2-quickside-')
     await fs.writeFile(path.join(tmpDir, 'a.ts'), 'export const a = 1\n')
     await fs.writeFile(path.join(tmpDir, 'b.ts'), 'export const b = 2\n')
     try {
@@ -199,7 +199,7 @@ test.describe('@p0 quick access', () => {
     // Regression: closing a non-default editor type and reopening the file via
     // quick open re-guessed the type through the resolver (priority 100 dummy
     // editor wins back) instead of restoring the "Reopen With" choice.
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-quickrestore-'))
+    const tmpDir = mkTempDir('ue2-quickrestore-')
     await fs.writeFile(path.join(tmpDir, 'chart.dummy'), '')
     try {
       await workbench.waitForRestored()
@@ -272,7 +272,7 @@ test.describe('@p0 quick access', () => {
     // Regression: closing a virtual-scheme editor (markdown-preview:) removed it
     // from quick open entirely; reopening the .md file went through the resolver
     // and could never bring the preview back.
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-quickclosed-'))
+    const tmpDir = mkTempDir('ue2-quickclosed-')
     await fs.writeFile(path.join(tmpDir, 'a.md'), '# Hello\n')
     try {
       await workbench.waitForRestored()

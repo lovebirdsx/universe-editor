@@ -7,8 +7,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { randomUUID } from 'node:crypto'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
@@ -42,12 +41,13 @@ import {
 import { connectNodeSocket, type PtySpawner } from '@universe-editor/node-services'
 import type { IPty } from '@lydell/node-pty'
 import { createDaemon, type RunningDaemon } from '../daemon.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 const daemons: RunningDaemon[] = []
 const tempRoots: string[] = []
 
 async function makeTempRoot(): Promise<string> {
-  const root = await mkdtemp(path.join(tmpdir(), 'ue-daemon-'))
+  const root = mkTempDir('ue-daemon-')
   tempRoots.push(root)
   return root
 }

@@ -7,8 +7,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import {
   checkSensitiveStrings,
@@ -18,9 +17,10 @@ import {
   formatHit,
   maskMatch,
 } from '../check-sensitive-strings.mjs'
+import { mkTempDir } from '../lib/temp-root.mjs'
 
 function makeRepo() {
-  return mkdtempSync(join(tmpdir(), 'sensitive-strings-'))
+  return mkTempDir('sensitive-strings-')
 }
 
 function writeConfig(root, content) {

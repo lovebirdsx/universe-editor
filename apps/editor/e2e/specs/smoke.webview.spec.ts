@@ -21,9 +21,9 @@
 
 import * as path from 'node:path'
 import * as fs from 'node:fs/promises'
-import * as os from 'node:os'
 import AdmZip from 'adm-zip'
 import { test, expect } from '../fixtures/electronApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 const VIEW_TYPE = 'e2eCustom.view'
 const MARKER = 'e2e-custom-editor-rendered'
@@ -120,7 +120,7 @@ test.describe('@p1 webview custom editor', () => {
   test('installs a custom-editor extension and renders its webview @regression', async ({
     workbench,
   }) => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-webview-'))
+    const tmpDir = mkTempDir('ue2-webview-')
     const vsixPath = await makeCustomEditorVsix(tmpDir)
     const docPath = path.join(tmpDir, 'sample.uecustom')
     await fs.writeFile(docPath, 'irrelevant body — the custom editor ignores it')
@@ -182,7 +182,7 @@ test.describe('@p1 webview custom editor', () => {
   test('focuses the iframe on open and forwards host shortcuts @regression', async ({
     workbench,
   }) => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-webview-focus-'))
+    const tmpDir = mkTempDir('ue2-webview-focus-')
     const vsixPath = await makeCustomEditorVsix(tmpDir)
     const docPath = path.join(tmpDir, 'sample.uecustom')
     await fs.writeFile(docPath, 'irrelevant body — the custom editor ignores it')
@@ -275,7 +275,7 @@ test.describe('@p1 webview custom editor', () => {
   test('re-renders the webview after the tab is hidden and revealed @regression', async ({
     workbench,
   }) => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-webview-revisit-'))
+    const tmpDir = mkTempDir('ue2-webview-revisit-')
     const vsixPath = await makeCustomEditorVsix(tmpDir)
     const docPath = path.join(tmpDir, 'sample.uecustom')
     await fs.writeFile(docPath, 'irrelevant body — the custom editor ignores it')

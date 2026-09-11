@@ -1,0 +1,33 @@
+{
+  "name": "@universe-editor/temp-root",
+  "version": "0.0.0",
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./vitest-setup": {
+      "types": "./dist/vitestSetup.d.ts",
+      "default": "./dist/vitestSetup.js"
+    }
+  },
+  "scripts": {
+    "build": "tsgo --build",
+    "typecheck": "tsgo --build",
+    "lint": "eslint src --cache --cache-strategy content",
+    "lint:fix": "eslint --fix src",
+    "test": "vitest run",
+    "dev": "tsgo --build --watch",
+    "clean": "tsgo --build --clean"
+  },
+  "devDependencies": {
+    "@universe-editor/config-ts": "workspace:*",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

@@ -5,8 +5,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   alreadyPublished,
@@ -16,6 +15,7 @@ import {
   ineligibleReason,
   selectExtensions,
 } from '../lib.mjs'
+import { getTempRoot, mkTempDir } from '../../lib/temp-root.mjs'
 
 const validManifest = {
   name: 'demo',
@@ -26,7 +26,7 @@ const validManifest = {
 
 /** 在临时目录铺一个 extensions-external 布局，返回根路径。 */
 function makeExternalRoot(exts) {
-  const root = mkdtempSync(join(tmpdir(), 'ext-release-'))
+  const root = mkTempDir('ext-release-')
   for (const [dir, manifest] of Object.entries(exts)) {
     const d = join(root, dir)
     mkdirSync(d, { recursive: true })
@@ -64,7 +64,7 @@ test('discoverExtensions 分流合法与跳过', () => {
 })
 
 test('discoverExtensions 对不存在的根返回空', () => {
-  const { eligible, skipped } = discoverExtensions(join(tmpdir(), 'nope-' + Math.random()))
+  const { eligible, skipped } = discoverExtensions(join(getTempRoot(), 'nope-' + Math.random()))
   assert.deepEqual(eligible, [])
   assert.deepEqual(skipped, [])
 })
@@ -97,7 +97,7 @@ test('alreadyPublished 命中 publisher.name@version', () => {
 })
 
 test('depsInstallPlan：无依赖或已装 → null；缺 node_modules → ci（有 lock）/ install（无 lock）', () => {
-  const root = mkdtempSync(join(tmpdir(), 'ext-release-deps-'))
+  const root = mkTempDir('ext-release-deps-')
   const extDir = join(root, 'ext')
   mkdirSync(extDir, { recursive: true })
 

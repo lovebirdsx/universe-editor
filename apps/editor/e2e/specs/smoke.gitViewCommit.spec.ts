@@ -11,11 +11,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { test, expect } from '@playwright/test'
-import { mkdtempSync, writeFileSync, realpathSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { seedBaselineUserData } from '@universe-editor/e2e-harness'
+import { seedBaselineUserData, mkTempDir } from '@universe-editor/e2e-harness'
 import { closeApp, launchCoreGitApp } from '../fixtures/coreGitApp.js'
 import { evaluateWhenRestored } from '../pages/WorkbenchPO.js'
 
@@ -26,7 +25,7 @@ function git(cwd: string, ...args: string[]): string {
 }
 
 function makeUserDataDir(): string {
-  const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-gvc-'))
+  const userDataDir = mkTempDir('universe-editor-e2e-gvc-')
   seedBaselineUserData(userDataDir)
   return userDataDir
 }
@@ -34,7 +33,7 @@ function makeUserDataDir(): string {
 /** Two commits; `second` touches both a.ts and b.ts (2-file commit changes). */
 function makeRepo(): { repoDir: string; firstHash: string; secondHash: string } {
   // realpath.native: the raw mkdtemp path on CI Windows is an 8.3 short path.
-  const repoDir = realpathSync.native(mkdtempSync(join(tmpdir(), 'universe-editor-e2e-gvc-repo-')))
+  const repoDir = realpathSync.native(mkTempDir('universe-editor-e2e-gvc-repo-'))
   git(repoDir, 'init')
   git(repoDir, 'config', 'user.email', 'e2e@example.com')
   git(repoDir, 'config', 'user.name', 'E2E')

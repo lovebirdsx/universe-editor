@@ -18,7 +18,6 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import type { FileHandle } from 'node:fs/promises'
-import os from 'node:os'
 import path from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import {
@@ -46,6 +45,7 @@ import {
   resolveSearchThreads,
   rgDiskPath,
 } from './ripgrepUtil.js'
+import { getTempRoot } from '@universe-editor/temp-root'
 
 type RawUri = URI | UriComponents | string
 type StopReason = NonNullable<IFileSearchComplete['stopReason']>
@@ -59,6 +59,10 @@ const PREFILTER_CAP = 10_000
 // 清单缓存新鲜期：过期后旧清单仍即时可用（stale-while-revalidate），后台重建。
 const LISTING_TTL_MS = 5 * 60_000
 const LISTING_SWEEP_AGE_MS = 7 * 24 * 60 * 60_000
+// 长驻编辑器不会重启，只在构造时扫一次等于永不回收——此前 87 份清单攒到 8 GB
+// （单份 760 MB，大工作区全量枚举）。按年龄之外再加总量上限，超了按 mtime 从旧到新淘汰。
+const LISTING_SWEEP_INTERVAL_MS = 6 * 60 * 60_000
+const DEFAULT_LISTING_CACHE_BUDGET_BYTES = 2 * 1024 * 1024 * 1024
 const SCORE_YIELD_EVERY = 4096
 const STDERR_LIMIT = 100_000
 // 打分查询等磁盘清单的预算：清单缺失时后台已经在构建，查询线程只等这么久——
@@ -281,6 +285,11 @@ export interface FileSearchServiceOptions {
    * 观察它是否在上限处收兵而不是等到自己的 deadline。
    */
   readonly listingWaitMs?: number
+  /**
+   * 清单缓存总量上限（字节，默认 {@link DEFAULT_LISTING_CACHE_BUDGET_BYTES}）。
+   * 可注入是为了让测试真正覆盖淘汰分支：真造一份超预算的清单不现实。
+   */
+  readonly listingCacheBudgetBytes?: number
 }
 
 export class FileSearchService extends Disposable implements IFileSearchService {
@@ -289,15 +298,21 @@ export class FileSearchService extends Disposable implements IFileSearchService 
   private readonly _logger: ILogger
   private readonly _cacheDir: string
   private readonly _listingWaitMs: number
+  private readonly _cacheBudgetBytes: number
   private readonly _listings = new Map<string, ListingEntry>()
   private readonly _procs = new Set<ChildProcess>()
+  private _sweepTimer: NodeJS.Timeout | undefined
 
   constructor(loggerService?: ILoggerServiceType, options?: FileSearchServiceOptions) {
     super()
     this._logger = createNamedLogger(loggerService, { id: 'fileSearch', name: 'File Search' })
-    this._cacheDir = options?.cacheDir ?? path.join(os.tmpdir(), 'universe-editor-file-listings')
+    this._cacheDir = options?.cacheDir ?? path.join(getTempRoot(), 'universe-editor-file-listings')
     this._listingWaitMs = options?.listingWaitMs ?? LISTING_WAIT_MS
+    this._cacheBudgetBytes = options?.listingCacheBudgetBytes ?? DEFAULT_LISTING_CACHE_BUDGET_BYTES
     void this._sweepStaleListings()
+    this._sweepTimer = setInterval(() => void this._sweepStaleListings(), LISTING_SWEEP_INTERVAL_MS)
+    // 卫生定时器不该把 Electron 主进程钉住。
+    this._sweepTimer.unref()
   }
 
   async search(query: IFileSearchQuery, token?: CancellationToken): Promise<IFileSearchComplete> {
@@ -508,6 +523,7 @@ export class FileSearchService extends Disposable implements IFileSearchService 
   }
 
   override dispose(): void {
+    if (this._sweepTimer !== undefined) clearInterval(this._sweepTimer)
     for (const child of this._procs) {
       try {
         child.kill()
@@ -710,17 +726,29 @@ export class FileSearchService extends Disposable implements IFileSearchService 
     try {
       const names = await fs.readdir(this._cacheDir)
       const now = Date.now()
-      await Promise.all(
-        names
-          .filter((n) => n.endsWith('.list') || n.endsWith('.building'))
-          .map(async (n) => {
-            const filePath = path.join(this._cacheDir, n)
-            const stat = await fs.stat(filePath).catch(() => null)
-            if (stat && now - stat.mtimeMs > LISTING_SWEEP_AGE_MS) {
-              await fs.unlink(filePath).catch(() => undefined)
-            }
-          }),
-      )
+      const survivors: { filePath: string; mtimeMs: number; size: number }[] = []
+      for (const n of names) {
+        if (!n.endsWith('.list') && !n.endsWith('.building')) continue
+        const filePath = path.join(this._cacheDir, n)
+        const stat = await fs.stat(filePath).catch(() => null)
+        if (stat === null) continue
+        if (now - stat.mtimeMs > LISTING_SWEEP_AGE_MS) {
+          await fs.unlink(filePath).catch(() => undefined)
+          continue
+        }
+        if (n.endsWith('.list'))
+          survivors.push({ filePath, mtimeMs: stat.mtimeMs, size: stat.size })
+      }
+      let total = survivors.reduce((sum, f) => sum + f.size, 0)
+      if (total <= this._cacheBudgetBytes) return
+      // 只淘汰 .list：.building 是正在写的半成品，删掉会毁掉别人的构建。
+      // 按 mtime 从旧到新——刚写的那份（当前 key）最后才会被动。
+      survivors.sort((a, b) => a.mtimeMs - b.mtimeMs)
+      for (const f of survivors) {
+        if (total <= this._cacheBudgetBytes) break
+        await fs.unlink(f.filePath).catch(() => undefined)
+        total -= f.size
+      }
     } catch {
       // 缓存目录尚不存在。
     }

@@ -6,13 +6,13 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { checkClaudeMdSize } from '../check-claude-md-size.mjs'
+import { mkTempDir } from '../lib/temp-root.mjs'
 
 function makeRepo() {
-  return mkdtempSync(join(tmpdir(), 'claude-md-size-'))
+  return mkTempDir('claude-md-size-')
 }
 
 function writeClaudeMd(root, rel, bytes) {

@@ -10,8 +10,7 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { createHash, verify } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdtemp, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   bearer,
@@ -26,6 +25,7 @@ import {
   spawnServer,
   writePublishers,
 } from './publish-fixture.mjs'
+import { mkTempDir } from '../../lib/temp-root.mjs'
 
 const TOKEN = 'uet_testtoken_acme_0000000000000000'
 const OTHER_TOKEN = 'uet_testtoken_globex_00000000000000'
@@ -39,7 +39,7 @@ let child
 let PORT
 
 before(async () => {
-  root = await mkdtemp(join(tmpdir(), 'ue-publish-api-'))
+  root = mkTempDir('ue-publish-api-')
   galleryRoot = join(root, 'gallery')
   // authDir 必须在静态根之外（启动自检红线），放 root 的兄弟目录（随 mkdtemp 随机后缀唯一）
   authDir = `${root}-auth`

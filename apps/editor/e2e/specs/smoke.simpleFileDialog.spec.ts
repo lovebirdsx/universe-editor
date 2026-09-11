@@ -11,8 +11,8 @@
 
 import * as path from 'node:path'
 import * as fs from 'node:fs/promises'
-import * as os from 'node:os'
 import { expect, test } from '../fixtures/sharedApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 /**
  * tmpDir/
@@ -23,7 +23,7 @@ import { expect, test } from '../fixtures/sharedApp.js'
  *   .hidden.txt          (dotfile — hidden until the toggle button is pressed)
  */
 async function makeTree(): Promise<string> {
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-sfd-'))
+  const tmpDir = mkTempDir('ue2-sfd-')
   await fs.mkdir(path.join(tmpDir, 'childdir', 'grandchild'), { recursive: true })
   await fs.writeFile(path.join(tmpDir, 'childdir', 'note.txt'), 'hello', 'utf8')
   await fs.writeFile(path.join(tmpDir, 'top.txt'), 'top', 'utf8')

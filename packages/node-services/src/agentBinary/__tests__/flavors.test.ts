@@ -3,16 +3,16 @@
  *  extraction params, version-dir binary layout, and bundled-version discovery.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { rm, writeFile } from 'node:fs/promises'
 import * as path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { CODEX_VERSION, codexFlavor, createClaudeFlavor } from '../flavors.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 const tempDirs: string[] = []
 
 async function makeTempDir(): Promise<string> {
-  const dir = await mkdtemp(path.join(tmpdir(), 'universe-editor-agent-flavor-'))
+  const dir = mkTempDir('universe-editor-agent-flavor-')
   tempDirs.push(dir)
   return dir
 }

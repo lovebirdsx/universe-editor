@@ -10,8 +10,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { test, expect } from '@playwright/test'
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import {
@@ -19,6 +18,7 @@ import {
   expectNoLeaks,
   evaluateWhenRestored,
   seedBaselineUserData,
+  mkTempDir,
 } from '@universe-editor/e2e-harness'
 import { launchAiApp } from '../fixtures/aiApp.js'
 
@@ -34,11 +34,11 @@ test.describe('@p1 ai commit message', () => {
     // budget, tripping the test timeout before the poll fills. Give headroom —
     // mirrors the heavier @p0 generation spec.
     test.setTimeout(120_000)
-    const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-ai-'))
+    const userDataDir = mkTempDir('universe-editor-e2e-ai-')
     seedBaselineUserData(userDataDir)
 
     // A real git repo with one uncommitted change so the SCM view has a provider.
-    const repoDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-ai-repo-'))
+    const repoDir = mkTempDir('universe-editor-e2e-ai-repo-')
     git(repoDir, 'init')
     git(repoDir, 'config', 'user.email', 'e2e@example.com')
     git(repoDir, 'config', 'user.name', 'E2E')

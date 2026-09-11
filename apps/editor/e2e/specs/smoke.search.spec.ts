@@ -2,18 +2,18 @@
  *  Search result activation smoke (P1).
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { URI } from '@universe-editor/platform'
 import { test, expect } from '../fixtures/sharedApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 const SEARCH = 'workbench.view.search'
 const MATCH_LINE = 37
 const NEEDLE = 'search-result-single-click-target'
 
 function writeWorkspace(): { dir: string; target: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-search-'))
+  const dir = mkTempDir('universe-editor-e2e-search-')
   const target = join(dir, 'target.txt')
   const content = Array.from({ length: 50 }, (_, index) =>
     index + 1 === MATCH_LINE ? NEEDLE : `line ${index + 1}`,

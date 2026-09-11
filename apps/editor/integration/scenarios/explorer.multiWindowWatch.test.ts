@@ -8,7 +8,6 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { promises as fsp } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { IFileWatcherService, URI } from '@universe-editor/platform'
 import { ExplorerTreeService } from '../../src/renderer/services/explorer/ExplorerTreeService.js'
@@ -19,6 +18,7 @@ import {
   type InMemoryWatcherTransport,
 } from '@universe-editor/node-services'
 import { createExplorerTree, waitFor } from '../fixtures/explorerTree.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 function makeTree(watcher: IFileWatcherService, root: string): ExplorerTreeService {
   return createExplorerTree({ watcher, root: URI.file(root) }).tree
@@ -35,8 +35,8 @@ describe('FileWatcher is per-window across two windows', () => {
   let treeB: ExplorerTreeService
 
   beforeEach(async () => {
-    dirA = await fsp.mkdtemp(join(tmpdir(), 'ue-win-a-'))
-    dirB = await fsp.mkdtemp(join(tmpdir(), 'ue-win-b-'))
+    dirA = mkTempDir('ue-win-a-')
+    dirB = mkTempDir('ue-win-b-')
     // One shared client owns the (in-memory) watcher host, mirroring the
     // app-singleton WatcherProcessClient in production.
     watcherTransports = []

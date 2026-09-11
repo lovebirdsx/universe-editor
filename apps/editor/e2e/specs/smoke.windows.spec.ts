@@ -14,16 +14,14 @@
  *  inherit the E2E probe because createWindow forwards --enable-e2e-probe.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { test, expect } from '../fixtures/electronApp.js'
 import { expectNoLeaks, evaluateWhenRestored } from '../pages/WorkbenchPO.js'
 import type { Page } from '@playwright/test'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 // URI.fsPath returns forward slashes in this codebase; normalize to match.
 function tmpFolder(): { dir: string; fsPath: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-win-'))
+  const dir = mkTempDir('universe-editor-e2e-win-')
   return { dir, fsPath: dir.replace(/\\/g, '/') }
 }
 

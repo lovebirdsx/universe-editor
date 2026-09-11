@@ -1,10 +1,10 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtemp, rm, readFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { rm, readFile } from 'node:fs/promises'
 import * as path from 'node:path'
 import { AssetType } from '@universe-editor/extension-gallery'
 import type { IGalleryExtension } from '@universe-editor/extension-gallery'
 import { ExtensionGalleryMainService } from '../extensionGalleryService.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 const realFetch = globalThis.fetch
 
@@ -46,7 +46,7 @@ describe('ExtensionGalleryMainService', () => {
   let cacheDir: string
 
   beforeEach(async () => {
-    cacheDir = await mkdtemp(path.join(tmpdir(), 'ext-gallery-'))
+    cacheDir = mkTempDir('ext-gallery-')
   })
 
   afterEach(async () => {

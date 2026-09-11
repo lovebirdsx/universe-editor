@@ -9,13 +9,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { test, expect } from '@playwright/test'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   ENABLED_EXTENSIONS_ENV,
   INITIAL_SETTINGS,
   launchElectron,
+  mkTempDir,
 } from '@universe-editor/e2e-harness'
 import { MAIN_ENTRY, APP_ROOT, closeApp } from '../fixtures/electronApp.js'
 import { expectNoLeaks, evaluateWhenRestored } from '../pages/WorkbenchPO.js'
@@ -66,7 +66,7 @@ test.describe('@p1 inline completion restore', () => {
     // Self-launched double cold boot: leave room for the graceful-close +
     // force-kill teardown under full-suite parallel load (see smoke.viewSizes).
     test.setTimeout(120_000)
-    const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-inline-restore-'))
+    const userDataDir = mkTempDir('universe-editor-inline-restore-')
     try {
       const { app, page } = await launchWithState(userDataDir)
       try {

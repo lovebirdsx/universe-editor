@@ -40,7 +40,8 @@
     "clean": "tsgo --build --clean"
   },
   "dependencies": {
-    "@universe-editor/e2e-contract": "workspace:*"
+    "@universe-editor/e2e-contract": "workspace:*",
+    "@universe-editor/temp-root": "workspace:*"
   },
   "peerDependencies": {
     "@playwright/test": "^1.62.0"

@@ -4,6 +4,7 @@ export default defineConfig({
   // Some suites shell out to the real `p4` CLI or spawn helper processes; keep a
   // generous timeout so Windows process spawning doesn't trip the 5s default.
   test: {
+    globalSetup: ['@universe-editor/temp-root/vitest-setup'],
     silent: 'passed-only',
     testTimeout: 30000,
     hookTimeout: 30000,

@@ -7,11 +7,11 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtemp, readFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { hashToken } from '../../server/__tests__/publish-fixture.mjs'
+import { mkTempDir } from '../../lib/temp-root.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const tokenScript = join(__dirname, '..', 'token.mjs')
@@ -21,7 +21,7 @@ function runToken(args) {
 }
 
 async function freshAuthDir() {
-  return join(await mkdtemp(join(tmpdir(), 'ue-token-')), 'auth')
+  return join(mkTempDir('ue-token-'), 'auth')
 }
 
 test('issue: 打印明文一次，publishers.json 只存哈希，publisher 隐式创建', async () => {

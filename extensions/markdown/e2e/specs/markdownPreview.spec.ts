@@ -11,12 +11,12 @@
  *  无 tag（主趟）与 @regression 场景各自成组。
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { writeFileSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Page } from '@playwright/test'
 import { test, expect } from '../fixtures/markdownApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 // A 1×1 red PNG — the smallest valid image to prove the universe-resource
 // protocol actually streamed real bytes (naturalWidth > 0), not just that an
@@ -25,14 +25,14 @@ const RED_DOT_PNG_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
 
 function writeTempMarkdown(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-md-'))
+  const dir = mkTempDir('universe-editor-e2e-md-')
   const file = join(dir, 'note.md')
   writeFileSync(file, '# Title\n\nsome **bold** text\n\n1. Alpha\n\n2. Beta\n\n3. Gamma\n')
   return file.replace(/\\/g, '/')
 }
 
 function writeLongMarkdown(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-md-'))
+  const dir = mkTempDir('universe-editor-e2e-md-')
   const file = join(dir, 'long.md')
   // Many paragraphs so the preview scrolls well beyond one viewport.
   const body = Array.from({ length: 200 }, (_, i) => `paragraph ${i} lorem ipsum dolor sit amet`)
@@ -54,7 +54,7 @@ function writePreviewWorkspace(): {
   realWatch: string
   realTarget: string
 } {
-  const dir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-md-'))
+  const dir = mkTempDir('universe-editor-e2e-md-')
   writeFileSync(join(dir, 'index.md'), '# Index\n\n[go to target](target.md)\n')
   writeFileSync(join(dir, 'target.md'), '# Target\n\nbody\n')
   writeFileSync(join(dir, 'outline.md'), '# Alpha\n\ntext\n\n## Beta\n\nmore\n\n## Gamma\n\nend\n')

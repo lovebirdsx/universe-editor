@@ -17,15 +17,15 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { test, expect } from '@playwright/test'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   ENABLED_EXTENSIONS_ENV,
   INITIAL_SETTINGS,
   INITIAL_STATE,
   launchElectron,
+  mkTempDir,
 } from '@universe-editor/e2e-harness'
 import { MAIN_ENTRY, APP_ROOT, closeApp } from '../fixtures/electronApp.js'
 import { expectNoLeaks, evaluateWhenRestored } from '../pages/WorkbenchPO.js'
@@ -157,9 +157,9 @@ test.describe('@p1 empty agent session restore', () => {
     // Self-launched cold boot: leave room for the graceful-close + force-kill
     // teardown under full-suite parallel load (see smoke.viewSizes).
     test.setTimeout(120_000)
-    const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-empty-acp-'))
+    const userDataDir = mkTempDir('universe-editor-empty-acp-')
     try {
-      const workspaceFolder = mkdtempSync(join(tmpdir(), 'universe-editor-ws-'))
+      const workspaceFolder = mkTempDir('universe-editor-ws-')
 
       seedGlobalSession(userDataDir, workspaceFolder)
       seedWorkspaceFile(userDataDir, workspaceFolder)

@@ -4,12 +4,12 @@
  *  all work on its in-memory content.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { URI } from '@universe-editor/platform'
 import type { Page } from '@playwright/test'
 import { test, expect } from '../fixtures/sharedApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 const SEARCH = 'workbench.view.search'
 const NEW_UNTITLED = 'workbench.action.files.newUntitledFile'
@@ -17,7 +17,7 @@ const DISK_NEEDLE = 'untitled-parity-disk-needle'
 const BUFFER_NEEDLE = 'untitled-parity-buffer-needle'
 
 function writeWorkspace(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-untitled-'))
+  const dir = mkTempDir('universe-editor-e2e-untitled-')
   writeFileSync(join(dir, 'on-disk.txt'), `first\n${DISK_NEEDLE}\nlast\n`, 'utf8')
   return dir
 }

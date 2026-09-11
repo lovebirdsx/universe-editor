@@ -7,13 +7,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as path from 'node:path'
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdir, readFile, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createVsix } from '@universe-editor/extension-packaging'
 import { LogLevel, NullLogger, type ILoggerService } from '@universe-editor/platform'
 import { RemoteExtensionManagementService } from '../extensionManagementService.js'
 import { resolveExtensionGlobalStorageDir, resolveUserExtensionsDir } from '../serverPaths.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 const loggerService: ILoggerService = {
   _serviceBrand: undefined,
@@ -27,7 +27,7 @@ let dataDir: string
 let svc: RemoteExtensionManagementService
 
 beforeEach(async () => {
-  root = await mkdtemp(path.join(tmpdir(), 'ue-extmgmt-'))
+  root = mkTempDir('ue-extmgmt-')
   dataDir = path.join(root, 'data')
   svc = new RemoteExtensionManagementService({ dataDir, loggerService })
 })

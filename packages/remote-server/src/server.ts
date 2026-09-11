@@ -98,7 +98,9 @@ export function createRemoteServer(
       nodeVersion: process.versions.node,
       pathCaseSensitive: fileProvider.capabilities.pathCaseSensitive,
       homeDir: homedir(),
-      tmpDir: tmpdir(),
+      // 这是「远端主机的环境描述」，不是我们要写临时文件的落点：对端 renderer 拿它做
+      // 文件对话框的 Temp 起始位置。故刻意保持原生 os.tmpdir()，不走 getTempRoot()。
+      tmpDir: tmpdir(), // temp-root:allow
     }),
   }
 

@@ -49,8 +49,9 @@
     "@universe-editor/extension-packaging": "workspace:*"
   },
   "devDependencies": {
-    "@universe-editor/config-ts": "workspace:*",
     "@types/node": "catalog:",
+    "@universe-editor/config-ts": "workspace:*",
+    "@universe-editor/temp-root": "workspace:*",
     "eslint": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"

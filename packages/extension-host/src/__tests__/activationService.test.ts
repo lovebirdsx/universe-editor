@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { ExtensionActivationService } from '../activationService.js'
 import type { IActivationErrorReport } from '../activationService.js'
 import type { IScannedExtension } from '../extensionScanner.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 // An extension module that records its activation by writing to a global the test
 // can read back (the host imports it as a real ESM module).
@@ -19,7 +19,7 @@ let dir: string
 let mainPath: string
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'ue-act-'))
+  dir = mkTempDir('ue-act-')
   mainPath = join(dir, 'extension.mjs')
   await writeFile(mainPath, EXT_SOURCE, 'utf8')
   ;(globalThis as Record<string, unknown>).__activated = 0

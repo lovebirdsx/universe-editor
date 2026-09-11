@@ -89,6 +89,7 @@ const monacoAlias = {
 
 export default defineConfig({
   test: {
+    globalSetup: ['@universe-editor/temp-root/vitest-setup'],
     // reporter 只读根配置的 silent（this.ctx.config.silent），project 级设置不生效
     silent: 'passed-only',
     projects: [

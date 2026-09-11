@@ -11,8 +11,7 @@
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   bearer,
@@ -25,6 +24,7 @@ import {
   serverScript,
   spawnServer,
 } from './publish-fixture.mjs'
+import { mkTempDir } from '../../lib/temp-root.mjs'
 
 let root
 let galleryRoot
@@ -64,7 +64,7 @@ async function adminListNames(port, token) {
 }
 
 before(async () => {
-  root = await mkdtemp(join(tmpdir(), 'ue-admin-api-'))
+  root = mkTempDir('ue-admin-api-')
   galleryRoot = join(root, 'gallery')
   // authDir 必须在静态根之外（启动自检红线），放 root 的兄弟目录（随 mkdtemp 随机后缀唯一）
   authDir = `${root}-auth`
@@ -84,7 +84,7 @@ before(async () => {
     ],
   }))
   // 对照实例：未配置管理令牌 → 管理面整体 503
-  const bareRoot = await mkdtemp(join(tmpdir(), 'ue-admin-off-'))
+  const bareRoot = mkTempDir('ue-admin-off-')
   ;({ child: noAdminChild, port: NOADMIN_PORT } = await spawnServer({
     root: bareRoot,
     extraArgs: ['--gallery-root', join(bareRoot, 'gallery'), '--auth-dir', `${bareRoot}-auth`],

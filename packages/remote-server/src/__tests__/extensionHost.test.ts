@@ -8,9 +8,9 @@
 
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { mkTempDir } from '@universe-editor/temp-root'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   PersistentProtocol,
@@ -46,7 +46,7 @@ rl.on('line', (line) => {
 `
 
 async function makeTempRoot(): Promise<string> {
-  const root = await mkdtemp(path.join(tmpdir(), 'ue-exthost-'))
+  const root = mkTempDir('ue-exthost-')
   tempRoots.push(root)
   return root
 }

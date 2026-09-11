@@ -5,10 +5,10 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { hasExplicitMode, loadEnv, parseEnvText, resolveMode } from '../env.mjs'
+import { mkTempDir } from '../temp-root.mjs'
 
 test('parseEnvText: 空行与注释行被跳过', () => {
   assert.deepEqual(parseEnvText('\n  \n# comment\n   # indented comment\nA=1\n'), { A: '1' })
@@ -103,7 +103,7 @@ test('hasExplicitMode: --env 无后继值不算显式（与 resolveMode 识别�
 })
 
 function makeTmpEnvDir(t) {
-  const dir = mkdtempSync(join(tmpdir(), 'ue-env-loader-'))
+  const dir = mkTempDir('ue-env-loader-')
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   return dir
 }

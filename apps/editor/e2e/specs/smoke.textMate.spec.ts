@@ -9,10 +9,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { Page } from '@playwright/test'
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test } from '../fixtures/coreTextMateApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 // 'const' is `storage.type.ts` in the TypeScript grammar; both built-in
 // themes map storage.type to the same value as keyword.
@@ -25,7 +25,7 @@ const DARK_JSON_KEY = 'rgb(156, 220, 254)' // #9CDCFE
 const DARK_JSON_STRING = 'rgb(206, 145, 120)' // #CE9178
 
 function seedFile(name: string, content: string): string {
-  const dir = mkdtempSync(join(tmpdir(), 'universe-textmate-'))
+  const dir = mkTempDir('universe-textmate-')
   const filePath = join(dir, name)
   writeFileSync(filePath, content, 'utf8')
   return filePath

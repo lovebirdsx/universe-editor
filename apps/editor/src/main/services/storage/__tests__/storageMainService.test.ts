@@ -4,11 +4,11 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { StorageScope } from '@universe-editor/platform'
 import { createStorage } from '../../../storage.js'
 import { MainStorageService } from '../storageMainService.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 // MainStorageService → workspaceStoragePath() → app.getPath('userData'). Stub it
 // at module level so the workspace files land under a temp dir.
@@ -22,7 +22,7 @@ describe('MainStorageService', () => {
   let globalFile: string
 
   beforeEach(async () => {
-    tmpRoot = await fs.mkdtemp(join(tmpdir(), 'universe-editor-mainstorage-'))
+    tmpRoot = mkTempDir('universe-editor-mainstorage-')
     globalFile = join(tmpRoot, 'state.json')
   })
 

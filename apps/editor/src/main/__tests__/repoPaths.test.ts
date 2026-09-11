@@ -6,10 +6,10 @@
  *  `apps/editor/vendor/...` under the e2e layout.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import * as path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 let appPath = ''
 
@@ -25,7 +25,7 @@ describe('resolveFromRepo', () => {
   let repoRoot = ''
 
   beforeEach(async () => {
-    repoRoot = await mkdtemp(path.join(tmpdir(), 'universe-editor-repopaths-'))
+    repoRoot = mkTempDir('universe-editor-repopaths-')
     const metaDir = path.join(repoRoot, 'vendor', 'claude-agent-acp', 'dist')
     await mkdir(metaDir, { recursive: true })
     await writeFile(path.join(metaDir, 'claude-binary.json'), '{}')

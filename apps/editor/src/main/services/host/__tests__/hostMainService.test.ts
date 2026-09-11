@@ -14,10 +14,10 @@ declare const __APP_VERSION__: string
 
 vi.mock('electron', async () => {
   const { EventEmitter } = await import('node:events')
-  const { mkdtempSync } = await import('node:fs')
-  const { tmpdir } = await import('node:os')
-  const { join } = await import('node:path')
-  const userDataDir = mkdtempSync(join(tmpdir(), 'universe-host-test-'))
+  // Dynamic import: vi.mock factories are hoisted above the module body, so a
+  // top-level import binding is still in its TDZ when this factory runs.
+  const { mkTempDir } = await import('@universe-editor/temp-root')
+  const userDataDir = mkTempDir('universe-host-test-')
   const nativeTheme = new EventEmitter() as EventEmitter & { shouldUseDarkColors: boolean }
   nativeTheme.shouldUseDarkColors = true
   return {

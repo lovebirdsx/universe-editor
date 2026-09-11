@@ -6,12 +6,12 @@
  *  injected spawner so nothing real is killed.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdir, readFile, rm } from 'node:fs/promises'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { buildWindowsDaemonLaunch, killProcessTree } from '../bootstrap.js'
 import { installBundle, resolveNpmCliPath, type NpmRunner } from '../install.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 const NPM_INSTALL_ARGS = ['install', '--omit=dev', '--no-audit', '--no-fund']
 const VENDOR_INSTALL_ARGS = ['ci', '--omit=dev', '--omit=optional', '--no-audit', '--no-fund']
@@ -25,7 +25,7 @@ afterEach(async () => {
 })
 
 async function makeTempDir(): Promise<string> {
-  const dir = await mkdtemp(path.join(tmpdir(), 'ue-install-'))
+  const dir = mkTempDir('ue-install-')
   tempDirs.push(dir)
   return dir
 }

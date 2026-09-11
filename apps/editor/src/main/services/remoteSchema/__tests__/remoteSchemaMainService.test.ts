@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { getTempRoot, mkTempDir } from '@universe-editor/temp-root'
 
 vi.mock('electron', () => ({
-  app: { getPath: () => tmpdir() },
+  app: { getPath: () => getTempRoot() },
 }))
 
 const { RemoteSchemaMainService } = await import('../remoteSchemaMainService.js')
@@ -13,7 +13,7 @@ let cacheDir: string
 const URL = 'https://json.schemastore.org/claude-code-settings.json'
 
 beforeEach(async () => {
-  cacheDir = await fs.mkdtemp(join(tmpdir(), 'ue-schema-cache-'))
+  cacheDir = mkTempDir('ue-schema-cache-')
 })
 afterEach(async () => {
   vi.unstubAllGlobals()

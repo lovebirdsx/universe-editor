@@ -1,7 +1,6 @@
 import { vi } from 'vitest'
 import { app } from 'electron'
 import { promises as fs } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createStorage } from '../../src/main/storage.js'
 import { LogMainService } from '../../src/main/services/log/logMainService.js'
@@ -17,6 +16,7 @@ import {
 import { WorkspaceMainService } from '../../src/main/services/workspace/workspaceMainService.js'
 import { RecentWorkspacesMainService } from '../../src/main/services/workspace/recentWorkspacesMainService.js'
 import { UserDataMainService } from '../../src/main/services/userData/userDataMainService.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 export interface TestWorkbench {
   readonly userDataDir: string
@@ -42,7 +42,7 @@ const noopDialog = { showOpenFolderDialog: vi.fn(async () => null) }
  * Call dispose() in afterEach to clean up the temp dir and close file watchers.
  */
 export async function createTestWorkbench(): Promise<TestWorkbench> {
-  const userDataDir = await fs.mkdtemp(join(tmpdir(), 'ue-integration-'))
+  const userDataDir = mkTempDir('ue-integration-')
 
   // Point app.getPath to our isolated temp dir BEFORE creating any service
   // that calls app.getPath in its constructor (LogMainService, UserDataMainService).

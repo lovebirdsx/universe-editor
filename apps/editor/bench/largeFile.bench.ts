@@ -1,12 +1,12 @@
 import { bench, beforeAll, afterAll, describe } from 'vitest'
 import { vi } from 'vitest'
 import { promises as fs } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { URI } from '@universe-editor/platform'
+import { getTempRoot, mkTempDir } from '@universe-editor/temp-root'
 
 vi.mock('electron', () => ({
-  app: { getPath: vi.fn(() => tmpdir()), on: vi.fn(), quit: vi.fn() },
+  app: { getPath: vi.fn(() => getTempRoot()), on: vi.fn(), quit: vi.fn() },
   ipcMain: { handle: vi.fn(), on: vi.fn() },
 }))
 
@@ -33,7 +33,7 @@ async function writeTestFile(path: string, sizeBytes: number): Promise<void> {
 }
 
 beforeAll(async () => {
-  tmpDir = await fs.mkdtemp(join(tmpdir(), 'ue-bench-largefile-'))
+  tmpDir = mkTempDir('ue-bench-largefile-')
   fileSystem = new FileSystemMainService()
   await Promise.all([
     writeTestFile(join(tmpDir, '1mb.txt'), SIZE_1MB),

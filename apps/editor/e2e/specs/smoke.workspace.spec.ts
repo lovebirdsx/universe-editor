@@ -7,16 +7,14 @@
  *    - 打开文件夹后侧栏展示 Explorer 视图
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { test, expect } from '../fixtures/sharedApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 const EXPLORER = 'workbench.view.explorer'
 
 test.describe('@p0 workspace', () => {
   test('openWorkspace sets current workspace path', async ({ workbench }) => {
-    const tmpDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-ws-'))
+    const tmpDir = mkTempDir('universe-editor-e2e-ws-')
     // URI.fsPath always returns forward slashes; normalize tmpDir to match
     const expectedPath = tmpDir.replace(/\\/g, '/')
 
@@ -30,7 +28,7 @@ test.describe('@p0 workspace', () => {
   })
 
   test('openFolder action reveals Explorer sidebar', async ({ workbench }) => {
-    const tmpDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-ws-'))
+    const tmpDir = mkTempDir('universe-editor-e2e-ws-')
 
     // WorkspaceExplorerRevealContribution is instantiated at AfterRestore phase.
     // Wait for Restored so the contribution is listening before we fire the event.

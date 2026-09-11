@@ -8,9 +8,8 @@
 
 import { EventEmitter } from 'node:events'
 import { createServer, type AddressInfo, type Server, type Socket as NetSocket } from 'node:net'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -41,6 +40,7 @@ import {
   type RemoteSpawner,
 } from '../remoteConnectionMainService.js'
 import type { WslDeployer } from '../wslDeploy.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 const ENV: IRemoteEnvironment = {
   protocolVersion: REMOTE_PROTOCOL_VERSION,
@@ -963,7 +963,7 @@ describe('RemoteConnectionMainService wsl mode', () => {
   })
 
   it('forwards deployerOptions to the internally-built WslDeployer', () => {
-    const bundleDir = mkdtempSync(join(tmpdir(), 'ue-deployer-options-'))
+    const bundleDir = mkTempDir('ue-deployer-options-')
     try {
       writeFileSync(join(bundleDir, 'bootstrap.js'), '// fake', 'utf8')
       const svc = new RemoteConnectionMainService(

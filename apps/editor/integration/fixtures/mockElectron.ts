@@ -1,5 +1,5 @@
 import { vi } from 'vitest'
-import { tmpdir } from 'node:os'
+import { getTempRoot } from '@universe-editor/temp-root'
 
 // Minimal electron mock for integration tests running in plain Node.
 // app.getPath is a vi.fn() so individual tests can override per-test:
@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 // `import { app } from 'electron'` will receive this mock object.
 vi.mock('electron', () => ({
   app: {
-    getPath: vi.fn((_name: string) => tmpdir()),
+    getPath: vi.fn((_name: string) => getTempRoot()),
     on: vi.fn(),
     quit: vi.fn(),
     relaunch: vi.fn(),

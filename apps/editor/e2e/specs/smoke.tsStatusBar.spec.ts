@@ -7,14 +7,14 @@
  * plus its version.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, expect } from '../fixtures/coreTypescriptSharedApp.js'
 import { DEFAULT_TS_SERVER_IMPLEMENTATION } from '../../src/shared/tsServerImplementation.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 function writeWorkspace(): { dir: string; aPath: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-tsstatus-'))
+  const dir = mkTempDir('universe-editor-e2e-tsstatus-')
   const aPath = join(dir, 'a.ts')
   writeFileSync(
     join(dir, 'tsconfig.json'),

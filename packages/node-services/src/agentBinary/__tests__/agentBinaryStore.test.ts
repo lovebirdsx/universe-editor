@@ -5,17 +5,17 @@
  *  because its bundled version is a constant (no claude-binary.json fixture).
  *--------------------------------------------------------------------------------------------*/
 
-import { access, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { access, mkdir, readdir, rm, writeFile } from 'node:fs/promises'
 import * as path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AgentBinaryStore } from '../agentBinaryStore.js'
 import { codexFlavor } from '../flavors.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 const tempDirs: string[] = []
 
 async function makeTempDir(): Promise<string> {
-  const dir = await mkdtemp(path.join(tmpdir(), 'universe-editor-agent-store-'))
+  const dir = mkTempDir('universe-editor-agent-store-')
   tempDirs.push(dir)
   return dir
 }

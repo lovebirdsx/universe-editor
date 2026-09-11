@@ -1,6 +1,5 @@
 import { execFile } from 'node:child_process'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -80,6 +79,7 @@ vi.mock('@universe-editor/extension-api', () => ({
 import { Repository } from '../repository.js'
 import { pullBranch } from '../gitGraphActions.js'
 import { autoSyncWorktreesAfterPull } from '../worktreeAutoSync.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 const execFileAsync = promisify(execFile)
 const tmpRoots: string[] = []
@@ -113,7 +113,7 @@ async function commitFile(repo: string, name: string, content: string): Promise<
  * point — the commit every worktree below starts from.
  */
 async function createRemoteBackedRepo(): Promise<{ local: string; baseHead: string }> {
-  const root = await mkdtemp(join(tmpdir(), 'ue-git-wtsync-'))
+  const root = mkTempDir('ue-git-wtsync-')
   tmpRoots.push(root)
   const remote = join(root, 'remote.git')
   const local = join(root, 'local')

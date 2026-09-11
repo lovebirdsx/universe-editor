@@ -7,8 +7,7 @@
 
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
-import { mkdtemp, rm, writeFile, mkdir, stat, readFile, readdir } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { rm, writeFile, mkdir, stat, readFile, readdir } from 'node:fs/promises'
 import * as path from 'node:path'
 import { createVsix } from '@universe-editor/extension-packaging'
 import {
@@ -24,6 +23,7 @@ import {
   writeEnablement,
   writeInstalledRecords,
 } from '../installedExtensionsManifest.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 const HOST_API = '0.1.0'
 
@@ -75,7 +75,7 @@ describe('extensionInstallEngine', () => {
   let extDir: string
 
   beforeEach(async () => {
-    root = await mkdtemp(path.join(tmpdir(), 'ext-engine-'))
+    root = mkTempDir('ext-engine-')
     extDir = path.join(root, 'extensions')
   })
   afterEach(async () => {

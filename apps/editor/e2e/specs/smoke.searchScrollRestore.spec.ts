@@ -6,10 +6,10 @@
  *  越过 Tree 的虚拟化阈值（200）走虚拟路径，所以这里同时守护“虚拟模式下的滚动恢复”。
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, expect } from '../fixtures/sharedApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 const SEARCH = 'workbench.view.search'
 const EXPLORER = 'workbench.view.explorer'
@@ -17,7 +17,7 @@ const NEEDLE = 'search-scroll-restore-needle'
 const MATCH_LINES = 600
 
 function writeWorkspace(): { dir: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-searchscrollrestore-'))
+  const dir = mkTempDir('universe-editor-e2e-searchscrollrestore-')
   const lines = Array.from({ length: MATCH_LINES }, (_, i) => `${NEEDLE} occurrence ${i + 1}`)
   writeFileSync(join(dir, 'big.txt'), lines.join('\n'), 'utf8')
   return { dir }

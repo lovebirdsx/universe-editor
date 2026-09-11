@@ -3,11 +3,9 @@
  *  leave global shortcuts usable even if a hidden terminal previously owned focus.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { test, expect } from '../fixtures/sharedApp.js'
 import { test as coldTest, expect as coldExpect } from '../fixtures/electronApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 const EXPLORER_TREE = 'workbench.view.explorer.tree'
 
@@ -16,7 +14,7 @@ test.describe('@p1 workspace focus restore', () => {
     page,
     workbench,
   }) => {
-    const tmpDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-focus-'))
+    const tmpDir = mkTempDir('universe-editor-e2e-focus-')
     const expectedPath = tmpDir.replace(/\\/g, '/')
 
     await workbench.waitForRestored()

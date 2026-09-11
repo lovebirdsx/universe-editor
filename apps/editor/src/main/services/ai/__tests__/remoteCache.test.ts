@@ -5,11 +5,11 @@
  *  round-tripping to a fresh instance, and the allRates snapshot shape.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { AiRemoteCache, RATES_TTL_MS, USAGE_TTL_MS } from '../remote/remoteCache.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 const RATES = { m: { input: 1, output: 2 } }
 
@@ -19,7 +19,7 @@ function makeCache(dir: string): AiRemoteCache {
 
 describe('AiRemoteCache', () => {
   it('treats a missing file as empty', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ai-remote-cache-'))
+    const dir = mkTempDir('ai-remote-cache-')
     const cache = makeCache(dir)
     await cache.load()
     expect(cache.allRates()).toEqual([])
@@ -28,7 +28,7 @@ describe('AiRemoteCache', () => {
   })
 
   it('treats a corrupt file as empty without throwing', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ai-remote-cache-'))
+    const dir = mkTempDir('ai-remote-cache-')
     writeFileSync(join(dir, 'aiRemoteCache.json'), '{ not json', 'utf8')
     const cache = makeCache(dir)
     await expect(cache.load()).resolves.toBeUndefined()
@@ -36,7 +36,7 @@ describe('AiRemoteCache', () => {
   })
 
   it('treats a v1 file (retired type/instance keys) as empty without migrating', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ai-remote-cache-'))
+    const dir = mkTempDir('ai-remote-cache-')
     writeFileSync(
       join(dir, 'aiRemoteCache.json'),
       JSON.stringify({ version: 1, rates: { 'a/b': { fetchedAt: 1, rates: RATES } } }),
@@ -48,7 +48,7 @@ describe('AiRemoteCache', () => {
   })
 
   it('treats an unknown-version file as empty', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ai-remote-cache-'))
+    const dir = mkTempDir('ai-remote-cache-')
     writeFileSync(
       join(dir, 'aiRemoteCache.json'),
       JSON.stringify({ version: 99, rates: { a: { fetchedAt: 1, rates: RATES } } }),
@@ -60,7 +60,7 @@ describe('AiRemoteCache', () => {
   })
 
   it('applies the dual TTL using the injected now', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ai-remote-cache-'))
+    const dir = mkTempDir('ai-remote-cache-')
     const cache = makeCache(dir)
     const now = Date.now()
     cache.setRates('a', RATES, now)
@@ -80,7 +80,7 @@ describe('AiRemoteCache', () => {
   })
 
   it('prune drops entries whose provider disappeared', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ai-remote-cache-'))
+    const dir = mkTempDir('ai-remote-cache-')
     const cache = makeCache(dir)
     await cache.load()
     cache.setRates('keep', RATES, 1)
@@ -95,7 +95,7 @@ describe('AiRemoteCache', () => {
   })
 
   it('flush round-trips through a fresh instance', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ai-remote-cache-'))
+    const dir = mkTempDir('ai-remote-cache-')
     const cache = makeCache(dir)
     await cache.load()
     cache.setRates('a', RATES, 1000)
@@ -109,7 +109,7 @@ describe('AiRemoteCache', () => {
   })
 
   it('allRates exposes the snapshot shape keyed by provider id', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ai-remote-cache-'))
+    const dir = mkTempDir('ai-remote-cache-')
     const cache = makeCache(dir)
     cache.setRates('a', RATES, 123)
     expect(cache.allRates()).toEqual([{ providerId: 'a', rates: RATES, fetchedAt: 123 }])

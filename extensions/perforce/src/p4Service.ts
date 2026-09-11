@@ -13,8 +13,8 @@
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { unlinkSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { getTempRoot } from '@universe-editor/temp-root'
 import type { ConcurrencyGate, P4Priority } from './concurrency.js'
 import { parseMarshalJson, parseZtag, parseZtagAsMarshal, type P4Record } from './p4Output.js'
 
@@ -434,7 +434,7 @@ function prepareSpawnArgs(
 ): { args: readonly string[]; cleanup: () => void; error?: string } {
   const split = splitArgsForArgfile(args)
   if (!split) return { args, cleanup: () => {} }
-  const argfile = join(tmpdir(), `universe-p4-args-${randomUUID()}.txt`)
+  const argfile = join(getTempRoot(), `universe-p4-args-${randomUUID()}.txt`)
   try {
     writeFileSync(argfile, split.argfileLines.join('\n') + '\n', 'utf8')
   } catch (err) {

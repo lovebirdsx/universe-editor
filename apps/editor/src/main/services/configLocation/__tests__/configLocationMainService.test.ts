@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 let currentUserData = ''
 
@@ -42,7 +42,7 @@ describe('ConfigLocationMainService', () => {
   let tmp: string
 
   beforeEach(async () => {
-    tmp = await fs.mkdtemp(join(tmpdir(), 'ued-cfgloc-'))
+    tmp = mkTempDir('ued-cfgloc-')
     currentUserData = join(tmp, 'userData')
     await fs.mkdir(currentUserData, { recursive: true })
   })

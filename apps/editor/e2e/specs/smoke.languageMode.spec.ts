@@ -9,13 +9,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { Page } from '@playwright/test'
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test } from '../fixtures/coreTextMateApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 function seedEnvFile(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'universe-langmode-'))
+  const dir = mkTempDir('universe-langmode-')
   const filePath = join(dir, '.env')
   writeFileSync(filePath, '# comment\nAPI_KEY=secret\n', 'utf8')
   return filePath

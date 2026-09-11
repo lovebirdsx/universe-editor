@@ -1,18 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import {
-  mkdtempSync,
-  mkdirSync,
-  writeFileSync,
-  readFileSync,
-  readdirSync,
-  existsSync,
-  statSync,
-} from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, statSync } from 'node:fs'
 import * as path from 'node:path'
 import { scaffold } from '../scaffold.js'
 import { ScaffoldError } from '../errors.js'
 import { SDK_VERSIONS } from '../sdkVersions.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 const answers = {
   name: 'demo-ext',
@@ -23,7 +15,7 @@ const answers = {
 }
 
 function tmp(): string {
-  return mkdtempSync(path.join(tmpdir(), 'cue-scaffold-'))
+  return mkTempDir('cue-scaffold-')
 }
 
 function listRel(root: string, dir = root, acc: string[] = []): string[] {

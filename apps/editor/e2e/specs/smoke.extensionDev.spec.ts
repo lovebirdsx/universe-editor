@@ -16,8 +16,7 @@
 
 import * as path from 'node:path'
 import * as fs from 'node:fs'
-import * as os from 'node:os'
-import { createColdAppTest } from '@universe-editor/e2e-harness'
+import { createColdAppTest, mkTempDir } from '@universe-editor/e2e-harness'
 import { expect } from '../fixtures/electronApp.js'
 
 const COMMAND_ID = 'e2eDevExt.hello'
@@ -25,7 +24,7 @@ const DEV_EXT_ID = 'universe.e2e-dev-ext'
 
 /** Materialize a minimal unpacked extension on disk (the dev-directory shape). */
 function makeDevExtensionDir(): string {
-  const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'ue2-devext-')))
+  const dir = fs.realpathSync.native(mkTempDir('ue2-devext-'))
   fs.writeFileSync(
     path.join(dir, 'package.json'),
     JSON.stringify({

@@ -21,13 +21,13 @@
  *  trailing step.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync, writeFileSync, existsSync, readdirSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync, existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, expect } from '../fixtures/markdownApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 function writeWorkspace(): { dir: string; aPath: string; cPath: string; fmPath: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-mdls-'))
+  const dir = mkTempDir('universe-editor-e2e-mdls-')
   const aPath = join(dir, 'a.md')
   writeFileSync(
     aPath,

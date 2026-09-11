@@ -17,8 +17,7 @@
 import { test as base, type ElectronApplication, type Page } from '@playwright/test'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync, readFileSync } from 'node:fs'
 import {
   WorkbenchPO,
   closeApp,
@@ -27,6 +26,7 @@ import {
   resolveEditorBuild,
   seedBaselineUserData,
   waitForProbe,
+  mkTempDir,
 } from '@universe-editor/e2e-harness'
 import type { UriComponents } from '@universe-editor/extension-api'
 
@@ -167,7 +167,7 @@ function seedWorkspace(
   workspaceDir: string
   stateFile: string
 } {
-  const workspaceDir = mkdtempSync(join(tmpdir(), 'ue2-p4-ws-'))
+  const workspaceDir = mkTempDir('ue2-p4-ws-')
   const depotPrefix = DEPOT_PREFIX
   const files: FakeState['files'] = {}
   const opened: FakeState['opened'] = {}
@@ -218,7 +218,7 @@ function seedWorkspace(
       }
     }
   }
-  const stateDir = mkdtempSync(join(tmpdir(), 'ue2-p4-state-'))
+  const stateDir = mkTempDir('ue2-p4-state-')
   const stateFile = join(stateDir, 'state.json')
   const changeMeta: FakeState['changeMeta'] = {}
   if (annotate) {
@@ -379,7 +379,7 @@ export const test = base.extend<
     })
   },
   electronApp: async ({ p4Workspace, p4ExtraEnv }, use) => {
-    const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-p4-'))
+    const userDataDir = mkTempDir('universe-editor-e2e-p4-')
     seedBaselineUserData(userDataDir)
     const app = await launchApp({
       appRoot: APP_ROOT,

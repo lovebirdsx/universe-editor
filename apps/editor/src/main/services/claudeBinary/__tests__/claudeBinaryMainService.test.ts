@@ -2,20 +2,20 @@
  *  Tests for apps/editor/src/main/services/claudeBinary/claudeBinaryMainService.ts
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import * as path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { selectClaudeExecutable } from '../claudeBinaryMainService.js'
+import { getTempRoot, mkTempDir } from '@universe-editor/temp-root'
 
 vi.mock('electron', () => ({
-  app: { isPackaged: false, getAppPath: () => '/fake/app', getPath: () => tmpdir() },
+  app: { isPackaged: false, getAppPath: () => '/fake/app', getPath: () => getTempRoot() },
 }))
 
 const tempDirs: string[] = []
 
 async function makeTempDir(): Promise<string> {
-  const dir = await mkdtemp(path.join(tmpdir(), 'universe-editor-claude-bin-'))
+  const dir = mkTempDir('universe-editor-claude-bin-')
   tempDirs.push(dir)
   return dir
 }

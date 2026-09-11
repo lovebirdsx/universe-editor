@@ -16,9 +16,9 @@
 
 import * as path from 'node:path'
 import * as fs from 'node:fs/promises'
-import * as os from 'node:os'
 import AdmZip from 'adm-zip'
 import { test, expect } from '../fixtures/electronApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 const VIEW_TYPE = 'e2eDiff.view'
 const MARKER = 'e2e-webview-diff-rendered'
@@ -96,7 +96,7 @@ test.describe('@p1 webview diff', () => {
     // contribution change), so the iframe mounts within a few seconds — but give
     // the cold-start extension host room on a loaded CI runner.
     test.slow()
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-webviewdiff-'))
+    const tmpDir = mkTempDir('ue2-webviewdiff-')
     const vsixPath = await makeDiffEditorVsix(tmpDir)
 
     await workbench.waitForRestored()

@@ -3,12 +3,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { promises as fs } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { NullLogger } from '@universe-editor/platform'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { TrackerIssueReporterProvider } from '../providers/trackerProvider.js'
 import { ISSUE_REPORTER_NOT_CONFIGURED } from '../../../../shared/issueReporter.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 const PASTE_HINT = '（诊断信息较长，请从剪贴板粘贴）'
 
@@ -84,7 +84,7 @@ describe('TrackerIssueReporterProvider', () => {
   })
 
   it('uploads the diagnostics zip and references it as name@path attachment', async () => {
-    const dir = await fs.mkdtemp(join(tmpdir(), 'tracker-test-'))
+    const dir = mkTempDir('tracker-test-')
     const zipPath = join(dir, 'universe-diagnostics-2026-08-05.zip')
     await fs.writeFile(zipPath, 'PK fake zip')
 
@@ -112,7 +112,7 @@ describe('TrackerIssueReporterProvider', () => {
   })
 
   it('propagates upload failures', async () => {
-    const dir = await fs.mkdtemp(join(tmpdir(), 'tracker-test-'))
+    const dir = mkTempDir('tracker-test-')
     const zipPath = join(dir, 'diag.zip')
     await fs.writeFile(zipPath, 'PK')
     vi.stubGlobal(

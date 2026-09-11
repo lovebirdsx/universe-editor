@@ -7,10 +7,10 @@
  *  case-insensitive substring jumps that select the match.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, expect } from '../fixtures/sharedApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 test.describe('findWordAtCursor', () => {
   test('strict jumps walk whole-word occurrences and keep the cursor delta @p1', async ({
@@ -19,7 +19,7 @@ test.describe('findWordAtCursor', () => {
   }) => {
     await workbench.waitForRestored()
 
-    const tmpDir = mkdtempSync(join(tmpdir(), 'universe-editor-findword-'))
+    const tmpDir = mkTempDir('universe-editor-findword-')
     const file = join(tmpDir, 'words.txt')
     // "foo" ×3 (line1 col1/col9, line2 col5); "foobar" on line3 must never match.
     writeFileSync(file, 'foo bar foo\nbaz foo qux\nfoobar quux\n')
@@ -64,7 +64,7 @@ test.describe('findWordAtCursor', () => {
   }) => {
     await workbench.waitForRestored()
 
-    const tmpDir = mkdtempSync(join(tmpdir(), 'universe-editor-findword-loose-'))
+    const tmpDir = mkTempDir('universe-editor-findword-loose-')
     const file = join(tmpDir, 'loose.txt')
     writeFileSync(file, 'xx alpha yy ALPHA zz alpha\n')
 
@@ -101,7 +101,7 @@ test.describe('findWordAtCursor', () => {
   test('sole occurrence keeps the cursor in place @p1', async ({ page, workbench }) => {
     await workbench.waitForRestored()
 
-    const tmpDir = mkdtempSync(join(tmpdir(), 'universe-editor-findword-sole-'))
+    const tmpDir = mkTempDir('universe-editor-findword-sole-')
     const file = join(tmpDir, 'sole.txt')
     writeFileSync(file, 'unique word here\n')
 

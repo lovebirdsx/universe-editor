@@ -4,9 +4,6 @@
  *  with an end signal carrying the original error when present).
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   AiMessageRole,
@@ -18,12 +15,13 @@ import { AiDebugRecorder } from '../aiDebugRecorder.js'
 import { AiDebugMainService } from '../aiDebugService.js'
 import type { LogMainService } from '../../log/logMainService.js'
 import type { AiReplayChunkEvent, AiReplayEndEvent } from '../../../../shared/ipc/aiDebugService.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 function makeService(): {
   service: AiDebugMainService
   recorder: AiDebugRecorder
 } {
-  const dir = mkdtempSync(join(tmpdir(), 'ai-debug-svc-test-'))
+  const dir = mkTempDir('ai-debug-svc-test-')
   const logMain = { getSessionDir: () => dir } as unknown as LogMainService
   const recorder = new AiDebugRecorder(logMain)
   const service = new AiDebugMainService(recorder)

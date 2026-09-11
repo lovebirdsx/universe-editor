@@ -5,10 +5,10 @@
  *  并可通过 "Reopen With..." 回退到文本编辑器（typeId='file'）。
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, expect } from '../fixtures/sharedApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 // A minimal valid 1x1 transparent PNG.
 const PNG_1X1_BASE64 =
@@ -18,7 +18,7 @@ test.describe('@p1 image editor', () => {
   test('opens a .png as the image editor', async ({ page, workbench }) => {
     await workbench.waitForRestored()
 
-    const tmpDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-image-'))
+    const tmpDir = mkTempDir('universe-editor-e2e-image-')
     const pngFile = join(tmpDir, 'pixel.png')
     writeFileSync(pngFile, Buffer.from(PNG_1X1_BASE64, 'base64'))
     const pngFsPath = pngFile.replace(/\\/g, '/')
@@ -36,7 +36,7 @@ test.describe('@p1 image editor', () => {
   test('"Reopen With..." switches a .png from image to file', async ({ page, workbench }) => {
     await workbench.waitForRestored()
 
-    const tmpDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-image-reopen-'))
+    const tmpDir = mkTempDir('universe-editor-e2e-image-reopen-')
     const pngFile = join(tmpDir, 'pixel.png')
     writeFileSync(pngFile, Buffer.from(PNG_1X1_BASE64, 'base64'))
     const pngFsPath = pngFile.replace(/\\/g, '/')

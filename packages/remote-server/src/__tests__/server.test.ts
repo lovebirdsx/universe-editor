@@ -6,8 +6,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it } from 'vitest'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import {
   ChannelPair,
@@ -28,11 +27,12 @@ import type {
   IRemoteAgentBinaryService,
   IRemoteExtensionManagementService,
 } from '@universe-editor/node-services'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 const tempRoots: string[] = []
 
 async function makeTempRoot(): Promise<string> {
-  const root = await mkdtemp(path.join(tmpdir(), 'ue-remote-server-'))
+  const root = mkTempDir('ue-remote-server-')
   tempRoots.push(root)
   return root
 }

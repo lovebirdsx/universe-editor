@@ -11,15 +11,15 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { test, expect } from '@playwright/test'
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   ENABLED_EXTENSIONS_ENV,
   INITIAL_SETTINGS,
   INITIAL_STATE,
   launchElectron,
+  mkTempDir,
 } from '@universe-editor/e2e-harness'
 import { MAIN_ENTRY, APP_ROOT, closeApp } from '../fixtures/electronApp.js'
 import { expectNoLeaks, evaluateWhenRestored } from '../pages/WorkbenchPO.js'
@@ -110,9 +110,9 @@ test.describe('@p1 output channel restore', () => {
     // Self-launched cold boot: leave room for the graceful-close + force-kill
     // teardown under full-suite parallel load (see smoke.viewSizes).
     test.setTimeout(120_000)
-    const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-output-restore-'))
+    const userDataDir = mkTempDir('universe-editor-output-restore-')
     try {
-      const workspaceFolder = mkdtempSync(join(tmpdir(), 'universe-editor-ws-out-'))
+      const workspaceFolder = mkTempDir('universe-editor-ws-out-')
 
       // Pre-seed: boot into the workspace and restore "Main" channel.
       // Main is chosen because the main process always writes startup
@@ -151,9 +151,9 @@ test.describe('@p1 output channel restore', () => {
     test.setTimeout(120_000)
     // "TestChannel" does not exist at startup; it is created via probe after
     // the workbench mounts.  The pending-restore path should pick it up.
-    const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-output-deferred-'))
+    const userDataDir = mkTempDir('universe-editor-output-deferred-')
     try {
-      const workspaceFolder = mkdtempSync(join(tmpdir(), 'universe-editor-ws-deferred-'))
+      const workspaceFolder = mkTempDir('universe-editor-ws-deferred-')
 
       seedGlobalState(userDataDir, workspaceFolder)
       seedWorkspaceKey(userDataDir, workspaceFolder, 'output.activeChannel', 'TestChannel')
@@ -200,9 +200,9 @@ test.describe('@p1 output channel restore', () => {
     // Simulates the case where the user had acp/claude/old-handle active.
     // On restart the ACP service creates acp/claude/new-handle.
     // The prefix-matching fix should activate the new channel automatically.
-    const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-output-acp-'))
+    const userDataDir = mkTempDir('universe-editor-output-acp-')
     try {
-      const workspaceFolder = mkdtempSync(join(tmpdir(), 'universe-editor-ws-acp-'))
+      const workspaceFolder = mkTempDir('universe-editor-ws-acp-')
 
       seedGlobalState(userDataDir, workspaceFolder)
       seedWorkspaceKey(

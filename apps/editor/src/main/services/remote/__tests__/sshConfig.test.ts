@@ -3,16 +3,16 @@
  *  Tests for the ~/.ssh/config reader backing Remote-SSH host completion.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { listSshHosts, parseSshHosts, parseSshIncludes } from '../sshConfig.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 const dirs: string[] = []
 
 function makeHome(entries: Record<string, string>): string {
-  const dir = mkdtempSync(join(tmpdir(), 'ue2-ssh-'))
+  const dir = mkTempDir('ue2-ssh-')
   dirs.push(dir)
   const sshDir = join(dir, '.ssh')
   mkdirSync(sshDir, { recursive: true })

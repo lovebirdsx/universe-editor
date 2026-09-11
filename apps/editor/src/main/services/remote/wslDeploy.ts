@@ -14,8 +14,8 @@
 
 import { createReadStream, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 import { randomBytes } from 'node:crypto'
+import { getTempRoot } from '@universe-editor/temp-root'
 import { NullLogger, type ILogger, type IRemoteDaemonInfo } from '@universe-editor/platform'
 import { buildChildEnv } from '../process/env.js'
 import {
@@ -161,15 +161,15 @@ export class WslDeployer {
     const bundleDir = this._bundleDir ?? resolveRemoteServerBundleDir()
     const bundleHash = computeBundleHash(bundleDir)
     const tmpName = `universe-server-${randomBytes(6).toString('hex')}.tgz`
-    const localTgz = join(tmpdir(), tmpName)
+    const localTgz = join(getTempRoot(), tmpName)
     log.info(`[wsl:${distro}] deploying bundle ${bundleDir} as v${this._serverVersion}`)
     try {
       onPhase?.('uploading')
-      // Same colon-in-path dodge as the ssh deployer: run tar from tmpdir with a
-      // bare filename so GNU tar never sees `C:\...` as host:file.
+      // Same colon-in-path dodge as the ssh deployer: run tar from the temp root
+      // with a bare filename so GNU tar never sees `C:\...` as host:file.
       const tarStarted = Date.now()
       const tarResult = await this._runner('tar', ['-czf', tmpName, '-C', bundleDir, '.'], {
-        cwd: tmpdir(),
+        cwd: getTempRoot(),
       })
       if (tarResult.code !== 0) {
         throw new Error(
@@ -220,7 +220,7 @@ export class WslDeployer {
     if ('error' in resolution) throw new Error(resolution.error)
     log.info(`[wsl:${distro}] platform '${resolution.platformKey}'`)
     const tmpName = `node-runtime-${randomBytes(6).toString('hex')}.tar.gz`
-    const localTgz = join(tmpdir(), tmpName)
+    const localTgz = join(getTempRoot(), tmpName)
     try {
       await downloadNodeArchive(resolution.fileName, localTgz, log, this._nodeArchiveFetcher)
       const uploadStarted = Date.now()

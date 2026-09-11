@@ -17,11 +17,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { test, expect } from '@playwright/test'
-import { mkdtempSync, writeFileSync, realpathSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { seedBaselineUserData } from '@universe-editor/e2e-harness'
+import { seedBaselineUserData, mkTempDir } from '@universe-editor/e2e-harness'
 import { closeApp, launchCoreGitApp } from '../fixtures/coreGitApp.js'
 import { evaluateWhenRestored } from '../pages/WorkbenchPO.js'
 
@@ -40,7 +39,7 @@ function git(cwd: string, ...args: string[]): string {
 /** One committed file, then edited on disk so it shows up as an unstaged change. */
 function makeRepo(): string {
   // realpath.native: the raw mkdtemp path on CI Windows is an 8.3 short path.
-  const repoDir = realpathSync.native(mkdtempSync(join(tmpdir(), 'universe-editor-e2e-sgh-repo-')))
+  const repoDir = realpathSync.native(mkTempDir('universe-editor-e2e-sgh-repo-'))
   git(repoDir, 'init')
   git(repoDir, 'config', 'user.email', 'e2e@example.com')
   git(repoDir, 'config', 'user.name', 'E2E')
@@ -56,7 +55,7 @@ test.describe('@p1 scm group header keyboard menu', () => {
     // Cold boot + git extension activation in a real repo is heavy on Windows CI.
     test.setTimeout(120_000)
 
-    const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-sgh-'))
+    const userDataDir = mkTempDir('universe-editor-e2e-sgh-')
     seedBaselineUserData(userDataDir)
     const repoDir = makeRepo()
 

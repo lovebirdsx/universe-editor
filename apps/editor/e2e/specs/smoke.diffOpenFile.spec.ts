@@ -10,16 +10,16 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { test, expect } from '../fixtures/sharedApp.js'
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 test.describe('@p1 diff editor open file', () => {
   test('returns to the source file, and stays unavailable for a blob diff', async ({
     workbench,
   }) => {
-    const dir = mkdtempSync(join(tmpdir(), 'ue2-diffopenfile-'))
+    const dir = mkTempDir('ue2-diffopenfile-')
     const notePath = join(dir, 'note.md')
     writeFileSync(notePath, 'working\n', 'utf8')
 

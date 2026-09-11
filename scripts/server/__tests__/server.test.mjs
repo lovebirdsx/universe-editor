@@ -9,10 +9,10 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { request } from 'node:http'
 import { createServer } from 'node:net'
-import { mkdtemp, writeFile, mkdir } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { writeFile, mkdir } from 'node:fs/promises'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { mkTempDir } from '../../lib/temp-root.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const serverScript = join(__dirname, '..', 'server.mjs')
@@ -117,7 +117,7 @@ let child
 let root
 
 before(async () => {
-  root = await mkdtemp(join(tmpdir(), 'ue-server-'))
+  root = mkTempDir('ue-server-')
   await writeFile(join(root, 'index.html'), '<!doctype html><title>dl</title>OK-INDEX')
   await writeFile(
     join(root, 'latest.yml'),
@@ -331,8 +331,8 @@ test('GET vsix 静态下载支持 Range', async () => {
 
 test('--gallery-root 指向独立目录时，更新与市场各自服务', async () => {
   const PORT2 = 39218
-  const updateRoot = await mkdtemp(join(tmpdir(), 'ue-upd-'))
-  const galleryRoot = await mkdtemp(join(tmpdir(), 'ue-gal-'))
+  const updateRoot = mkTempDir('ue-upd-')
+  const galleryRoot = mkTempDir('ue-gal-')
   // 更新根：只有更新产物，无 gallery 子目录
   await writeFile(join(updateRoot, 'latest.yml'), 'version: 1.0.0\n')
   // 市场根：独立位置，直接放 registry/control/assets

@@ -16,11 +16,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { test, expect } from '@playwright/test'
-import { mkdtempSync, writeFileSync, realpathSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { seedBaselineUserData } from '@universe-editor/e2e-harness'
+import { seedBaselineUserData, mkTempDir } from '@universe-editor/e2e-harness'
 import { closeApp, launchCoreGitApp } from '../fixtures/coreGitApp.js'
 import { evaluateWhenRestored } from '../pages/WorkbenchPO.js'
 
@@ -51,7 +50,7 @@ test.describe('@p1 dirty diff peek', () => {
     // Cold boot + git extension activation in a real repo is heavy on Windows CI.
     test.setTimeout(120_000)
 
-    const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-ddp-'))
+    const userDataDir = mkTempDir('universe-editor-e2e-ddp-')
     seedBaselineUserData(userDataDir)
 
     // `git rev-parse --show-toplevel` (used by the git extension to key its repo)
@@ -59,9 +58,7 @@ test.describe('@p1 dirty diff peek', () => {
     // short path (`C:\Users\RUNNER~1\...`), so the raw mkdtemp path wouldn't match
     // the toplevel — `getHeadContent`'s `relative(root, file)` would break and dirty
     // -diff regions would never compute. realpath.native normalizes to the long form.
-    const repoDir = realpathSync.native(
-      mkdtempSync(join(tmpdir(), 'universe-editor-e2e-ddp-repo-')),
-    )
+    const repoDir = realpathSync.native(mkTempDir('universe-editor-e2e-ddp-repo-'))
     git(repoDir, 'init')
     git(repoDir, 'config', 'user.email', 'e2e@example.com')
     git(repoDir, 'config', 'user.name', 'E2E')

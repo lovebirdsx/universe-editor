@@ -20,14 +20,15 @@
     "@parcel/watcher": "catalog:",
     "@universe-editor/node-services": "workspace:*",
     "@universe-editor/platform": "workspace:*",
+    "@universe-editor/temp-root": "workspace:*",
     "@vscode/ripgrep": "catalog:"
   },
   "devDependencies": {
+    "@types/node": "catalog:",
     "@universe-editor/config-ts": "workspace:*",
     "@universe-editor/extension-api": "workspace:*",
     "@universe-editor/extension-host": "workspace:*",
     "@universe-editor/extension-packaging": "workspace:*",
-    "@types/node": "catalog:",
     "esbuild": "catalog:",
     "eslint": "catalog:",
     "typescript": "catalog:",

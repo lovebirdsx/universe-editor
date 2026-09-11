@@ -2,16 +2,16 @@
  *  Tests for apps/editor/src/main/services/host/machineId.ts
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { _resetForTests, getMachineId } from '../machineId.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 let dir: string
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'universe-machineid-'))
+  dir = mkTempDir('universe-machineid-')
   _resetForTests()
 })
 

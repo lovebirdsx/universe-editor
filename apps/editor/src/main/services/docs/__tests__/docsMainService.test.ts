@@ -6,19 +6,19 @@
  *  locale directory is absent.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { DocCategory } from '../../../../shared/ipc/docsService.js'
 import { DocsMainService } from '../docsMainService.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 describe('DocsMainService', () => {
   let root: string
   const resolver = () => root
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), 'ue-docs-svc-'))
+    root = mkTempDir('ue-docs-svc-')
   })
 
   afterEach(() => {

@@ -10,10 +10,10 @@
  *  recency 位置(排在更早聚焦过的 view 之前),而不是被所有 view 顶到后面。
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test } from '../fixtures/sharedApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 const SEARCH_CONTAINER = 'workbench.view.search'
 const SCM_CONTAINER = 'workbench.view.scm'
@@ -23,7 +23,7 @@ async function withTempFiles<T>(
   names: readonly string[],
   fn: (dir: string) => Promise<T>,
 ): Promise<T> {
-  const dir = mkdtempSync(join(tmpdir(), 'universe-editor-viewmru-'))
+  const dir = mkTempDir('universe-editor-viewmru-')
   for (const name of names) writeFileSync(join(dir, name), `// ${name}\n`)
   try {
     return await fn(dir.replace(/\\/g, '/'))

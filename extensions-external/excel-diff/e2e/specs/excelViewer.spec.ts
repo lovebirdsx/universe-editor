@@ -11,9 +11,9 @@
 
 import * as path from 'node:path'
 import * as fs from 'node:fs/promises'
-import * as os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { test, expect } from '../fixtures/excelApp.js'
+import { mkTempDir } from '../../../../packages/e2e-harness/dist/index.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ASSETS = path.resolve(__dirname, '../fixtures/assets')
@@ -28,7 +28,7 @@ test.describe('@p1 excel viewer & diff', () => {
     test.slow()
     // View mode reads the file via `workspace.fs`, which requires an open
     // workspace folder — so open a folder holding the xlsx (not a bare file).
-    const wsDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-excel-view-'))
+    const wsDir = mkTempDir('ue2-excel-view-')
     const docPath = path.join(wsDir, 'buff.xlsx')
     await fs.copyFile(path.join(ASSETS, 'buff-base.xlsx'), docPath)
 

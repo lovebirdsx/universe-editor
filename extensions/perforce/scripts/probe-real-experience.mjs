@@ -69,18 +69,11 @@
  * (//depot/branch_x/..., testclient, testuser, DESKTOP-TEST).
  */
 import { spawn, spawnSync } from 'node:child_process'
-import {
-  existsSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join, resolve, dirname, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { tmpdir } from 'node:os'
 import { createRequire } from 'node:module'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = resolve(__dirname, '../../..')
@@ -579,7 +572,7 @@ function editorVersion() {
 }
 
 async function launchScenario(label, { focusDirs } = {}) {
-  const userData = mkdtempSync(join(tmpdir(), 'ue-p4exp-'))
+  const userData = mkTempDir('ue-p4exp-')
   const version = editorVersion()
   // NOTE: focus seeds here only matter on workspaces WITHOUT a project layer
   // (`.universe-editor/settings.json` beats the user layer). The real

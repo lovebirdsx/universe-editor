@@ -45,12 +45,12 @@
  *     self-mutation / offline / disposed events query nothing at all.
  */
 import { EventEmitter } from 'node:events'
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { FileSystemWatcher } from '@universe-editor/extension-api'
 import { expandP4Argv } from './expandP4Argv.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 class FakeChildProcess extends EventEmitter {
   readonly stdout = new EventEmitter()
@@ -2968,7 +2968,7 @@ describe('PerforceClient.runReconcileScan', () => {
     // _isDirectoryPath stats the path for real, so the event must name a path
     // that actually IS a directory on disk — a faked path would read as a file
     // and take the narrow-query branch this test exists to prove is skipped.
-    const realDir = mkdtempSync(join(tmpdir(), 'p4-dirEvt-'))
+    const realDir = mkTempDir('p4-dirEvt-')
     try {
       const disk = fakeDisk()
       const wt = makeFakeWatcher()
@@ -3140,7 +3140,7 @@ describe('㉑ reconcile-scan checkpoint 跨 session 持久化（真磁盘）', (
     heldChildren.length = 0
     currentClock = undefined
     windowMock.showErrorMessage.mockClear()
-    root = mkdtempSync(join(tmpdir(), 'p4cache-'))
+    root = mkTempDir('p4cache-')
     disk = P4CacheDisk.open(root, 1024 * 1024)!
   })
 

@@ -4,8 +4,7 @@
  *  enable flag, and the structured JSONL line (well-formed + no API key).
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync, readFileSync, existsSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
@@ -16,9 +15,10 @@ import {
 } from '@universe-editor/platform'
 import { AiDebugRecorder } from '../aiDebugRecorder.js'
 import type { LogMainService } from '../../log/logMainService.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 function makeRecorder(): { recorder: AiDebugRecorder; dir: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'ai-debug-test-'))
+  const dir = mkTempDir('ai-debug-test-')
   const logMain = { getSessionDir: () => dir } as unknown as LogMainService
   return { recorder: new AiDebugRecorder(logMain), dir }
 }

@@ -7,8 +7,8 @@
 
 import * as path from 'node:path'
 import * as fs from 'node:fs/promises'
-import * as os from 'node:os'
 import { test, expect } from '../fixtures/sharedApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 async function tryCleanup(dir: string): Promise<void> {
   try {
@@ -20,7 +20,7 @@ async function tryCleanup(dir: string): Promise<void> {
 
 test.describe('@p1 multi-file drag → editor', () => {
   test('OS file drag opens one editor per file @regression', async ({ page, workbench }) => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-mfe-'))
+    const tmpDir = mkTempDir('ue2-mfe-')
     const names = ['aaa.txt', 'bbb.txt', 'ccc.txt']
     const files = await Promise.all(
       names.map(async (n) => {
@@ -80,7 +80,7 @@ test.describe('@p1 multi-file drag → editor', () => {
     page,
     workbench,
   }) => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-mfecr-'))
+    const tmpDir = mkTempDir('ue2-mfecr-')
     const names = ['aaa.txt', 'bbb.txt', 'ccc.txt']
     await Promise.all(names.map((n) => fs.writeFile(path.join(tmpDir, n), 'x')))
 
@@ -129,7 +129,7 @@ test.describe('@p1 multi-file drag → editor', () => {
     page,
     workbench,
   }) => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-mfeglue-'))
+    const tmpDir = mkTempDir('ue2-mfeglue-')
     const names = ['aaa.txt', 'bbb.txt', 'World负载均衡设计方案.md']
     await Promise.all(names.map((n) => fs.writeFile(path.join(tmpDir, n), 'x')))
 

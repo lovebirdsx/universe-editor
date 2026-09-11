@@ -13,17 +13,17 @@
 import {
   createColdAppTest,
   resolveEditorBuild,
+  mkTempDir,
 } from '../../../../packages/e2e-harness/dist/index.js'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { mkdtempSync, symlinkSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { symlinkSync } from 'node:fs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const extRoot = resolve(__dirname, '../..')
 const { appRoot, mainEntry } = resolveEditorBuild()
 
-const userExtensionsDir = mkdtempSync(join(tmpdir(), 'ue2-excel-ext-'))
+const userExtensionsDir = mkTempDir('ue2-excel-ext-')
 symlinkSync(extRoot, join(userExtensionsDir, 'universe-excel-diff'), 'junction')
 
 export const test = createColdAppTest({

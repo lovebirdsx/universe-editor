@@ -5,6 +5,7 @@ const root = fileURLToPath(new URL('.', import.meta.url))
 
 export default defineConfig({
   test: {
+    globalSetup: ['@universe-editor/temp-root/vitest-setup'],
     name: 'integration',
     silent: 'passed-only',
     environment: 'node',

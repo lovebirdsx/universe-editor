@@ -13,13 +13,13 @@
  *  expand/collapse + descend/ascend.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, expect } from '../fixtures/sharedApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 function writeWorkspace(): { dir: string; jsonPath: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-outlinekbd-'))
+  const dir = mkTempDir('universe-editor-e2e-outlinekbd-')
   const jsonPath = join(dir, 'pkg.json')
   writeFileSync(
     jsonPath,

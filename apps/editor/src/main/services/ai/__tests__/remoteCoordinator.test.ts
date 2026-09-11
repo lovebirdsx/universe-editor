@@ -5,9 +5,6 @@
  *  and onDidChange firing only when something was written.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import {
   AiRemoteSourceRegistry,
@@ -18,6 +15,7 @@ import {
 } from '@universe-editor/platform'
 import { AiRemoteCache } from '../remote/remoteCache.js'
 import { AiRemoteCoordinator } from '../remote/remoteCoordinator.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 interface StubPricingSource extends IAiPricingSource {
   calls: number
@@ -61,7 +59,7 @@ function once(event: Event<void>): Promise<void> {
 
 describe('AiRemoteCoordinator', () => {
   it('fetches stale entries on setProviders and skips fresh ones', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ai-remote-coord-'))
+    const dir = mkTempDir('ai-remote-coord-')
     const cache = new AiRemoteCache(async () => dir)
     await cache.load()
     cache.setRates('fresh', { m: { input: 1, output: 2 } }, Date.now())
@@ -83,7 +81,7 @@ describe('AiRemoteCoordinator', () => {
   })
 
   it('keeps the old cache when a source throws and never surfaces the error', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ai-remote-coord-'))
+    const dir = mkTempDir('ai-remote-coord-')
     const cache = new AiRemoteCache(async () => dir)
     await cache.load()
     cache.setRates('a', { m: { input: 1, output: 2 } }, Date.now())
@@ -103,7 +101,7 @@ describe('AiRemoteCoordinator', () => {
   })
 
   it('skips a provider whose source id is not registered', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ai-remote-coord-'))
+    const dir = mkTempDir('ai-remote-coord-')
     const cache = new AiRemoteCache(async () => dir)
     await cache.load()
     const registry = new AiRemoteSourceRegistry()
@@ -117,7 +115,7 @@ describe('AiRemoteCoordinator', () => {
   })
 
   it('skips a sync source: never fetched, never cached', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ai-remote-coord-'))
+    const dir = mkTempDir('ai-remote-coord-')
     const cache = new AiRemoteCache(async () => dir)
     await cache.load()
 
@@ -135,7 +133,7 @@ describe('AiRemoteCoordinator', () => {
   })
 
   it('dedups concurrent refreshes of the same id', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ai-remote-coord-'))
+    const dir = mkTempDir('ai-remote-coord-')
     const cache = new AiRemoteCache(async () => dir)
     await cache.load()
 
@@ -155,7 +153,7 @@ describe('AiRemoteCoordinator', () => {
   })
 
   it('fires onDidChange only when a write happened', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ai-remote-coord-'))
+    const dir = mkTempDir('ai-remote-coord-')
     const cache = new AiRemoteCache(async () => dir)
     await cache.load()
 

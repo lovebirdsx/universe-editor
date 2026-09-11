@@ -8,11 +8,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { test, expect } from '@playwright/test'
-import { mkdtempSync, writeFileSync, realpathSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { seedBaselineUserData } from '@universe-editor/e2e-harness'
+import { seedBaselineUserData, mkTempDir } from '@universe-editor/e2e-harness'
 import { closeApp, launchCoreGitApp } from '../fixtures/coreGitApp.js'
 import { evaluateWhenRestored } from '../pages/WorkbenchPO.js'
 
@@ -23,7 +22,7 @@ function git(cwd: string, ...args: string[]): string {
 }
 
 function makeUserDataDir(): string {
-  const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-ggr-'))
+  const userDataDir = mkTempDir('universe-editor-e2e-ggr-')
   seedBaselineUserData(userDataDir)
   return userDataDir
 }
@@ -32,7 +31,7 @@ function makeUserDataDir(): string {
 function makeRepo(): { repoDir: string; firstHash: string; secondHash: string } {
   // realpath.native: `git rev-parse --show-toplevel` returns the long canonical
   // path; the raw mkdtemp path on CI Windows is an 8.3 short path.
-  const repoDir = realpathSync.native(mkdtempSync(join(tmpdir(), 'universe-editor-e2e-ggr-repo-')))
+  const repoDir = realpathSync.native(mkTempDir('universe-editor-e2e-ggr-repo-'))
   git(repoDir, 'init')
   git(repoDir, 'config', 'user.email', 'e2e@example.com')
   git(repoDir, 'config', 'user.name', 'E2E')
@@ -50,7 +49,7 @@ function makeRepo(): { repoDir: string; firstHash: string; secondHash: string } 
 /** A linear history of `count` commits built with one `git fast-import` spawn
  *  (per-commit `git commit` is far too slow for 500+ on CI Windows). */
 function makeManyCommitsRepo(count: number): { repoDir: string; oldestHash: string } {
-  const repoDir = realpathSync.native(mkdtempSync(join(tmpdir(), 'universe-editor-e2e-ggr-page-')))
+  const repoDir = realpathSync.native(mkTempDir('universe-editor-e2e-ggr-page-'))
   git(repoDir, 'init')
   git(repoDir, 'config', 'user.email', 'e2e@example.com')
   git(repoDir, 'config', 'user.name', 'E2E')

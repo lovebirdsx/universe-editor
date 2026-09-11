@@ -9,8 +9,7 @@
  *  selections are read from a temp aiSettings.json.
  *--------------------------------------------------------------------------------------------*/
 
-import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import {
@@ -40,6 +39,7 @@ import type {
   AiEndEvent,
   AiMessageDto,
 } from '../../../../shared/ipc/aiModelService.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 /** A real wire protocol whose built-in provider is overwritten with the test fake. */
 const FAKE_PROTOCOL: AiWireProtocol = 'ollama'
@@ -57,7 +57,7 @@ function makeConfigLocation(dir: string): IConfigLocationService {
 }
 
 function makeService(providers: readonly unknown[]): AiModelMainService {
-  const dir = mkdtempSync(join(tmpdir(), 'ai-settings-test-'))
+  const dir = mkTempDir('ai-settings-test-')
   writeFileSync(join(dir, 'aiSettings.json'), JSON.stringify({ providers }), 'utf8')
   return new AiModelMainService(makeConfigLocation(dir), undefined, undefined, async () =>
     join(dir, 'ai-remote-cache'),
@@ -66,7 +66,7 @@ function makeService(providers: readonly unknown[]): AiModelMainService {
 
 /** Like makeService but writes a raw aiSettings.json body (for parse/legacy tests). */
 function makeServiceFromFile(body: string): { service: AiModelMainService; dir: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'ai-settings-test-'))
+  const dir = mkTempDir('ai-settings-test-')
   writeFileSync(join(dir, 'aiSettings.json'), body, 'utf8')
   return {
     service: new AiModelMainService(makeConfigLocation(dir), undefined, undefined, async () =>
@@ -234,7 +234,7 @@ describe('AiModelMainService', () => {
       }
     }
     const spyLogger = new SpyLogger()
-    const dir = mkdtempSync(join(tmpdir(), 'ai-settings-test-'))
+    const dir = mkTempDir('ai-settings-test-')
     writeFileSync(
       join(dir, 'aiSettings.json'),
       JSON.stringify({ providers: [{ id: 'fake', protocolMap: { ollama: ['m'] } }] }),
@@ -704,7 +704,7 @@ describe('AiModelMainService', () => {
   })
 
   it('returns an empty user knowledge layer when no aiSettings.json exists', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ai-settings-test-'))
+    const dir = mkTempDir('ai-settings-test-')
     const service = new AiModelMainService(
       makeConfigLocation(dir),
       undefined,
@@ -1202,8 +1202,8 @@ describe('AiModelMainService', () => {
     // Regression guard for the key-policy red line: the apiKey lives on the
     // provider runtime (AiProviderRuntime.apiKey), never in AiRequestOptions.
     const SENTINEL = 'sk-SENTINEL-MUST-NEVER-BE-RECORDED-9f3a'
-    const dir = mkdtempSync(join(tmpdir(), 'ai-settings-test-'))
-    const sessionDir = mkdtempSync(join(tmpdir(), 'ai-debug-session-'))
+    const dir = mkTempDir('ai-settings-test-')
+    const sessionDir = mkTempDir('ai-debug-session-')
     writeFileSync(
       join(dir, 'aiSettings.json'),
       JSON.stringify({

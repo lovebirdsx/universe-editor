@@ -21,9 +21,9 @@
 
 import { dirname, resolve, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync, rmSync } from 'node:fs'
 import { test, expect } from '../fixtures/sharedApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ECHO_AGENT_PATH = resolve(__dirname, '..', '..', 'src', 'test-fixtures', 'echoAgent.cjs')
@@ -35,7 +35,7 @@ test.describe('@p1 agents prompt enter leak', () => {
   }) => {
     await workbench.waitForRestored()
 
-    const wsDir = mkdtempSync(join(tmpdir(), 'universe-editor-enter-leak-'))
+    const wsDir = mkTempDir('universe-editor-enter-leak-')
     const tsFile = join(wsDir, 'hello.ts')
     writeFileSync(tsFile, 'const a = 1\n', 'utf8')
 

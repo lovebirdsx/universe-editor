@@ -19,9 +19,9 @@
 
 import * as path from 'node:path'
 import * as fs from 'node:fs/promises'
-import * as os from 'node:os'
 import AdmZip from 'adm-zip'
 import { test, expect } from '../fixtures/electronApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 const CONTAINER_ID = 'e2eTree'
 const VIEW_ID = 'e2eTree.view'
@@ -133,7 +133,7 @@ test.describe('@p1 extension tree view', () => {
   test('renders the tree, expands lazily, runs item commands and refreshes @regression', async ({
     workbench,
   }) => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-treeview-'))
+    const tmpDir = mkTempDir('ue2-treeview-')
     const vsixPath = await makeTreeViewVsix(tmpDir)
 
     await workbench.waitForRestored()
@@ -176,7 +176,7 @@ test.describe('@p1 extension tree view', () => {
   })
 
   test('keeps the expansion across a per-element refresh @regression', async ({ workbench }) => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-treeview-refresh-'))
+    const tmpDir = mkTempDir('ue2-treeview-refresh-')
     const vsixPath = await makeTreeViewVsix(tmpDir)
 
     await workbench.waitForRestored()
@@ -211,7 +211,7 @@ test.describe('@p1 extension tree view', () => {
   })
 
   test('row context menu honours view/viewItem when-clauses @regression', async ({ workbench }) => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-treeview-menu-'))
+    const tmpDir = mkTempDir('ue2-treeview-menu-')
     const vsixPath = await makeTreeViewVsix(tmpDir)
 
     await workbench.waitForRestored()

@@ -5,7 +5,6 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import {
   CancellationToken,
@@ -16,6 +15,7 @@ import {
   type IFileSearchMatches,
 } from '@universe-editor/platform'
 import { FileSearchService } from '../fileSearchService.js'
+import { mkTempDir, effectiveTempRoot } from '@universe-editor/temp-root'
 
 /** The listing and scored shapes share no identifying field — discriminate loudly. */
 function asListing(complete: IFileSearchComplete): IFileSearchListing {
@@ -32,7 +32,7 @@ const roots: string[] = []
 const services: FileSearchService[] = []
 
 async function makeRoot(): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'universe-file-search-'))
+  const root = mkTempDir('universe-file-search-')
   roots.push(root)
   return root
 }
@@ -66,7 +66,7 @@ async function trySymlink(
 
 afterEach(async () => {
   for (const service of services.splice(0)) service.dispose()
-  const prefix = path.resolve(os.tmpdir(), 'universe-file-search-')
+  const prefix = path.resolve(effectiveTempRoot(), 'universe-file-search-')
   for (const root of roots.splice(0)) {
     const resolved = path.resolve(root)
     if (resolved.startsWith(prefix)) {
@@ -494,6 +494,57 @@ describe('FileSearchService', () => {
     })
 
     expect(asListing(complete).relPaths).toEqual(['real.ts'])
+  })
+
+  describe('listing cache hygiene', () => {
+    const exists = (p: string) =>
+      fs
+        .stat(p)
+        .then(() => true)
+        .catch(() => false)
+
+    async function seed(cacheDir: string, name: string, bytes: number, ageMs: number) {
+      const filePath = path.join(cacheDir, name)
+      await fs.writeFile(filePath, 'x'.repeat(bytes))
+      const when = new Date(Date.now() - ageMs)
+      await fs.utimes(filePath, when, when)
+      return filePath
+    }
+
+    // 长驻编辑器不会重启，构造时扫一次等于永不回收——8 GB 就是这么攒出来的。
+    it('sweeps again on the periodic timer, not just at construction', async () => {
+      vi.useFakeTimers()
+      try {
+        const cacheDir = path.join(await makeRoot(), 'listings')
+        await fs.mkdir(cacheDir, { recursive: true })
+        const service = new FileSearchService(undefined, { cacheDir })
+        services.push(service)
+
+        const stale = await seed(cacheDir, 'aaaa1111-1.list', 10, 8 * 24 * 60 * 60_000)
+        await vi.advanceTimersByTimeAsync(6 * 60 * 60_000 + 10)
+        await vi.waitFor(async () => expect(await exists(stale)).toBe(false))
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('evicts oldest listings first once the cache exceeds its byte budget', async () => {
+      const cacheDir = path.join(await makeRoot(), 'listings')
+      await fs.mkdir(cacheDir, { recursive: true })
+      const oldest = await seed(cacheDir, 'aaaa1111-1.list', 400, 3 * 60_000)
+      const middle = await seed(cacheDir, 'bbbb2222-1.list', 400, 2 * 60_000)
+      const newest = await seed(cacheDir, 'cccc3333-1.list', 400, 60_000)
+      // 半成品不参与预算淘汰：删掉会毁掉另一个进程正在建的清单
+      const building = await seed(cacheDir, 'dddd4444-1.building', 400, 4 * 60_000)
+
+      const service = new FileSearchService(undefined, { cacheDir, listingCacheBudgetBytes: 900 })
+      services.push(service)
+
+      await vi.waitFor(async () => expect(await exists(oldest)).toBe(false))
+      expect(await exists(middle)).toBe(true)
+      expect(await exists(newest)).toBe(true)
+      expect(await exists(building)).toBe(true)
+    })
   })
 
   describe('bounded accumulation', () => {

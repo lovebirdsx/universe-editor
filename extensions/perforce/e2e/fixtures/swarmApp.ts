@@ -15,8 +15,7 @@ import { test as base, type ElectronApplication, type Page, type TestInfo } from
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import {
   INITIAL_SETTINGS,
   WorkbenchPO,
@@ -27,6 +26,7 @@ import {
   resolveEditorBuild,
   seedBaselineUserData,
   waitForProbe,
+  mkTempDir,
 } from '@universe-editor/e2e-harness'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -103,8 +103,8 @@ export const test = base.extend<SwarmFixtures>({
   // server is torn down in this fixture's own teardown.
   swarmBackend: async ({ swarmExtraSettings }, use) => {
     // Temp dirs: user data, workspace, swarm portfile + request log.
-    const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-swarm-'))
-    const workspaceDir = mkdtempSync(join(tmpdir(), 'ue2-swarm-ws-'))
+    const userDataDir = mkTempDir('universe-editor-e2e-swarm-')
+    const workspaceDir = mkTempDir('ue2-swarm-ws-')
     const fakeDir = join(workspaceDir, '.swarmfake')
     mkdirSync(fakeDir, { recursive: true })
     const portfile = join(fakeDir, 'port.json')

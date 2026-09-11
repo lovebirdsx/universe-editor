@@ -28,9 +28,9 @@ import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { tmpdir } from 'node:os'
 import { createHash, randomBytes } from 'node:crypto'
 import { ManagedChildProcess } from '@universe-editor/node-services'
+import { getTempRoot } from '@universe-editor/temp-root'
 import {
   NullLogger,
   type IDisposable,
@@ -891,17 +891,17 @@ export class RemoteDeployer {
     const bundleDir = this._bundleDir ?? resolveRemoteServerBundleDir()
     const bundleHash = computeBundleHash(bundleDir)
     const tmpName = `universe-server-${randomBytes(6).toString('hex')}.tgz`
-    const localTgz = join(tmpdir(), tmpName)
+    const localTgz = join(getTempRoot(), tmpName)
     const remoteTgz = platform.platform === 'windows' ? tmpName : `/tmp/${tmpName}`
     log.info(`[remote:${authority}] deploying bundle ${bundleDir} as v${this._serverVersion}`)
     try {
       onPhase?.('uploading')
       // GNU tar/scp treat a `C:\...` path as host:file (remote shell syntax) and
-      // which binary PATH resolves to varies per machine — run from tmpdir with a
-      // bare filename so the local path never contains a colon.
+      // which binary PATH resolves to varies per machine — run from the temp root
+      // with a bare filename so the local path never contains a colon.
       const tarStarted = Date.now()
       const tarResult = await this._runner('tar', ['-czf', tmpName, '-C', bundleDir, '.'], {
-        cwd: tmpdir(),
+        cwd: getTempRoot(),
       })
       if (tarResult.code !== 0) {
         throw new Error(
@@ -913,7 +913,7 @@ export class RemoteDeployer {
       const scpResult = await this._runner(
         'scp',
         scpArgs(authority, tmpName, `${destination(authority)}:${remoteTgz}`),
-        { cwd: tmpdir() },
+        { cwd: getTempRoot() },
       )
       if (scpResult.code !== 0) {
         throw new Error(
@@ -969,7 +969,7 @@ export class RemoteDeployer {
     if ('error' in resolution) throw new Error(resolution.error)
     log.info(`[remote:${authority}] remote platform '${resolution.platformKey}'`)
     const tmpName = `node-runtime-${randomBytes(6).toString('hex')}.tar.gz`
-    const localTgz = join(tmpdir(), tmpName)
+    const localTgz = join(getTempRoot(), tmpName)
     const remoteTgz = `/tmp/${tmpName}`
     try {
       await downloadNodeArchive(resolution.fileName, localTgz, log, this._nodeArchiveFetcher)
@@ -977,7 +977,7 @@ export class RemoteDeployer {
       const scpResult = await this._runner(
         'scp',
         scpArgs(authority, tmpName, `${destination(authority)}:${remoteTgz}`),
-        { cwd: tmpdir() },
+        { cwd: getTempRoot() },
       )
       if (scpResult.code !== 0) {
         throw new Error(
@@ -1024,14 +1024,14 @@ export class RemoteDeployer {
     const resolution = resolveWindowsNodeArtifact(arch)
     log.info(`[remote:${authority}] remote platform '${resolution.platformKey}'`)
     const tmpName = `node-runtime-${randomBytes(6).toString('hex')}.zip`
-    const localZip = join(tmpdir(), tmpName)
+    const localZip = join(getTempRoot(), tmpName)
     try {
       await downloadNodeArchive(resolution.fileName, localZip, log, this._nodeArchiveFetcher)
       const scpStarted = Date.now()
       const scpResult = await this._runner(
         'scp',
         scpArgs(authority, tmpName, `${destination(authority)}:${tmpName}`),
-        { cwd: tmpdir() },
+        { cwd: getTempRoot() },
       )
       if (scpResult.code !== 0) {
         throw new Error(

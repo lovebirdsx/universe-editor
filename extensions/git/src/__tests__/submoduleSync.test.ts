@@ -1,5 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { GitExecResult } from '../gitService.js'
@@ -14,6 +13,7 @@ import {
   updateSubmodules,
   updateSubmodulesIfPresent,
 } from '../submoduleSync.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 const ok = (stdout = ''): GitExecResult => ({ stdout, stderr: '', exitCode: 0 })
 const fail = (stderr: string): GitExecResult => ({ stdout: '', stderr, exitCode: 1 })
@@ -24,7 +24,7 @@ describe('submoduleSync', () => {
   beforeEach(async () => {
     execMock.mockReset()
     execMock.mockResolvedValue(ok())
-    dir = await mkdtemp(join(tmpdir(), 'git-submodule-sync-'))
+    dir = mkTempDir('git-submodule-sync-')
   })
 
   afterEach(async () => {

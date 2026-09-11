@@ -5,8 +5,7 @@
  *  directory-level config watch.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdir, mkdtemp, rm, writeFile, rename } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdir, rm, writeFile, rename } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -14,6 +13,7 @@ import {
   codexMcpProjectConfigPath,
   translateCodexMcpServers,
 } from '../codexMcpConfigStore.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 const tempRoots: string[] = []
 const stores: CodexMcpConfigStore[] = []
@@ -34,7 +34,7 @@ async function makeStore(): Promise<{
   userConfig: string
   fired: () => number
 }> {
-  const dir = await mkdtemp(join(tmpdir(), 'ue-codex-mcp-'))
+  const dir = mkTempDir('ue-codex-mcp-')
   tempRoots.push(dir)
   const userConfig = join(dir, 'config.toml')
   const store = new CodexMcpConfigStore({ userConfigPath: userConfig })
@@ -95,7 +95,7 @@ describe('CodexMcpConfigStore reads', () => {
 
   it('reads the project-level file from <cwd>/.codex/config.toml', async () => {
     const { store } = await makeStore()
-    const cwd = await mkdtemp(join(tmpdir(), 'ue-codex-mcp-proj-'))
+    const cwd = mkTempDir('ue-codex-mcp-proj-')
     tempRoots.push(cwd)
     await mkdir(join(cwd, '.codex'), { recursive: true })
     await writeAtomic(codexMcpProjectConfigPath(cwd), '[mcp_servers.proj]\ncommand = "proj-srv"\n')
@@ -139,7 +139,7 @@ describe('CodexMcpConfigStore reads', () => {
 
   it('translates codex http entries in the project file too', async () => {
     const { store } = await makeStore()
-    const cwd = await mkdtemp(join(tmpdir(), 'ue-codex-mcp-proj-http-'))
+    const cwd = mkTempDir('ue-codex-mcp-proj-http-')
     tempRoots.push(cwd)
     await mkdir(join(cwd, '.codex'), { recursive: true })
     await writeAtomic(

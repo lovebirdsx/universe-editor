@@ -3,9 +3,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { combinedDisposable, ShutdownReason, URI } from '@universe-editor/platform'
+import { getTempRoot } from '@universe-editor/temp-root'
 
 // --- Mock IPC bootstrap ---
 vi.mock('../../../ipc/registerMainServices.js', () => ({
@@ -43,7 +43,7 @@ const windowIdCounter = { value: 1 }
 
 vi.mock('electron', () => ({
   app: {
-    getPath: vi.fn((_name: string) => join(tmpdir(), 'ue-wintest')),
+    getPath: vi.fn((_name: string) => join(getTempRoot(), 'ue-wintest')),
   },
   BrowserWindow: Object.assign(
     vi.fn().mockImplementation(() => ({
@@ -211,7 +211,7 @@ function makeOpts() {
     rendererDebug: false,
     preloadPath: '/preload/index.cjs',
     rendererUrl: 'http://localhost:5173',
-    getConfigDir: () => join(tmpdir(), 'ue-wintest'),
+    getConfigDir: () => join(getTempRoot(), 'ue-wintest'),
     getConfigurationDefaults: () => ({}),
   }
 }

@@ -5,7 +5,6 @@
 import AdmZip from 'adm-zip'
 import {
   existsSync,
-  mkdtempSync,
   mkdirSync,
   promises as fsp,
   readFileSync,
@@ -13,11 +12,11 @@ import {
   utimesSync,
   writeFileSync,
 } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AbstractLogger, LogLevel, type ILoggerService } from '@universe-editor/platform'
 import type { WireRendererHeapSample } from '../../../../shared/ipc/services.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 declare const __APP_VERSION__: string
 
@@ -47,7 +46,7 @@ describe('DiagnosticsMainService', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
-    root = mkdtempSync(join(tmpdir(), 'diagnostics-test-'))
+    root = mkTempDir('diagnostics-test-')
     crashDir = join(root, 'Crashes')
     logRoot = join(root, 'logs')
     diagnosticsDir = join(root, 'diagnostics')
@@ -400,7 +399,7 @@ describe('DiagnosticsMainService — renderer heap samples', () => {
 
   beforeEach(() => {
     logSink.length = 0
-    heapRoot = mkdtempSync(join(tmpdir(), 'diagnostics-heap-test-'))
+    heapRoot = mkTempDir('diagnostics-heap-test-')
     heapService = new DiagnosticsMainService(
       {
         crashDumpsDir: join(heapRoot, 'Crashes'),

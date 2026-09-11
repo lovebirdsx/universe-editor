@@ -10,8 +10,8 @@
 
 import * as path from 'node:path'
 import * as fs from 'node:fs/promises'
-import * as os from 'node:os'
 import { test, expect } from '../fixtures/sharedApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 const ROW_HEIGHT = 22
 // Enough rows to overflow any reasonable viewport, but well under the 200 default
@@ -22,7 +22,7 @@ test.describe('@p1 explorer row height', () => {
   test('rows keep their height when the list overflows the viewport @regression', async ({
     workbench,
   }) => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-rowh-'))
+    const tmpDir = mkTempDir('ue2-rowh-')
     await Promise.all(
       Array.from({ length: FILE_COUNT }, (_, i) =>
         fs.writeFile(path.join(tmpDir, `file-${String(i).padStart(3, '0')}.txt`), 'x'),

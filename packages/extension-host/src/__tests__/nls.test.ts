@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { loadNlsBundle, localizeManifest } from '../nls.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 let dir: string
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'ue-nls-'))
+  dir = mkTempDir('ue-nls-')
 })
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true })

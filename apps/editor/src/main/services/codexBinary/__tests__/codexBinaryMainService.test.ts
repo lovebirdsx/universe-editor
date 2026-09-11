@@ -5,10 +5,10 @@
  *  claudeBinary suite and need the npm registry, so are out of scope here.)
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { rm, writeFile } from 'node:fs/promises'
 import * as path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 const userData = ''
 
@@ -25,7 +25,7 @@ const { CodexBinaryMainService } = await import('../codexBinaryMainService.js')
 const tempDirs: string[] = []
 
 async function makeTempDir(): Promise<string> {
-  const dir = await mkdtemp(path.join(tmpdir(), 'universe-editor-codex-bin-'))
+  const dir = mkTempDir('universe-editor-codex-bin-')
   tempDirs.push(dir)
   return dir
 }

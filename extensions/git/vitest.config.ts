@@ -4,6 +4,7 @@ export default defineConfig({
   // These suites shell out to the real `git` CLI; spawning many processes is slow
   // on Windows, so the 5s default times out intermittently.
   test: {
+    globalSetup: ['@universe-editor/temp-root/vitest-setup'],
     silent: 'passed-only',
     testTimeout: 30000,
     hookTimeout: 30000,

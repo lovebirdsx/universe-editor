@@ -1,7 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync } from 'node:fs'
 import { promises as fs } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join, normalize } from 'node:path'
 import {
   FileSystemError,
@@ -22,6 +20,7 @@ import {
   MEASURE_CONCURRENCY,
   type FileClipboardMeasureLimits,
 } from '../fileClipboardMainService.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 interface FakeNode {
   readonly isDirectory: boolean
@@ -143,7 +142,7 @@ function createHarness(limits?: Partial<FileClipboardMeasureLimits>): {
 } {
   const backend = new FakeBackend()
   const fileService = new FakeFileService()
-  const root = mkdtempSync(join(tmpdir(), 'ue-fileclipboard-'))
+  const root = mkTempDir('ue-fileclipboard-')
   cleanups.push(root)
   const materializeRoot = join(root, 'materialize')
   const service = new FileClipboardMainService(

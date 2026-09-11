@@ -7,13 +7,13 @@
  *  Outline view renders — through its attach/re-pull logic across a file switch.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, expect } from '../fixtures/coreTypescriptSharedApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 function writeWorkspace(): { dir: string; aPath: string; bPath: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-outline-'))
+  const dir = mkTempDir('universe-editor-e2e-outline-')
   const aPath = join(dir, 'a.ts')
   const bPath = join(dir, 'b.ts')
   // A real tsconfig puts tsserver in *project* mode (loads the whole program),

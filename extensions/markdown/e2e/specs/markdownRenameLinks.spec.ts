@@ -7,13 +7,13 @@
  *  apply, end to end. The setting is forced to `always` so no modal blocks the run.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, expect } from '../fixtures/markdownApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 function writeWorkspace(): { dir: string; aPath: string; bPath: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-mdrename-'))
+  const dir = mkTempDir('universe-editor-e2e-mdrename-')
   const aPath = join(dir, 'a.md')
   const bPath = join(dir, 'b.md')
   // a.md links to b.md; renaming b.md → c.md must rewrite this link.

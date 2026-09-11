@@ -4,10 +4,10 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join, normalize } from 'node:path'
 import { FileSystemError, URI } from '@universe-editor/platform'
 import { FileSystemMainService } from '../fileSystemMainService.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 const trashItem = vi.fn(async (_p: string) => {})
 vi.mock('electron', () => ({ shell: { trashItem: (p: string) => trashItem(p) } }))
@@ -17,7 +17,7 @@ describe('FileSystemMainService', () => {
   const service = new FileSystemMainService()
 
   beforeEach(async () => {
-    root = await fs.mkdtemp(join(tmpdir(), 'universe-editor-fs-'))
+    root = mkTempDir('universe-editor-fs-')
   })
 
   afterEach(async () => {
@@ -258,10 +258,11 @@ describe('FileSystemMainService', () => {
     await service.writeFile(target, 'x')
     const real = await service.realpath(target)
     // On macOS tmpdir is itself a symlink (/var -> /private/var); compare against
-    // the OS realpath of the same input rather than the literal path. Normalize
-    // separators through URI.file (Windows fsPath uses forward slashes).
+    // the OS realpath of the same input rather than the literal path. Both sides
+    // go through URI.file: the provider hands back the raw OS string, whose
+    // separators differ from a URI fsPath on Windows.
     const expected = URI.file(await fs.realpath(join(root, 'plain.txt'))).fsPath
-    expect(real.fsPath).toBe(expected)
+    expect(URI.file(real.fsPath).fsPath).toBe(expected)
   })
 
   it('realpath resolves a symlink to its real target', async () => {
@@ -274,7 +275,7 @@ describe('FileSystemMainService', () => {
       return // symlink creation not permitted (e.g. Windows without privilege)
     }
     const resolved = await service.realpath(URI.file(link))
-    expect(resolved.fsPath).toBe(URI.file(await fs.realpath(realFile)).fsPath)
+    expect(URI.file(resolved.fsPath).fsPath).toBe(URI.file(await fs.realpath(realFile)).fsPath)
   })
 
   it('realpath of a not-yet-existing path resolves the existing prefix', async () => {
@@ -282,7 +283,9 @@ describe('FileSystemMainService', () => {
     // and re-append the missing tail rather than throwing ENOENT.
     const missing = URI.file(join(root, 'new-file.txt'))
     const resolved = await service.realpath(missing)
-    expect(resolved.fsPath).toBe(URI.file(join(await fs.realpath(root), 'new-file.txt')).fsPath)
+    expect(URI.file(resolved.fsPath).fsPath).toBe(
+      URI.file(join(await fs.realpath(root), 'new-file.txt')).fsPath,
+    )
   })
 
   it('realpath follows a symlinked parent directory for a missing child', async () => {
@@ -295,6 +298,8 @@ describe('FileSystemMainService', () => {
       return // symlink/junction creation not permitted
     }
     const resolved = await service.realpath(URI.file(join(linkDir, 'child.txt')))
-    expect(resolved.fsPath).toBe(URI.file(join(await fs.realpath(realDir), 'child.txt')).fsPath)
+    expect(URI.file(resolved.fsPath).fsPath).toBe(
+      URI.file(join(await fs.realpath(realDir), 'child.txt')).fsPath,
+    )
   })
 })

@@ -1,5 +1,4 @@
-import { tmpdir } from 'node:os'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
 import { Readable } from 'node:stream'
 import { join } from 'node:path'
 import { EventEmitter } from 'node:events'
@@ -42,6 +41,7 @@ import {
   type RemoteRunner,
   type RemoteSpawner,
 } from '../remoteDeploy.js'
+import { getTempRoot, mkTempDir } from '@universe-editor/temp-root'
 
 const NODE_BIN_PATH = '$HOME/.universe-editor-server/node/v24.19.0/bin'
 const NODE_PATH_PRELUDE = `PATH="$PATH:${NODE_BIN_PATH}"; `
@@ -230,7 +230,7 @@ describe('computeBundleHash', () => {
   })
 
   function makeBundle(): string {
-    const dir = mkdtempSync(join(tmpdir(), 'ue-bundle-'))
+    const dir = mkTempDir('ue-bundle-')
     dirs.push(dir)
     writeFileSync(join(dir, 'index.js'), 'export const a = 1\n')
     mkdirSync(join(dir, 'lib'))
@@ -595,7 +595,7 @@ describe('downloadNodeArchive', () => {
   }
 
   function mkDest(): string {
-    const dir = mkdtempSync(join(tmpdir(), 'ue-node-dl-'))
+    const dir = mkTempDir('ue-node-dl-')
     dirs.push(dir)
     return join(dir, 'archive.tar.gz')
   }
@@ -834,7 +834,7 @@ describe('RemoteDeployer.provisionNodeRuntime', () => {
     const tgzName = scp!.args.find((a) => a.includes('node-runtime-'))!
     expect(tgzName).toMatch(/^node-runtime-[0-9a-f]+\.tar\.gz$/)
     expect(scp!.args).toContain(`user@host:/tmp/${tgzName}`)
-    expect(scp!.cwd).toBe(tmpdir())
+    expect(scp!.cwd).toBe(getTempRoot())
     expect(install!.args).toEqual(
       sshCommandArgs('user@host', buildNodeInstallRemoteScript(tgzName)),
     )
@@ -903,7 +903,7 @@ describe('RemoteDeployer.provisionNodeRuntime', () => {
     expect(zipName).toMatch(/^node-runtime-[0-9a-f]+\.zip$/)
     expect(scp!.args).toContain(`user@host:${zipName}`)
     expect(scp!.args).not.toContain('/tmp/')
-    expect(scp!.cwd).toBe(tmpdir())
+    expect(scp!.cwd).toBe(getTempRoot())
     expect(install!.args).toEqual(
       sshCommandArgs('user@host', buildWindowsNodeInstallCommand(zipName)),
     )
@@ -919,7 +919,7 @@ describe('RemoteDeployer.deployRemoteServer', () => {
   })
 
   function makeBundle(): string {
-    const dir = mkdtempSync(join(tmpdir(), 'ue-bundle-'))
+    const dir = mkTempDir('ue-bundle-')
     dirs.push(dir)
     writeFileSync(join(dir, 'index.js'), 'export const a = 1\n')
     return dir
@@ -943,11 +943,11 @@ describe('RemoteDeployer.deployRemoteServer', () => {
     expect(tgzName).toMatch(/^universe-server-[0-9a-f]+\.tgz$/)
     expect(tgzName).not.toContain(':')
     expect(tar!.args.slice(2)).toEqual(['-C', bundleDir, '.'])
-    expect(tar!.cwd).toBe(tmpdir())
+    expect(tar!.cwd).toBe(getTempRoot())
 
     expect(scp!.args).toContain(tgzName)
     expect(scp!.args).toContain(`user@host:/tmp/${tgzName}`)
-    expect(scp!.cwd).toBe(tmpdir())
+    expect(scp!.cwd).toBe(getTempRoot())
 
     const remoteScript = install!.args[install!.args.length - 1]!
     expect(remoteScript).toContain(`tar xzf /tmp/${tgzName}`)

@@ -10,8 +10,7 @@
 
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   bearer,
@@ -20,6 +19,7 @@ import {
   spawnServer,
   writePublishers,
 } from './publish-fixture.mjs'
+import { mkTempDir } from '../../lib/temp-root.mjs'
 
 let root
 let authDir
@@ -39,7 +39,7 @@ async function readPublishers() {
 }
 
 before(async () => {
-  root = await mkdtemp(join(tmpdir(), 'ue-register-api-'))
+  root = mkTempDir('ue-register-api-')
   const galleryRoot = join(root, 'gallery')
   // authDir 必须在静态根之外（启动自检红线），放 root 的兄弟目录（随 mkdtemp 随机后缀唯一）
   authDir = `${root}-auth`
@@ -172,7 +172,7 @@ test('register: 非法 JSON body 400', async () => {
 })
 
 test('register: IP 节流——--register-rate-limit 2 时第 3 次注册 429', async () => {
-  const limitedRoot = await mkdtemp(join(tmpdir(), 'ue-register-rl-'))
+  const limitedRoot = mkTempDir('ue-register-rl-')
   const limitedAuth = `${limitedRoot}-auth`
   const limited = await spawnServer({
     root: limitedRoot,

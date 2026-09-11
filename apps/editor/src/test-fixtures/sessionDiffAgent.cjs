@@ -69,7 +69,9 @@ async function runPrompt(id, params) {
   const promptText = extractPromptText(params)
   const second = promptText.includes('again')
 
-  const filePath = path.join(os.tmpdir(), `universe-e2e-sessiondiff-${RUN_TOKEN}-${sessionId}.txt`)
+  // e2e 专用假 agent，由 e2e globalSetup 覆写 TEMP/TMP 后拉起，os.tmpdir() 已落在当次 run 根内；
+  // 且 CJS fixture 无法同步 import ESM 的 temp-root helper。
+  const filePath = path.join(os.tmpdir(), `universe-e2e-sessiondiff-${RUN_TOKEN}-${sessionId}.txt`) // temp-root:allow
   // 1. Write the post-edit file to disk (the tracker reads this as `current`).
   const current = second ? 'line one\nline two MODIFIED AGAIN' : 'line one\nline two MODIFIED'
   fs.writeFileSync(filePath, current, 'utf8')

@@ -7,9 +7,8 @@
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -23,6 +22,7 @@ import {
   spawnServer,
   writePublishers,
 } from './publish-fixture.mjs'
+import { mkTempDir } from '../../lib/temp-root.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const bundleScript = join(__dirname, '..', 'bundle.mjs')
@@ -35,7 +35,7 @@ let PORT
 
 before(async () => {
   // 独立临时 dist 目录，避免并发下与 bundle-env/setup 互踩真实 dist/server.env（无 --env 会清理它）。
-  distDir = await mkdtemp(join(tmpdir(), 'ue-bundle-dist-'))
+  distDir = mkTempDir('ue-bundle-dist-')
   const bundleOut = join(distDir, 'server.js')
   const built = spawnSync(process.execPath, [bundleScript], {
     encoding: 'utf8',
@@ -43,7 +43,7 @@ before(async () => {
   })
   assert.equal(built.status, 0, `bundle 构建失败: ${built.stderr}`)
 
-  root = await mkdtemp(join(tmpdir(), 'ue-bundle-smoke-'))
+  root = mkTempDir('ue-bundle-smoke-')
   const galleryRoot = join(root, 'gallery')
   const authDir = `${root}-auth`
   await mkdir(galleryRoot, { recursive: true })

@@ -3,12 +3,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { promises as fs } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { getOriginalConsole } from '@universe-editor/platform'
 import { DisposableLeakMainService } from '../disposableLeakMainService.js'
 import type { IDisposableLeakReport } from '../../../../shared/ipc/services.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 const SAMPLE: IDisposableLeakReport = {
   count: 3,
@@ -24,7 +24,7 @@ describe('DisposableLeakMainService', () => {
   let warnSpy: ReturnType<typeof vi.spyOn>
 
   beforeEach(async () => {
-    dir = await fs.mkdtemp(join(tmpdir(), 'ue-leak-'))
+    dir = mkTempDir('ue-leak-')
     filePath = join(dir, 'last-disposable-leak.json')
     svc = new DisposableLeakMainService(filePath)
     warnSpy = vi.spyOn(getOriginalConsole(), 'warn').mockImplementation(() => {})

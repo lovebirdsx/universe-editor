@@ -6,9 +6,8 @@
 
 import { EventEmitter } from 'node:events'
 import { PassThrough, Readable } from 'node:stream'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
@@ -27,6 +26,7 @@ import {
   type RemoteSpawner,
 } from '../remoteDeploy.js'
 import { WslDeployer, stripWslNuls, wslCommandArgs } from '../wslDeploy.js'
+import { getTempRoot, mkTempDir } from '@universe-editor/temp-root'
 
 const WSL_EXE = 'C:\\Windows\\System32\\wsl.exe'
 const NODE_PATH_PRELUDE = `PATH="$PATH:$HOME/.universe-editor-server/node/v24.19.0/bin"; `
@@ -150,7 +150,7 @@ afterEach(() => {
 })
 
 function makeBundle(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'ue-bundle-'))
+  const dir = mkTempDir('ue-bundle-')
   bundleDirs.push(dir)
   writeFileSync(join(dir, 'index.js'), 'export const a = 1\n')
   return dir
@@ -167,7 +167,7 @@ function makeDeployHarness(uploadExitCode = 0, installStderr = ''): DeployHarnes
       ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
     })
     if (command === 'tar') {
-      writeFileSync(join(tmpdir(), args[1]!), 'TGZ-BYTES')
+      writeFileSync(join(getTempRoot(), args[1]!), 'TGZ-BYTES')
     }
     if (installStderr && command !== 'tar') {
       return Promise.resolve({ code: 1, stdout: '', stderr: installStderr })
@@ -244,7 +244,7 @@ describe('WslDeployer', () => {
     const tar = runnerCalls[0]!
     const tgzName = tar.args[1]!
     expect(tgzName).toMatch(/^universe-server-[0-9a-f]+\.tgz$/)
-    expect(tar.cwd).toBe(tmpdir())
+    expect(tar.cwd).toBe(getTempRoot())
     expect(tar.args.slice(2)).toEqual(['-C', bundleDir, '.'])
 
     expect(spawns).toHaveLength(1)
@@ -263,14 +263,14 @@ describe('WslDeployer', () => {
     expect(install.args[5]).toMatch(/install\.js --bundle-hash [0-9a-f]+/)
     expect(install.timeoutMs).toBe(1_800_000)
 
-    expect(existsSync(join(tmpdir(), tgzName))).toBe(false)
+    expect(existsSync(join(getTempRoot(), tgzName))).toBe(false)
   })
 
   it('surfaces an upload failure and still cleans up', async () => {
     const { deployer, runnerCalls } = makeDeployHarness(1)
     await expect(deployer.deployRemoteServer('Ubuntu')).rejects.toThrow(/wsl upload failed/)
     const tgzName = runnerCalls[0]!.args[1]!
-    expect(existsSync(join(tmpdir(), tgzName))).toBe(false)
+    expect(existsSync(join(getTempRoot(), tgzName))).toBe(false)
   })
 
   it('strips NULs from a failing install stderr', async () => {

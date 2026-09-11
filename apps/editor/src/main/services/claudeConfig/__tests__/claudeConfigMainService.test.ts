@@ -6,7 +6,6 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { promises as fs } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
@@ -29,6 +28,7 @@ import type {
   IRemoteConnection,
   IRemoteConnectionService,
 } from '../../remote/remoteConnectionMainService.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 function configLocation(dir: string): IConfigLocationService {
   return {
@@ -42,7 +42,7 @@ describe('ClaudeConfigMainService', () => {
   let svc: ClaudeConfigMainService
 
   beforeEach(async () => {
-    dir = await fs.mkdtemp(join(tmpdir(), 'claude-config-'))
+    dir = mkTempDir('claude-config-')
     settingsPath = join(dir, 'settings.json')
     svc = new ClaudeConfigMainService(settingsPath)
   })
@@ -371,7 +371,7 @@ describe('ClaudeConfigMainService — remote checkGatewayConnectivity', () => {
   it('routes the probe through the remote AgentConfig channel when an authority is given', async () => {
     const remote = new FakeRemoteAgentConfigService()
     remote.probeResult = false
-    const dir = await fs.mkdtemp(join(tmpdir(), 'claude-config-remote-'))
+    const dir = mkTempDir('claude-config-remote-')
     dirs.push(dir)
     const { connService, proxyCalls } = makeRemoteService(remote)
     const svc = new ClaudeConfigMainService(
@@ -389,7 +389,7 @@ describe('ClaudeConfigMainService — remote checkGatewayConnectivity', () => {
 
   it('routes repeated remote reads through getServiceProxy with the AgentConfig channel', async () => {
     const remote = new FakeRemoteAgentConfigService()
-    const dir = await fs.mkdtemp(join(tmpdir(), 'claude-config-remote-'))
+    const dir = mkTempDir('claude-config-remote-')
     dirs.push(dir)
     const { connService, proxyCalls } = makeRemoteService(remote)
     const svc = new ClaudeConfigMainService(

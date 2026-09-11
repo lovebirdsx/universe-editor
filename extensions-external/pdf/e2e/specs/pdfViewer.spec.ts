@@ -11,8 +11,8 @@
 
 import * as path from 'node:path'
 import * as fs from 'node:fs/promises'
-import * as os from 'node:os'
 import { test, expect } from '../fixtures/pdfApp.js'
+import { mkTempDir } from '../../../../packages/e2e-harness/dist/index.js'
 
 function escapePdfString(text: string): string {
   return text.replace(/[()\\]/g, '\\$&')
@@ -53,7 +53,7 @@ test.describe('@p1 pdf viewer', () => {
   test('opens a .pdf in the PDF extension webview custom editor', async ({ workbench }) => {
     // Cold extension host + webview mount; give it room on a loaded CI runner.
     test.slow()
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-pdf-'))
+    const tmpDir = mkTempDir('ue2-pdf-')
     const docPath = path.join(tmpDir, 'sample.pdf')
     // Minimal binary-ish PDF body — rendered as text this would be garbage; the
     // custom editor must claim it and render the pdf.js viewer instead.
@@ -81,7 +81,7 @@ test.describe('@p1 pdf viewer', () => {
 
   test('reloads the preview when the pdf changes on disk', async ({ workbench }) => {
     test.slow()
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-pdf-watch-'))
+    const tmpDir = mkTempDir('ue2-pdf-watch-')
     const docPath = path.join(tmpDir, 'watched.pdf')
     await fs.writeFile(docPath, makeMinimalPdf('first'))
 

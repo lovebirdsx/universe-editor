@@ -4,7 +4,6 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   armSessionSentinel,
@@ -16,13 +15,14 @@ import {
   SENTINEL_HEARTBEAT_INTERVAL_MS,
   _resetSentinelForTests,
 } from '../sessionSentinel.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 describe('sessionSentinel', () => {
   let userDataDir: string
   let crashDumpsDir: string
 
   beforeEach(async () => {
-    userDataDir = await fs.mkdtemp(join(tmpdir(), 'ue-sentinel-'))
+    userDataDir = mkTempDir('ue-sentinel-')
     crashDumpsDir = join(userDataDir, 'Crashes')
     _resetSentinelForTests()
   })

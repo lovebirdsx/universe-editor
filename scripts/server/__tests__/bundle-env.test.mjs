@@ -5,18 +5,18 @@
 
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { after, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { mkTempDir } from '../../lib/temp-root.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const serverDir = join(__dirname, '..')
 const repoRoot = join(serverDir, '..', '..')
 const bundleScript = join(serverDir, 'bundle.mjs')
 // 用独立临时 dist 目录跑 bundle，避免与 setup.test.mjs（操作真实 dist/server.env）并发互踩同一份产物。
-const distDir = mkdtempSync(join(tmpdir(), 'ue-bundle-env-'))
+const distDir = mkTempDir('ue-bundle-env-')
 const envOutput = join(distDir, 'server.env')
 
 // 独立 mode 名，避免与开发者本机真实的 .env.prod / .env.test 撞车。

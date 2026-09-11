@@ -2,9 +2,9 @@
 // validate startup parcel-watch deferral. Launches the built app
 // with this repo as the startup workspace and reads window.__E2E__.getStartupMetrics().
 import { _electron as electron } from '@playwright/test'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { rmSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 const APP_ROOT = resolve(import.meta.dirname, '..')
 const MAIN_ENTRY = resolve(APP_ROOT, 'out', 'main', 'index.js')
@@ -12,7 +12,7 @@ const REPO_ROOT = resolve(APP_ROOT, '..', '..')
 const RUNS = Number(process.argv[2] ?? 3)
 
 async function runOnce() {
-  const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-perf-'))
+  const userDataDir = mkTempDir('universe-editor-perf-')
   const { ELECTRON_RUN_AS_NODE: _ignored, ...inheritedEnv } = process.env
   const app = await electron.launch({
     args: [MAIN_ENTRY, REPO_ROOT, `--user-data-dir=${userDataDir}`],

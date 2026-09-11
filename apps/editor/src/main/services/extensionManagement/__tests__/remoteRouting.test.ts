@@ -6,8 +6,7 @@
  *  install), keeping download/signature/anti-poisoning verification local.
  *--------------------------------------------------------------------------------------------*/
 
-import { tmpdir } from 'node:os'
-import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises'
+import { rm, writeFile, readFile } from 'node:fs/promises'
 import { generateKeyPairSync, sign, randomBytes } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import * as path from 'node:path'
@@ -28,6 +27,7 @@ import {
   type IManagementGallery,
 } from '../extensionManagementService.js'
 import type { IRemoteConnectionService } from '../../remote/remoteConnectionMainService.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 const HOST_API = '0.1.0'
 const CHUNK = 1024 * 1024
@@ -254,7 +254,7 @@ function makeFixture(opts: { gallery?: IManagementGallery } = {}): Fixture {
 
 describe('ExtensionManagementMainService — remote routing', () => {
   beforeEach(async () => {
-    root = await mkdtemp(path.join(tmpdir(), 'ext-mgmt-remote-'))
+    root = mkTempDir('ext-mgmt-remote-')
     services = []
   })
   afterEach(async () => {

@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { after, before, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -15,6 +14,7 @@ import {
   resolveEnvOverrides,
 } from '../setup.mjs'
 import { buildDeploySudoers } from '../serverEnv.mjs'
+import { mkTempDir } from '../../lib/temp-root.mjs'
 
 const serverDir = join(dirname(fileURLToPath(import.meta.url)), '..')
 const distEnv = join(serverDir, 'dist', 'server.env')
@@ -44,7 +44,7 @@ function withDistEnv(content, fn) {
 }
 
 function withTempDir(fn) {
-  const dir = mkdtempSync(join(tmpdir(), 'ue-setup-'))
+  const dir = mkTempDir('ue-setup-')
   try {
     return fn(dir)
   } finally {

@@ -20,12 +20,12 @@
 import {
   createColdAppTest,
   resolveEditorBuild,
+  mkTempDir,
 } from '../../../../packages/e2e-harness/dist/index.js'
 import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const extRoot = resolve(__dirname, '../..')
@@ -33,7 +33,7 @@ const repoRoot = resolve(__dirname, '../../../..')
 const { appRoot, mainEntry } = resolveEditorBuild()
 
 // Load the extension off disk via an isolated, junctioned user-extensions dir.
-const userExtensionsDir = mkdtempSync(join(tmpdir(), 'ue2-eslint-ext-'))
+const userExtensionsDir = mkTempDir('ue2-eslint-ext-')
 symlinkSync(extRoot, join(userExtensionsDir, 'universe-eslint'), 'junction')
 
 // The eslint package the server must resolve from the workspace (repo's eslint 9).
@@ -48,7 +48,7 @@ const eslintPkgDir = dirname(require.resolve('eslint/package.json'))
  * and the violating file's path. Each test calls this so runs don't share state.
  */
 export function makeEslintWorkspace(): { readonly dir: string; readonly filePath: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'ue2-eslint-ws-'))
+  const dir = mkTempDir('ue2-eslint-ws-')
   // Flat config as .mjs so Node always loads it as ESM (a plain .js would need a
   // package.json `"type":"module"` and otherwise fails with "Unexpected token
   // 'export'"). Enable the one rule the fixture file will trip.

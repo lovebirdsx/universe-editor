@@ -15,14 +15,14 @@
 
 import { test, expect } from '@playwright/test'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import {
   ENABLED_EXTENSIONS_ENV,
   INITIAL_SETTINGS,
   INITIAL_STATE,
   launchElectron,
+  mkTempDir,
 } from '@universe-editor/e2e-harness'
 import { URI } from '@universe-editor/platform'
 import { MAIN_ENTRY, APP_ROOT, closeApp } from '../fixtures/electronApp.js'
@@ -97,7 +97,7 @@ test.describe('@regression terminal restore', () => {
     // teardown under full-suite parallel load (see smoke.viewSizes).
     test.setTimeout(120_000)
     test.slow()
-    const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-term-restore-'))
+    const userDataDir = mkTempDir('universe-editor-term-restore-')
 
     try {
       const workspaceDir = join(userDataDir, 'fixture-workspace')

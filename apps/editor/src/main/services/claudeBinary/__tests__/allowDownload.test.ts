@@ -5,10 +5,10 @@
  *  with allowDownload:false must fail fast instead of calling fetch().
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import * as path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 let userData = ''
 let appRoot = ''
@@ -26,8 +26,8 @@ const { ClaudeBinaryMainService } = await import('../claudeBinaryMainService.js'
 
 describe('ClaudeBinaryMainService.resolve — allowDownload', () => {
   beforeEach(async () => {
-    userData = await mkdtemp(path.join(tmpdir(), 'universe-editor-claude-ad-data-'))
-    fixtureRoot = await mkdtemp(path.join(tmpdir(), 'universe-editor-claude-ad-app-'))
+    userData = mkTempDir('universe-editor-claude-ad-data-')
+    fixtureRoot = mkTempDir('universe-editor-claude-ad-app-')
     appRoot = path.join(fixtureRoot, 'apps', 'editor')
     await mkdir(appRoot, { recursive: true })
     // `_readSdkVersion` (dev, !isPackaged) reads `<appRoot>/../../vendor/claude-agent-acp/dist/claude-binary.json`.

@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import * as path from 'node:path'
 import { checkManifestForPublish, type PublishManifest } from '../lib/manifestChecks.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 function fixture(): { dir: string; base: PublishManifest } {
-  const dir = mkdtempSync(path.join(tmpdir(), 'uex-checks-'))
+  const dir = mkTempDir('uex-checks-')
   mkdirSync(path.join(dir, 'dist'), { recursive: true })
   writeFileSync(path.join(dir, 'dist', 'extension.js'), '')
   writeFileSync(path.join(dir, 'icon.png'), '')

@@ -4,13 +4,13 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   LOG_TIMESTAMP_FORMAT_DEFAULT,
   LogLevel,
   formatLogTimestamp,
 } from '@universe-editor/platform'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 // Mock electron's app before importing logMainService
 const mockGetPath = vi.fn((_name: string): string => '')
@@ -48,7 +48,7 @@ describe('LogMainService', () => {
   let tmpDir: string
 
   beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(join(tmpdir(), 'ue-log-test-'))
+    tmpDir = mkTempDir('ue-log-test-')
     mockGetPath.mockReturnValue(tmpDir)
   })
 
@@ -384,7 +384,7 @@ describe('MainLogChannelService', () => {
   let tmpDir: string
 
   beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(join(tmpdir(), 'ue-log-channel-test-'))
+    tmpDir = mkTempDir('ue-log-channel-test-')
     mockGetPath.mockReturnValue(tmpDir)
   })
 

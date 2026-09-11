@@ -8,8 +8,7 @@ import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { generateKeyPairSync, createHash, verify } from 'node:crypto'
-import { mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync, existsSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync, readdirSync, statSync, writeFileSync, existsSync } from 'node:fs'
 import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -23,6 +22,7 @@ import {
   issueToken,
   publisherStatus,
 } from '../lib.mjs'
+import { mkTempDir } from '../../lib/temp-root.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(__dirname, '..', '..', '..')
@@ -181,7 +181,7 @@ test('removeFromRegistry 删版本与删整个扩展', () => {
 })
 
 test('writeJsonAtomic 写入并可覆盖，JSON 完整可读，不留 tmp 文件', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'ue-atomic-'))
+  const dir = mkTempDir('ue-atomic-')
   const file = join(dir, 'nested', 'data.json')
   writeJsonAtomic(file, { a: 1 })
   assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), { a: 1 })
@@ -197,7 +197,7 @@ test(
   'writeJsonAtomic 传 mode 后 POSIX 权限位落到该 mode',
   { skip: process.platform === 'win32' },
   () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ue-atomic-mode-'))
+    const dir = mkTempDir('ue-atomic-mode-')
     const file = join(dir, 'data.json')
     writeJsonAtomic(file, { a: 1 }, { mode: 0o664 })
     assert.equal(statSync(file).mode & 0o777, 0o664)
@@ -205,7 +205,7 @@ test(
 )
 
 test('signVsix 产出 sha256 + 可用公钥验证的 Ed25519 签名', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'ue-sign-'))
+  const dir = mkTempDir('ue-sign-')
   const vsix = join(dir, 'a.vsix')
   writeFileSync(vsix, 'payload-bytes')
   const { publicKey, privateKey } = generateKeyPairSync('ed25519')
@@ -278,7 +278,7 @@ test('issueToken 未吊销同 label 抛错；已吊销同 label 可重发', () =
 })
 
 test('resolveSigningKeyFile 优先级：arg > env > 默认路径（存在才用）', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'ue-key-'))
+  const dir = mkTempDir('ue-key-')
   const keyFile = join(dir, 'market-key.pem')
   writeFileSync(keyFile, 'pem-bytes')
 
@@ -299,8 +299,8 @@ test('resolveSigningKeyFile 优先级：arg > env > 默认路径（存在才用�
 })
 
 test('publish.mjs 缺 --signing-key-file 时报错退出', () => {
-  const stage = mkdtempSync(join(tmpdir(), 'ue-gallery-'))
-  const vsixDir = mkdtempSync(join(tmpdir(), 'ue-vsix-'))
+  const stage = mkTempDir('ue-gallery-')
+  const vsixDir = mkTempDir('ue-vsix-')
   const vsix = makeVsix(vsixDir, {
     publisher: 'acme',
     name: 'demo',
@@ -316,8 +316,8 @@ test('publish.mjs 缺 --signing-key-file 时报错退出', () => {
 })
 
 test('publish.mjs 端到端：写 registry + 落地 assets', () => {
-  const stage = mkdtempSync(join(tmpdir(), 'ue-gallery-'))
-  const vsixDir = mkdtempSync(join(tmpdir(), 'ue-vsix-'))
+  const stage = mkTempDir('ue-gallery-')
+  const vsixDir = mkTempDir('ue-vsix-')
   const vsix = makeVsix(
     vsixDir,
     {

@@ -13,16 +13,16 @@
  *  happy-dom 单测看不出来 —— 必须在真实 Electron 里跑。
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, expect } from '../fixtures/sharedApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 // 轻量、确定的 fixture：几张图（含对竞态最敏感的 pie）+ 大量文本填充使其可滚动。
 // 数量小 → 串行渲染快 → 能在 restore 窗口内稳定，避免重型真实文档在 CI 高负载下
 // 因渲染过慢 + 浏览器 scroll-anchoring 造成的位置漂移。
 function writeMermaidMarkdown(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-mermaid-'))
+  const dir = mkTempDir('universe-editor-e2e-mermaid-')
   const file = join(dir, 'diagram.md')
   const filler = Array.from({ length: 60 }, (_, i) => `## Section ${i}\n\nparagraph ${i}\n`).join(
     '\n',

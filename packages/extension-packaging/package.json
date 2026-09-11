@@ -45,9 +45,10 @@
     "adm-zip": "catalog:"
   },
   "devDependencies": {
-    "@universe-editor/config-ts": "workspace:*",
     "@types/adm-zip": "catalog:",
     "@types/node": "catalog:",
+    "@universe-editor/config-ts": "workspace:*",
+    "@universe-editor/temp-root": "workspace:*",
     "eslint": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"

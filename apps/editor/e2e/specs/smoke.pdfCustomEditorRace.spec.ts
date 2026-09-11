@@ -20,9 +20,9 @@
 
 import * as path from 'node:path'
 import * as fs from 'node:fs/promises'
-import * as os from 'node:os'
 import AdmZip from 'adm-zip'
 import { test, expect } from '../fixtures/electronApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 const VIEW_TYPE = 'e2ePdf.view'
 const MARKER = 'e2e-pdf-custom-editor-rendered'
@@ -80,7 +80,7 @@ test.describe('@p1 late custom-editor registration', () => {
   test('a pdf opened before its provider is live self-heals to the custom editor @regression', async ({
     workbench,
   }) => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-pdf-race-'))
+    const tmpDir = mkTempDir('ue2-pdf-race-')
     const vsixPath = await makePdfEditorVsix(tmpDir)
     const docPath = path.join(tmpDir, 'sample.pdf')
     // Minimal binary-ish PDF body — rendered as text this is garbage.

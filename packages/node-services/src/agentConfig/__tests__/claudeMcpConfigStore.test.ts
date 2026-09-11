@@ -6,11 +6,11 @@
  *  claudeConfigStore.test.ts).
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtemp, rm, writeFile, rename } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { rm, writeFile, rename } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ClaudeMcpConfigStore } from '../claudeMcpConfigStore.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 const tempRoots: string[] = []
 const stores: ClaudeMcpConfigStore[] = []
@@ -31,7 +31,7 @@ async function makeStore(): Promise<{
   settingsJson: string
   fired: () => number
 }> {
-  const dir = await mkdtemp(join(tmpdir(), 'ue-claude-mcp-'))
+  const dir = mkTempDir('ue-claude-mcp-')
   tempRoots.push(dir)
   const claudeJson = join(dir, '.claude.json')
   const settingsJson = join(dir, 'settings.json')

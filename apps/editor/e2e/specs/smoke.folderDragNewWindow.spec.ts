@@ -5,12 +5,12 @@
  *  drive a real drop and assert a second window appears.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { test, expect } from '../fixtures/electronApp.js'
 import { expectNoLeaks, evaluateWhenRestored } from '../pages/WorkbenchPO.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 test.describe('@p1 folder drag → new window', () => {
   test('dropping a folder on the tab bar opens it in a new window', async ({
@@ -20,7 +20,7 @@ test.describe('@p1 folder drag → new window', () => {
   }) => {
     await workbench.waitForRestored()
 
-    const root = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-foldrop-'))
+    const root = mkTempDir('universe-editor-e2e-foldrop-')
     const sub = join(root, 'sub')
     mkdirSync(sub)
     writeFileSync(join(root, 'a.ts'), 'x')

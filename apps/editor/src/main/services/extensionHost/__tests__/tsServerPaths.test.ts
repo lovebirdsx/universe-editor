@@ -7,10 +7,10 @@
  *  point process.resourcesPath at a temp dir with a staged tsgo/ tree.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import * as path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 const appRoot = path.resolve(import.meta.dirname, '../../../../../../..')
 const appPathHolder = { current: appRoot }
@@ -33,7 +33,7 @@ let settingsDir = ''
 
 describe('tsServerPaths preference chain', () => {
   beforeEach(async () => {
-    settingsDir = await mkdtemp(path.join(tmpdir(), 'universe-editor-ts-server-pref-'))
+    settingsDir = mkTempDir('universe-editor-ts-server-pref-')
     vi.stubEnv('UNIVERSE_TS_SERVER', '')
     vi.stubEnv('UNIVERSE_TSGO_BIN', '')
   })
@@ -120,7 +120,7 @@ describe('tsServerPaths preference chain', () => {
   it('tsls spec carries the typescript package version', async () => {
     // The vendored node_modules only exists after scripts/release/vendor-install.mjs;
     // stage a fake tree so the test doesn't depend on that install.
-    const vendorDir = await mkdtemp(path.join(tmpdir(), 'universe-editor-tsls-vendor-'))
+    const vendorDir = mkTempDir('universe-editor-tsls-vendor-')
     const vendorRoot = path.join(vendorDir, 'vendor/typescript-language-server/node_modules')
     await mkdir(path.join(vendorRoot, 'typescript-language-server/lib'), { recursive: true })
     await writeFile(path.join(vendorRoot, 'typescript-language-server/lib/cli.mjs'), '')
@@ -159,8 +159,8 @@ describe('workspace settings layering', () => {
   let workspaceDir = ''
 
   beforeEach(async () => {
-    settingsDir = await mkdtemp(path.join(tmpdir(), 'universe-editor-ts-server-pref-'))
-    workspaceDir = await mkdtemp(path.join(tmpdir(), 'universe-editor-ts-server-ws-'))
+    settingsDir = mkTempDir('universe-editor-ts-server-pref-')
+    workspaceDir = mkTempDir('universe-editor-ts-server-ws-')
     vi.stubEnv('UNIVERSE_TS_SERVER', '')
     vi.stubEnv('UNIVERSE_TSGO_BIN', '')
   })
@@ -264,8 +264,8 @@ describe('packaged tsgo resolution', () => {
   let resourcesDir = ''
 
   beforeEach(async () => {
-    settingsDir = await mkdtemp(path.join(tmpdir(), 'universe-editor-ts-server-pref-'))
-    resourcesDir = await mkdtemp(path.join(tmpdir(), 'universe-editor-resources-'))
+    settingsDir = mkTempDir('universe-editor-ts-server-pref-')
+    resourcesDir = mkTempDir('universe-editor-resources-')
     mockedApp.isPackaged = true
     proc.resourcesPath = resourcesDir
   })

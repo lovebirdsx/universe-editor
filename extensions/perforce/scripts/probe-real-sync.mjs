@@ -108,7 +108,8 @@ const NARROW = requiredArg(
   'a relative dir inside the workspace with pending updates',
 )
 const PINNED_FILE = envOrArg('UNIVERSE_P4_PROBE_FILE', '--file', '')
-const TEMP_BASE = envOrArg('UNIVERSE_P4_PROBE_TEMP', '--temp', tmpdir())
+// 本脚本刻意零依赖（纯 Node，见文件头）；调用方可用 UNIVERSE_P4_PROBE_TEMP / --temp 指定暂存根。
+const TEMP_BASE = envOrArg('UNIVERSE_P4_PROBE_TEMP', '--temp', tmpdir()) // temp-root:allow
 const KEEP_TEMP = process.argv.includes('--keep-temp')
 
 const clientName = `tmp_probe_${process.pid}`

@@ -6,14 +6,14 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   checkBuiltinExtensionsEngines,
   computeExpectedEngine,
   patchEnginesUniverse,
 } from '../check-builtin-extensions-engines.mjs'
+import { mkTempDir } from '../lib/temp-root.mjs'
 
 test('computeExpectedEngine 取 major.minor、patch 固定 0', () => {
   assert.equal(computeExpectedEngine('0.13.0'), '^0.13.0')
@@ -28,7 +28,7 @@ test('computeExpectedEngine 拒绝非 X.Y.Z', () => {
 
 /** 构造一个含 App 版本 + 三个内置插件的最小仓库夹具。 */
 function makeFixture() {
-  const root = mkdtempSync(join(tmpdir(), 'builtin-engines-'))
+  const root = mkTempDir('builtin-engines-')
   mkdirSync(join(root, 'apps/editor'), { recursive: true })
   writeFileSync(join(root, 'apps/editor/package.json'), JSON.stringify({ version: '0.13.0' }) + '\n')
   const extensions = join(root, 'extensions')

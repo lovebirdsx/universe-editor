@@ -10,15 +10,15 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { test, expect } from '@playwright/test'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   ENABLED_EXTENSIONS_ENV,
   INITIAL_SETTINGS,
   INITIAL_STATE,
   launchElectron,
+  mkTempDir,
 } from '@universe-editor/e2e-harness'
 import { MAIN_ENTRY, APP_ROOT, closeApp } from '../fixtures/electronApp.js'
 import { expectNoLeaks, evaluateWhenRestored } from '../pages/WorkbenchPO.js'
@@ -133,9 +133,9 @@ test.describe('@p1 editor restore', () => {
     // Self-launched cold boot: leave room for the graceful-close + force-kill
     // teardown under full-suite parallel load (see smoke.viewSizes).
     test.setTimeout(120_000)
-    const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-editor-restore-'))
+    const userDataDir = mkTempDir('universe-editor-editor-restore-')
     try {
-      const workspaceFolder = mkdtempSync(join(tmpdir(), 'universe-editor-ws-'))
+      const workspaceFolder = mkTempDir('universe-editor-ws-')
       const testFile = join(workspaceFolder, 'hello.json')
       writeFileSync(testFile, '{ "restored": true }')
 
@@ -169,11 +169,11 @@ test.describe('@p1 editor restore', () => {
 
   test('switching workspaces does not leak editors across scopes', async () => {
     test.setTimeout(120_000)
-    const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-editor-restore-iso-'))
+    const userDataDir = mkTempDir('universe-editor-editor-restore-iso-')
     try {
       // Workspace A has an open editor; workspace B is empty.
-      const wsA = mkdtempSync(join(tmpdir(), 'universe-editor-wsA-'))
-      const wsB = mkdtempSync(join(tmpdir(), 'universe-editor-wsB-'))
+      const wsA = mkTempDir('universe-editor-wsA-')
+      const wsB = mkTempDir('universe-editor-wsB-')
       const fileA = join(wsA, 'a.json')
       writeFileSync(fileA, '{}')
 

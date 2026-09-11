@@ -18,13 +18,13 @@
  *  a full Electron + LSP cold start.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, expect } from '../fixtures/markdownApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 function writeWorkspace(): { dir: string; aPath: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-gotosym-'))
+  const dir = mkTempDir('universe-editor-e2e-gotosym-')
   const aPath = join(dir, 'a.md')
   writeFileSync(aPath, '# Alpha\n\n## Beta\n\nbody\n')
   writeFileSync(join(dir, 'other.md'), '# Gamma\n\nbody\n')

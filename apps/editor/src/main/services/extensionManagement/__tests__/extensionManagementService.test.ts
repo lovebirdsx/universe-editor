@@ -1,7 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, rm, writeFile, mkdir, stat, readFile, readdir } from 'node:fs/promises'
+import { rm, writeFile, mkdir, stat, readFile, readdir } from 'node:fs/promises'
 import { generateKeyPairSync, sign } from 'node:crypto'
-import { tmpdir } from 'node:os'
 import * as path from 'node:path'
 import AdmZip from 'adm-zip'
 import { hashVsixFile } from '@universe-editor/extension-packaging'
@@ -11,6 +10,7 @@ import {
   type IManagementGallery,
 } from '../extensionManagementService.js'
 import { writeInstalledRecords } from '@universe-editor/node-services'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 const HOST_API = '0.1.0'
 
@@ -91,7 +91,7 @@ describe('ExtensionManagementMainService', () => {
   let svc: ExtensionManagementMainService
 
   beforeEach(async () => {
-    root = await mkdtemp(path.join(tmpdir(), 'ext-mgmt-'))
+    root = mkTempDir('ext-mgmt-')
     extDir = path.join(root, 'extensions')
     svc = new ExtensionManagementMainService(() => extDir, HOST_API)
   })
@@ -281,7 +281,7 @@ describe('ExtensionManagementMainService — gallery install', () => {
   }
 
   beforeEach(async () => {
-    root = await mkdtemp(path.join(tmpdir(), 'ext-mgmt-gal-'))
+    root = mkTempDir('ext-mgmt-gal-')
     extDir = path.join(root, 'extensions')
   })
   afterEach(async () => {
@@ -444,7 +444,7 @@ describe('ExtensionManagementMainService — enablement, quarantine, updates', (
   let extDir: string
 
   beforeEach(async () => {
-    root = await mkdtemp(path.join(tmpdir(), 'ext-mgmt-en-'))
+    root = mkTempDir('ext-mgmt-en-')
     extDir = path.join(root, 'extensions')
   })
   afterEach(async () => {

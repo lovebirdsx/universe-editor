@@ -8,16 +8,16 @@
  *  re-search) over a broad tree of small files and asserts identical order.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, expect } from '../fixtures/sharedApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 const SEARCH = 'workbench.view.search'
 const NEEDLE = 'order-needle'
 
 function writeWorkspace(): { dir: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-searchorder-'))
+  const dir = mkTempDir('universe-editor-e2e-searchorder-')
   // Many small files across several directories: small files finish near-
   // simultaneously on different ripgrep threads, maximizing order nondeterminism.
   for (let d = 0; d < 8; d++) {

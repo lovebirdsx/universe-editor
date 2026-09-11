@@ -9,8 +9,7 @@ import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   demoManifest,
@@ -22,6 +21,7 @@ import {
   spawnServer,
   writePublishers,
 } from './publish-fixture.mjs'
+import { mkTempDir } from '../../lib/temp-root.mjs'
 
 const TOKEN = 'uet_uex_integration_token_00000000'
 const uexCli = join(repoRoot, 'packages', 'uex', 'dist', 'cli.js')
@@ -46,7 +46,7 @@ before(async () => {
     existsSync(uexCli),
     `缺少 ${uexCli} —— 请经 pnpm test:release 运行（前置 turbo build），或先 pnpm build`,
   )
-  root = await mkdtemp(join(tmpdir(), 'ue-uex-integration-'))
+  root = mkTempDir('ue-uex-integration-')
   galleryRoot = join(root, 'gallery')
   authDir = `${root}-auth`
   homeDir = join(root, 'home')

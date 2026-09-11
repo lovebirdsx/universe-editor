@@ -8,14 +8,14 @@
 
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
-import { mkdtemp, rm, readFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { rm, readFile } from 'node:fs/promises'
 import * as path from 'node:path'
 import {
   readEnablement,
   readInstalledRecords,
   writeEnablement,
 } from '../installedExtensionsManifest.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 function erroring(code: string): NodeJS.ErrnoException {
   const err = new Error(`${code}: operation not permitted, rename`) as NodeJS.ErrnoException
@@ -27,7 +27,7 @@ describe('installedExtensionsManifest atomic write', () => {
   let dir: string
 
   beforeEach(async () => {
-    dir = await mkdtemp(path.join(tmpdir(), 'ext-manifest-test-'))
+    dir = mkTempDir('ext-manifest-test-')
   })
 
   afterEach(async () => {

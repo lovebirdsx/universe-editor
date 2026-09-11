@@ -1,12 +1,12 @@
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { discoverRepos, type DiscoverOptions } from '../repoDiscovery.js'
 import { pickStatusBarRoot } from '../extension.js'
 import { norm } from '../pathUtil.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 // Lets a single test force `readdir` to fail for one directory while every other
 // fs call (and every other test) uses the real implementation.
@@ -49,7 +49,7 @@ async function git(args: readonly string[], cwd?: string): Promise<string> {
 }
 
 async function makeWorkspace(): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), 'ue-git-discover-'))
+  const root = mkTempDir('ue-git-discover-')
   tmpRoots.push(root)
   return root
 }

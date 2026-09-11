@@ -13,10 +13,10 @@
  *  InlineCompletionService.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, expect } from '../fixtures/sharedApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 const TRIGGER = 'ai.inlineCompletion.trigger'
 const COMMIT = 'ai.inlineCompletion.commit'
@@ -26,7 +26,7 @@ const PICK_MODEL = 'ai.inlineCompletion.pickModel'
 const ENABLED_IN_EDITOR_KEY = 'ai.inlineCompletion.enabledInEditor'
 
 function writeWorkspace(): { dir: string; filePath: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-inline-'))
+  const dir = mkTempDir('universe-editor-e2e-inline-')
   const filePath = join(dir, 'a.txt')
   writeFileSync(filePath, 'hello \n')
   return { dir: dir.replace(/\\/g, '/'), filePath: filePath.replace(/\\/g, '/') }

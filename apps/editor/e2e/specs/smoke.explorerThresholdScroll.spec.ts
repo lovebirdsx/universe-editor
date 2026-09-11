@@ -21,9 +21,9 @@
 
 import * as path from 'node:path'
 import * as fs from 'node:fs/promises'
-import * as os from 'node:os'
 import type { Page } from '@playwright/test'
 import { test, expect } from '../fixtures/sharedApp.js'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 // Row budget is what this spec is about, so it is spelled out:
 //   1 root + 40 dirs + 1 target dir + 140 files = 182 rows collapsed (not
@@ -65,7 +65,7 @@ async function setScroll(page: Page, top: number): Promise<void> {
 }
 
 async function seedWorkspace(): Promise<string> {
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-threshold-'))
+  const tmpDir = mkTempDir('ue2-threshold-')
   await Promise.all([
     // Each filler dir holds one file so it renders a twistie but stays collapsed.
     ...Array.from({ length: DIR_COUNT }, async (_, i) => {

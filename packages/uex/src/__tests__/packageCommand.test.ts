@@ -1,13 +1,13 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync, existsSync } from 'node:fs'
 import * as path from 'node:path'
 import { readVsixManifest } from '@universe-editor/extension-packaging'
 import { runPackage } from '../commands/package.js'
 import { UexError } from '../errors.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 function makeExtension(overrides: Record<string, unknown> = {}): string {
-  const dir = mkdtempSync(path.join(tmpdir(), 'uex-pkg-'))
+  const dir = mkTempDir('uex-pkg-')
   mkdirSync(path.join(dir, 'dist'), { recursive: true })
   writeFileSync(path.join(dir, 'dist', 'extension.js'), 'export {}')
   writeFileSync(
@@ -64,7 +64,7 @@ describe('runPackage', () => {
   })
 
   it('refuses outside an extension root', async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'uex-pkg-empty-'))
+    const dir = mkTempDir('uex-pkg-empty-')
     await expect(runPackage({ cwd: dir })).rejects.toBeInstanceOf(UexError)
   })
 })

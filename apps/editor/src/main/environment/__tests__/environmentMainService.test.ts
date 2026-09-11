@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { delimiter, join } from 'node:path'
 import { EnvironmentMainService } from '../environmentMainService.js'
+import { getTempRoot, mkTempDir } from '@universe-editor/temp-root'
 
 function make(opts: {
   argv?: readonly string[]
@@ -81,7 +81,7 @@ describe('updateUrl', () => {
   })
 
   it('reads from <userData>/update-config.json after resolveFileConfig', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ue-env-'))
+    const dir = mkTempDir('ue-env-')
     writeFileSync(join(dir, 'update-config.json'), JSON.stringify({ updateUrl: 'http://file/' }))
     const env = make({})
     expect(env.updateUrl).toBeUndefined()
@@ -90,7 +90,7 @@ describe('updateUrl', () => {
   })
 
   it('cli/env outrank the file source', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ue-env-'))
+    const dir = mkTempDir('ue-env-')
     writeFileSync(join(dir, 'update-config.json'), JSON.stringify({ updateUrl: 'http://file/' }))
     const env = make({ env: { UNIVERSE_UPDATE_URL: 'http://env/' } })
     env.resolveFileConfig(dir)
@@ -99,7 +99,7 @@ describe('updateUrl', () => {
 
   it('tolerates a missing config file', () => {
     const env = make({})
-    env.resolveFileConfig(join(tmpdir(), 'does-not-exist-ue'))
+    env.resolveFileConfig(join(getTempRoot(), 'does-not-exist-ue'))
     expect(env.updateUrl).toBeUndefined()
   })
 })
@@ -124,7 +124,7 @@ describe('galleryUrl', () => {
   })
 
   it('reads galleryUrl from an update-config.json with a trailing comma (JSONC)', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ue-env-'))
+    const dir = mkTempDir('ue-env-')
     writeFileSync(join(dir, 'update-config.json'), '{\n  "galleryUrl": "http://file/",\n}')
     const env = make({})
     env.resolveFileConfig(dir)
@@ -132,7 +132,7 @@ describe('galleryUrl', () => {
   })
 
   it('reads galleryUrl from an update-config.json with // comments (JSONC)', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ue-env-'))
+    const dir = mkTempDir('ue-env-')
     writeFileSync(
       join(dir, 'update-config.json'),
       '{\n  // marketplace endpoint\n  "galleryUrl": "http://file/"\n}',
@@ -143,7 +143,7 @@ describe('galleryUrl', () => {
   })
 
   it('falls back to the bundled product config (lowest priority)', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ue-env-'))
+    const dir = mkTempDir('ue-env-')
     const product = join(dir, 'product.json')
     writeFileSync(product, JSON.stringify({ galleryUrl: 'http://product/' }))
     const env = make({})
@@ -152,7 +152,7 @@ describe('galleryUrl', () => {
   })
 
   it('lets cli / env / update-config outrank the product config', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ue-env-'))
+    const dir = mkTempDir('ue-env-')
     writeFileSync(join(dir, 'update-config.json'), JSON.stringify({ galleryUrl: 'http://file/' }))
     const product = join(dir, 'product.json')
     writeFileSync(product, JSON.stringify({ galleryUrl: 'http://product/' }))
@@ -162,7 +162,7 @@ describe('galleryUrl', () => {
   })
 
   it('tolerates a missing product config file', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ue-env-'))
+    const dir = mkTempDir('ue-env-')
     const env = make({})
     env.resolveFileConfig(dir, join(dir, 'does-not-exist-product.json'))
     expect(env.galleryUrl).toBeUndefined()
@@ -171,7 +171,7 @@ describe('galleryUrl', () => {
 
 describe('configurationDefaults', () => {
   function withProduct(content: string, env?: Record<string, string | undefined>) {
-    const dir = mkdtempSync(join(tmpdir(), 'ue-cfgdef-'))
+    const dir = mkTempDir('ue-cfgdef-')
     const product = join(dir, 'product.json')
     writeFileSync(product, content)
     const svc = make(env ? { env } : {})
@@ -227,14 +227,14 @@ describe('configurationDefaults', () => {
 
 describe('configDir', () => {
   it('falls back to userData when nothing overrides it', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ue-cfg-'))
+    const dir = mkTempDir('ue-cfg-')
     const env = make({})
     env.resolveFileConfig(dir)
     expect(env.configDir).toBe(dir)
   })
 
   it('reads <userData>/config-location.json', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ue-cfg-'))
+    const dir = mkTempDir('ue-cfg-')
     writeFileSync(join(dir, 'config-location.json'), JSON.stringify({ configDir: '/my/config' }))
     const env = make({})
     env.resolveFileConfig(dir)
@@ -242,7 +242,7 @@ describe('configDir', () => {
   })
 
   it('resolves cli > env > file', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ue-cfg-'))
+    const dir = mkTempDir('ue-cfg-')
     writeFileSync(join(dir, 'config-location.json'), JSON.stringify({ configDir: '/file' }))
     const env = make({
       argv: ['node', 'main.js', '--config-dir=/cli'],
@@ -253,7 +253,7 @@ describe('configDir', () => {
   })
 
   it('env outranks the file source', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ue-cfg-'))
+    const dir = mkTempDir('ue-cfg-')
     writeFileSync(join(dir, 'config-location.json'), JSON.stringify({ configDir: '/file' }))
     const env = make({ env: { UNIVERSE_CONFIG_DIR: '/env' } })
     env.resolveFileConfig(dir)

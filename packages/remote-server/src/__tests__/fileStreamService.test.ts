@@ -6,9 +6,8 @@
  *  the real daemon's timing cannot guarantee (and what used to drop early chunks).
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { rm, writeFile } from 'node:fs/promises'
 import type { ReadStream } from 'node:fs'
-import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
@@ -18,6 +17,7 @@ import {
   type IRemoteFileStreamEvent,
 } from '@universe-editor/platform'
 import { RemoteFileStreamService } from '../fileStreamService.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 const CHUNK_SIZE = 262144
 
@@ -95,7 +95,7 @@ class FakeReadStream {
 
 describe('RemoteFileStreamService', () => {
   it('replays chunks emitted before the first subscription instead of dropping them', async () => {
-    const root = await mkdtemp(path.join(tmpdir(), 'ue-fss-'))
+    const root = mkTempDir('ue-fss-')
     tempRoots.push(root)
     const filePath = path.join(root, 'big.bin')
     const expected = makeBytes(20 * CHUNK_SIZE)

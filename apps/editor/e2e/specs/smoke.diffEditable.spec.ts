@@ -8,10 +8,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { test, expect } from '../fixtures/sharedApp.js'
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 
 const ORIGINAL = 'hello old\n'
 const MODIFIED = 'hello world\n'
@@ -19,7 +19,7 @@ const EDITED = 'hello world EDITED\n'
 
 test.describe('@p1 editable diff', () => {
   test('edits and saves the live working-tree side of a diff', async ({ workbench }) => {
-    const dir = mkdtempSync(join(tmpdir(), 'ue2-diffeditable-'))
+    const dir = mkTempDir('ue2-diffeditable-')
     const notePath = join(dir, 'note.md')
     writeFileSync(notePath, MODIFIED, 'utf8')
 
@@ -104,7 +104,7 @@ test.describe('@p1 editable diff', () => {
   })
 
   test('a snapshot diff stays read-only', async ({ workbench }) => {
-    const dir = mkdtempSync(join(tmpdir(), 'ue2-diffeditable2-'))
+    const dir = mkTempDir('ue2-diffeditable2-')
     const notePath = join(dir, 'note.md')
     writeFileSync(notePath, MODIFIED, 'utf8')
 

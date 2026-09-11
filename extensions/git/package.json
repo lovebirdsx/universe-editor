@@ -280,6 +280,7 @@
     "@universe-editor/config-ts": "workspace:*",
     "@universe-editor/extension-api": "workspace:*",
     "@universe-editor/extensions-common": "workspace:*",
+    "@universe-editor/temp-root": "workspace:*",
     "@types/node": "catalog:",
     "esbuild": "catalog:",
     "eslint": "catalog:",

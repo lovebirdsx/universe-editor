@@ -29,14 +29,14 @@
 
 import { test, expect } from '@playwright/test'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import {
   ENABLED_EXTENSIONS_ENV,
   INITIAL_SETTINGS,
   INITIAL_STATE,
   launchElectron,
+  mkTempDir,
 } from '@universe-editor/e2e-harness'
 import { URI } from '@universe-editor/platform'
 import { MAIN_ENTRY, APP_ROOT, closeApp } from '../fixtures/electronApp.js'
@@ -228,7 +228,7 @@ test.describe('@p1 maximized secondary sidebar restore', () => {
     // teardown under full-suite parallel load (see smoke.viewSizes).
     test.setTimeout(120_000)
     test.slow()
-    const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-maxsec-'))
+    const userDataDir = mkTempDir('universe-editor-maxsec-')
     try {
       seedUserData(userDataDir, { isMaximized: false })
 
@@ -280,7 +280,7 @@ test.describe('@p1 maximized secondary sidebar restore', () => {
   test('secondary sidebar width survives restarting while maximized @regression', async () => {
     test.setTimeout(120_000)
     test.slow()
-    const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-maxsec-restart-'))
+    const userDataDir = mkTempDir('universe-editor-maxsec-restart-')
     try {
       // The real user flow: quit while maximized, relaunch. Main maximizes the
       // window at ready-to-show, racing the renderer's initial layout AND the
@@ -322,7 +322,7 @@ test.describe('@p1 maximized secondary sidebar restore', () => {
   test('secondary sidebar width survives maximize then restore @regression', async () => {
     test.setTimeout(120_000)
     test.slow()
-    const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-maxsec-unmax-'))
+    const userDataDir = mkTempDir('universe-editor-maxsec-unmax-')
     try {
       seedUserData(userDataDir, { isMaximized: false })
       const { app, page } = await launchWithState(userDataDir)

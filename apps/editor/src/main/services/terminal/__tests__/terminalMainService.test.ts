@@ -5,7 +5,6 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
-import { tmpdir } from 'node:os'
 import path from 'node:path'
 import {
   DisposableTracker,
@@ -27,6 +26,7 @@ import {
 import type { IPty } from '@lydell/node-pty'
 import type { PtySpawner } from '@universe-editor/node-services'
 import { TerminalMainService, type IRemoteTerminalEndpoint } from '../terminalMainService.js'
+import { getTempRoot } from '@universe-editor/temp-root'
 
 class FakePty implements IPty {
   cols = 80
@@ -127,7 +127,7 @@ const remoteCwd = () =>
 describe('TerminalMainService routing', () => {
   it('routes a file cwd to the local pty host', async () => {
     const { svc, localSpawns } = makeLocalHarness()
-    const cwd = tmpdir()
+    const cwd = getTempRoot()
     const info = await svc.create({ cwd: URI.file(cwd).toJSON(), shell: 'bash' })
     expect(info.id).not.toContain('remote:')
     expect(localSpawns).toHaveLength(1)

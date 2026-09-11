@@ -6,7 +6,6 @@
  *  agent's events.
  *--------------------------------------------------------------------------------------------*/
 
-import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Emitter, Event, RemoteChannels } from '@universe-editor/platform'
 import {
@@ -19,9 +18,10 @@ import {
 import { CodexBinaryMainService } from '../codexBinaryMainService.js'
 import type { ICodexBinaryProgress } from '../../../../shared/ipc/codexBinaryService.js'
 import type { IRemoteConnectionService } from '../../remote/remoteConnectionMainService.js'
+import { getTempRoot } from '@universe-editor/temp-root'
 
 vi.mock('electron', () => ({
-  app: { isPackaged: false, getAppPath: () => '/fake/app', getPath: () => tmpdir() },
+  app: { isPackaged: false, getAppPath: () => '/fake/app', getPath: () => getTempRoot() },
 }))
 
 class FakeRemoteBinaryService implements IRemoteAgentBinaryService {

@@ -10,9 +10,13 @@
  *  driven: UNIVERSE_EDITOR_BIN, or the installed win32 build auto-detected).
  *--------------------------------------------------------------------------------------------*/
 
-import { createColdAppTest, resolveEditorLaunchTarget, expect } from '@universe-editor/e2e-harness'
-import { existsSync, mkdtempSync, symlinkSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import {
+  createColdAppTest,
+  resolveEditorLaunchTarget,
+  expect,
+  mkTempDir,
+} from '@universe-editor/e2e-harness'
+import { existsSync, symlinkSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -26,7 +30,7 @@ const target = resolveEditorLaunchTarget()
 // Isolated user-extensions dir holding a single junction → this extension. A
 // junction (dir symlink) works on Windows + CI Linux alike; scanning follows
 // it and reads the real dist/ in place.
-const userExtensionsDir = mkdtempSync(join(tmpdir(), 'ues-__name__-'))
+const userExtensionsDir = mkTempDir('ues-__name__-')
 symlinkSync(projectRoot, join(userExtensionsDir, '__name__'), 'junction')
 
 export const test = createColdAppTest({

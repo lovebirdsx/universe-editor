@@ -7,7 +7,6 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { promises as fs } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parse as parseToml } from 'smol-toml'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -31,6 +30,7 @@ import type {
   IRemoteConnection,
   IRemoteConnectionService,
 } from '../../remote/remoteConnectionMainService.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 function configLocation(dir: string): IConfigLocationService {
   return {
@@ -50,7 +50,7 @@ describe('CodexConfigMainService', () => {
   let svc: CodexConfigMainService
 
   beforeEach(async () => {
-    dir = await fs.mkdtemp(join(tmpdir(), 'codex-config-'))
+    dir = mkTempDir('codex-config-')
     configPath = join(dir, 'config.toml')
     svc = new CodexConfigMainService(configPath)
   })
@@ -597,7 +597,7 @@ describe('CodexConfigMainService — remote resolveActiveAuth', () => {
     proxyCalls: Array<{ authority: string; channel: string }>
     configDir: string
   }> {
-    const dir = await fs.mkdtemp(join(tmpdir(), 'codex-config-remote-'))
+    const dir = mkTempDir('codex-config-remote-')
     dirs.push(dir)
     const proxyCalls: Array<{ authority: string; channel: string }> = []
     const configDir = join(dir, 'editor-settings')

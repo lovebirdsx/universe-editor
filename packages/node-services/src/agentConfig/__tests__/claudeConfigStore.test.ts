@@ -9,11 +9,11 @@
  *  regression to a file-level watch fails here rather than in the field.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtemp, rm, writeFile, rename } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { rm, writeFile, rename } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ClaudeConfigStore } from '../claudeConfigStore.js'
+import { mkTempDir } from '@universe-editor/temp-root'
 
 const tempRoots: string[] = []
 const stores: ClaudeConfigStore[] = []
@@ -32,7 +32,7 @@ async function makeStore(): Promise<{
   dir: string
   fired: () => number
 }> {
-  const dir = await mkdtemp(join(tmpdir(), 'ue-claude-config-'))
+  const dir = mkTempDir('ue-claude-config-')
   tempRoots.push(dir)
   const store = new ClaudeConfigStore({ settingsPath: join(dir, 'settings.json') })
   stores.push(store)
@@ -92,7 +92,7 @@ describe('ClaudeConfigStore config watch', () => {
 
   it('degrades silently when the directory cannot be watched', async () => {
     // A path under a file (not a directory) can never be watched.
-    const dir = await mkdtemp(join(tmpdir(), 'ue-claude-config-'))
+    const dir = mkTempDir('ue-claude-config-')
     tempRoots.push(dir)
     const blocker = join(dir, 'blocker')
     await writeFile(blocker, 'x', 'utf8')
