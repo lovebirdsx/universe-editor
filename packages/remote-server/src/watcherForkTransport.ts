@@ -7,7 +7,7 @@
  *  parcel-native WatcherHost out of its own process.
  *--------------------------------------------------------------------------------------------*/
 
-import { fork, type ChildProcess } from 'node:child_process'
+import { fork, type ChildProcess, type ForkOptions } from 'node:child_process'
 import {
   Emitter,
   type ILogger,
@@ -31,7 +31,12 @@ export class ForkedWatcherTransport implements IWatcherTransport {
       // stdin stays piped (not ignored) so the child sees an EOF and exits when
       // the daemon dies; stdout/stderr are logged, and 'ipc' carries the protocol.
       stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
-    })
+      // The daemon runs windowless (see buildWindowsDaemonLaunch); without this
+      // Windows gives the child a console of its own — a visible one on desktop.
+      // fork() hands its options straight to spawn(), so the flag reaches
+      // CreateProcess; @types/node just omits it from ForkOptions.
+      windowsHide: true,
+    } as ForkOptions)
     this._child = child
 
     child.stdout?.on('data', (d: Buffer) => logger.debug(`[watcher-host] ${String(d).trim()}`))

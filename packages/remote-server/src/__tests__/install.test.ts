@@ -144,7 +144,7 @@ describe('buildWindowsDaemonLaunch', () => {
     const script = decodeScript(launch.args)
     expect(script).toContain('Invoke-CimMethod -ClassName Win32_Process -MethodName Create')
     expect(script).toContain(
-      "CommandLine = 'C:\\Users\\dev\\node\\node.exe C:\\Users\\dev\\srv\\bootstrap.js serve --data-dir C:\\Users\\dev\\.universe-editor-server'",
+      "$cmd = 'C:\\Users\\dev\\node\\node.exe C:\\Users\\dev\\srv\\bootstrap.js serve --data-dir C:\\Users\\dev\\.universe-editor-server'",
     )
     expect(script).toContain('exit $r.ReturnValue')
   })
@@ -160,7 +160,30 @@ describe('buildWindowsDaemonLaunch', () => {
 
     const script = decodeScript(launch.args)
     expect(script).toContain(
-      'CommandLine = \'"C:\\Users\\a b\\node.exe" "C:\\Users\\a b\\bootstrap.js" serve --data-dir "C:\\Users\\a b\\.universe-editor-server"\'',
+      '$cmd = \'"C:\\Users\\a b\\node.exe" "C:\\Users\\a b\\bootstrap.js" serve --data-dir "C:\\Users\\a b\\.universe-editor-server"\'',
     )
+  })
+
+  it('passes CREATE_NO_WINDOW so the consoleless WMI provider host does not give the daemon a window', () => {
+    const launch = buildWindowsDaemonLaunch(['node.exe', 'bootstrap.js', 'serve'])
+
+    const script = decodeScript(launch.args)
+    expect(script).toContain(
+      'New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ CreateFlags = [uint32]0x08000000 }',
+    )
+    expect(script).toContain("$startup['ProcessStartupInformation'] = New-CimInstance")
+    expect(script).toContain('-Arguments $startup')
+  })
+
+  it('retries without the startup info so a host that rejects it still gets a daemon', () => {
+    const launch = buildWindowsDaemonLaunch(['node.exe', 'bootstrap.js', 'serve'])
+
+    const script = decodeScript(launch.args)
+    // The marker makes a windowed fallback visible instead of silently degrading.
+    expect(script).toContain("[Console]::Error.WriteLine('ue:startup-info-unavailable')")
+    expect(script).toContain('if ($null -eq $r -or $r.ReturnValue -ne 0)')
+    expect(script).toContain('-Arguments @{ CommandLine = $cmd }')
+    // `exit $null` is 0, which would look like success and stall on the poll.
+    expect(script).toContain('if ($null -eq $r) { exit 1 }')
   })
 })

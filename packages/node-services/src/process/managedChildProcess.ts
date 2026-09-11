@@ -59,13 +59,13 @@ const defaultTreeKiller: TreeKiller = (pid, sync) => {
   const args = ['/pid', String(pid), '/T', '/F']
   if (sync) {
     try {
-      execFileSync('taskkill', args, { stdio: 'ignore' })
+      execFileSync('taskkill', args, { stdio: 'ignore', windowsHide: true })
     } catch {
       // Best-effort: already exited, partial tree, or taskkill unavailable.
     }
     return
   }
-  execFile('taskkill', args, () => {
+  execFile('taskkill', args, { windowsHide: true }, () => {
     // Best-effort: already exited, partial tree, or taskkill unavailable —
     // nothing actionable during teardown.
   })

@@ -136,7 +136,12 @@ function runDetectionProbe(
     child.stderr.on('data', (chunk: string) => (stderr += chunk))
     const timer = setTimeout(() => {
       if (process.platform === 'win32' && child.pid !== undefined) {
-        execFileCb('taskkill', ['/pid', String(child.pid), '/T', '/F'], () => undefined)
+        execFileCb(
+          'taskkill',
+          ['/pid', String(child.pid), '/T', '/F'],
+          { windowsHide: true },
+          () => undefined,
+        )
       } else {
         child.kill('SIGKILL')
       }

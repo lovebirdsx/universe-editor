@@ -170,7 +170,7 @@ async function serve(opts: CliOptions): Promise<void> {
     pid: process.pid,
   }
   await writeServerInfo(opts.dataDir, info)
-  process.stdout.write(`${INFO_PREFIX}${JSON.stringify(info)}\n`)
+  printInfo(info)
   logger.info(`[remote-server] ready on 127.0.0.1:${daemon.port}`)
 
   let shuttingDown = false
@@ -202,14 +202,29 @@ function toWindowsCommandLine(argv: readonly string[]): string {
  * detached spawn dies with the SSH session (node cannot pass
  * CREATE_BREAKAWAY_FROM_JOB — vscode's rust CLI can). Win32_Process.Create runs
  * the daemon from the WMI provider host instead, outside that job.
+ *
+ * That host owns no console, so a daemon created without Win32_ProcessStartup is
+ * handed a fresh *visible* console window by Windows — a stray terminal sitting
+ * on the user's desktop for as long as the daemon runs (tests, whose `start` case
+ * spawns a real daemon on an interactive session, hit this every run).
+ * CREATE_NO_WINDOW suppresses the console entirely; the daemon's diagnostics
+ * already go to server.log. A host that refuses the startup info still gets a
+ * windowed daemon rather than a failed connection, and says so on stderr.
  */
 export function buildWindowsDaemonLaunch(argv: readonly string[]): {
   file: string
   args: string[]
 } {
-  const commandLine = toWindowsCommandLine(argv)
+  const commandLine = toWindowsCommandLine(argv).replace(/'/g, "''")
   const script = [
-    `$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = '${commandLine.replace(/'/g, "''")}' }`,
+    `$cmd = '${commandLine}'`,
+    `$startup = @{ CommandLine = $cmd }`,
+    `try { $startup['ProcessStartupInformation'] = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ CreateFlags = [uint32]0x08000000 } } catch { [Console]::Error.WriteLine('ue:startup-info-unavailable') }`,
+    `$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments $startup`,
+    `if ($null -eq $r -or $r.ReturnValue -ne 0) { $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd } }`,
+    // A failed Create leaves $r null, and `exit $null` is exit code 0 — which would
+    // read as success and turn into a 10s "timed out waiting for server.json".
+    `if ($null -eq $r) { exit 1 }`,
     'exit $r.ReturnValue',
   ].join('; ')
   const systemRoot = process.env['SystemRoot'] ?? 'C:\\Windows'
@@ -235,8 +250,11 @@ function spawnDaemonWindows(argv: readonly string[]): Promise<void> {
     child.stderr.on('data', (chunk: Buffer) => (stderr += chunk.toString()))
     child.on('error', reject)
     child.on('close', (code) => {
-      if (code === 0) resolve()
-      else {
+      if (code === 0) {
+        // A degraded launch reports it here and nothing else would surface it.
+        if (stderr) process.stderr.write(stderr)
+        resolve()
+      } else {
         reject(
           new Error(
             `Win32_Process.Create failed (exit ${code})${stderr ? `: ${stderr.trim()}` : ''}`,
