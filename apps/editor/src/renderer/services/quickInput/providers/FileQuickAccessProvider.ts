@@ -63,6 +63,7 @@ import {
   encodeEditorPickId,
   encodeViewPickId,
   IRecentTargetsService,
+  type RecentTarget,
 } from '../../editor/RecentTargetsService.js'
 import { IClosedEditorsService } from '../../editor/ClosedEditorsService.js'
 import { resourceIconId } from '../quickPickResourceIcon.js'
@@ -188,6 +189,26 @@ function entryToPick(entry: MentionFileEntry): IQuickPickItem {
     label: entry.name,
     description: entry.relPath,
     iconId: resourceIconId(resource),
+  }
+}
+
+/**
+ * Pick id of a recency-ordered target — the id `_buildEditorCandidates` /
+ * `_buildViewCandidates` used for the same target, so the empty-query list can
+ * re-emit the candidate in MRU order without rebuilding the pick. A
+ * `closedEditor` slot carries the id of the editor that occupied it, which is
+ * exactly the resource URI a closed-editor candidate is keyed by.
+ */
+function recentTargetPickId(target: RecentTarget): string {
+  switch (target.kind) {
+    case 'editor':
+      return (
+        target.editor.resource?.toString() ?? encodeEditorPickId(target.group.id, target.editor.id)
+      )
+    case 'view':
+      return encodeViewPickId(target.descriptor.id)
+    case 'closedEditor':
+      return target.editorId
   }
 }
 
@@ -416,11 +437,11 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       useIgnoreFiles: this._exclude.getUseIgnoreFiles(),
     }
 
-    // Open editors (all types) and views interleave by recency at the head of
-    // the empty-query list — the target the user just worked in outranks
-    // everything else, mirroring Ctrl+Tab's MRU. Both kinds also participate in
-    // fuzzy matching while typing; fuzzy-equal view rows keep their MRU order
-    // rather than falling back to alphabetical.
+    // Open editors (all types), views, and the slots of just-closed editors
+    // interleave by recency at the head of the empty-query list — the target the
+    // user just worked in outranks everything else, mirroring Ctrl+Tab's MRU.
+    // All kinds also participate in fuzzy matching while typing; fuzzy-equal view
+    // rows keep their MRU order rather than falling back to alphabetical.
     const editorCandidates = this._buildEditorCandidates(root)
     const viewCandidates = this._buildViewCandidates()
     const matchCandidates = [...editorCandidates, ...viewCandidates]
@@ -434,21 +455,19 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     const emptyQueryItems = (): IQuickPickItem[] => {
       const headIds = new Set<string>()
       const head: IQuickPickItem[] = []
-      for (const target of this._recentTargets.getRecentTargets()) {
-        const id =
-          target.kind === 'editor'
-            ? (target.editor.resource?.toString() ??
-              encodeEditorPickId(target.group.id, target.editor.id))
-            : encodeViewPickId(target.descriptor.id)
+      for (const target of this._recentTargets.getRecentTargets({
+        includeClosedEditors: true,
+      })) {
+        const id = recentTargetPickId(target)
         if (headIds.has(id)) continue
         const pick = candidateByPickId.get(id)
         if (!pick) continue
         headIds.add(id)
         head.push(pick)
       }
-      // Candidates the MRU did not surface (e.g. recently closed editors —
-      // restorable but never focused this session) keep their relative order
-      // after the interleaved head, before the recent files.
+      // Candidates the MRU did not surface (restorable closed editors whose slot
+      // fell out of the bounded history, say) keep their relative order after the
+      // interleaved head, before the recent files.
       for (const c of matchCandidates) {
         if (!headIds.has(c.pick.id)) head.push(c.pick)
       }
@@ -821,12 +840,10 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     const interleavedHead = (): IQuickPickItem[] => {
       const seen = new Set<string>()
       const out: IQuickPickItem[] = []
-      for (const target of this._recentTargets.getRecentTargets()) {
-        const id =
-          target.kind === 'editor'
-            ? (target.editor.resource?.toString() ??
-              encodeEditorPickId(target.group.id, target.editor.id))
-            : encodeViewPickId(target.descriptor.id)
+      for (const target of this._recentTargets.getRecentTargets({
+        includeClosedEditors: true,
+      })) {
+        const id = recentTargetPickId(target)
         if (seen.has(id)) continue
         const pick = headPickById.get(id)
         if (!pick) continue

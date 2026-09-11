@@ -880,6 +880,24 @@ describe('quick-open recent targets', () => {
     expect(items[0]!.removable).toBeUndefined()
   })
 
+  it('closed-editor slots produce no row, leaving the order intact', () => {
+    // The recency list reserves a slot for a just-closed editor so Ctrl+P can
+    // place it; Ctrl+Tab switches between open targets only.
+    const svc = new EditorGroupsService()
+    const editor = new TestEditor('a')
+    svc.activeGroup.openEditor(editor)
+    const items = buildRecentTargetPickItems(
+      makeRecentTargets([
+        { kind: 'closedEditor', editorId: 'file:///ws/gone.ts' },
+        { kind: 'editor', editor, group: svc.activeGroup },
+        { kind: 'closedEditor', editorId: 'file:///ws/also-gone.ts' },
+      ]),
+      makeViewDescriptors({}),
+    )
+    expect(items).toHaveLength(1)
+    expect(items[0]!.label).toBe(editor.label)
+  })
+
   it('highlights the entry after the current one', () => {
     const items = [
       { id: 'a', label: 'a' },

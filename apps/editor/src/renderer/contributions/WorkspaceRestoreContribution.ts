@@ -23,6 +23,7 @@ import {
   EditorGroupsService,
   type ISerializedEditorGroupsState,
 } from '../services/editor/EditorGroupsService.js'
+import { IRecentTargetsService } from '../services/editor/RecentTargetsService.js'
 import { recordPerfPhaseAsync } from '../services/performance/perfPhases.js'
 
 export const WORKSPACE_STATE_STORAGE_KEY = 'workbench.workspaceState'
@@ -47,6 +48,7 @@ export class WorkspaceRestoreContribution extends Disposable implements IWorkben
   constructor(
     @IStorageService private readonly _storage: IStorageService,
     @IEditorGroupsService private readonly _groups: IEditorGroupsService,
+    @IRecentTargetsService private readonly _recentTargets: IRecentTargetsService,
     @IWorkspaceService _workspace: IWorkspaceService,
     @IInstantiationService private readonly _instantiation: IInstantiationService,
     @ILoggerService loggerService: ILoggerServiceType,
@@ -173,6 +175,10 @@ export class WorkspaceRestoreContribution extends Disposable implements IWorkben
       )
     } finally {
       this._suspendPersist = false
+      // The grid now holds this workspace's editors, so persisted recency ids
+      // can be resolved again — also on the failure path, where the grid was at
+      // least left in a settled state.
+      this._recentTargets.rebaseAfterRestore()
     }
   }
 

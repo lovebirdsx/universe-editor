@@ -32,9 +32,26 @@ import {
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { WelcomeEditorInput } from '../../services/editor/WelcomeEditorInput.js'
 import {
+  IRecentTargetsService,
+  type IRecentTargetsService as IRecentTargetsServiceType,
+} from '../../services/editor/RecentTargetsService.js'
+import {
   WORKSPACE_STATE_STORAGE_KEY,
   WorkspaceRestoreContribution,
 } from '../WorkspaceRestoreContribution.js'
+
+/** Records the restore→recency rebase handshake; nothing else is used here. */
+function makeRecentTargetsStub(): IRecentTargetsServiceType & { rebases: number } {
+  return {
+    _serviceBrand: undefined,
+    rebases: 0,
+    getRecentTargets: () => [],
+    getRecentViews: () => [],
+    rebaseAfterRestore() {
+      this.rebases++
+    },
+  }
+}
 
 function makeFs(): IFileServiceType {
   return {
@@ -125,10 +142,16 @@ function buildContribution(
   storage: IStorageService,
   groups: EditorGroupsService,
   logger: ILogger = new NullLogger(),
-): { contribution: WorkspaceRestoreContribution; inst: InstantiationService } {
+  recentTargets: IRecentTargetsServiceType & { rebases: number } = makeRecentTargetsStub(),
+): {
+  contribution: WorkspaceRestoreContribution
+  inst: InstantiationService
+  recentTargets: IRecentTargetsServiceType & { rebases: number }
+} {
   const services = new ServiceCollection()
   services.set(IStorageService, storage)
   services.set(IEditorGroupsService, groups)
+  services.set(IRecentTargetsService, recentTargets)
   services.set(IWorkspaceService, makeWorkspaceStub())
   services.set(IFileService, makeFs())
   services.set(ILoggerService, {
@@ -139,7 +162,7 @@ function buildContribution(
   })
   const inst = new InstantiationService(services)
   const contribution = inst.createInstance(WorkspaceRestoreContribution)
-  return { contribution, inst }
+  return { contribution, inst, recentTargets }
 }
 
 describe('WorkspaceRestoreContribution', () => {
@@ -221,6 +244,24 @@ describe('WorkspaceRestoreContribution', () => {
     expect(groups.groups).toHaveLength(1)
     expect(groups.groups[0]?.count).toBe(1)
     expect(groups.groups[0]?.activeEditor?.typeId).toBe(WelcomeEditorInput.TYPE_ID)
+    contribution.dispose()
+    groups.dispose()
+  })
+
+  it('rebases the persisted recency once restore settles', async () => {
+    const groups = new EditorGroupsService()
+    const recentTargets = makeRecentTargetsStub()
+    const { contribution } = buildContribution(
+      makeStorage({}),
+      groups,
+      new NullLogger(),
+      recentTargets,
+    )
+
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(recentTargets.rebases).toBe(1)
     contribution.dispose()
     groups.dispose()
   })

@@ -14,6 +14,7 @@ import {
   ViewRegistry,
   type IEditorGroup,
   type IEditorGroupsService,
+  type IStorageService,
   type IViewContainerDescriptor,
   type IViewDescriptor,
   type IViewDescriptorService,
@@ -21,6 +22,16 @@ import {
 import { RendererFocusTrackerService } from '../RendererFocusTrackerService.js'
 import { FocusStackService } from '../FocusStackService.js'
 import { RecentTargetsService } from '../../editor/RecentTargetsService.js'
+
+/** No workspace history — this spec only exercises the focus→view half. */
+function emptyStorage(): IStorageService {
+  return {
+    get: async () => undefined,
+    set: async () => undefined,
+    remove: async () => undefined,
+    onDidChangeWorkspaceScope: new Emitter<void>().event,
+  } as unknown as IStorageService
+}
 
 const SEARCH_VIEW_ID = 'workbench.view.search.results'
 const EXPLORER_VIEW_ID = 'workbench.view.explorer.tree'
@@ -167,7 +178,13 @@ describe('focus → MRU link (SearchView scenario)', () => {
           ['workbench.view.explorer', [makeView(EXPLORER_VIEW_ID, 'workbench.view.explorer')]],
         ]),
       )
-      const recent = new RecentTargetsService(groups as never, views as never, stack)
+      const recent = new RecentTargetsService(
+        groups as never,
+        views as never,
+        stack,
+        emptyStorage(),
+        null!,
+      )
       try {
         // Pre-condition: no focus yet → registration order (search registered first).
         expect(recent.getRecentViews().map((v) => v.id)).toEqual([SEARCH_VIEW_ID, EXPLORER_VIEW_ID])

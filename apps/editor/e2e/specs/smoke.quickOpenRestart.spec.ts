@@ -7,13 +7,15 @@
  *      修复前重启后点击会落进 resolver 兜底成空白 FileEditorInput。
  *   2. 历史版本泄漏进 recent files 的虚拟资源条目（universe:/acp/session/<guid>）
  *      启动时被清洗，不再以 guid 标签出现在列表中。
+ *   3. Ctrl+Tab 的最近使用顺序按工作区持久化，重启后重放上次会话的真实顺序，
+ *      而不是退化成「active tab 打头 + tab 顺序」。
  *
  *  实现：照 smoke.editorRestore 的套路直接预写 userData 下的
  *  workspaces/<hash>.json + state.json，独立启动一个 app 实例。
  *--------------------------------------------------------------------------------------------*/
 
 import { test, expect } from '@playwright/test'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -117,6 +119,36 @@ async function launchWithState(userDataDir: string) {
   }
 }
 
+/** The renderer debounces the recency write (200ms) and main persists the value
+ *  before the storage `set()` promise resolves, so waiting for the bucket on
+ *  disk guarantees the second boot below has something to replay. Views the
+ *  session focused are persisted next to the editors, hence the filter. */
+async function waitForPersistedRecency(
+  userDataDir: string,
+  folder: string,
+  order: readonly string[],
+): Promise<void> {
+  const bucket = join(userDataDir, 'workspaces', `${workspaceIdFromFolder(folder)}.json`)
+  await expect
+    .poll(
+      () => {
+        try {
+          const raw = JSON.parse(readFileSync(bucket, 'utf8')) as Record<string, unknown>
+          const entries = raw['workbench.recentTargets']
+          if (!Array.isArray(entries)) return '<none>'
+          return entries
+            .map((entry: { id?: string }) => entry.id?.split('/').pop() ?? '?')
+            .filter((name: string) => order.includes(name))
+            .join(',')
+        } catch {
+          return '<none>'
+        }
+      },
+      { timeout: 15_000 },
+    )
+    .toBe(order.join(','))
+}
+
 test.describe('@p1 quick open across restarts', () => {
   test('a closed non-text editor restores with its exact type; stale virtual recent entries are scrubbed', async () => {
     // Self-launched cold boot: leave room for the graceful-close + force-kill
@@ -172,6 +204,75 @@ test.describe('@p1 quick open across restarts', () => {
         rmSync(userDataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
       } catch {
         /* noop — temp dir cleanup is best-effort */
+      }
+    }
+  })
+
+  // Bug regression: the recency list lived only in memory, so a restart rebuilt
+  // it from the restore order (active tab first, then tab order) and threw the
+  // user's actual order away — Ctrl+Tab looked "reset".
+  test('the Ctrl+Tab recency order survives a restart @regression', async () => {
+    test.setTimeout(120_000)
+    const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-quickopen-mru-'))
+    const workspaceFolder = mkdtempSync(join(tmpdir(), 'universe-editor-ws-'))
+    try {
+      for (const name of ['alpha.ts', 'bravo.ts', 'charlie.ts']) {
+        writeFileSync(join(workspaceFolder, name), `// ${name}\n`)
+      }
+      seedGlobalSession(userDataDir, workspaceFolder)
+
+      // Session one: open in an order that differs from the tab order, so tabs
+      // end up [bravo, charlie, alpha] (alpha active) while the true recency
+      // order is [alpha, charlie, bravo].
+      const first = await launchWithState(userDataDir)
+      try {
+        const workbench = new WorkbenchPO(first.page)
+        for (const name of ['bravo.ts', 'charlie.ts', 'alpha.ts']) {
+          await first.page.evaluate(
+            (p) => window.__E2E__!.openFileUri(p, { pinned: true }),
+            join(workspaceFolder, name).replace(/\\/g, '/'),
+          )
+        }
+        await expect.poll(() => workbench.getActiveEditorUri()).toContain('alpha.ts')
+        await waitForPersistedRecency(userDataDir, workspaceFolder, [
+          'alpha.ts',
+          'charlie.ts',
+          'bravo.ts',
+        ])
+      } finally {
+        await closeApp(first.app)
+      }
+
+      // Session two: the tabs restore in tab order, so the old, memory-only list
+      // would open on [alpha, bravo, charlie]. The recency list must instead
+      // read [alpha, charlie, bravo].
+      const second = await launchWithState(userDataDir)
+      try {
+        const workbench = new WorkbenchPO(second.page)
+        await second.page.keyboard.down('Control')
+        await second.page.evaluate(() => {
+          void window.__E2E__!.runCommand('workbench.action.quickOpenRecentEditor')
+        })
+        await workbench.quickInput.waitForVisible()
+        await second.page.keyboard.up('Control')
+
+        const labels = await workbench.quickInput.dialog.getByRole('option').allTextContents()
+        const idxOf = (name: string) => labels.findIndex((l) => l.includes(name))
+        expect(idxOf('charlie.ts')).toBeGreaterThanOrEqual(0)
+        expect(idxOf('charlie.ts')).toBeLessThan(idxOf('bravo.ts'))
+
+        await second.page.keyboard.press('Escape')
+        await workbench.quickInput.waitForHidden()
+      } finally {
+        await closeApp(second.app)
+      }
+    } finally {
+      for (const dir of [workspaceFolder, userDataDir]) {
+        try {
+          rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+        } catch {
+          /* noop — temp dir cleanup is best-effort */
+        }
       }
     }
   })

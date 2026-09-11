@@ -470,5 +470,14 @@ markdown job（ubuntu，CI run 31295361355）`markdownPreview.spec.ts:205` 与 `
 
 ---
 
+**案例 88 — 新写的「重启后状态仍在」用例 initial 挂/retry 过，failed 在自建 poll 等持久化值：renderer 的 debounce 写还没落盘就 `closeApp`**
+- 信号：`pnpm --filter @universe-editor/editor e2e:regression` 报 `1 flaky`（本地单跑该用例过）；失败点是新建用例自己的 `expect.poll`（等 `<userData>/workspaces/<hash>.json` 里那个 key），message `Expected: "alpha.ts,charlie.ts,bravo.ts" / Received: "alpha.ts,charlie.ts,bravo.ts,workbench.view.explorer.tree"`（`smoke.quickOpenRestart.spec.ts` 新增的 `waitForPersistedRecency`）。
+- 根因两条独立叠加：① **时机**——renderer 持久化普遍 ~200ms debounce（`ClosedEditorsService` / `RecentTargetsService` / `WorkspaceRestoreContribution`）且根服务退出时不 dispose/flush，test body 里改完状态紧接 `closeApp`，写可能没发生、也可能只写了前半；② **断言形态**——对整份持久化数组做严格相等，而同一次会话还会写 view 条目（`workbench.view.explorer.tree`），条目集合自己就在变。
+- 定性：received 里出现**别的类型条目**即说明写链路是通的，只是断言的假设（"数组恰好是这三个文件"）与产品实际内容不符；若恒 `<none>` 才是真没写（那要查 scope：无工作区时 WORKSPACE 读写是 no-op）。
+- 处置：关 app 前轮询 bucket 的**过滤后**取值（先挑出关心的条目再比顺序）。主进程 storage 的 `set()` 会 await 落盘，读到即已持久化。范例 `smoke.quickOpenRestart.spec.ts` 的 `waitForPersistedRecency`。
+- 教训：a) 重启类断言的前提是"写已落盘"，`waitForTimeout(300)` 在并行负载下不够，要轮询真实产物；b) 持久化容器是多功能共享的，断言只挑自己的条目，别对整份容器严格相等；c) 新用例 initial 挂/retry 过**未必**是环境噪声——先看失败点落在断言链哪一环（自建前提 vs 被测行为），本篇就是自己写法的问题。参见案例 87（同形态但确属环境差异）。
+
+---
+
 - `@parcel/watcher` Windows 多 worker 竞态的长期根治（升级 / 换 watcher / 进一步隔离），替代长期 `--workers=1`（案例 12/16/26/44 的 `@serial` 都是它的 workaround）。
 - DnD 用例稳定化（显式等待 drop 完成态），稳定后摘 `@flaky`（案例 46）。

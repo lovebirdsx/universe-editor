@@ -14,6 +14,7 @@ import {
   ViewContainerLocation,
   type IFocusEntry,
   type IFocusStackService,
+  type IStorageService as IStorageServiceType,
   type IViewContainerDescriptor,
   type IViewDescriptor,
   type IViewDescriptorService,
@@ -26,6 +27,7 @@ import {
   encodeEditorPickId,
   encodeViewPickId,
   RecentTargetsService,
+  type IGetRecentTargetsOptions,
 } from '../RecentTargetsService.js'
 
 // ---------------------------------------------------------------------------
@@ -160,10 +162,49 @@ class FakeViewDescriptorService implements Partial<IViewDescriptorService> {
   }
 }
 
+/**
+ * JSON round-tripping IStorageService, so a value that only survives in memory
+ * fails loudly. `swapWorkspaceScope` mimics the main-side backend swap that an
+ * openFolder/closeFolder triggers.
+ */
+class FakeStorage implements IStorageServiceType {
+  declare readonly _serviceBrand: undefined
+  private _data = new Map<string, unknown>()
+  private readonly _scopeEmitter = new Emitter<void>()
+  readonly onDidChangeWorkspaceScope = this._scopeEmitter.event
+  writes = 0
+
+  async get<T>(key: string): Promise<T | undefined> {
+    return this._data.get(key) as T | undefined
+  }
+  async set(key: string, value: unknown): Promise<void> {
+    this.writes++
+    this._data.set(key, JSON.parse(JSON.stringify(value)))
+  }
+  async remove(key: string): Promise<void> {
+    this._data.delete(key)
+  }
+  seed(key: string, value: unknown): void {
+    this._data.set(key, JSON.parse(JSON.stringify(value)))
+  }
+  swapWorkspaceScope(): void {
+    this._data = new Map()
+    this._scopeEmitter.fire()
+  }
+}
+
+const STORAGE_KEY = 'workbench.recentTargets'
+
+/** Persisted entry for an editor, as the service writes it. */
+function persistedEditor(input: EditorInput): { kind: 'editor'; id: string } {
+  return { kind: 'editor', id: input.id }
+}
+
 interface Harness {
   groups: EditorGroupsService
   views: FakeViewDescriptorService
   focus: FakeFocusStackService
+  storage: FakeStorage
   svc: RecentTargetsService
   dispose(): void
 }
@@ -171,6 +212,7 @@ interface Harness {
 function makeService(
   configure?: (views: FakeViewDescriptorService) => void,
   groups = new EditorGroupsService(),
+  storage = new FakeStorage(),
 ): Harness {
   const views = new FakeViewDescriptorService()
   configure?.(views)
@@ -179,11 +221,15 @@ function makeService(
     groups,
     views as unknown as IViewDescriptorService,
     focus as unknown as IFocusStackService,
+    storage,
+    null!,
   )
+  svc._setPersistDebounceMsForTests(0)
   return {
     groups,
     views,
     focus,
+    storage,
     svc,
     dispose: () => {
       svc.dispose()
@@ -192,12 +238,17 @@ function makeService(
   }
 }
 
+/** Lets the storage read (and any debounced write) settle. */
+function flush(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0))
+}
+
 /** Stable identity per target, for order assertions. */
-function keysOf(svc: RecentTargetsService): string[] {
-  return svc.getRecentTargets().map((t) => {
-    return t.kind === 'view'
-      ? encodeViewPickId(t.descriptor.id)
-      : encodeEditorPickId(t.group.id, t.editor.id)
+function keysOf(svc: RecentTargetsService, options?: IGetRecentTargetsOptions): string[] {
+  return svc.getRecentTargets(options).map((t) => {
+    if (t.kind === 'view') return encodeViewPickId(t.descriptor.id)
+    if (t.kind === 'closedEditor') return t.editorId
+    return encodeEditorPickId(t.group.id, t.editor.id)
   })
 }
 
@@ -462,6 +513,279 @@ describe('RecentTargetsService — getRecentViews', () => {
 
     h.views.hideView('explorer', 'tree')
     expect(h.svc.getRecentViews().map((d) => d.id)).toEqual(['timeline'])
+    h.dispose()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Closed editor slots — the Ctrl+P half of the story: a file the user just
+// closed must keep the place it held instead of sinking below views that were
+// touched longer ago, so its slot is reported rather than dropped.
+// ---------------------------------------------------------------------------
+
+describe('RecentTargetsService — closed editor slots', () => {
+  it('stays silent about a closed editor unless the caller asks', () => {
+    const groups = new EditorGroupsService()
+    const a = makeInput('a')
+    const b = makeInput('b')
+    groups.activeGroup.openEditor(a)
+    groups.activeGroup.openEditor(b)
+    const h = makeService(undefined, groups)
+
+    groups.activeGroup.closeEditor(b)
+
+    expect(keysOf(h.svc)).not.toContain(b.id)
+    expect(keysOf(h.svc, { includeClosedEditors: true })).toContain(b.id)
+    h.dispose()
+  })
+
+  it('reports the closed editor at the recency slot it held while open', () => {
+    const groups = new EditorGroupsService()
+    const a = makeInput('a')
+    const b = makeInput('b')
+    const c = makeInput('c')
+    groups.activeGroup.openEditor(a)
+    groups.activeGroup.openEditor(b)
+    groups.activeGroup.openEditor(c)
+    const h = makeService((v) => {
+      v.addContainer(ViewContainerLocation.SideBar, 'explorer', ['tree'])
+    }, groups)
+
+    // Working in the search view, then closing the file that was open before it:
+    // the slot must sit under the new active editor and *above* the older editor,
+    // while the view keeps the recency it earned.
+    h.focus.push({ partId: PartId.SideBar, viewId: 'tree' })
+    groups.activeGroup.closeEditor(c)
+
+    expect(keysOf(h.svc, { includeClosedEditors: true })).toEqual([
+      encodeEditorPickId(groups.activeGroup.id, b.id),
+      encodeViewPickId('tree'),
+      c.id,
+      encodeEditorPickId(groups.activeGroup.id, a.id),
+    ])
+    h.dispose()
+  })
+
+  it('does not report a slot for an editor that is still open in another group', () => {
+    const groups = new EditorGroupsService()
+    const a = makeInput('a')
+    const first = groups.activeGroup
+    first.openEditor(a)
+    const second = groups.addGroup(first, GroupDirection.Right)
+    second.openEditor(a)
+    const h = makeService(undefined, groups)
+
+    first.closeEditor(a)
+
+    expect(keysOf(h.svc)).toEqual([encodeEditorPickId(second.id, a.id)])
+    expect(keysOf(h.svc, { includeClosedEditors: true })).toEqual([
+      encodeEditorPickId(second.id, a.id),
+    ])
+    h.dispose()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Persisted history — the Ctrl+Tab half: the order must survive a workspace
+// restart instead of degrading to the tab order the restore reproduces.
+// ---------------------------------------------------------------------------
+
+/** Restored grid with tabs in `order`, first one active — the tab order a
+ *  restore reproduces, deliberately the reverse of the persisted recency. */
+function restoreGrid(inputs: readonly EditorInput[]): EditorGroupsService {
+  const groups = new EditorGroupsService()
+  const [first, ...rest] = inputs
+  if (first) groups.activeGroup.openEditor(first)
+  for (const input of rest) groups.activeGroup.openEditor(input, { activate: false })
+  return groups
+}
+
+describe('RecentTargetsService — persisted history', () => {
+  it('folds the persisted order in after the grid is restored', async () => {
+    const storage = new FakeStorage()
+    const a = makeInput('a')
+    const b = makeInput('b')
+    const c = makeInput('c')
+    // Last session ended with c most recent, then b, then a.
+    storage.seed(STORAGE_KEY, [persistedEditor(c), persistedEditor(b), persistedEditor(a)])
+
+    const groups = new EditorGroupsService()
+    const h = makeService(undefined, groups, storage)
+    groups.restore(restoreGrid([a, b, c]).toJSON())
+    await flush()
+    h.svc.rebaseAfterRestore()
+
+    const { id } = groups.activeGroup
+    expect(keysOf(h.svc).slice(0, 3)).toEqual([
+      encodeEditorPickId(id, c.id),
+      encodeEditorPickId(id, b.id),
+      encodeEditorPickId(id, a.id),
+    ])
+    h.dispose()
+  })
+
+  it('re-anchors persisted editors to whichever group holds them now', async () => {
+    const storage = new FakeStorage()
+    const a = makeInput('a')
+    storage.seed(STORAGE_KEY, [persistedEditor(a)])
+
+    const groups = new EditorGroupsService()
+    const h = makeService(undefined, groups, storage)
+    groups.restore(restoreGrid([a]).toJSON())
+    await flush()
+    h.svc.rebaseAfterRestore()
+
+    // A live editor, not a dead slot: group ids are a process-global counter, so
+    // the restored group id is not the one the previous session had.
+    expect(h.svc.getRecentTargets({ includeClosedEditors: true })[0]).toMatchObject({
+      kind: 'editor',
+      group: { id: groups.activeGroup.id },
+    })
+    h.dispose()
+  })
+
+  it('leaves the history pending until the grid is restored', async () => {
+    const storage = new FakeStorage()
+    const a = makeInput('a')
+    const b = makeInput('b')
+    storage.seed(STORAGE_KEY, [persistedEditor(b), persistedEditor(a)])
+
+    const groups = new EditorGroupsService()
+    const h = makeService(undefined, groups, storage)
+    await flush()
+    // Folding now would resolve every editor against an empty grid and turn the
+    // whole history into dead slots.
+    expect(keysOf(h.svc, { includeClosedEditors: true })).toEqual([])
+
+    groups.restore(restoreGrid([a, b]).toJSON())
+    h.svc.rebaseAfterRestore()
+
+    const { id } = groups.activeGroup
+    expect(keysOf(h.svc).slice(0, 2)).toEqual([
+      encodeEditorPickId(id, b.id),
+      encodeEditorPickId(id, a.id),
+    ])
+    h.dispose()
+  })
+
+  it('keeps view entries and parks history editors that are gone as dead slots', async () => {
+    const storage = new FakeStorage()
+    const gone = makeInput('gone')
+    storage.seed(STORAGE_KEY, [{ kind: 'view', id: 'tree' }, persistedEditor(gone)])
+
+    const h = makeService(
+      (v) => {
+        v.addContainer(ViewContainerLocation.SideBar, 'explorer', ['tree'])
+      },
+      undefined,
+      storage,
+    )
+    await flush()
+    h.svc.rebaseAfterRestore()
+
+    expect(keysOf(h.svc)).toEqual([encodeViewPickId('tree')])
+    // The slot survives, so a caller listing closed editors can still place it.
+    expect(keysOf(h.svc, { includeClosedEditors: true })).toEqual([
+      encodeViewPickId('tree'),
+      gone.id,
+    ])
+    h.dispose()
+  })
+
+  it('folds once, letting later touches stay ahead of the history', async () => {
+    const storage = new FakeStorage()
+    const a = makeInput('a')
+    const b = makeInput('b')
+    storage.seed(STORAGE_KEY, [persistedEditor(b), persistedEditor(a)])
+
+    const groups = new EditorGroupsService()
+    const h = makeService(undefined, groups, storage)
+    groups.restore(restoreGrid([a, b]).toJSON())
+    await flush()
+    h.svc.rebaseAfterRestore()
+
+    const { id } = groups.activeGroup
+    groups.activeGroup.setActive(b)
+    h.svc.rebaseAfterRestore()
+    h.svc.getRecentViews()
+
+    expect(keysOf(h.svc)).toEqual([encodeEditorPickId(id, b.id), encodeEditorPickId(id, a.id)])
+    h.dispose()
+  })
+
+  it('drops the outgoing workspace history when the storage scope swaps', async () => {
+    const storage = new FakeStorage()
+    const a = makeInput('a')
+    const b = makeInput('b')
+    storage.seed(STORAGE_KEY, [persistedEditor(b), persistedEditor(a)])
+
+    const groups = new EditorGroupsService()
+    const h = makeService(undefined, groups, storage)
+    groups.restore(restoreGrid([a, b]).toJSON())
+    await flush()
+    h.svc.rebaseAfterRestore()
+
+    const { id } = groups.activeGroup
+    expect(keysOf(h.svc).slice(0, 2)).toEqual([
+      encodeEditorPickId(id, b.id),
+      encodeEditorPickId(id, a.id),
+    ])
+
+    storage.swapWorkspaceScope()
+    await flush()
+    h.svc.rebaseAfterRestore()
+
+    // The new workspace has no history of its own: recency starts from the grid.
+    expect(keysOf(h.svc).slice(0, 2)).toEqual([
+      encodeEditorPickId(id, a.id),
+      encodeEditorPickId(id, b.id),
+    ])
+    h.dispose()
+  })
+
+  it('persists recency most-recent-first', async () => {
+    const storage = new FakeStorage()
+    const groups = new EditorGroupsService()
+    const a = makeInput('a')
+    const b = makeInput('b')
+    groups.activeGroup.openEditor(a)
+    groups.activeGroup.openEditor(b)
+    const h = makeService(undefined, groups, storage)
+
+    await flush()
+    groups.activeGroup.setActive(a)
+    await flush()
+
+    expect(await storage.get(STORAGE_KEY)).toEqual([persistedEditor(a), persistedEditor(b)])
+    h.dispose()
+  })
+
+  it('keeps this session’s entries when the history alone fills the bound', async () => {
+    const storage = new FakeStorage()
+    const history = Array.from({ length: 50 }, (_, i) => ({
+      kind: 'editor' as const,
+      id: `test:///old-${i}`,
+    }))
+    storage.seed(STORAGE_KEY, history)
+
+    const groups = new EditorGroupsService()
+    // The service exists before the editors are opened, as it does in the app.
+    const h = makeService(undefined, groups, storage)
+    const fresh = [makeInput('new-0'), makeInput('new-1'), makeInput('new-2')]
+    for (const input of fresh) groups.activeGroup.openEditor(input)
+    await flush()
+
+    const { id } = groups.activeGroup
+    const keys = keysOf(h.svc, { includeClosedEditors: true })
+    expect(keys).toHaveLength(50)
+    expect(keys.slice(0, 3)).toEqual([
+      encodeEditorPickId(id, fresh[2]!.id),
+      encodeEditorPickId(id, fresh[1]!.id),
+      encodeEditorPickId(id, fresh[0]!.id),
+    ])
+    // The oldest history entries are what gives way.
+    expect(keys).toContain('test:///old-46')
+    expect(keys).not.toContain('test:///old-49')
     h.dispose()
   })
 })

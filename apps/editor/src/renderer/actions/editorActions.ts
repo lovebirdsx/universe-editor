@@ -498,6 +498,8 @@ export function buildRecentTargetPickItems(
       items.push(createViewPickItem(target.descriptor, viewDescriptors))
       continue
     }
+    // Closed-editor slots are not switch targets — Ctrl+Tab lists open tabs.
+    if (target.kind !== 'editor') continue
     const { editor, group } = target
     const iconId =
       editor.getIconId?.() ?? (editor.resource ? resourceIconId(editor.resource) : undefined)

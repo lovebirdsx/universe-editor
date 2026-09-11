@@ -344,6 +344,7 @@ class FakeRecentTargetsService implements IRecentTargetsService {
   getRecentViews() {
     return this._views
   }
+  rebaseAfterRestore(): void {}
 }
 
 /** Takes entries from a fixed list: the newest resource match is removed and
@@ -1416,6 +1417,67 @@ describe('FileQuickAccessProvider — closed editor restore', () => {
     expect(groupsFake.openLog[0]!.editor.resource?.toString()).toBe(uri.toString())
     expect(groupsFake.openLog[0]!.options).toMatchObject({ activate: true, pinned: true })
     expect(resolver.opened).toHaveLength(0)
+  })
+
+  // The reported scenario: closing a file dropped it below every view the user
+  // had touched at some point, however long ago. Its recency slot survives the
+  // close, so it must rank by recency like everything else.
+  it('keeps a just-closed editor at its recency slot instead of after the views', async () => {
+    const uri = URI.file('/ws/pic.png')
+    const searchView = makeView('workbench.view.search.main', 'Search')
+    const { provider, fileSearch } = setup({
+      closedEntries: [closedEntry(uri, 1, 'pic.png')],
+      views: [searchView],
+      recentTargetsOrder: [
+        { kind: 'closedEditor', editorId: uri.toString() },
+        { kind: 'view', descriptor: searchView },
+      ],
+    })
+    fileSearch.resultPaths = ['/ws/other.ts']
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    expect(picker.items.map((i) => (i as IQuickPickItem).label)).toEqual(['pic.png', 'Search'])
+  })
+
+  it('skips a recency slot no closed entry backs, leaving the rest in order', async () => {
+    const uri = URI.file('/ws/pic.png')
+    const searchView = makeView('workbench.view.search.main', 'Search')
+    const { provider, fileSearch } = setup({
+      closedEntries: [closedEntry(uri, 1, 'pic.png')],
+      views: [searchView],
+      recentTargetsOrder: [
+        { kind: 'closedEditor', editorId: 'file:///ws/ghost.ts' },
+        { kind: 'closedEditor', editorId: uri.toString() },
+        { kind: 'view', descriptor: searchView },
+      ],
+    })
+    fileSearch.resultPaths = ['/ws/other.ts']
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    expect(picker.items.map((i) => (i as IQuickPickItem).label)).toEqual(['pic.png', 'Search'])
+  })
+
+  it('orders closed editors by recency with no workspace open either', async () => {
+    const uri = URI.file('/ws/pic.png')
+    const searchView = makeView('workbench.view.search.main', 'Search')
+    const { provider } = setup({
+      root: null,
+      closedEntries: [closedEntry(uri, 1, 'pic.png')],
+      views: [searchView],
+      recentTargetsOrder: [
+        { kind: 'closedEditor', editorId: uri.toString() },
+        { kind: 'view', descriptor: searchView },
+      ],
+    })
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    expect(picker.items.map((i) => (i as IQuickPickItem).label)).toEqual(['pic.png', 'Search'])
   })
 
   it('restores the closed image type even while the same file stays open as text', async () => {
