@@ -36,7 +36,7 @@
 | 打开最近打开的项… | `Ctrl+R` |
 | 保存 | `Ctrl+S` |
 | 另存为… | `Ctrl+Shift+S` |
-| 保存全部（Save All） | `Ctrl+Alt+S` |
+| 全部保存（Save All） | `Ctrl+Alt+S` |
 | 打开设置 | `Ctrl+,` |
 
 > 更多见 [快速上手 · 命令面板](../getting-started/command-palette.md) 与 [定制 · 设置](../customization/settings.md)。
