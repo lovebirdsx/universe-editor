@@ -345,6 +345,25 @@ describe('PerforceGraphEditor', () => {
 
     expect(screen.queryByRole('menu')).toBeNull()
   })
+
+  it('offers a force get that carries the whole-repo toggle, with no waivers', async () => {
+    const { commandService, container } = renderEditor()
+    await flush()
+
+    // 4521 is this graph's head — the row whose plain get carries `isLatest`.
+    fireEvent.contextMenu(container.querySelector('[data-id="4521"]')!)
+    await flush()
+
+    fireEvent.click(screen.getByText('Force Get (Overwrite Local Files)'))
+    await flush()
+
+    // Exact equality on purpose: an extra `isLatest`/`confirmed` fails here.
+    expect(commandService.executeCommand).toHaveBeenCalledWith(PerforceGraphCommands.syncToChange, {
+      change: '4521',
+      wholeRepo: false,
+      force: true,
+    })
+  })
 })
 
 describe('PerforceGraphEditor scoped history', () => {
@@ -586,6 +605,28 @@ describe('PerforceGraphEditor merged (multi-select) history', () => {
         ],
       }),
     )
+  })
+
+  it('force get sends no time-travel waivers — even on the newest row', async () => {
+    const { commandService, container } = renderMerged()
+    await flush()
+
+    // 4521 is this graph's head, i.e. the row that would carry `isLatest: true`
+    // on a plain get. Force must not: the extension's force prompt has no waiver.
+    fireEvent.contextMenu(container.querySelector('[data-id="4521"]')!)
+    await flush()
+    fireEvent.click(screen.getByText('Force Get (Overwrite Local Files)'))
+    await flush()
+
+    // Exact equality on purpose: an extra `isLatest`/`confirmed` fails here.
+    expect(commandService.executeCommand).toHaveBeenCalledWith(PerforceGraphCommands.syncToChange, {
+      change: '4521',
+      scopePaths: [
+        { path: 'X:/p4ws/main/a.txt', isDirectory: false },
+        { path: 'X:/p4ws/main/lib', isDirectory: true },
+      ],
+      force: true,
+    })
   })
 
   it('Get Latest Revision reuses the extension multi-select (primary, selection) form', async () => {

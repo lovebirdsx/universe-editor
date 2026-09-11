@@ -187,13 +187,21 @@ export interface P4GraphSyncRequest {
    * already is the user's go-ahead — skip the extra warning.
    */
   confirmed?: boolean
+  /**
+   * Force the get (`p4 sync -f`): re-fetch files Perforce already considers
+   * current, overwriting writable local copies. Destroys uncollected local work,
+   * so the extension always confirms — this flag can only *escalate* what the
+   * user is warned about, never waive a warning.
+   */
+  force?: boolean
 }
 
 /**
  * Contributed-command ids the `perforce` extension registers for the Perforce
  * Graph view. Kept here as the single source of truth for the renderer side.
  * All are read-only except `syncToChange`, which mutates the workspace's have
- * revisions (a `p4 sync`) but never the depot.
+ * revisions (a `p4 sync`) but never the depot; with `force` it is destructive
+ * to local files, not just to the workspace's have state.
  */
 export const PerforceGraphCommands = {
   getRepos: 'perforce-graph.getRepos',

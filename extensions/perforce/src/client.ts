@@ -2813,6 +2813,12 @@ export class PerforceClient {
       this._syncParallelThreads > 0 ? [`--parallel=threads=${this._syncParallelThreads}`] : []
     const args = ['sync', ...parallel, ...(options?.force === true ? ['-f'] : []), ...targets]
     const onProgress = options?.onProgress
+    // The `-f` marker is the only trace of a force-get in the log: a plain get
+    // and a force that both succeed print the same counts, and p4's own command
+    // line never reaches this channel. It goes on every outcome, not just the
+    // summary — "was the run that just clobbered me a force-get?" is asked
+    // about the refusals and the cancels at least as often as the successes.
+    const forceMark = options?.force === true ? ' -f' : ''
     this._suppressExternalChanges()
     // Suspend external-drift handling for the sync's whole lifecycle: its own
     // write flood would otherwise leak past the 5s window (a wide sync far
@@ -2916,7 +2922,7 @@ export class PerforceClient {
             // the view reflects whatever landed before the abort. Whatever p4 already
             // reported as applied IS on disk matching its have revision, so those
             // drift rows are subtracted exactly as on a clean exit.
-            this._log?.('[perforce] sync cancelled by user')
+            this._log?.(`[perforce] sync${forceMark} cancelled by user`)
             // Whatever p4 already reported as applied IS on disk matching its have
             // revision, so those drift rows are subtracted exactly as on a clean
             // exit. Streaming runs collected them on the way through; a buffered run
@@ -2975,7 +2981,7 @@ export class PerforceClient {
             summary.refusedModified === 0 &&
             summary.refusedOverwrite === 0
           ) {
-            this._log?.('[perforce] sync: already up to date')
+            this._log?.(`[perforce] sync${forceMark}: already up to date`)
             return {
               ok: true,
               cancelled: false,
@@ -2993,7 +2999,9 @@ export class PerforceClient {
               ? { ...result, stdout: outcomeLines.join('\n') }
               : result
             const error = classifySyncError(errorInput)
-            this._log?.(`[perforce] sync failed (${error.kind}): ${p4ErrorText(errorInput)}`)
+            this._log?.(
+              `[perforce] sync${forceMark} failed (${error.kind}): ${p4ErrorText(errorInput)}`,
+            )
             await this._refreshAfterMutation()
             this._clearBehindDecorations()
             return {
@@ -3012,8 +3020,12 @@ export class PerforceClient {
               `[perforce] sync: output not parseable, reporting as unknown — ${result.stdout.trim().slice(0, 500)}`,
             )
           }
+          // The `-f` marker is the only trace of a force-get in the summary: a
+          // plain get and a force that both succeed print the same counts, so
+          // without it "which operation overwrote my local copy" has no answer
+          // in the log. p4's own command line never reaches this channel.
           this._log?.(
-            `[perforce] sync ${spec}: ${summary.applied} applied, ${summary.keptOpen} kept open, ` +
+            `[perforce] sync${forceMark} ${spec}: ${summary.applied} applied, ${summary.keptOpen} kept open, ` +
               `${summary.mustResolve} need resolve, ${summary.refusedModified} refused (locally modified), ` +
               `${summary.refusedOverwrite} refused (untracked file in the way)`,
           )

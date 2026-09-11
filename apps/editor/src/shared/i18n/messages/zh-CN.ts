@@ -1061,6 +1061,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'perforceGraph.onClient': ' · {client}',
   'perforceGraph.search.placeholder': '搜索变更…',
   'perforceGraph.client': '工作区',
+  'perforceGraph.forceGet': '强制拉取（覆盖本地文件）',
   'perforceGraph.getLatestRevision': '获取最新修订',
   'perforceGraph.getRevision': '获取修订…',
   'perforceGraph.getThisRevision': '获取此修订',

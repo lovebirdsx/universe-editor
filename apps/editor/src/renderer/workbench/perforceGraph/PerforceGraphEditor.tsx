@@ -51,6 +51,7 @@ import {
   type P4GraphLoadOptions,
   type P4GraphLoadResult,
   type P4GraphRepoDto,
+  type P4GraphSyncRequest,
   type P4GraphSyncScopeDto,
   type ShowCommitChangesPayload,
 } from '@universe-editor/extensions-common'
@@ -740,6 +741,25 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
       e.preventDefault()
       const id = change.id
       if (id === PENDING_ID) return
+      // Both graph kinds get the same destructive entry; only the payload's
+      // scope differs. Built in one place so the label/icon/`danger` and — more
+      // to the point — the absent `isLatest`/`confirmed` cannot drift apart
+      // between the two branches. Those two fields only waive the time-travel
+      // prompt, and the extension's force prompt has no waiver (see
+      // `graphSyncConfirmKind`): sending `isLatest` here would be a silent path
+      // to overwriting local work.
+      const forceGet = (payload: Omit<P4GraphSyncRequest, 'force'>): GitGraphMenuItem => ({
+        kind: 'item',
+        id: 'forceGet',
+        icon: 'cloud-download',
+        danger: true,
+        label: localize('perforceGraph.forceGet', 'Force Get (Overwrite Local Files)'),
+        run: () =>
+          void commands.executeCommand(PerforceGraphCommands.syncToChange, {
+            ...payload,
+            force: true,
+          }),
+      })
       const items: GitGraphMenuItem[] = [
         {
           kind: 'item',
@@ -817,6 +837,11 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
               void commands.executeCommand('perforce.syncLatest', selectionArgs[0], selectionArgs)
             },
           },
+          { kind: 'sep' },
+          forceGet({
+            change: id,
+            scopePaths: paths.map((p) => ({ path: p.path, isDirectory: p.isDirectory })),
+          }),
         )
       }
       // Whole-repo graph: sync the whole client (honouring the scope toggle),
@@ -859,6 +884,8 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
                 })
               })(),
           },
+          { kind: 'sep' },
+          forceGet({ change: id, wholeRepo }),
         )
       }
       setMenu({

@@ -191,13 +191,18 @@
 /* Semantic label colors (`IQuickPickItem.labelColor`): the value is a semantic
    id, mapped here to a theme-aware `--vscode-*` variable so the platform layer
    never hardcodes a hex. Used by pickers that mix item sources and need the
-   user to tell them apart (e.g. perforce force-get: modified vs orphan). */
+   user to tell them apart (e.g. perforce force-get: modified vs orphan), and by
+   pickers that must flag a destructive row (force = overwrites local files). */
 .itemLabelModified {
   color: var(--vscode-picker-modifiedLabel, #e2c08d);
 }
 
 .itemLabelOrphan {
   color: var(--vscode-picker-orphanLabel, #c586c0);
+}
+
+.itemLabelForce {
+  color: var(--vscode-picker-forceLabel, #f48771);
 }
 
 /* When the row has a trailing status column, the label sizes to its content

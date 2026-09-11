@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { clSpecOf, graphSyncNeedsConfirm, resolveCommonClient } from '../graphSync.js'
+import {
+  clSpecOf,
+  graphSyncConfirmKind,
+  graphSyncNeedsConfirm,
+  resolveCommonClient,
+} from '../graphSync.js'
 
 describe('clSpecOf', () => {
   it('builds an @-spec from a bare changelist number', () => {
@@ -51,6 +56,34 @@ describe('graphSyncNeedsConfirm', () => {
 
   it('skips the confirmation when the dialog already confirmed', () => {
     expect(graphSyncNeedsConfirm({ scopePaths: [dir, dir], confirmed: true })).toBe(false)
+  })
+})
+
+describe('graphSyncConfirmKind', () => {
+  const file = { path: 'X:/ws/a.txt', isDirectory: false }
+  const dir = { path: 'X:/ws/src', isDirectory: true }
+
+  // A force-get destroys uncollected local work whether or not it also moves
+  // files in time, so every time-travel waiver must be inert. These four are
+  // the complete set of waivers `graphSyncNeedsConfirm` knows.
+  it('forces the confirmation past every time-travel waiver', () => {
+    expect(graphSyncConfirmKind({ force: true })).toBe('force')
+    expect(graphSyncConfirmKind({ force: true, isLatest: true })).toBe('force')
+    expect(graphSyncConfirmKind({ force: true, confirmed: true })).toBe('force')
+    expect(graphSyncConfirmKind({ force: true, scopePaths: [file] })).toBe('force')
+    expect(graphSyncConfirmKind({ force: true, scopePaths: [dir, dir] })).toBe('force')
+  })
+
+  it('delegates to graphSyncNeedsConfirm when force is absent', () => {
+    expect(graphSyncConfirmKind({ scopePaths: [file] })).toBe('none')
+    expect(graphSyncConfirmKind({ isLatest: true })).toBe('none')
+    expect(graphSyncConfirmKind({ confirmed: true })).toBe('none')
+    expect(graphSyncConfirmKind({ scopePaths: [dir] })).toBe('timeTravel')
+    expect(graphSyncConfirmKind({})).toBe('timeTravel')
+  })
+
+  it('treats an explicit false as absent', () => {
+    expect(graphSyncConfirmKind({ force: false, scopePaths: [file] })).toBe('none')
   })
 })
 

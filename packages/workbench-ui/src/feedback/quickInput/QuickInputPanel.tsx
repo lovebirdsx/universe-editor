@@ -167,6 +167,7 @@ function isSelectable(item: QuickPickInput<IQuickPickItem> | undefined): item is
 function labelColorClass(labelColor: string | undefined): string {
   if (labelColor === 'modified') return styles['itemLabelModified'] ?? ''
   if (labelColor === 'orphan') return styles['itemLabelOrphan'] ?? ''
+  if (labelColor === 'force') return styles['itemLabelForce'] ?? ''
   return ''
 }
 

@@ -412,6 +412,45 @@ describe('QuickPickPanel prefix mode', () => {
   })
 })
 
+// `labelColor` is a semantic id, mapped to a CSS class by the panel. The set is
+// closed: an id nobody maps must render uncolored rather than throw or borrow
+// another row's color (the extension side keeps its own ids in sync with these).
+describe('QuickPickPanel label colors', () => {
+  const LABEL = 'Force-get: latest revision'
+  const COLOR_CLASSES = ['itemLabelModified', 'itemLabelOrphan', 'itemLabelForce']
+
+  const colorState = (labelColor: string) =>
+    makeState({
+      prefix: undefined,
+      items: [{ id: 'row', label: LABEL, labelColor }],
+    })
+
+  // The color sits on the label span, not on the row: the row also carries
+  // selection/hover classes, and those must not be overridden by a tint.
+  const labelClassOf = () => screen.getByText(LABEL).className
+
+  it('maps each known semantic id to its own class', () => {
+    const expected: Record<string, string> = {
+      modified: 'itemLabelModified',
+      orphan: 'itemLabelOrphan',
+      force: 'itemLabelForce',
+    }
+    for (const [id, className] of Object.entries(expected)) {
+      const { unmount } = render(
+        <QuickPickPanel state={colorState(id)} onClose={() => undefined} />,
+      )
+      expect(labelClassOf()).toContain(className)
+      unmount()
+    }
+  })
+
+  it('leaves an unmapped id uncolored instead of picking a class at random', () => {
+    render(<QuickPickPanel state={colorState('no-such-color')} onClose={() => undefined} />)
+    const className = labelClassOf()
+    for (const cls of COLOR_CLASSES) expect(className).not.toContain(cls)
+  })
+})
+
 describe('QuickPickPanel keyboard', () => {
   it('Enter selects the focused item and invokes onAccept + onClose', () => {
     const onAccept = vi.fn()

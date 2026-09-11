@@ -630,6 +630,12 @@ export const UNIVERSE_COLOR_DEFINITIONS: readonly UniverseColorDefinition[] = [
     'Label color for quick-pick items flagged `orphan` (untracked file occupying a path).',
   ),
   d(
+    'picker.forceLabel',
+    '#f48771',
+    '#d1242f',
+    'Label color for quick-pick items flagged `force` (a force-get that overwrites local files).',
+  ),
+  d(
     'inputValidation.errorBorder',
     '#be1100',
     '#be1100',

@@ -66,7 +66,15 @@ import {
   type SyncScopeTarget,
 } from './p4Filespec.js'
 import { carveReconcileFilespecs, carveReconcileTargets } from './reconcileCarve.js'
-import { clSpecOf, graphSyncNeedsConfirm, resolveCommonClient } from './graphSync.js'
+import { clSpecOf, graphSyncConfirmKind, resolveCommonClient } from './graphSync.js'
+import {
+  effectiveSyncScope,
+  forceConfirmMessage,
+  scopeTextOf,
+  syncPickItems,
+  syncPromptOf,
+  syncSpecOf,
+} from './syncSpec.js'
 import { resolveFocusScope, resolveExcludeDirs } from './focusScope.js'
 import { registerSwarmCommands } from './swarm/swarmCommands.js'
 import { createSwarmLogger } from './swarm/swarmLog.js'
@@ -279,18 +287,24 @@ export function refusedSyncButtons(state: {
   return out
 }
 
-/** Confirm a `p4 sync -f`. It re-fetches files p4 believes are already current
- *  and overwrites writable local copies, so it can silently discard uncollected
- *  work — it never runs without the user saying so a second time. */
-async function confirmForceGet(): Promise<boolean> {
+/**
+ * Confirm a `p4 sync -f`, the one get that destroys local work.
+ *
+ * A force can carry both destructiveness layers at once — it re-fetches files p4
+ * believes are already current, overwriting writable local copies *and* moving
+ * files that are not open for edit back or forward in time — so the body spells
+ * out both rather than stacking two modals for a single click. Every force path
+ * (the picker's forced rows, the post-refusal remedy, the graph rows) asks here,
+ * and the remedy passes the very spec and scope the refused run used: a
+ * confirmation never widens what the user already agreed to.
+ *
+ * `scopeText` names what is about to be re-fetched. It matters most when the
+ * scope is the entire client (`//...`): seeing that in the dialog is the user's
+ * only chance to notice the click re-transfers the world.
+ */
+async function confirmForceGet(spec: string, scopeText: string): Promise<boolean> {
   const BTN_FORCE = localize('perforce.btn.forceSync', 'Force Get')
-  const confirm = await window.showWarningMessage(
-    localize(
-      'perforce.sync.forceConfirm',
-      'Force-get overwrites local files even when Perforce thinks they are current. Uncollected changes in them will be lost. This cannot be undone.',
-    ),
-    BTN_FORCE,
-  )
+  const confirm = await window.showWarningMessage(forceConfirmMessage(spec, scopeText), BTN_FORCE)
   return confirm === BTN_FORCE
 }
 
@@ -351,70 +365,26 @@ async function pickForceGetFiles(
 }
 
 /**
- * The four ways P4V lets you name a revision, as a quick-pick. Returns the p4
- * revision suffix to append to each filespec, or undefined when cancelled.
+ * The ways P4V lets you name a revision, as a quick-pick — each offered plain
+ * and forced. Returns the p4 revision suffix to append to each filespec plus
+ * whether this run must force, or undefined when cancelled.
  *
- * `#head` is separate from the plain "latest" command because this one can also
- * force; the other three ask for a value.
+ * The rows come from `syncSpec.ts` (pure, unit-tested); this only drives the
+ * dialogs. A forced row asks the same value prompt its plain twin does — the
+ * only difference downstream is the confirmation and the `-f`.
  */
 async function pickSyncSpec(): Promise<{ spec: string; force: boolean } | undefined> {
-  const picks = [
-    {
-      id: 'head',
-      label: localize('perforce.syncPick.head', 'Latest revision'),
-      description: '#head',
-    },
-    {
-      id: 'changelist',
-      label: localize('perforce.syncPick.changelist', 'As of a changelist…'),
-      description: '@12345',
-    },
-    {
-      id: 'date',
-      label: localize('perforce.syncPick.date', 'As of a date…'),
-      description: '@2026/08/01',
-    },
-    {
-      id: 'rev',
-      label: localize('perforce.syncPick.rev', 'A specific revision…'),
-      description: '#4',
-    },
-    {
-      id: 'force',
-      label: localize('perforce.syncPick.force', 'Force-get latest (overwrite local files)'),
-      description: '#head -f',
-    },
-  ]
-  const choice = await window.showQuickPick(picks, {
-    placeHolder: localize('perforce.syncPick.placeholder', 'Which revision do you want?'),
+  const choice = await window.showQuickPick(syncPickItems(), {
+    placeHolder: localize(
+      'perforce.syncPick.placeholder',
+      'Which revision do you want? (Red rows force-get and overwrite local files.)',
+    ),
   })
   if (!choice) return undefined
-  if (choice.id === 'head') return { spec: '#head', force: false }
-  if (choice.id === 'force') return { spec: '#head', force: true }
-
-  const prompts: Record<string, { prompt: string; placeHolder: string }> = {
-    changelist: {
-      prompt: localize('perforce.syncPrompt.changelist', 'Changelist number'),
-      placeHolder: '12345',
-    },
-    date: {
-      prompt: localize('perforce.syncPrompt.date', 'Date (yyyy/mm/dd, optionally with time)'),
-      placeHolder: '2026/08/01',
-    },
-    rev: {
-      prompt: localize('perforce.syncPrompt.rev', 'Revision number'),
-      placeHolder: '4',
-    },
-  }
-  const ask = prompts[choice.id]
-  if (!ask) return undefined
-  const raw = await window.showInputBox(ask)
-  const value = raw?.trim()
-  if (!value) return undefined
-  // `@` selects "the state as of", `#` selects a numbered revision — a leading
-  // sigil the user typed themselves is honoured rather than doubled.
-  if (/^[@#]/.test(value)) return { spec: value, force: false }
-  return { spec: choice.id === 'rev' ? `#${value}` : `@${value}`, force: false }
+  const ask = syncPromptOf(choice.kind)
+  const spec = syncSpecOf(choice.kind, ask ? await window.showInputBox(ask) : undefined)
+  if (spec === undefined) return undefined
+  return { spec, force: choice.force }
 }
 
 /**
@@ -960,7 +930,13 @@ export async function activate(context: ExtensionContext): Promise<void> {
           ? await window.showErrorMessage(message, BTN_COLLECT)
           : await window.showErrorMessage(message, BTN_COLLECT, BTN_FORCE)
         if (picked === BTN_COLLECT) await collectScope()
-        else if (picked === BTN_FORCE && (await confirmForceGet())) {
+        else if (
+          picked === BTN_FORCE &&
+          (await confirmForceGet(
+            spec,
+            scopeTextOf(effectiveSyncScope(options.scope, target.syncScopes)),
+          ))
+        ) {
           await runSync(target, spec, { ...options, force: true })
         }
         return
@@ -1326,17 +1302,19 @@ export async function activate(context: ExtensionContext): Promise<void> {
       )
     }),
 
-    // Get a specific revision: four ways to name one, matching what P4V offers.
+    // Get a specific revision: four ways to name one, each also available as a
+    // force-get, matching what P4V offers.
     commands.registerCommand('perforce.sync', async (...args: unknown[]) => {
       const selection = selectionTargets(args[1])
       if (selection.length > 0) {
         const owner = await syncSelectionOwner(selection)
         if (!owner) return
+        const filespecs = buildSyncFilespecs(selection)
         const spec = await pickSyncSpec()
         if (spec === undefined) return
-        if (spec.force && !(await confirmForceGet())) return
+        if (spec.force && !(await confirmForceGet(spec.spec, scopeTextOf(filespecs)))) return
         await runSync(owner, spec.spec, {
-          scope: buildSyncFilespecs(selection),
+          scope: filespecs,
           scopeTargets: selection,
           ...(spec.force ? { force: true } : {}),
         })
@@ -1348,16 +1326,24 @@ export async function activate(context: ExtensionContext): Promise<void> {
         : (mgr.resolveClient(args[0]) ?? mgr.active)
       if (!target) return
       const single = path ? singleSyncTarget(args[0], path) : undefined
-      const spec = await pickSyncSpec()
-      if (spec === undefined) return
-      if (spec.force && !(await confirmForceGet())) return
-      await runSync(target, spec.spec, {
-        ...(single !== undefined
+      const scoped =
+        single !== undefined
           ? {
               scope: [buildScopeFilespec(single.path, single.isDirectory)],
               scopeTargets: [single],
             }
-          : {}),
+          : undefined
+      const spec = await pickSyncSpec()
+      if (spec === undefined) return
+      if (spec.force) {
+        // The dialog names the range this get will really cover. A scope-less get
+        // falls through to the client's configured scope, so name that rather
+        // than leaving the user to guess what "no scope" meant.
+        const scopeText = scopeTextOf(effectiveSyncScope(scoped?.scope, target.syncScopes))
+        if (!(await confirmForceGet(spec.spec, scopeText))) return
+      }
+      await runSync(target, spec.spec, {
+        ...(scoped !== undefined ? scoped : {}),
         ...(spec.force ? { force: true } : {}),
       })
     }),
@@ -2405,13 +2391,31 @@ export async function activate(context: ExtensionContext): Promise<void> {
             filespecs = [req.wholeRepo ? '//...' : workspaceScope]
           }
 
-          if (
-            graphSyncNeedsConfirm({
-              ...(scopes !== undefined ? { scopePaths: scopes } : {}),
-              ...(req.isLatest !== undefined ? { isLatest: req.isLatest } : {}),
-              ...(req.confirmed !== undefined ? { confirmed: req.confirmed } : {}),
-            })
-          ) {
+          const scopeList = filespecs.join(', ')
+          if (filespecs.length === 0) {
+            // `_syncTargets` falls back to the configured sync scope when the
+            // list is empty, so an empty list would silently widen this get from
+            // "the requested paths" to `//...` — and under `force` that means
+            // overwriting uncollected work across the whole client, with a
+            // confirmation dialog naming no scope at all. Refuse rather than let
+            // the fallback reinterpret what the user asked for.
+            await window.showErrorMessage(
+              localize(
+                'perforce.graphSync.emptyScope',
+                'No sync scope: the request carried no usable path.',
+              ),
+            )
+            return
+          }
+          const confirmKind = graphSyncConfirmKind({
+            ...(scopes !== undefined ? { scopePaths: scopes } : {}),
+            ...(req.isLatest !== undefined ? { isLatest: req.isLatest } : {}),
+            ...(req.confirmed !== undefined ? { confirmed: req.confirmed } : {}),
+            ...(req.force !== undefined ? { force: req.force } : {}),
+          })
+          if (confirmKind === 'force') {
+            if (!(await confirmForceGet(spec, scopeTextOf(filespecs)))) return
+          } else if (confirmKind === 'timeTravel') {
             const BTN_SYNC = localize('perforce.btn.confirmSync', 'Confirm Sync')
             const BTN_CANCEL = localize('perforce.btn.cancel', 'Cancel')
             const picked = await window.showWarningMessage(
@@ -2425,15 +2429,18 @@ export async function activate(context: ExtensionContext): Promise<void> {
             )
             if (picked !== BTN_SYNC) return
           }
-          const scopeList = filespecs.join(', ')
+          // Provenance for the graph's gets: the client logs every sync's counts
+          // (and the `-f` marker), but only this line says the get came from a
+          // graph row and which scope it asked for.
           log(
-            `[perforce] graph sync ${scopeList.slice(0, 500)}${
+            `[perforce] graph sync${req.force === true ? ' -f' : ''} ${scopeList.slice(0, 500)}${
               scopeList.length > 500 ? `… (${filespecs.length} filespecs)` : ''
             } to ${spec}`,
           )
           await runSync(target, spec, {
             scope: filespecs,
             ...(scopes !== undefined && scopes.length > 0 ? { scopeTargets: scopes } : {}),
+            ...(req.force === true ? { force: true } : {}),
           })
         }),
         // The top-level directories of the graph client's root, for the

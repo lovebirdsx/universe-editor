@@ -368,6 +368,7 @@ describe('PerforceGraphEditor Ctrl+Enter context menu', () => {
       'Send to Agent Chat',
       'Get This Revision',
       'Get Revision…',
+      'Force Get (Overwrite Local Files)',
     ])
   })
 

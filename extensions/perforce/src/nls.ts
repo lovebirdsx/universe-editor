@@ -103,18 +103,21 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.mergeEditor.theirs': '对方的版本',
   'perforce.mergeEditor.theirsRev': '对方的版本（head #{0}）',
   // sync（拉取版本）
-  'perforce.syncPick.placeholder': '要拉取哪个版本？',
+  'perforce.syncPick.placeholder': '要拉取哪个版本？（红色项为强制拉取，会覆盖本地文件）',
   'perforce.syncPick.head': '最新版本',
   'perforce.syncPick.changelist': '指定 changelist 时的版本…',
   'perforce.syncPick.date': '指定日期时的版本…',
   'perforce.syncPick.rev': '指定修订号…',
-  'perforce.syncPick.force': '强制拉取最新版本（覆盖本地文件）',
+  'perforce.syncPick.forceHead': '强制拉取：最新版本',
+  'perforce.syncPick.forceChangelist': '强制拉取：指定 changelist 时的版本…',
+  'perforce.syncPick.forceDate': '强制拉取：指定日期时的版本…',
+  'perforce.syncPick.forceRev': '强制拉取：指定修订号…',
   'perforce.syncPrompt.changelist': 'Changelist 编号',
   'perforce.syncPrompt.date': '日期（yyyy/mm/dd，可带时间）',
   'perforce.syncPrompt.rev': '修订号',
   'perforce.btn.forceSync': '强制拉取',
   'perforce.sync.forceConfirm':
-    '强制拉取会覆盖本地文件，即使 Perforce 认为它们已是最新。其中未收集的改动（包括未被跟踪的同名文件）将丢失，且此操作不可撤销。',
+    '强制拉取会覆盖本地文件——即使 Perforce 认为它们已是最新，其中未收集的改动（包括未被跟踪的同名文件）将丢失。目标版本：{0}；未签出的文件会被重置到该版本。范围：{1}。此操作不可撤销。',
   'perforce.sync.forcePickTitle':
     '强制拉取将用 depot 版本覆盖勾选的文件，其中未收集的本地修改与未被跟踪的占位文件将丢失，且不可撤销。（黄色 = 有本地修改，紫色 = 未被跟踪的同名文件）',
   'perforce.sync.forcePickOk': '强制拉取所选 ({0})',
@@ -158,6 +161,7 @@ const ZH_CN: Readonly<Record<string, string>> = {
     '所选路径不属于同一个 Perforce 工作区，无法同步到该变更列表。',
   'perforce.graphSync.timeTravelConfirm':
     '未打开编辑的文件将回到变更列表 {0} 时的状态；已签出的文件受服务器保护，不受影响。',
+  'perforce.graphSync.emptyScope': '没有可用的同步范围：请求未携带任何有效路径。',
   'perforce.btn.confirmSync': '确认同步',
   'perforce.btn.cancel': '取消',
   // 他人占用（Explorer 灰字）

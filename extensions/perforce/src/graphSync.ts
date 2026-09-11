@@ -43,6 +43,26 @@ export function graphSyncNeedsConfirm(input: GraphSyncConfirmInput): boolean {
   return first === undefined ? true : first.isDirectory
 }
 
+/** Which dialog a graph get must show before it runs. */
+export type GraphSyncConfirm = 'none' | 'timeTravel' | 'force'
+
+/**
+ * Force outranks every other reason to confirm. A forced get destroys
+ * uncollected local work whether or not it also moves files in time, and its
+ * own dialog spells out both — so the three time-travel waivers (a single file,
+ * the latest row, the multi-directory dialog's confirm) cannot waive it.
+ *
+ * `force` is deliberately NOT part of {@link GraphSyncConfirmInput}: passing it
+ * to `graphSyncNeedsConfirm` is a type error, so nobody can read "no time-travel
+ * warning" as "no warning at all".
+ */
+export function graphSyncConfirmKind(
+  input: GraphSyncConfirmInput & { readonly force?: boolean },
+): GraphSyncConfirm {
+  if (input.force === true) return 'force'
+  return graphSyncNeedsConfirm(input) ? 'timeTravel' : 'none'
+}
+
 /**
  * Resolve every path to one owning client (longest-prefix data-query semantics,
  * no active-client fallback). Returns the common owner, or undefined when the

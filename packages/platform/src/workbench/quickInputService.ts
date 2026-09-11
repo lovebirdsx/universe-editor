@@ -40,11 +40,13 @@ export interface IQuickPickItem {
   readonly highlights?: IQuickPickItemHighlights
   /**
    * Optional semantic color for the item's label text. The value is a semantic
-   * id (e.g. `'modified'` / `'orphan'`), NOT a concrete color — the renderer
-   * maps it to a theme-aware CSS class (`var(--vscode-*)`), keeping the platform
-   * layer free of hardcoded colors. Used by pickers that mix item sources and
-   * need the user to tell them apart at a glance (e.g. the perforce force-get
-   * picker: modified files vs untracked orphans).
+   * id (e.g. `'modified'` / `'orphan'` / `'force'`), NOT a concrete color — the
+   * renderer maps it to a theme-aware CSS class (`var(--vscode-*)`), keeping the
+   * platform layer free of hardcoded colors. Used by pickers that mix item
+   * sources and need the user to tell them apart at a glance (e.g. the perforce
+   * force-get picker: modified files vs untracked orphans), or that must flag a
+   * destructive row off from the rest of the list (perforce's `force` rows, which
+   * overwrite local files).
    */
   readonly labelColor?: string
   /**
