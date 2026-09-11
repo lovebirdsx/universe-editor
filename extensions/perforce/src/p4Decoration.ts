@@ -98,6 +98,10 @@ export function toShelvedResourceState(
   return {
     resourceUri: file.depotFile,
     contextValue: 'S',
+    // A depot path, not a file on disk — the host must not offer Open File /
+    // Open Preview for this row. They used to be gated by `scmResourceState != S`
+    // in the manifest; the host owns those actions now, so the row has to say so.
+    noHostFile: true,
     decorations: {
       tooltip: `Shelved · ${style.tooltip}`,
       color: style.color,

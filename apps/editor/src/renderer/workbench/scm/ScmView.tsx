@@ -28,7 +28,6 @@ import {
 } from 'react'
 import {
   ICommandService,
-  IEditorResolverService,
   IStorageService,
   autorun,
   CommandsRegistry,
@@ -58,10 +57,11 @@ import {
 } from '@universe-editor/workbench-ui'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { FileIcon } from '../files/fileIconTheme.js'
-import { ResourcePreviewButton } from '../files/ResourcePreviewButton.js'
 import { resolveIcon } from '../icons/icon-map.js'
 import { readDroppedResources } from '../../services/dnd/resourceDropTransfer.js'
+import { isPreviewableResource } from '../../services/resourcePreview/resourcePreviewSupport.js'
 import { scmHostPath } from '../../services/scm/scmHostPath.js'
+import type { ScmResourceArg } from '../../services/scm/scmResourceArg.js'
 import { useService, useObservable } from '../useService.js'
 import { useViewFocusable } from '../useViewFocusable.js'
 import { useRemoteAuthority } from '../useRemoteAuthority.js'
@@ -73,9 +73,9 @@ import {
 import {
   ActionButton,
   TitleOverflowMenu,
+  hoverRowActions,
   menuActions,
   useMenuRevision,
-  type ActionItem,
   type OverflowRow,
   type ViewMode,
 } from './scmShared.js'
@@ -97,16 +97,6 @@ interface PrimaryCommitAction {
   readonly label: string
   readonly command: string
   readonly disabled: boolean
-}
-
-/** Payload a file-row command receives: the resource DTO fields the extension host
- *  reads (`resourceUri` / `contextValue`) plus the group id the row lives in, so
- *  group-scoped file commands (unshelve/delete a single shelved file) can resolve
- *  their changelist. Used both for the clicked primary arg and each selected row. */
-interface ScmResourceArg {
-  readonly resourceUri: string
-  readonly contextValue?: string
-  readonly scmResourceGroupId: string
 }
 
 /** Command payload for a file row: its path, optional status letter, and owning
@@ -437,21 +427,36 @@ const ScmFileRow = memo(function ScmFileRow({
   getSelectedResources: () => readonly ScmResourceArg[]
 }) {
   const commandService = useService(ICommandService)
-  const editorResolverService = useService(IEditorResolverService)
   const resource = node.resource
+  const authority = useRemoteAuthority()
+  const uri = useMemo(
+    () => fsPathToWorkspaceUri(resource.resourceUri, authority),
+    [resource.resourceUri, authority],
+  )
+  // Previewability depends on the extension alone, so the scope carries the
+  // boolean: workspace hydration hands `uri` a new identity, and keying the
+  // scope on it would re-resolve every row's actions for nothing. A row that
+  // names no host file can be previewed no more than it can be opened — its
+  // path is a depot path, so the preview would resolve to nothing.
+  const previewable = !resource.noHostFile && isPreviewableResource(uri)
   const rowScope = useMemo(
     () => ({
       scmProvider: providerId,
       scmResourceGroup: node.groupId,
       scmResourceState: resource.contextValue,
+      scmResourcePreviewable: previewable,
+      scmResourceHasHostFile: resource.noHostFile !== true,
     }),
-    [providerId, node.groupId, resource.contextValue],
+    [providerId, node.groupId, resource.contextValue, previewable, resource.noHostFile],
   )
-  const inline = useMemo(
-    () => menuActions(MenuId.ScmResourceStateContext, rowScope, 'inline'),
+  // The row's whole menu, not just one group: the hover strip leads with the
+  // host's open commands, which the right-click menu groups under `1_open`.
+  const rowActions = useMemo(
+    () => menuActions(MenuId.ScmResourceStateContext, rowScope),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [rowScope, revision],
   )
+  const inline = useMemo(() => hoverRowActions(rowActions), [rowActions])
 
   const run = (command: string): void => {
     // The clicked row is the primary arg (kept back-compatible: it still carries
@@ -496,21 +501,6 @@ const ScmFileRow = memo(function ScmFileRow({
       })
   }
 
-  const authority = useRemoteAuthority()
-  const uri = useMemo(
-    () => fsPathToWorkspaceUri(resource.resourceUri, authority),
-    [resource.resourceUri, authority],
-  )
-  const openFile = (): void => {
-    void editorResolverService.openEditor(uri, { pinned: true })
-  }
-  const openFileAction: ActionItem = {
-    id: 'scm.openFile',
-    title: localize('scm.openFile', 'Open File'),
-    command: '',
-    icon: 'go-to-file',
-  }
-
   return (
     <li
       data-row-key={node.id}
@@ -532,14 +522,6 @@ const ScmFileRow = memo(function ScmFileRow({
       </span>
       {node.dir ? <span className={styles['resourceDir']}>{node.dir}</span> : null}
       <span className={styles['resourceActions']}>
-        <ResourcePreviewButton resource={uri} />
-        <ActionButton
-          action={openFileAction}
-          onRun={(e) => {
-            e.stopPropagation()
-            openFile()
-          }}
-        />
         {inline.map((a) => (
           <ActionButton
             key={a.id}

@@ -20,13 +20,16 @@ import {
   REMOTE_SCHEME,
   ServiceCollection,
   URI,
-  type ICommandService as ICommandServiceType,
+  registerAction2,
+  type IDisposable,
   type IEditorGroupsService as IEditorGroupsServiceType,
   type IEditorResolverService as IEditorResolverServiceType,
   type IStorageService as IStorageServiceType,
   type IWorkspaceService as IWorkspaceServiceType,
 } from '@universe-editor/platform'
 import { ScmView } from '../ScmView.js'
+import { ScmOpenFileAction, ScmOpenPreviewAction } from '../../../actions/scmResourceActions.js'
+import { CommandService } from '../../../services/command/CommandService.js'
 import { IScmService, ScmService } from '../../../services/extensions/ScmService.js'
 import { ServicesContext } from '../../useService.js'
 
@@ -46,9 +49,7 @@ const REMOTE_FILE = `${REMOTE_ROOT}/src/a.ts`
 
 function setup() {
   const scm = new ScmService()
-  const executeCommand = vi.fn().mockResolvedValue(undefined)
   const openEditor = vi.fn().mockResolvedValue(undefined)
-  const stubCommand: ICommandServiceType = { _serviceBrand: undefined, executeCommand }
   const stubEditorResolver: IEditorResolverServiceType = {
     _serviceBrand: undefined,
     registerEditor: () => ({ dispose() {} }),
@@ -72,7 +73,6 @@ function setup() {
   }
   const services = new ServiceCollection()
   services.set(IScmService, scm)
-  services.set(ICommandService, stubCommand)
   services.set(IEditorGroupsService, {
     _serviceBrand: undefined,
     activeGroup: { openEditor() {}, closeEditor() {}, indexOf: () => -1 },
@@ -81,6 +81,11 @@ function setup() {
   services.set(IEditorResolverService, stubEditorResolver)
   services.set(IWorkspaceService, stubWorkspace)
   const inst = new InstantiationService(services)
+  // The row's Open File button is a real command now: the hover strip renders the
+  // same menu contribution the right-click menu does, so the click has to reach
+  // the action through the command service rather than call the resolver directly.
+  services.set(ICommandService, new CommandService(inst))
+  registrations.push(registerAction2(ScmOpenFileAction), registerAction2(ScmOpenPreviewAction))
   render(
     <ServicesContext.Provider value={inst}>
       <ScmView />
@@ -89,7 +94,12 @@ function setup() {
   return { scm, openEditor }
 }
 
-afterEach(() => cleanup())
+let registrations: IDisposable[] = []
+afterEach(() => {
+  registrations.forEach((d) => d.dispose())
+  registrations = []
+  cleanup()
+})
 
 describe('ScmView — remote workspace source-file open', () => {
   it('opens the file row with a remote-ssh URI (authority reattached, not file://)', async () => {

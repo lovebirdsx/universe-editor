@@ -14,6 +14,7 @@ import { describe, expect, it } from 'vitest'
 interface MenuItem {
   command?: string
   when?: string
+  group?: string
 }
 
 const manifest = JSON.parse(
@@ -39,6 +40,23 @@ describe('perforce.openChange contribution', () => {
   it('stays available as an SCM row command', () => {
     expect(menu('scm/resourceState/context').map((item) => item.command)).toContain(
       'perforce.openChange',
+    )
+  })
+
+  // The host owns Open File / Open Preview for every provider's rows now, so a
+  // provider-level entry would render a second, identical "Open File".
+  it('leaves Open File to the host', () => {
+    expect(menu('scm/resourceState/context').map((item) => item.command)).not.toContain(
+      'perforce.openFile',
+    )
+  })
+
+  it('keeps View File History after the host open entries', () => {
+    expect(menu('scm/resourceState/context')).toContainEqual(
+      expect.objectContaining({
+        command: 'perforce-graph.viewFileHistory',
+        group: '1_open@4',
+      }),
     )
   })
 })

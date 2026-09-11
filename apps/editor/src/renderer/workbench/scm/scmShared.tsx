@@ -35,6 +35,7 @@ import {
   type IContext,
 } from '@universe-editor/platform'
 import { resolveIcon } from '../icons/icon-map.js'
+import { SCM_HOVER_LEADING_COMMANDS } from '../../services/scm/scmRowCommands.js'
 import styles from './ScmView.module.css'
 
 export type ViewMode = 'list' | 'tree'
@@ -98,6 +99,27 @@ export function menuActions(
     })
   }
   return out
+}
+
+/**
+ * The actions a row's hover strip renders, picked out of the full menu for the
+ * location: the `inline` group, led by the host-owned open commands. Those are
+ * contributed to the right-click menu's `1_open` group (VSCode orders "open"
+ * first) rather than to `inline`, so the strip has to name them — see
+ * SCM_HOVER_LEADING_COMMANDS. Selecting by command id keeps a single menu
+ * contribution behind both surfaces instead of the two definitions that used to
+ * drift apart.
+ *
+ * `all` arrives sorted for the menu, where the group's own `order` decides; the
+ * leading pair is ordered by the constant instead, so the strip does not depend
+ * on a menu ordering it isn't rendered in.
+ */
+export function hoverRowActions(all: readonly ActionItem[]): ActionItem[] {
+  const byCommand = new Map(all.map((a) => [a.command, a]))
+  const leading = SCM_HOVER_LEADING_COMMANDS.map((id) => byCommand.get(id)).filter(
+    (a): a is ActionItem => a !== undefined,
+  )
+  return [...leading, ...all.filter((a) => a.group === 'inline')]
 }
 
 /** Icon button that falls back to its title text when no icon is mapped. While

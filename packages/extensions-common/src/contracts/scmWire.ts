@@ -32,6 +32,9 @@ export interface ISourceControlResourceStateDto {
   contextValue?: string
   command?: ICommandDto
   decorations?: ISourceControlResourceDecorationsDto
+  /** `resourceUri` names something other than a host file — see
+   *  `SourceControlResourceState.noHostFile` in `@universe-editor/extension-api`. */
+  noHostFile?: boolean
 }
 
 /** Mutable provider-level features pushed on change. */

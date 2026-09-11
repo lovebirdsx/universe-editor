@@ -6,7 +6,7 @@
  *  list/tree stayed permanently empty.
  *--------------------------------------------------------------------------------------------*/
 
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { StrictMode } from 'react'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import {
@@ -17,19 +17,24 @@ import {
   IEditorGroupsService,
   IEditorResolverService,
   IStorageService,
+  IWorkspaceService,
   InstantiationService,
   MenuId,
   MenuRegistry,
   ServiceCollection,
+  registerAction2,
   type IDisposable,
   type ICommandService as ICommandServiceType,
   type IEditorGroupsService as IEditorGroupsServiceType,
   type IEditorResolverService as IEditorResolverServiceType,
   type IStorageService as IStorageServiceType,
+  type IWorkspaceService as IWorkspaceServiceType,
 } from '@universe-editor/platform'
 import { ScmView } from '../ScmView.js'
+import { ScmOpenFileAction, ScmOpenPreviewAction } from '../../../actions/scmResourceActions.js'
 import { MarkdownPreviewInput } from '../../../services/editor/MarkdownPreviewInput.js'
 import { HtmlPreviewInput } from '../../../services/editor/HtmlPreviewInput.js'
+import { CommandService } from '../../../services/command/CommandService.js'
 import { IScmService, ScmService } from '../../../services/extensions/ScmService.js'
 import { ServicesContext } from '../../useService.js'
 
@@ -69,13 +74,8 @@ class FakeEditorGroup {
 
 function setup() {
   const scm = new ScmService()
-  const executeCommand = vi.fn().mockResolvedValue(undefined)
   const openRealFile = vi.fn().mockResolvedValue(undefined)
   const editorGroup = new FakeEditorGroup()
-  const stubCommand: ICommandServiceType = {
-    _serviceBrand: undefined,
-    executeCommand,
-  }
   const stubEditorResolver: IEditorResolverServiceType = {
     _serviceBrand: undefined,
     registerEditor: () => ({ dispose() {} }),
@@ -84,7 +84,6 @@ function setup() {
   }
   const services = new ServiceCollection()
   services.set(IScmService, scm)
-  services.set(ICommandService, stubCommand)
   // Row menus resolve their `when` clauses against a scoped context, so the real
   // service is needed rather than a stub.
   services.set(IContextKeyService, new ContextKeyService())
@@ -96,7 +95,22 @@ function setup() {
   } as unknown as IEditorGroupsServiceType)
   services.set(IStorageService, stubStorage)
   services.set(IEditorResolverService, stubEditorResolver)
+  // The row actions read the window's remote authority through the workspace
+  // service; without it a non-strict InstantiationService hands back undefined.
+  services.set(IWorkspaceService, {
+    _serviceBrand: undefined,
+    current: null,
+    onDidChangeWorkspace: Event.None,
+  } as unknown as IWorkspaceServiceType)
   const inst = new InstantiationService(services)
+  // Record every dispatch and still run it: the row actions are commands now, so
+  // the assertions below are about which command ran as much as what it did.
+  const real = new CommandService(inst)
+  const executeCommand = vi.fn((id: string, ...args: unknown[]) => real.executeCommand(id, ...args))
+  services.set(ICommandService, {
+    _serviceBrand: undefined,
+    executeCommand,
+  } as unknown as ICommandServiceType)
   render(
     <ServicesContext.Provider value={inst}>
       <StrictMode>
@@ -298,6 +312,19 @@ describe('ScmView under StrictMode', () => {
 })
 
 describe('ScmView — markdown preview action', () => {
+  // The row's open actions are commands now — the hover strip renders the same
+  // menu contribution the right-click menu does — so they must be registered for
+  // the buttons to exist at all. Registered for the whole describe: the menu is
+  // a global registry, and re-registering per test would warn on duplicates.
+  let actions: IDisposable[] = []
+  beforeAll(() => {
+    actions = [registerAction2(ScmOpenFileAction), registerAction2(ScmOpenPreviewAction)]
+  })
+  afterAll(() => {
+    actions.forEach((d) => d.dispose())
+    actions = []
+  })
+
   it('shows a preview button for markdown files and opens a markdown preview', async () => {
     const { scm, executeCommand, openRealFile, editorGroup } = setup()
 
@@ -325,7 +352,14 @@ describe('ScmView — markdown preview action', () => {
     expect((previewInput as MarkdownPreviewInput | undefined)?.sourceUri.fsPath).toContain(
       'README.md',
     )
-    expect(executeCommand).not.toHaveBeenCalled()
+    // Only the preview command: the click must not also run the row's own
+    // `resource.command` (the diff) on its way out.
+    expect(executeCommand).toHaveBeenCalledTimes(1)
+    expect(executeCommand).toHaveBeenCalledWith(
+      ScmOpenPreviewAction.ID,
+      expect.objectContaining({ resourceUri: 'D:/repo/README.md' }),
+      expect.any(Array),
+    )
     expect(openRealFile).not.toHaveBeenCalled()
   })
 
@@ -345,6 +379,32 @@ describe('ScmView — markdown preview action', () => {
     })
 
     await screen.findByText('main.ts')
+    expect(screen.queryByRole('button', { name: 'Open Preview' })).toBeNull()
+  })
+
+  // A provider marks a row `noHostFile` when its path names no local file —
+  // Perforce's shelved rows carry a depot path. The host's open actions are
+  // host-file operations, so neither may be offered, no matter that the depot
+  // basename ends in `.md`. The gate is the same flag the right-click menu reads
+  // (both surfaces build their actions from this one row scope).
+  it('offers no host-file action for a row that names no host file', async () => {
+    const { scm } = setup()
+
+    await act(async () => {
+      await scm.$registerSourceControl(0, 'perforce', 'Perforce', 'D:/repo')
+      await scm.$registerGroup(0, 1, 'shelved:12', 'Shelved')
+      await scm.$updateGroupResourceStates(1, [
+        {
+          resourceUri: '//depot/branch_x/README.md',
+          contextValue: 'S',
+          noHostFile: true,
+          command: { command: 'perforce.openShelvedFile', title: 'Open Shelved Changes' },
+        },
+      ])
+    })
+
+    await screen.findByText('README.md')
+    expect(screen.queryByRole('button', { name: 'Open File' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Open Preview' })).toBeNull()
   })
 

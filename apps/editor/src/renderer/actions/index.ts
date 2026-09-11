@@ -239,6 +239,7 @@ import {
   ViewPerforceFileHistoryAction,
 } from './perforceGraphActions.js'
 import { SwitchScmRepoAction } from './scmActions.js'
+import { ScmOpenFileAction, ScmOpenPreviewAction } from './scmResourceActions.js'
 import {
   OpenSwarmReviewsAction,
   OpenSwarmReviewAction,
@@ -682,6 +683,9 @@ registerAction2(ViewPerforceFileHistoryAction)
 
 // Source Control
 registerAction2(SwitchScmRepoAction)
+// SCM resource rows: the hover strip and the right-click menu share these.
+registerAction2(ScmOpenFileAction)
+registerAction2(ScmOpenPreviewAction)
 
 // Swarm Reviews
 registerAction2(OpenSwarmReviewsAction)

@@ -39,6 +39,14 @@ export interface SourceControlResourceState {
   readonly decorations?: SourceControlResourceDecorations
   /** Surfaced to menu `when` clauses as `scmResourceState`. */
   readonly contextValue?: string
+  /**
+   * Set when `resourceUri` does not name a file on this host — a depot-only path
+   * with no local counterpart (Perforce's shelved rows are the case). The
+   * workbench's own row actions are host-file operations, so it offers them only
+   * for rows that leave this unset; surfaced to menu `when` clauses as
+   * `scmResourceHasHostFile`.
+   */
+  readonly noHostFile?: boolean
 }
 
 /**

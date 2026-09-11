@@ -167,6 +167,7 @@
         { "command": "git.submoduleSync", "when": "scmProvider == git",       "group": "1@2", "icon": "git-submodule" }
       ],
       "scm/resourceState/context": [
+        { "command": "git.openChange", "when": "scmProvider == git", "group": "1_open@1", "icon": "compare-changes" },
         { "command": "git.openMergeEditor", "when": "scmProvider == git && scmResourceState == U", "group": "inline", "icon": "merge" },
         { "command": "git.stage", "when": "scmProvider == git && scmResourceGroup == workingTree", "group": "inline", "icon": "add" },
         { "command": "git.discard", "when": "scmProvider == git && scmResourceGroup == workingTree", "group": "inline", "icon": "discard" },

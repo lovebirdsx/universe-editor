@@ -109,9 +109,11 @@ test.describe('@p1 scm keyboard context menu', () => {
       // parity) — there is no pointer to aim, so Enter must work immediately.
       // The highlight is a virtual focus (aria-activedescendant + data-active)
       // rather than DOM focus, which would blur the tree underneath.
+      // The row menu leads with the `1_open` group, so the first entry is the
+      // provider's Open Changes, not the inline Stage Changes.
       const active = page.locator('[role="menuitem"][data-active]')
       await expect(active).toHaveCount(1)
-      await expect(active).toHaveText('Stage Changes')
+      await expect(active).toHaveText('Open Changes')
       await expect(menu).toHaveAttribute('aria-activedescendant', /.+/)
 
       // The arrow keys step on from that opening highlight — and the menu must
@@ -121,16 +123,21 @@ test.describe('@p1 scm keyboard context menu', () => {
       await page.keyboard.press('ArrowDown')
       await expect(menu).toHaveCount(1)
       await expect(active).toHaveCount(1)
-      await expect(active).not.toHaveText('Stage Changes')
+      await expect(active).not.toHaveText('Open Changes')
 
       // Escape closes it — the old popup listened on document bubble, where the
       // workbench keybinding dispatcher had already stopped propagation.
       await page.keyboard.press('Escape')
       await expect(menu).toHaveCount(0)
 
-      // Reopen and run the opening highlight straight away: no arrow key first.
+      // Reopen and run a row command with Enter alone. The opening highlight is
+      // now Open Changes, so step down to Stage Changes first — that keeps
+      // asserting the picked command actually reached the provider.
       await page.keyboard.press('ContextMenu')
       await expect(menu).toHaveCount(1)
+      await expect(page.locator('[role="menuitem"][data-active]')).toHaveText('Open Changes')
+      await page.keyboard.press('ArrowDown') // Open File
+      await page.keyboard.press('ArrowDown') // Stage Changes
       await expect(page.locator('[role="menuitem"][data-active]')).toHaveText('Stage Changes')
       await page.keyboard.press('Enter')
       await expect(menu).toHaveCount(0)

@@ -112,6 +112,28 @@ describe('host SCM bridge', () => {
     ])
   })
 
+  // A row can declare that its path names no local file (Perforce's shelved rows
+  // carry a depot path). The flag has to survive the wire — the renderer gates
+  // the host's own open actions on it.
+  it('carries a row that names no host file, and omits the flag otherwise', () => {
+    const scm = recordingScm()
+    const service = new ExtensionService([], noopCommands, noopWindow, scm, noopTimeline)
+    const group = service
+      .createSourceControl('perforce', 'Perforce')
+      .createResourceGroup('shelved', 'Shelved')
+
+    group.resourceStates = [
+      { resourceUri: '//depot/branch_x/a.txt', contextValue: 'S', noHostFile: true },
+      { resourceUri: '/ws/b.txt', contextValue: 'M' },
+    ]
+
+    const [, resources] = scm.updateGroupResourceStates.mock.calls[0]!
+    expect(resources).toEqual([
+      { resourceUri: '//depot/branch_x/a.txt', contextValue: 'S', noHostFile: true },
+      { resourceUri: '/ws/b.txt', contextValue: 'M' },
+    ])
+  })
+
   it('flows input-box value both ways', () => {
     const scm = recordingScm()
     const service = new ExtensionService([], noopCommands, noopWindow, scm, noopTimeline)

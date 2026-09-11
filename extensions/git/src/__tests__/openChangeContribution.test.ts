@@ -6,9 +6,14 @@ import { describe, expect, it } from 'vitest'
 /*
  * `git.openChange` is a provider capability command, not a user-facing entry:
  * the workbench's `workbench.action.scm.openChanges` is the single Open Changes
- * command and arbitrates between git and Perforce. Re-declaring a UI entry here
- * is what used to put two identical compare icons in the title bar of a file
- * tracked by both, so the manifest is asserted rather than reviewed.
+ * command and arbitrates between git and Perforce. Re-declaring a title-bar or
+ * Explorer entry here is what used to put two identical compare icons in the
+ * title bar of a file tracked by both, so the manifest is asserted rather than
+ * reviewed.
+ *
+ * The SCM row's context menu is the one place it does belong: those rows pass
+ * the provider its own `{ resourceUri }` argument shape, which the unified
+ * command deliberately does not accept.
  */
 
 interface MenuItem {
@@ -37,5 +42,11 @@ describe('git.openChange contribution', () => {
 
   it('stays declared so SCM rows and the unified command can invoke it', () => {
     expect(manifest.contributes.commands.map((c) => c.command)).toContain('git.openChange')
+  })
+
+  it('reaches SCM rows through their context menu', () => {
+    expect(menu('scm/resourceState/context').map((item) => item.command)).toContain(
+      'git.openChange',
+    )
   })
 })

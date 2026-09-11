@@ -405,6 +405,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.save.title': '保存',
   'action.saveAs.title': '另存为…',
   'action.scm.openChanges.title': '打开更改',
+  'action.scm.openFile.title': '打开文件',
+  'action.scm.openPreview.title': '打开预览',
   'action.scm.switchRepo.placeholder': '选择仓库',
   'action.scm.switchRepo.title': '源代码管理：切换仓库…',
   'action.selectAll.title': '全选',

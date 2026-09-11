@@ -415,15 +415,9 @@
           "icon": "compare-changes"
         },
         {
-          "command": "perforce.openFile",
-          "when": "scmProvider == perforce && scmResourceState != S",
-          "group": "1_open@2",
-          "icon": "go-to-file"
-        },
-        {
           "command": "perforce-graph.viewFileHistory",
           "when": "scmProvider == perforce",
-          "group": "1_open@3",
+          "group": "1_open@4",
           "icon": "history"
         },
         {

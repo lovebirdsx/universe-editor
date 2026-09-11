@@ -28,6 +28,7 @@ const rendererDomTests = [
   'src/renderer/workbench/panel/terminal/__tests__/terminalClipboard.test.ts',
   'src/renderer/actions/__tests__/agentActions.test.ts',
   'src/renderer/actions/__tests__/editorActions.test.ts',
+  'src/renderer/actions/__tests__/scmResourceActions.test.ts',
   'src/renderer/actions/__tests__/historyActions.test.ts',
   'src/renderer/actions/__tests__/preferencesActions.test.ts',
   'src/renderer/contributions/__tests__/AgentFontContribution.test.ts',

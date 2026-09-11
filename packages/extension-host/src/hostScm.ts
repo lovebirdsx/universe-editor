@@ -38,6 +38,7 @@ function toResourceStateDto(state: SourceControlResourceState): ISourceControlRe
       ? { command: toCommandDto(state.command, SCM_COMMAND_WIRE_FIELDS) }
       : {}),
     ...(state.decorations !== undefined ? { decorations: { ...state.decorations } } : {}),
+    ...(state.noHostFile !== undefined ? { noHostFile: state.noHostFile } : {}),
   }
 }
 
