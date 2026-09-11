@@ -14,7 +14,8 @@
  *  注意: sessionDiffAgent.cjs 是源码（不经过构建），spec 直接拿源码绝对路径喂给探针。
  *--------------------------------------------------------------------------------------------*/
 
-import { dirname, resolve } from 'node:path'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test, expect } from '../fixtures/electronApp.js'
 
@@ -244,6 +245,98 @@ test.describe('@p1 session changes', () => {
     await expect
       .poll(() => page.evaluate(() => window.__E2E__!.getActiveDiffContent()?.modified))
       .toBe('line one\nline two LIVE EDIT')
+  })
+})
+
+/**
+ * The built-in Perforce ignore layer, end to end.
+ *
+ * The core fixture activates no extensions, so there is no git and no perforce
+ * source control — exactly the state the incident happened in (the extension was
+ * installed but never activated, so `checkIgnore` answered nothing and every
+ * build artifact became an inferred row). This case is what proves the fallback
+ * reads the rules itself.
+ *
+ * The rule file sits in the workspace's PARENT, not in the workspace: the opened
+ * folder is a subtree of the Perforce client root in the reported setup, so the
+ * rules live above it. That is the only shape that drives the walk past the
+ * workspace root (`scm.ignoreFiles.searchCeiling` defaults to 'filesystem') and
+ * the out-of-workspace read. The parent here is the per-run temp root, which the
+ * harness removes at teardown.
+ *
+ * The exact row count is also the guard against the filter catching its own
+ * catches: an earlier revision watched the ancestor rule file, which the main
+ * watcher realizes as a non-recursive watch on its DIRECTORY, so the rule file
+ * itself showed up here as an inferred row.
+ */
+test.describe('@p1 session changes · built-in .p4ignore', () => {
+  test.use({
+    workspaceSeeder: {
+      seed(dir) {
+        writeFileSync(join(dirname(dir), '.p4ignore'), 'build/\n', 'utf8')
+        mkdirSync(join(dir, 'src'), { recursive: true })
+        writeFileSync(join(dir, 'src', 'a.ts'), 'export const a = 1\n', 'utf8')
+      },
+    },
+  })
+
+  test('a build artifact dropped by .p4ignore never reaches the inferred list', async ({
+    page,
+    workbench,
+    launchWorkspace,
+  }) => {
+    test.setTimeout(180_000)
+    await workbench.waitForRestored()
+    if (!launchWorkspace) throw new Error('workspace seeder did not run')
+
+    await page.evaluate(([id, p]) => window.__E2E__!.installAcpEchoAgent(id, p), [
+      'sd',
+      SD_AGENT_PATH,
+    ] as const)
+    await page.evaluate(() => {
+      void window.__E2E__!.runCommand('workbench.action.agent.newSession')
+    })
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getAcpSessionCount()), { timeout: 10000 })
+      .toBe(1)
+
+    // The workspace watch is armed in the idle phase (WorkspaceWatchContribution),
+    // and the watcher only reports changes from the moment it subscribes — a
+    // write before that produces NO event at all, which is what made this case
+    // flake at roughly one run in five. The tree view papers over the gap with a
+    // catch-up re-read; the session-diff fallback has no such thing, so wait for
+    // the subscription instead of racing it.
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.isWorkspaceWatchArmed()), {
+        timeout: 30_000,
+      })
+      .toBe(true)
+
+    // `shell` mode writes both paths and reports neither, so both rows can only
+    // come from the fs-watch fallback — the same ingest path a build artifact
+    // takes. Both land in one flush, so the kept row doubles as proof that the
+    // flush ran at all (without it, a missing row proves nothing).
+    await page.evaluate(([a, b]) => window.__E2E__!.sendAcpPrompt(`shell\n${a}\n${b}`), [
+      launchWorkspace.file('build/out.log'),
+      launchWorkspace.file('src/a.ts'),
+    ] as const)
+
+    await page.evaluate(([cmd]) => void window.__E2E__!.runCommand(cmd), [
+      SHOW_CHANGES_CMD,
+    ] as const)
+
+    const rows = page.getByTestId('acp-changes-row')
+    await expect(rows).toHaveCount(1, { timeout: 60_000 })
+    await expect(rows).toContainText('a.ts')
+    await expect(page.getByTestId('acp-changes-inferred')).toHaveCount(1)
+
+    // An absence assertion needs an explicit settle: the kept path's row is
+    // created by the flush, the ignored path is dropped in the same pass, but a
+    // second flush (say, the watcher reporting the tree a beat late) could still
+    // add a row after the count above was satisfied. Outlast both the grace
+    // delay and a recompute before trusting the count.
+    await page.waitForTimeout(5_000)
+    await expect(rows).toHaveCount(1)
   })
 })
 

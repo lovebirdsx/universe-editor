@@ -121,6 +121,12 @@ export class ExplorerTreeService extends Disposable {
   // must sync immediately even if startWatching() hasn't fired yet.
   private _watchStarted = false
   private _coldStartSettled = false
+  // True once the main-process watcher has acked the workspace subscription.
+  // Everything that reads the shared change stream (this tree, the session-diff
+  // fallback, SCM) is blind until then — deliberately so, see `startWatching` —
+  // and only the tree compensates with a catch-up re-read. Callers that must
+  // see a specific write (e2e) have to wait for this instead of guessing.
+  private _watchArmed = false
   // Expansion-persistence orchestration (explorerTreeState). `_restoreGeneration`
   // tokens an in-flight restore so a `_setRoot` mid-restore abandons the stale
   // pass instead of re-expanding the old root's directories under the new one.
@@ -775,6 +781,20 @@ export class ExplorerTreeService extends Disposable {
   }
 
   /**
+   * Whether the main-process watcher has acked the current root's subscription.
+   *
+   * The single readiness signal for "a write to the workspace will produce a
+   * change event": the tree re-reads loaded directories to cover the deferral
+   * window, but every other consumer of the shared stream — the session-diff
+   * watcher fallback, SCM — has no such catch-up and simply misses anything
+   * written before this flips. Distinct from `_watchStarted`, which only means
+   * the arming was requested.
+   */
+  get watchArmed(): boolean {
+    return this._watchArmed
+  }
+
+  /**
    * (Re-)arm the watcher for the current root. Called by WorkspaceWatchContribution
    * once the workbench reaches its idle phase, to arm the cold-start watch that
    * `_setRoot` skips until this fires. Idempotent — safe to call more than once.
@@ -792,6 +812,7 @@ export class ExplorerTreeService extends Disposable {
 
   /** (Re-)arm or tear down the recursive file watcher for `root`. Idempotent — the main-process watcher dedupes same-root re-subscribes. */
   private _syncWatch(root: URI | null): void {
+    this._watchArmed = false
     if (root) {
       void this._watcher
         .watch(root, {
@@ -801,6 +822,9 @@ export class ExplorerTreeService extends Disposable {
           files: this._focus.fileWatchPaths,
         })
         .then(() => {
+          // A stale ack (root replaced, or the watch torn down while this was in
+          // flight) must not report the CURRENT root as armed.
+          if (this._root && sameUri(this._root, root)) this._watchArmed = true
           // parcel only reports changes after the subscription is live; the
           // ack resolves once the watcher process has armed. Anything created
           // externally in the request→ack window (cross-process spawn +

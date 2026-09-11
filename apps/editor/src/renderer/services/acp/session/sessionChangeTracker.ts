@@ -38,6 +38,9 @@ import {
   type ISettableObservable,
 } from '@universe-editor/platform'
 import { PersistedStateBase } from '../persistedStateBase.js'
+import { probeIsBinary } from '../../files/binaryDetection.js'
+import { IMemoryPressureService } from '../../memory/memoryPressureService.js'
+import { MemoryPressureLevel } from '../../memory/memoryPressureLevels.js'
 import { reconstructBaseline, type DiffBatch, type DiffHunk } from './sessionDiffReconstruct.js'
 
 export type SessionFileChangeStatus = 'added' | 'modified' | 'deleted' | 'degraded'
@@ -106,6 +109,16 @@ export interface ISessionChangeTrackerService {
   dismissWatched(sessionId: string, path: string): void
   /** Observable list of whole-file changes for a session (empty if none/unknown). */
   changesFor(sessionId: string): IObservable<readonly SessionFileChange[]>
+  /**
+   * Whether the path is already tracked for the session.
+   *
+   * Distinct from looking for a row in {@link changesFor}: a record can exist
+   * without producing one (dismissed, binary, self-healed, or a failed stat).
+   * Callers that use "is it tracked?" to decide whether to pay for a pre-change
+   * baseline lookup need this answer, not the rendered one — otherwise those
+   * states send them back for a fresh baseline on every single pass.
+   */
+  hasEntry(sessionId: string, path: string): boolean
   /** Drop all tracked changes for a session (e.g. on user-initiated clear). */
   clear(sessionId: string): void
   /**
@@ -228,6 +241,32 @@ interface FileRecord {
   created?: boolean
   /** Watched entry dismissed by the user; cleared when an agent call touches the path. */
   ignored?: boolean
+  /** Bumped by every mutation that changes what a rebuild would produce — see
+   *  {@link SessionChangeTrackerService._invalidateBuilt}. A pass captures it
+   *  before reading the record and only installs its result when the revision
+   *  still matches. */
+  rev: number
+  /** The row the last completed build produced, reusable while the file's size
+   *  and mtime are unchanged. Memory-only; never serialized.
+   *
+   *  `row: null` is a real cached answer (this file currently produces no row),
+   *  which is why it is `| null` rather than an optional property. */
+  lastBuilt?: {
+    readonly size: number
+    readonly mtime: number
+    readonly row: SessionFileChange | null
+  }
+}
+
+/** One file's rebuilt row plus the on-disk state it was built from. */
+interface BuiltRow {
+  readonly record: FileRecord
+  /** Identity of the content this row reflects; null when the file could not be
+   *  stat'ed at all, so there is nothing to key a cache on. */
+  readonly stamp: { readonly size: number; readonly mtime: number; readonly rev: number } | null
+  /** null = this file currently produces no row. Mutable: `_capLiveChanges`
+   *  degrades it in place so the cache is updated with what was published. */
+  change: SessionFileChange | null
 }
 
 /** Tracker state keyed by sessionId → path comparison key → record. */
@@ -268,7 +307,17 @@ function recordBytes(rec: FileRecord): number {
 
 /** Heap cost of one live diff row: both full texts, as UTF-16. */
 function changeBytes(change: SessionFileChange): number {
-  return (change.baseline.length + change.current.length) * 2
+  // Equal texts mean one string, not two: `_buildChange` gives a `baselineSource: 'none'`
+  // row `baseline = current` — the same string — and every other row whose two texts
+  // compare equal was dropped by the self-heal check or normalized to an empty baseline
+  // before it could be published. (An upcoming row shape carrying two distinct but
+  // identical texts would be under-counted here.) Counting the mirror twice would
+  // inflate both the budget that row competes for and the bytes a release claims.
+  const texts =
+    change.baseline === change.current
+      ? change.current.length
+      : change.baseline.length + change.current.length
+  return texts * 2
 }
 
 /** Strip the two full texts from a row, keeping it visible as a known-changed
@@ -305,6 +354,16 @@ export class SessionChangeTrackerService
   /** Sessions with a recompute pending inside the current throttle window. */
   private readonly _pendingRecompute = new Map<string, ReturnType<typeof setTimeout>>()
 
+  /** Sessions with a recompute pass in flight. A pass stats and reads every
+   *  tracked file, so it routinely outlives the throttle window that scheduled
+   *  it — without this guard the four call sites below would each start their
+   *  own overlapping pass over the same records. */
+  private readonly _recomputeRunning = new Set<string>()
+
+  /** Sessions asked to recompute while a pass was already in flight; each is
+   *  re-run exactly once after that pass settles. */
+  private readonly _recomputeAgain = new Set<string>()
+
   /** Throttle window between a `record` and its recompute. Overridable in tests
    *  (set to 0 for a synchronous flush). */
   recomputeThrottleMs = RECOMPUTE_THROTTLE_MS
@@ -325,6 +384,7 @@ export class SessionChangeTrackerService
     @ILoggerService loggerService: ILoggerService,
     @IFileService private readonly _files: IFileService,
     @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
+    @IMemoryPressureService memoryPressure: IMemoryPressureService,
   ) {
     super(storage, workspace, telemetry, loggerService, {
       storageKey: STORAGE_KEY,
@@ -332,11 +392,47 @@ export class SessionChangeTrackerService
       loggerName: 'ACP Session Changes',
       persistFailureEvent: 'acp.session_changes_persist_failed',
     })
+    // Registered here rather than by MemoryPressureContribution: the rows are private
+    // to this class and nothing else can reach them. They are also the biggest thing
+    // this service holds — two full copies of every changed file, per session — and
+    // they were the memory the renderer died with, while being invisible to the
+    // holdership report that is supposed to account for exactly that.
+    this._register(
+      memoryPressure.registerReleaser({
+        id: 'sessionChanges.liveTexts',
+        release: (level) =>
+          // Only at the last stop. One session's live-text budget is 32MiB (64MiB across
+          // sessions), small next to the elevated line (1.5GiB), so dropping every inline
+          // diff on a warning shot would cost the user something visible and free nothing
+          // that matters. At critical, losing the inline comparison beats losing the window.
+          level === MemoryPressureLevel.Critical ? this._releaseLiveTexts() : 0,
+      }),
+    )
+  }
+
+  /**
+   * Hand back every live diff text, across all sessions. The rows themselves stay —
+   * path, status, counts — so the panel keeps listing what changed; only the inline
+   * comparison goes. The build cache is degraded in the same pass for the same reason
+   * `_capLiveChanges` does it: a full-text row left in the cache would be published
+   * straight back by the next recompute (any neighbour file changing is enough),
+   * while `_liveChangeBytes` already reads zero.
+   */
+  private _releaseLiveTexts(): number {
+    // Copied before iterating: `obs.set` notifies subscribers synchronously, and a
+    // listener is free to open or close another session's panel from there.
+    let freed = 0
+    for (const sessionId of [...this._observables.keys()]) {
+      freed += this._degradeSessionRows(sessionId)
+    }
+    return freed
   }
 
   override dispose(): void {
     for (const timer of this._pendingRecompute.values()) clearTimeout(timer)
     this._pendingRecompute.clear()
+    this._recomputeRunning.clear()
+    this._recomputeAgain.clear()
     super.dispose()
   }
 
@@ -392,6 +488,7 @@ export class SessionChangeTrackerService
           batches,
           batchCount: typeof f.batchCount === 'number' ? f.batchCount : batches.length,
           origin: f.origin === 'watched' ? 'watched' : 'agent',
+          rev: 0,
           ...(f.baseline !== undefined ? { baseline: f.baseline } : {}),
           ...(f.baselineSource === 'reported' || f.baselineSource === 'git'
             ? { baselineSource: f.baselineSource }
@@ -461,7 +558,7 @@ export class SessionChangeTrackerService
     // Recompute every session that already has a live observable. Sessions
     // observed later recompute lazily on first `changesFor`.
     for (const sessionId of this._observables.keys()) {
-      void this._recompute(sessionId, state.get(sessionId))
+      this._requestRecompute(sessionId)
     }
     if (this._prunedOnLoad) {
       this._prunedOnLoad = false
@@ -494,7 +591,7 @@ export class SessionChangeTrackerService
     const files = this._filesFor(sessionId)
     let rec = files.get(key)
     if (!rec) {
-      rec = { path: normalizePath(path), batches: [], batchCount: 0, origin: 'agent' }
+      rec = { path: normalizePath(path), batches: [], batchCount: 0, origin: 'agent', rev: 0 }
       files.set(key, rec)
     }
     let bytes = this._sessionBytes.get(sessionId) ?? 0
@@ -554,7 +651,13 @@ export class SessionChangeTrackerService
       this._logger.warn(
         `dropping hunk batches for session ${sessionId} — accumulated data exceeds the ${(this.maxSessionBytes / 1024 / 1024).toFixed(0)}MB per-session budget; session diff is kept, rewind file rollback is degraded`,
       )
-      for (const r of files.values()) r.batches = []
+      for (const r of files.values()) {
+        r.batches = []
+        // A record with no pinned baseline falls from 'reconstructed' to 'none'
+        // here, which changes what its row says even though the file on disk did
+        // not move.
+        this._invalidateBuilt(r)
+      }
       bytes = 0
       for (const r of files.values()) bytes += recordBytes(r)
       if (bytes > this.maxSessionBytes) {
@@ -566,6 +669,7 @@ export class SessionChangeTrackerService
     this._sessionBytes.set(sessionId, bytes)
     this._touchLru(sessionId, files)
     this._scheduleWrite()
+    this._invalidateBuilt(rec)
     this._scheduleRecompute(sessionId)
   }
 
@@ -588,6 +692,7 @@ export class SessionChangeTrackerService
       batches: [],
       batchCount: 0,
       origin: 'watched',
+      rev: 0,
     }
     if (opts?.baseline !== undefined) {
       const baselineBytes = opts.baseline === null ? 0 : jsonSize(opts.baseline)
@@ -609,6 +714,7 @@ export class SessionChangeTrackerService
     if (!rec || rec.origin !== 'watched' || rec.ignored) return
     rec.ignored = true
     this._scheduleWrite()
+    this._invalidateBuilt(rec)
     this._scheduleRecompute(sessionId)
   }
 
@@ -617,9 +723,13 @@ export class SessionChangeTrackerService
     if (!obs) {
       obs = observableValue<readonly SessionFileChange[]>(`acp.sessionChanges.${sessionId}`, [])
       this._observables.set(sessionId, obs)
-      void this._recompute(sessionId, this._state.get(sessionId))
+      this._requestRecompute(sessionId)
     }
     return obs
+  }
+
+  hasEntry(sessionId: string, path: string): boolean {
+    return this._state.get(sessionId)?.has(this._pathKey(path)) === true
   }
 
   clear(sessionId: string): void {
@@ -759,6 +869,9 @@ export class SessionChangeTrackerService
         )
         rec.batchCount = Math.max(0, rec.batchCount - removed.length)
         mutated = true
+        // The write-back can land on the same mtime+size stamp as the content it
+        // replaced, which would otherwise be served from the build cache.
+        this._invalidateBuilt(rec)
       }
     }
 
@@ -773,7 +886,7 @@ export class SessionChangeTrackerService
       }
       this._sessionBytes.set(sessionId, bytes)
       this._scheduleWrite()
-      void this._recompute(sessionId, files)
+      this._requestRecompute(sessionId)
     }
 
     return { filesChanged, insertions, deletions }
@@ -788,34 +901,168 @@ export class SessionChangeTrackerService
     if (this._pendingRecompute.has(sessionId)) return
     const timer = setTimeout(() => {
       this._pendingRecompute.delete(sessionId)
-      void this._recompute(sessionId, this._state.get(sessionId))
+      this._requestRecompute(sessionId)
     }, this.recomputeThrottleMs)
     this._pendingRecompute.set(sessionId, timer)
   }
 
-  private async _recompute(
-    sessionId: string,
-    files: Map<string, FileRecord> | undefined,
-  ): Promise<void> {
+  /**
+   * Ask for a recompute of one session, running at most one pass at a time.
+   *
+   * The throttle above only coalesces *requests*; a pass can still outlive its
+   * window (it stats and reads every tracked file), and the four callers — the
+   * throttle timer, `changesFor`, `_onStateReplaced` and `_restore` — can ask
+   * concurrently. Overlapping passes would multiply the reads of every tracked
+   * file instead of collapsing them, which is exactly the shape that made a
+   * renderer re-read one 16MB binary 113 times over seven minutes.
+   *
+   * A request arriving mid-pass is remembered and re-run once, so the
+   * observable never settles on a state that predates the caller's write.
+   *
+   * One pass means one file read that never settles holds the whole list — there is
+   * no watchdog, because `IFileService` has none to inherit and a pass awaits *all*
+   * its reads before publishing, so a single hung read froze the list before this
+   * guard existed too (with one hung pass per request instead of one in total).
+   */
+  private _requestRecompute(sessionId: string): void {
+    if (this._recomputeRunning.has(sessionId)) {
+      this._recomputeAgain.add(sessionId)
+      return
+    }
+    void this._runRecomputeLoop(sessionId)
+  }
+
+  private async _runRecomputeLoop(sessionId: string): Promise<void> {
+    // Synchronous up to the first await, so `_recomputeRunning` is claimed
+    // before any other caller can observe the gap.
+    this._recomputeRunning.add(sessionId)
+    try {
+      do {
+        this._recomputeAgain.delete(sessionId)
+        await this._recompute(sessionId)
+      } while (this._recomputeAgain.has(sessionId))
+    } catch (err) {
+      // `mapWithConcurrency` propagates a read failure and every caller here is
+      // fire-and-forget, so without this the rejection escapes as an unhandled
+      // one. One file failing to read is not a reason to lose the whole panel.
+      this._logger.warn(`recompute failed for session ${sessionId}`, err)
+    } finally {
+      this._recomputeRunning.delete(sessionId)
+      // A request that landed between the loop's last check and the release
+      // would otherwise be dropped on the floor.
+      if (this._recomputeAgain.delete(sessionId)) this._requestRecompute(sessionId)
+    }
+  }
+
+  /**
+   * Rebuild one session's rows from its current records.
+   *
+   * Reads `_state` at call time rather than taking the caller's map: the pass
+   * awaits between files, and `_touchLru` can evict this session during those
+   * awaits. Holding the stale map would then write rows back into an observable
+   * for a session that no longer exists in `_state`, and nothing would ever
+   * release them.
+   */
+  private async _recompute(sessionId: string): Promise<void> {
     const obs = this._observables.get(sessionId)
     if (!obs) return
+    const files = this._state.get(sessionId)
     if (!files || files.size === 0) {
       this._liveChangeBytes.delete(sessionId)
       obs.set([], undefined)
       return
     }
-    const changes = await mapWithConcurrency(
-      [...files.values()],
-      RECOMPUTE_READ_CONCURRENCY,
-      (rec) => this._buildChange(rec),
+    const built = await mapWithConcurrency([...files.values()], RECOMPUTE_READ_CONCURRENCY, (rec) =>
+      this._buildChange(rec),
     )
-    obs.set(
-      this._capLiveChanges(
-        sessionId,
-        changes.filter((c): c is SessionFileChange => c !== undefined),
-      ),
-      undefined,
-    )
+    // `clear()`, an LRU eviction or a workspace swap can land while the reads are in
+    // flight. The rows this pass built describe a state that no longer exists; they
+    // must not be published — a cleared list would come back to life, and `changesFor`
+    // never recomputes an observable that already exists, so nothing would clear it
+    // again and its texts would sit there with no account of them.
+    if (this._state.get(sessionId) !== files) {
+      this._liveChangeBytes.delete(sessionId)
+      obs.set([], undefined)
+      return
+    }
+    this._capLiveChanges(sessionId, built)
+    this._rememberBuilt(built)
+    const rows: SessionFileChange[] = []
+    for (const b of built) {
+      if (b.change !== null) rows.push(b.change)
+    }
+    obs.set(rows, undefined)
+  }
+
+  /** Force the next build of this record's row from scratch. */
+  private _invalidateBuilt(rec: FileRecord): void {
+    rec.rev++
+    delete rec.lastBuilt
+  }
+
+  /**
+   * Park the rows just published as the next pass's cache, so a file whose size
+   * and mtime have not moved is never read again.
+   *
+   * Runs *after* `_capLiveChanges` deliberately: caching rows as they stood
+   * before the cap would hold on to the very full texts the cap just released,
+   * for as long as the file stays unchanged — the retention shape this budget
+   * exists to prevent, and one no assertion would notice.
+   *
+   * A row whose revision no longer matches was built before a `record()` landed
+   * mid-pass and used the pre-edit baseline; it is dropped rather than installed
+   * so the next pass rebuilds it.
+   */
+  private _rememberBuilt(built: readonly BuiltRow[]): void {
+    for (const b of built) {
+      const stamp = b.stamp
+      if (stamp === null || stamp.rev !== b.record.rev) continue
+      b.record.lastBuilt = { size: stamp.size, mtime: stamp.mtime, row: b.change }
+    }
+  }
+
+  /**
+   * Release one session's live rows — in both places they are held — and zero its
+   * live-byte account, which is the same act: the rows that were counted are exactly
+   * the rows being emptied.
+   *
+   * Degrading the observable alone would leave each row's two full texts alive
+   * in that session's build cache while `_liveChangeBytes` already reports it at
+   * zero, i.e. unaccounted retention. Rows are matched by identity: the cached
+   * row is the same object that was published.
+   *
+   * Returns the bytes actually freed, so callers subtract what was released instead
+   * of a number read from a separate map that could have drifted from it.
+   */
+  private _degradeSessionRows(sessionId: string): number {
+    const obs = this._observables.get(sessionId)
+    if (!obs) return 0
+    const previous = obs.get()
+    const next = previous.map(degradeChange)
+    obs.set(next, undefined)
+
+    let freed = 0
+    for (const row of previous) freed += changeBytes(row)
+    this._liveChangeBytes.set(sessionId, 0)
+    if (freed === 0) return 0
+
+    const files = this._state.get(sessionId)
+    if (!files) return freed
+    const degradedByOld = new Map<SessionFileChange, SessionFileChange>()
+    for (let i = 0; i < previous.length; i++) {
+      const before = previous[i]
+      const after = next[i]
+      if (before !== undefined && after !== undefined) degradedByOld.set(before, after)
+    }
+    for (const rec of files.values()) {
+      const cached = rec.lastBuilt
+      if (cached === undefined || cached.row === null) continue
+      const degraded = degradedByOld.get(cached.row)
+      if (degraded !== undefined) {
+        rec.lastBuilt = { size: cached.size, mtime: cached.mtime, row: degraded }
+      }
+    }
+    return freed
   }
 
   /**
@@ -827,27 +1074,29 @@ export class SessionChangeTrackerService
    *
    * Heaviest rows degrade first — dropping their two full texts costs only the
    * inline diff for the files least likely to be reviewed inline anyway.
+   *
+   * Degrades the `BuiltRow`s in place rather than returning a new array, so the
+   * caller's `_rememberBuilt` caches the row that was actually published instead
+   * of the pre-cap one.
    */
-  private _capLiveChanges(
-    sessionId: string,
-    changes: readonly SessionFileChange[],
-  ): readonly SessionFileChange[] {
-    const result = [...changes]
+  private _capLiveChanges(sessionId: string, built: BuiltRow[]): void {
     let bytes = 0
-    for (const c of result) bytes += changeBytes(c)
+    for (const b of built) {
+      if (b.change !== null) bytes += changeBytes(b.change)
+    }
 
     if (bytes > this.maxLiveChangeBytes) {
-      const heaviestFirst = result
-        .map((c, index) => ({ index, bytes: changeBytes(c) }))
+      const heaviestFirst = built
+        .map((b, index) => ({ index, bytes: b.change === null ? 0 : changeBytes(b.change) }))
         .sort((a, b) => b.bytes - a.bytes)
       for (const { index, bytes: rowBytes } of heaviestFirst) {
         if (bytes <= this.maxLiveChangeBytes) break
         // Degrading frees exactly `rowBytes`, so a zero-byte row frees nothing:
         // stop rather than spin once the heaviest remaining row is already bare.
         if (rowBytes === 0) break
-        const row = result[index]
-        if (row === undefined) continue
-        result[index] = degradeChange(row)
+        const row = built[index]
+        if (row === undefined || row.change === null) continue
+        row.change = degradeChange(row.change)
         bytes -= rowBytes
       }
       this._logger.warn(
@@ -868,30 +1117,62 @@ export class SessionChangeTrackerService
       for (const otherId of this._state.keys()) {
         if (total <= this.maxLiveChangeTotalBytes) break
         if (otherId === sessionId) continue
-        const otherBytes = this._liveChangeBytes.get(otherId) ?? 0
-        if (otherBytes === 0) continue
-        const otherObs = this._observables.get(otherId)
-        if (otherObs) otherObs.set(otherObs.get().map(degradeChange), undefined)
-        this._liveChangeBytes.set(otherId, 0)
-        total -= otherBytes
+        const freed = this._degradeSessionRows(otherId)
+        if (freed === 0) continue
+        total -= freed
         this._logger.warn(
           `degraded live diff rows for session ${otherId} — global live change budget exceeded`,
         )
       }
     }
-
-    return result
   }
 
-  private async _buildChange(record: FileRecord): Promise<SessionFileChange | undefined> {
-    if (record.ignored) return undefined
-    if (record.batchCount === 0 && record.origin === 'agent') return undefined
+  /**
+   * Rebuild one file's row.
+   *
+   * Cheap-answer-first ordering, most of which exists to avoid a full read:
+   *  - `ignored` / no batches: no row at all.
+   *  - stat fails: the file is gone; nothing to stamp, so nothing to cache.
+   *  - the cached `(size, mtime)` still matches: reuse the row outright.
+   *  - binary: no row. Checked *before* the size gates so an oversized binary
+   *    can't slip through as a degraded placeholder row — "binaries never enter
+   *    tracking" has no size caveat.
+   *  - not a regular file, over the read cap, or provably about to be degraded:
+   *    a degraded row, no read.
+   */
+  private async _buildChange(record: FileRecord): Promise<BuiltRow> {
+    // Read the cache and the revision it belongs to together, before the first
+    // await: the pass suspends in `stat`, and a `record()` landing there would
+    // otherwise leave `cached` describing a record that no longer exists while
+    // the stamp below picks up the revision of the replacement.
+    const cached = record.lastBuilt
+    const rev = record.rev
+    const miss = (change: SessionFileChange | null, stamp: BuiltRow['stamp']): BuiltRow => ({
+      record,
+      stamp,
+      change,
+    })
+    if (record.ignored) return miss(null, null)
+    if (record.batchCount === 0 && record.origin === 'agent') return miss(null, null)
     const uri = this._pathToUri(record.path)
-    let current = ''
+
     let existed = true
     let tooLarge = false
+    let binary = false
+    let stamp: BuiltRow['stamp'] = null
+    let current = ''
     try {
       const stat = await this._files.stat(uri)
+      stamp = { size: stat.size, mtime: stat.mtime, rev }
+      if (
+        cached !== undefined &&
+        record.rev === rev &&
+        cached.size === stat.size &&
+        cached.mtime === stat.mtime
+      ) {
+        // Unchanged on disk since the last build — the row is already correct.
+        return miss(cached.row, stamp)
+      }
       if (!stat.isFile) {
         // A directory (or other non-regular entry) that made it into tracking
         // would otherwise be read on every single recompute, and every read is
@@ -899,32 +1180,57 @@ export class SessionChangeTrackerService
         // file system log. Surface it as degraded instead of ever reading it.
         tooLarge = true
         this._logger.debug(`skipping diff of ${record.path} — not a regular file`)
+      } else if (await this._isBinary(uri, record.path)) {
+        binary = true
       } else if (stat.size > this.maxCurrentBytes) {
         tooLarge = true
         this._logger.debug(
           `skipping diff of ${record.path} — ${(stat.size / 1024 / 1024).toFixed(1)}MB exceeds the ${(this.maxCurrentBytes / 1024 / 1024).toFixed(0)}MB read cap`,
         )
+      } else if (this._wouldBeDegraded(record, stat.size)) {
+        // The per-session cap would release this row's texts on the very pass
+        // that read them, so reading is pure waste. See `_wouldBeDegraded`.
+        tooLarge = true
+        this._logger.debug(
+          `skipping diff of ${record.path} — ${(stat.size / 1024 / 1024).toFixed(1)}MB cannot fit the live change budget`,
+        )
       } else {
         current = await this._files.readFileText(uri)
       }
     } catch {
+      // stat failed, or the read failed after a successful stat. Neither leaves
+      // usable content, so the row below reports the file as deleted (as it
+      // always has). Dropping the stamp keeps that verdict out of the cache: a
+      // transient read failure would otherwise be frozen for as long as the
+      // file's size and mtime stayed put.
       existed = false
+      stamp = null
     }
 
     if (tooLarge) {
       // Known-changed but too large to diff: surface a safe degraded row without
       // ever reading the full content into memory.
-      return {
-        uri,
-        path: record.path,
-        baseline: '',
-        current: '',
-        status: 'degraded',
-        origin: record.origin,
-        baselineSource: 'none',
-        hasTexts: false,
-        batchCount: record.batchCount,
-      }
+      return miss(
+        {
+          uri,
+          path: record.path,
+          baseline: '',
+          current: '',
+          status: 'degraded',
+          origin: record.origin,
+          baselineSource: 'none',
+          hasTexts: false,
+          batchCount: record.batchCount,
+        },
+        stamp,
+      )
+    }
+    if (binary) {
+      // Compiled intermediate artifacts, object files, archives: never tracked
+      // at all (not even as a degraded row). The cached `row: null` above keeps
+      // every later pass from re-probing the same unchanged file.
+      this._logger.debug(`dropping binary change ${record.path}`)
+      return miss(null, stamp)
     }
 
     // A pinned baseline of null means the file was created during the session;
@@ -951,16 +1257,16 @@ export class SessionChangeTrackerService
       baseline = current
       source = 'none'
     } else {
-      return undefined
+      return miss(null, stamp)
     }
 
     // Created then deleted → net-zero for the session; drop the row.
-    if (!existed && created) return undefined
+    if (!existed && created) return miss(null, stamp)
     // Watched entry with no obtainable baseline and the file already gone —
     // an atomic-write tmp or create-then-delete; net-zero, drop the row.
-    if (!existed && source === 'none') return undefined
+    if (!existed && source === 'none') return miss(null, stamp)
     // Changed back to the baseline (or rewound) → self-heals out of the list.
-    if (source !== 'none' && baseline === current && existed && !created) return undefined
+    if (source !== 'none' && baseline === current && existed && !created) return miss(null, stamp)
 
     const status: SessionFileChangeStatus = !existed
       ? 'deleted'
@@ -972,19 +1278,60 @@ export class SessionChangeTrackerService
             ? 'added'
             : 'modified'
     const effectiveBaseline = created && existed ? '' : baseline
-    return {
-      uri,
-      path: record.path,
-      baseline: effectiveBaseline,
-      current,
-      status,
-      origin: record.origin,
-      baselineSource: source,
-      // Both texts were read for real on this path — the row may still be
-      // `degraded` (imprecise baseline), which is about accuracy, not absence.
-      hasTexts: true,
-      batchCount: record.batchCount,
+    return miss(
+      {
+        uri,
+        path: record.path,
+        baseline: effectiveBaseline,
+        current,
+        status,
+        origin: record.origin,
+        baselineSource: source,
+        // Both texts were read for real on this path — the row may still be
+        // `degraded` (imprecise baseline), which is about accuracy, not absence.
+        hasTexts: true,
+        batchCount: record.batchCount,
+      },
+      stamp,
+    )
+  }
+
+  /**
+   * Whether the per-session cap is certain to release this row's texts on the
+   * pass that would build it — in which case reading the file first is pure
+   * waste, since `_capLiveChanges` walks rows heaviest-first and breaks only
+   * once it is under budget or the heaviest remaining row is already bare.
+   * A row whose own size exceeds the whole budget therefore always degrades.
+   *
+   * `chars <= bytes`, so the estimate errs toward "too big": a file that might
+   * have fit gets a degraded row rather than a read. Skipping the read also skips
+   * the self-heal check, which is provably harmless for a pinned baseline — a heal
+   * needs `baseline === current`, but a pinned baseline is capped at
+   * `maxBaselineBytes` while being skipped needs more than `maxLiveChangeBytes / 2`,
+   * so the two can never meet while `maxLiveChangeBytes > 4 * maxBaselineBytes`
+   * (true for the defaults). A *reconstructed* baseline is outside that argument:
+   * when its hunks cannot be unapplied it comes back equal to `current`, so such a
+   * file now sticks as degraded instead of healing out of the list. Saying "changed,
+   * not comparable" beats the row vanishing, so that is the trade taken.
+   */
+  private _wouldBeDegraded(record: FileRecord, size: number): boolean {
+    const baselineChars = record.baseline == null ? size : record.baseline.length
+    return 2 * (baselineChars + size) > this.maxLiveChangeBytes
+  }
+
+  /**
+   * Whether this file is binary, per a small head sample. A head read that fails
+   * reports "unknown" and the file is let through, matching every other failure
+   * path in this tracker: losing a real change is worse than tracking a binary
+   * one, and the consequence is bounded by the read caps above.
+   */
+  private async _isBinary(uri: URI, path: string): Promise<boolean> {
+    const binary = await probeIsBinary(this._files, uri)
+    if (binary === undefined) {
+      this._logger.debug(`binary probe failed for ${path}; treating it as text`)
+      return false
     }
+    return binary
   }
 }
 

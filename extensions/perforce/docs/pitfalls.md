@@ -17,6 +17,7 @@
 - [巨量 stdout 会撑爆 V8 字符串上限 → 宿主崩溃](#巨量-stdout-会撑爆-v8-字符串上限--扩展宿主崩溃踩过)
 - [p4 子进程永不退出 → 宿主无限挂起](#p4-子进程永不退出--宿主无限挂起44-分钟闩锁卡死)
 - [中文/非 ASCII 路径 argv 乱码；超长 argv ENAMETOOLONG](#中文非-ascii-路径经-argv-传给-p4-会乱码超长-argv-会-enametoolong已修复-x-argfile)
+- [宿主侧内建 `.p4ignore` 读取与 `p4 ignores -i` 的语义差异](#-宿主侧内建-p4ignore-读取与-p4-ignores--i-的语义差异)
 
 ---
 
@@ -181,3 +182,18 @@ P4D 2024.2 实测（PROBE-FINDINGS §11.5）：`p4 opened` 通篇没有 `unresol
   - spawn 日志逐项累计截断（前 500 字符 + 参数个数），禁止把上万路径 `join` 成大字符串。
   - 纯切分逻辑 `splitArgsForArgfile` 已导出，单测见 `p4Service.test.ts`；e2e 的 fake-p4 已支持 `-x`（`swarmReview.spec.ts` 有中文路径 review diff 回归用例）。
 - **不在 `_mutate` 里按批切 mutation**：`-x` 是 p4 原生大参数通道（一条命令、原子、不灌满 `ConcurrencyGate`）。读路径的 `chunkByLength`（`reconcile -n` / `ignores` / `where`）保持分批，限制单次输出体积。
+
+## ⚠️ 宿主侧内建 `.p4ignore` 读取与 `p4 ignores -i` 的语义差异
+
+**背景**：会话更改视图里「推测」条目的忽略过滤走两条腿——**委托**本扩展的 `<providerId>.checkIgnore`，加上**编辑器内建**的 `.p4ignore` 解析（`apps/editor/src/renderer/services/scm/P4IgnoreService.ts` + `p4Ignore.ts`，纯函数）。内建那条必须在，因为委托给不出答案有三种形态，且**都长得像「没有忽略」**：扩展未安装/未激活（`sourceControls` 全空）、扩展在线但**离线**（`checkIgnore` 在连接守卫 `if (this._connection !== 'connected')` 后返回 `[]`，而 `_goOffline` **不移除** source control，`rootUri` 还在）、命令尚未注册（返回 `undefined`，且宿主会把整批缓存成「未忽略」且不再失效）。取并集而非「无归属才兜底」，正是因为这个「空数组」是假答案。
+
+**差异清单**（判断「内建层是不是判错了」时逐条对）：
+
+1. **自定义 `P4IGNORE` 名读不到**。`p4 set P4IGNORE=<名字>` 在 Windows 写注册表、Unix 写 `~/.p4enviro`，宿主无从读取；它只认进程环境变量里的 `P4IGNORE` 和链上 `.p4config` / `p4config.txt` 里的 `P4IGNORE=` 行。用自定义名的用户，这条兜底等于没开。
+2. **不做 depot 剔除**。本扩展的 `checkIgnore` 会额外做一次 fstat，把**已在 depot** 的候选从忽略集合里剔掉（受控文件不该被判成忽略）；宿主侧没有这个信息，所以受控文件命中规则时会被当忽略丢掉。**影响面仅限「推测」条目**——Agent 明确上报的编辑完全不经过这一层。
+3. **默认文件名偏宽**。宿主认 `.p4ignore` 与 `p4ignore.txt`（P4 Server 2023.2+ 起的默认）；更早的服务器没有默认名，必须显式 `p4 set P4IGNORE`。方向是「更宽」，属于安全的一侧。
+4. **语法实现上有刻意的分歧**（都写在 `p4Ignore.ts` 的文件头）：只认**行首** `/` 为锚定（行中的 `/` 不锚定，与 gitignore 相反）；非 directoryOnly 的规则命中目录即连带子树；`{a,b}` / `[...]` 会被共享 glob 编译器解释（p4 本身无此语法）；**不实现** gitignore 的「父目录被排除后 `!` 无法恢复」——p4 文档没有这条，而 Unreal 风格的 `.p4ignore` 恰恰依赖 `**/DerivedDataCache/` + `!**/Source/**/DerivedDataCache/` 反向恢复生效。
+5. **搜索上界是本扩展没有的概念**。宿主从文件所在目录**逐级向上**找规则文件（所以「工作区是 client root 子目录」时根目录的规则照样生效），上界取已注册 client root；完全没有 perforce source control 时退到文件系统根。可以用 `scm.ignoreFiles.searchCeiling: workspace` 把它限制在打开的文件夹内。
+6. **刷新时机**：规则**内容**每次使用都按 `stat` 复验，所以改一条已有规则→下一次 flush 就生效；只有「规则文件**新出现**」可能滞后（目录探测缓存 30s，工作区内的文件变化有事件可提前失效）。**宿主刻意不给祖先规则文件挂 watcher**——main 侧把工作区外的文件实现为「对它所在**目录**做非递归 watch，任何兄弟变化都重新分类已登记的文件」，于是 client root 里正常的构建噪声会被反复报成 `.p4ignore` 的 `modified`，而这条事件流正是会话更改兜底读的那条：净噪层自己制造噪声（e2e 里表现为列表里冒出一行 `.p4ignore`）。
+
+**排查入口**：宿主侧命中时会打一条 debug 日志，带规则原文与规则文件所在目录 —— `dropping p4-ignored path <path> (rule "<行原文>" in <目录>)`。拿它和 `p4 ignores -i -v <path>` 的输出对照，就能直接指出是哪一层判错了。单测见 `apps/editor/src/renderer/services/scm/__tests__/p4Ignore.test.ts` 与 `P4IgnoreService.test.ts`。

@@ -1899,6 +1899,7 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     },
     readWorkspaceFileText: (fsPath: string): Promise<string> =>
       services.fileService.readFileText(URI.file(fsPath)),
+    isWorkspaceWatchArmed: (): boolean => services.explorerTreeService.watchArmed,
     getViewContainerByViewId: (viewId: string) =>
       services.viewDescriptorService.getViewContainerByViewId(viewId)?.id,
     getActiveViewContainerId: (location: number) =>

@@ -5,6 +5,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { NoopTelemetryService } from '@universe-editor/platform'
 import {
+  MEMORY_RELEASE_RETRY_MS,
   MEMORY_SAMPLE_INTERVAL_MS,
   MEMORY_SAMPLE_INTERVAL_PRESSURED_MS,
   MemoryPressureService,
@@ -105,6 +106,51 @@ describe('MemoryPressureService — sampling', () => {
     setUsed(1 * GIB)
     service.sample()
     // Relieving must not trigger another release — only the rise costs content.
+    expect(release).not.toHaveBeenCalled()
+    service.dispose()
+  })
+
+  // Regression (OOM): `release()` ran only on a level *change*, so a heap parked above
+  // the critical line — which is the shape the sampled crash had, minutes of it — drove
+  // every releaser exactly once and then never again while the heap climbed to the
+  // limit. The caches refill from the work causing the pressure, so staying put is not
+  // a reason to stop asking.
+  it('keeps releasing while the heap stays at a level', () => {
+    let at = 0
+    const { service, setUsed } = harness({ now: () => at })
+    const release = vi.fn(() => 1024)
+    service.registerReleaser({ id: 'cache', release })
+
+    setUsed(3 * GIB)
+    service.sample()
+    expect(release).toHaveBeenCalledTimes(1)
+
+    setUsed(3 * GIB)
+    service.sample()
+    expect(release).toHaveBeenCalledTimes(1)
+
+    at += MEMORY_RELEASE_RETRY_MS
+    service.sample()
+    expect(release).toHaveBeenCalledTimes(2)
+
+    // And again after another interval — this is a cadence, not one extra attempt.
+    at += MEMORY_RELEASE_RETRY_MS
+    service.sample()
+    expect(release).toHaveBeenCalledTimes(3)
+
+    service.dispose()
+  })
+
+  it('does not retry the release while the heap is normal', () => {
+    let at = 0
+    const { service, setUsed } = harness({ now: () => at })
+    const release = vi.fn(() => 1024)
+    service.registerReleaser({ id: 'cache', release })
+
+    setUsed(1 * GIB)
+    service.sample()
+    at += MEMORY_RELEASE_RETRY_MS * 10
+    service.sample()
     expect(release).not.toHaveBeenCalled()
     service.dispose()
   })

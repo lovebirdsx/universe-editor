@@ -71,6 +71,12 @@ export class StubSessionChangeTracker implements ISessionChangeTrackerService {
   changesFor(): IObservable<readonly SessionFileChange[]> {
     return this._empty
   }
+  hasEntry(sessionId: string, path: string): boolean {
+    return (
+      this.records.some((r) => r.sessionId === sessionId && r.path === path) ||
+      this.watchedRecords.some((r) => r.sessionId === sessionId && r.path === path)
+    )
+  }
   clear(sessionId: string): void {
     this.clearedSessions.push(sessionId)
   }

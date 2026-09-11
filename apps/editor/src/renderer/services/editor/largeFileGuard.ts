@@ -18,24 +18,14 @@ import {
   type URI,
 } from '@universe-editor/platform'
 import { FileEditorInput } from './FileEditorInput.js'
+import { probeIsBinary } from '../files/binaryDetection.js'
 
 export const LARGE_FILE_THRESHOLD = 2 * 1024 * 1024
-
-/** Binary-detection sample window, matching VSCode's ZERO_BYTE_DETECTION_BUFFER_MAX_LEN. */
-export const BINARY_DETECTION_BUFFER_MAX_LEN = 512
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
-
-/** Heuristic: a buffer containing a NUL byte is treated as binary. */
-export function isBinaryBytes(bytes: Uint8Array): boolean {
-  for (let i = 0; i < bytes.length; i++) {
-    if (bytes[i] === 0) return true
-  }
-  return false
 }
 
 export async function confirmOpenFile(
@@ -61,14 +51,8 @@ export async function confirmOpenFile(
   }
   if (size <= LARGE_FILE_THRESHOLD) return true
 
-  let binary = false
-  try {
-    binary = isBinaryBytes(
-      await fileService.readFileHead(resource, BINARY_DETECTION_BUFFER_MAX_LEN),
-    )
-  } catch {
-    // Head read failed — fall through to the file-size warning below.
-  }
+  // Head read failure means "unknown" — fall through to the file-size warning.
+  const binary = (await probeIsBinary(fileService, resource)) ?? false
 
   if (binary) {
     const result = await dialogService.confirm({

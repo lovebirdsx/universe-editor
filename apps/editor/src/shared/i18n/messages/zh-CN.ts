@@ -1036,6 +1036,11 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.scm.diffDecorations.minimap': '仅在小地图中显示差异装饰。',
   'settings.scm.diffDecorations.none': '不显示差异装饰。',
   'settings.scm.diffDecorations.overview': '仅在概览标尺中显示差异装饰。',
+  'settings.scm.ignoreFiles.searchCeiling':
+    '在过滤推测的会话更改时，编辑器从文件所在目录向上查找 Perforce 忽略文件（.p4ignore / p4ignore.txt）的范围。仅对 Perforce 工作区生效。',
+  'settings.scm.ignoreFiles.searchCeiling.filesystem':
+    '一直向上查找到 Perforce client root；若该路径不属于任何 client，则查找到文件系统根目录。',
+  'settings.scm.ignoreFiles.searchCeiling.workspace': '不查找到打开的文件夹之上。',
   'settings.scm.mergeEditor':
     '在三方合并编辑器中打开有冲突的文件。设为 false 时，冲突以工作区差异的形式打开，并通过冲突标记就地解决。',
   'settings.semanticHighlighting.configuredByTheme': '由主题配置',
@@ -3152,6 +3157,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'editor.externallyModified.detail': '是否放弃当前更改并从磁盘重新加载？',
   'editor.externallyModified.reload': '重新加载',
   'editor.externallyModified.keepChanges': '保留当前更改',
+  'editor.externalReloadTooLarge':
+    '文件 "{name}" 过大，已停止自动同步磁盘上的改动。重新打开该文件可载入最新内容。',
   'languageMode.autoDetect': '自动检测',
   'languageMode.configured': '配置的语言',
   'languageMode.placeholder': '选择语言模式',

@@ -14,10 +14,13 @@ import {
   IFileService,
   IFileWatcherService,
   ILoggerService,
+  INotificationService,
   IUriIdentityService,
   IUserDataFilesService,
   NullLogger,
+  Severity,
   URI,
+  localize,
   type IEditorGroup,
   type IDisposable,
   type IFileChangeEvent,
@@ -33,13 +36,22 @@ import { MonacoModelRegistry } from '../workbench/editor/monaco/MonacoModelRegis
 import { applyMinimalTextEdit } from '../services/editor/minimalModelEdit.js'
 import { splitLeadingBom } from '../services/editor/leadingBom.js'
 import { isDescendant } from '../services/explorer/explorerTreeUtils.js'
+import { readForExternalReload } from '../services/files/externalReload.js'
 import { IOutOfWorkspaceWatchService } from '../services/files/outOfWorkspaceWatchService.js'
+import { basenameOfResource } from '../workbench/files/resourceInfo.js'
 
 export class ExternalChangeWatcher extends Disposable implements IWorkbenchContribution {
   private readonly _logger: ILogger
   private readonly _groupDisposables = new Map<number, IDisposable>()
   private _watchUpdatePending = false
   private _watchHandle: IDisposable | undefined
+  /**
+   * Comparison keys already reported as too large to keep reloading. Grows with the
+   * number of distinct oversized files anyone opens — a handful at most — and is
+   * never pruned on purpose: the alternative is one toast per change batch for as
+   * long as the file keeps being written.
+   */
+  private readonly _tooLargeNotified = new Set<string>()
 
   constructor(
     @IFileWatcherService private readonly _watcher: IFileWatcherService,
@@ -51,6 +63,7 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
     @ILoggerService loggerService: ILoggerServiceType,
     @IUserDataFilesService private readonly _userData: IUserDataFilesService,
     @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
+    @INotificationService private readonly _notifications: INotificationService,
   ) {
     super()
     this._logger =
@@ -229,9 +242,36 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
 
     if (changedKeys.size === 0) return
 
-    const handled = await this._reloadChangedFileEditors(changedKeys)
-    await this._reconcilePreviewModels(changedKeys, handled)
-    await this._refreshChangedDiffEditors(changedKeys, handled)
+    // Collected per batch (this runs concurrently for overlapping batches) and
+    // reported after all three reconcile passes, so a file refused by more than one
+    // of them still produces a single notice.
+    const skipped = new Map<string, URI>()
+    const handled = await this._reloadChangedFileEditors(changedKeys, false, skipped)
+    await this._reconcilePreviewModels(changedKeys, handled, skipped)
+    await this._refreshChangedDiffEditors(changedKeys, handled, skipped)
+    this._notifyTooLarge(skipped)
+  }
+
+  /**
+   * Say it once per file. A buffer that silently stops tracking disk is a data-loss
+   * trap — the user sees stale content, edits it and saves over someone else's
+   * write — so the refusal is never silent, but it is also never repeated: the file
+   * can keep changing every second for minutes.
+   */
+  private _notifyTooLarge(skipped: ReadonlyMap<string, URI>): void {
+    for (const [key, uri] of skipped) {
+      if (this._tooLargeNotified.has(key)) continue
+      this._tooLargeNotified.add(key)
+      this._logger.info(`externalChange tooLargeToReload ${uri.toString()}`)
+      this._notifications.notify({
+        severity: Severity.Warning,
+        message: localize(
+          'editor.externalReloadTooLarge',
+          '"{name}" is too large to keep in sync with changes on disk. Reopen it to load the latest content.',
+          { name: basenameOfResource(uri) },
+        ),
+      })
+    }
   }
 
   private async _exists(resource: URI): Promise<boolean> {
@@ -246,6 +286,7 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
   private async _reloadChangedFileEditors(
     changedKeys: Set<string>,
     force = false,
+    skipped?: Map<string, URI>,
   ): Promise<Set<string>> {
     const matches: FileEditorInput[] = []
     for (const group of this._groups.groups) {
@@ -271,7 +312,9 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
       if (seen.has(key)) continue
       seen.add(key)
       try {
-        await input.checkExternalChange(this._dialog, force)
+        if ((await input.checkExternalChange(this._dialog, force)) === 'too-large') {
+          skipped?.set(key, input.resource)
+        }
       } catch (err) {
         // Best-effort: a failure on one input must not stall the others.
         this._logger.warn(`externalChange check failed ${key}`, err)
@@ -296,6 +339,7 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
   private async _reconcilePreviewModels(
     changedKeys: Set<string>,
     handled: Set<string>,
+    skipped: Map<string, URI>,
   ): Promise<void> {
     const heldSources: FileEditorInput[] = []
     const orphanUris = new Map<string, URI>()
@@ -319,7 +363,9 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
       if (seen.has(key)) continue
       seen.add(key)
       try {
-        await source.checkExternalChange(this._dialog)
+        if ((await source.checkExternalChange(this._dialog)) === 'too-large') {
+          skipped.set(key, source.resource)
+        }
       } catch (err) {
         this._logger.warn(`preview source reconcile failed ${key}`, err)
       }
@@ -329,11 +375,15 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
       const model = MonacoModelRegistry.peek(uri)
       if (!model || model.isDisposed()) continue
       try {
-        const text = await this._fileService.readFileText(uri)
+        const read = await readForExternalReload(this._fileService, uri)
+        if (!read.ok) {
+          if (read.reason === 'too-large') skipped.set(key, uri)
+          continue
+        }
         // Re-check after the await: closing the preview releases the model
         // inside this window, and editing a disposed model throws.
         if (model.isDisposed()) continue
-        applyMinimalTextEdit(model, text)
+        applyMinimalTextEdit(model, read.text)
       } catch (err) {
         this._logger.warn(`preview reconcile failed ${key}`, err)
       }
@@ -355,6 +405,7 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
   private async _refreshChangedDiffEditors(
     changedKeys: Set<string>,
     handled: Set<string>,
+    skipped: Map<string, URI>,
   ): Promise<void> {
     const byUri = new Map<string, DiffEditorInput[]>()
     for (const group of this._groups.groups) {
@@ -377,13 +428,14 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
 
       if (inputs[0]!.modifiedEditable) {
         if (!handled.has(key)) {
-          let diskText: string
-          try {
-            diskText = await this._fileService.readFileText(uri)
-          } catch {
-            // Gone from disk — the deletion path closes it; nothing to refresh.
+          const read = await readForExternalReload(this._fileService, uri)
+          if (!read.ok) {
+            // Too large → leave the diff as it is and say so once. Unreadable →
+            // gone from disk; the deletion path closes it, nothing to refresh.
+            if (read.reason === 'too-large') skipped.set(key, uri)
             continue
           }
+          const diskText = read.text
           // Re-check after the await: closing the tab releases the shared model
           // inside this window, and both reads below would throw on a disposed
           // one. A disposed model means no editor still holds this URI (the
@@ -413,11 +465,12 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
       if (model) {
         text = model.getValue()
       } else {
-        try {
-          text = await this._fileService.readFileText(uri)
-        } catch {
+        const read = await readForExternalReload(this._fileService, uri)
+        if (!read.ok) {
+          if (read.reason === 'too-large') skipped.set(key, uri)
           continue
         }
+        text = read.text
       }
       for (const input of inputs) input.update(input.originalContent, text)
     }

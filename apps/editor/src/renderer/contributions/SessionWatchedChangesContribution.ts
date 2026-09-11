@@ -11,8 +11,12 @@
  *    watcher batch → tag with the sessions running at event time
  *      → grace delay (lets the agent's own tool-call report land first,
  *        turning the flush into a cheap refresh for reported edits)
+ *      → drop ignored paths (the owning provider's checkIgnore ∪ the built-in
+ *        Perforce rules — see _ignoredPaths)
  *      → stat confirm (a 'deleted' event is frequently an atomic rewrite;
  *        directories are skipped)
+ *      → binary gate (a build's compiled artifacts cost one 512-byte head read
+ *        and never become tracked entries)
  *      → pre-change content from the owning SCM provider's getHeadContent
  *        command (git HEAD ≈ the pre-turn state; null = no HEAD revision,
  *        i.e. the file is new) → tracker.recordWatched
@@ -45,6 +49,8 @@ import { IEnvironmentSnapshotService } from '../../shared/ipc/environmentSnapsho
 import { IAcpSessionService } from '../services/acp/session/acpSessionService.js'
 import { ISessionChangeTrackerService } from '../services/acp/session/sessionChangeTracker.js'
 import { IScmService, resolveScmProviderId } from '../services/extensions/ScmService.js'
+import { probeIsBinary } from '../services/files/binaryDetection.js'
+import { IP4IgnoreService } from '../services/scm/P4IgnoreService.js'
 import { scmViewState } from '../workbench/scm/scmViewState.js'
 import { recentSelfWrites } from '../services/editor/selfWriteRegistry.js'
 
@@ -90,6 +96,7 @@ export class SessionWatchedChangesContribution
     @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
     @ILoggerService loggerService: ILoggerServiceType,
     @IEnvironmentSnapshotService envSnapshot: IEnvironmentSnapshotService,
+    @IP4IgnoreService private readonly _p4Ignore: IP4IgnoreService,
   ) {
     super()
     this._logger =
@@ -175,10 +182,10 @@ export class SessionWatchedChangesContribution
       this._droppedSinceFlush = 0
     }
     const ignored = await this._ignoredPaths(entries.map(([, entry]) => entry.uri.fsPath))
-    for (const [key, entry] of entries) {
+    for (const [, entry] of entries) {
       if (ignored.has(entry.uri.fsPath)) continue
       try {
-        await this._processEntry(key, entry)
+        await this._processEntry(entry)
       } catch (err) {
         this._logger.warn(`watched change failed for ${entry.uri.toString()}`, err)
       }
@@ -190,8 +197,34 @@ export class SessionWatchedChangesContribution
    * `.eslintcache`) have no HEAD revision, so without this they'd all surface as
    * spurious "created" rows. Best-effort — an unregistered command or a failed
    * call degrades to no filtering rather than breaking the fallback chain.
+   *
+   * The provider's answer is unioned with the built-in Perforce rules, not
+   * substituted by them: `checkIgnore` returns an empty array both when nothing
+   * is ignored and when the provider is offline, unactivated, or not yet
+   * registered — three states where only the local rules can answer. Both
+   * sources run concurrently (the command times out after 20s, so serializing
+   * them would stall the flush).
    */
   private async _ignoredPaths(fsPaths: readonly string[]): Promise<ReadonlySet<string>> {
+    const [delegated, builtIn] = await Promise.all([
+      this._providerIgnoredPaths(fsPaths),
+      // The built-in resolver documents "never rejects", but the union must not
+      // hinge on another service's promise: an empty set degrades to the
+      // provider's answer alone.
+      this._p4Ignore.resolveIgnored(fsPaths).catch((err: unknown) => {
+        this._logger.warn('built-in Perforce ignore lookup failed; using the provider only', err)
+        return new Set<string>()
+      }),
+    ])
+    const ignored = new Set(delegated)
+    for (const p of builtIn) ignored.add(p)
+    if (ignored.size > 0) {
+      this._logger.debug(`dropping ${ignored.size} ignored watched-change path(s)`)
+    }
+    return ignored
+  }
+
+  private async _providerIgnoredPaths(fsPaths: readonly string[]): Promise<ReadonlySet<string>> {
     const byProvider = new Map<string, string[]>()
     for (const fsPath of fsPaths) {
       const providerId = resolveScmProviderId(
@@ -218,13 +251,10 @@ export class SessionWatchedChangesContribution
         this._logger.warn(`check-ignore via ${providerId} failed; keeping batch unfiltered`, err)
       }
     }
-    if (ignored.size > 0) {
-      this._logger.debug(`dropping ${ignored.size} ignored watched-change path(s)`)
-    }
     return ignored
   }
 
-  private async _processEntry(key: string, entry: PendingChange): Promise<void> {
+  private async _processEntry(entry: PendingChange): Promise<void> {
     // Confirm what's actually on disk: a 'deleted' event is often an atomic
     // rewrite, and directory events carry no diffable content.
     try {
@@ -235,16 +265,36 @@ export class SessionWatchedChangesContribution
       // (created-then-deleted, or a watched no-baseline entry whose file vanished).
     }
 
+    // Compiled intermediate artifacts are the dominant source of watcher noise
+    // during a build, and one of them must never become a tracked change: the
+    // tracker reads tracked files whole, and a 16MB binary crossing that path
+    // once took a renderer down. Answered first, so a binary costs a 512-byte
+    // head read and nothing more — in particular no baseline lookup.
+    const binary = await probeIsBinary(this._files, entry.uri)
+    if (binary === true) {
+      this._logger.debug(`dropping binary watched change ${entry.uri.fsPath}`)
+      for (const sid of entry.sessionIds) {
+        // Still refresh any session that already tracks the path — an earlier
+        // pass may have seen a text file before the artifact overwrote it — so
+        // the tracker gets to clear that row.
+        if (this._tracker.hasEntry(sid, entry.uri.fsPath)) {
+          this._tracker.recordWatched(sid, entry.uri.fsPath)
+        }
+      }
+      return
+    }
+    if (binary === undefined) {
+      // Fail open, like every other failure in this chain: losing a real change
+      // is worse than tracking one, and the tracker's own read caps bound it.
+      this._logger.debug(`binary probe failed for ${entry.uri.fsPath}; keeping the change`)
+    }
+
     // A single baseline lookup serves every session that saw the change.
     let baselineFetched = false
     let baselineOpts: { readonly baseline: string | null } | undefined
 
     for (const sid of entry.sessionIds) {
-      const tracked = this._tracker
-        .changesFor(sid)
-        .get()
-        .some((c) => this._uriIdentity.getComparisonKey(c.uri) === key)
-      if (tracked) {
+      if (this._tracker.hasEntry(sid, entry.uri.fsPath)) {
         // Already in the session diff — recordWatched only refreshes it.
         this._tracker.recordWatched(sid, entry.uri.fsPath)
         continue

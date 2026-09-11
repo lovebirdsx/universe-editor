@@ -107,6 +107,25 @@ export class ScmConfigurationContribution extends Disposable implements IWorkben
               'Open conflicted files in the 3-way merge editor. When false, conflicts open as a working-tree diff and are resolved inline via conflict markers.',
             ),
           },
+          'scm.ignoreFiles.searchCeiling': {
+            type: 'string',
+            enum: ['filesystem', 'workspace'],
+            enumDescriptions: [
+              localize(
+                'settings.scm.ignoreFiles.searchCeiling.filesystem',
+                'Search for ignore rules up to the Perforce client root, or the filesystem root when the path belongs to no client.',
+              ),
+              localize(
+                'settings.scm.ignoreFiles.searchCeiling.workspace',
+                'Never search for ignore rules above the open folder.',
+              ),
+            ],
+            default: 'filesystem',
+            description: localize(
+              'settings.scm.ignoreFiles.searchCeiling',
+              'How far up from a file the editor looks for Perforce ignore files (.p4ignore / p4ignore.txt) when filtering inferred session changes. Only applies to Perforce workspaces.',
+            ),
+          },
         },
       }),
     )

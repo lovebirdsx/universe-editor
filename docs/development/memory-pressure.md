@@ -38,6 +38,7 @@
 - **每帧带 `type` 与 `#id`**：`response` 帧在 wire 上**只有 `id`**（没有 `channel`），所以 `frameChannel`/`frameName` 对它恒为空。渲染侧不靠改协议解决，而是由**发起方**回答：`ChannelClient` 的 `_pendingRequests` 存下请求的 `channel`/`command`，一个 `frameTargetFor(msg)` 只对 `response` 做一次 Map 查找（零分配），`decodeInbound` 用它补全标签。于是告警从 `large inbound ipc frame 47.6MB` 变成 `… (response fileService.readFile #42)`，与 main 侧 ring 的 `#42` 对得上；解析不出也退化成 `(response #42)`，仍强于裸行。
 - **告警折叠**：同一 `(direction, channel, name)` 1s 窗口内只上报一次并携带 `suppressed` 计数。出站 warn 同样折叠（发送侧告警天然来自循环，一行一帧会把自己埋掉），折叠状态与 oversized 那份分开，避免互相重置窗口；入站 warn 维持**逐帧上报**。
 - **落点分进程注入**（platform 是纯 Node 包，不能碰 Electron）：renderer 在 `renderer/ipc/bootstrap.ts`，main 在 `main/index.ts`。renderer 侧只有 `ILogger`（`bindIpcFrameLog`，晚绑定——首个帧早于文件日志器存在），main 侧走 `mainLogger` + `errorSink.recordLocal`。`ITelemetryService` 不在这条链上，它只服务**内存水位**（见下文 `_snapshot`）。
+- **闸门接住的是症状，不是肇因**。47.6MiB 那条入站帧的发起方是**会话改动追踪的重算读取**：`sessionChangeTracker._buildChange` → `IFileService.readFileText` 把一个约 16MiB 的二进制编译产物当文本整读回来（其 `stat.size` 比 `MAX_CURRENT_BYTES` 低约 0.8%，尺寸闸门一次都没拦到），7 分钟内重复 113 次。帧闸门保证的是「这一帧不会把 renderer 打穿」，而**读取次数 × 单次体量**完全在它之外——别把那次 OOM 记成已解决。
 
 > renderer 的 `direction:'out'` 是它自己发的；**main 的 `direction:'out'` 才是 renderer 必须 decode 的那些帧**。renderer OOM 时来不及上报，所以 main 侧的 ring 才是权威答案——诊断包里的 `ipc-frames.txt` 就是它。
 
@@ -45,6 +46,7 @@
 
 - `memoryPressureLevels.ts`：纯函数阈值/迟滞。口径是**绝对字节为纲 + limit 比例为底**（`max(绝对值, 比例×limit)`），比例同时封顶；`limit < 512MB` 视为不可信，回落 4GB cage。迟滞 0.85 防贴阈值抖动。
 - `memoryPressureService.ts`：分级 `normal / elevated / critical`，超阈值按 priority 跑注册的 releaser。每个 releaser 容错、**必须返回真实释放字节**（否则归因日志不可读）。`critical` 时**先落诊断快照再释放**——释放前的状态才是现场。
+- **停留在一个档位也会重复释放**（`MEMORY_RELEASE_RETRY_MS = 5s`）。只在**跃迁**时释放等于只试一次：现场堆在 critical 线上方待了几分钟，1s 采样下档位再没变过，于是每个 releaser 恰好跑了一次，而堆继续爬到上限。缓存是**被制造压力的那些工作重新填满的**，所以"待在原地"不是停手的理由；间隔是必需的（释放本身有成本，且压在线上方的堆每次采样都会报同一个档位）。`normal` 不参与重试。
 - 采样器用**自重排 `setTimeout`，绝不用 `requestIdleCallback`**：主线程被 GC 挤占时永远不会 idle，恰恰是最需要采样的时刻。正常 5s、受压 1s。
 - **堆曲线要送到 main 才能在崩溃后活下来**（`rendererHeapReporter.ts`）：renderer 是它自己 V8 堆的唯一观测者，而 `processMetrics.log` 由 main 写——不送出去，曲线就与它所描述的进程同生共死。上报走已有的 `IDiagnosticsService` 通道（不新开通道），**复用采样器自己的定时循环**（不另起 timer），节流 30s / 受压 5s，`_reportedAt` 初值 0 使**首个读数必上报**（启动两分钟就崩的场景正是 30s 节流会整段漏掉的）。上报是 fire-and-forget 且吞掉 rejection——它绝不能带走唯一的堆观测者。
 - **落盘格式**：`renderer-heap window=1 used=3200MB limit=4096MB usedPct=78.1 level=critical holders=acp:412MB,monaco:38MB(12)`，写进**与 `main-heap` 同一个** `processMetrics.log`（同一时间线）。main 侧 32 槽预分配 ring：平时是 16 分钟，受压后同一只 ring 变成 160 秒的密集崩溃前窗口。`level` 先过白名单正则再落日志（防换行注入），`used` 非有限/≤0 的样本**丢弃而不是写 0**——写 0 会读成"堆很健康"，正是最不该在出事报告上出现的结论。被丢的样本计入 `dropped=N`（0 时省略）：否则"从没有过曲线"和"每一条都被拒"是同一份文件，而这是两个相反的结论。
@@ -60,8 +62,16 @@
 | `acp.mentionFileListing` | `@` 文件清单 | 75% | 0 |
 | `acp.residentBudget` | ACP 会话常驻预算 | 75% | 0 |
 | `dirtyDiff.headCache` | HEAD 全文（由 `DirtyDiffContribution` 自注册） | — | — |
+| `sessionChanges.liveTexts` | 会话改动追踪的活行全文（由 `SessionChangeTrackerService` 自注册） | — | 0 |
 
 `acpElicitationDraftCache` / `acpChatViewStateCache` 只加条数上限、**不注册 releaser**（值是表单文本/滚动位置，释放的痛感大于收益）。`semanticSelector.typeHierarchyCache` 不加：其键是 Monaco token type（约 20 个闭集标准值），值全部派生自静态表，构造上就有界。
+
+**第四类缺口：读取频次。** 上面三层管的都是**持有**——持有多大、谁持有、算不算得清。它们对「同一份内容被反复读回来又反复丢掉」零可见度：
+
+- 重算过程本身的**瞬时分配不在任何预算里**。`sessionChangeTracker` 的每一趟重算会按顺序读被跟踪的文件全文，峰值只受 `RECOMPUTE_READ_CONCURRENCY = 8` 约束；读回来的字符串进 `_capLiveChanges` 之前不计入任何 `residentBudget`。
+- tracker 的 `_observables` 活行对 `holders` **零可见度**。`holders` 的 `acp` 量的是 `sharedResidentBudget.totalBytes()`（聊天记录预算），与改动追踪的行无关——所以那次事故里 `used - sum(holders)` 的 3.6GB 缺口根本无从归因。看到巨大缺口时，改动追踪的行要进嫌疑名单，尽管 `holders` 报不出来。现在它至少有了归还通道（见上表 `sessionChanges.liveTexts`）。
+- **`readFileText` 的两个消费方现在都带尺寸闸门**（`MAX_EXTERNAL_RELOAD_BYTES = 16MiB`，收在 `services/files/externalReload.ts`，四处调用点共用）：① 会话改动追踪的重算读取（`_buildChange` 的 `MAX_CURRENT_BYTES` + 二进制闸门，`_buildChange` 的预判降级）；② 编辑器为「磁盘上文件被外部改动」而做的整读重载——`FileEditorInput.checkExternalChange` 与 `ExternalChangeWatcher` 的三条对预览/diff 的重读路径。② 此前**只有 mtime 短路、没有任何尺寸判断**，而它每条路径都会被每个 watcher 批次重入一次：一个每秒被写一次的大文件就是每秒一次全文搬运。超限时的行为是**不读盘 + 把 mtime 记为已知 + 一次性通知用户**（脏缓冲区仍会先问，因为问不需要内容；用户选择保留时同样记下这次 mtime，同一份写入的后续批次不会反复弹框）；缓冲区里显示的内容会过期，这是刻意的取舍。第二条消费方在 `externalReload.ts` 里共用同一个常量，避免四处阈值各自漂移。
+- 因此在诊断包上判读这类事故，除了「持有者之和 vs `used`」，还要看**同一份内容被读了几次**：`ipc-frames.txt` 里同标签的大帧条数、以及 renderer 日志里被折叠的 `large inbound ipc frame … (response fileService.readFile #N)` 计数，是这个维度的唯一证据。
 
 ### 三、崩溃恢复链路
 
@@ -89,6 +99,8 @@
 - **`holders` 只覆盖已知持有者**：`acp` 与 `monaco` 之外的堆（`output` 通道、diff 缓存、webview、第三方库的字符串）不计。这不是缺陷而是判据的一半——"已知持有者之和 vs `used`"的差值本身就是结论。补 `output` 需要 `IOutputService` 暴露通道枚举，留作后续；崩溃栈落在 `OutputModelService._applyFlush ← ModelRawLineChanged` 的那份报告说明它值得补。上一条提到的高估方向同样作用于这个差值。
 - **32 槽 ring 不按窗口分割**：多窗口下每个窗口各自上报，共用同一只 ring（≈每窗口 16 条）。判定依据是"崩溃的那个窗口在最后一刻的曲线"，共用 ring 在最坏情况下仍保留它最近的若干条。真要多窗口精读再按窗口分桶。
 - **renderer 侧自己的帧 ring 不进诊断包**：renderer OOM 时来不及落盘，只有 main 侧那份能活到导出。**出站热路径只加一次比较**是硬约束：任何"顺便做点别的"的改动都要先证明它不分配。
+- **被降级的改动行会粘住**：`sessionChangeTracker` 的 `(size, mtime)` 行缓存缓存的是 **cap 之后**的行（必须如此，否则被降级的行会把两份全文永久留在缓存里），所以一行一旦因超预算被降级，只要文件 size/mtime 不变就一直显示 degraded，即使预算压力已经消失。换来的读短路值得这个代价，逃生口也是现成的：文件一动、或 `record()` 再触发一次失效即恢复。
+- **预判降级会多降级一些 CJK 文本**：读之前的预判用 `2 × (baseline 字符数 + size 字节数) > maxLiveChangeBytes`，`chars ≤ bytes` 使它是保守估计（宁可多降级也不多读）。一个 9MiB 的 CJK 文本本该产出约 12MB 的行（预算内），会被直接降级。该门闸的存在意义是：这样的行**必然**会被 `_capLiveChanges` 的 heaviest-first 循环降级，读它是纯浪费。**对 `watched` 无 baseline 的行它按两份文本估算，而该行实际只按引用持有一份**（`baselineSource:'none'` 的 baseline 就是 `current`），即这类超过 8MiB 的文件会被降级、而预算本来容得下 16MiB —— 这是**刻意保留**的保守：事故里那个约 16MiB 的二进制正是这个形状，把门闸放宽到 2× 就等于把那次的读取放回来。
 
 
 ## 验证

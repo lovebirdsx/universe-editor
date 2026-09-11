@@ -14,6 +14,7 @@ import {
   type IFileStat,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../FileEditorInput.js'
+import { MAX_EXTERNAL_RELOAD_BYTES } from '../../files/externalReload.js'
 import { MonacoModelRegistry } from '../../../workbench/editor/monaco/MonacoModelRegistry.js'
 
 interface FsState {
@@ -23,11 +24,13 @@ interface FsState {
 
 function makeFs(initial: Record<string, FsState>): IFileServiceType & {
   state: Record<string, FsState>
+  reads: number
 } {
   const state = { ...initial }
-  return {
+  const fs = {
     _serviceBrand: undefined,
     state,
+    reads: 0,
     async readFile() {
       throw new Error('not implemented')
     },
@@ -35,6 +38,7 @@ function makeFs(initial: Record<string, FsState>): IFileServiceType & {
       throw new Error('not implemented')
     },
     async readFileText(resource: URI) {
+      fs.reads++
       const s = state[resource.toString()]
       if (!s) throw new Error('ENOENT')
       return s.text
@@ -68,7 +72,8 @@ function makeFs(initial: Record<string, FsState>): IFileServiceType & {
     async listRecursive() {
       return []
     },
-  } as IFileServiceType & { state: Record<string, FsState> }
+  }
+  return fs as IFileServiceType & { state: Record<string, FsState>; reads: number }
 }
 
 interface ConfirmCall {
@@ -205,6 +210,96 @@ describe('FileEditorInput.checkExternalChange', () => {
     const out = await input.checkExternalChange(dialog, true)
     expect(out).toBe('unchanged')
     expect(dialog.calls).toHaveLength(0)
+    MonacoModelRegistry.release(input.resource)
+    input.dispose()
+  })
+
+  // Regression (OOM): the reload path compared mtime and then read the whole file, so
+  // a file rewritten every second (a build product, a log an agent appends to) cost a
+  // whole-file read plus its ~47MB wire frame every second until the renderer heap was
+  // gone. Over the ceiling the read is refused, and the buffer is deliberately left
+  // stale rather than being read "just this once" per batch.
+  it('refuses to reload a file over the ceiling, and stops re-checking it', async () => {
+    const input = inst.createInstance(FileEditorInput, uri)
+    await input.resolve()
+    const model = MonacoModelRegistry.acquire(input.resource, input.backupContent)
+    fs.state[uri.toString()] = {
+      text: 'x'.repeat(MAX_EXTERNAL_RELOAD_BYTES + 1),
+      mtime: 200,
+    }
+    const dialog = makeDialog([])
+
+    expect(await input.checkExternalChange(dialog)).toBe('too-large')
+    expect(fs.reads).toBe(1) // resolve()'s read, and nothing since
+    expect(model.getValue()).toBe('one')
+    expect(input.backupContent).toBe('one')
+    expect(dialog.calls).toHaveLength(0)
+
+    // The mtime is taken as known: without it every later batch re-enters the same
+    // branch and the file never goes quiet.
+    expect(input.lastKnownMtime).toBe(200)
+    expect(await input.checkExternalChange(dialog)).toBe('unchanged')
+    expect(fs.reads).toBe(1)
+
+    MonacoModelRegistry.release(input.resource)
+    input.dispose()
+  })
+
+  it('resumes reloading once the file is back under the ceiling', async () => {
+    const input = inst.createInstance(FileEditorInput, uri)
+    await input.resolve()
+    const model = MonacoModelRegistry.acquire(input.resource, input.backupContent)
+    fs.state[uri.toString()] = {
+      text: 'x'.repeat(MAX_EXTERNAL_RELOAD_BYTES + 1),
+      mtime: 200,
+    }
+    const dialog = makeDialog([])
+    expect(await input.checkExternalChange(dialog)).toBe('too-large')
+
+    // Shrunk again: the next write moves mtime past the known one and the gate opens.
+    fs.state[uri.toString()] = { text: 'small again', mtime: 300 }
+    expect(await input.checkExternalChange(dialog)).toBe('reloaded')
+    expect(model.getValue()).toBe('small again')
+    expect(input.lastKnownMtime).toBe(300)
+
+    MonacoModelRegistry.release(input.resource)
+    input.dispose()
+  })
+
+  // A dirty buffer still has to be asked — someone else's write is about to lose to
+  // the user's unsaved edits, and asking needs no file content. Only a confirmed
+  // discard pays for the read, and that read is one user action, not a per-batch loop.
+  it('still asks a dirty buffer over the ceiling, and reads only on confirm', async () => {
+    const input = inst.createInstance(FileEditorInput, uri)
+    await input.resolve()
+    const model = MonacoModelRegistry.acquire(input.resource, input.backupContent)
+    model.setValue('LOCAL')
+    input.setDirty(true)
+    const huge = 'x'.repeat(MAX_EXTERNAL_RELOAD_BYTES + 1)
+    fs.state[uri.toString()] = { text: huge, mtime: 200 }
+
+    const decline = makeDialog([false])
+    expect(await input.checkExternalChange(decline)).toBe('kept')
+    expect(decline.calls).toHaveLength(1)
+    expect(fs.reads).toBe(1)
+    expect(model.getValue()).toBe('LOCAL')
+    expect(input.isDirty).toBe(true)
+
+    // Declining takes the mtime as known: the rest of that same write's batches must
+    // not re-ask, or a file being rewritten every second is a modal every second.
+    expect(await input.checkExternalChange(decline)).toBe('unchanged')
+    expect(decline.calls).toHaveLength(1)
+    expect(fs.reads).toBe(1)
+
+    // A new write moves mtime and the question is asked again.
+    fs.state[uri.toString()] = { text: huge, mtime: 300 }
+    const accept = makeDialog([true])
+    expect(await input.checkExternalChange(accept)).toBe('reloaded')
+    expect(accept.calls).toHaveLength(1)
+    expect(fs.reads).toBe(2)
+    expect(model.getValue()).toBe(huge)
+    expect(input.isDirty).toBe(false)
+
     MonacoModelRegistry.release(input.resource)
     input.dispose()
   })

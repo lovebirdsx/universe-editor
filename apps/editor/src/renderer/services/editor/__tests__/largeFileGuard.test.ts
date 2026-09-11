@@ -15,7 +15,7 @@ import {
   type IFileService,
   type IFileStat,
 } from '@universe-editor/platform'
-import { LARGE_FILE_THRESHOLD, confirmOpenFile, isBinaryBytes } from '../largeFileGuard.js'
+import { LARGE_FILE_THRESHOLD, confirmOpenFile } from '../largeFileGuard.js'
 
 function makeFs(opts: { stat: IFileStat | Error; head?: Uint8Array | Error }): IFileService {
   return {
@@ -88,20 +88,6 @@ function makeResolver(typeId: string | undefined): IEditorResolverService {
 }
 
 const uri = URI.file('/x.txt')
-
-describe('isBinaryBytes', () => {
-  it('returns true when the buffer contains a NUL byte', () => {
-    expect(isBinaryBytes(new Uint8Array([0x61, 0x00, 0x62]))).toBe(true)
-  })
-
-  it('returns false when the buffer has no NUL byte', () => {
-    expect(isBinaryBytes(new Uint8Array([0x61, 0x62]))).toBe(false)
-  })
-
-  it('returns false for an empty buffer', () => {
-    expect(isBinaryBytes(new Uint8Array())).toBe(false)
-  })
-})
 
 describe('confirmOpenFile', () => {
   it('lets a dedicated editor through without prompting', async () => {

@@ -1428,6 +1428,14 @@ export interface E2EProbe {
   moveExplorerResource(fsPath: string, destDirFsPath: string): Promise<string>
   /** Read a workspace file's UTF-8 text from disk (post-edit assertion helper). */
   readWorkspaceFileText(fsPath: string): Promise<string>
+  /**
+   * Whether the workspace watcher has armed (the main-process subscription is
+   * live). The recursive watch is deliberately deferred to the idle phase so it
+   * does not compete with restore, and a file written before it arms produces
+   * NO change event for anyone reading the shared stream. Poll this before
+   * writing a file whose change a watcher-driven path must observe.
+   */
+  isWorkspaceWatchArmed(): boolean
   // -- Views / view-container customization probe ---------------------------
   /** Id of the container a view currently lives in (custom location aware). */
   getViewContainerByViewId(viewId: string): string | undefined

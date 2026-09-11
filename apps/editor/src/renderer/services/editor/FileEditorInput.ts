@@ -22,6 +22,7 @@ import { MonacoModelRegistry } from '../../workbench/editor/monaco/MonacoModelRe
 import { SaveParticipant } from '../extensions/SaveParticipant.js'
 import { DidSaveNotification } from '../extensions/DidSaveNotification.js'
 import { applyMinimalTextEdit } from './minimalModelEdit.js'
+import { isTooLargeForExternalReload } from '../files/externalReload.js'
 import { noteSelfWrite } from './selfWriteRegistry.js'
 import { splitLeadingBom, UTF8_BOM } from './leadingBom.js'
 import type { monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
@@ -235,11 +236,14 @@ export class FileEditorInput extends EditorInput {
    * `force` skips the mtime short-circuit and reconciles against disk content
    * directly — used for atomic self-writes (e.g. settings written by the app)
    * where mtime granularity could otherwise falsely report 'unchanged'.
+   *
+   * A file over `MAX_EXTERNAL_RELOAD_BYTES` is not read on this path's own
+   * initiative and comes back as 'too-large' — see the gate in the body.
    */
   async checkExternalChange(
     dialog: IDialogService,
     force = false,
-  ): Promise<'unchanged' | 'reloaded' | 'kept' | 'gone'> {
+  ): Promise<'unchanged' | 'reloaded' | 'kept' | 'gone' | 'too-large'> {
     let stat
     try {
       stat = await this._fileService.stat(this._resource)
@@ -247,6 +251,31 @@ export class FileEditorInput extends EditorInput {
       return 'gone'
     }
     if (!force && stat.mtime === this._lastKnownMtime) return 'unchanged'
+
+    // Over the ceiling the content is not read on this path's own initiative: the
+    // read repeats for as long as the file keeps changing, and each one costs a
+    // multiple of the file (wire frame, decode, minimal-edit scan), which is how a
+    // renderer ends up dead. A clean buffer is left stale on purpose — the caller
+    // tells the user. A dirty one is still asked: that prompt needs no content, and
+    // swallowing someone else's write without a word is worse than a stale buffer.
+    // `force` is the app reconciling its own user-data files, small by construction.
+    const tooLarge = !force && isTooLargeForExternalReload(stat.size)
+    let discardConfirmed = false
+    if (tooLarge) {
+      if (!this.isDirty) {
+        // Known mtime, or every later batch re-enters this branch and the file never
+        // goes quiet. A shrink or any new write opens the gate again.
+        this._lastKnownMtime = stat.mtime
+        return 'too-large'
+      }
+      discardConfirmed = (await this._confirmDiscard(dialog)).confirmed
+      if (!discardConfirmed) {
+        // Known mtime here too: the disk state has not moved on, so re-asking on each
+        // later batch of the same write is noise, not diligence.
+        this._lastKnownMtime = stat.mtime
+        return 'kept'
+      }
+    }
 
     const diskText = await this._fileService.readFileText(this._resource)
     const content = splitLeadingBom(diskText)
@@ -273,7 +302,29 @@ export class FileEditorInput extends EditorInput {
       return 'reloaded'
     }
 
-    const result = await dialog.confirm({
+    if (!discardConfirmed && !(await this._confirmDiscard(dialog)).confirmed) {
+      this._lastKnownMtime = stat.mtime
+      return 'kept'
+    }
+
+    this._hasLeadingBom = content.hadBom
+    this._backupContent = content.text
+    this._savedAlternativeVersionId = undefined
+    this._lastKnownMtime = stat.mtime
+    // `model` was peeked before the confirm dialog; the editor can be closed
+    // while it is up, which releases the buffer. Editing a disposed model
+    // throws, and with no live buffer left the input is simply clean.
+    if (model && !model.isDisposed()) {
+      applyMinimalTextEdit(model, content.text)
+      this.markModelClean(model)
+    } else {
+      this.setDirty(false)
+    }
+    return 'reloaded'
+  }
+
+  private _confirmDiscard(dialog: IDialogService): Promise<{ confirmed: boolean }> {
+    return dialog.confirm({
       message: localize(
         'editor.externallyModified.message',
         'The file "{name}" has been modified externally.',
@@ -287,23 +338,6 @@ export class FileEditorInput extends EditorInput {
       cancelButton: localize('editor.externallyModified.keepChanges', 'Keep Current Changes'),
       type: 'warning',
     })
-    if (result.confirmed) {
-      this._hasLeadingBom = content.hadBom
-      this._backupContent = content.text
-      this._savedAlternativeVersionId = undefined
-      this._lastKnownMtime = stat.mtime
-      // `model` was peeked before the confirm dialog; the editor can be closed
-      // while it is up, which releases the buffer. Editing a disposed model
-      // throws, and with no live buffer left the input is simply clean.
-      if (model && !model.isDisposed()) {
-        applyMinimalTextEdit(model, content.text)
-        this.markModelClean(model)
-      } else {
-        this.setDirty(false)
-      }
-      return 'reloaded'
-    }
-    return 'kept'
   }
 
   private async _refreshMtime(): Promise<void> {

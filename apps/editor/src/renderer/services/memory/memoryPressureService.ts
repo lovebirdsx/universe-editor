@@ -103,6 +103,18 @@ export const MEMORY_SAMPLE_INTERVAL_MS = 5_000
 export const MEMORY_SAMPLE_INTERVAL_PRESSURED_MS = 1_000
 
 /**
+ * How often a level that is *not* changing re-runs the releasers.
+ *
+ * Releasing once per crossing is one attempt, not a bound: the sampled crash sat above
+ * the critical line for minutes, and at 1s sampling the level never changed again, so
+ * every releaser ran exactly once while the heap climbed to the limit. Caches refill
+ * from the work that is causing the pressure, which is why the attempt is worth
+ * repeating — but not on every sample, since releasing costs work of its own and a
+ * heap parked over the line reports the same level every time it is read.
+ */
+export const MEMORY_RELEASE_RETRY_MS = 5_000
+
+/**
  * How often a reading is pushed to main. Deliberately slower than sampling: this is the
  * curve that has to outlive the process, not the one that drives releasing, and main
  * keeps it in a 32-slot ring. Under pressure it tightens, so the same ring covers the
@@ -121,7 +133,7 @@ export interface MemoryPressureServiceOptions {
    * and any embedder without a diagnostics channel get.
    */
   readonly reportSample?: (sample: MemorySample, level: MemoryPressureLevel) => void
-  /** Test seam: the clock behind the report throttle. */
+  /** Test seam: the clock behind the report throttle and the release retry. */
   readonly now?: () => number
 }
 
@@ -167,6 +179,8 @@ export class MemoryPressureService extends Disposable implements IMemoryPressure
   private _timer: unknown
   private _running = false
   private _releasing = false
+  /** Clock reading of the last release, for the repeat-release interval. */
+  private _releasedAt = 0
 
   constructor(
     loggerService: ILoggerService,
@@ -268,7 +282,10 @@ export class MemoryPressureService extends Disposable implements IMemoryPressure
     // Reported before the early return and before `release()`: the reading that matters
     // is the one taken while the heap was still in the state being described.
     this._maybeReport(sample, next)
-    if (next === previous) return next
+    if (next === previous) {
+      this._retryRelease(next)
+      return next
+    }
 
     this._level.set(next, undefined)
     this._onDidChangeLevel.fire(next)
@@ -276,9 +293,25 @@ export class MemoryPressureService extends Disposable implements IMemoryPressure
       // Snapshot before releasing: the pre-release state is the one worth having,
       // because that is the state the process was actually in when it went bad.
       this._snapshot(next, sample)
+      this._releasedAt = this._now()
       this.release(next)
     }
     return next
+  }
+
+  /**
+   * Re-run the releasers while the heap stays at a level instead of only on the
+   * crossing that entered it — one release is not a bound on a heap that keeps
+   * climbing. Rate-limited by `MEMORY_RELEASE_RETRY_MS`; a releaser that freed
+   * nothing the first time is not spared a second look, because what it holds may
+   * have been refilled by the very work causing the pressure.
+   */
+  private _retryRelease(level: MemoryPressureLevel): void {
+    if (level === MemoryPressureLevel.Normal) return
+    const at = this._now()
+    if (at - this._releasedAt < MEMORY_RELEASE_RETRY_MS) return
+    this._releasedAt = at
+    this.release(level)
   }
 
   release(level: MemoryPressureLevel): readonly MemoryReleaseReport[] {

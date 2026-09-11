@@ -479,5 +479,15 @@ markdown job（ubuntu，CI run 31295361355）`markdownPreview.spec.ts:205` 与 `
 
 ---
 
+**案例 89 — 外部写盘后等「会话改动」兜底列出行、等满 60s 恒 0 行、且失败取证里连 `sessionWatchedChanges.log` 都不存在：工作区 watcher 是 idle 相位才 arm，arm 之前写盘不产生任何事件（树视图有 catch-up 重读，其它消费者没有）**
+信号：`smoke.sessionChanges.spec.ts` 新增的「built-in .p4ignore」用例在 `pnpm e2e specs/…`（4 workers 冷启）下约 1/5 概率 initial 挂 + retry 过（同一产物 `--repeat-each=6` 跑 15 条全绿，属偶发）；失败点 `await expect(rows).toHaveCount(1, { timeout: 60_000 })` 报 `Received: 0`，call log 是 `waiting for locator … 123 × resolved to 0 elements`（**恒 0**，非波动）。判别指纹：取证 `window-1/` 下**没有** `sessionWatchedChanges.log` 文件（renderer 通道文件懒创建，不存在 = 这条链路一次都没进）；同 spec 其余 4 条用例（行来自 agent 上报的 `Write` tool_call，不经 watcher）从未挂过。
+根因：`WorkspaceWatchContribution` 在 `WorkbenchPhase.Eventually`（idle）才调 `explorerTreeService.startWatching()`——注释写明「well after mount, so it never competes with the renderer restore window for main-process CPU」。`@parcel/watcher` 只报**订阅之后**的变更，arm 前的外部写永久无事件。树视图对这个窗口有补偿（`startWatching()` 顺带 `_refreshLoadedNodes()` 全量重读已加载目录），但 `SessionWatchedChangesContribution` 订阅的是同一条 `onDidChangeFiles`，**没有任何补偿**。本用例在 `waitForRestored()` 后约 1s 内就发 prompt 让 agent 写盘，正好骑在 arm 窗口上（4 冷启 Electron 竞争 main CPU 时窗口更宽）。
+定性：a) 同产物多跑全绿 ⇒ 非确定性；b) 失败取证零日志 ⇒ 不是「事件到了但被忽略层/二进制闸丢掉」（那会打 warn，文件会存在），而是**根本没有事件**；c) 单跑必过 ⇒ 不是产品逻辑错。三者合起来排除掉「忽略并集误伤 `a.ts`」「tracker 丢行」等假设。
+处置：不给 spec 加 sleep、也不让 fixture 重写一遍文件（那会把"事件丢了"变成"碰巧补上了"）——`ExplorerTreeService` 增加 `watchArmed`（`_syncWatch` 的 `.then()` 里置真，`unwatch`/重 arm 先置假；与只表示"已请求"的 `_watchStarted` 区分），探针加 `isWorkspaceWatchArmed()`，spec 在发 prompt 前 `expect.poll(() => …isWorkspaceWatchArmed()).toBe(true)`。验证：`--repeat-each=6` 全绿。
+教训：a) 「外部写盘 → 等 watcher 驱动的东西出现」的 e2e 必须先等**订阅就位**；`waitForRestored()` 只覆盖 restore 相位，**不覆盖 idle 相位的 watcher arm**。b) 就位信号只有产品侧给得出时，就给产品加只读探针（`getState` 类 getter + contract 一行），别用几何/时长猜。c) 取证里日志文件**不存在**（而非内容为空）是"这条链路一次都没进"的最强证据——先分辨「没进链路」与「进了但被日志等级过滤」（后者要临时降 level 重跑）。d) 与案例 55 是同一条产品事实（arm 前不监听）的两个消费者：55 是 treeitem 等不到，本条是会话改动等不到；**树的 catch-up 重读只治树**，任何新 consumer 都要自带就位判据（或参照本例补一个）。
+锚：`apps/editor/src/renderer/contributions/WorkspaceWatchContribution.ts`（idle 相位 arm）；`apps/editor/src/renderer/services/explorer/ExplorerTreeService.ts`（`watchArmed`/`_syncWatch`/`startWatching`）；`apps/editor/e2e/specs/smoke.sessionChanges.spec.ts`；`packages/e2e-contract/src/index.ts`（`isWorkspaceWatchArmed`）。
+
+---
+
 - `@parcel/watcher` Windows 多 worker 竞态的长期根治（升级 / 换 watcher / 进一步隔离），替代长期 `--workers=1`（案例 12/16/26/44 的 `@serial` 都是它的 workaround）。
 - DnD 用例稳定化（显式等待 drop 完成态），稳定后摘 `@flaky`（案例 46）。

@@ -22,7 +22,10 @@ import {
   type IWorkspaceService,
 } from '@universe-editor/platform'
 import { SessionChangeTrackerService } from '../sessionChangeTracker.js'
+import type { SessionFileChange } from '../sessionChangeTracker.js'
 import type { DiffHunk } from '../sessionDiffReconstruct.js'
+import { MemoryPressureService } from '../../../memory/memoryPressureService.js'
+import { MemoryPressureLevel } from '../../../memory/memoryPressureLevels.js'
 import { StubLoggerService } from '../../../../__tests__/_helpers/stubLoggerService.js'
 
 class FakeStorage implements IStorageService {
@@ -67,6 +70,11 @@ class FakeWorkspaceService implements IWorkspaceService {
 class FakeFileService implements IFileService {
   declare readonly _serviceBrand: undefined
   readonly files = new Map<string, string>()
+  /** Per-path mtime, bumped on every content write and on `bumpMtime`. A real
+   *  mtime (never constant) is what lets a stat-stamp cache be told apart from a
+   *  content cache — with a fixed 0 every "unchanged" assertion passes vacuously. */
+  private readonly _mtimes = new Map<string, number>()
+  private _clock = 0
   /** Optional per-path size override for stat() — fakes a huge file without
    *  materializing its content. */
   readonly sizes = new Map<string, number>()
@@ -80,8 +88,26 @@ class FakeFileService implements IFileService {
   peakInFlight = 0
   /** When set, readFileText resolves on the next microtask to expose concurrency. */
   deferReads = false
+  /** When > 0, readFileText holds for that long — long enough to keep a whole
+   *  recompute pass in flight across macrotasks, so requests can land mid-pass. */
+  readDelayMs = 0
+  /** When set, readFileText rejects although stat() still succeeds — a transient
+   *  read failure (EACCES/EMFILE) on a file that is still there. */
+  failReads = false
+  /** Calls to readFileHead, which the binary probe uses. */
+  headReads = 0
+  /** Paths whose head sample contains a NUL byte, i.e. look binary. */
+  readonly binaryPaths = new Set<string>()
+  /** When set, readFileHead rejects — the "cannot tell" path. */
+  headErrors = false
+  /** Runs inside stat(), i.e. while a build pass is suspended in its first
+   *  await — the only seam that can land a mutation between the pass reading a
+   *  record's cache and computing the stamp it will cache it under. */
+  onStat: (() => void) | undefined
   set(path: string, content: string): void {
-    this.files.set(URI.file(path).fsPath, content)
+    const fsPath = URI.file(path).fsPath
+    this.files.set(fsPath, content)
+    this._mtimes.set(fsPath, ++this._clock)
   }
   remove(path: string): void {
     this.files.delete(URI.file(path).fsPath)
@@ -89,12 +115,20 @@ class FakeFileService implements IFileService {
   addDirectory(path: string): void {
     this.directories.add(URI.file(path).fsPath)
   }
+  /** Change a path's mtime without touching its content — the only way to tell a
+   *  stat-stamp cache apart from a content cache. */
+  bumpMtime(path: string): void {
+    const fsPath = URI.file(path).fsPath
+    this._mtimes.set(fsPath, ++this._clock)
+  }
   async readFileText(resource: URI): Promise<string> {
     this.reads++
     this._inFlight++
     this.peakInFlight = Math.max(this.peakInFlight, this._inFlight)
     try {
       if (this.deferReads) await Promise.resolve()
+      if (this.readDelayMs > 0) await new Promise((r) => setTimeout(r, this.readDelayMs))
+      if (this.failReads) throw new Error('EACCES')
       if (this.directories.has(resource.fsPath)) throw new Error('EISDIR')
       const c = this.files.get(resource.fsPath)
       if (c === undefined) throw new Error('ENOENT')
@@ -106,27 +140,32 @@ class FakeFileService implements IFileService {
   async readFile(): Promise<Uint8Array> {
     throw new Error('not implemented')
   }
-  async readFileHead(): Promise<Uint8Array> {
-    throw new Error('not implemented')
+  async readFileHead(resource: URI): Promise<Uint8Array> {
+    this.headReads++
+    if (this.headErrors) throw new Error('EACCES')
+    return this.binaryPaths.has(resource.fsPath) ? new Uint8Array([0x00]) : new Uint8Array()
   }
   async writeFile(resource: URI, content: Uint8Array | string): Promise<void> {
     this.files.set(resource.fsPath, typeof content === 'string' ? content : content.toString())
+    this._mtimes.set(resource.fsPath, ++this._clock)
   }
   async exists(resource: URI): Promise<boolean> {
     return this.files.has(resource.fsPath)
   }
   async stat(resource: URI): Promise<IFileStat> {
     const fsPath = resource.fsPath
+    this.onStat?.()
+    const mtime = this._mtimes.get(fsPath) ?? 0
     if (this.directories.has(fsPath)) {
-      return { resource, isFile: false, isDirectory: true, size: 4096, mtime: 0 }
+      return { resource, isFile: false, isDirectory: true, size: 4096, mtime }
     }
     const override = this.sizes.get(fsPath)
     if (override !== undefined) {
-      return { resource, isFile: true, isDirectory: false, size: override, mtime: 0 }
+      return { resource, isFile: true, isDirectory: false, size: override, mtime }
     }
     const content = this.files.get(fsPath)
     if (content === undefined) throw new Error('ENOENT')
-    return { resource, isFile: true, isDirectory: false, size: content.length, mtime: 0 }
+    return { resource, isFile: true, isDirectory: false, size: content.length, mtime }
   }
   async list(): Promise<IDirectoryEntry[]> {
     return []
@@ -138,6 +177,10 @@ class FakeFileService implements IFileService {
   async listRecursive(): Promise<URI[]> {
     return []
   }
+}
+
+function makePressure(): MemoryPressureService {
+  return new MemoryPressureService(new StubLoggerService(), new NoopTelemetryService())
 }
 
 function makeService(platform: HostPlatform = 'linux'): {
@@ -152,6 +195,7 @@ function makeService(platform: HostPlatform = 'linux'): {
     new StubLoggerService(),
     files,
     new UriIdentityService(platform),
+    makePressure(),
   )
   svc.recomputeThrottleMs = 0 // no throttle in tests — the 5ms flush settles it
   return { svc, files }
@@ -160,6 +204,35 @@ function makeService(platform: HostPlatform = 'linux'): {
 /** Let the async _recompute (reads file off disk) settle. */
 async function flush(): Promise<void> {
   await new Promise((r) => setTimeout(r, 5))
+}
+
+/**
+ * White-box count of a session's cached rows that still carry both full texts.
+ *
+ * The build cache has to move in lockstep with what `_capLiveChanges` publishes;
+ * when it doesn't, the observable looks identical and only the heap differs, so
+ * there is no behavioural assertion that can catch it.
+ */
+function cachedRowsWithTexts(svc: SessionChangeTrackerService, sessionId: string): number {
+  const state = (
+    svc as unknown as {
+      _state: Map<string, Map<string, { lastBuilt?: { row: SessionFileChange | null } }>>
+    }
+  )._state
+  const files = state.get(sessionId)
+  if (!files) return 0
+  let count = 0
+  for (const rec of files.values()) {
+    if (rec.lastBuilt?.row?.hasTexts === true) count++
+  }
+  return count
+}
+
+/** White-box read of a session's live-byte account. */
+function liveBytesOf(svc: SessionChangeTrackerService, sessionId: string): number | undefined {
+  return (svc as unknown as { _liveChangeBytes: Map<string, number> })._liveChangeBytes.get(
+    sessionId,
+  )
 }
 
 const SID = 'sess-1'
@@ -347,6 +420,7 @@ describe('SessionChangeTrackerService — size budgets (OOM guard)', () => {
       overrides.loggerService ?? new StubLoggerService(),
       files,
       new UriIdentityService('linux'),
+      makePressure(),
     )
     svc.recomputeThrottleMs = 0
     if (overrides.maxTrackedSessions !== undefined) {
@@ -941,6 +1015,7 @@ describe('SessionChangeTrackerService — remote workspace (bare POSIX paths inh
       new StubLoggerService(),
       files,
       new UriIdentityService('linux'),
+      makePressure(),
     )
     svc.recomputeThrottleMs = 0
     return { svc, files }
@@ -1001,6 +1076,7 @@ describe('SessionChangeTrackerService — edit-storm resilience (EMFILE guard)',
       new StubLoggerService(),
       files,
       new UriIdentityService('linux'),
+      makePressure(),
     )
     svc.recomputeThrottleMs = throttleMs
     return { svc, files }
@@ -1044,6 +1120,309 @@ describe('SessionChangeTrackerService — edit-storm resilience (EMFILE guard)',
     // Never open more than the concurrency cap at once, regardless of file count.
     expect(files.peakInFlight).toBeLessThanOrEqual(8)
     svc.dispose()
+  })
+
+  it('runs one pass at a time, merging the requests that land mid-pass', async () => {
+    const { svc, files } = makeThrottled(0)
+    await svc.initialize()
+    const obs = svc.changesFor(SID)
+    files.set('/work/a.ts', 'v1')
+    svc.recordWatched(SID, '/work/a.ts')
+    await flush()
+    expect(files.reads).toBe(1)
+
+    // Hold the next pass open across macrotasks so requests land inside it, and
+    // move the mtime each time so the build cache can't answer for free — this
+    // test is about how many passes run, not how many reads they cost.
+    files.readDelayMs = 5
+    files.peakInFlight = 0
+    files.bumpMtime('/work/a.ts')
+    svc.recordWatched(SID, '/work/a.ts')
+    await new Promise((r) => setTimeout(r, 1))
+    files.bumpMtime('/work/a.ts')
+    svc.recordWatched(SID, '/work/a.ts')
+    await new Promise((r) => setTimeout(r, 1))
+    files.bumpMtime('/work/a.ts')
+    svc.recordWatched(SID, '/work/a.ts')
+    await new Promise((r) => setTimeout(r, 40))
+
+    // The throttle only coalesces *requests*; a pass outlives its window, so
+    // without the single-flight guard those three would each start their own
+    // overlapping pass over the same record.
+    expect(files.peakInFlight).toBe(1)
+    // ...and none of them is dropped: the running pass is followed by exactly
+    // one more that absorbs all three.
+    expect(files.reads).toBe(3)
+    expect(obs.get()).toHaveLength(1)
+    svc.dispose()
+  })
+
+  it('does not let a pass that outlived its session republish a cleared list', async () => {
+    const { svc, files } = makeThrottled(0)
+    await svc.initialize()
+    const obs = svc.changesFor(SID)
+    files.set('/work/a.ts', 'v1')
+    svc.recordWatched(SID, '/work/a.ts')
+    await flush()
+    expect(obs.get()).toHaveLength(1)
+
+    // Hold the next pass inside its read, clear the session underneath it, then let
+    // the read finish: the rows it built describe a session that no longer exists.
+    files.readDelayMs = 20
+    files.bumpMtime('/work/a.ts')
+    svc.recordWatched(SID, '/work/a.ts')
+    for (let i = 0; i < 200 && files.reads < 2; i++) await new Promise((r) => setTimeout(r, 1))
+    expect(files.reads).toBe(2)
+    svc.clear(SID)
+    await new Promise((r) => setTimeout(r, 40))
+
+    // `changesFor` never recomputes an observable that already exists, so a row
+    // republished here would stay on screen — and hold both its texts — forever.
+    expect(obs.get()).toEqual([])
+    svc.dispose()
+  })
+})
+
+describe('SessionChangeTrackerService — build cache (size + mtime)', () => {
+  let svc: SessionChangeTrackerService
+  let files: FakeFileService
+  beforeEach(async () => {
+    const made = makeService()
+    svc = made.svc
+    files = made.files
+    await svc.initialize()
+  })
+  afterEach(() => svc.dispose())
+
+  it('reads an unchanged file once, however often it is recomputed', async () => {
+    files.set('/work/a.ts', 'v1')
+    const obs = svc.changesFor(SID)
+    svc.recordWatched(SID, '/work/a.ts')
+    await flush()
+    expect(files.reads).toBe(1)
+
+    // Two more triggers that change nothing on disk — a churning build process
+    // next to a tracked file used to re-read it on every pass.
+    svc.recordWatched(SID, '/work/a.ts')
+    await flush()
+    svc.recordWatched(SID, '/work/a.ts')
+    await flush()
+
+    expect(files.reads).toBe(1)
+    expect(obs.get()).toHaveLength(1)
+  })
+
+  it('re-reads only the file whose content moved', async () => {
+    files.set('/work/a.ts', 'a1')
+    files.set('/work/b.ts', 'b1')
+    const obs = svc.changesFor(SID)
+    svc.recordWatched(SID, '/work/a.ts')
+    svc.recordWatched(SID, '/work/b.ts')
+    await flush()
+    expect(files.reads).toBe(2)
+
+    files.set('/work/a.ts', 'a2')
+    svc.recordWatched(SID, '/work/a.ts')
+    svc.recordWatched(SID, '/work/b.ts')
+    await flush()
+
+    expect(files.reads).toBe(3)
+    const a = obs.get().find((c) => c.path.endsWith('a.ts'))
+    expect(a?.current).toBe('a2')
+  })
+
+  it('re-reads when the record changed although the file did not', async () => {
+    files.set('/work/a.ts', 'v1')
+    const obs = svc.changesFor(SID)
+    svc.recordWatched(SID, '/work/a.ts')
+    await flush()
+    expect(files.reads).toBe(1)
+    expect(obs.get()[0]?.baselineSource).toBe('none')
+
+    // An agent report pins a real baseline for the same on-disk content, so the
+    // row has to be rebuilt even though (size, mtime) are untouched.
+    svc.record(SID, '/work/a.ts', 'tc-1', [createHunk(['v1'])], { baseline: '' })
+    await flush()
+
+    expect(files.reads).toBe(2)
+    expect(obs.get()[0]?.baselineSource).toBe('reported')
+    expect(obs.get()[0]?.status).toBe('added')
+  })
+
+  it('does not install a row the pass built before the record was rewritten', async () => {
+    files.set('/work/a.ts', 'v1')
+    const obs = svc.changesFor(SID)
+    svc.recordWatched(SID, '/work/a.ts')
+    await flush()
+    expect(obs.get()[0]?.baselineSource).toBe('none')
+
+    // An agent report for the same path lands while the next pass is suspended
+    // in stat(): the pass read the record's cache before that report existed, so
+    // the row it is holding describes the pre-report record. Publishing it is
+    // survivable (the pass re-runs), but caching it under the record's NEW
+    // revision is not — every later pass would serve it as current, and the
+    // file's own size/mtime never move to break the tie.
+    files.onStat = () => {
+      files.onStat = undefined
+      svc.record(SID, '/work/a.ts', 'tc-1', [createHunk(['v1'])], { baseline: '' })
+    }
+    svc.recordWatched(SID, '/work/a.ts')
+    await flush()
+
+    expect(obs.get()[0]?.baselineSource).toBe('reported')
+    expect(obs.get()[0]?.status).toBe('added')
+  })
+
+  it('caches the row the budget published, not the one it released', async () => {
+    // Two rows that fit individually but not together, so the per-session cap
+    // has to release one of them. Agent-reported rows carry a pinned baseline, so
+    // the read is not skipped by "the cap would degrade this anyway" — the budget
+    // releasing a row it already paid to read is what this test is about.
+    svc.maxLiveChangeBytes = 1000
+    const a = 'a'.repeat(400)
+    const b = 'b'.repeat(400)
+    files.set('/work/a.ts', a)
+    files.set('/work/b.ts', b)
+    const obs = svc.changesFor(SID)
+    svc.record(SID, '/work/a.ts', 'tc-a', [createHunk([a])], { baseline: '' })
+    svc.record(SID, '/work/b.ts', 'tc-b', [createHunk([b])], { baseline: '' })
+    await flush()
+    expect(files.reads).toBe(2)
+    expect(obs.get().filter((c) => !c.hasTexts)).toHaveLength(1)
+
+    // Pressure gone, nothing on disk changed. A cache holding the pre-cap rows
+    // would hand the released texts straight back — and keep a second copy of
+    // them alive in the meantime, unaccounted for by `_liveChangeBytes`.
+    svc.maxLiveChangeBytes = 1_000_000
+    svc.recordWatched(SID, '/work/a.ts')
+    await flush()
+
+    expect(files.reads).toBe(2)
+    expect(obs.get().filter((c) => !c.hasTexts)).toHaveLength(1)
+  })
+
+  it('does not cache a verdict built from a failed read', async () => {
+    files.set('/work/a.ts', 'v1')
+    const obs = svc.changesFor(SID)
+    svc.record(SID, '/work/a.ts', 'tc-1', [createHunk(['v1'])], { baseline: 'v0' })
+    await flush()
+    expect(obs.get()[0]?.status).toBe('modified')
+
+    // Move the stamp so the cache can't answer, then fail the read: the file is
+    // still there, we just can't see it, so the row reports deleted (as it
+    // always has). That verdict must not be frozen under this stamp, or a
+    // transient EACCES/EMFILE would outlive itself.
+    files.bumpMtime('/work/a.ts')
+    files.failReads = true
+    svc.recordWatched(SID, '/work/a.ts')
+    await flush()
+    expect(obs.get()[0]?.status).toBe('deleted')
+
+    // Nothing on disk changed in the meantime; the read simply works again.
+    files.failReads = false
+    svc.recordWatched(SID, '/work/a.ts')
+    await flush()
+    expect(obs.get()[0]?.status).toBe('modified')
+    expect(obs.get()[0]?.current).toBe('v1')
+  })
+})
+
+describe('SessionChangeTrackerService — binary files never enter tracking', () => {
+  let svc: SessionChangeTrackerService
+  let files: FakeFileService
+  beforeEach(async () => {
+    const made = makeService()
+    svc = made.svc
+    files = made.files
+    await svc.initialize()
+  })
+  afterEach(() => svc.dispose())
+
+  it('drops a binary watched change without ever reading it whole', async () => {
+    files.set('/work/out.obj', 'content the tracker must not read')
+    files.binaryPaths.add(URI.file('/work/out.obj').fsPath)
+    const obs = svc.changesFor(SID)
+    svc.recordWatched(SID, '/work/out.obj')
+    await flush()
+
+    expect(files.reads).toBe(0)
+    expect(obs.get()).toHaveLength(0)
+  })
+
+  it('probes a binary once, not on every recompute', async () => {
+    files.set('/work/out.obj', 'x')
+    files.binaryPaths.add(URI.file('/work/out.obj').fsPath)
+    const obs = svc.changesFor(SID)
+    svc.recordWatched(SID, '/work/out.obj')
+    await flush()
+    expect(files.headReads).toBe(1)
+
+    svc.recordWatched(SID, '/work/out.obj')
+    await flush()
+    svc.recordWatched(SID, '/work/out.obj')
+    await flush()
+
+    expect(files.headReads).toBe(1)
+    expect(obs.get()).toHaveLength(0)
+  })
+
+  it('leaves a text sibling of a binary file tracked', async () => {
+    files.set('/work/src/a.ts', 'const a = 1')
+    files.set('/work/out.obj', '\u0000\u0001')
+    files.binaryPaths.add(URI.file('/work/out.obj').fsPath)
+    const obs = svc.changesFor(SID)
+    svc.recordWatched(SID, '/work/src/a.ts')
+    svc.recordWatched(SID, '/work/out.obj')
+    await flush()
+
+    expect(obs.get()).toHaveLength(1)
+    expect(obs.get()[0]?.path.endsWith('a.ts')).toBe(true)
+  })
+
+  it('drops a binary file the agent reported too', async () => {
+    files.set('/work/out.obj', 'x')
+    files.binaryPaths.add(URI.file('/work/out.obj').fsPath)
+    const obs = svc.changesFor(SID)
+    svc.record(SID, '/work/out.obj', 'tc-1', [createHunk(['x'])], { baseline: '' })
+    await flush()
+
+    expect(files.reads).toBe(0)
+    expect(obs.get()).toHaveLength(0)
+  })
+
+  it('keeps a file whose probe failed', async () => {
+    files.set('/work/a.ts', 'v1')
+    files.headErrors = true
+    const obs = svc.changesFor(SID)
+    svc.recordWatched(SID, '/work/a.ts')
+    await flush()
+
+    expect(obs.get()).toHaveLength(1)
+    expect(files.reads).toBe(1)
+  })
+
+  it('never reads a file the live budget would degrade anyway', async () => {
+    svc.maxLiveChangeBytes = 1000
+    files.set('/work/big.log', 'x'.repeat(5000))
+    const obs = svc.changesFor(SID)
+    svc.recordWatched(SID, '/work/big.log')
+    await flush()
+
+    expect(files.reads).toBe(0)
+    expect(obs.get()).toHaveLength(1)
+    expect(obs.get()[0]?.status).toBe('degraded')
+    expect(obs.get()[0]?.hasTexts).toBe(false)
+  })
+
+  it('still reads a file that fits the live budget', async () => {
+    svc.maxLiveChangeBytes = 1000
+    files.set('/work/small.log', 'x'.repeat(100))
+    const obs = svc.changesFor(SID)
+    svc.recordWatched(SID, '/work/small.log')
+    await flush()
+
+    expect(files.reads).toBe(1)
+    expect(obs.get()[0]?.hasTexts).toBe(true)
   })
 })
 
@@ -1132,6 +1511,24 @@ describe('SessionChangeTrackerService — live change budget', () => {
     expect(obs.get()[0]?.current).toBe('current')
     svc.dispose()
   })
+
+  it('charges a row whose baseline mirrors its text once, not twice', async () => {
+    // A watched file with no obtainable pre-change content carries `baseline = current`
+    // — one string held by reference, not two copies. Charging for two would degrade
+    // such rows at half the budget they really cost, and would over-report them in the
+    // release log that exists to say where the heap went.
+    const { svc, files } = makeService()
+    await svc.initialize()
+    const obs = svc.changesFor(SID)
+    files.set('/work/a.ts', 'z'.repeat(100))
+    svc.recordWatched(SID, '/work/a.ts')
+    await flush()
+
+    expect(obs.get()[0]?.baselineSource).toBe('none')
+    expect(obs.get()[0]?.baseline).toBe(obs.get()[0]?.current)
+    expect(liveBytesOf(svc, SID)).toBe(200)
+    svc.dispose()
+  })
 })
 
 describe('SessionChangeTrackerService — global live change budget', () => {
@@ -1160,6 +1557,97 @@ describe('SessionChangeTrackerService — global live change budget', () => {
     expect(hotObs.get()[0]?.current).toBe(big)
     expect(coldObs.get()[0]?.status).toBe('degraded')
     expect(coldObs.get()[0]?.current).toBe('')
+    // The released texts must not survive in the cold session's build cache: it
+    // is cold precisely because nothing will recompute it, so a copy parked
+    // there would never be reclaimed, while its bytes are already reported gone.
+    expect(cachedRowsWithTexts(svc, cold)).toBe(0)
+    svc.dispose()
+  })
+})
+
+describe('SessionChangeTrackerService — memory pressure releaser', () => {
+  function makeWithPressure(): {
+    svc: SessionChangeTrackerService
+    files: FakeFileService
+    pressure: MemoryPressureService
+  } {
+    const files = new FakeFileService()
+    const pressure = makePressure()
+    const svc = new SessionChangeTrackerService(
+      new FakeStorage(),
+      new FakeWorkspaceService(),
+      new NoopTelemetryService(),
+      new StubLoggerService(),
+      files,
+      new UriIdentityService('linux'),
+      pressure,
+    )
+    svc.recomputeThrottleMs = 0
+    return { svc, files, pressure }
+  }
+
+  it('registers itself so the heap watermark can name it', () => {
+    const { svc, pressure } = makeWithPressure()
+    expect(pressure.releaserIds()).toContain('sessionChanges.liveTexts')
+    svc.dispose()
+  })
+
+  // Regression (OOM): the live rows — two full copies of every changed file, per
+  // session — were the memory the renderer died with, and they had no releaser at
+  // all, so the holdership report could not account for them and nothing could ask
+  // them to give the heap back.
+  it('hands back every live text at critical, keeping the rows', async () => {
+    const { svc, files, pressure } = makeWithPressure()
+    await svc.initialize()
+    const big = 'x'.repeat(5000)
+    files.set('/work/a.ts', big)
+    files.set('/work/b.ts', big)
+    const obs = svc.changesFor(SID)
+    svc.recordWatched(SID, '/work/a.ts')
+    svc.recordWatched(SID, '/work/b.ts')
+    await flush()
+    expect(obs.get()).toHaveLength(2)
+    expect(obs.get()[0]?.hasTexts).toBe(true)
+
+    const reports = pressure.release(MemoryPressureLevel.Critical)
+    // Two row texts at 2 bytes per UTF-16 unit. These are watched rows with no
+    // obtained baseline, so each row holds one text (`baseline` mirrors `current`)
+    // — the count has to match what the rows really hold, or the release log the
+    // incident report is read from would be inventing bytes.
+    expect(reports).toEqual([{ id: 'sessionChanges.liveTexts', freed: 2 * big.length * 2 }])
+
+    // The rows survive as "changed but not comparable" — the list still shows what
+    // the agent touched, which is the part the user acts on.
+    expect(obs.get()).toHaveLength(2)
+    for (const row of obs.get()) {
+      expect(row.status).toBe('degraded')
+      expect(row.current).toBe('')
+      expect(row.baseline).toBe('')
+    }
+    // And the cached copies go with them, or the release would be accounting only.
+    expect(cachedRowsWithTexts(svc, SID)).toBe(0)
+    svc.dispose()
+  })
+
+  it('leaves the live texts alone at elevated', async () => {
+    const { svc, files, pressure } = makeWithPressure()
+    await svc.initialize()
+    const big = 'x'.repeat(5000)
+    files.set('/work/a.ts', big)
+    const obs = svc.changesFor(SID)
+    svc.recordWatched(SID, '/work/a.ts')
+    await flush()
+
+    // The whole live-text budget is a rounding error next to the elevated line, so
+    // giving up the inline diff there costs the user something and frees nothing.
+    expect(pressure.release(MemoryPressureLevel.Elevated)).toEqual([])
+    expect(obs.get()[0]?.hasTexts).toBe(true)
+    svc.dispose()
+  })
+
+  it('reports nothing when there are no live texts to give back', () => {
+    const { svc, pressure } = makeWithPressure()
+    expect(pressure.release(MemoryPressureLevel.Critical)).toEqual([])
     svc.dispose()
   })
 })

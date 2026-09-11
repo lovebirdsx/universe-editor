@@ -17,6 +17,7 @@ import {
   type IFileService as IFileServiceType,
   type IFileWatcherService as IFileWatcherServiceType,
   type ILoggerService as ILoggerServiceType,
+  type INotificationService as INotificationServiceType,
   type IUserDataFileChange,
   type IUserDataFilesService,
   LogLevel,
@@ -27,6 +28,7 @@ import {
   type UserDataFile,
 } from '@universe-editor/platform'
 import type { IOutOfWorkspaceWatchService } from '../../services/files/outOfWorkspaceWatchService.js'
+import { MAX_EXTERNAL_RELOAD_BYTES } from '../../services/files/externalReload.js'
 
 // Stub the model registry so a test can inject a live editor buffer for a URI.
 // Default: no live model (peek → undefined), so diff refresh reads disk as before.
@@ -179,6 +181,25 @@ function makeLoggerService(): ILoggerServiceType {
   }
 }
 
+function makeNotifications(): INotificationServiceType & { messages: string[] } {
+  const messages: string[] = []
+  const fake = {
+    _serviceBrand: undefined,
+    messages,
+    notify(opts: { message: string }) {
+      messages.push(opts.message)
+      return {
+        id: 'n',
+        dispose() {},
+        progress: { report() {}, done() {} },
+        updateMessage() {},
+        updateSeverity() {},
+      }
+    },
+  }
+  return fake as unknown as INotificationServiceType & { messages: string[] }
+}
+
 // Real identity service on a case-sensitive platform so the existing `/ws/...`
 // test URIs compare exactly. A dedicated test below exercises win32 drive-letter
 // folding, which is the bug this service fixed in the watcher.
@@ -188,26 +209,32 @@ function makeUriIdentity(platform: 'linux' | 'win32' = 'linux'): UriIdentityServ
 
 /**
  * Fake file service. `existing` lists URIs whose `stat` succeeds (file present);
- * any other path throws (file gone). `contents` backs `readFileText`.
+ * any other path throws (file gone). `contents` backs `readFileText`, `size` is what
+ * every `stat` reports — the reload ceiling is decided on it, the read count is what
+ * proves a path stayed off disk.
  */
 function makeFileService(opts?: {
   existing?: Iterable<URI>
   contents?: Iterable<[URI, string]>
-}): IFileServiceType {
+  size?: number
+}): IFileServiceType & { reads: number } {
   const existing = new Set<string>()
   for (const u of opts?.existing ?? []) existing.add(u.toString())
   const contents = new Map<string, string>()
   for (const [u, text] of opts?.contents ?? []) contents.set(u.toString(), text)
-  return {
+  const fake = {
     _serviceBrand: undefined,
+    reads: 0,
     async stat(resource: URI) {
       if (!existing.has(resource.toString())) throw new Error('ENOENT')
-      return { resource, isFile: true, isDirectory: false, size: 0, mtime: 1 }
+      return { resource, isFile: true, isDirectory: false, size: opts?.size ?? 0, mtime: 1 }
     },
     async readFileText(resource: URI) {
+      fake.reads++
       return contents.get(resource.toString()) ?? ''
     },
-  } as unknown as IFileServiceType
+  }
+  return fake as unknown as IFileServiceType & { reads: number }
 }
 
 function makeFileInput(uri: URI): FileEditorInput {
@@ -248,6 +275,7 @@ describe('ExternalChangeWatcher', () => {
       makeLoggerService(),
       new FakeUserData(),
       makeUriIdentity(),
+      makeNotifications(),
     )
 
     watcher.fire([{ type: 'modified', resource: uriA }])
@@ -289,6 +317,7 @@ describe('ExternalChangeWatcher', () => {
       makeLoggerService(),
       new FakeUserData(),
       makeUriIdentity(),
+      makeNotifications(),
     )
 
     // 1000 temp files under an unrelated tree, each churning delete.
@@ -330,6 +359,7 @@ describe('ExternalChangeWatcher', () => {
       makeLoggerService(),
       new FakeUserData(),
       makeUriIdentity(),
+      makeNotifications(),
     )
 
     watcher.fire([
@@ -357,6 +387,7 @@ describe('ExternalChangeWatcher', () => {
       makeLoggerService(),
       new FakeUserData(),
       makeUriIdentity(),
+      makeNotifications(),
     )
 
     watcher.fire([{ type: 'modified', resource: URI.file('/ws/other.txt') }])
@@ -378,6 +409,7 @@ describe('ExternalChangeWatcher', () => {
       makeLoggerService(),
       new FakeUserData(),
       makeUriIdentity(),
+      makeNotifications(),
     )
 
     watcher.fire([{ type: 'deleted', resource: uri }])
@@ -401,6 +433,7 @@ describe('ExternalChangeWatcher', () => {
       makeLoggerService(),
       new FakeUserData(),
       makeUriIdentity(),
+      makeNotifications(),
     )
 
     watcher.fire([{ type: 'deleted', resource: uri }])
@@ -425,6 +458,7 @@ describe('ExternalChangeWatcher', () => {
       makeLoggerService(),
       new FakeUserData(),
       makeUriIdentity(),
+      makeNotifications(),
     )
 
     watcher.fire([{ type: 'deleted', resource: URI.file('/ws/folder') }])
@@ -455,6 +489,7 @@ describe('ExternalChangeWatcher', () => {
       makeLoggerService(),
       new FakeUserData(),
       makeUriIdentity(),
+      makeNotifications(),
     )
 
     watcher.fire([{ type: 'modified', resource: uri }])
@@ -496,6 +531,7 @@ describe('ExternalChangeWatcher', () => {
       makeLoggerService(),
       new FakeUserData(),
       makeUriIdentity(),
+      makeNotifications(),
     )
 
     watcher.fire([{ type: 'modified', resource: uri }])
@@ -534,6 +570,7 @@ describe('ExternalChangeWatcher', () => {
       makeLoggerService(),
       new FakeUserData(),
       makeUriIdentity(),
+      makeNotifications(),
     )
 
     watcher.fire([{ type: 'modified', resource: uri }])
@@ -567,12 +604,151 @@ describe('ExternalChangeWatcher', () => {
       makeLoggerService(),
       new FakeUserData(),
       makeUriIdentity(),
+      makeNotifications(),
     )
 
     watcher.fire([{ type: 'modified', resource: uri }])
     await flush()
     expect(diff.modifiedContent).toBe('commit-blob')
     expect(diff.originalContent).toBe('parent-blob')
+  })
+
+  // Regression (OOM): the three reconcile paths below read a whole file with no stat
+  // and no mtime short-circuit, and each is re-entered once per watcher batch as long
+  // as the file keeps changing. A file being rewritten every second therefore cost a
+  // whole-file read plus its multi-MB wire frame every second, which is how the
+  // renderer heap died. All three now share the same ceiling as checkExternalChange.
+  describe('reload ceiling', () => {
+    const huge = MAX_EXTERNAL_RELOAD_BYTES + 1
+
+    function watchWith(
+      groups: ReturnType<typeof makeGroups>,
+      files: IFileServiceType & { reads: number },
+      notifications?: INotificationServiceType,
+    ): FakeWatcher {
+      const watcher = new FakeWatcher()
+      new ExternalChangeWatcher(
+        watcher,
+        makeOutOfWorkspaceWatch(watcher),
+        groups,
+        makeDialog(),
+        files,
+        makeLoggerService(),
+        new FakeUserData(),
+        makeUriIdentity(),
+        notifications ?? makeNotifications(),
+      )
+      return watcher
+    }
+
+    it('does not read a link-reached preview source over the ceiling', async () => {
+      const sourceUri = URI.file('/ws/big.md')
+      liveModels.set(sourceUri.toString(), {
+        getValue: () => '# old',
+        setValue: () => {},
+        isDisposed: () => false,
+      })
+      const preview = new MarkdownPreviewInput(sourceUri)
+      const files = makeFileService({
+        existing: [sourceUri],
+        contents: [[sourceUri, '# new']],
+        size: huge,
+      })
+      const watcher = watchWith(makeGroups([preview]), files)
+
+      watcher.fire([{ type: 'modified', resource: sourceUri }])
+      await flush()
+      expect(files.reads).toBe(0)
+      liveModels.delete(sourceUri.toString())
+    })
+
+    it('does not read a live diff over the ceiling', async () => {
+      const uri = URI.file('/ws/big.txt')
+      const diff = new DiffEditorInput(
+        uri,
+        'head',
+        'old-working',
+        undefined,
+        undefined,
+        true,
+        fileServiceStub,
+      )
+      const files = makeFileService({
+        existing: [uri],
+        contents: [[uri, 'disk-new']],
+        size: huge,
+      })
+      const watcher = watchWith(makeGroups([diff]), files)
+
+      watcher.fire([{ type: 'modified', resource: uri }])
+      await flush()
+      expect(files.reads).toBe(0)
+      expect(diff.modifiedContent).toBe('old-working')
+    })
+
+    it('does not read a cross-file live diff over the ceiling', async () => {
+      const uri = URI.file('/ws/big-a.txt')
+      const other = URI.file('/ws/big-b.txt')
+      const diff = new DiffEditorInput(uri, 'head', 'work', other, undefined, true, fileServiceStub)
+      const files = makeFileService({
+        existing: [uri],
+        contents: [[uri, 'disk-new']],
+        size: huge,
+      })
+      const watcher = watchWith(makeGroups([diff]), files)
+
+      watcher.fire([{ type: 'modified', resource: uri }])
+      await flush()
+      expect(files.reads).toBe(0)
+      expect(diff.modifiedContent).toBe('work')
+    })
+
+    it('tells the user once that a file is too large to keep reloading', async () => {
+      const uri = URI.file('/ws/big.txt')
+      const diff = new DiffEditorInput(
+        uri,
+        'head',
+        'old-working',
+        undefined,
+        undefined,
+        true,
+        fileServiceStub,
+      )
+      const files = makeFileService({ existing: [uri], contents: [[uri, 'disk-new']], size: huge })
+      const notifications = makeNotifications()
+      const watcher = watchWith(makeGroups([diff]), files, notifications)
+
+      // Twice: the second batch finds the same file, and a toast per batch would be
+      // one toast per second for as long as the file keeps being written.
+      watcher.fire([{ type: 'modified', resource: uri }])
+      await flush()
+      watcher.fire([{ type: 'modified', resource: uri }])
+      await flush()
+
+      expect(notifications.messages).toHaveLength(1)
+      expect(notifications.messages[0]).toContain('big.txt')
+    })
+
+    it('does not notify for a file under the ceiling', async () => {
+      const uri = URI.file('/ws/small.txt')
+      const diff = new DiffEditorInput(
+        uri,
+        'head',
+        'old-working',
+        undefined,
+        undefined,
+        true,
+        fileServiceStub,
+      )
+      const files = makeFileService({ existing: [uri], contents: [[uri, 'disk-new']] })
+      const notifications = makeNotifications()
+      const watcher = watchWith(makeGroups([diff]), files, notifications)
+
+      watcher.fire([{ type: 'modified', resource: uri }])
+      await flush()
+      expect(files.reads).toBe(1)
+      expect(notifications.messages).toHaveLength(0)
+    })
   })
 
   it('reloads an open editor when its user-data file changes', async () => {
@@ -595,6 +771,7 @@ describe('ExternalChangeWatcher', () => {
       makeLoggerService(),
       userData,
       makeUriIdentity(),
+      makeNotifications(),
     )
 
     userData.fire(aiSettings)
@@ -619,6 +796,7 @@ describe('ExternalChangeWatcher', () => {
       makeLoggerService(),
       userData,
       makeUriIdentity(),
+      makeNotifications(),
     )
 
     userData.fire(settings, 'self')
@@ -640,6 +818,7 @@ describe('ExternalChangeWatcher', () => {
       makeLoggerService(),
       new FakeUserData(),
       makeUriIdentity(),
+      makeNotifications(),
     )
 
     await flush()
@@ -663,6 +842,7 @@ describe('ExternalChangeWatcher', () => {
       makeLoggerService(),
       new FakeUserData(),
       makeUriIdentity(),
+      makeNotifications(),
     )
 
     const uri = URI.file('/ws/new.txt')
@@ -691,6 +871,7 @@ describe('ExternalChangeWatcher', () => {
       makeLoggerService(),
       new FakeUserData(),
       makeUriIdentity(),
+      makeNotifications(),
     )
 
     groups.closeEditorInGroup(input)
@@ -722,6 +903,7 @@ describe('ExternalChangeWatcher', () => {
       makeLoggerService(),
       new FakeUserData(),
       makeUriIdentity('win32'),
+      makeNotifications(),
     )
 
     watcher.fire([{ type: 'modified', resource: eventUri }])
@@ -756,6 +938,7 @@ describe('ExternalChangeWatcher', () => {
       makeLoggerService(),
       new FakeUserData(),
       makeUriIdentity('win32'),
+      makeNotifications(),
     )
 
     watcher.fire([{ type: 'modified', resource: eventUri }])
@@ -782,6 +965,7 @@ describe('ExternalChangeWatcher', () => {
       makeLoggerService(),
       new FakeUserData(),
       makeUriIdentity(),
+      makeNotifications(),
     )
 
     watcher.fire([{ type: 'modified', resource: sourceUri }])
@@ -845,6 +1029,7 @@ describe('ExternalChangeWatcher', () => {
       makeLoggerService(),
       new FakeUserData(),
       makeUriIdentity(),
+      makeNotifications(),
     )
 
     watcher.fire([{ type: 'modified', resource: uri }])
@@ -893,6 +1078,7 @@ describe('ExternalChangeWatcher', () => {
       makeLoggerService(),
       new FakeUserData(),
       makeUriIdentity(),
+      makeNotifications(),
     )
 
     watcher.fire([{ type: 'modified', resource: sourceUri }])
@@ -917,6 +1103,7 @@ describe('ExternalChangeWatcher', () => {
       makeLoggerService(),
       new FakeUserData(),
       makeUriIdentity(),
+      makeNotifications(),
     )
 
     await flush()

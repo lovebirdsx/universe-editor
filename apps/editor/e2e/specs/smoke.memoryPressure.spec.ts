@@ -71,6 +71,7 @@ test.describe('@p0 renderer memory pressure', () => {
         'acp.cancelledDrafts',
         'acp.mentionFileListing',
         'acp.residentBudget',
+        'sessionChanges.liveTexts',
       ]),
     )
   })

@@ -12,6 +12,9 @@
  *      renderer's SessionChangeTrackerService records a whole-file change;
  *    - ends the turn.
  *
+ *  A `shell` prompt instead writes newline-separated paths with NO tool_call, so
+ *  those changes can only arrive through the fs-watch fallback.
+ *
  *  Used by smoke.sessionChanges.spec to verify the full data path
  *  (agent → structuredPatch → tracker → Side Bar list → whole-file diff editor).
  *
@@ -68,6 +71,29 @@ async function runPrompt(id, params) {
   // refreshes in place). Default is the first edit.
   const promptText = extractPromptText(params)
   const second = promptText.includes('again')
+
+  // `shell` mode: write each newline-separated path and emit NO tool_call, so a
+  // change reaches the session diff only through the fs-watch fallback
+  // (SessionWatchedChangesContribution) — the path a `sed -i` / `git apply` run
+  // by the agent takes. Paths are newline-separated because temp dirs can
+  // contain spaces. The turn stays open well past the fallback's grace delay
+  // (FLUSH_DELAY_MS = 1500ms): an event is only attributed to a session that is
+  // still running when it fires.
+  if (/^\s*shell\b/.test(promptText)) {
+    const targets = promptText
+      .replace(/^\s*shell\b/, '')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+    for (const target of targets) {
+      fs.mkdirSync(path.dirname(target), { recursive: true })
+      fs.writeFileSync(target, `written by shell: ${path.basename(target)}\n`, 'utf8')
+    }
+    await delay(6000)
+    activeTurns.delete(sessionId)
+    if (turn.cancelled) return reply(id, { stopReason: 'cancelled' })
+    return reply(id, { stopReason: 'end_turn' })
+  }
 
   // e2e 专用假 agent，由 e2e globalSetup 覆写 TEMP/TMP 后拉起，os.tmpdir() 已落在当次 run 根内；
   // 且 CJS fixture 无法同步 import ESM 的 temp-root helper。

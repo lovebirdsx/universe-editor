@@ -24,6 +24,7 @@ import {
 import { type IAcpSessionService } from '../../services/acp/session/acpSessionService.js'
 import { type IAcpSession } from '../../services/acp/session/acpSessionModel.js'
 import { type IScmService } from '../../services/extensions/ScmService.js'
+import { type IP4IgnoreService } from '../../services/scm/P4IgnoreService.js'
 import { noteSelfWrite, resetSelfWritesForTests } from '../../services/editor/selfWriteRegistry.js'
 import { StubLoggerService } from '../../__tests__/_helpers/stubLoggerService.js'
 
@@ -47,20 +48,27 @@ function makeSessions(
 
 interface TrackerStub extends ISessionChangeTrackerService {
   readonly watched: { sessionId: string; path: string; baseline?: string | null }[]
+  /** Seed the "already tracked" branch without recording a change. */
+  markTracked(sessionId: string, path: string): void
 }
 
-function makeTracker(changes: readonly SessionFileChange[] = []): TrackerStub {
-  const obs: IObservable<readonly SessionFileChange[]> = observableValue('changes', changes)
+function makeTracker(): TrackerStub {
+  const obs: IObservable<readonly SessionFileChange[]> = observableValue('changes', [])
   const watched: TrackerStub['watched'] = []
+  const entries = new Set<string>()
+  const key = (sessionId: string, path: string): string => `${sessionId}\n${path}`
   return {
     watched,
+    markTracked: (sessionId: string, path: string) => void entries.add(key(sessionId, path)),
     changesFor: () => obs,
+    hasEntry: (sessionId: string, path: string) => entries.has(key(sessionId, path)),
     recordWatched(sessionId: string, path: string, opts?: { baseline?: string | null }) {
       watched.push({
         sessionId,
         path,
         ...(opts?.baseline !== undefined ? { baseline: opts.baseline } : {}),
       })
+      entries.add(key(sessionId, path))
     },
   } as unknown as TrackerStub
 }
@@ -94,14 +102,32 @@ function makeCheckIgnoreCommands(
   } as unknown as ICommandService
 }
 
-function makeFiles(kind: 'file' | 'directory' | 'missing'): IFileService {
+function makeFiles(
+  kind: 'file' | 'directory' | 'missing',
+  head: Uint8Array | Error | { readonly binaryPaths: readonly string[] } = new Uint8Array(),
+): IFileService {
+  const binaryPaths =
+    head instanceof Uint8Array || head instanceof Error
+      ? undefined
+      : new Set(head.binaryPaths.map((p) => URI.file(p).fsPath))
+  const uniform = head instanceof Uint8Array ? head : new Uint8Array()
   return {
     stat: vi.fn().mockImplementation(() => {
       if (kind === 'missing') return Promise.reject(new Error('ENOENT'))
       return Promise.resolve({ isFile: kind === 'file', isDirectory: kind === 'directory' })
     }),
+    readFileHead: vi.fn().mockImplementation((resource: URI) => {
+      if (head instanceof Error) return Promise.reject(head)
+      if (binaryPaths) {
+        return Promise.resolve(binaryPaths.has(resource.fsPath) ? BINARY_HEAD : new Uint8Array())
+      }
+      return Promise.resolve(uniform)
+    }),
   } as unknown as IFileService
 }
+
+/** A head sample holding a NUL byte, i.e. what a compiled artifact looks like. */
+const BINARY_HEAD = new Uint8Array([0x7f, 0x45, 0x4c, 0x46, 0x00])
 
 const uriIdentity = {
   getComparisonKey: (uri: URI) => uri.toString().toLowerCase(),
@@ -138,6 +164,7 @@ async function make(opts: {
   commands?: ICommandService
   files?: IFileService
   envSnapshot?: IEnvironmentSnapshotService
+  p4Ignore?: IP4IgnoreService
 }): Promise<{
   contrib: SessionWatchedChangesContribution
   emitter: Emitter<IFileChangeEvent[]>
@@ -157,11 +184,20 @@ async function make(opts: {
     uriIdentity,
     new StubLoggerService(),
     opts.envSnapshot ?? makeEnvSnapshot(),
+    opts.p4Ignore ?? makeP4Ignore(),
   )
   // Let the constructor's getSnapshot().then(...) land before events are fired.
   await Promise.resolve()
   contrib.flushDelayMs = 0
   return { contrib, emitter, tracker, commands }
+}
+
+/** Default stand-in: the built-in layer ignores nothing unless a test says so. */
+function makeP4Ignore(
+  resolve: (paths: readonly string[]) => Promise<ReadonlySet<string>> = () =>
+    Promise.resolve(new Set()),
+): IP4IgnoreService {
+  return { resolveIgnored: vi.fn().mockImplementation(resolve) } as unknown as IP4IgnoreService
 }
 
 async function flush(): Promise<void> {
@@ -241,21 +277,27 @@ describe('SessionWatchedChangesContribution', () => {
   })
 
   it('only refreshes an already-tracked path (no git lookup, no new entry data)', async () => {
-    const tracked: SessionFileChange = {
-      uri: FOO,
-      path: FOO.fsPath,
-      baseline: 'a',
-      current: 'b',
-      status: 'modified',
-      origin: 'agent',
-      baselineSource: 'reported',
-      hasTexts: true,
-      batchCount: 1,
-    }
-    const { contrib, emitter, tracker, commands } = await make({ tracker: makeTracker([tracked]) })
+    const tracker = makeTracker()
+    tracker.markTracked('agent-1', FOO.fsPath)
+    const { contrib, emitter, commands } = await make({ tracker })
     emitter.fire([{ type: 'modified', resource: FOO }])
     await flush()
     expect(tracker.watched).toEqual([{ sessionId: 'agent-1', path: FOO.fsPath }])
+    expect(commands.executeCommand).not.toHaveBeenCalledWith('git.getHeadContent', FOO.fsPath)
+    contrib.dispose()
+  })
+
+  it('does not re-fetch a baseline for a record that renders no row', async () => {
+    // Dismissed, self-healed, degraded-to-nothing: the record exists without a
+    // row, so the row scan used to send us back for a full git HEAD read on
+    // every single pass.
+    const tracker = makeTracker()
+    tracker.markTracked('agent-1', FOO.fsPath)
+    const { contrib, emitter, commands } = await make({ tracker })
+    emitter.fire([{ type: 'modified', resource: FOO }])
+    await flush()
+    emitter.fire([{ type: 'modified', resource: FOO }])
+    await flush()
     expect(commands.executeCommand).not.toHaveBeenCalledWith('git.getHeadContent', FOO.fsPath)
     contrib.dispose()
   })
@@ -339,6 +381,117 @@ describe('SessionWatchedChangesContribution', () => {
   it('still records when the checkIgnore call fails (degrades to unfiltered)', async () => {
     const { contrib, emitter, tracker } = await make({
       commands: makeCheckIgnoreCommands(new Error('git blew up')),
+    })
+    emitter.fire([{ type: 'modified', resource: FOO }])
+    await flush()
+    expect(tracker.watched).toEqual([
+      { sessionId: 'agent-1', path: FOO.fsPath, baseline: 'head content' },
+    ])
+    contrib.dispose()
+  })
+
+  it('drops a binary artifact without recording it or fetching a baseline', async () => {
+    const { contrib, emitter, tracker, commands } = await make({
+      files: makeFiles('file', BINARY_HEAD),
+    })
+    emitter.fire([{ type: 'modified', resource: URI.file('/ws/build/out.obj') }])
+    await flush()
+    expect(tracker.watched).toEqual([])
+    // The whole point of the gate: no full-text round trip — neither the
+    // per-path HEAD read (whole file) nor a recorded entry the tracker would
+    // then read whole. The batch check-ignore is one metadata command for the
+    // whole flush and is expected to still cover the path.
+    expect(commands.executeCommand).not.toHaveBeenCalledWith(
+      'git.getHeadContent',
+      URI.file('/ws/build/out.obj').fsPath,
+    )
+    contrib.dispose()
+  })
+
+  it('keeps a text file whose head read fails', async () => {
+    const { contrib, emitter, tracker } = await make({
+      files: makeFiles('file', new Error('EACCES')),
+    })
+    emitter.fire([{ type: 'modified', resource: FOO }])
+    await flush()
+    expect(tracker.watched).toEqual([
+      { sessionId: 'agent-1', path: FOO.fsPath, baseline: 'head content' },
+    ])
+    contrib.dispose()
+  })
+
+  it('refreshes a binary path that is already tracked, so the row can be cleared', async () => {
+    const tracker = makeTracker()
+    tracker.markTracked('agent-1', FOO.fsPath)
+    const { contrib, emitter } = await make({ tracker, files: makeFiles('file', BINARY_HEAD) })
+    emitter.fire([{ type: 'modified', resource: FOO }])
+    await flush()
+    expect(tracker.watched).toEqual([{ sessionId: 'agent-1', path: FOO.fsPath }])
+    contrib.dispose()
+  })
+
+  it('keeps a text sibling of a dropped binary', async () => {
+    const { contrib, emitter, tracker } = await make({
+      files: makeFiles('file', { binaryPaths: ['/ws/build/out.obj'] }),
+    })
+    emitter.fire([
+      { type: 'modified', resource: URI.file('/ws/src/a.ts') },
+      { type: 'modified', resource: URI.file('/ws/build/out.obj') },
+    ])
+    await flush()
+    expect(tracker.watched).toEqual([
+      { sessionId: 'agent-1', path: URI.file('/ws/src/a.ts').fsPath, baseline: 'head content' },
+    ])
+    contrib.dispose()
+  })
+
+  it('drops a path the built-in rules ignore even with no SCM provider registered', async () => {
+    // The incident this layer exists for: sourceControls is empty, so the
+    // delegated check-ignore answers nothing at all.
+    const { contrib, emitter, tracker, commands } = await make({
+      scm: makeScm(null),
+      p4Ignore: makeP4Ignore((paths) => Promise.resolve(new Set(paths))),
+    })
+    emitter.fire([{ type: 'modified', resource: URI.file('/ws/build/out.obj') }])
+    await flush()
+    expect(tracker.watched).toEqual([])
+    expect(commands.executeCommand).not.toHaveBeenCalled()
+    contrib.dispose()
+  })
+
+  it('records a path neither source ignores', async () => {
+    const { contrib, emitter, tracker } = await make({
+      p4Ignore: makeP4Ignore((paths) =>
+        Promise.resolve(new Set(paths.filter((p) => p.endsWith('.obj')))),
+      ),
+    })
+    emitter.fire([{ type: 'modified', resource: URI.file('/ws/build/out.obj') }])
+    emitter.fire([{ type: 'modified', resource: URI.file('/ws/src/a.ts') }])
+    await flush()
+    expect(tracker.watched).toEqual([
+      { sessionId: 'agent-1', path: URI.file('/ws/src/a.ts').fsPath, baseline: 'head content' },
+    ])
+    contrib.dispose()
+  })
+
+  it('unions the two sources rather than letting the provider win', async () => {
+    // git owns the path and says "not ignored" (it has no .p4ignore knowledge);
+    // the built-in layer says ignored. Either source dropping it is enough.
+    const commands = makeCheckIgnoreCommands([])
+    const { contrib, emitter, tracker } = await make({
+      commands,
+      p4Ignore: makeP4Ignore((paths) => Promise.resolve(new Set(paths))),
+    })
+    emitter.fire([{ type: 'modified', resource: FOO }])
+    await flush()
+    expect(commands.executeCommand).toHaveBeenCalledWith('git.checkIgnore', [FOO.fsPath])
+    expect(tracker.watched).toEqual([])
+    contrib.dispose()
+  })
+
+  it('keeps the batch unfiltered when the built-in rules throw', async () => {
+    const { contrib, emitter, tracker } = await make({
+      p4Ignore: makeP4Ignore(() => Promise.reject(new Error('rule parse blew up'))),
     })
     emitter.fire([{ type: 'modified', resource: FOO }])
     await flush()

@@ -57,7 +57,7 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 - sash 拖拽/尺寸持久化 spec，reload 后目标 pane 高度稳定卡等分值=异步 reconcile 落后于 Allotment 首次布局、preferredSize 挂载后是 no-op → 案例 50；**修完同断言再挂**=等分值经 onChange→debounce 落盘污染磁盘，恢复路径修得再好读的也是脏值，须收窄落盘权到用户动作 → 案例 50b；**再挂且诊断现场 mem==DOM==贪心值**（磁盘干净）=mem 记账被 onChange 覆盖、storedSizesKey/target 读脏 mem 锁死，恢复目标必须读独立的 persisted 权威源（save 序列化也走它）+settle 窗口内持续校验 → 案例 50c
 - ACP 配置写入后立即建 session、echo agent received 恒 `"[]"`=异步镜像池 stale 滤空 wire 列表 → 案例 51
 - `[MonacoLoader] not initialized` 栈过同步探针=poll 回调抛异常击穿等待 → 案例 52（**已修又再发**时先核对 main 上修复真实存在：`git log -S`）
-- openWorkspace 后立即外部写文件、等 watcher surface 的 treeitem 等满 timeout 恒不出现=watcher 跨进程 arm（spawn utility process+subscribe）窗口吞事件，seed 可见≠订阅生效 → 案例 55
+- openWorkspace 后立即外部写文件、等 watcher surface 的 treeitem 等满 timeout 恒不出现=watcher 跨进程 arm（spawn utility process+subscribe）窗口吞事件，seed 可见≠订阅生效 → 案例 55；同一条事实的**非树消费者**（会话改动兜底）变体：等行恒 0 且失败取证里连该通道的 `.log` 文件都不存在=工作区 watcher 还是 idle 相位才 arm（`WorkspaceWatchContribution`），树的 catch-up 重读只治树，别的 consumer 得自己等就位信号 → 案例 89
 - teardown 泄漏栈 `MainThreadLanguages._createProvider` 但**断言全过**、bundle 变更提交后 CI 恒定挂、泄漏数=activate 注册批大小=host activate 赢了 Monaco dynamic import，注册抛 not-initialized 半建 store 成孤儿+provider 批静默丢失 → 案例 56（区分 54：那是 dying-host 帧打 **disposed** 对象）
 - 「忙等+可信输入」spec 本地 `--repeat-each` 必现 flaky、双形态交替（poll 恒 0 / byType 实收单元素但非期望类型如 `["keyup"]`）=setTimeout 提前量赛跑 CDP 输入派发 + dedupe 只留最慢样本；修=console token 确认主线程已阻塞再按键 + 断言放宽到事件族 → 案例 57
 - 焦点门控断言（如聚焦时应出现应用内 toast）恒不出现+host.log 是 `notify shown` 而非 `skipped`=并行 worker `win.show()` 偷前台，断言前 `page.bringToFront()` 钉焦点 → 案例 59

@@ -11,7 +11,7 @@
 | 收集修改 / Explorer 改动徽标 / 落后灰字 | [`docs/reconcile.md`](docs/reconcile.md) |
 | 菜单贡献 / when 子句 / 图标 / 多选拖放 | [`docs/menus.md`](docs/menus.md) |
 | e2e / fake-p4 | [`e2e/CLAUDE.md`](e2e/CLAUDE.md) |
-| 任何 p4 命令行为 / 解析 | [`docs/pitfalls.md`](docs/pitfalls.md)（13 条踩坑完整叙事） |
+| 任何 p4 命令行为 / 解析 | [`docs/pitfalls.md`](docs/pitfalls.md)（14 条踩坑完整叙事） |
 
 > 先读 skill `create-extension`（插件通用骨架、manifest 贡献点、engines 红线、NLS）——本文档只讲 p4 特有的东西。
 
