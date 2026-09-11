@@ -407,6 +407,20 @@ function makeFakeWatcher(): FakeWatcherController {
   }
 }
 
+/** Every client a test built, so `afterEach` can tear them down. Spawns are
+ *  observed through the module-global `calls` array, which `beforeEach` resets —
+ *  but a client left alive keeps floating work alive too (the background scan a
+ *  `refresh()` tail scheduled, a debounced flush), and that work spawns into
+ *  whichever test happens to be running when its timer fires. Under load the
+ *  stray lands one test later and fails an assertion that has nothing to do with
+ *  it; disposing on teardown is what keeps each test's spawns its own. */
+const createdClients: PerforceClientInstance[] = []
+
+afterEach(() => {
+  for (const client of createdClients) client.dispose()
+  createdClients.length = 0
+})
+
 async function makeClient(
   opts: RespondOptions = {},
   disk?: P4CacheDiskBackend,
@@ -428,6 +442,7 @@ async function makeClient(
     clientOptions,
   )
   expect(client).toBeDefined()
+  createdClients.push(client!)
   return client!
 }
 
