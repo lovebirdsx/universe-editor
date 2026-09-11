@@ -678,3 +678,176 @@ describe('LspClient _request connection-lost retry', () => {
     expect(ready.sendRequest).not.toHaveBeenCalled()
   })
 })
+
+describe('LspClient no-project degrade', () => {
+  interface DegradeInternals {
+    _ready(): Promise<unknown>
+    _open: Map<string, { sentGeneration: number }>
+    _generation: number
+  }
+
+  interface LogLine {
+    level: 'error' | 'info' | 'verbose'
+    message: string
+  }
+
+  const URI = 'file:///ws/src/a.ts'
+  const POS = { line: 0, character: 0 }
+  const RANGE = { start: POS, end: POS }
+
+  /** The shape the client actually sees: the server throws inside its handler
+   *  and jsonrpc wraps that into -32603 with a per-method prefix. */
+  const rpcError = (method: string, detail: string): Error =>
+    Object.assign(new Error(`Request ${method} failed with message: ${detail}`), { code: -32603 })
+
+  const tslsNoProject = (method: string): Error =>
+    rpcError(
+      method,
+      `<semantic> TypeScript Server Error (5.9.3)\nNo Project.\nThis is an internal error.`,
+    )
+  const tsgoNoProject = (method: string): Error =>
+    rpcError(method, `no project found for URI ${URI}`)
+
+  function makeDegradeClient(error: Error) {
+    const logs: LogLine[] = []
+    const sendRequest = vi.fn(async (..._args: unknown[]) => {
+      throw error
+    })
+    const client = new LspClient(
+      { kind: 'tsls', cli: 'cli', tsserver: 'tsserver', version: '5.9.3' },
+      '/ws',
+      () => {},
+      {
+        logger: {
+          error: (message) => {
+            logs.push({ level: 'error', message })
+          },
+          info: (message) => {
+            logs.push({ level: 'info', message })
+          },
+          verbose: (message) => {
+            logs.push({ level: 'verbose', message })
+          },
+        },
+      },
+    )
+    const internals = client as unknown as DegradeInternals
+    internals._ready = async () => ({ sendRequest })
+    internals._generation = 1
+    return { client, internals, sendRequest, logs }
+  }
+
+  const degradeLines = (logs: LogLine[]): LogLine[] =>
+    logs.filter((line) => line.message.startsWith('no-project degrade'))
+
+  it('degrades a no-project code action to no result and logs the uri', async () => {
+    const method = 'textDocument/codeAction'
+    const { client, sendRequest, logs } = makeDegradeClient(tslsNoProject(method))
+
+    await expect(client.provideCodeActions(URI, RANGE, {})).resolves.toBeNull()
+
+    expect(sendRequest).toHaveBeenCalledWith(
+      method,
+      expect.objectContaining({ textDocument: { uri: URI } }),
+    )
+    const line = degradeLines(logs)[0]
+    expect(line?.level).toBe('info')
+    expect(line?.message).toContain(method)
+    expect(line?.message).toContain(URI)
+    expect(line?.message).toContain('didOpen=no, delivered=no')
+  })
+
+  const DIALECTS: Array<[string, (method: string) => Error]> = [
+    ['tsls', tslsNoProject],
+    ['tsgo', tsgoNoProject],
+  ]
+
+  it.each(DIALECTS)('treats the %s phrasing as expected, not a failure', async (_name, make) => {
+    const { client, logs } = makeDegradeClient(make('textDocument/hover'))
+
+    await expect(client.provideHover(URI, POS)).resolves.toBeNull()
+    expect(degradeLines(logs)).toHaveLength(1)
+  })
+
+  it('still rejects a genuine LSP error, logging no degrade line', async () => {
+    const boom = rpcError('textDocument/hover', 'boom')
+    const { client, logs } = makeDegradeClient(boom)
+
+    await expect(client.provideHover(URI, POS)).rejects.toBe(boom)
+    expect(degradeLines(logs)).toHaveLength(0)
+  })
+
+  it('reports whether the doc was held and delivered, once per state', async () => {
+    const { client, internals, logs } = makeDegradeClient(tslsNoProject('textDocument/hover'))
+    const hover = () => client.provideHover(URI, POS)
+
+    await hover()
+    expect(degradeLines(logs)[0]?.message).toContain('didOpen=no, delivered=no')
+
+    // Held, but this connection never got its didOpen — handshake / replay race.
+    internals._open.set(URI, { sentGeneration: 0 })
+    await hover()
+    expect(degradeLines(logs)[1]?.message).toContain('didOpen=yes, delivered=no')
+
+    // Held and delivered: the server has the doc and still has no project.
+    internals._open.set(URI, { sentGeneration: internals._generation })
+    await hover()
+    expect(degradeLines(logs)[2]?.message).toContain('didOpen=yes, delivered=yes')
+
+    await hover()
+    expect(degradeLines(logs)).toHaveLength(3)
+  })
+
+  const PROVIDERS: Array<[string, (client: LspClient) => Promise<unknown>]> = [
+    ['textDocument/definition', (c) => c.provideDefinition(URI, POS)],
+    ['textDocument/references', (c) => c.provideReferences(URI, POS, true)],
+    ['textDocument/implementation', (c) => c.provideImplementation(URI, POS)],
+    ['textDocument/typeDefinition', (c) => c.provideTypeDefinition(URI, POS)],
+    ['textDocument/hover', (c) => c.provideHover(URI, POS)],
+    ['textDocument/completion', (c) => c.provideCompletion(URI, POS, { triggerKind: 1 })],
+    [
+      'textDocument/signatureHelp',
+      (c) => c.provideSignatureHelp(URI, POS, { triggerKind: 1, isRetrigger: false }),
+    ],
+    ['textDocument/documentSymbol', (c) => c.provideDocumentSymbols(URI)],
+    ['workspace/symbol', (c) => c.provideWorkspaceSymbols('foo')],
+    ['textDocument/rename', (c) => c.provideRenameEdits(URI, POS, 'bar')],
+    ['textDocument/semanticTokens/full', (c) => c.provideDocumentSemanticTokens(URI)],
+    ['textDocument/codeLens', (c) => c.provideCodeLenses(URI)],
+    ['textDocument/codeAction', (c) => c.provideCodeActions(URI, RANGE, {})],
+  ]
+
+  it.each(PROVIDERS)('degrades %s to no result', async (method, run) => {
+    const { client, sendRequest, logs } = makeDegradeClient(tslsNoProject(method))
+
+    await expect(run(client)).resolves.toBeNull()
+    // workspace/symbol also passes a cancellation token, so match the method only.
+    expect(sendRequest.mock.calls[0]?.[0]).toBe(method)
+    expect(degradeLines(logs)[0]?.message).toContain(method)
+  })
+
+  it('keeps the original completion item when resolve degrades', async () => {
+    const item = { label: 'foo' }
+    const { client, sendRequest } = makeDegradeClient(tslsNoProject('completionItem/resolve'))
+
+    await expect(client.resolveCompletion(item)).resolves.toBe(item)
+    expect(sendRequest).toHaveBeenCalledWith('completionItem/resolve', item)
+  })
+
+  it('degrades a codeLens resolve to null, so the renderer keeps the original lens', async () => {
+    const { client, logs } = makeDegradeClient(tslsNoProject('codeLens/resolve'))
+
+    await expect(client.resolveCodeLens({ range: RANGE, data: { uri: URI } })).resolves.toBeNull()
+    expect(degradeLines(logs)[0]?.message).toContain(URI)
+  })
+
+  it('does not degrade a connection-lost error — that path retries and cancels', async () => {
+    const lost = Object.assign(new Error('Pending response rejected (code -32097)'), {
+      code: -32097,
+    })
+    const { client, logs } = makeDegradeClient(lost)
+
+    await expect(client.provideHover(URI, POS)).rejects.toMatchObject({ name: 'Canceled' })
+    expect(degradeLines(logs)).toHaveLength(0)
+  })
+})

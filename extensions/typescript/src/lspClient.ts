@@ -200,6 +200,22 @@ function canceledError(): Error {
   return err
 }
 
+/** tsserver creates projects lazily (on didOpen / tsconfig discovery), so a
+ *  semantic request for a file it has no project for fails with "No Project."
+ *  (tsgo phrases it "no project found for URI …" — the `i` flag covers both).
+ *  An expected transient state, not a failure. */
+function isNoProjectError(err: unknown): boolean {
+  const message = (err as { message?: unknown } | null | undefined)?.message
+  return typeof message === 'string' && /no project/i.test(message)
+}
+
+/** A CodeLens' `data` carries `{kind,uri}` (tsgo's shape) — the uri is what the
+ *  references fallback and the degrade log both key off. */
+function codeLensUri(lens: CodeLens): string | undefined {
+  const uri = (lens.data as { uri?: unknown } | undefined)?.uri
+  return typeof uri === 'string' ? uri : undefined
+}
+
 interface OpenDoc {
   readonly languageId: string
   /** Live views onto the host mirror, so a crash-restart replay re-primes the
@@ -273,6 +289,10 @@ export class LspClient {
   private readonly _restartTimestamps: number[] = []
   /** Open documents we've forwarded, replayed on crash restart. */
   private readonly _open = new Map<string, OpenDoc>()
+  /** `<uri>#<didOpen>#<delivered>` keys already reported by `_reportNoProject`.
+   *  Hover and completion fire per keystroke, so an unattributable file would
+   *  otherwise flood the channel with identical degrade lines. */
+  private readonly _noProjectReported = new Set<string>()
   /** Bumped once per successful connection start; `OpenDoc.sentGeneration`
    *  matching this means the current server already holds the doc. */
   private _generation = 0
@@ -717,12 +737,58 @@ export class LspClient {
     return typeof code === 'number' && CONNECTION_LOST_CODES.has(code)
   }
 
+  /** Send a semantic request that must survive the server not having a project
+   *  for the file yet. The bare rejection surfaces as a renderer error toast —
+   *  tsserver answers "No Project." for any file it has neither opened nor seen
+   *  in a tsconfig — so degrade to `null` ("no result") and leave a forensic
+   *  line instead. Every other failure still propagates. */
+  private async _requestOrNoProject<T>(
+    conn: MessageConnection,
+    method: string,
+    uri: string | undefined,
+    params: unknown,
+    token?: RpcCancellationToken,
+  ): Promise<T | null> {
+    try {
+      return await this._request<T>(conn, method, params, token)
+    } catch (err) {
+      if (!isNoProjectError(err)) throw err
+      this._reportNoProject(method, uri)
+      return null
+    }
+  }
+
+  /** Forensics for a degraded request; the two flags are a diagnosis ladder.
+   *  `didOpen=no` → no doc held for the uri (document-sync gap, or a closed
+   *  doc whose model still asks). `delivered=no` → held, but its didOpen hasn't
+   *  reached this connection yet (handshake / crash-replay race). Both `yes` →
+   *  the server got the didOpen and still has no project (extension / include /
+   *  tsconfig attribution). */
+  private _reportNoProject(method: string, uri: string | undefined): void {
+    const doc = uri === undefined ? undefined : this._open.get(uri)
+    const delivered = doc !== undefined && doc.sentGeneration === this._generation
+    const target = uri ?? '(no uri)'
+    const key = `${target}#${doc ? 'open' : 'closed'}#${delivered ? 'sent' : 'unsent'}`
+    if (this._noProjectReported.has(key)) return
+    this._noProjectReported.add(key)
+    const project = uri === undefined ? undefined : this._attributeProject(uri)
+    const flags = `didOpen=${doc ? 'yes' : 'no'}, delivered=${delivered ? 'yes' : 'no'}`
+    const owner = project ? this._displayProject(project.tsconfig) : 'inferred'
+    this._log.info(
+      `no-project degrade ${method} ${target} (${flags}, ` +
+        `project≈${owner}, openDocs=${this._open.size})`,
+    )
+  }
+
   async provideDefinition(
     uri: string,
     position: Position,
   ): Promise<Definition | DefinitionLink[] | null> {
     const conn = await this._ready()
-    return this._request(conn, 'textDocument/definition', { ...this._doc(uri), position })
+    return this._requestOrNoProject(conn, 'textDocument/definition', uri, {
+      ...this._doc(uri),
+      position,
+    })
   }
 
   async provideReferences(
@@ -731,7 +797,7 @@ export class LspClient {
     includeDeclaration: boolean,
   ): Promise<Location[] | null> {
     const conn = await this._ready()
-    return this._request(conn, 'textDocument/references', {
+    return this._requestOrNoProject(conn, 'textDocument/references', uri, {
       ...this._doc(uri),
       position,
       context: { includeDeclaration },
@@ -743,7 +809,10 @@ export class LspClient {
     position: Position,
   ): Promise<Definition | DefinitionLink[] | null> {
     const conn = await this._ready()
-    return this._request(conn, 'textDocument/implementation', { ...this._doc(uri), position })
+    return this._requestOrNoProject(conn, 'textDocument/implementation', uri, {
+      ...this._doc(uri),
+      position,
+    })
   }
 
   async provideTypeDefinition(
@@ -751,12 +820,18 @@ export class LspClient {
     position: Position,
   ): Promise<Definition | DefinitionLink[] | null> {
     const conn = await this._ready()
-    return this._request(conn, 'textDocument/typeDefinition', { ...this._doc(uri), position })
+    return this._requestOrNoProject(conn, 'textDocument/typeDefinition', uri, {
+      ...this._doc(uri),
+      position,
+    })
   }
 
   async provideHover(uri: string, position: Position): Promise<Hover | null> {
     const conn = await this._ready()
-    return this._request(conn, 'textDocument/hover', { ...this._doc(uri), position })
+    return this._requestOrNoProject(conn, 'textDocument/hover', uri, {
+      ...this._doc(uri),
+      position,
+    })
   }
 
   async provideCompletion(
@@ -765,7 +840,7 @@ export class LspClient {
     context: CompletionContext,
   ): Promise<CompletionItem[] | CompletionList | null> {
     const conn = await this._ready()
-    return this._request(conn, 'textDocument/completion', {
+    return this._requestOrNoProject(conn, 'textDocument/completion', uri, {
       ...this._doc(uri),
       position,
       context,
@@ -774,7 +849,13 @@ export class LspClient {
 
   async resolveCompletion(item: CompletionItem): Promise<CompletionItem> {
     const conn = await this._ready()
-    return this._request(conn, 'completionItem/resolve', item)
+    const resolved = await this._requestOrNoProject<CompletionItem>(
+      conn,
+      'completionItem/resolve',
+      undefined,
+      item,
+    )
+    return resolved ?? item
   }
 
   async provideSignatureHelp(
@@ -783,7 +864,7 @@ export class LspClient {
     context: SignatureHelpContext,
   ): Promise<SignatureHelp | null> {
     const conn = await this._ready()
-    return this._request(conn, 'textDocument/signatureHelp', {
+    return this._requestOrNoProject(conn, 'textDocument/signatureHelp', uri, {
       ...this._doc(uri),
       position,
       context,
@@ -794,7 +875,7 @@ export class LspClient {
     uri: string,
   ): Promise<DocumentSymbol[] | SymbolInformation[] | null> {
     const conn = await this._ready()
-    return this._request(conn, 'textDocument/documentSymbol', this._doc(uri))
+    return this._requestOrNoProject(conn, 'textDocument/documentSymbol', uri, this._doc(uri))
   }
 
   async provideWorkspaceSymbols(
@@ -812,9 +893,10 @@ export class LspClient {
     const cts = new RpcCancellationTokenSource()
     const sub = token?.onCancellationRequested(() => cts.cancel())
     try {
-      const result = await this._request<WorkspaceSymbol[] | SymbolInformation[] | null>(
+      const result = await this._requestOrNoProject<WorkspaceSymbol[] | SymbolInformation[] | null>(
         conn,
         'workspace/symbol',
+        undefined,
         { query },
         cts.token,
       )
@@ -825,14 +907,7 @@ export class LspClient {
         : result
     } catch (err) {
       if (cts.token.isCancellationRequested) return null
-      const message = (err as Error).message
-      // "No Project" is expected, not a failure: tsserver creates projects
-      // lazily, so navto has nothing to search until a TS/JS file has been
-      // opened (or a tsconfig/jsconfig exists). Degrade silently to no results;
-      // only surface genuinely unexpected failures.
-      if (!/No Project/i.test(message)) {
-        this._log.error(`workspace/symbol failed: ${message}`)
-      }
+      this._log.error(`workspace/symbol failed: ${(err as Error).message}`)
       return null
     } finally {
       sub?.dispose()
@@ -846,7 +921,11 @@ export class LspClient {
     newName: string,
   ): Promise<WorkspaceEdit | null> {
     const conn = await this._ready()
-    return this._request(conn, 'textDocument/rename', { ...this._doc(uri), position, newName })
+    return this._requestOrNoProject(conn, 'textDocument/rename', uri, {
+      ...this._doc(uri),
+      position,
+      newName,
+    })
   }
 
   /** The server's semantic-tokens legend, captured from the `initialize` response.
@@ -859,12 +938,12 @@ export class LspClient {
 
   async provideDocumentSemanticTokens(uri: string): Promise<SemanticTokens | null> {
     const conn = await this._ready()
-    return this._request(conn, 'textDocument/semanticTokens/full', this._doc(uri))
+    return this._requestOrNoProject(conn, 'textDocument/semanticTokens/full', uri, this._doc(uri))
   }
 
   async provideCodeLenses(uri: string): Promise<CodeLens[] | null> {
     const conn = await this._ready()
-    return this._request(conn, 'textDocument/codeLens', this._doc(uri))
+    return this._requestOrNoProject(conn, 'textDocument/codeLens', uri, this._doc(uri))
   }
 
   async provideCodeActions(
@@ -879,7 +958,7 @@ export class LspClient {
       diagnostics: [],
       ...(context.only ? { only: [...context.only] } : {}),
     }
-    return this._request(conn, 'textDocument/codeAction', {
+    return this._requestOrNoProject(conn, 'textDocument/codeAction', uri, {
       ...this._doc(uri),
       range,
       context: lspContext,
@@ -888,7 +967,12 @@ export class LspClient {
 
   async resolveCodeLens(lens: CodeLens): Promise<CodeLens | null> {
     const conn = await this._ready()
-    const resolved = await this._request<CodeLens | null>(conn, 'codeLens/resolve', lens)
+    const resolved = await this._requestOrNoProject<CodeLens | null>(
+      conn,
+      'codeLens/resolve',
+      codeLensUri(lens),
+      lens,
+    )
     if (resolved?.command && !resolved.command.command) {
       // tsgo resolves a references lens to a title with an empty command (no
       // `editor.action.showReferences`). Synthesize it client-side — same wire
@@ -904,8 +988,8 @@ export class LspClient {
     conn: MessageConnection,
     lens: CodeLens,
   ): Promise<CodeLens | null> {
-    const uri = (lens.data as { uri?: unknown } | undefined)?.uri
-    if (typeof uri !== 'string' || !lens.command) return lens
+    const uri = codeLensUri(lens)
+    if (uri === undefined || !lens.command) return lens
     try {
       const locations = await this._request(conn, 'textDocument/references', {
         textDocument: { uri },
