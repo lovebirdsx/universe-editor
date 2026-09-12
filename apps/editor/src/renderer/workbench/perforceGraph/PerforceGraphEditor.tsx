@@ -1772,7 +1772,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
             view.scrollTop = e.currentTarget.scrollTop
           }}
         >
-          <div className={styles['header']}>
+          <div className={styles['header']} data-testid="perforceGraph-header">
             <span className={styles['graphSpacer']} style={{ width: effectiveGraphWidth }} />
             <span className={styles['headerDescription']}>
               {localize('gitGraph.header.description', 'Description')}

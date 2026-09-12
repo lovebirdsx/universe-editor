@@ -3,6 +3,13 @@
   flex-direction: column;
   height: 100%;
   overflow: hidden;
+  /* Single source of truth for the sticky header's height: `.header` paints it,
+     `.scrollBody` uses it to inset the scrollport's optimal viewing region. The
+     keyboard nav follows the selection with `scrollIntoView({block:'nearest'})`,
+     which only compares against the scrollport rect and cannot see the overlay —
+     without the inset a row parked under the header counts as visible, so
+     scrollTop clamps at the header height and the first row never comes out. */
+  --graph-header-height: 24px;
   background: var(--vscode-editor-background);
   color: var(--vscode-editor-foreground);
   font-size: 13px;
@@ -190,6 +197,8 @@
 .scrollBody {
   flex: 1 1 auto;
   overflow: auto;
+  /* Keep keyboard/programmatic scroll targets clear of the sticky header. */
+  scroll-padding-top: var(--graph-header-height);
 }
 
 .scrollBody:focus {
@@ -207,7 +216,7 @@
   z-index: 2;
   display: flex;
   align-items: center;
-  height: 24px;
+  height: var(--graph-header-height);
   white-space: nowrap;
   background: var(--vscode-editor-background);
   border-bottom: 1px solid var(--vscode-workbench-border);

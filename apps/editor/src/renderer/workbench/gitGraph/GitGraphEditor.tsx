@@ -2067,7 +2067,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
             gitGraphViewState.scrollTop = e.currentTarget.scrollTop
           }}
         >
-          <div className={styles['header']}>
+          <div className={styles['header']} data-testid="gitGraph-header">
             <span className={styles['graphSpacer']} style={{ width: effectiveGraphWidth }} />
             <span className={styles['headerDescription']}>
               {localize('gitGraph.header.description', 'Description')}
