@@ -2,8 +2,10 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Coverage for the reveal bridge (`_workbench.openPerforceGraph` → viewState):
  *  an already-loaded changelist is selected in place; an unloaded one pages in
- *  older history (bounded by the reveal page cap); a reveal requested while
- *  the tab was unmounted is consumed from pendingReveal after the first load.
+ *  older history (bounded by the ordering — once the window drops below the
+ *  wanted number it can no longer appear — and by the reveal page cap); a reveal
+ *  requested while the tab was unmounted is consumed from pendingReveal after the
+ *  first load.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -114,6 +116,15 @@ async function flush(): Promise<void> {
   }
 }
 
+/** The `maxChanges` of every page request beyond the base limit: a reveal pages
+ *  by re-querying with a growing limit, so this is the count of pages fetched. */
+function pagedLimits(executeCommand: ReturnType<typeof renderEditor>['executeCommand']): number[] {
+  return executeCommand.mock.calls
+    .filter((c) => c[0] === PerforceGraphCommands.getChanges)
+    .map((c) => (c[1] as { maxChanges?: number } | undefined)?.maxChanges)
+    .filter((n): n is number => typeof n === 'number' && n > PERFORCE_GRAPH_PAGE_SIZE)
+}
+
 function resetViewState(): void {
   perforceGraphViewState.revealCommit = null
   perforceGraphViewState.pendingReveal.set(null, undefined)
@@ -156,11 +167,7 @@ describe('PerforceGraphEditor reveal', () => {
 
     expect(perforceGraphViewState.selection).toEqual(['4521'])
     expect(scrollIntoViewSpy).toHaveBeenCalledWith({ block: 'center' })
-    const pagedLimits = executeCommand.mock.calls
-      .filter((c) => c[0] === PerforceGraphCommands.getChanges)
-      .map((c) => (c[1] as { maxChanges?: number })?.maxChanges)
-      .filter((n): n is number => typeof n === 'number' && n > PERFORCE_GRAPH_PAGE_SIZE)
-    expect(pagedLimits).toHaveLength(0)
+    expect(pagedLimits(executeCommand)).toHaveLength(0)
   })
 
   it('pages in older history with a growing maxChanges until the change is loaded', async () => {
@@ -178,13 +185,15 @@ describe('PerforceGraphEditor reveal', () => {
 
     expect(perforceGraphViewState.selection).toEqual(['4000'])
     expect(perforceGraphViewState.limit).toBe(PERFORCE_GRAPH_PAGE_SIZE * 2)
-    const pagedLimits = executeCommand.mock.calls
-      .filter((c) => c[0] === PerforceGraphCommands.getChanges)
-      .map((c) => (c[1] as { maxChanges?: number })?.maxChanges)
-    expect(pagedLimits).toContain(PERFORCE_GRAPH_PAGE_SIZE * 2)
+    expect(pagedLimits(executeCommand)).toContain(PERFORCE_GRAPH_PAGE_SIZE * 2)
   })
 
-  it('stops paging at the reveal page cap and leaves the selection untouched', async () => {
+  it('stops at once for a target the loaded window has already dropped below', async () => {
+    // Rows are ordered by changelist number and a page is always a prefix of
+    // that order: #9999 sits above everything loaded, so were it in this history
+    // it would have been in the first page. Paging for it can only turn up older
+    // rows — the loop that used to run to its 20-page cap for exactly this case
+    // is what dragged whole histories into the graph.
     const { executeCommand } = renderEditor(() => resultWith([change('4521', 'Fix widget')], true))
     await flush()
 
@@ -193,14 +202,28 @@ describe('PerforceGraphEditor reveal', () => {
     })
     await flush()
 
+    expect(pagedLimits(executeCommand)).toHaveLength(0)
+    // The open-time default selection stands.
+    expect(perforceGraphViewState.selection).toEqual(['4521'])
+  })
+
+  it('stops paging at the reveal page cap and leaves the selection untouched', async () => {
+    // A target BELOW the window keeps the loop honest: every page still holds
+    // rows above it, so the history may well contain it — the cap is what ends
+    // this one, not the ordering.
+    const { executeCommand } = renderEditor(() => resultWith([change('4521', 'Fix widget')], true))
+    await flush()
+
+    await act(async () => {
+      perforceGraphViewState.revealCommit?.('100')
+    })
+    await flush()
+
     // The missing changelist never got selected — the open-time default selection stands.
     expect(perforceGraphViewState.selection).toEqual(['4521'])
-    const pagedLimits = executeCommand.mock.calls
-      .filter((c) => c[0] === PerforceGraphCommands.getChanges)
-      .map((c) => (c[1] as { maxChanges?: number })?.maxChanges)
-      .filter((n): n is number => typeof n === 'number' && n > PERFORCE_GRAPH_PAGE_SIZE)
-    expect(pagedLimits).toHaveLength(20)
-    expect(Math.max(...pagedLimits)).toBe(PERFORCE_GRAPH_PAGE_SIZE * 21)
+    const pagedLimits_ = pagedLimits(executeCommand)
+    expect(pagedLimits_).toHaveLength(20)
+    expect(Math.max(...pagedLimits_)).toBe(PERFORCE_GRAPH_PAGE_SIZE * 21)
   })
 
   it('consumes pendingReveal once the mounted editor finishes its first load', async () => {

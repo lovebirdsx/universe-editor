@@ -83,6 +83,52 @@
   border-color: var(--vscode-workbench-border);
 }
 
+/* The toolbar's "· Synced to #4521" changelist: a button because clicking it
+   reveals that row (and, when nothing is known yet, queries the server instead).
+   Styled to sit inline in the count line, not to look like a toolbar control. */
+.syncPointLink {
+  padding: 0;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.syncPointLink:hover {
+  color: var(--vscode-textLink-foreground);
+}
+
+/* The sync point's query button, inline right after the changelist it refreshes
+   (Perforce graph only). Deliberately not `.toolBtn`: it belongs to the answer,
+   not to the row of view controls, so it is sized and coloured as part of the
+   line — underlining it would read as another link. */
+.syncQueryBtn {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 1px;
+  margin-left: 5px;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  vertical-align: text-bottom;
+}
+
+.syncQueryBtn:hover {
+  color: var(--vscode-textLink-foreground);
+}
+
+/* Elapsed clock of an in-flight probe. Tabular figures stop the line from
+   twitching as the tenths tick over. */
+.syncQueryElapsed {
+  margin-left: 4px;
+  font-variant-numeric: tabular-nums;
+  color: var(--vscode-editor-mutedForeground);
+}
+
 .settingsBackdrop {
   position: fixed;
   inset: 0;

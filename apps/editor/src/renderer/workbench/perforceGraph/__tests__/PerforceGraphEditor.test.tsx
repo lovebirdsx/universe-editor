@@ -6,11 +6,13 @@
  *  synthetic pending-changes node reveals the SCM main view instead.
  *--------------------------------------------------------------------------------------------*/
 
+import { StrictMode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import {
   Event,
   ICommandService,
+  INotificationService,
   IStorageService,
   IViewDescriptorService,
   IViewsService,
@@ -26,6 +28,7 @@ import {
   type P4GraphHaveChangeResult,
   type P4GraphLoadResult,
   type P4GraphRepoDto,
+  type P4GraphSyncPoint,
   type P4GraphSyncScopeDto,
 } from '@universe-editor/extensions-common'
 import { IScmService } from '../../../services/extensions/ScmService.js'
@@ -81,6 +84,26 @@ function makeResult(pendingCount = 0): P4GraphLoadResult {
   }
 }
 
+/** A paged history: the given rows newest-first, exactly as `p4 changes` returns
+ *  them, with older history still behind it (`moreAvailable`). */
+function pagedResult(ids: readonly string[], moreAvailable = true): P4GraphLoadResult {
+  return {
+    changes: ids.map((id) => ({
+      id,
+      parents: [],
+      author: 'alice',
+      client: 'alice-ws',
+      date: 1,
+      message: `Change ${id}`,
+      body: `Change ${id}`,
+    })),
+    head: ids[0] ?? null,
+    headClient: 'alice-ws',
+    moreAvailable,
+    pendingCount: 0,
+  }
+}
+
 function makeDetails(): P4GraphChangeDetailsDto {
   return {
     id: '4521',
@@ -101,17 +124,40 @@ function makeDetails(): P4GraphChangeDetailsDto {
   }
 }
 
-/** `haveChange` is the answer the have-point probe gives — it comes from its own
- *  command now (`getHaveChange`), not from the listing. */
-function makeCommandService(haveChange: string | null = null): ICommandService {
+/** The ledger's answer for the scope under test (`perforce-graph.getSyncPoint`) —
+ *  what a get this editor ran left behind. `source`/`widerScope`/`partial` are
+ *  the provenance the toolbar tooltip is built from. */
+function ledgerPoint(id: string, extra: Partial<P4GraphSyncPoint> = {}): P4GraphSyncPoint {
+  return {
+    id,
+    source: 'sync',
+    at: 1_700_000_000_000,
+    widerScope: false,
+    partial: false,
+    ...extra,
+  }
+}
+
+/**
+ * `ledger` is what `getSyncPoint` answers (zero p4 calls), `query` what a server
+ * query answers (`getHaveChange`). They are separate commands precisely because
+ * they cost different things: the graph reads the ledger on every load and only
+ * reaches the server when the ledger is empty and the scope makes it affordable.
+ */
+function makeCommandService(
+  ledger: P4GraphSyncPoint | null = null,
+  query: string | null = null,
+): ICommandService {
   return {
     _serviceBrand: undefined,
     executeCommand: vi.fn(async (id: string) => {
       switch (id) {
         case PerforceGraphCommands.getChanges:
           return makeResult()
+        case PerforceGraphCommands.getSyncPoint:
+          return ledger
         case PerforceGraphCommands.getHaveChange:
-          return { id: haveChange, failed: false } satisfies P4GraphHaveChangeResult
+          return { id: query, failed: false } satisfies P4GraphHaveChangeResult
         case PerforceGraphCommands.getRepos:
           return [REPO]
         case PerforceGraphCommands.getChangeDetails:
@@ -164,8 +210,12 @@ function makeViewServices(services: ServiceCollection): {
   return { openViewContainer, setViewCollapsed }
 }
 
-function renderEditor(haveChange: string | null = null, input?: PerforceGraphEditorInput) {
-  const commandService = makeCommandService(haveChange)
+function renderEditor(
+  ledger: P4GraphSyncPoint | null = null,
+  input?: PerforceGraphEditorInput,
+  query: string | null = null,
+) {
+  const commandService = makeCommandService(ledger, query)
   const storageService = makeStorageService()
   const services = new ServiceCollection()
   services.set(ICommandService, commandService)
@@ -182,8 +232,16 @@ function renderEditor(haveChange: string | null = null, input?: PerforceGraphEdi
 }
 
 /** Unscoped render plus a graph scope on the input — the scoped tab's shape. */
-function renderScopedEditor(paths: readonly GraphScopePath[]) {
-  return renderEditor(null, new PerforceGraphEditorInput(normalizeGraphScopeSelection(paths)))
+function renderScopedEditor(
+  paths: readonly GraphScopePath[],
+  ledger: P4GraphSyncPoint | null = null,
+  query: string | null = null,
+) {
+  return renderEditor(
+    ledger,
+    new PerforceGraphEditorInput(normalizeGraphScopeSelection(paths)),
+    query,
+  )
 }
 
 async function flush(): Promise<void> {
@@ -195,6 +253,24 @@ async function flush(): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 0))
     for (let i = 0; i < 8; i++) await Promise.resolve()
   }
+}
+
+/** One scoped-history target, shared by the scoped suites below. */
+const SCOPED_PATHS: readonly GraphScopePath[] = [{ path: 'X:/p4ws/main', isDirectory: true }]
+
+/** What the toolbar line shows before anything is known (or asked). */
+const UNKNOWN_SYNC_POINT = '#? (click to query)'
+
+/** The changelist button's own text — `#4521`, or {@link UNKNOWN_SYNC_POINT}. */
+function syncPointText(): string {
+  return screen.getByTestId('perforceGraph-syncPoint').textContent ?? ''
+}
+
+/** The whole " · Synced to …" sentence, read off the count span it sits in. The
+ *  changelist is a button of its own (it is clickable), so a text query for the
+ *  full sentence finds nothing — the text is split across elements on purpose. */
+function syncLine(): string {
+  return screen.getByTestId('perforceGraph-syncPoint').parentElement?.textContent ?? ''
 }
 
 function resetViewState(): void {
@@ -792,12 +868,12 @@ describe('PerforceGraphEditor merged (multi-select) history', () => {
   })
 })
 
-describe('PerforceGraphEditor sync badge', () => {
-  const TOOLTIP =
-    'The newest changelist synced to this workspace. Changes newer than this row are not synced yet.'
+describe('PerforceGraphEditor sync point', () => {
+  const BADGE_TOOLTIP =
+    'The newest changelist this workspace has been synced to; changes newer than this row are not synced yet (the toolbar’s “Synced to” has the provenance and its age).'
 
-  it('badges only the row holding the workspace have point', async () => {
-    const { container } = renderEditor('4519')
+  it('badges only the row holding the ledger’s sync point', async () => {
+    const { container } = renderEditor(ledgerPoint('4519'))
     await flush()
 
     const synced = container.querySelector('[data-id="4519"]') as HTMLElement
@@ -807,23 +883,23 @@ describe('PerforceGraphEditor sync badge', () => {
   })
 
   it('explains the badge in its tooltip', async () => {
-    const { container } = renderEditor('4519')
+    const { container } = renderEditor(ledgerPoint('4519'))
     await flush()
 
     const badge = within(container.querySelector('[data-id="4519"]') as HTMLElement).getByText(
       'Synced',
     )
-    expect(badge.getAttribute('data-tooltip')).toBe(TOOLTIP)
+    expect(badge.getAttribute('data-tooltip')).toBe(BADGE_TOOLTIP)
   })
 
   it('summarises the sync point in the toolbar', async () => {
-    renderEditor('4519')
+    renderEditor(ledgerPoint('4519'))
     await flush()
 
-    expect(screen.getByText(/Synced to #4519/)).toBeTruthy()
+    expect(syncLine()).toContain('Synced to #4519')
   })
 
-  it('shows no badge when the sync point is unknown', async () => {
+  it('shows no badge when the ledger has nothing for the scope', async () => {
     renderEditor(null)
     await flush()
 
@@ -834,41 +910,174 @@ describe('PerforceGraphEditor sync badge', () => {
     // 4400 is older than the loaded page: the marker is never paged in for (the
     // badge only labels a rendered row), so the toolbar line is the one signal
     // that survives.
-    const { container } = renderEditor('4400')
+    const { container } = renderEditor(ledgerPoint('4400'))
     await flush()
 
     expect(container.querySelectorAll('[data-id]').length).toBe(2)
     expect(screen.queryByText('Synced')).toBeNull()
-    expect(screen.getByText(/Synced to #4400/)).toBeTruthy()
+    expect(syncLine()).toContain('Synced to #4400')
+  })
+
+  it('does not ask the server for a whole-graph scope', async () => {
+    // The whole-repo / opened-folder graph is the expensive case (~40s on a big
+    // workspace), so an empty ledger says "not known, click to query" instead of
+    // paying it on every load.
+    const { commandService } = renderEditor(null)
+    await flush()
+
+    const calls = (commandService.executeCommand as ReturnType<typeof vi.fn>).mock.calls
+    expect(calls.some((c) => c[0] === PerforceGraphCommands.getHaveChange)).toBe(false)
+    expect(syncPointText()).toBe(UNKNOWN_SYNC_POINT)
+  })
+
+  it('asks the server on its own for a scoped history, whose probe is cheap', async () => {
+    const { container } = renderScopedEditor(SCOPED_PATHS, null, '4519')
+    await flush()
+
+    expect(
+      within(container.querySelector('[data-id="4519"]') as HTMLElement).getByText('Synced'),
+    ).toBeTruthy()
+  })
+
+  it('prefers the ledger over the server, even for a scoped history', async () => {
+    const { commandService } = renderScopedEditor(SCOPED_PATHS, ledgerPoint('4519'), '4520')
+    await flush()
+
+    const calls = (commandService.executeCommand as ReturnType<typeof vi.fn>).mock.calls
+    expect(calls.some((c) => c[0] === PerforceGraphCommands.getHaveChange)).toBe(false)
+    expect(syncLine()).toContain('Synced to #4519')
+  })
+
+  it('queries on the toolbar button and shows what the server answered', async () => {
+    const { commandService } = renderEditor(null, undefined, '4521')
+    await flush()
+    expect(syncPointText()).toBe(UNKNOWN_SYNC_POINT)
+
+    fireEvent.click(screen.getByTestId('perforceGraph-querySyncPoint'))
+    await flush()
+
+    expect(commandService.executeCommand).toHaveBeenCalledWith(
+      PerforceGraphCommands.getHaveChange,
+      expect.objectContaining({ force: true }),
+    )
+    expect(syncLine()).toContain('Synced to #4521')
+  })
+
+  it('queries when the toolbar line itself is clicked', async () => {
+    const { commandService } = renderEditor(null, undefined, '4519')
+    await flush()
+
+    fireEvent.click(screen.getByTestId('perforceGraph-syncPoint'))
+    await flush()
+
+    expect(commandService.executeCommand).toHaveBeenCalledWith(
+      PerforceGraphCommands.getHaveChange,
+      expect.objectContaining({ force: true }),
+    )
+    expect(syncLine()).toContain('Synced to #4519')
+  })
+
+  it('reveals the named row when the toolbar line is clicked', async () => {
+    const { commandService } = renderEditor(ledgerPoint('4519'))
+    await flush()
+    const before = (commandService.executeCommand as ReturnType<typeof vi.fn>).mock.calls.length
+
+    // Clicking the changelist is a REVEAL, not a query — the whole point of the
+    // click being on the id rather than on a "query" affordance. Only the
+    // unknown marker asks the server.
+    fireEvent.click(screen.getByTestId('perforceGraph-syncPoint'))
+    await flush()
+
+    const calls = (commandService.executeCommand as ReturnType<typeof vi.fn>).mock.calls.slice(
+      before,
+    )
+    expect(calls.some((c) => c[0] === PerforceGraphCommands.getHaveChange)).toBe(false)
+    expect(perforceGraphViewState.selection).toEqual(['4519'])
+  })
+
+  it('says where a recorded sync point came from, and what it cannot know', async () => {
+    renderEditor(ledgerPoint('4519'))
+    await flush()
+
+    const tooltip = screen.getByTestId('perforceGraph-syncPoint').getAttribute('data-tooltip') ?? ''
+    // A record only knows the gets this editor ran — the honest caveat the old
+    // "syncs outside the editor count too" wording got wrong.
+    expect(tooltip).toContain('outside the editor')
+    expect(tooltip).not.toContain('Answered by Perforce')
+  })
+
+  it('labels a queried answer as the server’s', async () => {
+    renderEditor({ ...ledgerPoint('4519'), source: 'query' })
+    await flush()
+
+    const tooltip = screen.getByTestId('perforceGraph-syncPoint').getAttribute('data-tooltip') ?? ''
+    expect(tooltip).toContain('Answered by Perforce')
+  })
+
+  it('labels an upper bound when the record came from a wider scope', async () => {
+    renderEditor(ledgerPoint('4519', { widerScope: true }))
+    await flush()
+
+    const tooltip = screen.getByTestId('perforceGraph-syncPoint').getAttribute('data-tooltip') ?? ''
+    expect(tooltip).toContain('upper bound')
+    expect(tooltip).toContain('wider scope')
+  })
+
+  it('labels an upper bound when the recorded pull left files behind', async () => {
+    renderEditor(ledgerPoint('4519', { partial: true }))
+    await flush()
+
+    const tooltip = screen.getByTestId('perforceGraph-syncPoint').getAttribute('data-tooltip') ?? ''
+    expect(tooltip).toContain('upper bound')
+    expect(tooltip).toContain('left some files behind')
   })
 })
 
 describe('PerforceGraphEditor sync point races', () => {
   /**
-   * The probe answers on its own schedule (it is the one read whose cost is the
-   * size of the scope), so its answer can arrive after the graph has moved on.
-   * Renders with a hand-rolled command service whose have-point answers are
-   * settled by the test, one deferred per call.
+   * Both halves of the answer arrive asynchronously — the ledger is a message
+   * round trip, a query is a p4 round trip — so either can land after the graph
+   * has moved on. Renders with a hand-rolled command service whose answers are
+   * settled by the test, in whatever order it likes.
    */
-  function renderWithDeferredProbes(): {
+  function renderWithDeferredSyncPoints(
+    input?: PerforceGraphEditorInput,
+    options: { deferChanges?: boolean; strict?: boolean } = {},
+  ): {
     container: HTMLElement
-    /** Settles the n-th `getHaveChange` call, in whatever order the test likes.
-     *  `failed` models a probe that could not answer at all (p4 failed or timed
-     *  out) — which is not the same as answering "nothing is synced". */
-    probes: ((id: string | null, failed?: boolean) => void)[]
-    /** The scope argument each probe was dispatched with (force vs. cached). */
-    probeArgs: P4GraphHaveChangeOptions[]
+    /** Settles the n-th `getChanges` (a listing load). Only deferred when the
+     *  test asked for it — the ordinary cases want the load to settle on flush. */
+    changes: ((result?: P4GraphLoadResult) => void)[]
+    /** Settles the n-th `getSyncPoint` (ledger read). */
+    ledger: ((point: P4GraphSyncPoint | null) => void)[]
+    /** Settles the n-th `getHaveChange` (server query). `failed` models a query
+     *  that could not answer at all (p4 failed or timed out) — which is not the
+     *  same as answering "nothing is synced". */
+    queries: ((id: string | null, failed?: boolean) => void)[]
+    /** The argument each query was dispatched with (force vs. shared cache). */
+    queryArgs: P4GraphHaveChangeOptions[]
+    /** Toasts the editor raised (e.g. the duplicate-query notice). */
+    notify: ReturnType<typeof vi.fn>
   } {
-    const probes: ((id: string | null, failed?: boolean) => void)[] = []
-    const probeArgs: P4GraphHaveChangeOptions[] = []
+    const changes: ((result?: P4GraphLoadResult) => void)[] = []
+    const ledger: ((point: P4GraphSyncPoint | null) => void)[] = []
+    const queries: ((id: string | null, failed?: boolean) => void)[] = []
+    const queryArgs: P4GraphHaveChangeOptions[] = []
+    const notify = vi.fn()
     const executeCommand = vi.fn((id: string, arg?: P4GraphHaveChangeOptions) => {
       switch (id) {
         case PerforceGraphCommands.getChanges:
-          return Promise.resolve(makeResult())
+          return options.deferChanges
+            ? new Promise<P4GraphLoadResult>((resolve) =>
+                changes.push((result) => resolve(result ?? makeResult())),
+              )
+            : Promise.resolve(makeResult())
+        case PerforceGraphCommands.getSyncPoint:
+          return new Promise<P4GraphSyncPoint | null>((resolve) => ledger.push(resolve))
         case PerforceGraphCommands.getHaveChange:
-          probeArgs.push(arg ?? {})
+          queryArgs.push(arg ?? {})
           return new Promise<P4GraphHaveChangeResult>((resolve) =>
-            probes.push((haveId, failed = false) => resolve({ id: haveId, failed })),
+            queries.push((haveId, failed = false) => resolve({ id: haveId, failed })),
           )
         case PerforceGraphCommands.getRepos:
           return Promise.resolve([REPO])
@@ -887,135 +1096,540 @@ describe('PerforceGraphEditor sync point races', () => {
     } as unknown as ICommandService)
     services.set(IScmService, makeScmService())
     services.set(IStorageService, makeStorageService())
+    services.set(INotificationService, {
+      _serviceBrand: undefined,
+      notify,
+    } as unknown as INotificationService)
     makeViewServices(services)
     const instantiation = new InstantiationService(services)
-    const utils = render(
+    const tree = (
       <ServicesContext.Provider value={instantiation}>
-        <PerforceGraphEditor input={{} as never} />
-      </ServicesContext.Provider>,
+        <PerforceGraphEditor input={input ?? ({} as never)} />
+      </ServicesContext.Provider>
     )
-    return { container: utils.container, probes, probeArgs }
+    // `strict` mirrors `pnpm dev`: main.tsx renders the workbench inside StrictMode,
+    // which mounts, runs every cleanup once, then mounts again on the SAME instance.
+    const utils = render(options.strict ? <StrictMode>{tree}</StrictMode> : tree)
+    return { container: utils.container, changes, ledger, queries, queryArgs, notify }
   }
 
-  /** Opens the row's context menu and runs "Get This Revision" — the get path
-   *  that re-reads the graph in the background (`revalidate`, no force). */
-  function getThisRevision(container: HTMLElement): void {
-    fireEvent.contextMenu(container.querySelector('[data-id="4519"]')!)
-    fireEvent.click(screen.getByText('Get This Revision'))
+  /** One probe round trip, several flush() rounds and a full re-render: these
+   *  run ~0.5s on an idle machine, and the whole-repo check runs every project at
+   *  once — the default 5s budget is not enough there. */
+  const SLOW = 10_000
+
+  /** The row the badge currently sits on, or null when nothing is badged. */
+  function badged(container: HTMLElement): string | null {
+    return (
+      [...container.querySelectorAll('[data-id]')]
+        .find((el) => el.textContent?.includes('Synced'))
+        ?.getAttribute('data-id') ?? null
+    )
   }
 
-  it('drops a probe whose scope changed under it', async () => {
-    const { container, probes } = renderWithDeferredProbes()
+  /** That row's badge tooltip — the badge explains which of the two things it is
+   *  marking (the point itself, or the newest change the sync covers). */
+  function badgeTooltip(container: HTMLElement): string {
+    const row = [...container.querySelectorAll('[data-id]')].find((el) =>
+      el.textContent?.includes('Synced'),
+    )
+    return row?.querySelector('[data-tooltip]')?.getAttribute('data-tooltip') ?? ''
+  }
+
+  it('drops a ledger answer whose scope changed under it', async () => {
+    const { container, ledger } = renderWithDeferredSyncPoints()
     await flush()
-    expect(probes.length).toBe(1)
+    expect(ledger.length).toBe(1)
 
-    // Switch to whole-repo while the folder-scoped probe is still out: its answer
+    // Switch to whole-repo while the folder-scoped read is still out: its answer
     // describes a different scope and must not badge the new list.
     fireEvent.click(screen.getByLabelText('Toggle repository scope'))
     await flush()
-    expect(probes.length).toBe(2)
+    expect(ledger.length).toBe(2)
 
-    probes[0]!('4519')
+    ledger[0]!(ledgerPoint('4519'))
     await flush()
-    expect(container.querySelector('[data-id="4519"]')).toBeTruthy()
-    expect(screen.queryByText('Synced')).toBeNull()
+    expect(badged(container)).toBeNull()
 
-    probes[1]!('4521')
+    ledger[1]!(ledgerPoint('4521'))
     await flush()
-    expect(
-      within(container.querySelector('[data-id="4521"]') as HTMLElement).getByText('Synced'),
-    ).toBeTruthy()
+    expect(badged(container)).toBe('4521')
   })
 
-  it('lets the newest probe win when two answers resolve out of order', async () => {
-    const { container, probes } = renderWithDeferredProbes()
-    await flush()
+  it(
+    'refuses a second press while a query is out, and says why',
+    async () => {
+      const { container, ledger, queries, queryArgs, notify } = renderWithDeferredSyncPoints()
+      await flush()
+      ledger[0]!(ledgerPoint('4519'))
+      await flush()
 
-    // A get re-reads the graph and re-asks for the sync point (same scope).
-    fireEvent.contextMenu(container.querySelector('[data-id="4521"]')!)
-    fireEvent.click(screen.getByText('Get This Revision'))
-    await flush()
-    expect(probes.length).toBe(2)
+      fireEvent.click(screen.getByTestId('perforceGraph-querySyncPoint'))
+      await flush()
+      expect(queries.length).toBe(1)
 
-    probes[1]!('4521')
-    await flush()
-    expect(
-      within(container.querySelector('[data-id="4521"]') as HTMLElement).getByText('Synced'),
-    ).toBeTruthy()
+      // A second press cannot answer anything the first will not, and it would
+      // spend a second whole-scope p4 round trip (tens of seconds) proving it.
+      fireEvent.click(screen.getByTestId('perforceGraph-querySyncPoint'))
+      await flush()
+      expect(queries.length).toBe(1)
+      expect(queryArgs.length).toBe(1)
+      expect(notify).toHaveBeenCalledWith(
+        expect.objectContaining({ message: expect.stringContaining('already running') }),
+      )
+      // The press that was refused must not have disturbed the one in flight.
+      expect(screen.getByTestId('perforceGraph-querySyncPoint').hasAttribute('data-querying')).toBe(
+        true,
+      )
 
-    // The pre-get answer lands last and is older news — it must not pull the
-    // badge back down to 4519.
-    probes[0]!('4519')
+      queries[0]!('4521')
+      await flush()
+      expect(badged(container)).toBe('4521')
+
+      // Once it has answered, the button is live again.
+      fireEvent.click(screen.getByTestId('perforceGraph-querySyncPoint'))
+      await flush()
+      expect(queries.length).toBe(2)
+    },
+    SLOW,
+  )
+
+  it(
+    'does not stop the newer clock when an abandoned answer lands',
+    async () => {
+      const { container, changes, ledger, queries } = renderWithDeferredSyncPoints(undefined, {
+        deferChanges: true,
+      })
+      await flush()
+      changes[0]!()
+      await flush()
+      ledger[0]!(null)
+      await flush()
+
+      // Press, then change scope while it is out: the load abandons it (its answer
+      // belongs to the scope the user has left) and frees the one-at-a-time slot.
+      fireEvent.click(screen.getByTestId('perforceGraph-querySyncPoint'))
+      await flush()
+      expect(queries.length).toBe(1)
+      fireEvent.click(screen.getByLabelText('Toggle repository scope'))
+      await flush()
+      changes[1]!()
+      await flush()
+      ledger[1]!(null)
+      await flush()
+      expect(screen.queryByTestId('perforceGraph-queryElapsed')).toBeNull()
+
+      // The new scope's own query is the one the user is now waiting on.
+      fireEvent.click(screen.getByTestId('perforceGraph-querySyncPoint'))
+      await flush()
+      expect(queries.length).toBe(2)
+
+      // The abandoned answer lands last and must not stop the clock of a press
+      // that is still in flight — the user would see "I pressed, it stopped, then
+      // it started again".
+      queries[0]!('4519')
+      await flush()
+      expect(screen.getByTestId('perforceGraph-querySyncPoint').hasAttribute('data-querying')).toBe(
+        true,
+      )
+      expect(badged(container)).toBeNull()
+
+      queries[1]!('4521')
+      await flush()
+      expect(badged(container)).toBe('4521')
+    },
+    SLOW,
+  )
+
+  it(
+    'ends the clock the query started, under StrictMode’s dry-run mount',
+    async () => {
+      // `pnpm dev` renders the workbench inside StrictMode, which mounts, runs every
+      // cleanup once, then mounts again — on the SAME instance, so any ref a cleanup
+      // flipped stays flipped. The clock the user's query started must still end,
+      // otherwise the spinner and the frozen number outlive the answer.
+      const { container, ledger, queries } = renderWithDeferredSyncPoints(undefined, {
+        strict: true,
+      })
+      for (let round = 0; round < 3; round++) {
+        ledger.forEach((settle) => settle(null))
+        await flush()
+      }
+
+      fireEvent.click(screen.getByTestId('perforceGraph-querySyncPoint'))
+      await flush()
+      for (let round = 0; round < 3; round++) {
+        ledger.forEach((settle) => settle(null))
+        queries.forEach((settle) => settle('4521'))
+        await flush()
+      }
+
+      expect(screen.getByTestId('perforceGraph-querySyncPoint').hasAttribute('data-querying')).toBe(
+        false,
+      )
+      expect(screen.getByTestId('perforceGraph-queryElapsed').hasAttribute('data-done')).toBe(true)
+      expect(badged(container)).toBe('4521')
+    },
+    SLOW,
+  )
+
+  it(
+    'does not spin or time the automatic probe of a scoped history',
+    async () => {
+      // The probe a scoped history runs on its own is cheap (a file or folder), so
+      // it gets no clock: the spinner and the held number must mean "the query YOU
+      // pressed is running", not "some p4 read is running".
+      const { ledger, queries } = renderWithDeferredSyncPoints(
+        new PerforceGraphEditorInput(normalizeGraphScopeSelection(SCOPED_PATHS)),
+      )
+      await flush()
+      ledger[0]!(null)
+      await flush()
+      expect(queries.length).toBe(1)
+      expect(screen.queryByTestId('perforceGraph-queryElapsed')).toBeNull()
+      expect(screen.getByTestId('perforceGraph-querySyncPoint').hasAttribute('data-querying')).toBe(
+        false,
+      )
+
+      queries[0]!('4519')
+      await flush()
+      expect(screen.queryByTestId('perforceGraph-queryElapsed')).toBeNull()
+    },
+    SLOW,
+  )
+
+  it(
+    'marks a query that came back without an answer',
+    async () => {
+      const { container, ledger, queries } = renderWithDeferredSyncPoints()
+      await flush()
+      ledger[0]!(ledgerPoint('4521'))
+      await flush()
+      expect(badged(container)).toBe('4521')
+
+      fireEvent.click(screen.getByTestId('perforceGraph-querySyncPoint'))
+      await flush()
+      queries[0]!(null, true)
+      await flush()
+
+      // The number is held — the click really ran for that long — but it is marked
+      // as unanswered, which is not the same ending as "answered, nothing moved".
+      const elapsed = screen.getByTestId('perforceGraph-queryElapsed')
+      expect(elapsed.hasAttribute('data-done')).toBe(true)
+      expect(elapsed.hasAttribute('data-failed')).toBe(true)
+      expect(badged(container)).toBe('4521')
+      expect(syncLine()).toContain('Synced to #4521')
+    },
+    SLOW,
+  )
+
+  it(
+    'stops claiming ignorance once a query has answered "nothing is synced"',
+    async () => {
+      const { ledger, queries } = renderWithDeferredSyncPoints()
+      await flush()
+      ledger[0]!(null)
+      await flush()
+      expect(screen.getByTestId('perforceGraph-syncPoint').getAttribute('data-tooltip')).toContain(
+        'not known',
+      )
+
+      fireEvent.click(screen.getByTestId('perforceGraph-querySyncPoint'))
+      await flush()
+      queries[0]!(null)
+      await flush()
+
+      // `id: null` from the server IS an answer, and one that costs tens of
+      // seconds: saying "not known, click to ask" sends the user straight back to
+      // the query they just ran.
+      expect(screen.getByTestId('perforceGraph-syncPoint').getAttribute('data-tooltip')).toContain(
+        'nothing in this scope is synced',
+      )
+    },
+    SLOW,
+  )
+
+  it(
+    'keeps a ledger read from overwriting the answer it raced',
+    async () => {
+      // The ledger read takes the SAME sequence as the query if it starts after it
+      // (only a user query advances the counter), so the sequence guard cannot
+      // catch this one: the read carries pre-query content (the extension writes
+      // the ledger only once the query command returns) and must not land on top.
+      const { container, ledger, queries } = renderWithDeferredSyncPoints()
+      await flush()
+      ledger[0]!(null)
+      await flush()
+
+      fireEvent.click(screen.getByTestId('perforceGraph-querySyncPoint'))
+      await flush()
+      // A get through the graph re-reads the ledger while the query is still out.
+      fireEvent.contextMenu(container.querySelector('[data-id="4519"]')!)
+      fireEvent.click(screen.getByText('Get This Revision'))
+      await flush()
+      expect(ledger.length).toBe(2)
+
+      queries[0]!('4521')
+      await flush()
+      expect(badged(container)).toBe('4521')
+
+      // The raced read resolves last, with what the ledger held before the query.
+      ledger[1]!(ledgerPoint('4519'))
+      await flush()
+      expect(badged(container)).toBe('4521')
+      expect(syncLine()).toContain('Synced to #4521')
+    },
+    SLOW,
+  )
+
+  it('keeps the last point when a query fails to answer', async () => {
+    const { container, ledger, queries } = renderWithDeferredSyncPoints()
     await flush()
-    expect(
-      within(container.querySelector('[data-id="4521"]') as HTMLElement).getByText('Synced'),
-    ).toBeTruthy()
-    expect(screen.queryByText(/Synced to #4519/)).toBeNull()
+    ledger[0]!(ledgerPoint('4521'))
+    await flush()
+    expect(badged(container)).toBe('4521')
+
+    // Ask the server and have it fail. `failed` is not an answer: the recorded
+    // point is still the best information available.
+    fireEvent.click(screen.getByTestId('perforceGraph-querySyncPoint'))
+    await flush()
+    expect(queries.length).toBe(1)
+    queries[0]!(null, true)
+    await flush()
+    expect(badged(container)).toBe('4521')
+    expect(syncLine()).toContain('Synced to #4521')
   })
 
-  it('keeps the last badge when a probe fails to answer', async () => {
-    const { container, probes } = renderWithDeferredProbes()
+  it('drops the point when the query answers "nothing synced"', async () => {
+    // An empty have list IS an answer — a get to an older changelist moves the
+    // sync point back, and a workspace can be reverted — so it must clear the
+    // marker rather than be mistaken for a failure.
+    const { container, ledger, queries } = renderWithDeferredSyncPoints()
     await flush()
-    probes[0]!('4521')
+    ledger[0]!(ledgerPoint('4521'))
     await flush()
-    expect(screen.getByText(/Synced to #4521/)).toBeTruthy()
+    expect(badged(container)).toBe('4521')
 
-    // The get re-asks and this time p4 times out. `failed` is not an answer: the
-    // previous id is still the best information available (only a sync moves the
-    // sync point, and the extension does not cache failures, so the next probe
-    // retries).
-    getThisRevision(container)
+    fireEvent.click(screen.getByTestId('perforceGraph-querySyncPoint'))
     await flush()
-    expect(probes.length).toBe(2)
-    probes[1]!(null, true)
+    queries[0]!(null)
     await flush()
-    expect(
-      within(container.querySelector('[data-id="4521"]') as HTMLElement).getByText('Synced'),
-    ).toBeTruthy()
-    expect(screen.getByText(/Synced to #4521/)).toBeTruthy()
-  })
-
-  it('drops the badge when the probe answers "nothing synced"', async () => {
-    // An empty have list IS an answer — `p4 sync` to an older changelist can move
-    // the sync point back, and a workspace can be reverted — so it must clear the
-    // badge rather than be mistaken for a failure.
-    const { container, probes } = renderWithDeferredProbes()
-    await flush()
-    probes[0]!('4521')
-    await flush()
-    expect(screen.getByText(/Synced to #4521/)).toBeTruthy()
-
-    fireEvent.click(screen.getByLabelText('Refresh'))
-    await flush()
-    expect(probes.length).toBe(2)
-    probes[1]!(null)
-    await flush()
-    expect(screen.queryByText(/Synced to #/)).toBeNull()
-    expect(screen.queryByText('Synced')).toBeNull()
+    expect(badged(container)).toBeNull()
+    expect(syncPointText()).toBe(UNKNOWN_SYNC_POINT)
     expect(container.querySelectorAll('[data-id]').length).toBe(2)
   })
 
-  it('re-runs the probe only for an explicit reload', async () => {
-    // Re-running it costs the size of the scope (tens of seconds over a whole
-    // workspace): the toolbar reload is a user asking for it, everything else
-    // shares the extension's cached answer.
-    const { container, probes, probeArgs } = renderWithDeferredProbes()
+  it('keeps a user query that a load lands on top of', async () => {
+    // The bad race, and the one a scope toggle sets up: press the query button
+    // while the new scope's load is still out, and the load's own ledger read
+    // arrives first. That read only fills a blank — it must not discard an answer
+    // the user is waiting on (a p4 round trip that costs tens of seconds on a real
+    // workspace, and one they pressed a button for).
+    const { container, changes, ledger, queries } = renderWithDeferredSyncPoints(undefined, {
+      deferChanges: true,
+    })
     await flush()
-    probes[0]!('4521')
+    expect(changes.length).toBe(1)
+    changes[0]!()
     await flush()
-    expect(probeArgs[0]).toMatchObject({ force: true })
+    ledger[0]!(ledgerPoint('4519'))
+    await flush()
+    expect(badged(container)).toBe('4519')
 
-    getThisRevision(container)
+    // Widen the scope: its load is handed back to the test, so it is still in
+    // flight when the query goes out.
+    fireEvent.click(screen.getByLabelText('Toggle repository scope'))
     await flush()
-    expect(probeArgs[1]).toMatchObject({ force: false })
-    probes[1]!('4521')
+    expect(changes.length).toBe(2)
+    fireEvent.click(screen.getByTestId('perforceGraph-querySyncPoint'))
+    await flush()
+    expect(queries.length).toBe(1)
+
+    // The load lands first and reads the ledger for the widened scope — which has
+    // nothing recorded for it.
+    changes[1]!()
+    await flush()
+    expect(ledger.length).toBe(2)
+    ledger[1]!(null)
     await flush()
 
-    fireEvent.click(screen.getByLabelText('Refresh'))
+    // The query still answers, and its answer is the one on screen.
+    queries[0]!('4521')
     await flush()
-    expect(probeArgs[2]).toMatchObject({ force: true })
-    probes[2]!('4521')
+    expect(badged(container)).toBe('4521')
+    expect(syncLine()).toContain('Synced to #4521')
+  })
+
+  it(
+    'spins the icon and runs the clock until the answer lands, then holds the number',
+    async () => {
+      // The deferred harness is what makes the in-flight window observable at all:
+      // a probe can take tens of seconds on a wide scope, and without a mark on the
+      // button a click is indistinguishable from a miss. The held number serves the
+      // other end — on a fast scope the answer beats the first tick, and "0.2s"
+      // appearing is the only proof the click was acted on.
+      const { ledger, queries } = renderWithDeferredSyncPoints()
+      await flush()
+      ledger[0]!(ledgerPoint('4519'))
+      await flush()
+
+      const button = screen.getByTestId('perforceGraph-querySyncPoint')
+      expect(button.hasAttribute('data-querying')).toBe(false)
+      expect(screen.queryByTestId('perforceGraph-queryElapsed')).toBeNull()
+
+      fireEvent.click(button)
+      await flush()
+      expect(queries.length).toBe(1)
+      expect(button.hasAttribute('data-querying')).toBe(true)
+      const running = screen.getByTestId('perforceGraph-queryElapsed')
+      expect(running.textContent).toMatch(/^\d+\.\ds$/)
+      expect(running.hasAttribute('data-done')).toBe(false)
+
+      // The number has to MOVE: the initial state is already "0.0s", so a frozen
+      // clock would satisfy every other assertion here. Poll rather than sleep a
+      // fixed interval — a loaded machine can delay the tick past any budget.
+      await vi.waitFor(
+        () => expect(screen.getByTestId('perforceGraph-queryElapsed').textContent).not.toBe('0.0s'),
+        { timeout: 3000 },
+      )
+
+      queries[0]!('4521')
+      await flush()
+      expect(button.hasAttribute('data-querying')).toBe(false)
+      const held = screen.getByTestId('perforceGraph-queryElapsed')
+      expect(held.hasAttribute('data-done')).toBe(true)
+      expect(held.textContent).toMatch(/^\d+\.\ds$/)
+      expect(syncLine()).toContain('Synced to #4521')
+    },
+    SLOW,
+  )
+
+  it('offers the query and the jump from the row menu', async () => {
+    const { container, ledger, queries, queryArgs } = renderWithDeferredSyncPoints()
     await flush()
+    ledger[0]!(ledgerPoint('4519'))
+    await flush()
+    // The graph opens on the newest row, so a jump is visible as a move away.
+    expect(perforceGraphViewState.selection).toEqual(['4521'])
+
+    fireEvent.contextMenu(container.querySelector('[data-id="4521"]')!)
+    fireEvent.click(screen.getByText('Query Sync Point'))
+    await flush()
+    expect(queryArgs[0]).toMatchObject({ force: true })
+    queries[0]!('4519')
+    await flush()
+    expect(badged(container)).toBe('4519')
+
+    fireEvent.contextMenu(container.querySelector('[data-id="4521"]')!)
+    fireEvent.click(screen.getByText('Go to Sync Point'))
+    await flush()
+    expect(perforceGraphViewState.selection).toEqual(['4519'])
+  })
+
+  it('offers no jump while the sync point is unknown', async () => {
+    const { container } = renderEditor(null)
+    await flush()
+
+    fireEvent.contextMenu(container.querySelector('[data-id="4521"]')!)
+
+    expect(screen.getByText('Query Sync Point')).toBeTruthy()
+    expect(screen.queryByText('Go to Sync Point')).toBeNull()
+  })
+
+  it(
+    'lands on the newest change the sync covers when the point has no row here',
+    async () => {
+      // A wider record answers for scopes its get never touched, so this history
+      // has no row for #4500 — and never will: rows are ordered by changelist
+      // number, and the first page already reaches below it. Paging for it used to
+      // pull the whole history in (20 pages) and land nowhere.
+      const { container, changes, ledger, notify } = renderWithDeferredSyncPoints(undefined, {
+        deferChanges: true,
+      })
+      for (let round = 0; round < 3; round++) {
+        changes.forEach((settle) => settle(pagedResult(['4521', '4519', '4400'])))
+        ledger.forEach((settle) => settle(ledgerPoint('4500', { widerScope: true })))
+        await flush()
+      }
+      const dispatched = changes.length
+      expect(badged(container)).toBe('4400')
+
+      fireEvent.click(screen.getByTestId('perforceGraph-syncPoint'))
+      await flush()
+
+      // No page was fetched — the point cannot be in this history.
+      expect(changes.length).toBe(dispatched)
+      // The toolbar keeps the record's own changelist (it is the honest upper bound
+      // and carries the provenance); the row it lands on is where this scope
+      // actually stands, and says so.
+      expect(syncPointText()).toBe('#4500')
+      expect(perforceGraphViewState.selection).toEqual(['4400'])
+      expect(badged(container)).toBe('4400')
+      expect(badgeTooltip(container)).toContain('changed nothing under this scope')
+      expect(notify).toHaveBeenCalledWith(
+        expect.objectContaining({ message: expect.stringContaining('4500') }),
+      )
+      expect(notify).toHaveBeenCalledWith(
+        expect.objectContaining({ message: expect.stringContaining('4400') }),
+      )
+    },
+    SLOW,
+  )
+
+  it(
+    'says nothing here is synced when the point is older than every change in the scope',
+    async () => {
+      const { container, changes, ledger, notify } = renderWithDeferredSyncPoints(undefined, {
+        deferChanges: true,
+      })
+      for (let round = 0; round < 3; round++) {
+        changes.forEach((settle) => settle(pagedResult(['4700', '4650'], false)))
+        ledger.forEach((settle) => settle(ledgerPoint('4600', { widerScope: true })))
+        await flush()
+      }
+
+      fireEvent.click(screen.getByTestId('perforceGraph-syncPoint'))
+      await flush()
+
+      // Every row here is NEWER than the point, so the sync covers none of them and
+      // there is no row to badge — saying "not known" would hide that answer.
+      expect(badged(container)).toBeNull()
+      expect(perforceGraphViewState.selection).toEqual(['4700'])
+      expect(notify).toHaveBeenCalledWith(
+        expect.objectContaining({ message: expect.stringContaining('every change here is newer') }),
+      )
+    },
+    SLOW,
+  )
+
+  it('queries with force only when the user asks, never on a revalidate', async () => {
+    // A scoped history probes on its own — its cost is a file or folder, not a
+    // workspace — but only through the shared answer; re-running the probe is
+    // the user pressing the button.
+    const { container, ledger, queries, queryArgs } = renderWithDeferredSyncPoints(
+      new PerforceGraphEditorInput(normalizeGraphScopeSelection(SCOPED_PATHS)),
+    )
+    await flush()
+    ledger[0]!(null)
+    await flush()
+    expect(queryArgs[0]).toMatchObject({ force: false })
+    queries[0]!('4521')
+    await flush()
+    expect(badged(container)).toBe('4521')
+
+    // A get through the graph re-reads the ledger (which the extension updated
+    // before the sync resolved) — not the server.
+    fireEvent.contextMenu(container.querySelector('[data-id="4519"]')!)
+    fireEvent.click(screen.getByText('Get This Revision'))
+    await flush()
+    expect(queries.length).toBe(1)
+    ledger[1]!(null)
+    await flush()
+    expect(queryArgs[1]).toMatchObject({ force: false })
+
+    fireEvent.click(screen.getByTestId('perforceGraph-querySyncPoint'))
+    await flush()
+    expect(queryArgs[2]).toMatchObject({ force: true })
   })
 })
 
@@ -1024,8 +1638,6 @@ describe('PerforceGraphEditor re-reads after a get', () => {
     fireEvent.contextMenu(container.querySelector('[data-id="4521"]')!)
   }
 
-  const SCOPED = [{ path: 'X:/p4ws/main', isDirectory: true }] as const
-
   /**
    * Every entry point that issues a get must re-read the graph itself: a `p4 sync`
    * advances have revisions without touching `p4 opened`, so the SCM observable the
@@ -1033,9 +1645,9 @@ describe('PerforceGraphEditor re-reads after a get', () => {
    * row. Each case asserts the get reached the extension AND that a second
    * `getChanges` followed — the 5 payloads differ but share the one helper.
    *
-   * The probe is asserted alongside it because the badge now hangs off its own
-   * command: a revalidate that re-reads the list but never re-asks for the sync
-   * point would leave the badge on the pre-get row, which is precisely the bug
+   * The sync point is asserted alongside it because the badge now hangs off its
+   * own commands: a revalidate that re-reads the list but never re-reads the
+   * ledger would leave the badge on the pre-get row, which is precisely the bug
    * this table exists for. e2e cannot cover it (the SCM auto-refresh delivers a
    * reload anyway), so this chain is the only guard.
    */
@@ -1046,6 +1658,8 @@ describe('PerforceGraphEditor re-reads after a get', () => {
     act: (container: HTMLElement) => void
     /** Follow-up that needs the previous flush to have settled (dialog opened). */
     confirm?: () => void
+    /** A scoped history, whose sync point is cheap enough to probe unasked. */
+    scoped?: boolean
     command: string
     args: readonly unknown[]
   }[] = [
@@ -1061,21 +1675,23 @@ describe('PerforceGraphEditor re-reads after a get', () => {
     },
     {
       name: 'scoped Get This Revision',
-      render: () => renderScopedEditor(SCOPED),
+      render: () => renderScopedEditor(SCOPED_PATHS),
       act: (c) => {
         openChangeMenu(c)
         fireEvent.click(screen.getByText('Get This Revision'))
       },
+      scoped: true,
       command: PerforceGraphCommands.syncToChange,
-      args: [expect.objectContaining({ change: '4521', scopePaths: SCOPED })],
+      args: [expect.objectContaining({ change: '4521', scopePaths: SCOPED_PATHS })],
     },
     {
       name: 'scoped Get Latest Revision',
-      render: () => renderScopedEditor(SCOPED),
+      render: () => renderScopedEditor(SCOPED_PATHS),
       act: (c) => {
         openChangeMenu(c)
         fireEvent.click(screen.getByText('Get Latest Revision'))
       },
+      scoped: true,
       command: 'perforce.syncLatest',
       args: [
         expect.objectContaining({ resourceUri: 'X:/p4ws/main', isDirectory: true }),
@@ -1117,8 +1733,11 @@ describe('PerforceGraphEditor re-reads after a get', () => {
         (commandService.executeCommand as ReturnType<typeof vi.fn>).mock.calls.filter(
           (c) => c[0] === id,
         ).length
+      // The ledger read is the badge's whole input now — a scoped history adds
+      // its own cheap probe, a whole-graph scope never probes unasked.
       expect(countCalls(PerforceGraphCommands.getChanges)).toBe(1)
-      expect(countCalls(PerforceGraphCommands.getHaveChange)).toBe(1)
+      expect(countCalls(PerforceGraphCommands.getSyncPoint)).toBe(1)
+      expect(countCalls(PerforceGraphCommands.getHaveChange)).toBe(testCase.scoped ? 1 : 0)
 
       testCase.act(container)
       await flush()
@@ -1129,7 +1748,12 @@ describe('PerforceGraphEditor re-reads after a get', () => {
 
       expect(commandService.executeCommand).toHaveBeenCalledWith(testCase.command, ...testCase.args)
       expect(countCalls(PerforceGraphCommands.getChanges)).toBe(2)
-      expect(countCalls(PerforceGraphCommands.getHaveChange)).toBe(2)
+      // The extension writes the ledger BEFORE the sync command resolves, so
+      // re-reading it here is what moves the badge onto the new row. A revalidate
+      // that re-reads the list but never the ledger leaves the badge on the
+      // pre-get row — the exact bug this table exists for.
+      expect(countCalls(PerforceGraphCommands.getSyncPoint)).toBe(2)
+      expect(countCalls(PerforceGraphCommands.getHaveChange)).toBe(testCase.scoped ? 2 : 0)
     })
   }
 })

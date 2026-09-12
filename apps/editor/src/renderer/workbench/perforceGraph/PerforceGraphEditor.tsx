@@ -35,15 +35,17 @@ import {
   Emitter,
   ICommandService,
   ILoggerService,
+  INotificationService,
   IStorageService,
   IViewDescriptorService,
   IViewsService,
   observableValue,
+  Severity,
   StorageScope,
   localize,
   type IEditorInput,
 } from '@universe-editor/platform'
-import { Globe } from 'lucide-react'
+import { Globe, RefreshCw } from 'lucide-react'
 import {
   PerforceGraphCommands,
   type P4GraphChangeDto,
@@ -52,6 +54,7 @@ import {
   type P4GraphLoadOptions,
   type P4GraphLoadResult,
   type P4GraphRepoDto,
+  type P4GraphSyncPoint,
   type P4GraphSyncRequest,
   type P4GraphSyncScopeDto,
   type ShowCommitChangesPayload,
@@ -59,6 +62,7 @@ import {
 import {
   createKeyboardContextMenuEvent,
   isKeyboardContextMenu,
+  Spinner,
 } from '@universe-editor/workbench-ui'
 import { useService, useObservable, useOptionalService } from '../useService.js'
 import { IScmService, scmProviderPathKey } from '../../services/extensions/ScmService.js'
@@ -125,6 +129,112 @@ function formatDate(unixSeconds: number): string {
   return new Date(unixSeconds * 1000).toLocaleString()
 }
 
+/**
+ * Elapsed time of a sync-point probe, as shown next to its button. One decimal:
+ * the interesting range is "instant" to "a minute", and tenths are what makes a
+ * 200ms answer legible as having happened at all.
+ */
+function formatElapsed(ms: number): string {
+  return `${(ms / 1000).toFixed(1)}s`
+}
+
+/** A changelist number as the graph orders rows by, or undefined for a row that
+ *  is not a changelist (`*` is the synthetic pending node). */
+function changeNumber(id: string): number | undefined {
+  const n = Number(id)
+  return Number.isFinite(n) ? n : undefined
+}
+
+/**
+ * The row holding the sync point, which is not always the row NAMED by it.
+ *
+ * A record made by a get on a wider scope answers for every scope under it, and
+ * the changelist it names need not have touched this one at all — so a scoped
+ * history can be missing that row entirely. The row it does contain is the
+ * newest change at or below the point, and badging THAT one is exact rather than
+ * a fallback: rows are strictly descending, so this row is the newest change in
+ * the whole history the sync covers (anything newer sits above it, and anything
+ * between it and the point would be above it too and would have been found
+ * first).
+ */
+function syncPointRowOf(
+  changes: readonly P4GraphChangeDto[],
+  pointId: string,
+): { id: string; exact: boolean } | null {
+  for (const c of changes) {
+    if (c.id === pointId) return { id: c.id, exact: true }
+  }
+  const target = changeNumber(pointId)
+  if (target === undefined) return null
+  for (const c of changes) {
+    const n = changeNumber(c.id)
+    if (n !== undefined && n <= target) return { id: c.id, exact: false }
+  }
+  return null
+}
+
+/**
+ * Whether the loaded window rules `id` out for good: rows come newest-first and
+ * a page is always a prefix of that order, so once one of them sits BELOW the
+ * wanted changelist number, the changelist can never show up — it would have
+ * been above what is already loaded. Ids that are not changelist numbers (the
+ * synthetic pending node) are ruled out on the same grounds: no row carries them.
+ *
+ * Without this the reveal loop runs to its page cap looking for a changelist the
+ * history cannot contain (a wider record's point, e.g.), pulling the entire
+ * history in — tens of pages for a scope that never touched it.
+ */
+function ruledOut(changes: readonly P4GraphChangeDto[], id: string): boolean {
+  const target = changeNumber(id)
+  if (target === undefined) return true
+  return changes.some((c) => {
+    const n = changeNumber(c.id)
+    return n !== undefined && n < target
+  })
+}
+
+/**
+ * The toolbar line's tooltip. Provenance comes first because a recorded answer
+ * and a queried one mean genuinely different things about what is NOT reflected:
+ * a record only knows the gets this editor ran, while a query is the server's
+ * answer as of that moment. The caveats say when the changelist is only an upper
+ * bound — the line itself shows a bare `#4521` either way, so this is the only
+ * place the difference can be told.
+ */
+function syncPointTooltip(point: P4GraphSyncPoint): string {
+  const when = formatDate(point.at / 1000)
+  const parts = [
+    point.source === 'query'
+      ? localize(
+          'perforceGraph.syncPoint.fromQuery',
+          'Answered by Perforce at {time}. Changes newer than this are not synced yet.',
+          { time: when },
+        )
+      : localize(
+          'perforceGraph.syncPoint.fromSync',
+          'Recorded at {time}, when this editor pulled that changelist. Syncs made outside the editor since then are not reflected — use Query Sync Point to re-check.',
+          { time: when },
+        ),
+  ]
+  if (point.widerScope) {
+    parts.push(
+      localize(
+        'perforceGraph.syncPoint.widerScope',
+        'The record covers a wider scope, so this is an upper bound: this scope may have been pulled less far.',
+      ),
+    )
+  }
+  if (point.partial) {
+    parts.push(
+      localize(
+        'perforceGraph.syncPoint.partial',
+        'That pull left some files behind (modified, open for edit, or needing a merge), so this is an upper bound.',
+      ),
+    )
+  }
+  return parts.join(' ')
+}
+
 /** A thin draggable divider on a column's left edge; reports the horizontal drag
  *  delta so the caller can resize the column. */
 function ColumnResizer({ onResize }: { onResize: (deltaX: number) => void }) {
@@ -155,16 +265,20 @@ const ChangeRow = memo(function ChangeRow({
   change,
   selected,
   isHave,
+  haveTooltip,
   onRowClick,
   onChangeMenu,
 }: {
   change: P4GraphChangeDto
   selected: boolean
-  /** This row is the workspace's local sync point (the id
-   *  `PerforceGraphCommands.getHaveChange` answered). A bare boolean, not the id
-   *  or the whole result: the memo above only earns its keep if the prop is
-   *  stable for rows the badge doesn't move between. */
+  /** This row is the row the sync point sits on — usually the changelist the
+   *  point names, but for a point that changed nothing under this scope it is
+   *  the newest change the sync covers (`syncPointRowOf`). A bare boolean, not
+   *  the id or the whole result: the memo above only earns its keep if the prop
+   *  is stable for rows the badge doesn't move between. */
   isHave: boolean
+  /** The badge's tooltip, which differs between those two cases. */
+  haveTooltip: string
   onRowClick: (id: string, e: MouseEvent) => void
   onChangeMenu: (change: P4GraphChangeDto, e: MouseEvent) => void
 }) {
@@ -183,13 +297,7 @@ const ChangeRow = memo(function ChangeRow({
           // of the lane. Reuses the shared badge styles; `.badge` alone is only
           // the ellipsis base, so the `.badgeTag` modifier supplies the pill.
           <span className={styles['refs']}>
-            <span
-              className={`${styles['badge']} ${styles['badgeTag']}`}
-              data-tooltip={localize(
-                'perforceGraph.haveBadge.tooltip',
-                'The newest changelist synced to this workspace. Changes newer than this row are not synced yet.',
-              )}
-            >
+            <span className={`${styles['badge']} ${styles['badgeTag']}`} data-tooltip={haveTooltip}>
               {localize('perforceGraph.haveBadge', 'Synced')}
             </span>
           </span>
@@ -218,6 +326,9 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
   const storage = useService(IStorageService)
   const viewsService = useService(IViewsService)
   const viewDescriptorService = useService(IViewDescriptorService)
+  // Optional: the toast is the only thing that needs it, and the probe itself
+  // must still work in a container that has no notification service (tests).
+  const notification = useOptionalService(INotificationService)
   const loggerService = useOptionalService(ILoggerService)
   const logger = useMemo(
     () => loggerService?.createLogger({ id: 'perforceGraph', name: 'Perforce Graph' }) ?? null,
@@ -225,10 +336,10 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
   )
   const [result, setResult] = useState<P4GraphLoadResult | null>(() => view.result)
   // The local sync point, kept OUT of `result` on purpose: it arrives from its
-  // own command (the probe costs ~40s on a large workspace), while three call
-  // sites replace `result` wholesale — merging a late answer into every one of
-  // them would drop the badge the first time one was missed.
-  const [haveChange, setHaveChange] = useState<string | null>(() => view.haveChange)
+  // own commands (the ledger read, or a server query), while three call sites
+  // replace `result` wholesale — merging a late answer into every one of them
+  // would drop the badge the first time one was missed.
+  const [syncPoint, setSyncPoint] = useState<P4GraphSyncPoint | null>(() => view.syncPoint)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(() => view.result === null)
   const [menu, setMenu] = useState<GitGraphMenuState | null>(null)
@@ -282,7 +393,31 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
   const haveSeqRef = useRef(0)
   // Change id the reveal still needs to scroll to, once its row is in the DOM.
   const pendingScrollRef = useRef<string | null>(null)
-
+  // Live state of the sync-point probe the toolbar is showing. Its cost is the
+  // size of the scope (tens of seconds on a wide workspace), so the click needs
+  // an answer of its own: the icon spins in place and the elapsed clock runs
+  // next to it, then the number stays up briefly so a fast answer is still
+  // legible as "that click ran".
+  //
+  // `failed` is the third ending: the probe came back without an answer (p4
+  // timed out or errored), which must not read as "answered, nothing changed".
+  const [syncQuery, setSyncQuery] = useState<{ ms: number; done: boolean; failed: boolean } | null>(
+    null,
+  )
+  const syncQueryTickRef = useRef<number | undefined>(undefined)
+  const syncQueryClearRef = useRef<number | undefined>(undefined)
+  const syncQueryStartedRef = useRef<number | undefined>(undefined)
+  // A user-issued query is out. Only one at a time: a second press cannot answer
+  // anything the first will not, and it would spend a second whole-scope p4
+  // round trip (tens of seconds) to prove it.
+  const queryInFlightRef = useRef(false)
+  // True while this instance is unmounted. A late answer can still reach
+  // `stopSyncQueryClock` — it must not arm a fresh 2.5s hold timer then.
+  const clockDisposedRef = useRef(false)
+  // The last query answered "nothing in this scope is synced". Distinct from
+  // "never asked": one is an answer with no changelist to name, the other is a
+  // gap — the tooltip must not claim ignorance over a reply we just received.
+  const [queriedEmpty, setQueriedEmpty] = useState(false)
   useEffect(() => {
     view.focusSearch = () => {
       searchInputRef.current?.focus()
@@ -320,8 +455,8 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
     view.result = result
   }, [result, view])
   useEffect(() => {
-    view.haveChange = haveChange
-  }, [haveChange, view])
+    view.syncPoint = syncPoint
+  }, [syncPoint, view])
   useEffect(() => {
     view.selection = selection
   }, [selection, view])
@@ -384,48 +519,216 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
     [scope],
   )
 
-  // Ask the extension for the local sync point of the scope `queryRef` currently
-  // holds. Separate from the listing because it is the one read whose cost is the
-  // SIZE of the scope: ~40s for a whole workspace, ~200-340ms for a selection —
-  // awaiting it inline would hold the first screen for the whole budget and, at
-  // the old 5s, lose the answer anyway. The answer is an annotation: a failure
-  // answers nothing and leaves the badge as it was (the extension logs why), and
-  // a stale answer is dropped rather than pinned onto a different scope's list.
+  // Ask for the local sync point of the scope `queryRef` currently holds.
   //
-  // `force` is for an explicit reload only: background revalidations share the
-  // extension's long-lived answer (a sync is what moves the sync point, and a
-  // sync through the editor clears that cache outright).
-  const probeHaveChange = useCallback(
-    (force = false) => {
-      const seq = ++haveSeqRef.current
+  // The ledger answers first, and for free: every get this editor ran recorded
+  // where it landed, so the common case costs one synchronous message and zero
+  // p4 calls. That is the whole point — the old probe (`p4 changes <scope>#have`)
+  // costs the SIZE of the scope, tens of seconds over a wide workspace, and was
+  // re-paid on every load and scope switch.
+  //
+  // The server is asked only when the ledger has nothing:
+  //   - a scoped history (a file / folder / merged selection) is cheap there
+  //     (~200-340ms), so it keeps the old automatic behaviour;
+  //   - the whole graph is not (up to ~40s), so it shows "not known" and waits
+  //     for the user to press the query button. That button is also the ONLY way
+  //     to see a `p4 sync` done outside the editor — a recorded answer says
+  //     nothing about those, which is exactly what the toolbar text now says.
+  //
+  // A failure answers nothing and leaves the badge as it was (the extension logs
+  // why); a stale answer is dropped rather than pinned onto a different scope.
+  const startSyncQueryClock = useCallback((): void => {
+    clearInterval(syncQueryTickRef.current)
+    clearTimeout(syncQueryClearRef.current)
+    const startedAt = Date.now()
+    syncQueryStartedRef.current = startedAt
+    queryInFlightRef.current = true
+    setSyncQuery({ ms: 0, done: false, failed: false })
+    logger?.debug('sync point query clock started')
+    // 100ms is under the eye's threshold for "this is moving" and costs nothing:
+    // the probe runs in the extension host, so this only repaints one number.
+    syncQueryTickRef.current = window.setInterval(() => {
+      setSyncQuery({ ms: Date.now() - startedAt, done: false, failed: false })
+    }, 100)
+  }, [logger])
+
+  /** Stop the clock and hold the final number on screen for a beat — on a fast
+   *  scope the answer arrives before the tick is readable, and "0.2s" appearing
+   *  is the only thing that says the click was acted on at all. `failed` keeps
+   *  the number but marks it as "no answer came", which is not the same ending. */
+  const stopSyncQueryClock = useCallback(
+    (failed = false): void => {
+      clearInterval(syncQueryTickRef.current)
+      syncQueryTickRef.current = undefined
+      const startedAt = syncQueryStartedRef.current
+      // No clock means no user query to release: an automatic probe answers here
+      // too, and it must not clear a claim it never took.
+      if (startedAt === undefined) return
+      queryInFlightRef.current = false
+      // Unmounted while the probe was out: report nothing, arm nothing. Logged
+      // because the visible symptom (a spinner that never comes back) is the same
+      // one a broken clock reports, and this is what tells the two apart.
+      if (clockDisposedRef.current) {
+        logger?.debug('sync point query clock dropped: the editor is unmounted')
+        return
+      }
+      logger?.debug(
+        `sync point query clock ${failed ? 'failed' : 'landed'} after ${Date.now() - startedAt}ms`,
+      )
+      setSyncQuery({ ms: Date.now() - startedAt, done: true, failed })
+      syncQueryClearRef.current = window.setTimeout(() => setSyncQuery(null), 2500)
+    },
+    [logger],
+  )
+
+  /** Drop the clock without reporting anything — the answer it was timing is
+   *  no longer wanted (the scope changed under it). */
+  const cancelSyncQueryClock = useCallback((): void => {
+    clearInterval(syncQueryTickRef.current)
+    clearTimeout(syncQueryClearRef.current)
+    syncQueryTickRef.current = undefined
+    syncQueryStartedRef.current = undefined
+    queryInFlightRef.current = false
+    setSyncQuery(null)
+    logger?.debug('sync point query clock cancelled: the answer it timed is not wanted any more')
+  }, [logger])
+
+  useEffect(() => {
+    // The setup MUST reset what the cleanup latches: dev's StrictMode runs
+    // mount → cleanup → mount again on this same instance, so a flag left set by
+    // the dry run would make every later `stopSyncQueryClock` a no-op — clearing
+    // the interval but never landing `done`, which freezes the spinner and the
+    // number on screen forever while the answer itself still applies.
+    clockDisposedRef.current = false
+    return () => {
+      clockDisposedRef.current = true
+      clearInterval(syncQueryTickRef.current)
+      clearTimeout(syncQueryClearRef.current)
+    }
+  }, [])
+
+  const refreshSyncPoint = useCallback(
+    (mode: 'ledger' | 'query' = 'ledger'): void => {
+      // A user query supersedes everything in flight — it is the newest truth
+      // there is — so it takes the next sequence. A ledger read does NOT: bumping
+      // would let it throw away an answer the user is waiting on (a p4 round trip
+      // that can run for tens of seconds) whenever a load lands between the click
+      // and the reply, which is exactly what a scope toggle and a get-through-the-
+      // graph both do. Reads still HONOUR the sequence — a load that changed the
+      // scope invalidates them up front — so the only thing they lose is the
+      // power to cancel someone else's answer. If a get records a point while a
+      // query is out, that query can still land last with the older point; the
+      // next load or revalidate reads the ledger again and settles it.
+      const askServer = (force: boolean, seq: number) => {
+        // Only a user-issued query drives the clock and claims the "one at a
+        // time" slot: the automatic probe of a scoped history is cheap and comes
+        // and goes on its own, so a spinner for it would be noise the user never
+        // asked for — and would make the held number mean two different things.
+        if (force) startSyncQueryClock()
+        logger?.debug(
+          `sync point #${seq} asked of the server (force=${force}, paths=${
+            queryRef.current.scopePaths?.length ?? 'whole-repo'
+          })`,
+        )
+        void commands
+          .executeCommand<P4GraphHaveChangeResult>(PerforceGraphCommands.getHaveChange, {
+            ...queryRef.current,
+            force,
+          })
+          .then((r) => {
+            // A superseded probe must not stop the clock: the newer press is the
+            // one whose answer the user is waiting for, and its own reply (or the
+            // scope change that discarded it) ends the run.
+            if (seq !== haveSeqRef.current) {
+              logger?.debug(`sync point #${seq} dropped: superseded by #${haveSeqRef.current}`)
+              return
+            }
+            stopSyncQueryClock(!r || r.failed)
+            // `failed` means the probe could not answer — not "nothing synced".
+            // Keeping the previous point is the better lie: only a sync moves it.
+            if (!r || r.failed) return
+            // `id: null` IS an answer ("nothing here is synced"), and showing it
+            // as the unknown marker is honest: there is no row to badge and no
+            // changelist to name or jump to. It is not the same as never having
+            // asked, so the marker's tooltip says which one this is.
+            setQueriedEmpty(r.id === null)
+            setSyncPoint(
+              r.id === null
+                ? null
+                : { id: r.id, source: 'query', at: Date.now(), widerScope: false, partial: false },
+            )
+          })
+          .catch(() => {
+            // Annotation only — the previous answer (or no badge) stands.
+            if (seq === haveSeqRef.current) {
+              stopSyncQueryClock(true)
+            }
+          })
+      }
+      if (mode === 'query') {
+        if (queryInFlightRef.current) {
+          // A second press cannot answer anything the first will not, and it
+          // would spend a whole-scope p4 round trip (tens of seconds) on it.
+          notification?.notify({
+            severity: Severity.Info,
+            message: localize(
+              'perforceGraph.syncPoint.alreadyQuerying',
+              'A sync point query is already running — it will answer as soon as Perforce replies.',
+            ),
+          })
+          return
+        }
+        // Taking the next sequence comes AFTER the refusal: a press that is
+        // turned away must not invalidate the answer it was told to wait for.
+        askServer(true, ++haveSeqRef.current)
+        return
+      }
+      const seq = haveSeqRef.current
+      // Whether a user query is out while this read resolves. A read dispatched
+      // during one carries pre-query content (the extension only writes the
+      // ledger once the query command returns), so it must not land on top of
+      // the answer the user is waiting for — the sequence check cannot catch it,
+      // since a read that starts after the query takes the same sequence.
+      const racedByQuery = queryInFlightRef.current
       void commands
-        .executeCommand<P4GraphHaveChangeResult>(PerforceGraphCommands.getHaveChange, {
-          ...queryRef.current,
-          force,
-        })
-        .then((r) => {
-          if (seq !== haveSeqRef.current) return
-          // `failed` means the probe could not answer — not "nothing synced".
-          // Keeping the previous id is the better lie: only a sync moves it, and
-          // the toolbar line says which change the badge refers to.
-          if (!r || r.failed) return
-          setHaveChange(r.id)
+        .executeCommand<P4GraphSyncPoint | null>(
+          PerforceGraphCommands.getSyncPoint,
+          queryRef.current,
+        )
+        .then((p) => {
+          if (seq !== haveSeqRef.current || racedByQuery) return
+          if (p) {
+            setSyncPoint(p)
+            setQueriedEmpty(false)
+            return
+          }
+          if (scope !== undefined) {
+            askServer(false, seq)
+            return
+          }
+          setSyncPoint(null)
         })
         .catch(() => {
-          // Annotation only — the previous answer (or no badge) stands.
+          if (seq !== haveSeqRef.current || racedByQuery) return
+          setSyncPoint(null)
         })
     },
-    [commands],
+    [commands, scope, notification, logger, startSyncQueryClock, stopSyncQueryClock],
   )
 
   const load = useCallback(() => {
     let cancelled = false
     const seq = ++fetchSeqRef.current
     // A different scope's sync point must not label this list while its own
-    // probe is in flight; the loading state covers the list, so clearing here is
-    // invisible.
+    // answer is in flight; the loading state covers the list, so clearing here
+    // is invisible. An in-flight probe is abandoned with it — its answer is
+    // dropped below, so its clock must not keep spinning for an answer that can
+    // no longer be shown.
     haveSeqRef.current++
-    setHaveChange(null)
+    cancelSyncQueryClock()
+    setSyncPoint(null)
+    // A different scope has not been asked about, whatever the last one answered.
+    setQueriedEmpty(false)
     pendingScrollRef.current = null
     setLoading(true)
     setError(null)
@@ -436,9 +739,11 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
         setResult(r ?? null)
         setSelection([])
         setError(loadErrorFor(r ?? null))
-        // A reload is an explicit ask (toolbar ↺, scope switch), so it re-runs the
-        // probe; a revalidate shares the cached answer.
-        probeHaveChange(true)
+        // Deliberately the LEDGER, not a server query: a reload is not a reason
+        // to pay a whole-workspace probe again — that is the cost this whole
+        // mechanism exists to remove. A scoped history still queries, because
+        // the ledger is empty and its probe is cheap.
+        refreshSyncPoint()
       })
       .catch((e: unknown) => {
         if (!cancelled && seq === fetchSeqRef.current)
@@ -450,7 +755,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
     return () => {
       cancelled = true
     }
-  }, [commands, loadErrorFor, probeHaveChange])
+  }, [commands, loadErrorFor, refreshSyncPoint, cancelSyncQueryClock])
 
   useEffect(() => {
     view.refresh = () => load()
@@ -537,10 +842,17 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
   // Reveal entry point (timeline / blame / Commit Changes → the observable
   // `view.pendingReveal`):
   // select the change and scroll it into view, paging in older history until it
-  // is loaded. The loop stops on a hit, on `moreAvailable === false`, or at the
-  // page cap (unknown id → silently no-op).
+  // is loaded. The loop stops on a hit, on a window that has dropped below the
+  // target (it can no longer appear — see `ruledOut`), on `moreAvailable ===
+  // false`, or at the page cap.
+  //
+  // `onMiss: 'below'` is the sync point's own jump: its changelist may not have
+  // touched this scope at all, and then there is no row to land on and never
+  // will be. Rather than paging to the cap and doing nothing, it lands on the
+  // row the sync actually covers and says so — the toolbar's point and the badge
+  // then agree on where this scope stands.
   const revealCommit = useCallback(
-    (id: string) => {
+    (id: string, options?: { onMiss?: 'below' }): void => {
       // Requested while the initial load is still in flight: re-queue it
       // instead of racing that load — the load's "fresh load" continuation
       // resets the selection, which would clobber a reveal whose own fetch
@@ -558,8 +870,11 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
           setSearchQuery('')
           let current = result
           let nextLimit = limit
-          for (let i = 0; i < MAX_REVEAL_PAGES && !current?.changes.some((c) => c.id === id); i++) {
-            if (current && !current.moreAvailable) break
+          let found = current.changes.some((c) => c.id === id)
+          let stopped = ruledOut(current.changes, id)
+          let pages = 0
+          for (let i = 0; i < MAX_REVEAL_PAGES && !found && !stopped; i++) {
+            if (!current.moreAvailable) break
             nextLimit += PERFORCE_GRAPH_PAGE_SIZE
             const r = await commands.executeCommand<P4GraphLoadResult>(
               PerforceGraphCommands.getChanges,
@@ -568,24 +883,74 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
             // Superseded by a newer dispatch (e.g. a manual refresh) — yield.
             if (seq !== fetchSeqRef.current) return
             if (!r) break
+            pages++
             setResult(r)
             current = r
+            found = r.changes.some((c) => c.id === id)
+            stopped = ruledOut(r.changes, id)
           }
-          if (!current?.changes.some((c) => c.id === id)) return
+          const landing = found
+            ? id
+            : options?.onMiss === 'below'
+              ? (syncPointRowOf(current.changes, id)?.id ?? null)
+              : null
+          logger?.debug(
+            `reveal #${id}: ${found ? 'hit' : landing !== null ? `miss, landed on #${landing}` : 'not in this history'} ` +
+              `after ${pages} page(s)${stopped ? ', the window dropped below it' : ''}`,
+          )
+          if (landing === null) {
+            // Silent no-ops are how a drained history reads as "nothing
+            // happened"; say which of the two misses this is and stop.
+            notification?.notify({
+              severity: Severity.Info,
+              message:
+                options?.onMiss === 'below'
+                  ? localize(
+                      'perforceGraph.syncPoint.notInScope',
+                      'Sync point #{point} changed nothing under this scope, and every change here is newer than it — nothing in this history has been synced yet.',
+                      { point: id },
+                    )
+                  : localize(
+                      'perforceGraph.reveal.missing',
+                      '#{id} is not in this history — it may not touch what this tab shows.',
+                      { id },
+                    ),
+            })
+            return
+          }
+          if (landing !== id) {
+            notification?.notify({
+              severity: Severity.Info,
+              message: localize(
+                'perforceGraph.syncPoint.landedBelow',
+                'Sync point #{point} changed nothing under this scope, so it has no row here. Showing #{row} — the newest change that the sync does cover.',
+                { point: id, row: landing },
+              ),
+            })
+          }
           if (nextLimit !== limit) setLimit(nextLimit)
-          setSelection([id])
-          followCommitChanges(id)
+          setSelection([landing])
+          followCommitChanges(landing)
           // Scroll now when the row is already rendered (re-reveal of a loaded
           // change commits no state change); otherwise the layout effect picks
           // it up once the row lands in the DOM.
-          pendingScrollRef.current = id
+          pendingScrollRef.current = landing
           scrollPendingReveal()
         } finally {
           revealingRef.current = false
         }
       })()
     },
-    [commands, result, limit, scrollPendingReveal, followCommitChanges, view.pendingReveal],
+    [
+      commands,
+      result,
+      limit,
+      scrollPendingReveal,
+      followCommitChanges,
+      view.pendingReveal,
+      notification,
+      logger,
+    ],
   )
 
   useEffect(() => {
@@ -622,15 +987,15 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
           const next = prev.filter((id) => id === PENDING_ID || r.changes.some((c) => c.id === id))
           return next.length === prev.length && next.every((h, i) => h === prev[i]) ? prev : next
         })
-        // Same scope, so the badge stays where it is until the fresh answer
-        // lands — a sync that just moved the sync point is exactly the case this
-        // re-read exists for.
-        probeHaveChange()
+        // This is where a get through the editor shows up: the extension writes
+        // the ledger before the sync command resolves, so re-reading it here
+        // picks up the new sync point without any server round trip.
+        refreshSyncPoint()
       })
       .catch(() => {
         // Transient failure — leave the stale view in place.
       })
-  }, [commands, loadErrorFor, probeHaveChange])
+  }, [commands, loadErrorFor, refreshSyncPoint])
 
   // A get started from the graph (row menu, force-get, the scope dialog) must
   // revalidate itself: a plain get rewrites have revisions without touching
@@ -989,6 +1354,35 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
           forceGet({ change: id, wholeRepo }),
         )
       }
+      // The sync point belongs to the whole listing rather than to the clicked
+      // row, but this is the graph's only context menu — so the two things the
+      // toolbar line offers live here as well, for the user who is reading rows
+      // rather than chrome. Re-asking the server is the only way to see a sync
+      // done outside the editor; jumping is the only way to see WHICH row the
+      // badge is on once it has been filtered or paged away.
+      items.push(
+        { kind: 'sep' },
+        {
+          kind: 'item',
+          id: 'querySyncPoint',
+          icon: 'sync',
+          label: localize('perforceGraph.syncPoint.query', 'Query Sync Point'),
+          run: () => refreshSyncPoint('query'),
+        },
+        ...(syncPoint
+          ? [
+              {
+                kind: 'item' as const,
+                id: 'revealSyncPoint',
+                icon: 'go-to-definition',
+                label: localize('perforceGraph.syncPoint.reveal', 'Go to Sync Point'),
+                // Same entry point as the toolbar's `#CL`: the point itself when
+                // this history has it, the newest change it covers otherwise.
+                run: () => revealCommit(syncPoint.id, { onMiss: 'below' }),
+              },
+            ]
+          : []),
+      )
       setMenu({
         x: e.clientX,
         y: e.clientY,
@@ -997,7 +1391,18 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
         contextTag: 'changelist',
       })
     },
-    [commands, openScopedFileDiff, scope, wholeRepo, result, setSyncDialog, getThenRevalidate],
+    [
+      commands,
+      openScopedFileDiff,
+      scope,
+      wholeRepo,
+      result,
+      setSyncDialog,
+      getThenRevalidate,
+      refreshSyncPoint,
+      syncPoint,
+      revealCommit,
+    ],
   )
 
   // Pending changes node, followed by the real changes.
@@ -1032,6 +1437,28 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
       )
     })
   }, [displayChanges, deferredQuery])
+
+  /** The row the badge sits on, which for a sync point this history does not
+   *  contain is the newest change the sync covers (see `syncPointRowOf`). */
+  const syncPointRow = useMemo(
+    () =>
+      syncPoint === null || result === null ? null : syncPointRowOf(result.changes, syncPoint.id),
+    [result, syncPoint],
+  )
+
+  const haveTooltip = useMemo(() => {
+    if (syncPointRow === null || syncPoint === null) return ''
+    return syncPointRow.exact
+      ? localize(
+          'perforceGraph.haveBadge.tooltip',
+          'The newest changelist this workspace has been synced to; changes newer than this row are not synced yet (the toolbar’s “Synced to” has the provenance and its age).',
+        )
+      : localize(
+          'perforceGraph.haveBadge.coveredTooltip',
+          'Sync point #{point} changed nothing under this scope, so it has no row here. This is the newest change that the sync does cover; changes newer than this row are not synced yet.',
+          { point: syncPoint.id },
+        )
+  }, [syncPointRow, syncPoint])
 
   const layout = useMemo(() => {
     if (!result) return null
@@ -1186,19 +1613,94 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
             {result.headClient
               ? localize('perforceGraph.onClient', ' · {client}', { client: result.headClient })
               : ''}
-            {haveChange && (
-              // The row badge only exists for a loaded row; this line is the one
-              // signal that survives the sync point being paged out, filtered
-              // away, or scrolled off.
-              <span
-                data-tooltip={localize(
-                  'perforceGraph.haveBadge.tooltip',
-                  'The newest changelist synced to this workspace. Changes newer than this row are not synced yet.',
-                )}
+            {/* The badge only exists for a loaded row; this line is the one signal
+                that survives the sync point being paged out, filtered away or
+                scrolled off — and it is the only handle on the query button and
+                on jumping to the row. */}
+            {localize('perforceGraph.syncedTo', ' · Synced to ')}
+            {syncPoint ? (
+              <button
+                type="button"
+                className={styles['syncPointLink']}
+                data-testid="perforceGraph-syncPoint"
+                data-tooltip={syncPointTooltip(syncPoint)}
+                onClick={() => revealCommit(syncPoint.id, { onMiss: 'below' })}
               >
-                {localize('perforceGraph.syncedTo', ' · Synced to #{change}', {
-                  change: haveChange,
-                })}
+                #{syncPoint.id}
+              </button>
+            ) : (
+              // Nothing recorded and nothing asked: say so rather than showing a
+              // stale id. The graph's own scope is too wide to probe on its own
+              // (tens of seconds), so the query is the user's call.
+              <button
+                type="button"
+                className={styles['syncPointLink']}
+                data-testid="perforceGraph-syncPoint"
+                data-tooltip={
+                  queriedEmpty
+                    ? // An ANSWER, not a gap: the server just said this scope's
+                      // files are all outside its have list. Saying "not known"
+                      // here would send the user back to the same tens-of-seconds
+                      // query they just ran.
+                      localize(
+                        'perforceGraph.syncPoint.answeredEmpty',
+                        'Perforce answered: nothing in this scope is synced yet. Click to ask again.',
+                      )
+                    : localize(
+                        'perforceGraph.syncPoint.queryTooltip',
+                        'Where this workspace has been pulled to is not known. Click to ask Perforce — on a wide scope this can take a while.',
+                      )
+                }
+                onClick={() => refreshSyncPoint('query')}
+              >
+                {localize('perforceGraph.syncedToUnknown', '#? (click to query)')}
+              </button>
+            )}
+            {/* The query button sits with the answer it refreshes, not in the
+                row of view controls: re-asking is about THIS number. It is also
+                the only handle on a `p4 sync` done outside the editor. Its glyph
+                is the same `sync` icon as the menu item's, so the two read as one
+                action rather than a question mark about one. */}
+            <button
+              type="button"
+              className={styles['syncQueryBtn']}
+              onClick={() => refreshSyncPoint('query')}
+              data-tooltip={
+                syncQuery && !syncQuery.done
+                  ? localize('perforceGraph.syncPoint.querying', 'Querying the sync point…')
+                  : localize(
+                      'perforceGraph.syncPoint.queryButton',
+                      'Ask Perforce where this workspace has been pulled to. Use it when the sync point is not known, or to re-check one recorded a while ago — on a wide scope it can take a while.',
+                    )
+              }
+              aria-label={
+                syncQuery && !syncQuery.done
+                  ? localize('perforceGraph.syncPoint.querying', 'Querying the sync point…')
+                  : localize('perforceGraph.syncPoint.query', 'Query Sync Point')
+              }
+              data-testid="perforceGraph-querySyncPoint"
+              {...(syncQuery && !syncQuery.done ? { 'data-querying': 'true' } : {})}
+            >
+              {syncQuery && !syncQuery.done ? <Spinner size={12} /> : <RefreshCw size={13} />}
+            </button>
+            {syncQuery && (
+              // Elapsed clock, kept for a beat after the answer lands: on a fast
+              // scope this is the only visible proof the click did anything.
+              <span
+                className={styles['syncQueryElapsed']}
+                data-testid="perforceGraph-queryElapsed"
+                {...(syncQuery.done ? { 'data-done': 'true' } : {})}
+                {...(syncQuery.done && syncQuery.failed ? { 'data-failed': 'true' } : {})}
+                {...(syncQuery.done && syncQuery.failed
+                  ? {
+                      'data-tooltip': localize(
+                        'perforceGraph.syncPoint.failed',
+                        'The query did not answer (Perforce failed or timed out), so the sync point is unchanged. The Perforce output channel has the details.',
+                      ),
+                    }
+                  : {})}
+              >
+                {formatElapsed(syncQuery.ms)}
               </span>
             )}
           </span>
@@ -1354,7 +1856,8 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
                   selected={selected.has(c.id)}
                   // The synthetic pending row's id is `'*'`, which can never equal
                   // a numeric changelist id — no special case needed.
-                  isHave={c.id === haveChange}
+                  isHave={c.id === syncPointRow?.id}
+                  haveTooltip={haveTooltip}
                   onRowClick={onRowClick}
                   onChangeMenu={openChangeMenu}
                 />

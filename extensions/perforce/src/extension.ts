@@ -28,6 +28,7 @@ import type {
   P4GraphFileChangeDto,
   P4GraphSyncRequest,
   P4GraphSyncScopeDto,
+  P4GraphSyncPoint,
   WorkingTreeChangeDto,
 } from '@universe-editor/extensions-common'
 import { readdir } from 'node:fs/promises'
@@ -37,6 +38,7 @@ import { setP4CommandTimeoutSeconds, type P4Connection } from './p4Service.js'
 import { PerforceClient, type P4CacheOptions } from './client.js'
 import type { SyncPreviewFile } from './syncParser.js'
 import { P4CacheDisk } from './p4CacheDisk.js'
+import { GraphSyncLedger, NO_REGRESSION } from './graphSyncLedger.js'
 import { ClientManager } from './clientManager.js'
 import { formatScanElapsed, P4StatusBarController } from './p4StatusBar.js'
 import { AutoEditController } from './autoEdit.js'
@@ -475,6 +477,17 @@ export async function activate(context: ExtensionContext): Promise<void> {
     ...(disk ? { disk } : {}),
   }
 
+  // The graph's sync ledger: which scope each get landed where, so the "Synced"
+  // badge costs zero p4 calls instead of one `#have` query per load. Kept out of
+  // the cache configuration on purpose — it is a record of what happened, not a
+  // cache of what the server said, so `perforce.cache.enabled` must not erase
+  // it. Under `globalStoragePath` so every window of this install shares it, and
+  // never inside the p4 workspace (that would put editor state in a colleague's
+  // sync and per-workspace bookkeeping in a shared tree).
+  const ledger = context.globalStoragePath
+    ? GraphSyncLedger.open(context.globalStoragePath, log)
+    : undefined
+
   // Probe for a p4 CLI + a client for this folder. A missing binary or a folder
   // outside any Perforce workspace disables the provider without crashing.
   let client: PerforceClient | undefined
@@ -547,8 +560,12 @@ export async function activate(context: ExtensionContext): Promise<void> {
   // bar / cancellation / refusal remedies. The lambda only runs when the
   // command fires, so the later declaration is never a TDZ problem.
   context.subscriptions.push(
-    ...createPerforceTimelineCommands(mgr, log, (target, spec, scope) =>
-      runSync(target, spec, { scope }),
+    ...createPerforceTimelineCommands(mgr, log, (target, spec, targets) =>
+      runSync(target, spec, {
+        scope: targets.map((t) => buildScopeFilespec(t.path, t.isDirectory)),
+        scopeTargets: targets,
+        ledgerScope: targets,
+      }),
     ),
   )
 
@@ -793,6 +810,80 @@ export async function activate(context: ExtensionContext): Promise<void> {
   }
 
   /**
+   * Write down where a get landed, for the graph's local-sync-point badge.
+   *
+   * The recorded changelist is READ BACK from p4 (`readGraphSyncPoint`), not
+   * taken from the request. Recording `@4521` outright would claim the scope is
+   * at 4521 even when 4521 never touched it — the Explorer's "Get Revision…"
+   * picks a target with no regard to what it changed, and a get to an unrelated
+   * changelist still moves every file to that moment.
+   *
+   * Awaited on purpose: the renderer re-reads the ledger as soon as the sync
+   * command resolves (`getThenRevalidate`), so the entry has to be on disk by
+   * then or the badge it just earned is missed. The read-back's tight timeout
+   * bounds that tail — a wedged p4 costs a few seconds and one missing entry,
+   * never a failed get.
+   */
+  /**
+   * How far back the get behind a record can have carried a file, as a
+   * changelist — the `floor` of the ledger entry it writes.
+   *
+   * `@CL` cannot move a file past its CL, so it names its own floor. `#head`
+   * only carries files forward (there is nothing newer to fetch), so it uses
+   * {@link NO_REGRESSION}. Anything else — a numbered `#<rev>`, or the per-file
+   * specs of an empty `spec` — can land anywhere as far as the spec alone says,
+   * and `0` is the conservative answer: the ledger retires a wider record rather
+   * than let it keep answering with a changelist the get may have moved below.
+   */
+  function specFloor(spec: string): number {
+    if (spec === '#head') return NO_REGRESSION
+    if (spec.startsWith('@')) {
+      const cl = Number(spec.slice(1))
+      if (Number.isFinite(cl)) return cl
+    }
+    return 0
+  }
+
+  const recordSyncPoint = async (
+    target: PerforceClient,
+    spec: string,
+    scope: readonly SyncScopeTarget[],
+    outcome: { complete: boolean },
+  ): Promise<void> => {
+    if (!ledger || scope.length === 0) return
+    const filespecs = buildSyncFilespecs(scope)
+    if (filespecs.length === 0) return
+    const read = await target.readGraphSyncPoint(filespecs, spec)
+    // No answer (p4 gone / timed out) records nothing: an unreadable sync point
+    // must not be invented. An EMPTY answer is a real one — "nothing of this
+    // scope is synced", which is where a get that landed the scope before its
+    // first change, or back before the file existed, really ends up. It is
+    // written as a tombstone for the same reason a query's empty answer is: an
+    // older, wider record must not keep claiming this scope sits at a changelist
+    // the user has just pulled it out of.
+    if (read.failed) return
+    if (read.id === null) {
+      ledger.recordEmpty(target.root, scope, Date.now(), 'sync')
+      log(`[perforce] sync ledger: nothing synced for ${scopeTextOf(filespecs)}`)
+      return
+    }
+    ledger.record({
+      clientRoot: target.root,
+      paths: scope,
+      change: read.id,
+      source: 'sync',
+      at: Date.now(),
+      complete: outcome.complete,
+      floor: specFloor(spec),
+    })
+    log(
+      `[perforce] sync ledger: #${read.id} for ${scopeTextOf(filespecs)}${
+        outcome.complete ? '' : ' (partial)'
+      }`,
+    )
+  }
+
+  /**
    * Run a sync and report the outcome.
    *
    * The whole run sits inside a cancellable notification progress. No pre-flight
@@ -810,6 +901,18 @@ export async function activate(context: ExtensionContext): Promise<void> {
        *  exact paths this get covered (a filespec list can't be re-carved). */
       scopeTargets?: readonly SyncScopeTarget[]
       force?: boolean
+      /**
+       * The scope as THIS CALL SITE names it — host paths plus directory-ness,
+       * never the expanded filespecs (see `graphSyncLedger.ts` for why the
+       * distinction matters). Recorded after a successful run so the graph can
+       * answer "where has this workspace got to?" without asking p4.
+       *
+       * Deliberately required: every get entry point has to state its scope, or
+       * the ledger develops holes and the graph falls back to the very query
+       * this exists to avoid. Pass `[]` for "this get cannot be expressed as
+       * host paths, record nothing".
+       */
+      ledgerScope: readonly SyncScopeTarget[]
     },
   ): Promise<void> => {
     const res = await window.withProgress(
@@ -956,6 +1059,27 @@ export async function activate(context: ExtensionContext): Promise<void> {
         summary.mustResolve === 0 &&
         summary.refusedModified === 0 &&
         summary.refusedOverwrite === 0)
+    // Record where this get landed BEFORE reporting it: the graph's badge is
+    // read back from the ledger by whoever revalidates next (this very sync's
+    // `getThenRevalidate`, another tab, another window), so the entry has to be
+    // on disk by the time this resolves. A get p4 walked past is still a
+    // position worth knowing, but a run whose outcome p4 never made legible
+    // ("exit 0, nothing applied, no up-to-date line") is not — it could mean
+    // anything, so nothing is recorded rather than a guess.
+    if (summary?.upToDate === true || !nothingHappened) {
+      await recordSyncPoint(target, spec, options.ledgerScope, {
+        // A run that refused or skipped files leaves them at their OLD revision,
+        // so the scope is only known to be synced AT LEAST this far. Recorded
+        // either way — "I pulled it, why is nothing shown?" is worse than a
+        // labelled upper bound — but the label has to survive to the badge.
+        complete:
+          summary !== undefined &&
+          summary.refusedModified === 0 &&
+          summary.refusedOverwrite === 0 &&
+          summary.keptOpen === 0 &&
+          summary.mustResolve === 0,
+      })
+    }
     if (summary?.upToDate && nothingHappened) {
       await window.showInformationMessage(
         localize('perforce.sync.upToDate', 'Already at the latest revision.'),
@@ -1059,6 +1183,35 @@ export async function activate(context: ExtensionContext): Promise<void> {
     } else if (kind === 'resolve') {
       await commands.executeCommand('perforce.resolveChangelist', { rootUri: target.root })
     }
+  }
+
+  /** The whole-client scope as host paths: what a scope-less get covers. `p4
+   *  sync //...` run against one client means every file its view maps, which
+   *  is exactly the client root. */
+  /** The whole client mapping as a ledger scope: every file the view maps, which
+   *  is what `//...` lists and what the client root covers on disk. */
+  const clientRootScope = (target: PerforceClient): SyncScopeTarget[] => [
+    { path: target.root, isDirectory: true },
+  ]
+
+  /**
+   * The scope a scope-less get really covers — for the sync ledger.
+   *
+   * It is NOT the client root: with no explicit scope, `PerforceClient.sync`
+   * targets `_syncScopes`, which is the opened workspace folder
+   * (`workspace.focusFolders` when configured) and only falls back to `//...`
+   * when no folder is open. Recording the client root here would badge a
+   * whole-repo graph with the newest changelist of the whole client, which the
+   * get never touched — the same over-report the probe's own scope rule exists
+   * to prevent (see `docs/graph.md`, "本地同步点"). The reverse is just as bad:
+   * the get's real scope would then be answered from a wider record and shown as
+   * an upper bound instead of the exact point it is.
+   */
+  const scopeLessLedgerScope = (target: PerforceClient): SyncScopeTarget[] => {
+    const dirs = target.syncScopeDirs
+    return dirs.length > 0
+      ? dirs.map((path) => ({ path, isDirectory: true }))
+      : clientRootScope(target)
   }
 
   // Swarm (P4 Code Review) commands. Registered unconditionally — the handlers
@@ -1286,6 +1439,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
         await runSync(owner, '#head', {
           scope: buildSyncFilespecs(selection),
           scopeTargets: selection,
+          ledgerScope: selection,
         })
         return
       }
@@ -1299,8 +1453,12 @@ export async function activate(context: ExtensionContext): Promise<void> {
         target,
         '#head',
         single !== undefined
-          ? { scope: [buildScopeFilespec(single.path, single.isDirectory)], scopeTargets: [single] }
-          : {},
+          ? {
+              scope: [buildScopeFilespec(single.path, single.isDirectory)],
+              scopeTargets: [single],
+              ledgerScope: [single],
+            }
+          : { ledgerScope: scopeLessLedgerScope(target) },
       )
     }),
 
@@ -1318,6 +1476,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
         await runSync(owner, spec.spec, {
           scope: filespecs,
           scopeTargets: selection,
+          ledgerScope: selection,
           ...(spec.force ? { force: true } : {}),
         })
         return
@@ -1333,6 +1492,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
           ? {
               scope: [buildScopeFilespec(single.path, single.isDirectory)],
               scopeTargets: [single],
+              ledgerScope: [single],
             }
           : undefined
       const spec = await pickSyncSpec()
@@ -1345,7 +1505,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
         if (!(await confirmForceGet(spec.spec, scopeText))) return
       }
       await runSync(target, spec.spec, {
-        ...(scoped !== undefined ? scoped : {}),
+        ...(scoped !== undefined ? scoped : { ledgerScope: scopeLessLedgerScope(target) }),
         ...(spec.force ? { force: true } : {}),
       })
     }),
@@ -2206,6 +2366,15 @@ export async function activate(context: ExtensionContext): Promise<void> {
             list: string[]
             have: string[]
             pendingScopes?: readonly { path: string; isDirectory: boolean }[]
+            /**
+             * The same scope in the sync ledger's coordinates — host paths plus
+             * directory-ness. `list`/`have` are built FROM this (`list` is
+             * post-escaping and post-`<dir>/...`-expansion, so it can never be
+             * compared for containment against anything else; see
+             * `graphSyncLedger.ts`). Everything that reads or writes the ledger
+             * keys on THIS.
+             */
+            ledgerScope: SyncScopeTarget[]
           }
         | { kind: 'multiClient'; pathCount: number }
         | { kind: 'none' } => {
@@ -2232,7 +2401,14 @@ export async function activate(context: ExtensionContext): Promise<void> {
           // nested-under-a-selected-directory collapsing all live here. One
           // build, both consumers — never rebuild it for the probe.
           const specs = buildSyncFilespecs(scopePaths)
-          return { kind: 'ok', target: owner, list: specs, have: specs, pendingScopes: scopePaths }
+          return {
+            kind: 'ok',
+            target: owner,
+            list: specs,
+            have: specs,
+            pendingScopes: scopePaths,
+            ledgerScope: [...scopePaths],
+          }
         }
         const target = graphClient()
         if (!target) return { kind: 'none' }
@@ -2241,7 +2417,13 @@ export async function activate(context: ExtensionContext): Promise<void> {
           // rows answer to. Narrowing this to the client root would let a sync
           // point produced by files OUTSIDE the opened folder badge a row the
           // folder never synced.
-          return { kind: 'ok', target, list: [workspaceScope], have: [workspaceScope] }
+          return {
+            kind: 'ok',
+            target,
+            list: [workspaceScope],
+            have: [workspaceScope],
+            ledgerScope: [{ path: root, isDirectory: true }],
+          }
         }
         // `//...` cannot carry a revision specifier at all (p4: `Path '…' is not
         // under client's root`), so the probe asks the client root's wildcard
@@ -2253,6 +2435,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
           target,
           list: ['//...'],
           have: [buildScopeFilespec(target.root, true)],
+          ledgerScope: [{ path: target.root, isDirectory: true }],
         }
       }
 
@@ -2324,10 +2507,9 @@ export async function activate(context: ExtensionContext): Promise<void> {
         // The have-point probe, split out of `getChanges` on purpose. Its cost is
         // the size of the scope, not of the answer: `p4 changes -m 1 <spec>#have`
         // measured ~40s on a million-file workspace (an indexed 200ms without the
-        // revision specifier). Riding in the listing's `Promise.all` meant the
-        // first screen waited out a 5s budget and then lost the badge to the
-        // timeout anyway. The renderer asks once the list is up and merges the
-        // answer, so a slow probe costs only the badge's arrival.
+        // revision specifier). The renderer asks only when the ledger has nothing
+        // (or when the user asks outright), so this is now the expensive
+        // EXCEPTION rather than the price of opening the graph.
         commands.registerCommand(
           'perforce-graph.getHaveChange',
           async (...args: unknown[]): Promise<P4GraphHaveChangeResult> => {
@@ -2337,7 +2519,78 @@ export async function activate(context: ExtensionContext): Promise<void> {
             // reported) is "no answer", not "nothing synced": the renderer keeps
             // whatever badge it had.
             if (resolved.kind !== 'ok') return { id: null, failed: true }
-            return resolved.target.getGraphHaveChange(resolved.have, opts.force === true)
+            // When the question was asked, not when it was answered. The answer
+            // describes the have table as p4 read it — somewhere between these
+            // two instants — so dating it at dispatch is the conservative choice:
+            // it can never claim to be newer than it is, and a get that happened
+            // while a slow probe was out therefore wins the ledger's
+            // newest-wins comparison instead of being overwritten by a stale
+            // answer stamped with the time it happened to arrive.
+            const askedAt = Date.now()
+            const result = await resolved.target.getGraphHaveChange(
+              resolved.have,
+              opts.force === true,
+            )
+            if (!ledger) return result
+            if (result.failed) return result
+            // Only an answer that really went to the server may be written down.
+            // A non-forced probe eats `P4CacheNs.haveChange` (TTL = the longer of
+            // the workspace TTL and 5min), so it can be a REPLAY of a reply from
+            // before a get that has been recorded since — stamped `askedAt` it
+            // would outrank that newer record, and in the rollback direction that
+            // means claiming a changelist the scope no longer has. The auto-probe
+            // still answers the tab it was asked for; it just does not get to
+            // speak for the workspace afterwards. (The button is `force`, so it
+            // always reaches p4 and always lands here.)
+            if (opts.force !== true) return result
+            if (result.id === null) {
+              // The server says nothing here is synced. That is an answer, and it
+              // must outrank whatever the ledger thought it knew — otherwise a
+              // stale entry keeps outliving the truth it no longer describes,
+              // which is precisely the freezing a query exists to break.
+              ledger.recordEmpty(resolved.target.root, resolved.ledgerScope, askedAt, 'query')
+              return result
+            }
+            // Truth beats bookkeeping: a query that answered overwrites the
+            // record, so a get done outside the editor is reflected the moment
+            // anyone asks (and stays reflected afterwards, with no second query).
+            ledger.record({
+              clientRoot: resolved.target.root,
+              paths: resolved.ledgerScope,
+              change: result.id,
+              source: 'query',
+              at: askedAt,
+              complete: true,
+              // Read-only: a query moves no file, so it can never be why a WIDER
+              // record went stale. Without this, asking about a folder whose sync
+              // point never touched it (the answer reads lower than the client's
+              // by construction — see `#have`) would retire the client's own
+              // answer and put `#? (click to query)` back on the whole-repo graph.
+              floor: NO_REGRESSION,
+            })
+            return result
+          },
+        ),
+        // The ledger's answer alone — zero p4 calls, synchronous. This is what
+        // the graph reads on every load and scope switch; `getHaveChange` is only
+        // reached when this comes back empty (and the scope is narrow enough to
+        // be worth asking about) or when the user presses the query button.
+        commands.registerCommand(
+          'perforce-graph.getSyncPoint',
+          (...args: unknown[]): P4GraphSyncPoint | null => {
+            if (!ledger) return null
+            const opts = (args[0] ?? {}) as P4GraphLoadOptions
+            const resolved = resolveGraphScope(opts)
+            if (resolved.kind !== 'ok') return null
+            const answer = ledger.lookup(resolved.target.root, resolved.ledgerScope)
+            if (!answer) return null
+            return {
+              id: answer.record.change,
+              source: answer.record.source,
+              at: answer.record.at,
+              widerScope: answer.widerScope,
+              partial: !answer.record.complete,
+            }
           },
         ),
         commands.registerCommand('perforce-graph.getChangeDetails', async (...args: unknown[]) => {
@@ -2425,6 +2678,12 @@ export async function activate(context: ExtensionContext): Promise<void> {
           const scopes = req.scopePaths
           let target: PerforceClient
           let filespecs: string[]
+          // What this get covers as host paths, for the sync ledger. The graph
+          // scopes are named in the same coordinates as every other entry point
+          // (the selected paths, the opened folder, the client root), so a get
+          // started here answers a later lookup from the Explorer or timeline —
+          // and vice versa.
+          let ledgerScope: SyncScopeTarget[]
           if (scopes !== undefined && scopes.length > 0) {
             // Data-query semantics: strict longest-prefix per path, and every
             // path must land in the same client — a sync spans one workspace.
@@ -2443,11 +2702,17 @@ export async function activate(context: ExtensionContext): Promise<void> {
             }
             target = owner
             filespecs = buildSyncFilespecs(scopes)
+            ledgerScope = [...scopes]
           } else {
             const client = graphClient()
             if (!client) return
             target = client
             filespecs = [req.wholeRepo ? '//...' : workspaceScope]
+            // The whole-repo branch lists `//...`, which is every file the
+            // client's view maps — the client root, not the opened folder.
+            ledgerScope = req.wholeRepo
+              ? clientRootScope(client)
+              : [{ path: root, isDirectory: true }]
           }
 
           const scopeList = filespecs.join(', ')
@@ -2499,6 +2764,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
           await runSync(target, spec, {
             scope: filespecs,
             ...(scopes !== undefined && scopes.length > 0 ? { scopeTargets: scopes } : {}),
+            ledgerScope,
             ...(req.force === true ? { force: true } : {}),
           })
         }),

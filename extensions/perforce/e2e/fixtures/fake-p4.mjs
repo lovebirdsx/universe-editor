@@ -497,11 +497,35 @@ function main() {
         return prev !== '-s' && prev !== '-c' && prev !== '-m'
       })
       // `<spec>#have` is p4's have-revision specifier: it asks which changes are
-      // already synced here (the graph's sync badge). Strip the suffix BEFORE
+      // already synced here (the graph's sync point). Strip the suffix BEFORE
       // scoping — left on, it matches no file and every such query would answer
       // "nothing synced".
       const haveScoped = raw.some((f) => f.endsWith('#have'))
-      const files = raw.map((f) => (f.endsWith('#have') ? f.slice(0, -'#have'.length) : f))
+      // `<spec>@<cl>` and `<spec>#head` narrow the question to a revision: the
+      // graph's post-sync read-back (`p4 changes -s submitted -m 1 <scope>@4521`)
+      // asks exactly this to learn where a get to 4521 landed the scope. Same
+      // strip-before-scoping rule as `#have`.
+      // `<spec>#<rev>` is a revision RANGE, not a scope: real `p4 changes f#4`
+      // answers which change produced revision 4 of f (what the graph's read-back
+      // needs after a `sync f#4`), and a bare `f#4` matches no file at all — left
+      // on, every such query would answer "nothing".
+      let atRev
+      let atChange
+      const files = raw.map((f) => {
+        let spec = f.endsWith('#have') ? f.slice(0, -'#have'.length) : f
+        if (spec.endsWith('#head')) spec = spec.slice(0, -'#head'.length)
+        const at = /@(\d+)$/.exec(spec)
+        if (at) {
+          atChange = Number(at[1])
+          spec = spec.slice(0, -at[0].length)
+        }
+        const rev = /#(\d+)$/.exec(spec)
+        if (rev) {
+          atRev = Number(rev[1])
+          spec = spec.slice(0, -rev[0].length)
+        }
+        return spec
+      })
       if (status === 'submitted' || files.length > 0) {
         const max = argAfter(rest, '-m')
         const entries = Object.entries(state.changeMeta ?? {})
@@ -515,7 +539,24 @@ function main() {
         // NOT narrow the client globally: it narrows the very same filespec, so
         // the scope test and the have test are asked about the same file.
         const listed = entries.filter(({ id }) => {
+          // `@<cl>` narrows to changes at or below that changelist — a revision
+          // range, not a scope. Applied before `-m 1`, so the answer is the
+          // newest change that is BOTH in scope and no newer than the specifier.
+          // (The read-back builds every filespec with the same suffix, so
+          // last-wins is that suffix, not a mismatch between specs.)
+          if (atChange !== undefined && id > atChange) return false
           const touched = state.submitted?.[String(id)]
+          if (atRev !== undefined) {
+            // A revision range, not a scope: answer only the change that produced
+            // that revision of a file these filespecs match. A change seeded with
+            // no file set cannot be that change, so it is excluded rather than
+            // kept (`#have`/`@cl` keep it — see below).
+            if (!touched) return false
+            return Object.keys(touched).some(
+              (depotFile) =>
+                Number(touched[depotFile].rev) === atRev && openedInScope(state, files, depotFile),
+            )
+          }
           if (!touched || Object.keys(touched).length === 0) return true
           if (haveScoped) return changeInHaveList(state, id, files)
           return Object.keys(touched).some((depotFile) => openedInScope(state, files, depotFile))

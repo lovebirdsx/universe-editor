@@ -16,7 +16,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { observableValue, type ISettableObservable } from '@universe-editor/platform'
-import type { P4GraphLoadResult, P4GraphRepoDto } from '@universe-editor/extensions-common'
+import type {
+  P4GraphLoadResult,
+  P4GraphRepoDto,
+  P4GraphSyncPoint,
+} from '@universe-editor/extensions-common'
 
 /** Draggable widths (px) of the fixed-width columns. */
 export interface PerforceGraphColumnWidths {
@@ -43,10 +47,11 @@ export interface PerforceGraphViewState {
   /** Last loaded change list, or null if never loaded. */
   result: P4GraphLoadResult | null
   /** Local sync point of the loaded scope (the row the "Synced" badge sits on),
-   *  or null while unknown — nothing synced yet, or the probe hasn't answered.
-   *  Persisted alongside `result` so a remount brings the badge back with the
-   *  list it labels; the probe re-runs anyway and is cached, so it settles fast. */
-  haveChange: string | null
+   *  or null while unknown — nothing synced, nothing recorded, or the ledger and
+   *  the query both had no answer. Persisted alongside `result` so a remount
+   *  brings the badge back with the list it labels; the ledger is re-read anyway
+   *  and costs nothing, so it settles instantly. */
+  syncPoint: P4GraphSyncPoint | null
   /** Selected change id (single), or the synthetic pending id. */
   selection: string[]
   /** Vertical scroll offset of the graph body, restored on remount. */
@@ -87,7 +92,7 @@ function createPerforceGraphViewState(): PerforceGraphViewState {
     revealCommit: null,
     pendingReveal: observableValue<string | null>('perforceGraph.pendingReveal', null),
     result: null,
-    haveChange: null,
+    syncPoint: null,
     selection: [],
     scrollTop: 0,
     searchQuery: '',

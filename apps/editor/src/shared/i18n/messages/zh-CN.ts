@@ -1354,8 +1354,37 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'perforceGraph.changeList': '变更',
   'perforceGraph.onClient': ' · {client}',
   'perforceGraph.haveBadge': '已同步',
-  'perforceGraph.haveBadge.tooltip': '本地工作区已同步到此变更；比它更新的变更尚未拉取。',
-  'perforceGraph.syncedTo': ' · 已同步至 #{change}',
+  'perforceGraph.haveBadge.tooltip':
+    '图谱标记的是本地已同步到的最新变更；比本行更新的变更尚未同步（来源与生效时间见工具栏的“已同步至”）。',
+  'perforceGraph.haveBadge.coveredTooltip':
+    '同步点 #{point} 没有修改这个范围，所以这里没有它那一行；本行是该范围内被这次同步覆盖到的最新变更，比它更新的变更尚未同步。',
+  'perforceGraph.syncedTo': ' · 已同步至 ',
+  'perforceGraph.syncedToUnknown': '#?（点击查询）',
+  'perforceGraph.syncPoint.query': '查询同步点',
+  'perforceGraph.syncPoint.queryTooltip':
+    '尚不知道工作区拉取到哪里。点击向 Perforce 查询——范围大时可能要等一会儿。',
+  'perforceGraph.syncPoint.queryButton':
+    '向 Perforce 查询工作区拉取到哪里。既用于「尚不知道」时，也用于重新核对一条较早的记录——范围大时可能要等一会儿。',
+  'perforceGraph.syncPoint.querying': '正在查询同步点…',
+  'perforceGraph.syncPoint.alreadyQuerying':
+    '已经有一次同步点查询在进行中，Perforce 答复后就会更新。',
+  'perforceGraph.syncPoint.answeredEmpty':
+    'Perforce 答复：该范围里目前没有任何已同步的文件。点击可再查一次。',
+  'perforceGraph.syncPoint.failed':
+    '这次查询没有拿到答案（Perforce 失败或超时），同步点保持不变；详情见 Perforce 输出面板。',
+  'perforceGraph.syncPoint.reveal': '跳转到同步点',
+  'perforceGraph.syncPoint.landedBelow':
+    '同步点 #{point} 没有修改这个范围，所以这里没有它那一行；已跳到 #{row}——本范围内被这次同步覆盖到的最新变更。',
+  'perforceGraph.syncPoint.notInScope':
+    '同步点 #{point} 没有修改这个范围，而这个范围里的变更全都比它新——这里的变更都还没拉下来。',
+  'perforceGraph.reveal.missing': '#{id} 不在当前范围的历史里（它可能没有修改这里的内容）。',
+  'perforceGraph.syncPoint.fromQuery': 'Perforce 于 {time} 答复。比它更新的变更尚未同步。',
+  'perforceGraph.syncPoint.fromSync':
+    '编辑器于 {time} 记录（那次拉取的就是这个 changelist）。此后在编辑器之外做的同步不会被反映——可用「查询同步点」重新查询。',
+  'perforceGraph.syncPoint.widerScope':
+    '该记录来自更大的范围，所以这只是上界：当前范围实际可能拉得更少。',
+  'perforceGraph.syncPoint.partial':
+    '那次拉取跳过了部分文件（本地已修改、已打开或需要合并），所以这只是上界。',
   'perforceGraph.search.placeholder': '搜索变更…',
   'perforceGraph.client': '工作区',
   'perforceGraph.forceGet': '强制拉取（覆盖本地文件）',

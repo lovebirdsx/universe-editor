@@ -362,6 +362,8 @@ describe('PerforceGraphEditor Ctrl+Enter context menu', () => {
     fireEvent.keyDown(scrollBody(container), { key: 'Enter', ctrlKey: true })
     await flush()
 
+    // The sync point is unknown in this fixture, so the menu carries the query
+    // but no jump — there would be no row to jump to.
     expect(menuLabels()).toEqual([
       'Copy changelist number',
       'Copy commit message',
@@ -369,6 +371,7 @@ describe('PerforceGraphEditor Ctrl+Enter context menu', () => {
       'Get This Revision',
       'Get Revision…',
       'Force Get (Overwrite Local Files)',
+      'Query Sync Point',
     ])
   })
 

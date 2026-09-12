@@ -94,6 +94,49 @@ export interface P4GraphHaveChangeResult {
   failed: boolean
 }
 
+/** Where a local sync point came from. */
+export type P4GraphSyncPointSource = 'sync' | 'query'
+
+/**
+ * Where the displayed scope's pulled history ends — the graph's local sync
+ * point, and everything the badge and the toolbar line are drawn from.
+ *
+ * This is normally answered from the editor's own ledger of the gets it ran
+ * (`extensions/perforce/src/graphSyncLedger.ts`), which costs nothing: the old
+ * behaviour — asking p4 `#have` on every load and scope switch — paid the size
+ * of the scope each time (tens of seconds over a wide workspace). The graph
+ * therefore also has to be honest about the answer's provenance, which is what
+ * `source`, `at`, `widerScope` and `partial` are for: a recorded answer says
+ * nothing about a `p4 sync` run outside the editor since, and only an explicit
+ * query reflects it.
+ */
+export interface P4GraphSyncPoint {
+  /** The changelist id. */
+  id: string
+  /** `sync`: recorded by a get this editor ran. `query`: answered by p4 just now
+   *  (`perforce-graph.getHaveChange`, which also overwrites the ledger — truth
+   *  beats bookkeeping, and a stale entry must not be able to freeze). */
+  source: P4GraphSyncPointSource
+  /** Epoch ms the answer was established: the get's completion, or the query's
+   *  run. Surfaced in the tooltip. */
+  at: number
+  /**
+   * The answer comes from a get whose scope is WIDER than the one displayed, so
+   * it is an upper bound: a wider get also moved files outside this scope, and
+   * the newest of those need not touch this scope at all. Same over-report the
+   * whole-repo probe avoids by not narrowing to the client root — it must be
+   * labelled, never shown as exact.
+   */
+  widerScope: boolean
+  /**
+   * The recorded get did not land every file at the target revision (p4 refused
+   * some, kept an opened file, or needs a resolve first), so the scope is only
+   * known to be synced AT LEAST this far. An upper bound again, from a
+   * different cause than {@link widerScope}.
+   */
+  partial: boolean
+}
+
 /** Result of `perforce-graph.getChanges`. */
 export interface P4GraphLoadResult {
   changes: P4GraphChangeDto[]
@@ -241,6 +284,7 @@ export const PerforceGraphCommands = {
   setRepo: 'perforce-graph.setRepo',
   getChanges: 'perforce-graph.getChanges',
   getHaveChange: 'perforce-graph.getHaveChange',
+  getSyncPoint: 'perforce-graph.getSyncPoint',
   getChangeDetails: 'perforce-graph.getChangeDetails',
   getPendingChanges: 'perforce-graph.getPendingChanges',
   openFileDiff: 'perforce-graph.openFileDiff',

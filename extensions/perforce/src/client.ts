@@ -411,6 +411,19 @@ const CHECK_BEHIND_TIMEOUT_MS = 20_000
 const HAVE_CHANGE_EXEC: P4ExecOptions = { priority: 'background', timeoutMs: 60_000 }
 
 /**
+ * Budget for the post-sync read-back (`p4 changes -m 1 <spec><revision>`), the
+ * one question every get asks to learn where it just landed. Unlike
+ * {@link HAVE_CHANGE_EXEC} this is an index query over the history — no
+ * revision specifier has to be resolved file by file — so it is expected in the
+ * hundreds of milliseconds on the same workspace that answers `#have` in ~40s.
+ * The tight budget is there because the caller AWAITS it before reporting the
+ * get complete: a wedged p4 must cost a few seconds and a missing ledger entry,
+ * never a stalled sync. A failure is silent by design (the get already
+ * succeeded); the graph simply has nothing recorded and falls back to querying.
+ */
+const SYNC_POINT_READBACK_EXEC: P4ExecOptions = { priority: 'background', timeoutMs: 5_000 }
+
+/**
  * Default ceiling for one directory batch of the background reconcile scan
  * (`perforce.reconcileScan.maxBatchDurationMs`). A batch that outlasts it is
  * split into its direct subdirectories, so batches auto-converge to roughly
@@ -5641,6 +5654,65 @@ export class PerforceClient {
       // as a rejected `executeCommand`.
       this._log?.(
         `[perforce] graph have point skipped: ${err instanceof Error ? err.message : String(err)}`,
+      )
+      return { id: null, failed: true }
+    }
+  }
+
+  /**
+   * Read back the sync point a `p4 sync` just established: the newest submitted
+   * change touching `scopes` as of `revision` — `p4 changes -s submitted -m 1
+   * <spec><revision>`. With the get having just landed, that IS the scope's have
+   * point, and unlike the `#have` probe it is an INDEX query: the cost tracks the
+   * history, not the number of files in scope (see `docs/pitfalls.md`).
+   *
+   * The caller passes the spec it synced with, verbatim: `@4521` for a get-to-
+   * changelist, `#head`/`''` for a get-latest, `#4` for the timeline's per-file
+   * get. The suffix must be appended AFTER escaping (same rule as `#have`).
+   *
+   * Reading back rather than recording the requested changelist is what keeps
+   * the ledger honest in both directions. A get to `@4521` over `src/` lands
+   * `src/` at whatever changelist last touched it at or before 4521 — recording
+   * 4521 outright would badge a row that never touched the scope, and 4521 need
+   * not be in this scope's history at all (the Explorer's "Get Revision…" picks
+   * a target without regard to what it changed).
+   *
+   * `failed: true` covers "could not ask" (p4 failed or timed out): the caller
+   * records NOTHING, because an unreadable sync point must not be invented.
+   * `{ id: null, failed: false }` is a real answer — nothing here was ever
+   * submitted.
+   */
+  async readGraphSyncPoint(
+    scopes: readonly string[],
+    revision: string,
+  ): Promise<{ id: string | null; failed: boolean }> {
+    if (scopes.length === 0) return { id: null, failed: true }
+    try {
+      const specs = scopes.map((s) => `${s}${revision}`)
+      const started = Date.now()
+      const res = await this._p4.execRecords(
+        ['changes', '-s', 'submitted', '-m', '1', ...specs],
+        SYNC_POINT_READBACK_EXEC,
+      )
+      const elapsed = Date.now() - started
+      if (res.result.exitCode !== 0) {
+        this._log?.(
+          `[perforce] sync point read-back failed (exit ${res.result.exitCode}, ${elapsed}ms): ${res.result.stderr
+            .trim()
+            .slice(0, 200)}`,
+        )
+        return { id: null, failed: true }
+      }
+      const id = parseLatestChangeId(res.records)
+      this._log?.(
+        `[perforce] sync point read-back ${revision || '(head)'}: ${id ? `#${id}` : 'none'} (${
+          scopes.length
+        } filespec(s), ${elapsed}ms)`,
+      )
+      return { id, failed: false }
+    } catch (err) {
+      this._log?.(
+        `[perforce] sync point read-back skipped: ${err instanceof Error ? err.message : String(err)}`,
       )
       return { id: null, failed: true }
     }

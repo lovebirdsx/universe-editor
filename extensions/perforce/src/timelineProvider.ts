@@ -39,7 +39,7 @@ import {
 import { filelogLabel, type FilelogRevision } from './filelogParser.js'
 import { statusFromAction, fileDiffRevs, displayPath } from './p4GraphParser.js'
 import { viewCommit as viewChangelist } from './viewCommit.js'
-import { buildScopeFilespec } from './p4Filespec.js'
+import { type SyncScopeTarget } from './p4Filespec.js'
 import { localize } from './nls.js'
 import type { PerforceClient } from './client.js'
 import type { ClientManager } from './clientManager.js'
@@ -231,14 +231,18 @@ function revisionItem(revision: FilelogRevision, absPath: string, depotFile: str
   }
 }
 
-/** Run a sync against one client for a single filespec scope (the timeline's
- *  "Get This Revision"). Injected by `extension.ts` — the timeline module owns
- *  the command, but the sync plumbing (progress, refusal remedies) lives in the
- *  activate closure. */
+/** Run a sync against one client for a single target (the timeline's "Get This
+ *  Revision"). Injected by `extension.ts` — the timeline module owns the
+ *  command, but the sync plumbing (progress, refusal remedies) lives in the
+ *  activate closure.
+ *
+ *  The target crosses as a host path plus directory-ness, not as a built
+ *  filespec: the ledger records the scope the CALLER named, and a filespec
+ *  cannot be turned back into one (see `graphSyncLedger.ts`). */
 export type TimelineSyncRunner = (
   client: PerforceClient,
   spec: string,
-  scope: string[],
+  targets: readonly SyncScopeTarget[],
 ) => Promise<unknown>
 
 /** The timeline feature's commands (item click + context menu entries). */
@@ -333,7 +337,7 @@ export function createPerforceTimelineCommands(
       const client = mgr.resolveContaining(uri)
       if (!client || !syncRunner) return
       log?.(`[perforce] timeline getThisRevision ${uri}#${String(rev)}`)
-      await syncRunner(client, `#${String(rev)}`, [buildScopeFilespec(uri, false)])
+      await syncRunner(client, `#${String(rev)}`, [{ path: uri, isDirectory: false }])
     }),
   ]
 }
