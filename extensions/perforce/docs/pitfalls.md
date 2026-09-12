@@ -18,6 +18,7 @@
 - [p4 子进程永不退出 → 宿主无限挂起](#p4-子进程永不退出--宿主无限挂起44-分钟闩锁卡死)
 - [中文/非 ASCII 路径 argv 乱码；超长 argv ENAMETOOLONG](#中文非-ascii-路径经-argv-传给-p4-会乱码超长-argv-会-enametoolong已修复-x-argfile)
 - [宿主侧内建 `.p4ignore` 读取与 `p4 ignores -i` 的语义差异](#-宿主侧内建-p4ignore-读取与-p4-ignores--i-的语义差异)
+- [图谱同步点：have 查询的成本是 scope 内文件数](#图谱同步点have-查询的成本是-scope-内文件数真机实测)
 
 ---
 
@@ -197,3 +198,37 @@ P4D 2024.2 实测（PROBE-FINDINGS §11.5）：`p4 opened` 通篇没有 `unresol
 6. **刷新时机**：规则**内容**每次使用都按 `stat` 复验，所以改一条已有规则→下一次 flush 就生效；只有「规则文件**新出现**」可能滞后（目录探测缓存 30s，工作区内的文件变化有事件可提前失效）。**宿主刻意不给祖先规则文件挂 watcher**——main 侧把工作区外的文件实现为「对它所在**目录**做非递归 watch，任何兄弟变化都重新分类已登记的文件」，于是 client root 里正常的构建噪声会被反复报成 `.p4ignore` 的 `modified`，而这条事件流正是会话更改兜底读的那条：净噪层自己制造噪声（e2e 里表现为列表里冒出一行 `.p4ignore`）。
 
 **排查入口**：宿主侧命中时会打一条 debug 日志，带规则原文与规则文件所在目录 —— `dropping p4-ignored path <path> (rule "<行原文>" in <目录>)`。拿它和 `p4 ignores -i -v <path>` 的输出对照，就能直接指出是哪一层判错了。单测见 `apps/editor/src/renderer/services/scm/__tests__/p4Ignore.test.ts` 与 `P4IgnoreService.test.ts`。
+
+## ⚠️ 图谱同步点：have 查询的成本是 scope 内文件数（真机实测）
+
+**现象**：「已同步」徽章在真机上**永不出现**（状态栏 tooltip 明明有 `Last pull: changelist NNNN`），同时图谱首屏被拖慢约 5 秒。两条症状同源，是三个独立缺陷叠加。
+
+**根因**：
+
+1. **探针预算是 5s，成本是 6–40s** → 每次都超时 → 返回 `null`；且失败**不缓存**，于是每次加载都重跑一遍注定超时的查询。`p4 changes <scope>@<client>` 的第一个动作是物化**整个 client 的 have 表**，成本与 scope 宽度基本无关：
+
+| 查询 | 实测耗时（约百万文件工作区，经代理连接） |
+|---|---|
+| `changes -s submitted -m 1 <scope>`（列表本身） | 185ms |
+| `changes -s submitted -m 1 <scope>@<client>` | 全工作区 **40s**；窄子树 12s；**单文件 6.3s** |
+| `changes -s submitted -m 1 <scope>#have` | 全工作区 42s；窄子树 **339ms**；单文件 **177ms**（答案与 `@client` 逐字一致） |
+| `changes -s submitted -m 1 "//...#have"` | **报错** `Path 'X:/p4ws/main' is not under client's root` |
+
+2. **探针挂在 `getChanges` 的 `Promise.all` 里** → 列表要等它跑满预算才上屏（这条回归与「徽章不出现」一样真实）。
+3. **`//...` 不能带任何修订说明符** → 「整仓库」scope（图谱的 globe 开关）的探针**从来没成功过**，一直静默返回 `null`。错误消息里那个路径是 **client 本地拼写**（不是 depot 路径，也不是「你写错了 filespec」），极易误读。
+
+**修法**（改任一处前先读 `docs/graph.md` 的「本地同步点」节）：两段式（列表先上屏，`perforce-graph.getHaveChange` 后补徽章）+ 探针改 `#have`（拼在转义**之后**）+ `HAVE_CHANGE_EXEC` 改 background/60s + TTL 独立为 `max(workspaceTtlMs, 5min)` + scope 解析收口到 `resolveGraphScope`（两个命令同一组 filespec）+ 整仓库 scope 的探针改用 client root 通配符（`X:/p4ws/main/...#have`：have 修订只存在于视图映射到该 root 的文件，是 `//...` 列表的子集，不会命名列表外的 CL）。
+
+**复查命令**（只读；scope 换成实际工作区根）：
+
+```bash
+p4 -c <client> changes -s submitted -m 1 "X:/p4ws/main/...#have"   # 秒级~几十秒；空输出 = 该 scope 从未同步
+p4 -c <client> changes -s submitted -m 1 "//..."                   # 列表本身（185ms 量级）
+```
+
+**别做**：不要为「更快」再去找别的 scope 级 have 查询——bare `@client` 41.5s、`sync -n -q` 62s、通配符 `#have` 42s，本机实测没有一条更快；也不要按变更号反查文件集来缩小 scope（40 个 CL 展开出 13,664 个文件，超出 Windows argv 上限）。窄 scope（单文件 / 小目录）的 `#have` 才是快的那个（180–340ms），这也是「选区/文件图谱的徽章几乎瞬时」而「整仓库要等几十秒」的原因。
+
+**两个附带结论**（都实测过，改探针前先对一下）：
+
+1. **「什么都没匹配到」是 exit 0**：`p4 changes -s submitted -m 1 <不存在的路径>#have`（含单文件形式与本地未跟踪目录）→ **exit 0 + 零记录 + 184ms**。所以「空答案」与「失败」在退出码上是分开的，可以放心把空答案缓存（失败不缓存），不会退化成每次刷新重跑一遍全量查询。
+2. **e2e 的 fake-p4 一度把 have 判定做成全局的**：`changes <spec>#have` 的正确语义是**同一条 filespec** 内的 have 收窄，即「某文件既在 scope 内、又已同步到该 CL 的修订」——逐文件同时成立。写成「先按 scope 过滤 CL、再按整个 client 的 have 表过滤 CL」两个独立 filter，会在「CL 同时碰了 scope 内文件与 scope 外已同步文件」时**高报**（真机上 scope 外的文件根本不在这条 filespec 里）。这个 bug 一直藏着，因为旧用例的 scope 都等于 client root；`perforceGraphHave.spec.ts` 新增的「打开 client 子目录」journey 才把它逼出来——**这也是为什么新回归用例必须让两个 scope 的答案不同**，否则点击前后断言都成立，等于没测。

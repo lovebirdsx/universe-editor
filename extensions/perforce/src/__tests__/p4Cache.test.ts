@@ -303,18 +303,39 @@ describe('registerP4CacheNamespaces', () => {
     expect(await read()).toBe('#2')
   })
 
-  it('expires the have point exactly when the listing it labels expires', async () => {
-    // Same TTL as `changesSubmitted` is a red line, not a detail: they are filled
-    // by the same load and must age together, or the badge annotates a listing it
-    // no longer matches. Asserted as an equality of boundaries so any future edit
-    // to one of the two numbers fails here.
-    const boundary = await expiryBoundary(P4CacheNs.changesSubmitted)
+  it('keeps the have point longer than the listing it labels', async () => {
+    // The two are no longer filled by one load, and they cost wildly different
+    // amounts: re-reading the listing is an index query (~185ms on a
+    // million-file workspace) while re-running the probe is a full have-list
+    // read (~40s there). So the point gets its own, longer TTL — a workspace
+    // invalidation (a successful sync) is what moves it, not the clock.
+    const listing = await expiryBoundary(P4CacheNs.changesSubmitted)
+    const have = await expiryBoundary(P4CacheNs.haveChange)
     // Guards the search ceiling: a TTL raised past it would make the bisection
-    // return a boundary that is not one, and the two assertions below would then
+    // return a boundary that is not one, and the assertions below would then
     // compare nothing meaningful.
-    expect(boundary).toBeLessThan(600_000)
-    expect(await expiredAfter(P4CacheNs.haveChange, boundary)).toBe(true)
-    expect(await expiredAfter(P4CacheNs.haveChange, boundary - 1)).toBe(false)
+    expect(have).toBeLessThan(600_000)
+    expect(have).toBeGreaterThan(listing)
+    // Still a TTL, not an immortal entry: it expires at its own boundary, and
+    // not one tick earlier.
+    expect(await expiredAfter(P4CacheNs.haveChange, have)).toBe(true)
+    expect(await expiredAfter(P4CacheNs.haveChange, have - 1)).toBe(false)
+  })
+
+  it('follows a longer workspace TTL instead of clamping the have point to its floor', async () => {
+    // The registration is `max(workspaceTtlMs, 5min)`: the floor keeps the point
+    // alive past the (short) default listing TTL, and it must not cap a
+    // workspace that is configured to cache longer.
+    const clock = fakeClock()
+    const cache = new P4Cache(clock.now)
+    registerP4CacheNamespaces(cache, 900_000)
+    let fetches = 0
+    const read = (): Promise<string | undefined> =>
+      cache.wrap(P4CacheNs.haveChange, 'k', async () => `#${++fetches}`)
+    await read()
+    clock.advance(300_000)
+    expect(await read()).toBe('#1')
+    expect(fetches).toBe(1)
   })
 })
 

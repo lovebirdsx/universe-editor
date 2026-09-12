@@ -48,6 +48,7 @@ import {
   PerforceGraphCommands,
   type P4GraphChangeDto,
   type P4GraphChangeDetailsDto,
+  type P4GraphHaveChangeResult,
   type P4GraphLoadOptions,
   type P4GraphLoadResult,
   type P4GraphRepoDto,
@@ -159,10 +160,10 @@ const ChangeRow = memo(function ChangeRow({
 }: {
   change: P4GraphChangeDto
   selected: boolean
-  /** This row is the workspace's local sync point (see
-   *  `P4GraphLoadResult.haveChange`). A bare boolean, not the id or the whole
-   *  result: the memo above only earns its keep if the prop is stable for rows
-   *  the badge doesn't move between. */
+  /** This row is the workspace's local sync point (the id
+   *  `PerforceGraphCommands.getHaveChange` answered). A bare boolean, not the id
+   *  or the whole result: the memo above only earns its keep if the prop is
+   *  stable for rows the badge doesn't move between. */
   isHave: boolean
   onRowClick: (id: string, e: MouseEvent) => void
   onChangeMenu: (change: P4GraphChangeDto, e: MouseEvent) => void
@@ -223,6 +224,11 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
     [loggerService],
   )
   const [result, setResult] = useState<P4GraphLoadResult | null>(() => view.result)
+  // The local sync point, kept OUT of `result` on purpose: it arrives from its
+  // own command (the probe costs ~40s on a large workspace), while three call
+  // sites replace `result` wholesale — merging a late answer into every one of
+  // them would drop the badge the first time one was missed.
+  const [haveChange, setHaveChange] = useState<string | null>(() => view.haveChange)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(() => view.result === null)
   const [menu, setMenu] = useState<GitGraphMenuState | null>(null)
@@ -268,6 +274,12 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
   // revalidate already in flight when a reveal starts cannot resolve afterwards
   // and clobber the paged-in result (last dispatch wins).
   const fetchSeqRef = useRef(0)
+  // Generation counter over have-point probes. Deliberately NOT `fetchSeqRef`:
+  // that one also advances for revealCommit's paging, and a paging read returns
+  // the same scope — dropping the badge for it would flicker the row marker off
+  // and on for a page the badge still describes. Only a scope change (load) or a
+  // newer probe invalidates one in flight.
+  const haveSeqRef = useRef(0)
   // Change id the reveal still needs to scroll to, once its row is in the DOM.
   const pendingScrollRef = useRef<string | null>(null)
 
@@ -307,6 +319,9 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
   useEffect(() => {
     view.result = result
   }, [result, view])
+  useEffect(() => {
+    view.haveChange = haveChange
+  }, [haveChange, view])
   useEffect(() => {
     view.selection = selection
   }, [selection, view])
@@ -369,9 +384,48 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
     [scope],
   )
 
+  // Ask the extension for the local sync point of the scope `queryRef` currently
+  // holds. Separate from the listing because it is the one read whose cost is the
+  // SIZE of the scope: ~40s for a whole workspace, ~200-340ms for a selection —
+  // awaiting it inline would hold the first screen for the whole budget and, at
+  // the old 5s, lose the answer anyway. The answer is an annotation: a failure
+  // answers nothing and leaves the badge as it was (the extension logs why), and
+  // a stale answer is dropped rather than pinned onto a different scope's list.
+  //
+  // `force` is for an explicit reload only: background revalidations share the
+  // extension's long-lived answer (a sync is what moves the sync point, and a
+  // sync through the editor clears that cache outright).
+  const probeHaveChange = useCallback(
+    (force = false) => {
+      const seq = ++haveSeqRef.current
+      void commands
+        .executeCommand<P4GraphHaveChangeResult>(PerforceGraphCommands.getHaveChange, {
+          ...queryRef.current,
+          force,
+        })
+        .then((r) => {
+          if (seq !== haveSeqRef.current) return
+          // `failed` means the probe could not answer — not "nothing synced".
+          // Keeping the previous id is the better lie: only a sync moves it, and
+          // the toolbar line says which change the badge refers to.
+          if (!r || r.failed) return
+          setHaveChange(r.id)
+        })
+        .catch(() => {
+          // Annotation only — the previous answer (or no badge) stands.
+        })
+    },
+    [commands],
+  )
+
   const load = useCallback(() => {
     let cancelled = false
     const seq = ++fetchSeqRef.current
+    // A different scope's sync point must not label this list while its own
+    // probe is in flight; the loading state covers the list, so clearing here is
+    // invisible.
+    haveSeqRef.current++
+    setHaveChange(null)
     pendingScrollRef.current = null
     setLoading(true)
     setError(null)
@@ -382,6 +436,9 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
         setResult(r ?? null)
         setSelection([])
         setError(loadErrorFor(r ?? null))
+        // A reload is an explicit ask (toolbar ↺, scope switch), so it re-runs the
+        // probe; a revalidate shares the cached answer.
+        probeHaveChange(true)
       })
       .catch((e: unknown) => {
         if (!cancelled && seq === fetchSeqRef.current)
@@ -393,7 +450,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
     return () => {
       cancelled = true
     }
-  }, [commands, loadErrorFor])
+  }, [commands, loadErrorFor, probeHaveChange])
 
   useEffect(() => {
     view.refresh = () => load()
@@ -565,11 +622,15 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
           const next = prev.filter((id) => id === PENDING_ID || r.changes.some((c) => c.id === id))
           return next.length === prev.length && next.every((h, i) => h === prev[i]) ? prev : next
         })
+        // Same scope, so the badge stays where it is until the fresh answer
+        // lands — a sync that just moved the sync point is exactly the case this
+        // re-read exists for.
+        probeHaveChange()
       })
       .catch(() => {
         // Transient failure — leave the stale view in place.
       })
-  }, [commands, loadErrorFor])
+  }, [commands, loadErrorFor, probeHaveChange])
 
   // A get started from the graph (row menu, force-get, the scope dialog) must
   // revalidate itself: a plain get rewrites have revisions without touching
@@ -985,10 +1046,6 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
   }, [result, filteredChanges, deferredQuery])
 
   const graphWidth = layout?.width ?? GRID.offsetX * 2
-  // The row the badge lands on, or null when the sync point is unknown (nothing
-  // synced yet, or the probe failed). A PENDING_ID (`'*'`) can never equal a
-  // numeric changelist id, so the synthetic row needs no special case.
-  const haveChange = result?.haveChange ?? null
   // Filtering drops parents outside the result set, so the layout draws dangling
   // lines to nothing — carry no topology, just noise. Hide the lanes entirely.
   const isCompact = deferredQuery.trim() !== ''
@@ -1129,7 +1186,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
             {result.headClient
               ? localize('perforceGraph.onClient', ' · {client}', { client: result.headClient })
               : ''}
-            {result.haveChange && (
+            {haveChange && (
               // The row badge only exists for a loaded row; this line is the one
               // signal that survives the sync point being paged out, filtered
               // away, or scrolled off.
@@ -1140,7 +1197,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
                 )}
               >
                 {localize('perforceGraph.syncedTo', ' · Synced to #{change}', {
-                  change: result.haveChange,
+                  change: haveChange,
                 })}
               </span>
             )}
@@ -1295,6 +1352,8 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
                   key={c.id}
                   change={c}
                   selected={selected.has(c.id)}
+                  // The synthetic pending row's id is `'*'`, which can never equal
+                  // a numeric changelist id — no special case needed.
                   isHave={c.id === haveChange}
                   onRowClick={onRowClick}
                   onChangeMenu={openChangeMenu}

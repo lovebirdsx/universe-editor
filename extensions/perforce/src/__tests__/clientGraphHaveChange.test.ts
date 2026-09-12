@@ -1,14 +1,20 @@
 /**
- * The graph's "local sync point" probe: `p4 changes -s submitted -m 1 <spec>@<client>`.
+ * The graph's "local sync point" probe: `p4 changes -s submitted -m 1 <spec>#have`.
  *
  * Three properties carry the feature, and each has a way to break silently:
- *  - the `@<client>` suffix must be appended AFTER filespec escaping (a literal
- *    `@` in a path is `%40` by then — appending first would leave two revision
+ *  - the `#have` suffix must be appended AFTER filespec escaping (a literal `#`
+ *    in a path is `%23` by then — appending first would leave two revision
  *    specifiers in one filespec);
  *  - the probe must be scoped to the very same filespecs the listing used, or it
  *    can name a changelist the list does not contain and the badge never shows;
- *  - a failure must degrade to "no badge" (null) and must NOT be cached, while an
- *    empty answer ("nothing synced") IS an answer and IS cached.
+ *  - a failure must degrade to "no answer" (`failed: true`, and NOT cached, so the
+ *    next load retries), while an empty answer ("nothing synced") IS an answer
+ *    (`failed: false`) and IS cached — the renderer keeps its previous badge on
+ *    the former and moves/clears it on the latter.
+ *
+ * `#have` rather than `@<client>`: same answer on a real server, but `@client`
+ * first materializes the client's whole have list (~6s before it touches a path
+ * on a million-file workspace, ~15s where `#have` answers in 340ms).
  */
 import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -111,7 +117,7 @@ interface Harness {
   create: () => ReturnType<typeof PerforceClient.create>
 }
 
-/** Routes every `changes` spawn to the have/list bucket by its `@<client>` suffix. */
+/** Routes every `changes` spawn to the have/list bucket by its `#have` suffix. */
 function harness(opts: HarnessOptions = {}): Harness {
   const haveArgvs: string[][] = []
   const listArgvs: string[][] = []
@@ -125,7 +131,7 @@ function harness(opts: HarnessOptions = {}): Harness {
       if (cmd === 'info') {
         stdout = `... clientName ${CLIENT}\n... clientRoot ${ROOT}\n... userName testuser\n\n`
       } else if (cmd === 'changes') {
-        if (filespecs(argv).some((f) => f.includes('@'))) {
+        if (filespecs(argv).some((f) => f.endsWith('#have'))) {
           haveArgvs.push(argv)
           const id = opts.have ?? null
           stdout = id ? changeRecord(id) : ''
@@ -162,12 +168,12 @@ describe('PerforceClient.getGraphHaveChange', () => {
     delete (globalThis as Record<string, unknown>)[BRIDGE_KEY]
   })
 
-  it('asks for the newest have-list change, one `@<client>` suffix per filespec', async () => {
+  it('asks for the newest have-list change, one `#have` suffix per filespec', async () => {
     const h = harness({ have: '4519' })
     const client = await h.create()
-    const id = await client!.getGraphHaveChange(SCOPES)
+    const answer = await client!.getGraphHaveChange(SCOPES)
 
-    expect(id).toBe('4519')
+    expect(answer).toEqual({ id: '4519', failed: false })
     const argv = h.haveArgvs[0]!
     expect(argv.slice(argv.indexOf('changes'))).toEqual([
       'changes',
@@ -175,8 +181,8 @@ describe('PerforceClient.getGraphHaveChange', () => {
       'submitted',
       '-m',
       '1',
-      `${SCOPES[0]}@${CLIENT}`,
-      `${SCOPES[1]}@${CLIENT}`,
+      `${SCOPES[0]}#have`,
+      `${SCOPES[1]}#have`,
     ])
     client!.dispose()
   })
@@ -199,30 +205,51 @@ describe('PerforceClient.getGraphHaveChange', () => {
       '11',
       ...SCOPES,
     ])
-    expect(h.haveArgvs[0]!.filter((a) => a.endsWith(`@${CLIENT}`))).toEqual([
-      `${SCOPES[0]}@${CLIENT}`,
-      `${SCOPES[1]}@${CLIENT}`,
+    expect(h.haveArgvs[0]!.filter((a) => a.endsWith('#have'))).toEqual([
+      `${SCOPES[0]}#have`,
+      `${SCOPES[1]}#have`,
     ])
     client!.dispose()
   })
 
-  it('appends the client AFTER escaping, leaving a path @ as %40', async () => {
+  it('appends `#have` AFTER escaping, leaving path metacharacters escaped', async () => {
     const h = harness({ have: '4521' })
     const client = await h.create()
-    const scope = buildScopeFilespec('X:/p4ws/main/a@b.txt', false)
-    await client!.getGraphHaveChange([scope])
+    await client!.getGraphHaveChange([
+      buildScopeFilespec('X:/p4ws/main/a@b.txt', false),
+      buildScopeFilespec('X:/p4ws/main/a#b.txt', false),
+    ])
 
-    const spec = h.haveArgvs[0]!.find((a) => a.includes('a%40b'))!
-    expect(spec).toBe(`X:/p4ws/main/a%40b.txt@${CLIENT}`)
-    // Exactly one unescaped `@` in the whole spec, and it is the suffix.
-    expect(spec.split('@')).toHaveLength(2)
+    const argv = h.haveArgvs[0]!
+    expect(argv).toContain('X:/p4ws/main/a%40b.txt#have')
+    expect(argv).toContain('X:/p4ws/main/a%23b.txt#have')
+    // Exactly one unescaped `#` per spec, and it is the suffix: had the suffix
+    // been appended before escaping, the path's own `#` would collide with it.
+    for (const spec of argv.filter((a) => a.includes('a%'))) {
+      expect(spec.split('#')).toHaveLength(2)
+    }
     client!.dispose()
   })
 
-  it('degrades to null on a failed probe without disturbing the listing', async () => {
+  it('passes a client-root wildcard through verbatim (the whole-repo carve-out)', async () => {
+    // `//...` cannot carry a revision specifier at all (`Path 'E:/...' is not
+    // under client's root`), so the whole-repo probe asks the client root's
+    // wildcard instead. Nothing here strips or re-derives the scope — the
+    // extension resolves it, this layer only appends the suffix.
+    const h = harness({ have: '4521' })
+    const client = await h.create()
+    await client!.getGraphHaveChange([buildScopeFilespec('//depot/branch_x', true)])
+
+    expect(h.haveArgvs[0]!).toContain('//depot/branch_x/...#have')
+    client!.dispose()
+  })
+
+  it('answers `failed` (never an empty id) on a failed probe, without disturbing the listing', async () => {
     const h = harness({ haveExit: 1 })
     const client = await h.create()
-    expect(await client!.getGraphHaveChange(SCOPES)).toBeNull()
+    // `failed`, not `{ id: null }`: the renderer must keep the badge it has rather
+    // than read this as "nothing is synced here".
+    expect(await client!.getGraphHaveChange(SCOPES)).toEqual({ id: null, failed: true })
     const listing = await client!.getGraphChanges(10, SCOPES)
     expect(listing?.changes.map((c) => c.id)).toEqual(['4522', '4521'])
     client!.dispose()
@@ -240,9 +267,23 @@ describe('PerforceClient.getGraphHaveChange', () => {
   it('caches an empty answer (nothing synced is a real answer)', async () => {
     const h = harness({ have: null })
     const client = await h.create()
-    expect(await client!.getGraphHaveChange(SCOPES)).toBeNull()
-    expect(await client!.getGraphHaveChange(SCOPES)).toBeNull()
+    expect(await client!.getGraphHaveChange(SCOPES)).toEqual({ id: null, failed: false })
+    expect(await client!.getGraphHaveChange(SCOPES)).toEqual({ id: null, failed: false })
     expect(h.haveArgvs.length).toBe(1)
+    client!.dispose()
+  })
+
+  it('re-runs a cached answer only when asked to (explicit reload)', async () => {
+    // Re-running the probe costs the SIZE of the scope (tens of seconds over a
+    // whole workspace), so only the explicit reload path passes `force`.
+    const h = harness({ have: '4521' })
+    const client = await h.create()
+    await client!.getGraphHaveChange(SCOPES)
+    await client!.getGraphHaveChange(SCOPES)
+    expect(h.haveArgvs.length).toBe(1)
+
+    expect(await client!.getGraphHaveChange(SCOPES, true)).toEqual({ id: '4521', failed: false })
+    expect(h.haveArgvs.length).toBe(2)
     client!.dispose()
   })
 
@@ -255,28 +296,13 @@ describe('PerforceClient.getGraphHaveChange', () => {
     client!.dispose()
   })
 
-  it('issues nothing when the client name is unknown (a bare @ means nothing)', async () => {
-    const h = harness()
-    // Bypasses discovery: `p4 info` without a clientName falls back to a
-    // `p4 clients` scan, which would answer "no client" and disable the provider.
-    const client = PerforceClient.createForClient(
-      { clientName: '', clientRoot: ROOT },
-      {},
-      new ConcurrencyGate(4),
-      { enabled: true, workspaceTtlMs: 30_000 },
-    )
-    expect(await client.getGraphHaveChange(SCOPES)).toBeNull()
-    expect(h.haveArgvs.length).toBe(0)
-    client.dispose()
-  })
-
-  it('issues nothing for an empty scope list (no filespec to hang `@<client>` on)', async () => {
+  it('issues nothing for an empty scope list (no filespec to hang `#have` on)', async () => {
     // Without the guard this degrades into a bare `-m 1` — the newest change
     // anywhere in the depot, i.e. the opposite of a have point — and it would
     // answer successfully, so the wrong answer would even be cached.
     const h = harness({ have: '4599' })
     const client = await h.create()
-    expect(await client!.getGraphHaveChange([])).toBeNull()
+    expect(await client!.getGraphHaveChange([])).toEqual({ id: null, failed: true })
     expect(h.haveArgvs.length).toBe(0)
     expect(h.listArgvs.length).toBe(0)
     client!.dispose()

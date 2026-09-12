@@ -75,7 +75,6 @@ function makeResult(pendingCount = 0): P4GraphLoadResult {
     headClient: 'alice-ws',
     moreAvailable: false,
     pendingCount,
-    haveChange: null,
   }
 }
 

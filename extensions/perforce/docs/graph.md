@@ -11,13 +11,13 @@
 | wire 类型 | `packages/extensions-common/src/contracts/perforceGraph.ts` | renderer↔扩展共享的 DTO（`P4GraphChangeDto` / `P4GraphRepoDto` / `P4GraphLoadResult` / `P4GraphChangeDetailsDto` / `P4GraphFileChangeDto` / `P4GraphFileDiffRequest`）+ `PerforceGraphCommands` 命令 id 常量。**必须**在 `index.ts` re-export |
 | 纯解析 | `extensions/perforce/src/p4GraphParser.ts` | `parseChangesList` / `parseChangeDescribe`（numbered 并行键折叠）/ `statusFromAction`（p4 action→A/M/D/R）/ `fileDiffRevs`（按 status 算 left/right rev spec）/ `parseWhereLocalPaths` / `displayPath`。**全纯、可对 fixture 单测** |
 | 数据源 | `extensions/perforce/src/client.ts` | 图谱方法：`getGraphChanges(max)` / `getGraphHaveChange(scopes)` / `getPendingCount` / `getOpenedForGraph` / `getGraphChangeDetails(id)` / `printRevision(spec)` / `_whereLocalPaths` |
-| 命令 | `extensions/perforce/src/extension.ts` | 注册 9 个 `perforce-graph.*` 命令（见下）——**运行时命令**（`commands.registerCommand`），构建 DTO、算单泳道 parents、跑 diff |
+| 命令 | `extensions/perforce/src/extension.ts` | 注册 10 个 `perforce-graph.*` 命令（见下）——**运行时命令**（`commands.registerCommand`），构建 DTO、算单泳道 parents、跑 diff |
 | 编辑器 | `apps/editor/src/renderer/workbench/perforceGraph/PerforceGraphEditor.tsx` | 主 React 编辑器：单泳道单选 + 顶部"待定变更"节点。只用 `ICommandService` + `IScmService` 跨 JSON 边界调命令 |
 | 输入/状态/动作 | `apps/editor/src/renderer/services/editor/PerforceGraphEditorInput.ts` · `services/perforceGraph/perforceGraphViewState.ts` · `actions/perforceGraphActions.ts` | EditorInput（URI `universe:/perforceGraph`）· module-level view-state 单例（重开秒恢复）· 两个 Action2 |
 
 ## 命令清单（`PerforceGraphCommands`）
 
-`getRepos` / `setRepo` / `getChanges` / `getChangeDetails` / `getPendingChanges` / `openFileDiff` / `openWorkingTreeFile` / `syncToChange` / `getSyncScopes`。全部走 `commands.registerCommand`（**不进 package.json `commands` 数组**，见头号坑），renderer 用 `commands.executeCommand(PerforceGraphCommands.xxx, ...)` 调用。
+`getRepos` / `setRepo` / `getChanges` / `getHaveChange` / `getChangeDetails` / `getPendingChanges` / `openFileDiff` / `openWorkingTreeFile` / `syncToChange` / `getSyncScopes`。全部走 `commands.registerCommand`（**不进 package.json `commands` 数组**，见头号坑），renderer 用 `commands.executeCommand(PerforceGraphCommands.xxx, ...)` 调用。
 
 除 `syncToChange` 外全部只读。`syncToChange` 是唯一的写命令（P4V 式 "get revision as of a changelist"）：`p4 sync` 到所选 CL，把工作区 have 版本**移动**（可回退可前进）——只动本地工作区，depot 仍只读。范围 = 请求的 `scopePaths`（经 `buildSyncFilespecs` 展开，目录转 `<dir>/...`）或图谱显示范围（`wholeRepo ? '//...' : workspaceScope`）；`@CL` 后缀由 `clSpecOf` 生成（只认纯数字，防任意文本 splice 进 filespec）；执行复用插件的 `runSync`（进度条 / 拒绝处理同一套）；确认策略 = 纯函数 `graphSyncConfirmKind`（`graphSync.ts`，三态）：`force` 请求 → 弹**合并**的强制确认框（覆盖未收集改动 + 时间旅行重置两层语义合成一个 modal，`confirmForceGet(spec, scopeText)`——与 Explorer 的「拉取版本…」强制档**共用同一个**函数与文案，故正文只说「目标版本」不说 changelist）并透传 `force` 给 `runSync` → `p4 sync -f`；否则委托 `graphSyncNeedsConfirm`：`confirmed`（多选目录对话框已确认）/ `isLatest`（目标 = 最新行，等价 get latest）/ 单文件 scope 免确认，目录 / 多路径 / 整显示范围弹时间旅行警告。**`force` 压过全部三条豁免**（`isLatest` / `confirmed` / 单文件都不豁免，见下）。`getSyncScopes` 列图谱 client root 的顶层目录（纯 `readdir`，零 p4 调用，失败读作「无候选」），喂 renderer 的多选目录对话框。
 
@@ -25,16 +25,26 @@
 
 ## 本地同步点（"已同步"徽章 / `haveChange`）
 
-图谱列的是 depot 侧历史，看不出「哪些已经拉到本地」。`P4GraphLoadResult.haveChange` 补上这一维：该 scope 下**已进入工作区 have 列表的最新已提交 CL**，renderer 在命中行打 `Synced` 徽章，并在工具栏追加 `· Synced to #NNNN`（徽章只对当前加载页可见，工具栏那句是同步点被分页出去 / 被搜索滤掉时的兜底）。
+图谱列的是 depot 侧历史，看不出「哪些已经拉到本地」。**本地同步点**补上这一维：该 scope 下**已进入工作区 have 列表的最新已提交 CL**（`client.ts` `getGraphHaveChange`），renderer 在命中行打 `Synced` 徽章，并在工具栏追加 `· Synced to #NNNN`（徽章只对当前加载页可见，工具栏那句是同步点被分页出去 / 被搜索滤掉时的兜底）。
 
-数据来源 = `p4 changes -s submitted -m 1 <filespec…>@<clientName>`（`client.ts` `getGraphHaveChange`）。`@<client>` 是 p4 的 **have-list 修订说明符**，所以 P4V / 命令行等**外部同步同样反映**——比「自己记录上次 get 的 CL」正确。这是本功能唯一的**未真机验证**的假设：fake-p4 按此语义实现，e2e 因此只能证明「假定被一致实现」，证明不了「真 p4d 接受该语法」。真机确认过 `p4 changes -m 1 <工作区根>/...@<client>` 后请把结论记进 `docs/pitfalls.md`；在那之前，若某服务器/视图组合拒绝该语法或返回空，表现就是**徽章不出现**（与「确实没同步过」视觉一致），现场只有日志 `graph have point query failed`。
+数据来源 = `p4 changes -s submitted -m 1 <filespec…>#have`。`#have` 是 p4 的**修订说明符**，解析的是工作区真实的 have 表，所以 P4V / 命令行等**外部同步同样反映**——比「自己记录上次 get 的 CL」正确。
 
-- **红线：查询用的 filespec 必须与列表用的完全同一份**。`extension.ts` 的 `getChanges` 把同一个 `scopes` 数组同时喂给 `getGraphChanges` 与 `getGraphHaveChange`，**不要**为后者另建一份（重建 / 换分支写法会让返回的 CL 不在列表里，徽章静默永不显示）。
-- **`@<client>` 必须拼在转义之后**（`getGraphHaveChange` 内部拼；与 `buildForceGetFilespecs` 拼 `#rev` 同一条规矩，见 `p4Filespec.ts`）。clientName 受 p4 命名限制（`[A-Za-z0-9_.-]`）不含 filespec 元字符，**不要**给它套 `escapeFilespecPath`。clientName 为空时直接返回 null（裸 `@` 语义未定义，不发命令）。
-- **失败降级是设计的一部分**：查询失败 / 超时 / spawn ENOENT → `null`，只写日志，绝不弹错；它在 `getChanges` 的 `Promise.all` 里（`getGraphChanges` / `getPendingCount` / `getGraphHaveChange` 并行），异常会掀翻整个加载，所以 `getGraphHaveChange` 自带 try/catch。**但它并非零成本**：`Promise.all` 意味着首屏要等它，故用 `HAVE_CHANGE_EXEC`（interactive，5s）而不是 `INTERACTIVE_EXEC` 的 30s——上界是「首屏最多被这句辅助信息拖 5s」，**不是**「图谱迟到」的同义词（5s 不含并发门排队时间：watchdog 在拿到槽位后才起算）。真要零等待得两段式（先渲染列表，haveChange 回来再 patch），代价是一条 renderer 状态流，不值。
-- **缓存**：`P4CacheNs.haveChange`，TTL 与 `changesSubmitted` 相同（`max(workspaceTtlMs, 20s)`）。两者在同一次加载里被同时填充、同时过期，列表与徽章才不会互相矛盾；`wrap` 返回 `undefined` = 不缓存失败（下次重试），空答案（该 scope 从未同步）**要**缓存。
-- **刷新**：成功 sync 会 `invalidateWorkspace()` 清掉它。图谱自己发起的 get（右键 Get This Revision / Get Latest Revision / Force Get、目录对话框）在命令 resolve 后显式 `revalidate()`（`getThenRevalidate`）——plain get 不改 `p4 opened`，SCM observable 驱动的自动刷新**不保证**触发。**这 5 个入口各有一条 renderer 单测**（`PerforceGraphEditor re-reads after a get` 表驱动，逐个断言 `getChanges` 被读第二次）；**不要**指望 e2e 守它——SCM 自动刷新那条路也会投递一次 reload，把 `.then(revalidate)` 改成 no-op 后 e2e 照样绿（已实测）。
-- **已知限制**：取消 / 失败的 sync 不失效缓存（既有行为，`changesSubmitted` 同样如此）。外部同步只在**下一次读**时反映——TTL 到期本身不触发任何查询，图谱页签开着不动时徽章会一直停在旧行（`perforce.refreshInterval` 默认 0）；同步点不落在已加载页时不显示行内徽章，由工具栏兜底（**不为它触发分页**）。
+**它是纯 background 查询，不在首屏路径上**：`perforce-graph.getChanges` 只回列表，renderer 拿到后另发 `perforce-graph.getHaveChange` 把徽章补上（两段式）。真机实测（百万文件工作区，完整表格在 `docs/pitfalls.md`「图谱同步点」节）：列表 185ms，而 have 查询**与 scope 内文件数同阶**——全工作区 36–40s、窄子树 340ms、单文件 180ms。由此：
+
+- **`HAVE_CHANGE_EXEC` = `{ priority: 'background', timeoutMs: 60_000 }`**：它已不在关键路径，预算只用来兜住真正挂死的 p4；background 不占用并发门给交互读预留的那一槽。**不要**把它挪回 `Promise.all`——那正是第一版「真机永不出现徽章」的原因（5s 预算 vs 40s 成本 = 每次都超时，且失败不缓存 → 每次加载重跑一遍注定超时的查询）。
+- **早期版本用 `@<client>`**（同语义、同答案），但 `@client` 会先把整个 client 的 have 表物化出来：全工作区 40s、**单文件也要 6.3s**，而 `#have` 单文件 180ms。要提速是换 `#have`，不是换更小的预算。
+- **缓存 TTL 独立**：`P4CacheNs.haveChange` = `max(workspaceTtlMs, 5min)`，**刻意比列表长**——重读列表是索引查询（185ms），重跑探针是 40s，两者不该共命运。`wrap` 返回 `undefined` = 不缓存失败（下次重试），空答案（该 scope 从未同步）**要**缓存。
+- **红线：查询用的 filespec 必须与列表用的完全同一份**。`extension.ts` 的 `resolveGraphScope` 一处解析、两个命令共用（各拿一份 `P4GraphLoadOptions` 后得到同一组 filespec）。**不要**为探针另建一份（重建 / 换分支写法会让返回的 CL 不在列表里，徽章静默永不显示）。
+  - scoped（选区 / 文件 / 合并历史）：`buildSyncFilespecs(scopePaths)`，**同一个数组**喂列表与探针。
+  - unscoped：探针 = **同一个 `workspaceScope`**（`<工作区根>/...`）。**不要**窄化成 client root：工作区是 client 子目录时，client 级同步点可能由 scope 外的文件产生，会**高报**（把没同步的行标成已同步）。
+  - `wholeRepo`：列表是 `//...`，而 **`//...` 不能带任何修订说明符**（真机报 `Path 'E:/...' is not under client's root`，这是该分支以前从未成功过的原因），故探针改用 client root 通配符 `buildScopeFilespec(target.root, true)` + `#have`。carve-out 成立的理由：have 修订只存在于视图映射到该 root 的文件，它们是 `//...` 列表的子集，答案不会命名列表外的 CL。
+- **`#have` 必须拼在转义之后**（`getGraphHaveChange` 内部拼；与 `buildForceGetFilespecs` 拼 `#rev` 同一条规矩，见 `p4Filespec.ts`）——否则路径里的 `#` 会和分隔符撞车。空 scope 列表直接返回 `{ id: null, failed: true }`（裸 `-m 1` 是「depot 里最新的变更」，与 have 点正相反，而且它会**成功**回答，错的答案还会被缓存）。
+- **失败与空答案必须可区分**（契约 `P4GraphHaveChangeResult`）：查询失败 / 超时 / spawn ENOENT / 无 client → `{ id: null, failed: true }`，只写日志、绝不弹错；「该 scope 里没有已同步的文件」→ `{ id: null, failed: false }`。renderer **只在 `failed: false` 时写 state**——探针失败保留原徽章（一次瞬时超时不该销毁一个大概率仍正确的标注），空答案才是答案（`p4 sync` 到旧 CL 会让同步点真的后退）。`getGraphHaveChange` 自带 try/catch（异常冒泡会杀掉 extension host）。日志 `[perforce] graph have point: #N (K filespec(s), Xms)` 是现场唯一溯源线索，**耗时必须在里面**。
+- **`failed` 不缓存、空答案缓存**：p4 对「filespec 什么都没匹配到」是 **exit 0 + 零记录**（真机实测 184ms），所以空答案天然落在缓存那侧，不会退化成每次 revalidate 重跑一遍的全量查询。
+- **显式重载强制重探**：`getHaveChange` 的 `force` 只由 `load()`（工具栏 ↺ / 换 scope / 切 client）传 `true`，`revalidate()`（SCM 自动刷新、get 后、Load more）不传——重跑一次的成本是 scope 的规模。`force` 走 `P4Cache.invalidate(ns, key)`，不清整个命名空间。
+- **renderer 侧的 generation 守卫**：`PerforceGraphEditor` 的 `haveSeqRef` **独立于 `fetchSeqRef`**（后者在 reveal 分页时也自增，共用会把仍然正确的徽章踢掉）。`load()` 里 `++haveSeqRef` 且 `setHaveChange(null)`（换 scope 时旧答案不得贴到新列表），load / revalidate 落地后各补一次探针，探针落地时比对 seq、过期答案丢弃（三条竞态用例在 `PerforceGraphEditor.test.tsx`：探针在飞时切 scope、两次探针乱序 resolve、失败保留旧徽章 / 空答案清徽章）。
+- **刷新**：成功 sync 会 `invalidateWorkspace()` 清掉它。图谱自己发起的 get（右键 Get This Revision / Get Latest Revision / Force Get、目录对话框）在命令 resolve 后显式 `revalidate()`（`getThenRevalidate`）——plain get 不改 `p4 opened`，SCM observable 驱动的自动刷新**不保证**触发。**这 5 个入口各有一条 renderer 单测**（`PerforceGraphEditor re-reads after a get` 表驱动，逐个断言 `getChanges` 与 `getHaveChange` **各**被读第二次）；**不要**指望 e2e 守它——SCM 自动刷新那条路也会投递一次 reload，把 `.then(revalidate)` 改成 no-op 后 e2e 照样绿（已实测）。
+- **已知限制**：徽章在列表出现后**才**补上，大工作区可能晚几十秒（缓存命中时几乎即时）；**取消 / 失败的 sync 不失效缓存**（既有行为，`changesSubmitted` 同样如此）→ 之后的自动 revalidate 会复用旧同步点，最长滞后一个 TTL（5 分钟；按 ↺ 立即重探）；外部同步同理，最坏滞后一个 TTL（`perforce.refreshInterval` 默认 0，图谱开着不动不会自己重查）；同步点不落在已加载页时不显示行内徽章，由工具栏兜底（**不为它触发分页**）；换 scope / 关页签**不取消**在飞的探针（收益只是早释放一个后台槽）。
 
 ## 与 Git Graph 的复用点（别重造轮子）
 
@@ -133,7 +143,7 @@ pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.con
 - `apps/editor/src/renderer/services/gitGraph/{graphLayout,fileTree}.ts` —— 复用的布局/文件树
 - `extensions/perforce/e2e/specs/perforceGraph.spec.ts` —— e2e 冒烟
 - `extensions/perforce/e2e/specs/perforceGraph{FileHistory,FolderHistorySync,HistoryMultiSelect}.spec.ts` —— scoped 历史三条回归（单文件 / 目录 get / 多选并集 + 双路径 get；fake-p4 的 `changes` case 吃全部 filespec 并回答并集）
-- `extensions/perforce/e2e/specs/perforceGraphHave.spec.ts` —— 同步点徽章两条回归（落在已同步行 / 图谱内 get 后前移；fake-p4 的 `changes` case 认 `@<client>` 后缀并按 per-file haveRev 判 have 列表，seed 用 `SeedFile.haveRev` 把 have 停在中间版本）
+- `extensions/perforce/e2e/specs/perforceGraphHave.spec.ts` —— 同步点徽章三条回归（落在已同步行 / 图谱内 get 后前移 / **打开的是 client 子目录时**整仓库 scope 把徽章移到 client 级同步点——第三条刻意让两个 scope 的答案不同，否则断言在点击前后都成立、等于假绿；fake-p4 的 `changes` case 认 `#have` 后缀，并按**同一个文件**同时过 scope 与 per-file haveRev，seed 用 `SeedFile.haveRev` 把 have 停在中间版本）
 
 ## 其它
 

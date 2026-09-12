@@ -19,6 +19,8 @@ import {
 } from '@universe-editor/extension-api'
 import type {
   P4GraphChangeDto,
+  P4GraphHaveChangeOptions,
+  P4GraphHaveChangeResult,
   P4GraphLoadOptions,
   P4GraphLoadResult,
   P4GraphChangeDetailsDto,
@@ -2187,6 +2189,73 @@ export async function activate(context: ExtensionContext): Promise<void> {
       // rather than the whole client depot. `wholeRepo` widens it to `//...`.
       const workspaceScope = buildScopeFilespec(root, true)
 
+      /**
+       * The client + filespecs ONE graph read should use, resolved in one place
+       * because the listing and the have-point probe are now two separate
+       * commands: the renderer badges the row whose id comes back, so a probe
+       * scoped differently from the list can name a change the list does not hold
+       * and the badge silently never shows. `list` is what `p4 changes` gets,
+       * `have` what the probe gets — identical except in the whole-repo branch.
+       */
+      const resolveGraphScope = (
+        opts: P4GraphLoadOptions,
+      ):
+        | {
+            kind: 'ok'
+            target: PerforceClient
+            list: string[]
+            have: string[]
+            pendingScopes?: readonly { path: string; isDirectory: boolean }[]
+          }
+        | { kind: 'multiClient'; pathCount: number }
+        | { kind: 'none' } => {
+        const scopePaths = opts.scopePaths
+        if (scopePaths !== undefined && scopePaths.length > 0) {
+          // Merged history spans one workspace only, same as sync: a union
+          // across clients has no single ordered changelist list to show.
+          const owner = resolveCommonClient(
+            scopePaths.map((s) => s.path),
+            (p) => mgr.resolveContaining(p),
+          )
+          if (owner === undefined) {
+            // A single path that resolves to no client is not a merge problem —
+            // it's simply outside every workspace (the palette entry acting on a
+            // non-Perforce active file). Keep the pre-existing behaviour: null,
+            // which the renderer renders as the plain "no changes" empty state.
+            if (scopePaths.length === 1) {
+              log(`[perforce] graph scope path is in no client: ${scopePaths[0]!.path}`)
+              return { kind: 'none' }
+            }
+            return { kind: 'multiClient', pathCount: scopePaths.length }
+          }
+          // Directory expansion (`<dir>/...`), metachar escaping, dedupe and
+          // nested-under-a-selected-directory collapsing all live here. One
+          // build, both consumers — never rebuild it for the probe.
+          const specs = buildSyncFilespecs(scopePaths)
+          return { kind: 'ok', target: owner, list: specs, have: specs, pendingScopes: scopePaths }
+        }
+        const target = graphClient()
+        if (!target) return { kind: 'none' }
+        if (!opts.wholeRepo) {
+          // The listing's own scope, so the probe asks exactly the question the
+          // rows answer to. Narrowing this to the client root would let a sync
+          // point produced by files OUTSIDE the opened folder badge a row the
+          // folder never synced.
+          return { kind: 'ok', target, list: [workspaceScope], have: [workspaceScope] }
+        }
+        // `//...` cannot carry a revision specifier at all (p4: `Path '…' is not
+        // under client's root`), so the probe asks the client root's wildcard
+        // instead. Still the same answer: a have revision only exists for files
+        // the view maps under that root, and those are a subset of what `//...`
+        // lists — so the id can never fall outside the listing.
+        return {
+          kind: 'ok',
+          target,
+          list: ['//...'],
+          have: [buildScopeFilespec(target.root, true)],
+        }
+      }
+
       return [
         commands.registerCommand('perforce-graph.getRepos', () =>
           mgr.all.map((c) => ({ root: c.root, name: c.clientName })),
@@ -2200,69 +2269,33 @@ export async function activate(context: ExtensionContext): Promise<void> {
           const opts = (args[0] ?? {}) as P4GraphLoadOptions
           const max = opts.maxChanges ?? DEFAULT_MAX
 
-          // Scoped query: resolve the client by strict longest prefix (data-query
-          // semantics, no active fallback — mirrors the timeline provider) and build
-          // the path filespecs. Never touches `graphRoot`, the graph's shared mutable
-          // state, so a scoped read can't leak into the whole-graph view.
-          let target: PerforceClient | undefined
-          let scopes: string[]
-          let pendingScopes: readonly { path: string; isDirectory: boolean }[] | undefined
-          const scopePaths = opts.scopePaths
-          if (scopePaths !== undefined && scopePaths.length > 0) {
-            // Merged history spans one workspace only, same as sync: a union
-            // across clients has no single ordered changelist list to show.
-            const owner = resolveCommonClient(
-              scopePaths.map((s) => s.path),
-              (p) => mgr.resolveContaining(p),
+          const resolved = resolveGraphScope(opts)
+          if (resolved.kind === 'multiClient') {
+            log(`[perforce] graph scope spans multiple clients (${resolved.pathCount} paths)`)
+            await window.showErrorMessage(
+              localize(
+                'perforce.graph.multiClient',
+                'The selected paths are not in one Perforce workspace, so their history cannot be merged.',
+              ),
             )
-            if (owner === undefined) {
-              // A single path that resolves to no client is not a merge problem —
-              // it's simply outside every workspace (the palette entry acting on a
-              // non-Perforce active file). Keep the pre-existing behaviour: null,
-              // which the renderer renders as the plain "no changes" empty state.
-              if (scopePaths.length === 1) {
-                log(`[perforce] graph scope path is in no client: ${scopePaths[0]!.path}`)
-                return null
-              }
-              log(`[perforce] graph scope spans multiple clients (${scopePaths.length} paths)`)
-              await window.showErrorMessage(
-                localize(
-                  'perforce.graph.multiClient',
-                  'The selected paths are not in one Perforce workspace, so their history cannot be merged.',
-                ),
-              )
-              return {
-                changes: [],
-                head: null,
-                headClient: null,
-                moreAvailable: false,
-                pendingCount: 0,
-                haveChange: null,
-                error: 'multiClient',
-              } satisfies P4GraphLoadResult
-            }
-            target = owner
-            // Directory expansion (`<dir>/...`), metachar escaping, dedupe and
-            // nested-under-a-selected-directory collapsing all live here.
-            scopes = buildSyncFilespecs(scopePaths)
-            pendingScopes = scopePaths
-            log(`[perforce] graph scoped to ${scopes.length} filespec(s): ${scopes.join(' ')}`)
-          } else {
-            target = graphClient()
-            scopes = [opts.wholeRepo ? '//...' : workspaceScope]
-            pendingScopes = undefined
+            return {
+              changes: [],
+              head: null,
+              headClient: null,
+              moreAvailable: false,
+              pendingCount: 0,
+              error: 'multiClient',
+            } satisfies P4GraphLoadResult
           }
-          if (!target) return null
+          if (resolved.kind === 'none') return null
+          const { target, list, pendingScopes } = resolved
+          if (opts.scopePaths !== undefined && opts.scopePaths.length > 0) {
+            log(`[perforce] graph scoped to ${list.length} filespec(s): ${list.join(' ')}`)
+          }
 
-          // The have-point probe takes the very same `scopes` array the listing
-          // used — not a rebuilt one. The renderer badges the row whose id comes
-          // back, so a differently scoped probe (a re-built filespec, the other
-          // side of the wholeRepo branch) can name a change this list does not
-          // contain, and the badge would silently never show.
-          const [listing, pendingCount, haveChange] = await Promise.all([
-            target.getGraphChanges(max, scopes),
+          const [listing, pendingCount] = await Promise.all([
+            target.getGraphChanges(max, list),
             target.getPendingCount(pendingScopes),
-            target.getGraphHaveChange(scopes),
           ])
           if (!listing) return null
           const { moreAvailable } = listing
@@ -2285,10 +2318,28 @@ export async function activate(context: ExtensionContext): Promise<void> {
             headClient: target.clientName,
             moreAvailable,
             pendingCount,
-            haveChange,
             clientRoot: target.root,
           } satisfies P4GraphLoadResult
         }),
+        // The have-point probe, split out of `getChanges` on purpose. Its cost is
+        // the size of the scope, not of the answer: `p4 changes -m 1 <spec>#have`
+        // measured ~40s on a million-file workspace (an indexed 200ms without the
+        // revision specifier). Riding in the listing's `Promise.all` meant the
+        // first screen waited out a 5s budget and then lost the badge to the
+        // timeout anyway. The renderer asks once the list is up and merges the
+        // answer, so a slow probe costs only the badge's arrival.
+        commands.registerCommand(
+          'perforce-graph.getHaveChange',
+          async (...args: unknown[]): Promise<P4GraphHaveChangeResult> => {
+            const opts = (args[0] ?? {}) as P4GraphHaveChangeOptions
+            const resolved = resolveGraphScope(opts)
+            // No client to ask (or several, which is an error the listing itself
+            // reported) is "no answer", not "nothing synced": the renderer keeps
+            // whatever badge it had.
+            if (resolved.kind !== 'ok') return { id: null, failed: true }
+            return resolved.target.getGraphHaveChange(resolved.have, opts.force === true)
+          },
+        ),
         commands.registerCommand('perforce-graph.getChangeDetails', async (...args: unknown[]) => {
           const id = args[0] as string
           // Pin the read to the client the listing came from: a scoped graph

@@ -3,13 +3,17 @@
  *
  *  The row whose changelist is the newest one in the client's have list is
  *  badged, plus a toolbar line naming it, so the graph shows at a glance where
- *  pulled history ends. The probe is `p4 changes -s submitted -m 1 <spec>@<client>`
- *  — the `@client` have-list specifier — which means the fake p4 has to model the
+ *  pulled history ends. The probe is `p4 changes -s submitted -m 1 <spec>#have`
+ *  — the `#have` revision specifier — which means the fake p4 has to model the
  *  have list, not just hand back a canned change: the seed puts the client on #2
  *  while the depot head is #3, so changelist 4521 (which produced #2) is synced
  *  and 4522 (head, #3) is not.
  *
- *  Two journeys, one cold launch each:
+ *  The badge arrives asynchronously, after the listing is already on screen
+ *  (`perforce-graph.getHaveChange` is a second round trip), which is why every
+ *  assertion below is on the badge rather than on a loaded list.
+ *
+ *  Three journeys, one cold launch each:
  *
  *  1. The badge lands on 4521 and not on the newer row, and the toolbar names it.
  *  2. Getting the head row moves the badge onto it: the whole chain of a graph
@@ -18,6 +22,13 @@
  *     (`PerforceGraphEditor re-reads after a get`) is what pins the explicit
  *     revalidate — in this scenario the SCM auto-refresh also delivers a reload,
  *     so a passing e2e here does not by itself prove that path.
+ *  3. The same badge with the whole-repository scope on, when the opened folder is
+ *     a subdirectory of the client: the folder's sync point and the client's
+ *     differ (a file outside the folder is synced further along), so the badge
+ *     has to MOVE when the scope widens. That scope lists `//...`, which cannot
+ *     carry a revision specifier at all (`Path 'E:/...' is not under client's
+ *     root`), so its probe asks the client root's wildcard instead — the one
+ *     branch that had never answered against a real server.
  *--------------------------------------------------------------------------------------------*/
 
 import { readFileSync } from 'node:fs'
@@ -123,6 +134,50 @@ test.describe('@p1 perforce graph sync badge', () => {
       .toBe(V3)
 
     // The badge follows the new have revision without any manual refresh.
+    await expect(editor.locator('[data-id="4522"]')).toContainText('Synced')
+    await expect(editor.locator('[data-id="4521"]')).not.toContainText('Synced')
+    await expect(editor).toContainText('Synced to #4522')
+  })
+})
+
+// The shape journey 3 needs: the opened folder is a SUBDIRECTORY of the client,
+// and the client-wide sync point comes from a file outside it. `other/b.txt` is
+// plain (head == have == #1) and 4522 is the change that added it, so the two
+// scopes genuinely disagree about where pulled history ends.
+const SPLIT_SUBMITTED: readonly P4SubmittedSeed[] = [
+  SUBMITTED[0]!,
+  {
+    ...SUBMITTED[1]!,
+    files: [
+      ...SUBMITTED[1]!.files,
+      { relPath: 'other/b.txt', action: 'add' as const, rev: 1 },
+    ],
+  },
+]
+
+test.describe('@p1 perforce graph sync badge, folder inside a wider client', () => {
+  test.use({
+    p4Seeds: { files: [aTxt, { relPath: 'other/b.txt', content: 'b1\n' }], submitted: SPLIT_SUBMITTED },
+    openSubdir: 'src',
+  })
+
+  test('moves the badge to the client-wide sync point when the scope widens @regression', async ({
+    page,
+    workbench,
+    perforce,
+  }) => {
+    await openGraphWorkspace(page, workbench, perforce.openDir)
+    const editor = page.locator('[data-testid="perforceGraph-editor"]')
+    await expect(editor.locator('[data-id="4521"]')).toBeVisible()
+    await expect(editor.locator('[data-id="4522"]')).not.toContainText('Synced')
+
+    // `//...` takes no revision specifier at all, so this scope's probe asks the
+    // client root's wildcard instead — and that one sees `other/b.txt`, which IS
+    // synced at 4522. A badge still sitting on 4521 after this click means the
+    // probe never re-ran for the widened scope.
+    const scopeToggle = editor.getByLabel('Toggle repository scope')
+    await scopeToggle.click()
+    await expect(scopeToggle).toHaveAttribute('aria-pressed', 'true')
     await expect(editor.locator('[data-id="4522"]')).toContainText('Synced')
     await expect(editor.locator('[data-id="4521"]')).not.toContainText('Synced')
     await expect(editor).toContainText('Synced to #4522')

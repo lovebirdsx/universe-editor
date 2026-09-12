@@ -22,6 +22,8 @@ import {
 import {
   PerforceGraphCommands,
   type P4GraphChangeDetailsDto,
+  type P4GraphHaveChangeOptions,
+  type P4GraphHaveChangeResult,
   type P4GraphLoadResult,
   type P4GraphRepoDto,
   type P4GraphSyncScopeDto,
@@ -50,7 +52,7 @@ const SYNC_SCOPES: readonly P4GraphSyncScopeDto[] = [
   { name: 'src', path: 'X:/p4ws/main/src' },
 ]
 
-function makeResult(pendingCount = 0, haveChange: string | null = null): P4GraphLoadResult {
+function makeResult(pendingCount = 0): P4GraphLoadResult {
   return {
     changes: [
       {
@@ -76,7 +78,6 @@ function makeResult(pendingCount = 0, haveChange: string | null = null): P4Graph
     headClient: 'alice-ws',
     moreAvailable: false,
     pendingCount,
-    haveChange,
   }
 }
 
@@ -100,13 +101,17 @@ function makeDetails(): P4GraphChangeDetailsDto {
   }
 }
 
+/** `haveChange` is the answer the have-point probe gives — it comes from its own
+ *  command now (`getHaveChange`), not from the listing. */
 function makeCommandService(haveChange: string | null = null): ICommandService {
   return {
     _serviceBrand: undefined,
     executeCommand: vi.fn(async (id: string) => {
       switch (id) {
         case PerforceGraphCommands.getChanges:
-          return makeResult(0, haveChange)
+          return makeResult()
+        case PerforceGraphCommands.getHaveChange:
+          return { id: haveChange, failed: false } satisfies P4GraphHaveChangeResult
         case PerforceGraphCommands.getRepos:
           return [REPO]
         case PerforceGraphCommands.getChangeDetails:
@@ -671,7 +676,6 @@ describe('PerforceGraphEditor merged (multi-select) history', () => {
       headClient: null,
       moreAvailable: false,
       pendingCount: 0,
-      haveChange: null,
       error: 'multiClient',
     }
     renderMerged(multiClient)
@@ -839,6 +843,182 @@ describe('PerforceGraphEditor sync badge', () => {
   })
 })
 
+describe('PerforceGraphEditor sync point races', () => {
+  /**
+   * The probe answers on its own schedule (it is the one read whose cost is the
+   * size of the scope), so its answer can arrive after the graph has moved on.
+   * Renders with a hand-rolled command service whose have-point answers are
+   * settled by the test, one deferred per call.
+   */
+  function renderWithDeferredProbes(): {
+    container: HTMLElement
+    /** Settles the n-th `getHaveChange` call, in whatever order the test likes.
+     *  `failed` models a probe that could not answer at all (p4 failed or timed
+     *  out) — which is not the same as answering "nothing is synced". */
+    probes: ((id: string | null, failed?: boolean) => void)[]
+    /** The scope argument each probe was dispatched with (force vs. cached). */
+    probeArgs: P4GraphHaveChangeOptions[]
+  } {
+    const probes: ((id: string | null, failed?: boolean) => void)[] = []
+    const probeArgs: P4GraphHaveChangeOptions[] = []
+    const executeCommand = vi.fn((id: string, arg?: P4GraphHaveChangeOptions) => {
+      switch (id) {
+        case PerforceGraphCommands.getChanges:
+          return Promise.resolve(makeResult())
+        case PerforceGraphCommands.getHaveChange:
+          probeArgs.push(arg ?? {})
+          return new Promise<P4GraphHaveChangeResult>((resolve) =>
+            probes.push((haveId, failed = false) => resolve({ id: haveId, failed })),
+          )
+        case PerforceGraphCommands.getRepos:
+          return Promise.resolve([REPO])
+        case PerforceGraphCommands.getSyncScopes:
+          return Promise.resolve(SYNC_SCOPES)
+        default:
+          return Promise.resolve(undefined)
+      }
+    })
+    const services = new ServiceCollection()
+    services.set(ICommandService, {
+      _serviceBrand: undefined,
+      executeCommand,
+      onWillExecuteCommand: Event.None,
+      onDidExecuteCommand: Event.None,
+    } as unknown as ICommandService)
+    services.set(IScmService, makeScmService())
+    services.set(IStorageService, makeStorageService())
+    makeViewServices(services)
+    const instantiation = new InstantiationService(services)
+    const utils = render(
+      <ServicesContext.Provider value={instantiation}>
+        <PerforceGraphEditor input={{} as never} />
+      </ServicesContext.Provider>,
+    )
+    return { container: utils.container, probes, probeArgs }
+  }
+
+  /** Opens the row's context menu and runs "Get This Revision" — the get path
+   *  that re-reads the graph in the background (`revalidate`, no force). */
+  function getThisRevision(container: HTMLElement): void {
+    fireEvent.contextMenu(container.querySelector('[data-id="4519"]')!)
+    fireEvent.click(screen.getByText('Get This Revision'))
+  }
+
+  it('drops a probe whose scope changed under it', async () => {
+    const { container, probes } = renderWithDeferredProbes()
+    await flush()
+    expect(probes.length).toBe(1)
+
+    // Switch to whole-repo while the folder-scoped probe is still out: its answer
+    // describes a different scope and must not badge the new list.
+    fireEvent.click(screen.getByLabelText('Toggle repository scope'))
+    await flush()
+    expect(probes.length).toBe(2)
+
+    probes[0]!('4519')
+    await flush()
+    expect(container.querySelector('[data-id="4519"]')).toBeTruthy()
+    expect(screen.queryByText('Synced')).toBeNull()
+
+    probes[1]!('4521')
+    await flush()
+    expect(
+      within(container.querySelector('[data-id="4521"]') as HTMLElement).getByText('Synced'),
+    ).toBeTruthy()
+  })
+
+  it('lets the newest probe win when two answers resolve out of order', async () => {
+    const { container, probes } = renderWithDeferredProbes()
+    await flush()
+
+    // A get re-reads the graph and re-asks for the sync point (same scope).
+    fireEvent.contextMenu(container.querySelector('[data-id="4521"]')!)
+    fireEvent.click(screen.getByText('Get This Revision'))
+    await flush()
+    expect(probes.length).toBe(2)
+
+    probes[1]!('4521')
+    await flush()
+    expect(
+      within(container.querySelector('[data-id="4521"]') as HTMLElement).getByText('Synced'),
+    ).toBeTruthy()
+
+    // The pre-get answer lands last and is older news — it must not pull the
+    // badge back down to 4519.
+    probes[0]!('4519')
+    await flush()
+    expect(
+      within(container.querySelector('[data-id="4521"]') as HTMLElement).getByText('Synced'),
+    ).toBeTruthy()
+    expect(screen.queryByText(/Synced to #4519/)).toBeNull()
+  })
+
+  it('keeps the last badge when a probe fails to answer', async () => {
+    const { container, probes } = renderWithDeferredProbes()
+    await flush()
+    probes[0]!('4521')
+    await flush()
+    expect(screen.getByText(/Synced to #4521/)).toBeTruthy()
+
+    // The get re-asks and this time p4 times out. `failed` is not an answer: the
+    // previous id is still the best information available (only a sync moves the
+    // sync point, and the extension does not cache failures, so the next probe
+    // retries).
+    getThisRevision(container)
+    await flush()
+    expect(probes.length).toBe(2)
+    probes[1]!(null, true)
+    await flush()
+    expect(
+      within(container.querySelector('[data-id="4521"]') as HTMLElement).getByText('Synced'),
+    ).toBeTruthy()
+    expect(screen.getByText(/Synced to #4521/)).toBeTruthy()
+  })
+
+  it('drops the badge when the probe answers "nothing synced"', async () => {
+    // An empty have list IS an answer — `p4 sync` to an older changelist can move
+    // the sync point back, and a workspace can be reverted — so it must clear the
+    // badge rather than be mistaken for a failure.
+    const { container, probes } = renderWithDeferredProbes()
+    await flush()
+    probes[0]!('4521')
+    await flush()
+    expect(screen.getByText(/Synced to #4521/)).toBeTruthy()
+
+    fireEvent.click(screen.getByLabelText('Refresh'))
+    await flush()
+    expect(probes.length).toBe(2)
+    probes[1]!(null)
+    await flush()
+    expect(screen.queryByText(/Synced to #/)).toBeNull()
+    expect(screen.queryByText('Synced')).toBeNull()
+    expect(container.querySelectorAll('[data-id]').length).toBe(2)
+  })
+
+  it('re-runs the probe only for an explicit reload', async () => {
+    // Re-running it costs the size of the scope (tens of seconds over a whole
+    // workspace): the toolbar reload is a user asking for it, everything else
+    // shares the extension's cached answer.
+    const { container, probes, probeArgs } = renderWithDeferredProbes()
+    await flush()
+    probes[0]!('4521')
+    await flush()
+    expect(probeArgs[0]).toMatchObject({ force: true })
+
+    getThisRevision(container)
+    await flush()
+    expect(probeArgs[1]).toMatchObject({ force: false })
+    probes[1]!('4521')
+    await flush()
+
+    fireEvent.click(screen.getByLabelText('Refresh'))
+    await flush()
+    expect(probeArgs[2]).toMatchObject({ force: true })
+    probes[2]!('4521')
+    await flush()
+  })
+})
+
 describe('PerforceGraphEditor re-reads after a get', () => {
   function openChangeMenu(container: HTMLElement): void {
     fireEvent.contextMenu(container.querySelector('[data-id="4521"]')!)
@@ -852,6 +1032,12 @@ describe('PerforceGraphEditor re-reads after a get', () => {
    * auto-refresh rides on may never emit, and the sync badge keeps naming the old
    * row. Each case asserts the get reached the extension AND that a second
    * `getChanges` followed — the 5 payloads differ but share the one helper.
+   *
+   * The probe is asserted alongside it because the badge now hangs off its own
+   * command: a revalidate that re-reads the list but never re-asks for the sync
+   * point would leave the badge on the pre-get row, which is precisely the bug
+   * this table exists for. e2e cannot cover it (the SCM auto-refresh delivers a
+   * reload anyway), so this chain is the only guard.
    */
   const CASES: readonly {
     name: string
@@ -927,11 +1113,12 @@ describe('PerforceGraphEditor re-reads after a get', () => {
     it(`revalidates the graph once "${testCase.name}" resolves`, async () => {
       const { commandService, container } = testCase.render()
       await flush()
-      const getChangesCalls = (): number =>
+      const countCalls = (id: string): number =>
         (commandService.executeCommand as ReturnType<typeof vi.fn>).mock.calls.filter(
-          (c) => c[0] === PerforceGraphCommands.getChanges,
+          (c) => c[0] === id,
         ).length
-      expect(getChangesCalls()).toBe(1)
+      expect(countCalls(PerforceGraphCommands.getChanges)).toBe(1)
+      expect(countCalls(PerforceGraphCommands.getHaveChange)).toBe(1)
 
       testCase.act(container)
       await flush()
@@ -941,7 +1128,8 @@ describe('PerforceGraphEditor re-reads after a get', () => {
       }
 
       expect(commandService.executeCommand).toHaveBeenCalledWith(testCase.command, ...testCase.args)
-      expect(getChangesCalls()).toBe(2)
+      expect(countCalls(PerforceGraphCommands.getChanges)).toBe(2)
+      expect(countCalls(PerforceGraphCommands.getHaveChange)).toBe(2)
     })
   }
 })

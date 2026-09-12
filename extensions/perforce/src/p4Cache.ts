@@ -342,11 +342,15 @@ export const P4CacheNs = {
   opened: 'opened',
   /** `changes -s submitted -m N //...` — the graph history list (grows). */
   changesSubmitted: 'changesSubmitted',
-  /** `changes -s submitted -m 1 <filespec…>@<client>` — the newest change in the
+  /** `changes -s submitted -m 1 <filespec…>#have` — the newest change in the
    *  workspace's have list for the graph's scope (the "local sync point" the
-   *  graph badges). Moves on `p4 sync`, hence TTL — and deliberately the same TTL
-   *  as {@link changesSubmitted}: the two are read in one graph load, so they must
-   *  age out together or the badge would label a list it no longer matches. */
+   *  graph badges). Moves on `p4 sync`, which invalidates the whole ttl layer
+   *  ({@link P4Cache.invalidateWorkspace}), so the TTL only backstops syncs done
+   *  OUTSIDE the editor. Deliberately NOT coupled to {@link changesSubmitted}:
+   *  re-reading a listing is an indexed lookup (~200ms), while this probe must
+   *  resolve a have revision per file in scope (~40s over a million-file view) —
+   *  they are no longer read by the same call either, since the badge is patched
+   *  in by its own command after the list is on screen. */
   haveChange: 'haveChange',
   /** `describe -S -s <pendingCL>` — mutable because a shelf can be replaced. */
   shelvedDescribe: 'shelvedDescribe',
@@ -393,9 +397,12 @@ export function registerP4CacheNamespaces(cache: P4Cache, workspaceTtlMs: number
     kind: 'ttl',
     ttlMs: Math.max(workspaceTtlMs, 20_000),
   })
+  // The one read whose cost dwarfs what it answers: a listing refresh must never
+  // re-run it. Minute scale, not the listing's 20s floor — the value only moves
+  // on a sync, and every sync through the editor clears this layer outright.
   cache.register(P4CacheNs.haveChange, {
     kind: 'ttl',
-    ttlMs: Math.max(workspaceTtlMs, 20_000),
+    ttlMs: Math.max(workspaceTtlMs, 5 * 60_000),
   })
   cache.register(P4CacheNs.filelog, {
     kind: 'ttl',

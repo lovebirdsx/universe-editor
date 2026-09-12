@@ -188,14 +188,18 @@ function contentAt(known, rev) {
   return known.content
 }
 
-/** True when a change is in the client's have list: some file it touched is
- *  synced to at least the revision that change produced. `haveRev: 0` on a seed
- *  models a file that was never synced, which makes the have list empty — the
- *  state a fresh workspace starts in. */
-function changeInHaveList(state, id) {
+/** True when a change landed for THIS client inside `scopes`: some file the change
+ *  touched is both matched by those filespecs and synced up to the revision the
+ *  change produced. Both halves are per file on purpose — `#have` narrows the
+ *  filespec itself, so a file the filespec does not match is not part of the
+ *  question, even when the client happens to have it synced. `haveRev: 0` on a
+ *  seed models a file that was never synced, which makes the have list empty —
+ *  the state a fresh workspace starts in. */
+function changeInHaveList(state, id, scopes) {
   const touched = state.submitted?.[String(id)]
   if (!touched) return false
   return Object.keys(touched).some((depotFile) => {
+    if (!openedInScope(state, scopes, depotFile)) return false
     const known = state.files[depotFile]
     if (!known) return false
     const rev = Number(touched[depotFile].rev)
@@ -492,15 +496,12 @@ function main() {
         const prev = rest[idx - 1]
         return prev !== '-s' && prev !== '-c' && prev !== '-m'
       })
-      // `<spec>@<client>` is p4's have-list revision specifier: it asks which
-      // changes are already synced here (the graph's sync badge). Strip the suffix
-      // BEFORE scoping — left on, it matches no file and every such query would
-      // answer "nothing synced".
-      const clientSuffix = `@${state.client}`
-      const haveScoped = raw.some((f) => f.endsWith(clientSuffix))
-      const files = raw.map((f) =>
-        f.endsWith(clientSuffix) ? f.slice(0, -clientSuffix.length) : f,
-      )
+      // `<spec>#have` is p4's have-revision specifier: it asks which changes are
+      // already synced here (the graph's sync badge). Strip the suffix BEFORE
+      // scoping — left on, it matches no file and every such query would answer
+      // "nothing synced".
+      const haveScoped = raw.some((f) => f.endsWith('#have'))
+      const files = raw.map((f) => (f.endsWith('#have') ? f.slice(0, -'#have'.length) : f))
       if (status === 'submitted' || files.length > 0) {
         const max = argAfter(rest, '-m')
         const entries = Object.entries(state.changeMeta ?? {})
@@ -509,19 +510,16 @@ function main() {
         // A file/dir scope limits the listing to changes that touched it — real
         // `p4 changes <filespec…>` answers per depot path, so a scoped graph
         // (file/folder/merged history) must not show unrelated changes. A change
-        // seeded without a file set (the annotate-only seeds) can't be
-        // filtered, so it stays — blame's `changes -l <file>` relies on that.
-        const scoped =
-          files.length > 0
-            ? entries.filter(({ id }) => {
-                const touched = state.submitted?.[String(id)]
-                if (!touched || Object.keys(touched).length === 0) return true
-                return Object.keys(touched).some((depotFile) =>
-                  openedInScope(state, files, depotFile),
-                )
-              })
-            : entries
-        const listed = haveScoped ? scoped.filter(({ id }) => changeInHaveList(state, id)) : scoped
+        // seeded without a file set (the annotate-only seeds) can't be filtered,
+        // so it stays — blame's `changes -l <file>` relies on that. `#have` does
+        // NOT narrow the client globally: it narrows the very same filespec, so
+        // the scope test and the have test are asked about the same file.
+        const listed = entries.filter(({ id }) => {
+          const touched = state.submitted?.[String(id)]
+          if (!touched || Object.keys(touched).length === 0) return true
+          if (haveScoped) return changeInHaveList(state, id, files)
+          return Object.keys(touched).some((depotFile) => openedInScope(state, files, depotFile))
+        })
         const limited = max !== undefined ? listed.slice(0, Number(max)) : listed
         emit(
           limited.map(({ id, m }) => ({

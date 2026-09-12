@@ -61,6 +61,39 @@ export interface P4GraphLoadOptions {
   scopePaths?: readonly { path: string; isDirectory: boolean }[]
 }
 
+/**
+ * Argument for `perforce-graph.getHaveChange`. Same scope shape as the listing
+ * it annotates, so the id it answers with is one the loaded rows can carry.
+ * `maxChanges` is ignored (the probe is always `-m 1`).
+ *
+ * The resolved filespecs are the listing's own, with one deliberate exception:
+ * the `wholeRepo` listing asks for `//...`, which accepts no revision specifier
+ * at all, so its probe asks the client root's wildcard instead (see
+ * `docs/graph.md`). A client's have revisions are a subset of what `//...`
+ * lists, so that id is still one of the loaded rows.
+ */
+export interface P4GraphHaveChangeOptions extends P4GraphLoadOptions {
+  /**
+   * Re-run the probe even when a recent answer is cached. Set only by an
+   * explicit reload (the toolbar refresh): re-running it costs the size of the
+   * scope (tens of seconds over a whole workspace), while background
+   * revalidations deliberately share one long-lived answer.
+   */
+  force?: boolean
+}
+
+/** Answer of the graph's have-point probe (`perforce-graph.getHaveChange`). */
+export interface P4GraphHaveChangeResult {
+  /** Newest submitted change already in the workspace's have list for the
+   *  scope, or null when the scope holds nothing synced — a real answer. */
+  id: string | null
+  /** The probe could not answer at all (p4 failed or timed out, or the scope did
+   *  not resolve to a client). `id` is null then and carries no information: the
+   *  renderer keeps the badge it already had rather than dropping one that is
+   *  most likely still correct. */
+  failed: boolean
+}
+
 /** Result of `perforce-graph.getChanges`. */
 export interface P4GraphLoadResult {
   changes: P4GraphChangeDto[]
@@ -72,15 +105,6 @@ export interface P4GraphLoadResult {
   moreAvailable: boolean
   /** Number of files currently open in the workspace (the synthetic "pending" node). */
   pendingCount: number
-  /**
-   * Newest submitted change that is already in the workspace's have list for this
-   * scope — the "local sync point" the graph badges. Read from
-   * `p4 changes -s submitted -m 1 <filespec…>@<clientName>`, so a sync done
-   * outside the editor (P4V, the CLI) moves it too. Null when it cannot be
-   * determined (nothing ever synced, or the query failed) — the renderer then
-   * shows no badge.
-   */
-  haveChange: string | null
   /**
    * Root of the client this result was read from. The renderer echoes it back on
    * `getChangeDetails` / `openFileDiff` so those reads land on the same client —
@@ -216,6 +240,7 @@ export const PerforceGraphCommands = {
   getRepos: 'perforce-graph.getRepos',
   setRepo: 'perforce-graph.setRepo',
   getChanges: 'perforce-graph.getChanges',
+  getHaveChange: 'perforce-graph.getHaveChange',
   getChangeDetails: 'perforce-graph.getChangeDetails',
   getPendingChanges: 'perforce-graph.getPendingChanges',
   openFileDiff: 'perforce-graph.openFileDiff',

@@ -24,7 +24,10 @@ import {
   type SourceControlResourceState,
   type SourceControlSupplementaryDecoration,
 } from '@universe-editor/extension-api'
-import type { WorkingTreeChangeDto } from '@universe-editor/extensions-common'
+import type {
+  P4GraphHaveChangeResult,
+  WorkingTreeChangeDto,
+} from '@universe-editor/extensions-common'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { chmod, readFile, readdir, stat, writeFile } from 'node:fs/promises'
@@ -393,14 +396,19 @@ const CHECK_IGNORE_TIMEOUT_MS = 20_000
 const CHECK_BEHIND_TIMEOUT_MS = 20_000
 
 /**
- * Budget for the graph's have-point probe (`p4 changes -m 1 <spec>@<client>`).
- * Interactive priority — it decides a first-screen badge, and a background slot
- * would make its arrival unpredictable — but a far tighter clock than
- * {@link INTERACTIVE_EXEC}: it is auxiliary information riding in the same
- * `Promise.all` as the history list, so a slow server may cost the first screen
- * this budget and no more. A healthy `changes -m 1` is an indexed lookup.
+ * Budget for the graph's have-point probe (`p4 changes -m 1 <spec>#have`).
+ *
+ * Deliberately generous, and background: the probe's cost is the SIZE of the
+ * scope, not of the answer — the revision specifier has to be resolved for every
+ * file under the filespecs. Measured against a real million-file workspace:
+ * ~40s for the workspace root, ~340ms for a narrow subtree, ~180ms for one file.
+ * The old 5s interactive budget was therefore not a bound on a slow probe but a
+ * timeout on every probe, and because it rode in the listing's `Promise.all` it
+ * also held the first screen. It is now its own command (the renderer asks once
+ * the list is up), so a slow answer costs only the badge's arrival and this
+ * budget's only job is to kill a genuinely wedged p4.
  */
-const HAVE_CHANGE_EXEC: P4ExecOptions = { priority: 'interactive', timeoutMs: 5_000 }
+const HAVE_CHANGE_EXEC: P4ExecOptions = { priority: 'background', timeoutMs: 60_000 }
 
 /**
  * Default ceiling for one directory batch of the background reconcile scan
@@ -5551,73 +5559,90 @@ export class PerforceClient {
 
   /**
    * The newest submitted change that is already in this workspace's have list for
-   * `scopes` — the graph's "local sync point". Reads `@<clientName>`, p4's
-   * have-list revision specifier, so a get done outside the editor (P4V, the CLI)
-   * counts too.
+   * `scopes` — the graph's "local sync point". Reads `#have`, p4's have-revision
+   * specifier, so a get done outside the editor (P4V, the CLI) counts too.
+   *
+   * `#have` rather than `@<clientName>` because the two answer identically (both
+   * resolve to the revision in the have list — verified against a real server)
+   * while `@client` first materializes the client's ENTIRE have list: on a
+   * million-file workspace that is ~6s before any path is touched, and ~15s for a
+   * scope `#have` answers in 340ms.
    *
    * `scopes` must be the SAME filespecs the caller listed with: the renderer
    * badges the row whose id comes back, and a differently scoped probe can name a
-   * change the list does not contain (badge silently never shows).
+   * change the list does not contain (badge silently never shows). That also
+   * means the caller owes this method a filespec a revision specifier may be
+   * appended to — `//...` takes none (p4 rejects it with `Path '…' is not under
+   * client's root`), so the whole-repo graph hands over the client root's own
+   * wildcard instead.
    *
-   * Returns null whenever the answer cannot be established — nothing synced for
-   * the scope yet, or the query failed/timed out — because the badge is an
-   * enhancement riding alongside the listing: it must never surface an error nor
-   * hold up the history.
+   * Answers `failed: true` whenever the answer cannot be established — the query
+   * failed/timed out, or there is no filespec to ask about — because the badge is
+   * an annotation on the listing: it must never surface an error nor hold up the
+   * history, and a failure must not be mistaken for "nothing synced here" (the
+   * caller keeps its previous badge instead of dropping a correct one).
+   *
+   * `force` re-runs a cached answer; only an explicit reload should ask for that.
    */
-  async getGraphHaveChange(scopes: readonly string[]): Promise<string | null> {
-    // A bare `@` means nothing, and the suffix position is the only place a
-    // client name may appear (see below) — so refuse rather than emit one.
-    if (this._clientName.length === 0) return null
-    // No filespec means no place to hang `@<client>`, so the command would
-    // degrade to a depot-global `-m 1` — the newest change anywhere, which is
-    // the opposite of a have point. Worse, it would answer successfully and thus
-    // cache. Callers shouldn't produce an empty list (a selection that scopes to
-    // nothing takes the whole-repo branch upstream), so this is a floor, not a
-    // case to handle gracefully.
-    if (scopes.length === 0) return null
+  async getGraphHaveChange(
+    scopes: readonly string[],
+    force = false,
+  ): Promise<P4GraphHaveChangeResult> {
+    // No filespec means no place to hang `#have`, so the command would degrade to
+    // a depot-global `-m 1` — the newest change anywhere, which is the opposite of
+    // a have point. Worse, it would answer successfully and thus cache. Callers
+    // shouldn't produce an empty list (a selection that scopes to nothing takes
+    // the whole-repo branch upstream), so this is a floor, not a case to handle
+    // gracefully.
+    if (scopes.length === 0) return { id: null, failed: true }
     // Sorted key, same reason as `getGraphChanges`: the caller's selection order
     // must not fan the same probe into several cache entries. No `maxChanges`
     // component — this is always `-m 1`.
     const key = [...scopes].sort().join('\n')
+    if (force) this._cache.invalidate(P4CacheNs.haveChange, key)
     try {
       const json = await this._cache.wrap(P4CacheNs.haveChange, key, async () => {
-        // The client name is appended AFTER escaping: `escapeFilespecPath` turns a
-        // literal `@` in a path into `%40`, so the suffix can only be added here
-        // (same rule as `buildForceGetFilespecs`'s `#rev`). The name itself needs
-        // no escaping — p4 restricts client names to `[A-Za-z0-9_.-]`, none of
-        // which are filespec metacharacters; escaping it would corrupt a `%`.
-        const specs = scopes.map((s) => `${s}@${this._clientName}`)
+        // The suffix is appended AFTER escaping: `escapeFilespecPath` turns a
+        // literal `#` in a path into `%23`, so this is the only position where
+        // `#have` can be added without a path's own `#` being read as the
+        // separator (same rule as `buildForceGetFilespecs`'s `#rev`).
+        const specs = scopes.map((s) => `${s}#have`)
+        const started = Date.now()
         const res = await this._p4.execRecords(
           ['changes', '-s', 'submitted', '-m', '1', ...specs],
           HAVE_CHANGE_EXEC,
         )
+        const elapsed = Date.now() - started
         if (res.result.exitCode !== 0) {
           const stderr = res.result.stderr.trim()
           this._log?.(
-            `[perforce] graph have point query failed (exit ${res.result.exitCode})${
+            `[perforce] graph have point query failed (exit ${res.result.exitCode}, ${elapsed}ms)${
               stderr ? `: ${stderr.slice(0, 200)}` : ''
             }; no sync badge`,
           )
           // undefined = "don't cache": a failure must be retried, not remembered.
           return undefined
         }
-        // An empty answer IS an answer ("nothing synced for this scope"), so it
-        // caches: otherwise every revalidate pays a doomed round trip.
+        // An empty answer IS an answer ("nothing synced for this scope") — and p4
+        // reports it as a clean exit with no records, including for a filespec
+        // that matches nothing at all (measured: 184ms, exit 0). So it caches:
+        // otherwise every revalidate pays a doomed round trip.
         const id = parseLatestChangeId(res.records)
         this._log?.(
-          `[perforce] graph have point: ${id ? `#${id}` : 'none'} (${scopes.length} filespec(s))`,
+          `[perforce] graph have point: ${id ? `#${id}` : 'none'} (${scopes.length} filespec(s), ${elapsed}ms)`,
         )
         return JSON.stringify({ id })
       })
-      return json === undefined ? null : (JSON.parse(json) as { id: string | null }).id
+      if (json === undefined) return { id: null, failed: true }
+      return { id: (JSON.parse(json) as { id: string | null }).id, failed: false }
     } catch (err) {
-      // `P4Service` only rejects when the spawn itself fails (p4 missing). This
-      // runs inside the graph load's `Promise.all`, where a throw would take the
-      // whole listing down with it.
+      // `P4Service` only rejects when the spawn itself fails (p4 missing) — and
+      // the caller awaits this inside its own command, where a throw would surface
+      // as a rejected `executeCommand`.
       this._log?.(
         `[perforce] graph have point skipped: ${err instanceof Error ? err.message : String(err)}`,
       )
-      return null
+      return { id: null, failed: true }
     }
   }
 
