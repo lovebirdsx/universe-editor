@@ -72,6 +72,7 @@ export const TEMP_PREFIXES: readonly string[] = [
   'ext-mgmt-',
   'git-submodule-sync-',
   'p4-dirEvt-',
+  'p4-ledger-',
   'p4cache-',
   'tracker-test-',
   'ued-',
