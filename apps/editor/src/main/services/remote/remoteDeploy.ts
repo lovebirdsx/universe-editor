@@ -611,6 +611,9 @@ export const defaultRemoteRunner: RemoteRunner = (command, args, options) =>
       [...args],
       {
         shell: false,
+        // ssh/scp/tar are console programs and the Electron main process owns no
+        // console to hand down: without this Windows flashes a window per call.
+        windowsHide: true,
         encoding: 'utf8',
         maxBuffer: 64 * 1024 * 1024,
         timeout: options?.timeoutMs ?? 600_000,

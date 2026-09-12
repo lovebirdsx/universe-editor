@@ -40,7 +40,13 @@ const defaultWslExecFile: WslExecFile = (file, args, options) =>
     execFile(
       file,
       [...args],
-      { encoding: options.encoding, timeout: options.timeout, env: options.env, shell: false },
+      {
+        encoding: options.encoding,
+        timeout: options.timeout,
+        env: options.env,
+        shell: false,
+        windowsHide: true,
+      },
       (error, stdout) => {
         if (error) reject(error)
         else resolve(stdout)

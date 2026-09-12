@@ -57,7 +57,7 @@
 - [插件↔编辑器版本依赖契约](extension-editor-version-contract.md) — engines=编辑器版本，不兼容=禁用+通知/市场选版/发布拦截；大坑=main 取版本一律走 getAppVersion()
 - [ext-host 无声失败治理](extension-host-silent-failure-hardening.md) — 激活期 getActiveTextEditor 立即 undefined+订阅补发+rejection 上浮；原则=API getter 永不无限挂起
 - [remote 工作区用户扩展支持](remote-user-extensions-management.md) — ExtensionManagement channel(协议v6)+引擎沉 node-services;本地验签+分片上传远端装;目录单一真相 serverPaths;listBuiltin 不路由
-- [Windows SSH 远程主机支持](remote-windows-ssh-support.md) — uname→cmd 探测+cmd 命令族+install.js 独立 entry+WMI 逃 sshd job kill；远端路径展示一律过 toDisplayPath
+- [Windows SSH 远程主机支持](remote-windows-ssh-support.md) — uname→cmd 探测+cmd 命令族+install.js 独立 entry+WMI 逃 sshd job kill（daemon 无窗口须 DETACHED_PROCESS+类对象 startup info，CREATE_NO_WINDOW 非法值会静默降级，conhost 子进程=有控制台≠有窗口，判弹窗只能靠 EnumWindows）；远端路径展示一律过 toDisplayPath
 
 ## 性能 / 疑难根因
 

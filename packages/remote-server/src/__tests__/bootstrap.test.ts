@@ -6,7 +6,7 @@
  *  any process that survived so no daemon leaks past the suite.
  *--------------------------------------------------------------------------------------------*/
 
-import { spawn, type ChildProcess } from 'node:child_process'
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { afterEach, beforeAll, afterAll, describe, expect, it } from 'vitest'
@@ -19,6 +19,27 @@ const INFO_PREFIX = 'UNIVERSE_REMOTE_DAEMON_INFO='
 let built: BuiltBootstrap
 const trackedChildren: ChildProcess[] = []
 const tempDirs: string[] = []
+// `start` hands the daemon to the WMI provider host, so it is not our child and
+// trackedChildren cannot reach it. An interrupted run skips every vitest teardown
+// hook, and a synchronous exit hook is all that is left to reclaim it.
+const daemonPids = new Set<number>()
+
+process.once('exit', () => {
+  for (const pid of daemonPids) {
+    try {
+      if (process.platform === 'win32') {
+        execFileSync('taskkill', ['/pid', String(pid), '/t', '/f'], {
+          stdio: 'ignore',
+          windowsHide: true,
+        })
+      } else {
+        process.kill(pid, 'SIGKILL')
+      }
+    } catch {
+      // already gone
+    }
+  }
+})
 
 beforeAll(async () => {
   built = await buildBootstrapBundle()
@@ -63,6 +84,32 @@ function isAlive(pid: number): boolean {
   }
 }
 
+/**
+ * Windows gives a console-subsystem process a conhost.exe child iff it owns a
+ * console — and a console owned by a windowless daemon is a terminal on the user's
+ * desktop, which is the regression being guarded here. The WMI provider host that
+ * creates the daemon has no console of its own to hand down, so a daemon started
+ * with the right creation flags has none to pass on either.
+ */
+function conhostChildrenOf(pid: number): number[] {
+  if (process.platform !== 'win32') return []
+  const query =
+    `@(Get-CimInstance Win32_Process -Filter "ParentProcessId=${pid} AND Name='conhost.exe'")` +
+    ' | ForEach-Object { $_.ProcessId }'
+  const out = String(
+    execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', query], {
+      encoding: 'utf8',
+      timeout: 15_000,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }),
+  )
+  return out
+    .split(/\r?\n/)
+    .map((line) => Number(line.trim()))
+    .filter((n) => Number.isInteger(n) && n > 0)
+}
+
 async function waitForExit(child: ChildProcess): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return
   await new Promise<void>((resolve) => child.once('exit', () => resolve()))
@@ -78,6 +125,7 @@ function runBootstrap(args: string[], dataDir: string): Promise<RunResult> {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [built.bootstrapPath, ...args, '--data-dir', dataDir], {
       stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
     })
     trackedChildren.push(child)
     let stdout = ''
@@ -97,6 +145,7 @@ async function spawnServe(
 ): Promise<{ child: ChildProcess; info: IRemoteDaemonInfo }> {
   const child = spawn(process.execPath, [built.bootstrapPath, 'serve', '--data-dir', dataDir], {
     stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
   })
   trackedChildren.push(child)
 
@@ -129,6 +178,7 @@ function parseInfo(stdout: string): IRemoteDaemonInfo {
 function spawnPlaceholderProcess(): ChildProcess {
   const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60_000)'], {
     stdio: 'ignore',
+    windowsHide: true,
   })
   trackedChildren.push(child)
   return child
@@ -233,8 +283,13 @@ describe('bootstrap subcommands', () => {
 
     const started = await runBootstrap(['start'], dataDir)
     expect(started.code).toBe(0)
+    // Any `ue:wmi-*` marker means the launch degraded to a windowed daemon.
+    expect(started.stderr).not.toContain('ue:wmi-')
     const info = parseInfo(started.stdout)
     expect(info.port).toBeGreaterThan(0)
+    daemonPids.add(info.pid)
+
+    expect(conhostChildrenOf(info.pid)).toEqual([])
 
     // Give the detached child a moment to be reachable, then verify + stop.
     const hit = await runBootstrap(['check'], dataDir)
@@ -244,6 +299,7 @@ describe('bootstrap subcommands', () => {
     const stopped = await runBootstrap(['stop'], dataDir)
     expect(stopped.code).toBe(0)
     expect(isAlive(info.pid)).toBe(false)
+    daemonPids.delete(info.pid)
   }, 30_000)
 
   it('start fails fast against a live daemon with a stale protocol version', async () => {

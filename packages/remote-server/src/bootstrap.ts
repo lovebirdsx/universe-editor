@@ -203,13 +203,25 @@ function toWindowsCommandLine(argv: readonly string[]): string {
  * CREATE_BREAKAWAY_FROM_JOB — vscode's rust CLI can). Win32_Process.Create runs
  * the daemon from the WMI provider host instead, outside that job.
  *
- * That host owns no console, so a daemon created without Win32_ProcessStartup is
- * handed a fresh *visible* console window by Windows — a stray terminal sitting
- * on the user's desktop for as long as the daemon runs (tests, whose `start` case
- * spawns a real daemon on an interactive session, hit this every run).
- * CREATE_NO_WINDOW suppresses the console entirely; the daemon's diagnostics
- * already go to server.log. A host that refuses the startup info still gets a
- * windowed daemon rather than a failed connection, and says so on stderr.
+ * That host owns no console, so Windows hands the daemon a fresh *visible* console
+ * window unless the creation flags forbid it — a stray terminal sitting on the
+ * user's desktop for as long as the daemon runs (tests, whose `start` case spawns
+ * a real daemon on an interactive session, hit this every run).
+ *
+ * DETACHED_PROCESS (0x8) is the flag that works, measured on Windows 10 19045:
+ * Create reports ReturnValue=0 and the daemon owns no console at all.
+ * CREATE_NO_WINDOW (0x08000000) is *not* a legal Win32_ProcessStartup.CreateFlags
+ * value — Create rejects it with ReturnValue=21 (invalid parameter), which the
+ * previous revision then degraded into a windowed daemon without a word on stderr.
+ * ShowWindow=0 is no better: it hides a console the process still owns. The startup
+ * info is an embedded instance, so it is built from the class object, which carries
+ * the full schema where a bare New-CimInstance instance holds only the properties
+ * you set.
+ *
+ * The daemon's diagnostics already go to server.log, so a host that refuses the
+ * startup info still gets a working daemon rather than a failed connection — but
+ * every degraded launch writes a `ue:wmi-*` marker to stderr (forwarded by
+ * spawnDaemonWindows) so a windowed fallback can never be silent again.
  */
 export function buildWindowsDaemonLaunch(argv: readonly string[]): {
   file: string
@@ -218,10 +230,14 @@ export function buildWindowsDaemonLaunch(argv: readonly string[]): {
   const commandLine = toWindowsCommandLine(argv).replace(/'/g, "''")
   const script = [
     `$cmd = '${commandLine}'`,
-    `$startup = @{ CommandLine = $cmd }`,
-    `try { $startup['ProcessStartupInformation'] = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ CreateFlags = [uint32]0x08000000 } } catch { [Console]::Error.WriteLine('ue:startup-info-unavailable') }`,
-    `$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments $startup`,
-    `if ($null -eq $r -or $r.ReturnValue -ne 0) { $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd } }`,
+    `$r = $null`,
+    `try { $si = [ciminstance]::new((Get-CimClass -ClassName Win32_ProcessStartup)); $si.CreateFlags = [uint32]0x00000008; $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd; ProcessStartupInformation = $si } } catch { [Console]::Error.WriteLine('ue:wmi-startup-info-failed'); [Console]::Error.WriteLine($_.Exception.Message) }`,
+    // A non-terminating failure leaves $r null and a rejected flag comes back as a
+    // non-zero ReturnValue; both mean the daemon about to be created owns a console.
+    `if ($null -eq $r -or $r.ReturnValue -ne 0) { [Console]::Error.WriteLine('ue:wmi-startup-info-failed'); $r = $null }`,
+    // Announced before the call: even if this one throws, the reason for the window
+    // that follows is on stderr.
+    `if ($null -eq $r) { [Console]::Error.WriteLine('ue:wmi-windowed-fallback'); $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd } }`,
     // A failed Create leaves $r null, and `exit $null` is exit code 0 — which would
     // read as success and turn into a 10s "timed out waiting for server.json".
     `if ($null -eq $r) { exit 1 }`,
@@ -445,6 +461,13 @@ function printUsage(): void {
 }
 
 async function main(): Promise<void> {
+  // serve is created with DETACHED_PROCESS: it owns no console, so fd 1/2 can be
+  // invalid and a write surfaces as an async 'error' — unhandled, that is an
+  // uncaughtException and the daemon dies at its first log line. Diagnostics already
+  // go to server.log; the console copies are allowed to fail.
+  process.stdout.on('error', () => {})
+  process.stderr.on('error', () => {})
+
   const argv = process.argv.slice(2)
   const command = argv[0]
   if (command === undefined || command === '--help' || command === '-h' || command === 'help') {

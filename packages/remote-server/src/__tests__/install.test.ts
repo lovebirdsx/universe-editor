@@ -164,24 +164,28 @@ describe('buildWindowsDaemonLaunch', () => {
     )
   })
 
-  it('passes CREATE_NO_WINDOW so the consoleless WMI provider host does not give the daemon a window', () => {
+  it('asks for DETACHED_PROCESS so the consoleless WMI provider host gives no window', () => {
     const launch = buildWindowsDaemonLaunch(['node.exe', 'bootstrap.js', 'serve'])
 
     const script = decodeScript(launch.args)
-    expect(script).toContain(
-      'New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ CreateFlags = [uint32]0x08000000 }',
-    )
-    expect(script).toContain("$startup['ProcessStartupInformation'] = New-CimInstance")
-    expect(script).toContain('-Arguments $startup')
+    // The startup info is an embedded instance: built from the class object it carries
+    // the whole schema, where a bare New-CimInstance holds only the properties set.
+    expect(script).toContain('[ciminstance]::new((Get-CimClass -ClassName Win32_ProcessStartup))')
+    expect(script).toContain('ProcessStartupInformation = $si')
+    // DETACHED_PROCESS (0x8) and nothing else: Create rejects CREATE_NO_WINDOW with
+    // ReturnValue=21 (measured), and ShowWindow=0 would leave the console in place.
+    expect(script).toContain('$si.CreateFlags = [uint32]0x00000008')
+    expect(script).not.toContain('ShowWindow')
   })
 
-  it('retries without the startup info so a host that rejects it still gets a daemon', () => {
+  it('marks every degraded launch on stderr so a windowed daemon is never silent', () => {
     const launch = buildWindowsDaemonLaunch(['node.exe', 'bootstrap.js', 'serve'])
 
     const script = decodeScript(launch.args)
-    // The marker makes a windowed fallback visible instead of silently degrading.
-    expect(script).toContain("[Console]::Error.WriteLine('ue:startup-info-unavailable')")
-    expect(script).toContain('if ($null -eq $r -or $r.ReturnValue -ne 0)')
+    // Both a rejected startup info and a non-terminating failure mark themselves…
+    expect(script).toContain("[Console]::Error.WriteLine('ue:wmi-startup-info-failed')")
+    // …and the windowed fallback announces itself before it runs.
+    expect(script).toContain("[Console]::Error.WriteLine('ue:wmi-windowed-fallback')")
     expect(script).toContain('-Arguments @{ CommandLine = $cmd }')
     // `exit $null` is 0, which would look like success and stall on the poll.
     expect(script).toContain('if ($null -eq $r) { exit 1 }')
