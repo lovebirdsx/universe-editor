@@ -822,6 +822,7 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       return s.messages.get().map((m) => ({
         role: m.role,
         text: m.text,
+        streaming: m.streaming,
         ...(m.selectionContexts !== undefined && m.selectionContexts.length > 0
           ? {
               selectionLabels: m.selectionContexts.map(

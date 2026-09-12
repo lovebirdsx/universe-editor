@@ -67,11 +67,13 @@ test.describe('@p0 agents selection attachment', () => {
     await page.keyboard.press('Enter')
     await expect
       .poll(() => page.evaluate(() => window.__E2E__!.getAcpMessages()), { timeout: 5000 })
-      .toContainEqual({
-        role: 'user',
-        text: 'Explain this selection',
-        selectionLabels: ['selection.ts:2'],
-      })
+      .toContainEqual(
+        expect.objectContaining({
+          role: 'user',
+          text: 'Explain this selection',
+          selectionLabels: ['selection.ts:2'],
+        }),
+      )
     await expect(page.getByTestId('acp-selection-context-chip')).toHaveText('selection.ts:2')
 
     // 等 echo 回复落地再 reload：上面的 user 消息是本地乐观上屏，不等 attach 完成；
@@ -92,11 +94,13 @@ test.describe('@p0 agents selection attachment', () => {
     expect(afterReload).not.toBe(beforeReload)
     await expect
       .poll(() => page.evaluate(() => window.__E2E__!.getAcpMessages()), { timeout: 10000 })
-      .toContainEqual({
-        role: 'user',
-        text: 'Explain this selection',
-        selectionLabels: ['selection.ts:2'],
-      })
+      .toContainEqual(
+        expect.objectContaining({
+          role: 'user',
+          text: 'Explain this selection',
+          selectionLabels: ['selection.ts:2'],
+        }),
+      )
     await expect(page.getByTestId('acp-selection-context-chip')).toHaveText('selection.ts:2')
   })
 })

@@ -897,10 +897,16 @@ export interface E2EProbe {
    * Multi-line content loses its line breaks (view lines concatenate).
    */
   getAcpVisiblePromptText(): string
-  /** Snapshot of the active session's messages, including attached selection labels. */
+  /**
+   * Snapshot of the active session's messages, including attached selection labels.
+   * `streaming` is the live flag: work counters a stream produces (parse, tokenize,
+   * seals) are cleared when the message seals, so a spec that asserts on them must
+   * wait for this to be true rather than race the agent's end-of-turn.
+   */
   getAcpMessages(): ReadonlyArray<{
     role: string
     text: string
+    streaming: boolean
     selectionLabels?: readonly string[]
   }>
   /** Snapshot of the active session's tool calls (id, title, status, text). */

@@ -45,10 +45,10 @@ test.describe('@p1 outline ↔ agent session selection sync', () => {
     await expect
       .poll(() => page.evaluate(() => window.__E2E__!.getAcpMessages()), { timeout: 8000 })
       .toEqual([
-        { role: 'user', text: 'alpha' },
-        { role: 'agent', text: 'echo: alpha' },
-        { role: 'user', text: 'bravo' },
-        { role: 'agent', text: 'echo: bravo' },
+        { role: 'user', text: 'alpha', streaming: false },
+        { role: 'agent', text: 'echo: alpha', streaming: false },
+        { role: 'user', text: 'bravo', streaming: false },
+        { role: 'agent', text: 'echo: bravo', streaming: false },
       ])
 
     // Reveal the Outline view so it renders and its service stays attached.

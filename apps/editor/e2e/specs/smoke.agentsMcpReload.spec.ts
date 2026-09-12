@@ -89,8 +89,8 @@ test.describe('@p1 agents session MCP reload', () => {
     await expect
       .poll(() => page.evaluate(() => window.__E2E__!.getAcpMessages()), { timeout: 5000 })
       .toEqual([
-        { role: 'user', text: 'hello' },
-        { role: 'agent', text: 'echo: hello' },
+        { role: 'user', text: 'hello', streaming: false },
+        { role: 'agent', text: 'echo: hello', streaming: false },
       ])
 
     await page.evaluate(() => window.__E2E__!.setAcpSessionMcpServers(['web']))

@@ -180,8 +180,6 @@ export function MarkdownView({
   )
 }
 
-const NO_NODES: readonly MdNode[] = []
-
 /**
  * Parse markdown to nodes, incrementally when `streaming`. The incremental cache
  * lives in a ref tied to this component instance; it self-heals if the text ever
@@ -191,6 +189,11 @@ const NO_NODES: readonly MdNode[] = []
  * that head `nodes`. Keeping that identity across renders is what lets the sealed
  * half skip reconciliation entirely; handing React `nodes.slice(0, n)` instead
  * would allocate a fresh array every frame and lose the whole win.
+ *
+ * The cache is read on the static branch too: a sealed message renders through
+ * plain `parseMarkdown`, but the sealing progress it reached is what the `gauge=`
+ * readings report, and reporting 0 once a stream ends would say "nothing was ever
+ * sealed" about the very stream the reading exists for.
  */
 function useMarkdownNodes(
   text: string,
@@ -207,8 +210,14 @@ function useMarkdownNodes(
     () => (streaming ? undefined : parseMarkdown(text, { frontmatter })),
     [text, streaming, frontmatter],
   )
-  if (staticNodes !== undefined) return { nodes: staticNodes, sealedNodes: NO_NODES, tailChars: 0 }
   const cache = cacheRef.current
+  if (staticNodes !== undefined) {
+    return {
+      nodes: staticNodes,
+      sealedNodes: cache.sealedNodes,
+      tailChars: text.length - cache.sealedText.length,
+    }
+  }
   const nodes = parseMarkdownStreaming(text, cache)
   return { nodes, sealedNodes: cache.sealedNodes, tailChars: text.length - cache.sealedText.length }
 }

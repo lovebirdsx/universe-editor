@@ -93,6 +93,26 @@ async function waitForThought(page: Page, expected: string): Promise<void> {
     .toBe(expected.length)
 }
 
+/**
+ * Wait until the thought message is marked streaming. The counters read next describe
+ * a live stream — they are drained on every read, so time spent after the stream only
+ * thins them out. The agent ends the turn (sealing the message) 500ms after the last
+ * chunk, and `waitForThought` polls with the default intervals, up to 1s apart, so it
+ * can report the text complete only after that hold has already expired; the flag is
+ * the only signal that says the read below is still inside the stream.
+ */
+async function waitForStreaming(page: Page): Promise<void> {
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() =>
+          window.__E2E__!.getAcpMessages().some((m) => m.role === 'thought' && m.streaming),
+        ),
+      { timeout: 20000 },
+    )
+    .toBe(true)
+}
+
 test.describe.configure({ mode: 'default' })
 
 test.describe('@p1 acp streaming render accounting', () => {
@@ -104,9 +124,11 @@ test.describe('@p1 acp streaming render accounting', () => {
     const expected = thoughtText(COUNT, CHUNK, false)
     const running = drivePrompt(page, `emit-thought:${COUNT}x1`)
 
-    // The echo agent holds the turn open briefly after the last chunk, so the reading
-    // is taken while the message is still streaming — sealing clears this state.
+    // The echo agent holds the turn open briefly after the last chunk, and the wait
+    // below pins the reading inside that window — the flow counters are drained per
+    // read, so time spent after the stream would only thin them out.
     await waitForThought(page, expected)
+    await waitForStreaming(page)
     const streaming = await page.evaluate(() => window.__E2E__!.getHeapFlowCounters())
     await running
 
@@ -126,7 +148,9 @@ test.describe('@p1 acp streaming render accounting', () => {
     expect(mdparse.chars, JSON.stringify(mdparse)).toBeLessThan(
       expected.length + 16 * CHUNK * mdparse.calls,
     )
-    // The sealed cache really did fill — a stale render can only under-report it.
+    // The sealed cache really did fill. Read while streaming, this is the live value;
+    // it also guards the seal path, where the parse cache holds the readings the gauge
+    // reports — a static render reporting 0 would say nothing ever sealed.
     expect(gaugeOf(streaming, 'sealednodes')).toBeGreaterThan(0)
     // Nothing in this message is a fence, so nothing should have been tokenized.
     expect(flowOf(streaming, 'colorize').chars).toBe(0)
@@ -147,6 +171,7 @@ test.describe('@p1 acp streaming render accounting', () => {
     const running = drivePrompt(page, `emit-thought:${COUNT}x1,fence`)
 
     await waitForThought(page, expected)
+    await waitForStreaming(page)
     const streaming = await page.evaluate(() => window.__E2E__!.getHeapFlowCounters())
 
     expect(flowOf(streaming, 'colorize').chars).toBe(0)

@@ -45,8 +45,8 @@ test.describe('@p0 agents', () => {
     await expect
       .poll(() => page.evaluate(() => window.__E2E__!.getAcpMessages()), { timeout: 5000 })
       .toEqual([
-        { role: 'user', text: 'hello' },
-        { role: 'agent', text: 'echo: hello' },
+        { role: 'user', text: 'hello', streaming: false },
+        { role: 'agent', text: 'echo: hello', streaming: false },
       ])
 
     // 6. 工具调用应在 prompt 完成后处于 completed 状态。

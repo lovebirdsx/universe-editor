@@ -59,8 +59,8 @@ test.describe('window close releases workspace folder', () => {
     await expect
       .poll(() => page.evaluate(() => window.__E2E__!.getAcpMessages()), { timeout: 5000 })
       .toEqual([
-        { role: 'user', text: 'hello' },
-        { role: 'agent', text: 'echo: hello' },
+        { role: 'user', text: 'hello', streaming: false },
+        { role: 'agent', text: 'echo: hello', streaming: false },
       ])
 
     // 第二窗口保活：Windows 上最后一个窗口关闭即 app.quit()，锁便无从观察。

@@ -84,6 +84,8 @@
 | `flow=` | **区间增量**，上报即清零；`name:calls、chars` | `mdparse` / `mdreseal` / `colorize` / `colorize.skip` / `materialize` |
 | `gauge=` | **绝对值**，取最近一次渲染写入；0 值省略 | `domnodes` / `astnodes` / `sealednodes` / `tailchars` |
 
+`sealednodes` / `tailchars` 记的是**最近一条流式消息**的密封进度（`MarkdownView` 的解析缓存本身），消息 seal 后不归零——它描述的正是「这条流结束时的代价」，seal 一下就把读数抹成 0 等于让这条量在最该看的时候消失。
+
 读法（判定优先于数值，同 `holders`）：
 
 - `mdparse.chars` 记的是**真正交给解析器的字符数**，不是消息长度。密封生效时它约等于消息长度（每个字符只解析一次）；它与 `calls` 同步放大则说明每次渲染都在重解析。**`mdreseal.calls` 跟涨 `mdparse.calls` 是「这条消息从未密封」的直接证据**——即 `lastSafeSplit` 找不到可切边界。
