@@ -116,12 +116,44 @@ describe('lookupSyncPoint', () => {
   })
 
   it('folds the drive-letter case, matching the shared scope key', () => {
+    // `norm` folds the separators and the drive letter on every host; the REST of
+    // the path folds only where the filesystem is case-insensitive (`scopeKey`),
+    // so `x:/P4WS/MAIN/src` and `X:/p4ws/main/src` name one directory there and
+    // two on linux. Asserting the win32/macOS answer unconditionally is what let
+    // this pass locally and fail on CI.
+    const insensitive = process.platform === 'win32' || process.platform === 'darwin'
     const answer = lookupSyncPoint(
       [record([{ path: 'x:/P4WS/MAIN/src', isDirectory: true }], '4521', 100)],
       ROOT,
       [SRC],
     )
-    expect(answer?.record.change).toBe('4521')
+    if (insensitive) {
+      expect(answer?.record.change).toBe('4521')
+    } else {
+      expect(answer).toBeUndefined()
+    }
+  })
+
+  it('folds the drive letter and the separators on every host', () => {
+    // The half of the key that does NOT follow the host, so it holds on the linux
+    // CI too: a backslashed spelling with a lower-cased drive letter names the
+    // same scope as the canonical one. Both branches of the containment check go
+    // through the folded form — equality here, the `dir/` boundary below.
+    const same = lookupSyncPoint(
+      [record([{ path: 'x:\\p4ws\\main\\src', isDirectory: true }], '4521', 100)],
+      ROOT,
+      [SRC],
+    )
+    expect(same?.record.change).toBe('4521')
+    expect(same?.widerScope).toBe(false)
+
+    const wider = lookupSyncPoint(
+      [record([{ path: 'x:\\p4ws\\main', isDirectory: true }], '4522', 100)],
+      ROOT,
+      [SRC],
+    )
+    expect(wider?.record.change).toBe('4522')
+    expect(wider?.widerScope).toBe(true)
   })
 })
 
