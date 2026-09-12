@@ -102,6 +102,7 @@ import {
   readSyntheticDenial,
   readTerminalOutput,
 } from './acpSessionUpdateMeta.js'
+import { bumpHeapFlow } from '../../memory/heapFlowCounters.js'
 import { ACP_CAPABILITIES_META_KEY, type AcpUniverseCapabilities } from './acpExtMethods.js'
 import {
   AcpAbortError,
@@ -576,6 +577,17 @@ const ORPHAN_TOOL_CALL_SWEEP_GRACE_MS = 5_000
  * card wedged by work that never reports still settles on its own.
  */
 const ORPHAN_TOOL_CALL_SWEEP_MAX_ATTEMPTS = 6
+
+/**
+ * Streaming merge batch cadence. A merge publishes by re-materializing the whole
+ * message, so on a long one the publish itself becomes the cost: the 2026-09-12
+ * renderer passed 2GB re-rendering a single message at 60Hz while the wire carried
+ * only 2.38MB. Past the size threshold the cadence coarsens — same work per publish,
+ * fewer publishes, and the tail stays continuous, only its steps get larger.
+ */
+const STREAM_BATCH_MS = 16
+const STREAM_HEAVY_BATCH_MS = 64
+const STREAM_HEAVY_CHARS = 64 * 1024
 /**
  * How many superseded durable ids a session remembers (see
  * {@link AcpSession._priorAgentSessionIds}). Only ids a not-yet-re-persisted
@@ -3540,7 +3552,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     // Anchorless chunks (agent/thought paths never pass one) keep the old
     // merge-anything behavior — undefined === undefined.
     if (last && last.role === role && this._isStreaming(last.id) && last.messageId === messageId) {
-      const tx = this._batchedTx()
+      const tx = this._batchedTx(last.text.length)
       const pending = this._pendingStreamingMerge
       if (pending !== undefined && pending.base !== last) {
         this._materializePendingStreamingMerge(tx)
@@ -4180,6 +4192,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     if (pending === undefined) return
     this._pendingStreamingMerge = undefined
     const { blocks, text } = pending.acc.flatten()
+    bumpHeapFlow('materialize', text.length)
     const base = pending.base
     const next: AcpMessage = {
       id: base.id,
@@ -4227,16 +4240,28 @@ export class AcpSession extends Disposable implements IAcpSession {
     }
   }
 
-  /** Lazily open a 16ms-deadlined transaction for streaming bursts. */
-  private _batchedTx(): TransactionImpl {
+  /**
+   * Lazily open a deadlined transaction for streaming bursts. `streamingLength` is the
+   * open message's current text: the deadline is fixed when the batch opens, so the
+   * size at that moment is what the publish it ends with will cost.
+   */
+  private _batchedTx(streamingLength = 0): TransactionImpl {
     if (!this._pendingTx) {
       this._pendingTx = new TransactionImpl(
         () => {},
         () => `acp.session.batch.${this.id}`,
       )
-      this._flushTimer = setTimeout(() => this._commitBatchedTx(), 16)
+      this._flushTimer = setTimeout(
+        () => this._commitBatchedTx(),
+        this._batchDelayMs(streamingLength),
+      )
     }
     return this._pendingTx
+  }
+
+  /** Coarsens once publishing one message costs more than the extra frames buy. */
+  private _batchDelayMs(streamingLength: number): number {
+    return streamingLength > STREAM_HEAVY_CHARS ? STREAM_HEAVY_BATCH_MS : STREAM_BATCH_MS
   }
 
   private _commitBatchedTx(): void {

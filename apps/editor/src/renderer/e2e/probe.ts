@@ -48,6 +48,11 @@ import {
   type IWorkspaceService,
 } from '@universe-editor/platform'
 import type { IAcpSessionService } from '../services/acp/session/acpSessionService.js'
+import {
+  drainHeapFlow,
+  readCodeHtmlBytes,
+  readHeapGauges,
+} from '../services/memory/heapFlowCounters.js'
 import type { IAcpSessionHistoryService } from '../services/acp/session/acpSessionHistory.js'
 import type { BugRecorderClient } from '../services/bugRecording/bugRecorderClient.js'
 import { collectTranscripts } from '../actions/bugRecordingActions.js'
@@ -2216,6 +2221,11 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
         releasedBytes: release.reduce((sum, entry) => sum + entry.freed, 0),
       }
     },
+    getHeapFlowCounters: () => ({
+      flow: drainHeapFlow(),
+      gauge: readHeapGauges(),
+      codeHtmlBytes: readCodeHtmlBytes(),
+    }),
     driveSwarmNotificationPoll: async () => {
       await swarmNotificationE2E.driveRefresh?.()
     },

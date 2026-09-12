@@ -106,7 +106,9 @@ import {
   shouldDefaultToRestoreSkip,
   shouldOfferRestoreSkip,
 } from './sessionSentinel.js'
-import { collectWindowsCrashForensics } from './werForensics.js'
+import { concludeAbnormalExit, type ForensicsLine } from './abnormalExitConclusion.js'
+import { readExitScene } from './exitSceneForensics.js'
+import { collectWerEvents } from './werForensics.js'
 import { applyProductIdentity, resolveProductIdentity } from './productPaths.js'
 import {
   EnvironmentMainService,
@@ -297,6 +299,18 @@ setIpcFrameDiagnostics({
     errorSink.recordLocal('ipcFrameTooLarge', new Error(message))
   },
 })
+
+/**
+ * Forensics lines each carry their own level — a memory-growth warning must not
+ * read like a crash record — so the prefix is applied here and the conclusion
+ * module stays free of logging.
+ */
+function logForensicsLine(line: ForensicsLine): void {
+  const text = `abnormal-exit forensics: ${line.text}`
+  if (line.level === 'error') mainLogger.error(text)
+  else if (line.level === 'warn') mainLogger.warn(text)
+  else mainLogger.info(text)
+}
 
 // Route console.* through the log system so ad-hoc console output and
 // third-party library noise reach the Console channel (and therefore the
@@ -646,32 +660,45 @@ void app.whenReady().then(async () => {
         `consecutive=${abnormalExit.consecutiveAbnormalExits}; ` +
         (abnormalExit.crashDumps.length > 0
           ? `crash dumps: ${abnormalExit.crashDumps.join(', ')}`
-          : 'no crash dump found — likely killed externally (AV / OOM / task kill)'),
+          : 'no crash dump found'),
     )
     errorSink.recordLocal(
       'abnormalExit',
       `previous session ${abnormalExit.previousSessionId} terminated abnormally; lastAlive=${lastAlive}; consecutive=${abnormalExit.consecutiveAbnormalExits}; crashDumps=${abnormalExit.crashDumps.length}`,
     )
-    // No dump means our own logs hold zero evidence of the cause; the Windows
-    // Application event log is the only remaining witness. Crash/hang events
-    // (1000/1002) for our exe prove a native death; none at all points at an
-    // external TerminateProcess (task kill / AV) or power loss. Fire-and-forget —
+    // With no dump the cause has to be reconstructed from two witnesses the logs
+    // already hold: the Windows event log separates crash/hang records from mere
+    // warnings, and the previous session's own metrics tail says what was climbing
+    // before the log stopped. Both are read here and resolved together so the
+    // verdict is one line instead of facts nobody joins. Fire-and-forget —
     // startup must not wait on wevtutil.
-    if (abnormalExit.crashDumps.length === 0 && process.platform === 'win32') {
-      const exeName = basename(process.execPath)
-      void collectWindowsCrashForensics(exeName, abnormalExit.previousStartedAt)
-        .then((events) => {
-          if (events.length > 0) {
-            for (const line of events) mainLogger.error(`abnormal-exit forensics: ${line}`)
-            errorSink.recordLocal('abnormalExitForensics', events.join('; '))
-          } else {
-            mainLogger.warn(
-              'abnormal-exit forensics: no crash/hang/WER event for this exe in the Windows Application log — ' +
-                'process was likely terminated externally (task kill / AV) or the machine lost power',
-            )
-          }
+    if (abnormalExit.crashDumps.length === 0) {
+      const werPromise =
+        process.platform === 'win32'
+          ? collectWerEvents(basename(process.execPath), abnormalExit.previousStartedAt)
+          : Promise.resolve(undefined)
+      const scenePromise = readExitScene(
+        logMainService.getLogRoot(),
+        abnormalExit.previousSessionId,
+      )
+      void Promise.all([werPromise, scenePromise])
+        .then(([werEvents, scene]) => {
+          const conclusion = concludeAbnormalExit({
+            crashDumpCount: abnormalExit.crashDumps.length,
+            platform: process.platform,
+            werEvents,
+            scene,
+            previousSessionId: abnormalExit.previousSessionId,
+            lastAliveAt: abnormalExit.previousLastAliveAt,
+          })
+          for (const line of conclusion.lines) logForensicsLine(line)
+          errorSink.recordLocal('abnormalExitForensics', conclusion.record)
         })
-        .catch(() => undefined)
+        .catch((error: unknown) => {
+          // Swallowing this would delete the verdict on exactly the launch that
+          // needed it; the startup path is already guarded, so report and move on.
+          mainLogger.warn(`abnormal-exit forensics: conclusion failed: ${String(error)}`)
+        })
     }
   }
   armSessionSentinel(

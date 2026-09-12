@@ -10,6 +10,7 @@
 import {
   createContext,
   Fragment,
+  memo,
   useContext,
   useEffect,
   useMemo,
@@ -39,7 +40,9 @@ import {
   splitFilePathTarget,
 } from '../../services/acp/filePathLink.js'
 import { CodeBlock } from '../agents/CodeBlock.js'
+import { setHeapGauge } from '../../services/memory/heapFlowCounters.js'
 import { MermaidBlock } from './MermaidBlock.js'
+import { MarkdownStreamingContext } from './markdownStreamingContext.js'
 import { useOptionalService } from '../useService.js'
 import { useMarkdownFileLink, type OpenMarkdownLinkOptions } from './useMarkdownFileLink.js'
 import { fileUriLinkTarget } from './markdownLinkResolve.js'
@@ -99,7 +102,18 @@ export function MarkdownView({
   renderImage,
   frontmatter,
 }: MarkdownViewProps) {
-  const nodes = useMarkdownNodes(text, streaming ?? false, frontmatter !== undefined)
+  const { nodes, sealedNodes, tailChars } = useMarkdownNodes(
+    text,
+    streaming ?? false,
+    frontmatter !== undefined,
+  )
+  // Absolute readings for the heap report: node counts are what move when a growing
+  // message re-renders, and they are invisible to the V8 heap number.
+  useEffect(() => {
+    setHeapGauge('astnodes', nodes.length)
+    setHeapGauge('sealednodes', sealedNodes.length)
+    setHeapGauge('tailchars', tailChars)
+  })
   const openFileLink = useMarkdownFileLink(baseUri, previewLinks ?? false)
   const resourceAccess = useOptionalService(IResourceAccessService)
   const workspaceFolder = useOptionalService(IWorkspaceService)?.current?.folder
@@ -146,9 +160,16 @@ export function MarkdownView({
                   className={className ? `${styles['markdown']} ${className}` : styles['markdown']}
                   {...(testId !== undefined ? { 'data-testid': testId } : {})}
                 >
-                  {nodes.map((node, i) => (
-                    <Block key={i} node={node} />
-                  ))}
+                  {streaming ? (
+                    <>
+                      <SealedNodes nodes={sealedNodes} />
+                      <MarkdownStreamingContext.Provider value={true}>
+                        <TailNodes nodes={nodes} from={sealedNodes.length} />
+                      </MarkdownStreamingContext.Provider>
+                    </>
+                  ) : (
+                    nodes.map((node, i) => <MemoBlock key={i} node={node} />)
+                  )}
                 </div>
               </FrontmatterModeContext.Provider>
             </ImageRenderContext.Provider>
@@ -159,23 +180,37 @@ export function MarkdownView({
   )
 }
 
+const NO_NODES: readonly MdNode[] = []
+
 /**
  * Parse markdown to nodes, incrementally when `streaming`. The incremental cache
  * lives in a ref tied to this component instance; it self-heals if the text ever
  * diverges from the cached prefix (message reset / non-monotonic growth).
+ *
+ * `sealedNodes` is the cache's own prefix array, holding the same element objects
+ * that head `nodes`. Keeping that identity across renders is what lets the sealed
+ * half skip reconciliation entirely; handing React `nodes.slice(0, n)` instead
+ * would allocate a fresh array every frame and lose the whole win.
  */
 function useMarkdownNodes(
   text: string,
   streaming: boolean,
   frontmatter: boolean,
-): readonly MdNode[] {
+): {
+  readonly nodes: readonly MdNode[]
+  readonly sealedNodes: readonly MdNode[]
+  /** Characters still unsealed — the part every batch has to re-parse and re-render. */
+  readonly tailChars: number
+} {
   const cacheRef = useRef(createMarkdownStreamCache())
   const staticNodes = useMemo(
     () => (streaming ? undefined : parseMarkdown(text, { frontmatter })),
     [text, streaming, frontmatter],
   )
-  if (staticNodes !== undefined) return staticNodes
-  return parseMarkdownStreaming(text, cacheRef.current)
+  if (staticNodes !== undefined) return { nodes: staticNodes, sealedNodes: NO_NODES, tailChars: 0 }
+  const cache = cacheRef.current
+  const nodes = parseMarkdownStreaming(text, cache)
+  return { nodes, sealedNodes: cache.sealedNodes, tailChars: text.length - cache.sealedText.length }
 }
 
 // Also consumed by MessageContent's plaintext variant: bare file paths in user
@@ -307,6 +342,38 @@ function Block({ node }: { node: MdNode }): ReactNode {
     case 'frontmatter':
       return <FrontmatterBlock node={node} lineAttr={lineAttr} />
   }
+}
+
+const MemoBlock = memo(Block)
+
+/**
+ * The sealed prefix of a streaming message: parsed once, then reused verbatim.
+ * Its `nodes` array keeps its identity between seals, so a growing tail — which
+ * re-renders ~60x/s during a thought storm — costs this subtree nothing.
+ */
+const SealedNodes = memo(function SealedNodes({ nodes }: { readonly nodes: readonly MdNode[] }) {
+  return (
+    <>
+      {nodes.map((node, i) => (
+        <MemoBlock key={i} node={node} />
+      ))}
+    </>
+  )
+})
+
+/**
+ * The unsealed tail, re-parsed and re-rendered on every batch by design. A node
+ * that seals migrates into {@link SealedNodes}, which remounts its subtree — a
+ * text selection inside it does not survive a seal.
+ */
+function TailNodes({ nodes, from }: { readonly nodes: readonly MdNode[]; from: number }) {
+  return (
+    <>
+      {nodes.slice(from).map((node, i) => (
+        <MemoBlock key={from + i} node={node} />
+      ))}
+    </>
+  )
 }
 
 /**

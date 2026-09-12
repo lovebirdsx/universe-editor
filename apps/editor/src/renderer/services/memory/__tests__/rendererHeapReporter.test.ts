@@ -2,8 +2,9 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *--------------------------------------------------------------------------------------------*/
 
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { collectHeapHolders, createRendererHeapReporter } from '../rendererHeapReporter.js'
+import { bumpHeapFlow, drainHeapFlow, setHeapGauge } from '../heapFlowCounters.js'
 import { MemoryPressureLevel } from '../memoryPressureLevels.js'
 import type {
   IDiagnosticsService,
@@ -140,5 +141,93 @@ describe('createRendererHeapReporter', () => {
     } as never)
     report(SAMPLE, MemoryPressureLevel.Normal)
     expect(warn).not.toHaveBeenCalled()
+  })
+})
+
+// The counters are process-wide, so these cases clean up on both sides — the cases
+// above assert the sample shape exactly, and a stray count would fail them.
+describe('createRendererHeapReporter — flow and gauge', () => {
+  const GAUGES = ['domnodes', 'astnodes', 'sealednodes', 'tailchars'] as const
+
+  beforeEach(() => {
+    drainHeapFlow()
+  })
+
+  afterEach(() => {
+    drainHeapFlow()
+    for (const name of GAUGES) setHeapGauge(name, 0)
+  })
+
+  it('carries the work counted since the previous reading', () => {
+    const seen: WireRendererHeapSample[] = []
+    const report = createRendererHeapReporter(
+      () => diagnostics((sample) => (seen.push(sample), Promise.resolve())),
+      [],
+    )
+    bumpHeapFlow('mdparse', 2048)
+    bumpHeapFlow('colorize.skip', 512)
+    report(SAMPLE, MemoryPressureLevel.Normal)
+
+    expect(seen[0]?.flow).toEqual([
+      { name: 'mdparse', calls: 1, chars: 2048 },
+      { name: 'colorize.skip', calls: 1, chars: 512 },
+    ])
+  })
+
+  it('omits both fields entirely when nothing was counted or measured', () => {
+    const seen: WireRendererHeapSample[] = []
+    const report = createRendererHeapReporter(
+      () => diagnostics((sample) => (seen.push(sample), Promise.resolve())),
+      [],
+    )
+    report(SAMPLE, MemoryPressureLevel.Normal)
+
+    expect(seen[0]).not.toHaveProperty('flow')
+    expect(seen[0]).not.toHaveProperty('gauge')
+  })
+
+  it('drains on report so each reading describes its own interval', () => {
+    const seen: WireRendererHeapSample[] = []
+    const report = createRendererHeapReporter(
+      () => diagnostics((sample) => (seen.push(sample), Promise.resolve())),
+      [],
+    )
+    bumpHeapFlow('mdparse', 10)
+    report(SAMPLE, MemoryPressureLevel.Normal)
+    report(SAMPLE, MemoryPressureLevel.Normal)
+
+    expect(seen[0]).toHaveProperty('flow')
+    expect(seen[1]).not.toHaveProperty('flow')
+  })
+
+  it('refreshes the gauges before reading them', () => {
+    const seen: WireRendererHeapSample[] = []
+    const report = createRendererHeapReporter(
+      () => diagnostics((sample) => (seen.push(sample), Promise.resolve())),
+      [],
+      undefined,
+      () => setHeapGauge('domnodes', 92_000),
+    )
+    report(SAMPLE, MemoryPressureLevel.Normal)
+
+    expect(seen[0]?.gauge).toEqual([{ name: 'domnodes', value: 92_000 }])
+  })
+
+  it('still reports the heap when a gauge cannot be taken', () => {
+    // The reading is the part that cannot be recovered after a crash; a DOM walk that
+    // throws must not take it down with it.
+    const seen: WireRendererHeapSample[] = []
+    const report = createRendererHeapReporter(
+      () => diagnostics((sample) => (seen.push(sample), Promise.resolve())),
+      [],
+      undefined,
+      () => {
+        throw new Error('document gone')
+      },
+    )
+
+    expect(() => report(SAMPLE, MemoryPressureLevel.Normal)).not.toThrow()
+    expect(seen).toHaveLength(1)
+    expect(seen[0]?.used).toBe(3200 * MIB)
   })
 })

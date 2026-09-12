@@ -514,6 +514,32 @@ describe('DiagnosticsMainService — renderer heap samples', () => {
     expect(heapLines()[0]).not.toContain('b'.repeat(33))
   })
 
+  it('drops flow and gauge entries that cannot be true', async () => {
+    await heapService.reportRendererHeapSample({
+      ...sample(900 * MIB),
+      flow: [
+        { name: 'mdparse', calls: 3, chars: 2048 },
+        { name: 'bad name', calls: 1, chars: 1 },
+        { name: 'mdreseal', calls: 1.5, chars: 10 },
+        { name: 'colorize', calls: 1, chars: -1 },
+      ],
+      gauge: [
+        { name: 'domnodes', value: 92_000 },
+        { name: 'bad\nname', value: 1 },
+      ],
+    })
+    expect(heapLines()).toEqual([
+      'renderer-heap window=0 used=900MB limit=4096MB usedPct=22.0 level=normal ' +
+        'flow=mdparse:3c/0MB gauge=domnodes:92000',
+    ])
+  })
+
+  it('caps the flow list so one sample cannot grow the line without bound', async () => {
+    const flow = Array.from({ length: 20 }, (_v, i) => ({ name: `f${i}`, calls: 1, chars: MIB }))
+    await heapService.reportRendererHeapSample({ ...sample(900 * MIB), flow })
+    expect(heapLines()[0]?.match(/f\d+:\d+c\/\d+MB/g)).toHaveLength(12)
+  })
+
   it('counts rejected readings, so a broken sender cannot look like an absent one', async () => {
     // `no samples recorded` alone is ambiguous: it is the same file whether the build
     // never had a curve or every report was thrown away.
@@ -583,5 +609,34 @@ describe('formatRendererHeapSample', () => {
     expect(formatRendererHeapSample({ ...base, limit: 0, holders: [] })).toContain(
       'limit=0MB level=',
     )
+  })
+
+  it('appends the counted work and the absolute readings after the holders', () => {
+    expect(
+      formatRendererHeapSample({
+        ...base,
+        holders: [{ name: 'codehtml', bytes: 96 * MIB }],
+        flow: [
+          { name: 'mdparse', calls: 1204, chars: 241 * MIB },
+          { name: 'colorize.skip', calls: 3180, chars: 48 * MIB },
+        ],
+        gauge: [
+          { name: 'domnodes', value: 91_234 },
+          { name: 'tailchars', value: 32_768 },
+        ],
+      }),
+    ).toBe(
+      'renderer-heap window=1 used=3200MB limit=4096MB usedPct=78.1 level=critical ' +
+        'holders=codehtml:96MB flow=mdparse:1204c/241MB,colorize.skip:3180c/48MB ' +
+        'gauge=domnodes:91234,tailchars:32768',
+    )
+  })
+
+  it('leaves the holder segment untouched when a report carried neither list', () => {
+    // The pre-existing shape has to survive: these fields are additive, and a reader
+    // that learned the old line must not have to learn a new one.
+    const line = formatRendererHeapSample({ ...base, holders: [] })
+    expect(line).not.toContain('flow=')
+    expect(line).not.toContain('gauge=')
   })
 })

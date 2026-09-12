@@ -22,6 +22,8 @@ import {
 import type {
   AbnormalExitInfo,
   IDiagnosticsService,
+  WireHeapFlow,
+  WireHeapGauge,
   WireHeapHolder,
   WireRendererHeapSample,
 } from '../../../shared/ipc/services.js'
@@ -92,6 +94,8 @@ const RENDERER_HEAP_RING = 32
  */
 const HOLDER_NAME_RE = /^[a-z][a-z0-9_.-]{0,31}$/i
 const HOLDER_MAX_ENTRIES = 8
+/** Flow and gauge are one list each rather than a breakdown, so they get a bit more room. */
+const WIRE_LIST_MAX_ENTRIES = 12
 /** Scan cap, so an array of junk names cannot cost one regex per entry. */
 const HOLDER_MAX_SCAN = 64
 
@@ -105,6 +109,10 @@ export interface RendererHeapRecord {
   readonly limit: number
   readonly level: string
   readonly holders: readonly WireHeapHolder[]
+  /** Work counted since the previous sample, already drained on the renderer side. */
+  readonly flow?: readonly WireHeapFlow[]
+  /** Absolute proxies for memory the V8 heap reading cannot see. */
+  readonly gauge?: readonly WireHeapGauge[]
 }
 
 function formatHolders(holders: readonly WireHeapHolder[]): string {
@@ -114,14 +122,59 @@ function formatHolders(holders: readonly WireHeapHolder[]): string {
     .join(',')
 }
 
+function formatFlow(flow: readonly WireHeapFlow[]): string {
+  return flow.map((f) => `${f.name}:${f.calls}c/${Math.round(f.chars / 1024 / 1024)}MB`).join(',')
+}
+
+function formatGauge(gauge: readonly WireHeapGauge[]): string {
+  return gauge.map((g) => `${g.name}:${g.value}`).join(',')
+}
+
 export function formatRendererHeapSample(record: RendererHeapRecord): string {
   const mb = (bytes: number): number => Math.round(bytes / 1024 / 1024)
   const pct = record.limit > 0 ? ` usedPct=${((record.used / record.limit) * 100).toFixed(1)}` : ''
   const holders = record.holders.length > 0 ? ` holders=${formatHolders(record.holders)}` : ''
+  const flow = record.flow && record.flow.length > 0 ? ` flow=${formatFlow(record.flow)}` : ''
+  const gauge = record.gauge && record.gauge.length > 0 ? ` gauge=${formatGauge(record.gauge)}` : ''
   return (
     `renderer-heap window=${record.window} used=${mb(record.used)}MB ` +
-    `limit=${mb(record.limit)}MB${pct} level=${record.level}${holders}`
+    `limit=${mb(record.limit)}MB${pct} level=${record.level}${holders}${flow}${gauge}`
   )
+}
+
+/**
+ * The flow and gauge lists get the holders treatment: renderer-supplied names that end
+ * up on a log line, and numbers that either held when sent or are not evidence. Sampling
+ * cap first, so a junk array cannot cost one regex per entry.
+ */
+function scanWireList<T>(
+  raw: unknown,
+  build: (entry: Record<string, unknown>) => T | undefined,
+): T[] {
+  const out: T[] = []
+  const candidates = Array.isArray(raw) ? (raw as readonly unknown[]) : []
+  const scanLimit = Math.min(candidates.length, HOLDER_MAX_SCAN)
+  for (let i = 0; i < scanLimit; i++) {
+    if (out.length >= WIRE_LIST_MAX_ENTRIES) break
+    const entry = candidates[i]
+    if (!entry || typeof entry !== 'object') continue
+    const built = build(entry as Record<string, unknown>)
+    if (built !== undefined) out.push(built)
+  }
+  return out
+}
+
+function wireName(entry: Record<string, unknown>): string | undefined {
+  const name = entry['name']
+  return typeof name === 'string' && HOLDER_NAME_RE.test(name) ? name : undefined
+}
+
+function wireAmount(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined
+}
+
+function wireCount(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : undefined
 }
 
 /**
@@ -161,7 +214,28 @@ function sanitizeHeapSample(
       ...(count === undefined ? {} : { count }),
     })
   }
-  return { window: windowId, used: sample.used, limit, level, holders }
+  const flow = scanWireList<WireHeapFlow>(sample.flow, (entry) => {
+    const name = wireName(entry)
+    const calls = wireCount(entry['calls'])
+    const chars = wireAmount(entry['chars'])
+    return name === undefined || calls === undefined || chars === undefined
+      ? undefined
+      : { name, calls, chars }
+  })
+  const gauge = scanWireList<WireHeapGauge>(sample.gauge, (entry) => {
+    const name = wireName(entry)
+    const value = wireAmount(entry['value'])
+    return name === undefined || value === undefined ? undefined : { name, value }
+  })
+  return {
+    window: windowId,
+    used: sample.used,
+    limit,
+    level,
+    holders,
+    ...(flow.length === 0 ? {} : { flow }),
+    ...(gauge.length === 0 ? {} : { gauge }),
+  }
 }
 
 /** Binds the renderer-facing surface to one window, so the stamped id cannot be forged. */

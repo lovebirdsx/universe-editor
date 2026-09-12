@@ -6,6 +6,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it, vi } from 'vitest'
+import { drainHeapFlow } from '../../memory/heapFlowCounters.js'
 import { parseMarkdown, type MdNode } from '../markdownRenderer.js'
 import { createMarkdownStreamCache, parseMarkdownStreaming } from '../markdownIncremental.js'
 
@@ -129,5 +130,56 @@ describe('parseMarkdownStreaming — reset / non-monotonic input', () => {
     // A completely different message reuses the same cache (e.g. message reset).
     const replaced = 'brand\n\nnew\n\ncontent'
     expect(parseMarkdownStreaming(replaced, cache)).toEqual(parseMarkdown(replaced))
+  })
+})
+
+describe('parseMarkdownStreaming — sealed prefix identity', () => {
+  // MarkdownView hands the sealed half to a memoized component and relies on those
+  // nodes keeping their identity across chunks — that is the whole reason a growing
+  // tail can skip reconciliation. Both halves of the premise are asserted here: the
+  // result heads with the cache's own elements, and sealing only ever appends.
+  it('keeps sealed elements identical across a char-by-char stream', () => {
+    const final = 'aaaa\n\nbbbb\n\ncccc\n\ndddd\n\neeee'
+    const cache = createMarkdownStreamCache()
+    let previouslySealed: readonly MdNode[] = []
+
+    for (let i = 1; i <= final.length; i++) {
+      const nodes = parseMarkdownStreaming(final.slice(0, i), cache)
+      const sealed = cache.sealedNodes
+      expect(nodes.slice(0, sealed.length)).toHaveLength(sealed.length)
+      for (let k = 0; k < sealed.length; k++) {
+        expect(Object.is(nodes[k], sealed[k])).toBe(true)
+        if (k < previouslySealed.length)
+          expect(Object.is(sealed[k], previouslySealed[k])).toBe(true)
+      }
+      previouslySealed = sealed
+    }
+
+    // A stream that sealed nothing would make every assertion above vacuous.
+    expect(previouslySealed.length).toBeGreaterThan(1)
+    expect(parseMarkdownStreaming(final, cache)).toEqual(parseMarkdown(final))
+  })
+})
+
+describe('parseMarkdownStreaming — flow accounting', () => {
+  // `mdparse.chars` is what the streaming e2e spec bounds work by, so its unit has to
+  // be the characters actually re-parsed: counting `text.length` per call would make
+  // the bound scale with (renders × length) no matter how well sealing works, and the
+  // spec would pass on an implementation that re-parses everything.
+  it('counts the characters it re-parses, not the whole message', () => {
+    drainHeapFlow()
+    const paragraphs = ['p0', 'p1', 'p2', 'p3', 'p4', 'p5']
+    const cache = createMarkdownStreamCache()
+    for (let i = 1; i <= paragraphs.length; i++) {
+      parseMarkdownStreaming(paragraphs.slice(0, i).join('\n\n'), cache)
+    }
+
+    const mdparse = drainHeapFlow().find((f) => f.name === 'mdparse')
+    const finalLength = paragraphs.join('\n\n').length
+    expect(mdparse?.calls).toBe(paragraphs.length)
+    // Each call re-parses its new paragraph plus the (tiny) unsealed tail. Charging
+    // `text.length` instead would cost the growing prefix again every call — 72 here
+    // against a bound of 66.
+    expect(mdparse?.chars).toBeLessThan(3 * finalLength)
   })
 })

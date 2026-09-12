@@ -99,6 +99,8 @@ import {
   IMemoryPressureService,
   MemoryPressureService,
 } from './services/memory/memoryPressureService.js'
+import { sampleDomGauges } from './services/memory/domHeapGauges.js'
+import { readCodeHtmlBytes } from './services/memory/heapFlowCounters.js'
 import { createRendererHeapReporter } from './services/memory/rendererHeapReporter.js'
 import { sharedResidentBudget } from './services/acp/session/acpResidentBudget.js'
 import { registerProxyChannelServices } from './ipc/registerProxyServices.js'
@@ -274,6 +276,15 @@ function measureMonacoModels(): { bytes: number; count: number } | undefined {
   return { bytes, count: models.length }
 }
 
+/**
+ * Colorized HTML held by mounted code blocks — the largest V8-resident string a
+ * streaming message keeps, and the shape that dominated the 2026-09-12 package.
+ */
+function measureCodeHtml(): { bytes: number } | undefined {
+  const bytes = readCodeHtmlBytes()
+  return bytes > 0 ? { bytes } : undefined
+}
+
 async function bootstrapWorkbench(): Promise<void> {
   mark(PerfMarks.rendererWillStartBootstrap)
   const isE2E = typeof window !== 'undefined' && window[E2E_PROBE_ENABLED_KEY] === true
@@ -436,8 +447,10 @@ async function bootstrapWorkbench(): Promise<void> {
           [
             { name: 'acp', measure: () => ({ bytes: sharedResidentBudget.totalBytes() }) },
             { name: 'monaco', measure: measureMonacoModels },
+            { name: 'codehtml', measure: measureCodeHtml },
           ],
           createNamedLogger(loggerService, { id: 'memory', name: 'Memory' }),
+          (level) => sampleDomGauges(document, level),
         ),
       }),
     ),

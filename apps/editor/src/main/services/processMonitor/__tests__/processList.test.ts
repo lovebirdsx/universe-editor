@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 import {
   findName,
   formatProcessList,
+  formatProcessTreeMemory,
   listProcesses,
   type ProcessItem,
   type WinProcessListEntry,
@@ -171,6 +172,40 @@ describe('listProcesses (unix, injected ps output)', () => {
     await expect(
       listProcesses(7, new Map(), { platform: 'linux', execPs: async () => psOutput, totalmem }),
     ).rejects.toThrow('Root process 7 not found')
+  })
+})
+
+describe('process names on the way out', () => {
+  it('keeps a command line out of the metrics line and the tree dump', () => {
+    const commandLine = 'C:\\tools\\claude.exe --mcp-config \'{"env":{"API_KEY":"ak-1"}}\''
+    const items: ProcessItem[] = [
+      {
+        name: 'window (window-4)',
+        cmd: 'editor --type=renderer',
+        pid: 130,
+        ppid: 100,
+        load: 0,
+        mem: 50 * 1024 * 1024,
+      },
+      { name: commandLine, cmd: commandLine, pid: 200, ppid: 100, load: 0, mem: 10 * 1024 * 1024 },
+    ]
+
+    const memoryLine = formatProcessTreeMemory(items)
+    expect(memoryLine).toContain('window (window-4)#130=')
+    expect(memoryLine).toContain('claude.exe#200=')
+    expect(memoryLine).not.toContain('ak-1')
+
+    const tree = formatProcessList({
+      name: 'editor',
+      cmd: 'editor',
+      pid: 100,
+      ppid: 1,
+      load: 0,
+      mem: 200 * 1024 * 1024,
+      children: items,
+    })
+    expect(tree).toContain('claude.exe')
+    expect(tree).not.toContain('ak-1')
   })
 })
 

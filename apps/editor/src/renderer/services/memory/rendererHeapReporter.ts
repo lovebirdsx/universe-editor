@@ -12,6 +12,7 @@
 
 import type { ILogger } from '@universe-editor/platform'
 import type { IDiagnosticsService, WireHeapHolder } from '../../../shared/ipc/services.js'
+import { drainHeapFlow, readHeapGauges } from './heapFlowCounters.js'
 import {
   MEMORY_PRESSURE_LEVEL_NAMES,
   type MemoryPressureLevel,
@@ -59,6 +60,7 @@ export function createRendererHeapReporter(
   getDiagnostics: () => IDiagnosticsService,
   sources: readonly HeapHolderSource[],
   logger?: ILogger,
+  sampleGauges?: (level: MemoryPressureLevel) => void,
 ): (sample: MemorySample, level: MemoryPressureLevel) => void {
   let failureLogged = false
   const failed = (err: unknown): void => {
@@ -67,13 +69,24 @@ export function createRendererHeapReporter(
     logger?.warn(`[memory] heap report failed: ${err instanceof Error ? err.message : String(err)}`)
   }
   return (sample, level) => {
+    // Outside the try below on purpose: a gauge that throws must not cost the heap
+    // reading itself, which is the part that cannot be recovered after a crash.
     try {
+      sampleGauges?.(level)
+    } catch {
+      // Absolute readings are best-effort.
+    }
+    try {
+      const flow = drainHeapFlow()
+      const gauge = readHeapGauges()
       void getDiagnostics()
         .reportRendererHeapSample({
           used: sample.used,
           limit: sample.limit,
           level: MEMORY_PRESSURE_LEVEL_NAMES[level],
           holders: collectHeapHolders(sources),
+          ...(flow.length === 0 ? {} : { flow }),
+          ...(gauge.length === 0 ? {} : { gauge }),
         })
         .catch(failed)
     } catch (err) {

@@ -26,6 +26,7 @@
  *  Prompt text directives:
  *    - emit-image:<count>x<kb>           → streams image chunks
  *    - emit-exec:<lines>                 → execute tool_call with <lines> output
+ *    - emit-thought:<count>x<kb>[,fence] → streams a long thought message
  *    - report-mcp-servers / report-cwd   → echoes session/new params
  *    - elicit-form                       → sends elicitation/create (form mode),
  *                                          echoes the user's response
@@ -57,6 +58,11 @@ const messagedSessions = new Set()
 const sessionPrompts = new Map() // sessionId -> [{ messageId, prompt }]
 const loadSessionEnabled = process.env.ECHO_AGENT_LOAD_SESSION === '1'
 const configOptionsEnabled = process.env.ECHO_AGENT_CONFIG_OPTIONS === '1'
+
+// How long `emit-thought` keeps its turn open after the final chunk. A spec reads
+// the renderer's live counters inside this window; the message seals when the
+// turn ends, which resets the streaming state those counters describe.
+const THOUGHT_HOLD_MS = 500
 
 // Select options advertised on session/new when ECHO_AGENT_CONFIG_OPTIONS=1.
 // The current values keep the bar's natural width between SIDEBAR_MIN (170px,
@@ -355,6 +361,54 @@ async function runPrompt(id, params) {
     } catch (err) {
       echoText('elicit-url error: ' + err.message)
     }
+    activeTurns.delete(sessionId)
+    return reply(id, { stopReason: 'end_turn' })
+  }
+
+  // Test directive: "emit-thought:<count>x<kb>[,fence]" streams one long thought
+  // message as <count> chunks of exactly <kb> KB each. This is the shape of the
+  // 2026-09-12 renderer blow-up: thousands of thought chunks landing on a single
+  // message, which the editor re-rendered in full every 16ms batch.
+  //
+  // The default form puts a blank line every 5th chunk, so the renderer's
+  // incremental markdown parser has a safe split and the message seals as it
+  // grows. `,fence` instead opens a code fence on the first chunk and never
+  // closes it — no blank line is ever outside a fence, so nothing seals and the
+  // whole message stays one growing tail. That is the case where every batch
+  // re-tokenizes the entire fence.
+  //
+  // Every chunk carries an `L<i> ` marker so a spec can count the markers and
+  // prove no content was dropped. The turn is held open briefly after the last
+  // chunk so a spec can read the renderer's live counters before the message
+  // seals (sealing clears the streaming state the counters describe).
+  const thoughtDirective = /^emit-thought:(\d+)x(\d+)(,fence)?$/.exec(userText)
+  if (thoughtDirective) {
+    const count = Number(thoughtDirective[1])
+    const chunkSize = Number(thoughtDirective[2]) * 1024
+    const fenced = thoughtDirective[3] === ',fence'
+    for (let i = 0; i < count; i++) {
+      if (turn.cancelled) break
+      const marker = 'L' + i + ' '
+      let body
+      if (fenced) {
+        const head = i === 0 ? '```ts\n' : ''
+        body = head + marker + 'x'.repeat(chunkSize - head.length - marker.length - 1) + '\n'
+      } else {
+        const tail = i % 5 === 4 ? '\n\n' : '\n'
+        body = marker + 'a'.repeat(chunkSize - marker.length - tail.length) + tail
+      }
+      notify('session/update', {
+        sessionId,
+        update: {
+          sessionUpdate: 'agent_thought_chunk',
+          content: { type: 'text', text: body },
+        },
+      })
+      // Yield periodically so the editor's batching produces several renders
+      // instead of folding the whole stream into one.
+      if (i % 25 === 24) await delay(4)
+    }
+    await delay(THOUGHT_HOLD_MS)
     activeTurns.delete(sessionId)
     return reply(id, { stopReason: 'end_turn' })
   }

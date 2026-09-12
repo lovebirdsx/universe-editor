@@ -242,6 +242,23 @@ export interface WireHeapHolder {
 }
 
 /**
+ * Work the renderer did between two samples, read-then-clear on the reporting side.
+ * Distinct from `holders`: a holder is bytes still resident, a flow entry is bytes
+ * churned through — which is how a renderer reaches 2GB without ever holding 2GB.
+ */
+export interface WireHeapFlow {
+  readonly name: string
+  readonly calls: number
+  readonly chars: number
+}
+
+/** An absolute reading of something the V8 heap number cannot see. */
+export interface WireHeapGauge {
+  readonly name: string
+  readonly value: number
+}
+
+/**
  * One renderer heap reading. Only the renderer can see its own V8 heap, and it can die
  * mid-crash — so the window id and the receive time are stamped by main, which is what
  * lets the record outlive the window it describes.
@@ -252,6 +269,10 @@ export interface WireRendererHeapSample {
   /** Watermark level name: normal | elevated | critical. */
   readonly level: string
   readonly holders: readonly WireHeapHolder[]
+  /** Omitted when no counted work happened during the interval. */
+  readonly flow?: readonly WireHeapFlow[]
+  /** Omitted when every gauge reads zero. */
+  readonly gauge?: readonly WireHeapGauge[]
 }
 
 /** Structured form of the previous session's abnormal exit (sentinel + crashpad). */

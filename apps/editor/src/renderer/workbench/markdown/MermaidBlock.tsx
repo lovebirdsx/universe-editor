@@ -12,6 +12,7 @@ import { IThemeService, isDark as isDarkScheme } from '@universe-editor/platform
 import { CodeBlock } from '../agents/CodeBlock.js'
 import { useService } from '../useService.js'
 import { MermaidLoader } from './mermaidLoader.js'
+import { useMarkdownStreaming } from './markdownStreamingContext.js'
 import styles from './markdown.module.css'
 
 function useIsDarkTheme(): boolean {
@@ -28,10 +29,17 @@ function useIsDarkTheme(): boolean {
 
 export function MermaidBlock({ code }: { readonly code: string }) {
   const isDark = useIsDarkTheme()
+  const streaming = useMarkdownStreaming()
   const [svg, setSvg] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
 
   useEffect(() => {
+    // Parsing and laying out a diagram per frame is the most expensive thing a
+    // growing fence can do; the tail stays a code block until the message seals.
+    if (streaming) {
+      setSvg(null)
+      return
+    }
     let cancelled = false
     setFailed(false)
     void MermaidLoader.render(code, isDark ? 'dark' : 'default')
@@ -47,9 +55,9 @@ export function MermaidBlock({ code }: { readonly code: string }) {
     return () => {
       cancelled = true
     }
-  }, [code, isDark])
+  }, [code, isDark, streaming])
 
-  if (failed || svg === null) {
+  if (streaming || failed || svg === null) {
     return <CodeBlock code={code} lang="mermaid" />
   }
   return (

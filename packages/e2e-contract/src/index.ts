@@ -368,6 +368,25 @@ export interface E2EMemoryPressure {
   readonly releasedBytes: number
 }
 
+/**
+ * Incremental renderer work counters; see E2EProbe.getHeapFlowCounters. The three
+ * dimensions stay separate on purpose — `flow` is an interval delta, `gauge` an
+ * absolute reading, `codeHtmlBytes` a resident total — because each answers a
+ * different question about what a stream cost.
+ */
+export interface E2EHeapFlowCounters {
+  /** Calls and characters per counted operation since the previous read. */
+  readonly flow: ReadonlyArray<{
+    readonly name: string
+    readonly calls: number
+    readonly chars: number
+  }>
+  /** Absolute readings written by the most recent render. */
+  readonly gauge: ReadonlyArray<{ readonly name: string; readonly value: number }>
+  /** Bytes of tokenized code HTML currently held by mounted code blocks. */
+  readonly codeHtmlBytes: number
+}
+
 /** Session snapshot of the interaction-responsiveness floor; see
  *  E2EProbe.getInteractionPerfSummary. */
 export interface E2EInteractionPerfSummary {
@@ -1570,6 +1589,13 @@ export interface E2EProbe {
    * `forceLevel` is `elevated` | `critical`; omit it to observe without releasing.
    */
   getMemoryPressure(forceLevel?: 'elevated' | 'critical'): Promise<E2EMemoryPressure>
+  /**
+   * Renderer work counters since the previous read (drained, so each call covers
+   * its own interval) plus the current absolute gauges. Reads the same module the
+   * heap reporter drains, so a spec can assert what a stream *cost* without
+   * waiting for a memory-pressure sample that a fixed build never reaches.
+   */
+  getHeapFlowCounters(): E2EHeapFlowCounters
   /**
    * Drive one poll cycle of the Swarm review-notification contribution
    * synchronously (its own timer is 60s — far too slow for a spec). Resolves once

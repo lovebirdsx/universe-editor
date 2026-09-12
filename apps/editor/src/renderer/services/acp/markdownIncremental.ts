@@ -17,6 +17,7 @@
  *  block `line` numbers), so callers can swap it in transparently.
  *--------------------------------------------------------------------------------------------*/
 
+import { bumpHeapFlow } from '../memory/heapFlowCounters.js'
 import { codeFenceMask, parseMarkdown, type MdNode } from './markdownRenderer.js'
 
 /**
@@ -49,6 +50,12 @@ export function parseMarkdownStreaming(
 ): readonly MdNode[] {
   const splitPos = lastSafeSplit(text)
   const head = text.slice(0, splitPos)
+  // Characters handed to `parse` on this call — not `text.length`. Counting what is
+  // actually re-parsed is what makes the counter answer the question it exists for:
+  // a sealed prefix re-parses only the tail, so the total stays O(length) across a
+  // whole stream, while a message that never seals re-parses all of itself on every
+  // batch and shows up as (batches × length).
+  let parsedChars = 0
 
   if (head === cache.sealedText) {
     // Sealed prefix unchanged — only the tail moved.
@@ -56,21 +63,31 @@ export function parseMarkdownStreaming(
     // The prefix grew: seal the newly-stable segment, parsing only it.
     const newSegment = head.slice(cache.sealedText.length)
     const segmentNodes = offsetLines(parse(newSegment), cache.sealedLineCount)
+    parsedChars += newSegment.length
     cache.sealedNodes = [...cache.sealedNodes, ...segmentNodes]
     cache.sealedText = head
     cache.sealedLineCount += countLines(newSegment)
   } else {
     // First call, or the text diverged from the cached prefix (message reset /
     // non-monotonic input): re-seal from scratch. Head nodes are already global.
+    // Counted apart from `mdparse`: a reseal count that tracks the parse count says
+    // the split is finding no boundary to keep, i.e. this message never seals and
+    // every chunk re-parses the whole thing.
+    bumpHeapFlow('mdreseal', head.length)
     cache.sealedNodes = parse(head)
+    parsedChars += head.length
     cache.sealedText = head
     cache.sealedLineCount = countLines(head)
   }
 
-  if (splitPos >= text.length) return cache.sealedNodes
-  const tail = text.slice(splitPos)
-  const tailNodes = offsetLines(parse(tail), cache.sealedLineCount)
-  return [...cache.sealedNodes, ...tailNodes]
+  let tailNodes: readonly MdNode[] | undefined
+  if (splitPos < text.length) {
+    const tail = text.slice(splitPos)
+    tailNodes = offsetLines(parse(tail), cache.sealedLineCount)
+    parsedChars += tail.length
+  }
+  bumpHeapFlow('mdparse', parsedChars)
+  return tailNodes === undefined ? cache.sealedNodes : [...cache.sealedNodes, ...tailNodes]
 }
 
 /** Count newline characters — equals the source line offset for following text. */

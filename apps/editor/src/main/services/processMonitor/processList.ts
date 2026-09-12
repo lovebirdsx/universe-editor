@@ -7,6 +7,7 @@
 import { exec } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { totalmem as osTotalmem } from 'node:os'
+import { redactProcessName } from './processNameSafety.js'
 
 export interface ProcessItem {
   name: string
@@ -334,8 +335,12 @@ export async function listProcesses(
 export function formatProcessList(root: ProcessItem): string {
   const lines: string[] = ['CPU %\tMem MB\t   PID\tProcess']
   const visit = (item: ProcessItem, depth: number): void => {
+    // This text is copied to the clipboard and written into the diagnostics
+    // bundle, so the command-line fallback must not travel with it. The process
+    // explorer view reads `resolveProcesses()` instead and is unaffected.
+    const name = redactProcessName(item.name) ?? 'unknown-process'
     lines.push(
-      `${item.load.toFixed(0).padStart(5, ' ')}\t${(item.mem / MB).toFixed(0).padStart(6, ' ')}\t${String(item.pid).padStart(6, ' ')}\t${'  '.repeat(depth)}${item.name}`,
+      `${item.load.toFixed(0).padStart(5, ' ')}\t${(item.mem / MB).toFixed(0).padStart(6, ' ')}\t${String(item.pid).padStart(6, ' ')}\t${'  '.repeat(depth)}${name}`,
     )
     item.children?.forEach((child) => visit(child, depth + 1))
   }
@@ -360,9 +365,12 @@ export function flattenProcessTree(root: ProcessItem): ProcessItem[] {
  * would bury the curve it exists to make readable.
  */
 export function formatProcessTreeMemory(items: readonly ProcessItem[]): string {
+  // `findName` falls back to the raw command line, and this string goes straight
+  // into processMetrics.log and the diagnostics bundle — redact before writing.
   return items
     .map(
-      (item) => `${item.name}#${item.pid}=${Math.round(item.mem / MB)}MB/${Math.round(item.load)}%`,
+      (item) =>
+        `${redactProcessName(item.name) ?? 'unknown-process'}#${item.pid}=${Math.round(item.mem / MB)}MB/${Math.round(item.load)}%`,
     )
     .join(' | ')
 }
