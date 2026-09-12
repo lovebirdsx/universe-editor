@@ -42,6 +42,7 @@ import {
   StorageScope,
   localize,
   type IEditorInput,
+  type IQuickPickItem,
 } from '@universe-editor/platform'
 import {
   GitGraphCommands,
@@ -99,10 +100,6 @@ import {
   GitGraphWorktreePickerDialog,
   type GitGraphWorktreePickerState,
 } from './GitGraphWorktreePickerDialog.js'
-import {
-  GitGraphBranchPickerDialog,
-  type GitGraphBranchPickerState,
-} from './GitGraphBranchPickerDialog.js'
 import { SendCommitToAgentChatAction } from '../../actions/agentContextActions.js'
 import styles from './GitGraphEditor.module.css'
 
@@ -142,6 +139,16 @@ function colourOf(index: number): string {
 
 function shortHash(hash: string): string {
   return hash.slice(0, 7)
+}
+
+/** Cherry-pick target row. The branch name is carried explicitly so the row's
+ *  label stays free to gain decoration without changing the command argument. */
+interface CherryPickBranchItem extends IQuickPickItem {
+  readonly branch: string
+}
+
+function toBranchItem(branch: string): CherryPickBranchItem {
+  return { id: branch, label: branch, branch }
 }
 
 function formatDate(unixSeconds: number): string {
@@ -398,9 +405,6 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
   const [loading, setLoading] = useState(() => gitGraphViewState.result === null)
   const [menu, setMenu] = useState<GitGraphMenuState | null>(null)
   const [worktreePicker, setWorktreePicker] = useState<GitGraphWorktreePickerState | null>(null)
-  const [branchPicker, setBranchPicker] = useState<
-    (GitGraphBranchPickerState & { onPick: (branch: string) => void }) | null
-  >(null)
 
   // Selected commit(s): one hash to show in the Commit Changes view, two to compare.
   const [selection, setSelection] = useState<string[]>(() => gitGraphViewState.selection)
@@ -965,6 +969,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
   const openCherryPickToBranch = useCallback(
     (hash: string) => {
       void (async () => {
+        if (!quickInput) return
         const branches = await commands.executeCommand<string[]>(GitGraphCommands.getBranches)
         if (!branches || branches.length === 0) {
           notification.notify({
@@ -973,20 +978,37 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
           })
           return
         }
-        setBranchPicker({
-          title: localize('gitGraph.cherryPickToBranch.title', 'Cherry-pick {hash} to branch', {
-            hash: shortHash(hash),
-          }),
-          branches,
-          ...(result?.headName ? { exclude: result.headName } : {}),
-          onPick: (branch) => {
-            setBranchPicker(null)
-            runOp(GitGraphCommands.cherryPickToBranch, hash, branch)
-          },
+        // The current branch is not offered: the plain "Cherry-pick…" entry
+        // already targets it, so listing it here would duplicate that action.
+        const candidates = branches.filter((branch) => branch !== result?.headName)
+        if (candidates.length === 0) {
+          notification.notify({
+            severity: Severity.Info,
+            message: localize(
+              'gitGraph.cherryPickToBranch.noTargets',
+              'No other branch to cherry-pick onto.',
+            ),
+          })
+          return
+        }
+        // Fetch first, open the picker second: the menu closes synchronously
+        // inside its click handler and restores focus to the graph, which would
+        // otherwise steal focus from a picker input shown before that flush.
+        const picked = await quickInput.pick(candidates.map(toBranchItem), {
+          placeholder: localize(
+            'gitGraph.cherryPickToBranch.title',
+            'Cherry-pick {hash} to branch',
+            { hash: shortHash(hash) },
+          ),
+          // Keep the extension's -committerdate order while filtering: a
+          // relevance re-sort would scatter the most recently used branches it
+          // puts first.
+          filterMode: 'fuzzyKeepOrder',
         })
+        if (picked) runOp(GitGraphCommands.cherryPickToBranch, hash, picked.branch)
       })()
     },
-    [commands, notification, result?.headName, runOp],
+    [commands, notification, quickInput, result?.headName, runOp],
   )
 
   const openCommitMenu = useCallback(
@@ -2183,13 +2205,6 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
             void runWorktreeSync(worktreePicker.targetBranch, paths, worktreePicker.force)
           }
           onClose={() => setWorktreePicker(null)}
-        />
-      )}
-      {branchPicker && (
-        <GitGraphBranchPickerDialog
-          state={branchPicker}
-          onConfirm={branchPicker.onPick}
-          onClose={() => setBranchPicker(null)}
         />
       )}
     </div>

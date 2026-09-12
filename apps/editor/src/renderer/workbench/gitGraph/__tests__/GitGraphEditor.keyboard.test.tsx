@@ -18,12 +18,14 @@ import {
   Event,
   ICommandService,
   IDialogService,
+  INotificationService,
   IQuickInputService,
   IStorageService,
   IViewDescriptorService,
   IViewsService,
   InstantiationService,
   ServiceCollection,
+  Severity,
   observableValue,
   type IDisposable,
 } from '@universe-editor/platform'
@@ -102,7 +104,10 @@ interface PickItem {
   context: { open: () => void }
 }
 
-function renderEditor(withUncommitted = false, overrides: { commits?: GitGraphCommitDto[] } = {}) {
+function renderEditor(
+  withUncommitted = false,
+  overrides: { commits?: GitGraphCommitDto[]; branches?: string[] } = {},
+) {
   const executeCommand = vi.fn(async (id: string, arg?: unknown) => {
     switch (id) {
       case GitGraphCommands.getCommits:
@@ -113,13 +118,18 @@ function renderEditor(withUncommitted = false, overrides: { commits?: GitGraphCo
         return [REPO]
       case GitGraphCommands.getCommitDetails:
         return makeDetails(arg as string)
+      case GitGraphCommands.getBranches:
+        return overrides.branches
       default:
         return undefined
     }
   })
   const openViewContainer = vi.fn()
   const setViewCollapsed = vi.fn()
-  const pick = vi.fn(async (_items: readonly PickItem[]) => undefined as PickItem | undefined)
+  const notify = vi.fn()
+  const pick = vi.fn(
+    async (_items: readonly PickItem[], _options?: unknown) => undefined as PickItem | undefined,
+  )
   const services = new ServiceCollection()
   services.set(ICommandService, {
     _serviceBrand: undefined,
@@ -158,12 +168,16 @@ function renderEditor(withUncommitted = false, overrides: { commits?: GitGraphCo
     _serviceBrand: undefined,
     pick,
   } as unknown as IQuickInputService)
+  services.set(INotificationService, {
+    _serviceBrand: undefined,
+    notify,
+  } as unknown as INotificationService)
   const utils = render(
     <ServicesContext.Provider value={new InstantiationService(services)}>
       <GitGraphEditor input={{} as never} />
     </ServicesContext.Provider>,
   )
-  return { executeCommand, openViewContainer, setViewCollapsed, pick, ...utils }
+  return { executeCommand, openViewContainer, setViewCollapsed, pick, notify, ...utils }
 }
 
 async function flush(): Promise<void> {
@@ -516,5 +530,106 @@ describe('GitGraphContextMenu keyboard operation', () => {
     fireEvent.keyDown(window, { key: 'Escape' })
     await flush()
     expect(openMenu()).toBeNull()
+  })
+})
+
+describe('GitGraphEditor cherry-pick to branch', () => {
+  /** `main` is makeResult()'s headName, i.e. the checked-out branch. */
+  const BRANCHES = ['main', 'feature', 'release']
+
+  function openRowMenu(container: HTMLElement): void {
+    scrollBody(container).focus()
+    fireEvent.keyDown(scrollBody(container), { key: 'ContextMenu' })
+  }
+
+  /** Walk the menu's virtual focus down to `label`, then run that entry. */
+  function runMenuItem(label: string): void {
+    const index = menuLabels().indexOf(label)
+    expect(index).toBeGreaterThan(-1)
+    for (let i = 0; i < index; i++) fireEvent.keyDown(window, { key: 'ArrowDown' })
+    expect(activeLabel()).toBe(label)
+    fireEvent.keyDown(window, { key: 'Enter' })
+  }
+
+  async function runCherryPickToBranch(container: HTMLElement): Promise<void> {
+    openRowMenu(container)
+    await flush()
+    runMenuItem('Cherry-pick to branch…')
+    await flush()
+  }
+
+  function cherryPickCalls(executeCommand: ReturnType<typeof vi.fn>): unknown[][] {
+    return executeCommand.mock.calls.filter((c) => c[0] === GitGraphCommands.cherryPickToBranch)
+  }
+
+  it('offers every branch but the current one, in the order git returned', async () => {
+    const { container, pick } = renderEditor(false, { branches: BRANCHES })
+    await flush()
+
+    await runCherryPickToBranch(container)
+
+    expect(pick).toHaveBeenCalledTimes(1)
+    const [items, options] = pick.mock.calls[0]! as unknown as [
+      { branch: string }[],
+      { placeholder: string; filterMode: string },
+    ]
+    // The current branch is left out: the plain "Cherry-pick…" entry covers it.
+    expect(items.map((item) => item.branch)).toEqual(['feature', 'release'])
+    expect(options.placeholder).toContain(HASH_A.slice(0, 7))
+    expect(options.filterMode).toBe('fuzzyKeepOrder')
+  })
+
+  it('cherry-picks onto the picked branch', async () => {
+    const { container, pick, executeCommand } = renderEditor(false, { branches: BRANCHES })
+    await flush()
+    pick.mockResolvedValueOnce({
+      id: 'feature',
+      label: 'feature',
+      branch: 'feature',
+    } as unknown as PickItem)
+
+    await runCherryPickToBranch(container)
+
+    expect(cherryPickCalls(executeCommand)).toEqual([
+      [GitGraphCommands.cherryPickToBranch, HASH_A, 'feature'],
+    ])
+    expect(openMenu()).toBeNull()
+  })
+
+  it('runs nothing when the picker is dismissed', async () => {
+    const { container, pick, executeCommand } = renderEditor(false, { branches: BRANCHES })
+    await flush()
+
+    // The default pick mock resolves undefined, i.e. Escape.
+    await runCherryPickToBranch(container)
+
+    expect(pick).toHaveBeenCalledTimes(1)
+    expect(cherryPickCalls(executeCommand)).toHaveLength(0)
+  })
+
+  it('notifies instead of picking when the repository has no branches', async () => {
+    const { container, pick, notify } = renderEditor(false, { branches: [] })
+    await flush()
+
+    await runCherryPickToBranch(container)
+
+    expect(pick).not.toHaveBeenCalled()
+    expect(notify).toHaveBeenCalledWith({
+      severity: Severity.Info,
+      message: 'No branches available.',
+    })
+  })
+
+  it('notifies when the current branch is the only one', async () => {
+    const { container, pick, notify } = renderEditor(false, { branches: ['main'] })
+    await flush()
+
+    await runCherryPickToBranch(container)
+
+    expect(pick).not.toHaveBeenCalled()
+    expect(notify).toHaveBeenCalledWith({
+      severity: Severity.Info,
+      message: 'No other branch to cherry-pick onto.',
+    })
   })
 })
