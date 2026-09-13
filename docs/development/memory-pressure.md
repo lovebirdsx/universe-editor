@@ -84,6 +84,8 @@
 | `flow=` | **区间增量**，上报即清零；`name:calls、chars` | `mdparse` / `mdreseal` / `colorize` / `colorize.skip` / `materialize` |
 | `gauge=` | **绝对值**，取最近一次渲染写入；0 值省略 | `domnodes` / `astnodes` / `sealednodes` / `tailchars` |
 
+`flow` 有**两个读法，不可混用**：落盘行走 `drainHeapFlow()`（读即清零，采样器每 5s 一次，所以每行描述自己那段区间）；e2e 探针走 `readHeapFlowTotals()`（进程累计、非破坏性，由 spec 取前后两次读数相减）。清零型读法只能有一个消费者——探针曾共用它，于是采样器先读到的那部分对 spec 静默消失：`smoke.agentStreamMemory` 在本地稳过（约 600ms 的流恰好落在两次采样之间），在 CI 上报 `mdparse.calls: 1`。加新的计数消费者时沿用累计读法。
+
 `sealednodes` / `tailchars` 记的是**最近一条流式消息**的密封进度（`MarkdownView` 的解析缓存本身），消息 seal 后不归零——它描述的正是「这条流结束时的代价」，seal 一下就把读数抹成 0 等于让这条量在最该看的时候消失。
 
 读法（判定优先于数值，同 `holders`）：
@@ -130,6 +132,6 @@
 
 ## 验证
 
-- 单测：`packages/platform/src/__tests__/ipc/ipcFrameGuard.test.ts`、`ipcFrameGate.test.ts`、`log/logFloodFold.test.ts`；`apps/editor/src/renderer/services/memory/__tests__/`（阈值/迟滞/缓存归还字节、上报节流与"首个读数必上报"、holder 采集容错、`heapFlowCounters.test.ts` 的 drain 清零与非法值、`flow=`/`gauge=` 为空时字段整体省略、取数抛错不影响堆读数）、`rendererHeapReporter.test.ts`、`main/services/diagnostics/__tests__/`（`renderer-heap` 行格式、非法样本被丢、越界的 `flow`/`gauge` 条目被丢、ring 满 32 淘汰最旧、窗口号盖章）、`AcpSession.liveBudget.test.ts`（trim 后 `_residentBytes === _measureResidentBytes()`）、`services/acp/__tests__/markdownIncremental.test.ts`（等价性、sealed 前缀的元素身份、`mdparse.chars` 记的是被重新解析的字符数）、`workbench/agents/__tests__/CodeBlock.test.tsx` + `workbench/markdown/__tests__/markdownStreamingGating.test.tsx`（流式期间不着色、seal 后着色一次、回收实例翻回流式时旧 html 被清空、sealed 段在 tail 增长时不被重渲染）。
+- 单测：`packages/platform/src/__tests__/ipc/ipcFrameGuard.test.ts`、`ipcFrameGate.test.ts`、`log/logFloodFold.test.ts`；`apps/editor/src/renderer/services/memory/__tests__/`（阈值/迟滞/缓存归还字节、上报节流与"首个读数必上报"、holder 采集容错、`heapFlowCounters.test.ts` 的 drain 清零与非法值、累计读法不被 drain 影响、`flow=`/`gauge=` 为空时字段整体省略、取数抛错不影响堆读数）、`rendererHeapReporter.test.ts`、`main/services/diagnostics/__tests__/`（`renderer-heap` 行格式、非法样本被丢、越界的 `flow`/`gauge` 条目被丢、ring 满 32 淘汰最旧、窗口号盖章）、`AcpSession.liveBudget.test.ts`（trim 后 `_residentBytes === _measureResidentBytes()`）、`services/acp/__tests__/markdownIncremental.test.ts`（等价性、sealed 前缀的元素身份、`mdparse.chars` 记的是被重新解析的字符数）、`workbench/agents/__tests__/CodeBlock.test.tsx` + `workbench/markdown/__tests__/markdownStreamingGating.test.tsx`（流式期间不着色、seal 后着色一次、回收实例翻回流式时旧 html 被清空、sealed 段在 tail 增长时不被重渲染）。
 - e2e：`@p0` `apps/editor/e2e/specs/smoke.memoryPressure.spec.ts`——**直接验证"`performance.memory` 在真实 Electron renderer 里可读"这个核心假设**、releaser 已注册、强制释放有归因，以及**堆曲线真的抵达 main 的 `processMetrics.log`**。最后一条是必需的：上报是 fire-and-forget，方法名写错或通道没注册会被完全静默吞掉，产出的报告与"这个构建本来就没有曲线"无法区分。
 - e2e：`@p1` `apps/editor/e2e/specs/smoke.agentStreamMemory.spec.ts`——把一条 300KB 的思考消息喂给真窗口（夹具 `emit-thought:<count>x<kb>[,fence]`，回合在末块后留 500ms 观察窗），断言**可密封消息的 `mdparse.chars` 不超过 (长度 + 每次调用有界的尾部)**、sealed 缓存确实在增长、`colorize.chars === 0`；再断言**从不闭合的围栏在流式期间 `colorize.chars === 0`、seal 之后被着色**，两条都比对全文逐字符相等。刻意不断言 WS/RSS/墙钟：那是机器属性，而这里要守的是算法形状。

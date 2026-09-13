@@ -8,11 +8,19 @@ import {
   bumpHeapFlow,
   drainHeapFlow,
   readCodeHtmlBytes,
+  readHeapFlowTotals,
   readHeapGauges,
   setHeapGauge,
 } from '../heapFlowCounters.js'
 
 const ALL_GAUGES = ['domnodes', 'astnodes', 'sealednodes', 'tailchars'] as const
+
+/** Totals never reset, so a reading is only meaningful against an earlier one. */
+const callsSince = (baseline: readonly { name: string; calls: number }[], name: string): number => {
+  const before = baseline.find((f) => f.name === name)?.calls ?? 0
+  const now = readHeapFlowTotals().find((f) => f.name === name)?.calls ?? 0
+  return now - before
+}
 
 describe('heap flow counters', () => {
   beforeEach(() => {
@@ -63,6 +71,35 @@ describe('heap flow counters', () => {
     setHeapGauge('domnodes', -1)
 
     expect(readHeapGauges()).toEqual([])
+  })
+})
+
+describe('process totals', () => {
+  /**
+   * The reason the totals exist. `drainHeapFlow` is destructive and the heap sampler
+   * calls it every 5 seconds; a second observer sharing that counter loses whatever a
+   * sample took first. That is what made the streaming e2e spec report `mdparse.calls: 1`
+   * on a contended runner while passing locally, so it is worth a test rather than a
+   * comment.
+   */
+  it('survives a drain by another observer', () => {
+    const baseline = readHeapFlowTotals()
+
+    bumpHeapFlow('mdparse', 100)
+    drainHeapFlow() // the sampler samples mid-stream
+    bumpHeapFlow('mdparse', 50)
+
+    expect(callsSince(baseline, 'mdparse')).toBe(2)
+    expect(drainHeapFlow()).toEqual([{ name: 'mdparse', calls: 1, chars: 50 }])
+  })
+
+  it('is not itself destructive', () => {
+    const baseline = readHeapFlowTotals()
+
+    bumpHeapFlow('colorize', 8)
+    readHeapFlowTotals()
+
+    expect(callsSince(baseline, 'colorize')).toBe(1)
   })
 })
 

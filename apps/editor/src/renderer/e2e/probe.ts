@@ -49,8 +49,8 @@ import {
 } from '@universe-editor/platform'
 import type { IAcpSessionService } from '../services/acp/session/acpSessionService.js'
 import {
-  drainHeapFlow,
   readCodeHtmlBytes,
+  readHeapFlowTotals,
   readHeapGauges,
 } from '../services/memory/heapFlowCounters.js'
 import type { IAcpSessionHistoryService } from '../services/acp/session/acpSessionHistory.js'
@@ -2223,7 +2223,7 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       }
     },
     getHeapFlowCounters: () => ({
-      flow: drainHeapFlow(),
+      flow: readHeapFlowTotals(),
       gauge: readHeapGauges(),
       codeHtmlBytes: readCodeHtmlBytes(),
     }),

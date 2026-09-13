@@ -50,7 +50,8 @@ const flowOf = (counters: StreamCounters, name: string): { calls: number; chars:
 const gaugeOf = (counters: StreamCounters, name: string): number =>
   counters.gauge.find((g) => g.name === name)?.value ?? 0
 
-async function startEchoSession(page: Page): Promise<void> {
+/** Open a session and return the counter baseline the stream will be measured against. */
+async function startEchoSession(page: Page): Promise<StreamCounters> {
   await page.evaluate(([id, p]) => window.__E2E__!.installAcpEchoAgent(id, p), [
     'echo',
     ECHO_AGENT_PATH,
@@ -61,8 +62,9 @@ async function startEchoSession(page: Page): Promise<void> {
   await expect
     .poll(() => page.evaluate(() => window.__E2E__!.getAcpSessionStatus()), { timeout: 20000 })
     .toBe('idle')
-  // Drop whatever opening a session counted, so the reading below covers the stream.
-  await page.evaluate(() => window.__E2E__!.getHeapFlowCounters())
+  // Baseline, not a reset: the counters are process totals, so opening a session is
+  // excluded by differencing rather than by clearing shared state.
+  return await page.evaluate(() => window.__E2E__!.getHeapFlowCounters())
 }
 
 /**
@@ -77,59 +79,85 @@ function drivePrompt(page: Page, text: string): Promise<void> {
   return running
 }
 
-/** Wait until the streamed thought has arrived in full on the view model. */
-async function waitForThought(page: Page, expected: string): Promise<void> {
-  await expect
-    .poll(
-      () =>
-        page.evaluate(() =>
-          window
-            .__E2E__!.getAcpMessages()
-            .filter((m) => m.role === 'thought')
-            .reduce((sum, m) => sum + m.text.length, 0),
-        ),
-      { timeout: 30000 },
-    )
-    .toBe(expected.length)
-}
+/** Poll interval while the stream runs; the agent's post-chunk hold is 500ms. */
+const SAMPLE_INTERVAL_MS = 20
 
 /**
- * Wait until the thought message is marked streaming. The counters read next describe
- * a live stream — they are drained on every read, so time spent after the stream only
- * thins them out. The agent ends the turn (sealing the message) 500ms after the last
- * chunk, and `waitForThought` polls with the default intervals, up to 1s apart, so it
- * can report the text complete only after that hold has already expired; the flag is
- * the only signal that says the read below is still inside the stream.
+ * Work the stream did, as the difference between two process totals.
+ *
+ * The counters are process totals (see `E2EHeapFlowCounters.flow`), so this is immune to
+ * the heap sampler draining its own view of them every 5 seconds. What still matters is
+ * *when* the closing reading is taken: the agent ends the turn 500ms after the last
+ * chunk, and sealing the message triggers the deferred work these tests assert is absent
+ * during streaming. So the closing reading is the last one observed while the message was
+ * still marked streaming — polled, rather than taken once after the text arrives, because
+ * the 500ms hold can expire before a single post-hoc read lands (that is what timed out on
+ * CI). Gauges are absolute, so their streaming-time peak is what the assertions describe.
  */
-async function waitForStreaming(page: Page): Promise<void> {
-  await expect
-    .poll(
-      () =>
-        page.evaluate(() =>
-          window.__E2E__!.getAcpMessages().some((m) => m.role === 'thought' && m.streaming),
-        ),
-      { timeout: 20000 },
-    )
-    .toBe(true)
+async function measureStream(
+  page: Page,
+  baseline: StreamCounters,
+  expectedLength: number,
+): Promise<StreamCounters> {
+  const deadline = Date.now() + 30000
+  let lastStreaming: StreamCounters | undefined
+
+  for (;;) {
+    const batch = await page.evaluate(() => {
+      // One evaluate on purpose: the reading and the flag it gets attributed to have to
+      // describe the same instant.
+      const counters = window.__E2E__!.getHeapFlowCounters()
+      const thoughts = window.__E2E__!.getAcpMessages().filter((m) => m.role === 'thought')
+      return {
+        flow: counters.flow,
+        gauge: counters.gauge,
+        streaming: thoughts.some((m) => m.streaming),
+        length: thoughts.reduce((sum, m) => sum + m.text.length, 0),
+      }
+    })
+
+    if (batch.streaming) lastStreaming = { flow: batch.flow, gauge: batch.gauge }
+    else if (batch.length >= expectedLength && lastStreaming) return diff(baseline, lastStreaming)
+
+    if (Date.now() > deadline) {
+      throw new Error(
+        `no sealed reading for a complete thought: ${batch.length}/${expectedLength} chars, ` +
+          `streaming=${batch.streaming}, sawStreaming=${lastStreaming !== undefined}`,
+      )
+    }
+    await page.waitForTimeout(SAMPLE_INTERVAL_MS)
+  }
 }
 
-test.describe.configure({ mode: 'default' })
+/** Flow as `after - before`; gauges pass through (absolute, not accumulated). */
+function diff(before: StreamCounters, after: StreamCounters): StreamCounters {
+  return {
+    flow: after.flow.map((entry) => {
+      const start = flowOf(before, entry.name)
+      return {
+        name: entry.name,
+        calls: entry.calls - start.calls,
+        chars: entry.chars - start.chars,
+      }
+    }),
+    gauge: after.gauge,
+  }
+}
+
+// Serial within the file (both tests drive the same shared echo agent), and each streams
+// hundreds of chunks while polling — past the 30s suite default on a 2-core runner.
+test.describe.configure({ mode: 'default', timeout: 90000 })
 
 test.describe('@p1 acp streaming render accounting', () => {
   test('a sealable thought storm re-parses only its tail', async ({ page, workbench }) => {
     await workbench.waitForRestored()
-    await startEchoSession(page)
+    const baseline = await startEchoSession(page)
 
     const COUNT = 300
     const expected = thoughtText(COUNT, CHUNK, false)
     const running = drivePrompt(page, `emit-thought:${COUNT}x1`)
 
-    // The echo agent holds the turn open briefly after the last chunk, and the wait
-    // below pins the reading inside that window — the flow counters are drained per
-    // read, so time spent after the stream would only thin them out.
-    await waitForThought(page, expected)
-    await waitForStreaming(page)
-    const streaming = await page.evaluate(() => window.__E2E__!.getHeapFlowCounters())
+    const streaming = await measureStream(page, baseline, expected.length)
     await running
 
     // Content first: deferring work must never drop text.
@@ -148,9 +176,9 @@ test.describe('@p1 acp streaming render accounting', () => {
     expect(mdparse.chars, JSON.stringify(mdparse)).toBeLessThan(
       expected.length + 16 * CHUNK * mdparse.calls,
     )
-    // The sealed cache really did fill. Read while streaming, this is the live value;
-    // it also guards the seal path, where the parse cache holds the readings the gauge
-    // reports — a static render reporting 0 would say nothing ever sealed.
+    // The sealed cache really did fill: this is the peak the gauge reached while the
+    // message streamed, so a message whose split never found a boundary — nothing ever
+    // sealed — reports 0 here no matter what the final static render says.
     expect(gaugeOf(streaming, 'sealednodes')).toBeGreaterThan(0)
     // Nothing in this message is a fence, so nothing should have been tokenized.
     expect(flowOf(streaming, 'colorize').chars).toBe(0)
@@ -161,7 +189,7 @@ test.describe('@p1 acp streaming render accounting', () => {
     workbench,
   }) => {
     await workbench.waitForRestored()
-    await startEchoSession(page)
+    const baseline = await startEchoSession(page)
 
     // The fence opens on the first chunk and is never closed, so no blank line is ever
     // outside it: nothing seals and the whole message stays one growing tail. That is
@@ -170,9 +198,7 @@ test.describe('@p1 acp streaming render accounting', () => {
     const expected = thoughtText(COUNT, CHUNK, true)
     const running = drivePrompt(page, `emit-thought:${COUNT}x1,fence`)
 
-    await waitForThought(page, expected)
-    await waitForStreaming(page)
-    const streaming = await page.evaluate(() => window.__E2E__!.getHeapFlowCounters())
+    const streaming = await measureStream(page, baseline, expected.length)
 
     expect(flowOf(streaming, 'colorize').chars).toBe(0)
     expect(flowOf(streaming, 'colorize.skip').chars).toBeGreaterThan(0)
@@ -180,11 +206,14 @@ test.describe('@p1 acp streaming render accounting', () => {
     await running
     // Sealing ends the deferral: the fence is tokenized as usual once the message is
     // done, so this is a streaming-time gate and not a permanent loss of highlighting.
+    // Counted from the same baseline — streaming-time colorize was just asserted to be
+    // zero, so anything that shows up here happened after the seal.
     await expect
       .poll(
-        async () =>
-          flowOf(await page.evaluate(() => window.__E2E__!.getHeapFlowCounters()), 'colorize')
-            .calls,
+        async () => {
+          const now = await page.evaluate(() => window.__E2E__!.getHeapFlowCounters())
+          return flowOf(diff(baseline, now), 'colorize').calls
+        },
         { timeout: 30000 },
       )
       .toBeGreaterThan(0)

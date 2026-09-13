@@ -64,6 +64,13 @@ const configOptionsEnabled = process.env.ECHO_AGENT_CONFIG_OPTIONS === '1'
 // turn ends, which resets the streaming state those counters describe.
 const THOUGHT_HOLD_MS = 500
 
+// Pause between `emit-thought` chunk groups. Has to exceed not just the renderer's 16ms
+// update batch but the time one render of the accumulated message takes (~50ms for a
+// 300KB thought), or groups coalesce and the stream arrives as a couple of giant updates
+// — the opposite of the many-small-renders shape the spec measures. Measured on a
+// 300-chunk stream: 4ms gave 2 renders, 25ms gave 5, this gives 8.
+const THOUGHT_YIELD_MS = 50
+
 // Select options advertised on session/new when ECHO_AGENT_CONFIG_OPTIONS=1.
 // The current values keep the bar's natural width between SIDEBAR_MIN (170px,
 // guaranteed overflow) and a wide sidebar (everything inline); alternatives
@@ -404,9 +411,12 @@ async function runPrompt(id, params) {
           content: { type: 'text', text: body },
         },
       })
-      // Yield periodically so the editor's batching produces several renders
-      // instead of folding the whole stream into one.
-      if (i % 25 === 24) await delay(4)
+      // Yield past the renderer's 16ms update batch so the stream lands as several
+      // renders instead of folding into one. A yield shorter than that window does not
+      // do it: with `delay(4)` a 300-chunk stream produced 2 renders on a fast machine
+      // and 1 on a contended CI runner, where the spec asserting "more than one render
+      // still parses each character about once" has nothing left to measure.
+      if (i % 25 === 24) await delay(THOUGHT_YIELD_MS)
     }
     await delay(THOUGHT_HOLD_MS)
     activeTurns.delete(sessionId)

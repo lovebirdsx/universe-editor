@@ -40,16 +40,18 @@ export interface HeapGaugeSnapshot {
 
 const flowCalls = new Map<HeapFlowName, number>()
 const flowChars = new Map<HeapFlowName, number>()
+const totalCalls = new Map<HeapFlowName, number>()
+const totalChars = new Map<HeapFlowName, number>()
 const gauges = new Map<HeapGaugeName, number>()
 
 let codeHtmlBytes = 0
 
 export function bumpHeapFlow(name: HeapFlowName, chars: number): void {
+  const counted = Number.isFinite(chars) && chars > 0 ? chars : 0
   flowCalls.set(name, (flowCalls.get(name) ?? 0) + 1)
-  flowChars.set(
-    name,
-    (flowChars.get(name) ?? 0) + (Number.isFinite(chars) && chars > 0 ? chars : 0),
-  )
+  flowChars.set(name, (flowChars.get(name) ?? 0) + counted)
+  totalCalls.set(name, (totalCalls.get(name) ?? 0) + 1)
+  totalChars.set(name, (totalChars.get(name) ?? 0) + counted)
 }
 
 /**
@@ -65,6 +67,26 @@ export function drainHeapFlow(): readonly HeapFlowSnapshot[] {
     snapshots.push({ name, calls, chars: flowChars.get(name) ?? 0 })
     flowCalls.set(name, 0)
     flowChars.set(name, 0)
+  }
+  return snapshots
+}
+
+/**
+ * Same counters, never cleared — process totals a second observer can difference.
+ *
+ * `drainHeapFlow` is destructive, so its readings only work for one consumer. The
+ * heap sampler is that consumer and it drains every 5 seconds; a spec sharing that
+ * counter would silently lose whatever a sample happened to take first, which is
+ * exactly what made `smoke.agentStreamMemory` pass locally (a ~600ms stream fits
+ * between two samples) and report `mdparse.calls: 1` on a contended CI runner.
+ * Monotonic totals are immune: take one reading before and one after, subtract.
+ */
+export function readHeapFlowTotals(): readonly HeapFlowSnapshot[] {
+  const snapshots: HeapFlowSnapshot[] = []
+  for (const name of HEAP_FLOW_NAMES) {
+    const calls = totalCalls.get(name) ?? 0
+    if (calls === 0) continue
+    snapshots.push({ name, calls, chars: totalChars.get(name) ?? 0 })
   }
   return snapshots
 }

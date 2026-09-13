@@ -369,13 +369,18 @@ export interface E2EMemoryPressure {
 }
 
 /**
- * Incremental renderer work counters; see E2EProbe.getHeapFlowCounters. The three
- * dimensions stay separate on purpose — `flow` is an interval delta, `gauge` an
- * absolute reading, `codeHtmlBytes` a resident total — because each answers a
- * different question about what a stream cost.
+ * Renderer work counters; see E2EProbe.getHeapFlowCounters. The three dimensions stay
+ * separate on purpose — `flow` is a process total, `gauge` an absolute reading,
+ * `codeHtmlBytes` a resident total — because each answers a different question about
+ * what a stream cost.
  */
 export interface E2EHeapFlowCounters {
-  /** Calls and characters per counted operation since the previous read. */
+  /**
+   * Calls and characters per counted operation, accumulated since process start.
+   * Difference two readings to get an interval. Deliberately not the drained view the
+   * heap sampler consumes: that one clears on read, so a spec sharing it would lose
+   * whatever a 5-second sample took first.
+   */
   readonly flow: ReadonlyArray<{
     readonly name: string
     readonly calls: number
@@ -1596,10 +1601,11 @@ export interface E2EProbe {
    */
   getMemoryPressure(forceLevel?: 'elevated' | 'critical'): Promise<E2EMemoryPressure>
   /**
-   * Renderer work counters since the previous read (drained, so each call covers
-   * its own interval) plus the current absolute gauges. Reads the same module the
-   * heap reporter drains, so a spec can assert what a stream *cost* without
-   * waiting for a memory-pressure sample that a fixed build never reaches.
+   * Renderer work counters accumulated since process start, plus the current absolute
+   * gauges. Reads the same module the heap reporter drains, but non-destructively, so a
+   * spec can assert what a stream *cost* — by differencing two readings — without
+   * waiting for a memory-pressure sample that a fixed build never reaches, and without
+   * racing the sampler for the same numbers.
    */
   getHeapFlowCounters(): E2EHeapFlowCounters
   /**
