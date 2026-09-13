@@ -109,7 +109,7 @@ function registerProviders(context: ExtensionContext, server: IMdServer): void {
         server.$provideReferences(uriString(doc.uri), position, ctx.includeDeclaration),
     }),
     languages.registerWorkspaceSymbolProvider({
-      provideWorkspaceSymbols: (query) => server.$provideWorkspaceSymbols(query),
+      provideWorkspaceSymbols: (query, token) => server.$provideWorkspaceSymbols(query, token),
     }),
     languages.registerFoldingRangeProvider(MARKDOWN_LANGUAGES, {
       provideFoldingRanges: (doc) => server.$provideFoldingRanges(uriString(doc.uri)),

@@ -6,7 +6,7 @@
  * with a stub IMdClient.
  */
 import MarkdownIt from 'markdown-it'
-import { CancellationToken } from 'vscode-languageserver-protocol'
+import { CancellationToken, CancellationTokenSource } from 'vscode-languageserver-protocol'
 import { URI } from 'vscode-uri'
 import {
   createLanguageService,
@@ -180,8 +180,20 @@ export function createMdServer(client: IMdClient, root: URI | undefined): MdServ
       return ls.getReferences(doc, position, { includeDeclaration }, CancellationToken.None)
     },
 
-    $provideWorkspaceSymbols: async (query) =>
-      ls.getWorkspaceSymbols(query, CancellationToken.None),
+    $provideWorkspaceSymbols: async (query, token) => {
+      // The workspace scan behind this can take seconds on a big workspace; the
+      // picker cancels superseded queries and enforces a deadline, so bridge its
+      // token into the language service instead of dropping it on the floor.
+      if (!token) return ls.getWorkspaceSymbols(query, CancellationToken.None)
+      const cts = new CancellationTokenSource()
+      const sub = token.onCancellationRequested(() => cts.cancel())
+      try {
+        return await ls.getWorkspaceSymbols(query, cts.token)
+      } finally {
+        sub.dispose()
+        cts.dispose()
+      }
+    },
 
     $provideFoldingRanges: async (uri) => {
       const doc = await resolveDoc(uri)

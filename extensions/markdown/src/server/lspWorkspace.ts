@@ -10,6 +10,9 @@ import type { FileStat, ITextDocument, IWorkspace } from 'vscode-markdown-langua
 import type { IMdClient } from './types.js'
 import { DocumentStore, makeDoc } from './documentStore.js'
 
+/** Concurrent `$readFile` RPCs while materializing the workspace scan. */
+const READ_CONCURRENCY = 16
+
 export class LspWorkspace implements IWorkspace {
   constructor(
     private readonly _store: DocumentStore,
@@ -37,11 +40,19 @@ export class LspWorkspace implements IWorkspace {
     const result = new Map<string, ITextDocument>()
     for (const doc of this._store.all()) result.set(doc.uri, doc)
 
-    const files = await this._client.$findMarkdownFiles()
-    for (const file of files) {
-      if (result.has(file)) continue
-      const doc = await this.openMarkdownDocument(URI.parse(file))
-      if (doc) result.set(file, doc)
+    const files = (await this._client.$findMarkdownFiles()).filter((f) => !result.has(f))
+    // Each read is one RPC round-trip to the renderer; reading the files
+    // sequentially made a workspace with a thousand markdown files take a
+    // thousand serialized round-trips. Bounded concurrency keeps the host
+    // responsive while cutting the wall time by the batch factor.
+    for (let i = 0; i < files.length; i += READ_CONCURRENCY) {
+      const batch = files.slice(i, i + READ_CONCURRENCY)
+      const docs = await Promise.all(
+        batch.map(
+          async (file) => [file, await this.openMarkdownDocument(URI.parse(file))] as const,
+        ),
+      )
+      for (const [file, doc] of docs) if (doc) result.set(file, doc)
     }
     return result.values()
   }

@@ -45,8 +45,11 @@ vi.mock('../../languageFeatures/typescript/lspMonacoConvert.js', () => ({
   workspaceSymbolsToEntries: (symbols: readonly WorkspaceSymbolEntry[] | null) => symbols ?? [],
 }))
 
-const { WorkspaceSymbolQuickAccessProvider, _resetLastResultsForTests } =
-  await import('../providers/WorkspaceSymbolQuickAccessProvider.js')
+const {
+  WorkspaceSymbolQuickAccessProvider,
+  _resetLastResultsForTests,
+  WORKSPACE_SYMBOL_PROVIDER_TIMEOUT_MS,
+} = await import('../providers/WorkspaceSymbolQuickAccessProvider.js')
 
 class FakeQuickPick<T extends IQuickPickItem> implements IQuickPick<T> {
   private readonly _onDidAccept = new Emitter<T[]>()
@@ -134,22 +137,34 @@ interface QueryCall {
 
 function setup(
   symbols: readonly WorkspaceSymbolEntry[] = [entry('foo')],
-  options?: { pending?: boolean; rootPath?: string },
+  options?: { pending?: boolean; rootPath?: string; hangingProviders?: number },
 ) {
   const calls: QueryCall[] = []
-  const langFeatures = {
-    getWorkspaceSymbolProviders: () => [
-      {
-        provideWorkspaceSymbols: (query: string, token: CancellationToken) => {
-          calls.push({ query, token })
-          // pending: never settles, simulating a slow language server so tests
-          // can observe the in-flight token's cancellation.
-          return options?.pending
-            ? new Promise<readonly WorkspaceSymbolEntry[]>(() => {})
-            : Promise.resolve(symbols)
-        },
+  const hangingCalls: QueryCall[] = []
+  const providers: { provideWorkspaceSymbols: (q: string, t: CancellationToken) => unknown }[] = [
+    {
+      provideWorkspaceSymbols: (query: string, token: CancellationToken) => {
+        calls.push({ query, token })
+        // pending: never settles, simulating a slow language server so tests
+        // can observe the in-flight token's cancellation.
+        return options?.pending
+          ? new Promise<readonly WorkspaceSymbolEntry[]>(() => {})
+          : Promise.resolve(symbols)
       },
-    ],
+    },
+  ]
+  // A second provider that never settles: the markdown workspace-symbol scan on a
+  // giant depot behaves exactly like this (it walks the whole tree over RPC).
+  for (let i = 0; i < (options?.hangingProviders ?? 0); i++) {
+    providers.push({
+      provideWorkspaceSymbols: (query: string, token: CancellationToken) => {
+        hangingCalls.push({ query, token })
+        return new Promise<readonly WorkspaceSymbolEntry[]>(() => {})
+      },
+    })
+  }
+  const langFeatures = {
+    getWorkspaceSymbolProviders: () => providers,
   }
   const services = new ServiceCollection()
   services.set(IWorkspaceService, {
@@ -162,7 +177,7 @@ function setup(
   const inst = new InstantiationService(services)
   services.set(IInstantiationService, inst as unknown as IInstantiationService)
   const provider = inst.createInstance(WorkspaceSymbolQuickAccessProvider)
-  return { provider, calls }
+  return { provider, calls, hangingCalls }
 }
 
 function run(
@@ -297,6 +312,50 @@ describe('WorkspaceSymbolQuickAccessProvider', () => {
     expect(picker.busy).toBe(false)
     // Exact-prefix match outranks the substring match.
     expect(picker.items.map((i) => (i as IQuickPickItem).label)).toEqual(['foo', 'barFoo'])
+  })
+
+  it('renders a fast provider immediately instead of waiting for a hanging one', async () => {
+    // Regression (giant depot): the '#' picker used to Promise.all every provider,
+    // so the markdown workspace scan — which walks the whole tree over RPC and
+    // effectively never returns — swallowed the TypeScript results and left the
+    // spinner up forever ("No results" + endless progress bar).
+    const { provider, calls, hangingCalls } = setup([entry('SendNpcMail')], {
+      hangingProviders: 1,
+    })
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    picker.value = '#'
+    run(provider, picker)
+    await vi.advanceTimersByTimeAsync(0)
+
+    picker.fireValue('#sendnpc')
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS)
+    expect(calls.map((c) => c.query)).toEqual(['sendnpc'])
+    expect(hangingCalls.map((c) => c.query)).toEqual(['sendnpc'])
+    await vi.advanceTimersByTimeAsync(0)
+
+    // The fast provider's result is on screen even though the other never settled.
+    expect(picker.items.map((i) => (i as IQuickPickItem).label)).toEqual(['SendNpcMail'])
+    // Still busy: one provider is genuinely outstanding.
+    expect(picker.busy).toBe(true)
+  })
+
+  it('clears busy once a hanging provider hits its timeout', async () => {
+    const { provider, hangingCalls } = setup([entry('SendNpcMail')], { hangingProviders: 1 })
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    picker.value = '#'
+    run(provider, picker)
+    await vi.advanceTimersByTimeAsync(0)
+
+    picker.fireValue('#sendnpc')
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(picker.busy).toBe(true)
+
+    await vi.advanceTimersByTimeAsync(WORKSPACE_SYMBOL_PROVIDER_TIMEOUT_MS + 50)
+    expect(picker.busy).toBe(false)
+    expect(picker.items.map((i) => (i as IQuickPickItem).label)).toEqual(['SendNpcMail'])
+    // The timed-out provider is told to stop so it cannot keep burning the host.
+    expect(hangingCalls[0]!.token.isCancellationRequested).toBe(true)
   })
 
   it('cancels the in-flight query when a newer keystroke supersedes it', async () => {

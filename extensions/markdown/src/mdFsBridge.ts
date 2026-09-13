@@ -16,12 +16,16 @@
 import { stat as nodeStat, readFile as nodeReadFile, readdir } from 'node:fs/promises'
 import { isAbsolute, relative } from 'node:path'
 import { workspace, FileType, type FileStat } from '@universe-editor/extension-api'
-import { URI, Utils } from 'vscode-uri'
+import { URI } from 'vscode-uri'
 import type { IMdClient, MdFileStat, MdFileType } from './server/types.js'
 
-/** Directories never scanned for markdown (parity with the file-watcher excludes). */
-const SCAN_IGNORE: ReadonlySet<string> = new Set(['node_modules', '.git', 'dist', 'out', '.turbo'])
-const MARKDOWN_EXT = /\.(md|markdown)$/i
+/**
+ * Upper bound for the workspace markdown scan. The scan feeds workspace symbols,
+ * link validation and header completions — all "best effort over the workspace"
+ * features — so a bound is the right trade: on a game depot the tree holds
+ * millions of files and an unbounded scan is indistinguishable from a hang.
+ */
+const MAX_MARKDOWN_FILES = 5_000
 
 const decoder = new TextDecoder('utf-8', { fatal: false })
 
@@ -58,17 +62,6 @@ export function createMdFsBridge(root: URI | undefined): IMdClient {
       return await workspace.fs.readDirectory(path)
     } catch {
       return []
-    }
-  }
-
-  const collectMarkdown = async (dir: URI, out: string[]): Promise<void> => {
-    for (const [name, type] of await readDir(dir)) {
-      if (type === FileType.Directory) {
-        if (SCAN_IGNORE.has(name)) continue
-        await collectMarkdown(Utils.joinPath(dir, name), out)
-      } else if (MARKDOWN_EXT.test(name)) {
-        out.push(Utils.joinPath(dir, name).toString())
-      }
     }
   }
 
@@ -119,9 +112,14 @@ export function createMdFsBridge(root: URI | undefined): IMdClient {
     },
     $findMarkdownFiles: async () => {
       if (!root) return []
-      const out: string[] = []
-      await collectMarkdown(root, out)
-      return out
+      // Goes through the renderer's rg-backed enumeration: bounded and prunes the
+      // configured search excludes during the walk. The previous hand-rolled
+      // recursive walk issued one `workspace.fs.readDirectory` RPC per directory —
+      // on a game depot (600k+ directories, millions of files) that never
+      // returned, which pinned the '#' workspace-symbol picker's spinner forever
+      // and swallowed every other provider's symbols along with it.
+      const found = await workspace.findFiles('**/*.{md,markdown}', undefined, MAX_MARKDOWN_FILES)
+      return found.map((uri) => uri.toString())
     },
   }
 }

@@ -48,6 +48,15 @@ type MonacoNamespace = Awaited<ReturnType<typeof MonacoLoader.ensureInitialized>
 
 const MAX_RESULTS = 512
 const WORKSPACE_SYMBOL_DEBOUNCE_MS = 150
+/**
+ * Per-provider budget for one query. Workspace-symbol providers are independent
+ * and unequal: TS/JS answers from an in-memory tsserver in milliseconds, while a
+ * provider that scans the workspace tree can take minutes on a giant depot (or
+ * never finish). Without a per-provider deadline one such provider keeps the
+ * picker busy forever — the spinner never stops and, before results were merged
+ * incrementally, the fast providers' symbols never even rendered.
+ */
+export const WORKSPACE_SYMBOL_PROVIDER_TIMEOUT_MS = 5_000
 /** A longer selection makes a poor symbol filter (VSCode caps at 1024). */
 const MAX_FILTER_LENGTH = 1024
 
@@ -151,6 +160,8 @@ export class WorkspaceSymbolQuickAccessProvider implements IQuickAccessProvider 
     let debounce: ReturnType<typeof setTimeout> | undefined
     /** The in-flight query; cancelled by the next keystroke / empty query / hide. */
     let queryCts: CancellationTokenSource | undefined
+    /** Per-provider deadline timers of the in-flight query, cleared with it. */
+    const providerTimers: ReturnType<typeof setTimeout>[] = []
 
     const render = (entries: readonly WorkspaceSymbolEntry[], query: string): void => {
       byId.clear()
@@ -194,6 +205,8 @@ export class WorkspaceSymbolQuickAccessProvider implements IQuickAccessProvider 
     let disposed = false
 
     const cancelInFlight = (): void => {
+      for (const timer of providerTimers) clearTimeout(timer)
+      providerTimers.length = 0
       queryCts?.cancel()
       queryCts?.dispose()
       queryCts = undefined
@@ -225,30 +238,70 @@ export class WorkspaceSymbolQuickAccessProvider implements IQuickAccessProvider 
       const startedAt = Date.now()
       picker.busy = true
       const source = (queryCts = new CancellationTokenSource(token))
-      void Promise.all(
-        wsProviders.map((p) =>
-          p
-            .provideWorkspaceSymbols(query, source.token)
-            .then((symbols) => workspaceSymbolsToEntries(symbols, ns))
-            .catch(() => [] as WorkspaceSymbolEntry[]),
-        ),
-      ).then((perProvider) => {
-        const stale = source.token.isCancellationRequested || mySeq !== seq
-        // Settled queries no longer need cancellation; disposing here releases
-        // the parent-token subscription instead of waiting for the next
-        // keystroke / teardown (a short-lived session could otherwise outlive
-        // its last query's subscription).
-        if (queryCts === source) queryCts = undefined
-        source.dispose()
-        if (stale || disposed) return
+      const isStale = (): boolean =>
+        source.token.isCancellationRequested || mySeq !== seq || disposed
+      // Merge per-provider: each provider renders as soon as IT answers, so a slow
+      // one can no longer hide the fast ones' symbols. Providers are also given a
+      // deadline each — on expiry the provider is cancelled and treated as empty,
+      // otherwise a provider that never settles pins the spinner up forever.
+      const collected: WorkspaceSymbolEntry[][] = wsProviders.map(() => [])
+      let outstanding = wsProviders.length
+      /** All providers answered (or timed out): stop the spinner, cache, release. */
+      const finishQuery = (flat: readonly WorkspaceSymbolEntry[]): void => {
         picker.busy = false
-        const flat = perProvider.flat()
         this._logger.debug(
           `workspace symbol query "${query}" → ${flat.length} results in ${Date.now() - startedAt}ms`,
         )
         // Cache the raw results so a later empty query can reuse them.
-        if (root) lastResults = { root, entries: flat }
+        if (root) lastResults = { root, entries: [...flat] }
+        // Release the parent-token subscription now rather than waiting for the
+        // next keystroke / teardown (a short-lived session could otherwise
+        // outlive its last query's subscription).
+        if (queryCts === source) queryCts = undefined
+        source.dispose()
+      }
+      const settleOne = (index: number, entries: readonly WorkspaceSymbolEntry[]): void => {
+        if (isStale()) return
+        collected[index] = [...entries]
+        outstanding--
+        const flat = collected.flat()
+        if (outstanding === 0) finishQuery(flat)
         render(flat, query)
+      }
+      if (outstanding === 0) {
+        finishQuery([])
+        render([], query)
+        return
+      }
+      wsProviders.forEach((p, index) => {
+        // Per-provider deadline: cancelling on expiry stops the provider's own
+        // work (the token rides all the way into the language server) instead of
+        // just abandoning a promise that keeps running in the extension host.
+        const perProvider = new CancellationTokenSource(source.token)
+        let done = false
+        // `finish` reads `timer` and the deadline callback calls `finish`; the cycle
+        // is fine because neither runs before this synchronous block completes.
+        const finish = (entries: readonly WorkspaceSymbolEntry[]): void => {
+          if (done) return
+          done = true
+          clearTimeout(timer)
+          perProvider.dispose()
+          settleOne(index, entries)
+        }
+        const timer = setTimeout(() => {
+          if (done || isStale()) return
+          this._logger.warn(
+            `workspace symbol provider #${index} exceeded ` +
+              `${WORKSPACE_SYMBOL_PROVIDER_TIMEOUT_MS}ms for "${query}"; dropping its results`,
+          )
+          perProvider.cancel()
+          finish([])
+        }, WORKSPACE_SYMBOL_PROVIDER_TIMEOUT_MS)
+        providerTimers.push(timer)
+        void p
+          .provideWorkspaceSymbols(query, perProvider.token)
+          .then((symbols) => finish(workspaceSymbolsToEntries(symbols, ns)))
+          .catch(() => finish([]))
       })
     }
 

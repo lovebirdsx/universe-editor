@@ -31,6 +31,17 @@ import type {
   WorkspaceSymbol,
 } from 'vscode-languageserver-types'
 
+/**
+ * Minimal cancellation shape, satisfied structurally by both the extension API's
+ * `CancellationToken` (what the plugin holds) and the LSP one (what the language
+ * service wants) — the server layer stays free of an extension-API dependency,
+ * and `mdServer` bridges the two.
+ */
+export interface MdCancellationToken {
+  readonly isCancellationRequested: boolean
+  onCancellationRequested(listener: () => void): { dispose(): void }
+}
+
 export interface MdTextDocumentDto {
   readonly uri: string
   readonly version: number
@@ -70,7 +81,7 @@ export interface IMdServer {
     position: Position,
     includeDeclaration: boolean,
   ): Promise<Location[]>
-  $provideWorkspaceSymbols(query: string): Promise<WorkspaceSymbol[]>
+  $provideWorkspaceSymbols(query: string, token?: MdCancellationToken): Promise<WorkspaceSymbol[]>
   $provideFoldingRanges(uri: string): Promise<FoldingRange[]>
   $provideHover(uri: string, position: Position): Promise<Hover | null>
   /** Path/fragment/reference completions (`[](`, `#`, `[ref]`); markdown-specific. */
@@ -123,6 +134,10 @@ export interface IMdClient {
   $readFile(uri: string): Promise<string | undefined>
   $stat(uri: string): Promise<MdFileStat | undefined>
   $readDirectory(uri: string): Promise<ReadonlyArray<readonly [string, MdFileType]>>
-  /** All markdown file URIs under the workspace root (recursive, ignoring node_modules etc.). */
+  /**
+   * Markdown file URIs under the workspace root. Bounded by design — a workspace
+   * can hold millions of files, and every caller (workspace symbols, link
+   * validation, header completions) is best-effort by nature.
+   */
   $findMarkdownFiles(): Promise<readonly string[]>
 }
