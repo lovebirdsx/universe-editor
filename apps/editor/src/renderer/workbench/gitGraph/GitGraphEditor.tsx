@@ -26,6 +26,7 @@ import {
 } from 'react'
 import {
   CommandsRegistry,
+  DisposableStore,
   Emitter,
   ICommandService,
   IDialogService,
@@ -96,10 +97,6 @@ import { useGraphKeyboardNav } from './useGraphKeyboardNav.js'
 import { useFullCommitMessages } from './useFullCommitMessages.js'
 import { usePersistedGraphSelection } from './usePersistedGraphSelection.js'
 import { useGitGraphAutoRefresh, useGitGraphEditorVisible } from './useGitGraphAutoRefresh.js'
-import {
-  GitGraphWorktreePickerDialog,
-  type GitGraphWorktreePickerState,
-} from './GitGraphWorktreePickerDialog.js'
 import { SendCommitToAgentChatAction } from '../../actions/agentContextActions.js'
 import styles from './GitGraphEditor.module.css'
 
@@ -149,6 +146,16 @@ interface CherryPickBranchItem extends IQuickPickItem {
 
 function toBranchItem(branch: string): CherryPickBranchItem {
   return { id: branch, label: branch, branch }
+}
+
+/** Worktree sync row. The path is carried explicitly so the row's label stays
+ *  free to gain decoration without changing the command argument. */
+interface WorktreeSyncItem extends IQuickPickItem {
+  readonly path: string
+}
+
+function toWorktreeSyncItem(wt: GitGraphWorktreeDto): WorktreeSyncItem {
+  return { id: wt.path, label: wt.name, description: wt.branch ?? wt.path, path: wt.path }
 }
 
 function formatDate(unixSeconds: number): string {
@@ -404,7 +411,6 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(() => gitGraphViewState.result === null)
   const [menu, setMenu] = useState<GitGraphMenuState | null>(null)
-  const [worktreePicker, setWorktreePicker] = useState<GitGraphWorktreePickerState | null>(null)
 
   // Selected commit(s): one hash to show in the Commit Changes view, two to compare.
   const [selection, setSelection] = useState<string[]>(() => gitGraphViewState.selection)
@@ -1495,13 +1501,99 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
     return result.commits.flatMap((c) => c.worktrees)
   }, [result])
 
+  // Multi-select quick pick over the candidate worktrees. Every candidate starts
+  // checked; Enter and the OK button confirm the whole checked set, Escape
+  // cancels. The input-row button flips between select-all and clear-all.
+  const pickWorktreesToSync = useCallback(
+    (
+      targetBranch: string,
+      candidates: readonly GitGraphWorktreeDto[],
+      force: boolean,
+    ): Promise<string[] | undefined> => {
+      if (!quickInput) return Promise.resolve(undefined)
+      const items = candidates.map(toWorktreeSyncItem)
+      const qp = quickInput.createQuickPick<WorktreeSyncItem>()
+      const allChecked = (): boolean => qp.selectedItems.length === items.length
+      // One button slot, two states: the icon and tooltip say which way it goes.
+      const syncChrome = (): void => {
+        qp.okLabel = force
+          ? localize('gitGraph.worktree.forceSync.confirm', 'Force sync ({count})', {
+              count: qp.selectedItems.length,
+            })
+          : localize('gitGraph.worktree.sync.confirm', 'Sync ({count})', {
+              count: qp.selectedItems.length,
+            })
+        qp.buttons = [
+          allChecked()
+            ? {
+                id: 'toggleAll',
+                iconId: 'clear-all',
+                tooltip: localize('gitGraph.worktree.sync.clearSelection', 'Clear selection'),
+              }
+            : {
+                id: 'toggleAll',
+                iconId: 'changelist',
+                tooltip: localize('gitGraph.worktree.sync.selectAll', 'Select all'),
+              },
+        ]
+      }
+
+      qp.canSelectMany = true
+      qp.title = force
+        ? localize('gitGraph.worktree.forceSync.title', 'Force sync worktrees to {branch}', {
+            branch: targetBranch,
+          })
+        : localize('gitGraph.worktree.sync.title', 'Sync worktrees to {branch}', {
+            branch: targetBranch,
+          })
+      qp.items = items
+      // Everything starts checked, so "sync them all" stays one Enter away.
+      qp.selectedItems = items
+      // The branch is how a worktree is told apart, so match on it too.
+      qp.matchOnDescription = true
+      // Candidates arrive alphabetically sorted; keep that order while filtering,
+      // since a relevance re-sort would reshuffle the rows under the cursor.
+      qp.filterMode = 'fuzzyKeepOrder'
+      syncChrome()
+
+      return new Promise((resolve) => {
+        // `qp.dispose()` only tears down the picker's own emitters; these
+        // subscriptions are separate disposables and would leak past every settle
+        // path without a store (same contract as MainThreadWindow._pickMany).
+        const subs = new DisposableStore()
+        const done = (paths: string[] | undefined): void => {
+          subs.dispose()
+          qp.dispose()
+          resolve(paths)
+        }
+        subs.add(
+          qp.onDidChangeSelection((selected) => {
+            qp.selectedItems = selected
+            syncChrome()
+          }),
+        )
+        subs.add(
+          qp.onDidTriggerButton(() => {
+            qp.selectedItems = allChecked() ? [] : items
+            syncChrome()
+          }),
+        )
+        // The panel confirms and hides in one synchronous step, so settle here:
+        // resolving after an await would let onDidHide's undefined win.
+        subs.add(qp.onDidTriggerOk(() => done(qp.selectedItems.map((it) => it.path))))
+        subs.add(qp.onDidHide(() => done(undefined)))
+        qp.show()
+      })
+    },
+    [quickInput],
+  )
+
   // Reset the picked worktrees' branches to the target, then report a summary and
   // reload the graph. Dirty worktrees are always skipped by the extension side.
   // The extension syncs the worktrees concurrently in one command call, so while
   // it runs we surface a sticky spinner notification instead of staying silent.
   const runWorktreeSync = useCallback(
     async (targetBranch: string, selectedPaths: string[], force: boolean) => {
-      setWorktreePicker(null)
       const selected = allWorktrees.filter((wt) => selectedPaths.includes(wt.path))
       const refs = selected.map((wt) => ({ path: wt.path, name: wt.name }))
       const execute = () =>
@@ -1581,6 +1673,24 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
     [allWorktrees, commands, dialog, progressService, revalidate],
   )
 
+  // Prompt for the worktrees to sync, then run the sync. The picker opens
+  // synchronously (nothing is fetched first): the menu has already closed and
+  // handed focus back to the graph before its entry runs, so the panel's own
+  // on-mount focus still lands last.
+  const openWorktreeSyncPicker = useCallback(
+    async (
+      targetBranch: string,
+      candidates: readonly GitGraphWorktreeDto[],
+      force: boolean,
+    ): Promise<void> => {
+      const paths = await pickWorktreesToSync(targetBranch, candidates, force)
+      // Defence in depth: the panel already disables confirm on an empty set.
+      if (!paths || paths.length === 0) return
+      await runWorktreeSync(targetBranch, paths, force)
+    },
+    [pickWorktreesToSync, runWorktreeSync],
+  )
+
   const openWorktreeMenu = useCallback(
     (worktree: GitGraphWorktreeDto, e: MouseEvent) => {
       e.preventDefault()
@@ -1629,8 +1739,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
             label: localize('gitGraph.worktree.syncToThis', 'Sync worktrees to {branch}…', {
               branch,
             }),
-            run: () =>
-              setWorktreePicker({ targetBranch: branch, candidates: others, force: false }),
+            run: () => void openWorktreeSyncPicker(branch, others, false),
           },
           {
             kind: 'item',
@@ -1644,7 +1753,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
               },
             ),
             danger: true,
-            run: () => setWorktreePicker({ targetBranch: branch, candidates: others, force: true }),
+            run: () => void openWorktreeSyncPicker(branch, others, true),
           },
         )
       }
@@ -1684,7 +1793,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
         contextTag: 'worktree',
       })
     },
-    [allWorktrees, commands, dialog, runOp],
+    [allWorktrees, commands, dialog, openWorktreeSyncPicker, runOp],
   )
 
   // Folded refs (the `+N` badge): list each hidden ref; clicking one re-dispatches
@@ -2196,15 +2305,6 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
             // arrow-key navigation only works while the container holds focus.
             scrollRef.current?.focus()
           }}
-        />
-      )}
-      {worktreePicker && (
-        <GitGraphWorktreePickerDialog
-          state={worktreePicker}
-          onConfirm={(paths) =>
-            void runWorktreeSync(worktreePicker.targetBranch, paths, worktreePicker.force)
-          }
-          onClose={() => setWorktreePicker(null)}
         />
       )}
     </div>

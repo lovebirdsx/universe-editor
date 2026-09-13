@@ -6,7 +6,7 @@ metadata:
   type: project
 ---
 
-对齐 P4V "Get Revision"：在历史视图里把工作区（或其中目录/文件）同步到某个变更列表，只动 have 版本、绝不碰 depot。五入口：全局图谱行右键「Get This Revision」（直接 `@CL`，范围跟随 wholeRepo 开关）+「Get Revision…」（多选目录对话框，镜像 GitGraphWorktreePickerDialog）；文件/文件夹历史行右键 Get This Revision + Get Latest Revision（后者直调 `perforce.syncLatest`）；Timeline 行右键 Get This Revision（唯一用 `#rev` 的入口，天然文件修订粒度）；Explorer 多选 `perforce.sync`/`perforce.syncLatest`。
+对齐 P4V "Get Revision"：在历史视图里把工作区（或其中目录/文件）同步到某个变更列表，只动 have 版本、绝不碰 depot。五入口：全局图谱行右键「Get This Revision」（直接 `@CL`，范围跟随 wholeRepo 开关）+「Get Revision…」（多选目录对话框，自维护 portal 弹窗，共用 GitGraphEditor.module.css 的 `.picker*` 类）；文件/文件夹历史行右键 Get This Revision + Get Latest Revision（后者直调 `perforce.syncLatest`）；Timeline 行右键 Get This Revision（唯一用 `#rev` 的入口，天然文件修订粒度）；Explorer 多选 `perforce.sync`/`perforce.syncLatest`。
 
 确认策略（纯函数 `graphSync.ts`）：`graphSyncConfirmKind` 三态 —— `force` 请求恒为 `'force'`（弹合并的强制确认框，覆盖未收集改动 + 时间旅行重置两层语义合成**一个** modal），否则委托 `graphSyncNeedsConfirm`：单文件恒免确认；`isLatest`（目标行==head，等价 get latest）免；对话框路径 `confirmed:true`（确认按钮即授权）免；目录/多目录/整显示范围弹时间旅行 `showWarningMessage`。
 

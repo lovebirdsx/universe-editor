@@ -817,7 +817,16 @@ export function QuickPickPanel({
               button.tooltip ?? localize('quickInput.button.ariaLabel', 'Quick pick button')
             }
             data-testid="quick-input-button"
-            onClick={() => state.onTriggerButton?.(button)}
+            onClick={() => {
+              state.onTriggerButton?.(button)
+              // Pull focus back to the input: the keyboard contract (Space
+              // toggles, Enter confirms, arrows navigate) lives there, and a
+              // focused toolbar button would re-trigger itself on Enter instead.
+              // On the `pick()` path the handler above closes the panel, in which
+              // case FocusScopeOverlay's restoreFocus returns focus to the opener
+              // exactly as before.
+              inputRef.current?.focus()
+            }}
           >
             {renderTitleButton?.(button.iconId, 16)}
           </button>

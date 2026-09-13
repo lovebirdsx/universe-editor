@@ -1321,6 +1321,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'gitGraph.worktree.sync.title': '将工作树同步到 {branch}',
   'gitGraph.worktree.forceSync.title': '强制将工作树同步到 {branch}',
   'gitGraph.worktree.sync.selectAll': '全选',
+  'gitGraph.worktree.sync.clearSelection': '取消全选',
   'gitGraph.worktree.sync.confirm': '同步（{count}）',
   'gitGraph.worktree.forceSync.confirm': '强制同步（{count}）',
   'gitGraph.worktree.sync.progress': '正在将 {count} 个工作树同步到 {branch}…',

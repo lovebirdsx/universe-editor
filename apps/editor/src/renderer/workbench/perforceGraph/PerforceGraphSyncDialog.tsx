@@ -2,8 +2,8 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  PerforceGraphSyncDialog — a self-contained modal that lets the user pick which
  *  top-level directories of the graph client to sync onto a submitted changelist
- *  (P4V-style "Get Revision as of a CL"). Mirrors GitGraphWorktreePickerDialog's
- *  portal-based, dependency-free style; selection is local and reported via
+ *  (P4V-style "Get Revision as of a CL"). Mirrors the graphs' portal-based,
+ *  dependency-free modal style; selection is local and reported via
  *  onConfirm with the chosen directory paths. Focus is trapped inside the dialog
  *  (FocusScopeOverlay) and the whole list is keyboard-driven: arrows/Home/End
  *  move across "Select all" + rows, Space toggles, Enter confirms, Esc cancels.

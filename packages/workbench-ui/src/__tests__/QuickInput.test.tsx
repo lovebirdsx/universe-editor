@@ -1404,3 +1404,43 @@ describe('QuickPickPanel multi-select (canSelectMany)', () => {
     expect(onClose).not.toHaveBeenCalled()
   })
 })
+
+describe('QuickPickPanel toolbar buttons', () => {
+  it('returns focus to the input after a button is triggered', () => {
+    const onTriggerButton = vi.fn()
+    const onClose = vi.fn()
+    render(
+      <QuickPickPanel
+        state={{
+          type: 'pick',
+          items: [
+            { id: 'a', label: 'Alpha' },
+            { id: 'b', label: 'Beta' },
+          ],
+          prefix: undefined,
+          canSelectMany: true,
+          selectedItems: [],
+          onSelectionChange: vi.fn(),
+          okLabel: 'Sync (0)',
+          buttons: [{ id: 'toggleAll', iconId: 'changelist', tooltip: 'Select all' }],
+          onTriggerButton,
+          onAccept: vi.fn(),
+          onHide: vi.fn(),
+        }}
+        onClose={onClose}
+      />,
+    )
+    const button = screen.getByTestId('quick-input-button')
+    button.focus()
+    expect(document.activeElement).toBe(button)
+
+    fireEvent.click(button)
+
+    expect(onTriggerButton).toHaveBeenCalledTimes(1)
+    expect(onClose).not.toHaveBeenCalled()
+    // The keyboard contract (Space toggles, Enter confirms, arrows navigate) is
+    // handled on the input, so a button that keeps focus would swallow all three
+    // — Enter would re-trigger the button instead of confirming.
+    expect(document.activeElement).toBe(screen.getByTestId('quick-input-field'))
+  })
+})

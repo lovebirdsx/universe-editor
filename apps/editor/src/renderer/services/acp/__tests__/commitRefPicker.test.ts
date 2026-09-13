@@ -7,121 +7,18 @@
 import type { GitGraphCommitDto, GitGraphLoadResult } from '@universe-editor/extensions-common'
 import { GitGraphCommands } from '@universe-editor/extensions-common'
 import {
-  Emitter,
   Severity,
   URI,
   type ICommandService,
-  type IInputOptions,
   type INotificationHandle,
   type INotificationService,
-  type IPickOptions,
-  type IKeyMods,
-  type IQuickInputButton,
-  type IQuickPickItemButtonEvent,
-  type IQuickInputService,
-  type IQuickPick,
   type IQuickPickItem,
-  type QuickPickFilterMode,
-  type QuickPickInput,
-  type QuickPickPresentation,
 } from '@universe-editor/platform'
 import { afterEach, describe, expect, it } from 'vitest'
 import { relativeTime } from '../../../relativeTime.js'
 import { scmViewState } from '../../../workbench/scm/scmViewState.js'
+import { FakeQuickInputService } from '../../quickInput/__tests__/fakeQuickPick.js'
 import { CommitRefPicker } from '../commitRefPicker.js'
-
-class FakeQuickPick<T extends IQuickPickItem> implements IQuickPick<T> {
-  private readonly _onDidAccept = new Emitter<T[]>()
-  private readonly _onDidHide = new Emitter<void>()
-  private readonly _onDidChangeValue = new Emitter<string>()
-  private readonly _onDidChangeActive = new Emitter<T | undefined>()
-  private readonly _onDidTriggerButton = new Emitter<IQuickInputButton>()
-  private readonly _onDidTriggerItemButton = new Emitter<IQuickPickItemButtonEvent<T>>()
-  private readonly _onDidTriggerOk = new Emitter<IKeyMods>()
-
-  readonly onDidAccept = this._onDidAccept.event
-  readonly onDidHide = this._onDidHide.event
-  readonly onDidChangeValue = this._onDidChangeValue.event
-  readonly onDidChangeActive = this._onDidChangeActive.event
-  readonly onDidTriggerButton = this._onDidTriggerButton.event
-  readonly onDidTriggerItemButton = this._onDidTriggerItemButton.event
-  readonly onDidTriggerOk = this._onDidTriggerOk.event
-
-  valueSelection: [number, number] | undefined
-  activeItems: readonly T[] = []
-  selectedItems: readonly T[] = []
-  canSelectMany = false
-  readonly onDidChangeSelection = new Emitter<T[]>().event
-  title: string | undefined
-  buttons: readonly IQuickInputButton[] = []
-  okLabel: string | undefined
-  keepOpenOnAccept = false
-  keyMods = { ctrl: false, alt: false }
-  placeholder: string | undefined
-  items: readonly QuickPickInput<T>[] = []
-  value = ''
-  prefix = ''
-  mruIds: readonly string[] = []
-  filterExternally = false
-  filterMode: QuickPickFilterMode = 'fuzzy'
-  matchOnDescription = false
-  matchOnDetail = false
-  presentation: QuickPickPresentation = 'default'
-  busy = false
-  shown = false
-  disposed = false
-
-  show(): void {
-    this.shown = true
-  }
-
-  hide(): void {
-    if (!this.shown) return
-    this.shown = false
-    this._onDidHide.fire()
-  }
-
-  accept(item: T): void {
-    this._onDidAccept.fire([item])
-  }
-
-  dispose(): void {
-    this.disposed = true
-    this._onDidAccept.dispose()
-    this._onDidHide.dispose()
-    this._onDidChangeValue.dispose()
-    this._onDidChangeActive.dispose()
-    this._onDidTriggerButton.dispose()
-    this._onDidTriggerItemButton.dispose()
-    this._onDidTriggerOk.dispose()
-  }
-}
-
-class FakeQuickInputService implements IQuickInputService {
-  declare readonly _serviceBrand: undefined
-  picker: FakeQuickPick<IQuickPickItem> | undefined
-
-  createQuickPick<T extends IQuickPickItem>(): IQuickPick<T> {
-    const picker = new FakeQuickPick<T>()
-    this.picker = picker as unknown as FakeQuickPick<IQuickPickItem>
-    return picker
-  }
-
-  async pick<T extends IQuickPickItem>(
-    _items: readonly QuickPickInput<T>[],
-    _options?: IPickOptions,
-  ): Promise<T | undefined> {
-    return undefined
-  }
-
-  async input(_options?: IInputOptions): Promise<string | undefined> {
-    return undefined
-  }
-
-  hide(): void {
-    this.picker?.hide()
-  }
-}
 
 class FakeCommandService implements ICommandService {
   declare readonly _serviceBrand: undefined

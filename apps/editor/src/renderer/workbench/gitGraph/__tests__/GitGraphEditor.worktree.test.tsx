@@ -9,9 +9,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import {
   CommandsRegistry,
+  ContextKeyService,
   ICommandService,
   IDialogService,
   IProgressService,
+  IQuickInputService,
   IStorageService,
   IViewDescriptorService,
   IViewsService,
@@ -21,6 +23,7 @@ import {
   observableValue,
   type IDisposable,
   type IProgressOptions,
+  type IQuickPickItem,
 } from '@universe-editor/platform'
 import {
   GitGraphCommands,
@@ -28,7 +31,13 @@ import {
   type GitGraphWorktreeDto,
 } from '@universe-editor/extensions-common'
 import { IScmService } from '../../../services/extensions/ScmService.js'
+import { QuickInputService } from '../../../services/quickInput/QuickInputService.js'
+import {
+  FakeQuickInputService,
+  type FakeQuickPick,
+} from '../../../services/quickInput/__tests__/fakeQuickPick.js'
 import { ServicesContext } from '../../useService.js'
+import { QuickInputPortal } from '../../quickinput/QuickInput.js'
 import { scmViewState } from '../../scm/scmViewState.js'
 import { gitGraphViewState } from '../../../services/gitGraph/gitGraphViewState.js'
 import { GitGraphEditor } from '../GitGraphEditor.js'
@@ -115,7 +124,14 @@ function makeDialog(confirmed: boolean): IDialogService {
   } as unknown as IDialogService
 }
 
-function renderEditor(confirmed = true) {
+/**
+ * `quickInput`: 'fake' records what the editor asked of the picker, 'real' mounts
+ * the actual QuickInputPanel (so the focus/keyboard contract is exercised end to
+ * end), 'none' leaves IQuickInputService unregistered (the editor resolves it
+ * optionally).
+ */
+function renderEditor(confirmed = true, opts: { quickInput?: 'fake' | 'real' | 'none' } = {}) {
+  const quickInputMode = opts.quickInput ?? 'fake'
   const { service: commandService, executeCommand } = makeCommandService()
   // Runs the task straight through while recording the options — lets tests
   // assert the sync is wrapped in a progress notification.
@@ -130,13 +146,14 @@ function renderEditor(confirmed = true) {
     _serviceBrand: undefined,
     withProgress,
   } as unknown as IProgressService)
-  services.set(IStorageService, {
+  const storageStub = {
     _serviceBrand: undefined,
     get: vi.fn().mockResolvedValue(undefined),
     set: vi.fn().mockResolvedValue(undefined),
     remove: vi.fn().mockResolvedValue(undefined),
     onDidChangeWorkspaceScope: () => ({ dispose: () => {} }),
-  } as unknown as IStorageService)
+  } as unknown as IStorageService
+  services.set(IStorageService, storageStub)
   services.set(IViewsService, {
     _serviceBrand: undefined,
     openViewContainer: vi.fn(),
@@ -145,13 +162,19 @@ function renderEditor(confirmed = true) {
     _serviceBrand: undefined,
     setViewCollapsed: vi.fn(),
   } as unknown as IViewDescriptorService)
+  const quickInput = new FakeQuickInputService()
+  if (quickInputMode === 'fake') services.set(IQuickInputService, quickInput)
+  if (quickInputMode === 'real') {
+    services.set(IQuickInputService, new QuickInputService(storageStub, new ContextKeyService()))
+  }
   const instantiation = new InstantiationService(services)
   const utils = render(
     <ServicesContext.Provider value={instantiation}>
       <GitGraphEditor input={{} as never} />
+      {quickInputMode === 'real' && <QuickInputPortal />}
     </ServicesContext.Provider>,
   )
-  return { executeCommand, withProgress, ...utils }
+  return { executeCommand, withProgress, quickInput, ...utils }
 }
 
 async function flush(): Promise<void> {
@@ -170,10 +193,21 @@ async function flush(): Promise<void> {
 let graphCommandStub: IDisposable
 beforeEach(() => {
   graphCommandStub = CommandsRegistry.registerCommand(GitGraphCommands.getCommits, () => undefined)
+  // happy-dom has no layout engine, so every element measures 0 and the quick
+  // pick's virtualizer would window down to zero rows — the real-panel assertions
+  // below would then pass on an empty list for the wrong reason.
+  // @tanstack/react-virtual sizes its scroller from offsetWidth/Height (not
+  // getBoundingClientRect), so those are what have to answer.
+  for (const prop of ['offsetHeight', 'offsetWidth'] as const) {
+    Object.defineProperty(HTMLElement.prototype, prop, { configurable: true, get: () => 400 })
+  }
 })
 
 afterEach(() => {
   graphCommandStub.dispose()
+  for (const prop of ['offsetHeight', 'offsetWidth'] as const) {
+    Reflect.deleteProperty(HTMLElement.prototype, prop)
+  }
   gitGraphViewState.result = null
   gitGraphViewState.selection = []
   gitGraphViewState.repos = []
@@ -249,6 +283,40 @@ describe('GitGraphEditor worktree sync', () => {
     isCurrent: false,
     isMain: false,
   }
+  // Fed to the graph out of alphabetical order on purpose: the picker owns the
+  // ordering, not the payload.
+  const zebraWt: GitGraphWorktreeDto = {
+    path: '/repo.worktrees/zebra',
+    name: 'zebra',
+    branch: 'br/zebra',
+    isCurrent: false,
+    isMain: false,
+  }
+  const appleWt: GitGraphWorktreeDto = {
+    path: '/repo.worktrees/apple',
+    name: 'apple',
+    branch: 'br/apple',
+    isCurrent: false,
+    isMain: false,
+  }
+
+  /** The sync command's calls. `not.toHaveBeenCalledWith` cannot express "never
+   *  ran": it also matches on arity, and the real call passes four arguments. */
+  function syncCalls(executeCommand: ReturnType<typeof vi.fn>): unknown[][] {
+    return executeCommand.mock.calls.filter((call) => call[0] === GitGraphCommands.syncWorktrees)
+  }
+
+  /** Run a sync entry off the main worktree's badge menu and hand back the picker. */
+  function openSyncPicker(
+    quickInput: FakeQuickInputService,
+    label = 'Sync worktrees to main…',
+  ): FakeQuickPick<IQuickPickItem> {
+    fireEvent.contextMenu(screen.getByText('✓ repo'))
+    fireEvent.click(within(screen.getByRole('menu')).getByText(label))
+    const picker = quickInput.picker
+    if (!picker) throw new Error('the editor did not open a quick pick')
+    return picker
+  }
 
   it('offers the sync item when the target has a branch and others exist', async () => {
     gitGraphViewState.result = makeResult([mainWt, featureWt])
@@ -286,17 +354,31 @@ describe('GitGraphEditor worktree sync', () => {
     expect(labels.some((l) => l?.startsWith('Sync worktrees'))).toBe(false)
   })
 
-  it('syncs the picked worktrees to the target branch on confirm', async () => {
-    gitGraphViewState.result = makeResult([mainWt, featureWt])
-    const { executeCommand } = renderEditor()
+  it('opens an all-checked multi-select picker over the other worktrees', async () => {
+    gitGraphViewState.result = makeResult([mainWt, zebraWt, appleWt])
+    const { quickInput } = renderEditor()
     await flush()
 
-    fireEvent.contextMenu(screen.getByText('✓ repo'))
-    fireEvent.click(within(screen.getByRole('menu')).getByText('Sync worktrees to main…'))
+    const picker = openSyncPicker(quickInput)
 
-    // Picker opens preselected with all candidates — confirm immediately.
-    const dialog = screen.getByRole('dialog')
-    fireEvent.click(within(dialog).getByText(/^Sync \(/))
+    // Every other worktree, alphabetically, checked up front; the branch is the
+    // description so it can be matched and read at a glance.
+    expect(picker.canSelectMany).toBe(true)
+    expect(picker.rows.map((it) => it.label)).toEqual(['apple', 'zebra'])
+    expect(picker.selectedItems).toEqual(picker.rows)
+    expect(picker.rows[0]?.description).toBe('br/apple')
+    expect(picker.matchOnDescription).toBe(true)
+    expect(picker.filterMode).toBe('fuzzyKeepOrder')
+    expect(picker.title).toContain('main')
+    expect(picker.okLabel).toBe('Sync (2)')
+  })
+
+  it('syncs the picked worktrees to the target branch on confirm', async () => {
+    gitGraphViewState.result = makeResult([mainWt, featureWt])
+    const { executeCommand, quickInput } = renderEditor()
+    await flush()
+
+    openSyncPicker(quickInput).triggerOk()
     await flush()
 
     expect(executeCommand).toHaveBeenCalledWith(
@@ -309,12 +391,10 @@ describe('GitGraphEditor worktree sync', () => {
 
   it('shows a progress notification while the sync command runs', async () => {
     gitGraphViewState.result = makeResult([mainWt, featureWt])
-    const { executeCommand, withProgress } = renderEditor()
+    const { executeCommand, withProgress, quickInput } = renderEditor()
     await flush()
 
-    fireEvent.contextMenu(screen.getByText('✓ repo'))
-    fireEvent.click(within(screen.getByRole('menu')).getByText('Sync worktrees to main…'))
-    fireEvent.click(within(screen.getByRole('dialog')).getByText(/^Sync \(/))
+    openSyncPicker(quickInput).triggerOk()
     await flush()
 
     expect(withProgress).toHaveBeenCalledTimes(1)
@@ -332,12 +412,14 @@ describe('GitGraphEditor worktree sync', () => {
 
   it('force-syncs selected clean worktrees while preserving the force flag', async () => {
     gitGraphViewState.result = makeResult([mainWt, featureWt])
-    const { executeCommand } = renderEditor()
+    const { executeCommand, quickInput } = renderEditor()
     await flush()
 
-    fireEvent.contextMenu(screen.getByText('✓ repo'))
-    fireEvent.click(within(screen.getByRole('menu')).getByText('Force sync worktrees to main…'))
-    fireEvent.click(within(screen.getByRole('dialog')).getByText(/^Force sync \(/))
+    const picker = openSyncPicker(quickInput, 'Force sync worktrees to main…')
+    expect(picker.title).toContain('Force sync')
+    expect(picker.okLabel).toBe('Force sync (1)')
+
+    picker.triggerOk()
     await flush()
 
     expect(executeCommand).toHaveBeenCalledWith(
@@ -350,129 +432,185 @@ describe('GitGraphEditor worktree sync', () => {
 
   it('does not sync when the picker is cancelled', async () => {
     gitGraphViewState.result = makeResult([mainWt, featureWt])
-    const { executeCommand } = renderEditor()
+    const { executeCommand, quickInput } = renderEditor()
     await flush()
 
-    fireEvent.contextMenu(screen.getByText('✓ repo'))
-    fireEvent.click(within(screen.getByRole('menu')).getByText('Sync worktrees to main…'))
-    fireEvent.click(within(screen.getByRole('dialog')).getByText('Cancel'))
+    openSyncPicker(quickInput).hide()
     await flush()
 
-    expect(executeCommand).not.toHaveBeenCalledWith(
+    expect(syncCalls(executeCommand)).toEqual([])
+  })
+
+  it('opens the picker synchronously, before the menu-close flush', async () => {
+    gitGraphViewState.result = makeResult([mainWt, featureWt])
+    const { quickInput } = renderEditor()
+    await flush()
+
+    // No flush: `show()` has to happen inside the menu entry's own click
+    // handler. Deferring it (e.g. awaiting before showing) would let the menu's
+    // focus restore land after the panel's, leaving the input unfocused.
+    expect(openSyncPicker(quickInput).shown).toBe(true)
+  })
+
+  it('syncs every candidate after the toolbar button re-selects them all', async () => {
+    gitGraphViewState.result = makeResult([mainWt, zebraWt, appleWt])
+    const { executeCommand, quickInput } = renderEditor()
+    await flush()
+
+    const picker = openSyncPicker(quickInput)
+    // Clear, then select all: the single button slot flips both ways and the
+    // confirm label tracks the checked count.
+    picker.triggerButton()
+    expect(picker.selectedItems).toEqual([])
+    expect(picker.okLabel).toBe('Sync (0)')
+    expect(picker.buttons[0]?.iconId).toBe('changelist')
+
+    picker.triggerButton()
+    expect(picker.selectedItems).toEqual(picker.rows)
+    expect(picker.okLabel).toBe('Sync (2)')
+    expect(picker.buttons[0]?.iconId).toBe('clear-all')
+
+    picker.triggerOk()
+    await flush()
+
+    // Refs follow the graph's own payload order, not the picker's alphabetical one.
+    expect(executeCommand).toHaveBeenCalledWith(
       GitGraphCommands.syncWorktrees,
-      expect.anything(),
-      expect.anything(),
+      'main',
+      [
+        { path: zebraWt.path, name: zebraWt.name },
+        { path: appleWt.path, name: appleWt.name },
+      ],
+      false,
     )
   })
 
-  it('moves focus into the picker on open and restores it to the graph on close', async () => {
-    gitGraphViewState.result = makeResult([mainWt, featureWt])
-    renderEditor()
+  it('syncs only the worktrees left checked', async () => {
+    gitGraphViewState.result = makeResult([mainWt, zebraWt, appleWt])
+    const { executeCommand, quickInput } = renderEditor()
     await flush()
 
-    const scrollBody = screen.getByTestId('gitGraph-scrollBody')
-    scrollBody.focus()
+    const picker = openSyncPicker(quickInput)
+    picker.toggle(appleWt.path)
+    expect(picker.okLabel).toBe('Sync (1)')
 
-    fireEvent.contextMenu(screen.getByText('✓ repo'))
-    fireEvent.click(within(screen.getByRole('menu')).getByText('Sync worktrees to main…'))
-
-    const dialog = screen.getByRole('dialog')
-    expect(dialog.contains(document.activeElement)).toBe(true)
-
-    fireEvent.keyDown(dialog, { key: 'Escape' })
-    await flush()
-
-    expect(screen.queryByRole('dialog')).toBeNull()
-    expect(document.activeElement).toBe(scrollBody)
-  })
-
-  it('is fully keyboard-operable: arrows move focus, space toggles, enter confirms', async () => {
-    gitGraphViewState.result = makeResult([mainWt, featureWt, detachedWt])
-    const { executeCommand } = renderEditor()
-    await flush()
-
-    fireEvent.contextMenu(screen.getByText('✓ repo'))
-    fireEvent.click(within(screen.getByRole('menu')).getByText('Sync worktrees to main…'))
-
-    const dialog = screen.getByRole('dialog')
-    const boxes = within(dialog).getAllByRole('checkbox')
-    // Candidates are sorted alphabetically: Select all, feature, wip.
-    expect(boxes).toHaveLength(3)
-    // autoFocus lands on the first focusable element: the Select-all checkbox.
-    expect(document.activeElement).toBe(boxes[0])
-
-    fireEvent.keyDown(boxes[0]!, { key: 'ArrowDown' })
-    expect(document.activeElement).toBe(boxes[1])
-    fireEvent.keyDown(boxes[1]!, { key: ' ' })
-    expect((boxes[1] as HTMLInputElement).checked).toBe(false)
-
-    fireEvent.keyDown(boxes[1]!, { key: 'End' })
-    expect(document.activeElement).toBe(boxes[2])
-    fireEvent.keyDown(boxes[2]!, { key: 'Home' })
-    expect(document.activeElement).toBe(boxes[0])
-
-    fireEvent.keyDown(boxes[0]!, { key: 'Enter' })
+    picker.triggerOk()
     await flush()
 
     expect(executeCommand).toHaveBeenCalledWith(
       GitGraphCommands.syncWorktrees,
       'main',
-      [{ path: detachedWt.path, name: detachedWt.name }],
+      [{ path: zebraWt.path, name: zebraWt.name }],
       false,
     )
   })
 
-  it('does not confirm via Enter once every row is unchecked', async () => {
+  it('does not sync once every row is unchecked', async () => {
     gitGraphViewState.result = makeResult([mainWt, featureWt])
-    const { executeCommand } = renderEditor()
+    const { executeCommand, quickInput } = renderEditor()
     await flush()
 
-    fireEvent.contextMenu(screen.getByText('✓ repo'))
-    fireEvent.click(within(screen.getByRole('menu')).getByText('Sync worktrees to main…'))
+    const picker = openSyncPicker(quickInput)
+    picker.toggle(featureWt.path)
+    expect(picker.okLabel).toBe('Sync (0)')
 
-    const dialog = screen.getByRole('dialog')
-    const selectAll = within(dialog).getAllByRole('checkbox')[0]!
-    fireEvent.keyDown(selectAll, { key: ' ' })
-    fireEvent.keyDown(selectAll, { key: 'Enter' })
+    picker.triggerOk()
     await flush()
 
-    expect(executeCommand).not.toHaveBeenCalledWith(
-      GitGraphCommands.syncWorktrees,
-      expect.anything(),
-      expect.anything(),
-    )
-    // The dialog stays open so the user can re-pick.
-    expect(screen.getByRole('dialog')).toBeTruthy()
+    // The panel disables its confirm button on an empty set; the editor refuses
+    // it too rather than running a sync over nothing.
+    expect(syncCalls(executeCommand)).toEqual([])
   })
 
   it('lists the candidate worktrees in alphabetical order', async () => {
-    const zebra: GitGraphWorktreeDto = {
-      path: '/repo.worktrees/zebra',
-      name: 'zebra',
-      branch: 'br/zebra',
-      isCurrent: false,
-      isMain: false,
-    }
-    const apple: GitGraphWorktreeDto = {
-      path: '/repo.worktrees/apple',
-      name: 'apple',
-      branch: 'br/apple',
-      isCurrent: false,
-      isMain: false,
-    }
-    // Feed them out of order; the picker must still render apple before zebra.
-    gitGraphViewState.result = makeResult([mainWt, zebra, apple])
-    renderEditor()
+    // Feed them out of order; the picker must still offer apple before zebra.
+    gitGraphViewState.result = makeResult([mainWt, zebraWt, appleWt])
+    const { quickInput } = renderEditor()
+    await flush()
+
+    expect(openSyncPicker(quickInput).rows.map((it) => it.label)).toEqual(['apple', 'zebra'])
+  })
+
+  it('does nothing when the quick input service is unavailable', async () => {
+    gitGraphViewState.result = makeResult([mainWt, featureWt])
+    const { executeCommand } = renderEditor(true, { quickInput: 'none' })
     await flush()
 
     fireEvent.contextMenu(screen.getByText('✓ repo'))
     fireEvent.click(within(screen.getByRole('menu')).getByText('Sync worktrees to main…'))
+    await flush()
 
-    const dialog = screen.getByRole('dialog')
-    const names = within(dialog)
-      .getAllByText(/^(apple|zebra)$/)
-      .map((el) => el.textContent)
-    expect(names).toEqual(['apple', 'zebra'])
+    expect(syncCalls(executeCommand)).toEqual([])
+  })
+
+  it('reports the checked count and confirms with Enter through the real panel', async () => {
+    gitGraphViewState.result = makeResult([mainWt, featureWt, detachedWt])
+    const { executeCommand } = renderEditor(true, { quickInput: 'real' })
+    await flush()
+
+    const scrollBody = screen.getByTestId('gitGraph-scrollBody')
+    scrollBody.focus()
+    fireEvent.contextMenu(screen.getByText('✓ repo'))
+    fireEvent.click(within(screen.getByRole('menu')).getByText('Sync worktrees to main…'))
+
+    // The panel takes focus and shows the target branch + the live checked count.
+    const field = screen.getByTestId('quick-input-field')
+    expect(document.activeElement).toBe(field)
+    expect(screen.getByTestId('quick-input-title').textContent).toContain('main')
+    expect(screen.getByTestId('quick-input-ok').textContent).toBe('Sync (2)')
+    expect(
+      screen
+        .getAllByTestId('quick-input-item-checkbox')
+        .map((el) => el.getAttribute('aria-checked')),
+    ).toEqual(['true', 'true'])
+
+    // Space toggles the highlighted row (feature); the count follows.
+    fireEvent.keyDown(field, { key: ' ' })
+    expect(screen.getByTestId('quick-input-ok').textContent).toBe('Sync (1)')
+
+    // The single toolbar button means "select all" while anything is unchecked…
+    const toggleAll = screen.getByTestId('quick-input-button')
+    fireEvent.click(toggleAll)
+    expect(screen.getByTestId('quick-input-ok').textContent).toBe('Sync (2)')
+    // …and "clear all" once everything is checked. It keeps focus on the input,
+    // so Enter still confirms instead of re-triggering the button.
+    fireEvent.click(toggleAll)
+    expect(screen.getByTestId('quick-input-ok').textContent).toBe('Sync (0)')
+    expect(document.activeElement).toBe(field)
+    expect(screen.getByTestId('quick-input-ok')).toHaveProperty('disabled', true)
+
+    fireEvent.click(toggleAll)
+    expect(screen.getByTestId('quick-input-ok').textContent).toBe('Sync (2)')
+
+    fireEvent.keyDown(field, { key: 'Enter' })
+    await flush()
+
+    expect(executeCommand).toHaveBeenCalledWith(
+      GitGraphCommands.syncWorktrees,
+      'main',
+      [
+        { path: featureWt.path, name: featureWt.name },
+        { path: detachedWt.path, name: detachedWt.name },
+      ],
+      false,
+    )
+  })
+
+  it('returns focus to the graph when the real panel is dismissed', async () => {
+    gitGraphViewState.result = makeResult([mainWt, featureWt])
+    renderEditor(true, { quickInput: 'real' })
+    await flush()
+
+    const scrollBody = screen.getByTestId('gitGraph-scrollBody')
+    scrollBody.focus()
+    fireEvent.contextMenu(screen.getByText('✓ repo'))
+    fireEvent.click(within(screen.getByRole('menu')).getByText('Sync worktrees to main…'))
+
+    fireEvent.keyDown(screen.getByTestId('quick-input-field'), { key: 'Escape' })
+    await flush()
+
+    expect(screen.queryByTestId('quick-input-field')).toBeNull()
+    expect(document.activeElement).toBe(scrollBody)
   })
 })
 
