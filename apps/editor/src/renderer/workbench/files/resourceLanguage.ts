@@ -41,7 +41,9 @@ const LANG_BY_EXT: Record<string, string> = {
 
   // web / scripting
   '.ts': 'typescript',
-  '.tsx': 'typescript',
+  // Own language id (VSCode-aligned): the tsx grammar can only bind to an id of
+  // its own, and source.ts has no JSX rules. See languageIdMapping.ts.
+  '.tsx': 'typescriptreact',
   '.cts': 'typescript',
   '.mts': 'typescript',
   '.js': 'javascript',

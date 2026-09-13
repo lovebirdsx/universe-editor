@@ -79,6 +79,14 @@ FileIcon 组件分流（useFileIconThemeActive，订阅 onDidFileIconThemeChange
 
 改 `pnpm-workspace.yaml` catalog 的 `material-icon-theme` 版本 → `pnpm install` → 重跑脚本 → `pnpm check` + `pnpm e2e`。留意脚本的 `not found` 警告（上游可能重命名图标）。
 
+## 语言解析易踩坑：同一 monaco 语言 id 只能有一条 grammar
+
+`resourceLanguage.ts` 给的是 **monaco 语言 id**，而 grammar manifest 用的是 **VSCode 语言 id**，二者由 `services/textmate/languageIdMapping.ts` 的 `toMonacoLanguageId` 折叠。`TextMateService._rebuildRegistrations` 按折叠后的 id 去重——**同一 monaco id 上第一个 grammar 胜出，后来者只留一条 `trace` 就被静默丢掉**。
+
+`jsonc`/`jsonl`→`json`、`javascriptreact`→`javascript` 无害（目标 grammar 是超集）；但 `typescriptreact` 曾折叠到 `typescript`，而 manifest 里 `source.ts` 排在 `source.tsx` 之前，于是 `.tsx` 被**没有 JSX 规则**的 `source.ts` 接管：`<span>` 被当成类型断言、`</li>`/`<Tree` 的标签名退化成普通标识符色。所以只有目标 grammar 是超集时才允许折叠，**JSX 变体必须有独立 id**。
+
+新增一个独立 monaco 语言 id 要同步四处：本目录 `resourceLanguage.ts`（扩展名映射）+ `languageDisplay.ts`（状态栏显示名）+ `editor/monaco/monacoTsxLanguage.ts` 那样的 monaco 侧配置（语言点 + 语言配置 + Monarch 兜底 + 复用 monaco 自己的 ts-worker adapter，monaco basic-languages 没有 tsx 模式）+ 该语言的 LSP/扩展 provider 语言列表。
+
 ## 易踩坑速记
 
 1. **别手改生成物**：`materialIconMap.ts` / `icons/*.svg` 是脚本产出，改脚本重跑。生成文件顶部 `/* eslint-disable */` 让 4100 行数据免于 prettier lint（否则报 4100 problems）。

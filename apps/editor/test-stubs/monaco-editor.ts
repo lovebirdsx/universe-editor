@@ -768,6 +768,9 @@ export const languages = {
   register: () => {},
   setMonarchTokensProvider: () => ({ dispose: () => {} }),
   registerTokensProviderFactory: () => ({ dispose: () => {} }),
+  // Never fires: the lazy per-language setup it gates (monacoTsxLanguage's
+  // language configuration + ts-worker adapters) needs a real monaco runtime.
+  onLanguage: () => ({ dispose: () => {} }),
   getLanguages: () => [] as { id: string; aliases?: string[] }[],
 }
 

@@ -66,6 +66,35 @@ declare module 'monaco-editor/esm/vs/basic-languages/markdown/markdown.js' {
   export const conf: languages.LanguageConfiguration
 }
 
+// Same for the built-in TypeScript Monarch grammar: `typescriptreact` is our own
+// language point (monaco ships no tsx mode), so it reuses these as its language
+// configuration and pre-TextMate tokenizer (see monacoTsxLanguage).
+declare module 'monaco-editor/esm/vs/basic-languages/typescript/typescript.js' {
+  import type { languages } from 'monaco-editor'
+  export const language: languages.IMonarchLanguage
+  export const conf: languages.LanguageConfiguration
+}
+
+// Monaco's TS mode internals. `setupMode` is only wired to the `typescript` and
+// `javascript` ids, so monacoTsxLanguage re-registers the still-enabled worker
+// features against `typescriptreact` using the very same adapter classes. Each
+// takes the worker accessor `getTypeScriptWorker()` resolves to. No shipped .d.ts.
+declare module 'monaco-editor/esm/vs/language/typescript/tsMode.js' {
+  import type { languages, Uri } from 'monaco-editor'
+  type TsWorkerAccessor = (...uris: Uri[]) => Promise<unknown>
+  export const FormatAdapter: new (
+    worker: TsWorkerAccessor,
+  ) => languages.DocumentRangeFormattingEditProvider
+  export const FormatOnTypeAdapter: new (
+    worker: TsWorkerAccessor,
+  ) => languages.OnTypeFormattingEditProvider
+  export const DocumentHighlightAdapter: new (
+    worker: TsWorkerAccessor,
+  ) => languages.DocumentHighlightProvider
+  export const CodeActionAdaptor: new (worker: TsWorkerAccessor) => languages.CodeActionProvider
+  export const InlayHintsAdapter: new (worker: TsWorkerAccessor) => languages.InlayHintsProvider
+}
+
 // IConfigurationService decorator + lookup key for StandaloneServices.get. The
 // E2E semantic-token probe reads `editor.semanticHighlighting` off it to check
 // the standalone config gate.

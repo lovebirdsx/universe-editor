@@ -23,6 +23,12 @@ const LIGHT_KEYWORD = 'rgb(0, 0, 255)' // #0000FF (Universe Light)
 // `.mtkN` stylesheet shows up here immediately.
 const DARK_JSON_KEY = 'rgb(156, 220, 254)' // #9CDCFE
 const DARK_JSON_STRING = 'rgb(206, 145, 120)' // #CE9178
+// JSX: intrinsic tag names (`entity.name.tag`) vs component references
+// (`support.class.component`). Both only exist in the tsx grammar — the plain
+// TypeScript grammar reads `<span>` as a type assertion and leaves the tag name
+// a plain identifier (#9CDCFE).
+const DARK_JSX_TAG = 'rgb(86, 156, 214)' // #569CD6
+const DARK_JSX_COMPONENT = 'rgb(78, 201, 176)' // #4EC9B0
 
 function seedFile(name: string, content: string): string {
   const dir = mkTempDir('universe-textmate-')
@@ -152,6 +158,47 @@ test.describe('@p0 textmate', () => {
     await expect
       .poll(() => tokenColorContaining(page, 'universe'), { timeout: 15000 })
       .toBe(DARK_JSON_STRING)
+  })
+
+  test('tsx files tokenize with the JSX grammar, not the plain typescript one @regression', async ({
+    page,
+    workbench,
+  }) => {
+    test.slow()
+    // `.tsx` used to map onto monaco's `typescript` id, which made the tsx
+    // grammar lose the "first grammar wins per monaco id" race against
+    // source.ts: JSX tag names degraded to plain identifiers (#9CDCFE) while
+    // `<li>` was misread as a type assertion.
+    const filePath = seedFile(
+      'sample.tsx',
+      [
+        // `Tree` is declared *after* its JSX use so the first exact-text `Tree`
+        // span in DOM order is the component reference, not the declaration
+        // name (which the theme colors as a function, #DCDCAA).
+        'function TreeNode({ children }: { children: string[] }) {',
+        '  const hasChildren = children.length > 0',
+        '  return (',
+        '    <li>',
+        '      <span onClick={() => hasChildren}>{children.length}</span>',
+        '      {hasChildren && <Tree nodes={children} />}',
+        '    </li>',
+        '  )',
+        '}',
+        '',
+        'function Tree({ nodes }: { nodes: string[] }) {',
+        '  return <ul>{nodes.map((n) => n)}</ul>',
+        '}',
+        '',
+      ].join('\n'),
+    )
+    await page.evaluate((p) => window.__E2E__!.openFileUri(p), filePath)
+    await expect(workbench.editor.monacoEditor).toBeVisible()
+
+    await waitForTextMateTakeover(page, 'typescriptreact')
+
+    await expect.poll(() => tokenColor(page, 'li'), { timeout: 15000 }).toBe(DARK_JSX_TAG)
+    expect(await tokenColor(page, 'span')).toBe(DARK_JSX_TAG)
+    expect(await tokenColor(page, 'Tree')).toBe(DARK_JSX_COMPONENT)
   })
 
   test('over-long lines degrade to null tokenization without blocking render', async ({

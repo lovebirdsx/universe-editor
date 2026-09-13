@@ -61,6 +61,17 @@ function makeMonacoStub(knownLanguages: readonly string[], modelLanguages: reado
   return { stub, registered, configured, createModel }
 }
 
+const TS_GRAMMAR = {
+  language: 'typescript',
+  scopeName: 'source.ts',
+  path: './syntaxes/ts.tmLanguage.json',
+}
+const EXT_CONTEXT = {
+  extensionId: 'test',
+  extensionLocation: URI.file('/ext'),
+  extensionIsBuiltin: true,
+}
+
 describe('TextMateService.initialize', () => {
   it('registers grammar-only languages into monaco so models keep their language id', async () => {
     const service = makeService()
@@ -80,6 +91,38 @@ describe('TextMateService.initialize', () => {
     await service.initialize(stub)
 
     expect(registered).toEqual(['toml'])
+    service.dispose()
+  })
+
+  // Regression pin: JSX variants must keep their own monaco language id.
+  // `typescriptreact` used to collapse onto `typescript`, and since the manifest
+  // declares source.ts first, the tsx grammar lost the "first grammar wins" race
+  // and was dropped with only a trace log — .tsx files were tokenized by
+  // source.ts, where `<span>` reads as a type assertion and JSX tag names lose
+  // their color.
+  it('keeps a separate tokenization factory for typescript and typescriptreact', async () => {
+    const service = makeService()
+    service.registerGrammars(
+      [
+        TS_GRAMMAR,
+        {
+          language: 'typescriptreact',
+          scopeName: 'source.tsx',
+          path: './syntaxes/tsx.tmLanguage.json',
+        },
+      ],
+      EXT_CONTEXT,
+    )
+    const { stub } = makeMonacoStub(['typescript'])
+    const registerFactory = vi.spyOn(TokenizationRegistry, 'registerFactory')
+
+    await service.initialize(stub)
+
+    expect(registerFactory.mock.calls.map(([languageId]) => languageId)).toEqual([
+      'typescript',
+      'typescriptreact',
+    ])
+    registerFactory.mockRestore()
     service.dispose()
   })
 
@@ -161,17 +204,6 @@ describe('TextMateService.registerLanguages', () => {
     service.dispose()
   })
 })
-
-const TS_GRAMMAR = {
-  language: 'typescript',
-  scopeName: 'source.ts',
-  path: './syntaxes/ts.tmLanguage.json',
-}
-const EXT_CONTEXT = {
-  extensionId: 'test',
-  extensionLocation: URI.file('/ext'),
-  extensionIsBuiltin: true,
-}
 
 describe('TextMateService live-model recovery', () => {
   // Guards the e2e-visible race: a model created after initialize() may lose

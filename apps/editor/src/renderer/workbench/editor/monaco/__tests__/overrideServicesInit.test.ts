@@ -47,6 +47,7 @@ vi.mock('monaco-editor', () => {
     register: () => {},
     setMonarchTokensProvider: () => ({ dispose: () => {} }),
     registerTokensProviderFactory: () => ({ dispose: () => {} }),
+    onLanguage: () => ({ dispose: () => {} }),
   }
   const json = { jsonDefaults: makeDefaults() }
   const typescript = { typescriptDefaults: makeDefaults(), javascriptDefaults: makeDefaults() }

@@ -54,8 +54,8 @@ const MIRROR_OPEN_TIMEOUT_MS = 5_000
 const LARGE_DOC_LOG_THRESHOLD = 1024 * 1024
 
 /** File extension → LSP languageId where it diverges from Monaco's model id.
- *  Notably .tsx/.jsx must carry the React variant so tsserver enables JSX (the
- *  Monaco model id collapses .tsx → 'typescript'). */
+ *  Only `.jsx` diverges now (`.tsx` has its own `typescriptreact` model id); the
+ *  React variants matter because they are what makes tsserver enable JSX. */
 const LSP_LANGUAGE_BY_EXT: Record<string, string> = {
   '.ts': 'typescript',
   '.cts': 'typescript',

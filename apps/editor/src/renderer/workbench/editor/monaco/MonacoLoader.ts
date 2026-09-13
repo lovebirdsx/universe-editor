@@ -29,6 +29,7 @@ import { applyMonacoNls } from './monacoNlsBootstrap.js'
 import { initMonacoErrorRouting } from './monacoErrorRouting.js'
 import { registerLogLanguage } from '../../panel/output/monacoLogLanguage.js'
 import { registerMarkdownFrontmatterHighlight } from './monacoMarkdownFrontmatter.js'
+import { registerTsxLanguage } from './monacoTsxLanguage.js'
 import { PerfMarks } from '../../../../shared/perf/marks.js'
 
 export type { monaco }
@@ -275,6 +276,10 @@ async function loadMonaco(): Promise<typeof monaco> {
       )
       _monaco = monacoMod
       registerLogLanguage(monacoMod)
+      // `.tsx` is its own language id (monaco ships no tsx mode) — must run
+      // before TextMateService.initialize so the tsx grammar factory registers
+      // last and wins over the Monarch fallback (see monacoTsxLanguage).
+      registerTsxLanguage(monacoMod, _logger)
       // The global active theme is owned by the Monaco theme bridge
       // (services/themes/monacoThemeBridge.ts): it defineTheme+setThemes the
       // workbench ColorThemeData as soon as Monaco resolves, and re-applies on

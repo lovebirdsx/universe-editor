@@ -22,6 +22,7 @@ const OVERRIDES: Record<string, string> = {
   json: 'JSON',
   markdown: 'Markdown',
   typescript: 'TypeScript',
+  typescriptreact: 'TypeScript JSX',
   javascript: 'JavaScript',
   html: 'HTML',
   css: 'CSS',

@@ -14,7 +14,8 @@ describe('languageForResource', () => {
   it('maps common code extensions to their Monaco language id', () => {
     const cases: Record<string, string> = {
       '/a.ts': 'typescript',
-      '/a.tsx': 'typescript',
+      '/a.tsx': 'typescriptreact',
+      '/a.cts': 'typescript',
       '/a.js': 'javascript',
       '/a.py': 'python',
       '/a.go': 'go',
