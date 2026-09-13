@@ -28,6 +28,7 @@ import type {
   QuickPickInput,
 } from '@universe-editor/platform'
 import { localize } from '@universe-editor/platform'
+import { ctrlNavigationKey } from '../../keybinding/ctrlNavigation.js'
 import { fuzzyScore, wordMatchField } from '../../text/fuzzyMatch.js'
 import type { QuickPickState } from './quickInputViewModel.js'
 import styles from './QuickInput.module.css'
@@ -344,10 +345,6 @@ function renderHighlightedText(
   }
   if (cursor < text.length) parts.push(text.slice(cursor))
   return parts
-}
-
-function isCtrlNavigationKey(e: KeyboardEvent<HTMLInputElement>, key: 'n' | 'p'): boolean {
-  return e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && e.key.toLowerCase() === key
 }
 
 // Column metrics, kept in sync with QuickInput.module.css. Used only to size the
@@ -685,10 +682,10 @@ export function QuickPickPanel({
       else setFocusedIdx((i) => nextSelectableIndex(sortedFiltered, i, 1))
       return
     }
-    if (e.key === 'ArrowDown' || isCtrlNavigationKey(e, 'n')) {
+    if (e.key === 'ArrowDown' || ctrlNavigationKey(e) === 'n') {
       e.preventDefault()
       setFocusedIdx((i) => nextSelectableIndex(sortedFiltered, i, 1))
-    } else if (e.key === 'ArrowUp' || isCtrlNavigationKey(e, 'p')) {
+    } else if (e.key === 'ArrowUp' || ctrlNavigationKey(e) === 'p') {
       e.preventDefault()
       setFocusedIdx((i) => nextSelectableIndex(sortedFiltered, i, -1))
     } else if (e.key === 'PageDown') {
@@ -1049,8 +1046,12 @@ function InputPanel({ state, onClose }: { state: QuickPickState; onClose: () => 
       }
       state.onInput?.(value)
       onClose()
-    } else if (isCtrlNavigationKey(e, 'n') || isCtrlNavigationKey(e, 'p')) {
-      e.preventDefault()
+    } else {
+      // The picker's list answers Ctrl+N / Ctrl+P. A plain text prompt has no
+      // list to move, so it holds those two rather than letting quick open /
+      // new file fire behind the dialog — but only those two.
+      const alias = ctrlNavigationKey(e)
+      if (alias === 'n' || alias === 'p') e.preventDefault()
     }
   }
 

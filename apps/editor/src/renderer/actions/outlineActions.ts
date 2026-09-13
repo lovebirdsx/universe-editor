@@ -8,6 +8,9 @@
  *  Vim aliases (Ctrl+H/J/K/L) are intentionally not bound: Ctrl+K is the app's
  *  chord leader (Ctrl+K Ctrl+S, …) and would shadow a single-stroke Ctrl+K, so
  *  the vim set can't be completed cleanly — emacs covers the four directions.
+ *  That reasoning is about *global* bindings; context menus do bind Ctrl+H/L
+ *  because they take the keys at the window capture phase (see
+ *  `useMenuNavigation`), which never reaches this registry.
  *--------------------------------------------------------------------------------------------*/
 
 import {

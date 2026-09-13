@@ -406,6 +406,15 @@ describe('ContextMenu submenus', () => {
         fireEvent.keyDown(window, { key })
       })
 
+    /** Dispatches a stroke and reports whether the menu swallowed it. */
+    const pressWith = (init: KeyboardEventInit): boolean => {
+      const event = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init })
+      act(() => {
+        window.dispatchEvent(event)
+      })
+      return event.defaultPrevented
+    }
+
     it('moves with the arrow keys, skipping separators and wrapping', () => {
       const root = asMenuId('test.submenu.keys.move')
       track(MenuRegistry.addMenuItem(root, { command: 'a.cmd', title: 'A', group: '1_a' }))
@@ -500,6 +509,174 @@ describe('ContextMenu submenus', () => {
 
       press('ArrowLeft')
       expect(screen.queryByText('Nested')).toBeNull()
+    })
+
+    it('steps with Ctrl+N and Ctrl+P, aliasing the arrow keys', () => {
+      const root = asMenuId('test.submenu.keys.ctrlstep')
+      track(MenuRegistry.addMenuItem(root, { command: 'a.cmd', title: 'A', group: '1_a' }))
+      track(MenuRegistry.addMenuItem(root, { command: 'b.cmd', title: 'B', group: '2_b' }))
+
+      render(
+        <ContextMenu
+          menuId={root}
+          anchor={{ x: 0, y: 0 }}
+          commandService={makeCommandService([])}
+          onClose={vi.fn()}
+        />,
+      )
+      const menu = screen.getByRole('menu')
+
+      expect(pressWith({ key: 'n', ctrlKey: true })).toBe(true)
+      expect(activeLabel(menu)).toBe('A')
+      // Index 1 is the group separator, so B is next.
+      pressWith({ key: 'n', ctrlKey: true })
+      expect(activeLabel(menu)).toBe('B')
+      pressWith({ key: 'n', ctrlKey: true })
+      expect(activeLabel(menu)).toBe('A')
+
+      pressWith({ key: 'p', ctrlKey: true })
+      expect(activeLabel(menu)).toBe('B')
+      // CapsLock reports an upper-case letter with no Shift held.
+      pressWith({ key: 'N', ctrlKey: true })
+      expect(activeLabel(menu)).toBe('A')
+    })
+
+    it('opens a submenu with Ctrl+L and collapses it with Ctrl+H', () => {
+      const root = asMenuId('test.submenu.keys.ctrlexpand')
+      const sub = asMenuId('test.submenu.keys.ctrlexpand.child')
+      track(MenuRegistry.addSubmenuItem(root, { submenu: sub, title: 'More' }))
+      track(MenuRegistry.addMenuItem(sub, { command: 'nested.cmd', title: 'Nested' }))
+
+      render(
+        <ContextMenu
+          menuId={root}
+          anchor={{ x: 0, y: 0 }}
+          commandService={makeCommandService([])}
+          onClose={vi.fn()}
+        />,
+      )
+
+      press('ArrowDown')
+      expect(pressWith({ key: 'l', ctrlKey: true })).toBe(true)
+      const panel = screen.getByTestId('context-menu-submenu')
+      expect(activeLabel(panel)).toBe('Nested')
+
+      expect(pressWith({ key: 'h', ctrlKey: true })).toBe(true)
+      expect(screen.queryByText('Nested')).toBeNull()
+    })
+
+    it('swallows the aliases even when the menu can do nothing with them', () => {
+      const root = asMenuId('test.submenu.keys.ctrlinert')
+      track(MenuRegistry.addMenuItem(root, { command: 'a.cmd', title: 'A', group: '1_a' }))
+      track(MenuRegistry.addMenuItem(root, { command: 'b.cmd', title: 'B', group: '2_b' }))
+
+      render(
+        <ContextMenu
+          menuId={root}
+          anchor={{ x: 0, y: 0 }}
+          commandService={makeCommandService([])}
+          onClose={vi.fn()}
+        />,
+      )
+      const menu = screen.getByRole('menu')
+      press('ArrowDown')
+      expect(activeLabel(menu)).toBe('A')
+
+      // Nothing to expand (A is a plain item) and nothing to collapse (top
+      // level). Unlike the arrows, which leak here so the tree underneath can
+      // expand a folder, an alias must not — Ctrl+H would otherwise pop the
+      // Replace widget on top of the open menu.
+      expect(pressWith({ key: 'l', ctrlKey: true })).toBe(true)
+      expect(screen.queryByTestId('context-menu-submenu')).toBeNull()
+      expect(pressWith({ key: 'h', ctrlKey: true })).toBe(true)
+      expect(activeLabel(menu)).toBe('A')
+    })
+
+    it('leaves every other modifier stripe to the workbench', () => {
+      const root = asMenuId('test.submenu.keys.ctrlguard')
+      track(MenuRegistry.addMenuItem(root, { command: 'a.cmd', title: 'A', group: '1_a' }))
+      track(MenuRegistry.addMenuItem(root, { command: 'b.cmd', title: 'B', group: '2_b' }))
+
+      render(
+        <ContextMenu
+          menuId={root}
+          anchor={{ x: 0, y: 0 }}
+          commandService={makeCommandService([])}
+          onClose={vi.fn()}
+        />,
+      )
+      const menu = screen.getByRole('menu')
+      press('ArrowDown')
+      expect(activeLabel(menu)).toBe('A')
+
+      // Bare letters aren't ours, and neither is any extra modifier stripe:
+      // these must reach the workbench (command palette, new window, AltGr, …).
+      for (const init of [
+        { key: 'n' },
+        { key: 'p' },
+        { key: 'h' },
+        { key: 'l' },
+        { key: 'p', ctrlKey: true, shiftKey: true },
+        { key: 'n', ctrlKey: true, shiftKey: true },
+        { key: 'h', ctrlKey: true, shiftKey: true },
+        { key: 'p', ctrlKey: true, altKey: true },
+        { key: 'p', metaKey: true },
+        { key: 'ArrowDown', ctrlKey: true },
+        { key: 'Enter', ctrlKey: true },
+      ] satisfies KeyboardEventInit[]) {
+        expect(pressWith(init)).toBe(false)
+      }
+      expect(activeLabel(menu)).toBe('A')
+    })
+
+    it('swallows an alias even when the highlighted level stops resolving', () => {
+      const root = asMenuId('test.submenu.keys.ctrlstale')
+      const sub = asMenuId('test.submenu.keys.ctrlstale.child')
+      // Row 0 is a submenu while `v1` holds and a plain item once `v2` does, so
+      // re-resolving the menu under an expanded panel leaves `open` pointing at
+      // a row that is no longer a submenu.
+      track(
+        MenuRegistry.addSubmenuItem(root, {
+          submenu: sub,
+          title: 'More',
+          when: 'v1',
+          group: '1_a',
+        }),
+      )
+      track(
+        MenuRegistry.addMenuItem(root, {
+          command: 'plain.cmd',
+          title: 'Plain',
+          when: 'v2',
+          group: '1_a',
+        }),
+      )
+      track(MenuRegistry.addMenuItem(sub, { command: 'nested.cmd', title: 'Nested' }))
+      track(MenuRegistry.addMenuItem(root, { command: 'tail.cmd', title: 'Tail', group: '2_b' }))
+
+      const view = (keys: readonly string[]) => (
+        <ContextMenu
+          menuId={root}
+          anchor={{ x: 0, y: 0 }}
+          commandService={makeCommandService([])}
+          contextKeyService={makeContextKeyService(keys)}
+          onClose={vi.fn()}
+        />
+      )
+      const { rerender } = render(view(['v1']))
+
+      press('ArrowDown')
+      press('ArrowRight')
+      expect(activeLabel(screen.getByTestId('context-menu-submenu'))).toBe('Nested')
+
+      rerender(view(['v2']))
+
+      // The level the highlight sits on no longer has rows. An arrow keeps
+      // falling through to the view underneath — that is how it reaches the tree
+      // — but an alias stays swallowed, or Ctrl+P would open quick open on top of
+      // a menu that is plainly still on screen.
+      expect(pressWith({ key: 'ArrowDown' })).toBe(false)
+      expect(pressWith({ key: 'p', ctrlKey: true })).toBe(true)
     })
 
     it('runs the active item on Enter', () => {

@@ -1,16 +1,17 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  useMenuNavigation — the keyboard half of every menu in the workbench: arrow
- *  stepping across separators, Home/End, submenu expand/collapse, Enter/Space,
- *  and the opening highlight. Navigation moves a *virtual* focus
- *  (`aria-activedescendant`) rather than DOM focus, so the tree or list that
- *  raised the menu keeps its own focus ring and selection.
+ *  stepping across separators (with Ctrl+P/N/H/L as their aliases), Home/End,
+ *  submenu expand/collapse, Enter/Space, and the opening highlight. Navigation
+ *  moves a *virtual* focus (`aria-activedescendant`) rather than DOM focus, so
+ *  the tree or list that raised the menu keeps its own focus ring and selection.
  *
  *  Shared by `ContextMenu` (MenuRegistry-driven) and `ListMenu` (item-driven) so
  *  the two can never drift apart.
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { ctrlNavigationKey, type CtrlNavigationKey } from '../keybinding/ctrlNavigation.js'
 import { rowsAtLevel, stepIndex, type RowModel } from './menuModel.js'
 
 /**
@@ -19,6 +20,12 @@ import { rowsAtLevel, stepIndex, type RowModel } from './menuModel.js'
  * closing on the first of those would make the panel unreachable by mouse.
  */
 const SUBMENU_CLOSE_DELAY_MS = 250
+
+/** Ctrl+P/N/H/L stand in for the four arrow keys while a menu owns the keyboard. */
+const CTRL_NAV_ARROWS: Record<
+  CtrlNavigationKey,
+  'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight'
+> = { h: 'ArrowLeft', l: 'ArrowRight', n: 'ArrowDown', p: 'ArrowUp' }
 
 /** The row the keyboard acts on, addressed by its depth and index. */
 export interface MenuActive {
@@ -219,11 +226,29 @@ export function useMenuNavigation(
     if (!enabled) return
     const onKeyDown = (e: KeyboardEvent): void => {
       // Mid-composition Enter commits an IME candidate; it is not ours to take.
-      if (e.isComposing || e.altKey || e.ctrlKey || e.metaKey) return
+      if (e.isComposing || e.altKey || e.metaKey) return
+      // Ctrl is ours only for the four aliases. Any other Ctrl stroke —
+      // Ctrl+Left, Ctrl+Enter, the Ctrl+K chord leader — keeps its global
+      // meaning, and Alt/Meta stay out entirely so Alt+ArrowDown and Cmd+ArrowDown
+      // never fall through to the plain arrow cases below. One casualty is a
+      // chord *completing* on an alias: Ctrl+K Ctrl+L lands on a menu that wants
+      // 'l' for ArrowRight, so the stroke is swallowed and the chord times out.
+      const alias = ctrlNavigationKey(e)
+      if (e.ctrlKey && alias === undefined) return
+      const key = alias === undefined ? e.key : CTRL_NAV_ARROWS[alias]
       const s = stateRef.current
       const level = activeLevel(s)
       const levelRows = rowsAtLevel(rowsRef.current, s.open, level)
-      if (!levelRows) return
+      // Nothing to step through at this level. The arrows fall through to the
+      // view underneath — that is how they reach the tree that raised the menu —
+      // but an alias stays ours: leaking Ctrl+H would pop the Replace widget on
+      // top of it. Same split in the ArrowLeft/ArrowRight cases below.
+      if (!levelRows) {
+        if (alias === undefined) return
+        e.preventDefault()
+        e.stopPropagation()
+        return
+      }
 
       const move = (next: number | undefined): void => {
         if (next === undefined) return
@@ -231,7 +256,7 @@ export function useMenuNavigation(
         setState({ open: s.open.slice(0, level), active: { level, index: next } })
       }
 
-      switch (e.key) {
+      switch (key) {
         case 'ArrowDown':
           move(stepIndex(levelRows, s.active?.index, 1))
           break
@@ -246,11 +271,11 @@ export function useMenuNavigation(
           break
         case 'ArrowRight':
           cancelClose()
-          if (!expand()) return
+          if (!expand() && alias === undefined) return
           break
         case 'ArrowLeft':
           cancelClose()
-          if (!collapse()) return
+          if (!collapse() && alias === undefined) return
           break
         case 'Enter':
         case ' ': {

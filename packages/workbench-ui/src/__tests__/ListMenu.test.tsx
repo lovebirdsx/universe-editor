@@ -135,6 +135,27 @@ describe('ListMenu', () => {
       expect(activeLabel(menu)).toBe('A')
     })
 
+    it('steps with Ctrl+N and Ctrl+P, like the MenuRegistry-driven menu', () => {
+      renderMenu(
+        [
+          { kind: 'item', label: 'A', run: vi.fn() },
+          { kind: 'item', label: 'B', run: vi.fn() },
+        ],
+        { autoFocusFirst: true },
+      )
+
+      const menu = rootMenu()
+      expect(activeLabel(menu)).toBe('A')
+      act(() => {
+        fireEvent.keyDown(window, { key: 'n', ctrlKey: true })
+      })
+      expect(activeLabel(menu)).toBe('B')
+      act(() => {
+        fireEvent.keyDown(window, { key: 'p', ctrlKey: true })
+      })
+      expect(activeLabel(menu)).toBe('A')
+    })
+
     it('does not act on a composing Enter (IME candidate commit)', () => {
       const run = vi.fn()
       renderMenu([{ kind: 'item', label: 'A', run }], { autoFocusFirst: true })
