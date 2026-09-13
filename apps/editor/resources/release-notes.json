@@ -1,5 +1,27 @@
 [
   {
+    "version": "0.14.4",
+    "date": "2026-09-13",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "context菜单支持ctrl+pnhl进行移动",
+          "git worktree sync的弹窗改成quick pick形式"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "修复 .tsx 文件 JSX 标签名不着色",
+          "修复git graph通过键盘无法滚动视图到顶的bug"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.14.3",
     "date": "2026-09-11",
     "groups": []
