@@ -170,7 +170,12 @@ export class ViewsService extends Disposable implements IViewsService {
     } finally {
       this._suspendPersist = false
     }
-    this._seedDefaults()
+    // The persisted selection may name a container that no longer registers
+    // (renamed/removed since it was written). The `version` autorun that would
+    // normally drop it has already fired — containers register during
+    // BlockStartup, while this load runs after workspace hydration — so without
+    // reconciling here a stale pointer survives and leaves the part blank.
+    this._reconcileActive()
   }
 
   async save(): Promise<void> {

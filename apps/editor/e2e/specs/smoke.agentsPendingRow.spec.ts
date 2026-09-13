@@ -15,7 +15,7 @@ import { test, expect } from '../fixtures/sharedApp.js'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ECHO_AGENT_PATH = resolve(__dirname, '..', '..', 'src', 'test-fixtures', 'echoAgent.cjs')
 
-const AGENTS_VIEW = 'workbench.view.agents.main'
+const SESSIONS_VIEW = 'workbench.view.sessions.main'
 
 test.describe('@p1 agents — optimistic pending session row', () => {
   test('pending row appears instantly, then swaps to the durable row', async ({
@@ -31,7 +31,7 @@ test.describe('@p1 agents — optimistic pending session row', () => {
     )
 
     await page.evaluate(() => window.__E2E__!.runCommand('workbench.action.agent.openView'))
-    await expect(page.locator(`[data-view-pane="${AGENTS_VIEW}"]`)).toBeVisible({ timeout: 5000 })
+    await expect(page.locator(`[data-view-pane="${SESSIONS_VIEW}"]`)).toBeVisible({ timeout: 5000 })
 
     // Fire-and-forget: createSession returns synchronously; the 3s session/new
     // runs in the background.

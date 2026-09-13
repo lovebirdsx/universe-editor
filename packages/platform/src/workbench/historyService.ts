@@ -23,7 +23,7 @@ export interface IHistoryEntry {
   readonly selection?: IHistorySelection | undefined
   /**
    * Editor input typeId, set by recorders when the entry corresponds to a
-   * non-text editor (Settings, Welcome, Agents, ...). Used by GoBack/GoForward
+   * non-text editor (Settings, Welcome, Agent session, ...). Used by GoBack/GoForward
    * to recreate the input via `EditorRegistry.deserialize(typeId, serialized)`
    * when no live instance is found in any group.
    */

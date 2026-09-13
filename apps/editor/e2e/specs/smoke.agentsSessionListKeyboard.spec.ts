@@ -1,13 +1,13 @@
 /*---------------------------------------------------------------------------------------------
- *  AGENTS session list keyboard navigation (@p1).
+ *  Session list keyboard navigation (Sessions view) (@p1).
  *
  *  Only e2e can prove this end to end. The list moved to the shared
  *  `useFlatListNavigation`, and the piece unit tests cannot reach is the wiring
  *  around it: `SessionListPanel` registering the `<ul>` with the focusable
- *  registry, so `LayoutService.focusView('workbench.view.agents.main')` puts DOM
+ *  registry, so `LayoutService.focusView('workbench.view.sessions.main')` puts DOM
  *  focus on the list, and `FocusContextKeyContribution` deriving
  *  `focusedView` from the DOM — which is what a future
- *  `focusedView == 'workbench.view.agents.main'` keybinding would be gated on.
+ *  `focusedView == 'workbench.view.sessions.main'` keybinding would be gated on.
  *  Same reasoning as smoke.outlineKeyboard's header.
  *
  *  Before the migration none of this held: the `<ul>` had no role and no
@@ -24,7 +24,7 @@ import type { WorkbenchPO } from '../pages/WorkbenchPO.js'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ECHO_AGENT_PATH = resolve(__dirname, '..', '..', 'src', 'test-fixtures', 'echoAgent.cjs')
 
-const AGENTS_VIEW_ID = 'workbench.view.agents.main'
+const SESSIONS_VIEW_ID = 'workbench.view.sessions.main'
 
 /** Row ids the arrow keys are currently on, read off `aria-selected`. */
 const cursorRowIds = () => {
@@ -48,7 +48,7 @@ const cursorRowIsActive = () => {
 }
 
 /**
- * Focus the AGENTS view and wait for the focus to actually stick.
+ * Focus the Sessions view and wait for the focus to actually stick.
  *
  * A freshly opened session's editor claims focus for its prompt input a beat
  * after `newSession` resolves, so a single focusView can be silently undone —
@@ -68,7 +68,7 @@ async function focusSessionList(page: Page, workbench: WorkbenchPO): Promise<Loc
       { timeout: 20000 },
     )
     .toBe('true')
-  await expect.poll(() => workbench.getContextKey<string>('focusedView')).toBe(AGENTS_VIEW_ID)
+  await expect.poll(() => workbench.getContextKey<string>('focusedView')).toBe(SESSIONS_VIEW_ID)
   return list
 }
 
@@ -86,7 +86,7 @@ test.describe('@p1 agents session list keyboard navigation', () => {
     ] as const)
 
     // Two sessions, so there is something to navigate between. The default chat
-    // location is 'editor', which is exactly when the AGENTS view shows the list.
+    // location is 'editor', which is exactly when the Sessions view shows the list.
     for (const _ of [0, 1]) {
       await page.evaluate(() => {
         void window.__E2E__!.runCommand('workbench.action.agent.newSession')

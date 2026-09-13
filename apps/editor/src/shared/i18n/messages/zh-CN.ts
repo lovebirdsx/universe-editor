@@ -181,8 +181,6 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'panel.restore': '还原底栏大小',
   'sidebar.empty': '没有注册任何视图。',
   'titleBar.empty': '（空）',
-  'view.agents.main': 'Agents',
-  'view.agents.mcp': 'MCP 服务器',
   'view.aiDebug': 'AI 调试',
   'view.commitChanges': '提交变更',
   'view.files': '文件',
@@ -191,12 +189,13 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'view.scm': '源代码管理',
   'view.search': '搜索',
   'view.sessionChanges': '会话更改',
+  'view.sessions.main': 'Sessions',
+  'view.sessions.mcp': 'MCP 服务器',
   'view.extensions': '扩展',
   'view.swarm.changes': 'Swarm 更改',
   'view.swarm.reviews': '审核',
   'view.terminal': '终端',
   'view.timeline': '时间线',
-  'viewContainer.agents': 'Agents',
   'viewContainer.aiDebug': 'AI 调试',
   'viewContainer.close': '关闭',
   'viewContainer.explorer': '资源管理器',
@@ -208,6 +207,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'viewContainer.scm': 'SCM',
   'viewContainer.search': '搜索',
   'viewContainer.sessionChanges': '会话更改',
+  'viewContainer.sessions': 'Sessions',
   'viewContainer.swarm': 'Swarm 审核',
   'viewContainer.terminal': '终端',
 
@@ -242,7 +242,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   // --- Welcome ---
   'welcome.agent.desc':
     'Agents 是此编辑器的核心 - 描述你的目标，让 AI 和你一起编辑、搜索和运行任务。',
-  'welcome.agent.openView': '打开 Agents 面板',
+  'welcome.agent.openView': '打开 Sessions 面板',
   'welcome.agent.select': '选择 Agent…',
   'welcome.agent.start': '开始第一个 Agent 会话',
   'welcome.agent.title': '从 Agent 开始',
@@ -302,7 +302,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.agent.openCodexConfig': '打开 Codex 配置（TOML）',
   'action.agent.openMcpSettings': '打开 MCP 设置',
   'action.agent.openSettings': '打开 Agent 设置',
-  'action.agent.openView': '打开 Agents 视图',
+  'action.agent.openView': '打开 Sessions 视图',
   'action.agent.pinSession': '固定 Agent 会话',
   'action.agent.prompt.acceptSuggestion': '接受建议',
   'action.agent.prompt.hideSuggestion': '隐藏建议',
@@ -981,7 +981,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.workbench.tree.virtualizationThreshold.description':
     '可见树项超过此数量时启用虚拟滚动。',
   'settings.acp.chat.enableSidebarLocation':
-    '允许将 Agent 聊天面板停靠到侧边栏（Agents 视图），而不是将会话作为编辑器标签打开。该功能为实验性且尚不完整——未来版本可能移除。默认关闭；关闭时聊天只在编辑器区域打开。',
+    '允许将 Agent 聊天面板停靠到侧边栏（Sessions 视图），而不是将会话作为编辑器标签打开。该功能为实验性且尚不完整——未来版本可能移除。默认关闭；关闭时聊天只在编辑器区域打开。',
   'settings.acp.deepLink.allowAutoSubmit':
     '允许 `universe-editor://agent/new?prompt=…` 深链接自动发送提示词。默认启用；关闭后链接只会填充输入框，便于你先检查再发送。链接可用 `autoSubmit=false` 强制只填充。',
   'settings.acp.prompt.confirmShortFirstMessageLength':
@@ -994,7 +994,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.acp.sessions.confirmDelete': '删除会话前是否请求确认。',
   'settings.acp.sessions.historyScope.all': '全部',
   'settings.acp.sessions.historyScope.description':
-    '控制 Agents 会话历史中列出哪些会话。"当前工作树"包含同一仓库的兄弟 git 工作树中的会话；"全部"列出所有项目的会话。',
+    '控制 Agent 会话历史中列出哪些会话。"当前工作树"包含同一仓库的兄弟 git 工作树中的会话；"全部"列出所有项目的会话。',
   'settings.acp.sessions.historyScope.workspace': '当前工作区',
   'settings.acp.sessions.historyScope.worktree': '当前工作树',
   'settings.acp.turnStallTimeoutMs':
@@ -1897,7 +1897,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'ai.quickSettings.inlineScope.session': '会话输入框',
   'ai.quickSettings.manageModels': '管理 AI 模型',
   'ai.quickSettings.noModel': '选择模型…',
-  'ai.quickSettings.openAgents': '打开 Agents',
+  'ai.quickSettings.openSessions': '打开 Sessions',
   'ai.quickSettings.sessionTitle': '会话标题',
   'ai.quickSettings.title': 'AI 设置',
   'ai.sessionTitle.pickModel.placeholder': '选择用于生成会话标题的模型',
@@ -2279,13 +2279,13 @@ export const ZH_CN_MESSAGES: MessageMap = {
 
   // --- AI: feature models panel ---
   'aiFeatures.chat': '对话',
-  'aiFeatures.chat.desc': 'AGENTS 会话与对话补全使用的模型。',
+  'aiFeatures.chat.desc': 'Agent 会话与对话补全使用的模型。',
   'aiFeatures.commit': '提交信息',
   'aiFeatures.commit.desc': '生成 Git 提交信息使用的模型。',
   'aiFeatures.inline': '内联补全',
   'aiFeatures.inline.desc': '编辑器幽灵文本补全使用的模型（可选更小更快的模型）。',
   'aiFeatures.sessionTitle': '会话标题',
-  'aiFeatures.sessionTitle.desc': '为 AGENTS 会话生成友好标题使用的模型。',
+  'aiFeatures.sessionTitle.desc': '为 Agent 会话生成友好标题使用的模型。',
   'aiFeatures.unavailable': '不可用',
   'aiFeatures.unset': '未设置',
 
@@ -2295,7 +2295,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
     '',
     '为不同 AI 功能分别指定使用的模型，互不影响：',
     '',
-    '- **对话**：AGENTS 会话与对话补全使用的主模型。',
+    '- **对话**：Agent 会话与对话补全使用的主模型。',
     '- **内联补全**：编辑器幽灵文本补全（可选更小更快的模型）。',
     '- **提交信息**：生成 Git 提交信息使用的模型。',
     '',

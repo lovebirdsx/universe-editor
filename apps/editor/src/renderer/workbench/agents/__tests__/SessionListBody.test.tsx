@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Tests for SessionListBody — archive / pin behavior in the AGENTS session
+ *  Tests for SessionListBody — archive / pin behavior in the session
  *  list: the visibility gate, pinned-first / archived-last ordering, pure-fuzzy
  *  search order, the Del / Shift+Del row keys, the inline buttons, and the
  *  context-menu items. Command dispatch is asserted on ICommandService; list

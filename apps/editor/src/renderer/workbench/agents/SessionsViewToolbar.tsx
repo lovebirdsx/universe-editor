@@ -1,6 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  AgentsViewToolbar — the title-bar actions for the AGENTS view, rendered in the
+ *  SessionsViewToolbar — the title-bar actions for the Sessions view, rendered in the
  *  view's ViewPane header via the view toolbar registry. The button set follows the chat
  *  location: docked in the sidebar (ChatPanel) it offers the sessions popover,
  *  New and switch-to-editor; parked in the editor area (SessionListPanel) it
@@ -21,7 +21,7 @@ import { SessionsPopover } from './SessionsPopover.js'
 import { SessionsFilterPopover } from './SessionsFilterPopover.js'
 import styles from './agents.module.css'
 
-export function AgentsViewToolbar() {
+export function SessionsViewToolbar() {
   const service = useService(IAcpSessionService)
   const registry = useService(IAcpAgentRegistry)
   const commands = useService(ICommandService)

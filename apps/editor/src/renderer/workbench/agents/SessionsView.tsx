@@ -1,6 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  AgentsView — the single AGENTS view that lives in SecondarySideBar. Picks
+ *  SessionsView — the single Sessions view that lives in SecondarySideBar. Picks
  *  between the SessionListPanel (when Chat is parked in EditorArea) and the
  *  full-fat ChatPanel (when the user moves Chat into the sidebar). The choice
  *  is driven by IAcpChatLocationService, which persists across restarts and
@@ -12,7 +12,7 @@ import { IAcpChatLocationService } from '../../services/acp/session/acpChatLocat
 import { ChatPanel } from './ChatPanel.js'
 import { SessionListPanel } from './SessionListPanel.js'
 
-export function AgentsView() {
+export function SessionsView() {
   const location = useService(IAcpChatLocationService)
   const value = useObservable(location.location)
   return value === 'sidebar' ? <ChatPanel /> : <SessionListPanel />

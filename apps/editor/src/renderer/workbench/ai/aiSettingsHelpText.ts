@@ -64,7 +64,7 @@ export function aiFeatureModelsHelpText(): string {
       '',
       'Assign a model to each AI feature independently:',
       '',
-      '- **Chat**: the main model used by AGENTS sessions and chat completions.',
+      '- **Chat**: the main model used by agent sessions and chat completions.',
       '- **Inline Completion**: editor ghost-text suggestions (can be a smaller, faster model).',
       '- **Commit Message**: the model used to generate Git commit messages.',
       '',

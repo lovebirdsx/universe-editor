@@ -924,7 +924,7 @@ export interface E2EProbe {
   }>
   /**
    * Snapshot of the active session's MCP servers (name, connection status, and
-   * transport when known). Backs the MCP Servers view and the Agents status-bar
+   * transport when known). Backs the MCP Servers view and the AI status-bar
    * tooltip. Empty when no session is active or no MCP servers are involved.
    */
   getAcpMcpServers(): ReadonlyArray<{ name: string; status: string; transport?: string }>

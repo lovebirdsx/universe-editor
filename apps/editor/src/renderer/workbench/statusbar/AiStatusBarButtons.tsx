@@ -2,7 +2,7 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  AiStatusBarButton — the status-bar (bottom-right) AI quick-settings button.
  *  Clicking opens an upward-anchored popover (inline-completion toggle, shortcuts
- *  to the Agents view / AI settings, and per-feature model rows). The tooltip
+ *  to the Sessions view / AI settings, and per-feature model rows). The tooltip
  *  carries the active session's MCP server summary. (The New-session / Choose-agent
  *  buttons live in the title bar — see workbench/titlebar/AgentSessionButtons.tsx.)
  *
@@ -30,7 +30,7 @@ import {
   parseModelRef,
   type AiModelMetadata,
 } from '@universe-editor/platform'
-import { Bot, Settings, Sparkles } from 'lucide-react'
+import { MessagesSquare, Settings, Sparkles } from 'lucide-react'
 import { useObservable, useOptionalService, useService } from '../useService.js'
 import { IInlineCompletionService } from '../../services/ai/InlineCompletionService.js'
 import { IAcpSessionService } from '../../services/acp/session/acpSessionService.js'
@@ -59,10 +59,10 @@ interface AiSnapshot {
 const EMPTY: AiSnapshot = { models: [] }
 const NO_SERVERS: readonly { status: string }[] = []
 
-function renderIcon(id: 'agents' | 'settings') {
+function renderIcon(id: 'sessions' | 'settings') {
   switch (id) {
-    case 'agents':
-      return <Bot size={14} strokeWidth={1.75} aria-hidden="true" />
+    case 'sessions':
+      return <MessagesSquare size={14} strokeWidth={1.75} aria-hidden="true" />
     case 'settings':
       return <Settings size={14} strokeWidth={1.75} aria-hidden="true" />
   }
@@ -267,8 +267,8 @@ export function AiStatusBarButtons() {
                 inlineLabel={localize('ai.quickSettings.inlineCompletions', 'Inline Completions')}
                 inlineScopes={inlineScopes}
                 onToggleInlineScope={onToggleInlineScope}
-                openAgentsLabel={localize('ai.quickSettings.openAgents', 'Open Agents')}
-                onOpenAgents={() => {
+                openSessionsLabel={localize('ai.quickSettings.openSessions', 'Open Sessions')}
+                onOpenSessions={() => {
                   void commands.executeCommand('workbench.action.agent.openView')
                   setOpen(false)
                 }}

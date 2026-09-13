@@ -44,7 +44,7 @@
   box-sizing: border-box;
 }
 
-/* Title-bar toolbar slot (AgentsViewToolbar) rendered inside the ViewPane
+/* Title-bar toolbar slot (SessionsViewToolbar) rendered inside the ViewPane
    header. Positioned so the sessions popover anchors to it. */
 .viewToolbar {
   position: relative;

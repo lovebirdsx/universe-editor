@@ -21,7 +21,7 @@ function Scroller({
 }
 
 /**
- * Mirrors the AGENTS session list: the scroll container is rendered behind an
+ * Mirrors the session list: the scroll container is rendered behind an
  * async placeholder and only appears once `ready` flips true. Restoration must
  * survive the scroller being absent at mount time.
  */

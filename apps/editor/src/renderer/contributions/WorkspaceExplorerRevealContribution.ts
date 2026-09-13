@@ -4,8 +4,8 @@
  *  dialog action, the "Open Recent" submenu, or the E2E probe), make the primary
  *  side bar visible and switch it to the Explorer view container so the file tree
  *  is immediately visible to the user — UNLESS the user has already switched to a
- *  non-Explorer container (Search / SCM / Agents), in which case their selection
- *  is preserved. `onDidChangeWorkspace` is async, so an opened folder must not
+ *  non-Explorer container (Search / SCM / Session Changes), in which case their
+ *  selection is preserved. `onDidChangeWorkspace` is async, so an opened folder
  *  clobber a container the user activated in the same tick (e.g. clicking Search
  *  right after opening a folder).
  *--------------------------------------------------------------------------------------------*/

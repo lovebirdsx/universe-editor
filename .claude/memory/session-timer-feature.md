@@ -10,4 +10,4 @@ metadata:
 
 **Why:** 帮助用户了解 Agent 实际消耗的工作时长，区别于挂起/等待时间。
 
-**How to apply:** 时间追踪逻辑在 `acpSession.ts` 的 `_recomputeStatus`/`_finalizeRunningSegment`；UI 展示分两处：输入框下方 (`PromptInput.tsx`) 和 AGENTS 面板 session 行 (`SessionListBody.tsx`)。新增公共 hook `useSessionTimer` + `formatRunningTime`。历史持久化通过 `AcpSessionHistoryEntry.accumulatedRunningMs`（可选字段，无需版本迁移）。
+**How to apply:** 时间追踪逻辑在 `acpSession.ts` 的 `_recomputeStatus`/`_finalizeRunningSegment`；UI 展示分两处：输入框下方 (`PromptInput.tsx`) 和 Sessions 面板 session 行 (`SessionListBody.tsx`)。新增公共 hook `useSessionTimer` + `formatRunningTime`。历史持久化通过 `AcpSessionHistoryEntry.accumulatedRunningMs`（可选字段，无需版本迁移）。

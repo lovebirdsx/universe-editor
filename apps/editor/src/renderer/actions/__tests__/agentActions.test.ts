@@ -934,14 +934,14 @@ describe('NewAgentSessionInFolderAction', () => {
     expect(b.createSession).toHaveBeenCalledWith('claude-code', { cwd: parent.fsPath })
   })
 
-  it('reveals the Agents view instead of an editor tab in docked mode', async () => {
+  it('reveals the Sessions view instead of an editor tab in docked mode', async () => {
     const b = build({ location: 'sidebar' })
     const folder = URI.file('/ws/src')
     await b.inst.invokeFunction((accessor) =>
       new NewAgentSessionInFolderAction().run(accessor, { parent: folder }),
     )
     expect(b.openEditor).not.toHaveBeenCalled()
-    expect(b.openViewContainer).toHaveBeenCalledWith('workbench.view.agents')
+    expect(b.openViewContainer).toHaveBeenCalledWith('workbench.view.sessions')
   })
 })
 

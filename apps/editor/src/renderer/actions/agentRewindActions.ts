@@ -243,7 +243,7 @@ export class ForkAgentSessionAction extends Action2 {
     } else {
       sessions.setActive(forked.id)
       if (!layout.getVisible(PartId.SecondarySideBar)) layout.toggleVisible(PartId.SecondarySideBar)
-      await views.openViewContainer('workbench.view.agents')
+      await views.openViewContainer('workbench.view.sessions')
     }
   }
 }

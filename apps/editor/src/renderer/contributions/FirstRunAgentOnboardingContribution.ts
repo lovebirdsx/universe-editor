@@ -1,7 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  FirstRunAgentOnboardingContribution — on a brand-new install, reveals the
- *  Agents side bar once so first-time users discover the editor's core feature.
+ *  Sessions side bar once so first-time users discover the editor's core feature.
  *  Gated by a GLOBAL storage flag so it only ever fires on the first launch;
  *  the persistent Agent entry point lives in WelcomeEditor afterwards.
  *--------------------------------------------------------------------------------------------*/
@@ -16,7 +16,7 @@ import {
   StorageScope,
 } from '@universe-editor/platform'
 
-const AGENTS_CONTAINER_ID = 'workbench.view.agents'
+const SESSIONS_CONTAINER_ID = 'workbench.view.sessions'
 const SEEN_KEY = 'welcome.agentOnboarding.seen'
 
 export class FirstRunAgentOnboardingContribution
@@ -39,6 +39,6 @@ export class FirstRunAgentOnboardingContribution
     if (!this._layout.getVisible(PartId.SecondarySideBar)) {
       this._layout.toggleVisible(PartId.SecondarySideBar)
     }
-    this._views.openViewContainer(AGENTS_CONTAINER_ID)
+    this._views.openViewContainer(SESSIONS_CONTAINER_ID)
   }
 }

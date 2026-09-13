@@ -1,8 +1,8 @@
 /*---------------------------------------------------------------------------------------------
- *  AGENTS session-list scroll-restore repro (@p1).
+ *  Session-list scroll restore (Sessions view) (@p1).
  *
- *  在 SecondarySideBar 的 AGENTS 视图里，session 列表滚到中间，切到别的容器（Outline）
- *  再切回来，滚动位置应保持。切换容器会 unmount AgentsView → SessionListPanel，滚动位置
+ *  在 SecondarySideBar 的 Sessions 视图里，session 列表滚到中间，切到别的容器（Outline）
+ *  再切回来，滚动位置应保持。切换容器会 unmount SessionsView → SessionListPanel，滚动位置
  *  由 ScrollStateCache 通过 useScrollRestore 保存/恢复。
  *--------------------------------------------------------------------------------------------*/
 
@@ -13,7 +13,7 @@ import { test, expect } from '../fixtures/sharedApp.js'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ECHO_AGENT_PATH = resolve(__dirname, '..', '..', 'src', 'test-fixtures', 'echoAgent.cjs')
 
-const AGENTS_VIEW = 'workbench.view.agents.main'
+const SESSIONS_VIEW = 'workbench.view.sessions.main'
 
 test.describe('@p1 agents — session list scroll restore', () => {
   test('session list keeps its scroll position across a secondary-sidebar container switch @regression', async ({
@@ -27,9 +27,9 @@ test.describe('@p1 agents — session list scroll restore', () => {
       ECHO_AGENT_PATH,
     ] as const)
 
-    // Reveal the AGENTS view (SecondarySideBar).
+    // Reveal the Sessions view (SecondarySideBar).
     await page.evaluate(() => window.__E2E__!.runCommand('workbench.action.agent.openView'))
-    await expect(page.locator(`[data-view-pane="${AGENTS_VIEW}"]`)).toBeVisible({ timeout: 5000 })
+    await expect(page.locator(`[data-view-pane="${SESSIONS_VIEW}"]`)).toBeVisible({ timeout: 5000 })
 
     // Seed enough sessions that the list overflows and can scroll.
     const N = 20
@@ -64,11 +64,11 @@ test.describe('@p1 agents — session list scroll restore', () => {
     })
     expect(target).toBeGreaterThan(0)
 
-    // Switch the SecondarySideBar to Outline (unmounts AgentsView) and back.
+    // Switch the SecondarySideBar to Outline (unmounts SessionsView) and back.
     await page.evaluate(() => window.__E2E__!.runCommand('outline.focus'))
-    await expect(page.locator(`[data-view-pane="${AGENTS_VIEW}"]`)).toBeHidden({ timeout: 5000 })
+    await expect(page.locator(`[data-view-pane="${SESSIONS_VIEW}"]`)).toBeHidden({ timeout: 5000 })
     await page.evaluate(() => window.__E2E__!.runCommand('workbench.action.agent.openView'))
-    await expect(page.locator(`[data-view-pane="${AGENTS_VIEW}"]`)).toBeVisible({ timeout: 5000 })
+    await expect(page.locator(`[data-view-pane="${SESSIONS_VIEW}"]`)).toBeVisible({ timeout: 5000 })
 
     const restored = page.locator('[data-testid="acp-session-list"] ul')
     await expect

@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Tests for AiQuickSettingsPanel — the inline toggle, the Agents / AI-settings
+ *  Tests for AiQuickSettingsPanel — the inline toggle, the Sessions / AI-settings
  *  shortcut buttons, and the per-row model picker (clicking a row fires onPickModel
  *  with the row's slot key so the host can open that slot's picker command).
  *--------------------------------------------------------------------------------------------*/
@@ -24,8 +24,8 @@ function renderPanel(overrides: Partial<AiQuickSettingsPanelProps> = {}) {
       { scope: 'session', label: 'Session Input', checked: false },
     ],
     onToggleInlineScope: vi.fn(),
-    openAgentsLabel: 'Open Agents',
-    onOpenAgents: vi.fn(),
+    openSessionsLabel: 'Open Sessions',
+    onOpenSessions: vi.fn(),
     openSettingsLabel: 'Manage Models',
     onOpenAiSettings: vi.fn(),
     rows: [
@@ -63,9 +63,9 @@ describe('AiQuickSettingsPanel', () => {
 
   it('fires the shortcut callbacks', () => {
     const props = renderPanel()
-    fireEvent.click(screen.getByTestId('ai-quick-settings-open-agents'))
+    fireEvent.click(screen.getByTestId('ai-quick-settings-open-sessions'))
     fireEvent.click(screen.getByTestId('ai-quick-settings-open-settings'))
-    expect(props.onOpenAgents).toHaveBeenCalled()
+    expect(props.onOpenSessions).toHaveBeenCalled()
     expect(props.onOpenAiSettings).toHaveBeenCalled()
   })
 

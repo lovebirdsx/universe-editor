@@ -57,7 +57,7 @@ export async function resolveTargetSession(services: RevealServices) {
 
 // Make the target session's chat visible and focus its input so the user sees
 // the freshly-attached chips and can keep typing. Editor mode → open the session
-// as a tab; sidebar mode → surface the Agents view. Focus is best-effort (the
+// as a tab; sidebar mode → surface the Sessions view. Focus is best-effort (the
 // widget may still be mounting; the inbox drain covers that case).
 export async function revealChat(services: RevealServices, sessionId: string): Promise<void> {
   const { location, widgets, groups, inst, layout, views, sessions } = services
@@ -82,7 +82,7 @@ export async function revealChat(services: RevealServices, sessionId: string): P
     }
   } else {
     if (!layout.getVisible(PartId.SecondarySideBar)) layout.toggleVisible(PartId.SecondarySideBar)
-    await views.openViewContainer('workbench.view.agents')
+    await views.openViewContainer('workbench.view.sessions')
   }
   widgets.focusSessionInput(sessionId)
 }

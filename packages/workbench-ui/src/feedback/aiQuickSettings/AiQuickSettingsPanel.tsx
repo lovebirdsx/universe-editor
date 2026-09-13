@@ -2,7 +2,7 @@
  *  AiQuickSettingsPanel — presentation-only quick-settings popover for AI features.
  *  Top: an inline-completions section with one checkbox per scope (text editor /
  *  session input) so each can be toggled independently, plus shortcut buttons
- *  (open Agents view, open AI settings). Below: a small table mapping each AI
+ *  (open Sessions view, open AI settings). Below: a small table mapping each AI
  *  feature slot (chat / inline / commit) to its active model; clicking a row asks
  *  the host to open that slot's model picker, so model selection stays consistent
  *  with the rest of the app.
@@ -37,14 +37,14 @@ export interface AiQuickSettingsPanelProps {
   readonly inlineLabel: string
   readonly inlineScopes: readonly AiInlineScopeRow[]
   readonly onToggleInlineScope: (scope: AiInlineScope, enabled: boolean) => void
-  readonly openAgentsLabel: string
-  readonly onOpenAgents: () => void
+  readonly openSessionsLabel: string
+  readonly onOpenSessions: () => void
   readonly openSettingsLabel: string
   readonly onOpenAiSettings: () => void
   readonly rows: readonly AiSlotRow[]
   readonly noModelLabel: string
   readonly onPickModel: (slot: AiSlotKey) => void
-  readonly renderIcon: (id: 'agents' | 'settings') => ReactNode
+  readonly renderIcon: (id: 'sessions' | 'settings') => ReactNode
 }
 
 export function AiQuickSettingsPanel({
@@ -52,8 +52,8 @@ export function AiQuickSettingsPanel({
   inlineLabel,
   inlineScopes,
   onToggleInlineScope,
-  openAgentsLabel,
-  onOpenAgents,
+  openSessionsLabel,
+  onOpenSessions,
   openSettingsLabel,
   onOpenAiSettings,
   rows,
@@ -72,11 +72,11 @@ export function AiQuickSettingsPanel({
         <span className={styles['inlineTitle']}>{inlineLabel}</span>
         <div className={styles['actions']}>
           <IconButton
-            label={openAgentsLabel}
-            onClick={onOpenAgents}
-            data-testid="ai-quick-settings-open-agents"
+            label={openSessionsLabel}
+            onClick={onOpenSessions}
+            data-testid="ai-quick-settings-open-sessions"
           >
-            {renderIcon('agents')}
+            {renderIcon('sessions')}
           </IconButton>
           <IconButton
             label={openSettingsLabel}

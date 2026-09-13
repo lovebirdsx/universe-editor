@@ -835,7 +835,7 @@ async function bootstrapWorkbench(): Promise<void> {
   )
   services.set(IAcpPromptHistoryService, acpPromptHistoryService)
 
-  // Renderer-only AGENTS UI state. ChatWidget tracks focused ChatBody for
+  // Renderer-only ACP chat UI state. ChatWidget tracks focused ChatBody for
   // single-target action dispatch and session-specific focusing.
   const acpChatWidgetService = workbenchStore.add(
     instantiation.createInstance(AcpChatWidgetService),

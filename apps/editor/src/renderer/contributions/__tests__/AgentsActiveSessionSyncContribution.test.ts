@@ -148,7 +148,7 @@ describe('AgentsActiveSessionSyncContribution', () => {
     h.editor.activeEditor.set(makeInput(h.inst, 's1'), undefined)
     expect(h.sessions.activeSessionId.get()).toBe('s1')
 
-    // AGENTS panel click: setActive('s2') must not be reverted by the autorun
+    // Sessions panel click: setActive('s2') must not be reverted by the autorun
     // seeing activeEditor still on s1 and calling setActive('s1') again.
     h.sessions.setActive('s2')
     expect(h.sessions.activeSessionId.get()).toBe('s2')

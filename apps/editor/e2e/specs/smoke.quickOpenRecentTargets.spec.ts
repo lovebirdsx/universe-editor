@@ -187,7 +187,7 @@ test.describe('@p0 quick open recent targets', () => {
     { view: 'workbench.view.timeline.main', label: 'Timeline' },
     { view: 'workbench.view.scm.commitChanges', label: 'Commit Changes' },
     { view: 'workbench.view.sessionChanges.main', label: 'Session Changes' },
-    { view: 'workbench.view.agents.mcp', label: 'MCP Servers' },
+    { view: 'workbench.view.sessions.mcp', label: 'MCP Servers' },
     { view: 'workbench.view.output.main', label: 'Output' },
     { view: 'workbench.view.terminal.main', label: 'Terminal' },
   ]) {

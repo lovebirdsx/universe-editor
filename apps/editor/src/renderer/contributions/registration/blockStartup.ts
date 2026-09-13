@@ -43,7 +43,7 @@ import { LogLevelContribution } from '../LogLevelContribution.js'
 import {
   AgentsConfigurationContribution,
   AgentsEditorProviderContribution,
-  AgentsViewContainerContribution,
+  SessionsViewContainerContribution,
 } from '../AgentsContributions.js'
 import { QuickAccessContribution } from '../QuickAccessContribution.js'
 import { SearchPersistenceContribution } from '../SearchPersistenceContribution.js'
@@ -336,8 +336,8 @@ ContributionsRegistry.registerContribution(
   WorkbenchPhase.BlockStartup,
 )
 ContributionsRegistry.registerContribution(
-  'workbench.contrib.agentsViewContainer',
-  AgentsViewContainerContribution,
+  'workbench.contrib.sessionsViewContainer',
+  SessionsViewContainerContribution,
   WorkbenchPhase.BlockStartup,
 )
 ContributionsRegistry.registerContribution(

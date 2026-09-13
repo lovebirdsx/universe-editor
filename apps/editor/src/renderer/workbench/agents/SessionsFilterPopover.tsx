@@ -1,6 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  SessionsFilterPopover — the funnel dropdown for the AGENTS session list,
+ *  SessionsFilterPopover — the funnel dropdown for the session list,
  *  modeled on VSCode's chat session filter. Four groups: sort mode (single
  *  choice), agent visibility (multi), status visibility (multi), and Reset.
  *  Selection state lives in IAcpSessionFilterService (persisted); this is a

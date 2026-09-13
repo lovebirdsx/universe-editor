@@ -1,8 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  AcpChatLocationService — single source of truth for whether the AGENTS Chat
- *  panel renders inside the EditorArea (full-screen tab) or in the
- *  SecondarySideBar (Copilot-style docked panel).
+ *  AcpChatLocationService — single source of truth for whether the agent chat
+ *  panel (Sessions view) renders inside the EditorArea (full-screen tab) or in
+ *  the SecondarySideBar (Copilot-style docked panel).
  *
  *  Three-way sync:
  *    - ISettableObservable<'editor' | 'sidebar'>  (React via useObservable)

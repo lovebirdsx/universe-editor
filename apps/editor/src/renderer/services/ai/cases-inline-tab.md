@@ -106,7 +106,7 @@ trigger/commit 都靠 `IEditorGroupsService.activeGroup.activeEditor` 拿 `FileE
 - 🔀 2026-06 变更：原 `InlineCompletionStatusContribution`（状态栏 Completions 条目：requesting `$(loading~spin)` / enabled `$(sparkle)` / disabled `$(circle-slash)`，点击触发 toggle）已删除，AI 入口统一为 Sparkle 按钮。
 - 🔀 2026-09 变更：AI 入口从标题栏迁回**状态栏右下角** `workbench/statusbar/AiStatusBarButtons.tsx`（data-testid `statusbar-ai-button`，经 `AiStatusBarContribution` 以 componentKey 挂载）；新建会话 / 选择 Agent 两个按钮留在标题栏（`workbench/titlebar/AgentSessionButtons.tsx`）。
 
-快速设置浮层细节（workbench-ui 的 `AiQuickSettingsPanel`）：inline-completion 区按作用域两个勾选项（data-testid `ai-quick-settings-inline-toggle-editor` / `-session`，`Checkbox` 的 `checked` 反映 `service.isEnabled(scope)`，拨动 → `inline.setEnabled(scope, b)`）、四个功能模型行（chat / inline / commit / sessionTitle → 各自 pickModel 命令）、Open Agents / Manage AI Models 捷径。数据源：订阅 `inline.onDidChange` + `IAiModelService` 的 onDidChange*Models 系列事件刷新。tooltip：基础文案 + 活跃会话 MCP server 摘要。
+快速设置浮层细节（workbench-ui 的 `AiQuickSettingsPanel`）：inline-completion 区按作用域两个勾选项（data-testid `ai-quick-settings-inline-toggle-editor` / `-session`，`Checkbox` 的 `checked` 反映 `service.isEnabled(scope)`，拨动 → `inline.setEnabled(scope, b)`）、四个功能模型行（chat / inline / commit / sessionTitle → 各自 pickModel 命令）、Open Sessions / Manage AI Models 捷径。数据源：订阅 `inline.onDidChange` + `IAiModelService` 的 onDidChange*Models 系列事件刷新。tooltip：基础文案 + 活跃会话 MCP server 摘要。
 
 ## 配置项全表（9 个，全 `ai.inlineCompletion.*`）
 

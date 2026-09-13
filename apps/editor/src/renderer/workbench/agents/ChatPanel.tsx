@@ -1,7 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  ChatPanel — the Copilot-style sidebar layout. The toolbar (sessions popover,
- *  New, switch-to-editor) lives in the view's title bar (AgentsViewToolbar);
+ *  New, switch-to-editor) lives in the view's title bar (SessionsViewToolbar);
  *  this component just hosts ChatBody, which renders the active session's stream
  *  and the prompt input.
  *--------------------------------------------------------------------------------------------*/

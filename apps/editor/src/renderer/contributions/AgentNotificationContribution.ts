@@ -27,8 +27,8 @@ import {
   primeAgentNotificationIcon,
 } from '../services/acp/agentNotificationIcon.js'
 
-const AGENTS_CONTAINER_ID = 'workbench.view.agents'
-const AGENTS_VIEW_ID = 'workbench.view.agents.main'
+const SESSIONS_CONTAINER_ID = 'workbench.view.sessions'
+const SESSIONS_VIEW_ID = 'workbench.view.sessions.main'
 
 type NotifyKind = 'permission' | 'question' | 'completed' | 'errored'
 
@@ -144,8 +144,8 @@ export class AgentNotificationContribution extends Disposable implements IWorkbe
     if (!this._layout.getVisible(PartId.SecondarySideBar)) {
       this._layout.toggleVisible(PartId.SecondarySideBar)
     }
-    this._views.openViewContainer(AGENTS_CONTAINER_ID)
-    void this._layout.focusView(AGENTS_VIEW_ID, { source: 'command' })
+    this._views.openViewContainer(SESSIONS_CONTAINER_ID)
+    void this._layout.focusView(SESSIONS_VIEW_ID, { source: 'command' })
   }
 }
 

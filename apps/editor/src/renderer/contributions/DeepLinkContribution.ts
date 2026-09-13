@@ -170,7 +170,7 @@ export class DeepLinkContribution extends Disposable implements IWorkbenchContri
       if (!this._layout.getVisible(PartId.SecondarySideBar)) {
         this._layout.toggleVisible(PartId.SecondarySideBar)
       }
-      await this._views.openViewContainer('workbench.view.agents')
+      await this._views.openViewContainer('workbench.view.sessions')
     }
     this._widgets.focusSessionInput(sessionId)
   }

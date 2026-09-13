@@ -395,7 +395,7 @@ ContributionsRegistry.registerContribution(
 )
 
 // OS-level desktop notifications when an Agent session needs attention while the
-// window is blurred. AfterRestore so the host service + Agents UI are live.
+// window is blurred. AfterRestore so the host service + Sessions UI are live.
 ContributionsRegistry.registerContribution(
   'workbench.contrib.agentNotification',
   AgentNotificationContribution,
@@ -420,7 +420,7 @@ ContributionsRegistry.registerContribution(
   WorkbenchPhase.AfterRestore,
 )
 
-// First-run only: reveal the Agents side bar so new users discover the editor's
+// First-run only: reveal the Sessions side bar so new users discover the editor's
 // core feature. Self-gates on a GLOBAL storage flag. AfterRestore so layout
 // visibility + view containers are live.
 ContributionsRegistry.registerContribution(

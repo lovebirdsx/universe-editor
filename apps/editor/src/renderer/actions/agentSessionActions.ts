@@ -162,7 +162,7 @@ const CHOOSE_FOLDER_PICK_ID = '__chooseFolder__'
 
 /**
  * Focus a freshly-created session the same way NewAgentSessionAction does:
- * open it as an editor tab in editor mode, or reveal the Agents view (and the
+ * open it as an editor tab in editor mode, or reveal the Sessions view (and the
  * secondary sidebar) in docked mode. Services are passed in — never the
  * accessor — because the caller reaches this point after awaiting createSession.
  */
@@ -182,7 +182,7 @@ function focusCreatedSession(
     if (!layout.getVisible(PartId.SecondarySideBar)) {
       layout.toggleVisible(PartId.SecondarySideBar)
     }
-    views.openViewContainer('workbench.view.agents')
+    views.openViewContainer('workbench.view.sessions')
   }
 }
 
@@ -394,7 +394,7 @@ export class OpenAgentViewAction extends Action2 {
   constructor() {
     super({
       id: OpenAgentViewAction.ID,
-      title: localize2('action.agent.openView', 'Open Agents View'),
+      title: localize2('action.agent.openView', 'Open Sessions View'),
       category: CATEGORY,
       f1: true,
     })
@@ -402,7 +402,7 @@ export class OpenAgentViewAction extends Action2 {
   override async run(accessor: ServicesAccessor): Promise<void> {
     await accessor
       .get(ILayoutService)
-      .focusView('workbench.view.agents.main', { source: 'command' })
+      .focusView('workbench.view.sessions.main', { source: 'command' })
   }
 }
 
@@ -490,7 +490,7 @@ export class SelectAgentAction extends Action2 {
 // workspace cwd at creation time. ResumeAgentSessionAction is a thin shim
 // over `IAcpSessionService.resumeSession`: the service handles the agent
 // capability gate, session/load round-trip, and rollback on failure. The
-// action just renders the picker and opens the Agents view on success.
+// action just renders the picker and opens the Sessions view on success.
 // ---------------------------------------------------------------------------
 
 function relativeTime(timestamp: number): string {
@@ -602,7 +602,7 @@ export class ResumeAgentSessionAction extends Action2 {
         if (!layout.getVisible(PartId.SecondarySideBar)) {
           layout.toggleVisible(PartId.SecondarySideBar)
         }
-        views.openViewContainer('workbench.view.agents')
+        views.openViewContainer('workbench.view.sessions')
       }
     } catch {
       // resumeSession publishes its own notification; nothing to do.

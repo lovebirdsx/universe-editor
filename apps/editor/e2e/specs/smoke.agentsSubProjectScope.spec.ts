@@ -21,7 +21,7 @@ import { mkTempDir } from '@universe-editor/e2e-harness'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ECHO_AGENT_PATH = resolve(__dirname, '..', '..', 'src', 'test-fixtures', 'echoAgent.cjs')
 
-const AGENTS_VIEW = 'workbench.view.agents.main'
+const SESSIONS_VIEW = 'workbench.view.sessions.main'
 const SUB_SEGMENTS = ['packages', 'client', 'app'] as const
 
 /** UriComponents for a local path — exactly one leading slash, forward slashes. */
@@ -53,7 +53,7 @@ test.describe('@p1 agents — sub-project session scope', () => {
       window.__E2E__!.updateConfigValue('acp.sessions.historyScope', 'workspace'),
     )
     await page.evaluate(() => window.__E2E__!.runCommand('workbench.action.agent.openView'))
-    await expect(page.locator(`[data-view-pane="${AGENTS_VIEW}"]`)).toBeVisible({ timeout: 5000 })
+    await expect(page.locator(`[data-view-pane="${SESSIONS_VIEW}"]`)).toBeVisible({ timeout: 5000 })
 
     // Fire-and-forget: createSession spawns + initializes in the background.
     await page.evaluate((folder) => {

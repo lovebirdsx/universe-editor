@@ -209,7 +209,7 @@ describe('executeAiFix', () => {
     expect(refs).toEqual([])
     expect(contexts).toHaveLength(1)
     expect(images).toEqual([])
-    expect(s.openViewContainer).toHaveBeenCalledWith('workbench.view.agents')
+    expect(s.openViewContainer).toHaveBeenCalledWith('workbench.view.sessions')
     expect(s.focusSessionInput).toHaveBeenCalledWith('sess-new')
   })
 

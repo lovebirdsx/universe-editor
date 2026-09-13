@@ -2,7 +2,7 @@
  *  First-run Agent onboarding smoke test (@p1).
  *
  *  验证全新安装首次启动时，FirstRunAgentOnboardingContribution 自动展开右侧
- *  Agents 二级侧边栏，让用户发现编辑器的核心能力。
+ *  Sessions 二级侧边栏，让用户发现编辑器的核心能力。
  *
  *  本 spec 自带一个未 seed `welcome.agentOnboarding.seen` 的全新 userData，
  *  因此不能复用默认 fixture（fixture 默认把该标记置为已见以保证布局确定性）。
@@ -21,7 +21,7 @@ import { APP_ROOT, MAIN_ENTRY, closeApp } from '../fixtures/electronApp.js'
 import { expectNoLeaks } from '../pages/WorkbenchPO.js'
 
 test.describe('@p1 first-run agent onboarding', () => {
-  test('reveals the Agents secondary sidebar on a brand-new install', async () => {
+  test('reveals the Sessions secondary sidebar on a brand-new install', async () => {
     // Self-launched cold boot: leave room for the graceful-close + force-kill
     // teardown under full-suite parallel load (see smoke.viewSizes).
     test.setTimeout(120_000)

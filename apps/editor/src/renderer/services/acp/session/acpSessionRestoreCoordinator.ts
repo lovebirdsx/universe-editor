@@ -162,7 +162,7 @@ export class AcpSessionRestoreCoordinator extends Disposable {
    * Called by the facade after it has cleared its own observable state and
    * closed all live sessions on a workspace swap. We re-load the pending
    * restore id from the new bucket and reset hydrate state — the next time
-   * the Agents view becomes visible, `requestHydrate()` will re-sweep the
+   * the Sessions view becomes visible, `requestHydrate()` will re-sweep the
    * new cwd. In-flight hydrates from the old cwd are aborted via
    * `_hydrateGen`.
    */
@@ -177,9 +177,9 @@ export class AcpSessionRestoreCoordinator extends Disposable {
   }
 
   /**
-   * Lazy hydrate trigger. Wired to the Agents view visibility autorun so the
+   * Lazy hydrate trigger. Wired to the Sessions view visibility autorun so the
    * `session/list` sweep — which spawns a `claude-code` subprocess inside
-   * the workspace cwd — only runs when the user actually opens the Agents
+   * the workspace cwd — only runs when the user actually opens the Sessions
    * UI. Idempotent per cwd; concurrent calls dedupe onto the same in-flight
    * promise. Fire-and-forget by design.
    */

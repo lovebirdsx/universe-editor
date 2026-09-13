@@ -15,9 +15,9 @@
 
 import { test, expect } from '../fixtures/sharedApp.js'
 
-const CONTAINER = 'workbench.view.agents'
-const AGENTS_VIEW = 'workbench.view.agents.main'
-const MCP_VIEW = 'workbench.view.agents.mcp'
+const CONTAINER = 'workbench.view.sessions'
+const SESSIONS_VIEW = 'workbench.view.sessions.main'
+const MCP_VIEW = 'workbench.view.sessions.mcp'
 
 function paneHeight(page: import('@playwright/test').Page, viewId: string): Promise<number> {
   return page.evaluate((id) => {
@@ -33,45 +33,45 @@ test.describe('@p1 view reorder', () => {
   }) => {
     await workbench.waitForRestored()
 
-    // Reveal the Agents container (SecondarySideBar) so both view panes mount.
+    // Reveal the Sessions container (SecondarySideBar) so both view panes mount.
     await page.evaluate(() => window.__E2E__!.runCommand('workbench.action.agent.openView'))
-    await expect(page.locator(`[data-view-pane="${AGENTS_VIEW}"]`)).toBeVisible({ timeout: 5000 })
+    await expect(page.locator(`[data-view-pane="${SESSIONS_VIEW}"]`)).toBeVisible({ timeout: 5000 })
     await expect(page.locator(`[data-view-pane="${MCP_VIEW}"]`)).toBeVisible()
 
-    // Default order: AGENTS (order 1) above MCP SERVERS (order 2).
+    // Default order: SESSIONS (order 1) above MCP SERVERS (order 2).
     const initialOrder = await page.evaluate(
       (id) => window.__E2E__!.getViewIdsByContainer(id),
       CONTAINER,
     )
-    expect(initialOrder).toEqual([AGENTS_VIEW, MCP_VIEW])
+    expect(initialOrder).toEqual([SESSIONS_VIEW, MCP_VIEW])
 
     // Start from both collapsed (matches the reported repro: both panes collapsed).
-    await page.evaluate((id) => window.__E2E__!.setViewCollapsed(id, true), AGENTS_VIEW)
+    await page.evaluate((id) => window.__E2E__!.setViewCollapsed(id, true), SESSIONS_VIEW)
     await page.evaluate((id) => window.__E2E__!.setViewCollapsed(id, true), MCP_VIEW)
 
-    // Swap the two views by reordering: drop AGENTS after MCP → [MCP, AGENTS].
+    // Swap the two views by reordering: drop SESSIONS after MCP → [MCP, SESSIONS].
     await page.evaluate(
       ({ container, view, target }) => window.__E2E__!.moveViewInContainer(container, view, target),
-      { container: CONTAINER, view: AGENTS_VIEW, target: MCP_VIEW },
+      { container: CONTAINER, view: SESSIONS_VIEW, target: MCP_VIEW },
     )
     await expect
       .poll(() => page.evaluate((id) => window.__E2E__!.getViewIdsByContainer(id), CONTAINER))
-      .toEqual([MCP_VIEW, AGENTS_VIEW])
+      .toEqual([MCP_VIEW, SESSIONS_VIEW])
 
-    // Now expand AGENTS (the reordered, bottom view). It must receive the freed
+    // Now expand SESSIONS (the reordered, bottom view). It must receive the freed
     // space; the still-collapsed MCP pane must stay at its ~28px header height.
-    await page.evaluate((id) => window.__E2E__!.setViewCollapsed(id, false), AGENTS_VIEW)
+    await page.evaluate((id) => window.__E2E__!.setViewCollapsed(id, false), SESSIONS_VIEW)
 
     await expect
-      .poll(() => paneHeight(page, AGENTS_VIEW), {
+      .poll(() => paneHeight(page, SESSIONS_VIEW), {
         timeout: 5000,
-        message: 'expanded AGENTS pane should be tall, not pinned to its header',
+        message: 'expanded SESSIONS pane should be tall, not pinned to its header',
       })
       .toBeGreaterThan(100)
 
     const mcpHeight = await paneHeight(page, MCP_VIEW)
-    const agentsHeight = await paneHeight(page, AGENTS_VIEW)
+    const sessionsHeight = await paneHeight(page, SESSIONS_VIEW)
     expect(mcpHeight).toBeLessThan(40) // collapsed sibling stays a header strip
-    expect(agentsHeight).toBeGreaterThan(mcpHeight)
+    expect(sessionsHeight).toBeGreaterThan(mcpHeight)
   })
 })

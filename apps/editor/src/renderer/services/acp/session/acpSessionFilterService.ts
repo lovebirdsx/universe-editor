@@ -1,9 +1,9 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  AcpSessionFilterService — shared state for the AGENTS session list: both the
+ *  AcpSessionFilterService — shared state for the session list: both the
  *  ephemeral search box AND the persistent filter/sort selection (the funnel
  *  menu, modeled on VSCode's chat session filter). The trigger buttons live in
- *  the view title bar (AgentsViewToolbar / SessionsPopover) while the find widget
+ *  the view title bar (SessionsViewToolbar / SessionsPopover) while the find widget
  *  and the filtered list live in the body (SessionListBody); they have no common
  *  React ancestor, so the state is held here as observables.
  *

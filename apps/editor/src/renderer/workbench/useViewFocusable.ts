@@ -7,7 +7,7 @@
  *  lazily on each focus request — pass a stable callback that reads from a ref.
  *
  *  `viewId` may be undefined for a component that is only sometimes a view: the
- *  session list renders both as the AGENTS view and inside a popover, and only
+ *  session list renders both as the Sessions view and inside a popover, and only
  *  the former should claim the id.
  *
  *  A view that registers nothing still gets focus: ViewBody registers the view

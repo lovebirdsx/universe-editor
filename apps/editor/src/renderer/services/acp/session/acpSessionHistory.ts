@@ -35,7 +35,7 @@ import type { AcpPlanEntry } from './acpSessionModel.js'
 import { isPromptEchoTitle } from './acpSessionTitleEcho.js'
 
 /**
- * Which sessions the Agents history surfaces:
+ * Which sessions the agent session history surfaces:
  *  - `workspace`: only sessions whose cwd equals the open folder.
  *  - `worktree`:  sessions from the open folder AND its sibling git worktrees
  *                 (the agent's `session/list` already returns these because the

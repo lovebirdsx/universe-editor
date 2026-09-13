@@ -5,7 +5,7 @@
  *    - clicking the AI button opens the quick-settings popover
  *    - the inline toggle reflects service state and writes back via setEnabled
  *    - picking a model routes to the matching slot picker command
- *    - the Agents / AI-settings shortcuts execute their commands
+ *    - the Sessions / AI-settings shortcuts execute their commands
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -145,11 +145,11 @@ describe('AiStatusBarButtons', () => {
     expect(commands.executeCommand).toHaveBeenCalledWith('ai.pickModel')
   })
 
-  it('runs the Agents and AI-settings commands', async () => {
+  it('runs the Sessions and AI-settings commands', async () => {
     const { commands } = renderButtons()
     fireEvent.click(screen.getByTestId('statusbar-ai-button'))
     await screen.findByTestId('ai-quick-settings')
-    fireEvent.click(screen.getByTestId('ai-quick-settings-open-agents'))
+    fireEvent.click(screen.getByTestId('ai-quick-settings-open-sessions'))
     fireEvent.click(screen.getByTestId('statusbar-ai-button'))
     await screen.findByTestId('ai-quick-settings')
     fireEvent.click(screen.getByTestId('ai-quick-settings-open-settings'))

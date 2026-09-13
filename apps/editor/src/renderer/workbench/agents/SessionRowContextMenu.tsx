@@ -1,6 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  SessionRowContextMenu — per-row right-click menu for the AGENTS session list.
+ *  SessionRowContextMenu — per-row right-click menu for the session list.
  *  Thin wrapper over the workbench-ui ListMenu: the item set depends on the row
  *  (rename is disabled for foreign-worktree rows, "reveal" is disabled when the
  *  session has no transcript file), so it can't come from MenuRegistry — but the

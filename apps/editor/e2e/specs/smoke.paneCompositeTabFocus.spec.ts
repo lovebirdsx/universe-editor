@@ -10,7 +10,7 @@
  *
  *  Only e2e can hold this: the gap is between a real click on a real tab, the
  *  focusable registry, and the DOM focus that `data-focused` reflects. AI Debug
- *  is the subject rather than AGENTS because AGENTS has its own
+ *  is the subject rather than Sessions because Sessions has its own
  *  `workbench.action.agent.openView` command that goes through `focusView`
  *  anyway, which would pass with or without the fix.
  *--------------------------------------------------------------------------------------------*/

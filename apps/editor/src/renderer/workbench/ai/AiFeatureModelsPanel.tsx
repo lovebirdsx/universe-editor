@@ -36,7 +36,7 @@ const FEATURES: readonly FeatureDef[] = [
     label: localize('aiFeatures.chat', 'Chat'),
     description: localize(
       'aiFeatures.chat.desc',
-      'Model used by AGENTS sessions and chat completions.',
+      'Model used by agent sessions and chat completions.',
     ),
     command: 'ai.pickModel',
     read: (ai) => ai.getActiveModelId(),
@@ -66,7 +66,7 @@ const FEATURES: readonly FeatureDef[] = [
     label: localize('aiFeatures.sessionTitle', 'Session Title'),
     description: localize(
       'aiFeatures.sessionTitle.desc',
-      'Model used to generate friendly titles for AGENTS sessions.',
+      'Model used to generate friendly titles for agent sessions.',
     ),
     command: 'ai.sessionTitle.pickModel',
     read: (ai) => ai.getSessionTitleModelId(),

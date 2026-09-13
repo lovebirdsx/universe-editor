@@ -88,7 +88,7 @@ export function WelcomeEditor(_props: { input: IEditorInput }) {
             className={styles['agentSecondary']}
             onClick={() => run('workbench.action.agent.openView')}
           >
-            {localize('welcome.agent.openView', 'Open Agents Panel')}
+            {localize('welcome.agent.openView', 'Open Sessions Panel')}
           </button>
         </div>
       </section>

@@ -4,7 +4,7 @@
  *  The coordinator's job is to:
  *    1) on construction-time `start()`, read `acp.activeSessionHistoryId` from
  *       WORKSPACE storage (hydrate is NOT auto-fired — it must be requested
- *       lazily once the user reveals the Agents view, see `requestHydrate()`)
+ *       lazily once the user reveals the Sessions view, see `requestHydrate()`)
  *    2) on `requestHydrate()`, run the cross-agent `session/list` sweep once
  *       per cwd; idempotent within the same workspace; deferred until
  *       `whenWorkspaceReady` resolves so the cwd is known

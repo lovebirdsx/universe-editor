@@ -9,7 +9,7 @@
  *
  *  Restoration can't happen in a single synchronous pass: the scroller may not
  *  exist yet at mount (it's rendered behind an async "no content" placeholder,
- *  e.g. the AGENTS session list before its history observable hydrates), it may
+ *  e.g. the session list before its history observable hydrates), it may
  *  live in an Allotment pane that isn't sized until a later layout tick, and its
  *  content may stream in and grow `scrollHeight` after mount. A ResizeObserver
  *  only fires on the observed element's own box, so it misses a `scrollHeight`

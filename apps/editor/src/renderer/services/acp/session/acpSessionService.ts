@@ -266,9 +266,9 @@ export interface IAcpSessionService {
   /**
    * Lazily kick off the cross-agent `session/list` hydrate sweep. Idempotent
    * per workspace cwd: a second call within the same workspace is a no-op
-   * unless `onDidChangeWorkspaceScope` has fired since. Wired to the Agents
+   * unless `onDidChangeWorkspaceScope` has fired since. Wired to the Sessions
    * view visibility autorun so we never spawn agent subprocesses inside the
-   * workspace cwd until the user actually opens the Agents UI.
+   * workspace cwd until the user actually opens the Sessions UI.
    */
   requestHydrateIfNeeded(): void
   /**

@@ -1597,7 +1597,7 @@ describe('ChatBody — outline controller active-slot sync', () => {
     expect(controller.getActiveKey()).toBe('m:c')
   })
 
-  // Repro for the reported bug: with the AGENTS side panel AND the full-screen
+  // Repro for the reported bug: with the Sessions side panel AND the full-screen
   // session editor both mounted for the SAME active session, two ChatBody
   // instances register a controller under the same id. The outline reads
   // registry.get() (the last registered) — moving the selection in the OTHER

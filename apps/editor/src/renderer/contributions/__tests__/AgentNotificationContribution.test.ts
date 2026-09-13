@@ -209,7 +209,7 @@ describe('AgentNotificationContribution', () => {
     expect(t.notify).not.toHaveBeenCalled()
   })
 
-  it('on click: activates the session and opens the Agents view', async () => {
+  it('on click: activates the session and opens the Sessions view', async () => {
     const t = setup({ clicked: true })
     const s = makeSession('a')
     t.addSession(s)
@@ -220,8 +220,8 @@ describe('AgentNotificationContribution', () => {
     await Promise.resolve()
     // Window focus happens main-side inside the click handler, not here.
     expect(t.setActive).toHaveBeenCalledWith('a')
-    expect(t.openViewContainer).toHaveBeenCalledWith('workbench.view.agents')
-    expect(t.focusView).toHaveBeenCalledWith('workbench.view.agents.main', { source: 'command' })
+    expect(t.openViewContainer).toHaveBeenCalledWith('workbench.view.sessions')
+    expect(t.focusView).toHaveBeenCalledWith('workbench.view.sessions.main', { source: 'command' })
   })
 
   it('includes the workspace folder name on a second body line when a folder is open', () => {

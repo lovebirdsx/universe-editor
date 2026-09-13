@@ -13,7 +13,7 @@ const TOGGLE_COMMAND_BY_CONTAINER: Readonly<Record<string, string>> = {
   'workbench.view.outline': 'outline.focus',
   'workbench.view.terminal': 'workbench.action.terminal.toggleTerminal',
   'workbench.view.output': 'workbench.action.toggleOutput',
-  'workbench.view.agents': 'workbench.action.agent.openView',
+  'workbench.view.sessions': 'workbench.action.agent.openView',
   'workbench.view.sessionChanges': 'workbench.action.agent.showSessionChanges',
   'workbench.view.swarm': 'swarm.openReviews',
 }

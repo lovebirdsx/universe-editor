@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, beforeEach } from 'vitest'
 import {
   Emitter,
   Event,
@@ -116,6 +116,33 @@ describe('ViewsService', () => {
 
   describe('cold-start workspace scope settle', () => {
     const tick = () => new Promise((r) => setTimeout(r, 0))
+    const disposables: { dispose(): void }[] = []
+
+    // Loading validates the persisted selection against the live registry, so
+    // the ids these tests persist must be registered for real. Built-in
+    // containers do this during BlockStartup, before the load runs.
+    beforeEach(() => {
+      disposables.push(
+        ViewContainerRegistry.registerViewContainer({
+          id: 'explorer',
+          label: 'Explorer',
+          icon: 'files',
+          order: 1,
+          location: ViewContainerLocation.SideBar,
+        }),
+        ViewContainerRegistry.registerViewContainer({
+          id: 'search',
+          label: 'Search',
+          icon: 'search',
+          order: 2,
+          location: ViewContainerLocation.SideBar,
+        }),
+      )
+    })
+
+    afterEach(() => {
+      for (const d of disposables.splice(0)) d.dispose()
+    })
 
     it('waits for the first scope event before loading, then reloads on genuine switches', async () => {
       let persisted: { activeContainerByLocation: Record<number, string> } | undefined = {
@@ -185,6 +212,31 @@ describe('ViewsService', () => {
       emitter.fire()
       await tick()
       expect(svc.getActiveViewContainerId(ViewContainerLocation.SideBar)).toBe('search')
+    })
+
+    it('drops a persisted container that no longer registers and falls back to the default', async () => {
+      // Regression: a persisted pointer to a container that has since been
+      // renamed (e.g. the old `workbench.view.agents`) used to survive the
+      // load, because the `version` autorun that reconciles it had already
+      // fired during BlockStartup. The part then rendered no content.
+      const emitter = new Emitter<void>()
+      const persisted = {
+        activeContainerByLocation: { [ViewContainerLocation.SideBar]: 'workbench.view.agents' },
+      }
+      const storage: IStorageService = {
+        ...stubStorage,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        get: async () => persisted as any,
+        onDidChangeWorkspaceScope: emitter.event,
+      }
+      const workspace = { current: null } as unknown as IWorkspaceService
+      const svc = new ViewsService(storage, workspace, stubViewDescriptors)
+
+      const loadPromise = svc.load()
+      emitter.fire()
+      await loadPromise
+
+      expect(svc.getActiveViewContainerId(ViewContainerLocation.SideBar)).toBe('explorer')
     })
   })
 })

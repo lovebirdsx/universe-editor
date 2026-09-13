@@ -33,7 +33,7 @@ export class OpenAcpMcpSettingsAction extends Action2 {
       menu: [
         {
           id: MenuId.ViewTitle,
-          when: 'view == workbench.view.agents.mcp',
+          when: 'view == workbench.view.sessions.mcp',
           group: 'navigation',
           order: 1,
         },

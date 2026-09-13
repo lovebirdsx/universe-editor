@@ -7,7 +7,7 @@
  *    - 快照流到 session.mcpServers（真实连接状态 connected/failed）；
  *    - 工具调用被归因到来源 server（mcpServer==='fs'）；
  *    - 标题栏 AI 按钮的 tooltip 汇总 MCP 连接状态；
- *    - 打开 Agents 容器后 MCP Servers view 渲染出每个 server 一行。
+ *    - 打开 Sessions 容器后 MCP Servers view 渲染出每个 server 一行。
  *
  *  注意: mcpAgent.cjs 是源码（不经过构建），spec 直接拿源码绝对路径喂给探针。
  *--------------------------------------------------------------------------------------------*/
@@ -72,7 +72,7 @@ test.describe('@p1 mcp servers', () => {
     await expect(aiTooltip).toHaveAttribute('data-tooltip', /MCP 1\/2 connected/)
     await expect(aiTooltip).toHaveAttribute('data-tooltip', /1 failed/)
 
-    // 8. 打开 Agents 容器后，MCP Servers view 每个 server 渲染一行。
+    // 8. 打开 Sessions 容器后，MCP Servers view 每个 server 渲染一行。
     await page.evaluate(() => {
       void window.__E2E__!.runCommand('workbench.action.agent.openView')
     })

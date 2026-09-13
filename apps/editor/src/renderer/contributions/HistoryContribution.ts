@@ -114,7 +114,7 @@ export class HistoryContribution extends Disposable implements IWorkbenchContrib
     // Record an entry whenever the active editor changes so that simply
     // opening file a then file b (or Settings then file a, etc.) is enough
     // for GoBack to work. Covers every EditorInput subclass — file, Settings,
-    // Welcome, Agents, ... — by capturing typeId + serialized so the action
+    // Welcome, Agent session, ... — by capturing typeId + serialized so the action
     // can rebuild the input via EditorRegistry.deserialize when it is no
     // longer open in any group. The cursor listener below upgrades file
     // entries in-place once Monaco mounts and the user moves the caret.

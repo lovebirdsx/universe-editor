@@ -22,8 +22,8 @@ import {
 } from '@universe-editor/platform'
 import { registerViewWithComponent } from '../services/views/ViewComponentRegistry.js'
 import { registerEditorWithComponent } from '../services/editor/EditorComponentRegistry.js'
-import { AgentsView } from '../workbench/agents/AgentsView.js'
-import { AgentsViewToolbar } from '../workbench/agents/AgentsViewToolbar.js'
+import { SessionsView } from '../workbench/agents/SessionsView.js'
+import { SessionsViewToolbar } from '../workbench/agents/SessionsViewToolbar.js'
 import { McpServersView } from '../workbench/agents/McpServersView.js'
 import { AcpSessionEditor } from '../workbench/agents/AcpSessionEditor.js'
 import { AcpSessionEditorInput } from '../services/acp/session/acpSessionEditorInput.js'
@@ -52,7 +52,7 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
             default: false,
             description: localize(
               'settings.acp.chat.enableSidebarLocation',
-              'Allow docking the Agent chat panel into the sidebar (Agents view) instead of opening sessions as editor tabs. Experimental and incomplete — it may be removed in a future release. Disabled by default; when off, chat only opens in the editor area.',
+              'Allow docking the Agent chat panel into the sidebar (Sessions view) instead of opening sessions as editor tabs. Experimental and incomplete — it may be removed in a future release. Disabled by default; when off, chat only opens in the editor area.',
             ),
           },
           'acp.defaultAgentId': {
@@ -297,7 +297,7 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
             },
             description: localize(
               'settings.acp.sessions.historyScope.description',
-              'Controls which sessions are listed in the Agents session history. "Current Worktree" includes sessions from sibling git worktrees of the same repository; "All" lists sessions across every project.',
+              'Controls which sessions are listed in the agent session history. "Current Worktree" includes sessions from sibling git worktrees of the same repository; "All" lists sessions across every project.',
             ),
           },
           'acp.prompt.confirmShortFirstMessageLength': {
@@ -392,15 +392,18 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
   }
 }
 
-export class AgentsViewContainerContribution extends Disposable implements IWorkbenchContribution {
+export class SessionsViewContainerContribution
+  extends Disposable
+  implements IWorkbenchContribution
+{
   constructor() {
     super()
 
     this._register(
       ViewContainerRegistry.registerViewContainer({
-        id: 'workbench.view.agents',
-        label: localize('viewContainer.agents', 'Agents'),
-        icon: 'sparkle',
+        id: 'workbench.view.sessions',
+        label: localize('viewContainer.sessions', 'Sessions'),
+        icon: 'comment-discussion',
         order: 2,
         location: ViewContainerLocation.SecondarySideBar,
       }),
@@ -409,22 +412,23 @@ export class AgentsViewContainerContribution extends Disposable implements IWork
     this._register(
       registerViewWithComponent(
         {
-          id: 'workbench.view.agents.main',
-          name: localize('view.agents.main', 'Agents'),
-          containerId: 'workbench.view.agents',
+          id: 'workbench.view.sessions.main',
+          name: localize('view.sessions.main', 'Sessions'),
+          containerId: 'workbench.view.sessions',
+          icon: 'comment-discussion',
           order: 1,
         },
-        AgentsView,
-        AgentsViewToolbar,
+        SessionsView,
+        SessionsViewToolbar,
       ),
     )
 
     this._register(
       registerViewWithComponent(
         {
-          id: 'workbench.view.agents.mcp',
-          name: localize('view.agents.mcp', 'MCP Servers'),
-          containerId: 'workbench.view.agents',
+          id: 'workbench.view.sessions.mcp',
+          name: localize('view.sessions.mcp', 'MCP Servers'),
+          containerId: 'workbench.view.sessions',
           order: 2,
         },
         McpServersView,
@@ -452,11 +456,11 @@ export class AgentsEditorProviderContribution extends Disposable implements IWor
 
 /**
  * Lazy-restores the previously-active ACP session AND kicks off the
- * cross-agent `session/list` hydrate when the AGENTS view first becomes
+ * cross-agent `session/list` hydrate when the Sessions view first becomes
  * visible after an editor restart (or after a workspace swap). Both calls
  * are idempotent on the service side — the contribution only owns the
  * visibility trigger so we never spawn agent subprocesses inside the
- * workspace cwd until the user actually looks at the Agents UI.
+ * workspace cwd until the user actually looks at the Sessions UI.
  */
 export class AgentsSessionRestoreContribution extends Disposable implements IWorkbenchContribution {
   constructor(
@@ -470,7 +474,7 @@ export class AgentsSessionRestoreContribution extends Disposable implements IWor
         if (!layout.visible.read(r)[PartId.SecondarySideBar]) return
         const active =
           views.activeContainerByLocation.read(r)[ViewContainerLocation.SecondarySideBar]
-        if (active !== 'workbench.view.agents') return
+        if (active !== 'workbench.view.sessions') return
         sessions.requestHydrateIfNeeded()
         void sessions.tryRestoreActiveSession()
       }),

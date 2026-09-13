@@ -12,9 +12,9 @@ main 入口（`index.ts`）在 service 实例化前调 `applyProductIdentity()` 
 
 - 任何模式可用 `UNIVERSE_USER_DATA_DIR=<absolute>` 或原生 `--user-data-dir=<absolute>` 覆盖（**CLI 优先**）。
 - CLI/env/配置读取收口 `EnvironmentMainService`（`src/main/environment/`），优先级 `cli > env > file > default`；新增启动期配置加声明项。
-- **构建期注入 settings 默认值（configurationDefaults）**：内网地址不进仓库，打包期注入出厂默认（高于 `schema.default`、低于可写层）；renderer 在 `new ConfigurationService()` **之前** `registerDefaultOverrides`；`build/product.json` **刻意不放占位值**。
+- **构建期注入 settings 默认值**：内网地址不进仓库，打包期经 `product.json` 注入出厂默认值。
 
-模式判定表、`--help` 生成、自动更新 feed url 覆盖见 [cases-user-data-dir.md](cases-user-data-dir.md)。
+模式判定表、`--help` 生成、构建期注入出厂默认值的优先级与链路、自动更新 feed url 覆盖见 [cases-user-data-dir.md](cases-user-data-dir.md)。
 
 ## renderer 目录归类规则
 
@@ -49,6 +49,7 @@ main 入口（`index.ts`）在 service 实例化前调 `applyProductIdentity()` 
 - [services/dnd](src/renderer/services/dnd/CLAUDE.md) — 资源拖放
 - [services/themes](src/renderer/services/themes/CLAUDE.md) — 主题系统
 - [workbench/files](src/renderer/workbench/files/CLAUDE.md) — 文件图标 + 语言解析
+- [shared/i18n](src/shared/i18n/CLAUDE.md) — 本地化消息表与解析序
 - [workbench/markdown](src/renderer/workbench/markdown/CLAUDE.md) — markdown 渲染/预览
 - [workbench/outline](src/renderer/workbench/outline/CLAUDE.md) — outline 视图
 - [workbench/scm](src/renderer/workbench/scm/CLAUDE.md) — SCM 视图 + dirty-diff
@@ -246,4 +247,4 @@ AI 服务三层：platform 契约（`IAiModelService` / `IAiModelProvider` / `Ai
 
 ## 其它
 
-- 对标 vscode 的功能保持默认按键和 command id 一致；向用户展示文本考虑本地化（localize）
+- 对标 vscode 的功能保持默认按键和 command id 一致；用户可见文本走 `localize()`（改文案先读 [shared/i18n](src/shared/i18n/CLAUDE.md)）。
