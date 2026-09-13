@@ -23,7 +23,7 @@
  *  in the extension host with no build step.
  *--------------------------------------------------------------------------------------------*/
 
-import { readFileSync, writeFileSync, readdirSync, mkdirSync, rmSync, existsSync } from 'node:fs'
+import { readFileSync, writeFileSync, readdirSync, mkdirSync, rmSync, existsSync, appendFileSync } from 'node:fs'
 import { join, relative, sep, dirname } from 'node:path'
 
 const STATE_PATH = process.env.UNIVERSE_P4_FAKE_STATE
@@ -501,6 +501,7 @@ function main() {
       // scoping — left on, it matches no file and every such query would answer
       // "nothing synced".
       const haveScoped = raw.some((f) => f.endsWith('#have'))
+      const headScoped = raw.some((f) => f.endsWith('#head'))
       // `<spec>@<cl>` and `<spec>#head` narrow the question to a revision: the
       // graph's post-sync read-back (`p4 changes -s submitted -m 1 <scope>@4521`)
       // asks exactly this to learn where a get to 4521 landed the scope. Same
@@ -527,6 +528,34 @@ function main() {
         return spec
       })
       if (status === 'submitted' || files.length > 0) {
+        // `UNIVERSE_P4_FAKE_READBACK_MS` holds a READ-BACK open: the question a
+        // get asks right after pulling (`<scope>@<cl>`, or `#head`/`#<rev>` for a
+        // revision get). Its real cost is the scope's WIDTH and nothing here
+        // models width, so the delay stands in for it — measured against a real
+        // workspace: 0.2s for one file, 12.8s for a mid subtree, 27.3s for a
+        // workspace root, all against the extension's 5s first window. Without
+        // this the fake always answers instantly and the escalation path (a get
+        // whose entry only lands ~seconds later) never runs. The query button's
+        // own probe carries `#have` and is deliberately NOT delayed: the two are
+        // different paths, and only one of them has a timeout to expire.
+        if (atChange !== undefined || atRev !== undefined || headScoped) {
+          // `UNIVERSE_P4_FAKE_READBACK_LOG` records that this read-back was asked
+          // at all. The fake answers instantly, so an assertion of the form "the
+          // badge moved with no query" cannot tell a get that never asked from a
+          // get whose read-back came back in time — an implementation that asks
+          // and then ignores the answer passes it just as well. A log file that
+          // stays empty is the part of that assertion only the real behaviour
+          // satisfies.
+          const readbackLog = process.env.UNIVERSE_P4_FAKE_READBACK_LOG
+          if (readbackLog) {
+            try {
+              appendFileSync(readbackLog, `${process.argv.slice(2).join(' ')}\n`)
+            } catch {
+              // A diagnostic seam must never fail a p4 command.
+            }
+          }
+          sleepSync(Number(process.env.UNIVERSE_P4_FAKE_READBACK_MS ?? '0'))
+        }
         const max = argAfter(rest, '-m')
         const entries = Object.entries(state.changeMeta ?? {})
           .map(([id, m]) => ({ id: Number(id), m }))

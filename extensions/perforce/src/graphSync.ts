@@ -4,6 +4,10 @@
  * through `runSync` — these only shape its inputs.
  */
 
+import { scopeCovers } from './graphSyncLedger.js'
+import type { SyncScopeTarget } from './p4Filespec.js'
+import { scopeKey } from './pathUtil.js'
+
 /**
  * The p4 revision suffix for a changelist row id: `'4521'` (or `'@4521'` when
  * a caller already carries the sigil) → `'@4521'`. Anything that is not a bare
@@ -81,4 +85,92 @@ export function resolveCommonClient<T>(
     if (resolve(paths[i]!) !== owner) return undefined
   }
   return owner
+}
+
+export type DirectSyncPoint =
+  | { readonly ok: true; readonly change: string }
+  /** `reason` is a short phrase for the log line and for tests; every one of
+   *  these means the same thing operationally — ask p4 instead of guessing. */
+  | { readonly ok: false; readonly reason: string }
+
+export interface DirectSyncPointInput {
+  /** Bare changelist number (already through {@link clSpecOf}). */
+  readonly change: string
+  /** What this get covers, in ledger coordinates. */
+  readonly getScope: readonly SyncScopeTarget[]
+  /** The client this get resolves to. */
+  readonly getClientRoot: string
+  /** The listing scope the row came from, resolved the same way the listing was. */
+  readonly listed?: {
+    readonly scope: readonly SyncScopeTarget[]
+    readonly clientRoot: string
+    /** The listing was the whole-repo one (`//...`, the graph's globe toggle). */
+    readonly wholeRepo?: boolean
+  }
+  /** The client the renderer loaded those rows from (its `clientRoot` echo). */
+  readonly displayedClientRoot?: string
+}
+
+/**
+ * The changelist a get must record when it can prove where it landed WITHOUT
+ * asking p4 — or the reason it cannot and has to read the answer back.
+ *
+ * A graph row exists because its changelist touched something inside the scope
+ * the listing was filtered by, so a get whose scope COVERS that listing scope
+ * necessarily landed on that very changelist: the read-back asks for the newest
+ * change at or below it touching the scope, and the row's own changelist is one
+ * of them and nothing newer can be. The two are equivalent, not approximate.
+ *
+ * Everything else is a refusal, and refusing only costs a read-back — the write
+ * this feeds is a claim about the user's workspace, so the one direction that
+ * must stay impossible is recording a changelist the scope never synced (which
+ * would badge a row that was never pulled). That is why the listing scope is
+ * stated by the caller rather than derived from this get's own scope: in the
+ * multi-directory dialog those differ, and deriving it would make the coverage
+ * test trivially true.
+ *
+ * The proof needs both sides named in the SAME coordinates. A whole-repo
+ * listing (`//...`) is not, so it is refused rather than excused — see the note
+ * on that branch for why its coverage test would be vacuous.
+ */
+export function directSyncPoint(input: DirectSyncPointInput): DirectSyncPoint {
+  const listed = input.listed
+  if (listed === undefined) return { ok: false, reason: 'no listing scope' }
+  // A whole-repo listing is refused outright, and NOT because it is wide: the
+  // extension writes every ledger coordinate as a HOST path under the client
+  // root, while the row came from `p4 changes //...` — a depot-level query. The
+  // coverage test would be trivially true (both sides are the client root), so
+  // the proof above would rest on an assumption never established: that every
+  // change `//...` lists touched a file this client's view maps under its root.
+  // The have probe only ever argued the OTHER direction (its answer is a subset
+  // of the listing), which is not enough here. When the assumption fails, the
+  // direct answer disagrees with what the read-back would have said for the very
+  // same get — and a later query button press, which IS the truth channel, then
+  // visibly moves the badge backwards. Refusing costs the whole-repo tab the
+  // read-back it has always paid; it buys one answer per get.
+  if (listed.wholeRepo === true) return { ok: false, reason: 'whole-repo listing' }
+  // An empty scope is not a narrower scope, it is a MISSING one: `scopeCovers`
+  // says it is covered by everything, and the graph resolves an empty
+  // `scopePaths` as "no scope given" (the opened folder). Both readings would
+  // turn "declared nothing" into "declared the widest thing there is".
+  if (listed.scope.length === 0) return { ok: false, reason: 'empty listing scope' }
+  const get = scopeKey(input.getClientRoot)
+  if (scopeKey(listed.clientRoot) !== get) {
+    return { ok: false, reason: 'listing from another client' }
+  }
+  // The rows on screen came from a listing the renderer loaded; if that listing
+  // was of a different client, the row ids in hand belong to that one. Both
+  // sides resolve against the CURRENT graph client, so without this echo a
+  // client switch would compare a stale row against the new client's scope and
+  // agree with itself.
+  if (input.displayedClientRoot === undefined) {
+    return { ok: false, reason: 'no listing client echoed' }
+  }
+  if (scopeKey(input.displayedClientRoot) !== get) {
+    return { ok: false, reason: 'rows not from this client' }
+  }
+  if (!scopeCovers(input.getScope, listed.scope)) {
+    return { ok: false, reason: 'get scope does not cover the listing scope' }
+  }
+  return { ok: true, change: input.change }
 }

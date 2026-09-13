@@ -18,7 +18,7 @@
  *  and on the ledger path a synchronous one), which is why every assertion below
  *  is on the badge / the toolbar line rather than on a loaded list.
  *
- *  Five journeys, one cold launch each:
+ *  Nine journeys, one cold launch each:
  *
  *  1. Opening the graph asks NOTHING: the whole-graph scope is too wide to probe
  *     on open, so the line says `#? (click to query)` until the query button is
@@ -51,9 +51,32 @@
  *     touched it — and that must not retire the client's answer: a read-only query
  *     moves no file, and losing the client's entry would put `#? (click to query)`
  *     back in front of the user, one whole-client probe later.
+ *  5. A get whose own read-back outlives the 5s window it is given, which on a
+ *     real workspace is every scope wider than a file. The entry lands late, on
+ *     its own, and the badge moves with no user action — see the block comment
+ *     above that describe.
+ *  6. The same row get, but with a fake that would take 40s to answer a
+ *     read-back and a log of every read-back it was asked: the badge still moves
+ *     and the log stays EMPTY. Journeys 2/2b pass on a fast fake whatever the
+ *     extension does, so this is the one that holds the shortcut (a row's
+ *     changelist written down without asking) in place.
+ *  7. The counter-example the shortcut must never widen into: the same row get
+ *     started from the scope dialog, whose picked directories are NARROWER than
+ *     the listing. It falls back to the read-back and the recorded answer is
+ *     p4's (4521), not the clicked row (4522) — so a tab scoped to the get's own
+ *     scope badges 4521. 4521 and 4522 touch different directories precisely so
+ *     the two candidate answers differ.
+ *  8. The listing the shortcut deliberately does not cover: the whole-repo one
+ *     (`//...`, the globe toggle). Its rows answer in depot coordinates while
+ *     the ledger's are host paths under the client root, so the coverage test
+ *     would compare the client root with itself and prove nothing — that get
+ *     keeps paying a read-back. The badge moves either way here (the clicked row
+ *     IS the read-back's answer for `//...`), so the log is the evidence again.
  *--------------------------------------------------------------------------------------------*/
 
 import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { mkTempDir } from '@universe-editor/temp-root'
 import { test, expect, waitForPerforceCommands } from '../fixtures/perforceApp.js'
 import { evaluateWhenRestored, type WorkbenchPO } from '@universe-editor/e2e-harness'
 import type { Page } from '@playwright/test'
@@ -255,11 +278,18 @@ const SPLIT_SUBMITTED: readonly P4SubmittedSeed[] = [
 
 test.describe('@p1 perforce graph sync point, folder inside a wider client', () => {
   test.use({
-    p4Seeds: { files: [aTxt, { relPath: 'other/b.txt', content: 'b1\n' }], submitted: SPLIT_SUBMITTED },
+    p4Seeds: {
+      files: [aTxt, { relPath: 'other/b.txt', content: 'b1\n' }],
+      submitted: SPLIT_SUBMITTED,
+    },
     openSubdir: 'src',
   })
 
-  test('answers each scope from its own query @regression', async ({ page, workbench, perforce }) => {
+  test('answers each scope from its own query @regression', async ({
+    page,
+    workbench,
+    perforce,
+  }) => {
     await openGraphWorkspace(page, workbench, perforce.openDir)
     const editor = page.locator('[data-testid="perforceGraph-editor"]')
     const line = editor.getByTestId('perforceGraph-syncPoint')
@@ -317,7 +347,10 @@ const WIDER_SUBMITTED: readonly P4SubmittedSeed[] = [
 
 test.describe('@p1 perforce graph sync point, folder whose history the point never touched', () => {
   test.use({
-    p4Seeds: { files: [currentA, { relPath: 'other/c.txt', content: 'c1\n' }], submitted: WIDER_SUBMITTED },
+    p4Seeds: {
+      files: [currentA, { relPath: 'other/c.txt', content: 'c1\n' }],
+      submitted: WIDER_SUBMITTED,
+    },
     openSubdir: 'src',
   })
 
@@ -376,5 +409,297 @@ test.describe('@p1 perforce graph sync point, folder whose history the point nev
     await scopeToggle.click()
     await expect(scopeToggle).toHaveAttribute('aria-pressed', 'true')
     await expect(line).toHaveText('#4523')
+  })
+})
+
+// The real-machine report this last journey exists for: against a real server a
+// get's read-back costs the scope's WIDTH — 0.2s for one file, but 12.8s for a
+// mid subtree and 27.3s for a workspace root — and the awaited attempt is given
+// 5s so that a wide get does not stall behind its own bookkeeping. Every get
+// wider than a file therefore lost its entry SILENTLY: the sync landed, nothing
+// was recorded, and the graph kept answering with an older query's changelist.
+// The answer now arrives late, from a background retry, and the entry pokes the
+// renderer so the badge moves with no user action at all.
+//
+// The fake answers instantly by default, so this is the one shape the rest of
+// the suite cannot reach: `UNIVERSE_P4_FAKE_READBACK_MS` holds the read-back
+// open instead of modelling width.
+test.describe('@p1 perforce graph sync point, read-back slower than the get', () => {
+  test.use({
+    p4Seeds: { files: [aTxt], submitted: SUBMITTED },
+    p4ExtraEnv: { UNIVERSE_P4_FAKE_READBACK_MS: '7000' },
+  })
+
+  test('moves the badge by itself once the late read-back lands @regression', async ({
+    page,
+    workbench,
+    perforce,
+  }) => {
+    await openGraphWorkspace(page, workbench, perforce.openDir)
+    const editor = page.locator('[data-testid="perforceGraph-editor"]')
+    const line = editor.getByTestId('perforceGraph-syncPoint')
+    await expect(line).toHaveText(UNKNOWN)
+
+    await editor.locator('[data-id="4522"]').click({ button: 'right' })
+    const menu = page.getByRole('menu')
+    await expect(menu).toBeVisible({ timeout: 10_000 })
+    await menu.getByText('Get This Revision', { exact: true }).click()
+
+    await expect
+      .poll(() => readFileSync(perforce.file('src/a.txt'), 'utf8'), {
+        timeout: 30_000,
+        message: 'the get should write head revision #3 to disk',
+      })
+      .toBe(V3)
+
+    // The get is over and the badge is STILL unknown — which is the whole point
+    // of the delay: the read-back that would answer it was killed by its own 5s
+    // window and is being asked again in the background. If this line already
+    // read `#4522` the journey would be passing without ever reaching the path
+    // it is here to guard.
+    await expect(line).toHaveText(UNKNOWN)
+
+    // Nothing is clicked, queried or reloaded from here on: the late entry lands
+    // on its own, and the graph re-derives the badge from it (the entry pokes the
+    // SCM observables, which is the only channel it has into the renderer).
+    await expect(line).toHaveText('#4522', { timeout: 60_000 })
+    await expect(line).toHaveAttribute('data-tooltip', /Recorded at/)
+    await expect(editor.locator('[data-id="4522"]')).toContainText('Synced')
+    await expect(editor.locator('[data-id="4521"]')).not.toContainText('Synced')
+  })
+})
+
+/** The lines fake-p4 appended to `UNIVERSE_P4_FAKE_READBACK_LOG`, if any: one
+ *  per `changes` call carrying a revision suffix, i.e. one per honest attempt to
+ *  ask the server where a get landed. */
+function readbackLines(file: string): string[] {
+  try {
+    return readFileSync(file, 'utf8')
+      .split('\n')
+      .filter((l) => l.trim() !== '')
+  } catch {
+    return []
+  }
+}
+
+// A read-back the fake could not answer inside any test's patience. The ledger
+// entry a row's get writes needs no server round-trip at all, so this delay
+// never elapses — and if the extension ever goes back to asking, the badge
+// cannot move in time for the assertion below, on top of the log check.
+const ZERO_READBACK_LOG = join(mkTempDir('p4-readback-none-'), 'readback.log')
+
+test.describe('@p1 perforce graph sync point, a row get never asks the server', () => {
+  test.use({
+    p4Seeds: { files: [aTxt], submitted: SUBMITTED },
+    p4ExtraEnv: {
+      UNIVERSE_P4_FAKE_READBACK_MS: '40000',
+      UNIVERSE_P4_FAKE_READBACK_LOG: ZERO_READBACK_LOG,
+    },
+  })
+
+  test('records the row changelist with no read-back at all @regression', async ({
+    page,
+    workbench,
+    perforce,
+  }) => {
+    await openGraphWorkspace(page, workbench, perforce.openDir)
+    const editor = page.locator('[data-testid="perforceGraph-editor"]')
+    const line = editor.getByTestId('perforceGraph-syncPoint')
+    await expect(line).toHaveText(UNKNOWN)
+
+    await editor.locator('[data-id="4522"]').click({ button: 'right' })
+    const menu = page.getByRole('menu')
+    await expect(menu).toBeVisible({ timeout: 10_000 })
+    await menu.getByText('Get This Revision', { exact: true }).click()
+
+    await expect
+      .poll(() => readFileSync(perforce.file('src/a.txt'), 'utf8'), {
+        timeout: 30_000,
+        message: 'the get should write head revision #3 to disk',
+      })
+      .toBe(V3)
+    await expect(line).toHaveText('#4522')
+    await expect(line).toHaveAttribute('data-tooltip', /Recorded at/)
+
+    // The hard evidence, and the reason this journey exists: the badge moving
+    // proves nothing on a fake that answers instantly — an implementation that
+    // asks and then ignores the answer passes that half just as well. A
+    // read-back log that is still EMPTY is what only the real behaviour
+    // satisfies (the fake appends to it before it would have waited).
+    expect(readbackLines(ZERO_READBACK_LOG)).toEqual([])
+  })
+})
+
+// Two changes that touched DIFFERENT directories, so "which changelist did this
+// get land on?" has two candidate answers that can be told apart: 4521 (what a
+// read-back answers for `src`) and 4522 (the row the user clicked, which never
+// touched `src`).
+const srcA: SeedFile = {
+  relPath: 'src/a.txt',
+  content: V1,
+  haveRev: 1,
+  haveContent: V1,
+  headRev: 2,
+  headContent: V2,
+  revisions: { '1': V1, '2': V2 },
+}
+const W1 = 'w1\n'
+const W2 = 'w2\n'
+const otherB: SeedFile = {
+  relPath: 'other/b.txt',
+  content: W1,
+  haveRev: 1,
+  haveContent: W1,
+  headRev: 2,
+  headContent: W2,
+  revisions: { '1': W1, '2': W2 },
+}
+const DIALOG_SUBMITTED: readonly P4SubmittedSeed[] = [
+  {
+    changelist: '4521',
+    user: 'e2e',
+    time: '1751600000',
+    description: 'a.txt to v2',
+    rev: 2,
+    files: [{ relPath: 'src/a.txt', action: 'edit', rev: 2 }],
+  },
+  {
+    changelist: '4522',
+    user: 'e2e',
+    time: '1751600100',
+    description: 'b.txt to w2',
+    rev: 2,
+    files: [{ relPath: 'other/b.txt', action: 'edit', rev: 2 }],
+  },
+]
+
+const DIALOG_READBACK_LOG = join(mkTempDir('p4-readback-dialog-'), 'readback.log')
+
+test.describe('@p1 perforce graph sync point, a narrower dialog get asks the server', () => {
+  test.use({
+    p4Seeds: { files: [srcA, otherB], submitted: DIALOG_SUBMITTED },
+    p4ExtraEnv: { UNIVERSE_P4_FAKE_READBACK_LOG: DIALOG_READBACK_LOG },
+  })
+
+  test('records the read-back answer, not the clicked row @regression', async ({
+    page,
+    workbench,
+    perforce,
+  }) => {
+    await openGraphWorkspace(page, workbench, perforce.openDir)
+    const editor = page.locator('[data-testid="perforceGraph-editor"]')
+    await expect(editor.locator('[data-id="4522"]')).toBeVisible()
+
+    // `Get Revision…` on a row of the whole-graph tab, then narrow the picked
+    // scope to `src` — a scope the clicked row never touched. The listing the
+    // row came from is the client root, so this get does NOT cover it.
+    await editor.locator('[data-id="4522"]').click({ button: 'right' })
+    const menu = page.getByRole('menu')
+    await expect(menu).toBeVisible({ timeout: 10_000 })
+    await menu.getByText('Get Revision…', { exact: true }).click()
+
+    const dialog = page.getByTestId('perforceGraph-syncDialog')
+    await expect(dialog).toBeVisible({ timeout: 30_000 })
+    // Every candidate starts selected; dropping `other` leaves exactly `src`.
+    await dialog.locator('input[type="checkbox"]').nth(1).click()
+    await dialog.getByRole('button', { name: 'Get Revision (1)' }).click()
+
+    // The get itself is real: src/a.txt moves #1 → #2 (the revision 4521 gave it).
+    await expect
+      .poll(() => readFileSync(perforce.file('src/a.txt'), 'utf8'), {
+        timeout: 30_000,
+        message: 'the dialog get should write revision #2 to src/a.txt',
+      })
+      .toBe(V2)
+
+    // ...and it went the honest way round: with the picked scope narrower than
+    // the listing, only p4 can say where the get landed. The fake logs the
+    // question, so an implementation that trusts the row instead leaves this
+    // empty (the renderer unit test pins WHICH scope it sends; this pins that
+    // the extension then asks).
+    await expect.poll(() => readbackLines(DIALOG_READBACK_LOG).length).toBeGreaterThan(0)
+
+    // The answer must be 4521, not the clicked 4522. A tab scoped to the get's
+    // own scope is what makes that visible: both records would badge `src`, and
+    // only the right one names a changelist that touched it.
+    await workbench.runCommand('workbench.action.closeAllEditors')
+    await workbench.runCommand('perforce-graph.viewFileHistory', {
+      resource: perforce.fileUri('src'),
+      isDirectory: true,
+    })
+    const srcTab = page.locator('[data-testid="perforceGraph-editor"]')
+    await expect(srcTab).toBeVisible()
+    const srcLine = srcTab.getByTestId('perforceGraph-syncPoint')
+    await expect(srcLine).toHaveText('#4521')
+    await expect(srcLine).toHaveAttribute('data-tooltip', /Recorded at/)
+    await expect(srcTab.locator('[data-id="4521"]')).toContainText('Synced')
+  })
+})
+
+// One more change that touched ONLY `other/`, so it appears in the whole-repo
+// listing and nowhere in the opened folder's — the row that tells the two
+// listings apart without reading any internal state.
+const WIDE_SUBMITTED: readonly P4SubmittedSeed[] = [
+  ...SPLIT_SUBMITTED,
+  {
+    changelist: '4523',
+    user: 'e2e',
+    time: '1751600200',
+    description: 'c.txt outside the folder',
+    rev: 1,
+    files: [{ relPath: 'other/c.txt', action: 'add', rev: 1 }],
+  },
+]
+
+const WIDE_READBACK_LOG = join(mkTempDir('p4-readback-wide-'), 'readback.log')
+
+test.describe('@p1 perforce graph sync point, a whole-repo listing still asks', () => {
+  test.use({
+    p4Seeds: {
+      files: [
+        aTxt,
+        { relPath: 'other/b.txt', content: 'b1\n' },
+        { relPath: 'other/c.txt', content: 'c1\n' },
+      ],
+      submitted: WIDE_SUBMITTED,
+    },
+    openSubdir: 'src',
+    p4ExtraEnv: { UNIVERSE_P4_FAKE_READBACK_LOG: WIDE_READBACK_LOG },
+  })
+
+  test('records a read-back answer instead of the row @regression', async ({
+    page,
+    workbench,
+    perforce,
+  }) => {
+    await openGraphWorkspace(page, workbench, perforce.openDir)
+    const editor = page.locator('[data-testid="perforceGraph-editor"]')
+    const line = editor.getByTestId('perforceGraph-syncPoint')
+    await expect(editor.locator('[data-id="4521"]')).toBeVisible()
+
+    // Widen to the whole repository. The globe toggle reloads the listing, and
+    // 4523 is the row only the widened one can hold — waiting for it is how this
+    // journey knows the menu below is opened over THAT listing. (Clicking during
+    // the reload would send the previous listing's claim, which is a real
+    // request shape and a different test.)
+    const scopeToggle = editor.getByLabel('Toggle repository scope')
+    await scopeToggle.click()
+    await expect(scopeToggle).toHaveAttribute('aria-pressed', 'true')
+    await expect(editor.locator('[data-id="4523"]')).toBeVisible()
+
+    // 4523 is the head row here, so this get asks for no confirmation.
+    await editor.locator('[data-id="4523"]').click({ button: 'right' })
+    const menu = page.getByRole('menu')
+    await expect(menu).toBeVisible({ timeout: 10_000 })
+    await menu.getByText('Get This Revision', { exact: true }).click()
+
+    // The badge moves either way — for `//...` the row's own changelist IS the
+    // read-back's answer, since the clicked row is one of the changes the scope
+    // lists. So the log is the whole point: the shortcut is deliberately not
+    // available here (`//...` and the ledger's host paths are different
+    // coordinate systems, see `docs/graph.md`), and an implementation that
+    // extends it to this listing would leave the log empty.
+    await expect(line).toHaveText('#4523')
+    await expect.poll(() => readbackLines(WIDE_READBACK_LOG).length).toBeGreaterThan(0)
   })
 })

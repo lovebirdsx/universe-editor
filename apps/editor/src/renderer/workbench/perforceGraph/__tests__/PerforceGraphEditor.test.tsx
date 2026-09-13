@@ -147,13 +147,14 @@ function ledgerPoint(id: string, extra: Partial<P4GraphSyncPoint> = {}): P4Graph
 function makeCommandService(
   ledger: P4GraphSyncPoint | null = null,
   query: string | null = null,
+  clientRoot?: string,
 ): ICommandService {
   return {
     _serviceBrand: undefined,
     executeCommand: vi.fn(async (id: string) => {
       switch (id) {
         case PerforceGraphCommands.getChanges:
-          return makeResult()
+          return clientRoot === undefined ? makeResult() : { ...makeResult(), clientRoot }
         case PerforceGraphCommands.getSyncPoint:
           return ledger
         case PerforceGraphCommands.getHaveChange:
@@ -210,12 +211,9 @@ function makeViewServices(services: ServiceCollection): {
   return { openViewContainer, setViewCollapsed }
 }
 
-function renderEditor(
-  ledger: P4GraphSyncPoint | null = null,
-  input?: PerforceGraphEditorInput,
-  query: string | null = null,
-) {
-  const commandService = makeCommandService(ledger, query)
+/** Mount the editor on an already-built command service — for the suites that
+ *  need a service the shared factory cannot express (a call that fails, …). */
+function renderWith(commandService: ICommandService, input?: PerforceGraphEditorInput) {
   const storageService = makeStorageService()
   const services = new ServiceCollection()
   services.set(ICommandService, commandService)
@@ -229,6 +227,15 @@ function renderEditor(
     </ServicesContext.Provider>,
   )
   return { commandService, storageService, ...viewServices, ...utils }
+}
+
+function renderEditor(
+  ledger: P4GraphSyncPoint | null = null,
+  input?: PerforceGraphEditorInput,
+  query: string | null = null,
+  clientRoot?: string,
+) {
+  return renderWith(makeCommandService(ledger, query, clientRoot), input)
 }
 
 /** Unscoped render plus a graph scope on the input — the scoped tab's shape. */
@@ -323,6 +330,48 @@ describe('PerforceGraphEditor', () => {
       'perforceGraph.wholeRepo',
       true,
       StorageScope.WORKSPACE,
+    )
+  })
+
+  it('claims the rows on screen, not the scope the tab has since moved to', async () => {
+    // A reload for a new scope that FAILS leaves the previous rows rendered —
+    // `loading` covers the list only while the read is out, and it is cleared in
+    // `.finally`, while `result` is untouched by the catch. So the graph can be
+    // showing rows from one listing while the tab's own query already describes
+    // the next one, and a get pressed on those rows has to name the listing they
+    // came from: the extension's coverage check compares that claim against the
+    // get's scope, and naming the tab's current query would make it agree with
+    // itself over a scope that never produced these rows.
+    let failReload = false
+    const base = makeCommandService()
+    const inner = base.executeCommand as (id: string, ...args: unknown[]) => Promise<unknown>
+    base.executeCommand = vi.fn(async (id: string, ...args: unknown[]) => {
+      if (id === PerforceGraphCommands.getChanges && failReload) throw new Error('p4 timed out')
+      return inner(id, ...args)
+    }) as ICommandService['executeCommand']
+
+    const { commandService, container } = renderWith(base)
+    await flush()
+    expect(screen.getByText('Fix widget')).toBeTruthy()
+
+    failReload = true
+    fireEvent.click(screen.getByLabelText('Toggle repository scope'))
+    await flush()
+
+    // The reload failed, and its rows survived it.
+    expect(screen.getByText('Fix widget')).toBeTruthy()
+    fireEvent.contextMenu(container.querySelector('[data-id="4521"]')!)
+    fireEvent.click(screen.getByText('Get This Revision'))
+
+    expect(commandService.executeCommand).toHaveBeenCalledWith(
+      PerforceGraphCommands.syncToChange,
+      expect.objectContaining({
+        change: '4521',
+        // The get itself follows the toggle …
+        wholeRepo: true,
+        // … while the claim stays on the listing the visible rows came from.
+        listScope: { wholeRepo: false },
+      }),
     )
   })
 
@@ -454,11 +503,32 @@ describe('PerforceGraphEditor', () => {
     await flush()
 
     // Exact equality on purpose: an extra `isLatest`/`confirmed` fails here.
+    // `listScope` is NOT such an extra: it is the listing's own scope, which is
+    // what lets the extension record this row's changelist without asking p4.
     expect(commandService.executeCommand).toHaveBeenCalledWith(PerforceGraphCommands.syncToChange, {
       change: '4521',
       wholeRepo: false,
+      listScope: { wholeRepo: false },
       force: true,
     })
+  })
+
+  it('echoes the client the rows came from, so a stale row cannot be recorded', async () => {
+    // After the graph switches client the old rows are still on screen, and both
+    // the listing and the get resolve against the NEW client — only this echo
+    // can tell the ids in hand belong to the old one.
+    const { commandService, container } = renderEditor(null, undefined, null, 'X:/p4ws/main')
+    await flush()
+
+    fireEvent.contextMenu(container.querySelector('[data-id="4521"]')!)
+    await flush()
+    fireEvent.click(screen.getByText('Get This Revision'))
+    await flush()
+
+    expect(commandService.executeCommand).toHaveBeenCalledWith(
+      PerforceGraphCommands.syncToChange,
+      expect.objectContaining({ change: '4521', clientRoot: 'X:/p4ws/main' }),
+    )
   })
 })
 
@@ -714,13 +784,21 @@ describe('PerforceGraphEditor merged (multi-select) history', () => {
     fireEvent.click(screen.getByText('Force Get (Overwrite Local Files)'))
     await flush()
 
-    // Exact equality on purpose: an extra `isLatest`/`confirmed` fails here.
+    // Exact equality on purpose: an extra `isLatest`/`confirmed` fails here —
+    // and `listScope` must name the LISTING's scope (all three paths), which is
+    // the same set this get covers.
     expect(commandService.executeCommand).toHaveBeenCalledWith(PerforceGraphCommands.syncToChange, {
       change: '4521',
       scopePaths: [
         { path: 'X:/p4ws/main/a.txt', isDirectory: false },
         { path: 'X:/p4ws/main/lib', isDirectory: true },
       ],
+      listScope: {
+        scopePaths: [
+          { path: 'X:/p4ws/main/a.txt', isDirectory: false },
+          { path: 'X:/p4ws/main/lib', isDirectory: true },
+        ],
+      },
       force: true,
     })
   })
@@ -1671,7 +1749,13 @@ describe('PerforceGraphEditor re-reads after a get', () => {
         fireEvent.click(screen.getByText('Get This Revision'))
       },
       command: PerforceGraphCommands.syncToChange,
-      args: [expect.objectContaining({ change: '4521', wholeRepo: false })],
+      args: [
+        expect.objectContaining({
+          change: '4521',
+          wholeRepo: false,
+          listScope: { wholeRepo: false },
+        }),
+      ],
     },
     {
       name: 'scoped Get This Revision',
@@ -1682,7 +1766,13 @@ describe('PerforceGraphEditor re-reads after a get', () => {
       },
       scoped: true,
       command: PerforceGraphCommands.syncToChange,
-      args: [expect.objectContaining({ change: '4521', scopePaths: SCOPED_PATHS })],
+      args: [
+        expect.objectContaining({
+          change: '4521',
+          scopePaths: SCOPED_PATHS,
+          listScope: { scopePaths: SCOPED_PATHS },
+        }),
+      ],
     },
     {
       name: 'scoped Get Latest Revision',
@@ -1706,7 +1796,13 @@ describe('PerforceGraphEditor re-reads after a get', () => {
         fireEvent.click(screen.getByText('Force Get (Overwrite Local Files)'))
       },
       command: PerforceGraphCommands.syncToChange,
-      args: [expect.objectContaining({ change: '4521', force: true })],
+      args: [
+        expect.objectContaining({
+          change: '4521',
+          force: true,
+          listScope: { wholeRepo: false },
+        }),
+      ],
     },
     {
       name: 'Get Revision… dialog confirm',
@@ -1721,7 +1817,22 @@ describe('PerforceGraphEditor re-reads after a get', () => {
         fireEvent.click(within(dialog).getByText(/^Get Revision \(/))
       },
       command: PerforceGraphCommands.syncToChange,
-      args: [expect.objectContaining({ change: '4521', confirmed: true })],
+      args: [
+        expect.objectContaining({
+          change: '4521',
+          confirmed: true,
+          // Every candidate is preselected, so the get's own scope is the whole
+          // candidate list — while `listScope` stays the tab's own listing
+          // scope. The two must not be conflated: they are different objects
+          // here precisely because they come from different questions, and the
+          // extension's coverage check only means something while that is true.
+          scopePaths: [
+            { path: 'X:/p4ws/main/assets', isDirectory: true },
+            { path: 'X:/p4ws/main/src', isDirectory: true },
+          ],
+          listScope: { wholeRepo: false },
+        }),
+      ],
     },
   ]
 

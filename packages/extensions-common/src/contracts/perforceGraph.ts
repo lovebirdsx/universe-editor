@@ -236,6 +236,19 @@ export interface P4GraphSyncScopeDto {
 }
 
 /**
+ * The scope a graph LISTING was filtered by — the coordinates the rows on screen
+ * actually answer to. Deliberately the listing's own request shape (see
+ * {@link P4GraphLoadOptions}), because the extension resolves it with the very
+ * function that serves the listing, so the two cannot drift apart.
+ *
+ * Passed to a get so it can be trusted to know where it landed WITHOUT asking
+ * the server: a row exists because that changelist touched something inside this
+ * scope, so a get whose scope covers it must land exactly on this changelist
+ * (see {@link P4GraphSyncRequest.listScope}).
+ */
+export type P4GraphListScope = Pick<P4GraphLoadOptions, 'scopePaths' | 'wholeRepo'>
+
+/**
  * Argument for `perforce-graph.syncToChange` — P4V-style "get revision as of a
  * changelist". Runs a `p4 sync` scoped to the change: it moves the workspace's
  * *have* revisions (rolling files back or forward in time), never the depot.
@@ -248,6 +261,28 @@ export interface P4GraphSyncRequest {
    * graph-derived scope; directories become `<dir>/...` filespecs.
    */
   scopePaths?: readonly { path: string; isDirectory: boolean }[]
+  /**
+   * The scope the listing this row came from was filtered by — NOT this get's
+   * scope, even though a row menu passes the same paths for both. They part ways
+   * in the multi-directory dialog, which picks a NEW selection that can be
+   * NARROWER than the listing: that row's changelist may never have touched the
+   * picked directory, so recording it would badge a row this scope never synced
+   * (the over-report the whole feature is built to avoid).
+   *
+   * Present = "the row really is from a listing filtered by this scope"; the
+   * extension then re-resolves it and records the row's changelist with no
+   * read-back, but ONLY once it has checked that this get's scope covers it.
+   * Absent = nothing can be established, and the get falls back to asking p4
+   * (correct, just slower) — never to guessing.
+   */
+  listScope?: P4GraphListScope
+  /**
+   * The client the rows came from — the graph's `clientRoot` from its own load
+   * result. Checked against the client this get resolves to: after the graph
+   * switches client, rows loaded from the old one must not have their
+   * changelists recorded against the new one's scope.
+   */
+  clientRoot?: string
   /**
    * Without `scopePaths` (the unscoped graph): sync `//...` instead of the
    * opened workspace folder — mirrors the graph's whole-repo toggle.

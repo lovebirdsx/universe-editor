@@ -336,6 +336,44 @@ describe('GraphSyncLedger', () => {
     expect(ledger.lookup(ROOT, [SRC_A])?.record.change).toBe('4522')
   })
 
+  it('keeps the newer answer for a scope when a superseded one lands late', () => {
+    // The write order is the arrival order, not the answer order: a wide scope's
+    // sync-point read-back takes tens of seconds, so the get that produced the
+    // OLDER answer can easily be the one whose record lands LAST. Recording it
+    // would move the badge backwards (the real-machine report: a get after a
+    // query left the badge on the query's, older, changelist).
+    const ledger = GraphSyncLedger.open(dir)!
+    ledger.record(record([SRC], '4560', 200))
+    ledger.record(record([SRC], '4520', 100))
+    expect(ledger.lookup(ROOT, [SRC])?.record.change).toBe('4560')
+  })
+
+  it('lets the write arriving now win when the two stamps are equal', () => {
+    // Equal stamps mean both answers were established within the same
+    // millisecond, so the one being written is not the older fact — dropping it
+    // would silently lose a real answer (a get and a query stamped in the same
+    // millisecond do that in production; two mocked gets do it on every run).
+    // Only a STRICTLY older stamp is the late-arrival case the guard is for,
+    // which the test above covers.
+    const ledger = GraphSyncLedger.open(dir)!
+    ledger.record(record([SRC], '4560', 200))
+    ledger.record(record([SRC], '4520', 200))
+    expect(ledger.lookup(ROOT, [SRC])?.record.change).toBe('4520')
+  })
+
+  it('still applies a superseded write as evidence against a wider record', () => {
+    // Dropping the claim must not drop the EVIDENCE: that get really ran, and it
+    // could have carried files back past what the wider record claims, so the
+    // wider claim is stale whether or not we keep this record's own changelist.
+    const ledger = GraphSyncLedger.open(dir)!
+    ledger.record(record([CLIENT_ROOT], '4560', 10))
+    // Newer, and floored at 4560 so it does NOT retire the wider record itself.
+    ledger.record(record([SRC], '4520', 200, { floor: 4560 }))
+    ledger.record(record([SRC], '4000', 100, { floor: 4000 }))
+    expect(ledger.lookup(ROOT, [SRC])?.record.change).toBe('4520')
+    expect(ledger.lookup(ROOT, [CLIENT_ROOT])).toBeUndefined()
+  })
+
   it('lets a later get beat a queried "nothing synced"', () => {
     const ledger = GraphSyncLedger.open(dir)!
     ledger.recordEmpty(ROOT, [SRC], 100, 'query')

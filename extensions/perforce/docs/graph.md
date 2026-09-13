@@ -30,7 +30,7 @@
 
 **答案有三个来源，按代价与新鲜度排序**：
 
-1. **本地账本**（`graphSyncLedger.ts`，零 p4 调用，`getSyncPoint` 同步返回）——编辑器内每次 get/sync 完成后写一条；`load()` / `revalidate()` / 换 scope 只读它。这是常态路径。
+1. **本地账本**（`graphSyncLedger.ts`，零 p4 调用，`getSyncPoint` 同步返回）——编辑器内每次 get/sync 完成后写一条；`load()` / `revalidate()` / 换 scope 只读它。这是常态路径。**宽 scope 的写入会迟到数十秒**（回读成本，见「记账的写入点」），期间的徽章答的是上一处落点，之后由落账自己推上去。
 2. **窄 scope 的自动查询**——**scoped tab**（文件 / 目录 / 合并历史，`scopePaths` 存在）账本没答案时仍自动查 `#have`（成本 180–340ms，付得起），保持老行为。
 3. **用户按「查询同步点」按钮**（`getHaveChange` 带 `force`）——唯一能看到**外部同步**的途径，也是宽 scope 唯一的查询方式。
 
@@ -65,22 +65,36 @@
 - **`runSync` 的 `ledgerScope` 是必填选项**：新增 sync 入口时编译器会逼你想清楚「这次 sync 覆盖哪些 scope」。这是刻意的——漏记一个入口 = 「我明明拉了但图谱不显示」，比不做这个功能更糟。已知入口：图谱 4 个（Get This Revision / Get Latest Revision / Force Get / Get Revision… 对话框）、Explorer 的拉取最新版本 / 拉取指定版本 / 单文件 get、Timeline 的 get、状态栏的「落后」chip（`p4StatusBar` → `perforce.syncLatest`，**记的是活动编辑器里的那个文件**——chip 本来就只描述一个文件，`resolveTargetPath` 取它；只有命令面板里没有活动文件时才退回 `scopeLessLedgerScope`）。
 - **无 scope 的 get 记的是它的真实范围，不是 client root**（`scopeLessLedgerScope`）：无参数时 `PerforceClient.sync` 打的是 `_syncScopes`＝打开的文件夹（配了 `workspace.focusFolders` 则是那些目录），只有没有打开任何文件夹时才是 `//...`。记成 client root 会让「整仓库」scope 的图谱拿一个从没碰过那些文件的 CL 打徽章——正是本文件的头号红线（高报）。（`scopeLessLedgerScope` 是编译期逼出来的：这条洞是靠代码审查发现的，e2e 与单测都没覆盖无参 get。）
 - **回读答「空」要写墓碑，同样是记真事**：`readGraphSyncPoint` 区分**失败**（非零退出 / 抛错 → `failed`，什么都不写）与**空答案**（exit 0 + 零记录 → 该 scope 的 have 列表里没有 CL）。空答案发生在「拉到该 scope 第一个变更之前」或「拉回文件还存在之前」这类 get 上；写墓碑才能让更旧的、更宽的记录不再声称它停在某个 CL 上（与查询答空同一条规矩，`recordEmpty(..., 'sync')`）。
-- **`@CL` 的 get 必须回读落点，不能记请求的 CL**。`p4 sync a.txt@4521` 把 a.txt 落在一个**可能不等于 4521** 的 revision 上（4521 从未碰过该文件时落在它之前最后一个碰过它的 CL）。所以 sync 结束后跑 `readGraphSyncPoint(scopes, suffix)`（`p4 changes -s submitted -m 1 <scope><suffix>`，background / 5s 预算，`suffix` = 原样的 `@4521` / `#head` / `#4` / 空）拿真实落点。后缀**只由 `_syncTargets` 转义后拼接**（路径里的 `#` 会先变 `%23`）。
-- **回读 `await` 在 `runSync` 里**（不在 `.then` 里），所以 sync 命令 resolve 时账本**已经**在盘上——renderer 的 revalidate 不会读到旧值。
+- **`@CL` 的 get 必须回读落点，不能记请求的 CL**（唯一例外是图谱行入口，见下条）。`p4 sync a.txt@4521` 把 a.txt 落在一个**可能不等于 4521** 的 revision 上（4521 从未碰过该文件时落在它之前最后一个碰过它的 CL）。所以 sync 结束后跑 `readGraphSyncPoint(scopes, suffix)`（`p4 changes -s submitted -m 1 <scope><suffix>`，`suffix` = 原样的 `@4521` / `#head` / `#4` / 空）拿真实落点。后缀**只由 `_syncTargets` 转义后拼接**（路径里的 `#` 会先变 `%23`）。
+- **图谱行入口：判据成立时直接记行的 CL，零回读**（`directSyncPoint`，纯函数在 `graphSync.ts`）。这不是「少问一次也差不多」，而是**等价**：回读问的是「`{c ≤ CL : c 碰过 S}` 的最大值」；行之所以在列表里，是因为它的 CL 碰过**列表 scope** `S` 里的某个文件，于是 CL 本身就在那个集合里、集合里又不可能有更大的 ⇒ 回读必然答 CL。前提只有一个：**本次 get 的 scope ⊇ 列表 scope**——这正是判据，不是「从行发起」。
+  - **列表 scope 必须由 renderer 报、扩展侧重算**（契约 `P4GraphSyncRequest.listScope` + `clientRoot`）：多目录对话框（`Get Revision…`）挑的是比列表**更窄**的新选区，从请求自身的 `scopePaths` 推导会让判据平凡成立 ⇒ 高报。扩展按**服务列表的同一个** `resolveGraphScope` 解析这个 listScope，两边不可能各自漂移。
+  - 判据顺序（每条各有 reason，供日志与单测）：无 listScope / listScope 为空 / **listScope 是 wholeRepo** → 拒（空数组**必须**显式拒：`scopeCovers(x, [])` 恒真，而空 `scopePaths` 在 `resolveGraphScope` 里还会被读成「打开的文件夹」，两个方向都会把「什么都没声明」变成「声明了最宽的范围」；wholeRepo 的理由见「已知限制」）；client 不匹配、少了 `clientRoot` 回显 → 拒（切换图谱 client 后残留的旧行，两侧都按**当前** client 解析，只有这个回显能识破）；`scopeCovers(getScope, listScope)` 不成立 → 拒。
+  - **拒绝只花一次回读，写错却要撒谎**：所以取的是「宁可慢」。判据只有 `directSyncPoint` 一个产出点（`knownLanding` 这个类型只有它构造得出来），所以写点**不再**冗余复验一遍覆盖关系——那是一次恒真的自检，读起来却像是「写点也守得住忘了走判据的调用点」，反而掩盖了真正该守的地方（契约注释 + renderer 的精确 payload 断言 + 反例 journey）。
+  - **`complete` 照旧按 `outcome.complete` 记**：用户明确要求「只要完成了就记，即便有冲突」（拒绝的文件停在旧版本，答案只是上界），所以有拒绝的 get 也记——记的是**上界**，不是把它说成精确。
+  - 直接路径**不写墓碑、不 poke**：墓碑（空答案）在覆盖成立时不可达（回读必答 CL），poke 也不需要（记录在命令 resolve 之前已落盘，renderer 的 `getThenRevalidate` 必然读到）。两条都只存在于回读路径上。
+  - **`wholeRepo` 列表一律拒**（代价＝整仓库 tab 继续付它一直在付的那次回读）：`//...` 与账本坐标（client root 下的 host 路径）不在同一套坐标里，覆盖判据会拿 client root 跟自己比 ⇒ 平凡成立，而证明要的是「该 CL 碰过这个 scope」，不是「它出现在一个宽得没边的列表里」。细节见「已知限制」。
+- **红线：回读成本 ≈ scope 宽度，不是「几百毫秒的 index query」**（这句旧注释已被真机实测证伪：单文件 0.205s，`Source/Client/Content/...` 12.8s，`Source/...` 20.1s，**整个工作区 27.3s**；depot 语法与 client-view 语法同量级）。所以回读分两级预算：**快档 `SYNC_POINT_READBACK_EXEC`（background / 5s）await 在 `runSync` 里**，成功即落账；**超时（`timedOut`，来自 `P4ExecResult`）才 fire-and-forget 一次慢档 `SYNC_POINT_READBACK_SLOW_EXEC`（background / 60s）**，落地后照常落账并 poke（见下条）。慢档不能反过来塞进 await：5s 就是「宽 get 不许卡在自己的记账上」的那条线；快档也不能取消——单文件 get 的账仍必须在命令 resolve 之前写好。
+  - **只有超时才算「问不出来的问题」**：非零退出 / spawn 失败是 p4 真的拒绝了，再问一遍还是同一个答复，不重试（`timedOut: false`）；超时是**这次没等到**，值得换更宽的窗口再问。
+  - 实测最坏 27.3s，慢档 60s 只用来兜住真正挂死的 p4。两次都失败 → 什么都不写、只打日志（红线：不可读的同步点绝不臆造）。
+  - **慢档占一枚后台槽最长 60s**（background 硬顶 `maxConcurrent - 1` = 3）：连续三次宽 scope get 会把后台队列占满一分钟，这期间的 reconcile 扫描 / `checkBehind` / `openedByOthers` 排队等槽——**交互读不受影响**（它可用满全部 4 槽，静态预留那一条仍在）。这是「不阻塞 get」换来的代价，别再给慢档加窗口。图谱行入口是唯一免于这条的宽 get（它不回读），所以这里说的「宽 scope get」其实只剩 Explorer / Timeline / 状态栏那几条入口。
+- **落账后必须 poke**（`target.notifyScmStateChanged()`）：迟到的答案落在 get 结束之后，而扩展→renderer 没有主动推送通道，图谱的自动刷新只订阅 SCM observable（`group.resources`）。poke = `_applyGroups(_desiredGroups)` 重放一次当前分组（**零 p4 调用**；但它是一次**全量重发布**，会同时唤醒 SCM 视图 / 行装饰 / git 图谱的自动刷新，与任何一次普通 SCM 变更同价——不是 no-op），SCM 服务重新发布资源数组 → autorun 触发 → `AUTO_REFRESH_DEBOUNCE`(500ms) 后 revalidate → 读账本 → 徽章自己前移。少了这一步，记录躺在盘上直到用户下次碰图谱——**正是用户报的那个现象**（e2e 实测：注掉这一行，最后一条 journey 稳定失败在「徽章自己前移」）。poke 在 `_disposed` / 非 `connected` 时直接返回：它天然迟到，可能晚于 `_goOffline`（已把各组清空但没动 `_desiredGroups`）或 `dispose`，重放会把刚撤回的行又贴回去。
+- **`at` 记的是「答案确立的时刻」（get 结束那一刻），不是写盘时刻**；账本对同一 identity 的写入加了守卫：既有记录 `at` 更新则丢弃这次更旧的写入。迟到落地的慢档因此不会把徽章往回推（真机现场：宽查询 42s 后落地，压掉了它之后那次 get 的记录）。
 - **`#have` 必须拼在转义之后**（`getGraphHaveChange` 内部拼；与 `buildForceGetFilespecs` 拼 `#rev`、`readGraphSyncPoint` 拼 `@cl` 同一条规矩，见 `p4Filespec.ts`）。空 scope 列表直接返回 `{ id: null, failed: true }`（裸 `-m 1` 是「depot 里最新的变更」，与 have 点正相反，而且它会**成功**回答，错的答案还会被缓存）。
 
 ### 查询覆盖记账（truth beats bookkeeping）
 
-- **只有真的去问了服务器的那次查询才写账本**（`opts.force === true`，即按钮 / 用户显式查询），就地覆盖该 scope 的记录——否则一条旧的记账会把答案永久冻在那一刻，用户按按钮也改不动。
+- **只有真的去问了服务器的那次查询才写账本**（`opts.force === true`，即按钮 / 用户显式查询），覆盖该 scope 的记录——否则一条旧的记账会把答案永久冻在那一刻，用户按按钮也改不动。**但「覆盖」也受 `at` 守卫管**：查询的 `at` 是**派发时刻**，所以派发之后才确立的答案（例如这期间的一次 get 落了账）不会被它顶掉——那种情况下被丢弃的是**查询的写入**，并在输出频道留一行 `dropped — an answer at or after …`（渲染侧那一次查询仍照常显示，见下条）。
   - **scoped tab 的自动探针（`force: false`）不写**：它吃 `P4CacheNs.haveChange` 缓存（TTL = `max(workspaceTtl, 5min)`），所以返回的可能是**上一次问服务器**的旧答复。而记录是按 `at: askedAt`（派发时刻）排序的，把一份旧答复盖上「此刻」的戳写进去，会压过这期间真实发生的 get —— 往回拉的方向上就是**高报**（声称一个 scope 已经没有的 CL）。它照样回答它自己那个 tab，只是不许替工作区记账。
 - **查询答「空」要写墓碑记录，不能只删自己那条**：服务端说「这儿什么都没有同步」是一等答案（`p4 sync` 到旧 CL、revert 都会让同步点真的后退）。若只是删掉该 scope 自己的记录，一条**更旧的、更宽的**记录会在下一次 load 时把这个 CL 重新贴回徽章——用户刚问到的答案被静默推翻。故写 `recordEmpty()`（`change: EMPTY_SYNC_POINT` 的记录），它按 `at` 压过那条宽的、并按 `contradictedBy` 把那条宽的**作废**，lookup 见到它即报「无答案」。
 - **查询失败 ≠ 空答案**（契约 `P4GraphHaveChangeResult`）：失败 / 超时 / spawn ENOENT / 无 client → `{ id: null, failed: true }`，**什么都不写**，renderer 保留原徽章。只写日志、绝不弹错。`getGraphHaveChange` 自带 try/catch（异常冒泡会杀掉 extension host）。日志 `[perforce] graph have point: #N (K filespec(s), Xms)` / `sync point read-back …` **耗时必须在里面**。
 
 ### renderer（`PerforceGraphEditor.tsx`）
 
+- **每个 get 入口都带一份「列表坐标」**（`listScopeOf()` + `clientRoot`，收口在 `claimOf()` 一处，四个入口都经它）：内容是**屏幕上这批行所属的列表 scope**，不是本次 get 的 scope。**对话框那条最要紧**：它传的仍是 tab 的 `{wholeRepo}`，而 `scopePaths` 是用户勾选的目录——两者故意不同，扩展才看得出「这次 get 没覆盖行所在的列表」并回退到回读（`PerforceGraphEditor.test.tsx` 的精确 payload 断言与 `perforceGraphHave.spec.ts` 最后一条 journey 都钉这个；改错时前者红、后者红）。
+  - **它读的是 `listed` state，不是 `queryRef`**：后者是「下次派发会用」的 scope，而这两者在换 scope 后**会分离**——重渲染先发生、重新加载的 effect 后发生，更别提加载**失败**时旧行会留在屏幕上（`loading` 只在读取在飞时盖住列表，`.finally` 就清掉，`result` 不被 catch 动）。判据的输入若跟着 `queryRef` 走，就会出现「拿 A 列表的行去声称 B 列表的 scope」，而覆盖校验恰好会自洽通过。`listed` 与 `result` 在同一次提交里更新，scope 在**派发时**捕获（读在 scope 已经换过一次之后才 resolve 时，它描述的仍是自己问的那批行）；`PerforceGraphEditor.test.tsx` 的 `claims the rows on screen, not the scope the tab has since moved to` 就是这条的护栏（把 `listScopeOf` 改回读 `queryRef` 即红）。
 - **`haveSeqRef` 独立于 `fetchSeqRef`**（后者在 reveal 分页时也自增，共用会把仍然正确的徽章踢掉）。
 - **`load()` 开头 `++haveSeqRef` + `setSyncPoint(null)`**（换 scope 时旧答案不得贴到新列表）——**所有换 scope 的路径都汇到 `load()`**，所以「过期答案不会跨 scope 落地」这条只靠它成立。
-- **红线：用户查询自增 seq，账本读不自增**。查询是「用户等着的最新真相」，压过在飞的一切；账本读只是填空，若也自增，则任何一次 load / revalidate 落地都会**静默丢掉用户正在等的答案**——而「切 scope」恰好就会触发一次 load，正是最容易被撞上的场景（e2e 实测：`perforceGraphHave.spec.ts` 第三条 journey 一度因此稳定失败，`PerforceGraphEditor.test.tsx` 的 `keeps a user query that a load lands on top of` 是它的单测）。残留代价：查询在飞时若有一次 get 落账，查询可能最后落地并带回更旧的答案；下一次 load / revalidate 会读账本纠正。
+- **红线：用户查询自增 seq，账本读不自增**。查询是「用户等着的最新真相」，压过在飞的一切；账本读只是填空，若也自增，则任何一次 load / revalidate 落地都会**静默丢掉用户正在等的答案**——而「切 scope」恰好就会触发一次 load，正是最容易被撞上的场景（e2e 实测：`perforceGraphHave.spec.ts` 第三条 journey 一度因此稳定失败，`PerforceGraphEditor.test.tsx` 的 `keeps a user query that a load lands on top of` 是它的单测）。残留代价：查询在飞时若有一次 get 落账，**界面上**查询可能最后落地并带回更旧的答案（账本侧已被 `at` 守卫挡住，那次查询的写入会被丢弃）；下一次 load / revalidate 会读账本纠正。
 - **取号必须在「拒绝重复按」之后**：`++haveSeqRef.current` 一旦被一次**注定要被拒绝**的按压执行，在飞的那次查询就变成过期答案而被丢弃，用户等到的答复永远不落地（实测：按钮停止转圈、徽章不动）。任何「先取号、后判可否」的写法都有这个洞。
 - **账本读不得覆盖它超车的那次查询**（`racedByQuery`）：序号守卫拦不住——账本读若在查询**之后**派发，抓到的是同一个序号。而账本读的内容是**查询前**的（扩展在查询命令返回时才写账本），所以它最后落地会把用户刚等到的答案换成旧值（或 null，徽章整块消失）。判据用**派发时刻**的 `queryInFlightRef`，不能用到岸时刻（到岸时那次查询通常已经答完，ref 已释放）。
 - **只有点击才分页**：工具栏的 `#4521` 是按钮 → `revealCommit(id)`（复用既有 reveal / 自动翻页）；**徽章本身永不触发分页**（分页是几十次 depot 查询，不能由一个标注自行发起）。未知态 `#? (click to query)` 本身也是按钮，点了即查。
@@ -130,6 +144,8 @@ tooltip（`syncPointTooltip`）**先讲来源再讲结论**，因为「记账」
 ### 已知限制
 
 - 账本**只知道编辑器内发起的同步**；外部 `p4 sync` 要按查询按钮才看得见（这正是按钮存在的理由）。
+- **宽 scope 的记账迟到**：回读成本随 scope 宽度增长（工作区根 27.3s），快档 5s 超时后转后台慢档，所以「get 完成后徽章要过十几到几十秒才自己前移」是正常的；期间它答的还是上一处落点（不是错，只是旧），且**这段窗口里关掉图谱不影响落账**（写入在扩展侧，与 UI 无关）。两个例外：单文件这类窄 scope（0.2s，徽章紧跟命令返回），以及**图谱行入口**——判据成立时根本不回读，徽章同样紧跟命令返回。
+- **`wholeRepo` 列表不参与直接记账（刻意，不是缺口）**：`//...` 是 depot 级查询，而账本/回读坐标一律落在 **client root**（`resolveGraphScope` 里既有的「`//...` ≡ client root」假设，探针替换也基于它）。两边不同坐标 ⇒ 覆盖判据退化成「client root 覆盖 client root」，恒真；而真正要证的是「该 CL 碰过本次 get 的 scope」，那需要「`//...` 列出的每个变更都碰过本 client 视图内、root 下面的文件」——这个假设恰恰只在 AltRoots 为空时成立，`#have` 探针只从反方向论证过（它的答案是列表的子集），证不了它。假设不成立时，直接记账会与「同一次 get 的回读」给出不同答案，而查询按钮（真值通道）一按，徽章就当场往回退。所以该分支一律回读，整仓库 tab 保持它一直以来的成本（27.3s）。
 - 标签页关掉再开**不丢**：账本在扩展侧、`view.syncPoint` 也跟着 `result` 一起持久化。
 - 换 scope / 关页签**不取消**在飞的探针（收益只是早释放一个后台槽）。
 - **长同步的 `#head` 回读会读到中途提交**：`readGraphSyncPoint(scopes, '#head')` 问的是「同步这一刻的 head」，若同步跑了几分钟且期间有人提交，回读拿到的可能是**同步期间**提交的 CL——账本因此高报一点点。不修正的理由：真正的落点只有逐个文件 `fstat` 才知道（成本＝scope 规模，正是本功能要躲的开销），而高报一条是新提交、下一次同步就会真正拉下来。
@@ -198,8 +214,11 @@ Action2 在 `actions/index.ts` `registerAction2`。
 ## 测试套路
 
 - **纯解析器单测**：`p4GraphParser.ts` 的每个函数对 fixture 断言（`extensions/perforce/src/__tests__/p4GraphParser.test.ts`）。新增解析逻辑先写纯函数 + 单测，client 只做编排。
-- **账本单测**：`extensions/perforce/src/__tests__/graphSyncLedger.test.ts`——包含关系（`X:/ws/a` 不含 `X:/ws/ab`）、文件 vs 目录 scope 不同身份、**更窄的记录绝不回答更宽的问题**、**按时间取而非按深度取**、跨 client 隔离、盘上往返 / 跨窗口合并 / 损坏文件 / 上限淘汰。
-- **renderer 单测**：`workbench/perforceGraph/__tests__/PerforceGraphEditor.test.tsx`，mock `ICommandService` 返回假 DTO，断言渲染/展开详情/待定节点 + 同步点四条竞态（切 scope 丢弃过期答案 / 两次查询乱序 / 失败保留 / **查询不被落地的 load 丢掉**）+ 查询反馈（`data-querying` / 秒表 `data-done`）+ 行菜单两项（未知同步点时**没有**跳转项）。秒表与菜单的断言都靠 `renderWithDeferredSyncPoints` 把答复交给测试来结——答复自己 resolve 的 mock 观测不到在飞窗口。
+- **账本单测**：`extensions/perforce/src/__tests__/graphSyncLedger.test.ts`——包含关系（`X:/ws/a` 不含 `X:/ws/ab`）、文件 vs 目录 scope 不同身份、**更窄的记录绝不回答更宽的问题**、**按时间取而非按深度取**、跨 client 隔离、盘上往返 / 跨窗口合并 / 损坏文件 / 上限淘汰、**迟到但更旧的写入不覆盖更新的记录**（含「被丢弃的写入仍作为作废证据生效」）。
+- **回读单测**：`extensions/perforce/src/__tests__/clientGraphSyncPointReadback.test.ts`——后缀拼在转义之后、空答案是答案、空 scope 不问 p4、**过期窗口报 `timedOut` 且用的是调用方的预算**、非零退出不算超时，外加两条预算断言（快档 `≤5s` + background、慢档 `>27s` + background）。断言的是**派发的 options**（spy `P4Service.prototype.exec`），不是模块常量。
+- **判据单测**：`extensions/perforce/src/__tests__/graphSync.test.ts` 的 `directSyncPoint`——覆盖/更宽 → ok；对话框形态（列表宽、get 窄）、兄弟前缀（`src` vs `src2`）、文件 vs 目录两个方向、**空列表 scope**、**wholeRepo 列表**（哪怕覆盖恰好成立）、client 不一致、`clientRoot` 缺失/不匹配 → 全拒（各带 reason）；大小写与斜杠按平台断言（win32/macOS 判同一 client、linux 判两个，**两个分支都断言**——只写一个分支的测试在开发机上绿、在 CI 上红）。
+- **命令级单测**：`extensions/perforce/src/__tests__/graphSyncToChangeLedger.test.ts`——真 `activate()` + 临时 `globalStoragePath` 的**真账本** + 计数假 `readGraphSyncPoint`（刻意答一个与行 id 不同的 CL：只断言调用次数不够，回读路径若偷偷记了行的 CL 也得红）：满足时**零回读**且账本恰一条 `{change, source:'sync', complete:true, floor:CL}`；对话框形态回读一次且记的是 p4 的答案；有拒绝仍记（`complete:false`）；clobber 失败不记；无 listScope / wholeRepo 列表 / client 不匹配 / 回显缺失或过期 → 回退且**不弹错**。
+- **renderer 单测**：`workbench/perforceGraph/__tests__/PerforceGraphEditor.test.tsx`，mock `ICommandService` 返回假 DTO，断言渲染/展开详情/待定节点 + 同步点四条竞态（切 scope 丢弃过期答案 / 两次查询乱序 / 失败保留 / **查询不被落地的 load 丢掉**）+ 查询反馈（`data-querying` / 秒表 `data-done`）+ 行菜单两项（未知同步点时**没有**跳转项）。秒表与菜单的断言都靠 `renderWithDeferredSyncPoints` 把答复交给测试来结——答复自己 resolve 的 mock 观测不到在飞窗口。**两条 Force Get 用精确相等断言**（多一个 `isLatest`/`confirmed` 就红），`listScope` 因此显式写在期望里；`CASES` 表逐入口断言 `listScope`（对话框那条断言它是 `{wholeRepo:false}` 而 `scopePaths` 是勾选目录）。**列表坐标必须描述屏幕上的行**：`claims the rows on screen, not the scope the tab has since moved to`——换 scope 的重载**失败**时旧行留在屏幕上，此时 get 的 `listScope` 必须是旧列表（改回读 `queryRef` 即红）。
 - **e2e 冒烟**：`extensions/perforce/e2e/specs/perforceGraph.spec.ts`（`@p1`）——`perforce-graph.view` 是 renderer Action2，无 p4 服务器也能开（显示 unavailable 态），断言 `[data-testid="perforceGraph-editor"]` 可见。
 
 ### e2e 两个必踩坑
@@ -234,7 +253,9 @@ pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.con
 - `apps/editor/src/renderer/services/gitGraph/{graphLayout,fileTree}.ts` —— 复用的布局/文件树
 - `extensions/perforce/e2e/specs/perforceGraph.spec.ts` —— e2e 冒烟
 - `extensions/perforce/e2e/specs/perforceGraph{FileHistory,FolderHistorySync,HistoryMultiSelect}.spec.ts` —— scoped 历史三条回归（单文件 / 目录 get / 多选并集 + 双路径 get；fake-p4 的 `changes` case 吃全部 filespec 并回答并集）
-- `extensions/perforce/e2e/specs/perforceGraphHave.spec.ts` —— 同步点三条回归（**打开时不查**、按查询按钮才给出 `#4521`、点工具栏那句跳回该行 / 图谱内 get 后徽章靠**记账**前移、全程零查询 / **打开的是 client 子目录时**，文件夹 scope 答 4521、切到整仓库 scope 必须先回到「未知」再由自己的查询答 4522——第三条刻意让两个 scope 的答案不同，否则断言在点击前后都成立、等于假绿；fake-p4 的 `changes` case 认 `#have` 后缀（按**同一个文件**同时过 scope 与 per-file haveRev，seed 用 `SeedFile.haveRev` 把 have 停在中间版本）以及 `<spec>@<cl>` 后缀（sync 后的落点回读按 CL 收窄），两者都必须在**按 scope 过滤之前**剥掉后缀）
+- `extensions/perforce/e2e/specs/perforceGraphHave.spec.ts` —— 同步点九条回归（**打开时不查**、按查询按钮才给出 `#4521`、点工具栏那句跳回该行 / 图谱内 get 后徽章靠**记账**前移、全程零查询 / **打开的是 client 子目录时**，文件夹 scope 答 4521、切到整仓库 scope 必须先回到「未知」再由自己的查询答 4522——第三条刻意让两个 scope 的答案不同，否则断言在点击前后都成立、等于假绿 / 已是最新的 get 也要记账 / 只碰外部目录的同步点跳转落点 / 行 get 零回读、对话框 get 回读、整仓库列表 get 回读；fake-p4 的 `changes` case 认 `#have` 后缀（按**同一个文件**同时过 scope 与 per-file haveRev，seed 用 `SeedFile.haveRev` 把 have 停在中间版本）以及 `<spec>@<cl>` 后缀（sync 后的落点回读按 CL 收窄），两者都必须在**按 scope 过滤之前**剥掉后缀）
+  - 最后一条是**迟到落账**的护栏：`UNIVERSE_P4_FAKE_READBACK_MS` 把回读拖过 5s 快档（fake 默认秒答，不拖就永远走不到升级路径），断言 get 结束后徽章**先**仍是未知（证明快档真的被杀了）**再**自己前移到 `#4522`，全程零点击。**两处都做过变异验证**：注掉 `runSync` 里的慢档重试 → 红；注掉 `notifyScmStateChanged()` → 红（终局断言只有「迟到落账 + poke」这一条路能达成，中间那句「先仍是未知」是弱断言，别拿它当护栏）。
+  - 另三条是**直接记账**的正反两面，靠 fake 的新缝 `UNIVERSE_P4_FAKE_READBACK_LOG`（带修订后缀的 `changes` 各追加一行 argv）：**正面**＝行 get 后徽章照常前移而日志**仍空**（fake 秒答，所以「徽章动了」这件事本身什么也证明不了——必须日志空才行；同时 `READBACK_MS=40000` 让旧路径不可能在断言前答完）；**反例一**＝整仓库 tab 上右键 4522 → `Get Revision…` → 只勾 `src`（种子让 4521 碰 `src/a.txt`、4522 只碰 `other/b.txt`，两个候选答案不同），日志必须非空、且随后开一个 scoped 到 `src` 的 tab 徽章必须是 **`#4521`**（回读的答案）而非 `#4522`（点的那一行）；**反例二**＝`openSubdir` 打开 client 子目录、点地球开关切到整仓库（先等只属于该列表的 4523 行出现，确保菜单浮在**已换过**的列表上）再对行 get，此时徽章两条路都会前移到同一个号，**只有日志非空**能证明它走了回读——即 wholeRepo 这条刻意的拒绝仍然生效。**三条都做过变异验证**：注掉 `directSyncPoint` → 正面红；对话框那条改传勾选目录（`clientRoot` 保留）→ 反例一红于「日志非空」；把 wholeRepo 的拒绝去掉 → 反例二红（同时正面那条也会红，方向相反，一并说明这条缝在两个方向上都有分辨力）。
 
 ## 其它
 

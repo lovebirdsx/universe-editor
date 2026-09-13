@@ -52,6 +52,7 @@ import {
   type P4GraphChangeDetailsDto,
   type P4GraphHaveChangeResult,
   type P4GraphLoadOptions,
+  type P4GraphListScope,
   type P4GraphLoadResult,
   type P4GraphRepoDto,
   type P4GraphSyncPoint,
@@ -117,6 +118,13 @@ const MIN_COL_WIDTH = 60
 
 /** Storage key for the per-workspace "whole repo vs opened folder" scope toggle. */
 const WHOLE_REPO_KEY = 'perforceGraph.wholeRepo'
+
+/** A listing request's scope, in the graph's own request shape. */
+function scopeOfListing(opts: P4GraphLoadOptions): P4GraphListScope {
+  return opts.scopePaths !== undefined
+    ? { scopePaths: opts.scopePaths }
+    : { wholeRepo: opts.wholeRepo ?? false }
+}
 
 const PALETTE = ['#0085d9']
 
@@ -374,6 +382,32 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
     scope !== undefined
       ? { maxChanges: limit, scopePaths: scope.paths }
       : { maxChanges: limit, wholeRepo }
+
+  /**
+   * The listing the rows ON SCREEN came from, moved in the same commit as
+   * `result` itself. Deliberately not `queryRef`: that is what the next dispatch
+   * would ask for, and the two part ways for as long as a scope change takes to
+   * reach `load()` — the re-render happens first, the effect that reloads after
+   * it. A get's claim must describe the rows the user was looking at.
+   *
+   * The scope is captured when the listing is DISPATCHED, not when it resolves:
+   * a read that resolves after the tab has already moved on still describes the
+   * rows it was asked for.
+   */
+  const [listed, setListed] = useState<P4GraphListScope>(() => scopeOfListing(queryRef.current))
+
+  /**
+   * The scope this tab's LISTING answers to, sent with every get it starts: it
+   * is what lets the extension record a row's changelist without asking p4
+   * (`directSyncPoint`).
+   *
+   * Never built from a get's own scope. The multi-directory dialog picks a
+   * selection that can be NARROWER than the listing, and a contract that let a
+   * get name its own listing would make the extension's coverage check
+   * trivially true — the badge would then claim a row the picked scope never
+   * synced.
+   */
+  const listScopeOf = useCallback((): P4GraphListScope => listed, [listed])
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
@@ -732,11 +766,13 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
     pendingScrollRef.current = null
     setLoading(true)
     setError(null)
+    const opts = queryRef.current
     void commands
-      .executeCommand<P4GraphLoadResult>(PerforceGraphCommands.getChanges, queryRef.current)
+      .executeCommand<P4GraphLoadResult>(PerforceGraphCommands.getChanges, opts)
       .then((r) => {
         if (cancelled || seq !== fetchSeqRef.current) return
         setResult(r ?? null)
+        setListed(scopeOfListing(opts))
         setSelection([])
         setError(loadErrorFor(r ?? null))
         // Deliberately the LEDGER, not a server query: a reload is not a reason
@@ -792,6 +828,20 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
   // selected paths, so two tabs showing the same changelist must not share one
   // cached payload (whoever built first would pin the other's file list).
   const clientRoot = result?.clientRoot
+  /**
+   * The listing coordinates every get this tab starts carries: the scope its
+   * rows answer to plus the client they were loaded from, so a stale row left
+   * over from a client switch can never be recorded against the new client's
+   * scope. One builder for all four entry points (both row menus, their force
+   * variants, the scope dialog) — none of them may send one without the other.
+   */
+  const claimOf = useCallback(
+    (): Pick<P4GraphSyncRequest, 'listScope' | 'clientRoot'> => ({
+      listScope: listScopeOf(),
+      ...(clientRoot !== undefined ? { clientRoot } : {}),
+    }),
+    [clientRoot, listScopeOf],
+  )
   // Only a MULTI-path tab filters. A single file/folder tab keeps showing the
   // whole changelist, exactly as before this feature existed.
   const filterPaths = scope !== undefined && scope.paths.length > 1 ? scope.paths : undefined
@@ -876,15 +926,17 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
           for (let i = 0; i < MAX_REVEAL_PAGES && !found && !stopped; i++) {
             if (!current.moreAvailable) break
             nextLimit += PERFORCE_GRAPH_PAGE_SIZE
+            const opts = { ...queryRef.current, maxChanges: nextLimit }
             const r = await commands.executeCommand<P4GraphLoadResult>(
               PerforceGraphCommands.getChanges,
-              { ...queryRef.current, maxChanges: nextLimit },
+              opts,
             )
             // Superseded by a newer dispatch (e.g. a manual refresh) — yield.
             if (seq !== fetchSeqRef.current) return
             if (!r) break
             pages++
             setResult(r)
+            setListed(scopeOfListing(opts))
             current = r
             found = r.changes.some((c) => c.id === id)
             stopped = ruledOut(r.changes, id)
@@ -977,12 +1029,14 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
     // would clobber the intermediate result and filter out the target.
     if (revealingRef.current) return
     const seq = ++fetchSeqRef.current
+    const opts = queryRef.current
     void commands
-      .executeCommand<P4GraphLoadResult>(PerforceGraphCommands.getChanges, queryRef.current)
+      .executeCommand<P4GraphLoadResult>(PerforceGraphCommands.getChanges, opts)
       .then((r) => {
         if (!r || seq !== fetchSeqRef.current) return
         setError(loadErrorFor(r))
         setResult(r)
+        setListed(scopeOfListing(opts))
         setSelection((prev) => {
           const next = prev.filter((id) => id === PENDING_ID || r.changes.some((c) => c.id === id))
           return next.length === prev.length && next.every((h, i) => h === prev[i]) ? prev : next
@@ -1214,7 +1268,9 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
       // prompt, and the extension's force prompt has no waiver (see
       // `graphSyncConfirmKind`): sending `isLatest` here would be a silent path
       // to overwriting local work.
-      const forceGet = (payload: Omit<P4GraphSyncRequest, 'force'>): GitGraphMenuItem => ({
+      const forceGet = (
+        payload: Omit<P4GraphSyncRequest, 'force' | 'listScope' | 'clientRoot'>,
+      ): GitGraphMenuItem => ({
         kind: 'item',
         id: 'forceGet',
         icon: 'cloud-download',
@@ -1223,6 +1279,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
         run: () =>
           getThenRevalidate(PerforceGraphCommands.syncToChange, {
             ...payload,
+            ...claimOf(),
             force: true,
           }),
       })
@@ -1285,6 +1342,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
               getThenRevalidate(PerforceGraphCommands.syncToChange, {
                 change: id,
                 scopePaths: paths.map((p) => ({ path: p.path, isDirectory: p.isDirectory })),
+                ...claimOf(),
                 isLatest: id === result?.head,
               }),
           },
@@ -1324,6 +1382,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
               getThenRevalidate(PerforceGraphCommands.syncToChange, {
                 change: id,
                 wholeRepo,
+                ...claimOf(),
                 isLatest: id === result?.head,
               }),
           },
@@ -1393,6 +1452,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
     },
     [
       commands,
+      claimOf,
       openScopedFileDiff,
       scope,
       wholeRepo,
@@ -1901,6 +1961,14 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
               isLatest: d.isLatest,
               confirmed: true,
               scopePaths: paths.map((path) => ({ path, isDirectory: true })),
+              // The TAB's listing scope — deliberately NOT `paths`. The picked
+              // directories are a new, possibly narrower selection: the clicked
+              // row's changelist need not have touched them, so the extension
+              // must be able to see that this get does not cover what the row
+              // came from and fall back to asking p4. Sending `paths` here
+              // would make that check pass by construction and badge a row this
+              // get never synced.
+              ...claimOf(),
             })
           }}
           onCancel={() => setSyncDialog(null)}

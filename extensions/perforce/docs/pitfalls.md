@@ -19,7 +19,7 @@
 - [中文/非 ASCII 路径 argv 乱码；超长 argv ENAMETOOLONG](#中文非-ascii-路径经-argv-传给-p4-会乱码超长-argv-会-enametoolong已修复-x-argfile)
 - [宿主侧内建 `.p4ignore` 读取与 `p4 ignores -i` 的语义差异](#-宿主侧内建-p4ignore-读取与-p4-ignores--i-的语义差异)
 - [图谱同步点：have 查询的成本是 scope 内文件数](#图谱同步点have-查询的成本是-scope-内文件数真机实测)
-- [图谱同步点改记账：三个只在真机上才暴露的坑](#图谱同步点改记账三个只在真机上才暴露的坑)
+- [图谱同步点改记账：四个只在真机上才暴露的坑](#图谱同步点改记账四个只在真机上才暴露的坑)
 
 ---
 
@@ -213,6 +213,7 @@ P4D 2024.2 实测（PROBE-FINDINGS §11.5）：`p4 opened` 通篇没有 `unresol
 | `changes -s submitted -m 1 <scope>`（列表本身） | 185ms |
 | `changes -s submitted -m 1 <scope>@<client>` | 全工作区 **40s**；窄子树 12s；**单文件 6.3s** |
 | `changes -s submitted -m 1 <scope>#have` | 全工作区 42s；窄子树 **339ms**；单文件 **177ms**（答案与 `@client` 逐字一致） |
+| `changes -s submitted -m 1 <scope>@<CL>`（**get 后的落点回读**） | 单文件 **205ms**；中子树（`Source/Client/Content/...`）**12.8s**；大子树（`Source/...`）**20.1s**；工作区根 **27.3s**（host path / depot 语法 / client 语法三种拼写同量级 ⇒ 是 scope 宽度，不是拼写）。**图谱行入口判据成立时不付这条**——见「图谱同步点改记账」第 1 条的例外 |
 | `changes -s submitted -m 1 "//...#have"` | **报错** `Path 'X:/p4ws/main' is not under client's root` |
 
 2. **探针挂在 `getChanges` 的 `Promise.all` 里** → 列表要等它跑满预算才上屏（这条回归与「徽章不出现」一样真实）。
@@ -234,15 +235,24 @@ p4 -c <client> changes -s submitted -m 1 "//..."                   # 列表本�
 1. **「什么都没匹配到」是 exit 0**：`p4 changes -s submitted -m 1 <不存在的路径>#have`（含单文件形式与本地未跟踪目录）→ **exit 0 + 零记录 + 184ms**。所以「空答案」与「失败」在退出码上是分开的，可以放心把空答案缓存（失败不缓存），不会退化成每次刷新重跑一遍全量查询。
 2. **e2e 的 fake-p4 一度把 have 判定做成全局的**：`changes <spec>#have` 的正确语义是**同一条 filespec** 内的 have 收窄，即「某文件既在 scope 内、又已同步到该 CL 的修订」——逐文件同时成立。写成「先按 scope 过滤 CL、再按整个 client 的 have 表过滤 CL」两个独立 filter，会在「CL 同时碰了 scope 内文件与 scope 外已同步文件」时**高报**（真机上 scope 外的文件根本不在这条 filespec 里）。这个 bug 一直藏着，因为旧用例的 scope 都等于 client root；`perforceGraphHave.spec.ts` 新增的「打开 client 子目录」journey 才把它逼出来——**这也是为什么新回归用例必须让两个 scope 的答案不同**，否则点击前后断言都成立，等于没测。
 
-## ⚠️ 图谱同步点改记账：三个只在真机上才暴露的坑
+## ⚠️ 图谱同步点改记账：四个只在真机上才暴露的坑
 
-**背景**：`#have` 探针虽然不是首屏阻塞了，但它的成本仍是 scope 的规模——每次开图谱 / 换 scope / 刷新都付一遍几十秒。改成「编辑器内每次 sync 完成后记账，图谱读账本（零 p4 调用），宽 scope 首次打开显示 `#? (click to query)`，按钮才真查」。设计见 `docs/graph.md`「本地同步点」节。三个坑在写的时候都不明显：
+**背景**：`#have` 探针虽然不是首屏阻塞了，但它的成本仍是 scope 的规模——每次开图谱 / 换 scope / 刷新都付一遍几十秒。改成「编辑器内每次 sync 完成后记账，图谱读账本（零 p4 调用），宽 scope 首次打开显示 `#? (click to query)`，按钮才真查」。设计见 `docs/graph.md`「本地同步点」节。四个坑在写的时候都不明显：
 
-1. **记「请求的 CL」是错的，必须回读落点**。`p4 sync src/@4521` 把 `src/` 落到 **4521 之前最后一个碰过 src 的 CL**，而 4521 很可能压根没碰过 `src/`（Explorer 的「拉取指定版本…」按目标选，不按内容选）。按请求值记账会把一个从未影响该 scope 的 CL 标成「已同步」——**比不显示徽章更坏**（用户会据此以为某个改动已经在本地）。修法：sync 结束后跑一次 `p4 changes -s submitted -m 1 <scope><suffix>`（`readGraphSyncPoint`，background / 5s）拿真实落点；后缀是原样的 `@4521` / `#head` / `#4` / 空——**同一段拼接逻辑覆盖全部四档**，不要为 `#head` 另写一条。
+1. **记「请求的 CL」是错的，必须回读落点——唯一例外是图谱行入口，且判据不是「从行发起」而是「本次 get 的 scope 覆盖列表 scope」**。`p4 sync src/@4521` 把 `src/` 落到 **4521 之前最后一个碰过 src 的 CL**，而 4521 很可能压根没碰过 `src/`（Explorer 的「拉取指定版本…」按目标选，不按内容选）。按请求值记账会把一个从未影响该 scope 的 CL 标成「已同步」——**比不显示徽章更坏**（用户会据此以为某个改动已经在本地）。修法：sync 结束后跑一次 `p4 changes -s submitted -m 1 <scope><suffix>`（`readGraphSyncPoint`，background / 5s）拿真实落点；后缀是原样的 `@4521` / `#head` / `#4` / 空——**同一段拼接逻辑覆盖全部四档**，不要为 `#head` 另写一条。
+   - **例外**：图谱里那一行之所以在列表中，是因为它的 CL 碰过**列表 scope** 里的某个文件；所以只要本次 get 的 scope 覆盖列表 scope，回读**必然**答该 CL（集合含 CL，且不可能有更大的）——这是等价，不是近似，可以直接记下行的 CL、零回读（`directSyncPoint`）。**判据必须是扩展侧重算的**：多目录对话框挑的选区可能比列表更窄，让请求自己声明「列表就是我的 scope」会让判据平凡成立 ⇒ 高报。契约里传的是**推导输入**（列表 scope 坐标 + 行的 client 回显），结论由扩展侧算。**`wholeRepo`（`//...`）列表一律不适用**：它与账本坐标（client root 下的 host 路径）不在同一套坐标系里，覆盖判据退化成自己跟自己比、恒真，而「该 CL 碰过本次 get 的 scope」这个结论根本没被证过（只在 AltRoots 为空时成立）⇒ 直接拒绝、照旧回读。**列表述与「覆盖」的完整判据见 `docs/graph.md`**。
+   - **这份坐标必须是「屏幕上那批行」的，不是「tab 现在指向」的**：换 scope 的重载失败时旧行会留在屏幕上，此时 `queryRef` 已经指向新 scope，拿它当判据输入就会用 A 列表的行去声称 B 列表的 scope——覆盖校验恰好自洽通过。renderer 侧因此把 scope 与 `result` 放在同一次提交里（`listed` state，派发时捕获）。
 
-2. **`await` 的位置决定成败**：回读必须 `await` 在 `runSync` 内部（不是 `.then` 里），否则 renderer 的 revalidate 可能先读到盘上的旧记录，徽章要等下一次刷新才动。反过来说，回读**不能放在 sync 之前**（那时 have 还没更新）。
+2. **`await` 的位置决定成败，但它只覆盖得了窄 scope**：回读的**快档**必须 `await` 在 `runSync` 内部（不是 `.then` 里），否则 renderer 的 revalidate 可能先读到盘上的旧记录，徽章要等下一次刷新才动。反过来说，回读**不能放在 sync 之前**（那时 have 还没更新）。**这条不变式只对单文件 scope 成立**——回读成本随 scope 宽度涨到 13–27s（见上一节的表），而快档只有 5s，所以宽 scope 的账是**迟到数十秒**才落的（见第 4 条）。
 
 3. **查询成功必须覆盖记账，查询答「空」必须退役记录**。账本是「我们以为的」，查询是「实际是的」——不覆盖，一条旧记账会把答案冻在那一刻，用户按按钮也改不动；答「空」时不 `forget()`，退役不了的记录会比它描述的事实活得更久（`p4 sync` 到旧 CL、revert 都会让同步点真的后退）。反之**查询失败什么都不写**（`failed: true` 不是答案）。
+
+4. **5s 快档 + 数十秒的真实成本 = 宽 scope 的回读必然超时，而超时当时被当成了「问不出来」**（症状：用户把工作区同步到更新的 CL，图谱徽章仍是更早那次**查询**的同步点，账本里连一条 `source: "sync"` 都没有）。三个要点，缺一条就退回原状：
+   - **超时不是失败，是「这次没等到」**：`P4ExecResult.timedOut` 与「p4 非零退出」必须分开——后者再问一遍还是同一个答复（不重试），前者换更宽的窗口再问（`SYNC_POINT_READBACK_SLOW_EXEC`，background / 60s，fire-and-forget 不 await）。
+   - **`timedOut` 必须先于 `exitCode` 判**：`_spawn` 的超时分支 resolve 的是**真实退出码**（`code ?? 1`），所以「p4 已经答完 exit 0、kill 才落地」会给出 `{ exitCode: 0, timedOut: true }` **且 stdout 已被丢弃**。判成「空答案」就会给一个刚同步的 scope 写墓碑，还会连带作废更宽的记录——比不写更糟。顺序反了这个洞只在事件循环忙碌时有概率出现，单测要专门造 `close(0)` 才守得住。
+   - **不能靠「把快档调宽」解决**：5s 就是「宽 get 不许卡在自己的记账上」的那条线，调宽等于让每次宽 get 都多等几十秒。
+   - **落账后必须 poke 一次 SCM observable**（`notifyScmStateChanged()`，零 p4 调用）：扩展→renderer 没有推送通道，图谱的自动刷新只订阅 SCM 分组，不 poke 的话记录躺在盘上、徽章要等用户下次碰图谱才动——**那正是用户报的现象**。
+   - 附带一条同类修正：账本 `record()` 原来按 identity 无条件替换，于是**迟到但更旧**的答案会顶掉更新的记录（宽查询 42s 落地，压过它之后那次 get）。现在同 identity 的既有记录 `at` 更新时丢弃这次更旧的写入，但**仍保留它作为「更宽记录已过时」的证据**（那次 get 真的跑了）。
 
 **外加两条设计红线**（不是坑，是推理错误的两个方向，都写进了 `docs/graph.md`）：
 

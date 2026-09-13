@@ -411,17 +411,43 @@ const CHECK_BEHIND_TIMEOUT_MS = 20_000
 const HAVE_CHANGE_EXEC: P4ExecOptions = { priority: 'background', timeoutMs: 60_000 }
 
 /**
- * Budget for the post-sync read-back (`p4 changes -m 1 <spec><revision>`), the
- * one question every get asks to learn where it just landed. Unlike
- * {@link HAVE_CHANGE_EXEC} this is an index query over the history — no
- * revision specifier has to be resolved file by file — so it is expected in the
- * hundreds of milliseconds on the same workspace that answers `#have` in ~40s.
+ * FAST budget for the post-sync read-back (`p4 changes -m 1 <spec><revision>`),
+ * the one question every get asks to learn where it just landed.
+ *
  * The tight budget is there because the caller AWAITS it before reporting the
  * get complete: a wedged p4 must cost a few seconds and a missing ledger entry,
- * never a stalled sync. A failure is silent by design (the get already
- * succeeded); the graph simply has nothing recorded and falls back to querying.
+ * never a stalled sync. It is NOT a bound on the query — the read-back is only
+ * cheap for a file scope. Measured against a real million-file workspace, same
+ * CL, three filespec spellings (host path, depot syntax, client syntax — all
+ * within noise, so this is scope WIDTH, not spelling):
+ *
+ * | scope | measured |
+ * |---|---|
+ * | one file | 205ms |
+ * | `Source/Client/Content/...` | 12.8s |
+ * | `Source/...` | 20.1s |
+ * | workspace root | 27.3s |
+ *
+ * i.e. on anything wider than a file this window ALWAYS expires, and a bare
+ * timeout here is exactly what made a wide get record nothing at all (measured:
+ * the workspace-wide probe costs about what the `#have` probe it exists to avoid
+ * costs). So a timeout is not a failure to report — it is the signal to keep
+ * asking under {@link SYNC_POINT_READBACK_SLOW_EXEC}, off the get's critical
+ * path. A genuine p4 failure stays silent by design (the get already succeeded).
  */
 const SYNC_POINT_READBACK_EXEC: P4ExecOptions = { priority: 'background', timeoutMs: 5_000 }
+
+/**
+ * Budget for the read-back the get did not wait for — the same question, asked
+ * again after {@link SYNC_POINT_READBACK_EXEC} expired, with a window wide
+ * enough to hold the measured cost of the widest scope (27s; 60s only has to
+ * outlast a genuinely wedged p4, and matches {@link HAVE_CHANGE_EXEC}). Still
+ * background: it must never take the slot an interactive read is waiting for.
+ */
+export const SYNC_POINT_READBACK_SLOW_EXEC: P4ExecOptions = {
+  priority: 'background',
+  timeoutMs: 60_000,
+}
 
 /**
  * Default ceiling for one directory batch of the background reconcile scan
@@ -685,6 +711,9 @@ export class PerforceClient {
   private readonly _baseline: BaselineProvider
   /** Live groups by group id (default / cl:<n>), so refresh can reuse or drop. */
   private readonly _groups = new Map<string, SourceControlResourceGroup>()
+  /** The last set handed to {@link _applyGroups}, kept so {@link
+   *  notifyScmStateChanged} can re-publish it without asking the server. */
+  private _desiredGroups: readonly DesiredGroup[] = []
   /** The pinned "needs resolve" group, created before the changelist groups so it
    *  renders at the top (the SCM view renders groups in creation order). Hidden
    *  when empty, never in {@link _groups}, released in dispose(). */
@@ -1157,6 +1186,38 @@ export class PerforceClient {
 
   private _emitChange(): void {
     for (const l of this._changeListeners) l()
+  }
+
+  /**
+   * Publish the current SCM state again so renderer-side observers re-derive
+   * what they show. Zero p4 work: nothing about the workspace changed, only
+   * something the renderer derives from it.
+   *
+   * The sync ledger is what needs this. A get's landing point is read back with
+   * an index query whose cost is the scope's width, so on anything wider than a
+   * file the answer lands long after the get returned (measured: 12.8s for a
+   * mid subtree, 27.3s for a workspace root — see
+   * {@link SYNC_POINT_READBACK_SLOW_EXEC}). The graph's "already synced" badge is
+   * renderer state read from that ledger, and the SCM observables are the only
+   * channel this extension has to tell the graph to look again (its auto-refresh
+   * autorun watches exactly these) — so the late entry would otherwise sit
+   * invisible until the user happened to reload the graph.
+   *
+   * Re-publishing the group states is the cheapest thing that fires them:
+   * {@link _applyGroups} always re-assigns `resourceStates` (so it does reach
+   * every observer — the SCM views, the decorations, and the graphs, which read
+   * the same observable), unlike a no-op `refresh()` it spawns nothing.
+   *
+   * Only while the client still owns the picture, though: this call is by
+   * definition LATE, so it can outlive the state it replays. `_goOffline` empties
+   * every live group without touching `_desiredGroups`, and `dispose` tears the
+   * SourceControl down, so replaying after either would put back rows the client
+   * just retracted (a connected-looking list over a cleared count) — or, past
+   * dispose, rebuild groups nothing will ever free.
+   */
+  notifyScmStateChanged(): void {
+    if (this._disposed || this._connection !== 'connected') return
+    this._applyGroups(this._desiredGroups)
   }
 
   /** Record a scan-progress transition and schedule a throttled change emit. The
@@ -2031,6 +2092,7 @@ export class PerforceClient {
   /** Reconcile the live ResourceGroups with the freshly computed groups: create
    *  new ones, update existing, dispose those that vanished. */
   private _applyGroups(groups: readonly DesiredGroup[]): void {
+    this._desiredGroups = groups
     const seen = new Set<string>()
     for (const group of groups) {
       seen.add(group.id)
@@ -5663,8 +5725,7 @@ export class PerforceClient {
    * Read back the sync point a `p4 sync` just established: the newest submitted
    * change touching `scopes` as of `revision` — `p4 changes -s submitted -m 1
    * <spec><revision>`. With the get having just landed, that IS the scope's have
-   * point, and unlike the `#have` probe it is an INDEX query: the cost tracks the
-   * history, not the number of files in scope (see `docs/pitfalls.md`).
+   * point.
    *
    * The caller passes the spec it synced with, verbatim: `@4521` for a get-to-
    * changelist, `#head`/`''` for a get-latest, `#4` for the timeline's per-file
@@ -5677,31 +5738,58 @@ export class PerforceClient {
    * not be in this scope's history at all (the Explorer's "Get Revision…" picks
    * a target without regard to what it changed).
    *
+   * The cost is the WIDTH of the scope, not the answer (see
+   * {@link SYNC_POINT_READBACK_EXEC} for the measured table) — which is why the
+   * budget is a parameter: the caller awaits one attempt under the narrow
+   * window, and on `timedOut` asks again under {@link
+   * SYNC_POINT_READBACK_SLOW_EXEC} off the get's critical path.
+   *
    * `failed: true` covers "could not ask" (p4 failed or timed out): the caller
-   * records NOTHING, because an unreadable sync point must not be invented.
-   * `{ id: null, failed: false }` is a real answer — nothing here was ever
-   * submitted.
+   * records NOTHING, because an unreadable sync point must not be invented —
+   * `timedOut` is what tells it apart from "cannot ever be answered", i.e. a
+   * window that expired versus a p4 that refused. `{ id: null, failed: false }`
+   * is a real answer — nothing here was ever submitted, and it is the ONE shape
+   * that may be written down as a tombstone, so a timed-out attempt must never be
+   * reported as it (the two are ordered, not tested together).
    */
   async readGraphSyncPoint(
     scopes: readonly string[],
     revision: string,
-  ): Promise<{ id: string | null; failed: boolean }> {
-    if (scopes.length === 0) return { id: null, failed: true }
+    exec: P4ExecOptions = SYNC_POINT_READBACK_EXEC,
+  ): Promise<{ id: string | null; failed: boolean; timedOut: boolean }> {
+    if (scopes.length === 0) return { id: null, failed: true, timedOut: false }
     try {
       const specs = scopes.map((s) => `${s}${revision}`)
       const started = Date.now()
       const res = await this._p4.execRecords(
         ['changes', '-s', 'submitted', '-m', '1', ...specs],
-        SYNC_POINT_READBACK_EXEC,
+        exec,
       )
       const elapsed = Date.now() - started
-      if (res.result.exitCode !== 0) {
+      // The expired window is judged FIRST, ahead of the exit code. `_spawn`
+      // resolves a timeout with the child's REAL exit code (`code ?? 1`), so a
+      // read-back that answered successfully a moment before the kill landed
+      // arrives as `exitCode: 0` with its stdout already discarded — read as an
+      // answer, that is a tombstone ("nothing synced here") for a scope that just
+      // synced, and it retires every wider record standing behind it. A window
+      // that expired is never an answer, whatever the exit code says. (The other
+      // two branches that also resolve with an empty stdout — the output cap and
+      // a decode failure — cannot be reached by a `-m 1` answer.)
+      if (res.result.timedOut === true) {
         this._log?.(
-          `[perforce] sync point read-back failed (exit ${res.result.exitCode}, ${elapsed}ms): ${res.result.stderr
+          `[perforce] sync point read-back timed out after ${elapsed}ms: ${res.result.stderr
             .trim()
             .slice(0, 200)}`,
         )
-        return { id: null, failed: true }
+        return { id: null, failed: true, timedOut: true }
+      }
+      if (res.result.exitCode !== 0) {
+        this._log?.(
+          `[perforce] sync point read-back failed (exit ${
+            res.result.exitCode
+          }): ${res.result.stderr.trim().slice(0, 200)}`,
+        )
+        return { id: null, failed: true, timedOut: false }
       }
       const id = parseLatestChangeId(res.records)
       this._log?.(
@@ -5709,12 +5797,12 @@ export class PerforceClient {
           scopes.length
         } filespec(s), ${elapsed}ms)`,
       )
-      return { id, failed: false }
+      return { id, failed: false, timedOut: false }
     } catch (err) {
       this._log?.(
         `[perforce] sync point read-back skipped: ${err instanceof Error ? err.message : String(err)}`,
       )
-      return { id: null, failed: true }
+      return { id: null, failed: true, timedOut: false }
     }
   }
 

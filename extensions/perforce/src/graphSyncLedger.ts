@@ -83,7 +83,9 @@ export interface SyncLedgerRecord {
    *  editor since, while a query is the truth as of {@link at}. */
   readonly source: SyncLedgerSource
   /** Epoch ms the answer was established: a get's completion, or when a query
-   *  was DISPATCHED (not when it returned — see the write site). */
+   *  was DISPATCHED (not when it returned — see the write site). Writes can
+   *  arrive long after this stamp, so it — not arrival order — decides which of
+   *  two records for one scope stands (see {@link GraphSyncLedger.record}). */
   readonly at: number
   /**
    * False when the get that produced this record did not land every file at the
@@ -342,22 +344,45 @@ export class GraphSyncLedger {
     // query later, never a wrong answer.
     const merged = readRecords(this._file)
     const id = recordIdentity(record)
+    // The tie-break is `at`, not arrival: it says when the ANSWER was
+    // established, and an answer can land long after the operation that produced
+    // it (a wide scope's sync-point read-back takes tens of seconds, so its write
+    // arrives after anything the user did in the meantime). Arriving late must
+    // not undo "newest wins" — otherwise a superseded answer overwrites the
+    // record that superseded it, and the badge goes backwards. An EQUAL stamp
+    // goes to the write arriving now: equal means both answers were established
+    // within the same millisecond, so this one is not the older fact — and
+    // treating it as such would silently drop a real answer (a get and a query
+    // stamped in the same millisecond are the ordinary way that happens).
+    const superseded = merged.some((r) => recordIdentity(r) === id && r.at > record.at)
     const retired: SyncLedgerRecord[] = []
     const next = merged.filter((r) => {
-      if (recordIdentity(r) === id) return false
+      // Its CLAIM is dropped, but not its evidence: the operation really happened
+      // and `contradictedBy` needs only its scope and floor, which is how a
+      // stale-claiming get still retires the wider records it may have moved
+      // files out from under.
+      if (recordIdentity(r) === id) return superseded
       if (!contradictedBy(r, record)) return true
       retired.push(r)
       return false
     })
-    next.push(record)
+    if (!superseded) next.push(record)
     next.sort((a, b) => a.at - b.at)
     while (next.length > MAX_RECORDS) next.shift()
     this._records = next
     this._flush()
-    // A retirement clears the badge of a scope the user is usually not looking at
-    // (the wider one), and its absence is what the next load there reads as
-    // "never asked" — so without this line the ledger keeps no trace of the one
-    // change that explains a sync point vanishing from another tab.
+    // Both outcomes leave a trace, because both look identical from the graph: a
+    // record that is not there reads as "never asked", whether it was retired by
+    // a contradiction or dropped as the older answer to a scope someone else has
+    // since moved. Written to the Perforce output channel — the only place these
+    // two can be told apart after the fact.
+    if (superseded) {
+      this._log?.(
+        `[perforce] sync ledger: #${record.change || '(nothing)'} over ${describeScope(
+          record.paths,
+        )} dropped — an answer at or after ${new Date(record.at).toISOString()} is already recorded`,
+      )
+    }
     if (retired.length > 0) {
       const gone = retired.map((r) => `#${r.change || '(nothing)'} over ${describeScope(r.paths)}`)
       this._log?.(

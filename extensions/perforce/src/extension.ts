@@ -35,7 +35,7 @@ import { readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { ConcurrencyGate } from './concurrency.js'
 import { setP4CommandTimeoutSeconds, type P4Connection } from './p4Service.js'
-import { PerforceClient, type P4CacheOptions } from './client.js'
+import { PerforceClient, SYNC_POINT_READBACK_SLOW_EXEC, type P4CacheOptions } from './client.js'
 import type { SyncPreviewFile } from './syncParser.js'
 import { P4CacheDisk } from './p4CacheDisk.js'
 import { GraphSyncLedger, NO_REGRESSION } from './graphSyncLedger.js'
@@ -70,7 +70,12 @@ import {
   type SyncScopeTarget,
 } from './p4Filespec.js'
 import { carveReconcileFilespecs, carveReconcileTargets } from './reconcileCarve.js'
-import { clSpecOf, graphSyncConfirmKind, resolveCommonClient } from './graphSync.js'
+import {
+  clSpecOf,
+  directSyncPoint,
+  graphSyncConfirmKind,
+  resolveCommonClient,
+} from './graphSync.js'
 import {
   effectiveSyncScope,
   forceConfirmMessage,
@@ -397,6 +402,16 @@ async function pickSyncSpec(): Promise<{ spec: string; force: boolean } | undefi
  * the renderer for updates no eye can follow.
  */
 const PROGRESS_REPORT_INTERVAL_MS = 150
+
+/**
+ * Where a get is known to have landed without asking p4 — the row's changelist.
+ * `directSyncPoint` is the only producer: it decides this against the listing
+ * scope the renderer echoed back, and consuming that scope is what the judgment
+ * IS, so nothing but the answer needs to travel further.
+ */
+interface KnownLanding {
+  readonly change: string
+}
 
 export async function activate(context: ExtensionContext): Promise<void> {
   const root = workspace.rootPath
@@ -810,21 +825,6 @@ export async function activate(context: ExtensionContext): Promise<void> {
   }
 
   /**
-   * Write down where a get landed, for the graph's local-sync-point badge.
-   *
-   * The recorded changelist is READ BACK from p4 (`readGraphSyncPoint`), not
-   * taken from the request. Recording `@4521` outright would claim the scope is
-   * at 4521 even when 4521 never touched it — the Explorer's "Get Revision…"
-   * picks a target with no regard to what it changed, and a get to an unrelated
-   * changelist still moves every file to that moment.
-   *
-   * Awaited on purpose: the renderer re-reads the ledger as soon as the sync
-   * command resolves (`getThenRevalidate`), so the entry has to be on disk by
-   * then or the badge it just earned is missed. The read-back's tight timeout
-   * bounds that tail — a wedged p4 costs a few seconds and one missing entry,
-   * never a failed get.
-   */
-  /**
    * How far back the get behind a record can have carried a file, as a
    * changelist — the `floor` of the ledger entry it writes.
    *
@@ -844,43 +844,141 @@ export async function activate(context: ExtensionContext): Promise<void> {
     return 0
   }
 
+  /**
+   * Write down where a get landed, for the graph's local-sync-point badge.
+   *
+   * The recorded changelist is READ BACK from p4 (`readGraphSyncPoint`), not
+   * taken from the request. Recording `@4521` outright would claim the scope is
+   * at 4521 even when 4521 never touched it — the Explorer's "Get Revision…"
+   * picks a target with no regard to what it changed, and a get to an unrelated
+   * changelist still moves every file to that moment.
+   *
+   * A get started from a graph row is the one case where the target IS the
+   * answer: that row exists because its changelist touched something in the
+   * scope the listing was filtered by, so a get covering that scope must land on
+   * it. `knownLanding` carries that proof (`directSyncPoint` made it, from the
+   * listing scope the renderer echoed back) and skips the read-back entirely.
+   *
+   * Awaited on purpose: the renderer re-reads the ledger as soon as the sync
+   * command resolves (`getThenRevalidate`), so the entry has to be on disk by
+   * then or the badge it just earned is missed. The read-back's tight timeout
+   * bounds that tail — a wedged p4 costs a few seconds and one missing entry,
+   * never a failed get.
+   *
+   * That window is only wide enough for a file scope, though: the read-back's
+   * cost is the scope's WIDTH (measured 12.8s for a mid subtree, 27.3s for a
+   * workspace root — the full table is on `SYNC_POINT_READBACK_EXEC`). So a
+   * timeout is not the end of the question, it is the signal to ask it again
+   * under the wide budget with nobody waiting — the `timedOut` branch below. A
+   * timeout that is NOT retried leaves the badge answering with whatever older
+   * record covers the scope, which reads to the user as "my get didn't update
+   * the graph" (the real-machine report this branch exists for).
+   */
   const recordSyncPoint = async (
     target: PerforceClient,
     spec: string,
     scope: readonly SyncScopeTarget[],
     outcome: { complete: boolean },
+    /** Where the get is known to have landed without asking p4 (see
+     *  `directSyncPoint`). Present = that answer is recorded as-is. */
+    knownLanding?: KnownLanding,
   ): Promise<void> => {
     if (!ledger || scope.length === 0) return
     const filespecs = buildSyncFilespecs(scope)
     if (filespecs.length === 0) return
-    const read = await target.readGraphSyncPoint(filespecs, spec)
-    // No answer (p4 gone / timed out) records nothing: an unreadable sync point
-    // must not be invented. An EMPTY answer is a real one — "nothing of this
-    // scope is synced", which is where a get that landed the scope before its
-    // first change, or back before the file existed, really ends up. It is
-    // written as a tombstone for the same reason a query's empty answer is: an
-    // older, wider record must not keep claiming this scope sits at a changelist
-    // the user has just pulled it out of.
-    if (read.failed) return
-    if (read.id === null) {
-      ledger.recordEmpty(target.root, scope, Date.now(), 'sync')
-      log(`[perforce] sync ledger: nothing synced for ${scopeTextOf(filespecs)}`)
+    // The moment the get finished. `at` says when the ANSWER was established, not
+    // when it was written: the read-back below can land tens of seconds later
+    // under the slow budget, and the ledger drops any write older than the record
+    // it would replace — so a late-landing answer cannot move the badge backwards.
+    const at = Date.now()
+    // An EMPTY answer is a real one — "nothing of this scope is synced", which is
+    // where a get that landed the scope before its first change, or back before
+    // the file existed, really ends up. It is written as a tombstone for the same
+    // reason a query's empty answer is: an older, wider record must not keep
+    // claiming this scope sits at a changelist the user has just pulled it out of.
+    const store = (read: { id: string | null }): void => {
+      if (read.id === null) {
+        ledger.recordEmpty(target.root, scope, at, 'sync')
+        log(`[perforce] sync ledger: nothing synced for ${scopeTextOf(filespecs)}`)
+        return
+      }
+      ledger.record({
+        clientRoot: target.root,
+        paths: scope,
+        change: read.id,
+        source: 'sync',
+        at,
+        complete: outcome.complete,
+        floor: specFloor(spec),
+      })
+      log(
+        `[perforce] sync ledger: #${read.id} for ${scopeTextOf(filespecs)}${
+          outcome.complete ? '' : ' (partial)'
+        }`,
+      )
+    }
+    if (knownLanding !== undefined) {
+      // p4's answer is already known, so the read-back — whose cost is the
+      // scope's WIDTH, tens of seconds over a workspace root — is skipped: the
+      // row exists because its changelist touched something inside the listing
+      // scope, and this get covers that scope, so asking would only confirm it.
+      //
+      // The coverage premise is NOT re-checked here. `directSyncPoint` is the
+      // only producer of this value and it is checked there, against these very
+      // two scopes; a second evaluation of the same call would be a tautology
+      // pretending to be a guard. The invariant is held by that single producer
+      // plus the command-level test that drives it (`graphSyncToChangeLedger`).
+      //
+      // No tombstone can arise on this path either (the claim names a
+      // changelist, and `spec` went through `clSpecOf`) and no poke is needed
+      // (the entry is on disk before this command resolves, so the renderer's
+      // `getThenRevalidate` already reads it). Both exist only on the read-back
+      // path below.
+      store({ id: knownLanding.change })
+      log(
+        `[perforce] sync ledger: ${scopeTextOf(filespecs)} — no read-back (this get covers the row's listing)`,
+      )
       return
     }
-    ledger.record({
-      clientRoot: target.root,
-      paths: scope,
-      change: read.id,
-      source: 'sync',
-      at: Date.now(),
-      complete: outcome.complete,
-      floor: specFloor(spec),
-    })
-    log(
-      `[perforce] sync ledger: #${read.id} for ${scopeTextOf(filespecs)}${
-        outcome.complete ? '' : ' (partial)'
-      }`,
-    )
+    const read = await target.readGraphSyncPoint(filespecs, spec)
+    if (!read.failed) {
+      store(read)
+      return
+    }
+    // "Could not ask" records nothing: an unreadable sync point must not be
+    // invented. A p4 that refused will refuse again — only a window that expired
+    // is worth asking a second time, since the query itself is fine.
+    if (!read.timedOut) return
+    const started = Date.now()
+    void target
+      .readGraphSyncPoint(filespecs, spec, SYNC_POINT_READBACK_SLOW_EXEC)
+      .then((late) => {
+        if (late.failed) {
+          log(
+            `[perforce] sync ledger: ${scopeTextOf(filespecs)} gave no answer twice; nothing recorded`,
+          )
+          return
+        }
+        store(late)
+        log(
+          `[perforce] sync ledger: ${scopeTextOf(filespecs)} read back late (${Date.now() - started}ms)`,
+        )
+        // Nothing about the workspace changed, but the graph's badge is renderer
+        // state read from this ledger and its auto-refresh only watches the SCM
+        // observables — without this the entry sits invisible until the user
+        // happens to reload the graph, which is the whole complaint. One
+        // re-publish per late entry, and late entries land at user pace.
+        target.notifyScmStateChanged()
+      })
+      .catch((err: unknown) => {
+        // Fire-and-forget: an unhandled rejection here would take down the
+        // extension host (red line), and the get it belongs to is long done.
+        log(
+          `[perforce] sync ledger late read-back failed: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        )
+      })
   }
 
   /**
@@ -913,6 +1011,14 @@ export async function activate(context: ExtensionContext): Promise<void> {
        * host paths, record nothing".
        */
       ledgerScope: readonly SyncScopeTarget[]
+      /**
+       * Where this get is known to have landed without asking p4 — only the
+       * graph's row menu can establish this (see `directSyncPoint`). Forwarded
+       * verbatim to {@link recordSyncPoint}; carried in these options rather
+       * than threaded through a second call path so every gate between a run
+       * and its ledger entry stays in one place.
+       */
+      knownLanding?: KnownLanding
     },
   ): Promise<void> => {
     const res = await window.withProgress(
@@ -1067,18 +1173,24 @@ export async function activate(context: ExtensionContext): Promise<void> {
     // ("exit 0, nothing applied, no up-to-date line") is not — it could mean
     // anything, so nothing is recorded rather than a guess.
     if (summary?.upToDate === true || !nothingHappened) {
-      await recordSyncPoint(target, spec, options.ledgerScope, {
-        // A run that refused or skipped files leaves them at their OLD revision,
-        // so the scope is only known to be synced AT LEAST this far. Recorded
-        // either way — "I pulled it, why is nothing shown?" is worse than a
-        // labelled upper bound — but the label has to survive to the badge.
-        complete:
-          summary !== undefined &&
-          summary.refusedModified === 0 &&
-          summary.refusedOverwrite === 0 &&
-          summary.keptOpen === 0 &&
-          summary.mustResolve === 0,
-      })
+      await recordSyncPoint(
+        target,
+        spec,
+        options.ledgerScope,
+        {
+          // A run that refused or skipped files leaves them at their OLD revision,
+          // so the scope is only known to be synced AT LEAST this far. Recorded
+          // either way — "I pulled it, why is nothing shown?" is worse than a
+          // labelled upper bound — but the label has to survive to the badge.
+          complete:
+            summary !== undefined &&
+            summary.refusedModified === 0 &&
+            summary.refusedOverwrite === 0 &&
+            summary.keptOpen === 0 &&
+            summary.mustResolve === 0,
+        },
+        options.knownLanding,
+      )
     }
     if (summary?.upToDate && nothingHappened) {
       await window.showInformationMessage(
@@ -2753,6 +2865,46 @@ export async function activate(context: ExtensionContext): Promise<void> {
             )
             if (picked !== BTN_SYNC) return
           }
+          // Whether this get can write the row's changelist down without asking
+          // p4 first (see `directSyncPoint`). Judged here because the listing
+          // scope has to be resolved by the very function that served the
+          // listing — anything derived from THIS get's own scope would make the
+          // coverage test trivially true, which is exactly the mistake the
+          // multi-directory dialog would otherwise hide.
+          let knownLanding: KnownLanding | undefined
+          // No `listScope` = nothing was established, and the get falls back to
+          // asking p4 — never to guessing. Deliberately NOT "resolve an absent
+          // listScope as the opened folder": that would hand a caller which only
+          // echoed `clientRoot` a listing scope that makes the coverage test pass
+          // by construction (the unscoped get covers that very folder), which is
+          // the over-report this whole judgment exists to prevent.
+          if (req.listScope !== undefined) {
+            const listed = resolveGraphScope(req.listScope)
+            if (listed.kind !== 'ok') {
+              log(`[perforce] sync ledger: read-back (row's listing unusable: ${listed.kind})`)
+            } else {
+              // The bare id: `spec` is the `@CL` p4 syntax, while the ledger
+              // stores the id the graph's rows carry.
+              const claim = directSyncPoint({
+                change: spec.slice(1),
+                getScope: ledgerScope,
+                getClientRoot: target.root,
+                listed: {
+                  scope: listed.ledgerScope,
+                  clientRoot: listed.target.root,
+                  wholeRepo: req.listScope.wholeRepo === true,
+                },
+                ...(req.clientRoot !== undefined ? { displayedClientRoot: req.clientRoot } : {}),
+              })
+              if (claim.ok) {
+                knownLanding = { change: claim.change }
+              } else {
+                // Only a request that CLAIMED to know says why it was not
+                // believed; every other entry point never claimed anything.
+                log(`[perforce] sync ledger: read-back (row claim unusable: ${claim.reason})`)
+              }
+            }
+          }
           // Provenance for the graph's gets: the client logs every sync's counts
           // (and the `-f` marker), but only this line says the get came from a
           // graph row and which scope it asked for.
@@ -2765,6 +2917,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
             scope: filespecs,
             ...(scopes !== undefined && scopes.length > 0 ? { scopeTargets: scopes } : {}),
             ledgerScope,
+            ...(knownLanding !== undefined ? { knownLanding } : {}),
             ...(req.force === true ? { force: true } : {}),
           })
         }),
