@@ -361,11 +361,16 @@ function resizeFocusedPart(
       if (dim === 'height') setClamped(layout, 'panel', sizes.panel + step, PANEL_MIN, PANEL_MAX)
       else resizeCenterWidth(layout, delta)
       return
-    case PartId.EditorArea:
-      // Editor taller = panel shorter (and vice versa).
+    case PartId.EditorArea: {
+      // A neighbour group along the requested axis owns the space between them;
+      // only when the editor grid has no such split does the resize fall back to
+      // the chrome (editor taller = panel shorter, wider = a narrower sidebar).
+      const groups = accessor.get(IEditorGroupsService)
+      if (groups.resizeGroup(groups.activeGroup, dim, step)) return
       if (dim === 'height') setClamped(layout, 'panel', sizes.panel - step, PANEL_MIN, PANEL_MAX)
       else resizeCenterWidth(layout, delta)
       return
+    }
   }
 }
 

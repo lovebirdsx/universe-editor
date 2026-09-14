@@ -6,7 +6,7 @@
  *  resize adjacent leaves.
  *--------------------------------------------------------------------------------------------*/
 
-import { useRef, useSyncExternalStore, type ReactNode, type CSSProperties } from 'react'
+import { useEffect, useRef, useSyncExternalStore, type ReactNode, type CSSProperties } from 'react'
 import {
   Grid,
   GridBranchNode,
@@ -33,16 +33,9 @@ function useGridVersion<T extends IGridView>(grid: Grid<T>): number {
   )
 }
 
-function totalSize<T extends IGridView>(children: GridNode<T>[]): number {
-  let sum = 0
-  for (const c of children) sum += c.size
-  return sum
-}
-
 // BranchNode is a React component (not a plain function) so it can hold a ref
-// to the container div and compute a proportional flex delta from the raw pixel
-// delta emitted by Sash.  This prevents the unit mismatch that would otherwise
-// occur when flex sizes and pixel deltas are added directly.
+// to its container div: the root branch reports the pixel size the grid needs
+// for every resize (see `Grid.setContainerSize`).
 function BranchNode<T extends IGridView>({
   grid,
   branch,
@@ -54,6 +47,7 @@ function BranchNode<T extends IGridView>({
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const isHorizontal = branch.orientation === Orientation.Horizontal
+  const isRoot = branch === grid.root
   const flexDir = isHorizontal ? 'row' : 'column'
   const style: CSSProperties = {
     display: 'flex',
@@ -65,6 +59,17 @@ function BranchNode<T extends IGridView>({
     height: '100%',
   }
 
+  useEffect(() => {
+    if (!isRoot) return
+    const el = containerRef.current
+    if (!el) return
+    const report = () => grid.setContainerSize({ width: el.offsetWidth, height: el.offsetHeight })
+    report()
+    const observer = new ResizeObserver(report)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [grid, isRoot])
+
   const items: ReactNode[] = []
   branch.children.forEach((child, i) => {
     items.push(renderNode(grid, child, viewFactory))
@@ -74,20 +79,7 @@ function BranchNode<T extends IGridView>({
         <Sash
           key={`sash-${branch.orientation}-${i}-${left?.view.viewId ?? i}`}
           orientation={isHorizontal ? 'vertical' : 'horizontal'}
-          onResize={(delta) => {
-            if (!left) return
-            const el = containerRef.current
-            const containerPx = el ? (isHorizontal ? el.offsetWidth : el.offsetHeight) : 0
-            if (containerPx === 0) return
-            // Convert the raw pixel delta to a proportional flex-unit delta so
-            // that the resize feels 1:1 regardless of the panel's actual size.
-            const flexTotal = totalSize(branch.children) || 1
-            const flexDelta = (delta / containerPx) * flexTotal
-            const dim = isHorizontal
-              ? { width: child.size + flexDelta }
-              : { height: child.size + flexDelta }
-            grid.resizeView(left.view, dim)
-          }}
+          onResize={(delta) => grid.resizeSash(branch, i, delta)}
         />,
       )
     }

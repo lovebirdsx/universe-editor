@@ -25,6 +25,8 @@ Workbench 风格 React UI 基础设施。**依赖 React，不依赖 Electron**�
 | `text/fuzzyMatch` | 零依赖模糊匹配纯函数（`fuzzyMatchField` / `scoreFuzzyMatch` / `wordMatchField`） |
 | `theme/tokens.css` | 设计 token（间距/圆角/字号/字重/行高/阴影/z-index），走 `@universe-editor/workbench-ui/tokens.css` 子路径引入 |
 
+**`GridLayout` 与 `Grid` 的分工**：节点 `size` 是无单位 flex 权重，而 `IGridView` 的 min/max 与所有调用方的步进都是像素，所以换算的唯一入口在 `Grid` 内——`GridLayout` 只负责把根容器的像素尺寸经 `ResizeObserver` 上报给 `grid.setContainerSize()`（漏上报则 resize 静默不动），sash 走 `grid.resizeSash(branch, i, deltaPx)`、键盘走 `grid.resizeViewByDelta(view, axis, deltaPx)`。单测里 happy-dom 既不做布局也不 fire RO，须先 `defineProperty` 根 `.grid-branch` 的 `offsetWidth/offsetHeight`，再手动 fire 假 `ResizeObserver` 的回调（照 `useMarkdownPreviewScrollRestore.test.tsx` 的写法）。
+
 ## 展示组件 + 宿主 wrapper 范式
 
 `feedback/*` 下的组件都是**纯展示**：props = 数据 + 回调，**不自带 Portal、不碰 service**。`apps/editor` 侧保留同名薄 wrapper，负责 `useService` 订阅 → `createPortal` → 拍平成 props（见 editor 的 `NotificationsToast`/`QuickInputPortal`/`DialogHost`/`ProgressDialogHost`）。新增 feedback 类组件按此分层，service 接口类型可从 platform `import type`（单向合法），但**不引入 DI**。

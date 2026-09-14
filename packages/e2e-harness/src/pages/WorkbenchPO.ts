@@ -1,6 +1,7 @@
 import { expect, type Page } from '@playwright/test'
 import type {
   E2EDisposableLeakReport,
+  E2EEditorGroupsLayout,
   E2EOpenWindow,
   E2EUpdateState,
 } from '@universe-editor/e2e-contract'
@@ -151,6 +152,15 @@ export class WorkbenchPO {
 
   async getContextKey<T = unknown>(key: string): Promise<T> {
     return this.page.evaluate((k) => window.__E2E__!.getContextKey(k) as unknown, key) as Promise<T>
+  }
+
+  /**
+   * Every editor group's pixel box (visual order) plus the container they share.
+   * The pixel values come from the grid's own flex→pixel conversion, so a spec
+   * can assert that a resize moved a split by an exact number of pixels.
+   */
+  async getEditorGroupsLayout(): Promise<E2EEditorGroupsLayout> {
+    return this.page.evaluate(() => window.__E2E__!.getEditorGroupsLayout())
   }
 
   /**

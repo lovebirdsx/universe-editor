@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
   ContextKeyService,
+  IEditorGroupsService,
   ILayoutService,
   InstantiationService,
   KeybindingsRegistry,
@@ -39,15 +40,27 @@ function makeLayout(
   return { mock, setSize }
 }
 
+/**
+ * `handled` stands in for "the editor grid owns a split along that axis": false
+ * (the default) is the single-group case, where the chrome resize still runs.
+ */
+function makeGroups(handled = false) {
+  const activeGroup = { id: 7 }
+  const resizeGroup = vi.fn(() => handled)
+  const mock = { _serviceBrand: undefined, activeGroup, resizeGroup } as never
+  return { mock, resizeGroup, activeGroup }
+}
+
 describe('Keyboard resize of the focused part', () => {
   const disposables: IDisposable[] = []
   afterEach(() => {
     while (disposables.length > 0) disposables.pop()?.dispose()
   })
 
-  function exec(action: new () => never, layoutMock: never): void {
+  function exec(action: new () => never, layoutMock: never, groupsMock?: never): void {
     const services = new ServiceCollection()
     services.set(ILayoutService, layoutMock)
+    services.set(IEditorGroupsService, groupsMock ?? (makeGroups().mock as never))
     const inst = new InstantiationService(services)
     disposables.push(registerAction2(action))
     inst.invokeFunction((accessor) => {
@@ -119,7 +132,7 @@ describe('Keyboard resize of the focused part', () => {
     expect(a.setSize).toHaveBeenCalledWith('sidebar', 300 - RESIZE_STEP)
   })
 
-  it('Editor focused: width is a no-op when both sidebars are hidden', () => {
+  it('Editor focused: single group + both sidebars hidden: width is a no-op', () => {
     const a = makeLayout(PartId.EditorArea, {
       hidden: [PartId.SecondarySideBar, PartId.SideBar],
     })
@@ -144,6 +157,53 @@ describe('Keyboard resize of the focused part', () => {
     exec(IncreaseViewWidthAction as never, a.mock)
     exec(IncreaseViewHeightAction as never, a.mock)
     expect(a.setSize).not.toHaveBeenCalled()
+  })
+
+  // -- The editor area with a sibling group: the grid owns the split ----------
+
+  it('Editor focused: a sibling group absorbs the width change instead of the sidebar', () => {
+    const a = makeLayout(PartId.EditorArea)
+    const groups = makeGroups(true)
+    exec(IncreaseViewWidthAction as never, a.mock, groups.mock)
+    expect(groups.resizeGroup).toHaveBeenCalledWith(groups.activeGroup, 'width', RESIZE_STEP)
+    expect(a.setSize).not.toHaveBeenCalled()
+
+    const b = makeLayout(PartId.EditorArea)
+    const shrink = makeGroups(true)
+    exec(DecreaseViewWidthAction as never, b.mock, shrink.mock)
+    expect(shrink.resizeGroup).toHaveBeenCalledWith(shrink.activeGroup, 'width', -RESIZE_STEP)
+    expect(b.setSize).not.toHaveBeenCalled()
+  })
+
+  it('Editor focused: a vertically split group absorbs the height change', () => {
+    const a = makeLayout(PartId.EditorArea)
+    const groups = makeGroups(true)
+    exec(IncreaseViewHeightAction as never, a.mock, groups.mock)
+    expect(groups.resizeGroup).toHaveBeenCalledWith(groups.activeGroup, 'height', RESIZE_STEP)
+    expect(a.setSize).not.toHaveBeenCalled()
+  })
+
+  it('Editor focused: falls back to the chrome when the grid has no such split', () => {
+    const height = makeLayout(PartId.EditorArea)
+    const noSplit = makeGroups(false)
+    exec(IncreaseViewHeightAction as never, height.mock, noSplit.mock)
+    expect(noSplit.resizeGroup).toHaveBeenCalledWith(noSplit.activeGroup, 'height', RESIZE_STEP)
+    expect(height.setSize).toHaveBeenCalledWith('panel', 300 - RESIZE_STEP)
+
+    const width = makeLayout(PartId.EditorArea)
+    const noSplit2 = makeGroups(false)
+    exec(IncreaseViewWidthAction as never, width.mock, noSplit2.mock)
+    expect(width.setSize).toHaveBeenCalledWith('secondarySidebar', 300 - RESIZE_STEP)
+  })
+
+  it('other parts focused: the editor group is never resized', () => {
+    for (const part of [PartId.SideBar, PartId.SecondarySideBar, PartId.Panel]) {
+      const layout = makeLayout(part)
+      const groups = makeGroups(true)
+      exec(IncreaseViewWidthAction as never, layout.mock, groups.mock)
+      exec(IncreaseViewHeightAction as never, layout.mock, groups.mock)
+      expect(groups.resizeGroup).not.toHaveBeenCalled()
+    }
   })
 })
 

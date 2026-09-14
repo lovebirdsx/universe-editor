@@ -20,6 +20,7 @@ import {
   GroupsArrangement,
   GroupsOrder,
   Grid,
+  type GridAxis,
   type GridBranchNode,
   type GridNode,
   type GridLeafNode,
@@ -259,6 +260,20 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
     target.model.dispose()
     this._onDidRemoveGroup.fire(target)
     this._logger.info(`removeGroup id=${target.id}`)
+  }
+
+  resizeGroup(group: IEditorGroup, axis: GridAxis, deltaPx: number): boolean {
+    const target = this._resolve(group)
+    if (!target) return false
+    const handled = this._grid.resizeViewByDelta(target, axis, deltaPx)
+    // Claiming the axis without a usable pixel size looks exactly like a dead
+    // shortcut, so say so: the React layer reports the container through
+    // `Grid.setContainerSize` and nothing can be converted before it does.
+    const container = this._grid.getContainerSize()
+    if (handled && (!container || container[axis] <= 0)) {
+      this._logger.warn(`resizeGroup: editor grid has no usable ${axis}; resize ignored`)
+    }
+    return handled
   }
 
   moveGroup(group: IEditorGroup, location: IEditorGroup, direction: GroupDirection): IEditorGroup {

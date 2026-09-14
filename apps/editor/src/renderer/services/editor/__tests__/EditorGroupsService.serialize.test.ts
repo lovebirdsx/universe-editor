@@ -511,7 +511,7 @@ describe('EditorGroupsService serialization', () => {
     // becomes Root(Horizontal)[Vertical(Horizontal(G1,G3), G2)].
     // The previous sequential-addView restore reconstructed this incorrectly as
     // Root(Horizontal)[G1, Vertical(G3,G2)] — two columns, right has two rows —
-    // which also broke the row sash (resizeView silent no-op on nested branch).
+    // which also broke the row sash (it moved the wrong split).
     const src = new EditorGroupsService()
     // G1 in top row
     src.activeGroup.openEditor(new FakeEditorInput())

@@ -219,37 +219,138 @@ describe('Grid — addView equal split', () => {
   })
 })
 
-describe('Grid — resizeView', () => {
-  it('resizeView updates the leaf size and fires onDidChange', () => {
+describe('Grid — container size + pixel resize', () => {
+  it('resizeViewByDelta grows the leaf by the requested pixels and fires onDidChange', () => {
     const a = new V('a')
     const b = new V('b')
     const grid = new Grid(a)
     grid.addView(b, 200, a, Direction.Right)
+    grid.setContainerSize({ width: 1000, height: 600 })
     const spy = vi.fn()
     grid.onDidChange(spy)
-    grid.resizeView(a, { width: 300 })
-    expect(grid.getLeafSize(a)).toBe(300)
+
+    expect(grid.resizeViewByDelta(a, 'width', 100)).toBe(true)
+
+    // Two equal 500-flex leaves in a 1000px container: 1 flex == 1px.
+    expect(grid.getLeafSize(a)).toBe(600)
+    expect(grid.getLeafSize(b)).toBe(400)
+    expect(grid.getViewSize(a)).toEqual({ width: 600, height: 600 })
     expect(spy).toHaveBeenCalledOnce()
   })
 
-  it('resizeView clamps to the view minimum', () => {
+  it('clamps to the view minimum in pixels, not in flex units', () => {
     const a = new V('a')
     const b = new V('b')
     const grid = new Grid(a)
     grid.addView(b, 200, a, Direction.Right)
-    grid.resizeView(a, { width: 10 })
-    expect(grid.getLeafSize(a)).toBe(a.minimumWidth)
+    // 600px container over 1000 flex → 1 flex == 0.6px, so the old flex-space
+    // clamp (minimumWidth = 50 flex) would have stopped at 30px.
+    grid.setContainerSize({ width: 600, height: 600 })
+
+    expect(grid.resizeViewByDelta(a, 'width', -400)).toBe(true)
+
+    expect(grid.getViewSize(a)?.width).toBeCloseTo(50)
+    expect(grid.getViewSize(b)?.width).toBeCloseTo(550)
+    expect(grid.getLeafSize(a)).toBeCloseTo(50 / 0.6)
   })
 
-  it('resizeView with no relevant axis is a no-op', () => {
+  it('stops at the sibling minimum instead of squashing it', () => {
+    const a = new V('a')
+    const b = new V('b')
+    const grid = new Grid(a)
+    grid.addView(b, 200, a, Direction.Right)
+    grid.setContainerSize({ width: 600, height: 600 })
+
+    expect(grid.resizeViewByDelta(a, 'width', 1000)).toBe(true)
+
+    expect(grid.getViewSize(a)?.width).toBeCloseTo(550)
+    expect(grid.getViewSize(b)?.width).toBeCloseTo(50)
+  })
+
+  it('keeps the divider movable when the container is narrower than both minimums', () => {
+    const a = new V('a')
+    const b = new V('b')
+    const grid = new Grid(a)
+    grid.addView(b, 200, a, Direction.Right)
+    // 60px for two 50px minimums: no split of it can satisfy both, and the
+    // container is to blame — freezing the divider at 30/30 would leave the
+    // sash dead and the shortcut claiming an axis it never moves.
+    grid.setContainerSize({ width: 60, height: 600 })
+
+    expect(grid.resizeViewByDelta(a, 'width', 100)).toBe(true)
+
+    expect(grid.getViewSize(a)?.width).toBeCloseTo(60)
+    expect(grid.getViewSize(b)?.width).toBeCloseTo(0)
+
+    expect(grid.resizeViewByDelta(a, 'width', -100)).toBe(true)
+
+    expect(grid.getViewSize(a)?.width).toBeCloseTo(0)
+    expect(grid.getViewSize(b)?.width).toBeCloseTo(60)
+  })
+
+  it('drags a sash in an over-constrained container too', () => {
+    const a = new V('a')
+    const b = new V('b')
+    const grid = new Grid(a)
+    grid.addView(b, 200, a, Direction.Right)
+    grid.setContainerSize({ width: 60, height: 600 })
+
+    grid.resizeSash(grid.root, 0, 12)
+
+    expect(grid.getViewSize(a)?.width).toBeCloseTo(42)
+    expect(grid.getViewSize(b)?.width).toBeCloseTo(18)
+  })
+
+  it('resizes without a container measurement is a no-op', () => {
     const a = new V('a')
     const b = new V('b')
     const grid = new Grid(a)
     grid.addView(b, 200, a, Direction.Right)
     const spy = vi.fn()
     grid.onDidChange(spy)
-    grid.resizeView(a, { height: 500 }) // parent is horizontal
+
+    // Handled (the split exists) but nothing can move without a measurement.
+    expect(grid.resizeViewByDelta(a, 'width', 100)).toBe(true)
+    expect(grid.getLeafSize(a)).toBe(500)
     expect(spy).not.toHaveBeenCalled()
+  })
+
+  it('setContainerSize itself never fires onDidChange', () => {
+    const grid = new Grid(new V('a'))
+    const spy = vi.fn()
+    grid.onDidChange(spy)
+    grid.setContainerSize({ width: 1000, height: 600 })
+    grid.setContainerSize({ width: 0, height: 0 })
+    expect(spy).not.toHaveBeenCalled()
+    expect(grid.getContainerSize()).toEqual({ width: 0, height: 0 })
+  })
+
+  it('resizeViewByDelta with no split along the axis reports fallback', () => {
+    const a = new V('a')
+    const b = new V('b')
+    const grid = new Grid(a)
+    grid.addView(b, 200, a, Direction.Right)
+    grid.setContainerSize({ width: 1000, height: 600 })
+    const spy = vi.fn()
+    grid.onDidChange(spy)
+
+    expect(grid.resizeViewByDelta(a, 'height', 500)).toBe(false) // parent is horizontal
+    expect(spy).not.toHaveBeenCalled()
+  })
+
+  it('resizeViewByDelta on a single-group grid reports fallback', () => {
+    const a = new V('a')
+    const grid = new Grid(a)
+    grid.setContainerSize({ width: 1000, height: 600 })
+    expect(grid.resizeViewByDelta(a, 'width', 100)).toBe(false)
+    expect(grid.resizeViewByDelta(a, 'height', 100)).toBe(false)
+  })
+
+  it('getViewSize is undefined before a container measurement', () => {
+    const a = new V('a')
+    const grid = new Grid(a)
+    expect(grid.getViewSize(a)).toBeUndefined()
+    expect(grid.getContainerSize()).toBeUndefined()
   })
 })
 
@@ -291,22 +392,26 @@ describe('Grid — serialize / deserialize', () => {
     const b = new V('b')
     const grid = new Grid(a)
     grid.addView(b, 200, a, Direction.Right)
-    grid.resizeView(a, { width: 250 })
+    grid.setContainerSize({ width: 1000, height: 600 })
+    grid.resizeViewByDelta(a, 'width', 100)
     const json = grid.serialize((v) => v.viewId)
     const leafA = json.root.children?.find((c) => c.type === 'leaf' && c.data === 'a')
-    expect(leafA?.size).toBe(250)
+    // 1000px over 1000 flex units makes 1px == 1 flex, so a literal, not
+    // `getLeafSize(a)` — that reads the very field serialization copied.
+    expect(leafA?.size).toBe(600)
+
+    const restored = Grid.deserialize<V>(json, (data) => new V(data as string))
+    expect(restored.getViews().map((v) => restored.getLeafSize(v))).toEqual([600, 400])
   })
 })
 
-describe('Grid — resizeView on nested branches', () => {
-  // Regression: for the layout Vertical(Horizontal(A, B), C) the sash between
-  // the top row and the bottom row calls resizeView(A, { height: ... }).  The
-  // old implementation looked only at A's immediate parent (Horizontal) and
-  // returned early because Horizontal ≠ Vertical, making the sash immovable.
-  // The fix walks up to the first ancestor whose parent has the matching
-  // orientation and resizes at that level.
+describe('Grid — resize on nested branches', () => {
+  // Regression: for the layout Vertical(Horizontal(A, B), C) a height resize
+  // requested through A (the keyboard path) must walk up past A's immediate
+  // parent (Horizontal) to the first ancestor split that runs along the axis.
+  // Looking only at the immediate parent made the request a silent no-op.
 
-  it('resizes the horizontal sub-branch when height is requested via its leftmost leaf', () => {
+  it('walks up from the leaf to the split that runs along the axis', () => {
     const a = new V('a')
     const b = new V('b')
     const c = new V('c')
@@ -315,25 +420,109 @@ describe('Grid — resizeView on nested branches', () => {
     grid.addView(b, 200, a, Direction.Down) // Vertical(A, B) inside root
     grid.addView(c, 200, a, Direction.Right) // split A right: Horizontal(A,C) replaces A
     // Now tree is Root(Horizontal)[Vertical(Horizontal(A,C), B)]
-    // Sash between Horizontal(A,C) and B calls resizeView(A, { height: ... })
+    grid.setContainerSize({ width: 1000, height: 600 })
     const spy = vi.fn()
     grid.onDidChange(spy)
     const prevSizeB = grid.getLeafSize(b)
-    grid.resizeView(a, { height: 300 })
-    // The resize must have fired and changed B's size (the sibling branch).
+    const prevSizeA = grid.getLeafSize(a)
+
+    expect(grid.resizeViewByDelta(a, 'height', 60)).toBe(true)
+
+    // The row and B trade height (300px each in a 600px container); the row's
+    // own horizontal split keeps its ratio.
     expect(spy).toHaveBeenCalledOnce()
     expect(grid.getLeafSize(b)).not.toBe(prevSizeB)
+    expect(grid.getLeafSize(a)).toBe(prevSizeA)
+    expect(grid.getViewSize(a)?.height).toBeCloseTo(360)
+    expect(grid.getViewSize(b)?.height).toBeCloseTo(240)
   })
 
-  it('resizeView with no relevant axis remains a no-op on a simple horizontal grid', () => {
-    const a = new V('a')
-    const b = new V('b')
-    const grid = new Grid(a)
-    grid.addView(b, 200, a, Direction.Right)
-    const spy = vi.fn()
-    grid.onDidChange(spy)
-    grid.resizeView(a, { height: 500 })
-    expect(spy).not.toHaveBeenCalled()
+  /** Root(H)[ V( H(A,B), C ), D ] — a tree `addView` cannot express. */
+  function nestedLayout() {
+    const v = { a: new V('a'), b: new V('b'), c: new V('c'), d: new V('d') }
+    const leaf = (data: keyof typeof v) => ({ type: 'leaf' as const, size: 500, data })
+    const grid = new Grid(v.a)
+    grid.rebuildFrom(
+      {
+        type: 'branch',
+        size: 1,
+        orientation: Orientation.Horizontal,
+        children: [
+          {
+            type: 'branch',
+            size: 500,
+            orientation: Orientation.Vertical,
+            children: [
+              {
+                type: 'branch',
+                size: 500,
+                orientation: Orientation.Horizontal,
+                children: [leaf('a'), leaf('b')],
+              },
+              leaf('c'),
+            ],
+          },
+          leaf('d'),
+        ],
+      },
+      (data) => v[data as keyof typeof v],
+    )
+    grid.setContainerSize({ width: 1000, height: 600 })
+    return { grid, v }
+  }
+
+  it('resizeSash on the inner split only moves that split', () => {
+    const { grid, v } = nestedLayout()
+    expect(grid.getViewSize(v.a)).toEqual({ width: 250, height: 300 })
+
+    const vBranch = grid.root.children[0]
+    if (!vBranch || vBranch.kind !== 'branch') throw new Error('expected a V branch')
+
+    grid.resizeSash(vBranch, 0, 50)
+
+    // The A|B row grew 50px taller, C gave the space up.
+    expect(grid.getViewSize(v.a)?.height).toBeCloseTo(350)
+    expect(grid.getViewSize(v.b)?.height).toBeCloseTo(350)
+    expect(grid.getViewSize(v.c)?.height).toBeCloseTo(250)
+    // The V|D split is untouched.
+    expect(grid.getViewSize(v.d)?.width).toBeCloseTo(500)
+  })
+
+  it('resizeSash on the root split moves the column split, not an inner one', () => {
+    // Regression: the A|B and the V|D splits both run horizontally, so resolving
+    // the root sash through its leftmost leaf (A) picks the inner A|B branch and
+    // silently resizes the wrong divider.
+    const { grid, v } = nestedLayout()
+
+    grid.resizeSash(grid.root, 0, 50)
+
+    expect(grid.getViewSize(v.d)?.width).toBeCloseTo(450)
+    expect(grid.getViewSize(v.a)?.width).toBeCloseTo(275)
+    expect(grid.getViewSize(v.a)?.height).toBeCloseTo(300)
+    expect(grid.getViewSize(v.c)?.height).toBeCloseTo(300)
+  })
+
+  it('the keyboard path resolves the same split as the sash', () => {
+    const viaSash = nestedLayout()
+    const viaKeyboard = nestedLayout()
+    const vBranch = viaSash.grid.root.children[0]
+    if (!vBranch || vBranch.kind !== 'branch') throw new Error('expected a V branch')
+
+    viaSash.grid.resizeSash(vBranch, 0, 50)
+    expect(viaKeyboard.grid.resizeViewByDelta(viaKeyboard.v.a, 'height', 50)).toBe(true)
+
+    expect(viaKeyboard.grid.getLeafSize(viaKeyboard.v.a)).toBeCloseTo(
+      viaSash.grid.getLeafSize(viaSash.v.a),
+    )
+    expect(viaKeyboard.grid.getLeafSize(viaKeyboard.v.b)).toBeCloseTo(
+      viaSash.grid.getLeafSize(viaSash.v.b),
+    )
+    expect(viaKeyboard.grid.getLeafSize(viaKeyboard.v.c)).toBeCloseTo(
+      viaSash.grid.getLeafSize(viaSash.v.c),
+    )
+    expect(viaKeyboard.grid.getLeafSize(viaKeyboard.v.d)).toBeCloseTo(
+      viaSash.grid.getLeafSize(viaSash.v.d),
+    )
   })
 })
 

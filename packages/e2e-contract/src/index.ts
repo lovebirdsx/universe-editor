@@ -60,6 +60,25 @@ export interface E2ELayoutSizes {
   readonly panel: number
 }
 
+export interface E2EEditorGroupLayout {
+  /** String form of the group id — matches the DOM `data-group-id` attribute. */
+  readonly id: string
+  readonly active: boolean
+  /** Flex weight inside the grid tree (unit-less; only ratios are meaningful). */
+  readonly flexSize: number
+  /** Pixels derived from the container size the renderer reported; 0 until then. */
+  readonly width: number
+  readonly height: number
+}
+
+export interface E2EEditorGroupsLayout {
+  readonly orientation: 'horizontal' | 'vertical'
+  readonly containerWidth: number
+  readonly containerHeight: number
+  /** Visual order (top-left to bottom-right): index 0 is the leftmost/topmost group. */
+  readonly groups: readonly E2EEditorGroupLayout[]
+}
+
 export interface E2EOpenWindow {
   readonly id: number
   /** Workspace folder fsPath, or null for an empty window. */
@@ -645,6 +664,12 @@ export interface E2EProbe {
   removeRecentWorkspace(fsPath: string): Promise<void>
   /** Returns current layout sizes (sidebar/secondarySidebar/panel in px). */
   getLayoutSizes(): E2ELayoutSizes
+  /**
+   * Every editor group's pixel box, in visual order, plus the container they
+   * share. Backs resize assertions (which split moved, and by how many pixels)
+   * without a spec reaching into the grid's flex weights or the DOM.
+   */
+  getEditorGroupsLayout(): E2EEditorGroupsLayout
   /**
    * Id of the active file icon theme ('' when None is selected — icons render
    * programmatically with the built-in Material SVGs). Backs the icon-theme

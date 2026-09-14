@@ -17,6 +17,7 @@ import {
   KeybindingsRegistry,
   LifecyclePhase,
   LogLevel,
+  Orientation,
   Severity,
   StatusBarAlignment,
   StorageScope,
@@ -126,6 +127,7 @@ import type { IScmBehindHintService } from '../services/scm/ScmBehindHintService
 import type { IAiDebugService } from '../../shared/ipc/aiDebugService.js'
 import type { IFileClipboardService } from '../../shared/ipc/fileClipboardService.js'
 import type { ExplorerTreeService } from '../services/explorer/ExplorerTreeService.js'
+import type { EditorGroupsService } from '../services/editor/EditorGroupsService.js'
 import type { IExtensionManagementService } from '../../shared/ipc/extensionManagementService.js'
 import type { IExtensionGalleryService } from '../../shared/ipc/extensionGalleryService.js'
 import type { IExtensionEnablementService } from '../services/extensions/ExtensionEnablementService.js'
@@ -549,6 +551,23 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     getRecentWorkspacePaths: () => services.workspaceService.recent.map((r) => r.folder.fsPath),
     removeRecentWorkspace: (fsPath) => services.workspaceService.removeRecent(URI.file(fsPath)),
     getLayoutSizes: () => ({ ...services.layoutService.sizes.get() }),
+    getEditorGroupsLayout: () => {
+      const grid = (services.editorGroupsService as EditorGroupsService).grid
+      const container = grid.getContainerSize()
+      const activeId = services.editorGroupsService.activeGroup?.id
+      return {
+        orientation: grid.orientation === Orientation.Horizontal ? 'horizontal' : 'vertical',
+        containerWidth: container?.width ?? 0,
+        containerHeight: container?.height ?? 0,
+        groups: grid.getViews().map((group) => ({
+          id: String(group.id),
+          active: group.id === activeId,
+          flexSize: grid.getLeafSize(group),
+          width: grid.getViewSize(group)?.width ?? 0,
+          height: grid.getViewSize(group)?.height ?? 0,
+        })),
+      }
+    },
     getFileIconThemeId: () => services.themeService.getFileIconTheme().id,
     getRegisteredFileIconThemeIds: () => services.themeService.getFileIconThemes().map((t) => t.id),
     getProductIconThemeId: () => services.themeService.getProductIconTheme().id,

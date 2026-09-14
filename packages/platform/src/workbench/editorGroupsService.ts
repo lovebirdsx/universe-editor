@@ -6,6 +6,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { Event } from '../base/event.js'
+import type { GridAxis } from '../base/grid.js'
 import { createDecorator } from '../di/instantiation.js'
 import type { EditorInput } from './editorService.js'
 import type { IEditorGroupModel, IOpenEditorOptions } from './editorGroupModel.js'
@@ -87,6 +88,18 @@ export interface IEditorGroupsService {
   activateGroup(group: IEditorGroup | number): IEditorGroup
   addGroup(location: IEditorGroup | number, direction: GroupDirection): IEditorGroup
   removeGroup(group: IEditorGroup | number): void
+  /**
+   * Grow (`deltaPx` > 0) or shrink the group along `axis` by that many pixels,
+   * taking the space from an adjacent sibling group.
+   *
+   * Returns whether the editor grid owns a split along that axis: `false` means
+   * the group has no neighbour to trade space with (a single group, or the axis
+   * is perpendicular to how the groups are arranged), so a caller driving this
+   * from the workbench chrome can fall back to resizing that instead. A request
+   * that gets clamped by the grid's minimum sizes still returns `true`; so does
+   * one made before the grid has been measured (nothing can move yet).
+   */
+  resizeGroup(group: IEditorGroup, axis: GridAxis, deltaPx: number): boolean
   moveGroup(group: IEditorGroup, location: IEditorGroup, direction: GroupDirection): IEditorGroup
   moveEditor(editor: EditorInput, target: IEditorGroup): void
   /**
