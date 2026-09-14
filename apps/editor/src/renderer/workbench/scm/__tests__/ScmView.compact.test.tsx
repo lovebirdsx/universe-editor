@@ -21,6 +21,7 @@ function group(
     handle,
     parentId,
     label: { get: () => id },
+    tooltip: { get: () => undefined },
     hideWhenEmpty: { get: () => false },
     resources: { get: () => resources },
   } as unknown as IScmGroupModel

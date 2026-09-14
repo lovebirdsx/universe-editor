@@ -11,6 +11,7 @@ import {
   resolveScmProviderId,
   resolveScmProviderIds,
   resolveScmProviderIdWhere,
+  type IScmGroupModel,
   type IScmSourceControlModel,
 } from '../ScmService.js'
 
@@ -48,6 +49,26 @@ describe('ScmService', () => {
       '/repo/a.ts',
       '/repo/b.ts',
     ])
+  })
+
+  it('carries a group tooltip through $updateGroup, and clears it on null', async () => {
+    const { scm } = make()
+    await scm.$registerSourceControl(0, 'perforce', 'Perforce', '/repo')
+    await scm.$registerGroup(0, 1, 'cl:7', '#7: first line')
+    const group = (): IScmGroupModel => scm.sourceControls.get()[0]!.groups.get()[0]!
+
+    expect(group().tooltip.get()).toBeUndefined()
+
+    await scm.$updateGroup(1, { tooltip: '#7: first line\n\nsecond line' })
+    expect(group().tooltip.get()).toBe('#7: first line\n\nsecond line')
+
+    // A label-only update must leave the tooltip alone (keys are independent).
+    await scm.$updateGroup(1, { label: '#7: renamed' })
+    expect(group().label.get()).toBe('#7: renamed')
+    expect(group().tooltip.get()).toBe('#7: first line\n\nsecond line')
+
+    await scm.$updateGroup(1, { tooltip: null })
+    expect(group().tooltip.get()).toBeUndefined()
   })
 
   it('mirrors the host input-box value and reports user edits back to the host', async () => {

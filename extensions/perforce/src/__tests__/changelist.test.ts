@@ -3,6 +3,7 @@ import {
   groupChangelists,
   countOpened,
   descriptionFirstLine,
+  fullDescription,
   numberedGroupId,
   shelvedGroupId,
   isShelvedGroupId,
@@ -24,7 +25,7 @@ function opened(changelist: string, name: string): OpenedFile {
 
 const labels = {
   default: () => 'Default Changelist',
-  numbered: (id: string, firstLine: string) => (firstLine ? `#${id}: ${firstLine}` : `#${id}`),
+  numbered: (id: string, desc: string) => (desc ? `#${id}: ${desc}` : `#${id}`),
 }
 
 describe('descriptionFirstLine', () => {
@@ -34,11 +35,31 @@ describe('descriptionFirstLine', () => {
   })
 })
 
+describe('fullDescription', () => {
+  it('keeps every line, folding CRLF to LF', () => {
+    expect(fullDescription('my feature\r\n\r\ndetails')).toBe('my feature\n\ndetails')
+  })
+
+  it('drops the surrounding whitespace and trailing blank lines', () => {
+    expect(fullDescription('  line one\nline two \n\n\n')).toBe('line one\nline two')
+  })
+
+  it('is undefined when nothing is left to show', () => {
+    expect(fullDescription('')).toBeUndefined()
+    expect(fullDescription('\n \n')).toBeUndefined()
+  })
+})
+
 describe('groupChangelists', () => {
   it('always emits the default group first, even when empty', () => {
     const groups = groupChangelists([], [], labels)
     expect(groups).toHaveLength(1)
-    expect(groups[0]).toMatchObject({ id: 'default', isDefault: true, label: 'Default Changelist' })
+    expect(groups[0]).toMatchObject({
+      id: 'default',
+      isDefault: true,
+      label: 'Default Changelist',
+      tooltip: undefined,
+    })
     expect(groups[0]!.files).toEqual([])
   })
 
@@ -76,9 +97,20 @@ describe('groupChangelists', () => {
     expect(groups[1]!.files).toEqual([])
   })
 
-  it('labels a numbered changelist without a description by id only', () => {
+  it('gives a numbered group the whole description as its tooltip', () => {
+    const groups = groupChangelists(
+      [],
+      [{ id: '123', description: 'my feature\n\ndetails', shelved: false }],
+      labels,
+    )
+    expect(groups[1]!.label).toBe('#123: my feature')
+    expect(groups[1]!.tooltip).toBe('#123: my feature\n\ndetails')
+  })
+
+  it('labels a numbered changelist without a description by id only, and no tooltip', () => {
     const groups = groupChangelists([opened('7', 'a')], [], labels)
     expect(groups[1]!.label).toBe('#7')
+    expect(groups[1]!.tooltip).toBeUndefined()
   })
 })
 

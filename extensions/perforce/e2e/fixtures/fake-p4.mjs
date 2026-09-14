@@ -319,6 +319,15 @@ function readStdin() {
   }
 }
 
+/** A description as `p4 changes` reports it: capped at 31 characters unless the
+ *  caller asks for more (`-L` → 250, `-l` → the whole text). Modelling the cap
+ *  is what makes a query that forgot `-l` show up truncated here exactly as it
+ *  does against a real server. */
+function reportDescription(desc, rest) {
+  if (rest.includes('-l')) return desc
+  return desc.slice(0, rest.includes('-L') ? 250 : 31)
+}
+
 // --- reconcile discovery: diff disk vs have-revision ---------------------------
 
 /** @returns {{depotFile:string, clientFile:string, action:string, rev?:string}[]} */
@@ -599,7 +608,7 @@ function main() {
             client: state.client,
             status: 'submitted',
             changeType: 'public',
-            desc: m.desc,
+            desc: reportDescription(m.desc, rest),
           })),
         )
         return 0
@@ -614,7 +623,7 @@ function main() {
       emit(
         Object.entries(state.changelists).map(([id, cl]) => ({
           change: id,
-          desc: cl.description,
+          desc: reportDescription(cl.description, rest),
           status: 'pending',
           client: state.client,
           user: state.user,

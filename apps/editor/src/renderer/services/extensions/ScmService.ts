@@ -33,6 +33,8 @@ export interface IScmGroupModel {
   /** Id of the parent group this one nests under, when the provider set one. */
   readonly parentId: string | undefined
   readonly label: IObservable<string>
+  /** Hover text for the group row; undefined falls back to `label` in the view. */
+  readonly tooltip: IObservable<string | undefined>
   readonly hideWhenEmpty: IObservable<boolean>
   readonly resources: IObservable<readonly ISourceControlResourceStateDto[]>
 }
@@ -223,6 +225,7 @@ export function scmProviderPathKey(p: string): string {
 
 class ScmGroupModel implements IScmGroupModel {
   readonly label: ISettableObservable<string>
+  readonly tooltip = observableValue<string | undefined>('scmGroupTooltip', undefined)
   readonly hideWhenEmpty = observableValue<boolean>('scmGroupHideWhenEmpty', false)
   readonly resources = observableValue<readonly ISourceControlResourceStateDto[]>(
     'scmGroupResources',
@@ -360,6 +363,9 @@ export class ScmService extends Disposable implements IScmService, IMainThreadSc
     const entry = this._groupsByHandle.get(groupHandle)
     if (entry) {
       if (features.label !== undefined) entry.group.label.set(features.label, undefined)
+      if (features.tooltip !== undefined) {
+        entry.group.tooltip.set(features.tooltip ?? undefined, undefined)
+      }
       if (features.hideWhenEmpty !== undefined) {
         entry.group.hideWhenEmpty.set(features.hideWhenEmpty, undefined)
       }

@@ -299,4 +299,32 @@ test.describe('@p1 perforce changelist', () => {
       await expect(menu).toBeHidden()
     })
   })
+
+  test.describe('group-header tooltip', () => {
+    // The header label is single-line and ellipsised, so a changelist's whole
+    // description — which p4 only reports with `-l` — has to be reachable by
+    // hovering it.
+    const firstLine = 'a first line far longer than thirty-one characters'
+    const description = `${firstLine}\n\nsecond line detail`
+
+    test.use({ p4Seeds: { files: DEFAULT_SEEDS, changelists: { '1000': description } } })
+
+    test('hovering a changelist header offers the whole description @regression', async ({
+      page,
+      workbench,
+      perforce,
+    }) => {
+      test.setTimeout(120_000)
+      await openScmWorkspace(page, workbench, perforce.openDir)
+
+      // Matching the full first line is the guard in itself: without `-l` p4 caps
+      // the description at 31 characters, so the label would stop dead inside
+      // "thirty-one" and this locator would never resolve.
+      const header = page.locator('[role="treeitem"]', { hasText: firstLine })
+      await expect(header).toBeVisible({ timeout: 30_000 })
+
+      const tooltip = await header.locator('[data-tooltip]').first().getAttribute('data-tooltip')
+      expect(tooltip).toBe(`#1000: ${description}`)
+    })
+  })
 })

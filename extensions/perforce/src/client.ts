@@ -149,6 +149,9 @@ import { localize } from './nls.js'
 interface DesiredGroup {
   readonly id: string
   readonly label: string
+  /** Hover text for the group header, when the group carries content that does
+   *  not fit its one-line label (a changelist's full multi-line description). */
+  readonly tooltip?: string
   readonly hideWhenEmpty: boolean
   readonly states: SourceControlResourceState[]
   /** Id of the changelist group this one nests under (shelved files under their
@@ -1629,7 +1632,15 @@ export class PerforceClient {
       return
     }
     let mark = stage('opened', started)
-    const changes = await this._p4.execRecords(['changes', '-s', 'pending', '-c', this._clientName])
+    // `-l`: without it p4 caps every changelist description at 31 characters.
+    const changes = await this._p4.execRecords([
+      'changes',
+      '-l',
+      '-s',
+      'pending',
+      '-c',
+      this._clientName,
+    ])
     if (this._disposed) return
     if (changes.result.exitCode !== 0) {
       this._goOffline(classifyP4Error(changes.result))
@@ -1708,9 +1719,9 @@ export class PerforceClient {
 
     const groups = groupChangelists(markedOpenedFiles, pending, {
       default: () => localize('perforce.group.defaultShort', 'Default'),
-      numbered: (id, firstLine) =>
-        firstLine
-          ? localize('perforce.group.numbered', '#{0}: {1}', { 0: id, 1: firstLine })
+      numbered: (id, desc) =>
+        desc
+          ? localize('perforce.group.numbered', '#{0}: {1}', { 0: id, 1: desc })
           : localize('perforce.group.numberedNoDesc', '#{0}', { 0: id }),
     })
 
@@ -1719,6 +1730,7 @@ export class PerforceClient {
       desired.push({
         id: group.id,
         label: group.label,
+        ...(group.tooltip !== undefined ? { tooltip: group.tooltip } : {}),
         // A pending changelist (default or numbered) stays visible even when empty
         // — matching P4V, where a changelist exists until you delete it. Otherwise a
         // freshly created (still-empty) numbered changelist would vanish, leaving no
@@ -2108,6 +2120,9 @@ export class PerforceClient {
       } else {
         live.label = group.label
       }
+      // Outside the branch on purpose: a group created in this very pass has no
+      // creation-time tooltip channel, so it must be assigned here too.
+      live.tooltip = group.tooltip
       live.resourceStates = group.states
     }
     for (const [id, live] of [...this._groups]) {

@@ -116,6 +116,7 @@ class HostInputBox implements SourceControlInputBox {
 
 class HostResourceGroup implements SourceControlResourceGroup {
   private _label: string
+  private _tooltip: string | undefined
   private _hideWhenEmpty: boolean | undefined
   private _resourceStates: SourceControlResourceState[] = []
 
@@ -136,6 +137,17 @@ class HostResourceGroup implements SourceControlResourceGroup {
   set label(value: string) {
     this._label = value
     void this._scm.$updateGroup(this._handle, { label: value })
+  }
+
+  get tooltip(): string | undefined {
+    return this._tooltip
+  }
+  set tooltip(value: string | undefined) {
+    // Every refresh re-assigns the whole group set, and the tooltip is the one
+    // field carrying multi-line text — skip the round trip when nothing moved.
+    if (this._tooltip === value) return
+    this._tooltip = value
+    void this._scm.$updateGroup(this._handle, { tooltip: value ?? null })
   }
 
   get hideWhenEmpty(): boolean | undefined {

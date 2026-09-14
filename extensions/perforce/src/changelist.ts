@@ -64,6 +64,9 @@ export interface ChangelistGroup {
   readonly id: string
   /** Human label for the group header. */
   readonly label: string
+  /** Hover text for the group header — the full description when one is known,
+   *  so the multi-line body stays reachable behind the one-line label. */
+  readonly tooltip: string | undefined
   /** Whether this is the default changelist (always shown, even when empty). */
   readonly isDefault: boolean
   readonly files: readonly OpenedFile[]
@@ -121,9 +124,20 @@ export function descriptionFirstLine(desc: string): string {
 }
 
 /**
+ * The whole description, normalised for display: CRLF folded to LF, surrounding
+ * whitespace dropped. `undefined` when nothing is left — a falsy tooltip makes
+ * the hover bubble vanish instead of falling back to the group label.
+ */
+export function fullDescription(desc: string): string | undefined {
+  return desc.replace(/\r\n?/g, '\n').trim() || undefined
+}
+
+/**
  * Group opened files by changelist into ordered groups: the default changelist
  * first (always present), then numbered changelists sorted ascending by id.
- * `labelFor` renders each group's header label so callers control localization.
+ * `labelFor` renders a changelist id plus a description into a header string so
+ * callers control localization; it is called twice per group — with the first
+ * line for the label and with the full description for the tooltip.
  *
  * A numbered changelist with no metadata (present in `opened` but missing from
  * the `changes` list — rare, e.g. a race) still gets a group, labelled by id.
@@ -133,7 +147,7 @@ export function groupChangelists(
   pending: readonly PendingChangelist[],
   labelFor: {
     default: () => string
-    numbered: (id: string, firstLine: string) => string
+    numbered: (id: string, desc: string) => string
   },
 ): ChangelistGroup[] {
   const byChangelist = new Map<string, OpenedFile[]>()
@@ -154,6 +168,7 @@ export function groupChangelists(
   groups.push({
     id: DEFAULT_GROUP_ID,
     label: labelFor.default(),
+    tooltip: undefined,
     isDefault: true,
     files: byChangelist.get(DEFAULT_GROUP_ID) ?? [],
   })
@@ -169,10 +184,12 @@ export function groupChangelists(
 
   const sorted = [...numberedIds].sort((a, b) => Number(a) - Number(b))
   for (const id of sorted) {
-    const firstLine = descriptionFirstLine(descById.get(id) ?? '')
+    const desc = descById.get(id) ?? ''
+    const full = fullDescription(desc)
     groups.push({
       id: numberedGroupId(id),
-      label: labelFor.numbered(id, firstLine),
+      label: labelFor.numbered(id, descriptionFirstLine(desc)),
+      tooltip: full !== undefined ? labelFor.numbered(id, full) : undefined,
       isDefault: false,
       files: byChangelist.get(id) ?? [],
     })

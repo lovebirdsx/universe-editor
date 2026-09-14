@@ -59,6 +59,12 @@ export interface ISourceControlFeaturesDto {
 export interface ISourceControlGroupFeaturesDto {
   label?: string
   hideWhenEmpty?: boolean
+  /**
+   * The group row's hover text. `null` means "clear it" — a distinct value
+   * rather than an omitted key, because keys whose value is `undefined` are
+   * dropped by the wire's JSON encoding.
+   */
+  tooltip?: string | null
 }
 
 /**

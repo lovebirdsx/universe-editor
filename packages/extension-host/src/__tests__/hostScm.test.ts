@@ -44,6 +44,7 @@ function recordingScm(): IMainThreadScm & {
   registerSourceControl: ReturnType<typeof vi.fn>
   registerGroup: ReturnType<typeof vi.fn>
   updateSourceControl: ReturnType<typeof vi.fn>
+  updateGroup: ReturnType<typeof vi.fn>
   updateGroupResourceStates: ReturnType<typeof vi.fn>
   setInputBoxValue: ReturnType<typeof vi.fn>
   updateSupplementary: ReturnType<typeof vi.fn>
@@ -51,6 +52,7 @@ function recordingScm(): IMainThreadScm & {
   const registerSourceControl = vi.fn().mockResolvedValue(undefined)
   const registerGroup = vi.fn().mockResolvedValue(undefined)
   const updateSourceControl = vi.fn().mockResolvedValue(undefined)
+  const updateGroup = vi.fn().mockResolvedValue(undefined)
   const updateGroupResourceStates = vi.fn().mockResolvedValue(undefined)
   const setInputBoxValue = vi.fn().mockResolvedValue(undefined)
   const updateSupplementary = vi.fn().mockResolvedValue(undefined)
@@ -58,6 +60,7 @@ function recordingScm(): IMainThreadScm & {
     registerSourceControl,
     registerGroup,
     updateSourceControl,
+    updateGroup,
     updateGroupResourceStates,
     setInputBoxValue,
     updateSupplementary,
@@ -65,7 +68,7 @@ function recordingScm(): IMainThreadScm & {
     $updateSourceControl: updateSourceControl,
     $unregisterSourceControl: () => Promise.resolve(),
     $registerGroup: registerGroup,
-    $updateGroup: () => Promise.resolve(),
+    $updateGroup: updateGroup,
     $updateGroupResourceStates: updateGroupResourceStates,
     $unregisterGroup: () => Promise.resolve(),
     $updateSupplementaryDecorations: updateSupplementary,
@@ -132,6 +135,40 @@ describe('host SCM bridge', () => {
       { resourceUri: '//depot/branch_x/a.txt', contextValue: 'S', noHostFile: true },
       { resourceUri: '/ws/b.txt', contextValue: 'M' },
     ])
+  })
+
+  // A group tooltip carries content the one-line label cannot hold (a changelist's
+  // whole multi-line description). Clearing it must be an explicit `null`: the
+  // wire drops keys whose value is `undefined`, so an omitted key would leave the
+  // stale tooltip standing.
+  it('pushes a group tooltip and clears it with an explicit null', () => {
+    const scm = recordingScm()
+    const service = new ExtensionService([], noopCommands, noopWindow, scm, noopTimeline)
+    const group = service
+      .createSourceControl('perforce', 'Perforce')
+      .createResourceGroup('cl:7', '#7: first line')
+
+    group.tooltip = '#7: first line\n\nsecond line'
+    expect(scm.updateGroup.mock.calls.at(-1)).toEqual([
+      1,
+      { tooltip: '#7: first line\n\nsecond line' },
+    ])
+
+    group.tooltip = undefined
+    expect(scm.updateGroup.mock.calls.at(-1)).toEqual([1, { tooltip: null }])
+  })
+
+  it('skips the round trip when a tooltip is re-assigned the same value', () => {
+    const scm = recordingScm()
+    const service = new ExtensionService([], noopCommands, noopWindow, scm, noopTimeline)
+    const group = service
+      .createSourceControl('perforce', 'Perforce')
+      .createResourceGroup('cl:7', '#7: first line')
+
+    group.tooltip = '#7: first line'
+    group.tooltip = '#7: first line'
+
+    expect(scm.updateGroup).toHaveBeenCalledTimes(1)
   })
 
   it('flows input-box value both ways', () => {

@@ -86,6 +86,12 @@ export interface SourceControlResourceGroup {
   /** Id of the parent group this one nests under, when created with one. */
   readonly parentId: string | undefined
   label: string
+  /**
+   * Hover text for the group's row, for content too long or too structured for
+   * the single-line {@link label} — `\n` renders as a line break. Unset (or
+   * empty) falls back to the label.
+   */
+  tooltip: string | undefined
   hideWhenEmpty: boolean | undefined
   /** Assigning replaces the group's rows and re-renders the view. */
   resourceStates: SourceControlResourceState[]

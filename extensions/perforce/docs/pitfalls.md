@@ -7,6 +7,7 @@
 - [共享 FIFO 并发门被大扇出灌满 → 交互命令排队几分钟](#共享-fifo-并发门被大扇出灌满--交互命令排队几分钟本轮根因)
 - [连接解析：`-p` 端口绝不从 `p4 info` 推导](#连接解析-p-端口绝不从-p4-info-推导)
 - [`-Mj` 在部分命令上会退化成单个 `data` blob](#-mj-在部分命令上会退化成单个-data-blob)
+- [`changes` 不带 `-l` 时描述被截断为前 31 字符](#changes-不带--l-时描述被截断为前-31-字符踩过)
 - [blame 元数据绝不走 `describe -s`（巨型 CL 挂死）](#blame-元数据绝不走-describe--s巨型-cl-挂死踩过)
 - [搁置发现绝不扇出 `describe -S -s`](#搁置发现绝不扇出-describe--s--s同款挂死风险)
 - [`opened`/`reconcile -n` 的 `clientFile` 是 client 语法](#openedreconcile--n-的-clientfile-是-client-语法不是本地路径踩过)
@@ -51,6 +52,15 @@
 - blame（`getBlame`）因此改用 `execTagged`（`-ztag`）跑 `annotate -c -q` + `changes -l`。**加任何"报表型/多字段"命令前，先在真服务器上 `p4 -Mj <cmd>` 验证它是否吐结构化键**；不确定就用 `-ztag`（`execTagged`）更稳。
 - 另一坑：`-ztag annotate -u` 的 `time` 是**显示日期串**（`2026/04/30 05:56:38`）而非 unix 秒 → 别 `Number()*1000`。author/time 从 `changes -l`（`time` 是干净 unix 秒）取，annotate 只取 `lower` 拿 changelist。
 
+## ⚠️ `changes` 不带 `-l` 时描述被截断为前 31 字符（踩过）
+
+`p4 changes` 默认只报描述的**前 31 个字符**（`-L` → 250，`-l` → 全文，Perforce 命令参考明说）。refresh 的 pending 查询曾漏 `-l`，于是 SCM 分组标题只显示 31 字符前缀，changelist 的多行描述（`首行 + 空行 + 详情`）整体不可达——悬停 tooltip 与标题是同一段文本，一起被砍。
+
+- **凡是要读 `desc` 的查询一律带 `-l`**：图谱 `changes -s submitted -l`、blame `changes -l <file>` 都带了，只有 refresh 的 `changes -s pending` 漏过。不读 `desc` 的查询（sync 回读的 `changes -s submitted -m 1 <spec>`，只取 `change`）不必带，带了只是白传文本。
+- 截断在**服务器侧**发生，`-Mj` / `-ztag` 都逃不掉。`-ztag` 下多行 desc 的续行还带一个前导 tab（`parseZtagAsMarshal` 原样保留，`pre-line` 渲染时塌成一个空格）。
+- 标题只取首行（`descriptionFirstLine`），全文进 tooltip（`fullDescription`，空描述返回 `undefined` 而不是空串——空 `data-tooltip` 会让气泡**完全不弹**，连回退的标题都没了）。
+- 回归护栏：`clientChangelistTooltip.test.ts`（断言 refresh 的 argv 含 `-l`）、`changelist.test.ts`（`fullDescription` 规范化）、e2e `perforceChangelist.spec.ts` 的 group-header tooltip journey。
+
 ## ⚠️ blame 元数据绝不走 `describe -s`（巨型 CL 挂死，踩过）
 
 `describe -s <cl>` 即使不带 diff 也列出该 CL 的**全部文件**（`depotFile0..N`）。对巨型 branch CL（initial branch，几十万文件）输出是 GB 级、命令永不返回（实测 >3min）——`getBlame` 曾按 unique CL 串行 `describe -s` 补 summary，blame 因此永远不显示。修法：元数据（user/time/desc 第一行）改从**一次** `p4 -ztag changes -l <file>` 取（单文件历史，亚秒级），解析复用图谱的 `parseChangesList`，缓存走 `P4CacheNs.changesSubmitted`（key `blame:<file>`）。回归护栏 `clientBlame.test.ts`（describe 挂起时 getBlame 仍须返回 + 断言零 describe 调用）。同理，任何新功能需要"CL 的元数据"时都用 `changes`/`change -o`，**不要** `describe`。
@@ -63,7 +73,7 @@
 
 | 探测 | 结果 |
 |---|---|
-| `p4 -ztag changes -s pending -c <client>` | 记录带**裸键** `... shelved `（无值）；**只有该 CL 真有搁置时才出现**，否则整个键缺席 → 存在性即信号 |
+| `p4 -ztag changes -l -s pending -c <client>` | 记录带**裸键** `... shelved `（无值）；**只有该 CL 真有搁置时才出现**，否则整个键缺席 → 存在性即信号 |
 | `p4 -Mj changes ...` | 在该服务器上塌成 `{"data":...}` blob（故走 `execRecords` 自动回退 `-ztag`） |
 | `p4 changes -s shelved -c <client>` | **不过滤**——同一个 CL 仍以 `*pending*` 返回，不能当权威索引用（曾按此设计，已被验证推翻） |
 

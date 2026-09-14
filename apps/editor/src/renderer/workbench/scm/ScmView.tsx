@@ -200,7 +200,16 @@ interface FolderNode {
 }
 
 type ScmNode =
-  | { kind: 'group'; id: string; groupId: string; handle: number; label: string; count: number }
+  | {
+      kind: 'group'
+      id: string
+      groupId: string
+      handle: number
+      label: string
+      /** Row hover text; undefined falls back to `label`. */
+      tooltip: string | undefined
+      count: number
+    }
   | { kind: 'folder'; id: string; groupId: string; path: string; name: string }
   | {
       kind: 'file'
@@ -271,6 +280,7 @@ export function buildSnapshot(
       groupId: g.id,
       handle: g.handle,
       label: g.label.get(),
+      tooltip: g.tooltip.get(),
       count: resources.length,
     }
     const parentEntry = g.parentId ? groupNodeById.get(g.parentId) : undefined
@@ -783,7 +793,7 @@ const ScmGroupRow = memo(function ScmGroupRow({
           />
         ) : null
       })()}
-      <span className={styles['groupLabel']} data-tooltip={node.label}>
+      <span className={styles['groupLabel']} data-tooltip={node.tooltip ?? node.label}>
         {node.label}
       </span>
       <span className={styles['groupActions']}>
@@ -893,13 +903,14 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
     [storage, repoKey],
   )
 
-  // Bump when any group's resources / label / visibility change.
+  // Bump when any group's resources / label / tooltip / visibility change.
   const [dataRevision, setDataRevision] = useState(0)
   useEffect(() => {
     const d = autorun((r) => {
       for (const g of groups) {
         g.resources.read(r)
         g.label.read(r)
+        g.tooltip.read(r)
         g.hideWhenEmpty.read(r)
       }
       setDataRevision((v) => v + 1)
