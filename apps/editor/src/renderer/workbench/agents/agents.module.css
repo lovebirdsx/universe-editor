@@ -3550,7 +3550,7 @@
 .imagePreviewBackdrop {
   position: fixed;
   inset: 0;
-  z-index: 999;
+  z-index: var(--z-view-backdrop);
   background: var(--vscode-widget-shadow, rgba(0, 0, 0, 0.5));
 }
 
@@ -3561,7 +3561,7 @@
    above/below + clamp near a window edge), large images center in the viewport. */
 .imagePreviewPopover {
   position: fixed;
-  z-index: 1000;
+  z-index: var(--z-view-overlay);
   padding: 4px;
   background: var(--vscode-menu-background, #252526);
   border: 1px solid var(--vscode-menu-border, #454545);

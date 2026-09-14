@@ -123,14 +123,14 @@
 .helpBackdrop {
   position: fixed;
   inset: 0;
-  z-index: var(--z-popover);
+  z-index: var(--z-view-backdrop);
 }
 
 .helpPopover {
   position: absolute;
   top: calc(100% + var(--spacing-3));
   right: 0;
-  z-index: calc(var(--z-popover) + 1);
+  z-index: calc(var(--z-view-overlay) + 1);
   width: 540px;
   max-width: calc(100vw - 48px);
   max-height: 60vh;
@@ -151,7 +151,7 @@
 .dialogBackdrop {
   position: fixed;
   inset: 0;
-  z-index: calc(var(--z-dialog) - 1);
+  z-index: var(--z-view-backdrop);
   background: rgba(0, 0, 0, 0.45);
 }
 
@@ -159,7 +159,7 @@
   position: fixed;
   top: 50%;
   left: 50%;
-  z-index: var(--z-dialog);
+  z-index: var(--z-view-overlay);
   display: flex;
   flex-direction: column;
   gap: var(--spacing-6);
@@ -920,7 +920,7 @@
 .probeBackdrop {
   position: fixed;
   inset: 0;
-  z-index: 60;
+  z-index: var(--z-view-backdrop);
   background: rgba(0, 0, 0, 0.35);
 }
 
@@ -928,7 +928,7 @@
   position: fixed;
   top: 50%;
   left: 50%;
-  z-index: 61;
+  z-index: var(--z-view-overlay);
   display: flex;
   flex-direction: column;
   gap: var(--spacing-4);
@@ -1023,7 +1023,7 @@
 .rawJsonOverlay {
   position: fixed;
   inset: 0;
-  z-index: 62;
+  z-index: var(--z-view-overlay);
   display: flex;
   align-items: center;
   justify-content: center;

@@ -259,7 +259,7 @@ export function AiStatusBarButtons() {
                 position: 'fixed',
                 bottom: window.innerHeight - rect.top + GAP,
                 right: Math.max(GAP, window.innerWidth - rect.right),
-                zIndex: 1000,
+                zIndex: 'var(--z-popover)',
               }}
             >
               <AiQuickSettingsPanel

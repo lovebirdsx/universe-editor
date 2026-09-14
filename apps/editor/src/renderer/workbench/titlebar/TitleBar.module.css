@@ -8,7 +8,7 @@
   user-select: none;
   overflow: visible;
   position: relative;
-  z-index: 100;
+  z-index: var(--z-workbench-chrome);
 }
 
 /* Full-width draggable layer; interactive children sit above it via z-index. */
@@ -258,7 +258,11 @@
   background: var(--vscode-workbench-surface, #242427);
   border: 1px solid var(--vscode-workbench-border, #0f0f11);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
-  z-index: 1000;
+  /* Local index, not a `--z-*` token: `.titlebar` carries a z-index, so it is a
+     stacking context and this dropdown can never out-stack the title bar itself
+     (a dialog or toast covers it whatever number goes here). All it has to beat
+     is the title bar's own children. */
+  z-index: 2;
   padding: 4px 0;
   border-radius: 3px;
 }
@@ -337,7 +341,8 @@
   background: var(--vscode-workbench-surface, #242427);
   border: 1px solid var(--vscode-workbench-border, #0f0f11);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
-  z-index: 1001;
+  /* Local index — see `.dropdown`. Nested inside it, so 1 is enough. */
+  z-index: 1;
   padding: 4px 0;
   border-radius: 3px;
 }

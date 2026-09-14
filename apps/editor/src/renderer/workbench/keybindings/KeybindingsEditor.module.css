@@ -217,7 +217,7 @@
 .defineBackdrop {
   position: absolute;
   inset: 0;
-  z-index: var(--z-popover);
+  z-index: var(--z-view-backdrop);
   display: flex;
   align-items: center;
   justify-content: center;

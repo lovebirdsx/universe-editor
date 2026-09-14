@@ -59,7 +59,7 @@
 .linkHintsLayer {
   position: fixed;
   inset: 0;
-  z-index: 20;
+  z-index: var(--z-view-backdrop);
   pointer-events: none;
 }
 
@@ -88,7 +88,7 @@
 .helpBackdrop {
   position: fixed;
   inset: 0;
-  z-index: 30;
+  z-index: var(--z-view-overlay);
   display: flex;
   align-items: center;
   justify-content: center;

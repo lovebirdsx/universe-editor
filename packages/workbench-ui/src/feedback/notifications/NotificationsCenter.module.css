@@ -2,7 +2,7 @@
   position: fixed;
   bottom: 28px; /* above status bar */
   right: 16px;
-  z-index: 999;
+  z-index: var(--z-toast-center);
   width: 380px;
   max-height: 60vh;
   background: var(--vscode-dialog-background, #252526);

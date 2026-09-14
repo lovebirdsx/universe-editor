@@ -17,6 +17,7 @@ import {
 } from '@universe-editor/platform'
 import type { monaco } from '../../editor/monaco/MonacoLoader.js'
 import { MonacoLoader } from '../../editor/monaco/MonacoLoader.js'
+import { createWorkbenchEditor } from '../../editor/monaco/workbenchEditorFactory.js'
 import { IOutputModelService } from '../../../services/output/OutputModelService.js'
 import { bridgeEditorFocus } from '../../../services/editor/editorFocus.js'
 import { useObservable, useOptionalService, useService } from '../../useService.js'
@@ -112,7 +113,8 @@ export function LogOutputView({
     let hoverGuard: IDisposable | undefined
     void MonacoLoader.ensureInitialized().then((m) => {
       if (disposed || !containerRef.current) return
-      const ed = m.editor.create(
+      const ed = createWorkbenchEditor(
+        m,
         containerRef.current,
         {
           model: null,

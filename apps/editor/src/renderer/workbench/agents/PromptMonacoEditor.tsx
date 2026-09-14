@@ -19,6 +19,7 @@ import { useEffect, useImperativeHandle, useRef, type Ref } from 'react'
 import type { IConfigurationService, IContextKeyService } from '@universe-editor/platform'
 import type { monaco } from '../editor/monaco/MonacoLoader.js'
 import { MonacoLoader } from '../editor/monaco/MonacoLoader.js'
+import { createWorkbenchEditor } from '../editor/monaco/workbenchEditorFactory.js'
 import { syncEditorFocusContext } from '../../services/editor/editorFocus.js'
 import { PromptRefTracker } from '../../services/acp/promptRefTracker.js'
 import type { PlacedRef, PromptRef } from '../../services/acp/promptRef.js'
@@ -320,7 +321,8 @@ export function PromptMonacoEditor({
       )
       modelRef.current = model
       const fontSize = configService.get<number>('editor.fontSize') ?? 13
-      const ed = m.editor.create(
+      const ed = createWorkbenchEditor(
+        m,
         containerRef.current,
         {
           model,

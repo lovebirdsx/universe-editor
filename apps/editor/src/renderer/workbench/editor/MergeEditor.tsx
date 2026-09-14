@@ -21,6 +21,7 @@ import {
 import { useService } from '../useService.js'
 import type { monaco } from './monaco/MonacoLoader.js'
 import { MonacoLoader } from './monaco/MonacoLoader.js'
+import { createWorkbenchEditor } from './monaco/workbenchEditorFactory.js'
 import { languageForResource } from '../files/resourceLanguage.js'
 import { MergeEditorInput } from '../../services/editor/MergeEditorInput.js'
 import { MergeEditorRegistry } from '../../services/editor/MergeEditorRegistry.js'
@@ -103,7 +104,7 @@ export function MergeEditor({ input }: { input: IEditorInput }) {
 
     // Bottom: editable Result pane seeded with the working-tree (marker) content.
     const resultModel = makeModel(c.merged, 'merge-result')
-    const resultEditor = monacoNs.editor.create(resultRef.current!, {
+    const resultEditor = createWorkbenchEditor(monacoNs, resultRef.current!, {
       model: resultModel,
       fontSize: size,
       automaticLayout: true,

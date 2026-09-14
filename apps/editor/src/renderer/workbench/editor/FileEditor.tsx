@@ -27,6 +27,7 @@ import {
 import { useService } from '../useService.js'
 import type { monaco } from './monaco/MonacoLoader.js'
 import { MonacoLoader } from './monaco/MonacoLoader.js'
+import { createWorkbenchEditor } from './monaco/workbenchEditorFactory.js'
 import {
   affectsBridgedEditorOption,
   buildBridgedEditorOptions,
@@ -159,7 +160,8 @@ export function FileEditor({ input }: { input: IEditorInput }) {
   // Create the standalone editor once monaco is ready; never recreate on input change.
   useLayoutEffect(() => {
     if (!monacoNs || !containerRef.current) return
-    const ed = monacoNs.editor.create(
+    const ed = createWorkbenchEditor(
+      monacoNs,
       containerRef.current,
       {
         automaticLayout: true,

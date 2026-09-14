@@ -20,8 +20,9 @@
 
 App 本体的发布（版本 bump、打包、上传，及 push `vX.Y.Z` tag 后自动创建 GitHub Release 并触发 samples 仓库 CI）见 [`scripts/release/README.md`](../../scripts/release/README.md)；市场运维脚本细节见 [`scripts/gallery/README.md`](../../scripts/gallery/README.md)。
 
-## 约定与协作
+## 架构与约定
 
+- [浮层层级与裁剪](overlay-layers.md) — tooltip / 菜单 / 对话框的四条挂载链路（React portal、monaco 平台层、monaco 编辑器内容层、视图自绘）、`--z-*` 三段式分层与「该不该 token 化」的判据、外部占位层、浮层排查套路。
 - [Git 提交信息规范](git-commit-msg-rule.md) — 提交格式、类型前缀、发布说明收录规则。
 
 ## 环境与工具（个人笔记）

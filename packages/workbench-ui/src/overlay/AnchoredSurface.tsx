@@ -142,7 +142,7 @@ export function AnchoredSurface({
       <div
         ref={refs.setFloating}
         style={{
-          zIndex: 9999,
+          zIndex: 'var(--z-menu)',
           display: 'flex',
           flexDirection: 'column',
           ...floatingStyles,

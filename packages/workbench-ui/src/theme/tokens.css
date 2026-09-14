@@ -44,15 +44,43 @@
   --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.28);
   --shadow-lg: 0 6px 24px rgba(0, 0, 0, 0.36);
 
-  /* Overlay z-index */
+  /* Overlay z-index — three bands, one ladder.
+     Everything a view opens on top of *itself* stays below `--z-workbench-chrome`:
+     the title bar and its window controls are the app frame, and a full-screen
+     backdrop from inside a view must not make the window unclosable. What lives
+     inside a view reaches ~100 at most (monaco's editor widgets, sticky-scroll
+     overlays, in-panel menus), so the view band sits just above that; the 101–999
+     range is otherwise empty on purpose. Workbench-wide surfaces start at
+     `--z-popover`. Local stacking indices inside one component (tab strips, drop
+     indicators, sash separators, …) are deliberately NOT tokenised — they never
+     leave their own container, and naming them here would imply they compete
+     globally. */
+  --z-view-backdrop: 200;
+  --z-view-overlay: 201;
+  --z-workbench-chrome: 300;
   --z-popover: 1000;
   --z-dialog: 1100;
   /* Select popover renders to document.body, so it must outrank the modal
      dialog whose trigger it anchors to — otherwise it gets painted underneath. */
   --z-dropdown: 1150;
-  --z-toast: 1200;
-  /* Tooltips sit above every anchored surface (AnchoredSurface uses 9999). */
+  /* Notifications: the center is where they are read, the toast stack is how new
+     ones arrive. The two overlap pixel for pixel in the bottom-right corner, so
+     the stack must outrank the panel rather than tie with it (a tie lets DOM
+     order hide a fresh toast behind an open center). */
+  --z-toast-center: 1200;
+  --z-toast: 1250;
+  /* Menus outrank every other workbench surface: a right-click or a toolbar
+     overflow menu still has to work while a dialog or a toast is on screen. */
+  --z-menu: 1300;
+  /* Tooltips sit above every anchored surface, menus included. */
   --z-tooltip: 10000;
+  /* Third-party layers we cannot retokenise, listed for orientation only:
+     monaco's editor-internal widgets span 11–100 (glyph hover 11, parameter
+     hints 39, suggest 40, hover 40/41, content hover 50, rename 100) — all
+     below the view band; its platform layers reach 2550 (quick input), which
+     lands in the empty gap between `--z-menu` and `--z-tooltip`; its diff-editor
+     internals go up to 10001 / 100000, above everything here. allotment's
+     separators and sashes use 5 / 35. See docs/development/overlay-layers.md. */
 
   /* Tooltip / hover surface max width (VSCode workbench-hover parity: 700px). */
   --tooltip-max-width: 700px;

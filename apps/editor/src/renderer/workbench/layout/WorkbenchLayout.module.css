@@ -22,7 +22,7 @@
   flex: 0 0 var(--titlebar-height, 30px);
   overflow: visible;
   position: relative;
-  z-index: 100;
+  z-index: var(--z-workbench-chrome);
 }
 
 .top {

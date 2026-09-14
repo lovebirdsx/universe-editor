@@ -14,6 +14,12 @@
  *    the contributed theme at runtime (`style.contributedColorTheme`), and a
  *    static definition would out-specify the injected `:root` block and shadow
  *    every theme switch / color customization.
+ * 4. The same footing for `--z-*`: the overlay ladder is defined once in
+ *    workbench-ui's `tokens.css` and consumed by name, so every `var(--z-*)` in
+ *    the scanned trees must resolve — a typo silently drops the declaration and
+ *    the overlay joins whatever order the DOM happens to have.
+ * 5. No hardcoded layer numbers beyond the in-view ceiling (100); anything above
+ *    it belongs to the workbench ladder and must name a token.
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs'
@@ -95,6 +101,34 @@ const tsContents = tsFiles.map((file) => ({
   text: maskComments(readFileSync(file, 'utf8')),
 }))
 
+const zTokenNames = new Set(
+  [
+    ...maskComments(readFileSync(join(workbenchUiRoot, 'theme', 'tokens.css'), 'utf8')).matchAll(
+      /(--z-[a-z-]+)\s*:/g,
+    ),
+  ].map((match) => match[1]!),
+)
+
+// 100 is the ceiling of what legitimately lives inside a view — monaco's rename
+// widget, sticky-scroll overlays, an in-panel menu. Above it every surface is a
+// layer of the workbench ladder and must name a token instead.
+const MAX_LITERAL_Z_INDEX = 100
+
+function offendingZIndexLiterals(text: string): string[] {
+  const offenders: string[] = []
+  const declarations = [
+    ...text.matchAll(/z-index\s*:\s*([^;{}]+)/gi),
+    ...text.matchAll(/zIndex\s*:\s*([^,;}\n]+)/g),
+  ]
+  for (const declaration of declarations) {
+    // A var() fallback is still token-driven; only bare numbers count.
+    for (const [digits] of declaration[1]!.replace(/var\([^()]*\)/g, '').matchAll(/\d+/g)) {
+      if (Number(digits) > MAX_LITERAL_Z_INDEX) offenders.push(digits)
+    }
+  }
+  return offenders
+}
+
 describe('css variable coverage', () => {
   it('found renderer css files to scan', () => {
     expect(cssFiles.length).toBeGreaterThan(40)
@@ -160,6 +194,28 @@ describe('css variable coverage', () => {
       }
     }
     expect(violations).toEqual([])
+  })
+
+  it('every var(--z-*) reference resolves to a token in tokens.css', () => {
+    const unknown: string[] = []
+    for (const { file, text } of [...maskedContents, ...tsContents]) {
+      for (const match of text.matchAll(/var\(\s*(--z-[a-z-]+)/g)) {
+        if (!zTokenNames.has(match[1]!)) {
+          unknown.push(`${file}: ${match[1]}`)
+        }
+      }
+    }
+    expect(unknown).toEqual([])
+  })
+
+  it('no surface hardcodes a z-index above the in-view ceiling', () => {
+    const offenders: string[] = []
+    for (const { file, text } of [...maskedContents, ...tsContents]) {
+      for (const digits of offendingZIndexLiterals(text)) {
+        offenders.push(`${file} → ${digits}`)
+      }
+    }
+    expect(offenders, 'use a --z-* token from workbench-ui tokens.css').toEqual([])
   })
 
   it('legacy mapping covers every pre-migration variable name', () => {

@@ -78,6 +78,10 @@ export function useHover(delay = 500): UseHoverResult {
           surfaceProps={{
             role: 'tooltip',
             className: styles['tooltipSurface'],
+            // A hover card is a tooltip, so it takes the tooltip layer rather
+            // than AnchoredSurface's menu default — otherwise tooltips could
+            // paint over it.
+            style: { zIndex: 'var(--z-tooltip)' },
           }}
         >
           {children}
