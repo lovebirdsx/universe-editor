@@ -3,12 +3,13 @@
  *  MessageContent — render a sequence of ACP content blocks as React elements.
  *  Text blocks go through the markdown parser by default; user messages pass
  *  variant="plain" instead (matching mainstream agents: a user's prompt renders
- *  verbatim — newlines kept, no `**`/`#`/link interpretation — with only bare
- *  URLs and file paths turned into clickable links), while assistant output
- *  keeps full markdown. Image blocks become inline images (data: URI is
- *  safe — the agent never gets to embed a remote URL); resource / resource_link
- *  blocks become file-open buttons when the URI is a workspace file, or visible
- *  labels otherwise.
+ *  verbatim — newlines kept, no `**`/`#` interpretation — with bare URLs, bare
+ *  file paths and markdown links turned into clickable links), while assistant
+ *  output keeps full markdown. Agents replay `@file` mentions as markdown links
+ *  (`[@a.md](file:///…)`), so those must stay clickable in a prompt too. Image
+ *  blocks become inline images (data: URI is safe — the agent never gets to
+ *  embed a remote URL); resource / resource_link blocks become file-open buttons
+ *  when the URI is a workspace file, or visible labels otherwise.
  *
  *  Slash-command artifacts: agents (notably Claude Code) replay locally-handled
  *  slash commands back through `user_message_chunk` as XML-wrapped text. We
@@ -23,9 +24,19 @@ import { memo, useContext, useMemo, type ReactNode } from 'react'
 import { IEditorResolverService, IWorkspaceService, URI } from '@universe-editor/platform'
 import type { ContentBlock } from '@agentclientprotocol/sdk'
 import { parseCommandWrappers } from '../../services/acp/commandWrapper.js'
-import { matchFilePathAt } from '../../services/acp/filePathLink.js'
-import { matchBareUrl } from '../../services/acp/markdownRenderer.js'
+import {
+  looksLikeFilePath,
+  matchFilePathAt,
+  splitFilePathTarget,
+  type FilePathTarget,
+} from '../../services/acp/filePathLink.js'
+import {
+  isAnchorHref,
+  matchBareUrl,
+  matchMarkdownLinkAt,
+} from '../../services/acp/markdownRenderer.js'
 import { FileLinkContext, MarkdownView } from '../markdown/MarkdownView.js'
+import { fileUriLinkTarget } from '../markdown/markdownLinkResolve.js'
 import { useMarkdownFileLink } from '../markdown/useMarkdownFileLink.js'
 import { useOptionalService, useService } from '../useService.js'
 import { CommandInvocationBadge } from './CommandInvocationBadge.js'
@@ -44,8 +55,9 @@ interface MessageContentProps {
    * 'markdown' (default) renders text blocks through the markdown parser;
    * 'plain' renders them verbatim with `white-space: pre-wrap` (user messages —
    * the prompt should look exactly like what was typed), with one exception:
-   * bare http(s) URLs and bare file paths become clickable links. Non-text
-   * blocks and slash-command badges render identically under both variants.
+   * bare URLs, bare file paths and markdown links become clickable links, and a
+   * link's label replaces its `[label](href)` syntax. Non-text blocks and
+   * slash-command badges render identically under both variants.
    */
   readonly variant?: 'markdown' | 'plain'
 }
@@ -146,9 +158,10 @@ function TextRunSegments({
 
 // User-prompt text under variant="plain": verbatim, whitespace-preserving, and
 // safe for long unbroken strings (URLs/paths) inside the clamped user card.
-// Bare http(s) URLs and bare file paths become clickable links — the text stays
-// exactly as typed, only the affordance is added. Everything else (including
-// markdown link syntax) stays literal.
+// Bare URLs, bare file paths, and markdown links `[label](href)` become
+// clickable — the sameness is structural, they are the markdown renderer's own
+// matchers. Everything else (headings, emphasis, inline code, images, anchors)
+// stays literal.
 function PlainTextBlock({ text }: { text: string }) {
   const workspaceService = useOptionalService(IWorkspaceService)
   // The same openFileLink pipeline markdown links use (FilePathLink in
@@ -160,21 +173,8 @@ function PlainTextBlock({ text }: { text: string }) {
     <div className={styles['plainTextBlock']} data-testid="acp-plaintext">
       <FileLinkContext.Provider value={openFileLink}>
         {segments.map((seg, i) =>
-          seg.type === 'url' ? (
-            <a
-              key={i}
-              href={seg.text}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={(e) => {
-                e.preventDefault()
-                // Same external-URL exit as SafeLink in MarkdownView: Electron's
-                // window-open handler routes http(s) to shell.openExternal.
-                window.open(seg.text, '_blank', 'noopener,noreferrer')
-              }}
-            >
-              {seg.text}
-            </a>
+          seg.type === 'link' ? (
+            <PlainLink key={i} seg={seg} />
           ) : seg.type === 'filepath' ? (
             <PlainFilePathLink key={i} seg={seg} />
           ) : (
@@ -183,6 +183,45 @@ function PlainTextBlock({ text }: { text: string }) {
         )}
       </FileLinkContext.Provider>
     </div>
+  )
+}
+
+/** Where a plain-text link points: a file to open, or nowhere (external URL). */
+function plainLinkTarget(href: string): FilePathTarget | undefined {
+  if (/^file:/i.test(href)) return fileUriLinkTarget(href)
+  if (looksLikeFilePath(href)) return splitFilePathTarget(href)
+  return undefined
+}
+
+// Attributes for an external link only: a file target is opened in place, so it
+// must NOT carry target=_blank — the window-open handler would push it to the OS
+// instead of the workbench.
+const EXTERNAL_LINK_ATTRS = { target: '_blank', rel: 'noopener noreferrer' } as const
+
+// Mirrors SafeLink's routing (MarkdownView) minus the surfaces the plain variant
+// has no context for: no preview/doc-link interception, and an anchor can't be
+// scrolled here — those are kept literal by linkifyPlainText.
+function PlainLink({ seg }: { seg: PlainLinkSegment }) {
+  const openFileLink = useContext(FileLinkContext)
+  const label = seg.text
+  const target = plainLinkTarget(seg.href)
+  const onClick = (e: React.MouseEvent<HTMLAnchorElement>): void => {
+    e.preventDefault()
+    if (!target) {
+      // Same external-URL exit as SafeLink: Electron's window-open handler
+      // routes http(s) to shell.openExternal and denies everything else.
+      window.open(seg.href, '_blank', 'noopener,noreferrer')
+      return
+    }
+    openFileLink(target.path, target.line, target.col, target.endLine, {
+      toSide: e.ctrlKey || e.metaKey,
+      ...(target.fragment !== undefined ? { fragment: target.fragment } : {}),
+    })
+  }
+  return (
+    <a href={seg.href} onClick={onClick} {...(target ? {} : EXTERNAL_LINK_ATTRS)}>
+      {label}
+    </a>
   )
 }
 
@@ -211,12 +250,21 @@ type PlainFilePathSegment = {
   readonly col?: number
   readonly endLine?: number
 }
-type PlainSegment = { readonly type: 'text' | 'url'; readonly text: string } | PlainFilePathSegment
+type PlainLinkSegment = {
+  readonly type: 'link'
+  /** Visible text: the markdown link's label, or the URL itself when bare. */
+  readonly text: string
+  readonly href: string
+}
+type PlainSegment =
+  | { readonly type: 'text'; readonly text: string }
+  | PlainLinkSegment
+  | PlainFilePathSegment
 
-// Left-to-right scan reusing the markdown renderer's bare-URL and bare-path
-// matchers (same order as parseInline: URL first), so both renderers agree on
-// what counts as a link — CJK termination, trailing punctuation, mid-word
-// guards, and the `/`-prefix guard that keeps a URL's path tail out.
+// Left-to-right scan reusing the markdown renderer's own matchers, in the same
+// order as parseInline (link syntax → bare URL → bare path), so both renderers
+// agree on what counts as a link — CJK termination, trailing punctuation,
+// mid-word guards, and the `/`-prefix guard that keeps a URL's path tail out.
 function linkifyPlainText(text: string): readonly PlainSegment[] {
   const out: PlainSegment[] = []
   let buf = ''
@@ -228,10 +276,25 @@ function linkifyPlainText(text: string): readonly PlainSegment[] {
   }
   let i = 0
   while (i < text.length) {
+    const link = matchMarkdownLinkAt(text, i)
+    if (link) {
+      if (link.image || isAnchorHref(link.href)) {
+        // Nothing to open here (images aren't rendered in a prompt, and an
+        // anchor needs a document to scroll). Consume the whole match so its
+        // parts can't be re-matched as a bare path — that also keeps a multi-KB
+        // `data:` URL off the per-character probe.
+        buf += text.slice(i, link.end)
+      } else {
+        flush()
+        out.push({ type: 'link', text: link.label, href: link.href })
+      }
+      i = link.end
+      continue
+    }
     const url = matchBareUrl(text, i)
     if (url) {
       flush()
-      out.push({ type: 'url', text: url })
+      out.push({ type: 'link', text: url, href: url })
       i += url.length
       continue
     }

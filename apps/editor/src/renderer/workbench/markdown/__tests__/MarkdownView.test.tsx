@@ -722,6 +722,38 @@ describe('MarkdownView', () => {
     expect(openWindow).not.toHaveBeenCalled()
   })
 
+  it('routes a bare file:// URI through the editor resolver, not window.open', async () => {
+    const openWindow = vi.fn().mockResolvedValue(undefined)
+    const resolverOpen = vi.fn().mockResolvedValue(undefined)
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null)
+    const exists = vi.fn((resource: URI) => resource.fsPath === 'D:/workspace/repo/docs/a.md')
+    const services = new ServiceCollection()
+    services.set(IEditorResolverService, makeResolver(resolverOpen))
+    services.set(IConfigurationService, makeConfig())
+    services.set(IFileService, makeFileService(exists))
+    services.set(IEditorService, makeEditorService())
+    services.set(IWindowsService, makeWindowsService(openWindow))
+    const inst = new InstantiationService(services)
+
+    try {
+      render(
+        <ServicesContext.Provider value={inst}>
+          <MarkdownView
+            text="见 file:///D:/workspace/repo/docs/a.md 结束"
+            baseUri={URI.file('/repo/docs')}
+          />
+        </ServicesContext.Provider>,
+      )
+
+      screen.getByRole('link', { name: 'file:///D:/workspace/repo/docs/a.md' }).click()
+      await waitFor(() => expect(resolverOpen).toHaveBeenCalledTimes(1))
+      expect(resolverOpen.mock.calls[0]?.[0]?.fsPath).toBe('D:/workspace/repo/docs/a.md')
+      expect(open).not.toHaveBeenCalled()
+    } finally {
+      open.mockRestore()
+    }
+  })
+
   it('routes a mermaid fence to MermaidBlock and injects the rendered svg', async () => {
     renderMock.mockResolvedValue('<svg id="rendered"><g /></svg>')
     renderMarkdown('```mermaid\ngraph TD; A-->B\n```')

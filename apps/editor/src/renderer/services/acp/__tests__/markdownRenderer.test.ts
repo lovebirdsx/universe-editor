@@ -12,6 +12,7 @@ import {
   isImageDataUrl,
   isImageSrc,
   isSafeHref,
+  matchMarkdownLinkAt,
   parseInline,
   parseMarkdown,
   slugifyHeading,
@@ -764,6 +765,26 @@ describe('parseInline — inline layer', () => {
     ])
   })
 
+  it('parses a bare file:// URI as a link', () => {
+    expect(parseInline('see file:///E:/x/a.md now')).toEqual<readonly MdInline[]>([
+      text('see '),
+      { type: 'link', href: 'file:///E:/x/a.md', children: [text('file:///E:/x/a.md')] },
+      text(' now'),
+    ])
+    // A location suffix rides along; the opener splits it off the fsPath.
+    expect(parseInline('file:///E:/x/a.md:10:5')).toEqual<readonly MdInline[]>([
+      { type: 'link', href: 'file:///E:/x/a.md:10:5', children: [text('file:///E:/x/a.md:10:5')] },
+    ])
+  })
+
+  it('keeps an http(s) URL containing "file://" as one link', () => {
+    // Guards the scheme alternation: the match must not restart at the inner
+    // `file://` and truncate the href.
+    expect(parseInline('https://host/file://x')).toEqual<readonly MdInline[]>([
+      { type: 'link', href: 'https://host/file://x', children: [text('https://host/file://x')] },
+    ])
+  })
+
   it('stops a bare URL at full-width punctuation and CJK prose', () => {
     // `（每 IP …` is prose after the URL, not part of it.
     expect(parseInline('http://0.0.0.0:8788/gallery/register（每 IP 每小时限 10 次）')).toEqual<
@@ -867,6 +888,36 @@ describe('parseInline — empty html anchors', () => {
     if (heading?.type === 'heading') {
       expect(slugifyHeading(inlineToText(heading.children))).toBe('cooksystem')
     }
+  })
+})
+
+describe('matchMarkdownLinkAt', () => {
+  it('matches a link at the requested index and reports the end past the paren', () => {
+    const input = 'see [docs](https://example.com/a) now'
+    const m = matchMarkdownLinkAt(input, 4)
+    expect(m).toEqual({ label: 'docs', href: 'https://example.com/a', end: 33, image: false })
+    expect(input[m!.end - 1]).toBe(')')
+    expect(input.slice(m!.end)).toBe(' now')
+  })
+
+  it('keeps the label verbatim for the caller to render', () => {
+    expect(matchMarkdownLinkAt('见 [**b**](../foo.md) 了', 2)?.label).toBe('**b**')
+  })
+
+  it('flags an inline base64 image href', () => {
+    const m = matchMarkdownLinkAt('[@i](data:image/png;base64,AAAA)', 0)
+    expect(m?.image).toBe(true)
+    expect(m?.href).toBe('data:image/png;base64,AAAA')
+  })
+
+  it('rejects anything that is not a safe link, leaving it to the char scan', () => {
+    expect(matchMarkdownLinkAt('[evil](javascript:alert(1))', 0)).toBeNull()
+    expect(matchMarkdownLinkAt('[b](b', 0)).toBeNull()
+    // An empty label would render as a zero-width anchor that eats its own text.
+    expect(matchMarkdownLinkAt('[](file:///x)', 0)).toBeNull()
+    expect(matchMarkdownLinkAt('[spaces](   )', 0)).toBeNull()
+    expect(matchMarkdownLinkAt('not at a bracket', 0)).toBeNull()
+    expect(matchMarkdownLinkAt('x[ignored](https://example.com)', 0)).toBeNull()
   })
 })
 

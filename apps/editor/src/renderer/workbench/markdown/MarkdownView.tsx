@@ -549,7 +549,8 @@ function SafeLink({ href, children }: { href: string; children: ReactNode }) {
   const scrollToAnchor = useContext(AnchorScrollContext)
   const openDocLink = useContext(DocLinkContext)
   const isAnchor = isAnchorHref(href)
-  const isFile = href.startsWith('file:')
+  // Case-insensitive: a bare `FILE:///…` autolink carries the scheme as typed.
+  const isFile = /^file:/i.test(href)
   const isFilePath = !isFile && !isAnchor && looksLikeFilePath(href)
   // A relative doc link: starts with ./ or ../ and the path portion ends in .md
   const isRelativeDocLink =

@@ -54,6 +54,11 @@ describe('parseMarkdownStreaming — equivalence with parseMarkdown', () => {
     // The blockquote branch of offsetLines: a blockquote (with children) landing
     // in the tail must have its children's lines shifted by the tail offset.
     'blockquote after sealed paragraph': 'para\n\n> q\n> r',
+    // A markdown link and a bare file URI never span a blank line, so each has
+    // to be parsed whole by whichever side of the sealed/tail split it lands on.
+    'markdown link and bare file uri around a blank line':
+      '[@a.md](file:///E:/x/a.md) 打开这个\n\nfile:///E:/y/b.md 与 [doc](../c.md)',
+    'link and url in one paragraph': '先 [@a.md](file:///E:/x/a.md) 再 file:///E:/y/b.md',
     'blockquote with list after sealed paragraph': 'para\n\n> intro\n>\n> - a',
   }
 

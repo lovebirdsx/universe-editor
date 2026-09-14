@@ -116,7 +116,7 @@ export function fileUriLinkTarget(href: string): FileUriLinkTarget | undefined {
   } catch {
     return undefined
   }
-  if (uri.scheme !== 'file') return undefined
+  if (uri.scheme.toLowerCase() !== 'file') return undefined
   // 本机路径：仅处理 file: href，不涉及远端 scheme。
   const fsPath = uri.fsPath
   if (fsPath.length === 0) return undefined

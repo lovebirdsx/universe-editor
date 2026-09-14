@@ -226,6 +226,17 @@ describe('matchFilePathAt', () => {
     expect(matchFilePathAt('见项目/子级/结构', 1)).toBeNull()
   })
 
+  it('leaves a file:/// URI to the URL matcher, not the path grammar', () => {
+    // Why matchBareUrl must consume a bare `file://` first: the path grammar
+    // only sees the URI's tail (`/x/a.md`) — the drive-letter start is blocked
+    // by the preceding-'/' guard — so a character-by-character scan (the code
+    // block / terminal consumers) would link a fragment of the URI instead.
+    const uri = 'file:///E:/x/a.md'
+    expect(matchFilePathAt(uri, 0)).toBeNull()
+    expect(matchFilePathAt(uri, uri.indexOf('E'))).toBeNull()
+    expect(matchFilePathAt(uri, uri.indexOf('/x/a.md'))?.full).toBe('/x/a.md')
+  })
+
   it('does not catastrophically backtrack on a slash-dense data: URL (freeze repro)', () => {
     // Regression: restoring a session with an image lands the image as a
     // `[@image](data:image/png;base64,<~8KB>)` markdown text block. The inline

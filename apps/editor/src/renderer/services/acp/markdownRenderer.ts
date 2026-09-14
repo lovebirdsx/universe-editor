@@ -23,7 +23,7 @@
  *    - ![alt](url)       (image — https/file only)
  *    - <url>           (autolink — http/https/file only)
  *    - <a id="x"></a> / <a name="x"></a> (empty in-document anchor target)
- *    - bare http(s)://…
+ *    - bare http(s)://… / file://…
  *    - `\\` escapes the next punctuation char
  *--------------------------------------------------------------------------------------------*/
 
@@ -560,38 +560,22 @@ export function parseInline(text: string): readonly MdInline[] {
       }
     }
 
-    // Link: [label](url). We require a balanced parens count > 0.
-    if (ch === '[') {
-      const labelEnd = findMatching(text, i, '[', ']')
-      if (labelEnd !== -1 && text[labelEnd + 1] === '(') {
-        const urlEnd = findMatching(text, labelEnd + 1, '(', ')')
-        if (urlEnd !== -1) {
-          const label = text.slice(i + 1, labelEnd)
-          const href = text.slice(labelEnd + 2, urlEnd).trim()
-          // An image embedded as a plain link — e.g. `[@image](data:image/..)`,
-          // how agents without an ACP image block carry a picture — renders as a
-          // real image (the label becomes its alt text).
-          if (isImageDataUrl(href)) {
-            flush()
-            out.push({ type: 'image', src: href, alt: label })
-            i = urlEnd + 1
-            continue
-          }
-          if (
-            isSafeHref(href) ||
-            looksLikeFilePath(href) ||
-            isAnchorHref(href) ||
-            (href.includes('#') &&
-              !href.startsWith('#') &&
-              looksLikeFilePath(href.slice(0, href.indexOf('#'))))
-          ) {
-            flush()
-            out.push({ type: 'link', href, children: parseInline(label) })
-            i = urlEnd + 1
-            continue
-          }
-        }
-      }
+    // Link: [label](url) — [label] must be non-empty and the parens balanced.
+    // An image embedded as a plain link — e.g. `[@image](data:image/..)`, how
+    // agents without an ACP image block carry a picture — renders as a real
+    // image (the label becomes its alt text). Anything the href predicate
+    // rejects stays literal text: the scan falls through to the bare-URL /
+    // bare-path probes one character later.
+    const link = matchMarkdownLinkAt(text, i)
+    if (link) {
+      flush()
+      out.push(
+        link.image
+          ? { type: 'image', src: link.href, alt: link.label }
+          : { type: 'link', href: link.href, children: parseInline(link.label) },
+      )
+      i = link.end
+      continue
     }
 
     // Autolink: <url> where url is http(s) or file; also accept explicit
@@ -654,6 +638,53 @@ export function parseInline(text: string): readonly MdInline[] {
   }
   flush()
   return out
+}
+
+/** An explicit markdown link `[label](href)` matched at some index. */
+export interface MarkdownLinkMatch {
+  /** Link text, verbatim (callers parse it for inline formatting or render it as-is). */
+  readonly label: string
+  readonly href: string
+  /** Index just past the closing `)` — the cursor position after the link. */
+  readonly end: number
+  /** `href` is an inline base64 image data URL; the caller decides image vs text. */
+  readonly image: boolean
+}
+
+/**
+ * Match an explicit markdown link `[label](href)` anchored at index {@link i}.
+ * Shared by the inline parser and the plain-text scanner (user prompts render
+ * verbatim, but links must stay clickable), so both agree on what a link is.
+ *
+ * Callers decide what to do with the match: `parseInline` turns `image` hrefs
+ * into pictures, while the plain scanner keeps those — and same-document
+ * anchors (`#x`), which have no target there — literal. Anything the href
+ * predicate rejects returns null, leaving the text to the character-by-character
+ * scan (`[x](javascript:alert(1))` stays literal).
+ */
+export function matchMarkdownLinkAt(text: string, i: number): MarkdownLinkMatch | null {
+  if (text[i] !== '[') return null
+  const labelEnd = findMatching(text, i, '[', ']')
+  if (labelEnd === -1 || text[labelEnd + 1] !== '(') return null
+  const urlEnd = findMatching(text, labelEnd + 1, '(', ')')
+  if (urlEnd === -1) return null
+  const label = text.slice(i + 1, labelEnd)
+  // An empty label would render as a zero-width anchor, hiding the text it
+  // swallowed — `[](file:///x)` stays literal.
+  if (label.trim().length === 0) return null
+  const href = text.slice(labelEnd + 2, urlEnd).trim()
+  const isImage = isImageDataUrl(href)
+  const accepted =
+    isImage ||
+    isSafeHref(href) ||
+    looksLikeFilePath(href) ||
+    isAnchorHref(href) ||
+    // A `path#fragment` href: the path portion is what decides (pitfall 11 in
+    // the markdown subsystem map: the fragment is split off by the opener).
+    (href.includes('#') &&
+      !href.startsWith('#') &&
+      looksLikeFilePath(href.slice(0, href.indexOf('#'))))
+  return accepted ? { label, href, end: urlEnd + 1, image: isImage } : null
 }
 
 /**
@@ -920,11 +951,14 @@ const EMPTY_ANCHOR_RE = /^<a\s+(?:id|name)\s*=\s*"([^"<]+)"\s*><\/a\s*>/i
 // bracket delimiters <>() — every non-ASCII char (full-width punctuation like
 // （）， CJK prose, emoji) terminates the URL. Chinese prose commonly follows a
 // URL with no intervening space (`http://x.com（备注` / `…下载`), so letting any
-// non-ASCII through would swallow the trailing prose into the link.
-const BARE_URL_RE = /^(https?:\/\/[^\s<>()\u007f-\uffff]*[^\s<>().,;:!?\u007f-\uffff])/i
+// non-ASCII through would swallow the trailing prose into the link. `file://` is
+// included because agents and users write host file URIs bare
+// (`file:///E:/x/a.md`): consuming the whole URI up front also keeps its drive
+// tail from being picked up as a `/x/a.md`-style path right after.
+const BARE_URL_RE = /^((?:https?|file):\/\/[^\s<>()\u007f-\uffff]*[^\s<>().,;:!?\u007f-\uffff])/i
 
 // Also exported for plaintext linkification (user-prompt rendering in
-// MessageContent variant="plain"), which recognizes bare URLs only.
+// MessageContent variant="plain"), so both renderers agree on bare links.
 export function matchBareUrl(text: string, i: number): string | null {
   // Avoid matching mid-word like `foohttp://...`
   if (i > 0 && /[A-Za-z0-9_/.~%-]/.test(text[i - 1] ?? '')) return null

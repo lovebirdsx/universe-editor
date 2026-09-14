@@ -70,6 +70,33 @@ function renderPlain(blocks: readonly ContentBlock[]) {
   )
 }
 
+// Plus the services a file-link click needs: file:// links resolve through the
+// shared file-link pipeline, which probes the target on disk before opening.
+function renderWithFileServices(
+  blocks: readonly ContentBlock[],
+  resolver: IEditorResolverServiceType,
+  variant?: 'markdown' | 'plain',
+) {
+  const services = new ServiceCollection()
+  services.set(IEditorResolverService, resolver)
+  services.set(IFileService, {
+    _serviceBrand: undefined,
+    exists: () => Promise.resolve(true),
+    stat: (resource: unknown) =>
+      Promise.resolve({ resource, isFile: true, isDirectory: false, size: 0, mtime: 0 }),
+  } as unknown as IFileServiceType)
+  services.set(IEditorService, {
+    _serviceBrand: undefined,
+    openEditor: vi.fn(),
+  } as unknown as IEditorServiceType)
+  const inst = new InstantiationService(services)
+  return render(
+    <ServicesContext.Provider value={inst}>
+      <MessageContent blocks={blocks} {...(variant ? { variant } : {})} />
+    </ServicesContext.Provider>,
+  )
+}
+
 describe('MessageContent', () => {
   it('renders an empty container when no blocks', () => {
     const { container } = renderContent([])
@@ -346,14 +373,20 @@ describe('MessageContent', () => {
       expect(container.querySelector('em')).toBeNull()
     })
 
-    it('does not parse ATX headings or markdown link syntax', () => {
-      const { container } = renderPlain([
-        { type: 'text', text: '# not a heading\n[not a link](https://example.com)' },
-      ])
+    it('does not parse ATX headings', () => {
+      const { container } = renderPlain([{ type: 'text', text: '# not a heading' }])
       expect(container.querySelector('h1')).toBeNull()
-      expect(screen.getByTestId('acp-plaintext').textContent).toBe(
-        '# not a heading\n[not a link](https://example.com)',
-      )
+      expect(screen.getByTestId('acp-plaintext').textContent).toBe('# not a heading')
+    })
+
+    it('parses a markdown link into a link, replacing the syntax with its label', () => {
+      const { container } = renderPlain([
+        { type: 'text', text: 'see [the docs](https://example.com/d) now' },
+      ])
+      expect(screen.getByTestId('acp-plaintext').textContent).toBe('see the docs now')
+      const link = container.querySelector('a')!
+      expect(link.getAttribute('href')).toBe('https://example.com/d')
+      expect(link.getAttribute('target')).toBe('_blank')
     })
 
     it('preserves newlines via the pre-wrap block', () => {
@@ -413,15 +446,14 @@ describe('MessageContent', () => {
       ])
     })
 
-    it('linkifies the bare URL inside markdown link syntax without parsing the syntax', () => {
+    it('leaves a markdown link whose href is unsafe literal', () => {
       const { container } = renderPlain([
-        { type: 'text', text: '[not a link](https://example.com)' },
+        { type: 'text', text: '[evil](javascript:alert(1)) and [b](vbscript:x)' },
       ])
-      const plain = screen.getByTestId('acp-plaintext')
-      // The syntax characters stay literal text; only the bare URL is a link.
-      expect(plain.textContent).toBe('[not a link](https://example.com)')
-      const link = container.querySelector('a')!
-      expect(link.getAttribute('href')).toBe('https://example.com')
+      expect(container.querySelector('a')).toBeNull()
+      expect(screen.getByTestId('acp-plaintext').textContent).toBe(
+        '[evil](javascript:alert(1)) and [b](vbscript:x)',
+      )
     })
 
     it('does not linkify a URL glued to a preceding word char', () => {
@@ -514,6 +546,115 @@ describe('MessageContent', () => {
       // With only IEditorResolverService registered, resolution reports
       // "missing" (no file service) — the click must not throw.
       fireEvent.click(screen.getByTestId('md-filepath'))
+    })
+
+    it('renders a replayed @-mention and the prompt prose as one clickable link', () => {
+      // Regression: a restored session replays the prompt with the mention's
+      // transport text (`[@Name](file:///…)`) fused with the user's prose. It
+      // used to render dead — the bare-URL matcher only knew http(s), and the
+      // path matcher only saw the URI's `/…` tail.
+      renderPlain([
+        {
+          type: 'text',
+          text:
+            '[@PerformanceReport.md](file:///E:/workspace/Source/Client/Saved/Editor/PerformanceReport.md) ' +
+            '这个是最近一次的编辑器启动性能报告，请你帮我进行整体分析。',
+        },
+      ])
+      const link = screen.getByRole('link', { name: '@PerformanceReport.md' })
+      expect(link.getAttribute('href')).toBe(
+        'file:///E:/workspace/Source/Client/Saved/Editor/PerformanceReport.md',
+      )
+      expect(screen.getByTestId('acp-plaintext').textContent).toBe(
+        '@PerformanceReport.md 这个是最近一次的编辑器启动性能报告，请你帮我进行整体分析。',
+      )
+    })
+
+    it('renders a markdown file link as a link instead of literal syntax', async () => {
+      const resolver = makeEditorResolver()
+      const open = vi.spyOn(window, 'open').mockImplementation(() => null)
+      try {
+        renderWithFileServices(
+          [{ type: 'text', text: '[@a.md](file:///E:/x/a.md) 看这个' }],
+          resolver,
+          'plain',
+        )
+        const link = screen.getByRole('link', { name: '@a.md' })
+        fireEvent.click(link)
+        await waitFor(() => expect(resolver.openEditor).toHaveBeenCalledTimes(1))
+        expect(open).not.toHaveBeenCalled()
+      } finally {
+        open.mockRestore()
+      }
+    })
+
+    it('renders a bare file:// URI as a link, not an external window.open', () => {
+      const open = vi.spyOn(window, 'open').mockImplementation(() => null)
+      try {
+        renderPlain([{ type: 'text', text: '看 file:///E:/x/a.md 这个文件' }])
+        const link = screen.getByRole('link', { name: 'file:///E:/x/a.md' })
+        expect(link.getAttribute('target')).toBeNull()
+        fireEvent.click(link)
+        expect(open).not.toHaveBeenCalled()
+      } finally {
+        open.mockRestore()
+      }
+    })
+
+    it('keeps a FILE: scheme inside the file pipeline instead of window.open', async () => {
+      const resolver = makeEditorResolver()
+      const open = vi.spyOn(window, 'open').mockImplementation(() => null)
+      try {
+        renderWithFileServices(
+          [{ type: 'text', text: '[@a.md](FILE:///E:/x/a.md)' }],
+          resolver,
+          'plain',
+        )
+        fireEvent.click(screen.getByRole('link', { name: '@a.md' }))
+        await waitFor(() => expect(resolver.openEditor).toHaveBeenCalledTimes(1))
+        expect(open).not.toHaveBeenCalled()
+      } finally {
+        open.mockRestore()
+      }
+    })
+
+    it('keeps a :line:col location in the href of a markdown file link', () => {
+      renderPlain([{ type: 'text', text: '[@a.md](file:///E:/x/a.md:10:5)' }])
+      // The label shows the file name; splitting the location off the URI is
+      // fileUriLinkTarget's job (covered in markdownLinkResolve.test.ts).
+      const link = screen.getByRole('link', { name: '@a.md' })
+      expect(link.getAttribute('href')).toBe('file:///E:/x/a.md:10:5')
+    })
+
+    it('renders a relative markdown file link with its label', () => {
+      renderPlain([{ type: 'text', text: '见 [文档](../foo.md)' }])
+      expect(screen.getByRole('link', { name: '文档' }).getAttribute('href')).toBe('../foo.md')
+      expect(screen.getByTestId('acp-plaintext').textContent).toBe('见 文档')
+    })
+
+    it('keeps a same-document anchor link literal (nothing to scroll in a prompt)', () => {
+      const { container } = renderPlain([{ type: 'text', text: '见 [跳转](#section) 说明' }])
+      expect(container.querySelector('a')).toBeNull()
+      expect(screen.getByTestId('acp-plaintext').textContent).toBe('见 [跳转](#section) 说明')
+    })
+
+    it('keeps an inline base64 image link literal instead of rendering a picture', () => {
+      const dataUrl = 'data:image/png;base64,iVBORw0KGgo='
+      const { container } = renderPlain([{ type: 'text', text: `图 [@image](${dataUrl})` }])
+      expect(container.querySelector('a')).toBeNull()
+      expect(screen.queryByTestId('acp-image-block')).toBeNull()
+      expect(screen.getByTestId('acp-plaintext').textContent).toBe(`图 [@image](${dataUrl})`)
+    })
+
+    it('linkifies a path inside a link-shaped text that is not a link', () => {
+      // A full-width paren is not the markdown link delimiter, so the syntax
+      // stays literal — but the bare path inside it is still a path link.
+      const { container } = renderPlain([{ type: 'text', text: '见 [注释]（src/foo/bar.ts）末尾' }])
+      expect(screen.getByTestId('acp-plaintext').textContent).toBe(
+        '见 [注释]（src/foo/bar.ts）末尾',
+      )
+      const links = [...container.querySelectorAll('a')]
+      expect(links.map((l) => l.textContent)).toEqual(['src/foo/bar.ts'])
     })
   })
 })
