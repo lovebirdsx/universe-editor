@@ -75,4 +75,33 @@ describe('AcpChatViewStateCache', () => {
     expect(AcpChatViewStateCache.load('early')?.scrollTop).toBe(2)
     expect(AcpChatViewStateCache.load('s0')).toBeUndefined()
   })
+
+  it('round-trips the focus surface separately from the scroll view state', () => {
+    AcpChatViewStateCache.setFocusSurface('s1', 'timeline')
+    expect(AcpChatViewStateCache.loadFocusSurface('s1')).toBe('timeline')
+    // The two maps are independent: recording a surface must not fabricate a view
+    // state (ChatScroll treats a missing entry as "stick to the bottom").
+    expect(AcpChatViewStateCache.load('s1')).toBeUndefined()
+    AcpChatViewStateCache.setFocusSurface('s1', 'prompt')
+    expect(AcpChatViewStateCache.loadFocusSurface('s1')).toBe('prompt')
+  })
+
+  it('clear drops the focus surface too', () => {
+    AcpChatViewStateCache.setFocusSurface('s1', 'timeline')
+    AcpChatViewStateCache.clear('s1')
+    expect(AcpChatViewStateCache.loadFocusSurface('s1')).toBeUndefined()
+  })
+
+  // Focus landing in a session is what keeps it warm: a chat whose surface never
+  // changes still writes on every focus move, so it must not be evicted first.
+  it('a re-set of the same surface keeps the session alive past the cap', () => {
+    AcpChatViewStateCache.setFocusSurface('early', 'timeline')
+    for (let i = 0; i < 15; i++) {
+      AcpChatViewStateCache.setFocusSurface(`s${i}`, 'prompt')
+    }
+    AcpChatViewStateCache.setFocusSurface('early', 'timeline')
+    AcpChatViewStateCache.setFocusSurface('late', 'prompt')
+    expect(AcpChatViewStateCache.loadFocusSurface('early')).toBe('timeline')
+    expect(AcpChatViewStateCache.loadFocusSurface('s0')).toBeUndefined()
+  })
 })

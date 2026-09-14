@@ -108,6 +108,7 @@ import { estimateWrappedLinesUpTo } from './contentOverflow.js'
 import { shouldAdjustTimelineScrollOnSizeChange } from './timelineVirtualScroll.js'
 import { ChatFindWidget } from './ChatFindWidget.js'
 import { useChatFind } from './useChatFind.js'
+import { useEditorGroup } from '../editor/EditorGroupContext.js'
 import styles from './agents.module.css'
 
 // The keyboard-selected slot is session-level state: every mounted chat
@@ -123,6 +124,11 @@ const selectionSyncEmitter = new Emitter<{
 
 const STICK_THRESHOLD_PX = 32
 
+/** The prompt input's root element (PromptInput's `<form>`): DOM focus inside it
+ *  means the session input is the focused surface, anything else inside the chat
+ *  counts as the timeline. */
+const PROMPT_SURFACE_SELECTOR = '[data-testid="acp-prompt"]'
+
 export interface WidgetHandle {
   move: (direction: AcpTimelineMoveDirection) => void
   moveLevel: (direction: AcpTimelineLevelDirection) => void
@@ -130,6 +136,9 @@ export interface WidgetHandle {
   /** Pull keyboard focus into this widget. Returns whether focus actually landed
    *  so callers (Alt+T → focusEditorInput) can fall back when there's no target. */
   focus: () => boolean
+  /** Pull keyboard focus onto the timeline scroll container — the surface the
+   *  message-card selection and Alt+J/K navigation live on. */
+  focusTimeline: () => boolean
   jumpToPlan: () => void
   toggleCollapse: () => void
   cycleCollapseMode: () => void
@@ -192,6 +201,7 @@ function createNoopHandle(): WidgetHandle {
     moveLevel: noop,
     scrollTimeline: noop,
     focus: () => false,
+    focusTimeline: () => false,
     jumpToPlan: noop,
     toggleCollapse: noop,
     cycleCollapseMode: noop,
@@ -251,6 +261,8 @@ function ChatSessionBody({
 }) {
   const widgetService = useService(IAcpChatWidgetService)
   const history = useService(IAcpSessionHistoryService)
+  // Null in the sidebar panel — only the full-screen editor host restores focus.
+  const group = useEditorGroup()
   const timeline = useObservable(session.timeline)
   // The sticky bar pins the first user message; until one exists the session is
   // "blank" and the cwd pill docks above the prompt input instead (it shares
@@ -263,6 +275,29 @@ function ChatSessionBody({
   const containerRef = useRef<HTMLDivElement | null>(null)
   const handleRef = useRef<WidgetHandle>(createNoopHandle())
   const widgetRef = useRef<AcpChatWidget | null>(null)
+  // Focus decisions this chat makes once per mount, re-pointed during render when
+  // the session changes (EditorGroupView reuses this component across session tabs
+  // — `<Component input={active} />` has no key) so both flags belong to the
+  // session on screen. The surface itself is *not* cached here: it flips on every
+  // focus move, and reads go straight to AcpChatViewStateCache.
+  const mountFocusRef = useRef<{
+    sessionId: string
+    promptAutoFocus: boolean
+    restored: boolean
+  } | null>(null)
+  if (mountFocusRef.current?.sessionId !== session.id) {
+    mountFocusRef.current = {
+      sessionId: session.id,
+      // Frozen at mount: PromptInput re-focuses its editor whenever the
+      // `autoFocus` prop flips to true, so recomputing this from the live surface
+      // would drag focus back into the input the moment the user moves on to it
+      // (tabbing to the send button, which sits inside the prompt form).
+      promptAutoFocus:
+        autoFocus === true &&
+        (AcpChatViewStateCache.loadFocusSurface(session.id) ?? 'prompt') !== 'timeline',
+      restored: false,
+    }
+  }
   // One-shot plain lookup, deliberately NOT an entries subscription: a session's
   // sideTaskOf flag is fixed at fork time and the row precedes the resume, so it
   // never flips while this chat is mounted — subscribing would re-render the
@@ -311,6 +346,11 @@ function ChatSessionBody({
       moveTimelineLevel: (d) => handleRef.current.moveLevel(d),
       scrollTimeline: (t) => handleRef.current.scrollTimeline(t),
       focusInput: () => handleRef.current.focus(),
+      focusTimeline: () => handleRef.current.focusTimeline(),
+      // Read through to the cache rather than snapshotting at mount: an explicit
+      // "focus the input" (deep link / session switcher) records the surface
+      // while this chat is still mounting and must win here.
+      getFocusSurface: () => AcpChatViewStateCache.loadFocusSurface(session.id) ?? 'prompt',
       jumpToPlan: () => handleRef.current.jumpToPlan(),
       toggleCollapse: () => handleRef.current.toggleCollapse(),
       cycleCollapseMode: () => handleRef.current.cycleCollapseMode(),
@@ -331,6 +371,29 @@ function ChatSessionBody({
       widgetRef.current = null
     }
   }, [widgetService, session.id])
+
+  // Remember which surface inside the chat holds keyboard focus, so re-activating
+  // the session editor restores the user's own surface (a message card) instead of
+  // dropping them into the prompt input. Written on every focus move rather than in
+  // persist(): an editor-tab switch renders the *new* ChatBody before the outgoing
+  // instance's unmount flush runs, and the new instance reads this value during
+  // render.
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+    const onFocusIn = (e: FocusEvent): void => {
+      const target = e.target
+      if (!(target instanceof Element)) return
+      // Anything inside the prompt form (input, config bar, send button) is the
+      // prompt surface; the rest of the chat is the timeline.
+      AcpChatViewStateCache.setFocusSurface(
+        session.id,
+        target.closest(PROMPT_SURFACE_SELECTOR) ? 'prompt' : 'timeline',
+      )
+    }
+    container.addEventListener('focusin', onFocusIn)
+    return () => container.removeEventListener('focusin', onFocusIn)
+  }, [session.id])
 
   // PromptInput reports its popover open/closed state up so the widget service
   // can flip `acpPromptPopupVisible` for the focused widget (gates the suggestion
@@ -382,6 +445,33 @@ function ChatSessionBody({
   // undefined forever — Ctrl+Alt+I and all timeline-nav commands went dead for
   // resumed sessions (regression from 50d30bd8).
   const replaying = isReplayingHistory && !hasTimelineContent
+
+  // Restore the remembered surface once the chat is on screen. The editor-group
+  // focus pass (EditorGroupView → focusEditorInput) can't do it on a tab switch:
+  // it runs as a layout effect, i.e. before this subtree's passive effects have
+  // registered the widget, so focusSession() finds nothing and gives up. The
+  // `replaying` guard must stay ahead of the one-shot: a resuming session mounts
+  // the loading placeholder first, whose handle is still the noop.
+  useEffect(() => {
+    if (replaying) return
+    const state = mountFocusRef.current
+    // One-shot per session: re-firing on later re-renders would fight every
+    // deliberate focus move the user makes afterwards.
+    if (!state || state.restored) return
+    state.restored = true
+    // Only a host that owns keyboard focus for this chat restores it: the
+    // full-screen session editor (autoFocus / readOnly) does, the sidebar panel
+    // deliberately does not.
+    if (autoFocus !== true && readOnly !== true) return
+    // Focus must not be yanked into a group the user isn't working in — at startup
+    // every group mounts its active editor, but only one of them is active.
+    if (group?.isActive !== true) return
+    // Re-read the surface: an explicit "focus the input" recorded while this chat
+    // was mounting must win over the surface remembered from last time.
+    const surface = AcpChatViewStateCache.loadFocusSurface(session.id) ?? 'prompt'
+    if (readOnly !== true && surface !== 'timeline') return
+    handleRef.current.focusTimeline()
+  }, [session.id, autoFocus, readOnly, group, replaying])
 
   const chatClassName = hasTimelineContent
     ? styles['chat']
@@ -447,7 +537,12 @@ function ChatSessionBody({
                 isSideTask={isSideTask}
                 handleRef={handleRef}
                 onPopoverOpenChange={handlePopoverOpenChange}
-                {...(autoFocus !== undefined ? { autoFocus } : {})}
+                // Don't claim the input on mount when the user's last focus in this
+                // session was on the timeline — the restore effect above hands focus
+                // to the timeline instead, and a mount auto-focus would fight it.
+                {...(autoFocus !== undefined
+                  ? { autoFocus: mountFocusRef.current?.promptAutoFocus === true }
+                  : {})}
                 // The cwd pill docks above the input only while the session has
                 // no first user message to pin; once the sticky bar exists it
                 // hosts the pill inside its header row instead.
@@ -1275,18 +1370,22 @@ function ChatScroll({
     }
   }, [collapse, persist])
 
+  // The timeline's keyboard surface: the tabIndex={-1} scroll container Alt+J/K
+  // drive and message cards are selected on. Keyboard navigation, the read-only
+  // Alt+T fallback and the cross-tab focus restore all funnel through here.
+  // popoverHide dismisses any prompt suggestion popup left open (it ignores
+  // blur), so the stale acpPromptPopupVisible key can't keep capturing
+  // arrows/Enter — a no-op when no popup is open.
+  const focusTimeline = useCallback((): boolean => {
+    const el = containerRef.current
+    if (!el) return false
+    el.focus({ preventScroll: true })
+    handleRef.current.popoverHide()
+    return true
+  }, [handleRef])
+
   useEffect(() => {
     const handle = handleRef.current
-    // Keyboard navigation moves DOM focus onto the scroll container alongside
-    // the focused-key highlight: without it focus stays in the prompt Monaco and
-    // Shift+F10 / ContextMenu never reaches this container's handler. popoverHide
-    // dismisses any prompt suggestion popup left open (it ignores blur), so the
-    // stale acpPromptPopupVisible key can't keep capturing arrows/Enter — a no-op
-    // when no popup is open.
-    const focusContainer = (): void => {
-      containerRef.current?.focus({ preventScroll: true })
-      handle.popoverHide()
-    }
     // Shared tail of every focus move: set the key, reveal it, persist. Prefers
     // the live DOM node (also covers sub-agent items inside their parent's
     // virtual row); falls back to the virtualizer for unmounted top-level rows
@@ -1294,7 +1393,7 @@ function ChatScroll({
     const focusAndReveal = (key: string): void => {
       setFocusedKey(key)
       focusedKeyRef.current = key
-      focusContainer()
+      focusTimeline()
       const container = containerRef.current
       const el = container?.querySelector<HTMLElement>(
         `[data-timeline-key="${cssEscape(key)}"], [data-sticky-key="${cssEscape(key)}"]`,
@@ -1367,7 +1466,7 @@ function ChatScroll({
       if (displayIndex === -1 || (topLevel && direction === 'first')) {
         setFocusedKey(nextKey)
         focusedKeyRef.current = nextKey
-        focusContainer()
+        focusTimeline()
         if (container) container.scrollTop = 0
         persist()
         return
@@ -1375,7 +1474,7 @@ function ChatScroll({
       if (topLevel && direction === 'last') {
         setFocusedKey(nextKey)
         focusedKeyRef.current = nextKey
-        focusContainer()
+        focusTimeline()
         scrollToBottomStable()
         persist()
         return
@@ -1468,7 +1567,7 @@ function ChatScroll({
         stickRef.current = false
         setFocusedKey(PLAN_SLOT_KEY)
         focusedKeyRef.current = PLAN_SLOT_KEY
-        focusContainer()
+        focusTimeline()
         const container = containerRef.current
         if (container) container.scrollTop = 0
         persist()
@@ -1493,7 +1592,7 @@ function ChatScroll({
       stickRef.current = false
       setFocusedKey(nextKey)
       focusedKeyRef.current = nextKey
-      focusContainer()
+      focusTimeline()
       const container = containerRef.current
       const el = container?.querySelector<HTMLElement>(
         `[data-timeline-key="${cssEscape(nextKey)}"]`,
@@ -1516,7 +1615,7 @@ function ChatScroll({
       handle.getFocusedText = () => undefined
       handle.setFocusedKey = noop
     }
-  }, [handleRef, handleToggleCollapse, persist, scrollToBottomStable, session])
+  }, [handleRef, focusTimeline, handleToggleCollapse, persist, scrollToBottomStable, session])
 
   // Find commands bind separately: the callbacks come from useChatFind and are
   // stable, so this effect only re-runs if one identity actually changes — it
@@ -1527,32 +1626,30 @@ function ChatScroll({
     handle.openFind = openFind
     handle.findNext = nextFind
     handle.findPrev = prevFind
+    // The widget's timeline entry point (focus restore + the read-only Alt+T
+    // fallback) is owned here because the scroll container ref lives in this
+    // component.
+    handle.focusTimeline = focusTimeline
     // Closing returns keyboard focus to the scroll container so subsequent
     // Alt+J/K keep working without a click (the input had stolen focus).
     handle.closeFind = () => {
       closeFind()
-      containerRef.current?.focus({ preventScroll: true })
+      focusTimeline()
     }
     // Read-only foreign sessions render no PromptInput, so nothing else claims
     // `handle.focus`. Point Alt+T (focusInput) at the scroll container — the same
     // tabIndex={-1} host that Alt+J/K keyboard navigation uses — so focus leaves
     // the terminal and lands on the (browsable) message list instead of nowhere.
-    if (readOnly) {
-      handle.focus = () => {
-        const el = containerRef.current
-        if (!el) return false
-        el.focus({ preventScroll: true })
-        return true
-      }
-    }
+    if (readOnly) handle.focus = focusTimeline
     return () => {
       handle.openFind = noop
       handle.closeFind = noop
       handle.findNext = noop
       handle.findPrev = noop
+      handle.focusTimeline = () => false
       if (readOnly) handle.focus = () => false
     }
-  }, [handleRef, openFind, closeFind, nextFind, prevFind, readOnly])
+  }, [handleRef, focusTimeline, openFind, closeFind, nextFind, prevFind, readOnly])
 
   return (
     <ContentExpansionProvider value={contentExpansion}>

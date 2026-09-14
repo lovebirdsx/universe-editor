@@ -114,6 +114,7 @@ class FakeChatWidgetService {
   declare readonly _serviceBrand: undefined
   readonly lastFocusedWidget = undefined
   readonly focusSessionInput = vi.fn(() => true)
+  readonly focusSession = vi.fn(() => true)
   register(): never {
     throw new Error('not implemented')
   }

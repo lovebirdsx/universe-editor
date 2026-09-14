@@ -127,7 +127,7 @@ describe('executeAiFix', () => {
         defaultAgentId: () => 'claude-code',
       },
       location: { location: observableValue<'editor' | 'sidebar'>('t.loc', 'sidebar') },
-      widgets: { focusSessionInput },
+      widgets: { focusSessionInput, focusSession: vi.fn() },
       groups: { groups: [], activeGroup: {}, activeGroupForOpen: {}, activateGroup: vi.fn() },
       inst: { createInstance: vi.fn() },
       layout: { getVisible: () => true, toggleVisible: vi.fn() },

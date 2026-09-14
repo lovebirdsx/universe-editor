@@ -10,6 +10,10 @@
  *  currently contains DOM focus. Action `when` clauses gate on this so Alt+J
  *  doesn't fire from the Explorer.
  *
+ *  Also routes *which surface* a focus request lands on: `focusSession` restores
+ *  the surface the user last used (timeline card vs. prompt input, remembered in
+ *  AcpChatViewStateCache), while `focusSessionInput` always targets the input.
+ *
  *  Also owns the `acpPromptPopupVisible` contextKey: true iff the *focused*
  *  widget has its slash/mention popover open. Per-widget popover state is pushed
  *  via `setPopoverOpen` and aggregated against focus the same way as
@@ -37,6 +41,7 @@ import {
   type IContextKey,
   type IDisposable,
 } from '@universe-editor/platform'
+import { AcpChatViewStateCache, type AcpFocusSurface } from './acpChatViewStateCache.js'
 
 export type AcpTimelineMoveDirection = 'next' | 'prev' | 'first' | 'last'
 
@@ -52,7 +57,14 @@ export interface AcpChatWidget {
    *  or back to its parent card ('out'). */
   moveTimelineLevel(direction: AcpTimelineLevelDirection): void
   scrollTimeline(target: AcpTimelineScrollTarget): void
+  /** Move keyboard focus into the prompt input. Returns whether focus landed. */
   focusInput(): boolean
+  /** Move keyboard focus onto the timeline scroll container — the surface
+   *  Alt+J/K navigate, where a message card selection lives. Returns whether
+   *  focus landed. */
+  focusTimeline(): boolean
+  /** Which surface inside this chat last held keyboard focus. */
+  getFocusSurface(): AcpFocusSurface
   /** Reveal the latest ExitPlanMode plan card (a `switch_mode` tool call). */
   jumpToPlan(): void
   /** Toggle the collapsed state of the currently focused timeline item. */
@@ -83,6 +95,21 @@ export interface IAcpChatWidgetService {
   readonly _serviceBrand: undefined
   readonly lastFocusedWidget: AcpChatWidget | undefined
   register(widget: AcpChatWidget): IDisposable
+  /**
+   * Focus the chat's *remembered* surface — the timeline (message card) when that
+   * is where the user left off, the prompt input otherwise. This is what the
+   * editor-group focus pass (`EditorInput.focus()`) wants: re-activating a
+   * session tab must not yank the user out of the card they were reading.
+   * Returns false when no widget is mounted yet; the mounting ChatBody restores
+   * the surface itself in that case.
+   */
+  focusSession(sessionId: string): boolean
+  /**
+   * Focus the prompt input explicitly (Alt+T / deep link / reveal-from-list).
+   * Unlike {@link focusSession} the caller's intent wins over the remembered
+   * surface — so the intent is recorded too, or a ChatBody mounting in the same
+   * tick would restore the timeline over it.
+   */
   focusSessionInput(sessionId: string): boolean
   /** The registered widget for a session id, or undefined if none is mounted.
    *  Used to route session-scoped commands (timeline nav / find / copy) to the
@@ -225,7 +252,20 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
     return this._registrations.add(sub)
   }
 
+  focusSession(sessionId: string): boolean {
+    const target = this.widgetForSession(sessionId)
+    // No widget: the chat is still mounting (or is parked on a resumer). Don't
+    // claim the focus — report failure so `focusEditorInput` falls back to the
+    // group body, exactly as before this surface routing existed.
+    if (!target) return false
+    return target.getFocusSurface() === 'timeline' ? target.focusTimeline() : target.focusInput()
+  }
+
   focusSessionInput(sessionId: string): boolean {
+    // Explicit input focus is authoritative: record it before routing so a
+    // ChatBody mounting in this same tick reads 'prompt' and leaves the input
+    // focused instead of restoring the remembered timeline surface over it.
+    AcpChatViewStateCache.setFocusSurface(sessionId, 'prompt')
     const target = this.widgetForSession(sessionId)
     if (!target) return false
     return target.focusInput()

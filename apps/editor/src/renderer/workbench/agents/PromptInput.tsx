@@ -1469,7 +1469,12 @@ export function PromptInput({
   }, [onPromptPaste])
 
   return (
-    <form className={styles['promptForm']} onSubmit={submit} onContextMenu={onPromptContextMenu}>
+    <form
+      className={styles['promptForm']}
+      data-testid="acp-prompt"
+      onSubmit={submit}
+      onContextMenu={onPromptContextMenu}
+    >
       {topAccessory != null && <div className={styles['promptTopAccessory']}>{topAccessory}</div>}
       <SelectionContextChips
         contexts={contexts}

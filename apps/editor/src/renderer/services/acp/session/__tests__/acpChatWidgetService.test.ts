@@ -15,6 +15,7 @@ import {
   type IEditorGroupsService,
 } from '@universe-editor/platform'
 import { AcpChatWidgetService, type AcpChatWidget } from '../acpChatWidgetService.js'
+import { AcpChatViewStateCache, type AcpFocusSurface } from '../acpChatViewStateCache.js'
 
 /** Minimal IEditorGroupsService stub — only `activeGroup.id` is read (split tie-break). */
 function makeGroupsStub(activeGroupId = 0): {
@@ -40,12 +41,14 @@ function makeGroupsStub(activeGroupId = 0): {
 function makeWidget(
   label: string,
   sessionId = label,
+  surface: AcpFocusSurface = 'prompt',
 ): {
   container: HTMLElement
   child: HTMLElement
   widget: AcpChatWidget
   moveSpy: ReturnType<typeof vi.fn>
   focusSpy: ReturnType<typeof vi.fn>
+  timelineSpy: ReturnType<typeof vi.fn>
 } {
   const container = document.createElement('div')
   container.dataset['label'] = label
@@ -54,6 +57,7 @@ function makeWidget(
   document.body.appendChild(container)
   const moveSpy = vi.fn()
   const focusSpy = vi.fn(() => true)
+  const timelineSpy = vi.fn(() => true)
   const widget: AcpChatWidget = {
     sessionId,
     container,
@@ -61,6 +65,8 @@ function makeWidget(
     moveTimelineLevel: vi.fn(),
     scrollTimeline: vi.fn(),
     focusInput: focusSpy,
+    focusTimeline: timelineSpy,
+    getFocusSurface: () => surface,
     jumpToPlan: vi.fn(),
     toggleCollapse: vi.fn(),
     cycleCollapseMode: vi.fn(),
@@ -74,7 +80,7 @@ function makeWidget(
     findNext: vi.fn(),
     findPrev: vi.fn(),
   }
-  return { container, child, widget, moveSpy, focusSpy }
+  return { container, child, widget, moveSpy, focusSpy, timelineSpy }
 }
 
 function fireFocusIn(target: HTMLElement, relatedTarget: EventTarget | null = null): void {
@@ -99,6 +105,7 @@ describe('AcpChatWidgetService', () => {
   afterEach(() => {
     svc.dispose()
     cks.dispose()
+    AcpChatViewStateCache._resetForTests()
     document.body.replaceChildren()
   })
 
@@ -192,6 +199,45 @@ describe('AcpChatWidgetService', () => {
     expect(svc.focusSessionInput('missing')).toBe(false)
   })
 
+  // focusSession is the "restore where the user was" entry point used by the
+  // editor-group focus pass, so it must honor the widget's remembered surface.
+  it('focusSession targets the timeline when that is where focus last was', () => {
+    const a = makeWidget('a', 's1', 'timeline')
+    svc.register(a.widget)
+
+    expect(svc.focusSession('s1')).toBe(true)
+    expect(a.timelineSpy).toHaveBeenCalledOnce()
+    expect(a.focusSpy).not.toHaveBeenCalled()
+  })
+
+  it('focusSession targets the prompt input when the input was last focused', () => {
+    const a = makeWidget('a', 's1', 'prompt')
+    svc.register(a.widget)
+
+    expect(svc.focusSession('s1')).toBe(true)
+    expect(a.focusSpy).toHaveBeenCalledOnce()
+    expect(a.timelineSpy).not.toHaveBeenCalled()
+  })
+
+  it('focusSession reports failure when no widget is mounted for the session', () => {
+    const b = makeWidget('b', 's2', 'timeline')
+    svc.register(b.widget)
+
+    expect(svc.focusSession('missing')).toBe(false)
+    expect(b.timelineSpy).not.toHaveBeenCalled()
+    expect(b.focusSpy).not.toHaveBeenCalled()
+  })
+
+  // The mounting ChatBody reads the remembered surface during render, so an
+  // explicit "focus the input" must be recorded before it mounts — otherwise the
+  // restore would hand focus to the timeline over the caller's intent.
+  it('focusSessionInput records the prompt surface for a chat that is still mounting', () => {
+    AcpChatViewStateCache.setFocusSurface('s1', 'timeline')
+
+    expect(svc.focusSessionInput('s1')).toBe(false)
+    expect(AcpChatViewStateCache.loadFocusSurface('s1')).toBe('prompt')
+  })
+
   it('widgetForSession returns the latest registered widget for that session, or undefined', () => {
     const oldA = makeWidget('old-a', 's1')
     const b = makeWidget('b', 's2')
@@ -248,6 +294,8 @@ describe('AcpChatWidgetService', () => {
       moveTimelineLevel: vi.fn(),
       scrollTimeline: vi.fn(),
       focusInput: vi.fn(),
+      focusTimeline: vi.fn(() => false),
+      getFocusSurface: () => 'prompt' as const,
       jumpToPlan: vi.fn(),
       toggleCollapse: vi.fn(),
       cycleCollapseMode: vi.fn(),

@@ -299,6 +299,7 @@ function makeSessionInst(rows: AcpSessionHistoryEntry[], workspaceFolder?: strin
   services.set(IAcpChatWidgetService, {
     _serviceBrand: undefined,
     focusSessionInput: () => false,
+    focusSession: () => false,
   } as unknown as IAcpChatWidgetServiceType)
   services.set(IWorkspaceService, makeWorkspace(workspaceFolder))
   services.set(IUriIdentityService, stubUriIdentity)

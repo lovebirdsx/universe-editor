@@ -5,6 +5,12 @@
  *  id. Mirrors EditorViewStateCache but scoped per session so switching editor
  *  tabs or sessions and coming back restores the scroll + selection instead of
  *  resetting to the bottom.
+ *
+ *  Also remembers which *surface* inside the chat last held keyboard focus
+ *  (prompt input vs. timeline) — separately from the scroll view state, which
+ *  persist() replaces wholesale on every scroll: an editor-tab round trip
+ *  remounts the chat, and the focus restore needs the value the moment the new
+ *  instance renders, before the outgoing instance's unmount flush runs.
  *--------------------------------------------------------------------------------------------*/
 
 export type CollapseMode = 'default' | 'collapsed' | 'expanded'
@@ -64,29 +70,56 @@ export interface AcpChatViewState {
  */
 const MAX_VIEW_STATES = 16
 
+/**
+ * Which surface inside the chat holds keyboard focus. `'prompt'` is the session
+ * input; everything else inside the chat (message cards, the scroll container
+ * Alt+J/K navigate, card buttons) counts as `'timeline'` — the surface a
+ * focus restore falls back to when the input isn't where the user left off.
+ */
+export type AcpFocusSurface = 'prompt' | 'timeline'
+
+/** Insert into a bounded LRU map, refreshing the entry's recency on every write. */
+function lruSet<K, V>(map: Map<K, V>, key: K, value: V): void {
+  map.delete(key)
+  map.set(key, value)
+  while (map.size > MAX_VIEW_STATES) {
+    const oldest = map.keys().next()
+    if (oldest.done) break
+    map.delete(oldest.value)
+  }
+}
+
 class AcpChatViewStateCacheImpl {
   private readonly _map = new Map<string, AcpChatViewState>()
+  private readonly _focusSurfaces = new Map<string, AcpFocusSurface>()
 
   save(sessionId: string, state: AcpChatViewState): void {
-    this._map.delete(sessionId)
-    this._map.set(sessionId, state)
-    while (this._map.size > MAX_VIEW_STATES) {
-      const oldest = this._map.keys().next()
-      if (oldest.done) break
-      this._map.delete(oldest.value)
-    }
+    lruSet(this._map, sessionId, state)
   }
 
   load(sessionId: string): AcpChatViewState | undefined {
     return this._map.get(sessionId)
   }
 
+  loadFocusSurface(sessionId: string): AcpFocusSurface | undefined {
+    return this._focusSurfaces.get(sessionId)
+  }
+
+  setFocusSurface(sessionId: string, surface: AcpFocusSurface): void {
+    // Written even when the surface is unchanged: every focus event inside a
+    // chat is a use of that session, so it must refresh the LRU (a session whose
+    // surface stays 'timeline' would otherwise be the first one evicted).
+    lruSet(this._focusSurfaces, sessionId, surface)
+  }
+
   clear(sessionId: string): void {
     this._map.delete(sessionId)
+    this._focusSurfaces.delete(sessionId)
   }
 
   _resetForTests(): void {
     this._map.clear()
+    this._focusSurfaces.clear()
   }
 }
 

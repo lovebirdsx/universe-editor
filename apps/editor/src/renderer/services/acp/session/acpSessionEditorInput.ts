@@ -148,7 +148,10 @@ export class AcpSessionEditorInput extends EditorInput {
     // resume — but the widget registry is keyed by the live session's local id.
     // Resolve to the local id so a split clone still finds its ChatBody widget.
     const localId = this._sessions.getById(this.sessionId)?.id ?? this.sessionId
-    return this._chatWidgetService.focusSessionInput(localId)
+    // Restore whichever surface the user last used inside the chat: re-entering
+    // the tab must not pull them out of the message card they were reading.
+    // Commands that mean "focus the input" go through focusSessionInput.
+    return this._chatWidgetService.focusSession(localId)
   }
 
   override async confirmClose(dialogService: IDialogService): Promise<boolean> {

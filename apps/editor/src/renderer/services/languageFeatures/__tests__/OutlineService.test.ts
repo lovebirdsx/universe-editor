@@ -997,6 +997,7 @@ describe('OutlineService', () => {
     const chatWidget = {
       _serviceBrand: undefined,
       focusSessionInput: () => false,
+      focusSession: () => false,
     } as unknown as IAcpChatWidgetServiceType
     const services = new ServiceCollection()
     services.set(IAcpSessionService, sessions)

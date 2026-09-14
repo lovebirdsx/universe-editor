@@ -19,6 +19,7 @@ import {
   IEditorResolverService,
   IFileSearchService,
   IFileService,
+  GroupDirection,
   InstantiationService,
   IUriIdentityService,
   IWorkspaceService,
@@ -66,6 +67,7 @@ import { ChatBody } from '../ChatBody.js'
 import { AcpSessionEditorInput } from '../../../services/acp/session/acpSessionEditorInput.js'
 import { ServicesContext } from '../../useService.js'
 import { EditorGroupsService } from '../../../services/editor/EditorGroupsService.js'
+import { EditorGroupContext } from '../../editor/EditorGroupContext.js'
 import styles from '../agents.module.css'
 import { IAcpPromptHistoryService } from '../../../services/acp/session/acpPromptHistoryService.js'
 import { ISessionBookmarkService } from '../../../services/acp/session/sessionBookmarkService.js'
@@ -264,6 +266,8 @@ function makeInstantiation(
       return { dispose() {} }
     },
     focusSessionInput: () => false,
+    focusSession: () => false,
+    setTurnRunning: () => {},
     setHasSelection: () => {},
     setForkSupported: () => {},
     setContextTarget: () => {},
@@ -502,6 +506,165 @@ describe('ChatBody — click to focus a timeline item', () => {
 function scrollEl(container: HTMLElement): HTMLElement {
   return container.querySelector<HTMLElement>('[data-testid="acp-timeline"]')!.parentElement!
 }
+
+/** Which chat surface currently owns DOM focus — the same split the editor-tab
+ *  focus restore keys on (prompt input vs. the timeline the message cards live in). */
+function focusedSurface(): 'prompt' | 'timeline' | 'none' {
+  const active = document.activeElement
+  if (!(active instanceof Element)) return 'none'
+  if (active.closest('[data-testid="acp-prompt"]')) return 'prompt'
+  if (active.closest('[data-testid="acp-chat"]')) return 'timeline'
+  return 'none'
+}
+
+function renderEditorChat(session: IAcpSession, autoFocus = true) {
+  const widgetRef: { current?: AcpChatWidget } = {}
+  const groups = new EditorGroupsService()
+  const inst = makeInstantiation(
+    (w) => {
+      widgetRef.current = w
+    },
+    undefined,
+    { groups },
+  )
+  // Mirrors EditorGroupView, which wraps every editor component in
+  // EditorGroupContext — the focus restore only fires for an active group.
+  const result = render(
+    <ServicesContext.Provider value={inst}>
+      <EditorGroupContext.Provider value={groups.activeGroup}>
+        <ChatBody session={session} autoFocus={autoFocus} />
+      </EditorGroupContext.Provider>
+    </ServicesContext.Provider>,
+  )
+  return { ...result, widgetRef, groups, inst }
+}
+
+describe('ChatBody — focus surface survives an editor tab round trip', () => {
+  const items: readonly TimelineItem[] = [
+    { kind: 'message', id: 'a', message: makeMessage('a', 'first') },
+    { kind: 'message', id: 'b', message: makeMessage('b', 'second') },
+  ]
+
+  it('focuses the prompt input on a first mount with no remembered surface', () => {
+    renderEditorChat(makeSession('s1', items))
+    expect(focusedSurface()).toBe('prompt')
+  })
+
+  it('records the prompt surface when focus moves back into the prompt input', () => {
+    const { container } = renderEditorChat(makeSession('s1', items))
+    act(() => {
+      fireEvent.click(slotEl(container, 'm:b'))
+    })
+    expect(AcpChatViewStateCache.loadFocusSurface('s1')).toBe('timeline')
+
+    const promptHost = container.querySelector<HTMLElement>('.native-edit-context')
+    expect(promptHost).not.toBeNull()
+    act(() => {
+      promptHost!.focus()
+    })
+    expect(AcpChatViewStateCache.loadFocusSurface('s1')).toBe('prompt')
+  })
+
+  it('records the timeline surface when a message card takes focus', () => {
+    const { container } = renderEditorChat(makeSession('s1', items))
+    act(() => {
+      fireEvent.click(slotEl(container, 'm:b'))
+    })
+    expect(focusedSurface()).toBe('timeline')
+    expect(AcpChatViewStateCache.loadFocusSurface('s1')).toBe('timeline')
+  })
+
+  // The user-reported bug: focus a message card, switch to another editor tab
+  // and back (which unmounts + remounts the chat) — focus landed in the prompt
+  // input again instead of the card the user left on.
+  it('restores the timeline focus on remount instead of the prompt', () => {
+    const first = renderEditorChat(makeSession('s1', items))
+    act(() => {
+      fireEvent.click(slotEl(first.container, 'm:b'))
+    })
+    expect(first.container.ownerDocument.activeElement).toBe(scrollEl(first.container))
+    first.unmount()
+
+    const second = renderEditorChat(makeSession('s1', items))
+    expect(focusedSurface()).toBe('timeline')
+    expect(second.container.ownerDocument.activeElement).toBe(scrollEl(second.container))
+  })
+
+  it('restores the prompt focus on remount when the input was last focused', () => {
+    const first = renderEditorChat(makeSession('s1', items))
+    const promptHost = first.container.querySelector<HTMLElement>('.native-edit-context')!
+    act(() => {
+      promptHost.focus()
+    })
+    first.unmount()
+
+    const second = renderEditorChat(makeSession('s1', items))
+    expect(focusedSurface()).toBe('prompt')
+    expect(second.container.ownerDocument.activeElement).not.toBe(scrollEl(second.container))
+  })
+
+  it('does not steal focus when the host did not ask for it (sidebar / panel)', () => {
+    AcpChatViewStateCache.setFocusSurface('s1', 'timeline')
+    const outside = document.createElement('button')
+    document.body.appendChild(outside)
+    outside.focus()
+    try {
+      // Sidebar / panel hosts render ChatBody without `autoFocus` — the mount
+      // restore must stay out of the way instead of pulling focus into the chat.
+      renderChat(makeSession('s1', items))
+      expect(document.activeElement).toBe(outside)
+    } finally {
+      outside.remove()
+    }
+  })
+
+  // EditorGroupView renders the active editor as `<Component input={active} />`
+  // without a key, so clicking another session tab swaps the session prop on this
+  // very component instead of remounting it — the restore has to re-arm per session.
+  it('restores the incoming session surface when the editor swaps sessions in place', () => {
+    const first = renderEditorChat(makeSession('s1', items))
+    act(() => {
+      fireEvent.click(slotEl(first.container, 'm:a'))
+    })
+    expect(focusedSurface()).toBe('timeline')
+    AcpChatViewStateCache.setFocusSurface('s2', 'timeline')
+
+    first.rerender(
+      <ServicesContext.Provider value={first.inst}>
+        <EditorGroupContext.Provider value={first.groups.activeGroup}>
+          <ChatBody session={makeSession('s2', items)} autoFocus />
+        </EditorGroupContext.Provider>
+      </ServicesContext.Provider>,
+    )
+    expect(focusedSurface()).toBe('timeline')
+    expect(first.container.ownerDocument.activeElement).toBe(scrollEl(first.container))
+  })
+
+  // Startup restores every group's active editor at once; only the group the user
+  // is actually working in may claim keyboard focus.
+  it('does not steal focus into an inactive editor group', () => {
+    AcpChatViewStateCache.setFocusSurface('s1', 'timeline')
+    const groups = new EditorGroupsService()
+    const home = groups.activeGroup
+    groups.activateGroup(groups.addGroup(home, GroupDirection.Right))
+    const outside = document.createElement('button')
+    document.body.appendChild(outside)
+    outside.focus()
+    try {
+      expect(home.isActive).toBe(false)
+      render(
+        <ServicesContext.Provider value={makeInstantiation()}>
+          <EditorGroupContext.Provider value={home}>
+            <ChatBody session={makeSession('s1', items)} autoFocus />
+          </EditorGroupContext.Provider>
+        </ServicesContext.Provider>,
+      )
+      expect(document.activeElement).toBe(outside)
+    } finally {
+      outside.remove()
+    }
+  })
+})
 
 describe('ChatBody — context menu fragment targets', () => {
   const CHIP_CONTEXT: SelectionContext = {

@@ -691,6 +691,7 @@ describe('OutlineView — agent session active-slot sync (end-to-end)', () => {
     const chatWidget = {
       _serviceBrand: undefined,
       focusSessionInput: () => false,
+      focusSession: () => false,
     } as unknown as IAcpChatWidgetServiceType
     const services = new ServiceCollection()
     services.set(IAcpSessionService, sessions)

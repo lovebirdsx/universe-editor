@@ -139,6 +139,8 @@ describe('Agent timeline navigation actions', () => {
         moveTimelineLevel,
         scrollTimeline,
         focusInput: vi.fn(),
+        focusTimeline: vi.fn(() => false),
+        getFocusSurface: () => 'prompt' as const,
         jumpToPlan,
         toggleCollapse: vi.fn(),
         cycleCollapseMode: vi.fn(),
@@ -434,6 +436,8 @@ describe('Agent prompt suggestion popover actions', () => {
         moveTimelineLevel: vi.fn(),
         scrollTimeline: vi.fn(),
         focusInput: vi.fn(),
+        focusTimeline: vi.fn(() => false),
+        getFocusSurface: () => 'prompt' as const,
         jumpToPlan: vi.fn(),
         toggleCollapse: vi.fn(),
         cycleCollapseMode: vi.fn(),
@@ -605,6 +609,7 @@ describe('NewAgentSessionInCurrentEditorAction', () => {
       _serviceBrand: undefined,
       register: vi.fn(),
       focusSessionInput: vi.fn(),
+      focusSession: vi.fn(),
     } as unknown as IAcpChatWidgetService)
     services.set(IEditorGroupsService, groups)
     services.set(IDialogService, {
@@ -685,6 +690,7 @@ describe('NewAgentSessionInCurrentEditorAction', () => {
       _serviceBrand: undefined,
       register: vi.fn(),
       focusSessionInput: vi.fn(),
+      focusSession: vi.fn(),
     } as unknown as IAcpChatWidgetService)
     services.set(IEditorGroupsService, groups)
     services.set(IEditorService, editorService)
@@ -779,6 +785,7 @@ describe('NewAgentSessionInCurrentEditorAction', () => {
       _serviceBrand: undefined,
       register: vi.fn(),
       focusSessionInput: vi.fn(),
+      focusSession: vi.fn(),
     } as unknown as IAcpChatWidgetService)
     services.set(IEditorGroupsService, groups)
     services.set(IDialogService, {

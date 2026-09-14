@@ -74,6 +74,7 @@ describe('SendCommitToAgentChatAction', () => {
     services.set(IAcpChatWidgetService, {
       _serviceBrand: undefined,
       focusSessionInput,
+      focusSession: vi.fn(),
     } as unknown as IAcpChatWidgetService)
     services.set(ILayoutService, {
       _serviceBrand: undefined,

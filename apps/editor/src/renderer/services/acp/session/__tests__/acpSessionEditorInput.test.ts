@@ -64,6 +64,7 @@ function makeAccessor(
   rows: AcpSessionHistoryEntry[] = [],
   opts: {
     getById?: (id: string) => IAcpSession | undefined
+    focusSession?: (id: string) => boolean
     focusSessionInput?: (id: string) => boolean
     workspace?: IWorkspaceServiceType
     uriIdentity?: IUriIdentityServiceType
@@ -104,6 +105,7 @@ function makeAccessor(
   } as unknown as IAcpSessionHistoryServiceType
   const chatWidget = {
     _serviceBrand: undefined,
+    focusSession: opts.focusSession ?? (() => false),
     focusSessionInput: opts.focusSessionInput ?? (() => false),
   } as unknown as IAcpChatWidgetServiceType
   const services = new ServiceCollection()
@@ -197,28 +199,40 @@ describe('AcpSessionEditorInput', () => {
   })
 
   it('focus() resolves a durable sessionId (split clone) to the live local id before routing', () => {
-    const focusSessionInput = vi.fn(() => true)
+    const focusSession = vi.fn(() => true)
     const live = {
       id: 'local-1',
       sessionIdOnAgent: observableValue<string | undefined>('test.agentId', 'echo-1'),
     } as unknown as IAcpSession
     const { inst } = makeAccessor([], {
       getById: (id) => (id === 'echo-1' ? live : undefined),
-      focusSessionInput,
+      focusSession,
     })
     // A split clone round-trips serialize/deserialize, which stores the durable
     // sessionIdOnAgent — so its `sessionId` is the agent id, not the local id.
     const clone = inst.createInstance(AcpSessionEditorInput, 'echo-1', 'claude-code', undefined)
     expect(clone.focus()).toBe(true)
-    expect(focusSessionInput).toHaveBeenCalledWith('local-1')
+    expect(focusSession).toHaveBeenCalledWith('local-1')
+  })
+
+  // Group activation routes through focusSession (restore the surface the user
+  // left on), never through focusSessionInput (which means "focus the prompt").
+  it('focus() restores the remembered surface rather than always the prompt input', () => {
+    const focusSession = vi.fn(() => true)
+    const focusSessionInput = vi.fn(() => true)
+    const { inst } = makeAccessor([], { focusSession, focusSessionInput })
+    const input = inst.createInstance(AcpSessionEditorInput, 'sess-11', 'fake', undefined)
+    expect(input.focus()).toBe(true)
+    expect(focusSession).toHaveBeenCalledWith('sess-11')
+    expect(focusSessionInput).not.toHaveBeenCalled()
   })
 
   it('focus() falls back to sessionId when the live session is gone', () => {
-    const focusSessionInput = vi.fn(() => false)
-    const { inst } = makeAccessor([], { focusSessionInput })
+    const focusSession = vi.fn(() => false)
+    const { inst } = makeAccessor([], { focusSession })
     const input = inst.createInstance(AcpSessionEditorInput, 'gone-1', 'claude-code', undefined)
     expect(input.focus()).toBe(false)
-    expect(focusSessionInput).toHaveBeenCalledWith('gone-1')
+    expect(focusSession).toHaveBeenCalledWith('gone-1')
   })
 
   it('isSideTask is true only when the history row carries a sideTaskOf flag', () => {
