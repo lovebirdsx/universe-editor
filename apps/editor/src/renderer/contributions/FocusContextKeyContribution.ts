@@ -14,6 +14,8 @@
  *    statusBarFocus             — focus is inside StatusBar
  *    terminalFocus              — focus is inside an xterm host, and not a
  *                                 hidden panel terminal (see below)
+ *    editorFocus                — a Monaco widget holds DOM focus (derived)
+ *    editorTextFocus            — cleared while no Monaco editor holds focus
  *
  *  Each Part exposes onDidFocus / onDidBlur (bridged from FocusTracker in
  *  main.tsx), so we use those for the per-part booleans rather than walking
@@ -26,6 +28,16 @@
  *  transiently lands in such a host must not leave the key stuck true (it
  *  would swallow every `!terminalFocus` keybinding, e.g. Ctrl+P quick open).
  *  Panel visibility is part of the derivation, so it re-syncs on toggle too.
+ *
+ *  `editorFocus` / `editorTextFocus` are derived for the same reason, from the
+ *  document's own focusin/focusout (see installEditorFocusDerivation — the
+ *  tracker drops a focus that returns to the element it left, which the DOM read
+ *  must still see). They used to be book-kept by the editors that happened to
+ *  bridge them (FileEditor, LogOutputView), so the ACP prompt input's embedded
+ *  Monaco never claimed the key: focus leaving it left a stale true behind, which
+ *  swallowed the global Escape binding (`!editorFocus`) and made "Escape returns
+ *  to the session input" work once and then never again. An embedded Monaco
+ *  therefore needs no editorFocus bridge of its own — this derivation covers it.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -37,6 +49,7 @@ import {
   IWorkbenchContribution,
   PartId,
 } from '@universe-editor/platform'
+import { installEditorFocusDerivation } from '../services/editor/editorFocus.js'
 
 const PART_KEY_BY_ID: Readonly<Record<PartId, string>> = {
   [PartId.ActivityBar]: 'activityBarFocus',
@@ -117,6 +130,8 @@ export class FocusContextKeyContribution extends Disposable implements IWorkbenc
       }),
     )
     updateTerminalFocus()
+
+    this._register(installEditorFocusDerivation(contextKeyService))
   }
 
   private _closestAttr(el: HTMLElement, attr: string): string | undefined {

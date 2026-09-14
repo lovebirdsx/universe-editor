@@ -310,6 +310,24 @@ export class WorkbenchPO {
     return this.page.evaluate(() => window.__E2E__!.getActiveGroupId())
   }
 
+  /**
+   * Which surface inside an ACP session editor owns DOM focus right now:
+   * `prompt` (the message input), `timeline` (the message card / scroll
+   * container) or `none`. Testid-based, so it does not poke at Monaco internals —
+   * the chat's focus contract is about which face of the editor is active, and the
+   * `acpPromptInputFocused` / `acpChatFocused` context keys do not say where focus
+   * went when both are false.
+   */
+  async getFocusedChatSurface(): Promise<'prompt' | 'timeline' | 'none'> {
+    return this.page.evaluate((): 'prompt' | 'timeline' | 'none' => {
+      const active = document.activeElement
+      if (!(active instanceof Element)) return 'none'
+      if (active.closest('[data-testid="acp-prompt"]')) return 'prompt'
+      if (active.closest('[data-testid="acp-chat"]')) return 'timeline'
+      return 'none'
+    })
+  }
+
   /** Current auto-update state (status machine + versions). */
   async getUpdateState(): Promise<E2EUpdateState> {
     return this.page.evaluate(() => window.__E2E__!.getUpdateState())

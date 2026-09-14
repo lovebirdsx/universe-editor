@@ -215,12 +215,17 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
     // True when a Monaco widget (textarea / find widget / IntelliSense / snippet input)
     // holds DOM focus. Drives ESC routing: when true the global ESC binding bows out
     // so Monaco's own ESC handling (cancel multi-cursor, close find widget, etc.) can
-    // fire via natural event bubbling. Written by FileEditor through onDidFocus/BlurEditorWidget.
+    // fire via natural event bubbling. Seeded here; reconciled from the DOM by
+    // services/editor/editorFocus.ts, which FocusContextKeyContribution installs —
+    // FileEditor / LogOutputView also write it synchronously from their own widget
+    // focus events, and focusEditorInput re-reads it in the same task it moves focus.
     contextKeyService.createKey<boolean>('editorFocus', false)
 
     // True when the code input area (textarea) holds focus, distinct from
-    // editorFocus which covers any monaco widget. Written by FileEditor through
-    // onDidFocus/BlurEditorText.
+    // editorFocus which covers any monaco widget. Set by Monaco's own
+    // onDidFocusEditorText and cleared by syncEditorFocusContext once no Monaco
+    // holds focus (only cleared, never set — the text-vs-widget split stays
+    // Monaco's job).
     contextKeyService.createKey<boolean>('editorTextFocus', false)
 
     // True while the ACP session prompt input (an embedded Monaco editor) holds

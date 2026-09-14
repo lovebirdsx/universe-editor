@@ -1,5 +1,5 @@
 import type { EditorInput, IContextKeyService, IDisposable } from '@universe-editor/platform'
-import { autorun } from '@universe-editor/platform'
+import { autorun, toDisposable } from '@universe-editor/platform'
 import type { monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
 import { FileEditorRegistry } from './FileEditorRegistry.js'
 import { DiffEditorRegistry } from './DiffEditorRegistry.js'
@@ -21,18 +21,80 @@ export function syncEditorFocusContext(contextKeyService: IContextKeyService): v
 }
 
 /**
- * Mirror Monaco widget focus onto the global `editorFocus` key. Without it the key
- * keeps whatever the last writer left behind (syncEditorFocusContext is DOM-based,
- * so focus moving between Monaco widgets and non-Monaco surfaces usually — not
- * reliably — lands on the right value), and the global Escape binding
- * (`!editorFocus`, FocusActiveEditorGroupAction) then steals Escape from Monaco's
- * own handling (close find widget, cancel multi-cursor, dismiss IntelliSense),
- * which only fires while the event is allowed to bubble.
+ * Keep `editorFocus` / `editorTextFocus` reconciled with the DOM's real focus.
+ *
+ * Both keys used to be book-kept per editor (FileEditor and LogOutputView each
+ * bridge their own Monaco widget focus). A Monaco surface that registered no
+ * bridge therefore left the key at whatever the last writer set. The ACP prompt
+ * input is one: its editContext focus host sits inside `.monaco-editor`, so the
+ * `input.focus()` branch of focusEditorInput wrote `editorFocus = true` — and
+ * moving on to the Explorer left it there. A stale `true` then swallows every
+ * `!editorFocus` keybinding, starting with the global Escape
+ * (FocusActiveEditorGroupAction), so Escape could no longer bring focus back to
+ * the session input. Reading the DOM on every focus event — the same "derive,
+ * don't book-keep" rule terminalFocus follows — makes that impossible.
+ *
+ * Deliberately off the document's own focus events rather than
+ * IFocusTrackerService: the tracker de-duplicates a focus move that lands back on
+ * the element it left (`_settle` sees `prev === next`) and would never report it,
+ * while for a DOM-derived key that transition matters — focus dropped to <body>
+ * and came back is exactly when a stale `false` would stick.
+ *
+ * The explicit syncEditorFocusContext() calls stay: they are the same-task fast
+ * path, for callers that just moved focus themselves. Missing one now costs a
+ * macrotask instead of leaving the key wrong for good.
+ */
+export function installEditorFocusDerivation(contextKeyService: IContextKeyService): IDisposable {
+  const reconcile = (): void => syncEditorFocusContext(contextKeyService)
+
+  // A focus move that lands on nothing focusable (a click on a plain div) fires
+  // focusout with no focusin behind it and leaves `activeElement` on <body> — the
+  // read has to happen, and it has to happen after the DOM settles. setTimeout(0)
+  // rather than queueMicrotask is deliberate: FileEditor reclaims focus from <body>
+  // in a microtask, and that reclaim must land before we read, or we would clear the
+  // keys out from under a re-focused editor. Focusout deliberately reads nothing
+  // synchronously — during the pair activeElement is momentarily null.
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const onFocusOut = (): void => {
+    if (timer !== undefined) return
+    timer = setTimeout(() => {
+      timer = undefined
+      reconcile()
+    }, 0)
+  }
+  // focusin needs no deferral: the DOM already points at the new element when it
+  // fires, which is what keeps the same-task window (a binding resolved right after
+  // a click) correct.
+  document.addEventListener('focusin', reconcile, true)
+  document.addEventListener('focusout', onFocusOut, true)
+
+  reconcile()
+  return toDisposable(() => {
+    document.removeEventListener('focusin', reconcile, true)
+    document.removeEventListener('focusout', onFocusOut, true)
+    if (timer !== undefined) clearTimeout(timer)
+    timer = undefined
+  })
+}
+
+/**
+ * Mirror Monaco widget focus onto the global `editorFocus` key, and reconcile the
+ * key when the widget loses it. Without the focus half the key lags a macrotask
+ * behind, and the global Escape binding (`!editorFocus`, FocusActiveEditorGroupAction)
+ * would steal Escape from Monaco's own handling (close find widget, cancel
+ * multi-cursor, dismiss IntelliSense), which only fires while the event is allowed
+ * to bubble.
+ *
+ * Correctness is installEditorFocusDerivation's job now: the derivation sees the same
+ * DOM focus move, so this is the same-task fast path for callers that read the key in
+ * the task they moved focus in — plus the two things the DOM listeners cannot express,
+ * `onBlur` (FileEditor reclaims focus from <body>) and the dispose recompute for an
+ * editor removed while it held focus.
  *
  * Blur recomputes from the DOM instead of writing false, so focus moving from one
  * Monaco widget to another stays correct. `onBlur` runs from the same microtask,
- * for callers that need to reclaim focus once the DOM move has settled. Dispose
- * recomputes too: a removed writer must not leave the key stuck true.
+ * for callers that need to reclaim focus once the DOM move has settled.
+ * Dispose recomputes too, so a removed editor's focus does not linger.
  */
 export function bridgeEditorFocus(
   editor: monaco.editor.IStandaloneCodeEditor,

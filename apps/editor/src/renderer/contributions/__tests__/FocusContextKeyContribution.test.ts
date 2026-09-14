@@ -173,3 +173,32 @@ describe('FocusContextKeyContribution — terminalFocus', () => {
     contribution.dispose()
   })
 })
+
+describe('FocusContextKeyContribution — editorFocus derivation', () => {
+  // Wiring contract: the contribution installs the DOM derivation, so an embedded
+  // Monaco (the ACP prompt input) needs no `editorFocus` bridge of its own. Before
+  // this, the key was book-kept per editor and focus leaving a bridgeless one left a
+  // stale `true` behind that swallowed the global Escape binding.
+  it('reconciles editorFocus from DOM focus, in and out of a Monaco editor', () => {
+    const tracker = makeFocusTracker()
+    const { layout } = makeLayoutService(true)
+    const { contribution, context } = makeContribution(layout, tracker)
+
+    const editor = document.createElement('div')
+    editor.className = 'monaco-editor'
+    const host = document.createElement('div')
+    host.tabIndex = 0
+    editor.appendChild(host)
+    document.body.appendChild(editor)
+
+    host.focus()
+    expect(context.get('editorFocus')).toBe(true)
+
+    const outside = document.createElement('button')
+    document.body.appendChild(outside)
+    outside.focus()
+    expect(context.get('editorFocus')).toBe(false)
+
+    contribution.dispose()
+  })
+})

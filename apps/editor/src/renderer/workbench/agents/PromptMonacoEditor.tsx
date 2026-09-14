@@ -397,6 +397,14 @@ export function PromptMonacoEditor({
         ed.onDidBlurEditorText(() => contextKeyService.set('acpPromptInputFocused', false)),
       )
 
+      // Deliberately no `editorFocus` bridge here, unlike FileEditor / LogOutputView:
+      // that key is derived from the document's own focus events by
+      // FocusContextKeyContribution, so it already covers this embedded editor. The
+      // missing bridge used to leave `editorFocus` stuck true once the prompt held
+      // focus, which swallowed the global Escape binding and broke "Escape returns to
+      // the session input". Don't add one back — a per-editor write is what allowed
+      // the stale value in the first place.
+
       // Auto-grow: size the container to the content between a 3-line floor and
       // a 16-line ceiling (past which Monaco's own scrollbar takes over). Mirrors
       // the old textarea's field-sizing min/max.

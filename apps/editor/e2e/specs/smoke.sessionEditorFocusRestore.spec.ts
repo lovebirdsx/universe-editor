@@ -24,17 +24,6 @@ const ECHO_AGENT_PATH = resolve(__dirname, '..', '..', 'src', 'test-fixtures', '
 
 const POLL = { timeout: 15000 }
 
-/** Which surface inside the chat owns DOM focus right now. */
-function focusedSurface(page: Page): Promise<'prompt' | 'timeline' | 'none'> {
-  return page.evaluate(() => {
-    const active = document.activeElement
-    if (!(active instanceof Element)) return 'none'
-    if (active.closest('[data-testid="acp-prompt"]')) return 'prompt'
-    if (active.closest('[data-testid="acp-chat"]')) return 'timeline'
-    return 'none'
-  })
-}
-
 /** Is the focused element the timeline's scroll container itself (not a descendant)? */
 function focusIsOnTimelineContainer(page: Page): Promise<boolean> {
   return page.evaluate(() => {
@@ -67,7 +56,7 @@ test.describe('session editor focus — message card focus survives a tab round 
       .toBe('acp.session')
 
     // 护栏：新会话首次打开仍然是输入框焦点（记忆为空 → 默认面是输入框）。
-    await expect.poll(() => focusedSurface(page)).toBe('prompt')
+    await expect.poll(() => workbench.getFocusedChatSurface()).toBe('prompt')
 
     // 一条 prompt 换来一条可点的 agent 消息卡。sendAcpPrompt 的 await 不等渲染。
     await page.evaluate((t) => window.__E2E__!.sendAcpPrompt(t), 'alpha')
@@ -78,7 +67,7 @@ test.describe('session editor focus — message card focus survives a tab round 
     const card = page.locator('[data-testid="acp-message-agent"]').first()
     await expect(card).toBeVisible()
     await card.click()
-    await expect.poll(() => focusedSurface(page)).toBe('timeline')
+    await expect.poll(() => workbench.getFocusedChatSurface()).toBe('timeline')
     await expect.poll(() => focusIsOnTimelineContainer(page)).toBe(true)
 
     // 同组切到另一个 editor（新建 untitled）——ChatBody 整棵卸载。
@@ -92,14 +81,14 @@ test.describe('session editor focus — message card focus survives a tab round 
     await expect
       .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), POLL)
       .toBe('acp.session')
-    await expect.poll(() => focusedSurface(page)).toBe('timeline')
+    await expect.poll(() => workbench.getFocusedChatSurface()).toBe('timeline')
     await expect.poll(() => focusIsOnTimelineContainer(page)).toBe(true)
     // 焦点真的落在 chat 内 → Alt+J/K 立刻可用。
     await expect.poll(() => workbench.getContextKey<boolean>('acpChatFocused')).toBe(true)
 
     // 反向护栏：焦点移回输入框后，再次往返应当回到输入框。
     await page.locator('[data-testid="acp-prompt"] .monaco-editor textarea').first().focus()
-    await expect.poll(() => focusedSurface(page)).toBe('prompt')
+    await expect.poll(() => workbench.getFocusedChatSurface()).toBe('prompt')
 
     // 用已有的两个标签往返（previous/nextEditor 按标签位置翻页，不造新标签：
     // 会话与 untitled 相邻，翻页即互达）。
@@ -111,6 +100,6 @@ test.describe('session editor focus — message card focus survives a tab round 
     await expect
       .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), POLL)
       .toBe('acp.session')
-    await expect.poll(() => focusedSurface(page)).toBe('prompt')
+    await expect.poll(() => workbench.getFocusedChatSurface()).toBe('prompt')
   })
 })

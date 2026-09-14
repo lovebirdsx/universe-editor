@@ -1,8 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { ContextKeyService, Emitter, EditorInput, URI } from '@universe-editor/platform'
+import {
+  ContextKeyService,
+  Emitter,
+  EditorInput,
+  URI,
+  type IDisposable,
+} from '@universe-editor/platform'
 import {
   bridgeEditorColumnSelection,
   focusEditorInput,
+  installEditorFocusDerivation,
   syncEditorFocusContext,
 } from '../editorFocus.js'
 import { FileEditorRegistry } from '../FileEditorRegistry.js'
@@ -144,6 +151,161 @@ describe('syncEditorFocusContext — editorTextFocus reset', () => {
     // Still focused in a Monaco editor: the text-vs-widget distinction stays
     // Monaco's job, so we must not clobber it here.
     expect(cks.get('editorTextFocus')).toBe(true)
+  })
+})
+
+describe('installEditorFocusDerivation', () => {
+  let derivation: IDisposable | undefined
+
+  /** Monaco's editContext focus host: a child of the `.monaco-editor` node. */
+  function mountMonacoFocusHost(): HTMLElement {
+    const editor = document.createElement('div')
+    editor.className = 'monaco-editor'
+    const host = document.createElement('div')
+    host.className = 'native-edit-context'
+    host.tabIndex = 0
+    editor.appendChild(host)
+    document.body.appendChild(editor)
+    return host
+  }
+
+  function mountFocusable(parent: HTMLElement = document.body): HTMLElement {
+    const el = document.createElement('div')
+    el.tabIndex = 0
+    parent.appendChild(el)
+    return el
+  }
+
+  /** The focusout pass defers by a macrotask; let it run. */
+  const settleMacrotask = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+  beforeEach(() => {
+    document.body.innerHTML = ''
+  })
+  afterEach(() => {
+    derivation?.dispose()
+    derivation = undefined
+    document.body.innerHTML = ''
+  })
+
+  // Regression: the ACP prompt input's embedded Monaco reports focus through a host
+  // inside `.monaco-editor`, but registered no `editorFocus` bridge — so once
+  // focusEditorInput wrote true, moving on (to the Explorer) left it true and the
+  // global Escape binding (`!editorFocus`) stopped matching.
+  it('follows focus out of a Monaco editor and back', () => {
+    const cks = new ContextKeyService()
+    derivation = installEditorFocusDerivation(cks)
+    const host = mountMonacoFocusHost()
+
+    host.focus()
+    expect(cks.get('editorFocus')).toBe(true)
+
+    mountFocusable().focus()
+    expect(cks.get('editorFocus')).toBe(false)
+  })
+
+  it('starts reconciled with the DOM', () => {
+    const cks = new ContextKeyService()
+    cks.set('editorFocus', true)
+
+    derivation = installEditorFocusDerivation(cks)
+
+    // Nothing is focused yet (activeElement is <body>), so the stale true must go.
+    expect(cks.get('editorFocus')).toBe(false)
+  })
+
+  // Focus dropping to <body> — a click on a non-focusable div — fires focusout with
+  // no focusin behind it, and the key would stay stuck true without a pass of its
+  // own. The read has to be deferred: while a focusout focusin pair is in flight
+  // activeElement is momentarily null.
+  it('reconciles when focus drops off Monaco without a focusin', async () => {
+    const cks = new ContextKeyService()
+    derivation = installEditorFocusDerivation(cks)
+    const host = mountMonacoFocusHost()
+
+    host.focus()
+    expect(cks.get('editorFocus')).toBe(true)
+
+    host.blur()
+    expect(document.activeElement).not.toBe(host)
+
+    await settleMacrotask()
+
+    expect(cks.get('editorFocus')).toBe(false)
+  })
+
+  // Why this derives from document focus events instead of IFocusTrackerService:
+  // the tracker's settle pass sees the same element as before and stays silent, so
+  // a key that went false while focus was on <body> would never come back true.
+  it('recovers when focus returns to the element it left', async () => {
+    const cks = new ContextKeyService()
+    derivation = installEditorFocusDerivation(cks)
+    const host = mountMonacoFocusHost()
+
+    host.focus()
+    host.blur()
+    await settleMacrotask()
+    expect(cks.get('editorFocus')).toBe(false)
+
+    host.focus()
+    expect(cks.get('editorFocus')).toBe(true)
+  })
+
+  it('clears a stuck editorTextFocus once focus moves outside Monaco', () => {
+    const cks = new ContextKeyService()
+    derivation = installEditorFocusDerivation(cks)
+    cks.set('editorTextFocus', true)
+
+    mountFocusable().focus()
+
+    expect(cks.get('editorTextFocus')).toBe(false)
+  })
+
+  it('leaves editorTextFocus to Monaco while an editor still holds focus', () => {
+    const cks = new ContextKeyService()
+    derivation = installEditorFocusDerivation(cks)
+    const host = mountMonacoFocusHost()
+
+    host.focus()
+    cks.set('editorTextFocus', true)
+    // Focus moves within `.monaco-editor` (widget → widget): the text-vs-widget
+    // split stays Monaco's job, so we must not clobber it here.
+    const monacoRoot = host.parentElement as HTMLElement
+    mountFocusable(monacoRoot).focus()
+
+    expect(cks.get('editorFocus')).toBe(true)
+    expect(cks.get('editorTextFocus')).toBe(true)
+  })
+
+  it('stops reconciling once disposed', () => {
+    const cks = new ContextKeyService()
+    derivation = installEditorFocusDerivation(cks)
+    const host = mountMonacoFocusHost()
+    cks.set('editorFocus', true)
+
+    derivation.dispose()
+    derivation = undefined
+
+    host.focus()
+    expect(cks.get('editorFocus')).toBe(true)
+
+    mountFocusable().focus()
+    expect(cks.get('editorFocus')).toBe(true)
+  })
+
+  it('cancels a pending focusout pass on dispose', async () => {
+    const cks = new ContextKeyService()
+    const disposable = installEditorFocusDerivation(cks)
+    const host = mountMonacoFocusHost()
+
+    host.focus()
+    expect(cks.get('editorFocus')).toBe(true)
+
+    host.blur()
+    disposable.dispose()
+    await settleMacrotask()
+
+    expect(cks.get('editorFocus')).toBe(true)
   })
 })
 
