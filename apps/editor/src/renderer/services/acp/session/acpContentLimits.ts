@@ -251,6 +251,15 @@ export const MAX_TOOL_CALL_PARENT_ENTRIES = 5000
  */
 export const MAX_ORPHAN_PARENT_ENTRIES = 64
 
+/**
+ * Cap on the dropped-baseline tool-call ids a side task remembers. The record
+ * must outlive the replay window (the fork's Task stats restamp is
+ * fire-and-forget), so it is bounded FIFO rather than cleared with the gate.
+ * A tool-call id is never reused, so an evicted entry can only cost one late
+ * echo slipping through as a card — and only on a baseline longer than this.
+ */
+export const MAX_SUPPRESSED_TOOL_CALL_IDS = 2048
+
 /** UTF-16 byte size of a string: `length` counts code units, each 2 bytes. */
 function utf16Bytes(s: string): number {
   return s.length * 2

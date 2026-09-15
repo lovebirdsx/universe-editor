@@ -1667,6 +1667,171 @@ describe('AcpSession.timeline', () => {
     s.endHistoryReplay()
   })
 
+  it('drops the fork’s backfilled tool results for suppressed baseline calls', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    s.beginHistoryReplay()
+    s.suppressReplayToTimeline('anchor-msg')
+
+    // Baseline: the side task view must never show this call.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'call_base_1',
+        title: 'Baseline read',
+        kind: 'read',
+        status: 'pending',
+      },
+    })
+    // The anchor message lifts the suppression.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'user_message_chunk',
+        content: { type: 'text', text: 'side-task first prompt' },
+        messageId: 'anchor-msg',
+      } as never,
+    })
+    // Tail-end backfill re-emits the dropped call's result: no title, no kind —
+    // only the agent's tool name rides along on the meta.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'call_base_1',
+        status: 'completed',
+        rawOutput: 'ok',
+        _meta: { claudeCode: { toolName: 'Bash' } },
+      },
+    })
+    // The side task's own call still lands.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'call_own_1',
+        title: 'Own call',
+        kind: 'execute',
+        status: 'pending',
+      },
+    })
+    s.endHistoryReplay()
+
+    expect(s.toolCalls.get().map((c) => c.id)).toEqual(['call_own_1'])
+    expect(s.timeline.get().map((it) => it.kind)).toEqual(['message', 'toolCall'])
+  })
+
+  it('drops a Task stats restamp that lands after the replay window closed', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    s.beginHistoryReplay()
+    s.suppressReplayToTimeline('anchor-msg')
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'call_base_task',
+        title: 'Baseline task',
+        kind: 'other',
+        status: 'pending',
+      },
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'user_message_chunk',
+        content: { type: 'text', text: 'side-task first prompt' },
+        messageId: 'anchor-msg',
+      } as never,
+    })
+    s.endHistoryReplay()
+
+    // The fork restamps replayed Task cards without awaiting, so this arrives
+    // after `session/load` resolved — past the replay window.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'call_base_task',
+        _meta: { '_universe/subagentStats': { inputTokens: 10, outputTokens: 2 } },
+      } as never,
+    })
+
+    expect(s.toolCalls.get()).toEqual([])
+    expect(s.timeline.get().map((it) => it.kind)).toEqual(['message'])
+  })
+
+  it('keeps suppressed baseline echoes out of the change tracker', async () => {
+    svc.dispose()
+    const tracker = new StubSessionChangeTracker()
+    svc = makeService(client, undefined, tracker)
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    s.beginHistoryReplay()
+    s.suppressReplayToTimeline('anchor-msg')
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'call_base_edit',
+        title: 'Baseline edit',
+        kind: 'edit',
+        status: 'pending',
+      },
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'user_message_chunk',
+        content: { type: 'text', text: 'side-task first prompt' },
+        messageId: 'anchor-msg',
+      } as never,
+    })
+    // The echo carries the baseline edit's diff. The guard has to sit ahead of
+    // the tracker or the parent's file change is filed under the side task.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'call_base_edit',
+        status: 'completed',
+        content: [{ type: 'diff', path: '/work/base.ts', oldText: null, newText: 'alpha\nbeta' }],
+      },
+    })
+    s.endHistoryReplay()
+
+    expect(tracker.records).toEqual([])
+    expect(s.toolCalls.get()).toEqual([])
+  })
+
+  it('titles a titleless orphan tool_call_update from the agent tool name, not the raw id', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'call_orphan',
+        status: 'completed',
+        rawOutput: 'ok',
+        _meta: { claudeCode: { toolName: 'Bash' } },
+      },
+    })
+
+    const card = s.toolCalls.get().find((c) => c.id === 'call_orphan')
+    expect(card?.title).toBe('Bash')
+    expect(card?.title).not.toBe('call_orphan')
+  })
+
   it('stamps a replayed user chunk matching the continuation sentinel as autoRetry', async () => {
     const s = await svc.createSession()
     await s.whenConnected()

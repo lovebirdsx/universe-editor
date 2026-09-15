@@ -66,6 +66,7 @@ import {
   MAX_ORPHAN_PARENT_ENTRIES,
   MAX_PLAN_ENTRIES,
   MAX_PLAN_ENTRY_CHARS,
+  MAX_SUPPRESSED_TOOL_CALL_IDS,
   MAX_TOOL_CALL_PARENT_ENTRIES,
   REPLAY_INGESTION_BUDGET,
   capContentBlock,
@@ -91,6 +92,7 @@ import {
 } from './acpSessionContent.js'
 import {
   extractModelBreakdown,
+  readAgentToolName,
   readAgentToolNameForTelemetry,
   readFileChanges,
   readMcpServer,
@@ -884,6 +886,27 @@ export class AcpSession extends Disposable implements IAcpSession {
   private _suppressReplayToTimeline = false
 
   /**
+   * Ids of the `tool_call`s {@link _suppressReplayToTimeline} dropped. The fork
+   * echoes a dropped call's result back at the tail of the replay: the awaited
+   * `backfillForkedToolResults` inside the `session/load` window, and the Task
+   * stats restamp which is fire-and-forget and lands *after*
+   * {@link endHistoryReplay}. An echo that finds no card to merge into would
+   * otherwise materialize as an orphan card titled with the raw `toolCallId`,
+   * so the ids have to outlive the gate itself. Reset per replay.
+   */
+  private readonly _suppressedToolCallIds = new Set<string>()
+
+  /** Echoes dropped by the guard in {@link applyUpdate}, logged once per burst. */
+  private _suppressedEchoCount = 0
+
+  /**
+   * Ids dropped from the FIFO past {@link MAX_SUPPRESSED_TOOL_CALL_IDS}: their
+   * late echoes can no longer be recognized. Reported alongside the tally above
+   * so the "silently un-suppressed" case is distinguishable from "none at all".
+   */
+  private _suppressedIdsEvicted = 0
+
+  /**
    * Replay ingestion accounting (session/load, rewind): tallies the resident
    * cost of replayed updates against `_replayIngestionBudget`. Past the budget
    * the remaining replayed updates are dropped (`_replayOverflow`) so a
@@ -1673,6 +1696,9 @@ export class AcpSession extends Disposable implements IAcpSession {
     this.isReplayingHistory.set(true, undefined)
     this._replayIngestedBytes = 0
     this._replayOverflow = false
+    this._suppressedToolCallIds.clear()
+    this._suppressedEchoCount = 0
+    this._suppressedIdsEvicted = 0
   }
 
   endHistoryReplay(): void {
@@ -1692,11 +1718,46 @@ export class AcpSession extends Disposable implements IAcpSession {
     // user sends another prompt. The window also covers the fork's tail-end
     // backfill of tool results that fell off the transcript's display chain.
     this._scheduleOrphanToolCallSweep('history replayed')
+    this._flushSuppressedEchoLog()
   }
 
   suppressReplayToTimeline(anchorMessageId?: string): void {
     this._suppressReplayToTimeline = true
     this._suppressAnchorMessageId = anchorMessageId
+  }
+
+  /** Record a baseline `tool_call` the gate dropped, bounded FIFO (see
+   * {@link _suppressedToolCallIds}). */
+  private _rememberSuppressedToolCallId(id: string): void {
+    if (this._suppressedToolCallIds.size >= MAX_SUPPRESSED_TOOL_CALL_IDS) {
+      const oldest = this._suppressedToolCallIds.values().next().value
+      if (oldest !== undefined) {
+        this._suppressedToolCallIds.delete(oldest)
+        this._suppressedIdsEvicted++
+      }
+    }
+    this._suppressedToolCallIds.add(id)
+  }
+
+  private _noteSuppressedEcho(): void {
+    this._suppressedEchoCount++
+    // Past the replay window (the fire-and-forget Task stats restamp) nothing
+    // else will report the tally, so flush it on arrival.
+    if (!this.isReplayingHistory.get()) this._flushSuppressedEchoLog()
+  }
+
+  private _flushSuppressedEchoLog(): void {
+    if (this._suppressedEchoCount === 0 && this._suppressedIdsEvicted === 0) return
+    const evicted =
+      this._suppressedIdsEvicted > 0
+        ? ` (${this._suppressedIdsEvicted} baseline id(s) evicted past ${MAX_SUPPRESSED_TOOL_CALL_IDS})`
+        : ''
+    console.debug(
+      `[acp] session ${this.id}: dropped ${this._suppressedEchoCount} side-task ` +
+        `baseline echo(es)${evicted}`,
+    )
+    this._suppressedEchoCount = 0
+    this._suppressedIdsEvicted = 0
   }
 
   setRetractedMessageIds(ids: readonly string[] | undefined): void {
@@ -2995,9 +3056,26 @@ export class AcpSession extends Disposable implements IAcpSession {
         case 'session_info_update':
         case 'usage_update':
           break
+        case 'tool_call':
+          // The card goes, but the fork still echoes this call's result once the
+          // replay is over — remember the id so those echoes can be dropped too.
+          this._rememberSuppressedToolCallId(update.toolCallId)
+          return
         default:
           return
       }
+    }
+    // The call behind this id was dropped as baseline, so whatever the fork
+    // re-sends for it afterwards — backfilled results, Task stats restamps,
+    // replayed sub-agent children — is only the replay re-emitting history this
+    // view already decided to hide. Landing it would resurrect that history as
+    // a card titled with the raw `toolCallId`.
+    if (
+      (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') &&
+      this._suppressedToolCallIds.has(update.toolCallId)
+    ) {
+      this._noteSuppressedEcho()
+      return
     }
     const cost = estimateUpdateCost(update)
     const residentCost = withViewModelOverhead(cost.retained)
@@ -3185,9 +3263,18 @@ export class AcpSession extends Disposable implements IAcpSession {
         // A late `_meta`-only update omits the flag — carry it forward like
         // `settleReason` so the card keeps reading as an upstream interruption.
         const syntheticDenial = readSyntheticDenial(update) || existing?.syntheticDenial === true
+        // A titleless update with no card to merge into is the fork re-sending a
+        // call this session dropped. Prefer the agent's own tool name over
+        // leaking the opaque protocol id into the UI; agents that report no name
+        // (everything but claude) get the generic label.
+        const title =
+          update.title ??
+          existing?.title ??
+          readAgentToolName(update) ??
+          localize('acp.session.toolCallUntitled', 'Tool call')
         const next: AcpToolCall = {
           id: update.toolCallId,
-          title: update.title != null ? update.title : (existing?.title ?? update.toolCallId),
+          title,
           kind: update.kind != null ? update.kind : (existing?.kind ?? 'unknown'),
           status,
           blocks,
