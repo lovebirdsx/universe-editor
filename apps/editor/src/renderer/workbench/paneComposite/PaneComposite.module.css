@@ -7,6 +7,7 @@
   width: 100%;
   height: 100%;
   background: var(--vscode-sideBar-background, #252526);
+  --view-background: var(--vscode-sideBar-background, #252526);
   overflow: hidden;
   outline: none;
 }
@@ -17,6 +18,7 @@
   width: 100%;
   height: 100%;
   background: var(--vscode-panel-background, #1a1a1c);
+  --view-background: var(--vscode-panel-background, #1a1a1c);
   overflow: hidden;
 }
 

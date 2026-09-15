@@ -59,15 +59,15 @@ test.describe('@p1 explorer reveal scroll', () => {
 
     // Scroll the tree back to the top so the (still-selected) target row leaves
     // the window viewport. Don't use toBeInViewport here: rows are absolutely
-    // positioned with an inline `transform: translateY(...)`, and a row
-    // re-mounted by the scroll reads as translateY(0) for one frame before
-    // React commits the real offset. IntersectionObserver may report that
-    // transient frame (ratio=1) even though the row's settled position is far
-    // below the window. Also, the tree's reveal useLayoutEffect re-runs when
-    // the tree structure version changes (e.g. the file watcher delivering its
-    // initial refresh after arming), which calls scrollIntoView and silently
-    // undoes our scroll-to-top. So keep re-asserting scrollTop = 0 inside the
-    // poll until the bounding rect confirms the row is outside the window.
+    // positioned with an inline `top`, and a row re-mounted by the scroll reads
+    // as top: 0 for one frame before React commits the real offset.
+    // IntersectionObserver may report that transient frame (ratio=1) even
+    // though the row's settled position is far below the window. Also, the
+    // tree's reveal useLayoutEffect re-runs when the tree structure version
+    // changes (e.g. the file watcher delivering its initial refresh after
+    // arming), which scrolls the target row back into view and silently undoes
+    // our scroll-to-top. So keep re-asserting scrollTop = 0 inside the poll
+    // until the bounding rect confirms the row is outside the window.
     await expect
       .poll(
         async () => {

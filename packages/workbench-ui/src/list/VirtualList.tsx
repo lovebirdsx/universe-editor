@@ -120,16 +120,23 @@ function VirtualListInner<T>(
 
   // Stable style refs per index — keeps renderItem children memoizable. A new
   // object is only allocated when an item's start/size actually changes.
+  //
+  // Offset via `top`, not `transform: translateY`. Rows are absolutely
+  // positioned inside the spacer, so the two are pixel-identical — but a
+  // transform is applied in the property tree, off the layout/paint-invalidation
+  // path: when a row's offset changes at the same time as its content, the old
+  // position's invalidation is derived from the new transform and can miss,
+  // leaving the previous glyphs on screen underneath the new ones. `top` makes
+  // the move an ordinary layout change, which always invalidates both rects.
   const getStableStyle = (index: number, start: number, size: number): CSSProperties => {
     const cached = styleCacheRef.current.get(index)
     if (cached && cached.start === start && cached.size === size) return cached.style
     const next: CSSProperties = {
       position: 'absolute',
-      top: 0,
+      top: `${start}px`,
       left: 0,
       width: '100%',
       ...(measureDynamically ? {} : { height: `${size}px` }),
-      transform: `translateY(${start}px)`,
     }
     styleCacheRef.current.set(index, { start, size, style: next })
     return next
@@ -178,8 +185,28 @@ function VirtualListInner<T>(
   // `flexShrink: 0` because the caller's scroller is often a flex column: a
   // shrinkable spacer would collapse to the viewport height, leaving no scroll
   // range at all.
+  //
+  // The spacer — not the scroller and not the rows — is what paints the opaque
+  // backdrop. It has to be inside the scrolled content: a row is transparent by
+  // design (it inherits the view's look), so the pixels under and around the
+  // glyphs come from whatever paints below them. Chromium may raster a scroller's
+  // content into a layer of its own, and when a tile there is re-rastered an
+  // opaque backdrop is what overwrites the previous glyphs; without one the tile
+  // keeps them and the new text lands on top of the old. Whichever surface paints
+  // the background behind this list republishes `--view-background` with that
+  // colour — the docked part, or an overlay that draws its own surface; anything
+  // else inherits `transparent` and is unchanged. See docs/development/scroll-lists.md.
   const spacer = (
-    <div style={{ height: `${totalSize}px`, position: 'relative', flexShrink: 0 }}>{body}</div>
+    <div
+      style={{
+        height: `${totalSize}px`,
+        position: 'relative',
+        flexShrink: 0,
+        backgroundColor: 'var(--view-background, transparent)',
+      }}
+    >
+      {body}
+    </div>
   )
 
   // With an external scroller we contribute only the spacer — wrapping it in

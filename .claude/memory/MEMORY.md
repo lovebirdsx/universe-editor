@@ -76,6 +76,7 @@
 - [openFolder 切工作区主进程闪退](parcel-watcher-win32-unsubscribe-uaf-crash.md) — parcel win32 unsubscribe UAF；已修=升2.6.0+watcher入UtilityProcess自愈重启；含 minidump 解析法
 - [虚拟列表滚动锚点恢复](virtual-list-scroll-anchor-restore.md) — 动态测量下纯 scrollTop 恢复必漂移，用内容锚点+收敛循环；三坑=尺寸锚定对抗/registry 重排/末尾组无法置顶
 - [Tree 跨虚拟化阈值滚动跳顶](tree-virtualization-threshold-scroll-jump.md) — 按行数切容器形态本身即缺陷；虚拟器重挂载 `_scrollToOffset(initialOffset=0)` 归零（展开偏/折叠不偏的指纹）；正解=scroller 恒为 `[role=tree]`+阈值只控 windowed+initialOffset 活读 DOM+containerReady 门控附着
+- [列表残影：新旧文字完全重合](scroll-content-ghosting-transparent-backdrop.md) — 无 opaque 底衬的滚动内容 + `transform` 定位 + `scrollIntoView` 滚祖先；底衬要打在滚动内容(spacer)里
 
 > NSIS 安装器 / 自动更新（守卫链、WM_SETTINGCHANGE 阻塞、Defender 排除、耗时方法学）收敛在 skill `nsis-installer-autoupdate`（按需加载，不占常驻索引）。
 

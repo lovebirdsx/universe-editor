@@ -939,6 +939,10 @@
   border: 1px solid var(--vscode-workbench-border);
   border-radius: var(--radius-md);
   background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  /* Not portalled: this dialog sits inside the editor area, so a list in here
+     would inherit that part's colour and paint it over this surface. A surface
+     that paints its own background republishes it for the lists it hosts. */
+  --view-background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
   box-shadow: var(--shadow-lg);
 }
 

@@ -23,6 +23,7 @@ App 本体的发布（版本 bump、打包、上传，及 push `vX.Y.Z` tag 后�
 ## 架构与约定
 
 - [浮层层级与裁剪](overlay-layers.md) — tooltip / 菜单 / 对话框的四条挂载链路（React portal、monaco 平台层、monaco 编辑器内容层、视图自绘）、`--z-*` 三段式分层与「该不该 token 化」的判据、外部占位层、浮层排查套路。
+- [滚动列表的渲染约定](scroll-lists.md) — 树 / 虚拟列表的三条绘制约定（滚动内容的不透明底衬 `--view-background`、行定位用 `top` 不用 `transform`、reveal 只滚自己的 scroller）、残影类故障的现场判据与护栏。
 - [Git 提交信息规范](git-commit-msg-rule.md) — 提交格式、类型前缀、发布说明收录规则。
 
 ## 环境与工具（个人笔记）

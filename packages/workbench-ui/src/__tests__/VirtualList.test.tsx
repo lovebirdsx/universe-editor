@@ -101,6 +101,10 @@ describe('VirtualList', () => {
     const spacer = host.firstElementChild as HTMLElement
     expect(spacer.style.height).toBe('44px')
     expect(spacer.style.position).toBe('relative')
+    // The spacer also carries the opaque backdrop for the scrolled content
+    // (`var(--view-background, transparent)`); happy-dom rejects `var()` inside an
+    // inline style, so the value is unreachable from here — the why lives next to
+    // the spacer in VirtualList.tsx.
     // No wrapper of our own, and nothing inside scrolls independently.
     expect(spacer.style.overflowY).toBe('')
     expect(host.querySelectorAll('[style*="overflow"]').length).toBe(0)
@@ -126,7 +130,11 @@ describe('VirtualList', () => {
     const rows = container.querySelectorAll('[data-row]')
     expect(rows.length).toBe(50)
     // Positioning matches the windowed path exactly — same spacer, same offsets.
-    expect((rows[3] as HTMLElement).style.transform).toBe('translateY(66px)')
+    // Offset is `top`, never a transform: a transform would move rows off the
+    // layout/paint-invalidation path and let stale glyphs survive at the old
+    // position (see getStableStyle).
+    expect((rows[3] as HTMLElement).style.top).toBe('66px')
+    expect((rows[3] as HTMLElement).style.transform).toBe('')
     const spacer = container.firstElementChild?.firstElementChild as HTMLElement
     expect(spacer.style.height).toBe('1100px')
   })

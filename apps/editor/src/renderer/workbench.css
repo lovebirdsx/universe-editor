@@ -36,6 +36,14 @@ html, body, #root {
   /* Typography */
   --font-ui: 'Roboto', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: 'Cascadia Code', 'Consolas', 'Menlo', 'Courier New', monospace;
+
+  /* Background of the part a view is docked in, republished as a plain custom
+     property so a shared list can paint its own scroll content opaque without
+     knowing which part it landed in. Each part root re-declares it with its own
+     colour (SideBar / Panel / editor area); surfaces outside every part — portals
+     such as dialogs, quick input, menus — keep this transparent default and are
+     unaffected. */
+  --view-background: transparent;
 }
 
 /* Scrollbar */

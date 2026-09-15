@@ -660,3 +660,112 @@ describe('SwarmReviewsView keyboard', () => {
     expect(document.querySelector('[role="menuitem"][data-active]')).toBeNull()
   })
 })
+
+describe('SwarmReviewsView soft refresh', () => {
+  // The dashboard is re-fetched on a timer, so rows swap content under the
+  // cursor without any user action. Two things must hold while that happens,
+  // because a violation of either is what the window showed as doubled text:
+  // the list holds exactly one row per node (never an old row left standing),
+  // and selecting a row scrolls nothing but the tree itself — reveal used to
+  // call `scrollIntoView`, which also scrolls every ancestor scroller
+  // (`overflow: hidden` boxes included, since script may scroll them) in the
+  // same frame the rows changed.
+  const second: SwarmReviewDto = { ...review, id: '1002', description: 'Second review' }
+  const arriving: SwarmReviewDto = { ...review, id: '1003', description: 'Arriving review' }
+
+  function rowsByOffset(): HTMLElement[] {
+    return Array.from(document.querySelectorAll<HTMLElement>('[role="treeitem"]'))
+  }
+
+  /** Review rows only — group headers are nodes too (id `group:<key>`). */
+  function reviewRowKeys(): Array<string | undefined> {
+    return rowsByOffset()
+      .filter((el) => el.dataset['testid'] === 'swarm-review-row')
+      .map((el) => el.dataset['rowKey'])
+  }
+
+  async function renderAndRefresh(next: SwarmDashboardResult) {
+    let payload: SwarmDashboardResult = {
+      needsAction: [review, second],
+      authored: [],
+      participating: [],
+    }
+    const executeCommand = vi.fn(async (command: string) => {
+      if (command === SwarmCommands.dashboard) return payload
+      if (command === SwarmCommands.getTransitions) return []
+      return undefined
+    })
+    render(
+      <ServicesContext.Provider value={createServices(executeCommand).instantiation}>
+        <SwarmReviewsView />
+      </ServicesContext.Provider>,
+    )
+    await screen.findByText('Fix the renderer')
+
+    payload = next
+    await act(async () => {
+      await requestSwarmReviewsRefresh(false)
+    })
+    return executeCommand
+  }
+
+  it('swaps the row at the head of the list and drops the one it displaced', async () => {
+    await renderAndRefresh({
+      needsAction: [arriving, review],
+      authored: [],
+      participating: [],
+    })
+
+    // Exactly one node per slot: the displaced row's text is gone from the DOM,
+    // not merely hidden behind the new one.
+    expect(screen.getByText('Arriving review')).toBeTruthy()
+    expect(screen.getByText('Fix the renderer')).toBeTruthy()
+    expect(screen.queryByText('Second review')).toBeNull()
+
+    const rows = rowsByOffset()
+    const keys = rows.map((el) => el.dataset['rowKey'])
+    expect(new Set(keys).size).toBe(keys.length)
+    expect(reviewRowKeys()).toEqual(['review:1003', 'review:1001'])
+  })
+
+  it('stacks the rows at strictly increasing offsets', async () => {
+    await renderAndRefresh({
+      needsAction: [arriving, review],
+      authored: [],
+      participating: [],
+    })
+
+    // The list is flat and absolutely positioned inside the spacer, so equal or
+    // decreasing offsets are rows drawn on top of each other.
+    const offsets = rowsByOffset().map((el) => Number.parseFloat(el.style.top))
+    expect(offsets.every((top) => Number.isFinite(top))).toBe(true)
+    for (let i = 1; i < offsets.length; i++) {
+      expect(offsets[i]! - offsets[i - 1]!).toBeGreaterThan(0)
+    }
+  })
+
+  it('selects the next row without dragging any ancestor scroller along', async () => {
+    // `scrollIntoView` walks up and scrolls *every* ancestor scroller — the
+    // `overflow: hidden` boxes included, since script may scroll them — in the
+    // same frame the rows changed, which is what left the view painted twice.
+    // happy-dom has no layout, so the offsets reveal computes are not meaningful
+    // here; that half is asserted in workbench-ui's Tree.revealScroll.test.tsx,
+    // which can pin the viewport height.
+    const scrollIntoView = vi.spyOn(Element.prototype, 'scrollIntoView')
+    await renderAndRefresh({
+      needsAction: [arriving, review],
+      authored: [],
+      participating: [],
+    })
+
+    const tree = reviewsTree()
+    fireEvent.focus(tree)
+    await waitFor(() => expect(swarmChangesViewState.selectedReviewId.get()).toBe('1003'))
+    scrollIntoView.mockClear()
+
+    fireEvent.keyDown(tree, { key: 'ArrowDown' })
+
+    await waitFor(() => expect(swarmChangesViewState.selectedReviewId.get()).toBe('1001'))
+    expect(scrollIntoView).not.toHaveBeenCalled()
+  })
+})

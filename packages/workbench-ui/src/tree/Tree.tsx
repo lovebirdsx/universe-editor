@@ -31,7 +31,7 @@ import {
   type ReactNode,
   type Ref,
 } from 'react'
-import { VirtualList, type VirtualListHandle } from '../list/VirtualList.js'
+import { VirtualList } from '../list/VirtualList.js'
 import { resolveIndexNavigation } from '../list/listKeyboard.js'
 import { useScrollRestore, type IScrollStatePersister } from '../list/useScrollRestore.js'
 import { markAsSingleton } from '@universe-editor/platform'
@@ -159,7 +159,6 @@ export function Tree<T>(props: ITreeProps<T>) {
 
   const [hasFocus, setHasFocus] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
-  const virtualRef = useRef<VirtualListHandle>(null)
   const visibleRef = useRef(visibleNodes)
   visibleRef.current = visibleNodes
 
@@ -186,9 +185,7 @@ export function Tree<T>(props: ITreeProps<T>) {
   const getScrollElement = useCallback((): HTMLElement | null => containerRef.current, [])
   useScrollRestore(scrollStateKey, getScrollElement, scrollStatePersister)
 
-  // Reveal: defer scroll to after commit. Prefer scrollIntoView on the row
-  // element (works virtual + non-virtual); fall back to scrollToIndex when the
-  // target row is outside the virtualizer's rendered window.
+  // Reveal: defer scroll to after commit.
   const [revealRequest, setRevealRequest] = useState<{ id: string; tick: number } | null>(null)
   useEffect(() => {
     // Singleton for the same reason as useTreeModel: a page-reload unmount runs
@@ -215,40 +212,42 @@ export function Tree<T>(props: ITreeProps<T>) {
     [structureVersion],
   )
 
+  // Reveal scrolls this tree's own container by the minimum needed, computed
+  // from row geometry rather than delegated to `element.scrollIntoView`. That
+  // call also scrolls every ancestor scroller — `overflow: hidden` boxes
+  // included, since script may scroll them — so selecting a row could shift an
+  // outer container or the document and leave the region the compositor had
+  // already rastered behind (double-exposed rows). Geometry also covers the
+  // windowed case, where the target row has no element to call it on.
   useLayoutEffect(() => {
     if (!revealRequest) return
-    const root = containerRef.current
-    if (!root) return
-    const el = findRow(root, revealRequest.id)
-    if (el) {
-      el.scrollIntoView({ block: 'nearest' })
+    const scroller = containerRef.current
+    if (!scroller) return
+    const idx = visibleRef.current.findIndex((n) => n.id === revealRequest.id)
+    if (idx < 0) return
+    // Uniform-height trees (the overwhelming majority) get the O(1) offset;
+    // only a per-row resolver forces the accumulating walk.
+    let rowTop = rowHeight * idx
+    if (getRowHeight) {
+      rowTop = 0
+      for (let i = 0; i < idx; i++) rowTop += sizeAt(i)
+    }
+    const height = sizeAt(idx)
+    // No host pads its scroller (each is an unpadded flex column whose only child
+    // is the spacer), so a row's offset inside the spacer is its offset in the
+    // scroll range. A padded scroller would shift every reveal by that padding.
+    const viewport = scroller.clientHeight
+    const visibleTop = scroller.scrollTop
+    if (viewport <= 0) {
+      // Collapsed pane or pre-layout mount: there is no "nearest" edge to align
+      // to, and nothing re-runs this once the pane is sized — put the row at the
+      // top of the range rather than leaving the reveal unconsumed.
+      scroller.scrollTop = Math.max(0, rowTop)
       return
     }
-    if (virtualRef.current) {
-      const idx = visibleRef.current.findIndex((n) => n.id === revealRequest.id)
-      if (idx < 0) return
-      // "Not in the DOM" does not always mean "off-screen": the virtualizer may
-      // not have rendered against the current scroll position yet, which makes
-      // every row below the top look unrendered. Scrolling then would yank the
-      // clicked row to the top of the viewport. Rows are fixed-height here, so
-      // decide from the scroller's geometry and only scroll when genuinely out
-      // of view.
-      const scroller = virtualRef.current.getScrollElement()
-      if (scroller) {
-        // Uniform-height trees (the overwhelming majority) get the O(1) offset;
-        // only a per-row resolver forces the accumulating walk.
-        let top = rowHeight * idx
-        if (getRowHeight) {
-          top = 0
-          for (let i = 0; i < idx; i++) top += sizeAt(i)
-        }
-        const height = sizeAt(idx)
-        const visibleTop = scroller.scrollTop
-        const visibleBottom = visibleTop + scroller.clientHeight
-        if (top >= visibleTop && top + height <= visibleBottom) return
-      }
-      virtualRef.current.scrollToIndex(idx, { align: 'start' })
-    }
+    const visibleBottom = visibleTop + viewport
+    if (rowTop < visibleTop) scroller.scrollTop = Math.max(0, rowTop)
+    else if (rowTop + height > visibleBottom) scroller.scrollTop = rowTop + height - viewport
   }, [revealRequest, sizeAt, rowHeight, getRowHeight])
 
   // Keyboard context menu (ContextMenu key / Shift+F10): anchored on the focused
@@ -418,7 +417,6 @@ export function Tree<T>(props: ITreeProps<T>) {
     >
       {containerReady && (
         <VirtualList
-          ref={virtualRef}
           items={visibleNodes}
           estimateSize={sizeAt}
           scrollElementRef={containerRef}

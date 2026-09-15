@@ -310,6 +310,71 @@ test.describe('@p1 swarm reviews', () => {
       await expect(editor.getByText('Fix farewell')).toBeVisible()
       await expect(editor.getByText('Review #1001')).toHaveCount(0)
     })
+
+    await test.step('a review arriving on a refresh re-lays the list as a stack, not a pile', async () => {
+      // The dashboard is re-fetched on a timer, so the list can grow under the
+      // cursor with no user action at all. Rows are absolutely positioned inside
+      // the tree's spacer, so the way that goes wrong is a row drawn on top of
+      // the one it displaced — assert the relaid list really is a stack of
+      // distinct rows before driving the keyboard over it.
+      await swarm.addReview({ id: '1900', author: 'carol', description: 'Arriving review' })
+      await page.locator('[data-testid="view-title-action-swarm.refreshReviews"]').click()
+      const rows = view.locator('[role="treeitem"]')
+      await expect(
+        view.locator('[data-testid="swarm-review-row"]', { hasText: 'Arriving review' }),
+      ).toBeVisible()
+      await expect(
+        view.locator('[data-testid="swarm-review-row"]', { hasText: 'Fix farewell' }),
+      ).toHaveCount(1)
+
+      const boxes = await rows.evaluateAll((els) =>
+        els.map((el) => {
+          const rect = el.getBoundingClientRect()
+          return {
+            key: (el as HTMLElement).dataset.rowKey ?? '',
+            top: Math.round(rect.top),
+            bottom: Math.round(rect.bottom),
+          }
+        }),
+      )
+      expect(new Set(boxes.map((b) => b.key)).size).toBe(boxes.length)
+      for (let i = 1; i < boxes.length; i++) {
+        expect(boxes[i]!.top).toBeGreaterThanOrEqual(boxes[i - 1]!.bottom)
+      }
+
+      // Walking the cursor to the end must reveal the row inside the tree's own
+      // scroller and move nothing else. Reveal used to call `scrollIntoView`,
+      // which also scrolls every ancestor scroller — `overflow: hidden` boxes
+      // included, since script may scroll them — in the same frame the rows
+      // changed. Reveal now derives the offset from row geometry. (This is a
+      // layout guard, not a repro: the ghosting was un-invalidated pixels, and
+      // the old implementation satisfies these same assertions.)
+      const tree = view.locator('[role="tree"]')
+      await tree.focus()
+      const selected = view.locator('[role="treeitem"][aria-selected="true"]')
+      await expect(selected).toHaveCount(1)
+
+      await page.keyboard.press('End')
+
+      await expect(selected).toHaveCount(1)
+      await expect(selected).toHaveAttribute('data-row-key', (await rows.last().getAttribute('data-row-key'))!)
+      const geometry = await tree.evaluate((el) => ({
+        scrollTop: el.scrollTop,
+        max: el.scrollHeight - el.clientHeight,
+      }))
+      // Bottom-aligned, and no further — a reveal that overshoots would leave a
+      // row above the cursor out of view.
+      expect(geometry.scrollTop).toBe(Math.max(0, geometry.max))
+      expect(
+        await selected.evaluate((el) => {
+          const rect = el.getBoundingClientRect()
+          const viewport = el.closest('[role="tree"]')!.getBoundingClientRect()
+          return rect.top >= viewport.top - 1 && rect.bottom <= viewport.bottom + 1
+        }),
+      ).toBe(true)
+      // The document is not a scroller — nothing may drag it along.
+      expect(await page.evaluate(() => document.documentElement.scrollTop)).toBe(0)
+    })
   })
 
   test('approvable row actions, then votes, transitions, comments, and obliterates with confirmation', async ({
