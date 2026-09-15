@@ -135,6 +135,36 @@ describe('Tree — reveal scrolls only its own scroller', () => {
     expect(root.scrollTop).toBe(440)
   })
 
+  it('retries on the next frame when the scroller still reports its pre-layout size', async () => {
+    // Remount on a container switch: the reveal's layout effect runs before the
+    // frame's layout is computed, so clientHeight still spans the whole content
+    // and the last row looks "already visible". The reveal must retry after
+    // layout settles instead of dropping the scroll (the "press twice" bug).
+    const model = makeModel(40)
+    const { root } = renderTree(model)
+    let laidOut = false
+    Object.defineProperty(root, 'clientHeight', {
+      configurable: true,
+      get: () => (laidOut ? VIEWPORT : 40 * ROW_HEIGHT),
+    })
+    Object.defineProperty(root, 'scrollHeight', {
+      configurable: true,
+      get: () => 40 * ROW_HEIGHT,
+    })
+
+    await reveal(model, 'r39')
+    // First attempt saw the content-sized viewport and judged the row visible.
+    expect(root.scrollTop).toBe(0)
+
+    laidOut = true
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve))
+    })
+
+    // Retry against the laid-out viewport bottom-aligns the last row.
+    expect(root.scrollTop).toBe(40 * ROW_HEIGHT - VIEWPORT)
+  })
+
   it('never calls scrollIntoView — it would drag every ancestor scroller along', async () => {
     const model = makeModel(40)
     const { root, outer } = renderTree(model)

@@ -221,33 +221,63 @@ export function Tree<T>(props: ITreeProps<T>) {
   // windowed case, where the target row has no element to call it on.
   useLayoutEffect(() => {
     if (!revealRequest) return
-    const scroller = containerRef.current
-    if (!scroller) return
-    const idx = visibleRef.current.findIndex((n) => n.id === revealRequest.id)
-    if (idx < 0) return
-    // Uniform-height trees (the overwhelming majority) get the O(1) offset;
-    // only a per-row resolver forces the accumulating walk.
-    let rowTop = rowHeight * idx
-    if (getRowHeight) {
-      rowTop = 0
-      for (let i = 0; i < idx; i++) rowTop += sizeAt(i)
+    // The attempt can run before this frame's layout is computed (remount on a
+    // container switch, reveal fired mid-commit): the scroller then still
+    // reports a pre-layout clientHeight (up to the full content height), the
+    // row looks "already visible", and the reveal is dropped with the tree
+    // stuck at the top. Retry until one attempt actually scrolls, or the row
+    // is confirmed visible against a laid-out viewport.
+    let attempt = 0
+    let cancelled = false
+    let rafId = 0
+    const tryScroll = (): void => {
+      if (cancelled) return
+      attempt += 1
+      const scroller = containerRef.current
+      if (!scroller) return
+      const idx = visibleRef.current.findIndex((n) => n.id === revealRequest.id)
+      if (idx < 0) return
+      // Uniform-height trees (the overwhelming majority) get the O(1) offset;
+      // only a per-row resolver forces the accumulating walk.
+      let rowTop = rowHeight * idx
+      if (getRowHeight) {
+        rowTop = 0
+        for (let i = 0; i < idx; i++) rowTop += sizeAt(i)
+      }
+      const height = sizeAt(idx)
+      // No host pads its scroller (each is an unpadded flex column whose only child
+      // is the spacer), so a row's offset inside the spacer is its offset in the
+      // scroll range. A padded scroller would shift every reveal by that padding.
+      const viewport = scroller.clientHeight
+      const visibleTop = scroller.scrollTop
+      if (viewport <= 0) {
+        // Collapsed pane or pre-layout mount: there is no "nearest" edge to align
+        // to, and nothing re-runs this once the pane is sized — put the row at the
+        // top of the range rather than leaving the reveal unconsumed.
+        scroller.scrollTop = Math.max(0, rowTop)
+        return
+      }
+      const visibleBottom = visibleTop + viewport
+      let next: number | null = null
+      if (rowTop < visibleTop) next = Math.max(0, rowTop)
+      else if (rowTop + height > visibleBottom) next = rowTop + height - viewport
+      if (next === null) {
+        // No scroll this attempt. If the viewport spans the whole content the
+        // scroller is pre-layout (a real viewport is smaller); retry on the next
+        // frame when layout has settled. A genuinely visible row confirms when
+        // the retried attempt still needs no scroll.
+        if (viewport >= scroller.scrollHeight && attempt < 10) {
+          rafId = requestAnimationFrame(tryScroll)
+        }
+        return
+      }
+      scroller.scrollTop = next
     }
-    const height = sizeAt(idx)
-    // No host pads its scroller (each is an unpadded flex column whose only child
-    // is the spacer), so a row's offset inside the spacer is its offset in the
-    // scroll range. A padded scroller would shift every reveal by that padding.
-    const viewport = scroller.clientHeight
-    const visibleTop = scroller.scrollTop
-    if (viewport <= 0) {
-      // Collapsed pane or pre-layout mount: there is no "nearest" edge to align
-      // to, and nothing re-runs this once the pane is sized — put the row at the
-      // top of the range rather than leaving the reveal unconsumed.
-      scroller.scrollTop = Math.max(0, rowTop)
-      return
+    tryScroll()
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(rafId)
     }
-    const visibleBottom = visibleTop + viewport
-    if (rowTop < visibleTop) scroller.scrollTop = Math.max(0, rowTop)
-    else if (rowTop + height > visibleBottom) scroller.scrollTop = rowTop + height - viewport
   }, [revealRequest, sizeAt, rowHeight, getRowHeight])
 
   // Keyboard context menu (ContextMenu key / Shift+F10): anchored on the focused
