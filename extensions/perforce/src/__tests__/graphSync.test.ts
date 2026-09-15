@@ -5,7 +5,9 @@ import {
   graphSyncConfirmKind,
   graphSyncNeedsConfirm,
   resolveCommonClient,
+  syncFloorOf,
 } from '../graphSync.js'
+import { NO_REGRESSION, contradictedBy, type SyncLedgerRecord } from '../graphSyncLedger.js'
 
 describe('clSpecOf', () => {
   it('builds an @-spec from a bare changelist number', () => {
@@ -301,5 +303,99 @@ describe('directSyncPoint', () => {
         ? { ok: true, change: '4522' }
         : { ok: false, reason: 'listing from another client' },
     )
+  })
+})
+
+describe('syncFloorOf', () => {
+  it('bounds a get to head with NO_REGRESSION — nothing newer to fetch', () => {
+    expect(syncFloorOf('#head', ['X:/ws/src/...'])).toBe(NO_REGRESSION)
+    expect(syncFloorOf('#head', [])).toBe(NO_REGRESSION)
+  })
+
+  it('names its own changelist for an @CL get', () => {
+    expect(syncFloorOf('@4521', ['X:/ws/src/...'])).toBe(4521)
+  })
+
+  it('reads the per-file revisions when the spec is empty, taking the oldest', () => {
+    expect(syncFloorOf('', ['//depot/a.txt#3', '//depot/b.txt#7'])).toBe(3)
+    expect(syncFloorOf('', ['//depot/a.txt#7', '//depot/b.txt#3'])).toBe(3)
+  })
+
+  it('answers NO_REGRESSION when an empty spec carries no revision at all', () => {
+    // A bare path is a get-latest, and a get-latest cannot put a file back.
+    expect(syncFloorOf('', ['//depot/a.txt#head'])).toBe(NO_REGRESSION)
+    expect(syncFloorOf('', ['//depot/a.txt'])).toBe(NO_REGRESSION)
+    expect(syncFloorOf('', ['//depot/a.txt#4', '//depot/b.txt#head'])).toBe(4)
+  })
+
+  it('stays conservative for a spec it cannot bound', () => {
+    // A numbered `#4` in the spec itself, a date, anything else: the spec alone
+    // does not say which old changelist that is, so the record claims the least.
+    expect(syncFloorOf('#4', ['X:/ws/src/...'])).toBe(0)
+    expect(syncFloorOf('@2026/08/01', ['X:/ws/src/...'])).toBe(0)
+    expect(syncFloorOf('garbage', [])).toBe(0)
+  })
+
+  it('ignores a revision specifier in the middle of a filespec path', () => {
+    // Escaped paths are the reason the sigil is matched at the END: `%23` is a
+    // literal `#` in the file name and says nothing about revisions.
+    expect(syncFloorOf('', ['//depot/a%23b.txt'])).toBe(NO_REGRESSION)
+    expect(syncFloorOf('', ['//depot/a%23b.txt#3'])).toBe(3)
+  })
+})
+
+describe('the floor keeps a wide record alive through a narrow get', () => {
+  const wide = (): SyncLedgerRecord => ({
+    clientRoot: 'X:/ws',
+    paths: [{ path: 'X:/ws', isDirectory: true }],
+    change: '8822042',
+    source: 'sync',
+    at: 1,
+    complete: true,
+    floor: NO_REGRESSION,
+  })
+
+  it('a plain get-latest of one subtree does not retire the workspace sync point', () => {
+    // The whole-workspace get recorded `#8822042`; the user then gets a subtree.
+    // `#head` moves files forward only, so it is evidence of nothing — retiring
+    // the root record here is what left the graph at `#? (click to query)` for
+    // good, since only the query button (tens of seconds over a wide scope) can
+    // put the badge back.
+    const floor = syncFloorOf('#head', ['X:/ws/Source/Client/...'])
+    expect(floor).toBe(NO_REGRESSION)
+    expect(
+      contradictedBy(wide(), {
+        paths: [{ path: 'X:/ws/Source/Client', isDirectory: true }],
+        at: 2,
+        floor,
+      }),
+    ).toBe(false)
+  })
+
+  it('a per-file get of its own revisions does not retire it either', () => {
+    // The clobber remedy re-gets refused files with an empty spec, each filespec
+    // carrying its own `#rev`. Those DO allow a step back, but only for the
+    // bytes they name — and the old `0` here retired every wider record there is.
+    const floor = syncFloorOf('', ['X:/ws/Source/Client/a.txt#3'])
+    expect(floor).toBe(3)
+    expect(
+      contradictedBy(wide(), {
+        paths: [{ path: 'X:/ws/Source/Client', isDirectory: true }],
+        at: 2,
+        floor,
+      }),
+    ).toBe(true)
+  })
+
+  it('still retires it when the get really can carry a file below the claim', () => {
+    // A genuine time-travel get to `@8793700` over a subtree moves files that the
+    // wide record says are at 8822042 — the honest answer is "not known".
+    expect(
+      contradictedBy(wide(), {
+        paths: [{ path: 'X:/ws/Source/Client', isDirectory: true }],
+        at: 2,
+        floor: syncFloorOf('@8793700', ['X:/ws/Source/Client/...']),
+      }),
+    ).toBe(true)
   })
 })

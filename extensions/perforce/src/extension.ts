@@ -75,6 +75,7 @@ import {
   directSyncPoint,
   graphSyncConfirmKind,
   resolveCommonClient,
+  syncFloorOf,
 } from './graphSync.js'
 import {
   effectiveSyncScope,
@@ -825,26 +826,6 @@ export async function activate(context: ExtensionContext): Promise<void> {
   }
 
   /**
-   * How far back the get behind a record can have carried a file, as a
-   * changelist — the `floor` of the ledger entry it writes.
-   *
-   * `@CL` cannot move a file past its CL, so it names its own floor. `#head`
-   * only carries files forward (there is nothing newer to fetch), so it uses
-   * {@link NO_REGRESSION}. Anything else — a numbered `#<rev>`, or the per-file
-   * specs of an empty `spec` — can land anywhere as far as the spec alone says,
-   * and `0` is the conservative answer: the ledger retires a wider record rather
-   * than let it keep answering with a changelist the get may have moved below.
-   */
-  function specFloor(spec: string): number {
-    if (spec === '#head') return NO_REGRESSION
-    if (spec.startsWith('@')) {
-      const cl = Number(spec.slice(1))
-      if (Number.isFinite(cl)) return cl
-    }
-    return 0
-  }
-
-  /**
    * Write down where a get landed, for the graph's local-sync-point badge.
    *
    * The recorded changelist is READ BACK from p4 (`readGraphSyncPoint`), not
@@ -902,6 +883,10 @@ export async function activate(context: ExtensionContext): Promise<void> {
         log(`[perforce] sync ledger: nothing synced for ${scopeTextOf(filespecs)}`)
         return
       }
+      // The floor rides in the log because it is what decides whether this
+      // record retires the wider ones — a retired badge is invisible from the
+      // graph, and without the number its cause cannot be reconstructed.
+      const floor = syncFloorOf(spec, filespecs)
       ledger.record({
         clientRoot: target.root,
         paths: scope,
@@ -909,12 +894,12 @@ export async function activate(context: ExtensionContext): Promise<void> {
         source: 'sync',
         at,
         complete: outcome.complete,
-        floor: specFloor(spec),
+        floor,
       })
       log(
         `[perforce] sync ledger: #${read.id} for ${scopeTextOf(filespecs)}${
           outcome.complete ? '' : ' (partial)'
-        }`,
+        } (floor=${floor === NO_REGRESSION ? 'none' : floor})`,
       )
     }
     if (knownLanding !== undefined) {

@@ -4,7 +4,7 @@
  * through `runSync` — these only shape its inputs.
  */
 
-import { scopeCovers } from './graphSyncLedger.js'
+import { NO_REGRESSION, scopeCovers } from './graphSyncLedger.js'
 import type { SyncScopeTarget } from './p4Filespec.js'
 import { scopeKey } from './pathUtil.js'
 
@@ -173,4 +173,54 @@ export function directSyncPoint(input: DirectSyncPointInput): DirectSyncPoint {
     return { ok: false, reason: 'get scope does not cover the listing scope' }
   }
   return { ok: true, change: input.change }
+}
+
+/** The revision specifier at the END of a filespec — the sigil INCLUDED, since
+ *  `#3` and `3` are not the same claim. A specifier is always last, and
+ *  `escapeFilespecPath` has already turned a literal `@`/`#` in the path into
+ *  `%40`/`%23`, so the last sigil in the string is the separator. */
+const REV_SUFFIX = /([@#][^@#]*)$/
+/** A revision specifier that names a NUMBER, as opposed to `#none`, `#head` or
+ *  `@2026/08/01`. */
+const NUMBERED_REV = /^[@#](\d+)$/
+
+/**
+ * How far back a get of one filespec can have carried the file, as a
+ * changelist: `#3` can land it at 3, `#head` and an unnumbered filespec only
+ * carry it forward. The caller folds these with `min` and reads "this get can
+ * move nothing backward" from `NO_REGRESSION` — taking the minimum over
+ * "cannot regress" and a number is the number.
+ */
+function revisionFloorOf(filespec: string): number {
+  const spec = filespec.match(REV_SUFFIX)?.[1]
+  if (spec === undefined) return NO_REGRESSION
+  const numbered = NUMBERED_REV.exec(spec)
+  return numbered ? Number.parseInt(numbered[1]!, 10) : NO_REGRESSION
+}
+
+/**
+ * The ledger's `floor` for a get: the OLDEST changelist it can have left a file
+ * at, which is what decides whether it may retire a wider record that claims
+ * more than this get can account for (see `contradictedBy`).
+ *
+ * `#head` and `@CL` bound themselves — nothing newer to fetch, nothing past the
+ * changelist. A per-file get (an empty `spec`) does not, so the answer has to
+ * come from the targets instead of the spec: each carries its own revision, and
+ * a get of `#3` can land the file at 3. Missing that used to read as `0`, "this
+ * could have put a file anywhere" — which let ONE file's revision get retire a
+ * whole workspace's sync point, leaving the graph at `#?` for good.
+ *
+ * `0` stays for the specs that really do not say: a numbered `#4` in `spec`
+ * itself, a date, anything else the spec alone cannot bound.
+ *
+ * Pure. `syncFloorOf(spec, [])` is `specFloor(spec)` — no targets, no per-file
+ * question.
+ */
+export function syncFloorOf(spec: string, filespecs: readonly string[]): number {
+  if (spec === '#head') return NO_REGRESSION
+  if (spec === '') {
+    return filespecs.reduce((lowest, f) => Math.min(lowest, revisionFloorOf(f)), NO_REGRESSION)
+  }
+  const cl = /^@(\d+)$/.exec(spec)
+  return cl ? Number.parseInt(cl[1]!, 10) : 0
 }
