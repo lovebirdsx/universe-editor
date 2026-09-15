@@ -1,5 +1,19 @@
 [
   {
+    "version": "0.14.5",
+    "date": "2026-09-15",
+    "groups": [
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "用户文本消息中识别形如 file:///xxx 的文件链接",
+          "session在切回时，焦点能够正确处理"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.14.4",
     "date": "2026-09-13",
     "groups": [
