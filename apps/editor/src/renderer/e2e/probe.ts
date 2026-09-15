@@ -855,13 +855,44 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     getAcpToolCalls: () => {
       const s = services.acpSessionService.activeSession.get()
       if (!s) return []
-      return s.toolCalls.get().map((t) => ({
-        id: t.id,
-        title: t.title,
-        status: t.status,
-        text: t.text,
-        ...(t.mcpServer !== undefined && { mcpServer: t.mcpServer }),
-      }))
+      // Children hang off the timeline slot, not the lane entry `toolCalls` returns —
+      // a sub-agent message is not a top-level call and never appears there.
+      const childrenByParent = new Map<
+        string,
+        NonNullable<ReturnType<E2EProbe['getAcpToolCalls']>[number]['children']>
+      >()
+      for (const item of s.timeline.get()) {
+        if (item.kind !== 'toolCall' || item.call.children === undefined) continue
+        childrenByParent.set(
+          item.id,
+          item.call.children.map((child) =>
+            child.kind === 'message'
+              ? {
+                  id: child.id,
+                  kind: 'message',
+                  role: child.message.role,
+                  textLength: child.message.text.length,
+                  live: child.message.live === true,
+                  streaming: child.message.streaming,
+                }
+              : { id: child.id, kind: 'toolCall', textLength: child.call.text.length },
+          ),
+        )
+      }
+      return s.toolCalls.get().map((t) => {
+        const children = childrenByParent.get(t.id)
+        return {
+          id: t.id,
+          title: t.title,
+          status: t.status,
+          text: t.text,
+          ...(t.mcpServer !== undefined && { mcpServer: t.mcpServer }),
+          // Per-card, not per-session: `children` is documented as present only on
+          // cards that have them, and a session-wide guard would hand `[]` to every
+          // card the moment one sub-agent existed.
+          ...(children !== undefined && { children }),
+        }
+      })
     },
     getAcpMcpServers: () => {
       const s = services.acpSessionService.activeSession.get()

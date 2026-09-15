@@ -88,6 +88,22 @@ function childToolCall(parentId: string, id: string, text: string): SessionUpdat
   }
 }
 
+/** A sub-agent text chunk, nested onto `parentId` via the claudeCode meta bag. */
+function childTextChunk(parentId: string, text: string): SessionUpdate {
+  return {
+    sessionUpdate: 'agent_message_chunk',
+    content: { type: 'text', text },
+    _meta: { claudeCode: { parentToolUseId: parentId } },
+  }
+}
+
+/** The child *messages* folded under one parent card, in order. */
+function childMessagesOf(s: AcpSession, parentId: string) {
+  const slot = s.timeline.get().find((it) => it.kind === 'toolCall' && it.id === parentId)
+  const children = slot?.kind === 'toolCall' ? (slot.call.children ?? []) : []
+  return children.flatMap((c) => (c.kind === 'message' ? [c.message] : []))
+}
+
 /** An edit tool call carrying a single diff — the shape a sub-agent result
  *  document arrives in (the fork fakes one so the saved file shows up). */
 function editToolCall(id: string, path: string, newText: string): SessionUpdate {
@@ -259,6 +275,27 @@ describe('AcpSession — live resident budget', () => {
     const newest = session.toolCalls.get().find((c) => c.id === 'newest')
     expect(newest?.memoryTrimmed).toBeUndefined()
     expect(newest?.text).toBe('n'.repeat(800))
+  })
+
+  it('drops the live flag from a trimmed sub-agent message', () => {
+    // The stream the flag described is gone with the text. Keeping it would leave
+    // the message advertising a growing tail that no longer exists, and — because
+    // `live` also gates fence highlighting — permanently uncoloured.
+    session = createSession()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    // 100 chars → 600 charged for the card, 1200 for the message (block + text
+    // copy); the 450-char top-level message adds 5400 → 7200 > 6144. Trimming the
+    // card alone leaves 6600, so the loop reaches the child message next.
+    session.applyUpdate(terminalToolCall('parent', 'p'.repeat(100)))
+    session.applyUpdate(childTextChunk('parent', 'sub '.repeat(25)))
+    expect(childMessagesOf(session, 'parent')[0]?.live).toBe(true)
+
+    session.applyUpdate(agentTextChunk('x'.repeat(450)))
+
+    const child = childMessagesOf(session, 'parent')[0]
+    expect(child?.memoryTrimmed).toBe(true)
+    expect(child?.live).toBeUndefined()
   })
 
   it('keeps a trimmed edit card’s diff path while releasing both text sides', () => {

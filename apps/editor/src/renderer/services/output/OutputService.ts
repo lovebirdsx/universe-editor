@@ -86,6 +86,16 @@ export class OutputChannel implements IOutputChannel {
     return this._chunks.join('') + this._pending.join('')
   }
 
+  /**
+   * `_length` covers the flushed chunks; the pending tail is a microtask's worth and
+   * is summed rather than ignored so a reading taken mid-burst still counts it.
+   */
+  get retainedChars(): number {
+    let chars = this._length
+    for (const pending of this._pending) chars += pending.length
+    return chars
+  }
+
   flushNow(): void {
     // Idempotent: the already-queued microtask finds _pending empty and returns.
     this._flush()

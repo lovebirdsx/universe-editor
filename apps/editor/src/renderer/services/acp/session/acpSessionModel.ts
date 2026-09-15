@@ -35,6 +35,18 @@ export interface AcpMessage {
   /** True while this message is still receiving streaming chunks; the UI uses this to render a blinking caret. */
   readonly streaming: boolean
   /**
+   * True while a *sub-agent* message is still growing under its parent tool call.
+   *
+   * Deliberately separate from `streaming`: that flag is anchored in `_messages`
+   * and `_streamingIds`, which the top-level seal/flush machinery owns, while a
+   * child run ends on the child path (role switch, an appended child tool call,
+   * or the turn ending). One shared flag would let a future symmetry fix stop a
+   * sub-agent mid-stream — and because `live` also gates code-fence highlighting,
+   * one that outlives its run leaves the card permanently uncoloured rather than
+   * merely slower.
+   */
+  readonly live?: true
+  /**
    * Agent-side stable id for this message (a client-generated uuid sent as
    * `PromptRequest._meta.messageId` and echoed back as
    * `PromptResponse._meta.userMessageId`).

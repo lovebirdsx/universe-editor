@@ -320,7 +320,9 @@ function trimToolCall(call: AcpToolCall): AcpToolCall {
 }
 
 /** Release a message's heavy content, replacing it with the memory-protection
- * notice while keeping the shell (role / id / anchor / selection contexts). */
+ * notice while keeping the shell (role / id / anchor / selection contexts).
+ * Drops `live` (the field list below is explicit): the content it described is
+ * gone, so there is no growing tail left to render incrementally. */
 function trimMessage(message: AcpMessage): AcpMessage {
   const notice = memoryTrimmedNotice()
   return {
@@ -336,6 +338,28 @@ function trimMessage(message: AcpMessage): AcpMessage {
       ? { selectionContexts: message.selectionContexts }
       : {}),
   }
+}
+
+/**
+ * Flip a child run's `live` off. Destructured rather than `live: undefined`:
+ * `exactOptionalPropertyTypes` rejects an explicit undefined for an optional `true`.
+ */
+function sealLiveMessage(message: AcpMessage): AcpMessage {
+  const { live: _live, ...rest } = message
+  return rest
+}
+
+/**
+ * Drop `live` from every message in one child list. Returns the input untouched
+ * when none were live, so sealing a settled list allocates nothing.
+ */
+function sealLiveChildren(children: readonly AcpChildItem[]): readonly AcpChildItem[] {
+  if (!children.some((c) => c.kind === 'message' && c.message.live === true)) return children
+  return children.map((c) =>
+    c.kind === 'message' && c.message.live === true
+      ? { kind: 'message', id: c.id, message: sealLiveMessage(c.message) }
+      : c,
+  )
 }
 
 /**
@@ -1705,6 +1729,9 @@ export class AcpSession extends Disposable implements IAcpSession {
     // Replay end is a batch boundary: publish any pending streaming merges
     // first so the just-restored history reads complete (mirrors the commit at
     // the top of close / _resetForReplay).
+    this._commitBatchedTx()
+    // A replayed sub-agent card is finished history, not a growing run.
+    this._sealLiveChildMessages()
     this._commitBatchedTx()
     this._suppressReplayToTimeline = false
     this._suppressAnchorMessageId = undefined
@@ -3729,6 +3756,12 @@ export class AcpSession extends Disposable implements IAcpSession {
 
   private _flushStream(): void {
     this._materializePendingStreamingMerge(this._batchedTx())
+    // A child run is over when the turn is. Publish the trailing one first — the
+    // commit below would otherwise re-spread a still-live base — then drop every
+    // `live` flag, or a card that stopped mid-run keeps re-parsing its tail and
+    // never highlights its code fences again.
+    this._materializePendingChildMerge(this._batchedTx())
+    this._sealLiveChildMessages()
     this._streamingIds.clear()
     this._messages = this._messages.map((m) => (m.streaming ? { ...m, streaming: false } : m))
     for (const m of this._messages) {
@@ -4110,23 +4143,29 @@ export class AcpSession extends Disposable implements IAcpSession {
 
   /** Append a streaming sub-agent message chunk under its parent tool call. */
   private _appendChildChunk(role: AcpMessageRole, block: ContentBlock, parentId: string): void {
-    const tx = this._batchedTx()
     const pending = this._pendingChildMerge
     if (pending !== undefined && pending.parentId !== parentId) {
-      this._materializePendingChildMerge(tx)
+      // A pending run implies a batch is already open (the commit that ended the
+      // previous one materializes this), so that batch's deadline is fixed and this
+      // length is inert — passed so the intent survives a change to that invariant.
+      // Another parent's chunks can never merge into this run, so publishing it
+      // ends it: drop `live` in the same rebuild rather than sweeping it later.
+      this._materializePendingChildMerge(this._batchedTx(pending.acc.textChars()), { seal: true })
     }
     const active = this._pendingChildMerge
     if (active !== undefined) {
       if (active.base.kind === 'message' && active.base.message.role === role) {
         // Same-parent merge reuses the in-place accumulator; cap-triggered and
         // non-text pushes publish immediately (same cadence as before).
+        const tx = this._batchedTx(active.acc.textChars())
         const capped = active.acc.push(block)
         if (capped || block.type !== 'text') this._materializePendingChildMerge(tx)
         this.timeline.set(this._timeline, tx)
         return
       }
-      // Role switch mid-run: flush the pending run, then open a fresh message.
-      this._materializePendingChildMerge(tx)
+      // Role switch mid-run: flush the pending run, then open a fresh message. The
+      // role check is what breaks the merge, so the flushed run is finished.
+      this._materializePendingChildMerge(this._batchedTx(active.acc.textChars()), { seal: true })
     }
     const children = this._childrenOf(parentId)
     const last = children[children.length - 1]
@@ -4134,6 +4173,12 @@ export class AcpSession extends Disposable implements IAcpSession {
       // Merge into the trailing child message. No streaming-flag bookkeeping:
       // an interleaved child tool call makes `last` a toolCall, which naturally
       // breaks the merge and opens a fresh message — same for a role switch.
+      //
+      // Load-bearing: nothing has opened a batch since the last commit materialized
+      // the previous run, so THIS call fixes the deadline. The trailing message's
+      // length is what `_batchDelayMs` sizes the batch against — the same role
+      // `last.text.length` plays for the top-level path.
+      const tx = this._batchedTx(last.message.text.length)
       const acc = new StreamingBlocksAccumulator(last.message.blocks)
       this._pendingChildMerge = { parentId, base: last, acc }
       const capped = acc.push(block)
@@ -4144,11 +4189,23 @@ export class AcpSession extends Disposable implements IAcpSession {
     if (isBlankContentBlock(block)) return
     const id = `m${++this._msgCounter}`
     const blocks: readonly ContentBlock[] = [capContentBlock(block)]
-    // Child messages never show a streaming caret (folded by default), so they
-    // stay out of `_streamingIds` and the top-level seal/flush machinery.
-    const message: AcpMessage = { id, role, blocks, text: blocksToText(blocks), streaming: false }
-    this._setChildren(parentId, [...children, { kind: 'message', id, message }])
-    this.timeline.set(this._timeline, tx)
+    // Child messages never show a streaming caret (folded by default), so they stay
+    // out of `_streamingIds` and the top-level seal/flush machinery. `live` is the
+    // separate flag that tells the renderer this one is still growing.
+    const message: AcpMessage = {
+      id,
+      role,
+      blocks,
+      text: blocksToText(blocks),
+      streaming: false,
+      live: true,
+    }
+    // Reaching here ends whatever run the trailing message had: a same-role chunk
+    // would have merged above, and a role switch across a *batch* boundary arrives
+    // with `_pendingChildMerge` already materialized — so the seal rides this
+    // rebuild rather than a separate sweep.
+    this._setChildren(parentId, [...sealLiveChildren(children), { kind: 'message', id, message }])
+    this.timeline.set(this._timeline, this._batchedTx())
   }
 
   /**
@@ -4157,14 +4214,22 @@ export class AcpSession extends Disposable implements IAcpSession {
    * identity, so a children rebuild that already replaced it (e.g. a trim)
    * wins and the pending delta is dropped.
    */
-  private _materializePendingChildMerge(tx: TransactionImpl): void {
+  private _materializePendingChildMerge(tx: TransactionImpl, opts?: { seal?: boolean }): void {
     const pending = this._pendingChildMerge
     if (pending === undefined) return
     this._pendingChildMerge = undefined
     const base = pending.base
     if (base.kind !== 'message') return
     const { blocks, text } = pending.acc.flatten()
-    const message: AcpMessage = { ...base.message, blocks, text }
+    bumpHeapFlow('childchunks', text.length)
+    // `live: true` unconditionally, not carried over from the base: reaching here means
+    // this message just took more text, so it is growing by definition. Re-asserting it
+    // is what makes a seal recoverable — a chunk that lands after the parent card
+    // settled must not leave the message on the static render path, which re-parses the
+    // whole message every batch and is the exact cost `live` exists to avoid. Callers
+    // that are ending the run pass `seal` and win over this.
+    const merged: AcpMessage = { ...base.message, blocks, text, live: true }
+    const message = opts?.seal === true ? sealLiveMessage(merged) : merged
     const child: AcpChildItem = { kind: 'message', id: message.id, message }
     const children = this._childrenOf(pending.parentId)
     const idx = children.findIndex((c) => c === base)
@@ -4172,6 +4237,34 @@ export class AcpSession extends Disposable implements IAcpSession {
     const next = [...children.slice(0, idx), child, ...children.slice(idx + 1)]
     this._setChildren(pending.parentId, next)
     this.timeline.set(this._timeline, tx)
+  }
+
+  /**
+   * Drop {@link AcpMessage.live} from every child run on the timeline and in the
+   * orphan stash. Called where a turn ends: a child run has no end-of-life signal
+   * of its own (the chunks simply stop arriving, with no counterpart to the
+   * top-level `streaming` flag clearing), so without this the turn's last
+   * sub-agent card would keep the streaming render path — and stay uncoloured —
+   * for the life of the session.
+   */
+  private _sealLiveChildMessages(): void {
+    let changed = false
+    this._timeline = this._timeline.map((slot) => {
+      if (slot.kind !== 'toolCall') return slot
+      const children = slot.call.children
+      if (children === undefined) return slot
+      const sealed = sealLiveChildren(children)
+      if (sealed === children) return slot
+      changed = true
+      return { ...slot, call: { ...slot.call, children: sealed } }
+    })
+    for (const [parentId, children] of this._orphanChildren) {
+      const sealed = sealLiveChildren(children)
+      if (sealed === children) continue
+      this._orphanChildren.set(parentId, sealed)
+      changed = true
+    }
+    if (changed) this.timeline.set(this._timeline, this._batchedTx())
   }
 
   /** Upsert one child slot (message / toolCall) into its parent's children. */
@@ -4185,11 +4278,14 @@ export class AcpSession extends Disposable implements IAcpSession {
     }
     const children = this._childrenOf(parentId)
     const idx = children.findIndex((c) => c.kind === child.kind && c.id === child.id)
-    const next =
-      idx === -1
-        ? [...children, child]
-        : [...children.slice(0, idx), child, ...children.slice(idx + 1)]
-    this._setChildren(parentId, next)
+    const appended = idx === -1
+    const next = appended
+      ? [...children, child]
+      : [...children.slice(0, idx), child, ...children.slice(idx + 1)]
+    // Appending a child tool call ends the trailing message's run: a chunk merges
+    // only into a message that is last, and it no longer is. An in-place update to
+    // an earlier child leaves the trailing message last, so it stays live.
+    this._setChildren(parentId, appended ? sealLiveChildren(next) : next)
     this.timeline.set(this._timeline, tx)
   }
 
@@ -4318,7 +4414,15 @@ export class AcpSession extends Disposable implements IAcpSession {
     const orphans = this._orphanChildren.get(call.id)
     if (orphans) this._orphanChildren.delete(call.id)
     const children = [...existingChildren, ...(orphans ?? [])]
-    const merged: AcpToolCall = children.length > 0 ? { ...call, children } : call
+    // A settled parent card is the sub-agent's end-of-life signal: the wire only
+    // completes a Task card once its sub-agent has stopped. Without this the trailing
+    // child message keeps `live` until the turn ends, and a turn that goes on to do
+    // more work leaves that report uncoloured — with unclickable paths inside its
+    // fences — for minutes. Mid-run rebuilds (the PostToolUse hook) carry `in_progress`
+    // and so deliberately do not seal; a chunk that arrives late re-asserts `live` in
+    // `_materializePendingChildMerge`, so sealing early is recoverable.
+    const sealed = isSettledToolCallStatus(call.status) ? sealLiveChildren(children) : children
+    const merged: AcpToolCall = sealed.length > 0 ? { ...call, children: sealed } : call
     const slot: TimelineItem = { kind: 'toolCall', id: call.id, call: merged }
     if (idx === -1) {
       this._timeline = [...this._timeline, slot]

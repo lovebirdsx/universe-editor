@@ -175,6 +175,7 @@ class FakeAgentRegistry implements IAcpAgentRegistry {
 
 class StubOutputChannel implements IOutputChannel {
   readonly name: string
+  readonly retainedChars = 0
   readonly hasContent: IObservable<boolean> = observableValue<boolean>(
     'stub.output.hasContent',
     false,

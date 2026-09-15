@@ -16,16 +16,44 @@ export const HEAP_FLOW_NAMES = [
   'colorize',
   'colorize.skip',
   'materialize',
+  /**
+   * Sub-agent publishes, counted apart from `materialize` (which is the top-level
+   * path). The two streams have different batch deadlines and different render
+   * paths, and a package that cannot say which one dominated cannot be acted on —
+   * the 2026-09-12 crash had both available and no way to tell them apart.
+   */
+  'childchunks',
 ] as const
 export type HeapFlowName = (typeof HEAP_FLOW_NAMES)[number]
 
 /**
- * Absolute readings, not deltas. `domnodes` is the only cheap proxy the renderer
- * has for Blink-side memory, which is where off-heap growth actually lands; the
- * rest describe how much markdown the live views are carrying.
+ * Absolute readings of process-wide singletons, where last-writer-wins is correct
+ * because there is exactly one of each.
  */
-export const HEAP_GAUGE_NAMES = ['domnodes', 'astnodes', 'sealednodes', 'tailchars'] as const
-export type HeapGaugeName = (typeof HEAP_GAUGE_NAMES)[number]
+export const HEAP_GAUGE_NAMES = ['domnodes'] as const
+
+/**
+ * Absolute readings summed across every mounted MarkdownView.
+ *
+ * Summed rather than last-writer-wins: with several chat panels open, the view that
+ * rendered last is not the one holding the window's markdown, and the reading exists
+ * to answer "how much markdown is this window carrying" — the question the 2026-09-12
+ * crash left unanswerable, since a last-writer-wins gauge reports one view's worth no
+ * matter how many are alive.
+ */
+export const HEAP_VIEW_GAUGE_NAMES = [
+  'views',
+  'astnodes',
+  'sealednodes',
+  'tailchars',
+  'mdbytes',
+] as const
+
+export type HeapGaugeName =
+  | (typeof HEAP_GAUGE_NAMES)[number]
+  | (typeof HEAP_VIEW_GAUGE_NAMES)[number]
+/** Only the singleton gauges are settable directly; the rest come from views. */
+export type HeapSingletonGaugeName = (typeof HEAP_GAUGE_NAMES)[number]
 
 export interface HeapFlowSnapshot {
   readonly name: HeapFlowName
@@ -38,12 +66,23 @@ export interface HeapGaugeSnapshot {
   readonly value: number
 }
 
+/** What one mounted MarkdownView is holding. */
+export interface HeapViewGauges {
+  readonly astnodes: number
+  readonly sealednodes: number
+  readonly tailchars: number
+  /** Source characters, i.e. sealed prefix + tail. */
+  readonly mdbytes: number
+}
+
 const flowCalls = new Map<HeapFlowName, number>()
 const flowChars = new Map<HeapFlowName, number>()
 const totalCalls = new Map<HeapFlowName, number>()
 const totalChars = new Map<HeapFlowName, number>()
-const gauges = new Map<HeapGaugeName, number>()
+const gauges = new Map<HeapSingletonGaugeName, number>()
+const viewGauges = new Map<number, HeapViewGauges>()
 
+let nextViewId = 1
 let codeHtmlBytes = 0
 
 export function bumpHeapFlow(name: HeapFlowName, chars: number): void {
@@ -91,14 +130,48 @@ export function readHeapFlowTotals(): readonly HeapFlowSnapshot[] {
   return snapshots
 }
 
-export function setHeapGauge(name: HeapGaugeName, value: number): void {
+export function setHeapGauge(name: HeapSingletonGaugeName, value: number): void {
   gauges.set(name, Number.isFinite(value) && value >= 0 ? value : 0)
+}
+
+/**
+ * Register one mounted view's readings and return its handle. Views come and go with
+ * the chat panels, so a flat accumulator would drift the moment one unmounts without
+ * the exact numbers it registered with; a keyed table cannot.
+ *
+ * A view that re-renders with new numbers re-registers under a fresh handle rather
+ * than updating in place — that is what `MarkdownView`'s memoised gauges object makes
+ * its effect do — so there is deliberately no update path to keep in step.
+ */
+export function registerHeapView(gauges: HeapViewGauges): number {
+  const id = nextViewId++
+  viewGauges.set(id, gauges)
+  return id
+}
+
+export function unregisterHeapView(id: number): void {
+  viewGauges.delete(id)
 }
 
 export function readHeapGauges(): readonly HeapGaugeSnapshot[] {
   const snapshots: HeapGaugeSnapshot[] = []
   for (const name of HEAP_GAUGE_NAMES) {
     const value = gauges.get(name) ?? 0
+    if (value === 0) continue
+    snapshots.push({ name, value })
+  }
+  const summed = new Map<string, number>()
+  // Not a sum: how many views are mounted is itself the reading, and it is what says
+  // whether a per-view total is describing one panel or a dozen.
+  if (viewGauges.size > 0) summed.set('views', viewGauges.size)
+  for (const view of viewGauges.values()) {
+    for (const name of HEAP_VIEW_GAUGE_NAMES) {
+      if (name === 'views') continue
+      summed.set(name, (summed.get(name) ?? 0) + view[name])
+    }
+  }
+  for (const name of HEAP_VIEW_GAUGE_NAMES) {
+    const value = summed.get(name) ?? 0
     if (value === 0) continue
     snapshots.push({ name, value })
   }

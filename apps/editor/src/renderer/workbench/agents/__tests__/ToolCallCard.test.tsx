@@ -27,6 +27,11 @@ import type {
 } from '../../../services/acp/session/acpSessionService.js'
 import { ToolCallCard } from '../ToolCallCard.js'
 import { ServicesContext } from '../../useService.js'
+import {
+  readHeapFlowTotals,
+  type HeapFlowName,
+  type HeapFlowSnapshot,
+} from '../../../services/memory/heapFlowCounters.js'
 
 vi.mock('../../editor/monaco/MonacoLoader.js', () => ({
   MonacoLoader: { ensureInitialized: () => new Promise(() => {}) },
@@ -346,6 +351,60 @@ describe('ToolCallCard', () => {
     expect(within(msg).getByTestId('acp-plaintext').textContent).toBe('do **this** now')
     expect(within(msg).queryByTestId('acp-markdown')).toBeNull()
     expect(msg.querySelector('strong')).toBeNull()
+  })
+
+  /**
+   * Characters handed to one flow counter since `before` — 0 when it saw none.
+   * Monotonic totals rather than `drainHeapFlow`: the heap sampler drains the same
+   * counters every 5s, so a destructive read here would race it.
+   */
+  function flowCharsSince(before: readonly HeapFlowSnapshot[], name: HeapFlowName): number {
+    const now = readHeapFlowTotals().find((s) => s.name === name)?.chars ?? 0
+    return now - (before.find((s) => s.name === name)?.chars ?? 0)
+  }
+
+  describe('sub-agent message body', () => {
+    // Trailing newline included — that is the fence body the parser yields.
+    const CODE = 'const x = 1\n'
+    // The blank line seals `intro`; the unclosed fence stays in the tail, which is
+    // the only part a growing stream re-parses and re-renders.
+    const BODY = `intro\n\n\`\`\`ts\n${CODE}`
+
+    const liveChild = (text: string): AcpToolCall =>
+      makeCall({
+        kind: 'other',
+        children: [
+          { kind: 'message', id: 'sm1', message: { ...makeChildMessage(text), live: true } },
+        ],
+      })
+
+    it('parses a live sub-agent message incrementally and skips tail fence colorization', () => {
+      const before = readHeapFlowTotals()
+      renderCard(liveChild(BODY))
+
+      expect(screen.getByTestId('acp-markdown')).toBeTruthy()
+      // `mdparse` is bumped only by the incremental parser; a static parse never
+      // touches it, so a non-zero reading is the proof this took the stream path.
+      expect(flowCharsSince(before, 'mdparse')).toBe(BODY.length)
+      // A fence that grows every batch must not be re-tokenized on every batch.
+      expect(flowCharsSince(before, 'colorize')).toBe(0)
+      expect(flowCharsSince(before, 'colorize.skip')).toBe(CODE.length)
+    })
+
+    it('keeps a settled sub-agent message on the static path', () => {
+      const before = readHeapFlowTotals()
+      renderCard(
+        makeCall({
+          kind: 'other',
+          children: [{ kind: 'message', id: 'sm1', message: makeChildMessage(BODY) }],
+        }),
+      )
+
+      expect(screen.getByTestId('acp-markdown')).toBeTruthy()
+      expect(flowCharsSince(before, 'mdparse')).toBe(0)
+      expect(flowCharsSince(before, 'colorize')).toBe(CODE.length)
+      expect(flowCharsSince(before, 'colorize.skip')).toBe(0)
+    })
   })
 
   it('folds a sub-agent message on click in standalone usage', () => {

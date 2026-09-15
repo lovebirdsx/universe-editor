@@ -5,7 +5,7 @@
  *  path without touching the SDK wire.
  *--------------------------------------------------------------------------------------------*/
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   autorun,
   ConfigurationService,
@@ -50,7 +50,7 @@ import {
   type SetSessionConfigOptionResponse,
   type SessionUpdate,
 } from '@agentclientprotocol/sdk'
-import { AcpSession, stripSelectionReplayChunk } from '../acpSession.js'
+import { AcpSession, stripSelectionReplayChunk, type IAcpSession } from '../acpSession.js'
 import {
   DIFF_SIDE_CAP,
   MEDIA_DATA_CAP,
@@ -2410,6 +2410,295 @@ describe('AcpSession.timeline — in-place streaming merge inside the batch wind
     const child = parent.call.children?.[0]
     if (child?.kind !== 'message') throw new Error('expected child message')
     expect(child.message.text).toBe('sub ab')
+  })
+})
+
+describe('AcpSession.timeline — sub-agent streaming runs', () => {
+  let svc: AcpSessionService
+  let client: FakeAcpClientService
+
+  beforeEach(() => {
+    client = new FakeAcpClientService({ stubOptions: { promptHangs: true } })
+    svc = makeService(client)
+  })
+
+  afterEach(() => {
+    svc.dispose()
+  })
+
+  /** Mirrors STREAM_HEAVY_CHARS in acpSession.ts (not exported). */
+  const HEAVY_CHARS = 64 * 1024
+
+  /** Let a chunk batch commit so `.get()` reflects the merged stream. */
+  const flushBatch = (): Promise<void> => new Promise((r) => setTimeout(r, 25))
+
+  const openParent: SessionUpdate = {
+    sessionUpdate: 'tool_call',
+    toolCallId: 'tcP',
+    title: 'Task',
+    kind: 'other',
+    status: 'in_progress',
+  }
+
+  const childChunk = (text: string): SessionUpdate => ({
+    sessionUpdate: 'agent_message_chunk',
+    content: { type: 'text', text },
+    _meta: { claudeCode: { parentToolUseId: 'tcP' } },
+  })
+
+  const childThought = (text: string): SessionUpdate => ({
+    sessionUpdate: 'agent_thought_chunk',
+    content: { type: 'text', text },
+    _meta: { claudeCode: { parentToolUseId: 'tcP' } },
+  })
+
+  const childToolCall = (toolCallId: string): SessionUpdate => ({
+    sessionUpdate: 'tool_call',
+    toolCallId,
+    title: 'Read',
+    kind: 'read',
+    status: 'completed',
+    _meta: { claudeCode: { parentToolUseId: 'tcP' } },
+  })
+
+  /** The child messages folded under the `tcP` card, in order. */
+  function childMessages(s: IAcpSession) {
+    const parent = s.timeline.get().find((it) => it.kind === 'toolCall' && it.id === 'tcP')
+    const children = parent?.kind === 'toolCall' ? (parent.call.children ?? []) : []
+    return children.flatMap((c) => (c.kind === 'message' ? [c.message] : []))
+  }
+
+  it('sizes a child batch against the trailing message, so a >64KB run commits on 64ms', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+    const send = (u: SessionUpdate): void =>
+      conn.sink.onSessionUpdate({ sessionId: 'agent-1', update: u })
+
+    send(openParent)
+    // The message-creation branch opens this first batch; the chunk after it is the
+    // one that has to size its own batch against the trailing message's length.
+    send(childChunk('a'.repeat(HEAVY_CHARS + 1)))
+    await flushBatch()
+
+    let notifications = 0
+    const stop = autorun((r) => {
+      s.timeline.read(r)
+      notifications++
+    })
+    const initial = notifications
+
+    send(childChunk('tail'))
+
+    // The 16ms window would have committed by now.
+    await flushBatch()
+    expect(notifications - initial).toBe(0)
+
+    // Waited for rather than slept through: a single 70ms sleep clears the 64ms
+    // deadline by 6ms, which a contended runner's event loop can eat — the commit
+    // lands, the timer that reads it does not, and the case goes red on nothing.
+    await vi.waitFor(() => expect(notifications - initial).toBe(1), { timeout: 1000 })
+    stop.dispose()
+  })
+
+  it('marks a new child message live, leaving the top-level streaming lane untouched', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    conn.sink.onSessionUpdate({ sessionId: 'agent-1', update: openParent })
+    conn.sink.onSessionUpdate({ sessionId: 'agent-1', update: childChunk('sub ') })
+    await flushBatch()
+
+    const children = childMessages(s)
+    expect(children).toHaveLength(1)
+    expect(children[0]!.live).toBe(true)
+    // `live` is deliberately not `streaming`: the child never enters the top-level
+    // caret / `_streamingIds` machinery.
+    expect(children[0]!.streaming).toBe(false)
+    expect(s.messages.get().some((m) => m.streaming)).toBe(false)
+  })
+
+  it('drops live from a child run when the turn ends', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+    const promptPromise = s.sendPrompt('go')
+    await flushBatch()
+
+    conn.sink.onSessionUpdate({ sessionId: 'agent-1', update: openParent })
+    conn.sink.onSessionUpdate({ sessionId: 'agent-1', update: childChunk('sub ') })
+    await flushBatch()
+    expect(childMessages(s)[0]!.live).toBe(true)
+
+    await s.cancelTurn()
+    await promptPromise
+
+    expect(childMessages(s)[0]!.live).toBeUndefined()
+  })
+
+  it('drops live from a replayed child run when history replay ends', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    conn.sink.onSessionUpdate({ sessionId: 'agent-1', update: openParent })
+    conn.sink.onSessionUpdate({ sessionId: 'agent-1', update: childChunk('sub ') })
+    await flushBatch()
+    expect(childMessages(s)[0]!.live).toBe(true)
+
+    s.endHistoryReplay()
+
+    expect(childMessages(s)[0]!.live).toBeUndefined()
+  })
+
+  it('drops live from a child run when the connection is lost mid-stream', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+    const promptPromise = s.sendPrompt('go')
+    await flushBatch()
+
+    conn.sink.onSessionUpdate({ sessionId: 'agent-1', update: openParent })
+    conn.sink.onSessionUpdate({ sessionId: 'agent-1', update: childChunk('sub ') })
+    await flushBatch()
+    expect(childMessages(s)[0]!.live).toBe(true)
+
+    // The watchdog's route into _handleConnectionLost. A crash reaches the same
+    // teardown through the aborted prompt's `finally → _flushStream`, which is the
+    // only thing that seals a child run — so a lost connection must not leave the
+    // card advertising a tail that will never grow again.
+    // `handleStall` lives on the concrete session, not the facade interface.
+    const concrete = s as unknown as AcpSession
+    concrete.handleStall()
+    await promptPromise.catch(() => {})
+
+    expect(childMessages(s)[0]!.live).toBeUndefined()
+  })
+
+  it('ends a child run on a role switch', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    conn.sink.onSessionUpdate({ sessionId: 'agent-1', update: openParent })
+    conn.sink.onSessionUpdate({ sessionId: 'agent-1', update: childChunk('sub ') })
+    await flushBatch()
+    expect(childMessages(s)[0]!.live).toBe(true)
+
+    conn.sink.onSessionUpdate({ sessionId: 'agent-1', update: childThought('think ') })
+    await flushBatch()
+
+    const children = childMessages(s)
+    expect(children).toHaveLength(2)
+    expect(children[0]!.live).toBeUndefined()
+    expect(children[1]!.live).toBe(true)
+  })
+
+  it('ends a child run when a child tool call is appended after it', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    conn.sink.onSessionUpdate({ sessionId: 'agent-1', update: openParent })
+    conn.sink.onSessionUpdate({ sessionId: 'agent-1', update: childChunk('sub ') })
+    await flushBatch()
+    expect(childMessages(s)[0]!.live).toBe(true)
+
+    conn.sink.onSessionUpdate({ sessionId: 'agent-1', update: childToolCall('tcChild') })
+    await flushBatch()
+
+    // No later chunk can merge into a message that is no longer last.
+    expect(childMessages(s)[0]!.live).toBeUndefined()
+  })
+
+  it('keeps the trailing child message live when an earlier child tool call updates in place', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    conn.sink.onSessionUpdate({ sessionId: 'agent-1', update: openParent })
+    conn.sink.onSessionUpdate({ sessionId: 'agent-1', update: childToolCall('tcChild') })
+    conn.sink.onSessionUpdate({ sessionId: 'agent-1', update: childChunk('sub ') })
+    await flushBatch()
+    expect(childMessages(s)[0]!.live).toBe(true)
+
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: { sessionUpdate: 'tool_call_update', toolCallId: 'tcChild', status: 'completed' },
+    })
+    await flushBatch()
+
+    // The updated child is not the last one, so the trailing message still grows.
+    expect(childMessages(s)[0]!.live).toBe(true)
+  })
+
+  it('keeps the child run live across a parent card update', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    conn.sink.onSessionUpdate({ sessionId: 'agent-1', update: openParent })
+    conn.sink.onSessionUpdate({ sessionId: 'agent-1', update: childChunk('sub ') })
+    await flushBatch()
+    expect(childMessages(s)[0]!.live).toBe(true)
+
+    // A PostToolUse hook rebuilds the parent card mid-run; sealing here would stop
+    // the sub-agent's incremental rendering on every parent update.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: { sessionUpdate: 'tool_call_update', toolCallId: 'tcP', status: 'in_progress' },
+    })
+    await flushBatch()
+
+    expect(childMessages(s)[0]!.live).toBe(true)
+  })
+
+  it('ends a child run when its parent card settles, without waiting for the turn', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    conn.sink.onSessionUpdate({ sessionId: 'agent-1', update: openParent })
+    conn.sink.onSessionUpdate({ sessionId: 'agent-1', update: childChunk('final report') })
+    await flushBatch()
+    expect(childMessages(s)[0]!.live).toBe(true)
+
+    // The wire only completes a Task card once its sub-agent has stopped, so this is
+    // the child run's end-of-life signal. The turn can then go on for minutes, and
+    // holding `live` that long leaves the report's fences uncoloured for all of it.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: { sessionUpdate: 'tool_call_update', toolCallId: 'tcP', status: 'completed' },
+    })
+    await flushBatch()
+
+    // Sealing drops the field rather than setting it false.
+    expect(childMessages(s)[0]!.live).toBeUndefined()
+  })
+
+  it('puts a child run back on the streaming path when a chunk lands after its parent settled', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    conn.sink.onSessionUpdate({ sessionId: 'agent-1', update: openParent })
+    conn.sink.onSessionUpdate({ sessionId: 'agent-1', update: childChunk('sub ') })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: { sessionUpdate: 'tool_call_update', toolCallId: 'tcP', status: 'completed' },
+    })
+    await flushBatch()
+    expect(childMessages(s)[0]!.live).toBeUndefined()
+
+    // An out-of-order completion must not strand the message on the static render
+    // path: there it is a full re-parse per batch, which is the cost `live` exists to
+    // avoid, and it would be silent. Growing again re-asserts the flag.
+    conn.sink.onSessionUpdate({ sessionId: 'agent-1', update: childChunk('more') })
+    await flushBatch()
+
+    expect(childMessages(s)[0]!.live).toBe(true)
+    expect(childMessages(s)[0]!.text).toBe('sub more')
   })
 })
 

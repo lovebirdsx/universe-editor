@@ -2,7 +2,7 @@
  *  Tests for the renderer's between-samples counters.
  *--------------------------------------------------------------------------------------------*/
 
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   addCodeHtmlBytes,
   bumpHeapFlow,
@@ -10,10 +10,13 @@ import {
   readCodeHtmlBytes,
   readHeapFlowTotals,
   readHeapGauges,
+  registerHeapView,
   setHeapGauge,
+  unregisterHeapView,
+  type HeapViewGauges,
 } from '../heapFlowCounters.js'
 
-const ALL_GAUGES = ['domnodes', 'astnodes', 'sealednodes', 'tailchars'] as const
+const ALL_GAUGES = ['domnodes'] as const
 
 /** Totals never reset, so a reading is only meaningful against an earlier one. */
 const callsSince = (baseline: readonly { name: string; calls: number }[], name: string): number => {
@@ -61,7 +64,6 @@ describe('heap flow counters', () => {
 
   it('reports a gauge that was set and omits a zero reading', () => {
     setHeapGauge('domnodes', 120_000)
-    setHeapGauge('tailchars', 0)
 
     expect(readHeapGauges()).toEqual([{ name: 'domnodes', value: 120_000 }])
   })
@@ -70,6 +72,59 @@ describe('heap flow counters', () => {
     setHeapGauge('domnodes', Number.POSITIVE_INFINITY)
     setHeapGauge('domnodes', -1)
 
+    expect(readHeapGauges()).toEqual([])
+  })
+})
+
+describe('mounted view gauges', () => {
+  const registered: number[] = []
+
+  afterEach(() => {
+    while (registered.length > 0) unregisterHeapView(registered.pop()!)
+  })
+
+  const mount = (gauges: HeapViewGauges): number => {
+    const id = registerHeapView(gauges)
+    registered.push(id)
+    return id
+  }
+
+  /**
+   * The reason this replaced the last-writer-wins gauge: several chat panels are
+   * mounted at once, and the reading exists to answer "how much markdown is this
+   * window carrying" — reporting the view that happened to render last answers it
+   * with one panel's worth no matter how many are holding content.
+   */
+  it('sums every mounted view rather than reporting the last one to render', () => {
+    mount({ astnodes: 10, sealednodes: 8, tailchars: 100, mdbytes: 4000 })
+    mount({ astnodes: 30, sealednodes: 30, tailchars: 5, mdbytes: 900 })
+
+    expect(readHeapGauges()).toEqual([
+      { name: 'views', value: 2 },
+      { name: 'astnodes', value: 40 },
+      { name: 'sealednodes', value: 38 },
+      { name: 'tailchars', value: 105 },
+      { name: 'mdbytes', value: 4900 },
+    ])
+  })
+
+  it('follows a re-rendering view under a fresh handle, and drops one that unmounts', () => {
+    const first = mount({ astnodes: 10, sealednodes: 10, tailchars: 0, mdbytes: 500 })
+    // What MarkdownView actually does when the tail grows: the memoised gauges object
+    // is new, so the effect tears the old handle down and registers a fresh one. The
+    // reading has to follow it without the handle count creeping up.
+    unregisterHeapView(first)
+    const second = mount({ astnodes: 12, sealednodes: 12, tailchars: 3, mdbytes: 503 })
+
+    expect(readHeapGauges()).toEqual([
+      { name: 'views', value: 1 },
+      { name: 'astnodes', value: 12 },
+      { name: 'sealednodes', value: 12 },
+      { name: 'tailchars', value: 3 },
+      { name: 'mdbytes', value: 503 },
+    ])
+
+    unregisterHeapView(second)
     expect(readHeapGauges()).toEqual([])
   })
 })

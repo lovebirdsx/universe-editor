@@ -231,6 +231,21 @@ export class StreamingBlocksAccumulator {
     return false
   }
 
+  /**
+   * Characters of text held so far — what a publish of this run would carry, and
+   * the number the streaming batch deadline is sized against.
+   *
+   * Sums the blocks rather than tracking a counter: `push`'s rebuild branch caps
+   * the text, so a running total would keep counting what the cap dropped.
+   */
+  textChars(): number {
+    let chars = this._runLength
+    for (const block of this._blocks) {
+      if (block.type === 'text') chars += block.text.length
+    }
+    return chars
+  }
+
   /** Materialize the final flat blocks and their joined plain text. */
   flatten(): { readonly blocks: readonly ContentBlock[]; readonly text: string } {
     this._closeRun()

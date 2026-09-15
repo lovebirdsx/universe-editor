@@ -103,6 +103,7 @@ import { sampleDomGauges } from './services/memory/domHeapGauges.js'
 import { readCodeHtmlBytes } from './services/memory/heapFlowCounters.js'
 import { createRendererHeapReporter } from './services/memory/rendererHeapReporter.js'
 import { sharedResidentBudget } from './services/acp/session/acpResidentBudget.js'
+import { ISessionChangeTrackerService } from './services/acp/session/sessionChangeTracker.js'
 import { registerProxyChannelServices } from './ipc/registerProxyServices.js'
 import { installRendererErrorHandlers, isBenignError } from './errors.js'
 import {
@@ -448,6 +449,27 @@ async function bootstrapWorkbench(): Promise<void> {
             { name: 'acp', measure: () => ({ bytes: sharedResidentBudget.totalBytes() }) },
             { name: 'monaco', measure: measureMonacoModels },
             { name: 'codehtml', measure: measureCodeHtml },
+            // Both sources below resolve their service at sample time: the services
+            // are constructed later in this function, and the first sample is 30s
+            // away. Without them a repeat of the 2026-09-12 crash is unattributable
+            // for the two holders that have no other reading.
+            {
+              name: 'changes',
+              measure: () =>
+                instantiation
+                  .invokeFunction((accessor) => accessor.get(ISessionChangeTrackerService))
+                  .retainedBytes(),
+            },
+            {
+              name: 'output',
+              measure: () => {
+                const channels = outputService.getChannels()
+                if (channels.length === 0) return undefined
+                let chars = 0
+                for (const channel of channels) chars += channel.retainedChars
+                return chars > 0 ? { bytes: chars * 2, count: channels.length } : undefined
+              },
+            },
           ],
           createNamedLogger(loggerService, { id: 'memory', name: 'Memory' }),
           (level) => sampleDomGauges(document, level),

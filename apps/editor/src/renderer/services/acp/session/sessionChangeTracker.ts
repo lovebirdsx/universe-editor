@@ -135,6 +135,14 @@ export interface ISessionChangeTrackerService {
    * accurate. Returns the same impact shape as {@link previewRestore}.
    */
   restore(sessionId: string, toolCallIds: readonly string[]): Promise<RewindFileImpact>
+  /**
+   * Bytes the tracker is holding across every session, for the heap report's
+   * `holders` line — this service has no other reading, and it once climbed from
+   * 0.7GB to 5.4GB over two hours until the process was OOM-killed (see the live
+   * change budgets above), so its absence from `holders` is the gap that made a
+   * repeat unattributable.
+   */
+  retainedBytes(): { bytes: number; count: number }
 }
 
 /** Aggregate impact of a rewind file rollback (mirrors the agent RewindFilesResult fields). */
@@ -749,6 +757,19 @@ export class SessionChangeTrackerService
 
   async restore(sessionId: string, toolCallIds: readonly string[]): Promise<RewindFileImpact> {
     return this._restore(sessionId, toolCallIds, true)
+  }
+
+  /**
+   * Two structures, both resident, so both count: `_sessionBytes` is the serialized
+   * records (pinned baselines and buffered batches), `_liveChangeBytes` the diff rows
+   * currently parked in the observables. Counting only one would report a session
+   * holding GB of live texts as holding nothing.
+   */
+  retainedBytes(): { bytes: number; count: number } {
+    let bytes = 0
+    for (const b of this._sessionBytes.values()) bytes += b
+    for (const b of this._liveChangeBytes.values()) bytes += b
+    return { bytes, count: this._sessionBytes.size }
   }
 
   // -- internals ------------------------------------------------------

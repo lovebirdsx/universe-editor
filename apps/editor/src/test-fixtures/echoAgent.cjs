@@ -27,6 +27,11 @@
  *    - emit-image:<count>x<kb>           → streams image chunks
  *    - emit-exec:<lines>                 → execute tool_call with <lines> output
  *    - emit-thought:<count>x<kb>[,fence] → streams a long thought message
+ *    - emit-subagent:<count>x<kb>[,fence]
+ *                                        → streams a long sub-agent message under
+ *                                          a parent Task card
+ *    - emit-subagent-mixed:<count>x<kb>  → same, with a child tool call interleaved
+ *                                          at the halfway point
  *    - report-mcp-servers / report-cwd   → echoes session/new params
  *    - elicit-form                       → sends elicitation/create (form mode),
  *                                          echoes the user's response
@@ -46,6 +51,7 @@
 let buffer = ''
 let nextSessionId = 1
 let nextExecId = 1
+let nextSubagentId = 1
 let nextClientRequestId = 1
 const activeTurns = new Map() // sessionId -> { cancelled: boolean }
 const pendingClientRequests = new Map() // id -> { resolve, reject } (agent->client requests)
@@ -70,6 +76,19 @@ const THOUGHT_HOLD_MS = 500
 // — the opposite of the many-small-renders shape the spec measures. Measured on a
 // 300-chunk stream: 4ms gave 2 renders, 25ms gave 5, this gives 8.
 const THOUGHT_YIELD_MS = 50
+
+// Body of one streamed chunk, shared by `emit-thought` and both sub-agent
+// directives so their text is identical by construction — a spec mirrors this one
+// function instead of a loop per directive.
+function subagentChunk(i, chunkSize, fenced) {
+  const marker = 'L' + i + ' '
+  if (fenced) {
+    const head = i === 0 ? '```ts\n' : ''
+    return head + marker + 'x'.repeat(chunkSize - head.length - marker.length - 1) + '\n'
+  }
+  const tail = i % 5 === 4 ? '\n\n' : '\n'
+  return marker + 'a'.repeat(chunkSize - marker.length - tail.length) + tail
+}
 
 // Select options advertised on session/new when ECHO_AGENT_CONFIG_OPTIONS=1.
 // The current values keep the bar's natural width between SIDEBAR_MIN (170px,
@@ -395,15 +414,7 @@ async function runPrompt(id, params) {
     const fenced = thoughtDirective[3] === ',fence'
     for (let i = 0; i < count; i++) {
       if (turn.cancelled) break
-      const marker = 'L' + i + ' '
-      let body
-      if (fenced) {
-        const head = i === 0 ? '```ts\n' : ''
-        body = head + marker + 'x'.repeat(chunkSize - head.length - marker.length - 1) + '\n'
-      } else {
-        const tail = i % 5 === 4 ? '\n\n' : '\n'
-        body = marker + 'a'.repeat(chunkSize - marker.length - tail.length) + tail
-      }
+      const body = subagentChunk(i, chunkSize, fenced)
       notify('session/update', {
         sessionId,
         update: {
@@ -418,6 +429,126 @@ async function runPrompt(id, params) {
       // still parses each character about once" has nothing left to measure.
       if (i % 25 === 24) await delay(THOUGHT_YIELD_MS)
     }
+    await delay(THOUGHT_HOLD_MS)
+    activeTurns.delete(sessionId)
+    return reply(id, { stopReason: 'end_turn' })
+  }
+
+  // Test directive: "emit-subagent:<count>x<kb>[,fence]" streams the same chunk storm
+  // as `emit-thought`, but as a *sub-agent* message — chunks carrying
+  // `_meta.claudeCode.parentToolUseId`, nested under a parent Task card.
+  //
+  // This is the path 0.14.4 left uncovered: a sub-agent message lives on its parent's
+  // children list, not in `_messages`, so the top-level seal/flush machinery never
+  // reached it and it kept the static, full-parse render path. The default form seals
+  // as it grows; `,fence` stays one unsealed tail.
+  const subagentDirective = /^emit-subagent:(\d+)x(\d+)(,fence)?$/.exec(userText)
+  if (subagentDirective) {
+    const count = Number(subagentDirective[1])
+    const chunkSize = Number(subagentDirective[2]) * 1024
+    const fenced = subagentDirective[3] === ',fence'
+    const parentId = 'tcSub' + nextSubagentId++
+    notify('session/update', {
+      sessionId,
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: parentId,
+        title: 'Task',
+        kind: 'other',
+        status: 'in_progress',
+        _meta: { claudeCode: { subagent: true } },
+      },
+    })
+    await delay(5)
+    for (let i = 0; i < count; i++) {
+      if (turn.cancelled) break
+      notify('session/update', {
+        sessionId,
+        update: {
+          sessionUpdate: 'agent_message_chunk',
+          content: { type: 'text', text: subagentChunk(i, chunkSize, fenced) },
+          _meta: { claudeCode: { parentToolUseId: parentId } },
+        },
+      })
+      if (i % 25 === 24) await delay(THOUGHT_YIELD_MS)
+    }
+    await delay(THOUGHT_HOLD_MS)
+    activeTurns.delete(sessionId)
+    return reply(id, { stopReason: 'end_turn' })
+  }
+
+  // "emit-subagent-mixed:<count>x<kb>" streams a sub-agent message, interleaves a child
+  // tool call at the halfway point, streams a second sub-agent message, and closes the
+  // run with a second child tool call.
+  //
+  // A chunk merges only into a message that is still last under its parent, so an
+  // appended tool call is the case a seal-on-append has to catch — miss it and the
+  // message stays "growing" forever, re-parsing its tail and never highlighting its
+  // fences again. Every tool call here interrupts a message, but only the **trailing**
+  // one isolates that seal: the chunk after the halfway call would have re-sealed the
+  // first message anyway on its way to opening a new one.
+  const mixedDirective = /^emit-subagent-mixed:(\d+)x(\d+)$/.exec(userText)
+  if (mixedDirective) {
+    const count = Number(mixedDirective[1])
+    const chunkSize = Number(mixedDirective[2]) * 1024
+    const parentId = 'tcSub' + nextSubagentId++
+    notify('session/update', {
+      sessionId,
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: parentId,
+        title: 'Task',
+        kind: 'other',
+        status: 'in_progress',
+        _meta: { claudeCode: { subagent: true } },
+      },
+    })
+    await delay(5)
+    const half = Math.floor(count / 2)
+    for (let i = 0; i < count; i++) {
+      if (turn.cancelled) break
+      if (i === half) {
+        notify('session/update', {
+          sessionId,
+          update: {
+            sessionUpdate: 'tool_call',
+            toolCallId: parentId + '-read',
+            title: 'Read',
+            kind: 'read',
+            status: 'completed',
+            _meta: { claudeCode: { parentToolUseId: parentId } },
+          },
+        })
+        await delay(5)
+      }
+      notify('session/update', {
+        sessionId,
+        update: {
+          sessionUpdate: 'agent_message_chunk',
+          content: { type: 'text', text: subagentChunk(i, chunkSize, false) },
+          _meta: { claudeCode: { parentToolUseId: parentId } },
+        },
+      })
+      if (i % 25 === 24) await delay(THOUGHT_YIELD_MS)
+    }
+    // Close the run with a tool call instead of more text. That is the shape the
+    // append-time seal exists for: a chunk merges only into a message that is still
+    // last under its parent, so this is the last moment anything can end the run —
+    // and if the seal is missed, nothing else fires until the turn ends, which in a
+    // real session can be minutes later. The interleaved call above cannot show it:
+    // the chunk that follows re-seals the first message on its way to opening a new
+    // one, so only this trailing call isolates the seal.
+    notify('session/update', {
+      sessionId,
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: parentId + '-verify',
+        title: 'Bash',
+        kind: 'execute',
+        status: 'completed',
+        _meta: { claudeCode: { parentToolUseId: parentId } },
+      },
+    })
     await delay(THOUGHT_HOLD_MS)
     activeTurns.delete(sessionId)
     return reply(id, { stopReason: 'end_turn' })

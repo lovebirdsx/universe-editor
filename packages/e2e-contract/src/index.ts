@@ -939,13 +939,32 @@ export interface E2EProbe {
     streaming: boolean
     selectionLabels?: readonly string[]
   }>
-  /** Snapshot of the active session's tool calls (id, title, status, text). */
+  /**
+   * Snapshot of the active session's tool calls (id, title, status, text), with the
+   * sub-agent children folded under each card.
+   *
+   * Children report shape only — lengths and flags, never the text. A sub-agent
+   * message is exactly the content this probe would be used to measure, and handing
+   * it across the bridge would make the probe itself a holder of it.
+   */
   getAcpToolCalls(): ReadonlyArray<{
     id: string
     title: string
     status: string
     text: string
     mcpServer?: string
+    /** Present only on cards that have children. */
+    children?: ReadonlyArray<{
+      id: string
+      kind: string
+      /** Message children only. */
+      role?: string
+      textLength: number
+      /** Message children only: still growing under its parent. */
+      live?: boolean
+      /** Message children only: the top-level streaming flag (false for children). */
+      streaming?: boolean
+    }>
   }>
   /**
    * Snapshot of the active session's MCP servers (name, connection status, and

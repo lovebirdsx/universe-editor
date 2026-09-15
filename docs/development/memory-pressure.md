@@ -50,7 +50,7 @@
 - 采样器用**自重排 `setTimeout`，绝不用 `requestIdleCallback`**：主线程被 GC 挤占时永远不会 idle，恰恰是最需要采样的时刻。正常 5s、受压 1s。
 - **堆曲线要送到 main 才能在崩溃后活下来**（`rendererHeapReporter.ts`）：renderer 是它自己 V8 堆的唯一观测者，而 `processMetrics.log` 由 main 写——不送出去，曲线就与它所描述的进程同生共死。上报走已有的 `IDiagnosticsService` 通道（不新开通道），**复用采样器自己的定时循环**（不另起 timer），节流 30s / 受压 5s，`_reportedAt` 初值 0 使**首个读数必上报**（启动两分钟就崩的场景正是 30s 节流会整段漏掉的）。上报是 fire-and-forget 且吞掉 rejection——它绝不能带走唯一的堆观测者。
 - **落盘格式**：`renderer-heap window=1 used=3200MB limit=4096MB usedPct=78.1 level=critical holders=acp:412MB,monaco:38MB(12)`，写进**与 `main-heap` 同一个** `processMetrics.log`（同一时间线）。main 侧 32 槽预分配 ring：平时是 16 分钟，受压后同一只 ring 变成 160 秒的密集崩溃前窗口。`level` 先过白名单正则再落日志（防换行注入），`used` 非有限/≤0 的样本**丢弃而不是写 0**——写 0 会读成"堆很健康"，正是最不该在出事报告上出现的结论。被丢的样本计入 `dropped=N`（0 时省略）：否则"从没有过曲线"和"每一条都被拒"是同一份文件，而这是两个相反的结论。受压时 `holders=` 之后还会追加 `flow=` 与 `gauge=` 两组（见下文第五类缺口），**为空则两组整体省略**，所以旧格式逐字不变。
-- **`holders=` 是判定而非数值**：`acp` 取 `sharedResidentBudget.totalBytes()`（O(1)），`monaco` 取 `editor.getModels()` 的条数与 `getValueLength()` 之和，`codehtml` 取当前挂在已挂载代码块上的着色 HTML 字节（见第五类缺口）。**若已知持有者之和远小于 `used`，结论就是"元凶不在已知持有者里"**，这直接把搜索范围推出嫌疑圈——比数值本身更有用。判据的方向性要注意：`monaco` 按每条线 2 字节（UTF-16 上界）**高估**，所以它单独就能把差值抹平，即这份判据偏保守（倾向于"嫌疑人已覆盖"）。窗口号由 `createWindowScopedDiagnostics` 在 main 侧盖章（照 `createWindowScopedErrorSink` 先例），renderer 伪造不了。
+- **`holders=` 是判定而非数值**：`acp` 取 `sharedResidentBudget.totalBytes()`（O(1)），`monaco` 取 `editor.getModels()` 的条数与 `getValueLength()` 之和，`codehtml` 取当前挂在已挂载代码块上的着色 HTML 字节（见第五类缺口；**不含 mermaid 图**——`MermaidBlock` 走另一条渲染分支，它渲染出的 SVG 是同类的大字符串但没有计入，看到 `codehtml` 很小时别把它排除干净），`changes` 取 `sessionChangeTracker` 的序列化记录与活行文本之和（见下），`output` 取各输出通道的 `retainedChars` 之和。**若已知持有者之和远小于 `used`，结论就是"元凶不在已知持有者里"**，这直接把搜索范围推出嫌疑圈——比数值本身更有用。判据的方向性要注意：`monaco` 按每条线 2 字节（UTF-16 上界）**高估**，所以它单独就能把差值抹平，即这份判据偏保守（倾向于"嫌疑人已覆盖"）。窗口号由 `createWindowScopedDiagnostics` 在 main 侧盖章（照 `createWindowScopedErrorSink` 先例），renderer 伪造不了。
 - `boundedCache.ts`：通用 LRU + 条数上限 + 字节预算 + pin。**measure 函数同时用于准入与释放报告**——两个数字不一致的缓存会让内存日志谎报堆的去向。
 
 注册的 releaser（`MemoryPressureContribution`）：
@@ -69,7 +69,7 @@
 **第四类缺口：读取频次。** 上面三层管的都是**持有**——持有多大、谁持有、算不算得清。它们对「同一份内容被反复读回来又反复丢掉」零可见度：
 
 - 重算过程本身的**瞬时分配不在任何预算里**。`sessionChangeTracker` 的每一趟重算会按顺序读被跟踪的文件全文，峰值只受 `RECOMPUTE_READ_CONCURRENCY = 8` 约束；读回来的字符串进 `_capLiveChanges` 之前不计入任何 `residentBudget`。
-- tracker 的 `_observables` 活行对 `holders` **零可见度**。`holders` 的 `acp` 量的是 `sharedResidentBudget.totalBytes()`（聊天记录预算），与改动追踪的行无关——所以那次事故里 `used - sum(holders)` 的 3.6GB 缺口根本无从归因。看到巨大缺口时，改动追踪的行要进嫌疑名单，尽管 `holders` 报不出来。现在它至少有了归还通道（见上表 `sessionChanges.liveTexts`）。
+- tracker 的 `_observables` 活行曾有**零可见度**：`holders` 的 `acp` 量的是 `sharedResidentBudget.totalBytes()`（聊天记录预算），与改动追踪的行无关——所以那次事故里 `used - sum(holders)` 的 3.6GB 缺口根本无从归因。看到巨大缺口时，改动追踪的行要进嫌疑名单。现在它有了归还通道（见上表 `sessionChanges.liveTexts`）**和**自己的读数（`holders` 的 `changes`：`_sessionBytes` 的序列化记录 + `_liveChangeBytes` 的活行文本，两个结构都驻留所以都计入）。
 - **`readFileText` 的两个消费方现在都带尺寸闸门**（`MAX_EXTERNAL_RELOAD_BYTES = 16MiB`，收在 `services/files/externalReload.ts`，四处调用点共用）：① 会话改动追踪的重算读取（`_buildChange` 的 `MAX_CURRENT_BYTES` + 二进制闸门，`_buildChange` 的预判降级）；② 编辑器为「磁盘上文件被外部改动」而做的整读重载——`FileEditorInput.checkExternalChange` 与 `ExternalChangeWatcher` 的三条对预览/diff 的重读路径。② 此前**只有 mtime 短路、没有任何尺寸判断**，而它每条路径都会被每个 watcher 批次重入一次：一个每秒被写一次的大文件就是每秒一次全文搬运。超限时的行为是**不读盘 + 把 mtime 记为已知 + 一次性通知用户**（脏缓冲区仍会先问，因为问不需要内容；用户选择保留时同样记下这次 mtime，同一份写入的后续批次不会反复弹框）；缓冲区里显示的内容会过期，这是刻意的取舍。第二条消费方在 `externalReload.ts` 里共用同一个常量，避免四处阈值各自漂移。
 - 因此在诊断包上判读这类事故，除了「持有者之和 vs `used`」，还要看**同一份内容被读了几次**：`ipc-frames.txt` 里同标签的大帧条数、以及 renderer 日志里被折叠的 `large inbound ipc frame … (response fileService.readFile #N)` 计数，是这个维度的唯一证据。
 
@@ -81,21 +81,31 @@
 
 | 组 | 语义 | 名字 |
 |---|---|---|
-| `flow=` | **区间增量**，上报即清零；`name:calls、chars` | `mdparse` / `mdreseal` / `colorize` / `colorize.skip` / `materialize` |
-| `gauge=` | **绝对值**，取最近一次渲染写入；0 值省略 | `domnodes` / `astnodes` / `sealednodes` / `tailchars` |
+| `flow=` | **区间增量**，上报即清零；`name:calls、chars` | `mdparse` / `mdreseal` / `colorize` / `colorize.skip` / `materialize`（顶层）/ `childchunks`（子代理） |
+| `gauge=` | **绝对值**，0 值省略 | `domnodes`（进程唯一，取最近一次写入）；`views` / `astnodes` / `sealednodes` / `tailchars` / `mdbytes`（**跨全部已挂载 `MarkdownView` 求和**） |
 
 `flow` 有**两个读法，不可混用**：落盘行走 `drainHeapFlow()`（读即清零，采样器每 5s 一次，所以每行描述自己那段区间）；e2e 探针走 `readHeapFlowTotals()`（进程累计、非破坏性，由 spec 取前后两次读数相减）。清零型读法只能有一个消费者——探针曾共用它，于是采样器先读到的那部分对 spec 静默消失：`smoke.agentStreamMemory` 在本地稳过（约 600ms 的流恰好落在两次采样之间），在 CI 上报 `mdparse.calls: 1`。加新的计数消费者时沿用累计读法。
 
-`sealednodes` / `tailchars` 记的是**最近一条流式消息**的密封进度（`MarkdownView` 的解析缓存本身），消息 seal 后不归零——它描述的正是「这条流结束时的代价」，seal 一下就把读数抹成 0 等于让这条量在最该看的时候消失。
+`materialize` 与 `childchunks` 是同一件事的两条路径：前者是顶层消息的合并发布，后者是**子代理消息**（挂在父卡 `children` 上，从不出现在 `_messages` 里）。哪个涨就说明那一侧是主力——2026-09-12 的包里两条路径同时在跑，而当时的计数器只有前者，所以「子代理路径是不是主力」这个问题没有答案。
+
+`sealednodes` / `tailchars` 记的是**当前挂载的每个 `MarkdownView` 的解析缓存**，跨视图求和，消息 seal 后不归零——它描述的正是「这条流结束时的代价」，seal 一下就把读数抹成 0 等于让这条量在最该看的时候消失。**求和而不是「最后写入者胜」**：同时挂着多个聊天面板时，最后渲染的那个不是持有内容的那个，而这条量要回答的是「这个窗口扛着多少 markdown」；旧写法下无论挂几个面板都只报其中一个的量，是**系统性低报**。`views` 是挂载数，它说明后面几个求和值在描述一个面板还是一打；`mdbytes` 是各视图源文本长度之和（sealed 前缀 + tail）。
+
+⚠️ 求和之后 **`tailchars` 单独不再是「某条流未密封的尾巴」**：非流式视图的 `sealedNodes` 为空、`tailChars` 就是它的全文长度，所以 `tailchars` 实际等于「全部已挂载 markdown 的源长度之和」，与 `mdbytes` 高度重合——50 条 20KB 的历史消息在**零流式**时就能报出约 1MB。判「有没有一条巨大的未密封 tail」要看 `sealednodes` 是否同时在动（静态视图对它贡献 0，方向是干净的），不能只看 `tailchars` 大。
 
 读法（判定优先于数值，同 `holders`）：
 
 - `mdparse.chars` 记的是**真正交给解析器的字符数**，不是消息长度。密封生效时它约等于消息长度（每个字符只解析一次）；它与 `calls` 同步放大则说明每次渲染都在重解析。**`mdreseal.calls` 跟涨 `mdparse.calls` 是「这条消息从未密封」的直接证据**——即 `lastSafeSplit` 找不到可切边界。
 - `colorize.chars` 在流式期间应为 0（见下）。`holders` 里的 `codehtml` 是这些着色 HTML 的当前驻留量。
-- `used - sum(holders)` 缺口大、而 `gauge=` 的 `astnodes` / `domnodes` 也大时，缺口在**渲染产物**里，不在任何已知持有者里——这正是前四类覆盖不到的那部分。
+- `used - sum(holders)` 缺口大、而 `gauge=` 的 `astnodes` / `domnodes` / `mdbytes` 也大时，缺口在**渲染产物**里，不在任何已知持有者里——这正是前四类覆盖不到的那部分。
 - `domnodes` 是 O(N) 遍历（`getElementsByTagName('*')`），只在 `level !== normal` 时才测，所以它是一条**受压窗口才有值**的量。
 
 止血落在三处，各自可独立回滚：① 流式期间代码围栏**不着色**、mermaid 退化为代码块（`markdownStreamingContext.ts` 提供上下文，`CodeBlock` / `MermaidBlock` 读取）——门控只关 **tail 子树**，sealed 前缀与文档预览照常着色；② sealed 前缀成为 `React.memo` 边界（`MarkdownView` 的 `SealedNodes` 直接持有解析缓存的 `sealedNodes` 数组本身，`tail` 增长不触碰它）；③ 单条消息超过 `STREAM_HEAVY_CHARS = 64KB` 后批次间隔由 16ms 放宽到 64ms。观感前提是用户确认过的：流式期间不高亮、超长消息可降频。
+
+**子代理路径（`toolCall.children`）上这三处曾全部落空**，因为 `AcpMessage` 的流式标志锚在 `_messages` 与 `_streamingIds` 上，而子代理消息从不进 `_messages`：它由 `_appendChildChunk` 建为 `streaming: false`（→ 静态全量解析、围栏每帧重着色），`_appendChildChunk` 又在函数入口以长度 0 打开了批次（→ 截止时间恒为 16ms，与消息多长无关；注意 `_batchedTx(len)` 只在**创建**批次时读 `len`，所以补长度必须补在真正开批的那一处），`ToolCallCard` 也没把标志传给 `MessageContent`。补齐方式是**加一个独立字段 `AcpMessage.live` 而不复用 `streaming`**：一个 flag 挂两个生命周期，未来"顺手补齐对称性"会让子代理流式中途被打断——而卡在 true 的代价不只是多渲染，`MarkdownStreamingContext` 会让围栏**永久不着色**、围栏内路径**永久不可点**。清除落在：回合结束（`_flushStream`，先 materialize 未决合并再扫，否则提交会把仍 live 的 base 重新铺开）、重放结束（`endHistoryReplay`）、角色切换与追加子 tool call（消息不再位于 children 末尾即运行结束）、**父卡 settle**（见下）、以及 trim（`trimMessage` 的字段列表本就丢弃它，单测守着这一点）。**不要**在父卡的 `tool_call_update` 上无条件清——PostToolUse 钩子会在子代理还在说话时重建父卡，清一次就打断一次。
+
+**父卡 settle 是子代理自己的收尾信号**（`isSettledToolCallStatus`，即 wire 给 Task 卡发 `completed`/`failed`）：只在"回合结束"清是不够的。子代理最常见的收尾形态是**最后一条为 message 而非 tool call**（Task 的最终报告），此时从它停止输出到整个回合结束之间**没有任何别的 seal 信号**，而那段时间可能是几分钟——报告里的围栏一直不着色、围栏内路径一直不可点。上面的 PostToolUse 陷阱之所以不受影响，是因为那种中途重建带的是 `in_progress`，拿得到 settle 的只有真正的收尾。**提前清是可恢复的**：`_materializePendingChildMerge` 无条件写回 `live: true`（走到那里就意味着这条消息刚吃了新文本，它在长是定义），所以一个迟到/乱序的 chunk 会把消息重新放回流式路径，而不是悄悄退回静态全量解析——那个代价正是 `live` 存在的理由，且它不会有任何报错。
+
+注意子代理卡默认折叠，而折叠时子代理消息**根本不挂载**（`CollapsibleSlot` 的 `{!collapsed && …}`），所以这条缺口只在用户展开过 Task 卡时发作。但**即使折叠，每批仍会 `timeline.set`**（`_setChildren` 重建 + 提交），订阅方每 16ms 跑一轮——所以批次降频的价值不依赖卡片是否展开。
 
 **已知未修（由计数器判定，而非先做）**：一条消息若没有「围栏外且非松散列表内」的空行——最典型的是一整段从不闭合的代码围栏——`lastSafeSplit` 恒返回 0，密封与 ② 对它完全失效，仍按 (渲染次数 × 长度) 重解析。判定它就是 `mdreseal.calls` 与 `mdparse.calls` 同步增长。要不要为此做解析器加固，应由真机计数器回答：切出不等价 AST 会导致**显示错误**，比性能退化更严重。
 
@@ -123,15 +133,28 @@
 - **硬上限可能误伤合法大帧**（用户把 `acp.prompt.image.maxSizeMB` 调到 50 → 约 340MB 帧）。这是刻意取舍：该帧 decode 峰值约 1.2GB，本就会 OOM。回滚 = 改一个常量。
 - **同一份用户 prompt 可能被记两次**：本地 append 走 `_appendMessage` 的显式记账，agent 若把该消息回显成 `user_message_chunk`，`applyUpdate` 会再按 `estimateUpdateCost` 记一次。方向是保守的（提前 trim，不会漏记），且 `_releaseResidentDownTo` 在 `freed === 0` 时用 `_measureResidentBytes()` 重算兜底，账不会永久漂高。真要收口需要按 messageId 去重记账，改动面大于收益。
 - **流式渲染的解析器加固延后**：无安全切点的消息（典型是一整段不闭合的代码围栏）密封失效，仍按 (渲染次数 × 长度) 重解析。不做是因为切出不等价 AST 会导致显示错误，而它是否真的发生可以由 `mdreseal` / `mdparse` 计数器在真机上回答。见第五类缺口。
-- **`holders` 只覆盖已知持有者**：`acp` 与 `monaco` 之外的堆（`output` 通道、diff 缓存、webview、第三方库的字符串）不计。这不是缺陷而是判据的一半——"已知持有者之和 vs `used`"的差值本身就是结论。补 `output` 需要 `IOutputService` 暴露通道枚举，留作后续；崩溃栈落在 `OutputModelService._applyFlush ← ModelRawLineChanged` 的那份报告说明它值得补。上一条提到的高估方向同样作用于这个差值。
+- **子代理的 `_childrenOf` 是 O(timeline) 扫描**，而 `_setChildren` 每次重建是 O(#children)，数百条子消息时呈 O(n²)。先量数据再决定要不要索引——`childchunks.calls` 与真机上 Task 卡的展开比例就是那个数据。同一处待确认项：真机上 Task 卡**是否展开**，决定这条路径是不是主力。
+- **`holders` 只覆盖已知持有者**：`acp` / `monaco` / `codehtml` / `changes` / `output` 之外的堆（diff 缓存、webview、第三方库的字符串）不计。这不是缺陷而是判据的一半——"已知持有者之和 vs `used`"的差值本身就是结论。`changes` 与 `output` 是后补的两项：前者有前科（见第四类缺口）却没有读数，后者是崩溃栈落在 `OutputModelService._applyFlush ← ModelRawLineChanged` 的那份报告点名要的。`output` 走 `IOutputChannel.retainedChars`（通道自己维护的长度，不 join 缓冲）而不是 `getText()`——采样本身发生在受压窗口，那里最不该做的就是拼一个 4MB 的字符串。上一条提到的高估方向同样作用于这个差值。
 - **32 槽 ring 不按窗口分割**：多窗口下每个窗口各自上报，共用同一只 ring（≈每窗口 16 条）。判定依据是"崩溃的那个窗口在最后一刻的曲线"，共用 ring 在最坏情况下仍保留它最近的若干条。真要多窗口精读再按窗口分桶。
 - **renderer 侧自己的帧 ring 不进诊断包**：renderer OOM 时来不及落盘，只有 main 侧那份能活到导出。**出站热路径只加一次比较**是硬约束：任何"顺便做点别的"的改动都要先证明它不分配。
 - **被降级的改动行会粘住**：`sessionChangeTracker` 的 `(size, mtime)` 行缓存缓存的是 **cap 之后**的行（必须如此，否则被降级的行会把两份全文永久留在缓存里），所以一行一旦因超预算被降级，只要文件 size/mtime 不变就一直显示 degraded，即使预算压力已经消失。换来的读短路值得这个代价，逃生口也是现成的：文件一动、或 `record()` 再触发一次失效即恢复。
 - **预判降级会多降级一些 CJK 文本**：读之前的预判用 `2 × (baseline 字符数 + size 字节数) > maxLiveChangeBytes`，`chars ≤ bytes` 使它是保守估计（宁可多降级也不多读）。一个 9MiB 的 CJK 文本本该产出约 12MB 的行（预算内），会被直接降级。该门闸的存在意义是：这样的行**必然**会被 `_capLiveChanges` 的 heaviest-first 循环降级，读它是纯浪费。**对 `watched` 无 baseline 的行它按两份文本估算，而该行实际只按引用持有一份**（`baselineSource:'none'` 的 baseline 就是 `current`），即这类超过 8MiB 的文件会被降级、而预算本来容得下 16MiB —— 这是**刻意保留**的保守：事故里那个约 16MiB 的二进制正是这个形状，把门闸放宽到 2× 就等于把那次的读取放回来。
+- **CDP 堆快照（原计划的 2.6）经 spike 判定不做**。计数器只能缩小到"某一类"，回答不了"这 3.8GB 是谁持有的"，所以曾规划让 main 在收到 `level=critical` 样本时用 `webContents.debugger` 触发 `HeapProfiler.takeHeapSnapshot` 落盘。2026-09-15 在 Electron 43.3.0 上实测（`wc.debugger.attach('1.3')` → `HeapProfiler.enable` → `takeHeapSnapshot({reportProgress:true})`，chunk 经 `addHeapSnapshotChunk` 直接流式写文件）：**能连、能拍、renderer 活着、main 侧 RSS 平稳**，但代价使 `critical` 触发点站不住：
+
+  | 活跃堆 | 快照 | 比值 | 耗时 | renderer 主线程卡顿 |
+  |---|---|---|---|---|
+  | 272 MB | 166 MB | 0.61 | 3.7 s | 3.7 s |
+  | 1201 MB | 663 MB | 0.55 | 17.9 s | 18.0 s |
+  | 2235 MB | 1542 MB | 0.69 | 42.0 s | 42.0 s |
+
+  **卡顿 == 全程**（三次 `maxStallMs` 与总耗时逐次相等），即快照期间 renderer 主线程完全停摆；耗时约 **15–19 ms / MB 活跃堆**，外推现场的 3.8GB ≈ **70 秒全窗口冻结**，而 renderer RSS 同期涨到约 1.6× 活跃堆。`critical`（≥85% limit）既是最没余量、又正是用户正在交互的时刻，在那里加一分钟冻死会把"可诊断的慢"变成"看起来已经死了"。**要留这条能力就只能是手动/按需**（用户或支持人员在复现时显式触发、窗口已空闲），不能挂自动阈值；且必须先解决卡顿的可接受性，而不是先做触发条件。
+
+  > 附带教训，省下一次重复踩坑：`'x'.repeat(n)` / `padEnd` 产出的是 rope/sliced 表示，**不是真实字节**——spike 里 400MB 这样的"字符串"只花了约 3MB RSS，`performance.memory` 与 CDP `Runtime.getHeapUsage` 双双不涨，据此测出的快照成本会小三个数量级。造真实堆要用 `JSON.parse(JSON.stringify(...))`（也正是那次崩溃栈 `JSON.parse ← decode` 的形状）。
 
 
 ## 验证
 
-- 单测：`packages/platform/src/__tests__/ipc/ipcFrameGuard.test.ts`、`ipcFrameGate.test.ts`、`log/logFloodFold.test.ts`；`apps/editor/src/renderer/services/memory/__tests__/`（阈值/迟滞/缓存归还字节、上报节流与"首个读数必上报"、holder 采集容错、`heapFlowCounters.test.ts` 的 drain 清零与非法值、累计读法不被 drain 影响、`flow=`/`gauge=` 为空时字段整体省略、取数抛错不影响堆读数）、`rendererHeapReporter.test.ts`、`main/services/diagnostics/__tests__/`（`renderer-heap` 行格式、非法样本被丢、越界的 `flow`/`gauge` 条目被丢、ring 满 32 淘汰最旧、窗口号盖章）、`AcpSession.liveBudget.test.ts`（trim 后 `_residentBytes === _measureResidentBytes()`）、`services/acp/__tests__/markdownIncremental.test.ts`（等价性、sealed 前缀的元素身份、`mdparse.chars` 记的是被重新解析的字符数）、`workbench/agents/__tests__/CodeBlock.test.tsx` + `workbench/markdown/__tests__/markdownStreamingGating.test.tsx`（流式期间不着色、seal 后着色一次、回收实例翻回流式时旧 html 被清空、sealed 段在 tail 增长时不被重渲染）。
+- 单测：`packages/platform/src/__tests__/ipc/ipcFrameGuard.test.ts`、`ipcFrameGate.test.ts`、`log/logFloodFold.test.ts`；`apps/editor/src/renderer/services/memory/__tests__/`（阈值/迟滞/缓存归还字节、上报节流与"首个读数必上报"、holder 采集容错、`heapFlowCounters.test.ts` 的 drain 清零与非法值、累计读法不被 drain 影响、`flow=`/`gauge=` 为空时字段整体省略、取数抛错不影响堆读数、视图 gauge 的跨视图求和、重渲染后按新句柄接续且句柄数不累加）、`rendererHeapReporter.test.ts`、`main/services/diagnostics/__tests__/`（`renderer-heap` 行格式、非法样本被丢、越界的 `flow`/`gauge` 条目被丢、ring 满 32 淘汰最旧、窗口号盖章）、`AcpSession.liveBudget.test.ts`（trim 后 `_residentBytes === _measureResidentBytes()`、trim 掉的子代理消息同时丢 `live`）、`AcpSession.timeline.test.ts` 的 `sub-agent streaming runs` 组（`live` 置位、批次按尾部长度定时、回合/重放/角色切换/追加子 tool call/父卡 settle 各自清除、就地更新与 `in_progress` 的父卡 update **不**清除、父卡 settle 后迟到的 chunk 把消息放回流式路径、连接丢失清除、顶层 `streaming` 不受影响）、`services/acp/__tests__/markdownIncremental.test.ts`（等价性、sealed 前缀的元素身份、`mdparse.chars` 记的是被重新解析的字符数）、`workbench/agents/__tests__/CodeBlock.test.tsx` + `workbench/markdown/__tests__/markdownStreamingGating.test.tsx`（流式期间不着色、seal 后着色一次、回收实例翻回流式时旧 html 被清空、sealed 段在 tail 增长时不被重渲染）、`workbench/agents/__tests__/ToolCallCard.test.tsx`（`live` 的子代理消息走增量解析且跳过尾部围栏着色，静态消息反之）。
+- e2e：`smoke.agentStreamMemory.spec.ts` 的 `acp sub-agent streaming render accounting` 组（`emit-subagent` / `emit-subagent-mixed` 夹具）。断言的是**算法形状**（`mdparse` 与 `mdreseal` 的比值、`childchunks.calls` 相对 chunk 数的量级、流式期 `colorize.chars === 0`），**不**断言墙钟或 MB——那些是机器的属性。`emit-subagent-mixed` 那条专守**追加子 tool call 的 seal**：它在回合仍在跑时取样（两侧消息在回合结束都会被 `_flushStream` 清掉，之后再读，"清过"与"从没清"长得一模一样），断言被打断的首条消息 `live === false`、其后新建的那条 `live === true`、且两条的文本长度之和等于整条流——这个 seal 一旦漏掉，表现是"围栏再也不着色"，只能在这条路径上被真窗口看见。
 - e2e：`@p0` `apps/editor/e2e/specs/smoke.memoryPressure.spec.ts`——**直接验证"`performance.memory` 在真实 Electron renderer 里可读"这个核心假设**、releaser 已注册、强制释放有归因，以及**堆曲线真的抵达 main 的 `processMetrics.log`**。最后一条是必需的：上报是 fire-and-forget，方法名写错或通道没注册会被完全静默吞掉，产出的报告与"这个构建本来就没有曲线"无法区分。
 - e2e：`@p1` `apps/editor/e2e/specs/smoke.agentStreamMemory.spec.ts`——把一条 300KB 的思考消息喂给真窗口（夹具 `emit-thought:<count>x<kb>[,fence]`，回合在末块后留 500ms 观察窗），断言**可密封消息的 `mdparse.chars` 不超过 (长度 + 每次调用有界的尾部)**、sealed 缓存确实在增长、`colorize.chars === 0`；再断言**从不闭合的围栏在流式期间 `colorize.chars === 0`、seal 之后被着色**，两条都比对全文逐字符相等。刻意不断言 WS/RSS/墙钟：那是机器属性，而这里要守的是算法形状。

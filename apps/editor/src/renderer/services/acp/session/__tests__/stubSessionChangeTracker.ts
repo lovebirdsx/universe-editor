@@ -88,4 +88,7 @@ export class StubSessionChangeTracker implements ISessionChangeTrackerService {
     this.restoredCalls.push({ sessionId, toolCallIds: [...toolCallIds] })
     return Promise.resolve(this.restoreImpact)
   }
+  retainedBytes(): { bytes: number; count: number } {
+    return { bytes: 0, count: 0 }
+  }
 }

@@ -493,7 +493,10 @@ export const ToolCallCard = memo(function ToolCallCard({
 /** A single sub-agent message rendered inside a parent tool call's child
  *  timeline. Card form matches the top-level message card: CollapsibleSlot
  *  shell + role icon + single-line summary, foldable like any other slot.
- *  Sub messages are always agent/thought (never user), and never stream. */
+ *  Sub messages are always agent/thought (never user). One that is still growing
+ *  (`live`) renders through the same incremental markdown path as a streaming
+ *  top-level message — without it, a sub-agent turn re-parses and re-colours its
+ *  whole text on every batch. */
 function SubMessage({
   message,
   stickyKey,
@@ -546,6 +549,7 @@ function SubMessage({
     >
       <MessageContent
         blocks={message.blocks}
+        streaming={message.live === true}
         {...(message.role === 'user' ? { variant: 'plain' as const } : {})}
       />
     </CollapsibleSlot>

@@ -40,7 +40,7 @@ import {
   splitFilePathTarget,
 } from '../../services/acp/filePathLink.js'
 import { CodeBlock } from '../agents/CodeBlock.js'
-import { setHeapGauge } from '../../services/memory/heapFlowCounters.js'
+import { registerHeapView, unregisterHeapView } from '../../services/memory/heapFlowCounters.js'
 import { MermaidBlock } from './MermaidBlock.js'
 import { MarkdownStreamingContext } from './markdownStreamingContext.js'
 import { useOptionalService } from '../useService.js'
@@ -108,12 +108,22 @@ export function MarkdownView({
     frontmatter !== undefined,
   )
   // Absolute readings for the heap report: node counts are what move when a growing
-  // message re-renders, and they are invisible to the V8 heap number.
+  // message re-renders, and they are invisible to the V8 heap number. Registered
+  // per view and summed on read — several chat panels are typically mounted at once,
+  // and a last-writer-wins gauge would report whichever one rendered last.
+  const heapGauges = useMemo(
+    () => ({
+      astnodes: nodes.length,
+      sealednodes: sealedNodes.length,
+      tailchars: tailChars,
+      mdbytes: text.length,
+    }),
+    [nodes.length, sealedNodes.length, tailChars, text.length],
+  )
   useEffect(() => {
-    setHeapGauge('astnodes', nodes.length)
-    setHeapGauge('sealednodes', sealedNodes.length)
-    setHeapGauge('tailchars', tailChars)
-  })
+    const id = registerHeapView(heapGauges)
+    return () => unregisterHeapView(id)
+  }, [heapGauges])
   const openFileLink = useMarkdownFileLink(baseUri, previewLinks ?? false)
   const resourceAccess = useOptionalService(IResourceAccessService)
   const workspaceFolder = useOptionalService(IWorkspaceService)?.current?.folder

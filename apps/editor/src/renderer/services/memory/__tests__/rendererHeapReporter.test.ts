@@ -147,7 +147,9 @@ describe('createRendererHeapReporter', () => {
 // The counters are process-wide, so these cases clean up on both sides — the cases
 // above assert the sample shape exactly, and a stray count would fail them.
 describe('createRendererHeapReporter — flow and gauge', () => {
-  const GAUGES = ['domnodes', 'astnodes', 'sealednodes', 'tailchars'] as const
+  // Only the settable singleton gauges; the view-backed ones come from mounted
+  // MarkdownViews, which these cases do not mount.
+  const GAUGES = ['domnodes'] as const
 
   beforeEach(() => {
     drainHeapFlow()

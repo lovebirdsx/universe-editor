@@ -44,6 +44,12 @@ export interface IOutputChannel extends IDisposable {
   /** True while the channel retains any text; updates synchronously on append/clear. */
   readonly hasContent: IObservable<boolean>
   /**
+   * Characters currently retained, without joining the buffer. The retained text of
+   * every live channel is a heap holder with no other cheap reading — `getText()`
+   * allocates the whole thing, which is the one operation a heap sample must not do.
+   */
+  readonly retainedChars: number
+  /**
    * Full retained text, including not-yet-flushed appends. O(retained length)
    * — joins the chunk buffer. For probes/tests/one-off snapshots (e.g. seeding
    * a Monaco model); live UI must mirror onDidFlush instead.
