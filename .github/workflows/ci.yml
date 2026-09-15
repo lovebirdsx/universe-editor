@@ -155,6 +155,13 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # Remove the file-lock competition at the source, before the retry below has
+      # to paper over it (same rationale as the e2e / package-windows jobs).
+      - name: Exclude workspace from Defender (process spawn DLL init failures)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE"
+
       - uses: pnpm/action-setup@v4.4.0
 
       - uses: actions/setup-node@v5
@@ -175,6 +182,14 @@ jobs:
             turbo-${{ runner.os }}-
 
       - name: Build toolchain packages
+        env:
+          # Same Windows spawn contention the other jobs document: turbo fans out
+          # one tsgo per package and a neighbour can die at DLL init (0xC0000142)
+          # before doing any work. 10 is turbo's own default, so the non-Windows
+          # leg is unchanged rather than silently serialised. Scoped to this step
+          # because it is the only turbo phase here — `pnpm test:templates` shells
+          # out to tsc/npm directly, never turbo.
+          TURBO_CONCURRENCY: ${{ runner.os == 'Windows' && 2 || 10 }}
         run: >-
           pnpm build
           --filter=@universe-editor/extension-api
@@ -183,7 +198,19 @@ jobs:
           --filter=@universe-editor/uex
           --filter=@universe-editor/create-extension
 
+      # Windows can kill the spawned process during DLL init (0xC0000142
+      # STATUS_DLL_INIT_FAILED). Observed shape: ~27ms of runtime, zero output, the
+      # script never reaching its first line — so it says nothing about the
+      # templates, SDK or CLI. Retry is the only real mitigation, and it is safe
+      # here because template-smoke builds its own temp root (idempotent re-run).
+      # A genuine template/SDK break fails both attempts and still reds the job.
       - name: External consumer smoke (scaffold/sample → npm i → build → uex package)
+        id: template-smoke
+        continue-on-error: true
+        run: pnpm test:templates
+
+      - name: External consumer smoke (retry)
+        if: steps.template-smoke.outcome == 'failure'
         run: pnpm test:templates
 
   # Cross-repo ACP contract test: spawns the REAL built fork dist and asserts the
