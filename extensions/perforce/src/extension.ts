@@ -966,6 +966,43 @@ export async function activate(context: ExtensionContext): Promise<void> {
       })
   }
 
+  /** One confirmation at a time: the status-bar entry stays clickable until the
+   *  renderer mounts the dialog, and two stacked dialogs for one operation read
+   *  as a stuck editor. */
+  let cancelConfirmPending = false
+
+  /**
+   * Ask before stopping in-flight p4 work, then stop only if it is still the
+   * same work. Both stop entries — the status-bar spinner's click and the sync
+   * notification's cancel button — route through here, so the two can never
+   * disagree about what needs confirming.
+   */
+  const confirmAndCancelBusy = async (target: PerforceClient): Promise<void> => {
+    const epoch = target.cancellableEpoch
+    if (epoch === undefined || cancelConfirmPending) return
+    cancelConfirmPending = true
+    try {
+      const BTN_STOP = localize('perforce.btn.stopOperation', 'Stop Operation')
+      const busy = target.status.busy ?? localize('perforce.busy.generic', 'Working')
+      const picked = await window.showWarningMessage(
+        localize(
+          'perforce.cancelBusy.confirm',
+          '{0} — stop it? Work already done is kept and anything unfinished is left as it is; any other p4 operation in this workspace is stopped too.',
+          { 0: busy },
+        ),
+        BTN_STOP,
+      )
+      // Modal, but not instant: the run this asked about can finish — and the
+      // client's own follow-up (the collect after a get) start — while the
+      // dialog is up, and cancelling on a stale answer would kill work the user
+      // never saw.
+      if (picked !== BTN_STOP || target.cancellableEpoch !== epoch) return
+      target.cancelBusy()
+    } finally {
+      cancelConfirmPending = false
+    }
+  }
+
   /**
    * Run a sync and report the outcome.
    *
@@ -1020,10 +1057,22 @@ export async function activate(context: ExtensionContext): Promise<void> {
         cancellable: true,
       },
       async (progress, token) => {
-        // The status-bar spinner already owns cancellation for p4 operations;
-        // routing the notification's button through the same path keeps one
-        // abort mechanism instead of two that can disagree.
-        const cancelSub = token.onCancellationRequested(() => target.cancelBusy())
+        // The status-bar spinner already owns stopping p4 operations; routing
+        // the notification's button through the same confirmation keeps one
+        // abort mechanism instead of two that can disagree. A declined
+        // confirmation leaves this run going: the token stays flipped, but the
+        // get's result is decided by whether the p4 child was killed.
+        const cancelSub = token.onCancellationRequested(() => {
+          // Nothing awaits this callback, so an escaping rejection would take
+          // down the extension host (red line).
+          void confirmAndCancelBusy(target).catch((err: unknown) => {
+            log(
+              `[perforce] cancel confirmation failed: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            )
+          })
+        })
         try {
           // p4 prints one line per file; on a ten-thousand-file get, reporting
           // each one is ten thousand RPC hops for pixels that can't move that
@@ -1672,14 +1721,14 @@ export async function activate(context: ExtensionContext): Promise<void> {
 
     commands.registerCommand('perforce.showOutput', () => out.show()),
 
-    // Cancel whatever cancellable p4 operation is in flight. Wired to the
-    // status-bar spinner's click while it's busy, so a slow operation doesn't have
-    // to be waited out. Runtime-only registration (deliberately NOT in
+    // Stop whatever cancellable p4 operation is in flight. Wired to the
+    // status-bar spinner's click while it's busy, so a slow operation doesn't
+    // have to be waited out. Runtime-only registration (deliberately NOT in
     // `contributes.commands`) — declaring it there registers a handler-less
     // duplicate that shadows this one.
-    commands.registerCommand('perforce.cancelBusy', (arg) => {
+    commands.registerCommand('perforce.cancelBusy', async (arg) => {
       const target = mgr.resolveClient(arg) ?? mgr.active
-      target?.cancelBusy()
+      if (target) await confirmAndCancelBusy(target)
     }),
 
     commands.registerCommand('perforce.login', async (arg) => {

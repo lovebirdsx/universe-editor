@@ -171,6 +171,10 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.graphSync.emptyScope': '没有可用的同步范围：请求未携带任何有效路径。',
   'perforce.btn.confirmSync': '确认同步',
   'perforce.btn.cancel': '取消',
+  // 取消在飞操作前的二次确认（extension.ts 的 confirmAndCancelBusy）
+  'perforce.btn.stopOperation': '停止操作',
+  'perforce.cancelBusy.confirm':
+    '{0} —— 要停止吗？已完成的部分会保留，未完成的保持原状；本工作区里其它正在进行的 p4 操作也会一并停止。',
   // 他人占用（Explorer 灰字）
   'perforce.deco.occupied.tooltip': '他人占用——{0} 打开着此文件',
   'perforce.deco.behind.tooltip': '远端有更新——服务器已到 {0}',
@@ -192,14 +196,14 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.status.notLoggedIn': '未登录',
   'perforce.status.tooltip': 'Perforce：{0} · {1} 个已打开',
   'perforce.status.openGraph': '打开 Perforce 图谱',
-  'perforce.status.cancelTooltip': '{0} —— 点击可取消',
+  'perforce.status.cancelTooltip': '{0} —— 点击可确认取消',
   // 状态栏扫描进度 tooltip
   'perforce.status.scanning': '正在扫描工作区 {0}',
   'perforce.status.scanCounts': '已扫描 {0} 个目录 / 待扫描 {1} 个',
   'perforce.status.scanCurrent': '当前：{0}',
   'perforce.status.scanCurrentRoot': '当前：工作区根目录',
   'perforce.status.scanDrift': '已发现 {0} 个差异文件 · 已耗时 {1}',
-  'perforce.status.clickToCancel': '点击可取消',
+  'perforce.status.clickToCancel': '点击可确认取消',
   // 状态栏修订（#have / #head）
   'perforce.status.revAdded': '新增',
   'perforce.status.revAddedTooltip': '新文件，尚未提交到 depot',

@@ -1043,6 +1043,31 @@ describe('PerforceClient.sync live progress', () => {
     expect(res.cancelled).toBe(true)
     expect(client.status.syncProgress).toBeUndefined()
   })
+
+  it('gives an in-flight run an identity the next run does not inherit', async () => {
+    // The stop confirmation is async, so it captures the epoch before asking.
+    // Two consecutive syncs share the same busy label, so when the answer comes
+    // back late only the epoch can tell "that run finished" from "a different
+    // one started" — the difference between a safe stop and killing work the
+    // user never saw.
+    const seen: (number | undefined)[] = []
+    const client = await makeClient(() => {
+      seen.push(client.cancellableEpoch)
+      return { stdout: '', stderr: '', exit: 0 }
+    })
+
+    expect(client.cancellableEpoch).toBeUndefined()
+    await client.sync('#head')
+    expect(client.cancellableEpoch).toBeUndefined()
+
+    await client.sync('#head')
+
+    expect(seen).toHaveLength(2)
+    expect(seen[0]).not.toBeUndefined()
+    expect(seen[1]).not.toBeUndefined()
+    expect(seen[1]).not.toBe(seen[0])
+    expect(client.cancellableEpoch).toBeUndefined()
+  })
 })
 
 describe('PerforceClient.sync watcher activity & suspension', () => {

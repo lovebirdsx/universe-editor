@@ -316,7 +316,7 @@ export class P4StatusBarController {
           }),
         )
         if (busyCancellable) {
-          lines.push('', localize('perforce.status.clickToCancel', 'Click to cancel'))
+          lines.push('', localize('perforce.status.clickToCancel', 'Click to confirm cancel'))
           this._item.command = 'perforce.cancelBusy'
         } else {
           this._item.command = 'perforce-graph.view'
@@ -351,7 +351,7 @@ export class P4StatusBarController {
           }),
         )
         if (busyCancellable) {
-          lines.push('', localize('perforce.status.clickToCancel', 'Click to cancel'))
+          lines.push('', localize('perforce.status.clickToCancel', 'Click to confirm cancel'))
           this._item.command = 'perforce.cancelBusy'
         } else {
           this._item.command = 'perforce-graph.view'
@@ -363,9 +363,11 @@ export class P4StatusBarController {
       this._item.text = `$(server) ${short}: ${busy}… $(sync~spin)`
       if (busyCancellable) {
         this._item.command = 'perforce.cancelBusy'
-        this._item.tooltip = localize('perforce.status.cancelTooltip', '{0} — click to cancel', {
-          0: busy,
-        })
+        this._item.tooltip = localize(
+          'perforce.status.cancelTooltip',
+          '{0} — click to confirm cancel',
+          { 0: busy },
+        )
       } else {
         this._item.command = 'perforce-graph.view'
         this._item.tooltip = busy

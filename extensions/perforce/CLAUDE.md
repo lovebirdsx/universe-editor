@@ -44,7 +44,7 @@
 绝大多数 mutating 操作走 `_mutate(label, args, paths?, options?)`：跑 p4（可取消）→ 失败 toast（`notifyP4Failure`）→ **按文件失效缓存** → **refresh**。加新操作时优先复用它。
 
 - **缓存失效按文件**（`_invalidateAfterMutation`）：小批量（≤64 且无 `/...`）逐条 `_cache.invalidateFile(p)` 并显式清 `P4CacheNs.opened`；空 paths/批量/目录递归 → `invalidateWorkspace()`。
-- **取消能力三层管道**：`P4ExecOptions.signal`（abort 即 kill + resolve 失败）→ `client._cancellable(fn)`（压 `_cancelSources` 栈 + 上报 `busyCancellable`）→ UI 状态栏 spinner 点取消（`perforce.cancelBusy`，**运行时命令，不进 `contributes.commands`**）。取消后不弹错误 toast。
+- **取消能力三层管道**：`P4ExecOptions.signal`（abort 即 kill + resolve 失败）→ `client._cancellable(fn)`（压 `_cancelSources` 栈 + 上报 `busyCancellable` + bump `cancellableEpoch`）→ UI **两个入口统一经 `extension.ts` 的 `confirmAndCancelBusy` 二次确认**（状态栏 spinner 点击 = `perforce.cancelBusy`，**运行时命令，不进 `contributes.commands`**；以及 sync 通知进度条的取消按钮）。`cancelBusy` 是全杀（abort 掉该 client 所有在飞源），故确认框文案须点明会一并停止同工作区其它 p4 操作；确认框是异步缺口，确认后必须复查 `client.cancellableEpoch` 未变才 `cancelBusy()`——否则会误杀确认期间新起的操作（如 get 后的 collect）。取消后不弹错误 toast。
 - 破坏性操作（delete/revert/submit 等）在 `extension.ts` 命令层 `showWarningMessage` 二次确认，**不要**塞进 client 方法。**submit 直达 depot 不可撤销**，确认框文案须注明。
 - **还原三档别混**：`revert`（统一入口）、`revertChangelist`（整组，破坏性需确认）、`revertUnchanged`（`revert -a`，安全无需确认）；`moveToReconcile`（`revert -k`）是「移出 Changelist」，不是还原。详见 [docs/reconcile.md](docs/reconcile.md)。
 

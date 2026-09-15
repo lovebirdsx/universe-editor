@@ -189,6 +189,30 @@ describe('NotificationService', () => {
     svc.dispose()
   })
 
+  it('keeps a cancellable progress answering while its notification is up', () => {
+    const svc = buildService()
+    const onCancel = vi.fn()
+    const handle = svc.notify({
+      severity: Severity.Info,
+      message: 'working…',
+      sticky: true,
+      progress: { cancellable: true, onCancel },
+    })
+
+    // A cancelled progress token is one-way, but the owner may DECLINE the
+    // cancellation (the p4 extension asks before killing the child), so the
+    // button has to answer a second click instead of going silently dead.
+    svc.cancelProgress(handle.id)
+    svc.cancelProgress(handle.id)
+    expect(onCancel).toHaveBeenCalledTimes(2)
+
+    // Dismissal still ends the re-entry guard: nothing is left to cancel.
+    svc.dismiss(handle.id)
+    svc.cancelProgress(handle.id)
+    expect(onCancel).toHaveBeenCalledTimes(2)
+    svc.dispose()
+  })
+
   it('clearAll() empties the list and persists immediately', async () => {
     const storage = new FakeStorage()
     const spy = vi.spyOn(storage, 'set')

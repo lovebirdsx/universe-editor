@@ -245,6 +245,13 @@ export class NotificationService extends Disposable implements INotificationServ
     // notification from inside the callback, and we don't want re-entry.
     this._cancelHandlers.delete(id)
     handler()
+    // Re-arm while the notification is still up. A progress token is one-way,
+    // but the owner may DECLINE the cancellation (the p4 extension asks before
+    // killing the child), and a visible Cancel button that silently does
+    // nothing is worse than no button at all. Owners that do finish on cancel
+    // dismiss the notification, which marks the item and drops the handler.
+    const item = this._findItem(id)
+    if (item !== undefined && !item.dismissed) this._cancelHandlers.set(id, handler)
   }
 
   clearAll(): void {

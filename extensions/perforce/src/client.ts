@@ -944,6 +944,8 @@ export class PerforceClient {
   private readonly _busyOps: string[] = []
   /** Abort sources for in-flight cancellable operations (see {@link cancelBusy}). */
   private readonly _cancelSources: AbortController[] = []
+  /** Bumped whenever {@link _cancelSources} changes — see {@link cancellableEpoch}. */
+  private _cancelEpoch = 0
   /** Structured progress of the in-flight reconcile scan (see
    *  {@link ScanProgress}); undefined when no scan is running. */
   private _scanProgress: ScanProgress | undefined
@@ -1124,6 +1126,21 @@ export class PerforceClient {
   }
 
   /**
+   * Identity of the cancellable work in flight, or undefined when there is none.
+   *
+   * A confirmation dialog is an async gap: the run the user was asked about can
+   * finish — and the client's own follow-up mutation (the collect after a get)
+   * start — before they answer. A caller that captured this before asking can
+   * tell "still the same work" from "that finished and something else started",
+   * so a stale answer never kills work the user never saw. `busyCancellable`
+   * alone can't: it answers "is there work now", and two consecutive syncs share
+   * the same busy label.
+   */
+  get cancellableEpoch(): number | undefined {
+    return this._cancelSources.length > 0 ? this._cancelEpoch : undefined
+  }
+
+  /**
    * Cancel the in-flight cancellable operation: kills the p4 child, which resolves
    * a failure result the normal error path then handles. Cancelling is a user
    * decision, not a fault, so the caller suppresses the failure toast.
@@ -1135,6 +1152,7 @@ export class PerforceClient {
     if (this._cancelSources.length === 0) return
     this._log?.('[perforce] cancelling in-flight p4 operation(s) at user request')
     for (const source of this._cancelSources.splice(0)) source.abort()
+    this._cancelEpoch++
     this._emitChange()
   }
 
@@ -1169,6 +1187,7 @@ export class PerforceClient {
     const source = new AbortController()
     if (tag === 'reconcile-scan') this._reconcileScanCancelSource = source
     this._cancelSources.push(source)
+    this._cancelEpoch++
     this._emitChange()
     try {
       const value = await fn(source.signal)
@@ -1177,6 +1196,7 @@ export class PerforceClient {
       if (this._reconcileScanCancelSource === source) this._reconcileScanCancelSource = undefined
       const i = this._cancelSources.indexOf(source)
       if (i !== -1) this._cancelSources.splice(i, 1)
+      this._cancelEpoch++
       this._emitChange()
     }
   }
@@ -6205,6 +6225,7 @@ export class PerforceClient {
     // — abort them so dispose settles them now. The disposed flag makes their
     // aftermath a no-op.
     for (const source of this._cancelSources.splice(0)) source.abort()
+    this._cancelEpoch++
     this._cache.clear()
     for (const live of this._groups.values()) live.dispose()
     this._groups.clear()
