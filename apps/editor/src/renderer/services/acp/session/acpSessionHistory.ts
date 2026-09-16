@@ -569,6 +569,30 @@ export function collectSideTaskDescendants(
   return collected
 }
 
+/** The rows forked directly off `sessionId`, most recently used first — exactly
+ *  the set the parent chat's SideTasksBar popover renders. One level only:
+ *  deeper side tasks hang off their own parent. `filter` copies, so the caller's
+ *  array (an observable snapshot during render) is never reordered in place. */
+export function directSideTaskChildren(
+  entries: readonly AcpSessionHistoryEntry[],
+  sessionId: string,
+): AcpSessionHistoryEntry[] {
+  return entries
+    .filter((entry) => entry.sideTaskOf === sessionId)
+    .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
+}
+
+/** The row `sessionId` was forked from. `undefined` for an ordinary session, and
+ *  also when the parent row is gone (cascade-deleted) — in both cases there is
+ *  nowhere for the parent-session affordance to go. */
+export function sideTaskParentOf(
+  entries: readonly AcpSessionHistoryEntry[],
+  sessionId: string,
+): AcpSessionHistoryEntry | undefined {
+  const parentId = entries.find((entry) => entry.id === sessionId)?.sideTaskOf
+  return parentId === undefined ? undefined : entries.find((entry) => entry.id === parentId)
+}
+
 export const IAcpSessionHistoryService = createDecorator<IAcpSessionHistoryService>(
   'acpSessionHistoryService',
 )

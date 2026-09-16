@@ -19,9 +19,11 @@ import {
   AcpSessionHistoryService,
   FIRST_PROMPT_MAX_LENGTH,
   collectSideTaskDescendants,
+  directSideTaskChildren,
   effectiveEntryAuthority,
   isDescendantOrEqual,
   isForeignWorkspaceSession,
+  sideTaskParentOf,
   type AcpSessionHistoryEntry,
 } from '../acpSessionHistory.js'
 import { StubLoggerService } from '../../../../__tests__/_helpers/stubLoggerService.js'
@@ -2780,5 +2782,64 @@ describe('collectSideTaskDescendants', () => {
   it('ignores regular (non side task) rows', () => {
     const entries = [row('root', 'parent'), row('plain'), row('other')]
     expect(collectSideTaskDescendants(entries, 'root')).toEqual(['root'])
+  })
+})
+
+describe('directSideTaskChildren', () => {
+  const row = (id: string, sideTaskOf?: string, lastUsedAt = 1): AcpSessionHistoryEntry => ({
+    id,
+    agentId: 'fake',
+    sessionIdOnAgent: id,
+    title: id,
+    createdAt: 1,
+    lastUsedAt,
+    ...(sideTaskOf !== undefined ? { sideTaskOf } : {}),
+  })
+
+  it('lists direct children only, most recently used first', () => {
+    const entries = [
+      row('root'),
+      row('older', 'root', 1000),
+      row('newer', 'root', 2000),
+      row('grandchild', 'older', 3000), // deeper level belongs to `older`, not `root`
+      row('other-root'),
+      row('stranger', 'other-root', 4000),
+    ]
+    expect(directSideTaskChildren(entries, 'root').map((e) => e.id)).toEqual(['newer', 'older'])
+  })
+
+  it('returns nothing for a session with no side tasks', () => {
+    expect(directSideTaskChildren([row('root'), row('plain')], 'root')).toEqual([])
+  })
+
+  it('does not reorder the caller array (render snapshots it from an observable)', () => {
+    const entries = [row('older', 'root', 1000), row('newer', 'root', 2000), row('root')]
+    directSideTaskChildren(entries, 'root')
+    expect(entries.map((e) => e.id)).toEqual(['older', 'newer', 'root'])
+  })
+})
+
+describe('sideTaskParentOf', () => {
+  const row = (id: string, sideTaskOf?: string): AcpSessionHistoryEntry => ({
+    id,
+    agentId: 'fake',
+    sessionIdOnAgent: id,
+    title: id,
+    createdAt: 1,
+    lastUsedAt: 1,
+    ...(sideTaskOf !== undefined ? { sideTaskOf } : {}),
+  })
+
+  it('resolves the row a side task was forked from', () => {
+    const entries = [row('parent'), row('side', 'parent')]
+    expect(sideTaskParentOf(entries, 'side')?.id).toBe('parent')
+  })
+
+  it('returns undefined for a regular session', () => {
+    expect(sideTaskParentOf([row('parent'), row('plain')], 'plain')).toBeUndefined()
+  })
+
+  it('returns undefined when the parent row is gone (cascade-deleted)', () => {
+    expect(sideTaskParentOf([row('side', 'parent')], 'side')).toBeUndefined()
   })
 })

@@ -34,10 +34,16 @@ import {
 } from '../../services/acp/session/acpSessionService.js'
 import {
   collectSideTaskDescendants,
+  directSideTaskChildren,
   IAcpSessionHistoryService,
+  sideTaskParentOf,
   type AcpSessionHistoryEntry,
 } from '../../services/acp/session/acpSessionHistory.js'
-import { openSessionInRightSplit, revealSessionEditor } from '../../actions/agentSessionActions.js'
+import {
+  openSessionInRightSplit,
+  revealSessionEditor,
+  sessionRowTarget,
+} from '../../actions/agentSessionActions.js'
 import { relativeTime } from '../../relativeTime.js'
 import styles from './agents.module.css'
 
@@ -54,9 +60,7 @@ export function SideTasksBar({ session }: { session: IAcpSession }) {
   const popoverRef = useRef<HTMLDivElement | null>(null)
   const triggerRef = useRef<HTMLButtonElement | null>(null)
 
-  const sideTasks = entries
-    .filter((e) => e.sideTaskOf !== undefined && e.sideTaskOf === sid)
-    .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
+  const sideTasks = directSideTaskChildren(entries, sid)
 
   useEffect(() => {
     if (!open) return
@@ -86,12 +90,10 @@ export function SideTasksBar({ session }: { session: IAcpSession }) {
 
   const openSideTask = (sessionId: string): void => {
     setOpen(false)
-    const row = history.get(sessionId)
-    if (!row) return
-    // Live when resident; otherwise a stand-in — the editor tab's resumer picks
-    // the id up from history and auto-resumes the side task.
-    const live = sessions.getById(sessionId)
-    const target = live ?? { id: sessionId, agentId: row.agentId }
+    // Live when resident; otherwise the row stands in — the editor tab's resumer
+    // picks the id up from history and auto-resumes the side task.
+    const target = sessionRowTarget(sessions, history, sessionId)
+    if (target === undefined) return
     openSessionInRightSplit(groups, inst, target)
   }
 
@@ -226,10 +228,9 @@ export function SideTaskParentBar({ session }: { session: IAcpSession }) {
   const sessions = useService(IAcpSessionService)
   const groups = useService(IEditorGroupsService)
   const inst = useService(IInstantiationService)
-  useObservable(history.entries)
+  const entries = useObservable(history.entries)
   const sid = useObservable(session.sessionIdOnAgent) ?? session.id
-  const parentId = history.get(sid)?.sideTaskOf
-  const parent = parentId !== undefined ? history.get(parentId) : undefined
+  const parent = sideTaskParentOf(entries, sid)
   if (parent === undefined) return null
   return (
     <button
@@ -238,13 +239,9 @@ export function SideTaskParentBar({ session }: { session: IAcpSession }) {
       data-testid="acp-side-task-parent"
       data-tooltip={parent.title}
       onClick={() => {
-        const live = sessions.getById(parent.id)
-        revealSessionEditor(
-          groups,
-          inst,
-          live ?? { id: parent.id, agentId: parent.agentId },
-          GroupDirection.Left,
-        )
+        const target = sessionRowTarget(sessions, history, parent.id)
+        if (target === undefined) return
+        revealSessionEditor(groups, inst, target, GroupDirection.Left)
       }}
     >
       <CornerUpLeft size={12} strokeWidth={1.75} aria-hidden="true" />

@@ -1,21 +1,48 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Agent session action tests. Currently guards the Choose Agent semantics:
- *  picking an agent only persists it as the default — creating a session is
- *  the job of the dedicated `+` button / `workbench.action.agent.newSession`.
+ *  Agent session action tests. Guards the Choose Agent semantics (picking an agent
+ *  only persists it as the default — creating a session is the job of the dedicated
+ *  `+` button / `workbench.action.agent.newSession`) and the side-task navigation
+ *  commands (open-side-task / go-to-parent-session).
  *--------------------------------------------------------------------------------------------*/
 
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import {
   CommandsRegistry,
-  InstantiationService,
+  Event,
+  GroupDirection,
+  IEditorGroupsService,
+  IEditorService,
+  IInstantiationService,
   IQuickInputService,
+  IUriIdentityService,
+  IWorkspaceService,
+  InstantiationService,
+  KeybindingsRegistry,
   ServiceCollection,
   constObservable,
+  observableValue,
   registerAction2,
+  type IDisposable,
+  type ISettableObservable,
 } from '@universe-editor/platform'
-import { SelectAgentAction } from '../agentSessionActions.js'
+import {
+  GoToParentSessionAction,
+  OpenSideTaskAction,
+  SelectAgentAction,
+} from '../agentSessionActions.js'
 import { IAcpAgentRegistry, type IAcpAgentDescriptor } from '../../services/acp/acpAgentRegistry.js'
+import {
+  IAcpSessionService,
+  type IAcpSession,
+} from '../../services/acp/session/acpSessionService.js'
+import {
+  IAcpSessionHistoryService,
+  type AcpSessionHistoryEntry,
+} from '../../services/acp/session/acpSessionHistory.js'
+import { IAcpChatWidgetService } from '../../services/acp/session/acpChatWidgetService.js'
+import { AcpSessionEditorInput } from '../../services/acp/session/acpSessionEditorInput.js'
+import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
 
 const AGENTS: readonly IAcpAgentDescriptor[] = [
   { id: 'claude-code', name: 'Claude Code', command: 'claude', args: [] },
@@ -74,5 +101,268 @@ describe('SelectAgentAction', () => {
     const src = SelectAgentAction.prototype.run.toString()
     expect(src).not.toContain('IAcpSessionService')
     expect(src).not.toContain('createSession')
+  })
+})
+
+/** A history row. `id` doubles as the durable `sessionIdOnAgent`, matching the
+ *  real service, where `sideTaskOf` links are keyed by the durable id. */
+function sideTaskRow(id: string, sideTaskOf?: string, lastUsedAt = 1): AcpSessionHistoryEntry {
+  return {
+    id,
+    agentId: 'fake',
+    sessionIdOnAgent: id,
+    title: id,
+    createdAt: 1,
+    lastUsedAt,
+    ...(sideTaskOf !== undefined ? { sideTaskOf } : {}),
+  }
+}
+
+/** A resident session. `sessionIdOnAgent` mirrors the real dual-id split: the
+ *  local uuid is what the instance answers to, the agent-issued id is what
+ *  history rows are keyed by. */
+function liveSession(id: string, sessionIdOnAgent?: string): IAcpSession {
+  return {
+    id,
+    agentId: 'fake',
+    sessionIdOnAgent: observableValue<string | undefined>('t.sid', sessionIdOnAgent),
+  } as unknown as IAcpSession
+}
+
+interface SideTaskHarness {
+  readonly groups: EditorGroupsService
+  readonly pick: ReturnType<typeof vi.fn>
+  readonly addGroup: MockInstance<EditorGroupsService['addGroup']>
+  readonly inst: InstantiationService
+  /** The stubbed `IEditorService.activeEditor` — the real service derives it from
+   *  the groups, so tests that open a tab must set it by hand. */
+  readonly activeEditor: ISettableObservable<unknown>
+  activeEditorId(): string | undefined
+  run(commandId: string, arg?: unknown): Promise<void>
+  dispose(): void
+}
+
+function makeSideTaskHarness(
+  options: {
+    readonly rows?: readonly AcpSessionHistoryEntry[]
+    /** Sessions that `getById` answers for — by local id AND by durable id. */
+    readonly live?: readonly IAcpSession[]
+    readonly pickResult?: { id: string } | undefined
+    readonly activeEditor?: unknown
+  } = {},
+): SideTaskHarness {
+  const rows = options.rows ?? []
+  const live = options.live ?? []
+  const history = {
+    _serviceBrand: undefined,
+    entries: observableValue<readonly AcpSessionHistoryEntry[]>('t.entries', rows),
+    list: () => rows,
+    get: (id: string) => rows.find((row) => row.id === id),
+  } as unknown as IAcpSessionHistoryService
+  const sessions = {
+    _serviceBrand: undefined,
+    getById: (id: string) => live.find((s) => s.id === id || s.sessionIdOnAgent.get() === id),
+    activeSession: observableValue<IAcpSession | undefined>('t.active', undefined),
+  } as unknown as IAcpSessionService
+  const groups = new EditorGroupsService()
+  const addGroup = vi.spyOn(groups, 'addGroup')
+  const pick = vi.fn().mockResolvedValue(options.pickResult)
+  const activeEditor = observableValue<unknown>('t.editor', options.activeEditor)
+
+  const services = new ServiceCollection()
+  services.set(IAcpSessionService, sessions)
+  services.set(IAcpSessionHistoryService, history)
+  services.set(IEditorGroupsService, groups)
+  services.set(IEditorService, { activeEditor } as unknown as IEditorService)
+  services.set(IQuickInputService, {
+    _serviceBrand: undefined,
+    pick,
+  } as unknown as IQuickInputService)
+  services.set(IAcpChatWidgetService, {
+    _serviceBrand: undefined,
+    register: () => ({ dispose() {} }),
+    lastFocusedWidget: undefined,
+  } as unknown as IAcpChatWidgetService)
+  services.set(IWorkspaceService, {
+    _serviceBrand: undefined,
+    current: null,
+    onDidChangeWorkspace: Event.None,
+  } as unknown as IWorkspaceService)
+  services.set(IUriIdentityService, { _serviceBrand: undefined } as unknown as IUriIdentityService)
+  const inst = new InstantiationService(services)
+  services.set(IInstantiationService, inst)
+
+  const disposables: IDisposable[] = [
+    registerAction2(OpenSideTaskAction),
+    registerAction2(GoToParentSessionAction),
+  ]
+
+  return {
+    groups,
+    pick,
+    addGroup,
+    inst,
+    activeEditor,
+    activeEditorId: () => {
+      const active = groups.activeGroup.activeEditor
+      return active instanceof AcpSessionEditorInput ? active.sessionId : undefined
+    },
+    run: async (commandId, arg) => {
+      await inst.invokeFunction((accessor) =>
+        Promise.resolve(CommandsRegistry.getCommand(commandId)!.handler(accessor, arg)),
+      )
+    },
+    dispose: () => {
+      while (disposables.length > 0) disposables.pop()?.dispose()
+    },
+  }
+}
+
+describe('side-task navigation commands', () => {
+  let harness: SideTaskHarness | undefined
+
+  const make = (options?: Parameters<typeof makeSideTaskHarness>[0]): SideTaskHarness => {
+    harness = makeSideTaskHarness(options)
+    return harness
+  }
+
+  afterEach(() => {
+    harness?.dispose()
+    harness = undefined
+  })
+
+  it('registers no default keybindings for either command', () => {
+    make()
+    const bound = KeybindingsRegistry.getAllKeybindings().map((item) => item.command)
+    expect(bound).not.toContain(OpenSideTaskAction.ID)
+    expect(bound).not.toContain(GoToParentSessionAction.ID)
+  })
+
+  it('maps a local session id onto its durable id before matching children', async () => {
+    // The live session answers to its local uuid while `sideTaskOf` is keyed by
+    // the agent-issued id — without the mapping the child list would come back
+    // empty and the command would look broken.
+    const h = make({
+      rows: [sideTaskRow('parent-dur'), sideTaskRow('side-1', 'parent-dur', 1000)],
+      live: [liveSession('local-parent', 'parent-dur')],
+      pickResult: { id: 'side-1' },
+    })
+    await h.run(OpenSideTaskAction.ID, { sessionId: 'local-parent' })
+
+    expect(h.pick).toHaveBeenCalledOnce()
+    expect(h.pick.mock.calls[0]![0].map((item: { id: string }) => item.id)).toEqual(['side-1'])
+  })
+
+  it('lists direct children only, most recently used first', async () => {
+    const h = make({
+      rows: [
+        sideTaskRow('parent-dur'),
+        sideTaskRow('older', 'parent-dur', 1000),
+        sideTaskRow('newer', 'parent-dur', 2000),
+        sideTaskRow('grandchild', 'older', 3000),
+      ],
+      pickResult: { id: 'newer' },
+    })
+    await h.run(OpenSideTaskAction.ID, { sessionId: 'parent-dur' })
+
+    expect(h.pick.mock.calls[0]![0].map((item: { id: string }) => item.id)).toEqual([
+      'newer',
+      'older',
+    ])
+  })
+
+  it('opens the picked side task in a new right split', async () => {
+    const h = make({
+      rows: [sideTaskRow('parent-dur'), sideTaskRow('side-1', 'parent-dur')],
+      pickResult: { id: 'side-1' },
+    })
+    await h.run(OpenSideTaskAction.ID, { sessionId: 'parent-dur' })
+
+    expect(h.addGroup).toHaveBeenCalledWith(expect.anything(), GroupDirection.Right)
+    expect(h.activeEditorId()).toBe('side-1')
+  })
+
+  it('prefers the resident session id so an open tab is reused, not duplicated', async () => {
+    const h = make({
+      rows: [sideTaskRow('parent-dur'), sideTaskRow('side-1', 'parent-dur')],
+      live: [liveSession('local-side', 'side-1')],
+      pickResult: { id: 'side-1' },
+    })
+    await h.run(OpenSideTaskAction.ID, { sessionId: 'parent-dur' })
+
+    expect(h.activeEditorId()).toBe('local-side')
+  })
+
+  it('does nothing when the session has no side tasks', async () => {
+    const h = make({ rows: [sideTaskRow('parent-dur')] })
+    await h.run(OpenSideTaskAction.ID, { sessionId: 'parent-dur' })
+
+    expect(h.pick).not.toHaveBeenCalled()
+    expect(h.groups.count).toBe(1)
+  })
+
+  it('does nothing when the pick is cancelled', async () => {
+    const h = make({
+      rows: [sideTaskRow('parent-dur'), sideTaskRow('side-1', 'parent-dur')],
+      pickResult: undefined,
+    })
+    await h.run(OpenSideTaskAction.ID, { sessionId: 'parent-dur' })
+
+    expect(h.groups.count).toBe(1)
+  })
+
+  it('focuses an already-open parent tab without adding a group', async () => {
+    const h = make({
+      rows: [sideTaskRow('parent-dur'), sideTaskRow('side-1', 'parent-dur')],
+    })
+    const group = h.groups.addGroup(h.groups.activeGroup, GroupDirection.Right)
+    group.openEditor(
+      h.inst.createInstance(AcpSessionEditorInput, 'parent-dur', 'fake', undefined),
+      {
+        activate: true,
+        pinned: true,
+      },
+    )
+    h.addGroup.mockClear()
+
+    await h.run(GoToParentSessionAction.ID, { sessionId: 'side-1' })
+
+    expect(h.addGroup).not.toHaveBeenCalled()
+    expect(h.activeEditorId()).toBe('parent-dur')
+  })
+
+  it('opens the parent in a left split when no tab exists', async () => {
+    const h = make({
+      rows: [sideTaskRow('parent-dur'), sideTaskRow('side-1', 'parent-dur')],
+    })
+    await h.run(GoToParentSessionAction.ID, { sessionId: 'side-1' })
+
+    // `groups.groups` is push order, not visual order — the spy is what pins
+    // down which side of the active group the split lands on.
+    expect(h.addGroup).toHaveBeenCalledWith(expect.anything(), GroupDirection.Left)
+    expect(h.activeEditorId()).toBe('parent-dur')
+  })
+
+  it('does nothing for a session that is not a side task', async () => {
+    const h = make({ rows: [sideTaskRow('plain-1')] })
+    await h.run(GoToParentSessionAction.ID, { sessionId: 'plain-1' })
+
+    expect(h.addGroup).not.toHaveBeenCalled()
+    expect(h.groups.count).toBe(1)
+  })
+
+  it('resolves the target from the active session editor when no argument is given', async () => {
+    const h = make({
+      rows: [sideTaskRow('parent-dur'), sideTaskRow('side-1', 'parent-dur')],
+      pickResult: { id: 'side-1' },
+    })
+    const parentTab = h.inst.createInstance(AcpSessionEditorInput, 'parent-dur', 'fake', undefined)
+    h.groups.activeGroup.openEditor(parentTab, { activate: true, pinned: true })
+    h.activeEditor.set(parentTab, undefined)
+
+    await h.run(OpenSideTaskAction.ID)
+
+    expect(h.pick).toHaveBeenCalledOnce()
+    expect(h.pick.mock.calls[0]![0].map((item: { id: string }) => item.id)).toEqual(['side-1'])
   })
 })

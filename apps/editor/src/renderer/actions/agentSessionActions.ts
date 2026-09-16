@@ -2,7 +2,7 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Agent session lifecycle commands: new / cancel / open-in-editor / open-view /
  *  toggle-location / focus-input / select-agent / resume / clear-history /
- *  refresh / switch-session.
+ *  refresh / switch-session / side-task navigation.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -41,8 +41,10 @@ import {
 import type { IAcpSession } from '../services/acp/session/acpSessionModel.js'
 import { IAcpAgentRegistry, agentIconId } from '../services/acp/acpAgentRegistry.js'
 import {
+  directSideTaskChildren,
   IAcpSessionHistoryService,
   isForeignWorkspaceSession,
+  sideTaskParentOf,
 } from '../services/acp/session/acpSessionHistory.js'
 import { IAcpChatLocationService } from '../services/acp/session/acpChatLocationService.js'
 import { AcpSessionEditorInput } from '../services/acp/session/acpSessionEditorInput.js'
@@ -67,6 +69,7 @@ import {
   revealSessionEditorTab,
 } from '../services/acp/session/revealSessionEditorTab.js'
 import { reviveUri, type ITargetArg } from './fileActionsCommon.js'
+import { relativeTime } from '../relativeTime.js'
 
 export class NewAgentSessionAction extends Action2 {
   static readonly ID = 'workbench.action.agent.newSession'
@@ -496,22 +499,6 @@ export class SelectAgentAction extends Action2 {
 // action just renders the picker and opens the Sessions view on success.
 // ---------------------------------------------------------------------------
 
-function relativeTime(timestamp: number): string {
-  const diff = Date.now() - timestamp
-  if (diff < 60_000) return localize('agent.history.justNow', 'just now')
-  if (diff < 3_600_000)
-    return localize('agent.history.minutesAgo', '{count}m ago', {
-      count: Math.floor(diff / 60_000),
-    })
-  if (diff < 86_400_000)
-    return localize('agent.history.hoursAgo', '{count}h ago', {
-      count: Math.floor(diff / 3_600_000),
-    })
-  return localize('agent.history.daysAgo', '{count}d ago', {
-    count: Math.floor(diff / 86_400_000),
-  })
-}
-
 function sessionDirectoryName(cwd: string | undefined): string | undefined {
   if (cwd === undefined || cwd.length === 0) return undefined
   const normalized = cwd.replace(/[\\/]+$/, '')
@@ -838,7 +825,7 @@ export class RevealAgentSessionInOSAction extends Action2 {
 
     // History rows are keyed by the agent-issued durable id; a live session
     // created in this window is addressed by its local id, so map it first.
-    const durableId = sessions.getById(sessionId)?.sessionIdOnAgent.get() ?? sessionId
+    const durableId = durableSessionId(sessions, sessionId)
 
     const entry = history.get(durableId)
     let transcriptPath = entry?.transcriptPath
@@ -1018,6 +1005,17 @@ function resolveSessionTargetId(
   return sessions.activeSession.get()?.id
 }
 
+/**
+ * Map a session id onto the agent-issued durable one. History rows and the
+ * `sideTaskOf` links between them are keyed by the durable id, while a session
+ * created in this window is addressed by its local uuid until the agent issues
+ * one. Unknown or not-yet-connected ids pass through unchanged — a tab restored
+ * from history is already addressed by its durable id.
+ */
+function durableSessionId(sessions: IAcpSessionService, sessionId: string): string {
+  return sessions.getById(sessionId)?.sessionIdOnAgent.get() ?? sessionId
+}
+
 function resolveEditorGroup(
   arg: { groupId?: unknown; sessionId?: unknown } | undefined,
   groups: IEditorGroupsService,
@@ -1135,9 +1133,27 @@ function openSessionInSplit(
 }
 
 /**
+ * Resolve a history row into an editor target. A resident session is used as-is
+ * — it carries the id its tab was opened with, so re-opening hits the existing
+ * tab instead of spawning a duplicate; otherwise the row's own (durable) id
+ * stands in and the tab's resumer picks it up from history. `undefined` when the
+ * row vanished between listing and acting on it.
+ */
+export function sessionRowTarget(
+  sessions: IAcpSessionService,
+  history: IAcpSessionHistoryService,
+  id: string,
+): { id: string; agentId: string | undefined } | undefined {
+  const row = history.get(id)
+  if (row === undefined) return undefined
+  return sessions.getById(id) ?? { id: row.id, agentId: row.agentId }
+}
+
+/**
  * Open (or focus) a session chat in the editor group to the RIGHT of the active
  * one, creating the split when none exists. Shared by the side-task flows (the
- * ask-in-side-chat command and the parent chat's side-tasks popover).
+ * ask-in-side-chat command, the parent chat's side-tasks popover, and the
+ * open-side-task command).
  */
 export function openSessionInRightSplit(
   groups: IEditorGroupsService,
@@ -1248,5 +1264,102 @@ export class AskInSideChatAction extends Action2 {
       .map((line) => (line.trim().length === 0 ? '>' : `> ${line}`))
       .join('\n')
     AcpPromptReplaceInbox.deposit(side.id, { text: `${quoted}\n\n`, contexts: [] })
+  }
+}
+
+/**
+ * Open Side Task (打开侧边任务): the command-palette twin of the parent chat's
+ * "Side Tasks (N)" popover — pick one of the current session's direct side tasks
+ * and open (or focus) it in a right split, auto-resuming it when it is not
+ * resident. The list is the popover's exact set: the same direct children, the
+ * same most-recent-first order.
+ *
+ * No default keybinding (bind one in the Keyboard Shortcuts editor if wanted);
+ * a session with no side tasks is a silent no-op, matching what the popover
+ * does when it renders nothing.
+ */
+export class OpenSideTaskAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.openSideTask'
+  constructor() {
+    super({
+      id: OpenSideTaskAction.ID,
+      title: localize2('action.agent.openSideTask', 'Open Side Task…'),
+      category: CATEGORY,
+      f1: true,
+    })
+  }
+
+  override async run(
+    accessor: ServicesAccessor,
+    arg?: { sessionId?: unknown; resource?: unknown },
+  ): Promise<void> {
+    // Snapshot every service synchronously — the accessor dies past the first await.
+    const sessions = accessor.get(IAcpSessionService)
+    const history = accessor.get(IAcpSessionHistoryService)
+    const editor = accessor.get(IEditorService)
+    const groups = accessor.get(IEditorGroupsService)
+    const inst = accessor.get(IInstantiationService)
+    const quickInput = accessor.get(IQuickInputService)
+
+    const sessionId = resolveSessionTargetId(arg, editor, sessions)
+    if (sessionId === undefined) return
+    const children = directSideTaskChildren(history.list(), durableSessionId(sessions, sessionId))
+    if (children.length === 0) return
+
+    // The item id is the durable id: it is what history and `sideTaskOf` are
+    // keyed by, and what sessionRowTarget resolves the pick back through.
+    const items: IQuickPickItem[] = children.map((child) => ({
+      id: child.id,
+      label: child.title,
+      description: relativeTime(child.lastUsedAt),
+    }))
+    const picked = await quickInput.pick(items, {
+      placeholder: localize('acp.sideTask.open.placeholder', 'Open a side task'),
+    })
+    if (!picked) return
+
+    const target = sessionRowTarget(sessions, history, picked.id)
+    if (target === undefined) return
+    openSessionInRightSplit(groups, inst, target)
+  }
+}
+
+/**
+ * Go to Parent Session (转到父会话): the command-palette twin of a side task's
+ * "Parent Session" chip. Focuses the parent's existing tab wherever it lives —
+ * stealing it into a fresh split would shuffle the user's layout on every use —
+ * and only opens a left split when no tab exists.
+ *
+ * No default keybinding; a session that is not a side task (or whose parent row
+ * is gone) is a silent no-op, matching the chip rendering nothing there.
+ */
+export class GoToParentSessionAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.goToParentSession'
+  constructor() {
+    super({
+      id: GoToParentSessionAction.ID,
+      title: localize2('action.agent.goToParentSession', 'Go to Parent Session'),
+      category: CATEGORY,
+      f1: true,
+    })
+  }
+
+  override run(
+    accessor: ServicesAccessor,
+    arg?: { sessionId?: unknown; resource?: unknown },
+  ): void {
+    const sessions = accessor.get(IAcpSessionService)
+    const history = accessor.get(IAcpSessionHistoryService)
+    const editor = accessor.get(IEditorService)
+    const groups = accessor.get(IEditorGroupsService)
+    const inst = accessor.get(IInstantiationService)
+
+    const sessionId = resolveSessionTargetId(arg, editor, sessions)
+    if (sessionId === undefined) return
+    const parent = sideTaskParentOf(history.list(), durableSessionId(sessions, sessionId))
+    if (parent === undefined) return
+    const target = sessionRowTarget(sessions, history, parent.id)
+    if (target === undefined) return
+    revealSessionEditor(groups, inst, target, GroupDirection.Left)
   }
 }

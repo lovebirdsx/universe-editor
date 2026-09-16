@@ -326,6 +326,7 @@ import {
   FocusNextAcpTimelineItemAction,
   FocusPreviousAcpTimelineItemAction,
   ForkAgentSessionAction,
+  GoToParentSessionAction,
   NewAgentSessionAction,
   NewAgentSessionInCurrentEditorAction,
   NewAgentSessionInFolderAction,
@@ -336,6 +337,7 @@ import {
   OpenCodexConfigAction,
   OpenAgentInEditorAction,
   OpenAgentViewAction,
+  OpenSideTaskAction,
   RefreshAgentSessionsAction,
   RenameAgentSessionAction,
   ResumeAgentSessionAction,
@@ -814,6 +816,12 @@ registerAction2(UnpinAgentSessionAction)
 registerAction2(RewindAgentSessionAction)
 registerAction2(ForkAgentSessionAction)
 registerAction2(AskInSideChatAction)
+// Side-task navigation — keyboard access to the parent chat's "Side Tasks (N)"
+// popover and a side task's "Parent Session" chip. No default keybindings
+// (bind them in the Keyboard Shortcuts editor); both are silent no-ops when the
+// target session has nothing to navigate to.
+registerAction2(OpenSideTaskAction)
+registerAction2(GoToParentSessionAction)
 registerAction2(FocusNextAcpTimelineItemAction)
 registerAction2(FocusPreviousAcpTimelineItemAction)
 registerAction2(FocusTopAcpTimelineAction)
