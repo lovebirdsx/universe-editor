@@ -39,7 +39,7 @@ import { IAcpAgentRegistry } from '../services/acp/acpAgentRegistry.js'
 import { IAcpChatLocationService } from '../services/acp/session/acpChatLocationService.js'
 import { IAcpChatWidgetService } from '../services/acp/session/acpChatWidgetService.js'
 import { AcpPromptTextInbox } from '../services/acp/session/acpPromptTextInbox.js'
-import { AcpSessionEditorInput } from '../services/acp/session/acpSessionEditorInput.js'
+import { revealSessionEditorTab } from '../services/acp/session/revealSessionEditorTab.js'
 import {
   IAcpSessionService,
   type IAcpCreateSessionOptions,
@@ -146,26 +146,12 @@ export class DeepLinkContribution extends Disposable implements IWorkbenchContri
 
   private async _revealAgentSession(sessionId: string): Promise<void> {
     if (this._location.location.get() === 'editor') {
-      const found = this._findSessionEditor(sessionId)
-      if (found) {
-        this._groups.activateGroup(found.group)
-        found.group.setActive(found.editor)
-      } else {
-        const session = this._sessions.getById(sessionId)
-        if (session) {
-          const target = this._groups.activeGroupForOpen
-          target.openEditor(
-            this._instantiation.createInstance(
-              AcpSessionEditorInput,
-              session.id,
-              session.agentId,
-              undefined,
-            ),
-            { activate: true, pinned: true },
-          )
-          if (target !== this._groups.activeGroup) this._groups.activateGroup(target)
-        }
-      }
+      revealSessionEditorTab(
+        this._groups,
+        this._instantiation,
+        sessionId,
+        this._sessions.getById(sessionId),
+      )
     } else {
       if (!this._layout.getVisible(PartId.SecondarySideBar)) {
         this._layout.toggleVisible(PartId.SecondarySideBar)
@@ -173,16 +159,5 @@ export class DeepLinkContribution extends Disposable implements IWorkbenchContri
       await this._views.openViewContainer('workbench.view.sessions')
     }
     this._widgets.focusSessionInput(sessionId)
-  }
-
-  private _findSessionEditor(sessionId: string) {
-    for (const group of this._groups.groups) {
-      for (const editor of group.editors) {
-        if (editor instanceof AcpSessionEditorInput && editor.sessionId === sessionId) {
-          return { group, editor }
-        }
-      }
-    }
-    return undefined
   }
 }

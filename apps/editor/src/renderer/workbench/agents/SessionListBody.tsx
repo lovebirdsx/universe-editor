@@ -3,10 +3,11 @@
  *  SessionListBody — the pure list rendering reused by SessionListPanel (full
  *  sidebar view) and SessionsPopover (Copilot-style dropdown). Click behavior
  *  flips the active session (resuming if necessary); in editor mode the tab is
- *  opened by AcpChatLocationService's activeSession autorun — keeping a single
- *  source of truth for "which input is open" avoids races that produced
- *  duplicate tabs. The optional `onPick` callback fires afterwards so popovers
- *  can collapse themselves.
+ *  opened by AcpChatLocationService's activeSession autorun for a *switch*, but
+ *  a session that is already open needs revealing instead (see
+ *  revealSessionChat) — the autorun deliberately bails when the tab lives in
+ *  another group rather than duplicating it. The optional `onPick` callback
+ *  fires afterwards so popovers can collapse themselves.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -24,7 +25,7 @@ import {
   IConfigurationService,
   ConfigurationTarget,
   IWorkspaceService,
-  IEditorService,
+  IEditorGroupsService,
   IInstantiationService,
   IUriIdentityService,
   ICommandService,
@@ -76,7 +77,10 @@ import {
   computeSessionDisplayStatus,
   isResidentLive,
 } from '../../services/acp/session/acpSessionStatus.js'
-import { AcpSessionEditorInput } from '../../services/acp/session/acpSessionEditorInput.js'
+import { revealSessionEditorTab } from '../../services/acp/session/revealSessionEditorTab.js'
+import { revealSessionChat } from '../../services/acp/session/revealSessionChat.js'
+import { IAcpChatLocationService } from '../../services/acp/session/acpChatLocationService.js'
+import { IAcpChatWidgetService } from '../../services/acp/session/acpChatWidgetService.js'
 import { AgentIcon } from './agentIcon.js'
 import { pathTail, shortenScopeLabel } from './scopeLabel.js'
 import {
@@ -495,8 +499,10 @@ export function SessionListBody({
   const workspace = useService(IWorkspaceService)
   const uriIdentity = useService(IUriIdentityService)
   const dialogService = useService(IDialogService)
-  const editorService = useService(IEditorService)
+  const groups = useService(IEditorGroupsService)
   const instantiation = useService(IInstantiationService)
+  const location = useService(IAcpChatLocationService)
+  const widgets = useService(IAcpChatWidgetService)
   const commandService = useService(ICommandService)
   const host = useService(IHostService)
   const entries = useObservable(history.entries)
@@ -660,14 +666,17 @@ export function SessionListBody({
         // Falling through to resumeSession would build a second session for the
         // same durable id.
         if (liveNow.isDormant.get()) void liveNow.ensureAwake()
+        // Switching the active session is not enough to see it: the tab may sit
+        // in another group, and the chat-location autorun bails in exactly that
+        // case (it must not duplicate the tab). Reveal it ourselves, then hand
+        // the chat input the focus.
+        revealSessionChat({ groups, inst: instantiation, location, widgets }, liveNow.id, liveNow)
       } else if (isForeignWorkspaceSession(entry, currentCwd, currentAuthority, uriIdentity)) {
         // Foreign worktree / cross-host: don't resume (would spawn the agent
         // against another worktree or host behind this window's UI). Open a
         // read-only preview tab; the user activates from there. A subdirectory
         // row is the same workspace, so it falls through to resumeSession below.
-        editorService.openEditor(
-          instantiation.createInstance(AcpSessionEditorInput, entry.id, entry.agentId, entry.title),
-        )
+        revealSessionEditorTab(groups, instantiation, entry.id, entry)
       } else {
         service.resumeSession(entry.id).catch(() => {
           // resumeSession publishes its own notification.
@@ -675,7 +684,17 @@ export function SessionListBody({
       }
       onPick?.(entry)
     },
-    [service, currentCwd, currentAuthority, uriIdentity, editorService, instantiation, onPick],
+    [
+      service,
+      currentCwd,
+      currentAuthority,
+      uriIdentity,
+      groups,
+      instantiation,
+      location,
+      widgets,
+      onPick,
+    ],
   )
 
   // The keyboard cursor. Deliberately separate from `activeId`: the active

@@ -1280,7 +1280,6 @@ describe('ResumeAgentSessionAction', () => {
         ((_id: string) => Promise.resolve({ id: 'live', agentId: 'fake' } as IAcpSession)),
     )
     const setActive = vi.fn()
-    const openEditor = vi.fn()
     const openViewContainer = vi.fn()
     const notify = vi.fn()
     const pickedItems: IQuickPickItem[][] = []
@@ -1317,10 +1316,7 @@ describe('ResumeAgentSessionAction', () => {
       _serviceBrand: undefined,
       openViewContainer,
     } as unknown as IViewsService
-    const editor = {
-      _serviceBrand: undefined,
-      openEditor,
-    } as unknown as IEditorService
+    const groups = new EditorGroupsService()
     const notification = {
       _serviceBrand: undefined,
       notify,
@@ -1346,7 +1342,7 @@ describe('ResumeAgentSessionAction', () => {
     services.set(IAcpChatLocationService, location)
     services.set(ILayoutService, layout)
     services.set(IViewsService, views)
-    services.set(IEditorService, editor)
+    services.set(IEditorGroupsService, groups)
     services.set(INotificationService, notification)
     services.set(IWorkspaceService, workspace)
     services.set(IHostService, host)
@@ -1357,7 +1353,14 @@ describe('ResumeAgentSessionAction', () => {
       register: vi.fn(),
     } as unknown as IAcpChatWidgetService)
     const inst = new InstantiationService(services)
-    return { inst, resumeSession, setActive, openEditor, openViewContainer, notify, pickedItems }
+    return { inst, resumeSession, setActive, groups, openViewContainer, notify, pickedItems }
+  }
+
+  /** Session tabs across every group — the reveal contract is about all of them. */
+  function sessionTabs(groups: EditorGroupsService): AcpSessionEditorInput[] {
+    return groups.groups
+      .flatMap((group) => group.editors)
+      .filter((editor): editor is AcpSessionEditorInput => editor instanceof AcpSessionEditorInput)
   }
 
   async function run(b: { inst: InstantiationService }): Promise<void> {
@@ -1371,10 +1374,9 @@ describe('ResumeAgentSessionAction', () => {
     // Must NOT spawn a live resume against the foreign worktree (split-brain).
     expect(b.resumeSession).not.toHaveBeenCalled()
     // Instead it opens the session as a (read-only) editor tab.
-    expect(b.openEditor).toHaveBeenCalledTimes(1)
-    const opened = b.openEditor.mock.calls[0]?.[0]
-    expect(opened).toBeInstanceOf(AcpSessionEditorInput)
-    expect((opened as AcpSessionEditorInput).sessionId).toBe('sess-1')
+    const tabs = sessionTabs(b.groups)
+    expect(tabs).toHaveLength(1)
+    expect(tabs[0]!.sessionId).toBe('sess-1')
   })
 
   it('resumes a session whose cwd matches the open workspace', async () => {
@@ -1392,9 +1394,9 @@ describe('ResumeAgentSessionAction', () => {
     expect(b.resumeSession).toHaveBeenCalledWith('sess-1')
     // …and opens the *live* session (id 'live'), never the read-only preview of
     // the history row (which would carry the history id 'sess-1').
-    const opened = b.openEditor.mock.calls[0]?.[0]
-    expect(opened).toBeInstanceOf(AcpSessionEditorInput)
-    expect((opened as AcpSessionEditorInput).sessionId).toBe('live')
+    const tabs = sessionTabs(b.groups)
+    expect(tabs).toHaveLength(1)
+    expect(tabs[0]!.sessionId).toBe('live')
   })
 
   it('shows the session directory name in the picker description', async () => {
@@ -1447,7 +1449,7 @@ describe('ResumeAgentSessionAction', () => {
     })
     await run(b)
     // The fix routes around resumeSession entirely, so the user gets a tab.
-    expect(b.openEditor).toHaveBeenCalledTimes(1)
+    expect(sessionTabs(b.groups)).toHaveLength(1)
   })
 
   it('opens a read-only preview (no live resume) for a same-path session on another host', async () => {
@@ -1461,10 +1463,54 @@ describe('ResumeAgentSessionAction', () => {
     await run(b)
     // Same cwd, but the entry ran on a different remote host — still split-brain.
     expect(b.resumeSession).not.toHaveBeenCalled()
-    expect(b.openEditor).toHaveBeenCalledTimes(1)
-    const opened = b.openEditor.mock.calls[0]?.[0]
-    expect(opened).toBeInstanceOf(AcpSessionEditorInput)
-    expect((opened as AcpSessionEditorInput).sessionId).toBe('sess-1')
+    const tabs = sessionTabs(b.groups)
+    expect(tabs).toHaveLength(1)
+    expect(tabs[0]!.sessionId).toBe('sess-1')
+  })
+
+  // Regression: IEditorService.openEditor dedupes only inside the active group,
+  // so opening the preview of a session whose tab already lives in another group
+  // duplicated it there. The resume path must find it across every group first.
+  it('focuses a preview tab sitting in another group instead of duplicating it', async () => {
+    const entry = makeEntry({ cwd: '/repo/wt1', title: 'From worktree' })
+    const b = build({ entries: [entry], pickIndex: 0, currentCwd: '/repo/main' })
+    const left = b.groups.activeGroup
+    const right = b.groups.addGroup(left, GroupDirection.Right)
+    // The left group keeps a tab of its own: an *empty* group is auto-closed on
+    // the next model change, which `await run` would reach.
+    left.openEditor(b.inst.createInstance(AcpSessionEditorInput, 'other', 'fake', undefined))
+    const existing = b.inst.createInstance(AcpSessionEditorInput, 'sess-1', 'fake', 'From worktree')
+    right.openEditor(existing, { activate: false, pinned: true })
+    b.groups.activateGroup(left)
+
+    await run(b)
+
+    expect(b.groups.count).toBe(2)
+    expect(left.editors).toHaveLength(1)
+    expect(right.editors).toHaveLength(1)
+    expect(sessionTabs(b.groups)).toHaveLength(2)
+    expect(b.groups.activeGroup).toBe(right)
+    expect(right.activeEditor).toBe(existing)
+  })
+
+  it('focuses a resumed session tab sitting in another group instead of duplicating it', async () => {
+    const entry = makeEntry({ cwd: '/repo/main', title: 'Local' })
+    const b = build({ entries: [entry], pickIndex: 0, currentCwd: '/repo/main' })
+    const left = b.groups.activeGroup
+    const right = b.groups.addGroup(left, GroupDirection.Right)
+    left.openEditor(b.inst.createInstance(AcpSessionEditorInput, 'other', 'fake', undefined))
+    // resumeSession (the stub) yields the live session id 'live'.
+    const existing = b.inst.createInstance(AcpSessionEditorInput, 'live', 'fake', undefined)
+    right.openEditor(existing, { activate: false, pinned: true })
+    b.groups.activateGroup(left)
+
+    await run(b)
+
+    expect(b.resumeSession).toHaveBeenCalledWith('sess-1')
+    expect(right.editors).toHaveLength(1)
+    expect(sessionTabs(b.groups)).toHaveLength(2)
+    expect(b.groups.activeGroup).toBe(right)
+    expect(right.activeEditor).toBe(existing)
   })
 })
 

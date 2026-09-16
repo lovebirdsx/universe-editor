@@ -10,12 +10,12 @@ import type {
   IRendererSessionsService,
   RendererSessionSummary,
 } from '../../../shared/ipc/sessionSwitcher.js'
-import { IEditorService, IInstantiationService } from '@universe-editor/platform'
+import { IEditorGroupsService, IInstantiationService } from '@universe-editor/platform'
 import { IAcpSessionService } from '../acp/session/acpSessionService.js'
 import { IAcpSessionHistoryService } from '../acp/session/acpSessionHistory.js'
 import { IAcpChatLocationService } from '../acp/session/acpChatLocationService.js'
 import { IAcpChatWidgetService } from '../acp/session/acpChatWidgetService.js'
-import { AcpSessionEditorInput } from '../acp/session/acpSessionEditorInput.js'
+import { revealSessionChat } from '../acp/session/revealSessionChat.js'
 import { computeSessionDisplayStatus } from '../acp/session/acpSessionStatus.js'
 import { resolveLiveSessionTitle } from '../acp/session/acpSessionTitle.js'
 
@@ -26,7 +26,7 @@ export class RendererSessionsService implements IRendererSessionsService {
     @IAcpSessionService private readonly _sessions: IAcpSessionService,
     @IAcpSessionHistoryService private readonly _history: IAcpSessionHistoryService,
     @IAcpChatLocationService private readonly _chatLocation: IAcpChatLocationService,
-    @IEditorService private readonly _editor: IEditorService,
+    @IEditorGroupsService private readonly _groups: IEditorGroupsService,
     @IInstantiationService private readonly _instantiation: IInstantiationService,
     @IAcpChatWidgetService private readonly _widgets: IAcpChatWidgetService,
   ) {}
@@ -52,17 +52,19 @@ export class RendererSessionsService implements IRendererSessionsService {
     // nothing else would wake it until the next prompt.
     if (session.isDormant.get()) void session.ensureAwake()
     this._chatLocation.setLocation('editor')
-    this._editor.openEditor(
-      this._instantiation.createInstance(
-        AcpSessionEditorInput,
-        session.id,
-        session.agentId,
-        undefined,
-      ),
-      { activate: true, pinned: true },
+    // The tab may already live in another group (session split across groups,
+    // the other one active). Going through IEditorService would dedupe only
+    // inside the active group and open a duplicate.
+    revealSessionChat(
+      {
+        groups: this._groups,
+        inst: this._instantiation,
+        location: this._chatLocation,
+        widgets: this._widgets,
+      },
+      session.id,
+      session,
     )
-    this._widgets.focusSessionInput(session.id)
-    requestAnimationFrame(() => this._widgets.focusSessionInput(session.id))
     return Promise.resolve()
   }
 }

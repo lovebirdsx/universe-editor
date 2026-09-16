@@ -615,6 +615,10 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       (services.editorGroupsService.activeGroup?.editors ?? [])
         .map((e) => e.resource?.toString())
         .filter((u): u is string => u !== undefined),
+    getEditorGroupEditorUris: (groupId) =>
+      (services.editorGroupsService.groups.find((g) => String(g.id) === groupId)?.editors ?? [])
+        .map((e) => e.resource?.toString())
+        .filter((u): u is string => u !== undefined),
     getActiveGroupEditorFlags: () => {
       const group = services.editorGroupsService.activeGroup
       return (group?.editors ?? []).map((e) => ({

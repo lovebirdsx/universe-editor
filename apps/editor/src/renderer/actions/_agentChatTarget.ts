@@ -19,7 +19,7 @@ import { IAcpChatWidgetService } from '../services/acp/session/acpChatWidgetServ
 import { IAcpChatLocationService } from '../services/acp/session/acpChatLocationService.js'
 import { IAcpSessionService } from '../services/acp/session/acpSessionService.js'
 import { IAcpAgentRegistry } from '../services/acp/acpAgentRegistry.js'
-import { AcpSessionEditorInput } from '../services/acp/session/acpSessionEditorInput.js'
+import { revealSessionEditorTab } from '../services/acp/session/revealSessionEditorTab.js'
 
 // Services revealChat / resolveTargetSession need, snapshotted while the accessor
 // is still valid (i.e. before run's first await).
@@ -62,39 +62,10 @@ export async function resolveTargetSession(services: RevealServices) {
 export async function revealChat(services: RevealServices, sessionId: string): Promise<void> {
   const { location, widgets, groups, inst, layout, views, sessions } = services
   if (location.location.get() === 'editor') {
-    // The session editor may already live in another group (e.g. Git Graph on the
-    // left, session on the right). Reveal that existing tab instead of opening a
-    // duplicate in the active group.
-    const found = findSessionEditor(groups, sessionId)
-    if (found) {
-      groups.activateGroup(found.group)
-      found.group.setActive(found.editor)
-    } else {
-      const session = sessions.getById(sessionId)
-      if (session) {
-        const target = groups.activeGroupForOpen
-        target.openEditor(
-          inst.createInstance(AcpSessionEditorInput, session.id, session.agentId, undefined),
-          { activate: true, pinned: true },
-        )
-        if (target !== groups.activeGroup) groups.activateGroup(target)
-      }
-    }
+    revealSessionEditorTab(groups, inst, sessionId, sessions.getById(sessionId))
   } else {
     if (!layout.getVisible(PartId.SecondarySideBar)) layout.toggleVisible(PartId.SecondarySideBar)
     await views.openViewContainer('workbench.view.sessions')
   }
   widgets.focusSessionInput(sessionId)
-}
-
-/** Locate an already-open session editor (and its group) across all groups. */
-export function findSessionEditor(groups: IEditorGroupsService, sessionId: string) {
-  for (const group of groups.groups) {
-    for (const editor of group.editors) {
-      if (editor instanceof AcpSessionEditorInput && editor.sessionId === sessionId) {
-        return { group, editor }
-      }
-    }
-  }
-  return undefined
 }

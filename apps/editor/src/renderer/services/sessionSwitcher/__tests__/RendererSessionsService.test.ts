@@ -5,17 +5,17 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   Event,
+  GroupDirection,
   InstantiationService,
   IUriIdentityService,
   IWorkspaceService,
   ServiceCollection,
   observableValue,
-  type IEditorInput,
-  type IEditorService,
+  type IEditorGroup,
   type IInstantiationService,
-  type IObservable,
 } from '@universe-editor/platform'
 import { RendererSessionsService } from '../RendererSessionsService.js'
+import { EditorGroupsService } from '../../editor/EditorGroupsService.js'
 import {
   IAcpSessionHistoryService,
   type AcpSessionHistoryEntry,
@@ -26,6 +26,7 @@ import {
   type AcpChatLocation,
 } from '../../acp/session/acpChatLocationService.js'
 import { AcpSessionEditorInput } from '../../acp/session/acpSessionEditorInput.js'
+import { revealSessionEditorTab } from '../../acp/session/revealSessionEditorTab.js'
 import {
   IAcpSessionService,
   type IAcpSession,
@@ -83,31 +84,15 @@ class FakeSessionService {
 
 class FakeChatLocation {
   declare readonly _serviceBrand: undefined
-  readonly location: IObservable<AcpChatLocation> = observableValue<AcpChatLocation>(
-    'test.location',
-    'sidebar',
-  )
+  readonly location = observableValue<AcpChatLocation>('test.location', 'sidebar')
   readonly isMigrating = false
-  readonly setLocation = vi.fn()
+  // Mirrors the real service: it publishes the new value synchronously, which
+  // reveal() depends on (it forces 'editor' and then reveals).
+  readonly setLocation = vi.fn((next: AcpChatLocation) => this.location.set(next, undefined))
   initialize(): Promise<void> {
     return Promise.resolve()
   }
   toggle(): void {}
-}
-
-class FakeEditorService {
-  declare readonly _serviceBrand: undefined
-  readonly openEditors = observableValue<readonly IEditorInput[]>('test.openEditors', [])
-  readonly activeEditorId = observableValue<string | undefined>('test.activeEditorId', undefined)
-  readonly activeEditor = observableValue<IEditorInput | undefined>('test.activeEditor', undefined)
-  readonly opened: Array<{ input: IEditorInput; options: unknown }> = []
-  openEditor(input: IEditorInput, options?: unknown): void {
-    this.opened.push({ input, options })
-    this.activeEditor.set(input, undefined)
-    this.activeEditorId.set(input.id, undefined)
-  }
-  closeEditor(): void {}
-  closeAllEditors(): void {}
 }
 
 class FakeChatWidgetService {
@@ -148,18 +133,20 @@ function makeSession(
   } as unknown as IAcpSession
 }
 
-function makeHarness(): {
+interface Harness {
   svc: RendererSessionsService
   sessions: FakeSessionService
   location: FakeChatLocation
-  editor: FakeEditorService
+  groups: EditorGroupsService
   widgets: FakeChatWidgetService
   instantiation: IInstantiationService
-} {
+}
+
+function makeHarness(): Harness {
   const sessions = new FakeSessionService()
   const history = makeHistory()
   const location = new FakeChatLocation()
-  const editor = new FakeEditorService()
+  const groups = new EditorGroupsService()
   const widgets = new FakeChatWidgetService()
   const services = new ServiceCollection()
   services.set(IAcpSessionService, sessions as unknown as IAcpSessionServiceType)
@@ -176,11 +163,29 @@ function makeHarness(): {
     sessions as unknown as IAcpSessionServiceType,
     history,
     location as unknown as IAcpChatLocationService,
-    editor as unknown as IEditorService,
+    groups,
     instantiation,
     widgets as unknown as IAcpChatWidgetServiceType,
   )
-  return { svc, sessions, location, editor, widgets, instantiation }
+  return { svc, sessions, location, groups, widgets, instantiation }
+}
+
+/** Open a real session tab in `group`, as the workbench would. */
+function openSessionTab(
+  h: Harness,
+  group: IEditorGroup,
+  sessionId: string,
+  activate = true,
+): AcpSessionEditorInput {
+  const input = h.instantiation.createInstance(AcpSessionEditorInput, sessionId, 'fake', undefined)
+  group.openEditor(input, { activate, pinned: true })
+  return input
+}
+
+function sessionTabs(groups: EditorGroupsService): AcpSessionEditorInput[] {
+  return groups.groups
+    .flatMap((group) => group.editors)
+    .filter((editor): editor is AcpSessionEditorInput => editor instanceof AcpSessionEditorInput)
 }
 
 describe('RendererSessionsService', () => {
@@ -195,11 +200,10 @@ describe('RendererSessionsService', () => {
 
     expect(h.sessions.setActive).toHaveBeenCalledWith('s1')
     expect(h.location.setLocation).toHaveBeenCalledWith('editor')
-    expect(h.editor.opened).toHaveLength(1)
-    const opened = h.editor.opened[0]!
-    expect(opened.input).toBeInstanceOf(AcpSessionEditorInput)
-    expect((opened.input as AcpSessionEditorInput).sessionId).toBe('s1')
-    expect(opened.options).toEqual({ activate: true, pinned: true })
+    const tabs = sessionTabs(h.groups)
+    expect(tabs).toHaveLength(1)
+    expect(tabs[0]!.sessionId).toBe('s1')
+    expect(h.groups.activeGroup.activeEditor).toBe(tabs[0])
     expect(h.widgets.focusSessionInput).toHaveBeenCalledWith('s1')
   })
 
@@ -210,7 +214,7 @@ describe('RendererSessionsService', () => {
 
     expect(h.sessions.setActive).not.toHaveBeenCalled()
     expect(h.location.setLocation).not.toHaveBeenCalled()
-    expect(h.editor.opened).toHaveLength(0)
+    expect(sessionTabs(h.groups)).toHaveLength(0)
   })
 
   it('reveal wakes a dormant session in the background', async () => {
@@ -221,7 +225,7 @@ describe('RendererSessionsService', () => {
     await h.svc.reveal('s1')
 
     expect(vi.mocked(session.ensureAwake)).toHaveBeenCalledOnce()
-    expect(h.editor.opened).toHaveLength(1)
+    expect(sessionTabs(h.groups)).toHaveLength(1)
   })
 
   it('reveal leaves an awake session untouched', async () => {
@@ -232,6 +236,103 @@ describe('RendererSessionsService', () => {
     await h.svc.reveal('s1')
 
     expect(vi.mocked(session.ensureAwake)).not.toHaveBeenCalled()
+  })
+
+  it('reveal focuses the group already holding the session tab instead of duplicating it', async () => {
+    const h = makeHarness()
+    h.sessions.add(makeSession('s1'))
+    const left = h.groups.activeGroup
+    const right = h.groups.addGroup(left, GroupDirection.Right)
+    const tab = openSessionTab(h, right, 's1')
+    h.groups.activateGroup(left)
+
+    await h.svc.reveal('s1')
+
+    expect(h.groups.activeGroup).toBe(right)
+    expect(right.editors).toHaveLength(1)
+    expect(right.activeEditor).toBe(tab)
+    expect(left.editors).toHaveLength(0)
+    expect(sessionTabs(h.groups)).toHaveLength(1)
+  })
+
+  it('reveal re-activates a session tab that already sits in the active group', async () => {
+    const h = makeHarness()
+    h.sessions.add(makeSession('s1'))
+    const left = h.groups.activeGroup
+    const other = openSessionTab(h, left, 's2')
+    const tab = openSessionTab(h, left, 's1', false)
+    expect(left.activeEditor).toBe(other)
+
+    await h.svc.reveal('s1')
+
+    expect(left.editors).toHaveLength(2)
+    expect(left.activeEditor).toBe(tab)
+  })
+
+  it('reveal activates the holding group even when the active group is locked', async () => {
+    const h = makeHarness()
+    h.sessions.add(makeSession('s1'))
+    const left = h.groups.activeGroup
+    const right = h.groups.addGroup(left, GroupDirection.Right)
+    // Both groups hold a tab: `lock()` fires a model change, and an *empty*
+    // group is auto-closed on the next microtask — which `await reveal` reaches.
+    openSessionTab(h, left, 's2')
+    const tab = openSessionTab(h, right, 's1')
+    h.groups.activateGroup(left)
+    left.lock(true)
+
+    await h.svc.reveal('s1')
+
+    expect(h.groups.count).toBe(2)
+    expect(h.groups.activeGroup).toBe(right)
+    expect(right.activeEditor).toBe(tab)
+    expect(left.editors).toHaveLength(1)
+    expect(sessionTabs(h.groups)).toHaveLength(2)
+  })
+
+  it('reveal falls back to the lock-aware target group when every group is locked', async () => {
+    const h = makeHarness()
+    h.sessions.add(makeSession('s1'))
+    const left = h.groups.activeGroup
+    const right = h.groups.addGroup(left, GroupDirection.Right)
+    openSessionTab(h, left, 's2')
+    openSessionTab(h, right, 's3')
+    h.groups.activateGroup(left)
+    left.lock(true)
+    right.lock(true)
+
+    await h.svc.reveal('s1')
+
+    expect(h.groups.count).toBe(3)
+    expect(h.groups.activeGroup.editors).toHaveLength(1)
+    const revealed = h.groups.activeGroup.activeEditor
+    expect(revealed).toBeInstanceOf(AcpSessionEditorInput)
+    expect((revealed as AcpSessionEditorInput).sessionId).toBe('s1')
+    expect(sessionTabs(h.groups)).toHaveLength(3)
+  })
+
+  describe('revealSessionEditorTab', () => {
+    it('reveals an existing tab even without a resident session instance', () => {
+      const h = makeHarness()
+      const left = h.groups.activeGroup
+      const right = h.groups.addGroup(left, GroupDirection.Right)
+      const tab = openSessionTab(h, right, 's1')
+      h.groups.activateGroup(left)
+
+      revealSessionEditorTab(h.groups, h.instantiation, 's1', undefined)
+
+      expect(h.groups.activeGroup).toBe(right)
+      expect(right.activeEditor).toBe(tab)
+      expect(sessionTabs(h.groups)).toHaveLength(1)
+    })
+
+    it('opens nothing when the session has neither a tab nor a resident instance', () => {
+      const h = makeHarness()
+
+      revealSessionEditorTab(h.groups, h.instantiation, 'ghost', undefined)
+
+      expect(sessionTabs(h.groups)).toHaveLength(0)
+    })
   })
 
   describe('listSessions', () => {

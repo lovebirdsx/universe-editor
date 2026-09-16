@@ -734,6 +734,13 @@ export interface E2EProbe {
   /** URIs of every editor in the active group, in tab order. */
   getActiveGroupEditorUris(): readonly string[]
   /**
+   * URIs of every editor in the group with this id (`getEditorGroupsLayout()`
+   * / DOM `data-group-id` form), in tab order. The active-group accessor above
+   * cannot see a group the user is not in, which is exactly what a spec
+   * asserting "nothing was duplicated over there" needs.
+   */
+  getEditorGroupEditorUris(groupId: string): readonly string[]
+  /**
    * Per-editor flags for the active group, in tab order. `sticky` is the
    * pinned (VSCode sticky-tab) flag; `preview` is the single preview-slot flag.
    * Lets specs assert the pin/unpin UI contract without peeking at the model.

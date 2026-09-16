@@ -62,7 +62,10 @@ import {
   rememberedCwdUri,
 } from '../services/acp/session/acpLastSessionCwdService.js'
 import { ACP_SCOPED_KEY_WEIGHT, CATEGORY, resolveNavWidget } from './_agentShared.js'
-import { findSessionEditor } from './_agentChatTarget.js'
+import {
+  findSessionEditor,
+  revealSessionEditorTab,
+} from '../services/acp/session/revealSessionEditorTab.js'
 import { reviveUri, type ITargetArg } from './fileActionsCommon.js'
 
 export class NewAgentSessionAction extends Action2 {
@@ -536,7 +539,7 @@ export class ResumeAgentSessionAction extends Action2 {
     const layout = accessor.get(ILayoutService)
     const views = accessor.get(IViewsService)
     const location = accessor.get(IAcpChatLocationService)
-    const editor = accessor.get(IEditorService)
+    const groups = accessor.get(IEditorGroupsService)
     const inst = accessor.get(IInstantiationService)
     const workspace = accessor.get(IWorkspaceService)
     const uriIdentity = accessor.get(IUriIdentityService)
@@ -585,18 +588,14 @@ export class ResumeAgentSessionAction extends Action2 {
     const currentAuthority =
       folder && folder.scheme === REMOTE_SCHEME ? folder.authority || undefined : undefined
     if (entry && isForeignWorkspaceSession(entry, currentCwd, currentAuthority, uriIdentity)) {
-      editor.openEditor(
-        inst.createInstance(AcpSessionEditorInput, entry.id, entry.agentId, entry.title),
-      )
+      revealSessionEditorTab(groups, inst, entry.id, entry)
       return
     }
 
     try {
       const session = await sessions.resumeSession(picked.id)
       if (location.location.get() === 'editor') {
-        editor.openEditor(
-          inst.createInstance(AcpSessionEditorInput, session.id, session.agentId, undefined),
-        )
+        revealSessionEditorTab(groups, inst, session.id, session)
       } else {
         sessions.setActive(session.id)
         if (!layout.getVisible(PartId.SecondarySideBar)) {

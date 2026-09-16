@@ -12,6 +12,7 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import {
   Emitter,
   Event,
+  GroupDirection,
   InstantiationService,
   ServiceCollection,
   NoopTelemetryService,
@@ -23,7 +24,7 @@ import {
   ICommandService,
   IConfigurationService,
   IDialogService,
-  IEditorService,
+  IEditorGroupsService,
   IStorageService,
   IUriIdentityService,
   IWorkspaceService,
@@ -52,6 +53,10 @@ import {
   IAcpAgentRegistry,
   type IAcpAgentRegistry as IAcpAgentRegistryType,
 } from '../../../services/acp/acpAgentRegistry.js'
+import { IAcpChatWidgetService } from '../../../services/acp/session/acpChatWidgetService.js'
+import { IAcpChatLocationService } from '../../../services/acp/session/acpChatLocationService.js'
+import { AcpSessionEditorInput } from '../../../services/acp/session/acpSessionEditorInput.js'
+import { EditorGroupsService } from '../../../services/editor/EditorGroupsService.js'
 import { SessionListBody } from '../SessionListBody.js'
 import { ServicesContext } from '../../useService.js'
 import { StubLoggerService } from '../../../__tests__/_helpers/stubLoggerService.js'
@@ -195,17 +200,29 @@ interface Harness {
   executeCommand: ReturnType<typeof vi.fn>
   sessionCtl: ReturnType<typeof makeSessionService>
   confirm: ReturnType<typeof vi.fn>
-  openEditor: ReturnType<typeof vi.fn>
+  groups: EditorGroupsService
+  inst: InstantiationService
+  widgets: { focusSessionInput: ReturnType<typeof vi.fn> }
   dispose: () => void
 }
 
-async function makeHarness(opts: { scope?: string; folder?: URI } = {}): Promise<Harness> {
+/** Session tabs across every group — the foreign preview must not duplicate them. */
+function sessionTabs(groups: EditorGroupsService): AcpSessionEditorInput[] {
+  return groups.groups
+    .flatMap((group) => group.editors)
+    .filter((editor): editor is AcpSessionEditorInput => editor instanceof AcpSessionEditorInput)
+}
+
+async function makeHarness(
+  opts: { scope?: string; folder?: URI; chatLocation?: 'editor' | 'sidebar' } = {},
+): Promise<Harness> {
   const storage = new FakeStorage()
   const uriIdentity = new UriIdentityService('linux')
   const folder = opts.folder ?? URI.file('/work')
   const workspace = {
     _serviceBrand: undefined,
     current: { folder, name: 'ws' } as IWorkspaceType,
+    onDidChangeWorkspace: Event.None,
   } as unknown as IWorkspaceServiceType
   const history = new AcpSessionHistoryService(
     storage,
@@ -221,7 +238,7 @@ async function makeHarness(opts: { scope?: string; folder?: URI } = {}): Promise
     new StubLoggerService(),
   )
   const executeCommand = vi.fn().mockResolvedValue(undefined)
-  const openEditor = vi.fn()
+  const groups = new EditorGroupsService()
   const sessionCtl = makeSessionService()
 
   const services = new ServiceCollection()
@@ -244,10 +261,18 @@ async function makeHarness(opts: { scope?: string; folder?: URI } = {}): Promise
     _serviceBrand: undefined,
     confirm,
   } as unknown as IDialogService)
-  services.set(IEditorService, {
+  services.set(IEditorGroupsService, groups)
+  services.set(IAcpChatLocationService, {
     _serviceBrand: undefined,
-    openEditor,
-  } as unknown as IEditorService)
+    location: observableValue('test.chatLocation', opts.chatLocation ?? 'editor'),
+  } as unknown as IAcpChatLocationService)
+  // AcpSessionEditorInput.createInstance (the foreign preview) pulls this one.
+  const widgets = { focusSessionInput: vi.fn(() => true) }
+  services.set(IAcpChatWidgetService, {
+    _serviceBrand: undefined,
+    register: vi.fn(),
+    ...widgets,
+  } as never)
   services.set(ICommandService, {
     _serviceBrand: undefined,
     executeCommand,
@@ -266,7 +291,9 @@ async function makeHarness(opts: { scope?: string; folder?: URI } = {}): Promise
     executeCommand,
     sessionCtl,
     confirm,
-    openEditor,
+    groups,
+    inst,
+    widgets,
     dispose: () => {
       history.dispose()
       filterService.dispose()
@@ -900,7 +927,47 @@ describe('SessionListBody — subdirectory vs foreign scoping', () => {
     addEntry(harness.history, 'sub', 'sub session', 1000, 'fake', '/work/sub')
     fireEvent.click(screen.getByTestId('session-row-sub'))
     expect(harness.sessionCtl.resumeSessionFn).toHaveBeenCalledWith('sub')
-    expect(harness.openEditor).not.toHaveBeenCalled()
+    expect(sessionTabs(harness.groups)).toHaveLength(0)
+    harness.dispose()
+  })
+
+  it('opens a foreign row as a read-only preview tab', async () => {
+    const harness = await makeHarness()
+    const entry = addEntry(harness.history, 'far', 'far session', 1000, 'fake', '/other')
+    fireEvent.click(screen.getByTestId('session-row-far'))
+    expect(harness.sessionCtl.resumeSessionFn).not.toHaveBeenCalled()
+    const tabs = sessionTabs(harness.groups)
+    expect(tabs).toHaveLength(1)
+    expect(tabs[0]!.sessionId).toBe(entry.id)
+    harness.dispose()
+  })
+
+  // Regression: IEditorService.openEditor dedupes only inside the active group,
+  // so a preview whose tab already lives in another group got duplicated there.
+  it('focuses a foreign preview tab sitting in another group instead of duplicating it', async () => {
+    const harness = await makeHarness()
+    const entry = addEntry(harness.history, 'far', 'far session', 1000, 'fake', '/other')
+    const left = harness.groups.activeGroup
+    const right = harness.groups.addGroup(left, GroupDirection.Right)
+    // Both groups keep a tab: an *empty* group is auto-closed on the next model
+    // change, and `addEntry` fires exactly one.
+    left.openEditor(harness.inst.createInstance(AcpSessionEditorInput, 'other', 'fake', undefined))
+    const existing = harness.inst.createInstance(
+      AcpSessionEditorInput,
+      entry.id,
+      'fake',
+      'far session',
+    )
+    right.openEditor(existing, { activate: false, pinned: true })
+    harness.groups.activateGroup(left)
+
+    fireEvent.click(screen.getByTestId('session-row-far'))
+
+    expect(left.editors).toHaveLength(1)
+    expect(right.editors).toHaveLength(1)
+    expect(sessionTabs(harness.groups)).toHaveLength(2)
+    expect(harness.groups.activeGroup).toBe(right)
+    expect(right.activeEditor).toBe(existing)
     harness.dispose()
   })
 
@@ -921,6 +988,131 @@ describe('SessionListBody — subdirectory vs foreign scoping', () => {
     const row = screen.getByTestId('session-row-deep')
     expect(row.textContent).toContain('a/…/c')
     expect(row.querySelector('[data-tooltip="/work/a/b/c"]')).toBeTruthy()
+    harness.dispose()
+  })
+})
+
+describe('SessionListBody — activating an already-open session', () => {
+  /** A live, resident session plus its history row — the row the user clicks. */
+  async function openHarness(opts: { chatLocation?: 'editor' | 'sidebar' } = {}): Promise<Harness> {
+    const harness = await makeHarness(opts)
+    addEntry(harness.history, 'agent-1', 'live session', 1000)
+    const session = makeFakeSession({
+      id: 'agent-1',
+      status: 'idle',
+      sessionIdOnAgent: 'agent-1',
+    })
+    act(() => {
+      harness.sessionCtl.liveById.set(session.id, session)
+      harness.sessionCtl.sessions.set([...harness.sessionCtl.sessions.get(), session], undefined)
+    })
+    return harness
+  }
+
+  function sessionTab(harness: Harness, activate = true): AcpSessionEditorInput {
+    const tab = harness.inst.createInstance(
+      AcpSessionEditorInput,
+      'agent-1',
+      'fake',
+      'live session',
+    )
+    harness.groups.activeGroup.openEditor(tab, { activate, pinned: true })
+    return tab
+  }
+
+  // Regression: switching the active session was all this did, and the
+  // chat-location autorun deliberately bails when the tab sits in another group
+  // (it must not duplicate it) — so clicking the row did nothing at all.
+  it('activates the group holding the session tab instead of doing nothing', async () => {
+    const harness = await openHarness()
+    const left = harness.groups.activeGroup
+    const right = harness.groups.addGroup(left, GroupDirection.Right)
+    // Both groups keep a tab: an *empty* group is auto-closed on the next model
+    // change, and the tab we open below is exactly such a change.
+    left.openEditor(harness.inst.createInstance(AcpSessionEditorInput, 'other', 'fake', undefined))
+    const tab = harness.inst.createInstance(
+      AcpSessionEditorInput,
+      'agent-1',
+      'fake',
+      'live session',
+    )
+    right.openEditor(tab, { activate: false, pinned: true })
+    harness.groups.activateGroup(left)
+
+    fireEvent.click(screen.getByTestId('session-row-agent-1'))
+
+    expect(harness.groups.activeGroup).toBe(right)
+    expect(right.activeEditor).toBe(tab)
+    expect(left.editors).toHaveLength(1)
+    expect(sessionTabs(harness.groups)).toHaveLength(2)
+    expect(harness.widgets.focusSessionInput).toHaveBeenCalledWith('agent-1')
+    expect(harness.sessionCtl.resumeSessionFn).not.toHaveBeenCalled()
+    harness.dispose()
+  })
+
+  it('re-activates the tab of the session that is already the active editor', async () => {
+    const harness = await openHarness()
+    const group = harness.groups.activeGroup
+    const tab = sessionTab(harness)
+    expect(group.activeEditor).toBe(tab)
+    const activationId = group.activationId
+
+    fireEvent.click(screen.getByTestId('session-row-agent-1'))
+
+    // The activation id is what EditorGroupView's focus pass keys on, so
+    // bumping it is exactly "focus went back to this editor".
+    expect(group.activationId).toBeGreaterThan(activationId)
+    expect(harness.groups.activeGroup).toBe(group)
+    expect(group.editors).toHaveLength(1)
+    expect(harness.widgets.focusSessionInput).toHaveBeenCalledWith('agent-1')
+    harness.dispose()
+  })
+
+  it('leaves the sidebar location alone — no tab, no focus grab', async () => {
+    const harness = await openHarness({ chatLocation: 'sidebar' })
+
+    fireEvent.click(screen.getByTestId('session-row-agent-1'))
+
+    expect(harness.sessionCtl.setActiveFn).toHaveBeenCalledWith('agent-1')
+    // The chat lives in the sidebar there: revealing would open a tab the
+    // location service immediately closes again, and focus stays where the
+    // user clicked.
+    expect(sessionTabs(harness.groups)).toHaveLength(0)
+    expect(harness.widgets.focusSessionInput).not.toHaveBeenCalled()
+    harness.dispose()
+  })
+
+  it('still keys on the local id, not the durable one', async () => {
+    const harness = await makeHarness()
+    addEntry(harness.history, 'durable-1', 'resumed session', 1000)
+    const session = makeFakeSession({
+      id: 'local-1',
+      status: 'idle',
+      sessionIdOnAgent: 'durable-1',
+    })
+    act(() => {
+      // The real service resolves either id (`_findSession`), and the history
+      // row is keyed by the durable one while the tab/widgets use the local one.
+      harness.sessionCtl.liveById.set(session.id, session)
+      harness.sessionCtl.liveById.set('durable-1', session)
+      harness.sessionCtl.sessions.set([...harness.sessionCtl.sessions.get(), session], undefined)
+    })
+    const group = harness.groups.activeGroup
+    const tab = harness.inst.createInstance(
+      AcpSessionEditorInput,
+      'local-1',
+      'fake',
+      'resumed session',
+    )
+    group.openEditor(tab, { activate: true, pinned: true })
+
+    fireEvent.click(screen.getByTestId('session-row-durable-1'))
+
+    // Tabs and chat widgets are keyed by the local id, so a reveal that looked
+    // up the row's durable id would miss and open a second tab.
+    expect(group.editors).toHaveLength(1)
+    expect(group.activeEditor).toBe(tab)
+    expect(harness.widgets.focusSessionInput).toHaveBeenCalledWith('local-1')
     harness.dispose()
   })
 })
