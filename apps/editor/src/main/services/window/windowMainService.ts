@@ -41,7 +41,7 @@ import { applyWindowState, trackWindowState, type IWindowState } from '../../win
 import { observeDevToolsState } from '../../devToolsState.js'
 import { getDefaultStorage, workspaceIdFromUri } from '../../storage.js'
 import { loadWorkspaceGeometry, type IRestoreWindow } from '../../windowsSession.js'
-import { normalizeRemoteUri } from '../remote/remoteUri.js'
+import { canonicalizeWorkspaceFolderUri } from '../remote/remoteUri.js'
 import { deriveWindowRemoteAuthority } from './windowRemoteAuthority.js'
 import { WindowSessionStore } from './windowSessionStore.js'
 import { createWindowScopedServices } from './windowScopeFactory.js'
@@ -740,7 +740,7 @@ export class WindowMainService implements IWindowMainService {
       if (!picked) return
       resolved = URI.file(picked)
     }
-    resolved = normalizeRemoteUri(resolved)
+    resolved = canonicalizeWorkspaceFolderUri(resolved)
     const workspace: IWorkspace = {
       folder: resolved,
       name: basename(resolved.fsPath) || resolved.fsPath,

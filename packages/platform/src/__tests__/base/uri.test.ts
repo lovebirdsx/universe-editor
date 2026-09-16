@@ -6,6 +6,7 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   URI,
+  canonicalizeFileUri,
   getResourceComparisonKey,
   isEqualResource,
   isEqualOrParentResource,
@@ -277,6 +278,48 @@ describe('URI — isUri', () => {
     expect(URI.isUri(null)).toBe(false)
     expect(URI.isUri('string')).toBe(false)
     expect(URI.isUri(42)).toBe(false)
+  })
+})
+
+describe('URI — canonicalizeFileUri', () => {
+  it('folds a lower-case Windows drive letter up, in the path and the string form', () => {
+    const uri = canonicalizeFileUri(URI.file('d:/proj/src/a.ts'))
+    expect(uri.path).toBe('/D:/proj/src/a.ts')
+    expect(uri.toString()).toBe('file:///D:/proj/src/a.ts')
+  })
+
+  it('is idempotent and returns the same instance when already canonical', () => {
+    const canonical = URI.file('D:/proj')
+    expect(canonicalizeFileUri(canonical)).toBe(canonical)
+  })
+
+  it('folds both spellings of one file onto one string', () => {
+    expect(canonicalizeFileUri(URI.file('d:/proj/a.ts')).toString()).toBe(
+      canonicalizeFileUri(URI.file('D:/proj/a.ts')).toString(),
+    )
+  })
+
+  it('leaves a UNC path alone', () => {
+    const unc = URI.parse('file://host/share/a.ts')
+    expect(canonicalizeFileUri(unc)).toBe(unc)
+  })
+
+  it('leaves non-file schemes and drive-less paths alone', () => {
+    const remote = URI.from({ scheme: 'remote-ssh', authority: 'host', path: '/c:/proj/a.ts' })
+    expect(canonicalizeFileUri(remote)).toBe(remote)
+    const posix = URI.file('/home/user/a.ts')
+    expect(canonicalizeFileUri(posix)).toBe(posix)
+  })
+
+  it('folds the drive to the spelling the comparison key uses, on any host platform', () => {
+    // `normalizeFsPath` folds the drive before any platform case policy applies,
+    // so a linux-hosted renderer reaching a Windows share still agrees with a
+    // win32 one on the canonical spelling — and with the key everything else
+    // compares resources by (nothing lower-cases the rest on linux).
+    expect(canonicalizeFileUri(URI.file('e:/x')).path).toBe('/E:/x')
+    expect(canonicalizeFileUri(URI.file('e:/x')).path.slice(1)).toBe(
+      getResourceComparisonKey(URI.file('e:/x'), 'linux'),
+    )
   })
 })
 

@@ -20,7 +20,7 @@ import {
   type UriComponents,
 } from '@universe-editor/platform'
 import { IMainStorageService, type Storage } from '../../storage.js'
-import { normalizeRemoteUri } from '../remote/remoteUri.js'
+import { canonicalizeWorkspaceFolderUri } from '../remote/remoteUri.js'
 
 export const RECENT_WORKSPACES_STORAGE_KEY = 'workbench.recentWorkspaces'
 
@@ -55,14 +55,28 @@ export class RecentWorkspacesMainService implements IDisposable {
     this._hydratePromise = (async () => {
       const raw = await this._storage.get<PersistedRecent[]>(RECENT_WORKSPACES_STORAGE_KEY)
       if (Array.isArray(raw)) {
-        this._recent = raw
+        const revived = raw
           .map((r) => {
             const folder = URI.revive(r.folder)
             if (!folder) return null
-            return { folder: normalizeRemoteUri(folder), name: r.name, lastOpened: r.lastOpened }
+            return {
+              folder: canonicalizeWorkspaceFolderUri(folder),
+              name: r.name,
+              lastOpened: r.lastOpened,
+            }
           })
           .filter((r): r is IRecentWorkspace => r !== null)
           .sort((a, b) => b.lastOpened - a.lastOpened)
+        // A build that spelled a folder two ways could store it twice; the list
+        // is newest-first by now, so the first occurrence is the one to keep.
+        const seen = new Set<string>()
+        this._recent = revived.filter((r) => {
+          const key = r.folder.toString()
+          if (seen.has(key)) return false
+          seen.add(key)
+          return true
+        })
+        if (this._recent.length !== raw.length) await this._persist()
       }
       this._hydrated = true
       this._logger.debug(`hydrate recentWorkspaces count=${this._recent.length}`)
@@ -77,7 +91,7 @@ export class RecentWorkspacesMainService implements IDisposable {
 
   async add(workspace: IWorkspace): Promise<void> {
     await this._hydrate()
-    const folder = normalizeRemoteUri(workspace.folder)
+    const folder = canonicalizeWorkspaceFolderUri(workspace.folder)
     const folderStr = folder.toString()
     const filtered = this._recent.filter((r) => r.folder.toString() !== folderStr)
     const entry: IRecentWorkspace = {
@@ -102,8 +116,8 @@ export class RecentWorkspacesMainService implements IDisposable {
   async remove(folder: UriComponents | URI): Promise<void> {
     await this._hydrate()
     const revived = folder instanceof URI ? folder : URI.revive(folder)
-    const folderStr = revived?.toString()
-    if (!folderStr) return
+    if (!revived) return
+    const folderStr = canonicalizeWorkspaceFolderUri(revived).toString()
     const next = this._recent.filter((r) => r.folder.toString() !== folderStr)
     if (next.length === this._recent.length) return
     this._recent = next

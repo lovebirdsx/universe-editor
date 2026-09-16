@@ -35,9 +35,11 @@ import {
   IFocusStackService,
   ILoggerService,
   IStorageService,
+  IUriIdentityService,
   IViewDescriptorService,
   NullLogger,
   StorageScope,
+  URI,
   ViewContainerLocation,
   createDecorator,
   type EditorInput,
@@ -153,11 +155,19 @@ interface PersistedTarget {
   readonly id: string
 }
 
+/** Resource half of an MRU id, folded to its canonical spelling: `EditorInput.id`
+ *  is the resource URI string, so the same file spelled `e:` by one source and
+ *  `E:` by another would otherwise hold two slots — and a history entry written
+ *  under the other spelling would not be recognised as the same target. */
+function editorIdKey(identity: IUriIdentityService, editorId: string): string {
+  return identity.getComparisonKey(URI.parse(editorId))
+}
+
 /** MRU id with the group id stripped — the identity used to recognise the same
  *  target across a restart and across groups. */
-function stableKeyOf(id: string): string {
+function stableKeyOf(identity: IUriIdentityService, id: string): string {
   const decoded = decodeEditorPickId(id)
-  return decoded ? `${EDITOR_PICK_ID_PREFIX}${decoded.editorId}` : id
+  return decoded ? `${EDITOR_PICK_ID_PREFIX}${editorIdKey(identity, decoded.editorId)}` : id
 }
 
 /** Inverse of `stableKeyOf`, dropping ids of an unexpected shape. */
@@ -170,9 +180,9 @@ function toPersistedTarget(id: string): PersistedTarget | undefined {
 }
 
 /** `stableKeyOf` of a persisted target — the two sides are comparable directly. */
-function persistedKeyOf(target: PersistedTarget): string {
+function persistedKeyOf(identity: IUriIdentityService, target: PersistedTarget): string {
   return target.kind === 'editor'
-    ? `${EDITOR_PICK_ID_PREFIX}${target.id}`
+    ? `${EDITOR_PICK_ID_PREFIX}${editorIdKey(identity, target.id)}`
     : `${VIEW_PICK_ID_PREFIX}${target.id}`
 }
 
@@ -205,6 +215,7 @@ export class RecentTargetsService extends Disposable implements IRecentTargetsSe
     @IFocusStackService focusStack: IFocusStackService,
     @IStorageService private readonly _storage: IStorageService,
     @ILoggerService loggerService: ILoggerServiceType,
+    @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
   ) {
     super()
     this._logger =
@@ -434,7 +445,7 @@ export class RecentTargetsService extends Disposable implements IRecentTargetsSe
     const baseKeys = new Set<string>()
     const folded: string[] = []
     for (const target of base) {
-      const key = persistedKeyOf(target)
+      const key = persistedKeyOf(this._uriIdentity, target)
       if (baseKeys.has(key)) continue
       baseKeys.add(key)
       folded.push(this._idForPersisted(target))
@@ -443,7 +454,7 @@ export class RecentTargetsService extends Disposable implements IRecentTargetsSe
     // in the history, and in the common case of a plain restart this list is
     // empty: the activations the restore itself performs match history entries
     // and are dropped here, so they cannot displace the order the user left.
-    const sessionPart = this._mru.filter((id) => !baseKeys.has(stableKeyOf(id)))
+    const sessionPart = this._mru.filter((id) => !baseKeys.has(stableKeyOf(this._uriIdentity, id)))
     const basePart = folded.slice(0, Math.max(0, MAX_ENTRIES - sessionPart.length))
     this._mru.length = 0
     this._mru.push(...sessionPart, ...basePart)
@@ -459,11 +470,19 @@ export class RecentTargetsService extends Disposable implements IRecentTargetsSe
   private _idForPersisted(target: PersistedTarget): string {
     if (target.kind === 'view') return encodeViewPickId(target.id)
     for (const group of this._groups.groups) {
-      if (group.editors.some((e) => e.id === target.id)) {
-        return encodeEditorPickId(group.id, target.id)
-      }
+      const editor = group.editors.find((e) => this._sameEditor(e.id, target.id))
+      // The live editor's id, not the persisted spelling: readers resolve a slot
+      // by matching `editorId` against the grid, so keeping the old spelling
+      // would report an editor that is right there as closed.
+      if (editor) return encodeEditorPickId(group.id, editor.id)
     }
     return encodeEditorPickId(DEAD_GROUP_ID, target.id)
+  }
+
+  /** `EditorInput.id` is a raw resource-URI string, so the same file can be
+   *  spelled two ways across builds (the drive letter, host case folding). */
+  private _sameEditor(a: string, b: string): boolean {
+    return a === b || editorIdKey(this._uriIdentity, a) === editorIdKey(this._uriIdentity, b)
   }
 
   private _anyEditorOpen(): boolean {
@@ -488,7 +507,7 @@ export class RecentTargetsService extends Disposable implements IRecentTargetsSe
       const seen = new Set<string>()
       for (const target of ordered) {
         if (!target) continue
-        const key = persistedKeyOf(target)
+        const key = persistedKeyOf(this._uriIdentity, target)
         if (seen.has(key)) continue
         seen.add(key)
         out.push(target)

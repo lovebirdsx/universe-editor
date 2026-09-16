@@ -319,6 +319,25 @@ function pathWithoutAuthority(uri: URI): string {
   return p
 }
 
+/**
+ * The canonical text form of a local `file:` URI: the Windows drive letter is
+ * folded to upper case — the same direction as {@link normalizeFsPath} — so a
+ * folder has one spelling no matter who produced it. Without a shared fold the
+ * folder dialog's casing, the Explorer's own normalization and a hand-typed
+ * path are three different strings for one file, and every `toString()`
+ * comparison downstream (dedup keys, workspace storage buckets, tree-state
+ * keys, window lookup) silently forks.
+ *
+ * UNC paths (`file://host/…`), non-`file:` schemes and paths without a drive
+ * letter are returned unchanged; an already-canonical URI is returned as the
+ * same instance.
+ */
+export function canonicalizeFileUri(uri: URI): URI {
+  if (uri.scheme !== 'file') return uri
+  const path = uri.path.replace(/^\/([a-z]):/, (_, drive: string) => `/${drive.toUpperCase()}:`)
+  return path === uri.path ? uri : uri.with({ path })
+}
+
 /** Whether two URIs address the same resource under the platform's case policy
  *  (see {@link getResourceComparisonKey}). */
 export function isEqualResource(

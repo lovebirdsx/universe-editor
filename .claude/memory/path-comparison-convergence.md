@@ -14,4 +14,6 @@ metadata:
 
 防回潮靠 ESLint 护栏（禁手写 fsPath 折叠/路径身份键），见 [[eslint-path-identity-guardrails]]。已删除的 `canonicalResourceKey` 由 no-restricted-imports 拦截；`isEqualResource` 签名已变（必带 platform）。
 
+**Ctrl+P 重复行的成因与两处约束**（2026-09 修）：形态分叉来自**源头**——工作区根保留对话框的盘符大小写（`file:///E:/…`），而 Explorer 曾把盘符折成小写，于是同一文件有两串文本；Ctrl+P 若用原始 `uri.toString()` 比较就各占一行（描述还因大小写敏感的 `startsWith` 回落成绝对路径）。收口方式：所有工作区根生产者统一走 `canonicalizeWorkspaceFolderUri`（`packages/platform/src/base/uri.ts` 的 `canonicalizeFileUri` 折盘符**向上**，与 `normalizeFsPath` 同向；折下会让整个 `workspaces/<sha1>.json` 换桶）。**唯一刻意不走 comparison key 的地方**是每击键扫 10 万条清单的 `FileQuickAccessProvider.scanPool`，它按 `entry.relPath` 建 `Set`（清单本身即 `URI.joinPath(root, relPath)`）；小集合（打开编辑器/视图/recent/最终发布行）一律走 `getComparisonKey`，**别把原始 URI 串比较请回来**。
+
 **同源异层的姊妹问题**：编辑器身份（`EditorInput.id`/`matches`）碰撞见 [[editor-input-identity-isolation]]——同一思路不同层。

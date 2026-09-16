@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { URI } from '@universe-editor/platform'
-import { remoteFsPathToUri, remotePathFromUri } from '../remoteUri.js'
+import {
+  canonicalizeWorkspaceFolderUri,
+  remoteFsPathToUri,
+  remotePathFromUri,
+} from '../remoteUri.js'
 
 function remote(authority: string, path: string): URI {
   return URI.from({ scheme: 'remote-ssh', authority, path })
@@ -49,5 +53,29 @@ describe('remoteUri.remoteFsPathToUri', () => {
     expect(remotePathFromUri(remoteFsPathToUri(remotePathFromUri(original), 'host'))).toBe(
       original.path,
     )
+  })
+})
+
+describe('remoteUri.canonicalizeWorkspaceFolderUri', () => {
+  it('folds a local folder drive letter so one folder has one identity', () => {
+    // The workspace bucket id is a hash of this string — two spellings would mean
+    // two storage files, two windows and a recent list holding the folder twice.
+    expect(canonicalizeWorkspaceFolderUri(URI.file('e:/ws')).toString()).toBe('file:///E:/ws')
+    expect(canonicalizeWorkspaceFolderUri(URI.file('E:/ws')).toString()).toBe(
+      canonicalizeWorkspaceFolderUri(URI.file('e:/ws')).toString(),
+    )
+  })
+
+  it('still folds the WSL distro case of a remote folder', () => {
+    const uri = canonicalizeWorkspaceFolderUri(remote('wsl+Ubuntu-24.04', '/home/u/proj'))
+    expect(uri.authority).toBe('wsl+ubuntu-24.04')
+    expect(uri.path).toBe('/home/u/proj')
+  })
+
+  it('leaves a posix folder and a non-WSL remote folder untouched', () => {
+    const posix = URI.file('/home/u/proj')
+    expect(canonicalizeWorkspaceFolderUri(posix)).toBe(posix)
+    const host = remote('user@Host:22', '/home/u/proj')
+    expect(canonicalizeWorkspaceFolderUri(host)).toBe(host)
   })
 })

@@ -17,6 +17,17 @@
  *  to alphabetical. With no workspace the picker falls back to the recent files
  *  list. Mirrors VSCode's file quick access, whose cached-listing fast path is
  *  what keeps typing responsive on large trees.
+ *
+ *  Identity: two notions, because the two places they are used have opposite
+ *  cost budgets. The small collections (open editors, views, recent files, the
+ *  rows a keystroke finally publishes) are keyed by
+ *  `IUriIdentityService.getComparisonKey`, so one file written two ways — the
+ *  Explorer folds the Windows drive letter, URIs persisted by older builds did
+ *  not — collapses to one row. The per-keystroke scan over the cached listing
+ *  instead indexes by `entry.relPath`: the listing is built as
+ *  `URI.joinPath(root, relPath)`, so the relative path IS its identity in that
+ *  pool, and comparing it costs one string hash per entry where a comparison
+ *  key would cost a parse plus a normalize on every one of up to 100k entries.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -116,25 +127,17 @@ function displayPath(uri: URI): string {
   return uri.scheme === 'file' ? uri.fsPath : uri.path
 }
 
-function workspaceRelativePath(root: URI, uri: URI): string {
-  if (root.scheme !== uri.scheme || root.authority !== uri.authority) return displayPath(uri)
-  const rootPath = root.path.replace(/\/$/, '')
-  const norm = uri.path
-  return norm.startsWith(rootPath + '/') ? norm.slice(rootPath.length + 1) : displayPath(uri)
+/** Whether a pick id names a virtual target rather than a resource. Those ids
+ *  are opaque (`editor::` / `view::`) and must be compared verbatim — parsing
+ *  one yields a bogus URI with a `editor:` / `view:` scheme. */
+function isVirtualPickId(id: string): boolean {
+  return decodeEditorPickId(id) !== undefined || decodeViewPickId(id) !== undefined
 }
 
-function editorPickDescription(root: URI | undefined, resource: URI): string | undefined {
-  return resource.scheme === 'file'
-    ? root
-      ? workspaceRelativePath(root, resource)
-      : resource.fsPath
-    : undefined
-}
-
-function createFilePick(root: URI, uri: URI, labelOverride?: string): IQuickPickItem {
-  const rel = workspaceRelativePath(root, uri)
-  const label = labelOverride ?? rel.split(/[/\\]/).at(-1) ?? displayPath(uri)
-  return { id: uri.toString(), label, description: rel, iconId: resourceIconId(uri) }
+/** Dedup key for a pick id: the platform's resource identity for real
+ *  resources, the raw id for virtual targets. */
+function identityKey(identity: IUriIdentityService, id: string): string {
+  return isVirtualPickId(id) ? id : identity.getComparisonKey(URI.parse(id))
 }
 
 /** An open editor or a view as a pick candidate: the pick itself plus the
@@ -144,6 +147,13 @@ interface EditorPickCandidate {
   readonly pick: IQuickPickItem
   readonly name: string
   readonly path: string
+  /** Resource identity of `pick.id` (see {@link identityKey}). */
+  readonly key: string
+  /** Workspace-relative path — set only on candidates whose resource lives
+   *  under the workspace root. The per-keystroke scan indexes the cached
+   *  listing by `entry.relPath`, so this is what lets an open editor suppress
+   *  its own listing row without touching the URI on the hot path. */
+  readonly poolRelPath?: string
   /** Index within `IRecentTargetsService.getRecentViews()` — set only on view
    *  candidates. Used as the tie-breaker when two view rows score equally in a
    *  fuzzy match so the picker keeps the MRU order the tracker produced. */
@@ -193,22 +203,24 @@ function entryToPick(entry: MentionFileEntry): IQuickPickItem {
 }
 
 /**
- * Pick id of a recency-ordered target — the id `_buildEditorCandidates` /
- * `_buildViewCandidates` used for the same target, so the empty-query list can
+ * Identity key of a recency-ordered target — the key `_buildEditorCandidates` /
+ * `_buildViewCandidates` gave the same target, so the empty-query list can
  * re-emit the candidate in MRU order without rebuilding the pick. A
  * `closedEditor` slot carries the id of the editor that occupied it, which is
  * exactly the resource URI a closed-editor candidate is keyed by.
  */
-function recentTargetPickId(target: RecentTarget): string {
+function recentTargetKey(identity: IUriIdentityService, target: RecentTarget): string {
   switch (target.kind) {
-    case 'editor':
-      return (
-        target.editor.resource?.toString() ?? encodeEditorPickId(target.group.id, target.editor.id)
-      )
+    case 'editor': {
+      const resource = target.editor.resource
+      return resource
+        ? identity.getComparisonKey(resource)
+        : encodeEditorPickId(target.group.id, target.editor.id)
+    }
     case 'view':
       return encodeViewPickId(target.descriptor.id)
     case 'closedEditor':
-      return target.editorId
+      return identity.getComparisonKey(URI.parse(target.editorId))
   }
 }
 
@@ -241,6 +253,34 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     else this._provideRecentOnly(picker, options)
   }
 
+  /** Relative path of `uri` under `root`, or undefined when it is not inside
+   *  the workspace (or IS the workspace root). Unlike {@link _relativePath}
+   *  this never falls back to the absolute path — it is an index, not a label. */
+  private _relativePathUnderRoot(root: URI, uri: URI): string | undefined {
+    const rel = this._uriIdentity.relativePath(root, uri)
+    return rel === null || rel === '' ? undefined : rel
+  }
+
+  /** Description of a resource row: workspace-relative when the file lives
+   *  inside the workspace, else the absolute path. */
+  private _relativePath(root: URI, uri: URI): string {
+    return this._relativePathUnderRoot(root, uri) ?? displayPath(uri)
+  }
+
+  private _editorPickDescription(root: URI | undefined, resource: URI): string | undefined {
+    return resource.scheme === 'file'
+      ? root
+        ? this._relativePath(root, resource)
+        : resource.fsPath
+      : undefined
+  }
+
+  private _createFilePick(root: URI, uri: URI, labelOverride?: string): IQuickPickItem {
+    const rel = this._relativePath(root, uri)
+    const label = labelOverride ?? rel.split(/[/\\]/).at(-1) ?? displayPath(uri)
+    return { id: uri.toString(), label, description: rel, iconId: resourceIconId(uri) }
+  }
+
   /** Snapshot the currently open editors (all types, MRU order) as pick
    *  candidates, followed by recently closed editors that can be restored with
    *  their exact type (same path as Reopen Closed Editor). Resource-backed
@@ -258,10 +298,12 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       const { editor, group } = target
       const resource = editor.resource
       const id = resource ? resource.toString() : encodeEditorPickId(group.id, editor.id)
-      if (seen.has(id)) continue
-      seen.add(id)
+      const key = resource ? this._uriIdentity.getComparisonKey(resource) : id
+      if (seen.has(key)) continue
+      seen.add(key)
       const iconId = editor.getIconId?.() ?? (resource ? resourceIconId(resource) : undefined)
-      const description = resource ? editorPickDescription(root, resource) : undefined
+      const description = resource ? this._editorPickDescription(root, resource) : undefined
+      const poolRelPath = resource && root ? this._relativePathUnderRoot(root, resource) : undefined
       out.push({
         pick: {
           id,
@@ -271,6 +313,8 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
         },
         name: editor.label,
         path: description ?? editor.label,
+        key,
+        ...(poolRelPath !== undefined ? { poolRelPath } : {}),
       })
     }
     // Recently closed editors stay listed so a closed custom/image/preview tab
@@ -280,21 +324,24 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     // a resource with an open editor collapses into that editor's pick — the
     // closed-first restore in `_open` still reopens the closed type.
     for (const entry of this._closedEditors.getClosedEditors()) {
-      const id = entry.resource.toString()
-      if (seen.has(id)) continue
+      const key = this._uriIdentity.getComparisonKey(entry.resource)
+      if (seen.has(key)) continue
       if (!EditorRegistry.getProvider(entry.typeId)?.deserialize) continue
-      seen.add(id)
-      const description = editorPickDescription(root, entry.resource)
+      seen.add(key)
+      const description = this._editorPickDescription(root, entry.resource)
       const iconId = resourceIconId(entry.resource)
+      const poolRelPath = root ? this._relativePathUnderRoot(root, entry.resource) : undefined
       out.push({
         pick: {
-          id,
+          id: entry.resource.toString(),
           label: entry.label,
           ...(description ? { description } : {}),
           ...(iconId ? { iconId } : {}),
         },
         name: entry.label,
         path: description ?? entry.label,
+        key,
+        ...(poolRelPath !== undefined ? { poolRelPath } : {}),
       })
     }
     return out
@@ -307,7 +354,13 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
   private _buildViewCandidates(): EditorPickCandidate[] {
     return this._recentTargets.getRecentViews().map((descriptor, index) => {
       const pick = createViewPickItem(descriptor, this._viewDescriptors)
-      return { pick, name: pick.label, path: pick.description ?? pick.label, viewRank: index }
+      return {
+        pick,
+        name: pick.label,
+        path: pick.description ?? pick.label,
+        key: pick.id,
+        viewRank: index,
+      }
     })
   }
 
@@ -446,35 +499,43 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     const viewCandidates = this._buildViewCandidates()
     const matchCandidates = [...editorCandidates, ...viewCandidates]
 
-    // Index candidates by pick id so the empty-query list below can re-emit
+    // Index candidates by identity key so the empty-query list below can re-emit
     // them in `getRecentTargets()` recency order without rebuilding the pick.
-    const candidateByPickId = new Map<string, IQuickPickItem>()
-    for (const c of matchCandidates) candidateByPickId.set(c.pick.id, c.pick)
+    const candidateByKey = new Map<string, IQuickPickItem>()
+    // Listing-relative path per resource-backed candidate, keyed by pick id. The
+    // per-keystroke scan indexes the cached listing by `entry.relPath`, so this
+    // map is how an open editor suppresses its own listing row at string-hash
+    // cost instead of a URI parse per entry.
+    const poolRelPathByPickId = new Map<string, string>()
+    for (const c of matchCandidates) {
+      candidateByKey.set(c.key, c.pick)
+      if (c.poolRelPath !== undefined) poolRelPathByPickId.set(c.pick.id, c.poolRelPath)
+    }
 
     let recentFileItems: readonly IQuickPickItem[] = []
     const emptyQueryItems = (): IQuickPickItem[] => {
-      const headIds = new Set<string>()
+      const headKeys = new Set<string>()
       const head: IQuickPickItem[] = []
       for (const target of this._recentTargets.getRecentTargets({
         includeClosedEditors: true,
       })) {
-        const id = recentTargetPickId(target)
-        if (headIds.has(id)) continue
-        const pick = candidateByPickId.get(id)
+        const key = recentTargetKey(this._uriIdentity, target)
+        if (headKeys.has(key)) continue
+        const pick = candidateByKey.get(key)
         if (!pick) continue
-        headIds.add(id)
+        headKeys.add(key)
         head.push(pick)
       }
       // Candidates the MRU did not surface (restorable closed editors whose slot
       // fell out of the bounded history, say) keep their relative order after the
       // interleaved head, before the recent files.
       for (const c of matchCandidates) {
-        if (!headIds.has(c.pick.id)) head.push(c.pick)
+        if (!headKeys.has(c.key)) head.push(c.pick)
       }
-      return [...head, ...recentFileItems.filter((it) => !headIds.has(it.id))].slice(
-        0,
-        GO_TO_FILE_MAX_RESULTS,
-      )
+      return [
+        ...head,
+        ...recentFileItems.filter((it) => !headKeys.has(identityKey(this._uriIdentity, it.id))),
+      ].slice(0, GO_TO_FILE_MAX_RESULTS)
     }
     // The cached full file listing (loaded once when the picker opens). Filtering
     // then runs in-memory on every keystroke — no per-keystroke disk walk.
@@ -518,19 +579,37 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       sortRows(rows)
       return rows.slice(0, GO_TO_FILE_MAX_RESULTS).map((r) => r.pick ?? entryToPick(r.entry!))
     }
-    const editorRows = (pattern: string): { rows: ScoredRow[]; ids: Set<string> } => {
+    // Matched editor/view rows plus the listing-relative paths they already
+    // represent. Only *matched* candidates suppress their listing row — an open
+    // editor that does not match the query must not hide its file. The editor
+    // row has to win, not the listing row: `_acceptPick` routes it through
+    // `_restoreClosed` / the resolver, which is what preserves a custom editor
+    // type (markdown preview, PDF) that a plain file row would lose.
+    const editorRows = (pattern: string): { rows: ScoredRow[]; excludedRelPaths: Set<string> } => {
       const rows = matchEditors(pattern)
-      const ids = new Set<string>()
-      for (const r of rows) if (r.pick) ids.add(r.pick.id)
-      return { rows, ids }
+      const excludedRelPaths = new Set<string>()
+      for (const r of rows) {
+        if (!r.pick) continue
+        const rel = poolRelPathByPickId.get(r.pick.id)
+        if (rel !== undefined) excludedRelPaths.add(rel)
+      }
+      return { rows, excludedRelPaths }
     }
     // Score `pool` from index `from` into rows/matched; stops once past
     // `deadline` (checked every 1024 entries). Returns the resume index.
+    // `excludedRelPaths` is a plain string set on purpose: this runs over up to
+    // 100k entries per keystroke, and a comparison key per entry would mean a
+    // URI parse plus a path normalize on every one of them. The listing is built
+    // as `URI.joinPath(root, relPath)`, so the relative path already IS the
+    // entry's identity here. Known gap: a difference in *path* case (not the
+    // drive letter) between an editor's resource and the walk's relPath does not
+    // fold. Closing it would mean precomputing a key on every MentionFileEntry,
+    // which the listing cache cannot afford.
     const scanPool = (
       pool: readonly MentionFileEntry[],
       from: number,
       pattern: string,
-      editorIds: ReadonlySet<string>,
+      excludedRelPaths: ReadonlySet<string>,
       rows: ScoredRow[],
       matched: MentionFileEntry[],
       deadline?: number,
@@ -538,7 +617,7 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       for (let i = from; i < pool.length; i++) {
         if (deadline !== undefined && (i & 1023) === 1023 && performance.now() > deadline) return i
         const entry = pool[i]!
-        if (editorIds.has(entry.uri)) continue
+        if (excludedRelPaths.has(entry.relPath)) continue
         const score = scoreFileMatch(entry.name, entry.relPath, pattern)
         if (score >= 0) {
           matched.push(entry)
@@ -553,9 +632,9 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
         : (allFiles ?? [])
 
     const filterPoolSync = (pattern: string, pool: readonly MentionFileEntry[]): ScoredRow[] => {
-      const { rows, ids } = editorRows(pattern)
+      const { rows, excludedRelPaths } = editorRows(pattern)
       const matched: MentionFileEntry[] = []
-      scanPool(pool, 0, pattern, ids, rows, matched)
+      scanPool(pool, 0, pattern, excludedRelPaths, rows, matched)
       lastCompleted = { pattern, entries: matched }
       return rows
     }
@@ -567,9 +646,17 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       pool: readonly MentionFileEntry[],
       mySeq: number,
     ): Promise<ScoredRow[] | undefined> => {
-      const { rows, ids } = editorRows(pattern)
+      const { rows, excludedRelPaths } = editorRows(pattern)
       const matched: MentionFileEntry[] = []
-      let next = scanPool(pool, 0, pattern, ids, rows, matched, performance.now() + CHUNK_BUDGET_MS)
+      let next = scanPool(
+        pool,
+        0,
+        pattern,
+        excludedRelPaths,
+        rows,
+        matched,
+        performance.now() + CHUNK_BUDGET_MS,
+      )
       while (next < pool.length) {
         if (rows.length > COMPACT_ROWS_AT) {
           sortRows(rows)
@@ -581,7 +668,7 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
           pool,
           next,
           pattern,
-          ids,
+          excludedRelPaths,
           rows,
           matched,
           performance.now() + CHUNK_BUDGET_MS,
@@ -612,8 +699,21 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       if (mySeq !== seq || token.isCancellationRequested || localRows === undefined) return
       let rows = localRows
       if (fallbackRows !== undefined && fallbackRows.length > 0) {
-        const seen = new Set(rows.map((r) => r.pick?.id ?? r.entry!.uri))
-        rows = [...rows, ...fallbackRows.filter((r) => !seen.has(r.entry!.uri))]
+        // A row answers to two key spaces at once: the listing-relative path the
+        // scan uses, and the resource URI its pick id carries. Fallback rows
+        // always have the former; a local editor row only has one when its file
+        // is inside the workspace (see `poolRelPathByPickId`), and with a
+        // truncated listing the local rows are editor/view rows only — the cache
+        // dropped the walk whole — so keying on the path alone would let an
+        // editor on a file outside the workspace land twice.
+        const rowKeys = (row: ScoredRow): string[] => {
+          if (row.entry) return [`r:${row.entry.relPath}`, `u:${row.entry.uri}`]
+          const pick = row.pick!
+          const poolRelPath = poolRelPathByPickId.get(pick.id)
+          return poolRelPath === undefined ? [`u:${pick.id}`] : [`r:${poolRelPath}`, `u:${pick.id}`]
+        }
+        const seen = new Set(rows.flatMap(rowKeys))
+        rows = [...rows, ...fallbackRows.filter((r) => rowKeys(r).every((k) => !seen.has(k)))]
       }
       const items = finalizeRows([...rows])
       picker.items = items
@@ -677,8 +777,13 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
           : URI.joinPath(root, normalized)
       const exists = await this._fileService.exists(target).catch(() => false)
       if (!exists || mySeq !== seq || token.isCancellationRequested) return
-      const pick = createFilePick(root, target)
-      const rest = items.filter((it) => it.id !== pick.id)
+      const pick = this._createFilePick(root, target)
+      // The typed path and the row it duplicates need not be spelled the same
+      // (the probe keeps the user's casing, the listing keeps the root's), so
+      // match on resource identity rather than on the id string. Off the
+      // keystroke path — this runs after the exists() round-trip.
+      const pickKey = identityKey(this._uriIdentity, pick.id)
+      const rest = items.filter((it) => identityKey(this._uriIdentity, it.id) !== pickKey)
       picker.items = [pick, ...rest].slice(0, GO_TO_FILE_MAX_RESULTS)
     }
 
@@ -809,7 +914,7 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       if (token.isCancellationRequested) return
       // Show all recent files (in-workspace shown by relative path, others by
       // full fsPath) so this picker fully subsumes "Open Recent File…".
-      recentFileItems = recent.map((f) => createFilePick(root, f.uri, f.name))
+      recentFileItems = recent.map((f) => this._createFilePick(root, f.uri, f.name))
       // Only seed the list if the user hasn't started typing a query yet.
       if (picker.value.trim().length === 0) picker.items = emptyQueryItems()
     })
@@ -827,15 +932,15 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     picker.filterMode = 'fuzzyKeepOrder'
     picker.placeholder = localize('quickInput.openRecentFile.placeholder', 'Open Recent File…')
 
-    const editorPicks = this._buildEditorCandidates(undefined).map((c) => c.pick)
+    const editorCandidates = this._buildEditorCandidates(undefined)
     // Panel-side filtering here (no `filterExternally`), so views are part of the
     // item list rather than appearing only once a query is typed. Harmless with
     // no workspace open: the list is short, and views are then the main thing
     // worth switching to. Editors and views interleave by recency (mirroring the
     // workspace branch), then recent files follow.
-    const viewPicks = this._buildViewCandidates().map((c) => c.pick)
-    const headPickById = new Map<string, IQuickPickItem>()
-    for (const p of [...editorPicks, ...viewPicks]) headPickById.set(p.id, p)
+    const viewCandidates = this._buildViewCandidates()
+    const headPickByKey = new Map<string, IQuickPickItem>()
+    for (const c of [...editorCandidates, ...viewCandidates]) headPickByKey.set(c.key, c.pick)
 
     const interleavedHead = (): IQuickPickItem[] => {
       const seen = new Set<string>()
@@ -843,15 +948,15 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       for (const target of this._recentTargets.getRecentTargets({
         includeClosedEditors: true,
       })) {
-        const id = recentTargetPickId(target)
-        if (seen.has(id)) continue
-        const pick = headPickById.get(id)
+        const key = recentTargetKey(this._uriIdentity, target)
+        if (seen.has(key)) continue
+        const pick = headPickByKey.get(key)
         if (!pick) continue
-        seen.add(id)
+        seen.add(key)
         out.push(pick)
       }
-      for (const p of headPickById.values()) {
-        if (!seen.has(p.id)) out.push(p)
+      for (const [key, pick] of headPickByKey) {
+        if (!seen.has(key)) out.push(pick)
       }
       return out
     }
@@ -867,7 +972,7 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
 
     void this._recentFiles.getAll().then((all) => {
       if (token.isCancellationRequested) return
-      const headIds = new Set(headPickById.keys())
+      const headKeys = new Set(headPickByKey.keys())
       const recentPicks = all
         .map((f) => ({
           id: f.uri.toString(),
@@ -875,7 +980,7 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
           description: displayPath(f.uri),
           iconId: resourceIconId(f.uri),
         }))
-        .filter((it) => !headIds.has(it.id))
+        .filter((it) => !headKeys.has(identityKey(this._uriIdentity, it.id)))
       picker.items = [...interleavedHead(), ...recentPicks]
     })
   }

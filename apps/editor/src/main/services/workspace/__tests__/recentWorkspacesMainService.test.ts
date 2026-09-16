@@ -161,4 +161,24 @@ describe('RecentWorkspacesMainService', () => {
     expect(recent[0]?.folder.authority).toBe('wsl+ubuntu-24.04')
     svc.dispose()
   })
+
+  it('collapses a persisted folder stored under both drive-letter cases', async () => {
+    const storage = makeStorage({
+      [RECENT_WORKSPACES_STORAGE_KEY]: [
+        { folder: URI.file('e:/proj').toJSON(), name: 'stale', lastOpened: 100 },
+        { folder: URI.file('E:/proj').toJSON(), name: 'proj', lastOpened: 200 },
+      ],
+    })
+    const svc = new RecentWorkspacesMainService(storage)
+
+    const recent = await svc.getRecent()
+    expect(recent).toHaveLength(1)
+    expect(recent[0]).toMatchObject({ name: 'proj' })
+    expect(recent[0]?.folder.toString()).toBe('file:///E:/proj')
+    // Scrubbed on the way in, so the menu does not show it twice next launch.
+    expect(storage.store[RECENT_WORKSPACES_STORAGE_KEY]).toEqual([
+      { folder: URI.file('E:/proj').toJSON(), name: 'proj', lastOpened: 200 },
+    ])
+    svc.dispose()
+  })
 })

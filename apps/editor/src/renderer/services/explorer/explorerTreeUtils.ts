@@ -5,15 +5,21 @@
  *  Kept separate so the service file focuses on tree state + IFileService /
  *  IFileWatcherService orchestration. These helpers compare URIs by their
  *  string form on purpose: the renderer receives URIs across an IPC boundary,
- *  so reference equality cannot be relied on.
+ *  so reference equality cannot be relied on. That only works while there is
+ *  one canonical spelling per resource, which is what `normalizeUri` is for.
  *--------------------------------------------------------------------------------------------*/
 
-import { URI } from '@universe-editor/platform'
+import { URI, canonicalizeFileUri } from '@universe-editor/platform'
 
-/** Normalize Windows drive letter to lowercase. No-op on non-Windows paths. */
+/**
+ * Canonical form of a resource URI for every comparison this module makes — see
+ * {@link canonicalizeFileUri}, which folds the Windows drive letter the same way
+ * a workspace folder URI is folded. Tree URIs therefore share one spelling with
+ * the folder they live under, so an effort that derives a file's identity from
+ * the root (the Ctrl+P listing does) agrees with the one the Explorer opens.
+ */
 export function normalizeUri(uri: URI): URI {
-  const path = uri.path.replace(/^\/([A-Za-z]):/, (_, d: string) => `/${d.toLowerCase()}:`)
-  return path !== uri.path ? uri.with({ path }) : uri
+  return canonicalizeFileUri(uri)
 }
 
 export function parentOf(resource: URI): URI | null {

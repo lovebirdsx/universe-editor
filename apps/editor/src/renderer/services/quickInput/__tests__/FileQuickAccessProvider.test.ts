@@ -30,6 +30,7 @@ import {
   IUriIdentityService,
   ViewContainerLocation,
   type CancellationToken,
+  type HostPlatform,
   type IEditorGroup,
   type IEditorResolverService as IEditorResolverServiceType,
   type IDisposable,
@@ -434,6 +435,10 @@ function setup(
     views?: readonly IViewDescriptor[]
     /** Full interleaved MRU order overriding the default editors-first order. */
     recentTargetsOrder?: readonly RecentTarget[]
+    /** Host platform the injected IUriIdentityService is bound to. Windows
+     *  drive-letter case only folds on a case-insensitive host, so the
+     *  drive-case scenarios below must bind 'win32'. */
+    platform?: HostPlatform
   } = {},
 ) {
   const root = opts.root === undefined ? URI.file('/ws') : opts.root
@@ -472,7 +477,7 @@ function setup(
   services.set(ILayoutService, layout as unknown as ILayoutService)
   services.set(IExcludeService, opts.exclude ?? new FakeExcludeService())
   services.set(IFocusScopeService, opts.focus ?? new FakeFocusScopeService())
-  services.set(IUriIdentityService, new UriIdentityService('linux'))
+  services.set(IUriIdentityService, new UriIdentityService(opts.platform ?? 'linux'))
   services.set(ILoggerService, { createLogger: () => new NullLogger() } as never)
   services.set(IFileService, makeFileService(opts.existingFiles))
   const resolver = new FakeEditorResolverService()
@@ -1273,6 +1278,140 @@ describe('FileQuickAccessProvider — truncated listing (main-search fallback)',
     await new Promise((resolve) => setTimeout(resolve, 300))
     expect(fileSearch.calls).toHaveLength(1)
     expect(picker.items.map((i) => (i as IQuickPickItem).label)).toEqual(['a.ts'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Windows drive-letter case. The Explorer folds the drive letter to upper case
+// (explorerTreeUtils.normalizeUri) while files opened before that fold — and
+// every URI persisted by an older build — kept whatever the folder dialog
+// returned. The same file therefore has two text forms, and any identity check
+// that compares raw URI strings sees two different files: one row from the
+// listing (relative description) and one from the open editor (whose relative
+// computation fell back to the absolute path).
+// ---------------------------------------------------------------------------
+
+describe('FileQuickAccessProvider — Windows drive-letter case', () => {
+  const ROOT = URI.file('E:/Sample Work')
+  const REL = 'Source/Config/BranchDefine.json'
+  const LISTING_PATH = 'E:/Sample Work/Source/Config/BranchDefine.json'
+  /** Lower-case drive: the form the Explorer hands to the editor and records in
+   *  the recent list. */
+  const EDITOR_RESOURCE = URI.file('e:/Sample Work/Source/Config/BranchDefine.json')
+
+  beforeEach(() => {
+    invalidateMentionFileCache()
+  })
+  afterEach(() => {
+    invalidateMentionFileCache()
+  })
+
+  it('shows one row while typing: the open editor, described by its relative path', async () => {
+    const editor = new FakeEditorInput('file', EDITOR_RESOURCE, 'BranchDefine.json')
+    const { provider, fileSearch } = setup({
+      root: ROOT,
+      platform: 'win32',
+      openEditors: [editor],
+    })
+    fileSearch.resultPaths = [LISTING_PATH]
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    picker.fireValue('brachde')
+
+    expect(picker.items).toHaveLength(1)
+    expect(picker.items[0]).toMatchObject({
+      id: EDITOR_RESOURCE.toString(),
+      label: 'BranchDefine.json',
+      description: REL,
+    })
+  })
+
+  it('collapses an open editor and its recent entry on the empty query', async () => {
+    const editor = new FakeEditorInput('file', EDITOR_RESOURCE, 'BranchDefine.json')
+    const recent: IRecentFile[] = [
+      { uri: URI.file(LISTING_PATH), name: 'BranchDefine.json', lastOpened: 1 },
+    ]
+    const { provider } = setup({ root: ROOT, platform: 'win32', openEditors: [editor], recent })
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    expect(picker.items).toHaveLength(1)
+    expect(picker.items[0]).toMatchObject({ id: EDITOR_RESOURCE.toString(), description: REL })
+  })
+
+  it('does not add a second row for an exact-path probe of an open file', async () => {
+    const editor = new FakeEditorInput('file', EDITOR_RESOURCE, 'BranchDefine.json')
+    const { provider, fileSearch } = setup({
+      root: ROOT,
+      platform: 'win32',
+      openEditors: [editor],
+      existingFiles: [LISTING_PATH],
+    })
+    fileSearch.resultPaths = [LISTING_PATH]
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    // The typed absolute path is spelled the way the listing spells it — the
+    // other drive-letter case than the editor's.
+    picker.fireValue(LISTING_PATH)
+    await flushPromises()
+
+    expect(picker.items).toHaveLength(1)
+    expect(picker.items[0]).toMatchObject({ description: REL })
+  })
+
+  it('collapses an open editor with the fallback-search hit for the same file', async () => {
+    const editor = new FakeEditorInput('file', EDITOR_RESOURCE, 'BranchDefine.json')
+    const { provider, fileSearch } = setup({
+      root: ROOT,
+      platform: 'win32',
+      openEditors: [editor],
+    })
+    fileSearch.resultPaths = [LISTING_PATH]
+    // Truncated warm-up walk: the cached listing is dropped whole, so the only
+    // local rows are the editors and every file row comes from the fallback.
+    fileSearch.truncateAt = 0
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    // Must be a substring of the path, not just a fuzzy-subsequence of it: the
+    // fallback search filters by `includes`, so `brachde` would return no hit at
+    // all and this case would pass without ever merging two rows.
+    picker.fireValue('branch')
+    await vi.waitFor(() => expect(fileSearch.calls).toHaveLength(2))
+    await vi.waitFor(() => expect(picker.busy).toBe(false))
+
+    expect(picker.items).toHaveLength(1)
+    expect(picker.items[0]).toMatchObject({
+      id: EDITOR_RESOURCE.toString(),
+      description: REL,
+    })
+  })
+
+  it('keeps the open editor row (not the listing row) for a file that is both', async () => {
+    const editor = new FakeEditorInput('file', URI.file('/ws/src/a.ts'), 'a.ts')
+    const { provider, fileSearch } = setup({ openEditors: [editor] })
+    fileSearch.resultPaths = ['/ws/src/a.ts']
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    picker.fireValue('a.ts')
+
+    // The editor row carries the resource URI as its pick id; a listing row
+    // would carry the same string here, so assert the description as well —
+    // losing the editor row would route activation away from the closed-stack
+    // restore path used for custom editors.
+    expect(picker.items).toHaveLength(1)
+    expect(picker.items[0]).toMatchObject({
+      id: URI.file('/ws/src/a.ts').toString(),
+      description: 'src/a.ts',
+    })
   })
 })
 

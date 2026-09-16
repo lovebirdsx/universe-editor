@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   Emitter,
   PartId,
+  UriIdentityService,
   ViewContainerLocation,
   ViewContainerRegistry,
   ViewRegistry,
@@ -184,6 +185,7 @@ describe('focus → MRU link (SearchView scenario)', () => {
         stack,
         emptyStorage(),
         null!,
+        new UriIdentityService('linux'),
       )
       try {
         // Pre-condition: no focus yet → registration order (search registered first).

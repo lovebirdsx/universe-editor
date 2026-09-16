@@ -2,6 +2,7 @@ import { basename } from 'node:path'
 import { URI, type IWorkspace, type UriComponents } from '@universe-editor/platform'
 import type { Storage } from './storage.js'
 import { validateWindowState, type IWindowState } from './windowState.js'
+import { canonicalizeWorkspaceFolderUri } from './services/remote/remoteUri.js'
 
 export const WINDOWS_SESSION_STORAGE_KEY = 'workbench.windowsState'
 
@@ -71,8 +72,13 @@ export function serializeWindow(
 
 function reviveWorkspace(raw: PersistedWorkspace | null): IWorkspace | null {
   if (!raw || !raw.folder) return null
-  const folder = URI.revive(raw.folder)
-  if (!folder) return null
+  const revived = URI.revive(raw.folder)
+  if (!revived) return null
+  // Canonicalize on the way in: `restoreSession` derives a workspace id from
+  // this URI to decide which windows to restore, so a session file written by a
+  // build that spelled the folder differently would restore the same folder
+  // into two windows.
+  const folder = canonicalizeWorkspaceFolderUri(revived)
   return { folder, name: raw.name || basename(folder.fsPath) || folder.fsPath }
 }
 

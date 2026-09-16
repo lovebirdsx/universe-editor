@@ -2,6 +2,7 @@ import {
   Disposable,
   IFileService,
   IStorageService,
+  IUriIdentityService,
   StorageScope,
   URI,
   createDecorator,
@@ -42,9 +43,20 @@ export class RecentFilesService extends Disposable implements IRecentFilesServic
   constructor(
     @IStorageService private readonly _storage: IStorageService,
     @IFileService private readonly _fileService: IFileService,
+    @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
   ) {
     super()
     this._register(this._storage.onDidChangeWorkspaceScope(() => this._reset()))
+  }
+
+  /**
+   * Resource identity for the list. Raw `toString()` would keep two entries for
+   * one file whose URI is spelled two ways — the Explorer folds the Windows
+   * drive letter, URIs persisted by older builds did not — and the picker shows
+   * one row per entry.
+   */
+  private _key(uri: URI): string {
+    return this._uriIdentity.getComparisonKey(uri)
   }
 
   private _ensureLoaded(): Promise<void> {
@@ -65,14 +77,23 @@ export class RecentFilesService extends Disposable implements IRecentFilesServic
     // here, which reopened after a restart as empty text tabs labelled by guid.
     // remote-ssh entries are filesystem-backed and must survive the scrub.
     const files = loaded.filter((l) => isFileSystemUri(l.uri))
-    // Keep items already in-memory (added in this session before load completed).
-    // Fill in from storage for URIs we don't have yet.
-    const known = new Set(this._items.map((i) => i.uri.toString()))
-    this._items = [...this._items, ...files.filter((l) => !known.has(l.uri.toString()))].slice(
-      0,
-      MAX_ITEMS,
-    )
-    if (files.length !== loaded.length) {
+    // Keep items already in-memory (added in this session before load completed)
+    // first, then fill in from storage — one entry per file. The merge dedupes
+    // within the persisted list too, not just against memory: a list written by
+    // a build that compared raw URI strings can already hold the same file
+    // twice, and the picker would keep showing both rows.
+    const merged: IRecentFile[] = []
+    const seen = new Set<string>()
+    for (const item of [...this._items, ...files]) {
+      const key = this._key(item.uri)
+      if (seen.has(key)) continue
+      seen.add(key)
+      merged.push(item)
+    }
+    const rewrite =
+      files.length !== loaded.length || merged.length !== this._items.length + files.length
+    this._items = merged.slice(0, MAX_ITEMS)
+    if (rewrite) {
       const data: PersistedRecentFile[] = this._items.map((i) => ({
         uri: i.uri.toJSON(),
         name: i.name,
@@ -89,8 +110,8 @@ export class RecentFilesService extends Disposable implements IRecentFilesServic
     // remote (remote-ssh) filesystem resources both count as files.
     if (!isFileSystemUri(uri)) return
     const entry: IRecentFile = { uri, name, lastOpened: Date.now() }
-    const uriStr = uri.toString()
-    this._items = [entry, ...this._items.filter((i) => i.uri.toString() !== uriStr)].slice(
+    const key = this._key(uri)
+    this._items = [entry, ...this._items.filter((i) => this._key(i.uri) !== key)].slice(
       0,
       MAX_ITEMS,
     )
@@ -106,10 +127,10 @@ export class RecentFilesService extends Disposable implements IRecentFilesServic
       // exists 出错时保守保留，避免临时 IO 错误误删
       snapshot.map((i) => this._fileService.exists(i.uri).catch(() => true)),
     )
-    const dead = new Set(snapshot.filter((_, idx) => !checks[idx]).map((i) => i.uri.toString()))
+    const dead = new Set(snapshot.filter((_, idx) => !checks[idx]).map((i) => this._key(i.uri)))
     if (dead.size > 0) {
       // 基于 uri 集合移除，而非索引：检查期间若有 add() prepend 新项不会被误删
-      this._items = this._items.filter((i) => !dead.has(i.uri.toString()))
+      this._items = this._items.filter((i) => !dead.has(this._key(i.uri)))
       void this._persist()
     }
     return this._items

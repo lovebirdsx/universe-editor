@@ -86,6 +86,15 @@ describe('windowsSession', () => {
     expect(list[0]?.remoteAuthority).toBeUndefined()
   })
 
+  it('canonicalizes a restored folder so one workspace cannot fork into two windows', async () => {
+    // `restoreSession` derives the workspace id from this URI; a session file
+    // written before the drive-letter fold landed spells the same folder with a
+    // lower-case drive, which would restore it as a second window.
+    const persisted = serializeWindow({ folder: URI.file('e:/proj'), name: 'proj' }, validUi, false)
+    const list = await loadSession(makeStorage([persisted]))
+    expect(list[0]?.workspace?.folder.toString()).toBe('file:///E:/proj')
+  })
+
   it('returns [] for missing / non-array values', async () => {
     expect(await loadSession(makeStorage())).toEqual([])
     expect(await loadSession(makeStorage(null))).toEqual([])

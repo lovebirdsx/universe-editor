@@ -9,9 +9,11 @@ import {
   IEditorGroupsService,
   IFileService,
   IStorageService,
+  IUriIdentityService,
   InstantiationService,
   ServiceCollection,
   URI,
+  UriIdentityService,
   registerAction2,
   type EditorInput,
   type IEditorGroup,
@@ -205,6 +207,9 @@ function buildService(storage: FakeStorage, fileService?: IFileServiceType): Rec
   const services = new ServiceCollection()
   services.set(IStorageService, storage)
   services.set(IFileService, fileService ?? makeRecentFilesFileService())
+  // 'win32' so the drive-letter scenarios below exercise the real identity
+  // policy; the drive fold in getComparisonKey is platform-independent anyway.
+  services.set(IUriIdentityService, new UriIdentityService('win32'))
   const inst = new InstantiationService(services)
   return inst.createInstance(RecentFilesService)
 }
@@ -265,6 +270,33 @@ describe('RecentFilesService', () => {
     expect(items).toHaveLength(2)
     expect(items[0]?.uri.toString()).toBe(uriA.toString())
     expect(items[1]?.uri.toString()).toBe(uriB.toString())
+  })
+
+  // The Explorer folds the Windows drive letter while URIs persisted by an
+  // older build did not, so one file can arrive spelled two ways. Two entries
+  // would mean two rows in the picker and two existence probes per getAll().
+  it('add() treats two drive-letter spellings of one file as one entry', async () => {
+    const svc = buildService(new FakeStorage())
+    svc.add(URI.file('e:/ws/a.ts'), 'a.ts')
+    svc.add(URI.file('E:/ws/a.ts'), 'a.ts')
+    const items = await svc.getAll()
+    expect(items).toHaveLength(1)
+    expect(items[0]?.uri.toString()).toBe(URI.file('E:/ws/a.ts').toString())
+  })
+
+  it('load merges persisted entries that differ only in drive-letter case', async () => {
+    const storage = new FakeStorage()
+    storage.seed('workbench.recentFiles', [
+      { uri: URI.file('e:/ws/a.ts').toJSON(), name: 'a.ts', lastOpened: 2 },
+      { uri: URI.file('E:/ws/a.ts').toJSON(), name: 'a.ts', lastOpened: 1 },
+      { uri: URI.file('/ws/b.ts').toJSON(), name: 'b.ts', lastOpened: 1 },
+    ])
+    const svc = buildService(storage)
+    const items = await svc.getAll()
+    expect(items.map((i) => i.name)).toEqual(['a.ts', 'b.ts'])
+    // The first occurrence wins, so the surviving entry keeps the spelling the
+    // list already had.
+    expect(items[0]?.uri.toString()).toBe(URI.file('e:/ws/a.ts').toString())
   })
 
   it('add() persists to storage', async () => {

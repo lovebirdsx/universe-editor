@@ -11,6 +11,7 @@ import {
   GroupDirection,
   PartId,
   URI,
+  UriIdentityService,
   ViewContainerLocation,
   type IFocusEntry,
   type IFocusStackService,
@@ -223,6 +224,7 @@ function makeService(
     focus as unknown as IFocusStackService,
     storage,
     null!,
+    new UriIdentityService('win32'),
   )
   svc._setPersistDebounceMsForTests(0)
   return {
@@ -641,6 +643,27 @@ describe('RecentTargetsService — persisted history', () => {
       kind: 'editor',
       group: { id: groups.activeGroup.id },
     })
+    h.dispose()
+  })
+
+  it('folds a persisted entry spelled with the other drive case onto the live editor', async () => {
+    const storage = new FakeStorage()
+    const a = new StableInput('file:///E:/ws/a.ts')
+    // The build that wrote this history folded the drive letter down, so the
+    // persisted slot names the same file by a different string.
+    storage.seed(STORAGE_KEY, [persistedEditor(new StableInput('file:///e:/ws/a.ts'))])
+
+    const groups = new EditorGroupsService()
+    const h = makeService(undefined, groups, storage)
+    groups.restore(restoreGrid([a]).toJSON())
+    await flush()
+    h.svc.rebaseAfterRestore()
+
+    // One slot, naming the editor the grid holds — neither a dead slot under the
+    // old spelling nor a second slot beside the live one.
+    expect(keysOf(h.svc, { includeClosedEditors: true })).toEqual([
+      encodeEditorPickId(groups.activeGroup.id, a.id),
+    ])
     h.dispose()
   })
 

@@ -15,13 +15,13 @@ const winFileLower = URI.from({ scheme: 'file', path: '/c:/workspace/src/index.t
 const outside = URI.from({ scheme: 'file', path: '/C:/other/file.ts' })
 
 describe('normalizeUri', () => {
-  it('lowercases Windows drive letter', () => {
-    expect(normalizeUri(winRoot).path).toBe('/c:/workspace')
-    expect(normalizeUri(winRootLower).path).toBe('/c:/workspace')
+  it('uppercases the Windows drive letter', () => {
+    expect(normalizeUri(winRoot).path).toBe('/C:/workspace')
+    expect(normalizeUri(winRootLower).path).toBe('/C:/workspace')
   })
 
   it('returns same instance when path unchanged', () => {
-    expect(normalizeUri(winRootLower)).toBe(winRootLower)
+    expect(normalizeUri(winRoot)).toBe(winRoot)
   })
 
   it('leaves non-Windows paths unchanged', () => {

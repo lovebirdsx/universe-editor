@@ -23,7 +23,7 @@ import {
   type UriComponents,
 } from '@universe-editor/platform'
 import { workspaceIdFromUri } from '../../storage.js'
-import { normalizeRemoteUri } from '../remote/remoteUri.js'
+import { canonicalizeWorkspaceFolderUri } from '../remote/remoteUri.js'
 import type { RecentWorkspacesMainService } from './recentWorkspacesMainService.js'
 
 export interface IFolderDialog {
@@ -129,7 +129,7 @@ export class WorkspaceMainService implements IWorkspaceServiceWire, IDisposable 
     } else {
       resolved = reviveUri(folder)
     }
-    resolved = normalizeRemoteUri(resolved)
+    resolved = canonicalizeWorkspaceFolderUri(resolved)
     await this._hydrate()
     const workspace = makeWorkspace(resolved)
     const workspaceId = workspaceIdFromUri(workspace.folder.toString())
@@ -189,7 +189,7 @@ export class WorkspaceMainService implements IWorkspaceServiceWire, IDisposable 
    * stale relative to folders opened explicitly via Open Folder/Open Recent.
    */
   async restoreCurrent(workspace: IWorkspace): Promise<void> {
-    const folder = normalizeRemoteUri(workspace.folder)
+    const folder = canonicalizeWorkspaceFolderUri(workspace.folder)
     const canonical: IWorkspace = { folder, name: workspace.name }
     await this._storage.switchWorkspace(workspaceIdFromUri(folder.toString()))
     this._current = canonical
