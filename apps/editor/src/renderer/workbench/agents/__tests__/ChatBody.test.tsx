@@ -62,6 +62,7 @@ import {
 } from '../../../services/acp/session/acpChatWidgetService.js'
 import { AcpChatViewStateCache } from '../../../services/acp/session/acpChatViewStateCache.js'
 import { AcpSessionOutlineRegistry } from '../../../services/acp/session/acpSessionOutlineRegistry.js'
+import { memoryTrimmedNotice } from '../../../services/acp/session/acpSession.js'
 import type { SessionConfigOption } from '@agentclientprotocol/sdk'
 import { ChatBody } from '../ChatBody.js'
 import { AcpSessionEditorInput } from '../../../services/acp/session/acpSessionEditorInput.js'
@@ -2453,5 +2454,34 @@ describe('ChatBody — sub-agent keyboard navigation', () => {
       controller.scrollToKey('t:gone/m:sm1')
     })
     expect(container.querySelector('[data-testid="acp-subagent-timeline"]')).toBeNull()
+  })
+})
+
+describe('ChatBody — memory-trimmed message bodies', () => {
+  const items: readonly TimelineItem[] = [
+    {
+      kind: 'message',
+      id: 't',
+      message: { ...makeMessage('t', 'the surviving opening'), memoryTrimmed: true },
+    },
+    { kind: 'message', id: 'n', message: makeMessage('n', 'untouched reply') },
+  ]
+
+  it('marks the body as a surviving preview rather than passing the notice off as the message', () => {
+    // The whole point of the marker: a reader scrolling back must not mistake a
+    // clamped old reply for the complete one, and the notice must never be what
+    // the message itself says.
+    const { container, getByTestId } = renderChat(makeSession('s1', items))
+
+    expect(getByTestId('acp-message-memory-trimmed').textContent).toBe(memoryTrimmedNotice())
+    // The preview is still there — the notice explains it, it does not replace it.
+    expect(slotEl(container, 'm:t').textContent).toContain('the surviving opening')
+  })
+
+  it('leaves an untouched message unmarked', () => {
+    const { container } = renderChat(makeSession('s1', items))
+    const untouched = slotEl(container, 'm:n')
+    expect(untouched.querySelector('[data-testid="acp-message-memory-trimmed"]')).toBeNull()
+    expect(untouched.textContent).toContain('untouched reply')
   })
 })

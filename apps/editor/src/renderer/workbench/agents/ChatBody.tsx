@@ -48,6 +48,7 @@ import {
 import {
   firstLineSummary,
   hasVisibleMessageContent,
+  memoryTrimmedNotice,
   timelineItemToText,
 } from '../../services/acp/session/acpSession.js'
 import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
@@ -1934,6 +1935,15 @@ const TimelineSlot = memo(function TimelineSlot({
             'data-sticky-depth': '0',
           }}
         >
+          {/* The body below is the surviving preview, not the whole message: say
+           *  so, or a reader scrolling back takes a clamped old reply for the
+           *  complete one. Rendered ahead of the content so the caveat is read
+           *  before the text it applies to. */}
+          {m.memoryTrimmed === true && (
+            <div className={styles['memoryTrimmedNotice']} data-testid="acp-message-memory-trimmed">
+              {memoryTrimmedNotice()}
+            </div>
+          )}
           {isUser ? (
             <UserMessageItem
               blocks={m.blocks}

@@ -837,8 +837,8 @@
   color: var(--vscode-agent-messageRoleForeground, #888);
 }
 
-/* 卡片内的短提示条：内存保护修剪后的占位提示 / 本地 settle 说明（cancelled）。 */
-.toolCallMemoryTrimmed,
+/* 卡片 / 消息内的短提示条：内存保护修剪后的占位提示 / 本地 settle 说明（cancelled）。 */
+.memoryTrimmedNotice,
 .toolCallSettleReason {
   margin: 4px 0 0;
   padding: 6px 8px;

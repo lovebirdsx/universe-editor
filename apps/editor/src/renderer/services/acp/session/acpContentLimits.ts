@@ -220,10 +220,28 @@ export const REPLAY_INGESTION_BUDGET = 256 * 1024 * 1024
  * Live-run resident budget (non-replay). A running turn has no replay gate, so
  * a single long Grep/Read session can accumulate hundreds of tool cards each
  * retaining up to 1MB of terminal output — enough to OOM the renderer. Once the
- * live view model's retained content passes this, the oldest heavy tool-call /
- * message content is trimmed in place (see `AcpSession._trimLiveResidentContent`).
+ * live view model's retained content passes this, heavy content is released in
+ * place — largest releases first, and user messages never (see
+ * `AcpSession._trimLiveResidentContent`).
  */
 export const LIVE_INGESTION_BUDGET = 256 * 1024 * 1024
+
+/**
+ * Smallest release a live trim will make. Freeing a few hundred bytes off one
+ * early message cannot pull a megabyte-scale overrun back under budget — the
+ * loop would go on to release the heavy cards anyway — so a candidate below
+ * this floor stays resident until every larger one is gone (the second trim
+ * pass relaxes the floor to 0).
+ */
+export const TRIM_MIN_RELEASE_BYTES = 4 * 1024
+
+/**
+ * Characters of its original text a trimmed message keeps. The opening is what
+ * makes a message recognisable when scrolling back, and it costs a fraction of
+ * a percent of what the trim releases — far less than the notice that used to
+ * take over the whole body.
+ */
+export const MESSAGE_TRIM_PREVIEW_CHARS = 200
 
 /**
  * Caps on agent-reported metadata lists. Unlike timeline content these are

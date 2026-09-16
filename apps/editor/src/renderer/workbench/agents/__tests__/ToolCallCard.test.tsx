@@ -25,6 +25,7 @@ import type {
   AcpToolCall,
   AcpToolCallStatus,
 } from '../../../services/acp/session/acpSessionService.js'
+import { memoryTrimmedNotice } from '../../../services/acp/session/acpSession.js'
 import { ToolCallCard } from '../ToolCallCard.js'
 import { ServicesContext } from '../../useService.js'
 import {
@@ -746,5 +747,14 @@ describe('ToolCallCard', () => {
       expect(screen.queryByTestId('acp-toolcall-open-preview')).toBeNull()
       expect(screen.queryByTestId('acp-toolcall-open-file')).toBeNull()
     })
+  })
+})
+
+describe('ToolCallCard — memory-trimmed cards', () => {
+  it('shows the notice in place of the released body', () => {
+    renderCard(makeCall({ memoryTrimmed: true }))
+    expect(screen.getByTestId('acp-toolcall-memory-trimmed').textContent).toBe(
+      memoryTrimmedNotice(),
+    )
   })
 })

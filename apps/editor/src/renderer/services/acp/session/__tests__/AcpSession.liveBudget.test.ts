@@ -1,21 +1,26 @@
 /*---------------------------------------------------------------------------------------------
  *  Live resident budget: outside of a history replay there is no ingest gate,
  *  so a long-running turn can accumulate hundreds of tool cards each retaining
- *  up to 1MB of terminal output. Once the tally passes the budget the OLDEST
- *  heavy content is trimmed in place (card shell kept, marked `memoryTrimmed`),
- *  so the newest output always lands and the renderer cannot OOM. Budgets are
- *  injected small so the trim path is exercised cheaply, and are expressed in
+ *  up to 1MB of terminal output. Once the tally passes the budget, heavy
+ *  content is trimmed in place (card shell kept, a message keeps its opening as
+ *  a preview, marked `memoryTrimmed`), so the newest output always lands and the
+ *  renderer cannot OOM. Releases go largest-first rather than strictly
+ *  oldest-first, and **user messages are never released** — the opening prompt
+ *  is the anchor the whole conversation is read against and a rounding error
+ *  next to the tool output that actually fills the budget. Budgets are injected
+ *  small so the trim path is exercised cheaply, and are expressed in
  *  overhead-adjusted bytes (wire bytes × VIEW_MODEL_OVERHEAD_FACTOR).
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { NoopTelemetryService } from '@universe-editor/platform'
 import type { SessionUpdate } from '@agentclientprotocol/sdk'
-import { AcpSession, memoryTrimmedNotice } from '../acpSession.js'
+import { AcpSession } from '../acpSession.js'
 import { AcpResidentBudget } from '../acpResidentBudget.js'
 import {
   MAX_ORPHAN_PARENT_ENTRIES,
   MAX_TOOL_CALL_PARENT_ENTRIES,
+  MESSAGE_TRIM_PREVIEW_CHARS,
   USER_PROMPT_MEDIA_CAP,
   VIEW_MODEL_OVERHEAD_FACTOR,
   estimateUpdateCost,
@@ -192,25 +197,76 @@ describe('AcpSession — live resident budget', () => {
     expectTallyMatchesMeasurement(session)
   })
 
-  it('trims old heavy messages when they are the oldest content', () => {
+  it('trims an old heavy message to its opening, then still reaches the card behind it', () => {
     session = createSession()
     vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     // 500 chars → 2000 wire bytes (block + text copy) → 6000 charged; then a
     // 4800-byte tool card pushes the tally to 10800 > 6144 → the older message
-    // is trimmed.
+    // is trimmed. It keeps a preview, so the release (3600) does not cover the
+    // overrun on its own and the card behind it goes too: the tally a trim
+    // decrements must be what it actually freed, not what the message held.
     session.applyUpdate(agentTextChunk('a'.repeat(500)))
     session.applyUpdate(terminalToolCall('tc-a', 'x'.repeat(800)))
 
     const messages = session.messages.get()
     expect(messages).toHaveLength(1)
     expect(messages[0]?.memoryTrimmed).toBe(true)
-    expect(messages[0]?.text).toBe(memoryTrimmedNotice())
+    // The opening survives: the notice explaining the release is the renderer's
+    // job, never the message's own text.
+    expect(messages[0]?.text).toBe('a'.repeat(MESSAGE_TRIM_PREVIEW_CHARS))
+    expect(messages[0]?.blocks).toEqual([
+      { type: 'text', text: 'a'.repeat(MESSAGE_TRIM_PREVIEW_CHARS) },
+    ])
 
     const calls = session.toolCalls.get()
     expect(calls).toHaveLength(1)
-    expect(calls[0]?.memoryTrimmed).toBeUndefined()
-    expect(calls[0]?.text).toBe('x'.repeat(800))
+    expect(calls[0]?.memoryTrimmed).toBe(true)
+    expectTallyMatchesMeasurement(session)
+  })
+
+  it('releases the heavy card behind a short message rather than the message itself', () => {
+    // 300 chars → 3600 charged: under the release floor, so on its own it is not
+    // worth releasing. The card behind it (4800) is what pushes the tally over
+    // 6144, and it is what goes — the early message stays readable instead of
+    // being traded for a few hundred bytes.
+    session = createSession()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    session.applyUpdate(agentTextChunk('a'.repeat(300)))
+    session.applyUpdate(terminalToolCall('tc-a', 'x'.repeat(800)))
+
+    const messages = session.messages.get()
+    expect(messages[0]?.memoryTrimmed).toBeUndefined()
+    expect(messages[0]?.text).toBe('a'.repeat(300))
+
+    const calls = session.toolCalls.get()
+    expect(calls[0]?.memoryTrimmed).toBe(true)
+    expectTallyMatchesMeasurement(session)
+  })
+
+  it('releases surrounding content before the user prompt that opened the session', () => {
+    // The prompt sits at the head of the timeline, so oldest-first reached it
+    // before anything else. It is the anchor the whole conversation is read
+    // against: the cards behind it go instead.
+    session = createSession()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    void session.sendPrompt('hello')
+    session.applyUpdate(terminalToolCall('tc-a', 'x'.repeat(800)))
+    session.applyUpdate(terminalToolCall('tc-b', 'y'.repeat(800)))
+
+    const messages = session.messages.get()
+    expect(messages[0]?.role).toBe('user')
+    expect(messages[0]?.memoryTrimmed).toBeUndefined()
+    expect(messages[0]?.text).toContain('hello')
+
+    const calls = session.toolCalls.get()
+    expect(calls[0]?.memoryTrimmed).toBe(true)
+    // The newest output always survives — that is the point of trimming at all.
+    expect(calls[1]?.memoryTrimmed).toBeUndefined()
+    expect(calls[1]?.text).toBe('y'.repeat(800))
+    expectTallyMatchesMeasurement(session)
   })
 
   it('does not trim anything while the live tally is under budget', () => {
@@ -245,7 +301,10 @@ describe('AcpSession — live resident budget', () => {
 
     const messages = session.messages.get()
     expect(messages[0]?.memoryTrimmed).toBe(true)
-    expect(session.toolCalls.get()[0]?.memoryTrimmed).toBeUndefined()
+    // The replayed message keeps a preview, so the card that pushed the total
+    // over is reached next.
+    expect(session.toolCalls.get()[0]?.memoryTrimmed).toBe(true)
+    expectTallyMatchesMeasurement(session)
   })
 
   it('trims sub-agent children so their charged bytes are actually released', () => {
@@ -284,11 +343,12 @@ describe('AcpSession — live resident budget', () => {
     session = createSession()
     vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    // 100 chars → 600 charged for the card, 1200 for the message (block + text
-    // copy); the 450-char top-level message adds 5400 → 7200 > 6144. Trimming the
-    // card alone leaves 6600, so the loop reaches the child message next.
+    // 100 chars → 600 charged for the card, 4800 for the child message (block +
+    // text copy); the 450-char top-level message adds 5400 → 10800 > 6144. The
+    // card is released first — its charge includes the child, so both go — and
+    // the child message is left holding its preview.
     session.applyUpdate(terminalToolCall('parent', 'p'.repeat(100)))
-    session.applyUpdate(childTextChunk('parent', 'sub '.repeat(25)))
+    session.applyUpdate(childTextChunk('parent', 'sub '.repeat(100)))
     expect(childMessagesOf(session, 'parent')[0]?.live).toBe(true)
 
     session.applyUpdate(agentTextChunk('x'.repeat(450)))
@@ -296,6 +356,7 @@ describe('AcpSession — live resident budget', () => {
     const child = childMessagesOf(session, 'parent')[0]
     expect(child?.memoryTrimmed).toBe(true)
     expect(child?.live).toBeUndefined()
+    expect(child?.text).toBe('sub '.repeat(100).slice(0, MESSAGE_TRIM_PREVIEW_CHARS))
   })
 
   it('keeps a trimmed edit card’s diff path while releasing both text sides', () => {
@@ -436,7 +497,12 @@ describe('AcpSession — accounting gaps', () => {
     expect(budget.totalBytes()).toBeGreaterThan(before)
   })
 
-  it('releases a charged user message rather than leaving the tally high', async () => {
+  it('keeps a charged user message resident even when that leaves the tally over', async () => {
+    // The prompt is the anchor the conversation is read against and a rounding
+    // error next to the tool output that fills a real budget, so the budget
+    // gives way rather than releasing it. What must still hold is the agreement
+    // between the tally and a fresh walk: the bytes it cannot reclaim have to be
+    // visible to it, not phantom.
     const budget = new AcpResidentBudget(0)
     session = createSession(Number.MAX_SAFE_INTEGER, budget)
     vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -444,10 +510,10 @@ describe('AcpSession — accounting gaps', () => {
     void session.sendPrompt('look', undefined, undefined, [promptImage('i1', 'A'.repeat(40000))])
 
     const [message] = session.messages.get()
-    expect(message?.memoryTrimmed).toBe(true)
-    // The tracer for "measure and release agree": everything heavy was released, so
-    // the tally the measure would recompute is zero.
-    expect(budget.totalBytes()).toBe(0)
+    expect(message?.memoryTrimmed).toBeUndefined()
+    expect(message?.text).toContain('look')
+    expectTallyMatchesMeasurement(session)
+    expect(budget.totalBytes()).toBeGreaterThan(0)
   })
 
   it('caps an oversized user attachment instead of blanking a legitimate one', async () => {

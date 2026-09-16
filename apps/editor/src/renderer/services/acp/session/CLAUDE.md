@@ -70,6 +70,7 @@
 - **连接池 refcount**：同 agentId+cwd 的多会话共享一个子进程，省 spawn；池在 `acpClientService.ts`。
 - **空闲进程回收 / 休眠唤醒两档 / lastActivityAt 防抖动 / 关窗停 agent 走 willShutdown join**：见 [cases-session-recovery.md](cases-session-recovery.md)。
 - **持久化只存字符串元数据**：恢复时拿 `sessionIdOnAgent` 调 `loadSession` 重放。双桶 scope 见 `../CLAUDE.md`「持久化」。
+- **live 内存修剪：用户消息（锚点）永不释放**；释放按收益优先，被剪消息留开头预览、通知由 UI 渲染不入 text、按差值记账。
 
 ### 易踩坑速记
 

@@ -9,7 +9,7 @@ metadata:
 
 2026-08-19 分析用户诊断包(0.1.69,8/18-19 三次 renderer OOM,0.4GB→3.6~5GB 分钟级):[[subagent-replay-bypasses-budget-renderer-oom]] 的修复(01a0e7f)已在 0.1.67+ 发布且未被 03b6a5f 破坏,但 OOM 仍复发。根因是三个独立缺口叠加:
 
-1. **live 路径完全无累计预算**(只有逐块 cap):`_messages`/`_toolCalls`/`_terminalOutput` 随大规模 Grep/Read 会话无界增长 → live 期 OOM。修=`acpSession.ts` 加 `LIVE_INGESTION_BUDGET`(256MB),超限从 timeline 头部修剪最旧 tool_call/message 的重内容(保卡片壳+`memoryTrimmed` 标记),新通知永远入库。
+1. **live 路径完全无累计预算**(只有逐块 cap):`_messages`/`_toolCalls`/`_terminalOutput` 随大规模 Grep/Read 会话无界增长 → live 期 OOM。修=`acpSession.ts` 加 `LIVE_INGESTION_BUDGET`(256MB),超限释放最旧的重内容(保卡片壳+`memoryTrimmed` 标记),新通知永远入库。**2026-09-16 修订释放策略**(原实现严格按 timeline 位置最旧优先,于是首条用户消息——最贵的锚点——第一个被牺牲,且通知文案被写进 `text` 冒充用户原文):用户消息永不释放、按收益优先(大块先走)、被剪消息留开头预览且通知由 UI 按标记渲染不入 `text`、释放量按差值记账——细节见 `apps/editor/src/renderer/services/acp/session/CLAUDE.md`。
 2. **fork 主 transcript 回放无源头上限**(仅子 agent sidecar 有 16/48MB cap),且 renderer 回放预算欠计(不计 terminal_output/rawInput/text 拷贝、按 code unit 非 UTF-16 字节)→ resume 回放期 OOM。修=fork `replaySessionHistory` 加 `MAIN_REPLAY_TOTAL_CAP_BYTES=96MB`+单条 1MB 截断(超限发说明性 chunk 停发);renderer `estimateUpdateResidentBytes` 补计三洞并按 ×2 字节估;`restampReplayedSubagentStats` readFile 前 stat 判 cap。
 3. **renderer 崩溃后旧 agent 进程无人回收**:`render-process-gone` 只弹对话框,crash reload 再 spawn 新进程 → 诊断包 3 个 `claude.exe --resume=同一session` 孤儿并存后台读扫放大压力。修=`AcpHostMainService` 维护 handle→windowId(per-window 通道包装 `createWindowScopedAcpHost`),崩溃/主 frame 导航时 `stopAllForWindow`(remote handle 不登记不误杀)。
 

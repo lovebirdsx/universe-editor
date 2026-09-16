@@ -437,7 +437,7 @@ export const ToolCallCard = memo(function ToolCallCard({
   )
 
   const trimmedNotice = call.memoryTrimmed && (
-    <div className={styles['toolCallMemoryTrimmed']} data-testid="acp-toolcall-memory-trimmed">
+    <div className={styles['memoryTrimmedNotice']} data-testid="acp-toolcall-memory-trimmed">
       {memoryTrimmedNotice()}
     </div>
   )

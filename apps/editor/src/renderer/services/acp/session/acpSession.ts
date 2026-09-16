@@ -68,7 +68,9 @@ import {
   MAX_PLAN_ENTRY_CHARS,
   MAX_SUPPRESSED_TOOL_CALL_IDS,
   MAX_TOOL_CALL_PARENT_ENTRIES,
+  MESSAGE_TRIM_PREVIEW_CHARS,
   REPLAY_INGESTION_BUDGET,
+  TRIM_MIN_RELEASE_BYTES,
   capContentBlock,
   capRawInput,
   capTerminalOutputTail,
@@ -220,10 +222,12 @@ export function replayHistoryOverflowNotice(): string {
 }
 
 /**
- * Body shown on a timeline card whose heavy content was released by the live
- * resident budget (oldest-first trimming) to protect the renderer from OOM.
+ * Notice shown on a timeline card or message whose heavy content was released by
+ * the live resident budget to protect the renderer from OOM. The UI renders it
+ * from the `memoryTrimmed` marker — it is never stored as the item's own text,
+ * so copy, collapsed summaries and the sticky bar keep reading real content.
  * Function rather than a module constant: `localize` reads the NLS state at call
- * time, and the trimmed card bakes the resolved text in at trim time.
+ * time.
  */
 export function memoryTrimmedNotice(): string {
   return localize(
@@ -319,17 +323,21 @@ function trimToolCall(call: AcpToolCall): AcpToolCall {
   }
 }
 
-/** Release a message's heavy content, replacing it with the memory-protection
- * notice while keeping the shell (role / id / anchor / selection contexts).
- * Drops `live` (the field list below is explicit): the content it described is
- * gone, so there is no growing tail left to render incrementally. */
+/** Release a message's heavy content, keeping the shell (role / id / anchor /
+ * selection contexts) and a short preview of the original opening. The preview
+ * stays in `text`, so every consumer of it — copy, the collapsed summary, the
+ * sticky bar — keeps seeing real content; the notice explaining the release is
+ * rendered from `memoryTrimmed` rather than stored as the body. Media blocks go
+ * outright: base64 payloads are most of what a message weighs. Drops `live`
+ * (the field list below is explicit): the content it described is gone, so
+ * there is no growing tail left to render incrementally. */
 function trimMessage(message: AcpMessage): AcpMessage {
-  const notice = memoryTrimmedNotice()
+  const preview = message.text.slice(0, MESSAGE_TRIM_PREVIEW_CHARS)
   return {
     id: message.id,
     role: message.role,
-    blocks: [{ type: 'text', text: notice }],
-    text: notice,
+    blocks: preview.length > 0 ? [{ type: 'text', text: preview }] : [],
+    text: preview,
     streaming: false,
     memoryTrimmed: true,
     ...(message.messageId !== undefined ? { messageId: message.messageId } : {}),
@@ -954,6 +962,11 @@ export class AcpSession extends Disposable implements IAcpSession {
    * newest result.
    */
   private _residentBytes = 0
+
+  /** Latched once the live budget is over with nothing releasable left, so that
+   *  diagnosis is logged once per episode rather than after every chunk. Cleared
+   *  as soon as the session is back under budget. */
+  private _anchorOverBudgetLogged = false
 
   /** `Date.now()` of the last update that grew {@link _residentBytes}. */
   private _lastIngestAt = 0
@@ -2842,12 +2855,33 @@ export class AcpSession extends Disposable implements IAcpSession {
           `released ${released} bytes from the oldest cards to protect memory`,
       )
     }
+    // Only user-message anchors left to give: the budget is deliberately left
+    // over rather than releasing the prompts the whole conversation is read
+    // against. Logged because this is the one case where the session keeps
+    // holding bytes the shared budget would otherwise have reclaimed from it —
+    // a diagnosis showing this repeatedly is a session whose prompts (large
+    // pasted logs, image attachments) need bounding at ingest instead. Latched:
+    // this runs after every chunk, and the state holds until it clears.
+    const over = this._residentBytes - this._liveIngestionBudget
+    if (over > 0 && !this._anchorOverBudgetLogged) {
+      this._anchorOverBudgetLogged = true
+      console.warn(
+        `[acp] session ${this.id}: ${over} bytes over the resident budget with nothing ` +
+          `releasable left (user-message anchors and message previews stay resident)`,
+      )
+    } else if (over <= 0) {
+      this._anchorOverBudgetLogged = false
+    }
   }
 
   /**
-   * Trim oldest-first until `_residentBytes <= targetBytes`, returning the bytes
-   * released. Shared by the per-session budget and the cross-session one, so
-   * both always release through the same traversal that measured the content.
+   * Release content until `_residentBytes <= targetBytes`, returning the bytes
+   * actually released. Shared by the per-session budget and the cross-session
+   * one, so both always release through the same traversal that measured the
+   * content. The result may come back short: bytes held by user-message anchors
+   * are deliberately not releasable (see `_trimOldestHeavyItem`), and the
+   * cross-session budget reads a short release as "this session has nothing left
+   * to give", moving on to the next one.
    */
   private _releaseResidentDownTo(targetBytes: number): number {
     // Trim operates on committed state: publish any pending streaming merges
@@ -2864,28 +2898,37 @@ export class AcpSession extends Disposable implements IAcpSession {
       }
     }
     let released = 0
-    // Bound the loop by the number of slots that can hold heavy content: a trim
-    // must strictly reduce the remaining heavy content, but if a future
+    // Two passes, big releases first: a megabyte-scale overrun is answered with
+    // the tool output that caused it, not with a handful of early short messages
+    // that merely happen to sit at the head of the timeline. The second pass
+    // relaxes the floor to 0 and only runs once nothing heavy is left, so a card
+    // is never released for a few hundred bytes while a megabyte card remains.
+    //
+    // Each pass is bounded by the number of slots that can hold heavy content: a
+    // trim must strictly reduce the remaining heavy content, but if a future
     // measure/release pair ever disagreed, an unbounded `while` would spin the
     // main thread instead of merely overrunning the budget. Orphans count —
     // `_trimOldestHeavyItem` releases through them last, so a bound that only
     // counted timeline slots would cut the loop short and leave the budget over.
-    for (let guard = this._timeline.length + this._orphanItemCount() + 1; guard > 0; guard--) {
-      if (this._residentBytes <= targetBytes) break
-      const freed = this._trimOldestHeavyItem()
-      if (freed === 0) {
-        // Nothing left to release, yet the tally still says we're over. The
-        // tally can drift high because it charges every update on arrival while
-        // some never land (a retracted prompt's replay, a suppressed side-task
-        // baseline). Resync it from what the timeline actually holds, so the
-        // shared budget doesn't keep seeing phantom bytes here and taking them
-        // out of other sessions instead.
-        this._residentBytes = this._measureResidentBytes()
-        break
+    const guardMax = this._timeline.length + this._orphanItemCount() + 1
+    for (const minReleaseBytes of [TRIM_MIN_RELEASE_BYTES, 0]) {
+      for (let guard = guardMax; guard > 0; guard--) {
+        if (this._residentBytes <= targetBytes) break
+        const freed = this._trimOldestHeavyItem(minReleaseBytes)
+        if (freed === 0) break
+        released += freed
+        this._residentBytes -= freed
       }
-      released += freed
-      this._residentBytes -= freed
+      if (this._residentBytes <= targetBytes) break
     }
+    // Still over after both passes: everything releasable is gone (or the tally
+    // drifted high, because it charges every update on arrival while some never
+    // land — a retracted prompt's replay, a suppressed side-task baseline).
+    // Resync it from what the timeline actually holds, so the shared budget
+    // doesn't keep seeing phantom bytes here and taking them out of other
+    // sessions instead. Content held by user-message anchors keeps the tally
+    // legitimately over; see `_trimLiveResidentContent`.
+    if (this._residentBytes > targetBytes) this._residentBytes = this._measureResidentBytes()
     if (released > 0) {
       const tx = this._batchedTx()
       this.messages.set(this._messages, tx)
@@ -2900,8 +2943,8 @@ export class AcpSession extends Disposable implements IAcpSession {
    * timeline plus the orphan stash, because content stashed for a parent card
    * that has not landed is just as resident as content on a card that has. A
    * measure that skipped the stash would report 0 for megabytes the trim below
-   * can actually free, and the `freed === 0` branch would latch that wrong
-   * number in. */
+   * can actually free, and the resync at the end of `_releaseResidentDownTo`
+   * would latch that wrong number in. */
   private _measureResidentBytes(): number {
     let bytes = 0
     for (const slot of this._timeline) {
@@ -2929,51 +2972,79 @@ export class AcpSession extends Disposable implements IAcpSession {
     return bytes
   }
 
-  /** Trim the oldest timeline slot that still holds heavy content, returning the
-   * released byte count (0 when nothing left to release). Falling through to the
-   * orphan stash matters: content stashed for a parent card that never landed is
-   * measured (see `_measureResidentBytes`) and so must be releasable, or the loop
-   * below would report 0 with megabytes still held. Charged at the same overhead
-   * factor the ingestion side used — see `withViewModelOverhead`. */
-  private _trimOldestHeavyItem(): number {
+  /** Trim the oldest timeline slot holding at least `minReleaseBytes` of heavy
+   * content, returning the bytes actually released (0 when nothing qualifies).
+   * The return value is the *difference* the trim makes, not what was measured
+   * before it: a trimmed message keeps a preview, so charging the pre-trim size
+   * would leave that residue uncounted and drift the tally away from
+   * `_measureResidentBytes`. Charged at the same overhead factor the ingestion
+   * side used — see `withViewModelOverhead`.
+   *
+   * User messages are never candidates: the opening prompt is the anchor every
+   * later turn is read against, and it is a rounding error next to the tool
+   * output that actually fills the budget. Falling through to the orphan stash
+   * matters: content stashed for a parent card that never landed is measured
+   * (see `_measureResidentBytes`) and so must be releasable, or the loop below
+   * would report 0 with megabytes still held. */
+  private _trimOldestHeavyItem(minReleaseBytes: number): number {
     for (let i = 0; i < this._timeline.length; i++) {
       const slot = this._timeline[i]
       if (slot === undefined) continue
       if (slot.kind === 'toolCall') {
-        const freed = withViewModelOverhead(toolCallHeavyBytes(slot.call))
-        if (freed === 0) continue
-        this._replaceToolCall(slot.call.id, trimToolCall(slot.call))
+        const before = withViewModelOverhead(toolCallHeavyBytes(slot.call))
+        if (before < minReleaseBytes) continue
+        const trimmed = trimToolCall(slot.call)
+        const freed = before - withViewModelOverhead(toolCallHeavyBytes(trimmed))
+        if (freed <= 0) continue
+        this._replaceToolCall(slot.call.id, trimmed)
         this._terminalOutput.delete(slot.call.id)
         return freed
       }
       if (slot.kind === 'message') {
-        const freed = withViewModelOverhead(messageHeavyBytes(slot.message))
-        if (freed === 0) continue
-        this._replaceMessage(slot.message.id, trimMessage(slot.message))
+        if (slot.message.role === 'user') continue
+        const before = withViewModelOverhead(messageHeavyBytes(slot.message))
+        if (before < minReleaseBytes) continue
+        const trimmed = trimMessage(slot.message)
+        const freed = before - withViewModelOverhead(messageHeavyBytes(trimmed))
+        if (freed <= 0) continue
+        this._replaceMessage(slot.message.id, trimmed)
         return freed
       }
     }
-    return this._trimOrphanHeavyItem()
+    return this._trimOrphanHeavyItem(minReleaseBytes)
   }
 
   /** Release the first heavy child of the oldest orphan parent, returning the bytes
    * released. Ordered by the stash's insertion order (oldest parent first), which is
-   * as close to oldest-first as a bucket with no timestamps gets. */
-  private _trimOrphanHeavyItem(): number {
+   * as close to oldest-first as a bucket with no timestamps gets.
+   *
+   * Child messages carry no user-message exemption: they are released with the
+   * parent card they hang off, and the measure charges them there
+   * (`toolCallHeavyBytes`), so skipping one would report bytes the release never
+   * actually freed. Sub-agent children are never user messages. */
+  private _trimOrphanHeavyItem(minReleaseBytes: number): number {
     for (const [parentId, children] of this._orphanChildren) {
       for (let i = 0; i < children.length; i++) {
         const child = children[i]
         if (child === undefined) continue
-        const freed = withViewModelOverhead(
+        const before = withViewModelOverhead(
           child.kind === 'toolCall'
             ? toolCallHeavyBytes(child.call)
             : messageHeavyBytes(child.message),
         )
-        if (freed === 0) continue
+        if (before < minReleaseBytes) continue
         const trimmed: AcpChildItem =
           child.kind === 'toolCall'
             ? { kind: 'toolCall', id: child.id, call: trimToolCall(child.call) }
             : { kind: 'message', id: child.id, message: trimMessage(child.message) }
+        const freed =
+          before -
+          withViewModelOverhead(
+            trimmed.kind === 'toolCall'
+              ? toolCallHeavyBytes(trimmed.call)
+              : messageHeavyBytes(trimmed.message),
+          )
+        if (freed <= 0) continue
         this._orphanChildren.set(parentId, [
           ...children.slice(0, i),
           trimmed,

@@ -69,7 +69,7 @@
 - [allotment 重挂载空窗口期](allotment-remount-empty-splitview-window.md) — 重挂载 viewItems 空至 RO tick；sizes 守卫只用当前实例报告值
 - [sessionChanges 无界增长 OOM](sessionchanges-unbounded-growth-main-oom-abort.md) — tracker 预算+有界日志+64MB 写入兜底
 - [子 agent 回放绕过预算 renderer OOM](subagent-replay-bypasses-budget-renderer-oom.md) — 预算窗口以 session/load 响应为界;fire-and-forget 回放=红线;修=await+sidecar 源头预算
-- [renderer OOM 三缺口三修(0.1.69 复发)](renderer-oom-triple-fix-live-budget-replay-cap-orphan.md) — live 累计预算+主回放源头 cap+崩溃回收孤儿 agent;预算须覆盖每条入库路径
+- [renderer OOM 三缺口三修(0.1.69 复发)](renderer-oom-triple-fix-live-budget-replay-cap-orphan.md) — live 累计预算+主回放源头 cap+崩溃回收孤儿 agent;预算须覆盖每条入库路径;释放须按收益排序、用户消息锚点不可剪、降级提示不入 `text`
 - [codex 回放 OOM：源头无 cap + children 修剪空转](codex-replay-oom-source-cap.md) — 三修只覆盖 claude fork;codex 全量物化 thread+rollout;度量与释放须同一套遍历(只补一边=永久超限或死循环)
 - [会话 diff observable 双份全文 OOM](session-diff-live-observable-oom.md) — 慢爬 0.7→5.4GB;recompute 结果常驻不在任何预算内(零修剪告警=增长在记账外);降级空串绝不能回灌 editable diff 否则清空共享 model 写空文件
 - [swarm 通知焦点门控吞 toast](swarm-notify-focus-gate-user-away.md) — Windows 锁屏/人离开 isFocused 恒 true；门控须叠 powerMonitor idle/locked；e2e 冻结 present
