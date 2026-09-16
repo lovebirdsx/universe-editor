@@ -95,6 +95,31 @@ describe('ListMenu', () => {
 
       expect(activeLabel(rootMenu())).toBe('Real')
     })
+
+    // Both flavours share `useMenuNavigation` + `MenuRows`; this pins the
+    // item-driven half of the cursor-source contract to the same values.
+    it('marks the pointer row apart from the keyboard cursor', () => {
+      renderMenu(
+        [
+          { kind: 'item', label: 'A', run: vi.fn() },
+          { kind: 'item', label: 'B', run: vi.fn() },
+        ],
+        { autoFocusFirst: true },
+      )
+
+      const row = (name: string) => screen.getByRole('menuitem', { name })
+      expect(row('A').getAttribute('data-active')).toBe('keyboard')
+
+      press('ArrowDown')
+      expect(row('B').getAttribute('data-active')).toBe('keyboard')
+
+      act(() => {
+        fireEvent.mouseMove(window)
+        fireEvent.mouseEnter(row('A'))
+      })
+      expect(row('A').getAttribute('data-active')).toBe('mouse')
+      expect(row('B').getAttribute('data-active')).toBeNull()
+    })
   })
 
   describe('keyboard navigation', () => {

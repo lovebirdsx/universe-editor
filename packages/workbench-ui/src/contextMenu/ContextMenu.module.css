@@ -21,6 +21,7 @@
   color: var(--vscode-menu-foreground, #cccccc);
   white-space: nowrap;
   user-select: none;
+  outline: none;
 }
 
 /* Fixed width whether or not the caller's renderIcon produced anything, so a
@@ -39,13 +40,25 @@
   text-overflow: ellipsis;
 }
 
-/* `data-active` is the cursor shared by mouse and keyboard: navigation uses a
-   virtual focus rather than moving DOM focus, which would blur the tree that
-   opened the menu and dim its selected row. */
+/* `data-active` says what a row is: the keyboard cursor, the row the pointer
+   last armed, or the trail back into an open panel. The pointer's row and the
+   trail are both secondary, so they share the workbench-wide hover fill —
+   `data-active='mouse'` deliberately has no rule of its own, because `:hover`
+   paints that row and cannot go stale once the pointer leaves the menu. */
 .item:hover,
-.item[data-active] {
-  background: var(--vscode-menu-selectionBackground, #094771);
-  outline: none;
+.item[data-active='open'] {
+  background: var(--vscode-list-hoverBackground, #2f2f35);
+}
+
+/* The keyboard cursor. Kept *after* the hover rule on purpose: a row the arrow
+   keys just stepped onto can also be the row under the pointer, and the cursor
+   has to win that tie (equal specificity, so source order decides). The focus
+   outline — not just the fill — is what separates it from hover under the light
+   themes, where the two selection colours collapse onto the same value. */
+.item[data-active='keyboard'] {
+  background: var(--vscode-list-activeSelectionBackground, #094771);
+  outline: 1px solid var(--vscode-list-focusOutline, #0070e0);
+  outline-offset: -1px;
 }
 
 /* Destructive actions (delete, obliterate, discard). */

@@ -14,8 +14,11 @@ import {
 } from '../overlay/anchorLayout.js'
 import { useTransformFreePlacement } from '../overlay/useTransformFreePlacement.js'
 import type { RowModel } from './menuModel.js'
-import type { MenuState } from './useMenuNavigation.js'
+import type { MenuCursorSource, MenuState } from './useMenuNavigation.js'
 import styles from './ContextMenu.module.css'
+
+/** What `data-active` says about a row: where the cursor came from, or the trail. */
+type RowActiveState = MenuCursorSource | 'open'
 
 export interface MenuRowsProps {
   readonly uid: string
@@ -50,9 +53,9 @@ export function MenuRows({
   testId,
 }: MenuRowsProps) {
   const openIndex = state.open[level]
-  const active = state.active?.level === level ? state.active.index : undefined
+  const active = state.active?.level === level ? state.active : undefined
   const openRow = openIndex === undefined ? undefined : rows[openIndex]
-  const activeId = active === undefined ? undefined : rowElementId(uid, level, active)
+  const activeId = active === undefined ? undefined : rowElementId(uid, level, active.index)
 
   return (
     <>
@@ -70,13 +73,21 @@ export function MenuRows({
           if (row.kind === 'separator') {
             return <li key={row.id} role="separator" className={styles['separator']} />
           }
-          const isActive = index === active || index === openIndex
+          // The cursor outranks the trail: hovering a submenu row lands the
+          // cursor on it *and* opens its panel, so there the row is what the
+          // pointer just hit rather than a way back.
+          const activeState: RowActiveState | undefined =
+            active !== undefined && active.index === index
+              ? active.source
+              : index === openIndex
+                ? 'open'
+                : undefined
           const disabled = row.kind === 'item' && row.disabled === true
           const common = {
             id,
             role: 'menuitem' as const,
             tabIndex: -1,
-            ...(isActive ? { 'data-active': '' } : {}),
+            ...(activeState === undefined ? {} : { 'data-active': activeState }),
             ...(disabled ? { 'aria-disabled': true } : {}),
             // A disabled row still cancels a pending submenu close (the pointer
             // is demonstrably inside this panel) but never takes the highlight.

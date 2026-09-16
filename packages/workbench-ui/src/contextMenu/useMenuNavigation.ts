@@ -27,10 +27,14 @@ const CTRL_NAV_ARROWS: Record<
   'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight'
 > = { h: 'ArrowLeft', l: 'ArrowRight', n: 'ArrowDown', p: 'ArrowUp' }
 
+/** Which input last moved the cursor: a pointer hover, or a keyboard step. */
+export type MenuCursorSource = 'mouse' | 'keyboard'
+
 /** The row the keyboard acts on, addressed by its depth and index. */
 export interface MenuActive {
   readonly level: number
   readonly index: number
+  readonly source: MenuCursorSource
 }
 
 export interface MenuState {
@@ -95,7 +99,7 @@ export function useMenuNavigation(
         if (!navigable || row === undefined) {
           valid = false
         } else if (level === initialActivePath.length - 1) {
-          requested = { level, index: index as number }
+          requested = { level, index: index as number, source: 'keyboard' }
           break
         } else if (row.kind === 'submenu') {
           levelRows = row.children
@@ -111,7 +115,9 @@ export function useMenuNavigation(
     }
     if (requested === undefined) {
       const first = stepIndex(rows, undefined, 1)
-      return first === undefined ? INITIAL_STATE : { open: [], active: { level: 0, index: first } }
+      return first === undefined
+        ? INITIAL_STATE
+        : { open: [], active: { level: 0, index: first, source: 'keyboard' } }
     }
     return { open: requestedOpen, active: requested }
   })
@@ -166,13 +172,16 @@ export function useMenuNavigation(
       if (!hoverArmed.current) return
       const open = stateRef.current.open
       if (isSubmenu) {
-        setState({ open: [...open.slice(0, level), index], active: { level, index } })
+        setState({
+          open: [...open.slice(0, level), index],
+          active: { level, index, source: 'mouse' },
+        })
         return
       }
       // Keep any deeper panel up for the grace period so a diagonal sweep into
       // it isn't cut off by the sibling rows it passes over.
       if (open.length > level) scheduleClose(level)
-      setState({ open, active: { level, index } })
+      setState({ open, active: { level, index, source: 'mouse' } })
     },
     [cancelClose, scheduleClose],
   )
@@ -194,7 +203,10 @@ export function useMenuNavigation(
     const parentIndex = s.open[level - 1]
     setState({
       open: s.open.slice(0, level - 1),
-      active: parentIndex === undefined ? undefined : { level: level - 1, index: parentIndex },
+      active:
+        parentIndex === undefined
+          ? undefined
+          : { level: level - 1, index: parentIndex, source: 'keyboard' },
     })
     return true
   }, [])
@@ -209,7 +221,8 @@ export function useMenuNavigation(
     const first = stepIndex(row.children, undefined, 1)
     setState({
       open: [...s.open.slice(0, level), index],
-      active: first === undefined ? undefined : { level: level + 1, index: first },
+      active:
+        first === undefined ? undefined : { level: level + 1, index: first, source: 'keyboard' },
     })
     return true
   }, [])
@@ -253,7 +266,10 @@ export function useMenuNavigation(
       const move = (next: number | undefined): void => {
         if (next === undefined) return
         cancelClose()
-        setState({ open: s.open.slice(0, level), active: { level, index: next } })
+        setState({
+          open: s.open.slice(0, level),
+          active: { level, index: next, source: 'keyboard' },
+        })
       }
 
       switch (key) {

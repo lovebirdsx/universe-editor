@@ -68,6 +68,28 @@ test.describe('@p1 menu ctrl navigation', () => {
     await expect(active).toHaveText(first)
     await expect.poll(() => workbench.getContextKey<boolean>('quickInputVisible')).toBe(false)
 
+    // The cursor is a single row and the keyboard one is painted with a focus
+    // outline on top of its fill. Note the *pointer's* row gets no such marker:
+    // it is painted by `:hover`, which an unfocused (offscreen) e2e window never
+    // applies — so its fill is verified by the CSS contract test instead.
+    const cursor = page.locator('[role="menuitem"][data-active="keyboard"]')
+    await expect(cursor).toHaveCount(1)
+    await expect(cursor).toHaveCSS('outline-style', 'solid')
+
+    // A real pointer move hands the cursor over. Scoped to the open menu: the
+    // title bar's menubar entries carry `role="menuitem"` too, and an unscoped
+    // `nth(1)` lands on one of those. Moved in steps rather than with `hover()`
+    // so the pointer crosses the menu's own padding first: hover is armed by the
+    // first mousemove, and a row's mouseenter arrives *before* the mousemove
+    // that goes with it, so the single jump that lands inside a row is exactly
+    // the move the menu has to ignore.
+    const target = menus.getByRole('menuitem').nth(1)
+    const box = await target.boundingBox()
+    expect(box).not.toBeNull()
+    await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2, { steps: 5 })
+    await expect(cursor).toHaveCount(0)
+    await expect(page.locator('[role="menuitem"][data-active="mouse"]')).toHaveCount(1)
+
     // Closed menu = the window-capture listener is gone. Ctrl+P is quick open
     // again, so the aliases only ever shadowed the globals while a menu was up.
     await page.keyboard.press('Escape')

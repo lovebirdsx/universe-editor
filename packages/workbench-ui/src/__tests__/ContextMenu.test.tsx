@@ -897,20 +897,123 @@ describe('ContextMenu submenus', () => {
       )
 
       const menu = screen.getByRole('menu')
+      const row = (name: string) => screen.getByRole('menuitem', { name })
+      expect(row('First').getAttribute('data-active')).toBe('keyboard')
+
       // The menu can land directly under a stationary pointer, and the browser
       // then fires mouseenter on whatever row is beneath it — which must not
       // steal the highlight from the row Enter is about to run.
       act(() => {
-        fireEvent.mouseEnter(screen.getByRole('menuitem', { name: 'Second' }))
+        fireEvent.mouseEnter(row('Second'))
       })
       expect(activeLabel(menu)).toBe('First')
+      expect(row('Second').getAttribute('data-active')).toBeNull()
 
-      // A genuine pointer move arms hover again.
+      // A genuine pointer move arms hover again, and the cursor changes hands.
       act(() => {
         fireEvent.mouseMove(window)
-        fireEvent.mouseEnter(screen.getByRole('menuitem', { name: 'Second' }))
+        fireEvent.mouseEnter(row('Second'))
       })
       expect(activeLabel(menu)).toBe('Second')
+      expect(row('Second').getAttribute('data-active')).toBe('mouse')
+      expect(row('First').getAttribute('data-active')).toBeNull()
+    })
+  })
+
+  describe('cursor source', () => {
+    const press = (key: string) =>
+      act(() => {
+        fireEvent.keyDown(window, { key })
+      })
+
+    function twoRows(id: string) {
+      const root = asMenuId(id)
+      track(MenuRegistry.addMenuItem(root, { command: 'a.cmd', title: 'First', group: '1_a' }))
+      track(MenuRegistry.addMenuItem(root, { command: 'b.cmd', title: 'Second', group: '2_b' }))
+      return root
+    }
+
+    /** Root menu whose second group is a submenu holding one nested entry. */
+    function oneSubmenu(id: string) {
+      const root = asMenuId(id)
+      const sub = asMenuId(`${id}.sub`)
+      track(MenuRegistry.addMenuItem(root, { command: 'a.cmd', title: 'First', group: '1_a' }))
+      track(MenuRegistry.addSubmenuItem(root, { submenu: sub, title: 'More', group: '2_b' }))
+      track(MenuRegistry.addMenuItem(sub, { command: 'nested.cmd', title: 'Nested' }))
+      return root
+    }
+
+    const row = (name: string) => screen.getByRole('menuitem', { name })
+
+    it('marks the keyboard cursor apart from the row under the pointer', () => {
+      render(
+        <ContextMenu
+          menuId={twoRows('test.cursor.source')}
+          anchor={{ x: 0, y: 0 }}
+          commandService={makeCommandService([])}
+          autoFocusFirst
+          onClose={vi.fn()}
+        />,
+      )
+
+      expect(row('First').getAttribute('data-active')).toBe('keyboard')
+
+      press('ArrowDown')
+      expect(row('Second').getAttribute('data-active')).toBe('keyboard')
+      expect(row('First').getAttribute('data-active')).toBeNull()
+
+      // The pointer hands the cursor over; the keyboard's row goes plain.
+      act(() => {
+        fireEvent.mouseMove(window)
+        fireEvent.mouseEnter(row('First'))
+      })
+      expect(row('First').getAttribute('data-active')).toBe('mouse')
+      expect(row('Second').getAttribute('data-active')).toBeNull()
+    })
+
+    it('marks the panel parent row as the trail, not the cursor', () => {
+      render(
+        <ContextMenu
+          menuId={oneSubmenu('test.cursor.trail')}
+          anchor={{ x: 0, y: 0 }}
+          commandService={makeCommandService([])}
+          autoFocusFirst
+          onClose={vi.fn()}
+        />,
+      )
+
+      press('ArrowDown')
+      expect(row('More').getAttribute('data-active')).toBe('keyboard')
+
+      // Expanding moves the cursor into the panel: the parent stays marked, but
+      // as the way back rather than as the row Enter would run.
+      press('ArrowRight')
+      expect(row('More').getAttribute('data-active')).toBe('open')
+      const panel = screen.getByTestId('context-menu-submenu')
+      expect(panel.querySelector('[data-active]')?.getAttribute('data-active')).toBe('keyboard')
+      expect(activeLabel(panel)).toBe('Nested')
+
+      press('ArrowLeft')
+      expect(row('More').getAttribute('data-active')).toBe('keyboard')
+      expect(screen.queryByTestId('context-menu-submenu')).toBeNull()
+    })
+
+    it('lets the cursor outrank the trail when the pointer opens a panel', () => {
+      render(
+        <ContextMenu
+          menuId={oneSubmenu('test.cursor.pointerPanel')}
+          anchor={{ x: 0, y: 0 }}
+          commandService={makeCommandService([])}
+          onClose={vi.fn()}
+        />,
+      )
+
+      act(() => {
+        fireEvent.mouseEnter(row('More'))
+      })
+      expect(row('More').getAttribute('data-active')).toBe('mouse')
+      expect(row('More').getAttribute('aria-expanded')).toBe('true')
+      expect(screen.getByTestId('context-menu-submenu')).toBeDefined()
     })
   })
 
