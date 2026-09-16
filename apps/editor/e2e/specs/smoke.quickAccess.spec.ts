@@ -130,7 +130,15 @@ test.describe('@p0 quick access', () => {
     )
     await expect(workbench.editor.monacoEditor).toBeVisible()
     // Select 'TestValue' (columns 7–15) so the prefill uses the selection.
-    await workbench.setActiveEditorSelection(1, 7, 1, 16)
+    await expect
+      .poll(() => workbench.setActiveEditorSelection(1, 7, 1, 16), { timeout: 5000 })
+      .toBe(true)
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorSelection()), {
+        timeout: 5000,
+        message: 'the freshly opened editor never adopted the selection',
+      })
+      .toEqual({ startLineNumber: 1, startColumn: 7, endLineNumber: 1, endColumn: 16 })
 
     await page.evaluate(() => {
       void window.__E2E__!.runCommand('workbench.action.showAllSymbols')

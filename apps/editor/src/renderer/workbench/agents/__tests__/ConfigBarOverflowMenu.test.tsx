@@ -475,6 +475,43 @@ describe('ConfigBarOverflowMenu — packing and panel', () => {
     expect(tempRow.getAttribute('data-active')).toBe('true')
   })
 
+  it('opens and closes a row with ←/→ and their Ctrl+H / Ctrl+L aliases', async () => {
+    setupNarrowBar()
+    await fireResize()
+    openOverflowMenu()
+    const panel = screen.getByTestId('acp-config-overflow-panel')
+    const modeRow = entryEl(panel, 'mode')
+    expect(modeRow.getAttribute('data-active')).toBe('true')
+
+    // → on the cursor's row expands it — the disclosure Enter already performs.
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowRight' })
+    expect(modeRow.getAttribute('aria-expanded')).toBe('true')
+    const body = modeRow.parentElement!.querySelector<HTMLElement>('[role="listbox"]')
+    expect(body).toBeTruthy()
+    expect(body!.contains(document.activeElement)).toBe(true)
+
+    // ← from anywhere in the body collapses it and hands the cursor back to the
+    // row that owns it — what ↑ on the body's first row does, and what Escape
+    // does one level up.
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowLeft' })
+    expect(modeRow.getAttribute('aria-expanded')).toBe('false')
+    expect(modeRow.getAttribute('data-active')).toBe('true')
+    expect(panel.contains(document.activeElement)).toBe(true)
+
+    // Ctrl+L / Ctrl+H are the same two strokes, taken on window capture so the
+    // workbench's global Ctrl+L (select line) never sees them.
+    fireEvent.keyDown(window, { key: 'l', ctrlKey: true })
+    expect(modeRow.getAttribute('aria-expanded')).toBe('true')
+    fireEvent.keyDown(window, { key: 'h', ctrlKey: true })
+    expect(modeRow.getAttribute('aria-expanded')).toBe('false')
+
+    // ← with nothing expanded declines (the bare arrow falls through); the alias
+    // is swallowed either way so it cannot reach the replace widget behind us.
+    const notCancelled = fireEvent.keyDown(window, { key: 'h', ctrlKey: true })
+    expect(notCancelled).toBe(false)
+    expect(screen.getByTestId('acp-config-overflow-panel')).toBeTruthy()
+  })
+
   it('drops a stale expansion when a row leaves the overflow set and re-enters collapsed', async () => {
     const { items } = setupNarrowBar()
     await fireResize()

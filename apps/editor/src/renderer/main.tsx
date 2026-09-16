@@ -325,8 +325,9 @@ async function bootstrapWorkbench(): Promise<void> {
   services.set(IContextKeyService, contextKeyService)
 
   // FocusTracker observes document-level focusin/focusout with debounce. Used
-  // by FocusContextKeyContribution + LayoutService.focusPart to settle DOM
-  // transitions before re-reading focus.
+  // by FocusStackService + LayoutService.focusPart to settle DOM transitions
+  // before re-reading focus. (Context keys derive from the DOM directly — the
+  // debounce is exactly what makes the tracker unsuitable for gating keys.)
   const focusTracker = workbenchStore.add(new RendererFocusTrackerService(window.document))
   services.set(IFocusTrackerService, focusTracker)
 

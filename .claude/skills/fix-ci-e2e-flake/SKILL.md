@@ -53,6 +53,7 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 - **WSL/Xvfb** 下 `smoke.terminalLink` 折行用例 initial+retry 确定性挂、失败在「fixture 得先折行」的前置断言上、`git stash -u`+build 回 HEAD 复跑同挂=本机环境差异（不打 tag，以 CI 为准）→ 案例 87
 - 新写「重启后状态仍在」用例 initial 挂/retry 过、failed 在自建 poll 等持久化值、received 里混入别的类型条目（view）=renderer 的 debounce 写还没落盘就 `closeApp` + 对整份持久化容器严格相等 → 案例 88
 - chord 用例卡 `defocusEditor` 等 focus 变 false+retry 秒过=defocus 时序噪声（观察中）→ 案例 48
+- `Alt+<n>` 偶发等于没按（`element(s) not found` 恒 0 / received 恒初值）+ 失败现场 DOM `activeElement` 已在目标区内而 `when` 里的 `*Focus` 键读到反向值 = **焦点键陈旧**（逐 Part 键由 tracker 记账；同一次按的上下文不同会走不同代码路径——浮层开着走 React handler、关着走全局 binding）→ 案例 90（已修：键改 DOM 派生 + 原子读不变量断言）
 - 列表相等断言 received 是 expected 前缀子集+采样点为固定 sleep=增量渲染截半，poll 到收敛 → 案例 49
 - sash 拖拽/尺寸持久化 spec，reload 后目标 pane 高度稳定卡等分值=异步 reconcile 落后于 Allotment 首次布局、preferredSize 挂载后是 no-op → 案例 50；**修完同断言再挂**=等分值经 onChange→debounce 落盘污染磁盘，恢复路径修得再好读的也是脏值，须收窄落盘权到用户动作 → 案例 50b；**再挂且诊断现场 mem==DOM==贪心值**（磁盘干净）=mem 记账被 onChange 覆盖、storedSizesKey/target 读脏 mem 锁死，恢复目标必须读独立的 persisted 权威源（save 序列化也走它）+settle 窗口内持续校验 → 案例 50c
 - ACP 配置写入后立即建 session、echo agent received 恒 `"[]"`=异步镜像池 stale 滤空 wire 列表 → 案例 51
@@ -84,6 +85,7 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 - 键盘 ContextMenu 键断言仅 CI Linux 确定性挂+`detail===0` 恒空+retry 同形态+Windows 全绿+新 spec 首跑=keyup 补充 contextmenu 是 Windows 专属 Chromium 契约，断言改平台感知（win32 精确/非 win32 0..1 且形状不变，非弱化）→ 案例 84
 - 虚拟化行出窗断言 `not.toBeInViewport` 但 ratio=1 且 rect 真在窗外（矛盾指纹）=IO 采样到 transform 前瞬态帧；改 rect 判窗后又稳定停中间值=Tree reveal useLayoutEffect 被 watcher 初始 refresh 的 structureVersion 变化重跑、scrollIntoView 撤销 scrollTop=0；修=poll 内每次先重设 scrollTop=0 再读 getBoundingClientRect 判窗外 → 案例 85
 - 键盘 ContextMenu 键开出的菜单 **count 恰 1 但缺行级项**（Rename…/Delete not found）+ 本地确定性复现=守卫判据失效致空白区菜单 last-wins 顶掉行级菜单；根因=keyup 补充事件坐标是**焦点元素中心不是 (0,0)**（上一轮按未实测的 (0,0) 收紧守卫），判据须换 `button === -1`（CDP 右键恒 `button: 2`）；改共享守卫判据后必须回查所有模拟该事件的单测否则假绿 → 案例 86
+- 预填/选区类断言 received 是**光标默认位**的旧值（`#TestValue` 变 `#const`）+ 同文件同族 setup 早已 `expect.poll` 只有这一处裸 fire + 本机高概率挂/`git stash` 回基线同挂=探针 setup 丢掉了返回值，`openWorkspace` 后活动编辑器还没就位/选区被迟到 adopt 覆盖 → 案例 91
 
 ## 关键参考路径
 - `apps/editor/e2e/specs/` —— 所有 e2e spec；`@p0` 阻塞 CI，`@p1` 次级

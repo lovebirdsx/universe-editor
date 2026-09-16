@@ -191,6 +191,7 @@ export function McpPickerPanel({
   onAltDigit,
   onExitUp,
   onExitDown,
+  onExitLeft,
 }: {
   session: IAcpSession
   /** Invoked before navigating away (e.g. opening settings) so a host surface can dismiss. */
@@ -198,6 +199,8 @@ export function McpPickerPanel({
   onAltDigit?: (digit: number) => void
   onExitUp?: () => void
   onExitDown?: () => void
+  /** True = collapsed the hosting body; false leaves ← to whatever is underneath. */
+  onExitLeft?: () => boolean
 }) {
   // Soft dependency, same as the picker: stays absent without the ACP layer.
   const service = useOptionalService(IAcpSessionService)
@@ -210,6 +213,7 @@ export function McpPickerPanel({
       {...(onAltDigit !== undefined ? { onAltDigit } : {})}
       {...(onExitUp !== undefined ? { onExitUp } : {})}
       {...(onExitDown !== undefined ? { onExitDown } : {})}
+      {...(onExitLeft !== undefined ? { onExitLeft } : {})}
     />
   )
 }
@@ -221,6 +225,7 @@ function McpPickerPanelInner({
   onAltDigit,
   onExitUp,
   onExitDown,
+  onExitLeft,
 }: {
   session: IAcpSession
   service: IAcpSessionServiceType
@@ -228,6 +233,7 @@ function McpPickerPanelInner({
   onAltDigit?: (digit: number) => void
   onExitUp?: () => void
   onExitDown?: () => void
+  onExitLeft?: () => boolean
 }) {
   const unionPool = useObservable(service.mcpServerDefinitions)
   const pool = filterPoolForSession(unionPool, session.agentId)
@@ -268,6 +274,7 @@ function McpPickerPanelInner({
     ...(onAltDigit !== undefined ? { onAltDigit } : {}),
     ...(onExitUp !== undefined ? { onExitUp } : {}),
     ...(onExitDown !== undefined ? { onExitDown } : {}),
+    ...(onExitLeft !== undefined ? { onExitLeft } : {}),
   })
 
   return (

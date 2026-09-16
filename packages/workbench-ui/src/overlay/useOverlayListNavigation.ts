@@ -18,6 +18,17 @@
  *  window capture, ahead of the workbench keybinding dispatcher, so a React
  *  onKeyDown never sees it. Hosts wire `onEscape` to AnchoredSurface's `onEscape`
  *  instead, where returning true peels one level and keeps the surface open.
+ *
+ *  The Ctrl movement aliases (Ctrl+N/P = down/up, Ctrl+H/L = left/right — the
+ *  emacs strokes every context menu already answers) are claimed the same way,
+ *  for the same reason: they *are* global bindings (quick open, new file,
+ *  replace, line select), so the dispatcher would preventDefault +
+ *  stopPropagation them on document capture and the React handler would never
+ *  run. One window-capture listener per mounted overlay takes them first, and
+ *  each one checks that its own container is the *innermost* one holding focus
+ *  (see `ownsFocus`) — a nested pair (the overflow panel's rows and an expanded
+ *  row's body) are both live at once, and a plain `contains` test would let both
+ *  answer the same stroke.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -25,9 +36,10 @@ import {
   useEffect,
   useRef,
   useState,
-  type KeyboardEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent,
 } from 'react'
+import { ctrlNavigationKey } from '../keybinding/ctrlNavigation.js'
 import { resolveIndexNavigation } from '../list/listKeyboard.js'
 
 /** Typeahead buffer lifetime — a pause longer than this starts a fresh query. */
@@ -58,6 +70,16 @@ export interface IUseOverlayListNavigationOptions {
    */
   readonly onExitUp?: (() => void) | undefined
   readonly onExitDown?: (() => void) | undefined
+  /**
+   * ArrowLeft / ArrowRight, and their Ctrl+H / Ctrl+L aliases. The bare arrow is
+   * offered first and falls through when the host declines (return `false`) — the
+   * menu rule, where arrows reach the view underneath. The alias is swallowed
+   * either way: leaking Ctrl+H would pop the replace widget behind the overlay,
+   * exactly as it would behind a menu. `index` is the row the cursor is on, which
+   * is what a list of disclosure rows needs in order to expand the right one.
+   */
+  readonly onExitLeft?: ((index: number) => boolean) | undefined
+  readonly onExitRight?: ((index: number) => boolean) | undefined
   /** Wraps ArrowUp / ArrowDown past the ends. Defaults to true, as pickers do. */
   readonly wrap?: boolean | undefined
   /**
@@ -75,7 +97,7 @@ export interface IOverlayListContainerProps {
   readonly role: 'listbox'
   readonly 'aria-label': string | undefined
   readonly tabIndex: -1
-  readonly onKeyDown: (e: KeyboardEvent) => void
+  readonly onKeyDown: (e: ReactKeyboardEvent) => void
   readonly onMouseDown: () => void
 }
 
@@ -98,6 +120,26 @@ export interface IOverlayListNavigation {
 
 const clampIndex = (index: number, count: number): number =>
   count <= 0 ? -1 : Math.max(0, Math.min(count - 1, index))
+
+/**
+ * Every mounted overlay container, so the Ctrl aliases can tell which of a
+ * nested pair owns the focus. `contains` alone is not enough: the overflow
+ * panel's row list holds the body of an expanded row, so with focus inside that
+ * body the outer list answers too — moving its own cursor behind the inner one's
+ * back, and on Ctrl+H collapsing the row without handing focus over, which drops
+ * the caret onto `<body>` and leaves every later stroke unowned.
+ */
+const liveContainers = new Set<HTMLElement>()
+
+/** Whether `el` is the innermost live overlay holding the document's focus. */
+function ownsFocus(el: HTMLElement): boolean {
+  const active = el.ownerDocument.activeElement
+  if (active === null) return false
+  for (const other of liveContainers) {
+    if (other !== el && el.contains(other) && other.contains(active)) return false
+  }
+  return el.contains(active)
+}
 
 // `resolveIndexNavigation` clamps, so "did not move" at an end means the key hit
 // the boundary. Turning that into the opposite end is the only thing `wrap` adds.
@@ -148,7 +190,9 @@ export function useOverlayListNavigation(
   }, [count])
 
   const containerRef = useCallback((node: HTMLElement | null) => {
+    if (containerElRef.current !== null) liveContainers.delete(containerElRef.current)
     containerElRef.current = node
+    if (node !== null) liveContainers.add(node)
     // preventScroll — the popup may have scrolled.
     if (optionsRef.current.autoFocus === false) return
     node?.focus({ preventScroll: true })
@@ -180,9 +224,71 @@ export function useOverlayListNavigation(
     return true
   }, [])
 
+  // One implementation of the index arithmetic for every stroke that moves the
+  // cursor — the six navigation keys and the Ctrl+N/P aliases alike — so wrap and
+  // the end-of-list exits cannot drift between the paths that reach them. Returns
+  // whether the key was the list's to take.
+  const applyIndexKey = useCallback((key: string): boolean => {
+    const { count: total, wrap = true } = optionsRef.current
+    if (total <= 0) return false
+    const next = resolveIndexNavigation(key, { index: activeIndexRef.current, count: total })
+    if (next === undefined) return false
+    const target = wrap ? applyWrap(key, activeIndexRef.current, next, total) : next
+    // Clamped onto the row we are already on = the key hit an end. With wrapping
+    // off that is where a nested region hands the cursor back.
+    if (!wrap && target === activeIndexRef.current) {
+      if (key === 'ArrowUp') optionsRef.current.onExitUp?.()
+      else if (key === 'ArrowDown') optionsRef.current.onExitDown?.()
+      return true
+    }
+    setActiveIndex(target)
+    return true
+  }, [])
+
+  // Whether the host took the horizontal stroke. `false` is the fall-through case
+  // the bare arrow honours and the Ctrl alias does not.
+  const handleHorizontal = useCallback((key: 'ArrowLeft' | 'ArrowRight'): boolean => {
+    const handler =
+      key === 'ArrowLeft' ? optionsRef.current.onExitLeft : optionsRef.current.onExitRight
+    return handler === undefined ? false : handler(activeIndexRef.current)
+  }, [])
+
+  // The aliases are taken on WINDOW capture, ahead of the workbench keybinding
+  // dispatcher (document capture), which would otherwise claim these strokes for
+  // their global commands and never let them reach a React handler. Same phase,
+  // same reason as AnchoredSurface's Escape just above.
+  useEffect(() => {
+    const onWindowKeyDown = (e: KeyboardEvent): void => {
+      // Mid-composition strokes are the IME's. A native event carries
+      // `isComposing` directly — no `nativeEvent` hop as in the React handler.
+      if (e.isComposing || e.keyCode === 229) return
+      const alias = ctrlNavigationKey(e)
+      // Every other Ctrl stroke keeps its global meaning — Ctrl+B, Ctrl+W, the
+      // Ctrl+K chord leader — and Alt / Meta stay out entirely.
+      if (alias === undefined) return
+      const el = containerElRef.current
+      // Ownership rather than registration order: an expanded overflow row mounts
+      // its body's overlay *inside* the panel's, so two of these listeners are
+      // live at once and both would move without this check. Only the innermost
+      // one holding focus answers.
+      if (el === null || !ownsFocus(el)) return
+      if (alias === 'n' || alias === 'p') {
+        applyIndexKey(alias === 'n' ? 'ArrowDown' : 'ArrowUp')
+      } else {
+        handleHorizontal(alias === 'h' ? 'ArrowLeft' : 'ArrowRight')
+      }
+      // Swallowed even when nothing moved: the alias must not reach the command
+      // it names globally. Bare arrows take the opposite rule in `onKeyDown`.
+      e.preventDefault()
+      e.stopPropagation()
+    }
+    window.addEventListener('keydown', onWindowKeyDown, true)
+    return () => window.removeEventListener('keydown', onWindowKeyDown, true)
+  }, [applyIndexKey, handleHorizontal])
+
   const onKeyDown = useCallback(
-    (e: KeyboardEvent) => {
-      const { count: total, onActivate, onAltDigit, wrap = true } = optionsRef.current
+    (e: ReactKeyboardEvent) => {
+      const { count: total, onActivate, onAltDigit } = optionsRef.current
       // IME composition owns every keystroke until it commits. Read through
       // `nativeEvent`: React's synthetic KeyboardEvent does not surface
       // `isComposing`, so `e.isComposing` here would always be undefined and the
@@ -204,23 +310,20 @@ export function useOverlayListNavigation(
         }
         return
       }
-      // Other modifier combos belong to the workbench / the host.
+      // Other modifier combos belong to the workbench / the host. The four
+      // movement aliases are not among them here: window capture took those.
       if (e.ctrlKey || e.metaKey) return
-      if (total <= 0) return
 
-      const next = resolveIndexNavigation(e.key, { index: activeIndexRef.current, count: total })
-      if (next !== undefined) {
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        if (!handleHorizontal(e.key)) return
         e.preventDefault()
         e.stopPropagation()
-        const target = wrap ? applyWrap(e.key, activeIndexRef.current, next, total) : next
-        // Clamped onto the row we are already on = the key hit an end. With
-        // wrapping off that is where a nested region hands the cursor back.
-        if (!wrap && target === activeIndexRef.current) {
-          if (e.key === 'ArrowUp') optionsRef.current.onExitUp?.()
-          else if (e.key === 'ArrowDown') optionsRef.current.onExitDown?.()
-          return
-        }
-        setActiveIndex(target)
+        return
+      }
+
+      if (applyIndexKey(e.key)) {
+        e.preventDefault()
+        e.stopPropagation()
         return
       }
 
@@ -240,7 +343,7 @@ export function useOverlayListNavigation(
         e.stopPropagation()
       }
     },
-    [runTypeahead],
+    [applyIndexKey, handleHorizontal, runTypeahead],
   )
 
   const onContainerMouseDown = useCallback(() => {

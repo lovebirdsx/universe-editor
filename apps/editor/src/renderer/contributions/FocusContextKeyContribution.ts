@@ -1,10 +1,10 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  FocusContextKeyContribution — derives focus-related context keys from
- *  IFocusTrackerService transitions.
+ *  FocusContextKeyContribution — derives focus-related context keys from the
+ *  document's own focus position.
  *
  *  Maintained keys:
- *    focusedPart                — partId currently containing focus, or ''
+ *    focusedPart                — the PartId whose xxxFocus key is true, or ''
  *    focusedView                — viewId currently containing focus, or ''
  *    sideBarFocus               — focus is inside SideBar
  *    secondarySideBarFocus      — focus is inside SecondarySideBar
@@ -17,39 +17,62 @@
  *    editorFocus                — a Monaco widget holds DOM focus (derived)
  *    editorTextFocus            — cleared while no Monaco editor holds focus
  *
- *  Each Part exposes onDidFocus / onDidBlur (bridged from FocusTracker in
- *  main.tsx), so we use those for the per-part booleans rather than walking
- *  the DOM on every transition. `focusedPart` / `focusedView` come from the
- *  FocusTracker's settled current element via [data-view-id] / [data-testid].
+ *  Everything here is derived from `document.activeElement` on each focus event
+ *  (see installDocumentFocusReconcile). It used to be book-kept: the per-part
+ *  booleans came from Part.onDidBlur, and the part/view ids from
+ *  IFocusTrackerService's settled current element. Both lag or lie.
  *
- *  `terminalFocus` is derived from the same settled element instead of being
- *  book-kept by TerminalInstance's own focusin/focusout listeners: startup
- *  spawns panel terminals while the panel is still hidden, and any focus that
- *  transiently lands in such a host must not leave the key stuck true (it
- *  would swallow every `!terminalFocus` keybinding, e.g. Ctrl+P quick open).
- *  Panel visibility is part of the derivation, so it re-syncs on toggle too.
+ *  The tracker is the dangerous one. It debounces through setTimeout(0) and
+ *  `_settle` short-circuits when the target equals the element focus is leaving,
+ *  so a key can stay on the wrong side of a move. For `editorAreaFocus` a stale
+ *  `false` is not cosmetic: Alt+<n> in the session config bar is gated on
+ *  `editorAreaFocus && activeEditorTypeId == 'acp.session'`, and so are Ctrl+F /
+ *  the resize chords — closing a popover used to leave the whole family dead
+ *  until the next unrelated focus move. Part.onDidBlur is the mirror image: it
+ *  fires whenever the tracker's tracked subtree loses the settled element, so a
+ *  transient blur could clear a key that the DOM still reads as focused.
  *
- *  `editorFocus` / `editorTextFocus` are derived for the same reason, from the
- *  document's own focusin/focusout (see installEditorFocusDerivation — the
- *  tracker drops a focus that returns to the element it left, which the DOM read
- *  must still see). They used to be book-kept by the editors that happened to
- *  bridge them (FileEditor, LogOutputView), so the ACP prompt input's embedded
- *  Monaco never claimed the key: focus leaving it left a stale true behind, which
- *  swallowed the global Escape binding (`!editorFocus`) and made "Escape returns
- *  to the session input" work once and then never again. An embedded Monaco
- *  therefore needs no editorFocus bridge of its own — this derivation covers it.
+ *  `Part.onDidFocus` is kept, on purpose, as an *intent* write. Part.focus()
+ *  fires it unconditionally, while `container.focus()` is a DOM no-op for the
+ *  editor-area / activity-bar / status-bar roots (they carry no tabIndex), so
+ *  F6, the bootstrap focus restore and LayoutService's focusPart fallback all
+ *  announce focus that the DOM never registers. Only the `true` side is kept:
+ *  false is the DOM's to report.
+ *
+ *  Known boundary: a focus move with no event behind it is invisible here.
+ *  Removing the focused node from the DOM is one — Chromium parks `activeElement`
+ *  on <body> without dispatching focusout — so a key can stay true until the next
+ *  real focus move (the old book-keeping had the same hole; it was event-driven
+ *  too). Nothing cheap closes it: the node that goes away is usually deep inside
+ *  a Part, so Part.onDidUnmount sees only the whole-Part case.
+ *
+ *  `focusedView` walks up from the focused element skipping unrelated
+ *  `data-testid`s — taking the nearest one made it blind to anything under a view
+ *  root, which is what closestPartId documents for the same trap.
+ *
+ *  `terminalFocus` keeps part of its own shape: startup spawns panel terminals
+ *  while the panel is still hidden, and any focus that transiently lands in such
+ *  a host must not leave the key stuck true (it would swallow every
+ *  `!terminalFocus` keybinding, e.g. Ctrl+P quick open). Panel visibility is part
+ *  of the derivation, so it re-syncs on toggle too — a visibility change moves no
+ *  DOM focus and therefore emits no focus event.
+ *
+ *  `editorFocus` / `editorTextFocus` share the same listener mechanics (see
+ *  installEditorFocusDerivation) — an embedded Monaco, like the ACP prompt input,
+ *  therefore needs no bridge of its own.
  *--------------------------------------------------------------------------------------------*/
 
 import {
   autorun,
   Disposable,
   IContextKeyService,
-  IFocusTrackerService,
   ILayoutService,
   IWorkbenchContribution,
   PartId,
 } from '@universe-editor/platform'
 import { installEditorFocusDerivation } from '../services/editor/editorFocus.js'
+import { closestAttr } from '../services/focus/FocusStackService.js'
+import { installDocumentFocusReconcile } from '../services/focus/documentFocusReconcile.js'
 
 const PART_KEY_BY_ID: Readonly<Record<PartId, string>> = {
   [PartId.ActivityBar]: 'activityBarFocus',
@@ -63,7 +86,6 @@ const PART_KEY_BY_ID: Readonly<Record<PartId, string>> = {
 export class FocusContextKeyContribution extends Disposable implements IWorkbenchContribution {
   constructor(
     @IContextKeyService contextKeyService: IContextKeyService,
-    @IFocusTrackerService focusTracker: IFocusTrackerService,
     @ILayoutService layoutService: ILayoutService,
   ) {
     super()
@@ -77,70 +99,61 @@ export class FocusContextKeyContribution extends Disposable implements IWorkbenc
       perPart.set(id, contextKeyService.createKey<boolean>(key, false))
     }
 
-    // Drive per-part focus booleans from each Part's own onDidFocus / onDidBlur.
-    // We bind both currently-registered parts and any future registrations.
-    const bind = (partId: PartId) => {
-      const part = layoutService.getPart(partId)
-      if (!part) return
-      const key = perPart.get(partId)
-      if (!key) return
-      // Active-part: subscribe to part events for boolean key.
-      this._register(part.onDidFocus(() => key.set(true)))
-      this._register(part.onDidBlur(() => key.set(false)))
-      if (part.isFocused()) key.set(true)
-    }
-    for (const part of layoutService.getParts()) bind(part.id)
-    this._register(layoutService.onDidRegisterPart((p) => bind(p.id)))
-
-    // focusedPart + focusedView come from settled focus transitions. We walk
-    // up from the current element looking for data-testid="part-*" and
-    // data-view-id="*".
-    const updateFromCurrent = () => {
-      const cur = focusTracker.current as unknown as HTMLElement | null
-      if (!cur) {
-        focusedPart.set('')
-        focusedView.set('')
-        return
-      }
-      const partTestId = this._closestAttr(cur, 'data-testid')
-      const partId = partTestId?.startsWith('part-') ? partTestId.slice('part-'.length) : ''
-      focusedPart.set(partId)
-      focusedView.set(this._closestAttr(cur, 'data-view-id') ?? '')
-    }
-    this._register(focusTracker.onDidFocusChange(updateFromCurrent))
-    updateFromCurrent()
-
-    const updateTerminalFocus = () => {
-      const cur = focusTracker.current as unknown as HTMLElement | null
-      const terminalHost = cur?.closest?.('[data-terminal-id]') ?? null
+    const updateTerminalFocus = (active: Element | null): void => {
+      const terminalHost = active?.closest('[data-terminal-id]') ?? null
       const hiddenPanelTerminal =
         terminalHost !== null &&
         terminalHost.closest('[data-testid="part-panel"]') !== null &&
         !layoutService.getVisible(PartId.Panel)
       terminalFocus.set(terminalHost !== null && !hiddenPanelTerminal)
     }
-    this._register(focusTracker.onDidFocusChange(updateTerminalFocus))
+
+    // One DOM read feeds every key. Part.isFocused() is just
+    // `container.contains(document.activeElement)`, so nothing here needs a flag
+    // that can drift from the DOM — and every key flips in the same task the
+    // focus move happened in.
+    //
+    // `focusedPart` falls out of the same loop rather than resolving the node's
+    // nearest Part separately: it is by construction "whichever xxxFocus key is
+    // true", so the two can never disagree, and a new PartId only has to be added
+    // to PART_KEY_BY_ID (a Record<PartId, …>, so the compiler enforces it).
+    const reconcile = (): void => {
+      const active = document.activeElement
+      let currentPart = ''
+      for (const [id, key] of perPart) {
+        const focused = layoutService.getPart(id)?.isFocused() ?? false
+        key.set(focused)
+        if (focused) currentPart = id
+      }
+      focusedPart.set(currentPart)
+      focusedView.set(closestAttr(active, 'data-view-id') ?? '')
+      updateTerminalFocus(active)
+    }
+
+    // Parts register after this contribution (blockStartup.ts orders us before
+    // WorkbenchPartsContribution), so getParts() is empty on construction and the
+    // initial reconcile lands on nothing — bind on registration to seed each key.
+    const bindPart = (partId: PartId): void => {
+      const part = layoutService.getPart(partId)
+      if (!part) return
+      this._register(part.onDidFocus(() => perPart.get(partId)?.set(true)))
+      reconcile()
+    }
+    for (const part of layoutService.getParts()) bindPart(part.id)
+    this._register(layoutService.onDidRegisterPart((p) => bindPart(p.id)))
+
     // Panel toggles don't move DOM focus by themselves fast enough to rely on
-    // the tracker alone (the pass-focus handoff is best-effort), so re-derive
-    // on visibility changes too.
+    // focus events alone (the pass-focus handoff is best-effort), so re-derive on
+    // visibility changes too.
     this._register(
       autorun((r) => {
         layoutService.visible.read(r)
-        updateTerminalFocus()
+        updateTerminalFocus(document.activeElement)
       }),
     )
-    updateTerminalFocus()
 
+    this._register(installDocumentFocusReconcile(reconcile))
     this._register(installEditorFocusDerivation(contextKeyService))
-  }
-
-  private _closestAttr(el: HTMLElement, attr: string): string | undefined {
-    let cur: HTMLElement | null = el
-    while (cur) {
-      const v = cur.getAttribute?.(attr)
-      if (v) return v
-      cur = cur.parentElement
-    }
-    return undefined
+    reconcile()
   }
 }

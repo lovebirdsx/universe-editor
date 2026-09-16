@@ -86,7 +86,7 @@
 - [reload disposable 泄漏误报](reload-disposable-leak-marksingleton.md) — markAsSingleton 兜底；render 期 new disposable 用 ref 守卫
 - [openEditor 孤儿泄漏](editor-group-open-orphan-leak.md) — 重复身份早退须 updateFrom?.()+dispose 新 input
 - [realpath URI 跨 IPC 未 revive](realpath-uri-ipc-revive.md) — 消费端须 URI.revive；诊断前必先 pnpm build
-- [editorTextFocus / editorFocus 残留吞键](editor-text-focus-stuck-swallows-keys.md) — 焦点离开 Monaco 即清；editorFocus 自 2026-09 起全局派生(勿再给嵌入 Monaco 补 bridge)、editorTextFocus 仍须自接；测裸字符键用真键盘
+- [editorTextFocus / editorFocus 残留吞键](editor-text-focus-stuck-swallows-keys.md) — 焦点离开 Monaco 即清；焦点类 key 一律 DOM 派生(editorFocus 2026-09、逐 Part 键 + focusedPart/View + terminalFocus 2026-09 跟进；勿再补 bridge)、唯一例外是 Part.onDidFocus 作 intent(三个 Part 根无 tabIndex)；editorTextFocus 仍须自接；测裸字符键用真键盘
 - [Monaco addCommand 全局泄漏](monaco-addcommand-global-key-leak.md) — 无编辑器作用域吞键；改作用域化 DOM keydown
 - [终端跨折行链接失效的三个独立根因](terminal-wrapped-link-two-root-causes.md) — windowsPty 须 IPC 透传；provideLinks 只能返回与该行相交的链接；trimRight 拼窗口须按 trimmedLength 映射坐标
 - [diff 视图重开显示旧内容](diff-view-stale-on-reopen.md) — 去重复用旧快照；EditorInput.updateFrom 钩子

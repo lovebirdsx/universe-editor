@@ -46,7 +46,7 @@
 |---|---|
 | `activityBarVisible` / `sideBarVisible` / `secondarySideBarVisible` / `panelVisible` | 布尔,各 Part 可见性 |
 | `activityBarFocus` / `sideBarFocus` / `secondarySideBarFocus` / `editorAreaFocus` / `panelFocus` / `statusBarFocus` | 布尔,焦点是否在该 Part 内 |
-| `focusedPart` | 字符串,当前含焦点的 Part id,无焦点为空串 |
+| `focusedPart` | 字符串,当前含焦点的 Part id(`activityBar` / `sideBar` / `secondarySideBar` / `editorArea` / `panel` / `statusBar`),无焦点为空串。取的是焦点元素最近的那个 Part 祖先,途经视图自带的 `data-testid` 不会把它挡住 |
 | `focusedView` | 字符串,当前含焦点的 View id,无焦点为空串 |
 | `editorFocus` | 布尔,任意 Monaco 编辑器持有焦点(含内嵌编辑器,如会话输入框) |
 | `editorTextFocus` | 布尔,编辑器文本输入区持有焦点(与 `editorFocus` 的区别:后者覆盖任何 Monaco widget) |

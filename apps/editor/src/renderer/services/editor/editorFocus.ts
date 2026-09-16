@@ -1,6 +1,7 @@
 import type { EditorInput, IContextKeyService, IDisposable } from '@universe-editor/platform'
-import { autorun, toDisposable } from '@universe-editor/platform'
+import { autorun } from '@universe-editor/platform'
 import type { monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
+import { installDocumentFocusReconcile } from '../focus/documentFocusReconcile.js'
 import { FileEditorRegistry } from './FileEditorRegistry.js'
 import { DiffEditorRegistry } from './DiffEditorRegistry.js'
 
@@ -43,38 +44,14 @@ export function syncEditorFocusContext(contextKeyService: IContextKeyService): v
  * The explicit syncEditorFocusContext() calls stay: they are the same-task fast
  * path, for callers that just moved focus themselves. Missing one now costs a
  * macrotask instead of leaving the key wrong for good.
+ *
+ * The listener mechanics (sync on focusin, coalesced timeout on focusout) live in
+ * installDocumentFocusReconcile, shared with the other DOM-derived focus keys.
  */
 export function installEditorFocusDerivation(contextKeyService: IContextKeyService): IDisposable {
-  const reconcile = (): void => syncEditorFocusContext(contextKeyService)
-
-  // A focus move that lands on nothing focusable (a click on a plain div) fires
-  // focusout with no focusin behind it and leaves `activeElement` on <body> — the
-  // read has to happen, and it has to happen after the DOM settles. setTimeout(0)
-  // rather than queueMicrotask is deliberate: FileEditor reclaims focus from <body>
-  // in a microtask, and that reclaim must land before we read, or we would clear the
-  // keys out from under a re-focused editor. Focusout deliberately reads nothing
-  // synchronously — during the pair activeElement is momentarily null.
-  let timer: ReturnType<typeof setTimeout> | undefined
-  const onFocusOut = (): void => {
-    if (timer !== undefined) return
-    timer = setTimeout(() => {
-      timer = undefined
-      reconcile()
-    }, 0)
-  }
-  // focusin needs no deferral: the DOM already points at the new element when it
-  // fires, which is what keeps the same-task window (a binding resolved right after
-  // a click) correct.
-  document.addEventListener('focusin', reconcile, true)
-  document.addEventListener('focusout', onFocusOut, true)
-
-  reconcile()
-  return toDisposable(() => {
-    document.removeEventListener('focusin', reconcile, true)
-    document.removeEventListener('focusout', onFocusOut, true)
-    if (timer !== undefined) clearTimeout(timer)
-    timer = undefined
-  })
+  const dispose = installDocumentFocusReconcile(() => syncEditorFocusContext(contextKeyService))
+  syncEditorFocusContext(contextKeyService)
+  return dispose
 }
 
 /**

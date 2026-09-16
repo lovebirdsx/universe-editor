@@ -264,8 +264,8 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
     contextKeyService.createKey<boolean>('tabShouldAcceptInlineEdit', false)
 
     // True when an xterm.js terminal instance holds DOM focus (panel or editor tab).
-    // Derived by FocusContextKeyContribution from the focus tracker's settled
-    // element (a hidden panel terminal never counts).
+    // Derived by FocusContextKeyContribution from the document's focused element
+    // (a hidden panel terminal never counts).
     contextKeyService.createKey<boolean>('terminalFocus', false)
 
     // -- group-level editor keys

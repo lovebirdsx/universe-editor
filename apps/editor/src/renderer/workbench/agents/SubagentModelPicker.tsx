@@ -109,11 +109,14 @@ export function SubagentModelPanel({
   onAltDigit,
   onExitUp,
   onExitDown,
+  onExitLeft,
 }: {
   session: IAcpSession
   onAltDigit?: (digit: number) => void
   onExitUp?: () => void
   onExitDown?: () => void
+  /** True = collapsed the hosting body; false leaves ← to whatever is underneath. */
+  onExitLeft?: () => boolean
 }) {
   const { activeAuth, subagentModelEnv, setSubagentModel } = useClaudeConfig()
   const { providers } = useProviderRegistry()
@@ -225,6 +228,7 @@ export function SubagentModelPanel({
     ...(onAltDigit !== undefined ? { onAltDigit } : {}),
     ...(onExitUp !== undefined ? { onExitUp } : {}),
     ...(onExitDown !== undefined ? { onExitDown } : {}),
+    ...(onExitLeft !== undefined ? { onExitLeft } : {}),
   })
 
   return (

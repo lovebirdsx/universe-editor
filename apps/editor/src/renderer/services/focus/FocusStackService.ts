@@ -123,8 +123,8 @@ export class FocusStackService extends Disposable implements IFocusStackService 
 }
 
 /** Nearest ancestor value of `attr` (inclusive of `el`), or undefined. */
-export function closestAttr(el: HTMLElement, attr: string): string | undefined {
-  for (let cur: HTMLElement | null = el; cur; cur = cur.parentElement) {
+export function closestAttr(el: Element | null, attr: string): string | undefined {
+  for (let cur: Element | null = el; cur; cur = cur.parentElement) {
     const v = cur.getAttribute?.(attr)
     if (v) return v
   }
@@ -145,9 +145,12 @@ const PART_ID_BY_TESTID_SUFFIX = new Map<string, PartId>(
  * view roots carry their own (e.g. `search-view`), and stopping there made the
  * Part lookup fail for every focus landing inside such a view, silently
  * dropping the entry — so those views never entered the focus history at all.
+ *
+ * Shared with FocusContextKeyContribution's `focusedPart` key, which hit the
+ * same shadowing (`acp-prompt` inside `part-editorArea`).
  */
-export function closestPartId(el: HTMLElement): PartId | undefined {
-  for (let cur: HTMLElement | null = el; cur; cur = cur.parentElement) {
+export function closestPartId(el: Element | null): PartId | undefined {
+  for (let cur: Element | null = el; cur; cur = cur.parentElement) {
     const testId = cur.getAttribute?.('data-testid')
     if (!testId?.startsWith('part-')) continue
     const partId = PART_ID_BY_TESTID_SUFFIX.get(testId.slice('part-'.length).toLowerCase())

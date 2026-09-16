@@ -123,6 +123,21 @@ export function ConfigBarOverflowMenu({
     },
     // No wrap: the ends are where an expanded body hands the cursor back.
     wrap: false,
+    // → opens the row under the cursor, ← closes the one that is open — the
+    // disclosure pair, on the plain arrows and on their Ctrl+L / Ctrl+H aliases.
+    // ← declines when nothing is expanded so the bare arrow still falls through;
+    // its alias is swallowed either way, as menu aliases are.
+    onExitRight: (index) => {
+      const entry = overflowEntries[index]
+      if (!entry || entry.key === expandedKey) return false
+      onExpandedKeyChange(entry.key)
+      return true
+    },
+    onExitLeft: () => {
+      if (expandedKey === null) return false
+      onExpandedKeyChange(null)
+      return true
+    },
     // Alt+<n> opens the panel with its target row already expanded, and host
     // refs fire child-first — without this the row container would take focus
     // straight back out of the body the user asked to land in.
@@ -162,6 +177,15 @@ export function ConfigBarOverflowMenu({
     },
     [expandedIndex, overflowEntries.length, onExpandedKeyChange, focusRow],
   )
+
+  // ← (and its Ctrl+H alias) from anywhere in a body: the same collapse as ↑ on
+  // the body's first row, so the two strokes agree instead of the arrow leaving
+  // and the alias not. A body is expanded by definition, so this always answers
+  // true — the key is never handed back to the list underneath.
+  const collapseBody = useCallback((): boolean => {
+    leaveBody(0)
+    return true
+  }, [leaveBody])
 
   const escapePanel = useCallback((): boolean => {
     if (expandedKey !== null) {
@@ -236,6 +260,7 @@ export function ConfigBarOverflowMenu({
                 onAltDigit={onAltDigit}
                 onExitUp={() => leaveBody(0)}
                 onExitDown={() => leaveBody(1)}
+                onExitLeft={collapseBody}
               />
             ))}
           </div>
@@ -255,6 +280,7 @@ function OverflowRow({
   onAltDigit,
   onExitUp,
   onExitDown,
+  onExitLeft,
 }: {
   session: IAcpSession
   entry: ConfigBarEntry
@@ -266,6 +292,7 @@ function OverflowRow({
   onAltDigit: (digit: number) => void
   onExitUp: () => void
   onExitDown: () => void
+  onExitLeft: () => boolean
 }) {
   // The MCP row gates itself on the service and the pool, so its hooks cannot
   // live here — each kind gets its own component rather than a conditional hook.
@@ -280,6 +307,7 @@ function OverflowRow({
         onAltDigit={onAltDigit}
         onExitUp={onExitUp}
         onExitDown={onExitDown}
+        onExitLeft={onExitLeft}
       />
     )
   }
@@ -293,6 +321,7 @@ function OverflowRow({
         onAltDigit={onAltDigit}
         onExitUp={onExitUp}
         onExitDown={onExitDown}
+        onExitLeft={onExitLeft}
       />
     )
   }
@@ -306,6 +335,7 @@ function OverflowRow({
       onAltDigit={onAltDigit}
       onExitUp={onExitUp}
       onExitDown={onExitDown}
+      onExitLeft={onExitLeft}
     />
   )
 }
@@ -317,6 +347,8 @@ interface IOverflowRowBodyProps {
   onAltDigit: (digit: number) => void
   onExitUp: () => void
   onExitDown: () => void
+  /** ← / Ctrl+H anywhere in the body: collapse it and hand the cursor back. */
+  onExitLeft: () => boolean
 }
 
 /** A select option's body: the same list the inline popover renders. */
@@ -329,6 +361,7 @@ function OptionOverflowRow({
   onAltDigit,
   onExitUp,
   onExitDown,
+  onExitLeft,
 }: Omit<IOverflowRowBodyProps, 'onRequestClose'> & {
   session: IAcpSession
   option: SessionConfigOption & { type: 'select' }
@@ -354,6 +387,7 @@ function OptionOverflowRow({
           onAltDigit={onAltDigit}
           onExitUp={onExitUp}
           onExitDown={onExitDown}
+          onExitLeft={onExitLeft}
         />
       }
       active={active}
@@ -371,6 +405,7 @@ function SubagentOverflowRow({
   onAltDigit,
   onExitUp,
   onExitDown,
+  onExitLeft,
 }: Omit<IOverflowRowBodyProps, 'onRequestClose'> & {
   session: IAcpSession
   active: boolean
@@ -390,6 +425,7 @@ function SubagentOverflowRow({
           onAltDigit={onAltDigit}
           onExitUp={onExitUp}
           onExitDown={onExitDown}
+          onExitLeft={onExitLeft}
         />
       }
       active={active}
@@ -452,6 +488,7 @@ function McpOverflowRow({
   onAltDigit,
   onExitUp,
   onExitDown,
+  onExitLeft,
 }: IOverflowRowBodyProps & {
   session: IAcpSession
   active: boolean
@@ -473,6 +510,7 @@ function McpOverflowRow({
       onAltDigit={onAltDigit}
       onExitUp={onExitUp}
       onExitDown={onExitDown}
+      onExitLeft={onExitLeft}
     />
   )
 }
@@ -487,6 +525,7 @@ function McpOverflowRowInner({
   onAltDigit,
   onExitUp,
   onExitDown,
+  onExitLeft,
 }: IOverflowRowBodyProps & {
   session: IAcpSession
   service: IAcpSessionServiceType
@@ -521,6 +560,7 @@ function McpOverflowRowInner({
           onAltDigit={onAltDigit}
           onExitUp={onExitUp}
           onExitDown={onExitDown}
+          onExitLeft={onExitLeft}
         />
       }
       active={active}

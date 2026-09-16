@@ -593,7 +593,8 @@ function ConfigOptionPopover({
  * Surface-free option list; renders inside any host (the inline popover, an
  * overflow row's expanded body). The host that nests it passes
  * `onExitUp` / `onExitDown` so the cursor falls back out to its rows instead of
- * wrapping here.
+ * wrapping here, and `onExitLeft` so ← (and its Ctrl+H alias) collapses that
+ * body rather than doing nothing.
  */
 export function ConfigOptionPanel({
   option,
@@ -601,12 +602,15 @@ export function ConfigOptionPanel({
   onAltDigit,
   onExitUp,
   onExitDown,
+  onExitLeft,
 }: {
   option: SessionConfigOption & { type: 'select' }
   onCommit: (value: string) => void
   onAltDigit?: ((digit: number) => void) | undefined
   onExitUp?: (() => void) | undefined
   onExitDown?: (() => void) | undefined
+  /** True = collapsed; false leaves the key to whatever is underneath. */
+  onExitLeft?: (() => boolean) | undefined
 }) {
   const flat = useMemo(() => flattenSelectOptions(option.options), [option.options])
   // When nested, the ends are exits rather than wrap points.
@@ -624,6 +628,7 @@ export function ConfigOptionPanel({
     ...(onAltDigit !== undefined ? { onAltDigit } : {}),
     ...(onExitUp !== undefined ? { onExitUp } : {}),
     ...(onExitDown !== undefined ? { onExitDown } : {}),
+    ...(onExitLeft !== undefined ? { onExitLeft } : {}),
   })
   return (
     // The surface root is the scroll container, so the focus holder is a bare

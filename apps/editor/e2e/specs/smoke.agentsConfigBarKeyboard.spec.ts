@@ -19,6 +19,11 @@
  *    - with the bar squeezed narrow, Alt+<n> reaches an entry that folded into
  *      the "…" panel: the panel opens with that row expanded and the cursor
  *      inside its option list
+ *    - the Ctrl movement aliases (Ctrl+N/P = down/up, Ctrl+H/L = collapse/open
+ *      the row) work inside an open surface without reaching quick open, and are
+ *      gone again once it closes
+ *    - whenever a surface hands the cursor back, the focus context keys the chords
+ *      are gated on agree with the DOM (see expectFocusKeysAgreeWithDom)
  *
  *  This is the only layer that can cover any of it. The binding lives in the
  *  global keybinding dispatcher (document capture, ahead of every React
@@ -87,6 +92,36 @@ async function focusSessionEditor(page: Page): Promise<void> {
   await page.getByTestId('acp-prompt-drop-host').click()
 }
 
+/**
+ * Assert the focus context keys and the DOM agree, in ONE atomic read.
+ *
+ * `editorAreaFocus` gates every chord this spec presses (ACP_EDITOR_ONLY_WHEN), so
+ * a key that lags the DOM turns "Alt+<n> did nothing" into a mystery. It used to be
+ * book-kept through the focus tracker, whose settle can leave it false while DOM
+ * focus already sits in the editor — that lag is this spec's historical flake.
+ * Deliberately not a poll: polling here would paper over exactly the lag it exists
+ * to catch, and would pass on the buggy build too.
+ *
+ * Only meaningful right after a real DOM focus move. `Part.focus()` is a DOM no-op
+ * on the editor-area / activity-bar / status-bar roots (no tabIndex) yet still
+ * fires onDidFocus, so on those paths `editorAreaFocus` reads true while
+ * `focusedPart` is '' and the caret is elsewhere — the agreement asserted here does
+ * not hold there by design. Both call sites below sit after Escape handed focus
+ * back to a real element; do not reuse this as a general-purpose assertion.
+ */
+async function expectFocusKeysAgreeWithDom(page: Page, activeTestId: string): Promise<void> {
+  const snapshot = await page.evaluate(() => ({
+    activeTestId: document.activeElement?.getAttribute('data-testid') ?? '(none)',
+    focusedPart: window.__E2E__!.getContextKey('focusedPart'),
+    editorAreaFocus: window.__E2E__!.getContextKey('editorAreaFocus'),
+  }))
+  expect(snapshot).toEqual({
+    activeTestId,
+    focusedPart: 'editorArea',
+    editorAreaFocus: true,
+  })
+}
+
 test.describe('@p0 agents config bar keyboard', () => {
   test('Alt+<n> opens config entries, arrows + Enter pick, Escape returns focus', async ({
     page,
@@ -152,6 +187,8 @@ test.describe('@p0 agents config bar keyboard', () => {
     await page.keyboard.press('Escape')
     await expect(modelPopover(page)).toBeHidden({ timeout: 5000 })
     await expect(modelTrigger(page)).toBeFocused()
+    // ...and the keys the chords are gated on agree with that DOM read.
+    await expectFocusKeysAgreeWithDom(page, 'acp-config-model-trigger')
 
     // Past the end: the bar reports how many entries the session actually has,
     // and the chord must not fall through to the workbench. Alt+<digit> is
@@ -191,6 +228,34 @@ test.describe('@p0 agents config bar keyboard', () => {
       'claude-opus-4-6-longterm-support',
     )
 
+    // Ctrl+P / Ctrl+N are the emacs aliases a context menu already answers, taken
+    // here on window capture so quick open / new file never see them. The cursor
+    // is inside the expanded body, so they must step its options — and the
+    // panel's own row listener must stay out of it: both are on window capture at
+    // once, so ownership (not registration order) has to decide.
+    await page.keyboard.press('Control+p')
+    await expect(modelRow.locator('..').locator('[role="option"][data-active="true"]')).toHaveText(
+      'opus-4-6',
+    )
+    await page.keyboard.press('Control+n')
+    await expect(modelRow.locator('..').locator('[role="option"][data-active="true"]')).toHaveText(
+      'claude-opus-4-6-longterm-support',
+    )
+    expect(await page.evaluate(() => window.__E2E__!.getContextKey('quickInputVisible'))).toBe(
+      false,
+    )
+
+    // ← / Ctrl+H collapse the body and hand the cursor back to the rows, → /
+    // Ctrl+L open the row under it again — the disclosure pair, on the aliases.
+    // The caret has to land on the panel itself: the body is gone, so a caret
+    // left inside it would fall to <body> and the stroke below would be owned by
+    // nobody.
+    await page.keyboard.press('Control+h')
+    await expect(modelRow).toHaveAttribute('aria-expanded', 'false')
+    await expect(panel).toBeVisible()
+    await page.keyboard.press('Control+l')
+    await expect(modelRow).toHaveAttribute('aria-expanded', 'true')
+
     // Escape peels one level at a time: the row collapses, the panel stays up.
     await page.keyboard.press('Escape')
     await expect(modelRow).toHaveAttribute('aria-expanded', 'false')
@@ -199,5 +264,17 @@ test.describe('@p0 agents config bar keyboard', () => {
     await page.keyboard.press('Escape')
     await expect(panel).toBeHidden({ timeout: 5000 })
     await expect(overflowTrigger).toBeFocused()
+    await expectFocusKeysAgreeWithDom(page, 'acp-config-overflow-trigger')
+
+    // The listener is torn down with the surface rather than merely narrowed:
+    // with the panel gone Ctrl+P is quick open again.
+    await page.keyboard.press('Control+p')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('quickInputVisible')), {
+        timeout: 5000,
+        message: 'Ctrl+P should be quick open again once the panel is closed',
+      })
+      .toBe(true)
+    await page.keyboard.press('Escape')
   })
 })
