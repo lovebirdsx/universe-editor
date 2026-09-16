@@ -350,6 +350,41 @@ describe('repriceForeignModelBreakdown', () => {
     const expected = (1_000_000 * 3 + 500_000 * 0.3) / 1e6
     expect(result!.models[0]!.costUSD).toBeCloseTo(expected, 10)
   })
+
+  // A generic gateway that publishes all four buckets as non-overlapping
+  // categories (anonymized fixture from a gateway trace: input 3 / cache read
+  // 39459 / cache write 958 / output 1336 at 56 / 5.6 / 70 / 280 CNY per M).
+  // That is the gateway's own bill for the request: ¥0.6622784. The model is no
+  // catalog member, so no cached share is deducted from input and the published
+  // CNY rates are normalized with the context's live rate.
+  it('prices a four-bucket gateway row at the published rates', () => {
+    const result = repriceForeignModelBreakdown(
+      [
+        midturnRow({
+          model: 'gw-chat-v1',
+          inputTokens: 3,
+          cacheReadTokens: 39459,
+          cacheCreateTokens: 958,
+          outputTokens: 1336,
+        }),
+      ],
+      {
+        providerId: 'gw',
+        protocol: 'anthropic-messages',
+        pricingSource: { id: 'http-json', options: {} },
+        gatewayRates: {
+          'gw-chat-v1': { currency: 'CNY', input: 56, output: 280, cacheRead: 5.6, cacheWrite: 70 },
+        },
+        cnyPerUsd: 6.74,
+      },
+    )
+    // ¥0.6622784 = (3*56 + 39459*5.6 + 958*70 + 1336*280) / 1e6
+    const expected = 0.6622784 / 6.74
+    expect(result!.models[0]!.costUSD).toBeCloseTo(expected, 10)
+    expect(result!.models[0]!.costUSD! * 6.74).toBeCloseTo(0.6622784, 9)
+    expect(result!.cost!.amount).toBeCloseTo(expected, 10)
+    expect(result!.cost!.currency).toBe('USD')
+  })
 })
 
 describe('estimateCodexCost', () => {

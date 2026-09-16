@@ -182,6 +182,257 @@ describe('AnthropicMessagesProvider', () => {
     expect(result.usage).toEqual({ inputTokens: 15, outputTokens: 5 })
   })
 
+  // Gateways transformed from another wire shape classify nothing on the start
+  // frame (all zeros) and only fill the buckets in on the terminal frame.
+  // Reading `output_tokens` alone left the input side at 0, so a request that
+  // really occupied 40420 context tokens was reported as empty.
+  it('fills the input buckets from the terminal message_delta frame', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          streamFromChunks([
+            sse({
+              type: 'message_start',
+              message: {
+                usage: {
+                  input_tokens: 0,
+                  cache_creation_input_tokens: 0,
+                  cache_read_input_tokens: 0,
+                },
+              },
+            }),
+            sse({ type: 'content_block_delta', delta: { type: 'text_delta', text: 'hi' } }),
+            sse({
+              type: 'message_delta',
+              delta: { stop_reason: 'end_turn' },
+              usage: {
+                input_tokens: 3,
+                cache_creation_input_tokens: 958,
+                cache_read_input_tokens: 39459,
+                output_tokens: 1336,
+              },
+            }),
+          ]),
+          { status: 200 },
+        ),
+      ),
+    )
+    const provider = new AnthropicMessagesProvider()
+    const cts = new CancellationTokenSource()
+
+    const response = provider.sendRequest(
+      userMessages,
+      { modelId: MODEL_ID },
+      makeProvider({ apiKey: 'sk-test' }),
+      cts.token,
+    )
+    const result = await response.result
+
+    // 3 + 958 + 39459 — the three input categories only, output never folded in.
+    expect(result.usage).toEqual({ inputTokens: 40420, outputTokens: 1336 })
+  })
+
+  it('keeps the start-frame buckets when the terminal frame omits or nulls them', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          streamFromChunks([
+            sse({
+              type: 'message_start',
+              message: {
+                usage: {
+                  input_tokens: 3,
+                  cache_creation_input_tokens: 958,
+                  cache_read_input_tokens: 39459,
+                },
+              },
+            }),
+            sse({ type: 'message_delta', usage: { output_tokens: 1336 } }),
+            sse({
+              type: 'message_delta',
+              usage: {
+                input_tokens: null,
+                cache_creation_input_tokens: null,
+                cache_read_input_tokens: null,
+              },
+            }),
+          ]),
+          { status: 200 },
+        ),
+      ),
+    )
+    const provider = new AnthropicMessagesProvider()
+    const cts = new CancellationTokenSource()
+
+    const response = provider.sendRequest(
+      userMessages,
+      { modelId: MODEL_ID },
+      makeProvider({ apiKey: 'sk-test' }),
+      cts.token,
+    )
+    const result = await response.result
+
+    expect(result.usage).toEqual({ inputTokens: 40420, outputTokens: 1336 })
+  })
+
+  it('lets an explicit zero in the terminal frame override the start-frame bucket', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          streamFromChunks([
+            sse({
+              type: 'message_start',
+              message: {
+                usage: {
+                  input_tokens: 10,
+                  cache_creation_input_tokens: 3,
+                  cache_read_input_tokens: 2,
+                },
+              },
+            }),
+            sse({
+              type: 'message_delta',
+              usage: {
+                input_tokens: 0,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
+                output_tokens: 5,
+              },
+            }),
+          ]),
+          { status: 200 },
+        ),
+      ),
+    )
+    const provider = new AnthropicMessagesProvider()
+    const cts = new CancellationTokenSource()
+
+    const response = provider.sendRequest(
+      userMessages,
+      { modelId: MODEL_ID },
+      makeProvider({ apiKey: 'sk-test' }),
+      cts.token,
+    )
+    const result = await response.result
+
+    expect(result.usage).toEqual({ inputTokens: 0, outputTokens: 5 })
+  })
+
+  it('treats each message_delta usage as a cumulative snapshot, not an increment', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          streamFromChunks([
+            sse({ type: 'message_start', message: { usage: { input_tokens: 1 } } }),
+            sse({
+              type: 'message_delta',
+              usage: {
+                input_tokens: 5,
+                cache_creation_input_tokens: 2,
+                cache_read_input_tokens: 10,
+                output_tokens: 7,
+              },
+            }),
+            sse({
+              type: 'message_delta',
+              usage: {
+                input_tokens: 9,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 20,
+                output_tokens: 11,
+              },
+            }),
+          ]),
+          { status: 200 },
+        ),
+      ),
+    )
+    const provider = new AnthropicMessagesProvider()
+    const cts = new CancellationTokenSource()
+
+    const response = provider.sendRequest(
+      userMessages,
+      { modelId: MODEL_ID },
+      makeProvider({ apiKey: 'sk-test' }),
+      cts.token,
+    )
+    const result = await response.result
+
+    // The last snapshot, not the sum of both (which would be 9+2+30 / 18).
+    expect(result.usage).toEqual({ inputTokens: 29, outputTokens: 11 })
+  })
+
+  // Usage merging must not turn the stream into a buffer: text chunks still come
+  // out as they arrive, with the single usage chunk only after the terminal frame.
+  it('keeps text streaming while the usage lands on the terminal frame', async () => {
+    const encoder = new TextEncoder()
+    let body!: ReadableStreamDefaultController<Uint8Array>
+    const sseStream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        body = controller
+      },
+    })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(sseStream, { status: 200 })))
+    const provider = new AnthropicMessagesProvider()
+    const cts = new CancellationTokenSource()
+
+    const response = provider.sendRequest(
+      userMessages,
+      { modelId: MODEL_ID },
+      makeProvider({ apiKey: 'sk-test' }),
+      cts.token,
+    )
+    const iterator = response.stream[Symbol.asyncIterator]()
+
+    body.enqueue(encoder.encode(sse({ type: 'message_start', message: { usage: {} } })))
+    body.enqueue(
+      encoder.encode(
+        sse({ type: 'content_block_delta', delta: { type: 'text_delta', text: 'Hel' } }),
+      ),
+    )
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: { type: 'text', value: 'Hel' },
+    })
+
+    body.enqueue(
+      encoder.encode(
+        sse({ type: 'content_block_delta', delta: { type: 'text_delta', text: 'lo' } }),
+      ),
+    )
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: { type: 'text', value: 'lo' },
+    })
+
+    body.enqueue(
+      encoder.encode(
+        sse({
+          type: 'message_delta',
+          usage: {
+            input_tokens: 3,
+            cache_creation_input_tokens: 958,
+            cache_read_input_tokens: 39459,
+            output_tokens: 1336,
+          },
+        }),
+      ),
+    )
+    body.close()
+
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: { type: 'usage', inputTokens: 40420, outputTokens: 1336 },
+    })
+    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined })
+    const result = await response.result
+    expect(result.usage).toEqual({ inputTokens: 40420, outputTokens: 1336 })
+  })
+
   it('maps a 401 response to an Unauthorized AiError', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('nope', { status: 401 })))
     const provider = new AnthropicMessagesProvider()

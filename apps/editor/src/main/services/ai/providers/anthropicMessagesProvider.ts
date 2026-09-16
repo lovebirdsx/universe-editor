@@ -165,6 +165,10 @@ export class AnthropicMessagesProvider implements IAiModelProvider {
             cacheReadTokens = evt.message?.usage?.cache_read_input_tokens ?? 0
             break
           case 'message_delta':
+            // 网关可能直到终帧才补齐输入分类；缺失字段保留旧值，显式 0 则覆盖。
+            inputTokens = evt.usage?.input_tokens ?? inputTokens
+            cacheCreationTokens = evt.usage?.cache_creation_input_tokens ?? cacheCreationTokens
+            cacheReadTokens = evt.usage?.cache_read_input_tokens ?? cacheReadTokens
             outputTokens = evt.usage?.output_tokens ?? outputTokens
             if (evt.delta?.stop_reason !== undefined) stopReason = evt.delta.stop_reason
             break
