@@ -2,21 +2,22 @@
  *  Tests for apps/editor/src/main/services/codexBinary/codexBinaryMainService.ts
  *  remote-authority routing: an `authority` on resolve routes through the
  *  AgentBinary channel of the remote connection (download semantics only),
- *  forwards progress with the authority attached, and filters out the other
- *  agent's events.
+ *  forwards download state with the authority attached, and filters out the
+ *  other agent's events.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Emitter, Event, RemoteChannels } from '@universe-editor/platform'
 import {
   AgentBinaryStore,
+  type AgentBinaryDownloadState,
   type AgentBinaryId,
-  type AgentBinaryRemoteProgressEvent,
+  type AgentBinaryRemoteDownloadEvent,
   type AgentBinaryVersionInfo,
   type IRemoteAgentBinaryService,
 } from '@universe-editor/node-services'
 import { CodexBinaryMainService } from '../codexBinaryMainService.js'
-import type { ICodexBinaryProgress } from '../../../../shared/ipc/codexBinaryService.js'
+import type { ICodexBinaryDownloadEvent } from '../../../../shared/ipc/codexBinaryService.js'
 import type { IRemoteConnectionService } from '../../remote/remoteConnectionMainService.js'
 import { getTempRoot } from '@universe-editor/temp-root'
 
@@ -24,10 +25,14 @@ vi.mock('electron', () => ({
   app: { isPackaged: false, getAppPath: () => '/fake/app', getPath: () => getTempRoot() },
 }))
 
+function downloading(received: number, total: number): AgentBinaryDownloadState[] {
+  return [{ version: '1.0.0', received, total, background: false }]
+}
+
 class FakeRemoteBinaryService implements IRemoteAgentBinaryService {
   declare readonly _serviceBrand: undefined
-  private readonly _onProgress = new Emitter<AgentBinaryRemoteProgressEvent>()
-  readonly onDidChangeProgress = this._onProgress.event
+  private readonly _onDownload = new Emitter<AgentBinaryRemoteDownloadEvent>()
+  readonly onDidChangeDownload = this._onDownload.event
   readonly resolves: { agent: AgentBinaryId; allowDownload: boolean }[] = []
   readonly versionInfos: AgentBinaryId[] = []
   readonly forceDownloads: { agent: AgentBinaryId; version: string }[] = []
@@ -48,7 +53,8 @@ class FakeRemoteBinaryService implements IRemoteAgentBinaryService {
       bundledVersion: `bundled-${agent}`,
       installedVersion: `installed-${agent}`,
       latestVersion: `latest-${agent}`,
-      prefetchedVersion: null,
+      downloadedVersions: [`installed-${agent}`],
+      downloads: [],
     }
   }
 
@@ -65,8 +71,8 @@ class FakeRemoteBinaryService implements IRemoteAgentBinaryService {
     this.cleanups.push(agent)
   }
 
-  fireProgress(e: AgentBinaryRemoteProgressEvent): void {
-    this._onProgress.fire(e)
+  fireDownload(e: AgentBinaryRemoteDownloadEvent): void {
+    this._onDownload.fire(e)
   }
 }
 
@@ -131,21 +137,21 @@ describe('CodexBinaryMainService — remote routing', () => {
     expect(fixture.remote.resolves).toEqual([{ agent: 'codex', allowDownload: false }])
   })
 
-  it('forwards progress with the authority attached, filtering out claude events', async () => {
+  it('forwards remote download state with the authority attached, filtering out claude events', async () => {
     const fixture = makeFixture()
     svc = fixture.svc
-    const events: ICodexBinaryProgress[] = []
-    const sub = svc.onDidChangeProgress((e) => events.push(e))
+    const events: ICodexBinaryDownloadEvent[] = []
+    const sub = svc.onDidChangeDownload((e) => events.push(e))
     try {
       await svc.resolve({ source: 'download', authority: 'host' })
 
-      fixture.remote.fireProgress({ agent: 'codex', received: 5, total: 100 })
-      fixture.remote.fireProgress({ agent: 'claude', received: 9, total: 100 })
-      fixture.remote.fireProgress({ agent: 'codex', received: 100, total: 100 })
+      fixture.remote.fireDownload({ agent: 'codex', downloads: downloading(5, 100) })
+      fixture.remote.fireDownload({ agent: 'claude', downloads: downloading(9, 100) })
+      fixture.remote.fireDownload({ agent: 'codex', downloads: [] })
 
       expect(events).toEqual([
-        { received: 5, total: 100, authority: 'host' },
-        { received: 100, total: 100, authority: 'host' },
+        { downloads: downloading(5, 100), authority: 'host' },
+        { downloads: [], authority: 'host' },
       ])
     } finally {
       sub.dispose()
@@ -160,7 +166,8 @@ describe('CodexBinaryMainService — remote routing', () => {
       bundledVersion: 'bundled-codex',
       installedVersion: 'installed-codex',
       latestVersion: 'latest-codex',
-      prefetchedVersion: null,
+      downloadedVersions: ['installed-codex'],
+      downloads: [],
     })
     expect(fixture.remote.versionInfos).toEqual(['codex'])
   })
@@ -239,18 +246,18 @@ describe('CodexBinaryMainService — remote routing', () => {
     ])
   })
 
-  it('subscribes to remote progress once per authority across repeated resolves', async () => {
+  it('subscribes to remote download events once per authority across repeated resolves', async () => {
     const fixture = makeFixture()
     svc = fixture.svc
-    const events: ICodexBinaryProgress[] = []
-    const sub = svc.onDidChangeProgress((e) => events.push(e))
+    const events: ICodexBinaryDownloadEvent[] = []
+    const sub = svc.onDidChangeDownload((e) => events.push(e))
     try {
       await svc.resolve({ source: 'download', authority: 'host' })
       await svc.resolve({ source: 'download', authority: 'host' })
 
-      fixture.remote.fireProgress({ agent: 'codex', received: 5, total: 100 })
+      fixture.remote.fireDownload({ agent: 'codex', downloads: downloading(5, 100) })
 
-      expect(events).toEqual([{ received: 5, total: 100, authority: 'host' }])
+      expect(events).toEqual([{ downloads: downloading(5, 100), authority: 'host' }])
     } finally {
       sub.dispose()
     }

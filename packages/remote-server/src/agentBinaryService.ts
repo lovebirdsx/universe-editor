@@ -4,9 +4,9 @@
  *  Codex binaries onto the remote host by wrapping the shared AgentBinaryStore
  *  (node-services) per agent. The stores are constructed lazily on first use so
  *  a fresh daemon never reads a meta file (or touches disk) until a session —
- *  or an explicit prefetch/cleanup — actually needs a binary. Progress is
- *  throttled per agent before crossing the TCP tunnel — the store fires per
- *  chunk, which is far too chatty for a remote link (a multi-hundred-MB
+ *  or an explicit prefetch/cleanup — actually needs a binary. Download state is
+ *  forwarded per agent, throttled before crossing the TCP tunnel — the store
+ *  fires per chunk, which is far too chatty for a remote link (a multi-hundred-MB
  *  download is tens of thousands of events).
  *--------------------------------------------------------------------------------------------*/
 
@@ -16,9 +16,9 @@ import {
   AgentBinaryStore,
   codexFlavor,
   createClaudeFlavor,
+  type AgentBinaryDownloadState,
   type AgentBinaryId,
-  type AgentBinaryProgressEvent,
-  type AgentBinaryRemoteProgressEvent,
+  type AgentBinaryRemoteDownloadEvent,
   type AgentBinaryVersionInfo,
   type IRemoteAgentBinaryService,
 } from '@universe-editor/node-services'
@@ -38,16 +38,18 @@ export interface RemoteAgentBinaryServiceOptions {
 export class RemoteAgentBinaryService extends Disposable implements IRemoteAgentBinaryService {
   declare readonly _serviceBrand: undefined
 
-  private readonly _onDidChangeProgress = this._register(
-    new Emitter<AgentBinaryRemoteProgressEvent>(),
+  private readonly _onDidChangeDownload = this._register(
+    new Emitter<AgentBinaryRemoteDownloadEvent>(),
   )
-  readonly onDidChangeProgress = this._onDidChangeProgress.event
+  readonly onDidChangeDownload = this._onDidChangeDownload.event
 
   private readonly _agentBinaryDir: string
   private readonly _loggerService: ILoggerService
   private readonly _createStore: AgentBinaryStoreFactory
   private readonly _stores: Partial<Record<AgentBinaryId, AgentBinaryStore>> = {}
   private readonly _lastForward = new Map<AgentBinaryId, number>()
+  /** Last forwarded download set per agent — drives the begin/end transition check. */
+  private readonly _lastShape = new Map<AgentBinaryId, string>()
 
   constructor(options: RemoteAgentBinaryServiceOptions) {
     super()
@@ -89,7 +91,9 @@ export class RemoteAgentBinaryService extends Disposable implements IRemoteAgent
       store = this._createStore(agent, path.join(this._agentBinaryDir, agent))
       this._stores[agent] = store
       this._register(store)
-      this._register(store.onDidChangeProgress((p) => this._forwardProgress(agent, p)))
+      this._register(
+        store.onDidChangeDownload((downloads) => this._forwardDownload(agent, downloads)),
+      )
     }
     return store
   }
@@ -111,12 +115,24 @@ export class RemoteAgentBinaryService extends Disposable implements IRemoteAgent
     })
   }
 
-  private _forwardProgress(agent: AgentBinaryId, p: AgentBinaryProgressEvent): void {
-    const at100 = p.total > 0 && p.received >= p.total
+  /**
+   * The store fires per chunk, which is far too chatty for a tunnel. Intermediate
+   * progress is throttled, but a state *transition* never is: a download appearing
+   * or disappearing and the 100% frame always cross the wire, otherwise the panel
+   * would sit on a download that already finished (or miss one that started).
+   */
+  private _forwardDownload(
+    agent: AgentBinaryId,
+    downloads: readonly AgentBinaryDownloadState[],
+  ): void {
+    const shape = downloads.map((d) => d.version).join('|')
+    const complete = downloads.some((d) => d.total > 0 && d.received >= d.total)
+    const transition = shape !== (this._lastShape.get(agent) ?? '') || complete
     const now = Date.now()
     const last = this._lastForward.get(agent)
-    if (!at100 && last !== undefined && now - last < PROGRESS_THROTTLE_MS) return
+    if (!transition && last !== undefined && now - last < PROGRESS_THROTTLE_MS) return
+    this._lastShape.set(agent, shape)
     this._lastForward.set(agent, now)
-    this._onDidChangeProgress.fire({ agent, received: p.received, total: p.total })
+    this._onDidChangeDownload.fire({ agent, downloads })
   }
 }

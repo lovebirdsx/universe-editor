@@ -414,11 +414,11 @@ function build(storage: FakeStorage): Built {
     release: async () => {},
   } as unknown as IAcpTerminalService
   const claudeBinary = {
-    onDidChangeProgress: new Emitter<never>().event,
+    onDidChangeDownload: new Emitter<never>().event,
     resolve: () => Promise.resolve({ path: '/x' }),
   } as unknown as IClaudeBinaryService
   const codexBinary = {
-    onDidChangeProgress: new Emitter<never>().event,
+    onDidChangeDownload: new Emitter<never>().event,
     resolve: () => Promise.resolve({ path: '/x' }),
   } as unknown as ICodexBinaryService
   const claudeConfig = {

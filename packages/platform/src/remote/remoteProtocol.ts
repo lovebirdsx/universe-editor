@@ -50,10 +50,15 @@ import type { WatcherHostRequest, WatcherHostResponse } from '../files/watcherPr
  * v9 → v10: the fileSearch channel's `matchAll` result switches from
  * `results: IFileSearchMatch[]` to `relPaths: string[]` — an older daemon's
  * reply would read as an empty listing on a newer client rather than erroring.
+ * v10 → v11: the agentBinary channel's `onDidChangeProgress` becomes
+ * `onDidChangeDownload` (new event name and payload: `{agent, downloads[]}`),
+ * and its version-info DTO replaces `prefetchedVersion` with
+ * `downloadedVersions` / `downloads` — an older daemon would report an empty
+ * download set instead of erroring, leaving the panel showing a stale state.
  * Remote-workspace users must restart the daemon after upgrading: an old
- * daemon fails the handshake with `protocol version 9 != 10`.
+ * daemon fails the handshake with `protocol version 10 != 11`.
  */
-export const REMOTE_PROTOCOL_VERSION = 10
+export const REMOTE_PROTOCOL_VERSION = 11
 
 /** Scheme of remote workspace resources: `remote-ssh://<authority>/<path>`. */
 export const REMOTE_SCHEME = 'remote-ssh'

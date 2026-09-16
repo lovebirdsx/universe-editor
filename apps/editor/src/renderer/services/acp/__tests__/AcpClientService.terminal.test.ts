@@ -34,11 +34,11 @@ import { AcpSessionCreateProfiler } from '../acpSessionCreateProfiler.js'
 import { AcpPathPolicy } from '../acpPathPolicy.js'
 import type { IAcpAgentDescriptor, IAcpAgentRegistry } from '../acpAgentRegistry.js'
 import type {
-  IClaudeBinaryProgress,
+  IClaudeBinaryDownloadEvent,
   IClaudeBinaryService,
 } from '../../../../shared/ipc/claudeBinaryService.js'
 import type {
-  ICodexBinaryProgress,
+  ICodexBinaryDownloadEvent,
   ICodexBinaryService,
 } from '../../../../shared/ipc/codexBinaryService.js'
 import type { IClaudeConfigService } from '../../../../shared/ipc/claudeConfigService.js'
@@ -302,8 +302,8 @@ interface Harness {
   readonly claudeResolve: ReturnType<typeof vi.fn>
   readonly codexResolve: ReturnType<typeof vi.fn>
   readonly claudeConfigRead: ReturnType<typeof vi.fn>
-  readonly claudeProgress: Emitter<IClaudeBinaryProgress>
-  readonly codexProgress: Emitter<ICodexBinaryProgress>
+  readonly claudeProgress: Emitter<IClaudeBinaryDownloadEvent>
+  readonly codexProgress: Emitter<ICodexBinaryDownloadEvent>
   readonly progressReports: { message: string; increment?: number }[]
   /** Inject a peer JSON-RPC request and resolve with the next response payload. */
   callPeer(
@@ -331,8 +331,8 @@ function makeService(
     onRequestPermission: vi.fn(),
     onCreateElicitation: vi.fn(),
   }
-  const claudeProgress = new Emitter<IClaudeBinaryProgress>()
-  const codexProgress = new Emitter<ICodexBinaryProgress>()
+  const claudeProgress = new Emitter<IClaudeBinaryDownloadEvent>()
+  const codexProgress = new Emitter<ICodexBinaryDownloadEvent>()
   const progressReports: { message: string; increment?: number }[] = []
   const claudeResolve = vi.fn(async (): Promise<{ path: string }> => ({ path: '/x' }))
   const codexResolve = vi.fn(async (): Promise<{ path: string }> => ({ path: '/x' }))
@@ -350,11 +350,11 @@ function makeService(
     new NoopTelemetryService(),
     terminals,
     {
-      onDidChangeProgress: claudeProgress.event,
+      onDidChangeDownload: claudeProgress.event,
       resolve: claudeResolve,
     } as unknown as IClaudeBinaryService,
     {
-      onDidChangeProgress: codexProgress.event,
+      onDidChangeDownload: codexProgress.event,
       resolve: codexResolve,
     } as unknown as ICodexBinaryService,
     {
@@ -902,10 +902,23 @@ describe('AcpClientService — remote binary injection', () => {
 
   it('reports only remote progress events carrying the spawn authority', async () => {
     h = makeService()
+    const downloading = (
+      received: number,
+      version = '1.0.0',
+      background = false,
+    ): IClaudeBinaryDownloadEvent['downloads'] => [{ version, received, total: 100, background }]
     h.claudeResolve.mockImplementationOnce(async () => {
-      h.claudeProgress.fire({ received: 20, total: 100 })
-      h.claudeProgress.fire({ received: 40, total: 100, authority: 'ssh-remote+other' })
-      h.claudeProgress.fire({ received: 50, total: 100, authority: REMOTE })
+      h.claudeProgress.fire({ downloads: downloading(20) })
+      h.claudeProgress.fire({ downloads: downloading(40), authority: 'ssh-remote+other' })
+      h.claudeProgress.fire({ downloads: downloading(50), authority: REMOTE })
+      // A background prefetch racing the spawn must not drive the notification.
+      h.claudeProgress.fire({
+        downloads: [
+          { version: '0.0.1', received: 99, total: 100, background: true },
+          { version: '1.0.0', received: 60, total: 100, background: false },
+        ],
+        authority: REMOTE,
+      })
       return { path: '/remote/bin/claude' }
     })
 
@@ -916,8 +929,10 @@ describe('AcpClientService — remote binary injection', () => {
     })
     try {
       const pctReports = h.progressReports.filter((r) => r.increment !== undefined)
-      expect(pctReports).toHaveLength(1)
-      expect(pctReports[0]!.message).toContain('50%')
+      expect(pctReports.map((r) => r.message)).toEqual([
+        expect.stringContaining('50%'),
+        expect.stringContaining('60%'),
+      ])
     } finally {
       conn.dispose()
     }

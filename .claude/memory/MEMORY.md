@@ -50,7 +50,7 @@
 - [远程开发 Phase 0 地基](remote-dev-phase0-fs-provider.md) — scheme 分派 FileService+per-scheme 大小写+fsPath 审计；护栏只守内核，main 侧加 scheme 守卫不重写
 - [远程开发 Phase 1 remote-server](remote-dev-phase1-remote-server.md) — 路由在 main 侧/URI 互译收口/server 零 scheme 感知；UNIVERSE_REMOTE_SERVER_CMD 联调；@regression 须 ONLY_TAG
 - [远程开发 v2 全栈](remote-dev-v2-full-stack.md) — daemon+TCP+PersistentProtocol；exthost/ACP 迁远端；host 内须 JSON codec；WSL 实机验收坑；协议 bump 须纳入 daemon 自愈
-- [远程 agent binary 受管下载](remote-agent-binary-managed-download.md) — AgentBinaryStore 沉 node-services 双端共享+AgentBinary channel；store 须并发去重；预下载须门控 connected
+- [远程 agent binary 受管下载](remote-agent-binary-managed-download.md) — AgentBinaryStore 沉 node-services 双端共享+AgentBinary channel；store 须按版本并发去重（forceDownload 不得删目录重下）；保留集 {active,bundled,.latest} 永不联网、空 keep-set = 全删；下载状态须在 store（面板常驻订阅）否则切走再回来丢进度；预下载须门控 connected
 - [Remote Explorer 单 Targets 树](remote-explorer-merged-targets-tree.md) — 4 view 合一+buildRemoteTree 纯函数；连接双条根因=WSL authority 大小写未归一化
 - [AI Settings 远程路由修复](agent-settings-remote-authority-routing.md) — authority 须订阅 onDidChangeWorkspace 勿 useMemo 读 current；useRemoteAuthority hook；协议匹配只回 index 不回秘密
 - [远程连接安装过程透明化](remote-connect-progress-transparency.md) — progress 事件复用 onDidChangeState；坑=状态栏须回退 in-flight authority

@@ -1,11 +1,12 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Tests for computeBinaryVersionActions — the shared button-visibility
- *  derivation used by the claude/codex binary panels.
+ *  Tests for computeBinaryVersionActions / deriveBinaryActionState — the shared
+ *  button-visibility and button-state derivation used by the claude/codex binary
+ *  panels.
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
-import { computeBinaryVersionActions } from '../binaryVersionActions.js'
+import { computeBinaryVersionActions, deriveBinaryActionState } from '../binaryVersionActions.js'
 
 describe('computeBinaryVersionActions', () => {
   it('offers download + latest when nothing is installed', () => {
@@ -76,5 +77,51 @@ describe('computeBinaryVersionActions', () => {
         latestVersion: '1.0.0',
       }),
     ).toEqual({ showDownloadBundled: false, showRevertToBundled: false, showLatest: false })
+  })
+})
+
+describe('deriveBinaryActionState', () => {
+  // Built by a function, not an inline literal: the helper only reads `version`,
+  // so the full download shape still has to type-check as a wider value.
+  function inFlight(version: string, background = false) {
+    return { version, received: 1, total: 2, background }
+  }
+
+  const info = {
+    downloadedVersions: ['1.0.0'],
+    downloads: [inFlight('2.0.0')],
+  }
+
+  it('marks the version being downloaded right now', () => {
+    expect(deriveBinaryActionState('2.0.0', info)).toEqual({
+      version: '2.0.0',
+      downloading: true,
+      onDisk: false,
+    })
+  })
+
+  it('marks a version already extracted on disk', () => {
+    expect(deriveBinaryActionState('1.0.0', info)).toEqual({
+      version: '1.0.0',
+      downloading: false,
+      onDisk: true,
+    })
+  })
+
+  it('marks a background download as in flight too', () => {
+    expect(
+      deriveBinaryActionState('5.0.0', {
+        downloadedVersions: [],
+        downloads: [inFlight('5.0.0', true)],
+      }).downloading,
+    ).toBe(true)
+  })
+
+  it('reports an untouched version as plain', () => {
+    expect(deriveBinaryActionState('3.0.0', info)).toEqual({
+      version: '3.0.0',
+      downloading: false,
+      onDisk: false,
+    })
   })
 })

@@ -32,11 +32,20 @@ export interface IClaudeBinaryResolveOptions {
   readonly authority?: string
 }
 
-export interface IClaudeBinaryProgress {
+export interface IClaudeBinaryDownload {
+  /** Version being downloaded. */
+  readonly version: string
   /** Bytes downloaded so far. */
   readonly received: number
   /** Total bytes per Content-Length, or 0 when the server didn't report it. */
   readonly total: number
+  /** True when the idle prefetch started this download rather than a user action. */
+  readonly background: boolean
+}
+
+export interface IClaudeBinaryDownloadEvent {
+  /** Downloads in flight; empty means the store went idle. */
+  readonly downloads: readonly IClaudeBinaryDownload[]
   /** Remote workspace authority (remote downloads only; absent for local events). */
   readonly authority?: string
 }
@@ -61,11 +70,13 @@ export interface IClaudeBinaryVersionInfo {
    */
   readonly latestVersion: string | null
   /**
-   * Version already downloaded into the background prefetch staging area and ready
-   * to be activated instantly by forceDownload() without a network fetch. null when
-   * nothing is staged.
+   * Versions whose binary is fully extracted on disk (`installedVersion` included).
+   * Switching to one of these — reverting to the bundled version or going back to
+   * the latest — needs no network at all.
    */
-  readonly prefetchedVersion: string | null
+  readonly downloadedVersions: readonly string[]
+  /** Downloads in flight right now — empty when idle. */
+  readonly downloads: readonly IClaudeBinaryDownload[]
 }
 
 /**
@@ -76,8 +87,12 @@ export interface IClaudeBinaryVersionInfo {
 export interface IClaudeBinaryService {
   readonly _serviceBrand: undefined
 
-  /** Fires while a download is in flight so the UI can show progress. */
-  readonly onDidChangeProgress: Event<IClaudeBinaryProgress>
+  /**
+   * Fires whenever the set of in-flight downloads changes — including the final
+   * empty set. Long-lived (not scoped to one download), so a panel that mounts
+   * mid-download can pick up the state it missed.
+   */
+  readonly onDidChangeDownload: Event<IClaudeBinaryDownloadEvent>
 
   resolve(opts: IClaudeBinaryResolveOptions): Promise<IClaudeBinaryResult>
 
@@ -90,10 +105,10 @@ export interface IClaudeBinaryService {
 
   /**
    * Best-effort background download of the most desirable version (latest when
-   * available, otherwise the bundled SDK version) into a staging area, so a later
-   * forceDownload() can activate it instantly. No-op when the desired version is
-   * already installed or already staged. Never throws — network failures are
-   * swallowed so idle prefetch never disrupts the user.
+   * available, otherwise the bundled SDK version) into that version's own dir,
+   * so a later forceDownload() needs no network. No-op when the desired version
+   * is already installed. Never throws — network failures are swallowed so idle
+   * prefetch never disrupts the user.
    *
    * When `authority` is set, the prefetch runs on that remote host's managed
    * store (download semantics only — `acp.claude.source` is a local setting and
@@ -102,20 +117,22 @@ export interface IClaudeBinaryService {
   prefetch(authority?: string): Promise<void>
 
   /**
-   * Force-downloads (or activates a prefetched) version into its own per-version
-   * dir and flips the `.active` pointer to it. Because each version has its own
-   * dir, activation never overwrites the running binary's locked files (the EPERM
-   * trap on Windows); the previous version's dir is cleaned up best-effort. When
-   * `authority` is set, the download/activation happens on that remote host.
+   * Switches to `version` by flipping the `.active` pointer to its own per-version
+   * dir, downloading it only when it isn't on disk yet. Because each version has
+   * its own dir, activation never overwrites the running binary's locked files
+   * (the EPERM trap on Windows), and a version already on disk — the bundled one,
+   * or the latest after a previous download — is re-activated with zero network.
+   * The previous version's dir is left in place. When `authority` is set, the
+   * download/activation happens on that remote host.
    */
   forceDownload(version: string, authority?: string): Promise<IClaudeBinaryResult>
 
   /**
-   * Removes stale (non-active) version dirs left behind by a previous upgrade.
-   * Safe to call only at startup/idle — mid-session the predecessor binary is
-   * still locked by the running agent. Best-effort; never throws. When
-   * `authority` is set, the sweep runs on that remote host's store instead of
-   * the local one.
+   * Removes version dirs the user can no longer switch to offline (anything
+   * outside active / bundled / last-seen latest). Safe to call only at
+   * startup/idle — mid-session the predecessor binary is still locked by the
+   * running agent. Best-effort; never throws. When `authority` is set, the sweep
+   * runs on that remote host's store instead of the local one.
    */
   cleanupStaleVersions(authority?: string): Promise<void>
 }

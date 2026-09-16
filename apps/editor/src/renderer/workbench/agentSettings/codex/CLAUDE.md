@@ -14,7 +14,7 @@ Renderer — 贡献注册（与 Claude 共用，见 [`../claude/CLAUDE.md`](../c
 
 Renderer — Codex 专属（agentSettings/codex/）：
 - `codex/CodexAgentSettings.tsx` — 根组件：`useCodexConfig()` + 五分类子导航（auth/model/safety/advanced/binary），激活分类/滚动持久化（`agent.settings.codex.activeCategory`/`.scroll.<id>`）。**末行 `registerAgentSettings('codex', CodexAgentSettings)`**；仅 `config.loaded` 后渲染。
-- `codex/CodexAuthenticationPanel.tsx` — 认证页：`AuthenticationSection`（provider 条目或 `@subscription`）+ `LoginForm`。**下拉当前值是盘上生效值**（从 `activeAuth` 反查、非声明值；providerId 缺席 → 「外部凭据」）；`GatewayProviderPicker`（`protocol="openai-responses"`），派生经 `deriveCodexGateway`；**没有 drift 警告**（盘上即真相）与 "In use" 徽章；`overridden` 时显示 "a saved credential is currently taking precedence."。完整行为见 [cases-credential-model.md](cases-credential-model.md)。
+- `codex/CodexAuthenticationPanel.tsx` — 认证页：`AuthenticationSection`（provider 条目或 `@subscription`）+ `LoginForm`。**下拉当前值是盘上生效值**（从 `activeAuth` 反查、非声明值；providerId 缺席 → 「外部凭据」）；`GatewayProviderPicker`（`protocol="openai-responses"`），派生经 `deriveCodexGateway`；**没有 drift 警告**（盘上即真相）与 "In use" 徽章；`overridden` 时显示 "a saved credential is currently taking precedence."。
 - `codex/CodexModelPanel.tsx` / `CodexSafetyPanel.tsx` / `CodexAdvancedPanel.tsx` — model / model_provider（blur 提交）/ model_reasoning_effort；approval_policy + sandbox_mode；cli_auth_credentials_store + hide_agent_reasoning + 自由标量键编辑器。均绑 config.toml（Advanced 只编标量，嵌套表留给原始文件）。
 - `codex/useCodexConfig.ts` — 聚合 settings/authStatus/**activeAuth**；**凭据切换统一走 `service.applyCredential(intent)`**；`setModel` 只 `patch({model}, authority)`（不镜像）；订阅 `onDidChangeAuth` 后**三样都重读**。
 - `codex/codexLogin.ts` — `runCodexLogin()` 跑系统 PATH 的 **`codex login`**（官方 CLI；**不是 codex-acp**——它没有 `login` 子命令）。
@@ -87,7 +87,7 @@ baseUrl **逐字比对不做归一化**；同 baseUrl+key 按文件序**确定�
 与 Claude 同构（契约方法带尾部 `authority`，经 `RemoteChannels.AgentConfig` 转发，协议路径见 claude 文档，改协议须 bump `REMOTE_PROTOCOL_VERSION`；**authority 必须来自 `useRemoteAuthority()`**；归属按主机分区且**看会话所在主机**；**一律经 `IRemoteConnectionService.getServiceProxy` 取 channel，勿自缓存代理**）。共享条目与踩坑见 [`../claude/CLAUDE.md`](../claude/CLAUDE.md) §Remote 工作区路由。Codex 特有：
 - `resolveActiveAuth(authority)` 比对**生效端**凭据：main 读远端 config.toml / auth.json 与本地派生的 baseUrl/key 比对，只回 `{kind, providerId?}`——**远端 auth.json 秘密绝不回传**。
 - `ConfigFileLink` 传 `authority` 开远端文件；`runCodexLogin` 本就开远端终端跑 `codex login`。
-- **CodexBinaryPanel 远程语义**：版本/强制下载经 `ICodexBinaryService` 尾部 `authority` 走 `RemoteChannels.AgentBinary`；远端隐藏「Binary source」区；`prefetch`/`cleanupStaleVersions` 同样带 authority。
+- **CodexBinaryPanel 远程语义**：版本/强制下载经 `ICodexBinaryService` 尾部 `authority` 走 `RemoteChannels.AgentBinary`；远端隐藏「Binary source」区；`prefetch`/`cleanupStaleVersions` 同样带 authority。**本地下载进度/保留集语义同 Claude**（见 [`../claude/CLAUDE.md`](../claude/CLAUDE.md)）。
 
 ### 🔒 安全约束（刻意决策，勿擅改）
 

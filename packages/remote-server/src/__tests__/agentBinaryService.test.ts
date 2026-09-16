@@ -9,17 +9,17 @@ import * as path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { Emitter, type IDisposable, type ILoggerService } from '@universe-editor/platform'
 import {
+  type AgentBinaryDownloadState,
   type AgentBinaryId,
-  type AgentBinaryProgressEvent,
-  type AgentBinaryRemoteProgressEvent,
+  type AgentBinaryRemoteDownloadEvent,
   type AgentBinaryStore,
   type AgentBinaryVersionInfo,
 } from '@universe-editor/node-services'
 import { RemoteAgentBinaryService } from '../agentBinaryService.js'
 
 class FakeStore implements IDisposable {
-  private readonly _onProgress = new Emitter<AgentBinaryProgressEvent>()
-  readonly onDidChangeProgress = this._onProgress.event
+  private readonly _onDownload = new Emitter<readonly AgentBinaryDownloadState[]>()
+  readonly onDidChangeDownload = this._onDownload.event
   readonly resolves: boolean[] = []
   versionInfoCalls: number = 0
   readonly forceDownloads: string[] = []
@@ -42,7 +42,8 @@ class FakeStore implements IDisposable {
       bundledVersion: `bundled-${this.agent}`,
       installedVersion: null,
       latestVersion: null,
-      prefetchedVersion: null,
+      downloadedVersions: [],
+      downloads: [],
     }
   }
 
@@ -59,13 +60,17 @@ class FakeStore implements IDisposable {
     this.cleanupCalls++
   }
 
-  fireProgress(p: AgentBinaryProgressEvent): void {
-    this._onProgress.fire(p)
+  fireDownload(downloads: readonly AgentBinaryDownloadState[]): void {
+    this._onDownload.fire(downloads)
   }
 
   dispose(): void {
-    this._onProgress.dispose()
+    this._onDownload.dispose()
   }
+}
+
+function state(received: number, total: number, version = '1.0.0'): AgentBinaryDownloadState {
+  return { version, received, total, background: false }
 }
 
 function makeService(
@@ -113,32 +118,71 @@ describe('RemoteAgentBinaryService', () => {
     }
   })
 
-  it('throttles progress per agent (>=100ms interval, or 100% always fires)', () => {
+  it('throttles intermediate progress but never drops a begin, a 100% frame or the end', () => {
     let now = 0
     const dateSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
     try {
       const built: { agent: AgentBinaryId; baseDir: string }[] = []
       const stores = new Map<AgentBinaryId, FakeStore>()
       const svc = makeService(built, stores)
-      const events: AgentBinaryRemoteProgressEvent[] = []
-      const sub = svc.onDidChangeProgress((e) => events.push(e))
+      const events: AgentBinaryRemoteDownloadEvent[] = []
+      const sub = svc.onDidChangeDownload((e) => events.push(e))
       try {
         // Force construction of the claude store (and its subscription).
         void svc.resolve('claude', {})
         const claude = stores.get('claude')!
 
-        claude.fireProgress({ received: 1, total: 100 }) // first event always fires
+        claude.fireDownload([state(0, 100)]) // set grew from empty → always fires
         now = 50
-        claude.fireProgress({ received: 2, total: 100 }) // within window → dropped
+        claude.fireDownload([state(2, 100)]) // same shape, within window → dropped
         now = 100
-        claude.fireProgress({ received: 3, total: 100 }) // >=100ms later → fires
+        claude.fireDownload([state(3, 100)]) // >=100ms later → fires
         now = 101
-        claude.fireProgress({ received: 100, total: 100 }) // 100% → always fires
+        claude.fireDownload([state(100, 100)]) // 100% → always fires
+        now = 102
+        claude.fireDownload([]) // set emptied → always fires, or the UI sticks
 
         expect(events).toEqual([
-          { agent: 'claude', received: 1, total: 100 },
-          { agent: 'claude', received: 3, total: 100 },
-          { agent: 'claude', received: 100, total: 100 },
+          { agent: 'claude', downloads: [state(0, 100)] },
+          { agent: 'claude', downloads: [state(3, 100)] },
+          { agent: 'claude', downloads: [state(100, 100)] },
+          { agent: 'claude', downloads: [] },
+        ])
+      } finally {
+        sub.dispose()
+        svc.dispose()
+      }
+    } finally {
+      dateSpy.mockRestore()
+    }
+  })
+
+  it('forwards a version joining or leaving the in-flight set immediately', () => {
+    const now = 0
+    const dateSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    try {
+      const built: { agent: AgentBinaryId; baseDir: string }[] = []
+      const stores = new Map<AgentBinaryId, FakeStore>()
+      const svc = makeService(built, stores)
+      const events: AgentBinaryRemoteDownloadEvent[] = []
+      const sub = svc.onDidChangeDownload((e) => events.push(e))
+      try {
+        void svc.resolve('claude', {})
+        const claude = stores.get('claude')!
+
+        // A second, concurrent download (background prefetch + a user click) must
+        // surface even though it lands inside the throttle window.
+        claude.fireDownload([state(1, 100, '1.0.0')])
+        claude.fireDownload([state(1, 100, '1.0.0'), state(0, 100, '2.0.0')])
+        claude.fireDownload([state(2, 100, '2.0.0')])
+
+        expect(events).toEqual([
+          { agent: 'claude', downloads: [state(1, 100, '1.0.0')] },
+          {
+            agent: 'claude',
+            downloads: [state(1, 100, '1.0.0'), state(0, 100, '2.0.0')],
+          },
+          { agent: 'claude', downloads: [state(2, 100, '2.0.0')] },
         ])
       } finally {
         sub.dispose()
@@ -156,21 +200,21 @@ describe('RemoteAgentBinaryService', () => {
       const built: { agent: AgentBinaryId; baseDir: string }[] = []
       const stores = new Map<AgentBinaryId, FakeStore>()
       const svc = makeService(built, stores)
-      const events: AgentBinaryRemoteProgressEvent[] = []
-      const sub = svc.onDidChangeProgress((e) => events.push(e))
+      const events: AgentBinaryRemoteDownloadEvent[] = []
+      const sub = svc.onDidChangeDownload((e) => events.push(e))
       try {
         void svc.resolve('claude', {})
         void svc.resolve('codex', {})
         const claude = stores.get('claude')!
         const codex = stores.get('codex')!
 
-        claude.fireProgress({ received: 1, total: 100 })
+        claude.fireDownload([state(1, 100)])
         // Same timestamp, different agent — codex has its own throttle state.
-        codex.fireProgress({ received: 1, total: 100 })
+        codex.fireDownload([state(1, 100)])
 
         expect(events).toEqual([
-          { agent: 'claude', received: 1, total: 100 },
-          { agent: 'codex', received: 1, total: 100 },
+          { agent: 'claude', downloads: [state(1, 100)] },
+          { agent: 'codex', downloads: [state(1, 100)] },
         ])
       } finally {
         sub.dispose()
@@ -190,7 +234,8 @@ describe('RemoteAgentBinaryService', () => {
         bundledVersion: 'bundled-codex',
         installedVersion: null,
         latestVersion: null,
-        prefetchedVersion: null,
+        downloadedVersions: [],
+        downloads: [],
       })
       expect(stores.get('codex')!.versionInfoCalls).toBe(1)
       expect(stores.get('claude')).toBeUndefined()

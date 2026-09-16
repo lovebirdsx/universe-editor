@@ -33,7 +33,7 @@ import {
 } from '@universe-editor/node-services'
 import { IRemoteConnectionService } from '../remote/remoteConnectionMainService.js'
 import type {
-  ICodexBinaryProgress,
+  ICodexBinaryDownloadEvent,
   ICodexBinaryResolveOptions,
   ICodexBinaryResult,
   ICodexBinaryService,
@@ -52,8 +52,8 @@ async function pathExists(p: string): Promise<boolean> {
 export class CodexBinaryMainService extends Disposable implements ICodexBinaryService {
   declare readonly _serviceBrand: undefined
 
-  private readonly _onDidChangeProgress = this._register(new Emitter<ICodexBinaryProgress>())
-  readonly onDidChangeProgress = this._onDidChangeProgress.event
+  private readonly _onDidChangeDownload = this._register(new Emitter<ICodexBinaryDownloadEvent>())
+  readonly onDidChangeDownload = this._onDidChangeDownload.event
 
   /** De-dupes concurrent resolves and caches the resolved path per options. */
   private readonly _inflight = new Map<string, Promise<ICodexBinaryResult>>()
@@ -61,7 +61,7 @@ export class CodexBinaryMainService extends Disposable implements ICodexBinarySe
   private readonly _logger: ILogger
   private readonly _binaryStore: AgentBinaryStore
 
-  private readonly _remoteProgressBound = new Set<string>()
+  private readonly _remoteDownloadBound = new Set<string>()
 
   constructor(
     @ILoggerService loggerService?: ILoggerService,
@@ -76,7 +76,11 @@ export class CodexBinaryMainService extends Disposable implements ICodexBinarySe
         ...(loggerService !== undefined ? { logger: loggerService } : {}),
       }),
     )
-    this._register(this._binaryStore.onDidChangeProgress((p) => this._onDidChangeProgress.fire(p)))
+    this._register(
+      this._binaryStore.onDidChangeDownload((downloads) => {
+        this._onDidChangeDownload.fire({ downloads })
+      }),
+    )
   }
 
   resolve(opts: ICodexBinaryResolveOptions): Promise<ICodexBinaryResult> {
@@ -130,12 +134,12 @@ export class CodexBinaryMainService extends Disposable implements ICodexBinarySe
       authority,
       RemoteChannels.AgentBinary,
     )
-    if (!this._remoteProgressBound.has(authority)) {
-      this._remoteProgressBound.add(authority)
+    if (!this._remoteDownloadBound.has(authority)) {
+      this._remoteDownloadBound.add(authority)
       this._register(
-        service.onDidChangeProgress((e) => {
+        service.onDidChangeDownload((e) => {
           if (e.agent !== 'codex') return
-          this._onDidChangeProgress.fire({ received: e.received, total: e.total, authority })
+          this._onDidChangeDownload.fire({ downloads: e.downloads, authority })
         }),
       )
     }

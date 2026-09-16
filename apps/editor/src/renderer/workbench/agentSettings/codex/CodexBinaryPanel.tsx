@@ -18,17 +18,17 @@ import {
   INotificationService,
   Severity,
   localize,
-  markAsSingleton,
 } from '@universe-editor/platform'
 import { Button, Input } from '@universe-editor/workbench-ui'
 import {
   ICodexBinaryService,
   type CodexBinarySource,
+  type ICodexBinaryDownload,
   type ICodexBinaryVersionInfo,
 } from '../../../../shared/ipc/codexBinaryService.js'
-import { useService } from '../../useService.js'
+import { useEventSubscription, useService } from '../../useService.js'
 import { useRemoteAuthority } from '../../useRemoteAuthority.js'
-import { computeBinaryVersionActions } from '../binaryVersionActions.js'
+import { computeBinaryVersionActions, deriveBinaryActionState } from '../binaryVersionActions.js'
 import type { UseCodexConfig } from './useCodexConfig.js'
 import styles from '../AgentSettingsEditor.module.css'
 
@@ -48,31 +48,56 @@ export function CodexBinaryPanel(_props: { config: UseCodexConfig }) {
   const [versionInfo, setVersionInfo] = useState<ICodexBinaryVersionInfo | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [loadingVersion, setLoadingVersion] = useState(false)
-  const [downloading, setDownloading] = useState(false)
-  const [downloadProgress, setDownloadProgress] = useState<{
-    received: number
-    total: number
-  } | null>(null)
+  const [downloads, setDownloads] = useState<readonly ICodexBinaryDownload[]>([])
 
-  const progressSubRef = useRef<{ dispose(): void } | null>(null)
+  const downloadsRef = useRef<readonly ICodexBinaryDownload[]>([])
+  /** Set once a live event lands, so a slower snapshot can't stamp stale state over it. */
+  const sawEventRef = useRef(false)
 
   const loadVersionInfo = useCallback(() => {
     setLoadingVersion(true)
     setLoadError(null)
-    setVersionInfo(null)
     void codexBinary
       .getVersionInfo(authority)
-      .then((info) => setVersionInfo(info))
+      .then((info) => {
+        setVersionInfo(info)
+        if (!sawEventRef.current) {
+          downloadsRef.current = info.downloads
+          setDownloads(info.downloads)
+        }
+      })
       .catch((err: unknown) => setLoadError(String(err)))
       .finally(() => setLoadingVersion(false))
   }, [codexBinary, authority])
 
   useEffect(() => {
+    // A different host has a different download set entirely, so drop what we
+    // have before re-reading. (Info itself is kept — clearing it would flash
+    // "Loading…" on every refresh.)
+    sawEventRef.current = false
+    downloadsRef.current = []
+    setDownloads([])
     loadVersionInfo()
-    return () => {
-      progressSubRef.current?.dispose()
-    }
   }, [loadVersionInfo])
+
+  // Long-lived subscription, not one scoped to a click: the download keeps running
+  // in the main process while this panel is unmounted, so the state has to be
+  // re-readable on the next mount (snapshot above) and live while mounted (here).
+  useEventSubscription(
+    () =>
+      codexBinary.onDidChangeDownload((e) => {
+        if (e.authority !== authority) return
+        const wasBusy = downloadsRef.current.length > 0
+        sawEventRef.current = true
+        downloadsRef.current = e.downloads
+        setDownloads(e.downloads)
+        // The queue drained → the installed version may have changed. A switch to
+        // an already-downloaded version emits no download at all, so this refresh
+        // (plus the one in handleUpgrade) is the only signal for it.
+        if (wasBusy && e.downloads.length === 0) loadVersionInfo()
+      }),
+    [codexBinary, authority, loadVersionInfo],
+  )
 
   const changeSource = useCallback(
     (next: CodexBinarySource) => {
@@ -93,20 +118,9 @@ export function CodexBinaryPanel(_props: { config: UseCodexConfig }) {
 
   const handleUpgrade = useCallback(
     (targetVersion: string) => {
-      if (downloading) return
-      setDownloading(true)
-      setDownloadProgress(null)
-      progressSubRef.current?.dispose()
-      // Scoped to this download (disposed in .finally), not the component's
-      // mount — markAsSingleton keeps a mid-download leak snapshot from flagging
-      // it while a real teardown still disposes it.
-      progressSubRef.current = markAsSingleton(
-        codexBinary.onDidChangeProgress((p) => {
-          if (p.authority !== authority) return
-          setDownloadProgress(p)
-        }),
-      )
-
+      // The store de-dupes downloads by version, so a repeat click can't start a
+      // second one — this just skips the round-trip.
+      if (downloadsRef.current.some((d) => d.version === targetVersion)) return
       void codexBinary
         .forceDownload(targetVersion, authority)
         .then(() => {
@@ -130,14 +144,8 @@ export function CodexBinaryPanel(_props: { config: UseCodexConfig }) {
             ),
           })
         })
-        .finally(() => {
-          progressSubRef.current?.dispose()
-          progressSubRef.current = null
-          setDownloading(false)
-          setDownloadProgress(null)
-        })
     },
-    [codexBinary, downloading, loadVersionInfo, notifications, authority],
+    [codexBinary, loadVersionInfo, notifications, authority],
   )
 
   const isRemote = authority !== undefined
@@ -215,12 +223,14 @@ export function CodexBinaryPanel(_props: { config: UseCodexConfig }) {
           <h3 className={styles['sectionTitle']}>
             {localize('codexBinaryPanel.version.title', 'Version')}
           </h3>
+          {/* Rendered outside the info branch: a download reported by the service
+              event must not disappear because the metadata load is slow or failed. */}
+          <DownloadRows downloads={downloads} />
           <VersionInfo
             info={versionInfo}
+            downloads={downloads}
             loadError={loadError}
             loading={loadingVersion}
-            downloading={downloading}
-            downloadProgress={downloadProgress}
             onUpgrade={handleUpgrade}
           />
         </section>
@@ -262,23 +272,48 @@ function SourceOption({ value, current, label, desc, onChange }: SourceOptionPro
   )
 }
 
+function DownloadRows({ downloads }: { downloads: readonly ICodexBinaryDownload[] }) {
+  if (downloads.length === 0) return null
+  return (
+    <>
+      {downloads.map((d) => (
+        <div className={styles['statusRow']} key={d.version}>
+          <span className={styles['statusMuted']}>
+            {d.total > 0
+              ? localize(
+                  'codexBinaryPanel.version.downloading.pct',
+                  'Downloading {version}… {pct}%',
+                  {
+                    version: d.version,
+                    pct: Math.min(100, Math.floor((d.received / d.total) * 100)),
+                  },
+                )
+              : d.received > 0
+                ? localize(
+                    'codexBinaryPanel.version.downloading.mb',
+                    'Downloading {version}… {mb} MB',
+                    { version: d.version, mb: Math.floor(d.received / 1_048_576) },
+                  )
+                : localize('codexBinaryPanel.version.downloading', 'Downloading {version}…', {
+                    version: d.version,
+                  })}
+          </span>
+        </div>
+      ))}
+    </>
+  )
+}
+
 interface VersionInfoProps {
   info: ICodexBinaryVersionInfo | null
+  /** Live in-flight set — not `info.downloads`, which is only a mount-time snapshot. */
+  downloads: readonly ICodexBinaryDownload[]
   loadError: string | null
   loading: boolean
-  downloading: boolean
-  downloadProgress: { received: number; total: number } | null
   onUpgrade(version: string): void
 }
 
-function VersionInfo({
-  info,
-  loadError,
-  loading,
-  downloading,
-  downloadProgress,
-  onUpgrade,
-}: VersionInfoProps) {
+function VersionInfo({ info, downloads, loadError, loading, onUpgrade }: VersionInfoProps) {
   if (loading && !info) {
     return (
       <div className={styles['statusRow']}>
@@ -304,9 +339,15 @@ function VersionInfo({
     return null
   }
 
-  const { bundledVersion, installedVersion, latestVersion, prefetchedVersion } = info
+  const { bundledVersion, installedVersion, latestVersion, downloadedVersions } = info
   const isUpToDate = latestVersion !== null && installedVersion === latestVersion
   const { showDownloadBundled, showRevertToBundled, showLatest } = computeBinaryVersionActions(info)
+  // `downloads` is live, so a download this panel started (or one already running
+  // when it mounted) swaps its own button for the progress row immediately.
+  const diskState = { downloadedVersions, downloads }
+  const bundledState = deriveBinaryActionState(bundledVersion, diskState)
+  const latestState =
+    latestVersion !== null ? deriveBinaryActionState(latestVersion, diskState) : null
 
   return (
     <div className={styles['field']}>
@@ -353,102 +394,88 @@ function VersionInfo({
         </span>
       </div>
 
-      {/* Download progress */}
-      {downloading && (
+      {/* Versions already on disk — a switch to one of these needs no download */}
+      {downloadedVersions.length > 0 && (
         <div className={styles['statusRow']}>
           <span className={styles['statusMuted']}>
-            {downloadProgress && downloadProgress.total > 0
-              ? localize('codexBinaryPanel.version.downloading.pct', 'Downloading… {pct}%', {
-                  pct: Math.min(
-                    100,
-                    Math.floor((downloadProgress.received / downloadProgress.total) * 100),
-                  ),
-                })
-              : downloadProgress
-                ? localize('codexBinaryPanel.version.downloading.mb', 'Downloading… {mb} MB', {
-                    mb: Math.floor(downloadProgress.received / 1_048_576),
-                  })
-                : localize('codexBinaryPanel.version.downloading', 'Downloading…')}
+            {localize(
+              'codexBinaryPanel.version.downloadedLocally',
+              'Available locally: {versions}',
+              { versions: downloadedVersions.join(', ') },
+            )}
           </span>
         </div>
       )}
 
       {/* Actions */}
-      {!downloading && (
-        <>
-          {showDownloadBundled && showLatest && (
-            <div className={styles['desc']} style={{ marginTop: 4 }}>
-              {localize(
-                'codexBinaryPanel.version.chooseHint',
-                'Pinned ({bundled}) is the version this build follows and is known to work — safest choice. Latest ({latest}) gets the newest features but may not be fully tested with this build.',
-                { bundled: bundledVersion, latest: latestVersion ?? '' },
-              )}
-            </div>
+      {showDownloadBundled && showLatest && (
+        <div className={styles['desc']} style={{ marginTop: 4 }}>
+          {localize(
+            'codexBinaryPanel.version.chooseHint',
+            'Pinned ({bundled}) is the version this build follows and is known to work — safest choice. Latest ({latest}) gets the newest features but may not be fully tested with this build.',
+            { bundled: bundledVersion, latest: latestVersion ?? '' },
           )}
-          {showRevertToBundled && (
-            <div className={styles['desc']} style={{ marginTop: 4 }}>
-              {localize(
-                'codexBinaryPanel.version.revertHint',
-                'The installed version differs from the pinned version this build follows. Revert if the agent fails to start or behaves unexpectedly.',
-              )}
-            </div>
-          )}
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
-            {showDownloadBundled && (
-              <Button onClick={() => onUpgrade(bundledVersion)}>
-                <Download size={14} strokeWidth={2} />
-                {prefetchedVersion === bundledVersion
-                  ? localize(
-                      'codexBinaryPanel.version.downloadReady',
-                      'Download {version} (ready)',
-                      {
-                        version: bundledVersion,
-                      },
-                    )
-                  : localize('codexBinaryPanel.version.download', 'Download {version}', {
-                      version: bundledVersion,
-                    })}
-              </Button>
-            )}
-            {showRevertToBundled && (
-              <Button onClick={() => onUpgrade(bundledVersion)}>
-                <Undo2 size={14} strokeWidth={2} />
-                {prefetchedVersion === bundledVersion
-                  ? localize(
-                      'codexBinaryPanel.version.revertReady',
-                      'Revert to {version} (ready)',
-                      {
-                        version: bundledVersion,
-                      },
-                    )
-                  : localize('codexBinaryPanel.version.revert', 'Revert to {version}', {
-                      version: bundledVersion,
-                    })}
-              </Button>
-            )}
-            {showLatest && latestVersion !== null && (
-              <Button onClick={() => onUpgrade(latestVersion)}>
-                <ArrowUpCircle size={14} strokeWidth={2} />
-                {prefetchedVersion === latestVersion
-                  ? localize(
-                      'codexBinaryPanel.version.upgradeReady',
-                      'Upgrade to {version} (ready)',
-                      {
-                        version: latestVersion,
-                      },
-                    )
-                  : installedVersion === null
-                    ? localize('codexBinaryPanel.version.download', 'Download {version}', {
-                        version: latestVersion,
-                      })
-                    : localize('codexBinaryPanel.version.upgrade', 'Upgrade to {version}', {
-                        version: latestVersion,
-                      })}
-              </Button>
-            )}
-          </div>
-        </>
+        </div>
       )}
+      {showRevertToBundled && (
+        <div className={styles['desc']} style={{ marginTop: 4 }}>
+          {localize(
+            'codexBinaryPanel.version.revertHint',
+            'The installed version differs from the pinned version this build follows. Revert if the agent fails to start or behaves unexpectedly.',
+          )}
+        </div>
+      )}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
+        {showDownloadBundled && !bundledState.downloading && (
+          <Button onClick={() => onUpgrade(bundledVersion)}>
+            <Download size={14} strokeWidth={2} />
+            {bundledState.onDisk
+              ? localize(
+                  'codexBinaryPanel.version.downloadReady',
+                  'Install {version} (already downloaded)',
+                  { version: bundledVersion },
+                )
+              : localize('codexBinaryPanel.version.download', 'Download {version}', {
+                  version: bundledVersion,
+                })}
+          </Button>
+        )}
+        {showRevertToBundled && !bundledState.downloading && (
+          <Button onClick={() => onUpgrade(bundledVersion)}>
+            <Undo2 size={14} strokeWidth={2} />
+            {bundledState.onDisk
+              ? localize(
+                  'codexBinaryPanel.version.revertReady',
+                  'Revert to {version} (already downloaded)',
+                  { version: bundledVersion },
+                )
+              : localize('codexBinaryPanel.version.revert', 'Revert to {version}', {
+                  version: bundledVersion,
+                })}
+          </Button>
+        )}
+        {showLatest &&
+          latestVersion !== null &&
+          latestState !== null &&
+          !latestState.downloading && (
+            <Button onClick={() => onUpgrade(latestVersion)}>
+              <ArrowUpCircle size={14} strokeWidth={2} />
+              {latestState.onDisk
+                ? localize(
+                    'codexBinaryPanel.version.upgradeReady',
+                    'Switch to {version} (already downloaded)',
+                    { version: latestVersion },
+                  )
+                : installedVersion === null
+                  ? localize('codexBinaryPanel.version.download', 'Download {version}', {
+                      version: latestVersion,
+                    })
+                  : localize('codexBinaryPanel.version.upgrade', 'Upgrade to {version}', {
+                      version: latestVersion,
+                    })}
+            </Button>
+          )}
+      </div>
     </div>
   )
 }

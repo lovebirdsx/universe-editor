@@ -4,7 +4,7 @@ description: 远程工作区 agent 原生二进制受管下载到远端主机（
 metadata: 
   node_type: memory
   type: project
-  modified: 2026-08-16T03:03:51.906Z
+  modified: 2026-09-16T01:37:15.000Z
 ---
 
 远程工作区下 claude/codex 原生二进制改为下载到**远端主机** `<dataDir>/agent-bin/<agent>/`（2026-08-15 落地）。此前 renderer 对 `spec.authority` 直接短路 → 远端 claude-code 必挂（fork 的 claudeCliPath() 无 `CLAUDE_CODE_EXECUTABLE` 直接 throw），codex 靠部署时 npm ci 隐式拉 300MB 平台包。
@@ -22,3 +22,9 @@ metadata:
 - 多入口去重两条不变量：①`_maintained.add(authority)` 必须在 **connected 检查之后**（前置会让「未连接→后连接」的 authority 永久漏维护）、且在任何 `await` **之前**（否则同帧两事件重复下载）；②`onDidChangeState` 是 live emitter 不重放历史，故需 seed，而 seed 失败的按需重试必须**有次数上限**——否则 `seed → _maintain → re-seed` 自成环，IPC 持续失败时无限刷日志。
 
 关联：[[remote-dev-v2-full-stack]]、[[agent-binary-silent-download-e2e-fix]]
+
+**版本保留 + 下载状态改造（2026-09-16，协议 v10→v11）**：需求「回退/升级不该重下几百 MB」的根因是 `forceDownload` 会先 `_rmQuiet(版本目录)` 删掉盘上已有版本再重下。改法：`_ensureVersion(version, background)` 收成**唯一入口**（盘上命中即返回 → `_inflightEnsures` 按版本去重 → 才下载），`forceDownload` = ensure + 写 `.active`。保留集 = `{active, bundled, 上次见到的 registry latest}`；latest 落 `<baseDir>/.latest` 文本文件而**不是** cleanup 时联网查（cleanup 在启动路径上，10s registry 超时是最坏路径，且与并发的 prefetch 抢同一份查询）；`.prefetch` 暂存区删掉（暂存目录 ≠ 版本目录时「一个版本只下一次」不可能成立），`_adoptLegacyPrefetch` 只做一次性搬家。下载状态从面板组件局部 state 搬进 store：`onDidChangeDownload` 用**数组载荷**（后台 prefetch 与用户点击可真实并发，`[]` = 空闲，也避开 JSON 信封丢 `undefined` key），`getVersionInfo().downloads` 是同状态快照 —— 面板常驻订阅 + 快照重建，切走再回来才看得到进度、正在下载的版本不再渲染按钮。
+
+**Why**: 局部 state 跨组件卸载必然丢；无查询接口就没法判断「这个版本正在下载」，重复点击会并发写同一个 `.extract.<pid>` 而互相踩踏。
+
+**How to apply / 坑**：① `cleanupStaleVersions` 里 `bundledVersion()` 抛错时**绝不能拿空 keep-set 往下走**（= 把用户下过的版本全删），要么跳过这轮；② `background` 是「谁先发起」不是「我是谁」，前台 join 后台下载会继承 `true`，别拿它判断「是不是我发起的」；③ 失败路径必须在 `finally` 清下载状态，否则 UI 永远卡在「下载中」；④ 面板是三层防重复的最外一层（store 去重才是真保证），别把状态退回组件里；⑤ **判定「某版本正在下载」只能喂实时 `downloads`**，喂 `getVersionInfo` 快照会让点击后「进度行 + 仍可点的按钮」并存（快照只在挂载瞬间用来恢复状态）——这条被子 agent 审查抓到，且测试是靠种快照取巧才没暴露，补的用例必须走「点击 → 收实时事件 → 断言按钮消失」；⑥ 时间窗口类保留问题要一起想全：下载 settle 到 `.active` 落盘之间、以及 idle cleanup 早于用户点击回收遗留 `.prefetch` 暂存区，两者都会让「刚下好的版本被清掉」，前者靠 `_activating` 集合、后者靠 cleanup 内先搬家并把搬回来的版本计入 keep-set。

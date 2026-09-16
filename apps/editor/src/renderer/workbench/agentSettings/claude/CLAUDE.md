@@ -17,7 +17,7 @@ Renderer — 贡献注册（承载壳见 [`../ai/CLAUDE.md`](../ai/CLAUDE.md)）
 
 Renderer — Claude 专属（agentSettings/claude/）：
 - `claude/ClaudeAgentSettings.tsx` — 根组件：`useClaudeConfig()` + 三分类子导航（auth/model/env，`CATEGORIES`）；激活分类/滚动持久化（`agent.settings.claude.activeCategory` / `.scroll.<id>`）。**末行 `registerAgentSettings('claude-code', ClaudeAgentSettings)`**。
-- `claude/AuthenticationPanel.tsx` — 认证页：`AuthenticationSection`（单一认证选择：provider 条目或 `@subscription`；Model + Sub Agent Model 两行 `ModelPickRow` 各带 `1m` 勾选框——**行显示有效 id，勾选框由 id 是否以 `[1m]` 结尾派生**；没选模型时勾选框不出现）+ `LoginForm`（OAuth 登录状态）。**下拉当前值是盘上生效值**（从 `activeAuth` 派生、非声明值；providerId 缺席 → 「外部凭据」）。共享 `../GatewayProviderPicker.js`（`protocol="anthropic-messages"`），派生经 `deriveClaudeAuth`。**没有 "In use" 徽章**（生效即所选，`isClaudeAuthActive` 已删）；`LoginForm.isActive` 直接读 `activeAuth.kind==='subscription'`；`mask()` 脱敏。
+- `claude/AuthenticationPanel.tsx` — 认证页：`AuthenticationSection`（单一认证选择：provider 条目或 `@subscription`；Model + Sub Agent Model 两行 `ModelPickRow` 各带 `1m` 勾选框——**行显示有效 id，勾选框由 id 是否以 `[1m]` 结尾派生**；没选模型时勾选框不出现）+ `LoginForm`（OAuth 登录状态）。**下拉当前值是盘上生效值**（从 `activeAuth` 派生、非声明值；providerId 缺席 → 「外部凭据」）。共享 `../GatewayProviderPicker.js`（`protocol="anthropic-messages"`），派生经 `deriveClaudeAuth`。**没有 "In use" 徽章**；`LoginForm.isActive` 直接读 `activeAuth.kind==='subscription'`；`mask()` 脱敏。
 - `claude/ModelThinkingPanel.tsx` — 模型 / 语言 / 思考开关 / effort / availableModels，绑 settings.json。
 - `claude/AdvancedEnvPanel.tsx` — env 开关（PROMPT_CACHING、AUTO_COMPACT）+ 自定义 env 编辑器。隐藏认证类 env（`ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_BASE_URL`）与 `CLAUDE_CODE_SUBAGENT_MODEL`（owner 是认证页）；`ANTHROPIC_SMALL_FAST_MODEL` 已无可视化入口，改手填（**不隐藏**）。
 - `claude/useClaudeConfig.ts` — 配置 hook：聚合 settings/authStatus/**activeAuth** 读取与 patch，订阅 `onDidChangeConfig` 一次刷三样（外部 `claude auth login`、别的窗口、手改文件都能跟上）。`applyAuthentication` **只把匹配凭据 env 注入 settings.json**（互斥清掉另一种凭据）后重读 `activeAuth`——不再持久化声明值；`setModel`/`setSubagentModel` 系列共用 `applyModelPick`，两条不变量：① **每个 setter 只 patch 自己关联的那一个键**（`settings.model` 或 `env.CLAUDE_CODE_SUBAGENT_MODEL`），其余不动；② **在写队列内重新 `service.read()` 拿盘上现值再复合，绝不读 React state**（防陈旧快照盖掉外部编辑）。暴露 `subagentModelEnv`。
@@ -41,7 +41,7 @@ Renderer — Claude 专属（agentSettings/claude/）：
 | `~/.claude/settings.json` | 编辑器 + CLI 共享 | agent/SDK/CLI | **当前生效**配置：model、env（含激活凭据）、思考开关等 |
 | `~/.claude/.credentials.json` | `claude auth login`（OAuth） | agent/SDK | `claudeAiOauth`：accessToken/refreshToken/expiresAt/scopes/subscriptionType/rateLimitTier |
 
-- **🔴 agent 自己的配置文件是唯一真相**：编辑器**不存任何声明值**（`aiSettings.json` 的 `agentSettings.claude` 已废弃、不再被读取），「当前用哪个凭据」一律**反查** `resolveActiveAuth(authority)`（读上面两文件 + 条目正向派生比对）。外部登录、手改、换机器同步都自动跟上（`onDidChangeConfig` 去抖 150ms），不存在「声明与盘上漂移」——原先的 `credentialMatch.isClaudeAuthActive`、codex drift 检测已删。
+- **🔴 agent 自己的配置文件是唯一真相**：编辑器**不存任何声明值**（`aiSettings.json` 的 `agentSettings.claude` 已废弃、不再被读取），「当前用哪个凭据」一律**反查** `resolveActiveAuth(authority)`（读上面两文件 + 条目正向派生比对）。外部登录、手改、换机器同步都自动跟上（`onDidChangeConfig` 去抖 150ms），不存在「声明与盘上漂移」。
 - **🔴 模型选择同样只有一处真相：settings.json**（`model` 与 `env.CLAUDE_CODE_SUBAGENT_MODEL`）：UI 显示的就是有效 id，`1m` 勾选框由 id 后缀派生。历史教训：镜像版本 + 整块替换写入 = 陈旧快照盖掉别人刚改的选择（真实 bug）。新增模型类选择项一律直写 settings.json。
 - 登录(OAuth) 不是一个 provider 条目，走 `.credentials.json`，是反查的最后一档。
 - 切换 Provider 只写三个凭据 env、**不连带清空 model**（独立于认证）；下拉 `pinCurrent` 置顶「当前值不在新候选」的项更关键。
@@ -59,7 +59,7 @@ Renderer — Claude 专属（agentSettings/claude/）：
 | 无 token，`API_KEY` 非空 | 命中 → 带 providerId；否则不带 |
 | 三个 env 都空（孤立 `BASE_URL` 忽略） | `loggedIn && !expired` ? `{kind:'subscription'}` : `{kind:'none'}` |
 
-baseUrl **逐字比对不做 URL 归一化**（写盘值与反查同源，归一化只会制造假不匹配）；两条目同 baseUrl+key 时按文件序**确定性 first-match**（盘上只有 key 区分不了哪条，答案必须稳定；纯函数、无 logger）。
+baseUrl **逐字比对不做 URL 归一化**（写盘值与反查同源，归一化只会制造假不匹配）；两条目同 baseUrl+key 时按文件序**确定性 first-match**（盘上只有 key 区分不了哪条，答案必须稳定）。
 
 `applyAuthentication` 是反查的逆向，按同优先级**互斥注入**（保证只有一种凭据生效）：官方端点 provider → `{API_KEY, AUTH_TOKEN:null, BASE_URL:null}`；网关 provider → `{AUTH_TOKEN, BASE_URL, API_KEY:null}`（值由条目经 `deriveClaudeAuth` 派生：官方 → apiKey 写 `ANTHROPIC_API_KEY`；网关 → apiKey 写 `ANTHROPIC_AUTH_TOKEN`、baseUrl 写 `ANTHROPIC_BASE_URL`；判定靠 `shared/ai/officialEndpoints.ts`）；`@subscription` → 清三 env 走 OAuth。写盘后重读 `activeAuth` 必须得到刚选的 id（**单测钉住** `agentActiveAuth.test.ts`）。
 
@@ -72,6 +72,7 @@ baseUrl **逐字比对不做 URL 归一化**（写盘值与反查同源，归一
 - **`onDidChangeConfig` 也跨主机**：远端 watch 事件经 `IRemoteAgentConfigService.onDidChangeClaudeConfig` 转发；**一律经 `IRemoteConnectionService.getServiceProxy` 取 channel，勿自缓存代理**（stop/reconnect 后死代理）。
 - `ConfigFileLink` 传 `authority` 用 `remoteFsPathToUri` 开远端文件；`runClaudeLogin` remote 分支在远端终端跑 `claude auth login`。
 - **BinaryPanel 远程语义**：版本/强制下载经 `IClaudeBinaryService` 尾部 `authority` 走 `RemoteChannels.AgentBinary`；远端隐藏「Binary source」区；`prefetch`/`cleanupStaleVersions` 同样带 authority，门控在「已连接」。
+- **BinaryPanel 本地语义**：下载进度是 **store 状态**（常驻订阅 `onDidChangeDownload`，跨挂载可见；下载中的版本不渲染按钮，**别退回组件局部 state**），保留集与 store 语义见 `packages/node-services/src/agentBinary/CLAUDE.md`。
 
 ### 🔒 安全约束（刻意决策，勿擅改）
 

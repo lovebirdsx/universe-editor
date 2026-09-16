@@ -510,7 +510,7 @@ export class AcpClientService extends Disposable implements IAcpClientService {
       'Preparing Claude…',
       'Claude binary',
       authority,
-      this._claudeBinary.onDidChangeProgress,
+      this._claudeBinary.onDidChangeDownload,
       () => this._claudeBinary.resolve(opts),
     )
     // The native CLI's first-run onboarding decides whether to auto-start the
@@ -567,7 +567,7 @@ export class AcpClientService extends Disposable implements IAcpClientService {
       'Preparing Codex…',
       'codex',
       authority,
-      this._codexBinary.onDidChangeProgress,
+      this._codexBinary.onDidChangeDownload,
       () => this._codexBinary.resolve(opts),
     )
 
@@ -602,7 +602,7 @@ export class AcpClientService extends Disposable implements IAcpClientService {
 
   /**
    * Runs a binary resolve inside a progress notification, forwarding download
-   * progress from the service's onDidChangeProgress stream. `authority` scopes
+   * progress from the service's onDidChangeDownload stream. `authority` scopes
    * the subscription: a local resolve reacts only to authority-less events and a
    * remote resolve only to events carrying its own authority, so a local and a
    * remote download racing each other don't drive each other's notifications.
@@ -611,9 +611,12 @@ export class AcpClientService extends Disposable implements IAcpClientService {
     title: string,
     label: string,
     authority: string | undefined,
-    onProgress: Event<{
-      readonly received: number
-      readonly total: number
+    onDownload: Event<{
+      readonly downloads: readonly {
+        readonly received: number
+        readonly total: number
+        readonly background: boolean
+      }[]
       readonly authority?: string
     }>,
     resolve: () => Promise<{ path: string }>,
@@ -623,18 +626,23 @@ export class AcpClientService extends Disposable implements IAcpClientService {
       async (progress) => {
         let lastPct = 0
         const sub = this._entriesStore.add(
-          onProgress((e) => {
+          onDownload((e) => {
             if (e.authority !== authority) return
-            if (e.total > 0) {
-              const pct = Math.min(100, Math.floor((e.received / e.total) * 100))
+            // An idle prefetch may be running alongside this spawn; the
+            // notification is about the spawn, so prefer the download the user
+            // is actually waiting on.
+            const download = e.downloads.find((d) => !d.background) ?? e.downloads[0]
+            if (!download) return
+            if (download.total > 0) {
+              const pct = Math.min(100, Math.floor((download.received / download.total) * 100))
               progress.report({
                 message: `Downloading ${label}… ${pct}%`,
-                increment: pct - lastPct,
+                increment: Math.max(0, pct - lastPct),
               })
               lastPct = pct
             } else {
               progress.report({
-                message: `Downloading ${label}… ${Math.floor(e.received / 1048576)} MB`,
+                message: `Downloading ${label}… ${Math.floor(download.received / 1048576)} MB`,
               })
             }
           }),

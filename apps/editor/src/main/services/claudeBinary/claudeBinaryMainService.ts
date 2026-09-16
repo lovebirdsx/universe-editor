@@ -33,7 +33,7 @@ import {
 import { resolveFromRepo } from '../../repoPaths.js'
 import { IRemoteConnectionService } from '../remote/remoteConnectionMainService.js'
 import type {
-  IClaudeBinaryProgress,
+  IClaudeBinaryDownloadEvent,
   IClaudeBinaryResolveOptions,
   IClaudeBinaryResult,
   IClaudeBinaryService,
@@ -79,8 +79,8 @@ export async function selectClaudeExecutable(
 export class ClaudeBinaryMainService extends Disposable implements IClaudeBinaryService {
   declare readonly _serviceBrand: undefined
 
-  private readonly _onDidChangeProgress = this._register(new Emitter<IClaudeBinaryProgress>())
-  readonly onDidChangeProgress = this._onDidChangeProgress.event
+  private readonly _onDidChangeDownload = this._register(new Emitter<IClaudeBinaryDownloadEvent>())
+  readonly onDidChangeDownload = this._onDidChangeDownload.event
 
   /** De-dupes concurrent resolves and caches the resolved path per options. */
   private readonly _inflight = new Map<string, Promise<IClaudeBinaryResult>>()
@@ -89,7 +89,7 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
   private readonly _flavor: ReturnType<typeof createClaudeFlavor>
   private readonly _binaryStore: AgentBinaryStore
 
-  private readonly _remoteProgressBound = new Set<string>()
+  private readonly _remoteDownloadBound = new Set<string>()
 
   constructor(
     @ILoggerService loggerService?: ILoggerService,
@@ -106,7 +106,11 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
         ...(!app.isPackaged ? { devBinaryFallback: () => this._vendoredBinary() } : {}),
       }),
     )
-    this._register(this._binaryStore.onDidChangeProgress((p) => this._onDidChangeProgress.fire(p)))
+    this._register(
+      this._binaryStore.onDidChangeDownload((downloads) => {
+        this._onDidChangeDownload.fire({ downloads })
+      }),
+    )
   }
 
   resolve(opts: IClaudeBinaryResolveOptions): Promise<IClaudeBinaryResult> {
@@ -160,12 +164,12 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
       authority,
       RemoteChannels.AgentBinary,
     )
-    if (!this._remoteProgressBound.has(authority)) {
-      this._remoteProgressBound.add(authority)
+    if (!this._remoteDownloadBound.has(authority)) {
+      this._remoteDownloadBound.add(authority)
       this._register(
-        service.onDidChangeProgress((e) => {
+        service.onDidChangeDownload((e) => {
           if (e.agent !== 'claude') return
-          this._onDidChangeProgress.fire({ received: e.received, total: e.total, authority })
+          this._onDidChangeDownload.fire({ downloads: e.downloads, authority })
         }),
       )
     }
