@@ -50,7 +50,7 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 - 纯黑页+probe 恒无+业务无关 spec 同轮随机挂=bootstrap RPC 被 gate 丢弃 → 案例 33
 - 本机裸 `electron.launch` 报 `Process failed to launch!`（exitCode=9）、CI 正常=本机环境 → 案例 28；**CI Windows** 同报错+ICU 加载失败/文件被占用+同窗口多 worker 齐挂=runner 文件锁窗口，harness `launchElectron` 已内建重试 → 案例 72；**CI Linux** 报 `spawn ETXTBSY` 栈在 launchElectron 内=瞬时守卫正则不匹配新变体 / Windows 重试耗尽仍挂=锁窗口超预算（Defender 排除根治）/ Windows 报 `Electron failed to install correctly`=同族新变体（已并入守卫）→ 案例 72b；报错**无 `electron.launch:` 前缀**+trace error 条目早于重试留痕=playwright 内部游离 promise unhandledRejection 击穿守卫（已 pnpm patch playwright-core）→ 案例 72c
 - 失败仅集中 DnD 类且重跑能过=headless 手势时序 → 案例 46；锁屏时剪贴板用例必败 → 案例 47
-- **WSL/Xvfb** 下 `smoke.terminalLink` 折行用例 initial+retry 确定性挂、失败在「fixture 得先折行」的前置断言上、`git stash -u`+build 回 HEAD 复跑同挂=本机环境差异（不打 tag，以 CI 为准）→ 案例 87
+- 终端 spec 在 WSL 下 initial+retry 确定性挂、续行文本比预期多一个 `"`（CI 全绿）=把 pty 对输入的回显当成了 shell 输出（缓冲区含某段文本 ≠ shell 执行过；快 shell 赢 race、慢 `$SHELL` 必输），定位判据锚「行首」→ 案例 87
 - 新写「重启后状态仍在」用例 initial 挂/retry 过、failed 在自建 poll 等持久化值、received 里混入别的类型条目（view）=renderer 的 debounce 写还没落盘就 `closeApp` + 对整份持久化容器严格相等 → 案例 88
 - chord 用例卡 `defocusEditor` 等 focus 变 false+retry 秒过=defocus 时序噪声（观察中）→ 案例 48
 - `Alt+<n>` 偶发等于没按（`element(s) not found` 恒 0 / received 恒初值）+ 失败现场 DOM `activeElement` 已在目标区内而 `when` 里的 `*Focus` 键读到反向值 = **焦点键陈旧**（逐 Part 键由 tracker 记账；同一次按的上下文不同会走不同代码路径——浮层开着走 React handler、关着走全局 binding）→ 案例 90（已修：键改 DOM 派生 + 原子读不变量断言）

@@ -95,13 +95,15 @@ test.describe('terminal file links', () => {
       ([tid, line]) => window.__E2E__!.terminalInput(tid!, `echo "${line}"\r`),
       [id, `${SIBLING} ${TARGET_REL}`],
     )
+    // The pty echoes the bytes as soon as they arrive, so this only proves the
+    // input reached the pty — not that the shell ran it. Waiting for the shell's
+    // own output is pollClickTargets' job.
     await expect
       .poll(() => page.evaluate((tid) => window.__E2E__!.terminalReadBuffer(tid!), id), {
         timeout: 15_000,
       })
       .toContain('endmarker.ts')
 
-    // Poll: the pty echo lands before xterm has painted the rows.
     const targets = await pollClickTargets(page, id!)
 
     // The whole point of the fixture is that the path spans rows. Without this
@@ -197,11 +199,16 @@ async function pollClickTargets(
             const host = document.querySelector(`[data-terminal-id="${id}"]`)
             const rows = host ? Array.from(host.querySelectorAll('.xterm-rows > div')) : []
             const texts = rows.map((el) => el.textContent ?? '')
-            // Last occurrence = the echoed output. The typed command line above
-            // it contains the same text.
+            // Anchor on a row that *starts* with the sibling: the shell prints
+            // its output at column 0, the echoed command line carries the
+            // `echo "` prefix. `includes` matched that echo too — the tty paints
+            // it the moment the pty gets the bytes, a whole shell startup before
+            // a slow ($SHELL) shell prints anything — so the poll settled on a
+            // line the shell never wrote. Column 0 keeps it running until the
+            // output lands.
             let head = -1
             for (let i = texts.length - 1; i >= 0; i--) {
-              if (texts[i]!.includes(sibling!)) {
+              if (texts[i]!.startsWith(`${sibling} `)) {
                 head = i
                 break
               }
@@ -234,6 +241,21 @@ async function pollClickTargets(
       { timeout: 15_000 },
     )
     .toBe(true)
-  if (!last) throw new Error('terminal rows never rendered the wrapped path')
+  if (!last) {
+    // Reaching here means the shell never printed the output (or the terminal is
+    // blank), so what the terminal is showing *is* the diagnosis.
+    const rows = await page.evaluate(
+      (id) =>
+        Array.from(
+          document
+            .querySelector(`[data-terminal-id="${id}"]`)
+            ?.querySelectorAll('.xterm-rows > div') ?? [],
+        )
+          .map((el) => (el.textContent ?? '').trimEnd())
+          .filter((text) => text !== ''),
+      terminalId,
+    )
+    throw new Error(`terminal rows never rendered the wrapped path; got ${JSON.stringify(rows)}`)
+  }
   return last
 }

@@ -23,7 +23,7 @@ playwright.config.ts  timeout/retries/workers(CI vs 本地分流)
 
 ## 最小扩展集启动（P2 基线）
 
-harness 启动 fixture 接收 `extensions: string[]`（allowlist），拼进 launch env `UNIVERSE_ENABLED_EXTENSIONS`，bootstrap 的纯函数 `computeActiveExtensions`（`extensionActivationFilter.ts`）据此过滤：`undefined` → 全部；`[]` → 只核心；`['@universe-editor/x']` → 该扩展 + 核心。**core fixture 基线是 `extensions: []`**——不启任何扩展，冷启动不 spawn tsserver / markdown-LSP，消除大半 LSP-warmup flake。allowlist 只门控 built-in：用户装的 vsix **始终激活**。
+harness fixture 接收 `extensions: string[]`（allowlist）→ launch env `UNIVERSE_ENABLED_EXTENSIONS` → bootstrap 纯函数 `computeActiveExtensions`（`extensionActivationFilter.ts`）：`undefined`=全部、`[]`=只核心、`['…/x']`=该扩展+核心。**core 基线是 `[]`**——不启扩展，冷启动不 spawn tsserver / markdown-LSP，消除大半 LSP-warmup flake。allowlist 只门控 built-in，用户装的 vsix **始终激活**。
 
 少数核心 spec 需要某扩展搭建测试场景，走 scoped fixture（基线 `[]` 之上只加所需扩展）：
 
@@ -103,7 +103,7 @@ pnpm --filter @universe-editor/editor test:visual    # 视觉基线（仅 Linux 
 
 > **`pnpm e2e` 走 turbo 缓存**：输入未变则命中缓存**不重跑**（缓存 key 含 `editor#build` 的 output hash）。强制真跑用 `pnpm e2e:force`。`--concurrency=1` 让 suite 串行，避免多个独立 Electron 并发的资源争抢 flake。
 
-**改了扩展代码要跑单个 suite？** 子包脚本已前置 `scripts/e2e/ensure-e2e-build.mjs`——裸 `pnpm --filter <ext> e2e` 会先把「宿主 + 被测扩展 + 上游」refresh 到最新再跑，不会再测旧产物。**首选仍是 `pnpm e2e:ext <包>`**：走 turbo `e2e` task，连 e2e 结果都进缓存（输入未变直接返回上次结果）。core 套件的 `core*App` scoped fixture 激活 git/typescript/markdown、从其 `dist` 读产物——这三个扩展是 editor 的 devDependencies，无需单列 `#build`。
+**改了扩展代码要跑单个 suite？** 首选 `pnpm e2e:ext <包>`（走 turbo `e2e` task，结果也进缓存）；裸 `pnpm --filter <ext> e2e` 也安全，已前置 `ensure-e2e-build.mjs`（见踩坑）。core 套件的 `core*App` fixture 激活 git/typescript/markdown 并从其 `dist` 读产物——这三个是 editor 的 devDependencies，无需单列 `#build`。
 
 **CI affected**：PR 用 turbo affected（`--filter=...[origin/main]`）只跑受影响 suite；改 `platform`/`e2e-harness` → 依赖传递触发全量兜底；main/nightly 无条件全量。CI 的 core e2e job 直接 `pnpm exec playwright test`（tag 分流靠 env 前缀；前面有独立 `pnpm build` step）。
 
@@ -131,6 +131,7 @@ pnpm --filter @universe-editor/editor test:visual    # 视觉基线（仅 Linux 
 - **异步 ACP 会话**：`sendAcpPrompt` 的 await **不等** echo 流式回复渲染完。依赖 timeline 高度/滚动的断言前，先 `expect.poll` 等消息数到位 + 高度收敛（见 skill `fix-ci-e2e-flake` 案例 15/34/41）。
 - **可见性别用 `toBeVisible()`**：Allotment.Pane 用 CSS visibility 隐藏后代，DOM 可见性会误判。走 ContextKey + `expect.poll`。
 - **长任务命令 fire-and-forget**：`showCommands` 之类内部 await 用户输入的命令必须 `void window.__E2E__!.runCommand(id)`，否则死锁。
+- **终端 spec 别拿回显当 shell 输出**：`terminalInput` 的行由内核 tty 立即回显，缓冲区含某段文本 ≠ shell 执行过；定位锚行首（案例 87）。
 - **URI fsPath 用正斜杠**：本代码库 `URI.fsPath` 返回正斜杠，比对临时目录路径先 `.replace(/\\/g, '/')`。
 - **`page.viewportSize()` 在 Electron 下是 null**——位置/视口断言用 `page.evaluate(() => window.innerHeight)`。
 - **真回归 vs 环境噪声**：失败先按 skill `fix-ci-e2e-flake` 的判定流程定性；新发现一类 flaky → 往该 skill 追加案例。
