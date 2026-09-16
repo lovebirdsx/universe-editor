@@ -3079,6 +3079,10 @@
 .configOverflowPanel {
   min-width: 160px;
   max-width: 280px;
+  /* An expanded row's body adds height, so the panel needs its own ceiling —
+     without one a long option list can run past the viewport with no way to
+     reach the rows below the fold. */
+  max-height: 60vh;
   overflow-y: auto;
   background: var(--vscode-agent-messageBackground, #2a2a2a);
   border: 1px solid var(--vscode-workbench-border, #555);
@@ -3112,7 +3116,18 @@
   background: var(--vscode-list-hoverBackground, #2a2d2e);
 }
 
-.configOverflowRow[aria-expanded='true'] {
+/* The panel's cursor is virtual (the container holds focus), but the rows are
+   real buttons, so Tab can still land on one — show that too. */
+.configOverflowRow:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: -1px;
+}
+
+/* Two independent states, one look: `aria-expanded` is the row showing its
+   body, `data-active` is where the panel's keyboard cursor sits. They coincide
+   whenever the cursor is on the expanded row. */
+.configOverflowRow[aria-expanded='true'],
+.configOverflowRow[data-active='true'] {
   background: var(--vscode-list-activeSelectionBackground, #094771);
 }
 
@@ -3130,7 +3145,8 @@
   text-align: right;
 }
 
-.configOverflowRow[aria-expanded='true'] .configOverflowRowValue {
+.configOverflowRow[aria-expanded='true'] .configOverflowRowValue,
+.configOverflowRow[data-active='true'] .configOverflowRowValue {
   color: var(--vscode-editor-foreground, #d4d4d4);
 }
 
@@ -3245,6 +3261,21 @@
 .configPopoverItem[data-active='true'] {
   background: var(--vscode-list-activeSelectionBackground, #094771);
   color: var(--vscode-editor-foreground, #d4d4d4);
+}
+
+/* data-active is the keyboard cursor, which moves on every arrow press;
+   data-current is the value actually in effect. They were the same marker until
+   the cursor existed, so without this the current value stops being findable
+   the moment the cursor steps off it. */
+.configPopoverItem[data-current='true']::after {
+  content: '✓';
+  flex-shrink: 0;
+  margin-left: 6px;
+  color: var(--vscode-agent-messageRoleForeground, #aaa);
+}
+
+.configPopoverItem[data-current='true'][data-active='true']::after {
+  color: inherit;
 }
 
 .configPopoverItemName {

@@ -50,6 +50,22 @@ export function findConfigOptionLabel(
   return value
 }
 
+/**
+ * Flatten a (possibly grouped) select list into leaf values, dropping the group
+ * headings. Callers that need a single linear sequence — QuickPick items, the
+ * popover's keyboard cursor — index into this.
+ */
+export function flattenSelectOptions(
+  options: readonly SessionConfigSelectOption[] | readonly SessionConfigSelectGroup[],
+): readonly SessionConfigSelectOption[] {
+  if (options.length === 0) return []
+  const first = options[0]!
+  if ('group' in first) {
+    return (options as readonly SessionConfigSelectGroup[]).flatMap((g) => g.options)
+  }
+  return options as readonly SessionConfigSelectOption[]
+}
+
 export interface ConfigSelectionSnapshot {
   /** configId → currentValue, for every `select` option in the bag. */
   readonly values: Readonly<Record<string, string>>

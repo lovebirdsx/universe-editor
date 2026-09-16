@@ -40,6 +40,12 @@ export const ACP_SCOPED_KEY_WEIGHT = KeybindingWeight.WorkbenchContrib + 50
 // root context key that global keybinding resolution can see.
 export const ACP_NAV_WHEN = `acpChatFocused || (editorAreaFocus && activeEditorTypeId == '${AcpSessionEditorInput.TYPE_ID}')`
 
+// Stricter gate for keys that address the session *editor*'s config bar by
+// position (Alt+<n>). ACP_NAV_WHEN would also match the sidebar ChatPanel's bar
+// — the legacy host the user confirmed is out of scope — and the key would then
+// drive whichever widget last held focus instead of the editor in front.
+export const ACP_EDITOR_ONLY_WHEN = `editorAreaFocus && activeEditorTypeId == '${AcpSessionEditorInput.TYPE_ID}'`
+
 // Resolve which chat widget a session command should target. Prefer the widget
 // behind the active session editor (so commands work even when DOM focus never
 // landed in its timeline); otherwise fall back to whichever chat last held focus
@@ -52,4 +58,15 @@ export function resolveNavWidget(accessor: ServicesAccessor): AcpChatWidget | un
     if (w) return w
   }
   return widgets.lastFocusedWidget
+}
+
+// ...and the strict variant for keys gated on ACP_EDITOR_ONLY_WHEN. There the
+// last-focused fallback is actively wrong: between an editor becoming active and
+// its widget registering (ChatBody registers on mount), it would hand the key to
+// the sidebar ChatPanel — exactly the host the gate exists to keep out. A session
+// editor with no widget yet simply has no target.
+export function resolveEditorNavWidget(accessor: ServicesAccessor): AcpChatWidget | undefined {
+  const active = accessor.get(IEditorService).activeEditor.get()
+  if (!(active instanceof AcpSessionEditorInput)) return undefined
+  return accessor.get(IAcpChatWidgetService).widgetForSession(active.sessionId)
 }

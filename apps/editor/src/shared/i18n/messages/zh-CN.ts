@@ -257,6 +257,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
 
   // --- Actions ---
   'action.about.title': '关于 Universe Editor',
+  'action.agent.activateConfigEntry': '聚焦会话配置项',
   'action.agent.addSelectionToChat': '将选区添加到 Agent 聊天',
   'action.agent.aiFixProblem': '使用 AI 修复',
   'action.agent.archiveSession': '归档 Agent 会话',
@@ -2438,6 +2439,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
 
   // --- ACP: config bar overflow ---
   'acp.config.more': '更多选项…',
+  'acp.config.entryOutOfRange': '本会话有 {0} 个配置项。',
 
   // --- ACP: model switch context guard ---
   'acp.modelSwitch.shrink.message': '切换到 "{model}"？',

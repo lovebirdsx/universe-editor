@@ -79,6 +79,7 @@ function makeWidget(
     closeFind: vi.fn(),
     findNext: vi.fn(),
     findPrev: vi.fn(),
+    activateConfigEntry: vi.fn(() => false),
   }
   return { container, child, widget, moveSpy, focusSpy, timelineSpy }
 }
@@ -308,6 +309,7 @@ describe('AcpChatWidgetService', () => {
       closeFind: vi.fn(),
       findNext: vi.fn(),
       findPrev: vi.fn(),
+      activateConfigEntry: vi.fn(() => false),
     }
     svc.register(widget)
     expect(cks.get('acpChatFocused')).toBe(true)

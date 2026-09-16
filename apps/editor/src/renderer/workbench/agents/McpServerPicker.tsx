@@ -18,10 +18,10 @@
  *  trigger + anchored shell around it.
  *--------------------------------------------------------------------------------------------*/
 
-import { useState, type HTMLAttributes } from 'react'
-import { ChevronDown, Plug } from 'lucide-react'
-import { ICommandService, localize } from '@universe-editor/platform'
-import { AnchoredSurface } from '@universe-editor/workbench-ui'
+import { Plug } from 'lucide-react'
+import type { HTMLAttributes } from 'react'
+import { localize, ICommandService } from '@universe-editor/platform'
+import { AnchoredSurface, useOverlayListNavigation } from '@universe-editor/workbench-ui'
 import { useObservable, useOptionalService } from '../useService.js'
 import {
   IAcpSessionService,
@@ -33,6 +33,7 @@ import {
   resolveMcpServerSelection,
   type McpServerDefinition,
 } from '../../services/acp/acpMcpServers.js'
+import { ConfigTrigger, type ConfigBarAnchor } from './ConfigOptionsBar.js'
 import { McpEnablementToggles } from './McpEnablementToggles.js'
 import styles from './agents.module.css'
 
@@ -75,13 +76,19 @@ export function filterPoolForSession(
 export function McpServerPicker({
   session,
   open,
-  onOpen,
+  anchor,
+  onRequestOpen,
   onClose,
+  onEscape,
+  onAltDigit,
 }: {
   session: IAcpSession
   open: boolean
-  onOpen: () => void
+  anchor: ConfigBarAnchor | null
+  onRequestOpen: (trigger: HTMLElement) => void
   onClose: () => void
+  onEscape: () => boolean
+  onAltDigit: (digit: number) => void
 }) {
   // Soft dependency: unit tests render the config bar with a minimal DI
   // container that has no ACP layer — the picker simply stays absent there.
@@ -92,8 +99,11 @@ export function McpServerPicker({
       session={session}
       service={service}
       open={open}
-      onOpen={onOpen}
+      anchor={anchor}
+      onRequestOpen={onRequestOpen}
       onClose={onClose}
+      onEscape={onEscape}
+      onAltDigit={onAltDigit}
     />
   )
 }
@@ -102,19 +112,24 @@ function McpServerPickerInner({
   session,
   service,
   open,
+  anchor,
+  onRequestOpen,
   onClose,
-  onOpen,
+  onEscape,
+  onAltDigit,
 }: {
   session: IAcpSession
   service: IAcpSessionServiceType
   open: boolean
-  onOpen: () => void
+  anchor: ConfigBarAnchor | null
+  onRequestOpen: (trigger: HTMLElement) => void
   onClose: () => void
+  onEscape: () => boolean
+  onAltDigit: (digit: number) => void
 }) {
   const unionPool = useObservable(service.mcpServerDefinitions)
   const pool = filterPoolForSession(unionPool, session.agentId)
   const selection = useObservable(session.mcpServerSelection)
-  const [anchor, setAnchor] = useState<{ x: number; y: number } | null>(null)
   if (isMcpPickerHidden(session, unionPool)) return null
   // `null` (inherit) resolves to every non-disabled pool entry — the same
   // default set a brand-new session starts with.
@@ -123,38 +138,25 @@ function McpServerPickerInner({
   const custom = selection !== null
   return (
     <div className={styles['configTriggerWrap']} data-testid="acp-mcp-picker">
-      <button
-        type="button"
-        className={styles['configTrigger']}
-        data-custom={custom}
-        data-testid="acp-mcp-picker-trigger"
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        data-tooltip={localize('acp.mcp.picker.title', 'MCP servers enabled for this session')}
-        onMouseDown={(e) => {
-          // The surface's outside-press listens on document mousedown; without
-          // this the same click would dismiss and the click below would
-          // immediately reopen the panel.
-          e.stopPropagation()
-        }}
-        onClick={(e) => {
-          if (open) {
-            onClose()
-            return
-          }
-          const rect = e.currentTarget.getBoundingClientRect()
-          setAnchor({ x: rect.left, y: rect.top })
+      <ConfigTrigger
+        testId="acp-mcp-picker-trigger"
+        icon={<Plug size={13} strokeWidth={1.75} aria-hidden="true" />}
+        value={
+          <>
+            {enabledSet.size}/{pool.length}
+          </>
+        }
+        tooltip={localize('acp.mcp.picker.title', 'MCP servers enabled for this session')}
+        hasPopup="dialog"
+        open={open}
+        attrs={{ 'data-custom': custom ? 'true' : 'false' }}
+        onRequestOpen={(trigger) => {
           // Pick up a `.mcp.json` edited on disk since the last refresh.
           void service.refreshMcpServerDefinitions()
-          onOpen()
+          onRequestOpen(trigger)
         }}
-      >
-        <Plug size={13} strokeWidth={1.75} aria-hidden="true" />
-        <span className={styles['configTriggerValue']}>
-          {enabledSet.size}/{pool.length}
-        </span>
-        <ChevronDown size={12} strokeWidth={1.75} aria-hidden="true" />
-      </button>
+        onClose={onClose}
+      />
       {open && anchor !== null ? (
         <AnchoredSurface
           x={anchor.x}
@@ -162,6 +164,7 @@ function McpServerPickerInner({
           placement="top-start"
           offset={4}
           onClose={onClose}
+          onEscape={onEscape}
           surfaceProps={
             {
               className: styles['configPopover'],
@@ -174,7 +177,7 @@ function McpServerPickerInner({
             } as HTMLAttributes<HTMLDivElement>
           }
         >
-          <McpPickerPanel session={session} onRequestClose={onClose} />
+          <McpPickerPanel session={session} onRequestClose={onClose} onAltDigit={onAltDigit} />
         </AnchoredSurface>
       ) : null}
     </div>
@@ -185,10 +188,16 @@ function McpServerPickerInner({
 export function McpPickerPanel({
   session,
   onRequestClose,
+  onAltDigit,
+  onExitUp,
+  onExitDown,
 }: {
   session: IAcpSession
   /** Invoked before navigating away (e.g. opening settings) so a host surface can dismiss. */
   onRequestClose?: () => void
+  onAltDigit?: (digit: number) => void
+  onExitUp?: () => void
+  onExitDown?: () => void
 }) {
   // Soft dependency, same as the picker: stays absent without the ACP layer.
   const service = useOptionalService(IAcpSessionService)
@@ -198,6 +207,9 @@ export function McpPickerPanel({
       session={session}
       service={service}
       {...(onRequestClose !== undefined ? { onRequestClose } : {})}
+      {...(onAltDigit !== undefined ? { onAltDigit } : {})}
+      {...(onExitUp !== undefined ? { onExitUp } : {})}
+      {...(onExitDown !== undefined ? { onExitDown } : {})}
     />
   )
 }
@@ -206,10 +218,16 @@ function McpPickerPanelInner({
   session,
   service,
   onRequestClose,
+  onAltDigit,
+  onExitUp,
+  onExitDown,
 }: {
   session: IAcpSession
   service: IAcpSessionServiceType
   onRequestClose?: () => void
+  onAltDigit?: (digit: number) => void
+  onExitUp?: () => void
+  onExitDown?: () => void
 }) {
   const unionPool = useObservable(service.mcpServerDefinitions)
   const pool = filterPoolForSession(unionPool, session.agentId)
@@ -228,8 +246,36 @@ function McpPickerPanelInner({
     const next = enabledSet.has(name) ? base.filter((n) => n !== name) : [...base, name]
     service.setSessionMcpServers(session.id, next)
   }
+
+  // A checkbox list is the one place Space means "toggle" rather than "confirm":
+  // the hook reports it as `preview`, and Enter does the same thing here so both
+  // gestures work. Focus stays on the container, so the rows are driven by the
+  // cursor rather than by a real checkbox focus ring.
+  const listLabel = localize('acp.mcp.picker.title', 'MCP servers enabled for this session')
+  const nav = useOverlayListNavigation({
+    count: pool.length,
+    initialIndex: 0,
+    onActivate: (index) => {
+      const def = pool[index]
+      if (def) toggle(def.name)
+    },
+    getTypeaheadText: (index) => pool[index]?.name ?? '',
+    // Nested in the overflow panel the ends are exits — the cursor falls back
+    // out to the rows rather than jumping to the other extreme; standalone it
+    // wraps like every other picker.
+    wrap: onExitUp === undefined && onExitDown === undefined,
+    ariaLabel: listLabel,
+    ...(onAltDigit !== undefined ? { onAltDigit } : {}),
+    ...(onExitUp !== undefined ? { onExitUp } : {}),
+    ...(onExitDown !== undefined ? { onExitDown } : {}),
+  })
+
   return (
-    <>
+    // No listbox on the focus host: this panel is a header, a checkbox list and
+    // a footer, and a listbox may only contain options. The role therefore moves
+    // down onto the rows' own wrapper, leaving the host an unroled focus holder
+    // (same shape as the overflow panel's row list).
+    <div ref={nav.containerRef} {...nav.containerProps} role={undefined} aria-label={undefined}>
       <div className={styles['mcpPickHeader']}>
         <span>
           {custom
@@ -246,75 +292,92 @@ function McpPickerPanelInner({
           </button>
         ) : null}
       </div>
-      {pool.map((def) => (
-        <div
-          key={def.name}
-          className={styles['mcpPickRow']}
-          data-status={liveStatus.get(def.name)}
-          data-testid="acp-mcp-picker-row"
-          data-name={def.name}
-        >
-          <label className={styles['mcpPickSession']}>
-            <input
-              type="checkbox"
-              checked={enabledSet.has(def.name)}
-              onChange={() => toggle(def.name)}
-            />
-            {liveStatus.has(def.name) ? (
-              <span className={styles['mcpStatusDot']} aria-hidden="true" />
-            ) : null}
-            <span
-              className={styles['mcpPickName']}
-              data-default-disabled={def.disabled || undefined}
+      <div role="listbox" aria-label={listLabel} aria-multiselectable="true">
+        {pool.map((def, index) => {
+          const rowProps = nav.getItemProps(index)
+          return (
+            <div
+              key={def.name}
+              {...rowProps}
+              // No mouse activation on the row itself: the session checkbox is
+              // the mouse target (a press on a row's empty space must not
+              // restart the session, which is what flipping a server does), and
+              // every control inside — the checkbox, the two default switches,
+              // Reset — owns its own press. Keyboard activation is unaffected:
+              // Enter/Space go through the container's key handler.
+              onMouseDown={undefined}
+              className={styles['mcpPickRow']}
+              data-status={liveStatus.get(def.name)}
+              data-testid="acp-mcp-picker-row"
+              data-name={def.name}
             >
-              {def.name}
-            </span>
-            <span className={styles['mcpPickMeta']}>
-              {def.agentAffinity !== undefined && (
+              <label className={styles['mcpPickSession']}>
+                <input
+                  type="checkbox"
+                  checked={enabledSet.has(def.name)}
+                  // The container owns the cursor, so the box must not become a
+                  // second tab stop the arrow keys cannot reach.
+                  tabIndex={-1}
+                  onChange={() => toggle(def.name)}
+                />
+                {liveStatus.has(def.name) ? (
+                  <span className={styles['mcpStatusDot']} aria-hidden="true" />
+                ) : null}
                 <span
-                  className={styles['mcpAffinityBadge']}
-                  data-tooltip={
-                    def.agentAffinity === 'claude-code'
-                      ? localize('acp.mcp.picker.affinityClaude', 'Claude Code sessions only')
-                      : localize('acp.mcp.picker.affinityCodex', 'Codex sessions only')
-                  }
+                  className={styles['mcpPickName']}
+                  data-default-disabled={def.disabled || undefined}
                 >
-                  {def.agentAffinity === 'claude-code' ? 'claude' : 'codex'}
+                  {def.name}
                 </span>
-              )}
-              {def.fromMcpJson
-                ? '.mcp.json'
-                : def.source === 'project'
-                  ? localize('acp.mcp.picker.sourceProject', 'project')
-                  : def.source === 'extension'
-                    ? localize('acp.mcp.picker.sourceExtension', 'extension')
-                    : def.source === 'agent-user'
-                      ? def.agentAffinity === 'codex'
-                        ? localize('acp.mcp.picker.sourceAgentUserCodex', 'codex user')
-                        : localize('acp.mcp.picker.sourceAgentUserClaude', 'claude user')
-                      : def.source === 'agent-project'
-                        ? localize('acp.mcp.picker.sourceAgentProjectCodex', 'codex project')
-                        : localize('acp.mcp.picker.sourceGlobal', 'global')}
-            </span>
-            {sessionAffinity !== undefined && def.sharedWith?.includes(sessionAffinity) === true ? (
-              <span
-                className={styles['mcpSharedHint']}
-                data-tooltip={localize(
-                  'acp.mcp.picker.sharedHint',
-                  'Also defined for this agent — the entry shown comes from a higher-priority shared layer',
-                )}
-              >
-                {localize('acp.mcp.picker.sharedShort', 'shared')}
-              </span>
-            ) : null}
-          </label>
-          <McpEnablementToggles
-            name={def.name}
-            showUserToggle={def.hasUserLevelDefinition ?? false}
-            compact
-          />
-        </div>
-      ))}
+                <span className={styles['mcpPickMeta']}>
+                  {def.agentAffinity !== undefined && (
+                    <span
+                      className={styles['mcpAffinityBadge']}
+                      data-tooltip={
+                        def.agentAffinity === 'claude-code'
+                          ? localize('acp.mcp.picker.affinityClaude', 'Claude Code sessions only')
+                          : localize('acp.mcp.picker.affinityCodex', 'Codex sessions only')
+                      }
+                    >
+                      {def.agentAffinity === 'claude-code' ? 'claude' : 'codex'}
+                    </span>
+                  )}
+                  {def.fromMcpJson
+                    ? '.mcp.json'
+                    : def.source === 'project'
+                      ? localize('acp.mcp.picker.sourceProject', 'project')
+                      : def.source === 'extension'
+                        ? localize('acp.mcp.picker.sourceExtension', 'extension')
+                        : def.source === 'agent-user'
+                          ? def.agentAffinity === 'codex'
+                            ? localize('acp.mcp.picker.sourceAgentUserCodex', 'codex user')
+                            : localize('acp.mcp.picker.sourceAgentUserClaude', 'claude user')
+                          : def.source === 'agent-project'
+                            ? localize('acp.mcp.picker.sourceAgentProjectCodex', 'codex project')
+                            : localize('acp.mcp.picker.sourceGlobal', 'global')}
+                </span>
+                {sessionAffinity !== undefined &&
+                def.sharedWith?.includes(sessionAffinity) === true ? (
+                  <span
+                    className={styles['mcpSharedHint']}
+                    data-tooltip={localize(
+                      'acp.mcp.picker.sharedHint',
+                      'Also defined for this agent — the entry shown comes from a higher-priority shared layer',
+                    )}
+                  >
+                    {localize('acp.mcp.picker.sharedShort', 'shared')}
+                  </span>
+                ) : null}
+              </label>
+              <McpEnablementToggles
+                name={def.name}
+                showUserToggle={def.hasUserLevelDefinition ?? false}
+                compact
+              />
+            </div>
+          )
+        })}
+      </div>
       <div className={styles['mcpPickFooter']}>
         <button
           type="button"
@@ -337,6 +400,6 @@ function McpPickerPanelInner({
           'Checkboxes on the left apply to this session only; the person/folder switches set the user-level and workspace-level defaults (workspace wins, and can go back to inheriting).',
         )}
       </div>
-    </>
+    </div>
   )
 }

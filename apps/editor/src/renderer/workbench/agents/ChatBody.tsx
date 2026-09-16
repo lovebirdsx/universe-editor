@@ -140,6 +140,8 @@ export interface WidgetHandle {
   /** Pull keyboard focus onto the timeline scroll container — the surface the
    *  message-card selection and Alt+J/K navigation live on. */
   focusTimeline: () => boolean
+  /** Open the config bar entry at `index` (Alt+<n>). False when no such entry. */
+  activateConfigEntry: (index: number) => boolean
   jumpToPlan: () => void
   toggleCollapse: () => void
   cycleCollapseMode: () => void
@@ -203,6 +205,7 @@ function createNoopHandle(): WidgetHandle {
     scrollTimeline: noop,
     focus: () => false,
     focusTimeline: () => false,
+    activateConfigEntry: () => false,
     jumpToPlan: noop,
     toggleCollapse: noop,
     cycleCollapseMode: noop,
@@ -348,6 +351,7 @@ function ChatSessionBody({
       scrollTimeline: (t) => handleRef.current.scrollTimeline(t),
       focusInput: () => handleRef.current.focus(),
       focusTimeline: () => handleRef.current.focusTimeline(),
+      activateConfigEntry: (index) => handleRef.current.activateConfigEntry(index),
       // Read through to the cache rather than snapshotting at mount: an explicit
       // "focus the input" (deep link / session switcher) records the surface
       // while this chat is still mounting and must win here.

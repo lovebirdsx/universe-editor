@@ -358,6 +358,7 @@ import {
   SelectAgentModeAction,
   SelectAgentModelAction,
   SelectAgentThoughtLevelAction,
+  ActivateAgentConfigEntryAction,
   ConfigureAiFixAction,
   ToggleAcpTimelineItemCollapseAction,
   CycleAcpTimelineCollapseAction,
@@ -799,6 +800,7 @@ registerAction2(OpenClaudeConfigAction)
 registerAction2(SelectAgentModelAction)
 registerAction2(SelectAgentModeAction)
 registerAction2(SelectAgentThoughtLevelAction)
+registerAction2(ActivateAgentConfigEntryAction)
 registerAction2(ConfigureAiFixAction)
 registerAction2(ResumeAgentSessionAction)
 registerAction2(ClearAgentSessionHistoryAction)

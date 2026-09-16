@@ -20,12 +20,8 @@ import {
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { IAcpSessionService, type IAcpSession } from '../services/acp/session/acpSessionService.js'
-import type {
-  SessionConfigOptionCategory,
-  SessionConfigSelectGroup,
-  SessionConfigSelectOption,
-} from '@agentclientprotocol/sdk'
-import { findConfigOptionLabel } from '../services/acp/configOptionLabel.js'
+import type { SessionConfigOptionCategory } from '@agentclientprotocol/sdk'
+import { findConfigOptionLabel, flattenSelectOptions } from '../services/acp/configOptionLabel.js'
 import {
   AI_FIX_AGENT_ID_KEY,
   AI_FIX_MODE_KEY,
@@ -39,7 +35,12 @@ import {
   confirmModelSwitchContextShrink,
   evaluateModelSwitchContextShrink,
 } from '../services/acp/session/modelSwitchContextGuard.js'
-import { CATEGORY } from './_agentShared.js'
+import {
+  CATEGORY,
+  ACP_EDITOR_ONLY_WHEN,
+  ACP_SCOPED_KEY_WEIGHT,
+  resolveEditorNavWidget,
+} from './_agentShared.js'
 
 async function pickConfigOption(
   accessor: ServicesAccessor,
@@ -91,21 +92,9 @@ async function pickConfigOption(
 /**
  * SDK's `SessionConfigSelectOptions` is a union: either a flat array of
  * `SessionConfigSelectOption` or an array of `SessionConfigSelectGroup`. The
- * QuickPick UI doesn't support grouping today, so we flatten — group labels
- * are dropped, leaving just the leaf values.
+ * QuickPick UI doesn't support grouping today, so `flattenSelectOptions` drops
+ * the group labels, leaving just the leaf values.
  */
-function flattenSelectOptions(
-  options: readonly SessionConfigSelectOption[] | readonly SessionConfigSelectGroup[],
-): readonly SessionConfigSelectOption[] {
-  if (options.length === 0) return []
-  const first = options[0]!
-  if ('group' in first) {
-    const groups = options as readonly SessionConfigSelectGroup[]
-    return groups.flatMap((g) => g.options)
-  }
-  return options as readonly SessionConfigSelectOption[]
-}
-
 async function applyConfigOption(
   session: IAcpSession,
   configId: string,
@@ -121,6 +110,59 @@ async function applyConfigOption(
         error: (err as Error).message,
       }),
     })
+  }
+}
+
+/** Alt+<n> reaches entries 1..8; the index is the keybinding's `args`. */
+const MAX_CONFIG_ENTRY_SHORTCUT = 8
+
+/**
+ * The config bar's keyboard door: Alt+<n> opens the n-th entry of the *focused
+ * session editor's* bar and drops the cursor inside it. The index is the entry's
+ * position in `buildConfigBarEntries` order — including the tail the bar folded
+ * into its "…" panel, so folding never renumbers what stayed inline; a folded
+ * entry opens the panel with its row already expanded.
+ *
+ * One action carrying eight argument-bound keybindings rather than eight
+ * commands: the index is the only difference between them. `f1: false` keeps the
+ * palette from listing eight identically-titled entries — the bindings still
+ * register, which is the whole point.
+ */
+export class ActivateAgentConfigEntryAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.activateConfigEntry'
+  constructor() {
+    super({
+      id: ActivateAgentConfigEntryAction.ID,
+      title: localize2('action.agent.activateConfigEntry', 'Focus Session Config Entry'),
+      category: CATEGORY,
+      keybinding: Array.from({ length: MAX_CONFIG_ENTRY_SHORTCUT }, (_, i) => ({
+        primary: `alt+${i + 1}`,
+        args: i,
+        when: ACP_EDITOR_ONLY_WHEN,
+        weight: ACP_SCOPED_KEY_WEIGHT,
+      })),
+      f1: false,
+    })
+  }
+  override run(accessor: ServicesAccessor, ...args: unknown[]): void {
+    const index = args[0]
+    if (typeof index !== 'number') return
+    // The strict resolver, not the shared one: the gate promises the editor's
+    // bar, and the fallback would deliver the key to the sidebar ChatPanel
+    // during the window before the editor's widget registers.
+    const widget = resolveEditorNavWidget(accessor)
+    if (!widget) {
+      // Unreachable through the keybinding (its `when` requires a session editor
+      // to be active), but a command invocation must not look like a dead key.
+      accessor.get(INotificationService).notify({
+        severity: Severity.Info,
+        message: localize('agent.noSession', 'No active agent session.'),
+      })
+      return
+    }
+    // Out-of-range is reported by the bar itself — it is the only side that
+    // knows how many entries this session actually has.
+    widget.activateConfigEntry(index)
   }
 }
 

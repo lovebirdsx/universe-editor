@@ -7,7 +7,10 @@
  *      button shows
  *    - rows expand inline one at a time; picking a value calls setConfigOption
  *    - widening the bar clears the overflow and closes the panel
- *    - Escape closes the panel
+ *    - Escape closes the panel, peeling one level at a time (collapse the row,
+ *      then dismiss) and handing focus back to the ⋯ button
+ *    - the row cursor and an expanded body form one sequence: Down at the last
+ *      option continues to the next row, Up at the first returns to its row
  *    - a hidden MCP entry (empty pool) never lights the ⋯ button
  *      (splitConfigBarOverflow pure packing semantics live in
  *      services/acp/__tests__/configBarLayout.test.ts)
@@ -398,6 +401,78 @@ describe('ConfigBarOverflowMenu — packing and panel', () => {
     await act(async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(screen.queryByTestId('acp-config-overflow-panel')).toBeNull()
+  })
+
+  it('Escape peels one level at a time and hands focus back to the ⋯ button', async () => {
+    setupNarrowBar()
+    await fireResize()
+    openOverflowMenu()
+    const panel = screen.getByTestId('acp-config-overflow-panel')
+    const modeRow = panel.querySelector<HTMLElement>('[data-entry-key="mode"]')!
+
+    fireEvent.keyDown(document.activeElement!, { key: 'Enter' })
+    expect(modeRow.getAttribute('aria-expanded')).toBe('true')
+    await act(async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
+
+    // First Escape collapses the row — the panel is a two-level surface, and
+    // collapsing the whole thing on one press would lose the user's place.
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(modeRow.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.getByTestId('acp-config-overflow-panel')).toBeTruthy()
+    expect(panel.contains(document.activeElement)).toBe(true)
+
+    // Second Escape dismisses, with the cursor back on what opened it.
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByTestId('acp-config-overflow-panel')).toBeNull()
+    expect(document.activeElement).toBe(screen.getByTestId('acp-config-overflow-trigger'))
+  })
+
+  it('runs the cursor across the rows and an expanded body as one sequence', async () => {
+    setupNarrowBar()
+    await fireResize()
+    openOverflowMenu()
+    const panel = screen.getByTestId('acp-config-overflow-panel')
+    const rows = [...panel.querySelectorAll<HTMLElement>('[data-entry-key]')]
+    expect(rows.map((r) => r.getAttribute('data-entry-key'))).toEqual([
+      'mode',
+      'thought_level',
+      'temp',
+      MCP_ENTRY_KEY,
+    ])
+    // Opening puts the cursor on the first row and focus inside the panel, so
+    // the arrows work without a click.
+    expect(rows[0]!.getAttribute('data-active')).toBe('true')
+    expect(panel.contains(document.activeElement)).toBe(true)
+
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' })
+    expect(rows[1]!.getAttribute('data-active')).toBe('true')
+    // The rows are hand-rolled disclosure buttons, not hook-managed options, so
+    // "not the cursor" is the attribute's absence rather than "false".
+    expect(rows[0]!.hasAttribute('data-active')).toBe(false)
+
+    // Expand `temp` — a one-option list, so Down sits on its last row.
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' })
+    fireEvent.keyDown(document.activeElement!, { key: 'Enter' })
+    const tempRow = rows[2]!
+    expect(tempRow.getAttribute('aria-expanded')).toBe('true')
+
+    const body = tempRow.parentElement!.querySelector<HTMLElement>('[role="listbox"]')
+    expect(body).toBeTruthy()
+    expect(body!.contains(document.activeElement)).toBe(true)
+
+    // Down at the body's end continues to the next row rather than dead-ending.
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' })
+    expect(tempRow.getAttribute('aria-expanded')).toBe('false')
+    expect(rows[3]!.getAttribute('data-active')).toBe('true')
+    expect(panel.contains(document.activeElement)).toBe(true)
+
+    // And re-opening it, Up from the body's first row returns to its own row.
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowUp' })
+    fireEvent.keyDown(document.activeElement!, { key: 'Enter' })
+    expect(tempRow.getAttribute('aria-expanded')).toBe('true')
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowUp' })
+    expect(tempRow.getAttribute('aria-expanded')).toBe('false')
+    expect(tempRow.getAttribute('data-active')).toBe('true')
   })
 
   it('drops a stale expansion when a row leaves the overflow set and re-enters collapsed', async () => {

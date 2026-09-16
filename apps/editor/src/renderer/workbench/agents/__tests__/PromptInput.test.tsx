@@ -390,6 +390,7 @@ function makeHandleRef(): { current: WidgetHandle } {
       closeFind: () => {},
       findNext: () => {},
       findPrev: () => {},
+      activateConfigEntry: () => false,
     },
   }
 }

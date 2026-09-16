@@ -18,13 +18,15 @@
  *
  *  `SubagentModelPanel` is the surface-free content (all logic included) so the
  *  overflow menu can render the same pick inline; the picker is just the
- *  trigger + anchored shell around it.
+ *  trigger + anchored shell around it. The panel owns its own list navigation:
+ *  when it renders inside the overflow panel it is the inner region, and the
+ *  `onExitUp` / `onExitDown` hooks let its cursor fall back out to the rows.
  *--------------------------------------------------------------------------------------------*/
 
 import { useMemo, useRef, useState, type HTMLAttributes } from 'react'
-import { ChevronDown, Users } from 'lucide-react'
+import { Users } from 'lucide-react'
 import { INotificationService, Severity, localize } from '@universe-editor/platform'
-import { AnchoredSurface } from '@universe-editor/workbench-ui'
+import { AnchoredSurface, useOverlayListNavigation } from '@universe-editor/workbench-ui'
 import {
   candidateModelsForProtocol,
   CLAUDE_AGENT_PROTOCOL,
@@ -35,6 +37,7 @@ import type { IAcpSession } from '../../services/acp/session/acpSessionService.j
 import { useClaudeConfig } from '../agentSettings/claude/useClaudeConfig.js'
 import { useProviderRegistry } from '../agentSettings/useProviderRegistry.js'
 import { useObservable, useService } from '../useService.js'
+import { ConfigTrigger, type ConfigBarAnchor } from './ConfigOptionsBar.js'
 import styles from './agents.module.css'
 
 /** Inherit is the empty pick — `setSubagentModel(undefined)` clears the env. */
@@ -43,16 +46,21 @@ const INHERIT = ''
 export function SubagentModelPicker({
   session,
   open,
-  onOpen,
+  anchor,
+  onRequestOpen,
   onClose,
+  onEscape,
+  onAltDigit,
 }: {
   session: IAcpSession
   open: boolean
-  onOpen: () => void
+  anchor: ConfigBarAnchor | null
+  onRequestOpen: (trigger: HTMLElement) => void
   onClose: () => void
+  onEscape: () => boolean
+  onAltDigit: (digit: number) => void
 }) {
   const { subagentModelEnv } = useClaudeConfig()
-  const [anchor, setAnchor] = useState<{ x: number; y: number } | null>(null)
 
   const current = subagentModelEnv ?? INHERIT
   const triggerValue =
@@ -63,33 +71,16 @@ export function SubagentModelPicker({
 
   return (
     <div className={styles['configTriggerWrap']} data-testid="acp-subagent-picker">
-      <button
-        type="button"
-        className={styles['configTrigger']}
-        data-testid="acp-subagent-picker-trigger"
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        data-tooltip={triggerTooltip}
-        onMouseDown={(e) => {
-          // The surface's outside-press listens on document mousedown; without
-          // this the same click would dismiss and the click below would
-          // immediately reopen the panel.
-          e.stopPropagation()
-        }}
-        onClick={(e) => {
-          if (open) {
-            onClose()
-            return
-          }
-          const rect = e.currentTarget.getBoundingClientRect()
-          setAnchor({ x: rect.left, y: rect.top })
-          onOpen()
-        }}
-      >
-        <Users size={13} strokeWidth={1.75} aria-hidden="true" />
-        <span className={styles['configTriggerValue']}>{triggerValue}</span>
-        <ChevronDown size={12} strokeWidth={1.75} aria-hidden="true" />
-      </button>
+      <ConfigTrigger
+        testId="acp-subagent-picker-trigger"
+        icon={<Users size={13} strokeWidth={1.75} aria-hidden="true" />}
+        value={triggerValue}
+        tooltip={triggerTooltip}
+        hasPopup="listbox"
+        open={open}
+        onRequestOpen={onRequestOpen}
+        onClose={onClose}
+      />
       {open && anchor !== null ? (
         <AnchoredSurface
           x={anchor.x}
@@ -97,16 +88,15 @@ export function SubagentModelPicker({
           placement="top-start"
           offset={4}
           onClose={onClose}
+          onEscape={onEscape}
           surfaceProps={
             {
               className: styles['subagentPanel'],
-              role: 'listbox',
-              'aria-label': localize('acp.subagent.label', 'Sub Agent'),
               'data-testid': 'acp-subagent-panel',
             } as HTMLAttributes<HTMLDivElement>
           }
         >
-          <SubagentModelPanel session={session} />
+          <SubagentModelPanel session={session} onAltDigit={onAltDigit} />
         </AnchoredSurface>
       ) : null}
     </div>
@@ -114,7 +104,17 @@ export function SubagentModelPicker({
 }
 
 /** Surface-free pick content; renders inside any host (picker surface, overflow menu). */
-export function SubagentModelPanel({ session }: { session: IAcpSession }) {
+export function SubagentModelPanel({
+  session,
+  onAltDigit,
+  onExitUp,
+  onExitDown,
+}: {
+  session: IAcpSession
+  onAltDigit?: (digit: number) => void
+  onExitUp?: () => void
+  onExitDown?: () => void
+}) {
   const { activeAuth, subagentModelEnv, setSubagentModel } = useClaudeConfig()
   const { providers } = useProviderRegistry()
   const notifications = useService(INotificationService)
@@ -190,23 +190,48 @@ export function SubagentModelPanel({ session }: { session: IAcpSession }) {
     setChanged(false)
   }
 
-  const rows = [
-    {
-      key: INHERIT,
-      value: INHERIT,
-      label: localize('acp.subagent.inherit', 'Follow main model'),
-      active: current === INHERIT,
+  const rows = useMemo(
+    () => [
+      {
+        key: INHERIT,
+        value: INHERIT,
+        label: localize('acp.subagent.inherit', 'Follow main model'),
+        active: current === INHERIT,
+      },
+      ...options.map((m) => ({
+        key: m,
+        value: m,
+        label: m,
+        active: m === current,
+      })),
+    ],
+    [options, current],
+  )
+
+  const listLabel = localize('acp.subagent.label', 'Sub Agent')
+  const nav = useOverlayListNavigation({
+    count: rows.length,
+    initialIndex: rows.findIndex((r) => r.active),
+    onActivate: (index) => {
+      const row = rows[index]
+      if (row) pick(row.value)
     },
-    ...options.map((m) => ({
-      key: m,
-      value: m,
-      label: m,
-      active: m === current,
-    })),
-  ]
+    getTypeaheadText: (index) => rows[index]?.label ?? '',
+    // Nested in the overflow panel the ends are exits — the cursor falls back
+    // out to the rows rather than jumping to the other extreme; standalone it
+    // wraps like every other picker.
+    wrap: onExitUp === undefined && onExitDown === undefined,
+    ariaLabel: listLabel,
+    ...(onAltDigit !== undefined ? { onAltDigit } : {}),
+    ...(onExitUp !== undefined ? { onExitUp } : {}),
+    ...(onExitDown !== undefined ? { onExitDown } : {}),
+  })
 
   return (
-    <>
+    // The heading, the description and the restart hint are not options, so the
+    // listbox sits on a wrapper that holds nothing but the rows (the focus host
+    // itself stays unroled — a listbox may only contain options).
+    <div ref={nav.containerRef} {...nav.containerProps} role={undefined} aria-label={undefined}>
       <div className={styles['configPopoverGroupLabel']}>
         {localize('acp.subagent.label', 'Sub Agent')}
       </div>
@@ -216,22 +241,19 @@ export function SubagentModelPanel({ session }: { session: IAcpSession }) {
           'Sub agents run with this model. It is read when they spawn, so changes apply from the next session.',
         )}
       </div>
-      {rows.map((row) => (
-        <div
-          key={row.key}
-          role="option"
-          aria-selected={row.active}
-          data-active={row.active}
-          className={styles['configPopoverItem']}
-          data-tooltip={row.label}
-          onMouseDown={(e) => {
-            e.preventDefault()
-            pick(row.value)
-          }}
-        >
-          <span className={styles['configPopoverItemName']}>{row.label}</span>
-        </div>
-      ))}
+      <div role="listbox" aria-label={listLabel}>
+        {rows.map((row, index) => (
+          <div
+            key={row.key}
+            {...nav.getItemProps(index)}
+            className={styles['configPopoverItem']}
+            data-current={row.active ? 'true' : undefined}
+            data-tooltip={row.label}
+          >
+            <span className={styles['configPopoverItemName']}>{row.label}</span>
+          </div>
+        ))}
+      </div>
       {changed ? (
         <div className={styles['subagentPanelHint']}>
           {localize('acp.subagent.nextSession', 'Takes effect next session')} ·{' '}
@@ -240,6 +262,6 @@ export function SubagentModelPanel({ session }: { session: IAcpSession }) {
           </button>
         </div>
       ) : null}
-    </>
+    </div>
   )
 }

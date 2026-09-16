@@ -63,6 +63,14 @@ export interface AcpChatWidget {
    *  Alt+J/K navigate, where a message card selection lives. Returns whether
    *  focus landed. */
   focusTimeline(): boolean
+  /**
+   * Open the config bar entry at `index` (0-based, in bar order) and move the
+   * cursor inside it. An entry the bar could not fit expands inside the "…"
+   * panel instead of its inline popover. Returns whether an entry exists at that
+   * index — the caller reports the miss, so a silent no-op never masquerades as
+   * a broken binding.
+   */
+  activateConfigEntry(index: number): boolean
   /** Which surface inside this chat last held keyboard focus. */
   getFocusSurface(): AcpFocusSurface
   /** Reveal the latest ExitPlanMode plan card (a `switch_mode` tool call). */

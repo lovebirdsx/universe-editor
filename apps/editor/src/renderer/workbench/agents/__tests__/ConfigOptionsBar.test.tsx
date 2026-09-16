@@ -11,10 +11,13 @@
  *    - overflow packing: narrow bars mark the low-priority tail with
  *      data-overflowed/inert, widening clears it, an overflowed entry's open
  *      popover is closed
+ *    - the imperative handle behind Alt+<n>: index → entry mapping (overflow
+ *      included), the cursor landing inside whichever host opened, and the
+ *      out-of-range notice naming the real entry count
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, cleanup, fireEvent, act } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, act, within } from '@testing-library/react'
 import {
   Event,
   IAiModelService,
@@ -46,7 +49,7 @@ import type {
 } from '../../../services/acp/session/acpSessionService.js'
 import type { AvailableCommand, SessionConfigOption } from '@agentclientprotocol/sdk'
 import { IClaudeConfigService } from '../../../../shared/ipc/claudeConfigService.js'
-import { ConfigOptionsBar } from '../ConfigOptionsBar.js'
+import { ConfigOptionsBar, type ConfigOptionsBarHandle } from '../ConfigOptionsBar.js'
 import { ServicesContext } from '../../useService.js'
 import {
   FakeResizeObserver,
@@ -603,5 +606,143 @@ describe('ConfigOptionsBar — overflow', () => {
     await fireResize()
 
     expect(screen.queryByTestId('acp-config-mode-popover')).toBeNull()
+  })
+})
+
+/**
+ * The imperative handle is what the Alt+<n> command drives: it arrives with no
+ * click event, so it must open exactly like a mouse click does — and for an
+ * entry the bar folded away, it must land in the "…" panel instead.
+ */
+describe('ConfigOptionsBar — entry activation (Alt+<n>)', () => {
+  function renderWithHandle(
+    session: FakeSession,
+    notificationService: INotificationService = stubNotificationService,
+  ): { current: ConfigOptionsBarHandle | null } {
+    const handle: { current: ConfigOptionsBarHandle | null } = { current: null }
+    renderWithServices(
+      <ConfigOptionsBar session={session} handleRef={handle} />,
+      undefined,
+      notificationService,
+    )
+    return handle
+  }
+
+  /** The command path has no event to wrap the update, so drive it through act. */
+  function activate(handle: { current: ConfigOptionsBarHandle | null }, index: number): boolean {
+    let opened = false
+    act(() => {
+      opened = handle.current!.activateEntry(index)
+    })
+    return opened
+  }
+
+  it('opens the entry at the index and drops the cursor on its current value', () => {
+    const handle = renderWithHandle(makeSession([MODEL_OPTION, MODE_OPTION]))
+    expect(activate(handle, 0)).toBe(true)
+    const popover = screen.getByTestId('acp-config-model-popover')
+    expect(popover.querySelector('[data-active="true"]')?.textContent).toBe('Sonnet 4.6')
+    // Focus moved into the overlay, so arrows and typeahead work without the
+    // user having to click into it first.
+    expect(popover.contains(document.activeElement)).toBe(true)
+  })
+
+  it('numbers entries by bar order, so the sub-agent slot is index 1 on claude-code', () => {
+    const handle = renderWithHandle(makeSession([MODEL_OPTION], { agentId: 'claude-code' }))
+    expect(activate(handle, 1)).toBe(true)
+    expect(screen.getByTestId('acp-subagent-panel')).toBeTruthy()
+  })
+
+  it('opens a folded-away entry inside the "…" panel with its row already expanded', async () => {
+    globalThis.ResizeObserver = FakeResizeObserver as unknown as typeof ResizeObserver
+    // 230px keeps model + subagent inline (200 <= 204) and folds mode away.
+    const session = makeSession([MODEL_OPTION, MODE_OPTION], { agentId: 'claude-code' })
+    const handle: { current: ConfigOptionsBarHandle | null } = { current: null }
+    renderWithServices(<ConfigOptionsBar session={session} handleRef={handle} />)
+    const bar = screen.getByTestId('acp-config-options')
+    const items = screen.getByTestId('acp-config-options-items')
+    stubClientWidth(items, 230)
+    for (const el of bar.querySelectorAll('[data-entry-key]')) stubWidth(el, 100)
+    stubWidth(screen.getByTestId('acp-config-overflow-trigger'), 26)
+    await fireResize()
+    expect(bar.querySelector('[data-entry-key="mode"]')?.getAttribute('data-overflowed')).toBe(
+      'true',
+    )
+
+    expect(activate(handle, 2)).toBe(true)
+
+    const panel = screen.getByTestId('acp-config-overflow-panel')
+    const row = within(panel).getByText('Mode').closest('[data-entry-key]')
+    expect(row?.getAttribute('aria-expanded')).toBe('true')
+    // No inline popover: its trigger is inert (hidden from the flex line), so
+    // anchoring one there would put it where the user cannot see the trigger.
+    expect(screen.queryByTestId('acp-config-mode-popover')).toBeNull()
+    // Focus lands inside the expanded body, not merely somewhere in the panel:
+    // the point of Alt+<n> is to be able to pick a value straight away.
+    const body = row!.parentElement!.querySelector('[role="listbox"]')
+    expect(body?.contains(document.activeElement)).toBe(true)
+  })
+
+  it('reopens the "…" panel with every row collapsed', async () => {
+    globalThis.ResizeObserver = FakeResizeObserver as unknown as typeof ResizeObserver
+    // 230px keeps model + subagent inline (200 <= 204) and folds mode away.
+    const session = makeSession([MODEL_OPTION, MODE_OPTION], { agentId: 'claude-code' })
+    renderWithServices(<ConfigOptionsBar session={session} />)
+    const bar = screen.getByTestId('acp-config-options')
+    const items = screen.getByTestId('acp-config-options-items')
+    stubClientWidth(items, 230)
+    for (const el of bar.querySelectorAll('[data-entry-key]')) stubWidth(el, 100)
+    stubWidth(screen.getByTestId('acp-config-overflow-trigger'), 26)
+    await fireResize()
+
+    const trigger = screen.getByTestId('acp-config-overflow-trigger')
+    const rowFor = (key: string): HTMLElement =>
+      screen.getByTestId('acp-config-overflow-panel').querySelector(`[data-entry-key="${key}"]`)!
+
+    fireEvent.click(trigger)
+    fireEvent.click(rowFor('mode'))
+    expect(rowFor('mode').getAttribute('aria-expanded')).toBe('true')
+
+    // Dismiss through the "…" toggle — a path that never runs the collapse
+    // handler, unlike the two-level Escape. Reopening must not resurrect the
+    // expansion: focus would be on the "…" button with the arrows pointing into
+    // a body that is already open, and the first Escape would only collapse it.
+    fireEvent.click(trigger)
+    expect(screen.queryByTestId('acp-config-overflow-panel')).toBeNull()
+    fireEvent.click(trigger)
+    expect(rowFor('mode').getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('keeps the current-value marker on the value in effect while the cursor moves', () => {
+    const handle = renderWithHandle(makeSession([MODEL_OPTION]))
+    activate(handle, 0)
+    const popover = screen.getByTestId('acp-config-model-popover')
+    const list = popover.querySelector('[role="listbox"]') as HTMLElement
+    fireEvent.keyDown(list, { key: 'ArrowDown' })
+    const rows = [...popover.querySelectorAll('[role="option"]')]
+    const moved = rows.find((r) => r.textContent === 'Opus 4.7')!
+    const current = rows.find((r) => r.textContent === 'Sonnet 4.6')!
+    expect(moved.getAttribute('data-active')).toBe('true')
+    expect(moved.getAttribute('aria-selected')).toBe('true')
+    expect(current.getAttribute('data-active')).toBe('false')
+    expect(current.getAttribute('aria-selected')).toBe('false')
+    // ... and the value in effect is still marked, so the user can see both
+    // where the cursor is and what is actually selected.
+    expect(current.getAttribute('data-current')).toBe('true')
+  })
+
+  it('reports the real entry count when the index is past the end', () => {
+    const notify = vi.fn((_notification: { message: string }) => ({
+      dispose: () => {},
+      update: () => {},
+    }))
+    const handle = renderWithHandle(makeSession([MODEL_OPTION, MODE_OPTION]), {
+      _serviceBrand: undefined,
+      notify,
+    } as unknown as INotificationService)
+    expect(activate(handle, 2)).toBe(false)
+    expect(notify).toHaveBeenCalledTimes(1)
+    expect(notify.mock.calls[0]?.[0].message).toContain('2')
+    expect(screen.queryByTestId('acp-config-model-popover')).toBeNull()
   })
 })

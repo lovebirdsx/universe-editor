@@ -51,6 +51,7 @@ import {
   NewAgentSessionInCurrentEditorAction,
 } from '../agentActions.js'
 import { AskInSideChatAction } from '../agentSessionActions.js'
+import { ActivateAgentConfigEntryAction } from '../agentModelActions.js'
 import {
   NewAgentSessionInFolderAction,
   NewAgentSessionWithScopeAction,
@@ -153,6 +154,7 @@ describe('Agent timeline navigation actions', () => {
         closeFind: vi.fn(),
         findNext: vi.fn(),
         findPrev: vi.fn(),
+        activateConfigEntry: vi.fn(() => false),
       },
     }
   }
@@ -401,6 +403,104 @@ describe('Agent timeline navigation actions', () => {
   })
 })
 
+describe('ActivateAgentConfigEntryAction', () => {
+  const disposables: IDisposable[] = []
+
+  afterEach(() => {
+    while (disposables.length > 0) disposables.pop()?.dispose()
+  })
+
+  function editorContext(): ContextKeyService {
+    const ctx = new ContextKeyService()
+    ctx.createKey<string>('activeEditorTypeId', AcpSessionEditorInput.TYPE_ID)
+    ctx.createKey<boolean>('editorAreaFocus', true)
+    return ctx
+  }
+
+  /**
+   * Invoke the command the way the key dispatcher does: with the keybinding's
+   * `args` — the entry index — and a widget resolved through `widgetForSession`.
+   */
+  function run(
+    lastFocusedWidget: AcpChatWidget | undefined,
+    sessionWidget: AcpChatWidget | undefined,
+    index: number,
+  ): { notify: ReturnType<typeof vi.fn> } {
+    const notify = vi.fn()
+    const services = new ServiceCollection()
+    services.set(IAcpChatWidgetService, {
+      _serviceBrand: undefined,
+      lastFocusedWidget,
+      register: vi.fn(),
+      widgetForSession: () => sessionWidget,
+    } as unknown as IAcpChatWidgetService)
+    const input = { sessionId: 'sess-1' }
+    Object.setPrototypeOf(input, AcpSessionEditorInput.prototype)
+    services.set(IEditorService, {
+      _serviceBrand: undefined,
+      activeEditor: observableValue<unknown>('t.activeEditor', input),
+    } as unknown as IEditorService)
+    services.set(INotificationService, {
+      _serviceBrand: undefined,
+      notify,
+    } as unknown as INotificationService)
+    const inst = new InstantiationService(services)
+    inst.invokeFunction((accessor) => {
+      CommandsRegistry.getCommand(ActivateAgentConfigEntryAction.ID)!.handler(accessor, index)
+    })
+    return { notify }
+  }
+
+  it('binds Alt+1..Alt+8 to entry indices 0..7 in the session editor', () => {
+    disposables.push(registerAction2(ActivateAgentConfigEntryAction))
+    const ctx = editorContext()
+    expect(KeybindingsRegistry.resolveKeybinding('alt+1', ctx)).toBe(
+      ActivateAgentConfigEntryAction.ID,
+    )
+    expect(KeybindingsRegistry.resolveKeybinding('alt+8', ctx)).toBe(
+      ActivateAgentConfigEntryAction.ID,
+    )
+    expect(KeybindingsRegistry.resolveKeybinding('alt+9', ctx)).not.toBe(
+      ActivateAgentConfigEntryAction.ID,
+    )
+
+    const widget = { activateConfigEntry: vi.fn(() => true) } as unknown as AcpChatWidget
+    run(undefined, widget, 2)
+    // The keybinding's `args` is the entry index, not the digit.
+    expect(widget.activateConfigEntry).toHaveBeenCalledWith(2)
+  })
+
+  // The sidebar ChatPanel carries an `acpChatFocused` timeline just like the
+  // editor does, so ACP_NAV_WHEN would match it — the editor-only gate is what
+  // keeps Alt+<n> off the legacy host. Only e2e covers the positive polarity;
+  // the exclusion has to be asserted here.
+  it('does not bind Alt+<n> for a focused sidebar chat', () => {
+    disposables.push(registerAction2(ActivateAgentConfigEntryAction))
+    const ctx = new ContextKeyService()
+    ctx.createKey<boolean>('acpChatFocused', true)
+    expect(KeybindingsRegistry.resolveKeybinding('alt+1', ctx)).toBeUndefined()
+  })
+
+  it('does not bind Alt+<n> when a session editor is active but focus is outside the editor area', () => {
+    disposables.push(registerAction2(ActivateAgentConfigEntryAction))
+    const ctx = new ContextKeyService()
+    ctx.createKey<string>('activeEditorTypeId', AcpSessionEditorInput.TYPE_ID)
+    ctx.createKey<boolean>('editorAreaFocus', false)
+    expect(KeybindingsRegistry.resolveKeybinding('alt+1', ctx)).toBeUndefined()
+  })
+
+  // The window where the editor is active but its widget has not registered yet
+  // (ChatBody registers on mount). The shared resolver would fall back to the
+  // last-focused widget — the sidebar panel — and drive the wrong bar.
+  it('ignores the last-focused widget when the active session editor has none yet', () => {
+    disposables.push(registerAction2(ActivateAgentConfigEntryAction))
+    const sidebar = { activateConfigEntry: vi.fn(() => true) } as unknown as AcpChatWidget
+    const { notify } = run(sidebar, undefined, 0)
+    expect(sidebar.activateConfigEntry).not.toHaveBeenCalled()
+    expect(notify).toHaveBeenCalled()
+  })
+})
+
 describe('Agent prompt suggestion popover actions', () => {
   const disposables: IDisposable[] = []
 
@@ -450,6 +550,7 @@ describe('Agent prompt suggestion popover actions', () => {
         closeFind: vi.fn(),
         findNext: vi.fn(),
         findPrev: vi.fn(),
+        activateConfigEntry: vi.fn(() => false),
       },
     }
   }

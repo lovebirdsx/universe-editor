@@ -41,6 +41,7 @@ import {
 import type { AgentActiveAuth } from '../../../../shared/ai/agentActiveAuth.js'
 import type { IAcpSession } from '../../../services/acp/session/acpSessionService.js'
 import { SubagentModelPanel, SubagentModelPicker } from '../SubagentModelPicker.js'
+import type { ConfigBarAnchor } from '../ConfigOptionsBar.js'
 import { ServicesContext } from '../../useService.js'
 
 afterEach(() => cleanup())
@@ -185,15 +186,22 @@ function setup(opts: {
   return { claude, session }
 }
 
-/** Controlled-open harness mirroring ConfigOptionsBar's openId wiring. */
+/** Controlled-open harness mirroring ConfigOptionsBar's openId/anchor wiring. */
 function PickerHarness({ session }: { session: IAcpSession }) {
   const [open, setOpen] = useState(false)
+  const [anchor, setAnchor] = useState<ConfigBarAnchor | null>(null)
   return (
     <SubagentModelPicker
       session={session}
       open={open}
-      onOpen={() => setOpen(true)}
+      anchor={anchor}
+      onRequestOpen={() => {
+        setAnchor({ x: 0, y: 0 })
+        setOpen(true)
+      }}
       onClose={() => setOpen(false)}
+      onEscape={() => false}
+      onAltDigit={() => {}}
     />
   )
 }

@@ -120,7 +120,7 @@ import {
 } from './PromptMonacoEditor.js'
 import { SlashCommandPopover, filterCommands } from './SlashCommandPopover.js'
 import { PromptHistoryPopover } from './PromptHistoryPopover.js'
-import { ConfigOptionsBar } from './ConfigOptionsBar.js'
+import { ConfigOptionsBar, type ConfigOptionsBarHandle } from './ConfigOptionsBar.js'
 import { SendButton } from './SendButton.js'
 import { StopButton } from './StopButton.js'
 import { AcpPromptDraftCache } from '../../services/acp/session/acpPromptDraftCache.js'
@@ -225,6 +225,9 @@ export function PromptInput({
   }>({ symbol: [], scmChange: [], openEditor: [], docs: [], commit: [] })
   const [hashLoading, setHashLoading] = useState(false)
   const editorHandleRef = useRef<PromptEditorHandle | null>(null)
+  // The config bar's imperative handle: Alt+<n> arrives as a command, not as a
+  // DOM event, so it has to reach the bar by ref rather than by bubbling.
+  const configBarRef = useRef<ConfigOptionsBarHandle | null>(null)
   // The React-owned host div wrapping the Monaco editor. Paste listens here
   // (outside Monaco's editContext DOM — see onPromptPaste).
   const dropHostRef = useRef<HTMLDivElement | null>(null)
@@ -382,12 +385,14 @@ export function PromptInput({
       else if (s.mentionOpen) setMentionDismissed(true)
       else if (s.slashOpen) setSlashDismissed(true)
     }
+    ref.current.activateConfigEntry = (index) => configBarRef.current?.activateEntry(index) ?? false
     return () => {
       ref.current.focus = () => false
       ref.current.popoverSelectNext = () => {}
       ref.current.popoverSelectPrev = () => {}
       ref.current.popoverAccept = () => {}
       ref.current.popoverHide = () => {}
+      ref.current.activateConfigEntry = () => false
     }
   }, [handleRef])
 
@@ -1546,7 +1551,7 @@ export function PromptInput({
         </div>
       </div>
       <div className={styles['promptActions']}>
-        <ConfigOptionsBar session={session} />
+        <ConfigOptionsBar session={session} handleRef={configBarRef} />
         {totalRunningMs > 0 || running ? (
           <span
             className={styles['sessionTimerInline']}

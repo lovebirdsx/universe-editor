@@ -37,6 +37,7 @@ import type { IMcpServerEnablementService } from '../../../services/acp/mcpServe
 import { IMcpServerEnablementService as IMcpServerEnablementServiceId } from '../../../services/acp/mcpServerEnablementService.js'
 import type { McpServerDefinition } from '../../../services/acp/acpMcpServers.js'
 import { McpPickerPanel, McpServerPicker } from '../McpServerPicker.js'
+import type { ConfigBarAnchor } from '../ConfigOptionsBar.js'
 import { ServicesContext } from '../../useService.js'
 
 afterEach(() => cleanup())
@@ -149,7 +150,7 @@ const POOL: readonly McpServerDefinition[] = [
   { name: 'web', transport: 'stdio', disabled: true, source: 'global' },
 ]
 
-/** Controlled-open harness mirroring ConfigOptionsBar's openId wiring. */
+/** Controlled-open harness mirroring ConfigOptionsBar's openId/anchor wiring. */
 function PickerHarness({
   session,
   onOpen,
@@ -160,11 +161,14 @@ function PickerHarness({
   onClose: () => void
 }) {
   const [isOpen, setIsOpen] = useState(false)
+  const [anchor, setAnchor] = useState<ConfigBarAnchor | null>(null)
   return (
     <McpServerPicker
       session={session}
       open={isOpen}
-      onOpen={() => {
+      anchor={anchor}
+      onRequestOpen={() => {
+        setAnchor({ x: 0, y: 0 })
         setIsOpen(true)
         onOpen()
       }}
@@ -172,6 +176,8 @@ function PickerHarness({
         setIsOpen(false)
         onClose()
       }}
+      onEscape={() => false}
+      onAltDigit={() => {}}
     />
   )
 }
@@ -294,6 +300,44 @@ describe('McpServerPicker', () => {
     renderPicker({ session: makeSession(['fs']), service, open: true })
     fireEvent.click(checkboxOf('web'))
     expect(service.setSessionMcpServers).toHaveBeenCalledWith('s1', ['fs', 'web'])
+  })
+
+  it('a row press is not a session toggle — the checkbox and the keyboard are', () => {
+    const pool: readonly McpServerDefinition[] = [
+      {
+        name: 'fs',
+        transport: 'stdio',
+        disabled: false,
+        source: 'global',
+        hasUserLevelDefinition: true,
+      },
+      { name: 'docs', transport: 'stdio', disabled: false, source: 'global' },
+    ]
+    const service = makeService(pool)
+    // A pin, so the header's Reset is on screen as well.
+    renderPicker({ session: makeSession(['fs']), service, open: true })
+    service.setSessionMcpServers.mockClear()
+
+    // Flipping a server restarts the session, so a press anywhere in the row
+    // must stay the business of the control under it: the row takes no mouse
+    // activation at all (the checkbox, the two default switches and Reset are
+    // all inside it).
+    fireEvent.mouseDown(rowOf('docs'))
+    fireEvent.mouseDown(checkboxOf('docs'))
+    fireEvent.mouseDown(defaultUserToggleOf('fs'))
+    fireEvent.mouseDown(defaultWsToggleOf('fs'))
+    fireEvent.mouseDown(screen.getByTestId('acp-mcp-picker-reset'))
+    expect(service.setSessionMcpServers).not.toHaveBeenCalled()
+
+    // The keyboard still toggles the row the cursor is on, and Space keeps the
+    // panel open (it is the multi-select gesture).
+    const list = screen
+      .getByTestId('acp-mcp-picker-popover')
+      .querySelector('[role="listbox"]') as HTMLElement
+    fireEvent.keyDown(list, { key: 'ArrowDown' })
+    fireEvent.keyDown(list, { key: ' ' })
+    expect(service.setSessionMcpServers).toHaveBeenCalledWith('s1', ['fs', 'docs'])
+    expect(screen.getByTestId('acp-mcp-picker-popover')).toBeTruthy()
   })
 
   it('shows the inherit header without reset, and marks the trigger non-custom', () => {
