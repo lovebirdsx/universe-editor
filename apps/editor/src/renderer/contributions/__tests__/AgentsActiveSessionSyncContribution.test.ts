@@ -1,7 +1,8 @@
 /*---------------------------------------------------------------------------------------------
- *  Tests for AgentsActiveSessionSyncContribution — focusing a session editor tab
- *  retargets IAcpSessionService.activeSession to that session, so session-scoped
- *  UI (Session Changes, status bar) tracks the editor in front of the user.
+ *  Tests for AgentsActiveSessionSyncContribution — the activeSession ⇄ focused
+ *  session editor sync. Focusing a tab retargets IAcpSessionService.activeSession
+ *  so session-scoped UI (Session Changes, status bar) tracks the editor in front
+ *  of the user; moving activeSession brings that session's chat tab to the front.
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
@@ -13,6 +14,7 @@ import {
   IWorkspaceService,
   ServiceCollection,
   observableValue,
+  type IEditorGroupsService,
   type IEditorInput,
   type IEditorService,
   type ISettableObservable,
@@ -36,12 +38,34 @@ class FakeEditorService {
     'fake.activeEditor',
     undefined,
   )
+  readonly openEditorCalls: IEditorInput[] = []
+  openEditor(input: IEditorInput): void {
+    this.openEditorCalls.push(input)
+  }
+}
+
+interface FakeGroup {
+  editors: IEditorInput[]
+}
+
+class FakeEditorGroupsService {
+  declare readonly _serviceBrand: undefined
+  readonly active: FakeGroup = { editors: [] }
+  readonly other: FakeGroup = { editors: [] }
+  readonly groups: FakeGroup[] = [this.active, this.other]
+  get activeGroup(): FakeGroup {
+    return this.active
+  }
 }
 
 class FakeSessionService {
   declare readonly _serviceBrand: undefined
   readonly activeSessionId: ISettableObservable<string | undefined> = observableValue(
     'fake.activeSessionId',
+    undefined,
+  )
+  readonly activeSession: ISettableObservable<IAcpSession | undefined> = observableValue(
+    'fake.activeSession',
     undefined,
   )
   readonly setActiveCalls: string[] = []
@@ -60,6 +84,7 @@ class FakeSessionService {
   setActive(id: string): void {
     this.setActiveCalls.push(id)
     this.activeSessionId.set(id, undefined)
+    this.activeSession.set(this._byId.get(id), undefined)
   }
 }
 
@@ -67,8 +92,13 @@ function makeInput(inst: IInstantiationService, sessionId: string) {
   return inst.createInstance(AcpSessionEditorInput, sessionId, 'fake', undefined)
 }
 
+function openedSessionIds(editor: FakeEditorService): (string | undefined)[] {
+  return (editor.openEditorCalls as AcpSessionEditorInput[]).map((input) => input.sessionId)
+}
+
 function makeHarness() {
   const editor = new FakeEditorService()
+  const editorGroups = new FakeEditorGroupsService()
   const sessions = new FakeSessionService()
   const history = {
     _serviceBrand: undefined,
@@ -89,9 +119,11 @@ function makeHarness() {
   const inst = new InstantiationService(services)
   const contrib = new AgentsActiveSessionSyncContribution(
     editor as unknown as IEditorService,
+    editorGroups as unknown as IEditorGroupsService,
+    inst,
     sessions as unknown as IAcpSessionServiceType,
   )
-  return { editor, sessions, inst, contrib }
+  return { editor, editorGroups, sessions, inst, contrib }
 }
 
 describe('AgentsActiveSessionSyncContribution', () => {
@@ -153,6 +185,41 @@ describe('AgentsActiveSessionSyncContribution', () => {
     h.sessions.setActive('s2')
     expect(h.sessions.activeSessionId.get()).toBe('s2')
     expect(h.sessions.setActiveCalls).toEqual(['s1', 's2'])
+    h.contrib.dispose()
+  })
+
+  it('opens the session as a tab when activeSession moves to a session with no tab', () => {
+    const h = makeHarness()
+    h.sessions.register('s2')
+    h.sessions.setActive('s2')
+    expect(openedSessionIds(h.editor)).toEqual(['s2'])
+    h.contrib.dispose()
+  })
+
+  it('does not duplicate a session tab that already lives in a non-active group', () => {
+    const h = makeHarness()
+    h.sessions.register('s2')
+    h.editorGroups.other.editors.push(makeInput(h.inst, 's2'))
+    h.sessions.setActive('s2')
+    expect(h.editor.openEditorCalls).toEqual([])
+    h.contrib.dispose()
+  })
+
+  it('still routes through the editor service when the tab is in the active group', () => {
+    // The guard only skips the NON-active-group case: a session already showing
+    // in the active group must go through openEditor so the tab re-activates.
+    const h = makeHarness()
+    h.sessions.register('s2')
+    h.editorGroups.active.editors.push(makeInput(h.inst, 's2'))
+    h.sessions.setActive('s2')
+    expect(openedSessionIds(h.editor)).toEqual(['s2'])
+    h.contrib.dispose()
+  })
+
+  it('opens nothing while there is no active session', () => {
+    const h = makeHarness()
+    h.sessions.register('s2')
+    expect(h.editor.openEditorCalls).toEqual([])
     h.contrib.dispose()
   })
 })

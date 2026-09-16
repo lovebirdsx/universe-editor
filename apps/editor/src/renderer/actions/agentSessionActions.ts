@@ -1,8 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Agent session lifecycle commands: new / cancel / open-in-editor / open-view /
- *  toggle-location / focus-input / select-agent / resume / clear-history /
- *  refresh / switch-session / side-task navigation.
+ *  Agent session lifecycle commands: new / cancel / open-view / focus-input /
+ *  select-agent / resume / clear-history / refresh / switch-session /
+ *  side-task navigation.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -18,11 +18,9 @@ import {
   INotificationService,
   IQuickInputService,
   IUriIdentityService,
-  IViewsService,
   IWorkspaceService,
   ILayoutService,
   MenuId,
-  PartId,
   REMOTE_SCHEME,
   Severity,
   URI,
@@ -46,7 +44,6 @@ import {
   isForeignWorkspaceSession,
   sideTaskParentOf,
 } from '../services/acp/session/acpSessionHistory.js'
-import { IAcpChatLocationService } from '../services/acp/session/acpChatLocationService.js'
 import { AcpSessionEditorInput } from '../services/acp/session/acpSessionEditorInput.js'
 import { AcpPromptReplaceInbox } from '../services/acp/session/acpPromptReplaceInbox.js'
 import { IAcpMessageAttachmentStore } from '../services/acp/session/acpMessageAttachmentStore.js'
@@ -87,13 +84,10 @@ export class NewAgentSessionAction extends Action2 {
   override async run(accessor: ServicesAccessor): Promise<void> {
     const sessions = accessor.get(IAcpSessionService)
     const registry = accessor.get(IAcpAgentRegistry)
-    const layout = accessor.get(ILayoutService)
-    const views = accessor.get(IViewsService)
-    const location = accessor.get(IAcpChatLocationService)
     const editor = accessor.get(IEditorService)
     const inst = accessor.get(IInstantiationService)
     const session = await sessions.createSession(registry.defaultAgentId())
-    focusCreatedSession(session, location, editor, inst, layout, views)
+    focusCreatedSession(session, editor, inst)
   }
 }
 
@@ -155,10 +149,11 @@ export class NewAgentSessionInCurrentEditorAction extends Action2 {
     const index = current instanceof AcpSessionEditorInput ? group.indexOf(current) : -1
     openSessionEditorInGroup(group, nextInput, index >= 0 ? index + 1 : undefined)
     closeDuplicateSessionEditors(groups, group, session.id)
-    // createSession's side effect (the chat-location autorun) opens the new
-    // session through IEditorService, whose lock-aware routing hands a fresh
-    // editor to a different unlocked group and activates it. Re-assert this
-    // group as active so focus stays where the user clicked "new session".
+    // createSession's side effect (AgentsActiveSessionSyncContribution's
+    // activeSession autorun) opens the new session through IEditorService, whose
+    // lock-aware routing hands a fresh editor to a different unlocked group and
+    // activates it. Re-assert this group as active so focus stays where the user
+    // clicked "new session".
     groups.activateGroup(group)
   }
 }
@@ -167,29 +162,18 @@ export class NewAgentSessionInCurrentEditorAction extends Action2 {
 const CHOOSE_FOLDER_PICK_ID = '__chooseFolder__'
 
 /**
- * Focus a freshly-created session the same way NewAgentSessionAction does:
- * open it as an editor tab in editor mode, or reveal the Sessions view (and the
- * secondary sidebar) in docked mode. Services are passed in — never the
- * accessor — because the caller reaches this point after awaiting createSession.
+ * Focus a freshly-created session the same way NewAgentSessionAction does: open
+ * it as an editor tab. Services are passed in — never the accessor — because the
+ * caller reaches this point after awaiting createSession.
  */
 function focusCreatedSession(
   session: IAcpSession,
-  location: IAcpChatLocationService,
   editor: IEditorService,
   inst: IInstantiationService,
-  layout: ILayoutService,
-  views: IViewsService,
 ): void {
-  if (location.location.get() === 'editor') {
-    editor.openEditor(
-      inst.createInstance(AcpSessionEditorInput, session.id, session.agentId, undefined),
-    )
-  } else {
-    if (!layout.getVisible(PartId.SecondarySideBar)) {
-      layout.toggleVisible(PartId.SecondarySideBar)
-    }
-    views.openViewContainer('workbench.view.sessions')
-  }
+  editor.openEditor(
+    inst.createInstance(AcpSessionEditorInput, session.id, session.agentId, undefined),
+  )
 }
 
 /**
@@ -236,9 +220,6 @@ export class NewAgentSessionInFolderAction extends Action2 {
   override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
     const sessions = accessor.get(IAcpSessionService)
     const registry = accessor.get(IAcpAgentRegistry)
-    const layout = accessor.get(ILayoutService)
-    const views = accessor.get(IViewsService)
-    const location = accessor.get(IAcpChatLocationService)
     const editor = accessor.get(IEditorService)
     const inst = accessor.get(IInstantiationService)
 
@@ -248,7 +229,7 @@ export class NewAgentSessionInFolderAction extends Action2 {
       cwd: folder.fsPath,
       ...(folder.authority ? { authority: folder.authority } : {}),
     })
-    focusCreatedSession(session, location, editor, inst, layout, views)
+    focusCreatedSession(session, editor, inst)
   }
 }
 
@@ -274,9 +255,6 @@ export class NewAgentSessionWithScopeAction extends Action2 {
     const subProjects = accessor.get(ISubProjectService)
     const quickInput = accessor.get(IQuickInputService)
     const fileDialog = accessor.get(IFileDialogService)
-    const layout = accessor.get(ILayoutService)
-    const views = accessor.get(IViewsService)
-    const location = accessor.get(IAcpChatLocationService)
     const editor = accessor.get(IEditorService)
     const inst = accessor.get(IInstantiationService)
     const notification = accessor.get(INotificationService)
@@ -333,7 +311,7 @@ export class NewAgentSessionWithScopeAction extends Action2 {
       }
 
       const session = await sessions.createSession(registry.defaultAgentId(), target)
-      focusCreatedSession(session, location, editor, inst, layout, views)
+      focusCreatedSession(session, editor, inst)
     } catch (err) {
       notification.notify({
         severity: Severity.Error,
@@ -376,25 +354,6 @@ export class CancelAgentTurnAction extends Action2 {
   }
 }
 
-export class OpenAgentInEditorAction extends Action2 {
-  static readonly ID = 'workbench.action.agent.openInEditor'
-  constructor() {
-    super({
-      id: OpenAgentInEditorAction.ID,
-      title: localize2('action.agent.openInEditor', 'Open Agent Session in Editor'),
-      category: CATEGORY,
-      f1: true,
-    })
-  }
-  override run(accessor: ServicesAccessor): void {
-    // Flip the global location flag so the side-effect handler opens the
-    // active session as a tab and (if it was docked) clears the sidebar
-    // version. Callers that simply want a tab opened still get the same
-    // outcome — the location service is idempotent on its current value.
-    accessor.get(IAcpChatLocationService).setLocation('editor')
-  }
-}
-
 export class OpenAgentViewAction extends Action2 {
   static readonly ID = 'workbench.action.agent.openView'
   constructor() {
@@ -409,22 +368,6 @@ export class OpenAgentViewAction extends Action2 {
     await accessor
       .get(ILayoutService)
       .focusView('workbench.view.sessions.main', { source: 'command' })
-  }
-}
-
-export class ToggleAgentChatLocationAction extends Action2 {
-  static readonly ID = 'workbench.action.agent.toggleChatLocation'
-  constructor() {
-    super({
-      id: ToggleAgentChatLocationAction.ID,
-      title: localize2('action.agent.toggleChatLocation', 'Toggle Agent Chat Location'),
-      category: CATEGORY,
-      f1: true,
-      precondition: 'acpChatSidebarEnabled',
-    })
-  }
-  override run(accessor: ServicesAccessor): void {
-    accessor.get(IAcpChatLocationService).toggle()
   }
 }
 
@@ -523,9 +466,6 @@ export class ResumeAgentSessionAction extends Action2 {
     const sessions = accessor.get(IAcpSessionService)
     const quickInput = accessor.get(IQuickInputService)
     const notification = accessor.get(INotificationService)
-    const layout = accessor.get(ILayoutService)
-    const views = accessor.get(IViewsService)
-    const location = accessor.get(IAcpChatLocationService)
     const groups = accessor.get(IEditorGroupsService)
     const inst = accessor.get(IInstantiationService)
     const workspace = accessor.get(IWorkspaceService)
@@ -581,15 +521,7 @@ export class ResumeAgentSessionAction extends Action2 {
 
     try {
       const session = await sessions.resumeSession(picked.id)
-      if (location.location.get() === 'editor') {
-        revealSessionEditorTab(groups, inst, session.id, session)
-      } else {
-        sessions.setActive(session.id)
-        if (!layout.getVisible(PartId.SecondarySideBar)) {
-          layout.toggleVisible(PartId.SecondarySideBar)
-        }
-        views.openViewContainer('workbench.view.sessions')
-      }
+      revealSessionEditorTab(groups, inst, session.id, session)
     } catch {
       // resumeSession publishes its own notification; nothing to do.
     }
@@ -709,7 +641,7 @@ export class SwitchSessionAction extends Action2 {
  *  1. explicit `{ sessionId }` arg (session list button),
  *  2. the `{ resource }` arg from the editor tab context menu,
  *  3. the active AcpSessionEditorInput (editor focused),
- *  4. the active session (command palette / sidebar chat).
+ *  4. the active session (command palette).
  * Renders a QuickInput box prefilled with the current title.
  */
 export class RenameAgentSessionAction extends Action2 {
@@ -765,7 +697,7 @@ export class RenameAgentSessionAction extends Action2 {
  *  1. explicit `{ sessionId }` arg (session list / chat-area context menu),
  *  2. the `{ resource }` arg from the editor tab context menu,
  *  3. the active AcpSessionEditorInput (editor focused),
- *  4. the active session (command palette / sidebar chat).
+ *  4. the active session (command palette).
  * The transcript path comes from the history entry; a session created during
  * this window's lifetime has none until the next hydrate sweep, so it is
  * resolved on demand via the owning agent's `session/list` before giving up.

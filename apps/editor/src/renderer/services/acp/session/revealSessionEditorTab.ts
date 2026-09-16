@@ -8,7 +8,7 @@
  *  group, revealing it opened a second copy in the active group. Callers must
  *  find it across every group first.
  *
- *  Deliberately NOT the rule AcpChatLocationService uses: its
+ *  Deliberately NOT the rule AgentsActiveSessionSyncContribution uses: its
  *  `_isSessionOpenInInactiveGroup` guard must ignore a session sitting in the
  *  ACTIVE group so openEditor re-activates that tab in place.
  *--------------------------------------------------------------------------------------------*/

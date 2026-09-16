@@ -335,7 +335,6 @@ import {
   OpenAgentSettingsAction,
   OpenClaudeConfigAction,
   OpenCodexConfigAction,
-  OpenAgentInEditorAction,
   OpenAgentViewAction,
   OpenSideTaskAction,
   RefreshAgentSessionsAction,
@@ -364,7 +363,6 @@ import {
   ConfigureAiFixAction,
   ToggleAcpTimelineItemCollapseAction,
   CycleAcpTimelineCollapseAction,
-  ToggleAgentChatLocationAction,
   ScrollAcpTimelineUpAction,
   ScrollAcpTimelineDownAction,
   SwitchSessionAction,
@@ -790,9 +788,7 @@ registerAction2(NewAgentSessionInCurrentEditorAction)
 registerAction2(NewAgentSessionInFolderAction)
 registerAction2(NewAgentSessionWithScopeAction)
 registerAction2(CancelAgentTurnAction)
-registerAction2(OpenAgentInEditorAction)
 registerAction2(OpenAgentViewAction)
-registerAction2(ToggleAgentChatLocationAction)
 registerAction2(FocusAgentInputAction)
 registerAction2(SelectAgentAction)
 registerAction2(OpenAcpMcpSettingsAction)

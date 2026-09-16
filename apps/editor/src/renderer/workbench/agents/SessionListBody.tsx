@@ -1,13 +1,12 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  SessionListBody — the pure list rendering reused by SessionListPanel (full
- *  sidebar view) and SessionsPopover (Copilot-style dropdown). Click behavior
- *  flips the active session (resuming if necessary); in editor mode the tab is
- *  opened by AcpChatLocationService's activeSession autorun for a *switch*, but
- *  a session that is already open needs revealing instead (see
+ *  SessionListBody — the pure list rendering behind the Sessions view. Click
+ *  behavior flips the active session (resuming if necessary); the tab is opened
+ *  by AgentsActiveSessionSyncContribution's activeSession autorun for a
+ *  *switch*, but a session that is already open needs revealing instead (see
  *  revealSessionChat) — the autorun deliberately bails when the tab lives in
  *  another group rather than duplicating it. The optional `onPick` callback
- *  fires afterwards so popovers can collapse themselves.
+ *  fires afterwards so callers can collapse themselves.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -79,7 +78,6 @@ import {
 } from '../../services/acp/session/acpSessionStatus.js'
 import { revealSessionEditorTab } from '../../services/acp/session/revealSessionEditorTab.js'
 import { revealSessionChat } from '../../services/acp/session/revealSessionChat.js'
-import { IAcpChatLocationService } from '../../services/acp/session/acpChatLocationService.js'
 import { IAcpChatWidgetService } from '../../services/acp/session/acpChatWidgetService.js'
 import { AgentIcon } from './agentIcon.js'
 import { pathTail, shortenScopeLabel } from './scopeLabel.js'
@@ -501,7 +499,6 @@ export function SessionListBody({
   const dialogService = useService(IDialogService)
   const groups = useService(IEditorGroupsService)
   const instantiation = useService(IInstantiationService)
-  const location = useService(IAcpChatLocationService)
   const widgets = useService(IAcpChatWidgetService)
   const commandService = useService(ICommandService)
   const host = useService(IHostService)
@@ -667,10 +664,10 @@ export function SessionListBody({
         // same durable id.
         if (liveNow.isDormant.get()) void liveNow.ensureAwake()
         // Switching the active session is not enough to see it: the tab may sit
-        // in another group, and the chat-location autorun bails in exactly that
+        // in another group, and the activeSession autorun bails in exactly that
         // case (it must not duplicate the tab). Reveal it ourselves, then hand
         // the chat input the focus.
-        revealSessionChat({ groups, inst: instantiation, location, widgets }, liveNow.id, liveNow)
+        revealSessionChat({ groups, inst: instantiation, widgets }, liveNow.id, liveNow)
       } else if (isForeignWorkspaceSession(entry, currentCwd, currentAuthority, uriIdentity)) {
         // Foreign worktree / cross-host: don't resume (would spawn the agent
         // against another worktree or host behind this window's UI). Open a
@@ -684,17 +681,7 @@ export function SessionListBody({
       }
       onPick?.(entry)
     },
-    [
-      service,
-      currentCwd,
-      currentAuthority,
-      uriIdentity,
-      groups,
-      instantiation,
-      location,
-      widgets,
-      onPick,
-    ],
+    [service, currentCwd, currentAuthority, uriIdentity, groups, instantiation, widgets, onPick],
   )
 
   // The keyboard cursor. Deliberately separate from `activeId`: the active

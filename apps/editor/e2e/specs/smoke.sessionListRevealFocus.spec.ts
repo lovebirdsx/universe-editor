@@ -5,8 +5,8 @@
  *  什么都不会发生——既不切到 tab 所在的 editor group，也不把焦点交给 chat 输入框。
  *  根因：activateEntry 的 live 分支只调 setActive，而「activeSession 变化 → 激活 tab」
  *  的 autorun 在 tab 位于**非 active 组**时**刻意早退**（免得开出重复 tab，见
- *  acpChatLocationService._isSessionOpenInInactiveGroup）；会话没换时它更是压根不重跑
- *  （observable 同值不通知）。修法见 services/acp/session/revealSessionChat.ts。
+ *  AgentsActiveSessionSyncContribution._isSessionOpenInInactiveGroup）；会话没换时它
+ *  更是压根不重跑（observable 同值不通知）。修法见 services/acp/session/revealSessionChat.ts。
  *
  *  两条断言各守一半：「activeGroup 归位」守跨组 reveal，「acpChatFocused」守焦点真的
  *  落进了输入框（EditorGroupView 的焦点 pass + widget 的 focusInput 都会点亮它）。

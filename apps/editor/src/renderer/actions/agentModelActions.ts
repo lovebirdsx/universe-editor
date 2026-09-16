@@ -148,7 +148,7 @@ export class ActivateAgentConfigEntryAction extends Action2 {
     const index = args[0]
     if (typeof index !== 'number') return
     // The strict resolver, not the shared one: the gate promises the editor's
-    // bar, and the fallback would deliver the key to the sidebar ChatPanel
+    // bar, and the last-focused fallback could point at another session's widget
     // during the window before the editor's widget registers.
     const widget = resolveEditorNavWidget(accessor)
     if (!widget) {

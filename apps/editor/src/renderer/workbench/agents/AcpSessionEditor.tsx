@@ -1,6 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  AcpSessionEditor — full-screen editor variant of ChatBody. Looks the session
+ *  AcpSessionEditor — the session editor tab: hosts ChatBody. Looks the session
  *  up by id from the AcpSessionService; auto-resumes when the input refers to
  *  a session that exists in history but isn't live yet.
  *--------------------------------------------------------------------------------------------*/

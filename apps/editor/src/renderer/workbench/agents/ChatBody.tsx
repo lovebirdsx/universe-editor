@@ -1,9 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  ChatBody — the Copilot-style stack rendered both by SecondarySideBar's
- *  ChatPanel and the full-screen AcpSessionEditor. Session-level config
- *  switches live inside PromptInput's action row to keep the bottom bar
- *  compact.
+ *  ChatBody — the Copilot-style stack rendered inside the session editor
+ *  (AcpSessionEditor). Session-level config switches live inside PromptInput's
+ *  action row to keep the bottom bar compact.
  *
  *  ChatScroll renders one unified timeline of message / tool_call / plan slots
  *  in arrival order — the canonical view-model is `session.timeline`. Each
@@ -113,11 +112,11 @@ import { useEditorGroup } from '../editor/EditorGroupContext.js'
 import styles from './agents.module.css'
 
 // The keyboard-selected slot is session-level state: every mounted chat
-// surface of the same session (sidebar panel + full-screen editor, a split
-// showing the same session, …) mirrors the same selection, so the outline —
-// backed by the *last-registered* instance's controller — surfaces selection
-// moves driven from any surface. Publishers fire after their local state
-// updates; subscribers ignore echoes by comparing against their own value.
+// surface of the same session (the same session opened in two split groups, …)
+// mirrors the same selection, so the outline — backed by the *last-registered*
+// instance's controller — surfaces selection moves driven from any surface.
+// Publishers fire after their local state updates; subscribers ignore echoes by
+// comparing against their own value.
 const selectionSyncEmitter = new Emitter<{
   readonly sessionId: string
   readonly key: string | null
@@ -265,7 +264,7 @@ function ChatSessionBody({
 }) {
   const widgetService = useService(IAcpChatWidgetService)
   const history = useService(IAcpSessionHistoryService)
-  // Null in the sidebar panel — only the full-screen editor host restores focus.
+  // Null outside an editor group — only the editor host restores focus.
   const group = useEditorGroup()
   const timeline = useObservable(session.timeline)
   // The sticky bar pins the first user message; until one exists the session is
@@ -465,8 +464,8 @@ function ChatSessionBody({
     if (!state || state.restored) return
     state.restored = true
     // Only a host that owns keyboard focus for this chat restores it: the
-    // full-screen session editor (autoFocus / readOnly) does, the sidebar panel
-    // deliberately does not.
+    // session editor (autoFocus / readOnly) does, a read-only foreign one does
+    // not.
     if (autoFocus !== true && readOnly !== true) return
     // Focus must not be yanked into a group the user isn't working in — at startup
     // every group mounts its active editor, but only one of them is active.

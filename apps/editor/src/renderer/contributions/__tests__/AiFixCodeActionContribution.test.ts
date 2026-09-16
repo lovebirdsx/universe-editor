@@ -102,7 +102,7 @@ describe('executeAiFix', () => {
     const sendPrompt = vi.fn().mockResolvedValue(undefined)
     const createSession = vi.fn()
     const focusSessionInput = vi.fn()
-    const openViewContainer = vi.fn().mockResolvedValue(undefined)
+    const openEditor = vi.fn()
     const session = { id: 'sess-new', agentId: 'codex', sendPrompt } as unknown as IAcpSession
     createSession.mockResolvedValue(session)
     const agents = opts.agents ?? [
@@ -116,22 +116,20 @@ describe('executeAiFix', () => {
       'acp.aiFix.mode': '',
       ...opts.settings,
     }
+    const activeGroup = { openEditor }
     const reveal = {
       sessions: {
         activeSession: observableValue<IAcpSession | undefined>('t.active', undefined),
         createSession,
-        getById: () => undefined,
+        getById: (id: string) => (id === 'sess-new' ? session : undefined),
       },
       registry: {
         list: () => agents,
         defaultAgentId: () => 'claude-code',
       },
-      location: { location: observableValue<'editor' | 'sidebar'>('t.loc', 'sidebar') },
       widgets: { focusSessionInput, focusSession: vi.fn() },
-      groups: { groups: [], activeGroup: {}, activeGroupForOpen: {}, activateGroup: vi.fn() },
+      groups: { groups: [], activeGroup: activeGroup, activeGroupForOpen: activeGroup },
       inst: { createInstance: vi.fn() },
-      layout: { getVisible: () => true, toggleVisible: vi.fn() },
-      views: { openViewContainer },
     } as unknown as RevealServices
     const run: AiFixRunServices = {
       config: {
@@ -142,7 +140,7 @@ describe('executeAiFix', () => {
       } as unknown as AiFixRunServices['configOptionsCache'],
     }
     const logger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as ILogger
-    return { reveal, run, logger, sendPrompt, createSession, focusSessionInput, openViewContainer }
+    return { reveal, run, logger, sendPrompt, createSession, focusSessionInput, openEditor }
   }
 
   it('always creates a dedicated session with title / aiFix / overrides', async () => {
@@ -209,7 +207,8 @@ describe('executeAiFix', () => {
     expect(refs).toEqual([])
     expect(contexts).toHaveLength(1)
     expect(images).toEqual([])
-    expect(s.openViewContainer).toHaveBeenCalledWith('workbench.view.sessions')
+    // No tab was open for the new session, so its chat is opened in the active group.
+    expect(s.openEditor).toHaveBeenCalledTimes(1)
     expect(s.focusSessionInput).toHaveBeenCalledWith('sess-new')
   })
 

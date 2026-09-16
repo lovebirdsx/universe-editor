@@ -299,7 +299,6 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.agent.newSessionInCurrentEditor': '在当前编辑器中新建 Agent 会话',
   'action.agent.newSessionInFolder': '在此处新建 Agent 会话',
   'action.agent.newSessionWithScope': '新建会话（选择作用域）…',
-  'action.agent.openInEditor': '在编辑器中打开 Agent 会话',
   'action.agent.openClaudeConfig': '打开 Claude 配置（JSON）',
   'action.agent.openCodexConfig': '打开 Codex 配置（TOML）',
   'action.agent.openMcpSettings': '打开 MCP 设置',
@@ -340,7 +339,6 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.agent.toggleBookmark7': '切换会话书签 7',
   'action.agent.toggleBookmark8': '切换会话书签 8',
   'action.agent.toggleBookmark9': '切换会话书签 9',
-  'action.agent.toggleChatLocation': '切换 Agent 聊天位置',
   'action.agent.toggleTimelineItemCollapse': '切换时间线项折叠状态',
   'action.agent.unarchiveSession': '取消归档 Agent 会话',
   'action.agent.unpinSession': '取消固定 Agent 会话',
@@ -983,8 +981,6 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.workbench.fontFamily.description': '控制工作台 UI 字体。',
   'settings.workbench.tree.virtualizationThreshold.description':
     '可见树项超过此数量时启用虚拟滚动。',
-  'settings.acp.chat.enableSidebarLocation':
-    '允许将 Agent 聊天面板停靠到侧边栏（Sessions 视图），而不是将会话作为编辑器标签打开。该功能为实验性且尚不完整——未来版本可能移除。默认关闭；关闭时聊天只在编辑器区域打开。',
   'settings.acp.deepLink.allowAutoSubmit':
     '允许 `universe-editor://agent/new?prompt=…` 深链接自动发送提示词。默认启用；关闭后链接只会填充输入框，便于你先检查再发送。链接可用 `autoSubmit=false` 强制只填充。',
   'settings.acp.prompt.confirmShortFirstMessageLength':
@@ -2649,7 +2645,6 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.find.count': '{current} / {total}',
   'acp.find.next': '下一个匹配项',
   'acp.find.noResults': '无结果',
-  'acp.find.open': '在会话中查找',
   'acp.find.placeholder': '查找',
   'acp.find.previous': '上一个匹配项',
   'acp.foreignSession.another': '另一个工作树',
@@ -2726,7 +2721,6 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.sessions.connecting': '正在连接…',
   'acp.sessions.dormant': '会话已休眠以节省内存 — 使用时会自动唤醒',
   'acp.sessions.startFailed': '启动失败',
-  'acp.sessions.popover': '会话',
   'acp.sessions.remove': '移除会话',
   'acp.sessions.removeConfirm': '删除这个会话？',
   'acp.sessions.removeConfirmDetail': '这将删除该会话及其历史记录。',
@@ -2738,7 +2732,6 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.sessions.renameMenu': '重命名会话',
   'acp.sessions.search': '搜索会话',
   'acp.sessions.searchClose': '关闭搜索',
-  'acp.sessions.toggle': '会话',
   'acp.sessions.archive': '归档会话 (Del)',
   'acp.sessions.unarchive': '取消归档会话 (Shift+Del)',
   'acp.sessions.pin': '置顶会话',
@@ -2827,8 +2820,6 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.accountUsage.unavailable.tooltip':
     '该 provider 声明了账号用量来源，但当前拉取不到权威数字；这里不会用本地估算值代替。',
   'acp.accountUsage.used': '已用：{amount}',
-  'acp.switchToEditor.tooltip': '将聊天移动到编辑器区域',
-  'acp.switchToSidebar.tooltip': '将聊天移动到侧边栏',
   'acp.terminal.collapse': '折叠',
   'acp.terminal.expand': '展开',
   'acp.usage.cost': '费用：{amount} {currency}',

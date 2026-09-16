@@ -413,9 +413,7 @@ export function PromptInput({
     setHistoryOpen(false)
   }, [session.id])
 
-  // Initial-mount focus for callers that opt in (full-screen editor).
-  // Sidebar leaves this false so opening the ChatPanel doesn't yank focus
-  // from whatever the user just clicked.
+  // Initial-mount focus for callers that opt in (the session editor).
   useEffect(() => {
     if (autoFocus) editorHandleRef.current?.focus()
   }, [autoFocus])

@@ -13,7 +13,6 @@ import type {
 import { IEditorGroupsService, IInstantiationService } from '@universe-editor/platform'
 import { IAcpSessionService } from '../acp/session/acpSessionService.js'
 import { IAcpSessionHistoryService } from '../acp/session/acpSessionHistory.js'
-import { IAcpChatLocationService } from '../acp/session/acpChatLocationService.js'
 import { IAcpChatWidgetService } from '../acp/session/acpChatWidgetService.js'
 import { revealSessionChat } from '../acp/session/revealSessionChat.js'
 import { computeSessionDisplayStatus } from '../acp/session/acpSessionStatus.js'
@@ -25,7 +24,6 @@ export class RendererSessionsService implements IRendererSessionsService {
   constructor(
     @IAcpSessionService private readonly _sessions: IAcpSessionService,
     @IAcpSessionHistoryService private readonly _history: IAcpSessionHistoryService,
-    @IAcpChatLocationService private readonly _chatLocation: IAcpChatLocationService,
     @IEditorGroupsService private readonly _groups: IEditorGroupsService,
     @IInstantiationService private readonly _instantiation: IInstantiationService,
     @IAcpChatWidgetService private readonly _widgets: IAcpChatWidgetService,
@@ -51,17 +49,11 @@ export class RendererSessionsService implements IRendererSessionsService {
     // process back in the background — the editor may already be mounted, so
     // nothing else would wake it until the next prompt.
     if (session.isDormant.get()) void session.ensureAwake()
-    this._chatLocation.setLocation('editor')
     // The tab may already live in another group (session split across groups,
     // the other one active). Going through IEditorService would dedupe only
     // inside the active group and open a duplicate.
     revealSessionChat(
-      {
-        groups: this._groups,
-        inst: this._instantiation,
-        location: this._chatLocation,
-        widgets: this._widgets,
-      },
+      { groups: this._groups, inst: this._instantiation, widgets: this._widgets },
       session.id,
       session,
     )

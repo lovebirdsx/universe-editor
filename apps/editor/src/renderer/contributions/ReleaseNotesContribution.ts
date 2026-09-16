@@ -29,7 +29,6 @@ const EXISTING_INSTALL_MARKER_KEYS = [
   'workbench.windowsState',
   'workbench.recentWorkspaces',
   'workbench.userSettings',
-  'acp.chatLocation',
   'acp.agentDefaults',
   'acp.sessionHistory',
 ]

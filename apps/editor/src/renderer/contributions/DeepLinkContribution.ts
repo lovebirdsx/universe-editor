@@ -20,11 +20,8 @@ import {
   IConfigurationService,
   IEditorGroupsService,
   IInstantiationService,
-  ILayoutService,
   INotificationService,
   IOpenerService,
-  IViewsService,
-  PartId,
   Severity,
   localize,
 } from '@universe-editor/platform'
@@ -36,7 +33,6 @@ import {
 } from '../../shared/deepLink.js'
 import type { IpcBridge } from '../../preload/index.js'
 import { IAcpAgentRegistry } from '../services/acp/acpAgentRegistry.js'
-import { IAcpChatLocationService } from '../services/acp/session/acpChatLocationService.js'
 import { IAcpChatWidgetService } from '../services/acp/session/acpChatWidgetService.js'
 import { AcpPromptTextInbox } from '../services/acp/session/acpPromptTextInbox.js'
 import { revealSessionEditorTab } from '../services/acp/session/revealSessionEditorTab.js'
@@ -52,12 +48,9 @@ export class DeepLinkContribution extends Disposable implements IWorkbenchContri
     @IConfigurationService private readonly _config: IConfigurationService,
     @IAcpSessionService private readonly _sessions: IAcpSessionService,
     @IAcpAgentRegistry private readonly _agents: IAcpAgentRegistry,
-    @IAcpChatLocationService private readonly _location: IAcpChatLocationService,
     @IAcpChatWidgetService private readonly _widgets: IAcpChatWidgetService,
     @IEditorGroupsService private readonly _groups: IEditorGroupsService,
     @IInstantiationService private readonly _instantiation: IInstantiationService,
-    @ILayoutService private readonly _layout: ILayoutService,
-    @IViewsService private readonly _views: IViewsService,
     @INotificationService private readonly _notification: INotificationService,
     @IUserSettingsSyncService private readonly _userSettings: IUserSettingsSyncService,
   ) {
@@ -111,7 +104,7 @@ export class DeepLinkContribution extends Disposable implements IWorkbenchContri
       ...(target.mcpServers !== undefined ? { mcpServerNames: [...target.mcpServers] } : {}),
     }
     const session = await this._sessions.createSession(agentId, options)
-    await this._revealAgentSession(session.id)
+    this._revealAgentSession(session.id)
     if (autoSubmit) {
       await session.sendPrompt(target.prompt)
     } else {
@@ -144,20 +137,13 @@ export class DeepLinkContribution extends Disposable implements IWorkbenchContri
     })
   }
 
-  private async _revealAgentSession(sessionId: string): Promise<void> {
-    if (this._location.location.get() === 'editor') {
-      revealSessionEditorTab(
-        this._groups,
-        this._instantiation,
-        sessionId,
-        this._sessions.getById(sessionId),
-      )
-    } else {
-      if (!this._layout.getVisible(PartId.SecondarySideBar)) {
-        this._layout.toggleVisible(PartId.SecondarySideBar)
-      }
-      await this._views.openViewContainer('workbench.view.sessions')
-    }
+  private _revealAgentSession(sessionId: string): void {
+    revealSessionEditorTab(
+      this._groups,
+      this._instantiation,
+      sessionId,
+      this._sessions.getById(sessionId),
+    )
     this._widgets.focusSessionInput(sessionId)
   }
 }

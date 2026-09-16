@@ -9,26 +9,24 @@
 import {
   Disposable,
   IConfigurationService,
+  IEditorGroupsService,
   IHostService,
-  ILayoutService,
-  IViewsService,
+  IInstantiationService,
   IWorkbenchContribution,
   IWorkspaceService,
-  PartId,
   autorun,
   localize,
   toDisposable,
   type IDisposable,
 } from '@universe-editor/platform'
 import { IAcpSessionService, type IAcpSession } from '../services/acp/session/acpSessionService.js'
+import { IAcpChatWidgetService } from '../services/acp/session/acpChatWidgetService.js'
+import { revealSessionChat } from '../services/acp/session/revealSessionChat.js'
 import { truncateTitle } from '../services/acp/session/sessionTitleFormat.js'
 import {
   getAgentNotificationIcon,
   primeAgentNotificationIcon,
 } from '../services/acp/agentNotificationIcon.js'
-
-const SESSIONS_CONTAINER_ID = 'workbench.view.sessions'
-const SESSIONS_VIEW_ID = 'workbench.view.sessions.main'
 
 type NotifyKind = 'permission' | 'question' | 'completed' | 'errored'
 
@@ -39,8 +37,9 @@ export class AgentNotificationContribution extends Disposable implements IWorkbe
     @IAcpSessionService private readonly _sessions: IAcpSessionService,
     @IHostService private readonly _host: IHostService,
     @IConfigurationService private readonly _config: IConfigurationService,
-    @IViewsService private readonly _views: IViewsService,
-    @ILayoutService private readonly _layout: ILayoutService,
+    @IEditorGroupsService private readonly _groups: IEditorGroupsService,
+    @IInstantiationService private readonly _inst: IInstantiationService,
+    @IAcpChatWidgetService private readonly _widgets: IAcpChatWidgetService,
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
   ) {
     super()
@@ -141,11 +140,11 @@ export class AgentNotificationContribution extends Disposable implements IWorkbe
     const res = await this._host.notify({ title, body, ...(icon ? { icon } : {}) })
     if (!res.clicked) return
     this._sessions.setActive(sessionId)
-    if (!this._layout.getVisible(PartId.SecondarySideBar)) {
-      this._layout.toggleVisible(PartId.SecondarySideBar)
-    }
-    this._views.openViewContainer(SESSIONS_CONTAINER_ID)
-    void this._layout.focusView(SESSIONS_VIEW_ID, { source: 'command' })
+    revealSessionChat(
+      { groups: this._groups, inst: this._inst, widgets: this._widgets },
+      sessionId,
+      this._sessions.getById(sessionId),
+    )
   }
 }
 

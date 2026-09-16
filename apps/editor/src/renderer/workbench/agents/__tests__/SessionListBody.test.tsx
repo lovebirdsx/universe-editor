@@ -54,7 +54,6 @@ import {
   type IAcpAgentRegistry as IAcpAgentRegistryType,
 } from '../../../services/acp/acpAgentRegistry.js'
 import { IAcpChatWidgetService } from '../../../services/acp/session/acpChatWidgetService.js'
-import { IAcpChatLocationService } from '../../../services/acp/session/acpChatLocationService.js'
 import { AcpSessionEditorInput } from '../../../services/acp/session/acpSessionEditorInput.js'
 import { EditorGroupsService } from '../../../services/editor/EditorGroupsService.js'
 import { SessionListBody } from '../SessionListBody.js'
@@ -213,9 +212,7 @@ function sessionTabs(groups: EditorGroupsService): AcpSessionEditorInput[] {
     .filter((editor): editor is AcpSessionEditorInput => editor instanceof AcpSessionEditorInput)
 }
 
-async function makeHarness(
-  opts: { scope?: string; folder?: URI; chatLocation?: 'editor' | 'sidebar' } = {},
-): Promise<Harness> {
+async function makeHarness(opts: { scope?: string; folder?: URI } = {}): Promise<Harness> {
   const storage = new FakeStorage()
   const uriIdentity = new UriIdentityService('linux')
   const folder = opts.folder ?? URI.file('/work')
@@ -262,10 +259,6 @@ async function makeHarness(
     confirm,
   } as unknown as IDialogService)
   services.set(IEditorGroupsService, groups)
-  services.set(IAcpChatLocationService, {
-    _serviceBrand: undefined,
-    location: observableValue('test.chatLocation', opts.chatLocation ?? 'editor'),
-  } as unknown as IAcpChatLocationService)
   // AcpSessionEditorInput.createInstance (the foreign preview) pulls this one.
   const widgets = { focusSessionInput: vi.fn(() => true) }
   services.set(IAcpChatWidgetService, {
@@ -994,8 +987,8 @@ describe('SessionListBody — subdirectory vs foreign scoping', () => {
 
 describe('SessionListBody — activating an already-open session', () => {
   /** A live, resident session plus its history row — the row the user clicks. */
-  async function openHarness(opts: { chatLocation?: 'editor' | 'sidebar' } = {}): Promise<Harness> {
-    const harness = await makeHarness(opts)
+  async function openHarness(): Promise<Harness> {
+    const harness = await makeHarness()
     addEntry(harness.history, 'agent-1', 'live session', 1000)
     const session = makeFakeSession({
       id: 'agent-1',
@@ -1021,7 +1014,7 @@ describe('SessionListBody — activating an already-open session', () => {
   }
 
   // Regression: switching the active session was all this did, and the
-  // chat-location autorun deliberately bails when the tab sits in another group
+  // activeSession autorun deliberately bails when the tab sits in another group
   // (it must not duplicate it) — so clicking the row did nothing at all.
   it('activates the group holding the session tab instead of doing nothing', async () => {
     const harness = await openHarness()
@@ -1065,20 +1058,6 @@ describe('SessionListBody — activating an already-open session', () => {
     expect(harness.groups.activeGroup).toBe(group)
     expect(group.editors).toHaveLength(1)
     expect(harness.widgets.focusSessionInput).toHaveBeenCalledWith('agent-1')
-    harness.dispose()
-  })
-
-  it('leaves the sidebar location alone — no tab, no focus grab', async () => {
-    const harness = await openHarness({ chatLocation: 'sidebar' })
-
-    fireEvent.click(screen.getByTestId('session-row-agent-1'))
-
-    expect(harness.sessionCtl.setActiveFn).toHaveBeenCalledWith('agent-1')
-    // The chat lives in the sidebar there: revealing would open a tab the
-    // location service immediately closes again, and focus stays where the
-    // user clicked.
-    expect(sessionTabs(harness.groups)).toHaveLength(0)
-    expect(harness.widgets.focusSessionInput).not.toHaveBeenCalled()
     harness.dispose()
   })
 

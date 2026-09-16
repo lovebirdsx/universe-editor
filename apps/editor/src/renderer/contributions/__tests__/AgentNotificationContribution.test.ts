@@ -61,17 +61,21 @@ function setup(opts?: { enabled?: boolean; clicked?: boolean; workspaceName?: st
   )
   const focusWindow = vi.fn(async () => {})
   const setActive = vi.fn()
-  const openViewContainer = vi.fn()
-  const focusView = vi.fn(async () => true)
+  const openEditor = vi.fn()
+  const focusSessionInput = vi.fn()
 
   const sessions = {
     sessions: sessionsObs,
     setActive,
+    // The clicked session is always live — the watcher is fed from the same list.
+    getById: (id: string) => ({ id, agentId: 'fake' }) as unknown as IAcpSession,
   } as unknown as IAcpSessionService
   const host = { notify, focusWindow } as never
   const config = { get: () => enabled } as never
-  const views = { openViewContainer } as never
-  const layout = { getVisible: () => true, toggleVisible: vi.fn(), focusView } as never
+  const activeGroup = { openEditor }
+  const groups = { groups: [], activeGroup, activeGroupForOpen: activeGroup } as never
+  const inst = { createInstance: vi.fn((id: string) => ({ id })) } as never
+  const widgets = { focusSessionInput } as never
   const workspace = {
     current: opts?.workspaceName !== undefined ? { name: opts.workspaceName } : null,
   } as never
@@ -80,8 +84,9 @@ function setup(opts?: { enabled?: boolean; clicked?: boolean; workspaceName?: st
     sessions,
     host,
     config,
-    views,
-    layout,
+    groups,
+    inst,
+    widgets,
     workspace,
   )
 
@@ -91,8 +96,8 @@ function setup(opts?: { enabled?: boolean; clicked?: boolean; workspaceName?: st
     notify,
     focusWindow,
     setActive,
-    openViewContainer,
-    focusView,
+    openEditor,
+    focusSessionInput,
     addSession: (s: FakeSession) =>
       sessionsObs.set(
         [...(sessionsObs.get() as IAcpSession[]), s as unknown as IAcpSession],
@@ -102,7 +107,15 @@ function setup(opts?: { enabled?: boolean; clicked?: boolean; workspaceName?: st
 }
 
 describe('AgentNotificationContribution', () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(() => {
+    vi.clearAllMocks()
+    // revealSessionChat schedules a second focus pass on the next frame; the
+    // node environment has no rAF, and the sync pass is what these tests assert.
+    vi.stubGlobal(
+      'requestAnimationFrame',
+      vi.fn(() => 0),
+    )
+  })
 
   it('fires a completion notification when status goes running → idle', () => {
     const t = setup()
@@ -209,7 +222,7 @@ describe('AgentNotificationContribution', () => {
     expect(t.notify).not.toHaveBeenCalled()
   })
 
-  it('on click: activates the session and opens the Sessions view', async () => {
+  it('on click: activates the session and reveals its chat with the input focused', async () => {
     const t = setup({ clicked: true })
     const s = makeSession('a')
     t.addSession(s)
@@ -220,8 +233,9 @@ describe('AgentNotificationContribution', () => {
     await Promise.resolve()
     // Window focus happens main-side inside the click handler, not here.
     expect(t.setActive).toHaveBeenCalledWith('a')
-    expect(t.openViewContainer).toHaveBeenCalledWith('workbench.view.sessions')
-    expect(t.focusView).toHaveBeenCalledWith('workbench.view.sessions.main', { source: 'command' })
+    expect(t.focusSessionInput).toHaveBeenCalledWith('a')
+    // No tab was open for it yet, so the chat is opened in the active group.
+    expect(t.openEditor).toHaveBeenCalledTimes(1)
   })
 
   it('includes the workspace folder name on a second body line when a folder is open', () => {

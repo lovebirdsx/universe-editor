@@ -9,14 +9,12 @@ import {
   IFileDialogService,
   IHostService,
   IInstantiationService,
-  ILayoutService,
   ILoggerService,
   MenuId,
   MenuRegistry,
   INotificationService,
   IQuickInputService,
   IUriIdentityService,
-  IViewsService,
   IWorkspaceService,
   InstantiationService,
   KeybindingsRegistry,
@@ -71,7 +69,6 @@ import {
   IAcpSessionHistoryService,
   type AcpSessionHistoryEntry,
 } from '../../services/acp/session/acpSessionHistory.js'
-import { IAcpChatLocationService } from '../../services/acp/session/acpChatLocationService.js'
 import {
   ISubProjectService,
   type SubProjectScope,
@@ -470,11 +467,11 @@ describe('ActivateAgentConfigEntryAction', () => {
     expect(widget.activateConfigEntry).toHaveBeenCalledWith(2)
   })
 
-  // The sidebar ChatPanel carries an `acpChatFocused` timeline just like the
-  // editor does, so ACP_NAV_WHEN would match it — the editor-only gate is what
-  // keeps Alt+<n> off the legacy host. Only e2e covers the positive polarity;
-  // the exclusion has to be asserted here.
-  it('does not bind Alt+<n> for a focused sidebar chat', () => {
+  // A chat timeline holding DOM focus still sets `acpChatFocused`, so
+  // ACP_NAV_WHEN would match it — the editor-only gate is what keeps Alt+<n> off
+  // any chat that is not the editor in front. Only e2e covers the positive
+  // polarity; the exclusion has to be asserted here.
+  it('does not bind Alt+<n> for a focused chat that is not the active editor', () => {
     disposables.push(registerAction2(ActivateAgentConfigEntryAction))
     const ctx = new ContextKeyService()
     ctx.createKey<boolean>('acpChatFocused', true)
@@ -491,12 +488,12 @@ describe('ActivateAgentConfigEntryAction', () => {
 
   // The window where the editor is active but its widget has not registered yet
   // (ChatBody registers on mount). The shared resolver would fall back to the
-  // last-focused widget — the sidebar panel — and drive the wrong bar.
+  // last-focused widget — another session's chat — and drive the wrong bar.
   it('ignores the last-focused widget when the active session editor has none yet', () => {
     disposables.push(registerAction2(ActivateAgentConfigEntryAction))
-    const sidebar = { activateConfigEntry: vi.fn(() => true) } as unknown as AcpChatWidget
-    const { notify } = run(sidebar, undefined, 0)
-    expect(sidebar.activateConfigEntry).not.toHaveBeenCalled()
+    const otherChat = { activateConfigEntry: vi.fn(() => true) } as unknown as AcpChatWidget
+    const { notify } = run(otherChat, undefined, 0)
+    expect(otherChat.activateConfigEntry).not.toHaveBeenCalled()
     expect(notify).toHaveBeenCalled()
   })
 })
@@ -681,8 +678,9 @@ describe('NewAgentSessionInCurrentEditorAction', () => {
     const createSession = vi.fn(async (agentId?: string) => {
       const session = fakeSession('new-session', agentId ?? 'missing-agent', 'New')
       live.set(session.id, session)
-      // Simulate AcpChatLocationService's active-session autorun: createSession
-      // may already have opened the new session before the title action resumes.
+      // Simulate AgentsActiveSessionSyncContribution's active-session autorun:
+      // createSession may already have opened the new session before the title
+      // action resumes.
       groups.activeGroup.openEditor(
         instRef.current!.createInstance(AcpSessionEditorInput, session.id, session.agentId, 'New'),
       )
@@ -746,11 +744,12 @@ describe('NewAgentSessionInCurrentEditorAction', () => {
 
   // A locked session-editor group must still accept the new session directly as a
   // new tab (the lock only guards lock-aware routing, not explicit group opens),
-  // and stay the active group. createSession's side effect (the chat location
-  // autorun) opens the new session via EditorService.openEditor, whose lock-aware
-  // routing hands a brand-new editor to a *different* unlocked group and activates
-  // it; without our cleanup + re-activation the real editor would end up split
-  // across groups with focus in the wrong one.
+  // and stay the active group. createSession's side effect — the activeSession
+  // autorun in AgentsActiveSessionSyncContribution — opens the new session via
+  // EditorService.openEditor, whose lock-aware routing hands a brand-new editor to
+  // a *different* unlocked group and activates it; without our cleanup +
+  // re-activation the real editor would end up split across groups with focus in
+  // the wrong one.
   it('creates the new session directly in the locked group and keeps it active', async () => {
     const groups = new EditorGroupsService()
     const editorService = new EditorService(groups)
@@ -761,9 +760,9 @@ describe('NewAgentSessionInCurrentEditorAction', () => {
     const createSession = vi.fn(async (agentId?: string) => {
       const session = fakeSession('new-session', agentId ?? 'missing-agent', 'New')
       live.set(session.id, session)
-      // Mirror AcpChatLocationService's active-session autorun: it opens the
-      // freshly created session through the shared EditorService, which routes a
-      // new editor away from the locked active group into an unlocked one.
+      // Mirror AgentsActiveSessionSyncContribution's active-session autorun: it
+      // opens the freshly created session through the shared EditorService, which
+      // routes a new editor away from the locked active group into an unlocked one.
       editorService.openEditor(
         instRef.current!.createInstance(AcpSessionEditorInput, session.id, session.agentId, 'New'),
       )
@@ -957,13 +956,10 @@ describe('NewAgentSessionInFolderAction', () => {
     return { id, agentId: 'claude-code', title: 'New' } as unknown as IAcpSession
   }
 
-  function build(opts?: { location?: 'editor' | 'sidebar' }) {
+  function build() {
     const createSession = vi.fn(async () => fakeSession('sess-1'))
     const defaultAgentId = vi.fn(() => 'claude-code')
     const openEditor = vi.fn()
-    const openViewContainer = vi.fn()
-    const getVisible = vi.fn(() => true)
-    const toggleVisible = vi.fn()
 
     const services = new ServiceCollection()
     services.set(IAcpSessionService, {
@@ -982,23 +978,10 @@ describe('NewAgentSessionInFolderAction', () => {
       _serviceBrand: undefined,
       defaultAgentId,
     } as unknown as IAcpAgentRegistry)
-    services.set(IAcpChatLocationService, {
-      _serviceBrand: undefined,
-      location: observableValue('test.loc', opts?.location ?? 'editor'),
-    } as unknown as IAcpChatLocationService)
     services.set(IEditorService, {
       _serviceBrand: undefined,
       openEditor,
     } as unknown as IEditorService)
-    services.set(ILayoutService, {
-      _serviceBrand: undefined,
-      getVisible,
-      toggleVisible,
-    } as unknown as ILayoutService)
-    services.set(IViewsService, {
-      _serviceBrand: undefined,
-      openViewContainer,
-    } as unknown as IViewsService)
     // AcpSessionEditorInput construction pulls the chat widget service.
     services.set(IAcpChatWidgetService, {
       _serviceBrand: undefined,
@@ -1007,15 +990,7 @@ describe('NewAgentSessionInFolderAction', () => {
     registerWorkspaceServices(services)
     const inst = new InstantiationService(services)
     services.set(IInstantiationService, inst)
-    return {
-      inst,
-      createSession,
-      defaultAgentId,
-      openEditor,
-      openViewContainer,
-      getVisible,
-      toggleVisible,
-    }
+    return { inst, createSession, defaultAgentId, openEditor }
   }
 
   it('roots the session at the folder arg and opens it as an editor tab', async () => {
@@ -1040,16 +1015,6 @@ describe('NewAgentSessionInFolderAction', () => {
     )
     const parent = URI.joinPath(file, '..')
     expect(b.createSession).toHaveBeenCalledWith('claude-code', { cwd: parent.fsPath })
-  })
-
-  it('reveals the Sessions view instead of an editor tab in docked mode', async () => {
-    const b = build({ location: 'sidebar' })
-    const folder = URI.file('/ws/src')
-    await b.inst.invokeFunction((accessor) =>
-      new NewAgentSessionInFolderAction().run(accessor, { parent: folder }),
-    )
-    expect(b.openEditor).not.toHaveBeenCalled()
-    expect(b.openViewContainer).toHaveBeenCalledWith('workbench.view.sessions')
   })
 })
 
@@ -1107,23 +1072,10 @@ describe('NewAgentSessionWithScopeAction', () => {
       _serviceBrand: undefined,
       showOpenDialog,
     } as unknown as IFileDialogService)
-    services.set(IAcpChatLocationService, {
-      _serviceBrand: undefined,
-      location: observableValue('test.loc', 'editor'),
-    } as unknown as IAcpChatLocationService)
     services.set(IEditorService, {
       _serviceBrand: undefined,
       openEditor,
     } as unknown as IEditorService)
-    services.set(ILayoutService, {
-      _serviceBrand: undefined,
-      getVisible: () => true,
-      toggleVisible: vi.fn(),
-    } as unknown as ILayoutService)
-    services.set(IViewsService, {
-      _serviceBrand: undefined,
-      openViewContainer: vi.fn(),
-    } as unknown as IViewsService)
     services.set(INotificationService, {
       _serviceBrand: undefined,
       notify,
@@ -1271,7 +1223,6 @@ describe('ResumeAgentSessionAction', () => {
     pickIndex: number
     currentCwd: string | undefined
     platform?: 'win32' | 'linux'
-    location?: 'editor' | 'sidebar'
     authority?: string
     resumeImpl?: (id: string) => Promise<IAcpSession>
   }) {
@@ -1280,7 +1231,6 @@ describe('ResumeAgentSessionAction', () => {
         ((_id: string) => Promise.resolve({ id: 'live', agentId: 'fake' } as IAcpSession)),
     )
     const setActive = vi.fn()
-    const openViewContainer = vi.fn()
     const notify = vi.fn()
     const pickedItems: IQuickPickItem[][] = []
 
@@ -1303,19 +1253,6 @@ describe('ResumeAgentSessionAction', () => {
         return Promise.resolve(items[opts.pickIndex])
       },
     } as unknown as IQuickInputService
-    const location = {
-      _serviceBrand: undefined,
-      location: observableValue('test.loc', opts.location ?? 'editor'),
-    } as unknown as IAcpChatLocationService
-    const layout = {
-      _serviceBrand: undefined,
-      getVisible: () => true,
-      toggleVisible: vi.fn(),
-    } as unknown as ILayoutService
-    const views = {
-      _serviceBrand: undefined,
-      openViewContainer,
-    } as unknown as IViewsService
     const groups = new EditorGroupsService()
     const notification = {
       _serviceBrand: undefined,
@@ -1339,9 +1276,6 @@ describe('ResumeAgentSessionAction', () => {
     services.set(IAcpSessionService, sessions)
     services.set(IAcpSessionHistoryService, history)
     services.set(IQuickInputService, quickInput)
-    services.set(IAcpChatLocationService, location)
-    services.set(ILayoutService, layout)
-    services.set(IViewsService, views)
     services.set(IEditorGroupsService, groups)
     services.set(INotificationService, notification)
     services.set(IWorkspaceService, workspace)
@@ -1353,7 +1287,7 @@ describe('ResumeAgentSessionAction', () => {
       register: vi.fn(),
     } as unknown as IAcpChatWidgetService)
     const inst = new InstantiationService(services)
-    return { inst, resumeSession, setActive, groups, openViewContainer, notify, pickedItems }
+    return { inst, resumeSession, setActive, groups, notify, pickedItems }
   }
 
   /** Session tabs across every group — the reveal contract is about all of them. */

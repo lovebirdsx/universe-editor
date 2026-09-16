@@ -21,10 +21,6 @@ import {
   type AcpSessionHistoryEntry,
   type IAcpSessionHistoryService as IAcpSessionHistoryServiceType,
 } from '../../acp/session/acpSessionHistory.js'
-import {
-  IAcpChatLocationService,
-  type AcpChatLocation,
-} from '../../acp/session/acpChatLocationService.js'
 import { AcpSessionEditorInput } from '../../acp/session/acpSessionEditorInput.js'
 import { revealSessionEditorTab } from '../../acp/session/revealSessionEditorTab.js'
 import {
@@ -82,19 +78,6 @@ class FakeSessionService {
   }
 }
 
-class FakeChatLocation {
-  declare readonly _serviceBrand: undefined
-  readonly location = observableValue<AcpChatLocation>('test.location', 'sidebar')
-  readonly isMigrating = false
-  // Mirrors the real service: it publishes the new value synchronously, which
-  // reveal() depends on (it forces 'editor' and then reveals).
-  readonly setLocation = vi.fn((next: AcpChatLocation) => this.location.set(next, undefined))
-  initialize(): Promise<void> {
-    return Promise.resolve()
-  }
-  toggle(): void {}
-}
-
 class FakeChatWidgetService {
   declare readonly _serviceBrand: undefined
   readonly lastFocusedWidget = undefined
@@ -136,7 +119,6 @@ function makeSession(
 interface Harness {
   svc: RendererSessionsService
   sessions: FakeSessionService
-  location: FakeChatLocation
   groups: EditorGroupsService
   widgets: FakeChatWidgetService
   instantiation: IInstantiationService
@@ -145,7 +127,6 @@ interface Harness {
 function makeHarness(): Harness {
   const sessions = new FakeSessionService()
   const history = makeHistory()
-  const location = new FakeChatLocation()
   const groups = new EditorGroupsService()
   const widgets = new FakeChatWidgetService()
   const services = new ServiceCollection()
@@ -162,12 +143,11 @@ function makeHarness(): Harness {
   const svc = new RendererSessionsService(
     sessions as unknown as IAcpSessionServiceType,
     history,
-    location as unknown as IAcpChatLocationService,
     groups,
     instantiation,
     widgets as unknown as IAcpChatWidgetServiceType,
   )
-  return { svc, sessions, location, groups, widgets, instantiation }
+  return { svc, sessions, groups, widgets, instantiation }
 }
 
 /** Open a real session tab in `group`, as the workbench would. */
@@ -199,7 +179,6 @@ describe('RendererSessionsService', () => {
     await h.svc.reveal(session.id)
 
     expect(h.sessions.setActive).toHaveBeenCalledWith('s1')
-    expect(h.location.setLocation).toHaveBeenCalledWith('editor')
     const tabs = sessionTabs(h.groups)
     expect(tabs).toHaveLength(1)
     expect(tabs[0]!.sessionId).toBe('s1')
@@ -213,7 +192,6 @@ describe('RendererSessionsService', () => {
     await h.svc.reveal('missing')
 
     expect(h.sessions.setActive).not.toHaveBeenCalled()
-    expect(h.location.setLocation).not.toHaveBeenCalled()
     expect(sessionTabs(h.groups)).toHaveLength(0)
   })
 

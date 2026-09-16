@@ -14,9 +14,7 @@ import {
   IConfigurationService,
   IEditorGroupsService,
   IInstantiationService,
-  ILayoutService,
   ILoggerService,
-  IViewsService,
   IWorkspaceService,
   URI,
   localize,
@@ -26,7 +24,6 @@ import {
 import { ILanguageFeaturesService } from '../services/languageFeatures/LanguageFeaturesService.js'
 import { IAcpSessionService } from '../services/acp/session/acpSessionService.js'
 import { IAcpAgentRegistry } from '../services/acp/acpAgentRegistry.js'
-import { IAcpChatLocationService } from '../services/acp/session/acpChatLocationService.js'
 import { IAcpChatWidgetService } from '../services/acp/session/acpChatWidgetService.js'
 import { IAcpConfigOptionsCacheService } from '../services/acp/session/acpConfigOptionsCache.js'
 import { toMentionName } from '../services/dnd/resourceDropTransfer.js'
@@ -152,12 +149,9 @@ export class AiFixCodeActionContribution extends Disposable implements IWorkbenc
     @ILanguageFeaturesService languageFeatures: ILanguageFeaturesService,
     @IAcpSessionService sessions: IAcpSessionService,
     @IAcpAgentRegistry registry: IAcpAgentRegistry,
-    @IAcpChatLocationService location: IAcpChatLocationService,
     @IAcpChatWidgetService widgets: IAcpChatWidgetService,
     @IEditorGroupsService groups: IEditorGroupsService,
     @IInstantiationService inst: IInstantiationService,
-    @ILayoutService layout: ILayoutService,
-    @IViewsService views: IViewsService,
     @IWorkspaceService workspace: IWorkspaceService,
     @ILoggerService loggerService: ILoggerService,
     @IConfigurationService config: IConfigurationService,
@@ -165,7 +159,7 @@ export class AiFixCodeActionContribution extends Disposable implements IWorkbenc
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'aiFixCodeAction', name: 'AI Fix Code Action' })
-    this._reveal = { sessions, registry, location, widgets, groups, inst, layout, views }
+    this._reveal = { sessions, registry, widgets, groups, inst }
     this._run = { config, configOptionsCache }
 
     void MonacoLoader.ensureInitialized().then(() => {

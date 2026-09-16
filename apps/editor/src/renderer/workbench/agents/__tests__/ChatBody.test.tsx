@@ -604,14 +604,15 @@ describe('ChatBody — focus surface survives an editor tab round trip', () => {
     expect(second.container.ownerDocument.activeElement).not.toBe(scrollEl(second.container))
   })
 
-  it('does not steal focus when the host did not ask for it (sidebar / panel)', () => {
+  it('does not steal focus when the host did not ask for it (read-only session)', () => {
     AcpChatViewStateCache.setFocusSurface('s1', 'timeline')
     const outside = document.createElement('button')
     document.body.appendChild(outside)
     outside.focus()
     try {
-      // Sidebar / panel hosts render ChatBody without `autoFocus` — the mount
-      // restore must stay out of the way instead of pulling focus into the chat.
+      // A read-only (foreign-workspace) session editor renders ChatBody with
+      // `autoFocus={false}` (see AcpSessionEditor) — the mount restore must stay
+      // out of the way instead of pulling focus into the chat.
       renderChat(makeSession('s1', items))
       expect(document.activeElement).toBe(outside)
     } finally {

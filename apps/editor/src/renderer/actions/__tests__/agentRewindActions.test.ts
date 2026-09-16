@@ -5,8 +5,6 @@ import {
   IEditorService,
   IInstantiationService,
   INotificationService,
-  IViewsService,
-  ILayoutService,
   InstantiationService,
   IUriIdentityService,
   IWorkspaceService,
@@ -23,7 +21,6 @@ import {
   type IAcpSession,
   type RewindFilesResult,
 } from '../../services/acp/session/acpSessionService.js'
-import { IAcpChatLocationService } from '../../services/acp/session/acpChatLocationService.js'
 import { IAcpSessionHistoryService } from '../../services/acp/session/acpSessionHistory.js'
 import { AcpPromptReplaceInbox } from '../../services/acp/session/acpPromptReplaceInbox.js'
 import type { SelectionContext } from '../../services/acp/promptContext.js'
@@ -82,7 +79,6 @@ interface Harness {
   readonly dialog: { confirm: ReturnType<typeof vi.fn> }
   readonly notify: ReturnType<typeof vi.fn>
   readonly openEditor: ReturnType<typeof vi.fn>
-  readonly location: { location: ReturnType<typeof observableValue<'editor' | 'sidebar'>> }
   run(commandId: string, arg?: unknown): Promise<void>
 }
 
@@ -98,7 +94,6 @@ function makeHarness(overrides: Partial<Harness['service']> = {}): Harness {
   const dialog = { confirm: vi.fn().mockResolvedValue({ confirmed: true }) }
   const notify = vi.fn()
   const openEditor = vi.fn()
-  const location = { location: observableValue<'editor' | 'sidebar'>('t.loc', 'editor') }
 
   const services = new ServiceCollection()
   services.set(IAcpSessionService, service as unknown as IAcpSessionService)
@@ -108,14 +103,6 @@ function makeHarness(overrides: Partial<Harness['service']> = {}): Harness {
     openEditor,
     activeEditor: observableValue<unknown>('t.active', undefined),
   } as unknown as IEditorService)
-  services.set(IAcpChatLocationService, location as unknown as IAcpChatLocationService)
-  services.set(ILayoutService, {
-    getVisible: () => true,
-    toggleVisible: vi.fn(),
-  } as unknown as ILayoutService)
-  services.set(IViewsService, {
-    openViewContainer: vi.fn().mockResolvedValue(undefined),
-  } as unknown as IViewsService)
   services.set(IAcpSessionHistoryService, {
     get: () => undefined,
     entries: observableValue('t.entries', []),
@@ -134,7 +121,6 @@ function makeHarness(overrides: Partial<Harness['service']> = {}): Harness {
     dialog,
     notify,
     openEditor,
-    location,
     run: async (commandId, arg) => {
       await inst.invokeFunction((accessor) =>
         Promise.resolve(CommandsRegistry.getCommand(commandId)!.handler(accessor, arg)),

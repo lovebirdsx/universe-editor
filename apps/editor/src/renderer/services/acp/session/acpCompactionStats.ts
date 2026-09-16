@@ -12,7 +12,7 @@
  *  next run. Failed compactions are ignored — an aborted summarization has no
  *  bearing on how long a real one takes.
  *
- *  Storage mirrors AcpChatLocationService: single GLOBAL bucket via
+ *  Storage mirrors AcpSessionFilterService: single GLOBAL bucket via
  *  IStorageService, debounced writes, synchronous flush on dispose.
  *--------------------------------------------------------------------------------------------*/
 

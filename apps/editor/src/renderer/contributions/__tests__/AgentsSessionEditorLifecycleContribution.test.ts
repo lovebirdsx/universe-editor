@@ -1,8 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Tests for AgentsSessionEditorLifecycleContribution — verifies that closing
- *  an AcpSessionEditorInput tab stops the live agent session, except during
- *  AcpChatLocationService migrations or when the input is still open in
- *  another group.
+ *  an AcpSessionEditorInput tab stops the live agent session, except when the
+ *  input is still open in another group.
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
@@ -19,14 +18,9 @@ import {
   type IEditorGroup,
   type IEditorGroupsService,
   type IEditorGroupModelChangeEvent,
-  type IObservable,
 } from '@universe-editor/platform'
 import { AgentsSessionEditorLifecycleContribution } from '../AgentsContributions.js'
 import { AcpSessionEditorInput } from '../../services/acp/session/acpSessionEditorInput.js'
-import type {
-  IAcpChatLocationService,
-  AcpChatLocation,
-} from '../../services/acp/session/acpChatLocationService.js'
 import {
   IAcpSessionService,
   type IAcpSession,
@@ -81,18 +75,6 @@ class FakeSessionService {
   }
 }
 
-class FakeLocationService {
-  declare readonly _serviceBrand: undefined
-  isMigrating = false
-  readonly location: IObservable<AcpChatLocation> = observableValue<AcpChatLocation>(
-    'fake.location',
-    'editor',
-  )
-  async initialize(): Promise<void> {}
-  setLocation(): void {}
-  toggle(): void {}
-}
-
 function makeSession(id: string, agentId: string): IAcpSession {
   return {
     id,
@@ -105,7 +87,6 @@ function makeSession(id: string, agentId: string): IAcpSession {
 interface Harness {
   groups: FakeEditorGroupsService
   sessions: FakeSessionService
-  location: FakeLocationService
   contrib: AgentsSessionEditorLifecycleContribution
   inst: IInstantiationService
 }
@@ -113,7 +94,6 @@ interface Harness {
 function makeHarness(): Harness {
   const groups = new FakeEditorGroupsService()
   const sessions = new FakeSessionService()
-  const location = new FakeLocationService()
   // AcpSessionEditorInput needs both services via DI even though this
   // contribution test doesn't exercise titles/resume — the constructor's
   // autorun reads from them.
@@ -137,9 +117,8 @@ function makeHarness(): Harness {
   const contrib = new AgentsSessionEditorLifecycleContribution(
     groups as unknown as IEditorGroupsService,
     sessions as unknown as IAcpSessionServiceType,
-    location as unknown as IAcpChatLocationService,
   )
-  return { groups, sessions, location, contrib, inst }
+  return { groups, sessions, contrib, inst }
 }
 
 function makeInput(inst: IInstantiationService, sessionId: string, agentId: string) {
@@ -164,17 +143,6 @@ describe('AgentsSessionEditorLifecycleContribution', () => {
     const h = makeHarness()
     const fileInput = { id: 'file:foo' } as unknown as EditorInput
     h.groups.groupList[0]!.fireClose(fileInput)
-    await flush()
-    expect(h.sessions.closed).toEqual([])
-    h.contrib.dispose()
-  })
-
-  it('skips closeSession while AcpChatLocationService.isMigrating is true', async () => {
-    const h = makeHarness()
-    h.sessions.register(makeSession('s1', 'fake'))
-    h.location.isMigrating = true
-    const input = makeInput(h.inst, 's1', 'fake')
-    h.groups.groupList[0]!.fireClose(input)
     await flush()
     expect(h.sessions.closed).toEqual([])
     h.contrib.dispose()

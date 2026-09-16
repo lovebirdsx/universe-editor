@@ -30,10 +30,10 @@
  *  handler), the entries address each other by position, and happy-dom has no
  *  key layer at all — the unit tests below it drive the component API directly.
  *
- *  The `when` clause is `editorAreaFocus && activeEditorTypeId == 'acp.session'`,
- *  so the session must stay in the EDITOR area (docking the chat into the
- *  sidebar would push the config bar out of scope by design — see
- *  ACP_EDITOR_ONLY_WHEN) and focus must be put in the editor before pressing.
+ *  The `when` clause is `editorAreaFocus && activeEditorTypeId == 'acp.session'`
+ *  (see ACP_EDITOR_ONLY_WHEN): the session editor must be the active editor and
+ *  focus must be in the editor area before every press, so the test puts it
+ *  there first.
  *
  *  The echo agent fixture (ECHO_AGENT_CONFIG_OPTIONS=1) advertises six select
  *  options in the order model → mode → thought_level → profile → verbosity →

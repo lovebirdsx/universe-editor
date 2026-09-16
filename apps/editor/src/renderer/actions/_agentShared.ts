@@ -27,9 +27,9 @@ export const CATEGORY = localize2('command.category.agents', 'Agents')
 export const ACP_SCOPED_KEY_WEIGHT = KeybindingWeight.WorkbenchContrib + 50
 
 // Gate for session-scoped navigation commands (timeline move/scroll, collapse,
-// find-open, font, copy). The chat widget can be driven two ways:
-//   - DOM focus is inside a chat container (sidebar ChatPanel or an editor whose
-//     timeline the user clicked) → `acpChatFocused`.
+// find-open, font, copy). Focus reaches a chat timeline two ways:
+//   - DOM focus is inside the chat container (the user clicked the timeline, or
+//     the session editor auto-focused its input) → `acpChatFocused`.
 //   - the active editor is a session editor AND focus is somewhere in the editor
 //     area (notably a read-only foreign session, which auto-focuses the editor
 //     group body rather than a chat input) → `editorAreaFocus && activeEditorTypeId`.
@@ -41,15 +41,13 @@ export const ACP_SCOPED_KEY_WEIGHT = KeybindingWeight.WorkbenchContrib + 50
 export const ACP_NAV_WHEN = `acpChatFocused || (editorAreaFocus && activeEditorTypeId == '${AcpSessionEditorInput.TYPE_ID}')`
 
 // Stricter gate for keys that address the session *editor*'s config bar by
-// position (Alt+<n>). ACP_NAV_WHEN would also match the sidebar ChatPanel's bar
-// — the legacy host the user confirmed is out of scope — and the key would then
-// drive whichever widget last held focus instead of the editor in front.
+// position (Alt+<n>): they must resolve against the editor in front, so a chat
+// widget that merely held focus last can never answer them.
 export const ACP_EDITOR_ONLY_WHEN = `editorAreaFocus && activeEditorTypeId == '${AcpSessionEditorInput.TYPE_ID}'`
 
 // Resolve which chat widget a session command should target. Prefer the widget
 // behind the active session editor (so commands work even when DOM focus never
-// landed in its timeline); otherwise fall back to whichever chat last held focus
-// (the sidebar case, and any non-editor focus path).
+// landed in its timeline); otherwise fall back to whichever chat last held focus.
 export function resolveNavWidget(accessor: ServicesAccessor): AcpChatWidget | undefined {
   const widgets = accessor.get(IAcpChatWidgetService)
   const active = accessor.get(IEditorService).activeEditor.get()
@@ -63,7 +61,7 @@ export function resolveNavWidget(accessor: ServicesAccessor): AcpChatWidget | un
 // ...and the strict variant for keys gated on ACP_EDITOR_ONLY_WHEN. There the
 // last-focused fallback is actively wrong: between an editor becoming active and
 // its widget registering (ChatBody registers on mount), it would hand the key to
-// the sidebar ChatPanel — exactly the host the gate exists to keep out. A session
+// another session's chat — exactly what the gate exists to keep out. A session
 // editor with no widget yet simply has no target.
 export function resolveEditorNavWidget(accessor: ServicesAccessor): AcpChatWidget | undefined {
   const active = accessor.get(IEditorService).activeEditor.get()

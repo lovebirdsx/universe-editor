@@ -1,10 +1,10 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  SessionListPanel — what the Sessions view shows in SecondarySideBar when Chat
- *  lives in the EditorArea. The toolbar (New / choose agent / refresh / switch to
- *  sidebar) lives in the view's title bar (SessionsViewToolbar); this component
- *  just hosts the shared SessionListBody. Picking a row resumes/activates the
- *  session through SessionListBody's built-in click handling.
+ *  SessionListPanel — the Sessions view body: the list of this window's sessions.
+ *  The toolbar (search / filter / New / choose agent / refresh) lives in the
+ *  view's title bar (SessionsViewToolbar); this component just hosts the shared
+ *  SessionListBody. Picking a row resumes/activates the session through
+ *  SessionListBody's built-in click handling.
  *--------------------------------------------------------------------------------------------*/
 
 import { SessionListBody } from './SessionListBody.js'

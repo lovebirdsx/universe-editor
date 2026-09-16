@@ -4,7 +4,7 @@
 
 ## 会话子系统（acp-session）
 
-把外部 AI agent（claude-code / codex / …）经 ACP 接入编辑器：多会话管理、流式消息/工具调用/计划渲染、权限交互、配置项、会话恢复、两种渲染布局、会话级 diff/计时/开销。案例拆在 `cases-*.md`（文末索引）。
+把外部 AI agent（claude-code / codex / …）经 ACP 接入编辑器：多会话管理、流式消息/工具调用/计划渲染、权限交互、配置项、会话恢复、会话级 diff/计时/开销。案例拆在 `cases-*.md`（文末索引）。
 
 > ⚠️ **第一原则**：先认领改动落在**哪一层**——① 多会话 facade `AcpSessionService` ② 单会话 view-model `AcpSession` ③ 连接/进程 `AcpClientService` ④ 恢复协调 `AcpSessionRestoreCoordinator` ⑤ 持久化（双桶服务）⑥ UI `workbench/agents/*` ⑦ 命令 `actions/agentActions.ts`。**协议层见 [`../CLAUDE.md`](../CLAUDE.md)。**
 
@@ -20,7 +20,7 @@
 #### Service 层（本目录）
 
 - **核心三件套**：`acpSessionService.ts`（多会话 facade：observables + `IAcpClientNotificationSink` 分发 + create/`_connectSession`/resume/close + `_findSession`）、`acpSession.ts`（单会话 view-model：observable 全集 + `applyUpdate` 状态机 + 双 id + prompt 队列 + `attachConnection`/`failConnection`/`whenConnected` + 标题派生 + usage/cost）、`acpSessionConfigOptions.ts`（`ConfigOptionStateMachine`：echo 抑制 + 推送 + 持久化分支）
-- **恢复/历史/定位**：`acpSessionRestoreCoordinator.ts`（启动/workspace-swap 恢复 + `session/list` 扫描）、`acpSessionHistory.ts`（`MAX_ENTRIES=100`，键 `sessionIdOnAgent`）、`acpSessionEditorInput.ts`（会话即 editor tab）、`acpChatLocationService.ts`（**单一真相**：Chat 位置）、`acpChatWidgetService.ts`（ChatBody registry + `lastFocusedWidget`）
+- **恢复/历史/定位**：`acpSessionRestoreCoordinator.ts`（启动/workspace-swap 恢复 + `session/list` 扫描）、`acpSessionHistory.ts`（`MAX_ENTRIES=100`，键 `sessionIdOnAgent`）、`acpSessionEditorInput.ts`（会话即 editor tab）、`acpChatWidgetService.ts`（ChatBody registry + `lastFocusedWidget`）
 - **标题/状态**：`acpSessionTitleService.ts` / `acpSessionTitle.ts` / `acpSessionTitleEcho.ts` / `sessionTitleFormat.ts`、`acpSessionStatus.ts` / `acpSessionFilterService.ts` / `acpAuthError.ts`（含共享判定 **`isResidentLive`**——「这实例还该被当成活会话用吗」的唯一真相）
 - **改动追踪/附件/草稿**：`sessionChangeTracker.ts`（键 `sessionIdOnAgent`，[[session-diff-feature]]）、`acpMessageAttachmentStore.ts`（已发送消息选区快照）、`acpPromptDraftCache.ts` / `acpQuestionDraftCache.ts` / `acpChatViewStateCache.ts` / `acpPromptCancelledDraftStash.ts`（按**本地 id** 缓存）、`acpPromptHistoryService.ts` / `acpPromptContextInbox.ts` / `acpPromptReplaceInbox.ts` / `acpPromptTextInbox.ts` / `acpElicitationDraftCache.ts`
 - **杂项**：`acpSessionConnection` / `acpSessionContent` / `acpSessionCost` / `acpSessionModel` / `acpSessionFactory` / `acpSessionRecovery` / `acpSessionRegistry` / `acpSessionOutlineRegistry` / `acpSessionUpdateMeta` / `acpTimelineOutline` / `acpAgentDefaultsService` / `acpLastSessionCwdService` / `sessionBookmarks` / `sessionBookmarkService` / `acpCompactionStats` / `acpConfigOptionsCache` / `acpAgentCostStrategy` / `acpAuthGuidanceService` / `acpErrors` / `acpErrorClassify` / `acpExtMethods` / `acpAutoResumeGuard` / `acpResidentBudget` / `acpContentLimits` / `modelSwitchContextGuard` / `sessionDiffReconstruct` / `acpSessionProviderContext`（费率归属：`agentId + authority` 复合键，**反查 agent 自己的配置文件**）
@@ -31,17 +31,17 @@
 
 #### UI 层 `apps/editor/src/renderer/workbench/agents/`
 
-- **布局**：`SessionsView`（按 `acpChatLocationService` 切双布局）、`AcpSessionEditor`、`ChatPanel` / `ChatBody`
+- **布局**：`AcpSessionEditor` / `ChatBody`（Chat **唯一宿主**）、`SessionListPanel`（次侧栏列表）
 - **输入/消息**：`PromptInput` / `SendButton` / `StopButton`、`MessageList` / `MessageContent` / `UserMessageItem` / `CodeBlock`
 - **工具/计划**：`ToolCallCard` / `ToolCallOutput` / `CommandInvocationBadge` / `InlineDiffPreview` / `lineDiff`、`PlanView` / `StickyPlanBar` / `StickyUserMessageBar` / `StickyScrollOverlay` / `stickyScroll` / `CompactionCard`
 - **卡片/条**：`PermissionCard` / `QuestionCard` / `ElicitationCard`、`ConfigOptionsBar` / `ConfigBarOverflowMenu`、`RecoveryBar` / `ResurrectionCard` / `ForeignSessionPreview` / `SideTasksBar`
-- **列表/改动/用量**：`SessionListPanel` / `SessionListBody` / `SessionsPopover` / `SessionsViewToolbar` / `AgentChatContextMenu`、`SessionChangesView` / `sessionChangesViewState`（**用 `sessionIdOnAgent` 查 changesFor**，[[session-diff-feature]]）、`useSessionTimer` / `UsageIndicator` / `SessionCostIndicator` / `useExchangeRate`、`McpServersView` / `McpServerPicker` / `McpEnablementToggles`
+- **列表/改动/用量**：`SessionListPanel` / `SessionListBody` / `SessionsViewToolbar` / `AgentChatContextMenu`、`SessionChangesView` / `sessionChangesViewState`（**用 `sessionIdOnAgent` 查 changesFor**，[[session-diff-feature]]）、`useSessionTimer` / `UsageIndicator` / `SessionCostIndicator` / `useExchangeRate`、`McpServersView` / `McpServerPicker` / `McpEnablementToggles`
 - **辅助**：`ChatFindWidget` / `useChatFind`、`timelineCollapse` / `timelineIcons` / `sessionStatusIcon` / `agentIcon`、`chatContentExpansion` / `contentOverflow` / `timelineVirtualScroll`
 
 #### 跨进程 / 命令 / contributions
 
 - **main**：`src/main/services/acpHost/`（spawn + pump stdio/exit）、`src/main/services/acpTerminal/`（terminal 池）。**无 endStdin，关流走 stop**。
-- **命令**：`actions/agentActions.ts`——42 个 Action2（NewAgentSession / CancelAgentTurn / ResumeAgentSession / ToggleAgentChatLocation / SelectAgent[Model|Mode|ThoughtLevel] …）。加命令走 `apps/editor/CLAUDE.md` 套路 A。
+- **命令**：`actions/agentActions.ts`（barrel）——NewAgentSession / CancelAgentTurn / ResumeAgentSession / SelectAgent[Model|Mode|ThoughtLevel] …。加命令走 `apps/editor/CLAUDE.md` 套路 A。
 - **contributions**：`AcpInitContribution`（启动 hydrate）/ `AgentBinaryPrefetchContribution` / `AgentFontContribution` / `AgentNotificationContribution` / `AgentsContributions` / `FirstRunAgentOnboardingContribution` / `SessionShutdownParticipant`（退出时优雅关闭）。
 
 ### 数据流（细节见 `../CLAUDE.md`「数据流」）
@@ -55,7 +55,7 @@
 - **加一种 SessionUpdate 类型**：`acpSession.ts` 的 `applyUpdate()` switch 加 case + 进 16ms `transaction` + 新 view-model 挂 `AcpSession` 上。详见 `../CLAUDE.md` 套路 ACP-B。
 - **改会话生命周期/连接时序**：`acpSessionService.ts` 的 `createSession`/`_connectSession`/`resumeSession`；连接绑定/队列 flush 在 `acpSession.ts` 的 `attachConnection`/`failConnection`。**任何「连接前/后」分支都要想清双 id 与队列**。
 - **加附加于会话的能力**（新 indicator / 新追踪）：view-model 字段加在 `acpSession.ts`（observable），UI 用 `useObservable` 订阅。**键用 `sessionIdOnAgent` 还是本地 `id`**——跨会话持久/协议相关用前者，纯运行期 UI 缓存用后者（坑 #1）。
-- **改双模式布局**：`acpChatLocationService.ts` + `SessionsView.tsx` + 命令 `ToggleAgentChatLocationAction`。
+- **改会话编辑器的开关/揭示**：`AgentsActiveSessionSyncContribution` + `revealSessionEditorTab` / `revealSessionChat`（列表行 / Alt+S / deep link / 通知共用）。
 - **卡片折叠有两层，别混**：外层 slot 收起走 `timelineCollapse.ts`；内层内容折叠走 `chatContentExpansion.tsx`。详见 [cases-session-ui.md](cases-session-ui.md)。
 - **加配置项交互**：`acpSessionConfigOptions.ts`（推送/echo）+ `ConfigOptionsBar.tsx` + `acpAgentDefaultsService.ts`。
 - **加/改内置 agent skill**（`apps/editor/resources/agent-skills/.claude/skills/<name>/SKILL.md`，**加文件即生效**；默认 `disable-model-invocation: true`）：经 `_builtinAgentDirs()` 在 new/load/resume/fork 四条 wire 路径注入；**remote authority 会话不注入**；打包 `runtime-resources.mjs` 补 `REQUIRED_SOURCE_FILES` sentinel。命名别撞本仓库开发者 skill。

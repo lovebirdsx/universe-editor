@@ -11,7 +11,7 @@
  *  Subclasses provide the state shape (serialize/deserialize/empty) and a
  *  hook to push state into their observables after each replacement.
  *
- *  Not intended for single-scope persisters like `AcpChatLocationService`,
+ *  Not intended for single-scope persisters like `AcpSessionFilterService`,
  *  which has only one bucket and doesn't need the workspace-swap machinery.
  *--------------------------------------------------------------------------------------------*/
 

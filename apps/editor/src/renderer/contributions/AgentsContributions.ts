@@ -10,6 +10,7 @@ import {
   Disposable,
   IEditorGroupsService,
   IEditorService,
+  IInstantiationService,
   ILayoutService,
   IViewsService,
   IWorkbenchContribution,
@@ -22,13 +23,13 @@ import {
 } from '@universe-editor/platform'
 import { registerViewWithComponent } from '../services/views/ViewComponentRegistry.js'
 import { registerEditorWithComponent } from '../services/editor/EditorComponentRegistry.js'
-import { SessionsView } from '../workbench/agents/SessionsView.js'
+import { SessionListPanel } from '../workbench/agents/SessionListPanel.js'
 import { SessionsViewToolbar } from '../workbench/agents/SessionsViewToolbar.js'
 import { McpServersView } from '../workbench/agents/McpServersView.js'
 import { AcpSessionEditor } from '../workbench/agents/AcpSessionEditor.js'
 import { AcpSessionEditorInput } from '../services/acp/session/acpSessionEditorInput.js'
+import { findSessionEditor } from '../services/acp/session/revealSessionEditorTab.js'
 import { IAcpSessionService } from '../services/acp/session/acpSessionService.js'
-import { IAcpChatLocationService } from '../services/acp/session/acpChatLocationService.js'
 import { AGENT_FONT_SIZE_DEFAULT } from '../services/configuration/fontDefaults.js'
 
 export class AgentsConfigurationContribution extends Disposable implements IWorkbenchContribution {
@@ -45,14 +46,6 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
             description: localize(
               'settings.acp.agents',
               'Custom ACP-compatible agent commands. Each entry needs `id`, `command`; `args`, `env`, `cwd` are optional. Env values are stored in plain text — keep API keys in real environment variables.',
-            ),
-          },
-          'acp.chat.enableSidebarLocation': {
-            type: 'boolean',
-            default: false,
-            description: localize(
-              'settings.acp.chat.enableSidebarLocation',
-              'Allow docking the Agent chat panel into the sidebar (Sessions view) instead of opening sessions as editor tabs. Experimental and incomplete — it may be removed in a future release. Disabled by default; when off, chat only opens in the editor area.',
             ),
           },
           'acp.defaultAgentId': {
@@ -418,7 +411,7 @@ export class SessionsViewContainerContribution
           icon: 'comment-discussion',
           order: 1,
         },
-        SessionsView,
+        SessionListPanel,
         SessionsViewToolbar,
       ),
     )
@@ -487,12 +480,9 @@ export class AgentsSessionRestoreContribution extends Disposable implements IWor
  * AcpSessionEditorInput tab. The session history entry is preserved so a later
  * click in the session list can re-resume it.
  *
- * Two close paths are filtered out so we don't kill sessions the user still
- * cares about:
- *   - `AcpChatLocationService.isMigrating` — `setLocation('sidebar')` closes
- *     editor tabs as a relocation, not a termination.
- *   - The same `AcpSessionEditorInput` still open in another group (future
- *     split-view) — treat that as "still showing" and skip.
+ * One close path is filtered out so we don't kill a session the user still cares
+ * about: the same `AcpSessionEditorInput` still open in another group (split
+ * view) — treat that as "still showing" and skip.
  */
 export class AgentsSessionEditorLifecycleContribution
   extends Disposable
@@ -501,7 +491,6 @@ export class AgentsSessionEditorLifecycleContribution
   constructor(
     @IEditorGroupsService private readonly _editorGroups: IEditorGroupsService,
     @IAcpSessionService private readonly _sessions: IAcpSessionService,
-    @IAcpChatLocationService private readonly _location: IAcpChatLocationService,
   ) {
     super()
     for (const group of this._editorGroups.groups) {
@@ -527,7 +516,6 @@ export class AgentsSessionEditorLifecycleContribution
         if (e.kind !== 'close') return
         const closed = e.editor
         if (!(closed instanceof AcpSessionEditorInput)) return
-        if (this._location.isMigrating) return
         // `moveEditor` 实现为 detach(触发 'close')→ open,二者同步。detach 触发的
         // 'close' 与真正关闭无法区分,且发生在 editor 进入目标组之前。把判断推到
         // 微任务,等同步的 detach+open 结束后再看 editor 是否还在某个组——拖动分屏
@@ -547,12 +535,23 @@ export class AgentsSessionEditorLifecycleContribution
 }
 
 /**
- * Keeps `IAcpSessionService.activeSession` in sync with the focused session
- * editor. Multiple session editors can be open at once; whichever tab the user
- * focuses should become the active session so session-scoped UI (the Session
- * Changes view, the status-bar MCP summary, …) tracks the editor in front of
- * them. Without this, `activeSession` only moves on explicit list/new actions
- * and stale-looks when the user clicks between session tabs.
+ * Keeps `IAcpSessionService.activeSession` and the focused session editor in
+ * sync, in both directions. Multiple session editors can be open at once;
+ * whichever tab the user focuses should become the active session so
+ * session-scoped UI (the Session Changes view, the status-bar MCP summary, …)
+ * tracks the editor in front of them. Without this, `activeSession` only moves
+ * on explicit list/new actions and stale-looks when the user clicks between
+ * session tabs. Conversely, when something else moves `activeSession` (session
+ * list click, new/resumed session, deep link), its chat must come to the front
+ * as a tab.
+ *
+ * The forward direction opens a tab in the ACTIVE group only when the session
+ * is not already showing in some other group — `openEditor`'s dedup is scoped
+ * to the active group, so opening in that case would duplicate the tab instead
+ * of revealing it. That guard is deliberately the opposite of the one
+ * `revealSessionEditorTab` uses (see its header): there a session already in
+ * the active group must still go through `openEditor` so a user-driven session
+ * swap re-activates the tab in place.
  */
 export class AgentsActiveSessionSyncContribution
   extends Disposable
@@ -560,6 +559,8 @@ export class AgentsActiveSessionSyncContribution
 {
   constructor(
     @IEditorService private readonly _editor: IEditorService,
+    @IEditorGroupsService private readonly _editorGroups: IEditorGroupsService,
+    @IInstantiationService private readonly _inst: IInstantiationService,
     @IAcpSessionService private readonly _sessions: IAcpSessionService,
   ) {
     super()
@@ -574,5 +575,23 @@ export class AgentsActiveSessionSyncContribution
         if (this._sessions.getById(active.sessionId)) this._sessions.setActive(active.sessionId)
       }),
     )
+    this._register(
+      autorun((r) => {
+        // Read unconditionally: an autorun only tracks the observables it
+        // actually reads on that run, so bailing before this line would drop
+        // the subscription and later swaps would silently no-op.
+        const active = this._sessions.activeSession.read(r)
+        if (!active) return
+        if (this._isSessionOpenInInactiveGroup(active.id)) return
+        this._editor.openEditor(
+          this._inst.createInstance(AcpSessionEditorInput, active.id, active.agentId, undefined),
+        )
+      }),
+    )
+  }
+
+  private _isSessionOpenInInactiveGroup(sessionId: string): boolean {
+    const found = findSessionEditor(this._editorGroups, sessionId)
+    return found !== undefined && found.group !== this._editorGroups.activeGroup
   }
 }

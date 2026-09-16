@@ -79,9 +79,6 @@ test.describe('@p1 agents prompt enter leak', () => {
       await expect
         .poll(() => page.evaluate(() => window.__E2E__!.getAcpSessionCount()), { timeout: 10000 })
         .toBe(1)
-      await page.evaluate(
-        () => void window.__E2E__!.runCommand('workbench.action.agent.openInEditor'),
-      )
       await expect
         .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), {
           timeout: 10000,

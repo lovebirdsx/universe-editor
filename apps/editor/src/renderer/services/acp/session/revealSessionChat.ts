@@ -13,21 +13,15 @@
  *  chat widget registry (ChatBody) are both keyed by it. A tab restored from a
  *  previous run carries the durable id instead, and AcpSessionEditorInput.focus
  *  resolves that back to the local id on its own.
- *
- *  Sidebar mode is a deliberate no-op: the chat panel already sits in the
- *  sidebar (nothing to reveal), and `setLocation('sidebar')` closes every
- *  session tab — opening one here would be a bug, not a reveal.
  *--------------------------------------------------------------------------------------------*/
 
 import { IEditorGroupsService, IInstantiationService } from '@universe-editor/platform'
 import { revealSessionEditorTab } from './revealSessionEditorTab.js'
-import { IAcpChatLocationService } from './acpChatLocationService.js'
 import { IAcpChatWidgetService } from './acpChatWidgetService.js'
 
 export interface RevealSessionChatTarget {
   readonly groups: IEditorGroupsService
   readonly inst: IInstantiationService
-  readonly location: IAcpChatLocationService
   readonly widgets: IAcpChatWidgetService
 }
 
@@ -36,7 +30,6 @@ export function revealSessionChat(
   sessionId: string,
   live: { readonly agentId: string | undefined } | undefined,
 ): void {
-  if (target.location.location.get() !== 'editor') return
   revealSessionEditorTab(target.groups, target.inst, sessionId, live)
   target.widgets.focusSessionInput(sessionId)
   // Second pass on the next frame: activating a group or opening the tab makes

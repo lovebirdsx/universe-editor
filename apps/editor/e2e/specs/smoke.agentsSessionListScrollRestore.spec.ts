@@ -2,8 +2,8 @@
  *  Session-list scroll restore (Sessions view) (@p1).
  *
  *  在 SecondarySideBar 的 Sessions 视图里，session 列表滚到中间，切到别的容器（Outline）
- *  再切回来，滚动位置应保持。切换容器会 unmount SessionsView → SessionListPanel，滚动位置
- *  由 ScrollStateCache 通过 useScrollRestore 保存/恢复。
+ *  再切回来，滚动位置应保持。切换容器会 unmount SessionListPanel，滚动位置由
+ *  ScrollStateCache 通过 useScrollRestore 保存/恢复。
  *--------------------------------------------------------------------------------------------*/
 
 import { dirname, resolve } from 'node:path'
@@ -64,7 +64,7 @@ test.describe('@p1 agents — session list scroll restore', () => {
     })
     expect(target).toBeGreaterThan(0)
 
-    // Switch the SecondarySideBar to Outline (unmounts SessionsView) and back.
+    // Switch the SecondarySideBar to Outline (unmounts the session list) and back.
     await page.evaluate(() => window.__E2E__!.runCommand('outline.focus'))
     await expect(page.locator(`[data-view-pane="${SESSIONS_VIEW}"]`)).toBeHidden({ timeout: 5000 })
     await page.evaluate(() => window.__E2E__!.runCommand('workbench.action.agent.openView'))

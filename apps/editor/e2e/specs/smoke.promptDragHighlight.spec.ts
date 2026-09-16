@@ -50,7 +50,6 @@ async function openSessionInEditor(
   await expect
     .poll(() => page.evaluate(() => window.__E2E__!.getAcpSessionCount()), { timeout: 10000 })
     .toBe(1)
-  await page.evaluate(() => void window.__E2E__!.runCommand('workbench.action.agent.openInEditor'))
   const host = page.getByTestId('acp-prompt-drop-host')
   await expect(host).toBeVisible({ timeout: 10000 })
 }

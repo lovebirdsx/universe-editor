@@ -3,14 +3,12 @@
  *
  *  The config row under the ACP prompt input is a strict single line: entry
  *  order (model → mode → thought_level → custom… → MCP) is the priority
- *  order, and when the sidebar is too narrow the low-priority tail folds
+ *  order, and when the prompt input is too narrow the low-priority tail folds
  *  into a "…" overflow panel instead of wrapping onto a second line. This
  *  spec drives the real layout widths through the LayoutService and pins the
  *  fold/unfold contract end to end:
  *
- *    - wide sidebar → every entry inline, the "…" button in its empty state
- *    - SIDEBAR_MIN (170px) → the bar overflows entirely (the line leaves
- *      ~40px, too narrow even for the highest-priority model trigger)
+ *    - wide prompt input → every entry inline, the "…" button in its empty state
  *    - a self-calibrated midpoint width → the model keeps its inline slot
  *      while the tail overflows (the priority split itself)
  *    - the overflow panel renders 20+ character option labels, and a pick
@@ -18,8 +16,13 @@
  *      updates (the echo fixture echoes the updated bag)
  *    - widening back returns every entry inline, empties the "…" button and
  *      dismisses the open panel. This last step also guards the re-expand:
- *      the bar must track the sidebar width, not stay collapsed after an
+ *      the bar must track its container width, not stay collapsed after an
  *      overflow (a flexbox sizing bug found while writing this spec).
+ *
+ *  The chat is an editor-area tab, so the prompt input's width is the EDITOR
+ *  pane's — driven here by the primary sidebar, which is the only lever that
+ *  takes width away from it. The secondary sidebar is hidden for the whole
+ *  test so its width cannot enter the equation.
  *
  *  Widths are MEASURED, not hard-coded. Entry widths are text-driven, so the
  *  same six entries are materially wider under Windows font metrics than under
@@ -27,7 +30,11 @@
  *  assertion on the other (this spec's original 700px wide step did exactly
  *  that, failing every Windows CI run). Three consequences:
  *
- *    - the wide step DERIVES its sidebar target from the live window width
+ *    - the wide step asks for SIDEBAR_MIN (the narrowest the primary sidebar
+ *      goes, i.e. the widest the editor gets while that sidebar stays usable).
+ *      Going narrower means hiding the sidebar, which would leave no lever for
+ *      the later steps.
+ *    - the ceiling for the squeezing steps is DERIVED from the live window
  *      instead of asking for SIDEBAR_MAX. Allotment only has
  *      innerWidth − activity bar to hand out and the editor pane keeps
  *      EDITOR_MIN, so on a narrow display SIDEBAR_MAX is unreachable — and
@@ -35,12 +42,10 @@
  *      (WorkbenchLayout's programmatic resize early-returns when
  *      `center <= 0`), leaving the sidebar at its initial 300px while
  *      getLayoutSizes() happily reports the request. That lie is why the
- *      previous "hide the primary sidebar and go to SIDEBAR_MAX" fix looked
- *      right on a 1280-wide dev machine and kept failing on the ~1024-wide
- *      Windows CI runner: the settle poll passed on a value the layout never
- *      applied, and the bar was measured at ~200px.
- *    - the wide step hides the primary sidebar first, so the whole
- *      innerWidth − 48 budget is the secondary's to take (minus EDITOR_MIN).
+ *      previous "hide one sidebar and go to SIDEBAR_MAX" fix looked right on a
+ *      1280-wide dev machine and kept failing on the ~1024-wide Windows CI
+ *      runner: the settle poll passed on a value the layout never applied, and
+ *      the bar was measured at ~200px.
  *    - the priority-split step measures the real entry/gap/button widths and
  *      aims at the midpoint between "only the model fits" and "everything
  *      fits", so both sides of that assertion keep equal margin everywhere.
@@ -51,12 +56,18 @@
  *  deliver the width then fails naming the two numbers, instead of as a bare
  *  data-empty mismatch that reads like broken packing.
  *
+ *  Coverage note: the original spec also squeezed the bar past the point where
+ *  even the model entry overflows. An editor-area chat cannot get there — the
+ *  editor pane has an EDITOR_MIN (220px) floor, which leaves the line far too
+ *  wide to overflow reliably on every platform. That branch is covered by the
+ *  packing unit test instead (renderer/services/acp/__tests__/configBarLayout.test.ts).
+ *
  *  Reading offsetWidth/clientWidth off the bar's own testid'd elements is
  *  deliberate: those are this feature's layout contract (the packing consumes
  *  exactly these numbers — see configBarLayout.ts), not third-party internals.
- *  The sidebar pane's own width is read for the same reason: it is what the bar
- *  is given, and the only value that distinguishes a real resize from a dropped
- *  one.
+ *  The sidebar pane's own width is read for the same reason: it is what the
+ *  editor pane — and so the bar — is given, and the only value that
+ *  distinguishes a real resize from a dropped one.
  *
  *  The echo agent fixture (ECHO_AGENT_CONFIG_OPTIONS=1) advertises six
  *  select options. The MCP picker self-hides (no servers configured) and
@@ -72,11 +83,11 @@ import { test, expect } from '../fixtures/sharedApp.js'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ECHO_AGENT_PATH = resolve(__dirname, '..', '..', 'src', 'test-fixtures', 'echoAgent.cjs')
 
-/** SIDEBAR_MAX (services/layout/layoutConstraints.ts) — the secondary sidebar's ceiling. */
+/** SIDEBAR_MAX (services/layout/layoutConstraints.ts) — the primary sidebar's ceiling. */
 const SIDEBAR_MAX = 1000
-/** SIDEBAR_MIN (same file). */
-const NARROW_SIZE = 170
-/** EDITOR_MIN (same file) — the editor pane keeps this much whatever the sidebars ask for. */
+/** SIDEBAR_MIN (same file) — the narrowest the primary sidebar goes, i.e. the widest the editor gets while it stays visible. */
+const WIDE_SIZE = 170
+/** EDITOR_MIN (same file) — the editor pane keeps this much whatever the sidebar asks for. */
 const EDITOR_MIN = 220
 /** --activitybar-width (WorkbenchLayout.module.css), outside the Allotment budget. */
 const ACTIVITY_BAR = 48
@@ -89,8 +100,8 @@ const ACTIVITY_BAR = 48
 const WIDE_SLACK_PX = 80
 
 /**
- * The widest the secondary sidebar can actually reach right now, with the
- * primary sidebar hidden.
+ * The widest the primary sidebar can actually reach right now — which is also
+ * the narrowest the editor (and so the config bar) can be squeezed to.
  *
  * Asking for more than this is worse than being clamped: WorkbenchLayout's
  * programmatic resize computes `center = total − targetSidebar − targetSecondary`
@@ -99,7 +110,7 @@ const WIDE_SLACK_PX = 80
  * the request as if it had landed. Derived from the live window so it holds on
  * the ~1024-wide Windows CI runner as well as on a 1280-wide dev machine.
  */
-async function computeWideSize(page: Page): Promise<number> {
+async function computeMaxSidebarSize(page: Page): Promise<number> {
   const innerWidth = await page.evaluate(() => window.innerWidth)
   return Math.min(SIDEBAR_MAX, innerWidth - ACTIVITY_BAR - EDITOR_MIN)
 }
@@ -142,32 +153,31 @@ async function measureConfigBar(page: Page): Promise<ConfigBarMetrics> {
 }
 
 /**
- * Resize the secondary sidebar and wait for the change to actually reach the DOM.
+ * Resize the primary sidebar and wait for the change to actually reach the DOM.
  *
  * The service value is NOT the signal: it stores the request verbatim, and an
- * over-ask that WorkbenchLayout dropped (see computeWideSize) reads back as if
- * it had applied. So assert on the pane's real width — that is the only value
- * the config bar downstream actually sees — and only then wait for the bar's own
- * relayout (Allotment settles after the service value, and the overflow
- * re-measure runs in a rAF after that).
+ * over-ask that WorkbenchLayout dropped (see computeMaxSidebarSize) reads back as
+ * if it had applied. So assert on the pane's real width — that is the only value
+ * the editor pane (and so the config bar) downstream actually sees — and only
+ * then wait for the bar's own relayout (Allotment settles after the service
+ * value, and the overflow re-measure runs in a rAF after that).
  */
-async function resizeSecondarySidebar(page: Page, size: number): Promise<void> {
-  await page.evaluate((value) => window.__E2E__!.setLayoutSize('secondarySidebar', value), size)
+async function resizeSidebar(page: Page, size: number): Promise<void> {
+  await page.evaluate((value) => window.__E2E__!.setLayoutSize('sidebar', value), size)
   await expect
-    .poll(() => secondarySidebarDomWidth(page), {
+    .poll(() => sidebarDomWidth(page), {
       timeout: 5000,
-      message: `secondarySidebar should reach ${size}px in the DOM`,
+      message: `primary sidebar should reach ${size}px in the DOM`,
     })
     .toBeCloseTo(size, -1)
   await waitForConfigBarDomSettle(page)
 }
 
-/** The secondary sidebar pane's real laid-out width. */
-async function secondarySidebarDomWidth(page: Page): Promise<number> {
+/** The primary sidebar pane's real laid-out width. */
+async function sidebarDomWidth(page: Page): Promise<number> {
   return page.evaluate(
     () =>
-      document.querySelector('[data-testid="part-secondarysidebar"]')?.getBoundingClientRect()
-        .width ?? -1,
+      document.querySelector('[data-testid="part-sidebar"]')?.getBoundingClientRect().width ?? -1,
   )
 }
 
@@ -177,27 +187,29 @@ async function secondarySidebarDomWidth(page: Page): Promise<number> {
  *
  * The bar cannot be sized directly and its width does NOT track the sidebar 1:1:
  * it is `flex: 1 1 auto` in a row shared with the send button, usage indicators
- * and so on, several of which also flex, so a 100px narrower sidebar takes some
+ * and so on, several of which also flex, so a 100px wider sidebar takes some
  * other amount off the bar. Rather than model that, measure and correct — which
  * stays true whatever else lands in that row later.
  *
- * `maxSize` is the caller's reachable ceiling (computeWideSize), not SIDEBAR_MAX:
- * correcting past it would be dropped outright rather than clamped.
+ * The correction is INVERTED relative to the sidebar: a wider sidebar means a
+ * narrower editor, hence a narrower bar. `maxSidebarSize` is the caller's
+ * reachable ceiling (computeMaxSidebarSize), not SIDEBAR_MAX: correcting past it
+ * would be dropped outright rather than clamped.
  */
 async function resizeToConfigBarWidth(
   page: Page,
   targetClientWidth: number,
-  maxSize: number,
+  maxSidebarSize: number,
 ): Promise<number> {
-  let size = Math.round(await secondarySidebarDomWidth(page))
+  let size = Math.round(await sidebarDomWidth(page))
   let measured = (await measureConfigBar(page)).clientWidth
   for (let i = 0; i < 5 && Math.abs(measured - targetClientWidth) > 2; i++) {
     const next = Math.round(
-      Math.min(maxSize, Math.max(NARROW_SIZE, size + (targetClientWidth - measured))),
+      Math.min(maxSidebarSize, Math.max(WIDE_SIZE, size + (measured - targetClientWidth))),
     )
     if (next === size) break // clamped at a bound — as close as this layout gets
     size = next
-    await resizeSecondarySidebar(page, size)
+    await resizeSidebar(page, size)
     measured = (await measureConfigBar(page)).clientWidth
   }
   return measured
@@ -238,25 +250,6 @@ test.describe('@p1 agents config bar overflow', () => {
     // before driving the layout (mirrors smoke.agentsMcpDraft).
     await workbench.waitForBootstrapFocusSettled()
 
-    // Dock the chat into the secondary sidebar (the config bar lives in the
-    // prompt input, so the sidebar layout is what constrains its width).
-    await page.evaluate(() =>
-      window.__E2E__!.updateConfigValue('acp.chat.enableSidebarLocation', true),
-    )
-    await expect
-      .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('acpChatSidebarEnabled')), {
-        timeout: 5000,
-      })
-      .toBe(true)
-    await page.evaluate(
-      () => void window.__E2E__!.runCommand('workbench.action.agent.toggleChatLocation'),
-    )
-    await expect
-      .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('acpChatLocation')), {
-        timeout: 5000,
-      })
-      .toBe('sidebar')
-
     // Echo agent advertising six select config options.
     await page.evaluate(([id, p, e]) => window.__E2E__!.installAcpEchoAgent(id, p, e), [
       'echo',
@@ -276,16 +269,17 @@ test.describe('@p1 agents config bar overflow', () => {
     await expect(page.getByTestId('acp-prompt-drop-host')).toBeVisible({ timeout: 10000 })
     await expect(page.getByTestId('acp-config-model-trigger')).toBeAttached({ timeout: 5000 })
 
-    // Hide the primary sidebar so the secondary one can reach SIDEBAR_MAX: with
-    // both visible the secondary caps at 1232 − 240 − EDITOR_MIN, which leaves
-    // too little slack to be font-independent.
-    await page.evaluate(
-      () => void window.__E2E__!.runCommand('workbench.action.toggleSidebarVisibility'),
-    )
+    // Park the secondary sidebar out of the way: it takes width from the editor
+    // too, and only the primary one is the lever below, so leaving it up would
+    // shrink the very width the wide step's premise depends on. The fixture
+    // reseeds userData before every test, so it starts hidden — hence the
+    // read-then-fire shape (same as smoke.editorGroupResize's ensureSideBarHidden)
+    // rather than either a blind toggle or an assumption stated in a comment.
     await expect
-      .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('sideBarVisible')), {
-        timeout: 5000,
-        message: 'primary sidebar should hide',
+      .poll(async () => {
+        const visible = await workbench.getContextKey<boolean>('secondarySideBarVisible')
+        if (visible) await workbench.runCommand('workbench.action.toggleSecondarySidebarVisibility')
+        return visible
       })
       .toBe(false)
 
@@ -306,13 +300,12 @@ test.describe('@p1 agents config bar overflow', () => {
       .poll(() => page.evaluate(() => window.__E2E__!.getAcpSessionStatus()), { timeout: 10000 })
       .toBe('idle')
 
-    // Wide sidebar → nothing overflows, the "…" button sits in its empty
+    // Wide prompt input → nothing overflows, the "…" button sits in its empty
     // state. The attribute (not visibility) is the signal: the empty button
-    // is hidden via CSS and toBeVisible() would misjudge it. The target comes
-    // from the live window (see computeWideSize) — SIDEBAR_MAX is unreachable
-    // on a narrow display and over-asking is dropped, not clamped.
-    const wideSize = await computeWideSize(page)
-    await resizeSecondarySidebar(page, wideSize)
+    // is hidden via CSS and toBeVisible() would misjudge it. The target is
+    // SIDEBAR_MIN — the narrowest the primary sidebar goes, so the widest the
+    // editor gets while that sidebar stays available as the lever below.
+    await resizeSidebar(page, WIDE_SIZE)
 
     // Measure the natural widths the packing consumes — valid in any overflow
     // state, since overflowed entries stay mounted and keep their natural
@@ -335,38 +328,25 @@ test.describe('@p1 agents config bar overflow', () => {
     // reads like broken packing. The message reports the sidebar's requested
     // AND real width: if a future layout change starts clamping the request
     // instead of dropping it, the two diverge and that is worth seeing.
-    const wideDomWidth = Math.round(await secondarySidebarDomWidth(page))
+    const wideDomWidth = Math.round(await sidebarDomWidth(page))
     expect(
       wide.clientWidth,
-      `wide-step premise: ${inlineTotal}px of entries + ${WIDE_SLACK_PX}px slack must fit the bar's ${wide.clientWidth}px (secondary sidebar ${wideSize}px requested / ${wideDomWidth}px actual)`,
+      `wide-step premise: ${inlineTotal}px of entries + ${WIDE_SLACK_PX}px slack must fit the bar's ${wide.clientWidth}px (primary sidebar ${WIDE_SIZE}px requested / ${wideDomWidth}px actual)`,
     ).toBeGreaterThanOrEqual(inlineTotal + WIDE_SLACK_PX)
 
     await expect(overflowTrigger(page)).toHaveAttribute('data-empty', 'true', { timeout: 5000 })
 
-    // SIDEBAR_MIN (170px): the line leaves ~40px, so even the first (model)
-    // entry cannot fit and the whole bar overflows. Direction-safe on any
-    // platform — wider fonts only overflow harder.
-    await resizeSecondarySidebar(page, NARROW_SIZE)
-    await expect(overflowTrigger(page)).not.toHaveAttribute('data-empty', 'true', {
-      timeout: 5000,
-    })
-    await expect(inlineEntry(page, 'model')).toHaveAttribute('data-overflowed', 'true', {
-      timeout: 5000,
-    })
-    await expect(inlineEntry(page, 'style')).toHaveAttribute('data-overflowed', 'true', {
-      timeout: 5000,
-    })
-
-    // The priority split: wide enough for the highest-priority model entry to
-    // keep its inline slot, too narrow for the low-priority tail. The two
-    // bounds (from splitConfigBarOverflow) are
+    // The priority split: a sidebar narrow enough that the editor leaves the
+    // highest-priority model entry its inline slot but not the low-priority
+    // tail. The two bounds (from splitConfigBarOverflow) are
     //   lower = model + gap + button   (model alone fits, with the button in flow)
     //   upper = inlineTotal            (everything fits, button out of flow)
     // Aiming at their midpoint leaves equal slack on both sides, so neither
     // assertion depends on platform font metrics.
+    const maxSidebarSize = await computeMaxSidebarSize(page)
     const lower = wide.entryWidths['model']! + wide.gap + wide.buttonWidth
     const midClientWidth = Math.round((lower + inlineTotal) / 2)
-    const reached = await resizeToConfigBarWidth(page, midClientWidth, wideSize)
+    const reached = await resizeToConfigBarWidth(page, midClientWidth, maxSidebarSize)
     // Both assertions below are only meaningful inside (lower, upper); if the
     // layout could not deliver that, say so instead of failing cryptically.
     const midRange = `midpoint unreachable: layout delivered a ${reached}px bar, need (${lower}, ${inlineTotal})px`
@@ -397,11 +377,12 @@ test.describe('@p1 agents config bar overflow', () => {
       timeout: 5000,
     })
 
-    // Widen back: every entry returns inline, the "…" button empties again
-    // and the open panel dismisses itself (no overflow left to show). The
-    // picked label is wider than the one measured above, which is exactly why
-    // this step goes back to the full reachable width rather than to `wide`.
-    await resizeSecondarySidebar(page, wideSize)
+    // Widen back to the widest the editor gets (SIDEBAR_MIN): every entry
+    // returns inline, the "…" button empties again and the open panel
+    // dismisses itself (no overflow left to show). The picked label is wider
+    // than the one measured above, which is exactly why this step goes back to
+    // the full reachable width rather than to the midpoint.
+    await resizeSidebar(page, WIDE_SIZE)
     await expect(overflowTrigger(page)).toHaveAttribute('data-empty', 'true', { timeout: 5000 })
     await expect(inlineEntry(page, 'model')).not.toHaveAttribute('data-overflowed', 'true', {
       timeout: 5000,

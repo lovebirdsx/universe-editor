@@ -3,8 +3,6 @@ import {
   CommandsRegistry,
   IEditorGroupsService,
   IInstantiationService,
-  ILayoutService,
-  IViewsService,
   ServiceCollection,
   observableValue,
   registerAction2,
@@ -17,7 +15,6 @@ import {
   type IAcpSession,
 } from '../../services/acp/session/acpSessionService.js'
 import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
-import { IAcpChatLocationService } from '../../services/acp/session/acpChatLocationService.js'
 import { IAcpChatWidgetService } from '../../services/acp/session/acpChatWidgetService.js'
 import { AcpSessionEditorInput } from '../../services/acp/session/acpSessionEditorInput.js'
 import { AcpPromptTextInbox } from '../../services/acp/session/acpPromptTextInbox.js'
@@ -49,7 +46,6 @@ describe('SendCommitToAgentChatAction', () => {
     arg: unknown,
     activeSession: IAcpSession | undefined,
     overrides?: {
-      location?: 'editor' | 'sidebar'
       groups?: IEditorGroupsService
       sessionsById?: (id: string) => IAcpSession | undefined
     },
@@ -67,24 +63,11 @@ describe('SendCommitToAgentChatAction', () => {
       _serviceBrand: undefined,
       defaultAgentId: () => 'claude',
     } as unknown as IAcpAgentRegistry)
-    services.set(IAcpChatLocationService, {
-      _serviceBrand: undefined,
-      location: observableValue<'editor' | 'sidebar'>('t.loc', overrides?.location ?? 'sidebar'),
-    } as unknown as IAcpChatLocationService)
     services.set(IAcpChatWidgetService, {
       _serviceBrand: undefined,
       focusSessionInput,
       focusSession: vi.fn(),
     } as unknown as IAcpChatWidgetService)
-    services.set(ILayoutService, {
-      _serviceBrand: undefined,
-      getVisible: () => true,
-      toggleVisible: vi.fn(),
-    } as unknown as ILayoutService)
-    services.set(IViewsService, {
-      _serviceBrand: undefined,
-      openViewContainer: vi.fn().mockResolvedValue(undefined),
-    } as unknown as IViewsService)
     services.set(IEditorGroupsService, overrides?.groups ?? noopGroups())
     services.set(IInstantiationService, {
       _serviceBrand: undefined,
@@ -131,10 +114,7 @@ describe('SendCommitToAgentChatAction', () => {
       activateGroup,
     } as unknown as IEditorGroupsService
 
-    await runAction({ hash: 'abc1234def', message: 'fix' }, session, {
-      location: 'editor',
-      groups,
-    })
+    await runAction({ hash: 'abc1234def', message: 'fix' }, session, { groups })
 
     expect(activateGroup).toHaveBeenCalledWith(otherGroup)
     expect(setActive).toHaveBeenCalledWith(existing)
@@ -155,7 +135,6 @@ describe('SendCommitToAgentChatAction', () => {
     } as unknown as IEditorGroupsService
 
     await runAction({ hash: 'abc1234def', message: 'fix' }, session, {
-      location: 'editor',
       groups,
       sessionsById: (id) => (id === 'sess-1' ? session : undefined),
     })

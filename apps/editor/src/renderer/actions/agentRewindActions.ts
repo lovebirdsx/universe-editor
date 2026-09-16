@@ -25,9 +25,6 @@ import {
   IEditorService,
   IInstantiationService,
   INotificationService,
-  IViewsService,
-  ILayoutService,
-  PartId,
   Severity,
   localize,
   localize2,
@@ -39,7 +36,6 @@ import {
   type AcpMessage,
   type RewindFilesResult,
 } from '../services/acp/session/acpSessionService.js'
-import { IAcpChatLocationService } from '../services/acp/session/acpChatLocationService.js'
 import { AcpSessionEditorInput } from '../services/acp/session/acpSessionEditorInput.js'
 import { AcpPromptReplaceInbox } from '../services/acp/session/acpPromptReplaceInbox.js'
 import { CATEGORY } from './_agentShared.js'
@@ -184,11 +180,8 @@ export class ForkAgentSessionAction extends Action2 {
   override async run(accessor: ServicesAccessor, arg?: RewindForkArg): Promise<void> {
     const sessions = accessor.get(IAcpSessionService)
     const notification = accessor.get(INotificationService)
-    const location = accessor.get(IAcpChatLocationService)
     const editor = accessor.get(IEditorService)
     const inst = accessor.get(IInstantiationService)
-    const layout = accessor.get(ILayoutService)
-    const views = accessor.get(IViewsService)
 
     // The arg carries an explicit target (per-message hover button, timeline-end
     // footer); a bare invocation (command palette) forks the active session.
@@ -236,15 +229,9 @@ export class ForkAgentSessionAction extends Action2 {
       return
     }
 
-    if (location.location.get() === 'editor') {
-      editor.openEditor(
-        inst.createInstance(AcpSessionEditorInput, forked.id, forked.agentId, undefined),
-      )
-    } else {
-      sessions.setActive(forked.id)
-      if (!layout.getVisible(PartId.SecondarySideBar)) layout.toggleVisible(PartId.SecondarySideBar)
-      await views.openViewContainer('workbench.view.sessions')
-    }
+    editor.openEditor(
+      inst.createInstance(AcpSessionEditorInput, forked.id, forked.agentId, undefined),
+    )
   }
 }
 

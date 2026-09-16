@@ -242,8 +242,8 @@ export class OutlineService extends Disposable implements IOutlineService {
     )
 
     // The agent-session ChatBody mounts asynchronously after its editor input
-    // becomes active (and re-mounts on chat-location swaps); its outline
-    // controller registers once the DOM is ready, so re-attach when it appears.
+    // becomes active; its outline controller registers once the DOM is ready,
+    // so re-attach when it appears.
     this._register(
       AcpSessionOutlineRegistry.onDidChange((sessionId) => {
         if (this._currentSession && sessionId === this._currentSession.sessionId) {
