@@ -52,7 +52,7 @@
 - [远程开发 v2 全栈](remote-dev-v2-full-stack.md) — daemon+TCP+PersistentProtocol；exthost/ACP 迁远端；host 内须 JSON codec；WSL 实机验收坑；协议 bump 须纳入 daemon 自愈
 - [远程 agent binary 受管下载](remote-agent-binary-managed-download.md) — AgentBinaryStore 沉 node-services 双端共享+AgentBinary channel；store 须按版本并发去重（forceDownload 不得删目录重下）；保留集 {active,bundled,.latest} 永不联网、空 keep-set = 全删；下载状态须在 store（面板常驻订阅）否则切走再回来丢进度；预下载须门控 connected
 - [Remote Explorer 单 Targets 树](remote-explorer-merged-targets-tree.md) — 4 view 合一+buildRemoteTree 纯函数；连接双条根因=WSL authority 大小写未归一化
-- [AI Settings 远程路由修复](agent-settings-remote-authority-routing.md) — authority 须订阅 onDidChangeWorkspace 勿 useMemo 读 current；useRemoteAuthority hook；协议匹配只回 index 不回秘密
+- [AI Settings / home 远程路由修复](agent-settings-remote-authority-routing.md) — authority 须订阅 onDidChangeWorkspace 勿 useMemo 读 current；useRemoteAuthority/useWorkspaceHome hook；`~` 用 host home 勿用客户端 ipc.home；协议匹配只回 index 不回秘密
 - [远程连接安装过程透明化](remote-connect-progress-transparency.md) — progress 事件复用 onDidChangeState；坑=状态栏须回退 in-flight authority
 - [插件↔编辑器版本依赖契约](extension-editor-version-contract.md) — engines=编辑器版本，不兼容=禁用+通知/市场选版/发布拦截；大坑=main 取版本一律走 getAppVersion()
 - [ext-host 无声失败治理](extension-host-silent-failure-hardening.md) — 激活期 getActiveTextEditor 立即 undefined+订阅补发+rejection 上浮；原则=API getter 永不无限挂起

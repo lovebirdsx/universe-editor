@@ -154,6 +154,14 @@ describe('markdownLinkCandidates', () => {
       expect(c[2]?.scheme).toBe('remote-ssh')
       expect(c[2]?.path).toBe('/home/dev/Universe%20Editor/a.ts')
     })
+
+    it('expands ~ to the remote home and inherits the remote authority', () => {
+      const c = markdownLinkCandidates('~/.claude/plans/x.md', remoteRoot, remoteRoot, '/home/dev')
+      expect(c.map((u) => u.toString())).toEqual([
+        'remote-ssh://wsl+Ubuntu/home/dev/.claude/plans/x.md',
+        'file:///home/dev/.claude/plans/x.md',
+      ])
+    })
   })
 })
 

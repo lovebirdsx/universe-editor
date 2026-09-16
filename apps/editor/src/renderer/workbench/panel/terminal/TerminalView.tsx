@@ -4,9 +4,9 @@ import 'allotment/dist/style.css'
 import { ILayoutService, IWorkspaceService, PartId, localize } from '@universe-editor/platform'
 import { ITerminalManagerService } from '../../../services/terminal/TerminalManagerService.js'
 import { useService, useObservable } from '../../useService.js'
+import { useWorkspaceHome } from '../../useWorkspaceHome.js'
 import { TerminalInstance } from './TerminalInstance.js'
 import { useResolveTerminalFile, useOpenTerminalFile } from './useTerminalOpenFile.js'
-import { useTerminalHome } from './useTerminalHome.js'
 import '../../layout/allotment-theme.css'
 import styles from './TerminalView.module.css'
 
@@ -46,7 +46,8 @@ export function TerminalView() {
 
   const resolveFile = useResolveTerminalFile()
   const openFile = useOpenTerminalFile()
-  const home = useTerminalHome()
+  // pty 在远端 spawn，链接里的 `~` 须展开为远端 host 的 home。
+  const { home } = useWorkspaceHome()
 
   // 本地工作区 fsPath 是本机路径；remote 工作区 folder.fsPath 即远端 POSIX 路径（pty 在远端 spawn），同样正确。
   const cwd = workspaceService.current?.folder.fsPath ?? ''

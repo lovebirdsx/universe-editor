@@ -2,11 +2,11 @@ import { IEditorInput, IWorkspaceService } from '@universe-editor/platform'
 import { TerminalEditorInput } from '../../services/editor/TerminalEditorInput.js'
 import { TerminalInstance } from '../panel/terminal/TerminalInstance.js'
 import { useService, useObservable } from '../useService.js'
+import { useWorkspaceHome } from '../useWorkspaceHome.js'
 import {
   useResolveTerminalFile,
   useOpenTerminalFile,
 } from '../panel/terminal/useTerminalOpenFile.js'
-import { useTerminalHome } from '../panel/terminal/useTerminalHome.js'
 import styles from './TerminalEditorView.module.css'
 
 export function TerminalEditorView({ input }: { input: IEditorInput }) {
@@ -20,7 +20,8 @@ function TerminalEditorBody({ input }: { input: TerminalEditorInput }) {
   const workspaceService = useService(IWorkspaceService)
   const resolveFile = useResolveTerminalFile()
   const openFile = useOpenTerminalFile()
-  const home = useTerminalHome()
+  // pty 在远端 spawn，链接里的 `~` 须展开为远端 host 的 home。
+  const { home } = useWorkspaceHome()
   const terminalId = useObservable(input.terminalId)
 
   // 本地工作区 fsPath 是本机路径；remote 工作区 folder.fsPath 即远端 POSIX 路径（pty 在远端 spawn），同样正确。

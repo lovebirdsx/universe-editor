@@ -16,7 +16,7 @@
  *  non-markdown files, always open the source editor as before.
  *--------------------------------------------------------------------------------------------*/
 
-import { useCallback, useMemo, useRef } from 'react'
+import { useCallback, useRef } from 'react'
 import {
   IEditorGroupsService,
   IEditorResolverService,
@@ -42,6 +42,7 @@ import { IExcludeService } from '../../services/exclude/ExcludeService.js'
 import { IQuickAccessController } from '../../services/quickInput/QuickAccessController.js'
 import { stripFilePathLinkPrefix } from '../../services/acp/filePathLink.js'
 import { useOptionalService } from '../useService.js'
+import { useWorkspaceHome } from '../useWorkspaceHome.js'
 import { markdownLinkCandidates, searchPatternFor } from './markdownLinkResolve.js'
 
 const CACHE_TTL = 10_000
@@ -105,12 +106,10 @@ export function useMarkdownFileLink(
   const quickAccess = useOptionalService(IQuickAccessController)
   const cache = useRef(new Map<string, CacheEntry>())
   const inflight = useRef(new Map<string, Promise<Resolution>>())
-  // Home directory for `~` expansion, from the preload bridge (os.homedir()).
-  // Stable for the session; guarded for happy-dom tests where window.ipc is absent.
-  const homeDir = useMemo(() => {
-    const ipc = typeof window !== 'undefined' ? window.ipc : undefined
-    return typeof ipc?.home === 'string' && ipc.home.length > 0 ? ipc.home : undefined
-  }, [])
+  // Home for `~` expansion on the host the link lives on. `window.ipc.home` is the
+  // *client's* os.homedir() — in a remote workspace the path belongs to the
+  // remote host, so the home has to come from the workspace's authority.
+  const { home: homeDir, resolveHome } = useWorkspaceHome(baseUri)
 
   const resolve = useCallback(
     (rawPath: string): Promise<Resolution> => {
@@ -124,12 +123,16 @@ export function useMarkdownFileLink(
 
       const promise = (async (): Promise<Resolution> => {
         const workspaceRoot = workspaceService?.current?.folder
+        // The remote home arrives with the handshake, which may still be in
+        // flight — expand `~` with the awaited answer rather than letting it
+        // fall through as a relative path (which would miss for sure).
+        const home = homeDir ?? (await resolveHome())
         // 1. Concrete candidates — open the first that exists, no search needed.
         for (const candidate of markdownLinkCandidates(
           normalizedRawPath,
           baseUri,
           workspaceRoot,
-          homeDir,
+          home,
         )) {
           if (await fileService.exists(candidate)) return { kind: 'open', uri: candidate }
         }
@@ -170,7 +173,15 @@ export function useMarkdownFileLink(
       })
       return promise
     },
-    [fileService, fileSearchService, workspaceService, excludeService, baseUri, homeDir],
+    [
+      fileService,
+      fileSearchService,
+      workspaceService,
+      excludeService,
+      baseUri,
+      homeDir,
+      resolveHome,
+    ],
   )
 
   return useCallback(

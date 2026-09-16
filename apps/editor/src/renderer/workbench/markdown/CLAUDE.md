@@ -105,6 +105,7 @@ contributions/MarkdownPasteContribution.ts / MarkdownDropContribution.ts  注册
 14. **成链相对路径基准**（已修勿回退）：用 `dirname(mdUri.fsPath)`（目标文档自身目录）+ platform `relativePath`（允许 `../`）；勿回退工作区根（`relativePathUnder` 爬不出根，目标不在根目录必 404）。
 15. **`.mdAnchor` 必须 `vertical-align: top`**（已修勿回退）：见线② 锚点节；几何不可在 happy-dom 测。
 16. **跨文件锚点挂载期滚动**（已修勿回退）：预览未挂载时 `revealAnchor` 把 fragment 存 `MarkdownPreviewViewStateCache.saveRevealAnchor` one-shot（与 revealLine 互斥），restore effect 按 **anchor > revealLine > saved scrollTop** 决策；**新的挂载期滚动意图必须并入此 one-shot 通道，勿旁路**（600ms 窗口内 scroll-restore 反复 re-apply 会拉回 saved 位置）。
+17. **`~` 按 host 展开**（已修勿回退）：remote 工作区的 `~/…` 属于**远端** home（由远端进程写出），收口在 `renderer/workbench/useWorkspaceHome.ts`，点击用 `resolveHome()`；勿回退 `window.ipc.home`（客户端 home，remote 下必报 "File does not exist"）。
 
 ## 验证
 
