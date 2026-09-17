@@ -17,6 +17,10 @@ import { IViewsService } from '@universe-editor/platform'
 import { ViewsService } from '../../../services/views/ViewsService.js'
 import { ViewDescriptorService } from '../../../services/views/ViewDescriptorService.js'
 import { ViewComponentRegistry } from '../../../services/views/ViewComponentRegistry.js'
+import {
+  IViewPaneResizeRegistry,
+  ViewPaneResizeRegistry,
+} from '../../../services/views/viewPaneResizeRegistry.js'
 import { ServicesContext } from '../../useService.js'
 import { PaneCompositePart } from '../../paneComposite/PaneCompositePart.js'
 import { sideBarConfig } from '../../paneComposite/paneCompositeConfigs.js'
@@ -98,13 +102,15 @@ function renderSideBar(
   const viewsService = new ViewsService(makeStorage(), stubWorkspace, viewDescriptorService)
   viewsService.openViewContainer(CONTAINER_ID)
   services.set(IViewsService, viewsService)
+  const resizeRegistry = new ViewPaneResizeRegistry()
+  services.set(IViewPaneResizeRegistry, resizeRegistry)
   const inst = new InstantiationService(services)
   const result = render(
     <ServicesContext.Provider value={inst}>
       <PaneCompositePart part={undefined} config={sideBarConfig} />
     </ServicesContext.Provider>,
   )
-  return { viewDescriptorService, ...result }
+  return { viewDescriptorService, resizeRegistry, ...result }
 }
 
 describe('ViewPaneContainer', () => {
@@ -202,6 +208,59 @@ describe('ViewPaneContainer', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('resizes a view pane through the registry, trading with its neighbour', () => {
+    const { resizeRegistry } = renderSideBar()
+    act(() => fireLastResizeObserver(800, 600))
+    expect(paneHeightPx('test.view.a')).toBe(300)
+
+    let handled = false
+    act(() => {
+      handled = resizeRegistry.resize('test.view.a', 50)
+    })
+
+    expect(handled).toBe(true)
+    expect(paneHeightPx('test.view.a')).toBe(350)
+    expect(paneHeightPx('test.view.b')).toBe(250)
+  })
+
+  it('persists a keyboard resize as the user action it is', () => {
+    const { resizeRegistry, viewDescriptorService } = renderSideBar()
+    act(() => fireLastResizeObserver(800, 600))
+    act(() => {
+      resizeRegistry.resize('test.view.a', 50)
+    })
+
+    expect(viewDescriptorService.getPersistedViewSize('test.view.a')).toBe(350)
+    expect(viewDescriptorService.getPersistedViewSize('test.view.b')).toBe(250)
+  })
+
+  it('keeps a collapsed sibling out of the resize and stops when nothing can move', () => {
+    const { resizeRegistry, viewDescriptorService } = renderSideBar()
+    act(() => fireLastResizeObserver(800, 600))
+    act(() => viewDescriptorService.setViewCollapsed('test.view.b', true))
+    const openHeight = paneHeightPx('test.view.a')
+
+    let handled = true
+    act(() => {
+      handled = resizeRegistry.resize('test.view.a', 50)
+    })
+
+    expect(handled).toBe(false)
+    expect(paneHeightPx('test.view.a')).toBe(openHeight)
+    expect(paneHeightPx('test.view.b')).toBe(28)
+    // The collapsed pane's remembered expanded size survives the no-op.
+    expect(viewDescriptorService.getViewState('test.view.b').size).toBeGreaterThan(28)
+  })
+
+  it('stops routing resize requests after unmount', () => {
+    const { resizeRegistry, unmount } = renderSideBar()
+    act(() => fireLastResizeObserver(800, 600))
+
+    unmount()
+
+    expect(resizeRegistry.resize('test.view.a', 50)).toBe(false)
   })
 
   it('does not resize against a remounted Allotment whose panes are not reconciled yet', () => {

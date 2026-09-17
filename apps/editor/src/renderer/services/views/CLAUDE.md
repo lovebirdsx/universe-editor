@@ -52,7 +52,7 @@ UI 层（全部经 useViewDescriptors() 订阅 version 后再 re-query，五件�
 | `ActivityBar.tsx`（workbench/activitybar/） | SideBar 区容器图标：点选激活；图标拖拽重排（`moveContainerInLocation`）；接收 view 投放（`moveViewsToContainer`） |
 | `PaneCompositePart.tsx`（workbench/paneComposite/） | 某 location 活跃容器的内容宿主：`content==='stack'` → `ViewPaneContainer`；否则 `TiledViews` |
 | `PaneCompositeHeader.tsx`（workbench/paneComposite/） | SecondarySideBar/Panel 区容器标签条 |
-| `ViewPaneContainer.tsx`（workbench/sidebar/） | 容器内多 view 纵向 `Allotment`：折叠 `getViewState/setViewCollapsed`；尺寸 `onChange`→`setViewSizes`（记账）、`onDragEnd`→`{persist:true}`；`moveHere` 跨容器+容器内重排；整容器是「合并」放置区（`data-container-drop`），单 view 精细插入留给各 ViewPane；`draggable={v.canMoveView !== false}` |
+| `ViewPaneContainer.tsx`（workbench/sidebar/） | 容器内多 view 纵向 `Allotment`：折叠/尺寸/键盘 resize 见下方「尺寸持久化」节；`moveHere` 跨容器+容器内重排；整容器是「合并」放置区（`data-container-drop`），单 view 精细插入留给各 ViewPane；`draggable={v.canMoveView !== false}` |
 | `ViewPane.tsx`（workbench/sidebar/） | 单 view 面板：拖源（写 `viewDragData` + `setData(VIEW_DRAG_MIME)`）；放置目标（hit-test clientY vs 中点得 dropEdge 'before'/'after'） |
 
 CSS 状态类在 `ViewPane.module.css` / `PaneComposite.module.css`（`.mergeOverlay` 容器级合并高亮）/ `ActivityBar.module.css`。
@@ -85,14 +85,14 @@ HTML5 DnD 的 **dragover 阶段读不到 `dataTransfer` payload**（只在 drop 
 - **改持久化内容（多存一个 per-view 字段）**：`IViewState` 加字段 → `getViewState/set*` + `PersistedCustomizations` 序列化往返 → 单测加 round-trip。
 - **改 view 移动命令交互**：`actions/viewActions.ts`（QuickPick 流程）；标题栏 action 拿 viewId 看 `ViewTitleActions.tsx` 的 context key 传参。
 - **某 view 不该被拖走**：注册描述符设 `canMoveView: false`（静态层），UI 的 `draggable` 与命令目标过滤都已尊重它。
-- **加新 View/Container**：套路 B 三件套，**不是**这个 service 的事。
 - **生成容器图标不对**：`workbench/activitybar/icon-map.ts`（`window: AppWindow`）/ `icons/icon-map.ts`。
 
 ## 尺寸持久化与折叠语义（对标 VSCode SplitView）
 
-多 view 容器（`ViewPaneContainer.tsx`）尺寸机制，纯函数在 `services/views/viewPaneLayout.ts`（`VIEW_HEADER_SIZE=28`/`VIEW_OPEN_MIN=88`、`computeToggleSizes`、`initialPaneSize`）：
+多 view 容器（`ViewPaneContainer.tsx`）尺寸机制，纯函数在 `services/views/viewPaneLayout.ts`（`VIEW_HEADER_SIZE=28`/`VIEW_OPEN_MIN=88`、`computeToggleSizes`、`computeResizeSizes`、`initialPaneSize`）：
 
-- **落盘权收窄到用户动作**：`setViewSizes(sizes,{persist?})` 默认**只更新内存**（布局记账），`persist:true` 才落盘。`onChange` 全走记账（首布局等分/容器 resize/程序化纠正永不落盘，见案例 50b）；`onDragEnd`（sash 拖拽）与 collapse 的 remembered size 走 `persist:true`。
+- **落盘权收窄到用户动作**：`setViewSizes(sizes,{persist?})` 默认**只更新内存**（布局记账），`persist:true` 才落盘。`onChange` 全走记账（首布局等分/容器 resize/程序化纠正永不落盘，见案例 50b）；`onDragEnd`（sash 拖拽）、collapse 的 remembered size 与**键盘 resize** 走 `persist:true`。
+- **键盘 resize（ctrl+alt+shift+上下）**：焦点在 view 上时调整该 pane 的高度（借用/归还邻居空间）。链路、借还语义与坑见 [cases-keyboard-resize.md](cases-keyboard-resize.md)。
 - **persisted/mem 双轨制**：`_persistedSizes` 是权威源（只被 reconcile/persist:true 写），`_viewStates.size` 只是记账。**所有「恢复目标」读 `getPersistedViewSize()`**（含 `save()` 序列化）——读脏 mem 会把布局噪声当真值锁死（案例 50c）。
 - **reconcile 迟到的校正**：Allotment 挂载后 `preferredSize` 是 no-op（pane 构造时冻结 layoutStrategy）；`RECONCILE_GRACE_MS`(600ms) 窗口内**每次** onChange 都 `correctToStoredSizes`（贪心重分配可再次落进来），窗口外靠 `storedSizesKey` effect。防自激：`sashDraggingRef` / collapsed 跳过 / `correctingRef` 重入 / `deficit<0` 跳过（装不下会无限同步递归）。
 - **挂载恢复**：`preferredSize` = 折叠→28 / 展开→持久化 `size`（clamp ≥ OPEN_MIN）/ 无存储→不传（Allotment 等分）；重挂载（重排/移入移出/切容器）同理。
@@ -121,10 +121,13 @@ HTML5 DnD 的 **dragover 阶段读不到 `dataTransfer` payload**（只在 drop 
 cd apps/editor && pnpm vitest run --project renderer \
   src/renderer/services/views/__tests__/ViewDescriptorService.test.ts \
   src/renderer/services/views/__tests__/ViewsService.test.ts \
+  src/renderer/services/views/__tests__/viewPaneLayout.test.ts \
+  src/renderer/workbench/sidebar/__tests__/ViewPaneContainer.test.tsx \
   src/renderer/workbench/panel/__tests__/Panel.test.tsx
 pnpm check
 pnpm --filter @universe-editor/editor build         # e2e 跑 out/ 产物
 cd apps/editor && pnpm exec playwright test specs/smoke.viewMove.spec.ts   # @p0 移动+重载持久化往返
+cd apps/editor && pnpm exec playwright test specs/smoke.viewSizes.spec.ts  # @p0 尺寸持久化 + 键盘 resize
 ```
 
 **e2e 探针**（`contract.ts` + `renderer/e2e/probe.ts`，委托 `viewDescriptorService`）：`getViewContainerByViewId` / `getViewIdsByContainer` / `getViewContainerIdsByLocation` / `moveViewsToContainer` / `moveViewToLocation` / `moveViewContainerToLocation` / `getViewCollapsed` / `setViewCollapsed` / `getViewSize` / `flushViewCustomizationsSave` / `resetViewLocations`——**绕开 DnD 鼠标几何**直驱 service，测「数据模型+持久化」主链路；`smoke.viewMove.spec.ts` 与 `smoke.viewSizes.spec.ts` 走此探针。

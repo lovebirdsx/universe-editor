@@ -11,11 +11,13 @@ import { Allotment, type AllotmentHandle } from 'allotment'
 import 'allotment/dist/style.css'
 import type { IViewDescriptor } from '@universe-editor/platform'
 import { ViewPane } from './ViewPane.js'
+import { useViewPaneResize } from './useViewPaneResize.js'
 import {
   ViewToolbarRegistry,
   type IViewComponentProps,
 } from '../../services/views/ViewComponentRegistry.js'
 import {
+  computeResizeSizes,
   computeToggleSizes,
   initialPaneSize,
   VIEW_HEADER_SIZE as HEADER_H,
@@ -70,6 +72,41 @@ export function ViewPaneContainer({
 
   const collapsed = (id: string) => viewDescriptors.getViewState(id).collapsed === true
   const toggle = (id: string) => viewDescriptors.setViewCollapsed(id, !collapsed(id))
+
+  // Keyboard resize (ctrl+alt+shift+arrows) arrives through
+  // IViewPaneResizeRegistry: the focused pane trades pixels with its *expanded*
+  // neighbours (see viewPaneLayout.computeResizeSizes). A collapsed pane is
+  // pinned to its header by Allotment, so it takes no part in either the
+  // arithmetic or the persisted set.
+  const resizeHandler = (viewId: string, deltaPx: number): boolean => {
+    const handle = allotmentRef.current
+    const sizes = sizesRef.current
+    // Geometry not reported yet (fresh mount, or a remount after a reorder).
+    if (!handle || sizes.length !== views.length) return false
+    const resizedIndex = views.findIndex((v) => v.id === viewId)
+    if (resizedIndex < 0) return false
+    const next = computeResizeSizes({
+      sizes,
+      collapsed: views.map((v) => collapsed(v.id)),
+      resizedIndex,
+      deltaPx,
+    })
+    if (!next) return false
+    handle.resize(next)
+    // A keypress is a user action, so it lands on disk (onDragEnd does the same
+    // for a sash drag). Persisting the computed values, not the ones onChange
+    // reports: the report is async in tests, and a collapsed pane reports its
+    // 28px header, which must never overwrite its remembered expanded size.
+    viewDescriptors.setViewSizes(
+      views.flatMap((v, i) => (collapsed(v.id) ? [] : [{ id: v.id, size: next[i] ?? 0 }])),
+      { persist: true },
+    )
+    return true
+  }
+  useViewPaneResize(
+    views.map((v) => v.id),
+    resizeHandler,
+  )
 
   const moveHere = (sourceViewId: string, targetViewId: string, position: 'before' | 'after') => {
     const sourceContainer = viewDescriptors.getViewContainerByViewId(sourceViewId)?.id

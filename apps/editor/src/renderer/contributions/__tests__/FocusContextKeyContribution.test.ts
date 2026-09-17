@@ -147,6 +147,58 @@ describe('FocusContextKeyContribution — per-part keys', () => {
     contribution.dispose()
   })
 
+  it('derives focusedViewPane from the pane root, so the header counts too', () => {
+    const { layout } = makeLayout()
+    const { contribution, context } = makeContribution(layout)
+    const part = new TestPart(PartId.SideBar, 'sidebar', layout)
+
+    // ViewPane marks the whole section with data-view-pane; ViewBody marks only
+    // the content below the header with data-view-id. The resize chord reads the
+    // former — a focus on the collapse chevron or a toolbar button is still
+    // "this view" for sizing — while `focusedView` must stay body-only, since
+    // several views gate their keybindings on it.
+    const pane = document.createElement('section')
+    pane.setAttribute('data-view-pane', 'workbench.view.scm.commitChanges')
+    const chevron = document.createElement('button')
+    pane.appendChild(chevron)
+    const body = document.createElement('div')
+    body.setAttribute('data-view-id', 'workbench.view.scm.commitChanges')
+    const input = document.createElement('input')
+    body.appendChild(input)
+    pane.appendChild(body)
+    mountPart(part, partRoot('part-sidebar', pane))
+
+    chevron.focus()
+    expect(context.get('focusedViewPane')).toBe('workbench.view.scm.commitChanges')
+    expect(context.get('focusedView')).toBe('')
+
+    input.focus()
+    expect(context.get('focusedViewPane')).toBe('workbench.view.scm.commitChanges')
+    expect(context.get('focusedView')).toBe('workbench.view.scm.commitChanges')
+
+    contribution.dispose()
+  })
+
+  it('leaves focusedViewPane empty for a tiled view (the Panel renders no ViewPane)', () => {
+    const { layout } = makeLayout()
+    const { contribution, context } = makeContribution(layout)
+    const part = new TestPart(PartId.Panel, 'panel', layout)
+
+    const view = document.createElement('div')
+    view.setAttribute('data-view-id', 'workbench.view.terminal')
+    const item = document.createElement('button')
+    view.appendChild(item)
+    mountPart(part, partRoot('part-panel', view))
+
+    item.focus()
+    expect(context.get('focusedView')).toBe('workbench.view.terminal')
+    // The panel's views share one rectangle, so none of them owns a pane size:
+    // the vertical chord must keep resizing the panel itself.
+    expect(context.get('focusedViewPane')).toBe('')
+
+    contribution.dispose()
+  })
+
   it('ignores a part-* subtree whose Part is not registered', () => {
     // focusedPart is read off the same loop as the booleans — "whichever
     // xxxFocus is true" — so a Part-shaped element the layout never registered

@@ -6,6 +6,7 @@
 
 import {
   Action2,
+  IContextKeyService,
   IEditorGroupsService,
   ILayoutService,
   IViewsService,
@@ -30,6 +31,7 @@ import {
   PANEL_MAX,
   RESIZE_STEP,
 } from '../services/layout/layoutConstraints.js'
+import { IViewPaneResizeRegistry } from '../services/views/viewPaneResizeRegistry.js'
 
 export class ShowExplorerAction extends Action2 {
   static readonly ID = 'workbench.view.explorer'
@@ -332,6 +334,18 @@ function resizeCenterWidth(layout: ILayoutService, delta: 1 | -1): void {
   }
 }
 
+// A sidebar is a stack of view panes, so the vertical axis belongs to the view
+// the focus sits in rather than to the chrome: hand the request to the container
+// hosting it, which trades the pixels with the neighbouring panes. Nothing to do
+// when no view pane holds focus (a lone view fills its container, the Panel is
+// tiled, the command was invoked from the palette) — those keep their part-level
+// behaviour.
+function resizeFocusedView(accessor: ServicesAccessor, delta: 1 | -1): void {
+  const focusedView = accessor.get(IContextKeyService).get('focusedViewPane')
+  if (typeof focusedView !== 'string' || focusedView.length === 0) return
+  accessor.get(IViewPaneResizeRegistry).resize(focusedView, RESIZE_STEP * delta)
+}
+
 function resizeFocusedPart(
   accessor: ServicesAccessor,
   dim: 'width' | 'height',
@@ -344,11 +358,14 @@ function resizeFocusedPart(
   const step = RESIZE_STEP * delta
   switch (part) {
     case PartId.SideBar:
-      if (dim === 'width')
+      if (dim === 'width') {
         setClamped(layout, 'sidebar', sizes.sidebar + step, SIDEBAR_MIN, SIDEBAR_MAX)
+      } else {
+        resizeFocusedView(accessor, delta)
+      }
       return
     case PartId.SecondarySideBar:
-      if (dim === 'width')
+      if (dim === 'width') {
         setClamped(
           layout,
           'secondarySidebar',
@@ -356,6 +373,9 @@ function resizeFocusedPart(
           SIDEBAR_MIN,
           SIDEBAR_MAX,
         )
+      } else {
+        resizeFocusedView(accessor, delta)
+      }
       return
     case PartId.Panel:
       if (dim === 'height') setClamped(layout, 'panel', sizes.panel + step, PANEL_MIN, PANEL_MAX)

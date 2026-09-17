@@ -4,7 +4,10 @@ import { extractUserDataDir } from '../fixtureProcesses.js'
 describe('extractUserDataDir', () => {
   it('认 --user-data-dir=<v> 形态（launchApp 与自启 spec 都用它）', () => {
     expect(
-      extractUserDataDir(['/app/out/main/index.js', '--user-data-dir=/run/fx/universe-editor-e2e-a1']),
+      extractUserDataDir([
+        '/app/out/main/index.js',
+        '--user-data-dir=/run/fx/universe-editor-e2e-a1',
+      ]),
     ).toBe('/run/fx/universe-editor-e2e-a1')
   })
 

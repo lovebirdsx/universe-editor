@@ -78,6 +78,73 @@ export function computeToggleSizes(args: ComputeToggleSizesArgs): number[] | und
   return desired
 }
 
+export interface ComputeResizeSizesArgs {
+  /** Current pane sizes, aligned with `collapsed`. */
+  readonly sizes: readonly number[]
+  /** Collapsed flags, aligned with `sizes`. */
+  readonly collapsed: readonly boolean[]
+  /** Index of the pane being resized. */
+  readonly resizedIndex: number
+  /** Signed pixels: > 0 grows the pane (and takes from its neighbours), < 0 shrinks it. */
+  readonly deltaPx: number
+}
+
+/**
+ * Sizes to apply after a keyboard resize of one pane, or undefined when not a
+ * single pixel can move (bad input, collapsed target, no expanded neighbour,
+ * every donor already at VIEW_OPEN_MIN).
+ *
+ * Space is only ever traded between *expanded* panes, so the container total is
+ * preserved and a collapsed pane is left untouched: Allotment pins it to
+ * min = max = header, and any other value would be silently clamped — drifting
+ * from the expanded size the pane remembers for its next expand.
+ */
+export function computeResizeSizes(args: ComputeResizeSizesArgs): number[] | undefined {
+  const { sizes, collapsed, resizedIndex, deltaPx } = args
+  if (sizes.length === 0 || sizes.length !== collapsed.length) return undefined
+  if (resizedIndex < 0 || resizedIndex >= sizes.length) return undefined
+  if (deltaPx === 0 || collapsed[resizedIndex]) return undefined
+
+  // Nearest first in both directions: growing first borrows from the pane a sash
+  // drag would push, then spills over to the rest. Collapsed panes never donate.
+  const below: number[] = []
+  const above: number[] = []
+  for (let i = resizedIndex + 1; i < sizes.length; i++) {
+    if (!collapsed[i]) below.push(i)
+  }
+  for (let i = resizedIndex - 1; i >= 0; i--) {
+    if (!collapsed[i]) above.push(i)
+  }
+  if (below.length === 0 && above.length === 0) return undefined
+
+  const next = [...sizes]
+  if (deltaPx > 0) {
+    let need = deltaPx
+    for (const i of [...below, ...above]) {
+      if (need <= 0) break
+      const give = Math.min((next[i] ?? 0) - VIEW_OPEN_MIN, need)
+      if (give > 0) {
+        next[i] = (next[i] ?? 0) - give
+        need -= give
+      }
+    }
+    // Donors bottomed out: report a no-op rather than writing the sizes back.
+    if (need === deltaPx) return undefined
+    next[resizedIndex] = (next[resizedIndex] ?? 0) + (deltaPx - need)
+    return next
+  }
+
+  // Shrinking stops at the pane's own floor — past it Allotment clamps the
+  // request and the persisted size would disagree with what is on screen.
+  const give = Math.min(-deltaPx, (next[resizedIndex] ?? 0) - VIEW_OPEN_MIN)
+  if (give <= 0) return undefined
+  // The nearer pane below takes the pixels; the one above when there is none.
+  const receiver = below.length > 0 ? below[0]! : above[0]!
+  next[resizedIndex] = (next[resizedIndex] ?? 0) - give
+  next[receiver] = (next[receiver] ?? 0) + give
+  return next
+}
+
 /** Initial size for an Allotment pane (preferredSize): stored expanded size, clamped. */
 export function initialPaneSize(
   collapsed: boolean,

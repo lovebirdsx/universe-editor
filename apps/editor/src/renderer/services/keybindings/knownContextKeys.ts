@@ -110,6 +110,7 @@ const SEEDED_CONTEXT_KEYS: readonly string[] = [
   // FocusContextKeyContribution
   'focusedPart',
   'focusedView',
+  'focusedViewPane',
   'activityBarFocus',
   'sideBarFocus',
   'secondarySideBarFocus',

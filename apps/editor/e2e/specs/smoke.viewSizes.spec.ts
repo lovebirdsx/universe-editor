@@ -5,8 +5,11 @@
  *   A. 折叠一个 view 再展开，两个 view 都恢复原来的尺寸（不被等分重置），
  *      且折叠期间持久化的展开尺寸不被 28px header 覆盖。
  *   B. 拖动 sash 调整尺寸后重载窗口，尺寸按 workspace 作用域持久化恢复。
+ *   C. 键盘缩放（Ctrl+Shift+Alt+上下）调整聚焦 view 的高度，向相邻展开 pane
+ *      借/还空间，且与 sash 一样落盘、跨重载恢复。
  *
- *  默认 explorer 容器自带两个 view（explorer.tree + timeline.main），直接用它。
+ *  默认 explorer 容器自带两个 view（explorer.tree + timeline.main），直接用它；
+ *  C 走 SCM 容器（scm.main + commitChanges），正是该功能的目标场景。
  *--------------------------------------------------------------------------------------------*/
 
 import { test, expect } from '@playwright/test'
@@ -25,7 +28,12 @@ import { expectNoLeaks, evaluateWhenRestored } from '../pages/WorkbenchPO.js'
 const TREE_VIEW = 'workbench.view.explorer.tree'
 const TIMELINE_VIEW = 'workbench.view.timeline.main'
 const EXPLORER_CONTAINER = 'workbench.view.explorer'
+const SCM_VIEW = 'workbench.view.scm.main'
+const COMMIT_CHANGES_VIEW = 'workbench.view.scm.commitChanges'
 const HEADER_H = 28
+
+/** Must match RESIZE_STEP in renderer/services/layout/layoutConstraints.ts. */
+const RESIZE_STEP = 50
 
 function seedUserSettings(userDataDir: string): void {
   writeFileSync(join(userDataDir, 'settings.json'), INITIAL_SETTINGS, 'utf8')
@@ -97,13 +105,20 @@ async function paneHeight(page: import('@playwright/test').Page, viewId: string)
   return box?.height ?? 0
 }
 
-async function waitForPanes(page: import('@playwright/test').Page): Promise<void> {
-  await expect(page.locator(`[data-view-pane="${TREE_VIEW}"]`)).toBeVisible()
-  await expect(page.locator(`[data-view-pane="${TIMELINE_VIEW}"]`)).toBeVisible()
+async function waitForViewPane(
+  page: import('@playwright/test').Page,
+  viewId: string,
+): Promise<void> {
+  await expect(page.locator(`[data-view-pane="${viewId}"]`)).toBeVisible()
   // Wait until the mounted Allotment reports real geometry.
   await expect
-    .poll(async () => paneHeight(page, TREE_VIEW), { timeout: 5000 })
+    .poll(async () => paneHeight(page, viewId), { timeout: 5000 })
     .toBeGreaterThan(HEADER_H)
+}
+
+async function waitForPanes(page: import('@playwright/test').Page): Promise<void> {
+  await waitForViewPane(page, TREE_VIEW)
+  await waitForViewPane(page, TIMELINE_VIEW)
 }
 
 test.describe('@p0 view pane sizes', () => {
@@ -208,6 +223,119 @@ test.describe('@p0 view pane sizes', () => {
           .poll(async () => Math.abs((await paneHeight(page, TIMELINE_VIEW)) - h2), {
             timeout: 5000,
           })
+          .toBeLessThanOrEqual(5)
+        await expectNoLeaks(page)
+      } finally {
+        await closeApp(app)
+      }
+    } finally {
+      for (const dir of [workspaceFolder, userDataDir]) {
+        try {
+          rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+        } catch {
+          /* best-effort */
+        }
+      }
+    }
+  })
+
+  test('keyboard resize of the focused view borrows from its neighbour and survives a reload', async () => {
+    test.setTimeout(120_000)
+    const userDataDir = mkTempDir('universe-editor-viewresize-')
+    const workspaceFolder = mkTempDir('universe-editor-ws-viewresize-')
+    try {
+      seedGlobalState(userDataDir, workspaceFolder)
+      const { app, page } = await launchWithState(userDataDir)
+      try {
+        // Focusing opens the SCM container, expands the view and drops DOM focus
+        // inside it — the chord only fires for a view that holds focus.
+        await page.evaluate(
+          () => void window.__E2E__!.runCommand('workbench.view.scm.commitChanges.focus'),
+        )
+        await waitForViewPane(page, SCM_VIEW)
+        await waitForViewPane(page, COMMIT_CHANGES_VIEW)
+        await expect
+          .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('focusedView')), {
+            message: 'the resize chord needs the view to hold focus first',
+          })
+          .toBe(COMMIT_CHANGES_VIEW)
+
+        const mainBefore = await paneHeight(page, SCM_VIEW)
+        const commitBefore = await paneHeight(page, COMMIT_CHANGES_VIEW)
+
+        // Commit Changes sits below Source Control, so growing it borrows upward
+        // by exactly one step — the chrome (the sidebar's own width) is untouched.
+        await page.keyboard.press('Control+Shift+Alt+ArrowDown')
+        await expect
+          .poll(
+            async () =>
+              Math.abs(
+                (await paneHeight(page, COMMIT_CHANGES_VIEW)) - (commitBefore + RESIZE_STEP),
+              ),
+            { timeout: 5000 },
+          )
+          .toBeLessThanOrEqual(3)
+        await expect
+          .poll(
+            async () => Math.abs((await paneHeight(page, SCM_VIEW)) - (mainBefore - RESIZE_STEP)),
+            { timeout: 5000 },
+          )
+          .toBeLessThanOrEqual(3)
+
+        // Shrinking hands the pixels back to the same neighbour.
+        await page.keyboard.press('Control+Shift+Alt+ArrowUp')
+        await expect
+          .poll(
+            async () => Math.abs((await paneHeight(page, COMMIT_CHANGES_VIEW)) - commitBefore),
+            {
+              timeout: 5000,
+            },
+          )
+          .toBeLessThanOrEqual(3)
+
+        // Grow once more and prove a keypress lands on disk like a sash drag.
+        await page.keyboard.press('Control+Shift+Alt+ArrowDown')
+        await expect
+          .poll(
+            async () =>
+              Math.abs(
+                (await paneHeight(page, COMMIT_CHANGES_VIEW)) - (commitBefore + RESIZE_STEP),
+              ),
+            { timeout: 5000 },
+          )
+          .toBeLessThanOrEqual(3)
+        await page.evaluate(() => window.__E2E__!.flushViewCustomizationsSave())
+
+        const loaded = page.waitForEvent('load')
+        void page
+          .evaluate(() => void window.__E2E__!.runCommand('workbench.action.reloadWindow'))
+          .catch(() => {})
+        await loaded
+        await waitForRestored(page)
+        // The reveal is not part of what is under test: reloading may land on
+        // another container, so bring the SCM views back before measuring.
+        await page.evaluate(
+          () => void window.__E2E__!.runCommand('workbench.view.scm.commitChanges.focus'),
+        )
+        await waitForViewPane(page, SCM_VIEW)
+        await waitForViewPane(page, COMMIT_CHANGES_VIEW)
+
+        await expect
+          .poll(
+            async () =>
+              Math.abs(
+                (await paneHeight(page, COMMIT_CHANGES_VIEW)) - (commitBefore + RESIZE_STEP),
+              ),
+            { timeout: 5000 },
+          )
+          .toBeLessThanOrEqual(5)
+        await expect
+          .poll(
+            async () => Math.abs((await paneHeight(page, SCM_VIEW)) - (mainBefore - RESIZE_STEP)),
+            {
+              timeout: 5000,
+            },
+          )
           .toBeLessThanOrEqual(5)
         await expectNoLeaks(page)
       } finally {

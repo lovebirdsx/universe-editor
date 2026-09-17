@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  computeResizeSizes,
   computeToggleSizes,
   initialPaneSize,
   VIEW_HEADER_SIZE,
@@ -74,6 +75,179 @@ describe('computeToggleSizes', () => {
       computeToggleSizes({ sizes: [100, 100], collapsed: [false, false], toggledIndex: 5 }),
     ).toBeUndefined()
     expect(computeToggleSizes({ sizes: [], collapsed: [], toggledIndex: 0 })).toBeUndefined()
+  })
+})
+
+describe('computeResizeSizes', () => {
+  const sum = (sizes: readonly number[]) => sizes.reduce((total, size) => total + size, 0)
+
+  it('growing borrows from the pane below, keeping the container total', () => {
+    const sizes = [300, 300]
+    const result = computeResizeSizes({
+      sizes,
+      collapsed: [false, false],
+      resizedIndex: 0,
+      deltaPx: 50,
+    })
+    expect(result).toEqual([350, 250])
+    expect(sum(result!)).toBe(sum(sizes))
+    expect(sizes).toEqual([300, 300])
+  })
+
+  it('growing spills over to the next pane down once the nearest bottoms out', () => {
+    expect(
+      computeResizeSizes({
+        sizes: [300, VIEW_OPEN_MIN, 300],
+        collapsed: [false, false, false],
+        resizedIndex: 0,
+        deltaPx: 50,
+      }),
+    ).toEqual([350, VIEW_OPEN_MIN, 250])
+  })
+
+  it('growing borrows from the pane above, nearest first', () => {
+    // Above = [index 1, index 0]; index 1 can cover the whole step, so index 0 stays put.
+    expect(
+      computeResizeSizes({
+        sizes: [300, 200, VIEW_OPEN_MIN],
+        collapsed: [false, false, false],
+        resizedIndex: 2,
+        deltaPx: 50,
+      }),
+    ).toEqual([300, 150, 138])
+  })
+
+  it('grows the bottom pane from the pane above', () => {
+    expect(
+      computeResizeSizes({
+        sizes: [300, 300],
+        collapsed: [false, false],
+        resizedIndex: 1,
+        deltaPx: 50,
+      }),
+    ).toEqual([250, 350])
+  })
+
+  it('applies a partial delta when the donors bottom out', () => {
+    // The only donor can give 100 - 88 = 12 of the requested 50.
+    expect(
+      computeResizeSizes({
+        sizes: [150, 100],
+        collapsed: [false, false],
+        resizedIndex: 0,
+        deltaPx: 50,
+      }),
+    ).toEqual([162, VIEW_OPEN_MIN])
+  })
+
+  it('never touches a collapsed pane', () => {
+    expect(
+      computeResizeSizes({
+        sizes: [300, VIEW_HEADER_SIZE, 300],
+        collapsed: [false, true, false],
+        resizedIndex: 0,
+        deltaPx: 50,
+      }),
+    ).toEqual([350, VIEW_HEADER_SIZE, 250])
+  })
+
+  it('returns undefined when no pixel can move', () => {
+    // Every neighbour is collapsed, so there is no one to borrow from.
+    expect(
+      computeResizeSizes({
+        sizes: [300, VIEW_HEADER_SIZE],
+        collapsed: [false, true],
+        resizedIndex: 0,
+        deltaPx: 50,
+      }),
+    ).toBeUndefined()
+    // The only neighbour is already at its floor.
+    expect(
+      computeResizeSizes({
+        sizes: [300, VIEW_OPEN_MIN],
+        collapsed: [false, false],
+        resizedIndex: 0,
+        deltaPx: 50,
+      }),
+    ).toBeUndefined()
+  })
+
+  it('shrinking hands the pixels to the pane below', () => {
+    expect(
+      computeResizeSizes({
+        sizes: [300, 300],
+        collapsed: [false, false],
+        resizedIndex: 0,
+        deltaPx: -50,
+      }),
+    ).toEqual([250, 350])
+  })
+
+  it('shrinking falls back to the pane above when there is none below', () => {
+    expect(
+      computeResizeSizes({
+        sizes: [300, 300],
+        collapsed: [false, false],
+        resizedIndex: 1,
+        deltaPx: -50,
+      }),
+    ).toEqual([350, 250])
+  })
+
+  it('shrinking stops at the pane floor', () => {
+    expect(
+      computeResizeSizes({
+        sizes: [100, 300],
+        collapsed: [false, false],
+        resizedIndex: 0,
+        deltaPx: -50,
+      }),
+    ).toEqual([VIEW_OPEN_MIN, 312])
+  })
+
+  it('returns undefined when the pane is already at its floor', () => {
+    expect(
+      computeResizeSizes({
+        sizes: [VIEW_OPEN_MIN, 300],
+        collapsed: [false, false],
+        resizedIndex: 0,
+        deltaPx: -50,
+      }),
+    ).toBeUndefined()
+  })
+
+  it('returns undefined on bad input', () => {
+    expect(
+      computeResizeSizes({ sizes: [100], collapsed: [false, false], resizedIndex: 0, deltaPx: 50 }),
+    ).toBeUndefined()
+    expect(
+      computeResizeSizes({ sizes: [], collapsed: [], resizedIndex: 0, deltaPx: 50 }),
+    ).toBeUndefined()
+    expect(
+      computeResizeSizes({
+        sizes: [100, 100],
+        collapsed: [false, false],
+        resizedIndex: 5,
+        deltaPx: 50,
+      }),
+    ).toBeUndefined()
+    expect(
+      computeResizeSizes({
+        sizes: [100, 100],
+        collapsed: [false, false],
+        resizedIndex: 0,
+        deltaPx: 0,
+      }),
+    ).toBeUndefined()
+    // A collapsed pane has no body left to resize.
+    expect(
+      computeResizeSizes({
+        sizes: [100, 100],
+        collapsed: [true, false],
+        resizedIndex: 0,
+        deltaPx: 50,
+      }),
+    ).toBeUndefined()
   })
 })
 

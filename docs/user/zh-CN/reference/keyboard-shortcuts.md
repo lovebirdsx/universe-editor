@@ -71,6 +71,7 @@
 | 切换底栏 | `Ctrl+J` |
 | 在编辑器中打开终端 | `` Ctrl+` `` |
 | 聚焦大纲视图 | `Ctrl+Shift+Q` |
+| 调整聚焦视图的大小 | `Ctrl+Alt+Shift+←` / `→` / `↑` / `↓` |
 
 > 更多见 [快速上手 · 界面导览](../getting-started/interface-tour.md)。
 

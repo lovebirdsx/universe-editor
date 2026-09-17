@@ -6,6 +6,8 @@
  *  Maintained keys:
  *    focusedPart                — the PartId whose xxxFocus key is true, or ''
  *    focusedView                — viewId currently containing focus, or ''
+ *    focusedViewPane            — viewId of the view *pane* containing focus
+ *                                 (header included), or ''
  *    sideBarFocus               — focus is inside SideBar
  *    secondarySideBarFocus      — focus is inside SecondarySideBar
  *    panelFocus                 — focus is inside Panel
@@ -50,6 +52,14 @@
  *  `data-testid`s — taking the nearest one made it blind to anything under a view
  *  root, which is what closestPartId documents for the same trap.
  *
+ *  `focusedViewPane` is the *wider* of the two ids: ViewPane marks its whole
+ *  section with `data-view-pane`, header included, so a focus on a view's
+ *  collapse chevron or toolbar button still reports that view. `focusedView`
+ *  deliberately keeps its narrower ViewBody-only meaning — it gates keybindings
+ *  for several views (outline, the explorer tree, swarm), and widening it there
+ *  would silently grow their trigger surface. Only stacked containers render a
+ *  ViewPane, so a Panel's tiled views report `focusedView` but never this one.
+ *
  *  `terminalFocus` keeps part of its own shape: startup spawns panel terminals
  *  while the panel is still hidden, and any focus that transiently lands in such
  *  a host must not leave the key stuck true (it would swallow every
@@ -92,6 +102,7 @@ export class FocusContextKeyContribution extends Disposable implements IWorkbenc
 
     const focusedPart = contextKeyService.createKey<string>('focusedPart', '')
     const focusedView = contextKeyService.createKey<string>('focusedView', '')
+    const focusedViewPane = contextKeyService.createKey<string>('focusedViewPane', '')
     const terminalFocus = contextKeyService.createKey<boolean>('terminalFocus', false)
 
     const perPart = new Map<PartId, ReturnType<typeof contextKeyService.createKey<boolean>>>()
@@ -127,6 +138,7 @@ export class FocusContextKeyContribution extends Disposable implements IWorkbenc
       }
       focusedPart.set(currentPart)
       focusedView.set(closestAttr(active, 'data-view-id') ?? '')
+      focusedViewPane.set(closestAttr(active, 'data-view-pane') ?? '')
       updateTerminalFocus(active)
     }
 

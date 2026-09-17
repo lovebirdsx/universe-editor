@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
   ContextKeyService,
+  IContextKeyService,
   IEditorGroupsService,
   ILayoutService,
   InstantiationService,
@@ -20,8 +21,16 @@ import {
 } from '../layoutActions.js'
 import { MoveEditorToRightGroupAction } from '../editorActions.js'
 import { SIDEBAR_MAX, PANEL_MIN, RESIZE_STEP } from '../../services/layout/layoutConstraints.js'
+import { IViewPaneResizeRegistry } from '../../services/views/viewPaneResizeRegistry.js'
 
 const DEFAULT_SIZES: LayoutSizes = { sidebar: 300, secondarySidebar: 300, panel: 300 }
+
+const VIEW_ID = 'workbench.view.scm.commitChanges'
+
+const disposables: IDisposable[] = []
+afterEach(() => {
+  while (disposables.length > 0) disposables.pop()?.dispose()
+})
 
 function makeLayout(
   focused: PartId | undefined,
@@ -51,24 +60,47 @@ function makeGroups(handled = false) {
   return { mock, resizeGroup, activeGroup }
 }
 
-describe('Keyboard resize of the focused part', () => {
-  const disposables: IDisposable[] = []
-  afterEach(() => {
-    while (disposables.length > 0) disposables.pop()?.dispose()
+/**
+ * `handled` stands in for "a stack container hosts the view and could move a
+ * pixel": false is the unhandled case (lone view, tiled panel, no focused view),
+ * where the caller must fall back to its part-level behaviour.
+ */
+function makeRegistry(handled = true) {
+  const resize = vi.fn(() => handled)
+  const mock = { _serviceBrand: undefined, register: vi.fn(), resize } as never
+  return { mock, resize }
+}
+
+interface ExecOptions {
+  /** Seeds the root `focusedViewPane` key; omit to leave the key unset. */
+  focusedView?: string
+  registry?: ReturnType<typeof makeRegistry>
+}
+
+function exec(
+  action: new () => never,
+  layoutMock: never,
+  groupsMock?: never,
+  opts: ExecOptions = {},
+): ReturnType<typeof makeRegistry> {
+  const registry = opts.registry ?? makeRegistry()
+  const services = new ServiceCollection()
+  services.set(ILayoutService, layoutMock)
+  services.set(IEditorGroupsService, groupsMock ?? (makeGroups().mock as never))
+  const ctx = new ContextKeyService()
+  if (opts.focusedView !== undefined) ctx.createKey('focusedViewPane', opts.focusedView)
+  services.set(IContextKeyService, ctx)
+  services.set(IViewPaneResizeRegistry, registry.mock)
+  const inst = new InstantiationService(services)
+  disposables.push(registerAction2(action), ctx)
+  inst.invokeFunction((accessor) => {
+    const id = (action as unknown as { ID: string }).ID
+    CommandsRegistry.getCommand(id)!.handler(accessor)
   })
+  return registry
+}
 
-  function exec(action: new () => never, layoutMock: never, groupsMock?: never): void {
-    const services = new ServiceCollection()
-    services.set(ILayoutService, layoutMock)
-    services.set(IEditorGroupsService, groupsMock ?? (makeGroups().mock as never))
-    const inst = new InstantiationService(services)
-    disposables.push(registerAction2(action))
-    inst.invokeFunction((accessor) => {
-      const id = (action as unknown as { ID: string }).ID
-      CommandsRegistry.getCommand(id)!.handler(accessor)
-    })
-  }
-
+describe('Keyboard resize of the focused part', () => {
   it('SideBar focused: right grows sidebar, left shrinks it', () => {
     const a = makeLayout(PartId.SideBar)
     exec(IncreaseViewWidthAction as never, a.mock)
@@ -79,7 +111,7 @@ describe('Keyboard resize of the focused part', () => {
     expect(b.setSize).toHaveBeenCalledWith('sidebar', 300 - RESIZE_STEP)
   })
 
-  it('SideBar focused: vertical resize is a no-op', () => {
+  it('SideBar focused: vertical resize is a no-op without a focused view pane', () => {
     const a = makeLayout(PartId.SideBar)
     exec(IncreaseViewHeightAction as never, a.mock)
     exec(DecreaseViewHeightAction as never, a.mock)
@@ -204,6 +236,83 @@ describe('Keyboard resize of the focused part', () => {
       exec(IncreaseViewHeightAction as never, layout.mock, groups.mock)
       expect(groups.resizeGroup).not.toHaveBeenCalled()
     }
+  })
+})
+
+describe('Keyboard resize of the focused view inside a stack', () => {
+  it('SideBar focused: down grows the focused view, not the chrome', () => {
+    const layout = makeLayout(PartId.SideBar)
+    const registry = exec(IncreaseViewHeightAction as never, layout.mock, undefined, {
+      focusedView: VIEW_ID,
+    })
+    expect(registry.resize).toHaveBeenCalledWith(VIEW_ID, RESIZE_STEP)
+    expect(layout.setSize).not.toHaveBeenCalled()
+  })
+
+  it('SideBar focused: up shrinks the focused view', () => {
+    const layout = makeLayout(PartId.SideBar)
+    const registry = exec(DecreaseViewHeightAction as never, layout.mock, undefined, {
+      focusedView: VIEW_ID,
+    })
+    expect(registry.resize).toHaveBeenCalledWith(VIEW_ID, -RESIZE_STEP)
+    expect(layout.setSize).not.toHaveBeenCalled()
+  })
+
+  it('SecondarySideBar focused: down grows its focused view', () => {
+    const layout = makeLayout(PartId.SecondarySideBar)
+    const registry = exec(IncreaseViewHeightAction as never, layout.mock, undefined, {
+      focusedView: VIEW_ID,
+    })
+    expect(registry.resize).toHaveBeenCalledWith(VIEW_ID, RESIZE_STEP)
+    expect(layout.setSize).not.toHaveBeenCalled()
+  })
+
+  it('an empty focusedViewPane (part-level focus) keeps the vertical no-op', () => {
+    const layout = makeLayout(PartId.SideBar)
+    const registry = exec(IncreaseViewHeightAction as never, layout.mock, undefined, {
+      focusedView: '',
+    })
+    expect(registry.resize).not.toHaveBeenCalled()
+    expect(layout.setSize).not.toHaveBeenCalled()
+  })
+
+  it('a view no container could move stays a no-op instead of resizing the chrome', () => {
+    const layout = makeLayout(PartId.SideBar)
+    const unhandled = makeRegistry(false)
+    const registry = exec(IncreaseViewHeightAction as never, layout.mock, undefined, {
+      focusedView: VIEW_ID,
+      registry: unhandled,
+    })
+    expect(registry.resize).toHaveBeenCalledWith(VIEW_ID, RESIZE_STEP)
+    expect(layout.setSize).not.toHaveBeenCalled()
+  })
+
+  it('SideBar focused: width still resizes the sidebar itself', () => {
+    const layout = makeLayout(PartId.SideBar)
+    const registry = exec(IncreaseViewWidthAction as never, layout.mock, undefined, {
+      focusedView: VIEW_ID,
+    })
+    expect(layout.setSize).toHaveBeenCalledWith('sidebar', 300 + RESIZE_STEP)
+    expect(registry.resize).not.toHaveBeenCalled()
+  })
+
+  it('Panel focused: a focused view never hijacks the panel height', () => {
+    const layout = makeLayout(PartId.Panel)
+    const registry = exec(IncreaseViewHeightAction as never, layout.mock, undefined, {
+      focusedView: VIEW_ID,
+    })
+    expect(layout.setSize).toHaveBeenCalledWith('panel', 300 + RESIZE_STEP)
+    expect(registry.resize).not.toHaveBeenCalled()
+  })
+
+  it('Editor focused: a focused view never hijacks the editor resize', () => {
+    const layout = makeLayout(PartId.EditorArea)
+    const groups = makeGroups(true)
+    const registry = exec(IncreaseViewHeightAction as never, layout.mock, groups.mock, {
+      focusedView: VIEW_ID,
+    })
+    expect(groups.resizeGroup).toHaveBeenCalledWith(groups.activeGroup, 'height', RESIZE_STEP)
+    expect(registry.resize).not.toHaveBeenCalled()
   })
 })
 

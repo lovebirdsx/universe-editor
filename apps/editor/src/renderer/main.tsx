@@ -137,6 +137,10 @@ import {
   ViewContainerMemoryService,
 } from './services/focus/ViewContainerMemoryService.js'
 import { FocusStackService } from './services/focus/FocusStackService.js'
+import {
+  IViewPaneResizeRegistry,
+  ViewPaneResizeRegistry,
+} from './services/views/viewPaneResizeRegistry.js'
 import { RendererWorkspaceService } from './services/workspace/RendererWorkspaceService.js'
 import {
   ExplorerTreeService,
@@ -336,6 +340,12 @@ async function bootstrapWorkbench(): Promise<void> {
   // input/tree after the host part mounts.
   const focusableRegistry = workbenchStore.add(new FocusableRegistry())
   services.set(IFocusableRegistry, focusableRegistry)
+
+  // ViewPaneResizeRegistry: viewId → pane resizer, published by the stacked view
+  // containers via useViewPaneResize. The ctrl+alt+shift+arrow actions resize a
+  // focused view's pane through this instead of the part chrome.
+  const viewPaneResizeRegistry = workbenchStore.add(new ViewPaneResizeRegistry())
+  services.set(IViewPaneResizeRegistry, viewPaneResizeRegistry)
 
   // ViewContainerMemory: containerId → lastFocusedViewId. Pure storage with no
   // deps; FocusStackService writes to it on focus changes, LayoutService.focusPart
