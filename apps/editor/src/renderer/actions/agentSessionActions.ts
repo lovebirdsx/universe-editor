@@ -412,6 +412,7 @@ export class SelectAgentAction extends Action2 {
       return {
         id: d.id,
         label: d.name,
+        iconId: agentIconId(d.id, d.icon),
         description: d.command,
         ...(available
           ? {}

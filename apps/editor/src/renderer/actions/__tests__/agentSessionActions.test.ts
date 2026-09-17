@@ -49,10 +49,10 @@ const AGENTS: readonly IAcpAgentDescriptor[] = [
   { id: 'codex', name: 'Codex', command: 'codex', args: [] },
 ]
 
-function makeRegistry() {
+function makeRegistry(agents: readonly IAcpAgentDescriptor[] = AGENTS) {
   return {
     _serviceBrand: undefined,
-    list: () => AGENTS,
+    list: () => agents,
     defaultAgentId: () => 'claude-code',
     defaultAgentIdObs: constObservable('claude-code'),
     setDefaultAgentId: vi.fn(),
@@ -63,15 +63,13 @@ function makeRegistry() {
 async function run(
   registry: ReturnType<typeof makeRegistry>,
   picked: { id: string; label: string } | undefined,
-): Promise<void> {
+): Promise<MockInstance> {
   const dispose = registerAction2(SelectAgentAction)
+  const pick = vi.fn().mockResolvedValue(picked)
   try {
     const services = new ServiceCollection()
     services.set(IAcpAgentRegistry, registry as never)
-    services.set(IQuickInputService, {
-      _serviceBrand: undefined,
-      pick: vi.fn().mockResolvedValue(picked),
-    } as never)
+    services.set(IQuickInputService, { _serviceBrand: undefined, pick } as never)
     const inst = new InstantiationService(services)
     await inst.invokeFunction(async (accessor) => {
       await Promise.resolve(CommandsRegistry.getCommand(SelectAgentAction.ID)!.handler(accessor))
@@ -79,6 +77,13 @@ async function run(
   } finally {
     dispose.dispose()
   }
+  return pick
+}
+
+/** The `iconId`s the action handed to the quick pick, in row order. */
+function rowIconIds(pick: MockInstance): (string | undefined)[] {
+  const args = pick.mock.calls[0] as readonly [readonly { iconId?: string }[]] | undefined
+  return (args?.[0] ?? []).map((item) => item.iconId)
 }
 
 describe('SelectAgentAction', () => {
@@ -92,6 +97,17 @@ describe('SelectAgentAction', () => {
     const registry = makeRegistry()
     await run(registry, undefined)
     expect(registry.setDefaultAgentId).not.toHaveBeenCalled()
+  })
+
+  it('gives every row an agent logo (descriptor icon → id map → bot)', async () => {
+    const registry = makeRegistry([
+      { id: 'claude-code', name: 'Claude Code', command: 'claude', args: [] },
+      { id: 'codex', name: 'Codex', command: 'codex', args: [] },
+      { id: 'custom', name: 'Custom', command: 'custom-acp', args: [], icon: 'claude' },
+      { id: 'mystery', name: 'Mystery', command: 'mystery-acp', args: [] },
+    ])
+    const pick = await run(registry, undefined)
+    expect(rowIconIds(pick)).toEqual(['claude', 'openai', 'claude', 'bot'])
   })
 
   it('declares no dependency on the session service (selection only)', () => {
