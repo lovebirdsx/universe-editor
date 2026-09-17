@@ -258,7 +258,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   // --- Actions ---
   'action.about.title': '关于 Universe Editor',
   'action.agent.activateConfigEntry': '聚焦会话配置项',
-  'action.agent.addSelectionToChat': '将选区添加到 Agent 聊天',
+  'action.agent.addSelectionToExistingChat': '将选区添加到已有 Agent 聊天',
+  'action.agent.addSelectionToNewChat': '将选区添加到新建 Agent 聊天',
   'action.agent.aiFixProblem': '使用 AI 修复',
   'action.agent.archiveSession': '归档 Agent 会话',
   'action.agent.cancelTurn': '取消 Agent 回合',
@@ -2832,6 +2833,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.userMessage.rewind': '回退到此处',
 
   // --- Agent: state & placeholders ---
+  'agent.addSelection.pickTarget': '选择要添加选区的 Agent 聊天',
   'agent.bookmark.gone': '（不可用）',
   'agent.configOption.current': '当前',
   'agent.configOption.failed': '应用选项失败：{error}',

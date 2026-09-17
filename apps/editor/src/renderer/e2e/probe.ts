@@ -820,7 +820,9 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       await s.sendPrompt(text)
     },
     addActiveSelectionToAcpPrompt: async () => {
-      await services.commandService.executeCommand('workbench.action.agent.addSelectionToChat')
+      await services.commandService.executeCommand(
+        'workbench.action.agent.addSelectionToExistingChat',
+      )
     },
     setAcpCollapseMode: (mode) => {
       const s = services.acpSessionService.activeSession.get()

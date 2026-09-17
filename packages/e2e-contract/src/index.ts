@@ -912,7 +912,11 @@ export interface E2EProbe {
    * turn). Specs that don't want to wait should not await this call.
    */
   sendAcpPrompt(text: string): Promise<void>
-  /** Attach the active editor's current non-empty selections to the active prompt. */
+  /**
+   * Attach the active editor's current non-empty selections to an existing
+   * prompt — Ctrl+K Ctrl+L's command. With no session open it creates one, so
+   * specs may call it from a cold start.
+   */
   addActiveSelectionToAcpPrompt(): Promise<void>
   /**
    * Force the active session's timeline collapse mode ('default' | 'collapsed' |

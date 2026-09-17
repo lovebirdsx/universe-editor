@@ -49,7 +49,6 @@ import { AcpPromptReplaceInbox } from '../services/acp/session/acpPromptReplaceI
 import { IAcpMessageAttachmentStore } from '../services/acp/session/acpMessageAttachmentStore.js'
 import { resolveLiveSessionTitle } from '../services/acp/session/acpSessionTitle.js'
 import { ISessionSwitcherService, type SessionSummary } from '../../shared/ipc/sessionSwitcher.js'
-import { basenameOfPath } from '../workbench/files/resourceInfo.js'
 import {
   ISubProjectService,
   type SubProjectScope,
@@ -60,7 +59,12 @@ import {
   rememberedCwdForWindow,
   rememberedCwdUri,
 } from '../services/acp/session/acpLastSessionCwdService.js'
-import { ACP_SCOPED_KEY_WEIGHT, CATEGORY, resolveNavWidget } from './_agentShared.js'
+import {
+  ACP_SCOPED_KEY_WEIGHT,
+  CATEGORY,
+  resolveNavWidget,
+  sessionDirectoryName,
+} from './_agentShared.js'
 import {
   findSessionEditor,
   revealSessionEditorTab,
@@ -442,14 +446,6 @@ export class SelectAgentAction extends Action2 {
 // capability gate, session/load round-trip, and rollback on failure. The
 // action just renders the picker and opens the Sessions view on success.
 // ---------------------------------------------------------------------------
-
-function sessionDirectoryName(cwd: string | undefined): string | undefined {
-  if (cwd === undefined || cwd.length === 0) return undefined
-  const normalized = cwd.replace(/[\\/]+$/, '')
-  if (normalized.length === 0) return cwd
-  const name = basenameOfPath(normalized)
-  return name.length > 0 ? name : cwd
-}
 
 export class ResumeAgentSessionAction extends Action2 {
   static readonly ID = 'workbench.action.agent.resumeSession'

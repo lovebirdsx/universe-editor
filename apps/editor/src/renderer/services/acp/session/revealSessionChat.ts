@@ -34,5 +34,9 @@ export function revealSessionChat(
   target.widgets.focusSessionInput(sessionId)
   // Second pass on the next frame: activating a group or opening the tab makes
   // the chat mount on this frame, so the first call can find no widget yet.
-  requestAnimationFrame(() => target.widgets.focusSessionInput(sessionId))
+  // Guarded because node tests exercise this path with no DOM (same idiom as
+  // LayoutService / QuickTextSearchService).
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(() => target.widgets.focusSessionInput(sessionId))
+  }
 }

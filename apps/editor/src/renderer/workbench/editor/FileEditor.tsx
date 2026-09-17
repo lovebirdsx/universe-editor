@@ -197,9 +197,10 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     ed.addCommand(monacoNs.KeyCode.F1, () => {
       void commandService.executeCommand('workbench.action.showCommands')
     })
-    // "Add Selection to Agent Chat" is registered against MenuId.EditorContext by
-    // EditorContextMenuContribution (with `when: editorHasSelection`), so it shows
-    // in the MenuRegistry-driven right-click menu wired up below.
+    // The add-selection-to-agent-chat entries are registered against
+    // MenuId.EditorContext by EditorContextMenuContribution (with
+    // `when: editorHasSelection`), so they show in the MenuRegistry-driven
+    // right-click menu wired up below.
     //
     // Bridge Monaco widget focus → `editorFocus` contextKey, so the global ESC
     // binding (FocusActiveEditorGroupAction) bows out while Monaco has focus and

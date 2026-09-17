@@ -17,8 +17,18 @@ import {
   type AcpChatWidget,
 } from '../services/acp/session/acpChatWidgetService.js'
 import { AcpSessionEditorInput } from '../services/acp/session/acpSessionEditorInput.js'
+import { basenameOfPath } from '../workbench/files/resourceInfo.js'
 
 export const CATEGORY = localize2('command.category.agents', 'Agents')
+
+/** Trailing segment of a session's cwd, for disambiguating same-titled rows. */
+export function sessionDirectoryName(cwd: string | undefined): string | undefined {
+  if (cwd === undefined || cwd.length === 0) return undefined
+  const normalized = cwd.replace(/[\\/]+$/, '')
+  if (normalized.length === 0) return cwd
+  const name = basenameOfPath(normalized)
+  return name.length > 0 ? name : cwd
+}
 
 // The prompt-suggestion popover, in-session find, and turn-cancel bind keys that
 // would otherwise hit Monaco / global bindings (down/up/tab/enter/escape/f3).

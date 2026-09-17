@@ -1,10 +1,11 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Populates the editor right-click menu (MenuId.EditorContext) with the core
- *  built-in items — command palette, add-selection-to-agent-chat, and the Monaco
- *  clipboard actions (cut/copy/paste). Cut/paste are hidden when the editor is
- *  read-only; the agent action only shows with a non-empty selection. Extensions
- *  contribute further items to the same menu via `contributes.menus['editor/context']`.
+ *  built-in items — command palette, the two add-selection-to-agent-chat
+ *  entries (existing chat / new chat), and the Monaco clipboard actions
+ *  (cut/copy/paste). Cut/paste are hidden when the editor is read-only; the
+ *  agent actions only show with a non-empty selection. Extensions contribute
+ *  further items to the same menu via `contributes.menus['editor/context']`.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -14,7 +15,10 @@ import {
   MenuId,
   MenuRegistry,
 } from '@universe-editor/platform'
-import { AddSelectionToAgentChatAction } from '../actions/agentContextActions.js'
+import {
+  AddSelectionToExistingAgentChatAction,
+  AddSelectionToNewAgentChatAction,
+} from '../actions/agentContextActions.js'
 import { ShowCommandsAction } from '../actions/layoutActions.js'
 
 export class EditorContextMenuContribution extends Disposable implements IWorkbenchContribution {
@@ -33,12 +37,26 @@ export class EditorContextMenuContribution extends Disposable implements IWorkbe
 
     this._register(
       MenuRegistry.addMenuItem(MenuId.EditorContext, {
-        command: AddSelectionToAgentChatAction.ID,
+        command: AddSelectionToExistingAgentChatAction.ID,
         icon: 'sparkle',
-        title: localize('action.agent.addSelectionToChat', 'Add Selection to Agent Chat'),
+        title: localize(
+          'action.agent.addSelectionToExistingChat',
+          'Add Selection to Existing Agent Chat',
+        ),
         when: 'editorHasSelection',
         group: '1_agent',
         order: 1,
+      }),
+    )
+
+    this._register(
+      MenuRegistry.addMenuItem(MenuId.EditorContext, {
+        command: AddSelectionToNewAgentChatAction.ID,
+        icon: 'add',
+        title: localize('action.agent.addSelectionToNewChat', 'Add Selection to New Agent Chat'),
+        when: 'editorHasSelection',
+        group: '1_agent',
+        order: 2,
       }),
     )
 
