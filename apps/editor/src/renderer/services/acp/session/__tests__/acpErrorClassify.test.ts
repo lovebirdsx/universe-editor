@@ -3,7 +3,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
-import { classifyAcpError, isSessionNotFoundError } from '../acpErrorClassify.js'
+import {
+  classifyAcpError,
+  formatAcpErrorMessage,
+  isSessionNotFoundError,
+} from '../acpErrorClassify.js'
 
 describe('classifyAcpError', () => {
   it('classifies claude fork structured errorKinds', () => {
@@ -154,6 +158,46 @@ describe('classifyAcpError', () => {
     expect(classifyAcpError(undefined).cls).toBe('fatal')
     expect(classifyAcpError(null).cls).toBe('fatal')
     expect(classifyAcpError({}).cls).toBe('fatal')
+  })
+})
+
+describe('formatAcpErrorMessage', () => {
+  it('rewrites a Codex writer-lock details payload', () => {
+    expect(
+      formatAcpErrorMessage({
+        message: 'Internal error',
+        data: { details: 'thread 01a0aec6 already has an active writer' },
+      }),
+    ).toBe(
+      'This session is in use by another Codex client. Close it in the official Codex app and try again.',
+    )
+  })
+
+  it('appends data.details when the message does not already contain them', () => {
+    expect(
+      formatAcpErrorMessage({
+        message: 'Internal error',
+        data: { details: 'paginated threads do not support thread/read(includeTurns=true)' },
+      }),
+    ).toBe('Internal error: paginated threads do not support thread/read(includeTurns=true)')
+  })
+
+  it('does not duplicate details already present in the message', () => {
+    expect(
+      formatAcpErrorMessage({
+        message: 'Internal error: boom from agent',
+        data: { details: 'boom from agent' },
+      }),
+    ).toBe('Internal error: boom from agent')
+  })
+
+  it('uses a plain Error message', () => {
+    expect(formatAcpErrorMessage(new Error('boom'))).toBe('boom')
+  })
+
+  it('returns an empty string for unknown shapes', () => {
+    expect(formatAcpErrorMessage(undefined)).toBe('')
+    expect(formatAcpErrorMessage(null)).toBe('')
   })
 })
 

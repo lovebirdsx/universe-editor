@@ -45,6 +45,10 @@ import { AcpSessionEditorInput } from '../../../services/acp/session/acpSessionE
 import { AcpSessionEditor } from '../AcpSessionEditor.js'
 import { ServicesContext } from '../../useService.js'
 
+vi.mock('../ChatBody.js', () => ({
+  ChatBody: () => <div data-testid="acp-chat-body" />,
+}))
+
 afterEach(() => cleanup())
 
 interface FakeAcpSessionService extends IAcpSessionServiceType {
@@ -358,6 +362,70 @@ describe('AcpSessionEditor — auto-resume after editor restart', () => {
     })
     expect(screen.queryByTestId('acp-session-resume-error')).toBeNull()
     expect(editor.closeEditor).toHaveBeenCalledWith(input.id)
+  })
+
+  it('does not re-kick resume after a transient live session is torn down on load failure', async () => {
+    // Repro: `_resumeSessionInner` registers the session (ChatBody replaces the
+    // Resumer) before `session/load` rejects, then removes it. A Resumer that
+    // owned phase locally would remount at idle and storm session/load.
+    let rejectResume!: (err: unknown) => void
+    const service = makeService({
+      resumeResult: () =>
+        new Promise<IAcpSession>((_resolve, reject) => {
+          rejectResume = reject
+        }),
+    })
+    const { input } = buildInput(service, 'sess-loop', 'fake')
+    await act(async () => {
+      renderEditor(service, input)
+    })
+    expect(service.resumeSession).toHaveBeenCalledTimes(1)
+    expect(screen.getByTestId('acp-session-resuming')).toBeTruthy()
+
+    const sess = { id: 'sess-loop', readOnly: false } as unknown as IAcpSession
+    await act(async () => {
+      service._byId.set('sess-loop', sess)
+      service.sessionsObs.set([sess], undefined)
+    })
+    expect(screen.getByTestId('acp-chat-body')).toBeTruthy()
+
+    await act(async () => {
+      service._byId.delete('sess-loop')
+      service.sessionsObs.set([], undefined)
+    })
+    expect(service.resumeSession).toHaveBeenCalledTimes(1)
+    expect(screen.getByTestId('acp-session-resuming')).toBeTruthy()
+
+    await act(async () => {
+      rejectResume(new Error('boom'))
+    })
+    expect(service.resumeSession).toHaveBeenCalledTimes(1)
+    expect(await screen.findByTestId('acp-session-resume-error')).toBeTruthy()
+
+    const retry = screen.getByTestId('acp-session-resume-retry')
+    await act(async () => {
+      fireEvent.click(retry)
+    })
+    expect(service.resumeSession).toHaveBeenCalledTimes(2)
+  })
+
+  it('shows the writer-lock instruction instead of a bare Internal error', async () => {
+    const service = makeService({
+      resumeResult: () =>
+        Promise.reject({
+          message: 'Internal error',
+          data: { details: 'thread x already has an active writer' },
+        }),
+    })
+    const { input } = buildInput(service, 'sess-locked', 'fake')
+    await act(async () => {
+      renderEditor(service, input)
+    })
+    expect(service.resumeSession).toHaveBeenCalledTimes(1)
+    const error = await screen.findByTestId('acp-session-resume-error')
+    expect(error.textContent).toContain(
+      'This session is in use by another Codex client. Close it in the official Codex app and try again.',
+    )
   })
 
   it('closes its own tab silently (no error UI) when resume fails and the session vanished from history', async () => {

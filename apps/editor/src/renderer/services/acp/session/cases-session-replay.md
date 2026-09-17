@@ -28,6 +28,16 @@ side task 恢复时 `suppressReplayToTimeline` 把锚点之前的整段基线丢
 
 CLI 从 transcript 恢复模型时拿到的是 `claude-fable-5` 而非用户选的 `claude-fable-5[1m]`，而 `CLAUDE_CODE_AUTO_COMPACT_WINDOW` 是 `min(模型有效窗口, 配置值)` 的取小语义，窗口一退化配置再大也被钳住。根治：`session/load` 与 `session/resume`（`_resumeSessionInner` / `_reconnectSession`）的 `_meta.claudeCode.resumeModel` 捎上 history 行记忆的 per-session 模型原值（`buildResumeMeta`），fork `getAvailableModels` 按 **env > resumeModel > settings.model** 优先级解析，命中走既有 `reassert-override` 后台 `setModel`（带 `[1m]` 原值）；wire key 常量在 `acpExtMethods.ts` 的 `ACP_META_KEYS.resumeModel`。**第二坑（实测踩过）**：SDK 模型列表可能没有目标 lane 行（如无 allowlist 时 fable 只有裸行），`resolveModelPreference` 的 tokenized 兜底层会把 `claude-fable-5[1m]` 模糊匹配到**裸行**，reassert 裸名 → 仍 200k；fork 的修法是 canonical 比较发现 lane 丢失时**逐字跟踪原值**（合成条目拷最近 SDK 行的能力标志），窗口播种也按逐字 id 命中 `1m` 启发式。`/model` 斜杠命令切换的值能正常进 history 并经 resumeModel 回传（CLI 落 transcript、fork 不追踪但 editor 侧从 configOption 同步学到）。**第三坑（用户手动切裸行，side task 实测踩过）**：模型列表同时有 `sonnet`（200k）与 `sonnet[1m]` 两行，172k 上下文的 fork 会话切到裸行后下一条 prompt 立即 auto-compact——机制上"正确"但用户无预警地丢上下文。守卫在 `modelSwitchContextGuard.ts`：`evaluateModelSwitchContextShrink`（仅 claude-code；`[Nm]`/`-Nm` hint → N×1M、裸行 200k 启发式；`used ≥ 目标×0.8` 且目标 < 当前 `usage.size` 才告警）+ 确认对话框，接线在 `ConfigOptionsBar.pickValue` 与 `agentModelActions.pickConfigOption` 两个切模型入口。
 
+## 官方 Codex app 打开过的会话：writer lock + paginated thread + resume 死循环
+
+诊断包钉死三条（不是猜测）：
+
+1. **跨进程 writer lock**。官方 app 占 `$CODEX_HOME/thread-writer-locks/<id>.lock`，编辑器 spawn 的私有 `codex app-server` 在 `thread/resume` 上报 `already has an active writer`。不能双写，只做 UX：`formatAcpErrorMessage` 读 `data.details`，命中 writer-lock 时译成「该会话正在被另一个 Codex 客户端使用」。
+2. **paginated thread 的 `session/load` 永久失败**。官方 app 打开/迁移后，0.146 `thread/read(includeTurns=true)` 拒绝。修在 fork `CodexAcpClient.loadSession`：捕获该错误、带着 resume 返回的空 `turns` thread 走 JSONL fallback（`includeAllItems`）。`mergeHistoryUpdates` 在空 turns 时会在第一条 `user_message_chunk` 丢掉整个 fallback，故 `requireHistory` 时直接用 fallback；空 fallback 大声失败，禁止打开空白会话。
+3. **UI remount 死循环**。`_resumeSessionInner` 先 register 再 `session/load`，失败再 remove → `AcpSessionEditor` 在 session 有无之间切 ChatBody ↔ 新 `AcpSessionResumer`（phase idle）→ 再 auto-resume（约 71 次 / 18s）。phase 提升到不随 `getById` 卸载的一层、按 `sessionId` 隔离；成功只在 `resumeSession` resolve 时 idle。
+
+配套测试：`AcpSessionEditor.test.tsx`（load 失败不重踢 + writer-lock 文案）；fork `load-session.test.ts`（paginated JSONL 成功 / 空 fallback 失败 / 其它 threadRead 错误仍抛）。
+
 ## "Open Session Location"（列表右键）依赖 fork 上报 `_meta.transcriptPath`
 
 链路 = fork `session/list` 响应 `SessionInfo._meta.transcriptPath` → `acpSessionRestoreCoordinator.toBulkMergeInfo`（agent 无关通用提取）→ `acpSessionHistory` → `RevealAgentSessionInOSAction`（`host.showItemInFolder`）。claude fork 用 `findTranscriptFile` 查 `~/.claude/projects/...`；codex fork 直接映射 app-server `thread/list` 返回的 `Thread.path`（rollout JSONL，ephemeral 线程为 null 则省略）。**运行中 session 的 history 行在下次 hydrate 前没有 transcriptPath**：菜单项对 live session 保持可用，`RevealAgentSessionInOSAction` 缓存未命中时走 facade `resolveTranscriptPath` → coordinator `fetchTranscriptPath` 按需发一次 `session/list`（capability 门控、silent 连接、游标翻页）解析并经 `setHistoryTranscriptPath` 写回 history，解析不到才提示无 transcript。仅当行既非 live 又无缓存路径时菜单项才灰掉 = 其 fork 没上报，编辑器侧无需改。

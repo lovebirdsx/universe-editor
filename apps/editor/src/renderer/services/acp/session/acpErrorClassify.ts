@@ -34,6 +34,8 @@
  *      wrapper's 'Internal error' code is never mistaken for `authRequired`.
  *--------------------------------------------------------------------------------------------*/
 
+import { localize } from '@universe-editor/platform'
+
 export type AcpErrorClass = 'transient' | 'quota' | 'auth' | 'fatal' | 'agent_crash'
 
 export interface AcpErrorVerdict {
@@ -141,6 +143,33 @@ function classifyClaudeKind(kind: unknown): AcpErrorVerdict | undefined {
   // through to the message-text fallback instead of forcing fatal.
   if (kind === 'unknown') return undefined
   return { cls: 'fatal', kind }
+}
+
+/**
+ * Surface the JSON-RPC `data.details` that ACP wraps behind a generic
+ * `Internal error` message. Writer-lock collisions get a specific instruction
+ * instead of the raw lock text.
+ */
+export function formatAcpErrorMessage(err: unknown): string {
+  const message =
+    err && typeof err === 'object' && typeof (err as { message?: unknown }).message === 'string'
+      ? (err as { message: string }).message
+      : typeof err === 'string'
+        ? err
+        : ''
+  const details = readData(err)?.['details']
+  const detailsText = typeof details === 'string' && details.length > 0 ? details : undefined
+  const blob = detailsText !== undefined ? `${message}\n${detailsText}` : message
+  if (/already has an active writer/i.test(blob)) {
+    return localize(
+      'acp.session.resumeWriterLock',
+      'This session is in use by another Codex client. Close it in the official Codex app and try again.',
+    )
+  }
+  if (detailsText !== undefined && !message.includes(detailsText)) {
+    return message.length > 0 ? `${message}: ${detailsText}` : detailsText
+  }
+  return message
 }
 
 /**

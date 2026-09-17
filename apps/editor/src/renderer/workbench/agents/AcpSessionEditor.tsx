@@ -5,7 +5,7 @@
  *  a session that exists in history but isn't live yet.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { AlertCircle, KeyRound, Loader2, RotateCw } from 'lucide-react'
 import {
   ICommandService,
@@ -27,6 +27,7 @@ import type { AcpSessionHistoryEntry } from '../../services/acp/session/acpSessi
 import { AcpSessionEditorInput } from '../../services/acp/session/acpSessionEditorInput.js'
 import { isAuthRequiredError } from '../../services/acp/session/acpAuthError.js'
 import { shouldPauseAcpAutoResume } from '../../services/acp/session/acpAutoResumeGuard.js'
+import { formatAcpErrorMessage } from '../../services/acp/session/acpErrorClassify.js'
 import { ChatBody } from './ChatBody.js'
 import { ForeignSessionPreview } from './ForeignSessionPreview.js'
 import styles from './agents.module.css'
@@ -49,6 +50,16 @@ export function AcpSessionEditor({ input }: { input: IEditorInput }) {
 
   const acpInput = input instanceof AcpSessionEditorInput ? input : undefined
   const session = acpInput ? service.getById(acpInput.sessionId) : undefined
+  // Resume phase lives here, not in AcpSessionResumer: `_resumeSessionInner` registers
+  // the session before `session/load` finishes, so this component briefly renders
+  // ChatBody and unmounts the Resumer. If load then fails, the store removes the
+  // session and a fresh idle Resumer would auto-kick again (dozens of session/load
+  // calls in seconds). Keep phase keyed by sessionId so tab switches cannot leak
+  // a pending machine onto the next input. Only a resolved resume resets to idle.
+  const [phaseBySessionId, setPhaseBySessionId] = useState<Record<string, ResumePhase>>({})
+  const setPhaseFor = useCallback((id: string, next: ResumePhase) => {
+    setPhaseBySessionId((prev) => ({ ...prev, [id]: next }))
+  }, [])
 
   if (!acpInput) return null
 
@@ -77,12 +88,18 @@ export function AcpSessionEditor({ input }: { input: IEditorInput }) {
   }
 
   // EditorGroupView 用 `<Component input={active} />`（无 key）渲染激活编辑器，切换 tab
-  // 会复用同一个 AcpSessionEditor 实例、只换 input prop。若把 resume 的 phase 状态直接
-  // 挂在这里，phase 会跨 input 残留——一旦它停在 'pending'（首个 session resume 后从不
-  // 复位），`phase !== 'idle'` 守卫会永久挡住下一个 session 的 resume，表现为切到第二个
-  // 会话永远转圈、不发 session/load、也不报错。用 sessionId 作 key 让每个会话拥有独立
-  // 的 resume 状态机即可根治。
-  return <AcpSessionResumer key={acpInput.sessionId} input={acpInput} />
+  // 会复用同一个 AcpSessionEditor 实例、只换 input prop。phase 按 sessionId 分桶，Resumer
+  // 仍用 sessionId 作 key（本地 ref / effect 隔离）。成功路径把该 id 复位为 idle，关闭
+  // 后再打开才能再次 auto-resume；失败保持 error，直到用户点 Retry。
+  const phase = phaseBySessionId[acpInput.sessionId] ?? { kind: 'idle' }
+  return (
+    <AcpSessionResumer
+      key={acpInput.sessionId}
+      input={acpInput}
+      phase={phase}
+      onPhaseChange={setPhaseFor}
+    />
+  )
 }
 
 /**
@@ -138,14 +155,22 @@ function ForeignSessionResumer({
   )
 }
 
-function AcpSessionResumer({ input }: { input: AcpSessionEditorInput }) {
+function AcpSessionResumer({
+  input,
+  phase,
+  onPhaseChange,
+}: {
+  input: AcpSessionEditorInput
+  phase: ResumePhase
+  onPhaseChange: (sessionId: string, next: ResumePhase) => void
+}) {
   const service = useService(IAcpSessionService)
   const history = useService(IAcpSessionHistoryService)
   const editor = useService(IEditorService)
   const commands = useService(ICommandService)
   const windows = useService(IWindowsService)
   const sessionId = input.sessionId
-  const [phase, setPhase] = useState<ResumePhase>({ kind: 'idle' })
+  const setPhase = (next: ResumePhase) => onPhaseChange(sessionId, next)
   // Set when the user clicks "load anyway" on the OOM-paused placeholder — the
   // guard must not re-pause the manual retry.
   const resumeAnywayRef = useRef(false)
@@ -157,8 +182,11 @@ function AcpSessionResumer({ input }: { input: AcpSessionEditorInput }) {
       setPhase({ kind: 'pending' })
       service.resumeSession(sessionId).then(
         () => {
-          // 成功路径：service.sessions 的变更驱动父组件 useObservable 重渲，渲染分支自动
-          // 切到 <ChatBody />（本组件随即卸载），无需在此 setPhase。
+          // Reset even if this Resumer already unmounted (parent swapped to
+          // ChatBody after the brief pre-load register). Idle lets a later
+          // close-and-reopen auto-resume; do not idle merely because a session
+          // appeared — that happens before loadSession settles.
+          onPhaseChange(sessionId, { kind: 'idle' })
         },
         (err: unknown) => {
           // 此处不查 cancelled：kick 里的 setPhase(pending) 改变 phase.kind 依赖，
@@ -171,9 +199,9 @@ function AcpSessionResumer({ input }: { input: AcpSessionEditorInput }) {
             editor.closeEditor(input.id)
             return
           }
-          setPhase({
+          onPhaseChange(sessionId, {
             kind: 'error',
-            message: (err as Error).message,
+            message: formatAcpErrorMessage(err),
             needsAuth: isAuthRequiredError(err),
           })
         },
@@ -194,7 +222,7 @@ function AcpSessionResumer({ input }: { input: AcpSessionEditorInput }) {
     return () => {
       cancelled = true
     }
-  }, [service, history, editor, windows, input, sessionId, phase.kind])
+  }, [service, history, editor, windows, input, sessionId, phase.kind, onPhaseChange])
 
   if (phase.kind === 'paused') {
     return (

@@ -2709,6 +2709,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.session.memoryTrimmed': '为保护内存已释放部分内容；最新的输出已保留。',
   'acp.session.openAuth': '打开 Agent 设置',
   'acp.session.resumeFailed': '恢复 Agent 会话失败：{error}',
+  'acp.session.resumeWriterLock':
+    '该会话正在被另一个 Codex 客户端使用，请先在官方 Codex 应用中关闭后再试',
   'acp.session.resuming': '正在恢复 Agent 会话...',
   'acp.session.retry': '重试',
   'acp.session.resumePausedAfterOom': '上次加载此会话时窗口因内存不足崩溃，已暂停自动恢复。',

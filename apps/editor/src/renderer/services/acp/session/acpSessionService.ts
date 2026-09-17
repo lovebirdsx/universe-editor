@@ -85,7 +85,7 @@ import {
 } from '../acpSessionCreateProfiler.js'
 import { ACP_EXT_METHODS, ACP_META_KEYS, readCodexModelKnownInCatalog } from './acpExtMethods.js'
 import { isAuthRequiredError } from './acpAuthError.js'
-import { isSessionNotFoundError } from './acpErrorClassify.js'
+import { formatAcpErrorMessage, isSessionNotFoundError } from './acpErrorClassify.js'
 import { IAcpPermissionHandler } from '../acpPermissionHandler.js'
 import { IAcpAuthGuidanceService } from './acpAuthGuidanceService.js'
 import { IAcpSessionFactory } from './acpSessionFactory.js'
@@ -1926,7 +1926,7 @@ export class AcpSessionService
    * so callers see the error.
    */
   private _onResumeFailure(entry: AcpSessionHistoryEntry, err: unknown, readOnly = false): never {
-    const msg = (err as Error).message
+    const msg = formatAcpErrorMessage(err)
     if (readOnly) {
       // Read-only preview failures (e.g. agent without loadSession) are not
       // user errors: the UI falls back to the metadata-only preview. Log only.
