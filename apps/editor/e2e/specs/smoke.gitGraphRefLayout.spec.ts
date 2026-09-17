@@ -2,11 +2,23 @@
  *  Git Graph ref-badge layout smoke test (@regression).
  *
  *  A long commit subject must give its row space up to the branch badges instead of
- *  squeezing them into ellipses: `.refs` takes no part in the row's shrink, so the
- *  subject is the only item that ellipsizes. Both the branch name and the subject
- *  are long enough that the row's flex line is genuinely over budget in the default
- *  1280x800 window — the "subject is truncated" assertion is what keeps the badge
- *  assertion from passing vacuously.
+ *  squeezing them into ellipses: `.refs` takes no part in the row's shrink, so the subject
+ *  is the only item that ellipsizes.
+ *
+ *  The row is deliberately not assumed to be wide, because CI is not always wide: the
+ *  Windows runner's 1024x768 virtual screen clamps the 1280x800 default window, and `.refs`
+ *  is capped at 55% of its column — two long branch names genuinely do not fit there and do
+ *  get an ellipsis. That is the accepted rendering (the pill tooltip still names the whole
+ *  ref, see GitGraphEditor.refBadges.test), not the regression this case guards.
+ *
+ *  What has to hold at any window width is what the fix introduced: how much room `.refs`
+ *  gets cannot depend on how long the subject is. So the row is measured twice in one pass,
+ *  the second time with the subject cut to a single character, and the two `.refs` widths
+ *  must match — a residual `flex-shrink` on `.refs` is exactly what pulls them apart. The
+ *  subject's own overflow stays asserted so the pair cannot match vacuously, and the
+ *  per-badge "shows its whole name" check runs only while the badges fit the room `.refs`
+ *  was allotted; when the column itself is the constraint that check is waived with the
+ *  numbers logged rather than passing mute.
  *--------------------------------------------------------------------------------------------*/
 
 import { test, expect } from '@playwright/test'
@@ -21,32 +33,83 @@ const LONG_BRANCH = 'testuser/long-branch-name'
 const LONG_SUBJECT =
   'a deliberately long commit subject that has to yield its row space to the branch badges, because the subject is the one that ellipsizes once the row is over budget'
 
-/** What the row's flex line did to the ref badges and to the subject, measured in
- *  the page. A badge whose text is wider than its own content box is the truncation
- *  the layout has to prevent — Chromium swaps the tail for an ellipsis on any
- *  overflow, so the comparison is sub-pixel: a whole pixel of slack would already
- *  hide a lost character. */
+/** What the row's flex line did to the ref badges and to the subject, measured in the page.
+ *  A badge whose text is wider than its own content box is the truncation the layout has to
+ *  prevent — Chromium swaps the tail for an ellipsis on any overflow, so the comparison is
+ *  sub-pixel: a whole pixel of slack would already hide a lost character.
+ *
+ *  `textWidth` comes from a Range over the badge's contents, which reports the text's layout
+ *  boxes rather than what `overflow: hidden` painted: a badge that already lost its tail
+ *  still measures its whole name. `refs.width` and `refs.widthWithShortSubject` are two
+ *  reads of the same box with only the subject's length differing between them — the subject
+ *  must not move `.refs` at all. `refs.naturalWidth` is what the badges want, which is what
+ *  `.refs` would be without its own `max-width`. */
 function measureRow(el: Element): {
-  badges: { text: string; textWidth: number; contentWidth: number }[]
+  badges: { text: string; textWidth: number; contentWidth: number; naturalWidth: number }[]
+  refs: { width: number; widthWithShortSubject: number; naturalWidth: number }
+  column: number
   message: { client: number; scroll: number }
 } {
-  const refs = el.querySelector('[data-testid="gitGraph-refs"]')!
+  const refs = el.querySelector('[data-testid="gitGraph-refs"]') as HTMLElement
   const message = el.querySelector('[data-testid="gitGraph-message"]') as HTMLElement
+
+  const contentBox = (box: HTMLElement): number => {
+    const style = getComputedStyle(box)
+    return (
+      box.getBoundingClientRect().width -
+      parseFloat(style.paddingLeft) -
+      parseFloat(style.paddingRight)
+    )
+  }
+
+  const width = refs.getBoundingClientRect().width
+  // The subject as React rendered it is a single text node. `nodeValue` (not `textContent`)
+  // keeps that node's identity, so the restore below leaves no reconciler state pointing at
+  // a detached node. The write dirties layout and the rect read flushes it synchronously —
+  // nothing to wait for, and no chance for a re-render to slip between the two reads.
+  const subject = message.firstChild
+  if (subject?.nodeType !== Node.TEXT_NODE) {
+    throw new Error('gitGraph-message should hold the subject as a single text node')
+  }
+  const realSubject = subject.nodeValue ?? ''
+  subject.nodeValue = 'x'
+  const widthWithShortSubject = refs.getBoundingClientRect().width
+  subject.nodeValue = realSubject
+
+  const badges = [...refs.children].map((child) => {
+    const box = child as HTMLElement
+    const style = getComputedStyle(box)
+    const range = document.createRange()
+    range.selectNodeContents(box)
+    const textWidth = range.getBoundingClientRect().width
+    return {
+      text: (box.textContent ?? '').trim(),
+      textWidth,
+      contentWidth: contentBox(box),
+      naturalWidth:
+        textWidth +
+        parseFloat(style.paddingLeft) +
+        parseFloat(style.paddingRight) +
+        parseFloat(style.borderLeftWidth) +
+        parseFloat(style.borderRightWidth) +
+        parseFloat(style.marginLeft) +
+        parseFloat(style.marginRight),
+    }
+  })
+
+  // Badges carry a `margin-right` today (`.refs` sets no `gap`); counting a gap if one is
+  // ever added keeps the natural sum comparable to the width `.refs` is actually allotted.
+  const gap = parseFloat(getComputedStyle(refs).columnGap) || 0
   return {
-    badges: [...refs.children].map((child) => {
-      const box = child as HTMLElement
-      const style = getComputedStyle(box)
-      const range = document.createRange()
-      range.selectNodeContents(box)
-      return {
-        text: (box.textContent ?? '').trim(),
-        textWidth: range.getBoundingClientRect().width,
-        contentWidth:
-          box.getBoundingClientRect().width -
-          parseFloat(style.paddingLeft) -
-          parseFloat(style.paddingRight),
-      }
-    }),
+    badges,
+    refs: {
+      width,
+      widthWithShortSubject,
+      naturalWidth:
+        badges.reduce((sum, badge) => sum + badge.naturalWidth, 0) +
+        gap * Math.max(0, badges.length - 1),
+    },
+    column: contentBox(refs.parentElement as HTMLElement),
     message: { client: message.clientWidth, scroll: message.scrollWidth },
   }
 }
@@ -128,19 +191,38 @@ test.describe('@p1 git graph ref layout', () => {
         )
         .toBeGreaterThanOrEqual(80)
 
-      const { badges, message } = await row.evaluate(measureRow)
+      const { badges, refs, column, message } = await row.evaluate(measureRow)
 
       const long = badges.find((badge) => badge.text === LONG_BRANCH)
       expect(long, `branch badge ${LONG_BRANCH} should be on the row`).toBeDefined()
       expect(long!.contentWidth).toBeGreaterThan(20)
-      // The pressure that used to squeeze the badge — without it the check below is
-      // no evidence at all.
+      // The pressure that used to squeeze the badge. Without it the pair below could match
+      // vacuously — a row that never laid out measures zero twice.
       expect(message.scroll).toBeGreaterThan(message.client + 1)
-      for (const badge of badges) {
-        expect(
-          badge.textWidth,
-          `badge "${badge.text}" should show its whole name`,
-        ).toBeLessThanOrEqual(badge.contentWidth + 0.01)
+
+      // The invariant that holds at every window width: the subject's length must not change
+      // how much room `.refs` gets. Goes red the moment `.refs` takes part in the row's
+      // shrink again, whatever the row's budget happens to be.
+      expect(
+        Math.abs(refs.width - refs.widthWithShortSubject),
+        `.refs must keep one width whatever the subject length is: ${refs.width}px with the ` +
+          `real subject, ${refs.widthWithShortSubject}px with a one-character subject`,
+      ).toBeLessThanOrEqual(0.01)
+
+      // The badges only fit while `.refs` stays under its own `max-width`; a narrow column
+      // clamps it first, and the ellipsis behind the tooltip is the accepted rendering there.
+      if (refs.naturalWidth > refs.widthWithShortSubject + 1) {
+        console.log(
+          `[gitGraphRefLayout] badge-fits check waived: badges want ${refs.naturalWidth}px, ` +
+            `.refs is allotted ${refs.widthWithShortSubject}px of a ${column}px column`,
+        )
+      } else {
+        for (const badge of badges) {
+          expect(
+            badge.textWidth,
+            `badge "${badge.text}" should show its whole name`,
+          ).toBeLessThanOrEqual(badge.contentWidth + 0.01)
+        }
       }
     } finally {
       await closeApp(app)
