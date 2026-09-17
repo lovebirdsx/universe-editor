@@ -371,8 +371,14 @@
   font-family: var(--font-mono, monospace);
 }
 
+/* Branch names come first: `.refs` never takes part in the row's shrink, so a long
+ *  subject cannot squeeze the badges (a subject only ellipsizes itself, and flex
+ *  hands the whole deficit to it as the only shrinkable item). Any residual shrink
+ *  would bite sub-pixel — enough for Chromium to swap the badge's last character
+ *  for an ellipsis. The badges still narrow inside `.refs` once it hits its own
+ *  `max-width`, which is where `+N` folding takes over. */
 .refs {
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   min-width: 0;
   max-width: 55%;
   display: flex;

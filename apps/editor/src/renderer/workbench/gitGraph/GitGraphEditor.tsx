@@ -211,6 +211,7 @@ interface RefEntry {
   menuLabel: string
   /** Icon id for the overflow menu row, keyed to the ref kind. */
   menuIcon: string
+  /** Hover tooltip (kind + full name): a badge that had to ellipsize still reads. */
   title?: string
   priority: number
   onMenu: (e: MouseEvent) => void
@@ -256,34 +257,40 @@ function CommitRefs({
     })
   }
   for (const h of commit.heads) {
+    const label = localize('gitGraph.ref.branch', 'Branch {name}', { name: h })
     entries.push({
       key: `h-${h}`,
       className: `${styles['badge']} ${styles['badgeHead']}`,
       text: h,
       menuIcon: 'checkout',
-      menuLabel: localize('gitGraph.ref.branch', 'Branch {name}', { name: h }),
+      menuLabel: label,
+      title: label,
       priority: h === headName ? 2 : 3,
       onMenu: (e) => onBranchMenu(h, e),
     })
   }
   for (const t of commit.tags) {
+    const label = localize('gitGraph.ref.tag', 'Tag {name}', { name: t.name })
     entries.push({
       key: `t-${t.name}`,
       className: `${styles['badge']} ${styles['badgeTag']}`,
       text: t.name,
       menuIcon: 'tag',
-      menuLabel: localize('gitGraph.ref.tag', 'Tag {name}', { name: t.name }),
+      menuLabel: label,
+      title: label,
       priority: 5,
       onMenu: (e) => onTagMenu(t.name, e),
     })
   }
   for (const r of commit.remotes) {
+    const label = localize('gitGraph.ref.remote', 'Remote {name}', { name: r.name })
     entries.push({
       key: `r-${r.name}`,
       className: `${styles['badge']} ${styles['badgeRemote']}`,
       text: r.name,
       menuIcon: 'remote',
-      menuLabel: localize('gitGraph.ref.remote', 'Remote {name}', { name: r.name }),
+      menuLabel: label,
+      title: label,
       priority: 6,
       onMenu: (e) => onRemoteMenu(r.name, e),
     })
@@ -297,7 +304,7 @@ function CommitRefs({
   const hidden = entries.slice(visibleCount)
 
   return (
-    <span className={styles['refs']}>
+    <span className={styles['refs']} data-testid="gitGraph-refs">
       {commit.stash && <span className={styles['badgeStash']}>{commit.stash.selector}</span>}
       {visible.map((entry) => (
         <span
@@ -376,6 +383,7 @@ const CommitRow = memo(function CommitRow({
         />
         <span
           className={styles['message']}
+          data-testid="gitGraph-message"
           data-tooltip={fullMessage ?? commit.message}
           onMouseEnter={() => onMessageHover(commit.hash)}
         >
