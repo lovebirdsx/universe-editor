@@ -173,3 +173,23 @@ export ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/
 - 两个 Windows-only 用例在 WSL 下 `test.skip`、不执行：`smoke.update.spec.ts`（自动更新）、`smoke.windowCloseFolderLock.spec.ts`（目录删除锁）。涉及这两块改动仍需回 Windows 验证。
 - 视觉基线是 Linux-only（跨平台 fonts/antialiasing 差异），在 WSL 里更新基线天然正确，流程见 [`apps/editor/e2e/baselines/README.md`](../../apps/editor/e2e/baselines/README.md)。
 - 原生模块（`@parcel/watcher`、`@lydell/node-pty`、`@vscode/ripgrep`）均有 Linux prebuild；`@vscode/windows-process-tree` 无 Linux prebuild 且 install 脚本是 node-gyp rebuild，安装期由根 `.pnpmfile.cjs` 的 updateConfig 钩子在非 win32 平台把该包从构建放行改为跳过构建（因此无需 build-essential），运行时由懒加载 + `process.platform === 'win32'` 守卫隔离。
+
+## 残留进程的两级兜底
+
+POSIX 下父进程死亡不会带走子进程（被 reparent 到 init），而 Playwright 只在主进程还活着时才 force-kill 进程组——**主进程已退出恰好是它跳过的那一种**，也是孤儿的来源。所以 e2e-harness 自己按「命令行里的归属签名」清扫（`packages/e2e-harness/src/processSweep.ts`），两级：
+
+| 层 | 时机 | 标记 | 覆盖 |
+|---|---|---|---|
+| worker（`fixtureProcesses.ts`） | 每次 `closeApp` + 进程 `exit` 兜底 | 该 fixture 的 `userDataDir` | 正常结束、测试超时、`workbench.action.quit` 后 handle 已释放 |
+| runner（`globalSetup.ts`） | teardown + 进程 `exit` 兜底 | 本趟 run 根 `ue-e2e-<pid>-<rand>` | Ctrl-C，以及 worker 被 runner SIGKILL（exit 钩子跑不了） |
+
+被测 app 整棵树（`--user-data-dir=<dir>`）与它拉起的 remote-server daemon（`--data-dir <dir>/remote-direct/<authority>`）命令行里都带该路径，所以主进程已死也能定位。
+
+**归属标记只允许是本趟运行自己造的目录**（fixture `userDataDir` / run 根）。绝不使用 `pkill -f bootstrap.js` 这类宽泛模式：开发机上的 `~/.universe-editor-server/<ver>/bootstrap.js serve` 常驻服务命令行同样含 `bootstrap.js serve`，误杀会直接掐断正在进行的编辑器/agent 会话。
+
+手工核查（跑完或 Ctrl-C 后都应输出 0）：
+
+```bash
+ps -eo pid,ppid,args | grep -E 'ue-e2e-|--enable-e2e-probe' | grep -v grep | wc -l
+```
+

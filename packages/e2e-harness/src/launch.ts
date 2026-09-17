@@ -11,7 +11,8 @@
  *    - the minimal-extension-set seam: `extensions` (an allowlist) is forwarded to
  *      the app as `UNIVERSE_ENABLED_EXTENSIONS`; `undefined` means "activate all"
  *      (current behaviour), `[]` means "core only".
- *    - graceful-close-with-force-kill teardown (Windows orphan handling).
+ *    - graceful-close-with-force-kill teardown plus the marker sweep that reaps
+ *      orphans the process tree can no longer reach (see ./processSweep.ts).
  *--------------------------------------------------------------------------------------------*/
 
 import { _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
@@ -20,6 +21,18 @@ import { fileURLToPath } from 'node:url'
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { createRequire } from 'node:module'
+import {
+  extractUserDataDir,
+  registerFixtureApp,
+  sweepFixtureProcesses,
+  unregisterFixtureApp,
+} from './fixtureProcesses.js'
+import {
+  collectDescendants,
+  containsMarker,
+  formatSweepLine,
+  readProcessTable,
+} from './processSweep.js'
 
 // Env var the app's extension-host bootstrap reads as an allowlist (P2). When
 // unset the host activates every scanned extension; when set (even to empty) it
@@ -165,13 +178,32 @@ const CLOSE_TIMEOUT_MS = 10_000
 // recursed with one Get-CimInstance call per descendant; under full-suite load
 // the compounded WMI latency blew the timeout, the catch fell back to a /T on
 // the already-dead root, and nothing got killed — the CDP pipe stayed open.)
-// Non-Windows: a parent SIGKILL suffices (the orphan bug is Windows-only).
+// POSIX needs its own answer: a dead parent does NOT take its children along
+// (they get reparented to init), so the same orphan class exists here. Playwright
+// spawns Electron with `detached: true`, making the app the leader of its own
+// process group — every process it spawns inherits that group, including the
+// remote-server daemon (a plain spawn), so one `kill(-pid)` reaps the lot and
+// still works after the leader died. The snapshot walk is the belt to that
+// suspenders: it catches children that left the group (setsid) while their ppid
+// chain is still intact, so it must sample BEFORE the root is killed.
+// Neither reaches a process reparented to init — that is what the userDataDir
+// marker sweep in closeApp is for.
 function forceKillTree(pid: number): void {
   if (process.platform !== 'win32') {
-    try {
-      process.kill(pid, 'SIGKILL')
-    } catch {
-      // Already gone.
+    if (pid > 1 && pid !== process.pid) {
+      try {
+        process.kill(-pid, 'SIGKILL')
+      } catch {
+        // No such process group.
+      }
+    }
+    const table = readProcessTable()
+    for (const descendant of collectDescendants(table, [pid])) {
+      try {
+        process.kill(descendant, 'SIGKILL')
+      } catch {
+        // Already gone.
+      }
     }
     return
   }
@@ -240,6 +272,10 @@ function forceKillTree(pid: number): void {
 //     `where <tool>` lookups, `wmic baseboard` fingerprinting, and conhost
 //     corpses (a dead-parent conhost's console app is gone — headless ConPTY
 //     hosts and plain `0x4` hosts alike are pure leftovers)
+// Windows-only: these fingerprints are guesses at the spawn ecosystem. POSIX has
+// a precise identifier — the fixture's own userDataDir on the command line — so it
+// sweeps by that instead (see sweepFixtureProcesses); the early return below does
+// NOT mean POSIX goes without.
 function killOrphanedElectronProcesses(): void {
   if (process.platform !== 'win32') return
   try {
@@ -271,8 +307,27 @@ function killOrphanedElectronProcesses(): void {
 // orphans plus anything from our spawn ecosystem — with pid/ppid/name/cmdline.
 // Post-mortem scans miss the culprit (wedged probes eventually exit on their
 // own), so this must run at the moment the pipe is stuck.
-function dumpSuspectProcesses(): void {
-  if (process.platform !== 'win32') return
+function dumpSuspectProcesses(marker: string | undefined): void {
+  if (process.platform !== 'win32') {
+    try {
+      const rows = readProcessTable().filter(
+        (row) =>
+          row.pid === process.pid ||
+          row.ppid === process.pid ||
+          (marker !== undefined && containsMarker(row.args, marker)) ||
+          /--type=[a-z-]+/.test(row.args),
+      )
+      if (rows.length > 0) {
+        const lines = rows.map((row) => `${row.pid} ppid=${row.ppid} ${row.args.slice(0, 180)}`)
+        console.warn(
+          `[e2e] closeApp: suspect processes at stuck-pipe time (self=${process.pid}):\n${lines.join('\n')}`,
+        )
+      }
+    } catch {
+      // Diagnostics only.
+    }
+    return
+  }
   try {
     // Only lines with diagnostic value: anything from OUR ecosystem (command
     // line mentions the repo / userData temp dirs, both contain
@@ -303,10 +358,35 @@ function dumpSuspectProcesses(): void {
 }
 
 export async function closeApp(app: ElectronApplication): Promise<void> {
+  // Unregister first: the sweep below must exclude the OTHER live apps, not this one.
+  const userDataDir = unregisterFixtureApp(app)
+  try {
+    await closeAppInner(app, userDataDir)
+  } finally {
+    // Runs on every path, including the `app.process()` throw inside — the app is
+    // gone, so anything still naming its userDataDir is an orphan holding either
+    // the directory itself (teardownDir then EPERMs) or an inherited CDP pipe fd.
+    if (userDataDir !== undefined) logFixtureSweep(userDataDir)
+  }
+}
+
+function logFixtureSweep(userDataDir: string): void {
+  // Loud on purpose: worker stderr surfaces in the Playwright report, and a sweep
+  // firing at all means the fixture's own teardown did not finish the job.
+  const line = formatSweepLine(sweepFixtureProcesses(userDataDir), `fixture ${userDataDir}`)
+  if (line !== '') console.warn(line)
+}
+
+async function closeAppInner(
+  app: ElectronApplication,
+  userDataDir: string | undefined,
+): Promise<void> {
   let proc: ReturnType<ElectronApplication['process']>
   try {
     // workbench.action.quit already tore the process down; the Playwright
-    // handle is disposed and process() throws. Nothing left to close.
+    // handle is disposed and process() throws. Nothing left to close — but the
+    // caller's finally still sweeps, which is the whole point: a disposed handle
+    // means the main process is gone while its children may well be alive.
     proc = app.process()
   } catch {
     return
@@ -342,6 +422,11 @@ export async function closeApp(app: ElectronApplication): Promise<void> {
     // intermediate parent died first). Sweep those dead-parent orphans too,
     // else they hold the pipe open and app.close() never resolves.
     killOrphanedElectronProcesses()
+    // POSIX counterpart of the win32 sweep above, and the only thing that reaches
+    // a reparented remote-server daemon. Deliberately here rather than only in
+    // closeApp's finally: killing now is what lets the CDP pipe EOF during the
+    // waits below instead of burning the worker-teardown budget.
+    if (userDataDir !== undefined) logFixtureSweep(userDataDir)
 
     // Killing the orphans EOFs the pipe → the pending close() resolves. Wait
     // briefly so Playwright's connection is fully torn down before the worker
@@ -361,7 +446,7 @@ export async function closeApp(app: ElectronApplication): Promise<void> {
       console.warn(
         `[e2e] closeApp: CDP pipe still open after force-kill (pid=${pid}) — destroying parent-side stdio to unblock close()`,
       )
-      dumpSuspectProcesses()
+      dumpSuspectProcesses(userDataDir)
       for (const stream of proc.stdio) stream?.destroy()
       const unblocked = await Promise.race([
         closePromise,
@@ -499,7 +584,14 @@ export async function launchElectron(
 ): Promise<ElectronApplication> {
   for (let attempt = 1; ; attempt++) {
     try {
-      return await electron.launch(options)
+      const app = await electron.launch(options)
+      // Registering here (rather than in launchApp) also covers the self-launching
+      // specs that call this directly. It is what lets a later sweep reach the
+      // app's children after the main process was SIGKILLed (will-quit never ran,
+      // so nothing disposed them) — a disposed Playwright handle can no longer
+      // tell us the pid, but the userDataDir on their command lines still can.
+      registerFixtureApp(app, extractUserDataDir(options?.args))
+      return app
     } catch (err) {
       if (FATAL_LAUNCH_ERROR.test(String(err))) {
         // Keep the original message intact — Playwright's call log carries the

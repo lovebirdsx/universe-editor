@@ -41,6 +41,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import net from 'node:net'
 import { createRunRoot, installRunTempEnv, removeRunRoot } from '@universe-editor/temp-root'
+import { formatSweepLine, sweepProcesses } from './processSweep.js'
 
 // Screen geometry matches CI's `xvfb-run --server-args="-screen 0 1280x1024x24"`.
 const XVFB_SCREEN = '1280x1024x24'
@@ -197,14 +198,26 @@ export default async function globalSetup(): Promise<(() => void) | undefined> {
     throw err
   }
 
-  const teardowns: Array<() => void> = [() => removeRunRoot(runRoot)]
-  if (stopXvfb) teardowns.push(stopXvfb)
-
-  return () => {
-    // 后进先出：先收 Xvfb，再删 run 根（Xvfb 的临时 socket 也在 TEMP 语义之外，顺序其实无关，
-    // 但保持与 setup 相反的顺序更不容易踩坑）。
-    for (const teardown of teardowns.reverse()) teardown()
+  let stopped = false
+  const cleanup = (): void => {
+    if (stopped) return
+    stopped = true
+    // 顺序有讲究：先收本趟残留进程——游离的 remote-server daemon 与 Electron helper
+    // 正攥着 run 根里的文件（也正是「ppid=1 活几天」的症状），再停 Xvfb，最后删 run 根。
+    // run 根每趟唯一（ue-e2e-<pid>-<rand>），所以这个 marker 只会命中本趟自己的进程；
+    // 这也是唯一能覆盖「worker 被 runner SIGKILL 掉」的一层——那种情况 worker 的 exit
+    // 钩子根本没机会跑。worker 自己那层按 fixture 的 userDataDir 收（见 fixtureProcesses）。
+    const line = formatSweepLine(sweepProcesses([runRoot]), `运行根 ${runRoot}`)
+    if (line !== '') console.warn(line)
+    stopXvfb?.()
+    removeRunRoot(runRoot)
   }
+  // 兜底：runner 走 process.exit()（Playwright 的 SIGINT 路径正是如此）时，返回的
+  // teardown 完全不执行。exit 处理器只能做同步事，而扫描（execFileSync + kill）、
+  // stopXvfb（kill SIGTERM）与 removeRunRoot（rmSync）都是同步的，放这里安全。
+  // 先例见 packages/temp-root/src/vitestSetup.ts 的 process.once('exit', cleanup)。
+  process.once('exit', cleanup)
+  return cleanup
 }
 
 async function setupXvfb(): Promise<(() => void) | undefined> {
