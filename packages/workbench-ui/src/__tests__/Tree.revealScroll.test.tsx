@@ -179,3 +179,30 @@ describe('Tree — reveal scrolls only its own scroller', () => {
     expect(root.scrollTop).toBe(440 + ROW_HEIGHT - VIEWPORT)
   })
 })
+
+describe('Tree — reveal survives a structure change', () => {
+  it('scrolls to a revealed row that only expansion made visible', async () => {
+    // “Reveal in Explorer” 可能落在折叠行上：reveal effect 跑时该行还不可见，找不到索引、什么也不消费，
+    // 要等下一次结构变化才轮得到它——所以 effect 也必须依赖那次变化；sizeAt 恒定后请求会被悄悄丢掉。
+    const children: Node[] = Array.from({ length: 30 }, (_, i) => ({ id: `c${i}` }))
+    const parent: Node = { id: 'parent' }
+    const dataSource: ITreeDataSource<Node> = {
+      getId: (n) => n.id,
+      hasChildren: (n) => n.id === parent.id,
+      getChildren: (n) => (n.id === parent.id ? children : []),
+      getRoots: () => [parent],
+    }
+    const model = new TreeModel<Node>({ dataSource })
+    const { root } = renderTree(model)
+
+    await reveal(model, 'c20')
+    expect(root.scrollTop).toBe(0)
+
+    await act(async () => {
+      await model.expand(parent)
+    })
+
+    // 父行展开后 c20 位于索引 21（父行是第 0 行）：[462, 484) 对视口 [0, 220) → 底对齐。
+    expect(root.scrollTop).toBe(21 * ROW_HEIGHT + ROW_HEIGHT - VIEWPORT)
+  })
+})

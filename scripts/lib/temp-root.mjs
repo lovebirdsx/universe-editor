@@ -68,6 +68,7 @@ export const TEMP_PREFIXES = [
   'ext-manifest-test-',
   'ext-mgmt-',
   'git-submodule-sync-',
+  'heap-snapshot-test-',
   'p4-cancel-',
   'p4-direct-',
   'p4-dirEvt-',

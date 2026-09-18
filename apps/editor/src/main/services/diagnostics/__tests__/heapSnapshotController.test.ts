@@ -256,7 +256,9 @@ describe('HeapSnapshotController', () => {
 
     feedBaseline(1)
 
-    await vi.waitFor(() => expect(snapshots()).toHaveLength(1))
+    // 快照 rename 早于 sidecar 写入，等完成事件后再读取整套产物。
+    await vi.waitFor(() => expect(kinds()).toEqual(['started:', 'captured:']))
+    expect(snapshots()).toHaveLength(1)
     // partial 只是中间态，永远不能是产物：列目录的人不该在真名下看到一个写了一半的快照。
     expect(partials()).toEqual([])
     expect(window.calls).toHaveLength(1)

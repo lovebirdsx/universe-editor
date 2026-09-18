@@ -34,6 +34,7 @@ import {
 import { VirtualList } from '../list/VirtualList.js'
 import { resolveIndexNavigation } from '../list/listKeyboard.js'
 import { useScrollRestore, type IScrollStatePersister } from '../list/useScrollRestore.js'
+import { useStableCallback } from '../hooks/useStableCallback.js'
 import { markAsSingleton } from '@universe-editor/platform'
 import { type IVisibleNode, type TreeModel } from './TreeModel.js'
 import {
@@ -196,21 +197,16 @@ export function Tree<T>(props: ITreeProps<T>) {
     return () => d.dispose()
   }, [model])
 
-  // Row heights: uniform by default, per-row when the view supplies
-  // getRowHeight. Held in a ref so the virtualizer's estimateSize identity stays
-  // stable while still seeing the latest resolver.
+  // 行高：默认统一，视图给了 getRowHeight 则按行。解析器放 ref，函数身份恒定——虚拟化器并不按
+  // estimateSize 身份缓存测量（getMeasurementOptions 只看 count / getItemKey 等），换身份换来的
+  // 只是闭包链持有（见 useStableCallback）。
   const rowHeightRef = useRef({ rowHeight, getRowHeight })
   rowHeightRef.current = { rowHeight, getRowHeight }
-  const sizeAt = useCallback(
-    (index: number): number => {
-      const { rowHeight: fallback, getRowHeight: resolve } = rowHeightRef.current
-      const node = visibleRef.current[index]
-      return (node && resolve?.(node)) ?? fallback
-    },
-    // The virtualizer memoizes its measurements against this identity, so it
-    // must change whenever the rows behind the indices did.
-    [structureVersion],
-  )
+  const sizeAt = useStableCallback((index: number): number => {
+    const { rowHeight: fallback, getRowHeight: resolve } = rowHeightRef.current
+    const node = visibleRef.current[index]
+    return (node && resolve?.(node)) ?? fallback
+  })
 
   // Reveal scrolls this tree's own container by the minimum needed, computed
   // from row geometry rather than delegated to `element.scrollIntoView`. That
@@ -278,7 +274,9 @@ export function Tree<T>(props: ITreeProps<T>) {
       cancelled = true
       cancelAnimationFrame(rafId)
     }
-  }, [revealRequest, sizeAt, rowHeight, getRowHeight])
+    // sizeAt 身份恒定后必须显式依赖 structureVersion：只被展开带出来的目标行要等结构变化重跑；
+    // 同一 id 的重复 reveal 仍由 revealRequest 里的 tick 触发。
+  }, [revealRequest, structureVersion, sizeAt, rowHeight, getRowHeight])
 
   // Keyboard context menu (ContextMenu key / Shift+F10): anchored on the focused
   // row so each view's existing row handler opens the menu exactly like a mouse
@@ -290,22 +288,21 @@ export function Tree<T>(props: ITreeProps<T>) {
     dispatchKeyboardContextMenu(row ?? root, row !== null)
   }, [])
 
-  const makeClickHandler = useCallback(
-    (node: IVisibleNode<T>) => (e: ReactMouseEvent) => {
-      if (e.shiftKey) {
-        model.selectRange(model.focused ?? node.id, node.id)
-        return
-      }
-      if (e.ctrlKey || e.metaKey) {
-        model.toggleInSelection(node.id)
-        return
-      }
-      model.setSelection([node.id], node.id)
-      if (node.hasChildren) void model.toggle(node.element)
-      else onActivate?.(node, { preview: true })
-    },
-    [model, onActivate],
-  )
+  // 身份恒定、body 最新：返回的行处理器每次调用现造（读到当前 model / onActivate），
+  // 工厂自身不钉住产出旧一代行的渲染帧。
+  const makeClickHandler = useStableCallback((node: IVisibleNode<T>) => (e: ReactMouseEvent) => {
+    if (e.shiftKey) {
+      model.selectRange(model.focused ?? node.id, node.id)
+      return
+    }
+    if (e.ctrlKey || e.metaKey) {
+      model.toggleInSelection(node.id)
+      return
+    }
+    model.setSelection([node.id], node.id)
+    if (node.hasChildren) void model.toggle(node.element)
+    else onActivate?.(node, { preview: true })
+  })
 
   const onKeyDown = useCallback(
     (e: ReactKeyboardEvent<HTMLDivElement>) => {

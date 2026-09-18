@@ -628,6 +628,34 @@ export interface E2EFindWidgetState {
   readonly searchString: string
 }
 
+/**
+ * `startOutlineRetentionProbe()` 之后 Outline 视图被要求渲染的代际的弱引用读数。
+ * 只计数：探针只存 `WeakRef`、从不强引用，所以这里还活着的代际一定是被窗口里别的
+ * 东西持有着——正是「回调链钉住每一代历史渲染」这个缺陷。要在强制回收之后读（见
+ * `armGcControl`），并比较两段更新：有界的持有者会让 live 数保持恒定。
+ */
+export interface E2EOutlineRetentionStats {
+  /** start 与 stop 之间为 true；stop 后读数仍可读。 */
+  readonly recording: boolean
+  /** 已记录的 outline 取值个数（受探针自己的上限约束）。 */
+  readonly generations: number
+  /** 因上限未记录的数量——非 0 表示这份读数少算了。 */
+  readonly dropped: number
+  /** 其中 model 仍可达的代际数。 */
+  readonly aliveModels: number
+  /** 其中首个符号仍可达的代际数（空 pull 记 0）。 */
+  readonly aliveSymbols: number
+  /** model 或首个符号任一仍可达的代际数。 */
+  readonly aliveGenerations: number
+}
+
+/**
+ * 探针的 GC 控制位状态：一个只剩 `WeakRef` 引用的对象。强制回收后仍是 `alive`
+ * 只能说明「这一轮无法证明不可达对象可被回收」，因此同一时刻读到的存活数不可
+ * 解释——不要据此推断「GC 没跑」。
+ */
+export type E2EGcControlState = 'unarmed' | 'alive' | 'collected'
+
 export interface E2EProbe {
   /** Resolves once the workbench has reached LifecyclePhase.Ready. */
   whenReady(): Promise<void>
@@ -1508,6 +1536,27 @@ export interface E2EProbe {
    * selection change moves the outline highlight" spec.
    */
   getOutlineActiveSymbol(): string | undefined
+  /**
+   * 开始用弱引用记录此后每一个 `IOutlineService.outline` 取值（每代都是视图随后要渲染
+   * 的一棵新树）及其首个符号。重复调用无效果；每轮记录有上限，探针自身有界。**每次
+   * start 都开一轮新统计**（清空上一轮的读数）；这里不保留任何强引用，所以下面的计数
+   * 回答的是「这一代能不能被回收」，而不是「它有没有被登记」。
+   *
+   * 仅 E2E 可用、显式 start/stop：生产路径不会武装它，stop 之后不再持有任何强引用。
+   */
+  startOutlineRetentionProbe(): void
+  /** 停止记录（dispose 订阅）；读数保留，仍可读。 */
+  stopOutlineRetentionProbe(): void
+  /** 当前弱引用读数；只有经过强制回收（见 `armGcControl`）之后才有意义。 */
+  getOutlineRetentionStats(): E2EOutlineRetentionStats
+  /**
+   * 分配一个只剩 `WeakRef` 引用的对象。spec 随后经 CDP 强制回收并读
+   * `getGcControlState()`：控制位仍存活时，这一轮回收**未被证明**能回收不可达对象，
+   * 同时读到的存活数也就不可解释——它把「已回收」与「没验证过」区分开。
+   */
+  armGcControl(): void
+  /** 首次 arm 之前是 `unarmed`；否则表示控制位是否挺过了最近一次强制回收。 */
+  getGcControlState(): E2EGcControlState
   // -- Keybindings probe ----------------------------------------------------
   /**
    * Resolve a single keystroke against KeybindingsRegistry (no when-clause

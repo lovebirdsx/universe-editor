@@ -22,6 +22,7 @@ import {
   StatusBarAlignment,
   StorageScope,
   URI,
+  autorun,
   onUnexpectedError,
   type AiModelKnowledge,
   type AiProviderEntry,
@@ -111,12 +112,14 @@ import {
   type E2EEditorDecoration,
   type E2EExtensionUpdate,
   type E2EFindWidgetState,
+  type E2EGcControlState,
   type E2EInstalledExtension,
   type E2EMarker,
   type E2EMemoryReminderDecision,
   type E2EMemoryReminderSample,
   type E2EMemoryReminderState,
   type E2ENotification,
+  type E2EOutlineRetentionStats,
   type E2EScmDecoration,
   type E2ETerminalLink,
   type E2ETimelineItem,
@@ -422,6 +425,17 @@ const CONFIG_TARGET_NAMES: readonly E2EConfigTarget[] = [
   'memory',
 ]
 
+/** 探针记录 outline 代际的上限：弱引用很小，但上限能防住更新风暴把观测器本身撑大；
+ *  读数里的 `dropped` 说明上限有没有真的截断过（要比较两段计数时必须为 0）。 */
+const OUTLINE_RETENTION_MAX_GENERATIONS = 256
+
+/** 一代 outline：`IOutlineService` 发布的模型，以及它的首个符号（视图回调链钉住的
+ *  就是这个层次的对象）。两者都只持弱引用——探针绝不能成为某一代活下来的原因。 */
+interface OutlineGenerationRefs {
+  readonly model: WeakRef<object>
+  readonly symbol: WeakRef<object> | undefined
+}
+
 export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposable {
   const ds = new DisposableStore()
   if (typeof window === 'undefined' || window[E2E_PROBE_ENABLED_KEY] !== true) return ds
@@ -491,6 +505,65 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       }
     }
     return undefined
+  }
+
+  // outline 代际保留观测器（仅 E2E，由 spec 显式 start/stop）。它记录视图被要求渲染
+  // 过什么，好让强制回收之后能回答「上一代到底能不能被回收」，而不是「回调身份稳不稳」。
+  // 这里只存 WeakRef：某一代若还活着，那是窗口里别的东西仍然可达它——正是本观测器要
+  // 抓的缺陷。每次 start 开一轮新统计（清空上一轮）；stop 只是关订阅，读数仍在。
+  let outlineRetentionRefs: OutlineGenerationRefs[] = []
+  let outlineRetentionDropped = 0
+  let outlineRetentionSeen = new WeakSet<object>()
+  let outlineRetentionSub: IDisposable | undefined
+  let gcControl: WeakRef<object> | undefined
+
+  const startOutlineRetentionProbe = (): void => {
+    if (outlineRetentionSub) return
+    outlineRetentionRefs = []
+    outlineRetentionDropped = 0
+    outlineRetentionSeen = new WeakSet()
+    outlineRetentionSub = autorun((reader) => {
+      const model = services.outlineService.outline.read(reader)
+      // 同一个模型对象可能被再次发布（例如缓存命中后重发），按 model 去重，避免同一代算两次。
+      if (!model || outlineRetentionSeen.has(model)) return
+      outlineRetentionSeen.add(model)
+      if (outlineRetentionRefs.length >= OUTLINE_RETENTION_MAX_GENERATIONS) {
+        outlineRetentionDropped++
+        return
+      }
+      const first = model.roots[0]
+      outlineRetentionRefs.push({
+        model: new WeakRef(model),
+        symbol: first !== undefined ? new WeakRef(first) : undefined,
+      })
+    })
+  }
+
+  const stopOutlineRetentionProbe = (): void => {
+    outlineRetentionSub?.dispose()
+    outlineRetentionSub = undefined
+  }
+  ds.add({ dispose: () => stopOutlineRetentionProbe() })
+
+  const getOutlineRetentionStats = (): E2EOutlineRetentionStats => {
+    let aliveModels = 0
+    let aliveSymbols = 0
+    let aliveGenerations = 0
+    for (const ref of outlineRetentionRefs) {
+      const modelAlive = ref.model.deref() !== undefined
+      const symbolAlive = ref.symbol?.deref() !== undefined
+      if (modelAlive) aliveModels++
+      if (symbolAlive) aliveSymbols++
+      if (modelAlive || symbolAlive) aliveGenerations++
+    }
+    return {
+      recording: outlineRetentionSub !== undefined,
+      generations: outlineRetentionRefs.length,
+      dropped: outlineRetentionDropped,
+      aliveModels,
+      aliveSymbols,
+      aliveGenerations,
+    }
   }
 
   const probe: E2EProbe = {
@@ -1923,6 +1996,22 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     getOutlineUri: (): string | undefined => services.outlineService.outline.get()?.uri,
     getOutlineActiveSymbol: (): string | undefined =>
       services.outlineService.activeSymbol.get()?.name,
+    startOutlineRetentionProbe,
+    stopOutlineRetentionProbe,
+    getOutlineRetentionStats,
+    armGcControl: (): void => {
+      // 只在这里分配、函数返回后除了下面的 WeakRef 再无引用：强制回收要么收走它，
+      // 要么这一轮回收未能被证明有效。
+      const control = {
+        marker: 'e2e-gc-control',
+        payload: Array.from({ length: 64 }, (_, i) => ({ i })),
+      }
+      gcControl = new WeakRef(control)
+    },
+    getGcControlState: (): E2EGcControlState => {
+      if (!gcControl) return 'unarmed'
+      return gcControl.deref() === undefined ? 'collected' : 'alive'
+    },
     resolveKeybinding: (key: string): { kind: string; command?: string } => {
       const r = KeybindingsRegistry.resolveKeystroke(key)
       return r.kind === 'execute' ? { kind: r.kind, command: r.command } : { kind: r.kind }
