@@ -43,6 +43,7 @@ import {
   IEditorService,
   IInstantiationService,
   INotificationService,
+  IUriIdentityService,
   MenuId,
   Severity,
   generateUuid,
@@ -107,6 +108,7 @@ import {
   loadWorkspaceFiles,
   type MentionFileEntry,
 } from '../../services/acp/mentionFileSearch.js'
+import { resolveSessionScopeRoot } from '../../services/acp/sessionScope.js'
 import { MentionPopover } from './MentionPopover.js'
 import { ContextPopover, type ContextPopoverEntry } from './ContextPopover.js'
 import { SelectionContextChips } from './SelectionContextChips.js'
@@ -269,7 +271,16 @@ export function PromptInput({
   const hostService = useService(IHostService)
   const commandService = useService(ICommandService)
   const widgetService = useService(IAcpChatWidgetService)
+  const uriIdentity = useService(IUriIdentityService)
   const workspaceRoot = workspace.current?.folder
+  // A session rooted at a subdirectory suggests only that directory's files and
+  // context entries; a root-scoped session keeps the workspace as before.
+  const sessionScope = useMemo(
+    () => resolveSessionScopeRoot(workspaceRoot, session.cwd, uriIdentity),
+    [workspaceRoot, session.cwd, uriIdentity],
+  )
+  const mentionRoot = sessionScope?.root
+  const sessionScoped = sessionScope?.narrowed === true
   // Focus-scope changes partition the mention cache, so the scans below must
   // re-run when the fingerprint moves.
   const focusFingerprint = useEventValue(
@@ -685,24 +696,24 @@ export function PromptInput({
 
   // 扫描结果按 (root, 焦点指纹) 记账：一次已完成的扫描（哪怕结果是空的）不再重跑。
   // 不能用「列表非空」当判据——截断的巨型工作区会刻意返回空清单，效果循环会空转。
-  const scanKey = workspaceRoot ? `${workspaceRoot.toString()}|${focusFingerprint}` : null
+  const scanKey = mentionRoot ? `${mentionRoot.toString()}|${focusFingerprint}` : null
 
-  // A focus-scope change partitions the mention cache; drop the stale listing
-  // so the scan effect re-runs under the new scope. `scannedKey` must be cleared
-  // too: switching back to an already-scanned scope would otherwise look
-  // "settled" and the cleared list would never be refilled.
+  // A focus-scope or scan-root change partitions the mention cache; drop the
+  // stale listing so the scan effect re-runs under the new scope. `scannedKey`
+  // must be cleared too: switching back to an already-scanned scope would
+  // otherwise look "settled" and the cleared list would never be refilled.
   useEffect(() => {
     mentionScanSeqRef.current++
     setFiles([])
     setFilesComplete(false)
     setScannedKey(null)
-  }, [focusFingerprint])
+  }, [scanKey])
 
   // Lazily kick off the workspace file scan the first time `@` is typed.
   useEffect(() => {
     if (
       mentionQuery === null ||
-      workspaceRoot === undefined ||
+      mentionRoot === undefined ||
       scannedKey === scanKey ||
       filesLoading
     ) {
@@ -715,7 +726,7 @@ export function PromptInput({
     const seq = mentionScanSeqRef.current
     setFilesLoading(true)
     loadWorkspaceFiles(
-      workspaceRoot,
+      mentionRoot,
       fileSearch,
       {
         dirNames: exclude.getDirNameIgnores(),
@@ -723,7 +734,9 @@ export function PromptInput({
         useIgnoreFiles: exclude.getUseIgnoreFiles(),
       },
       undefined,
-      focusScopeForMention(focusScope),
+      // Focus entries are workspace-relative paths, so they only narrow a
+      // workspace-root scan: a session-scoped root is always walked in full.
+      sessionScoped ? undefined : focusScopeForMention(focusScope),
     )
       .then((listing) => {
         if (seq !== mentionScanSeqRef.current) return
@@ -747,11 +760,11 @@ export function PromptInput({
     scanKey,
     scannedKey,
     filesLoading,
-    workspaceRoot,
+    mentionRoot,
+    sessionScoped,
     fileSearch,
     exclude,
     focusScope,
-    focusFingerprint,
   ])
 
   // Truncated-listing fallback (mirrors quick open's): the cached listing is an
@@ -763,15 +776,15 @@ export function PromptInput({
       setMentionFallback((prev) => (prev.length === 0 ? prev : []))
       return
     }
-    if (!workspaceRoot) return
+    if (!mentionRoot) return
     const seq = ++mentionFallbackSeqRef.current
-    const focus = focusScopeForMention(focusScope)
+    const focus = sessionScoped ? undefined : focusScopeForMention(focusScope)
     const cts = new CancellationTokenSource()
     const timer = setTimeout(() => {
       fileSearch
         .search(
           {
-            root: workspaceRoot,
+            root: mentionRoot,
             pattern: mentionQuery.query,
             maxResults: 30,
             ignore: exclude.getDirNameIgnores(),
@@ -781,8 +794,8 @@ export function PromptInput({
             useIgnoreFiles: exclude.getUseIgnoreFiles(),
             // An explicitly empty scanPaths is "focused on nothing yet" —
             // forward it as [] rather than dropping it into a full-tree scan.
-            ...(focus.scanPaths !== undefined ? { scanPaths: focus.scanPaths } : {}),
-            rootFilesInScope: focus.rootFilesInScope,
+            ...(focus?.scanPaths !== undefined ? { scanPaths: focus.scanPaths } : {}),
+            ...(focus ? { rootFilesInScope: focus.rootFilesInScope } : {}),
           },
           cts.token,
         )
@@ -806,7 +819,8 @@ export function PromptInput({
   }, [
     filesComplete,
     mentionQuery,
-    workspaceRoot,
+    mentionRoot,
+    sessionScoped,
     fileSearch,
     exclude,
     focusScope,
@@ -828,7 +842,7 @@ export function PromptInput({
   // Only open when there's actually a workspace to search — without one we
   // have nothing to suggest, so the popover (including its "Scanning files…"
   // and "No matching files" states) would be pure noise.
-  const mentionOpen = mentionQuery !== null && !mentionDismissed && workspaceRoot !== undefined
+  const mentionOpen = mentionQuery !== null && !mentionDismissed && mentionRoot !== undefined
 
   // Fetch the three cheap `#` sources (Git changes / open editors / docs)
   // immediately; the symbol search is comparatively expensive (may hit
@@ -869,6 +883,16 @@ export function PromptInput({
     return all.filter((ctx) => formatSelectionLabel(ctx).toLowerCase().includes(q))
   }, [hashQuery, editorService, workspace])
 
+  // A session-scoped input only offers context entries that resolve inside its
+  // own directory.
+  const inSessionScope = useCallback(
+    (uri: string): boolean => {
+      if (!sessionScoped || mentionRoot === undefined) return true
+      return uriIdentity.isEqualOrParent(URI.parse(uri), mentionRoot)
+    },
+    [sessionScoped, mentionRoot, uriIdentity],
+  )
+
   // One flat suggestion list (no group headers). Each context source is a group;
   // groups are ordered by how many items they contribute, fewest first — so a
   // narrow, high-signal source (e.g. the single "docs" entry) surfaces at the
@@ -876,12 +900,20 @@ export function PromptInput({
   // keep the source-priority order below (stable sort). Selection and open-editor
   // entries share one group — both answer "what am I looking at right now".
   const hashEntries = useMemo<readonly ContextPopoverEntry[]>(() => {
+    // Docs sit in the app resources and the commit picker carries no path at
+    // all, so neither is directory-scoped.
+    const scoped = <T extends { readonly uri: string }>(items: readonly T[]): readonly T[] =>
+      sessionScoped ? items.filter((item) => inSessionScope(item.uri)) : items
     const groups: readonly ContextPopoverEntry[][] = [
-      hashSuggestions.symbol.map((item) => ({ kind: 'suggestion', item }) as const),
-      hashSuggestions.scmChange.map((item) => ({ kind: 'suggestion', item }) as const),
+      scoped(hashSuggestions.symbol).map((item) => ({ kind: 'suggestion', item }) as const),
+      scoped(hashSuggestions.scmChange).map((item) => ({ kind: 'suggestion', item }) as const),
       [
-        ...hashSelectionEntries.map((selection) => ({ kind: 'selection', selection }) as const),
-        ...hashSuggestions.openEditor.map((item) => ({ kind: 'suggestion', item }) as const),
+        ...scoped(hashSelectionEntries).map(
+          (selection) => ({ kind: 'selection', selection }) as const,
+        ),
+        ...scoped(hashSuggestions.openEditor).map(
+          (item) => ({ kind: 'suggestion', item }) as const,
+        ),
       ],
       hashSuggestions.docs.map((item) => ({ kind: 'suggestion', item }) as const),
       hashSuggestions.commit.map((item) => ({ kind: 'suggestion', item }) as const),
@@ -890,7 +922,7 @@ export function PromptInput({
       .filter((g) => g.length > 0)
       .sort((a, b) => a.length - b.length)
       .flat()
-  }, [hashSuggestions, hashSelectionEntries])
+  }, [hashSuggestions, hashSelectionEntries, sessionScoped, inSessionScope])
 
   // Report popover open/closed up to the widget service, which flips
   // `acpPromptPopupVisible` for the focused widget. The suggestion commands

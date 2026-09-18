@@ -12,7 +12,7 @@
  *       只读预览。
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdirSync, realpathSync } from 'node:fs'
+import { mkdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test, expect } from '../fixtures/sharedApp.js'
@@ -93,5 +93,50 @@ test.describe('@p1 agents — sub-project session scope', () => {
 
     // The chat carries the working-directory badge so the scope is visible.
     await expect(page.locator('[data-testid="acp-session-cwd"]')).toBeVisible({ timeout: 5000 })
+  })
+
+  test('@-mention lists only files under the session subdirectory', async ({ page, workbench }) => {
+    await workbench.waitForRestored()
+
+    const wsDir = realpathSync.native(mkTempDir('universe-editor-e2e-mention-scope-'))
+    const subDir = join(wsDir, ...SUB_SEGMENTS)
+    mkdirSync(join(subDir, 'src'), { recursive: true })
+    writeFileSync(join(wsDir, 'root-only.ts'), 'export const rootOnly = 1\n')
+    writeFileSync(join(subDir, 'src', 'inside.ts'), 'export const inside = 1\n')
+    await workbench.openWorkspace(wsDir)
+
+    await page.evaluate(([id, p]) => window.__E2E__!.installAcpEchoAgent(id, p), [
+      'echo',
+      ECHO_AGENT_PATH,
+    ] as const)
+
+    await page.evaluate((folder) => {
+      void window.__E2E__!.runCommand('workbench.action.agent.newSessionInFolder', {
+        parent: folder,
+      })
+    }, localUriComponents(subDir))
+
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getAcpSessionCount()), { timeout: 15000 })
+      .toBe(1)
+
+    await expect(page.getByTestId('acp-prompt-drop-host')).toBeVisible({ timeout: 10000 })
+    await page.evaluate(() => void window.__E2E__!.runCommand('workbench.action.agent.focusInput'))
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('acpPromptInputFocused')), {
+        timeout: 5000,
+      })
+      .toBe(true)
+    await page.keyboard.type('@')
+
+    // The listing is walked asynchronously (ripgrep in the main process), so the
+    // row count is the assertion — it settles at exactly the one file the
+    // session's own directory holds, not the workspace's two.
+    const popover = page.getByTestId('acp-mention-popover')
+    await expect(popover).toBeVisible({ timeout: 10000 })
+    const rows = popover.getByRole('option')
+    await expect(rows).toHaveCount(1, { timeout: 15000 })
+    await expect(rows.first()).toContainText('src/inside.ts')
+    await expect(popover).not.toContainText('root-only.ts')
   })
 })

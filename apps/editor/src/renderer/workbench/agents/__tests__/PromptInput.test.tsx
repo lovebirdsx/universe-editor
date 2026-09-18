@@ -53,6 +53,7 @@ import type {
   IEditorService as IEditorServiceType,
   IFileDialogService as IFileDialogServiceType,
   IFileSearchService as IFileSearchServiceType,
+  IFileSearchQuery,
   IFileService as IFileServiceType,
   IHostService as IHostServiceType,
   INotificationService as INotificationServiceType,
@@ -225,20 +226,26 @@ const stubLanguageFeatures: ILanguageFeaturesServiceType = {
   getWorkspaceSymbolProviders: () => [],
 } as unknown as ILanguageFeaturesServiceType
 
+function stubRelativePathUnder(root: string, child: string): string | null {
+  const normRoot = root.replace(/\\/g, '/').replace(/\/$/, '')
+  const normChild = child.replace(/\\/g, '/')
+  if (normChild === normRoot) return ''
+  return normChild.startsWith(normRoot + '/') ? normChild.slice(normRoot.length + 1) : null
+}
+
 const stubUriIdentity: IUriIdentityServiceType = {
   _serviceBrand: undefined,
   platform: 'linux',
   isEqual: (a?: URI, b?: URI) => a?.toString() === b?.toString(),
-  isEqualOrParent: () => false,
+  isEqualOrParent: (resource?: URI, parent?: URI) => {
+    if (!resource || !parent) return false
+    if (resource.scheme !== parent.scheme || resource.authority !== parent.authority) return false
+    return stubRelativePathUnder(parent.path, resource.path) !== null
+  },
   getComparisonKey: (uri: URI) => uri.toString(),
   arePathsEqual: (a?: string, b?: string) => a === b,
   getPathComparisonKey: (p: string) => p,
-  relativePathUnder: (root: string, child: string) => {
-    const normRoot = root.replace(/\\/g, '/').replace(/\/$/, '')
-    const normChild = child.replace(/\\/g, '/')
-    if (normChild === normRoot) return ''
-    return normChild.startsWith(normRoot + '/') ? normChild.slice(normRoot.length + 1) : null
-  },
+  relativePathUnder: stubRelativePathUnder,
   createResourceMap: () => new Map() as never,
   createResourceSet: () => new Set() as never,
 } as unknown as IUriIdentityServiceType
@@ -532,6 +539,22 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
     commandsObs,
     cancelRestoreEmitter,
   } satisfies FakeSession
+}
+
+/** `makeFileSearch` that records every query it was handed, so a test can assert
+ *  which root — and whether any focus scope — a walk was issued with. */
+function captureFileSearch(
+  paths: readonly string[],
+  queries: IFileSearchQuery[],
+): IFileSearchServiceType {
+  const base = makeFileSearch(paths)
+  return {
+    _serviceBrand: undefined,
+    async search(query, token) {
+      queries.push(query)
+      return base.search(query, token)
+    },
+  } as IFileSearchServiceType
 }
 
 const COMMANDS: readonly AvailableCommand[] = [
@@ -1137,6 +1160,68 @@ describe('PromptInput — @-mention popover', () => {
     expect(options.length).toBeGreaterThanOrEqual(3)
   })
 
+  it('scans the session subdirectory instead of the workspace root', async () => {
+    const queries: IFileSearchQuery[] = []
+    renderWithServices(<PromptInput session={makeSession({ cwd: '/repo/packages/app' })} />, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+      fileSearch: captureFileSearch(['/repo/packages/app/src/inside.ts'], queries),
+    })
+    const ta = getTextarea()
+    typeAt(ta, '@')
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    expect(queries[0]?.root.toString()).toBe(URI.file('/repo/packages/app').toString())
+    expect(screen.getAllByRole('option')[0]?.textContent).toContain('inside.ts')
+  })
+
+  it('keeps the workspace root for a session rooted at the folder itself', async () => {
+    const queries: IFileSearchQuery[] = []
+    renderWithServices(<PromptInput session={makeSession({ cwd: '/repo' })} />, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+      fileSearch: captureFileSearch(FILES, queries),
+    })
+    const ta = getTextarea()
+    typeAt(ta, '@')
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    expect(queries[0]?.root.toString()).toBe(URI.file('/repo').toString())
+    expect(screen.getAllByRole('option').length).toBeGreaterThanOrEqual(3)
+  })
+
+  it('does not apply the focus scope to a session-scoped walk', async () => {
+    const queries: IFileSearchQuery[] = []
+    renderWithServices(<PromptInput session={makeSession({ cwd: '/repo/packages/app' })} />, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+      fileSearch: captureFileSearch(['/repo/packages/app/src/inside.ts'], queries),
+      focus: new FakeFocusScopeService(['src']),
+    })
+    const ta = getTextarea()
+    typeAt(ta, '@')
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    // Focus entries are workspace-relative paths, so they cannot narrow a root
+    // that is already the session's own directory.
+    expect(queries[0]?.scanPaths).toBeUndefined()
+  })
+
+  it('still applies the focus scope to a root-scoped walk', async () => {
+    const queries: IFileSearchQuery[] = []
+    renderWithServices(<PromptInput session={makeSession()} />, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+      fileSearch: captureFileSearch(FILES, queries),
+      focus: new FakeFocusScopeService(['src']),
+    })
+    const ta = getTextarea()
+    typeAt(ta, '@')
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    expect(queries[0]?.scanPaths).toEqual(['src'])
+  })
+
   it('refills the listing after the focus scope switches away and back mid-walk', async () => {
     // 回归：scope 变更会清空清单，若不同时清掉"已扫描"记账，趁中间那次扫描还在飞
     // 就切回原 scope 时，记账里仍是原 scope 的旧值 → 判定"已结算"而永不重扫 ——
@@ -1432,6 +1517,33 @@ describe('PromptInput — # context popover', () => {
       uri: URI.file('/repo/docs/zh-CN').toString(),
       meta: { description: expect.any(String) },
     })
+  })
+
+  it('scopes local-change rows to the session directory', async () => {
+    renderWithServices(<PromptInput session={makeSession({ cwd: '/repo/packages/app' })} />, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+      scm: makeScmService(['/repo/packages/app/src/in.ts', '/repo/other/out.ts']),
+    })
+    const ta = getTextarea()
+    typeAt(ta, '#')
+    await flush()
+    const rows = screen.getAllByRole('option').map((o) => o.textContent ?? '')
+    expect(rows.some((t) => t.includes('packages/app/src/in.ts'))).toBe(true)
+    expect(rows.some((t) => t.includes('other/out.ts'))).toBe(false)
+    // Docs live in the app resources and the commit picker carries no path, so
+    // neither is directory-scoped: 1 change + 1 docs + 1 commit.
+    expect(rows).toHaveLength(3)
+  })
+
+  it('keeps every local-change row for a root-scoped session', async () => {
+    renderWithServices(<PromptInput session={makeSession({ cwd: '/repo' })} />, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+      scm: makeScmService(['/repo/packages/app/src/in.ts', '/repo/other/out.ts']),
+    })
+    const ta = getTextarea()
+    typeAt(ta, '#')
+    await flush()
+    expect(screen.getAllByRole('option')).toHaveLength(4)
   })
 
   it('orders sources by item count, fewest first (docs above local changes)', async () => {

@@ -10,7 +10,7 @@ Agent Client Protocol（ACP）客户端层。基于 `@agentclientprotocol/sdk` v
 
 - **协议装配 / 网关**：`acpClientService.ts`（进程启动 + `ClientSideConnection` 装配 + refcount 连接池 + fs/terminal/permission 网关）、`acpAgentRegistry.ts`（内置预设 + `acp.agents` 合并 + PATH 探测）、`acpPathPolicy.ts`（沙盒纯函数：cwd 相对性 + 敏感前缀拒绝）、`acpPermissionHandler.ts`（自动批准 + Memory 持久化）、`acpElicitationForm.ts`（elicitation → 表单模型）、`sdkHostStream.ts`（字符串 → Uint8Array IO 适配）
 - **MCP**：`acpMcpServers.ts`（配置 → wire `McpServer[]` 规范化 + 门控）、`mcpServerEnablementService.ts`（默认启停）、`agentMcpConfigService.ts`（agent 自有 MCP 配置文件路由门面）
-- **输入框引用**：`promptRef.ts` / `promptRefTracker.ts` / `promptMentions.ts` / `promptContextRef.ts` / `contextSuggestions.ts`（@/# 药丸子系，见 [cases-prompt-ref-pills.md](cases-prompt-ref-pills.md)）、`promptContext.ts`（选区上下文组装）
+- **输入框引用**：`promptRef.ts` / `promptRefTracker.ts` / `promptMentions.ts` / `promptContextRef.ts` / `contextSuggestions.ts`（@/# 药丸子系，见 [cases-prompt-ref-pills.md](cases-prompt-ref-pills.md)）、`promptContext.ts`（选区上下文组装）、`sessionScope.ts`
 - **其余工具**：`persistedStateBase.ts`（双桶持久化基类）、`markdownRenderer.ts` / `markdownIncremental.ts` / `mentionFileSearch.ts` / `ansi.ts` / `filePathLink.ts` / `chatFindMatcher.ts` / `commandWrapper.ts` / `agentIconData.ts` / `agentNotificationIcon.ts` / `acpProtocolTracer.ts`、`acpModelCandidateService.ts` / `acpModelCandidates.ts` / `modelOneM.ts` / `configOptionLabel.ts` / `aiFixConfig.ts` / `aiFixPrompt.ts`（职责见文件名）
 - **测试**：`testing/inMemoryAcpPair.ts`（真 `ClientSideConnection` ↔ 桩 `AgentSideConnection` 对联）
 - **会话子系统（37 个文件）**：见 [`session/CLAUDE.md`](session/CLAUDE.md)

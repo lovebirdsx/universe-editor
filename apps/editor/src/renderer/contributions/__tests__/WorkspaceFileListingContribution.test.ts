@@ -136,6 +136,21 @@ describe('WorkspaceFileListingContribution', () => {
     contribution.dispose()
   })
 
+  it('a file change also drops a subdirectory listing (session-scoped walk)', async () => {
+    const { contribution, fileSearch, watcher } = setup()
+    const sub = URI.joinPath(URI.file('/ws'), 'packages/app')
+    await loadWorkspaceFiles(sub, fileSearch, { dirNames: [] })
+    expect(fileSearch.calls).toBe(1)
+
+    // Change events are reported against the workspace root, but a session
+    // rooted at a subdirectory holds its own cache entry of its own.
+    watcher.changes.fire([{ type: 'added', resource: URI.joinPath(sub, 'b.ts') }])
+
+    await loadWorkspaceFiles(sub, fileSearch, { dirNames: [] })
+    expect(fileSearch.calls).toBe(2)
+    contribution.dispose()
+  })
+
   it('a watcher restart invalidates the cached listing (events lost in the gap)', async () => {
     const { contribution, fileSearch, watcher } = setup()
     await loadWorkspaceFiles(URI.file('/ws'), fileSearch, { dirNames: [] })

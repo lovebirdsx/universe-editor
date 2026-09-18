@@ -121,6 +121,53 @@ describe('loadWorkspaceFiles', () => {
     expect(calls()).toBe(2)
   })
 
+  it('invalidateMentionFileCache drops listings walked under a subdirectory', async () => {
+    const root = URI.file('/repo')
+    const sub = URI.joinPath(root, 'packages/app')
+    const { fs } = countingFake(['/repo/a.ts'])
+    await loadWorkspaceFiles(root, fs)
+    await loadWorkspaceFiles(sub, fs)
+
+    // File changes are reported against the workspace root, so a session rooted
+    // at a subdirectory would otherwise never have its listing invalidated.
+    invalidateMentionFileCache(root)
+    expect(peekWorkspaceFiles(root)).toBeUndefined()
+    expect(peekWorkspaceFiles(sub)).toBeUndefined()
+  })
+
+  it('invalidateMentionFileCache leaves roots outside the subtree alone', async () => {
+    const root = URI.file('/repo')
+    const sibling = URI.file('/repo/submarine')
+    const { fs } = countingFake(['/repo/a.ts'])
+    await loadWorkspaceFiles(root, fs)
+    await loadWorkspaceFiles(sibling, fs)
+
+    invalidateMentionFileCache(URI.file('/repo/sub'))
+    expect(peekWorkspaceFiles(root)?.entries).toHaveLength(1)
+    expect(peekWorkspaceFiles(sibling)?.entries).toHaveLength(1)
+  })
+
+  it('invalidateMentionFileCache folds case when matching descendants', async () => {
+    const sub = URI.file('c:/repo/sub')
+    const { fs } = countingFake(['c:/repo/sub/a.ts'])
+    await loadWorkspaceFiles(sub, fs)
+
+    invalidateMentionFileCache(URI.file('C:/repo'))
+    expect(peekWorkspaceFiles(sub)).toBeUndefined()
+  })
+
+  it('invalidateMentionFileCache clears every root when called without one', async () => {
+    const root = URI.file('/repo')
+    const sub = URI.joinPath(root, 'packages/app')
+    const { fs } = countingFake(['/repo/a.ts'])
+    await loadWorkspaceFiles(root, fs)
+    await loadWorkspaceFiles(sub, fs)
+
+    invalidateMentionFileCache()
+    expect(peekWorkspaceFiles(root)).toBeUndefined()
+    expect(peekWorkspaceFiles(sub)).toBeUndefined()
+  })
+
   it('peekWorkspaceFiles returns the stale listing past the TTL without re-walking', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     try {

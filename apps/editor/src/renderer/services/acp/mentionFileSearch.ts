@@ -237,16 +237,41 @@ export function peekWorkspaceFiles(
   )?.listing
 }
 
-/** Invalidate the cache — exposed for tests and for explicit refresh actions. */
+/** Keys are `<rootUri>|<dirNameSignature>…` and `URI.toString()` percent-encodes
+ *  `|`, so the root segment always ends at the first literal separator. */
+function rootSegmentOf(key: string): string {
+  const end = key.indexOf('|')
+  return end === -1 ? key : key.slice(0, end)
+}
+
+/**
+ * Whether `candidate` is `root` or a root walked beneath it. Case is folded on
+ * purpose: the same directory can reach the cache spelled `C:/repo/sub` from a
+ * session cwd and `c:/repo/sub` from a folder URI, and a case-sensitive *miss*
+ * would leave that listing stale for the whole TTL — a folded *hit* only costs
+ * one re-walk.
+ */
+function isSameOrDescendantRoot(candidate: string, root: string): boolean {
+  const base = root.toLowerCase()
+  const other = candidate.toLowerCase()
+  // A `file:///` root already ends in the separator; adding another never matches.
+  return other === base || other.startsWith(base.endsWith('/') ? base : `${base}/`)
+}
+
+/**
+ * Invalidate the cache — exposed for tests and for explicit refresh actions.
+ * Descendant roots go with it: file changes are reported against the workspace
+ * root, but a session rooted at a subdirectory holds its own cache entry that
+ * would otherwise survive every invalidation and stay stale for the whole TTL.
+ */
 export function invalidateMentionFileCache(root?: URI): void {
   if (!root) {
     _cache.clear()
     return
   }
-  // Keys are `<root>|<dirNameSignature>…`, so clear every variant for this root.
-  const prefix = root.toString() + '|'
+  const target = root.toString()
   for (const key of [..._cache.keys()]) {
-    if (key.startsWith(prefix)) _cache.delete(key)
+    if (isSameOrDescendantRoot(rootSegmentOf(key), target)) _cache.delete(key)
   }
 }
 

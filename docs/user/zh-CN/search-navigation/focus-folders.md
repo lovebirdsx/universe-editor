@@ -92,7 +92,7 @@
 - **配置目录在文件树里始终可见**：根目录下的 `.universe-editor/` 与 `.vscode/` 无论聚焦集与 `workspace.focusShowRootFiles` 怎么设，都留在文件树里——聚焦配置本身就写在 `.universe-editor/settings.json` 里，把它藏起来等于把钥匙锁在柜子里。这个豁免只作用于**文件树的可见性**，也只在**根目录**生效：全局搜索、`Ctrl+P` 与文件监听仍按聚焦集来，`Client/.vscode` 也是普通内容照常过滤。
 - **全局搜索**只在聚焦目录里搜；[搜索侧栏](./global-search.md)的包含 / 排除范围在此基础上进一步收窄。
 - **Ctrl+P 快速打开**只在聚焦目录里找文件。
-- **AI 会话的 `@` 文件引用**只在聚焦目录里给建议（见[你的第一次 Agent 会话](../ai-agent/first-session.md)）。
+- **AI 会话的 `@` 文件引用**只在聚焦目录里给建议（见[你的第一次 Agent 会话](../ai-agent/first-session.md)）；会话自带[子目录工作目录](../ai-agent/managing-sessions.md#子项目会话工作目录)时不叠加聚焦——聚焦条目是相对工作区根的路径，而那时整个子目录都已经是它的范围。
 
 **编辑器在后台扫的**——这正是性能收益的来源：
 
