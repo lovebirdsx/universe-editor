@@ -1,8 +1,10 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Breadcrumbs — the symbol path of the editor caret, shown above the editor.
- *  Consumes IOutlineService (shared with the Outline view): the file name plus
- *  the ancestry of the symbol under the cursor. Clicking a segment jumps to it.
+ *  Reads the outline of ITS OWN editor group (IOutlineService.forGroup): in a
+ *  split view each group follows its own active editor, so a background group
+ *  must not mirror the focused one. Falls back to the service itself (the active
+ *  group) when rendered outside a group, e.g. in isolation tests.
  *--------------------------------------------------------------------------------------------*/
 
 import { Fragment } from 'react'
@@ -13,13 +15,16 @@ import { IOutlineService } from '../../services/languageFeatures/OutlineService.
 import { symbolAncestryPath } from '../../services/languageFeatures/symbolTree.js'
 import { SymbolIcon } from '../symbols/symbolIcon.js'
 import type { FileEditorInput } from '../../services/editor/FileEditorInput.js'
+import { useEditorGroup } from './EditorGroupContext.js'
 import styles from './Breadcrumbs.module.css'
 
 export function Breadcrumbs({ input }: { input: IEditorInput }) {
   const fileInput = input as FileEditorInput
+  const group = useEditorGroup()
   const outlineService = useService(IOutlineService)
-  const outline = useObservable(outlineService.outline)
-  const activeSymbol = useObservable(outlineService.activeSymbol)
+  const scope = group ? outlineService.forGroup(group.id) : outlineService
+  const outline = useObservable(scope.outline)
+  const activeSymbol = useObservable(scope.activeSymbol)
 
   const path = outline ? symbolAncestryPath(outline.roots, activeSymbol) : []
 
@@ -34,7 +39,7 @@ export function Breadcrumbs({ input }: { input: IEditorInput }) {
           <button
             type="button"
             className={styles['segment']}
-            onClick={() => outlineService.revealSymbol(symbol)}
+            onClick={() => scope.revealSymbol(symbol)}
           >
             <span className={styles['segmentIcon']} aria-hidden="true">
               <SymbolIcon kind={symbol.kind} languageId={outline?.languageId} size={14} />

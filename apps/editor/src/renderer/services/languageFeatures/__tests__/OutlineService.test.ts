@@ -4,6 +4,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  autorun,
   Emitter,
   Event,
   IFileService,
@@ -13,9 +14,14 @@ import {
   observableValue,
   ServiceCollection,
   URI,
-  type IEditorService,
+  type IEditorGroupsService,
   type IFileService as IFileServiceType,
 } from '@universe-editor/platform'
+import {
+  FakeEditorGroups,
+  makeEditorGroups,
+  SINGLE_GROUP_ID,
+} from '../../../__tests__/_helpers/fakeEditorGroups.js'
 import type { monaco } from '../../../workbench/editor/monaco/MonacoLoader.js'
 import { FileEditorInput } from '../../editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../editor/FileEditorRegistry.js'
@@ -58,6 +64,7 @@ import {
 } from '../../gitGraph/graphOutline.js'
 import type { ILanguageFeaturesService } from '../LanguageFeaturesService.js'
 import { OutlineService } from '../OutlineService.js'
+import { OutlineSymbolCache } from '../editorOutlineTracker.js'
 
 const { markerListeners, previewModels, modelAddListeners } = vi.hoisted(() => ({
   markerListeners: [] as Array<(resources: readonly { toString(): string }[]) => void>,
@@ -179,10 +186,15 @@ function makeFakeEditor(languageId: string) {
   }
 }
 
-/** Editor whose model carries a given URI; `getModel()` returns null once disposed. */
+/** Editor whose model carries a given URI; `getModel()` returns null once disposed.
+ *  Records cursor moves / reveals so per-group routing can be asserted. */
 function makeFakeEditorFor(uri: string, languageId = 'markdown') {
   let disposed = false
   let version = 1
+  let position: monaco.Position = { lineNumber: 1, column: 1 } as monaco.Position
+  let cursorCb: (() => void) | undefined
+  const revealed: number[] = []
+  let focusCount = 0
   const model = {
     uri: { toString: () => uri },
     getLanguageId: () => languageId,
@@ -193,13 +205,34 @@ function makeFakeEditorFor(uri: string, languageId = 'markdown') {
   } as unknown as monaco.editor.ITextModel
   const editor = {
     getModel: () => (disposed ? null : model),
-    getPosition: () => ({ lineNumber: 1, column: 1 }) as monaco.Position,
-    onDidChangeCursorPosition: () => ({ dispose: () => {} }),
-    setPosition: () => {},
-    revealLineInCenterIfOutsideViewport: () => {},
-    focus: () => {},
+    getPosition: () => position,
+    onDidChangeCursorPosition: (cb: () => void) => {
+      cursorCb = cb
+      return { dispose: () => {} }
+    },
+    setPosition: (p: monaco.Position) => {
+      position = p
+    },
+    revealLineInCenterIfOutsideViewport: (line: number) => {
+      revealed.push(line)
+    },
+    focus: () => {
+      focusCount++
+    },
   } as unknown as monaco.editor.IStandaloneCodeEditor
-  return { editor, dispose: () => (disposed = true), bumpVersion: () => void version++ }
+  return {
+    editor,
+    revealed,
+    get focusCount() {
+      return focusCount
+    },
+    moveCursorTo(lineNumber: number) {
+      position = { lineNumber, column: 1 } as monaco.Position
+      cursorCb?.()
+    },
+    dispose: () => (disposed = true),
+    bumpVersion: () => void version++,
+  }
 }
 
 describe('OutlineService', () => {
@@ -221,7 +254,6 @@ describe('OutlineService', () => {
     const input = inst.createInstance(FileEditorInput, URI.file('/ws/x.md'))
 
     const activeEditor = observableValue<FileEditorInput | undefined>('t', undefined)
-    const editorService = { activeEditor } as unknown as IEditorService
 
     const changeEmitter = new Emitter<{ languageId: string }>()
     const provider = {
@@ -233,14 +265,14 @@ describe('OutlineService', () => {
     } as unknown as ILanguageFeaturesService
 
     const fake = makeFakeEditor(languageId)
-    const svc = new OutlineService(editorService, facade, undefined as never)
+    const svc = new OutlineService(makeEditorGroups(activeEditor), facade, undefined as never)
     return { svc, input, activeEditor, fake }
   }
 
   it('publishes the symbol tree when a markdown editor becomes active', async () => {
     const symbols = [makeSymbol('A', 1, 5)]
     const { svc, input, activeEditor, fake } = setup(symbols)
-    FileEditorRegistry.register(input, fake.editor)
+    FileEditorRegistry.register(input, fake.editor, SINGLE_GROUP_ID)
     activeEditor.set(input, undefined)
     await flush()
     expect(svc.outline.get()?.roots).toEqual(symbols)
@@ -249,7 +281,7 @@ describe('OutlineService', () => {
 
   it('clears the outline when the active editor goes away', async () => {
     const { svc, input, activeEditor, fake } = setup([makeSymbol('A', 1, 5)])
-    FileEditorRegistry.register(input, fake.editor)
+    FileEditorRegistry.register(input, fake.editor, SINGLE_GROUP_ID)
     activeEditor.set(input, undefined)
     await flush()
     expect(svc.outline.get()).toBeDefined()
@@ -261,7 +293,7 @@ describe('OutlineService', () => {
   it('updates the active symbol on cursor movement', async () => {
     const symbols = [makeSymbol('A', 1, 3), makeSymbol('B', 4, 10)]
     const { svc, input, activeEditor, fake } = setup(symbols)
-    FileEditorRegistry.register(input, fake.editor)
+    FileEditorRegistry.register(input, fake.editor, SINGLE_GROUP_ID)
     activeEditor.set(input, undefined)
     await flush()
     expect(svc.activeSymbol.get()?.name).toBe('A')
@@ -272,7 +304,7 @@ describe('OutlineService', () => {
 
   it('yields an empty outline for a language with no provider', async () => {
     const { svc, input, activeEditor, fake } = setup([makeSymbol('A', 1, 5)], 'plaintext')
-    FileEditorRegistry.register(input, fake.editor)
+    FileEditorRegistry.register(input, fake.editor, SINGLE_GROUP_ID)
     activeEditor.set(input, undefined)
     await flush()
     expect(svc.outline.get()?.roots).toEqual([])
@@ -302,11 +334,10 @@ describe('OutlineService', () => {
     } as unknown as ILanguageFeaturesService
 
     const activeEditor = observableValue<FileEditorInput | undefined>('t', undefined)
-    const editorService = { activeEditor } as unknown as IEditorService
-    const svc = new OutlineService(editorService, facade, undefined as never)
+    const svc = new OutlineService(makeEditorGroups(activeEditor), facade, undefined as never)
 
-    FileEditorRegistry.register(inputA, makeFakeEditorFor(uriA.toString()).editor)
-    FileEditorRegistry.register(inputB, makeFakeEditorFor(uriB.toString()).editor)
+    FileEditorRegistry.register(inputA, makeFakeEditorFor(uriA.toString()).editor, SINGLE_GROUP_ID)
+    FileEditorRegistry.register(inputB, makeFakeEditorFor(uriB.toString()).editor, SINGLE_GROUP_ID)
 
     activeEditor.set(inputA, undefined)
     await flush()
@@ -356,12 +387,11 @@ describe('OutlineService', () => {
     } as unknown as ILanguageFeaturesService
 
     const activeEditor = observableValue<FileEditorInput | undefined>('t', undefined)
-    const editorService = { activeEditor } as unknown as IEditorService
-    const svc = new OutlineService(editorService, facade, undefined as never)
+    const svc = new OutlineService(makeEditorGroups(activeEditor), facade, undefined as never)
 
     const fakeA = makeFakeEditorFor(uriA.toString())
-    FileEditorRegistry.register(inputA, fakeA.editor)
-    FileEditorRegistry.register(inputB, makeFakeEditorFor(uriB.toString()).editor)
+    FileEditorRegistry.register(inputA, fakeA.editor, SINGLE_GROUP_ID)
+    FileEditorRegistry.register(inputB, makeFakeEditorFor(uriB.toString()).editor, SINGLE_GROUP_ID)
 
     activeEditor.set(inputA, undefined)
     await flush()
@@ -411,18 +441,17 @@ describe('OutlineService', () => {
     } as unknown as ILanguageFeaturesService
 
     const activeEditor = observableValue<FileEditorInput | undefined>('t', undefined)
-    const editorService = { activeEditor } as unknown as IEditorService
-    const svc = new OutlineService(editorService, facade, undefined as never)
+    const svc = new OutlineService(makeEditorGroups(activeEditor), facade, undefined as never)
 
     const fake = makeFakeEditorFor('file:///ws/x.md')
-    FileEditorRegistry.register(input, fake.editor)
+    FileEditorRegistry.register(input, fake.editor, SINGLE_GROUP_ID)
     activeEditor.set(input, undefined)
     await flush()
     expect(calls).toBe(1)
 
     // The Monaco editor (re)mounting mid-pull re-attaches the same input — the
     // duplicated trigger must not stack a second full-size pull on the wire.
-    FileEditorRegistry.register(input, fake.editor)
+    FileEditorRegistry.register(input, fake.editor, SINGLE_GROUP_ID)
     await flush()
     expect(calls).toBe(1)
 
@@ -450,10 +479,9 @@ describe('OutlineService', () => {
     } as unknown as ILanguageFeaturesService
 
     const activeEditor = observableValue<FileEditorInput | undefined>('t', undefined)
-    const editorService = { activeEditor } as unknown as IEditorService
-    const svc = new OutlineService(editorService, facade, undefined as never)
+    const svc = new OutlineService(makeEditorGroups(activeEditor), facade, undefined as never)
 
-    FileEditorRegistry.register(input, makeFakeEditorFor('file:///ws/x.md').editor)
+    FileEditorRegistry.register(input, makeFakeEditorFor('file:///ws/x.md').editor, SINGLE_GROUP_ID)
     activeEditor.set(input, undefined)
     await flush()
     // First pull happens before the server is ready: empty outline.
@@ -486,10 +514,9 @@ describe('OutlineService', () => {
     } as unknown as ILanguageFeaturesService
 
     const activeEditor = observableValue<FileEditorInput | undefined>('t', undefined)
-    const editorService = { activeEditor } as unknown as IEditorService
-    const svc = new OutlineService(editorService, facade, undefined as never)
+    const svc = new OutlineService(makeEditorGroups(activeEditor), facade, undefined as never)
 
-    FileEditorRegistry.register(input, makeFakeEditorFor('file:///ws/x.md').editor)
+    FileEditorRegistry.register(input, makeFakeEditorFor('file:///ws/x.md').editor, SINGLE_GROUP_ID)
     activeEditor.set(input, undefined)
     await flush()
     expect(svc.outline.get()?.roots).toEqual([])
@@ -520,10 +547,9 @@ describe('OutlineService', () => {
     } as unknown as ILanguageFeaturesService
 
     const activeEditor = observableValue<FileEditorInput | undefined>('t', undefined)
-    const editorService = { activeEditor } as unknown as IEditorService
-    const svc = new OutlineService(editorService, facade, undefined as never)
+    const svc = new OutlineService(makeEditorGroups(activeEditor), facade, undefined as never)
 
-    FileEditorRegistry.register(input, makeFakeEditorFor('file:///ws/x.md').editor)
+    FileEditorRegistry.register(input, makeFakeEditorFor('file:///ws/x.md').editor, SINGLE_GROUP_ID)
     activeEditor.set(input, undefined)
     await flush()
     expect(svc.outline.get()?.roots).toEqual([]) // no provider registered yet
@@ -557,10 +583,9 @@ describe('OutlineService', () => {
     } as unknown as ILanguageFeaturesService
 
     const activeEditor = observableValue<FileEditorInput | undefined>('t', undefined)
-    const editorService = { activeEditor } as unknown as IEditorService
-    const svc = new OutlineService(editorService, facade, undefined as never)
+    const svc = new OutlineService(makeEditorGroups(activeEditor), facade, undefined as never)
 
-    FileEditorRegistry.register(input, makeFakeEditorFor('file:///ws/x.md').editor)
+    FileEditorRegistry.register(input, makeFakeEditorFor('file:///ws/x.md').editor, SINGLE_GROUP_ID)
     activeEditor.set(input, undefined)
     await flush()
     expect(svc.outline.get()?.roots).toEqual([])
@@ -594,10 +619,13 @@ describe('OutlineService', () => {
       } as unknown as ILanguageFeaturesService
 
       const activeEditor = observableValue<FileEditorInput | undefined>('t', undefined)
-      const editorService = { activeEditor } as unknown as IEditorService
-      const svc = new OutlineService(editorService, facade, undefined as never)
+      const svc = new OutlineService(makeEditorGroups(activeEditor), facade, undefined as never)
 
-      FileEditorRegistry.register(input, makeFakeEditorFor('file:///ws/x.md').editor)
+      FileEditorRegistry.register(
+        input,
+        makeFakeEditorFor('file:///ws/x.md').editor,
+        SINGLE_GROUP_ID,
+      )
       activeEditor.set(input, undefined)
       await vi.advanceTimersByTimeAsync(0)
       expect(svc.outline.get()?.roots).toEqual([])
@@ -635,10 +663,13 @@ describe('OutlineService', () => {
       } as unknown as ILanguageFeaturesService
 
       const activeEditor = observableValue<FileEditorInput | undefined>('t', undefined)
-      const editorService = { activeEditor } as unknown as IEditorService
-      const svc = new OutlineService(editorService, facade, undefined as never)
+      const svc = new OutlineService(makeEditorGroups(activeEditor), facade, undefined as never)
 
-      FileEditorRegistry.register(input, makeFakeEditorFor('file:///ws/x.md').editor)
+      FileEditorRegistry.register(
+        input,
+        makeFakeEditorFor('file:///ws/x.md').editor,
+        SINGLE_GROUP_ID,
+      )
       activeEditor.set(input, undefined)
       await vi.advanceTimersByTimeAsync(0)
       expect(svc.outline.get()?.roots).toEqual([])
@@ -682,10 +713,13 @@ describe('OutlineService', () => {
       } as unknown as ILanguageFeaturesService
 
       const activeEditor = observableValue<FileEditorInput | undefined>('t', undefined)
-      const editorService = { activeEditor } as unknown as IEditorService
-      const svc = new OutlineService(editorService, facade, undefined as never)
+      const svc = new OutlineService(makeEditorGroups(activeEditor), facade, undefined as never)
 
-      FileEditorRegistry.register(input, makeFakeEditorFor('file:///ws/x.md').editor)
+      FileEditorRegistry.register(
+        input,
+        makeFakeEditorFor('file:///ws/x.md').editor,
+        SINGLE_GROUP_ID,
+      )
       activeEditor.set(input, undefined)
       await vi.advanceTimersByTimeAsync(0)
       // The first pull rejected, so no tree is published yet — the key point is
@@ -727,10 +761,13 @@ describe('OutlineService', () => {
       } as unknown as ILanguageFeaturesService
 
       const activeEditor = observableValue<FileEditorInput | undefined>('t', undefined)
-      const editorService = { activeEditor } as unknown as IEditorService
-      const svc = new OutlineService(editorService, facade, undefined as never)
+      const svc = new OutlineService(makeEditorGroups(activeEditor), facade, undefined as never)
 
-      FileEditorRegistry.register(input, makeFakeEditorFor('file:///ws/x.md').editor)
+      FileEditorRegistry.register(
+        input,
+        makeFakeEditorFor('file:///ws/x.md').editor,
+        SINGLE_GROUP_ID,
+      )
       activeEditor.set(input, undefined)
       await vi.advanceTimersByTimeAsync(0)
       // The first pull is still hanging, so no tree is published yet — the key
@@ -789,7 +826,7 @@ describe('OutlineService', () => {
       createDecorationsCollection: () => collection,
     } as unknown as monaco.editor.IStandaloneCodeEditor
 
-    FileEditorRegistry.register(input, editor)
+    FileEditorRegistry.register(input, editor, SINGLE_GROUP_ID)
     activeEditor.set(input, undefined)
     await flush()
 
@@ -837,7 +874,7 @@ describe('OutlineService', () => {
       setPosition: () => {},
     } as unknown as monaco.editor.IStandaloneCodeEditor
 
-    FileEditorRegistry.register(input, editor)
+    FileEditorRegistry.register(input, editor, SINGLE_GROUP_ID)
     activeEditor.set(input, undefined)
     await flush()
 
@@ -866,7 +903,6 @@ describe('OutlineService', () => {
     previewModels.set(sourceUri.toString(), model)
 
     const activeEditor = observableValue<MarkdownPreviewInput | undefined>('t', undefined)
-    const editorService = { activeEditor } as unknown as IEditorService
     const provider = {
       provideDocumentSymbols: () => symbols,
     } as unknown as monaco.languages.DocumentSymbolProvider
@@ -875,7 +911,7 @@ describe('OutlineService', () => {
       getDocumentSymbolProviders: (lang: string) => (lang === 'markdown' ? [provider] : []),
     } as unknown as ILanguageFeaturesService
 
-    const svc = new OutlineService(editorService, facade, undefined as never)
+    const svc = new OutlineService(makeEditorGroups(activeEditor), facade, undefined as never)
     const preview = new MarkdownPreviewInput(sourceUri)
     return { svc, preview, sourceUri, activeEditor }
   }
@@ -1017,12 +1053,11 @@ describe('OutlineService', () => {
 
   function setupSession() {
     const activeEditor = observableValue<AcpSessionEditorInput | undefined>('t', undefined)
-    const editorService = { activeEditor } as unknown as IEditorService
     const facade = {
       onDidChangeDocumentSymbolProviders: new Emitter<{ languageId: string }>().event,
       getDocumentSymbolProviders: () => [],
     } as unknown as ILanguageFeaturesService
-    const svc = new OutlineService(editorService, facade, undefined as never)
+    const svc = new OutlineService(makeEditorGroups(activeEditor), facade, undefined as never)
     const input = makeSessionInput('s1')
     return { svc, input, activeEditor }
   }
@@ -1193,12 +1228,11 @@ describe('OutlineService', () => {
     const activeEditor = observableValue<
       GitGraphEditorInput | PerforceGraphEditorInput | undefined
     >('t', undefined)
-    const editorService = { activeEditor } as unknown as IEditorService
     const facade = {
       onDidChangeDocumentSymbolProviders: new Emitter<{ languageId: string }>().event,
       getDocumentSymbolProviders: () => [],
     } as unknown as ILanguageFeaturesService
-    const svc = new OutlineService(editorService, facade, undefined as never)
+    const svc = new OutlineService(makeEditorGroups(activeEditor), facade, undefined as never)
     return { svc, input, activeEditor }
   }
 
@@ -1395,12 +1429,11 @@ describe('OutlineService', () => {
   function setupDoc() {
     initUserDocsForTests({ 'en-US': { index: DOC_MARKDOWN } })
     const activeEditor = observableValue<DocEditorInput | undefined>('t', undefined)
-    const editorService = { activeEditor } as unknown as IEditorService
     const facade = {
       onDidChangeDocumentSymbolProviders: new Emitter<{ languageId: string }>().event,
       getDocumentSymbolProviders: () => [],
     } as unknown as ILanguageFeaturesService
-    const svc = new OutlineService(editorService, facade, undefined as never)
+    const svc = new OutlineService(makeEditorGroups(activeEditor), facade, undefined as never)
     const doc = new DocEditorInput('index')
     return { svc, doc, activeEditor }
   }
@@ -1484,12 +1517,11 @@ describe('OutlineService', () => {
       'en-US': { index: DOC_MARKDOWN, other: '# Other\n\nbody\n\n## Sub\n\nx' },
     })
     const activeEditor = observableValue<DocEditorInput | undefined>('t', undefined)
-    const editorService = { activeEditor } as unknown as IEditorService
     const facade = {
       onDidChangeDocumentSymbolProviders: new Emitter<{ languageId: string }>().event,
       getDocumentSymbolProviders: () => [],
     } as unknown as ILanguageFeaturesService
-    const svc = new OutlineService(editorService, facade, undefined as never)
+    const svc = new OutlineService(makeEditorGroups(activeEditor), facade, undefined as never)
 
     activeEditor.set(new DocEditorInput('index'), undefined)
     await flush()
@@ -1513,12 +1545,11 @@ describe('OutlineService', () => {
       extensionDev: { 'en-US': { README: '# Extension Guide\n\n## Setup\n\nx' } },
     })
     const activeEditor = observableValue<DocEditorInput | undefined>('t', undefined)
-    const editorService = { activeEditor } as unknown as IEditorService
     const facade = {
       onDidChangeDocumentSymbolProviders: new Emitter<{ languageId: string }>().event,
       getDocumentSymbolProviders: () => [],
     } as unknown as ILanguageFeaturesService
-    const svc = new OutlineService(editorService, facade, undefined as never)
+    const svc = new OutlineService(makeEditorGroups(activeEditor), facade, undefined as never)
 
     const doc = new DocEditorInput('README', 'extensionDev')
     activeEditor.set(doc, undefined)
@@ -1538,5 +1569,466 @@ describe('OutlineService', () => {
     await flush()
     expect(svc.outline.get()?.roots.map((r) => r.name)).toEqual(['# User Readme'])
     svc.dispose()
+  })
+
+  // A split view renders one FileEditor (and one Breadcrumbs) per group, each
+  // reading ITS OWN group's outline. The service used to follow only the global
+  // active editor, so a background group's breadcrumbs mirrored the focused
+  // editor's symbol path.
+  describe('per-group tracking (split view)', () => {
+    const A_SYMBOLS = [makeSymbol('Alpha', 1, 3), makeSymbol('AlphaTwo', 4, 9)]
+    const B_SYMBOLS = [makeSymbol('Beta', 1, 3), makeSymbol('BetaTwo', 4, 9)]
+
+    function setupGroups(
+      provide?: (model: monaco.editor.ITextModel) => monaco.languages.DocumentSymbol[],
+    ) {
+      const services = new ServiceCollection()
+      services.set(IFileService, makeFs())
+      const inst = new InstantiationService(services)
+      const inputA = inst.createInstance(FileEditorInput, URI.file('/ws/a.md'))
+      const inputB = inst.createInstance(FileEditorInput, URI.file('/ws/b.md'))
+
+      const pulledUris: string[] = []
+      const provider = {
+        provideDocumentSymbols: (model: monaco.editor.ITextModel) => {
+          const uri = model.uri.toString()
+          pulledUris.push(uri)
+          if (provide) return provide(model)
+          return uri === inputA.resource.toString() ? A_SYMBOLS : B_SYMBOLS
+        },
+      } as unknown as monaco.languages.DocumentSymbolProvider
+      const facade = {
+        onDidChangeDocumentSymbolProviders: new Emitter<{ languageId: string }>().event,
+        getDocumentSymbolProviders: (lang: string) => (lang === 'markdown' ? [provider] : []),
+      } as unknown as ILanguageFeaturesService
+
+      const groups = new FakeEditorGroups()
+      const left = groups.addGroup()
+      const right = groups.addGroup()
+      const svc = new OutlineService(
+        groups as unknown as IEditorGroupsService,
+        facade,
+        undefined as never,
+      )
+      return { svc, groups, left, right, inputA, inputB, pulledUris }
+    }
+
+    it("keeps a background group's breadcrumbs on its own symbol path", async () => {
+      const { svc, groups, left, right, inputA, inputB } = setupGroups()
+      FileEditorRegistry.register(
+        inputA,
+        makeFakeEditorFor(inputA.resource.toString()).editor,
+        left.id,
+      )
+      FileEditorRegistry.register(
+        inputB,
+        makeFakeEditorFor(inputB.resource.toString()).editor,
+        right.id,
+      )
+      left.setActiveEditor(inputA)
+      right.setActiveEditor(inputB)
+      groups.activate(right)
+      await flush()
+
+      // The focused group drives the service (Outline view / @ quick access).
+      expect(svc.outline.get()?.uri).toBe(inputB.resource.toString())
+      // The background group keeps publishing its OWN tree.
+      expect(svc.forGroup(left.id).outline.get()?.uri).toBe(inputA.resource.toString())
+      expect(
+        svc
+          .forGroup(left.id)
+          .outline.get()
+          ?.roots.map((s) => s.name),
+      ).toEqual(['Alpha', 'AlphaTwo'])
+      expect(
+        svc
+          .forGroup(right.id)
+          .outline.get()
+          ?.roots.map((s) => s.name),
+      ).toEqual(['Beta', 'BetaTwo'])
+      svc.dispose()
+    })
+
+    it("tracks each group's cursor symbol independently", async () => {
+      const { svc, groups, left, right, inputA, inputB } = setupGroups()
+      const leftEditor = makeFakeEditorFor(inputA.resource.toString())
+      const rightEditor = makeFakeEditorFor(inputB.resource.toString())
+      FileEditorRegistry.register(inputA, leftEditor.editor, left.id)
+      FileEditorRegistry.register(inputB, rightEditor.editor, right.id)
+      left.setActiveEditor(inputA)
+      right.setActiveEditor(inputB)
+      groups.activate(right)
+      await flush()
+
+      expect(svc.activeSymbol.get()?.name).toBe('Beta')
+      expect(svc.forGroup(left.id).activeSymbol.get()?.name).toBe('Alpha')
+
+      // Moving the background group's caret must not move the focused group's
+      // breadcrumbs.
+      leftEditor.moveCursorTo(5)
+      expect(svc.forGroup(left.id).activeSymbol.get()?.name).toBe('AlphaTwo')
+      expect(svc.activeSymbol.get()?.name).toBe('Beta')
+
+      rightEditor.moveCursorTo(5)
+      expect(svc.activeSymbol.get()?.name).toBe('BetaTwo')
+      expect(svc.forGroup(left.id).activeSymbol.get()?.name).toBe('AlphaTwo')
+      svc.dispose()
+    })
+
+    it('reveals into the group whose breadcrumbs were clicked (same file, two groups)', async () => {
+      const { svc, groups, left, right, inputA } = setupGroups()
+      const leftEditor = makeFakeEditorFor(inputA.resource.toString())
+      const rightEditor = makeFakeEditorFor(inputA.resource.toString())
+      // The right group registers LAST, which is the instance a bare
+      // `FileEditorRegistry.get(input)` would have handed the left group.
+      FileEditorRegistry.register(inputA, leftEditor.editor, left.id)
+      FileEditorRegistry.register(inputA, rightEditor.editor, right.id)
+      left.setActiveEditor(inputA)
+      right.setActiveEditor(inputA)
+      groups.activate(right)
+      await flush()
+
+      const outline = svc.forGroup(left.id).outline.get()
+      expect(outline?.roots.map((s) => s.name)).toEqual(['Alpha', 'AlphaTwo'])
+      const symbol = outline?.roots[1]
+      if (!symbol) throw new Error('expected the left group to publish its own outline')
+      svc.forGroup(left.id).revealSymbol(symbol)
+
+      expect(leftEditor.revealed).toEqual([4])
+      expect(leftEditor.focusCount).toBe(1)
+      expect(rightEditor.revealed).toEqual([])
+      expect(rightEditor.focusCount).toBe(0)
+      svc.dispose()
+    })
+
+    it('pulls a file shown in both groups once', async () => {
+      const { svc, groups, left, right, inputA, pulledUris } = setupGroups()
+      const leftEditor = makeFakeEditorFor(inputA.resource.toString())
+      const rightEditor = makeFakeEditorFor(inputA.resource.toString())
+      FileEditorRegistry.register(inputA, leftEditor.editor, left.id)
+      FileEditorRegistry.register(inputA, rightEditor.editor, right.id)
+      left.setActiveEditor(inputA)
+      right.setActiveEditor(inputA)
+      groups.activate(right)
+      await flush()
+
+      expect(pulledUris.filter((uri) => uri === inputA.resource.toString())).toHaveLength(1)
+      expect(
+        svc
+          .forGroup(left.id)
+          .outline.get()
+          ?.roots.map((s) => s.name),
+      ).toEqual(['Alpha', 'AlphaTwo'])
+      expect(
+        svc
+          .forGroup(right.id)
+          .outline.get()
+          ?.roots.map((s) => s.name),
+      ).toEqual(['Alpha', 'AlphaTwo'])
+      svc.dispose()
+    })
+
+    it("does not serve a group the other language's tree after a language switch", async () => {
+      const services = new ServiceCollection()
+      services.set(IFileService, makeFs())
+      const inst = new InstantiationService(services)
+      const input = inst.createInstance(FileEditorInput, URI.file('/ws/a.md'))
+
+      // Both pulls hang, so the second group attaches while the first is on the
+      // wire — the shared pool's join is what is under test.
+      const pending: Array<{
+        language: string
+        resolve: (roots: monaco.languages.DocumentSymbol[]) => void
+      }> = []
+      const provider = {
+        provideDocumentSymbols: (model: monaco.editor.ITextModel) =>
+          new Promise<monaco.languages.DocumentSymbol[]>((resolve) => {
+            pending.push({ language: model.getLanguageId(), resolve })
+          }),
+      } as unknown as monaco.languages.DocumentSymbolProvider
+      const facade = {
+        onDidChangeDocumentSymbolProviders: new Emitter<{ languageId: string }>().event,
+        getDocumentSymbolProviders: () => [provider],
+      } as unknown as ILanguageFeaturesService
+
+      const groups = new FakeEditorGroups()
+      const left = groups.addGroup()
+      const right = groups.addGroup()
+      const svc = new OutlineService(
+        groups as unknown as IEditorGroupsService,
+        facade,
+        undefined as never,
+      )
+      // Same uri and model version, different language: "Change Language Mode"
+      // calls setModelLanguage, which does not bump the version.
+      FileEditorRegistry.register(
+        input,
+        makeFakeEditorFor(input.resource.toString(), 'markdown').editor,
+        left.id,
+      )
+      FileEditorRegistry.register(
+        input,
+        makeFakeEditorFor(input.resource.toString(), 'plaintext').editor,
+        right.id,
+      )
+      left.setActiveEditor(input)
+      groups.activate(right)
+      right.setActiveEditor(input)
+      await flush()
+
+      // Each language must get its own pull; joining the markdown one would give
+      // the plaintext group the wrong tree and cache it under its own language.
+      expect(pending.map((p) => p.language)).toEqual(['markdown', 'plaintext'])
+
+      pending[0]!.resolve([makeSymbol('MarkdownTree', 1, 3)])
+      pending[1]!.resolve([makeSymbol('PlaintextTree', 1, 3)])
+      await vi.waitFor(() =>
+        expect(
+          svc
+            .forGroup(left.id)
+            .outline.get()
+            ?.roots.map((s) => s.name),
+        ).toEqual(['MarkdownTree']),
+      )
+      expect(
+        svc
+          .forGroup(right.id)
+          .outline.get()
+          ?.roots.map((s) => s.name),
+      ).toEqual(['PlaintextTree'])
+      svc.dispose()
+    })
+
+    it('clears the published tree when the active group is removed', async () => {
+      const services = new ServiceCollection()
+      services.set(IFileService, makeFs())
+      const inst = new InstantiationService(services)
+      const input = inst.createInstance(FileEditorInput, URI.file('/ws/a.md'))
+      const provider = {
+        provideDocumentSymbols: () => [makeSymbol('Alpha', 1, 3)],
+      } as unknown as monaco.languages.DocumentSymbolProvider
+      const facade = {
+        onDidChangeDocumentSymbolProviders: new Emitter<{ languageId: string }>().event,
+        getDocumentSymbolProviders: () => [provider],
+      } as unknown as ILanguageFeaturesService
+
+      const groups = new FakeEditorGroups()
+      const only = groups.addGroup()
+      const svc = new OutlineService(
+        groups as unknown as IEditorGroupsService,
+        facade,
+        undefined as never,
+      )
+      FileEditorRegistry.register(
+        input,
+        makeFakeEditorFor(input.resource.toString()).editor,
+        only.id,
+      )
+      // Subscribe first: a derived with no observers recomputes on every read, so
+      // only an ACTIVE subscriber shows whether the service invalidated it.
+      const seen: Array<string | undefined> = []
+      const sub = autorun((r) => {
+        seen.push(
+          svc.outline
+            .read(r)
+            ?.roots.map((s) => s.name)
+            .join(','),
+        )
+      })
+      only.setActiveEditor(input)
+      await flush()
+      expect(seen.at(-1)).toBe('Alpha')
+
+      // The active group (and with it its tracker) is gone while the active-group
+      // id still points at it — the shape a workspace switch leaves behind. An
+      // already-subscribed consumer (the Outline view, breadcrumbs) must be told
+      // the tree is gone, not left on the previous workspace's outline.
+      groups.remove(only)
+      expect(seen.at(-1)).toBeUndefined()
+      sub.dispose()
+      svc.dispose()
+    })
+
+    it("drops a removed group's tracker", async () => {
+      const { svc, groups, left, right, inputA, inputB, pulledUris } = setupGroups()
+      FileEditorRegistry.register(
+        inputA,
+        makeFakeEditorFor(inputA.resource.toString()).editor,
+        left.id,
+      )
+      FileEditorRegistry.register(
+        inputB,
+        makeFakeEditorFor(inputB.resource.toString()).editor,
+        right.id,
+      )
+      left.setActiveEditor(inputA)
+      right.setActiveEditor(inputB)
+      groups.activate(right)
+      await flush()
+
+      expect(svc.forGroup(left.id)).not.toBe(svc)
+      groups.remove(left)
+      // No tracker left for that id: the scope must report nothing (a stable
+      // empty scope) rather than fall back to the active group's tree, which is
+      // what made a removed group's breadcrumbs mirror the focused editor.
+      expect(svc.forGroup(left.id).outline.get()).toBeUndefined()
+      expect(svc.forGroup(left.id)).not.toBe(svc)
+      expect(svc.forGroup(left.id)).toBe(svc.forGroup(left.id))
+
+      const pullsBefore = pulledUris.length
+      left.setActiveEditor(undefined)
+      await flush()
+      expect(pulledUris.length).toBe(pullsBefore)
+      expect(svc.outline.get()?.uri).toBe(inputB.resource.toString())
+      svc.dispose()
+    })
+
+    it('stops a removed group from pulling forever', async () => {
+      vi.useFakeTimers()
+      try {
+        const services = new ServiceCollection()
+        services.set(IFileService, makeFs())
+        const inst = new InstantiationService(services)
+        const inputA = inst.createInstance(FileEditorInput, URI.file('/ws/a.md'))
+        const inputB = inst.createInstance(FileEditorInput, URI.file('/ws/b.md'))
+
+        // A's server never answers — a cold worker that hangs. Its pull can only
+        // settle through the tracker's own timeout, i.e. possibly after the group
+        // it belongs to is already gone.
+        let aCalls = 0
+        const provider = {
+          provideDocumentSymbols: (model: monaco.editor.ITextModel) => {
+            if (model.uri.toString() !== inputA.resource.toString())
+              return [makeSymbol('Beta', 1, 3)]
+            aCalls++
+            return new Promise<never>(() => {})
+          },
+        } as unknown as monaco.languages.DocumentSymbolProvider
+        const facade = {
+          onDidChangeDocumentSymbolProviders: new Emitter<{ languageId: string }>().event,
+          getDocumentSymbolProviders: (lang: string) => (lang === 'markdown' ? [provider] : []),
+        } as unknown as ILanguageFeaturesService
+
+        const groups = new FakeEditorGroups()
+        const left = groups.addGroup()
+        const right = groups.addGroup()
+        const svc = new OutlineService(
+          groups as unknown as IEditorGroupsService,
+          facade,
+          undefined as never,
+        )
+        FileEditorRegistry.register(
+          inputA,
+          makeFakeEditorFor(inputA.resource.toString()).editor,
+          left.id,
+        )
+        FileEditorRegistry.register(
+          inputB,
+          makeFakeEditorFor(inputB.resource.toString()).editor,
+          right.id,
+        )
+        left.setActiveEditor(inputA)
+        right.setActiveEditor(inputB)
+        groups.activate(right)
+        await vi.advanceTimersByTimeAsync(0)
+        expect(aCalls).toBe(1)
+
+        groups.remove(left)
+        // The hung pull times out only after the tracker is gone, and its handler
+        // would re-arm the retry chain: a disposed tracker must not, or a closed
+        // split keeps hitting the language service for the whole retry budget.
+        // (Advance in steps — one big jump schedules past its own window.)
+        for (let i = 0; i < 20; i++) await vi.advanceTimersByTimeAsync(1000)
+        expect(aCalls).toBe(1)
+        svc.dispose()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it("keeps a cold background group's retry chain alive", async () => {
+      let ready = false
+      const { svc, groups, left, right, inputA, inputB } = setupGroups((model) =>
+        model.uri.toString() === inputA.resource.toString() && !ready
+          ? []
+          : [makeSymbol('Late', 1, 5)],
+      )
+      FileEditorRegistry.register(
+        inputA,
+        makeFakeEditorFor(inputA.resource.toString()).editor,
+        left.id,
+      )
+      FileEditorRegistry.register(
+        inputB,
+        makeFakeEditorFor(inputB.resource.toString()).editor,
+        right.id,
+      )
+      left.setActiveEditor(inputA)
+      right.setActiveEditor(inputB)
+      groups.activate(right)
+      await flush()
+      expect(svc.forGroup(left.id).outline.get()?.roots).toEqual([])
+
+      // The server answers after the first empty pull. The background group is
+      // never re-focused, so only its own retry chain can fill it in.
+      ready = true
+      await vi.waitFor(
+        () =>
+          expect(
+            svc
+              .forGroup(left.id)
+              .outline.get()
+              ?.roots.map((s) => s.name),
+          ).toEqual(['Late']),
+        { timeout: 3000 },
+      )
+      expect(svc.outline.get()?.roots.map((s) => s.name)).toEqual(['Late'])
+      svc.dispose()
+    })
+  })
+
+  describe('OutlineSymbolCache', () => {
+    /** Shorthand for the pull result the cache hands back. */
+    type Pull = { roots: monaco.languages.DocumentSymbol[] | null | undefined; pullMs: number }
+
+    it('joins a pull only for the same uri, version AND language', async () => {
+      const cache = new OutlineSymbolCache()
+      const starts: Array<(pull: Pull) => void> = []
+      const start = (): Promise<Pull> => new Promise<Pull>((resolve) => starts.push(resolve))
+      const pull = (key: string) => cache.pullOnce(key, start)
+
+      const markdown = pull('file:///ws/a.md@1@markdown')
+      expect(pull('file:///ws/a.md@1@markdown')).toBe(markdown)
+      // A language switch keeps the model version, so the language has to be part
+      // of the key — otherwise the second group joins the first language's pull
+      // and publishes (and caches) the wrong tree for its own language.
+      const plaintext = pull('file:///ws/a.md@1@plaintext')
+      expect(plaintext).not.toBe(markdown)
+      expect(starts).toHaveLength(2)
+
+      starts[0]!({ roots: [makeSymbol('FromMarkdown', 1, 2)], pullMs: 1 })
+      starts[1]!({ roots: [makeSymbol('FromPlaintext', 1, 2)], pullMs: 1 })
+      await expect(markdown).resolves.toMatchObject({ roots: [{ name: 'FromMarkdown' }] })
+      await expect(plaintext).resolves.toMatchObject({ roots: [{ name: 'FromPlaintext' }] })
+    })
+
+    it('does not let a joiner ride a pull started before clear()', async () => {
+      const cache = new OutlineSymbolCache()
+      const starts: Array<(pull: Pull) => void> = []
+      const start = (): Promise<Pull> => new Promise<Pull>((resolve) => starts.push(resolve))
+
+      const before = cache.pullOnce('file:///ws/a.md@1@markdown', start)
+      // clear() means "the providers changed": an in-flight pull describes the
+      // old provider set and must not be handed to anyone attaching afterwards.
+      cache.clear()
+      const after = cache.pullOnce('file:///ws/a.md@1@markdown', start)
+      expect(after).not.toBe(before)
+      expect(starts).toHaveLength(2)
+
+      starts[0]!({ roots: [], pullMs: 1 })
+      starts[1]!({ roots: [makeSymbol('Fresh', 1, 2)], pullMs: 1 })
+      await before
+      await expect(after).resolves.toMatchObject({ roots: [{ name: 'Fresh' }] })
+    })
   })
 })

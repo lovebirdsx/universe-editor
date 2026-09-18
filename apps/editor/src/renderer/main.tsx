@@ -703,8 +703,10 @@ async function bootstrapWorkbench(): Promise<void> {
   const editorResolverService = instantiation.createInstance(EditorResolverService)
   services.set(IEditorResolverService, editorResolverService)
 
-  // OutlineService: derives the active editor's symbol tree + cursor symbol from
-  // the facade. Needs IEditorService + ILanguageFeaturesService, both set above.
+  // OutlineService: derives each editor group's active-editor symbol tree +
+  // cursor symbol from the language features facade, so split-view breadcrumbs
+  // each follow their own group. Needs IEditorGroupsService +
+  // ILanguageFeaturesService, both set above.
   const outlineService = workbenchStore.add(instantiation.createInstance(OutlineService))
   services.set(IOutlineService, outlineService)
 

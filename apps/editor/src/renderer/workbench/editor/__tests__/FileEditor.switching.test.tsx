@@ -288,12 +288,16 @@ describe('FileEditor tab switching', () => {
     const inputB = instantiation.createInstance(FileEditorInput, uriB)
     const group = new FakeGroup(inputA)
     services.set(IEditorGroupsService, new FakeGroupsService(group) as never)
-    services.set(IOutlineService, {
+    // The breadcrumbs read their own group's scope; this fake serves one group,
+    // so forGroup hands back the same stub (as the real service does for the
+    // active one).
+    const outlineStub = {
       _serviceBrand: undefined,
       outline: observableValue('test.outline', undefined),
       activeSymbol: observableValue('test.activeSymbol', undefined),
       revealSymbol: () => {},
-    } as never)
+    }
+    services.set(IOutlineService, { ...outlineStub, forGroup: () => outlineStub } as never)
 
     const { rerender } = render(renderEditor(instantiation, group, inputA))
 

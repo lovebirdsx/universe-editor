@@ -12,3 +12,5 @@ metadata:
 **How to apply:** 写 CLAUDE.md 时自觉控长；`EXEMPT` 集合当前为空（perforce 两份已达标并移出豁免），未来有临时豁免需求时在脚本里加条目并注明原因。
 
 **各文件都贴着上限**：`apps/editor/CLAUDE.md` 常年 14.9KB+（2026-09 实测 14992/15000），nested 文档也多在 14.7–15.0KB。**往这些文件加一行几乎必然先撑破预算**，所以加知识前先想好"这条从哪腾位置"——正解是把它推进该目录的 nested CLAUDE.md（新开一份也行，最小的一份才 1.1KB）+ 父文件留一行指针，而不是删别人写的事实。改完必须跑 `node scripts/check-claude-md-size.mjs --check`（`pnpm check` 里也有，但它在 turbo 前几步，容易被后面的输出淹掉而漏看）。
+
+**2026-09 补充：nested 文档同样贴顶**——往 `workbench/outline/CLAUDE.md`（13.6KB）加一段架构说明直接冲到 16.9KB，父文件也从 14990 涨到 15174，两份同时爆。压缩手法（本仓实测有效、不掉事实）：删与正文重复的「关键参考路径」汇总节、把细节推给相邻子文档（`services/acp/session/CLAUDE.md` 已记的不要再抄）、合并同义句、删示例代码里的解释性注释。中文 3 bytes/字，改完**必须实测**（`wc -c`），别凭感觉估。

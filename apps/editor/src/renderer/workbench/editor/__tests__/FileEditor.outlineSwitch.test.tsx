@@ -263,12 +263,15 @@ function makeServices() {
     getUserEntries: () => [],
     diagnostics: { vscodeFilePath: undefined, vscodeParsedCount: 0, vscodeRegisteredCount: 0 },
   })
-  services.set(IOutlineService, {
+  // The breadcrumbs read their own group's scope; this fake serves one group, so
+  // forGroup hands back the same stub (as the real service does for the active one).
+  const outlineStub = {
     _serviceBrand: undefined,
     outline: observableValue('test.outline', undefined),
     activeSymbol: observableValue('test.activeSymbol', undefined),
     revealSymbol: () => {},
-  } as never)
+  }
+  services.set(IOutlineService, { ...outlineStub, forGroup: () => outlineStub } as never)
   const instantiation = new InstantiationService(services)
   const inputA = instantiation.createInstance(FileEditorInput, uriA)
   const inputB = instantiation.createInstance(FileEditorInput, uriB)

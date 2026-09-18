@@ -58,7 +58,7 @@ main 入口（`index.ts`）在 service 实例化前调 `applyProductIdentity()` 
 
 ## 套路 A：加一个 Action2（命令 + 快捷键）
 
-归位：`renderer/actions/<domain>Actions.ts`（**复数**，按业务域归类）。
+归位：`renderer/actions/<domain>Actions.ts`。
 
 ```ts
 import { Action2, ILayoutService, PartId, type ServicesAccessor } from '@universe-editor/platform'
@@ -171,7 +171,7 @@ entry.dispose()
 
 ## 右键菜单图标：新增菜单项一律写 `icon`
 
-图标 id 经 `workbench/icons/icon-map.ts` 的 `resolveIcon` 查表——**表里没有 → 静默不渲染**；`<ContextMenu>`/`<ListMenu>` **必须传 `renderIcon={renderMenuIcon}`**（`menuIcon.tsx` 唯一共享实现）。⚠️ `registerAction2` 会把 `desc.icon` 撒到其声明的**每一个** menu 槽位——Menubar 命令加图标会整组开启图标列。
+图标 id 经 `workbench/icons/icon-map.ts` 的 `resolveIcon` 查表——**表里没有 → 静默不渲染**；`<ContextMenu>`/`<ListMenu>` **必须传 `renderIcon={renderMenuIcon}`**（`menuIcon.tsx`）。⚠️ `registerAction2` 会把 `desc.icon` 撒到其声明的**每一个** menu 槽位——Menubar 命令加图标会整组开启图标列。
 
 ## 套路 F：加一个 E2E 冒烟场景
 
@@ -202,7 +202,7 @@ test.describe('@p0 my thing', () => {
 3. **聚合/计算**：renderer `ITimerService`（`services/performance/TimerService.ts`）合并 marks，`getStartupMetrics()` 按 `MILESTONES` 算耗时；新里程碑加进 MILESTONES。
 4. **展示**：Developer: Startup Performance 命令；状态栏警示由 `StartupPerformanceStatusContribution` 控制。
 
-任何性能检测都从「往 `PerfMarks` 加常量 + 打点」起步；响应性监控/卡顿报告见 [cases-interaction-perf.md](cases-interaction-perf.md) 和 skill `analyze-interaction-performance`。
+响应性监控/卡顿报告见 [cases-interaction-perf.md](cases-interaction-perf.md) 和 skill `analyze-interaction-performance`。
 
 ## 套路 H：加一个语言特性（DocumentSymbol / Definition / Reference / Outline）
 
@@ -211,7 +211,7 @@ test.describe('@p0 my thing', () => {
 1. 在 `services/languageFeatures/<lang>/` 写 provider（实现 `monaco.languages.DocumentSymbolProvider` 等）。
 2. 在 `contributions/LanguageFeaturesContribution.ts` 的 `MonacoLoader.ensureInitialized().then(...)` 里 `this._register(langFeatures.registerXxxProvider('<lang>', new XxxProvider()))`。**必须等 Monaco 就绪**。
 
-Outline 数据由 `IOutlineService` 产出，`OutlineView` 与 `Breadcrumbs` 共享；跳转走 `outlineService.revealSymbol`。
+Outline 数据由 `IOutlineService` 产出（**分屏每组一个 tracker**）：`OutlineView` / @ 看活动组，面包屑走 `forGroup(本组 id)`；跳转走 `revealSymbol`。
 
 ## 套路 I：加一个 AI provider（协议）
 
