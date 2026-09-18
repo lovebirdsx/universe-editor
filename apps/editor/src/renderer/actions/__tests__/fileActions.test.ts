@@ -359,7 +359,9 @@ class FakeHostService implements IHostServiceType {
   async minimizeWindow() {}
   async toggleMaximizeWindow() {}
   async closeWindow() {}
-  async restart() {}
+  async restart() {
+    return true
+  }
   async toggleDevTools() {}
   async zoomIn() {}
   async zoomOut() {}

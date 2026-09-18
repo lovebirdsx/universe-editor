@@ -3288,6 +3288,15 @@ export const ZH_CN_MESSAGES: MessageMap = {
     '当前窗口的渲染进程已经不在运行，本轮诊断结束。重新加载窗口后可再开一轮。',
   'heapSnapshot.notice.stoppedByUser': '内存诊断已停止。',
   'heapSnapshot.notice.noTarget': '当前窗口没有可采集的渲染进程，无法开始诊断。',
+  'action.reloadWindowForMemoryDiagnosis.title': '重载窗口并开始内存诊断',
+
+  // --- Memory reminder (a heap that stays high while releasing fails to bring it down) ---
+  'memoryReminder.message':
+    '这个窗口已连续 {minutes} 分钟接近内存上限，释放缓存并没有把它降下来。现在重载会从干净的基线重新开始内存诊断——但重载会丢弃未保存的更改，而大约一分钟后采集第一份快照时，这个窗口最多会暂停约 {seconds} 秒。这是正常现象，不是崩溃。只诊断当前窗口；快照是该窗口堆内存里的原始数据，可能包含文件内容或会话正文；它只写到本机，不会自动上传。',
+  'memoryReminder.action.reload': '重载并开始诊断',
+  'memoryReminder.action.notNow': '暂不',
+  'memoryReminder.armFailed': '窗口已重载，但内存诊断没能启动：{message}',
+  'memoryReminder.armUnavailable': '窗口已重载，但当前版本未接入内存诊断，未启动任何轮次。',
 
   // --- Bug recording ---
   'bugRecording.statusTooltip': '正在录制 bug 证据。点击停止并导出。',

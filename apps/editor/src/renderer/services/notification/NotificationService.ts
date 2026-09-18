@@ -62,8 +62,22 @@ export class NotificationService extends Disposable implements INotificationServ
   private async _load(): Promise<void> {
     const raw = await this._storage.get<unknown[]>(STORAGE_KEY)
     if (!Array.isArray(raw) || raw.length === 0) return
-    // Restore as read — they appear in center but not as fresh toasts.
-    this._items = (raw as INotification[]).map((n) => ({ ...n, read: true, dismissed: false }))
+    // Restore as read — they appear in center but not as fresh toasts. What is restored is
+    // an explicit list rather than everything the entry happens to carry: `JSON.stringify`
+    // keeps an action's label and loses its handler, so a restored action renders a button
+    // that throws the moment it is clicked. Nothing clickable is better than a button that
+    // fails — and a whitelist keeps the next field with a handler out of here by default.
+    this._items = (raw as INotification[]).map((restored) => ({
+      id: restored.id,
+      severity: restored.severity,
+      message: restored.message,
+      sticky: restored.sticky,
+      timestamp: restored.timestamp,
+      ...(restored.progress === undefined ? {} : { progress: restored.progress }),
+      ...(restored.cancellable === undefined ? {} : { cancellable: restored.cancellable }),
+      read: true,
+      dismissed: false,
+    }))
     // Advance _nextId past any restored ids, otherwise new notifications would
     // reuse ids and _findItem would resolve to the stale restored entry.
     let maxId = -1

@@ -52,7 +52,14 @@ export interface IHostService {
   minimizeWindow(): Promise<void>
   toggleMaximizeWindow(): Promise<void>
   closeWindow(): Promise<void>
-  restart(): Promise<void>
+  /**
+   * Reload this window. Resolves `false` when the renderer's shutdown veto chain refused the
+   * reload, so the window is still the old one — callers that did something irreversible in
+   * preparation for the reload (writing a one-shot flag the next renderer reads) have to undo
+   * it. Resolves `true` once the reload has been started; the renderer is usually gone before
+   * it can act on that answer, and any work depending on the reload must not happen here.
+   */
+  restart(): Promise<boolean>
   toggleDevTools(): Promise<void>
 
   /** Increase the window's zoom level by one step (clamped to the webFrame range). */

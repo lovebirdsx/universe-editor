@@ -58,3 +58,4 @@ export { RemoteReconnectionUxContribution } from './RemoteReconnectionUxContribu
 export { BugRecordingContribution } from './bugRecordingContribution.js'
 export { BugRecordingOrphanContribution } from './BugRecordingOrphanContribution.js'
 export { HeapSnapshotNotificationContribution } from './HeapSnapshotNotificationContribution.js'
+export { MemoryReminderContribution } from './MemoryReminderContribution.js'

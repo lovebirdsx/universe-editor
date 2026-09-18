@@ -165,6 +165,36 @@
 - 采集走 `webContents.takeHeapSnapshot(path)`：**不新建 CDP 连接、不调用强制 GC、不解析也不整份加载快照进内存**（对象图从不经过 main 的 JS 堆）。
 - 实测（e2e 冷启空窗口，2026-09-18）：49MB 活跃堆 → 85.5MB 文件 / 耗时 2s，冻结就是这 2s。小堆上固定元数据占比大，**文件/堆比例不是常数**，别按 MB 外推耗时——上表那个 0.55~0.69 是大堆（几百 MB 起）的读数。
 
+## 内存提醒（长期偏高且释放无效时）
+
+水位服务自己会释放（见上文「renderer 内存水位」），但**释放失败时没有人告诉用户**：那次崩溃里窗口在 elevated 线上停了 20+ 分钟、每次 releaser 都返回 0.0MB，直到 V8 abort 都没有一句话。提醒就是补上这一句，并把用户直接接到上面那套受控快照上。
+
+**判定**（`renderer/services/memory/memoryReminderPolicy.ts`，纯函数、时间只从样本取）：
+
+| 常量 | 值 | 由来 |
+|---|---|---|
+| `MEMORY_REMINDER_SUSTAIN_MS` | 10 分钟 | 事故样本是 elevated 持续 20+ 分钟后 OOM，10 分钟能在中段提醒 |
+| `MEMORY_REMINDER_OBSERVATION_GAP_MS` | 3 分钟 | 相邻读数间隔超过它就是「没人在看」；必须大于 Chromium 后台定时器节流周期，否则窗口只是切到后台就会被判成读数中断 |
+| `MEMORY_REMINDER_COOLDOWN_MS` | 30 分钟 | 跨 reload 存活的那半条反骚扰规则；比持续门槛长，否则重载一次就能重新被问 |
+
+四条同时满足才提醒：连续 ≥10 分钟在 elevated 之上、期间**从未回到 normal**、本 renderer 未提醒过、距上次提醒 ≥30 分钟。
+
+**「releaser 没把它降下来」不是独立输入，就是「期间没有出现过 `at-normal`」**——`evaluatePressure` 的迟滞（0.85）已经定义了「降下来」的门槛。曾经想用「相对峰值回落 ≥5% 即视为释放有效」，被否掉：一次普通 GC 就能超过 5%，那台判据会把最该提醒的锯齿堆（涨→GC→涨）**永久静音**。同理，回升/抖动一律不算，只有 level 真的回到 normal 才重置计时。
+
+**两个动作**：主操作是命令 `workbench.action.reloadWindowForMemoryDiagnosis`（重载窗口并开始诊断），次操作是「暂不」。**不做**「先拍一张当前快照」：堆已经超过基线上限，main 策略只会回 `baseline-too-large`；要让它成立就得在拍摄上限/配额上开洞，与「释放阈值和拍摄阈值都不为提醒让路」直接冲突。
+
+- **为什么主操作是重载而不是就地开始**：基线只有在**小堆**上拍才有意义（`baselineMaxBytes = min(512MiB, cap/2)`）。内存高到值得提醒时早就超过它，就地开始只会被拒绝。重载把堆换回干净值，「基线 → 增长」才跑得起来。代价照实写进提醒正文（仓库的 reload **没有**未保存缓冲区的保护——与 `workbench.action.reloadWindow` 同级，唯一的 shutdown veto 参与者是 ACP 会话）。
+- **重载意图走 `sessionStorage`**（`renderer/services/diagnostics/diagnosisReloadSession.ts`，一次性 + 90s TTL）：它属于「这次重载之后的那个 renderer」，且只属于它。放进持久化存储会让某次冷启动读到它并自己开一轮。命令里**先过 shutdown 否决闸门再写意图**——被否决的重载不能留下悬着的意图。
+- **通知用 `notify({sticky, actions})` 而不是 `prompt()`**：`prompt()` 的 promise 在用户只是关掉通知中心面板（`markAllAsRead`/`toggleCenter`）时**永不 resolve**，in-flight 守卫会就此卡死；它也不返回 handle，无法在跳转重载前撤掉提醒。
+- **提醒正文就是同意书**：这条路径不弹确认框（提醒本身就是那次同意），所以 toast 必须自己说完确认框说的四件事（只诊断本窗口 / 采集时会暂停数秒至数十秒 / 快照可能含文件内容与会话正文 / 只写本机不上传）。暂停秒数按**当前** used 估算（`estimateSnapshotPauseSeconds`：1000ms 固定 + 19ms/MB，取实测区间上界），并写成「最多约 N 秒」——真实采集跑在重载后更小的堆上，这个数是上界。
+- **轮次已在跑时不提醒**：用户可能刚手动开了一轮，主操作会把那轮打成 `window-reloaded`，还会白烧一次全应用额度。改为推迟 5 分钟，且**不消耗**本窗口的提醒配额（`markReminded` 只在通知真的发出后才提交）。
+- 提醒本身（`contributions/MemoryReminderContribution.ts`）与重载后的武装在同一个 contribution：前者订阅 `onDidSample`，后者在构造时消费 sessionStorage 里的意图并调 `startHeapSnapshotRound()`（**不再弹确认框**，轮次开局由既有的 `started` 事件播报）。
+- **意图只在「重载真的发生了」之后才算数**：否决闸门有**两道**——命令里的 `confirmBeforeShutdown` 只跑否决相位，而 `IHostService.restart()` 内部还会对 reload 跑一次完整 shutdown（`lifecycle.shutdown()`，含同一个否决相位：ACP 会话在跑时会**弹第二次**同一个对话框）。写意图卡在两道门之间，所以 `restart()` 现在回 `Promise<boolean>`，命令在 `false` 时调 `clearReloadArmIntent`。**不能写成 `try/finally`**：重载时 IPC 回包先于页面销毁送达，`finally` 会在新 renderer 读之前把意图删掉，功能直接失效。**也不能用定时器兜**：设成 TTL 只在危害窗口已关闭后才响（等于没修），设短了又会在对话框需要用户思考时抢在真实重载之前删掉意图。意图自带的 90 秒 TTL 挡不住这一点——危害恰恰发生在被否之后那 90 秒内：窗口没重载，而意图还活着，之后**任意一次**重载（用户按 `Ctrl+Alt+R`、扩展触发、崩溃恢复）都会替用户开始一轮他从没要过的诊断。
+- **重载后没能武装要照实记**：额度用尽 / 没有活 renderer 时 `startHeapSnapshotRound()` 回的是 `{ active: false, phase: 'stopped', code: 'app-quota-exhausted' }`——只判 `phase === 'off'` 会把这情形记成 `armed`，与事实相反（而 `maxAttemptsPerApp = 4` 是全应用级、reload 不重置，跑完两轮后第三次提醒照样会发，点下去白重载一次）。判 `status.active`，非 active 打 `warn` 带 `code`/`detail`；**不另发通知**，拒绝已由轮次自己的 `stopped` 事件播报（见上文）。同理 `consumeReloadArmIntent` 的返回值要把「压根没有意图」和「意图过期了」分开——后者意味着用户点了主操作、窗口也重载了，但诊断没起来，这是唯一从外面看不见的结局。
+- **提醒正文有硬上限**：toast 的 message 渲染进一个带 `max-height: 7.2em`（约 5 行）的 `<p>`，且**没有 `white-space` 规则**——`\n\n` 会塌成一个空格，同时把「最多暂停约 N 秒」这句挤出可视区。所以这条文案是**一整段**（`\n\n` 是 dialog `detail` 的用法，通知正文里不要用），两笔代价（重载丢未保存的更改 / 最多暂停约 N 秒）都放在前半段。守护这条的断言同时钉住「不含 `\n`」与「两笔代价都在」。
+- **闩锁要带截止时间**：`_remind` 之前的守卫是「到点之前不许再来一次」的**时间戳**而不是布尔——`getHeapSnapshotStatus()` 若永不 settle，布尔的 `finally` 永不执行，这个窗口余生的提醒就永久静默且不留一行日志。
+- 顺带修掉一个既有缺陷：`NotificationService._load()` 复原持久化通知时改为**白名单**重建（丢掉 `actions`）。`JSON.stringify` 保留 label 丢掉 handler，复原出来的按钮点下去抛 TypeError——这个功能让它每次都发生（提醒必然导致重载）。
+
 ## 诊断包里的相关文件
 
 - `ipc-frames.txt`：main 侧帧环形记录 + 统计 + 最大帧标签。每行/标签形如 `out response fileService.readFile #42`；`#id` 是把它与 renderer 侧告警对上、再与那次请求对上三者的唯一把手。

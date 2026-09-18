@@ -18,7 +18,7 @@ Workbench 风格 React UI 基础设施。**依赖 React，不依赖 Electron**�
 | `atoms/*` | `Button` / `IconButton` / `Input` / `Checkbox` / `Badge` / `Spinner` + `cx` 工具 |
 | `layout/*` | `Sash`（拖拽分隔条）/ `GridLayout`（消费 platform `Grid<T>`）/ `CollapsibleSlot`（图标走 props 注入） |
 | `overlay/*` | `FocusScopeOverlay`（focus trap + Esc）/ `PopoverList<T>`（泛型列表浮层，合并 Slash/Mention 类弹窗）/ `useOverlayListNavigation`（浮层列表键盘导航：六键 + typeahead + `Alt+1~8` + 四个 emacs 别名 `Ctrl+P/N/H/L`。别名的处理**不走 React onKeyDown**：它们本就是全局绑定（转到文件/新建文件/替换/行选择），document capture 的 keybinding dispatcher 会 `stopPropagation` 掉，必须像菜单一样在 **window capture** 先手，且**落空也吞**。`←/→` 走宿主的 `onExitLeft/onExitRight`（带行号、返回 boolean）：宿主返回 false 时**裸箭头放行**（与菜单箭头穿透下层同理），别名照吞。多个浮层同时挂载（溢出面板展开行的 body 嵌在行列表里）时靠「`containerElRef` 是否包含 `activeElement`」定归属，**不靠监听器注册顺序**——两者都在 window capture 上、会同时触发） |
-| `feedback/notifications` | `NotificationsToast` / `NotificationsCenter`（展示组件，吃 `INotification[]` + 回调） |
+| `feedback/notifications` | `NotificationsToast` / `NotificationsCenter`（展示组件，吃 `INotification[]` + 回调）。toast 的 message 渲染进 `<p>`，带 `max-height: 7.2em`（约 5 行，内部滚动）且**无 `white-space` 规则**——消息里不要写 `\n`：它不会分行，只会塌成空格并把后半段挤出可视区（`\n\n` 是 dialog `detail` 的用法）。要保证用户读到某句，就把它放到最前面 |
 | `feedback/quickInput` | `QuickInputPanel` + `QuickPickState`（图标走 `renderIcon` 注入） |
 | `feedback/progress` | `ProgressDialog` + `DialogProgressState` |
 | `feedback/dialog` | `ConfirmDialog` / `PromptDialog`（队列 + Portal 留在宿主） |

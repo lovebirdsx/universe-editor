@@ -415,6 +415,34 @@ export interface E2EHeapSnapshotStatus {
   readonly detail?: string
 }
 
+/** One replayed reading; see E2EProbe.driveMemoryReminder. */
+export interface E2EMemoryReminderSample {
+  /** Offset from the start of the replay — the replay is its own timeline. */
+  readonly afterMs: number
+  /** `normal` | `elevated` | `critical`. */
+  readonly level: string
+  readonly usedBytes: number
+}
+
+/** What the policy decided about one replayed reading. */
+export interface E2EMemoryReminderDecision {
+  readonly remind: boolean
+  /** `remind` | `at-normal` | `observation-gap` | `reminded` | `cooldown` | `too-brief`. */
+  readonly reason: string
+  /** Present when `remind`: how long the heap has been high. */
+  readonly sustainedMs?: number
+  /** Present when `remind`: the reading the pause estimate was made from. */
+  readonly usedBytes?: number
+}
+
+/** The reminder state after a replay, for asserting the stretch was measured as intended. */
+export interface E2EMemoryReminderState {
+  readonly sustainedSince: number | null
+  readonly lastSampleAt: number | null
+  readonly reminded: boolean
+  readonly lastRemindedAt: number | null
+}
+
 /**
  * Renderer work counters; see E2EProbe.getHeapFlowCounters. The three dimensions stay
  * separate on purpose — `flow` is a process total, `gauge` an absolute reading,
@@ -1689,6 +1717,20 @@ export interface E2EProbe {
    * so a spec asserts on the state a real run reached rather than driving it.
    */
   getHeapSnapshotStatus(): Promise<E2EHeapSnapshotStatus>
+  /**
+   * Replay a series of heap readings through the reminder's real policy and notification
+   * path. The reminder needs ten minutes above the elevated line, which a spec cannot
+   * spend and cannot fake — the watermark reads a live renderer's `performance.memory` and
+   * has no setter — so only the readings are synthetic here; the decision, the toast and
+   * the action behind it are the shipping ones. Live readings stop feeding the policy for
+   * the rest of this renderer's life, otherwise an ordinary reading would land between two
+   * replayed ones and reset the stretch being built.
+   */
+  driveMemoryReminder(samples: readonly E2EMemoryReminderSample[]): void
+  /** Every decision the most recent replay produced, in order. */
+  getMemoryReminderDecisions(): E2EMemoryReminderDecision[]
+  /** The reminder state the most recent replay left behind. */
+  getMemoryReminderState(): E2EMemoryReminderState
   /**
    * Renderer work counters accumulated since process start, plus the current absolute
    * gauges. Reads the same module the heap reporter drains, but non-destructively, so a

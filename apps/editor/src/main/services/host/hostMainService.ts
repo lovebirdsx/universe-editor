@@ -195,7 +195,7 @@ export class MainHostService implements IHostServiceWire, IDisposable {
     return Promise.resolve()
   }
 
-  async restart(): Promise<void> {
+  async restart(): Promise<boolean> {
     const rendererLifecycle = this._restartHooks?.getRendererLifecycle?.()
     if (rendererLifecycle) {
       let canProceed = true
@@ -205,12 +205,15 @@ export class MainHostService implements IHostServiceWire, IDisposable {
         canProceed = true
       }
       if (!canProceed) {
+        // The renderer is still the old one, and it is waiting on this answer to undo
+        // whatever it staged for a reload that is not going to happen.
         this._logger.info(`restart vetoed by renderer id=${this._win.id}`)
-        return
+        return false
       }
     }
     this._win.reload()
     this._logger.info(`restart reloadWindow id=${this._win.id}`)
+    return true
   }
 
   toggleDevTools(): Promise<void> {

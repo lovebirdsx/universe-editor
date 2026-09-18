@@ -156,7 +156,8 @@ describe('MainHostService', () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       getRendererLifecycle: () => ({ confirmShutdown }) as any,
     })
-    await svc.restart()
+    // `true` is the renderer's licence to treat whatever it staged for the reload as spent.
+    expect(await svc.restart()).toBe(true)
     expect(confirmShutdown).toHaveBeenCalledWith(ShutdownReason.Reload)
     expect(win.reloadCount).toBe(1)
     svc.dispose()
@@ -168,7 +169,9 @@ describe('MainHostService', () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       getRendererLifecycle: () => ({ confirmShutdown }) as any,
     })
-    await svc.restart()
+    // `false` says the window did not reload, so a caller that wrote a one-shot flag for the
+    // next renderer has to take it back — otherwise the flag outlives the reload that earned it.
+    expect(await svc.restart()).toBe(false)
     expect(win.reloadCount).toBe(0)
     svc.dispose()
   })

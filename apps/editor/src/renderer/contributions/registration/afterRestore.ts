@@ -23,6 +23,7 @@ import { CommitChangesViewResetContribution } from '../CommitChangesViewResetCon
 import { GitGraphViewResetContribution } from '../GitGraphViewResetContribution.js'
 import { MergeConflictContribution } from '../MergeConflictContribution.js'
 import { MemoryPressureContribution } from '../MemoryPressureContribution.js'
+import { MemoryReminderContribution } from '../MemoryReminderContribution.js'
 import { DirtyDiffContribution } from '../DirtyDiffContribution.js'
 import { ExternalChangeWatcher } from '../ExternalChangeWatcher.js'
 import { GlobalDragAndDropContribution } from '../GlobalDragAndDropContribution.js'
@@ -244,6 +245,17 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.memoryPressure',
   MemoryPressureContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// The reminder for a heap that stays high while the releasers above demonstrably fail to
+// bring it down. AfterRestore for the same reason as the watermark itself (it has to have
+// been watching the whole time), and it also consumes the one-shot reload intent the
+// "reload and start the diagnosis" command leaves in sessionStorage — which must happen in
+// the renderer that came back from that reload.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.memoryReminder',
+  MemoryReminderContribution,
   WorkbenchPhase.AfterRestore,
 )
 

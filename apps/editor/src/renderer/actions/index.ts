@@ -275,6 +275,7 @@ import {
   OpenHeapSnapshotsFolderAction,
   ReportIssueAction,
   ExportDiagnosticsAction,
+  ReloadWindowForMemoryDiagnosisAction,
   StartHeapSnapshotDiagnosticsAction,
   StopHeapSnapshotDiagnosticsAction,
 } from './helpActions.js'
@@ -772,13 +773,14 @@ registerAction2(InstallUpdateAction)
 registerAction2(ShowReleaseNotesAction)
 registerAction2(ReportIssueAction)
 registerAction2(ExportDiagnosticsAction)
-// Memory diagnosis (start / stop / open the snapshots folder). No `icon` on purpose:
-// `registerAction2` spreads `desc.icon` into every menu slot an Action2 declares, and
-// the menubar menus are asserted to stay icon-free (iconCoverage.test.ts) — one icon
-// here would turn on the whole Help menu's icon column.
+// Memory diagnosis (start / stop / open the snapshots folder / reload and start). No
+// `icon` on purpose: `registerAction2` spreads `desc.icon` into every menu slot an Action2
+// declares, and the menubar menus are asserted to stay icon-free (iconCoverage.test.ts) —
+// one icon here would turn on the whole Help menu's icon column.
 registerAction2(StartHeapSnapshotDiagnosticsAction)
 registerAction2(StopHeapSnapshotDiagnosticsAction)
 registerAction2(OpenHeapSnapshotsFolderAction)
+registerAction2(ReloadWindowForMemoryDiagnosisAction)
 
 // Bug recording
 registerAction2(StartBugRecordingAction)

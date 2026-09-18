@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
   IDialogService,
+  IHostService,
+  ILifecycleService,
   INotificationService,
   InstantiationService,
   MenuId,
@@ -17,6 +19,7 @@ import { IDiagnosticsService, type HeapSnapshotStatus } from '../../../shared/ip
 import {
   OpenExtensionDocsAction,
   OpenHeapSnapshotsFolderAction,
+  ReloadWindowForMemoryDiagnosisAction,
   ShowReleaseNotesAction,
   StartHeapSnapshotDiagnosticsAction,
   StopHeapSnapshotDiagnosticsAction,
@@ -130,15 +133,17 @@ describe('heap snapshot commands', () => {
     disposables.push(registerAction2(StartHeapSnapshotDiagnosticsAction))
     disposables.push(registerAction2(StopHeapSnapshotDiagnosticsAction))
     disposables.push(registerAction2(OpenHeapSnapshotsFolderAction))
+    disposables.push(registerAction2(ReloadWindowForMemoryDiagnosisAction))
   }
 
   const HELP_MENU_ORDERS: Readonly<Record<string, number>> = {
     [StartHeapSnapshotDiagnosticsAction.ID]: 5,
     [StopHeapSnapshotDiagnosticsAction.ID]: 6,
     [OpenHeapSnapshotsFolderAction.ID]: 7,
+    [ReloadWindowForMemoryDiagnosisAction.ID]: 8,
   }
 
-  it('puts the three commands in the Help menu, below the developer tools', () => {
+  it('puts the four commands in the Help menu, below the developer tools', () => {
     // They are reachable from the menubar like every other Help entry; the consent
     // dialog the start command raises is the same one the palette raises, so a menubar
     // placement costs nothing and is how the feature is meant to be found.
@@ -349,5 +354,67 @@ describe('heap snapshot commands', () => {
 
     expect(notifications.messages[0]?.severity).toBe(Severity.Error)
     expect(notifications.messages[0]?.message).toContain('no handler registered')
+  })
+})
+
+describe('ReloadWindowForMemoryDiagnosisAction', () => {
+  const disposables: IDisposable[] = []
+  const INTENT_KEY = 'universe.memory.reloadArmIntent'
+
+  afterEach(() => {
+    while (disposables.length > 0) disposables.pop()?.dispose()
+    vi.unstubAllGlobals()
+  })
+
+  function memoryStorage(): Storage {
+    const entries = new Map<string, string>()
+    return {
+      get length() {
+        return entries.size
+      },
+      clear: () => entries.clear(),
+      getItem: (key: string) => entries.get(key) ?? null,
+      key: (index: number) => [...entries.keys()][index] ?? null,
+      removeItem: (key: string) => void entries.delete(key),
+      setItem: (key: string, value: string) => void entries.set(key, value),
+    }
+  }
+
+  /** `vetoed` is the first gate; `reloaded` is what `restart()` reports coming back. */
+  async function run(vetoed: boolean, reloaded: boolean) {
+    disposables.push(registerAction2(ReloadWindowForMemoryDiagnosisAction))
+    vi.stubGlobal('sessionStorage', memoryStorage())
+    const confirmBeforeShutdown = vi.fn().mockResolvedValue(vetoed)
+    const restart = vi.fn().mockResolvedValue(reloaded)
+    const services = new ServiceCollection()
+    services.set(ILifecycleService, { confirmBeforeShutdown } as never)
+    services.set(IHostService, { restart } as never)
+
+    await runCommand(ReloadWindowForMemoryDiagnosisAction.ID, services)
+    return { confirmBeforeShutdown, restart, sessionStorage }
+  }
+
+  it('leaves no intent behind when the veto chain refuses the reload', async () => {
+    const { restart, sessionStorage } = await run(true, false)
+    expect(restart).not.toHaveBeenCalled()
+    expect(sessionStorage.getItem(INTENT_KEY)).toBeNull()
+  })
+
+  it('takes the intent back when the reload is refused after the intent was written', async () => {
+    // The regression this guards: `restart()` runs the shutdown veto chain a second time,
+    // and this one is not reachable from the command. A refusal there leaves the window
+    // un-reloaded, so an intent that survives would let the *next* reload — for any
+    // reason at all — start a diagnosis the user never agreed to, freezing the window and
+    // spending a quarter of the app-wide capture budget.
+    const { restart, sessionStorage } = await run(false, false)
+    expect(restart).toHaveBeenCalledTimes(1)
+    expect(sessionStorage.getItem(INTENT_KEY)).toBeNull()
+  })
+
+  it('keeps the intent when the reload really happened', async () => {
+    // It has to be in sessionStorage *before* the reload: it is the only thing the renderer
+    // that comes back can read, and for a real reload this renderer never runs again.
+    const { sessionStorage } = await run(false, true)
+    expect(sessionStorage.getItem(INTENT_KEY)).not.toBeNull()
   })
 })

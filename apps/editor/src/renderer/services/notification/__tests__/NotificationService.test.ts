@@ -300,6 +300,34 @@ describe('NotificationService', () => {
     expect(remaining[0]?.message).toBe('restored')
     svc.dispose()
   })
+
+  it('drops the actions of a restored notification instead of resurrecting dead buttons', async () => {
+    // JSON keeps an action's label and loses its handler, so a restored notification would
+    // render a button that throws on click. The memory reminder makes this the common path
+    // rather than an edge case: acting on it reloads the window it is displayed in.
+    const storage = new FakeStorage()
+    await storage.set('workbench.notifications.list', [
+      {
+        id: 'notification-0',
+        severity: Severity.Warning,
+        message: 'high memory',
+        sticky: true,
+        timestamp: 1,
+        read: true,
+        dismissed: false,
+        actions: [{ label: 'Reload and Start Diagnosis' }],
+      },
+    ])
+    const svc = buildService(storage)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const restored = svc.notifications.get()
+    expect(restored).toHaveLength(1)
+    expect(restored[0]?.message).toBe('high memory')
+    expect(restored[0]?.actions).toBeUndefined()
+    svc.dispose()
+  })
 })
 
 // ---------------------------------------------------------------------------

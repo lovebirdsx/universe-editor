@@ -33,7 +33,7 @@ class FakeHost implements IHostServiceWire {
   readonly minimize = vi.fn().mockResolvedValue(undefined)
   readonly toggleMaximize = vi.fn().mockResolvedValue(undefined)
   readonly close = vi.fn().mockResolvedValue(undefined)
-  readonly restartWindow = vi.fn().mockResolvedValue(undefined)
+  readonly restartWindow = vi.fn().mockResolvedValue(true)
   readonly devTools = vi.fn().mockResolvedValue(undefined)
   readonly zoomInFn = vi.fn().mockResolvedValue(undefined)
   readonly zoomOutFn = vi.fn().mockResolvedValue(undefined)
@@ -54,7 +54,7 @@ class FakeHost implements IHostServiceWire {
   closeWindow(): Promise<void> {
     return this.close()
   }
-  restart(): Promise<void> {
+  restart(): Promise<boolean> {
     return this.restartWindow()
   }
   toggleDevTools(): Promise<void> {

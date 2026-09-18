@@ -88,6 +88,7 @@ import { revealOutputPanel } from '../services/output/revealOutputPanel.js'
 import { DirtyDiffPeekRegistry } from '../workbench/scm/dirtyDiff/DirtyDiffPeekRegistry.js'
 import { AcpPromptDraftCache } from '../services/acp/session/acpPromptDraftCache.js'
 import { swarmNotificationE2E } from '../services/swarm/swarmNotificationE2E.js'
+import { memoryReminderE2E } from '../services/memory/memoryReminderE2E.js'
 import { applyViewDrop } from '../workbench/dnd/applyViewDrop.js'
 import {
   E2E_PROBE_ENABLED_KEY,
@@ -112,6 +113,9 @@ import {
   type E2EFindWidgetState,
   type E2EInstalledExtension,
   type E2EMarker,
+  type E2EMemoryReminderDecision,
+  type E2EMemoryReminderSample,
+  type E2EMemoryReminderState,
   type E2ENotification,
   type E2EScmDecoration,
   type E2ETerminalLink,
@@ -2305,6 +2309,42 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     },
     driveSwarmNotificationPoll: async () => {
       await swarmNotificationE2E.driveRefresh?.()
+    },
+    // Replays readings through the reminder's own policy; the contribution drops live
+    // readings for the rest of this renderer's life once a replay has happened, so the
+    // spec's series is the whole timeline. `?.` because the seam is empty unless the
+    // contribution is loaded.
+    driveMemoryReminder: (samples: readonly E2EMemoryReminderSample[]): void => {
+      memoryReminderE2E.drive?.(
+        samples.map((sample) => ({
+          afterMs: sample.afterMs,
+          level:
+            sample.level === 'normal'
+              ? MemoryPressureLevel.Normal
+              : sample.level === 'critical'
+                ? MemoryPressureLevel.Critical
+                : MemoryPressureLevel.Elevated,
+          usedBytes: sample.usedBytes,
+        })),
+      )
+    },
+    getMemoryReminderDecisions: (): E2EMemoryReminderDecision[] =>
+      // Copied out of the module-level seam: a spec must not be able to mutate what the
+      // contribution records for the next assertion.
+      memoryReminderE2E.decisions.map((decision) => ({
+        remind: decision.remind,
+        reason: decision.reason,
+        ...(decision.sustainedMs === undefined ? {} : { sustainedMs: decision.sustainedMs }),
+        ...(decision.used === undefined ? {} : { usedBytes: decision.used }),
+      })),
+    getMemoryReminderState: (): E2EMemoryReminderState => {
+      const state = memoryReminderE2E.readState?.()
+      return {
+        sustainedSince: state?.sustainedSince ?? null,
+        lastSampleAt: state?.lastSampleAt ?? null,
+        reminded: state?.reminded ?? false,
+        lastRemindedAt: state?.lastRemindedAt ?? null,
+      }
     },
     getSwarmNotifiedReviewIds: () => swarmNotificationE2E.notified.map((ids) => [...ids]),
     getSwarmNotifyDiag: () => ({
