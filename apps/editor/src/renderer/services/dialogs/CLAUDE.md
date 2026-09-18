@@ -104,7 +104,7 @@ pnpm --filter @universe-editor/workbench-ui test    # panel 单测
 pnpm --filter @universe-editor/platform build       # 改 platform 接口必重建
 pnpm check                                          # lint+typecheck+全量 test
 pnpm --filter @universe-editor/editor build         # e2e 前必 build out/
-cd apps/editor && pnpm exec playwright test -c e2e/playwright.config.ts --grep "simple file dialog"
+pnpm --filter @universe-editor/editor e2eg "simple file dialog"
 ```
 
 ## 关键参考路径

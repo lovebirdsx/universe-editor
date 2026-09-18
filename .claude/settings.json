@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "deny": [
+      "Bash(npx playwright test)",
+      "Bash(npx playwright test:*)",
+      "Bash(pnpm exec playwright test)",
+      "Bash(pnpm exec playwright test:*)",
+      "Bash(pnpm dlx playwright test)",
+      "Bash(pnpm dlx playwright test:*)",
+      "Bash(playwright test)",
+      "Bash(playwright test:*)"
+    ],
+    "allow": [
+      "Bash(pnpm e2e)",
+      "Bash(pnpm e2e:*)",
+      "Bash(pnpm e2ea:*)",
+      "Bash(pnpm e2eg:*)",
+      "Bash(pnpm --filter @universe-editor/editor e2e)",
+      "Bash(pnpm --filter @universe-editor/editor e2e:*)",
+      "Bash(pnpm --filter @universe-editor/editor e2ea:*)",
+      "Bash(pnpm --filter @universe-editor/editor e2eg:*)",
+      "Bash(pnpm --filter @universe-editor/editor test:visual:*)"
+    ]
+  }
+}

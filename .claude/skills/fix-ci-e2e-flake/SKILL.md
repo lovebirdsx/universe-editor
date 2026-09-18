@@ -15,7 +15,7 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 2. **读 call log 失败形态**：count **波动**=背景元素间歇出现（噪音污染全局 count）；count/received **稳定停错值**=被测对象自身没就位（真回归/定时器没触发/fire-once 空转）；`waiting for locator` 恒 0=渲染没发生/探针没触发/选择器错；timeout 且无元素=往前看前置步骤；**元素 visible 但 click 超时 + `... intercepts pointer events`=被兄弟元素遮挡**（hit-target 检查走 elementFromPoint，水平布局溢出时常见，见案例 42）。
 3. **已知噪音源**：extension host 偶发崩溃（`ExtensionHostClientService._handleCrash` 发背景 toast + error 日志）；renderer 定时器竞态（auto-hide/auto-read 在 CI 晚几百 ms）。
 4. **最小且鲁棒的修复**（优先对齐同文件已鲁棒化的兄弟断言——同文件内有的步骤已加固、有的还裸，后者是遗留薄弱点）：噪音污染**列表**→`.filter({hasText:'<被测唯一文案>'})` 收敛；噪音污染**全局单值/一次性状态**→从源头禁用无关子系统（先 grep 确认无 spec 依赖）；定时器/异步竞态→`expect.poll`/`toHaveCount({timeout})`，少用固定 `waitForTimeout`+硬断言；纯环境型→别强改产品，记录案例库。
-5. **验证**：诊断前先确认产物链是新的（`pnpm build`；手跑单 LSP spec 还需 `pnpm ext:build`+`extension-host/dist`+`vendor/typescript-language-server`，缺→符号空/探针缺=产物问题非回归）。`pnpm --filter @universe-editor/editor exec playwright test e2e/specs/<spec>.ts [--repeat-each=5]`；全量 `pnpm e2e`（输出多，只截错误）。本地无法复现 CI 噪音是常态——目标是“鲁棒化没破坏 happy path”。
+5. **验证**：诊断前先确认产物链是新的（`pnpm build`；手跑单 LSP spec 还需 `pnpm ext:build`+`extension-host/dist`+`vendor/typescript-language-server`，缺→符号空/探针缺=产物问题非回归）。`UNIVERSE_E2E_NO_TAG_FILTER=1 pnpm --filter @universe-editor/editor exec playwright test e2e/specs/<spec>.ts [--repeat-each=5]`（cwd 落在 apps/editor，会命中该目录的转发 config 从而套用默认 tag 过滤——不带 `NO_TAG_FILTER` 时全 `@regression` 的 spec 会直接报 “No tests found”，看着像路径写错）；全量 `pnpm e2e`（输出多，只截错误）。本地无法复现 CI 噪音是常态——目标是“鲁棒化没破坏 happy path”。
 6. **沉淀**：把“失败形态→根因→修法”追加到 `references/cases.md`（**信号行必填**），并在下方「案例索引」补一行。这是本 skill 长期价值所在。
 
 ## 案例索引（按失败信号速查，命中后去 `references/cases.md` 读详情）

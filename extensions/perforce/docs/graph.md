@@ -236,7 +236,7 @@ pnpm --filter @universe-editor/perforce build
 pnpm --filter @universe-editor/editor build   # e2e 前必做
 
 pnpm check   # lint + typecheck + 全量单测 + docs:check
-pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts specs/smoke.perforceGraph.spec.ts
+cd extensions/perforce && pnpm e2eg perforceGraph
 ```
 
 改了用户可见文案/交互，同步 `docs/user/zh-CN/perforce/perforce-graph.md`（`pnpm docs:check` 校验内链）。

@@ -55,6 +55,7 @@
         "e2e/**",
         "!e2e/test-results/**",
         "!e2e/playwright-report/**",
+        "playwright.config.ts",
         "tsconfig*.json",
         "package.json",
         "scripts/typecheck.mjs"

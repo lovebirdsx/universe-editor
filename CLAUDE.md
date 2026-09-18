@@ -47,7 +47,8 @@ pnpm check        # 快速校验：docs/敏感串/skills/knowledge 检查 + lint
 pnpm check:full   # 全量校验（lint + typecheck + test + build），大改动/发版前用
 pnpm test:changed # 只跑 git 变更涉及的测试（全是 *.test.* 才 targeted，混入源码则该域全量；--base main 看分支整体差异）
 pnpm e2e:smoke    # 只跑 @p0 核心冒烟（约 30 用例），交互改动的快速 e2e 验证
-pnpm e2e          # 端到端测试（未提交改动仅含 e2e spec 时自动只跑改动文件；也可显式指定 pnpm e2e specs/<x>.spec.ts；UNIVERSE_E2E_FULL=1 强制全量）
+pnpm e2e          # 端到端测试（未提交改动仅含 e2e spec 时自动只跑改动文件；UNIVERSE_E2E_FULL=1 强制全量）
+                  #   显式指定：pnpm e2e specs/a.spec.ts specs/b.spec.ts（位置参数可多个）；含 @regression 用 pnpm e2ea
 ```
 
 ## 跨包共同约定
@@ -96,6 +97,7 @@ Prettier：无分号、单引号、`trailingComma: all`、宽度 100。默认不
   - 任何改动收尾：总是用 `pnpm check`（纯测试/叶子包源码自动走快速路径；需要全量语义时用 `pnpm check:full`）
   - 涉及编辑器交互逻辑：明确知道影响面时先 `pnpm e2e specs/<相关>.spec.ts` 定向验证，再用 `pnpm e2e:smoke` 跑 @p0 冒烟
   - 大重构 / 跨包改动 / 需要回归整体功能：`pnpm e2e` 跑全量；含 bug 守护回归用 `pnpm e2ea`
+  - e2e 一律走 `pnpm e2e` / `pnpm e2ea`（位置参数可给多个 spec）：裸 `playwright test` 只在 cwd 找 config，找不到就跳过 globalSetup——WSL 下窗口直接弹到 Windows 桌面，并丢掉 tag 过滤 / 预检 / 构建守卫（见 `docs/development/wsl-e2e.md`）
 - 完成新功能后，仅在非常必要的场景，才更新 CLAUDE.md
 - 由于该项目还处在开发阶段，功能迭代不用考虑向后兼容
 - 仅在有必要的场景，才在代码里写注释；优先考虑通过命名和结构让代码自解释

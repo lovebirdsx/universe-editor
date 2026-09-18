@@ -15,6 +15,10 @@
  *  e2e:headed / e2e:ui scripts, which set it) opts back into the real window;
  *  headless Linux (no DISPLAY) behaves exactly as before.
  *
+ *  This file also stamps GLOBAL_SETUP_DONE_ENV — the marker ./offscreen.ts uses to
+ *  tell "went through the config entry point" apart from a config-less invocation
+ *  (a bare `playwright test` skips this file entirely and would pop real windows).
+ *
  *  When active it walks a fixed range of display numbers (:99 through :119) and
  *  starts `Xvfb :<N>` on the first one whose socket accepts connections. Explicit
  *  numbers (rather than `-displayfd`) matter on WSLg: /tmp/.X11-unix is a
@@ -38,9 +42,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { spawn, type ChildProcess } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import net from 'node:net'
 import { createRunRoot, installRunTempEnv, removeRunRoot } from '@universe-editor/temp-root'
+import { GLOBAL_SETUP_DONE_ENV, isWsl } from './offscreen.js'
 import { formatSweepLine, sweepProcesses } from './processSweep.js'
 
 // Screen geometry matches CI's `xvfb-run --server-args="-screen 0 1280x1024x24"`.
@@ -56,18 +61,6 @@ const DISPLAY_END = 119
 
 const XVFB_FIX_HINT =
   '修复：`bash scripts/wsl/bootstrap.sh` 或 `sudo apt-get install -y xvfb`；详见 `docs/development/wsl-e2e.md`'
-
-// WSLg exports DISPLAY=:0, so "has a display" is not the same as "wants a real
-// window". Detect WSL from /proc/version (the same gate scripts/wsl/bootstrap.sh
-// uses); a read failure is treated as non-WSL, keeping the original headless-only
-// rule for plain Linux containers/servers.
-function isWsl(): boolean {
-  try {
-    return /microsoft/i.test(readFileSync('/proc/version', 'utf8'))
-  } catch {
-    return false
-  }
-}
 
 function probeSocket(path: string): Promise<boolean> {
   return new Promise((resolve) => {
@@ -184,6 +177,11 @@ function startCandidate(displayNumber: number): Promise<ChildProcess | undefined
 }
 
 export default async function globalSetup(): Promise<(() => void) | undefined> {
+  // marker 的语义是「走的是 config 入口」，不是「Xvfb 起过」：启动期兜底
+  // （./offscreen.ts）只认它，所以要覆盖全部分支——含 Xvfb 失败时的降级、
+  // e2e:headed/e2e:ui，以及非 WSL 的真实 DISPLAY。放第一句，早于任何会抛错的步骤。
+  process.env[GLOBAL_SETUP_DONE_ENV] = '1'
+
   // 先立 run 根：它必须在任何 worker / Electron 起来之前生效，且与 Xvfb 互不依赖。
   const runRoot = createRunRoot('ue-e2e')
   installRunTempEnv(runRoot)

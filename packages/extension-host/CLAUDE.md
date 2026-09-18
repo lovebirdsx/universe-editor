@@ -77,7 +77,7 @@ host 生命周期与启用禁用无直接 UI 入口，靠探针直调服务：�
 cd apps/editor && pnpm exec vitest run ExtensionEnablementService ExtensionHostClientService ExtensionsWorkbenchService
 pnpm --filter @universe-editor/extension-host test
 pnpm --filter editor build    # e2e 前必重建
-cd apps/editor && npx playwright test -c e2e/playwright.config.ts e2e/specs/smoke.extensions.spec.ts --grep "@regression"
+UNIVERSE_E2E_ONLY_TAG=@regression pnpm e2e specs/smoke.extensions.spec.ts   # 仓库根执行
 pnpm check    # 仅看错误
 ```
 

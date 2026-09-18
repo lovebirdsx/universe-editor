@@ -93,7 +93,7 @@ Swarm 的 comment 端点**不挂在 review 下**——写成嵌套路径会 404�
 ### 验证
 
 ```bash
-cd extensions/perforce && UNIVERSE_E2E_NO_TAG_FILTER=1 npx playwright test -c e2e/playwright.config.ts swarmReview.spec.ts   # Swarm 冒烟
+cd extensions/perforce && pnpm e2eg swarmReview.spec.ts   # Swarm 冒烟
 ```
 
 改了用户可见文案/交互，同步 `docs/user/zh-CN/perforce/swarm-code-review.md`（`pnpm docs:check` 校验内链）。e2e 套路（fake Swarm server + 三坑）→ [cases-e2e.md](cases-e2e.md)；e2e 栈通用约定 → `../../e2e/CLAUDE.md`。

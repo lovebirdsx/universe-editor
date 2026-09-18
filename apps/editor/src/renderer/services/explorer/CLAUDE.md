@@ -114,8 +114,8 @@ cd apps/editor && pnpm vitest run src/renderer/actions/__tests__/fileActions.tes
   src/renderer/services/explorer/__tests__/ src/renderer/workbench/explorer/__tests__/
 pnpm check    # lint+typecheck+全量 test
 pnpm --filter @universe-editor/editor build    # e2e 跑 out/ 产物
-cd apps/editor && pnpm exec playwright test specs/smoke.explorerDnD.spec.ts \
-  specs/smoke.explorerExternalWatch.spec.ts specs/smoke.explorerRowHeight.spec.ts
+pnpm e2ea specs/smoke.explorerDnD.spec.ts specs/smoke.explorerExternalWatch.spec.ts \
+  specs/smoke.explorerRowHeight.spec.ts    # 后两个 spec 全为 @regression，须用 e2ea
 ```
 
 e2e 探针：`renderer/e2e/probe.ts`，经 `services.explorerTreeService`（renameExplorerResource/moveExplorerResource/readWorkspaceFileText）。

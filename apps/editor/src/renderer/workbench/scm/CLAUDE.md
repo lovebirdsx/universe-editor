@@ -30,7 +30,7 @@ gutter / peek / blame / open-changes 对 git 与 perforce 共用同一套 render
 ```bash
 pnpm check
 pnpm --filter @universe-editor/editor build         # e2e 跑 out/ 产物
-cd apps/editor && pnpm exec playwright test -c e2e/playwright.config.ts smoke.dirtyDiffPeek
+pnpm e2e specs/smoke.dirtyDiffPeek.spec.ts
 pnpm --filter @universe-editor/git build            # 动了 Stage 后端（git 扩展 dist）
 ```
 

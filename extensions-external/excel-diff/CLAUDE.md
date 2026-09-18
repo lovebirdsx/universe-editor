@@ -104,7 +104,7 @@ extensions-external/excel-diff/
 ```bash
 pnpm check                                    # lint+typecheck+test，仅看错误
 pnpm build                                    # e2e 跑 out/ 产物，改 renderer/main 后必重建
-cd apps/editor && pnpm exec playwright test -c e2e/playwright.config.ts specs/smoke.webviewDiff.spec.ts
+pnpm e2ea specs/smoke.webviewDiff.spec.ts      # 含 @regression 用例，故用 e2ea；仓库根执行
 # 扩展侧：cd extensions-external/excel-diff && npm install && node esbuild.config.mjs && node scripts/pack.mjs
 # diff 算法快验：esbuild bundle src/diff.ts → import data:URL → 跑上面两个场景断言
 ```

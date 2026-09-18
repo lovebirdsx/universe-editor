@@ -98,7 +98,7 @@ DocEditor (workbench/editor/DocEditor.tsx)  用 resolveDoc 取内容 → Markdow
 pnpm docs:check                                   # 文档内部相对链接死链校验（已接入 CI；check 会先跑它）
 pnpm check                                         # lint+typecheck+test，仅看错误
 pnpm --filter @universe-editor/editor build        # e2e 跑 out/ 产物，改 renderer/main 后必重建
-cd apps/editor && pnpm exec playwright test smoke.markdownPreview -g "doc center"   # 文档中心端到端（渲染真实文档+链接+键盘导航，验证运行时读盘可用）
+cd extensions/markdown && pnpm e2eg "doc center"   # 文档中心端到端（渲染真实文档+链接+键盘导航，验证运行时读盘可用）
 node scripts/release/runtime-resources.mjs verify-source   # 校验 docs/user sentinel 存在（stage 前置）
 ```
 

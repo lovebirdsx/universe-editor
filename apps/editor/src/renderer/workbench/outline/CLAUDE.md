@@ -116,7 +116,7 @@ cd apps/editor && pnpm vitest run --project renderer-node --project renderer-dom
   src/renderer/workbench/editor/__tests__/previewScrollMap.test.ts
 pnpm check
 pnpm --filter @universe-editor/editor build         # e2e 跑 out/ 产物
-cd apps/editor && pnpm exec playwright test specs/smoke.outline.spec.ts specs/smoke.breadcrumbs.spec.ts
+pnpm e2e specs/smoke.outline.spec.ts specs/smoke.breadcrumbs.spec.ts   # 仓库根执行
 cd extensions/markdown && pnpm e2e -- specs/markdownPreview.spec.ts    # 切预览后大纲仍在
 ```
 

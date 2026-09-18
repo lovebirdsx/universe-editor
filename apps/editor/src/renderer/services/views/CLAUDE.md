@@ -126,8 +126,8 @@ cd apps/editor && pnpm vitest run --project renderer \
   src/renderer/workbench/panel/__tests__/Panel.test.tsx
 pnpm check
 pnpm --filter @universe-editor/editor build         # e2e 跑 out/ 产物
-cd apps/editor && pnpm exec playwright test specs/smoke.viewMove.spec.ts   # @p0 移动+重载持久化往返
-cd apps/editor && pnpm exec playwright test specs/smoke.viewSizes.spec.ts  # @p0 尺寸持久化 + 键盘 resize
+pnpm e2e specs/smoke.viewMove.spec.ts    # @p0 移动+重载持久化往返
+pnpm e2e specs/smoke.viewSizes.spec.ts   # @p0 尺寸持久化 + 键盘 resize
 ```
 
 **e2e 探针**（`contract.ts` + `renderer/e2e/probe.ts`，委托 `viewDescriptorService`）：`getViewContainerByViewId` / `getViewIdsByContainer` / `getViewContainerIdsByLocation` / `moveViewsToContainer` / `moveViewToLocation` / `moveViewContainerToLocation` / `getViewCollapsed` / `setViewCollapsed` / `getViewSize` / `flushViewCustomizationsSave` / `resetViewLocations`——**绕开 DnD 鼠标几何**直驱 service，测「数据模型+持久化」主链路；`smoke.viewMove.spec.ts` 与 `smoke.viewSizes.spec.ts` 走此探针。

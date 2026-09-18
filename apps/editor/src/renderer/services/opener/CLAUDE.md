@@ -95,7 +95,8 @@
 pnpm --filter @universe-editor/platform test -- --run opener    # fragment 编解码往返
 cd apps/editor && pnpm exec vitest run OpenerService revealEditorPosition deepLink    # 三档分发/信任闸门/定位/深链解析
 pnpm --filter editor build    # e2e 跑 out/ 产物
-cd apps/editor && pnpm exec playwright test -c e2e/playwright.config.ts smoke.gotoSymbol smoke.historyNavigation smoke.markdownPreview --grep-invert "@visual|@serial|@flaky|@perf"
+pnpm e2e specs/smoke.historyNavigation.spec.ts                      # core 侧
+cd extensions/markdown && pnpm e2eg "gotoSymbol|markdownPreview"    # 这两个 spec 属 markdown 扩展 suite
 pnpm check    # lint+typecheck+test（含 docs:check），仅看错误
 ```
 

@@ -61,13 +61,15 @@ bash scripts/wsl/bootstrap.sh
 
 无 `DISPLAY` 时，e2e-harness 的 Playwright globalSetup 会自动启动一个 Xvfb（自动挑选空闲 display 编号，屏幕参数与 CI 的 `xvfb-run` 完全一致：`-screen 0 1280x1024x24`；WSLg 下 `/tmp/.X11-unix` 只读、无法创建 socket 文件也没关系，X server 会经 Linux 抽象 socket 服务），运行结束自动回收。**WSL 下即便有 WSLg 的 `DISPLAY=:0` 也默认离屏**——除非显式要求有头，否则照常启动 Xvfb 覆盖 DISPLAY；若未装 xvfb（启动失败 / 编号耗尽 / 超时），不会让整趟失败，而是回退到 WSLg/现有 DISPLAY 的真实窗口并打一行警告提示。设 `UNIVERSE_E2E_SHOW=1`（或 `e2e:headed` / `e2e:ui`）恢复真实窗口。所以 headless Linux / WSL 上裸跑 `pnpm e2e` 即可，无需手动 `xvfb-run` 包裹。
 
-最后还有一层 harness 兜底：`launch.ts` 把「error while loading shared libraries / Unable to open X display」这类环境错误从瞬态重试中排除，立即失败并附修复指引——覆盖不经预检脚本的入口（如 `test:visual` 直跑 playwright）。
+最后还有两层 harness 兜底：`launch.ts` 把「error while loading shared libraries / Unable to open X display」这类环境错误从瞬态重试中排除，立即失败并附修复指引；同处还在 `electron.launch` **之前**校验「本趟是否跑过 globalSetup」——没跑过且 WSL 有 DISPLAY 时于**建窗前**报错并列出正确命令（非 WSL 桌面只警告一次），覆盖绕过 config 的裸跑入口（见下「跑测试」）。
 
 > **bootstrap.sh 仍是首次一键初始化的推荐方式**：`sudo` 类系统安装（xvfb、Playwright 系统库、AppArmor 检测等）仍需它来做。预检的定位是「忘了初始化」时不再以重试风暴收场、并给出精确修复指令，而不是替代 bootstrap.sh。
 
 ## 跑测试
 
-headless Linux（无 `DISPLAY`，如未启用 WSLg 的 WSL2、远程服务器/容器）已无需手动 `xvfb-run` 包裹——e2e-harness 的 globalSetup 会自动启动 Xvfb 离屏运行（见上「自动预检与自动 Xvfb」）。直接裸跑：
+headless Linux（无 `DISPLAY`，如未启用 WSLg 的 WSL2、远程服务器/容器）已无需手动 `xvfb-run` 包裹——e2e-harness 的 globalSetup 会自动启动 Xvfb 离屏运行（见上「自动预检与自动 Xvfb」）。直接跑根级脚本即可：
+
+> **不要裸跑 `playwright test`**（含 `npx` / `pnpm exec` / `pnpm dlx` 形式）：Playwright 只在 cwd 找 `playwright.config.*`，找不到就用内置默认配置——globalSetup 不跑，离屏 Xvfb、tag 过滤、Linux 预检、构建守卫**全部失效**。WSLg 下这意味着 `DISPLAY=:0` 直通，每个 Electron 窗口都弹到 Windows 桌面（`apps/editor/` 下有一份转发 config 兜底，其它目录没有）。一律走 `pnpm e2e`（位置参数可给多个 spec：`pnpm e2e specs/a.spec.ts specs/b.spec.ts`），含 `@regression` 用 `pnpm e2ea ...`。harness 会在 `electron.launch` 之前拦下这类启动并报出正确命令（`UNIVERSE_E2E_SHOW=1` 可显式放行真实窗口）。
 
 ```bash
 cd ~/universe-editor

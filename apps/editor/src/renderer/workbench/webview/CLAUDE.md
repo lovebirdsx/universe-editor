@@ -76,7 +76,7 @@ webview 的 iframe 宿主（`WebviewElement.tsx`）在本目录。本文是 webv
 ```bash
 pnpm check                                    # lint+typecheck+test，仅看错误
 pnpm build                                    # e2e 跑 out/ 产物，改 renderer/main 后必重建
-cd apps/editor && pnpm exec playwright test -c e2e/playwright.config.ts specs/smoke.webview.spec.ts
+pnpm e2ea specs/smoke.webview.spec.ts    # 该 spec 全为 @regression，须用 e2ea
 pnpm docs:check                               # 动了 docs/user 后校验死链
 # 扩展侧：cd extensions-external/<name> && node esbuild.config.mjs && node scripts/pack.mjs
 ```

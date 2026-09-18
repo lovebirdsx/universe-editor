@@ -94,6 +94,13 @@ export interface E2EConfigOptions {
    * big spec file alone.
    */
   readonly fullyParallel?: boolean
+  /**
+   * Artifacts dir (trace/video/test-results), relative to the config file. Only the
+   * core suite overrides it: `apps/editor/playwright.config.ts` — the forwarder that
+   * catches a bare `playwright test` run from apps/editor — sits one directory above
+   * e2e/, and Playwright resolves this against the config file's own directory.
+   */
+  readonly outputDir?: string
 }
 
 /**
@@ -146,6 +153,6 @@ export function defineE2EConfig(options: E2EConfigOptions = {}): PlaywrightTestC
       video: 'retain-on-failure',
       screenshot: 'only-on-failure',
     },
-    outputDir: 'test-results',
+    outputDir: options.outputDir ?? 'test-results',
   })
 }

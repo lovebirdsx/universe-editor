@@ -9,5 +9,5 @@
     "lib": ["ES2022", "DOM"],
     "types": ["node"]
   },
-  "include": ["**/*.ts", "../src/shared/e2e/contract.ts"]
+  "include": ["**/*.ts", "../playwright.config.ts", "../src/shared/e2e/contract.ts"]
 }

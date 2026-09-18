@@ -105,7 +105,7 @@ pnpm --filter @universe-editor/editor test:visual    # 视觉基线（仅 Linux 
 
 **改了扩展代码要跑单个 suite？** 首选 `pnpm e2e:ext <包>`（走 turbo `e2e` task，结果也进缓存）；裸 `pnpm --filter <ext> e2e` 也安全，已前置 `ensure-e2e-build.mjs`（见踩坑）。core 套件的 `core*App` fixture 激活 git/typescript/markdown 并从其 `dist` 读产物——这三个是 editor 的 devDependencies，无需单列 `#build`。
 
-**CI affected**：PR 用 turbo affected（`--filter=...[origin/main]`）只跑受影响 suite；改 `platform`/`e2e-harness` → 依赖传递触发全量兜底；main/nightly 无条件全量。CI 的 core e2e job 直接 `pnpm exec playwright test`（tag 分流靠 env 前缀；前面有独立 `pnpm build` step）。
+**CI affected**：PR 用 turbo affected（`--filter=...[origin/main]`）只跑受影响 suite；改 `platform`/`e2e-harness` → 依赖传递触发全量兜底；main/nightly 无条件全量。CI 的 core e2e job 直接调 playwright（带 `-c e2e/playwright.config.ts`；前面有独立 `pnpm build` step）。
 
 **Linux 环境预检与自动 Xvfb**：入口先跑 `scripts/e2e/linux-preflight.mjs` 秒级预检（`UNIVERSE_E2E_SKIP_PREFLIGHT=1` 跳过）；无 `DISPLAY` 时 globalSetup 自动起 Xvfb。**WSL 下默认离屏**（即便 WSLg 给了 DISPLAY）；`UNIVERSE_E2E_SHOW=1` 恢复真实窗口。详见 `docs/development/wsl-e2e.md`。
 
@@ -127,7 +127,7 @@ pnpm --filter @universe-editor/editor test:visual    # 视觉基线（仅 Linux 
 - **E2E 默认静默不抢焦点**：`isE2E` 时主进程窗口 `showInactive()`、其余 `focus()` 降级（`UNIVERSE_E2E_SHOW=1` 恢复完整 show/focus）。
 - **驱动焦点前先等启动焦点落定**：启动焦点恢复晚于 `waitForRestored()`，要补 `await workbench.waitForBootstrapFocusSettled()`，否则中途抢焦点、用例偶发失败且像回归（先例 `smoke.outputFind`）；断言“焦点到位”用 `focusedView`，别只看 `editorFocus`。
 - **core suite 是用例级并行（`fullyParallel`）**：同一 spec 文件里的用例可能被拆到不同 worker 同时跑，**文件内用例不得共享可变资源**（module 级固定端口/路径/beforeAll 服务）——确需共享的文件加 `test.describe.configure({ mode: 'default' })` 退回文件内串行（先例 `smoke.update.spec.ts`）。扩展 suite 仍是文件级调度（每用例冷启一个 Electron）；机制见 `playwrightConfig.ts` 的 `fullyParallel` 注释。
-- **产物 build 已自动兜底**：`pnpm --filter <ext> e2e`（及 `e2ea`/`e2eg`/`e2e:regression`/`e2e:ui`）前置了 `scripts/e2e/ensure-e2e-build.mjs`，裸跑也先 turbo build 宿主+扩展+上游。唯一例外：直接 `npx playwright test` 绕开 npm 脚本——先 `pnpm build` 或改走 `pnpm e2e:ext`。
+- **产物 build 已自动兜底**：`pnpm e2e` / `pnpm --filter <ext> e2e` 前置 `scripts/e2e/ensure-e2e-build.mjs`，裸跑也先 turbo build。例外是裸 `playwright test`：无构建守卫，在仓库根/扩展目录跑还连 globalSetup 一起绕开（WSL 下弹窗）——改走 `pnpm e2e`（位置参数可多个 spec）。
 - **异步 ACP 会话**：`sendAcpPrompt` 的 await **不等** echo 流式回复渲染完。依赖 timeline 高度/滚动的断言前，先 `expect.poll` 等消息数到位 + 高度收敛（见 skill `fix-ci-e2e-flake` 案例 15/34/41）。
 - **可见性别用 `toBeVisible()`**：Allotment.Pane 用 CSS visibility 隐藏后代，DOM 可见性会误判。走 ContextKey + `expect.poll`。
 - **长任务命令 fire-and-forget**：`showCommands` 之类内部 await 用户输入的命令必须 `void window.__E2E__!.runCommand(id)`，否则死锁。

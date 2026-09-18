@@ -142,7 +142,7 @@ pnpm --filter @universe-editor/extension-gallery test      # 市场协议 codec
 pnpm --filter @universe-editor/extension-packaging test    # VSIX 读取 + zip-slip
 cd apps/editor && pnpm exec vitest run extensionManagementService ExtensionsWorkbenchService
 pnpm --filter editor build    # e2e 前必重建
-cd apps/editor && pnpm exec playwright test -c e2e/playwright.config.ts smoke.extensions
+pnpm e2e specs/smoke.extensions.spec.ts
 ```
 
 > 改了用户可见行为（命令名、市场交互、信任提示文案）时，同步 `docs/user/zh-CN/customization/extensions.md`。e2e 跑 `out/` 产物，改 renderer/main/probe 后必先 `pnpm --filter editor build`。

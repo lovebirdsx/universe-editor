@@ -27,6 +27,7 @@ import {
   sweepFixtureProcesses,
   unregisterFixtureApp,
 } from './fixtureProcesses.js'
+import { assertOffscreenLaunch } from './offscreen.js'
 import {
   collectDescendants,
   containsMarker,
@@ -578,10 +579,16 @@ const FATAL_LAUNCH_ERROR =
  * `electron.launch` with transient-failure retry. Use this instead of the bare
  * `_electron.launch` in self-launching specs so a runner-level file-lock window
  * doesn't fail the test before the app under test even starts.
+ *
+ * Also the single choke point for the offscreen guard: every fixture and
+ * self-launching spec funnels through here, so a config-less `playwright test`
+ * (which skips globalSetup and would render onto the real desktop) is rejected
+ * before any window exists rather than retried into a popup.
  */
 export async function launchElectron(
   options: Parameters<typeof electron.launch>[0],
 ): Promise<ElectronApplication> {
+  assertOffscreenLaunch()
   for (let attempt = 1; ; attempt++) {
     try {
       const app = await electron.launch(options)

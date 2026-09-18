@@ -75,7 +75,7 @@ trigger/commit 经 `IEditorGroupsService.activeGroup.activeEditor` 拿 FileEdito
 ```bash
 cd apps/editor && pnpm vitest run --project renderer src/renderer/services/ai/__tests__/InlineCompletionService.test.ts
 pnpm --filter @universe-editor/editor build   # e2e 跑 out/ 产物，改 renderer 后必重建
-cd apps/editor && pnpm exec playwright test -c e2e/playwright.config.ts specs/smoke.inlineCompletion.spec.ts
+pnpm e2e specs/smoke.inlineCompletion.spec.ts
 ```
 
 e2e 探针：`installFakeInlineCompletion(text)`（恒定假 provider 绕开 AI）、`getActiveInlineSuggestionText()`（读 primaryGhostText）。**改 Tab 接受链路务必跑这条 e2e。**
@@ -140,7 +140,7 @@ cd apps/editor && pnpm vitest run --project renderer-node src/renderer/services/
   src/renderer/services/ai/__tests__/RecentEditsTracker.test.ts \
   src/renderer/services/ai/__tests__/InlineCompletionService.test.ts
 pnpm --filter @universe-editor/editor build
-cd apps/editor && pnpm exec playwright test -c e2e/playwright.config.ts specs/smoke.nes.spec.ts
+pnpm e2e specs/smoke.nes.spec.ts
 ```
 
 e2e 探针：`installFakeInlineEdit(s,e,text)`（**仅 `context.includeInlineEdits===true` 才出**）、`getActiveInlineEditText()`（注意 model 会去公共前缀）、`getContextKey('inlineEditIsVisible')`。**改 Tab 跳转/接受链路务必跑这条 e2e**；别用键盘连按多个 Tab 断言 jump+accept（步数随距离变化，多余 Tab 变缩进），用 runCommand jump → poll 光标行 → commit（已踩坑）。
