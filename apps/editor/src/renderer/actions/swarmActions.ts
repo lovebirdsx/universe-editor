@@ -12,11 +12,10 @@ import {
   IEditorService,
   ILayoutService,
   IQuickInputService,
-  IViewDescriptorService,
-  IViewsService,
   KeybindingWeight,
   MenuId,
   PartId,
+  ViewContainerRegistry,
   localize,
   localize2,
   type ServicesAccessor,
@@ -44,6 +43,10 @@ const SWARM_REVIEWS_FOCUS_WHEN = viewFocusWhen(SWARM_REVIEWS_VIEW_ID)
 
 /** Focus (and reveal) the Swarm Reviews view container in the primary side bar. */
 function revealSwarmContainer(accessor: ServicesAccessor): void {
+  // Swarm off (or not a Perforce workspace): the container is not registered, so
+  // there is nothing to reveal — no-op instead of opening the SideBar on an
+  // unrelated container. Same contract as focusSwarmChangesView below.
+  if (!ViewContainerRegistry.getViewContainer(SWARM_CONTAINER_ID)) return
   const layout = accessor.get(ILayoutService)
   if (!layout.getVisible(PartId.SideBar)) layout.setVisible(PartId.SideBar, true)
   // focusView (not openViewContainer) so re-running this while the container is
@@ -236,14 +239,16 @@ export class RefreshSwarmReviewsAction extends Action2 {
 /** Reveal the Swarm container, expand the Swarm Changes view and move DOM focus
  *  into its file tree. Shared by the palette command and the Ctrl+Enter jump. */
 async function focusSwarmChangesView(accessor: ServicesAccessor): Promise<void> {
+  // Swarm off (or not a Perforce workspace): the container is not registered, so
+  // there is nothing to reveal. Bail before touching the layout — without this the
+  // command would open the SideBar on whatever unrelated container is active.
+  if (!ViewContainerRegistry.getViewContainer(SWARM_CONTAINER_ID)) return
+
   // Snapshot every service synchronously — the accessor dies past the first await.
   const layoutService = accessor.get(ILayoutService)
-  const viewsService = accessor.get(IViewsService)
-  const viewDescriptorService = accessor.get(IViewDescriptorService)
 
   if (!layoutService.getVisible(PartId.SideBar)) layoutService.setVisible(PartId.SideBar, true)
-  viewsService.openViewContainer(SWARM_CONTAINER_ID)
-  viewDescriptorService.setViewCollapsed(SWARM_CHANGES_VIEW_ID, false)
+  // focusView also opens the container and expands the view if collapsed.
   await layoutService.focusView(SWARM_CHANGES_VIEW_ID, { source: 'command' })
 }
 

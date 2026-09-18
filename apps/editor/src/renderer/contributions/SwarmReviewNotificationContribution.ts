@@ -196,9 +196,15 @@ export class SwarmReviewNotificationContribution
     // Coarse-grained on purpose: the pushed snapshot (enabled switch + interval +
     // configured flag) reads several `perforce.swarm.*` keys, so re-push on any
     // change under that section (changes are rare; the push is one RPC).
+    //
+    // Matched on `keys`, NOT `affectsConfiguration('perforce.swarm')`: the
+    // renderer's ConfigurationService matches keys EXACTLY (the VSCode-style
+    // prefix rule only exists host-side, in extensionService), so a section
+    // query silently never fires — which is how this listener used to be dead,
+    // leaving the poll driver on a stale snapshot for the whole session.
     this._register(
       this._config.onDidChangeConfiguration((e) => {
-        if (e.affectsConfiguration('perforce.swarm')) this._syncPolling()
+        if (e.keys.some((key) => key.startsWith('perforce.swarm.'))) this._syncPolling()
       }),
     )
     // Catch-up tick on window foregrounding: when the renderer was

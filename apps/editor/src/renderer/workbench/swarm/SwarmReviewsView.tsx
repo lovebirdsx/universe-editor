@@ -249,9 +249,11 @@ export function SwarmReviewsView() {
     readSwarmFilterConfig(configuration),
   )
   const [menu, setMenu] = useState<SwarmReviewContextMenuState | null>(null)
-  // Swarm turned off / URL cleared: the view stays registered (a Perforce
-  // workspace is open) but every command would fall back to an empty dashboard,
-  // so show a real "not configured" state instead of a misleading empty list.
+  // URL cleared: the view stays registered (a Perforce workspace is open) but
+  // every command would fall back to an empty dashboard, so show a real "not
+  // configured" state instead of a misleading empty list. (A disabled
+  // `perforce.swarm.enabled` no longer reaches this view — SwarmViewContribution
+  // deregisters the whole container with it.)
   const [swarmConfigured, setSwarmConfigured] = useState(() => readSwarmConfigured(configuration))
   const swarmConfiguredRef = useRef(swarmConfigured)
   // Perforce workspace check — when no perforce source control exists the whole

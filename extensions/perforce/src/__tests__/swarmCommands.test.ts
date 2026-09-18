@@ -12,6 +12,23 @@ const mocks = vi.hoisted(() => ({
   dashboard: vi.fn(),
   showErrorMessage: vi.fn(),
   invalidateCredential: vi.fn(),
+  /** Shared across instances: counts SwarmClient rebuilds (dispose-then-construct). */
+  clientDispose: vi.fn(),
+  /** The active PerforceClient's commit-bar availability hook (setSwarmAvailable +
+   *  the refresh that re-renders the SCM accept-input actions). */
+  clientSetSwarmAvailable: vi.fn(),
+  clientRefresh: vi.fn(),
+  /** Stable status-bar item so tests can assert show/hide across a refresh. */
+  statusItem: {
+    text: '',
+    tooltip: '',
+    command: '',
+    show: vi.fn(),
+    hide: vi.fn(),
+    dispose: vi.fn(),
+  },
+  /** Listeners captured from `workspace.onDidChangeConfiguration`. */
+  configListeners: new Set<(e: { affectsConfiguration(key: string): boolean }) => void>(),
 }))
 
 vi.mock('@universe-editor/extension-api', () => ({
@@ -24,11 +41,7 @@ vi.mock('@universe-editor/extension-api', () => ({
     executeCommand: vi.fn(),
   },
   window: {
-    createStatusBarItem: vi.fn(() => ({
-      show: vi.fn(),
-      hide: vi.fn(),
-      dispose: vi.fn(),
-    })),
+    createStatusBarItem: vi.fn(() => mocks.statusItem),
     showErrorMessage: mocks.showErrorMessage,
     showInformationMessage: vi.fn(),
     showWarningMessage: vi.fn(),
@@ -39,6 +52,12 @@ vi.mock('@universe-editor/extension-api', () => ({
         key === 'swarm.url' ? 'https://swarm.example.com/' : fallback,
       ),
     })),
+    onDidChangeConfiguration: vi.fn(
+      (listener: (e: { affectsConfiguration(key: string): boolean }) => void) => {
+        mocks.configListeners.add(listener)
+        return { dispose: () => mocks.configListeners.delete(listener) }
+      },
+    ),
   },
 }))
 
@@ -48,6 +67,7 @@ vi.mock('../swarm/swarmClient.js', () => ({
     obliterateReview = mocks.obliterateReview
     dashboard = mocks.dashboard
     invalidateCredential = mocks.invalidateCredential
+    dispose = mocks.clientDispose
   },
 }))
 
@@ -413,5 +433,117 @@ describe('registerSwarmCommands setBackgroundPoll payload', () => {
     expect(tickCalls().length).toBe(1)
     await vi.advanceTimersByTimeAsync(1_000)
     expect(tickCalls().length).toBe(2)
+  })
+})
+
+// Regression: Swarm's availability is host-owned state that no config event used
+// to invalidate — it is re-checked on activation, workspace switch and the manual
+// `refreshStatus` command only. Switching Swarm off therefore left "N reviews need
+// my attention" on screen and kept "Request New Swarm Review…" as the default
+// commit-bar action: background polling is off by default, so no tick came along
+// to re-check availability.
+describe('registerSwarmCommands status bar availability vs config', () => {
+  const configValues: Record<string, unknown> = {}
+
+  const flushMicrotasks = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
+
+  const fireConfigChange = (key: string): void => {
+    for (const listener of [...mocks.configListeners]) {
+      listener({ affectsConfiguration: (k: string) => k === key })
+    }
+  }
+
+  beforeEach(async () => {
+    mocks.handlers.clear()
+    mocks.configListeners.clear()
+    delete configValues['swarm.url']
+    delete configValues['swarm.enabled']
+    mocks.statusItem.show.mockClear()
+    mocks.statusItem.hide.mockClear()
+    mocks.clientSetSwarmAvailable.mockClear()
+    mocks.clientRefresh.mockClear()
+    vi.mocked(workspace.getConfiguration).mockImplementation((() => ({
+      get: vi.fn(async (key: string, fallback: unknown) => {
+        if (key === 'swarm.url') return configValues['swarm.url'] ?? 'https://swarm.example.com/'
+        if (key === 'swarm.enabled') return configValues['swarm.enabled'] ?? fallback
+        return fallback
+      }),
+    })) as never)
+
+    registerSwarmCommands(
+      {
+        active: {
+          user: 'devuser',
+          p4Service: {},
+          setSwarmAvailable: mocks.clientSetSwarmAvailable,
+          refresh: mocks.clientRefresh,
+        },
+      } as never,
+      logger,
+    )
+    await flushMicrotasks()
+  })
+
+  afterEach(() => {
+    vi.mocked(workspace.getConfiguration).mockReturnValue({
+      get: vi.fn(async (key: string, fallback: unknown) =>
+        key === 'swarm.url' ? 'https://swarm.example.com/' : fallback,
+      ),
+    } as never)
+  })
+
+  it('hides the status bar item when perforce.swarm.enabled is switched off', async () => {
+    expect(mocks.statusItem.show).toHaveBeenCalled()
+
+    configValues['swarm.enabled'] = false
+    fireConfigChange('perforce.swarm.enabled')
+    await flushMicrotasks()
+
+    expect(mocks.statusItem.hide).toHaveBeenCalled()
+  })
+
+  it('shows the status bar item again when the switch comes back on', async () => {
+    configValues['swarm.enabled'] = false
+    fireConfigChange('perforce.swarm.enabled')
+    await flushMicrotasks()
+    mocks.statusItem.show.mockClear()
+
+    configValues['swarm.enabled'] = true
+    fireConfigChange('perforce.swarm.enabled')
+    await flushMicrotasks()
+
+    expect(mocks.statusItem.show).toHaveBeenCalled()
+  })
+
+  // Same verdict, second consumer: the default changelist's commit bar only
+  // offers "Request New Swarm Review…" while Swarm is available, and
+  // setSwarmAvailable needs a refresh to re-render those actions.
+  it('flips the commit-bar Swarm action with the same verdict', async () => {
+    configValues['swarm.enabled'] = false
+    fireConfigChange('perforce.swarm.enabled')
+    await flushMicrotasks()
+
+    expect(mocks.clientSetSwarmAvailable).toHaveBeenCalledWith(false)
+    expect(mocks.clientRefresh).toHaveBeenCalled()
+  })
+
+  // The verdict guard: perforce.swarm.url fires per keystroke in the settings UI,
+  // and an unguarded refresh would run swarm()'s signature diff every character —
+  // disposing and rebuilding the SwarmClient, which drops its credential and list
+  // caches. Each rebuild surfaces as a dispose on the previous instance.
+  it('does not rebuild the SwarmClient on every URL keystroke', async () => {
+    mocks.clientDispose.mockClear()
+
+    configValues['swarm.url'] = 'https://swarm.example.com/a'
+    fireConfigChange('perforce.swarm.url')
+    await flushMicrotasks()
+    configValues['swarm.url'] = 'https://swarm.example.com/ab'
+    fireConfigChange('perforce.swarm.url')
+    await flushMicrotasks()
+
+    // Configured from startup on, so no keystroke is a verdict flip and none of
+    // them reaches swarm() — the startup read seeds the verdict instead of
+    // leaving the undefined sentinel that would make the first one look like one.
+    expect(mocks.clientDispose).toHaveBeenCalledTimes(0)
   })
 })

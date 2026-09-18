@@ -165,7 +165,18 @@ async function setup(opts: SetupOpts = {}) {
     'perforce.swarm.backgroundPoll.enabled': opts.pollEnabled ?? true,
     ...opts.config,
   }
-  const configChange = new Emitter<{ affectsConfiguration(key: string): boolean }>()
+  const configChange = new Emitter<{
+    keys: readonly string[]
+    affectsConfiguration(key: string): boolean
+  }>()
+  /** Fire a change carrying exactly the given keys, with the renderer
+   *  ConfigurationService's semantics: `affectsConfiguration` matches keys
+   *  EXACTLY — the VSCode-style section prefix only exists host-side, so a
+   *  `affectsConfiguration('perforce.swarm')` test double would keep a
+   *  section-query listener green while it is dead in the app. */
+  const fireConfigChange = (...keys: string[]): void => {
+    configChange.fire({ keys, affectsConfiguration: (key: string) => keys.includes(key) })
+  }
   const config = {
     get: (key: string) => configValues[key],
     onDidChangeConfiguration: configChange.event,
@@ -197,7 +208,7 @@ async function setup(opts: SetupOpts = {}) {
     viewState,
     platform,
     configValues,
-    configChange,
+    fireConfigChange,
     logger,
     dispose: () => {
       instance.dispose()
@@ -249,9 +260,7 @@ describe('SwarmReviewNotificationContribution', () => {
     expect(t.executeCommand.mock.calls.some((c) => c[0] === 'perforce.swarm.dashboard')).toBe(false)
 
     t.configValues['perforce.swarm.backgroundPoll.enabled'] = true
-    t.configChange.fire({
-      affectsConfiguration: (k) => k === 'perforce.swarm',
-    })
+    t.fireConfigChange('perforce.swarm.backgroundPoll.enabled')
     await flush()
 
     expect(t.executeCommand.mock.calls.some((c) => c[0] === 'perforce.swarm.dashboard')).toBe(true)
@@ -266,9 +275,7 @@ describe('SwarmReviewNotificationContribution', () => {
     expect(t.viewState.swarmNeedsActionCount.observable.get()).toBe(1)
 
     t.configValues['perforce.swarm.backgroundPoll.enabled'] = false
-    t.configChange.fire({
-      affectsConfiguration: (k) => k === 'perforce.swarm',
-    })
+    t.fireConfigChange('perforce.swarm.backgroundPoll.enabled')
     await flush()
 
     // Stale badge cleared; further refreshes (timer / host tick) are inert.
@@ -329,7 +336,7 @@ describe('SwarmReviewNotificationContribution', () => {
     const pushCalls = () =>
       t.executeCommand.mock.calls.filter((c) => c[0] === 'perforce.swarm.setBackgroundPoll')
 
-    t.configChange.fire({ affectsConfiguration: (k: string) => k === 'perforce.swarm' })
+    t.fireConfigChange('perforce.swarm.url')
     await flush()
 
     expect(pushCalls().length).toBeGreaterThanOrEqual(1)
@@ -477,7 +484,7 @@ describe('SwarmReviewNotificationContribution', () => {
       t.executeCommand.mock.calls.filter((c) => c[0] === 'perforce.swarm.setBackgroundPoll')
 
     t.configValues['perforce.swarm.pollInterval'] = 30
-    t.configChange.fire({ affectsConfiguration: (k: string) => k === 'perforce.swarm' })
+    t.fireConfigChange('perforce.swarm.pollInterval')
     await flush()
 
     expect(pushCalls().length).toBeGreaterThanOrEqual(1)

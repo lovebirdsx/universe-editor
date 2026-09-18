@@ -15,6 +15,7 @@ import {
   IWorkbenchContribution,
   localize,
   MutableDisposable,
+  observableValue,
   ViewContainerLocation,
   ViewContainerRegistry,
 } from '@universe-editor/platform'
@@ -28,11 +29,13 @@ import { registerViewWithComponent } from '../services/views/ViewComponentRegist
 import { swarmIgnoreStore } from '../services/swarm/swarmIgnoreStore.js'
 import { swarmApplyStore } from '../services/swarm/swarmApplyStore.js'
 import { swarmReviewsUiStore } from '../services/swarm/swarmReviewsUiStore.js'
+import { swarmNeedsActionCount } from '../services/swarm/swarmViewState.js'
 import { SwarmReviewsView } from '../workbench/swarm/SwarmReviewsView.js'
 import { SwarmChangesView } from '../workbench/swarm/SwarmChangesView.js'
 import { SwarmChangesViewToolbar } from '../workbench/swarm/SwarmChangesViewToolbar.js'
 
 const REVIEW_WINDOW_DAYS_KEY = 'perforce.swarm.reviewWindowDays'
+const SWARM_ENABLED_KEY = 'perforce.swarm.enabled'
 
 export class SwarmViewContribution extends Disposable implements IWorkbenchContribution {
   constructor(
@@ -61,17 +64,45 @@ export class SwarmViewContribution extends Disposable implements IWorkbenchContr
       }),
     )
 
+    // `perforce.swarm.enabled` drives registration alongside the SCM presence.
+    // IConfigurationService is event-based (no observable), so mirror it into one
+    // for the autorun below. Any non-false value counts as enabled (host parity:
+    // readSwarmConfig only bails on an explicit false).
+    const swarmEnabled = observableValue<boolean>(
+      'swarmView.enabled',
+      configuration.get<boolean>(SWARM_ENABLED_KEY) !== false,
+    )
+    this._register(
+      configuration.onDidChangeConfiguration((e) => {
+        if (e.affectsConfiguration(SWARM_ENABLED_KEY)) {
+          swarmEnabled.set(configuration.get<boolean>(SWARM_ENABLED_KEY) !== false, undefined)
+        }
+      }),
+    )
+
     // Register the container only while a perforce source control exists (the
-    // extension activated for this workspace). Swarm reviews are meaningless
-    // outside a Perforce workspace, so the whole entry point disappears from
-    // the Activity Bar instead of rendering an unusable view. The holder is
-    // registered on this contribution so the leak tracker roots the dynamic
-    // registrations through it (a plain closure variable would be reported).
+    // extension activated for this workspace) AND `perforce.swarm.enabled` is on.
+    // Swarm reviews are meaningless outside a Perforce workspace, and the whole
+    // integration is off when the switch is off, so either way the whole entry
+    // point disappears from the Activity Bar instead of rendering an unusable
+    // view. Deregistering (rather than gating the views with a `when` clause) is
+    // deliberate: LayoutService._findViewDescriptor reads ViewRegistry directly
+    // and ignores `when`, so focusView would still activate a container that is
+    // no longer in the Activity Bar — leaving the SideBar on a blank container.
+    // The holder is registered on this contribution so the leak tracker roots the
+    // dynamic registrations through it (a plain closure variable would be reported).
     const registrations = this._register(new MutableDisposable())
     this._register(
       autorun((r) => {
         const hasPerforce = scmService.sourceControls.read(r).some((sc) => sc.id === 'perforce')
-        if (hasPerforce && !registrations.value) {
+        const enabled = swarmEnabled.read(r)
+        if (hasPerforce && enabled && !registrations.value) {
+          // A freshly (re)registered container has no count computed against it
+          // yet, and the view that owns it only mounts after this runs. Clearing
+          // here too (not just on the way out) closes the window a deregistration
+          // race leaves open: the unmounting view's effect can still write the
+          // count it was showing after the branch below zeroed it.
+          swarmNeedsActionCount.set(0)
           registrations.value = combinedDisposable(
             ViewContainerRegistry.registerViewContainer({
               id: SWARM_CONTAINER_ID,
@@ -103,8 +134,15 @@ export class SwarmViewContribution extends Disposable implements IWorkbenchContr
               SwarmChangesViewToolbar,
             ),
           )
-        } else if (!hasPerforce) {
+        } else if (!hasPerforce || !enabled) {
           registrations.clear()
+          // Nothing recomputes this count while Swarm is off: the view is gone,
+          // and the background poll — when it is running at all — only ever gets
+          // the host's empty fallback (`readSwarmConfig` bails on a disabled
+          // switch), so it writes 0 at best. Left alone, the last value would
+          // survive and flash on the Activity Bar badge and the host status bar
+          // until the view reloads.
+          swarmNeedsActionCount.set(0)
         }
       }),
     )

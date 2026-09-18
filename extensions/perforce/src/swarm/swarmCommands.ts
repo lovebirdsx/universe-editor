@@ -1,9 +1,11 @@
 /**
  * Swarm command registration. Called from the perforce extension's `activate`
- * when `perforce.swarm.enabled` is set. Builds a {@link SwarmClient} lazily from
- * config + the active PerforceClient (for the p4 connection / ticket), and
- * registers every `perforce.swarm.*` command the renderer calls over the
- * contributed-command boundary.
+ * unconditionally (toggling `perforce.swarm.enabled` must take effect without a
+ * reload); every handler re-reads the config at call time and no-ops with a
+ * friendly toast when Swarm is off or unconfigured. Builds a {@link SwarmClient}
+ * lazily from config + the active PerforceClient (for the p4 connection /
+ * ticket), and registers every `perforce.swarm.*` command the renderer calls
+ * over the contributed-command boundary.
  *
  * All handlers live here (extension host), so these command ids are safe to
  * declare in package.json `commands` (they are not renderer Action2 — see the
@@ -818,6 +820,11 @@ export function registerSwarmCommands(
   // entirely while the window is background-throttled (the 2026-08 incident).
   const notificationPoller = new SwarmNotificationPoller(() => swarmConfiguredCache, logger)
   subs.push(notificationPoller)
+  // Last verdict applied by the config listener below. Seeded by the startup read
+  // further down so the first config tweak after launch compares against a real
+  // verdict instead of the undefined sentinel — a sentinel would look like a flip
+  // and cost a full status-bar + client refresh for nothing.
+  let swarmAvailable: boolean | undefined
   void (async () => {
     void statusBar.refresh()
     const cfg = workspace.getConfiguration('perforce')
@@ -831,18 +838,18 @@ export function registerSwarmCommands(
       readSwarmConfig(),
     ])
     swarmConfiguredCache = config !== undefined
+    swarmAvailable = swarmConfiguredCache
     notificationPoller.setIntervalMs(resolveSwarmPollIntervalMs(pollInterval))
     if (backgroundPollEnabled) {
       notificationPoller.start()
     }
   })()
 
-  // The renderer owns the switch's live state (the host has no config-change
-  // event): it pushes the full polling snapshot on startup (with retries until
-  // this command exists) and on every `perforce.swarm` configuration change.
-  // Interval conversion stays HOST-side: `UNIVERSE_SWARM_POLL_INTERVAL_MS` is a
-  // host-process env (e2e relies on it to bypass the 10s floor), so the
-  // renderer only ever pushes raw seconds.
+  // The renderer owns the switch's live state and pushes the full polling
+  // snapshot on startup (with retries until this command exists) and on every
+  // `perforce.swarm` configuration change. Interval conversion stays HOST-side:
+  // `UNIVERSE_SWARM_POLL_INTERVAL_MS` is a host-process env (e2e relies on it to
+  // bypass the 10s floor), so the renderer only ever pushes raw seconds.
   subs.push(
     commands.registerCommand(Cmd.setBackgroundPoll, (payload: unknown) => {
       const p = (payload ?? {}) as {
@@ -855,6 +862,41 @@ export function registerSwarmCommands(
         notificationPoller.setIntervalMs(resolveSwarmPollIntervalMs(p.pollIntervalSeconds))
       }
       notificationPoller.setEnabled(p.enabled === true)
+    }),
+  )
+
+  // Swarm's availability is host-owned state that no config event used to
+  // invalidate — it was re-checked on activation, workspace switch and the
+  // manual `refreshStatus` command only. Switching Swarm off therefore left both
+  // "N reviews need my attention" on screen and "Request New Swarm Review…" as
+  // the default commit-bar action (background polling is off by default, so no
+  // tick came along to re-check). Re-evaluate on the two keys that decide it and
+  // push the verdict to both consumers.
+  //
+  // Guarded on a verdict FLIP: `perforce.swarm.url` fires per keystroke in the
+  // settings UI, and an unguarded refresh would run swarm()'s signature diff on
+  // every character — disposing and rebuilding the SwarmClient each time, which
+  // drops its credential and list caches.
+  const syncSwarmAvailability = async (): Promise<void> => {
+    const available = (await readSwarmConfig()) !== undefined
+    if (available === swarmAvailable) return
+    swarmAvailable = available
+    // setSwarmAvailable only flips the flag behind the commit-bar actions; a
+    // refresh is what re-renders them (same pair `activate` runs).
+    const activeClient = mgr.active
+    activeClient?.setSwarmAvailable(available)
+    await statusBar.refresh()
+    void activeClient?.refresh()
+  }
+  subs.push(
+    workspace.onDidChangeConfiguration((e) => {
+      if (
+        !e.affectsConfiguration('perforce.swarm.enabled') &&
+        !e.affectsConfiguration('perforce.swarm.url')
+      ) {
+        return
+      }
+      void syncSwarmAvailability()
     }),
   )
 
