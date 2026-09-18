@@ -17,6 +17,7 @@ import { act, cleanup, render } from '@testing-library/react'
 import { ILayoutService, PartId, autorun, observableValue } from '@universe-editor/platform'
 import { IWorkspaceService } from '@universe-editor/platform'
 import { ITerminalManagerService } from '../../../../services/terminal/TerminalManagerService.js'
+import { ITerminalXtermService } from '../../../../services/terminal/TerminalXtermService.js'
 import { ServicesContext } from '../../../useService.js'
 import { TerminalView } from '../TerminalView.js'
 
@@ -101,6 +102,7 @@ function renderView(manager: unknown) {
   }
   const map = new Map<unknown, unknown>([
     [ITerminalManagerService, manager],
+    [ITerminalXtermService, { get: () => undefined }],
     [IWorkspaceService, workspace],
     [ILayoutService, layout],
   ])

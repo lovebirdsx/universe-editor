@@ -12,6 +12,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { EditorInput, URI } from '@universe-editor/platform'
+import { WebviewFocusRegistry } from './WebviewFocusRegistry.js'
 
 /** Identity URI for an extension-owned panel (focus registry key + model resource). */
 export function hostPanelResource(panelHandle: number): URI {
@@ -57,6 +58,18 @@ export class WebviewPanelInput extends EditorInput {
 
   override getName(): string {
     return this._title
+  }
+
+  /**
+   * Move keyboard focus into the panel's iframe. WebviewPanelHost requests this
+   * when it mounts, but the host stays mounted across a re-activation of the same
+   * tab, so `focusEditorInput` — Focus Active Editor Group, window focus restore,
+   * picking the panel from the Ctrl+Tab switcher — would otherwise fall through
+   * to the editor-group body, which sits *outside* the iframe, and the webview
+   * would need a click. Same contract as CustomEditorInput.focus().
+   */
+  override focus(): boolean {
+    return WebviewFocusRegistry.requestFocus(this._viewType, this._focusResource)
   }
 
   /** `WebviewPanel.title = …` retitles the tab (host → $setWebviewTitle → here). */

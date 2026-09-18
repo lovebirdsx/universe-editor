@@ -200,4 +200,67 @@ test.describe('@p1 webview panel (createWebviewPanel)', () => {
     await workbench.page.evaluate((id) => window.__E2E__!.uninstallExtension(id), installedId)
     await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
   })
+
+  // WebviewPanelHost asks for focus when it MOUNTS, so every path that remounts
+  // it (a tab switch, panel.reveal()) looks fine. The gap is the other half:
+  // focusEditorInput reached while the host stays mounted — Focus Active Editor
+  // Group, window focus restore, picking the panel from the Ctrl+Tab switcher.
+  // WebviewPanelInput had no focus(), so those fell through to the editor-group
+  // body, which sits *outside* the iframe, and the webview needed a click.
+  test('restoring focus to the group lands inside the webview iframe @regression', async ({
+    workbench,
+  }) => {
+    const tmpDir = mkTempDir('ue2-webview-panel-focus-')
+    const vsixPath = await makeWebviewPanelVsix(tmpDir)
+
+    await workbench.waitForRestored()
+
+    const installedId = await workbench.page.evaluate(
+      (p) => window.__E2E__!.installVsixExtension(p),
+      vsixPath,
+    )
+    expect(installedId).toBe('universe.e2e-webview-panel')
+    await expect
+      .poll(() => workbench.page.evaluate((id) => window.__E2E__!.hasCommand(id), CREATE_COMMAND), {
+        timeout: 10000,
+      })
+      .toBe(true)
+
+    await workbench.runCommand(CREATE_COMMAND)
+    const frameEl = workbench.page.locator('[data-testid="webview-frame"]')
+    const frame = workbench.page.frameLocator('[data-testid="webview-frame"]')
+    // Wait until the extension HTML has been written AND settled. The host
+    // re-applies focus 80ms after `html` lands, so blurring inside that window
+    // just gets overwritten by the replay and the state under test is never
+    // reached — the run would then pass on a plain group-body fallback.
+    await expect(frame.locator(`#${MARKER}`)).toHaveText('ok', { timeout: 10000 })
+    await expect(frameEl).toBeFocused({ timeout: 10000 })
+    await workbench.page.waitForTimeout(300)
+
+    // Drop focus onto the body without touching the active editor: the host stays
+    // mounted, so its mount-time focus request does not run again. This is also
+    // the state the window-focus restorer starts from.
+    await workbench.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+    await workbench.page.waitForTimeout(300)
+    await expect(frameEl).not.toBeFocused()
+
+    await workbench.runCommand('workbench.action.focusActiveEditorGroup')
+
+    // Focus must land inside the iframe, not on the group body around it.
+    await expect(frameEl).toBeFocused({ timeout: 10000 })
+
+    // Close the tab before teardown: an extension-owned panel still open at
+    // unmount keeps its WebviewPanelModel alive and trips the leak gate.
+    await workbench.runCommand('workbench.action.closeActiveEditor')
+    await expect
+      .poll(
+        () =>
+          workbench.page.evaluate((name) => window.__E2E__!.getOutputChannelContent(name), CHANNEL),
+        { timeout: 10000 },
+      )
+      .toContain(DISPOSE_SIGNAL)
+
+    await workbench.page.evaluate((id) => window.__E2E__!.uninstallExtension(id), installedId)
+    await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
+  })
 })

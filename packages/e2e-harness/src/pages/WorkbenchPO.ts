@@ -328,6 +328,21 @@ export class WorkbenchPO {
     })
   }
 
+  /**
+   * The `data-terminal-id` of the terminal host that currently owns DOM focus
+   * (via the ancestor chain), or undefined when focus is outside every terminal.
+   * The `terminalFocus` context key only says focus is in *some* terminal host;
+   * this says *which* one — needed to prove a focus request landed in the
+   * terminal the user picked rather than merely somewhere inside the panel.
+   */
+  async getFocusedTerminalId(): Promise<string | undefined> {
+    return this.page.evaluate((): string | undefined => {
+      const active = document.activeElement
+      if (!(active instanceof Element)) return undefined
+      return active.closest('[data-terminal-id]')?.getAttribute('data-terminal-id') ?? undefined
+    })
+  }
+
   /** Current auto-update state (status machine + versions). */
   async getUpdateState(): Promise<E2EUpdateState> {
     return this.page.evaluate(() => window.__E2E__!.getUpdateState())

@@ -68,6 +68,15 @@ export interface ITerminalXtermHolder {
   saveScroll(): void
   restoreScroll(): void
   focus(): void
+  /**
+   * The element DOM focus actually lands on — xterm's helper textarea, i.e.
+   * exactly what `focus()` drives. Lets a view hand the terminal to
+   * IFocusableRegistry, whose contract needs the element focus lands on (it
+   * verifies the request by comparing against `document.activeElement`).
+   * Undefined once the holder is released: the terminal process can exit while
+   * the view is still mounted.
+   */
+  readonly focusElement: HTMLTextAreaElement | undefined
   hasSelection(): boolean
   copy(): Promise<void>
   paste(): Promise<void>
@@ -335,6 +344,13 @@ class TerminalXtermHolder extends Disposable implements ITerminalXtermHolder {
 
   focus(): void {
     this.term.focus()
+  }
+
+  get focusElement(): HTMLTextAreaElement | undefined {
+    // Process exit can release the holder before the view unmounts; reading
+    // through a disposed terminal's core is the same hazard saveScroll guards.
+    if (this._store.isDisposed) return undefined
+    return this.term.textarea
   }
 
   hasSelection(): boolean {

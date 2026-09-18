@@ -1,9 +1,11 @@
-import { useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { Allotment } from 'allotment'
 import 'allotment/dist/style.css'
 import { ILayoutService, IWorkspaceService, PartId, localize } from '@universe-editor/platform'
 import { ITerminalManagerService } from '../../../services/terminal/TerminalManagerService.js'
+import { ITerminalXtermService } from '../../../services/terminal/TerminalXtermService.js'
 import { useService, useObservable } from '../../useService.js'
+import { useViewFocusable } from '../../useViewFocusable.js'
 import { useWorkspaceHome } from '../../useWorkspaceHome.js'
 import { TerminalInstance } from './TerminalInstance.js'
 import { useResolveTerminalFile, useOpenTerminalFile } from './useTerminalOpenFile.js'
@@ -12,6 +14,7 @@ import styles from './TerminalView.module.css'
 
 export function TerminalView() {
   const manager = useService(ITerminalManagerService)
+  const xtermService = useService(ITerminalXtermService)
   const workspaceService = useService(IWorkspaceService)
   const layoutService = useService(ILayoutService)
   const terminals = useObservable(manager.panelTerminals)
@@ -19,6 +22,32 @@ export function TerminalView() {
   const activeGroupId = useObservable(manager.activeGroupId)
   const activeId = useObservable(manager.activeTerminalId)
   const panelVisible = useObservable(layoutService.visible)[PartId.Panel]
+
+  // The view's real keyboard focus target is the active panel terminal's xterm
+  // helper textarea. Without this registration the registry held only ViewBody's
+  // fallback for this view id, so focusView() (Ctrl+Tab's switcher, a container-tab
+  // click, the recent-targets picker) parked DOM focus on the container div — a
+  // focus ring around the whole panel and keystrokes that never reached the shell.
+  // `focusElement` is what `holder.focus()` drives, so both paths now agree.
+  //
+  // Services are read at call time rather than through render state: the getter
+  // runs lazily inside focusView's poll, and a render snapshot can be stale by
+  // then (the user switched instances in between). Returning null yields
+  // ViewBody's fallback — which is what keeps a terminal-less empty view
+  // focusable, and therefore in the Ctrl+Tab recency list. The membership check
+  // mirrors what TerminalInstance's `focused` prop derives, so the element handed
+  // out always belongs to the group that is on screen.
+  useViewFocusable(
+    'workbench.view.terminal.main',
+    useCallback(() => {
+      const groupId = manager.activeGroupId.get()
+      const active = manager.activeTerminalId.get()
+      if (groupId === null || active === null) return null
+      const group = manager.terminalGroups.get().find((g) => g.id === groupId)
+      if (group === undefined || !group.terminals.includes(active)) return null
+      return xtermService.get(active)?.focusElement ?? null
+    }, [manager, xtermService]),
+  )
 
   // Spawn an initial terminal only on the very first mount with none open.
   // We mark didInit on the first frame regardless of outcome: once the view has
