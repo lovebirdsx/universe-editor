@@ -5,7 +5,10 @@
  *    - greedy packing keeps the high-priority entries (model, sub agent)
  *    - overflowed entries carry data-overflowed/inert/aria-hidden and the ⋯
  *      button shows
- *    - rows expand inline one at a time; picking a value calls setConfigOption
+ *    - rows expand inline one at a time; picking a value calls setConfigOption,
+ *      ends the panel and hands the caret back to whatever opened it (the ⋯
+ *      button when that element is gone) — while MCP's jump to settings closes
+ *      the panel without touching focus
  *    - widening the bar clears the overflow and closes the panel
  *    - Escape closes the panel, peeling one level at a time (collapse the row,
  *      then dismiss) and handing focus back to the ⋯ button
@@ -21,7 +24,7 @@
  *  "fits" (fake green).
  *--------------------------------------------------------------------------------------------*/
 
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import {
   Event,
@@ -54,6 +57,8 @@ import type {
 } from '../../../services/acp/session/acpSessionService.js'
 import { IAcpSessionService as IAcpSessionServiceId } from '../../../services/acp/session/acpSessionService.js'
 import type { McpServerDefinition } from '../../../services/acp/acpMcpServers.js'
+import type { IMcpServerEnablementService } from '../../../services/acp/mcpServerEnablementService.js'
+import { IMcpServerEnablementService as IMcpServerEnablementServiceId } from '../../../services/acp/mcpServerEnablementService.js'
 import type { AvailableCommand, SessionConfigOption } from '@agentclientprotocol/sdk'
 import { MCP_ENTRY_KEY, SUBAGENT_ENTRY_KEY } from '../../../services/acp/configBarLayout.js'
 import { IClaudeConfigService } from '../../../../shared/ipc/claudeConfigService.js'
@@ -119,6 +124,17 @@ const stubNotificationService = {
   _serviceBrand: undefined,
   notify: () => ({ dispose: () => {}, update: () => {} }),
 } as unknown as INotificationService
+// An expanded MCP row renders its per-server toggles, which read this service.
+// The assertions here never touch a toggle — the stub only has to exist.
+const stubEnablementService = {
+  _serviceBrand: undefined,
+  whenReady: Promise.resolve(),
+  onDidChange: Event.None,
+  isEnabled: () => true,
+  getOverride: () => undefined,
+  setEnabled: async () => {},
+  removeOverride: async () => {},
+} as unknown as IMcpServerEnablementService
 
 const MCP_POOL: readonly McpServerDefinition[] = [
   { name: 'fs', transport: 'stdio', disabled: false, source: 'global' },
@@ -144,6 +160,7 @@ function renderWithServices(
   services.set(IClaudeConfigService, stubClaudeConfigService)
   services.set(IAiModelService, stubAiModelService)
   services.set(INotificationService, stubNotificationService)
+  services.set(IMcpServerEnablementServiceId, stubEnablementService)
   services.set(IAcpSessionServiceId, opts.acpService ?? makeAcpService())
   services.set(
     IDialogService,
@@ -307,6 +324,28 @@ function openOverflowMenu() {
   fireEvent.click(screen.getByTestId('acp-config-overflow-trigger'))
 }
 
+/**
+ * Stand-in for the prompt input: an element outside the bar that really holds
+ * the caret when the panel opens. Alt+<n> reaches the panel from there, so a
+ * committed pick has to give the caret back to it.
+ */
+function makeOpener(): HTMLButtonElement {
+  const el = document.createElement('button')
+  document.body.appendChild(el)
+  onTestFinished(() => el.remove())
+  el.focus()
+  expect(document.activeElement).toBe(el)
+  return el
+}
+
+/**
+ * Let a committed pick's hand-back run. It lands on the microtask after React's
+ * close (see `restoreOpener`): a mouse pick fires on the item's own mousedown,
+ * and that press keeps bubbling out through every overlay container on its way,
+ * each re-focusing itself.
+ */
+const settleHandback = (): Promise<void> => act(async () => {})
+
 describe('ConfigBarOverflowMenu — packing and panel', () => {
   it('overflows the low-priority tail and keeps model + sub agent visible when narrow', async () => {
     const { bar } = setupNarrowBar()
@@ -351,6 +390,8 @@ describe('ConfigBarOverflowMenu — packing and panel', () => {
     const plan = options.find((o) => o.textContent === 'Plan')!
     fireEvent.mouseDown(plan)
     expect(session.setConfigOption).toHaveBeenCalledWith('mode', 'plan')
+    // A mouse pick ends the panel exactly like Enter does.
+    expect(screen.queryByTestId('acp-config-overflow-panel')).toBeNull()
   })
 
   it('expands only one row at a time inside the panel', async () => {
@@ -425,6 +466,66 @@ describe('ConfigBarOverflowMenu — packing and panel', () => {
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(screen.queryByTestId('acp-config-overflow-panel')).toBeNull()
     expect(document.activeElement).toBe(screen.getByTestId('acp-config-overflow-trigger'))
+  })
+
+  it('a committed pick ends the panel and hands the caret back to the opener', async () => {
+    setupNarrowBar()
+    await fireResize()
+    const opener = makeOpener()
+    openOverflowMenu()
+    const panel = screen.getByTestId('acp-config-overflow-panel')
+    const modeRow = entryEl(panel, 'mode')
+    fireEvent.keyDown(document.activeElement!, { key: 'Enter' })
+    expect(modeRow.getAttribute('aria-expanded')).toBe('true')
+
+    const body = modeRow.parentElement!.querySelector<HTMLElement>('[role="listbox"]')!
+    fireEvent.keyDown(body, { key: 'ArrowDown' })
+    fireEvent.keyDown(body, { key: 'Enter' })
+    await settleHandback()
+
+    // A pick ends the whole panel — no row left expanded behind a caret that
+    // has already moved on — and the caret goes back where it came from.
+    expect(screen.queryByTestId('acp-config-overflow-panel')).toBeNull()
+    expect(document.activeElement).toBe(opener)
+  })
+
+  it('falls back to the ⋯ button when the opener is gone by commit time', async () => {
+    setupNarrowBar()
+    await fireResize()
+    const opener = makeOpener()
+    openOverflowMenu()
+    const panel = screen.getByTestId('acp-config-overflow-panel')
+    const modeRow = entryEl(panel, 'mode')
+    fireEvent.keyDown(document.activeElement!, { key: 'Enter' })
+
+    opener.remove()
+    const body = modeRow.parentElement!.querySelector<HTMLElement>('[role="listbox"]')!
+    fireEvent.keyDown(body, { key: 'ArrowDown' })
+    fireEvent.keyDown(body, { key: 'Enter' })
+    await settleHandback()
+
+    // The folded entry's own trigger is inert, so the ⋯ button is the only
+    // thing left to hand the caret to — the same target the second Escape uses.
+    expect(screen.queryByTestId('acp-config-overflow-panel')).toBeNull()
+    expect(document.activeElement).toBe(screen.getByTestId('acp-config-overflow-trigger'))
+  })
+
+  it('leaves the caret alone when a body closes the panel without a pick', async () => {
+    setupNarrowBar()
+    await fireResize()
+    const opener = makeOpener()
+    openOverflowMenu()
+    const panel = screen.getByTestId('acp-config-overflow-panel')
+    const mcpRow = entryEl(panel, MCP_ENTRY_KEY)
+    fireEvent.click(mcpRow)
+    expect(mcpRow.getAttribute('aria-expanded')).toBe('true')
+
+    fireEvent.click(screen.getByTestId('acp-mcp-picker-open-settings'))
+
+    // Navigating away is not a pick: the caret stays put instead of being handed
+    // back, so this close route must not run the commit path.
+    expect(screen.queryByTestId('acp-config-overflow-panel')).toBeNull()
+    expect(document.activeElement).not.toBe(opener)
   })
 
   it('runs the cursor across the rows and an expanded body as one sequence', async () => {

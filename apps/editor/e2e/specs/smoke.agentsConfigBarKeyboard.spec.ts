@@ -11,8 +11,14 @@
  *    - Alt+<n> opens the n-th entry's popover with the cursor already inside it
  *    - arrows move the cursor and Enter applies the pick — the echo fixture
  *      answers with the updated bag, so the trigger's label must change
+ *    - a committed pick hands the caret back to where it was when the surface
+ *      opened (the prompt input, for the Alt+<n> story) — both for an entry the
+ *      bar shows inline and for one that folded into the "…" panel, which ends
+ *      the whole panel rather than leaving a row expanded behind a moved caret
  *    - Alt+<m> while a popover is up switches entries directly (no Escape first)
  *    - Escape dismisses and hands the cursor back to the trigger that opened it
+ *      — the deliberate exception to the line above, so ← / → keep walking the
+ *      bar from there
  *    - an index past the end reports the real entry count instead of no-oping,
  *      and does NOT leak through to the workbench (quickInputVisible stays false
  *      — a leaked chord would open the command palette instead)
@@ -87,9 +93,44 @@ const cursorRow = (popover: ReturnType<typeof modelPopover>) =>
  * Put DOM focus inside the session editor, which is what the binding's `when`
  * clause needs and what the user's situation actually is (typing in the prompt).
  * runCommand would bypass the gate entirely, so the keys are pressed for real.
+ *
+ * The poll is the precondition of every focus assertion below: a committed pick
+ * hands the caret back to *this* element, so the click has to have landed in the
+ * prompt's Monaco (the key is bridged from Monaco's own text-focus event) rather
+ * than on some non-focusable spot beside it — otherwise the hand-back would fall
+ * back to the trigger and the failures would read as a focus bug.
  */
 async function focusSessionEditor(page: Page): Promise<void> {
   await page.getByTestId('acp-prompt-drop-host').click()
+  await expect
+    .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('acpPromptInputFocused')), {
+      timeout: 5000,
+      message: 'clicking the prompt host should put the caret in the prompt editor',
+    })
+    .toBe(true)
+}
+
+/**
+ * Assert the caret is back in the prompt input — the state a committed pick has
+ * to leave behind. `acpPromptInputFocused` is bridged from Monaco's text-focus
+ * event (PromptMonacoEditor), so it only turns true when the editor itself took
+ * the caret; the DOM read then proves it is in the editor host. Deliberately not
+ * `[data-testid="acp-prompt"]`: the config bar lives inside that form too, so it
+ * would pass on the buggy build where focus stays on the trigger.
+ */
+async function expectPromptFocused(page: Page, message: string): Promise<void> {
+  await expect
+    .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('acpPromptInputFocused')), {
+      timeout: 5000,
+      message,
+    })
+    .toBe(true)
+  expect(
+    await page.evaluate(
+      () => document.activeElement?.closest('[data-testid="acp-prompt-drop-host"]') !== null,
+    ),
+    'the caret should be inside the prompt editor host',
+  ).toBe(true)
 }
 
 /**
@@ -179,6 +220,10 @@ test.describe('@p0 agents config bar keyboard', () => {
     await expect(modelTrigger(page)).toContainText('claude-opus-4-6-longterm-support', {
       timeout: 5000,
     })
+    // ...and the pick gives the caret back where it was when the popover opened:
+    // the prompt input. Landing on the trigger instead would leave the user one
+    // Ctrl+Alt+I away from typing again, which is the bug this pins.
+    await expectPromptFocused(page, 'a committed pick should hand the caret back to the prompt')
 
     // Escape hands the cursor back to the trigger that opened the surface, so
     // the next arrow key lands where the user left off instead of on <body>.
@@ -276,5 +321,23 @@ test.describe('@p0 agents config bar keyboard', () => {
       })
       .toBe(true)
     await page.keyboard.press('Escape')
+
+    // A folded entry commits like an inline one: the panel ends outright — no
+    // row left expanded behind a caret that has already moved on — and the caret
+    // goes back to the prompt. Ctrl+P is used rather than ArrowUp because on the
+    // body's first row an up arrow is the exit that collapses the body.
+    await focusSessionEditor(page)
+    await page.keyboard.press('Alt+1')
+    await expect(panel).toBeVisible({ timeout: 5000 })
+    await expect(modelRow).toHaveAttribute('aria-expanded', 'true')
+    const bodyCursor = modelRow.locator('..').locator('[role="option"][data-active="true"]')
+    await expect(bodyCursor).toHaveText('claude-opus-4-6-longterm-support')
+    await page.keyboard.press('Control+p')
+    await expect(bodyCursor).toHaveText('opus-4-6')
+    await page.keyboard.press('Enter')
+    await expect(panel).toBeHidden({ timeout: 5000 })
+    await expect(modelTrigger(page)).toContainText('opus-4-6', { timeout: 5000 })
+    await expect(overflowTrigger).not.toBeFocused()
+    await expectPromptFocused(page, 'a pick in a folded entry should hand the caret back too')
   })
 })

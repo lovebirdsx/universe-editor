@@ -14,9 +14,12 @@
  *    - the imperative handle behind Alt+<n>: index → entry mapping (overflow
  *      included), the cursor landing inside whichever host opened, and the
  *      out-of-range notice naming the real entry count
+ *    - a committed pick hands the caret back to whatever opened the surface
+ *      (the prompt input, in the Alt+<n> story), falling back to the trigger
+ *      when that element is gone or cannot take focus
  *--------------------------------------------------------------------------------------------*/
 
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { render, screen, cleanup, fireEvent, act, within } from '@testing-library/react'
 import {
   Event,
@@ -637,6 +640,35 @@ describe('ConfigOptionsBar — entry activation (Alt+<n>)', () => {
     return opened
   }
 
+  /**
+   * Stand-in for the prompt input: an element outside the bar that really holds
+   * the caret when a surface opens. Alt+<n> reaches the bar from there, so a
+   * committed pick has to give the caret back to it.
+   */
+  function makeOpener(): HTMLButtonElement {
+    const el = document.createElement('button')
+    document.body.appendChild(el)
+    onTestFinished(() => el.remove())
+    el.focus()
+    expect(document.activeElement).toBe(el)
+    return el
+  }
+
+  /**
+   * Let a committed pick's hand-back run. It lands on the microtask after
+   * React's close (see `restoreOpener`): a mouse pick fires on the item's own
+   * mousedown, and that press keeps bubbling out through every overlay
+   * container on its way, each re-focusing itself.
+   */
+  const settleHandback = (): Promise<void> => act(async () => {})
+
+  /** Pull the list element a popover/body hosts its options in. */
+  function listOf(host: HTMLElement): HTMLElement {
+    const list = host.querySelector('[role="listbox"]')
+    expect(list).toBeTruthy()
+    return list as HTMLElement
+  }
+
   it('opens the entry at the index and drops the cursor on its current value', () => {
     const handle = renderWithHandle(makeSession([MODEL_OPTION, MODE_OPTION]))
     expect(activate(handle, 0)).toBe(true)
@@ -744,5 +776,116 @@ describe('ConfigOptionsBar — entry activation (Alt+<n>)', () => {
     expect(notify).toHaveBeenCalledTimes(1)
     expect(notify.mock.calls[0]?.[0].message).toContain('2')
     expect(screen.queryByTestId('acp-config-model-popover')).toBeNull()
+  })
+
+  it('a committed pick hands the caret back to whatever opened the popover', async () => {
+    const session = makeSession([MODEL_OPTION, MODE_OPTION])
+    const handle = renderWithHandle(session)
+    const opener = makeOpener()
+
+    expect(activate(handle, 0)).toBe(true)
+    const popover = screen.getByTestId('acp-config-model-popover')
+    // The overlay takes the caret as it opens...
+    expect(popover.contains(document.activeElement)).toBe(true)
+
+    const list = listOf(popover)
+    fireEvent.keyDown(list, { key: 'ArrowDown' })
+    fireEvent.keyDown(list, { key: 'Enter' })
+    await settleHandback()
+
+    // ...and the pick gives it back. Alt+<n> out of the prompt has to end back
+    // in the prompt, not stranded on the bar's trigger.
+    expect(screen.queryByTestId('acp-config-model-popover')).toBeNull()
+    expect(document.activeElement).toBe(opener)
+    expect(session.setConfigOption).toHaveBeenCalledWith('model', 'opus')
+  })
+
+  it('keeps the opener recorded before the first surface when Alt+<n> switches entries', async () => {
+    const session = makeSession([MODEL_OPTION, MODE_OPTION])
+    const handle = renderWithHandle(session)
+    const opener = makeOpener()
+
+    expect(activate(handle, 0)).toBe(true)
+    // The caret now sits inside the model popover — a node that unmounts as the
+    // mode popover replaces it. Recording it instead of the real opener would
+    // leave the commit with nothing to hand the caret back to.
+    expect(activate(handle, 1)).toBe(true)
+    const popover = screen.getByTestId('acp-config-mode-popover')
+
+    const list = listOf(popover)
+    fireEvent.keyDown(list, { key: 'ArrowDown' })
+    fireEvent.keyDown(list, { key: 'Enter' })
+    await settleHandback()
+
+    expect(document.activeElement).toBe(opener)
+    expect(session.setConfigOption).toHaveBeenCalledWith('mode', 'plan')
+  })
+
+  it('falls back to the trigger when the recorded opener left the document', async () => {
+    const session = makeSession([MODEL_OPTION])
+    const handle = renderWithHandle(session)
+    const opener = makeOpener()
+    expect(activate(handle, 0)).toBe(true)
+
+    // A session switch / remount can take the opener out of the document while
+    // the surface is up. The caret must land on the trigger rather than on
+    // <body>, where no later stroke has an owner.
+    opener.remove()
+    const list = listOf(screen.getByTestId('acp-config-model-popover'))
+    fireEvent.keyDown(list, { key: 'ArrowDown' })
+    fireEvent.keyDown(list, { key: 'Enter' })
+    await settleHandback()
+
+    expect(document.activeElement).toBe(screen.getByTestId('acp-config-model-trigger'))
+  })
+
+  it('falls back to the trigger when the opener cannot take focus', async () => {
+    const session = makeSession([MODEL_OPTION])
+    renderWithServices(<ConfigOptionsBar session={session} />)
+    // Clicking through happy-dom moves no caret, so <body> is what an open
+    // records here — the same thing a click on a non-focusable spot leaves
+    // behind. focus() on it is a no-op, so it must never be the target.
+    expect(document.activeElement).toBe(document.body)
+    fireEvent.click(screen.getByTestId('acp-config-model-trigger'))
+
+    const list = listOf(screen.getByTestId('acp-config-model-popover'))
+    fireEvent.keyDown(list, { key: 'ArrowDown' })
+    fireEvent.keyDown(list, { key: 'Enter' })
+    await settleHandback()
+
+    expect(document.activeElement).toBe(screen.getByTestId('acp-config-model-trigger'))
+  })
+
+  it('a commit in a folded row ends the "…" panel and hands the caret back', async () => {
+    globalThis.ResizeObserver = FakeResizeObserver as unknown as typeof ResizeObserver
+    // 150px entries on a 230px line (available = 230 − 26) leave room for the
+    // model alone, so mode folds into the "…" panel.
+    const session = makeSession([MODEL_OPTION, MODE_OPTION])
+    const handle: { current: ConfigOptionsBarHandle | null } = { current: null }
+    renderWithServices(<ConfigOptionsBar session={session} handleRef={handle} />)
+    const bar = screen.getByTestId('acp-config-options')
+    const items = screen.getByTestId('acp-config-options-items')
+    stubClientWidth(items, 230)
+    for (const el of bar.querySelectorAll('[data-entry-key]')) stubWidth(el, 150)
+    stubWidth(screen.getByTestId('acp-config-overflow-trigger'), 26)
+    await fireResize()
+
+    const opener = makeOpener()
+    expect(activate(handle, 1)).toBe(true)
+    const panel = screen.getByTestId('acp-config-overflow-panel')
+    const row = within(panel).getByText('Mode').closest('[data-entry-key]')
+    expect(row?.getAttribute('aria-expanded')).toBe('true')
+    const body = listOf(row!.parentElement!)
+    expect(body.contains(document.activeElement)).toBe(true)
+
+    fireEvent.keyDown(body, { key: 'ArrowDown' })
+    fireEvent.keyDown(body, { key: 'Enter' })
+    await settleHandback()
+
+    // A pick ends the whole panel — no row left expanded behind a caret that
+    // has already moved on — and the caret goes back where it came from.
+    expect(screen.queryByTestId('acp-config-overflow-panel')).toBeNull()
+    expect(document.activeElement).toBe(opener)
+    expect(session.setConfigOption).toHaveBeenCalledWith('mode', 'plan')
   })
 })

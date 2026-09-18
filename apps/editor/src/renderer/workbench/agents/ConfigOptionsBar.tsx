@@ -152,9 +152,60 @@ export function ConfigOptionsBar({
     [itemsRef],
   )
 
-  // Hand the cursor back to whatever opened the surface. Outside presses skip
-  // this — the user already moved on, and pulling focus back would fight them.
-  const restoreFocus = useCallback(
+  // Where the caret was when the surface that is up right now opened. A commit
+  // hands it back there — Alt+<digit> out of the prompt must not strand the user
+  // in the bar.
+  const openerRef = useRef<HTMLElement | null>(null)
+
+  /**
+   * Remember the opening position, before the surface mounts and takes the
+   * caret. Skipped while the caret already sits inside a floating portal: that
+   * is the surface being replaced, not where the user came from — Alt+<digit>
+   * with a surface up re-opens through this same path, and recording it would
+   * hand the caret to a node that unmounts right after.
+   */
+  const captureOpener = useCallback((): void => {
+    const active = document.activeElement
+    if (!(active instanceof HTMLElement)) return
+    if (active.closest('[data-floating-ui-portal]') !== null) return
+    openerRef.current = active
+  }, [])
+
+  /**
+   * Hand the caret back to what `captureOpener` recorded, or run `fallback` —
+   * the trigger, which is what every close handed to before. A node that left
+   * the document, `<body>` ("nothing is focused"), or one whose focus() is
+   * silently refused (an inert row) can take nothing: a caret left on a row as
+   * it unmounts drops onto `<body>`, where no later stroke has an owner.
+   */
+  const restoreOpener = useCallback((fallback: () => void): void => {
+    const opener = openerRef.current
+    openerRef.current = null
+    // Deferred to a microtask. A mouse pick runs on the item's own mousedown,
+    // and that same press keeps bubbling out through every overlay container on
+    // the way — each focuses itself (useOverlayListNavigation's container
+    // handler) — before React commits the close and unmounts the surface under
+    // that focus, dropping the caret on <body>. One microtask later the press
+    // has finished and the caret is ours to place.
+    queueMicrotask(() => {
+      if (
+        opener !== null &&
+        opener.isConnected &&
+        opener !== document.body &&
+        opener !== document.documentElement
+      ) {
+        opener.focus({ preventScroll: true })
+        if (document.activeElement === opener) return
+      }
+      fallback()
+    })
+  }, [])
+
+  /**
+   * Focus the trigger of entry `key` — the hand-back target every close used
+   * before, and still the fallback for a close whose opener cannot take it.
+   */
+  const focusEntryTrigger = useCallback(
     (key: string | null) => {
       if (key === null) return
       entryElFor(key)?.querySelector('button')?.focus()
@@ -162,42 +213,70 @@ export function ConfigOptionsBar({
     [entryElFor],
   )
 
-  const restoreFocusToOpen = useCallback(() => restoreFocus(openIdRef.current), [restoreFocus])
+  const focusOpenTrigger = useCallback(
+    () => focusEntryTrigger(openIdRef.current),
+    [focusEntryTrigger],
+  )
 
   /**
    * Dismiss the inline popover. `restoreFocus` splits the two families: true
-   * for a deliberate close (Escape, a committed pick) that hands the cursor back
-   * to the trigger, false for an outside press where the user already moved on.
+   * for a committed pick, which hands the caret back where it was before the
+   * surface opened, false for an outside press where the user already moved on.
    */
   const closeInline = useCallback(
     (restoreFocus = false) => {
-      if (restoreFocus) restoreFocusToOpen()
+      if (restoreFocus) {
+        // The entry is named here, not in the hand-back: closing clears
+        // `openId`, and by the time the deferred focus runs there is no open
+        // entry left to read the trigger off.
+        const key = openIdRef.current
+        restoreOpener(() => focusEntryTrigger(key))
+      }
       setOpenId(null)
     },
-    [restoreFocusToOpen],
+    [focusEntryTrigger, restoreOpener],
+  )
+
+  /**
+   * Dismiss the "…" panel. Same split as `closeInline`, with the "…" button as
+   * the fallback: a folded entry's own trigger sits in an inert row, so
+   * focusing it would silently drop the caret onto `<body>`.
+   */
+  const closeOverflow = useCallback(
+    (restoreFocus = false) => {
+      if (restoreFocus) restoreOpener(() => overflowRef.current?.focus())
+      setOverflowOpen(false)
+    },
+    [restoreOpener, overflowRef],
   )
 
   /**
    * Escape is about to peel one level. Return false so AnchoredSurface still
    * dismisses; the focus hand-back happens here because the surface's own
-   * onClose also serves outside presses, which must not steal focus.
+   * onClose also serves outside presses, which must not steal focus. Escape
+   * deliberately stops at the trigger rather than the opener: from there ← / →
+   * keep walking the bar, which is what escaping into it is for.
    */
   const escapeInline = useCallback((): boolean => {
-    restoreFocusToOpen()
+    focusOpenTrigger()
     return false
-  }, [restoreFocusToOpen])
+  }, [focusOpenTrigger])
 
-  const openInline = useCallback((key: string, trigger: HTMLElement | null) => {
-    if (!trigger) return
-    const rect = trigger.getBoundingClientRect()
-    // The inline popover and the overflow panel are mutually exclusive: the
-    // sub-agent panel keeps local `changed`/`pendingWrite` state, so its two
-    // hosts must never mount it at the same time.
-    setOverflowOpen(false)
-    setOverflowExpandedKey(null)
-    setAnchor({ x: rect.left, y: rect.top })
-    setOpenId(key)
-  }, [])
+  const openInline = useCallback(
+    (key: string, trigger: HTMLElement | null) => {
+      if (!trigger) return
+      captureOpener()
+      const rect = trigger.getBoundingClientRect()
+      // The inline popover and the overflow panel are mutually exclusive: the
+      // sub-agent panel keeps local `changed`/`pendingWrite` state, so its two
+      // hosts must never mount it at the same time.
+      setOverflowOpen(false)
+      setOverflowExpandedKey(null)
+      setAnchor({ x: rect.left, y: rect.top })
+      setOpenId(key)
+    },
+    [captureOpener],
+  )
 
   const activateEntry = useCallback(
     (index: number): boolean => {
@@ -226,6 +305,7 @@ export function ConfigOptionsBar({
         // and out of the flex line, so a popover hung off it would land offscreen.
         const button = overflowRef.current
         if (!button) return false
+        captureOpener()
         const rect = button.getBoundingClientRect()
         setOpenId(null)
         setOverflowExpandedKey(entry.key)
@@ -236,7 +316,7 @@ export function ConfigOptionsBar({
       openInline(entry.key, el?.querySelector('button') ?? null)
       return true
     },
-    [entryElFor, notifications, openInline, overflowRef],
+    [captureOpener, entryElFor, notifications, openInline, overflowRef],
   )
 
   useImperativeHandle(handleRef, () => ({ activateEntry }), [activateEntry])
@@ -363,6 +443,7 @@ export function ConfigOptionsBar({
           expandedKey={overflowExpandedKey}
           onExpandedKeyChange={setOverflowExpandedKey}
           onOpen={(trigger) => {
+            captureOpener()
             const rect = trigger.getBoundingClientRect()
             setOpenId(null)
             // Reopening starts from the rows: a dismissal (outside press) does
@@ -373,7 +454,7 @@ export function ConfigOptionsBar({
             setAnchor({ x: rect.left, y: rect.top })
             setOverflowOpen(true)
           }}
-          onClose={() => setOverflowOpen(false)}
+          onClose={closeOverflow}
           onAltDigit={switchToEntry}
           buttonRef={overflowRef}
         />
@@ -505,7 +586,7 @@ function ConfigOptionTrigger({
   open: boolean
   anchor: ConfigBarAnchor | null
   onRequestOpen: (trigger: HTMLElement) => void
-  /** `restoreFocus: true` hands the cursor back to the trigger as it closes. */
+  /** `restoreFocus: true` (a committed pick) hands the caret back where it came from. */
   onClose: (restoreFocus?: boolean) => void
   onEscape: () => boolean
   onAltDigit: (digit: number) => void

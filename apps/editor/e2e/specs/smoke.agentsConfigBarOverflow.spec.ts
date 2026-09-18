@@ -13,7 +13,8 @@
  *      while the tail overflows (the priority split itself)
  *    - the overflow panel renders 20+ character option labels, and a pick
  *      through it sends session/set_config_option — the trigger's label
- *      updates (the echo fixture echoes the updated bag)
+ *      updates (the echo fixture echoes the updated bag), the panel ends and
+ *      the caret lands back on the "…" button that opened it
  *    - widening back returns every entry inline, empties the "…" button and
  *      dismisses the open panel. This last step also guards the re-expand:
  *      the bar must track its container width, not stay collapsed after an
@@ -376,6 +377,15 @@ test.describe('@p1 agents config bar overflow', () => {
     await expect(page.getByTestId('acp-config-style-trigger')).toContainText('max creative', {
       timeout: 5000,
     })
+    // A pick ends the whole panel, and the caret goes back to what opened it —
+    // here the "…" button itself, since this one was a mouse pick. The pick
+    // runs on the item's mousedown and that press keeps bubbling out through
+    // every overlay container on the way (each focuses itself), so this pins the
+    // hand-back landing after they had their turn — before it, the caret ended
+    // on <body>. Asserted before the resize below: widening empties the button
+    // (CSS-hidden), and a hidden element is the wrong thing to pin focus on.
+    await expect(panel).toBeHidden({ timeout: 5000 })
+    await expect(overflowTrigger(page)).toBeFocused()
 
     // Widen back to the widest the editor gets (SIDEBAR_MIN): every entry
     // returns inline, the "…" button empties again and the open panel

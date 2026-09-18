@@ -16,6 +16,12 @@
  *  wired to AnchoredSurface's `onEscape` because that surface owns the key on
  *  window capture, ahead of both the workbench dispatcher and React.
  *
+ *  A committed pick is the one path that ends the panel outright, and it hands
+ *  the caret back where the panel was opened from rather than leaving it in the
+ *  list (see `onClose`). Escape is the deliberate exception: it stays on the "…"
+ *  button. MCP's row toggles instead of committing, so it never closes the panel
+ *  at all — only its "open settings" button does, and that one moves no focus.
+ *
  *  `expandedKey` is controlled by ConfigOptionsBar: a row has to be expandable
  *  from outside for Alt+<n> to reach an entry the bar folded away.
  *--------------------------------------------------------------------------------------------*/
@@ -90,7 +96,12 @@ export function ConfigBarOverflowMenu({
   expandedKey: string | null
   onExpandedKeyChange: (key: string | null) => void
   onOpen: (trigger: HTMLElement) => void
-  onClose: () => void
+  /**
+   * Dismiss the panel. `restoreFocus: true` is the commit path, which hands the
+   * caret back to whatever opened the panel; every other path — outside press,
+   * the "…" toggle, MCP's jump to settings — leaves it where the user put it.
+   */
+  onClose: (restoreFocus?: boolean) => void
   onAltDigit: (digit: number) => void
   buttonRef: Ref<HTMLButtonElement>
 }) {
@@ -256,6 +267,7 @@ export function ConfigBarOverflowMenu({
                 active={index === rowNav.activeIndex}
                 expanded={expandedKey === entry.key}
                 onToggle={() => onExpandedKeyChange(expandedKey === entry.key ? null : entry.key)}
+                onCommitted={() => onClose(true)}
                 onRequestClose={onClose}
                 onAltDigit={onAltDigit}
                 onExitUp={() => leaveBody(0)}
@@ -276,6 +288,7 @@ function OverflowRow({
   active,
   expanded,
   onToggle,
+  onCommitted,
   onRequestClose,
   onAltDigit,
   onExitUp,
@@ -288,6 +301,8 @@ function OverflowRow({
   active: boolean
   expanded: boolean
   onToggle: () => void
+  /** A pick in this row's body: the panel ends (see the panel's `onClose`). */
+  onCommitted: () => void
   onRequestClose: () => void
   onAltDigit: (digit: number) => void
   onExitUp: () => void
@@ -296,6 +311,8 @@ function OverflowRow({
 }) {
   // The MCP row gates itself on the service and the pool, so its hooks cannot
   // live here — each kind gets its own component rather than a conditional hook.
+  // Only the option row commits, so only it is handed `onCommitted`: MCP toggles
+  // in place and the sub-agent row restarts the session instead.
   if (entry.kind === 'mcp') {
     return (
       <McpOverflowRow
@@ -332,6 +349,7 @@ function OverflowRow({
       active={active}
       expanded={expanded}
       onToggle={onToggle}
+      onCommitted={onCommitted}
       onAltDigit={onAltDigit}
       onExitUp={onExitUp}
       onExitDown={onExitDown}
@@ -358,6 +376,7 @@ function OptionOverflowRow({
   active,
   expanded,
   onToggle,
+  onCommitted,
   onAltDigit,
   onExitUp,
   onExitDown,
@@ -368,6 +387,8 @@ function OptionOverflowRow({
   active: boolean
   expanded: boolean
   onToggle: () => void
+  /** A pick in this list ends the panel, unlike the two multi-toggle bodies. */
+  onCommitted: () => void
 }) {
   const dialogService = useService(IDialogService)
   const notificationService = useService(INotificationService)
@@ -382,6 +403,10 @@ function OptionOverflowRow({
         <ConfigOptionPanel
           option={option}
           onCommit={(value) => {
+            // Same order as the inline popover: end the surface (and hand the
+            // caret back) before the pick lands, so the async apply cannot hold
+            // focus inside a list that is on its way out.
+            onCommitted()
             void pickConfigValue(session, option, value, dialogService, notificationService)
           }}
           onAltDigit={onAltDigit}
