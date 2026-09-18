@@ -41,7 +41,7 @@ packages/
 ## 常用命令
 
 ```bash
-pnpm check        # 快速校验：docs/敏感串/skills/knowledge 检查 + lint/typecheck（turbo 缓存）+ 按变更选测试
+pnpm check        # 快速校验：docs/敏感串/skills/knowledge 检查 + lint/typecheck（turbo 缓存）+ scripts 侧 node:test + 按变更选测试
                   #   纯测试变更 → 只跑变更测试文件；叶子包源码 → vitest related 按 import 图选测试；
                   #   配置类/上游包变更 → turbo 全量兜底
 pnpm check:full   # 全量校验（lint + typecheck + test + build），大改动/发版前用

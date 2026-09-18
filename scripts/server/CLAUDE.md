@@ -115,7 +115,9 @@ Windows 下快速连续写同一文件 `mtimeMs` 可能不变（NTFS 时间戳�
 - 测试：`node --test scripts/server/__tests__/<x>.test.mjs`。注意 `dist/server.env` 参与 setup 的
   查找顺序，本机残留会污染用例（`setup.test.mjs` 用 before/after 全程移开再还原）。
   bundle-env / bundle 的冒烟测试经 `UE_SERVER_DIST_DIR` 跑在独立临时 dist 目录，不碰真实
-  `dist/server.env`；`test:release` 仍保留 `--test-concurrency=1` 串行跑文件做兜底。
+  `dist/server.env`。`test:release` = `turbo run build --filter=@universe-editor/uex` + `test:scripts`
+  （CI 跑这条）：`uex-publish.integration.test.mjs` 依赖那个构建产物，本地不带前置构建裸跑
+  `pnpm test:scripts` / `pnpm check` 时该用例自动 skip，不会假红。
 
 ## 客户端信任链（改签名相关代码时）
 

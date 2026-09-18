@@ -2,7 +2,7 @@
 
 本仓库分三层测试，全部经 `pnpm check` / CI 门禁：**单元测试**（vitest）、**集成测试**（vitest，跨窗口/多进程场景）、**E2E 冒烟**（Playwright + Electron，跑打包产物）。
 
-> 只想跑一遍全绿：`pnpm check`——`docs:check` + `skills:check` + `knowledge:check` + lint/typecheck（turbo 缓存）+ 按变更选测试（纯测试变更只跑变更文件；叶子包源码变更用 `vitest related` 按 import 图选受影响测试；配置类/上游包变更退 turbo 全量）。需要全量语义用 `pnpm check:full`。改了交互逻辑再跑 `pnpm e2e:smoke`（@p0 冒烟）或 `pnpm e2e`（全量）。本地是快信号，完备性由 CI 全量兜底。
+> 只想跑一遍全绿：`pnpm check`——`docs:check` + `skills:check` + `knowledge:check` + lint/typecheck（turbo 缓存）+ `test:scripts`（`scripts/**` 侧的 node:test 全量，仓库自检护栏在这里）+ 按变更选测试（纯测试变更只跑变更文件；叶子包源码变更用 `vitest related` 按 import 图选受影响测试；配置类/上游包变更退 turbo 全量）。需要全量语义用 `pnpm check:full`。改了交互逻辑再跑 `pnpm e2e:smoke`（@p0 冒烟）或 `pnpm e2e`（全量）。本地是快信号，完备性由 CI 全量兜底。
 
 ## 一览
 
@@ -168,7 +168,7 @@ export TURBO_CACHE_DIR="$HOME/.cache/turbo-universe"
 
 写测试时用 `mkTempDir('<prefix>-')` 取代 `mkdtempSync(join(tmpdir(), ...))`；`scripts/check-temp-root.mjs`（已接入 `pnpm check`）会拒绝裸调 `os.tmpdir()`——它会剥掉行尾注释与字符串字面量再匹配，所以文案里提到 `os.tmpdir()` 不会误报。确属「查询宿主环境描述」而非「我们要写文件」的调用（目前只有 `packages/remote-server` 握手里的 `tmpDir`），在该行加 `temp-root:allow` 注释豁免。
 
-**新增往临时根写东西的调用点，要把前缀登记进 `TEMP_PREFIXES`**——护栏拦得住裸 `tmpdir()`，但拦不住一个没登记的新前缀，它只会让残留无法被清理。`scripts/__tests__/temp-root-drift.test.mjs` 会扫全仓 `mkTempDir('<字面量>-')` 反查漏登记。前缀同时也是清理命令的允许清单，所以**只清一级条目里自己建的、且 mtime 超过 TTL 的那些**（目录与散文件都收，剪贴板中转文件 / p4 argfile 这类就写在根一级），绝不递归清空 `os.tmpdir()`。
+**新增往临时根写东西的调用点，要把前缀登记进 `TEMP_PREFIXES`**——护栏拦得住裸 `tmpdir()`，但拦不住一个没登记的新前缀，它只会让残留无法被清理。`scripts/__tests__/temp-root-drift.test.mjs` 会扫全仓 `mkTempDir('<字面量>-')` 反查漏登记，且已随 `pnpm test:scripts` 接入 `pnpm check`——漏登记在本地就红，不必等 CI。前缀同时也是清理命令的允许清单，所以**只清一级条目里自己建的、且 mtime 超过 TTL 的那些**（目录与散文件都收，剪贴板中转文件 / p4 argfile 这类就写在根一级），绝不递归清空 `os.tmpdir()`。
 
 ```bash
 pnpm tmp:clean --dry-run                  # 先看会删什么（默认 24h TTL，同时扫临时根与 %TEMP%）

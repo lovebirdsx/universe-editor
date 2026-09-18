@@ -2,7 +2,8 @@
  *  uex CLI ↔ publish API 真联调（Phase D 完成标准）：真起 server，真跑构建出的 uex dist：
  *  login（whoami 验证 + 落配置）→ publish（走 stored 凭据）→ extensionquery 可见 →
  *  同版本 409 非零退出 → unpublish → 不可见。
- *  依赖 test:release 前置的 `turbo run build --filter=@universe-editor/uex` 产出 dist。
+ *  依赖 test:release 前置的 `turbo run build --filter=@universe-editor/uex` 产出 dist；
+ *  产物缺席时（裸跑 `pnpm test:scripts`，如 pnpm check 里）skip 而非红——这条链路的门禁在 CI 的 test:release。
  *--------------------------------------------------------------------------------------------*/
 
 import { test, before, after } from 'node:test'
@@ -25,6 +26,9 @@ import { mkTempDir } from '../../lib/temp-root.mjs'
 
 const TOKEN = 'uet_uex_integration_token_00000000'
 const uexCli = join(repoRoot, 'packages', 'uex', 'dist', 'cli.js')
+const uexCliMissing = existsSync(uexCli)
+  ? false
+  : `缺少 ${uexCli} —— 请经 pnpm test:release 运行（前置 turbo build），或先 pnpm build`
 
 let root
 let galleryRoot
@@ -42,10 +46,7 @@ function runUex(args) {
 }
 
 before(async () => {
-  assert.ok(
-    existsSync(uexCli),
-    `缺少 ${uexCli} —— 请经 pnpm test:release 运行（前置 turbo build），或先 pnpm build`,
-  )
+  if (uexCliMissing) return
   root = mkTempDir('ue-uex-integration-')
   galleryRoot = join(root, 'gallery')
   authDir = `${root}-auth`
@@ -67,7 +68,7 @@ after(() => {
   if (child) child.kill()
 })
 
-test('uex login → publish → 409 → unpublish 全链路', async () => {
+test('uex login → publish → 409 → unpublish 全链路', { skip: uexCliMissing }, async () => {
   const registry = `http://127.0.0.1:${PORT}`
 
   const login = runUex(['login', 'acme', '--registry', registry, '--token', TOKEN])
