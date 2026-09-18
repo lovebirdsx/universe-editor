@@ -3,9 +3,24 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it, vi } from 'vitest'
-import { Severity } from '@universe-editor/platform'
+import { Event, Severity } from '@universe-editor/platform'
 import { AbnormalExitNotificationContribution } from '../AbnormalExitNotificationContribution.js'
-import type { AbnormalExitInfo, IDiagnosticsService } from '../../../shared/ipc/services.js'
+import type {
+  AbnormalExitInfo,
+  HeapSnapshotStatus,
+  IDiagnosticsService,
+} from '../../../shared/ipc/services.js'
+
+const OFF_STATUS: HeapSnapshotStatus = {
+  active: false,
+  phase: 'off',
+  attempts: 0,
+  attemptLimit: 2,
+  appAttempts: 0,
+  appAttemptLimit: 4,
+  artifacts: 0,
+  bytes: 0,
+}
 
 function makeDiagnostics(report: AbnormalExitInfo | null): IDiagnosticsService & {
   revealCrashesFolder: ReturnType<typeof vi.fn>
@@ -19,6 +34,11 @@ function makeDiagnostics(report: AbnormalExitInfo | null): IDiagnosticsService &
     exportDiagnosticsZip: () => Promise.resolve(''),
     createDiagnosticsZip: () => Promise.resolve(''),
     reportRendererHeapSample: () => Promise.resolve(),
+    startHeapSnapshotRound: () => Promise.resolve(OFF_STATUS),
+    stopHeapSnapshotRound: () => Promise.resolve(OFF_STATUS),
+    getHeapSnapshotStatus: () => Promise.resolve(OFF_STATUS),
+    revealHeapSnapshotsFolder: () => Promise.resolve(),
+    onDidChangeHeapSnapshot: Event.None,
   }
 }
 
@@ -49,7 +69,7 @@ describe('AbnormalExitNotificationContribution', () => {
     c.dispose()
   })
 
-  it('uses the externally-killed wording when no dumps were produced', async () => {
+  it('stays neutral when no dumps were produced', async () => {
     const diagnostics = makeDiagnostics({
       previousSessionId: 's1',
       previousStartedAt: 1,
@@ -60,7 +80,11 @@ describe('AbnormalExitNotificationContribution', () => {
     const c = new AbnormalExitNotificationContribution(diagnostics, notifications as never)
     await vi.waitFor(() => expect(notifications.notify).toHaveBeenCalledTimes(1))
     const message = notifications.notify.mock.calls[0]?.[0].message
-    expect(message).toContain('externally')
+    // 只知道「没留 dump」：不猜死因，也不提没查过的事件日志
+    expect(message).toContain('unknown')
+    expect(message).not.toContain('externally')
+    expect(message).not.toContain('antivirus')
+    expect(message).not.toContain('memory')
     expect(message).toContain(new Date(Date.UTC(2026, 7, 6, 12, 37, 59)).toLocaleString())
     c.dispose()
   })

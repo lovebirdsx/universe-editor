@@ -108,6 +108,11 @@ import { IProcessMonitorService } from '../../shared/ipc/processMonitorService.j
 import { ProcessMonitorMainService } from './processMonitor/processMonitorMainService.js'
 import { flattenProcessTree, formatProcessTreeMemory } from './processMonitor/processList.js'
 import { formatMainHeapSample } from '../crashMonitoring.js'
+import { HeapSnapshotController } from './diagnostics/heapSnapshotController.js'
+import {
+  formatSystemMemoryLine,
+  getSharedSystemMemorySampler,
+} from './diagnostics/systemMemorySampler.js'
 import { IWatcherProcessService, WatcherProcessClient } from '@universe-editor/node-services'
 import { createWatcherUtilityTransportFactory } from './fileWatcher/watcherUtilityTransport.js'
 import {
@@ -297,7 +302,8 @@ registerSingletonFactory(IFileClipboardService, (acc) => {
 registerSingletonFactory(IDiagnosticsService, (acc) => {
   const extensionManagement = acc.get(IExtensionManagementService)
   const processMonitor = acc.get(IProcessMonitorService)
-  return new DiagnosticsMainService(
+  const loggerService = acc.get(ILoggerService)
+  const service = new DiagnosticsMainService(
     {
       crashDumpsDir: app.getPath('crashDumps'),
       logRoot: join(app.getPath('userData'), 'logs'),
@@ -307,7 +313,13 @@ registerSingletonFactory(IDiagnosticsService, (acc) => {
       collectProcesses: () => processMonitor.formatProcessList(),
       readIpcFrames: () => formatIpcFrames(),
       collectMemory: async () => {
-        const lines = [formatMainHeapSample(process.memoryUsage())]
+        const lines = [
+          formatMainHeapSample(process.memoryUsage()),
+          // Same line and same cached reading as the periodic metrics log — the zip
+          // must not start a second query, nor show a number the live log disagrees
+          // with. A stale/unknown status is carried through verbatim.
+          formatSystemMemoryLine(getSharedSystemMemorySampler().latest()),
+        ]
         const snapshot = await processMonitor.resolveProcesses()
         const items = flattenProcessTree(snapshot.root)
         lines.push(`hosted-processes cnt=${items.length} ${formatProcessTreeMemory(items)}`)
@@ -325,8 +337,19 @@ registerSingletonFactory(IDiagnosticsService, (acc) => {
         }))
       },
     },
-    acc.get(ILoggerService),
+    loggerService,
   )
+  // 受控堆快照。在这里构造而不是塞进服务内部：这样日志工厂和共享系统内存采样器两边共用，
+  // 窗口宿主也能等 WindowMainService 就绪后（main/index.ts）再迟到绑定。
+  service.attachHeapSnapshotController(
+    new HeapSnapshotController({
+      // 刻意不放在 logs/ 下：快照有几百 MB，绝不能被日志保留策略扫掉或被打进报告。
+      dir: join(app.getPath('userData'), 'diagnostics', 'heap-snapshots'),
+      logger: createNamedLogger(loggerService, { id: 'heapSnapshot', name: 'Heap Snapshots' }),
+      onEvent: (event) => service.publishHeapSnapshotEvent(event),
+    }),
+  )
+  return service
 })
 registerSingletonFactory(IProcessMonitorService, (acc) => {
   return new ProcessMonitorMainService(undefined, undefined, acc.get(ILoggerService))

@@ -12,6 +12,7 @@ import {
   Emitter,
   Event,
   LifecycleService,
+  LogLevel,
   NoopTelemetryService,
   observableValue,
   UriIdentityService,
@@ -20,6 +21,8 @@ import {
 import type {
   IConfigurationService,
   IFileService,
+  ILogger,
+  ILoggerService,
   INotification,
   INotificationHandle,
   INotificationService,
@@ -319,6 +322,8 @@ function makeService(
     startupTimeoutMs?: number
     claudeSettingsEnv?: Record<string, string>
     config?: Record<string, unknown>
+    /** Replaces the null logger when a test asserts on what the service logged. */
+    loggerService?: ILoggerService
   } = {},
 ): Harness {
   const transport = createInMemoryAcpHost()
@@ -375,7 +380,7 @@ function makeService(
           },
         }),
     } as unknown as IProgressService,
-    new StubLoggerService(),
+    opts.loggerService ?? new StubLoggerService(),
     new UriIdentityService('linux'),
     { getEnvironment: () => Promise.resolve(null) } as unknown as IRemoteStatusService,
     new LifecycleService(),
@@ -936,5 +941,93 @@ describe('AcpClientService — remote binary injection', () => {
     } finally {
       conn.dispose()
     }
+  })
+})
+
+/**
+ * Pool accounting: the heap sample reports how many pooled connections are alive, and
+ * the acquire/release/evict boundaries are the only place the transitions are visible.
+ * These lines carry counts and local ids — a cwd on them would put a user path in a
+ * file meant to be shared.
+ */
+function capturingLogger(): { service: ILoggerService; lines: string[] } {
+  const lines: string[] = []
+  const push = (message: string): void => {
+    lines.push(message)
+  }
+  const logger = {
+    level: LogLevel.Info,
+    onDidChangeLogLevel: () => ({ dispose: () => undefined }),
+    setLevel: () => undefined,
+    trace: push,
+    debug: push,
+    info: push,
+    warn: push,
+    error: push,
+    flush: () => undefined,
+    dispose: () => undefined,
+  } as unknown as ILogger
+  const service = {
+    _serviceBrand: undefined,
+    createLogger: () => logger,
+    setLevel: () => undefined,
+    getLevel: () => LogLevel.Info,
+  } as unknown as ILoggerService
+  return { service, lines }
+}
+
+describe('AcpClientService — pool accounting', () => {
+  let h: Harness
+  afterEach(() => {
+    h.transport.dispose()
+  })
+
+  it('counts pool entries and logs acquire/release/evict without the workspace path', async () => {
+    const captured = capturingLogger()
+    h = makeService({ loggerService: captured.service })
+    expect(h.svc.poolSize()).toBe(0)
+
+    const conn = await h.svc.connect('fake', { cwd: CWD, leaseFor: SESSION_ID })
+    expect(h.svc.poolSize()).toBe(1)
+    const acquire = captured.lines.find((l) => l.startsWith('pool acquire'))
+    expect(acquire).toContain('agent=fake')
+    expect(acquire).toContain('refcount=1')
+    expect(acquire).toContain('pool=1')
+
+    conn.dispose()
+    const release = captured.lines.find((l) => l.startsWith('pool release'))
+    expect(release).toContain('refcount=0')
+
+    h.svc.drainAll()
+    await vi.waitFor(() => expect(h.svc.poolSize()).toBe(0))
+    expect(captured.lines.some((l) => l.startsWith('pool evict'))).toBe(true)
+
+    const poolLines = captured.lines.filter((l) => l.startsWith('pool ')).join('\n')
+    expect(poolLines).not.toContain(CWD)
+  })
+
+  it('shares one entry across leases and holds it until the last one is released', async () => {
+    const captured = capturingLogger()
+    h = makeService({ loggerService: captured.service })
+    const first = await h.svc.connect('fake', { cwd: CWD, leaseFor: 'sess-a' })
+    const second = await h.svc.connect('fake', { cwd: CWD, leaseFor: 'sess-b' })
+    expect(h.svc.poolSize()).toBe(1)
+    expect(captured.lines.some((l) => l.includes('refcount=2') && l.includes('pool=1'))).toBe(true)
+
+    first.dispose()
+    // Still leased by the second session: a pool that dropped the entry here would
+    // spawn a second agent process for the same cwd.
+    expect(h.svc.poolSize()).toBe(1)
+    second.dispose()
+    expect(h.svc.poolSize()).toBe(1)
+  })
+
+  it('reports the pool teardown on window close', async () => {
+    const captured = capturingLogger()
+    h = makeService({ loggerService: captured.service })
+    const conn = await h.svc.connect('fake', { cwd: CWD, leaseFor: SESSION_ID })
+    h.svc.dispose()
+    expect(captured.lines).toContain('pool dispose entries=1')
+    conn.dispose()
   })
 })

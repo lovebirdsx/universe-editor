@@ -79,6 +79,13 @@ export interface IWindowMainService {
   getFocusedWindowId(): number | null
   getWindowById(id: number): BrowserWindow | undefined
   getWindows(): ReadonlyArray<BrowserWindow>
+  /**
+   * Renderer generation for a window, bumped on every main-frame navigation (reload and
+   * crash-reload included). Anything that binds work to a specific renderer — a heap
+   * snapshot round, above all — records this and compares it again after each await:
+   * the same window id with a different epoch is a different JS heap.
+   */
+  getRendererEpoch(windowId: number): number
   getOpenWindowInfos(): IOpenWindowInfo[]
   openWindowForFolder(folder?: URI, sessionToOpen?: string, deepLink?: string): Promise<void>
   closeWindowsForRemoteAuthority(authority: string): Promise<boolean>
@@ -176,6 +183,11 @@ export class WindowMainService implements IWindowMainService {
    * reloading on its own and waits for a person.
    */
   private readonly _crashTimes = new Map<number, number[]>()
+  /**
+   * 每窗口一份的 renderer 世代，每次主框架导航自增。由 `getRendererEpoch` 读取；值本身不
+   * 透明，只有「相同与否」有意义。
+   */
+  private readonly _rendererEpochs = new Map<number, number>()
   private readonly _sessionStore = new WindowSessionStore(() => this._windows.values())
   private _hasCreatedFirstWindow = false
   /** Window id that last had OS focus (or was programmatically focused). */
@@ -431,6 +443,10 @@ export class WindowMainService implements IWindowMainService {
     // subframe loads and same-document navigations keep their agents.
     win.webContents.on('did-start-navigation', (details) => {
       if (!details.isMainFrame || details.isSameDocument) return
+      // 先做这一件：这个窗口原来的 renderer 正在被替换，绑在它上面的东西（堆快照轮次）
+      // 必须现在结束，而不是等下一个可能永远不来的样本。
+      this._rendererEpochs.set(win.id, this.getRendererEpoch(win.id) + 1)
+      appServices.diagnostics.invalidateWindowRenderer(win.id, 'window-reloaded')
       void appServices.acpHost.stopAllForWindow(win.id)
       void appServices.extensionHost.stopAllForWindow(win.id)
     })
@@ -544,6 +560,10 @@ export class WindowMainService implements IWindowMainService {
       this._crashHandled.delete(win.id)
       this._lastRenderCrash.delete(win.id)
       this._crashTimes.delete(win.id)
+      this._rendererEpochs.delete(win.id)
+      // 趁状态还读得到，先结束这个窗口的堆快照轮次：已经没人会读它了，而还在跑的抓取属于
+      // 一个正在被拆掉的进程。
+      appServices.diagnostics.invalidateWindowRenderer(win.id, 'window-closed')
       // The top window fell to the fallback chain; let pending consumers re-check.
       if (this._lastFocusedWindowId === win.id) {
         this._lastFocusedWindowId = undefined
@@ -688,6 +708,10 @@ export class WindowMainService implements IWindowMainService {
 
   getWindows(): ReadonlyArray<BrowserWindow> {
     return Array.from(this._windows.values()).map((e) => e.win)
+  }
+
+  getRendererEpoch(windowId: number): number {
+    return this._rendererEpochs.get(windowId) ?? 0
   }
 
   getOpenWindowInfos(): IOpenWindowInfo[] {

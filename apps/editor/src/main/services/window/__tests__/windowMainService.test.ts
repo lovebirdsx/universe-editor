@@ -140,6 +140,29 @@ function grabReadyToShowHandler(): () => void {
   return call[1] as () => void
 }
 
+interface NavigationDetails {
+  isMainFrame: boolean
+  isSameDocument: boolean
+}
+
+function grabMainFrameNavigationHandler(): (details: NavigationDetails) => void {
+  const win = vi.mocked(BrowserWindow).mock.results.at(-1)?.value as {
+    webContents: { on: { mock: { calls: Array<[string, (...args: never[]) => void]> } } }
+  }
+  const call = win.webContents.on.mock.calls.find(([event]) => event === 'did-start-navigation')
+  if (!call) throw new Error('no did-start-navigation handler registered')
+  return call[1] as (details: NavigationDetails) => void
+}
+
+function grabWindowClosedHandler(): () => void {
+  const win = vi.mocked(BrowserWindow).mock.results.at(-1)?.value as {
+    on: { mock: { calls: Array<[string, (...args: never[]) => void]> } }
+  }
+  const call = win.on.mock.calls.find(([event]) => event === 'closed')
+  if (!call) throw new Error('no closed handler registered')
+  return call[1] as () => void
+}
+
 function grabDidFinishLoadHandler(): () => void {
   const win = vi.mocked(BrowserWindow).mock.results.at(-1)?.value as {
     webContents: { once: { mock: { calls: Array<[string, (...args: never[]) => void]> } } }
@@ -196,7 +219,7 @@ function makeOpts() {
       resourceAccess: {} as never,
       environmentSnapshot: {} as never,
       errorSink: { recordLocal: vi.fn() } as never,
-      diagnostics: {} as never,
+      diagnostics: { invalidateWindowRenderer: () => {} } as never,
       issueReporter: {} as never,
       processMonitor: {} as never,
       bugRecorder: {} as never,
@@ -299,6 +322,67 @@ describe('WindowMainService', () => {
       grabRenderProcessGoneHandler()(undefined, { reason: 'oom' })
       expect(acpStopAll).toHaveBeenCalledWith(id)
       expect(extHostStopAll).toHaveBeenCalledWith(id)
+    })
+
+    describe('renderer generation', () => {
+      const makeDiagnosticsOpts = () => {
+        const opts = makeOpts()
+        const invalidateWindowRenderer = vi.fn()
+        opts.appServices.diagnostics = { invalidateWindowRenderer } as never
+        return { opts, invalidateWindowRenderer }
+      }
+
+      it('bumps the epoch and ends the round on a main-frame navigation', async () => {
+        const { opts, invalidateWindowRenderer } = makeDiagnosticsOpts()
+        const svc = makeService(opts)
+        const id = await svc.createWindow()
+        expect(svc.getRendererEpoch(id)).toBe(0)
+
+        grabMainFrameNavigationHandler()({ isMainFrame: true, isSameDocument: false })
+
+        // The heap snapshot round measured the renderer that just went away; it has to
+        // end now, not at the next sample, which may never come.
+        expect(svc.getRendererEpoch(id)).toBe(1)
+        expect(invalidateWindowRenderer).toHaveBeenCalledWith(id, 'window-reloaded')
+      })
+
+      it('leaves subframe and same-document navigations alone', async () => {
+        const { opts, invalidateWindowRenderer } = makeDiagnosticsOpts()
+        const svc = makeService(opts)
+        const id = await svc.createWindow()
+        const navigate = grabMainFrameNavigationHandler()
+
+        navigate({ isMainFrame: false, isSameDocument: false })
+        navigate({ isMainFrame: true, isSameDocument: true })
+
+        // An iframe load or a hash change is not a new renderer: the heap is the same one.
+        expect(svc.getRendererEpoch(id)).toBe(0)
+        expect(invalidateWindowRenderer).not.toHaveBeenCalled()
+      })
+
+      it('gives every navigation a new epoch, so a stale one can never match again', async () => {
+        const { opts } = makeDiagnosticsOpts()
+        const svc = makeService(opts)
+        const id = await svc.createWindow()
+        const navigate = grabMainFrameNavigationHandler()
+        navigate({ isMainFrame: true, isSameDocument: false })
+        const first = svc.getRendererEpoch(id)
+        navigate({ isMainFrame: true, isSameDocument: false })
+        expect(svc.getRendererEpoch(id)).toBeGreaterThan(first)
+      })
+
+      it('drops the epoch and invalidates the window when it closes', async () => {
+        const { opts, invalidateWindowRenderer } = makeDiagnosticsOpts()
+        const svc = makeService(opts)
+        const id = await svc.createWindow()
+        grabMainFrameNavigationHandler()({ isMainFrame: true, isSameDocument: false })
+
+        grabWindowClosedHandler()()
+
+        // 0 is "never seen"; a reused window id must not inherit the old generation.
+        expect(svc.getRendererEpoch(id)).toBe(0)
+        expect(invalidateWindowRenderer).toHaveBeenLastCalledWith(id, 'window-closed')
+      })
     })
 
     describe('unanswered-dialog recovery', () => {

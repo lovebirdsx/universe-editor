@@ -97,6 +97,11 @@ import {
   installChildProcessGoneLogging,
   installProcessMetricsLogging,
 } from './crashMonitoring.js'
+import {
+  SystemMemorySampler,
+  disposeSharedSystemMemorySampler,
+  setSharedSystemMemorySampler,
+} from './services/diagnostics/systemMemorySampler.js'
 import { ErrorSinkMainService } from './services/telemetry/errorSinkMainService.js'
 import { DiagnosticsMainService } from './services/diagnostics/diagnosticsMainService.js'
 import {
@@ -348,6 +353,15 @@ const consoleInterceptor = installConsoleInterceptor({
 })
 
 installChildProcessGoneLogging(mainLogger, (event, error) => errorSink.recordLocal(event, error))
+// System commit/physical readings, shared by the metrics log below and (later)
+// heap-snapshot admission. Started here, and never awaited: the first reading is a
+// spawned PowerShell query that must not sit on the startup path. Logged on the metrics
+// channel so a fold ("the query has been failing for 40 minutes") lands in the same file
+// as the samples it explains, and folded there because a broken WMI repeats forever.
+const systemMemorySampler = new SystemMemorySampler({
+  logger: logMainService.createLogger({ id: 'processMetrics', name: 'Process Metrics' }),
+})
+setSharedSystemMemorySampler(systemMemorySampler)
 const processMetricsLogging = installProcessMetricsLogging(logMainService, {
   // Late-bound: the process monitor is a DI service built lazily on first use, and this
   // timer is installed before the container exists. Until it is up, the tree walk is
@@ -356,6 +370,7 @@ const processMetricsLogging = installProcessMetricsLogging(logMainService, {
     applicationServices
       ? applicationServices.processMonitor.resolveProcesses().then((s) => s.root)
       : Promise.resolve(undefined),
+  readSystemMemory: () => systemMemorySampler.latest(),
 })
 
 const e2eEnabled = environmentService.isE2E
@@ -619,6 +634,25 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       const id = windows.getFocusedWindowId()
       return id === null ? undefined : windows.getWindowById(id)
     })
+    // 堆快照轮次同样需要迟到绑定；它捕获的身份必须来自这里（main）而不是载荷——总不能让
+    // renderer 自己说「我是哪个 renderer」。`takeHeapSnapshot` 自己写文件：不建 CDP 连接、
+    // 不强制 GC，对象图也从不经过本进程。
+    applicationServices.diagnostics.setHeapSnapshotWindowHost({
+      resolve: (windowId) => {
+        const win = windows.getWindowById(windowId)
+        if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return undefined
+        return {
+          windowId,
+          webContentsId: win.webContents.id,
+          pid: win.webContents.getOSProcessId(),
+          navigationEpoch: windows.getRendererEpoch(windowId),
+          takeHeapSnapshot: (path) => win.webContents.takeHeapSnapshot(path),
+          isAlive: () => !win.isDestroyed() && !win.webContents.isDestroyed(),
+          // 崩溃的 renderer 不是「窗口关了」：窗口还在，只是里面没有可测量的堆。
+          isRendererAlive: () => !win.webContents.isCrashed(),
+        }
+      },
+    })
     // Windows taskbar Jump List (right-click the pinned icon). Tracks the shared
     // recent-workspaces list; no-op on non-Windows platforms.
     windowsJumpList = new WindowsJumpList(applicationServices.recentWorkspaces, logMainService)
@@ -866,6 +900,9 @@ app.on('will-quit', () => {
   // the latest in-memory state atomically before we return.
   getDefaultStorage().flushSync()
   consoleInterceptor.dispose()
+  // Synchronous: clears the sampler's timer and kills any in-flight query child,
+  // so nothing survives the process it was measuring.
+  disposeSharedSystemMemorySampler()
   processMetricsLogging.dispose()
   logMainService.dispose()
   // Last synchronous mark before the process exits and the NSIS installer takes

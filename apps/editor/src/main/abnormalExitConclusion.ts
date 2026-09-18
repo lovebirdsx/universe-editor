@@ -1,14 +1,12 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  The single place that decides *why* the previous session is gone.
+ *  上一会话死因的唯一收口处。
  *
- *  Two witnesses feed it: the Windows event log (crash/hang records vs. warnings)
- *  and our own metrics tail (what was climbing just before the log stopped). The
- *  verdict only escalates to "native death" on an actual crash/hang record —
- *  a memory-growth warning is a precursor, and reporting it as evidence would
- *  suppress the far more informative "no crash event at all, so it was killed
- *  from outside" verdict. An unreadable event log yields "indeterminate", never
- *  "external": unknown is not the same as absent.
+ *  两个证人：Windows 事件日志（崩溃/挂起记录 vs. 非致命预警）与本会话自己的指标尾巴
+ *  （日志停止前什么在涨）。只有真正的崩溃/挂起记录才升级成原生死亡——内存增长预警只是
+ *  前兆，把它当证据会盖掉「日志里根本没有崩溃记录」这条信息。没有 dump 又没有崩溃记录
+ *  时一律未定论：事件日志读不到是「不知道」，读到了但没匹配也是「不知道」，两者都不足
+ *  以指认外部终止（WER 未被记录、机器关机/重启都会留下同样的现场），只是措辞分开写。
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -39,7 +37,7 @@ export interface AbnormalExitFacts {
   readonly lastAliveAt: number
 }
 
-export type AbnormalExitVerdict = 'native-death' | 'external-termination' | 'indeterminate'
+export type AbnormalExitVerdict = 'native-death' | 'indeterminate'
 
 export interface AbnormalExitConclusion {
   readonly verdict: AbnormalExitVerdict
@@ -62,11 +60,9 @@ function describeSceneSummary(scene: ExitScene | undefined): string {
 }
 
 /**
- * Whether the process was *still* over its line is a fact about the last sample,
- * not about the fact that it was flagged at some point. On 2026-09-12 the flagged
- * renderer had fallen from 2747MB back to 687MB four minutes before the log
- * stopped; reading "still over its line" off `flaggedSamples` alone would have
- * pointed the whole post-mortem at an OOM kill the data does not support.
+ * 内存曲线只是现场事实，不能写成死因。「末尾仍在线之上」的判据是**末次读数 > 阈值**，
+ * 不是「曾被标记过」：2026-09-12 那次被标记的 renderer 已在日志停止前四分钟从 2747MB
+ * 回落到 687MB，只读 flaggedSamples 会把复盘引向一个数据不支持的 OOM 归因。
  */
 function describeHeavyProcess(process: SceneProcess): string {
   const subject =
@@ -75,9 +71,9 @@ function describeHeavyProcess(process: SceneProcess): string {
       : `${process.name ?? 'a spawned process'}#${process.pid}`
   const line = `${process.thresholdMB ?? '?'}MB line`
   if (process.thresholdMB !== undefined && process.lastMB > process.thresholdMB) {
-    return `our own log shows ${subject} peaked at ${process.peakMB}MB and was still over its ${line} in the last sample — consistent with a process killed while already past its memory line`
+    return `our own log shows ${subject} peaked at ${process.peakMB}MB and was still over its ${line} in the last sample`
   }
-  return `our own log shows ${subject} peaked at ${process.peakMB}MB while over its ${line}, but the final sample read ${process.lastMB}MB — it had come back under the line, so the peak does not explain the kill`
+  return `our own log shows ${subject} peaked at ${process.peakMB}MB while over its ${line}, but the final sample read ${process.lastMB}MB — it had come back under the line, so the peak does not explain the exit`
 }
 
 /** The id is read back from a JSON file on disk — only a well-formed name is echoed into the log. */
@@ -117,11 +113,7 @@ export function concludeAbnormalExit(facts: AbnormalExitFacts): AbnormalExitConc
   }
 
   const verdict: AbnormalExitVerdict =
-    facts.crashDumpCount > 0 || evidence.length > 0
-      ? 'native-death'
-      : facts.werEvents === undefined
-        ? 'indeterminate'
-        : 'external-termination'
+    facts.crashDumpCount > 0 || evidence.length > 0 ? 'native-death' : 'indeterminate'
 
   if (verdict === 'native-death') {
     const kinds = describeWerSummary(evidence.map((event) => event.kind))
@@ -132,14 +124,24 @@ export function concludeAbnormalExit(facts: AbnormalExitFacts): AbnormalExitConc
           ? `crash dump found for the previous session — the process died natively`
           : `native crash/hang recorded for this exe in the Windows Application log (${kinds}) — the session died inside this process, not from an external kill`,
     })
-  } else if (verdict === 'external-termination') {
+  } else if (facts.werEvents === undefined) {
+    // 没查成：不知道，别把查询失败渲染成「外部终止」
+    lines.push({
+      level: 'warn',
+      text:
+        facts.platform === 'win32'
+          ? 'Windows Application log could not be read (wevtutil failed) — a native death can be neither ruled in nor ruled out'
+          : `Windows event log not consulted on ${facts.platform} — a native death can be neither ruled in nor ruled out`,
+    })
+  } else {
+    // 查过但没有原生死亡证据：列举仍开放的死因，不挑一个
     const clauses: string[] = []
     const opening =
       werEvents.length === 0
-        ? 'no crash/hang/WER event for this exe in the Windows Application log'
-        : 'no crash/hang evidence for this exe in the Windows Application log (only non-fatal WER reports)'
+        ? 'no crash/hang/WER event for this exe in the Windows Application log, and no crash dump'
+        : 'no crash/hang evidence for this exe in the Windows Application log (only non-fatal WER reports), and no crash dump'
     clauses.push(
-      `${opening} — process was likely terminated externally (task kill / AV) or the machine lost power`,
+      `${opening} — no native-death evidence, so the exit cannot be attributed: an external kill (task kill / antivirus), a machine shutdown or restart, and a crash WER never recorded are all possible`,
     )
     if (precursors.length > 0) {
       const names = [...new Set(precursors.map((event) => event.reportName ?? 'unknown'))].join(
@@ -155,14 +157,6 @@ export function concludeAbnormalExit(facts: AbnormalExitFacts): AbnormalExitConc
       clauses.push(describeHeavyProcess(heavyHosted))
     }
     lines.push({ level: 'warn', text: clauses.join('; ') })
-  } else {
-    lines.push({
-      level: 'warn',
-      text:
-        facts.platform === 'win32'
-          ? 'Windows Application log could not be read (wevtutil failed) — a native death can be neither ruled in nor ruled out'
-          : `Windows event log not consulted on ${facts.platform} — a native death can be neither ruled in nor ruled out`,
-    })
   }
 
   const record = [

@@ -3,16 +3,34 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { collectHeapHolders, createRendererHeapReporter } from '../rendererHeapReporter.js'
+import { Event } from '@universe-editor/platform'
+import {
+  collectHeapCounts,
+  collectHeapHolders,
+  createRendererHeapReporter,
+} from '../rendererHeapReporter.js'
 import { bumpHeapFlow, drainHeapFlow, setHeapGauge } from '../heapFlowCounters.js'
 import { MemoryPressureLevel } from '../memoryPressureLevels.js'
 import type {
+  HeapSnapshotStatus,
   IDiagnosticsService,
   WireRendererHeapSample,
 } from '../../../../shared/ipc/services.js'
 
 const MIB = 1024 * 1024
 const SAMPLE = { used: 3200 * MIB, limit: 4096 * MIB }
+
+/** Snapshots are not what this file tests; the mock only has to satisfy the contract. */
+const OFF_STATUS: HeapSnapshotStatus = {
+  active: false,
+  phase: 'off',
+  attempts: 0,
+  attemptLimit: 2,
+  appAttempts: 0,
+  appAttemptLimit: 4,
+  artifacts: 0,
+  bytes: 0,
+}
 
 function diagnostics(
   report: (sample: WireRendererHeapSample) => Promise<void>,
@@ -25,6 +43,11 @@ function diagnostics(
     exportDiagnosticsZip: () => Promise.resolve(''),
     createDiagnosticsZip: () => Promise.resolve(''),
     reportRendererHeapSample: report,
+    startHeapSnapshotRound: () => Promise.resolve(OFF_STATUS),
+    stopHeapSnapshotRound: () => Promise.resolve(OFF_STATUS),
+    getHeapSnapshotStatus: () => Promise.resolve(OFF_STATUS),
+    revealHeapSnapshotsFolder: () => Promise.resolve(),
+    onDidChangeHeapSnapshot: Event.None,
   }
 }
 
@@ -86,6 +109,32 @@ describe('createRendererHeapReporter', () => {
     ])
   })
 
+  it('carries the renderer identity on every sample', () => {
+    // main 会丢掉 incarnation 与本轮绑定的那个不一致的样本——这是把 reload 期间迟到的报告
+    // 和活报告区分开的唯一手段。
+    const seen: WireRendererHeapSample[] = []
+    const report = createRendererHeapReporter(
+      () => diagnostics((sample) => (seen.push(sample), Promise.resolve())),
+      [],
+      undefined,
+      undefined,
+      [],
+      'r-abc-123',
+    )
+    report(SAMPLE, MemoryPressureLevel.Normal)
+    expect(seen[0]?.incarnation).toBe('r-abc-123')
+  })
+
+  it('omits the identity when the reporter was built without one', () => {
+    const seen: WireRendererHeapSample[] = []
+    const report = createRendererHeapReporter(
+      () => diagnostics((sample) => (seen.push(sample), Promise.resolve())),
+      [],
+    )
+    report(SAMPLE, MemoryPressureLevel.Normal)
+    expect(seen[0]).not.toHaveProperty('incarnation')
+  })
+
   it('resolves the service per report rather than capturing it', () => {
     // The reporter is built with the sampler, which is before the proxy-channel
     // services exist; a captured undefined would silence every report forever.
@@ -141,6 +190,76 @@ describe('createRendererHeapReporter', () => {
     } as never)
     report(SAMPLE, MemoryPressureLevel.Normal)
     expect(warn).not.toHaveBeenCalled()
+  })
+})
+
+describe('createRendererHeapReporter — counts', () => {
+  it('reports a known zero instead of dropping it', () => {
+    // "No session is live" and "this renderer cannot read the session list" are
+    // opposite conclusions drawn from the same absent field, so zero survives.
+    const seen: WireRendererHeapSample[] = []
+    const report = createRendererHeapReporter(
+      () => diagnostics((sample) => (seen.push(sample), Promise.resolve())),
+      [],
+      undefined,
+      undefined,
+      [
+        { name: 'sessions', count: () => 0 },
+        { name: 'pool', count: () => 2 },
+      ],
+    )
+    report(SAMPLE, MemoryPressureLevel.Normal)
+    expect(seen[0]?.counts).toEqual([
+      { name: 'sessions', value: 0 },
+      { name: 'pool', value: 2 },
+    ])
+  })
+
+  it('drops a source that cannot answer, and keeps the rest of the sample', () => {
+    const seen: WireRendererHeapSample[] = []
+    const report = createRendererHeapReporter(
+      () => diagnostics((sample) => (seen.push(sample), Promise.resolve())),
+      [],
+      undefined,
+      undefined,
+      [
+        { name: 'sessions', count: () => undefined },
+        {
+          name: 'pool',
+          count: () => {
+            throw new Error('client disposed')
+          },
+        },
+        { name: 'budget.holders', count: () => 3 },
+      ],
+    )
+    expect(() => report(SAMPLE, MemoryPressureLevel.Normal)).not.toThrow()
+    expect(seen[0]?.counts).toEqual([{ name: 'budget.holders', value: 3 }])
+  })
+
+  it('omits counts entirely when no population could be read', () => {
+    const seen: WireRendererHeapSample[] = []
+    const report = createRendererHeapReporter(
+      () => diagnostics((sample) => (seen.push(sample), Promise.resolve())),
+      [],
+      undefined,
+      undefined,
+      [{ name: 'sessions', count: () => undefined }],
+    )
+    report(SAMPLE, MemoryPressureLevel.Normal)
+    expect(seen[0]).not.toHaveProperty('counts')
+  })
+
+  it('rejects a count that is not a population rather than clamping it', () => {
+    expect(
+      collectHeapCounts([
+        { name: 'a', count: () => -1 },
+        { name: 'b', count: () => 1.5 },
+        { name: 'c', count: () => Number.NaN },
+        { name: 'd', count: () => Number.POSITIVE_INFINITY },
+        { name: 'e', count: () => 0 },
+      ]),
+    ).toEqual([{ name: 'e', value: 0 }])
   })
 })
 

@@ -1,7 +1,6 @@
 /*---------------------------------------------------------------------------------------------
- *  Tests for apps/editor/src/main/abnormalExitConclusion.ts — the 2026-09-12
- *  shape is the regression that matters: a leak warning must not read as a crash,
- *  and the verdict must still name the memory line the dead session was over.
+ *  Tests for apps/editor/src/main/abnormalExitConclusion.ts — 2026-09-12 那次是必须
+ *  守住的回归形状：泄漏预警不能被读成崩溃，日志自己停住也不能被读成外部终止。
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
@@ -47,14 +46,21 @@ function facts(overrides: Partial<AbnormalExitFacts> = {}): AbnormalExitFacts {
 }
 
 describe('concludeAbnormalExit', () => {
-  it('calls the 2026-09-12 shape an external termination, not a crash', () => {
+  it('does not attribute the 2026-09-12 shape to an external kill', () => {
     const conclusion = concludeAbnormalExit(facts())
-    expect(conclusion.verdict).toBe('external-termination')
+    expect(conclusion.verdict).toBe('indeterminate')
     expect(
-      conclusion.lines.some(
-        (line) => line.level === 'warn' && line.text.includes('likely terminated externally'),
-      ),
-    ).toBe(true)
+      conclusion.lines.some((line) => line.text.includes('likely terminated externally')),
+    ).toBe(false)
+  })
+
+  it('enumerates the causes an exit without native-death evidence leaves open', () => {
+    const verdictLine = concludeAbnormalExit(facts()).lines.at(-1)
+    expect(verdictLine?.level).toBe('warn')
+    expect(verdictLine?.text).toContain('no native-death evidence')
+    expect(verdictLine?.text).toContain('cannot be attributed')
+    expect(verdictLine?.text).toContain('an external kill (task kill / antivirus)')
+    expect(verdictLine?.text).toContain('shutdown or restart')
   })
 
   it('keeps the leak warning out of the error level', () => {
@@ -82,21 +88,30 @@ describe('concludeAbnormalExit', () => {
     // an OOM kill the data does not support.
     expect(verdictLine?.text).not.toContain('still over its')
     expect(verdictLine?.text).toContain('the final sample read 687MB')
-    expect(verdictLine?.text).toContain('does not explain the kill')
+    expect(verdictLine?.text).toContain('does not explain the exit')
   })
 
-  it('says the process died over its line when the last sample says so', () => {
-    const text = [
-      '[12:02:42] [warn] pid=29676 type=Tab mem=2300MB — renderer working set above 2048MB, OOM risk',
-      '[12:15:22] [info] pid=29676 type=Tab mem=2600MB cpu=0%',
-    ].join('\n')
+  it('never lets the memory clause name the cause of death', () => {
     const scene = {
-      ...parseExitScene(text, { sessionStartMs: SESSION_START_MS }),
+      ...parseExitScene(
+        [
+          '[12:02:42] [warn] pid=29676 type=Tab mem=2300MB — renderer working set above 2048MB, OOM risk',
+          '[12:15:22] [info] pid=29676 type=Tab mem=2600MB cpu=0%',
+        ].join('\n'),
+        { sessionStartMs: SESSION_START_MS },
+      ),
       source: 'live' as const,
       truncated: false,
     }
-    const verdictLine = concludeAbnormalExit(facts({ scene })).lines.at(-1)
-    expect(verdictLine?.text).toContain('still over its 2048MB line in the last sample')
+    const clause = concludeAbnormalExit(facts({ scene }))
+      .lines.at(-1)
+      ?.text.split('; ')
+      .find((part) => part.includes('peaked at'))
+    expect(clause).toContain('still over its 2048MB line in the last sample')
+    // 内存曲线只是现场事实，不能写成死因
+    expect(clause).not.toContain('kill')
+    expect(clause).not.toContain('OOM')
+    expect(clause).not.toContain('consistent with')
   })
 
   it('does not echo a malformed session id into the log', () => {
@@ -122,12 +137,18 @@ describe('concludeAbnormalExit', () => {
     expect(conclusion.record).toContain('dumps=1')
   })
 
-  it('keeps the original wording when the event log matched nothing at all', () => {
-    const conclusion = concludeAbnormalExit(facts({ werEvents: [] }))
-    expect(conclusion.verdict).toBe('external-termination')
+  it('keeps "nothing matched" apart from "could not read the log"', () => {
+    const none = concludeAbnormalExit(facts({ werEvents: [] }))
+    const unknown = concludeAbnormalExit(facts({ werEvents: undefined }))
+    expect(none.verdict).toBe('indeterminate')
+    expect(unknown.verdict).toBe('indeterminate')
     expect(
-      conclusion.lines.some((line) => line.text.includes('no crash/hang/WER event for this exe')),
+      none.lines.some((line) => line.text.includes('no crash/hang/WER event for this exe')),
     ).toBe(true)
+    expect(unknown.lines.some((line) => line.text.includes('could not be read'))).toBe(true)
+    expect(none.lines.some((line) => line.text.includes('neither ruled in nor ruled out'))).toBe(
+      false,
+    )
   })
 
   it('never claims an external kill when the event log could not be read', () => {
@@ -151,7 +172,7 @@ describe('concludeAbnormalExit', () => {
 
   it('surfaces a missing scene without changing the verdict', () => {
     const conclusion = concludeAbnormalExit(facts({ scene: undefined }))
-    expect(conclusion.verdict).toBe('external-termination')
+    expect(conclusion.verdict).toBe('indeterminate')
     expect(
       conclusion.lines.some(
         (line) =>
@@ -167,7 +188,7 @@ describe('concludeAbnormalExit', () => {
     )
     expect(first.record).toBe(second.record)
     expect(first.record).toBe(
-      'verdict=external-termination; platform=win32; wer=leak-warning; dumps=0; scene=renderer-over-threshold',
+      'verdict=indeterminate; platform=win32; wer=leak-warning; dumps=0; scene=renderer-over-threshold',
     )
   })
 })

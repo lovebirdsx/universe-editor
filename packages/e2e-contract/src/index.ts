@@ -388,6 +388,34 @@ export interface E2EMemoryPressure {
 }
 
 /**
+ * Where the window's heap-snapshot round stands, straight from `IDiagnosticsService`
+ * (`getHeapSnapshotStatus`). Read-only: a spec cannot start, stop or configure a round
+ * through it — the command and its consent dialog are the only way in, which is the
+ * behaviour a spec is meant to exercise. Here so a spec can tell "the round is armed and
+ * waiting for a stable baseline" from "the round ended, because the window reloaded"
+ * without scraping log files for the reason.
+ */
+export interface E2EHeapSnapshotStatus {
+  /** True while a round is armed for this window. */
+  readonly active: boolean
+  /** `off` | `baseline` | `watching` | `capturing` | `stopped`. */
+  readonly phase: string
+  /** Capture calls made this round (failures included, since they froze the window too). */
+  readonly attempts: number
+  readonly attemptLimit: number
+  /** Capture calls made since the app started; stopping a round does not reset it. */
+  readonly appAttempts: number
+  readonly appAttemptLimit: number
+  /** Snapshot files this round wrote. */
+  readonly artifacts: number
+  readonly bytes: number
+  /** Why the round ended, or the last decision that kept it from capturing. */
+  readonly code?: string
+  /** Measurements only (counts, seconds, MB) — never paths or snapshot content. */
+  readonly detail?: string
+}
+
+/**
  * Renderer work counters; see E2EProbe.getHeapFlowCounters. The three dimensions stay
  * separate on purpose — `flow` is a process total, `gauge` an absolute reading,
  * `codeHtmlBytes` a resident total — because each answers a different question about
@@ -1655,6 +1683,12 @@ export interface E2EProbe {
    * `forceLevel` is `elevated` | `critical`; omit it to observe without releasing.
    */
   getMemoryPressure(forceLevel?: 'elevated' | 'critical'): Promise<E2EMemoryPressure>
+  /**
+   * The window's heap-snapshot round, as main sees it. Read-only on purpose: starting a
+   * round is the user's decision (the command + its consent dialog are the only entry),
+   * so a spec asserts on the state a real run reached rather than driving it.
+   */
+  getHeapSnapshotStatus(): Promise<E2EHeapSnapshotStatus>
   /**
    * Renderer work counters accumulated since process start, plus the current absolute
    * gauges. Reads the same module the heap reporter drains, but non-destructively, so a

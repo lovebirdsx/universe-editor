@@ -7,6 +7,7 @@
 
 import { ContributionsRegistry, WorkbenchPhase } from '@universe-editor/platform'
 import { AbnormalExitNotificationContribution } from '../AbnormalExitNotificationContribution.js'
+import { HeapSnapshotNotificationContribution } from '../HeapSnapshotNotificationContribution.js'
 import { BugRecordingContribution } from '../bugRecordingContribution.js'
 import { BugRecordingOrphanContribution } from '../BugRecordingOrphanContribution.js'
 import { JsonSchemaContextContribution } from '../JsonSchemaContextContribution.js'
@@ -99,6 +100,16 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.abnormalExitNotification',
   AbnormalExitNotificationContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Heap-snapshot round reports (started / captured / skipped / failed / stopped). The
+// round itself lives in main and is started by an explicit command; this only listens,
+// and only to the reports main addressed to this window. AfterRestore so the
+// notification service is live.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.heapSnapshotNotification',
+  HeapSnapshotNotificationContribution,
   WorkbenchPhase.AfterRestore,
 )
 

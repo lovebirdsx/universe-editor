@@ -1,9 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Surfaces the previous session's abnormal exit (native crash / external kill)
- *  as a sticky warning with a shortcut to the crash dumps. The main side
- *  detects it via the session sentinel; the report is consume-once, so exactly
- *  one window notifies even with several windows open.
+ *  把上一会话的异常退出报成 sticky 警告，附「打开崩溃目录」action。
+ *  main 侧靠会话哨兵发现；报告是 consume-once 的，多窗口下只有一个窗口提示。
+ *  这里只知道「没有留下 dump」——归因在 main 的异常退出取证里，通知不猜死因。
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -44,7 +43,7 @@ export class AbnormalExitNotificationContribution
           )
         : localize(
             'abnormalExit.noDumps',
-            'The previous session did not exit cleanly around {time} (it may have been killed externally, e.g. by antivirus or out of memory).',
+            'The previous session did not exit cleanly around {time} and left no crash dump; the cause is unknown.',
             { time: diedAround },
           ),
       sticky: true,

@@ -11,7 +11,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { ILogger } from '@universe-editor/platform'
-import type { IDiagnosticsService, WireHeapHolder } from '../../../shared/ipc/services.js'
+import type {
+  IDiagnosticsService,
+  WireHeapCount,
+  WireHeapHolder,
+} from '../../../shared/ipc/services.js'
 import { drainHeapFlow, readHeapGauges } from './heapFlowCounters.js'
 import {
   MEMORY_PRESSURE_LEVEL_NAMES,
@@ -24,6 +28,18 @@ export interface HeapHolderSource {
   readonly name: string
   /** Overhead-adjusted bytes, or undefined when the holder is not loaded at all. */
   measure(): { bytes: number; count?: number } | undefined
+}
+
+/**
+ * A population that can be read in O(1) — no walking of session bodies or of a
+ * connection pool. `undefined` means "this renderer cannot answer right now" (the
+ * service is not loaded, or reading threw) and the entry is dropped; a returned `0`
+ * is a reading and is reported as one. Conflating the two would let "everything was
+ * released" and "the observer is blind" print the same line.
+ */
+export interface HeapCountSource {
+  readonly name: string
+  count(): number | undefined
 }
 
 export function collectHeapHolders(sources: readonly HeapHolderSource[]): WireHeapHolder[] {
@@ -45,6 +61,22 @@ export function collectHeapHolders(sources: readonly HeapHolderSource[]): WireHe
   return holders
 }
 
+export function collectHeapCounts(sources: readonly HeapCountSource[]): WireHeapCount[] {
+  const counts: WireHeapCount[] = []
+  for (const source of sources) {
+    try {
+      const value = source.count()
+      // Zero is kept; a negative or fractional count is not a population and is
+      // dropped rather than clamped — a corrected reading is not evidence.
+      if (value === undefined || !Number.isInteger(value) || value < 0) continue
+      counts.push({ name: source.name, value })
+    } catch {
+      // Same rule as holders: an unreadable count must not cost the heap sample.
+    }
+  }
+  return counts
+}
+
 /**
  * Fire-and-forget on purpose — a rejected report must not disturb the sampler. That
  * makes the failure silent by construction (the IPC surface only rejects on a wiring
@@ -61,6 +93,13 @@ export function createRendererHeapReporter(
   sources: readonly HeapHolderSource[],
   logger?: ILogger,
   sampleGauges?: (level: MemoryPressureLevel) => void,
+  countSources: readonly HeapCountSource[] = [],
+  /**
+   * This renderer start's identity. Stamped on every sample so main can reject a report
+   * that arrives after the renderer it describes has been replaced — the window id and
+   * the navigation epoch alone cannot tell that case apart from a current report.
+   */
+  incarnation?: string,
 ): (sample: MemorySample, level: MemoryPressureLevel) => void {
   let failureLogged = false
   const failed = (err: unknown): void => {
@@ -79,6 +118,7 @@ export function createRendererHeapReporter(
     try {
       const flow = drainHeapFlow()
       const gauge = readHeapGauges()
+      const counts = collectHeapCounts(countSources)
       void getDiagnostics()
         .reportRendererHeapSample({
           used: sample.used,
@@ -87,6 +127,8 @@ export function createRendererHeapReporter(
           holders: collectHeapHolders(sources),
           ...(flow.length === 0 ? {} : { flow }),
           ...(gauge.length === 0 ? {} : { gauge }),
+          ...(counts.length === 0 ? {} : { counts }),
+          ...(incarnation === undefined ? {} : { incarnation }),
         })
         .catch(failed)
     } catch (err) {

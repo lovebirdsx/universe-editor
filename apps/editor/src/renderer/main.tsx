@@ -101,6 +101,7 @@ import {
 } from './services/memory/memoryPressureService.js'
 import { sampleDomGauges } from './services/memory/domHeapGauges.js'
 import { readCodeHtmlBytes } from './services/memory/heapFlowCounters.js'
+import { RENDERER_INCARNATION } from './services/memory/rendererIncarnation.js'
 import { createRendererHeapReporter } from './services/memory/rendererHeapReporter.js'
 import { sharedResidentBudget } from './services/acp/session/acpResidentBudget.js'
 import { ISessionChangeTrackerService } from './services/acp/session/sessionChangeTracker.js'
@@ -484,6 +485,25 @@ async function bootstrapWorkbench(): Promise<void> {
           ],
           createNamedLogger(loggerService, { id: 'memory', name: 'Memory' }),
           (level) => sampleDomGauges(document, level),
+          [
+            // Populations, not bytes: the diff between what the holders above account
+            // for and the heap itself is only interpretable next to how many of each
+            // were alive. Every source resolves lazily (this runs while the ACP
+            // services are still being constructed) and returns undefined rather than
+            // 0 when it cannot read, so "none live" and "not loaded" stay apart.
+            {
+              name: 'sessions',
+              count: () =>
+                instantiation
+                  .invokeFunction((accessor) => accessor.get(IAcpSessionService))
+                  .sessions.get().length,
+            },
+            { name: 'budget.holders', count: () => sharedResidentBudget.holderCount() },
+            { name: 'pool', count: () => acpClientService.poolSize() },
+          ],
+          // This start's identity, so a report that outlives its renderer (a reload
+          // between send and receipt) is dropped instead of being read as the new heap.
+          RENDERER_INCARNATION,
         ),
       }),
     ),
@@ -1057,6 +1077,7 @@ async function bootstrapWorkbench(): Promise<void> {
     timerService: instantiation.invokeFunction((a) => a.get(ITimerService)),
     interactionPerfService,
     memoryPressureService: services.get(IMemoryPressureService) as IMemoryPressureService,
+    diagnosticsService: services.get(IDiagnosticsService) as IDiagnosticsService,
     explorerTreeService,
     fileService: services.get(IFileService) as IFileService,
     textSearchMainService: services.get(ITextSearchMainService) as ITextSearchMainService,

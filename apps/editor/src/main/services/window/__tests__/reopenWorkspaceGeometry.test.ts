@@ -142,6 +142,8 @@ function makeOpts() {
       recentWorkspaces: { add: vi.fn().mockResolvedValue(undefined) },
       sessionSwitcher: { registerWindow: () => {}, unregisterWindow: () => {} },
       configLocation: { onDidChangeConfigDir: () => ({ dispose: () => {} }), currentDir: '' },
+      // Closing a window ends its heap-snapshot round; these tests never start one.
+      diagnostics: { invalidateWindowRenderer: () => {} },
       watcherProcess: createStubWatcherProcessClient(),
     } as never,
     logService: new LogMainService(),

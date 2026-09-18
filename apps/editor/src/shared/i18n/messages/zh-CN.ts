@@ -402,6 +402,9 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.editor.previousChange.title': '转到上一处更改',
   'action.exit.title': '退出',
   'action.exportDiagnostics.title': '导出诊断包...',
+  'action.openHeapSnapshotsFolder.title': '打开内存快照目录',
+  'action.startHeapSnapshotDiagnostics.title': '开始内存诊断',
+  'action.stopHeapSnapshotDiagnostics.title': '停止内存诊断',
   'action.find.title': '查找',
   'action.findInFiles.title': '在文件中查找',
   'action.findInFolder.title': '在文件夹中查找...',
@@ -1845,8 +1848,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'crashLoop.detail':
     '崩溃可能由上次打开的工作区触发（例如包含海量文件的目录）。可以跳过本次工作区恢复，以空窗口启动进行排查；之前的目录仍可从「最近打开」进入。',
   'abnormalExit.withDumps': '上次会话异常终止，已留下 {count} 个崩溃转储文件。',
-  'abnormalExit.noDumps':
-    '上次会话在 {time} 前后未正常退出（可能被外部强制终止，如杀毒软件 / 内存不足）。',
+  'abnormalExit.noDumps': '上次会话在 {time} 前后未正常退出，且未留下崩溃转储文件，具体原因未知。',
   'abnormalExit.openCrashes': '打开崩溃目录',
 
   // --- Update ---
@@ -3234,6 +3236,58 @@ export const ZH_CN_MESSAGES: MessageMap = {
   // --- Diagnostics ---
   'exportDiagnostics.done': '诊断包已导出：{path}',
   'exportDiagnostics.failed': '诊断包导出失败：{message}',
+
+  // --- Memory diagnosis (controlled heap snapshots) ---
+  'heapSnapshot.openFolder': '打开快照目录',
+  'heapSnapshot.revealFailed': '无法打开快照目录：{message}',
+  'heapSnapshot.commandFailed': '内存诊断执行失败：{message}',
+  'heapSnapshot.unavailable': '当前版本未接入内存诊断，未启动任何轮次。',
+  'heapSnapshot.confirm.message': '对当前窗口开启内存诊断？',
+  'heapSnapshot.confirm.detail':
+    '只诊断当前窗口，其它窗口不受影响。\n\n采集快照时窗口会暂停数秒至数十秒——这段时间编辑器不响应任何操作。\n\n快照内容是该窗口堆内存里的原始数据，可能包含文件内容、会话正文或凭据。它只写到本机（编辑器用户数据目录下），不会自动上传。\n\n本轮诊断最长 2 小时，重载或关闭窗口即停止；点「停止」不会取消已经开始的那一份快照。',
+  'heapSnapshot.confirm.start': '开始诊断',
+  'heapSnapshot.confirm.cancel': '取消',
+  'heapSnapshot.stop.inFlight':
+    '不会再采集新的快照。当前这一份正在写入，无法取消——窗口会一直卡住直到它完成。',
+  'heapSnapshot.event.started': '内存诊断已开启：正在建立基线。采集时当前窗口会暂停数秒至数十秒。',
+  'heapSnapshot.event.captured': '快照已写入：{name}',
+  'heapSnapshot.event.capturedTrigger': '已写入{trigger}快照：{name}（{size}MB）',
+  'heapSnapshot.trigger.baseline': '基线',
+  'heapSnapshot.trigger.growth': '增长',
+  'heapSnapshot.status.off': '内存诊断未开启。',
+  'heapSnapshot.status.ended': '内存诊断已结束：',
+  'heapSnapshot.status.capturing':
+    '内存诊断：正在采集快照（窗口暂时无响应）。已尝试 {attempts} 次，已生成 {artifacts} 个文件。',
+  'heapSnapshot.status.running':
+    '内存诊断进行中（{phase}）。已尝试 {attempts} 次，已生成 {artifacts} 个文件。',
+  'heapSnapshot.notice.heapLimitUnknown':
+    '这个窗口没有上报可用的 V8 堆上限，无法推算快照大小，暂不采集。',
+  'heapSnapshot.notice.baselineTooLarge': '当前堆已经超过基线快照允许的大小，先等它降下来。',
+  'heapSnapshot.notice.baselineUnstable': '堆占用仍在波动，还不够稳定，继续等待基线。',
+  'heapSnapshot.notice.sampleStale': '这个窗口不再上报内存读数，本轮诊断已失去依据。',
+  'heapSnapshot.notice.holdersExplain': '占用上升已被已知缓存解释，快照不会提供新线索。',
+  'heapSnapshot.notice.heapTooLarge': '当前堆已超过约定的拍摄上限，不再自动采集。',
+  'heapSnapshot.notice.captureLimitReached': '基线之上已没有足够余量，增长快照无法保持在上限内。',
+  'heapSnapshot.notice.physicalMemoryLow': '可用物理内存不足，跳过本次采集，避免加剧压力。',
+  'heapSnapshot.notice.commitHeadroomLow': '系统提交内存余量不足，跳过本次采集，避免加剧压力。',
+  'heapSnapshot.notice.commitUnknown': '读不到新的提交内存读数，保守跳过本次采集，不做猜测。',
+  'heapSnapshot.notice.diskSpaceLow': '磁盘可用空间不足，跳过本次采集。',
+  'heapSnapshot.notice.diskUnknown': '读不到磁盘可用空间，保守跳过本次采集，不做猜测。',
+  'heapSnapshot.notice.directoryBudget': '快照目录已达上限，请手动清理后再开始新一轮。',
+  'heapSnapshot.notice.captureFailed': '快照采集失败，本轮到此结束，不再重复冻结窗口。',
+  'heapSnapshot.notice.captureStalled':
+    '快照仍在进行（已超过 90 秒）。该调用无法取消，窗口可能继续无响应。',
+  'heapSnapshot.notice.appQuotaExhausted':
+    '本次运行允许的快照次数已用完，重启编辑器后才有新的额度。',
+  'heapSnapshot.notice.roundQuotaExhausted': '本轮诊断的两次采集机会已用完。',
+  'heapSnapshot.notice.roundExpired': '本轮诊断已达 2 小时上限，自动停止。',
+  'heapSnapshot.notice.roundComplete': '两份快照（基线 + 增长）已写入磁盘。',
+  'heapSnapshot.notice.windowClosed': '窗口已关闭，本轮诊断随之结束。',
+  'heapSnapshot.notice.windowReloaded': '窗口已重新加载，本轮诊断结束：它测量的堆已不存在。',
+  'heapSnapshot.notice.rendererUnavailable':
+    '当前窗口的渲染进程已经不在运行，本轮诊断结束。重新加载窗口后可再开一轮。',
+  'heapSnapshot.notice.stoppedByUser': '内存诊断已停止。',
+  'heapSnapshot.notice.noTarget': '当前窗口没有可采集的渲染进程，无法开始诊断。',
 
   // --- Bug recording ---
   'bugRecording.statusTooltip': '正在录制 bug 证据。点击停止并导出。',

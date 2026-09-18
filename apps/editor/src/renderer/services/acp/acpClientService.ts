@@ -355,6 +355,12 @@ export class AcpClientService extends Disposable implements IAcpClientService {
   override dispose(): void {
     // Fire host.stop best-effort for every resolved entry. _entriesStore (via
     // super.dispose) tears down all per-entry subscriptions synchronously.
+    // Window close is the one lifecycle boundary that runs through here instead of
+    // _evictNow, so the pool teardown gets its own count-only line: a pool still
+    // holding entries at teardown is the case where agent children outlive the window.
+    if (this._pool.size > 0) {
+      this._logger.info(`pool dispose entries=${this._pool.size}`)
+    }
     for (const entryPromise of [...this._pool.values()]) {
       entryPromise.then(
         (entry) => {
@@ -427,6 +433,12 @@ export class AcpClientService extends Disposable implements IAcpClientService {
       entry.graceTimer = undefined
     }
     entry.refcount++
+    // Pool lifecycle boundary — one line per lease, never per message or stream chunk.
+    // Info rather than debug: the default level is info, so a debug line would never
+    // reach the log file this exists for. Counts and local ids only, no cwd.
+    this._logger.info(
+      `pool acquire agent=${agentId} handle=${entry.handle.slice(-6)} refcount=${entry.refcount} pool=${this._pool.size}`,
+    )
     const initTimeoutMs =
       this._config.get<number>('acp.startupTimeoutMs') ?? DEFAULT_INIT_TIMEOUT_MS
     try {
@@ -464,6 +476,16 @@ export class AcpClientService extends Disposable implements IAcpClientService {
         // Spawn failed — already self-evicted via the catch in connect().
       },
     )
+  }
+
+  /**
+   * Entries currently in the pool — spawning or alive. O(1), read by the renderer heap
+   * sample: a pool that keeps growing while the heap grows is a lead the byte totals
+   * cannot give, and it is the one number that says whether agent children were
+   * accumulating across sessions.
+   */
+  poolSize(): number {
+    return this._pool.size
   }
 
   // -- internals -----------------------------------------------------------
@@ -938,6 +960,9 @@ export class AcpClientService extends Disposable implements IAcpClientService {
       }
     }
     entry.refcount--
+    this._logger.info(
+      `pool release agent=${entry.agentId} handle=${entry.handle.slice(-6)} refcount=${entry.refcount} pool=${this._pool.size}`,
+    )
     if (entry.refcount > 0) return
     // Last lease gone — schedule lazy eviction.
     entry.graceTimer = setTimeout(() => {
@@ -950,6 +975,11 @@ export class AcpClientService extends Disposable implements IAcpClientService {
   private _evictNow(entry: PoolEntry): void {
     if (entry.evicted) return
     entry.evicted = true
+    // The `pool=` count is deliberately absent: the map deletion below is async, so a
+    // size read here would report the entry being removed as still pooled.
+    this._logger.info(
+      `pool evict agent=${entry.agentId} handle=${entry.handle.slice(-6)} refcount=${entry.refcount}`,
+    )
     if (entry.graceTimer !== undefined) {
       clearTimeout(entry.graceTimer)
       entry.graceTimer = undefined

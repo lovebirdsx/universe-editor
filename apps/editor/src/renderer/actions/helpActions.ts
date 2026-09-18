@@ -8,6 +8,7 @@
 import {
   Action2,
   IConfigurationService,
+  IDialogService,
   IEditorService,
   IEditorGroupsService,
   INotificationService,
@@ -21,7 +22,12 @@ import {
 } from '@universe-editor/platform'
 import { DocEditorInput } from '../services/editor/DocEditorInput.js'
 import { IReleaseNotesService } from '../../shared/ipc/releaseNotesService.js'
-import { IDiagnosticsService, IIssueReporterService } from '../../shared/ipc/services.js'
+import {
+  IDiagnosticsService,
+  IIssueReporterService,
+  type HeapSnapshotStatus,
+} from '../../shared/ipc/services.js'
+import { describeHeapSnapshotStatus } from '../services/diagnostics/heapSnapshotMessages.js'
 import { ReleaseNotesInput } from '../services/editor/ReleaseNotesInput.js'
 import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
 import { renderReleaseNotesMarkdown } from '../services/releaseNotes/releaseNotes.js'
@@ -199,5 +205,180 @@ async function exportDiagnostics(
         },
       ),
     })
+  }
+}
+
+/**
+ * 堆快照前的同意闸门。用户同意的不是「跑个命令」：写对象图的这几秒到几十秒里 renderer 会
+ * 冻结，产物是那个堆里所有字符串的副本（文件内容、提示词、凭据），而且已经开始的一次抓取停
+ * 不下来。跳过这个对话框的命令，等于在这四件事上撒谎。
+ */
+export async function confirmHeapSnapshotStart(dialogs: IDialogService): Promise<boolean> {
+  const result = await dialogs.confirm({
+    type: 'warning',
+    message: localize('heapSnapshot.confirm.message', 'Start memory diagnosis for this window?'),
+    detail: localize(
+      'heapSnapshot.confirm.detail',
+      "Only this window is diagnosed; other windows are not affected.\n\nTaking a snapshot pauses this window for seconds to tens of seconds — the editor will not respond while it runs.\n\nThe snapshot contains whatever the heap held, which may include file contents, session text or credentials. It is written only to this machine, under the editor's user data folder, and is never uploaded automatically.\n\nDiagnosis stops by itself after 2 hours, on reload and on close. Stopping it does not cancel a snapshot that has already started.",
+    ),
+    primaryButton: localize('heapSnapshot.confirm.start', 'Start Diagnosis'),
+    cancelButton: localize('heapSnapshot.confirm.cancel', 'Cancel'),
+  })
+  return result.confirmed
+}
+
+/**
+ * 内存诊断在 Help 菜单里的落点：`5_tools` 组，排在日志/用户数据/安装目录之后。三条命令都**不带
+ * icon**——`registerAction2` 会把 `desc.icon` 撒进它声明的每个菜单槽位，而菜单栏下拉一旦有任意
+ * 一项带图标就会整组开启图标列（`TitleBarDropdown.tsx`），所以 `iconCoverage.test.ts` 断言
+ * File/Edit/View/Help 一律无图标。palette 侧也不读命令图标（`CommandsQuickAccessProvider`）。
+ *
+ * **同一件事只有一条通知通路**：开局、拒绝、结束都由轮次自己的事件流报（`HeapSnapshotNotification
+ * Contribution`），命令只报事件报不出来的那几种——重复点开始、服务没接上、IPC 失败。否则用户在
+ * 一次开始里读到两条「内存诊断已开启」。
+ */
+export class StartHeapSnapshotDiagnosticsAction extends Action2 {
+  static readonly ID = 'workbench.action.startHeapSnapshotDiagnostics'
+  constructor() {
+    super({
+      id: StartHeapSnapshotDiagnosticsAction.ID,
+      title: localize2('action.startHeapSnapshotDiagnostics.title', 'Start Memory Diagnosis'),
+      category: localize2('command.category.help', 'Help'),
+      menu: { id: MenuId.MenubarHelpMenu, group: '5_tools', order: 5 },
+      f1: true,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    // Every service is taken before the first await: the accessor is invalid past it.
+    const diagnostics = accessor.get(IDiagnosticsService)
+    const dialogs = accessor.get(IDialogService)
+    const notifications = accessor.get(INotificationService)
+
+    let current: HeapSnapshotStatus
+    try {
+      current = await diagnostics.getHeapSnapshotStatus()
+    } catch (err) {
+      reportCommandFailure(notifications, err)
+      return
+    }
+    // 已经在跑：再点一次是对状态的询问，不是新一轮（重新武装不会给新的额度），所以这里
+    // 只回状态，也不再弹同意框——用户上一次已经同意过了。
+    if (current.active) {
+      notifications.notify({
+        severity: Severity.Info,
+        message: describeHeapSnapshotStatus(current),
+        sticky: false,
+      })
+      return
+    }
+
+    if (!(await confirmHeapSnapshotStart(dialogs))) return
+
+    let status: HeapSnapshotStatus
+    try {
+      status = await diagnostics.startHeapSnapshotRound()
+    } catch (err) {
+      reportCommandFailure(notifications, err)
+      return
+    }
+    // 开局与拒绝（无渲染进程 / 额度用尽）都由轮次事件自己报。唯一没有事件可等的结局是
+    // 这一版根本没有接上快照服务——那时用户点了「开始」却什么都不会发生。
+    if (status.phase === 'off') {
+      notifications.notify({
+        severity: Severity.Error,
+        message: localize(
+          'heapSnapshot.unavailable',
+          'Memory diagnosis is not available in this build, so nothing was started.',
+        ),
+      })
+    }
+  }
+}
+
+/** 停住后续抓取。已经在跑的那次如实报告，绝不声称已取消。 */
+export class StopHeapSnapshotDiagnosticsAction extends Action2 {
+  static readonly ID = 'workbench.action.stopHeapSnapshotDiagnostics'
+  constructor() {
+    super({
+      id: StopHeapSnapshotDiagnosticsAction.ID,
+      title: localize2('action.stopHeapSnapshotDiagnostics.title', 'Stop Memory Diagnosis'),
+      category: localize2('command.category.help', 'Help'),
+      menu: { id: MenuId.MenubarHelpMenu, group: '5_tools', order: 6 },
+      f1: true,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const diagnostics = accessor.get(IDiagnosticsService)
+    const notifications = accessor.get(INotificationService)
+    let status: HeapSnapshotStatus
+    try {
+      // 用户主动停止是静默的：控制器不再为它发事件，所以这一条就是用户看到的那一条。
+      status = await diagnostics.stopHeapSnapshotRound()
+    } catch (err) {
+      reportCommandFailure(notifications, err)
+      return
+    }
+    notifications.notify(
+      status.phase === 'capturing'
+        ? {
+            // There is no cancel API: saying "stopped" here would have the user believe
+            // the freeze ended while it has not.
+            severity: Severity.Warning,
+            sticky: true,
+            message: localize(
+              'heapSnapshot.stop.inFlight',
+              'No further snapshots will be taken. One is being written right now and cannot be cancelled — the window stays paused until it finishes.',
+            ),
+          }
+        : {
+            severity: Severity.Info,
+            message: describeHeapSnapshotStatus(status),
+          },
+    )
+  }
+}
+
+/**
+ * 服务调用失败必须说出来：命令点了却没反应，用户只会以为按钮坏了。
+ */
+function reportCommandFailure(notifications: INotificationService, err: unknown): void {
+  notifications.notify({
+    severity: Severity.Error,
+    message: localize('heapSnapshot.commandFailed', 'Memory diagnosis failed: {message}', {
+      message: err instanceof Error ? err.message : String(err),
+    }),
+  })
+}
+
+/** 打开快照目录。路径由 main 决定；renderer 永远不传路径进来。 */
+export class OpenHeapSnapshotsFolderAction extends Action2 {
+  static readonly ID = 'workbench.action.openHeapSnapshotsFolder'
+  constructor() {
+    super({
+      id: OpenHeapSnapshotsFolderAction.ID,
+      title: localize2('action.openHeapSnapshotsFolder.title', 'Open Memory Snapshots Folder'),
+      category: localize2('command.category.help', 'Help'),
+      menu: { id: MenuId.MenubarHelpMenu, group: '5_tools', order: 7 },
+      f1: true,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const diagnostics = accessor.get(IDiagnosticsService)
+    const notifications = accessor.get(INotificationService)
+    try {
+      await diagnostics.revealHeapSnapshotsFolder()
+    } catch (err) {
+      notifications.notify({
+        severity: Severity.Error,
+        message: localize(
+          'heapSnapshot.revealFailed',
+          'Could not open the snapshots folder: {message}',
+          { message: err instanceof Error ? err.message : String(err) },
+        ),
+      })
+    }
   }
 }

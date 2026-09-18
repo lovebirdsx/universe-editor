@@ -26,6 +26,27 @@ function fakeHolder(budgetId: string, bytes: number, lastIngestAt: number) {
 }
 
 describe('AcpResidentBudget', () => {
+  it('counts registrations, so a holder that never unregisters is countable', () => {
+    // Reported on the heap sample: bytes alone cannot show a registration that was
+    // never disposed, because its content sits inside the total already reported.
+    const budget = new AcpResidentBudget(1000)
+    expect(budget.holderCount()).toBe(0)
+
+    const a = fakeHolder('a', 100, 1)
+    const b = fakeHolder('b', 100, 2)
+    const registration = budget.register(a.holder)
+    const second = budget.register(b.holder)
+    expect(budget.holderCount()).toBe(2)
+
+    registration.dispose()
+    expect(budget.holderCount()).toBe(1)
+    // Disposing twice must not drive the count below the truth.
+    registration.dispose()
+    expect(budget.holderCount()).toBe(1)
+    second.dispose()
+    expect(budget.holderCount()).toBe(0)
+  })
+
   it('leaves everyone alone while the total is under budget', () => {
     const budget = new AcpResidentBudget(1000)
     const a = fakeHolder('a', 300, 1)

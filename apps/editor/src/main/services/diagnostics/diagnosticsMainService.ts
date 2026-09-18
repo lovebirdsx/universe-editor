@@ -15,13 +15,18 @@ import { basename, join } from 'node:path'
 import { getAppVersion } from '../../appVersion.js'
 import {
   Disposable,
+  Emitter,
+  Event,
   type ILogger,
   ILoggerService,
   createNamedLogger,
 } from '@universe-editor/platform'
 import type {
   AbnormalExitInfo,
+  HeapSnapshotEvent,
+  HeapSnapshotStatus,
   IDiagnosticsService,
+  WireHeapCount,
   WireHeapFlow,
   WireHeapGauge,
   WireHeapHolder,
@@ -30,6 +35,8 @@ import type {
 import type { AbnormalExitReport } from '../../sessionSentinel.js'
 import { SESSION_DIR_RE } from '../log/logMainService.js'
 import { collectSessionLogTails } from '../log/logTails.js'
+import { HEAP_SNAPSHOT_THRESHOLDS } from './heapSnapshotPolicy.js'
+import type { HeapSnapshotController, HeapSnapshotWindowHost } from './heapSnapshotController.js'
 import {
   aggregateErrorFingerprints,
   buildIssueMarkdown,
@@ -113,6 +120,13 @@ export interface RendererHeapRecord {
   readonly flow?: readonly WireHeapFlow[]
   /** Absolute proxies for memory the V8 heap reading cannot see. */
   readonly gauge?: readonly WireHeapGauge[]
+  /** Populations the renderer knows exactly; a zero here is a reading, not silence. */
+  readonly counts?: readonly WireHeapCount[]
+  /**
+   * renderer 自报的每次启动 id。不打印——它的用处是让快照控制器把「上一个 renderer 的迟到
+   * 样本」和新鲜样本区分开。
+   */
+  readonly incarnation?: string
 }
 
 function formatHolders(holders: readonly WireHeapHolder[]): string {
@@ -130,15 +144,42 @@ function formatGauge(gauge: readonly WireHeapGauge[]): string {
   return gauge.map((g) => `${g.name}:${g.value}`).join(',')
 }
 
+function formatCounts(counts: readonly WireHeapCount[]): string {
+  return counts.map((c) => `${c.name}:${c.value}`).join(',')
+}
+
+/**
+ * What the reported holders do not account for, in MB — the number the 2026-09-18
+ * package could not state ("2GB heap, 32MB of registered caches, nothing in between").
+ *
+ * Deliberately named `unexplained`: the holder estimates cover a subset of what lives
+ * in the JS heap (the V8 internals, Monaco's own objects and everything unmeasured sit
+ * on the other side), so the difference is "not explained by the current estimates" and
+ * nothing more. It is not a leak, not a lost allocation, and not a defect count.
+ *
+ * Omitted when no holder was reported at all: there the whole reading is unexplained by
+ * construction, and the absence of the `holders=` segment already says so.
+ */
+function unexplainedMB(record: RendererHeapRecord): number | undefined {
+  if (record.holders.length === 0) return undefined
+  let accounted = 0
+  for (const holder of record.holders) accounted += holder.bytes
+  return Math.max(0, Math.round((record.used - accounted) / 1024 / 1024))
+}
+
 export function formatRendererHeapSample(record: RendererHeapRecord): string {
   const mb = (bytes: number): number => Math.round(bytes / 1024 / 1024)
   const pct = record.limit > 0 ? ` usedPct=${((record.used / record.limit) * 100).toFixed(1)}` : ''
   const holders = record.holders.length > 0 ? ` holders=${formatHolders(record.holders)}` : ''
+  const unexplained = unexplainedMB(record)
+  const unexplainedField = unexplained === undefined ? '' : ` unexplained=${unexplained}MB`
   const flow = record.flow && record.flow.length > 0 ? ` flow=${formatFlow(record.flow)}` : ''
   const gauge = record.gauge && record.gauge.length > 0 ? ` gauge=${formatGauge(record.gauge)}` : ''
+  const counts =
+    record.counts && record.counts.length > 0 ? ` counts=${formatCounts(record.counts)}` : ''
   return (
     `renderer-heap window=${record.window} used=${mb(record.used)}MB ` +
-    `limit=${mb(record.limit)}MB${pct} level=${record.level}${holders}${flow}${gauge}`
+    `limit=${mb(record.limit)}MB${pct} level=${record.level}${holders}${unexplainedField}${flow}${gauge}${counts}`
   )
 }
 
@@ -227,6 +268,17 @@ function sanitizeHeapSample(
     const value = wireAmount(entry['value'])
     return name === undefined || value === undefined ? undefined : { name, value }
   })
+  // `wireCount` (not `wireAmount`): a population is a non-negative integer, and 0 is
+  // accepted here — unlike a gauge, "no session is live" is a reading worth keeping.
+  const counts = scanWireList<WireHeapCount>(sample.counts, (entry) => {
+    const name = wireName(entry)
+    const value = wireCount(entry['value'])
+    return name === undefined || value === undefined ? undefined : { name, value }
+  })
+  const incarnation =
+    typeof sample.incarnation === 'string' && /^[a-z0-9-]{1,40}$/i.test(sample.incarnation)
+      ? sample.incarnation
+      : undefined
   return {
     window: windowId,
     used: sample.used,
@@ -235,6 +287,22 @@ function sanitizeHeapSample(
     holders,
     ...(flow.length === 0 ? {} : { flow }),
     ...(gauge.length === 0 ? {} : { gauge }),
+    ...(counts.length === 0 ? {} : { counts }),
+    ...(incarnation === undefined ? {} : { incarnation }),
+  }
+}
+
+/** 快照已接线但没武装任何轮次时，窗口看到的状态。 */
+function offStatus(): HeapSnapshotStatus {
+  return {
+    active: false,
+    phase: 'off',
+    attempts: 0,
+    attemptLimit: HEAP_SNAPSHOT_THRESHOLDS.maxAttemptsPerRound,
+    appAttempts: 0,
+    appAttemptLimit: HEAP_SNAPSHOT_THRESHOLDS.maxAttemptsPerApp,
+    artifacts: 0,
+    bytes: 0,
   }
 }
 
@@ -251,6 +319,16 @@ export function createWindowScopedDiagnostics(
     exportDiagnosticsZip: () => diagnostics.exportDiagnosticsZip(),
     createDiagnosticsZip: () => diagnostics.createDiagnosticsZip(),
     reportRendererHeapSample: (sample) => diagnostics.reportRendererHeapSample(sample, windowId),
+    startHeapSnapshotRound: () => diagnostics.startHeapSnapshotRound(windowId),
+    stopHeapSnapshotRound: () => diagnostics.stopHeapSnapshotRound(windowId),
+    getHeapSnapshotStatus: () => diagnostics.getHeapSnapshotStatus(windowId),
+    revealHeapSnapshotsFolder: () => diagnostics.revealHeapSnapshotsFolder(),
+    // 在这里按 main 自己的窗口 id 过滤：无论载荷怎么构造，A 窗口的轮次报告都不会在
+    // B 窗口弹出通知。
+    onDidChangeHeapSnapshot: Event.filter(
+      diagnostics.onDidChangeHeapSnapshot,
+      (event) => event.windowId === windowId,
+    ),
   }
 }
 
@@ -265,6 +343,17 @@ export class DiagnosticsMainService extends Disposable implements IDiagnosticsSe
    */
   private readonly _metricsLogger: ILogger
   private _pendingAbnormalExit: AbnormalExitInfo | null = null
+
+  /**
+   * Absent until main-services wires one (and in the zip/notification-only tests).
+   * Everything the facade exposes degrades to "off" without it rather than throwing:
+   * a diagnostics build that cannot snapshot must still be able to report.
+   */
+  private _heapSnapshots: HeapSnapshotController | undefined
+
+  private readonly _onDidChangeHeapSnapshot = new Emitter<HeapSnapshotEvent>()
+  /** One stream for the whole app; each window's wrapper filters it by window id. */
+  readonly onDidChangeHeapSnapshot: Event<HeapSnapshotEvent> = this._onDidChangeHeapSnapshot.event
 
   // Preallocated so recording never allocates: the samples arrive over IPC and the
   // interesting ones arrive while the sender is already out of heap.
@@ -313,7 +402,101 @@ export class DiagnosticsMainService extends Disposable implements IDiagnosticsSe
     }
     this._heapCursor = (this._heapCursor + 1) % RENDERER_HEAP_RING
     if (this._heapFilled < RENDERER_HEAP_RING) this._heapFilled++
+    this._feedHeapSnapshots(record)
     return Promise.resolve()
+  }
+
+  /**
+   * 把*已消毒*的读数交给快照控制器。控制器按自己的钟重新判断，这里绝不等它：堆样本的 IPC
+   * 回复不能被一次可能冻结窗口几十秒的抓取卡在后面。
+   */
+  private _feedHeapSnapshots(record: RendererHeapRecord): void {
+    const controller = this._heapSnapshots
+    if (controller === undefined) return
+    let holdersBytes = 0
+    for (const holder of record.holders) holdersBytes += holder.bytes
+    try {
+      controller.reportSample({
+        windowId: record.window,
+        at: Date.now(),
+        used: record.used,
+        limit: record.limit,
+        holdersBytes,
+        ...(record.incarnation === undefined ? {} : { incarnation: record.incarnation }),
+      })
+    } catch (err) {
+      this._logger.warn(
+        `heap snapshot sample rejected: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
+  }
+
+  /**
+   * 接上跨窗口的快照控制器。它在 main-services 里构造（那边管快照目录和共享采样器），在这里
+   * 挂上是因为控制器要经本服务的事件流上报。
+   */
+  attachHeapSnapshotController(controller: HeapSnapshotController): void {
+    this._heapSnapshots = controller
+  }
+
+  /** 控制器每报告一次就调用；再由 emitter 按窗口分发出去。 */
+  publishHeapSnapshotEvent(event: HeapSnapshotEvent): void {
+    this._onDidChangeHeapSnapshot.fire(event)
+  }
+
+  /** Late-bound by main/index.ts, exactly like the bug recorder's window provider. */
+  setHeapSnapshotWindowHost(host: HeapSnapshotWindowHost): void {
+    this._heapSnapshots?.setWindowHost(host)
+  }
+
+  /** Reload / close: the round measured a renderer that is gone, so it ends with it. */
+  invalidateWindowRenderer(windowId: number, reason: 'window-reloaded' | 'window-closed'): void {
+    this._heapSnapshots?.invalidateWindow(windowId, reason)
+  }
+
+  /**
+   * 为一个窗口武装一轮。额度按轮和按应用运行各算一份：已武装时再调用是空操作，第二次点击
+   * 不会白送一对新的尝试机会。
+   *
+   * `windowId` 默认 0 =「没有窗口」，与 `reportRendererHeapSample` 一致：不是从按窗口包装的
+   * 通道进来的调用报不出窗口，而窗口 0 解析不到活 renderer，所以结果是被拒绝，而不是抓错堆。
+   */
+  startHeapSnapshotRound(windowId = 0): Promise<HeapSnapshotStatus> {
+    return Promise.resolve(this._heapSnapshots?.start(windowId) ?? offStatus())
+  }
+
+  stopHeapSnapshotRound(windowId = 0): Promise<HeapSnapshotStatus> {
+    return Promise.resolve(this._heapSnapshots?.stop(windowId) ?? offStatus())
+  }
+
+  getHeapSnapshotStatus(windowId = 0): Promise<HeapSnapshotStatus> {
+    return Promise.resolve(this._heapSnapshots?.status(windowId) ?? offStatus())
+  }
+
+  /**
+   * 打开快照目录，需要时先创建。系统拒绝打开时抛错：用户是显式点了这个动作的，静默无响应会
+   * 让人以为快照丢了。
+   */
+  async revealHeapSnapshotsFolder(): Promise<void> {
+    const dir = this._heapSnapshots?.directory
+    if (dir === undefined) return
+    try {
+      await fs.mkdir(dir, { recursive: true })
+    } catch (err) {
+      throw new Error(
+        `cannot create the snapshot directory: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
+    if (this._options.revealInShell === false) return
+    const failure = await shell.openPath(dir)
+    if (failure) throw new Error(failure)
+  }
+
+  override dispose(): void {
+    this._onDidChangeHeapSnapshot.dispose()
+    this._heapSnapshots?.dispose()
+    this._heapSnapshots = undefined
+    super.dispose()
   }
 
   /** Called by the bootstrap once the sentinel has been read (before any window asks). */
@@ -395,6 +578,11 @@ export class DiagnosticsMainService extends Disposable implements IDiagnosticsSe
 
     const frames = this._options.readIpcFrames?.()
     zip.addFile('ipc-frames.txt', Buffer.from(frames ?? '(ipc frame record unavailable)\n', 'utf8'))
+
+    // 快照是几百 MB 的原始堆，里面装着当时堆上的各种字符串。zip 要发去问题跟踪系统，
+    // 所以只列清单，永不打包内容。
+    const manifest = await this._heapSnapshots?.formatManifest().catch(() => undefined)
+    zip.addFile('heap-snapshots.txt', Buffer.from(manifest ?? '(no heap snapshots)\n', 'utf8'))
 
     await fs.mkdir(this._options.diagnosticsDir, { recursive: true })
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)

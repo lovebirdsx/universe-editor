@@ -126,6 +126,7 @@ import type { IScmWorkingTreeHintService } from '../services/scm/ScmWorkingTreeH
 import type { IScmBehindHintService } from '../services/scm/ScmBehindHintService.js'
 import type { IAiDebugService } from '../../shared/ipc/aiDebugService.js'
 import type { IFileClipboardService } from '../../shared/ipc/fileClipboardService.js'
+import type { IDiagnosticsService } from '../../shared/ipc/services.js'
 import type { ExplorerTreeService } from '../services/explorer/ExplorerTreeService.js'
 import type { EditorGroupsService } from '../services/editor/EditorGroupsService.js'
 import type { IExtensionManagementService } from '../../shared/ipc/extensionManagementService.js'
@@ -177,6 +178,7 @@ export interface E2EProbeServices {
   readonly timerService: ITimerService
   readonly interactionPerfService: IInteractionPerfService
   readonly memoryPressureService: IMemoryPressureService
+  readonly diagnosticsService: IDiagnosticsService
   readonly explorerTreeService: ExplorerTreeService
   readonly fileService: IFileService
   readonly textSearchMainService: ITextSearchMainService
@@ -2283,6 +2285,24 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       gauge: readHeapGauges(),
       codeHtmlBytes: readCodeHtmlBytes(),
     }),
+    // Read-only view of main's round state. Starting a round stays the user's call (the
+    // command + its consent dialog), so this exists purely so a spec can tell "armed and
+    // waiting for a stable baseline" from "over, because the window reloaded".
+    getHeapSnapshotStatus: async () => {
+      const status = await services.diagnosticsService.getHeapSnapshotStatus()
+      return {
+        active: status.active,
+        phase: status.phase,
+        attempts: status.attempts,
+        attemptLimit: status.attemptLimit,
+        appAttempts: status.appAttempts,
+        appAttemptLimit: status.appAttemptLimit,
+        artifacts: status.artifacts,
+        bytes: status.bytes,
+        ...(status.code === undefined ? {} : { code: status.code }),
+        ...(status.detail === undefined ? {} : { detail: status.detail }),
+      }
+    },
     driveSwarmNotificationPoll: async () => {
       await swarmNotificationE2E.driveRefresh?.()
     },

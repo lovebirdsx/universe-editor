@@ -26,7 +26,18 @@ function tabMetric(pid: number, mb: number): unknown {
   }
 }
 
+/** Same row, with the Windows-only private-bytes counter Electron also reports. */
+function tabMetricWithPrivate(pid: number, mb: number, privateMb: number): unknown {
+  return {
+    pid,
+    type: 'Tab',
+    memory: { workingSetSize: mb * 1024, privateBytes: privateMb * 1024 },
+    cpu: { percentCPUUsage: 1 },
+  }
+}
+
 const {
+  formatAppMetricsLine,
   formatMainHeapSample,
   MAIN_HEAP_WARN_BYTES,
   MAIN_HEAP_BUSY_BYTES,
@@ -37,7 +48,11 @@ const {
   processMetricsIntervalMs,
   installProcessMetricsLogging,
 } = await import('../crashMonitoring.js')
+const { formatSystemMemoryLine } = await import('../services/diagnostics/systemMemorySampler.js')
+const { parseExitScene } = await import('../exitSceneForensics.js')
 type ProcessItem = import('../services/processMonitor/processList.js').ProcessItem
+type SystemMemorySample =
+  import('../services/diagnostics/systemMemorySampler.js').SystemMemorySample
 
 describe('formatMainHeapSample', () => {
   it('formats heapUsed/heapTotal/external/rss in rounded MB', () => {
@@ -64,6 +79,36 @@ describe('formatMainHeapSample', () => {
 describe('MAIN_HEAP_WARN_BYTES', () => {
   it('is 1.5GB — the agreed pre-OOM warn threshold', () => {
     expect(MAIN_HEAP_WARN_BYTES).toBe(1536 * 1024 * 1024)
+  })
+})
+
+describe('formatAppMetricsLine', () => {
+  it('keeps mem= as the working set and appends private bytes in MB', () => {
+    // workingSetSize/privateBytes come from Electron in KB and are converted here, where
+    // the unit is known — a reader that divided again would report a 1024x smaller app.
+    const line = formatAppMetricsLine([tabMetricWithPrivate(1234, 722, 4096) as never])
+    expect(line).toBe('pid=1234 type=Tab mem=722MB cpu=1% privateBytes=4096MB')
+  })
+
+  it('omits private bytes where the platform does not report them', () => {
+    const line = formatAppMetricsLine([tabMetric(7, 100) as never])
+    expect(line).toBe('pid=7 type=Tab mem=100MB cpu=1%')
+    expect(line).not.toContain('privateBytes')
+  })
+
+  it('stays readable by the forensics parser that reads these lines back', () => {
+    // The extra field is only safe after cpu=, where APP_METRICS_RE stops: a number
+    // moved in front of mem= would swallow the working set into `type`.
+    const line = formatAppMetricsLine([
+      tabMetricWithPrivate(1929756, 722, 4096) as never,
+      tabMetric(99, 2100) as never,
+    ])
+    const scene = parseExitScene(`[12:00:00] [info] ${line}`, { sessionStartMs: 0 })
+    expect(scene.sampleCount).toBe(1)
+    expect(scene.renderers.map((p) => [p.pid, p.peakMB, p.type])).toEqual([
+      [99, 2100, 'Tab'],
+      [1929756, 722, 'Tab'],
+    ])
   })
 })
 
@@ -146,8 +191,44 @@ describe('installProcessMetricsLogging', () => {
     expect(info.some((l) => l.includes('pid=1') && l.includes('type=Tab'))).toBe(true)
   })
 
-  it('TAB_WORKING_SET_WARN_BYTES is 2GB — under the kill point, with room to react', () => {
+  it('TAB_WORKING_SET_WARN_BYTES is 2GB — below the observed peak, with room to react', () => {
     expect(TAB_WORKING_SET_WARN_BYTES).toBe(2 * 1024 * 1024 * 1024)
+  })
+
+  it('logs the system commit reading from the sampler cache, without querying itself', async () => {
+    const lines: string[] = []
+    const sample: SystemMemorySample = {
+      status: 'ok',
+      at: 0,
+      ageMs: 0,
+      commit: {
+        committedBytes: 12 * 1024 * 1024 * 1024,
+        commitLimitBytes: 16 * 1024 * 1024 * 1024,
+        commitHeadroomBytes: 4 * 1024 * 1024 * 1024,
+      },
+      availablePhysicalBytes: 2 * 1024 * 1024 * 1024,
+      totalPhysicalBytes: 32 * 1024 * 1024 * 1024,
+    }
+    appMetrics.current = [tabMetric(1, 100)]
+    const disposable = installProcessMetricsLogging(
+      { createLogger: () => ({ info: (l: string) => lines.push(l), warn: () => {} }) as never },
+      { readSystemMemory: () => sample },
+    )
+    try {
+      expect(lines).toContain(formatSystemMemoryLine(sample))
+      expect(lines.some((l) => l.startsWith('system-memory status=ok'))).toBe(true)
+      // Read synchronously from the cache: the first sample must not wait on a query.
+      expect(lines.some((l) => l.includes('commitHeadroom=4096MB'))).toBe(true)
+    } finally {
+      disposable.dispose()
+      appMetrics.current = []
+    }
+  })
+
+  it('keeps sampling when no system reading is available', () => {
+    const { info } = sampleOnce([tabMetric(1, 100)])
+    expect(info.some((l) => l.startsWith('system-memory'))).toBe(false)
+    expect(info.some((l) => l.startsWith('main-heap '))).toBe(true)
   })
 
   describe('hosted process tree', () => {

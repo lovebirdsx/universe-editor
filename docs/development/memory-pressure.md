@@ -50,7 +50,9 @@
 - 采样器用**自重排 `setTimeout`，绝不用 `requestIdleCallback`**：主线程被 GC 挤占时永远不会 idle，恰恰是最需要采样的时刻。正常 5s、受压 1s。
 - **堆曲线要送到 main 才能在崩溃后活下来**（`rendererHeapReporter.ts`）：renderer 是它自己 V8 堆的唯一观测者，而 `processMetrics.log` 由 main 写——不送出去，曲线就与它所描述的进程同生共死。上报走已有的 `IDiagnosticsService` 通道（不新开通道），**复用采样器自己的定时循环**（不另起 timer），节流 30s / 受压 5s，`_reportedAt` 初值 0 使**首个读数必上报**（启动两分钟就崩的场景正是 30s 节流会整段漏掉的）。上报是 fire-and-forget 且吞掉 rejection——它绝不能带走唯一的堆观测者。
 - **落盘格式**：`renderer-heap window=1 used=3200MB limit=4096MB usedPct=78.1 level=critical holders=acp:412MB,monaco:38MB(12)`，写进**与 `main-heap` 同一个** `processMetrics.log`（同一时间线）。main 侧 32 槽预分配 ring：平时是 16 分钟，受压后同一只 ring 变成 160 秒的密集崩溃前窗口。`level` 先过白名单正则再落日志（防换行注入），`used` 非有限/≤0 的样本**丢弃而不是写 0**——写 0 会读成"堆很健康"，正是最不该在出事报告上出现的结论。被丢的样本计入 `dropped=N`（0 时省略）：否则"从没有过曲线"和"每一条都被拒"是同一份文件，而这是两个相反的结论。受压时 `holders=` 之后还会追加 `flow=` 与 `gauge=` 两组（见下文第五类缺口），**为空则两组整体省略**，所以旧格式逐字不变。
-- **`holders=` 是判定而非数值**：`acp` 取 `sharedResidentBudget.totalBytes()`（O(1)），`monaco` 取 `editor.getModels()` 的条数与 `getValueLength()` 之和，`codehtml` 取当前挂在已挂载代码块上的着色 HTML 字节（见第五类缺口；**不含 mermaid 图**——`MermaidBlock` 走另一条渲染分支，它渲染出的 SVG 是同类的大字符串但没有计入，看到 `codehtml` 很小时别把它排除干净），`changes` 取 `sessionChangeTracker` 的序列化记录与活行文本之和（见下），`output` 取各输出通道的 `retainedChars` 之和。**若已知持有者之和远小于 `used`，结论就是"元凶不在已知持有者里"**，这直接把搜索范围推出嫌疑圈——比数值本身更有用。判据的方向性要注意：`monaco` 按每条线 2 字节（UTF-16 上界）**高估**，所以它单独就能把差值抹平，即这份判据偏保守（倾向于"嫌疑人已覆盖"）。窗口号由 `createWindowScopedDiagnostics` 在 main 侧盖章（照 `createWindowScopedErrorSink` 先例），renderer 伪造不了。
+- **`holders=` 是判定而非数值**：`acp` 取 `sharedResidentBudget.totalBytes()`（O(1)），`monaco` 取 `editor.getModels()` 的条数与 `getValueLength()` 之和，`codehtml` 取当前挂在已挂载代码块上的着色 HTML 字节（见第五类缺口；**不含 mermaid 图**——`MermaidBlock` 走另一条渲染分支，它渲染出的 SVG 是同类的大字符串但没有计入，看到 `codehtml` 很小时别把它排除干净），`changes` 取 `sessionChangeTracker` 的序列化记录与活行文本之和（见下），`output` 取各输出通道的 `retainedChars` 之和。**若已知持有者之和远小于 `used`，结论就是"元凶不在已知持有者里"**，这直接把搜索范围推出嫌疑圈——比数值本身更有用。判据的方向性要注意：`monaco` 按每条线 2 字节（UTF-16 上界）**高估**，所以它单独就能把差值抹平，即这份判据偏保守（倾向于"嫌疑人已覆盖"）。窗口号由 `createWindowScopedDiagnostics` 在 main 侧盖章（照 `createWindowScopedErrorSink` 先例），renderer 伪造不了。线尾还会带上 `unexplained=<n>MB`（`used − Σholders`，2026-09-18 那份包报不出来的中间数）：它**只**表示「当前估算没有解释的部分」，不是泄漏、不是丢失的分配、更不是缺陷计数——`holders` 覆盖的本来就是堆的一个子集（V8 内部结构、Monaco 自己的对象、以及所有没被计量的东西都在另一侧）。完全没有 holder 上报时整段省略（那种读数的「没解释」是构造性的，缺这段本身就在说这件事）。
+- **`counts=` 报的是个数，与字节分开**：`sessions:<n>,budget.holders:<n>,pool:<n>` 由 renderer 以 O(1) 只读 getter 取（`acpSessionService.sessions` / `acpResidentBudget` 的 Set / `acpClientService` 连接池），**不遍历正文、不新增全域 IPC 计数**。口径与 `gauge` 刻意不同：`count` 返回 0 **照写**（0 个会话是一个读数），读不到（服务没装配/取数抛错）则该条目整体缺席——「一个都没有」和「这个构建没有这个服务」不能塌成同一行。读法：`used` 涨而 `counts` 不涨，指向单个会话/单条连接的体量；`counts` 涨而 `holders` 不涨，说明涨的那部分没有被任何已登记的预算管着。
+- **每个样本带 renderer 自证身份的 `incarnation`**（每次 renderer 启动生成），main 侧连同 windowId/PID/导航代次一起盖章。它挡的是「上一个 renderer 的样本迟到、被算到接替它的那个堆头上」——导航代次在 reload 场景能挡住，但同一代次内被替换掉的帧（IPC 在途）只能靠它。快照轮次（见下）额外要求同一 incarnation，否则宁可丢一个样本。
 - `boundedCache.ts`：通用 LRU + 条数上限 + 字节预算 + pin。**measure 函数同时用于准入与释放报告**——两个数字不一致的缓存会让内存日志谎报堆的去向。
 
 注册的 releaser（`MemoryPressureContribution`）：
@@ -119,10 +121,55 @@
   - `markRendererFramesUnreachable` **不**触发 `onDidClose`：那会拆掉 ChannelServer 的订阅，对**已确认**死亡的 renderer 是对的，对"从一行日志推断出来的"不是。
 - **延迟 reload**：崩溃对话框是窗口模态，无人点击则 `.then()` 永不 resolve，而 `win.reload()` 就在 `.then()` 里（现场黑屏 15m21s）。改为 20s 超时自动 reload + 崩溃风暴退避（5 分钟内 ≥3 次只提示不自动重载），`settled` 标志防双重动作。**不改成"先 reload 再提示"**——风暴下会无限重载。同理，风暴期间**对话框自身 reject 也不重载**（那会绕过退避变成无限重载循环，正是退避要防的事）；黑窗是这里的较小恶，下次启动的异常退出计数会提供「跳过恢复」。
 
+## 按需受控堆快照（用户开启一次，自动采两份）
+
+计数器与水位能缩小到「某一类」，回答不了「这 2GB 是谁持有的」。2026-09-18 那份包里 `used` 约 2GB、已登记的业务缓存约 32MB——中间那 1.9GB 在 `holders` 名单之外，而没有任何对象图可以拿去追引用链。这一段就是补那份对象图：**用户显式开启、本机保存、按轮次限额**，只在需要复现时用。
+
+> ⚠️ 先读这一句：**这不是「已修未知泄漏」**。它是取证据的手段，不是止血；未知泄漏仍在（`ipc-frames.txt` 里那条「同一份内容被反复读回来」的第四类缺口、以及所有没进 `holders` 的持有路径）。快照本身也会暂停窗口并额外分配内存，资源检查只是准入判断，不是内存硬保证——**不承诺固定耗时，也不承诺绝不 OOM**。
+
+**入口与授权范围**（`renderer/actions/helpActions.ts`，Help 菜单 `5_tools` 组 + 命令面板；无快捷键）
+
+- 「开始内存诊断」`workbench.action.startHeapSnapshotDiagnostics`：先弹确认框（`IDialogService.confirm`，warning）——讲清四件事：**只诊断当前窗口**、采集期间**窗口会暂停数秒至数十秒**、快照是**当时堆里的字符串副本（可能含文件内容、会话正文、凭据）**、**只写本机且不会自动上传**；停止**不会取消**已经开始的那一份。跳过这个对话框就等于在这四件事上撒谎，所以它是命令的一部分，不是可选装饰。
+- 「停止内存诊断」`…stopHeapSnapshotDiagnostics`：停住**后续**抓取。正在写的那份按「仍在写、无法取消」上报（`takeHeapSnapshot` 没有取消 API），**绝不写「已停止」**——那会让用户以为冻结结束了。
+- 「打开内存快照目录」`…openHeapSnapshotsFolder`：路径由 main 决定，renderer 不传路径进来。
+- **默认关闭、不持久化、没有任何配置项能开启它**（不存在可被工作区 settings 静默打开的键）；重复开启幂等（不重置本轮预算）；**全应用额度用尽时「开始」当场拒绝并说明理由**（不先发「已开启」再收回）；reload / 关窗即停止；一轮最长 **2 小时**（轮次自带到期计时器，**没有任何样本也会到期**，`status` 查询同样会先结账）。**同一次开始/停止只有一条通知**：开局、拒绝、结束一律由轮次事件流报，命令只报事件报不出来的那几种（重复点开始→回状态、服务未接上、IPC 失败），用户主动停止则是命令自己报、控制器静默。三条命令都**不带 icon**：`registerAction2` 会把 `desc.icon` 撒进它声明的每个菜单槽位，而菜单栏下拉只要有一项带图标就整组开启图标列（`iconCoverage.test.ts` 断言菜单栏一律无图标）；palette 侧也不读命令图标。
+
+**一轮的判定链**（纯数值决策在 `main/services/diagnostics/heapSnapshotPolicy.ts`，注入时钟；编排与身份在 `heapSnapshotController.ts`）
+
+| 阶段 | 判据 | 常量 |
+|---|---|---|
+| 基线 | 武装后 ≥60s、≥3 个有效样本、样本波动 ≤ 均值 10% | `minArmMs` / `minSamples` / `baselineBandRatio` |
+| 拍摄上限 | `min(1GiB, 30% × V8 堆上限)`；堆上限从没上报过 → **永不自动拍** | `captureMaxBytes` / `captureLimitRatio` |
+| 基线大小 | 堆 ≤ `min(512MiB, 拍摄上限/2)` 才拍 | `baselineMaxBytes` |
+| 增长 | 参照点 = 基线之后**最低**的读数（抓取会推一次 GC，拿第一个样本当参照会把回升报成增长）；阈值 `max(256MiB, 50%×基线)`，再收窄到剩余余量的一半 | `growthMinBytes` / `growthBaselineRatio` |
+| 持续性 | 连续 ≥3 个样本在阈值之上、且跨度 ≥60s | `growthSamples` / `growthSpanMs` |
+| 已知解释 | 已知 holder 的增长 ≥ 涨幅的 50% → 判为「已被解释」，不拍 | `holderExplainRatio` |
+| 新鲜度 | 样本比 45s 更旧 → 失去依据（窗口可能已不再上报），**只拦住这一次抓取、不结束轮次** | `sampleFreshMs` |
+| 频次 | 两次抓取间隔 ≥5 分钟；每窗口每轮 ≤2 次调用（**失败也算**）；整个应用运行期 ≤4 次（停止/重开**不重置**，用尽则「开始」当场拒绝）；失败即结束本轮 | `minCaptureSpacingMs` / `maxAttemptsPerRound` / `maxAttemptsPerApp` |
+
+> 参照点是**独立于滑窗**的一条低水位记录（值 + 当时的 holders + 时间），只在出现新低谷时下调、**永不上调**，也不随滑窗淘汰。曾经的做法是每轮从保留的 24 个样本里现取最小值：窗口一滚，参照点就跟着被抬走，于是「每个采样周期涨 1MiB」这类慢速爬升永远够不到阈值——阈值本身在跟着一起涨。`heapSnapshotPolicy.test.ts` 里那条 20 分钟慢爬用例就是照这个形状写的（默认阈值、5s 节奏）。
+
+**资源与并发闸门**
+
+- 只用**当前窗口的新鲜样本**（≤45s，时间取 **main 的接收时刻**，不信 renderer 自己的钟）。同一套复核（`_revalidate`）在**建目录之前和之后各走一遍**，最后再**同步重读一次资源读数**才调用抓取：`fs.mkdir` / `statfs` 这些 await 在慢盘上可能比整个准入检查还久，等待期间轮次可能到期、renderer 可能被换掉、样本可能变旧。三类问题的后果**刻意不同**：窗口/身份/时限出问题 → **结束轮次**（那个堆已经没人有了，抓到的文件只能丢弃，不能改名留下）；样本过期或上限不够 → **只拦住这一次抓取**（窗口暂停上报不等于诊断出错，下个样本会重新判断），且按 code 折叠提示、不刷屏。
+- **窗口没了**（`no-target` / `window-closed`）与**窗口还在但 renderer 已死**（`renderer-unavailable`，命令开始时的拒绝和运行中掉线共用同一个码）是两种结局，不许合并：把崩溃的 renderer 报成「窗口已关闭」会指向一个用户看不见的事件，他只会去找一个明明还开着的窗口。
+- 可用物理内存 ≥ `max(2GiB, 2×used)`——这一项**每次现读 `os.freemem()`**，不复用采样器缓存：缓存里的空闲物理内存是 commit 查询那一刻的伴随读数，两次之间可能隔一分钟，拿过期的数当现在正好会在最不该猜的时候猜；Windows 还要求**新鲜**的 commit 读数（≤90s）且提交余量 ≥ `max(2GiB, 2×used)`（commit 必须起进程去问，所以共用采样器缓存，但状态里带着年龄）；磁盘 ≥ `2GiB + 2×used`。读数失败或陈旧**保守跳过并明确说明**（`disk-unknown` / `commit-unknown`），**绝不猜**；非 Windows 不把「平台没有 commit 记账」当成错误（`unsupported` ≠ 失败）。目录**读不出来**（非 ENOENT）同样按 `disk-unknown` 拒绝，不当成空目录——空目录会让预算闸门失效，而一份读不出来的目录里可能正堆着几 GB。磁盘读数取**最近的已存在祖先**（`diskFreeBytesFor`）：快照目录要到第一次采集成功才建，而 `statfs` 对不存在的路径抛 ENOENT——直接读它会把「目录还没建」读成 `disk-unknown`，而那个拒绝**永远解不开**（只有成功的采集才会建目录）。
+- 整个应用同时只有**一次**真正的抓取，不排无界队列（忙就等下一个样本重新决策，`HeapSnapshotController._inflight`）。`takeHeapSnapshot` 无取消 API：**90s 超时只是提示**（发一条 `capture-stalled`），**不释放并发锁、不启动下一份**；锁在 promise 真正落定时释放。提示发出前要确认「还是不是这个窗口当前那一轮」：reload 后新轮次收到旧轮次的迟到提醒，会把「上一位 renderer 还在写」读成「你现在卡住了」。同理，凡可能迟到的报告（停止、失败、抓取完成、样本判定）都带这一道守卫，被顶替的轮次只留日志、不进事件流。
+- 快照产物与 partial 都受目录预算约束（`4GiB` / `8` 个产物），到顶即停止并**告知用户手动清理**，从不自动删历史文件。
+
+**文件、隐私与诊断包**
+
+- `<userData>/diagnostics/heap-snapshots/`（**刻意不放 `logs/`**：几百 MB 的产物不该被日志保留策略扫掉或被打进报告）。文件名由 main 生成；先写 `heap-<trigger>-w<id>-<stamp>.heapsnapshot.partial`，**API 成功且身份仍匹配**才 rename 成 `.heapsnapshot`，并写同名 `.json` sidecar（trigger / 窗口 / PID / 代次 / 采样值 / 耗时 / 字节数 / 状态）。上次异常退出残留的 partial 只列为 `incomplete`，不直接删。
+- 日志只记 `heap-snapshot captured trigger=… window=… pid=… bytes=… duration=…s`，**不含快照正文**。
+- 诊断 zip 里只有 `heap-snapshots.txt`（**清单**：时间 / 大小 / 类型 / 未完成标记），**永不打包原件**；「报告问题」的上传链路因此不可能把快照发出去——它要发去问题跟踪系统，而快照里装着当时堆上的各种字符串。分享快照只能在用户自己的机器上手工进行（「打开内存快照目录」）。
+- 采集走 `webContents.takeHeapSnapshot(path)`：**不新建 CDP 连接、不调用强制 GC、不解析也不整份加载快照进内存**（对象图从不经过 main 的 JS 堆）。
+- 实测（e2e 冷启空窗口，2026-09-18）：49MB 活跃堆 → 85.5MB 文件 / 耗时 2s，冻结就是这 2s。小堆上固定元数据占比大，**文件/堆比例不是常数**，别按 MB 外推耗时——上表那个 0.55~0.69 是大堆（几百 MB 起）的读数。
+
 ## 诊断包里的相关文件
 
 - `ipc-frames.txt`：main 侧帧环形记录 + 统计 + 最大帧标签。每行/标签形如 `out response fileService.readFile #42`；`#id` 是把它与 renderer 侧告警对上、再与那次请求对上三者的唯一把手。
-- `memory.txt`：main 堆（`formatMainHeapSample`）+ 托管进程树内存（`hosted-processes cnt=… name#pid=…MB/…%`）+ **renderer 堆曲线尾部 32 条**（`renderer-heap samples=32 (newest first)`，最新在前）。曲线进 zip 而不是只留在日志里，是因为日志尾部有 512KiB 截断，会恰好丢掉慢速爬升最早的那几条。
+- `memory.txt`：main 堆（`formatMainHeapSample`）+ **系统提交内存行**（`formatSystemMemoryLine`：Windows 的 `CommittedBytes` / `CommitLimit` / 余量 / `AvailableBytes`，与周期性 metrics 日志共用同一份缓存读数，不会为导出再起一次查询）+ 托管进程树内存（`hosted-processes cnt=… name#pid=…MB/…%`）+ **renderer 堆曲线尾部 32 条**（`renderer-heap samples=32 (newest first)`，最新在前）。曲线进 zip 而不是只留在日志里，是因为日志尾部有 512KiB 截断，会恰好丢掉慢速爬升最早的那几条。
+- `heap-snapshots.txt`：快照目录的**清单**（时间 / 大小 / 类型 / `incomplete` 标记 + 目录预算）。**只有清单，永不打包 `.heapsnapshot` 原件**。
 - `sysinfo.md` / 日志尾部：renderer 侧的 `[memory] …` 行（水位变化时打印 `describe()` + 最近 12 帧）。
 - 详见 [error-diagnostics.md](error-diagnostics.md)。
 
@@ -139,7 +186,7 @@
 - **renderer 侧自己的帧 ring 不进诊断包**：renderer OOM 时来不及落盘，只有 main 侧那份能活到导出。**出站热路径只加一次比较**是硬约束：任何"顺便做点别的"的改动都要先证明它不分配。
 - **被降级的改动行会粘住**：`sessionChangeTracker` 的 `(size, mtime)` 行缓存缓存的是 **cap 之后**的行（必须如此，否则被降级的行会把两份全文永久留在缓存里），所以一行一旦因超预算被降级，只要文件 size/mtime 不变就一直显示 degraded，即使预算压力已经消失。换来的读短路值得这个代价，逃生口也是现成的：文件一动、或 `record()` 再触发一次失效即恢复。
 - **预判降级会多降级一些 CJK 文本**：读之前的预判用 `2 × (baseline 字符数 + size 字节数) > maxLiveChangeBytes`，`chars ≤ bytes` 使它是保守估计（宁可多降级也不多读）。一个 9MiB 的 CJK 文本本该产出约 12MB 的行（预算内），会被直接降级。该门闸的存在意义是：这样的行**必然**会被 `_capLiveChanges` 的 heaviest-first 循环降级，读它是纯浪费。**对 `watched` 无 baseline 的行它按两份文本估算，而该行实际只按引用持有一份**（`baselineSource:'none'` 的 baseline 就是 `current`），即这类超过 8MiB 的文件会被降级、而预算本来容得下 16MiB —— 这是**刻意保留**的保守：事故里那个约 16MiB 的二进制正是这个形状，把门闸放宽到 2× 就等于把那次的读取放回来。
-- **CDP 堆快照（原计划的 2.6）经 spike 判定不做**。计数器只能缩小到"某一类"，回答不了"这 3.8GB 是谁持有的"，所以曾规划让 main 在收到 `level=critical` 样本时用 `webContents.debugger` 触发 `HeapProfiler.takeHeapSnapshot` 落盘。2026-09-15 在 Electron 43.3.0 上实测（`wc.debugger.attach('1.3')` → `HeapProfiler.enable` → `takeHeapSnapshot({reportProgress:true})`，chunk 经 `addHeapSnapshotChunk` 直接流式写文件）：**能连、能拍、renderer 活着、main 侧 RSS 平稳**，但代价使 `critical` 触发点站不住：
+- **CDP 自动堆快照（原计划的 2.6）经 spike 判定不做**（按需能力另见上文「按需受控堆快照」一节）。计数器只能缩小到"某一类"，回答不了"这 3.8GB 是谁持有的"，所以曾规划让 main 在收到 `level=critical` 样本时用 `webContents.debugger` 触发 `HeapProfiler.takeHeapSnapshot` 落盘。2026-09-15 在 Electron 43.3.0 上实测（`wc.debugger.attach('1.3')` → `HeapProfiler.enable` → `takeHeapSnapshot({reportProgress:true})`，chunk 经 `addHeapSnapshotChunk` 直接流式写文件）：**能连、能拍、renderer 活着、main 侧 RSS 平稳**，但代价使 `critical` 触发点站不住：
 
   | 活跃堆 | 快照 | 比值 | 耗时 | renderer 主线程卡顿 |
   |---|---|---|---|---|
@@ -147,7 +194,7 @@
   | 1201 MB | 663 MB | 0.55 | 17.9 s | 18.0 s |
   | 2235 MB | 1542 MB | 0.69 | 42.0 s | 42.0 s |
 
-  **卡顿 == 全程**（三次 `maxStallMs` 与总耗时逐次相等），即快照期间 renderer 主线程完全停摆；耗时约 **15–19 ms / MB 活跃堆**，外推现场的 3.8GB ≈ **70 秒全窗口冻结**，而 renderer RSS 同期涨到约 1.6× 活跃堆。`critical`（≥85% limit）既是最没余量、又正是用户正在交互的时刻，在那里加一分钟冻死会把"可诊断的慢"变成"看起来已经死了"。**要留这条能力就只能是手动/按需**（用户或支持人员在复现时显式触发、窗口已空闲），不能挂自动阈值；且必须先解决卡顿的可接受性，而不是先做触发条件。
+  **卡顿 == 全程**（三次 `maxStallMs` 与总耗时逐次相等），即快照期间 renderer 主线程完全停摆；耗时约 **15–19 ms / MB 活跃堆**，外推现场的 3.8GB ≈ **70 秒全窗口冻结**，而 renderer RSS 同期涨到约 1.6× 活跃堆。`critical`（≥85% limit）既是最没余量、又正是用户正在交互的时刻，在那里加一分钟冻死会把"可诊断的慢"变成"看起来已经死了"。**要留这条能力就只能是手动/按需**（用户或支持人员在复现时显式触发、窗口已空闲），不能挂自动阈值；且必须先解决卡顿的可接受性，而不是先做触发条件。→ 这条结论就是上文「按需受控堆快照」的由来：**上表是那套阈值的依据**（60s 稳定带、512MiB 基线上限、`min(1GiB, 30%×limit)` 拍摄上限、两次间隔 ≥5 分钟、每窗口每轮 ≤2 次都从「冻结的是用户的时间」推出来），而采集改用 `webContents.takeHeapSnapshot`——同一条 V8 对象图序列化路径，同样冻结主线程数秒至数十秒（**不承诺固定耗时**），但不建 CDP 连接、不解析快照进内存。
 
   > 附带教训，省下一次重复踩坑：`'x'.repeat(n)` / `padEnd` 产出的是 rope/sliced 表示，**不是真实字节**——spike 里 400MB 这样的"字符串"只花了约 3MB RSS，`performance.memory` 与 CDP `Runtime.getHeapUsage` 双双不涨，据此测出的快照成本会小三个数量级。造真实堆要用 `JSON.parse(JSON.stringify(...))`（也正是那次崩溃栈 `JSON.parse ← decode` 的形状）。
 
@@ -156,5 +203,7 @@
 
 - 单测：`packages/platform/src/__tests__/ipc/ipcFrameGuard.test.ts`、`ipcFrameGate.test.ts`、`log/logFloodFold.test.ts`；`apps/editor/src/renderer/services/memory/__tests__/`（阈值/迟滞/缓存归还字节、上报节流与"首个读数必上报"、holder 采集容错、`heapFlowCounters.test.ts` 的 drain 清零与非法值、累计读法不被 drain 影响、`flow=`/`gauge=` 为空时字段整体省略、取数抛错不影响堆读数、视图 gauge 的跨视图求和、重渲染后按新句柄接续且句柄数不累加）、`rendererHeapReporter.test.ts`、`main/services/diagnostics/__tests__/`（`renderer-heap` 行格式、非法样本被丢、越界的 `flow`/`gauge` 条目被丢、ring 满 32 淘汰最旧、窗口号盖章）、`AcpSession.liveBudget.test.ts`（trim 后 `_residentBytes === _measureResidentBytes()`、trim 掉的子代理消息同时丢 `live`）、`AcpSession.timeline.test.ts` 的 `sub-agent streaming runs` 组（`live` 置位、批次按尾部长度定时、回合/重放/角色切换/追加子 tool call/父卡 settle 各自清除、就地更新与 `in_progress` 的父卡 update **不**清除、父卡 settle 后迟到的 chunk 把消息放回流式路径、连接丢失清除、顶层 `streaming` 不受影响）、`services/acp/__tests__/markdownIncremental.test.ts`（等价性、sealed 前缀的元素身份、`mdparse.chars` 记的是被重新解析的字符数）、`workbench/agents/__tests__/CodeBlock.test.tsx` + `workbench/markdown/__tests__/markdownStreamingGating.test.tsx`（流式期间不着色、seal 后着色一次、回收实例翻回流式时旧 html 被清空、sealed 段在 tail 增长时不被重渲染）、`workbench/agents/__tests__/ToolCallCard.test.tsx`（`live` 的子代理消息走增量解析且跳过尾部围栏着色，静态消息反之）。
 - e2e：`smoke.agentStreamMemory.spec.ts` 的 `acp sub-agent streaming render accounting` 组（`emit-subagent` / `emit-subagent-mixed` 夹具）。断言的是**算法形状**（`mdparse` 与 `mdreseal` 的比值、`childchunks.calls` 相对 chunk 数的量级、流式期 `colorize.chars === 0`），**不**断言墙钟或 MB——那些是机器的属性。`emit-subagent-mixed` 那条专守**追加子 tool call 的 seal**：它在回合仍在跑时取样（两侧消息在回合结束都会被 `_flushStream` 清掉，之后再读，"清过"与"从没清"长得一模一样），断言被打断的首条消息 `live === false`、其后新建的那条 `live === true`、且两条的文本长度之和等于整条流——这个 seal 一旦漏掉，表现是"围栏再也不着色"，只能在这条路径上被真窗口看见。
-- e2e：`@p0` `apps/editor/e2e/specs/smoke.memoryPressure.spec.ts`——**直接验证"`performance.memory` 在真实 Electron renderer 里可读"这个核心假设**、releaser 已注册、强制释放有归因，以及**堆曲线真的抵达 main 的 `processMetrics.log`**。最后一条是必需的：上报是 fire-and-forget，方法名写错或通道没注册会被完全静默吞掉，产出的报告与"这个构建本来就没有曲线"无法区分。
 - e2e：`@p1` `apps/editor/e2e/specs/smoke.agentStreamMemory.spec.ts`——把一条 300KB 的思考消息喂给真窗口（夹具 `emit-thought:<count>x<kb>[,fence]`，回合在末块后留 500ms 观察窗），断言**可密封消息的 `mdparse.chars` 不超过 (长度 + 每次调用有界的尾部)**、sealed 缓存确实在增长、`colorize.chars === 0`；再断言**从不闭合的围栏在流式期间 `colorize.chars === 0`、seal 之后被着色**，两条都比对全文逐字符相等。刻意不断言 WS/RSS/墙钟：那是机器属性，而这里要守的是算法形状。
+- e2e：`@p0` `apps/editor/e2e/specs/smoke.memoryPressure.spec.ts`——**直接验证"`performance.memory` 在真实 Electron renderer 里可读"这个核心假设**、releaser 已注册、强制释放有归因，以及**堆曲线真的抵达 main 的 `processMetrics.log`**。最后一条是必需的：上报是 fire-and-forget，方法名写错或通道没注册会被完全静默吞掉，产出的报告与"这个构建本来就没有曲线"无法区分。
+- 单测（受控快照）：`main/services/diagnostics/__tests__/heapSnapshotPolicy.test.ts`（未武装不决策、60s 稳定带与「波动则重置带」、基线过大/堆上限未知/过期样本、参照点取基线后的谷底、增长阈值按余量收窄、holder 解释、5 分钟间隔、轮次超时与两种配额耗尽、重开一轮丢弃上一轮样本）、`heapSnapshotController.test.ts`（partial→rename、增长轮、失败也扣名额、采集中停止按「仍在跑」上报且保留产物、等待资源期间被停止/身份被替换则不起抓取、迟到 promise 不污染新一轮、应用级配额不因重开重置、目录预算在写之前拦、只删本次的 partial、单航班锁在 stalled 期间不释放、无活 renderer 只报不武装、incarnation 不同即丢弃、清单有界且不含内容）、`systemMemorySampler.test.ts`（真机 `Win32_PerfFormattedData_PerfOS_Memory` 语义：`AvailableBytes` 是可用物理内存、提交余量 = `CommitLimit − CommittedBytes`，单位/字符串化 64 位计数器/非法字段/负数余量、固定命令无 shell 不改执行策略、单 flight、退避到 10 分钟、dispose 杀在途子进程并丢弃迟到读数、非 Windows 标 `unsupported` 但仍报物理内存、共享单例只启动一次）、`diagnosticsMainService.test.ts`（sanitize、`counts=`/`unexplained=`、zip 只含清单、窗口盖章）、`renderer/services/memory/__tests__/rendererIncarnation.test.ts`、`renderer/services/diagnostics/__tests__/heapSnapshotMessages.test.ts`（每个 code 都有句子、severity 分档、detail 只挂在值得引用的结局上）、`renderer/contributions/__tests__/HeapSnapshotNotificationContribution.test.ts`（revision 单调丢弃旧报告、只有 outcome 粘住、揭示动作只在有用时给）、`renderer/actions/__tests__/helpActions.test.ts`（确认框文案含暂停/隐私/本机/不可取消四件事、取消则不武装、Help 菜单落点与「刻意不带 icon」）。
+- e2e：`@p1` `apps/editor/e2e/specs/smoke.heapSnapshot.spec.ts`——**独立 userData 冷启**，走**真实命令 + 真实确认对话框**（`Start Diagnosis` 按钮），等满 60s+ 让 main 真的采一份 baseline（实测量级：武装到落盘约 2 分钟——开机后堆还在动，第一次判定通常是 `baseline-unstable`，等下一组样本重来；等待上限 420s，够走完退避后恢复的资源读数），然后断言：`.heapsnapshot` 已从 partial 改名落地且是一份完整的 V8 快照（头部 `{"snapshot":` + `meta`、尾部闭合、体积 > 0）、sidecar 记的是 `trigger: baseline`、窗口在冻结后仍能应答探针、`workbench.action.stopHeapSnapshotDiagnostics` 之后不再产出、reload 结束本轮、诊断 zip 里只有 `heap-snapshots.txt` 清单而**不含任何 `.heapsnapshot` / `.partial` 正文**。它**不**造 GB 级堆、不碰用户的正式 userData。资源不够时分两种结局，绝不互相冒充：**只有明确点名「资源不足」的闸门**（`physical-memory-low` / `commit-headroom-low` / `disk-space-low`）→ 用例**跳过并打印该闸门与读数**（skip ≠ 通过，这台机器上就是没验证过）；`commit-unknown` / `disk-unknown`（读数取不到）**不在跳过之列**——一次恒失败的 WMI 查询或永远 ENOENT 的 `statfs` 是本构建的缺陷，把缺陷一起跳过等于用绿色盖住代码错误；任何其他原因（决策行里没有闸门、超时、策略 bug）→ **失败并报出该决策行 + `active`/`phase` 与两处配额计数**。判据取自 main 自己写下的 `<userData>/logs/<session>/heapSnapshot.log` 决策行，而不是窗口的 `getHeapSnapshotStatus`：后者的 `code` 只在**轮次结束**（`_stop`）时才有值，被闸门拦住的轮次全程 `active: true` 且无 code，只看它会把「被拦」误读成「卡住」，跳过分支永远不会触发。断言产物时必须**等快照与其 sidecar 一起就位**再读：rename 先落地、`.json` 随后才写，只等 `.heapsnapshot` 会出现「读到没有元数据的半成品目录」。策略边界本身由上面的纯函数单测守，不由这条 e2e 守。

@@ -20,6 +20,10 @@ import {
   formatProcessTreeMemory,
   type ProcessItem,
 } from './services/processMonitor/processList.js'
+import {
+  formatSystemMemoryLine,
+  type SystemMemorySample,
+} from './services/diagnostics/systemMemorySampler.js'
 
 /**
  * Keep minidumps locally under <userData>/Crashes. Must run after
@@ -70,9 +74,10 @@ export const MAIN_HEAP_WARN_BYTES = 1536 * 1024 * 1024
  * Working set of a single renderer (`type: 'Tab'`) above which we log at warn.
  * The metrics line has always carried every child process's working set, but
  * nothing ever compared it to anything — a renderer that climbed from 0.7GB to
- * 5.4GB over two hours and was then OOM-killed left a complete curve in the log
- * and not one warning. Picked below the kill point, mirroring how
- * {@link MAIN_HEAP_WARN_BYTES} leaves room to react.
+ * 5.4GB over two hours and then died left a complete curve in the log and not one
+ * warning. The peak is an observation, not a cause: whether that climb killed it
+ * is not something this file can know. Picked below the observed peak, mirroring
+ * how {@link MAIN_HEAP_WARN_BYTES} leaves room to react.
  */
 export const TAB_WORKING_SET_WARN_BYTES = 2 * 1024 * 1024 * 1024
 
@@ -106,6 +111,45 @@ export interface ProcessMetricsOptions {
    * tests / contexts without a process monitor.
    */
   readonly listProcessTree?: () => Promise<ProcessItem | undefined>
+  /**
+   * Latest system reading from the shared sampler (commit + physical). Injected
+   * rather than owned here so the periodic log and the heap-snapshot gate read one
+   * cache: two samplers would spawn two PowerShell queries to say the same thing.
+   * Omitted in tests / contexts without the sampler.
+   */
+  readonly readSystemMemory?: () => SystemMemorySample
+}
+
+/**
+ * `app.getAppMetrics()` reports OS working set for every process, and (Windows
+ * only) private bytes — the number that keeps climbing while a process holds
+ * committed memory the working set has already paged out. Working set, private
+ * bytes and the JS heap are three separate readings and stay separate here: a
+ * process can look small on one and be the reason the machine is out of commit.
+ * Only `mem=` is read back by the forensics parser, so extra fields go after
+ * `cpu=` where its regex stops.
+ */
+export function formatAppMetricsLine(
+  metrics: readonly {
+    pid: number
+    type: string
+    memory: { workingSetSize: number; privateBytes?: number | undefined }
+    cpu: { percentCPUUsage: number }
+  }[],
+): string {
+  return metrics
+    .map((metric) => {
+      const privateBytes = metric.memory.privateBytes
+      const priv =
+        typeof privateBytes === 'number' && Number.isFinite(privateBytes)
+          ? ` privateBytes=${Math.round(privateBytes / 1024)}MB`
+          : ''
+      return (
+        `pid=${metric.pid} type=${metric.type} mem=${Math.round(metric.memory.workingSetSize / 1024)}MB ` +
+        `cpu=${Math.round(metric.cpu.percentCPUUsage)}%${priv}`
+      )
+    })
+    .join(' | ')
 }
 
 /**
@@ -132,7 +176,9 @@ export function formatMainHeapSample(mem: {
  *
  * Two independent loops: `app.getAppMetrics()` (Electron's own children) and a
  * process-tree walk (everything else, which is where the spawned Node children hide).
- * They have separate cadences because the tree walk is far more expensive.
+ * They have separate cadences because the tree walk is far more expensive. A third
+ * line records the system reading from the shared sampler's cache — no query of its
+ * own, so the log and the snapshot gate can never disagree about the same minute.
  */
 export function installProcessMetricsLogging(
   loggerService: {
@@ -152,13 +198,7 @@ export function installProcessMetricsLogging(
     let rendererBusy = false
     try {
       const metrics = app.getAppMetrics()
-      const line = metrics
-        .map(
-          (metric) =>
-            `pid=${metric.pid} type=${metric.type} mem=${Math.round(metric.memory.workingSetSize / 1024)}MB cpu=${Math.round(metric.cpu.percentCPUUsage)}%`,
-        )
-        .join(' | ')
-      logger.info(line)
+      logger.info(formatAppMetricsLine(metrics))
       for (const metric of metrics) {
         if (metric.type !== 'Tab') continue
         // workingSetSize is reported in KB.
@@ -179,6 +219,11 @@ export function installProcessMetricsLogging(
       } else {
         logger.info(heapLine)
       }
+      // System commit pressure beside the per-process readings: a machine can OOM
+      // with every process small, and "committed 15.8/16GB" is the only line that
+      // would have said so. Absent until the first async query lands.
+      const systemMemory = options.readSystemMemory?.()
+      if (systemMemory) logger.info(formatSystemMemoryLine(systemMemory))
     } catch {
       // Metrics are best-effort diagnostics; never let sampling kill the main process.
     }

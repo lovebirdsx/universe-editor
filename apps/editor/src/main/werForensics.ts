@@ -4,9 +4,11 @@
  *  without a crash dump, our own logs just stop mid-stream — the only remaining
  *  evidence lives in the Windows Application event log: Application Error (1000)
  *  and Application Hang (1002) prove a native crash/hang of our exe, WER (1001)
- *  records the report, and their absence points at an external TerminateProcess
- *  (task kill / AV) or power loss. Queried via wevtutil on the launch that
- *  detects the abnormal exit, best-effort with a hard timeout.
+ *  records the report. Their absence proves nothing on its own — an external
+ *  TerminateProcess (task kill / AV), power loss, and a crash WER never got
+ *  around to recording all leave the same empty log — so this module reports
+ *  events and never converts their absence into a cause. Queried via wevtutil on
+ *  the launch that detects the abnormal exit, best-effort with a hard timeout.
  *
  *  Not every 1001 is a death certificate: the same event id carries
  *  RADAR_PRE_LEAK_64, a memory-growth warning Windows logs *before* anything

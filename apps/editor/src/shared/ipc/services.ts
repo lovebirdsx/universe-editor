@@ -259,6 +259,18 @@ export interface WireHeapGauge {
 }
 
 /**
+ * A population the renderer knows exactly (live sessions, registered resident-budget
+ * holders, pooled agent connections). Kept apart from `gauge` on purpose: a count of
+ * zero is a reading and has to survive to the log line, whereas a gauge reading zero
+ * is dropped as noise — and "0 sessions" and "this build has no session service" must
+ * not collapse into the same absent field.
+ */
+export interface WireHeapCount {
+  readonly name: string
+  readonly value: number
+}
+
+/**
  * One renderer heap reading. Only the renderer can see its own V8 heap, and it can die
  * mid-crash — so the window id and the receive time are stamped by main, which is what
  * lets the record outlive the window it describes.
@@ -273,6 +285,14 @@ export interface WireRendererHeapSample {
   readonly flow?: readonly WireHeapFlow[]
   /** Omitted when every gauge reads zero. */
   readonly gauge?: readonly WireHeapGauge[]
+  /** Omitted when no population could be read (not when one reads zero). */
+  readonly counts?: readonly WireHeapCount[]
+  /**
+   * Regenerated on every renderer start. Main compares it against the incarnation it
+   * already bound to the window: a sample from a different one cannot be part of the
+   * same baseline, because it describes a different JS heap.
+   */
+  readonly incarnation?: string
 }
 
 /** Structured form of the previous session's abnormal exit (sentinel + crashpad). */
@@ -318,9 +338,154 @@ export interface IDiagnosticsService {
    * and into a small ring that the diagnostics zip ships as `memory.txt`.
    */
   reportRendererHeapSample(sample: WireRendererHeapSample): Promise<void>
+  /**
+   * Arm a round for the calling window. Idempotent; never resets the round's budget.
+   * Default off, never persisted, never enabled by workspace settings: taking a
+   * snapshot freezes this renderer for seconds to tens of seconds (measured: ~15–19 ms
+   * per MB of live heap) and the artifact contains whatever strings that heap held, so
+   * only the person in front of this window can start one.
+   */
+  startHeapSnapshotRound(): Promise<HeapSnapshotStatus>
+  /** Stop new captures for the calling window. An in-flight capture cannot be cancelled. */
+  stopHeapSnapshotRound(): Promise<HeapSnapshotStatus>
+  getHeapSnapshotStatus(): Promise<HeapSnapshotStatus>
+  /** Open the snapshot directory (created on demand) in the OS shell. */
+  revealHeapSnapshotsFolder(): Promise<void>
+  /** Round reports for this window only; main filters, so nothing crosses windows. */
+  readonly onDidChangeHeapSnapshot: Event<HeapSnapshotEvent>
 }
 
 export const IDiagnosticsService = createDecorator<IDiagnosticsService>('diagnosticsService')
+
+// -------- Controlled heap snapshots (user-enabled, local-only) --------
+
+/** Which of the two snapshots of a round a file is. */
+export type HeapSnapshotTrigger = 'baseline' | 'growth'
+
+/**
+ * Why a round did nothing, ended, or waits. Stable ids, not prose: main sends the id
+ * plus numeric measurements, and the window renders the sentence in the user's
+ * language. A code that carries no text would silently produce a blank notification,
+ * so the renderer maps every member (the coverage test for that map is what keeps the
+ * two sides in step).
+ */
+export type HeapSnapshotNoticeCode =
+  /** The window never reported a usable V8 heap limit, so no capture size is derivable. */
+  | 'heap-limit-unknown'
+  /** The heap is already above what a baseline is allowed to cost. */
+  | 'baseline-too-large'
+  /** Samples moved more than the baseline band allows — the heap is not settled enough. */
+  | 'baseline-unstable'
+  /** The newest sample is older than the freshness bound; the window stopped reporting. */
+  | 'sample-stale'
+  /** Known holders account for the majority of the rise; a snapshot would not add a lead. */
+  | 'holders-explain'
+  /** The heap is past the capture ceiling, so the artifact would exceed what was agreed. */
+  | 'heap-too-large'
+  /** Nothing left below the capture ceiling; a growth snapshot could never stay under it. */
+  | 'capture-limit-reached'
+  | 'physical-memory-low'
+  | 'commit-headroom-low'
+  /** No fresh commit reading on a platform that has commit accounting. */
+  | 'commit-unknown'
+  | 'disk-space-low'
+  /** The free-space reading itself failed; refusing to guess. */
+  | 'disk-unknown'
+  /** The snapshot directory is at its size/count budget; the user has to clean it up. */
+  | 'directory-budget'
+  | 'capture-failed'
+  /** The capture has not returned within the timeout — reported, not cancelled. */
+  | 'capture-stalled'
+  /** The app-wide attempt budget for this run is spent. */
+  | 'app-quota-exhausted'
+  /** This round's attempts are spent. */
+  | 'round-quota-exhausted'
+  /** A round lasts at most 2 hours. */
+  | 'round-expired'
+  /** Both snapshots of the round are on disk. */
+  | 'round-complete'
+  | 'window-closed'
+  | 'window-reloaded'
+  /** The window is still open but its renderer is not running (crashed). Not the same as closed. */
+  | 'renderer-unavailable'
+  | 'stopped-by-user'
+  /** The calling window has no live renderer to snapshot. */
+  | 'no-target'
+
+/** What the round is doing right now, for the window that owns it. */
+export type HeapSnapshotPhase =
+  /** No round is armed (the default; enabling is never persisted). */
+  | 'off'
+  /** Collecting the samples a baseline has to be stable across. */
+  | 'baseline'
+  /** Baseline captured; watching post-baseline samples for a sustained rise. */
+  | 'watching'
+  /** A capture is in flight for this window (an unrecoverable state to interrupt). */
+  | 'capturing'
+  /** A round ran and ended; the reason is in `code`. */
+  | 'stopped'
+
+export interface HeapSnapshotArtifactInfo {
+  /** File name only — main generates it and never hands out the directory to renderers. */
+  readonly name: string
+  readonly bytes: number
+  readonly trigger: HeapSnapshotTrigger
+}
+
+export type HeapSnapshotEventKind =
+  /** A round was armed for this window. */
+  | 'started'
+  /** A snapshot finished and was renamed into place. */
+  | 'captured'
+  /** A decision skipped or a capture is taking longer than expected. */
+  | 'notice'
+  /** An attempt failed; the round ends (no repeat freeze). */
+  | 'failed'
+  /** The round ended. */
+  | 'stopped'
+
+/**
+ * One report for the window that owns the round. Main stamps `windowId` and filters on
+ * it per window, so window A's diagnostics can never surface a toast in window B.
+ */
+export interface HeapSnapshotEvent {
+  readonly windowId: number
+  /** Monotonic per window. The renderer drops anything at or below what it has shown. */
+  readonly revision: number
+  readonly at: number
+  readonly kind: HeapSnapshotEventKind
+  readonly code?: HeapSnapshotNoticeCode
+  /** Measurements only (counts, durations, megabytes) — never paths or snapshot content. */
+  readonly detail?: string
+  readonly artifact?: HeapSnapshotArtifactInfo
+}
+
+export interface HeapSnapshotStatus {
+  /** True while a round is armed for this window. */
+  readonly active: boolean
+  readonly phase: HeapSnapshotPhase
+  readonly startedAt?: number
+  /** A round lasts at most this long; armed rounds stop at the deadline. */
+  readonly expiresAt?: number
+  /** Actual capture calls made this round (failures included). */
+  readonly attempts: number
+  readonly attemptLimit: number
+  /** Actual capture calls made since the app started; stopping a round does not reset it. */
+  readonly appAttempts: number
+  readonly appAttemptLimit: number
+  /** Snapshot files this round wrote. */
+  readonly artifacts: number
+  readonly bytes: number
+  /** The last decision, so a window that just mounted can say what is going on. */
+  readonly code?: HeapSnapshotNoticeCode
+  readonly detail?: string
+}
+
+/**
+ * The heap-snapshot half of the diagnostics facade is documented on the members
+ * declared with the rest of {@link IDiagnosticsService} above; the types below are
+ * what crosses the wire.
+ */
 
 // -------- Issue Reporter (pluggable Report Issue targets) --------
 

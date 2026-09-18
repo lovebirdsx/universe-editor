@@ -45,6 +45,12 @@ export interface IAcpResidentBudget {
   register(holder: IAcpResidentBudgetHolder): IDisposable
   /** Total resident estimate across all registered holders. */
   totalBytes(): number
+  /**
+   * How many holders are registered — O(1). Reported on the heap sample because a
+   * registration that never got disposed is invisible in `totalBytes()`: the bytes
+   * it holds are inside the number the budget already reports as explained.
+   */
+  holderCount(): number
   /** Bring the total back under budget, trimming oldest-ingesting holders first. */
   reconcile(origin: string): void
   /**
@@ -75,6 +81,10 @@ export class AcpResidentBudget implements IAcpResidentBudget {
     let total = 0
     for (const h of this._holders) total += h.residentBytes()
     return total
+  }
+
+  holderCount(): number {
+    return this._holders.size
   }
 
   reconcile(origin: string): void {
