@@ -11,7 +11,9 @@
  *
  * Storage lives under the extension's `globalStoragePath`, NOT in the p4
  * workspace: it is editor state (and must be shared by every window of the same
- * install), not something a colleague should see in their sync.
+ * install), not something a colleague should see in their sync. Records written
+ * by tools OUTSIDE the editor are a separate, read-only input to the lookup
+ * itself — see `graphSyncExternal.ts` and {@link lookupSyncPoint}.
  *
  * Coordinates: every record and every lookup is a list of HOST paths plus
  * directory-ness — the shape the call sites already have (`scopePaths` from the
@@ -48,9 +50,16 @@ const MAX_RECORDS = 200
  */
 export const NO_REGRESSION = Number.MAX_SAFE_INTEGER
 
-/** Where a recorded sync point came from. Slice-compatible with the wire
- *  contract's `P4GraphSyncPointSource`. */
-export type SyncLedgerSource = 'sync' | 'query'
+/**
+ * Where a recorded sync point came from. Slice-compatible with the wire
+ * contract's `P4GraphSyncPointSource`.
+ *
+ * `'external'` is a record derived at read time from another tool's sync file
+ * (`graphSyncExternal.ts`). It exists in memory only — nothing with this source
+ * is ever written to the ledger, so the file's own records stay a complete
+ * account of what this editor did.
+ */
+export type SyncLedgerSource = 'sync' | 'query' | 'external'
 
 /**
  * The changelist of a record that says "a query asked, and this scope has
@@ -78,9 +87,10 @@ export interface SyncLedgerRecord {
   /** The changelist this scope is known to be synced to, or
    *  {@link EMPTY_SYNC_POINT} for a queried "nothing synced". */
   readonly change: string
-  /** Whether a get recorded this or a query answered it. The graph's tooltip
-   *  must say which: a recorded answer says nothing about a sync run outside the
-   *  editor since, while a query is the truth as of {@link at}. */
+  /** Whether a get recorded this, a query answered it, or another tool on this
+   *  machine recorded it. The graph's tooltip must say which: a recorded answer
+   *  says nothing about a sync run outside the editor since, while a query is
+   *  the truth as of {@link at}. */
   readonly source: SyncLedgerSource
   /** Epoch ms the answer was established: a get's completion, or when a query
    *  was DISPATCHED (not when it returned — see the write site). Writes can
@@ -233,11 +243,21 @@ export interface SyncLedgerAnswer {
  * wrong: after `sync A/B@4520` then `sync A@4560`, the answer for `A/B/C` is
  * 4560 from `A`, while the most-specific rule would report 4520 and UNDER-report
  * what is on disk. Pure.
+ *
+ * `external` are records derived from another tool's sync files
+ * (`graphSyncExternal.ts`). They take part in THIS comparison rather than in a
+ * second lookup of their own, for two reasons: a tombstone that a query just
+ * wrote must be able to outrank them (a second lookup reports the tombstone as
+ * "no answer" and would hand the answer back to the older external record), and
+ * an external record is only "newer" relative to the ledger's, which is a
+ * question about one ordering. A tie goes to the editor's own records — the
+ * ledger is listed first and the comparison is strict.
  */
 export function lookupSyncPoint(
   records: readonly SyncLedgerRecord[],
   clientRoot: string,
   scope: readonly SyncScopeTarget[],
+  external?: readonly SyncLedgerRecord[],
 ): SyncLedgerAnswer | undefined {
   // No scope, no question: an empty list is covered by everything (see
   // `scopeCovers`), so without this an empty selection would answer with the
@@ -245,11 +265,13 @@ export function lookupSyncPoint(
   if (scope.length === 0) return undefined
   const rootKey = scopeKey(clientRoot)
   let best: SyncLedgerRecord | undefined
-  for (const record of records) {
-    if (scopeKey(record.clientRoot) !== rootKey) continue
-    if (!scopeCovers(record.paths, scope)) continue
+  const consider = (record: SyncLedgerRecord): void => {
+    if (scopeKey(record.clientRoot) !== rootKey) return
+    if (!scopeCovers(record.paths, scope)) return
     if (best === undefined || record.at > best.at) best = record
   }
+  for (const record of records) consider(record)
+  if (external) for (const record of external) consider(record)
   if (best === undefined || best.change === EMPTY_SYNC_POINT) return undefined
   // "Wider" is the same containment question read the other way: among the
   // records that answer at all, this one is wider exactly when the asked-about
@@ -286,6 +308,10 @@ function isRecord(value: unknown): value is SyncLedgerRecord {
   return (
     typeof r['clientRoot'] === 'string' &&
     typeof r['change'] === 'string' &&
+    // `'external'` is refused rather than accepted: every external record is
+    // built in memory from another tool's file, so one sitting in the ledger
+    // was hand-written — and a hand-written record that claims to come from
+    // outside is exactly the one to distrust.
     (r['source'] === 'sync' || r['source'] === 'query') &&
     typeof r['at'] === 'number' &&
     typeof r['complete'] === 'boolean' &&
@@ -394,10 +420,19 @@ export class GraphSyncLedger {
   }
 
   /** The answer for `scope`, or undefined when nothing recorded covers it (or
-   *  the newest such record says "nothing synced"). Zero p4 calls. */
-  lookup(clientRoot: string, scope: readonly SyncScopeTarget[]): SyncLedgerAnswer | undefined {
+   *  the newest such record says "nothing synced"). Zero p4 calls.
+   *
+   *  `external` — another tool's records — is a lookup INPUT only: it is never
+   *  merged into the records this object persists, never deduped, never capped,
+   *  and never allowed to retire a record (`contradictedBy`). Those records own
+   *  their files; this class only lends them the comparison. */
+  lookup(
+    clientRoot: string,
+    scope: readonly SyncScopeTarget[],
+    external?: readonly SyncLedgerRecord[],
+  ): SyncLedgerAnswer | undefined {
     this._reloadIfChanged()
-    return lookupSyncPoint(this._records, clientRoot, scope)
+    return lookupSyncPoint(this._records, clientRoot, scope, external)
   }
 
   /**
@@ -458,8 +493,9 @@ export class GraphSyncLedger {
   }
 }
 
-/** Cheap change detector for the ledger file: mtime + size. */
-function stampOf(file: string): string | undefined {
+/** Cheap change detector for a file this module (and `graphSyncExternal.ts`)
+ *  re-reads only when it moved: mtime + size. */
+export function stampOf(file: string): string | undefined {
   try {
     const s = statSync(file)
     return `${s.mtimeMs}:${s.size}`

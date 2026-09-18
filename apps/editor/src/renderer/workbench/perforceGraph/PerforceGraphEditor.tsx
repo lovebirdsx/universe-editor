@@ -218,11 +218,17 @@ function syncPointTooltip(point: P4GraphSyncPoint): string {
           'Answered by Perforce at {time}. Changes newer than this are not synced yet.',
           { time: when },
         )
-      : localize(
-          'perforceGraph.syncPoint.fromSync',
-          'Recorded at {time}, when this editor pulled that changelist. Syncs made outside the editor since then are not reflected — use Query Sync Point to re-check.',
-          { time: when },
-        ),
+      : point.source === 'external'
+        ? localize(
+            'perforceGraph.syncPoint.fromExternal',
+            'A local sync record from another tool, written at {time}. This editor cannot check how far this scope really got — use Query Sync Point to confirm it against Perforce.',
+            { time: when },
+          )
+        : localize(
+            'perforceGraph.syncPoint.fromSync',
+            'Recorded at {time}, when this editor pulled that changelist. Syncs made outside the editor since then are not reflected — use Query Sync Point to re-check.',
+            { time: when },
+          ),
   ]
   if (point.widerScope) {
     parts.push(

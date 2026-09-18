@@ -30,8 +30,8 @@
 
 **答案有三个来源，按代价与新鲜度排序**：
 
-1. **本地账本**（`graphSyncLedger.ts`，零 p4 调用，`getSyncPoint` 同步返回）——编辑器内每次 get/sync 完成后写一条；`load()` / `revalidate()` / 换 scope 只读它。这是常态路径。**宽 scope 的写入会迟到数十秒**（回读成本，见「记账的写入点」），期间的徽章答的是上一处落点，之后由落账自己推上去。
-2. **窄 scope 的自动查询**——**scoped tab**（文件 / 目录 / 合并历史，`scopePaths` 存在）账本没答案时仍自动查 `#have`（成本 180–340ms，付得起），保持老行为。
+1. **本地记录**（零 p4 调用，`getSyncPoint` 同步返回）——编辑器内每次 get/sync 完成后写一条进同步账本（`graphSyncLedger.ts`），`load()` / `revalidate()` / 换 scope 只读它。**本机其它工具（编辑器救世主 / UGS）写下的同步记录并进同一张表按时间比**，见下「外部同步记录」。这是常态路径。**宽 scope 的写入会迟到数十秒**（回读成本，见「记账的写入点」），期间的徽章答的是上一处落点，之后由落账自己推上去。
+2. **窄 scope 的自动查询**——**scoped tab**（文件 / 目录 / 合并历史，`scopePaths` 存在）**账本与外部记录都没答案**时仍自动查 `#have`（成本 180–340ms，付得起），保持老行为。**外部记录一作答就不再探针**（哪怕它只是上界）：否则「用了外部同步工具的机器上每换一个子目录都要问一次服务器」正好是账本要省掉的那笔开销；此时子目录里显示的是整 root 那个 CL，tooltip 已标注是上界，要该目录的精确值按「查询同步点」。
 3. **用户按「查询同步点」按钮**（`getHaveChange` 带 `force`）——唯一能看到**外部同步**的途径，也是宽 scope 唯一的查询方式。
 
 **为什么不再自动查宽 scope**：`#have` 的成本 ≈ scope 内文件数（真机百万文件工作区 36–42s，表在 `docs/pitfalls.md`「图谱同步点」节）。旧实现每次打开图谱 / 换 scope / 刷新都付一遍这个成本：**整图未知名 `#? (click to query)` 本身就是「不替用户做这个决定」**。全图（未 scoped 且非 wholeRepo）与 wholeRepo 两条分支的首次打开都走它。
@@ -40,7 +40,7 @@
 
 ### 账本（`graphSyncLedger.ts`）
 
-- **记什么**：`{ clientRoot, paths, change, source: 'sync'|'query', at, complete, floor }`。`record()` **重读磁盘再合并**（多窗口各持一份内存副本，不重读会互相覆盖）、按 `scopeIdentity` 去重只留最新、上限 200 条。原子写（temp + rename）。
+- **记什么**：`{ clientRoot, paths, change, source: 'sync'|'query'|'external', at, complete, floor }`。`record()` **重读磁盘再合并**（多窗口各持一份内存副本，不重读会互相覆盖）、按 `scopeIdentity` 去重只留最新、上限 200 条。原子写（temp + rename）。`'external'` 只可能出现在**内存里**（外部记录文件派生），落盘的一律 `'sync'`/`'query'`——`isRecord()` 也据此只认这两档，磁盘上出现 `'external'` 只可能是手改。
 - **存哪儿**：`context.globalStoragePath/graphSyncLedger.json`——**多窗口共享**（renderer 内存里的服务是 per-window 的，各存一份必然发散），且**不写进 p4 工作区目录**（那是用户与 p4 自己的领地，写进去会被 reconcile / 提交扫到）。
 - **怎么答**：`lookupSyncPoint(records, clientRoot, scope)` —— 候选 = **scope 包含目标**的记录（目标自身 + 更宽的祖先，**不含更窄的**），取 `at` **最新**的一条。
   - **红线：按时间取，不按深度取**。「最具体优先」是错的：先 `sync A/B@4520`、再 `sync A@4560`，此时 A/B/C 的答案是 **4560**（后一次同步把整个 A 也推到了 4560），按深度会答 4520 = 低报。
@@ -60,6 +60,18 @@
   - **墓碑（`change: ''`）的 `floor = 0`**，所以它照旧作废它触及的更宽记录：「这个范围里没有任何已同步的文件」和「更宽的记录说这些文件都在某个 CL」不能同时为真。已知代价：对一个**空的 / 未被 client 映射的**文件夹按查询，这两种情况在 p4 那里不可分辨，更宽 scope 的徽章会退回「点击查询」——偏低的方向，再查一次即可恢复。
   - **作废要打日志**：`record()` 把每条被作废的记录连同它的 CL 与 host 路径写进 Perforce 输出频道。作废抹掉的是**另一个 tab / 另一个 scope** 的徽章，而它的缺席在那边读起来就是「从来没问过」——没有这行日志，账本里不会留下任何解释（上面那条真机 bug 就是这么无痕的）。
 - **`complete` / `partial`**：`refusedModified`/`refusedOverwrite`/`keptOpen`/`mustResolve` 全 0 才算精确；被拒绝的文件留在原版本 → 答案只能是上界。**该记的三类**：`applied > 0`、`upToDate === true`（p4 明确说「已是最新」——回读到的落点就是真相，不记就是「我明明点了拉取但徽章不动」）、以及有拒绝但仍有动作的 run（记成上界）。**不该记的两类**：取消 / 失败，以及**结局无法识别**（`!summary`，或 exit 0 + 什么都没应用 + 又没有 up-to-date 行）——后者可能意味着任何事，宁可不记也不猜。
+
+### 外部同步记录（编辑器之外的拉取）
+
+账本只知道**本编辑器**发起的 get。工作区是先被别的工具拉下来的那些用户，徽章本该有答案却是 `#?`——于是把两个外部工具自己的记录也读进来（`graphSyncExternal.ts`）：
+
+- **两个文件，两种形态**：`<home>/.editor_savior/sync_config.json`（按 depot 路径分组，每条 `ClientRoot` + `ChangeNum` + `Timestamp`；外层 depot key **不参与匹配**，它说的是 stream 不是工作区）与 `<clientRoot>/.ugs/state.json`（单对象，`CurrentChangeNumber` + `LastSyncTime`，`at` 取 `Date.parse(LastSyncTime)`，退化才用数值 `Timestamp`）。环境变量 `UNIVERSE_P4_SAVIOR_CONFIG` 可改前者位置（**测试缝**：开发机真实存在该文件，e2e 的 fixture 必须显式钉住，不能靠「临时工作区恰好不匹配」这个巧合）。
+- **匹配依据 = `scopeKey(ClientRoot)` 相等**，`ClientName` 不参与。UGS 连匹配都不用：文件**就在**那个 client root 里。
+- **只读**：绝不回写这两个文件，也绝不把它们的内容写进账本。
+- **红线：外部记录只进 `lookup` 的参数位，不进 `_records`**。它们不落盘、不参与 `recordIdentity` 去重与 200 条上限、不参与 `contradictedBy` 作废（那是落盘路径才有的账目），所以一个损坏或手改的文件最多毁掉它自己的那条答案。
+- **红线：必须与账本在同一趟遍历里比 `at`**（`lookupSyncPoint(records, root, scope, external?)`），不能「各查各的再挑新的」。`lookupSyncPoint` 返回 `undefined` 是二义的——既表示「没有记录覆盖」，也表示「赢家是墓碑」；两趟比较时，一条刚落下的查询墓碑（「这个范围什么都没同步」）会先被读成 `undefined`，外部记录随即把更旧的 CL 贴回徽章。平局归编辑器自己（账本先遍历 + 严格 `>`）。
+- **外部记录 = 整个 client root**（两个工具都是整工作区同步），所以问子目录时它是上界（`widerScope: true`，UI 已标注）；问得比它还宽时不参与；跨 client 由 `lookupSyncPoint` 既有的 `scopeKey(record.clientRoot) !== rootKey` 一行挡掉。
+- **`at` 钳到读取时刻**：外部记录不吃 `record()` 的 `at` 守卫（它根本不走那条路），一个来自未来的时间戳（时钟偏移 / 手改）会赢过此后的一切，用户按「查询同步点」也纠正不回来。钳到**这一次读取**之后，此后写下的账（含用户之后再查询）仍稳压它，但比这次读取更早的账会被它顶掉；而文件每被改写一次就重解析、重钳一次，取舍与残留偏差见「已知限制」。
 
 ### 记账的写入点（`runSync`）
 
@@ -135,16 +147,24 @@
 
 
 
-tooltip（`syncPointTooltip`）**先讲来源再讲结论**，因为「记账」与「查询」对「什么没被反映」的含义根本不同：
+tooltip（`syncPointTooltip`）**先讲来源再讲结论**，因为三种来源对「什么没被反映」的含义根本不同：
 - 查询所得：`Answered by Perforce at <time>`（此后新增的改动未同步）；
 - 记账所得：`Recorded at <time>, when this editor pulled that changelist`，并**明说编辑器之外的同步不被反映**，要新答案请按查询按钮；
+- 外部记录所得：`A local sync record from another tool, written at <time>`，并**明说本编辑器核实不了这个范围实际拉到了哪**，请用查询按钮向 Perforce 核对；
 - 外加 `widerScope` / `partial` 两条上界说明。
 
-**旧的「在编辑器之外的同步同样算数」不再成立**——旧实现查的是真 have 表所以成立，现在账本只知道编辑器内发起的 get。用户文档（`docs/user/zh-CN/perforce/perforce-graph.md`）必须同步改口径。
+`source` 是**三路互斥**的（`point.source === 'query' ? … : …` 这种二值写法会把 `'external'` 静默归进 `'sync'`、谎称这次 get 是本编辑器拉的）——`PerforceGraphEditor.test.tsx` 用「三种来源各自的标志性短语 + 互不出现」钉住。
+
+**旧的「在编辑器之外的同步同样算数」只恢复了一半**：旧实现查的是真 have 表所以无条件成立；现在只有**那两类外部记录文件覆盖到**的部分成立（它们记的是「谁、什么时候、拉到哪个 CL」，不是 have 表的真实快照）。用户文档（`docs/user/zh-CN/perforce/perforce-graph.md`）必须同步这个口径。
 
 ### 已知限制
 
-- 账本**只知道编辑器内发起的同步**；外部 `p4 sync` 要按查询按钮才看得见（这正是按钮存在的理由）。
+- 账本**只知道编辑器内发起的同步**，外部同步要看得到就得有「外部同步记录」那一节的记录文件；两个工具都没有（或换成了别的工具）时，仍然只有查询按钮能看见。
+- **外部记录的 `ClientRoot` 必须等于 p4 报的 client root**，否则那条记录静默不被采用（不是错答）。Linux 上大小写敏感，`ClientRoot` 大小写不同就不匹配；一个 client 下有多条记录（不同 stream / depot key）时取 `Timestamp` 最新的一条，时间倒流的那次会**低报**——偏低方向安全，再查询即可恢复。
+- **外部记录记的是那次同步的目标 CL，本身是上界**：`#have` 点是「≤ 目标 CL 里碰过本范围的最大值」，二者只在目标 CL 确实碰过本范围时才相等（这正是 `directSyncPoint` 要证的那件事，而外部记录拿不到这个证明）。整 client root 的 scope 基本精确（同步目标就是当时的 head），子目录查询已由 `widerScope` 标注，其余靠 tooltip 明说「核实不了」。
+- **未来时间戳被钳到读取时刻**：钳制发生在文件变化或进程启动的那一次读取，之后缓存住。那次读取**之后**写下的记账/查询仍然赢它（`at` 更大），**之前**的则输给它；而文件每被改写一次就重钳一次，所以一条时钟严重超前的记录能在同一次会话里反超用户刚查到的值（那种改写通常就对应外部工具新的一次同步，方向可以接受，除非文件被改写却并没有同步）。真正的修法是拒绝未来时间戳（那样会连正常时钟偏移的记录一起丢掉），取舍见 `graphSyncExternal.ts`。
+- **外部记录不受作废（`contradictedBy`）约束**：它只进 `lookup`、不进账本，所以账本那套「反向 get 之后把旧的宽记录作废」管不到它。后果：一次反向 get（把子目录拉回更旧的 CL）之后账本自己的宽记录已作废、整仓库徽章本该回到 `#?`，但更旧的外部宽记录仍会作答——方向是高报，按一次「查询同步点」即纠正。
+- 状态栏 `ClientStatus.lastSyncSpec`（「上次拉取 @NNNN」）**不读外部记录**：它是本会话内操作的即时反馈，语义不同。Timeline 同理（它按文件实时 `fstat`）。
 - **宽 scope 的记账迟到**：回读成本随 scope 宽度增长（工作区根 27.3s），快档 5s 超时后转后台慢档，所以「get 完成后徽章要过十几到几十秒才自己前移」是正常的；期间它答的还是上一处落点（不是错，只是旧），且**这段窗口里关掉图谱不影响落账**（写入在扩展侧，与 UI 无关）。两个例外：单文件这类窄 scope（0.2s，徽章紧跟命令返回），以及**图谱行入口**——判据成立时根本不回读，徽章同样紧跟命令返回。
 - **`wholeRepo` 列表不参与直接记账（刻意，不是缺口）**：`//...` 是 depot 级查询，而账本/回读坐标一律落在 **client root**（`resolveGraphScope` 里既有的「`//...` ≡ client root」假设，探针替换也基于它）。两边不同坐标 ⇒ 覆盖判据退化成「client root 覆盖 client root」，恒真；而真正要证的是「该 CL 碰过本次 get 的 scope」，那需要「`//...` 列出的每个变更都碰过本 client 视图内、root 下面的文件」——这个假设恰恰只在 AltRoots 为空时成立，`#have` 探针只从反方向论证过（它的答案是列表的子集），证不了它。假设不成立时，直接记账会与「同一次 get 的回读」给出不同答案，而查询按钮（真值通道）一按，徽章就当场往回退。所以该分支一律回读，整仓库 tab 保持它一直以来的成本（27.3s）。
 - 标签页关掉再开**不丢**：账本在扩展侧、`view.syncPoint` 也跟着 `result` 一起持久化。
@@ -217,6 +237,7 @@ Action2 在 `actions/index.ts` `registerAction2`。
 - **纯解析器单测**：`p4GraphParser.ts` 的每个函数对 fixture 断言（`extensions/perforce/src/__tests__/p4GraphParser.test.ts`）。新增解析逻辑先写纯函数 + 单测，client 只做编排。
 - **账本单测**：`extensions/perforce/src/__tests__/graphSyncLedger.test.ts`——包含关系（`X:/ws/a` 不含 `X:/ws/ab`）、文件 vs 目录 scope 不同身份、**更窄的记录绝不回答更宽的问题**、**按时间取而非按深度取**、跨 client 隔离、盘上往返 / 跨窗口合并 / 损坏文件 / 上限淘汰、**迟到但更旧的写入不覆盖更新的记录**（含「被丢弃的写入仍作为作废证据生效」）。
 - **回读单测**：`extensions/perforce/src/__tests__/clientGraphSyncPointReadback.test.ts`——后缀拼在转义之后、空答案是答案、空 scope 不问 p4、**过期窗口报 `timedOut` 且用的是调用方的预算**、非零退出不算超时，外加两条预算断言（快档 `≤5s` + background、慢档 `>27s` + background）。断言的是**派发的 options**（spy `P4Service.prototype.exec`），不是模块常量。
+- **外部记录单测**：`extensions/perforce/src/__tests__/graphSyncExternal.test.ts`——两种文件形态各自的解析（逐条丢弃非法项、字符串数字的 CL 拒绝、未来时间戳钳制、`ClientRoot` 保留原拼写但 `scopeKey` 折叠）、薄壳的 stamp 缓存（文件后出现要读得到）；`graphSyncExternalLedger.test.ts` 走真 `activate()` 驱动 `perforce-graph.getSyncPoint`，钉住「外部记录以 `source: 'external'` 到 wire」「编辑器自己更新的记录仍然赢」「读到的内容一个字都没写进账本」；`graphSyncLedger.test.ts` 的 `lookupSyncPoint with records from outside the editor` 钉合并语义（更新者胜、平局归账本、更新的墓碑仍然答「什么都没同步」、跨 client / 更窄不回答更宽）。
 - **判据单测**：`extensions/perforce/src/__tests__/graphSync.test.ts` 的 `directSyncPoint`——覆盖/更宽 → ok；对话框形态（列表宽、get 窄）、兄弟前缀（`src` vs `src2`）、文件 vs 目录两个方向、**空列表 scope**、**wholeRepo 列表**（哪怕覆盖恰好成立）、client 不一致、`clientRoot` 缺失/不匹配 → 全拒（各带 reason）；大小写与斜杠按平台断言（win32/macOS 判同一 client、linux 判两个，**两个分支都断言**——只写一个分支的测试在开发机上绿、在 CI 上红）。
 - **命令级单测**：`extensions/perforce/src/__tests__/graphSyncToChangeLedger.test.ts`——真 `activate()` + 临时 `globalStoragePath` 的**真账本** + 计数假 `readGraphSyncPoint`（刻意答一个与行 id 不同的 CL：只断言调用次数不够，回读路径若偷偷记了行的 CL 也得红）：满足时**零回读**且账本恰一条 `{change, source:'sync', complete:true, floor:CL}`；对话框形态回读一次且记的是 p4 的答案；有拒绝仍记（`complete:false`）；clobber 失败不记；无 listScope / wholeRepo 列表 / client 不匹配 / 回显缺失或过期 → 回退且**不弹错**。
 - **renderer 单测**：`workbench/perforceGraph/__tests__/PerforceGraphEditor.test.tsx`，mock `ICommandService` 返回假 DTO，断言渲染/展开详情/待定节点 + 同步点四条竞态（切 scope 丢弃过期答案 / 两次查询乱序 / 失败保留 / **查询不被落地的 load 丢掉**）+ 查询反馈（`data-querying` / 秒表 `data-done`）+ 行菜单两项（未知同步点时**没有**跳转项）。秒表与菜单的断言都靠 `renderWithDeferredSyncPoints` 把答复交给测试来结——答复自己 resolve 的 mock 观测不到在飞窗口。**两条 Force Get 用精确相等断言**（多一个 `isLatest`/`confirmed` 就红），`listScope` 因此显式写在期望里；`CASES` 表逐入口断言 `listScope`（对话框那条断言它是 `{wholeRepo:false}` 而 `scopePaths` 是勾选目录）。**列表坐标必须描述屏幕上的行**：`claims the rows on screen, not the scope the tab has since moved to`——换 scope 的重载**失败**时旧行留在屏幕上，此时 get 的 `listScope` 必须是旧列表（改回读 `queryRef` 即红）。
@@ -246,6 +267,7 @@ cd extensions/perforce && pnpm e2eg perforceGraph
 - `packages/extensions-common/src/contracts/perforceGraph.ts` —— wire 类型 + 命令常量
 - `extensions/perforce/src/p4GraphParser.ts`（+ `__tests__/`）—— 纯解析
 - `extensions/perforce/src/client.ts` —— 图谱数据源方法（搜 `getGraphChanges`）
+- `extensions/perforce/src/graphSyncLedger.ts`（账本）· `graphSyncExternal.ts`（外部同步记录：解析 + 只读薄壳）—— 同步点的两个输入
 - `extensions/perforce/src/extension.ts` —— `perforce-graph.*` 命令注册（搜 `graphClient`）
 - `extensions/perforce/package.json` —— **只有 menus 项**，无 commands 项（头号坑）
 - `apps/editor/src/renderer/workbench/perforceGraph/PerforceGraphEditor.tsx` —— 主编辑器
@@ -254,7 +276,7 @@ cd extensions/perforce && pnpm e2eg perforceGraph
 - `apps/editor/src/renderer/services/gitGraph/{graphLayout,fileTree}.ts` —— 复用的布局/文件树
 - `extensions/perforce/e2e/specs/perforceGraph.spec.ts` —— e2e 冒烟
 - `extensions/perforce/e2e/specs/perforceGraph{FileHistory,FolderHistorySync,HistoryMultiSelect}.spec.ts` —— scoped 历史三条回归（单文件 / 目录 get / 多选并集 + 双路径 get；fake-p4 的 `changes` case 吃全部 filespec 并回答并集）
-- `extensions/perforce/e2e/specs/perforceGraphHave.spec.ts` —— 同步点九条回归（**打开时不查**、按查询按钮才给出 `#4521`、点工具栏那句跳回该行 / 图谱内 get 后徽章靠**记账**前移、全程零查询 / **打开的是 client 子目录时**，文件夹 scope 答 4521、切到整仓库 scope 必须先回到「未知」再由自己的查询答 4522——第三条刻意让两个 scope 的答案不同，否则断言在点击前后都成立、等于假绿 / 已是最新的 get 也要记账 / 只碰外部目录的同步点跳转落点 / 行 get 零回读、对话框 get 回读、整仓库列表 get 回读；fake-p4 的 `changes` case 认 `#have` 后缀（按**同一个文件**同时过 scope 与 per-file haveRev，seed 用 `SeedFile.haveRev` 把 have 停在中间版本）以及 `<spec>@<cl>` 后缀（sync 后的落点回读按 CL 收窄），两者都必须在**按 scope 过滤之前**剥掉后缀）
+- `extensions/perforce/e2e/specs/perforceGraphHave.spec.ts` —— 同步点十条回归（**打开时不查**、按查询按钮才给出 `#4521`、点工具栏那句跳回该行 / 图谱内 get 后徽章靠**记账**前移、全程零查询 / **打开的是 client 子目录时**，文件夹 scope 答 4521、切到整仓库 scope 必须先回到「未知」再由自己的查询答 4522——第三条刻意让两个 scope 的答案不同，否则断言在点击前后都成立、等于假绿 / 已是最新的 get 也要记账 / 只碰外部目录的同步点跳转落点 / 行 get 零回读、对话框 get 回读、整仓库列表 get 回读 / **外部同步记录**：全新 userData 下账本为空，徽章仍给出外部文件里的 `#4522` 且 tooltip 说来源在编辑器之外——这条专门钉 fixture 对 `UNIVERSE_P4_SAVIOR_CONFIG` 的钉死，开发机上真实存在那个文件；fake-p4 的 `changes` case 认 `#have` 后缀（按**同一个文件**同时过 scope 与 per-file haveRev，seed 用 `SeedFile.haveRev` 把 have 停在中间版本）以及 `<spec>@<cl>` 后缀（sync 后的落点回读按 CL 收窄），两者都必须在**按 scope 过滤之前**剥掉后缀）
   - 最后一条是**迟到落账**的护栏：`UNIVERSE_P4_FAKE_READBACK_MS` 把回读拖过 5s 快档（fake 默认秒答，不拖就永远走不到升级路径），断言 get 结束后徽章**先**仍是未知（证明快档真的被杀了）**再**自己前移到 `#4522`，全程零点击。**两处都做过变异验证**：注掉 `runSync` 里的慢档重试 → 红；注掉 `notifyScmStateChanged()` → 红（终局断言只有「迟到落账 + poke」这一条路能达成，中间那句「先仍是未知」是弱断言，别拿它当护栏）。
   - 另三条是**直接记账**的正反两面，靠 fake 的新缝 `UNIVERSE_P4_FAKE_READBACK_LOG`（带修订后缀的 `changes` 各追加一行 argv）：**正面**＝行 get 后徽章照常前移而日志**仍空**（fake 秒答，所以「徽章动了」这件事本身什么也证明不了——必须日志空才行；同时 `READBACK_MS=40000` 让旧路径不可能在断言前答完）；**反例一**＝整仓库 tab 上右键 4522 → `Get Revision…` → 只勾 `src`（种子让 4521 碰 `src/a.txt`、4522 只碰 `other/b.txt`，两个候选答案不同），日志必须非空、且随后开一个 scoped 到 `src` 的 tab 徽章必须是 **`#4521`**（回读的答案）而非 `#4522`（点的那一行）；**反例二**＝`openSubdir` 打开 client 子目录、点地球开关切到整仓库（先等只属于该列表的 4523 行出现，确保菜单浮在**已换过**的列表上）再对行 get，此时徽章两条路都会前移到同一个号，**只有日志非空**能证明它走了回读——即 wholeRepo 这条刻意的拒绝仍然生效。**三条都做过变异验证**：注掉 `directSyncPoint` → 正面红；对话框那条改传勾选目录（`clientRoot` 保留）→ 反例一红于「日志非空」；把 wholeRepo 的拒绝去掉 → 反例二红（同时正面那条也会红，方向相反，一并说明这条缝在两个方向上都有分辨力）。
 

@@ -289,7 +289,7 @@ function seedWorkspace(
 }
 
 export type PerforceFixtures = {
-  p4Workspace: PerforceHarness & { stateFile: string }
+  p4Workspace: PerforceHarness & { stateFile: string; saviorFile: string }
   electronApp: ElectronApplication
   page: Page
   workbench: WorkbenchPO
@@ -320,6 +320,24 @@ export interface P4SeedConfig {
   /** Ignore rules for `p4 ignores -i` (checkIgnore e2e): client-root-relative
    *  paths or directory prefixes. */
   readonly ignored?: readonly string[]
+  /** Sync records another tool left on this machine, as the graph's sync point
+   *  reads them (`../src/graphSyncExternal.ts`). Seeded into a temp file the app
+   *  is pointed at, never into the workspace. */
+  readonly savior?: readonly P4SaviorSeed[]
+}
+
+/** One entry of the `editor_savior` helper's sync config. */
+export interface P4SaviorSeed {
+  /** Depot path the tool groups its entries under (the stream). The extension
+   *  matches on the client root, so this is decoration. */
+  readonly depotPath: string
+  /** Epoch ms the tool stamped the record with — what decides whether it or the
+   *  editor's own record answers. */
+  readonly timestamp: number
+  readonly change: string | number
+  /** Client root the record claims to describe. Defaults to this spec's own
+   *  workspace, which is what makes it answer for it. */
+  readonly clientRoot?: string
 }
 
 /** Blame seed: the changelist annotate reports + the metadata `changes -l` returns. */
@@ -350,6 +368,36 @@ export interface P4SubmittedSeed {
   }[]
 }
 
+/**
+ * The sync config `editor_savior` keeps under the user's home, as the app reads
+ * it — written to a temp file the app is pointed at instead of anywhere near the
+ * workspace or the real one.
+ *
+ * A path is returned even with nothing to seed, and it is a path that does not
+ * exist: the app always reads SOME file for this, and pointing it at a real
+ * developer's own records would make every journey depend on their machine.
+ */
+function seedSaviorConfig(
+  clientRoot: string,
+  seeds: readonly P4SaviorSeed[] | undefined,
+): string {
+  const file = join(mkTempDir('ue2-p4-savior-'), 'sync_config.json')
+  if (seeds === undefined || seeds.length === 0) return file
+  const byDepot: Record<string, unknown[]> = {}
+  for (const seed of seeds) {
+    const entries = byDepot[seed.depotPath] ?? []
+    entries.push({
+      ClientName: 'e2e-client',
+      ClientRoot: seed.clientRoot ?? clientRoot,
+      ChangeNum: Number(seed.change),
+      Timestamp: seed.timestamp,
+    })
+    byDepot[seed.depotPath] = entries
+  }
+  writeFileSync(file, JSON.stringify(byDepot, null, 2), 'utf8')
+  return file
+}
+
 export const test = base.extend<
   PerforceFixtures & {
     p4Seeds: P4SeedConfig
@@ -377,11 +425,13 @@ export const test = base.extend<
       p4Seeds.ignored,
     )
     const openDir = openSubdir ? join(workspaceDir, openSubdir) : workspaceDir
+    const saviorFile = seedSaviorConfig(workspaceDir, p4Seeds.savior)
     const abs = (relPath: string) => toPosix(join(workspaceDir, relPath))
     await use({
       clientRoot: workspaceDir,
       openDir,
       stateFile,
+      saviorFile,
       file: abs,
       fileUri: (relPath: string) => {
         const p = abs(relPath)
@@ -405,6 +455,10 @@ export const test = base.extend<
         // unpinnable and would make every timing assertion here nondeterministic.
         // The rate's own spec overrides this with a scripted probe.
         UNIVERSE_P4_IO_PROBE: 'off',
+        // Pinned even when nothing is seeded (the file simply does not exist):
+        // the app reads the real developer's own sync records otherwise, and
+        // every assertion below would depend on their machine.
+        UNIVERSE_P4_SAVIOR_CONFIG: p4Workspace.saviorFile,
         ...p4ExtraEnv,
       },
     })

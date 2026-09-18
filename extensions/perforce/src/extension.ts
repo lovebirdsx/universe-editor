@@ -32,6 +32,7 @@ import type {
   WorkingTreeChangeDto,
 } from '@universe-editor/extensions-common'
 import { readdir } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { ConcurrencyGate } from './concurrency.js'
 import { setP4CommandTimeoutSeconds, type P4Connection } from './p4Service.js'
@@ -39,6 +40,7 @@ import { PerforceClient, SYNC_POINT_READBACK_SLOW_EXEC, type P4CacheOptions } fr
 import type { SyncPreviewFile } from './syncParser.js'
 import { P4CacheDisk } from './p4CacheDisk.js'
 import { GraphSyncLedger, NO_REGRESSION } from './graphSyncLedger.js'
+import { ExternalSyncPoints, saviorConfigPath } from './graphSyncExternal.js'
 import { ClientManager } from './clientManager.js'
 import { formatScanElapsed, P4StatusBarController } from './p4StatusBar.js'
 import { AutoEditController } from './autoEdit.js'
@@ -503,6 +505,13 @@ export async function activate(context: ExtensionContext): Promise<void> {
   const ledger = context.globalStoragePath
     ? GraphSyncLedger.open(context.globalStoragePath, log)
     : undefined
+
+  // What the OTHER tools on this machine pulled (the savior helper's own config
+  // under the user's home, and UGS's state file inside the workspace). Read-only
+  // and independent of `globalStoragePath`: a workspace pulled by one of them
+  // must not read as "never synced" just because this editor was not the one
+  // that ran the get. See `graphSyncExternal.ts`.
+  const externalSyncPoints = ExternalSyncPoints.open(saviorConfigPath(process.env, homedir()), log)
 
   // Probe for a p4 CLI + a client for this folder. A missing binary or a folder
   // outside any Perforce workspace disables the provider without crashing.
@@ -2717,10 +2726,14 @@ export async function activate(context: ExtensionContext): Promise<void> {
             return result
           },
         ),
-        // The ledger's answer alone — zero p4 calls, synchronous. This is what
-        // the graph reads on every load and scope switch; `getHaveChange` is only
-        // reached when this comes back empty (and the scope is narrow enough to
-        // be worth asking about) or when the user presses the query button.
+        // The ledger's answer — plus whatever the tools outside the editor
+        // recorded, which is newer than a get of ours more often than not in a
+        // workspace people pull with them. Both go into ONE comparison, so a
+        // newer external record wins and a query's tombstone still outranks it.
+        // Zero p4 calls, synchronous. This is what the graph reads on every load
+        // and scope switch; `getHaveChange` is only reached when this comes back
+        // empty (and the scope is narrow enough to be worth asking about) or
+        // when the user presses the query button.
         commands.registerCommand(
           'perforce-graph.getSyncPoint',
           (...args: unknown[]): P4GraphSyncPoint | null => {
@@ -2728,8 +2741,21 @@ export async function activate(context: ExtensionContext): Promise<void> {
             const opts = (args[0] ?? {}) as P4GraphLoadOptions
             const resolved = resolveGraphScope(opts)
             if (resolved.kind !== 'ok') return null
-            const answer = ledger.lookup(resolved.target.root, resolved.ledgerScope)
+            const answer = ledger.lookup(
+              resolved.target.root,
+              resolved.ledgerScope,
+              externalSyncPoints.read(resolved.target.root),
+            )
             if (!answer) return null
+            if (answer.record.source === 'external') {
+              // Which file it came from is logged where the file is read; this
+              // line ties that record to the answer the graph is about to show.
+              log(
+                `[perforce] graph sync point: #${answer.record.change} over ${resolved.ledgerScope
+                  .map((p) => p.path)
+                  .join(', ')} recorded outside the editor`,
+              )
+            }
             return {
               id: answer.record.change,
               source: answer.record.source,

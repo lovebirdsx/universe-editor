@@ -72,6 +72,9 @@
  *     would compare the client root with itself and prove nothing — that get
  *     keeps paying a read-back. The badge moves either way here (the clicked row
  *     IS the read-back's answer for `//...`), so the log is the evidence again.
+ *  9. The workspace was pulled with a tool that is not this editor (the
+ *     `editor_savior` helper). Its record answers the badge on open, with no
+ *     query and no ledger entry of our own — the whole point of reading it.
  *--------------------------------------------------------------------------------------------*/
 
 import { readFileSync } from 'node:fs'
@@ -701,5 +704,40 @@ test.describe('@p1 perforce graph sync point, a whole-repo listing still asks', 
     // extends it to this listing would leave the log empty.
     await expect(line).toHaveText('#4523')
     await expect.poll(() => readbackLines(WIDE_READBACK_LOG).length).toBeGreaterThan(0)
+  })
+})
+
+// Unix ms, well in the past: a record stamped in the future is clamped to the
+// read time, which would make this journey's ordering assertions say nothing.
+const SAVIOR_TIME = 1_751_600_100_000
+
+test.describe('@p1 perforce graph sync point, recorded by a sync outside the editor', () => {
+  test.use({
+    p4Seeds: {
+      files: [aTxt],
+      submitted: SUBMITTED,
+      savior: [{ depotPath: '//depot/branch_x', change: '4522', timestamp: SAVIOR_TIME }],
+    },
+  })
+
+  test('badges what another tool pulled, without asking the server @regression', async ({
+    page,
+    workbench,
+    perforce,
+  }) => {
+    await openGraphWorkspace(page, workbench, perforce.openDir)
+    const editor = page.locator('[data-testid="perforceGraph-editor"]')
+    const line = editor.getByTestId('perforceGraph-syncPoint')
+    await expect(editor.locator('[data-id="4521"]')).toBeVisible()
+
+    // The workspace was pulled with another tool, never through this editor
+    // (fresh userData ⇒ the ledger is empty), and the whole-graph scope never
+    // probes on its own. So this badge can only come from the record that tool
+    // left on the machine — and it arrives with no click at all.
+    await expect(line).toHaveText('#4522')
+    await expect(line).toHaveAttribute('data-tooltip', /another tool/)
+    await expect(line).not.toHaveAttribute('data-tooltip', /Answered by Perforce/)
+    await expect(editor.locator('[data-id="4522"]')).toContainText('Synced')
+    await expect(editor.locator('[data-id="4521"]')).not.toContainText('Synced')
   })
 })

@@ -1382,6 +1382,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'perforceGraph.syncPoint.fromQuery': 'Perforce 于 {time} 答复。比它更新的变更尚未同步。',
   'perforceGraph.syncPoint.fromSync':
     '编辑器于 {time} 记录（那次拉取的就是这个 changelist）。此后在编辑器之外做的同步不会被反映——可用「查询同步点」重新查询。',
+  'perforceGraph.syncPoint.fromExternal':
+    '本机另一个同步工具于 {time} 写下的记录。本编辑器无法核实该范围实际拉到了哪里——可用「查询同步点」向 Perforce 核对。',
   'perforceGraph.syncPoint.widerScope':
     '该记录来自更大的范围，所以这只是上界：当前范围实际可能拉得更少。',
   'perforceGraph.syncPoint.partial':

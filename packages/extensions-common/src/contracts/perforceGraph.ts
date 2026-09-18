@@ -95,27 +95,33 @@ export interface P4GraphHaveChangeResult {
 }
 
 /** Where a local sync point came from. */
-export type P4GraphSyncPointSource = 'sync' | 'query'
+export type P4GraphSyncPointSource = 'sync' | 'query' | 'external'
 
 /**
  * Where the displayed scope's pulled history ends — the graph's local sync
  * point, and everything the badge and the toolbar line are drawn from.
  *
  * This is normally answered from the editor's own ledger of the gets it ran
- * (`extensions/perforce/src/graphSyncLedger.ts`), which costs nothing: the old
- * behaviour — asking p4 `#have` on every load and scope switch — paid the size
- * of the scope each time (tens of seconds over a wide workspace). The graph
- * therefore also has to be honest about the answer's provenance, which is what
- * `source`, `at`, `widerScope` and `partial` are for: a recorded answer says
- * nothing about a `p4 sync` run outside the editor since, and only an explicit
- * query reflects it.
+ * (`extensions/perforce/src/graphSyncLedger.ts`) plus whatever sync tools
+ * outside the editor recorded on this machine (`graphSyncExternal.ts`), which
+ * costs nothing: the old behaviour — asking p4 `#have` on every load and scope
+ * switch — paid the size of the scope each time (tens of seconds over a wide
+ * workspace). The graph therefore also has to be honest about the answer's
+ * provenance, which is what `source`, `at`, `widerScope` and `partial` are for:
+ * a recorded answer says nothing about a `p4 sync` run nobody recorded since,
+ * and only an explicit query is the server's own word.
  */
 export interface P4GraphSyncPoint {
   /** The changelist id. */
   id: string
   /** `sync`: recorded by a get this editor ran. `query`: answered by p4 just now
    *  (`perforce-graph.getHaveChange`, which also overwrites the ledger — truth
-   *  beats bookkeeping, and a stale entry must not be able to freeze). */
+   *  beats bookkeeping, and a stale entry must not be able to freeze).
+   *  `external`: read from a sync record another tool on this machine left
+   *  behind (the `editor_savior` helper's own config, or UGS's workspace state
+   *  file). It is a real local sync this editor did not run, so it outranks a
+   *  stale record of its own by the SAME newest-wins rule — but nothing here can
+   *  vouch for it the way a query can, and the tooltip has to say so. */
   source: P4GraphSyncPointSource
   /** Epoch ms the answer was established: the get's completion, or the query's
    *  run. Surfaced in the tooltip. */

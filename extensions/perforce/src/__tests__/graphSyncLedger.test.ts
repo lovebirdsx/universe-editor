@@ -436,3 +436,98 @@ describe('GraphSyncLedger', () => {
     )
   })
 })
+
+describe('lookupSyncPoint with records from outside the editor', () => {
+  /** What `graphSyncExternal.ts` produces: the whole client root, stamped with
+   *  the other tool's own timestamp. */
+  function external(
+    change: string,
+    at: number,
+    extra: Partial<SyncLedgerRecord> = {},
+  ): SyncLedgerRecord {
+    return {
+      clientRoot: ROOT,
+      paths: [CLIENT_ROOT],
+      change,
+      source: 'external',
+      at,
+      complete: true,
+      ...extra,
+    }
+  }
+
+  it('answers from an external record when the editor has nothing', () => {
+    const answer = lookupSyncPoint([], ROOT, [SRC], [external('4521', 100)])
+    expect(answer?.record.change).toBe('4521')
+    expect(answer?.record.source).toBe('external')
+    expect(answer?.widerScope).toBe(true)
+  })
+
+  it('prefers an external record that is NEWER than the editor’s own', () => {
+    // The whole point: the workspace was pulled with the other tool afterwards,
+    // so the editor's record of its own older get is no longer the truth.
+    const answer = lookupSyncPoint(
+      [record([SRC], '4520', 100)],
+      ROOT,
+      [SRC],
+      [external('4522', 200)],
+    )
+    expect(answer?.record.change).toBe('4522')
+  })
+
+  it('keeps the editor’s own answer when its record is the newer one', () => {
+    const answer = lookupSyncPoint(
+      [record([SRC], '4560', 300)],
+      ROOT,
+      [SRC],
+      [external('4522', 200)],
+    )
+    expect(answer?.record.change).toBe('4560')
+    expect(answer?.record.source).toBe('sync')
+  })
+
+  it('gives a tie to the editor’s own record', () => {
+    const answer = lookupSyncPoint(
+      [record([SRC], '4560', 200)],
+      ROOT,
+      [SRC],
+      [external('4522', 200)],
+    )
+    expect(answer?.record.change).toBe('4560')
+  })
+
+  it('still answers "nothing synced" from a newer tombstone', () => {
+    // The reason the two lists go through ONE comparison: a query that just
+    // answered "this scope has nothing synced" must not hand the answer back to
+    // an older external record. A second lookup of its own would, because a
+    // tombstone winner is reported exactly like "no record at all".
+    const tombstone = record([SRC], '', 300)
+    expect(lookupSyncPoint([tombstone], ROOT, [SRC], [external('4522', 200)])).toBeUndefined()
+    // And the other way round: a tombstone the external sync is NEWER than does
+    // not stand in its way.
+    expect(
+      lookupSyncPoint([record([SRC], '', 100)], ROOT, [SRC], [external('4522', 200)])?.record
+        .change,
+    ).toBe('4522')
+  })
+
+  it('never answers for another client root', () => {
+    expect(
+      lookupSyncPoint([], ROOT, [SRC], [external('4521', 100, { clientRoot: 'X:/p4ws/other' })]),
+    ).toBeUndefined()
+  })
+
+  it('never answers a wider question from a narrower external scope', () => {
+    expect(
+      lookupSyncPoint([], ROOT, [CLIENT_ROOT], [external('4521', 100, { paths: [SRC] })]),
+    ).toBeUndefined()
+  })
+
+  it('leaves the ledger itself untouched', () => {
+    const ledger = GraphSyncLedger.open(dir)!
+    ledger.record(record([SRC], '4520', 100))
+    const before = readFileSync(join(dir, 'graphSyncLedger.json'), 'utf8')
+    expect(ledger.lookup(ROOT, [SRC], [external('4522', 200)])?.record.change).toBe('4522')
+    expect(readFileSync(join(dir, 'graphSyncLedger.json'), 'utf8')).toBe(before)
+  })
+})

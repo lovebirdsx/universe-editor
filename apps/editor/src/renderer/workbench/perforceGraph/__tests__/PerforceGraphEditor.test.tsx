@@ -1026,6 +1026,23 @@ describe('PerforceGraphEditor sync point', () => {
     expect(syncLine()).toContain('Synced to #4519')
   })
 
+  it('takes another tool’s record over the server’s answer, scoped history included', async () => {
+    // Deliberate, and the reason `docs/graph.md` no longer promises a probe for
+    // every scoped history: probing here would put a p4 call behind every
+    // subdirectory switch on exactly the machines this record exists for. The
+    // scope is marked as an upper bound instead, and the tooltip says so.
+    const { commandService } = renderScopedEditor(
+      SCOPED_PATHS,
+      ledgerPoint('4519', { source: 'external', widerScope: true }),
+      '4520',
+    )
+    await flush()
+
+    const calls = (commandService.executeCommand as ReturnType<typeof vi.fn>).mock.calls
+    expect(calls.some((c) => c[0] === PerforceGraphCommands.getHaveChange)).toBe(false)
+    expect(syncLine()).toContain('Synced to #4519')
+  })
+
   it('queries on the toolbar button and shows what the server answered', async () => {
     const { commandService } = renderEditor(null, undefined, '4521')
     await flush()
@@ -1090,6 +1107,20 @@ describe('PerforceGraphEditor sync point', () => {
 
     const tooltip = screen.getByTestId('perforceGraph-syncPoint').getAttribute('data-tooltip') ?? ''
     expect(tooltip).toContain('Answered by Perforce')
+  })
+
+  it('says an answer another tool recorded was not this editor’s own', async () => {
+    // The third provenance. Folding it into `'sync'` would claim this editor ran
+    // a get it never ran, and the wording must not be mistakable for either of
+    // the other two (the caveats above key off those exact phrases).
+    renderEditor({ ...ledgerPoint('4519'), source: 'external' })
+    await flush()
+
+    const tooltip = screen.getByTestId('perforceGraph-syncPoint').getAttribute('data-tooltip') ?? ''
+    expect(tooltip).toContain('another tool')
+    expect(tooltip).toContain('cannot check')
+    expect(tooltip).not.toContain('Answered by Perforce')
+    expect(tooltip).not.toContain('when this editor pulled')
   })
 
   it('labels an upper bound when the record came from a wider scope', async () => {
