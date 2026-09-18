@@ -387,6 +387,13 @@ jobs:
         run: npm --prefix vendor/typescript-language-server ci
 
       - name: Build
+        env:
+          # Same Windows spawn contention as the other build jobs: turbo fans out
+          # ~10 tsgo.exe at its default concurrency and a neighbour can die at DLL
+          # init (0xC0000142) before echoing anything, leaving only an exit code.
+          # The Defender exclusion above covers Electron launch locks, not this.
+          # 10 is turbo's own default, so the non-Windows leg is unchanged.
+          TURBO_CONCURRENCY: ${{ runner.os == 'Windows' && 2 || 10 }}
         run: pnpm build
 
       - name: Run E2E smoke (Linux, xvfb)
