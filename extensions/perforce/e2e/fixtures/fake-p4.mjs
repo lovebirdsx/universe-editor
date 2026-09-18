@@ -23,7 +23,15 @@
  *  in the extension host with no build step.
  *--------------------------------------------------------------------------------------------*/
 
-import { readFileSync, writeFileSync, readdirSync, mkdirSync, rmSync, existsSync, appendFileSync } from 'node:fs'
+import {
+  readFileSync,
+  writeFileSync,
+  readdirSync,
+  mkdirSync,
+  rmSync,
+  existsSync,
+  appendFileSync,
+} from 'node:fs'
 import { join, relative, sep, dirname } from 'node:path'
 
 const STATE_PATH = process.env.UNIVERSE_P4_FAKE_STATE
@@ -374,25 +382,35 @@ function computeReconcile(state) {
 /** Resolve command file args (paths or wildcards) to depotFiles on disk. Honors
  *  three forms: bare `//...` / `//depot/...` (whole client), a directory-scoped
  *  `<path>/...` (only files under that dir — mirrors real p4 and the extension's
- *  narrowed reconcile scope), or explicit file paths. */
+ *  narrowed reconcile scope), or explicit file paths.
+ *
+ *  The forms are NOT interchangeable and a batch may mix them, so the answers are
+ *  UNIONED (each filespec is resolved independently, as p4 does) rather than one
+ *  form taking precedence:
+ *
+ *    - `<path>/...` is a subtree wildcard → prefix match on clientFile.
+ *    - a bare path is a SINGLE-FILE spec → it matches only a file whose path it
+ *      equals. Nothing is matched by its filesystem shape: a path that no longer
+ *      exists names no file at all, and p4 answers "no file(s) to reconcile" for
+ *      it. That is precisely why a deleted directory needs the `<dir>/...`
+ *      companion, and a fake that let a bare path prefix-match would answer a
+ *      query a real server refuses — the silent-clean bug this suite guards
+ *      against would go untested.
+ */
 function targetsFromArgs(state, args, discovered) {
   const files = args.filter((a) => !a.startsWith('-'))
   if (files.length === 0) return discovered
   const wholeClient = files.some((f) => f === '//...' || f === `${state.depotPrefix}/...`)
   if (wholeClient) return discovered
-  // Directory-scoped wildcards: `<something>/...` → prefix match on clientFile.
   const dirScopes = files
     .filter((f) => f.endsWith('/...'))
     .map((f) => normPath(f.slice(0, -'/...'.length)))
-  if (dirScopes.length > 0) {
-    return discovered.filter((d) => {
-      const abs = normPath(clientOf(state, d.depotFile))
-      return dirScopes.some((s) => abs === s || abs.startsWith(`${s}/`))
-    })
-  }
+  const exactLocal = new Set(files.filter((f) => !f.endsWith('/...')).map((f) => normPath(f)))
+  const exactDepot = new Set(files.filter((f) => f.startsWith('//')))
   return discovered.filter((d) => {
     const abs = normPath(clientOf(state, d.depotFile))
-    return files.some((f) => normPath(f) === abs || toDepotFile(state, f) === d.depotFile)
+    if (exactLocal.has(abs) || exactDepot.has(d.depotFile)) return true
+    return dirScopes.some((s) => abs === s || abs.startsWith(`${s}/`))
   })
 }
 
@@ -1029,12 +1047,28 @@ function main() {
 
     case 'reconcile': {
       const dryRun = rest.includes('-n')
+      // `UNIVERSE_P4_FAKE_ARGV_LOG` appends every reconcile argv, one line each.
+      // It is the only evidence a spec SHAPE assertion can be built on: the fake
+      // answers from disk state, so "the row appeared" is satisfied just as well
+      // by a query that asked the wrong filespec but happened to match, and by
+      // one that asked the right spec for the wrong reason. A log of what was
+      // actually handed to p4 is the part only the real invocation satisfies.
+      const argvLog = process.env.UNIVERSE_P4_FAKE_ARGV_LOG
+      if (argvLog) {
+        try {
+          appendFileSync(argvLog, `${process.argv.slice(2).join(' ')}\n`)
+        } catch {
+          // A diagnostic seam must never fail a p4 command.
+        }
+      }
       const discovered = computeReconcile(state)
       const targets = targetsFromArgs(state, rest, discovered)
       if (dryRun) {
         if (targets.length === 0) {
+          // Real behaviour: "nothing to do" is reported on STDERR with exit 0 —
+          // a clean dry run is a RESULT, not a failure.
           process.stderr.write('//... - no file(s) to reconcile.\n')
-          return 1
+          return 0
         }
         emit(
           targets.map((t) => ({

@@ -6,6 +6,7 @@ import {
   containsAny,
   isScopeFile,
   isUnderAny,
+  isUnderAnyKey,
   norm,
   respellUnderRoot,
   scopeKey,
@@ -73,6 +74,54 @@ describe('isUnderAny', () => {
     expect(isUnderAny('C:/ws/CLIENT', ['C:/ws/client'])).toBe(insensitive)
     // Case folding must not defeat the directory boundary.
     expect(isUnderAny('C:/ws/clientTools/a.txt', ['C:/ws/Client'])).toBe(false)
+  })
+})
+
+describe('isUnderAnyKey', () => {
+  const keys = (...dirs: string[]): ReadonlySet<string> => new Set(dirs.map(scopeKey))
+
+  it('answers the same question as isUnderAny, for a keyed directory set', () => {
+    const dirs = ['C:/ws/Client', 'C:/ws/Other']
+    for (const path of [
+      'C:/ws/Client',
+      'C:/ws/Client/a.txt',
+      'C:/ws/Client/deep/b.txt',
+      'C:/ws/Other/x.txt',
+      'C:/ws/ClientTools/a.txt',
+      'C:/ws/AB',
+      'C:/ws',
+    ]) {
+      expect(isUnderAnyKey(path, keys(...dirs))).toBe(isUnderAny(path, dirs))
+    }
+  })
+
+  it('matches the key itself, not only paths below it', () => {
+    expect(isUnderAnyKey('C:/ws/Client', keys('C:/ws/Client'))).toBe(true)
+  })
+
+  it('never matches on a bare prefix (Client must not match ClientTools)', () => {
+    expect(isUnderAnyKey('C:/ws/ClientTools/a.txt', keys('C:/ws/Client'))).toBe(false)
+    expect(isUnderAnyKey('C:/ws/Clientter', keys('C:/ws/Client'))).toBe(false)
+  })
+
+  it('matches nothing for an empty key set', () => {
+    expect(isUnderAnyKey('C:/ws/a.txt', keys())).toBe(false)
+  })
+
+  it('follows the host case policy for the path segments', () => {
+    const insensitive = process.platform === 'win32' || process.platform === 'darwin'
+    expect(isUnderAnyKey('C:/ws/Client/a.txt', keys('C:/ws/client'))).toBe(insensitive)
+    expect(isUnderAnyKey('C:/ws/clientTools/a.txt', keys('C:/ws/Client'))).toBe(false)
+  })
+
+  it('is slash-insensitive and folds the drive letter', () => {
+    expect(isUnderAnyKey('c:\\ws\\Client\\a.txt', keys('C:/ws/Client'))).toBe(true)
+  })
+
+  it('does not walk past a root with no parent segment', () => {
+    expect(isUnderAnyKey('/ws/a.txt', keys('/ws/a'))).toBe(false)
+    expect(isUnderAnyKey('/ws/a.txt', keys('/ws'))).toBe(true)
+    expect(isUnderAnyKey('a.txt', keys('/ws'))).toBe(false)
   })
 })
 

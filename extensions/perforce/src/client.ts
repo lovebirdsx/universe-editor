@@ -92,6 +92,7 @@ import { carveReconcileFilespecs } from './reconcileCarve.js'
 import {
   norm,
   isUnderAny,
+  isUnderAnyKey,
   isScopeFile,
   containsAny,
   scopeKey,
@@ -158,6 +159,11 @@ interface DesiredGroup {
    *  owning changelist), or undefined for a top-level group. */
   readonly parentId?: string
 }
+
+/** What a local path is on disk, as far as a narrow reconcile query cares:
+ *  `'gone'` is a distinct answer, not a flavour of `'file'` — see
+ *  {@link PerforceClient._pathKind}. */
+type PathKind = 'dir' | 'file' | 'gone'
 
 /** The checkpoint payload for one scanned directory of the background reconcile
  *  scan ({@link P4CacheNs.reconcileScan}): what the scan found plus when. A
@@ -1930,18 +1936,30 @@ export class PerforceClient {
    * the watcher's flush needs the rows themselves — the SCM row's click command
    * depends on `action`, which the rendered hint cannot recover.
    *
-   * `covered` is the subset of `paths` the query actually examined (opened and
-   * out-of-scope paths are dropped before spawning, and paths whose batch
-   * failed to run are dropped after). It matters to the caller: "examined and
-   * not in `rows`" is the only defensible reading of "clean", and treating an
-   * unexamined path as clean would write a lie into a checkpoint — or delete a
-   * drift row the query never even looked at.
+   * `subtreeSpecs` maps a requested path's {@link scopeKey} to the filespecs that
+   * answer for it *instead* of its bare form — what a directory event (and a
+   * vanished path, whose kind is unknowable) needs, since a bare path is p4's
+   * single-file spec ({@link _querySpecsFor}). Rows such a query returns name
+   * individual files, so they cannot echo-match the asked path and are kept under
+   * their own path when they sit under a queried root.
    *
-   * Each returned row's `clientFile` is rewritten to the caller's own spelling,
-   * for the reasons in {@link checkWorkingTree}'s echo note.
+   * `covered` is what the query answered for: the paths it examined (opened and
+   * out-of-scope paths are dropped before spawning, and paths whose batch failed
+   * or timed out are dropped after) plus the individual paths it reported back.
+   * It matters to the caller: "examined and not in `rows`" is the only defensible
+   * reading of "clean", and treating an unexamined path as clean would write a lie
+   * into a checkpoint — or delete a drift row the query never even looked at. The
+   * asked paths must stay in it even when only their subtree was queried: the
+   * scan's settle step matches them by exact string to decide whether the
+   * checkpoint covering them still stands.
+   *
+   * Each returned row's `clientFile` is rewritten to the caller's own — or, for a
+   * subtree answer, to the client-root spelling, for the reasons in
+   * {@link checkWorkingTree}'s echo note.
    */
   private async _queryWorkingTreeRows(
     paths: readonly string[],
+    subtreeSpecs: ReadonlyMap<string, readonly string[]> = new Map(),
   ): Promise<{ covered: readonly string[]; rows: readonly ReconcileFile[] }> {
     const empty = { covered: [], rows: [] } as const
     if (this._disposed || paths.length === 0) return empty
@@ -1954,26 +1972,58 @@ export class PerforceClient {
     }
     if (requested.size === 0) return empty
 
-    const { files: fresh, failed } = await this._rescanReconcilePaths([...requested.values()])
+    // Only a root that survived the filter above contributes its subtree specs,
+    // or a row could be attributed to a path this query never asked about.
+    const subtreeKeys = new Set<string>()
+    const owners = new Map<string, string>()
+    const specs: string[] = []
+    for (const [key, path] of requested) {
+      const subtree = subtreeSpecs.get(key)
+      if (subtree !== undefined) subtreeKeys.add(key)
+      for (const spec of subtree ?? [path]) {
+        specs.push(spec)
+        // Every spec is owned, so a failed batch can be traced back to the paths
+        // it failed to answer for — a batch reports its specs, not its owners.
+        owners.set(spec, key)
+      }
+    }
+
+    const { files: fresh, failed, partial } = await this._rescanReconcilePaths(specs)
     if (this._disposed) return empty
 
-    // A failed batch examined nothing, so its paths are not "covered" — drop them
-    // or the caller would read them as clean and erase real drift rows.
-    if (failed.length > 0) {
+    // A failed or timed-out batch did not answer for every path it asked about,
+    // so those paths are not "covered" — drop them or the caller would read them
+    // as clean and erase real drift rows. Their rows are still kept below: a row
+    // is a lower bound, and silence from a batch that never answered is not a
+    // conclusion.
+    const unanswered = [...failed, ...partial]
+    if (unanswered.length > 0) {
       this._log?.(
-        `[perforce] reconcile query: ${failed.length} path(s) failed to scan; their drift rows are kept`,
+        `[perforce] reconcile query: ${unanswered.length} of ${specs.length} spec(s) not answered (failed or timed out); their paths keep the drift they had`,
       )
-      for (const p of failed) requested.delete(scopeKey(p))
+      for (const spec of unanswered) {
+        const owner = owners.get(spec)
+        if (owner !== undefined) requested.delete(owner)
+      }
     }
 
     const rows: ReconcileFile[] = []
     for (const file of fresh) {
       if (!file.clientFile) continue
       const asAsked = requested.get(scopeKey(file.clientFile))
-      if (asAsked === undefined) continue
-      rows.push({ ...file, clientFile: asAsked })
+      if (asAsked !== undefined) {
+        rows.push({ ...file, clientFile: asAsked })
+        continue
+      }
+      if (!isUnderAnyKey(file.clientFile, subtreeKeys)) continue
+      rows.push({ ...file, clientFile: respellUnderRoot(file.clientFile, this.root) })
     }
-    return { covered: [...requested.values()], rows }
+    const covered = new Map<string, string>()
+    for (const [key, path] of requested) covered.set(key, path)
+    for (const row of rows) {
+      if (row.clientFile !== undefined) covered.set(scopeKey(row.clientFile), row.clientFile)
+    }
+    return { covered: [...covered.values()], rows }
   }
 
   /**
@@ -2041,32 +2091,49 @@ export class PerforceClient {
    * sinking the whole scan.
    *
    * `failed` carries the paths whose batch could not run (spawn error, non-timeout
-   * non-zero exit, cancellation). The caller needs it to tell "examined and
-   * clean" apart from "never examined": deleting a drift row for a failed path
-   * would report a lie as clean (the extension's hard rule: a failed query logs,
-   * it never resolves as clean). Timed-out batches are NOT failed — a timeout
-   * still streamed a lower-bound answer, and the timeout itself is conclusive
-   * for the in-flight-race tradeoff the channel already accepts.
+   * non-zero exit, cancellation); `partial` carries those whose batch timed out,
+   * which streamed a lower bound of its answer but never finished. The caller
+   * needs both to tell "examined and clean" apart from "not really examined":
+   * a timeout's silence proves nothing about the paths it never reached, and
+   * deleting a drift row — or checkpointing "clean" — for one of them would report
+   * a lie as clean (the extension's hard rule: a failed query logs, it never
+   * resolves as clean). Rows are a lower bound in both cases and are returned
+   * regardless; only the *silence* is discarded.
    */
-  private async _rescanReconcilePaths(
-    paths: readonly string[],
-  ): Promise<{ files: ReconcileFile[]; failed: readonly string[] }> {
+  private async _rescanReconcilePaths(paths: readonly string[]): Promise<{
+    files: ReconcileFile[]
+    failed: readonly string[]
+    partial: readonly string[]
+  }> {
     const batches = chunkByLength(paths)
     const perBatch = await Promise.all(
-      batches.map(async (batch): Promise<{ files: ReconcileFile[]; failed: readonly string[] }> => {
-        if (this._disposed) return { files: [], failed: [] }
-        // No `recoverPartialOnTimeout` here: this serves `checkWorkingTree`, whose
-        // contract is "which of exactly these paths drifted" — a partial answer
-        // would let the renderer pin the un-covered paths as clean forever (the
-        // in-flight-query-race class of false negative). A timeout therefore reads
-        // as clean under the channel's existing lower-bound tradeoff; later
-        // invalidation (file events / provider refresh / workspace switch) — not a
-        // retry — is what corrects that cache entry.
-        const res = await this._reconcileScanBatch(batch)
-        return res === undefined ? { files: [], failed: batch } : { files: res.files, failed: [] }
-      }),
+      batches.map(
+        async (
+          batch,
+        ): Promise<{
+          files: ReconcileFile[]
+          failed: readonly string[]
+          partial: readonly string[]
+        }> => {
+          if (this._disposed) return { files: [], failed: [], partial: [] }
+          // No `recoverPartialOnTimeout` here: this serves `checkWorkingTree`, whose
+          // contract is "which of exactly these paths drifted" — a partial answer
+          // would let the renderer pin the un-covered paths as clean forever (the
+          // in-flight-query-race class of false negative). A timeout therefore reads
+          // as clean under the channel's existing lower-bound tradeoff; later
+          // invalidation (file events / provider refresh / workspace switch) — not a
+          // retry — is what corrects that cache entry.
+          const res = await this._reconcileScanBatch(batch)
+          if (res === undefined) return { files: [], failed: batch, partial: [] }
+          return { files: res.files, failed: [], partial: res.partial ? batch : [] }
+        },
+      ),
     )
-    return { files: perBatch.flatMap((b) => b.files), failed: perBatch.flatMap((b) => b.failed) }
+    return {
+      files: perBatch.flatMap((b) => b.files),
+      failed: perBatch.flatMap((b) => b.failed),
+      partial: perBatch.flatMap((b) => b.partial),
+    }
   }
 
   /**
@@ -2096,29 +2163,48 @@ export class PerforceClient {
     }
     if (this._disposed) return undefined
     if (res.result.exitCode === 0) {
-      return {
-        files: parseReconcile(res.records, this.root).filter(
-          (f) => !f.clientFile || !this._openedPaths.has(norm(f.clientFile)),
-        ),
-        partial: false,
-      }
+      return { files: this._parseReconcileRecords(res.records), partial: false }
     }
     if (res.result.timedOut) {
       // A timed-out batch reports whatever drift it streamed before the kill
       // (partial recovery) — even zero records: the timeout is what forces the
       // directory to split, not the row count, or a timeout that recovered
       // nothing would fall back to the elapsed heuristic and be re-run forever.
-      const files = parseReconcile(res.records, this.root).filter(
-        (f) => !f.clientFile || !this._openedPaths.has(norm(f.clientFile)),
-      )
-      return { files, partial: true }
+      return { files: this._parseReconcileRecords(res.records), partial: true }
     }
     const stderr = res.result.stderr.toLowerCase()
     if (stderr.includes('no file(s) to reconcile') || stderr.includes('- no such file')) {
-      return { files: [], partial: false }
+      // Silence is a conclusion; the rows are a lower bound. A batch holds several
+      // specs, so "this spec matched nothing" says nothing about the others: on a
+      // server that exits non-zero for a spec it cannot expand, dropping the
+      // records here would throw away real drift rows the other specs reported in
+      // the same batch — the delete-only-speaks-for-its-own-spec rule `checkIgnore`
+      // already learned. So keep the rows and mark the batch partial (never
+      // checkpointed), which is exactly right: what came back is real, what did
+      // not is not evidence of clean.
+      const files = this._parseReconcileRecords(res.records)
+      if (files.length > 0) {
+        this._log?.(
+          `[perforce] incremental reconcile -n reported no file(s) for some spec(s) (${stderr.split('\n')[0]?.trim() ?? ''}); kept ${files.length} row(s) from the same batch`,
+        )
+      }
+      return { files, partial: files.length > 0 }
     }
-    this._log?.(`[perforce] incremental reconcile -n failed: ${res.result.stderr.trim()}`)
+    this._log?.(
+      `[perforce] incremental reconcile -n failed: ${res.result.stderr.slice(0, 500).trim()} (${res.records.length} record(s) discarded)`,
+    )
     return undefined
+  }
+
+  /** Shape `reconcile -n` records into drift rows, dropping the files the plugin
+   *  already has open (their disk state is tracked through the open list, so
+   *  listing them again would double-report). Shared by every exit path of
+   *  {@link _reconcileScanBatch} so a row can never mean different things
+   *  depending on how the batch ended. */
+  private _parseReconcileRecords(records: readonly Record<string, unknown>[]): ReconcileFile[] {
+    return parseReconcile(records, this.root).filter(
+      (f) => !f.clientFile || !this._openedPaths.has(norm(f.clientFile)),
+    )
   }
 
   /** Reconcile the live ResourceGroups with the freshly computed groups: create
@@ -2387,12 +2473,23 @@ export class PerforceClient {
    * `.finally`) must only re-invalidate the latter: a patched checkpoint is
    * already correct, and its `wrap` generation bump fences off any stale write
    * from a round that read the key before the patch.
+   *
+   * `subtrees` are paths whose whole subtree the query answered for — a directory
+   * event or a vanished path, whose spec was `<path>/...` ({@link _querySpecsFor}).
+   * Their rows are pruned from the checkpoint, not just superseded: an
+   * authoritative subtree answer that did not report a row is proof that row is
+   * gone, which is the only way a row can leave a checkpoint for a path nobody
+   * asked about by name. That is safe under a carved spec list too — a carve still
+   * covers every non-excluded path below the directory, and an excluded one is
+   * filtered out of the group anyway.
    */
   private async _patchReconcileScanCheckpoints(
     paths: readonly string[],
     drift: ReadonlyMap<string, ReconcileFile>,
+    subtrees: readonly string[] = [],
   ): Promise<readonly string[]> {
     const merged: string[] = []
+    const subtreeKeys = new Set(subtrees.map((p) => scopeKey(p)))
     for (const key of this._cache.keys(P4CacheNs.reconcileScan)) {
       const dir = key.slice(key.indexOf(':') + 1)
       const covered = paths.filter((p) => isUnderAny(p, [dir]))
@@ -2415,7 +2512,9 @@ export class PerforceClient {
       // checkpoint — the retraction the aggregate could never express.
       const superseded = new Set(covered.map((p) => scopeKey(p)))
       const kept = entry.files.filter(
-        (f) => f.clientFile === undefined || !superseded.has(scopeKey(f.clientFile)),
+        (f) =>
+          f.clientFile === undefined ||
+          (!superseded.has(scopeKey(f.clientFile)) && !isUnderAnyKey(f.clientFile, subtreeKeys)),
       )
       const files = [...kept]
       for (const path of covered) {
@@ -2456,17 +2555,49 @@ export class PerforceClient {
     return merged
   }
 
-  /** Whether `path` is a directory on disk. The narrow query is per-file, so a
-   *  directory event (a new folder, a moved subtree) matches no file row and
-   *  would read as "clean" — those paths must invalidate instead of patch. A
-   *  path that no longer exists is a deleted file, not a directory: `stat`
-   *  throwing IS the answer here, not an error to report. */
-  private async _isDirectoryPath(path: string): Promise<boolean> {
+  /**
+   * What `path` is on disk right now. Three states, not two, because "gone" is
+   * NOT "a deleted file": p4 reads a bare filespec as a single-FILE spec, and a
+   * path that no longer exists names no file either, so `reconcile -n <gone dir>`
+   * answers "no file(s) to reconcile" (exit 0, measured) and the subtree it used
+   * to hold stays invisible. `stat` failing is therefore a third answer to carry,
+   * not a verdict of "file" — that misreading is the reported bug.
+   */
+  private async _pathKind(path: string): Promise<PathKind> {
     try {
-      return (await stat(path)).isDirectory()
+      return (await stat(path)).isDirectory() ? 'dir' : 'file'
     } catch {
-      return false
+      return 'gone'
     }
+  }
+
+  /**
+   * The filespecs a narrow query must send to answer for `path`, or undefined
+   * when no defensible spec can be built (the caller then invalidates instead of
+   * querying — never a guess).
+   *
+   * A directory needs its subtree form: the bare path names no file, so a
+   * directory event (a new folder, a moved subtree, a rename) would otherwise
+   * match nothing and read as "clean". A path that is GONE gets BOTH — which of
+   * "a file was deleted" and "a directory was deleted" happened cannot be known
+   * from a path that is not there, and the two specs answer for the two cases;
+   * a batch mixing them is fine (a spec that matches nothing only prints its own
+   * stderr line, exit stays 0).
+   */
+  private async _querySpecsFor(
+    path: string,
+    kind: PathKind,
+  ): Promise<readonly string[] | undefined> {
+    if (kind === 'file') return [path]
+    const subtree = this._containsAnyExcluded(path)
+      ? // An excluded descendant makes `<path>/...` illegal — it would pull the
+        // excluded subtree back into p4's traversal (the carve module's red
+        // line). Carve around it; a carve that cannot run (readdir failure,
+        // abort, directory budget) leaves no defensible spec at all.
+        await carveReconcileFilespecs(path, this._reconcileExcludeDirs)
+      : [buildScopeFilespec(path, true)]
+    if (subtree === undefined) return kind === 'gone' ? [path] : undefined
+    return kind === 'gone' ? [path, ...subtree] : subtree
   }
 
   /** Human-friendly busy label for a raw p4 command label (e.g. `revert -k` →
@@ -3848,20 +3979,30 @@ export class PerforceClient {
 
   /**
    * Drain the pending external paths and answer them with a NARROW query: one
-   * `reconcile -n -a -e -d <those exact files>` (via {@link checkWorkingTree}),
-   * whose drift is published straight to the renderer. The watcher's signal is
-   * per-file, so the response is per-file — responding with the scan's recursive
-   * `<dir>/...` walk would spend minutes of a 450k-file workspace to learn what
-   * a handful of paths already told us.
+   * `reconcile -n -a -e -d <specs for those paths>` (via
+   * {@link _queryWorkingTreeRows}), whose drift is published straight to the
+   * renderer. The watcher's signal is per-path, so the response is per-path —
+   * answering a save with the scan's recursive `<dir>/...` walk over the whole
+   * workspace would spend minutes of a 450k-file workspace to learn what a
+   * handful of paths already told us.
+   *
+   * What that spec is depends on what the path IS on disk ({@link _pathKind}):
+   * a file answers to its bare path, but a directory — and any path that is gone,
+   * whose kind cannot be known — answers only to its subtree form
+   * ({@link _querySpecsFor}). Reading "the path is gone" as "a deleted file" is
+   * what made a deleted directory invisible: p4 expands a bare spec from the
+   * filesystem, so a path that is not there names no file, `reconcile -n` answers
+   * "no file(s) to reconcile" (exit 0, measured), and that clean verdict was
+   * patched into the covering checkpoint for the next 24h.
    *
    * The answer is then merged INTO the covering checkpoints rather than dropping
    * them ({@link _patchReconcileScanCheckpoints}) — dropping one is destructive
    * to disk, and with a root-level scope every file in the workspace covers the
    * single root checkpoint, so invalidating on save cost the next session a full
-   * re-walk. Three cases cannot be merged and still invalidate: a batch over
-   * {@link MAX_EXTERNAL_NARROW_PATHS} (no query, so no state), a directory event
-   * (the query is per-file and would read the directory as clean), and a failed
-   * query (unknown state, which must not be recorded as clean).
+   * re-walk. Two cases cannot be merged and still invalidate: a batch over
+   * {@link MAX_EXTERNAL_NARROW_PATHS} (no query, so no state), and a path whose
+   * specs could not be built at all (an excluded subtree that cannot be carved
+   * around), which has no defensible answer to record.
    *
    * A mutation that opened its suppression window *after* these paths were
    * queued gets one debounce tick of grace, then the flush proceeds anyway
@@ -3915,42 +4056,58 @@ export class PerforceClient {
       return
     }
 
-    // Directory events can't be answered per-file, so they can't be merged —
-    // partition them out and drop their covering checkpoints instead. Whatever
-    // files landed inside a new directory arrive as their own events under the
-    // recursive watch, so this loses no drift; it only refuses to record "clean"
-    // for a path the query never really examined.
-    const directories: string[] = []
-    const files: string[] = []
+    // Every path is classified once, and the classification decides its spec:
+    // a file answers to its bare path, a directory or a vanished path to its
+    // subtree form. `gone` sends BOTH specs (see _querySpecsFor) so the batch
+    // covers "a file was deleted" and "a directory was deleted" at once; a
+    // directory whose excluded subtrees cannot be carved around has no
+    // defensible spec, so it invalidates instead of being queried.
+    const queryPaths: string[] = []
+    const subtreeSpecs = new Map<string, readonly string[]>()
+    const unanswerable: string[] = []
     for (const path of paths) {
-      if (await this._isDirectoryPath(path)) directories.push(path)
-      else files.push(path)
+      const kind = await this._pathKind(path)
+      const specs = await this._querySpecsFor(path, kind)
+      if (specs === undefined) {
+        unanswerable.push(path)
+        continue
+      }
+      queryPaths.push(path)
+      if (kind !== 'file') subtreeSpecs.set(scopeKey(path), specs)
     }
     if (this._disposed || this._connection !== 'connected') return
-    if (directories.length > 0) this._invalidateAndLatch(directories)
-    if (files.length === 0) return
+    if (unanswerable.length > 0) {
+      this._log?.(
+        `[perforce] ${unanswerable.length} external path(s) have no usable filespec (excluded subtree that could not be carved); their checkpoints are invalidated instead`,
+      )
+      this._invalidateAndLatch(unanswerable)
+    }
+    if (queryPaths.length === 0) return
+    this._log?.(
+      `[perforce] external flush: ${paths.length} path(s) → ${queryPaths.length} queried (${subtreeSpecs.size} as subtrees), ${unanswerable.length} invalidated`,
+    )
     // Latched before the query, not after the patch: the whole span from here to
     // the write is a window in which an in-flight round can install a checkpoint
     // built from a pre-change read, and a patch cannot fence a checkpoint that
     // does not exist yet.
-    this._latchForInFlightScan(files)
+    this._latchForInFlightScan(queryPaths)
 
     // Already filtered by _queryWorkingTreeRows (opened files, out-of-scope and
     // excluded paths).
     let covered: readonly string[]
     let rows: readonly ReconcileFile[]
     try {
-      ;({ covered, rows } = await this._queryWorkingTreeRows(files))
+      ;({ covered, rows } = await this._queryWorkingTreeRows(queryPaths, subtreeSpecs))
     } catch (err) {
       // The paths' state is unknown, and treating unknown as clean would write a
       // lie into the checkpoint that nothing later corrects.
-      this._invalidateAndLatch(files)
+      this._invalidateAndLatch(queryPaths)
       this._log?.(`[perforce] external-change narrow query failed: ${String(err)}`)
       return
     }
     if (this._disposed || this._connection !== 'connected') return
 
-    // `covered` — not `files` — is the authoritative set here: the query drops
+    // `covered` — not `queryPaths` — is the authoritative set here: the query drops
     // opened and out-of-scope paths before spawning, and calling those clean would
     // record a claim the query never made.
     this._applyDriftFromWatcher(covered, rows)
@@ -3964,6 +4121,7 @@ export class PerforceClient {
           .filter((r) => r.clientFile !== undefined)
           .map((r) => [scopeKey(r.clientFile!), r] as const),
       ),
+      [...subtreeSpecs.keys()],
     )
     for (const path of patched) this._externalPatchedPaths.add(path)
     if (this._disposed || this._connection !== 'connected') return
@@ -5197,17 +5355,30 @@ export class PerforceClient {
   }
 
   /** Fold a mutation's own reverted paths back into the drift set, in place of the
-   *  watcher events the mutation suppressed. A bare directory is spelled as
-   *  `<dir>/...` for the dry-run; a `reconcile -n` returns the still-diverged rows
-   *  (a file the mutation un-opened is no longer in `_openedPaths`, so it is no
-   *  longer filtered out), and each is upserted exactly like
-   *  {@link _applyDriftFromWatcher}. A failed query just leaves drift where the
-   *  next session's scan will find it — never recorded as clean. */
+   *  watcher events the mutation suppressed. Each path is spelled by the same rule
+   *  the watcher flush uses ({@link _querySpecsFor}): a directory — and a path
+   *  that is GONE, which is the case that matters here, since a `revert -k` on a
+   *  directory deleted on disk leaves the files opened but absent — needs its
+   *  `<path>/...` form, because a bare path names no file at all. A `reconcile -n`
+   *  returns the still-diverged rows (a file the mutation un-opened is no longer
+   *  in `_openedPaths`, so it is no longer filtered out), and each is upserted
+   *  exactly like {@link _applyDriftFromWatcher}. A failed query just leaves drift
+   *  where the next session's scan will find it — never recorded as clean. */
   private async _reapplyDriftForMutation(paths: readonly string[]): Promise<void> {
     const specs: string[] = []
     for (const path of paths) {
-      if (!path.endsWith('/...') && (await this._isDirectoryPath(path))) specs.push(`${path}/...`)
-      else specs.push(path)
+      if (path.endsWith('/...')) {
+        specs.push(path)
+        continue
+      }
+      const built = await this._querySpecsFor(path, await this._pathKind(path))
+      if (built === undefined) {
+        this._log?.(
+          `[perforce] revert -k: no usable filespec for ${path} (excluded subtree that could not be carved); its drift is left to the next scan`,
+        )
+        continue
+      }
+      specs.push(...built)
     }
     if (specs.length === 0) return
     // A `revert -k`'d file is no longer opened, but `_openedPaths` is still the

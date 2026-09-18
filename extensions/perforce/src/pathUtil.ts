@@ -56,6 +56,33 @@ export function containsAny(parentDir: string, dirs: readonly string[]): boolean
 }
 
 /**
+ * Whether `path` equals or sits under one of the directory keys in `dirKeys`,
+ * where every key is a {@link scopeKey} of a directory. Same semantics as
+ * `isUnderAny(path, dirs)` but keyed, so the caller can hold thousands of
+ * directories without paying `scopeKey` on all of them for every row.
+ *
+ * Walks `path`'s own segments instead of the key list, so each row costs
+ * O(depth) lookups rather than O(dirs): a watcher burst that deletes 2000
+ * directories and then answers a batch of rows must not be O(rows × dirs).
+ * Keys are matched by walking up to and including the whole path, so a key
+ * equal to `path` matches (the caller decides whether "equal" counts — for a
+ * subtree spec it does, because `<dir>/...` covers `dir/*` and below).
+ *
+ * Pure, so unit-testable without spawning p4.
+ */
+export function isUnderAnyKey(path: string, dirKeys: ReadonlySet<string>): boolean {
+  if (dirKeys.size === 0) return false
+  const key = scopeKey(path)
+  if (dirKeys.has(key)) return true
+  let cut = key.lastIndexOf('/')
+  while (cut > 0) {
+    if (dirKeys.has(key.slice(0, cut))) return true
+    cut = key.lastIndexOf('/', cut - 1)
+  }
+  return false
+}
+
+/**
  * Whether `path` EXACTLY equals one of `files`, using {@link scopeKey} for
  * identity — the file counterpart of {@link isUnderAny}, for scope entries that
  * name a single file rather than a directory. No directory-boundary logic:

@@ -33,19 +33,23 @@
  *     down (normal batch) when they fit the budget, and an unreadable count
  *     degrades to a normal scan.
  * 14. An external file change (working-tree watcher) is answered by a NARROW
- *     `reconcile -n` about those exact files plus an incremental drift merge — never
- *     by re-walking `<dir>/...`; the covering checkpoint is PATCHED in place with
- *     that answer (preserving `completedAt`) rather than dropped, because with a
- *     root-level scope every file covers the single root checkpoint and dropping
- *     it cost the next session a full re-walk. Three cases still invalidate: a
- *     bulk change past the path budget, a directory event (the query is per-file
- *     and would read a directory as clean), and a failed query. An in-flight
- *     round is fenced by re-invalidating once it settles — a patch cannot fence a
- *     checkpoint that round has not written yet. Excluded / out-of-scope /
- *     self-mutation / offline / disposed events query nothing at all.
+ *     `reconcile -n` about those paths plus an incremental drift merge — never
+ *     by re-walking the workspace; the covering checkpoint is PATCHED in place
+ *     with that answer (preserving `completedAt`) rather than dropped, because
+ *     with a root-level scope every file covers the single root checkpoint and
+ *     dropping it cost the next session a full re-walk. The spec each path gets
+ *     follows what it IS on disk: a file answers to its bare path, a directory to
+ *     its `<dir>/...` subtree, and a path that is GONE to BOTH (which case
+ *     deleted it cannot be known from a path that is not there — reading it as
+ *     "a deleted file" is what made a deleted directory invisible). Two cases
+ *     still invalidate: a bulk change past the path budget, and a directory whose
+ *     excluded subtree cannot be carved around. An in-flight round is fenced by
+ *     re-invalidating once it settles — a patch cannot fence a checkpoint that
+ *     round has not written yet. Excluded / out-of-scope / self-mutation /
+ *     offline / disposed events query nothing at all.
  */
 import { EventEmitter } from 'node:events'
-import { readdirSync, rmSync } from 'node:fs'
+import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { FileSystemWatcher } from '@universe-editor/extension-api'
@@ -193,8 +197,13 @@ function fakeDisk(): P4CacheDiskBackend & { store: Map<string, string> } {
 
 interface RespondOptions {
   /** Reconcile rows per filespec (client-syntax rels). Return undefined for "no
-   *  special handling" (empty success). */
-  reconcile?: (filespec: string) => { rel: string; action?: string }[] | undefined
+   *  special handling" (empty success). `filespec` is the path the batch asks
+   *  about (the bare form when a spec pair is present); `specs` is the batch's
+   *  whole filespec list, for asserting on the shape p4 was actually handed. */
+  reconcile?: (
+    filespec: string,
+    specs: readonly string[],
+  ) => { rel: string; action?: string }[] | undefined
   /** Advance the injected clock by this much before replying (a slow batch). */
   reconcileDelayMs?: (filespec: string) => number
   /** Override the reconcile exit code / stderr (failure scenarios). */
@@ -305,8 +314,12 @@ function handle(
     }
   }
   if (cmd === 'reconcile' && argv.includes('-n')) {
-    // The filespec is the trailing arg of `reconcile -n -a -e -d <filespec>`.
-    const filespec = argv[argv.length - 1] ?? ''
+    const specs = reconcileSpecs(argv)
+    // The responders are written per PATH, not per spec, so a path answered by a
+    // spec pair (a bare form plus its `<path>/...` companion — the shape every
+    // vanished path and every directory gets) reads as that path. A scan batch is
+    // unaffected: it has no bare/companion pair, so the trailing spec stands.
+    const filespec = specs.find((s) => specs.includes(`${s}/...`)) ?? specs[specs.length - 1] ?? ''
     const delay = opts.reconcileDelayMs?.(filespec)
     if (delay) currentClock?.advance(delay)
     const timeoutRows = opts.reconcileTimeout?.(filespec)
@@ -316,7 +329,7 @@ function handle(
     if (exit !== undefined && exit !== 0) {
       return { stdout: '', stderr: opts.reconcileStderr?.(filespec) ?? 'reconcile failed', exit }
     }
-    const rows = opts.reconcile?.(filespec) ?? []
+    const rows = opts.reconcile?.(filespec, specs) ?? []
     return { stdout: reconcileRows(rows) }
   }
   if (cmd === 'clean') {
@@ -344,23 +357,39 @@ function reconcileScans(): string[][] {
   return calls.filter((a) => subcommand(a) === 'reconcile' && a.includes('-n'))
 }
 
+const WILDCARD_SPEC = /[/\\](\.\.\.|\*)$/
+
+/** The filespecs of a `reconcile -n` argv: everything after `-d`, the last of the
+ *  command's fixed flags. A batch may carry several — a path that is GONE sends
+ *  its bare form AND its `<path>/...` companion. */
+function reconcileSpecs(argv: string[]): string[] {
+  const at = argv.indexOf('-d')
+  return at === -1 ? [] : argv.slice(at + 1)
+}
+
 /**
- * The background scan's own spawns: a `reconcile -n` carrying at least one
- * recursive/wildcard filespec (`<dir>/...` or a carved `<dir>/*`).
+ * The background scan's own spawns: a `reconcile -n` whose filespecs are ALL
+ * recursive/wildcard (`<dir>/...` or a carved `<dir>/*`).
  *
  * Split from {@link narrowScans} because BOTH are `reconcile -n` — asserting on
  * `reconcileScans().length` cannot tell "re-walked the whole directory" from
  * "asked about three files", which is exactly the distinction the watcher's
- * narrow-query design turns on.
+ * narrow-query design turns on. A narrow query for a path that is GONE carries a
+ * `<path>/...` companion alongside the bare path (which of "a file" / "a
+ * directory" was deleted cannot be known), so the test is "every spec wildcards",
+ * not "some spec wildcards" — otherwise that batch would be counted as a re-walk.
  */
 function fullScanScans(): string[][] {
-  return reconcileScans().filter((a) => a.some((arg) => /[/\\](\.\.\.|\*)$/.test(arg)))
+  return reconcileScans().filter((a) => {
+    const specs = reconcileSpecs(a)
+    return specs.length > 0 && specs.every((s) => WILDCARD_SPEC.test(s))
+  })
 }
 
-/** The per-file spawns: a `reconcile -n` whose filespecs are all concrete paths
- *  (the watcher flush and `checkWorkingTree`). */
+/** The per-path spawns: a `reconcile -n` carrying at least one concrete path
+ *  (the watcher flush, `checkWorkingTree`, `revert -k`'s re-query). */
 function narrowScans(): string[][] {
-  return reconcileScans().filter((a) => !a.some((arg) => /[/\\](\.\.\.|\*)$/.test(arg)))
+  return reconcileScans().filter((a) => reconcileSpecs(a).some((s) => !WILDCARD_SPEC.test(s)))
 }
 
 let currentClock: ReturnType<typeof fakeClock> | undefined
@@ -2526,9 +2555,13 @@ describe('PerforceClient.runReconcileScan', () => {
     const narrow = narrowScans()
     expect(narrow.length).toBeGreaterThan(1) // batched by the argv budget…
     expect(narrow.length).toBeLessThan(20) // …not one spawn per event
-    // Batching loses nothing: every fired path was asked about exactly once.
-    const asked = narrow.flat().filter((a) => a.startsWith(`${LOCAL}/f`))
-    expect(new Set(asked).size).toBe(fired)
+    // Batching loses nothing: every fired path was asked about exactly once — by
+    // its bare spec, plus the `<path>/...` companion every path that is gone from
+    // disk carries (which case deleted it is unknowable from a path that is not
+    // there, so both specs ride along).
+    const specs = narrow.flat().filter((a) => a.startsWith(`${LOCAL}/f`))
+    expect(new Set(specs.filter((s) => !WILDCARD_SPEC.test(s))).size).toBe(fired)
+    expect(specs.filter((s) => WILDCARD_SPEC.test(s))).toHaveLength(fired)
   })
 
   it('degrades to invalidate-only past the narrow-query budget', async () => {
@@ -2742,6 +2775,33 @@ describe('PerforceClient.runReconcileScan', () => {
     // The reverted content is now uncollected drift: it must appear in the
     // reconcile group this session, not wait for the next session's scan.
     expect(driftFiles(client)).toContain(`${LOCAL}/a.txt`)
+  })
+
+  it('revert -k on a directory that is gone re-queries its subtree, not the bare path', async () => {
+    // The directory was deleted on disk while its files were still opened, which
+    // is exactly when "move to Reconcile" is reachable: the user collects the
+    // deleted files rather than reverting them. A bare spec names no file — p4
+    // expands a directory spec from the filesystem, and there is no directory any
+    // more — so only the subtree form can still answer for the files that were
+    // inside it, and without it the files stay invisible this session.
+    const client = await makeClient(
+      {
+        reconcile: (_filespec, specs) =>
+          specs.some((s) => s.endsWith('/...')) ? [{ rel: 'gone/a.txt', action: 'delete' }] : [],
+      },
+      fakeDisk(),
+      fakeClock(),
+      { createFileSystemWatcher: () => makeFakeWatcher().watcher, watchRoot: ROOT },
+    )
+    client.setReconcileScope([LOCAL])
+
+    const ok = await client.moveToReconcile([`${LOCAL}/gone`])
+    expect(ok).toBe(true)
+
+    const query = reconcileScans().find((a) => reconcileSpecs(a).includes(`${LOCAL}/gone/...`))
+    expect(query).toBeDefined()
+    expect(reconcileSpecs(query!)).toContain(`${LOCAL}/gone`)
+    expect(driftFiles(client)).toContain(`${LOCAL}/gone/a.txt`)
   })
 
   it('revert -k makes the file appear in the rendered reconcile group immediately', async () => {
@@ -2979,10 +3039,12 @@ describe('PerforceClient.runReconcileScan', () => {
     expect(driftFiles(client)).toContain(`${LOCAL}/elsewhere.txt`)
   })
 
-  it('a directory event invalidates the covering checkpoint instead of reading it as clean', async () => {
-    // _isDirectoryPath stats the path for real, so the event must name a path
-    // that actually IS a directory on disk — a faked path would read as a file
-    // and take the narrow-query branch this test exists to prove is skipped.
+  it('a directory event is answered as a subtree, so the checkpoint is corrected not dropped', async () => {
+    // `_pathKind` stats the path for real, so the event must name a path that
+    // actually IS a directory on disk — a faked path reads as gone and takes the
+    // deleted-path branch. (The row-attribution half — a subtree answer's rows
+    // landing in the Changes group — is the `gone` case below, which can point
+    // its rows into the fake workspace root; a real temp dir cannot.)
     const realDir = mkTempDir('p4-dirEvt-')
     try {
       const disk = fakeDisk()
@@ -2998,16 +3060,231 @@ describe('PerforceClient.runReconcileScan', () => {
       expect(fullScanScans()).toHaveLength(1)
       expect([...disk.store.keys()].some((k) => k.endsWith(realDir))).toBe(true)
 
-      // A directory event (new folder, moved subtree) names no file, so a
-      // per-file narrow query would read it as clean and stamp that lie into the
-      // checkpoint. The flush must refuse to merge and drop the checkpoint instead.
+      // A directory event (new folder, moved subtree) names no file, so a bare
+      // spec would match nothing and "no file(s) to reconcile" would be stamped
+      // into the checkpoint as clean. It must be asked as a SUBTREE instead — and
+      // then the answer ("this dir holds no drift") is a real answer, so the
+      // checkpoint is patched in place rather than thrown away.
       wt.fire('change', realDir)
       await nextMacrotask()
       await client.whenExternalFlushSettled()
 
-      expect(narrowScans()).toHaveLength(0)
-      expect(fullScanScans()).toHaveLength(1)
-      expect([...disk.store.keys()].some((k) => k.endsWith(realDir))).toBe(false)
+      const dirQuery = reconcileScans().find((a) => a.includes(`${realDir}/...`))
+      expect(dirQuery).toBeDefined()
+      // The subtree spec stands alone for a directory: there is no bare companion,
+      // because a bare path names no file and would only add a junk spec.
+      expect(reconcileSpecs(dirQuery!)).toEqual([`${realDir}/...`])
+      // Patched, not dropped: the next session replays it instead of re-walking.
+      expect([...disk.store.keys()].some((k) => k.endsWith(realDir))).toBe(true)
+    } finally {
+      rmSync(realDir, { recursive: true, force: true })
+    }
+  })
+
+  it('a deleted directory is answered as a subtree, so its files land in the Changes group', async () => {
+    // The reported bug: delete a folder in the editor (shell.trashItem = a
+    // same-volume rename) and Windows reports ONE event for the directory path —
+    // the files inside are moved with it and never get events of their own. A
+    // path that no longer exists can't be classified by `stat`, and the old
+    // reading of "stat threw, so it was a deleted FILE" sent a bare
+    // `reconcile -n <dir>` — which p4 expands from the FILESYSTEM, so a vanished
+    // directory is a single file spec that matches nothing and answers
+    // "no file(s) to reconcile" (measured against a real server). The whole
+    // subtree stayed invisible, and worse, that "clean" was stamped into the
+    // checkpoint for the next 24h.
+    const disk = fakeDisk()
+    const wt = makeFakeWatcher()
+    const client = await makeClient(
+      {
+        // Only the subtree form can answer for the directory: the bare path names
+        // no file in the depot, so a per-file reading of this path is exactly the
+        // false "clean" the real server hands back. Keyed on the SPEC list, not on
+        // the (path-normalized) filespec, because the distinction between the two
+        // specs in the batch is the whole point here.
+        reconcile: (_filespec, specs) =>
+          specs.some((s) => s.endsWith('/...'))
+            ? [
+                { rel: 'gone/a.txt', action: 'delete' },
+                { rel: 'gone/b.txt', action: 'delete' },
+              ]
+            : [],
+      },
+      disk,
+      fakeClock(),
+      { createFileSystemWatcher: () => wt.watcher, watchRoot: ROOT, externalChangeDebounceMs: 0 },
+    )
+    client.setReconcileScope([LOCAL])
+    client.scheduleReconcileScan()
+    await client.whenReconcileScanSettled()
+    expect(fullScanScans()).toHaveLength(1)
+    const firstEntry = [...disk.store.entries()].find(([k]) => k.endsWith(LOCAL))
+    const firstCompletedAt = (JSON.parse(firstEntry![1]) as { completedAt: number }).completedAt
+
+    // `gone` is really absent from disk (ROOT is a fictional tree), which is the
+    // only precondition this test needs — the event IS the user's delete.
+    wt.fire('delete', `${LOCAL}/gone`)
+    await nextMacrotask()
+    await client.whenExternalFlushSettled()
+
+    // The query must ask about the directory as a SUBTREE. The bare companion is
+    // what covers "the deleted thing was a file", which cannot be known from a
+    // path that is gone — so both specs ride in one batch.
+    const argv = narrowScans()[0]
+    expect(argv).toBeDefined()
+    expect(argv).toContain(`${LOCAL}/gone`)
+    expect(argv).toContain(`${LOCAL}/gone/...`)
+    // Answering this by re-walking the directory would spend minutes of a large
+    // workspace on a signal that already names the subtree.
+    expect(fullScanScans()).toHaveLength(1)
+
+    expect(driftFiles(client)).toEqual(
+      expect.arrayContaining([`${LOCAL}/gone/a.txt`, `${LOCAL}/gone/b.txt`]),
+    )
+    // The action is what the panel renders as `RD` (delete, struck through).
+    // Looked up by value: the drift set is keyed by `scopeKey`, which folds case
+    // on Windows, so a literal key would only match on one platform.
+    const deleted = [...client.scanDrift.values()].find(
+      (r) => r.clientFile === `${LOCAL}/gone/a.txt`,
+    )
+    expect(deleted?.action).toBe('delete')
+
+    // The covering checkpoint is corrected in place rather than dropped — the
+    // answer is authoritative for the paths it covered, so the next session
+    // replays the deletions instead of re-walking the workspace.
+    const entry = [...disk.store.entries()].find(([k]) => k.endsWith(LOCAL))
+    expect(entry).toBeDefined()
+    const patched = JSON.parse(entry![1]) as {
+      completedAt: number
+      files: readonly { clientFile?: string; action?: string }[]
+    }
+    expect(patched.files.map((f) => f.clientFile)).toEqual(
+      expect.arrayContaining([`${LOCAL}/gone/a.txt`, `${LOCAL}/gone/b.txt`]),
+    )
+    expect(patched.completedAt).toBe(firstCompletedAt)
+
+    // And the panel renders them: a fresh scan replaying that checkpoint (zero
+    // spawns) must turn the rows into the resident group's `RD` entries.
+    await client.runReconcileScan()
+    expect(fullScanScans()).toHaveLength(1)
+    expect(groupRows(client)).toEqual(
+      expect.arrayContaining([
+        { path: `${LOCAL}/gone/a.txt`, letter: 'RD' },
+        { path: `${LOCAL}/gone/b.txt`, letter: 'RD' },
+      ]),
+    )
+  })
+
+  it('a deleted file is answered by its bare spec, so the pair stays load-bearing', async () => {
+    // The mirror of the directory case above. A path that is GONE gets BOTH
+    // specs precisely because which one names a file cannot be known from a path
+    // that is not there — and `<path>/...` on a deleted FILE names nothing (p4
+    // resolves a directory spec from the filesystem, and there is no directory).
+    // Dropping the bare companion in favour of the subtree form alone would make
+    // every deleted file invisible: the same bug in a new coat. The responder
+    // below mirrors the server by answering only for the concrete spec.
+    const disk = fakeDisk()
+    const wt = makeFakeWatcher()
+    const client = await makeClient(
+      {
+        reconcile: (_filespec, specs) =>
+          specs.some((s) => !WILDCARD_SPEC.test(s)) ? [{ rel: 'a.txt', action: 'delete' }] : [],
+      },
+      disk,
+      fakeClock(),
+      { createFileSystemWatcher: () => wt.watcher, watchRoot: ROOT, externalChangeDebounceMs: 0 },
+    )
+    client.setReconcileScope([LOCAL])
+    client.scheduleReconcileScan()
+    await client.whenReconcileScanSettled()
+
+    wt.fire('delete', `${LOCAL}/a.txt`)
+    await nextMacrotask()
+    await client.whenExternalFlushSettled()
+
+    const argv = narrowScans()[0]
+    expect(argv).toBeDefined()
+    expect(argv).toContain(`${LOCAL}/a.txt`)
+    expect(argv).toContain(`${LOCAL}/a.txt/...`)
+    expect(fullScanScans()).toHaveLength(1)
+    // The bare spec is what answered, so the row is real and the covering
+    // checkpoint carries it into the next session.
+    expect(driftFiles(client)).toContain(`${LOCAL}/a.txt`)
+    const entry = [...disk.store.entries()].find(([k]) => k.endsWith(LOCAL))
+    expect(JSON.parse(entry![1]).files.map((f: { clientFile?: string }) => f.clientFile)).toEqual([
+      `${LOCAL}/a.txt`,
+    ])
+  })
+
+  it('an existing file is asked by its bare path alone, with no subtree companion', async () => {
+    // The cost red line: a directory spec is only for directories. The commonest
+    // external event by far is a save, and pairing every one of them with a
+    // `<file>/...` spec would double the argv of the hot path — so the subtree
+    // form must be reachable ONLY from the `dir`/`gone` branches. The path has to
+    // exist on disk for this: `_pathKind` stats for real.
+    const realDir = mkTempDir('p4-fileEvt-')
+    const realFile = join(realDir, 'a.txt')
+    writeFileSync(realFile, 'x')
+    try {
+      const wt = makeFakeWatcher()
+      const client = await makeClient({ reconcile: () => [] }, undefined, fakeClock(), {
+        createFileSystemWatcher: () => wt.watcher,
+        watchRoot: ROOT,
+        externalChangeDebounceMs: 0,
+      })
+      client.setReconcileScope([realDir])
+
+      wt.fire('change', realFile)
+      await nextMacrotask()
+      await client.whenExternalFlushSettled()
+
+      const argv = narrowScans()[0]
+      expect(argv).toBeDefined()
+      expect(reconcileSpecs(argv!)).toEqual([realFile])
+    } finally {
+      rmSync(realDir, { recursive: true, force: true })
+    }
+  })
+
+  it('carves around an excluded subtree instead of widening to `<dir>/...`', async () => {
+    // An excluded directory under an event's directory makes `<dir>/...` illegal
+    // (it would pull the excluded subtree back into p4's traversal — the reconcile
+    // carve module's red line), so the spec list is carved. The carve walks the
+    // real tree, hence the real directories.
+    const realDir = mkTempDir('p4-dirExcl-')
+    const sub = join(realDir, 'sub')
+    const excluded = join(sub, 'excluded')
+    mkdirSync(excluded, { recursive: true })
+    writeFileSync(join(sub, 'keep.txt'), 'x')
+    // The mocked readdir must answer for real files here.
+    const actualFs = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+    readdirMock.mockImplementation((dir: string) => actualFs.readdir(dir, { withFileTypes: true }))
+    try {
+      const wt = makeFakeWatcher()
+      const client = await makeClient({ reconcile: () => [] }, undefined, fakeClock(), {
+        createFileSystemWatcher: () => wt.watcher,
+        watchRoot: ROOT,
+        externalChangeDebounceMs: 0,
+      })
+      client.setReconcileScope([realDir])
+      client.setReconcileExcludes([excluded])
+
+      wt.fire('change', sub)
+      await nextMacrotask()
+      await client.whenExternalFlushSettled()
+
+      // Looked up on `reconcileScans`, not `narrowScans`: a carve spells its level
+      // spec `<dir>/*`, which is shape-identical to a scan batch — the classifier
+      // cannot tell them apart, and this test is about the SPECS either way.
+      const dirQuery = reconcileScans().find((a) =>
+        reconcileSpecs(a).some((s) => s.startsWith(sub)),
+      )
+      expect(dirQuery).toBeDefined()
+      const specs = reconcileSpecs(dirQuery!)
+      // The level spec is what keeps locally deleted files visible on that level.
+      expect(specs).toContain(`${sub}/*`)
+      // Neither the widening nor a spec reaching into the exclusion.
+      expect(specs).not.toContain(`${sub}/...`)
+      expect(specs.some((s) => s.startsWith(excluded))).toBe(false)
     } finally {
       rmSync(realDir, { recursive: true, force: true })
     }

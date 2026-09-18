@@ -1091,11 +1091,18 @@ describe('PerforceClient.sync watcher activity & suspension', () => {
   const droppedEvents = (client: PerforceClientInstance): number =>
     (client as unknown as { _syncDroppedEvents: number })._syncDroppedEvents
   /** Narrow `reconcile -n <files>` spawns — excludes the scan's recursive
-   *  `<dir>/...` batches, which settle-time refreshes also fire. */
+   *  `<dir>/...` batches, which settle-time refreshes also fire. The test is "at
+   *  least one concrete spec", not "no wildcard spec": a path that is gone from
+   *  disk also carries its `<path>/...` companion (which case deleted it is
+   *  unknowable from a path that is not there), so a pure "no wildcard" filter
+   *  would silently stop counting the deletes this file is about. */
   const narrowQueries = (): string[][] =>
     spawned
       .filter((a) => subcommand(a) === 'reconcile')
-      .filter((a) => !a.some((arg) => /[/\\](\.\.\.|\*)$/.test(arg)))
+      .filter((a) => {
+        const at = a.indexOf('-d')
+        return at !== -1 && a.slice(at + 1).some((arg) => !/[/\\](\.\.\.|\*)$/.test(arg))
+      })
 
   it('counts watcher events as disk writes while the sync runs', async () => {
     const wt = makeFakeWatcher()
