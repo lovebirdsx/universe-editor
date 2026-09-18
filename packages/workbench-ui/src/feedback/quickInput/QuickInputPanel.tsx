@@ -235,6 +235,66 @@ function pagedSelectableIndex(
   return selectable[nextOffset] ?? normalized
 }
 
+/** Row identity for list diffing. Separators carry their own id; the prefix keeps
+ *  one from ever matching an item that reuses that id. */
+function rowKeyOf(item: QuickPickInput<IQuickPickItem>): string {
+  return isSeparator(item) ? `sep:${item.id}` : item.id
+}
+
+/**
+ * Whether `next` is `prev` minus some rows — the shape a removal produces, whether
+ * the panel hid the row itself (`removedIds`) or the host re-derived its items
+ * after its own × button (the command palette). Typing never looks like this: a
+ * fuzzy filter reorders the whole list and always moves the filter text, which is
+ * the other half of the test.
+ */
+function isShrinkOf(
+  prev: readonly QuickPickInput<IQuickPickItem>[],
+  next: readonly QuickPickInput<IQuickPickItem>[],
+): boolean {
+  if (next.length >= prev.length) return false
+  const keys = new Set(prev.map(rowKeyOf))
+  return next.every((item) => keys.has(rowKeyOf(item)))
+}
+
+/** Nearest selectable row to `slot`. Searches forward first, so the row that slid
+ *  up into a removed row's place wins over the one above it. */
+function nearestSelectableIndex(
+  items: readonly QuickPickInput<IQuickPickItem>[],
+  slot: number,
+): number {
+  if (items.length === 0) return 0
+  const start = Math.min(Math.max(slot, 0), items.length - 1)
+  for (let i = start; i < items.length; i++) {
+    const item = items[i]
+    if (isSelectable(item)) return i
+  }
+  for (let i = start; i >= 0; i--) {
+    const item = items[i]
+    if (isSelectable(item)) return i
+  }
+  return firstSelectableIndex(items)
+}
+
+/**
+ * Where the cursor lands when rows disappear: follow the highlighted row if it
+ * survived (it may only have moved up), otherwise let the row that slid into its
+ * slot take over. Never falls back to the top — that jump is what makes removing
+ * a row feel like the whole list reset.
+ */
+function reconcileFocusIndex(
+  next: readonly QuickPickInput<IQuickPickItem>[],
+  prev: readonly QuickPickInput<IQuickPickItem>[],
+  focusedIdx: number,
+): number {
+  const focused = prev[focusedIdx]
+  if (isSelectable(focused)) {
+    const moved = next.findIndex((item) => isSelectable(item) && item.id === focused.id)
+    if (moved >= 0) return moved
+  }
+  return nearestSelectableIndex(next, focusedIdx)
+}
+
 function filterWithSeparators(
   items: readonly QuickPickInput<IQuickPickItem>[],
   query: string,
@@ -363,6 +423,7 @@ const ITEM_FONT = 13 // .item font-size
 const INPUT_FONT = 14 // .input font-size
 
 const EMPTY_SELECTED_ITEMS: readonly IQuickPickItem[] = []
+const EMPTY_PICK_LIST: readonly QuickPickInput<IQuickPickItem>[] = []
 
 /** One panel at a time, so the hint's id can be a fixed target for aria-describedby. */
 const HINT_ID = 'quick-input-hint'
@@ -595,6 +656,18 @@ export function QuickPickPanel({
     overscan: 5,
   })
 
+  // What the focus effect last reconciled against. The list alone cannot say why
+  // it changed, and "rows disappeared" needs a different answer from "the filter
+  // changed" — see the effect below.
+  const focusReconcileRef = useRef<{
+    list: readonly QuickPickInput<IQuickPickItem>[]
+    filterText: string
+  }>({ list: EMPTY_PICK_LIST, filterText: deferredFilterText })
+  // Set on the commit that follows a removal: the scroll effect still sees the
+  // pre-reconcile `focusedIdx`, and since the row taking over the cursor sits in
+  // the removed row's slot the viewport must not move at all.
+  const skipScrollRef = useRef(false)
+
   // Reset focus to the first selectable item when the list itself changes. In
   // filterExternally mode (the simple file dialog) the host autocompletes the
   // value as the user types — that changes `query` but not the items, so this must
@@ -603,6 +676,33 @@ export function QuickPickPanel({
   // `focusedIdx` already starts at `initialSelectionIndex` — the row a modifier
   // release must open — so it is only snapped off a separator.
   useEffect(() => {
+    const prev = focusReconcileRef.current
+    const listChanged = prev.list !== sortedFiltered
+    const filterChanged = prev.filterText !== deferredFilterText
+    focusReconcileRef.current = { list: sortedFiltered, filterText: deferredFilterText }
+    if (!listChanged && !filterChanged) return
+
+    // Rows went away without the filter moving: a removal. Keeping the cursor
+    // where it was is the whole point — snapping back to the top is what made
+    // removing a recent workspace feel like the list resetting.
+    //
+    // `filtersLocally` is what makes "the filter did not move" mean anything: an
+    // externally filtered picker (Ctrl+P / Ctrl+T / text search) leaves the
+    // deferred text pinned to '', so its list narrowing as the user types looks
+    // exactly like a removal — and there the cursor must go back to the best
+    // match at the top.
+    if (
+      listChanged &&
+      !filterChanged &&
+      filtersLocally &&
+      autoFocusFirstItem &&
+      isShrinkOf(prev.list, sortedFiltered)
+    ) {
+      skipScrollRef.current = true
+      setFocusedIdx((idx) => reconcileFocusIndex(sortedFiltered, prev.list, idx))
+      return
+    }
+
     if (quickNavigate) {
       setFocusedIdx((idx) => normalizeSelectableIndex(sortedFiltered, idx))
       return
@@ -616,7 +716,7 @@ export function QuickPickPanel({
       return
     }
     setFocusedIdx(firstSelectableIndex(sortedFiltered))
-  }, [quickNavigate, sortedFiltered, autoFocusFirstItem])
+  }, [deferredFilterText, quickNavigate, sortedFiltered, autoFocusFirstItem])
 
   // Host-driven focus: when the host sets activeItems (path autocomplete /
   // directory navigation), move focus to the first matching item by id. Runs
@@ -645,6 +745,13 @@ export function QuickPickPanel({
   }, [activeItems, sortedFiltered, autoFocusFirstItem, quickNavigate])
 
   useEffect(() => {
+    // Removal commit: `focusedIdx` has not been reconciled yet, so the checks
+    // below would read the removed row's slot against the new list and yank the
+    // viewport. The cursor is about to land in that same slot — leave it alone.
+    if (skipScrollRef.current) {
+      skipScrollRef.current = false
+      return
+    }
     if (sortedFiltered.length > 0) {
       if (!isSelectable(sortedFiltered[focusedIdx])) {
         if (listRef.current) listRef.current.scrollTop = 0

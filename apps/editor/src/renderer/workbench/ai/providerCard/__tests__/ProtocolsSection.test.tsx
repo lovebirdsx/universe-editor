@@ -19,7 +19,7 @@ import type {
   IAiModelService,
   IDialogService,
 } from '@universe-editor/platform'
-import { ProtocolsSection } from '../ProtocolsSection.js'
+import { ProtocolsSection, protocolRowIds } from '../ProtocolsSection.js'
 
 afterEach(() => cleanup())
 
@@ -53,6 +53,8 @@ interface Rendered {
   readonly onChange: ReturnType<typeof vi.fn<(map: AiProtocolMap | undefined) => void>>
   readonly dialog: { confirm: ReturnType<typeof vi.fn> }
   readonly verifyProvider: ReturnType<typeof vi.fn>
+  /** Re-renders with the same props but a fresh provider (e.g. after a write). */
+  readonly rerenderWith: (provider: AiProviderEntry) => void
 }
 
 function renderSection({
@@ -85,11 +87,11 @@ function renderSection({
     modelIds: probeIds,
   }))
   const aiModel = { verifyProvider } as unknown as IAiModelService
-  render(
+  const build = (p: AiProviderEntry) => (
     <ProtocolsSection
       aiModel={aiModel}
       dialog={dialog as unknown as IDialogService}
-      provider={provider}
+      provider={p}
       allProviders={allProviders}
       models={models}
       modelsLoading={false}
@@ -100,9 +102,15 @@ function renderSection({
       getConfiguration={vi.fn(async (_id: string) => ({}))}
       isCollapsed={isCollapsed}
       onToggleCollapsed={onToggleCollapsed}
-    />,
+    />
   )
-  return { onChange, dialog, verifyProvider }
+  const utils = render(build(provider))
+  return {
+    onChange,
+    dialog,
+    verifyProvider,
+    rerenderWith: (next: AiProviderEntry) => utils.rerender(build(next)),
+  }
 }
 
 describe('ProtocolsSection', () => {
@@ -344,5 +352,41 @@ describe('ProtocolsSection', () => {
     await flushEffects()
 
     expect(onToggleCollapsed).not.toHaveBeenCalled()
+  })
+
+  it('keeps the rows below a removed one mounted', async () => {
+    const provider: AiProviderEntry = {
+      id: 'p',
+      protocolMap: { 'openai-chat': ['gpt-4o', 'gpt-4o-mini', 'gpt-4o-nano'] },
+    }
+    const { rerenderWith } = renderSection({ provider })
+    await flushEffects()
+    const survivor = screen.getByText('gpt-4o-nano').closest('li')
+
+    rerenderWith({ id: 'p', protocolMap: { 'openai-chat': ['gpt-4o-mini', 'gpt-4o-nano'] } })
+
+    // An index-shaped key would rebuild both remaining rows, collapsing an
+    // expanded model and dropping its configuration draft.
+    expect(screen.getByText('gpt-4o-nano').closest('li')).toBe(survivor)
+  })
+})
+
+describe('protocolRowIds', () => {
+  it('names a row after its wire name, not its knowledge ref', () => {
+    expect(
+      protocolRowIds('openai-chat', ['gpt-4o', { id: 'gpt-4o-mini', ref: 'gpt-4o-mini-2024' }]),
+    ).toEqual(['openai-chat#gpt-4o#0', 'openai-chat#gpt-4o-mini#0'])
+  })
+
+  it('disambiguates a wire name declared twice', () => {
+    expect(protocolRowIds('openai-chat', ['gpt-4o', { id: 'gpt-4o', ref: 'gpt-4o-2024' }])).toEqual(
+      ['openai-chat#gpt-4o#0', 'openai-chat#gpt-4o#1'],
+    )
+  })
+
+  it('leaves the surviving ids untouched when a row above them is dropped', () => {
+    const before = protocolRowIds('openai-chat', ['gpt-4o', 'gpt-4o-mini', 'gpt-4o-nano'])
+    const after = protocolRowIds('openai-chat', ['gpt-4o-mini', 'gpt-4o-nano'])
+    expect(after).toEqual(before.slice(1))
   })
 })

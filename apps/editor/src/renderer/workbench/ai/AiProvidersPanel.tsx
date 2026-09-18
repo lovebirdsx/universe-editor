@@ -54,6 +54,22 @@ const sectionCollapseKey = (id: string, section: CardSectionId): string =>
 const protocolCollapseKey = (id: string, protocol: string): string =>
   `provider:${id}:protocol:${protocol}`
 
+/**
+ * React key per card. A hand-edited file can repeat an id — that is a reported
+ * `duplicate-id` issue and both cards must render, so the id alone will not do;
+ * only the repeats get a suffix. Keeping the index out of the key is what lets
+ * the cards after a removed one stay mounted (and keep their drafts, filters and
+ * connectivity probes) instead of being rebuilt.
+ */
+export function providerCardKeys(providers: readonly AiProviderEntry[]): readonly string[] {
+  const seen = new Map<string, number>()
+  return providers.map((provider) => {
+    const nth = seen.get(provider.id) ?? 0
+    seen.set(provider.id, nth + 1)
+    return nth === 0 ? provider.id : `${provider.id}#${nth}`
+  })
+}
+
 export function AiProvidersPanel() {
   const aiModel = useService(IAiModelService)
   const rateMirror = useService(IAiRateMirror)
@@ -143,7 +159,7 @@ export function AiProvidersPanel() {
    * and paints only the model counts. A stale enumeration result is dropped via
    * `modelsTokenRef` so a newer reload always wins.
    */
-  const reload = useCallback(async () => {
+  const reloadFast = useCallback(async () => {
     const version = writeSeqRef.current
     try {
       const [nextProviders, nextIssues, nextLegacy, nextKnowledge] = await Promise.all([
@@ -169,7 +185,10 @@ export function AiProvidersPanel() {
       // never leave the panel spinning at the loading placeholder forever.
       if (!disposedRef.current) setLoaded(true)
     }
+  }, [aiModel, rateMirror])
 
+  /** The /v1/models sweep. Only paths that can change which models exist ask for it. */
+  const enumerateModels = useCallback(() => {
     const token = ++modelsTokenRef.current
     setModelsLoading(true)
     const settle = () => {
@@ -187,15 +206,39 @@ export function AiProvidersPanel() {
         console.debug('aiModels: model enumeration failed', error)
         settle()
       })
-  }, [aiModel, rateMirror])
+  }, [aiModel])
+
+  const reload = useCallback(async () => {
+    await reloadFast()
+    enumerateModels()
+  }, [reloadFast, enumerateModels])
 
   useEffect(() => {
     void reload()
   }, [reload])
 
+  /**
+   * Writes we sent that must not come back as an enumeration. Deleting an entry
+   * cannot change the surviving entries' model lists (main caches them per entry),
+   * but every write makes main fire `onDidChangeModels` — itself included — so
+   * both that echo and our own reload would re-sweep /v1/models and flash zero-model
+   * cards into "Fetching models…". Counted rather than a flag because writes queue.
+   *
+   * Depends on one accepted write producing exactly one event: a write that fails
+   * decrements instead (no echo), and a second event from the same write would be
+   * treated as someone else's change — an extra enumeration, never a missed one.
+   */
+  const silentModelEchoRef = useRef(0)
+
   useEventSubscription(
     () => [
-      aiModel.onDidChangeModels(() => void reload()),
+      aiModel.onDidChangeModels(() => {
+        if (silentModelEchoRef.current > 0) {
+          silentModelEchoRef.current--
+          return
+        }
+        void reload()
+      }),
       aiModel.onDidChangeRemote(() => void reload()),
     ],
     [aiModel, reload],
@@ -270,14 +313,24 @@ export function AiProvidersPanel() {
     return issues.filter((issue) => !ids.has(issue.providerId))
   }, [issues, providers])
 
+  const cardKeys = useMemo(() => providerCardKeys(providers), [providers])
+
   const updateProviders = useCallback(
-    async (next: readonly AiProviderEntry[]) => {
+    async (next: readonly AiProviderEntry[], options?: { readonly enumerate?: boolean }) => {
       providersRef.current = next
       writeSeqRef.current++
-      await aiModel.updateProviders(next)
-      await reload()
+      const silent = options?.enumerate === false
+      if (silent) silentModelEchoRef.current++
+      try {
+        await aiModel.updateProviders(next)
+      } catch (error) {
+        // A write that never landed produces no echo to swallow.
+        if (silent) silentModelEchoRef.current--
+        throw error
+      }
+      await (silent ? reloadFast() : reload())
     },
-    [aiModel, reload],
+    [aiModel, reload, reloadFast],
   )
 
   // Indexed, not keyed by id: a hand-edited file can repeat an id, and editing
@@ -333,7 +386,14 @@ export function AiProvidersPanel() {
       })
       if (!confirmed) return
       await enqueueWrite(async () => {
-        await updateProviders(providersRef.current.filter((_, i) => i !== index))
+        // Removing one entry leaves the others' model lists untouched, so the only
+        // thing a re-enumeration here can do is flash the remaining cards.
+        await updateProviders(
+          providersRef.current.filter((_, i) => i !== index),
+          {
+            enumerate: false,
+          },
+        )
       })
     },
     [dialog, enqueueWrite, providers, updateProviders],
@@ -449,10 +509,7 @@ export function AiProvidersPanel() {
           <div className={styles['cards']}>
             {providers.map((provider, index) => (
               <ProviderEntryCard
-                // A hand-edited file can repeat an id. That is a reported
-                // `duplicate-id` issue, and both cards must render so the badge
-                // is visible — so the key cannot be the id alone.
-                key={`${provider.id}#${index}`}
+                key={cardKeys[index] ?? provider.id}
                 aiModel={aiModel}
                 dialog={dialog}
                 provider={provider}

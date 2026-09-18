@@ -87,6 +87,20 @@ export function buildRemoteTreeSnapshot(
   return { roots, childrenById, parentById }
 }
 
+/** Every node id in the snapshot, roots and children alike. */
+export function collectSnapshotIds(snapshot: IRemoteTreeSnapshot): ReadonlySet<string> {
+  const ids = new Set<string>()
+  const walk = (nodes: readonly RemoteNode[]): void => {
+    for (const node of nodes) {
+      const id = remoteNodeId(node)
+      ids.add(id)
+      walk(snapshot.childrenById.get(id) ?? [])
+    }
+  }
+  walk(snapshot.roots)
+  return ids
+}
+
 /**
  * A data source reading the latest snapshot through `getSnapshot`, so the tree
  * model built once at mount keeps serving fresh data after every refresh.

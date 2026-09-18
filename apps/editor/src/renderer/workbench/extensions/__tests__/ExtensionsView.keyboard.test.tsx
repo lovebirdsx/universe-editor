@@ -8,7 +8,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import {
   Emitter,
   IEditorService,
@@ -92,7 +92,7 @@ function setup(input: SetupInput = {}) {
       <ExtensionsView />
     </ServicesContext.Provider>,
   )
-  return { workbench, openEditor }
+  return { workbench, openEditor, onDidChange }
 }
 
 const list = () => screen.getByRole('listbox')
@@ -240,6 +240,21 @@ describe('ExtensionsView keyboard navigation', () => {
     setup({ installed: [entry('acme.one')] })
     fireEvent.keyDown(list(), { key: 'Tab', shiftKey: true })
     expect(document.activeElement).toBe(screen.getByLabelText('Search Extensions'))
+  })
+
+  it('follows the same extension when a row above it disappears', () => {
+    const { workbench, onDidChange } = setup({
+      installed: [entry('acme.one'), entry('acme.two'), entry('acme.three')],
+    })
+    fireEvent.keyDown(list(), { key: 'End' })
+    expect(focusedLabels()[0]).toContain('acme.three')
+
+    // acme.one is uninstalled: every index below it shifts up. An index-shaped
+    // cursor would end up past the end (or on a different extension).
+    workbench.getInstalled.mockReturnValue([entry('acme.two'), entry('acme.three')])
+    act(() => onDidChange.fire())
+
+    expect(focusedLabels()[0]).toContain('acme.three')
   })
 
   it('drops the cursor when collapsing a section shortens the list past it', () => {

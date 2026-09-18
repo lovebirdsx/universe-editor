@@ -24,6 +24,25 @@ async function openPalette(page: Page, workbench: WorkbenchPO): Promise<void> {
   await workbench.quickInput.waitForVisible()
 }
 
+/** Run a command through the palette, which is what puts it into the MRU list. */
+async function acceptFromPalette(
+  page: Page,
+  workbench: WorkbenchPO,
+  commandId: string,
+  label: RegExp,
+): Promise<void> {
+  await openPalette(page, workbench)
+  await page.keyboard.type(commandId)
+  // Scoped to the panel: hidden views in the workbench keep native <option>
+  // elements in the DOM, and those match the same role.
+  const row = workbench.quickInput.dialog.getByRole('option', { name: label }).first()
+  await expect(row).toBeVisible()
+  // Hovering moves the cursor onto that row, so Enter cannot accept a neighbour.
+  await row.hover()
+  await page.keyboard.press('Enter')
+  await workbench.quickInput.waitForHidden()
+}
+
 test.describe('@p1 command palette item buttons', () => {
   test.beforeEach(async ({ workbench }) => {
     await workbench.waitForBootstrapFocusSettled()
@@ -109,5 +128,42 @@ test.describe('@p1 command palette item buttons', () => {
     ).toHaveCount(1)
     await page.keyboard.press('Escape')
     await workbench.quickInput.waitForHidden()
+  })
+
+  test('removing a row keeps the cursor on the row that slides up', async ({ page, workbench }) => {
+    // Two MRU entries, so the palette opens on a list whose second row has a
+    // successor to hand the cursor to.
+    await acceptFromPalette(page, workbench, 'workbench.action.files.newUntitledFile', /New File/)
+    await acceptFromPalette(
+      page,
+      workbench,
+      'workbench.action.openGlobalKeybindings',
+      /Open Keyboard Shortcuts/,
+    )
+
+    await openPalette(page, workbench)
+    const rows = workbench.quickInput.dialog.getByRole('option')
+    await expect(rows.nth(2)).toBeVisible()
+    const successorLabel = await rows.nth(2).textContent()
+    const list = workbench.quickInput.dialog.getByRole('listbox')
+    const scrollBefore = await list.evaluate((el) => el.scrollTop)
+
+    // Remove the second row: resetting the list would put the cursor back on the
+    // first one, and scroll the list back to the top.
+    //
+    // Keyboard + a synthetic click, not `hover()` + `click()`: a real pointer
+    // would be left resting on the row that slides up, and Chromium re-fires
+    // hover at it after the list re-renders — which moves the cursor there for a
+    // reason that has nothing to do with the list staying put.
+    await page.keyboard.press('ArrowDown')
+    const removeButton = rows
+      .nth(1)
+      .locator('[data-testid="quick-input-item-button"][data-icon-id="x"]')
+    await expect(removeButton).toHaveCount(1)
+    await removeButton.dispatchEvent('click')
+
+    await expect(rows.nth(1)).toHaveAttribute('aria-selected', 'true')
+    expect(await rows.nth(1).textContent()).toBe(successorLabel)
+    expect(await list.evaluate((el) => el.scrollTop)).toBe(scrollBefore)
   })
 })

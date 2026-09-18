@@ -556,6 +556,61 @@ describe('ExtensionsWorkbenchService', () => {
     expect(mocks.management.uninstall).toHaveBeenCalledWith('acme.installed', undefined)
   })
 
+  it('hides the row for the whole uninstall and puts it back when the uninstall fails', async () => {
+    const mocks = makeMocks()
+    vi.mocked(mocks.management.getInstalled).mockResolvedValue([
+      localExtension({ identifier: 'acme.kept' }),
+      localExtension({ identifier: 'acme.doomed' }),
+    ])
+    let fail: (() => void) | undefined
+    vi.mocked(mocks.management.uninstall).mockImplementation(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          fail = () => reject(new Error('permission denied'))
+        }),
+    )
+    const svc = makeService(mocks)
+    await svc.refreshInstalled()
+    expect(svc.getInstalled().map((e) => e.id)).toEqual(['acme.kept', 'acme.doomed'])
+
+    const entry = svc.getInstalled().find((e) => e.id === 'acme.doomed')!
+    const pending = svc.uninstall(entry)
+    // The authoritative re-read has not landed yet; the row must already be gone.
+    expect(svc.getInstalled().map((e) => e.id)).toEqual(['acme.kept'])
+
+    fail?.()
+    await pending
+    expect(svc.getInstalled().map((e) => e.id)).toEqual(['acme.kept', 'acme.doomed'])
+    expect(mocks.notification.notify).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: Severity.Error }),
+    )
+  })
+
+  it('does not list the extension twice when a refresh landed before the failure', async () => {
+    const mocks = makeMocks()
+    vi.mocked(mocks.management.getInstalled).mockResolvedValue([
+      localExtension({ identifier: 'acme.doomed' }),
+    ])
+    let fail: (() => void) | undefined
+    vi.mocked(mocks.management.uninstall).mockImplementation(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          fail = () => reject(new Error('host went away'))
+        }),
+    )
+    const svc = makeService(mocks)
+    await svc.refreshInstalled()
+
+    const pending = svc.uninstall(svc.getInstalled()[0]!)
+    // The extension host reports the extension back while the uninstall is in
+    // flight, so the rollback has nothing left to restore.
+    await svc.refreshInstalled()
+    fail?.()
+    await pending
+
+    expect(svc.getInstalled().map((e) => e.id)).toEqual(['acme.doomed'])
+  })
+
   it('installInRemote looks up the marketplace and installs into the remote', async () => {
     const mocks = makeMocks()
     vi.mocked(mocks.management.getInstalled).mockImplementation((authority?: string) =>

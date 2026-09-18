@@ -86,6 +86,26 @@ interface ProtocolsSectionProps {
   readonly onToggleCollapsed: (protocol: AiWireProtocol) => void
 }
 
+/**
+ * Stable identity per declared model row: the wire name, with an occurrence
+ * counter appended only when the same name is declared twice (a hand-edited
+ * file). This doubles as the React key and as the `editing` identity, so an
+ * index-shaped id would both remount every row below a removed one and move the
+ * open editor to whichever row slid into that slot.
+ */
+export function protocolRowIds(
+  protocol: AiWireProtocol,
+  refs: readonly AiProtocolModelRef[],
+): readonly string[] {
+  const seen = new Map<string, number>()
+  return refs.map((ref) => {
+    const wire = refWireName(ref)
+    const nth = seen.get(wire) ?? 0
+    seen.set(wire, nth + 1)
+    return `${protocol}#${wire}#${nth}`
+  })
+}
+
 export function ProtocolsSection({
   aiModel,
   dialog,
@@ -276,6 +296,7 @@ export function ProtocolsSection({
       ) : (
         ordered.map((protocol) => {
           const refs = effective[protocol] ?? []
+          const rowIds = protocolRowIds(protocol, refs)
           const mode: ProtocolMode = refs.length === 0 ? 'discover' : 'static'
           const resolved = modelsByProtocol.get(protocol) ?? []
           const collapsed = isCollapsed(protocol)
@@ -406,7 +427,7 @@ export function ProtocolsSection({
                         const model = models.find(
                           (m) => m.id === composeModelId(provider.id, protocol, wire),
                         )
-                        const rowId = `${protocol}#${index}`
+                        const rowId = rowIds[index] ?? `${protocol}#${wire}`
                         if (!matches(wire, model?.name, model?.family, query)) return null
                         if (editing === rowId) {
                           return (

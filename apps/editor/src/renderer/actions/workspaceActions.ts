@@ -183,7 +183,9 @@ export class OpenRecentAction extends Action2 {
       const isOpen = openFolders.has(r.folder.toString())
       const isRemote = r.folder.scheme === REMOTE_SCHEME
       return {
-        id: `recent.${index}`,
+        // Keyed by folder, not by row: the panel hides a removed row by id, and an
+        // index-shaped id would hide whichever entry slid into that slot.
+        id: `recent.${r.folder.toString()}`,
         label: isRemote ? `${REMOTE_MARKER} ${r.name}` : r.name,
         description: workspaceFullLabel(r.folder),
         ...(isOpen ? { iconId: 'check' } : {}),

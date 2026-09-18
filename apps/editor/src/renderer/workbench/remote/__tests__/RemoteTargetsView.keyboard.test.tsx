@@ -8,7 +8,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import {
   ContextKeyService,
   Emitter,
@@ -53,11 +53,13 @@ function setup(input: SetupInput = {}) {
     executeCommand,
   } as unknown as ICommandServiceType
 
-  const workspaceService = {
+  const recentChanges = new Emitter<readonly IRecentWorkspace[]>()
+  disposables.push(recentChanges)
+  const workspace = {
     _serviceBrand: undefined,
     recent: input.recents ?? [],
-    onDidChangeRecent: new Emitter<readonly IRecentWorkspace[]>().event,
-  } as unknown as IWorkspaceServiceType
+    onDidChangeRecent: recentChanges.event,
+  }
 
   const explorerService: IRemoteExplorerServiceType = {
     _serviceBrand: undefined,
@@ -78,7 +80,7 @@ function setup(input: SetupInput = {}) {
   const services = new ServiceCollection()
   services.set(ICommandService, commandService)
   services.set(IContextKeyService, contextKeyService)
-  services.set(IWorkspaceService, workspaceService)
+  services.set(IWorkspaceService, workspace as unknown as IWorkspaceServiceType)
   services.set(IRemoteExplorerService, explorerService)
   const inst = new InstantiationService(services)
 
@@ -87,7 +89,15 @@ function setup(input: SetupInput = {}) {
       <RemoteTargetsView />
     </ServicesContext.Provider>,
   )
-  return { ...result, executeCommand }
+  return {
+    ...result,
+    executeCommand,
+    /** Publish a new recent-workspace list, as removing one entry does. */
+    setRecents: (next: readonly IRecentWorkspace[]) => {
+      workspace.recent = next
+      recentChanges.fire(next)
+    },
+  }
 }
 
 const tree = () => screen.getByRole('tree')
@@ -249,5 +259,30 @@ describe('RemoteTargetsView keyboard navigation', () => {
     const { executeCommand } = setup({ sshTargets: [target('alpha')] })
     expect(executeCommand).not.toHaveBeenCalled()
     await waitFor(() => expect(screen.getAllByTestId('remote-target-row')).toHaveLength(1))
+  })
+
+  it('moves the cursor onto the next row when the focused recent entry is removed', () => {
+    const { setRecents } = setup({
+      sshTargets: [target('alpha')],
+      recents: [
+        recent('alpha', '/srv/app', 'app'),
+        recent('alpha', '/srv/lib', 'lib'),
+        recent('alpha', '/srv/tool', 'tool'),
+      ],
+    })
+    fireEvent.keyDown(tree(), { key: 'End' })
+    fireEvent.keyDown(tree(), { key: 'ArrowUp' })
+    fireEvent.keyDown(tree(), { key: 'ArrowUp' })
+    expect(focusedLabels()).toEqual(['app'])
+
+    act(() =>
+      setRecents([recent('alpha', '/srv/lib', 'lib'), recent('alpha', '/srv/tool', 'tool')]),
+    )
+
+    // A dangling cursor would leave nothing highlighted, and the next ArrowDown
+    // would jump back to the first row.
+    expect(focusedLabels()).toEqual(['lib'])
+    fireEvent.keyDown(tree(), { key: 'ArrowDown' })
+    expect(focusedLabels()).toEqual(['tool'])
   })
 })

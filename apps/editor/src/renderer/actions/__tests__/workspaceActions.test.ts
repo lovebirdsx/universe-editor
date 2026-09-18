@@ -363,6 +363,28 @@ describe('workspaceActions', () => {
     expect(ws.openCalls).toHaveLength(0)
   })
 
+  it('OpenRecent.run keys items by folder, not by row index', async () => {
+    disposables.push(registerAction2(OpenRecentAction))
+    const folderA = URI.file('/tmp/a')
+    const folderB = URI.file('/tmp/b')
+    const ws = makeWorkspaceStub([
+      { folder: folderA, name: 'a', lastOpened: 2 },
+      { folder: folderB, name: 'b', lastOpened: 1 },
+    ])
+    const qi = makeQuickInputStub({})
+    await runCommand(OpenRecentAction.ID, ws, qi)
+    const pickItems = qi.pickCalls[0] as unknown as readonly {
+      readonly id: string
+      readonly index: number
+    }[]
+    // The panel hides a removed row by id, so an index-shaped id would hide
+    // whichever entry moved into that slot.
+    expect(pickItems[0]?.id).toBe(`recent.${folderA.toString()}`)
+    expect(pickItems[1]?.id).toBe(`recent.${folderB.toString()}`)
+    // The row still carries its positional payload: accept and remove read it.
+    expect(pickItems[1]?.index).toBe(1)
+  })
+
   it('OpenRecent.run remove affordance delegates to removeRecent', async () => {
     disposables.push(registerAction2(OpenRecentAction))
     const folderA = URI.file('/tmp/a')

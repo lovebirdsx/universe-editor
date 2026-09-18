@@ -489,15 +489,61 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
 
   async uninstall(entry: IExtensionEntry): Promise<void> {
     this._installing.add(entry.id)
+    // Hide the row now: the authoritative re-read round-trips the extension host,
+    // and until then the row would sit there still offering Uninstall.
+    const restore = this._hideInstalled(entry.id, this._authorityFor(entry) !== undefined)
     this._onDidChange.fire()
     try {
       // Route by the entry's side: remote-side entries uninstall from the remote
       // host, local-side entries from this machine.
       await this._management.uninstall(entry.id, this._authorityFor(entry))
+    } catch (err) {
+      restore()
+      this._notification.notify({
+        severity: Severity.Error,
+        message: localize('extensions.uninstall.failed', 'Failed to uninstall {name}: {error}', {
+          name: entry.displayName,
+          error: (err as Error).message,
+        }),
+      })
+      return
     } finally {
       this._installing.delete(entry.id)
+      this._onDidChange.fire()
     }
     await this.refreshInstalled()
+  }
+
+  /**
+   * Drop an id from the installed snapshot while its uninstall is in flight,
+   * returning a closure that puts it back. Only the side being uninstalled is
+   * touched — the same extension can be installed locally and remotely at once.
+   */
+  private _hideInstalled(id: string, remote: boolean): () => void {
+    const source = this._installedList(remote)
+    const index = source.findIndex((local) => local.identifier === id)
+    const hidden = source[index]
+    if (hidden === undefined) return () => undefined
+    this._setInstalledList(
+      remote,
+      source.filter((_, i) => i !== index),
+    )
+    return () => {
+      const current = this._installedList(remote)
+      // A refresh that landed while the uninstall was in flight may have read the
+      // extension back already; inserting another copy would list it twice.
+      if (current.some((local) => local.identifier === id)) return
+      this._setInstalledList(remote, [...current.slice(0, index), hidden, ...current.slice(index)])
+    }
+  }
+
+  private _installedList(remote: boolean): ILocalExtension[] {
+    return remote ? this._remoteInstalled : this._installed
+  }
+
+  private _setInstalledList(remote: boolean, next: ILocalExtension[]): void {
+    if (remote) this._remoteInstalled = next
+    else this._installed = next
   }
 
   getReadme(entry: IExtensionEntry): Promise<string> {

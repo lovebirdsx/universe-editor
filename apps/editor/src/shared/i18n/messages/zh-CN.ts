@@ -147,6 +147,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'extensions.group.marketplace': '市场扩展',
   'extensions.install': '安装',
   'extensions.install.failed': '安装 {name} 失败：{error}',
+  'extensions.uninstall.failed': '卸载 {name} 失败：{error}',
   'extensions.installCompatibleVersion': '将安装版本 {version}',
   'extensions.installIncompatible': '与当前版本不兼容',
   'extensions.installVsix.done': '已安装"{name}"（{version}）。',

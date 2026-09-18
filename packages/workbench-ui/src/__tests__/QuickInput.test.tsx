@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, createEvent, fireEvent, render, screen } from '@testing-library/react'
 import { QuickPickPanel } from '../feedback/quickInput/QuickInputPanel.js'
 import type { QuickPickState } from '../feedback/quickInput/quickInputViewModel.js'
-import { IQuickInputButton } from '@universe-editor/platform'
+import { IQuickInputButton, type QuickPickInput } from '@universe-editor/platform'
 
 // happy-dom has no layout engine so @tanstack/react-virtual renders 0 visible items.
 // Mock it so all items are "visible" and existing text assertions continue to work.
@@ -771,6 +771,138 @@ describe('QuickPickPanel item removal', () => {
   })
 })
 
+describe('QuickPickPanel focus after removal', () => {
+  const rows = [
+    { id: 'cmd.a', label: 'Alpha' },
+    { id: 'cmd.b', label: 'Bravo' },
+    { id: 'cmd.c', label: 'Charlie' },
+    { id: 'cmd.d', label: 'Delta' },
+  ]
+
+  const pickState = (extra: Partial<QuickPickState> = {}): QuickPickState =>
+    makeState({ prefix: undefined, items: rows, ...extra })
+  const options = () => screen.getAllByRole('option')
+  const selectedText = () =>
+    options().find((o) => o.getAttribute('aria-selected') === 'true')?.textContent
+  const cursorTo = (index: number) => {
+    const input = screen.getByTestId('quick-input-field')
+    for (let i = 0; i < index; i++) fireEvent.keyDown(input, { key: 'ArrowDown' })
+  }
+
+  it('hands the cursor to the row below the removed one and leaves the viewport alone', () => {
+    render(
+      <QuickPickPanel state={pickState({ onItemRemove: vi.fn() })} onClose={() => undefined} />,
+    )
+    cursorTo(2)
+    expect(selectedText()).toContain('Charlie')
+    const list = screen.getByRole('listbox')
+    list.scrollTop = 120
+
+    fireEvent.click(screen.getAllByTestId('quick-input-item-remove')[2]!)
+
+    expect(screen.queryByText('Charlie')).toBeNull()
+    expect(selectedText()).toContain('Delta')
+    expect(list.scrollTop).toBe(120)
+  })
+
+  it('clamps to the new last row when the last row is removed', () => {
+    render(
+      <QuickPickPanel state={pickState({ onItemRemove: vi.fn() })} onClose={() => undefined} />,
+    )
+    cursorTo(3)
+    expect(selectedText()).toContain('Delta')
+
+    fireEvent.click(screen.getAllByTestId('quick-input-item-remove')[3]!)
+
+    expect(selectedText()).toContain('Charlie')
+  })
+
+  it('follows the highlighted row when a row above it is removed', () => {
+    render(
+      <QuickPickPanel state={pickState({ onItemRemove: vi.fn() })} onClose={() => undefined} />,
+    )
+    cursorTo(2)
+
+    fireEvent.click(screen.getAllByTestId('quick-input-item-remove')[0]!)
+
+    expect(screen.queryByText('Alpha')).toBeNull()
+    expect(selectedText()).toContain('Charlie')
+  })
+
+  it('skips forward over a separator instead of falling back to the top', () => {
+    const withSeparator: QuickPickInput[] = [
+      { id: 'cmd.a', label: 'Alpha' },
+      { id: 'cmd.b', label: 'Bravo' },
+      { type: 'separator', id: 'sep.more', label: 'More' },
+      { id: 'cmd.c', label: 'Charlie' },
+      { id: 'cmd.d', label: 'Delta' },
+    ]
+    render(
+      <QuickPickPanel
+        state={makeState({ prefix: undefined, items: withSeparator, onItemRemove: vi.fn() })}
+        onClose={() => undefined}
+      />,
+    )
+    cursorTo(1)
+    expect(selectedText()).toContain('Bravo')
+
+    fireEvent.click(screen.getAllByTestId('quick-input-item-remove')[1]!)
+
+    expect(selectedText()).toContain('Charlie')
+  })
+
+  it('keeps the cursor on the same row when the host re-derives its items', () => {
+    const { rerender } = render(
+      <QuickPickPanel state={pickState({ onItemRemove: vi.fn() })} onClose={() => undefined} />,
+    )
+    cursorTo(2)
+
+    // The command palette's × removes the row from the picker's own item list
+    // instead of hiding it in the panel; same reconciliation must apply.
+    rerender(
+      <QuickPickPanel
+        state={pickState({ items: rows.slice(1), onItemRemove: vi.fn() })}
+        onClose={() => undefined}
+      />,
+    )
+
+    expect(selectedText()).toContain('Charlie')
+  })
+
+  it('still resets the cursor to the first row when the filter changes', () => {
+    render(
+      <QuickPickPanel state={pickState({ onItemRemove: vi.fn() })} onClose={() => undefined} />,
+    )
+    cursorTo(3)
+
+    const input = screen.getByTestId('quick-input-field') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'a' } })
+
+    expect(options().length).toBeGreaterThan(1)
+    expect(selectedText()).toBe(options()[0]?.textContent)
+  })
+
+  it('still resets to the first row when an externally filtered host narrows the list', () => {
+    const externalState = (items: readonly QuickPickInput[]) =>
+      pickState({ filterExternally: true, items, onItemRemove: vi.fn() })
+    const { rerender } = render(
+      <QuickPickPanel state={externalState(rows)} onClose={() => undefined} />,
+    )
+    cursorTo(2)
+    expect(selectedText()).toContain('Charlie')
+
+    // Ctrl+P answering a keystroke: the host re-derives its items and the result
+    // is a subset of the previous ones — the same shape a removal produces, and
+    // the cursor still has to land on the best match at the top.
+    rerender(
+      <QuickPickPanel state={externalState([rows[0]!, rows[2]!])} onClose={() => undefined} />,
+    )
+
+    expect(selectedText()).toBe(options()[0]?.textContent)
+    expect(options()[0]?.textContent).toContain('Alpha')
+  })
+})
+
 describe('QuickPickPanel quick navigate locked mode', () => {
   const navigateState = (extra: Partial<QuickPickState> = {}): QuickPickState =>
     makeState({
@@ -787,6 +919,31 @@ describe('QuickPickPanel quick navigate locked mode', () => {
     render(<QuickPickPanel state={navigateState()} onClose={() => undefined} />)
     expect(field().readOnly).toBe(true)
     expect(screen.getByTestId('quick-input-hint').textContent).toContain('Release Ctrl to open')
+  })
+
+  it('keeps the cursor on the highlighted row when a row above it is removed', () => {
+    render(
+      <QuickPickPanel
+        state={navigateState({
+          quickNavigate: { modifier: 'ctrl', initialSelectionIndex: 1 },
+          items: [
+            { id: 'cmd.a', label: 'Alpha' },
+            { id: 'cmd.b', label: 'Bravo' },
+            { id: 'cmd.c', label: 'Charlie' },
+          ],
+          onItemRemove: vi.fn(),
+        })}
+        onClose={() => undefined}
+      />,
+    )
+    // Ctrl+Tab parks the cursor on the second entry (the most recent editor), and
+    // the first one is removed from under it.
+    expect(selectedRow()?.textContent).toContain('Bravo')
+
+    fireEvent.click(screen.getAllByTestId('quick-input-item-remove')[0]!)
+
+    // Following the index would slide the cursor onto Charlie.
+    expect(selectedRow()?.textContent).toContain('Bravo')
   })
 
   it('Enter hands the field over instead of accepting', () => {

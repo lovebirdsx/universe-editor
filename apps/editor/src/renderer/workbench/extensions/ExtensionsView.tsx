@@ -155,7 +155,7 @@ export function ExtensionsView() {
   const [dropActive, setDropActive] = useState(false)
   const [menu, setMenu] = useState<ExtensionActionsMenuState | undefined>(undefined)
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set())
-  const [focusedIndex, setFocusedIndex] = useState(-1)
+  const [focusedKey, setFocusedKey] = useState<string | undefined>(undefined)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const inputRef = useRef<HTMLInputElement | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -293,9 +293,14 @@ export function ExtensionsView() {
     [sections, collapsed],
   )
 
-  // Searching, collapsing a section or an install finishing all shorten the
-  // list, which would otherwise leave the cursor past the end.
-  const clampedFocusedIndex = focusedIndex >= navigable.length ? -1 : focusedIndex
+  // Keyed, not indexed: searching, collapsing a section, an install finishing or
+  // an uninstall all shorten the list, and an index would silently hand the
+  // cursor to a different extension. A row that disappears takes the cursor with
+  // it (-1) instead of pointing at its neighbour.
+  const focusedIndex = useMemo(
+    () => (focusedKey === undefined ? -1 : navigable.findIndex((row) => row.key === focusedKey)),
+    [focusedKey, navigable],
+  )
 
   // ArrowLeft/ArrowRight need to move the cursor, but the mover comes out of the
   // very hook this handler is passed to — read it through a ref rather than
@@ -304,8 +309,11 @@ export function ExtensionsView() {
 
   const nav = useFlatListNavigation({
     count: navigable.length,
-    focusedIndex: clampedFocusedIndex,
-    onFocusChange: setFocusedIndex,
+    focusedIndex,
+    onFocusChange: useCallback(
+      (index: number) => setFocusedKey(navigable[index]?.key),
+      [navigable],
+    ),
     getItemKey: useCallback((index: number) => navigable[index]?.key ?? '', [navigable]),
     getContainer,
     ariaLabel: localize('extensions.list', 'Extensions'),

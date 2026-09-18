@@ -293,6 +293,61 @@ export class TreeModel<T> extends Disposable {
     this._emitStructure()
   }
 
+  /**
+   * Ids the data source no longer returns: drop their cached state (a row that
+   * comes back later starts from `defaultExpanded` again rather than inheriting
+   * a stale fold), prune them from the selection, and hand the keyboard cursor to
+   * the row that slid into the focused row's place. Leaving `_focused` on a gone
+   * id is not cosmetic: `navigate()` cannot find it in the visible list, reads
+   * that as "nothing focused", and sends the next ArrowDown to the first row.
+   *
+   * `refresh()` plus a prune, in one structure event; with nothing to remove it
+   * is just `refresh()`.
+   */
+  invalidateNodes(ids: Iterable<string>): void {
+    const gone = new Set(ids)
+    if (gone.size === 0) {
+      this._emitStructure()
+      return
+    }
+    // Read before pruning state: the cache still holds the pre-change rows, which
+    // is what the neighbour calculation needs.
+    const visible = this.getVisibleNodes()
+    const previousFocus = this._focused
+    const removedFocus = previousFocus !== null && gone.has(previousFocus) ? previousFocus : null
+    const focusIdx = previousFocus === null ? -1 : visible.findIndex((n) => n.id === previousFocus)
+    // -1 when the cursor was not part of the selection, >= 0 is its seat there.
+    const focusSeat = removedFocus === null ? -1 : this._selection.indexOf(removedFocus)
+    for (const id of gone) this._state.delete(id)
+
+    let nextFocus = previousFocus
+    if (removedFocus !== null) {
+      const survivors = visible.filter((n) => !gone.has(n.id))
+      // focusIdx < 0: the row is gone but was not on screen at all (a collapsed
+      // ancestor hid it), so there is no "row that slid up" to hand the cursor to
+      // — and picking the first row is the jump this method exists to avoid.
+      nextFocus =
+        focusIdx < 0 ? null : (survivors[Math.min(focusIdx, survivors.length - 1)]?.id ?? null)
+    }
+
+    const nextSelection = this._selection.filter((id) => !gone.has(id))
+    let selectionChanged = nextSelection.length !== this._selection.length
+    // The row highlight follows the selection, so a cursor handed to a neighbour
+    // has to take the removed row's seat there — otherwise the focus moves with
+    // nothing on screen to show it. A successor that is still selected already
+    // carries the highlight, and must not be listed twice.
+    if (focusSeat >= 0 && nextFocus !== null && !nextSelection.includes(nextFocus)) {
+      nextSelection.splice(Math.min(focusSeat, nextSelection.length), 0, nextFocus)
+      selectionChanged = true
+    }
+
+    if (selectionChanged) this._replaceSelection(nextSelection)
+    const focusChanged = nextFocus !== previousFocus
+    if (focusChanged) this._focused = nextFocus
+    if (selectionChanged || focusChanged) this._emitSelection()
+    this._emitStructure()
+  }
+
   /** Drop all expansion + selection state (e.g. when the root changes). */
   reset(): void {
     this._state.clear()

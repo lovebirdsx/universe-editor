@@ -52,6 +52,7 @@ import { workspaceFullLabel } from '../../services/workspace/workspaceLabel.js'
 import { buildRemoteTree, type RemoteTreeTarget } from './remoteTree.js'
 import {
   buildRemoteTreeSnapshot,
+  collectSnapshotIds,
   createRemoteTreeDataSource,
   type IRemoteTreeSnapshot,
   type RemoteNode,
@@ -124,8 +125,17 @@ export function RemoteTargetsView() {
       }),
   )
 
+  const prevNodeIdsRef = useRef<ReadonlySet<string>>(new Set())
+
   useEffect(() => {
-    model.refresh()
+    // A retried connection or a finished refresh only adds or relabels rows;
+    // dropped ones (a removed recent workspace, a forgotten host) need their
+    // cached state pruned and the cursor moved off them, or the next ArrowDown
+    // would land back on the first row.
+    const nextIds = collectSnapshotIds(snapshot)
+    const gone = [...prevNodeIdsRef.current].filter((id) => !nextIds.has(id))
+    prevNodeIdsRef.current = nextIds
+    model.invalidateNodes(gone)
   }, [snapshot, model])
 
   const treeRef = useRef<HTMLDivElement>(null)
@@ -278,6 +288,7 @@ export function RemoteTargetsView() {
       <Tree<RemoteNode>
         model={model}
         rootRef={treeRef}
+        scrollStateKey="remoteTargets"
         className={styles['view'] ?? ''}
         ariaLabel={localize('remote.targets.ariaLabel', 'Remote targets')}
         indentBase={REMOTE_ROW_INDENT_BASE}

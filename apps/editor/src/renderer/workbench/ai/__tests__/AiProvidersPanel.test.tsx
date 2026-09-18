@@ -32,7 +32,7 @@ import {
   type AiProviderVerifyResult,
 } from '@universe-editor/platform'
 import { IAiRateMirror } from '../../../services/ai/aiRateMirror.js'
-import { AiProvidersPanel } from '../AiProvidersPanel.js'
+import { AiProvidersPanel, providerCardKeys } from '../AiProvidersPanel.js'
 import { ServicesContext } from '../../useService.js'
 
 afterEach(() => cleanup())
@@ -896,5 +896,78 @@ describe('AiProvidersPanel', () => {
     gates[0]?.([ACME_MODEL])
     await flushEffects()
     expect(screen.getByText('2 models')).toBeTruthy()
+  })
+})
+
+describe('providerCardKeys', () => {
+  const entry = (id: string): AiProviderEntry => ({ id })
+
+  it('is the id itself when ids are unique', () => {
+    expect(providerCardKeys([entry('acme'), entry('acme-gbl')])).toEqual(['acme', 'acme-gbl'])
+  })
+
+  it('suffixes only the repeats, since both cards must render', () => {
+    expect(providerCardKeys([entry('acme'), entry('acme'), entry('acme')])).toEqual([
+      'acme',
+      'acme#1',
+      'acme#2',
+    ])
+  })
+
+  it('leaves every surviving key untouched when an unrelated entry is dropped', () => {
+    const before = providerCardKeys([entry('acme'), entry('acme-gbl'), entry('third')])
+    const after = providerCardKeys([entry('acme-gbl'), entry('third')])
+    expect(after).toEqual(before.slice(1))
+  })
+})
+
+describe('AiProvidersPanel removal', () => {
+  const SECOND_PROVIDER: AiProviderEntry = {
+    id: 'acme-gbl',
+    baseUrl: 'https://acme-gbl.example',
+    protocolMap: { 'anthropic-messages': ['qwen3-coder'] },
+  }
+
+  /** Main fires onDidChangeModels on every providers write, the removal's own included. */
+  function echoOnWrite(aiModel: FakeAiModelService): void {
+    aiModel.updateProviders.mockImplementation(async (providers) => {
+      aiModel.providers = [...providers]
+      aiModel.fireModelsChanged()
+    })
+  }
+
+  it('does not re-enumerate models when a provider is removed', async () => {
+    const aiModel = new FakeAiModelService()
+    aiModel.providers = [ACME_PROVIDER, SECOND_PROVIDER]
+    aiModel.models = [ACME_MODEL]
+    echoOnWrite(aiModel)
+    renderPanel(aiModel)
+    await flushEffects()
+    const enumerations = aiModel.getModels.mock.calls.length
+    expect(enumerations).toBeGreaterThan(0)
+
+    fireEvent.click(within(entryCard('acme')).getByRole('button', { name: 'Remove provider' }))
+    await flushEffects()
+    await flushEffects()
+
+    expect(entryCard('acme-gbl')).toBeTruthy()
+    expect(aiModel.getModels.mock.calls.length).toBe(enumerations)
+  })
+
+  it('keeps the cards below the removed one mounted', async () => {
+    const aiModel = new FakeAiModelService()
+    aiModel.providers = [ACME_PROVIDER, SECOND_PROVIDER]
+    aiModel.models = [ACME_MODEL]
+    echoOnWrite(aiModel)
+    renderPanel(aiModel)
+    await flushEffects()
+    const survivor = entryCard('acme-gbl')
+
+    fireEvent.click(within(entryCard('acme')).getByRole('button', { name: 'Remove provider' }))
+    await flushEffects()
+
+    // An index-shaped key would rebuild this card, dropping its drafts, its
+    // filter and its connectivity probe.
+    expect(entryCard('acme-gbl')).toBe(survivor)
   })
 })

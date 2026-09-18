@@ -102,6 +102,11 @@ pnpm e2e:ext @universe-editor/perforce
 - 判定只看未提交改动——已提交（含未推送）的 e2e 改动走全量，turbo 缓存照常生效。
 - 与 CI 的关系：本地是**文件级**缩小，CI 是 **suite 级** affected（见下「CI affected 选择性执行」），互不干扰。
 
+### 写 core spec 的两个定位坑
+
+- **断言 quick pick 的行要 scope 到面板**：隐藏视图仍留在 DOM 里，其 `<select>` 的原生 `<option>` 同样匹配 `option` role，且按文档顺序排在 portal 之前——`page.getByRole('option').nth(i)` 会取到它，报错形如 `resolved to <option value="…">` + `unexpected value "hidden"`。用 `workbench.quickInput.dialog.getByRole('option')`。
+- **别让真实指针停在会被重排的行上**：`locator.hover()` / `click()` 会把指针留在原地，列表因这次操作重排后，Chromium 会对新落到指针下的行重发 hover。若组件本身"指针悬停即移动焦点"（如 quick pick 行的 `onMouseMove`），这条浏览器行为会顶掉被断言的代码路径，让"有 bug 也照过"。需要只点不指时用 `locator.dispatchEvent('click')`，光标位置改由键盘摆放。
+
 ### 外部（marketplace）扩展 E2E
 
 `extensions-external/*`（eslint / pdf / excel-diff）是独立发布的 marketplace 扩展，**不在 pnpm/turbo workspace 内**，走单独一套 e2e。对齐 VSCode 的 `--extensionDevelopmentPath`：**从磁盘目录直接加载 unpacked 扩展跑测**（内核认 `UNIVERSE_USER_EXTENSIONS_DIR` env，fixture 把扩展根 junction 进隔离临时目录），**不打 vsix、不重启 host**。
