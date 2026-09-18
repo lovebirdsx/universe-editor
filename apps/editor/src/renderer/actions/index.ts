@@ -366,6 +366,7 @@ import {
   ScrollAcpTimelineUpAction,
   ScrollAcpTimelineDownAction,
   SwitchSessionAction,
+  SwitchSessionReverseAction,
   CopyFocusedAcpMessageAction,
   CopySelectedTextAction,
   CopyAcpImageAction,
@@ -834,6 +835,7 @@ registerAction2(ScrollAcpTimelinePageDownAction)
 registerAction2(ToggleAcpTimelineItemCollapseAction)
 registerAction2(CycleAcpTimelineCollapseAction)
 registerAction2(SwitchSessionAction)
+registerAction2(SwitchSessionReverseAction)
 registerAction2(CopyFocusedAcpMessageAction)
 registerAction2(CopySelectedTextAction)
 registerAction2(CopyAcpImageAction)

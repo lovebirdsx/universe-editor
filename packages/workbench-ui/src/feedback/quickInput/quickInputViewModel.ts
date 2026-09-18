@@ -7,6 +7,7 @@
 import type {
   IKeyMods,
   IQuickInputButton,
+  IQuickNavigateOptions,
   IQuickPickItem,
   IQuickPickItemButton,
   QuickPickFilterMode,
@@ -32,7 +33,7 @@ export interface QuickPickState {
   filterExternally?: boolean | undefined
   /** Locked (modifier still held) until Enter; releasing the modifier accepts the
    *  focused row. The panel owns the lock state — the host only declares the mode. */
-  quickNavigate?: { modifier: 'ctrl'; initialSelectionIndex?: number } | undefined
+  quickNavigate?: IQuickNavigateOptions | undefined
   /** Show an indeterminate progress bar at the top of the panel. */
   busy?: boolean | undefined
   /** Controlled cursor / selection in the input box as `[start, end]` offsets. */

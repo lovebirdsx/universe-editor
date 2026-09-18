@@ -24,6 +24,7 @@ import type {
   IQuickPickItem,
   IQuickPickItemHighlights,
   IQuickPickSeparator,
+  QuickNavigateModifier,
   QuickPickFilterMode,
   QuickPickInput,
 } from '@universe-editor/platform'
@@ -366,6 +367,29 @@ const EMPTY_SELECTED_ITEMS: readonly IQuickPickItem[] = []
 /** One panel at a time, so the hint's id can be a fixed target for aria-describedby. */
 const HINT_ID = 'quick-input-hint'
 
+/** Per modifier: the `KeyboardEvent.key` of its release, and its name in the hint. */
+const QUICK_NAVIGATE_MODIFIERS: Record<
+  QuickNavigateModifier,
+  { readonly releaseKey: string; readonly label: string }
+> = {
+  ctrl: { releaseKey: 'Control', label: 'Ctrl' },
+  alt: { releaseKey: 'Alt', label: 'Alt' },
+}
+
+/**
+ * Whether the picker's own modifier is down and the other one is not. AltGr reports
+ * as Ctrl+Alt on Windows/Linux, so a bare `altKey` test would read AltGr+S (a plain
+ * character on many layouts) as the cycle key, and a bare `ctrlKey` test would read
+ * AltGr as Ctrl.
+ */
+function isQuickNavigateModifierHeld(
+  e: Pick<globalThis.KeyboardEvent, 'altKey' | 'ctrlKey' | 'metaKey'>,
+  modifier: QuickNavigateModifier,
+): boolean {
+  if (e.metaKey) return false
+  return modifier === 'alt' ? e.altKey && !e.ctrlKey : e.ctrlKey && !e.altKey
+}
+
 let sharedMeasureCanvas: HTMLCanvasElement | undefined
 function measureText(text: string, fontSize: number, fontFamily: string): number {
   if (typeof document === 'undefined') return 0
@@ -575,7 +599,9 @@ export function QuickPickPanel({
   // filterExternally mode (the simple file dialog) the host autocompletes the
   // value as the user types — that changes `query` but not the items, so this must
   // NOT depend on `query`, or the programmatic value update would yank focus back
-  // to the top and fight host-driven navigation.
+  // to the top and fight host-driven navigation. Quick navigate is the third case:
+  // `focusedIdx` already starts at `initialSelectionIndex` — the row a modifier
+  // release must open — so it is only snapped off a separator.
   useEffect(() => {
     if (quickNavigate) {
       setFocusedIdx((idx) => normalizeSelectableIndex(sortedFiltered, idx))
@@ -595,9 +621,13 @@ export function QuickPickPanel({
   // Host-driven focus: when the host sets activeItems (path autocomplete /
   // directory navigation), move focus to the first matching item by id. Runs
   // after the reset effect above so it wins when both fire on a list change.
+  // Quick navigate is the exception, and the guard below is what makes it one:
+  // `initialSelectionIndex` is the only source of the highlight there, so an
+  // `activeItemId` would be inert rather than a second opinion on where a release
+  // lands.
   const activeItems = state.activeItems
   useEffect(() => {
-    if (!activeItems) return
+    if (!activeItems || quickNavigate) return
     // Host explicitly cleared the highlight (file dialog: the typed trailing
     // segment stopped matching any entry). Drop focus so Enter resolves the typed
     // value via onOk instead of acting on the now-stale autocomplete highlight —
@@ -612,7 +642,7 @@ export function QuickPickPanel({
     if (targetId === undefined) return
     const idx = sortedFiltered.findIndex((item) => !isSeparator(item) && item.id === targetId)
     if (idx >= 0) setFocusedIdx(idx)
-  }, [activeItems, sortedFiltered, autoFocusFirstItem])
+  }, [activeItems, sortedFiltered, autoFocusFirstItem, quickNavigate])
 
   useEffect(() => {
     if (sortedFiltered.length > 0) {
@@ -688,14 +718,15 @@ export function QuickPickPanel({
   })
 
   useEffect(() => {
-    if (!locked) return
+    if (!locked || quickNavigate === undefined) return
+    const releaseKey = QUICK_NAVIGATE_MODIFIERS[quickNavigate.modifier].releaseKey
     const onKeyUp = (e: globalThis.KeyboardEvent) => {
-      if (e.key !== 'Control') return
+      if (e.key !== releaseKey) return
       releaseAcceptRef.current()
     }
     document.addEventListener('keyup', onKeyUp)
     return () => document.removeEventListener('keyup', onKeyUp)
-  }, [locked])
+  }, [locked, quickNavigate])
 
   const PAGE_SIZE = 8
 
@@ -707,11 +738,25 @@ export function QuickPickPanel({
     const len = sortedFiltered.length
     if (locked) {
       // Enter hands the field over to the user instead of accepting, so a still-held
-      // Ctrl cannot open a row mid-navigation.
+      // modifier cannot open a row mid-navigation.
       if (e.key === 'Enter') {
         e.preventDefault()
         setUnlockedFor(quickNavigate)
         inputRef.current?.focus()
+        return
+      }
+      // Tapping the key that opened this picker walks the focus one row (Shift
+      // reverses), so holding the modifier and tapping it repeatedly cycles the whole
+      // list — the Alt+S counterpart of Ctrl+Tab's repeated Tab. Locked-only on
+      // purpose: once Enter hands the field over, a bare `s` has to reach the filter.
+      if (
+        quickNavigate?.triggerKey !== undefined &&
+        e.key.toLowerCase() === quickNavigate.triggerKey &&
+        isQuickNavigateModifierHeld(e, quickNavigate.modifier)
+      ) {
+        e.preventDefault()
+        if (len === 0) return
+        setFocusedIdx((i) => nextSelectableIndex(sortedFiltered, i, e.shiftKey ? -1 : 1))
         return
       }
       // Swallow printable characters (Space included): the field is readOnly, so they
@@ -745,9 +790,14 @@ export function QuickPickPanel({
       e.preventDefault()
       const item = sortedFiltered[focusedIdx]
       if (canRemove(item)) removeItem(item)
-    } else if (quickNavigate && onItemRemove && e.ctrlKey && e.key.toLowerCase() === 'x') {
-      // Ctrl+X removes the focused row in quick-navigate mode (the Ctrl+Tab
-      // switcher, where Ctrl is already down). Gated on ctrlKey because the input
+    } else if (
+      quickNavigate &&
+      onItemRemove &&
+      isQuickNavigateModifierHeld(e, quickNavigate.modifier) &&
+      e.key.toLowerCase() === 'x'
+    ) {
+      // <modifier>+X removes the focused row in quick-navigate mode (the switcher,
+      // where the modifier is already down). Gated on the modifier because the input
       // box is a live filter — a bare `x` must type, not close an editor.
       e.preventDefault()
       const item = sortedFiltered[focusedIdx]
@@ -1071,11 +1121,12 @@ export function QuickPickPanel({
           </div>
         )}
       </div>
-      {locked && (
+      {locked && quickNavigate && (
         <div id={HINT_ID} className={styles['hint']} data-testid="quick-input-hint">
           {localize(
             'quickInput.quickNavigateHint',
-            'Release Ctrl to open · Enter to type a filter',
+            'Release {modifier} to open · Enter to type a filter',
+            { modifier: QUICK_NAVIGATE_MODIFIERS[quickNavigate.modifier].label },
           )}
         </div>
       )}

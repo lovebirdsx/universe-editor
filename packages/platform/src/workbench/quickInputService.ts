@@ -139,6 +139,24 @@ export interface IKeyMods {
   alt: boolean
 }
 
+/** Modifier driving a quick-navigate picker: `'ctrl'` = Ctrl+Tab, `'alt'` = Alt+S. */
+export type QuickNavigateModifier = 'ctrl' | 'alt'
+
+export interface IQuickNavigateOptions {
+  readonly modifier: QuickNavigateModifier
+  readonly initialSelectionIndex?: number
+  /**
+   * The key that opened this picker, held together with `modifier` (lowercase
+   * `KeyboardEvent.key`, e.g. `'s'` for Alt+S). Tapping it again while the panel is
+   * still locked walks the focus one row (Shift reverses), so holding the modifier
+   * and tapping the trigger key repeatedly cycles the whole list while the read-only
+   * field never sees a character. Omit when the picker has no such key (Ctrl+Tab's
+   * Tab is handled by the panel's own Tab branch). Inert once Enter unlocks the
+   * field — from then on a bare `s` must reach the filter box.
+   */
+  readonly triggerKey?: string
+}
+
 export interface IPickOptions {
   readonly id?: string
   readonly placeholder?: string
@@ -167,12 +185,10 @@ export interface IPickOptions {
    * input box is read-only (typing goes nowhere) and Enter hands the field over
    * for filtering; from then on the picker behaves like any other. Releasing the
    * modifier without pressing Enter accepts the focused item, which is what makes
-   * Ctrl+Tab a one-gesture switch. Used by Ctrl+Tab editor/view switching.
+   * Ctrl+Tab a one-gesture switch. Used by Ctrl+Tab editor/view switching ('ctrl')
+   * and Alt+S session switching ('alt'); the printed hint names the modifier.
    */
-  readonly quickNavigate?: {
-    readonly modifier: 'ctrl'
-    readonly initialSelectionIndex?: number
-  }
+  readonly quickNavigate?: IQuickNavigateOptions
   /**
    * Mutable out-param. When provided, the service writes the modifier state held
    * at acceptance time into it right before `pick` resolves.

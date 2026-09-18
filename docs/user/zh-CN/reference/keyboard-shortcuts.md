@@ -120,7 +120,7 @@
 | 取消 Agent 回合 | `Ctrl+Shift+Escape`；会话聚焦时也可按 `Shift+Esc` |
 | 将选区添加到已有 Agent 聊天 | `Ctrl+K Ctrl+L` |
 | 恢复 Agent 会话… | `Ctrl+Shift+H` |
-| 切换会话…（跨窗口） | `Alt+S` |
+| 切换会话…（跨窗口） | `Alt+S`；`Alt+Shift+S` 反向 |
 | 聚焦第 1~8 个会话配置项 | `Alt+1` ~ `Alt+8`（会话编辑器聚焦时） |
 | 触发内联补全 | `Alt+\`（编辑器文本焦点） |
 | 采纳内联补全 | `Tab`（幽灵文本可见时） |

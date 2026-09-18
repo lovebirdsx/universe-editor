@@ -70,6 +70,7 @@ import {
   revealSessionEditorTab,
 } from '../services/acp/session/revealSessionEditorTab.js'
 import { reviveUri, type ITargetArg } from './fileActionsCommon.js'
+import { computeInitialSelectionIndex } from '../services/quickInput/quickNavigateSelection.js'
 import { relativeTime } from '../relativeTime.js'
 
 export class NewAgentSessionAction extends Action2 {
@@ -600,13 +601,58 @@ export class SwitchSessionAction extends Action2 {
       icon: 'history',
       title: localize2('action.agent.switchSession', 'Switch Session…'),
       category: CATEGORY,
-      keybinding: { primary: 'alt+s' },
+      // `when` mirrors Ctrl+Tab, and is load-bearing: while the picker is up the
+      // keybinding must stop resolving, or the global handler swallows the repeated
+      // Alt+S that walks the list (it only lets Escape through) and the panel never
+      // sees it. `runSwitchSession`'s in-flight guard covers the other re-entry
+      // window — the round trip before the picker is up.
+      keybinding: { primary: 'alt+s', when: '!quickInputVisible' },
       menu: [{ id: MenuId.AcpChatContext, group: '3_switch', order: 1 }],
       f1: true,
     })
   }
 
-  override async run(accessor: ServicesAccessor): Promise<void> {
+  override run(accessor: ServicesAccessor): Promise<void> {
+    return runSwitchSession(accessor, false)
+  }
+}
+
+export class SwitchSessionReverseAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.switchSessionReverse'
+  constructor() {
+    super({
+      id: SwitchSessionReverseAction.ID,
+      title: localize2('action.agent.switchSessionReverse', 'Switch to Previous Session…'),
+      category: CATEGORY,
+      keybinding: { primary: 'alt+shift+s', when: '!quickInputVisible' },
+      f1: true,
+    })
+  }
+
+  override run(accessor: ServicesAccessor): Promise<void> {
+    return runSwitchSession(accessor, true)
+  }
+}
+
+/**
+ * Re-entry guard. The picker only mounts after `getAllSessions()` (an IPC round trip to
+ * main, which fans out to every window), so during that window `quickInputVisible` is
+ * still false and the keybinding still resolves: a held Alt tapping S twice would run
+ * this again, and the second `pick()` overwrites `_currentOnHide`, stranding the first
+ * promise forever and fanning the sessions out twice over.
+ */
+let switchSessionInFlight = false
+
+/**
+ * Quick-navigate gesture shared by both directions: the picker opens locked with the
+ * row one step away from the current session highlighted, so tapping Alt+S and letting
+ * go of Alt switches in one gesture. Repeating the trigger key (or Tab) walks the list;
+ * Enter hands the field over for filtering.
+ */
+async function runSwitchSession(accessor: ServicesAccessor, reverse: boolean): Promise<void> {
+  if (switchSessionInFlight) return
+  switchSessionInFlight = true
+  try {
     const switcher = accessor.get(ISessionSwitcherService)
     const quickInput = accessor.get(IQuickInputService)
     const activeSessionId = accessor.get(IAcpSessionService).activeSession.get()?.id
@@ -623,13 +669,22 @@ export class SwitchSessionAction extends Action2 {
       windowId: s.windowId,
       sessionId: s.sessionId,
     }))
-    const activeItemId = items.find((it) => it.sessionId === activeSessionId)?.id
+    // The current session only anchors the initial highlight. `initialSelectionIndex` is
+    // the single source of it — a quick-navigate picker ignores `activeItemId` outright,
+    // so passing one as well would just be a second, dead description of the same thing.
+    const currentItemId = items.find((it) => it.sessionId === activeSessionId)?.id
     const pick = await quickInput.pick<SessionSwitchPickItem>(items, {
       placeholder: localize('agent.switchSession.placeholder', 'Switch to a session in any window'),
-      ...(activeItemId !== undefined ? { activeItemId } : {}),
+      quickNavigate: {
+        modifier: 'alt',
+        triggerKey: 's',
+        initialSelectionIndex: computeInitialSelectionIndex(items, currentItemId, reverse),
+      },
     })
     if (!pick) return
     await switcher.reveal(pick.windowId, pick.sessionId)
+  } finally {
+    switchSessionInFlight = false
   }
 }
 

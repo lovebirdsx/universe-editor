@@ -21,7 +21,6 @@ import {
 } from '@universe-editor/platform'
 import {
   buildRecentTargetPickItems,
-  computeInitialSelectionIndex,
   CloseActiveEditorAction,
   CloseActivePinnedEditorAction,
   CloseAllEditorsAction,
@@ -896,42 +895,6 @@ describe('quick-open recent targets', () => {
     )
     expect(items).toHaveLength(1)
     expect(items[0]!.label).toBe(editor.label)
-  })
-
-  it('highlights the entry after the current one', () => {
-    const items = [
-      { id: 'a', label: 'a' },
-      { id: 'b', label: 'b' },
-      { id: 'c', label: 'c' },
-    ]
-    expect(computeInitialSelectionIndex(items, 'a', false)).toBe(1)
-    expect(computeInitialSelectionIndex(items, 'b', false)).toBe(2)
-  })
-
-  it('reverse direction highlights the entry before the current one, wrapping', () => {
-    const items = [
-      { id: 'a', label: 'a' },
-      { id: 'b', label: 'b' },
-      { id: 'c', label: 'c' },
-    ]
-    expect(computeInitialSelectionIndex(items, 'b', true)).toBe(0)
-    expect(computeInitialSelectionIndex(items, 'a', true)).toBe(2)
-  })
-
-  it('falls back to "index 0 is here" when the current target is not listed', () => {
-    // Focus parked on the activity bar / status bar: nothing in the list matches.
-    const items = [
-      { id: 'a', label: 'a' },
-      { id: 'b', label: 'b' },
-      { id: 'c', label: 'c' },
-    ]
-    expect(computeInitialSelectionIndex(items, undefined, false)).toBe(1)
-    expect(computeInitialSelectionIndex(items, 'missing', false)).toBe(1)
-    expect(computeInitialSelectionIndex(items, undefined, true)).toBe(2)
-  })
-
-  it('does not divide by zero on an empty list', () => {
-    expect(computeInitialSelectionIndex([], undefined, false)).toBe(0)
   })
 
   it('both directions are registered and usable without an editor open', () => {

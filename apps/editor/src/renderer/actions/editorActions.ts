@@ -43,6 +43,7 @@ import {
   encodeViewPickId,
   IRecentTargetsService,
 } from '../services/editor/RecentTargetsService.js'
+import { computeInitialSelectionIndex } from '../services/quickInput/quickNavigateSelection.js'
 import { resourceIconId } from '../services/quickInput/quickPickResourceIcon.js'
 import { createViewPickItem } from '../services/quickInput/viewQuickPick.js'
 import { resolveTargetEditor } from './editorActionHelpers.js'
@@ -530,24 +531,6 @@ function resolveRecentPick(
   const editor = group.editors.find((e) => e.id === decoded.editorId)
   if (!editor) return undefined
   return { kind: 'editor', group, editor }
-}
-
-/**
- * Index to highlight when the picker opens: one step away from wherever the
- * user currently is, so a single Ctrl+Tab lands on the previous target. Falls
- * back to the classic "index 0 is here" assumption when the current location
- * isn't in the list (focus parked on the activity bar / status bar, say).
- */
-export function computeInitialSelectionIndex(
-  items: readonly IQuickPickItem[],
-  currentId: string | undefined,
-  reverse: boolean,
-): number {
-  if (items.length === 0) return 0
-  const currentIdx = currentId === undefined ? -1 : items.findIndex((i) => i.id === currentId)
-  const from = currentIdx === -1 ? 0 : currentIdx
-  const step = reverse ? -1 : 1
-  return (((from + step) % items.length) + items.length) % items.length
 }
 
 async function runQuickOpenRecentEditor(

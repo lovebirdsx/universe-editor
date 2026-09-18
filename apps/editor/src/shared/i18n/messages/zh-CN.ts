@@ -330,6 +330,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.agent.sendCommitToChat': '发送到 Agent 聊天',
   'action.agent.showSessionChanges': '显示会话更改',
   'action.agent.switchSession': '切换会话…',
+  'action.agent.switchSessionReverse': '切换到上一个会话…',
   'action.agent.toggleBookmark0': '切换会话书签 0',
   'action.agent.toggleBookmark1': '切换会话书签 1',
   'action.agent.toggleBookmark2': '切换会话书签 2',
@@ -730,7 +731,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'quickInput.inputBox.ariaLabel': '输入框',
   'quickInput.noResults': '没有结果',
   'quickInput.prefixHint': "输入 '{prefix}' 后接命令名称",
-  'quickInput.quickNavigateHint': '松开 Ctrl 打开选中项 · 按 Enter 输入过滤',
+  'quickInput.quickNavigateHint': '松开 {modifier} 打开选中项 · 按 Enter 输入过滤',
   'quickInput.removeFromList': '从列表中移除',
 
   // --- Settings ---

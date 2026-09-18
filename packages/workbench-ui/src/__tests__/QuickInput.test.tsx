@@ -872,6 +872,125 @@ describe('QuickPickPanel quick navigate locked mode', () => {
     expect(onAccept).not.toHaveBeenCalled()
     expect(onClose).not.toHaveBeenCalled()
   })
+
+  // Alt+S (cross-window session switching) drives the same gesture with a different
+  // modifier, so every branch below has to follow `quickNavigate.modifier` instead of
+  // assuming Ctrl — including the trigger key, which the panel only gets for pickers
+  // whose opening keystroke is not Tab.
+  const altState = (extra: Partial<QuickPickState> = {}): QuickPickState =>
+    makeState({
+      prefix: undefined,
+      quickNavigate: { modifier: 'alt', triggerKey: 's', initialSelectionIndex: 0 },
+      ...extra,
+    })
+
+  it('names the picker’s own modifier in the hint', () => {
+    render(<QuickPickPanel state={altState()} onClose={() => undefined} />)
+    expect(screen.getByTestId('quick-input-hint').textContent).toContain('Release Alt to open')
+  })
+
+  it('releasing Alt accepts the focused item', () => {
+    const onAccept = vi.fn()
+    const onClose = vi.fn()
+    render(<QuickPickPanel state={altState({ onAccept })} onClose={onClose} />)
+    fireEvent.keyUp(document, { key: 'Alt' })
+    expect(onAccept).toHaveBeenCalledWith([items[0]], { ctrl: false, alt: false })
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  it('only the picker’s own modifier releases it', () => {
+    const onAccept = vi.fn()
+    render(<QuickPickPanel state={altState({ onAccept })} onClose={() => undefined} />)
+    fireEvent.keyUp(document, { key: 'Control' })
+    expect(onAccept).not.toHaveBeenCalled()
+
+    cleanup()
+    const ctrlAccept = vi.fn()
+    render(
+      <QuickPickPanel state={navigateState({ onAccept: ctrlAccept })} onClose={() => undefined} />,
+    )
+    fireEvent.keyUp(document, { key: 'Alt' })
+    expect(ctrlAccept).not.toHaveBeenCalled()
+  })
+
+  it('tapping the trigger key walks the list while locked, wrapping around', () => {
+    render(<QuickPickPanel state={altState()} onClose={() => undefined} />)
+    expect(selectedRow()?.textContent).toContain('Format Document')
+
+    fireEvent.keyDown(field(), { key: 's', altKey: true })
+    expect(selectedRow()?.textContent).toContain('Go to Line')
+
+    fireEvent.keyDown(field(), { key: 's', altKey: true })
+    expect(selectedRow()?.textContent).toContain('Format Document')
+  })
+
+  it('Shift reverses the trigger key walk', () => {
+    render(<QuickPickPanel state={altState()} onClose={() => undefined} />)
+    fireEvent.keyDown(field(), { key: 'S', altKey: true, shiftKey: true })
+    expect(selectedRow()?.textContent).toContain('Go to Line')
+  })
+
+  it('swallows a bare trigger key while locked, without moving the focus', () => {
+    render(<QuickPickPanel state={altState()} onClose={() => undefined} />)
+    const event = createEvent.keyDown(field(), { key: 's' })
+    fireEvent(field(), event)
+    expect(event.defaultPrevented).toBe(true)
+    expect(selectedRow()?.textContent).toContain('Format Document')
+  })
+
+  it('the trigger key types once Enter handed the field over', () => {
+    render(<QuickPickPanel state={altState()} onClose={() => undefined} />)
+    fireEvent.keyDown(field(), { key: 'Enter' })
+
+    const event = createEvent.keyDown(field(), { key: 's' })
+    fireEvent(field(), event)
+    expect(event.defaultPrevented).toBe(false)
+
+    fireEvent.change(field(), { target: { value: 'line' } })
+    const options = screen.getAllByRole('option')
+    expect(options).toHaveLength(1)
+    expect(options[0]?.textContent).toContain('Go to Line')
+  })
+
+  it('the trigger key is inert after unlocking, even with the modifier held', () => {
+    render(<QuickPickPanel state={altState()} onClose={() => undefined} />)
+    fireEvent.keyDown(field(), { key: 'Enter' })
+    fireEvent.keyDown(field(), { key: 's', altKey: true })
+    expect(selectedRow()?.textContent).toContain('Format Document')
+  })
+
+  it('honours initialSelectionIndex', () => {
+    render(
+      <QuickPickPanel
+        state={makeState({
+          prefix: undefined,
+          quickNavigate: { modifier: 'alt', triggerKey: 's', initialSelectionIndex: 1 },
+        })}
+        onClose={() => undefined}
+      />,
+    )
+    expect(selectedRow()?.textContent).toContain('Go to Line')
+  })
+
+  it('ignores the trigger key on an empty list', () => {
+    const onAccept = vi.fn()
+    render(<QuickPickPanel state={altState({ items: [], onAccept })} onClose={() => undefined} />)
+    fireEvent.keyDown(field(), { key: 's', altKey: true })
+    fireEvent.keyUp(document, { key: 'Alt' })
+    expect(onAccept).not.toHaveBeenCalled()
+  })
+
+  it('follows the picker’s modifier for the removal chord', () => {
+    const onItemRemove = vi.fn()
+    render(<QuickPickPanel state={altState({ onItemRemove })} onClose={() => undefined} />)
+
+    // Ctrl+X belongs to the Ctrl-driven picker only; the alt one must not take it.
+    fireEvent.keyDown(field(), { key: 'x', ctrlKey: true })
+    expect(onItemRemove).not.toHaveBeenCalled()
+
+    fireEvent.keyDown(field(), { key: 'x', altKey: true })
+    expect(onItemRemove).toHaveBeenCalledWith(items[0])
+  })
 })
 
 describe('QuickPickPanel item buttons', () => {

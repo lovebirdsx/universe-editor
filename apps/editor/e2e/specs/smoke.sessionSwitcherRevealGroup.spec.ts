@@ -124,6 +124,13 @@ test.describe('@regression Alt+S reveals a session tab that lives in another gro
       void window.__E2E__!.runCommand('workbench.action.agent.switchSession')
     })
     await workbench.quickInput.waitForVisible()
+    // 切换器和 Ctrl+Tab 一样以锁定态打开（输入框只读，松开 Alt 直接打开高亮项），
+    // 所以要先按 Enter 交还输入权才能填过滤词。
+    await expect(workbench.quickInput.input).toHaveAttribute('readonly', '')
+    await expect(workbench.quickInput.hint).toBeVisible()
+    await page.keyboard.press('Enter')
+    await expect(workbench.quickInput.input).not.toHaveAttribute('readonly', '')
+    await expect(workbench.quickInput.hint).toBeHidden()
     await workbench.quickInput.input.fill('RIGHT-TARGET')
     const option = workbench.quickInput.dialog.getByRole('option', { name: /RIGHT-TARGET/ })
     await expect(option).toBeVisible({ timeout: 10000 })

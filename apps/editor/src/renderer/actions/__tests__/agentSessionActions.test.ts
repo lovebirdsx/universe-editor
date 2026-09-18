@@ -9,6 +9,7 @@
 import { afterEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import {
   CommandsRegistry,
+  ContextKeyService,
   Event,
   GroupDirection,
   IEditorGroupsService,
@@ -30,7 +31,13 @@ import {
   GoToParentSessionAction,
   OpenSideTaskAction,
   SelectAgentAction,
+  SwitchSessionAction,
+  SwitchSessionReverseAction,
 } from '../agentSessionActions.js'
+import {
+  ISessionSwitcherService,
+  type SessionSummary,
+} from '../../../shared/ipc/sessionSwitcher.js'
 import { IAcpAgentRegistry, type IAcpAgentDescriptor } from '../../services/acp/acpAgentRegistry.js'
 import {
   IAcpSessionService,
@@ -380,5 +387,196 @@ describe('side-task navigation commands', () => {
 
     expect(h.pick).toHaveBeenCalledOnce()
     expect(h.pick.mock.calls[0]![0].map((item: { id: string }) => item.id)).toEqual(['side-1'])
+  })
+})
+
+function sessionSummary(windowId: number, sessionId: string, title: string): SessionSummary {
+  return { windowId, sessionId, title, status: 'idle', agentId: 'fake', workspaceName: 'ws' }
+}
+
+interface SwitchHarness {
+  readonly pick: MockInstance
+  readonly reveal: MockInstance
+  run(commandId: string): Promise<void>
+  dispose(): void
+}
+
+function makeSwitchHarness(
+  sessions: readonly SessionSummary[],
+  activeSessionId: string | undefined,
+  pickResult: unknown = undefined,
+  /** Overridable so a test can hold the command inside the session fan-out. */
+  getAllSessions: () => Promise<readonly SessionSummary[]> = async () => sessions,
+): SwitchHarness {
+  const pick = vi.fn().mockResolvedValue(pickResult)
+  const reveal = vi.fn().mockResolvedValue(undefined)
+  const services = new ServiceCollection()
+  services.set(ISessionSwitcherService, {
+    _serviceBrand: undefined,
+    getAllSessions: vi.fn(getAllSessions),
+    reveal,
+  } as unknown as ISessionSwitcherService)
+  services.set(IAcpSessionService, {
+    _serviceBrand: undefined,
+    activeSession: constObservable(
+      activeSessionId === undefined ? undefined : ({ id: activeSessionId } as IAcpSession),
+    ),
+  } as unknown as IAcpSessionService)
+  services.set(IQuickInputService, {
+    _serviceBrand: undefined,
+    pick,
+  } as unknown as IQuickInputService)
+  const inst = new InstantiationService(services)
+  const disposables: IDisposable[] = [
+    registerAction2(SwitchSessionAction),
+    registerAction2(SwitchSessionReverseAction),
+  ]
+  return {
+    pick,
+    reveal,
+    run: async (commandId) => {
+      await inst.invokeFunction((accessor) =>
+        Promise.resolve(CommandsRegistry.getCommand(commandId)!.handler(accessor)),
+      )
+    },
+    dispose: () => {
+      while (disposables.length > 0) disposables.pop()?.dispose()
+    },
+  }
+}
+
+/** The pick options the action handed to the quick pick. */
+function pickOptions(pick: MockInstance): {
+  activeItemId?: string
+  quickNavigate?: { modifier: string; triggerKey?: string; initialSelectionIndex?: number }
+} {
+  const call = pick.mock.calls[0] as readonly [unknown, Record<string, never>] | undefined
+  return (call?.[1] ?? {}) as never
+}
+
+describe('SwitchSessionAction', () => {
+  const SESSIONS = [
+    sessionSummary(1, 'a', 'Session A'),
+    sessionSummary(1, 'b', 'Session B'),
+    sessionSummary(2, 'c', 'Session C'),
+  ]
+  let harness: SwitchHarness | undefined
+
+  const make = (
+    sessions = SESSIONS,
+    activeSessionId: string | undefined = 'b',
+    pickResult: unknown = undefined,
+  ): SwitchHarness => {
+    harness = makeSwitchHarness(sessions, activeSessionId, pickResult)
+    return harness
+  }
+
+  afterEach(() => {
+    harness?.dispose()
+    harness = undefined
+  })
+
+  // The gesture is the whole point: the panel opens locked on the row a release
+  // would open, so Alt+S then letting go of Alt switches in one keystroke.
+  it('asks for an Alt-driven quick-navigate picker one row past the current session', async () => {
+    const h = make()
+    await h.run(SwitchSessionAction.ID)
+
+    expect(pickOptions(h.pick).quickNavigate).toEqual({
+      modifier: 'alt',
+      triggerKey: 's',
+      initialSelectionIndex: 2,
+    })
+  })
+
+  it('highlights the row before the current session for the reverse command', async () => {
+    const h = make()
+    await h.run(SwitchSessionReverseAction.ID)
+
+    expect(pickOptions(h.pick).quickNavigate?.initialSelectionIndex).toBe(0)
+  })
+
+  // A quick-navigate picker takes its highlight from `initialSelectionIndex` alone —
+  // the panel ignores `activeItemId` in that mode — so the current session is only an
+  // anchor for the index, never a second highlight on the row a release must not open.
+  it('does not also highlight the current session through activeItemId', async () => {
+    const h = make()
+    await h.run(SwitchSessionAction.ID)
+
+    expect(pickOptions(h.pick).activeItemId).toBeUndefined()
+  })
+
+  it('reveals the picked session in its own window', async () => {
+    const h = make(SESSIONS, 'b', {
+      id: '2.c',
+      label: 'Session C',
+      windowId: 2,
+      sessionId: 'c',
+    })
+    await h.run(SwitchSessionAction.ID)
+
+    expect(h.reveal).toHaveBeenCalledWith(2, 'c')
+  })
+
+  it('reveals nothing when the picker is dismissed', async () => {
+    const h = make(SESSIONS, 'b', undefined)
+    await h.run(SwitchSessionAction.ID)
+
+    expect(h.reveal).not.toHaveBeenCalled()
+  })
+
+  it('does not open a picker without any session', async () => {
+    const h = make([], undefined)
+    await h.run(SwitchSessionAction.ID)
+
+    expect(h.pick).not.toHaveBeenCalled()
+  })
+
+  it('ignores a second Alt+S that lands before the first picker is up', async () => {
+    // The `when` clause cannot cover this one: while `getAllSessions()` is in flight
+    // the panel is not up yet, so `quickInputVisible` is still false and a held Alt
+    // tapping S twice reaches the command twice. The second `pick()` would strand the
+    // first promise (`_currentOnHide` is a single slot) and re-run the whole fan-out.
+    let release: (value: readonly SessionSummary[]) => void = () => {}
+    const gate = new Promise<readonly SessionSummary[]>((resolve) => {
+      release = resolve
+    })
+    const h = (harness = makeSwitchHarness(SESSIONS, 'b', undefined, () => gate))
+
+    // Both taps are in flight on purpose: awaiting the second one here would hang
+    // the test instead of failing it when the guard is gone, since it parks on the
+    // very gate this test is holding shut.
+    const first = h.run(SwitchSessionAction.ID)
+    const second = h.run(SwitchSessionAction.ID)
+    release(SESSIONS)
+    await Promise.all([first, second])
+
+    expect(h.pick).toHaveBeenCalledOnce()
+  })
+
+  it('binds both directions only while no picker is open', async () => {
+    // The when-clause keeps the picker's own keys from resolving while it is up:
+    // otherwise the global handler swallows the repeated Alt+S the panel cycles on,
+    // and the highlight would sit still.
+    const contextKeyService = new ContextKeyService()
+    const quickInputVisible = contextKeyService.createKey<boolean>('quickInputVisible', false)
+    const h = make()
+    try {
+      expect(KeybindingsRegistry.resolveKeybinding('alt+s', contextKeyService)).toBe(
+        SwitchSessionAction.ID,
+      )
+      expect(KeybindingsRegistry.resolveKeybinding('alt+shift+s', contextKeyService)).toBe(
+        SwitchSessionReverseAction.ID,
+      )
+
+      quickInputVisible.set(true)
+      expect(KeybindingsRegistry.resolveKeybinding('alt+s', contextKeyService)).toBeUndefined()
+      expect(
+        KeybindingsRegistry.resolveKeybinding('alt+shift+s', contextKeyService),
+      ).toBeUndefined()
+    } finally {
+      h.dispose()
+      harness = undefined
+    }
   })
 })
