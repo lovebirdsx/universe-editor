@@ -163,9 +163,11 @@ export interface IPickOptions {
   /**
    * Enables VSCode-style "quick navigate" mode: Tab / Shift+Tab cycles the
    * focused item and the picker opens on `initialSelectionIndex` rather than the
-   * first row. Acceptance is ordinary Enter — the picker deliberately does NOT
-   * close when the modifier is released, so the user can keep typing to filter a
-   * long list. Used by Ctrl+Tab editor/view switching.
+   * first row. The picker opens *locked* — the modifier is still held, so the
+   * input box is read-only (typing goes nowhere) and Enter hands the field over
+   * for filtering; from then on the picker behaves like any other. Releasing the
+   * modifier without pressing Enter accepts the focused item, which is what makes
+   * Ctrl+Tab a one-gesture switch. Used by Ctrl+Tab editor/view switching.
    */
   readonly quickNavigate?: {
     readonly modifier: 'ctrl'

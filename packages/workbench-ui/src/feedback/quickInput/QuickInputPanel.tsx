@@ -363,6 +363,9 @@ const INPUT_FONT = 14 // .input font-size
 
 const EMPTY_SELECTED_ITEMS: readonly IQuickPickItem[] = []
 
+/** One panel at a time, so the hint's id can be a fixed target for aria-describedby. */
+const HINT_ID = 'quick-input-hint'
+
 let sharedMeasureCanvas: HTMLCanvasElement | undefined
 function measureText(text: string, fontSize: number, fontFamily: string): number {
   if (typeof document === 'undefined') return 0
@@ -386,6 +389,13 @@ export function QuickPickPanel({
   const [query, setQuery] = useState(state.value ?? prefix)
   const quickNavigate = state.quickNavigate
   const [focusedIdx, setFocusedIdx] = useState(quickNavigate?.initialSelectionIndex ?? 0)
+  // Quick navigate opens locked: the modifier is still held, so the field is read-only
+  // until Enter hands it over. Tracked by identity rather than a boolean because a new
+  // `pick()` mints a fresh `quickNavigate` object: should a host ever swap one picker
+  // for another in place (React reuses this instance, useState initializers don't
+  // re-run), the next one starts locked again instead of inheriting the unlocked state.
+  const [unlockedFor, setUnlockedFor] = useState<QuickPickState['quickNavigate']>(undefined)
+  const locked = quickNavigate !== undefined && unlockedFor !== quickNavigate
   const [removedIds, setRemovedIds] = useState<ReadonlySet<string>>(() => new Set())
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
@@ -663,9 +673,29 @@ export function QuickPickPanel({
     [onItemRemove],
   )
 
-  // Quick navigate mode keeps the picker open when the modifier is released: the
-  // input box is a real filter box, so accepting on keyup would make it
-  // impossible to type a query. Enter accepts, like every other picker.
+  // Release-to-open (VSCode quick-navigate parity): while locked, letting go of the
+  // modifier accepts the focused row — that is the whole point of the Ctrl+Tab flow,
+  // and it is why the field stays read-only until Enter. The listener reads the list
+  // and focus through a ref: a release landing right after a Tab keydown would
+  // otherwise accept the row the keydown moved away from.
+  const releaseAcceptRef = useRef<() => void>(() => undefined)
+  useLayoutEffect(() => {
+    releaseAcceptRef.current = () => {
+      if (!locked) return
+      const item = sortedFiltered[focusedIdx]
+      if (isSelectable(item)) accept([item], { ctrl: false, alt: false })
+    }
+  })
+
+  useEffect(() => {
+    if (!locked) return
+    const onKeyUp = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== 'Control') return
+      releaseAcceptRef.current()
+    }
+    document.addEventListener('keyup', onKeyUp)
+    return () => document.removeEventListener('keyup', onKeyUp)
+  }, [locked])
 
   const PAGE_SIZE = 8
 
@@ -675,6 +705,23 @@ export function QuickPickPanel({
     // fights the composition and duplicates the committed text. Defer to the IME.
     if (e.nativeEvent.isComposing) return
     const len = sortedFiltered.length
+    if (locked) {
+      // Enter hands the field over to the user instead of accepting, so a still-held
+      // Ctrl cannot open a row mid-navigation.
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        setUnlockedFor(quickNavigate)
+        inputRef.current?.focus()
+        return
+      }
+      // Swallow printable characters (Space included): the field is readOnly, so they
+      // would go nowhere anyway, and they must not double as the way out of the locked
+      // state. Navigation keys, Delete, Ctrl+N/P and Ctrl+X fall through below.
+      if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        e.preventDefault()
+        return
+      }
+    }
     if (quickNavigate && e.key === 'Tab') {
       e.preventDefault()
       if (len === 0) return
@@ -772,8 +819,9 @@ export function QuickPickPanel({
       <div className={styles['inputRow']}>
         <input
           ref={inputRef}
-          className={styles['input']}
+          className={`${styles['input']} ${locked ? styles['inputLocked'] : ''}`}
           value={query}
+          readOnly={locked}
           onCompositionStart={() => {
             composingRef.current = true
           }}
@@ -800,6 +848,9 @@ export function QuickPickPanel({
           aria-label={
             state.placeholder ?? localize('quickInput.input.ariaLabel', 'Quick pick input')
           }
+          // The locked field announces itself as read-only, so the hint row is the only
+          // place a screen-reader user can learn how to get out of that state.
+          aria-describedby={locked ? HINT_ID : undefined}
           spellCheck={false}
           data-testid="quick-input-field"
         />
@@ -1020,6 +1071,14 @@ export function QuickPickPanel({
           </div>
         )}
       </div>
+      {locked && (
+        <div id={HINT_ID} className={styles['hint']} data-testid="quick-input-hint">
+          {localize(
+            'quickInput.quickNavigateHint',
+            'Release Ctrl to open · Enter to type a filter',
+          )}
+        </div>
+      )}
     </div>
   )
 }

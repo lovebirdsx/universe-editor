@@ -730,6 +730,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'quickInput.inputBox.ariaLabel': '输入框',
   'quickInput.noResults': '没有结果',
   'quickInput.prefixHint': "输入 '{prefix}' 后接命令名称",
+  'quickInput.quickNavigateHint': '松开 Ctrl 打开选中项 · 按 Enter 输入过滤',
   'quickInput.removeFromList': '从列表中移除',
 
   // --- Settings ---

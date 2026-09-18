@@ -254,8 +254,10 @@ test.describe('@p1 quick open across restarts', () => {
           void window.__E2E__!.runCommand('workbench.action.quickOpenRecentEditor')
         })
         await workbench.quickInput.waitForVisible()
-        await second.page.keyboard.up('Control')
 
+        // Collect the labels while Ctrl is still held: releasing it now opens the
+        // highlighted row (release-to-open) and the panel would be gone before the
+        // order could be read.
         const labels = await workbench.quickInput.dialog.getByRole('option').allTextContents()
         const idxOf = (name: string) => labels.findIndex((l) => l.includes(name))
         expect(idxOf('charlie.ts')).toBeGreaterThanOrEqual(0)
@@ -263,6 +265,7 @@ test.describe('@p1 quick open across restarts', () => {
 
         await second.page.keyboard.press('Escape')
         await workbench.quickInput.waitForHidden()
+        await second.page.keyboard.up('Control')
       } finally {
         await closeApp(second.app)
       }

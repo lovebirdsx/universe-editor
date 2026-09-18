@@ -1,12 +1,14 @@
 /*---------------------------------------------------------------------------------------------
  *  Ctrl+Tab switcher: editors and views in one recency list (P0).
  *
- *  验证 quick-navigate 全流程（Ctrl+Tab 打开 → Tab 移动 → 回车确认）能选中视图,
- *  松开 Ctrl 后弹窗保持打开以便输入过滤, 视图行不可移除, 且没有编辑器打开时仍可
- *  弹出（precondition 已放宽）。
+ *  验证 quick-navigate 全流程：Ctrl+Tab 打开后处于锁定态（输入框只读 + 底部提示），松开
+ *  Ctrl 直接打开高亮项，先按 Enter 才交还输入权用于过滤；视图行不可移除；没有编辑器打开
+ *  时仍可弹出（precondition 已放宽）。
  *--------------------------------------------------------------------------------------------*/
 
+import type { Locator, Page } from '@playwright/test'
 import { expect, test } from '../fixtures/sharedApp.js'
+import type { WorkbenchPO } from '../pages/WorkbenchPO.js'
 
 const SWITCH_COMMAND = 'workbench.action.quickOpenRecentEditor'
 // AI Debug is the focus subject rather than Explorer: with no folder open the
@@ -16,6 +18,56 @@ const SWITCH_COMMAND = 'workbench.action.quickOpenRecentEditor'
 // smoke.paneCompositeTabFocus.spec.ts.
 const AI_DEBUG_VIEW = 'workbench.view.aiDebug.main'
 
+/** Ctrl+Tab as the keybinding fires it, with Ctrl left DOWN — releasing it accepts
+ *  the highlighted row, so tests that want to keep the picker open must pass it
+ *  through `unlockSwitcher` or close it with `dismissSwitcher` first. */
+async function openSwitcherHoldingCtrl(page: Page, workbench: WorkbenchPO): Promise<void> {
+  await page.keyboard.down('Control')
+  await page.evaluate((id) => {
+    void window.__E2E__!.runCommand(id)
+  }, SWITCH_COMMAND)
+  await workbench.quickInput.waitForVisible()
+}
+
+/** Enter is the only way out of the locked state; it hands the field over without
+ *  accepting, so Ctrl can then be released without opening anything. */
+async function unlockSwitcher(page: Page, workbench: WorkbenchPO): Promise<void> {
+  await page.keyboard.press('Enter')
+  await expect(workbench.quickInput.input).not.toHaveAttribute('readonly', '')
+  await expect(workbench.quickInput.hint).toBeHidden()
+}
+
+/** Close without accepting, then let go of the modifier (the panel is gone by then,
+ *  so the release cannot open a row — and the shared window is left with no key held). */
+async function dismissSwitcher(page: Page, workbench: WorkbenchPO): Promise<void> {
+  await page.keyboard.press('Escape')
+  await workbench.quickInput.waitForHidden()
+  await page.keyboard.up('Control')
+}
+
+/** The switcher in its post-Enter state: Ctrl released, field editable, the picker
+ *  behaving like any other. */
+async function openSwitcherForTyping(page: Page, workbench: WorkbenchPO): Promise<void> {
+  await openSwitcherHoldingCtrl(page, workbench)
+  await unlockSwitcher(page, workbench)
+  await page.keyboard.up('Control')
+}
+
+/**
+ * Narrow the list to one row by typing, then confirm it is the highlighted one.
+ * Requires the switcher to be unlocked (`openSwitcherForTyping`). Typing rather
+ * than Tab-walking because the list is recency-ordered — its length and shape
+ * depend on what earlier tests in the shared window touched, so no fixed number
+ * of Tab presses reaches a given row.
+ */
+async function selectOnlyRow(page: Page, workbench: WorkbenchPO, query: string): Promise<Locator> {
+  await page.keyboard.type(query)
+  const rows = workbench.quickInput.dialog.getByRole('option')
+  await expect.poll(() => rows.count()).toBe(1)
+  await expect(rows.first()).toHaveAttribute('aria-selected', 'true')
+  return rows.first()
+}
+
 test.describe('@p0 quick open recent targets', () => {
   // Every test drives focus into Quick Input right after startup; the one-shot
   // bootstrap focus restore would otherwise steal it back mid-test.
@@ -23,52 +75,24 @@ test.describe('@p0 quick open recent targets', () => {
     await workbench.waitForBootstrapFocusSettled()
   })
 
-  /**
-   * The command resolves only once the user accepts, so it must be
-   * fire-and-forget. Ctrl is pressed and released around it the way a real
-   * Ctrl+Tab does — the picker must survive the release.
-   */
-  async function openSwitcher(
-    page: import('@playwright/test').Page,
-    workbench: { quickInput: { waitForVisible(): Promise<void> } },
-  ): Promise<void> {
-    await page.keyboard.down('Control')
-    await page.evaluate((id) => {
-      void window.__E2E__!.runCommand(id)
-    }, SWITCH_COMMAND)
-    await workbench.quickInput.waitForVisible()
+  // A failed assertion inside a helper skips its `up('Control')`, and Playwright
+  // keeps the pressed key on the Page — which the shared fixture reuses across
+  // tests. Release it here so one failure cannot turn every later keystroke in
+  // this worker into a Ctrl+<key> chord.
+  test.afterEach(async ({ page }) => {
     await page.keyboard.up('Control')
-  }
-
-  /**
-   * Narrow the list to one row by typing, then confirm it is the highlighted
-   * one. Typing rather than Tab-walking because the list is recency-ordered —
-   * its length and shape depend on what earlier tests in the shared window
-   * touched, so no fixed number of Tab presses reaches a given row.
-   */
-  async function selectOnlyRow(
-    page: import('@playwright/test').Page,
-    workbench: { quickInput: { dialog: import('@playwright/test').Locator } },
-    query: string,
-  ): Promise<import('@playwright/test').Locator> {
-    await page.keyboard.type(query)
-    const rows = workbench.quickInput.dialog.getByRole('option')
-    await expect.poll(() => rows.count()).toBe(1)
-    await expect(rows.first()).toHaveAttribute('aria-selected', 'true')
-    return rows.first()
-  }
+  })
 
   test('lists views alongside editors', async ({ page, workbench }) => {
     await workbench.runCommand('workbench.action.files.newUntitledFile')
     await expect(workbench.editor.monacoEditor).toBeVisible()
 
-    await openSwitcher(page, workbench)
+    await openSwitcherHoldingCtrl(page, workbench)
 
     // Views are listed even when never focused this session.
     await expect(workbench.quickInput.dialog.getByRole('option', { name: /Files/ })).toBeVisible()
 
-    await page.keyboard.press('Escape')
-    await workbench.quickInput.waitForHidden()
+    await dismissSwitcher(page, workbench)
   })
 
   test('opens without an editor open', async ({ page, workbench }) => {
@@ -76,20 +100,49 @@ test.describe('@p0 quick open recent targets', () => {
     await workbench.runCommand('workbench.action.closeAllEditors')
     await expect.poll(() => workbench.getContextKey<boolean>('editorIsOpen')).toBe(false)
 
-    await openSwitcher(page, workbench)
+    await openSwitcherHoldingCtrl(page, workbench)
     await expect(workbench.quickInput.dialog.getByRole('option', { name: /Files/ })).toBeVisible()
 
-    await page.keyboard.press('Escape')
-    await workbench.quickInput.waitForHidden()
+    await dismissSwitcher(page, workbench)
   })
 
-  // Releasing Ctrl used to accept immediately, which made the filter box
-  // unreachable — the picker was gone before a query could be typed.
-  test('survives releasing Ctrl so the list can be filtered by typing', async ({
-    page,
-    workbench,
-  }) => {
-    await openSwitcher(page, workbench)
+  // The gesture the switcher exists for: Ctrl+Tab, release, done. The picker opens
+  // one step away from where the user is, so the highlighted row is the target they
+  // came from.
+  test('releasing Ctrl opens the highlighted row', async ({ page, workbench }) => {
+    await workbench.runCommand('workbench.action.files.newUntitledFile')
+    await expect(workbench.editor.monacoEditor).toBeVisible()
+    const previous = await workbench.getActiveEditorUri()
+    expect(previous).toBeDefined()
+
+    await workbench.runCommand('workbench.action.files.newUntitledFile')
+    await expect.poll(() => workbench.getActiveEditorUri()).not.toBe(previous)
+
+    await openSwitcherHoldingCtrl(page, workbench)
+    await expect(workbench.quickInput.dialog.locator('[aria-selected="true"]')).toContainText(
+      previous!.split('/').pop() ?? '',
+    )
+
+    await page.keyboard.up('Control')
+    await workbench.quickInput.waitForHidden()
+    await expect.poll(() => workbench.getActiveEditorUri()).toBe(previous)
+  })
+
+  // Holding Ctrl keeps the field read-only (typed characters must not land in it),
+  // and Enter is what hands it over. Until then a release opens the row, so this is
+  // also the regression guard for "the filter box became unreachable".
+  test('stays locked until Enter, then filters by typing', async ({ page, workbench }) => {
+    await workbench.runCommand('workbench.action.files.newUntitledFile')
+    await expect(workbench.editor.monacoEditor).toBeVisible()
+
+    await openSwitcherHoldingCtrl(page, workbench)
+    await expect(workbench.quickInput.input).toHaveAttribute('readonly', '')
+    await expect(workbench.quickInput.hint).toBeVisible()
+
+    await unlockSwitcher(page, workbench)
+    await page.keyboard.up('Control')
+    // Unlocked: releasing the modifier no longer opens anything.
+    await expect(workbench.quickInput.dialog).toBeVisible()
 
     await page.keyboard.type('Terminal')
     const rows = workbench.quickInput.dialog.getByRole('option')
@@ -105,7 +158,7 @@ test.describe('@p0 quick open recent targets', () => {
     await expect(workbench.editor.monacoEditor).toBeVisible()
     await workbench.focusActiveEditorGroup()
 
-    await openSwitcher(page, workbench)
+    await openSwitcherForTyping(page, workbench)
     await selectOnlyRow(page, workbench, 'AI Debug')
 
     await page.keyboard.press('Enter')
@@ -115,7 +168,7 @@ test.describe('@p0 quick open recent targets', () => {
   })
 
   test('view rows cannot be removed from the list', async ({ page, workbench }) => {
-    await openSwitcher(page, workbench)
+    await openSwitcherForTyping(page, workbench)
 
     const filesRow = await selectOnlyRow(page, workbench, 'Timeline')
 
@@ -137,7 +190,7 @@ test.describe('@p0 quick open recent targets', () => {
     await workbench.runCommand('workbench.action.files.newUntitledFile')
     await expect.poll(() => workbench.getActiveEditorUri()).not.toBe(first)
 
-    await openSwitcher(page, workbench)
+    await openSwitcherForTyping(page, workbench)
     await selectOnlyRow(page, workbench, first!.split('/').pop() ?? '')
 
     await page.keyboard.press('Enter')
@@ -160,7 +213,9 @@ test.describe('@p0 quick open recent targets', () => {
       .poll(() => workbench.getContextKey<string>('focusedView'))
       .toBe('workbench.view.search.results')
 
-    await openSwitcher(page, workbench)
+    // Read-only assertions: stay locked (Ctrl held) so the picker cannot accept and
+    // close underneath the labels being collected.
+    await openSwitcherHoldingCtrl(page, workbench)
 
     const labels = await workbench.quickInput.dialog.getByRole('option').allTextContents()
     const idxOf = (prefix: string) => labels.findIndex((l) => l.startsWith(prefix))
@@ -169,8 +224,7 @@ test.describe('@p0 quick open recent targets', () => {
     expect(idxOf('Source Control')).toBeGreaterThan(0)
     expect(idxOf('Source Control')).toBeLessThan(idxOf('Outline'))
 
-    await page.keyboard.press('Escape')
-    await workbench.quickInput.waitForHidden()
+    await dismissSwitcher(page, workbench)
   })
 
   // These six used to be permanently stuck at the tail of the recency list:
@@ -192,7 +246,7 @@ test.describe('@p0 quick open recent targets', () => {
     { view: 'workbench.view.terminal.main', label: 'Terminal' },
   ]) {
     test(`${label} enters the recency list once focused`, async ({ page, workbench }) => {
-      await openSwitcher(page, workbench)
+      await openSwitcherForTyping(page, workbench)
       await selectOnlyRow(page, workbench, label)
       await page.keyboard.press('Enter')
       await workbench.quickInput.waitForHidden()
@@ -201,12 +255,11 @@ test.describe('@p0 quick open recent targets', () => {
 
       // Reopening must now show it at the head — the switcher opens one step
       // away from "here", so the current target is row 0.
-      await openSwitcher(page, workbench)
+      await openSwitcherHoldingCtrl(page, workbench)
       const labels = await workbench.quickInput.dialog.getByRole('option').allTextContents()
       expect(labels[0]).toContain(label)
 
-      await page.keyboard.press('Escape')
-      await workbench.quickInput.waitForHidden()
+      await dismissSwitcher(page, workbench)
     })
   }
 
@@ -225,7 +278,7 @@ test.describe('@p0 quick open recent targets', () => {
       .poll(() => page.evaluate((id) => window.__E2E__!.getViewCollapsed(id), TIMELINE))
       .toBe(true)
 
-    await openSwitcher(page, workbench)
+    await openSwitcherForTyping(page, workbench)
     await selectOnlyRow(page, workbench, 'Timeline')
     await page.keyboard.press('Enter')
     await workbench.quickInput.waitForHidden()
@@ -235,11 +288,10 @@ test.describe('@p0 quick open recent targets', () => {
       .toBe(false)
     await expect.poll(() => workbench.getContextKey<string>('focusedView')).toBe(TIMELINE)
 
-    await openSwitcher(page, workbench)
+    await openSwitcherHoldingCtrl(page, workbench)
     const labels = await workbench.quickInput.dialog.getByRole('option').allTextContents()
     expect(labels[0]).toContain('Timeline')
 
-    await page.keyboard.press('Escape')
-    await workbench.quickInput.waitForHidden()
+    await dismissSwitcher(page, workbench)
   })
 })

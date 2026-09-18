@@ -30,6 +30,8 @@ export interface QuickPickState {
   /** When true, row descriptions keep their content width and the label truncates first. */
   preserveDescription?: boolean | undefined
   filterExternally?: boolean | undefined
+  /** Locked (modifier still held) until Enter; releasing the modifier accepts the
+   *  focused row. The panel owns the lock state — the host only declares the mode. */
   quickNavigate?: { modifier: 'ctrl'; initialSelectionIndex?: number } | undefined
   /** Show an indeterminate progress bar at the top of the panel. */
   busy?: boolean | undefined

@@ -637,7 +637,9 @@ describe('QuickPickPanel item removal', () => {
     expect(screen.getByText('Go to Line')).toBeTruthy()
   })
 
-  it('a bare x types instead of removing, so the filter box stays usable', () => {
+  // Locked mode swallows printable keys (the field is readOnly there), so a bare `x`
+  // must neither remove a row nor be the way out of the lock.
+  it('a bare x neither removes nor unlocks while locked', () => {
     const onItemRemove = vi.fn()
     render(
       <QuickPickPanel
@@ -649,15 +651,44 @@ describe('QuickPickPanel item removal', () => {
         onClose={() => undefined}
       />,
     )
-    const input = screen.getByTestId('quick-input-field')
-    fireEvent.keyDown(input, { key: 'x' })
+    const input = screen.getByTestId('quick-input-field') as HTMLInputElement
+    const event = createEvent.keyDown(input, { key: 'x' })
+    fireEvent(input, event)
+    expect(event.defaultPrevented).toBe(true)
     expect(onItemRemove).not.toHaveBeenCalled()
+    expect(input.readOnly).toBe(true)
+    expect(screen.getByTestId('quick-input-hint')).toBeTruthy()
     expect(screen.getByText('Format Document')).toBeTruthy()
   })
 
-  // Releasing the modifier used to accept the focused item, which made the
-  // filter box unusable: the picker closed before a query could be typed.
-  it('releasing the modifier neither accepts nor closes in quick-navigate mode', () => {
+  it('a bare x types once Enter handed the field over, so the filter stays usable', () => {
+    const onItemRemove = vi.fn()
+    render(
+      <QuickPickPanel
+        state={makeState({
+          prefix: undefined,
+          quickNavigate: { modifier: 'ctrl', initialSelectionIndex: 0 },
+          onItemRemove,
+        })}
+        onClose={() => undefined}
+      />,
+    )
+    const input = screen.getByTestId('quick-input-field') as HTMLInputElement
+    fireEvent.keyDown(input, { key: 'Enter' })
+    const event = createEvent.keyDown(input, { key: 'x' })
+    fireEvent(input, event)
+    expect(event.defaultPrevented).toBe(false)
+    expect(onItemRemove).not.toHaveBeenCalled()
+
+    fireEvent.change(input, { target: { value: 'lin' } })
+    const options = screen.getAllByRole('option')
+    expect(options).toHaveLength(1)
+    expect(options[0]?.textContent).toContain('Go to Line')
+  })
+
+  // Release-to-open: letting go of Ctrl opens the highlighted row, which is the whole
+  // point of the Ctrl+Tab gesture — and why the field is read-only until Enter.
+  it('releasing Ctrl accepts the focused item in quick-navigate mode', () => {
     const onAccept = vi.fn()
     const onClose = vi.fn()
     render(
@@ -671,12 +702,8 @@ describe('QuickPickPanel item removal', () => {
       />,
     )
     fireEvent.keyUp(document, { key: 'Control' })
-    expect(onAccept).not.toHaveBeenCalled()
-    expect(onClose).not.toHaveBeenCalled()
-
-    // Enter is what accepts now.
-    fireEvent.keyDown(screen.getByTestId('quick-input-field'), { key: 'Enter' })
-    expect(onAccept).toHaveBeenCalledWith([items[0]], expect.anything())
+    expect(onAccept).toHaveBeenCalledWith([items[0]], { ctrl: false, alt: false })
+    expect(onClose).toHaveBeenCalled()
   })
 
   it('x does not remove items outside quick-navigate mode', () => {
@@ -741,6 +768,109 @@ describe('QuickPickPanel item removal', () => {
     fireEvent.keyDown(input, { key: 'x', ctrlKey: true })
     expect(onItemRemove).not.toHaveBeenCalled()
     expect(screen.getByText('Format Document')).toBeTruthy()
+  })
+})
+
+describe('QuickPickPanel quick navigate locked mode', () => {
+  const navigateState = (extra: Partial<QuickPickState> = {}): QuickPickState =>
+    makeState({
+      prefix: undefined,
+      quickNavigate: { modifier: 'ctrl', initialSelectionIndex: 0 },
+      ...extra,
+    })
+
+  const field = () => screen.getByTestId('quick-input-field') as HTMLInputElement
+  const selectedRow = () =>
+    screen.getAllByRole('option').find((o) => o.getAttribute('aria-selected') === 'true')
+
+  it('opens read-only with the quick-navigate hint', () => {
+    render(<QuickPickPanel state={navigateState()} onClose={() => undefined} />)
+    expect(field().readOnly).toBe(true)
+    expect(screen.getByTestId('quick-input-hint').textContent).toContain('Release Ctrl to open')
+  })
+
+  it('Enter hands the field over instead of accepting', () => {
+    const onAccept = vi.fn()
+    const onClose = vi.fn()
+    render(<QuickPickPanel state={navigateState({ onAccept })} onClose={onClose} />)
+    fireEvent.keyDown(field(), { key: 'Enter' })
+    expect(onAccept).not.toHaveBeenCalled()
+    expect(onClose).not.toHaveBeenCalled()
+    expect(field().readOnly).toBe(false)
+    expect(screen.queryByTestId('quick-input-hint')).toBeNull()
+  })
+
+  // The Tab branch of the switcher had no coverage at all before this.
+  it('Tab cycles while locked, and a release after unlocking no longer accepts', () => {
+    const onAccept = vi.fn()
+    render(<QuickPickPanel state={navigateState({ onAccept })} onClose={() => undefined} />)
+    fireEvent.keyDown(field(), { key: 'Tab' })
+    expect(selectedRow()?.textContent).toContain('Go to Line')
+
+    fireEvent.keyDown(field(), { key: 'Enter' })
+    fireEvent.keyUp(document, { key: 'Control' })
+    expect(onAccept).not.toHaveBeenCalled()
+
+    fireEvent.keyDown(field(), { key: 'Enter' })
+    expect(onAccept).toHaveBeenCalledWith([items[1]], { ctrl: false, alt: false })
+  })
+
+  it('Shift+Tab cycles backwards while locked', () => {
+    render(<QuickPickPanel state={navigateState()} onClose={() => undefined} />)
+    expect(selectedRow()?.textContent).toContain('Format Document')
+    // Wraps past the head of the list to its last row.
+    fireEvent.keyDown(field(), { key: 'Tab', shiftKey: true })
+    expect(selectedRow()?.textContent).toContain('Go to Line')
+  })
+
+  // The lock only silences typing. Everything the switcher does with the keyboard
+  // must keep working, or Ctrl+Tab would lose its arrows and its delete affordance.
+  it('still navigates and removes rows while locked', () => {
+    const onItemRemove = vi.fn()
+    render(<QuickPickPanel state={navigateState({ onItemRemove })} onClose={() => undefined} />)
+    fireEvent.keyDown(field(), { key: 'ArrowDown' })
+    expect(selectedRow()?.textContent).toContain('Go to Line')
+    fireEvent.keyDown(field(), { key: 'ArrowUp' })
+    expect(selectedRow()?.textContent).toContain('Format Document')
+    fireEvent.keyDown(field(), { key: 'Delete' })
+    expect(onItemRemove).toHaveBeenCalledWith(items[0])
+  })
+
+  it('swallows Space while locked, so a multi-select row is not toggled by it', () => {
+    const onSelectionChange = vi.fn()
+    render(
+      <QuickPickPanel
+        state={navigateState({ canSelectMany: true, onSelectionChange })}
+        onClose={() => undefined}
+      />,
+    )
+    const event = createEvent.keyDown(field(), { key: ' ' })
+    fireEvent(field(), event)
+    expect(event.defaultPrevented).toBe(true)
+    expect(onSelectionChange).not.toHaveBeenCalled()
+  })
+
+  it('leaves ordinary pickers unlocked and hint-free', () => {
+    const onAccept = vi.fn()
+    render(
+      <QuickPickPanel
+        state={makeState({ prefix: undefined, onAccept })}
+        onClose={() => undefined}
+      />,
+    )
+    expect(field().readOnly).toBe(false)
+    expect(screen.queryByTestId('quick-input-hint')).toBeNull()
+    fireEvent.keyUp(document, { key: 'Control' })
+    expect(onAccept).not.toHaveBeenCalled()
+  })
+
+  it('ignores a release when nothing is selectable', () => {
+    const onAccept = vi.fn()
+    const onClose = vi.fn()
+    render(<QuickPickPanel state={navigateState({ items: [], onAccept })} onClose={onClose} />)
+    fireEvent.keyUp(document, { key: 'Control' })
+    expect(onAccept).not.toHaveBeenCalled()
+    expect(onClose).not.toHaveBeenCalled()
   })
 })
 

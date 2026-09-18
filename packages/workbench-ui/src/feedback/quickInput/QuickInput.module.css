@@ -109,6 +109,12 @@
   outline: none;
 }
 
+/* Quick-navigate lock: Chromium still draws a caret in a readOnly field, which reads
+   as "type here" right when typing is deliberately disabled. */
+.inputLocked {
+  caret-color: transparent;
+}
+
 .inputButtons {
   display: flex;
   align-items: center;
@@ -431,6 +437,15 @@
   color: var(--vscode-descriptionForeground, #8a8a92);
   border-bottom: 1px solid var(--vscode-workbench-border, #0f0f11);
   flex-shrink: 0;
+}
+
+.hint {
+  padding: var(--spacing-2) var(--spacing-5);
+  font-size: var(--font-size-xs);
+  color: var(--vscode-descriptionForeground, #8a8a92);
+  border-top: 1px solid var(--vscode-workbench-border, #0f0f11);
+  flex-shrink: 0;
+  user-select: none;
 }
 
 .progress {
