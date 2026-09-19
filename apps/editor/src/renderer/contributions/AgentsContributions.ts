@@ -220,7 +220,7 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
             },
             description: localize(
               'settings.acp.defaultCollapseModes',
-              'Default timeline collapse mode for new sessions per agent ID. Possible values: "default" (smart per-kind folding), "collapsed" (all folded), "expanded" (all unfolded). Example: { "claude-code": "default", "codex": "collapsed" }.',
+              'Default timeline collapse mode for new sessions per agent ID. Possible values: "default" (smart per-kind folding), "collapsed" (all folded), "expanded" (all unfolded, except that at most one sub-agent card stays open). Example: { "claude-code": "default", "codex": "collapsed" }.',
             ),
           },
           'acp.mcpCard.defaultExpanded': {

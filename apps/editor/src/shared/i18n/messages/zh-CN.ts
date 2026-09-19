@@ -768,7 +768,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.acp.aiFix.mode':
     '「使用 AI 修复」会话的模式。留空不固定模式（AI 修复需要写权限来改文件，默认不固定）。',
   'settings.acp.defaultCollapseModes':
-    '按 Agent ID 设置新会话的默认时间线折叠模式。可选值："default"（按类型智能折叠）、"collapsed"（全部折叠）、"expanded"（全部展开）。示例：{ "claude-code": "default", "codex": "collapsed" }。',
+    '按 Agent ID 设置新会话的默认时间线折叠模式。可选值："default"（按类型智能折叠）、"collapsed"（全部折叠）、"expanded"（全部展开，但子 Agent 卡片最多保留一张展开）。示例：{ "claude-code": "default", "codex": "collapsed" }。',
   'settings.acp.mcpCard.defaultExpanded':
     'MCP 工具调用卡片默认展开哪些区域："both"（输入和输出）、"output"（仅输出）或 "none"（全部折叠）。',
   'settings.acp.fontFamily': '控制 Agent 聊天面板的字体。留空则继承工作台 UI 字体。',
@@ -2549,7 +2549,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.chat.forkFromTip': '从此处分叉',
   'acp.collapse.collapsed': '时间线：全部折叠 - 点击全部展开',
   'acp.collapse.default': '时间线：智能折叠 - 点击全部折叠',
-  'acp.collapse.expanded': '时间线：全部展开 - 点击重置',
+  'acp.collapse.expanded': '时间线：全部展开（子 Agent 卡片最多展开一张）- 点击重置',
   'acp.confirmClose.close': '关闭',
   'acp.confirmClose.detail': '关闭将停止正在运行的 agent。',
   'acp.confirmClose.message': '会话 "{title}" 仍在运行。',

@@ -56,7 +56,7 @@
 - **改会话生命周期/连接时序**：`acpSessionService.ts` 的 `createSession`/`_connectSession`/`resumeSession`；连接绑定/队列 flush 在 `acpSession.ts` 的 `attachConnection`/`failConnection`。**任何「连接前/后」分支都要想清双 id 与队列**。
 - **加附加于会话的能力**（新 indicator / 新追踪）：view-model 字段加在 `acpSession.ts`（observable），UI 用 `useObservable` 订阅。**键用 `sessionIdOnAgent` 还是本地 `id`**——跨会话持久/协议相关用前者，纯运行期 UI 缓存用后者（坑 #1）。
 - **改会话编辑器的开关/揭示**：`AgentsActiveSessionSyncContribution` + `revealSessionEditorTab` / `revealSessionChat`（列表行 / Alt+S / deep link / 通知共用）。
-- **卡片折叠有两层，别混**：外层 slot 收起走 `timelineCollapse.ts`；内层内容折叠走 `chatContentExpansion.tsx`。详见 [cases-session-ui.md](cases-session-ui.md)。
+- **卡片折叠有两层 + 子 Agent 互斥例外，别混**：外层 slot 收起走 `timelineCollapse.ts`；内层内容折叠走 `chatContentExpansion.tsx`。详见 [cases-session-ui.md](cases-session-ui.md)。
 - **加配置项交互**：`acpSessionConfigOptions.ts`（推送/echo）+ `ConfigOptionsBar.tsx` + `acpAgentDefaultsService.ts`。
 - **加/改内置 agent skill**（`apps/editor/resources/agent-skills/.claude/skills/<name>/SKILL.md`，**加文件即生效**；默认 `disable-model-invocation: true`）：经 `_builtinAgentDirs()` 在 new/load/resume/fork 四条 wire 路径注入；**remote authority 会话不注入**；打包 `runtime-resources.mjs` 补 `REQUIRED_SOURCE_FILES` sentinel。命名别撞本仓库开发者 skill。
 - **改恢复/重连**：`acpSessionRestoreCoordinator.ts` + `acpSessionEditorInput.ts` + `acpSessionHistory.ts`。

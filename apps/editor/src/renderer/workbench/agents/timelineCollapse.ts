@@ -14,13 +14,44 @@ import { createdFilePath } from './toolCallDisplay.js'
 export interface CollapseState {
   readonly mode: CollapseMode
   readonly overrides: ReadonlyMap<string, boolean>
+  /**
+   * The one top-level sub-agent card allowed to be open, `null` when none is.
+   * Kept apart from `overrides` because "at most one open" is a single-slot
+   * pointer, not a per-item boolean: a second card opening has to close the
+   * first, which no autonomous override can express.
+   */
+  readonly openSubagent: string | null
 }
 
-// Per-kind default under the `default` mode: read/search / sub-agent-parent
-// tool calls start collapsed, everything else (thought messages included)
-// starts expanded. A whole-file write (Write / add file) is an `edit` card by
-// shape but a new document by content — folded so it does not flood the
-// timeline; its header carries a preview / open affordance instead.
+/**
+ * Whether this card owns a sub-agent timeline. The fork stamps `subagent` on the
+ * spawning tool call, but a card that only carries children counts too — history
+ * replay of an older session may omit the stamp, and children are what actually
+ * fold inside the card.
+ */
+export function isSubagentCard(item: TimelineItem | AcpChildItem): boolean {
+  return (
+    item.kind === 'toolCall' &&
+    (item.call.subagent === true || (item.call.children?.length ?? 0) > 0)
+  )
+}
+
+/**
+ * Whether a sticky key names a top-level sub-agent card — the unit the
+ * exclusivity rule counts. A composite key (`t:task/t:sub`) is content *inside*
+ * an open card, never a card of its own; treating it as one would fold the very
+ * parent card the user just opened to reach it.
+ */
+export function isSubagentSlot(key: string, item: TimelineItem | AcpChildItem): boolean {
+  return !key.includes('/') && isSubagentCard(item)
+}
+
+// Per-kind default under the `default` mode: read/search tool calls start
+// collapsed, everything else (thought messages included) starts expanded. No
+// top-level sub-agent card ever reaches this — {@link resolveCollapsed} decides
+// those from the designation alone. A whole-file write (Write / add file) is an
+// `edit` card by shape but a new document by content — folded so it does not
+// flood the timeline; its header carries a preview / open affordance instead.
 export function defaultCollapsed(item: TimelineItem | AcpChildItem, mode: CollapseMode): boolean {
   if (mode === 'collapsed') return true
   if (mode === 'expanded') return false
@@ -38,11 +69,15 @@ export function defaultCollapsed(item: TimelineItem | AcpChildItem, mode: Collap
 }
 
 // An explicit per-item override wins; otherwise fall back to the mode default.
+// Sub-agent cards are the exception and are decided before either: only the
+// designated one may be open, in every mode — so "expand all" (expanded) still
+// leaves a single sub-agent timeline unfolded rather than flooding the view.
 export function resolveCollapsed(
   key: string,
   item: TimelineItem | AcpChildItem,
   state: CollapseState,
 ): boolean {
+  if (isSubagentSlot(key, item)) return state.openSubagent !== key
   const override = state.overrides.get(key)
   return override !== undefined ? override : defaultCollapsed(item, state.mode)
 }

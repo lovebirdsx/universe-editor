@@ -1688,7 +1688,10 @@ const COLLAPSE_ICON: Record<CollapseMode, LucideIcon> = {
 const COLLAPSE_TOOLTIP: Record<CollapseMode, string> = {
   default: localize('acp.collapse.default', 'Timeline: Smart folding — click to collapse all'),
   collapsed: localize('acp.collapse.collapsed', 'Timeline: All collapsed — click to expand all'),
-  expanded: localize('acp.collapse.expanded', 'Timeline: All expanded — click to reset'),
+  expanded: localize(
+    'acp.collapse.expanded',
+    'Timeline: All expanded (one sub-agent card at most) — click to reset',
+  ),
 }
 
 function CollapseToggleButton({ mode, onCycle }: { mode: CollapseMode; onCycle: () => void }) {

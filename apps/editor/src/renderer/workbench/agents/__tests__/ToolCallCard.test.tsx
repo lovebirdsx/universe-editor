@@ -284,7 +284,7 @@ describe('ToolCallCard', () => {
             subtreeCollapse={{
               stickyKey: 't:t1',
               depth: 0,
-              collapse: { mode: 'default', overrides: new Map() },
+              collapse: { mode: 'default', overrides: new Map(), openSubagent: null },
               toggle: () => {},
             }}
           />
@@ -451,7 +451,11 @@ describe('ToolCallCard', () => {
             subtreeCollapse={{
               stickyKey: 't:t1',
               depth: 0,
-              collapse: { mode: 'default', overrides: new Map([['t:t1/m:sm1', true]]) },
+              collapse: {
+                mode: 'default',
+                overrides: new Map([['t:t1/m:sm1', true]]),
+                openSubagent: null,
+              },
               toggle,
             }}
           />

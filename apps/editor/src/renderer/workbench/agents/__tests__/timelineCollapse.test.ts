@@ -1,9 +1,11 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Tests for timelineCollapse — per-kind collapse defaults and override resolution.
+ *  Tests for timelineCollapse — per-kind collapse defaults, override resolution, and the
+ *  at-most-one-open rule for sub-agent cards.
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
+import type { CollapseMode } from '../../../services/acp/session/acpChatViewStateCache.js'
 import type {
   AcpChildItem,
   AcpToolCall,
@@ -12,6 +14,8 @@ import type {
 import {
   defaultCollapsed,
   foldedAncestorKeys,
+  isSubagentCard,
+  isSubagentSlot,
   nextCollapseMode,
   resolveCollapsed,
   subtreeCardKeys,
@@ -34,6 +38,12 @@ function makeCall(overrides: Partial<AcpToolCall>): AcpToolCall {
 function toolCallItem(call: AcpToolCall): TimelineItem {
   return { kind: 'toolCall', id: call.id, call } as TimelineItem
 }
+
+const collapseState = (
+  mode: CollapseMode,
+  overrides: ReadonlyArray<readonly [string, boolean]> = [],
+  openSubagent: string | null = null,
+) => ({ mode, overrides: new Map(overrides), openSubagent })
 
 const agentResult = toolCallItem(
   makeCall({
@@ -90,19 +100,19 @@ const nestedTask = (id: string, children: readonly AcpChildItem[]): AcpChildItem
   call: makeCall({ id, kind: 'other', children }),
 })
 
+const taskCard = makeCall({
+  id: 'task',
+  kind: 'other',
+  children: [childMessage('sm1'), nestedTask('sub', [childMessage('sm2')])],
+})
+
 const subAgentTimeline: readonly TimelineItem[] = [
   {
     kind: 'message',
     id: 'u',
     message: { id: 'u', role: 'user', text: 'hi', blocks: [], streaming: false },
   },
-  toolCallItem(
-    makeCall({
-      id: 'task',
-      kind: 'other',
-      children: [childMessage('sm1'), nestedTask('sub', [childMessage('sm2')])],
-    }),
-  ),
+  toolCallItem(taskCard),
 ]
 
 const nestedKey = 't:task/t:sub/m:sm2'
@@ -138,13 +148,72 @@ describe('defaultCollapsed', () => {
 
 describe('resolveCollapsed', () => {
   it('lets a per-item override win over the folded default', () => {
-    const state = { mode: 'default', overrides: new Map([['t:t1', false]]) } as const
+    const state = collapseState('default', [['t:t1', false]])
     expect(resolveCollapsed('t:t1', agentResult, state)).toBe(false)
   })
 
   it('falls back to the default when no override exists for the key', () => {
-    const state = { mode: 'default', overrides: new Map<string, boolean>() } as const
+    const state = collapseState('default')
     expect(resolveCollapsed('t:t1', agentResult, state)).toBe(true)
+  })
+})
+
+describe('isSubagentCard / isSubagentSlot', () => {
+  it('counts a card the fork stamped as a sub-agent parent', () => {
+    expect(isSubagentCard(toolCallItem(makeCall({ subagent: true })))).toBe(true)
+  })
+
+  it('counts a card that carries a sub-agent timeline without the stamp (replay)', () => {
+    expect(isSubagentCard(toolCallItem(taskCard))).toBe(true)
+  })
+
+  it('ignores ordinary cards, including one with an empty child list', () => {
+    expect(isSubagentCard(ordinaryEdit)).toBe(false)
+    expect(isSubagentCard(toolCallItem(makeCall({ children: [] })))).toBe(false)
+    expect(isSubagentCard(childMessage('sm1'))).toBe(false)
+  })
+
+  it('treats a nested card as content, never as a card of its own', () => {
+    const nested = nestedTask('sub', [childMessage('sm2')])
+    expect(isSubagentCard(nested)).toBe(true)
+    expect(isSubagentSlot('t:task/t:sub', nested)).toBe(false)
+    expect(isSubagentSlot('t:task', toolCallItem(taskCard))).toBe(true)
+  })
+})
+
+describe('sub-agent exclusivity', () => {
+  const item = toolCallItem(taskCard)
+
+  it('keeps an undesignated sub-agent card folded whatever the mode says', () => {
+    expect(resolveCollapsed('t:task', item, collapseState('default'))).toBe(true)
+    expect(resolveCollapsed('t:task', item, collapseState('expanded'))).toBe(true)
+    expect(resolveCollapsed('t:task', item, collapseState('collapsed'))).toBe(true)
+  })
+
+  it('opens the designated card — and only from the designation', () => {
+    expect(resolveCollapsed('t:task', item, collapseState('default', [], 't:task'))).toBe(false)
+    expect(resolveCollapsed('t:task', item, collapseState('expanded', [], 't:task'))).toBe(false)
+  })
+
+  it('lets a designation beat an explicit override', () => {
+    // Nothing writes overrides for sub-agent slots any more; a stale one must not
+    // be able to fold the card the user has open.
+    expect(
+      resolveCollapsed('t:task', item, collapseState('expanded', [['t:task', true]], 't:task')),
+    ).toBe(false)
+  })
+
+  it('opens the same card under a different designation', () => {
+    expect(resolveCollapsed('t:task', item, collapseState('default', [], 't:other'))).toBe(true)
+  })
+
+  it('leaves nested cards on the ordinary override / mode path', () => {
+    const nested = nestedTask('sub', [childMessage('sm2')])
+    const key = 't:task/t:sub'
+    expect(resolveCollapsed(key, nested, collapseState('default', [], 't:task'))).toBe(true)
+    expect(resolveCollapsed(key, nested, collapseState('default', [[key, false]], 't:task'))).toBe(
+      false,
+    )
   })
 })
 
@@ -158,43 +227,37 @@ describe('nextCollapseMode', () => {
 
 describe('foldedAncestorKeys', () => {
   it('lists every folded ancestor of a nested key, outermost first', () => {
-    const state = { mode: 'default', overrides: new Map<string, boolean>() } as const
-    expect(foldedAncestorKeys(subAgentTimeline, nestedKey, state)).toEqual([
+    expect(foldedAncestorKeys(subAgentTimeline, nestedKey, collapseState('default'))).toEqual([
       't:task',
       't:task/t:sub',
     ])
   })
 
   it('skips ancestors that are already expanded', () => {
-    const state = {
-      mode: 'default',
-      overrides: new Map([
-        ['t:task', false],
-        ['t:task/t:sub', false],
-      ]),
-    } as const
+    // The Task card is opened by designating it, its nested card by an override —
+    // the two mechanisms that can unfold anything on this path.
+    const state = collapseState('default', [['t:task/t:sub', false]], 't:task')
     expect(foldedAncestorKeys(subAgentTimeline, nestedKey, state)).toEqual([])
   })
 
   it('reports the folded prefix that an explicit mode leaves standing', () => {
-    const state = { mode: 'collapsed', overrides: new Map([['t:task', false]]) } as const
+    const state = collapseState('collapsed', [], 't:task')
     expect(foldedAncestorKeys(subAgentTimeline, nestedKey, state)).toEqual(['t:task/t:sub'])
   })
 
   it('returns nothing for a top-level key — it has no ancestors to unfold', () => {
-    const state = { mode: 'default', overrides: new Map<string, boolean>() } as const
-    expect(foldedAncestorKeys(subAgentTimeline, 't:task', state)).toEqual([])
+    expect(foldedAncestorKeys(subAgentTimeline, 't:task', collapseState('default'))).toEqual([])
   })
 
   // The target's own fold is not the caller's business: a folded card still
   // renders its header row, which is exactly where the reveal lands.
   it('leaves a folded target itself alone', () => {
-    const state = { mode: 'default', overrides: new Map([['t:task', false]]) } as const
+    const state = collapseState('default', [], 't:task')
     expect(foldedAncestorKeys(subAgentTimeline, 't:task/t:sub', state)).toEqual([])
   })
 
   it('returns nothing when the key resolves to no item', () => {
-    const state = { mode: 'default', overrides: new Map<string, boolean>() } as const
+    const state = collapseState('default')
     expect(foldedAncestorKeys(subAgentTimeline, 't:task/m:gone', state)).toEqual([])
     expect(foldedAncestorKeys(subAgentTimeline, 't:gone/m:sm1', state)).toEqual([])
   })
@@ -202,29 +265,23 @@ describe('foldedAncestorKeys', () => {
 
 describe('visibleFocusKey', () => {
   it('converges a nested key onto its outermost folded ancestor', () => {
-    const state = { mode: 'default', overrides: new Map<string, boolean>() } as const
-    expect(visibleFocusKey(subAgentTimeline, nestedKey, state)).toBe('t:task')
+    expect(visibleFocusKey(subAgentTimeline, nestedKey, collapseState('default'))).toBe('t:task')
   })
 
   it('converges onto the folded ancestor nearest the key, not the outermost', () => {
-    const state = { mode: 'default', overrides: new Map([['t:task', false]]) } as const
+    const state = collapseState('default', [], 't:task')
     expect(visibleFocusKey(subAgentTimeline, nestedKey, state)).toBe('t:task/t:sub')
   })
 
   it('keeps an unblocked nested key as-is', () => {
-    const state = {
-      mode: 'default',
-      overrides: new Map([
-        ['t:task', false],
-        ['t:task/t:sub', false],
-      ]),
-    } as const
+    const state = collapseState('default', [['t:task/t:sub', false]], 't:task')
     expect(visibleFocusKey(subAgentTimeline, nestedKey, state)).toBe(nestedKey)
   })
 
   it('keeps a stale key untouched — the caller decides what to do with it', () => {
-    const state = { mode: 'default', overrides: new Map<string, boolean>() } as const
-    expect(visibleFocusKey(subAgentTimeline, 't:gone/m:sm1', state)).toBe('t:gone/m:sm1')
+    expect(visibleFocusKey(subAgentTimeline, 't:gone/m:sm1', collapseState('default'))).toBe(
+      't:gone/m:sm1',
+    )
   })
 })
 

@@ -98,7 +98,7 @@ function toolItem(id: string, over?: Partial<AcpToolCall>): TimelineItem {
   return { kind: 'toolCall', id, call: toolCall(id, over) }
 }
 
-const COLLAPSE: CollapseState = { mode: 'default', overrides: new Map() }
+const COLLAPSE: CollapseState = { mode: 'default', overrides: new Map(), openSubagent: null }
 
 describe('StickyScrollOverlay', () => {
   it('pins a single containing card and wires its actions', async () => {

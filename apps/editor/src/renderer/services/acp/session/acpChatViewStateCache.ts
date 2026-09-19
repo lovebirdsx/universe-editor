@@ -20,6 +20,13 @@ export interface AcpChatCollapseState {
   mode: CollapseMode
   /** Per-item explicit overrides (Alt+F / chevron click); serialized Map. */
   overrides: ReadonlyArray<readonly [string, boolean]>
+  /**
+   * The single sub-agent card left open (see `CollapseState.openSubagent` in
+   * workbench/agents/timelineCollapse.ts). `null` — nothing open — is both the
+   * initial state of every session and the state a session falls back to when
+   * its open card is folded again.
+   */
+  openSubagent: string | null
 }
 
 /**

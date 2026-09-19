@@ -100,6 +100,7 @@ import {
 import { ISessionBookmarkService } from '../../services/acp/session/sessionBookmarkService.js'
 import {
   foldedAncestorKeys,
+  isSubagentSlot,
   resolveCollapsed,
   visibleFocusKey,
   type CollapseState,
@@ -624,6 +625,15 @@ function ChatScroll({
   // frame. Unlike restoringRef this does NOT gate handleScroll: a real outside
   // scroll during the window must still flip `stuck` to false so the pin aborts.
   const pinningRef = useRef(false)
+  // The one sub-agent card allowed to be open (see `resolveCollapsed`): opening
+  // a second one closes this one. Kept next to the rest of the view state so a
+  // tab round-trip keeps the card you were reading unfolded.
+  const [openSubagentKey, setOpenSubagentKey] = useState<string | null>(
+    () => saved?.collapse?.openSubagent ?? null,
+  )
+  const openSubagentRef = useRef<string | null>(null)
+  openSubagentRef.current = openSubagentKey
+
   const [focusedKey, setFocusedKey] = useState<string | null>(() => {
     const restored = saved?.focusedKey ?? null
     // A restored composite (sub-agent) key is only reachable while every ancestor
@@ -632,6 +642,7 @@ function ChatScroll({
     const restoreCollapse: CollapseState = {
       mode: session.collapseMode.get(),
       overrides: new Map(saved?.collapse?.overrides ?? []),
+      openSubagent: openSubagentKey,
     }
     return visibleFocusKey(timeline, restored, restoreCollapse)
   })
@@ -666,7 +677,10 @@ function ChatScroll({
   const [overrides, setOverrides] = useState<ReadonlyMap<string, boolean>>(
     () => new Map(saved?.collapse?.overrides ?? []),
   )
-  const collapse: CollapseState = useMemo(() => ({ mode, overrides }), [mode, overrides])
+  const collapse: CollapseState = useMemo(
+    () => ({ mode, overrides, openSubagent: openSubagentKey }),
+    [mode, overrides, openSubagentKey],
+  )
   const collapseRef = useRef(collapse)
   collapseRef.current = collapse
 
@@ -693,10 +707,26 @@ function ChatScroll({
   )
 
   // When mode changes from outside (e.g. toggle button), clear per-item overrides.
-  const prevModeRef = useRef(mode)
-  if (prevModeRef.current !== mode) {
-    prevModeRef.current = mode
+  // "All collapsed" folds the sub-agent cards too — the designation survives the
+  // fold in `mutedOpenSubagent` so cycling on to another mode hands the card
+  // you were reading back instead of silently forgetting it. A card the user
+  // opens while in `collapsed` wins over that memory (the state is non-null when
+  // we leave).
+  //
+  // Both halves of that memory are state, not refs: they move together with the
+  // updates above, so a render React discards (a transition, a suspended tree)
+  // rolls them back instead of leaving the designation advanced past the mode.
+  const [prevMode, setPrevMode] = useState(mode)
+  const [mutedOpenSubagent, setMutedOpenSubagent] = useState<string | null>(null)
+  if (prevMode !== mode) {
+    setPrevMode(mode)
     setOverrides(new Map())
+    if (mode === 'collapsed') {
+      setMutedOpenSubagent(openSubagentKey)
+      setOpenSubagentKey(null)
+    } else if (prevMode === 'collapsed') {
+      setOpenSubagentKey(openSubagentKey ?? mutedOpenSubagent)
+    }
   }
 
   // Virtualize only past a threshold so short conversations keep the plain DOM
@@ -876,6 +906,7 @@ function ChatScroll({
       collapse: {
         mode: collapseRef.current.mode,
         overrides: [...collapseRef.current.overrides],
+        openSubagent: openSubagentRef.current,
       },
     }
     if (anchor) next.anchor = anchor
@@ -886,10 +917,11 @@ function ChatScroll({
     AcpChatViewStateCache.save(session.id, next)
   }, [session.id])
 
-  // Persist whenever the overrides change (Alt+F / chevron).
+  // Persist whenever the overrides change (Alt+F / chevron) or the open sub-agent
+  // card moves (chevron on a card header).
   useEffect(() => {
     persist()
-  }, [overrides, persist])
+  }, [overrides, openSubagentKey, persist])
 
   // Persist whenever inner content-expansion changes (Expand/Collapse buttons).
   useEffect(() => {
@@ -1272,6 +1304,12 @@ function ChatScroll({
       }
       const item = findByStickyKey(timelineRef.current, key)
       if (!item) return
+      // A sub-agent card's fold state *is* the designation, not an override:
+      // opening one closes whichever card held it before.
+      if (isSubagentSlot(key, item)) {
+        setOpenSubagentKey((prev) => (prev === key ? null : key))
+        return
+      }
       const current = resolveCollapsed(key, item, collapseRef.current)
       setOverrides((prev) => {
         const next = new Map(prev)
@@ -1341,11 +1379,22 @@ function ChatScroll({
       scrollToKey: (key) => {
         const folded = foldedAncestorKeys(timelineRef.current, key, collapseRef.current)
         if (folded.length > 0) {
-          setOverrides((prev) => {
-            const next = new Map(prev)
-            for (const ancestor of folded) next.set(ancestor, false)
-            return next
+          // A folded sub-agent card on the chain opens by designation (an
+          // override would be ignored) — which folds the previously open card,
+          // exactly as clicking its header would.
+          const subagent = folded.find((ancestor) => {
+            const item = findByStickyKey(timelineRef.current, ancestor)
+            return item !== undefined && isSubagentSlot(ancestor, item)
           })
+          if (subagent !== undefined) setOpenSubagentKey(subagent)
+          const rest = subagent === undefined ? folded : folded.filter((k) => k !== subagent)
+          if (rest.length > 0) {
+            setOverrides((prev) => {
+              const next = new Map(prev)
+              for (const ancestor of rest) next.set(ancestor, false)
+              return next
+            })
+          }
         }
         setFocusedKey(key)
         focusedKeyRef.current = key

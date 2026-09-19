@@ -348,6 +348,56 @@ function slotEl(container: HTMLElement, key: string): HTMLElement {
   return el
 }
 
+const makeTaskCall = (id: string, children: AcpToolCall['children']): AcpToolCall => ({
+  id,
+  title: 'Task',
+  // 'other' defaults to collapsed under the default mode — the tests drive the
+  // chevron to expand, exercising the same fold state the renderer consults.
+  kind: 'other',
+  status: 'completed',
+  text: '',
+  blocks: [],
+  diffs: [],
+  ...(children !== undefined ? { children } : {}),
+})
+
+const childMessage = (id: string, text: string) =>
+  ({ kind: 'message', id, message: makeMessage(id, text) }) as const
+
+const childToolCall = (id: string, title: string) =>
+  ({
+    kind: 'toolCall',
+    id,
+    call: { id, title, kind: 'read', status: 'completed', text: '', blocks: [], diffs: [] },
+  }) as const
+
+/** Any card by sticky key — the only locator that reaches nested (sub-agent) cards. */
+function stickyEl(container: HTMLElement, key: string): HTMLElement {
+  const el = container.querySelector<HTMLElement>(`[data-sticky-key="${key}"]`)
+  if (!el) throw new Error(`no element for sticky key ${key}`)
+  return el
+}
+
+// The first toggle in a card's subtree is the card's own: an expanded card renders
+// its children — nested toggles included — below its header.
+function collapseToggle(el: HTMLElement): HTMLElement {
+  const toggle = el.querySelector<HTMLElement>('[data-testid="acp-collapsible-toggle"]')
+  if (!toggle) throw new Error('no collapse toggle')
+  return toggle
+}
+
+function toggleStickyCard(container: HTMLElement, key: string): void {
+  act(() => {
+    fireEvent.click(collapseToggle(stickyEl(container, key)))
+  })
+}
+
+function toggleCard(container: HTMLElement, key: string): void {
+  act(() => {
+    fireEvent.click(collapseToggle(slotEl(container, key)))
+  })
+}
+
 describe('ChatBody — click to focus a timeline item', () => {
   const items: readonly TimelineItem[] = [
     { kind: 'message', id: 'a', message: makeMessage('a', 'first') },
@@ -2389,45 +2439,11 @@ describe('ChatBody — sub-agent keyboard navigation', () => {
     id,
     message: { id, role: 'user', text, blocks: [{ type: 'text', text }], streaming: false },
   })
-  const makeTaskCall = (id: string, children: AcpToolCall['children']): AcpToolCall => ({
-    id,
-    title: 'Task',
-    // 'other' defaults to collapsed under the default mode — the tests drive the
-    // chevron to expand, exercising the same fold state the renderer consults.
-    kind: 'other',
-    status: 'completed',
-    text: '',
-    blocks: [],
-    diffs: [],
-    ...(children !== undefined ? { children } : {}),
-  })
-  const childMessage = (id: string, text: string) =>
-    ({ kind: 'message', id, message: makeMessage(id, text) }) as const
-  const childToolCall = (id: string, title: string) =>
-    ({
-      kind: 'toolCall',
-      id,
-      call: { id, title, kind: 'read', status: 'completed', text: '', blocks: [], diffs: [] },
-    }) as const
-
   const navItems = (children: NonNullable<AcpToolCall['children']>): readonly TimelineItem[] => [
     userItem('u', 'top question'),
     { kind: 'toolCall', id: 'task', call: makeTaskCall('task', children) },
     { kind: 'message', id: 'a', message: makeMessage('a', 'after task') },
   ]
-
-  const stickyEl = (container: HTMLElement, key: string): HTMLElement => {
-    const el = container.querySelector<HTMLElement>(`[data-sticky-key="${key}"]`)
-    if (!el) throw new Error(`no element for sticky key ${key}`)
-    return el
-  }
-  const toggleCard = (container: HTMLElement, key: string): void => {
-    act(() => {
-      fireEvent.click(
-        slotEl(container, key).querySelector('[data-testid="acp-collapsible-toggle"]')!,
-      )
-    })
-  }
 
   it('Alt+J/K stays on the current level — children are skipped until Alt+L descends', () => {
     const { container, widgetRef } = renderChatWithWidget(
@@ -2658,7 +2674,7 @@ describe('ChatBody — sub-agent keyboard navigation', () => {
       stuck: true,
       focusedKey: 't:task/m:sm1',
       // No overrides: kind 'other' resolves collapsed under the default mode.
-      collapse: { mode: 'default', overrides: [] },
+      collapse: { mode: 'default', overrides: [], openSubagent: null },
     })
     const { container } = renderChat(makeSession('s-sub-restore-folded', items))
     expect(container.querySelector('[data-testid="acp-subagent-timeline"]')).toBeNull()
@@ -2717,6 +2733,189 @@ describe('ChatBody — sub-agent keyboard navigation', () => {
       controller.scrollToKey('t:gone/m:sm1')
     })
     expect(container.querySelector('[data-testid="acp-subagent-timeline"]')).toBeNull()
+  })
+})
+
+describe('ChatBody — one sub-agent card open at a time', () => {
+  // Two Task cards so "opening a second one" has a first one to close. Both carry
+  // a child message, which is what makes them sub-agent cards.
+  const twoTasks = (): readonly TimelineItem[] => [
+    { kind: 'toolCall', id: 'a', call: makeTaskCall('a', [childMessage('ma', 'from a')]) },
+    { kind: 'toolCall', id: 'b', call: makeTaskCall('b', [childMessage('mb', 'from b')]) },
+  ]
+  const timelineOf = (container: HTMLElement): number =>
+    container.querySelectorAll('[data-testid="acp-subagent-timeline"]').length
+
+  it('folds the previously opened card when another one is opened', () => {
+    const { container } = renderChatWithWidget(makeSession('s-sub-exclusive', twoTasks()))
+
+    toggleCard(container, 't:a')
+    expect(stickyEl(container, 't:a/m:ma')).toBeTruthy()
+
+    toggleCard(container, 't:b')
+    expect(timelineOf(container)).toBe(1)
+    expect(stickyEl(container, 't:b/m:mb')).toBeTruthy()
+    expect(collapseToggle(slotEl(container, 't:a')).getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('folds only itself when the open card is toggled again', () => {
+    const { container } = renderChatWithWidget(makeSession('s-sub-toggle-off', twoTasks()))
+
+    toggleCard(container, 't:a')
+    toggleCard(container, 't:a')
+    expect(timelineOf(container)).toBe(0)
+  })
+
+  it('keeps a single sub-agent card open in the "expand all" mode', () => {
+    const { container, widgetRef } = renderChatWithWidget(
+      makeSession('s-sub-expanded-mode', twoTasks()),
+    )
+    toggleCard(container, 't:a')
+
+    act(() => {
+      widgetRef.current!.cycleCollapseMode() // collapsed
+    })
+    act(() => {
+      widgetRef.current!.cycleCollapseMode() // expanded
+    })
+
+    // 'expanded' opens everything except sub-agent cards: the one you had open
+    // comes back, the other stays folded.
+    expect(timelineOf(container)).toBe(1)
+    expect(stickyEl(container, 't:a/m:ma')).toBeTruthy()
+  })
+
+  it('opens no sub-agent card at all when the mode is cycled to expanded', () => {
+    const { container, widgetRef } = renderChatWithWidget(
+      makeSession('s-sub-expanded-none', twoTasks()),
+    )
+    act(() => {
+      widgetRef.current!.cycleCollapseMode() // collapsed
+    })
+    act(() => {
+      widgetRef.current!.cycleCollapseMode() // expanded
+    })
+    expect(timelineOf(container)).toBe(0)
+  })
+
+  it('folds the open card on "collapse all", and hands it back on the next mode', () => {
+    const { container, widgetRef } = renderChatWithWidget(
+      makeSession('s-sub-collapse-all', twoTasks()),
+    )
+    toggleCard(container, 't:a')
+
+    act(() => {
+      widgetRef.current!.cycleCollapseMode() // collapsed
+    })
+    expect(timelineOf(container)).toBe(0)
+
+    act(() => {
+      widgetRef.current!.cycleCollapseMode() // expanded
+    })
+    expect(stickyEl(container, 't:a/m:ma')).toBeTruthy()
+  })
+
+  it('persists the open card (and no override for it) across a remount', () => {
+    const items = twoTasks()
+    const first = renderChatWithWidget(makeSession('s-sub-exclusive-restore', items))
+    toggleCard(first.container, 't:a')
+    first.unmount()
+
+    const saved = AcpChatViewStateCache.load('s-sub-exclusive-restore')?.collapse
+    expect(saved?.openSubagent).toBe('t:a')
+    expect(saved?.overrides.some(([key]) => key === 't:a')).toBe(false)
+
+    const second = renderChat(makeSession('s-sub-exclusive-restore', items))
+    expect(stickyEl(second.container, 't:a/m:ma')).toBeTruthy()
+  })
+
+  it('designates the card Alt+L unfolds, closing the one open before it', () => {
+    const { container, widgetRef } = renderChatWithWidget(
+      makeSession('s-sub-exclusive-altl', twoTasks()),
+    )
+    toggleCard(container, 't:a')
+
+    act(() => {
+      fireEvent.click(slotEl(container, 't:b'))
+    })
+    act(() => {
+      widgetRef.current!.moveTimelineLevel('in')
+    })
+    expect(stickyEl(container, 't:b/m:mb')).toBeTruthy()
+    expect(timelineOf(container)).toBe(1)
+  })
+
+  it('designates the card an outline reveal unfolds, closing the one open before it', () => {
+    const { container } = renderChatWithWidget(makeSession('s-sub-exclusive-reveal', twoTasks()))
+    toggleCard(container, 't:a')
+
+    const controller = AcpSessionOutlineRegistry.get('s-sub-exclusive-reveal')!
+    act(() => {
+      controller.scrollToKey('t:b/m:mb')
+    })
+
+    expect(stickyEl(container, 't:b/m:mb').className).toContain(focusedClass)
+    expect(timelineOf(container)).toBe(1)
+  })
+
+  // The exclusivity rule counts *cards*, not everything that can fold: a nested
+  // card lives inside an open one, so treating it as a card would fold the very
+  // parent the user opened to reach it.
+  it('does not fold the parent card when a nested card inside it is opened', () => {
+    const nested = childToolCall('sub', 'nested read')
+    const { container } = renderChatWithWidget(
+      makeSession('s-sub-exclusive-nested', [
+        { kind: 'toolCall', id: 'a', call: makeTaskCall('a', [nested]) },
+      ]),
+    )
+    toggleCard(container, 't:a')
+    toggleStickyCard(container, 't:a/t:sub')
+
+    expect(timelineOf(container)).toBe(1)
+    expect(collapseToggle(stickyEl(container, 't:a/t:sub')).getAttribute('aria-expanded')).toBe(
+      'true',
+    )
+  })
+
+  it('prefers a card opened while "collapse all" is on over the remembered one', () => {
+    const { container, widgetRef } = renderChatWithWidget(
+      makeSession('s-sub-collapsed-pick', twoTasks()),
+    )
+    toggleCard(container, 't:a')
+
+    act(() => {
+      widgetRef.current!.cycleCollapseMode() // collapsed
+    })
+    expect(timelineOf(container)).toBe(0)
+
+    // Clicking still works under "collapse all" — it is the mode's baseline that
+    // folds everything, not a lock on the cards.
+    toggleCard(container, 't:b')
+    expect(stickyEl(container, 't:b/m:mb')).toBeTruthy()
+
+    act(() => {
+      widgetRef.current!.cycleCollapseMode() // expanded
+    })
+    expect(timelineOf(container)).toBe(1)
+    expect(stickyEl(container, 't:b/m:mb')).toBeTruthy()
+  })
+
+  // A rewind or fork can take away the card the designation points at. Rendering
+  // nothing open is the whole fallout — no stale fold state, no dead slot the user
+  // has to clear before another card will open.
+  it('renders nothing open when the remembered card is gone, and still opens another', () => {
+    AcpChatViewStateCache.save('s-sub-gone-designation', {
+      scrollTop: 0,
+      stuck: true,
+      focusedKey: null,
+      collapse: { mode: 'default', overrides: [], openSubagent: 't:gone' },
+    })
+    const { container } = renderChatWithWidget(makeSession('s-sub-gone-designation', twoTasks()))
+    expect(timelineOf(container)).toBe(0)
+
+    toggleCard(container, 't:b')
+    expect(timelineOf(container)).toBe(1)
+    expect(stickyEl(container, 't:b/m:mb')).toBeTruthy()
   })
 })
 

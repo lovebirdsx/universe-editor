@@ -55,8 +55,9 @@ const gaugeOf = (counters: StreamCounters, name: string): number =>
  *
  * `collapseMode` is applied before the baseline is taken: switching modes re-renders the
  * timeline, and that render would otherwise land in the measured interval. A sub-agent
- * message only reaches a view when its parent card is open, so the sub-agent cases need
- * `'expanded'` — under the default mode a Task card starts folded and renders nothing.
+ * message only reaches a view when its parent card is open — and no collapse mode opens a
+ * Task card any more (at most one sub-agent card may be open, and it is opened by hand),
+ * so the sub-agent cases pair this with {@link openSubagentCard}.
  */
 async function startEchoSession(
   page: Page,
@@ -175,6 +176,50 @@ type AcpChildSnapshot = ReadonlyArray<{
   textLength: number
   live?: boolean
 }>
+
+/** Top-level Task cards of the active session, as the timeline holds them. */
+function subagentCards(page: Page): Promise<ReadonlyArray<{ id: string }>> {
+  return page.evaluate(() =>
+    window
+      .__E2E__!.getAcpToolCalls()
+      .filter((call) => (call.children ?? []).length > 0)
+      .map((call) => ({ id: call.id })),
+  )
+}
+
+/**
+ * Open a sub-agent card the way a user does: click the chevron in its header.
+ *
+ * Nothing else opens one — a folded card mounts no body, so its sub-agent message
+ * never renders, which is exactly why that path's cost only shows up once a card is
+ * open. Polling for a *live* child rather than for the card keeps the click inside
+ * the measured window: the fence case needs the mount of a still-growing message to
+ * be observed (that mount is what records the tokenize deferral), not excluded from
+ * the measurement by an early baseline.
+ */
+async function openSubagentCard(page: Page): Promise<void> {
+  const liveCard = () =>
+    page.evaluate(() => {
+      const call = window
+        .__E2E__!.getAcpToolCalls()
+        .find((c) => (c.children ?? []).some((child) => child.live === true))
+      return call?.id ?? ''
+    })
+  await expect.poll(liveCard, { timeout: 20000, intervals: [10] }).not.toBe('')
+  const id = await liveCard()
+  const toggle = cardToggle(page, id)
+  await toggle.click()
+  await expect.poll(() => toggle.getAttribute('aria-expanded'), { timeout: 5000 }).toBe('true')
+}
+
+/** The header chevron of the card with this tool-call id (top-level cards carry the key). */
+function cardToggle(page: Page, toolCallId: string) {
+  // `.first()` is the card's *own* header: once a card is open its nested cards carry
+  // toggles of their own, and those live under the same sticky-key subtree.
+  return page
+    .locator(`[data-sticky-key="t:${toolCallId}"] [data-testid="acp-collapsible-toggle"]`)
+    .first()
+}
 
 /**
  * The children view of an `emit-subagent-mixed` run, taken at the last moment the turn
@@ -356,6 +401,7 @@ test.describe('@p1 acp sub-agent streaming render accounting', () => {
     const COUNT = 300
     const expected = streamedText(COUNT, CHUNK, false)
     const running = drivePrompt(page, `emit-subagent:${COUNT}x1`)
+    await openSubagentCard(page)
 
     const streaming = await measureSubagentStream(page, baseline, expected.length)
     await running
@@ -396,6 +442,7 @@ test.describe('@p1 acp sub-agent streaming render accounting', () => {
     const COUNT = 6
     const expected = streamedText(COUNT, CHUNK, true)
     const running = drivePrompt(page, `emit-subagent:${COUNT}x1,fence`)
+    await openSubagentCard(page)
 
     // Streaming-time deferral — the reading that has to be taken while the message is
     // still growing, since sealing is what ends it.
@@ -436,7 +483,9 @@ test.describe('@p1 acp sub-agent streaming render accounting', () => {
     workbench,
   }) => {
     await workbench.waitForRestored()
-    await startEchoSession(page, 'expanded')
+    // No collapse mode and no card to open: this case reads the model through the
+    // probe, and a folded card still holds every chunk it received.
+    await startEchoSession(page)
 
     const COUNT = 60
     const expected = streamedText(COUNT, CHUNK, false)
@@ -483,5 +532,41 @@ test.describe('@p1 acp sub-agent streaming render accounting', () => {
     const now = await page.evaluate(() => window.__E2E__!.getHeapFlowCounters())
     const mdparse = flowOf(diff(baseline, now), 'mdparse')
     expect(mdparse.chars, JSON.stringify(mdparse)).toBeLessThan(COUNT * CHUNK)
+  })
+})
+
+test.describe('@p1 acp sub-agent card exclusivity', () => {
+  test('opening a second sub-agent card folds the one opened before it', async ({
+    page,
+    workbench,
+  }) => {
+    await workbench.waitForRestored()
+    await startEchoSession(page)
+
+    // Two turns, two Task cards. Sub-agent timelines are long enough that a second
+    // open card pushes the main conversation out of view, so only one may be open.
+    const cardCount = async (): Promise<number> => (await subagentCards(page)).length
+    const idle = () =>
+      expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getAcpSessionStatus()), { timeout: 30000 })
+        .toBe('idle')
+    await page.evaluate((t) => window.__E2E__!.sendAcpPrompt(t), 'emit-subagent:2x1')
+    await expect.poll(cardCount, { timeout: 30000 }).toBe(1)
+    await idle()
+    await page.evaluate((t) => window.__E2E__!.sendAcpPrompt(t), 'emit-subagent:2x1')
+    await expect.poll(cardCount, { timeout: 30000 }).toBe(2)
+
+    const cards = await subagentCards(page)
+    const first = cardToggle(page, cards[0]!.id)
+    const second = cardToggle(page, cards[1]!.id)
+
+    await first.click()
+    await expect(first).toHaveAttribute('aria-expanded', 'true')
+
+    await second.click()
+    // Still exactly one sub-agent timeline in the DOM — now the second card's.
+    await expect(page.locator('[data-testid="acp-subagent-timeline"]')).toHaveCount(1)
+    await expect(second).toHaveAttribute('aria-expanded', 'true')
+    await expect(first).toHaveAttribute('aria-expanded', 'false')
   })
 })
