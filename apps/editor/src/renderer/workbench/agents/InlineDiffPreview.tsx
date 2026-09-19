@@ -25,6 +25,12 @@ interface InlineDiffPreviewProps {
    * the diff view). Clicking the path invokes it; omitted → the path is static.
    */
   readonly onOpenPath?: () => void
+  /**
+   * Resolved URI of the diff's target file, stamped as `data-uri` on the path so
+   * the chat context menu can copy it. Absent → no attribute (the path is either
+   * unresolvable or the caller has no workspace folder).
+   */
+  readonly uri?: string | undefined
 }
 
 /**
@@ -51,6 +57,7 @@ export function InlineDiffPreview({
   newText,
   onOpen,
   onOpenPath,
+  uri,
 }: InlineDiffPreviewProps) {
   const lines = useMemo(() => computeLineDiff(oldText, newText), [oldText, newText])
   const [expanded, setExpanded] = useState(false)
@@ -61,6 +68,7 @@ export function InlineDiffPreview({
   const { start, count } = collapsedDiffWindow(lines.length, firstChangeIndex)
   const visible = expanded ? lines : lines.slice(start, start + count)
   const hiddenCount = expanded ? 0 : lines.length - visible.length
+  const uriAttr = uri !== undefined ? { 'data-uri': uri } : {}
 
   return (
     <div className={styles['inlineDiff']} data-testid="acp-inline-diff">
@@ -72,11 +80,12 @@ export function InlineDiffPreview({
             data-tooltip={path}
             onClick={onOpenPath}
             data-testid="acp-inline-diff-path"
+            {...uriAttr}
           >
             📝 {path}
           </button>
         ) : (
-          <span className={styles['inlineDiffPath']} data-tooltip={path}>
+          <span className={styles['inlineDiffPath']} data-tooltip={path} {...uriAttr}>
             📝 {path}
           </span>
         )}

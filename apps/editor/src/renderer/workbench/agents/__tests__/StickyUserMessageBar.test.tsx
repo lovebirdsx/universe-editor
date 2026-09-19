@@ -33,6 +33,7 @@ import type {
 } from '../../../services/acp/session/acpSessionService.js'
 import { IAcpChatWidgetService } from '../../../services/acp/session/acpChatWidgetService.js'
 import { StickyUserMessageBar } from '../StickyUserMessageBar.js'
+import type { WidgetHandle } from '../ChatBody.js'
 import { ServicesContext } from '../../useService.js'
 
 afterEach(() => {
@@ -91,6 +92,7 @@ function makeSession(id: string, items: TimelineItem[], cwd?: string): IAcpSessi
     readOnly: false,
     cwd,
     forkSupported: observableValue<boolean>(`fork:${id}`, false),
+    rewindSupported: observableValue<boolean>(`rewind:${id}`, false),
     timeline: observableValue<readonly TimelineItem[]>(`tl:${id}`, items),
   } as unknown as IAcpSession
 }
@@ -264,6 +266,8 @@ describe('StickyUserMessageBar — context menu fragment targets', () => {
       services.set(IAcpChatWidgetService, {
         setHasSelection: () => {},
         setForkSupported: () => {},
+        setRewindSupported: () => {},
+        setSlotTarget: () => {},
         setContextTarget,
       } as unknown as IAcpChatWidgetService)
       services.set(IOpenerService, { open: vi.fn() } as unknown as IOpenerService)
@@ -284,6 +288,7 @@ describe('StickyUserMessageBar — context menu fragment targets', () => {
       expect(setContextTarget).toHaveBeenLastCalledWith(undefined)
       expect(command).toHaveBeenCalledWith(CaptureStickyContextArgAction.ID, {
         sessionId: 's-sticky-menu',
+        slotKey: 'm:u1',
         target: { kind: 'image', src },
       })
     } finally {
@@ -307,6 +312,8 @@ describe('StickyUserMessageBar — context menu fragment targets', () => {
       services.set(IAcpChatWidgetService, {
         setHasSelection: () => {},
         setForkSupported: () => {},
+        setRewindSupported: () => {},
+        setSlotTarget: () => {},
         setContextTarget: () => {},
       } as unknown as IAcpChatWidgetService)
       services.set(IOpenerService, { open: vi.fn() } as unknown as IOpenerService)
@@ -323,6 +330,7 @@ describe('StickyUserMessageBar — context menu fragment targets', () => {
       fireEvent.click(getByText('Capture Session Arg'))
       expect(command).toHaveBeenCalledWith(CaptureStickyContextArgAction.ID, {
         sessionId: 's-sticky-key',
+        slotKey: 'm:u1',
       })
     } finally {
       disposable.dispose()
@@ -341,6 +349,8 @@ describe('StickyUserMessageBar — context menu fragment targets', () => {
       services.set(IAcpChatWidgetService, {
         setHasSelection: () => {},
         setForkSupported: () => {},
+        setRewindSupported: () => {},
+        setSlotTarget: () => {},
         setContextTarget: () => {},
       } as unknown as IAcpChatWidgetService)
       services.set(IOpenerService, { open: vi.fn() } as unknown as IOpenerService)
@@ -356,6 +366,78 @@ describe('StickyUserMessageBar — context menu fragment targets', () => {
       // ContextMenu key — it must not open a second menu on top of the first.
       fireEvent.contextMenu(getByTestId('acp-user-bar'), { detail: 0, button: -1 })
       expect(getAllByRole('menu')).toHaveLength(1)
+    } finally {
+      disposable.dispose()
+    }
+  })
+
+  // The bar is the second menu host for the timeline. It must describe the card
+  // exactly like ChatBody does — the two drifting apart is what the shared
+  // describeAcpChatSlot exists to prevent.
+  it('describes the pinned card and pulls focus back into the timeline', () => {
+    const disposable = registerAction2(CaptureStickyContextArgAction)
+    try {
+      const session = makeSession('s-sticky-slot', [
+        message('u1', 'user', 'hello'),
+        message('a1', 'agent', 'answer'),
+      ])
+      const command = vi.fn()
+      const setSlotTarget = vi.fn()
+      const focusTimeline = vi.fn()
+      const services = new ServiceCollection()
+      services.set(IContextKeyService, new ContextKeyService())
+      services.set(ICommandService, {
+        executeCommand: (id: string, ...args: unknown[]) => {
+          command(id, ...args)
+          return Promise.resolve(undefined)
+        },
+      } as unknown as ICommandService)
+      services.set(IAcpChatWidgetService, {
+        setHasSelection: () => {},
+        setForkSupported: () => {},
+        setRewindSupported: () => {},
+        setSlotTarget,
+        setContextTarget: () => {},
+      } as unknown as IAcpChatWidgetService)
+      services.set(IOpenerService, { open: vi.fn() } as unknown as IOpenerService)
+      const inst = new InstantiationService(services)
+      const handleRef = {
+        current: {
+          focusTimeline,
+          isSlotCollapsed: () => true,
+          getFocusedKey: () => null,
+          onDidChangeFocusedKey: () => ({ dispose: () => {} }),
+          onDidChangeCollapse: () => ({ dispose: () => {} }),
+        } as unknown as WidgetHandle,
+      }
+      const { getByTestId, getByText } = render(
+        <ServicesContext.Provider value={inst}>
+          <StickyUserMessageBar session={session} handleRef={handleRef} />
+        </ServicesContext.Provider>,
+      )
+
+      fireEvent.contextMenu(getByTestId('acp-user-bar'), { detail: 1 })
+      fireEvent.click(getByText('Capture Session Arg'))
+
+      expect(command).toHaveBeenCalledWith(CaptureStickyContextArgAction.ID, {
+        sessionId: 's-sticky-slot',
+        slotKey: 'm:u1',
+      })
+      expect(setSlotTarget).toHaveBeenCalledWith({
+        slotKey: 'm:u1',
+        messageId: undefined,
+        card: true,
+        // Read from the widget's shared collapse store, not the bar's local state.
+        collapsed: true,
+        userMessage: false,
+        subAgent: false,
+        nested: false,
+        createdFile: undefined,
+      })
+      // Without this the menu rows gated on `acpChatFocused` (Copy Message and
+      // the card collapse rows) silently vanish: right-clicking the bar leaves
+      // DOM focus outside the chat container.
+      expect(focusTimeline).toHaveBeenCalled()
     } finally {
       disposable.dispose()
     }

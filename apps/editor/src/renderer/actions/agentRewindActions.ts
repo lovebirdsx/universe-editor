@@ -25,6 +25,7 @@ import {
   IEditorService,
   IInstantiationService,
   INotificationService,
+  MenuId,
   Severity,
   localize,
   localize2,
@@ -38,7 +39,7 @@ import {
 } from '../services/acp/session/acpSessionService.js'
 import { AcpSessionEditorInput } from '../services/acp/session/acpSessionEditorInput.js'
 import { AcpPromptReplaceInbox } from '../services/acp/session/acpPromptReplaceInbox.js'
-import { CATEGORY } from './_agentShared.js'
+import { ACP_CHAT_CARD_GROUP, CATEGORY } from './_agentShared.js'
 
 interface RewindForkArg {
   readonly sessionId?: unknown
@@ -74,7 +75,19 @@ export class RewindAgentSessionAction extends Action2 {
       id: RewindAgentSessionAction.ID,
       title: localize2('action.agent.rewindSession', 'Rewind to Here'),
       category: CATEGORY,
+      // 'discard' (Undo2) / 'checkout' (GitBranch) name git ops but are chosen
+      // for their glyphs — the same ones the message card's hover buttons use.
+      icon: 'discard',
+      // Menu-only: it needs the clicked message's id from the args.
       f1: false,
+      menu: [
+        {
+          id: MenuId.AcpChatContext,
+          group: ACP_CHAT_CARD_GROUP,
+          order: 7,
+          when: 'acpChatContextUserMessage && acpChatRewindSupported',
+        },
+      ],
     })
   }
 
@@ -173,6 +186,18 @@ export class ForkAgentSessionAction extends Action2 {
       id: ForkAgentSessionAction.ID,
       title: localize2('action.agent.forkSession', 'Fork Session'),
       category: CATEGORY,
+      icon: 'checkout',
+      menu: [
+        // `acpChatForkSupported` is set by the menu host at open time (it also
+        // gates "Ask in Side Chat"); a user-message card is what "from here"
+        // needs, so both keys are required.
+        {
+          id: MenuId.AcpChatContext,
+          group: ACP_CHAT_CARD_GROUP,
+          order: 8,
+          when: 'acpChatContextUserMessage && acpChatForkSupported',
+        },
+      ],
       f1: true,
     })
   }

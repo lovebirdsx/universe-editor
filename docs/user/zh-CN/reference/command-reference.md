@@ -97,6 +97,8 @@
 | 选择 Agent 模式…              | 切换 Agent 行为模式                                                                                     | 无                                                |
 | 选择 Agent 思考级别…          | 调节推理深度                                                                                            | 无                                                |
 | 显示会话更改                  | 打开并聚焦会话更改视图；视图聚焦时再次调用收起侧边栏                                                    | 无                                                |
+| 在会话中查找                  | 在聊天时间线里查找文本（打开查找条）                                                                    | 会话聚焦时 `Ctrl+F`                               |
+| 跳转到计划                    | 聚焦常驻顶部的计划卡片；没有计划卡片时跳到最近的 ExitPlanMode 卡片                                      | `Alt+P`                                           |
 | 打开 Codex 配置（TOML）       | 直接编辑 Codex 的 `.codex/config.toml`                                                                  | 无                                                |
 | 打开 Claude 配置（JSON）      | 直接编辑 Claude 的 `.claude/settings.json`                                                              | 无                                                |
 | 触发内联补全                  | 主动求一条补全建议                                                                                      | `Alt+\`                                           |

@@ -60,6 +60,9 @@ import {
   rememberedCwdUri,
 } from '../services/acp/session/acpLastSessionCwdService.js'
 import {
+  ACP_COPY_GROUP,
+  ACP_CHAT_SESSION_GROUP,
+  ACP_CHAT_SWITCH_GROUP,
   ACP_SCOPED_KEY_WEIGHT,
   CATEGORY,
   resolveNavWidget,
@@ -82,7 +85,7 @@ export class NewAgentSessionAction extends Action2 {
       title: localize2('action.agent.newSession', 'New Agent Session'),
       keybinding: { primary: 'ctrl+alt+n' },
       category: CATEGORY,
-      menu: [{ id: MenuId.AcpChatContext, group: '2_session', order: 1 }],
+      menu: [{ id: MenuId.AcpChatContext, group: ACP_CHAT_SESSION_GROUP, order: 1 }],
       f1: true,
     })
   }
@@ -116,7 +119,7 @@ export class NewAgentSessionInCurrentEditorAction extends Action2 {
         },
         {
           id: MenuId.AcpChatContext,
-          group: '2_session',
+          group: ACP_CHAT_SESSION_GROUP,
           order: 1.5,
         },
       ],
@@ -400,7 +403,7 @@ export class SelectAgentAction extends Action2 {
       icon: 'list-view',
       title: localize2('action.agent.selectAgent', 'Choose Agent…'),
       category: CATEGORY,
-      menu: [{ id: MenuId.AcpChatContext, group: '2_session', order: 2 }],
+      menu: [{ id: MenuId.AcpChatContext, group: ACP_CHAT_SESSION_GROUP, order: 2 }],
       f1: true,
     })
   }
@@ -607,7 +610,7 @@ export class SwitchSessionAction extends Action2 {
       // sees it. `runSwitchSession`'s in-flight guard covers the other re-entry
       // window — the round trip before the picker is up.
       keybinding: { primary: 'alt+s', when: '!quickInputVisible' },
-      menu: [{ id: MenuId.AcpChatContext, group: '3_switch', order: 1 }],
+      menu: [{ id: MenuId.AcpChatContext, group: ACP_CHAT_SWITCH_GROUP, order: 1 }],
       f1: true,
     })
   }
@@ -705,7 +708,7 @@ export class RenameAgentSessionAction extends Action2 {
       title: localize2('action.agent.renameSession', 'Rename Agent Session…'),
       category: CATEGORY,
       menu: [
-        { id: MenuId.AcpChatContext, group: '2_session', order: 3 },
+        { id: MenuId.AcpChatContext, group: ACP_CHAT_SESSION_GROUP, order: 3 },
         {
           id: MenuId.EditorTabContext,
           when: `activeEditorType == '${AcpSessionEditorInput.TYPE_ID}'`,
@@ -768,7 +771,7 @@ export class RevealAgentSessionInOSAction extends Action2 {
       menu: [
         {
           id: MenuId.AcpChatContext,
-          group: '2_session',
+          group: ACP_CHAT_SESSION_GROUP,
           order: 4,
           // Match the session list's context menu label for the same action.
           title: localize2('acp.sessions.revealTranscript', 'Open Session Location'),
@@ -1189,7 +1192,7 @@ export class AskInSideChatAction extends Action2 {
       menu: [
         {
           id: MenuId.AcpChatContext,
-          group: '1_copy',
+          group: ACP_COPY_GROUP,
           order: 2,
           when: 'acpChatHasSelection && acpChatForkSupported',
         },

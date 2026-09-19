@@ -29,6 +29,11 @@
  *  a turn. Pushed via `setTurnRunning`, aggregated the same way; the
  *  CancelAgentTurn Shift+Escape binding gates on it so Shift+Esc stops the
  *  turn only while focus sits inside the chat of the running session.
+ *
+ *  And the `acpChatContext*` group: what a timeline context menu was raised on —
+ *  the fragment under the cursor (`setContextTarget`) and the card it sits in
+ *  (`setSlotTarget`). Pushed by the host just before the menu opens and cleared
+ *  on close; the menu items' `when` clauses read them.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -41,6 +46,7 @@ import {
   type IContextKey,
   type IDisposable,
 } from '@universe-editor/platform'
+import type { AcpChatSlot } from '../chatContextTarget.js'
 import { AcpChatViewStateCache, type AcpFocusSurface } from './acpChatViewStateCache.js'
 
 export type AcpTimelineMoveDirection = 'next' | 'prev' | 'first' | 'last'
@@ -77,6 +83,16 @@ export interface AcpChatWidget {
   jumpToPlan(): void
   /** Toggle the collapsed state of the currently focused timeline item. */
   toggleCollapse(): void
+  /** Deterministic collapse write for the *card* a context-menu command named —
+   *  the menu rows read "Collapse Card" / "Expand Card", so the command must set
+   *  the stated end state rather than flip whatever is current. Takes a map so
+   *  "Collapse Card and Children" folds a whole sub-agent subtree in one state
+   *  update (one render, one persist). */
+  setSlotCollapsed(overrides: ReadonlyMap<string, boolean>): void
+  /** Collapse state of a (possibly composite) card key, read from the same store
+   *  {@link setSlotCollapsed} writes — so a command never acts on a snapshot
+   *  taken when the menu opened. */
+  isSlotCollapsed(key: string): boolean
   /** Cycle the whole timeline: by-kind default → all collapsed → all expanded. */
   cycleCollapseMode(): void
   /** Plain text of the currently focused timeline message; undefined when none. */
@@ -143,6 +159,20 @@ export interface IAcpChatWidgetService {
    */
   setForkSupported(forkSupported: boolean): void
   /**
+   * Set `acpChatRewindSupported` — the rewind counterpart of
+   * {@link setForkSupported}. Gates the "Rewind to Here" menu item.
+   */
+  setRewindSupported(rewindSupported: boolean): void
+  /**
+   * Set the `acpChatContextCard*` group in one call — the shape of the card the
+   * timeline menu was raised on (the *slot*), which is orthogonal to
+   * {@link setContextTarget}'s fragment: right-clicking a selection inside a
+   * sub-agent card sets both. One setter for the whole group is what keeps the
+   * two hosts (ChatBody, the sticky user-message bar) from writing divergent
+   * shapes. `undefined` = the click was not on a card.
+   */
+  setSlotTarget(slot: AcpChatSlot | undefined): void
+  /**
    * Set the `acpChatContextImage` / `acpChatContextPath` / `acpChatContextChipText`
    * group in one call — the timeline context menu resolves exactly one target
    * kind, so the keys always flip as a set and never show two items at once.
@@ -179,9 +209,17 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
   private readonly _runningKey: IContextKey<boolean>
   private readonly _selectionKey: IContextKey<boolean>
   private readonly _forkSupportedKey: IContextKey<boolean>
+  private readonly _rewindSupportedKey: IContextKey<boolean>
   private readonly _contextImageKey: IContextKey<boolean>
   private readonly _contextPathKey: IContextKey<boolean>
   private readonly _contextChipTextKey: IContextKey<boolean>
+  private readonly _slotCardKey: IContextKey<boolean>
+  private readonly _slotCollapsedKey: IContextKey<boolean>
+  private readonly _slotUserMessageKey: IContextKey<boolean>
+  private readonly _slotSubAgentKey: IContextKey<boolean>
+  private readonly _slotNestedKey: IContextKey<boolean>
+  private readonly _slotCreatedPreviewKey: IContextKey<boolean>
+  private readonly _slotCreatedFileKey: IContextKey<boolean>
   private readonly _promptContextImageKey: IContextKey<boolean>
   private readonly _promptContextRefKey: IContextKey<boolean>
   private readonly _promptContextChipTextKey: IContextKey<boolean>
@@ -202,9 +240,29 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
     this._runningKey = contextKeyService.createKey<boolean>('acpChatTurnRunning', false)
     this._selectionKey = contextKeyService.createKey<boolean>('acpChatHasSelection', false)
     this._forkSupportedKey = contextKeyService.createKey<boolean>('acpChatForkSupported', false)
+    this._rewindSupportedKey = contextKeyService.createKey<boolean>('acpChatRewindSupported', false)
     this._contextImageKey = contextKeyService.createKey<boolean>('acpChatContextImage', false)
     this._contextPathKey = contextKeyService.createKey<boolean>('acpChatContextPath', false)
     this._contextChipTextKey = contextKeyService.createKey<boolean>('acpChatContextChipText', false)
+    this._slotCardKey = contextKeyService.createKey<boolean>('acpChatContextCard', false)
+    this._slotCollapsedKey = contextKeyService.createKey<boolean>(
+      'acpChatContextCardCollapsed',
+      false,
+    )
+    this._slotUserMessageKey = contextKeyService.createKey<boolean>(
+      'acpChatContextUserMessage',
+      false,
+    )
+    this._slotSubAgentKey = contextKeyService.createKey<boolean>('acpChatContextSubAgent', false)
+    this._slotNestedKey = contextKeyService.createKey<boolean>('acpChatContextNestedCard', false)
+    this._slotCreatedPreviewKey = contextKeyService.createKey<boolean>(
+      'acpChatContextCreatedPreview',
+      false,
+    )
+    this._slotCreatedFileKey = contextKeyService.createKey<boolean>(
+      'acpChatContextCreatedFile',
+      false,
+    )
     this._promptContextImageKey = contextKeyService.createKey<boolean>(
       'acpPromptContextImage',
       false,
@@ -333,6 +391,20 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
 
   setForkSupported(forkSupported: boolean): void {
     this._forkSupportedKey.set(forkSupported)
+  }
+
+  setRewindSupported(rewindSupported: boolean): void {
+    this._rewindSupportedKey.set(rewindSupported)
+  }
+
+  setSlotTarget(slot: AcpChatSlot | undefined): void {
+    this._slotCardKey.set(slot?.card === true)
+    this._slotCollapsedKey.set(slot?.card === true && slot.collapsed)
+    this._slotUserMessageKey.set(slot?.userMessage === true)
+    this._slotSubAgentKey.set(slot?.subAgent === true)
+    this._slotNestedKey.set(slot?.nested === true)
+    this._slotCreatedPreviewKey.set(slot?.createdFile === 'preview')
+    this._slotCreatedFileKey.set(slot?.createdFile === 'open')
   }
 
   setContextTarget(kind: 'image' | 'path' | 'text' | undefined): void {

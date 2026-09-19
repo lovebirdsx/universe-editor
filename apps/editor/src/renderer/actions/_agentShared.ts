@@ -21,6 +21,19 @@ import { basenameOfPath } from '../workbench/files/resourceInfo.js'
 
 export const CATEGORY = localize2('command.category.agents', 'Agents')
 
+// Groups of MenuId.AcpChatContext. Three action files register into that one menu
+// (agentTimelineActions' copy / card rows, agentRewindActions' rewind rows and
+// agentSessionActions' session rows), so the names live here rather than as
+// literals on either side: MenuRegistry sorts by group name and inserts a
+// separator whenever the group changes, which makes the numbering the whole order
+// of the menu. The copy group is deliberately first — a right-click on a
+// selection must find "Copy" where it has always been — and is shared with
+// MenuId.AcpPromptContext, which numbers its own rows independently.
+export const ACP_COPY_GROUP = '1_copy'
+export const ACP_CHAT_CARD_GROUP = '2_card'
+export const ACP_CHAT_SESSION_GROUP = '3_session'
+export const ACP_CHAT_SWITCH_GROUP = '4_switch'
+
 /** Trailing segment of a session's cwd, for disambiguating same-titled rows. */
 export function sessionDirectoryName(cwd: string | undefined): string | undefined {
   if (cwd === undefined || cwd.length === 0) return undefined
@@ -77,4 +90,17 @@ export function resolveEditorNavWidget(accessor: ServicesAccessor): AcpChatWidge
   const active = accessor.get(IEditorService).activeEditor.get()
   if (!(active instanceof AcpSessionEditorInput)) return undefined
   return accessor.get(IAcpChatWidgetService).widgetForSession(active.sessionId)
+}
+
+// Target widget for a *chat context-menu* command. When the menu arg names a
+// session, only that session's widget is acceptable — the last-focused fallback
+// would let e.g. "Focus Parent Card" in one split move another chat's cursor.
+// Commands invoked without a sessionId (keybinding, command palette) fall back
+// to the ordinary resolution.
+export function resolveSessionWidget(
+  accessor: ServicesAccessor,
+  sessionId: string | undefined,
+): AcpChatWidget | undefined {
+  if (sessionId === undefined) return resolveNavWidget(accessor)
+  return accessor.get(IAcpChatWidgetService).widgetForSession(sessionId)
 }

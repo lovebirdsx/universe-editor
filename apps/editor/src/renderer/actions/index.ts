@@ -336,6 +336,8 @@ import {
   NewAgentSessionInFolderAction,
   NewAgentSessionWithScopeAction,
   OpenAcpMcpSettingsAction,
+  OpenAcpToolCallFileAction,
+  OpenAcpToolCallPreviewAction,
   OpenAgentSettingsAction,
   OpenClaudeConfigAction,
   OpenCodexConfigAction,
@@ -366,6 +368,7 @@ import {
   ActivateAgentConfigEntryAction,
   ConfigureAiFixAction,
   ToggleAcpTimelineItemCollapseAction,
+  ToggleAcpTimelineCardSubtreeAction,
   CycleAcpTimelineCollapseAction,
   ScrollAcpTimelineUpAction,
   ScrollAcpTimelineDownAction,
@@ -377,6 +380,7 @@ import {
   CopyAcpResourcePathAction,
   CopyAcpContextTextAction,
   CopyAcpReferenceAction,
+  CopyAcpSubAgentTranscriptAction,
   SelectNextAcpPromptSuggestionAction,
   SelectPreviousAcpPromptSuggestionAction,
   AcceptAcpPromptSuggestionAction,
@@ -845,6 +849,7 @@ registerAction2(ScrollAcpTimelineDownAction)
 registerAction2(ScrollAcpTimelinePageUpAction)
 registerAction2(ScrollAcpTimelinePageDownAction)
 registerAction2(ToggleAcpTimelineItemCollapseAction)
+registerAction2(ToggleAcpTimelineCardSubtreeAction)
 registerAction2(CycleAcpTimelineCollapseAction)
 registerAction2(SwitchSessionAction)
 registerAction2(SwitchSessionReverseAction)
@@ -854,6 +859,9 @@ registerAction2(CopyAcpImageAction)
 registerAction2(CopyAcpResourcePathAction)
 registerAction2(CopyAcpContextTextAction)
 registerAction2(CopyAcpReferenceAction)
+registerAction2(CopyAcpSubAgentTranscriptAction)
+registerAction2(OpenAcpToolCallPreviewAction)
+registerAction2(OpenAcpToolCallFileAction)
 // Prompt suggestion popover — its `escape` / `enter` / `tab` / `ctrl+j` /
 // `ctrl+n` / `ctrl+p` bindings carry an explicit higher weight so they win over
 // global shortcuts whenever `acpPromptPopupVisible` is set, regardless of order.

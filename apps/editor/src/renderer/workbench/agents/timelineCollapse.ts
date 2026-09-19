@@ -8,7 +8,7 @@
 
 import type { CollapseMode } from '../../services/acp/session/acpChatViewStateCache.js'
 import type { AcpChildItem, TimelineItem } from '../../services/acp/session/acpSession.js'
-import { findByStickyKey } from './stickyScroll.js'
+import { buildStickyKey, findByStickyKey } from './stickyScroll.js'
 import { createdFilePath } from './toolCallDisplay.js'
 
 export interface CollapseState {
@@ -56,6 +56,30 @@ export function nextCollapseMode(mode: CollapseMode): CollapseMode {
     case 'expanded':
       return 'default'
   }
+}
+
+/**
+ * `key`'s own card plus every descendant card, pre-order (outermost first) —
+ * the fold set behind "Collapse Card and Children". Empty when the key resolves
+ * to nothing, so a stale key leaves the fold state untouched.
+ *
+ * Recurses through `AcpChildItem.call.children` exactly like ToolCallCard
+ * renders nested cards: the model nests one level deep today, but encoding that
+ * limit here as well would make the two disagree the day it changes.
+ */
+export function subtreeCardKeys(timeline: readonly TimelineItem[], key: string): string[] {
+  const root = findByStickyKey(timeline, key)
+  if (!root) return []
+  const keys: string[] = []
+  const walk = (item: TimelineItem | AcpChildItem, itemKey: string): void => {
+    keys.push(itemKey)
+    if (item.kind !== 'toolCall') return
+    for (const child of item.call.children ?? []) {
+      walk(child, buildStickyKey(itemKey, child))
+    }
+  }
+  walk(root, key)
+  return keys
 }
 
 /**

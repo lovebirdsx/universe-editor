@@ -33,6 +33,7 @@ import {
   isKeyupContextMenuSupplement,
 } from '@universe-editor/workbench-ui'
 import { MessageContent } from './MessageContent.js'
+import { describeAcpChatSlot } from './chatContextSlot.js'
 import { SelectionContextChips, useSelectionContextReveal } from './SelectionContextChips.js'
 import { roleIcon } from './timelineIcons.js'
 import { AgentChatContextMenu, type AgentChatContextMenuState } from './AgentChatContextMenu.js'
@@ -117,17 +118,44 @@ export function StickyUserMessageBar({
     // here, or the same ContextMenu keystroke re-opens the menu anchored on the
     // focus holder instead of the row.
     if (isKeyupContextMenuSupplement(e)) return
+    // Read the selection before anything moves focus (see below).
+    const hasSelection = !!window.getSelection()?.toString()
     e.preventDefault()
-    if (slotKey !== null) onFocusSlot?.(slotKey)
-    widgetService.setHasSelection(!!window.getSelection()?.toString())
+    if (slotKey !== null) {
+      onFocusSlot?.(slotKey)
+      // Mirror ChatBody, which focuses its scroll container on right-click: menu
+      // items gated on `acpChatFocused` (Copy Message, the card collapse rows)
+      // are ANDed with ACP_NAV_WHEN via the action's precondition, so without
+      // this they silently vanish when DOM focus happened to sit outside the
+      // chat. Focusing the container does not scroll.
+      handleRef?.current.focusTimeline()
+    }
+    widgetService.setHasSelection(hasSelection)
     // Mirrors ChatBody's context menu: gates "Ask in Side Chat".
     widgetService.setForkSupported(!session.readOnly && session.forkSupported.get())
+    widgetService.setRewindSupported(!session.readOnly && session.rewindSupported.get())
+    // The bar *is* a card (the first user message, rendered outside the scroll
+    // container) — describe it exactly like ChatBody does, from the same item
+    // shape, so the two hosts can't offer different menu items.
+    const slot = describeAcpChatSlot(
+      item,
+      slotKey ?? '',
+      handleRef?.current.isSlotCollapsed(slotKey ?? '') ?? collapsed,
+    )
+    widgetService.setSlotTarget(slot)
     const target = resolveChatContextTarget(e.target as HTMLElement)
     widgetService.setContextTarget(target?.kind)
     setMenu({
       x: e.clientX,
       y: e.clientY,
-      args: [{ sessionId: session.id, ...(target ? { target } : {}) }],
+      args: [
+        {
+          sessionId: session.id,
+          ...(slot !== undefined ? { slotKey: slot.slotKey } : {}),
+          ...(slot?.messageId !== undefined ? { messageId: slot.messageId } : {}),
+          ...(target ? { target } : {}),
+        },
+      ],
       keyboard: isKeyboardContextMenu(e),
       ...(target !== undefined ? { contextTag: target.kind } : {}),
     })
@@ -188,7 +216,9 @@ export function StickyUserMessageBar({
             setMenu(null)
             widgetService.setHasSelection(false)
             widgetService.setForkSupported(false)
+            widgetService.setRewindSupported(false)
             widgetService.setContextTarget(undefined)
+            widgetService.setSlotTarget(undefined)
           }}
         />
       )}

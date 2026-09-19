@@ -74,6 +74,7 @@ import {
   isKeyupContextMenuSupplement,
 } from '@universe-editor/workbench-ui'
 import { MessageContent } from './MessageContent.js'
+import { describeAcpChatSlot, slotKeyFromEvent } from './chatContextSlot.js'
 import { PermissionCard } from './PermissionCard.js'
 import { ElicitationCard } from './ElicitationCard.js'
 import { RecoveryBar } from './RecoveryBar.js'
@@ -156,6 +157,11 @@ export interface WidgetHandle {
   isSlotCollapsed: (key: string) => boolean
   onDidChangeCollapse: Event<void>
   toggleSlotCollapse: (key: string) => void
+  /** Deterministic collapse write for a context-menu command naming a card (and,
+   *  for "Card and Children", its whole sub-agent subtree): the menu row states
+   *  the end result, so this sets rather than flips. One call = one state update
+   *  = one render = one persist. */
+  setSlotCollapsed: (overrides: ReadonlyMap<string, boolean>) => void
   popoverSelectNext: () => void
   popoverSelectPrev: () => void
   popoverAccept: () => void
@@ -215,6 +221,7 @@ function createNoopHandle(): WidgetHandle {
     isSlotCollapsed: () => false,
     onDidChangeCollapse: Event.None,
     toggleSlotCollapse: noop,
+    setSlotCollapsed: noop,
     popoverSelectNext: noop,
     popoverSelectPrev: noop,
     popoverAccept: noop,
@@ -357,6 +364,8 @@ function ChatSessionBody({
       getFocusSurface: () => AcpChatViewStateCache.loadFocusSurface(session.id) ?? 'prompt',
       jumpToPlan: () => handleRef.current.jumpToPlan(),
       toggleCollapse: () => handleRef.current.toggleCollapse(),
+      isSlotCollapsed: (key) => handleRef.current.isSlotCollapsed(key),
+      setSlotCollapsed: (overrides) => handleRef.current.setSlotCollapsed(overrides),
       cycleCollapseMode: () => handleRef.current.cycleCollapseMode(),
       getFocusedText: () => handleRef.current.getFocusedText(),
       popoverSelectNext: () => handleRef.current.popoverSelectNext(),
@@ -899,7 +908,7 @@ function ChatScroll({
   }
 
   const handleClick = (e: ReactMouseEvent) => {
-    const key = focusedKeyFromEvent(e)
+    const key = slotKeyFromEvent(e.target)
     if (!key) return
     focusSlot(key)
   }
@@ -921,13 +930,30 @@ function ChatScroll({
     // here, or the same ContextMenu keystroke re-anchors the menu onto the
     // focus holder instead of the focused slot.
     if (isKeyupContextMenuSupplement(e)) return
-    const key = focusedKeyFromEvent(e)
+    // Read the selection *before* anything moves focus: focusing the scroll
+    // container can drop the DOM selection the plain "Copy" item exists for.
+    const hasSelection = !!window.getSelection()?.toString()
+    const key = slotKeyFromEvent(e.target)
     if (key) focusSlot(key)
     e.preventDefault()
-    widgetService.setHasSelection(!!window.getSelection()?.toString())
+    widgetService.setHasSelection(hasSelection)
     // Gates the "Ask in Side Chat" menu item: read-only foreign previews and
     // agents without fork support must not offer it.
     widgetService.setForkSupported(!readOnly && session.forkSupported.get())
+    // Same gate, for the user-message "Rewind to Here" item.
+    widgetService.setRewindSupported(!readOnly && session.rewindSupported.get())
+    // The card the menu was raised on. Resolved through the same store the
+    // collapse commands write, so the Collapse/Expand labels and the command
+    // itself can never disagree.
+    const slot =
+      key !== undefined
+        ? describeAcpChatSlot(
+            findByStickyKey(timelineRef.current, key),
+            key,
+            handleRef.current.isSlotCollapsed(key),
+          )
+        : undefined
+    widgetService.setSlotTarget(slot)
     // Resolve the copy-able fragment under the cursor (image / resource link /
     // selection chip) — flips the acpChatContext* contextKeys and rides along in
     // the menu args so the copy actions know exactly what to copy.
@@ -936,7 +962,14 @@ function ChatScroll({
     setMenu({
       x: e.clientX,
       y: e.clientY,
-      args: [{ sessionId: session.id, ...(target ? { target } : {}) }],
+      args: [
+        {
+          sessionId: session.id,
+          ...(slot !== undefined ? { slotKey: slot.slotKey } : {}),
+          ...(slot?.messageId !== undefined ? { messageId: slot.messageId } : {}),
+          ...(target ? { target } : {}),
+        },
+      ],
       keyboard: isKeyboardContextMenu(e),
       ...(target !== undefined ? { contextTag: target.kind } : {}),
     })
@@ -1544,6 +1577,18 @@ function ChatScroll({
       if (key !== null) handleToggleCollapse(key)
     }
     handle.toggleSlotCollapse = (key) => handleToggleCollapse(key)
+    // Deterministic counterpart used by the context menu: those rows state the
+    // end result ("Collapse Card"), so they write it instead of flipping. No
+    // PLAN_SLOT_KEY branch — the plan bar raises no context menu, so no command
+    // can name it (its collapse goes through the chevron / Alt+F).
+    handle.setSlotCollapsed = (next) => {
+      if (next.size === 0) return
+      setOverrides((prev) => {
+        const merged = new Map(prev)
+        for (const [key, collapsed] of next) merged.set(key, collapsed)
+        return merged
+      })
+    }
     handle.cycleCollapseMode = () => {
       session.cycleCollapseMode()
     }
@@ -1615,6 +1660,7 @@ function ChatScroll({
       handle.jumpToPlan = noop
       handle.toggleCollapse = noop
       handle.toggleSlotCollapse = noop
+      handle.setSlotCollapsed = noop
       handle.cycleCollapseMode = noop
       handle.getFocusedText = () => undefined
       handle.setFocusedKey = noop
@@ -1772,7 +1818,9 @@ function ChatScroll({
               setMenu(null)
               widgetService.setHasSelection(false)
               widgetService.setForkSupported(false)
+              widgetService.setRewindSupported(false)
               widgetService.setContextTarget(undefined)
+              widgetService.setSlotTarget(undefined)
             }}
           />
         )}
@@ -2162,16 +2210,6 @@ function collectChildKeys(timeline: readonly TimelineItem[], parentKey: string):
 // `t:p/m:c` → `t:p`; multi-level composites drop their last segment.
 function parentKeyOf(key: string): string {
   return key.slice(0, key.lastIndexOf('/'))
-}
-
-// Deepest slot key under the pointer: sub-agent children carry only
-// data-sticky-key; top-level slots carry both attributes with the same value.
-function focusedKeyFromEvent(e: ReactMouseEvent): string | undefined {
-  const el = (e.target as HTMLElement).closest<HTMLElement>(
-    '[data-sticky-key], [data-timeline-key]',
-  )
-  if (!el) return undefined
-  return el.getAttribute('data-sticky-key') ?? el.getAttribute('data-timeline-key') ?? undefined
 }
 
 // Escape a string for use inside a CSS attribute selector. Timeline keys are

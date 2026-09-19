@@ -14,6 +14,7 @@ import {
   foldedAncestorKeys,
   nextCollapseMode,
   resolveCollapsed,
+  subtreeCardKeys,
   visibleFocusKey,
 } from '../timelineCollapse.js'
 
@@ -224,5 +225,35 @@ describe('visibleFocusKey', () => {
   it('keeps a stale key untouched — the caller decides what to do with it', () => {
     const state = { mode: 'default', overrides: new Map<string, boolean>() } as const
     expect(visibleFocusKey(subAgentTimeline, 't:gone/m:sm1', state)).toBe('t:gone/m:sm1')
+  })
+})
+
+describe('subtreeCardKeys', () => {
+  it('lists a card and its descendants in pre-order, with composite keys', () => {
+    expect(subtreeCardKeys(subAgentTimeline, 't:task')).toEqual([
+      't:task',
+      't:task/m:sm1',
+      't:task/t:sub',
+      't:task/t:sub/m:sm2',
+    ])
+  })
+
+  it('starts from a nested card when that is the target', () => {
+    expect(subtreeCardKeys(subAgentTimeline, 't:task/t:sub')).toEqual([
+      't:task/t:sub',
+      't:task/t:sub/m:sm2',
+    ])
+  })
+
+  it('returns just the card itself when it has no children', () => {
+    expect(subtreeCardKeys(subAgentTimeline, 'm:u')).toEqual(['m:u'])
+    expect(subtreeCardKeys(subAgentTimeline, 't:task/m:sm1')).toEqual(['t:task/m:sm1'])
+  })
+
+  it('returns nothing for keys that resolve to no item', () => {
+    // PLAN_SLOT_KEY never resolves — the pinned plan bar is not a timeline item.
+    expect(subtreeCardKeys(subAgentTimeline, 'p:plan')).toEqual([])
+    expect(subtreeCardKeys(subAgentTimeline, 't:gone')).toEqual([])
+    expect(subtreeCardKeys(subAgentTimeline, 't:task/m:gone')).toEqual([])
   })
 })

@@ -80,19 +80,46 @@ export function toolCallToText(call: AcpToolCall): string {
   const body = call.kind === 'execute' ? call.text : blocksToText(call.blocks)
   if (body.trim().length > 0) parts.push(body)
 
-  for (const child of call.children ?? []) {
-    const childText = timelineItemToText(child)
-    if (childText.trim().length > 0) {
-      parts.push(
-        childText
-          .split('\n')
-          .map((line) => `  ${line}`)
-          .join('\n'),
-      )
-    }
-  }
+  // Each child is indented on its own, before the blank-line join: indenting the
+  // joined transcript instead would put two stray spaces on every separator line.
+  const children = subAgentChildTexts(call)
+  if (children.length > 0) parts.push(children.map(indentBlock).join('\n\n'))
 
   return parts.join('\n\n')
+}
+
+/**
+ * Just the sub-agent portion of a sub-agent-spawning tool call: its children's
+ * text, joined with a blank line. Excludes the parent's own title / diffs /
+ * output. `undefined` when the card has no (non-empty) children — the caller
+ * decides whether that means "copy nothing" or "not offered".
+ *
+ * Unindented on purpose: {@link toolCallToText} re-indents each child as it
+ * embeds them into the parent card's copy text, but a user copying the
+ * transcript standalone wants the text as it was written.
+ */
+export function subAgentTranscriptToText(call: AcpToolCall): string | undefined {
+  const children = subAgentChildTexts(call)
+  return children.length > 0 ? children.join('\n\n') : undefined
+}
+
+/** Non-blank text of each child, in order — the shared step behind both the
+ *  standalone transcript and its indented embedding in the parent's text. */
+function subAgentChildTexts(call: AcpToolCall): string[] {
+  const texts: string[] = []
+  for (const child of call.children ?? []) {
+    const childText = timelineItemToText(child)
+    if (childText.trim().length > 0) texts.push(childText)
+  }
+  return texts
+}
+
+/** Two-space indent for embedding a child under its parent card's title. */
+function indentBlock(text: string): string {
+  return text
+    .split('\n')
+    .map((line) => `  ${line}`)
+    .join('\n')
 }
 
 /** Plain-text representation of any timeline slot, suitable for clipboard copy. */

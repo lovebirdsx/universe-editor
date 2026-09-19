@@ -21,7 +21,10 @@ import {
   blocksToText,
   readToolCallLocations,
   splitToolCallContent,
+  subAgentTranscriptToText,
+  toolCallToText,
 } from '../acpSessionContent.js'
+import type { AcpChildItem, AcpToolCall } from '../acpSessionModel.js'
 
 describe('readToolCallLocations', () => {
   it('returns undefined for null / undefined / empty', () => {
@@ -173,5 +176,72 @@ describe('StreamingBlocksAccumulator', () => {
     expect(first.text).toBe('x')
     expect(first.blocks).toStrictEqual([{ type: 'text', text: 'x' }])
     expect(second.text).toBe('xy')
+  })
+})
+
+describe('subAgentTranscriptToText / toolCallToText', () => {
+  const makeCall = (overrides: Partial<AcpToolCall>): AcpToolCall => ({
+    id: 't1',
+    title: 'Task',
+    kind: 'other',
+    status: 'completed',
+    text: '',
+    blocks: [],
+    diffs: [],
+    ...overrides,
+  })
+
+  const childMessage = (id: string, text: string): AcpChildItem => ({
+    kind: 'message',
+    id,
+    message: { id, role: 'agent', text, blocks: [], streaming: false },
+  })
+
+  it('returns undefined for a card with no children', () => {
+    expect(subAgentTranscriptToText(makeCall({}))).toBeUndefined()
+    expect(subAgentTranscriptToText(makeCall({ children: [] }))).toBeUndefined()
+  })
+
+  it('returns undefined when every child is blank', () => {
+    expect(
+      subAgentTranscriptToText(makeCall({ children: [childMessage('c1', '   ')] })),
+    ).toBeUndefined()
+  })
+
+  it('joins the children with a blank line and skips blank ones', () => {
+    const call = makeCall({
+      children: [childMessage('c1', 'first'), childMessage('c2', ''), childMessage('c3', 'third')],
+    })
+    expect(subAgentTranscriptToText(call)).toBe('first\n\nthird')
+  })
+
+  it('carries only the sub-agent part — not the parent title, diff or output', () => {
+    const call = makeCall({
+      title: 'Task: explore the repo',
+      blocks: [{ type: 'text', text: 'parent output' }],
+      diffs: [{ path: '/repo/a.ts', oldText: '', newText: 'x' }],
+      children: [childMessage('c1', 'child says hi')],
+    })
+    expect(subAgentTranscriptToText(call)).toBe('child says hi')
+  })
+
+  // The indented transcript embedded in the parent's copy text is what
+  // "Copy Message" has always produced; the sub-agent extraction must not have
+  // changed a byte of it — including the separator line between two children,
+  // which is *not* indented (each child is indented before the blank-line join).
+  it('embeds the transcript indented, byte for byte as before', () => {
+    const call = makeCall({
+      title: 'Task',
+      children: [childMessage('c1', 'line one\n\nline three')],
+    })
+    expect(toolCallToText(call)).toBe('Task\n\n  line one\n  \n  line three')
+  })
+
+  it('leaves the blank line between two children unindented', () => {
+    const call = makeCall({
+      title: 'Task',
+      children: [childMessage('c1', 'first'), childMessage('c2', 'second')],
+    })
+    expect(toolCallToText(call)).toBe('Task\n\n  first\n\n  second')
   })
 })

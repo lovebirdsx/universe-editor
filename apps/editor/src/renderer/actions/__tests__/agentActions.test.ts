@@ -41,6 +41,8 @@ import {
   FocusPreviousAcpTimelineItemAction,
   FocusDeeperAcpTimelineItemAction,
   FocusOuterAcpTimelineItemAction,
+  ToggleAcpTimelineCardSubtreeAction,
+  ToggleAcpTimelineItemCollapseAction,
   JumpToAcpPlanAction,
   SelectNextAcpPromptSuggestionAction,
   SelectPreviousAcpPromptSuggestionAction,
@@ -56,6 +58,7 @@ import {
 } from '../agentSessionActions.js'
 import { FindWordAtCursorNextAction, FindWordAtCursorPreviousAction } from '../findWordActions.js'
 import { AcpPromptReplaceInbox } from '../../services/acp/session/acpPromptReplaceInbox.js'
+import { makeFakeAcpChatWidget } from '../../__tests__/_helpers/fakeAcpChatWidget.js'
 import {
   IAcpChatWidgetService,
   type AcpChatWidget,
@@ -63,7 +66,10 @@ import {
 import {
   AcpForeignWorktreeError,
   IAcpSessionService,
+  type AcpMessage,
+  type AcpToolCall,
   type IAcpSession,
+  type TimelineItem,
 } from '../../services/acp/session/acpSessionService.js'
 import {
   IAcpSessionHistoryService,
@@ -131,28 +137,16 @@ describe('Agent timeline navigation actions', () => {
       popoverSelectPrev,
       popoverAccept,
       popoverHide,
-      widget: {
-        container: document.createElement('div'),
+      widget: makeFakeAcpChatWidget({
         moveTimeline,
         moveTimelineLevel,
         scrollTimeline,
-        focusInput: vi.fn(),
-        focusTimeline: vi.fn(() => false),
-        getFocusSurface: () => 'prompt' as const,
         jumpToPlan,
-        toggleCollapse: vi.fn(),
-        cycleCollapseMode: vi.fn(),
-        getFocusedText: vi.fn(),
         popoverSelectNext,
         popoverSelectPrev,
         popoverAccept,
         popoverHide,
-        openFind: vi.fn(),
-        closeFind: vi.fn(),
-        findNext: vi.fn(),
-        findPrev: vi.fn(),
-        activateConfigEntry: vi.fn(() => false),
-      },
+      }),
     }
   }
 
@@ -527,28 +521,12 @@ describe('Agent prompt suggestion popover actions', () => {
       popoverSelectPrev,
       popoverAccept,
       popoverHide,
-      widget: {
-        container: document.createElement('div'),
-        moveTimeline: vi.fn(),
-        moveTimelineLevel: vi.fn(),
-        scrollTimeline: vi.fn(),
-        focusInput: vi.fn(),
-        focusTimeline: vi.fn(() => false),
-        getFocusSurface: () => 'prompt' as const,
-        jumpToPlan: vi.fn(),
-        toggleCollapse: vi.fn(),
-        cycleCollapseMode: vi.fn(),
-        getFocusedText: vi.fn(),
+      widget: makeFakeAcpChatWidget({
         popoverSelectNext,
         popoverSelectPrev,
         popoverAccept,
         popoverHide,
-        openFind: vi.fn(),
-        closeFind: vi.fn(),
-        findNext: vi.fn(),
-        findPrev: vi.fn(),
-        activateConfigEntry: vi.fn(() => false),
-      },
+      }),
     }
   }
 
@@ -1819,5 +1797,194 @@ describe('AskInSideChatAction', () => {
 
     expect(h.notify).toHaveBeenCalledTimes(1)
     expect(h.notify.mock.calls[0]![0].message).toContain('own worktree')
+  })
+})
+
+describe('Agent card-targeted collapse actions', () => {
+  const disposables: IDisposable[] = []
+  const SESSION_ID = 's-cards'
+
+  afterEach(() => {
+    while (disposables.length > 0) disposables.pop()?.dispose()
+  })
+
+  function makeAgentMessage(id: string): AcpMessage {
+    return { id, role: 'agent', text: id, blocks: [], streaming: false }
+  }
+
+  function makeTaskCall(id: string, children: AcpToolCall['children']): AcpToolCall {
+    return {
+      id,
+      title: 'Task',
+      kind: 'other',
+      status: 'completed',
+      text: '',
+      blocks: [],
+      diffs: [],
+      ...(children !== undefined ? { children } : {}),
+    }
+  }
+
+  const SESSION_ITEMS: readonly TimelineItem[] = [
+    { kind: 'message', id: 'u', message: makeAgentMessage('u') },
+    {
+      kind: 'toolCall',
+      id: 'task',
+      call: makeTaskCall('task', [
+        { kind: 'message', id: 'sm1', message: makeAgentMessage('sm1') },
+      ]),
+    },
+  ]
+
+  function runWithArgs(commandId: string, widget: AcpChatWidget, arg?: unknown): void {
+    const services = new ServiceCollection()
+    services.set(IAcpChatWidgetService, {
+      _serviceBrand: undefined,
+      lastFocusedWidget: widget,
+      register: vi.fn(),
+      widgetForSession: (id: string) => (id === SESSION_ID ? widget : undefined),
+    } as unknown as IAcpChatWidgetService)
+    services.set(IAcpSessionService, {
+      _serviceBrand: undefined,
+      getById: (id: string) =>
+        id === SESSION_ID
+          ? ({
+              id: SESSION_ID,
+              timeline: observableValue<readonly TimelineItem[]>('t.timeline', SESSION_ITEMS),
+            } as unknown as IAcpSession)
+          : undefined,
+    } as unknown as IAcpSessionService)
+    services.set(IEditorService, {
+      _serviceBrand: undefined,
+      activeEditor: observableValue<unknown>('t.activeEditor', undefined),
+    } as unknown as IEditorService)
+    const inst = new InstantiationService(services)
+    inst.invokeFunction((accessor) => {
+      CommandsRegistry.getCommand(commandId)!.handler(accessor, arg)
+    })
+  }
+
+  it('offers both collapse rows, labelled by the card state they produce', () => {
+    disposables.push(registerAction2(ToggleAcpTimelineItemCollapseAction))
+    const rows = MenuRegistry.getMenuItems(MenuId.AcpChatContext).filter(
+      (i) => 'command' in i && i.command === ToggleAcpTimelineItemCollapseAction.ID,
+    )
+    const whens = rows.map((r) => {
+      if (!('when' in r)) return ''
+      return typeof r.when === 'string' ? r.when : r.when.serialize()
+    })
+    expect(whens).toHaveLength(2)
+    // Two mutually exclusive rows rather than one toggle: the label states the
+    // end state, so the row that folds must not also match an already-folded card.
+    expect(whens[0]).toContain('!acpChatContextCardCollapsed')
+    expect(whens[1]).not.toContain('!acpChatContextCardCollapsed')
+    expect(whens[1]).toContain('acpChatContextCardCollapsed')
+    // registerAction2 ANDs the command's precondition into every menu row — the
+    // rows must not survive the chat losing focus, or a stale menu state could
+    // fold a card in a chat the user has moved on from.
+    expect(whens.every((w) => w.includes('acpChatFocused'))).toBe(true)
+    // The command's own title stays generic — only the menu rows are state-specific.
+    expect(CommandsRegistry.getCommand(ToggleAcpTimelineItemCollapseAction.ID)).toBeDefined()
+  })
+
+  it('collapses the card the menu was raised on, not the focused one', () => {
+    disposables.push(registerAction2(ToggleAcpTimelineItemCollapseAction))
+    const setSlotCollapsed = vi.fn()
+    const toggleCollapse = vi.fn()
+    const widget = makeFakeAcpChatWidget({
+      isSlotCollapsed: () => false,
+      setSlotCollapsed,
+      toggleCollapse,
+    })
+
+    runWithArgs(ToggleAcpTimelineItemCollapseAction.ID, widget, {
+      sessionId: SESSION_ID,
+      slotKey: 'm:u',
+    })
+
+    // Deterministic: the menu row said "Collapse Card", so the state is written,
+    // never toggled — a toggle could fold the wrong way.
+    expect(setSlotCollapsed).toHaveBeenCalledWith(new Map([['m:u', true]]))
+    expect(toggleCollapse).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the focused card when the invocation carries no card', () => {
+    disposables.push(registerAction2(ToggleAcpTimelineItemCollapseAction))
+    const setSlotCollapsed = vi.fn()
+    const toggleCollapse = vi.fn()
+    const widget = makeFakeAcpChatWidget({ setSlotCollapsed, toggleCollapse })
+
+    // Alt+F / command palette: no sessionId, no slotKey — the keybinding path.
+    runWithArgs(ToggleAcpTimelineItemCollapseAction.ID, widget)
+
+    expect(toggleCollapse).toHaveBeenCalledTimes(1)
+    expect(setSlotCollapsed).not.toHaveBeenCalled()
+  })
+
+  it('ignores a card named for a session that has no widget', () => {
+    disposables.push(registerAction2(ToggleAcpTimelineItemCollapseAction))
+    const setSlotCollapsed = vi.fn()
+    const widget = makeFakeAcpChatWidget({ setSlotCollapsed, isSlotCollapsed: () => false })
+
+    runWithArgs(ToggleAcpTimelineItemCollapseAction.ID, widget, {
+      sessionId: 's-other',
+      slotKey: 'm:u',
+    })
+
+    expect(setSlotCollapsed).not.toHaveBeenCalled()
+  })
+
+  it('folds a sub-agent card and every card nested under it in one write', () => {
+    disposables.push(registerAction2(ToggleAcpTimelineCardSubtreeAction))
+    const setSlotCollapsed = vi.fn()
+    const widget = makeFakeAcpChatWidget({ isSlotCollapsed: () => false, setSlotCollapsed })
+
+    runWithArgs(ToggleAcpTimelineCardSubtreeAction.ID, widget, {
+      sessionId: SESSION_ID,
+      slotKey: 't:task',
+    })
+
+    // One call, one Map — one render and one persisted write for the whole subtree.
+    expect(setSlotCollapsed).toHaveBeenCalledTimes(1)
+    expect(setSlotCollapsed).toHaveBeenCalledWith(
+      new Map([
+        ['t:task', true],
+        ['t:task/m:sm1', true],
+      ]),
+    )
+  })
+
+  it('expands a folded subtree back to the parent state', () => {
+    disposables.push(registerAction2(ToggleAcpTimelineCardSubtreeAction))
+    const setSlotCollapsed = vi.fn()
+    // The parent reads as folded → the command's stated end state is "expanded".
+    const widget = makeFakeAcpChatWidget({ isSlotCollapsed: () => true, setSlotCollapsed })
+
+    runWithArgs(ToggleAcpTimelineCardSubtreeAction.ID, widget, {
+      sessionId: SESSION_ID,
+      slotKey: 't:task',
+    })
+
+    expect(setSlotCollapsed).toHaveBeenCalledWith(
+      new Map([
+        ['t:task', false],
+        ['t:task/m:sm1', false],
+      ]),
+    )
+  })
+
+  it('does nothing for a card key that resolves to no item', () => {
+    disposables.push(registerAction2(ToggleAcpTimelineCardSubtreeAction))
+    const setSlotCollapsed = vi.fn()
+    const widget = makeFakeAcpChatWidget({ setSlotCollapsed })
+
+    runWithArgs(ToggleAcpTimelineCardSubtreeAction.ID, widget, {
+      sessionId: SESSION_ID,
+      slotKey: 't:gone',
+    })
+    // A bare invocation has no card to act on at all.
+    runWithArgs(ToggleAcpTimelineCardSubtreeAction.ID, widget)
+
+    expect(setSlotCollapsed).not.toHaveBeenCalled()
   })
 })

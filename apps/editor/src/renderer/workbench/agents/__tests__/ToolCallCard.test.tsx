@@ -26,6 +26,7 @@ import type {
   AcpToolCallStatus,
 } from '../../../services/acp/session/acpSessionService.js'
 import { memoryTrimmedNotice } from '../../../services/acp/session/acpSession.js'
+import { resolveChatContextTarget } from '../../../services/acp/chatContextTarget.js'
 import { ToolCallCard } from '../ToolCallCard.js'
 import { ServicesContext } from '../../useService.js'
 import {
@@ -756,5 +757,42 @@ describe('ToolCallCard — memory-trimmed cards', () => {
     expect(screen.getByTestId('acp-toolcall-memory-trimmed').textContent).toBe(
       memoryTrimmedNotice(),
     )
+  })
+})
+
+// The chat context menu resolves a right-clicked path through the component's
+// `data-uri` attribute — the components themselves know nothing about menus, so
+// this attribute *is* the contract. It is asserted through
+// resolveChatContextTarget rather than by string, so a rename of the attribute
+// fails here instead of silently killing Copy Path in the running app.
+describe('ToolCallCard — copyable path attributes', () => {
+  it('stamps the inline diff path with the resolved URI', () => {
+    renderCard(
+      makeCall({
+        kind: 'edit',
+        title: 'Edit foo.ts',
+        diffs: [{ path: '/repo/src/foo.ts', oldText: 'a', newText: 'b' }],
+      }),
+    )
+    const pathButton = screen.getByTestId('acp-inline-diff-path')
+    expect(resolveChatContextTarget(pathButton)).toEqual({
+      kind: 'path',
+      uri: 'file:///repo/src/foo.ts',
+    })
+  })
+
+  it('stamps each file location with its resolved URI', () => {
+    renderCard(
+      makeCall({
+        kind: 'read',
+        locations: [{ path: '/repo/src/foo.ts', line: 12 }],
+      }),
+    )
+    // A read card starts collapsed; the body (and its location rows) mount on expand.
+    fireEvent.click(screen.getByTestId('acp-collapsible-toggle'))
+    expect(resolveChatContextTarget(screen.getByTestId('acp-toolcall-location'))).toEqual({
+      kind: 'path',
+      uri: 'file:///repo/src/foo.ts',
+    })
   })
 })

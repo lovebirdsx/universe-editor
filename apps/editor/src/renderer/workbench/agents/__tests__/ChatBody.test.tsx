@@ -122,6 +122,8 @@ function makeSession(
   opts: {
     isReplayingHistory?: boolean
     forkSupported?: boolean
+    rewindSupported?: boolean
+    readOnly?: boolean
     status?: AcpSessionStatus
     plan?: readonly AcpPlanEntry[]
     cwd?: string
@@ -156,7 +158,8 @@ function makeSession(
     runningStartedAt: observableValue<number | undefined>('t.rsa', undefined),
     imageSupported: observableValue<boolean>('t.imageSupported', false),
     forkSupported: observableValue<boolean>('t.forkSupported', opts.forkSupported ?? false),
-    rewindSupported: observableValue<boolean>('t.rewindSupported', false),
+    rewindSupported: observableValue<boolean>('t.rewindSupported', opts.rewindSupported ?? false),
+    readOnly: opts.readOnly ?? false,
     onDidCancelForRestore: Event.None,
     cycleCollapseMode: () => {
       const cur = collapseMode.get()
@@ -271,6 +274,8 @@ function makeInstantiation(
     setTurnRunning: () => {},
     setHasSelection: () => {},
     setForkSupported: () => {},
+    setRewindSupported: () => {},
+    setSlotTarget: () => {},
     setContextTarget: () => {},
     setPopoverOpen: () => {},
     setFindVisible: () => {},
@@ -360,11 +365,12 @@ describe('ChatBody — click to focus a timeline item', () => {
     expect(slotEl(container, 'm:a').className).not.toContain(focusedClass)
   })
 
-  it('passes the session id to chat context menu commands', () => {
+  it('passes the session id and the clicked card to chat context menu commands', () => {
     const disposable = registerAction2(CaptureChatContextArgAction)
     try {
       const command = vi.fn()
-      const inst = makeInstantiation(undefined, command)
+      const setSlotTarget = vi.fn()
+      const inst = makeInstantiation(undefined, command, { widget: { setSlotTarget } })
       const oneMessage: readonly TimelineItem[] = [
         { kind: 'message', id: 'a', message: makeMessage('a', 'first') },
       ]
@@ -379,7 +385,46 @@ describe('ChatBody — click to focus a timeline item', () => {
 
       expect(command).toHaveBeenCalledWith(CaptureChatContextArgAction.ID, {
         sessionId: 's-menu',
+        slotKey: 'm:a',
       })
+      // The card descriptor the menu `when` clauses read — an agent message is a
+      // foldable card but carries no rewind / fork anchor.
+      expect(setSlotTarget).toHaveBeenCalledWith({
+        slotKey: 'm:a',
+        messageId: undefined,
+        card: true,
+        collapsed: false,
+        userMessage: false,
+        subAgent: false,
+        nested: false,
+        createdFile: undefined,
+      })
+    } finally {
+      disposable.dispose()
+    }
+  })
+
+  it('drops the card from the args when the click resolves to no item', () => {
+    const disposable = registerAction2(CaptureChatContextArgAction)
+    try {
+      const command = vi.fn()
+      const setSlotTarget = vi.fn()
+      const inst = makeInstantiation(undefined, command, { widget: { setSlotTarget } })
+      const { container, getByText } = render(
+        <ServicesContext.Provider value={inst}>
+          <ChatBody session={makeSession('s-menu', items)} />
+        </ServicesContext.Provider>,
+      )
+
+      // The plan bar's pseudo slot key resolves to no timeline item, and the
+      // container itself carries no key at all — neither may reach the args.
+      fireEvent.contextMenu(container.querySelector('[data-testid="acp-timeline"]')!, { detail: 1 })
+      fireEvent.click(getByText('Capture Session Arg'))
+
+      expect(command).toHaveBeenCalledWith(CaptureChatContextArgAction.ID, {
+        sessionId: 's-menu',
+      })
+      expect(setSlotTarget).toHaveBeenCalledWith(undefined)
     } finally {
       disposable.dispose()
     }
@@ -722,6 +767,7 @@ describe('ChatBody — context menu fragment targets', () => {
       expect(setContextTarget).toHaveBeenCalledWith('image')
       expect(command).toHaveBeenCalledWith(CaptureChatContextArgAction.ID, {
         sessionId: 's-menu',
+        slotKey: 'm:a',
         target: { kind: 'image', src },
       })
     } finally {
@@ -757,6 +803,7 @@ describe('ChatBody — context menu fragment targets', () => {
       expect(setContextTarget).toHaveBeenCalledWith('path')
       expect(command).toHaveBeenCalledWith(CaptureChatContextArgAction.ID, {
         sessionId: 's-menu',
+        slotKey: 'm:a',
         target: { kind: 'path', uri: 'file:///w/src/a.ts' },
       })
     } finally {
@@ -792,6 +839,7 @@ describe('ChatBody — context menu fragment targets', () => {
       expect(setContextTarget).toHaveBeenCalledWith('text')
       expect(command).toHaveBeenCalledWith(CaptureChatContextArgAction.ID, {
         sessionId: 's-menu',
+        slotKey: 'm:u2',
         target: { kind: 'text', text: CHIP_CONTEXT.text },
       })
     } finally {
@@ -815,7 +863,221 @@ describe('ChatBody — context menu fragment targets', () => {
       expect(setContextTarget).toHaveBeenCalledWith(undefined)
       expect(command).toHaveBeenCalledWith(CaptureChatContextArgAction.ID, {
         sessionId: 's-menu',
+        slotKey: 'm:a',
       })
+    } finally {
+      disposable.dispose()
+    }
+  })
+})
+
+describe('ChatBody — context menu card targets', () => {
+  const makeTaskCall = (id: string, children: AcpToolCall['children']): AcpToolCall => ({
+    id,
+    title: 'Task',
+    kind: 'other',
+    status: 'completed',
+    text: '',
+    blocks: [],
+    diffs: [],
+    ...(children !== undefined ? { children } : {}),
+  })
+  const childMessage = (id: string, text: string) =>
+    ({ kind: 'message', id, message: makeMessage(id, text) }) as const
+  const userItem = (id: string, text: string): TimelineItem => ({
+    kind: 'message',
+    id,
+    message: { id, role: 'user', text, blocks: [{ type: 'text', text }], streaming: false },
+  })
+  const writeItem = (id: string, path: string): TimelineItem => ({
+    kind: 'toolCall',
+    id,
+    call: {
+      id,
+      title: `Write ${path}`,
+      kind: 'edit',
+      status: 'completed',
+      text: '',
+      blocks: [],
+      diffs: [{ path, oldText: '', newText: '# hi\n' }],
+    },
+  })
+
+  function renderWithCapture(
+    session: IAcpSession,
+    widget: Record<string, unknown> = {},
+  ): ReturnType<typeof render> & {
+    command: ReturnType<typeof vi.fn>
+    setSlotTarget: ReturnType<typeof vi.fn>
+    widgetRef: { current?: AcpChatWidget }
+  } {
+    const command = vi.fn()
+    const setSlotTarget = vi.fn()
+    const widgetRef: { current?: AcpChatWidget } = {}
+    const inst = makeInstantiation((w) => (widgetRef.current = w), command, {
+      widget: { setSlotTarget, ...widget },
+    })
+    const result = render(
+      <ServicesContext.Provider value={inst}>
+        <ChatBody session={session} />
+      </ServicesContext.Provider>,
+    )
+    return { command, setSlotTarget, widgetRef, ...result }
+  }
+
+  const stickyEl = (container: HTMLElement, key: string): HTMLElement => {
+    const el = container.querySelector<HTMLElement>(`[data-sticky-key="${key}"]`)
+    if (!el) throw new Error(`no element for sticky key ${key}`)
+    return el
+  }
+
+  it('resolves a nested sub-agent card by its composite key', () => {
+    const disposable = registerAction2(CaptureChatContextArgAction)
+    try {
+      const session = makeSession('s-menu', [
+        userItem('u', 'top question'),
+        { kind: 'toolCall', id: 'task', call: makeTaskCall('task', [childMessage('sm1', 'sub')]) },
+      ])
+      const { container, getByText, command, setSlotTarget } = renderWithCapture(session)
+
+      // Sub-agent children only mount once the parent card is expanded.
+      act(() => {
+        fireEvent.click(
+          slotEl(container, 't:task').querySelector('[data-testid="acp-collapsible-toggle"]')!,
+        )
+      })
+      fireEvent.contextMenu(stickyEl(container, 't:task/m:sm1'), { detail: 1 })
+      fireEvent.click(getByText('Capture Session Arg'))
+
+      expect(command).toHaveBeenCalledWith(CaptureChatContextArgAction.ID, {
+        sessionId: 's-menu',
+        slotKey: 't:task/m:sm1',
+      })
+      expect(setSlotTarget).toHaveBeenCalledWith({
+        slotKey: 't:task/m:sm1',
+        messageId: undefined,
+        card: true,
+        collapsed: false,
+        userMessage: false,
+        subAgent: false,
+        nested: true,
+        createdFile: undefined,
+      })
+    } finally {
+      disposable.dispose()
+    }
+  })
+
+  it('marks a sub-agent parent card and carries its own fold state', () => {
+    const disposable = registerAction2(CaptureChatContextArgAction)
+    try {
+      const session = makeSession('s-menu', [
+        userItem('u', 'top question'),
+        { kind: 'toolCall', id: 'task', call: makeTaskCall('task', [childMessage('sm1', 'sub')]) },
+      ])
+      const { container, getByText, setSlotTarget } = renderWithCapture(session)
+
+      fireEvent.contextMenu(slotEl(container, 't:task'), { detail: 1 })
+      fireEvent.click(getByText('Capture Session Arg'))
+
+      // 'other' tools fold under the default mode, so the shared store — not a
+      // snapshot taken here — is what reports the card as collapsed.
+      expect(setSlotTarget).toHaveBeenCalledWith(
+        expect.objectContaining({
+          slotKey: 't:task',
+          subAgent: true,
+          nested: false,
+          collapsed: true,
+        }),
+      )
+    } finally {
+      disposable.dispose()
+    }
+  })
+
+  it('resolves a whole-file write card to its preview affordance', () => {
+    const disposable = registerAction2(CaptureChatContextArgAction)
+    try {
+      const session = makeSession('s-menu', [writeItem('w', '/repo/notes.md')])
+      const { container, getByText, setSlotTarget } = renderWithCapture(session)
+
+      fireEvent.contextMenu(slotEl(container, 't:w'), { detail: 1 })
+      fireEvent.click(getByText('Capture Session Arg'))
+
+      expect(setSlotTarget).toHaveBeenCalledWith(
+        expect.objectContaining({ slotKey: 't:w', card: true, createdFile: 'preview' }),
+      )
+    } finally {
+      disposable.dispose()
+    }
+  })
+
+  it('carries the message id of a user turn into the args', () => {
+    const disposable = registerAction2(CaptureChatContextArgAction)
+    try {
+      const session = makeSession('s-menu', [
+        userItem('u1', 'first'),
+        { kind: 'message', id: 'a1', message: makeMessage('a1', 'answer') },
+        {
+          kind: 'message',
+          id: 'u2',
+          message: {
+            id: 'u2',
+            role: 'user',
+            text: 'follow up',
+            blocks: [],
+            streaming: false,
+            messageId: 'msg-7',
+          },
+        },
+      ])
+      const { container, getByText, command, setSlotTarget } = renderWithCapture(session)
+
+      fireEvent.contextMenu(slotEl(container, 'm:u2'), { detail: 1 })
+      fireEvent.click(getByText('Capture Session Arg'))
+
+      expect(command).toHaveBeenCalledWith(CaptureChatContextArgAction.ID, {
+        sessionId: 's-menu',
+        slotKey: 'm:u2',
+        messageId: 'msg-7',
+      })
+      expect(setSlotTarget).toHaveBeenCalledWith(
+        expect.objectContaining({ slotKey: 'm:u2', userMessage: true, messageId: 'msg-7' }),
+      )
+    } finally {
+      disposable.dispose()
+    }
+  })
+
+  it('gates rewind on the session and read-only state', () => {
+    const disposable = registerAction2(CaptureChatContextArgAction)
+    try {
+      const items = [userItem('u1', 'first'), userItem('u2', 'second')]
+      const openOn = (session: IAcpSession, readOnly: boolean): void => {
+        const setRewindSupported = vi.fn()
+        const inst = makeInstantiation(undefined, vi.fn(), { widget: { setRewindSupported } })
+        const { container, getByText } = render(
+          <ServicesContext.Provider value={inst}>
+            <ChatBody session={session} readOnly={readOnly} />
+          </ServicesContext.Provider>,
+        )
+        // The *second* user message: the first is pinned in the sticky bar, which
+        // repeats `data-timeline-key` and answers with its own handler.
+        fireEvent.contextMenu(slotEl(container, 'm:u2'), { detail: 1 })
+        expect(setRewindSupported).toHaveBeenCalledWith(
+          readOnly ? false : session.rewindSupported.get(),
+        )
+        fireEvent.click(getByText('Capture Session Arg'))
+        // The menu's onClose runs before the command and resets the key.
+        expect(setRewindSupported).toHaveBeenLastCalledWith(false)
+      }
+
+      const rewindable = makeSession('s-menu', items, { rewindSupported: true })
+      openOn(rewindable, false)
+      // A read-only (foreign-workspace) preview must not offer it even though the
+      // session advertises the capability.
+      openOn(rewindable, true)
+      openOn(makeSession('s-menu', items), false)
     } finally {
       disposable.dispose()
     }

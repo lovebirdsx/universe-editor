@@ -16,6 +16,7 @@ import {
 } from '@universe-editor/platform'
 import { AcpChatWidgetService, type AcpChatWidget } from '../acpChatWidgetService.js'
 import { AcpChatViewStateCache, type AcpFocusSurface } from '../acpChatViewStateCache.js'
+import { makeFakeAcpChatWidget } from '../../../../__tests__/_helpers/fakeAcpChatWidget.js'
 
 /** Minimal IEditorGroupsService stub — only `activeGroup.id` is read (split tie-break). */
 function makeGroupsStub(activeGroupId = 0): {
@@ -58,29 +59,14 @@ function makeWidget(
   const moveSpy = vi.fn()
   const focusSpy = vi.fn(() => true)
   const timelineSpy = vi.fn(() => true)
-  const widget: AcpChatWidget = {
+  const widget: AcpChatWidget = makeFakeAcpChatWidget({
     sessionId,
     container,
     moveTimeline: moveSpy,
-    moveTimelineLevel: vi.fn(),
-    scrollTimeline: vi.fn(),
     focusInput: focusSpy,
     focusTimeline: timelineSpy,
     getFocusSurface: () => surface,
-    jumpToPlan: vi.fn(),
-    toggleCollapse: vi.fn(),
-    cycleCollapseMode: vi.fn(),
-    getFocusedText: vi.fn(),
-    popoverSelectNext: vi.fn(),
-    popoverSelectPrev: vi.fn(),
-    popoverAccept: vi.fn(),
-    popoverHide: vi.fn(),
-    openFind: vi.fn(),
-    closeFind: vi.fn(),
-    findNext: vi.fn(),
-    findPrev: vi.fn(),
-    activateConfigEntry: vi.fn(() => false),
-  }
+  })
   return { container, child, widget, moveSpy, focusSpy, timelineSpy }
 }
 
@@ -289,28 +275,7 @@ describe('AcpChatWidgetService', () => {
     document.body.appendChild(container)
     input.focus()
     expect(document.activeElement).toBe(input)
-    const widget: AcpChatWidget = {
-      container,
-      moveTimeline: vi.fn(),
-      moveTimelineLevel: vi.fn(),
-      scrollTimeline: vi.fn(),
-      focusInput: vi.fn(),
-      focusTimeline: vi.fn(() => false),
-      getFocusSurface: () => 'prompt' as const,
-      jumpToPlan: vi.fn(),
-      toggleCollapse: vi.fn(),
-      cycleCollapseMode: vi.fn(),
-      getFocusedText: vi.fn(),
-      popoverSelectNext: vi.fn(),
-      popoverSelectPrev: vi.fn(),
-      popoverAccept: vi.fn(),
-      popoverHide: vi.fn(),
-      openFind: vi.fn(),
-      closeFind: vi.fn(),
-      findNext: vi.fn(),
-      findPrev: vi.fn(),
-      activateConfigEntry: vi.fn(() => false),
-    }
+    const widget: AcpChatWidget = makeFakeAcpChatWidget({ container })
     svc.register(widget)
     expect(cks.get('acpChatFocused')).toBe(true)
     expect(svc.lastFocusedWidget).toBe(widget)

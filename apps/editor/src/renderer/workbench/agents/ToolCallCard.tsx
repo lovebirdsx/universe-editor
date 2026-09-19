@@ -19,8 +19,6 @@ import {
   IInstantiationService,
   IWorkspaceService,
   REMOTE_SCHEME,
-  URI,
-  absolutePathToWorkspaceUri,
   localize,
 } from '@universe-editor/platform'
 import { useObservable, useOptionalService, useService } from '../useService.js'
@@ -58,6 +56,7 @@ import {
 } from './toolCallDisplay.js'
 import { roleIcon, toolCallIcon } from './timelineIcons.js'
 import { buildStickyKey } from './stickyScroll.js'
+import { toolCallPathUri, toolCallPathUriString } from './toolCallPaths.js'
 import { resolveCollapsed, type CollapseState } from './timelineCollapse.js'
 import styles from './agents.module.css'
 
@@ -79,11 +78,6 @@ function formatMcpInput(rawInput: unknown): string | undefined {
   } catch {
     return undefined
   }
-}
-
-/** Resolve a tool-call diff path to a URI, following the workspace's scheme. */
-function diffUri(path: string, folder: URI | undefined): URI {
-  return path.includes('://') ? URI.parse(path) : absolutePathToWorkspaceUri(path, folder)
 }
 
 /**
@@ -145,7 +139,8 @@ export const ToolCallCard = memo(function ToolCallCard({
   // Reuse the same file opener the markdown renderer / code blocks use, so a path
   // on a tool-call card resolves (absolute / relative to workspace) and reveals
   // its line exactly like a path clicked anywhere else in the chat.
-  const openFilePath = useMarkdownFileLink(workspaceService?.current?.folder)
+  const workspaceFolder = workspaceService?.current?.folder
+  const openFilePath = useMarkdownFileLink(workspaceFolder)
   const isMcp = call.mcpServer !== undefined
   // A whole-file write (Write / add file): folded by default (it is a new
   // document, not an edit to review) and given a read affordance in its header.
@@ -165,7 +160,7 @@ export const ToolCallCard = memo(function ToolCallCard({
     : () => setInternalCollapsed((v) => !v)
 
   const openDiff = (diff: AcpToolCallDiff): void => {
-    const uri = diffUri(diff.path, workspaceService?.current?.folder)
+    const uri = toolCallPathUri(diff.path, workspaceFolder)
     // Local and remote workspace files can both be reopened as a source file
     // from the diff title bar; only non-file schemes are left closed.
     const openable = uri.scheme === 'file' || uri.scheme === REMOTE_SCHEME ? uri : undefined
@@ -201,16 +196,22 @@ export const ToolCallCard = memo(function ToolCallCard({
 
   const diffs = hasDiffs && (
     <div className={styles['toolCallDiffs']}>
-      {call.diffs.map((d, i) => (
-        <InlineDiffPreview
-          key={`${d.path}-${i}`}
-          path={d.path}
-          oldText={d.oldText}
-          newText={d.newText}
-          onOpen={() => openDiff(d)}
-          onOpenPath={() => openFilePath(d.path)}
-        />
-      ))}
+      {call.diffs.map((d, i) => {
+        // Stamped onto the path button as `data-uri` so the chat context menu's
+        // Copy Path works on a diff without this component knowing about menus.
+        const uri = toolCallPathUriString(d.path, workspaceFolder)
+        return (
+          <InlineDiffPreview
+            key={`${d.path}-${i}`}
+            path={d.path}
+            oldText={d.oldText}
+            newText={d.newText}
+            {...(uri !== undefined ? { uri } : {})}
+            onOpen={() => openDiff(d)}
+            onOpenPath={() => openFilePath(d.path)}
+          />
+        )
+      })}
     </div>
   )
 
@@ -222,6 +223,8 @@ export const ToolCallCard = memo(function ToolCallCard({
     <ToolCallLocations
       locations={call.locations}
       onOpen={(loc: AcpToolCallLocation) => openFilePath(loc.path, loc.line)}
+      // Stamped as `data-uri` on each row (Copy Path from the chat context menu).
+      resolveUri={(path) => toolCallPathUriString(path, workspaceFolder)}
     />
   )
 
@@ -370,7 +373,7 @@ export const ToolCallCard = memo(function ToolCallCard({
   // columns out of line with every neighbouring card. Inline costs nothing when
   // absent and keeps the trailing columns where the other cards put them.
   const createdUri =
-    createdPath !== undefined ? diffUri(createdPath, workspaceService?.current?.folder) : undefined
+    createdPath !== undefined ? toolCallPathUri(createdPath, workspaceFolder) : undefined
   const previewable =
     createdUri !== undefined && previewLanguageForResource(createdUri) !== undefined
   const readLabel = previewable

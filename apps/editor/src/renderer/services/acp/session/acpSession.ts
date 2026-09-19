@@ -184,6 +184,7 @@ export {
   hasVisibleMessageContent,
   isBlankContentBlock,
   splitToolCallContent,
+  subAgentTranscriptToText,
   timelineItemToText,
   toolCallToText,
 } from './acpSessionContent.js'

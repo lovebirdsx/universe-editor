@@ -389,6 +389,7 @@ function makeHandleRef(): { current: WidgetHandle } {
       isSlotCollapsed: () => false,
       onDidChangeCollapse: () => ({ dispose: () => {} }),
       toggleSlotCollapse: () => {},
+      setSlotCollapsed: () => {},
       popoverSelectNext: () => {},
       popoverSelectPrev: () => {},
       popoverAccept: () => {},
