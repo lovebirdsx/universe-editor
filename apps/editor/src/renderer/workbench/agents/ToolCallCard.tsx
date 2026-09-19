@@ -29,11 +29,7 @@ import type {
   AcpToolCallLocation,
   IAcpSession,
 } from '../../services/acp/session/acpSessionService.js'
-import {
-  firstLineSummary,
-  hasVisibleMessageContent,
-  memoryTrimmedNotice,
-} from '../../services/acp/session/acpSession.js'
+import { firstLineSummary, memoryTrimmedNotice } from '../../services/acp/session/acpSession.js'
 import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
 import { useMarkdownFileLink } from '../markdown/useMarkdownFileLink.js'
 import { previewLanguageForResource } from '../../services/resourcePreview/resourcePreviewSupport.js'
@@ -57,7 +53,7 @@ import {
 import { roleIcon, toolCallIcon } from './timelineIcons.js'
 import { buildStickyKey } from './stickyScroll.js'
 import { toolCallPathUri, toolCallPathUriString } from './toolCallPaths.js'
-import { resolveCollapsed, type CollapseState } from './timelineCollapse.js'
+import { isMessageRendered, resolveCollapsed, type CollapseState } from './timelineCollapse.js'
 import styles from './agents.module.css'
 
 /** Config key controlling which MCP-card sections start expanded. */
@@ -525,7 +521,7 @@ function SubMessage({
   const [internalCollapsed, setInternalCollapsed] = useState(false)
   // Drop settled empty sub messages (no visible content) like the main timeline
   // does — a card with just an icon and no body would read as a rendering glitch.
-  if (message.role !== 'user' && !hasVisibleMessageContent(message.blocks)) {
+  if (!isMessageRendered(message, true)) {
     return null
   }
   const collapsed = controlled ? collapsedProp : internalCollapsed

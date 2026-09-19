@@ -8,18 +8,23 @@ import { describe, expect, it } from 'vitest'
 import type { CollapseMode } from '../../../services/acp/session/acpChatViewStateCache.js'
 import type {
   AcpChildItem,
+  AcpMessage,
   AcpToolCall,
   TimelineItem,
 } from '../../../services/acp/session/acpSession.js'
 import {
+  collectTimelineRows,
   defaultCollapsed,
   foldedAncestorKeys,
+  isCollapsibleItem,
+  isMessageRendered,
   isSubagentCard,
   isSubagentSlot,
   nextCollapseMode,
   resolveCollapsed,
   subtreeCardKeys,
   visibleFocusKey,
+  type CollapseState,
 } from '../timelineCollapse.js'
 
 function makeCall(overrides: Partial<AcpToolCall>): AcpToolCall {
@@ -104,6 +109,14 @@ const taskCard = makeCall({
   id: 'task',
   kind: 'other',
   children: [childMessage('sm1'), nestedTask('sub', [childMessage('sm2')])],
+})
+
+// Same shape as `childMessage`, but with content: an empty message draws no row
+// at all, so the visible-row fixtures need one that does.
+const visibleChild = (id: string): AcpChildItem => ({
+  kind: 'message',
+  id,
+  message: { id, role: 'agent', text: id, blocks: [{ type: 'text', text: id }], streaming: false },
 })
 
 const subAgentTimeline: readonly TimelineItem[] = [
@@ -312,5 +325,162 @@ describe('subtreeCardKeys', () => {
     expect(subtreeCardKeys(subAgentTimeline, 'p:plan')).toEqual([])
     expect(subtreeCardKeys(subAgentTimeline, 't:gone')).toEqual([])
     expect(subtreeCardKeys(subAgentTimeline, 't:task/m:gone')).toEqual([])
+  })
+})
+
+describe('isCollapsibleItem', () => {
+  it('folds message and tool-call cards', () => {
+    expect(isCollapsibleItem(agentResult)).toBe(true)
+    expect(isCollapsibleItem(visibleChild('sm1'))).toBe(true)
+  })
+
+  it('leaves the single-line status cards out', () => {
+    for (const kind of ['compaction', 'resurrection'] as const) {
+      const item = { kind, id: kind, [kind]: {} } as unknown as TimelineItem
+      expect(isCollapsibleItem(item)).toBe(false)
+    }
+  })
+})
+
+describe('isMessageRendered', () => {
+  const message = (blocks: AcpMessage['blocks'], streaming: boolean): AcpMessage => ({
+    id: 'm',
+    role: 'agent',
+    text: 'm',
+    blocks,
+    streaming,
+  })
+  const text: AcpMessage['blocks'] = [{ type: 'text', text: 'visible' }]
+
+  it('drops a settled message with no visible content at any depth', () => {
+    expect(isMessageRendered(message([], false), false)).toBe(false)
+    expect(isMessageRendered(message([], false), true)).toBe(false)
+  })
+
+  it('keeps a streaming top-level card so its caret still shows', () => {
+    expect(isMessageRendered(message([], true), false)).toBe(true)
+  })
+
+  it('has no such exception inside a sub-agent card — no caret is drawn there', () => {
+    expect(isMessageRendered(message([], true), true)).toBe(false)
+  })
+
+  it('keeps user messages and any message with visible content', () => {
+    expect(isMessageRendered({ ...message([], false), role: 'user' }, true)).toBe(true)
+    expect(isMessageRendered(message(text, false), true)).toBe(true)
+  })
+})
+
+describe('collectTimelineRows', () => {
+  // A task card holding a rendered message, an empty one, and a nested task card
+  // — every card folded unless an override says otherwise.
+  const rowsTimeline: readonly TimelineItem[] = [
+    {
+      kind: 'message',
+      id: 'u',
+      message: {
+        id: 'u',
+        role: 'user',
+        text: 'hi',
+        blocks: [{ type: 'text', text: 'hi' }],
+        streaming: false,
+      },
+    },
+    toolCallItem(
+      makeCall({
+        id: 'task',
+        kind: 'other',
+        children: [
+          visibleChild('sm1'),
+          childMessage('sm2'),
+          nestedTask('sub', [visibleChild('sm3')]),
+        ],
+      }),
+    ),
+    {
+      kind: 'message',
+      id: 'tail',
+      message: {
+        id: 'tail',
+        role: 'agent',
+        text: 'tail',
+        blocks: [{ type: 'text', text: 'tail' }],
+        streaming: false,
+      },
+    },
+  ]
+  const folded = collapseState('default')
+  const keys = (state: CollapseState): string[] =>
+    collectTimelineRows(rowsTimeline, state).map((row) => row.key)
+
+  it('lists the top-level slots in order while every card stays folded', () => {
+    expect(keys(folded)).toEqual(['m:u', 't:task', 'm:tail'])
+    expect(collectTimelineRows(rowsTimeline, folded).every((row) => row.rendered)).toBe(true)
+  })
+
+  it('splices a folded card’s children in right after its own row', () => {
+    // The task card itself opens by designation — a top-level sub-agent slot
+    // reads the single-slot pointer, never an override. The nested card inside
+    // it is an ordinary card, so that one takes an override.
+    const state = collapseState('default', [['t:task/t:sub', false]], 't:task')
+    expect(keys(state)).toEqual([
+      'm:u',
+      't:task',
+      't:task/m:sm1',
+      't:task/m:sm2',
+      't:task/t:sub',
+      't:task/t:sub/m:sm3',
+      'm:tail',
+    ])
+  })
+
+  it('reports the nesting depth of every row', () => {
+    const state = collapseState('default', [], 't:task')
+    expect(collectTimelineRows(rowsTimeline, state)).toEqual([
+      { key: 'm:u', depth: 0, rendered: true },
+      { key: 't:task', depth: 0, rendered: true },
+      { key: 't:task/m:sm1', depth: 1, rendered: true },
+      { key: 't:task/m:sm2', depth: 1, rendered: false },
+      { key: 't:task/t:sub', depth: 1, rendered: true },
+      { key: 'm:tail', depth: 0, rendered: true },
+    ])
+  })
+
+  // The row stays in the sequence so it can hold the focus key; the flag is what
+  // keeps the keyboard off it.
+  it('keeps a child that draws nothing, flagged as not rendered', () => {
+    const state = collapseState('default', [], 't:task')
+    const row = collectTimelineRows(rowsTimeline, state).find((it) => it.key === 't:task/m:sm2')
+    expect(row?.rendered).toBe(false)
+  })
+
+  it('flags a settled top-level message with no content too', () => {
+    const state = collapseState('default')
+    const blank: readonly TimelineItem[] = [
+      {
+        kind: 'message',
+        id: 'e',
+        message: { id: 'e', role: 'agent', text: '', blocks: [], streaming: false },
+      },
+    ]
+    expect(collectTimelineRows(blank, state)).toEqual([{ key: 'm:e', depth: 0, rendered: false }])
+  })
+
+  it('splices the pinned plan bar in after its anchor row', () => {
+    const rows = collectTimelineRows(rowsTimeline, folded, { key: 'p:plan', afterKey: 'm:u' })
+    expect(rows.map((row) => row.key)).toEqual(['m:u', 'p:plan', 't:task', 'm:tail'])
+    expect(rows[1]).toEqual({ key: 'p:plan', depth: 0, rendered: true })
+  })
+
+  it('prepends the pinned row when the anchor is missing', () => {
+    expect(keys(folded)).not.toContain('p:plan')
+    const rows = collectTimelineRows(rowsTimeline, folded, { key: 'p:plan', afterKey: null })
+    expect(rows.map((row) => row.key)).toEqual(['p:plan', 'm:u', 't:task', 'm:tail'])
+    const stale = collectTimelineRows(rowsTimeline, folded, { key: 'p:plan', afterKey: 'm:gone' })
+    expect(stale.map((row) => row.key)).toEqual(['p:plan', 'm:u', 't:task', 'm:tail'])
+  })
+
+  it('returns an empty sequence for an empty timeline', () => {
+    expect(collectTimelineRows([], folded)).toEqual([])
   })
 })

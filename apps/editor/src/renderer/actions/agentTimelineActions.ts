@@ -45,9 +45,10 @@ import {
 } from './_agentShared.js'
 
 // ---------------------------------------------------------------------------
-// Timeline keyboard navigation (Alt+J / Alt+K, vim-style; Alt+H / Alt+L cross
-// nesting levels). Movement is level-locked: J/K never descend into sub-agent
-// timelines on their own — that takes Alt+L, and Alt+H ascends back out.
+// Timeline keyboard navigation (Alt+J / Alt+K, vim-style; Alt+H / Alt+L the
+// tree's Left / Right arrow). Movement walks the visible rows — a step off an
+// expanded card lands on its first child, exactly like the Explorer tree — while
+// Alt+H/L fold and unfold the focused card before stepping out or in.
 // Targets the focused AcpChatWidget via IAcpChatWidgetService. Gated by
 // `acpChatFocused`, which the widget service toggles based on real DOM focus.
 // ---------------------------------------------------------------------------
@@ -164,18 +165,18 @@ export class FocusBottomAcpTimelineAction extends Action2 {
   }
 }
 
-// Level-locked navigation: Alt+J/K stay within the current nesting level; these
-// two cross levels explicitly — Alt+L descends into a sub-agent timeline (or
-// expands the folded card first), Alt+H ascends back to the parent card. Both
-// are also offered on the card context menu (the menu cannot answer "which
-// level am I on", so it gates on the card shape instead: a card with children
-// can be entered, a nested card can be left).
+// The tree's Left / Right arrow: Alt+L unfolds the focused card in place (a
+// second press then steps into its first child), Alt+H folds it in place (a
+// second press then steps out to the parent card). Both are also offered on the
+// card context menu (the menu cannot answer "which level am I on", so it gates
+// on the card shape instead: a card with children can be entered, a nested card
+// can be left).
 export class FocusDeeperAcpTimelineItemAction extends Action2 {
   static readonly ID = 'workbench.action.agent.focusDeeperTimelineItem'
   constructor() {
     super({
       id: FocusDeeperAcpTimelineItemAction.ID,
-      title: localize2('action.agent.focusDeeperTimelineItem', 'Focus Into Sub-Agent Timeline'),
+      title: localize2('action.agent.focusDeeperTimelineItem', 'Unfold Card or Step Into It'),
       category: CATEGORY,
       icon: 'arrow-right',
       keybinding: { primary: 'alt+l', when: ACP_NAV_WHEN },
@@ -202,7 +203,7 @@ export class FocusOuterAcpTimelineItemAction extends Action2 {
   constructor() {
     super({
       id: FocusOuterAcpTimelineItemAction.ID,
-      title: localize2('action.agent.focusOuterTimelineItem', 'Focus Parent Timeline Item'),
+      title: localize2('action.agent.focusOuterTimelineItem', 'Fold Card or Step Out'),
       category: CATEGORY,
       icon: 'arrow-left',
       keybinding: { primary: 'alt+h', when: ACP_NAV_WHEN },

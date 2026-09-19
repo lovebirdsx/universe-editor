@@ -46,7 +46,6 @@ import {
 } from '../../services/acp/session/acpSessionService.js'
 import {
   firstLineSummary,
-  hasVisibleMessageContent,
   memoryTrimmedNotice,
   timelineItemToText,
 } from '../../services/acp/session/acpSession.js'
@@ -92,14 +91,17 @@ import { roleIcon } from './timelineIcons.js'
 import { UserMessageItem } from './UserMessageItem.js'
 import { AgentChatContextMenu, type AgentChatContextMenuState } from './AgentChatContextMenu.js'
 import { StickyScrollOverlay } from './StickyScrollOverlay.js'
-import { findByStickyKey, itemSlotKey, PLAN_SLOT_KEY } from './stickyScroll.js'
+import { buildStickyKey, findByStickyKey, itemSlotKey, PLAN_SLOT_KEY } from './stickyScroll.js'
 import {
   AcpSessionOutlineRegistry,
   type IAcpSessionOutlineController,
 } from '../../services/acp/session/acpSessionOutlineRegistry.js'
 import { ISessionBookmarkService } from '../../services/acp/session/sessionBookmarkService.js'
 import {
+  collectTimelineRows,
   foldedAncestorKeys,
+  isCollapsibleItem,
+  isMessageRendered,
   isSubagentSlot,
   resolveCollapsed,
   visibleFocusKey,
@@ -194,10 +196,12 @@ interface CollapseBridge {
 
 /** One-way route into StickyPlanBar's self-owned collapse state. The plan lives
  *  on `session.plan`, outside the timeline, so ChatScroll's shared override
- *  store can't reach it; Alt+F on the focused plan bar goes through here.
+ *  store can't reach it; Alt+F (toggle) and Alt+H/L (idempotent set) on the
+ *  focused plan bar go through here.
  *  Assigned during the bar's render (same pattern as the bridges above). */
 export interface PlanBridge {
   toggle: () => void
+  setCollapsed: (collapsed: boolean) => void
 }
 
 // Never a module-level singleton: child effects write real methods onto the
@@ -343,7 +347,7 @@ function ChatSessionBody({
   // (planCollapsedCache), and Alt+F reaches it through this bridge.
   const planBridgeRef = useRef<PlanBridge | null>(null)
   if (planBridgeRef.current === null) {
-    planBridgeRef.current = { toggle: noop }
+    planBridgeRef.current = { toggle: noop, setCollapsed: noop }
   }
   const planBridge = planBridgeRef.current
 
@@ -1292,8 +1296,37 @@ function ChatScroll({
     return () => observer.disconnect()
   }, [virtualize, hasTimelineContent, scrollToBottomStable])
 
+  // Writes a per-item collapse override. Idempotent on purpose: the keyboard's
+  // Alt+H/L already know the state they want, so they never read the resolved
+  // value back — a lagging collapse ref can't flip them the wrong way.
+  const applyCollapse = useCallback((key: string, collapsed: boolean) => {
+    setOverrides((prev) => {
+      const next = new Map(prev)
+      next.set(key, collapsed)
+      return next
+    })
+  }, [])
+
+  // Deterministic fold write for one card — the shared path behind Alt+H/L and
+  // the context menu's "Collapse Card" rows, both of which know the state they
+  // want instead of flipping. A top-level sub-agent card's fold state *is* the
+  // single-slot designation, not an override: opening one closes whichever card
+  // held it before, and an override written for it would be ignored on read.
+  const setCardCollapsed = useCallback(
+    (key: string, collapsed: boolean) => {
+      const item = findByStickyKey(timelineRef.current, key)
+      if (item === undefined) return
+      if (isSubagentSlot(key, item)) {
+        setOpenSubagentKey((prev) => (collapsed ? (prev === key ? null : prev) : key))
+        return
+      }
+      applyCollapse(key, collapsed)
+    },
+    [applyCollapse],
+  )
+
   // Stable across renders (reads refs only) so passing it to the memoized
-  // TimelineSlot does not bust memo. Toggles the per-item collapse override.
+  // TimelineSlot does not bust memo. Toggles the fold state of one card.
   const handleToggleCollapse = useCallback(
     (key: string) => {
       // The pinned plan bar owns its collapse state (it has no timeline item
@@ -1304,20 +1337,9 @@ function ChatScroll({
       }
       const item = findByStickyKey(timelineRef.current, key)
       if (!item) return
-      // A sub-agent card's fold state *is* the designation, not an override:
-      // opening one closes whichever card held it before.
-      if (isSubagentSlot(key, item)) {
-        setOpenSubagentKey((prev) => (prev === key ? null : key))
-        return
-      }
-      const current = resolveCollapsed(key, item, collapseRef.current)
-      setOverrides((prev) => {
-        const next = new Map(prev)
-        next.set(key, !current)
-        return next
-      })
+      setCardCollapsed(key, !resolveCollapsed(key, item, collapseRef.current))
     },
-    [planBridge],
+    [planBridge, setCardCollapsed],
   )
 
   // Jump to a (possibly nested) card's top — from its pinned sticky header or from
@@ -1502,98 +1524,127 @@ function ChatScroll({
       // message is sliced out of displayTimeline because the sticky bar above the
       // scroll container renders it — but it must stay keyboard-reachable.
       const list = timelineRef.current
+      const collapse = collapseRef.current
       const current = focusedKeyRef.current
-      // Level-locked navigation: a composite (sub-agent) focus steps within its
-      // sibling children, top-level focus steps the top-level sequence —
-      // Alt+J/K never descends on its own; crossing levels is moveLevel's job.
-      // A stale composite key (parent gone) falls back to the top-level sequence.
-      const parentKey = current !== null && current.includes('/') ? parentKeyOf(current) : null
-      const siblingKeys = parentKey === null ? [] : collectChildKeys(list, parentKey)
-      const topLevel = siblingKeys.length === 0
-      const keys = topLevel ? collectNavigableKeys(list) : siblingKeys
-      // The pinned plan bar likewise renders outside the scroll container; it
-      // joins the top-level sequence right after the first user message,
-      // matching the visual stacking order of the bars above the container.
-      if (topLevel && planKeyRef.current !== null) {
-        const firstUser = list.findIndex(
-          (it) => it.kind === 'message' && it.message.role === 'user',
-        )
-        keys.splice(firstUser >= 0 ? firstUser + 1 : 0, 0, PLAN_SLOT_KEY)
+      // Visible-row navigation, the same shape as the Explorer tree: a step off
+      // an expanded card lands on its first child, and a step past its last child
+      // continues at the next top-level item. A focus hidden by a fold converges
+      // to its nearest visible ancestor first; a key with no row left at all
+      // restarts the walk — `next` from the top, `prev` from the newest row. The
+      // Explorer sends both to index 0; a chat's tail is the useful end here.
+      // The pinned plan bar renders outside the scroll container too, so it joins
+      // the sequence right after the first user message — the visual stacking
+      // order of the bars above the container.
+      const firstUser = list.find((it) => it.kind === 'message' && it.message.role === 'user')
+      const rows = collectTimelineRows(
+        list,
+        collapse,
+        planKeyRef.current === null
+          ? undefined
+          : {
+              key: PLAN_SLOT_KEY,
+              afterKey: firstUser === undefined ? null : itemSlotKey(firstUser),
+            },
+      )
+      if (rows.length === 0) return
+      const visible = current === null ? null : visibleFocusKey(list, current, collapse)
+      const anchor = visible === null ? -1 : rows.findIndex((row) => row.key === visible)
+      // Walk from a position to the first row the user can actually see: the
+      // anchor may be a card that stopped drawing (a message that settled empty
+      // while focused), which must not turn a step into a jump to the far end.
+      const renderedFrom = (start: number, delta: 1 | -1): number => {
+        for (let i = start; i >= 0 && i < rows.length; i += delta) {
+          if (rows[i]?.rendered === true) return i
+        }
+        return -1
       }
-      if (keys.length === 0) return
+      const lastRendered = renderedFrom(rows.length - 1, -1)
       let nextIndex: number
       if (direction === 'first') {
-        nextIndex = 0
+        nextIndex = renderedFrom(0, 1)
       } else if (direction === 'last') {
-        nextIndex = keys.length - 1
-      } else if (current === null) {
-        nextIndex = direction === 'next' ? 0 : keys.length - 1
+        nextIndex = lastRendered
+      } else if (anchor === -1) {
+        nextIndex = direction === 'next' ? renderedFrom(0, 1) : lastRendered
+      } else if (direction === 'next') {
+        nextIndex = renderedFrom(anchor + 1, 1)
       } else {
-        const idx = keys.indexOf(current)
-        if (idx === -1) {
-          nextIndex = direction === 'next' ? 0 : keys.length - 1
-        } else if (direction === 'next') {
-          nextIndex = Math.min(idx + 1, keys.length - 1)
-        } else {
-          nextIndex = Math.max(idx - 1, 0)
-        }
+        nextIndex = renderedFrom(anchor - 1, -1)
       }
-      const nextKey = keys[nextIndex]
-      if (nextKey === undefined) return
-      // The chat-wide scroll extremes only belong to the top-level sequence:
-      // inside a sub-agent timeline first/last reveal like any sibling move —
-      // scrolling the whole chat to its top/bottom would lose the sub-timeline.
+      const next = rows[nextIndex]
+      if (next === undefined) return
+      const topLevel = next.depth === 0
+      // 'last' on a top-level row means "follow the newest content from here on";
+      // a nested target (an expanded sub-agent's child) only reveals, since
+      // sticking the whole chat to its bottom would scroll the sub-timeline away.
       stickRef.current = topLevel && direction === 'last'
       const container = containerRef.current
-      const topSegment = nextKey.split('/')[0] ?? nextKey
+      const topSegment = next.key.split('/')[0] ?? next.key
       const displayIndex = displayTimelineRef.current.findIndex((it) => slotKey(it) === topSegment)
-      // The first user message lives in the always-visible sticky bar above the
-      // container (displayIndex === -1); revealing it just means scrolling to top.
+      // The first user message and the plan bar live in the always-visible bars
+      // above the container (displayIndex === -1); revealing one means scrolling
+      // to top, which is where the first row sits by definition anyway.
       if (displayIndex === -1 || (topLevel && direction === 'first')) {
-        setFocusedKey(nextKey)
-        focusedKeyRef.current = nextKey
+        setFocusedKey(next.key)
+        focusedKeyRef.current = next.key
         focusTimeline()
         if (container) container.scrollTop = 0
         persist()
         return
       }
       if (topLevel && direction === 'last') {
-        setFocusedKey(nextKey)
-        focusedKeyRef.current = nextKey
+        setFocusedKey(next.key)
+        focusedKeyRef.current = next.key
         focusTimeline()
         scrollToBottomStable()
         persist()
         return
       }
-      focusAndReveal(nextKey)
+      focusAndReveal(next.key)
     }
     handle.moveLevel = (direction) => {
       const current = focusedKeyRef.current
-      if (current === null || current === PLAN_SLOT_KEY) return
+      if (current === null) return
+      // The plan bar keeps its fold state outside the override store — fold and
+      // unfold it through its bridge, like the chevron and Alt+F do.
+      if (current === PLAN_SLOT_KEY) {
+        planBridge.setCollapsed(direction === 'out')
+        return
+      }
+      const item = findByStickyKey(timelineRef.current, current)
+      if (!item) return
+      const collapsible = isCollapsibleItem(item)
+      const collapsed = resolveCollapsed(current, item, collapseRef.current)
       if (direction === 'out') {
-        // Back to the parent card's key. Every ancestor is expanded (folding
-        // one converges the focus to a visible ancestor), so the parent row is
-        // mounted and the reveal lands on live DOM.
+        // Fold the card itself first, step out to the parent only once it is
+        // already folded — the Explorer's Left arrow. Every ancestor is expanded
+        // while focus sits inside it (folding one converges the focus), so the
+        // parent row is mounted and the reveal lands on live DOM.
+        if (collapsible && !collapsed) {
+          setCardCollapsed(current, true)
+          return
+        }
         if (!current.includes('/')) return
         stickRef.current = false
         focusAndReveal(parentKeyOf(current))
         return
       }
-      // Into a sub-agent timeline: only a tool call with children can be
-      // entered. A collapsed card expands in place instead (pressing Alt+L
-      // again then steps in), matching VSCode tree semantics.
-      const item = findByStickyKey(timelineRef.current, current)
-      if (!item || item.kind !== 'toolCall') return
-      const children = item.call.children
-      if (children === undefined || children.length === 0) return
-      if (resolveCollapsed(current, item, collapseRef.current)) {
-        handleToggleCollapse(current)
+      // Unfold in place first, so a folded card can be reopened from the keyboard
+      // (a long message has no children to step into, yet Alt+H folds it). Only
+      // then does the next Alt+L descend into the first child.
+      if (collapsible && collapsed) {
+        setCardCollapsed(current, false)
         return
       }
-      const first = children[0]
+      if (item.kind !== 'toolCall') return
+      // The first child that draws a row: stepping onto a child the card drops
+      // (an empty settled sub message) would leave the focus ring nowhere.
+      const first = (item.call.children ?? []).find(
+        (child) => child.kind !== 'message' || isMessageRendered(child.message, true),
+      )
       if (first === undefined) return
       stickRef.current = false
-      focusAndReveal(`${current}/${itemSlotKey(first)}`)
+      focusAndReveal(buildStickyKey(current, first))
     }
     handle.scrollTimeline = (target) => {
       const el = containerRef.current
@@ -1632,9 +1683,22 @@ function ChatScroll({
     // can name it (its collapse goes through the chevron / Alt+F).
     handle.setSlotCollapsed = (next) => {
       if (next.size === 0) return
+      // A top-level sub-agent card in the batch is routed to the designation
+      // instead (see `setCardCollapsed`); the rest fold in one state update, so
+      // "Collapse Card and Children" still costs one render and one persist.
+      const pending = new Map<string, boolean>()
+      for (const [key, collapsed] of next) {
+        const item = findByStickyKey(timelineRef.current, key)
+        if (item !== undefined && isSubagentSlot(key, item)) {
+          setCardCollapsed(key, collapsed)
+          continue
+        }
+        pending.set(key, collapsed)
+      }
+      if (pending.size === 0) return
       setOverrides((prev) => {
         const merged = new Map(prev)
-        for (const [key, collapsed] of next) merged.set(key, collapsed)
+        for (const [key, collapsed] of pending) merged.set(key, collapsed)
         return merged
       })
     }
@@ -1714,7 +1778,16 @@ function ChatScroll({
       handle.getFocusedText = () => undefined
       handle.setFocusedKey = noop
     }
-  }, [handleRef, focusTimeline, handleToggleCollapse, persist, scrollToBottomStable, session])
+  }, [
+    handleRef,
+    setCardCollapsed,
+    planBridge,
+    focusTimeline,
+    handleToggleCollapse,
+    persist,
+    scrollToBottomStable,
+    session,
+  ])
 
   // Find commands bind separately: the callbacks come from useChatFind and are
   // stable, so this effect only re-runs if one identity actually changes — it
@@ -2012,7 +2085,7 @@ const TimelineSlot = memo(function TimelineSlot({
       // Drop settled messages that render no visible content (e.g. an agent's
       // empty/whitespace thought turn-marker). User messages and the streaming
       // first frame — which shows the caret before its first chunk lands — stay.
-      if (!m.streaming && m.role !== 'user' && !hasVisibleMessageContent(m.blocks)) {
+      if (!isMessageRendered(m, false)) {
         return null
       }
       const showCaret = sessionRunning && m.streaming && !collapsed
@@ -2229,31 +2302,8 @@ function hasRenderableTimelineContent(timeline: readonly TimelineItem[]): boolea
     if (item.kind === 'toolCall') return true
     if (item.kind === 'compaction') return true
     if (item.kind === 'resurrection') return true
-    const message = item.message
-    return message.streaming || message.role === 'user' || hasVisibleMessageContent(message.blocks)
+    return isMessageRendered(item.message, false)
   })
-}
-
-// Level-locked keyboard navigation. Alt+J/K movement stays within one nesting
-// level: the top-level timeline sequence, or — while focus sits on a composite
-// (sub-agent) key — the sibling children of its parent card. Crossing levels is
-// explicit via moveLevel (Alt+L descends, Alt+H ascends); children never join
-// the top-level sequence on their own.
-
-// The top-level navigation sequence: slot keys in timeline order.
-function collectNavigableKeys(timeline: readonly TimelineItem[]): string[] {
-  return timeline.map((item) => itemSlotKey(item))
-}
-
-// The sibling sequence for a composite focus: its parent's children as
-// composite keys, in order. Returns [] when the parent is missing or not a
-// tool call (stale key) — the move handler then falls back to the top-level
-// sequence. When non-empty, every ancestor is expanded (folding would have
-// converged the focus), so the sequence matches the mounted DOM.
-function collectChildKeys(timeline: readonly TimelineItem[], parentKey: string): string[] {
-  const parent = findByStickyKey(timeline, parentKey)
-  if (!parent || parent.kind !== 'toolCall') return []
-  return (parent.call.children ?? []).map((child) => `${parentKey}/${itemSlotKey(child)}`)
 }
 
 // `t:p/m:c` → `t:p`; multi-level composites drop their last segment.

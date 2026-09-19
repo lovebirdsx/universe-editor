@@ -8,8 +8,8 @@
  *
  *  The bar is a keyboard-navigation stop (PLAN_SLOT_KEY, right after the first
  *  user message): it tracks ChatScroll's focused key through the widget handle
- *  exactly like StickyUserMessageBar, and Alt+F folds it through `planBridge`
- *  since ChatScroll's timeline-keyed override store can't reach it.
+ *  exactly like StickyUserMessageBar, and Alt+F / Alt+H / Alt+L fold it through
+ *  `planBridge` since ChatScroll's timeline-keyed override store can't reach it.
  *--------------------------------------------------------------------------------------------*/
 
 import { useEffect, useState, type MutableRefObject } from 'react'
@@ -52,15 +52,26 @@ export function StickyPlanBar({
   }, [handleRef])
 
   if (entries.length === 0) return null
-  const toggle = (): void =>
-    setCollapsed((v) => {
-      const next = !v
+  // The idempotent set is what Alt+H/L want; flipping reads the state from the
+  // updater so a stale render can't flip it back to where it already was.
+  const applyCollapsed = (next: boolean): void => {
+    setCollapsed(next)
+    planCollapsedCache.set(session.id, next)
+  }
+  const toggleCollapsed = (): void => {
+    setCollapsed((current) => {
+      const next = !current
       planCollapsedCache.set(session.id, next)
       return next
     })
+  }
   // Render-phase assignment (same pattern as ChatBody's bridges): the bar mounts
-  // before ChatScroll's handle-binding effect, so Alt+F must find this already.
-  if (planBridge) planBridge.toggle = toggle
+  // before ChatScroll's handle-binding effect, so Alt+F / Alt+H / Alt+L must find
+  // this already.
+  if (planBridge) {
+    planBridge.toggle = toggleCollapsed
+    planBridge.setCollapsed = applyCollapsed
+  }
   return (
     <ul
       className={styles['stickyPlanBar']}
@@ -71,7 +82,7 @@ export function StickyPlanBar({
       <PlanCard
         entries={entries}
         collapsed={collapsed}
-        onToggle={toggle}
+        onToggle={toggleCollapsed}
         rootProps={{
           // The focus ring goes on the card (inset from the chat edge), not the
           // full-width <ul> — same geometry as the sticky first-user bar.

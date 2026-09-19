@@ -53,12 +53,10 @@ test.describe('@p1 acp timeline context menu', () => {
     })
     await expect(page.getByRole('menuitem', { name: 'Expand Card and Children' })).toBeVisible()
     await expect(page.getByRole('menuitem', { name: 'Collapse Card and Children' })).toHaveCount(0)
-    // Descending is what the card offers; coming back up is not — it is a
-    // top-level card, and not a whole-file write either.
-    await expect(
-      page.getByRole('menuitem', { name: 'Focus Into Sub-Agent Timeline' }),
-    ).toBeVisible()
-    await expect(page.getByRole('menuitem', { name: 'Focus Parent Timeline Item' })).toHaveCount(0)
+    // Unfolding / descending is what the card offers; folding back out is not —
+    // it is a top-level card, and not a whole-file write either.
+    await expect(page.getByRole('menuitem', { name: 'Unfold Card or Step Into It' })).toBeVisible()
+    await expect(page.getByRole('menuitem', { name: 'Fold Card or Step Out' })).toHaveCount(0)
     await expect(page.getByRole('menuitem', { name: 'Open File' })).toHaveCount(0)
     await page.keyboard.press('Escape')
 
@@ -71,15 +69,13 @@ test.describe('@p1 acp timeline context menu', () => {
     const childHeader = childMessage.locator('> [data-testid="acp-collapsible-toggle"]')
     await expect(childHeader).toHaveAttribute('aria-expanded', 'true')
 
-    // 2b. The mirror image on a nested card: it can climb back out to its parent,
-    //     but it is not itself a sub-agent parent.
+    // 2b. The mirror image on a nested card: it can fold and step back out to its
+    //     parent, but it is not itself a sub-agent parent.
     await childHeader.click({ button: 'right' })
-    await expect(page.getByRole('menuitem', { name: 'Focus Parent Timeline Item' })).toBeVisible({
+    await expect(page.getByRole('menuitem', { name: 'Fold Card or Step Out' })).toBeVisible({
       timeout: 3000,
     })
-    await expect(page.getByRole('menuitem', { name: 'Focus Into Sub-Agent Timeline' })).toHaveCount(
-      0,
-    )
+    await expect(page.getByRole('menuitem', { name: 'Unfold Card or Step Into It' })).toHaveCount(0)
     await expect(page.getByRole('menuitem', { name: 'Copy Sub-Agent Transcript' })).toHaveCount(0)
     await page.keyboard.press('Escape')
 

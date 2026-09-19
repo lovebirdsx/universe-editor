@@ -1605,6 +1605,42 @@ describe('ChatBody — pinned plan bar keyboard navigation', () => {
     })
     expect(planExpanded()).toBe('true')
   })
+
+  it('Alt+H folds the focused plan bar, Alt+L unfolds it (tree Left/Right parity)', () => {
+    const { container, widgetRef } = renderChatWithWidget(
+      makeSession('s-plan-level', navItems, { plan: planEntries }),
+    )
+    const planExpanded = (): string | null =>
+      planCard(container).querySelector('button')!.getAttribute('aria-expanded')
+
+    act(() => {
+      widgetRef.current!.jumpToPlan()
+    })
+    expect(planExpanded()).toBe('true')
+
+    // Folding is idempotent — a second Alt+H must not flip it back open — and the
+    // focus stays on the bar, there being no parent above a pinned row.
+    act(() => {
+      widgetRef.current!.moveTimelineLevel('out')
+    })
+    expect(planExpanded()).toBe('false')
+    expect(planCard(container).className).toContain(focusedClass)
+    act(() => {
+      widgetRef.current!.moveTimelineLevel('out')
+    })
+    expect(planExpanded()).toBe('false')
+
+    act(() => {
+      widgetRef.current!.moveTimelineLevel('in')
+    })
+    expect(planExpanded()).toBe('true')
+
+    // Alt+F still toggles from there — both routes drive the same state.
+    act(() => {
+      widgetRef.current!.toggleCollapse()
+    })
+    expect(planExpanded()).toBe('false')
+  })
 })
 
 describe('ChatBody — empty session hint', () => {
@@ -2445,7 +2481,20 @@ describe('ChatBody — sub-agent keyboard navigation', () => {
     { kind: 'message', id: 'a', message: makeMessage('a', 'after task') },
   ]
 
-  it('Alt+J/K stays on the current level — children are skipped until Alt+L descends', () => {
+  const stickyEl = (container: HTMLElement, key: string): HTMLElement => {
+    const el = container.querySelector<HTMLElement>(`[data-sticky-key="${key}"]`)
+    if (!el) throw new Error(`no element for sticky key ${key}`)
+    return el
+  }
+  const toggleCard = (container: HTMLElement, key: string): void => {
+    act(() => {
+      fireEvent.click(
+        slotEl(container, key).querySelector('[data-testid="acp-collapsible-toggle"]')!,
+      )
+    })
+  }
+
+  it('Alt+J/K walk the visible rows — an expanded card descends into its children', () => {
     const { container, widgetRef } = renderChatWithWidget(
       makeSession(
         's-sub-nav',
@@ -2454,62 +2503,123 @@ describe('ChatBody — sub-agent keyboard navigation', () => {
     )
     toggleCard(container, 't:task')
     expect(container.querySelector('[data-testid="acp-subagent-timeline"]')).not.toBeNull()
+    const userBarCard = container.querySelector<HTMLElement>('[data-testid="acp-user-bar-card"]')!
 
     act(() => {
       fireEvent.click(slotEl(container, 't:task'))
     })
     expect(slotEl(container, 't:task').className).toContain(focusedClass)
 
-    // Alt+J skips the expanded children entirely — the next top-level item wins.
+    // Alt+J steps onto the first child of the expanded card, walks its siblings,
+    // then continues at the next top-level item — the Explorer tree's rows.
+    act(() => {
+      widgetRef.current!.moveTimeline('next')
+    })
+    expect(stickyEl(container, 't:task/m:sm1').className).toContain(focusedClass)
+    expect(slotEl(container, 't:task').className).not.toContain(focusedClass)
+    act(() => {
+      widgetRef.current!.moveTimeline('next')
+    })
+    expect(stickyEl(container, 't:task/m:sm2').className).toContain(focusedClass)
     act(() => {
       widgetRef.current!.moveTimeline('next')
     })
     expect(slotEl(container, 'm:a').className).toContain(focusedClass)
+    // Clamp at the bottom end of the sequence instead of escaping it.
+    act(() => {
+      widgetRef.current!.moveTimeline('next')
+    })
+    expect(slotEl(container, 'm:a').className).toContain(focusedClass)
+
+    // Back up: last child → first child → the parent card's own row (a stop of
+    // its own) → the sticky first-user bar, clamping there.
     act(() => {
       widgetRef.current!.moveTimeline('prev')
-    })
-    expect(slotEl(container, 't:task').className).toContain(focusedClass)
-
-    // Alt+L descends into the sub-agent timeline…
-    act(() => {
-      widgetRef.current!.moveTimelineLevel('in')
-    })
-    expect(stickyEl(container, 't:task/m:sm1').className).toContain(focusedClass)
-    expect(slotEl(container, 't:task').className).not.toContain(focusedClass)
-
-    // …and Alt+J/K now walk the sibling children, clamping at the ends.
-    act(() => {
-      widgetRef.current!.moveTimeline('next')
-    })
-    expect(stickyEl(container, 't:task/m:sm2').className).toContain(focusedClass)
-    act(() => {
-      widgetRef.current!.moveTimeline('next')
     })
     expect(stickyEl(container, 't:task/m:sm2').className).toContain(focusedClass)
     act(() => {
       widgetRef.current!.moveTimeline('prev')
     })
     expect(stickyEl(container, 't:task/m:sm1').className).toContain(focusedClass)
-    // Clamp at the top end of the sibling sequence — staying, not escaping.
     act(() => {
       widgetRef.current!.moveTimeline('prev')
     })
-    expect(stickyEl(container, 't:task/m:sm1').className).toContain(focusedClass)
+    expect(slotEl(container, 't:task').className).toContain(focusedClass)
+    act(() => {
+      widgetRef.current!.moveTimeline('prev')
+    })
+    expect(userBarCard.className).toContain(focusedClass)
+    act(() => {
+      widgetRef.current!.moveTimeline('prev')
+    })
+    expect(userBarCard.className).toContain(focusedClass)
+  })
 
-    // Alt+L on a leaf child is a no-op; Alt+H ascends back to the parent card.
+  it('Alt+H folds the focused card in place first, then steps out; Alt+L unfolds it again', () => {
+    const { container, widgetRef } = renderChatWithWidget(
+      makeSession('s-sub-fold-nav', navItems([childMessage('sm1', 'sub one')])),
+    )
+    toggleCard(container, 't:task')
+    act(() => {
+      fireEvent.click(slotEl(container, 't:task'))
+    })
+
+    // Expanded card: the first Alt+H folds it and keeps the focus on its header…
+    act(() => {
+      widgetRef.current!.moveTimelineLevel('out')
+    })
+    expect(slotEl(container, 't:task').className).toContain(focusedClass)
+    expect(container.querySelector('[data-testid="acp-subagent-timeline"]')).toBeNull()
+    // …only the second one steps out — there is no parent above the top level.
+    act(() => {
+      widgetRef.current!.moveTimelineLevel('out')
+    })
+    expect(slotEl(container, 't:task').className).toContain(focusedClass)
+
+    // Alt+L unfolds it in place, then a second Alt+L steps into the first child.
+    act(() => {
+      widgetRef.current!.moveTimelineLevel('in')
+    })
+    expect(slotEl(container, 't:task').className).toContain(focusedClass)
+    expect(container.querySelector('[data-testid="acp-subagent-timeline"]')).not.toBeNull()
     act(() => {
       widgetRef.current!.moveTimelineLevel('in')
     })
     expect(stickyEl(container, 't:task/m:sm1').className).toContain(focusedClass)
+
+    // A sub-agent message folds the same way — fold in place, then step out to
+    // the parent card.
+    act(() => {
+      widgetRef.current!.moveTimelineLevel('out')
+    })
+    expect(stickyEl(container, 't:task/m:sm1').className).toContain(focusedClass)
+    expect(
+      stickyEl(container, 't:task/m:sm1')
+        .querySelector('[data-testid="acp-collapsible-toggle"]')!
+        .getAttribute('aria-expanded'),
+    ).toBe('false')
     act(() => {
       widgetRef.current!.moveTimelineLevel('out')
     })
     expect(slotEl(container, 't:task').className).toContain(focusedClass)
-    // Alt+H at the top level is a no-op too.
+
+    // Alt+L reopens the folded message — without it, Alt+H would strand it folded.
+    const childToggle = (): HTMLElement =>
+      stickyEl(container, 't:task/m:sm1').querySelector<HTMLElement>(
+        '[data-testid="acp-collapsible-toggle"]',
+      )!
+    // Stepping in from the parent lands on the folded child without unfolding it…
     act(() => {
-      widgetRef.current!.moveTimelineLevel('out')
+      widgetRef.current!.moveTimelineLevel('in')
     })
-    expect(slotEl(container, 't:task').className).toContain(focusedClass)
+    expect(stickyEl(container, 't:task/m:sm1').className).toContain(focusedClass)
+    expect(childToggle().getAttribute('aria-expanded')).toBe('false')
+    // …and only the next Alt+L unfolds it in place.
+    act(() => {
+      widgetRef.current!.moveTimelineLevel('in')
+    })
+    expect(stickyEl(container, 't:task/m:sm1').className).toContain(focusedClass)
+    expect(childToggle().getAttribute('aria-expanded')).toBe('true')
   })
 
   it('Alt+L on a folded card expands it in place; a second Alt+L steps in', () => {
@@ -2537,7 +2647,149 @@ describe('ChatBody — sub-agent keyboard navigation', () => {
     expect(stickyEl(container, 't:task/m:sm1').className).toContain(focusedClass)
   })
 
-  it('skips the children of a collapsed task card', () => {
+  it('walks past a settled message that draws no row at all', () => {
+    const items: readonly TimelineItem[] = [
+      userItem('u', 'top question'),
+      {
+        kind: 'message',
+        id: 'empty',
+        message: { id: 'empty', role: 'agent', text: '', blocks: [], streaming: false },
+      },
+      { kind: 'message', id: 'a', message: makeMessage('a', 'answer one') },
+    ]
+    const { container, widgetRef } = renderChatWithWidget(makeSession('s-sub-empty', items))
+    // The slot renders nothing — a focus ring could never land on it.
+    expect(container.querySelector('[data-timeline-key="m:empty"]')).toBeNull()
+
+    act(() => {
+      fireEvent.click(slotEl(container, 'm:a'))
+    })
+    act(() => {
+      widgetRef.current!.moveTimeline('prev')
+    })
+    // The invisible row is skipped, so the sticky first-user bar is next up.
+    expect(
+      container.querySelector<HTMLElement>('[data-testid="acp-user-bar-card"]')!.className,
+    ).toContain(focusedClass)
+  })
+
+  it('steps off a row that stops drawing instead of jumping to the timeline top', () => {
+    const streaming: AcpMessage = {
+      id: 'pending',
+      role: 'agent',
+      text: '',
+      blocks: [],
+      streaming: true,
+    }
+    const items: readonly TimelineItem[] = [
+      userItem('u', 'top question'),
+      { kind: 'message', id: 'pending', message: streaming },
+      { kind: 'message', id: 'a', message: makeMessage('a', 'answer one') },
+    ]
+    const session = makeSession('s-sub-settle', items)
+    const { container, widgetRef } = renderChatWithWidget(session)
+    // An empty streaming card still draws a row (its caret), so it can hold focus…
+    act(() => {
+      fireEvent.click(slotEl(container, 'm:pending'))
+    })
+    expect(slotEl(container, 'm:pending').className).toContain(focusedClass)
+
+    // …then the turn settles with nothing to show and the row stops drawing.
+    act(() => {
+      ;(session.timeline as ReturnType<typeof observableValue<readonly TimelineItem[]>>).set(
+        [
+          items[0]!,
+          { kind: 'message', id: 'pending', message: { ...streaming, streaming: false } },
+          items[2]!,
+        ],
+        undefined,
+      )
+    })
+    expect(container.querySelector('[data-timeline-key="m:pending"]')).toBeNull()
+
+    // The focus key still sits on that card — a step must move one row on, not
+    // teleport to the end of the sequence.
+    act(() => {
+      widgetRef.current!.moveTimeline('next')
+    })
+    expect(slotEl(container, 'm:a').className).toContain(focusedClass)
+    act(() => {
+      widgetRef.current!.moveTimeline('prev')
+    })
+    expect(
+      container.querySelector<HTMLElement>('[data-testid="acp-user-bar-card"]')!.className,
+    ).toContain(focusedClass)
+  })
+
+  it('sticks to the bottom only when Alt+E lands on a top-level row', () => {
+    const items: readonly TimelineItem[] = [
+      userItem('u', 'top question'),
+      { kind: 'message', id: 'a', message: makeMessage('a', 'answer one') },
+      {
+        kind: 'toolCall',
+        id: 'task',
+        call: makeTaskCall('task', [childMessage('sm1', 'sub one')]),
+      },
+    ]
+    const { container, widgetRef } = renderChatWithWidget(makeSession('s-sub-stick', items))
+
+    // Folded, the trailing card is the last top-level row: "the newest content"
+    // means following it, as before.
+    act(() => {
+      widgetRef.current!.moveTimeline('last')
+    })
+    expect(slotEl(container, 't:task').className).toContain(focusedClass)
+    expect(AcpChatViewStateCache.load('s-sub-stick')?.stuck).toBe(true)
+
+    // Expanded, the last row is inside the card: reveal only — sticking the view
+    // to the bottom would scroll the sub-timeline the user is inspecting away.
+    toggleCard(container, 't:task')
+    act(() => {
+      widgetRef.current!.moveTimeline('last')
+    })
+    expect(stickyEl(container, 't:task/m:sm1').className).toContain(focusedClass)
+    expect(AcpChatViewStateCache.load('s-sub-stick')?.stuck).toBe(false)
+  })
+
+  it('steps into the first child that draws a row', () => {
+    const items: readonly TimelineItem[] = [
+      userItem('u', 'top question'),
+      {
+        kind: 'toolCall',
+        id: 'task',
+        call: makeTaskCall('task', [
+          {
+            kind: 'message',
+            id: 'blank',
+            message: { id: 'blank', role: 'agent', text: '', blocks: [], streaming: false },
+          },
+          childMessage('sm2', 'sub two'),
+        ]),
+      },
+    ]
+    const { container, widgetRef } = renderChatWithWidget(makeSession('s-sub-first', items))
+    toggleCard(container, 't:task')
+    act(() => {
+      fireEvent.click(slotEl(container, 't:task'))
+    })
+
+    // The blank first child draws nothing, so Alt+J lands on the next one…
+    act(() => {
+      widgetRef.current!.moveTimeline('next')
+    })
+    expect(stickyEl(container, 't:task/m:sm2').className).toContain(focusedClass)
+
+    // …and so does Alt+L stepping in from the parent card.
+    act(() => {
+      fireEvent.click(slotEl(container, 't:task'))
+    })
+    act(() => {
+      widgetRef.current!.moveTimelineLevel('in')
+    })
+    expect(stickyEl(container, 't:task/m:sm2').className).toContain(focusedClass)
+  })
+
+  it('leaves the children of a folded card out of the row walk', () => {
     const { container, widgetRef } = renderChatWithWidget(
       makeSession('s-sub-collapsed', navItems([childMessage('sm1', 'sub one')])),
     )
@@ -2557,7 +2809,7 @@ describe('ChatBody — sub-agent keyboard navigation', () => {
     expect(slotEl(container, 't:task').className).toContain(focusedClass)
   })
 
-  it('Alt+E/Alt+A operate within the current level', () => {
+  it('Alt+E/Alt+A land on the last/first visible row', () => {
     const items: readonly TimelineItem[] = [
       userItem('u', 'top question'),
       { kind: 'message', id: 'a', message: makeMessage('a', 'answer one') },
@@ -2571,28 +2823,26 @@ describe('ChatBody — sub-agent keyboard navigation', () => {
       },
     ]
     const { container, widgetRef } = renderChatWithWidget(makeSession('s-sub-last', items))
-    toggleCard(container, 't:task')
+    const userBarCard = container.querySelector<HTMLElement>('[data-testid="acp-user-bar-card"]')!
 
-    // Top-level last is the trailing task card itself — its children are no
-    // longer spliced into the sequence.
+    // Folded, the trailing task card is the last row on screen…
     act(() => {
       widgetRef.current!.moveTimeline('last')
     })
     expect(slotEl(container, 't:task').className).toContain(focusedClass)
 
-    // Descend, then first/last walk the sibling children instead.
-    act(() => {
-      widgetRef.current!.moveTimelineLevel('in')
-    })
-    expect(stickyEl(container, 't:task/m:sm1').className).toContain(focusedClass)
+    // …expanded, the last row is inside it.
+    toggleCard(container, 't:task')
     act(() => {
       widgetRef.current!.moveTimeline('last')
     })
     expect(stickyEl(container, 't:task/m:sm2').className).toContain(focusedClass)
+
+    // Alt+A reaches the sticky first-user bar from inside the sub-timeline too.
     act(() => {
       widgetRef.current!.moveTimeline('first')
     })
-    expect(stickyEl(container, 't:task/m:sm1').className).toContain(focusedClass)
+    expect(userBarCard.className).toContain(focusedClass)
   })
 
   it('copies the focused sub-agent message text', () => {

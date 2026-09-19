@@ -59,8 +59,10 @@ export interface AcpChatWidget {
   readonly sessionId?: string
   readonly container: HTMLElement
   moveTimeline(direction: AcpTimelineMoveDirection): void
-  /** Step across nesting levels (Alt+L / Alt+H): into a sub-agent timeline ('in'),
-   *  or back to its parent card ('out'). */
+  /** One nesting level step (Alt+L / Alt+H), the tree's Right/Left arrow: a
+   *  folded card unfolds in place first, and only then does 'in' step into the
+   *  first child; 'out' folds the card in place first, and only then steps back
+   *  to its parent card. */
   moveTimelineLevel(direction: AcpTimelineLevelDirection): void
   scrollTimeline(target: AcpTimelineScrollTarget): void
   /** Move keyboard focus into the prompt input. Returns whether focus landed. */

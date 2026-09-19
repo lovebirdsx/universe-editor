@@ -3,12 +3,19 @@
  *  Collapse resolution for timeline cards — shared by ChatBody (top-level slots)
  *  and ToolCallCard (nested sub-agent cards) so a single override store keyed by
  *  (possibly composite) sticky keys drives folding everywhere: chevron clicks,
- *  Alt+F, the sticky-scroll overlay, outline reveals, and persistence.
+ *  Alt+F, the sticky-scroll overlay, outline reveals, and persistence. Also owns
+ *  the derived view of what folding leaves on screen — the flattened row
+ *  sequence the keyboard navigation walks.
  *--------------------------------------------------------------------------------------------*/
 
 import type { CollapseMode } from '../../services/acp/session/acpChatViewStateCache.js'
-import type { AcpChildItem, TimelineItem } from '../../services/acp/session/acpSession.js'
-import { buildStickyKey, findByStickyKey } from './stickyScroll.js'
+import type {
+  AcpChildItem,
+  AcpMessage,
+  TimelineItem,
+} from '../../services/acp/session/acpSession.js'
+import { hasVisibleMessageContent } from '../../services/acp/session/acpSession.js'
+import { buildStickyKey, findByStickyKey, itemSlotKey } from './stickyScroll.js'
 import { createdFilePath } from './toolCallDisplay.js'
 
 export interface CollapseState {
@@ -46,12 +53,32 @@ export function isSubagentSlot(key: string, item: TimelineItem | AcpChildItem): 
   return !key.includes('/') && isSubagentCard(item)
 }
 
-// Per-kind default under the `default` mode: read/search tool calls start
-// collapsed, everything else (thought messages included) starts expanded. No
-// top-level sub-agent card ever reaches this — {@link resolveCollapsed} decides
-// those from the designation alone. A whole-file write (Write / add file) is an
-// `edit` card by shape but a new document by content — folded so it does not
-// flood the timeline; its header carries a preview / open affordance instead.
+/** Compaction / resurrection are single-line status cards drawn without a
+ *  chevron — Alt+H/L must step past them rather than fold them. */
+export function isCollapsibleItem(item: TimelineItem | AcpChildItem): boolean {
+  return item.kind !== 'compaction' && item.kind !== 'resurrection'
+}
+
+/**
+ * Whether a message draws a row at all — the two render sites drop a settled
+ * message with no visible content (an agent's empty/whitespace thought
+ * turn-marker). Mirrors them exactly: a top-level card keeps a streaming first
+ * frame so the caret shows before its first chunk lands, whereas a `nested`
+ * sub-agent message has no caret frame to keep.
+ */
+export function isMessageRendered(message: AcpMessage, nested: boolean): boolean {
+  if (message.role === 'user') return true
+  if (hasVisibleMessageContent(message.blocks)) return true
+  return !nested && message.streaming
+}
+
+// Per-kind default under the `default` mode: read/search / sub-agent-parent
+// tool calls start collapsed, everything else (thought messages included)
+// starts expanded. No top-level sub-agent card ever reaches this — {@link
+// resolveCollapsed} decides those from the designation alone. A whole-file
+// write (Write / add file) is an `edit` card by shape but a new document by
+// content — folded so it does not flood the timeline; its header carries a
+// preview / open affordance instead.
 export function defaultCollapsed(item: TimelineItem | AcpChildItem, mode: CollapseMode): boolean {
   if (mode === 'collapsed') return true
   if (mode === 'expanded') return false
@@ -178,4 +205,58 @@ export function visibleFocusKey(
     if (resolveCollapsed(prefix, item, state)) return prefix
   }
   return key
+}
+
+/** One row of the timeline, in the order it is stacked vertically. */
+export interface TimelineRow {
+  readonly key: string
+  /** 0 for a top-level slot, 1+ inside a sub-agent timeline. */
+  readonly depth: number
+  /** False for a card that draws nothing at all — a settled message with no
+   *  content. Its row still anchors the walk (it can hold the focus when it
+   *  stops drawing) but the keyboard steps over it, never onto it. */
+  readonly rendered: boolean
+}
+
+/** A row rendered outside the timeline (the pinned plan bar) to splice in. */
+export interface PinnedTimelineRow {
+  readonly key: string
+  /** Splice right after this key; `null` (or an anchor that is gone) prepends. */
+  readonly afterKey: string | null
+}
+
+/**
+ * The row sequence Alt+J/K walk — the timeline counterpart of the Explorer's
+ * `TreeModel.getVisibleNodes()`. A card's children follow its own row while it
+ * is expanded and vanish while it is folded (their DOM is unmounted too), so
+ * descending into a sub-agent timeline is an ordinary step rather than a
+ * separate command. Rows that draw nothing are kept — anchored, never stopped on
+ * — so a step off a card that just stopped drawing still moves one row.
+ */
+export function collectTimelineRows(
+  timeline: readonly TimelineItem[],
+  state: CollapseState,
+  pinned?: PinnedTimelineRow,
+): TimelineRow[] {
+  const rows: TimelineRow[] = []
+  const pushChild = (item: AcpChildItem, parentKey: string, depth: number): void => {
+    const rendered = item.kind !== 'message' || isMessageRendered(item.message, true)
+    const key = buildStickyKey(parentKey, item)
+    rows.push({ key, depth, rendered })
+    if (item.kind !== 'toolCall' || resolveCollapsed(key, item, state)) return
+    for (const child of item.call.children ?? []) pushChild(child, key, depth + 1)
+  }
+  for (const item of timeline) {
+    const rendered = item.kind !== 'message' || isMessageRendered(item.message, false)
+    const key = itemSlotKey(item)
+    rows.push({ key, depth: 0, rendered })
+    if (item.kind !== 'toolCall' || resolveCollapsed(key, item, state)) continue
+    for (const child of item.call.children ?? []) pushChild(child, key, 1)
+  }
+  if (pinned !== undefined) {
+    const anchor =
+      pinned.afterKey === null ? -1 : rows.findIndex((row) => row.key === pinned.afterKey)
+    rows.splice(anchor + 1, 0, { key: pinned.key, depth: 0, rendered: true })
+  }
+  return rows
 }
