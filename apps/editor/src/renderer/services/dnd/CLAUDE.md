@@ -25,7 +25,7 @@ universe-editor 的资源拖放统一成「**源端发布资源 URI → 目标�
     （按 uri.toString() 去重）
         ▼ 各落点拿到 URI[] 后自行决定：
   ├─ EditorGroupView（标签栏 + 编辑区）→ openDroppedResource：folder→新窗口 / file→openEditor
-  ├─ PromptInput（agent 输入框）       → toMentionName → 插入 @相对路径 mention
+  ├─ PromptInput（agent 输入框）       → toMentionName（基准=会话 scope）→ 插入 @相对路径 mention
   ├─ TerminalInstance                  → formatPathForTerminal → 粘贴路径
   └─ ExplorerView（文件夹）            → importDroppedFiles（导入/复制）
 ```
@@ -61,7 +61,7 @@ universe-editor 的资源拖放统一成「**源端发布资源 URI → 目标�
 ## 目标端：读取与落点
 
 `readDroppedResources(e)` 是所有落点的统一入口（OS 文件 + 应用内 uri-list，去重）。它之后各落点各自处理：
-- **toMentionName(uri, workspaceRoot?)**：工作区内 → 正斜杠相对路径；区外 / 无根 → `uri.fsPath`。**绝不返回 `file://`**。PromptInput 的 `@mention` 用它。
+- **toMentionName(uri, mentionRoot?)**：基准根之下 → 正斜杠相对路径；区外 / 无根 → `uri.fsPath`（远端为 path 段）。**绝不返回 `file://`**。PromptInput 的 `@mention`（picker 与拖入都走它）用它，第二参传 **session scope root**（`services/acp/sessionScope.ts` 的 `resolveSessionScopeRoot`，非 narrowed 会话即工作区根）——pill 的 label 会经 `refDisplay` 进 prompt 正文，而 agent 的 cwd 是 `session.cwd`，基准必须对齐。
 - **openDroppedResource(resource, {fileService, windowsService, editorResolverService, groupsService?, targetGroup?, notificationService?, logger?})**（`dnd/openDroppedResource.ts`）：`stat().isDirectory` → `windowsService.openWindow`（**新窗口，多文件夹开多窗**）；否则 `editorResolverService.openEditor`；无法 stat 的 URI 当文件。EditorGroupView 标签栏与编辑区共用。**返回 `boolean`**（成功打开=true）。**多 group 必传 `targetGroup` + `groupsService`**：`editorResolverService.openEditor` / `EditorService.openEditor` 永远操作 `activeGroup` 且按 activeGroup 去重"已打开"，所以落点 group ≠ activeGroup 时，不先 `activateGroup(targetGroup)` 就会 ① 文件开进活动 group（拖到右 group 却在左边打开）② 若文件已在活动 group 打开则整体 no-op（看似"判定已打开不再打开"，实为落点 group 未被激活）。见坑⑥。**打开失败会 `notificationService.notify` 出错原因 + `logger` 记录诊断**（openWindow/openEditor 抛错、stat 失败后 open 又失败=文件被移动/删除/无权限）；调用方（EditorGroupView）用 `useOptionalService` 取 `INotificationService`/`ILoggerService`（测试 DI 可不注册），`readDroppedResources` 返回空时（drop 里无 file 句柄且无 uri-list，如拖文本/图片 blob/浏览器链接）单独提示"不是可打开的文件或文件夹"。
 - **importDroppedResources(sources, destDir, fileService, dialogService, logger?)**（`dnd/importDroppedFiles.ts`）：Explorer 文件夹的落点——逐文件 `copy` 导入（同名先弹替换确认；落到自身目录 no-op）。**单个失败不中断整批**，末尾聚合弹一个错误框列出失败项（坑⑦）。`fileService.copy` 跨 scheme 已回退 `copyAcrossProviders`（`packages/platform/src/files/fileSystemProvider.ts`），所以 OS 文件拖进远端工作区文件夹、或本地↔远端互拖，导入直接可用。
 - **formatPathForTerminal(fsPath)**：含空格则加引号。

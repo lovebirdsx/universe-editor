@@ -4,7 +4,9 @@
 
 ## `@@`/`@#` 触发 SimpleFileDialog 选文件/文件夹作为 @提及
 
-纯函数 `promptMentions.ts` 的 `detectFilePickerTrigger(text, caret)` 识别刚敲下的 `@@`(file)/`@#`(folder)，边界规则同 `extractMentionQuery`（`@` 须在行首或空白后，光标须紧跟两字符）；`PromptInput.tsx` 的 textarea `onChange` 里拦截该触发 → 剥掉两字符 → 走 `IFileDialogService.showOpenDialog`（file: canSelectFiles / folder: canSelectFolders）→ 选中后 `toMentionName(uri, workspaceRoot)` + `mergeMention` 复用既有 @提及管线（发送时 `composePromptBlocks` 序列化成 `resource_link`）。取消则只留剥除触发后的文本。测试 stub 需注册 `IFileDialogService`。
+纯函数 `promptMentions.ts` 的 `detectFilePickerTrigger(text, caret)` 识别刚敲下的 `@@`(file)/`@#`(folder)，边界规则同 `extractMentionQuery`（`@` 须在行首或空白后，光标须紧跟两字符）；`PromptInput.tsx` 的 textarea `onChange` 里拦截该触发 → 剥掉两字符 → 走 `IFileDialogService.showOpenDialog`（file: canSelectFiles / folder: canSelectFolders；`defaultUri` = `mentionRoot`，对话框从会话目录开始）→ 选中后 `toMentionName(uri, mentionRoot)` 取相对名，再经 `mentionEntryToRef` + `insertRef` 复用既有 @提及管线（发送时 `composePromptBlocks` 序列化成 `resource_link`）。取消则只留剥除触发后的文本。测试 stub 需注册 `IFileDialogService`。
+
+**基准必须是 `mentionRoot` 而不是工作区根**：`mentionRoot` 是 `resolveSessionScopeRoot`（`services/acp/sessionScope.ts`）算出的会话 scope 根——cwd 是工作区严格子目录时收窄到该子目录，否则回落工作区根。`@` 弹层的扫描 root、`@@`/`@#` picker 的起点、以及**拖入文件的 mention**（`PromptInput` 的 `onPromptDrop`）共用它。原因是 pill 的 label 经 `refDisplay`（`'@' + label`）**写进 prompt 正文**，而 agent 进程 cwd 就是 `session.cwd`——子目录会话若用工作区根相对的 label，agent 会解析到不存在的路径。选到 scope 外的文件时 `toMentionName` 回退绝对路径。
 
 ## 把 editor 选区作为上下文推给 input（"Add Selection to Agent Chat"，Cursor Ctrl+L 式）
 

@@ -1857,6 +1857,115 @@ describe('PromptInput — @@ / @# file picker triggers', () => {
 
     await waitFor(() => expect(ta.value).toBe('see @a.ts please'))
   })
+
+  // A session rooted at a subdirectory starts the pickers there and labels the
+  // pick from there. The label is not cosmetic: it lands in the prompt text as
+  // `@<label>` and the agent resolves it against its own cwd (= session cwd),
+  // so a workspace-relative label would point at a path that does not exist.
+
+  it('starts the @@ picker at the session subdirectory and labels the pick from there', async () => {
+    nextPick = URI.file('/repo/packages/app/src/main.ts')
+    const session = makeSession({ cwd: '/repo/packages/app' })
+    renderWithServices(<PromptInput session={session} />, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+    })
+    const ta = getTextarea()
+    fireEvent.change(ta, { target: { value: '@@', selectionStart: 2 } })
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    expect(showOpenDialogSpy.mock.calls[0]![0].defaultUri?.toString()).toBe(
+      URI.file('/repo/packages/app').toString(),
+    )
+    expect(ta.value).toBe('@src/main.ts ')
+    fireEvent.keyDown(ta, { key: 'Enter' })
+    const [, refs] = session.sendPrompt.mock.calls[0]!
+    expect(refs[0].ref).toMatchObject({
+      kind: 'file',
+      label: 'src/main.ts',
+      uri: URI.file('/repo/packages/app/src/main.ts').toString(),
+    })
+  })
+
+  it('starts the @# folder picker at the session subdirectory', async () => {
+    nextPick = URI.file('/repo/packages/app/levels')
+    const session = makeSession({ cwd: '/repo/packages/app' })
+    renderWithServices(<PromptInput session={session} />, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+    })
+    const ta = getTextarea()
+    fireEvent.change(ta, { target: { value: '@#', selectionStart: 2 } })
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    expect(showOpenDialogSpy.mock.calls[0]![0].defaultUri?.toString()).toBe(
+      URI.file('/repo/packages/app').toString(),
+    )
+    expect(ta.value).toBe('@levels ')
+  })
+
+  it('keeps the workspace root for a session rooted at the folder itself', async () => {
+    nextPick = URI.file('/repo/src/main.ts')
+    const session = makeSession({ cwd: '/repo' })
+    renderWithServices(<PromptInput session={session} />, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+    })
+    const ta = getTextarea()
+    fireEvent.change(ta, { target: { value: '@@', selectionStart: 2 } })
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    expect(showOpenDialogSpy.mock.calls[0]![0].defaultUri?.toString()).toBe(
+      URI.file('/repo').toString(),
+    )
+    expect(ta.value).toBe('@src/main.ts ')
+  })
+
+  it('falls back to the absolute path for a pick outside the session scope', async () => {
+    nextPick = URI.file('/repo/root-only.ts')
+    const session = makeSession({ cwd: '/repo/packages/app' })
+    renderWithServices(<PromptInput session={session} />, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+    })
+    const ta = getTextarea()
+    fireEvent.change(ta, { target: { value: '@@', selectionStart: 2 } })
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    expect(ta.value).toBe(`@${URI.file('/repo/root-only.ts').fsPath} `)
+  })
+
+  it('omits defaultUri and mentions an absolute path without a workspace folder', async () => {
+    nextPick = URI.file('/tmp/a.ts')
+    renderWithServices(<PromptInput session={makeSession()} />)
+    const ta = getTextarea()
+    fireEvent.change(ta, { target: { value: '@@', selectionStart: 2 } })
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    const opts = showOpenDialogSpy.mock.calls[0]![0]
+    // `defaultUri?: URI` under exactOptionalPropertyTypes: the key must be
+    // absent, never present-with-undefined.
+    expect('defaultUri' in opts).toBe(false)
+    expect(ta.value).toBe(`@${URI.file('/tmp/a.ts').fsPath} `)
+  })
+
+  it('labels a dropped file relative to the session scope', async () => {
+    const session = makeSession({ cwd: '/repo/packages/app' })
+    renderWithServices(<PromptInput session={session} />, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+    })
+    const ta = getTextarea()
+    const uri = URI.file('/repo/packages/app/src/inside.ts').toString()
+    fireEvent.drop(ta, {
+      dataTransfer: {
+        files: [],
+        types: ['text/uri-list'],
+        getData: (mime: string) => (mime === 'text/uri-list' ? uri : ''),
+      },
+    })
+    await waitFor(() => expect(ta.value).toBe('@src/inside.ts '))
+  })
 })
 
 // ---------------------------------------------------------------------------

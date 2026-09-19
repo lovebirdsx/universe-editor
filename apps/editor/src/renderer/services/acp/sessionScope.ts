@@ -3,16 +3,22 @@
  *  The directory a session's prompt suggestions are enumerated from. A session
  *  rooted at a strict subdirectory of the open folder (the same judgement the
  *  cwd pill uses) narrows both the `@` file listing and the `#` context entries
- *  to that directory; every other case — root cwd, unknown cwd, cwd outside the
- *  folder — keeps the workspace root, so a root-scoped session behaves exactly
- *  as it did before.
+ *  to that directory, and is the start point + relative-name basis for the
+ *  `@@`/`@#` pickers and dropped-file mentions; every other case — root cwd,
+ *  unknown cwd, cwd outside the folder — keeps the workspace root, so a
+ *  root-scoped session behaves exactly as it did before. The relative basis
+ *  matters because the agent runs with the session cwd, so it resolves a
+ *  mention's `@<name>` label against that directory.
  *--------------------------------------------------------------------------------------------*/
 
 import { IUriIdentityService, URI } from '@universe-editor/platform'
 import { sessionCwdScopeRel } from './session/acpSessionHistory.js'
 
 export interface SessionScopeRoot {
-  /** Directory the prompt input's file and context suggestions come from. */
+  /**
+   * Directory the prompt input's file and context suggestions come from, and
+   * the root its `@<name>` labels are made relative to.
+   */
   readonly root: URI
   /** True when `root` is the session's own cwd rather than the open folder. */
   readonly narrowed: boolean

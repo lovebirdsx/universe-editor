@@ -274,7 +274,10 @@ export function PromptInput({
   const uriIdentity = useService(IUriIdentityService)
   const workspaceRoot = workspace.current?.folder
   // A session rooted at a subdirectory suggests only that directory's files and
-  // context entries; a root-scoped session keeps the workspace as before.
+  // context entries, starts the `@@`/`@#` pickers there, and labels every
+  // mention from it — the agent process runs with the session cwd, so its
+  // relative paths must be resolved against that directory. A root-scoped
+  // session keeps the workspace as before.
   const sessionScope = useMemo(
     () => resolveSessionScopeRoot(workspaceRoot, session.cwd, uriIdentity),
     [workspaceRoot, session.cwd, uriIdentity],
@@ -996,9 +999,11 @@ export function PromptInput({
 
   // `@@` opens a file picker, `@#` a folder picker. Strip the two-char trigger
   // out of `buffer` (the just-typed textarea value, not the committed `text`
-  // state), run the SimpleFileDialog, and on pick splice an `@<name>` mention in
-  // at the trigger position — reusing the same recorded-mention pipeline as the
-  // popover so it serializes to a resource_link on send.
+  // state), run the SimpleFileDialog from `mentionRoot`, and on pick splice an
+  // `@<name>` mention in at the trigger position — reusing the same
+  // recorded-mention pipeline as the popover so it serializes to a resource_link
+  // on send. The name is relative to `mentionRoot`, matching both the popover
+  // entries and the directory the agent is rooted at.
   const openFilePicker = useCallback(
     async (buffer: string, kind: FilePickerTriggerKind, start: number): Promise<void> => {
       // Remove the trigger chars immediately so the textarea doesn't keep `@@`/`@#`
@@ -1016,14 +1021,14 @@ export function PromptInput({
                 canSelectFiles: true,
                 canSelectFolders: false,
                 openLabel: localize('acp.mention.pickFile.open', 'Mention'),
-                ...(workspaceRoot ? { defaultUri: workspaceRoot } : {}),
+                ...(mentionRoot ? { defaultUri: mentionRoot } : {}),
               }
             : {
                 title: localize('acp.mention.pickFolder.title', 'Select Folder to Mention'),
                 canSelectFiles: false,
                 canSelectFolders: true,
                 openLabel: localize('acp.mention.pickFolder.open', 'Mention'),
-                ...(workspaceRoot ? { defaultUri: workspaceRoot } : {}),
+                ...(mentionRoot ? { defaultUri: mentionRoot } : {}),
               },
         )
       )?.[0]
@@ -1039,7 +1044,7 @@ export function PromptInput({
         return
       }
 
-      const mention = toMentionName(picked, workspaceRoot)
+      const mention = toMentionName(picked, mentionRoot)
       // Space the pill off the preceding text so `@<name>` keeps its boundary.
       const needsLeadingSpace = before.length > 0 && !/\s/.test(before[before.length - 1]!)
       const lead = needsLeadingSpace ? ' ' : ''
@@ -1055,7 +1060,7 @@ export function PromptInput({
       setMentionDismissed(true)
       requestAnimationFrame(() => editorHandleRef.current?.focus())
     },
-    [fileDialog, workspaceRoot],
+    [fileDialog, mentionRoot],
   )
 
   const acceptHistory = useCallback((): void => {
@@ -1372,7 +1377,7 @@ export function PromptInput({
     if (droppedFileCount === 0 && imageUris.length > 0) void acceptImageUris(imageUris)
 
     if (mentionUris.length === 0) return
-    const picks = mentionUris.map((uri) => toMentionName(uri, workspaceRoot))
+    const picks = mentionUris.map((uri) => toMentionName(uri, mentionRoot))
     const el = editorHandleRef.current
     if (!el) return
     // Insert each dropped file as a range-tracked pill at the caret; insertRef

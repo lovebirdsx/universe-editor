@@ -60,19 +60,18 @@ export function formatPathForTerminal(fsPath: string): string {
 }
 
 /**
- * Resolve the `@`-mention name + resource URI for a dropped file. Files inside
- * the workspace use their forward-slash relative path (matching
+ * Resolve the `@`-mention name + resource URI for a dropped file. Files under
+ * `mentionRoot` use their forward-slash relative path (matching
  * `mentionFileSearch`); anything else falls back to the absolute path so the
- * agent can locate files outside the current workspace.
+ * agent can locate files outside that root. Callers feeding an agent prompt
+ * pass the session scope root (`resolveSessionScopeRoot`) rather than the
+ * workspace folder: the name is spliced into the prompt text as `@<name>` and
+ * the agent resolves it against its own cwd, which is the session cwd.
  */
-export function toMentionName(uri: URI, workspaceRoot?: URI): { uri: string; name: string } {
+export function toMentionName(uri: URI, mentionRoot?: URI): { uri: string; name: string } {
   const resource = uri.toString()
-  if (
-    workspaceRoot &&
-    uri.scheme === workspaceRoot.scheme &&
-    uri.authority === workspaceRoot.authority
-  ) {
-    const rel = relativeUnder(workspaceRoot, uri)
+  if (mentionRoot && uri.scheme === mentionRoot.scheme && uri.authority === mentionRoot.authority) {
+    const rel = relativeUnder(mentionRoot, uri)
     if (rel) return { uri: resource, name: rel }
   }
   // 非 file: 的 URI（如远端资源）无本机路径，回退到展示形态的 path 段而非折进 authority 的 fsPath。
