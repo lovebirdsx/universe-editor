@@ -88,6 +88,9 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 - 键盘 ContextMenu 键开出的菜单 **count 恰 1 但缺行级项**（Rename…/Delete not found）+ 本地确定性复现=守卫判据失效致空白区菜单 last-wins 顶掉行级菜单；根因=keyup 补充事件坐标是**焦点元素中心不是 (0,0)**（上一轮按未实测的 (0,0) 收紧守卫），判据须换 `button === -1`（CDP 右键恒 `button: 2`）；改共享守卫判据后必须回查所有模拟该事件的单测否则假绿 → 案例 86
 - 预填/选区类断言 received 是**光标默认位**的旧值（`#TestValue` 变 `#const`）+ 同文件同族 setup 早已 `expect.poll` 只有这一处裸 fire + 本机高概率挂/`git stash` 回基线同挂=探针 setup 丢掉了返回值，`openWorkspace` 后活动编辑器还没就位/选区被迟到 adopt 覆盖 → 案例 91
 
+- 连续键盘 grow → shrink 恰差一个步长、启动窗口内真实 Allotment 单测稳定复现=onChange 启动恢复撤销键盘操作（产品竞态），键盘与拖动共用用户操作标记 → 案例 93
+- focusedView 已到位但立即重开 Ctrl+Tab 首行仍是 Files、retry 恢复=FocusTracker 延迟 settle 而 picker 只取一次快照，打开前只读 poll MRU head（同查 Ctrl+P）→ 案例 94
+
 ## 关键参考路径
 - `apps/editor/e2e/specs/` —— 所有 e2e spec；`@p0` 阻塞 CI，`@p1` 次级
 - `apps/editor/e2e/fixtures/electronApp.ts` —— `workbench` fixture、`runCommand`/`waitForRestored`/`statusBar` 封装、`closeApp`

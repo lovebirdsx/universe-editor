@@ -9,6 +9,7 @@
 import type { Locator, Page } from '@playwright/test'
 import { expect, test } from '../fixtures/sharedApp.js'
 import type { WorkbenchPO } from '../pages/WorkbenchPO.js'
+import { waitForRecentTargetHead } from '../pages/recentTargets.js'
 
 const SWITCH_COMMAND = 'workbench.action.quickOpenRecentEditor'
 // AI Debug is the focus subject rather than Explorer: with no folder open the
@@ -117,6 +118,10 @@ test.describe('@p0 quick open recent targets', () => {
 
     await workbench.runCommand('workbench.action.files.newUntitledFile')
     await expect.poll(() => workbench.getActiveEditorUri()).not.toBe(previous)
+    const current = await workbench.getActiveEditorUri()
+    expect(current).toBeDefined()
+    // 高亮行是「当前项在列表里的下一项」，所以当前编辑器必须先坐稳 head。
+    await waitForRecentTargetHead(page, 'editor', current!)
 
     await openSwitcherHoldingCtrl(page, workbench)
     await expect(workbench.quickInput.dialog.locator('[aria-selected="true"]')).toContainText(
@@ -212,6 +217,7 @@ test.describe('@p0 quick open recent targets', () => {
     await expect
       .poll(() => workbench.getContextKey<string>('focusedView'))
       .toBe('workbench.view.search.results')
+    await waitForRecentTargetHead(page, 'view', 'workbench.view.search.results')
 
     // Read-only assertions: stay locked (Ctrl held) so the picker cannot accept and
     // close underneath the labels being collected.
@@ -252,6 +258,7 @@ test.describe('@p0 quick open recent targets', () => {
       await workbench.quickInput.waitForHidden()
 
       await expect.poll(() => workbench.getContextKey<string>('focusedView')).toBe(view)
+      await waitForRecentTargetHead(page, 'view', view)
 
       // Reopening must now show it at the head — the switcher opens one step
       // away from "here", so the current target is row 0.
@@ -287,6 +294,7 @@ test.describe('@p0 quick open recent targets', () => {
       .poll(() => page.evaluate((id) => window.__E2E__!.getViewCollapsed(id), TIMELINE))
       .toBe(false)
     await expect.poll(() => workbench.getContextKey<string>('focusedView')).toBe(TIMELINE)
+    await waitForRecentTargetHead(page, 'view', TIMELINE)
 
     await openSwitcherHoldingCtrl(page, workbench)
     const labels = await workbench.quickInput.dialog.getByRole('option').allTextContents()

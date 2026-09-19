@@ -518,6 +518,18 @@ markdown job（ubuntu，CI run 31295361355）`markdownPreview.spec.ts:205` 与 `
 教训：a) **布局类 e2e 断言的隐含前提是「窗口够宽」，而 Windows runner 的屏只有 1024x768**（Linux Xvfb 1280x1024）——任何依赖行/列宽度的断言在 Windows 上测的是另一个场景，先看失败截图的视口宽度再谈其他。案例 42 把 1280 当既定环境常量，本条是它的反面。b) 约束是谁在起作用可以**反算**出来：把断言两边的实测值拿去做 flex 的 base/max-width 推导，结论往往唯一。c) 修法优先选**与几何无关的不变量**而非放宽断言——换成「长度不改变宽度」后，1024/1280 测得是同一件事，且把 `flex` 改回 `0 1 auto` 时两种宽度都必红，比原断言更硬。d) 读宽度一律用 `getBoundingClientRect().width`（分数），别用 `clientWidth`（取整到整数）——「残余 0.14px 就够 Chromium 把末字符换成省略号」这个量级会被整数量化吞掉。e) `Range.getBoundingClientRect()` 报告文本布局盒、不受 `text-overflow: ellipsis` 影响，所以「文本宽 > content box 宽」能判「被截断了」；反之若测量方式本身会被裁，断言永远红不了（本例 CI 失败即证明 Range 给的是未截断值）。f) 断言只在特定条件下成立时**带数字 `console.log` 留痕**，别静默跳过（本仓 spec 惯例是 console + `expect(value,'说明')`，全仓无 `test.info().annotations` 用法）。
 锚：`apps/editor/e2e/specs/smoke.gitGraphRefLayout.spec.ts`（双测量 + 门）；`apps/editor/src/renderer/workbench/gitGraph/GitGraphEditor.module.css`（`.refs` 的 `max-width: 55%` 与 `.badge` 的 shrink）；`apps/editor/src/main/services/window/windowMainService.ts:228`（默认 1280x800，被 OS 夹的源头）；`apps/editor/e2e/specs/smoke.maximizedSecondarySidebarRestore.spec.ts:195-223`（`setBounds` 先例，本地复现窄窗口照抄）。
 
+**案例 93 — 连续键盘缩放恰好差一个步长：启动恢复撤销用户操作（产品竞态）**
+信号：`smoke.viewSizes` 在 grow → shrink 的第二步稳定差 50px，initial/retry 均失败，尚未走到 reload；本地 E2E 可全绿，但真实 Allotment 单测在启动窗口内连续 resize 可稳定复现 350 → 350（预期 300）。
+根因：启动后 600ms 内 `onChange` 会按持久化尺寸校正布局。鼠标拖动会标记用户操作，键盘 resize 没有；第二次 `handle.resize` 同步触发 `onChange` 时，上次持久化的 350 又覆盖本次目标 300。不能仅凭差一个步长就推断按键丢失或失焦。
+修：键盘路径在 `handle.resize` 前设置与拖动共用的 `userResizedRef`，让用户操作优先于启动恢复；单测逐步断言两个 pane 的实际高度和持久化值，原 E2E 像素误差断言不变。与案例 50c 互参：恢复机制需要同时守护恢复权威源和用户操作优先级。
+锚：`apps/editor/src/renderer/workbench/sidebar/ViewPaneContainer.tsx` 与同级 `__tests__/ViewPaneContainer.test.tsx`。
+
+**案例 94 — focusedView 已到位但 picker 首行仍是 Files：焦点到 MRU 的延迟同步**
+信号：`smoke.quickOpenRecentTargets` 选择 Commit Changes / Session Changes 后，`focusedView` 已满足，立即重开 Ctrl+Tab 却读到 `FilesExplorer`，retry 恢复。
+根因：`focusedView` 在 focusin 时同步更新，FocusTracker → FocusStack → RecentTargets 则要经 `setTimeout(0)` settle；picker 打开时只快照一次列表，等待 UI 出现不会重建旧快照。
+修：增加真实 RecentTargetsService 的只读探针，在打开 picker 前 poll 目标成为 MRU head；原首行和相对顺序断言保留。探针不得刷新服务或主动聚焦，也不要在 poll 中反复开关 picker。同族 Ctrl+P 视图排序用例共用等待 helper；命令面板的命令历史、编辑器标签 MRU 是不同数据源，不套用这一等待。
+锚：`apps/editor/e2e/pages/recentTargets.ts`、`smoke.quickOpenRecentTargets.spec.ts`、`smoke.quickOpenViewMru.spec.ts`；探针实现位于 `apps/editor/src/renderer/e2e/probe.ts`。
+
 ---
 - `@parcel/watcher` Windows 多 worker 竞态的长期根治（升级 / 换 watcher / 进一步隔离），替代长期 `--workers=1`（案例 12/16/26/44 的 `@serial` 都是它的 workaround）。
 - DnD 用例稳定化（显式等待 drop 完成态），稳定后摘 `@flaky`（案例 46）。

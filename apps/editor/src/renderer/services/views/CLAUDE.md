@@ -94,7 +94,7 @@ HTML5 DnD 的 **dragover 阶段读不到 `dataTransfer` payload**（只在 drop 
 - **落盘权收窄到用户动作**：`setViewSizes(sizes,{persist?})` 默认**只更新内存**（布局记账），`persist:true` 才落盘。`onChange` 全走记账（首布局等分/容器 resize/程序化纠正永不落盘，见案例 50b）；`onDragEnd`（sash 拖拽）、collapse 的 remembered size 与**键盘 resize** 走 `persist:true`。
 - **键盘 resize（ctrl+alt+shift+上下）**：焦点在 view 上时调整该 pane 的高度（借用/归还邻居空间）。链路、借还语义与坑见 [cases-keyboard-resize.md](cases-keyboard-resize.md)。
 - **persisted/mem 双轨制**：`_persistedSizes` 是权威源（只被 reconcile/persist:true 写），`_viewStates.size` 只是记账。**所有「恢复目标」读 `getPersistedViewSize()`**（含 `save()` 序列化）——读脏 mem 会把布局噪声当真值锁死（案例 50c）。
-- **reconcile 迟到的校正**：Allotment 挂载后 `preferredSize` 是 no-op（pane 构造时冻结 layoutStrategy）；`RECONCILE_GRACE_MS`(600ms) 窗口内**每次** onChange 都 `correctToStoredSizes`（贪心重分配可再次落进来），窗口外靠 `storedSizesKey` effect。防自激：`sashDraggingRef` / collapsed 跳过 / `correctingRef` 重入 / `deficit<0` 跳过（装不下会无限同步递归）。
+- **reconcile 迟到的校正**：Allotment 挂载后 `preferredSize` 是 no-op（pane 构造时冻结 layoutStrategy）；`RECONCILE_GRACE_MS`(600ms) 窗口内**每次** onChange 都 `correctToStoredSizes`（贪心重分配可再次落进来，用户键盘缩放或拖动后由 `userResizedRef` 跳过），窗口外靠 `storedSizesKey` effect。防自激：`sashDraggingRef` / collapsed 跳过 / `correctingRef` 重入 / `deficit<0` 跳过（装不下会无限同步递归）。
 - **挂载恢复**：`preferredSize` = 折叠→28 / 展开→持久化 `size`（clamp ≥ OPEN_MIN）/ 无存储→不传（Allotment 等分）；重挂载（重排/移入移出/切容器）同理。
 - **折叠/展开**：折叠收缩到 header（min=max=28），空间全归最底部展开 pane（SplitView greedy）；展开恢复记住的尺寸，空间自底向上从其它展开 pane 扣（各扣到 OPEN_MIN 为止）。
 - **折叠 pane 不持久化尺寸**：onChange/onDragEnd 必须过滤折叠 pane 的 28px 上报，否则展开尺寸被覆盖成 28。

@@ -3008,6 +3008,35 @@ describe('ChatBody — one sub-agent card open at a time', () => {
     expect(collapseToggle(slotEl(container, 't:a')).getAttribute('aria-expanded')).toBe('false')
   })
 
+  it('批量折叠同时关闭父卡，重开父卡后子卡仍保持折叠', () => {
+    const { container, widgetRef } = renderChatWithWidget(
+      makeSession('s-sub-batch-collapse', [
+        { kind: 'toolCall', id: 'a', call: makeTaskCall('a', [childToolCall('sub', 'read')]) },
+      ]),
+    )
+    toggleCard(container, 't:a')
+    toggleStickyCard(container, 't:a/t:sub')
+    expect(collapseToggle(stickyEl(container, 't:a/t:sub')).getAttribute('aria-expanded')).toBe(
+      'true',
+    )
+
+    act(() => {
+      widgetRef.current!.setSlotCollapsed(
+        new Map([
+          ['t:a', true],
+          ['t:a/t:sub', true],
+        ]),
+      )
+    })
+    expect(collapseToggle(slotEl(container, 't:a')).getAttribute('aria-expanded')).toBe('false')
+    expect(timelineOf(container)).toBe(0)
+
+    toggleCard(container, 't:a')
+    expect(collapseToggle(stickyEl(container, 't:a/t:sub')).getAttribute('aria-expanded')).toBe(
+      'false',
+    )
+  })
+
   it('folds only itself when the open card is toggled again', () => {
     const { container } = renderChatWithWidget(makeSession('s-sub-toggle-off', twoTasks()))
 

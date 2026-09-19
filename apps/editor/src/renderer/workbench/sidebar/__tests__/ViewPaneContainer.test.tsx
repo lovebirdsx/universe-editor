@@ -225,6 +225,25 @@ describe('ViewPaneContainer', () => {
     expect(paneHeightPx('test.view.b')).toBe(250)
   })
 
+  it('连续键盘缩放不会被启动期尺寸恢复撤销', () => {
+    const { resizeRegistry, viewDescriptorService } = renderSideBar()
+    act(() => fireLastResizeObserver(800, 600))
+
+    for (const [delta, expected] of [
+      [50, 350],
+      [-50, 300],
+      [50, 350],
+    ] as const) {
+      act(() => {
+        expect(resizeRegistry.resize('test.view.a', delta)).toBe(true)
+      })
+      expect(paneHeightPx('test.view.a')).toBe(expected)
+      expect(paneHeightPx('test.view.b')).toBe(600 - expected)
+      expect(viewDescriptorService.getPersistedViewSize('test.view.a')).toBe(expected)
+      expect(viewDescriptorService.getPersistedViewSize('test.view.b')).toBe(600 - expected)
+    }
+  })
+
   it('persists a keyboard resize as the user action it is', () => {
     const { resizeRegistry, viewDescriptorService } = renderSideBar()
     act(() => fireLastResizeObserver(800, 600))

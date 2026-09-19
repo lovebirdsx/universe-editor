@@ -1068,6 +1068,7 @@ async function bootstrapWorkbench(): Promise<void> {
     scmDecorationsService,
     scmWorkingTreeHintService,
     scmBehindHintService,
+    recentTargetsService,
     languageFeaturesService: instantiation.invokeFunction((a) => a.get(ILanguageFeaturesService)),
     outlineService,
     timelineService: instantiation.invokeFunction((a) => a.get(ITimelineService)),

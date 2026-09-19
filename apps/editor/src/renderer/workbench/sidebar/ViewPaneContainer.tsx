@@ -92,6 +92,8 @@ export function ViewPaneContainer({
       deltaPx,
     })
     if (!next) return false
+    // 键盘缩放与拖动一样优先于启动恢复，避免 onChange 用上次落盘尺寸撤销本次操作。
+    userResizedRef.current = true
     handle.resize(next)
     // A keypress is a user action, so it lands on disk (onDragEnd does the same
     // for a sash drag). Persisting the computed values, not the ones onChange
@@ -216,7 +218,7 @@ export function ViewPaneContainer({
   // container) and on the stored-sizes key change below; a user sash drag
   // cancels them.
   const isLayoutSettledRef = useRef(false)
-  const userDraggedRef = useRef(false)
+  const userResizedRef = useRef(false)
   // Set on drag *start* (not only drag-end): an in-flight sash gesture blocks
   // every persisted-size correction — applying one mid-drag fights the live
   // drag stream and can leave the panes frozen at the pre-drag split.
@@ -372,8 +374,8 @@ export function ViewPaneContainer({
           // an earlier correction — e.g. the window's own startup geometry
           // settle re-layouts the container a second time — with no further
           // stored-sizes key change to retrigger the effect above. A user
-          // sash drag takes precedence (sashDraggingRef / userDraggedRef).
-          if (!isLayoutSettledRef.current && !userDraggedRef.current) correctToStoredSizes(s)
+          // sash drag takes precedence (sashDraggingRef / userResizedRef).
+          if (!isLayoutSettledRef.current && !userResizedRef.current) correctToStoredSizes(s)
           // In-memory bookkeeping only (drives collapse/expand restore math
           // and the collapse-time remembered-size snapshot). Persisting here
           // would let layout noise — notably the pre-reconcile equal split —
@@ -390,7 +392,7 @@ export function ViewPaneContainer({
         }}
         onDragEnd={(s) => {
           sashDraggingRef.current = false
-          userDraggedRef.current = true
+          userResizedRef.current = true
           // Collapsed panes report their header height here; persist only the
           // expanded panes' sizes so a collapsed pane keeps its remembered
           // expanded size for later restore (across reloads too).

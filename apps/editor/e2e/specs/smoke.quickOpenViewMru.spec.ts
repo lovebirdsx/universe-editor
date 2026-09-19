@@ -12,11 +12,13 @@
 
 import { rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { waitForRecentTargetHead } from '../pages/recentTargets.js'
 import { expect, test } from '../fixtures/sharedApp.js'
 import { mkTempDir } from '@universe-editor/e2e-harness'
 
 const SEARCH_CONTAINER = 'workbench.view.search'
 const SCM_CONTAINER = 'workbench.view.scm'
+const SEARCH_VIEW = 'workbench.view.search.results'
 
 /** Scratch files for the closed-editor case; cleanup rides out open handles. */
 async function withTempFiles<T>(
@@ -53,9 +55,8 @@ test.describe('@p1 ctrl+p view MRU', () => {
       .toBe('workbench.view.scm.main')
 
     await workbench.activityBar.click(SEARCH_CONTAINER)
-    await expect
-      .poll(() => workbench.getContextKey<string>('focusedView'))
-      .toBe('workbench.view.search.results')
+    await expect.poll(() => workbench.getContextKey<string>('focusedView')).toBe(SEARCH_VIEW)
+    await waitForRecentTargetHead(page, 'view', SEARCH_VIEW)
 
     await page.evaluate(() => {
       void window.__E2E__!.runCommand('workbench.action.quickOpen')
@@ -84,9 +85,8 @@ test.describe('@p1 ctrl+p view MRU', () => {
     await expect(workbench.editor.monacoEditor).toBeVisible()
 
     await workbench.activityBar.click(SEARCH_CONTAINER)
-    await expect
-      .poll(() => workbench.getContextKey<string>('focusedView'))
-      .toBe('workbench.view.search.results')
+    await expect.poll(() => workbench.getContextKey<string>('focusedView')).toBe(SEARCH_VIEW)
+    await waitForRecentTargetHead(page, 'view', SEARCH_VIEW)
 
     await page.evaluate(() => {
       void window.__E2E__!.runCommand('workbench.action.quickOpen')

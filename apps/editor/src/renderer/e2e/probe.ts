@@ -120,6 +120,7 @@ import {
   type E2EMemoryReminderState,
   type E2ENotification,
   type E2EOutlineRetentionStats,
+  type E2ERecentTarget,
   type E2EScmDecoration,
   type E2ETerminalLink,
   type E2ETimelineItem,
@@ -127,6 +128,10 @@ import {
   type E2EWorkingTreeHint,
 } from '../../shared/e2e/contract.js'
 import type { IScmService } from '../services/extensions/ScmService.js'
+import type {
+  IRecentTargetsService,
+  RecentTarget,
+} from '../services/editor/RecentTargetsService.js'
 import type { IScmIgnoredResourcesService } from '../services/scm/ScmIgnoredResourcesService.js'
 import type { IScmDecorationsService } from '../services/scm/ScmDecorationsService.js'
 import type { IScmWorkingTreeHintService } from '../services/scm/ScmWorkingTreeHintService.js'
@@ -176,6 +181,7 @@ export interface E2EProbeServices {
   readonly scmDecorationsService: IScmDecorationsService
   readonly scmWorkingTreeHintService: IScmWorkingTreeHintService
   readonly scmBehindHintService: IScmBehindHintService
+  readonly recentTargetsService: IRecentTargetsService
   readonly languageFeaturesService: ILanguageFeaturesService
   readonly outlineService: IOutlineService
   readonly timelineService: ITimelineService
@@ -339,6 +345,14 @@ function toE2EMarker(m: monaco.editor.IMarker): E2EMarker {
         }
       : {}),
   }
+}
+
+/** MRU 槽位 → {kind,id}；closedEditor 槽位不给（Ctrl+Tab 不列已关闭的编辑器，探针与
+ *  它读同一套语义，head 才对得上 picker 的第 0 行）。 */
+function toE2ERecentTarget(target: RecentTarget): E2ERecentTarget | undefined {
+  if (target.kind === 'view') return { kind: 'view', id: target.descriptor.id }
+  if (target.kind === 'editor') return { kind: 'editor', id: target.editor.id }
+  return undefined
 }
 
 async function getCompletionLabels(
@@ -578,6 +592,14 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     whenUserSettingsInitialized: () => services.userSettingsSync.whenInitialized,
     runCommand: (id, ...args) => services.commandService.executeCommand(id, ...args),
     getActiveEditorUri: () => services.editorService.activeEditorId.get(),
+    getRecentTargets: (): E2ERecentTarget[] => {
+      const out: E2ERecentTarget[] = []
+      for (const target of services.recentTargetsService.getRecentTargets()) {
+        const dto = toE2ERecentTarget(target)
+        if (dto) out.push(dto)
+      }
+      return out
+    },
     isReferencePeekFocused: () => {
       const active = document.activeElement
       return active instanceof HTMLElement && active.closest('.ref-tree') != null

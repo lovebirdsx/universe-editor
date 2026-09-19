@@ -27,7 +27,7 @@
 - **落盘写计算值，不写 onChange 上报值**：onChange 在测试环境异步投递，且折叠 pane 上报的是 28px header（会覆盖它记住的展开尺寸）。走 `setViewSizes(..., { persist: true })` 并过滤折叠 pane——与 `onDragEnd` 同一套谓词。
 - **必须自带 clamp**：Allotment 对越界请求只静默 clamp，屏上值与 persisted 值就此漂移，下一次按键会从错误的基线起算。
 - **不要 bump version**：`setViewSizes` 有意不 bump（高频按键会变成高频整树 re-render）；DOM 已由 `resize()` 更新。
-- **不碰 `sashDraggingRef` / `userDraggedRef`**：那是"用户拖拽优先于 persisted 纠正"的语义，键盘路径不该进入。
+- **键盘与拖动共用 `userResizedRef`**：在 `handle.resize()` 前置位，阻止启动窗口内的 `onChange` 按旧持久化值撤销本次操作；`sashDraggingRef` 仍只表示正在拖动。连续 grow → shrink 是必要回归场景，单次按键无法暴露旧尺寸覆盖。
 
 ## 验证
 

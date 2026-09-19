@@ -176,6 +176,16 @@ export interface E2EWorkingTreeHint {
   readonly strikeThrough?: boolean
 }
 
+/**
+ * Ctrl+Tab / Ctrl+P recency 列表的一项（`IRecentTargetsService.getRecentTargets`）。
+ * `id` 是目标自己的身份而非 pick id：视图给 viewId（= `focusedView` 的值），编辑器给
+ * `EditorInput.id`（= `getActiveEditorUri()` 的值）。
+ */
+export interface E2ERecentTarget {
+  readonly kind: 'editor' | 'view'
+  readonly id: string
+}
+
 /** One top-level node of an extension-contributed tree view. */
 export interface E2ETreeItem {
   readonly label: string
@@ -1626,6 +1636,13 @@ export interface E2EProbe {
    * writing a file whose change a watcher-driven path must observe.
    */
   isWorkspaceWatchArmed(): boolean
+  // -- Recency (MRU) probe --------------------------------------------------
+  /**
+   * 只读返回 Ctrl+Tab 使用的 MRU 列表，最近使用在前，不移动焦点或主动刷新。
+   * 不含已关闭编辑器；Ctrl+P 会额外包含这些条目，不能用此探针断言其完整顺序。
+   * 焦点同步到 MRU 有延迟，而 picker 仅在打开时快照列表，顺序断言前须等待同步。
+   */
+  getRecentTargets(): readonly E2ERecentTarget[]
   // -- Views / view-container customization probe ---------------------------
   /** Id of the container a view currently lives in (custom location aware). */
   getViewContainerByViewId(viewId: string): string | undefined
