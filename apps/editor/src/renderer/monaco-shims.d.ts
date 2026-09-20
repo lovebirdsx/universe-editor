@@ -247,6 +247,15 @@ declare module 'monaco-editor/esm/vs/editor/common/languages/nullTokenize.js' {
   ): EncodedTokenizationResult
 }
 
+// The `OperatingSystem` enum values, read by the keyboard mirror to resolve
+// monaco's per-platform `win` / `mac` / `linux` keybinding blocks the same way
+// monaco's own `bindToCurrentPlatform` does — the constant is the single source
+// of platform truth (the sandboxed renderer has no `process.platform`). No
+// shipped .d.ts.
+declare module 'monaco-editor/esm/vs/base/common/platform.js' {
+  export const OS: number
+}
+
 // Monaco's error-handler singleton (module-level in vs/base/common/errors). The
 // esm build drops ErrorHandler.setUnexpectedErrorHandler, so the workbench
 // reassigns the `unexpectedErrorHandler` instance field directly to route

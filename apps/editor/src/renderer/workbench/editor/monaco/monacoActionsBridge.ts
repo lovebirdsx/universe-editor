@@ -23,6 +23,15 @@
  *
  *  The first decoded default per command is also kept in a `_defaults`
  *  side-table read by the Keyboard Shortcuts editor to show the built-in key.
+ *
+ *  Platform overrides are resolved the way monaco resolves them: a `win` / `mac`
+ *  / `linux` block replaces the whole rule (base `primary`/`secondary` dropped),
+ *  and `primary: 0` means "no key on this platform". Mirroring the base rule
+ *  instead used to leave phantom rows in the registry — on Linux `Alt+Shift+↓`
+ *  showed up as copy-line while monaco actually ran add-cursor-below, and
+ *  `Ctrl+PageUp` showed up as scroll-page while monaco binds `Alt+PageUp` there.
+ *  Only `primary` is mirrored, never `secondary`: adding those would put a
+ *  second MonacoDefault row on 30+ commands for no arbitration benefit.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -39,6 +48,11 @@ import {
 } from '@universe-editor/platform'
 import { FileEditorRegistry } from '../../../services/editor/FileEditorRegistry.js'
 import {
+  MONACO_COMPAT_KEYBINDINGS,
+  registerMonacoCompatKeybindings,
+  type IMonacoCompatKeybinding,
+} from './monacoCompatKeybindings.js'
+import {
   decodeMonacoKeybinding,
   decodedToRegistryKeyString,
   MASK_CTRLCMD,
@@ -46,18 +60,41 @@ import {
   type DecodedKeybinding,
 } from './monacoKeybindingDecoder.js'
 
+/** The three platforms monaco's `bindToCurrentPlatform` distinguishes. */
+export type MonacoPlatform = 'win32' | 'darwin' | 'linux'
+
+/** One platform's override block. Replaces the whole rule, it does not merge. */
+export interface IMonacoPlatformRule {
+  readonly primary?: number
+  /** Read into the type for fidelity; deliberately not mirrored (see header). */
+  readonly secondary?: readonly number[]
+}
+
+export interface IMonacoKbRule extends IMonacoPlatformRule {
+  readonly win?: IMonacoPlatformRule
+  readonly mac?: IMonacoPlatformRule
+  readonly linux?: IMonacoPlatformRule
+}
+
+/** `_kbOpts` as monaco's Command constructor sets it. */
+export interface IMonacoKbOpts extends IMonacoKbRule {
+  readonly kbExpr?: unknown
+  readonly weight?: number
+  readonly args?: unknown
+}
+
 interface IMonacoEditorAction {
   readonly id: string
   readonly label: string
   // `_kbOpts` is the private field set by Command#constructor.
-  readonly _kbOpts?: { primary?: number } | readonly { primary?: number }[]
+  readonly _kbOpts?: IMonacoKbOpts | readonly IMonacoKbOpts[]
 }
 
 export interface IMonacoEditorExtensionsRegistry {
   getEditorActions(): readonly IMonacoEditorAction[]
 }
 
-export interface CoreCommandKeybinding {
+export interface CoreCommandKeybinding extends IMonacoKbRule {
   /** Numeric KeyMod | KeyCode encoding, same form the decoder accepts. */
   primary: number
   /** Registry when-clause. Defaults to `editorFocus`, matching mirrored EditorActions. */
@@ -162,20 +199,59 @@ function makeHandler(commandId: string) {
   }
 }
 
-/** Every distinct, non-empty `primary` across an action's `_kbOpts`. */
-function allPrimariesOf(kbOpts: IMonacoEditorAction['_kbOpts']): number[] {
+const PLATFORM_RULE_KEY = { win32: 'win', darwin: 'mac', linux: 'linux' } as const
+
+/**
+ * Replicates monaco's `bindToCurrentPlatform`: an override block replaces the
+ * whole rule, so the base `primary` is gone on that platform — it is not merged
+ * and not kept as a fallback.
+ */
+export function resolvePlatformRule(
+  rule: IMonacoKbRule,
+  platform: MonacoPlatform,
+): IMonacoPlatformRule {
+  return rule[PLATFORM_RULE_KEY[platform]] ?? rule
+}
+
+function isRuleArray(
+  kbOpts: IMonacoKbOpts | readonly IMonacoKbOpts[],
+): kbOpts is readonly IMonacoKbOpts[] {
+  return Array.isArray(kbOpts)
+}
+
+/**
+ * Every distinct non-zero `primary` an action contributes on `platform`.
+ * `primary: 0` yields nothing: monaco means "no key here", and the registry
+ * expresses absence by having no item — a negation entry would show up as a
+ * user-made unbind in the Keyboard Shortcuts editor.
+ */
+export function effectivePrimariesOf(
+  kbOpts: IMonacoKbOpts | readonly IMonacoKbOpts[] | undefined,
+  platform: MonacoPlatform,
+): number[] {
   if (!kbOpts) return []
-  const arr = Array.isArray(kbOpts) ? kbOpts : [kbOpts]
+  const rules = isRuleArray(kbOpts) ? kbOpts : [kbOpts]
   const out: number[] = []
-  for (const opt of arr) {
-    if (opt.primary && opt.primary !== 0 && !out.includes(opt.primary)) out.push(opt.primary)
+  for (const rule of rules) {
+    const primary = resolvePlatformRule(rule, platform).primary
+    if (primary !== undefined && primary !== 0 && !out.includes(primary)) out.push(primary)
   }
   return out
 }
 
-function coreKeybindingsOf(core: CoreCommand): readonly CoreCommandKeybinding[] {
-  if (core.keybindings) return core.keybindings
-  return typeof core.primary === 'number' ? [{ primary: core.primary }] : []
+function coreKeybindingsOf(
+  core: CoreCommand,
+  platform: MonacoPlatform,
+): readonly CoreCommandKeybinding[] {
+  const declared =
+    core.keybindings ?? (typeof core.primary === 'number' ? [{ primary: core.primary }] : [])
+  const out: CoreCommandKeybinding[] = []
+  for (const kb of declared) {
+    const primary = resolvePlatformRule(kb, platform).primary
+    if (primary === undefined || primary === 0) continue
+    out.push({ primary, ...(kb.when !== undefined ? { when: kb.when } : {}) })
+  }
+  return out
 }
 
 // Core editor commands Monaco registers outside the EditorAction registry, so
@@ -187,10 +263,12 @@ const ctrl = (token: string): number => MASK_CTRLCMD | TOKEN_TO_KEYCODE[token]!
 const KEYMOD_SHIFT = 0x0400
 const KEYMOD_ALT = 0x0200
 const shift = (token: string): number => KEYMOD_SHIFT | TOKEN_TO_KEYCODE[token]!
+const alt = (token: string): number => KEYMOD_ALT | TOKEN_TO_KEYCODE[token]!
 const ctrlAltShift = (token: string): number =>
   MASK_CTRLCMD | KEYMOD_ALT | KEYMOD_SHIFT | TOKEN_TO_KEYCODE[token]!
 
-const CORE_COMMANDS: readonly CoreCommand[] = [
+/** Exported so a unit test can pin the shipped table rather than a copy of it. */
+export const CORE_COMMANDS: readonly CoreCommand[] = [
   { id: 'undo', label: 'Undo', nlsKey: 'Undo', primary: ctrl('z') },
   { id: 'redo', label: 'Redo', nlsKey: 'Redo', primary: ctrl('y') },
   {
@@ -204,7 +282,9 @@ const CORE_COMMANDS: readonly CoreCommand[] = [
     label: 'Column Select Up',
     labelKey: 'monaco.command.columnSelectUp',
     keybindings: [
-      { primary: ctrlAltShift('arrowup'), when: 'editorTextFocus' },
+      // coreCommands.js:383 — `linux: { primary: 0 }` there, so linux only keeps
+      // the column-selection-mode entry below.
+      { primary: ctrlAltShift('arrowup'), when: 'editorTextFocus', linux: { primary: 0 } },
       { primary: shift('arrowup'), when: 'editorTextFocus && editorColumnSelection' },
     ],
   },
@@ -213,29 +293,73 @@ const CORE_COMMANDS: readonly CoreCommand[] = [
     label: 'Column Select Down',
     labelKey: 'monaco.command.columnSelectDown',
     keybindings: [
-      { primary: ctrlAltShift('arrowdown'), when: 'editorTextFocus' },
+      { primary: ctrlAltShift('arrowdown'), when: 'editorTextFocus', linux: { primary: 0 } },
       { primary: shift('arrowdown'), when: 'editorTextFocus && editorColumnSelection' },
     ],
   },
+  {
+    // coreCommands.js:1135 — base is Cmd+PageUp, Windows and Linux move it to
+    // Alt+PageUp. No `nlsKey`: monaco has no NLS entry for these two.
+    id: 'scrollPageUp',
+    label: 'Scroll Page Up',
+    labelKey: 'monaco.command.scrollPageUp',
+    keybindings: [
+      {
+        primary: ctrl('pageup'),
+        win: { primary: alt('pageup') },
+        linux: { primary: alt('pageup') },
+      },
+    ],
+  },
+  {
+    id: 'scrollPageDown',
+    label: 'Scroll Page Down',
+    labelKey: 'monaco.command.scrollPageDown',
+    keybindings: [
+      {
+        primary: ctrl('pagedown'),
+        win: { primary: alt('pagedown') },
+        linux: { primary: alt('pagedown') },
+      },
+    ],
+  },
 ]
+
+/** `OperatingSystem` values from vs/base/common/platform.js. */
+const PLATFORM_BY_OS: Readonly<Record<number, MonacoPlatform>> = {
+  1: 'win32',
+  2: 'darwin',
+  3: 'linux',
+}
 
 /**
  * Main entrypoint. Calls into monaco's internal modules — must run AFTER
  * `import('monaco-editor')` has resolved.
  */
 export async function bridgeAllMonacoActions(): Promise<IDisposable> {
-  const mod = (await import('monaco-editor/esm/vs/editor/browser/editorExtensions.js')) as {
-    EditorExtensionsRegistry: IMonacoEditorExtensionsRegistry
-  }
-  return markAsSingleton(bridgeMonacoActionsForTests(mod.EditorExtensionsRegistry, CORE_COMMANDS))
+  const [mod, platformMod] = (await Promise.all([
+    import('monaco-editor/esm/vs/editor/browser/editorExtensions.js'),
+    // The very constant monaco's own bindToCurrentPlatform reads, so the mirror
+    // and monaco's dispatch cannot disagree about the platform. The renderer is
+    // sandboxed — `process.platform` is not available here.
+    import('monaco-editor/esm/vs/base/common/platform.js'),
+  ])) as [{ EditorExtensionsRegistry: IMonacoEditorExtensionsRegistry }, { OS: number }]
+  const platform = PLATFORM_BY_OS[platformMod.OS] ?? 'linux'
+  return markAsSingleton(
+    bridgeMonacoActionsForTests(mod.EditorExtensionsRegistry, CORE_COMMANDS, platform),
+  )
 }
 
 /**
  * Test seam. Tests supply a fake registry; we never touch real monaco here.
+ * `platform` defaults to linux so the seam is deterministic on every host — win
+ * and mac coverage has to be requested explicitly.
  */
 export function bridgeMonacoActionsForTests(
   registry: IMonacoEditorExtensionsRegistry,
   coreCommands: readonly CoreCommand[],
+  platform: MonacoPlatform = 'linux',
+  compat: readonly IMonacoCompatKeybinding[] = MONACO_COMPAT_KEYBINDINGS,
 ): IDisposable {
   const disposables: IDisposable[] = []
   const seenIds = new Set<string>()
@@ -270,7 +394,7 @@ export function bridgeMonacoActionsForTests(
 
     recordDefaults(
       action.id,
-      allPrimariesOf(action._kbOpts).map((primary) => ({ primary })),
+      effectivePrimariesOf(action._kbOpts, platform).map((primary) => ({ primary })),
     )
   }
 
@@ -286,8 +410,12 @@ export function bridgeMonacoActionsForTests(
         handler: makeHandler(core.id),
       }),
     )
-    recordDefaults(core.id, coreKeybindingsOf(core))
+    recordDefaults(core.id, coreKeybindingsOf(core, platform))
   }
+
+  // After the commands exist: an alternative key whose command is missing would
+  // swallow the keystroke with nothing to run.
+  disposables.push(registerMonacoCompatKeybindings(compat))
 
   disposables.push({
     dispose() {

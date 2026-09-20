@@ -10,20 +10,26 @@
  *  when monaco's precondition fails, or when the language lacks the capability.
  *  The first is what this file pins; the third is pinned by the last test.
  *
- *  Two platform traps this file encodes deliberately:
+ *  Two things this file encodes deliberately:
  *
- *  - monaco rebinds several actions per platform (`linux:` / `win:` blocks in its
- *    kbOpts), but the bridge only mirrors the base `primary`. So on Linux the
- *    shortcut editor can name a command for a key that actually runs a different
- *    action — `Alt+Shift+Down` is mirrored as copy-line but really inserts a
- *    cursor below. The Linux entries below assert the *behaviour*, so fixing the
- *    bridge to be platform-aware will fail this file and force a doc update.
+ *  - the mirror resolves monaco's per-platform `win` / `mac` / `linux` blocks the
+ *    way monaco's own `bindToCurrentPlatform` does (whole-rule replacement), so on
+ *    the running platform the shortcut editor names the key monaco really runs —
+ *    on Linux `Ctrl+Alt+Shift+↑/↓` is copy-line, and `Alt+Shift+↑/↓` adds a cursor
+ *    above/below. A bridge that regresses to mirroring the base rule only fails
+ *    here.
  *
- *  - the scene is a real `.json` file on purpose. In the core baseline
- *    (`extensions: []`) json is the only language that has a comment config, a
- *    formatting provider and a document-symbol provider (its worker lives in the
- *    renderer). An untitled plaintext buffer would make Ctrl+/ fail for language
- *    reasons and read as a keybinding bug.
+ *  - four built-in features have no reachable default key left, because this
+ *    editor claims their native key for something else. Each is restored on an
+ *    alternative key by monacoCompatKeybindings.ts; the second test pins those
+ *    keys, their weight (they must outrank the deferral at 50, or the key would
+ *    be dead) and that they really act on the buffer.
+ *
+ *  The scene is a real `.json` file on purpose. In the core baseline
+ *  (`extensions: []`) json is the only language that has a comment config, a
+ *  formatting provider and a document-symbol provider (its worker lives in the
+ *  renderer). An untitled plaintext buffer would make Ctrl+/ fail for language
+ *  reasons and read as a keybinding bug.
  *--------------------------------------------------------------------------------------------*/
 
 import { writeFileSync } from 'node:fs'
@@ -37,8 +43,19 @@ const IS_LINUX = process.platform === 'linux'
 const JSON_BODY =
   '{\n  "name": "alpha",\n  "beta": 2,\n  "alias": "alpha",\n  "gamma": {\n    "nested": 3\n  }\n}\n'
 
+/** One-line json, so a formatter run is unmistakable in the buffer. */
+const FLAT_JSON_BODY = '{"name":"alpha","beta":2}'
+
+/** Taller than any editor viewport, so a page-scroll has somewhere to go. */
+const TALL_JSON_BODY = `{\n${Array.from({ length: 200 }, (_, i) => `  "key${i}": ${i},`).join(
+  '\n',
+)}\n  "last": true\n}\n`
+
 /** MonacoDefault — the only weight the dispatcher defers without preventDefault. */
 const MONACO_DEFAULT_WEIGHT = 50
+
+/** `WorkbenchContrib` — what Action2 and registerKeybinding default to. */
+const WORKBENCH_CONTRIB_WEIGHT = 200
 
 type DocKey = readonly [key: string, command: string]
 
@@ -91,17 +108,17 @@ const WIN_KEYS: readonly DocKey[] = [
 ]
 
 /**
- * Keys monaco rebinds per platform. On Linux the bridge still mirrors the base
- * (windows-flavoured) key, so the registry names one command while monaco runs
- * another — or nothing at all. Asserted as observed behaviour, so making the
- * bridge platform-aware fails here and forces the doc's platform table to move.
+ * Keys monaco rebinds on Linux. The mirror resolves the same platform block, so
+ * these assert the *rebound* key — a bridge that ignores `linux:` mirrors the
+ * base key instead and fails here.
  */
-const LINUX_DIVERGENT: ReadonlyArray<readonly [string, string]> = [
-  ['alt+shift+a', 'editor.action.blockComment'],
-  ['alt+shift+down', 'editor.action.copyLinesDownAction'],
-  ['alt+shift+up', 'editor.action.copyLinesUpAction'],
-  ['ctrl+alt+down', 'editor.action.insertCursorBelow'],
-  ['ctrl+alt+up', 'editor.action.insertCursorAbove'],
+const LINUX_REBOUND_KEYS: readonly DocKey[] = [
+  ['alt+shift+down', 'editor.action.insertCursorBelow'],
+  ['alt+shift+up', 'editor.action.insertCursorAbove'],
+  ['ctrl+shift+a', 'editor.action.blockComment'],
+  // ctrl+shift+i is the one Linux rebind that is *not* pressable: the workbench
+  // claims it for DevTools (see the occupied list). Its registration is asserted
+  // in the binding-enumeration test below instead.
 ]
 
 /** 2-stroke chords, traced as [first, second]. */
@@ -118,7 +135,9 @@ const CHORD_KEYS: ReadonlyArray<readonly [string, string, string]> = [
 
 /**
  * Keys the project claims on purpose, so the doc can tell users what a key does
- * *here* instead of what monaco would have done with it.
+ * *here* instead of what monaco would have done with it. The resize keys are
+ * listed for every platform: their when-clause is `... || editorAreaFocus`,
+ * which has nothing to do with the platform.
  */
 const OCCUPIED_KEYS: readonly DocKey[] = [
   ['alt+up', 'findWordAtCursor.previous'],
@@ -128,24 +147,65 @@ const OCCUPIED_KEYS: readonly DocKey[] = [
   ['ctrl+h', 'workbench.action.editor.findReplace'],
   ['f3', 'workbench.action.editor.findNext'],
   ['shift+f3', 'workbench.action.editor.findPrevious'],
+  ['ctrl+alt+shift+down', 'workbench.action.increaseViewHeight'],
+  ['ctrl+alt+shift+up', 'workbench.action.decreaseViewHeight'],
   // Linux rebinds formatDocument to ctrl+shift+i, which the workbench already
-  // uses for DevTools — so on Linux there is no working format-document key.
+  // uses for DevTools — the mirrored row exists, the workbench still wins it.
   ['ctrl+shift+i', 'workbench.action.toggleDevTools'],
 ]
 
-const LINUX_OCCUPIED_KEYS: readonly DocKey[] = [
-  ['ctrl+alt+shift+down', 'workbench.action.increaseViewHeight'],
-  ['ctrl+alt+shift+up', 'workbench.action.decreaseViewHeight'],
+/**
+ * The alternative keys monacoCompatKeybindings.ts restores. Hardcoded on
+ * purpose: importing the renderer module would make the spec agree with the
+ * implementation by construction, which is the one thing a guard must not do.
+ */
+const COMPAT_KEYS: readonly DocKey[] = [
+  ['ctrl+shift+up', 'editor.action.moveLinesUpAction'],
+  ['ctrl+shift+down', 'editor.action.moveLinesDownAction'],
+  ['ctrl+shift+alt+f', 'editor.toggleFold'],
+  ['shift+alt+pageup', 'scrollPageUp'],
+  ['shift+alt+pagedown', 'scrollPageDown'],
 ]
+
+/** Linux-only entries: elsewhere the native key works, so no alternative is offered. */
+const COMPAT_KEYS_LINUX: readonly DocKey[] = [
+  ['ctrl+shift+d', 'editor.action.copyLinesDownAction'],
+  ['ctrl+shift+alt+d', 'editor.action.copyLinesUpAction'],
+  ['shift+alt+f', 'editor.action.formatDocument'],
+]
+
+interface RegisteredBinding {
+  readonly command: string
+  readonly key: string
+  readonly weight: number
+}
 
 const text = (page: Page) => page.evaluate(() => window.__E2E__!.getActiveEditorText())
 const selCount = (page: Page) =>
   page.evaluate(() => window.__E2E__!.getActiveEditorSelectionCount())
+const firstVisibleLine = (page: Page) =>
+  page.evaluate(() => window.__E2E__!.getActiveEditorFirstVisibleLine())
+const visibleLineCount = (page: Page) =>
+  page.evaluate(() => window.__E2E__!.getActiveEditorVisibleLineCount())
 
 async function setText(page: Page, body: string): Promise<void> {
   await expect
     .poll(() => page.evaluate((t) => window.__E2E__!.setActiveEditorText(t), body))
     .toBe(true)
+}
+
+async function registry(page: Page): Promise<readonly RegisteredBinding[]> {
+  return page.evaluate(() => window.__E2E__!.getAllKeybindings())
+}
+
+/** Registered at `weight`, regardless of who would win the key at runtime. */
+function mirrored(
+  bindings: readonly RegisteredBinding[],
+  key: string,
+  command: string,
+  weight: number = MONACO_DEFAULT_WEIGHT,
+): boolean {
+  return bindings.some((kb) => kb.key === key && kb.command === command && kb.weight === weight)
 }
 
 /** One temp dir per call: the core suite is fullyParallel, so tests must not share one. */
@@ -207,39 +267,83 @@ test.describe('@p1 editor text shortcuts', () => {
     }
   })
 
-  test('linux: monaco rebinds make the mirrored keys diverge', async ({ page, workbench }) => {
-    test.skip(!IS_LINUX, 'windows uses the base binding, covered by the test above')
+  test('the mirror resolves monaco’s per-platform rebinds', async ({ page, workbench }) => {
     await workbench.waitForRestored()
     await workbench.waitForBootstrapFocusSettled()
     await openJsonEditor(page, workbench)
 
-    for (const [key, mirrored] of LINUX_DIVERGENT) {
-      await test.step(`${key} is mirrored as ${mirrored} but monaco disagrees`, async () => {
-        const trace = await page.evaluate((k) => window.__E2E__!.traceKeybinding(k), key)
+    // Platform-truth sentinel: the bridge derives the platform from monaco's own
+    // `OS` constant, and `isLinux` is seeded from the same place. A second
+    // platform source (e.g. process.platform) would make them disagree.
+    expect(await page.evaluate(() => window.__E2E__!.getContextKey('isLinux'))).toBe(IS_LINUX)
+
+    if (IS_LINUX) {
+      for (const [key, command] of LINUX_REBOUND_KEYS) {
+        await test.step(`${key} → ${command}`, async () => {
+          const trace = await page.evaluate((k) => window.__E2E__!.traceKeybinding(k), key)
+          expect(
+            trace.command,
+            `${key} no longer resolves to the Linux rebind ${command} — the mirror is ` +
+              'reading the base rule again',
+          ).toBe(command)
+          expect(trace.weight).toBe(MONACO_DEFAULT_WEIGHT)
+        })
+      }
+    }
+
+    const bindings = await registry(page)
+
+    // Keys the mirror must NOT carry: monaco dropped them on this platform, and
+    // a phantom row is what the shortcut editor would show the user instead.
+    const stale: readonly DocKey[] = IS_LINUX
+      ? [
+          ['alt+shift+up', 'editor.action.copyLinesUpAction'],
+          ['alt+shift+down', 'editor.action.copyLinesDownAction'],
+          ['alt+shift+a', 'editor.action.blockComment'],
+          ['alt+shift+f', 'editor.action.formatDocument'],
+          ['ctrl+pageup', 'scrollPageUp'],
+          ['ctrl+pagedown', 'scrollPageDown'],
+        ]
+      : [
+          ['alt+ctrl+shift+up', 'editor.action.copyLinesUpAction'],
+          ['alt+ctrl+shift+down', 'editor.action.copyLinesDownAction'],
+          ['ctrl+shift+a', 'editor.action.blockComment'],
+          ['ctrl+shift+i', 'editor.action.formatDocument'],
+        ]
+    for (const [key, command] of stale) {
+      await test.step(`${key} is not mirrored as ${command} here`, async () => {
         expect(
-          trace.command,
-          `${key} no longer mirrors ${mirrored} — if the bridge became platform-aware, ` +
-            "update the doc's platform table and drop this entry",
-        ).toBe(mirrored)
+          mirrored(bindings, key, command),
+          `${key} is registered as ${command} at weight ${MONACO_DEFAULT_WEIGHT}, but monaco ` +
+            'has no such binding on this platform',
+        ).toBe(false)
       })
     }
 
-    // ...and the wrap-around that makes it reachable anyway: whatever the
-    // registry does not know about falls through to monaco untouched.
-    await setText(page, JSON_BODY)
-    await page.evaluate(() => window.__E2E__!.setActiveEditorCursor(2, 1))
-    await page.keyboard.press('Alt+Shift+A')
-    await expect.poll(() => text(page)).toBe(JSON_BODY)
-
-    await setText(page, JSON_BODY)
-    await page.evaluate(() => window.__E2E__!.setActiveEditorCursor(2, 1))
-    await page.keyboard.press('Control+Shift+A')
-    await expect.poll(() => text(page)).toContain('/*')
-
-    await setText(page, JSON_BODY)
-    await page.evaluate(() => window.__E2E__!.setActiveEditorCursor(1, 1))
-    await page.keyboard.press('Alt+Shift+ArrowDown')
-    await expect.poll(() => selCount(page)).toBe(2)
+    // ...and the keys it must carry instead.
+    const expected: readonly DocKey[] = IS_LINUX
+      ? [
+          ['alt+ctrl+shift+up', 'editor.action.copyLinesUpAction'],
+          ['alt+ctrl+shift+down', 'editor.action.copyLinesDownAction'],
+          ['ctrl+shift+a', 'editor.action.blockComment'],
+          ['ctrl+shift+i', 'editor.action.formatDocument'],
+          ['alt+pageup', 'scrollPageUp'],
+          ['alt+pagedown', 'scrollPageDown'],
+        ]
+      : [
+          ['alt+shift+up', 'editor.action.copyLinesUpAction'],
+          ['alt+shift+down', 'editor.action.copyLinesDownAction'],
+          ['alt+shift+a', 'editor.action.blockComment'],
+          ['alt+shift+f', 'editor.action.formatDocument'],
+        ]
+    for (const [key, command] of expected) {
+      await test.step(`${key} is mirrored as ${command}`, async () => {
+        expect(
+          mirrored(bindings, key, command),
+          `${key} should be registered as ${command} at weight ${MONACO_DEFAULT_WEIGHT}`,
+        ).toBe(true)
+      })
+    }
   })
 
   test('keys the workbench claims on purpose still belong to the workbench', async ({
@@ -250,14 +354,134 @@ test.describe('@p1 editor text shortcuts', () => {
     await workbench.waitForBootstrapFocusSettled()
     await openJsonEditor(page, workbench)
 
-    const occupied = IS_LINUX ? [...OCCUPIED_KEYS, ...LINUX_OCCUPIED_KEYS] : OCCUPIED_KEYS
-    for (const [key, command] of occupied) {
+    for (const [key, command] of OCCUPIED_KEYS) {
       await test.step(`${key} → ${command}`, async () => {
         const trace = await page.evaluate((k) => window.__E2E__!.traceKeybinding(k), key)
         expect(
           trace.command,
           `${key} changed hands — the doc's "keys the workbench claims" table is stale`,
         ).toBe(command)
+      })
+    }
+  })
+
+  test('alternative keys reach the features the workbench took over', async ({
+    page,
+    workbench,
+  }) => {
+    await workbench.waitForRestored()
+    await workbench.waitForBootstrapFocusSettled()
+    await openJsonEditor(page, workbench)
+
+    const compat = IS_LINUX ? [...COMPAT_KEYS, ...COMPAT_KEYS_LINUX] : COMPAT_KEYS
+
+    for (const [, command] of compat) {
+      await test.step(`${command} exists`, async () => {
+        await expect
+          .poll(() => page.evaluate((c) => window.__E2E__!.hasCommand(c), command), {
+            message:
+              `${command} is not registered — the alternative key would swallow the ` +
+              'keystroke with nothing to run',
+          })
+          .toBe(true)
+      })
+    }
+
+    for (const [key, command] of compat) {
+      await test.step(`${key} → ${command}`, async () => {
+        const trace = await page.evaluate((k) => window.__E2E__!.traceKeybinding(k), key)
+        expect(trace.command, `${key} does not reach ${command}`).toBe(command)
+        expect(
+          trace.weight,
+          `${key} sits at weight ${trace.weight}; at ${MONACO_DEFAULT_WEIGHT} the dispatcher ` +
+            'defers to monaco, which has no binding for this key',
+        ).toBe(WORKBENCH_CONTRIB_WEIGHT)
+      })
+    }
+
+    // An alternative key is only ours to take while monaco holds no *primary* on
+    // it. A monaco bump that adds one would silently shadow the core command
+    // again, which is exactly the class of bug this whole change is about.
+    const bindings = await registry(page)
+    for (const [key, command] of compat) {
+      await test.step(`${key} carries no other monaco default`, async () => {
+        const rivals = bindings
+          .filter((kb) => kb.key === key && kb.weight === MONACO_DEFAULT_WEIGHT)
+          .filter((kb) => kb.command !== command)
+          .map((kb) => kb.command)
+        expect(
+          rivals,
+          `${key} is now monaco's own default for ${rivals.join(', ')} — the alternative key ` +
+            'for ' +
+            command +
+            ' shadows it',
+        ).toEqual([])
+      })
+    }
+
+    await test.step('Ctrl+Shift+↓ moves the line down', async () => {
+      await setText(page, JSON_BODY)
+      await page.evaluate(() => window.__E2E__!.setActiveEditorCursor(2, 1))
+      await page.keyboard.press('Control+Shift+ArrowDown')
+      await expect.poll(() => text(page)).toContain('  "beta": 2,\n  "name": "alpha",')
+    })
+
+    await test.step('Ctrl+Shift+↑ moves the line up', async () => {
+      await setText(page, JSON_BODY)
+      await page.evaluate(() => window.__E2E__!.setActiveEditorCursor(3, 1))
+      await page.keyboard.press('Control+Shift+ArrowUp')
+      await expect.poll(() => text(page)).toContain('  "beta": 2,\n  "name": "alpha",')
+    })
+
+    await test.step('Ctrl+Shift+Alt+F folds', async () => {
+      await setText(page, JSON_BODY)
+      await page.evaluate(() => window.__E2E__!.setActiveEditorCursor(1, 1))
+      const before = (await visibleLineCount(page)) ?? 0
+      await page.keyboard.press('Control+Shift+Alt+f')
+      // Folding is view state, so the buffer stays put either way — the visible
+      // line count is what drops. Without this the step would pass on a key that
+      // does nothing at all.
+      await expect
+        .poll(visibleLineCount.bind(null, page), {
+          message: `folding hid nothing — all ${before} lines are still visible`,
+        })
+        .toBeLessThan(before)
+      expect(await text(page)).toBe(JSON_BODY)
+    })
+
+    await test.step('Shift+Alt+PageDown scrolls a page', async () => {
+      await setText(page, TALL_JSON_BODY)
+      const before = (await firstVisibleLine(page)) ?? 1
+      await page.keyboard.press('Shift+Alt+PageDown')
+      await expect
+        .poll(firstVisibleLine.bind(null, page), {
+          message: `the page-scroll left the first visible line at ${before}`,
+        })
+        .toBeGreaterThan(before)
+      expect(await text(page)).toBe(TALL_JSON_BODY)
+    })
+
+    if (IS_LINUX) {
+      await test.step('Ctrl+Shift+D copies the line down', async () => {
+        await setText(page, JSON_BODY)
+        await page.evaluate(() => window.__E2E__!.setActiveEditorCursor(2, 1))
+        await page.keyboard.press('Control+Shift+d')
+        await expect.poll(() => text(page)).toContain('  "name": "alpha",\n  "name": "alpha",')
+      })
+
+      await test.step('Ctrl+Shift+Alt+D copies the line up', async () => {
+        await setText(page, JSON_BODY)
+        await page.evaluate(() => window.__E2E__!.setActiveEditorCursor(3, 1))
+        await page.keyboard.press('Control+Shift+Alt+d')
+        await expect.poll(() => text(page)).toContain('  "beta": 2,\n  "beta": 2,')
+      })
+
+      await test.step('Shift+Alt+F formats the document', async () => {
+        await setText(page, FLAT_JSON_BODY)
+        await page.keyboard.press('Shift+Alt+f')
+        // Only the json formatter produces this indentation, so the assertion
+        // tells a real formatting run from a key that merely did nothing.
+        await expect.poll(() => text(page)).toContain('\n  "name": "alpha",\n')
       })
     }
   })
@@ -306,13 +530,15 @@ test.describe('@p1 editor text shortcuts', () => {
 
     await test.step('Ctrl+K Ctrl+0 resolves and runs the fold-all chord', async () => {
       await setText(page, JSON_BODY)
+      const before = (await visibleLineCount(page)) ?? 0
       await page.keyboard.press('Control+k')
       await page.keyboard.press('Control+0')
-      // Folding is visibly observable only through monaco's DOM (39 → 5 rendered
-      // lines), which specs must not assert. The chord's effect on the buffer is
-      // "none", and that is what is checkable here: a stolen chord would type
-      // into the buffer instead.
-      await expect.poll(() => text(page)).toBe(JSON_BODY)
+      // The visible line count is the DOM-free way to see folding; a stolen chord
+      // would type into the buffer instead, so pin both.
+      await expect
+        .poll(visibleLineCount.bind(null, page), { message: 'fold-all hid nothing' })
+        .toBeLessThan(before)
+      expect(await text(page)).toBe(JSON_BODY)
     })
   })
 

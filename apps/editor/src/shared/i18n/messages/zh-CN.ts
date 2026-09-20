@@ -1888,6 +1888,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'monaco.needsActiveEditor': '此命令需要一个活动的文本编辑器',
   'monaco.command.columnSelectUp': '向上列选择',
   'monaco.command.columnSelectDown': '向下列选择',
+  'monaco.command.scrollPageUp': '向上滚动一页',
+  'monaco.command.scrollPageDown': '向下滚动一页',
 
   // --- AI: commands & model picker ---
   'ai.clearApiKey.confirm': '清除已存储的 {provider} API 密钥？',

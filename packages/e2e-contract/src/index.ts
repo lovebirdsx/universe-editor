@@ -949,6 +949,13 @@ export interface E2EProbe {
    */
   getActiveEditorLastVisibleLine(): number | undefined
   /**
+   * How many lines of the active file editor are actually visible, i.e. not
+   * hidden behind a fold. Folding is pure view state — the buffer never changes —
+   * so this is the DOM-free way to prove a fold command ran, whichever folding
+   * provider produced the region. Undefined when no file editor is mounted.
+   */
+  getActiveEditorVisibleLineCount(): number | undefined
+  /**
    * Full text of the active Monaco editor's model, or undefined when the active
    * editor isn't a file editor (or its Monaco instance isn't mounted). Used by
    * the markdown-editing spec to assert the result of each editing command.

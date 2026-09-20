@@ -782,6 +782,12 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       const ranges = monaco?.getVisibleRanges()
       return ranges && ranges.length > 0 ? ranges[ranges.length - 1]?.endLineNumber : undefined
     },
+    getActiveEditorVisibleLineCount: () => {
+      const monaco = getActiveTextEditor(services.editorGroupsService)?.editor
+      const ranges = monaco?.getVisibleRanges()
+      if (!ranges) return undefined
+      return ranges.reduce((n, r) => n + (r.endLineNumber - r.startLineNumber + 1), 0)
+    },
     getActiveEditorText: () => {
       const monaco = getActiveTextEditor(services.editorGroupsService)?.editor
       return monaco?.getModel()?.getValue()

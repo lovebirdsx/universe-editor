@@ -7,6 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
+  ContextKeyService,
   EditorInput,
   IEditorGroupsService,
   INotificationService,
@@ -18,12 +19,21 @@ import {
   type IDisposable,
 } from '@universe-editor/platform'
 import {
-  bridgeMonacoActionsForTests,
+  bridgeMonacoActionsForTests as bridgeAll,
+  CORE_COMMANDS,
   getAllMonacoDefaultKeybindings,
   getMonacoDefaultKeybinding,
+  resolvePlatformRule,
+  effectivePrimariesOf,
   type CoreCommand,
   type IMonacoEditorExtensionsRegistry,
+  type MonacoPlatform,
 } from '../monaco/monacoActionsBridge.js'
+import {
+  MONACO_COMPAT_KEYBINDINGS,
+  registerMonacoCompatKeybindings,
+  type IMonacoCompatKeybinding,
+} from '../monaco/monacoCompatKeybindings.js'
 import { FileEditorRegistry } from '../../../services/editor/FileEditorRegistry.js'
 
 const CtrlCmd = 2048
@@ -33,9 +43,12 @@ const KC_KeyF = 36
 const KC_KeyZ = 56
 const KC_KeyY = 55
 const KC_KeyA = 31
+const KC_KeyI = 39
 const KC_F1 = 59
 const KC_UpArrow = 16
 const KC_DownArrow = 18
+const KC_PageUp = 11
+const KC_PageDown = 12
 
 type NlsGlobals = { __MONACO_NLS__?: Record<string, string> }
 
@@ -43,6 +56,19 @@ function makeRegistry(
   actions: { id: string; label: string; _kbOpts?: unknown }[],
 ): IMonacoEditorExtensionsRegistry {
   return { getEditorActions: () => actions as never }
+}
+
+/**
+ * The mirror on its own. The assertions below are about monaco facts; the
+ * alternative-key table is a product decision tested separately, so it is
+ * opted out of here to keep its entries from reshaping these expectations.
+ */
+function bridge(
+  registry: IMonacoEditorExtensionsRegistry,
+  coreCommands: readonly CoreCommand[],
+  platform: MonacoPlatform = 'linux',
+): IDisposable {
+  return bridgeAll(registry, coreCommands, platform, [])
 }
 
 describe('bridgeMonacoActionsForTests', () => {
@@ -59,7 +85,7 @@ describe('bridgeMonacoActionsForTests', () => {
   })
 
   it('registers each EditorAction into CommandsRegistry with label/category', () => {
-    registered = bridgeMonacoActionsForTests(
+    registered = bridge(
       makeRegistry([
         { id: 'editor.action.formatDocument', label: 'Format Document', _kbOpts: undefined },
         { id: 'editor.action.commentLine', label: 'Toggle Line Comment' },
@@ -79,7 +105,7 @@ describe('bridgeMonacoActionsForTests', () => {
   })
 
   it('records the first decoded default keybinding for each action', () => {
-    registered = bridgeMonacoActionsForTests(
+    registered = bridge(
       makeRegistry([
         {
           id: 'editor.action.formatDocument',
@@ -95,7 +121,7 @@ describe('bridgeMonacoActionsForTests', () => {
   })
 
   it('handles kbOpts as an array — takes the first non-zero primary', () => {
-    registered = bridgeMonacoActionsForTests(
+    registered = bridge(
       makeRegistry([
         {
           id: 'editor.action.foo',
@@ -109,7 +135,7 @@ describe('bridgeMonacoActionsForTests', () => {
   })
 
   it('skips the default-keybinding map entry when the key code is unsupported', () => {
-    registered = bridgeMonacoActionsForTests(
+    registered = bridge(
       makeRegistry([
         {
           id: 'editor.action.bar',
@@ -125,10 +151,7 @@ describe('bridgeMonacoActionsForTests', () => {
   })
 
   it('registers actions without kbOpts (command-only, no default key)', () => {
-    registered = bridgeMonacoActionsForTests(
-      makeRegistry([{ id: 'editor.action.noKb', label: 'No KB' }]),
-      [],
-    )
+    registered = bridge(makeRegistry([{ id: 'editor.action.noKb', label: 'No KB' }]), [])
     expect(CommandsRegistry.getCommands().get('editor.action.noKb')).toBeDefined()
     expect(getMonacoDefaultKeybinding('editor.action.noKb')).toBeUndefined()
   })
@@ -149,7 +172,7 @@ describe('bridgeMonacoActionsForTests', () => {
         primary: CtrlCmd | KC_KeyA,
       },
     ]
-    registered = bridgeMonacoActionsForTests(makeRegistry([]), coreCommands)
+    registered = bridge(makeRegistry([]), coreCommands)
 
     const cmds = CommandsRegistry.getCommands()
     expect(cmds.get('undo')?.metadata?.description).toBe('撤销')
@@ -169,7 +192,7 @@ describe('bridgeMonacoActionsForTests', () => {
         labelKey: 'monaco.command.columnSelectUp',
       },
     ]
-    registered = bridgeMonacoActionsForTests(makeRegistry([]), coreCommands)
+    registered = bridge(makeRegistry([]), coreCommands)
     // No configureNls / no table entry → English defaultMessage wins.
     expect(CommandsRegistry.getCommands().get('cursorColumnSelectUp')?.metadata?.description).toBe(
       'Column Select Up',
@@ -202,7 +225,7 @@ describe('bridgeMonacoActionsForTests', () => {
       },
     ]
 
-    registered = bridgeMonacoActionsForTests(makeRegistry([]), coreCommands)
+    registered = bridge(makeRegistry([]), coreCommands)
 
     const cmds = CommandsRegistry.getCommands()
     expect(cmds.get('cursorColumnSelectUp')?.metadata).toEqual({
@@ -264,7 +287,7 @@ describe('bridgeMonacoActionsForTests', () => {
     const coreCommands: CoreCommand[] = [
       { id: 'undo', label: 'Undo', nlsKey: 'undo', primary: CtrlCmd | KC_KeyZ },
     ]
-    registered = bridgeMonacoActionsForTests(makeRegistry([]), coreCommands)
+    registered = bridge(makeRegistry([]), coreCommands)
     expect(CommandsRegistry.getCommands().get('undo')?.metadata?.description).toBe('Undo')
   })
 
@@ -272,7 +295,7 @@ describe('bridgeMonacoActionsForTests', () => {
     const coreCommands: CoreCommand[] = [
       { id: 'undo', label: 'Core Undo', nlsKey: 'undo', primary: CtrlCmd | KC_KeyZ },
     ]
-    registered = bridgeMonacoActionsForTests(
+    registered = bridge(
       makeRegistry([{ id: 'undo', label: 'Action Undo', _kbOpts: { primary: CtrlCmd | KC_KeyZ } }]),
       coreCommands,
     )
@@ -281,7 +304,7 @@ describe('bridgeMonacoActionsForTests', () => {
   })
 
   it('exposes all defaults via getAllMonacoDefaultKeybindings()', () => {
-    registered = bridgeMonacoActionsForTests(
+    registered = bridge(
       makeRegistry([
         {
           id: 'editor.action.formatDocument',
@@ -298,7 +321,7 @@ describe('bridgeMonacoActionsForTests', () => {
   })
 
   it('dispose() removes both the command and the default-keybinding entry', () => {
-    registered = bridgeMonacoActionsForTests(
+    registered = bridge(
       makeRegistry([
         {
           id: 'editor.action.demo',
@@ -321,7 +344,7 @@ describe('bridgeMonacoActionsForTests', () => {
   })
 
   it('registers the default key into KeybindingsRegistry at MonacoDefault weight, gated on editorFocus', () => {
-    registered = bridgeMonacoActionsForTests(
+    registered = bridge(
       makeRegistry([
         {
           id: 'editor.action.formatDocument',
@@ -342,7 +365,7 @@ describe('bridgeMonacoActionsForTests', () => {
   })
 
   it('registers ALL distinct primaries from a kbOpts array, not just the first', () => {
-    registered = bridgeMonacoActionsForTests(
+    registered = bridge(
       makeRegistry([
         {
           id: 'editor.action.multi',
@@ -360,7 +383,7 @@ describe('bridgeMonacoActionsForTests', () => {
   })
 
   it('dispose() removes the registry bindings too', () => {
-    registered = bridgeMonacoActionsForTests(
+    registered = bridge(
       makeRegistry([
         { id: 'editor.action.demo', label: 'Demo', _kbOpts: { primary: CtrlCmd | KC_KeyA } },
       ]),
@@ -407,7 +430,7 @@ describe('bridgeMonacoActionsForTests', () => {
     })
 
     it('dispatches to a mounted editor even when the active input is not a FileEditorInput', () => {
-      registered = bridgeMonacoActionsForTests(
+      registered = bridge(
         makeRegistry([{ id: 'editor.action.insertCursorBelow', label: 'Add Cursor Below' }]),
         [],
       )
@@ -422,7 +445,7 @@ describe('bridgeMonacoActionsForTests', () => {
     })
 
     it('notifies instead of throwing when no text editor is mounted', () => {
-      registered = bridgeMonacoActionsForTests(
+      registered = bridge(
         makeRegistry([{ id: 'editor.action.insertCursorBelow', label: 'Add Cursor Below' }]),
         [],
       )
@@ -433,5 +456,426 @@ describe('bridgeMonacoActionsForTests', () => {
       })
       expect(status).toHaveBeenCalledTimes(1)
     })
+  })
+})
+
+/**
+ * The kbOpts fixtures below are copied verbatim from the monaco 0.55 esm sources
+ * of the actions they name. Platform resolution is the only place win32/mac
+ * behaviour is exercised at all — the e2e suite runs on Linux — so these
+ * fixtures have to be the real shapes, not convenient ones.
+ */
+const COPY_LINES_UP = {
+  primary: Alt | Shift | KC_UpArrow,
+  linux: { primary: CtrlCmd | Alt | Shift | KC_UpArrow },
+}
+const INSERT_CURSOR_ABOVE = {
+  primary: CtrlCmd | Alt | KC_UpArrow,
+  linux: { primary: Shift | Alt | KC_UpArrow, secondary: [CtrlCmd | Shift | KC_UpArrow] },
+}
+const BLOCK_COMMENT = {
+  primary: Shift | Alt | KC_KeyA,
+  linux: { primary: CtrlCmd | Shift | KC_KeyA },
+}
+const FORMAT_DOCUMENT = {
+  primary: Shift | Alt | KC_KeyF,
+  linux: { primary: CtrlCmd | Shift | KC_KeyI },
+}
+
+describe('resolvePlatformRule / effectivePrimariesOf', () => {
+  it('a platform block replaces the whole rule — the base primary is not a fallback', () => {
+    const rule = {
+      primary: Alt | Shift | KC_UpArrow,
+      linux: { primary: CtrlCmd | Alt | Shift | KC_UpArrow },
+    }
+    expect(resolvePlatformRule(rule, 'win32').primary).toBe(Alt | Shift | KC_UpArrow)
+    expect(resolvePlatformRule(rule, 'darwin').primary).toBe(Alt | Shift | KC_UpArrow)
+    expect(resolvePlatformRule(rule, 'linux').primary).toBe(CtrlCmd | Alt | Shift | KC_UpArrow)
+  })
+
+  it('primary: 0 on a platform means "no key here", and yields nothing', () => {
+    const rule = { primary: CtrlCmd | Shift | Alt | KC_UpArrow, linux: { primary: 0 } }
+    expect(resolvePlatformRule(rule, 'linux').primary).toBe(0)
+    expect(effectivePrimariesOf(rule, 'win32')).toEqual([CtrlCmd | Shift | Alt | KC_UpArrow])
+    expect(effectivePrimariesOf(rule, 'linux')).toEqual([])
+  })
+
+  it('dedupes primaries across a rule array, keeping registration order', () => {
+    const kbOpts = [
+      { primary: KC_F1 },
+      { primary: KC_F1 },
+      { primary: CtrlCmd | KC_KeyA },
+      { primary: 0 },
+    ]
+    expect(effectivePrimariesOf(kbOpts, 'linux')).toEqual([KC_F1, CtrlCmd | KC_KeyA])
+  })
+
+  it('accepts a single rule, a rule array, and nothing at all', () => {
+    expect(effectivePrimariesOf({ primary: KC_F1 }, 'linux')).toEqual([KC_F1])
+    expect(effectivePrimariesOf([], 'linux')).toEqual([])
+    expect(effectivePrimariesOf(undefined, 'linux')).toEqual([])
+  })
+
+  it('resolves a platform block nested inside an array', () => {
+    const kbOpts = [{ primary: KC_F1, linux: { primary: CtrlCmd | KC_KeyI } }]
+    expect(effectivePrimariesOf(kbOpts, 'win32')).toEqual([KC_F1])
+    expect(effectivePrimariesOf(kbOpts, 'linux')).toEqual([CtrlCmd | KC_KeyI])
+  })
+})
+
+describe('the mirror follows the current platform', () => {
+  let registered: IDisposable | undefined
+
+  afterEach(() => {
+    registered?.dispose()
+    registered = undefined
+  })
+
+  function mirrorFor(platform: MonacoPlatform): void {
+    registered?.dispose()
+    registered = bridge(
+      makeRegistry([
+        { id: 'editor.action.copyLinesUpAction', label: 'Copy Line Up', _kbOpts: COPY_LINES_UP },
+        {
+          id: 'editor.action.insertCursorAbove',
+          label: 'Add Cursor Above',
+          _kbOpts: INSERT_CURSOR_ABOVE,
+        },
+        { id: 'editor.action.blockComment', label: 'Toggle Block Comment', _kbOpts: BLOCK_COMMENT },
+        { id: 'editor.action.formatDocument', label: 'Format Document', _kbOpts: FORMAT_DOCUMENT },
+      ]),
+      [],
+      platform,
+    )
+  }
+
+  /** Registry keys of a command's MonacoDefault rows, in canonical order. */
+  function mirroredKeys(commandId: string): string[] {
+    return KeybindingsRegistry.getAllKeybindings()
+      .filter((kb) => kb.command === commandId)
+      .map((kb) => kb.key ?? kb.chords!.join(' '))
+      .sort()
+  }
+
+  it('linux mirrors the linux blocks — and drops the base key they replace', () => {
+    mirrorFor('linux')
+
+    expect(mirroredKeys('editor.action.copyLinesUpAction')).toEqual(['alt+ctrl+shift+up'])
+    expect(mirroredKeys('editor.action.insertCursorAbove')).toEqual(['alt+shift+up'])
+    expect(mirroredKeys('editor.action.blockComment')).toEqual(['ctrl+shift+a'])
+    expect(mirroredKeys('editor.action.formatDocument')).toEqual(['ctrl+shift+i'])
+
+    // The base keys are *gone* on linux, not mirrored alongside. `alt+shift+a`
+    // showing up as block-comment on Linux was the phantom row this replaces.
+    const all = KeybindingsRegistry.getAllKeybindings().map((kb) => kb.key)
+    expect(all).not.toContain('alt+shift+a')
+    expect(all).not.toContain('alt+shift+f')
+    expect(all).not.toContain('ctrl+alt+up')
+  })
+
+  it('win32 mirrors the base rules', () => {
+    mirrorFor('win32')
+
+    expect(mirroredKeys('editor.action.copyLinesUpAction')).toEqual(['alt+shift+up'])
+    expect(mirroredKeys('editor.action.insertCursorAbove')).toEqual(['alt+ctrl+up'])
+    expect(mirroredKeys('editor.action.blockComment')).toEqual(['alt+shift+a'])
+    expect(mirroredKeys('editor.action.formatDocument')).toEqual(['alt+shift+f'])
+  })
+
+  it('darwin mirrors the base rules (none of these four have a mac block)', () => {
+    mirrorFor('darwin')
+
+    expect(mirroredKeys('editor.action.formatDocument')).toEqual(['alt+shift+f'])
+    expect(mirroredKeys('editor.action.blockComment')).toEqual(['alt+shift+a'])
+  })
+
+  it('never mirrors a secondary — only primary', () => {
+    mirrorFor('linux')
+    // INSERT_CURSOR_ABOVE's linux secondary is ctrl+shift+up; mirroring it would
+    // add a second MonacoDefault row to a command that already has one.
+    expect(mirroredKeys('editor.action.insertCursorAbove')).toHaveLength(1)
+  })
+
+  it('records the platform-effective key as the "built-in" default', () => {
+    mirrorFor('linux')
+    expect(getMonacoDefaultKeybinding('editor.action.formatDocument')).toEqual({
+      key: 'ctrl+shift+i',
+    })
+
+    mirrorFor('win32')
+    expect(getMonacoDefaultKeybinding('editor.action.formatDocument')).toEqual({
+      key: 'alt+shift+f',
+    })
+  })
+})
+
+describe('core commands follow the current platform', () => {
+  let registered: IDisposable | undefined
+
+  const CORE_COMMANDS_FIXTURE: readonly CoreCommand[] = [
+    {
+      id: 'cursorColumnSelectUp',
+      label: 'Column Select Up',
+      labelKey: 'monaco.command.columnSelectUp',
+      keybindings: [
+        // coreCommands.js:383 — monaco disables this on linux; the second entry
+        // is ours (column-selection mode), so it must survive the platform pass.
+        {
+          primary: CtrlCmd | Shift | Alt | KC_UpArrow,
+          when: 'editorTextFocus',
+          linux: { primary: 0 },
+        },
+        { primary: Shift | KC_UpArrow, when: 'editorTextFocus && editorColumnSelection' },
+      ],
+    },
+    {
+      id: 'scrollPageUp',
+      label: 'Scroll Page Up',
+      labelKey: 'monaco.command.scrollPageUp',
+      keybindings: [
+        {
+          primary: CtrlCmd | KC_PageUp,
+          win: { primary: Alt | KC_PageUp },
+          linux: { primary: Alt | KC_PageUp },
+        },
+      ],
+    },
+    {
+      id: 'scrollPageDown',
+      label: 'Scroll Page Down',
+      labelKey: 'monaco.command.scrollPageDown',
+      keybindings: [
+        {
+          primary: CtrlCmd | KC_PageDown,
+          win: { primary: Alt | KC_PageDown },
+          linux: { primary: Alt | KC_PageDown },
+        },
+      ],
+    },
+  ]
+
+  afterEach(() => {
+    registered?.dispose()
+    registered = undefined
+  })
+
+  function mirrorCore(platform: MonacoPlatform): void {
+    registered?.dispose()
+    registered = bridge(makeRegistry([]), CORE_COMMANDS_FIXTURE, platform)
+  }
+
+  function coreKeys(commandId: string): string[] {
+    return KeybindingsRegistry.getAllKeybindings()
+      .filter((kb) => kb.command === commandId)
+      .map((kb) => kb.key!)
+      .sort()
+  }
+
+  it('linux drops the column-select primary monaco disables there', () => {
+    mirrorCore('linux')
+    expect(coreKeys('cursorColumnSelectUp')).toEqual(['shift+up'])
+    // The side-table keeps the decoder's long token form — it is fed to the
+    // Keyboard Shortcuts editor, which normalizes on its own.
+    expect(getMonacoDefaultKeybinding('cursorColumnSelectUp')).toEqual({ key: 'shift+arrowup' })
+  })
+
+  it('win32 keeps both column-select primaries', () => {
+    mirrorCore('win32')
+    expect(coreKeys('cursorColumnSelectUp')).toEqual(['alt+ctrl+shift+up', 'shift+up'])
+    expect(getMonacoDefaultKeybinding('cursorColumnSelectUp')).toEqual({
+      key: 'alt+ctrl+shift+arrowup',
+    })
+  })
+
+  it('scroll-page is Alt+PageUp on win32/linux and Ctrl+PageUp elsewhere', () => {
+    mirrorCore('linux')
+    expect(coreKeys('scrollPageUp')).toEqual(['alt+pageup'])
+    expect(coreKeys('scrollPageDown')).toEqual(['alt+pagedown'])
+
+    mirrorCore('win32')
+    expect(coreKeys('scrollPageUp')).toEqual(['alt+pageup'])
+
+    mirrorCore('darwin')
+    expect(coreKeys('scrollPageUp')).toEqual(['ctrl+pageup'])
+    expect(coreKeys('scrollPageDown')).toEqual(['ctrl+pagedown'])
+  })
+
+  it('registers the scroll-page commands so their keys have something to run', () => {
+    mirrorCore('linux')
+    const cmds = CommandsRegistry.getCommands()
+    expect(cmds.get('scrollPageUp')?.metadata?.description).toBe('Scroll Page Up')
+    expect(cmds.get('scrollPageDown')?.metadata?.description).toBe('Scroll Page Down')
+  })
+})
+
+describe('the shipped CORE_COMMANDS table', () => {
+  let registered: IDisposable | undefined
+
+  afterEach(() => {
+    registered?.dispose()
+    registered = undefined
+  })
+
+  /** The shipped table — not a fixture, so a drift in it fails right here. */
+  function mirrorShipped(platform: MonacoPlatform): void {
+    registered?.dispose()
+    registered = bridge(makeRegistry([]), CORE_COMMANDS, platform)
+  }
+
+  function shippedKeys(commandId: string): string[] {
+    return KeybindingsRegistry.getAllKeybindings()
+      .filter((kb) => kb.command === commandId)
+      .map((kb) => kb.key!)
+      .sort()
+  }
+
+  it('linux: scroll-page is Alt+PageUp, and column-select loses its disabled primary', () => {
+    mirrorShipped('linux')
+    expect(shippedKeys('scrollPageUp')).toEqual(['alt+pageup'])
+    expect(shippedKeys('scrollPageDown')).toEqual(['alt+pagedown'])
+    expect(shippedKeys('cursorColumnSelectUp')).toEqual(['shift+up'])
+    expect(shippedKeys('cursorColumnSelectDown')).toEqual(['shift+down'])
+  })
+
+  it('win32: scroll-page is Alt+PageUp and column-select keeps both primaries', () => {
+    mirrorShipped('win32')
+    expect(shippedKeys('scrollPageUp')).toEqual(['alt+pageup'])
+    expect(shippedKeys('cursorColumnSelectUp')).toEqual(['alt+ctrl+shift+up', 'shift+up'])
+    expect(shippedKeys('cursorColumnSelectDown')).toEqual(['alt+ctrl+shift+down', 'shift+down'])
+  })
+
+  it('darwin: scroll-page falls back to the base Ctrl+PageUp', () => {
+    mirrorShipped('darwin')
+    expect(shippedKeys('scrollPageUp')).toEqual(['ctrl+pageup'])
+    expect(shippedKeys('scrollPageDown')).toEqual(['ctrl+pagedown'])
+  })
+
+  it('undo / redo / selectAll are platform-independent', () => {
+    for (const platform of ['linux', 'win32', 'darwin'] as const) {
+      mirrorShipped(platform)
+      expect(shippedKeys('undo'), platform).toEqual(['ctrl+z'])
+      expect(shippedKeys('redo'), platform).toEqual(['ctrl+y'])
+      expect(shippedKeys('editor.action.selectAll'), platform).toEqual(['ctrl+a'])
+    }
+  })
+
+  it('every shipped command is reachable in the command palette', () => {
+    mirrorShipped('linux')
+    const cmds = CommandsRegistry.getCommands()
+    for (const core of CORE_COMMANDS) {
+      expect(cmds.get(core.id)?.metadata?.category, core.id).toBe('Editor')
+    }
+  })
+})
+
+describe('monaco compat keybindings', () => {
+  let registered: IDisposable | undefined
+
+  const MOVE_UP = MONACO_COMPAT_KEYBINDINGS.find((b) => b.id === 'editor.action.moveLinesUpAction')!
+  const COPY_DOWN = MONACO_COMPAT_KEYBINDINGS.find(
+    (b) => b.id === 'editor.action.copyLinesDownAction',
+  )!
+
+  /** Two entries are enough to pin the mechanism; the table itself is checked below. */
+  const FIXTURE: readonly IMonacoCompatKeybinding[] = [MOVE_UP, COPY_DOWN]
+
+  afterEach(() => {
+    registered?.dispose()
+    registered = undefined
+  })
+
+  function bindFixture(): void {
+    registered = bridgeAll(
+      makeRegistry([
+        { id: MOVE_UP.id, label: 'Move Line Up' },
+        { id: COPY_DOWN.id, label: 'Copy Line Down' },
+      ]),
+      [],
+      'linux',
+      FIXTURE,
+    )
+  }
+
+  it('registers the alternative key above MonacoDefault', () => {
+    bindFixture()
+    const item = KeybindingsRegistry.getAllKeybindings().find(
+      (kb) => kb.command === MOVE_UP.id && kb.key === MOVE_UP.key,
+    )
+    expect(item).toBeDefined()
+    expect(item!.weight).toBe(KeybindingWeight.WorkbenchContrib)
+    // The dispatcher defers (no preventDefault) at MonacoDefault and monaco has
+    // no binding for these keys — a compat entry at that weight would be dead.
+    expect(item!.weight).toBeGreaterThan(KeybindingWeight.MonacoDefault)
+  })
+
+  it('gates the key on the when-clause, evaluated against a real context', () => {
+    bindFixture()
+    const context = new ContextKeyService()
+
+    context.set('editorTextFocus', true)
+    context.set('isInMergeEditor', false)
+    context.set('isLinux', true)
+    expect(KeybindingsRegistry.resolveKeybinding(MOVE_UP.key, context)).toBe(MOVE_UP.id)
+    expect(KeybindingsRegistry.resolveKeybinding(COPY_DOWN.key, context)).toBe(COPY_DOWN.id)
+
+    context.set('isInMergeEditor', true)
+    expect(KeybindingsRegistry.resolveKeybinding(MOVE_UP.key, context)).toBeUndefined()
+    expect(KeybindingsRegistry.resolveKeybinding(COPY_DOWN.key, context)).toBeUndefined()
+    context.set('isInMergeEditor', false)
+
+    context.set('editorTextFocus', false)
+    expect(KeybindingsRegistry.resolveKeybinding(MOVE_UP.key, context)).toBeUndefined()
+    context.set('editorTextFocus', true)
+
+    // The linux-only entries really are linux-only.
+    context.set('isLinux', false)
+    expect(KeybindingsRegistry.resolveKeybinding(COPY_DOWN.key, context)).toBeUndefined()
+    expect(KeybindingsRegistry.resolveKeybinding(MOVE_UP.key, context)).toBe(MOVE_UP.id)
+  })
+
+  it('skips entries whose command does not exist instead of swallowing the key', () => {
+    const disposables = registerMonacoCompatKeybindings([
+      { ...MOVE_UP, id: 'editor.action.doesNotExist' },
+    ])
+    try {
+      expect(
+        KeybindingsRegistry.getAllKeybindings().some(
+          (kb) => kb.command === 'editor.action.doesNotExist',
+        ),
+      ).toBe(false)
+    } finally {
+      disposables.dispose()
+    }
+  })
+
+  it('dispose() removes the alternative keys', () => {
+    bindFixture()
+    expect(KeybindingsRegistry.getAllKeybindings().some((kb) => kb.command === MOVE_UP.id)).toBe(
+      true,
+    )
+
+    registered!.dispose()
+    registered = undefined
+    expect(KeybindingsRegistry.getAllKeybindings().some((kb) => kb.command === MOVE_UP.id)).toBe(
+      false,
+    )
+  })
+
+  it('every shipped entry is editor-scoped, distinct and self-documenting', () => {
+    expect(MONACO_COMPAT_KEYBINDINGS).toHaveLength(8)
+    expect(new Set(MONACO_COMPAT_KEYBINDINGS.map((b) => b.id)).size).toBe(
+      MONACO_COMPAT_KEYBINDINGS.length,
+    )
+    expect(new Set(MONACO_COMPAT_KEYBINDINGS.map((b) => b.key)).size).toBe(
+      MONACO_COMPAT_KEYBINDINGS.length,
+    )
+    for (const binding of MONACO_COMPAT_KEYBINDINGS) {
+      // Scoping every entry to editor text focus is what keeps an alternative
+      // key from claiming the global key space.
+      expect(binding.when, binding.id).toContain('editorTextFocus')
+      // Both halves a reader needs to judge the entry: what got taken, by what.
+      expect(binding.nativeKey, binding.id).not.toBe('')
+      expect(binding.takenBy, binding.id).not.toBe('')
+    }
   })
 })
