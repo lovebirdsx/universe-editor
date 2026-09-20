@@ -90,6 +90,7 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 
 - 连续键盘 grow → shrink 恰差一个步长、启动窗口内真实 Allotment 单测稳定复现=onChange 启动恢复撤销键盘操作（产品竞态），键盘与拖动共用用户操作标记 → 案例 93
 - focusedView 已到位但立即重开 Ctrl+Tab 首行仍是 Files、retry 恢复=FocusTracker 延迟 settle 而 picker 只取一次快照，打开前只读 poll MRU head（同查 Ctrl+P）→ 案例 94
+- 子代理全文已到但 `live=false, sawLive=false`、展开 click 比末块观察窗更慢=采样错过流式阶段；仅延后封口又出现 `mdparse.calls=1`=展开前已发完，首块挂载握手 + 末块采样握手保留真实增量渲染 → 案例 95
 
 ## 关键参考路径
 - `apps/editor/e2e/specs/` —— 所有 e2e spec；`@p0` 阻塞 CI，`@p1` 次级

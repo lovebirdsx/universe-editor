@@ -13,8 +13,10 @@
  *  stream re-parses, and whether a fence that is still growing gets tokenized at all.
  *--------------------------------------------------------------------------------------------*/
 
-import { dirname, resolve } from 'node:path'
+import { existsSync, writeFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 import type { Page } from '@playwright/test'
 import { test, expect } from '../fixtures/sharedApp.js'
 
@@ -51,6 +53,30 @@ const gaugeOf = (counters: StreamCounters, name: string): number =>
   counters.gauge.find((g) => g.name === name)?.value ?? 0
 
 /**
+ * 渲染侧证据：文本到模型不代表 React 已挂载，放行前必须看到渲染器处理过这段文本。
+ * 读数都是进程累计量，一律按基线差值算。
+ */
+type RenderEvidence = 'mdparse' | 'colorize.skip'
+
+/** 计数器自基线以来的增长量。 */
+function grewBy(baseline: StreamCounters, batch: StreamCounters, name: string): number {
+  return flowOf(batch, name).chars - flowOf(baseline, name).chars
+}
+
+// 累计解析量只作渲染就绪下限（可能重复解析尾部）；文本完整性由模型长度和最终断言另守。
+// 围栏还必须有流式延迟着色的记录，不能把「尚未挂载」当作「没有着色」。
+function hasRenderEvidence(
+  baseline: StreamCounters,
+  batch: StreamCounters,
+  expectedLength: number,
+  evidence: RenderEvidence,
+): boolean {
+  return evidence === 'mdparse'
+    ? grewBy(baseline, batch, 'mdparse') >= expectedLength
+    : grewBy(baseline, batch, 'colorize.skip') > 0
+}
+
+/**
  * Open a session and return the counter baseline the stream will be measured against.
  *
  * `collapseMode` is applied before the baseline is taken: switching modes re-renders the
@@ -58,14 +84,18 @@ const gaugeOf = (counters: StreamCounters, name: string): number =>
  * message only reaches a view when its parent card is open — and no collapse mode opens a
  * Task card any more (at most one sub-agent card may be open, and it is opened by hand),
  * so the sub-agent cases pair this with {@link openSubagentCard}.
+ *
+ * `echoAgentEnv` 透传给 fixture 进程，见 {@link makeTurnEndGate}。
  */
 async function startEchoSession(
   page: Page,
   collapseMode?: 'default' | 'collapsed' | 'expanded',
+  echoAgentEnv?: Record<string, string>,
 ): Promise<StreamCounters> {
-  await page.evaluate(([id, p]) => window.__E2E__!.installAcpEchoAgent(id, p), [
+  await page.evaluate(([id, p, env]) => window.__E2E__!.installAcpEchoAgent(id, p, env), [
     'echo',
     ECHO_AGENT_PATH,
+    echoAgentEnv,
   ] as const)
   await page.evaluate(() => {
     void window.__E2E__!.runCommand('workbench.action.agent.newSession')
@@ -82,10 +112,46 @@ async function startEchoSession(
 }
 
 /**
- * Fire the prompt without awaiting it yet: the echo agent keeps the turn open briefly
- * after the last chunk, and that window is where the counters are read. The rejection
- * is swallowed up front so that a failed assertion inside the window surfaces as itself
- * instead of as a teardown "page closed" error from the abandoned promise.
+ * turn-end gate：fixture 撑住 turn 直到放行文件出现，读数因此按 spec 的节奏取。
+ */
+interface TurnEndGate {
+  /** 经 installAcpEchoAgent 透传给 fixture 进程。 */
+  readonly env: Record<string, string>
+  /** 幂等：释放末块门，fixture 结束真实 turn。 */
+  release(): void
+  /** 幂等：释放首块门，仅子代理用例有（卡片得在流还短时点开）。 */
+  resume?(): void
+}
+
+/**
+ * 放行文件此刻不存在——mkTempDir 只建目录，文件由 release/resume 创建，run 根统一清理。
+ * `subagent` 再加一道首块门：首块之后 fixture 停住，等卡片挂载证据到手再继续。
+ */
+function makeTurnEndGate(subagent = false): TurnEndGate {
+  const dir = mkTempDir('ue2-turn-gate-')
+  const endPath = join(dir, 'release')
+  const firstChunkPath = join(dir, 'first-chunk')
+  const release = (path: string): void => {
+    if (!existsSync(path)) writeFileSync(path, '')
+  }
+  return subagent
+    ? {
+        env: {
+          ECHO_AGENT_TURN_END_GATE: endPath,
+          ECHO_AGENT_STREAM_CONTINUE_GATE: firstChunkPath,
+        },
+        release: () => release(endPath),
+        resume: () => release(firstChunkPath),
+      }
+    : { env: { ECHO_AGENT_TURN_END_GATE: endPath }, release: () => release(endPath) }
+}
+
+/**
+ * Fire the prompt without awaiting it yet: the echo agent holds the turn open after the
+ * last chunk — for the fixed hold, or until a gate releases it — and that window is where
+ * the counters are read. The rejection is swallowed up front so that a failed assertion
+ * inside the window surfaces as itself instead of as a teardown "page closed" error from
+ * the abandoned promise.
  */
 function drivePrompt(page: Page, text: string): Promise<void> {
   const running = page.evaluate((t) => window.__E2E__!.sendAcpPrompt(t), text)
@@ -93,28 +159,44 @@ function drivePrompt(page: Page, text: string): Promise<void> {
   return running
 }
 
-/** Poll interval while the stream runs; the agent's post-chunk hold is 500ms. */
+/**
+ * 跑一次 gated 提示：放提示 → 在 fixture 撑住 turn 的窗口里读数 → 释放两道门并等真实 turn
+ * 结束。释放放 finally：读数抛错时也得放行，否则 fixture 要空等满安全超时。
+ */
+async function driveGatedPrompt<T>(
+  page: Page,
+  gate: TurnEndGate,
+  promptText: string,
+  read: () => Promise<T>,
+): Promise<T> {
+  const running = drivePrompt(page, promptText)
+  try {
+    const result = await read()
+    gate.release()
+    await running
+    return result
+  } finally {
+    gate.resume?.()
+    gate.release()
+    await running.catch(() => {})
+  }
+}
+
+/** Poll interval while the stream runs; the window it samples is the fixture's hold. */
 const SAMPLE_INTERVAL_MS = 20
 
 /**
- * Work the stream did, as the difference between two process totals.
- *
- * The counters are process totals (see `E2EHeapFlowCounters.flow`), so this is immune to
- * the heap sampler draining its own view of them every 5 seconds. What still matters is
- * *when* the closing reading is taken: the agent ends the turn 500ms after the last
- * chunk, and sealing the message triggers the deferred work these tests assert is absent
- * during streaming. So the closing reading is the last one observed while the message was
- * still marked streaming — polled, rather than taken once after the text arrives, because
- * the 500ms hold can expire before a single post-hoc read lands (that is what timed out on
- * CI). Gauges are absolute, so their streaming-time peak is what the assertions describe.
+ * 流式期间的读数（进程累计量相减，见 `E2EHeapFlowCounters.flow`）。收尾必须落在消息仍
+ * streaming 的时刻：seal 会做这些用例断言「流式期间不该发生」的延迟工作。gate 把这段窗口
+ * 变成条件而不是运气——整段已进模型且渲染器确实处理过（见 {@link hasRenderEvidence}）。
  */
 async function measureStream(
   page: Page,
   baseline: StreamCounters,
   expectedLength: number,
+  evidence: RenderEvidence,
 ): Promise<StreamCounters> {
   const deadline = Date.now() + 30000
-  let lastStreaming: StreamCounters | undefined
 
   for (;;) {
     const batch = await page.evaluate(() => {
@@ -130,13 +212,19 @@ async function measureStream(
       }
     })
 
-    if (batch.streaming) lastStreaming = { flow: batch.flow, gauge: batch.gauge }
-    else if (batch.length >= expectedLength && lastStreaming) return diff(baseline, lastStreaming)
+    if (
+      batch.streaming &&
+      batch.length >= expectedLength &&
+      hasRenderEvidence(baseline, batch, expectedLength, evidence)
+    ) {
+      return diff(baseline, batch)
+    }
 
     if (Date.now() > deadline) {
       throw new Error(
-        `no sealed reading for a complete thought: ${batch.length}/${expectedLength} chars, ` +
-          `streaming=${batch.streaming}, sawStreaming=${lastStreaming !== undefined}`,
+        `no complete rendered streaming reading for a thought: ${batch.length}/${expectedLength} chars, ` +
+          `streaming=${batch.streaming}, mdparse=${grewBy(baseline, batch, 'mdparse')}, ` +
+          `colorizeSkip=${grewBy(baseline, batch, 'colorize.skip')}`,
       )
     }
     await page.waitForTimeout(SAMPLE_INTERVAL_MS)
@@ -222,17 +310,16 @@ function cardToggle(page: Page, toolCallId: string) {
 }
 
 /**
- * The children view of an `emit-subagent-mixed` run, taken at the last moment the turn
- * is still running.
+ * The children view of an `emit-subagent-mixed` run, taken at the last moment the turn is
+ * still running.
  *
- * Reading it after the turn would prove nothing: `_flushStream` seals every child
- * message there, so a seal that never happened and one that did look exactly alike.
- * The fixture holds the turn open 500ms after its trailing tool call, and that hold is
- * the window this reads.
+ * Reading it after the turn would prove nothing: `_flushStream` seals every child message
+ * there, so a seal that never happened and one that did look exactly alike.
+ * 取到两条子 toolCall（尾随那条闭合整个 run）且 turn 仍在跑就返回，放行由调用方在其后做，
+ * 最终 seal 因此够不到这份快照。
  */
 async function sampleMixedRun(page: Page): Promise<AcpChildSnapshot> {
   const deadline = Date.now() + 30000
-  let last: AcpChildSnapshot | undefined
   for (;;) {
     const batch = await page.evaluate(() => {
       // One evaluate on purpose: the snapshot and the turn state have to describe the
@@ -242,15 +329,12 @@ async function sampleMixedRun(page: Page): Promise<AcpChildSnapshot> {
         children: window.__E2E__!.getAcpToolCalls().flatMap((call) => call.children ?? []),
       }
     })
-    if (batch.children.filter((child) => child.kind === 'toolCall').length === 2) {
-      if (batch.status === 'idle') {
-        if (last) return last
-      } else {
-        last = batch.children
-      }
-    }
+    const toolCalls = batch.children.filter((child) => child.kind === 'toolCall').length
+    if (toolCalls === 2 && batch.status !== 'idle') return batch.children
     if (Date.now() > deadline) {
-      throw new Error(`no mixed sub-agent run observed: ${JSON.stringify(last ?? batch.children)}`)
+      throw new Error(
+        `no mixed sub-agent run observed (status=${batch.status}): ${JSON.stringify(batch.children)}`,
+      )
     }
     await page.waitForTimeout(SAMPLE_INTERVAL_MS)
   }
@@ -265,9 +349,9 @@ async function measureSubagentStream(
   page: Page,
   baseline: StreamCounters,
   expectedLength: number,
+  evidence: RenderEvidence,
 ): Promise<StreamCounters> {
   const deadline = Date.now() + 30000
-  let lastLive: StreamCounters | undefined
 
   for (;;) {
     const batch = await page.evaluate(() => {
@@ -285,17 +369,48 @@ async function measureSubagentStream(
       }
     })
 
-    if (batch.live) lastLive = { flow: batch.flow, gauge: batch.gauge }
-    else if (batch.length >= expectedLength && lastLive) return diff(baseline, lastLive)
+    if (
+      batch.live &&
+      batch.length >= expectedLength &&
+      hasRenderEvidence(baseline, batch, expectedLength, evidence)
+    ) {
+      return diff(baseline, batch)
+    }
 
     if (Date.now() > deadline) {
       throw new Error(
-        `no sealed reading for a complete sub-agent message: ${batch.length}/${expectedLength} chars, ` +
-          `live=${batch.live}, sawLive=${lastLive !== undefined}`,
+        `no complete rendered streaming reading for a sub-agent message: ${batch.length}/${expectedLength} chars, ` +
+          `live=${batch.live}, mdparse=${grewBy(baseline, batch, 'mdparse')}, ` +
+          `colorizeSkip=${grewBy(baseline, batch, 'colorize.skip')}`,
       )
     }
     await page.waitForTimeout(SAMPLE_INTERVAL_MS)
   }
+}
+
+/**
+ * 首块门放行：先等到挂载证据（首块那段文本已被渲染器处理过），再让 fixture 继续发余下 chunk。
+ * 卡片点开太晚时整段早已到齐，增量渲染只剩一次解析，这条用例就测不到要守的形状了。
+ */
+async function resumeAfterMount(
+  page: Page,
+  gate: TurnEndGate,
+  baseline: StreamCounters,
+  evidence: RenderEvidence,
+): Promise<void> {
+  await expect
+    .poll(
+      async () =>
+        hasRenderEvidence(
+          baseline,
+          await page.evaluate(() => window.__E2E__!.getHeapFlowCounters()),
+          CHUNK,
+          evidence,
+        ),
+      { timeout: 20000 },
+    )
+    .toBe(true)
+  gate.resume?.()
 }
 
 // Serial within the file (both tests drive the same shared echo agent), and each streams
@@ -305,14 +420,14 @@ test.describe.configure({ mode: 'default', timeout: 90000 })
 test.describe('@p1 acp streaming render accounting', () => {
   test('a sealable thought storm re-parses only its tail', async ({ page, workbench }) => {
     await workbench.waitForRestored()
-    const baseline = await startEchoSession(page)
+    const gate = makeTurnEndGate()
+    const baseline = await startEchoSession(page, undefined, gate.env)
 
     const COUNT = 300
     const expected = streamedText(COUNT, CHUNK, false)
-    const running = drivePrompt(page, `emit-thought:${COUNT}x1`)
-
-    const streaming = await measureStream(page, baseline, expected.length)
-    await running
+    const streaming = await driveGatedPrompt(page, gate, `emit-thought:${COUNT}x1`, () =>
+      measureStream(page, baseline, expected.length, 'mdparse'),
+    )
 
     // Content first: deferring work must never drop text.
     const finalText = await page.evaluate(
@@ -343,21 +458,21 @@ test.describe('@p1 acp streaming render accounting', () => {
     workbench,
   }) => {
     await workbench.waitForRestored()
-    const baseline = await startEchoSession(page)
+    const gate = makeTurnEndGate()
+    const baseline = await startEchoSession(page, undefined, gate.env)
 
     // The fence opens on the first chunk and is never closed, so no blank line is ever
     // outside it: nothing seals and the whole message stays one growing tail. That is
     // the shape that made every batch re-tokenize the entire fence.
     const COUNT = 100
     const expected = streamedText(COUNT, CHUNK, true)
-    const running = drivePrompt(page, `emit-thought:${COUNT}x1,fence`)
-
-    const streaming = await measureStream(page, baseline, expected.length)
+    const streaming = await driveGatedPrompt(page, gate, `emit-thought:${COUNT}x1,fence`, () =>
+      measureStream(page, baseline, expected.length, 'colorize.skip'),
+    )
 
     expect(flowOf(streaming, 'colorize').chars).toBe(0)
     expect(flowOf(streaming, 'colorize.skip').chars).toBeGreaterThan(0)
 
-    await running
     // Sealing ends the deferral: the fence is tokenized as usual once the message is
     // done, so this is a streaming-time gate and not a permanent loss of highlighting.
     // Counted from the same baseline — streaming-time colorize was just asserted to be
@@ -396,15 +511,16 @@ test.describe('@p1 acp sub-agent streaming render accounting', () => {
     await workbench.waitForRestored()
     // A Task card starts folded, and a folded card renders no message at all — which is
     // exactly why this path's cost only appears once the user opens one.
-    const baseline = await startEchoSession(page, 'expanded')
+    const gate = makeTurnEndGate(true)
+    const baseline = await startEchoSession(page, 'expanded', gate.env)
 
     const COUNT = 300
     const expected = streamedText(COUNT, CHUNK, false)
-    const running = drivePrompt(page, `emit-subagent:${COUNT}x1`)
-    await openSubagentCard(page)
-
-    const streaming = await measureSubagentStream(page, baseline, expected.length)
-    await running
+    const streaming = await driveGatedPrompt(page, gate, `emit-subagent:${COUNT}x1`, async () => {
+      await openSubagentCard(page)
+      await resumeAfterMount(page, gate, baseline, 'mdparse')
+      return measureSubagentStream(page, baseline, expected.length, 'mdparse')
+    })
 
     // Content first: deferring work must never drop text.
     const children = await subagentChildren(page)
@@ -436,20 +552,27 @@ test.describe('@p1 acp sub-agent streaming render accounting', () => {
     workbench,
   }) => {
     await workbench.waitForRestored()
-    const baseline = await startEchoSession(page, 'expanded')
+    const gate = makeTurnEndGate(true)
+    const baseline = await startEchoSession(page, 'expanded', gate.env)
 
     // A fence that never closes: deferred while it streams, tokenized once it seals.
     const COUNT = 6
     const expected = streamedText(COUNT, CHUNK, true)
-    const running = drivePrompt(page, `emit-subagent:${COUNT}x1,fence`)
-    await openSubagentCard(page)
+    const streaming = await driveGatedPrompt(
+      page,
+      gate,
+      `emit-subagent:${COUNT}x1,fence`,
+      async () => {
+        await openSubagentCard(page)
+        await resumeAfterMount(page, gate, baseline, 'colorize.skip')
+        return measureSubagentStream(page, baseline, expected.length, 'colorize.skip')
+      },
+    )
 
     // Streaming-time deferral — the reading that has to be taken while the message is
     // still growing, since sealing is what ends it.
-    const streaming = await measureSubagentStream(page, baseline, expected.length)
     expect(flowOf(streaming, 'colorize').chars).toBe(0)
     expect(flowOf(streaming, 'colorize.skip').chars).toBeGreaterThan(0)
-    await running
 
     // Sealing is what clears `live`, and the turn's end is the only signal a child run
     // gets. One that kept the flag would re-parse its tail on every batch forever and
@@ -485,14 +608,14 @@ test.describe('@p1 acp sub-agent streaming render accounting', () => {
     await workbench.waitForRestored()
     // No collapse mode and no card to open: this case reads the model through the
     // probe, and a folded card still holds every chunk it received.
-    await startEchoSession(page)
+    const gate = makeTurnEndGate()
+    await startEchoSession(page, undefined, gate.env)
 
     const COUNT = 60
     const expected = streamedText(COUNT, CHUNK, false)
-    const running = drivePrompt(page, `emit-subagent-mixed:${COUNT}x1`)
-
-    const children = await sampleMixedRun(page)
-    await running
+    const children = await driveGatedPrompt(page, gate, `emit-subagent-mixed:${COUNT}x1`, () =>
+      sampleMixedRun(page),
+    )
 
     const messages = children.filter((child) => child.kind === 'message')
     expect(children.filter((child) => child.kind === 'toolCall')).toHaveLength(2)
@@ -507,9 +630,10 @@ test.describe('@p1 acp sub-agent streaming render accounting', () => {
     // listed only because it must not be the one carrying the assertion.
     expect(messages[0]!.live).toBe(false)
 
-    // Read after the turn, not from the snapshot above: that one is taken mid-stream
-    // and is therefore short. Sealing preserves the text, so the split — which must
-    // have cost neither message any of it — can still be checked here.
+    // Read after the turn, not from the snapshot above: that one is taken while the turn
+    // is still running, so it cannot show what the turn's own seal leaves behind. Sealing
+    // preserves the text, so the split — which must have cost neither message any of it —
+    // can still be checked here.
     const settled = await subagentChildren(page)
     expect(settled.reduce((sum, message) => sum + message.textLength, 0)).toBe(expected.length)
   })

@@ -530,6 +530,13 @@ markdown job（ubuntu，CI run 31295361355）`markdownPreview.spec.ts:205` 与 `
 修：增加真实 RecentTargetsService 的只读探针，在打开 picker 前 poll 目标成为 MRU head；原首行和相对顺序断言保留。探针不得刷新服务或主动聚焦，也不要在 poll 中反复开关 picker。同族 Ctrl+P 视图排序用例共用等待 helper；命令面板的命令历史、编辑器标签 MRU 是不同数据源，不套用这一等待。
 锚：`apps/editor/e2e/pages/recentTargets.ts`、`smoke.quickOpenRecentTargets.spec.ts`、`smoke.quickOpenViewMru.spec.ts`；探针实现位于 `apps/editor/src/renderer/e2e/probe.ts`。
 
+**案例 95 — 流式观察窗短于展开点击：用夹具握手固定被测阶段**
+信号：`smoke.agentStreamMemory` 报 `6144/6144 chars, live=false, sawLive=false`，Windows initial/retry 同形态；文本完整但从未采到 live。run `35519555212` 的 trace 中展开卡片 click 约 776/786ms，夹具末块后只等 500ms。
+根因：折叠子代理卡片不挂载消息，点击完成时回合已结束，轮询再快也无法补采过去的流式状态。单纯延长 timeout 无效。只增加末块门还不够：慢点击也会让压力用例在全部块到达后才挂载，`mdparse.calls` 只剩 1，丢掉多次增量渲染场景。
+修：echo 夹具用唯一临时文件握手。子代理首块后等真实点击与挂载证据再继续发送；所有流式取样用例在末块后保持回合开启，取得完整模型及渲染计数后才放行。mixed 用例必须保留回合结束前的快照。门控支持取消、超时明确报 RPC error，spec 在 finally 放行；未配置门控的夹具保留原等待。原文本、解析成本、批处理、流式不着色和 seal 后着色断言不放宽。同族 thought×2、subagent×2、mixed×1 共用末块握手，只读最终态的用例不改。
+验证：本地基线 7/7；点击前临时插入 900ms，旧实现 2 failed / 5 passed；双门控保留相同延迟后 7/7，随后移除临时延迟。累计 `mdparse.chars` 可能重复计尾部，只能作渲染就绪下限，不能宣称它独立证明全文渲染完成。
+锚：`apps/editor/e2e/specs/smoke.agentStreamMemory.spec.ts`、`apps/editor/src/test-fixtures/echoAgent.cjs`；开发说明见 `docs/development/memory-pressure.md`。
+
 ---
 - `@parcel/watcher` Windows 多 worker 竞态的长期根治（升级 / 换 watcher / 进一步隔离），替代长期 `--workers=1`（案例 12/16/26/44 的 `@serial` 都是它的 workaround）。
 - DnD 用例稳定化（显式等待 drop 完成态），稳定后摘 `@flaky`（案例 46）。

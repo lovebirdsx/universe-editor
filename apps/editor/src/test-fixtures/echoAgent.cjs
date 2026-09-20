@@ -18,6 +18,8 @@
  *  used by E2E to drive the config bar's overflow panel.
  *  ECHO_AGENT_SESSION_NEW_DELAY_MS=<ms> delays every session/new response —
  *  used by E2E to exercise the editor's optimistic "connecting" session row.
+ *  ECHO_AGENT_TURN_END_GATE=<path>: 流式指令改等 <path> 出现再收尾（未设＝固定 500ms）。
+ *  ECHO_AGENT_STREAM_CONTINUE_GATE=<path>: emit-subagent 发完首块再等 <path> 才继续。
  *    - session/prompt                    → emits two session/update chunks and
  *                                          a tool_call cycle, then resolves
  *                                          with stopReason='end_turn'
@@ -48,6 +50,8 @@
 
 'use strict'
 
+const { existsSync } = require('node:fs')
+
 let buffer = ''
 let nextSessionId = 1
 let nextExecId = 1
@@ -65,10 +69,17 @@ const sessionPrompts = new Map() // sessionId -> [{ messageId, prompt }]
 const loadSessionEnabled = process.env.ECHO_AGENT_LOAD_SESSION === '1'
 const configOptionsEnabled = process.env.ECHO_AGENT_CONFIG_OPTIONS === '1'
 
-// How long `emit-thought` keeps its turn open after the final chunk. A spec reads
-// the renderer's live counters inside this window; the message seals when the
-// turn ends, which resets the streaming state those counters describe.
+// How long the streaming directives keep their turn open after the final chunk when no
+// gate is set. A spec reads the renderer's live counters inside this window; the message
+// seals when the turn ends, which resets the streaming state those counters describe.
 const THOUGHT_HOLD_MS = 500
+
+// turn-end gate（ECHO_AGENT_TURN_END_GATE）：流式指令改等放行文件出现，采样窗口由 spec 决定；
+// 首块门（ECHO_AGENT_STREAM_CONTINUE_GATE）额外停在首块之后，让 spec 在流还短时点开卡片。
+const TURN_END_GATE_PATH = process.env.ECHO_AGENT_TURN_END_GATE ?? ''
+const STREAM_CONTINUE_GATE_PATH = process.env.ECHO_AGENT_STREAM_CONTINUE_GATE ?? ''
+const TURN_END_GATE_TIMEOUT_MS = 60000
+const TURN_END_GATE_POLL_MS = 10
 
 // Pause between `emit-thought` chunk groups. Has to exceed not just the renderer's 16ms
 // update batch but the time one render of the accumulated message takes (~50ms for a
@@ -208,6 +219,64 @@ function requestFromClient(method, params) {
 
 async function delay(ms) {
   return new Promise((r) => setTimeout(r, ms))
+}
+
+/** 等放行文件出现，返回 'released' | 'cancelled' | 'timeout'。 */
+async function waitForRelease(path, turn) {
+  const deadline = Date.now() + TURN_END_GATE_TIMEOUT_MS
+  while (!turn.cancelled && !existsSync(path) && Date.now() < deadline) {
+    await delay(TURN_END_GATE_POLL_MS)
+  }
+  if (existsSync(path)) return 'released'
+  return turn.cancelled ? 'cancelled' : 'timeout'
+}
+
+/**
+ * 收尾一次流式 turn：无 gate 时就是原来的固定 hold；超时写 stderr 并以 RPC error 结束
+ * ——静默 end_turn 会把 spec 的采样窗口悄悄变回竞速状态。
+ */
+async function finishTurn(id, sessionId, turn) {
+  if (TURN_END_GATE_PATH === '') {
+    await delay(THOUGHT_HOLD_MS)
+    activeTurns.delete(sessionId)
+    return reply(id, { stopReason: 'end_turn' })
+  }
+  const outcome = await waitForRelease(TURN_END_GATE_PATH, turn)
+  activeTurns.delete(sessionId)
+  if (outcome === 'cancelled') return reply(id, { stopReason: 'cancelled' })
+  if (outcome === 'timeout') {
+    const message =
+      'echoAgent: turn-end gate not released within ' +
+      TURN_END_GATE_TIMEOUT_MS +
+      'ms: ' +
+      TURN_END_GATE_PATH
+    process.stderr.write(message + '\n')
+    return fail(id, -32603, message)
+  }
+  return reply(id, { stopReason: 'end_turn' })
+}
+
+/**
+ * 首块门：发完首块先停下等放行文件（仅子代理渲染用例设置）。返回 false 表示请求已按
+ * cancelled/error 收尾，调用方直接返回。
+ */
+async function holdAfterFirstChunk(id, sessionId, turn) {
+  if (STREAM_CONTINUE_GATE_PATH === '') return true
+  const outcome = await waitForRelease(STREAM_CONTINUE_GATE_PATH, turn)
+  if (outcome === 'released') return true
+  activeTurns.delete(sessionId)
+  if (outcome === 'cancelled') {
+    reply(id, { stopReason: 'cancelled' })
+    return false
+  }
+  const message =
+    'echoAgent: first-chunk gate not released within ' +
+    TURN_END_GATE_TIMEOUT_MS +
+    'ms: ' +
+    STREAM_CONTINUE_GATE_PATH
+  process.stderr.write(message + '\n')
+  fail(id, -32603, message)
+  return false
 }
 
 async function runPrompt(id, params) {
@@ -404,9 +473,10 @@ async function runPrompt(id, params) {
   // re-tokenizes the entire fence.
   //
   // Every chunk carries an `L<i> ` marker so a spec can count the markers and
-  // prove no content was dropped. The turn is held open briefly after the last
-  // chunk so a spec can read the renderer's live counters before the message
-  // seals (sealing clears the streaming state the counters describe).
+  // prove no content was dropped. The turn is held open after the last chunk — the
+  // fixed hold, or ECHO_AGENT_TURN_END_GATE until the spec releases it — so a spec can
+  // read the renderer's live counters before the message seals (sealing clears the
+  // streaming state the counters describe).
   const thoughtDirective = /^emit-thought:(\d+)x(\d+)(,fence)?$/.exec(userText)
   if (thoughtDirective) {
     const count = Number(thoughtDirective[1])
@@ -429,9 +499,7 @@ async function runPrompt(id, params) {
       // still parses each character about once" has nothing left to measure.
       if (i % 25 === 24) await delay(THOUGHT_YIELD_MS)
     }
-    await delay(THOUGHT_HOLD_MS)
-    activeTurns.delete(sessionId)
-    return reply(id, { stopReason: 'end_turn' })
+    return finishTurn(id, sessionId, turn)
   }
 
   // Test directive: "emit-subagent:<count>x<kb>[,fence]" streams the same chunk storm
@@ -462,6 +530,8 @@ async function runPrompt(id, params) {
     await delay(5)
     for (let i = 0; i < count; i++) {
       if (turn.cancelled) break
+      // 首块之后停住（仅设了首块门时）；余下 chunk 保持原有 50ms 批节奏。
+      if (i === 1 && !(await holdAfterFirstChunk(id, sessionId, turn))) return
       notify('session/update', {
         sessionId,
         update: {
@@ -472,9 +542,7 @@ async function runPrompt(id, params) {
       })
       if (i % 25 === 24) await delay(THOUGHT_YIELD_MS)
     }
-    await delay(THOUGHT_HOLD_MS)
-    activeTurns.delete(sessionId)
-    return reply(id, { stopReason: 'end_turn' })
+    return finishTurn(id, sessionId, turn)
   }
 
   // "emit-subagent-mixed:<count>x<kb>" streams a sub-agent message, interleaves a child
@@ -549,9 +617,7 @@ async function runPrompt(id, params) {
         _meta: { claudeCode: { parentToolUseId: parentId } },
       },
     })
-    await delay(THOUGHT_HOLD_MS)
-    activeTurns.delete(sessionId)
-    return reply(id, { stopReason: 'end_turn' })
+    return finishTurn(id, sessionId, turn)
   }
 
   // Emit two streaming chunks.
