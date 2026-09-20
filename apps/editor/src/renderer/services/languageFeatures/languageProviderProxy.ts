@@ -328,13 +328,23 @@ export function createCodeActionProxy(
   extHost: IExtHostLanguages,
 ): monaco.languages.CodeActionProvider {
   return {
-    provideCodeActions: async (model, range, context) =>
-      codeActionsToMonaco(
-        await extHost.$provideCodeActions(handle, model.uri, monacoRangeToLsp(range), {
+    provideCodeActions: async (model, range, context, token) => {
+      const version = model.getVersionId()
+      const isStale = () =>
+        token.isCancellationRequested || model.isDisposed() || model.getVersionId() !== version
+      if (isStale()) return null
+      await PendingDocumentSync.flush(model.uri.toString())
+      if (isStale()) return null
+      const actions = await extHost.$provideCodeActions(
+        handle,
+        model.uri,
+        monacoRangeToLsp(range),
+        {
           ...(context.only ? { only: [context.only] } : {}),
-        }),
-        MonacoLoader.get(),
-      ),
+        },
+      )
+      return isStale() ? null : codeActionsToMonaco(actions, MonacoLoader.get())
+    },
   }
 }
 

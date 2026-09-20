@@ -8,8 +8,10 @@
 import { describe, expect, it, vi } from 'vitest'
 import { DisposableStore, Emitter } from '@universe-editor/platform'
 import type { IExtHostLanguages } from '@universe-editor/extensions-common'
+import { PendingDocumentSync } from '../../extensions/PendingDocumentSync.js'
 import type { monaco } from '../../../workbench/editor/monaco/MonacoLoader.js'
 import {
+  createCodeActionProxy,
   createCodeLensProxy,
   createDocumentRangeFormattingProxy,
   createDocumentSymbolProxy,
@@ -27,6 +29,124 @@ function makeModel(uri: string, versionId = 1): monaco.editor.ITextModel {
     getVersionId: () => versionId,
   } as unknown as monaco.editor.ITextModel
 }
+
+describe('code action 文档版本一致性', () => {
+  const uri = 'file:///workspace/error.ts'
+  function setup() {
+    let version = 1
+    let disposed = false
+    const model = {
+      ...makeModel(uri),
+      getVersionId: () => version,
+      isDisposed: () => disposed,
+    } as monaco.editor.ITextModel
+    const token = { isCancellationRequested: false } as monaco.CancellationToken
+    const pull = vi.fn().mockResolvedValue([{ title: '正常重构', kind: 'refactor' }])
+    const proxy = createCodeActionProxy(1, {
+      $provideCodeActions: pull,
+    } as unknown as IExtHostLanguages)
+    const request = () =>
+      proxy.provideCodeActions(
+        model,
+        {
+          startLineNumber: 3,
+          endLineNumber: 3,
+          startColumn: 28,
+          endColumn: 28,
+        } as monaco.Range,
+        { markers: [], trigger: 1, only: 'refactor' },
+        token,
+      )
+    return {
+      pull,
+      token,
+      request,
+      change: () => {
+        version++
+      },
+      dispose: () => {
+        disposed = true
+      },
+    }
+  }
+
+  it('镜像同步完成前不发请求，正常响应保留过滤条件', async () => {
+    let resume!: () => void
+    PendingDocumentSync.register(
+      uri,
+      () =>
+        new Promise<void>((resolve) => {
+          resume = resolve
+        }),
+    )
+    try {
+      const h = setup()
+      const pending = h.request()
+      expect(h.pull).not.toHaveBeenCalled()
+      resume()
+      const result = await pending
+      expect(result?.actions[0]?.title).toBe('正常重构')
+      expect(h.pull).toHaveBeenCalledWith(
+        1,
+        expect.anything(),
+        {
+          start: { line: 2, character: 27 },
+          end: { line: 2, character: 27 },
+        },
+        { only: ['refactor'] },
+      )
+    } finally {
+      PendingDocumentSync.unregister(uri)
+    }
+  })
+
+  it.each(['change', 'cancel', 'dispose'])('同步等待期间 %s 不发送旧 range', async (reason) => {
+    let resume!: () => void
+    PendingDocumentSync.register(
+      uri,
+      () =>
+        new Promise<void>((resolve) => {
+          resume = resolve
+        }),
+    )
+    try {
+      const h = setup()
+      const pending = h.request()
+      if (reason === 'change') h.change()
+      if (reason === 'dispose') h.dispose()
+      if (reason === 'cancel')
+        (h.token as { isCancellationRequested: boolean }).isCancellationRequested = true
+      resume?.()
+      expect(await pending).toBeNull()
+      expect(h.pull).not.toHaveBeenCalled()
+    } finally {
+      PendingDocumentSync.unregister(uri)
+    }
+  })
+
+  it('同步失败不继续请求', async () => {
+    const error = new Error('同步失败')
+    PendingDocumentSync.register(uri, async () => {
+      throw error
+    })
+    try {
+      const h = setup()
+      await expect(h.request()).rejects.toBe(error)
+      expect(h.pull).not.toHaveBeenCalled()
+    } finally {
+      PendingDocumentSync.unregister(uri)
+    }
+  })
+
+  it('文档变化后不返回旧 edits', async () => {
+    const h = setup()
+    h.pull.mockImplementation(async () => {
+      h.change()
+      return [{ title: '旧修复' }]
+    })
+    expect(await h.request()).toBeNull()
+  })
+})
 
 const lspSymbol = {
   name: 'A',

@@ -1082,6 +1082,7 @@ export class LspClient {
     // is self-contained and spawned directly (no ELECTRON_RUN_AS_NODE).
     const command = spec.kind === 'native' ? spec.binary : process.execPath
     const args = spec.kind === 'native' ? ['--lsp', '--stdio'] : [spec.cli, '--stdio']
+    if (spec.kind === 'tsls' && this._logVerbosity() === 'verbose') args.push('--log-level', '4')
     if (spec.kind === 'tsls') env.ELECTRON_RUN_AS_NODE = '1'
 
     let proc: ChildProcessWithoutNullStreams
@@ -1121,6 +1122,9 @@ export class LspClient {
     )
     this._conn = conn
 
+    conn.onNotification('window/logMessage', (params: { message: string }) => {
+      this._log.verbose(`server: ${params.message}`)
+    })
     conn.onNotification('textDocument/publishDiagnostics', (params: PublishDiagnosticsParams) => {
       this._onDiagnostics({
         uri: params.uri,

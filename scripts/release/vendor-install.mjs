@@ -19,6 +19,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { applyPatch as patchTsls } from '../../vendor/typescript-language-server/patch.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(__dirname, '../..')
@@ -51,11 +52,14 @@ for (const rel of VENDOR_DIRS) {
   const stampFile = join(nodeModules, '.install-stamp')
 
   if (!existsSync(lockFile)) {
-    console.error(`[vendor-install] missing lockfile for ${rel} (run \`git submodule update --init\`?)`)
+    console.error(
+      `[vendor-install] missing lockfile for ${rel} (run \`git submodule update --init\`?)`,
+    )
     process.exit(1)
   }
 
   if (isFresh(nodeModules, stampFile, lockFile)) {
+    if (rel === 'vendor/typescript-language-server') patchTsls()
     console.log(`[vendor-install] ${rel} up to date — skipping npm ci`)
     continue
   }

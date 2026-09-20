@@ -47,7 +47,7 @@ npm --prefix vendor/typescript-language-server ci
 bash scripts/wsl/bootstrap.sh
 ```
 
-构建无需手动做：`pnpm e2e:smoke` / `pnpm e2e` 等 e2e 脚本前置了 `scripts/e2e/ensure-e2e-build.mjs`，会自动 `turbo run build --filter=@universe-editor/editor...`。首次运行会全量构建，之后命中 turbo 缓存秒过。同一脚本也自动保障 tsserver vendor（缺失时 `npm ci`，存在即跳过），新 clone / worktree 无需手动执行上一步骤 5。
+构建无需手动做：`pnpm e2e:smoke` / `pnpm e2e` 等 e2e 脚本前置了 `scripts/e2e/ensure-e2e-build.mjs`，会自动 `turbo run build --filter=@universe-editor/editor...`。首次运行会全量构建，之后命中 turbo 缓存秒过。同一脚本也自动保障 tsserver vendor（缺失时 `npm ci`，已有安装则幂等应用仓库的 TSLS 补丁），新 clone / worktree 无需手动执行上一步骤 5。
 
 > **e2e 不需要 submodule 和 `pnpm agent:build`**。核心 e2e 的 ACP/agents 用例走 echo agent 源码 fixture（`apps/editor/src/test-fixtures/echoAgent.cjs`），不 spawn 真实 fork；CI 的 core e2e job 也不 checkout submodule。`vendor/claude-agent-acp` submodule + `pnpm agent:build` 只在 `pnpm --filter @universe-editor/editor test:integration acpForkContract` 和 `package:win` 打包时才需要。
 
@@ -180,10 +180,10 @@ export ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/
 
 POSIX 下父进程死亡不会带走子进程（被 reparent 到 init），而 Playwright 只在主进程还活着时才 force-kill 进程组——**主进程已退出恰好是它跳过的那一种**，也是孤儿的来源。所以 e2e-harness 自己按「命令行里的归属签名」清扫（`packages/e2e-harness/src/processSweep.ts`），两级：
 
-| 层 | 时机 | 标记 | 覆盖 |
-|---|---|---|---|
-| worker（`fixtureProcesses.ts`） | 每次 `closeApp` + 进程 `exit` 兜底 | 该 fixture 的 `userDataDir` | 正常结束、测试超时、`workbench.action.quit` 后 handle 已释放 |
-| runner（`globalSetup.ts`） | teardown + 进程 `exit` 兜底 | 本趟 run 根 `ue-e2e-<pid>-<rand>` | Ctrl-C，以及 worker 被 runner SIGKILL（exit 钩子跑不了） |
+| 层                              | 时机                               | 标记                              | 覆盖                                                         |
+| ------------------------------- | ---------------------------------- | --------------------------------- | ------------------------------------------------------------ |
+| worker（`fixtureProcesses.ts`） | 每次 `closeApp` + 进程 `exit` 兜底 | 该 fixture 的 `userDataDir`       | 正常结束、测试超时、`workbench.action.quit` 后 handle 已释放 |
+| runner（`globalSetup.ts`）      | teardown + 进程 `exit` 兜底        | 本趟 run 根 `ue-e2e-<pid>-<rand>` | Ctrl-C，以及 worker 被 runner SIGKILL（exit 钩子跑不了）     |
 
 被测 app 整棵树（`--user-data-dir=<dir>`）与它拉起的 remote-server daemon（`--data-dir <dir>/remote-direct/<authority>`）命令行里都带该路径，所以主进程已死也能定位。
 
@@ -194,4 +194,3 @@ POSIX 下父进程死亡不会带走子进程（被 reparent 到 init），而 P
 ```bash
 ps -eo pid,ppid,args | grep -E 'ue-e2e-|--enable-e2e-probe' | grep -v grep | wc -l
 ```
-

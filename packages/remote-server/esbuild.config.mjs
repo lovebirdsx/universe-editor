@@ -147,6 +147,11 @@ if (watch) {
 // remote side installs.
 const pkg = { type: 'module' }
 if (deploy) {
+  cpSync(
+    join(repoRoot, 'vendor/typescript-language-server/patch.mjs'),
+    join(outDir, 'patch-tsls.mjs'),
+  )
+  pkg.scripts = { postinstall: 'node patch-tsls.mjs' }
   pkg.version = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8')).version
   pkg.dependencies = {
     '@parcel/watcher': `^${await nativeDepVersion('@parcel/watcher', '2.6.0')}`,

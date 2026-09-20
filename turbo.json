@@ -34,6 +34,22 @@
       ],
       "outputs": ["dist-bundle/**"]
     },
+    "@universe-editor/remote-server#bundle": {
+      "dependsOn": ["build", "^build"],
+      "outputLogs": "new-only",
+      "inputs": [
+        "src/**",
+        "!src/**/__tests__/**",
+        "!src/**/*.test.ts",
+        "!src/**/*.test.tsx",
+        "package.json",
+        "tsconfig*.json",
+        "esbuild.config.mjs",
+        "$TURBO_ROOT$/vendor/typescript-language-server/patch.mjs",
+        "$TURBO_ROOT$/vendor/typescript-language-server/package-lock.json"
+      ],
+      "outputs": ["dist-bundle/**"]
+    },
     "typecheck": {
       "dependsOn": ["build", "^build"],
       "outputLogs": "new-only",

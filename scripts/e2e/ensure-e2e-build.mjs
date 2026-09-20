@@ -24,6 +24,7 @@ import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runLinuxPreflight } from './linux-preflight.mjs'
+import { applyPatch as patchTsls } from '../../vendor/typescript-language-server/patch.mjs'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 
@@ -34,18 +35,17 @@ const TS_LS_VENDOR = 'vendor/typescript-language-server'
  * The vendored typescript-language-server is a gitignored npm tree outside the
  * pnpm workspace (installed via npm, see scripts/release/vendor-install.mjs).
  * A fresh clone/worktree lacks it and e2e fails late with e.g. "typescript
- * language server is not running". Install it when missing; presence is the
- * skip-stamp, so re-runs cost one fs stat. The agent forks need neither
+ * language server is not running". 缺失时安装，已有安装则幂等应用仓库补丁。
+ * The agent forks need neither
  * submodule nor dist for e2e (ACP specs use the echo-agent fixture), so they
  * are intentionally out of scope here.
  */
 function ensureVendorArtifacts() {
-  const cli = join(
-    repoRoot,
-    TS_LS_VENDOR,
-    'node_modules/typescript-language-server/lib/cli.mjs',
-  )
-  if (existsSync(cli)) return
+  const cli = join(repoRoot, TS_LS_VENDOR, 'node_modules/typescript-language-server/lib/cli.mjs')
+  if (existsSync(cli)) {
+    patchTsls()
+    return
+  }
   console.log(`[ensure-e2e-build] installing ${TS_LS_VENDOR} (npm ci)…`)
   const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
   const result = spawnSync(npm, ['ci'], {
