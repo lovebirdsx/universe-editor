@@ -131,7 +131,7 @@ export function StickyUserMessageBar({
       handleRef?.current.focusTimeline()
     }
     widgetService.setHasSelection(hasSelection)
-    // Mirrors ChatBody's context menu: gates "Ask in Side Chat".
+    // Mirrors ChatBody's context menu: gates "New Side Task".
     widgetService.setForkSupported(!session.readOnly && session.forkSupported.get())
     widgetService.setRewindSupported(!session.readOnly && session.rewindSupported.get())
     // The bar *is* a card (the first user message, rendered outside the scroll

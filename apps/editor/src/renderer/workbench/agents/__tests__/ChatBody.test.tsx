@@ -2316,6 +2316,7 @@ describe('ChatBody — side task affordances', () => {
     sessionIdOnAgent: string,
     sideTaskOf: string,
     lastUsedAt: number,
+    quoted = true,
   ): AcpSessionHistoryEntry {
     return {
       id: sessionIdOnAgent,
@@ -2325,7 +2326,7 @@ describe('ChatBody — side task affordances', () => {
       createdAt: lastUsedAt,
       lastUsedAt,
       sideTaskOf,
-      sideTaskQuote: `quote ${sessionIdOnAgent}`,
+      ...(quoted ? { sideTaskQuote: `quote ${sessionIdOnAgent}` } : {}),
     }
   }
 
@@ -2426,6 +2427,19 @@ describe('ChatBody — side task affordances', () => {
       expect(container.querySelector('[data-testid="acp-side-task-parent"]')).toBeNull()
       // The quote chip is gated independently and still renders.
       expect(container.querySelector('[data-testid="acp-side-task-quote"]')).not.toBeNull()
+    })
+
+    it('omits the quote chip for a side task created without a selection', () => {
+      const rows = [makeRow('s1', 4000), makeSideTaskRow('side-1', 's1', 1000, false)]
+      const inst = makeInstantiation(undefined, undefined, { history: makeHistory(rows) })
+      const { container } = render(
+        <ServicesContext.Provider value={inst}>
+          <ChatBody session={makeSession('side-1', items)} />
+        </ServicesContext.Provider>,
+      )
+      // The parent chip is gated on sideTaskOf alone, so it still renders.
+      expect(container.querySelector('[data-testid="acp-side-task-parent"]')).not.toBeNull()
+      expect(container.querySelector('[data-testid="acp-side-task-quote"]')).toBeNull()
     })
 
     it('opens the picked side task in a right-split editor tab', () => {

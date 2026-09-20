@@ -189,7 +189,7 @@ export class ForkAgentSessionAction extends Action2 {
       icon: 'checkout',
       menu: [
         // `acpChatForkSupported` is set by the menu host at open time (it also
-        // gates "Ask in Side Chat"); a user-message card is what "from here"
+        // gates "New Side Task"); a user-message card is what "from here"
         // needs, so both keys are required.
         {
           id: MenuId.AcpChatContext,

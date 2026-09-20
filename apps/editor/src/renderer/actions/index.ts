@@ -323,7 +323,6 @@ import {
   ToggleOutputAutoScrollAction,
 } from './logActions.js'
 import {
-  AskInSideChatAction,
   CancelAgentTurnAction,
   ClearAgentSessionHistoryAction,
   FocusAgentInputAction,
@@ -335,6 +334,7 @@ import {
   NewAgentSessionInCurrentEditorAction,
   NewAgentSessionInFolderAction,
   NewAgentSessionWithScopeAction,
+  NewSideTaskAction,
   OpenAcpMcpSettingsAction,
   OpenAcpToolCallFileAction,
   OpenAcpToolCallPreviewAction,
@@ -828,11 +828,12 @@ registerAction2(PinAgentSessionAction)
 registerAction2(UnpinAgentSessionAction)
 registerAction2(RewindAgentSessionAction)
 registerAction2(ForkAgentSessionAction)
-registerAction2(AskInSideChatAction)
-// Side-task navigation — keyboard access to the parent chat's "Side Tasks (N)"
-// popover and a side task's "Parent Session" chip. No default keybindings
-// (bind them in the Keyboard Shortcuts editor); both are silent no-ops when the
-// target session has nothing to navigate to.
+// Side-task commands — create one from the active session, then keyboard access
+// to the parent chat's "Side Tasks (N)" popover and a side task's "Parent
+// Session" chip. No default keybindings (bind them in the Keyboard Shortcuts
+// editor); the navigation pair is a silent no-op when the target session has
+// nothing to navigate to.
+registerAction2(NewSideTaskAction)
 registerAction2(OpenSideTaskAction)
 registerAction2(GoToParentSessionAction)
 registerAction2(FocusNextAcpTimelineItemAction)

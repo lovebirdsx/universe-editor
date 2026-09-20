@@ -60,10 +60,11 @@ import {
   rememberedCwdUri,
 } from '../services/acp/session/acpLastSessionCwdService.js'
 import {
-  ACP_COPY_GROUP,
+  ACP_CHAT_CARD_GROUP,
   ACP_CHAT_SESSION_GROUP,
   ACP_CHAT_SWITCH_GROUP,
   ACP_SCOPED_KEY_WEIGHT,
+  ACP_SESSION_EDITOR_ACTIVE_WHEN,
   CATEGORY,
   resolveNavWidget,
   sessionDirectoryName,
@@ -977,14 +978,24 @@ function rememberedSessionCwdUri(
   return rememberedCwdUri(cwd, authorityForFolder(workspace.current?.folder))
 }
 
+/**
+ * The session id a *context-menu* host passed in its args, if any. Menu hosts
+ * always name the session they were raised on; the command palette invokes the
+ * command bare. Several decisions key off that difference (which session to
+ * target, and whether the DOM selection belongs to this command at all), so the
+ * test lives here rather than being re-spelled at each call site.
+ */
+function menuSessionArg(arg: { sessionId?: unknown } | undefined): string | undefined {
+  return typeof arg?.sessionId === 'string' && arg.sessionId.length > 0 ? arg.sessionId : undefined
+}
+
 function resolveSessionTargetId(
   arg: { sessionId?: unknown; resource?: unknown } | undefined,
   editor: IEditorService,
   sessions: IAcpSessionService,
 ): string | undefined {
-  if (arg && typeof arg.sessionId === 'string' && arg.sessionId.length > 0) {
-    return arg.sessionId
-  }
+  const fromMenu = menuSessionArg(arg)
+  if (fromMenu !== undefined) return fromMenu
   const fromResource = sessionIdFromResource(arg?.resource)
   if (fromResource !== undefined) return fromResource
   const active = editor.activeEditor.get()
@@ -1175,35 +1186,47 @@ export function revealSessionEditor(
 const SIDE_TASK_QUOTE_MAX_CHARS = 8000
 
 /**
- * Ask in Side Chat (在侧边聊天中提问): fork the current session into a
- * read-only-mode side task seeded with the text selection, open it in a
- * right-split editor tab, and prefill its prompt with the quoted text. The
- * menu entry only appears over an actual selection on a fork-capable,
- * non-read-only session (`acpChatHasSelection && acpChatForkSupported`).
+ * New Side Task (新建侧边任务): fork the current session into a read-only-mode
+ * side task, open it in a right-split editor tab, and — when text was selected
+ * — prefill its prompt with that text as a quote. The selection is optional:
+ * the command is also the plain "open a side chat on this session" entry, so it
+ * works from the chat context menu on a fork-capable, non-read-only session
+ * (`acpChatForkSupported`) and from the command palette while a session editor
+ * is in front (`ACP_SESSION_EDITOR_ACTIVE_WHEN`).
+ *
+ * The palette row is declared as an explicit menu entry instead of via `f1`,
+ * because `registerAction2` ANDs `precondition` into *every* declared menu —
+ * including the context menu, where a palette-only editor gate would silently
+ * hide the row on the sticky-user-message host.
  */
-export class AskInSideChatAction extends Action2 {
-  static readonly ID = 'workbench.action.agent.askInSideChat'
+export class NewSideTaskAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.newSideTask'
   constructor() {
     super({
-      id: AskInSideChatAction.ID,
+      id: NewSideTaskAction.ID,
       icon: 'sparkle',
-      title: localize2('acp.sideTask.ask', 'Ask in Side Chat'),
+      title: localize2('action.agent.newSideTask', 'New Side Task'),
       category: CATEGORY,
       menu: [
         {
           id: MenuId.AcpChatContext,
-          group: ACP_COPY_GROUP,
-          order: 2,
-          when: 'acpChatHasSelection && acpChatForkSupported',
+          group: ACP_CHAT_CARD_GROUP,
+          order: 9,
+          when: 'acpChatForkSupported',
         },
+        { id: MenuId.CommandPalette, when: ACP_SESSION_EDITOR_ACTIVE_WHEN },
       ],
       f1: false,
     })
   }
 
-  override async run(accessor: ServicesAccessor, arg?: { sessionId?: unknown }): Promise<void> {
+  override async run(
+    accessor: ServicesAccessor,
+    arg?: { sessionId?: unknown; resource?: unknown },
+  ): Promise<void> {
     // Snapshot every service synchronously — the accessor dies past the first await.
     const sessions = accessor.get(IAcpSessionService)
+    const editor = accessor.get(IEditorService)
     const groups = accessor.get(IEditorGroupsService)
     const inst = accessor.get(IInstantiationService)
     const notification = accessor.get(INotificationService)
@@ -1211,24 +1234,56 @@ export class AskInSideChatAction extends Action2 {
       .get(ILoggerService)
       .createLogger({ id: 'acp.sideTask', name: 'ACP Side Task' })
 
-    const sessionId = typeof arg?.sessionId === 'string' ? arg.sessionId : undefined
+    const sessionId = resolveSessionTargetId(arg, editor, sessions)
     if (sessionId === undefined) return
-    // Same pattern as CopySelectedTextAction: the selection is still readable
-    // when the menu item's run executes.
-    const raw = window.getSelection()?.toString() ?? ''
-    const text = raw.trim()
-    if (text.length === 0) return
-    let quote = text
-    if (quote.length > SIDE_TASK_QUOTE_MAX_CHARS) {
-      logger.info(`[acp] side-task quote truncated: ${quote.length} chars`)
-      quote = `${quote.slice(0, SIDE_TASK_QUOTE_MAX_CHARS)}…`
+    // The menu host gates the row on the clicked session's writability and fork
+    // support; the palette can only gate on the editor type, so a session this
+    // command must not fork still lands here. Turn both cases away up front —
+    // the service rejects them with internal English messages that embed the
+    // session id.
+    const live = sessions.getById(sessionId)
+    if (live?.readOnly) {
+      notification.notify({
+        severity: Severity.Error,
+        message: localize(
+          'agent.fork.foreign',
+          'Open the session in its own worktree before forking it.',
+        ),
+      })
+      return
     }
-    const label =
-      quote.replace(/\s+/g, ' ').slice(0, 60) || localize('acp.sideTask.bar', 'Side Tasks')
+    if (live !== undefined && !live.forkSupported.get()) {
+      notification.notify({
+        severity: Severity.Error,
+        message: localize(
+          'acp.sideTask.forkUnsupported',
+          'This agent does not support side tasks.',
+        ),
+      })
+      return
+    }
+    // Only the context-menu host can answer "what is selected": it passes the
+    // clicked session id, and its selection is still readable when the menu
+    // item's run executes (same pattern as CopySelectedTextAction). The palette
+    // passes no args, and reading the DOM there would pick up whatever the user
+    // highlighted inside the quick input instead.
+    const fromMenu = menuSessionArg(arg) !== undefined
+    let quote: { text: string; label: string } | undefined
+    if (fromMenu) {
+      const text = (window.getSelection()?.toString() ?? '').trim()
+      if (text.length > 0) {
+        let clipped = text
+        if (clipped.length > SIDE_TASK_QUOTE_MAX_CHARS) {
+          logger.info(`[acp] side-task quote truncated: ${clipped.length} chars`)
+          clipped = `${clipped.slice(0, SIDE_TASK_QUOTE_MAX_CHARS)}…`
+        }
+        quote = { text: clipped, label: clipped.replace(/\s+/g, ' ').slice(0, 60) }
+      }
+    }
 
     let side: IAcpSession
     try {
-      side = await sessions.forkSideTask(sessionId, { text: quote, label })
+      side = await sessions.forkSideTask(sessionId, quote)
     } catch (err) {
       const message =
         err instanceof AcpForeignWorktreeError
@@ -1245,12 +1300,15 @@ export class AskInSideChatAction extends Action2 {
 
     openSessionInRightSplit(groups, inst, side)
     // Prefill (not auto-send) the side chat with the quote as a markdown
-    // blockquote — the user edits and sends manually, mirroring Codex.
-    const quoted = quote
-      .split('\n')
-      .map((line) => (line.trim().length === 0 ? '>' : `> ${line}`))
-      .join('\n')
-    AcpPromptReplaceInbox.deposit(side.id, { text: `${quoted}\n\n`, contexts: [] })
+    // blockquote — the user edits and sends manually, mirroring Codex. Without
+    // a quote the input stays untouched, so the user starts from a blank slate.
+    if (quote !== undefined) {
+      const quoted = quote.text
+        .split('\n')
+        .map((line) => (line.trim().length === 0 ? '>' : `> ${line}`))
+        .join('\n')
+      AcpPromptReplaceInbox.deposit(side.id, { text: `${quoted}\n\n`, contexts: [] })
+    }
   }
 }
 

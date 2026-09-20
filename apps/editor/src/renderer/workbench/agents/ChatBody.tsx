@@ -973,7 +973,7 @@ function ChatScroll({
     if (key) focusSlot(key)
     e.preventDefault()
     widgetService.setHasSelection(hasSelection)
-    // Gates the "Ask in Side Chat" menu item: read-only foreign previews and
+    // Gates the "New Side Task" menu item: read-only foreign previews and
     // agents without fork support must not offer it.
     widgetService.setForkSupported(!readOnly && session.forkSupported.get())
     // Same gate, for the user-message "Rewind to Here" item.

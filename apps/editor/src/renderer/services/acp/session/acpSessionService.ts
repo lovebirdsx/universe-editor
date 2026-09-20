@@ -320,9 +320,14 @@ export interface IAcpSessionService {
    * Fork a LIVE session into a **side task** (侧边任务): a read-only-mode child
    * chat that inherits the parent's full conversation as agent-side context but
    * presents as a fresh, empty chat (the forked baseline replay is suppressed
-   * from the timeline). The child row is linked to the parent via
-   * `sideTaskOf`/`sideTaskQuote`, hidden from the session list, and surfaced
-   * through the parent chat's side-tasks popover instead.
+   * from the timeline). The child row is linked to the parent via `sideTaskOf`
+   * and, when the caller supplies one, `sideTaskQuote`; it is hidden from the
+   * session list and surfaced through the parent chat's side-tasks popover.
+   *
+   * `quote` is the text the user pulled aside to ask about. It is optional: a
+   * side task can be started from the active session alone, in which case the
+   * child gets a placeholder title and renders no quote chip, and the caller
+   * pre-fills no prompt.
    *
    * Unlike {@link forkSession} the child is NOT made active — the caller opens
    * it in a right-split editor tab. Requires the parent to be live (resident
@@ -331,7 +336,7 @@ export interface IAcpSessionService {
    */
   forkSideTask(
     parentSessionId: string,
-    quote: { text: string; label: string },
+    quote?: { text: string; label: string },
   ): Promise<IAcpSession>
   /**
    * Rewind a live session to an earlier user message (回退) — delegates to the
@@ -2080,7 +2085,7 @@ export class AcpSessionService
 
   async forkSideTask(
     parentSessionId: string,
-    quote: { text: string; label: string },
+    quote?: { text: string; label: string },
   ): Promise<IAcpSession> {
     // Side tasks fork the parent's CURRENT tip, so the parent must be resident
     // (a history-only row would fork a stale tip) and writable (a read-only
@@ -2114,12 +2119,14 @@ export class AcpSessionService
     this._history.add({
       agentId: entry.agentId,
       sessionIdOnAgent: newSessionId,
-      title: quote.label,
+      // Without a quote there is nothing to derive a title from; the placeholder
+      // holds until the title service replaces it after the first turn.
+      title: quote?.label ?? localize('acp.sideTask.untitled', 'New Side Task'),
       ...(entry.cwd !== undefined ? { cwd: entry.cwd } : {}),
       ...(forkAuthority !== undefined ? { authority: forkAuthority } : {}),
       hasMessages: false,
       sideTaskOf: sourceAgentSessionId,
-      sideTaskQuote: quote.text,
+      ...(quote !== undefined ? { sideTaskQuote: quote.text } : {}),
       ...(forkMcpSelection !== null ? { mcpServerNames: [...forkMcpSelection] } : {}),
       configOptions,
       configLabels,

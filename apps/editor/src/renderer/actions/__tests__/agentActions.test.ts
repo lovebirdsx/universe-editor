@@ -50,7 +50,7 @@ import {
   HideAcpPromptSuggestionAction,
   NewAgentSessionInCurrentEditorAction,
 } from '../agentActions.js'
-import { AskInSideChatAction } from '../agentSessionActions.js'
+import { NewSideTaskAction } from '../agentSessionActions.js'
 import { ActivateAgentConfigEntryAction } from '../agentModelActions.js'
 import {
   NewAgentSessionInFolderAction,
@@ -1639,7 +1639,7 @@ describe('RevealAgentSessionInOSAction', () => {
   })
 })
 
-describe('AskInSideChatAction', () => {
+describe('NewSideTaskAction', () => {
   const disposables: IDisposable[] = []
 
   afterEach(() => {
@@ -1652,17 +1652,31 @@ describe('AskInSideChatAction', () => {
     return { id, agentId } as unknown as IAcpSession
   }
 
-  function makeHarness(opts: { forkImpl?: (sid: string) => Promise<IAcpSession> } = {}) {
+  function makeHarness(
+    opts: {
+      forkImpl?: (sid: string) => Promise<IAcpSession>
+      activeEditor?: unknown
+      activeSession?: IAcpSession
+      /** What `getById` answers — the palette-only guards read it. */
+      live?: IAcpSession
+    } = {},
+  ) {
     const groups = new EditorGroupsService()
     const notify = vi.fn()
-    const forkSideTask = vi.fn(async (sid: string, _quote: { text: string; label: string }) =>
+    const forkSideTask = vi.fn(async (sid: string, _quote?: { text: string; label: string }) =>
       opts.forkImpl ? opts.forkImpl(sid) : sideSession('side-1', 'claude-code'),
+    )
+    const activeEditor = observableValue<unknown>('t.activeEditor', opts.activeEditor)
+    const activeSession = observableValue<IAcpSession | undefined>(
+      't.activeSession',
+      opts.activeSession,
     )
     const services = new ServiceCollection()
     services.set(IAcpSessionService, {
       _serviceBrand: undefined,
       forkSideTask,
-      getById: () => undefined,
+      getById: () => opts.live,
+      activeSession,
     } as unknown as IAcpSessionService)
     services.set(IAcpSessionHistoryService, {
       _serviceBrand: undefined,
@@ -1670,6 +1684,12 @@ describe('AskInSideChatAction', () => {
       get: () => undefined,
     } as unknown as IAcpSessionHistoryService)
     services.set(IEditorGroupsService, groups)
+    services.set(IEditorService, { activeEditor } as unknown as IEditorService)
+    services.set(IAcpChatWidgetService, {
+      _serviceBrand: undefined,
+      register: () => ({ dispose() {} }),
+      lastFocusedWidget: undefined,
+    } as unknown as IAcpChatWidgetService)
     services.set(INotificationService, {
       _serviceBrand: undefined,
       notify,
@@ -1681,7 +1701,7 @@ describe('AskInSideChatAction', () => {
     registerWorkspaceServices(services)
     const inst = new InstantiationService(services)
     services.set(IInstantiationService, inst)
-    return { groups, notify, forkSideTask, inst }
+    return { groups, notify, forkSideTask, inst, activeEditor }
   }
 
   function stubSelection(text: string | undefined): void {
@@ -1690,41 +1710,141 @@ describe('AskInSideChatAction', () => {
     )
   }
 
-  async function run(inst: InstantiationService, arg?: { sessionId?: string }): Promise<void> {
-    await inst.invokeFunction((accessor) => new AskInSideChatAction().run(accessor, arg))
+  async function run(inst: InstantiationService, arg?: { sessionId?: unknown }): Promise<void> {
+    await inst.invokeFunction((accessor) => new NewSideTaskAction().run(accessor, arg))
   }
 
-  it('appears in the chat context menu only with a selection on a fork-capable chat', () => {
-    disposables.push(registerAction2(AskInSideChatAction))
-    const has = (ctx: ContextKeyService) =>
-      MenuRegistry.getMenuItems(MenuId.AcpChatContext, ctx).some(
-        (item) => 'command' in item && item.command === AskInSideChatAction.ID,
+  it('appears in the chat context menu on any fork-capable chat, selected text or not', () => {
+    disposables.push(registerAction2(NewSideTaskAction))
+    const items = (ctx: ContextKeyService) =>
+      MenuRegistry.getMenuItems(MenuId.AcpChatContext, ctx).filter(
+        (item) => 'command' in item && item.command === NewSideTaskAction.ID,
       )
     const both = new ContextKeyService()
     both.createKey<boolean>('acpChatHasSelection', true)
     both.createKey<boolean>('acpChatForkSupported', true)
-    expect(has(both)).toBe(true)
+    expect(items(both)).toHaveLength(1)
 
+    // The new case: no selection must no longer hide the row.
     const noSelection = new ContextKeyService()
     noSelection.createKey<boolean>('acpChatHasSelection', false)
     noSelection.createKey<boolean>('acpChatForkSupported', true)
-    expect(has(noSelection)).toBe(false)
+    expect(items(noSelection)).toHaveLength(1)
 
     const noFork = new ContextKeyService()
     noFork.createKey<boolean>('acpChatHasSelection', true)
     noFork.createKey<boolean>('acpChatForkSupported', false)
-    expect(has(noFork)).toBe(false)
+    expect(items(noFork)).toHaveLength(0)
+
+    // Filed under the card group, next to Fork Session / Rewind to Here.
+    expect(items(both)[0]).toEqual(expect.objectContaining({ group: '2_card', order: 9 }))
   })
 
-  it('is a no-op without a sessionId arg or an empty selection', async () => {
+  it('is listed in the command palette only while a session editor is in front', () => {
+    disposables.push(registerAction2(NewSideTaskAction))
+    const listed = (ctx: ContextKeyService) =>
+      MenuRegistry.getMenuItems(MenuId.CommandPalette, ctx).some(
+        (item) => 'command' in item && item.command === NewSideTaskAction.ID,
+      )
+    const inSession = new ContextKeyService()
+    inSession.createKey<string>('activeEditorTypeId', AcpSessionEditorInput.TYPE_ID)
+    expect(listed(inSession)).toBe(true)
+
+    const inFile = new ContextKeyService()
+    inFile.createKey<string>('activeEditorTypeId', 'default')
+    expect(listed(inFile)).toBe(false)
+
+    // The palette gate must not carry editorAreaFocus: opening the palette moves
+    // focus into the quick input, which would flip it false and hide the row.
+    const blurred = new ContextKeyService()
+    blurred.createKey<string>('activeEditorTypeId', AcpSessionEditorInput.TYPE_ID)
+    blurred.createKey<boolean>('editorAreaFocus', false)
+    expect(listed(blurred)).toBe(true)
+  })
+
+  it('ignores the DOM selection when the palette invokes it without args', async () => {
+    const h = makeHarness({ activeSession: sideSession('parent-1', 'claude-code') })
+    // What the user highlighted inside the quick input is not a quote.
+    stubSelection('quick input text')
+
+    await run(h.inst)
+
+    expect(h.forkSideTask).toHaveBeenCalledTimes(1)
+    expect(h.forkSideTask.mock.calls[0]![0]).toBe('parent-1')
+    expect(h.forkSideTask.mock.calls[0]![1]).toBeUndefined()
+    expect(AcpPromptReplaceInbox.drain('side-1')).toBeUndefined()
+  })
+
+  it('resolves the session from the active session editor on the palette path', async () => {
     const h = makeHarness()
-    stubSelection('some text')
+    const tab = h.inst.createInstance(AcpSessionEditorInput, 'parent-dur', 'fake', undefined)
+    h.groups.activeGroup.openEditor(tab, { activate: true, pinned: true })
+    h.activeEditor.set(tab, undefined)
+
+    await run(h.inst)
+
+    expect(h.forkSideTask.mock.calls[0]![0]).toBe('parent-dur')
+    expect(h.groups.groups).toHaveLength(2)
+  })
+
+  it('is a no-op when nothing names a session', async () => {
+    const h = makeHarness()
+
     await run(h.inst)
     expect(h.forkSideTask).not.toHaveBeenCalled()
 
-    stubSelection('   ')
-    await run(h.inst, { sessionId: 's1' })
+    // A stray selection in the quick input still needs a session to fork.
+    stubSelection('quick input text')
+    await run(h.inst)
     expect(h.forkSideTask).not.toHaveBeenCalled()
+  })
+
+  it('turns away a read-only session the palette can still reach', async () => {
+    const readOnly = {
+      id: 'parent-1',
+      agentId: 'claude-code',
+      readOnly: true,
+      forkSupported: observableValue('t.fork', true),
+    } as unknown as IAcpSession
+    const h = makeHarness({ activeSession: readOnly, live: readOnly })
+
+    await run(h.inst)
+
+    expect(h.forkSideTask).not.toHaveBeenCalled()
+    expect(h.notify).toHaveBeenCalledTimes(1)
+    expect(h.notify.mock.calls[0]![0].message).toContain('own worktree')
+  })
+
+  it('turns away an agent without fork support instead of surfacing the raw service error', async () => {
+    const noFork = {
+      id: 'parent-1',
+      agentId: 'echo',
+      readOnly: false,
+      forkSupported: observableValue('t.fork', false),
+    } as unknown as IAcpSession
+    const h = makeHarness({ activeSession: noFork, live: noFork })
+
+    await run(h.inst)
+
+    expect(h.forkSideTask).not.toHaveBeenCalled()
+    expect(h.notify).toHaveBeenCalledTimes(1)
+    expect(h.notify.mock.calls[0]![0].message).toBe('This agent does not support side tasks.')
+  })
+
+  it('forks without a quote when the menu names a session but nothing is selected', async () => {
+    const h = makeHarness()
+    stubSelection('   ')
+
+    await run(h.inst, { sessionId: 'parent-1' })
+
+    expect(h.forkSideTask.mock.calls[0]![0]).toBe('parent-1')
+    expect(h.forkSideTask.mock.calls[0]![1]).toBeUndefined()
+    expect(h.groups.groups).toHaveLength(2)
+    const sideTab = h.groups.groups[1]!.activeEditor
+    expect(sideTab).toBeInstanceOf(AcpSessionEditorInput)
+    expect((sideTab as AcpSessionEditorInput).sessionId).toBe('side-1')
+    // Nothing is deposited: an empty quote would clear the side chat's input.
+    expect(AcpPromptReplaceInbox.drain('side-1')).toBeUndefined()
   })
 
   it('forks into a new right group, opens the tab there, and deposits the blockquote', async () => {
@@ -1769,7 +1889,7 @@ describe('AskInSideChatAction', () => {
 
     await run(h.inst, { sessionId: 'parent-1' })
 
-    const quote = h.forkSideTask.mock.calls[0]![1].text as string
+    const quote = h.forkSideTask.mock.calls[0]![1]!.text
     expect(quote.length).toBe(8001)
     expect(quote.endsWith('…')).toBe(true)
   })

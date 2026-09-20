@@ -157,7 +157,7 @@ export interface IAcpChatWidgetService {
   /**
    * Set `acpChatForkSupported` — true at context-menu time when the menu's
    * session is writable (not a read-only foreign preview) and its agent
-   * advertises fork support. Gates the "Ask in Side Chat" menu item.
+   * advertises fork support. Gates the "New Side Task" menu item.
    */
   setForkSupported(forkSupported: boolean): void
   /**

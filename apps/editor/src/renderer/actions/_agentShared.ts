@@ -68,6 +68,13 @@ export const ACP_NAV_WHEN = `acpChatFocused || (editorAreaFocus && activeEditorT
 // widget that merely held focus last can never answer them.
 export const ACP_EDITOR_ONLY_WHEN = `editorAreaFocus && activeEditorTypeId == '${AcpSessionEditorInput.TYPE_ID}'`
 
+// Same editor check as ACP_EDITOR_ONLY_WHEN minus the focus conjunct, for rows
+// that must survive the command palette: opening it moves focus into the quick
+// input (so `editorAreaFocus` flips false) while the active editor is untouched.
+// Keybindings want the focus conjunct — a chord pressed over a focused panel
+// must not reach a session editor sitting behind it; palette listing does not.
+export const ACP_SESSION_EDITOR_ACTIVE_WHEN = `activeEditorTypeId == '${AcpSessionEditorInput.TYPE_ID}'`
+
 // Resolve which chat widget a session command should target. Prefer the widget
 // behind the active session editor (so commands work even when DOM focus never
 // landed in its timeline); otherwise fall back to whichever chat last held focus.

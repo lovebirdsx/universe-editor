@@ -2305,6 +2305,32 @@ describe('AcpSessionService — rewind / fork', () => {
     }
   })
 
+  it('forkSideTask without a quote leaves the row unquoted and titles it with the placeholder', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({
+      stubOptions: { forkCapable: true, loadSession: true, forkedSessionId: 'agent-side-3' },
+    })
+    const { svc, history } = makeServiceWithHistory(client, tracker)
+    try {
+      const s = await svc.createSession('claude-code')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+
+      const side = await svc.forkSideTask(s.id)
+
+      expect(side.id).toBe('agent-side-3')
+      const entry = history.get('agent-side-3')
+      expect(entry?.sideTaskOf).toBe('agent-1')
+      // Absent, not the empty string: an empty quote would still render a chip.
+      expect(entry?.sideTaskQuote).toBeUndefined()
+      expect(entry?.title).toBe('New Side Task')
+      expect(entry?.configOptions?.['mode']).toBe('dontAsk')
+      expect(svc.activeSession.get()?.id).toBe(s.id)
+    } finally {
+      svc.dispose()
+    }
+  })
+
   it('forkSideTask overrides an explicitly-selected mode with the read-only value', async () => {
     const tracker = new StubSessionChangeTracker()
     const modeConfig: readonly SessionConfigOption[] = [
