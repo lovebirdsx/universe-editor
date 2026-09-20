@@ -23,6 +23,13 @@ export const HEAP_FLOW_NAMES = [
    * the 2026-09-12 crash had both available and no way to tell them apart.
    */
   'childchunks',
+  /** 文档镜像发往扩展宿主的载荷：`docpush` 是真正上线的字符数，`docdrop` 是被丢弃的增量（超上限、
+   *  批失败、或被整篇推送取代）。docdrop 升而 docpush 降=上限在起作用，两者同升=放大器还在赢。 */
+  'docpush',
+  'docdrop',
+  /** 外部刷新从盘上读回来的字符数：一次读盘的代价是同一份内容在传输、解码、最小编辑扫描上各来
+   *  一遍，且随文件持续变更反复发生——涨的 `extreload` 是与 `docpush` 并排读时才分得开的读侧成本。 */
+  'extreload',
 ] as const
 export type HeapFlowName = (typeof HEAP_FLOW_NAMES)[number]
 

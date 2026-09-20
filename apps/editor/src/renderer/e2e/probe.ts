@@ -80,6 +80,7 @@ import {
 import { readHeapSample } from '../services/memory/rendererHeapSample.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
+import { DocumentSyncStats } from '../services/extensions/documentSyncStats.js'
 import { getActiveTextEditor } from '../services/editor/activeTextEditor.js'
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
 import { DiffEditorRegistry } from '../services/editor/DiffEditorRegistry.js'
@@ -109,6 +110,7 @@ import {
   type E2EConfigTarget,
   type E2EContributedMcpServer,
   type E2EDirtyDiffDecoration,
+  type E2EDocumentSyncStats,
   type E2EEditorDecoration,
   type E2EExtensionUpdate,
   type E2EFindWidgetState,
@@ -378,6 +380,17 @@ async function getCompletionLabels(
     }
   }
   return labels
+}
+
+/** FNV-1a（UTF-16 码元，32 位）。刻意不用 `crypto.subtle.digest`：那要先整体编码成字节，等于给
+ *  可能上兆的缓冲区再复制一份，而这个指纹的意义正是「比一次大缓冲区只要一趟、零分配」。spec 侧
+ *  有一份同样的循环，两边由 `smoke.docSyncExternalReload.spec.ts` 的手写字面量钉住。 */
+function fnv1a(text: string): number {
+  let hash = 0x811c9dc5
+  for (let i = 0; i < text.length; i++) {
+    hash = Math.imul(hash ^ text.charCodeAt(i), 0x01000193)
+  }
+  return hash >>> 0
 }
 
 class DummyEditorInput extends EditorInput {
@@ -761,6 +774,15 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     getActiveEditorText: () => {
       const monaco = getActiveTextEditor(services.editorGroupsService)?.editor
       return monaco?.getModel()?.getValue()
+    },
+    isActiveEditorDirty: () => services.editorGroupsService.activeGroup?.activeEditor?.isDirty,
+    // 只走一趟模型、不持有副本：调用方比的是两个数，而不是把上兆的正文搬过桥。
+    getActiveEditorTextDigest: () => {
+      const monaco = getActiveTextEditor(services.editorGroupsService)?.editor
+      const model = monaco?.getModel()
+      if (!model) return undefined
+      const text = model.getValue()
+      return { length: text.length, hash: fnv1a(text) }
     },
     setActiveEditorText: (text: string) => {
       const monaco = getActiveTextEditor(services.editorGroupsService)?.editor
@@ -2400,6 +2422,9 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       gauge: readHeapGauges(),
       codeHtmlBytes: readCodeHtmlBytes(),
     }),
+    // 瞬时量而非累计量：管道此刻还欠着 ack 的载荷。读的是管道自己写的模块（不读文档），
+    // 所以拆掉的管道读作零，而不是停在最后一帧。
+    getDocumentSyncStats: (): E2EDocumentSyncStats => DocumentSyncStats.read(),
     // Read-only view of main's round state. Starting a round stays the user's call (the
     // command + its consent dialog), so this exists purely so a spec can tell "armed and
     // waiting for a stable baseline" from "over, because the window reloaded".

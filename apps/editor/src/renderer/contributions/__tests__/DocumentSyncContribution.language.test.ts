@@ -33,6 +33,7 @@ function fakeModel(uriString: string, text: string, initialLanguageId = 'plainte
   return {
     uri: URI.parse(uriString),
     getValue: () => value,
+    getValueLength: () => value.length,
     getVersionId: () => 1,
     getLanguageId: () => languageId,
     isDisposed: () => disposed,

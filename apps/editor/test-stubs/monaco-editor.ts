@@ -12,14 +12,19 @@ type ContentChangedEvent = { changes: ReadonlyArray<unknown> }
 type Listener = (e: ContentChangedEvent) => void
 type LanguageListener = (e: { oldLanguage: string; newLanguage: string }) => void
 
-function normalizeModelText(initial: string): string {
+/** Monaco's `PieceTreeTextBufferFactory._getEOL`: a buffer whose line endings are
+ *  more than half CRLF is a CRLF buffer, otherwise LF. */
+function modelEol(initial: string): '\r\n' | '\n' {
   const crlf = initial.match(/\r\n/g)?.length ?? 0
   const lf = initial.match(/(?<!\r)\n/g)?.length ?? 0
   const cr = initial.match(/\r(?!\n)/g)?.length ?? 0
   const total = crlf + lf + cr
-  if (total === 0) return initial
-  const eol = cr + crlf > total / 2 ? '\r\n' : '\n'
-  return initial.replace(/\r\n|\r|\n/g, eol)
+  if (total === 0) return '\n'
+  return cr + crlf > total / 2 ? '\r\n' : '\n'
+}
+
+function normalizeModelText(initial: string): string {
+  return initial.replace(/\r\n|\r|\n/g, modelEol(initial))
 }
 
 interface Position {
@@ -50,6 +55,7 @@ interface StoredDecoration {
 }
 
 function makeModel(initial: string, language: string, uri: unknown) {
+  const eol = modelEol(initial)
   let value = normalizeModelText(initial)
   let versionId = 1
   let disposed = false
@@ -104,6 +110,7 @@ function makeModel(initial: string, language: string, uri: unknown) {
     getValue: () => value,
     getVersionId: () => versionId,
     getAlternativeVersionId: () => versionId,
+    getEOL: () => eol,
     setValue: (next: string) => {
       const normalized = normalizeModelText(next)
       if (normalized === value) return

@@ -477,6 +477,36 @@ export interface E2EHeapFlowCounters {
   readonly codeHtmlBytes: number
 }
 
+/**
+ * 文档镜像管道此刻持有的载荷（`DocumentSyncStats.read()`），单位是**字符**。
+ *
+ * `openChars` 是镜像文档的**长度**（`getValueLength()`，不是正文），`pendingChars` /
+ * `inflightChars` 是还没 ack 的积压增量与在途批次——也就是堆报告里 `docSync` holder 计入的
+ * 那部分。
+ */
+export interface E2EDocumentSyncStats {
+  readonly openDocs: number
+  readonly openChars: number
+  readonly pendingDocs: number
+  readonly pendingDeltas: number
+  readonly pendingChars: number
+  readonly inflightDocs: number
+  readonly inflightChars: number
+  /** 已欠整篇推送的文档数。 */
+  readonly fullDocs: number
+}
+
+/**
+ * 活动文件编辑器缓冲区的内容指纹（FNV-1a，按 UTF-16 code unit）。
+ *
+ * 比对「模型与磁盘一致」不能靠把正文搬过桥：一份 10MB 的缓冲区不该为了比对而整体序列化进
+ * node 侧。spec 用同一算法从磁盘内容算出期望值，两边只交换两个数。
+ */
+export interface E2ETextDigest {
+  readonly length: number
+  readonly hash: number
+}
+
 /** Session snapshot of the interaction-responsiveness floor; see
  *  E2EProbe.getInteractionPerfSummary. */
 export interface E2EInteractionPerfSummary {
@@ -1805,6 +1835,15 @@ export interface E2EProbe {
    * racing the sampler for the same numbers.
    */
   getHeapFlowCounters(): E2EHeapFlowCounters
+  /**
+   * 文档镜像管道此刻的读数。与 `flow=` 的 `docpush` / `docdrop` 是两种量纲：那两个是**区间
+   * 累计**，这里是**瞬时持有**（这一刻积压 + 在途）。
+   */
+  getDocumentSyncStats(): E2EDocumentSyncStats
+  /** 活动编辑器缓冲区是否脏；没有活动编辑器（或它不支持 dirty）时 undefined。 */
+  isActiveEditorDirty(): boolean | undefined
+  /** 活动文件编辑器模型文本的长度与指纹；没有文件编辑器挂载时 undefined。见 {@link E2ETextDigest}。 */
+  getActiveEditorTextDigest(): E2ETextDigest | undefined
   /**
    * Drive one poll cycle of the Swarm review-notification contribution
    * synchronously (its own timer is 60s — far too slow for a spec). Resolves once

@@ -33,18 +33,28 @@ import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
 import { MarkdownPreviewInput } from '../services/editor/MarkdownPreviewInput.js'
 import { MonacoModelRegistry } from '../workbench/editor/monaco/MonacoModelRegistry.js'
-import { applyMinimalTextEdit } from '../services/editor/minimalModelEdit.js'
+import { applyMinimalTextEdit, normalizeToModelEol } from '../services/editor/minimalModelEdit.js'
 import { splitLeadingBom } from '../services/editor/leadingBom.js'
 import { isDescendant } from '../services/explorer/explorerTreeUtils.js'
 import { readForExternalReload } from '../services/files/externalReload.js'
 import { IOutOfWorkspaceWatchService } from '../services/files/outOfWorkspaceWatchService.js'
 import { basenameOfResource } from '../workbench/files/resourceInfo.js'
 
+/** 一个资源的对账状态。`queued` 是单槽而非计数：每秒被重写的文件只该拿到一次后续通过；
+ *  `force` 合进下一次通过。 */
+interface IResourceReconcile {
+  queued: boolean
+  force: boolean
+}
+
 export class ExternalChangeWatcher extends Disposable implements IWorkbenchContribution {
   private readonly _logger: ILogger
   private readonly _groupDisposables = new Map<number, IDisposable>()
   private _watchUpdatePending = false
   private _watchHandle: IDisposable | undefined
+  private _isDisposed = false
+  /** 有对账在跑（或排队）的资源，键与其他所有比较一致。 */
+  private readonly _reconciles = new Map<string, IResourceReconcile>()
   /**
    * Comparison keys already reported as too large to keep reloading. Grows with the
    * number of distinct oversized files anyone opens — a handful at most — and is
@@ -71,8 +81,9 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
       new NullLogger()
     this._register(
       _watcher.onDidChangeFiles((events) => {
-        // Don't await — events run concurrently per group.
-        void this._handle(events)
+        // 刻意同步：整批事件在这里过滤完即被丢弃，成千上万条事件的风暴到不了下面那个会停在
+        // 读盘或模态框上的对账。
+        this._handle(events)
       }),
     )
     // User-data files (settings/keybindings/aiSettings) live outside the
@@ -105,8 +116,10 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
   }
 
   override dispose(): void {
+    this._isDisposed = true
     this._watchHandle?.dispose()
     this._groupDisposables.clear()
+    this._reconciles.clear()
     super.dispose()
   }
 
@@ -163,7 +176,7 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
     if (!uri) return
     // force: a same-content atomic rewrite can leave mtime unchanged at coarse
     // filesystem granularity, so reconcile against disk content directly.
-    await this._reloadChangedFileEditors(new Set([this._uriIdentity.getComparisonKey(uri)]), true)
+    this._requestReconcile(this._uriIdentity.getComparisonKey(uri), true)
   }
 
   /**
@@ -189,17 +202,24 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
     return { keys, resources }
   }
 
-  private async _handle(events: readonly IFileChangeEvent[]): Promise<void> {
+  /**
+   * Pre-filter a watcher batch and hand the survivors to the reconcilers.
+   *
+   * Pre-filter against the open editors before doing any work. Watching a
+   * large, high-churn tree (e.g. a game-engine folder that constantly writes
+   * and deletes temp files) fires thousands of events per batch; without this
+   * gate every deleted event triggered a cross-process `stat`, piling up
+   * unbounded pending IPC + stacked `_handle` calls until the renderer OOMed.
+   * A change is relevant only if it matches an open editor, or (for a delete)
+   * is an ancestor directory of one — the exact conditions the handlers below
+   * act on.
+   *
+   * 同步执行是刻意的：它是最后一个能看到整批事件的帧，而后面那个 await 之后的对账可能停在读盘或
+   * 模态框上几分钟——批次不能挂在那后面。
+   */
+  private _handle(events: readonly IFileChangeEvent[]): void {
     if (events.length === 0) return
 
-    // Pre-filter against the open editors before doing any work. Watching a
-    // large, high-churn tree (e.g. a game-engine folder that constantly writes
-    // and deletes temp files) fires thousands of events per batch; without this
-    // gate every deleted event triggered a cross-process `stat`, piling up
-    // unbounded pending IPC + stacked _handle calls until the renderer OOMed.
-    // A change is relevant only if it matches an open editor, or (for a delete)
-    // is an ancestor directory of one — the exact conditions the handlers below
-    // act on.
     const watched = this._collectWatchedResources()
     if (watched.resources.length === 0) return
 
@@ -207,16 +227,15 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
     const changedKeys = new Set<string>()
     for (const ev of events) {
       const u = ev.resource
+      const key = this._uriIdentity.getComparisonKey(u)
       if (ev.type === 'deleted') {
-        const key = this._uriIdentity.getComparisonKey(u)
         // Relevant if it IS an open editor (atomic-rewrite → reload) or an
         // ancestor of one (directory delete → close descendant tabs).
         if (watched.keys.has(key) || watched.resources.some((r) => isDescendant(u, r))) {
           deletedResources.push(u)
         }
-      } else {
-        const key = this._uriIdentity.getComparisonKey(u)
-        if (watched.keys.has(key)) changedKeys.add(key)
+      } else if (watched.keys.has(key)) {
+        changedKeys.add(key)
       }
     }
     if (deletedResources.length === 0 && changedKeys.size === 0) return
@@ -224,32 +243,261 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
       `handleExternalChanges events=${events.length} relevant deleted=${deletedResources.length} changed=${changedKeys.size}`,
     )
 
+    void this._applyChanges(deletedResources, changedKeys)
+  }
+
+  private async _applyChanges(
+    deleted: readonly URI[],
+    changed: ReadonlySet<string>,
+  ): Promise<void> {
     // A 'deleted' event is frequently just an atomic rewrite (e.g. `git
     // checkout` rewriting the file). Confirm the path is really gone before
     // closing — survivors are treated as content changes so the open editor
     // reloads its content instead of being closed.
-    if (deletedResources.length > 0) {
+    if (deleted.length > 0) {
       const trulyDeleted: URI[] = []
-      for (const u of deletedResources) {
-        if (await this._exists(u)) {
-          changedKeys.add(this._uriIdentity.getComparisonKey(u))
-        } else {
-          trulyDeleted.push(u)
-        }
+      for (const u of deleted) {
+        if (await this._exists(u))
+          this._requestReconcile(this._uriIdentity.getComparisonKey(u), false)
+        else trulyDeleted.push(u)
       }
       if (trulyDeleted.length > 0) this._closeDeletedEditors(trulyDeleted)
+      if (this._isDisposed) return
     }
 
-    if (changedKeys.size === 0) return
+    for (const key of changed) this._requestReconcile(key, false)
+  }
 
-    // Collected per batch (this runs concurrently for overlapping batches) and
-    // reported after all three reconcile passes, so a file refused by more than one
-    // of them still produces a single notice.
+  /**
+   * Reconcile one resource, at most once at a time.
+   *
+   * 跑动期间到达的请求只置一个「排队」标志，而不是再起一趟：一趟对账含一次整文件读盘及其传输帧，
+   * 被写得比读还快的文件不该把读盘堆起来。标志是单槽而不是静默窗口去抖——永不安静的文件照样会被
+   * 对账，只是不会积压。闸门按资源划分：卡在丢弃确认框上的文件不得拖住同批次的其他文件。
+   */
+  private _requestReconcile(key: string, force: boolean): void {
+    if (this._isDisposed) return
+    const running = this._reconciles.get(key)
+    if (running) {
+      running.queued = true
+      running.force = running.force || force
+      return
+    }
+    const state: IResourceReconcile = { queued: false, force }
+    this._reconciles.set(key, state)
+    void this._runReconcile(key, state)
+  }
+
+  private async _runReconcile(key: string, state: IResourceReconcile): Promise<void> {
+    // 本轮各次通过共用一份 skipped：被多条路径拒绝的文件仍只提示一次。
     const skipped = new Map<string, URI>()
-    const handled = await this._reloadChangedFileEditors(changedKeys, false, skipped)
-    await this._reconcilePreviewModels(changedKeys, handled, skipped)
-    await this._refreshChangedDiffEditors(changedKeys, handled, skipped)
-    this._notifyTooLarge(skipped)
+    try {
+      do {
+        state.queued = false
+        const force = state.force
+        state.force = false
+        await this._reconcileResource(key, force, skipped)
+      } while (state.queued && !this._isDisposed)
+    } catch (err) {
+      // 失败不能让该资源一直停在「运行中」：下一条事件必须能重试。
+      this._logger.warn(`externalChange reconcile failed ${key}`, err)
+    } finally {
+      this._reconciles.delete(key)
+      if (!this._isDisposed) this._notifyTooLarge(skipped)
+    }
+  }
+
+  /**
+   * 让一个资源的所有打开视图与磁盘一致：先文件编辑器（干净的重载、脏的询问），再共享或镜像同一
+   * 模型的预览与实时 diff。
+   */
+  private async _reconcileResource(
+    key: string,
+    force: boolean,
+    skipped: Map<string, URI>,
+  ): Promise<void> {
+    const editors: FileEditorInput[] = []
+    for (const group of this._groups.groups) {
+      for (const editor of group.editors) {
+        if (
+          editor instanceof FileEditorInput &&
+          this._uriIdentity.getComparisonKey(editor.resource) === key
+        ) {
+          editors.push(editor)
+        }
+      }
+    }
+
+    // De-dup by URI: a file can be open in multiple groups (they share the
+    // registry's model), but we only want to prompt once per resource.
+    const [input] = editors
+    if (input) {
+      this._logger.info(
+        `externalChanges matchedEditors=${editors.length} ${input.resource.toString()}`,
+      )
+      try {
+        if ((await input.checkExternalChange(this._dialog, force)) === 'too-large') {
+          skipped.set(key, input.resource)
+        }
+      } catch (err) {
+        // Best-effort: a failure on one input must not stall the others.
+        this._logger.warn(`externalChange check failed ${key}`, err)
+      }
+    }
+    if (this._isDisposed) return
+
+    await this._reconcilePreviews(key, editors.length > 0, skipped)
+    if (this._isDisposed) return
+    await this._refreshDiff(key, editors.length > 0, skipped)
+  }
+
+  /**
+   * Reconcile the markdown previews for this resource that were reached WITHOUT
+   * their source open as a FileEditorInput in a group — so nothing else pulls
+   * external disk edits into the model they render:
+   *   - toggle mode (Ctrl+Shift+V): the preview holds the detached source
+   *     FileEditorInput. Delegate to its dirty-aware `checkExternalChange` (its
+   *     model is shared with the preview, so the reload fires onDidChangeContent).
+   *   - link-reached: no source input at all; the preview acquired a clean disk
+   *     model. Reconcile it directly with a minimal edit (never dirty — the
+   *     preview is read-only), which fires the onDidChangeContent it subscribes to.
+   * A resource already handled by `_reconcileResource` (source open in a group,
+   * model shared) is skipped.
+   */
+  private async _reconcilePreviews(
+    key: string,
+    handled: boolean,
+    skipped: Map<string, URI>,
+  ): Promise<void> {
+    if (handled) return
+    let heldSource: FileEditorInput | undefined
+    let orphanUri: URI | undefined
+    for (const group of this._groups.groups) {
+      for (const editor of group.editors) {
+        if (!(editor instanceof MarkdownPreviewInput)) continue
+        if (this._uriIdentity.getComparisonKey(editor.sourceUri) !== key) continue
+        const source = editor.sourceInput
+        if (source) heldSource = heldSource ?? source
+        else orphanUri = editor.sourceUri
+      }
+    }
+
+    // One source per resource, same de-dup as the file editors above.
+    if (heldSource) {
+      try {
+        if ((await heldSource.checkExternalChange(this._dialog)) === 'too-large') {
+          skipped.set(key, heldSource.resource)
+        }
+      } catch (err) {
+        this._logger.warn(`preview source reconcile failed ${key}`, err)
+      }
+    }
+
+    if (!orphanUri) return
+    const model = MonacoModelRegistry.peek(orphanUri)
+    if (!model || model.isDisposed()) return
+    try {
+      const read = await readForExternalReload(this._fileService, orphanUri)
+      if (!read.ok) {
+        if (read.reason === 'too-large') skipped.set(key, orphanUri)
+        return
+      }
+      // Re-check after the await: closing the preview releases the model inside
+      // this window, and editing a disposed model throws.
+      if (model.isDisposed() || this._isDisposed) return
+      applyMinimalTextEdit(model, read.text)
+    } catch (err) {
+      this._logger.warn(`preview reconcile failed ${key}`, err)
+    }
+  }
+
+  /**
+   * Re-read the working-tree side of any open diff editor whose file changed.
+   * The original (HEAD) side is a snapshot that a discard does not affect, so
+   * only the modified side is refreshed — after a discard it equals HEAD and the
+   * diff collapses to empty.
+   *
+   * An editable diff's modified side IS the shared buffer, so it reconciles like
+   * a file editor: a key already handled by `_reconcileResource` means the
+   * same-file FileEditor already reconciled the model — mirror it. Otherwise read
+   * disk and, when the buffer is clean and differs, reconcile with a minimal edit
+   * + markClean; a dirty buffer keeps the user's in-progress edits.
+   */
+  private async _refreshDiff(
+    key: string,
+    handled: boolean,
+    skipped: Map<string, URI>,
+  ): Promise<void> {
+    const inputs: DiffEditorInput[] = []
+    for (const group of this._groups.groups) {
+      for (const editor of group.editors) {
+        // Snapshot diffs (commit-to-commit, depot revisions) are frozen — a
+        // working-tree change must not rewrite their right side.
+        if (!(editor instanceof DiffEditorInput) || !editor.liveModified) continue
+        if (this._uriIdentity.getComparisonKey(editor.originalUri) === key) inputs.push(editor)
+      }
+    }
+    if (inputs.length === 0) return
+
+    const uri = inputs[0]!.originalUri
+    const liveModel = MonacoModelRegistry.peek(uri)
+    let model = liveModel && !liveModel.isDisposed() ? liveModel : undefined
+
+    if (inputs[0]!.modifiedEditable) {
+      if (!handled) {
+        const read = await readForExternalReload(this._fileService, uri)
+        if (!read.ok) {
+          // Too large → leave the diff as it is and say so once. Unreadable →
+          // gone from disk; the deletion path closes it, nothing to refresh.
+          if (read.reason === 'too-large') skipped.set(key, uri)
+          return
+        }
+        const content = splitLeadingBom(read.text)
+        // Re-check after the await: closing the tab releases the shared model
+        // inside this window, and both reads below would throw on a disposed
+        // one. A disposed model means no editor still holds this URI (the
+        // registry is refcounted), so there is nothing left to mirror into.
+        if (this._isDisposed) return
+        model = MonacoModelRegistry.peek(uri)
+        if (model?.isDisposed()) return
+        if (
+          model &&
+          !inputs[0]!.isDirty &&
+          // 按模型自己的行尾比：混写行尾的盘上文本与 getValue() 永不逐字节相等，逐字节比会让每个
+          // 批次都在这里推一份近全文编辑（并 markClean）。
+          model.getValue() !== normalizeToModelEol(content.text, model)
+        ) {
+          applyMinimalTextEdit(model, content.text)
+          MonacoModelRegistry.markModelClean(model)
+        }
+        if (!model) {
+          for (const input of inputs) input.update(input.originalContent, content.text)
+          return
+        }
+      }
+      // Mirror the live buffer into the input: after a handled FileEditor
+      // reconcile the model is fresh, and a dirty buffer wins over disk.
+      if (model) {
+        const text = model.getValue()
+        for (const input of inputs) input.update(input.originalContent, text)
+      }
+      return
+    }
+
+    // Non-editable liveModified diff (defensive): existing buffer-wins path.
+    let text: string
+    if (model) {
+      text = model.getValue()
+    } else {
+      const read = await readForExternalReload(this._fileService, uri)
+      if (!read.ok) {
+        if (read.reason === 'too-large') skipped.set(key, uri)
+        return
+      }
+      text = read.text
+    }
+    if (this._isDisposed) return
+    for (const input of inputs) input.update(input.originalContent, text)
   }
 
   /**
@@ -280,199 +528,6 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
       return true
     } catch {
       return false
-    }
-  }
-
-  private async _reloadChangedFileEditors(
-    changedKeys: Set<string>,
-    force = false,
-    skipped?: Map<string, URI>,
-  ): Promise<Set<string>> {
-    const matches: FileEditorInput[] = []
-    for (const group of this._groups.groups) {
-      for (const editor of group.editors) {
-        if (
-          editor instanceof FileEditorInput &&
-          changedKeys.has(this._uriIdentity.getComparisonKey(editor.resource))
-        ) {
-          matches.push(editor)
-        }
-      }
-    }
-    const handled = new Set<string>()
-    if (matches.length === 0) return handled
-    this._logger.info(`externalChanges matchedEditors=${matches.length}`)
-
-    // De-dup by URI: a file can be open in multiple groups, but we only want
-    // to prompt once per resource.
-    const seen = new Set<string>()
-    for (const input of matches) {
-      const key = this._uriIdentity.getComparisonKey(input.resource)
-      handled.add(key)
-      if (seen.has(key)) continue
-      seen.add(key)
-      try {
-        if ((await input.checkExternalChange(this._dialog, force)) === 'too-large') {
-          skipped?.set(key, input.resource)
-        }
-      } catch (err) {
-        // Best-effort: a failure on one input must not stall the others.
-        this._logger.warn(`externalChange check failed ${key}`, err)
-      }
-    }
-    return handled
-  }
-
-  /**
-   * Reconcile the markdown previews reached WITHOUT their source open as a
-   * FileEditorInput in a group — so nothing else pulls external disk edits into
-   * the model they render:
-   *   - toggle mode (Ctrl+Shift+V): the preview holds the detached source
-   *     FileEditorInput. Delegate to its dirty-aware `checkExternalChange` (its
-   *     model is shared with the preview, so the reload fires onDidChangeContent).
-   *   - link-reached: no source input at all; the preview acquired a clean disk
-   *     model. Reconcile it directly with a minimal edit (never dirty — the
-   *     preview is read-only), which fires the onDidChangeContent it subscribes to.
-   * Keys already handled by `_reloadChangedFileEditors` (source open in a group,
-   * model shared) are skipped.
-   */
-  private async _reconcilePreviewModels(
-    changedKeys: Set<string>,
-    handled: Set<string>,
-    skipped: Map<string, URI>,
-  ): Promise<void> {
-    const heldSources: FileEditorInput[] = []
-    const orphanUris = new Map<string, URI>()
-    for (const group of this._groups.groups) {
-      for (const editor of group.editors) {
-        if (!(editor instanceof MarkdownPreviewInput)) continue
-        const key = this._uriIdentity.getComparisonKey(editor.sourceUri)
-        if (!changedKeys.has(key) || handled.has(key)) continue
-        const source = editor.sourceInput
-        if (source) {
-          heldSources.push(source)
-        } else {
-          orphanUris.set(key, editor.sourceUri)
-        }
-      }
-    }
-
-    const seen = new Set<string>()
-    for (const source of heldSources) {
-      const key = this._uriIdentity.getComparisonKey(source.resource)
-      if (seen.has(key)) continue
-      seen.add(key)
-      try {
-        if ((await source.checkExternalChange(this._dialog)) === 'too-large') {
-          skipped.set(key, source.resource)
-        }
-      } catch (err) {
-        this._logger.warn(`preview source reconcile failed ${key}`, err)
-      }
-    }
-
-    for (const [key, uri] of orphanUris) {
-      const model = MonacoModelRegistry.peek(uri)
-      if (!model || model.isDisposed()) continue
-      try {
-        const read = await readForExternalReload(this._fileService, uri)
-        if (!read.ok) {
-          if (read.reason === 'too-large') skipped.set(key, uri)
-          continue
-        }
-        // Re-check after the await: closing the preview releases the model
-        // inside this window, and editing a disposed model throws.
-        if (model.isDisposed()) continue
-        applyMinimalTextEdit(model, read.text)
-      } catch (err) {
-        this._logger.warn(`preview reconcile failed ${key}`, err)
-      }
-    }
-  }
-
-  /**
-   * Re-read the working-tree side of any open diff editor whose file changed.
-   * The original (HEAD) side is a snapshot that a discard does not affect, so
-   * only the modified side is refreshed — after a discard it equals HEAD and the
-   * diff collapses to empty.
-   *
-   * An editable diff's modified side IS the shared buffer, so it reconciles like
-   * a file editor: a key already `handled` by `_reloadChangedFileEditors` means
-   * the same-file FileEditor already reconciled the model — mirror it. Otherwise
-   * read disk and, when the buffer is clean and differs, reconcile with a minimal
-   * edit + markClean; a dirty buffer keeps the user's in-progress edits.
-   */
-  private async _refreshChangedDiffEditors(
-    changedKeys: Set<string>,
-    handled: Set<string>,
-    skipped: Map<string, URI>,
-  ): Promise<void> {
-    const byUri = new Map<string, DiffEditorInput[]>()
-    for (const group of this._groups.groups) {
-      for (const editor of group.editors) {
-        // Snapshot diffs (commit-to-commit, depot revisions) are frozen — a
-        // working-tree change must not rewrite their right side.
-        if (!(editor instanceof DiffEditorInput) || !editor.liveModified) continue
-        const key = this._uriIdentity.getComparisonKey(editor.originalUri)
-        if (!changedKeys.has(key)) continue
-        const list = byUri.get(key) ?? []
-        list.push(editor)
-        byUri.set(key, list)
-      }
-    }
-    for (const inputs of byUri.values()) {
-      const uri = inputs[0]!.originalUri
-      const key = this._uriIdentity.getComparisonKey(uri)
-      const liveModel = MonacoModelRegistry.peek(uri)
-      const model = liveModel && !liveModel.isDisposed() ? liveModel : undefined
-
-      if (inputs[0]!.modifiedEditable) {
-        if (!handled.has(key)) {
-          const read = await readForExternalReload(this._fileService, uri)
-          if (!read.ok) {
-            // Too large → leave the diff as it is and say so once. Unreadable →
-            // gone from disk; the deletion path closes it, nothing to refresh.
-            if (read.reason === 'too-large') skipped.set(key, uri)
-            continue
-          }
-          const diskText = read.text
-          // Re-check after the await: closing the tab releases the shared model
-          // inside this window, and both reads below would throw on a disposed
-          // one. A disposed model means no editor still holds this URI (the
-          // registry is refcounted), so there is nothing left to mirror into.
-          if (model?.isDisposed()) continue
-          const content = splitLeadingBom(diskText)
-          if (model && !inputs[0]!.isDirty && model.getValue() !== content.text) {
-            applyMinimalTextEdit(model, content.text)
-            MonacoModelRegistry.markModelClean(model)
-          }
-          if (!model) {
-            for (const input of inputs) input.update(input.originalContent, content.text)
-            continue
-          }
-        }
-        // Mirror the live buffer into the input: after a handled FileEditor
-        // reconcile the model is fresh, and a dirty buffer wins over disk.
-        if (model) {
-          const text = model.getValue()
-          for (const input of inputs) input.update(input.originalContent, text)
-        }
-        continue
-      }
-
-      // Non-editable liveModified diff (defensive): existing buffer-wins path.
-      let text: string
-      if (model) {
-        text = model.getValue()
-      } else {
-        const read = await readForExternalReload(this._fileService, uri)
-        if (!read.ok) {
-          if (read.reason === 'too-large') skipped.set(key, uri)
-          continue
-        }
-        text = read.text
-      }
-      for (const input of inputs) input.update(input.originalContent, text)
     }
   }
 

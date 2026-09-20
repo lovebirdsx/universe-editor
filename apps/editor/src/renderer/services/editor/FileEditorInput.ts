@@ -21,8 +21,8 @@ import { languageForResource } from '../../workbench/files/resourceLanguage.js'
 import { MonacoModelRegistry } from '../../workbench/editor/monaco/MonacoModelRegistry.js'
 import { SaveParticipant } from '../extensions/SaveParticipant.js'
 import { DidSaveNotification } from '../extensions/DidSaveNotification.js'
-import { applyMinimalTextEdit } from './minimalModelEdit.js'
-import { isTooLargeForExternalReload } from '../files/externalReload.js'
+import { applyMinimalTextEdit, normalizeToModelEol } from './minimalModelEdit.js'
+import { isTooLargeForExternalReload, readFileTextForReload } from '../files/externalReload.js'
 import { noteSelfWrite } from './selfWriteRegistry.js'
 import { splitLeadingBom, UTF8_BOM } from './leadingBom.js'
 import type { monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
@@ -239,6 +239,11 @@ export class FileEditorInput extends EditorInput {
    *
    * A file over `MAX_EXTERNAL_RELOAD_BYTES` is not read on this path's own
    * initiative and comes back as 'too-large' — see the gate in the body.
+   *
+   * 每个 await 之后都要重新核对当初据以决策的那个缓冲区——同一个模型实例、未 dispose、内容版本
+   * 未变：读盘与丢弃确认框都是用户可以输入、关闭标签页或让模型被换掉的窗口。缓冲区已经动过的就
+   * 不写，并且**什么都不记**：`_lastKnownMtime` 只在内容真的对上之后才写，所以被跳过的重载会在
+   * 下一条事件上重试，而不是被悄悄消掉。
    */
   async checkExternalChange(
     dialog: IDialogService,
@@ -277,50 +282,91 @@ export class FileEditorInput extends EditorInput {
       }
     }
 
-    const diskText = await this._fileService.readFileText(this._resource)
+    let stamp = this._snapshotBuffer()
+    const diskText = await readFileTextForReload(this._fileService, this._resource)
     const content = splitLeadingBom(diskText)
-    const model = MonacoModelRegistry.peek(this._resource)
+    let buffer = this._unchangedBuffer(stamp)
 
-    if (force && !this.isDirty && model && model.getValue() === content.text) {
+    if (
+      force &&
+      !this.isDirty &&
+      buffer &&
+      buffer.getValue() === normalizeToModelEol(content.text, buffer)
+    ) {
       this._lastKnownMtime = stat.mtime
       return 'unchanged'
     }
 
     if (!this.isDirty) {
-      this._hasLeadingBom = content.hadBom
-      this._backupContent = content.text
-      this._savedAlternativeVersionId = undefined
-      this._lastKnownMtime = stat.mtime
-      if (model) {
+      if (buffer) {
         // Reconcile with a minimal edit, not setValue: a flush would drop the
         // viewer's folding/decorations on lines that did not even change.
-        applyMinimalTextEdit(model, content.text)
-        this.markModelClean(model)
-      } else {
+        applyMinimalTextEdit(buffer, content.text)
+        // 顺带把缓冲区当前（已按模型行尾归一）的文本记为干净基线并清脏。
+        this.markModelClean(buffer)
+      } else if (!this._hasBufferToProtect()) {
         this.setDirty(false)
+      } else {
+        return 'kept'
       }
+      this._hasLeadingBom = content.hadBom
+      this._lastKnownMtime = stat.mtime
       return 'reloaded'
     }
 
-    if (!discardConfirmed && !(await this._confirmDiscard(dialog)).confirmed) {
-      this._lastKnownMtime = stat.mtime
-      return 'kept'
+    if (!discardConfirmed) {
+      // 快照取在提问之前而不是读盘之前：提问描述的是此刻的缓冲区，只有提问期间敲进去的才算「
+      // 答复之后才出现的东西」。
+      stamp = this._snapshotBuffer()
+      if (!(await this._confirmDiscard(dialog)).confirmed) {
+        this._lastKnownMtime = stat.mtime
+        return 'kept'
+      }
+      buffer = this._unchangedBuffer(stamp)
     }
 
-    this._hasLeadingBom = content.hadBom
-    this._backupContent = content.text
-    this._savedAlternativeVersionId = undefined
-    this._lastKnownMtime = stat.mtime
-    // `model` was peeked before the confirm dialog; the editor can be closed
-    // while it is up, which releases the buffer. Editing a disposed model
-    // throws, and with no live buffer left the input is simply clean.
-    if (model && !model.isDisposed()) {
-      applyMinimalTextEdit(model, content.text)
-      this.markModelClean(model)
-    } else {
+    if (buffer) {
+      applyMinimalTextEdit(buffer, content.text)
+      this.markModelClean(buffer)
+    } else if (!this._hasBufferToProtect()) {
+      this._backupContent = content.text
+      this._savedAlternativeVersionId = undefined
       this.setDirty(false)
+    } else {
+      // 提问期间用户敲进去的内容（或缓冲区被换掉）优先于「在它出现之前作出的丢弃答复」。
+      return 'kept'
     }
+    this._hasLeadingBom = content.hadBom
+    this._lastKnownMtime = stat.mtime
     return 'reloaded'
+  }
+
+  /** 决策所依据的那个缓冲区：身份 + 内容版本，供后面的 await 判断它是否还是同一个。 */
+  private _snapshotBuffer():
+    | { readonly model: monaco.editor.ITextModel; readonly version: number }
+    | undefined {
+    const model = MonacoModelRegistry.peek(this._resource)
+    if (!model || model.isDisposed()) return undefined
+    return { model, version: model.getVersionId() }
+  }
+
+  /** 活着的模型，但仅当它仍是 `stamp` 当初取到的那一个（同实例、未 dispose、其后没被编辑过）。
+   *  `undefined` 表示「不要往缓冲区里写」：要么没有缓冲区，要么现在这个不是当初据以决策的那个。 */
+  private _unchangedBuffer(
+    stamp: { readonly model: monaco.editor.ITextModel; readonly version: number } | undefined,
+  ): monaco.editor.ITextModel | undefined {
+    if (!stamp) return undefined
+    const model = MonacoModelRegistry.peek(this._resource)
+    if (!model || model.isDisposed()) return undefined
+    if (model !== stamp.model || model.getVersionId() !== stamp.version) return undefined
+    return model
+  }
+
+  /** 有没有一个不能被覆盖的活缓冲区？区分「这个 input 压根没有模型」（无可失去）与「另一个模型
+   *  顶替了这个 URI」（那是别人的缓冲区）。 */
+  private _hasBufferToProtect(): boolean {
+    const model = MonacoModelRegistry.peek(this._resource)
+    return model !== undefined && !model.isDisposed()
   }
 
   private _confirmDiscard(dialog: IDialogService): Promise<{ confirmed: boolean }> {

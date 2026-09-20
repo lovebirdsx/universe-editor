@@ -23,6 +23,7 @@ import { SaveParticipant } from '../extensions/SaveParticipant.js'
 import { DidSaveNotification } from '../extensions/DidSaveNotification.js'
 import { noteSelfWrite } from './selfWriteRegistry.js'
 import { splitLeadingBom, UTF8_BOM } from './leadingBom.js'
+import { normalizeToModelEol } from './minimalModelEdit.js'
 import type { monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
 
 /** Structural + content snapshot for reopen / session restore. A diff's two sides
@@ -265,9 +266,11 @@ export class DiffEditorInput extends EditorInput {
     }
     const content = splitLeadingBom(diskText)
     this._hasLeadingBom = content.hadBom
-    this._cleanModifiedContent = content.text
-    this._savedAlternativeVersionId = undefined
     const model = this.peekModifiedModel()
+    // 基线按模型的存储形态存：混写行尾的盘上文本与 getValue() 永不逐字节相等，下面的脏判定会把
+    // 未动过的缓冲区报成脏——那同时会让外部变更监听不再刷新它。
+    this._cleanModifiedContent = model ? normalizeToModelEol(content.text, model) : content.text
+    this._savedAlternativeVersionId = undefined
     if (model) this._recomputeDirty(model)
   }
 

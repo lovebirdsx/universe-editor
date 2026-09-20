@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { URI, type IFileService } from '@universe-editor/platform'
+import { readHeapFlowTotals } from '../../memory/heapFlowCounters.js'
 import {
   MAX_EXTERNAL_RELOAD_BYTES,
   isTooLargeForExternalReload,
@@ -11,6 +12,12 @@ import {
 } from '../externalReload.js'
 
 type Files = Pick<IFileService, 'stat' | 'readFileText'>
+
+/** Process totals for one flow counter, differenced by the caller. */
+function extreload(): { calls: number; chars: number } {
+  const reading = readHeapFlowTotals().find((f) => f.name === 'extreload')
+  return { calls: reading?.calls ?? 0, chars: reading?.chars ?? 0 }
+}
 
 function makeFiles(opts: {
   size?: number
@@ -69,5 +76,27 @@ describe('externalReload', () => {
     const files = makeFiles({ size: 10, readError: true })
     expect(await readForExternalReload(files, uri)).toEqual({ ok: false, reason: 'unreadable' })
     expect(files.reads).toBe(1)
+  })
+
+  // 重载读盘是那次 OOM 的读侧：一整份文件、它的传输帧与解码，每个 watcher 批次付一次。
+  // 不在堆报告里露头，重复发生就只能靠猜。
+  it('counts the characters a reload read pulled off disk', async () => {
+    const files = makeFiles({ size: 5, text: 'hello' })
+    const before = extreload()
+
+    await readForExternalReload(files, uri)
+
+    const after = extreload()
+    expect(after.calls - before.calls).toBe(1)
+    expect(after.chars - before.chars).toBe(5)
+  })
+
+  it('counts nothing for a read the ceiling refused', async () => {
+    const files = makeFiles({ size: MAX_EXTERNAL_RELOAD_BYTES + 1 })
+    const before = extreload()
+
+    await readForExternalReload(files, uri)
+
+    expect(extreload()).toEqual(before)
   })
 })

@@ -12,6 +12,7 @@
  *  would drift apart and re-open the hole one site at a time.
  *--------------------------------------------------------------------------------------------*/
 
+import { bumpHeapFlow } from '../memory/heapFlowCounters.js'
 import type { IFileService, URI } from '@universe-editor/platform'
 
 /**
@@ -35,6 +36,17 @@ export type ExternalReloadRead =
   /** `too-large`: refused by the ceiling. `unreadable`: gone or unreadable. */
   | { readonly ok: false; readonly reason: 'too-large' | 'unreadable' }
 
+/** 外部刷新唯一的读盘入口，`extreload` 因此能看到全部：不进计数器的读盘事后无法归因，
+ *  而「读盘又来了」只能从成本上看见。 */
+export async function readFileTextForReload(
+  files: Pick<IFileService, 'readFileText'>,
+  resource: URI,
+): Promise<string> {
+  const text = await files.readFileText(resource)
+  bumpHeapFlow('extreload', text.length)
+  return text
+}
+
 /**
  * Read `resource` for an external-change reload, or refuse it as too large.
  *
@@ -53,7 +65,7 @@ export async function readForExternalReload(
     return { ok: false, reason: 'unreadable' }
   }
   try {
-    return { ok: true, text: await files.readFileText(resource) }
+    return { ok: true, text: await readFileTextForReload(files, resource) }
   } catch {
     return { ok: false, reason: 'unreadable' }
   }

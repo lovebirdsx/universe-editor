@@ -259,6 +259,31 @@ describe('DiffEditorInput', () => {
       input.releaseModifiedModel()
       input.dispose()
     })
+
+    // 回归（OOM 的「写入侧」）：盘上行尾混写而缓冲区只有一种行尾，拿原始盘上文本当干净基线会
+    // 把未动过的缓冲区报成脏——脏的 diff 又会被外部变更监听跳过，于是它同时卡在旧内容上。
+    it('stays clean when the disk text mixes line endings', async () => {
+      const diskText = 'one\r\ntwo\nthree\r\n'
+      fs.store[uri.toString()] = diskText
+      const input = inst.createInstance(
+        DiffEditorInput,
+        uri,
+        'head',
+        diskText,
+        undefined,
+        undefined,
+        true,
+      )
+      const model = input.acquireModifiedModel()
+      await flush()
+      expect(model.getValue()).toBe('one\r\ntwo\r\nthree\r\n')
+      expect(input.isDirty).toBe(false)
+
+      model.setValue('one\r\ntwo\r\nEDITED\r\n')
+      expect(input.isDirty).toBe(true)
+      input.releaseModifiedModel()
+      input.dispose()
+    })
   })
 
   describe('save', () => {

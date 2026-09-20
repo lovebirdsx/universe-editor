@@ -33,6 +33,7 @@ function fakeModel(uriString: string, text: string, languageId = 'plaintext') {
   return {
     uri: URI.parse(uriString),
     getValue: () => value,
+    getValueLength: () => value.length,
     getVersionId: () => 1,
     getLanguageId: () => languageId,
     isDisposed: () => disposed,

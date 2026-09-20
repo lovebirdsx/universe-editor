@@ -237,25 +237,60 @@ function makeFileService(opts?: {
   return fake as unknown as IFileServiceType & { reads: number }
 }
 
-function makeFileInput(uri: URI): FileEditorInput {
+function makeFileInput(
+  uri: URI,
+  check?: (force: boolean) => Promise<string>,
+): FileEditorInput & { checks: number[]; forces: boolean[] } {
   const checks: number[] = []
+  const forces: boolean[] = []
   const fake = Object.create(FileEditorInput.prototype) as FileEditorInput & {
     checks: number[]
+    forces: boolean[]
   }
   Object.defineProperty(fake, 'resource', { get: () => uri })
   Object.defineProperty(fake, 'typeId', { get: () => 'file' })
   fake.checks = checks
+  fake.forces = forces
   ;(
     fake as { checkExternalChange: (d: IDialogService, force?: boolean) => Promise<string> }
-  ).checkExternalChange = async () => {
+  ).checkExternalChange = async (_dialog: IDialogService, force = false) => {
     checks.push(Date.now())
-    return 'unchanged'
+    forces.push(force)
+    return check ? await check(force) : 'unchanged'
   }
   return fake
 }
 
 function flush(): Promise<void> {
   return new Promise((r) => setTimeout(r, 0))
+}
+
+function deferred(): { promise: Promise<void>; resolve(): void } {
+  let resolve: (() => void) | undefined
+  const promise = new Promise<void>((r) => {
+    resolve = r
+  })
+  return { promise, resolve: () => resolve?.() }
+}
+
+function makeWatcher(
+  watcher: FakeWatcher,
+  groups: IEditorGroupsServiceType,
+  files: IFileServiceType,
+  userData?: IUserDataFilesService,
+): { contribution: ExternalChangeWatcher } {
+  const contribution = new ExternalChangeWatcher(
+    watcher,
+    makeOutOfWorkspaceWatch(watcher),
+    groups,
+    makeDialog(),
+    files,
+    makeLoggerService(),
+    userData ?? new FakeUserData(),
+    makeUriIdentity(),
+    makeNotifications(),
+  )
+  return { contribution }
 }
 
 describe('ExternalChangeWatcher', () => {
@@ -1112,5 +1147,168 @@ describe('ExternalChangeWatcher', () => {
       URI.revive(u as Parameters<typeof URI.revive>[0])?.toString(),
     )
     expect(uriStrings).toContain(sourceUri.toString())
+  })
+
+  // 回归（OOM 的读侧）：每秒被重写的文件每秒都送来一批事件，而每趟对账要付一次整文件读盘及其
+  // 传输帧。没有按资源的闸门时，慢读盘会让下一批再起一趟，10MB 日志的读盘就这样堆到堆耗尽。
+  describe('per-resource single flight', () => {
+    it('coalesces a burst of events for one file into one follow-up pass', async () => {
+      const uri = URI.file('/ws/busy.txt')
+      const gate = deferred()
+      let passes = 0
+      const input = makeFileInput(uri, async () => {
+        passes++
+        if (passes === 1) await gate.promise
+        return 'unchanged'
+      })
+      const groups = makeGroups([input])
+      const watcher = new FakeWatcher()
+      makeWatcher(watcher, groups, makeFileService())
+
+      for (let i = 0; i < 200; i++) watcher.fire([{ type: 'modified', resource: uri }])
+      await flush()
+      // One read in flight; the other 199 events are a flag, not 199 reads.
+      expect(input.checks).toHaveLength(1)
+
+      gate.resolve()
+      await flush()
+      // Exactly one follow-up, which reads the disk as it is now — the last
+      // event is what the buffer ends up agreeing with.
+      expect(input.checks).toHaveLength(2)
+    })
+
+    it('reconciles an unrelated file while another waits on its discard prompt', async () => {
+      const uriA = URI.file('/ws/a.txt')
+      const uriB = URI.file('/ws/b.txt')
+      const never = new Promise<string>(() => {})
+      const inputA = makeFileInput(uriA, () => never)
+      const inputB = makeFileInput(uriB) as FileEditorInput & { checks: number[] }
+      const groups = makeGroups([inputA, inputB])
+      const watcher = new FakeWatcher()
+      makeWatcher(watcher, groups, makeFileService())
+
+      watcher.fire([
+        { type: 'modified', resource: uriA },
+        { type: 'modified', resource: uriB },
+      ])
+      await flush()
+      // A's prompt can sit on screen for minutes; B must not be queued behind it.
+      expect(inputA.checks).toHaveLength(1)
+      expect(inputB.checks).toHaveLength(1)
+    })
+
+    it('merges a user-data force request into the pass already running', async () => {
+      const settings = 'settings' as UserDataFile
+      const uri = URI.file('/config/settings.json')
+      const gate = deferred()
+      let passes = 0
+      const input = makeFileInput(uri, async () => {
+        passes++
+        if (passes === 1) await gate.promise
+        return 'unchanged'
+      })
+      const groups = makeGroups([input])
+      const userData = new FakeUserData([[settings, uri]])
+      const watcher = new FakeWatcher()
+      makeWatcher(watcher, groups, makeFileService({ existing: [uri] }), userData)
+
+      watcher.fire([{ type: 'modified', resource: uri }])
+      await flush()
+      expect(input.forces).toEqual([false])
+
+      userData.fire(settings)
+      await flush()
+      expect(input.checks).toHaveLength(1)
+
+      gate.resolve()
+      await flush()
+      // The queued pass inherited the force, so the self-write still reconciles
+      // against content rather than the mtime it left unchanged.
+      expect(input.forces).toEqual([false, true])
+    })
+
+    it('does not let a failed pass swallow the next event', async () => {
+      const uri = URI.file('/ws/flaky.txt')
+      let passes = 0
+      const input = makeFileInput(uri, async () => {
+        passes++
+        if (passes === 1) throw new Error('disk unreadable')
+        return 'unchanged'
+      })
+      const groups = makeGroups([input])
+      const watcher = new FakeWatcher()
+      makeWatcher(watcher, groups, makeFileService())
+
+      watcher.fire([{ type: 'modified', resource: uri }])
+      await flush()
+      expect(input.checks).toHaveLength(1)
+
+      watcher.fire([{ type: 'modified', resource: uri }])
+      await flush()
+      expect(input.checks).toHaveLength(2)
+    })
+
+    it('does not notify for a size check that finishes after disposal', async () => {
+      const uri = URI.file('/ws/large.log')
+      const gate = deferred()
+      const input = makeFileInput(uri, async () => {
+        await gate.promise
+        return 'too-large'
+      })
+      const watcher = new FakeWatcher()
+      const notifications = makeNotifications()
+      const contribution = new ExternalChangeWatcher(
+        watcher,
+        makeOutOfWorkspaceWatch(watcher),
+        makeGroups([input]),
+        makeDialog(),
+        makeFileService(),
+        makeLoggerService(),
+        new FakeUserData(),
+        makeUriIdentity(),
+        notifications,
+      )
+      watcher.fire([{ type: 'modified', resource: uri }])
+      await flush()
+      contribution.dispose()
+      gate.resolve()
+      await flush()
+      expect(notifications.messages).toEqual([])
+    })
+
+    it('stops applying disk content once it has been disposed', async () => {
+      const sourceUri = URI.file('/ws/note.md')
+      let modelValue = '# old'
+      liveModels.set(sourceUri.toString(), {
+        getValue: () => modelValue,
+        setValue: (v: string) => {
+          modelValue = v
+        },
+        isDisposed: () => false,
+      })
+      const preview = new MarkdownPreviewInput(sourceUri)
+      const groups = makeGroups([preview])
+      const gate = deferred()
+      const files = {
+        _serviceBrand: undefined,
+        async stat(resource: URI) {
+          return { resource, isFile: true, isDirectory: false, size: 0, mtime: 1 }
+        },
+        async readFileText() {
+          await gate.promise
+          return '# new'
+        },
+      } as unknown as IFileServiceType
+      const watcher = new FakeWatcher()
+      const { contribution } = makeWatcher(watcher, groups, files)
+
+      watcher.fire([{ type: 'modified', resource: sourceUri }])
+      await flush()
+      contribution.dispose()
+      gate.resolve()
+      await flush()
+      expect(modelValue).toBe('# old')
+      liveModels.delete(sourceUri.toString())
+    })
   })
 })

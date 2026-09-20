@@ -105,6 +105,10 @@ import { RENDERER_INCARNATION } from './services/memory/rendererIncarnation.js'
 import { createRendererHeapReporter } from './services/memory/rendererHeapReporter.js'
 import { sharedResidentBudget } from './services/acp/session/acpResidentBudget.js'
 import { ISessionChangeTrackerService } from './services/acp/session/sessionChangeTracker.js'
+import {
+  DocumentSyncStats,
+  measureDocumentSyncPayload,
+} from './services/extensions/documentSyncStats.js'
 import { registerProxyChannelServices } from './ipc/registerProxyServices.js'
 import { installRendererErrorHandlers, isBenignError } from './errors.js'
 import {
@@ -482,6 +486,9 @@ async function bootstrapWorkbench(): Promise<void> {
                 return chars > 0 ? { bytes: chars * 2, count: channels.length } : undefined
               },
             },
+            // 文档镜像拼出来还没 ack 的载荷（积压 + 在途）。镜像正文不在这里报：它已由
+            // `monaco` holder 记账，重复计会让两边都不可归因。
+            { name: 'docSync', measure: measureDocumentSyncPayload },
           ],
           createNamedLogger(loggerService, { id: 'memory', name: 'Memory' }),
           (level) => sampleDomGauges(document, level),
@@ -500,6 +507,9 @@ async function bootstrapWorkbench(): Promise<void> {
             },
             { name: 'budget.holders', count: () => sharedResidentBudget.holderCount() },
             { name: 'pool', count: () => acpClientService.poolSize() },
+            // 镜像文档数而不是字节：`docSync` holder 只算瞬时载荷，文档数才能区分「管道闲着」与
+            // 「管道压根不在」。
+            { name: 'docSync.docs', count: () => DocumentSyncStats.read().openDocs },
           ],
           // This start's identity, so a report that outlives its renderer (a reload
           // between send and receipt) is dropped instead of being read as the new heap.

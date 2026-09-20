@@ -9,9 +9,13 @@
  *  still holds the pre-keystroke text, so the language service parses a stale line
  *  and returns nothing. The contribution registers a per-URI `flush` here; the
  *  completion proxy awaits it so the host sees the just-typed character first.
+ *
+ *  调用方得到的是镜像**版本**的保证，而不是「定时器被取消」：宿主 ack 到调用时的版本才
+ *  resolve，已经在线的批即使后面没有排队也要等；open/change 共用 5 秒期限，超时 reject，
+ *  让调用方跳过依赖旧镜像的操作。调用之后到达的输入属于下一次请求。
  *--------------------------------------------------------------------------------------------*/
 
-/** Flush any debounced pending change for `uri` to the host; resolves once sent. */
+/** 刷新 `uri` 的镜像，宿主 ack 到调用时的版本才 resolve；没有镜像的文档直接 resolve。 */
 type Flush = () => Promise<void>
 
 class PendingDocumentSyncImpl {
