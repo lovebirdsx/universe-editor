@@ -14,7 +14,7 @@
  *  loadSession all flow over a genuine ACP wire.
  *--------------------------------------------------------------------------------------------*/
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   ConfigurationService,
   Emitter,
@@ -50,6 +50,8 @@ import {
   type AuthenticateRequest,
   type AuthenticateResponse,
   type CancelNotification,
+  type ForkSessionRequest,
+  type ForkSessionResponse,
   type InitializeRequest,
   type InitializeResponse,
   type LoadSessionRequest,
@@ -102,15 +104,21 @@ const FAKE_URI_IDENTITY = new UriIdentityService('linux')
 class StubAgent implements Agent {
   connection?: AgentSideConnection
   readonly loadSessionCalls: string[] = []
+  readonly forkSessionCalls: string[] = []
   newSessionCount = 0
   initializeCount = 0
   private _seq = 0
+  private _forkSeq = 0
 
   initialize(_params: InitializeRequest): Promise<InitializeResponse> {
     this.initializeCount++
     return Promise.resolve({
       protocolVersion: PROTOCOL_VERSION,
-      agentCapabilities: { loadSession: true, promptCapabilities: {} },
+      agentCapabilities: {
+        loadSession: true,
+        promptCapabilities: {},
+        sessionCapabilities: { fork: {} },
+      },
       authMethods: [],
     } as unknown as InitializeResponse)
   }
@@ -123,6 +131,13 @@ class StubAgent implements Agent {
   loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {
     this.loadSessionCalls.push(params.sessionId)
     return Promise.resolve({} as unknown as LoadSessionResponse)
+  }
+
+  unstable_forkSession(params: ForkSessionRequest): Promise<ForkSessionResponse> {
+    this.forkSessionCalls.push(params.sessionId)
+    return Promise.resolve({
+      sessionId: `fork-${++this._forkSeq}`,
+    } as unknown as ForkSessionResponse)
   }
 
   prompt(_params: PromptRequest): Promise<PromptResponse> {
@@ -142,6 +157,7 @@ interface BridgedHost {
   readonly host: IAcpHostService
   readonly agents: StubAgent[]
   starts(): number
+  stopAll(): Promise<void>
   dispose(): void
 }
 
@@ -215,6 +231,9 @@ function createBridgedAcpHost(): BridgedHost {
     host,
     agents,
     starts: () => startCount,
+    stopAll: async () => {
+      await Promise.all([...live.keys()].map((handle) => host.stop(handle)))
+    },
     dispose: () => {
       onStdout.dispose()
       onStderr.dispose()
@@ -575,5 +594,43 @@ describe('ACP pooled resume — two sessions, one cwd (editor restart)', () => {
     expect(built.bridge.starts()).toBe(1)
     const agent = built.bridge.agents[0]!
     expect(agent.loadSessionCalls).toEqual([s1Id, s2Id])
+  })
+})
+
+describe('ACP fork on a dormant source — fresh process, source stays asleep', () => {
+  let built: Built | undefined
+
+  afterEach(() => {
+    built?.dispose()
+    built = undefined
+  })
+
+  it('spawns a new agent process for the fork after the idle reaper killed the pooled one', async () => {
+    const storage = new FakeStorage()
+    built = build(storage)
+    await built.history.initialize()
+    const s = await built.svc.createSession()
+    await s.whenConnected()
+    const sourceAgentId = s.sessionIdOnAgent.get()!
+    expect(built.bridge.starts()).toBe(1)
+
+    // Simulate the idle reaper: the pooled process exits, which evicts the pool
+    // entry and seals the session to 'closed' + dormant.
+    await built.bridge.stopAll()
+    await vi.waitFor(() => {
+      expect(s.isDormant.get()).toBe(true)
+    })
+    expect(s.status.get()).toBe('closed')
+
+    const fork = await withTimeout(built.svc.forkSession(s.id), 3000, 'fork a dormant session')
+
+    // The pooled entry is gone, so the fork RPC had to come up on a NEW process
+    // — the link the stub-client tests (a pool-less fake) cannot exercise.
+    expect(built.bridge.starts()).toBe(2)
+    expect(built.bridge.agents[1]!.forkSessionCalls).toEqual([sourceAgentId])
+    expect(fork.id).toBe('fork-1')
+    // Forking never wakes the source: it is still sealed and asleep.
+    expect(s.status.get()).toBe('closed')
+    expect(s.isDormant.get()).toBe(true)
   })
 })

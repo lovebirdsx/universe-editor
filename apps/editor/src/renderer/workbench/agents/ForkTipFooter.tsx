@@ -3,10 +3,12 @@
  *  ForkTipFooter — a subtle row pinned to the end of the timeline that forks
  *  the WHOLE conversation (tip included) into a new independent session. It
  *  complements the per-user-message "Fork from here" (which excludes that
- *  turn): this one keeps the finished turn. Shown only once the agent's turn
- *  has settled (status 'idle'), the agent advertises fork support, and the
- *  session isn't a read-only foreign preview; hidden while running so a fork
- *  never captures a half-written turn.
+ *  turn): this one keeps the finished turn. Shown once the agent's turn has
+ *  settled — `status === 'idle'`, or the idle reaper's `'closed'` + isDormant
+ *  seal (the process is gone but the transcript is intact, and a fork reads the
+ *  transcript rather than the live session, so it never needs a wake) — the
+ *  agent advertises fork support, and the session isn't a read-only foreign
+ *  preview; hidden while running so a fork never captures a half-written turn.
  *--------------------------------------------------------------------------------------------*/
 
 import { memo } from 'react'
@@ -20,8 +22,12 @@ import styles from './agents.module.css'
 export const ForkTipFooter = memo(function ForkTipFooter({ session }: { session: IAcpSession }) {
   const executeCommand = useExecuteCommand()
   const status = useObservable(session.status)
+  const dormant = useObservable(session.isDormant)
   const forkSupported = useObservable(session.forkSupported)
-  if (status !== 'idle' || !forkSupported || session.readOnly) return null
+  // isDormant needs its own subscription: closing a dormant session clears it
+  // without moving status, which is already 'closed'.
+  const settled = status === 'idle' || (status === 'closed' && dormant)
+  if (!settled || !forkSupported || session.readOnly) return null
 
   const label = localize('acp.chat.forkFromTip', 'Fork conversation from here')
   return (

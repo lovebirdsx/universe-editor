@@ -2245,6 +2245,39 @@ describe('AcpSessionService — rewind / fork', () => {
     }
   })
 
+  it('forkSession forks a dormant source and leaves it asleep', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({
+      stubOptions: { forkCapable: true, loadSession: true, forkedSessionId: 'agent-fork-dorm' },
+    })
+    const { svc } = makeServiceWithHistory(client, tracker)
+    try {
+      const s = await svc.createSession('claude-code')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+
+      // Simulate the idle reaper's kill: the fake killConnectionFor is a no-op,
+      // so dispose the lease to abort the connection like a real process death.
+      client.connected[0]!.disposeLease()
+      await vi.waitFor(() => {
+        expect(s.status.get()).toBe('closed')
+      })
+      expect(s.isDormant.get()).toBe(true)
+
+      const fork = await svc.forkSession(s.id)
+
+      expect(fork.id).toBe('agent-fork-dorm')
+      expect(svc.getById('agent-fork-dorm')).toBeDefined()
+      // Forking reads the on-disk transcript over its own lease, so it must not
+      // wake the source — the timeline's tip footer stays visible on a dormant
+      // session precisely because of this.
+      expect(s.status.get()).toBe('closed')
+      expect(s.isDormant.get()).toBe(true)
+    } finally {
+      svc.dispose()
+    }
+  })
+
   it('forkSideTask registers a child row with the quote and the read-only mode override', async () => {
     const tracker = new StubSessionChangeTracker()
     const client = new FakeAcpClientService({

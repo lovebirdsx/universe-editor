@@ -124,6 +124,7 @@ function makeSession(
     forkSupported?: boolean
     rewindSupported?: boolean
     readOnly?: boolean
+    dormant?: boolean
     status?: AcpSessionStatus
     plan?: readonly AcpPlanEntry[]
     cwd?: string
@@ -145,6 +146,7 @@ function makeSession(
     plan: observableValue<readonly AcpPlanEntry[]>('t.plan', opts.plan ?? []),
     timeline: observableValue<readonly TimelineItem[]>('t.timeline', items),
     status: observableValue<AcpSessionStatus>('t.status', opts.status ?? 'idle'),
+    isDormant: observableValue<boolean>('t.dormant', opts.dormant ?? false),
     isReplayingHistory: observableValue<boolean>('t.replay', opts.isReplayingHistory ?? false),
     usage: observableValue<AcpUsage | undefined>('t.usage', undefined),
     pendingPermission: observableValue<AcpPendingPermission | undefined>('t.perm', undefined),
@@ -1249,12 +1251,13 @@ describe('ChatBody — re-pin when the turn settles and the fork footer mounts',
   })
 
   // Regression for "fork footer sits half below the fold at turn end": the
-  // ForkTipFooter is gated on status === 'idle' and mounts OUTSIDE the observed
-  // [data-testid="acp-timeline"] element, so the content-growth observer never
-  // sees it. The tail signature is also already stable by the time the status
-  // flips (the last chunk arrived first), so without `status` in the re-pin
-  // effect's deps nothing re-runs and scrollTop stays where it was before the
-  // footer grew the content by ~30px.
+  // ForkTipFooter mounts OUTSIDE the observed [data-testid="acp-timeline"]
+  // element on whichever status flip settles the turn ('running' → 'idle', or
+  // 'errored' → the idle reaper's 'closed' + dormant seal), so the growth
+  // observer never sees it. The tail signature is also already stable by the
+  // time the status flips (the last chunk arrived first), so without `status`
+  // in the re-pin effect's deps nothing re-runs and scrollTop stays where it
+  // was before the footer grew the content by ~30px.
   it('re-pins to the bottom when the fork footer mounts on idle while pinned', () => {
     globalThis.ResizeObserver = FakeResizeObserver as unknown as typeof ResizeObserver
     const items: readonly TimelineItem[] = [
@@ -1315,6 +1318,53 @@ describe('ChatBody — re-pin when the turn settles and the fork footer mounts',
 
     // The footer mounting must not yank a user who scrolled away.
     expect(scroll.scrollTop).toBe(200)
+  })
+
+  it('re-pins when the idle reaper reclaims an errored session and surfaces the footer', () => {
+    globalThis.ResizeObserver = FakeResizeObserver as unknown as typeof ResizeObserver
+    const items: readonly TimelineItem[] = [
+      { kind: 'message', id: 'a', message: makeMessage('a', 'first') },
+    ]
+    const session = makeSession('s1', items, { forkSupported: true, status: 'errored' })
+    const setStatus = (
+      session.status as ReturnType<typeof observableValue<AcpSessionStatus>>
+    ).set.bind(session.status)
+    const setDormant = (session.isDormant as ReturnType<typeof observableValue<boolean>>).set.bind(
+      session.isDormant,
+    )
+    const { container } = renderChat(session)
+    const scroll = scrollEl(container)
+
+    // An errored session has no footer while its process is still alive.
+    expect(container.querySelector('[data-testid="acp-fork-tip-footer"]')).toBeNull()
+
+    Object.defineProperty(scroll, 'scrollHeight', { value: 2000, configurable: true })
+    Object.defineProperty(scroll, 'clientHeight', { value: 300, configurable: true })
+    scroll.scrollTop = 1700
+
+    // The reaper's seal turns it dormant, which surfaces the footer.
+    act(() => {
+      Object.defineProperty(scroll, 'scrollHeight', { value: 2030, configurable: true })
+      setDormant(true, undefined)
+      setStatus('closed', undefined)
+    })
+    expect(container.querySelector('[data-testid="acp-fork-tip-footer"]')).not.toBeNull()
+    expect(scroll.scrollTop).toBe(2030)
+  })
+})
+
+describe('ChatBody — fork footer on a reclaimed session', () => {
+  it('keeps the fork footer once the idle reaper seals the session', () => {
+    const items: readonly TimelineItem[] = [
+      { kind: 'message', id: 'a', message: makeMessage('a', 'first') },
+    ]
+    const session = makeSession('s1', items, {
+      forkSupported: true,
+      status: 'closed',
+      dormant: true,
+    })
+    const { container } = renderChat(session)
+    expect(container.querySelector('[data-testid="acp-fork-tip-footer"]')).not.toBeNull()
   })
 })
 

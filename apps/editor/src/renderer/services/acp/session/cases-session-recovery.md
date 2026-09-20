@@ -15,6 +15,8 @@
 | **必须唤醒**（用户显式动作，数秒等待可接受） | 列表点击激活/打开、`forkSideTask`、`rewindSession`（含 dryRun）、切 model/mode/thought-level、`requestProcessRestart`、`consumeResetCredit` 兑换额度、`setSessionMcpServers` | 结果依赖 agent 存活：fork 读当前 tip、rewind 走 extMethod、config 是 RPC、restart 要新 spawn env、兑换是用户按了按钮、MCP 生效要 `session/load` |
 | **不唤醒** | 订阅用量轮询（`refresh`/`_fetch`/`_tick`）、`renameSession` 的 agent 侧 push、`requestExtMethod` 本体、`resumeSessionReadOnly` 只读预览 | 轮询是心跳不是用户意图；标题走**延迟补推**（`_setHistoryTitle` 无条件写 `_pendingTitle`，`_pushTitleToAgent` 对死 lease 短路，下次 attach 由 `_applyHistoryTitle` 重放）；`requestExtMethod` 的契约注释明确「永不建连」 |
 
+**`forkSession` 是「不唤醒」档的隐藏成员**：它没列进上表，因为它压根不碰源会话的连接——`_forkOnAgent` 自取一把临时租约打 `session/fork`（读磁盘 transcript 切片），源会话保持沉睡。**别给 `forkSession` 加 `_awakeSession`**：`AcpSessionService.test.ts` 的 `forkSession forks a dormant source and leaves it asleep` 守住这条不变量，而时间线末尾的 `ForkTipFooter` 在休眠会话上保持可见正是依赖它（见下节收口点）。
+
 ## `lastActivityAt` 防抖动
 
 `_handleConnectionLost` 内 bump `_lastActivityAt`——唤醒是用户活动，成功唤醒的 session 因此拿到完整 idleMs 宽限。若不 bump：唤醒耗时十几秒且期间无 wire 流量 → `lastActivityAt` 陈旧 → 下一 tick（≤60s）就被再杀，用户观感是「点开又睡回去」。不会无限续命（唤醒后无交互，idleMs 后照常回收）；唤醒全程 status 是 `connecting`（recovery.phase 为 `reconnecting`），在 `_isIdleReclaimable` 的 status 过滤处就已排除，reaper 本身无需改。
@@ -31,7 +33,7 @@ agent 进程在闲置期退出时，onClose 的 idle 分支只做**静默 seal**
 - **`_wakeIfDormant()`**（私有，命令式）——死连接检测的**唯一实现**，`sendPrompt` 原先那段守卫已重构成对它的一次调用。命令式读 phase 是安全的（调用时求值），所以它保留比 `isDormant` 更宽的 `phase==='failed'` 分支。命中即 `_handleConnectionLost('wake')`，**复用既有 `onDidLoseConnection → _wireRecovery → _reconnectSession` 通道，不开第二条重连路径**。
 - **`ensureAwake(): Promise<'ready'|'connecting'|'closed'|'failed'>`**（公开，等待版）——显式用户操作的入口。四值不可合并：`'connecting'` 必须与 `'ready'` 区分，因为**初始握手期绝不能 await**（`setConfigOption` 的「连接前本地乐观应用 + 待推」是刻意路径，await 全握手会让配置栏点击阻塞十几秒）；`'failed'` 与 `'closed'` 区分是前者要抛错让调用方 notify、后者静默。facade 侧包了一层 `_awakeSession(sessionId)`（不存在/只读预览/已 close/唤醒失败一律返回 undefined）。
 
-散落的 `status==='closed'` **语义**判定（「这实例还能用吗」）一律改读 **`isResidentLive`**（`acpSessionStatus.ts`）：`resumeSession`（根治「休眠 session 被判死 → 再建一个实例 → 双实例共存 → 通知路由打在幽灵上」）、`resumeSessionReadOnly`、`renameSession`、`setSessionMcpServers`、`SessionListBody` 的行判定与 `onActivate`。
+散落的 `status==='closed'` **语义**判定（「这实例还能用吗」）一律改读 **`isResidentLive`**（`acpSessionStatus.ts`）：`resumeSession`（根治「休眠 session 被判死 → 再建一个实例 → 双实例共存 → 通知路由打在幽灵上」）、`resumeSessionReadOnly`、`renameSession`、`setSessionMcpServers`、`SessionListBody` 的行判定与 `onActivate`。**React 侧传不了 reader**，改成并列订阅两个 observable：`SessionListBody` 的 `LiveSessionStatus`（休眠照常出月亮图标）、时间线末尾的 `ForkTipFooter`（把「回合已落定」判成 `status==='idle' || (status==='closed' && isDormant)`——fork 走自己的临时租约读磁盘 transcript，不需要源进程，所以休眠时按钮照常可点）。**只订阅 `status` 会漏掉「关闭一个休眠会话」那一次翻转**：`close()` 先清 `_dormant` 再置 `status`，而 status 本已是 `'closed'`。
 
 **`setConfigOption` 必须保留同步快路径**（曾在此翻车）：`_wakeIfDormant()` 后若非 `_reconnecting` 就**直接同步委托状态机**，只有真要等重连时才 `await ensureAwake()`。把整个方法体放到 await 之后会把状态机的「乐观本地应用 + 同 id echo 抑制门」推到微任务之后，同一 tick 抵达的 `config_option_update` 会覆盖用户刚选的值——`AcpSessionService.configOptions.test.ts` 的两个 echo 用例就是这条不变量的守卫。
 
