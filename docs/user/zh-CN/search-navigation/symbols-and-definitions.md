@@ -30,7 +30,7 @@
 
 在一个长文件里想直接跳到某个标题或函数：
 
-- 按 `Ctrl+Shift+O`，或在[命令面板](../reference/glossary.md#命令面板)运行**转到编辑器中的符号…**（`workbench.action.gotoSymbol`）。
+- 按 `Ctrl+Shift+O`，或在[命令面板](../reference/glossary.md#命令面板)运行**转到编辑器中的符号…**。这两条路都会弹出当前文件的符号选择器（快捷键走的是编辑器内核的实现）。
 - 也可以在 `Ctrl+P` 的快速打开框里输入 `@` 前缀，进入同样的模式。
 - 弹出选择器后输入符号名筛选，选中即跳转。
 - 在 `@` 后再输入 `:`，可以把符号按类别分组显示。
@@ -121,6 +121,8 @@ Markdown 的工作区符号打开项目后立即可用。TypeScript 不一样—
 | 转到引用 | `Shift+F12` | 查看所有引用 |
 | 转到实现 | `Ctrl+F12` | 跳到具体实现 |
 
+> 这张表里除「转到工作区中的符号…」外都是**编辑器内核**提供的，需要当前语言给出符号或定义——换个文件类型可能就没反应。`Ctrl+Shift+O` 对应的是内核里那一条（面板里显示英文 **Go to Symbol in Editor...**）；面板里的**转到编辑器中的符号…**是同一用途的另一个入口。编辑器一侧的按键清单见[编辑器文本编辑快捷键](../reference/editor-shortcuts.md)。
+
 ## 下一步
 
 - [导航历史](./history.md)
@@ -128,5 +130,6 @@ Markdown 的工作区符号打开项目后立即可用。TypeScript 不一样—
 ## 相关阅读
 
 - [快速打开与命令面板](./quick-open.md)
+- [编辑器文本编辑快捷键](../reference/editor-shortcuts.md)
 - [编辑与文件 · 大纲视图](../editing/outline.md)
 - [定制 · 扩展管理](../customization/extensions.md)

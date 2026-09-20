@@ -696,6 +696,46 @@ export interface E2EOutlineRetentionStats {
  */
 export type E2EGcControlState = 'unarmed' | 'alive' | 'collected'
 
+/** One registered keybinding, as stored in KeybindingsRegistry. */
+export interface E2EKeybindingEntry {
+  readonly command: string
+  /** Normalized first stroke, e.g. `ctrl+shift+k` (lowercase, sorted modifiers). */
+  readonly key: string
+  readonly weight: number
+  /** Serialized when-clause, or undefined when the binding is unconditional. */
+  readonly when?: string
+  readonly isNegated: boolean
+  /** Present only for 2-stroke chord bindings. */
+  readonly chords?: readonly [string, string]
+}
+
+/** One binding the dispatcher examined for a keystroke, and why it was kept or skipped. */
+export interface E2EKeybindingTraceCandidate {
+  readonly command: string
+  readonly weight: number
+  readonly when?: string
+  readonly whenMatched: boolean
+  /** Why the candidate matched or was skipped; `matched` on the winner. */
+  readonly reason: string
+  /** True for the single candidate that won (at most one per trace). */
+  readonly selected: boolean
+  /** Live value of every context key the when-clause references. */
+  readonly keys: ReadonlyArray<{ readonly key: string; readonly value: unknown }>
+}
+
+/**
+ * What the global key handler would do with a keystroke in the CURRENT context,
+ * plus every candidate binding and why it lost. This is the attribution tool for
+ * "the key did nothing": a winner that is not the expected command means the key
+ * is *shadowed*, which is a different failure than a missing language capability.
+ */
+export interface E2EKeybindingTrace {
+  readonly kind: 'execute' | 'enter-chord' | 'no-match'
+  readonly command?: string
+  readonly weight?: number
+  readonly candidates: readonly E2EKeybindingTraceCandidate[]
+}
+
 export interface E2EProbe {
   /** Resolves once the workbench has reached LifecyclePhase.Ready. */
   whenReady(): Promise<void>
@@ -1620,6 +1660,21 @@ export interface E2EProbe {
    * bindings since it evaluates `when` against the (unfocused) current context.
    */
   getKeybindingCommandsForKey(key: string): string[]
+  /**
+   * Every registered keybinding, normalized. Not filtered by `when` — the caller
+   * decides. Enumerating the Monaco defaults (weight 50) from here is how a spec
+   * learns which built-in editor keys exist at all; probing them one by one would
+   * first require knowing the keys. Also carries `weight`, so "not registered" is
+   * distinguishable from "registered but outranked".
+   */
+  getAllKeybindings(): readonly E2EKeybindingEntry[]
+  /**
+   * The same decision `useGlobalKeybindingHandler` makes for `key` right now, with
+   * the real context-key service bound — so `when` clauses (including the
+   * `editorFocus` gate on every mirrored Monaco default) evaluate against live
+   * state. Pass `pending` to trace a chord's second stroke.
+   */
+  traceKeybinding(key: string, pending?: readonly string[]): E2EKeybindingTrace
   /**
    * Snapshot of the user keybindings layer state for the "user binding missing"
    * race: the parsed user entries (what keybindings.json yielded) plus the

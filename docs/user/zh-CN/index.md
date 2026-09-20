@@ -104,6 +104,7 @@ Perforce 集成：连接登录、changelist 管理、签出/提交/对比、搁�
 快捷键速查、命令速查、术语表、FAQ、排障指南、Bug 录制。
 
 - [快捷键速查表](./reference/keyboard-shortcuts.md)
+- [编辑器文本编辑快捷键](./reference/editor-shortcuts.md)
 - [命令速查表](./reference/command-reference.md)
 - [术语表](./reference/glossary.md)
 - [FAQ 常见问题](./reference/faq.md)

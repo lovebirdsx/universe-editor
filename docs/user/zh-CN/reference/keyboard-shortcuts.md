@@ -9,6 +9,7 @@
 - [菜单内键盘操作](#菜单内键盘操作)
 - [布局](#布局)
 - [编辑器：标签与分屏](#编辑器标签与分屏)
+- [编辑器：文本编辑](#编辑器文本编辑)
 - [搜索与导航](#搜索与导航)
 - [AI Agent](#ai-agent)
 - [Git 版本控制](#git-版本控制)
@@ -39,6 +40,10 @@
 | 另存为… | `Ctrl+Shift+S` |
 | 全部保存（Save All） | `Ctrl+Alt+S` |
 | 打开设置 | `Ctrl+,` |
+| 放大 / 缩小 / 重置缩放 | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` |
+| 新建窗口 | `Ctrl+Shift+N` |
+| 关闭窗口 | `Ctrl+Shift+W` |
+| 循环聚焦下一个 / 上一个区域 | `F6` / `Shift+F6` |
 
 > 更多见 [快速上手 · 命令面板](../getting-started/command-palette.md) 与 [定制 · 设置](../customization/settings.md)。
 
@@ -69,8 +74,15 @@
 | 切换主侧边栏 | `Ctrl+B` |
 | 切换辅助侧边栏 | `Ctrl+Alt+B` |
 | 切换底栏 | `Ctrl+J` |
+| 显示资源管理器 | `Ctrl+Shift+E` |
+| 显示源代码管理 | `Ctrl+Shift+G` |
+| 显示扩展 | `Ctrl+Shift+X` |
 | 在编辑器中打开终端 | `` Ctrl+` `` |
+| 聚焦终端 | `` Alt+` `` |
+| 新建终端 | `` Ctrl+Shift+` `` |
+| 打开原生控制台 | `Ctrl+Shift+C` |
 | 聚焦大纲视图 | `Ctrl+Shift+Q` |
+| 最大化 / 还原底栏 | `Alt+M` |
 | 调整聚焦视图的大小 | `Ctrl+Alt+Shift+←` / `→` / `↑` / `↓` |
 
 > 更多见 [快速上手 · 界面导览](../getting-started/interface-tour.md)。
@@ -83,6 +95,8 @@
 | 关闭其他编辑器 | `Alt+W` |
 | 重新打开已关闭的编辑器 | `Ctrl+Shift+T` |
 | 打开下一个 / 上一个编辑器 | `Ctrl+PageDown` / `Ctrl+PageUp` |
+| 把编辑器移到左 / 右一组 | `Ctrl+Shift+PageUp` / `Ctrl+Shift+PageDown` |
+| 上一处 / 下一处更改（文件有改动时） | `Alt+PageUp` / `Alt+PageDown` |
 | 最近使用的编辑器和视图（MRU） | `Ctrl+Tab` / `Ctrl+Shift+Tab` |
 | 向右拆分编辑器 | `Ctrl+\` |
 | 切换自动换行 | `Alt+Z` |
@@ -90,6 +104,30 @@
 | 后退 / 前进（导航历史） | `Alt+←` / `Alt+→` |
 
 > 更多见 [编辑与文件 · 标签页与分屏](../editing/tabs-and-split.md) 与 [搜索与导航 · 导航历史](../search-navigation/history.md)。
+
+## 编辑器：文本编辑
+
+以下按键由**编辑器内核（Monaco）自带**，编辑器文本获得焦点时即生效。
+
+| 操作 | 快捷键 |
+| --- | --- |
+| 切换行注释（`//`） | `Ctrl+/` |
+| 删除当前行 | `Ctrl+Shift+K` |
+| 在下方 / 上方插入行 | `Ctrl+Enter` / `Ctrl+Shift+Enter` |
+| 缩进 / 反缩进 | `Ctrl+]` / `Ctrl+[` |
+| 向上 / 向下复制行 | `Shift+Alt+↑` / `Shift+Alt+↓` |
+| 选中下一个相同的词（多光标） | `Ctrl+D` |
+| 选中所有相同的词 | `Ctrl+Shift+L` |
+| 折叠 / 展开 | `Ctrl+Shift+[` / `Ctrl+Shift+]` |
+| 格式化文档 | `Shift+Alt+F` |
+| 转到文件中的符号 | `Ctrl+Shift+O` |
+| 转到行 | `Ctrl+G` |
+
+> `Ctrl+/`、`Shift+Alt+F`、`Ctrl+Shift+O` 需要当前语言支持注释 / 格式化 / 符号。
+> `Shift+Alt+↑` `Shift+Alt+↓` `Shift+Alt+F` 在 Linux 上是别的键（其中两项在 Linux 没有可用默认键）。
+> 有几种键被本编辑器占用了，最常见的两个：`Alt+↑` `Alt+↓` 是「查找光标处单词」，`Ctrl+K Ctrl+L` 是「把选区加到 Agent 聊天」。
+
+> 更多见 [编辑器文本编辑快捷键](./editor-shortcuts.md)（含多光标、折叠、导航与完整平台差异）。
 
 ## 搜索与导航
 
@@ -108,6 +146,8 @@
 | 转到引用 | `Shift+F12` |
 
 > 查找类快捷键作用于**当前聚焦的编辑器**（文件编辑器或输出面板日志区），见 [单文件内查找与替换](../search-navigation/find-in-file.md)。
+>
+> 符号与定义类快捷键来自**编辑器内核**，需要当前语言提供符号；命令面板里显示英文名。见 [编辑器文本编辑快捷键](./editor-shortcuts.md)。
 
 > 更多见 [搜索与导航 · 全局搜索与替换](../search-navigation/global-search.md) 与 [符号与定义跳转](../search-navigation/symbols-and-definitions.md)。
 

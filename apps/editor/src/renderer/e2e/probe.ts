@@ -14,6 +14,7 @@ import {
   EditorInput,
   EditorRegistry,
   IDisposable,
+  KeybindingWeight,
   KeybindingsRegistry,
   LifecyclePhase,
   LogLevel,
@@ -23,9 +24,11 @@ import {
   StorageScope,
   URI,
   autorun,
+  normalizeKeybindingString,
   onUnexpectedError,
   type AiModelKnowledge,
   type AiProviderEntry,
+  type ContextKeyExpression,
   type IAiModelService,
   type ICommandService,
   type IConfigurationService,
@@ -116,6 +119,8 @@ import {
   type E2EFindWidgetState,
   type E2EGcControlState,
   type E2EInstalledExtension,
+  type E2EKeybindingEntry,
+  type E2EKeybindingTrace,
   type E2EMarker,
   type E2EMemoryReminderDecision,
   type E2EMemoryReminderSample,
@@ -461,6 +466,12 @@ const OUTLINE_RETENTION_MAX_GENERATIONS = 256
 interface OutlineGenerationRefs {
   readonly model: WeakRef<object>
   readonly symbol: WeakRef<object> | undefined
+}
+
+/** Registry items keep `when` as an AST or a string; the trace keeps it pre-serialized. */
+function serializeWhen(when: ContextKeyExpression | string | undefined): string | undefined {
+  if (when === undefined) return undefined
+  return typeof when === 'string' ? when : when.serialize()
 }
 
 export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposable {
@@ -2062,13 +2073,59 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     },
     hasCommand: (id: string): boolean => CommandsRegistry.getCommand(id) !== undefined,
     getKeybindingCommandsForKey: (key: string): string[] => {
-      const normalized = key.trim().toLowerCase()
+      const normalized = normalizeKeybindingString(key)
       return KeybindingsRegistry.getAllKeybindings()
         .filter((kb) => {
-          const first = (kb.chords ? kb.chords[0] : kb.key)?.trim().toLowerCase()
-          return first === normalized && !kb.isNegated
+          const first = kb.chords ? kb.chords[0] : kb.key
+          return (
+            first !== undefined && normalizeKeybindingString(first) === normalized && !kb.isNegated
+          )
         })
         .map((kb) => kb.command)
+    },
+    getAllKeybindings: (): readonly E2EKeybindingEntry[] =>
+      KeybindingsRegistry.getAllKeybindings().flatMap((kb): E2EKeybindingEntry[] => {
+        const when = serializeWhen(kb.when)
+        const base = {
+          command: kb.command,
+          weight: kb.weight ?? KeybindingWeight.WorkbenchContrib,
+          isNegated: kb.isNegated ?? false,
+          ...(when !== undefined ? { when } : {}),
+        }
+        if (kb.chords) {
+          const chords: [string, string] = [
+            normalizeKeybindingString(kb.chords[0]),
+            normalizeKeybindingString(kb.chords[1]),
+          ]
+          return [{ ...base, key: chords[0], chords }]
+        }
+        if (kb.key === undefined) return []
+        return [{ ...base, key: normalizeKeybindingString(kb.key) }]
+      }),
+    traceKeybinding: (key: string, pending?: readonly string[]): E2EKeybindingTrace => {
+      const trace = KeybindingsRegistry.traceKeystroke(key, services.contextKeyService, pending)
+      const candidates = trace.candidates.map((c) => ({
+        command: c.command,
+        weight: c.weight,
+        whenMatched: c.whenMatched,
+        reason: c.outcomeReason,
+        selected: c.selected,
+        keys: c.whenKeys.map((k) => ({ key: k.key, value: k.value })),
+        ...(c.when !== undefined ? { when: c.when } : {}),
+      }))
+      // The trace's `execute` variant carries no weight, but exactly one candidate
+      // is flagged `selected` — that is the winner whose weight decides whether
+      // the dispatcher defers to monaco (MonacoDefault) or preventDefaults.
+      const winnerWeight = candidates.find((c) => c.selected)?.weight
+      if (trace.kind === 'execute') {
+        return {
+          kind: 'execute',
+          command: trace.command,
+          candidates,
+          ...(winnerWeight !== undefined ? { weight: winnerWeight } : {}),
+        }
+      }
+      return { kind: trace.kind, candidates }
     },
     getUserKeybindingDebug: () => ({
       userEntries: services.userKeybindingsService.userEntries.map((e) => ({

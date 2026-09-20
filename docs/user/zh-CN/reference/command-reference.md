@@ -72,6 +72,8 @@
 > 查找类命令跟着**焦点**走，而不是跟着当前标签页走：焦点在输出面板的日志区时，`Ctrl+F` 打开的是日志区的查找栏，不会动上方文件编辑器里的查找栏。见 [单文件内查找与替换](../search-navigation/find-in-file.md#在输出面板里查找)。
 >
 > 输出面板聚焦时 `Escape` 归面板所有：先用来关闭面板内的查找栏（没开查找栏时不做任何事），不再直接跳回编辑器组。
+>
+> 「转到编辑器中的符号…」按 `Ctrl+Shift+O` 走的是**编辑器内核**那一条（面板里显示英文 **Go to Symbol in Editor...**）；两者用途相同，都要求当前语言提供符号。见 [编辑器文本编辑快捷键](./editor-shortcuts.md)。
 
 > 更多见 [全局搜索与替换](../search-navigation/global-search.md)、[符号与定义跳转](../search-navigation/symbols-and-definitions.md)、[导航历史](../search-navigation/history.md)。
 
