@@ -131,6 +131,17 @@
   outline-offset: -1px;
 }
 
+/* 保留选中位置，但输入框聚焦或分屏失活时不再显示活动焦点的强描边。 */
+[data-group-active='false'] .chat .timelineSlotFocused,
+.chat:not(:focus-within) .timelineSlotFocused,
+.chat:has(.promptForm :focus) .timelineSlotFocused {
+  outline-color: color-mix(
+    in srgb,
+    var(--vscode-focusBorder, var(--vscode-badge-progressBackground, #4fa6e2)) 40%,
+    transparent
+  );
+}
+
 /* Sticky-scroll overlay: pinned card headers above the chat scroll. The shell is
    the first flex child of .chatBody with zero height, so it never shifts content;
    the negative margin cancels .chatBody's 8px flex gap below it. Sticky respects

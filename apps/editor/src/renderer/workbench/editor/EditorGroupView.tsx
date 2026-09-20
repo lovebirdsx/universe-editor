@@ -913,6 +913,7 @@ export const EditorGroupView = memo(function EditorGroupView({
       className={`${styles['editorArea']} ${isActiveGroup ? (styles['groupActive'] ?? '') : ''}`}
       onMouseDown={handleFocus}
       data-group-id={group.id}
+      data-group-active={isActiveGroup}
     >
       {group.editors.length > 0 && (
         <div className={styles['tabBarWrapper']}>

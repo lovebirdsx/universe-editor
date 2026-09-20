@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import {
   ContextKeyService,
   EditorInput,
@@ -177,6 +177,33 @@ describe('EditorGroupView', () => {
     fireEvent.mouseDown(container.firstElementChild!)
     expect(svc.activeGroup).toBe(second)
     expect(onChange).toHaveBeenCalledOnce()
+  })
+
+  it('程序化切换活动组时同步更新焦点样式标记', () => {
+    const svc = new EditorGroupsService()
+    const first = svc.activeGroup
+    const second = svc.addGroup(first, 3 /* Right */)
+    const { container, unmount } = renderWithServices(
+      <EditorGroupView
+        group={first}
+        groupsService={svc}
+        resolveComponent={() => undefined}
+        fallback={<button>焦点保留在原组</button>}
+      />,
+    )
+    const root = container.firstElementChild!
+    const button = screen.getByRole('button', { name: '焦点保留在原组' })
+    button.focus()
+    expect(root.getAttribute('data-group-active')).toBe('true')
+
+    act(() => svc.activateGroup(second))
+    expect(document.activeElement).toBe(button)
+    expect(root.getAttribute('data-group-active')).toBe('false')
+
+    act(() => svc.activateGroup(first))
+    expect(root.getAttribute('data-group-active')).toBe('true')
+    unmount()
+    svc.dispose()
   })
 
   it('active editor renders via componentMap', () => {
