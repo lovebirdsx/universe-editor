@@ -47,11 +47,12 @@ import {
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { FileEditorRegistry } from '../../../services/editor/FileEditorRegistry.js'
+import { MONACO_COMPAT_KEYBINDINGS } from './monacoCompatKeybindings.js'
 import {
-  MONACO_COMPAT_KEYBINDINGS,
-  registerMonacoCompatKeybindings,
-  type IMonacoCompatKeybinding,
-} from './monacoCompatKeybindings.js'
+  registerMonacoCommandKeybindings,
+  type IMonacoCommandKeybinding,
+} from './monacoCommandKeybindings.js'
+import { MONACO_EXTRA_KEYBINDINGS } from './monacoExtraKeybindings.js'
 import {
   decodeMonacoKeybinding,
   decodedToRegistryKeyString,
@@ -353,13 +354,18 @@ export async function bridgeAllMonacoActions(): Promise<IDisposable> {
 /**
  * Test seam. Tests supply a fake registry; we never touch real monaco here.
  * `platform` defaults to linux so the seam is deterministic on every host — win
- * and mac coverage has to be requested explicitly.
+ * and mac coverage has to be requested explicitly. `keybindingTables` carries
+ * every table this editor layers on the mirror; an empty list means "no added
+ * keys", which is what the mirror-only assertions want.
  */
 export function bridgeMonacoActionsForTests(
   registry: IMonacoEditorExtensionsRegistry,
   coreCommands: readonly CoreCommand[],
   platform: MonacoPlatform = 'linux',
-  compat: readonly IMonacoCompatKeybinding[] = MONACO_COMPAT_KEYBINDINGS,
+  keybindingTables: readonly (readonly IMonacoCommandKeybinding[])[] = [
+    MONACO_COMPAT_KEYBINDINGS,
+    MONACO_EXTRA_KEYBINDINGS,
+  ],
 ): IDisposable {
   const disposables: IDisposable[] = []
   const seenIds = new Set<string>()
@@ -413,9 +419,11 @@ export function bridgeMonacoActionsForTests(
     recordDefaults(core.id, coreKeybindingsOf(core, platform))
   }
 
-  // After the commands exist: an alternative key whose command is missing would
+  // After the commands exist: an added key whose command is missing would
   // swallow the keystroke with nothing to run.
-  disposables.push(registerMonacoCompatKeybindings(compat))
+  for (const table of keybindingTables) {
+    disposables.push(registerMonacoCommandKeybindings(table))
+  }
 
   disposables.push({
     dispose() {

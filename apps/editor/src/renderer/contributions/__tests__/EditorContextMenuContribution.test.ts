@@ -74,4 +74,29 @@ describe('EditorContextMenuContribution', () => {
     expect(commands).not.toContain('editor.action.clipboardPasteAction')
     expect(commands).toContain('editor.action.clipboardCopyAction')
   })
+
+  it('offers the sort pair with a selection, ascending first', () => {
+    disposables.push(new EditorContextMenuContribution())
+    const sort = menuItemsFor({ editorHasSelection: true, editorReadonly: false }).filter((e) =>
+      e.command.startsWith('editor.action.sortLines'),
+    )
+    expect(sort.map((e) => e.command)).toEqual([
+      'editor.action.sortLinesAscending',
+      'editor.action.sortLinesDescending',
+    ])
+    expect(sort.map((e) => e.group)).toEqual(['2_sort', '2_sort'])
+    expect(sort.map((e) => e.order)).toEqual([1, 2])
+  })
+
+  it('hides the sort pair without a selection, and in a read-only editor', () => {
+    disposables.push(new EditorContextMenuContribution())
+    for (const context of [
+      { editorHasSelection: false, editorReadonly: false },
+      { editorHasSelection: true, editorReadonly: true },
+    ]) {
+      const commands = menuCommandsFor(context)
+      expect(commands).not.toContain('editor.action.sortLinesAscending')
+      expect(commands).not.toContain('editor.action.sortLinesDescending')
+    }
+  })
 })

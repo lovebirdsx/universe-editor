@@ -31,9 +31,10 @@ import {
 } from '../monaco/monacoActionsBridge.js'
 import {
   MONACO_COMPAT_KEYBINDINGS,
-  registerMonacoCompatKeybindings,
   type IMonacoCompatKeybinding,
 } from '../monaco/monacoCompatKeybindings.js'
+import { registerMonacoCommandKeybindings } from '../monaco/monacoCommandKeybindings.js'
+import { MONACO_EXTRA_KEYBINDINGS } from '../monaco/monacoExtraKeybindings.js'
 import { FileEditorRegistry } from '../../../services/editor/FileEditorRegistry.js'
 
 const CtrlCmd = 2048
@@ -59,9 +60,9 @@ function makeRegistry(
 }
 
 /**
- * The mirror on its own. The assertions below are about monaco facts; the
- * alternative-key table is a product decision tested separately, so it is
- * opted out of here to keep its entries from reshaping these expectations.
+ * The mirror on its own. The assertions below are about monaco facts; the two
+ * added-key tables are product decisions tested separately, so both are opted
+ * out of here to keep their entries from reshaping these expectations.
  */
 function bridge(
   registry: IMonacoEditorExtensionsRegistry,
@@ -792,7 +793,7 @@ describe('monaco compat keybindings', () => {
       ]),
       [],
       'linux',
-      FIXTURE,
+      [FIXTURE],
     )
   }
 
@@ -834,7 +835,7 @@ describe('monaco compat keybindings', () => {
   })
 
   it('skips entries whose command does not exist instead of swallowing the key', () => {
-    const disposables = registerMonacoCompatKeybindings([
+    const disposables = registerMonacoCommandKeybindings([
       { ...MOVE_UP, id: 'editor.action.doesNotExist' },
     ])
     try {
@@ -877,5 +878,83 @@ describe('monaco compat keybindings', () => {
       expect(binding.nativeKey, binding.id).not.toBe('')
       expect(binding.takenBy, binding.id).not.toBe('')
     }
+  })
+})
+
+describe('the keys this editor adds on top of the mirror', () => {
+  let registered: IDisposable | undefined
+
+  const SORT_UP = MONACO_EXTRA_KEYBINDINGS.find((b) => b.id === 'editor.action.sortLinesAscending')!
+  const SORT_DOWN = MONACO_EXTRA_KEYBINDINGS.find(
+    (b) => b.id === 'editor.action.sortLinesDescending',
+  )!
+
+  afterEach(() => {
+    registered?.dispose()
+    registered = undefined
+  })
+
+  function bindExtraKeys(): void {
+    registered = bridgeAll(
+      makeRegistry([
+        { id: SORT_UP.id, label: 'Sort Lines Ascending' },
+        { id: SORT_DOWN.id, label: 'Sort Lines Descending' },
+      ]),
+      [],
+      'linux',
+      [MONACO_EXTRA_KEYBINDINGS],
+    )
+  }
+
+  it('gives F9 / Shift+F9 to the sort actions above MonacoDefault', () => {
+    bindExtraKeys()
+    for (const binding of [SORT_UP, SORT_DOWN]) {
+      const item = KeybindingsRegistry.getAllKeybindings().find(
+        (kb) => kb.command === binding.id && kb.key === binding.key,
+      )
+      expect(item, binding.id).toBeDefined()
+      expect(item!.weight).toBe(KeybindingWeight.WorkbenchContrib)
+      // Monaco ships these two actions keyless, so a deferred binding at
+      // MonacoDefault would have nothing to hand the keystroke to.
+      expect(item!.weight).toBeGreaterThan(KeybindingWeight.MonacoDefault)
+    }
+  })
+
+  it('gates the keys on the when-clause, evaluated against a real context', () => {
+    bindExtraKeys()
+    const context = new ContextKeyService()
+
+    context.set('editorTextFocus', true)
+    context.set('isInMergeEditor', false)
+    context.set('editorReadonly', false)
+    expect(KeybindingsRegistry.resolveKeybinding(SORT_UP.key, context)).toBe(SORT_UP.id)
+    expect(KeybindingsRegistry.resolveKeybinding(SORT_DOWN.key, context)).toBe(SORT_DOWN.id)
+
+    // The actions are writable-gated in monaco: in a read-only editor the key
+    // could only run a no-op, so it must not claim the keystroke.
+    context.set('editorReadonly', true)
+    expect(KeybindingsRegistry.resolveKeybinding(SORT_UP.key, context)).toBeUndefined()
+    expect(KeybindingsRegistry.resolveKeybinding(SORT_DOWN.key, context)).toBeUndefined()
+    context.set('editorReadonly', false)
+
+    context.set('isInMergeEditor', true)
+    expect(KeybindingsRegistry.resolveKeybinding(SORT_UP.key, context)).toBeUndefined()
+    context.set('isInMergeEditor', false)
+
+    context.set('editorTextFocus', false)
+    expect(KeybindingsRegistry.resolveKeybinding(SORT_UP.key, context)).toBeUndefined()
+  })
+
+  it('every shipped entry is editor-scoped and distinct, and never shadows a compat key', () => {
+    expect(MONACO_EXTRA_KEYBINDINGS).toHaveLength(2)
+    expect(new Set(MONACO_EXTRA_KEYBINDINGS.map((b) => b.id)).size).toBe(
+      MONACO_EXTRA_KEYBINDINGS.length,
+    )
+    for (const binding of MONACO_EXTRA_KEYBINDINGS) {
+      expect(binding.when, binding.id).toContain('editorTextFocus')
+      expect(binding.when, binding.id).toContain('editorReadonly')
+    }
+    const keys = [...MONACO_COMPAT_KEYBINDINGS, ...MONACO_EXTRA_KEYBINDINGS].map((b) => b.key)
+    expect(new Set(keys).size).toBe(keys.length)
   })
 })

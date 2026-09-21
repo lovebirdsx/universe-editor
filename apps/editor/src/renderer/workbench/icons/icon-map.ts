@@ -118,6 +118,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   'arrow-right': ArrowRight,
   'arrow-left': ArrowLeft,
   'arrow-down': ArrowDown,
+  'arrow-up': ArrowUp,
   'new-file': FilePlus,
   export: FileOutput,
   edit: SquarePen,

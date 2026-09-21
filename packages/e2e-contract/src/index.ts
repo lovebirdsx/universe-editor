@@ -1676,6 +1676,14 @@ export interface E2EProbe {
    */
   getAllKeybindings(): readonly E2EKeybindingEntry[]
   /**
+   * Command ids the `editor/context` menu resolves to under `context` (the keys
+   * the caller wants set, e.g. `{ editorHasSelection: true, editorReadonly:
+   * false }`), in menu order. A menu entry whose command is not registered still
+   * renders and then does nothing when picked, so a spec uses this to assert the
+   * ids it cares about — and that they resolve — without clicking the menu.
+   */
+  getEditorContextMenuCommands(context: Record<string, boolean>): string[]
+  /**
    * The same decision `useGlobalKeybindingHandler` makes for `key` right now, with
    * the real context-key service bound — so `when` clauses (including the
    * `editorFocus` gate on every mirrored Monaco default) evaluate against live

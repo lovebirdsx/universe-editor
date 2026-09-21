@@ -69,6 +69,18 @@ function runMonacoNavAction(accessor: ServicesAccessor, actionId: string): void 
 
 命令集稳定且小时，用**一张声明表 + 工厂**生成 Action2 子类（见 `gotoLocationActions.ts` 的 `NAVIGATION_COMMANDS` + `createNavAction`），比逐个手写类好维护。
 
+**路径 3 — 内核从没配过键的命令：只补键，不新增命令**
+内核里有一类 EditorAction 自带实现却**没有任何默认键**（如 `editor.action.sortLinesAscending` / `sortLinesDescending`——Monaco 的 `linesOperations.js` 就没给 `_kbOpts`）。这类命令已被路径 0 镜像，只缺一键，于是把键填进 `monacoExtraKeybindings.ts` 的数据表即可（与 compat 表同一注册机制，理由不同：那张表是「原生键被占后补备选键」）。
+
+```ts
+const WHEN = `${EDITOR_TEXT_FOCUS} && !editorReadonly`
+export const MONACO_EXTRA_KEYBINDINGS: readonly IMonacoCommandKeybinding[] = [
+  { id: 'editor.action.sortLinesAscending', key: 'f9', when: WHEN },
+]
+```
+
+**别为它走路径 1**：同名 id 会在项目 `CommandsRegistry` 里叠出第二个 handler，命令面板也多一条重复条目——而你并没有新命令要注册，只有键要补。
+
 ### 3. 处理默认键双触发（给 action2 配了项目默认键时必看）
 现象：你在项目 Action2 上声明了默认键（如 `f12`），而 Monaco 自身的同名默认键还在 → 一次按键被触发两次。
 解法：在 `MonacoLoader`（`loadMonaco()` 内 Monaco 就绪后）对**有默认键**的 id 批量拆掉 Monaco 默认键：
@@ -122,6 +134,14 @@ pnpm e2e                  # 必要时跑 commandPalette / keyboardShortcut 冒�
 - **怎么接**：这些命令本已被 `bridgeAllMonacoActions` 自动桥接进命令面板/快捷键编辑器（路径 0）。项目额外给它们配了**项目级显式默认键**（ctrl+f / ctrl+h / f3 / shift+f3）所以走**路径 1**：Action2 包装 + `getAction(id)?.run()`。
 - **锚点**：`apps/editor/src/renderer/actions/searchActions.ts`（`runActiveMonacoAction` + `FindInFileAction` 等）。
 
+### 案例 3：排序选中行（内核有实现、无键、也不进右键菜单）
+- **命令**：`editor.action.sortLinesAscending` / `sortLinesDescending`（内核 `linesOperations.js`；VSCode 同样只给命令、不给键）。
+- **机制**：`registerEditorAction` → 路径 0 **已自动镜像**（命令面板里叫「按升序排列行」，Monaco NLS patch 提供中文名），`precondition: writable` 使只读文件里静默 no-op。**缺口只有键和菜单**。
+- **怎么接**：走**路径 3**——新 `monacoExtraKeybindings.ts` 表（f9 / shift+f9，`when` = `editorTextFocus && !isInMergeEditor && !editorReadonly`）；`monacoActionsBridge` 第 4 参由「compat 表」升格为**表列表** `[MONACO_COMPAT_KEYBINDINGS, MONACO_EXTRA_KEYBINDINGS]`，共用 `registerMonacoCommandKeybindings`（`monacoCommandKeybindings.ts`，权重 `WorkbenchContrib` 必须 > `MonacoDefault`，命令不存在则跳过）。右键菜单两项加在 `EditorContextMenuContribution.ts`，`when: 'editorHasSelection && !editorReadonly'`（走 per-group scoped ctx）。**不新增命令、不自研排序**。
+- **内核语义**（照抄，别自创）：按**整行**排；只选中一行内一段 → 静默 no-op；已有序 → no-op 且不产生 undo 条目（**e2e 必须从已知乱序体断言具体排列**，否则「没反应」也能蒙混过关）；多光标各自排序、全有或全无；**单光标无选区时排整篇**（键/菜单行为不对称，文档写明）。
+- **锚点**：`workbench/editor/monaco/monacoExtraKeybindings.ts`、`monacoCommandKeybindings.ts`、`monacoActionsBridge.ts`（表列表参数）、`contributions/EditorContextMenuContribution.ts`、`e2e/specs/smoke.editorTextShortcuts.spec.ts`（真按键重排缓冲区）。
+- **教训**：给「内核已有实现」的功能加一键，**先确认它是不是已经被镜像**——是的话只补键；一旦包装成 Action2，就凭空多出一个同 id handler 和一条重复的命令面板条目。
+
 ## 易踩坑速记
 1. **`editor.getAction(id)` 对 action2 恒返回 null**——goto/peek 用它必失败，改用 `editor.trigger(source, id, {})`。
 2. **action2 触发前必须 `editor.focus()`**——否则从命令面板（编辑器已失焦）触发时解析不到目标编辑器，静默不执行。
@@ -136,6 +156,8 @@ pnpm e2e                  # 必要时跑 commandPalette / keyboardShortcut 冒�
 - `apps/editor/src/renderer/actions/gotoLocationActions.ts` —— **action2 型**表驱动 Action2 模板（focus + trigger）
 - `apps/editor/src/renderer/actions/searchActions.ts` —— **EditorAction 型** Action2 模板（getAction().run()）
 - `apps/editor/src/renderer/workbench/editor/monaco/monacoActionsBridge.ts` —— EditorAction + core 命令的**自动桥接**（路径 0）+ 默认键侧表
+- `apps/editor/src/renderer/workbench/editor/monaco/monacoExtraKeybindings.ts` / `monacoCommandKeybindings.ts` —— **路径 3**：给内核无键的命令补项目默认键（数据表 + 注册机制）
+- `apps/editor/src/renderer/workbench/editor/monaco/monacoCompatKeybindings.ts` —— 「原生键被占用后补备选键」的表（同一注册机制，不同理由）
 - `apps/editor/src/renderer/workbench/editor/monaco/MonacoLoader.ts` —— Monaco 加载、拆默认键（`addKeybindingRule`）、触发 `bridgeAllMonacoActions`
 - `apps/editor/src/renderer/actions/index.ts` —— Action2 注册入口（按业务域分组）
 - `apps/editor/src/renderer/actions/__tests__/gotoLocationActions.test.ts` —— 测试范式

@@ -10,7 +10,7 @@
  *  when monaco's precondition fails, or when the language lacks the capability.
  *  The first is what this file pins; the third is pinned by the last test.
  *
- *  Two things this file encodes deliberately:
+ *  Three things this file encodes deliberately:
  *
  *  - the mirror resolves monaco's per-platform `win` / `mac` / `linux` blocks the
  *    way monaco's own `bindToCurrentPlatform` does (whole-rule replacement), so on
@@ -24,6 +24,11 @@
  *    alternative key by monacoCompatKeybindings.ts; the second test pins those
  *    keys, their weight (they must outrank the deferral at 50, or the key would
  *    be dead) and that they really act on the buffer.
+ *
+ *  - `F9` / `Shift+F9` sort the selected lines. These are not restorations —
+ *    monaco ships no key for the sort actions at all — so they live in
+ *    monacoExtraKeybindings.ts, and the third test pins them the same way plus
+ *    the selection bound the sort must respect.
  *
  *  The scene is a real `.json` file on purpose. In the core baseline
  *  (`extensions: []`) json is the only language that has a comment config, a
@@ -173,6 +178,20 @@ const COMPAT_KEYS_LINUX: readonly DocKey[] = [
   ['ctrl+shift+alt+d', 'editor.action.copyLinesUpAction'],
   ['shift+alt+f', 'editor.action.formatDocument'],
 ]
+
+/**
+ * Keys this editor adds for core commands monaco ships *keyless* — not
+ * restorations of a taken key, so they are not in the compat table. Same rule
+ * though: hardcoded, because importing the renderer table would make the guard
+ * agree with the implementation by construction.
+ */
+const ADDED_KEYS: readonly DocKey[] = [
+  ['f9', 'editor.action.sortLinesAscending'],
+  ['shift+f9', 'editor.action.sortLinesDescending'],
+]
+
+/** Four unsorted lines: the sort must touch the selected ones and leave the rest. */
+const SORT_BODY = 'dddd\ncccc\naaaa\nbbbb\n'
 
 interface RegisteredBinding {
   readonly command: string
@@ -484,6 +503,106 @@ test.describe('@p1 editor text shortcuts', () => {
         await expect.poll(() => text(page)).toContain('\n  "name": "alpha",\n')
       })
     }
+  })
+
+  test('the added keys reach the core commands monaco ships keyless', async ({
+    page,
+    workbench,
+  }) => {
+    await workbench.waitForRestored()
+    await workbench.waitForBootstrapFocusSettled()
+    await openJsonEditor(page, workbench)
+
+    for (const [, command] of ADDED_KEYS) {
+      await test.step(`${command} exists`, async () => {
+        await expect
+          .poll(() => page.evaluate((c) => window.__E2E__!.hasCommand(c), command), {
+            message:
+              `${command} is not registered — the added key would swallow the ` +
+              'keystroke with nothing to run',
+          })
+          .toBe(true)
+      })
+    }
+
+    for (const [key, command] of ADDED_KEYS) {
+      await test.step(`${key} → ${command}`, async () => {
+        const trace = await page.evaluate((k) => window.__E2E__!.traceKeybinding(k), key)
+        expect(trace.command, `${key} does not reach ${command}`).toBe(command)
+        expect(
+          trace.weight,
+          `${key} sits at weight ${trace.weight}; at ${MONACO_DEFAULT_WEIGHT} the dispatcher ` +
+            'defers to monaco, which ships no key for the sort actions',
+        ).toBe(WORKBENCH_CONTRIB_WEIGHT)
+      })
+    }
+
+    // Same hazard the compat keys are guarded against: a monaco bump that gives
+    // F9 a *mirrored* primary would make the added key shadow it. (Defaults monaco
+    // registers through its own action2 path never enter this registry.)
+    const bindings = await registry(page)
+    for (const [key, command] of ADDED_KEYS) {
+      await test.step(`${key} carries no other mirrored monaco default`, async () => {
+        const rivals = bindings
+          .filter((kb) => kb.key === key && kb.weight === MONACO_DEFAULT_WEIGHT)
+          .filter((kb) => kb.command !== command)
+          .map((kb) => kb.command)
+        expect(
+          rivals,
+          `${key} is now monaco's own default for ${rivals.join(', ')} — the added key for ` +
+            `${command} shadows it`,
+        ).toEqual([])
+      })
+    }
+
+    // The context menu is the one entry point a key press cannot cover: an entry
+    // whose command id is wrong still renders and then does nothing when picked,
+    // so pin the ids the menu resolves to *and* that they are registered.
+    await test.step('the editor menu offers the sort pair, wired to registered commands', async () => {
+      const commands = await page.evaluate(() =>
+        window.__E2E__!.getEditorContextMenuCommands({
+          editorHasSelection: true,
+          editorReadonly: false,
+        }),
+      )
+      for (const [key, command] of ADDED_KEYS) {
+        expect(commands, `${key} is not offered by the editor context menu`).toContain(command)
+        await expect
+          .poll(() => page.evaluate((c) => window.__E2E__!.hasCommand(c), command), {
+            message: `${command} is not registered — the menu entry would do nothing when picked`,
+          })
+          .toBe(true)
+      }
+    })
+
+    await test.step('F9 sorts the selected lines, leaving the unselected one alone', async () => {
+      await setText(page, SORT_BODY)
+      // endColumn 1 means the selection stops at the end of line 3, so line 4
+      // must not move — that is the assertion, not just "the buffer changed".
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.setActiveEditorSelection(1, 1, 4, 1)))
+        .toBe(true)
+      await page.keyboard.press('F9')
+      await expect.poll(() => text(page)).toBe('aaaa\ncccc\ndddd\nbbbb\n')
+    })
+
+    await test.step('Shift+F9 sorts them descending', async () => {
+      await setText(page, SORT_BODY)
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.setActiveEditorSelection(1, 1, 4, 1)))
+        .toBe(true)
+      await page.keyboard.press('Shift+F9')
+      await expect.poll(() => text(page)).toBe('dddd\ncccc\naaaa\nbbbb\n')
+    })
+
+    await test.step('with nothing selected F9 sorts the whole file (monaco semantics)', async () => {
+      await setText(page, SORT_BODY)
+      await page.evaluate(() => window.__E2E__!.setActiveEditorCursor(1, 1))
+      await page.keyboard.press('F9')
+      // Line 4 moves here and did not in the selection step above: the two
+      // expectations cannot both pass on one shape of "sorted".
+      await expect.poll(() => text(page)).toBe('aaaa\nbbbb\ncccc\ndddd\n')
+    })
   })
 
   test('editor text shortcuts really edit the buffer', async ({ page, workbench }) => {

@@ -18,6 +18,8 @@ import {
   KeybindingsRegistry,
   LifecyclePhase,
   LogLevel,
+  MenuId,
+  MenuRegistry,
   Orientation,
   Severity,
   StatusBarAlignment,
@@ -2108,6 +2110,18 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
         if (kb.key === undefined) return []
         return [{ ...base, key: normalizeKeybindingString(kb.key) }]
       }),
+    getEditorContextMenuCommands: (context: Record<string, boolean>): string[] => {
+      // Scoped: the menu's `when` clauses are written against the per-group
+      // context the right-click path seeds, not the root one.
+      const scoped = services.contextKeyService.createScoped(context)
+      try {
+        return MenuRegistry.getMenuItems(MenuId.EditorContext, scoped).flatMap((entry) =>
+          'command' in entry ? [entry.command] : [],
+        )
+      } finally {
+        scoped.dispose()
+      }
+    },
     traceKeybinding: (key: string, pending?: readonly string[]): E2EKeybindingTrace => {
       const trace = KeybindingsRegistry.traceKeystroke(key, services.contextKeyService, pending)
       const candidates = trace.candidates.map((c) => ({

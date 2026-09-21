@@ -2,10 +2,11 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Populates the editor right-click menu (MenuId.EditorContext) with the core
  *  built-in items — command palette, the two add-selection-to-agent-chat
- *  entries (existing chat / new chat), and the Monaco clipboard actions
- *  (cut/copy/paste). Cut/paste are hidden when the editor is read-only; the
- *  agent actions only show with a non-empty selection. Extensions contribute
- *  further items to the same menu via `contributes.menus['editor/context']`.
+ *  entries (existing chat / new chat), the sort-selected-lines pair, and the
+ *  Monaco clipboard actions (cut/copy/paste). Cut/paste and sort are hidden when
+ *  the editor is read-only; the agent actions and sort only show with a non-empty
+ *  selection. Extensions contribute further items to the same menu via
+ *  `contributes.menus['editor/context']`.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -56,6 +57,29 @@ export class EditorContextMenuContribution extends Disposable implements IWorkbe
         title: localize('action.agent.addSelectionToNewChat', 'Add Selection to New Agent Chat'),
         when: 'editorHasSelection',
         group: '1_agent',
+        order: 2,
+      }),
+    )
+
+    this._register(
+      MenuRegistry.addMenuItem(MenuId.EditorContext, {
+        command: 'editor.action.sortLinesAscending',
+        icon: 'arrow-up',
+        title: localize('action.sortLinesAscending.title', 'Sort Selected Lines: Ascending'),
+        // Both keys are seeded into the scoped context by EditorContextMenu from
+        // the *clicked* editor; the mirrored actions no-op on a read-only model.
+        when: 'editorHasSelection && !editorReadonly',
+        group: '2_sort',
+        order: 1,
+      }),
+    )
+    this._register(
+      MenuRegistry.addMenuItem(MenuId.EditorContext, {
+        command: 'editor.action.sortLinesDescending',
+        icon: 'arrow-down',
+        title: localize('action.sortLinesDescending.title', 'Sort Selected Lines: Descending'),
+        when: 'editorHasSelection && !editorReadonly',
+        group: '2_sort',
         order: 2,
       }),
     )

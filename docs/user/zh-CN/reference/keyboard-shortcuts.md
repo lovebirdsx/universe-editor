@@ -117,6 +117,7 @@
 | 缩进 / 反缩进 | `Ctrl+]` / `Ctrl+[` |
 | 上移 / 下移行 | `Ctrl+Shift+↑` / `Ctrl+Shift+↓` |
 | 向上 / 向下复制行 | `Shift+Alt+↑` / `Shift+Alt+↓`（Linux 用 `Ctrl+Shift+Alt+↑` / `↓`） |
+| 排序选中行（升序 / 降序） | `F9` / `Shift+F9`（光标无选区时排整个文件） |
 | 选中下一个相同的词（多光标） | `Ctrl+D` |
 | 选中所有相同的词 | `Ctrl+Shift+L` |
 | 折叠 / 展开 | `Ctrl+Shift+[` / `Ctrl+Shift+]` |
@@ -129,6 +130,7 @@
 > `Ctrl+/`、`Shift+Alt+F`、`Ctrl+Shift+O` 需要当前语言支持注释 / 格式化 / 符号。
 > Linux 上 `Shift+Alt+↑` `Shift+Alt+↓` 是「在下方 / 上方加光标」，复制行改用 `Ctrl+Shift+Alt+↑` / `↓`；`Shift+Alt+F` 三平台都是格式化文档。
 > 上表中后四项（上移 / 下移行、切换折叠、滚动一页，以及 Linux 的复制行）是**本编辑器补的备选键**：它们在内核里的原生键被本编辑器占用了（`Alt+↑` `Alt+↓` 是「查找光标处单词」，`Ctrl+K Ctrl+L` 是「把选区加到 Agent 聊天」等），完整对照见 [被本编辑器占用的键](./editor-shortcuts.md#被本编辑器占用的键)。
+> `F9` / `Shift+F9`（排序选中行）**不属于备选键**：内核本来就没给排序命令配键，这两个键是本编辑器新增的默认键。
 
 > 更多见 [编辑器文本编辑快捷键](./editor-shortcuts.md)（含多光标、折叠、导航与完整平台差异）。
 

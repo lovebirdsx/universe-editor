@@ -589,6 +589,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.showScm.title': '显示源代码管理',
   'action.showStartupPerformance.title': '启动性能',
   'action.showInteractionPerformance.title': '交互性能',
+  'action.sortLinesAscending.title': '排序选中行：升序',
+  'action.sortLinesDescending.title': '排序选中行：降序',
   'action.splitEditorDown.title': '向下拆分编辑器',
   'action.splitEditorLeft.title': '向左拆分编辑器',
   'action.splitEditorRight.title': '向右拆分编辑器',
