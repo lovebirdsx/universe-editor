@@ -13,6 +13,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { AcpToolCall } from '../../services/acp/session/acpSessionService.js'
+import { stripCodeFence } from '../../services/acp/session/acpSessionContent.js'
 import { localize } from '@universe-editor/platform'
 
 export interface ToolCallDisplay {
@@ -124,10 +125,9 @@ export function isKeepPlanning(call: AcpToolCall): boolean {
  */
 export const DEFAULT_KEEP_PLANNING_MESSAGE = 'User rejected request to exit plan mode.'
 
-/** 去掉 fork 对错误内容添加的 ```\n…\n``` 代码围栏，还原纯文本。 */
+/** 去掉 fork 对错误内容添加的 ``` 代码围栏，并 trim 掉两端空白，还原纯文本。 */
 function stripErrorFence(text: string): string {
-  const m = /^```(?:\w*)?\n([\s\S]*?)\n```$/.exec(text.trim())
-  return (m?.[1] ?? text).trim()
+  return stripCodeFence(text).trim()
 }
 
 /**

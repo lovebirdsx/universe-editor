@@ -57,6 +57,18 @@ export function blocksToText(blocks: readonly ContentBlock[] | undefined): strin
 }
 
 /**
+ * 剥掉 fork 给工具结果加的整块代码围栏：客户端未通告终端输出能力时，shell 输出被包成
+ * ` ```console ` 围栏、错误文本被包成裸 ``` 围栏（见 vendor/claude-agent-acp 的
+ * `toolUpdateFromToolResult`）。卡片正文按终端渲染，围栏会字面显示出来，故展示/复制时剥掉。
+ *
+ * 只认「整段就是一个围栏块」——正文夹带其它段落、或输出自身含反引号时原样返回，避免误伤。
+ */
+export function stripCodeFence(text: string): string {
+  const m = /^```(?:\w*)?\n([\s\S]*?)\n```$/.exec(text.trim())
+  return m?.[1] ?? text
+}
+
+/**
  * Serialize a tool call into copyable plain text — title, diffs, output, and any
  * nested sub-agent items — so the right-click "Copy Message" works on tool-call
  * cards, not just plain messages (mirrors VSCode's chat tool-invocation repr).
@@ -77,7 +89,7 @@ export function toolCallToText(call: AcpToolCall): string {
     parts.push(call.memoryTrimmed ? label : `${label}\n${d.newText}`)
   }
 
-  const body = call.kind === 'execute' ? call.text : blocksToText(call.blocks)
+  const body = call.kind === 'execute' ? stripCodeFence(call.text) : blocksToText(call.blocks)
   if (body.trim().length > 0) parts.push(body)
 
   // Each child is indented on its own, before the blank-line join: indenting the

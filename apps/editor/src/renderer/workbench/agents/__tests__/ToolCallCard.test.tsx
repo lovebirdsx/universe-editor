@@ -157,6 +157,13 @@ describe('ToolCallCard', () => {
     expect(out.textContent).toBe('ok')
   })
 
+  it('drops the console fence the fork wraps shell output in', () => {
+    renderCard(
+      makeCall({ kind: 'execute', title: 'Get-ChildItem', text: '```console\nCargo.lock\n```' }),
+    )
+    expect(screen.getByTestId('acp-terminal-output').textContent).toBe('Cargo.lock')
+  })
+
   it('shows a Bash description as the title and moves the command into the body', () => {
     renderCard(
       makeCall({

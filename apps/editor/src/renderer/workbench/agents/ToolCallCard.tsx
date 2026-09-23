@@ -30,6 +30,7 @@ import type {
   IAcpSession,
 } from '../../services/acp/session/acpSessionService.js'
 import { firstLineSummary, memoryTrimmedNotice } from '../../services/acp/session/acpSession.js'
+import { stripCodeFence } from '../../services/acp/session/acpSessionContent.js'
 import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
 import { useMarkdownFileLink } from '../markdown/useMarkdownFileLink.js'
 import { previewLanguageForResource } from '../../services/resourcePreview/resourcePreviewSupport.js'
@@ -278,7 +279,7 @@ export const ToolCallCard = memo(function ToolCallCard({
       {call.text.length > 0 && (
         <div className={styles['toolCallBody']}>
           <TerminalOutput
-            text={call.text}
+            text={stripCodeFence(call.text)}
             {...(dataStickyKey !== undefined ? { contentKey: `term:${dataStickyKey}` } : {})}
           />
         </div>

@@ -21,6 +21,7 @@ import {
   blocksToText,
   readToolCallLocations,
   splitToolCallContent,
+  stripCodeFence,
   subAgentTranscriptToText,
   toolCallToText,
 } from '../acpSessionContent.js'
@@ -179,6 +180,40 @@ describe('StreamingBlocksAccumulator', () => {
   })
 })
 
+describe('stripCodeFence', () => {
+  it('strips the console fence the fork wraps shell output in', () => {
+    expect(stripCodeFence('```console\nfile1.txt\nfile2.txt\n```')).toBe('file1.txt\nfile2.txt')
+  })
+
+  it('strips the bare fence the fork wraps error text in', () => {
+    expect(stripCodeFence('```\ncommand not found: bad_cmd\n```')).toBe(
+      'command not found: bad_cmd',
+    )
+  })
+
+  it('tolerates blank lines around the fence', () => {
+    expect(stripCodeFence('\n```console\nout\n```\n')).toBe('out')
+  })
+
+  it('handles an empty fenced body', () => {
+    expect(stripCodeFence('```console\n\n```')).toBe('')
+  })
+
+  it('leaves text without a fence untouched', () => {
+    expect(stripCodeFence('line1\n\nline2')).toBe('line1\n\nline2')
+    expect(stripCodeFence('')).toBe('')
+  })
+
+  it('leaves a fence that is only part of the text untouched', () => {
+    const text = 'before\n```console\nout\n```\nafter'
+    expect(stripCodeFence(text)).toBe(text)
+  })
+
+  it('keeps a trailing fence inside the body', () => {
+    expect(stripCodeFence('```console\ncode: ```\n```')).toBe('code: ```')
+  })
+})
+
 describe('subAgentTranscriptToText / toolCallToText', () => {
   const makeCall = (overrides: Partial<AcpToolCall>): AcpToolCall => ({
     id: 't1',
@@ -243,5 +278,14 @@ describe('subAgentTranscriptToText / toolCallToText', () => {
       children: [childMessage('c1', 'first'), childMessage('c2', 'second')],
     })
     expect(toolCallToText(call)).toBe('Task\n\n  first\n\n  second')
+  })
+
+  it('copies a shell card without the console fence the fork adds', () => {
+    const call = makeCall({
+      kind: 'execute',
+      title: 'Get-ChildItem -Force',
+      text: '```console\nCargo.lock\nCargo.toml\n```',
+    })
+    expect(toolCallToText(call)).toBe('Get-ChildItem -Force\n\nCargo.lock\nCargo.toml')
   })
 })
