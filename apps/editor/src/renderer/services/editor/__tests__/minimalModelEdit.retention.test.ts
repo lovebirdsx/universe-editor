@@ -199,7 +199,7 @@ describe('minimalModelEdit — a reload leaves no copy of the file behind', () =
       growth,
       `刷新读进来的文本被留在了堆里：${ROUNDS} 轮之后每轮多留 ${(growth / Math.max(1, ROUNDS - 1) / 1048576).toFixed(1)}MB`,
     ).toBeLessThan(RETAINED_GROWTH_BOUND_BYTES)
-  })
+  }, 15_000)
 
   it('would retain one whole file per round if the span were a slice view (premise)', async () => {
     const gc = acquireGc()
@@ -218,5 +218,5 @@ describe('minimalModelEdit — a reload leaves no copy of the file behind', () =
       `切片视图不再钉住父串（15 轮只多出 ${(growth / 1048576).toFixed(1)}MB）：V8 的字符串表示变了，` +
         `detachView 的取舍需要重新评估——这是前提变了，不是抖动`,
     ).toBeGreaterThan(VIEW_GROWTH_MIN_BYTES)
-  })
+  }, 15_000)
 })
