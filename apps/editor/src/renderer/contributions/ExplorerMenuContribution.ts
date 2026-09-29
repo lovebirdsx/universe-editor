@@ -174,11 +174,24 @@ export class ExplorerMenuContribution extends Disposable implements IWorkbenchCo
 
     this._register(
       MenuRegistry.addMenuItem(MenuId.ExplorerContext, {
+        command: 'workbench.files.action.openPreview',
+        icon: 'open-preview',
+        // `when`, never the action's `precondition`: the key is seeded only in
+        // ExplorerContextMenu's row scope, while a precondition is ANDed into
+        // every placement and evaluated against the root context, where it is
+        // always unset — the entry would silently never match.
+        when: 'explorerResourceIsPreviewable',
+        group: '5_open',
+        order: 1,
+      }),
+    )
+    this._register(
+      MenuRegistry.addMenuItem(MenuId.ExplorerContext, {
         command: 'workbench.files.action.openWithDefaultApp',
         icon: 'open-with',
         when: '!explorerResourceIsFolder && (resourceScheme == file || resourceScheme == remote-ssh && remoteRevealInOsSupported)',
         group: '5_open',
-        order: 1,
+        order: 2,
       }),
     )
     this._register(
@@ -187,7 +200,7 @@ export class ExplorerMenuContribution extends Disposable implements IWorkbenchCo
         icon: 'reveal',
         when: 'resourceScheme == file || resourceScheme == remote-ssh && remoteRevealInOsSupported',
         group: '5_open',
-        order: 2,
+        order: 3,
       }),
     )
 

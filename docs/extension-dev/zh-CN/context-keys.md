@@ -97,6 +97,7 @@
 | `explorerResourceIsRoot` | 布尔,目标是工作区根 |
 | `resourceScheme` | 字符串,目标资源的 scheme(如 `file`) |
 | `resourceExtname` | 字符串,目标文件扩展名(含前导点、小写,如 `.xlsx`;无扩展名为空串) |
+| `explorerResourceIsPreviewable` | 布尔,目标是可打开渲染预览的文件(Markdown / HTML,且非目录) |
 | `resourceScmProvider` | 字符串,拥有该资源的 SCM provider 编码(形如 `\|perforce\|`,用 `=~` 匹配成员) |
 | `fileCopied` | 布尔,剪贴板中有已复制的文件 |
 | `explorerResourceCut` | 布尔,剪贴板中有已剪切的文件 |

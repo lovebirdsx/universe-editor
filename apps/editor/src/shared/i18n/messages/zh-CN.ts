@@ -395,6 +395,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.decreaseViewHeight.title': '减小当前视图高度',
   'action.decreaseViewWidth.title': '减小当前视图宽度',
   'action.deleteFile.title': '删除',
+  'action.explorer.openPreview.title': '打开预览',
   'action.filesExplorer.cancelCut': '取消剪切',
   'action.filesExplorer.copy': '复制',
   'action.filesExplorer.cut': '剪切',

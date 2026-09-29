@@ -31,7 +31,7 @@ explorer（文件资源管理器）是主侧栏的文件树视图：把「文件
 
 - `ExplorerView.tsx`：`<Tree model={tree.model}>`；F2→rename / Delete→delete（传焦点行，多选靠命令层展开）；无 workspace 渲染 Open Folder 空态。
 - `ExplorerTreeNode.tsx`：单行 React.memo。onClick：shift/ctrl|meta/普通三分支；双击=非预览打开。拖源 + 目录落点见 `services/dnd/CLAUDE.md`。compact 段独立 hover/右键/落点——用该段 URI（`data-segment-uri`），不是 leaf `resource`。
-- `ExplorerContextMenu.tsx`：薄封装；scoped context key（explorerResourceIsFolder/IsRoot/explorerResourceCut/fileCopied）；args 传 {target,resource,parent,isDirectory}，多选时 args[1]=选区数组（工作区根不包含，否则 `<root>/...` 扇出整个工作区；空白区右键不加）。
+- `ExplorerContextMenu.tsx`：薄封装；scoped context key（explorerResourceIsFolder/IsRoot/explorerResourceCut/fileCopied/explorerResourceIsPreviewable）；args 传 {target,resource,parent,isDirectory}，多选时 args[1]=选区数组（工作区根不包含，否则 `<root>/...` 扇出整个工作区；空白区右键不加）。
 - `ExplorerViewToolbar.tsx`：新建文件/文件夹、刷新、全部折叠；无 root 禁用。
 
 ## 命令族（file*Actions）与「目标解析」套路
@@ -58,7 +58,7 @@ explorer（文件资源管理器）是主侧栏的文件树视图：把「文件
 
 ## 上下文菜单与 context key
 
-- `contributions/ExplorerMenuContribution.ts`：注册 MenuId.ExplorerContext 各项（分组 2_cutcopypaste/3_modification/4_copy/5_open/6_misc）。
+- `contributions/ExplorerMenuContribution.ts`：注册 MenuId.ExplorerContext 各项（分组 1_new/2_cutcopypaste/3_compare/3_modification/4_copy/4_search/4_timeline/5_open/6_misc/7_agent/7_focus）。`5_open` 由预览（`workbench.files.action.openPreview`，gated on `explorerResourceIsPreviewable`）领衔。
 - `contributions/ExplorerClipboardContextContribution.ts`：同步 context key `fileCopied`/`explorerResourceCut`；构造时 readResources 一次做启动快照（reload 后 cut 变暗不丢）。
 - 键位 when：`EXPLORER_FOCUS_WHEN = focusedView == 'workbench.view.explorer.tree' && !editorTextFocus && !terminalFocus`。cut/copy/paste 只叠它——paste 不再门控 `fileCopied`（目录上常亮，空剪贴板粘贴静默 no-op）。
 - **扩展命令的多选注入在菜单期物化**（SCM parity）：扩展命令跑在 extension-host 拿不到 renderer 选区——ExplorerContextMenu 弹出时把选区固化成 args[1] 跨进程传；renderer 自己的 Action2 忽略 args[1]、自行走 resolveContextOperations。**args[1] 已被多选选区占用**：handler 不得把它当 options 解构——若确需 options，先 `Array.isArray(args[1])` 守卫剔除选区形态。

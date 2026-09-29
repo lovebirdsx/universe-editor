@@ -22,6 +22,7 @@ import {
   resolveScmProviderIds,
   type IScmSourceControlModel,
 } from '../../services/extensions/ScmService.js'
+import { isPreviewableResource } from '../../services/resourcePreview/resourcePreviewSupport.js'
 import { scmHostPath } from '../../services/scm/scmHostPath.js'
 import { renderMenuIcon } from '../icons/menuIcon.js'
 import { useContextMenuMemory } from '../contextMenu/useContextMenuMemory.js'
@@ -86,6 +87,12 @@ export function ExplorerContextMenu({
   // `resourceExtname`), so extensions can gate Explorer menus by file type.
   const resourceExtname = extnameOf(resource)
 
+  // Whether "Open Preview" applies. Shares the predicate with the row's hover
+  // eye button (ResourcePreviewButton) rather than restating the extensions, so
+  // the two entry points cannot drift; `!isDirectory` covers a folder named
+  // `notes.md`, which the path-based predicate alone would call previewable.
+  const explorerResourceIsPreviewable = !isDirectory && isPreviewableResource(resource)
+
   // Which SCM provider(s) own this resource — so provider-specific Explorer
   // actions (e.g. Perforce checkout) only show inside that provider's workspace,
   // not for any file. A resource can belong to several providers at once (a git
@@ -143,6 +150,7 @@ export function ExplorerContextMenu({
     explorerResourceIsFocusEntry,
     resourceScheme,
     resourceExtname,
+    explorerResourceIsPreviewable,
     resourceScmProvider,
     fileCopied: hasClipboard,
     explorerResourceCut: hasCutItems,

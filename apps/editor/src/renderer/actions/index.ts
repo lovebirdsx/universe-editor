@@ -148,6 +148,7 @@ import {
   OpenWithDefaultAppAction,
   RefreshExplorerAction,
 } from './fileOpenActions.js'
+import { ExplorerOpenPreviewAction } from './explorerPreviewActions.js'
 import {
   RevealActiveFileInExplorerAction,
   RevealInExplorerAction,
@@ -579,6 +580,7 @@ registerAction2(NewFolderAction)
 registerAction2(RenameFileAction)
 registerAction2(DeleteFileAction)
 registerAction2(OpenWithDefaultAppAction)
+registerAction2(ExplorerOpenPreviewAction)
 registerAction2(OpenTimelineAction)
 registerAction2(RefreshExplorerAction)
 registerAction2(RevealInExplorerAction)

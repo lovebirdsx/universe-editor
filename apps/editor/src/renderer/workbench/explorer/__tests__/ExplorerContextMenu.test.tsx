@@ -215,6 +215,62 @@ describe('ExplorerContextMenu', () => {
     }
   })
 
+  it('seeds explorerResourceIsPreviewable from the row, not from the extension', () => {
+    const cmdId = 'test.explorer.openPreview'
+    const cmdDisposable = CommandsRegistry.registerCommand(cmdId, () => {}, {
+      description: 'Open Preview',
+    })
+    const menuDisposable = MenuRegistry.addMenuItem(MenuId.ExplorerContext, {
+      command: cmdId,
+      title: 'Open Preview',
+      when: 'explorerResourceIsPreviewable',
+    })
+
+    // Mirrors previewLanguageForResource (markdown / html flavors) plus the
+    // directory guard the path-based predicate cannot see.
+    const cases: ReadonlyArray<{ name: string; isDirectory: boolean; visible: boolean }> = [
+      { name: 'README.md', isDirectory: false, visible: true },
+      { name: 'notes.markdown', isDirectory: false, visible: true },
+      { name: 'docs.mdx', isDirectory: false, visible: true },
+      { name: 'index.html', isDirectory: false, visible: true },
+      { name: 'legacy.htm', isDirectory: false, visible: true },
+      { name: 'main.ts', isDirectory: false, visible: false },
+      { name: 'src', isDirectory: true, visible: false },
+      // A directory whose name carries a previewable extension: only the row
+      // knows it is a directory, the path alone would call it previewable.
+      { name: 'notes.md', isDirectory: true, visible: false },
+    ]
+
+    try {
+      const root = URI.file('/ws')
+      for (const { name, isDirectory, visible } of cases) {
+        const contextKeyService = new ContextKeyService()
+        const commandService = new FakeCommandService()
+        const label = `${name} (isDirectory: ${isDirectory})`
+
+        const { unmount } = render(
+          <ExplorerContextMenu
+            state={{ x: 0, y: 0, target: { resource: URI.joinPath(root, name), isDirectory } }}
+            rootResource={root}
+            commandService={commandService as unknown as ICommandService}
+            contextKeyService={contextKeyService}
+            onClose={() => {}}
+          />,
+        )
+
+        const item = screen.queryByText('Open Preview')
+        if (visible) expect(item, label).not.toBeNull()
+        else expect(item, label).toBeNull()
+
+        unmount()
+        contextKeyService.dispose()
+      }
+    } finally {
+      menuDisposable.dispose()
+      cmdDisposable.dispose()
+    }
+  })
+
   it('gates provider-specific items on resourceScmProvider (shown when the file is owned)', () => {
     const cmdId = 'perforce.edit'
     const cmdDisposable = CommandsRegistry.registerCommand(cmdId, () => {}, {
