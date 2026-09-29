@@ -1769,21 +1769,27 @@
   border-left: 2px solid transparent;
 }
 
+/* The session open in the editor. A border rather than a fill: it stays true
+   while the list has no DOM focus at all, so it reads as a marker beside the
+   cursor's fill instead of a highlight competing with it. */
 .sessionRow[data-active='true'] {
-  background: var(--vscode-list-activeSelectionBackground, #094771);
-}
-
-/* The keyboard cursor, independent of `data-active` (which session is open).
-   The two land on the same row as often as on different ones, so the cursor
-   draws an outline rather than a background — a second background would either
-   hide the active row or be hidden by it. */
-.sessionRow[aria-selected='true'] {
   outline: 1px solid var(--vscode-list-focusOutline, #007fd4);
   outline-offset: -1px;
 }
 
-.sessionRows[data-focused='true'] .sessionRow[aria-selected='true']:not([data-active='true']) {
+/* The keyboard cursor, independent of `data-active` (which session is open).
+   Filled, because it marks where the next Enter lands. This is the blurred
+   tone: losing DOM focus does not clear the cursor, so the row has to stop
+   looking focused once the list has. It sits above `:hover` below on purpose —
+   a blurred cursor is a placeholder, and hover feedback outranks it. */
+.sessionRow[aria-selected='true'] {
   background: var(--vscode-list-inactiveSelectionBackground, rgba(58, 61, 65, 0.6));
+}
+
+/* Container-scoped, and therefore more specific than `:hover`: hovering the row
+   under the cursor must not gray out the fill that is the point of the cursor. */
+.sessionRows[data-focused='true'] .sessionRow[aria-selected='true'] {
+  background: var(--vscode-list-activeSelectionBackground, #094771);
 }
 
 .sessionRow:hover {
@@ -1812,17 +1818,14 @@
   background: var(--vscode-list-hoverBackground, #2a2d2e);
 }
 
-.sessionRow[data-active='true']::after {
+/* The backdrop the inline actions sit on. It has to follow whatever reveals
+   them — `:hover`, or list focused + cursor row — otherwise the buttons sit on
+   bare label text. The open session reveals nothing by itself, so it gets no
+   backdrop: with its fill gone, a patch in the old fill colour would be a block
+   with nothing in it. */
+.sessionRows[data-focused='true'] .sessionRow[aria-selected='true']::after {
   visibility: visible;
   background: var(--vscode-list-activeSelectionBackground, #094771);
-}
-
-/* The backdrop the inline actions sit on. It has to follow whatever reveals
-   them — otherwise the keyboard cursor shows the buttons over bare label text. */
-.sessionRows[data-focused='true']
-  .sessionRow[aria-selected='true']:not([data-active='true'])::after {
-  visibility: visible;
-  background: var(--vscode-list-inactiveSelectionBackground, rgba(58, 61, 65, 0.6));
 }
 
 .sessionRowTitle {
@@ -1979,10 +1982,10 @@
   background: var(--vscode-list-hoverBackground, #2a2d2e);
 }
 
-.sessionRow[data-active='true'] .sessionDelete,
-.sessionRow[data-active='true'] .sessionRename,
-.sessionRow[data-active='true'] .sessionPin,
-.sessionRow[data-active='true'] .sessionArchive {
+.sessionRows[data-focused='true'] .sessionRow[aria-selected='true'] .sessionDelete,
+.sessionRows[data-focused='true'] .sessionRow[aria-selected='true'] .sessionRename,
+.sessionRows[data-focused='true'] .sessionRow[aria-selected='true'] .sessionPin,
+.sessionRows[data-focused='true'] .sessionRow[aria-selected='true'] .sessionArchive {
   background: var(--vscode-list-activeSelectionBackground, #094771);
 }
 
