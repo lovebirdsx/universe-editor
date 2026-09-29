@@ -1,5 +1,5 @@
 /** 协议版本号 */
-export const EDITOR_MCP_PROTOCOL_VERSION = 3 as const
+export const EDITOR_MCP_PROTOCOL_VERSION = 4 as const
 
 /** 协议信封类型 */
 export const EditorMcpEnvelopeType = {
@@ -15,6 +15,8 @@ export const EditorMcpEnvelopeType = {
 export const EditorMcpClientKind = {
   /** MCP 工具 */
   McpTool: 'mcp-tool',
+  /** 实例身份探测 */
+  McpProbe: 'mcp-probe',
 } as const
 
 /** 方法 */
@@ -74,6 +76,12 @@ export interface EditorMcpResponseEnvelope {
   readonly Success: boolean
   readonly Result?: unknown
   readonly Error?: EditorMcpProtocolError
+}
+
+export interface EditorMcpInstanceIdentity {
+  readonly EditorPid: number
+  readonly InstanceId: string
+  readonly ProjectPath: string
 }
 
 export type EditorMcpEnvelope =
