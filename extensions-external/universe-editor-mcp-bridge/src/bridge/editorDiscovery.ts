@@ -1,30 +1,42 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 
+import { EditorCommandBridge, EditorMcpVersionMismatchError } from './editorBridge.js'
+import { EditorMcpClientKind, type EditorMcpInstanceIdentity } from './protocol.js'
+
 const execFileAsync = promisify(execFile)
-const EDITOR_PROCESS_NAME = 'UE4Editor.exe'
+const EDITOR_PROCESS_FILTER = "Name='UE4Editor.exe'"
 
 export interface EditorProcessInfo {
   readonly pid: number
   readonly executablePath: string
   readonly commandLine: string
+  readonly startTime?: number
 }
 
-export interface ResolveEditorPidOptions {
+export interface EditorCandidate {
+  readonly identity: EditorMcpInstanceIdentity
+  readonly startTime?: number
+}
+
+export interface DiscoverEditorsOptions {
+  readonly connectTimeoutMs: number
   readonly onLog?: (message: string) => void
+  readonly enumerate?: () => Promise<readonly EditorProcessInfo[]>
+  readonly probe?: (pid: number) => Promise<EditorMcpInstanceIdentity>
 }
 
 export async function enumerateEditors(): Promise<readonly EditorProcessInfo[]> {
   if (process.platform !== 'win32') return []
 
   const script =
-    `Get-CimInstance Win32_Process -Filter "Name='${EDITOR_PROCESS_NAME}'" | ` +
-    'Select-Object ProcessId, ExecutablePath, CommandLine | ConvertTo-Json -Compress'
+    `Get-CimInstance Win32_Process -Filter "${EDITOR_PROCESS_FILTER}" | ` +
+    "Select-Object ProcessId, ExecutablePath, CommandLine, @{Name='CreationDate';Expression={if ($_.CreationDate) {$_.CreationDate.ToString('o')}}} | ConvertTo-Json -Compress"
 
   const { stdout } = await execFileAsync(
     'powershell.exe',
     ['-NoProfile', '-NonInteractive', '-Command', script],
-    { windowsHide: true, maxBuffer: 8 * 1024 * 1024 },
+    { windowsHide: true, maxBuffer: 8 * 1024 * 1024, timeout: 10000 },
   )
 
   const trimmed = stdout.trim()
@@ -38,30 +50,70 @@ export async function enumerateEditors(): Promise<readonly EditorProcessInfo[]> 
     const record = row as Record<string, unknown>
     const pid = Number(record.ProcessId)
     if (!Number.isInteger(pid) || pid <= 0) continue
+    const startTime =
+      typeof record.CreationDate === 'string' ? Date.parse(record.CreationDate) : NaN
     editors.push({
       pid,
       executablePath: typeof record.ExecutablePath === 'string' ? record.ExecutablePath : '',
       commandLine: typeof record.CommandLine === 'string' ? record.CommandLine : '',
+      ...(Number.isFinite(startTime) ? { startTime } : {}),
     })
   }
   return editors.sort((first, second) => first.pid - second.pid)
 }
 
-export async function resolveEditorPid(options: ResolveEditorPidOptions = {}): Promise<number> {
-  const { onLog } = options
-
-  const editors = await enumerateEditors()
-  const first = editors[0]
-  if (!first) {
-    throw new Error(`未发现正在运行的 ${EDITOR_PROCESS_NAME}，请先启动 Universe Editor。`)
+export async function probeEditor(
+  pid: number,
+  connectTimeoutMs: number,
+): Promise<EditorMcpInstanceIdentity> {
+  const bridge = new EditorCommandBridge({
+    editorPid: pid,
+    timeoutMs: connectTimeoutMs,
+    connectTimeoutMs,
+    clientKind: EditorMcpClientKind.McpProbe,
+  })
+  try {
+    await bridge.start()
+    return bridge.identity
+  } finally {
+    await bridge.stop()
   }
+}
 
-  if (editors.length === 1) {
-    onLog?.(`resolved single editor pid=${first.pid}`)
-    return first.pid
+export async function discoverEditors(
+  options: DiscoverEditorsOptions,
+): Promise<readonly EditorCandidate[]> {
+  const editors = await (options.enumerate ?? enumerateEditors)()
+  if (!editors.length) throw new Error('未发现正在运行的 UE4Editor，请先启动 UE4Editor。')
+
+  const probe =
+    options.probe ?? ((pid: number) => probeEditor(pid, Math.min(options.connectTimeoutMs, 2000)))
+  const candidates: EditorCandidate[] = []
+  let hasVersionMismatch = false
+  for (let offset = 0; offset < editors.length; offset += 8) {
+    await Promise.all(
+      editors.slice(offset, offset + 8).map(async (editor) => {
+        try {
+          const identity = await probe(editor.pid)
+          if (identity.EditorPid !== editor.pid) throw new Error('握手 PID 与进程不一致')
+          candidates.push({
+            identity,
+            ...(editor.startTime !== undefined ? { startTime: editor.startTime } : {}),
+          })
+        } catch (error) {
+          if (error instanceof EditorMcpVersionMismatchError) hasVersionMismatch = true
+          options.onLog?.(
+            `UE pid=${editor.pid} MCP probe failed: ${error instanceof Error ? error.message : String(error)}`,
+          )
+        }
+      }),
+    )
   }
-
-  throw new Error(
-    `检测到 ${editors.length} 个 ${EDITOR_PROCESS_NAME} 进程，请只保留一个目标实例后重试。`,
-  )
+  if (!candidates.length) {
+    if (hasVersionMismatch) {
+      throw new EditorMcpVersionMismatchError()
+    }
+    throw new Error('检测到 UE4Editor 进程，但没有可连接的 MCP 服务；请确认可视化编辑器已启动。')
+  }
+  return candidates.sort((first, second) => first.identity.EditorPid - second.identity.EditorPid)
 }
