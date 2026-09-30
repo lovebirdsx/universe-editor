@@ -12,6 +12,7 @@ import { act, cleanup, renderHook, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import {
   Emitter,
+  IEditorGroupsService,
   IEditorResolverService,
   IEditorService,
   IFileSearchService,
@@ -34,8 +35,10 @@ import type {
   RemoteConnectionStatusDto,
   RemoteEnvironmentDto,
 } from '../../../../shared/ipc/remoteStatusService.js'
+import { EditorGroupsService } from '../../../services/editor/EditorGroupsService.js'
+import { MarkdownPreviewInput } from '../../../services/editor/MarkdownPreviewInput.js'
 import { ServicesContext } from '../../useService.js'
-import { useMarkdownFileLink } from '../useMarkdownFileLink.js'
+import { useMarkdownFileLink, type OpenMarkdownLinkOptions } from '../useMarkdownFileLink.js'
 
 const AUTHORITY = 'wsl+ubuntu2004'
 const REMOTE_HOME = '/home/dev'
@@ -81,14 +84,23 @@ function makeWorkspace() {
   }
 }
 
-function makeFileService(exists: (resource: URI) => boolean): IFileServiceType {
+function makeFileService(
+  exists: (resource: URI) => boolean,
+  isDirectory: (resource: URI) => boolean = () => false,
+): IFileServiceType {
   return {
     _serviceBrand: undefined,
     async exists(resource: URI) {
       return exists(resource)
     },
     async stat(resource: URI) {
-      return { resource, isFile: true, isDirectory: false, size: 0, mtime: 0 }
+      return {
+        resource,
+        isFile: !isDirectory(resource),
+        isDirectory: isDirectory(resource),
+        size: 0,
+        mtime: 0,
+      }
     },
   } as unknown as IFileServiceType
 }
@@ -100,11 +112,18 @@ function makeFileSearch(): IFileSearchServiceType {
   } as unknown as IFileSearchServiceType
 }
 
-function mount(options: { exists: (uri: URI) => boolean; remoteStatus?: IRemoteStatusService }) {
+function mount(options: {
+  exists: (uri: URI) => boolean
+  remoteStatus?: IRemoteStatusService
+  previewLinks?: boolean
+  isDirectory?: (uri: URI) => boolean
+}) {
   const openEditor = vi.fn().mockResolvedValue(undefined)
   const notify = vi.fn()
+  const groups = new EditorGroupsService()
   const services = new ServiceCollection()
   services.set(IWorkspaceService, makeWorkspace() as never)
+  services.set(IEditorGroupsService, groups as never)
   services.set(IEditorResolverService, {
     _serviceBrand: undefined,
     registerEditor: () => ({ dispose: () => {} }),
@@ -115,7 +134,7 @@ function mount(options: { exists: (uri: URI) => boolean; remoteStatus?: IRemoteS
     _serviceBrand: undefined,
     openEditor: vi.fn(),
   } as unknown as IEditorServiceType)
-  services.set(IFileService, makeFileService(options.exists))
+  services.set(IFileService, makeFileService(options.exists, options.isDirectory))
   services.set(IFileSearchService, makeFileSearch())
   services.set(INotificationService, {
     _serviceBrand: undefined,
@@ -126,8 +145,17 @@ function mount(options: { exists: (uri: URI) => boolean; remoteStatus?: IRemoteS
   const wrapper = ({ children }: { children: ReactNode }) => (
     <ServicesContext.Provider value={instantiation}>{children}</ServicesContext.Provider>
   )
-  const { result } = renderHook(() => useMarkdownFileLink(REMOTE_ROOT), { wrapper })
-  return { openEditor, notify, click: (href: string) => result.current(href) }
+  const { result } = renderHook(
+    () => useMarkdownFileLink(REMOTE_ROOT, options.previewLinks ?? false),
+    { wrapper },
+  )
+  return {
+    openEditor,
+    notify,
+    groups,
+    click: (href: string, opts?: OpenMarkdownLinkOptions) =>
+      result.current(href, undefined, undefined, undefined, opts),
+  }
 }
 
 afterEach(() => {
@@ -199,5 +227,63 @@ describe('useMarkdownFileLink remote ~ expansion', () => {
 
     await waitFor(() => expect(openEditor).toHaveBeenCalledTimes(1))
     expect(openEditor.mock.calls[0]?.[0]?.toString()).toBe(clientUri)
+  })
+})
+
+// Ctrl/Cmd+click sends the target to the group beside the active one. The group
+// has to be created and activated at the open itself, because the resolver and
+// the editor service route a new editor through `activeGroupForOpen`. A click
+// that ends up opening nothing must not leave an empty group behind.
+describe('useMarkdownFileLink open to the side', () => {
+  const ABS_FILE = '/repo/src/a.ts'
+  const ABS_MD = '/repo/docs/readme.md'
+
+  it('creates and activates the side group for a plain file', async () => {
+    const { openEditor, groups, click } = mount({ exists: () => true })
+
+    click(ABS_FILE, { toSide: true })
+
+    await waitFor(() => expect(openEditor).toHaveBeenCalledTimes(1))
+    expect(groups.count).toBe(2)
+    expect(groups.activeGroup).not.toBe(groups.getGroups()[0])
+  })
+
+  it('leaves the layout alone on a plain click', async () => {
+    const { openEditor, groups, click } = mount({ exists: () => true })
+
+    click(ABS_FILE)
+
+    await waitFor(() => expect(openEditor).toHaveBeenCalledTimes(1))
+    expect(groups.count).toBe(1)
+  })
+
+  it('opens the markdown preview into the side group in preview mode', async () => {
+    const { groups, click } = mount({ exists: () => true, previewLinks: true })
+
+    click(ABS_MD, { toSide: true })
+
+    await waitFor(() => expect(groups.count).toBe(2))
+    const side = groups.getGroups()[1]!
+    expect(side.editors).toHaveLength(1)
+    expect(side.editors[0]!).toBeInstanceOf(MarkdownPreviewInput)
+  })
+
+  it('creates no group when the file does not exist', async () => {
+    const { notify, groups, click } = mount({ exists: () => false })
+
+    click(ABS_FILE, { toSide: true })
+
+    await waitFor(() => expect(notify).toHaveBeenCalledTimes(1))
+    expect(groups.count).toBe(1)
+  })
+
+  it('creates no group for a directory target', async () => {
+    const { groups, click } = mount({ exists: () => true, isDirectory: () => true })
+
+    await act(async () => {
+      click(ABS_FILE, { toSide: true })
+    })
+
+    expect(groups.count).toBe(1)
   })
 })

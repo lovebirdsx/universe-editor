@@ -152,6 +152,9 @@ const ICON_MAP: Record<string, LucideIcon> = {
   // Editor title actions.
   'open-preview': Eye,
   'open-preview-side': Columns2,
+  // "Open beside" for a file with no preview flavour — same split glyph as the
+  // preview variant above, since only one of the two is ever shown per menu.
+  'open-to-the-side': Columns2,
   help: CircleHelp,
   'json-schema': FileJson,
   // Simple file dialog — toggle hidden files.

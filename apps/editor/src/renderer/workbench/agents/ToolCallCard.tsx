@@ -34,7 +34,8 @@ import { stripCodeFence } from '../../services/acp/session/acpSessionContent.js'
 import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
 import { useMarkdownFileLink } from '../markdown/useMarkdownFileLink.js'
 import { previewLanguageForResource } from '../../services/resourcePreview/resourcePreviewSupport.js'
-import { openResourcePreviewInGroup } from '../../services/resourcePreview/openResourcePreview.js'
+import { openResourceForRead } from '../../services/resourcePreview/openResourcePreview.js'
+import { ensureSideGroup } from '../../services/editor/openToSide.js'
 import { CollapsibleSlot } from '@universe-editor/workbench-ui'
 import { InlineDiffPreview } from './InlineDiffPreview.js'
 import { ToolCallLocations } from './ToolCallLocations.js'
@@ -205,7 +206,7 @@ export const ToolCallCard = memo(function ToolCallCard({
             newText={d.newText}
             {...(uri !== undefined ? { uri } : {})}
             onOpen={() => openDiff(d)}
-            onOpenPath={() => openFilePath(d.path)}
+            onOpenPath={(opts) => openFilePath(d.path, undefined, undefined, undefined, opts)}
           />
         )
       })}
@@ -219,7 +220,9 @@ export const ToolCallCard = memo(function ToolCallCard({
   const locations = !hasDiffs && !isMcp && call.locations !== undefined && (
     <ToolCallLocations
       locations={call.locations}
-      onOpen={(loc: AcpToolCallLocation) => openFilePath(loc.path, loc.line)}
+      onOpen={(loc: AcpToolCallLocation, opts) =>
+        openFilePath(loc.path, loc.line, undefined, undefined, opts)
+      }
       // Stamped as `data-uri` on each row (Copy Path from the chat context menu).
       resolveUri={(path) => toolCallPathUriString(path, workspaceFolder)}
     />
@@ -376,10 +379,13 @@ export const ToolCallCard = memo(function ToolCallCard({
   const readLabel = previewable
     ? localize('resourcePreview.openPreview', 'Open Preview')
     : localize('acp.toolCall.openFile', 'Open File')
-  const openCreated = (): void => {
+  // Ctrl/Cmd+click (or Ctrl+Enter) reads it beside the chat instead of over it:
+  // the document lands in the group to the right, matching the "open to the
+  // side" every other file link in the workbench offers.
+  const openCreated = (toSide: boolean): void => {
     if (createdUri === undefined) return
-    if (previewable) openResourcePreviewInGroup(editorGroups, editorGroups.activeGroup, createdUri)
-    else void editorResolver.openEditor(createdUri, { pinned: true })
+    const group = toSide ? ensureSideGroup(editorGroups) : editorGroups.activeGroup
+    openResourceForRead(editorGroups, group, createdUri, editorResolver)
   }
   // The header is itself a <button>; nesting one inside it is invalid HTML that
   // the browser silently re-parents, so this affordance is a span acting as one.
@@ -393,13 +399,13 @@ export const ToolCallCard = memo(function ToolCallCard({
       data-testid={previewable ? 'acp-toolcall-open-preview' : 'acp-toolcall-open-file'}
       onClick={(e) => {
         e.stopPropagation()
-        openCreated()
+        openCreated(e.ctrlKey || e.metaKey)
       }}
       onKeyDown={(e) => {
         if (e.key !== 'Enter' && e.key !== ' ') return
         e.preventDefault()
         e.stopPropagation()
-        openCreated()
+        openCreated(e.ctrlKey || e.metaKey)
       }}
     >
       {previewable ? (

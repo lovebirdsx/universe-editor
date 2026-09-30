@@ -338,7 +338,9 @@ import {
   NewSideTaskAction,
   OpenAcpMcpSettingsAction,
   OpenAcpToolCallFileAction,
+  OpenAcpToolCallFileToSideAction,
   OpenAcpToolCallPreviewAction,
+  OpenAcpToolCallPreviewToSideAction,
   OpenAgentSettingsAction,
   OpenClaudeConfigAction,
   OpenCodexConfigAction,
@@ -865,6 +867,8 @@ registerAction2(CopyAcpReferenceAction)
 registerAction2(CopyAcpSubAgentTranscriptAction)
 registerAction2(OpenAcpToolCallPreviewAction)
 registerAction2(OpenAcpToolCallFileAction)
+registerAction2(OpenAcpToolCallPreviewToSideAction)
+registerAction2(OpenAcpToolCallFileToSideAction)
 // Prompt suggestion popover — its `escape` / `enter` / `tab` / `ctrl+j` /
 // `ctrl+n` / `ctrl+p` bindings carry an explicit higher weight so they win over
 // global shortcuts whenever `acpPromptPopupVisible` is set, regardless of order.

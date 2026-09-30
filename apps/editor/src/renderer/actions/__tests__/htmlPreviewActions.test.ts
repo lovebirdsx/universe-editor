@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   CommandsRegistry,
   ContextKeyService,
+  GroupDirection,
   IContextKeyService,
   IEditorGroupsService,
   IFileService,
@@ -22,7 +23,11 @@ import {
   type IDisposable,
   type IFileService as IFileServiceType,
 } from '@universe-editor/platform'
-import { OpenHtmlPreviewAction, OpenHtmlSourceAction } from '../htmlPreviewActions.js'
+import {
+  OpenHtmlPreviewAction,
+  OpenHtmlPreviewToSideAction,
+  OpenHtmlSourceAction,
+} from '../htmlPreviewActions.js'
 import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
@@ -177,5 +182,47 @@ describe('OpenHtmlPreviewAction — preview tab lifecycle', () => {
     expect(group.activeEditor).toBe(preview)
     expect(group.contains(source)).toBe(true)
     expect(source.isDisposed).toBe(false)
+  })
+})
+
+describe('OpenHtmlPreviewToSideAction', () => {
+  const disposables: IDisposable[] = []
+
+  afterEach(() => {
+    while (disposables.length > 0) disposables.pop()?.dispose()
+    FileEditorRegistry._resetForTests()
+  })
+
+  it('opens the preview in a new group to the right, keeping the source tab', async () => {
+    const { groups, inst } = setup()
+    const uri = URI.file('/repo/page.html')
+    const source = inst.createInstance(FileEditorInput, uri)
+    const sourceGroup = groups.activeGroup
+    sourceGroup.openEditor(source, { activate: true, pinned: true })
+
+    await runCommand(inst, OpenHtmlPreviewToSideAction, disposables)
+
+    expect(groups.count).toBe(2)
+    const side = groups.getGroups()[1]!
+    expect(side.editors).toHaveLength(1)
+    expect(side.editors[0]!).toBeInstanceOf(HtmlPreviewInput)
+    expect(groups.activeGroup).toBe(side)
+    expect(sourceGroup.editors).toEqual([source])
+  })
+
+  it('reuses an existing right neighbour instead of splitting again', async () => {
+    const { groups, inst } = setup()
+    const sourceGroup = groups.activeGroup
+    sourceGroup.openEditor(inst.createInstance(FileEditorInput, URI.file('/repo/page.html')), {
+      activate: true,
+      pinned: true,
+    })
+    const side = groups.addGroup(sourceGroup, GroupDirection.Right)
+    groups.activateGroup(sourceGroup)
+
+    await runCommand(inst, OpenHtmlPreviewToSideAction, disposables)
+
+    expect(groups.count).toBe(2)
+    expect(side.activeEditor).toBeInstanceOf(HtmlPreviewInput)
   })
 })

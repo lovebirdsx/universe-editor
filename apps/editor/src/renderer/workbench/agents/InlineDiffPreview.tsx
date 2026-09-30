@@ -8,6 +8,7 @@
 import { useMemo, useState } from 'react'
 import { ArrowLeftRight } from 'lucide-react'
 import { localize } from '@universe-editor/platform'
+import type { OpenMarkdownLinkOptions } from '../markdown/useMarkdownFileLink.js'
 import { computeLineDiff, type DiffLine } from './lineDiff.js'
 import styles from './agents.module.css'
 
@@ -22,9 +23,10 @@ interface InlineDiffPreviewProps {
   readonly onOpen: () => void
   /**
    * Open the source file for this diff (as opposed to {@link onOpen}, which opens
-   * the diff view). Clicking the path invokes it; omitted → the path is static.
+   * the diff view). Clicking the path invokes it, in the side group when Ctrl/Cmd
+   * is held; omitted → the path is static.
    */
-  readonly onOpenPath?: () => void
+  readonly onOpenPath?: (opts?: OpenMarkdownLinkOptions) => void
   /**
    * Resolved URI of the diff's target file, stamped as `data-uri` on the path so
    * the chat context menu can copy it. Absent → no attribute (the path is either
@@ -78,7 +80,7 @@ export function InlineDiffPreview({
             type="button"
             className={styles['inlineDiffPathButton']}
             data-tooltip={path}
-            onClick={onOpenPath}
+            onClick={(e) => onOpenPath({ toSide: e.ctrlKey || e.metaKey })}
             data-testid="acp-inline-diff-path"
             {...uriAttr}
           >

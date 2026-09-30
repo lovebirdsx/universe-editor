@@ -22,9 +22,7 @@
 
 import {
   Action2,
-  GroupDirection,
   IEditorGroupsService,
-  type IEditorGroup,
   IInstantiationService,
   MenuId,
   localize2,
@@ -38,6 +36,7 @@ import { MarkdownPreviewInput } from '../services/editor/MarkdownPreviewInput.js
 import { MarkdownPreviewRegistry } from '../services/editor/MarkdownPreviewRegistry.js'
 import { MarkdownPreviewViewStateCache } from '../services/editor/MarkdownPreviewViewStateCache.js'
 import { openPreviewInGroup, togglePreviewInGroup } from '../services/editor/openPreviewInGroup.js'
+import { ensureSideGroup } from '../services/editor/openToSide.js'
 import { MonacoModelRegistry } from '../workbench/editor/monaco/MonacoModelRegistry.js'
 import type { IMarkdownPreviewController } from '../services/editor/MarkdownPreviewRegistry.js'
 
@@ -79,11 +78,8 @@ function openPreview(accessor: ServicesAccessor, toSide: boolean): void {
     MarkdownPreviewViewStateCache.saveRevealLine(active.resource.toString(), revealLine)
   }
 
-  let target: IEditorGroup = source
   if (toSide) {
-    target = groups.findGroup({ direction: GroupDirection.Right }, source) ?? source
-    if (target === source) target = groups.addGroup(source, GroupDirection.Right)
-    groups.activateGroup(target)
+    const target = ensureSideGroup(groups, source)
     // The preview inherits the source tab's pin state — a preview-slot source
     // (still in the source group here) yields a slot preview, a pinned one a
     // pinned preview.
@@ -94,7 +90,7 @@ function openPreview(accessor: ServicesAccessor, toSide: boolean): void {
   }
 
   // Ctrl+Shift+V: replace the source tab with the preview tab in the same group.
-  togglePreviewInGroup(groups, target, new MarkdownPreviewInput(active), active)
+  togglePreviewInGroup(groups, source, new MarkdownPreviewInput(active), active)
 }
 
 export class OpenMarkdownPreviewAction extends Action2 {

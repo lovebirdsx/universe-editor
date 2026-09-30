@@ -26,17 +26,16 @@
 
 import {
   Action2,
-  GroupDirection,
   IEditorGroupsService,
   IInstantiationService,
   MenuId,
   localize2,
-  type IEditorGroup,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { HtmlPreviewInput } from '../services/editor/HtmlPreviewInput.js'
 import { openPreviewInGroup, togglePreviewInGroup } from '../services/editor/openPreviewInGroup.js'
+import { ensureSideGroup } from '../services/editor/openToSide.js'
 
 const HTML_PRECONDITION = 'activeEditorLanguageId == html'
 const HTML_PREVIEW_PRECONDITION = `activeEditorTypeId == '${HtmlPreviewInput.TYPE_ID}'`
@@ -52,10 +51,7 @@ function openPreview(accessor: ServicesAccessor, toSide: boolean): void {
   if (!(active instanceof FileEditorInput)) return
 
   if (toSide) {
-    let target: IEditorGroup =
-      groups.findGroup({ direction: GroupDirection.Right }, source) ?? source
-    if (target === source) target = groups.addGroup(source, GroupDirection.Right)
-    groups.activateGroup(target)
+    const target = ensureSideGroup(groups, source)
     // The preview inherits the source tab's pin state — a preview-slot source
     // (still in the source group here) yields a slot preview, a pinned one a
     // pinned preview.

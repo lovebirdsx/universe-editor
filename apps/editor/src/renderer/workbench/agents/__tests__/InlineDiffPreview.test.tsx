@@ -5,7 +5,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { InlineDiffPreview, collapsedDiffWindow } from '../InlineDiffPreview.js'
 
 afterEach(() => {
@@ -46,5 +46,27 @@ describe('InlineDiffPreview', () => {
     expect(body.textContent).toContain('CHANGED')
     // The untouched top of the file must not be what the collapsed card shows.
     expect(body.textContent).not.toContain('line 0')
+  })
+
+  it('forwards the Ctrl/Cmd modifier held on the path to the opener', () => {
+    // The opener (useMarkdownFileLink) decides where the file lands from this
+    // flag; the component only has to report the modifier faithfully.
+    const onOpenPath = vi.fn()
+    render(
+      <InlineDiffPreview
+        path="a.ts"
+        oldText="a"
+        newText="b"
+        onOpen={vi.fn()}
+        onOpenPath={onOpenPath}
+      />,
+    )
+    const path = screen.getByTestId('acp-inline-diff-path')
+
+    fireEvent.click(path, { ctrlKey: true })
+    expect(onOpenPath).toHaveBeenLastCalledWith({ toSide: true })
+
+    fireEvent.click(path)
+    expect(onOpenPath).toHaveBeenLastCalledWith({ toSide: false })
   })
 })

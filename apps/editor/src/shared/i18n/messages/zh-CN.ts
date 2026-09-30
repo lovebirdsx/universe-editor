@@ -2500,6 +2500,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
     '上游响应异常导致工具调用被中断，并被误报为用户拒绝；子 Agent 已停止，需要重新发起请求才能继续。',
   'acp.toolCall.searchTitle': '搜索“{pattern}”',
   'acp.toolCall.openFile': '打开文件',
+  'acp.toolCall.openFileToSide': '在侧边打开文件',
+  'acp.toolCall.openPreviewToSide': '在侧边打开预览',
   'resourcePreview.openPreview': '打开预览',
   'acp.inlineDiff.openTooltip': '查看完整变更',
   'acp.inlineDiff.expandLines': '… 展开 {count} 行',

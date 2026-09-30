@@ -9,11 +9,17 @@
  *  intended target, and zero hits surfaces a "file not found" notification.
  *
  *  In `previewLinks` mode (the doc preview) a link to another markdown file opens
- *  as a *preview* rather than its source: the preview tab is opened pinned
- *  (deduplicated globally — an existing preview of that file is focused instead
- *  of duplicated), and Ctrl/Cmd+click appends it after the last tab via an
- *  explicit `index: count`. Links that carry a `:line` location, or point at
- *  non-markdown files, always open the source editor as before.
+ *  as a *preview* rather than its source: the preview tab is opened pinned and
+ *  deduplicated globally — an existing preview of that file is focused instead
+ *  of duplicated. Links that carry a `:line` location, or point at non-markdown
+ *  files, always open the source editor as before.
+ *
+ *  `toSide` (Ctrl/Cmd held) sends the target to the group to the right of the
+ *  active one, created when the layout has none — the same "open to the side"
+ *  every file-link surface offers. It only takes effect where an editor is
+ *  actually opened: a missing file, a multi-match handoff to Go to File and a
+ *  directory target all leave the layout untouched rather than creating a group
+ *  for nothing.
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useRef } from 'react'
@@ -38,6 +44,7 @@ import { revealSelectionInInput } from '../../services/editor/revealEditorPositi
 import { MarkdownPreviewInput } from '../../services/editor/MarkdownPreviewInput.js'
 import { MarkdownPreviewRegistry } from '../../services/editor/MarkdownPreviewRegistry.js'
 import { openPreviewInGroup } from '../../services/editor/openPreviewInGroup.js'
+import { ensureSideGroup } from '../../services/editor/openToSide.js'
 import { IExcludeService } from '../../services/exclude/ExcludeService.js'
 import { IQuickAccessController } from '../../services/quickInput/QuickAccessController.js'
 import { stripFilePathLinkPrefix } from '../../services/acp/filePathLink.js'
@@ -58,7 +65,8 @@ type CacheEntry = { readonly resolution: Resolution; readonly expiresAt: number 
 
 /** Options carried from the click handler (which mouse modifiers were held). */
 export interface OpenMarkdownLinkOptions {
-  /** Ctrl/Cmd was held: open a new preview tab instead of navigating in place. */
+  /** Ctrl/Cmd was held: open in the group to the right of the active one
+   *  (created when absent) instead of the active group. */
   readonly toSide?: boolean
   /** Markdown heading fragment from a cross-file link (`foo.md#section`). */
   readonly fragment?: string
@@ -224,16 +232,19 @@ export function useMarkdownFileLink(
         }
         // A markdown→markdown link in the preview opens as another pinned
         // preview tab (the same-file one is focused instead — previews are
-        // globally unique). Ctrl/Cmd+click behaves the same; the old
-        // "open to the side" nuance no longer applies now that multiple
-        // previews coexist. A `:line` location means the user wants the
-        // source at that line, so fall through.
+        // globally unique), in the side group when Ctrl/Cmd was held. A `:line`
+        // location means the user wants the source at that line, so fall through.
         if (previewLinks && groupsService && line === undefined && isMarkdownResource(uri)) {
           const preview = new MarkdownPreviewInput(uri)
-          openPreviewInGroup(groupsService, groupsService.activeGroup, preview)
+          const group = opts?.toSide ? ensureSideGroup(groupsService) : groupsService.activeGroup
+          openPreviewInGroup(groupsService, group, preview)
           if (opts?.fragment) MarkdownPreviewRegistry.revealAnchor(uri, opts.fragment)
           return
         }
+        // Ctrl/Cmd+click: everything below opens an editor, so create/activate
+        // the side group first — the resolver and the editor service both route
+        // a new editor through `activeGroupForOpen`, which follows it.
+        if (opts?.toSide && groupsService) ensureSideGroup(groupsService)
         // A `:line` location targets the text source at that line, which only a
         // FileEditorInput can honor (the resolver carries no selection). Without
         // a line, route through the editor resolver so specialized editors win —

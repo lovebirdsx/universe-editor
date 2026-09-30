@@ -27,7 +27,8 @@ import { IAcpSessionService } from '../services/acp/session/acpSessionService.js
 import { subAgentTranscriptToText } from '../services/acp/session/acpSessionContent.js'
 import { AcpSessionEditorInput } from '../services/acp/session/acpSessionEditorInput.js'
 import { readChatContextArg, readContextTarget } from '../services/acp/chatContextTarget.js'
-import { openResourcePreviewInGroup } from '../services/resourcePreview/openResourcePreview.js'
+import { openResourceForRead } from '../services/resourcePreview/openResourcePreview.js'
+import { ensureSideGroup } from '../services/editor/openToSide.js'
 import { toPngBase64 } from '../services/acp/promptImage.js'
 import { findByStickyKey } from '../workbench/agents/stickyScroll.js'
 import { subtreeCardKeys } from '../workbench/agents/timelineCollapse.js'
@@ -946,10 +947,11 @@ export class CopyAcpSubAgentTranscriptAction extends Action2 {
  * The card header's read affordance, reachable from the menu. One shared body:
  * a whole-file write opens as a rendered preview when the document has one
  * (markdown / html) and as the file itself otherwise — exactly what the header
- * button does, so the two can't diverge. The two commands differ only in which
- * of them the menu shows (and therefore in its label and icon).
+ * button does, so the two can't diverge. The commands differ only in which of
+ * them the menu shows (and therefore in its label and icon), and in whether the
+ * document lands beside the chat (`toSide`) or over the active group.
  */
-function openCreatedToolCallFile(accessor: ServicesAccessor, arg: unknown): void {
+function openCreatedToolCallFile(accessor: ServicesAccessor, arg: unknown, toSide = false): void {
   const { sessionId, slotKey } = readChatContextArg(arg)
   if (sessionId === undefined || slotKey === undefined) return
   const session = accessor.get(IAcpSessionService).getById(sessionId)
@@ -962,9 +964,8 @@ function openCreatedToolCallFile(accessor: ServicesAccessor, arg: unknown): void
   const path = createdFilePath(item.call)
   if (path === undefined) return
   const uri = toolCallPathUri(path, folder)
-  if (!openResourcePreviewInGroup(editorGroups, editorGroups.activeGroup, uri)) {
-    void editorResolver.openEditor(uri, { pinned: true })
-  }
+  const group = toSide ? ensureSideGroup(editorGroups) : editorGroups.activeGroup
+  openResourceForRead(editorGroups, group, uri, editorResolver)
 }
 
 export class OpenAcpToolCallPreviewAction extends Action2 {
@@ -1013,5 +1014,57 @@ export class OpenAcpToolCallFileAction extends Action2 {
   }
   override run(accessor: ServicesAccessor, arg?: unknown): void {
     openCreatedToolCallFile(accessor, arg)
+  }
+}
+
+// The `toSide` twins of the two above. Only one of each pair is ever in the menu
+// (they share `acpChatContextCreatedPreview` / `acpChatContextCreatedFile`, set
+// from the same slot), so a card gains one row, not two — the same shape the
+// editor-title "Open Preview to the Side" takes.
+export class OpenAcpToolCallPreviewToSideAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.openToolCallPreviewToSide'
+  constructor() {
+    super({
+      id: OpenAcpToolCallPreviewToSideAction.ID,
+      icon: 'open-preview-side',
+      title: localize2('acp.toolCall.openPreviewToSide', 'Open Preview to the Side'),
+      category: CATEGORY,
+      f1: false,
+      menu: [
+        {
+          id: MenuId.AcpChatContext,
+          group: ACP_CHAT_CARD_GROUP,
+          order: 6,
+          when: 'acpChatContextCreatedPreview',
+        },
+      ],
+    })
+  }
+  override run(accessor: ServicesAccessor, arg?: unknown): void {
+    openCreatedToolCallFile(accessor, arg, true)
+  }
+}
+
+export class OpenAcpToolCallFileToSideAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.openToolCallFileToSide'
+  constructor() {
+    super({
+      id: OpenAcpToolCallFileToSideAction.ID,
+      icon: 'open-to-the-side',
+      title: localize2('acp.toolCall.openFileToSide', 'Open File to the Side'),
+      category: CATEGORY,
+      f1: false,
+      menu: [
+        {
+          id: MenuId.AcpChatContext,
+          group: ACP_CHAT_CARD_GROUP,
+          order: 6,
+          when: 'acpChatContextCreatedFile',
+        },
+      ],
+    })
+  }
+  override run(accessor: ServicesAccessor, arg?: unknown): void {
+    openCreatedToolCallFile(accessor, arg, true)
   }
 }

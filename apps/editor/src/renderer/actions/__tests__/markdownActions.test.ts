@@ -10,6 +10,7 @@ import {
   CommandsRegistry,
   ContextKeyService,
   Emitter,
+  GroupDirection,
   IContextKeyService,
   IEditorGroupsService,
   IFileService,
@@ -27,6 +28,7 @@ import {
   MarkdownPreviewHelpAction,
   MarkdownPreviewLinkHintsAction,
   OpenMarkdownPreviewAction,
+  OpenMarkdownPreviewToSideAction,
   OpenMarkdownSourceAction,
 } from '../markdownActions.js'
 import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
@@ -416,6 +418,55 @@ describe('OpenMarkdownPreviewAction — preview tab lifecycle', () => {
     expect(group.activeEditor).toBe(preview)
     expect(group.contains(source)).toBe(true)
     expect(source.isDisposed).toBe(false)
+  })
+})
+
+// The beside variant (Ctrl+K Ctrl+V) lands in the group to the right of the
+// source and leaves the source tab alone. It shares ensureSideGroup with every
+// other beside-open, so this doubles as the guard on that refactor.
+describe('OpenMarkdownPreviewToSideAction', () => {
+  const disposables: IDisposable[] = []
+
+  afterEach(() => {
+    while (disposables.length > 0) disposables.pop()?.dispose()
+    MarkdownPreviewViewStateCache._resetForTests()
+    FileEditorRegistry._resetForTests()
+  })
+
+  it('opens the preview in a new group to the right, keeping the source tab', async () => {
+    const { groups, inst } = setup()
+    const sourceUri = URI.file('/repo/doc.md')
+    const source = inst.createInstance(FileEditorInput, sourceUri)
+    const sourceGroup = groups.activeGroup
+    sourceGroup.openEditor(source, { activate: true, pinned: true })
+
+    await runCommand(inst, OpenMarkdownPreviewToSideAction, disposables)
+
+    expect(groups.count).toBe(2)
+    const side = groups.getGroups()[1]!
+    expect(side.editors).toHaveLength(1)
+    expect(side.editors[0]!).toBeInstanceOf(MarkdownPreviewInput)
+    expect(groups.activeGroup).toBe(side)
+    // The preview does not steal the source tab — it is a second tab beside it.
+    expect(sourceGroup.editors).toEqual([source])
+  })
+
+  it('reuses an existing right neighbour instead of splitting again', async () => {
+    const { groups, inst } = setup()
+    const sourceUri = URI.file('/repo/doc.md')
+    const sourceGroup = groups.activeGroup
+    sourceGroup.openEditor(inst.createInstance(FileEditorInput, sourceUri), {
+      activate: true,
+      pinned: true,
+    })
+    const side = groups.addGroup(sourceGroup, GroupDirection.Right)
+    groups.activateGroup(sourceGroup)
+
+    await runCommand(inst, OpenMarkdownPreviewToSideAction, disposables)
+
+    expect(groups.count).toBe(2)
+    expect(side.editors).toHaveLength(1)
+    expect(side.activeEditor).toBeInstanceOf(MarkdownPreviewInput)
   })
 })
 

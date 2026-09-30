@@ -42,6 +42,7 @@ vi.mock('../../editor/monaco/MonacoLoader.js', () => ({
 afterEach(() => {
   cleanup()
   openedInGroup.length = 0
+  openedInWhichGroup.length = 0
   resolvedOpens.length = 0
 })
 
@@ -71,26 +72,63 @@ function makeChildMessage(text: string): AcpMessage {
 /** Captures editors opened through the group service (the preview button's route). */
 const openedInGroup: unknown[] = []
 
+/** Which group each `openedInGroup` entry landed in, in the same order. */
+const openedInWhichGroup: ('main' | 'side')[] = []
+
 /** Captures files opened through the resolver (the "Open File" button's route). */
 const resolvedOpens: { resource: unknown; options: unknown }[] = []
 
-function makeGroupsService(): IEditorGroupsServiceType {
-  const group = {
+interface StubGroup {
+  readonly findEditor: () => undefined
+  readonly openEditor: ReturnType<typeof vi.fn>
+}
+
+function makeStubGroup(id: 'main' | 'side'): StubGroup {
+  return {
     // No preview is ever already open in these tests, so the dedupe lookup that
     // openPreviewInGroup performs always misses.
     findEditor: () => undefined,
     openEditor: vi.fn((input: unknown) => {
       openedInGroup.push(input)
+      openedInWhichGroup.push(id)
       return Promise.resolve(undefined)
     }),
   }
-  const groups = {
+}
+
+/**
+ * A two-group stand-in: `main` is where the card lives, `side` is added on the
+ * first beside-open and reused by every later one from the same source —
+ * mirroring EditorGroupsService's findGroup(Right) ?? addGroup(Right) sequence,
+ * including activateGroup moving `activeGroup` onto the group just opened into.
+ */
+function makeGroupsService(): IEditorGroupsServiceType {
+  const main = makeStubGroup('main')
+  let side: StubGroup | undefined
+  let active: StubGroup = main
+  const all = (): StubGroup[] => (side ? [main, side] : [main])
+  return {
     _serviceBrand: undefined,
-    activeGroup: group,
-    getGroups: () => [group],
-    activateGroup: vi.fn(),
-  }
-  return groups as unknown as IEditorGroupsServiceType
+    get activeGroup() {
+      return active
+    },
+    get groups() {
+      return all()
+    },
+    get count() {
+      return all().length
+    },
+    getGroups: all,
+    findGroup: (_scope: unknown, source: unknown) => (source === main ? side : undefined),
+    addGroup: vi.fn(() => {
+      side = makeStubGroup('side')
+      return side
+    }),
+    activateGroup: vi.fn((group: unknown) => {
+      active = group as StubGroup
+      return group
+    }),
+  } as unknown as IEditorGroupsServiceType
 }
 
 function renderCard(call: AcpToolCall, config: Record<string, unknown> = {}) {
@@ -103,7 +141,8 @@ function renderCard(call: AcpToolCall, config: Record<string, unknown> = {}) {
     _serviceBrand: undefined,
     get: (key: string) => config[key],
   } as unknown as IConfigurationServiceType)
-  services.set(IEditorGroupsService, makeGroupsService())
+  const groups = makeGroupsService()
+  services.set(IEditorGroupsService, groups)
   services.set(IEditorResolverService, {
     _serviceBrand: undefined,
     openEditor: vi.fn((resource: unknown, options: unknown) => {
@@ -112,13 +151,14 @@ function renderCard(call: AcpToolCall, config: Record<string, unknown> = {}) {
     }),
   } as unknown as IEditorResolverServiceType)
   const inst = new InstantiationService(services)
-  return render(
+  const view = render(
     <ServicesContext.Provider value={inst}>
       <ul>
         <ToolCallCard call={call} />
       </ul>
     </ServicesContext.Provider>,
   )
+  return { view, groups }
 }
 
 describe('ToolCallCard', () => {
@@ -745,6 +785,65 @@ describe('ToolCallCard', () => {
       expect(resolvedOpens[0]?.options).toEqual({ pinned: true })
       // The click must not also toggle the card open.
       expect(screen.queryByTestId('acp-inline-diff')).toBeNull()
+    })
+
+    // Ctrl/Cmd+click reads the document beside the chat instead of over it. The
+    // plain click is asserted alongside every case so the modifier can never
+    // silently become the default.
+    it('opens the preview in a new side group on Ctrl+click', () => {
+      renderCard(makeResultCall())
+
+      fireEvent.click(screen.getByTestId('acp-toolcall-open-preview'), { ctrlKey: true })
+
+      expect(openedInWhichGroup).toEqual(['side'])
+    })
+
+    it('treats Cmd+click the same as Ctrl+click', () => {
+      renderCard(makeResultCall())
+
+      fireEvent.click(screen.getByTestId('acp-toolcall-open-preview'), { metaKey: true })
+
+      expect(openedInWhichGroup).toEqual(['side'])
+    })
+
+    it('treats Ctrl+Enter as the keyboard equivalent of Ctrl+click', () => {
+      renderCard(makeResultCall())
+
+      fireEvent.keyDown(screen.getByTestId('acp-toolcall-open-preview'), {
+        key: 'Enter',
+        ctrlKey: true,
+      })
+
+      expect(openedInWhichGroup).toEqual(['side'])
+    })
+
+    it('keeps a plain click in the active group', () => {
+      renderCard(makeResultCall())
+
+      fireEvent.click(screen.getByTestId('acp-toolcall-open-preview'))
+
+      expect(openedInWhichGroup).toEqual(['main'])
+    })
+
+    it('activates the side group before handing a non-previewable file to the resolver', () => {
+      const { groups } = renderCard(makeSourceCreateCall())
+
+      fireEvent.click(screen.getByTestId('acp-toolcall-open-file'), { ctrlKey: true })
+
+      // The resolver routes a new editor through `activeGroupForOpen`, so the
+      // side group has to exist and be active by the time it runs.
+      expect(groups.count).toBe(2)
+      expect(groups.activeGroup).not.toBe(groups.getGroups()[0])
+      expect(resolvedOpens).toHaveLength(1)
+    })
+
+    it('leaves a plain click on the open-file button in the active group', () => {
+      const { groups } = renderCard(makeSourceCreateCall())
+
+      fireEvent.click(screen.getByTestId('acp-toolcall-open-file'))
+
+      expect(groups.count).toBe(1)
+      expect(resolvedOpens).toHaveLength(1)
     })
 
     it('leaves an ordinary edit card expanded and without any header action', () => {

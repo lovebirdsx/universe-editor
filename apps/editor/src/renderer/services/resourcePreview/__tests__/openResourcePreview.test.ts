@@ -4,12 +4,21 @@
  *  of the same file is globally unique and previews of different files coexist.
  *--------------------------------------------------------------------------------------------*/
 
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { GroupDirection, URI } from '@universe-editor/platform'
+import type { IEditorResolverService } from '@universe-editor/platform'
 import { EditorGroupsService } from '../../editor/EditorGroupsService.js'
 import { HtmlPreviewInput } from '../../editor/HtmlPreviewInput.js'
 import { MarkdownPreviewInput } from '../../editor/MarkdownPreviewInput.js'
-import { openResourcePreviewInGroup } from '../openResourcePreview.js'
+import { openResourceForRead, openResourcePreviewInGroup } from '../openResourcePreview.js'
+
+function makeResolver() {
+  const openEditor = vi.fn().mockResolvedValue(undefined)
+  return {
+    openEditor,
+    resolver: { _serviceBrand: undefined, openEditor } as unknown as IEditorResolverService,
+  }
+}
 
 describe('openResourcePreviewInGroup', () => {
   let groups: EditorGroupsService
@@ -58,5 +67,44 @@ describe('openResourcePreviewInGroup', () => {
   it('returns false for a resource with no preview flavor', () => {
     expect(openResourcePreviewInGroup(groups, group, URI.file('/repo/main.ts'))).toBe(false)
     expect(group.editors).toHaveLength(0)
+  })
+})
+
+describe('openResourceForRead', () => {
+  let groups: EditorGroupsService
+  let group: EditorGroupsService['activeGroup']
+
+  beforeEach(() => {
+    groups = new EditorGroupsService()
+    group = groups.activeGroup
+  })
+
+  it('renders a preview when the file has one, without touching the resolver', () => {
+    const { resolver, openEditor } = makeResolver()
+
+    openResourceForRead(groups, group, URI.file('/repo/a.md'), resolver)
+
+    expect(group.activeEditor).toBeInstanceOf(MarkdownPreviewInput)
+    expect(openEditor).not.toHaveBeenCalled()
+  })
+
+  it('hands a file with no preview flavor to the resolver, pinned', () => {
+    const { resolver, openEditor } = makeResolver()
+
+    openResourceForRead(groups, group, URI.file('/repo/main.ts'), resolver)
+
+    expect(openEditor).toHaveBeenCalledWith(URI.file('/repo/main.ts'), { pinned: true })
+    expect(group.editors).toHaveLength(0)
+  })
+
+  it('lands in the group it is given (the side group, for a beside-open)', () => {
+    const { resolver } = makeResolver()
+    const side = groups.addGroup(group, GroupDirection.Right)
+
+    openResourceForRead(groups, side, URI.file('/repo/a.md'), resolver)
+
+    expect(side.editors).toHaveLength(1)
+    expect(group.editors).toHaveLength(0)
+    expect(groups.activeGroup).toBe(side)
   })
 })

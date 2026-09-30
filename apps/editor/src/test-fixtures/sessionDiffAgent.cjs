@@ -95,6 +95,64 @@ async function runPrompt(id, params) {
     return reply(id, { stopReason: 'end_turn' })
   }
 
+  // `create` mode: a whole-file *creation* (`type: 'create'`, `originalFile: null`),
+  // which is the shape that carries the card-header read affordance — see
+  // createdFilePath, which requires a diff whose oldText came out empty. The
+  // extension follows the prompt (`createmd` / `createtxt`) so one fixture covers
+  // both the previewable and the plain-file flavour of that affordance.
+  const createDirective = /\bcreate(md|txt)\b/.exec(promptText)
+  if (createDirective) {
+    const isMarkdown = createDirective[1] === 'md'
+    const suffix = isMarkdown ? '.md' : '.txt'
+    const created = path.join(
+      os.tmpdir(), // temp-root:allow
+      `universe-e2e-created-${RUN_TOKEN}-${sessionId}${suffix}`,
+    )
+    const lines = isMarkdown ? ['# Created by the agent', '', 'Hello.'] : ['created by the agent']
+    fs.writeFileSync(created, lines.join('\n') + '\n', 'utf8')
+
+    notify('session/update', {
+      sessionId,
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: isMarkdown ? 'sd-create-md' : 'sd-create-txt',
+        title: 'Write',
+        kind: 'edit',
+        status: 'completed',
+        // Two independent consumers, two payload halves: the card's diffs (and
+        // so its read affordance) come from this standard ACP `diff` content
+        // block — `oldText: null` is what makes it a *creation* — while the
+        // `_meta.claudeCode` patch below is what the session change tracker
+        // consumes. Neither substitutes for the other.
+        content: [{ type: 'diff', path: created, oldText: null, newText: lines.join('\n') + '\n' }],
+        _meta: {
+          claudeCode: {
+            toolName: 'Write',
+            toolResponse: {
+              filePath: created,
+              type: 'create',
+              originalFile: null,
+              structuredPatch: [
+                {
+                  oldStart: 0,
+                  oldLines: 0,
+                  newStart: 1,
+                  newLines: lines.length,
+                  lines: lines.map((line) => '+' + line),
+                },
+              ],
+            },
+          },
+        },
+      },
+    })
+
+    await delay(5)
+    activeTurns.delete(sessionId)
+    if (turn.cancelled) return reply(id, { stopReason: 'cancelled' })
+    return reply(id, { stopReason: 'end_turn' })
+  }
+
   // e2e 专用假 agent，由 e2e globalSetup 覆写 TEMP/TMP 后拉起，os.tmpdir() 已落在当次 run 根内；
   // 且 CJS fixture 无法同步 import ESM 的 temp-root helper。
   const filePath = path.join(os.tmpdir(), `universe-e2e-sessiondiff-${RUN_TOKEN}-${sessionId}.txt`) // temp-root:allow
