@@ -53,6 +53,15 @@ describe('buildCmdCommandLine', () => {
       '""C:\\Program Files\\app\\tool.exe" "a b""',
     )
   })
+
+  it('quotes a command name carrying cmd metacharacters', () => {
+    expect(buildCmdCommandLine('calc&calc', ['x'])).toBe('""calc&calc" "x""')
+    expect(buildCmdCommandLine('a>b', ['x'])).toBe('""a>b" "x""')
+  })
+
+  it('keeps a metacharacter-free path bare so its %~dp0 still resolves', () => {
+    expect(buildCmdCommandLine('C:\\tools\\code.cmd', ['-r'])).toBe('C:\\tools\\code.cmd "-r"')
+  })
 })
 
 /**
@@ -66,8 +75,14 @@ describe('buildCmdCommandLine', () => {
  *
  * An absolute command path is immune (its `%0` carries the directory), so the
  * bare-name form — the one every call site uses — is what has to be exercised.
+ *
+ * That needs a real cmd.exe, so the block is win32-only. Under WSL interop
+ * `cmd.exe` does resolve, but the Windows side cannot read the Linux temp root
+ * the shim is written to, so the assertion is unreachable there too. What keeps
+ * the builder honest everywhere else is cmdSpawnDispatch.test.ts, which asserts
+ * the *shape* of the line handed to node without spawning anything.
  */
-const tempRootIsSpaceless = !/\s/.test(effectiveTempRoot())
+const canResolveCmdShim = process.platform === 'win32' && !/\s/.test(effectiveTempRoot())
 
 describe('spawnViaCmd (.cmd shim resolution)', () => {
   afterEach(() => {
@@ -90,21 +105,18 @@ describe('spawnViaCmd (.cmd shim resolution)', () => {
       child.on('close', (code) => resolve({ code, stdout }))
     })
 
-  it.runIf(tempRootIsSpaceless)(
-    'resolves a bare name with %~dp0 at the shim directory',
-    async () => {
-      const shimDir = mkTempDir('cmdspawn-shim-')
-      const otherCwd = mkTempDir('cmdspawn-cwd-')
-      writeFileSync(join(shimDir, 'probe.cmd'), '@echo off\r\necho %~dp0\r\n')
+  it.runIf(canResolveCmdShim)('resolves a bare name with %~dp0 at the shim directory', async () => {
+    const shimDir = mkTempDir('cmdspawn-shim-')
+    const otherCwd = mkTempDir('cmdspawn-cwd-')
+    writeFileSync(join(shimDir, 'probe.cmd'), '@echo off\r\necho %~dp0\r\n')
 
-      const { code, stdout } = await runCapture('probe.cmd', otherCwd, shimDir)
+    const { code, stdout } = await runCapture('probe.cmd', otherCwd, shimDir)
 
-      expect(code).toBe(0)
-      expect(stdout.trim().replace(/[\\/]+$/, '')).toBe(shimDir)
-    },
-  )
+    expect(code).toBe(0)
+    expect(stdout.trim().replace(/[\\/]+$/, '')).toBe(shimDir)
+  })
 
-  it.runIf(tempRootIsSpaceless)('lets a bare-name shim reach a file next to it', async () => {
+  it.runIf(canResolveCmdShim)('lets a bare-name shim reach a file next to it', async () => {
     const shimDir = mkTempDir('cmdspawn-sibling-')
     const otherCwd = mkTempDir('cmdspawn-sibling-cwd-')
     writeFileSync(join(shimDir, 'sibling.txt'), 'ok')
@@ -119,7 +131,7 @@ describe('spawnViaCmd (.cmd shim resolution)', () => {
     expect(stdout.trim()).toBe('FOUND')
   })
 
-  it.runIf(tempRootIsSpaceless)('still resolves an absolute shim path', async () => {
+  it.runIf(canResolveCmdShim)('still resolves an absolute shim path', async () => {
     const shimDir = mkTempDir('cmdspawn-abs-')
     const otherCwd = mkTempDir('cmdspawn-abs-cwd-')
     writeFileSync(join(shimDir, 'probe.cmd'), '@echo off\r\necho %~dp0\r\n')

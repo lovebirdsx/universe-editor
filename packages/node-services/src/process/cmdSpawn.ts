@@ -21,6 +21,16 @@ export function quoteCmdArg(value: string): string {
 }
 
 /**
+ * A command name cmd.exe would read as something other than a plain word goes
+ * out quoted: whitespace splits it, `&|<>()` chain or redirect, `^` escapes,
+ * `"` re-quotes, `%`/`!` expand. Real paths land here too —
+ * `C:\Programs(x86)\x.exe` used to go bare, its parenthesis running as shell
+ * syntax. Quoting costs the `%~dp0` resolution explained below, which cannot
+ * bite: a name like this is never a PATH shim.
+ */
+const CMD_NAME_NEEDS_QUOTING = /[\s&|<>^()"%!]/
+
+/**
  * Assemble the single command line for `cmd.exe /d /s /c`.
  *
  * A bare command name is deliberately left unquoted so the line never *starts*
@@ -31,13 +41,13 @@ export function quoteCmdArg(value: string): string {
  * `code.cmd` looking for `Code.exe` exits 9009, and the caller sees a clean
  * spawn (the cmd.exe wrapper really did start) and reports success.
  *
- * A command name containing spaces can only be quoted, so it keeps the
- * outer-quoted form. `.exe` targets still work there — an absolute path puts
- * its directory into `%0` — while `.cmd` shims under a spaced path are a cmd
- * limitation we cannot route around.
+ * A command name containing whitespace or any of the metacharacters above can
+ * only be quoted, so it keeps the outer-quoted form. `.exe` targets still work
+ * there — an absolute path puts its directory into `%0` — while `.cmd` shims
+ * under a spaced path are a cmd limitation we cannot route around.
  */
 export function buildCmdCommandLine(command: string, args: readonly string[]): string {
-  if (/\s/.test(command)) {
+  if (CMD_NAME_NEEDS_QUOTING.test(command)) {
     return `"${[command, ...args].map(quoteCmdArg).join(' ')}"`
   }
   const quotedArgs = args.map(quoteCmdArg).join(' ')
