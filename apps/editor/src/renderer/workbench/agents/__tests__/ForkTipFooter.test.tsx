@@ -19,6 +19,8 @@ import { ForkTipFooter } from '../ForkTipFooter.js'
 import { ServicesContext } from '../../useService.js'
 import type {
   AcpSessionStatus,
+  AcpPendingPermission,
+  AcpPendingElicitation,
   IAcpSession,
 } from '../../../services/acp/session/acpSessionService.js'
 import { ForkAgentSessionAction } from '../../../actions/agentRewindActions.js'
@@ -28,6 +30,9 @@ afterEach(() => cleanup())
 type FakeSession = IAcpSession & {
   status: ISettableObservable<AcpSessionStatus>
   isDormant: ISettableObservable<boolean>
+  backgroundTaskCount: ISettableObservable<number>
+  pendingElicitation: ISettableObservable<AcpPendingElicitation | undefined>
+  pendingPermission: ISettableObservable<AcpPendingPermission | undefined>
 }
 
 function fakeSession(opts: {
@@ -35,12 +40,16 @@ function fakeSession(opts: {
   dormant?: boolean
   fork?: boolean
   readOnly?: boolean
+  backgroundTasks?: number
 }): FakeSession {
   return {
     id: 's1',
     agentId: 'fake',
     status: observableValue<AcpSessionStatus>('t.status', opts.status ?? 'idle'),
     isDormant: observableValue<boolean>('t.dormant', opts.dormant ?? false),
+    backgroundTaskCount: observableValue<number>('t.bg', opts.backgroundTasks ?? 0),
+    pendingElicitation: observableValue<AcpPendingElicitation | undefined>('t.eli', undefined),
+    pendingPermission: observableValue<AcpPendingPermission | undefined>('t.perm', undefined),
     forkSupported: observableValue<boolean>('t.fork', opts.fork ?? true),
     readOnly: opts.readOnly ?? false,
   } as unknown as FakeSession
@@ -78,6 +87,18 @@ describe('ForkTipFooter', () => {
   it('hides while the session is running', () => {
     const { container } = renderFooter(fakeSession({ status: 'running' }))
     expect(footer(container)).toBeNull()
+  })
+
+  // The turn's prompt RPC returning is not the end of the work: a
+  // `run_in_background` task keeps the session unsettled, so the tip must stay
+  // hidden until the task really finishes.
+  it('stays hidden while background tasks outlive the settled turn', () => {
+    const session = fakeSession({ backgroundTasks: 1 })
+    const { container } = renderFooter(session)
+    expect(footer(container)).toBeNull()
+
+    act(() => session.backgroundTaskCount.set(0, undefined))
+    expect(footer(container)).not.toBeNull()
   })
 
   it('hides when the agent does not support fork', () => {

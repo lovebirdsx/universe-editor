@@ -41,6 +41,7 @@ interface FakeSessionOpts {
   readonly messageId?: string
   readonly selectionContexts?: readonly SelectionContext[]
   readonly status?: 'idle' | 'running'
+  readonly backgroundTasks?: number
 }
 
 function fakeSession(id: string, opts: FakeSessionOpts = {}): IAcpSession {
@@ -52,6 +53,10 @@ function fakeSession(id: string, opts: FakeSessionOpts = {}): IAcpSession {
     forkSupported: observableValue<boolean>('t.fork', opts.forkSupported ?? false),
     status: observableValue<string>('t.status', opts.status ?? 'idle'),
     sessionIdOnAgent: observableValue<string | undefined>('t.sid', undefined),
+    isDormant: observableValue<boolean>('t.dormant', false),
+    backgroundTaskCount: observableValue<number>('t.bg', opts.backgroundTasks ?? 0),
+    pendingElicitation: observableValue('t.pe', undefined),
+    pendingPermission: observableValue('t.pp', undefined),
     messages: observableValue('t.messages', [
       {
         id: 'm1',
@@ -293,6 +298,21 @@ describe('Rewind / Fork agent session commands', () => {
     disposables.push(registerAction2(ForkAgentSessionAction))
     const h = makeHarness()
     h.service.getById.mockReturnValue(fakeSession('s1', { forkSupported: true, status: 'running' }))
+
+    await h.run(ForkAgentSessionAction.ID, { sessionId: 's1' })
+
+    expect(h.service.forkSession).not.toHaveBeenCalled()
+    expect(h.notify).toHaveBeenCalledTimes(1)
+  })
+
+  // The prompt RPC having settled is not the end of the work: forking then
+  // would capture a tip the background task is still appending to.
+  it('fork warns and stops while background tasks outlive the settled turn', async () => {
+    disposables.push(registerAction2(ForkAgentSessionAction))
+    const h = makeHarness()
+    h.service.getById.mockReturnValue(
+      fakeSession('s1', { forkSupported: true, status: 'idle', backgroundTasks: 1 }),
+    )
 
     await h.run(ForkAgentSessionAction.ID, { sessionId: 's1' })
 

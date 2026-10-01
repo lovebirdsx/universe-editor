@@ -44,6 +44,7 @@ import {
   Loader2,
   AlertCircle,
   Moon,
+  Hourglass,
 } from 'lucide-react'
 import {
   IconButton,
@@ -58,6 +59,7 @@ import {
 } from '@universe-editor/workbench-ui'
 import { useObservable, useService } from '../useService.js'
 import { useViewFocusable } from '../useViewFocusable.js'
+import { useSessionDisplayStatus } from './useSessionStatus.js'
 import { relativeTime } from '../../relativeTime.js'
 import {
   IAcpSessionService,
@@ -160,14 +162,18 @@ function LiveSessionTimer({ session }: { session: IAcpSession }) {
 /**
  * Self-subscribed status glyph for a live row: a spinner while the background
  * handshake is in flight, an error badge when it failed, a moon while the row is
- * asleep (the idle reaper stopped its agent process; it wakes on use). The row
- * list itself does not re-render on status flips (the sessions array identity is
- * stable across attach/fail), so the subscription must live here.
+ * asleep (the idle reaper stopped its agent process; it wakes on use), an
+ * hourglass while `run_in_background` tasks outlive the turn's prompt RPC. The
+ * row list itself does not re-render on status flips (the sessions array
+ * identity is stable across attach/fail), so the subscription must live here.
+ *
+ * Reads the DERIVED status, not the core one: the core status settles to
+ * `'idle'` the moment the prompt RPC returns, so a row whose background tasks
+ * are still executing would otherwise carry no glyph and read as finished.
  */
 function LiveSessionStatus({ session }: { session: IAcpSession }) {
-  const status = useObservable(session.status)
-  const dormant = useObservable(session.isDormant)
-  if (dormant) {
+  const status = useSessionDisplayStatus(session)
+  if (status === 'dormant') {
     return (
       <Moon
         size={13}
@@ -200,6 +206,17 @@ function LiveSessionStatus({ session }: { session: IAcpSession }) {
         className={styles['sessionRowError']}
         data-status="errored"
         aria-label={localize('acp.sessions.startFailed', 'Failed to start')}
+      />
+    )
+  }
+  if (status === 'background') {
+    return (
+      <Hourglass
+        size={13}
+        strokeWidth={1.75}
+        className={styles['sessionRowBackground']}
+        data-status="background"
+        aria-label={localize('acp.sessions.background', 'Background tasks still running')}
       />
     )
   }

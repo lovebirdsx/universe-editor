@@ -37,6 +37,7 @@ import {
   type AcpMessage,
   type RewindFilesResult,
 } from '../services/acp/session/acpSessionService.js'
+import { isSessionWorking } from '../services/acp/session/acpSessionStatus.js'
 import { AcpSessionEditorInput } from '../services/acp/session/acpSessionEditorInput.js'
 import { AcpPromptReplaceInbox } from '../services/acp/session/acpPromptReplaceInbox.js'
 import { ACP_CHAT_CARD_GROUP, CATEGORY } from './_agentShared.js'
@@ -227,13 +228,16 @@ export class ForkAgentSessionAction extends Action2 {
       }
       return
     }
-    if (session.status.get() === 'running') {
-      // Forking the tip mid-turn would capture a half-written turn.
+    // Same "still working" story the footer that offers this fork gates on: a
+    // `run_in_background` task outliving the settled turn still counts. On the
+    // core status alone the guard would open the moment the prompt RPC returns,
+    // forking a tip the background task is still appending to.
+    if (isSessionWorking(session)) {
       notification.notify({
         severity: Severity.Warning,
         message: localize(
           'agent.fork.running',
-          'Wait for the current turn to finish before forking.',
+          'Wait for the current work to finish before forking.',
         ),
       })
       return

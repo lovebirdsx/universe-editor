@@ -74,3 +74,75 @@ export function computeSessionDisplayStatus(
   if (status === 'idle' && backgroundTasks > 0) return 'background'
   return status
 }
+
+/**
+ * True for the display statuses that carry a turn — a prompt RPC in flight, an
+ * ask parked on the user, or the `run_in_background` tasks that outlived the
+ * RPC.
+ *
+ * `'connecting'` is deliberately excluded: it is the handshake (and every
+ * wake/resume) settling, which lands on `'idle'` without a turn ever running.
+ * Callers reading it as a turn edge announce a completion on every new session.
+ */
+export function isTurnDisplayStatus(status: AcpSessionDisplayStatus): boolean {
+  switch (status) {
+    case 'running':
+    case 'ask':
+    case 'background':
+      return true
+    case 'connecting':
+    case 'idle':
+    case 'errored':
+    case 'dormant':
+    case 'closed':
+      return false
+  }
+}
+
+/**
+ * True while the session still has work in flight. The single predicate for
+ * "is the agent still working?" — use this instead of comparing
+ * `session.status` to `'running'`.
+ *
+ * The core status drops to `'idle'` the moment the prompt RPC settles, while
+ * `run_in_background` tasks keep executing — {@link computeSessionDisplayStatus}
+ * surfaces that as `'background'`. A status-only test therefore goes quiet
+ * mid-work: the send button's spinner stops, the Stop button vanishes, the
+ * "finished" notification fires and the fork tip mounts, all while real work is
+ * still running.
+ *
+ * Unlike {@link isTurnInFlight} this includes `'connecting'`, so it is the
+ * predicate for "would killing/restarting this session lose work?" guards —
+ * the handshake is exactly when a session must not be torn down either.
+ *
+ * Pass the autorun `IReader` to keep the subscription live; omit it for a
+ * one-shot snapshot.
+ */
+export function isSessionWorking(session: IAcpSession, r?: IReader): boolean {
+  switch (computeSessionDisplayStatus(session, r)) {
+    case 'connecting':
+    case 'running':
+    case 'ask':
+    case 'background':
+      return true
+    case 'idle':
+    case 'errored':
+    case 'dormant':
+    case 'closed':
+      return false
+  }
+}
+
+/**
+ * True while a turn is in flight — the variant of {@link isSessionWorking}
+ * without `'connecting'`, for affordances that act ON the turn rather than
+ * guard the session: the Stop button, the shift+esc gate, "did a turn just
+ * finish?" edges. A handshake has no turn to cancel, so those must stay quiet
+ * until the session really settles.
+ *
+ * Pass the autorun `IReader` to keep the subscription live; omit it for a
+ * one-shot snapshot.
+ */
+export function isTurnInFlight(session: IAcpSession, r?: IReader): boolean {
+  return isTurnDisplayStatus(computeSessionDisplayStatus(session, r))
+}

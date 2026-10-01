@@ -757,6 +757,27 @@ describe('SessionListBody — optimistic pending rows', () => {
     expect(screen.queryByLabelText('Connecting…')).toBeNull()
   })
 
+  // The turn's prompt RPC returning is not the end of the work: a
+  // `run_in_background` task keeps the row busy, and a row carrying no glyph at
+  // all reads as finished — the one signal a side task has, since side tasks
+  // never enter the list.
+  it('marks a row whose prompt RPC settled but background tasks still run', () => {
+    const session = makeFakeSession({ id: 'local-1', status: 'idle' })
+    pushSession(session)
+    // Settled with nothing left running: no glyph, the row reads as finished.
+    expect(screen.queryByLabelText('Background tasks still running')).toBeNull()
+
+    act(() => {
+      session.backgroundTaskCount.set(1, undefined)
+    })
+    expect(screen.getByLabelText('Background tasks still running')).toBeTruthy()
+
+    act(() => {
+      session.backgroundTaskCount.set(0, undefined)
+    })
+    expect(screen.queryByLabelText('Background tasks still running')).toBeNull()
+  })
+
   it('deleting a pending row only closes the live session — no deleteOnAgent, no history churn', async () => {
     const { history, sessionCtl } = harness
     const removeSpy = vi.spyOn(history, 'remove')

@@ -20,6 +20,10 @@ import {
   type IDisposable,
 } from '@universe-editor/platform'
 import { IAcpSessionService, type IAcpSession } from '../services/acp/session/acpSessionService.js'
+import {
+  computeSessionDisplayStatus,
+  isTurnDisplayStatus,
+} from '../services/acp/session/acpSessionStatus.js'
 import { IAcpChatWidgetService } from '../services/acp/session/acpChatWidgetService.js'
 import { revealSessionChat } from '../services/acp/session/revealSessionChat.js'
 import { truncateTitle } from '../services/acp/session/sessionTitleFormat.js'
@@ -78,13 +82,13 @@ export class AgentNotificationContribution extends Disposable implements IWorkbe
     // Warm the notification icon so it's ready synchronously when an edge fires.
     primeAgentNotificationIcon(session.agentId)
 
-    let prevStatus = session.status.get()
+    let prevDisplay = computeSessionDisplayStatus(session)
     let permissionLatched = session.pendingPermission.get() !== undefined
     let elicitationLatched = session.pendingElicitation.get() !== undefined
     let completionAnnounced = false
 
     return autorun((r) => {
-      const status = session.status.read(r)
+      const display = computeSessionDisplayStatus(session, r)
       const permission = session.pendingPermission.read(r)
       const elicitation = session.pendingElicitation.read(r)
 
@@ -101,23 +105,33 @@ export class AgentNotificationContribution extends Disposable implements IWorkbe
       if (elicitation !== undefined && !elicitationLatched) this._fire('question', session)
       elicitationLatched = elicitation !== undefined
 
-      // A new turn opens: reset the per-turn completion latch.
-      if (status === 'running' && prevStatus !== 'running') {
+      // Work is in flight again (a new turn, a background task the settled turn
+      // left behind, or a turn parked on the user): re-arm the per-turn
+      // completion latch.
+      if (isTurnDisplayStatus(display)) {
         completionAnnounced = false
       }
 
-      // "Completed" fires at most once per turn, and only when the status settles
-      // back to idle. The plan flipping to all-complete is not a signal: the agent
-      // checks off its last todo mid-turn while it still streams the summary text.
-      const turnFinished = status === 'idle' && prevStatus === 'running'
+      // "Completed" fires at most once per turn, and only once the session is
+      // GENUINELY settled — the prompt RPC having returned is not enough, since
+      // `run_in_background` tasks outlive it (the derived status stays
+      // 'background' until they finish). Announcing on the core status instead
+      // both fired early and swallowed the real finish. The plan flipping to
+      // all-complete is not a signal either: the agent checks off its last todo
+      // mid-turn while it still streams the summary text.
+      //
+      // The edge is a TURN edge, not a "was busy" edge: 'connecting' settles
+      // straight to 'idle' on every new, resumed or woken session, so counting
+      // it as the prior state announces a completion for work that never ran.
+      const turnFinished = display === 'idle' && isTurnDisplayStatus(prevDisplay)
       if (turnFinished && !completionAnnounced) {
         completionAnnounced = true
         this._fire('completed', session)
       }
 
-      if (status === 'errored' && prevStatus !== 'errored') this._fire('errored', session)
+      if (display === 'errored' && prevDisplay !== 'errored') this._fire('errored', session)
 
-      prevStatus = status
+      prevDisplay = display
     })
   }
 

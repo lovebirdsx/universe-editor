@@ -13,6 +13,7 @@ import {
   ServiceCollection,
   URI,
   observableValue,
+  type IDialogService,
   type ISettableObservable,
   type IWorkspaceService as IWorkspaceServiceType,
   type IUriIdentityService as IUriIdentityServiceType,
@@ -21,6 +22,7 @@ import {
 import { AcpSessionEditorInput } from '../acpSessionEditorInput.js'
 import {
   IAcpSessionService,
+  type AcpSessionStatus,
   type IAcpSession,
   type IAcpSessionService as IAcpSessionServiceType,
 } from '../acpSessionService.js'
@@ -362,6 +364,60 @@ describe('AcpSessionEditorInput', () => {
       // Listener released with the input → badge stays at its last value.
       expect(input.hasSubdirCwd.get()).toBe(true)
       emitter.dispose()
+    })
+  })
+
+  describe('confirmClose', () => {
+    function fakeSession(opts: {
+      status?: AcpSessionStatus
+      backgroundTasks?: number
+    }): IAcpSession {
+      return {
+        id: 'sess-1',
+        title: 'Session one',
+        sessionIdOnAgent: observableValue<string | undefined>('t.sid', 'sess-1'),
+        status: observableValue<AcpSessionStatus>('t.status', opts.status ?? 'idle'),
+        isDormant: observableValue<boolean>('t.dormant', false),
+        backgroundTaskCount: observableValue<number>('t.bg', opts.backgroundTasks ?? 0),
+        pendingElicitation: observableValue('t.pe', undefined),
+        pendingPermission: observableValue('t.pp', undefined),
+      } as unknown as IAcpSession
+    }
+
+    function makeInput(session: IAcpSession): {
+      input: AcpSessionEditorInput
+      confirm: ReturnType<typeof vi.fn>
+    } {
+      const { inst } = makeAccessor([], { getById: () => session })
+      const input = inst.createInstance(AcpSessionEditorInput, 'sess-1', 'claude-code', undefined)
+      return { input, confirm: vi.fn().mockResolvedValue({ confirmed: false }) }
+    }
+
+    // Closing the tab disposes the session and kills the agent process under it.
+    // The prompt RPC having settled is not the end of the work, so a background
+    // task must still raise the confirmation instead of slipping through.
+    it('asks before closing while background tasks outlive the settled turn', async () => {
+      const { input, confirm } = makeInput(fakeSession({ status: 'idle', backgroundTasks: 1 }))
+      const dialog = { confirm } as unknown as IDialogService
+
+      expect(await input.confirmClose(dialog)).toBe(false)
+      expect(confirm).toHaveBeenCalledTimes(1)
+    })
+
+    it('closes a genuinely settled session without asking', async () => {
+      const { input, confirm } = makeInput(fakeSession({ status: 'idle' }))
+      const dialog = { confirm } as unknown as IDialogService
+
+      expect(await input.confirmClose(dialog)).toBe(true)
+      expect(confirm).not.toHaveBeenCalled()
+    })
+
+    it('asks while the turn is still in flight', async () => {
+      const { input, confirm } = makeInput(fakeSession({ status: 'running' }))
+      const dialog = { confirm } as unknown as IDialogService
+
+      expect(await input.confirmClose(dialog)).toBe(false)
+      expect(confirm).toHaveBeenCalledTimes(1)
     })
   })
 })

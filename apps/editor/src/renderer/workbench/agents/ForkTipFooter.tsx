@@ -17,16 +17,19 @@ import { localize } from '@universe-editor/platform'
 import { useExecuteCommand, useObservable } from '../useService.js'
 import type { IAcpSession } from '../../services/acp/session/acpSessionService.js'
 import { ForkAgentSessionAction } from '../../actions/agentRewindActions.js'
+import { useSessionDisplayStatus } from './useSessionStatus.js'
 import styles from './agents.module.css'
 
 export const ForkTipFooter = memo(function ForkTipFooter({ session }: { session: IAcpSession }) {
   const executeCommand = useExecuteCommand()
-  const status = useObservable(session.status)
-  const dormant = useObservable(session.isDormant)
   const forkSupported = useObservable(session.forkSupported)
-  // isDormant needs its own subscription: closing a dormant session clears it
-  // without moving status, which is already 'closed'.
-  const settled = status === 'idle' || (status === 'closed' && dormant)
+  // Only a genuinely settled session may offer a fork. The derived status keeps
+  // a session 'background' while `run_in_background` tasks are still running,
+  // so they no longer read as settled the moment the prompt RPC returns; the
+  // dormant seal (idle-reaped, wakes on use) stays settled, matching the old
+  // `closed && isDormant` arm.
+  const displayStatus = useSessionDisplayStatus(session)
+  const settled = displayStatus === 'idle' || displayStatus === 'dormant'
   if (!settled || !forkSupported || session.readOnly) return null
 
   const label = localize('acp.chat.forkFromTip', 'Fork conversation from here')

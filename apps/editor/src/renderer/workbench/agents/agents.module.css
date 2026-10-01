@@ -1895,6 +1895,14 @@
   opacity: 0.75;
 }
 
+/* The turn's prompt RPC has returned but `run_in_background` tasks are still
+   executing: the row is working, so it takes the running colour rather than the
+   muted one a genuinely finished row would use. */
+.sessionRowBackground {
+  color: var(--vscode-badge-progressBackground, #0e639c);
+  flex-shrink: 0;
+}
+
 .sessionRowModel {
   flex-shrink: 1;
   min-width: 0;

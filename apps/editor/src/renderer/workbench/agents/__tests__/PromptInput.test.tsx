@@ -468,10 +468,12 @@ interface FakeSession extends IAcpSession {
   readonly statusObs: ISettableObservable<AcpSessionStatus>
   readonly commandsObs: ISettableObservable<readonly AvailableCommand[]>
   readonly cancelRestoreEmitter: Emitter<void>
+  readonly backgroundTasksObs: ISettableObservable<number>
 }
 
 function makeSession(opts: FakeSessionOptions = {}): FakeSession {
   const statusObs = observableValue<AcpSessionStatus>('test.status', opts.status ?? 'idle')
+  const backgroundTasksObs = observableValue<number>('test.btc', 0)
   const commandsObs = observableValue<readonly AvailableCommand[]>(
     'test.commands',
     opts.commands ?? [],
@@ -513,7 +515,7 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
     collapseMode: observableValue('test.collapseMode', 'default' as const),
     accumulatedRunningMs: observableValue('test.arm', 0),
     runningStartedAt: observableValue<number | undefined>('test.rsa', undefined),
-    backgroundTaskCount: observableValue<number>('test.btc', 0),
+    backgroundTaskCount: backgroundTasksObs,
     imageSupported: observableValue<boolean>('test.imageSupported', opts.imageSupported ?? false),
     forkSupported: observableValue<boolean>('test.forkSupported', false),
     rewindSupported: observableValue<boolean>('test.rewindSupported', false),
@@ -539,6 +541,7 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
     statusObs,
     commandsObs,
     cancelRestoreEmitter,
+    backgroundTasksObs,
   } satisfies FakeSession
 }
 
@@ -826,6 +829,21 @@ describe('PromptInput — submit and cancel', () => {
     const cancel = screen.getByTestId('acp-prompt-cancel')
     fireEvent.click(cancel)
     expect(session.cancelTurn).toHaveBeenCalledTimes(1)
+  })
+
+  // The prompt RPC settling is not the end of the work: a `run_in_background`
+  // task keeps the session working, so Stop must survive it — dropping it left
+  // the user unable to abort a session the editor had already written off.
+  it('keeps the Stop button while background tasks outlive the settled turn', () => {
+    const session = makeSession()
+    renderWithServices(<PromptInput session={session} />)
+    expect(screen.queryByTestId('acp-prompt-cancel')).toBeNull()
+
+    act(() => session.backgroundTasksObs.set(1, undefined))
+    expect(screen.getByTestId('acp-prompt-cancel')).toBeTruthy()
+
+    act(() => session.backgroundTasksObs.set(0, undefined))
+    expect(screen.queryByTestId('acp-prompt-cancel')).toBeNull()
   })
 
   it('allows sending a new prompt while the session is running (mid-turn steering)', () => {

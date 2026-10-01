@@ -27,6 +27,7 @@ import type {
   INotificationHandle,
   INotificationService,
   IObservable,
+  ISettableObservable,
   IStorageService,
   ITelemetryService,
   IWorkspace,
@@ -4022,6 +4023,41 @@ describe('AcpSessionService — session MCP selection', () => {
     const resumed = svc.getById(sid)
     expect(resumed?.mcpServerSelection.get()).toEqual(['fs'])
     expect(svc.activeSession.get()?.id).toBe(sid)
+    svc.dispose()
+  })
+
+  // The reload close+resumes the session, which kills whatever the agent is
+  // running — a `run_in_background` task included, even though its core status
+  // already reads 'idle'. The pin waits the task out and lands when it ends.
+  it('holds the reload back while background tasks outlive the settled turn', async () => {
+    const client = new FakeAcpClientService({ stubOptions: { loadSession: true } })
+    const config = new ConfigurationService()
+    await config.update('acp.mcpServers', {
+      fs: { command: 'node', args: [] },
+      docs: { command: 'node', args: [] },
+    })
+    const { svc } = makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+    await s.sendPrompt('first turn')
+
+    const backgroundTasks = s.backgroundTaskCount as ISettableObservable<number>
+    backgroundTasks.set(1, undefined)
+    svc.setSessionMcpServers(s.id, ['fs'])
+
+    // The explicit converge is held back: no second connection opens.
+    await new Promise((r) => setTimeout(r, 25))
+    expect(client.connected).toHaveLength(1)
+
+    // The task ends, the drift autorun re-fires and the waiting pin lands.
+    backgroundTasks.set(0, undefined)
+    await vi.waitFor(() => {
+      expect(client.connected).toHaveLength(2)
+      expect(client.connected[1]!.agent.loadSessionCalls).toHaveLength(1)
+    })
+    expect(client.connected[1]!.agent.loadSessionCalls[0]!.mcpServers.map((m) => m.name)).toEqual([
+      'fs',
+    ])
     svc.dispose()
   })
 

@@ -29,6 +29,8 @@ interface FakeSession {
   pendingPermission: ISettableObservable<AcpPendingPermission | undefined>
   pendingElicitation: ISettableObservable<AcpPendingElicitation | undefined>
   plan: ISettableObservable<readonly AcpPlanEntry[]>
+  isDormant: ISettableObservable<boolean>
+  backgroundTaskCount: ISettableObservable<number>
 }
 
 function makeSession(id: string, title = id): FakeSession {
@@ -39,6 +41,8 @@ function makeSession(id: string, title = id): FakeSession {
     pendingPermission: observableValue<AcpPendingPermission | undefined>(`perm.${id}`, undefined),
     pendingElicitation: observableValue<AcpPendingElicitation | undefined>(`eli.${id}`, undefined),
     plan: observableValue<readonly AcpPlanEntry[]>(`plan.${id}`, []),
+    isDormant: observableValue<boolean>(`dormant.${id}`, false),
+    backgroundTaskCount: observableValue<number>(`bg.${id}`, 0),
   }
 }
 
@@ -247,6 +251,54 @@ describe('AgentNotificationContribution', () => {
     expect(t.notify.mock.calls[0]![0]).toMatchObject({
       body: 'fix the login spinner\nuniverse-editor4',
     })
+  })
+
+  it('does not announce completion while background tasks outlive the turn', () => {
+    const t = setup()
+    const s = makeSession('a')
+    t.addSession(s)
+    s.status.set('running', undefined)
+    // `run_in_background` 任务在 turn 结束的瞬间仍在跑：prompt RPC 已 settle
+    // （核心状态落到 idle），但派生状态是 'background' —— 报"已完成"是假信号。
+    s.backgroundTaskCount.set(1, undefined)
+    s.status.set('idle', undefined)
+    expect(t.notify).not.toHaveBeenCalled()
+    // 后台任务真正跑完，此刻才算完成——旧逻辑在这里反而一声不吭。
+    s.backgroundTaskCount.set(0, undefined)
+    expect(t.notify).toHaveBeenCalledTimes(1)
+    expect(t.notify.mock.calls[0]![0]).toMatchObject({ body: 'a' })
+  })
+
+  // The regression this pins: every new, resumed or woken session settles from
+  // the handshake straight to 'idle' with no turn ever having run. Reading
+  // 'connecting' as the prior state announced a completion for work that never
+  // happened — once per session, on the most ordinary path there is.
+  it('does not announce completion when a fresh session settles from the handshake', () => {
+    const t = setup()
+    const s = makeSession('a')
+    s.status.set('connecting', undefined)
+    t.addSession(s)
+    s.status.set('idle', undefined)
+    expect(t.notify).not.toHaveBeenCalled()
+  })
+
+  it('re-arms the completion latch for a background task started after the turn settled', () => {
+    // Defensive rather than a real timeline: a background task is reported by
+    // the agent as it starts, so its count is already 1 by the time the prompt
+    // RPC settles (that path is the test above). This pins the latch re-arming
+    // on the background edge itself, in case a task ever surfaces late.
+    const t = setup()
+    const s = makeSession('a')
+    t.addSession(s)
+    s.status.set('running', undefined)
+    s.status.set('idle', undefined)
+    expect(t.notify).toHaveBeenCalledTimes(1)
+    // A later background task keeps the session working; its finish is the next
+    // completion edge, not a second announcement of the same turn.
+    s.backgroundTaskCount.set(1, undefined)
+    expect(t.notify).toHaveBeenCalledTimes(1)
+    s.backgroundTaskCount.set(0, undefined)
+    expect(t.notify).toHaveBeenCalledTimes(2)
   })
 
   it('stops watching a session once it leaves the list', () => {

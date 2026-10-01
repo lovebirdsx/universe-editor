@@ -49,6 +49,7 @@ import {
   memoryTrimmedNotice,
   timelineItemToText,
 } from '../../services/acp/session/acpSession.js'
+import { isTurnInFlight } from '../../services/acp/session/acpSessionStatus.js'
 import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
 import { IAcpSessionHistoryService } from '../../services/acp/session/acpSessionHistory.js'
 import { resolveChatContextTarget } from '../../services/acp/chatContextTarget.js'
@@ -443,7 +444,11 @@ function ChatSessionBody({
     const widget = widgetRef.current
     if (!widget) return
     const sub = autorun((reader) => {
-      widgetService.setTurnRunning(widget, session.status.read(reader) === 'running')
+      // Feeds the `acpChatTurnRunning` key that gates shift+esc. It must span
+      // background tasks the settled turn left behind, or the key goes dark
+      // while the agent is still working and the shortcut stops reaching the
+      // Stop button it is documented to mirror.
+      widgetService.setTurnRunning(widget, isTurnInFlight(session, reader))
     })
     return () => sub.dispose()
   }, [widgetService, session])

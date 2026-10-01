@@ -74,6 +74,7 @@ import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
 import { URI } from '@universe-editor/platform'
 import type { WidgetHandle } from './ChatBody.js'
+import { useTurnInFlight } from './useSessionStatus.js'
 import type { AvailableCommand } from '@agentclientprotocol/sdk'
 import {
   detectFilePickerTrigger,
@@ -291,12 +292,15 @@ export function PromptInput({
     useCallback(() => focusScope.fingerprint, [focusScope]),
   )
 
-  const status = useObservable(session.status)
+  // "Working" spans the whole out-of-band story, not just an in-flight prompt
+  // RPC: a `run_in_background` task keeps the spinner and the Stop button up
+  // after the turn's prompt has settled. The handshake is excluded — there is
+  // no turn to stop yet, and `cancelTurn()` is a no-op until it attaches.
+  const running = useTurnInFlight(session)
   const commands = useObservable(session.availableCommands)
   const timeline = useObservable(session.timeline)
   const historyEntries = useObservable(historyService.entries)
   const imageSupported = useObservable(session.imageSupported)
-  const running = status === 'running'
   const hasUserMessages = timeline.some(
     (item) => item.kind === 'message' && item.message.role === 'user',
   )

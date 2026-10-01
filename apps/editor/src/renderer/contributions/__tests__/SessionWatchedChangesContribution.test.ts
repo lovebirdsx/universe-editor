@@ -40,6 +40,10 @@ function makeSessions(
   const session = {
     status: observableValue('status', status),
     sessionIdOnAgent: observableValue<string | undefined>('sid', idOnAgent),
+    isDormant: observableValue<boolean>('dormant', false),
+    backgroundTaskCount: observableValue<number>('bg', 0),
+    pendingElicitation: observableValue('pe', undefined),
+    pendingPermission: observableValue('pp', undefined),
   } as unknown as IAcpSession
   return {
     sessions: observableValue<readonly IAcpSession[]>('sessions', [session]),

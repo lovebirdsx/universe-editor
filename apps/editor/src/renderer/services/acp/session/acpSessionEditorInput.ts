@@ -21,6 +21,7 @@ import {
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { IAcpSessionService } from './acpSessionService.js'
+import { isSessionWorking } from './acpSessionStatus.js'
 import { IAcpSessionHistoryService, sessionCwdScopeRel } from './acpSessionHistory.js'
 import { IAcpChatWidgetService } from './acpChatWidgetService.js'
 import { agentIconId } from '../acpAgentRegistry.js'
@@ -156,11 +157,13 @@ export class AcpSessionEditorInput extends EditorInput {
 
   override async confirmClose(dialogService: IDialogService): Promise<boolean> {
     const session = this._sessions.getById(this.sessionId)
-    const status = session?.status.get()
-    if (status !== 'running' && status !== 'connecting') return true
+    // A `run_in_background` task outliving the settled turn still counts: the
+    // core status reads 'idle' while it runs, yet closing the tab disposes the
+    // session and kills the agent process underneath it.
+    if (session === undefined || !isSessionWorking(session)) return true
     const result = await dialogService.confirm({
       message: localize('acp.confirmClose.message', 'Session "{title}" is still running.', {
-        title: session?.title ?? this.getName(),
+        title: session.title,
       }),
       detail: localize('acp.confirmClose.detail', 'Closing it will stop the running agent.'),
       primaryButton: localize('acp.confirmClose.close', 'Close'),

@@ -151,6 +151,7 @@ function makeSession(
     usage: observableValue<AcpUsage | undefined>('t.usage', undefined),
     pendingPermission: observableValue<AcpPendingPermission | undefined>('t.perm', undefined),
     pendingElicitation: observableValue('t.elicitation', undefined),
+    backgroundTaskCount: observableValue<number>('t.bg', 0),
     configOptions: observableValue<readonly SessionConfigOption[]>('t.cfg', []),
     availableCommands: observableValue('t.cmds', []),
     mcpServers: observableValue('t.mcp', []),

@@ -47,6 +47,7 @@ import {
 import { dirtyDiffCommandId } from '@universe-editor/extensions-common'
 import { IEnvironmentSnapshotService } from '../../shared/ipc/environmentSnapshotService.js'
 import { IAcpSessionService } from '../services/acp/session/acpSessionService.js'
+import { isTurnInFlight } from '../services/acp/session/acpSessionStatus.js'
 import { ISessionChangeTrackerService } from '../services/acp/session/sessionChangeTracker.js'
 import { IScmService, resolveScmProviderId } from '../services/extensions/ScmService.js'
 import { probeIsBinary } from '../services/files/binaryDetection.js'
@@ -123,7 +124,10 @@ export class SessionWatchedChangesContribution
   private _runningSessionIds(): string[] {
     const ids: string[] = []
     for (const session of this._sessions.sessions.get()) {
-      if (session.status.get() !== 'running') continue
+      // Background tasks write files too, and they outlive the prompt RPC that
+      // drops the core status to 'idle' — attributing on the status alone drops
+      // their changes from the review surface.
+      if (!isTurnInFlight(session)) continue
       const sid = session.sessionIdOnAgent.get()
       if (sid !== undefined) ids.push(sid)
     }

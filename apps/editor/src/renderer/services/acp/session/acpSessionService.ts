@@ -2766,7 +2766,10 @@ export class AcpSessionService
    * from what the connection attached with (and the turn is not mid-flight),
    * seamlessly reload the session so the agent process restarts its MCP
    * servers with the new list. A drift surfacing while `running` simply waits
-   * — the autorun re-fires when the status flips back to idle.
+   * — the autorun re-fires when the status flips back to idle. A
+   * `run_in_background` task reads as idle too, so its count is read here as
+   * well: it both holds the converge back and, by changing, re-fires the
+   * autorun once the task ends and the waiting drift can finally apply.
    */
   private _wireMcpDrift(session: AcpSession): void {
     this._register(
@@ -2775,13 +2778,14 @@ export class AcpSessionService
         const status = session.status.read(r)
         const sid = session.sessionIdOnAgent.read(r)
         const replaying = session.isReplayingHistory.read(r)
+        const backgroundTasks = session.backgroundTaskCount.read(r)
         if (sid === undefined || status === 'closed') return
         if (session.readOnly) return
         // Mid-replay the session is attached but its history is still loading;
         // reloading now would race the replay. The autorun re-fires when
         // endHistoryReplay flips this back.
         if (replaying) return
-        if (status !== 'idle') return
+        if (status !== 'idle' || backgroundTasks > 0) return
         const attached = this._mcpSelectionAtAttach.get(session.id)
         if (selectionEquals(attached ?? null, selection)) return
         this._convergeMcpDrift(session)
@@ -2797,7 +2801,17 @@ export class AcpSessionService
       // drift autorun once the session attaches. Nothing to do here.
       return
     }
-    if (session.status.get() !== 'idle' || session.isReplayingHistory.get()) return
+    // The reload close+resumes the session, which kills whatever the agent is
+    // running — a `run_in_background` task included, even though the core
+    // status already reads 'idle' for it. The drift autorun re-fires when the
+    // task ends, so the waiting change still lands.
+    if (
+      session.status.get() !== 'idle' ||
+      session.backgroundTaskCount.get() > 0 ||
+      session.isReplayingHistory.get()
+    ) {
+      return
+    }
     const attached = this._mcpSelectionAtAttach.get(session.id)
     const selection = session.mcpServerSelection.get()
     // Both callers re-check the snapshot: the drift autorun fires on the
