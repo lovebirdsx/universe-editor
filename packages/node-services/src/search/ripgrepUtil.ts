@@ -29,6 +29,12 @@ export function normalizeGlob(value: string): string {
   return value.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '')
 }
 
+// ripgrep prints paths with the platform separator; the rest of the engine
+// speaks forward-slash workspace-relative paths.
+export function normalizeRel(value: string): string {
+  return value.replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/+/, '')
+}
+
 export function expandExcludeGlob(value: string): string[] {
   const normalized = normalizeGlob(value)
   if (!normalized) return []

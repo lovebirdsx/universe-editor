@@ -326,6 +326,49 @@ export interface IpcFrameTarget {
   readonly name: string
 }
 
+/**
+ * One inbound frame that made it through the codec, as attributed by the receiver.
+ *
+ * Delivered only for frames that decoded: a refused or malformed frame never becomes an
+ * observation (the frame guard reports the refusal instead). A response is named by the
+ * pending request it answers — the only handle on the payload — so this arrives after
+ * that lookup, one frame per decode.
+ */
+export interface IpcDecodeObservation {
+  /** Message kind: `request` / `response` / `event` / `subscribe` / `unsubscribe` / `cancel`. */
+  readonly type: string
+  /** Channel the frame belongs to; empty when unknown (an unresolved response). */
+  readonly channel: string
+  /** Command / event name; for a response, the command of the request it answers. */
+  readonly name: string
+  /** Request id, or `0` for frames that carry none (events). */
+  readonly id: number
+  /** Raw frame size on the wire. The payload itself is deliberately absent. */
+  readonly bytes: number
+  /** `performance.now()` timebase, taken at the start of the synchronous decode. */
+  readonly startTime: number
+  /** Wall time of the codec decode alone (TextDecoder + JSON.parse + revival),
+   *  measured inside the timed run so an instrument wrapper is never counted. */
+  readonly durationMs: number
+}
+
+/**
+ * How an embedder instruments inbound decoding for one `ChannelPair` / `IpcService`.
+ * Both hooks ride the same seam so a caller attributing slow frames cannot end up
+ * measuring one pass and reporting another, and so no second listener has to be mounted
+ * on the protocol to learn what crossed it.
+ */
+export interface IpcDecodeInstrumentation {
+  /** Wraps each synchronous decode, e.g. to run it inside a long-task marker. */
+  readonly instrument?: (run: () => IpcMessage, bytes: number) => IpcMessage
+  /**
+   * Delivered once per decoded frame, after its label has been resolved. Runs isolated
+   * from the transport: a throw here is swallowed so it can neither drop the frame nor
+   * leave the request it answers hanging.
+   */
+  readonly onDecoded?: (observation: IpcDecodeObservation) => void
+}
+
 function frameName(msg: IpcMessage): string {
   switch (msg.type) {
     case 'request':
@@ -356,12 +399,27 @@ function frameName(msg: IpcMessage): string {
 function decodeInbound(
   codec: IpcCodec,
   data: Uint8Array,
-  instrument?: (run: () => IpcMessage, bytes: number) => IpcMessage,
+  instrumentation?: IpcDecodeInstrumentation,
   resolveLabel?: (msg: IpcMessage) => IpcFrameTarget | undefined,
 ): IpcMessage | undefined {
+  const observe = instrumentation?.onDecoded
+  // Timed inside the decode run itself, so the cost covers the codec alone and never the
+  // instrument wrapper an embedder may put around it. Skipped entirely when nobody is
+  // listening: the steady path pays nothing for a capability no one installed.
+  let startTime = 0
+  let durationMs = 0
+  const run = observe
+    ? () => {
+        startTime = performance.now()
+        const msg = codec.decode(data)
+        durationMs = performance.now() - startTime
+        return msg
+      }
+    : () => codec.decode(data)
   let msg: IpcMessage
   try {
-    msg = instrument ? instrument(() => codec.decode(data), data.byteLength) : codec.decode(data)
+    const instrument = instrumentation?.instrument
+    msg = instrument ? instrument(run, data.byteLength) : run()
   } catch (err) {
     if (!(err instanceof IpcFrameTooLargeError)) throw err
     reportIpcFrame('in', data.byteLength, 'unparsed', '', '')
@@ -379,7 +437,26 @@ function decodeInbound(
       name = target.name
     }
   }
-  reportIpcFrame('in', data.byteLength, msg.type, channel, name, frameId(msg))
+  const id = frameId(msg)
+  reportIpcFrame('in', data.byteLength, msg.type, channel, name, id)
+  // Same boundary as the guard's report: one decode, one entry, now with the label
+  // resolved. Nothing is re-parsed and no payload is carried along. Isolated because
+  // the observer is diagnostics: a throw in it must not drop the already-decoded frame
+  // or leave the request it answers hanging — and a console line per frame is exactly
+  // what this seam exists to avoid, so the failure is swallowed rather than rethrown.
+  try {
+    observe?.({
+      type: msg.type,
+      channel,
+      name,
+      id,
+      bytes: data.byteLength,
+      startTime,
+      durationMs,
+    })
+  } catch {
+    /* an embedder's observation failure is not a protocol failure */
+  }
   return msg
 }
 
@@ -788,10 +865,11 @@ export class ChannelServer extends Disposable implements IChannelServer {
  * the extension-host tunnel) that doubles the main-thread stall. The pair
  * decodes once and routes by message type instead.
  *
- * `decodeInstrument` optionally wraps each decode so the embedder can attribute
- * its wall time (e.g. the renderer records a perf phase for slow decodes).
- * The second parameter carries the raw frame byte length so slow-frame
- * reports can name the payload size instead of an unattributed "ipc.decode".
+ * `decodeInstrumentation` optionally wraps each decode and/or observes the decoded
+ * frames, so the embedder can attribute them (e.g. the renderer records a perf phase for
+ * slow decodes and warns about multi-MB ones). Observations carry the raw frame byte
+ * length and the synchronous decode cost, so a report can name the payload and the stall
+ * instead of an unattributed "ipc.decode".
  */
 export class ChannelPair extends Disposable {
   readonly client: ChannelClient
@@ -799,7 +877,7 @@ export class ChannelPair extends Disposable {
 
   constructor(
     protocol: IMessagePassingProtocol,
-    decodeInstrument?: (run: () => IpcMessage, bytes: number) => IpcMessage,
+    decodeInstrumentation?: IpcDecodeInstrumentation,
     codec: IpcCodec = defaultCodec,
   ) {
     super()
@@ -807,7 +885,7 @@ export class ChannelPair extends Disposable {
     this.server = this._register(new ChannelServer(protocol, false, codec))
     this._register(
       protocol.onMessage((data) => {
-        const msg = decodeInbound(codec, data, decodeInstrument, (m) =>
+        const msg = decodeInbound(codec, data, decodeInstrumentation, (m) =>
           this.client.frameTargetFor(m),
         )
         if (!msg) return
@@ -865,11 +943,11 @@ export class IpcService extends Disposable implements IIpcService {
 
   constructor(
     protocol: IMessagePassingProtocol,
-    decodeInstrument?: (run: () => IpcMessage, bytes: number) => IpcMessage,
+    decodeInstrumentation?: IpcDecodeInstrumentation,
     codec: IpcCodec = defaultCodec,
   ) {
     super()
-    const pair = this._register(new ChannelPair(protocol, decodeInstrument, codec))
+    const pair = this._register(new ChannelPair(protocol, decodeInstrumentation, codec))
     this._client = pair.client
     this._server = pair.server
   }

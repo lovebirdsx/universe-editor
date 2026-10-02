@@ -210,7 +210,7 @@ export class HostConnection extends Disposable {
     // with the frame byte length attached so the offending payload is attributable.
     const rpcDecodeWithSize = (run: () => IpcMessage, bytes: number): IpcMessage =>
       rpcDecodeSlow(bytes)(run)
-    const pair = store.add(new ChannelPair(protocol, rpcDecodeWithSize))
+    const pair = store.add(new ChannelPair(protocol, { instrument: rpcDecodeWithSize }))
     const { client, server } = pair
 
     this.commands = ProxyChannel.toService<IExtHostCommands>(

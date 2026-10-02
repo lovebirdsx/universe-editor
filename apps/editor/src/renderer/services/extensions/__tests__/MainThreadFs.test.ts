@@ -324,14 +324,15 @@ describe('MainThreadFs', () => {
       })
     }
 
-    function fakeSearch(
-      relPaths: readonly string[],
-    ): IFileSearchService & { lastQueryExcludes: () => readonly string[] | undefined } {
-      let excludes: readonly string[] | undefined
+    function fakeSearch(relPaths: readonly string[]): IFileSearchService & {
+      lastQueryExcludes: () => readonly string[] | undefined
+      lastQuery: () => IFileSearchQuery | undefined
+    } {
+      let last: IFileSearchQuery | undefined
       return {
         _serviceBrand: undefined,
         search: (query) => {
-          excludes = query.excludes
+          last = query
           // The real engine prunes `query.excludes` during the walk, before its
           // own maxResults cap — excluded entries never consume the cap.
           const candidates = relPaths.filter((rel) => !enginePruned(rel, query.excludes ?? []))
@@ -348,7 +349,8 @@ describe('MainThreadFs', () => {
           }
           return Promise.resolve(complete)
         },
-        lastQueryExcludes: () => excludes,
+        lastQueryExcludes: () => last?.excludes,
+        lastQuery: () => last,
       }
     }
 
@@ -602,6 +604,126 @@ describe('MainThreadFs', () => {
       expect(warn).toHaveBeenCalledTimes(1)
       expect(warn.mock.calls[0]?.[0]).toMatch(/truncated at the 100000-entry cap/)
       expect(warn.mock.calls[0]?.[0]).toMatch(/maxResults/)
+    })
+
+    it('hands the include glob and the caller limit to the engine', async () => {
+      const search = fakeSearch(['src/a.ts'])
+      const fs = makeFs('/repo', allowPolicy, fakeFiles({}), search)
+      await fs.$findFiles('**/*.ts', [], 7)
+      expect(search.lastQuery()?.matchAll).toBe(true)
+      expect(search.lastQuery()?.includeGlob).toBe('**/*.ts')
+      expect(search.lastQuery()?.maxResults).toBe(7)
+    })
+
+    it('passes a RelativePattern pattern as the engine include glob', async () => {
+      const search = fakeSearch(['a.ts'])
+      const fs = makeFs('/repo', allowPolicy, fakeFiles({}), search)
+      await fs.$findFiles({ base: URI.file('/repo/src').toJSON(), pattern: '*.ts' }, null, null)
+      expect(search.lastQuery()?.includeGlob).toBe('*.ts')
+      expect(search.lastQuery()?.root.fsPath).toBe('/repo/src')
+    })
+
+    it('keeps the safety enumeration cap when maxResults is null or huge', async () => {
+      const search = fakeSearch([])
+      const fs = makeFs('/repo', allowPolicy, fakeFiles({}), search)
+      await fs.$findFiles('**/*.ts', null, null)
+      expect(search.lastQuery()?.maxResults).toBe(100_000)
+      await fs.$findFiles('**/*.ts', null, 500_000)
+      expect(search.lastQuery()?.maxResults).toBe(100_000)
+    })
+
+    it('returns no results without walking for maxResults <= 0', async () => {
+      const search = fakeSearchRecorder()
+      const fs = makeFs('/repo', allowPolicy, fakeFiles({}), search)
+      expect(await fs.$findFiles('**/*.ts', null, 0)).toEqual([])
+      expect(await fs.$findFiles('**/*.ts', null, -3)).toEqual([])
+      expect(search.ran()).toBe(false)
+    })
+
+    it('still filters defensively what the engine returned', async () => {
+      // 服务端过滤是优化，renderer 的 matcher 才是保证：旧协议 daemon 会忽略
+      // includeGlob 先按 cap 截断，没有这层防御就会把不匹配条目当结果发出去。
+      const search = fakeSearch(['src/a.ts', 'src/b.css'])
+      const fs = makeFs('/repo', allowPolicy, fakeFiles({}), search)
+      expect(await fs.$findFiles('*.ts', null, 50)).toEqual(['/repo/src/a.ts'])
+    })
+
+    it('keeps a caller-capped truncation at debug, naming the limit actually applied', async () => {
+      const warn = vi.fn()
+      const debug = vi.fn()
+      const logger = { ...new NullLogger(), warn, debug } as unknown as ILogger
+      const search: IFileSearchService = {
+        _serviceBrand: undefined,
+        search: () => {
+          const complete: IFileSearchComplete = {
+            relPaths: ['a.ts', 'b.ts', 'c.ts'],
+            limitHit: true,
+            filesWalked: 5_000,
+            directoriesWalked: 0,
+            durationMs: 0,
+            stopReason: 'maxResults',
+          }
+          return Promise.resolve(complete)
+        },
+      }
+      const fs = makeFs('/repo', allowPolicy, fakeFiles({}), search, () => [], logger)
+      await fs.$findFiles('**/*.ts', null, 3)
+      // 调用方要的 3 条就摆在结果里：这是请求按要的答复，不是需要警觉的事件。
+      expect(warn).not.toHaveBeenCalled()
+      expect(debug).toHaveBeenCalledTimes(1)
+      expect(debug.mock.calls[0]?.[0]).toMatch(/truncated at the 3-entry cap/)
+      expect(debug.mock.calls[0]?.[0]).toMatch(/5000 scanned, 3 returned/)
+    })
+
+    it('warns on a timeout even when the caller limit was the nominal cap', async () => {
+      const warn = vi.fn()
+      const debug = vi.fn()
+      const logger = { ...new NullLogger(), warn, debug } as unknown as ILogger
+      const search: IFileSearchService = {
+        _serviceBrand: undefined,
+        search: () => {
+          const complete: IFileSearchComplete = {
+            relPaths: [],
+            limitHit: true,
+            filesWalked: 12_000,
+            directoriesWalked: 0,
+            durationMs: 0,
+            stopReason: 'timeout',
+          }
+          return Promise.resolve(complete)
+        },
+      }
+      const fs = makeFs('/repo', allowPolicy, fakeFiles({}), search, () => [], logger)
+      await fs.$findFiles('**/*.ts', null, 3)
+      // 超时是走查本身没跑完——调用方的小 limit 遮不住这件事，仍要升到 warn。
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(warn.mock.calls[0]?.[0]).toMatch(/stopReason: timeout/)
+      expect(debug).not.toHaveBeenCalled()
+    })
+
+    it('keeps a cancelled walk at debug', async () => {
+      const warn = vi.fn()
+      const debug = vi.fn()
+      const logger = { ...new NullLogger(), warn, debug } as unknown as ILogger
+      const search: IFileSearchService = {
+        _serviceBrand: undefined,
+        search: () => {
+          const complete: IFileSearchComplete = {
+            relPaths: [],
+            limitHit: true,
+            filesWalked: 40,
+            directoriesWalked: 0,
+            durationMs: 0,
+            stopReason: 'canceled',
+          }
+          return Promise.resolve(complete)
+        },
+      }
+      const fs = makeFs('/repo', allowPolicy, fakeFiles({}), search, () => [], logger)
+      await fs.$findFiles('**/*.ts', null, null)
+      expect(warn).not.toHaveBeenCalled()
+      expect(debug).toHaveBeenCalledTimes(1)
+      expect(debug.mock.calls[0]?.[0]).toMatch(/stopReason: canceled/)
     })
   })
 

@@ -55,10 +55,15 @@ import type { WatcherHostRequest, WatcherHostResponse } from '../files/watcherPr
  * and its version-info DTO replaces `prefetchedVersion` with
  * `downloadedVersions` / `downloads` — an older daemon would report an empty
  * download set instead of erroring, leaving the panel showing a stale state.
+ * v11 → v12: `IFileSearchQuery` gains `includeGlob` (the matchAll-only
+ * server-side filter behind `workspace.findFiles`). An older daemon ignores the
+ * field and applies `maxResults` to the unfiltered walk, so findFiles would come
+ * back truncated with matching files silently missing — wrong results rather
+ * than an error, which is exactly why the handshake must fail here.
  * Remote-workspace users must restart the daemon after upgrading: an old
- * daemon fails the handshake with `protocol version 10 != 11`.
+ * daemon fails the handshake with `protocol version 11 != 12`.
  */
-export const REMOTE_PROTOCOL_VERSION = 11
+export const REMOTE_PROTOCOL_VERSION = 12
 
 /** Scheme of remote workspace resources: `remote-ssh://<authority>/<path>`. */
 export const REMOTE_SCHEME = 'remote-ssh'

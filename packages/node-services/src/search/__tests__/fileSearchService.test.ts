@@ -761,4 +761,200 @@ describe('FileSearchService', () => {
       expect(complete.filesWalked).toBe(0)
     })
   })
+
+  describe('matchAll include filtering', () => {
+    it('finds the match behind a wall of unrelated entries (they never consume the cap)', async () => {
+      const root = await makeRoot()
+      const writes: Promise<void>[] = []
+      for (let dir = 0; dir < 30; dir++) {
+        for (let file = 0; file < 10; file++) {
+          writes.push(writeFile(root, `gen/d${dir}/f${file}.ts`))
+        }
+      }
+      writes.push(writeFile(root, 'zz-keep/tsconfig.json'))
+      await Promise.all(writes)
+
+      const service = await makeService()
+      const complete = await service.search({
+        root: URI.file(root),
+        pattern: '',
+        matchAll: true,
+        includeGlob: 'tsconfig*.json',
+        maxResults: 5,
+      })
+
+      // 过滤若发生在 cap 之后，300 个无关文件会把结果整份吃掉（只剩 gen/*.ts）。
+      expect(asListing(complete).relPaths).toEqual(['zz-keep/tsconfig.json'])
+      expect(complete.limitHit).toBe(false)
+      expect(complete.filesWalked).toBeGreaterThanOrEqual(1)
+    })
+
+    it('counts the cap against matching entries, not scanned ones', async () => {
+      const root = await makeRoot()
+      const writes: Promise<void>[] = []
+      for (let i = 0; i < 200; i++) writes.push(writeFile(root, `gen/f${i}.ts`))
+      writes.push(writeFile(root, 'a.json'), writeFile(root, 'b.json'), writeFile(root, 'c.json'))
+      await Promise.all(writes)
+
+      const service = await makeService()
+      const complete = await service.search({
+        root: URI.file(root),
+        pattern: '',
+        matchAll: true,
+        includeGlob: '*.json',
+        maxResults: 2,
+      })
+
+      expect(asListing(complete).relPaths).toHaveLength(2)
+      expect(asListing(complete).relPaths.every((relPath) => relPath.endsWith('.json'))).toBe(true)
+      expect(complete.limitHit).toBe(true)
+      expect(complete.stopReason).toBe('maxResults')
+      // scanned 记的是扫过的行数（含被过滤掉的），与命中数分开记账。
+      expect(complete.filesWalked).toBeGreaterThanOrEqual(2)
+    })
+
+    it('applies the extension glob semantics (brace / class / case)', async () => {
+      const root = await makeRoot()
+      await writeFile(root, 'src/a.ts')
+      await writeFile(root, 'src/b.tsx')
+      await writeFile(root, 'src/c.js')
+      await writeFile(root, 'src/D.TS')
+
+      const service = await makeService()
+      const query = { root: URI.file(root), pattern: '', matchAll: true, maxResults: 50 }
+
+      const braces = await service.search({ ...query, includeGlob: '**/*.{ts,tsx}' })
+      expect([...asListing(braces).relPaths].sort()).toEqual(['src/a.ts', 'src/b.tsx'])
+
+      const charClass = await service.search({ ...query, includeGlob: 'src/[ab].ts' })
+      expect(asListing(charClass).relPaths).toEqual(['src/a.ts'])
+
+      // 扩展语义大小写敏感：`*.ts` 不匹配 `D.TS`（预筛的 --iglob 是大小写不敏感的，
+      // 所以含 includeGlob 的请求绝不能把过滤下放给 rg --iglob）。
+      const caseSensitive = await service.search({ ...query, includeGlob: '*.ts' })
+      expect(asListing(caseSensitive).relPaths).toEqual(['src/a.ts'])
+    })
+
+    it('keeps ignore-file and exclude semantics untouched while filtering', async () => {
+      const root = await makeRoot()
+      await writeFile(root, 'keep/a.json')
+      await writeFile(root, 'ignored/b.json')
+      await writeFile(root, 'skip/c.json')
+      await fs.writeFile(path.join(root, '.gitignore'), 'ignored/\n')
+
+      const service = await makeService()
+      const complete = await service.search({
+        root: URI.file(root),
+        pattern: '',
+        matchAll: true,
+        includeGlob: '*.json',
+        excludes: ['skip/**'],
+        useIgnoreFiles: true,
+        maxResults: 50,
+      })
+
+      expect(asListing(complete).relPaths).toEqual(['keep/a.json'])
+    })
+
+    it('filters the root-files pass with the same include glob', async () => {
+      const root = await makeRoot()
+      await writeFile(root, 'Client/a.json')
+      await writeFile(root, 'Client/b.ts')
+      await writeFile(root, 'README.json')
+      await writeFile(root, 'root.ts')
+
+      const service = await makeService()
+      const complete = await service.search({
+        root: URI.file(root),
+        pattern: '',
+        matchAll: true,
+        includeGlob: '*.json',
+        scanPaths: ['Client'],
+        rootFilesInScope: true,
+        maxResults: 10,
+      })
+
+      expect([...asListing(complete).relPaths].sort()).toEqual(['Client/a.json', 'README.json'])
+    })
+
+    it('returns an empty listing for an already-cancelled token', async () => {
+      const root = await makeRoot()
+      await writeFile(root, 'a.json')
+
+      const service = await makeService()
+      const complete = await service.search(
+        {
+          root: URI.file(root),
+          pattern: '',
+          matchAll: true,
+          includeGlob: '*.json',
+          maxResults: 10,
+        },
+        CancellationToken.Cancelled,
+      )
+
+      expect(asListing(complete).relPaths).toEqual([])
+      expect(complete.stopReason).toBe('canceled')
+    })
+
+    it('does not warm the full listing cache for a capped include-filtered walk', async () => {
+      const root = await makeRoot()
+      const writes: Promise<void>[] = []
+      for (let i = 0; i < 20; i++) writes.push(writeFile(root, `gen/f${i}.json`))
+      await Promise.all(writes)
+
+      const cacheDir = path.join(await makeRoot(), 'listings')
+      const service = new FileSearchService(undefined, { cacheDir })
+      services.push(service)
+      const kick = vi.spyOn(
+        service as unknown as { _kickBackgroundBuild: (spec: unknown) => void },
+        '_kickBackgroundBuild',
+      )
+
+      const complete = await service.search({
+        root: URI.file(root),
+        pattern: '',
+        matchAll: true,
+        includeGlob: '*.json',
+        maxResults: 3,
+      })
+      expect(complete.limitHit).toBe(true)
+
+      // 过滤后的枚举命中上限只说明"匹配够多了"，不代表工作区大——为它预热一份全量
+      // 清单纯属浪费。断言的是"预热根本没被叫起"（确定性），而不是等 150ms 看有没有
+      // 落盘：后者既慢，又只在构建比等待更慢时才是证据。
+      expect(kick).not.toHaveBeenCalled()
+    })
+
+    it('still warms the listing cache for a capped walk without includeGlob', async () => {
+      const root = await makeRoot()
+      const writes: Promise<void>[] = []
+      for (let i = 0; i < 20; i++) writes.push(writeFile(root, `gen/f${i}.ts`))
+      await Promise.all(writes)
+
+      const cacheDir = path.join(await makeRoot(), 'listings')
+      const service = new FileSearchService(undefined, { cacheDir })
+      services.push(service)
+      const kick = vi.spyOn(
+        service as unknown as { _kickBackgroundBuild: (spec: unknown) => void },
+        '_kickBackgroundBuild',
+      )
+
+      const complete = await service.search({
+        root: URI.file(root),
+        pattern: '',
+        matchAll: true,
+        maxResults: 3,
+      })
+      expect(complete.limitHit).toBe(true)
+
+      // 正向对照：同上一条对称，证明那条不是"预热从来就没跑过"。
+      expect(kick).toHaveBeenCalledTimes(1)
+      // 普通路径行为不变：撞上限说明工作区大，后台清单照建。
+      await vi.waitFor(async () => {
+        const listings = (await fs.readdir(cacheDir)).filter((n) => n.endsWith('.list'))
+        expect(listings).toHaveLength(1)
+      })
+    })
+  })
 })

@@ -68,6 +68,7 @@ import {
   type MentionFileFilter,
 } from '../../acp/mentionFileSearch.js'
 import { IFocusScopeService } from '../../focus/FocusScopeService.js'
+import { yieldToMain } from '../../scheduling/yieldToMain.js'
 import {
   decodeEditorPickId,
   decodeViewPickId,
@@ -95,12 +96,7 @@ const COMPACT_ROWS_AT = 8_192
 // 兜底搜索都等这个停顿才启动，连续击键时只有停顿后的最终 pattern 真正花费 CPU/IO。
 // 取代原先只包住兜底搜索的 FALLBACK_DEBOUNCE_MS——只有一个闸门，两个延迟不会叠加；
 // 小池同步过滤、空输入 MRU 与"预热未落地"的兜底分支都不受它影响（零延迟）。
-const SEARCH_DEBOUNCE_MS = 200
-
-const yieldToMain = (): Promise<void> => {
-  const scheduler = (globalThis as { scheduler?: { yield?: () => Promise<void> } }).scheduler
-  return scheduler?.yield?.() ?? new Promise((resolve) => setTimeout(resolve, 0))
-}
+export const SEARCH_DEBOUNCE_MS = 200
 
 /** A scored filter hit: either an open-editor pick or a file listing entry. */
 interface ScoredRow {

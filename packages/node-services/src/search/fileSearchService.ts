@@ -21,6 +21,7 @@ import type { FileHandle } from 'node:fs/promises'
 import path from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import {
+  compileGlobMatcher,
   createNamedLogger,
   Disposable,
   getPathComparisonKey,
@@ -42,9 +43,11 @@ import {
   escapeForRegex,
   expandExcludeGlob,
   normalizeGlob,
+  normalizeRel,
   resolveSearchThreads,
   rgDiskPath,
 } from './ripgrepUtil.js'
+import { RgLineCollector } from './rgLineCollector.js'
 import { getTempRoot } from '@universe-editor/temp-root'
 
 type RawUri = URI | UriComponents | string
@@ -69,15 +72,14 @@ const STDERR_LIMIT = 100_000
 // 超过就放弃本次兜底（本次靠 exact-path 探测+少量结果顶上，清单后台继续构建、
 // 下一次击键再用），避免一次击键把主进程阻塞在整个 rg 枚举期间（大工作区 30s+）。
 const LISTING_WAIT_MS = 5_000
+// 汇总日志的"慢/大"阈值：只决定日志级别（debug → warn），不改变查询行为。
+const SLOW_LISTING_MS = 5_000
+const LARGE_LISTING_SCANNED = 50_000
 
 function reviveUri(value: RawUri): URI {
   if (value instanceof URI) return value
   if (typeof value === 'string') return URI.parse(value)
   return URI.revive(value as UriComponents) as URI
-}
-
-function normalizeRel(value: string): string {
-  return value.replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/+/, '')
 }
 
 function fuzzyMatchField(text: string, query: string): boolean {
@@ -272,6 +274,8 @@ interface ListingEntry {
 
 interface RgLinesResult {
   readonly lines: string[]
+  /** Complete lines seen, accepted or filtered — distinct from `lines.length`. */
+  readonly scanned: number
   readonly capped: boolean
   readonly stopReason: StopReason | null
 }
@@ -337,6 +341,13 @@ export class FileSearchService extends Disposable implements IFileSearchService 
       useIgnoreFiles: query.useIgnoreFiles === true,
       glob: query.glob,
     }
+    // matchAll 的行过滤（扩展 glob 语义，compileGlobMatcher）。只作用于 matchAll：
+    // 打分路径靠排序而非过滤。注意它绝不进 ListingSpec —— 磁盘清单缓存必须保持
+    // 全量，否则之后每一次击键的打分兜底都会在这份被过滤的清单上"搜不到"。
+    const includeAccept =
+      matchAll && query.includeGlob !== undefined
+        ? compileGlobMatcher(query.includeGlob)
+        : undefined
 
     let stopReason: StopReason | null = null
     let filesWalked = 0
@@ -347,10 +358,18 @@ export class FileSearchService extends Disposable implements IFileSearchService 
     else if (Date.now() >= deadlineAt) stopReason = 'timeout'
     if (stopReason !== null) {
       // 预算耗尽发生在走查之前：没有 capped，但它同样说明这是巨型工作区，
-      // 提前把磁盘清单建好（取消则不必——调用方已经不要结果了）。
-      if (matchAll && stopReason === 'timeout') this._kickBackgroundBuild(spec)
+      // 提前把磁盘清单建好（取消则不必——调用方已经不要结果了）。带 includeGlob
+      // 的枚举是 findFiles 那类"只要这一类文件"的请求，不走模糊兜底，不必预热。
+      if (matchAll && stopReason === 'timeout' && includeAccept === undefined) {
+        this._kickBackgroundBuild(spec)
+      }
       return matchAll
-        ? this._completeListing(root.fsPath, [], { filesWalked, startedAt, stopReason })
+        ? this._completeListing(root.fsPath, [], {
+            filesWalked,
+            matchesFound: 0,
+            startedAt,
+            stopReason,
+          })
         : this._complete(root, pattern, [], 0, {
             matchesFound,
             filesWalked,
@@ -382,6 +401,7 @@ export class FileSearchService extends Disposable implements IFileSearchService 
       // scanPaths 已定义但为空 = 聚焦却无可扫路径（聚焦条目全是 rootFilesInScope
       // 覆盖的根级文件）：主枚举整体跳过，只留根文件浅枚举，绝不能回退全量。
       let lines: string[] = []
+      let scanned = 0
       let capped = false
       if (spec.scanPaths === undefined || spec.scanPaths.length > 0) {
         const res = await this._runRgLines({
@@ -391,8 +411,10 @@ export class FileSearchService extends Disposable implements IFileSearchService 
           token,
           deadlineAt,
           label: 'list',
+          ...(includeAccept !== undefined ? { accept: includeAccept } : {}),
         })
         lines = res.lines
+        scanned = res.scanned
         capped = res.capped
         stopReason = res.stopReason ?? (res.capped ? 'maxResults' : null)
       }
@@ -405,22 +427,30 @@ export class FileSearchService extends Disposable implements IFileSearchService 
           token,
           deadlineAt,
           label: 'rootFiles',
+          ...(includeAccept !== undefined ? { accept: includeAccept } : {}),
         })
         lines = [...lines, ...rootRes.lines]
+        scanned += rootRes.scanned
         capped = capped || rootRes.capped
         stopReason = rootRes.stopReason ?? (rootRes.capped ? 'maxResults' : null)
       }
-      filesWalked = lines.length
+      // scanned 是扫过的行数（含被 includeGlob 过滤掉的），不是返回条数。
+      filesWalked = scanned
       // 清单没走完说明这是巨型工作区：renderer 之后的每次击键都会走打分兜底，
       // 提前把磁盘清单建好（后台，不阻塞本次调用）。超时同样要建——否则第一次
-      // 交互式兜底搜索会自己在调用里等完整个构建（分钟级）。
-      if (capped || stopReason === 'timeout') this._kickBackgroundBuild(spec)
+      // 交互式兜底搜索会自己在调用里等完整个构建（分钟级）。带 includeGlob 的
+      // 枚举例外：撞上限只说明"匹配够多了"，不代表工作区大，而这类调用方
+      //（findFiles）也不走打分兜底，为它预热全量清单纯属浪费。
+      if (includeAccept === undefined && (capped || stopReason === 'timeout')) {
+        this._kickBackgroundBuild(spec)
+      }
       // 调用方用不了残缺子集时必须整份丢弃（模糊过滤会把"子集外"呈现成"搜不到"），
       // 十万条路径本来也不必跨 IPC —— 它正是巨型工作区堵住 renderer 主线程的原因。
       const relPaths =
         stopReason !== null && query.omitTruncatedListing === true ? [] : lines.map(normalizeRel)
       return this._completeListing(root.fsPath, relPaths, {
         filesWalked,
+        matchesFound: lines.length,
         startedAt,
         stopReason,
       })
@@ -763,14 +793,23 @@ export class FileSearchService extends Disposable implements IFileSearchService 
     readonly token: CancellationToken | undefined
     readonly deadlineAt: number
     readonly label: string
+    /**
+     * Keep only lines whose `normalizeRel` form passes (the matchAll include
+     * glob). Rejected lines never enter the result array, so `cap` counts
+     * matches — unrelated files cannot consume it. Filtering at the streaming
+     * collection stage (instead of handing the glob to rg) is what keeps the
+     * walk's ignore rules intact: a positive `-g`/`--iglob` whitelists and
+     * thereby resurrects .gitignore'd files (verified on rg 15).
+     */
+    readonly accept?: (relPath: string) => boolean
   }): Promise<RgLinesResult> {
-    const { args, cwd, cap, token, deadlineAt, label } = opts
+    const { args, cwd, cap, token, deadlineAt, label, accept } = opts
     if (token?.isCancellationRequested) {
-      return Promise.resolve({ lines: [], capped: false, stopReason: 'canceled' })
+      return Promise.resolve({ lines: [], scanned: 0, capped: false, stopReason: 'canceled' })
     }
     const timeLeft = deadlineAt - Date.now()
     if (timeLeft <= 0) {
-      return Promise.resolve({ lines: [], capped: false, stopReason: 'timeout' })
+      return Promise.resolve({ lines: [], scanned: 0, capped: false, stopReason: 'timeout' })
     }
 
     return new Promise<RgLinesResult>((resolve) => {
@@ -783,35 +822,15 @@ export class FileSearchService extends Disposable implements IFileSearchService 
         })
       } catch (err) {
         this._logger.error(`fileSearch rg(${label}) spawn error: ${(err as Error).message}`)
-        resolve({ lines: [], capped: false, stopReason: null })
+        resolve({ lines: [], scanned: 0, capped: false, stopReason: null })
         return
       }
       this._procs.add(child)
       const decoder = new StringDecoder('utf8')
-      const lines: string[] = []
-      let remainder = ''
+      const collector = new RgLineCollector(cap, accept)
       let stderr = ''
-      let capped = false
       let stopReason: StopReason | null = null
       let settled = false
-
-      const append = (chunk: string): void => {
-        // settle 之后仍可能有迟到 data 事件挂在已 resolve 的 lines 上，直接丢弃。
-        if (settled || stopReason !== null || capped) return
-        const data = remainder + chunk
-        const parts = data.split(/\r?\n/)
-        remainder = parts.pop() ?? ''
-        for (const part of parts) {
-          if (part.length === 0) continue
-          lines.push(part)
-          if (lines.length >= cap) {
-            capped = true
-            remainder = ''
-            child.kill()
-            return
-          }
-        }
-      }
 
       const tokenSub = token?.onCancellationRequested(() => {
         stopReason = 'canceled'
@@ -825,18 +844,20 @@ export class FileSearchService extends Disposable implements IFileSearchService 
 
       const finish = (): void => {
         if (settled) return
+        // 先排空 stdout 尾部（decoder.end() 的残余字节 + 无换行末行，同样过
+        // accept 与 cap）再置 settled：收集器与 data 处理都以 settled 为止损闸，
+        // 反过来会把最后一行静默丢掉。
+        if (stopReason === null) collector.end(decoder.end())
         settled = true
         this._procs.delete(child)
         tokenSub?.dispose()
         clearTimeout(timer)
-        if (stopReason === null && !capped) {
-          append(decoder.end())
-          if (remainder.length > 0 && lines.length < cap) {
-            lines.push(remainder)
-            if (lines.length >= cap) capped = true
-          }
-        }
-        resolve({ lines, capped, stopReason })
+        resolve({
+          lines: [...collector.lines],
+          scanned: collector.scanned,
+          capped: collector.capped,
+          stopReason,
+        })
       }
 
       child.stdout?.on('data', (data: Buffer) => {
@@ -846,7 +867,10 @@ export class FileSearchService extends Disposable implements IFileSearchService 
           child.kill()
           return
         }
-        append(decoder.write(data))
+        // settle / 已停止之后仍可能有迟到 data 事件，直接丢弃。
+        if (settled || stopReason !== null || collector.capped) return
+        collector.push(decoder.write(data))
+        if (collector.capped) child.kill()
       })
       child.stderr?.on('data', (data: Buffer) => {
         if (stderr.length < STDERR_LIMIT) stderr += data.toString()
@@ -861,7 +885,7 @@ export class FileSearchService extends Disposable implements IFileSearchService 
       child.on('close', (code) => {
         if (
           stopReason === null &&
-          !capped &&
+          !collector.capped &&
           code !== 0 &&
           code !== 1 &&
           stderr.trim().length > 0
@@ -911,13 +935,16 @@ export class FileSearchService extends Disposable implements IFileSearchService 
     rootFsPath: string,
     relPaths: readonly string[],
     stats: {
+      /** Lines scanned — accepted plus include-glob-filtered ones. */
       filesWalked: number
+      /** Entries the walk matched, before `omitTruncatedListing` drops them. */
+      matchesFound: number
       startedAt: number
       stopReason: StopReason | null
     },
   ): IFileSearchListing {
-    const { filesWalked, startedAt, stopReason } = stats
-    // matchAll 没有 exact-path 探测，也不做 dedup 淘汰：每个枚举到的文件都进了
+    const { filesWalked, matchesFound, startedAt, stopReason } = stats
+    // matchAll 没有 exact-path 探测，也不做 dedup 淘汰：每个被接受的文件都进了
     // relPaths，所以截断与否完全由 stopReason 决定。
     const complete: IFileSearchListing = {
       relPaths,
@@ -927,11 +954,16 @@ export class FileSearchService extends Disposable implements IFileSearchService 
       durationMs: Date.now() - startedAt,
       ...(stopReason !== null ? { stopReason } : {}),
     }
+    // 只统计不列文件（路径清单可能十万条）：返回/命中/扫描分开记账，别把扫描数
+    // 误报成结果数。慢或大的走查升到 warn，让巨型工作区的问题可见。
     const summary =
-      `fileSearch listing root=${rootFsPath} entries=${relPaths.length} ` +
-      `limitHit=${complete.limitHit} ms=${complete.durationMs}` +
+      `fileSearch listing root=${rootFsPath} returned=${relPaths.length} ` +
+      `matched=${matchesFound} scanned=${filesWalked} limitHit=${complete.limitHit} ` +
+      `ms=${complete.durationMs}` +
       (stopReason !== null ? ` stop=${stopReason}` : '')
-    if (stopReason === 'timeout') {
+    const slowOrLarge =
+      complete.durationMs >= SLOW_LISTING_MS || filesWalked >= LARGE_LISTING_SCANNED
+    if (stopReason === 'timeout' || slowOrLarge) {
       this._logger.warn(summary)
     } else {
       this._logger.debug(summary)

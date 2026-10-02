@@ -87,7 +87,7 @@ Universe Editor **不提供 `vscode` 模块的兼容层（shim），也不承诺
 | `workspace.isTrusted` / `onDidGrantWorkspaceTrust` | 同名 | 对齐（信任不会在原地撤销——撤销会重启扩展宿主，故无 revoke 事件） |
 | `workspace.fs` | 同名 | 部分对齐：8 方法 `readFile/writeFile/stat/readDirectory/createDirectory/delete/rename/copy`；参数是**字符串路径**不是 `Uri`；`delete` 无 `useTrash`；每次调用过宿主路径策略（拒敏感目录、禁逃逸工作区根） |
 | `workspace.createFileSystemWatcher` | 同名 | 部分对齐：glob 支持 string 与 `RelativePattern`；支持工作区外监听（Linux 下无效——`fs.watch` recursive 限制；工作区外事件只触发 `onDidChange`，不区分 create/delete） |
-| `workspace.findFiles` | 同名 | 部分对齐：`include` 与 `exclude` 均支持 string 与 `RelativePattern`（base 需为工作区内 `file:` URI）；exclude 在枚举期按目录剪枝（命中子树不遍历、不占截断额度）；`token` 为真取消（杀底层枚举，取消 resolve `[]`）；结果超过 10 万条截断并记日志 |
+| `workspace.findFiles` | 同名 | 部分对齐：`include` 与 `exclude` 均支持 string 与 `RelativePattern`（base 需为工作区内 `file:` URI）；include 匹配与 exclude 剪枝都在枚举期完成（无关文件不传输、不占 `maxResults` 额度；`maxResults` 为 0 或负数返回空列表）；`token` 为真取消（杀底层枚举，取消 resolve `[]`）；结果超过 10 万条截断并记日志 |
 | `workspace.textDocuments` / `onDidOpenTextDocument` / `onDidChangeTextDocument` / `onDidCloseTextDocument` | 同名 | 对齐（`TextDocument` 更薄：仅 `uri/languageId/version/isUntitled/getText()`；无 `lineAt/offsetAt/lineCount/fileName/isDirty/save()`；untitled 文档同样进 `textDocuments` 与事件流） |
 | `workspace.openTextDocument` | 同名 | 部分对齐：`Uri`/路径、`{language?, content?}` 内存文档、无参与 `untitled:` URI 形态均支持；打开进文档模型不显示（要显示走 `window.showTextDocument`）；untitled URI 的 path 不 seed 另存对话框，纯 API 创建的 untitled 无法被扩展主动关闭 |
 | `workspace.onWillSaveTextDocument` | 同名 | 对齐（`waitUntil(Promise<TextEdit[]>)`，宿主带超时兜底） |

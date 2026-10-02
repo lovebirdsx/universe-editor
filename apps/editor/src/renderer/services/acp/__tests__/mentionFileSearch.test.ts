@@ -6,16 +6,22 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  CancellationError,
   CancellationTokenSource,
   URI,
   type CancellationToken,
+  type IFileSearchComplete,
   type IFileSearchService,
 } from '@universe-editor/platform'
+import { _resetPerfPhasesForTests, getRecordedPhases } from '../../performance/perfPhases.js'
 import {
+  buildMentionEntries,
+  buildMentionEntrySlice,
   filterMentionFiles,
   invalidateMentionFileCache,
   loadWorkspaceFiles,
   peekWorkspaceFiles,
+  releaseMentionFileCache,
   type MentionFileEntry,
 } from '../mentionFileSearch.js'
 
@@ -317,6 +323,299 @@ describe('loadWorkspaceFiles', () => {
 
     await loadWorkspaceFiles(root, fs)
     expect(seenScanPaths).toBeUndefined()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 分片构造：大清单在分片边界让出事件循环，小清单保持同步快路径
+// ---------------------------------------------------------------------------
+
+const BUILD_LARGE = 3_000
+
+function manyPaths(count: number): string[] {
+  return Array.from({ length: count }, (_, i) => `/repo/f${i}.ts`)
+}
+
+/** 每次 search 都挂起，由测试按调用序号决定何时、以哪些路径完成 —— 用来制造
+ *  「旧请求晚于新请求完成」「walk 途中失效/释放」这类重叠时序。 */
+function deferredFileSearch(): {
+  readonly fs: IFileSearchService
+  readonly calls: () => number
+  readonly resolve: (index: number, relPaths: readonly string[]) => void
+} {
+  const pending: Array<(value: IFileSearchComplete) => void> = []
+  let calls = 0
+  const fs = {
+    _serviceBrand: undefined,
+    search(): Promise<IFileSearchComplete> {
+      return new Promise((resolve) => {
+        pending[calls++] = resolve
+      })
+    },
+  } satisfies IFileSearchService
+  return {
+    fs,
+    calls: () => calls,
+    resolve(index, relPaths) {
+      pending[index]!({
+        relPaths: [...relPaths],
+        limitHit: false,
+        filesWalked: relPaths.length,
+        directoriesWalked: 1,
+        durationMs: 0,
+      })
+    },
+  }
+}
+
+function flushMacrotask(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0))
+}
+
+describe('loadWorkspaceFiles — chunked entry construction', () => {
+  it('yields the event loop between slices for a large listing, without loss or reorder', async () => {
+    const root = URI.file('/repo')
+    const events: string[] = []
+    const pending = loadWorkspaceFiles(root, fakeFileSearch(manyPaths(BUILD_LARGE)))
+    // 让出是宏任务级的：清单构造若真的分片让出，这个定时器会在 load 完成前触发。
+    setTimeout(() => events.push('timer'), 0)
+    const listing = await pending
+    events.push('done')
+
+    expect(events).toEqual(['timer', 'done'])
+    expect(listing.entries).toHaveLength(BUILD_LARGE)
+    expect(listing.entries[0]?.uri).toBe(URI.file('/repo/f0.ts').toString())
+    expect(listing.entries[BUILD_LARGE - 1]?.relPath).toBe(`f${BUILD_LARGE - 1}.ts`)
+    expect(new Set(listing.entries.map((e) => e.relPath)).size).toBe(BUILD_LARGE)
+  })
+
+  it('leaves a small listing that completes in its first slice without an extra yield', async () => {
+    const root = URI.file('/repo')
+    const events: string[] = []
+    const pending = loadWorkspaceFiles(root, fakeFileSearch(['/repo/a.ts']))
+    setTimeout(() => events.push('timer'), 0)
+    await pending
+    events.push('done')
+    // 完成先于定时器：小清单在首片内建完，不再额外让出（预算检查仍在，只是没触发）。
+    expect(events).toEqual(['done'])
+  })
+
+  it('rejects a small listing whose token was cancelled during the walk, caching nothing', async () => {
+    const root = URI.file('/repo')
+    const cts = new CancellationTokenSource()
+    let calls = 0
+    const fs = {
+      _serviceBrand: undefined,
+      async search() {
+        calls++
+        // 取消发生在 walk 途中：路径已到手，但调用方已经不要这份清单了。
+        cts.cancel()
+        return {
+          relPaths: ['a.ts'],
+          limitHit: false,
+          filesWalked: 1,
+          directoriesWalked: 1,
+          durationMs: 0,
+        }
+      },
+    } satisfies IFileSearchService
+
+    await expect(loadWorkspaceFiles(root, fs, undefined, cts.token)).rejects.toBeInstanceOf(
+      CancellationError,
+    )
+    expect(peekWorkspaceFiles(root)).toBeUndefined()
+
+    // 未缓存 ⇒ 下一次调用必须重新 walk。
+    await loadWorkspaceFiles(root, fs)
+    expect(calls).toBe(2)
+  })
+
+  it('abandons a build cancelled mid-way: rejects, caches nothing, returns no half listing', async () => {
+    const root = URI.file('/repo')
+    const { fs, calls } = countingFake(manyPaths(BUILD_LARGE))
+    const cts = new CancellationTokenSource()
+    const pending = loadWorkspaceFiles(root, fs, undefined, cts.token)
+    const assertion = expect(pending).rejects.toBeInstanceOf(CancellationError)
+    // 先让清单落地、首片构造完（让出挂在分片边界），再取消：早停发生在分片边界，
+    // 而不是"拒绝启动"。已构造的部分不得作为结果返回，也不得进缓存。
+    await flushMacrotask()
+    cts.cancel()
+    await assertion
+    expect(peekWorkspaceFiles(root)).toBeUndefined()
+
+    // 不缓存 ⇒ 下一次调用必须重新 walk。
+    await loadWorkspaceFiles(root, fs)
+    expect(calls()).toBe(2)
+  })
+
+  it('never lets a walk that started before an invalidation refill the cache', async () => {
+    const root = URI.file('/repo')
+    const deferred = deferredFileSearch()
+    const pending = loadWorkspaceFiles(root, deferred.fs)
+    // watcher 事件在 walk 途中到达：这份"变更前"的数据可以回给发起方，但不得回灌缓存。
+    invalidateMentionFileCache(root)
+    deferred.resolve(0, ['a.ts'])
+    const listing = await pending
+    expect(listing.entries.map((e) => e.relPath)).toEqual(['a.ts'])
+    expect(peekWorkspaceFiles(root)).toBeUndefined()
+  })
+
+  it('a superseded load must not clobber the newer listing when it finishes later', async () => {
+    const root = URI.file('/repo')
+    const deferred = deferredFileSearch()
+    const older = loadWorkspaceFiles(root, deferred.fs)
+    const newer = loadWorkspaceFiles(root, deferred.fs)
+    expect(deferred.calls()).toBe(2)
+
+    deferred.resolve(1, ['new.ts'])
+    await newer
+    expect(peekWorkspaceFiles(root)?.entries.map((e) => e.relPath)).toEqual(['new.ts'])
+
+    // 旧请求后完成：结果仍返回给它的发起方，但不得覆盖较新的缓存。
+    deferred.resolve(0, ['old.ts'])
+    expect((await older).entries.map((e) => e.relPath)).toEqual(['old.ts'])
+    expect(peekWorkspaceFiles(root)?.entries.map((e) => e.relPath)).toEqual(['new.ts'])
+  })
+
+  it('a per-root invalidation only blocks the in-flight loads it speaks for', async () => {
+    const rootA = URI.file('/repo-a')
+    const subA = URI.joinPath(rootA, 'packages/app')
+    const rootB = URI.file('/repo-b')
+    const deferredA = deferredFileSearch()
+    const deferredSub = deferredFileSearch()
+    const deferredB = deferredFileSearch()
+    const pendingA = loadWorkspaceFiles(rootA, deferredA.fs)
+    const pendingSub = loadWorkspaceFiles(subA, deferredSub.fs)
+    const pendingB = loadWorkspaceFiles(rootB, deferredB.fs)
+
+    // watcher 事件只针对 rootA：rootA 与它子树上的在途 walk 失去回灌资格（它们的
+    // 数据早于这次变更），但无关的 rootB 仍必须能把清单写进缓存——它没有任何理由
+    // 被别的 root 的失效牵连。
+    invalidateMentionFileCache(rootA)
+    deferredA.resolve(0, ['a.ts'])
+    deferredSub.resolve(0, ['sub.ts'])
+    deferredB.resolve(0, ['b.ts'])
+    const [listingA, listingSub, listingB] = await Promise.all([pendingA, pendingSub, pendingB])
+
+    // 结果仍回给各自的发起方（"变更前"的这份数据不是错误），落不落缓存才是差别。
+    expect(listingA.entries.map((e) => e.relPath)).toEqual(['a.ts'])
+    expect(listingSub.entries.map((e) => e.relPath)).toEqual(['sub.ts'])
+    expect(listingB.entries.map((e) => e.relPath)).toEqual(['b.ts'])
+    expect(peekWorkspaceFiles(rootA)).toBeUndefined()
+    expect(peekWorkspaceFiles(subA)).toBeUndefined()
+    expect(peekWorkspaceFiles(rootB)?.entries.map((e) => e.relPath)).toEqual(['b.ts'])
+  })
+
+  it('a global clear blocks in-flight walks of every root from refilling the cache', async () => {
+    const rootA = URI.file('/repo-a')
+    const rootB = URI.file('/repo-b')
+    const deferredA = deferredFileSearch()
+    const deferredB = deferredFileSearch()
+    const pendingA = loadWorkspaceFiles(rootA, deferredA.fs)
+    const pendingB = loadWorkspaceFiles(rootB, deferredB.fs)
+
+    invalidateMentionFileCache()
+    deferredA.resolve(0, ['a.ts'])
+    deferredB.resolve(0, ['b.ts'])
+    await Promise.all([pendingA, pendingB])
+
+    expect(peekWorkspaceFiles(rootA)).toBeUndefined()
+    expect(peekWorkspaceFiles(rootB)).toBeUndefined()
+  })
+
+  it('a memory release blocks an in-flight walk from refilling the cache', async () => {
+    const root = URI.file('/repo')
+    const deferred = deferredFileSearch()
+    const pending = loadWorkspaceFiles(root, deferred.fs)
+    releaseMentionFileCache(0)
+    deferred.resolve(0, ['a.ts'])
+    expect((await pending).entries).toHaveLength(1)
+    expect(peekWorkspaceFiles(root)).toBeUndefined()
+  })
+
+  it('bounds one slice by entry count and by the time budget (deterministic clock)', () => {
+    const root = URI.file('/repo')
+    const relPaths = manyPaths(2_000).map((p) => p.slice('/repo/'.length))
+    const entries: MentionFileEntry[] = new Array<MentionFileEntry>(relPaths.length)
+
+    // 冻结时钟：分片在 1024 条上限处停下（预算检查永不触发）。
+    expect(buildMentionEntrySlice(root, relPaths, 0, entries, () => 0)).toBe(1_024)
+    expect(entries[1_023]?.uri).toBe(URI.joinPath(root, 'f1023.ts').toString())
+
+    // 时钟在 256 条检查点已越过预算：分片提前结束（让出由异步包装做）。
+    let t = 0
+    expect(buildMentionEntrySlice(root, relPaths, 0, [], () => (t += 100))).toBe(256)
+  })
+
+  it('records each over-budget slice as its own real span, never a summed pseudo-span', async () => {
+    _resetPerfPhasesForTests()
+    const root = URI.file('/repo')
+    const relPaths = manyPaths(BUILD_LARGE).map((p) => p.slice('/repo/'.length))
+    const entries: MentionFileEntry[] = new Array<MentionFileEntry>(relPaths.length)
+    // 冻结推进的时钟：每个分片在 256 条检查点越过预算而提前收兵，于是每一片都超预算，
+    // 逐片落一条相位（真实起止由这只时钟直接读出）。
+    let t = 0
+    const now = (): number => (t += 100)
+    await buildMentionEntries(root, relPaths, undefined, { now, budgetMs: 8, slowMs: 8 })
+    expect(entries).toHaveLength(BUILD_LARGE)
+
+    const slices = getRecordedPhases().filter((p) =>
+      p.name.startsWith('mentionFileSearch.buildSlice'),
+    )
+    // 3000 条 / 每片 256 条 = 11 片整 + 184 条的收尾片。
+    expect(slices.filter((s) => s.name.includes('256 entries'))).toHaveLength(11)
+    expect(slices.filter((s) => s.name.includes('184 entries'))).toHaveLength(1)
+    // 每条相位描述它自己那一小段：startTime 逐片前移 400（两次 now() + 检查 + 收尾），
+    // duration 是该分片自己的墙钟——不是把各分片耗时累加成一个横跨让出间隙的伪连续 span。
+    expect(slices[0]).toMatchObject({ startTime: 100, duration: 300 })
+    expect(slices[1]!.startTime - slices[0]!.startTime).toBe(400)
+    expect(slices.every((s) => s.duration === 300 || s.duration === 200)).toBe(true)
+    const aggregate = getRecordedPhases().find((p) =>
+      p.name.startsWith('mentionFileSearch.buildEntries'),
+    )
+    expect(aggregate).toBeUndefined()
+  })
+
+  it('records the async wall only when the load is actually slow', async () => {
+    _resetPerfPhasesForTests()
+    const root = URI.file('/repo')
+    const slowFs = {
+      _serviceBrand: undefined,
+      async search() {
+        // 墙钟含 IPC 等待：用一次真实的等待把它推过 50ms 记录线。
+        await new Promise((resolve) => setTimeout(resolve, 120))
+        return {
+          relPaths: ['a.ts'],
+          limitHit: false,
+          filesWalked: 1,
+          directoriesWalked: 1,
+          durationMs: 0,
+        }
+      },
+    } satisfies IFileSearchService
+
+    await loadWorkspaceFiles(root, slowFs)
+    const wall = getRecordedPhases().find((p) => p.name.startsWith('mentionFileSearch.loadWall'))
+    expect(wall?.name).toContain('not cpu')
+    expect(wall!.duration).toBeGreaterThanOrEqual(50)
+
+    // 快路径（以及缓存命中）不记墙钟：这条量只在"卡顿期间清单加载在途"时有价值。
+    _resetPerfPhasesForTests()
+    await loadWorkspaceFiles(URI.file('/repo-fast'), fakeFileSearch(['/repo-fast/a.ts']))
+    expect(
+      getRecordedPhases().filter((p) => p.name.startsWith('mentionFileSearch.loadWall')),
+    ).toHaveLength(0)
+  })
+
+  it('records no build sample for a small fast listing, and no wall sample on a cache hit', async () => {
+    _resetPerfPhasesForTests()
+    const root = URI.file('/repo')
+    const fs = fakeFileSearch(['/repo/a.ts'])
+    await loadWorkspaceFiles(root, fs)
+    await loadWorkspaceFiles(root, fs)
+    const phases = getRecordedPhases()
+    expect(phases.filter((p) => p.name.includes('buildSlice'))).toHaveLength(0)
+    expect(phases.filter((p) => p.name.includes('loadWall'))).toHaveLength(0)
   })
 })
 

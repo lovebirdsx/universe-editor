@@ -27,6 +27,19 @@ export interface IFileSearchQuery {
    */
   readonly glob?: readonly string[]
   /**
+   * `matchAll` only: keep just the paths matching this glob, with the
+   * extension-surface semantics of `compileGlobMatcher` (a slashless pattern
+   * matches the basename at any depth, `{a,b}`/`[a-z]` supported, matching is
+   * case-sensitive). The engine filters during the walk and `maxResults` counts
+   * the *matching* entries, so unrelated files never consume the result cap.
+   *
+   * Deliberately not folded into `glob`: rg's own glob machinery would change
+   * case and ignore-file semantics, and its dialect is not the extension
+   * matcher's. Ignored outside `matchAll` (the scored path already ranks rather
+   * than filters).
+   */
+  readonly includeGlob?: string
+  /**
    * `matchAll` only: drop the listing entirely when the walk did not finish
    * (`limitHit: true` — `maxResults` cap, timeout or cancellation) instead of
    * returning the partial subset. Callers that cannot use an arbitrary subset —
@@ -70,6 +83,10 @@ export interface IFileSearchMatch {
 
 export interface IFileSearchCompleteBase {
   readonly limitHit: boolean
+  /**
+   * Entries walked. For a listing this counts every scanned line — entries the
+   * `includeGlob` filter dropped are included — so it is not the result count.
+   */
   readonly filesWalked: number
   readonly directoriesWalked: number
   readonly durationMs: number

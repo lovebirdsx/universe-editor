@@ -661,8 +661,17 @@ export interface WorkspaceApi {
    * omit to use the configured search excludes (files.exclude ∪
    * search.exclude). Excludes prune during the enumeration itself: a glob
    * matching a directory skips its whole subtree, and excluded entries never
-   * count against the enumeration cap. Cancelling `token` stops the underlying
-   * enumeration; the promise then resolves with an empty list.
+   * count against the enumeration cap. The include filter runs during the
+   * enumeration too, so only matching entries count against `maxResults` and
+   * unrelated files never cross the wire; it does not change the ignore rules —
+   * files skipped by `.gitignore` / `.ignore` / `search.useIgnoreFiles` stay
+   * skipped even when the include glob names them.
+   *
+   * `maxResults` bounds the returned matches. Omitted: the host's safety
+   * enumeration cap (see below) applies. A value above that cap is clamped to
+   * it. `0` or a negative value is defined as "no results" and resolves an
+   * empty list without enumerating anything. Cancelling `token` stops the
+   * underlying enumeration; the promise then resolves with an empty list.
    */
   findFiles(
     include: GlobPattern,

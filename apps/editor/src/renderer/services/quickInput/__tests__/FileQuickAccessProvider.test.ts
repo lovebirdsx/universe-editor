@@ -49,7 +49,10 @@ import {
   type QuickPickInput,
   type QuickPickPresentation,
 } from '@universe-editor/platform'
-import { FileQuickAccessProvider } from '../providers/FileQuickAccessProvider.js'
+import {
+  FileQuickAccessProvider,
+  SEARCH_DEBOUNCE_MS,
+} from '../providers/FileQuickAccessProvider.js'
 import { IExcludeService } from '../../exclude/ExcludeService.js'
 import { FakeExcludeService } from '../../exclude/testing/fakeExcludeService.js'
 import { IFocusScopeService } from '../../focus/FocusScopeService.js'
@@ -1156,14 +1159,61 @@ describe('FileQuickAccessProvider — typing debounce', () => {
     expect(picker.items).toHaveLength(0)
   })
 
-  it('publishes nothing when disposables fire inside the debounce window', async () => {
+  it('dispose clears the debounce timer itself, not just the token gate', async () => {
     const { provider, fileSearch } = setup()
     fileSearch.resultPaths = Array.from({ length: LARGE }, (_, i) => `/ws/x${i}.ts`)
     const picker = new FakeQuickPick<IQuickPickItem>()
     const { disposables } = run(provider, picker)
     await flushPromises()
 
+    // 捕获防抖定时器的句柄：断言 dispose 真的把它 clearTimeout 掉，而不是靠 token
+    // 在闸门里拦下（两条守卫必须各自成立——只留 token 的话，任何绕过 token 的重入
+    // 都会在会话结束后再发一次结果）。
+    const handles = new Map<unknown, number>()
+    const realSetTimeout = globalThis.setTimeout
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((
+      fn: () => void,
+      ms?: number,
+      ...args: unknown[]
+    ) => {
+      const handle = realSetTimeout(fn, ms, ...args)
+      handles.set(handle, ms ?? 0)
+      return handle
+    }) as typeof setTimeout)
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout')
+    try {
+      picker.fireValue('x')
+      // 清单落地后提供方会带着非空 value 重跑 runSearch，大池路径这时才发出防抖定时器
+      // （"预热未落地"分支不发）——等到它真的被排上，断言才有对象。
+      await vi.waitFor(
+        () => expect([...handles.values()].some((ms) => ms === SEARCH_DEBOUNCE_MS)).toBe(true),
+        waitOpts,
+      )
+      const debounce = [...handles.entries()]
+        .filter(([, ms]) => ms === SEARCH_DEBOUNCE_MS)
+        .at(-1)?.[0]
+      expect(debounce).toBeDefined()
+
+      disposables.dispose()
+      expect(clearTimeoutSpy).toHaveBeenCalledWith(debounce)
+    } finally {
+      setTimeoutSpy.mockRestore()
+      clearTimeoutSpy.mockRestore()
+    }
+  })
+
+  it('publishes nothing when disposables fire inside the debounce window', async () => {
+    const { provider, fileSearch } = setup()
+    fileSearch.resultPaths = Array.from({ length: LARGE }, (_, i) => `/ws/x${i}.ts`)
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    const { disposables, token } = run(provider, picker)
+    await flushPromises()
+
     picker.fireValue('x')
+    // disposeActiveProvider 的次序：先 cancel 再 dispose。迟到的清单落地与
+    // 兜底重跑都以 token 为 stale 守卫（大清单分片构造后，"清单落地晚于击键"
+    // 是常态），dispose 若不先 cancel，落地重跑会在会话结束后再发一次结果。
+    token.isCancellationRequested = true
     disposables.dispose()
     // disposables 清掉了定时器：闸门永远不会触发。
     await new Promise((resolve) => setTimeout(resolve, 300))

@@ -38,8 +38,9 @@ import {
 import type { IRemoteStatusService } from '../../../shared/ipc/remoteStatusService.js'
 import type { AcpPathPolicyEnv, IAcpPathPolicy } from '../acp/acpPathPolicy.js'
 
-/** Upper bound for the `rg --files` enumeration behind `workspace.findFiles`;
- *  the include-glob filter and the caller's `maxResults` apply on top. */
+/** Safety bound for the `rg --files` enumeration behind `workspace.findFiles`: the
+ *  caller's `maxResults` is clamped to it, and the include filter runs during the walk,
+ *  so only matching entries consume either. */
 const FIND_FILES_ENUMERATION_CAP = 100_000
 
 /** Path-policy facts for a remote host we couldn't interrogate. Supported remote
@@ -254,15 +255,20 @@ export class MainThreadFs implements IMainThreadFs {
 
   /**
    * `workspace.findFiles`: enumerate the workspace live (matchAll walks with rg,
-   * never the stale listing cache), then apply the include glob to each match's
-   * relative path. A RelativePattern include roots the walk at its base folder
-   * (resolved through the path policy, symlink check included) and matches
-   * against base-relative paths. Excludes are folded into the engine query —
-   * string entries as-is, RelativePattern entries rebased against the
-   * enumeration root — so the engine prunes them during the walk and they never
-   * consume the enumeration cap. The token comes from the RPC cancel path and
-   * is handed to the enumeration itself, so a cancelled request kills the
-   * underlying `rg` walk instead of discarding a late result.
+   * never the stale listing cache), handing the include glob to the engine so
+   * filtering happens during the walk — unrelated files never consume
+   * `maxResults`, and only matching entries cross the wire. A RelativePattern
+   * include roots the walk at its base folder (resolved through the path policy,
+   * symlink check included) and matches against base-relative paths. Excludes are
+   * folded into the engine query — string entries as-is, RelativePattern entries
+   * rebased against the enumeration root — so the engine prunes them during the
+   * walk and they never consume the enumeration cap. The token comes from the RPC
+   * cancel path and is handed to the enumeration itself, so a cancelled request
+   * kills the underlying `rg` walk instead of discarding a late result.
+   *
+   * The renderer matcher stays as the guarantee, not the optimization: an older
+   * remote daemon ignores `includeGlob` and caps before filtering, and a
+   * non-matching entry must never reach the extension either way.
    */
   async $findFiles(
     include: string | IRelativePatternDto,
@@ -273,6 +279,9 @@ export class MainThreadFs implements IMainThreadFs {
     if (this._cwd === undefined) {
       throw new Error('workspace.findFiles requires an open workspace folder')
     }
+    // Project definition: 0 or a negative `maxResults` means "no results wanted", so
+    // there is nothing to walk for.
+    if (maxResults !== null && maxResults <= 0) return []
     // Containment comparisons below must use the *host's* case-sensitivity, not
     // the client's: a POSIX remote browsed from Windows would otherwise fold
     // `/home/Dev/evil` into `/home/dev/repo` and let it through.
@@ -298,6 +307,13 @@ export class MainThreadFs implements IMainThreadFs {
               : this._foldExcludeForEngine(entry, includeBase, platform),
           )
     const searchRoot = includeBase ?? this._rootUri()
+    const includePattern = typeof include === 'string' ? include : include.pattern
+    // `maxResults` is enforced server-side (after the include filter, so only
+    // matches count against it) but still bounded by the safety enumeration cap.
+    const limit =
+      maxResults === null
+        ? FIND_FILES_ENUMERATION_CAP
+        : Math.min(maxResults, FIND_FILES_ENUMERATION_CAP)
     const complete = await this._fileSearch.search(
       {
         root: searchRoot,
@@ -305,26 +321,37 @@ export class MainThreadFs implements IMainThreadFs {
         matchAll: true,
         excludes: engineExcludes,
         useIgnoreFiles: this._useIgnoreFiles(),
-        maxResults: FIND_FILES_ENUMERATION_CAP,
+        maxResults: limit,
+        includeGlob: includePattern,
       },
       token,
     )
     // matchAll 只会得到清单形态；万一不是，空结果比抛出更适合扩展 API。
     const relPaths = 'relPaths' in complete ? complete.relPaths : []
     if (complete.limitHit) {
-      this._logger.warn(
-        `findFiles enumeration truncated at the ${FIND_FILES_ENUMERATION_CAP}-entry cap ` +
-          `(${relPaths.length} results walked, stopReason: ${complete.stopReason ?? 'maxResults'}); ` +
-          'results beyond the cap were dropped',
-      )
+      const line =
+        `findFiles enumeration truncated at the ${limit}-entry cap ` +
+        `(${complete.filesWalked} scanned, ${relPaths.length} returned, ` +
+        `stopReason: ${complete.stopReason ?? 'maxResults'}); ` +
+        'results beyond the cap were dropped'
+      // The caller's own `maxResults` being reached is the request working as asked —
+      // the page it wanted is right here. Only a truncation this host decided on (the
+      // safety enumeration cap) or a walk that ran out of time is worth a warning;
+      // caller-capped and cancelled walks stay at debug.
+      const truncatedByUs =
+        complete.stopReason === 'timeout' ||
+        (complete.stopReason !== 'canceled' &&
+          (maxResults === null || maxResults > FIND_FILES_ENUMERATION_CAP))
+      if (truncatedByUs) this._logger.warn(line)
+      else this._logger.debug(line)
     }
-    const matches = compileGlobMatcher(typeof include === 'string' ? include : include.pattern)
+    const matches = compileGlobMatcher(includePattern)
     const out: string[] = []
     // 派生出的 fsPath 是 URI 形态（正斜杠）；下游 Uri.file() 会归一，端到端不变。
     for (const rel of relPaths) {
       if (!matches(rel)) continue
       out.push(URI.joinPath(searchRoot, rel).fsPath)
-      if (maxResults !== null && out.length >= maxResults) break
+      if (out.length >= limit) break
     }
     return out
   }
