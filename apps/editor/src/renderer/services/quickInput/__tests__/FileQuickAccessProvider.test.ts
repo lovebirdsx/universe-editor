@@ -421,9 +421,16 @@ function makeView(id: string, name: string): IViewDescriptor {
   return { id, name, containerId: PANEL_CONTAINER.id, componentKey: id, order: 1 }
 }
 
+/** 只推进一轮宏任务：够等一条 await 链落地，但清单条目是分片构建的（超时预算就让出
+ *  主线程，见 `buildMentionEntries`），慢机器上会跨片落地——凡是要断言"清单已生效"
+ *  的地方必须用 `vi.waitFor` 轮询，不能假定 flush 一轮就绪。 */
 function flushPromises(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0))
 }
+
+/** `vi.waitFor` 的轮询窗口：要跨过 200ms 的防抖闸门，给第一条轮询留出闸门之外的
+ *  余量，否则它会赶在闸门触发前执行、把「尚未发布」误判为失败。 */
+const WAIT_OPTS = { timeout: 2_000, interval: 20 } as const
 
 function setup(
   opts: {
@@ -591,7 +598,11 @@ describe('FileQuickAccessProvider', () => {
     expect(fileSearch.calls[0]!.ignore).toEqual(['node_modules'])
 
     picker.fireValue('x')
-    expect(picker.items).toHaveLength(512)
+    // 清单分片构建落地后才会带着当前 query 重跑（慢机器上晚于上面那一轮 flush），
+    // 落地前的 items 是"预热未就绪"的空列表——等结果发布后再断言 cap。
+    await vi.waitFor(() => expect(picker.items).toHaveLength(512), WAIT_OPTS)
+    // 512 条全部来自缓存池的内存过滤：没有退化成主进程兜底搜索（那会多一次 search）。
+    expect(fileSearch.calls).toHaveLength(1)
   })
 
   it('prepends an exact path match for a slash query even outside the listing', async () => {
@@ -1033,9 +1044,6 @@ describe('FileQuickAccessProvider — large listing (chunked filter + narrowing)
 
 describe('FileQuickAccessProvider — typing debounce', () => {
   const LARGE = 6000
-  // vi.waitFor 的轮询窗口：防抖闸门 200ms，必须给 waitFor 留出闸门之外的轮询余量，
-  // 否则第一条轮询赶在闸门触发前执行、把「未发布」的断言误判为失败。
-  const waitOpts = { timeout: 2_000, interval: 20 } as const
 
   beforeEach(() => {
     invalidateMentionFileCache()
@@ -1075,7 +1083,7 @@ describe('FileQuickAccessProvider — typing debounce', () => {
     expect(picker.busy).toBe(true)
     expect(picker.items.some((i) => (i as IQuickPickItem).label === 'Settings')).toBe(false)
 
-    await vi.waitFor(() => expect(picker.busy).toBe(false), waitOpts)
+    await vi.waitFor(() => expect(picker.busy).toBe(false), WAIT_OPTS)
     expect(picker.items.length).toBeGreaterThan(0)
   })
 
@@ -1110,7 +1118,7 @@ describe('FileQuickAccessProvider — typing debounce', () => {
     expect(picker.items).toHaveLength(0)
     expect(picker.busy).toBe(true)
 
-    await vi.waitFor(() => expect(picker.busy).toBe(false), waitOpts)
+    await vi.waitFor(() => expect(picker.busy).toBe(false), WAIT_OPTS)
     // 只有最终 pattern 花费扫描：'x12' 命中的恰是文件名同时含 1 和 2 的那批
     // （x12.ts/x120.ts/x1200.ts…），若中途的 'x'/'x1' 也发布过，最后一屏会是 512 条。
     expect(picker.items.length).toBeGreaterThan(0)
@@ -1137,9 +1145,9 @@ describe('FileQuickAccessProvider — typing debounce', () => {
 
     await vi.waitFor(
       () => expect(fileSearch.calls.some((c) => c.matchAll !== true)).toBe(true),
-      waitOpts,
+      WAIT_OPTS,
     )
-    await vi.waitFor(() => expect(picker.busy).toBe(false), waitOpts)
+    await vi.waitFor(() => expect(picker.busy).toBe(false), WAIT_OPTS)
     // 兜底搜索（全树打分，不受 truncateAt 截断）把清单外的 c.ts 找了回来。
     expect(picker.items.map((i) => (i as IQuickPickItem).label)).toContain('c.ts')
     expect(fileSearch.calls.filter((c) => c.matchAll !== true)).toHaveLength(1)
@@ -1187,7 +1195,7 @@ describe('FileQuickAccessProvider — typing debounce', () => {
       // （"预热未落地"分支不发）——等到它真的被排上，断言才有对象。
       await vi.waitFor(
         () => expect([...handles.values()].some((ms) => ms === SEARCH_DEBOUNCE_MS)).toBe(true),
-        waitOpts,
+        WAIT_OPTS,
       )
       const debounce = [...handles.entries()]
         .filter(([, ms]) => ms === SEARCH_DEBOUNCE_MS)
@@ -1233,9 +1241,9 @@ describe('FileQuickAccessProvider — typing debounce', () => {
     picker.fireValue('c12')
     await vi.waitFor(
       () => expect(fileSearch.calls.some((c) => c.matchAll !== true)).toBe(true),
-      waitOpts,
+      WAIT_OPTS,
     )
-    await vi.waitFor(() => expect(picker.busy).toBe(false), waitOpts)
+    await vi.waitFor(() => expect(picker.busy).toBe(false), WAIT_OPTS)
     // 三次击键只换来一次兜底搜索（最终 pattern），不是三次。
     expect(fileSearch.calls.filter((c) => c.matchAll !== true)).toHaveLength(1)
   })
