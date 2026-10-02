@@ -154,6 +154,32 @@ describe('MemoryPressureService — sampling', () => {
     expect(release).not.toHaveBeenCalled()
     service.dispose()
   })
+
+  it('hands releasers the heap reading the release was decided on', () => {
+    const { service, setUsed } = harness()
+    const release = vi.fn(() => 0)
+    service.registerReleaser({ id: 'cache', release })
+
+    setUsed(3 * GIB)
+    service.sample()
+
+    expect(release).toHaveBeenCalledWith(MemoryPressureLevel.Critical, { used: 3 * GIB })
+    service.dispose()
+  })
+
+  it('weighs a forced release against a fresh reading, not the last sample', () => {
+    const { service, setUsed } = harness()
+    const release = vi.fn(() => 0)
+    service.registerReleaser({ id: 'cache', release })
+
+    setUsed(1 * GIB)
+    service.sample()
+    setUsed(2 * GIB)
+    service.release(MemoryPressureLevel.Elevated)
+
+    expect(release).toHaveBeenCalledWith(MemoryPressureLevel.Elevated, { used: 2 * GIB })
+    service.dispose()
+  })
 })
 
 describe('MemoryPressureService — releasers', () => {

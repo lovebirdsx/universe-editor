@@ -17,8 +17,14 @@ import {
   formatIpcFrames,
   type IWorkbenchContribution,
 } from '@universe-editor/platform'
-import { IMemoryPressureService } from '../services/memory/memoryPressureService.js'
-import { MemoryPressureLevel } from '../services/memory/memoryPressureLevels.js'
+import {
+  IMemoryPressureService,
+  type MemoryHeapReading,
+} from '../services/memory/memoryPressureService.js'
+import {
+  MEMORY_PRESSURE_LEVEL_NAMES,
+  MemoryPressureLevel,
+} from '../services/memory/memoryPressureLevels.js'
 import { AcpPromptDraftCache } from '../services/acp/session/acpPromptDraftCache.js'
 import { AcpPromptCancelledDraftStash } from '../services/acp/session/acpPromptCancelledDraftStash.js'
 import {
@@ -35,6 +41,29 @@ import { sharedResidentBudget } from '../services/acp/session/acpResidentBudget.
 const ELEVATED_KEEP_FRACTION = 0.75
 const CRITICAL_KEEP_FRACTION = 0
 
+/**
+ * Smallest share of the heap the ACP transcripts must hold before an *elevated* release
+ * touches them. The heap reading includes garbage the next GC reclaims: the field report
+ * behind this sat at 2–2.5GB "used" with transcripts holding 2–47MB, and every retry
+ * shaved another quarter off them — down to the reply being read — while freeing
+ * kilobytes from a heap that then fell back to ~350MB on its own. Content the user is
+ * reading is only worth giving up when giving it up can matter. Critical is the last
+ * stop before the cage and is never gated.
+ */
+export const ACP_ELEVATED_MIN_HEAP_SHARE = 0.2
+
+/** Whether a release at `level` should trim ACP transcripts holding `acpBytes`. */
+export function shouldReleaseAcpTranscripts(
+  level: MemoryPressureLevel,
+  acpBytes: number,
+  heap: MemoryHeapReading,
+): boolean {
+  if (level === MemoryPressureLevel.Critical) return true
+  // No reading yet (a forced release before the first sample): nothing to weigh against.
+  if (heap.used <= 0) return true
+  return acpBytes >= heap.used * ACP_ELEVATED_MIN_HEAP_SHARE
+}
+
 /** Trim a byte-budgeted cache to `fraction` of what it currently holds. */
 function keepFraction(current: number, fraction: number): number {
   return Math.floor(current * fraction)
@@ -48,6 +77,8 @@ export class MemoryPressureContribution extends Disposable implements IWorkbench
     super()
     const logger = createNamedLogger(loggerService, { id: 'memory', name: 'Memory' })
 
+    let lastAcpReleaseDecision: boolean | undefined
+    const toMB = (bytes: number): number => Math.round(bytes / (1024 * 1024))
     const cacheKeep = (level: MemoryPressureLevel): number =>
       level === MemoryPressureLevel.Critical ? CRITICAL_KEEP_FRACTION : ELEVATED_KEEP_FRACTION
 
@@ -80,7 +111,21 @@ export class MemoryPressureContribution extends Disposable implements IWorkbench
     this._register(
       pressure.registerReleaser({
         id: 'acp.residentBudget',
-        release: (level) => sharedResidentBudget.releaseFraction(cacheKeep(level)),
+        release: (level, heap) => {
+          const acpBytes = sharedResidentBudget.totalBytes()
+          const release = shouldReleaseAcpTranscripts(level, acpBytes, heap)
+          // Logged on change only: this runs every retry interval while the heap is
+          // parked over a line, and the decision is what a diagnosis needs to read.
+          if (release !== lastAcpReleaseDecision) {
+            lastAcpReleaseDecision = release
+            logger.info(
+              `[memory] acp.residentBudget ${release ? 'releasing' : 'spared'} at ` +
+                `${MEMORY_PRESSURE_LEVEL_NAMES[level]}: transcripts=${toMB(acpBytes)}MB ` +
+                `heap=${toMB(heap.used)}MB`,
+            )
+          }
+          return release ? sharedResidentBudget.releaseFraction(cacheKeep(level)) : 0
+        },
       }),
     )
 

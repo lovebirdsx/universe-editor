@@ -62,9 +62,14 @@
 | `acp.cancelledDrafts` | 取消撤回的草稿（priority -10，最便宜） | — | 0 |
 | `acp.promptDrafts` | 未发送的 prompt 草稿（含 base64 图片） | 75% | 0 |
 | `acp.mentionFileListing` | `@` 文件清单 | 75% | 0 |
-| `acp.residentBudget` | ACP 会话常驻预算 | 75% | 0 |
+| `acp.residentBudget` | ACP 会话常驻预算 | 75%（仅当会话内容 ≥ 堆读数的 20% 时才动） | 0（每会话仍保留最新尾部，见下） |
 | `dirtyDiff.headCache` | HEAD 全文（由 `DirtyDiffContribution` 自注册） | — | — |
 | `sessionChanges.liveTexts` | 会话改动追踪的活行全文（由 `SessionChangeTrackerService` 自注册） | — | 0 |
+
+**ACP 会话内容的两道保护**（2026-10-02 诊断包：用户正在看的回复被截成 200 字预览）。那份包里堆读数在 elevated 线上方停了约 47 分钟（1.9–2.5GB），但会话内容只有 2–47MB——堆里绝大部分是可回收的垃圾（随后 GC 自行掉回约 350MB）。5s 一次的重试释放每次都把会话再削到 75%，`0.75ⁿ` 复利下最终削到了**正在流式输出的那条回复**，而释放的只有几十 KB。两道保护：
+
+- **elevated 门控**（`MemoryPressureContribution.shouldReleaseAcpTranscripts`）：会话内容不足堆读数的 `ACP_ELEVATED_MIN_HEAP_SHARE`（20%）时 elevated 不动它——释放它对堆无意义，只会伤害用户。critical 不门控。决策翻转时记一行 `acp.residentBudget releasing|spared`。releaser 因此拿到第二个参数 `MemoryHeapReading`，由 `release()` **现读**（probe 强制释放发生在两次采样之间，复用上次采样会拿陈旧值）。盲区：`used` 含垃圾，若会话内容恰是元凶但被垃圾稀释到 20% 以下，elevated 不会动它——这时只削 25% 本来也救不了堆，兜底是 critical（不门控）。
+- **最新尾部豁免**（`SHARED_TRIM_PROTECTED_TAIL_BYTES` = 32MB 计费字节/会话，**只用于压力释放 `releaseFraction`，critical 下也保留**）：从时间线末尾往前，计费之和装得进预算的 slot 永不被裁；单个装不下的 slot（失控卡片）被**跳过而非截断遍历**，所以它照样可裁、它之前的回复照样受保护；user 消息本就不裁，不占预算；orphan 不在屏上，不受保护。跨会话上限 `reconcile` 与单会话 live 上限**都不传**这个豁免——它们是硬上限，且给 `reconcile` 豁免会让空闲会话「交不出」、刀落到前台会话上。豁免依赖「trim 只原地替换 slot、不增删」这一不变量。
 
 `acpElicitationDraftCache` / `acpChatViewStateCache` 只加条数上限、**不注册 releaser**（值是表单文本/滚动位置，释放的痛感大于收益）。`semanticSelector.typeHierarchyCache` 不加：其键是 Monaco token type（约 20 个闭集标准值），值全部派生自静态表，构造上就有界。
 

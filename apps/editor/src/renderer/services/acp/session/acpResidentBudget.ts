@@ -15,6 +15,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { toDisposable, type IDisposable } from '@universe-editor/platform'
+import { SHARED_TRIM_PROTECTED_TAIL_BYTES } from './acpContentLimits.js'
 
 /**
  * Ceiling for **all** sessions combined, in overhead-adjusted bytes (see
@@ -37,8 +38,11 @@ export interface IAcpResidentBudgetHolder {
    * bytes actually released (0 when there is nothing left to give). The measure
    * and the release must walk the same structures — a holder that reports bytes
    * it cannot free would keep the total over budget forever.
+   *
+   * The newest content worth up to `protectedTailBytes` is never released (0 =
+   * nothing exempt), so the result may come back short of the target.
    */
-  trimToward(targetBytes: number): number
+  trimToward(targetBytes: number, protectedTailBytes: number): number
 }
 
 export interface IAcpResidentBudget {
@@ -59,6 +63,11 @@ export interface IAcpResidentBudget {
    * {@link reconcile}: not "we are over the ceiling" but "the heap as a whole is in
    * trouble", applied as the same proportional haircut wherever the total happens to
    * sit. The renderer memory watermark drives this (see `IMemoryPressureService`).
+   *
+   * Unlike {@link reconcile}, each holder keeps its newest content (see
+   * `SHARED_TRIM_PROTECTED_TAIL_BYTES`) even at fraction 0: the haircut repeats every
+   * retry interval while the heap stays over a line, and compounding toward zero is
+   * how it once reached the reply the user was reading as it streamed in.
    */
   releaseFraction(fraction: number): number
 }
@@ -68,7 +77,10 @@ export class AcpResidentBudget implements IAcpResidentBudget {
   /** Re-entrancy guard: a trim pushes observables, which can loop back here. */
   private _reconciling = false
 
-  constructor(private readonly _budget: number = GLOBAL_RESIDENT_BUDGET) {}
+  constructor(
+    private readonly _budget: number = GLOBAL_RESIDENT_BUDGET,
+    private readonly _protectedTailBytes: number = SHARED_TRIM_PROTECTED_TAIL_BYTES,
+  ) {}
 
   register(holder: IAcpResidentBudgetHolder): IDisposable {
     this._holders.add(holder)
@@ -102,7 +114,9 @@ export class AcpResidentBudget implements IAcpResidentBudget {
         if (total <= this._budget) break
         const excess = total - this._budget
         const target = Math.max(0, holder.residentBytes() - excess)
-        const freed = holder.trimToward(target)
+        // No tail exemption: this is the hard ceiling, and exempting each session's
+        // newest content would both lift it and push the cut onto the busier session.
+        const freed = holder.trimToward(target, 0)
         if (freed <= 0) continue
         released += freed
         trimmed++
@@ -132,7 +146,7 @@ export class AcpResidentBudget implements IAcpResidentBudget {
         const current = holder.residentBytes()
         const target = Math.max(0, Math.floor(current * fraction))
         if (target >= current) continue
-        const freed = holder.trimToward(target)
+        const freed = holder.trimToward(target, this._protectedTailBytes)
         if (freed <= 0) continue
         released += freed
         trimmed++

@@ -244,6 +244,17 @@ export const TRIM_MIN_RELEASE_BYTES = 4 * 1024
 export const MESSAGE_TRIM_PREVIEW_CHARS = 200
 
 /**
+ * Newest content per session that heap-pressure release never trims — about 10MB of
+ * wire content, overhead-adjusted, kept even at the critical level. Pressure release
+ * used to haircut every session to a fraction of what it held, and repeating that every
+ * few seconds compounds toward zero: in the field it reached the reply the user was
+ * reading while it was still arriving. Bounded per session, so even a dozen sessions
+ * keep this well clear of the cage. The cross-session ceiling and the per-session live
+ * budget are hard limits and do not honour it.
+ */
+export const SHARED_TRIM_PROTECTED_TAIL_BYTES = 32 * 1024 * 1024
+
+/**
  * Caps on agent-reported metadata lists. Unlike timeline content these are
  * replaced wholesale on every update (a plan or command list is a snapshot, not
  * an append), so they need no trim path — only a ceiling on how large a single

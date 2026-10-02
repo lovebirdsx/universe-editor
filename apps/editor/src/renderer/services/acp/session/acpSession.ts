@@ -1107,7 +1107,8 @@ export class AcpSession extends Disposable implements IAcpSession {
       budgetId: id,
       residentBytes: () => this._residentBytes,
       lastIngestAt: () => this._lastIngestAt,
-      trimToward: (targetBytes) => this._releaseResidentDownTo(targetBytes),
+      trimToward: (targetBytes, protectedTailBytes) =>
+        this._releaseResidentDownTo(targetBytes, protectedTailBytes),
     }
     this._register(this._residentBudget.register(this._budgetHolder))
     this._costStrategy = getAgentCostStrategy(agentId)
@@ -2883,8 +2884,12 @@ export class AcpSession extends Disposable implements IAcpSession {
    * are deliberately not releasable (see `_trimOldestHeavyItem`), and the
    * cross-session budget reads a short release as "this session has nothing left
    * to give", moving on to the next one.
+   *
+   * `protectedTailBytes` exempts the newest timeline slots whose combined heavy
+   * content fits in it — the shared budget passes one so pressure release can never
+   * reach the reply being read; the per-session hard ceiling passes 0.
    */
-  private _releaseResidentDownTo(targetBytes: number): number {
+  private _releaseResidentDownTo(targetBytes: number, protectedTailBytes = 0): number {
     // Trim operates on committed state: publish any pending streaming merges
     // first, or a trim of the message/tool card holding them would drop the
     // newest chunks (and a later commit would splice stale content back in).
@@ -2899,6 +2904,7 @@ export class AcpSession extends Disposable implements IAcpSession {
       }
     }
     let released = 0
+    const protectedSlots = this._protectedTailSlots(protectedTailBytes)
     // Two passes, big releases first: a megabyte-scale overrun is answered with
     // the tool output that caused it, not with a handful of early short messages
     // that merely happen to sit at the head of the timeline. The second pass
@@ -2915,7 +2921,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     for (const minReleaseBytes of [TRIM_MIN_RELEASE_BYTES, 0]) {
       for (let guard = guardMax; guard > 0; guard--) {
         if (this._residentBytes <= targetBytes) break
-        const freed = this._trimOldestHeavyItem(minReleaseBytes)
+        const freed = this._trimOldestHeavyItem(minReleaseBytes, protectedSlots)
         if (freed === 0) break
         released += freed
         this._residentBytes -= freed
@@ -2973,6 +2979,33 @@ export class AcpSession extends Disposable implements IAcpSession {
     return bytes
   }
 
+  /** Timeline indices the shared budget must not trim: the newest slots whose
+   * combined heavy content (as `_measureResidentBytes` charges it) fits in
+   * `budgetBytes`. A slot that alone would overflow the budget is skipped rather than
+   * ending the walk — a runaway card stays releasable without costing the replies
+   * around it their protection. User messages are never trimmed anyway, so they do not
+   * spend the budget. Indices stay valid for one release because every trim replaces
+   * its slot in place; a trim path that inserted or removed slots would break this. */
+  private _protectedTailSlots(budgetBytes: number): ReadonlySet<number> {
+    const slots = new Set<number>()
+    if (budgetBytes <= 0) return slots
+    let used = 0
+    for (let i = this._timeline.length - 1; i >= 0 && used < budgetBytes; i--) {
+      const slot = this._timeline[i]
+      if (slot === undefined) continue
+      const cost =
+        slot.kind === 'toolCall'
+          ? withViewModelOverhead(toolCallHeavyBytes(slot.call))
+          : slot.kind === 'message' && slot.message.role !== 'user'
+            ? withViewModelOverhead(messageHeavyBytes(slot.message))
+            : 0
+      if (used + cost > budgetBytes) continue
+      used += cost
+      slots.add(i)
+    }
+    return slots
+  }
+
   /** Trim the oldest timeline slot holding at least `minReleaseBytes` of heavy
    * content, returning the bytes actually released (0 when nothing qualifies).
    * The return value is the *difference* the trim makes, not what was measured
@@ -2986,9 +3019,15 @@ export class AcpSession extends Disposable implements IAcpSession {
    * output that actually fills the budget. Falling through to the orphan stash
    * matters: content stashed for a parent card that never landed is measured
    * (see `_measureResidentBytes`) and so must be releasable, or the loop below
-   * would report 0 with megabytes still held. */
-  private _trimOldestHeavyItem(minReleaseBytes: number): number {
+   * would report 0 with megabytes still held. `protectedSlots` are never
+   * candidates (see `_protectedTailSlots`); the protection covers the timeline
+   * only — orphans are not on screen until their parent lands. */
+  private _trimOldestHeavyItem(
+    minReleaseBytes: number,
+    protectedSlots: ReadonlySet<number>,
+  ): number {
     for (let i = 0; i < this._timeline.length; i++) {
+      if (protectedSlots.has(i)) continue
       const slot = this._timeline[i]
       if (slot === undefined) continue
       if (slot.kind === 'toolCall') {

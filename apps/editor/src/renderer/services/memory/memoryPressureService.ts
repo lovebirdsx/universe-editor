@@ -39,6 +39,15 @@ import {
 } from './memoryPressureLevels.js'
 import { readHeapSample } from './rendererHeapSample.js'
 
+/**
+ * The heap reading a release was decided on. `used` is `usedJSHeapSize`, which includes
+ * garbage the next GC will reclaim — a releaser weighing its own share against it is
+ * deciding whether dropping its content can matter at all. 0 = no reading available.
+ */
+export interface MemoryHeapReading {
+  readonly used: number
+}
+
 /** One cache that can hand memory back. */
 export interface IMemoryReleaser {
   /** Stable id — attribution logs name it, so keep it recognisable. */
@@ -50,7 +59,7 @@ export interface IMemoryReleaser {
    * whole point: a releaser that reports nothing cannot be told apart from one that
    * freed nothing, and the attribution log becomes unreadable.
    */
-  release(level: MemoryPressureLevel): number
+  release(level: MemoryPressureLevel, heap: MemoryHeapReading): number
 }
 
 export interface MemoryReleaseReport {
@@ -320,13 +329,16 @@ export class MemoryPressureService extends Disposable implements IMemoryPressure
     if (this._releasing) return []
     this._releasing = true
     const reports: MemoryReleaseReport[] = []
+    // Read fresh rather than reuse the last sample: a forced release (the e2e probe)
+    // runs between samples, and the sampler's own path reads within the same tick.
+    const heap: MemoryHeapReading = { used: this._readSample()?.used ?? this._lastUsed }
     try {
       const ordered = [...this._releasers].sort(
         (a, b) => (a.releaser.priority ?? 0) - (b.releaser.priority ?? 0) || a.order - b.order,
       )
       for (const { releaser } of ordered) {
         try {
-          const freed = releaser.release(level)
+          const freed = releaser.release(level, heap)
           // A releaser that reports a number it cannot stand behind makes the
           // attribution log unreadable — the one thing it exists for. Negative and
           // non-finite values are rejected loudly rather than folded into the total.
