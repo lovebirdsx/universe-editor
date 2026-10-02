@@ -22,3 +22,5 @@ metadata:
 **豁免**：
 - 测试文件（`**/__tests__/**`、`**/*.test.*`）在 base config 里 `no-restricted-syntax: 'off'`（断言辅助可手写归一）。
 - SCM 域集中键用行内 `// eslint-disable-next-line no-restricted-syntax`（放在 return 行正上方，不是函数声明行——PostToolUse formatter 会移动/删除错位的 disable 注释）。
+
+**e2e spec 不豁免**：`apps/editor/e2e/specs/*.spec.ts` 不在上面的测试豁免内（只匹配 `*.test.*` 与 `__tests__/`）。spec 里比临时目录路径与 `URI.fsPath` 要用 `@universe-editor/platform` 的 `relativePathUnder` / `arePathsEqual`，platform 参数取 `normalizePlatform(process.platform)`；手搓 `replace(/\\/g,'/').toLowerCase()` 会被 lint 拦（曾在 main 上致 CI 红）。

@@ -29,10 +29,12 @@ const FRAME_TARGET = '(response fileSystem.readFileText #'
 
 /** The line, or '' while it has not been written yet. */
 function largeFrameLine(page: Page): Promise<string> {
-  return page.evaluate(() =>
-    (window.__E2E__!.getOutputChannelContent('All').split('\n').find((l) =>
-      l.includes('large inbound ipc frame'),
-    ) ?? ''),
+  return page.evaluate(
+    () =>
+      window
+        .__E2E__!.getOutputChannelContent('All')
+        .split('\n')
+        .find((l) => l.includes('large inbound ipc frame')) ?? '',
   )
 }
 

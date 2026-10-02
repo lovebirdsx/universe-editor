@@ -132,7 +132,7 @@ pnpm --filter @universe-editor/editor test:visual    # 视觉基线（仅 Linux 
 - **可见性别用 `toBeVisible()`**：Allotment.Pane 用 CSS visibility 隐藏后代，DOM 可见性会误判。走 ContextKey + `expect.poll`。
 - **长任务命令 fire-and-forget**：`showCommands` 之类内部 await 用户输入的命令必须 `void window.__E2E__!.runCommand(id)`，否则死锁。
 - **终端 spec 别拿回显当 shell 输出**：`terminalInput` 的行由内核 tty 立即回显，缓冲区含某段文本 ≠ shell 执行过；定位锚行首（案例 87）。
-- **URI fsPath 用正斜杠**：本代码库 `URI.fsPath` 返回正斜杠，比对临时目录路径先 `.replace(/\\/g, '/')`。
+- **比对临时目录路径走 platform helper**：`relativePathUnder` / `arePathsEqual`，别手搓 `replace(/\\/g,'/')`+`toLowerCase()`（eslint 拦）。
 - **`page.viewportSize()` 在 Electron 下是 null**——位置/视口断言用 `page.evaluate(() => window.innerHeight)`。
 - **真回归 vs 环境噪声**：失败先按 skill `fix-ci-e2e-flake` 的判定流程定性；新发现一类 flaky → 往该 skill 追加案例。
 - **script 里设 env 要跨平台**：用 `cross-env`——裸 `FOO=1 cmd` 在 Windows 非 bash 下不生效。

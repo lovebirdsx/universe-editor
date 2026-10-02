@@ -18,6 +18,7 @@
 
 import * as path from 'node:path'
 import * as fs from 'node:fs'
+import { normalizePlatform, relativePathUnder } from '@universe-editor/platform'
 import { createColdAppTest, mkTempDir } from '@universe-editor/e2e-harness'
 import { expect } from '../fixtures/electronApp.js'
 
@@ -218,12 +219,14 @@ test.describe('@p1 workspace.findFiles', () => {
     // matches — the include glob must not resurrect ignored files.
     expect(sortPaths(caseOf('include-json').paths)).toEqual(sortPaths(JSON_MATCHES))
     // The returned paths are absolute and inside the seeded workspace root.
+    // They arrive as URI.fsPath (forward slashes, folded drive letter) while the
+    // fixture dir is a native path, so compare with the platform-aware helper
+    // rather than folding separators/case by hand.
     const absolute = caseOf('include-json').absolutes[0]
     expect(absolute).toBeTruthy()
-    // URI.fsPath folds the drive letter to lowercase and uses forward slashes;
-    // the fixture dir is a native Windows path. Fold both before the prefix check.
-    const normalize = (p: string): string => p.replace(/\\/g, '/').toLowerCase()
-    expect(normalize(absolute!).startsWith(normalize(launchWorkspace.dir))).toBe(true)
+    expect(
+      relativePathUnder(launchWorkspace.dir, absolute!, normalizePlatform(process.platform)),
+    ).not.toBeNull()
     expect(absolute!.endsWith('.json')).toBe(true)
     // The URI string an extension receives is a well-formed file URL — this is
     // what every downstream URI.join / parse sees. (Keep the case as-is: the
