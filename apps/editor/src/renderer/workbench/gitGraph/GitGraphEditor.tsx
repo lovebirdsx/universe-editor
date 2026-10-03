@@ -1597,7 +1597,9 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
   )
 
   // Reset the picked worktrees' branches to the target, then report a summary and
-  // reload the graph. Dirty worktrees are always skipped by the extension side.
+  // reload the graph. Dirty worktrees are always skipped by the extension side;
+  // without `force` it also skips any worktree holding a commit whose subject the
+  // target lacks, while `force` discards those commits.
   // The extension syncs the worktrees concurrently in one command call, so while
   // it runs we surface a sticky spinner notification instead of staying silent.
   const runWorktreeSync = useCallback(
@@ -1641,15 +1643,6 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
             'gitGraph.worktree.sync.summarySkipped',
             'Skipped (uncommitted changes): {names}',
             { names: summary.skippedDirty.join(', ') },
-          ),
-        )
-      }
-      if (summary.skippedUnmerged.length > 0) {
-        lines.push(
-          localize(
-            'gitGraph.worktree.sync.summaryUnmerged',
-            'Skipped (commits not in {branch}): {names}',
-            { branch: targetBranch, names: summary.skippedUnmerged.join(', ') },
           ),
         )
       }
@@ -1734,6 +1727,8 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
       )
       // Sync other worktrees onto this one's branch (git reset --hard <branch>).
       // Only meaningful when this worktree has a branch and others exist to sync.
+      // The force variant drops the commit-message guard and resets any clean
+      // worktree, so it is danger-marked and labelled as such.
       const others = allWorktrees
         .filter((wt) => wt.path !== path)
         .sort((a, b) => a.name.localeCompare(b.name))

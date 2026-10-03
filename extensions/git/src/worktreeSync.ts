@@ -12,10 +12,10 @@
  *
  * Only worktrees that can be fast-forwarded are touched: clean (no uncommitted
  * changes) and with a HEAD that is a strict ancestor of the new commit. Ancestry
- * — not `git cherry`'s patch-id comparison, which the *manual* worktree sync in
- * gitGraphActions.ts uses — is the right test here precisely because this runs
- * without the user asking: a patch-id match would let `reset --hard` discard real
- * commit objects that merely happen to carry equivalent content.
+ * — not the subject comparison the *manual* worktree sync in gitGraphActions.ts
+ * uses — is the right test here precisely because this runs without the user
+ * asking: any looser match would let `reset --hard` discard real commit objects
+ * that merely happen to carry equivalent content.
  *
  * A worktree on a branch has that branch's ref fast-forwarded along with it.
  * That is a deliberate, user-configured behaviour (`git.autoSyncWorktreesAfterPull`),

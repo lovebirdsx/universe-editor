@@ -17,16 +17,14 @@ interface Call {
 
 /**
  * Drive `gitExec(args, cwd)` from per-cwd canned responses. `status[cwd]` is the
- * `git status --porcelain` stdout (presence of text ⇒ dirty); `cherry[cwd]` is
- * the `git cherry <target> HEAD` stdout (a `+`-prefixed line ⇒ unmerged commit);
- * `reset[cwd]`, when present, overrides the reset result. `log` is keyed by
- * `cwd` → `args.join(' ')` for `git log`; `mergeBase`/`mergeBaseUnrelated`/
- * `mergeBaseFail` drive the `git merge-base` probe per cwd. Records every call.
+ * `git status --porcelain` stdout (presence of text ⇒ dirty); `reset[cwd]`, when
+ * present, overrides the reset result. `log` is keyed by `cwd` → `args.join(' ')`
+ * for `git log`; `mergeBase`/`mergeBaseUnrelated`/`mergeBaseFail` drive the `git
+ * merge-base` probe per cwd. Records every call.
  */
 function setup(opts: {
   status?: Record<string, string>
   statusFail?: Set<string>
-  cherry?: Record<string, string>
   reset?: Record<string, GitExecResult>
   submoduleFail?: Record<string, string>
   log?: Record<string, Record<string, string>>
@@ -42,7 +40,6 @@ function setup(opts: {
       if (opts.statusFail?.has(cwd)) return Promise.resolve(fail('status boom'))
       return Promise.resolve(ok(opts.status?.[cwd] ?? ''))
     }
-    if (args[0] === 'cherry') return Promise.resolve(ok(opts.cherry?.[cwd] ?? ''))
     if (args[0] === 'reset') {
       return Promise.resolve(opts.reset?.[cwd] ?? ok())
     }
@@ -87,7 +84,6 @@ describe('syncWorktreesToBranch', () => {
     expect(res).toEqual({
       synced: ['a', 'b'],
       skippedDirty: [],
-      skippedUnmerged: [],
       skippedUnmatchedMessages: [],
       failed: [],
     })
@@ -98,56 +94,11 @@ describe('syncWorktreesToBranch', () => {
     ])
   })
 
-  it('syncs a worktree whose commits are merged by patch-id (squash/rebase)', async () => {
-    // `git cherry` reports only `-` lines: every worktree commit is already in the
-    // target under a different hash. This must NOT be treated as unmerged.
-    setup({ cherry: { '/repo.wt/a': '- 1111111111111111111111111111111111111111\n' } })
-    const res = await syncWorktreesToBranch('main', [{ path: '/repo.wt/a', name: 'a' }], undefined)
-
-    expect(res.synced).toEqual(['a'])
-    expect(res.skippedUnmerged).toEqual([])
-  })
-
-  it('skips dirty worktrees without checking merge state or resetting them', async () => {
-    const calls = setup({ status: { '/repo.wt/a': ' M file.ts\n' } })
-    const res = await syncWorktreesToBranch(
-      'main',
-      [
-        { path: '/repo.wt/a', name: 'a' },
-        { path: '/repo.wt/b', name: 'b' },
-      ],
-      undefined,
-    )
-
-    expect(res.synced).toEqual(['b'])
-    expect(res.skippedDirty).toEqual(['a'])
-    expect(res.skippedUnmerged).toEqual([])
-    expect(calls.some((c) => c.args[0] === 'reset' && c.cwd === '/repo.wt/a')).toBe(false)
-    expect(calls.some((c) => c.args[0] === 'cherry' && c.cwd === '/repo.wt/a')).toBe(false)
-  })
-
-  it('skips worktrees whose commits are not contained in the target', async () => {
+  it('syncs a clean worktree whose orphan-to-be commits are covered by the target', async () => {
+    // The worktree's commits are not in the target by hash or patch-id (a squash /
+    // cherry-pick landed them under different hashes), but every subject they carry
+    // is present in the target's own history, so the reset drops nothing.
     const calls = setup({
-      cherry: { '/repo.wt/a': '+ 2222222222222222222222222222222222222222\n' },
-    })
-    const res = await syncWorktreesToBranch(
-      'main',
-      [
-        { path: '/repo.wt/a', name: 'a' },
-        { path: '/repo.wt/b', name: 'b' },
-      ],
-      undefined,
-    )
-
-    expect(res.synced).toEqual(['b'])
-    expect(res.skippedUnmerged).toEqual(['a'])
-    expect(res.skippedDirty).toEqual([])
-    expect(calls.some((c) => c.args[0] === 'reset' && c.cwd === '/repo.wt/a')).toBe(false)
-  })
-
-  it('force-syncs a clean worktree whose orphan-to-be commits are covered by the target', async () => {
-    const calls = setup({
-      cherry: { '/repo.wt/a': '+ 2222222222222222222222222222222222222222\n' },
       log: {
         '/repo.wt/a': {
           'log --format=%s main..HEAD': 'dc2\ndc3\n',
@@ -157,17 +108,10 @@ describe('syncWorktreesToBranch', () => {
       mergeBase: { '/repo.wt/a': 'abc123' },
     })
 
-    const res = await syncWorktreesToBranch(
-      'main',
-      [{ path: '/repo.wt/a', name: 'a' }],
-      undefined,
-      true,
-    )
+    const res = await syncWorktreesToBranch('main', [{ path: '/repo.wt/a', name: 'a' }], undefined)
 
     expect(res.synced).toEqual(['a'])
-    expect(res.skippedUnmerged).toEqual([])
     expect(res.skippedUnmatchedMessages).toEqual([])
-    expect(calls).not.toContainEqual({ args: ['cherry', 'main', 'HEAD'], cwd: '/repo.wt/a' })
     expect(calls).toContainEqual({
       args: ['log', '--format=%s', 'main..HEAD'],
       cwd: '/repo.wt/a',
@@ -180,7 +124,26 @@ describe('syncWorktreesToBranch', () => {
     expect(calls).toContainEqual({ args: ['reset', '--hard', 'main'], cwd: '/repo.wt/a' })
   })
 
-  it('refuses force sync when an orphan-to-be commit message is missing from the target', async () => {
+  it('skips dirty worktrees without probing their commits or resetting them', async () => {
+    const calls = setup({ status: { '/repo.wt/a': ' M file.ts\n' } })
+    const res = await syncWorktreesToBranch(
+      'main',
+      [
+        { path: '/repo.wt/a', name: 'a' },
+        { path: '/repo.wt/b', name: 'b' },
+      ],
+      undefined,
+    )
+
+    expect(res.synced).toEqual(['b'])
+    expect(res.skippedDirty).toEqual(['a'])
+    expect(res.skippedUnmatchedMessages).toEqual([])
+    expect(calls.some((c) => c.args[0] === 'reset' && c.cwd === '/repo.wt/a')).toBe(false)
+    expect(calls.some((c) => c.args[0] === 'log' && c.cwd === '/repo.wt/a')).toBe(false)
+    expect(calls.some((c) => c.args[0] === 'merge-base' && c.cwd === '/repo.wt/a')).toBe(false)
+  })
+
+  it('skips a worktree whose orphan-to-be commit message is missing from the target', async () => {
     const calls = setup({
       log: {
         '/repo.wt/a': {
@@ -190,7 +153,6 @@ describe('syncWorktreesToBranch', () => {
       },
       mergeBase: { '/repo.wt/a': 'abc123' },
     })
-
     const res = await syncWorktreesToBranch(
       'main',
       [
@@ -198,17 +160,26 @@ describe('syncWorktreesToBranch', () => {
         { path: '/repo.wt/b', name: 'b' },
       ],
       undefined,
-      true,
     )
 
     expect(res.synced).toEqual(['b'])
-    expect(res.skippedUnmerged).toEqual([])
     expect(res.skippedUnmatchedMessages).toEqual(['a'])
+    expect(res.skippedDirty).toEqual([])
     expect(calls.some((c) => c.args[0] === 'reset' && c.cwd === '/repo.wt/a')).toBe(false)
   })
 
-  it('force-syncs without probing messages when the worktree has no commits beyond the target', async () => {
-    const calls = setup({})
+  it('force-syncs a clean worktree without probing its commit messages', async () => {
+    // Same uncovered commit as above (dc31 is nowhere in the target), but force
+    // mode discards it instead of refusing — and never pays for the probe.
+    const calls = setup({
+      log: {
+        '/repo.wt/a': {
+          'log --format=%s main..HEAD': 'dc31\n',
+          'log --format=%s abc123..main': 'dc1\ndc2\n',
+        },
+      },
+      mergeBase: { '/repo.wt/a': 'abc123' },
+    })
 
     const res = await syncWorktreesToBranch(
       'main',
@@ -216,6 +187,36 @@ describe('syncWorktreesToBranch', () => {
       undefined,
       true,
     )
+
+    expect(res).toEqual({
+      synced: ['a'],
+      skippedDirty: [],
+      skippedUnmatchedMessages: [],
+      failed: [],
+    })
+    expect(calls.some((c) => c.args[0] === 'log' || c.args[0] === 'merge-base')).toBe(false)
+    expect(calls).toContainEqual({ args: ['reset', '--hard', 'main'], cwd: '/repo.wt/a' })
+  })
+
+  it('still skips dirty worktrees in force mode', async () => {
+    const calls = setup({ status: { '/repo.wt/a': ' M file.ts\n' } })
+
+    const res = await syncWorktreesToBranch(
+      'main',
+      [{ path: '/repo.wt/a', name: 'a' }],
+      undefined,
+      true,
+    )
+
+    expect(res.synced).toEqual([])
+    expect(res.skippedDirty).toEqual(['a'])
+    expect(calls.some((c) => c.args[0] === 'reset')).toBe(false)
+  })
+
+  it('syncs without probing messages when the worktree has no commits beyond the target', async () => {
+    const calls = setup({})
+
+    const res = await syncWorktreesToBranch('main', [{ path: '/repo.wt/a', name: 'a' }], undefined)
 
     expect(res.synced).toEqual(['a'])
     expect(calls.some((c) => c.args[0] === 'merge-base')).toBe(false)
@@ -233,12 +234,7 @@ describe('syncWorktreesToBranch', () => {
       mergeBaseUnrelated: new Set(['/repo.wt/a']),
     })
 
-    const res = await syncWorktreesToBranch(
-      'main',
-      [{ path: '/repo.wt/a', name: 'a' }],
-      undefined,
-      true,
-    )
+    const res = await syncWorktreesToBranch('main', [{ path: '/repo.wt/a', name: 'a' }], undefined)
 
     expect(res.synced).toEqual(['a'])
     expect(calls).toContainEqual({ args: ['log', '--format=%s', 'main'], cwd: '/repo.wt/a' })
@@ -248,15 +244,28 @@ describe('syncWorktreesToBranch', () => {
     })
   })
 
+  it('refuses when a unique commit has an empty subject', async () => {
+    const calls = setup({
+      log: {
+        '/repo.wt/a': {
+          'log --format=%s main..HEAD': 'dc2\n\n',
+          'log --format=%s abc123..main': 'dc1\ndc2\n',
+        },
+      },
+      mergeBase: { '/repo.wt/a': 'abc123' },
+    })
+
+    const res = await syncWorktreesToBranch('main', [{ path: '/repo.wt/a', name: 'a' }], undefined)
+
+    expect(res.synced).toEqual([])
+    expect(res.skippedUnmatchedMessages).toEqual(['a'])
+    expect(calls.some((c) => c.args[0] === 'reset' && c.cwd === '/repo.wt/a')).toBe(false)
+  })
+
   it('records a unique-log failure as a failure, not a skip', async () => {
     setup({ logFail: { '/repo.wt/a': { 'log --format=%s main..HEAD': 'fatal: bad revision' } } })
 
-    const res = await syncWorktreesToBranch(
-      'main',
-      [{ path: '/repo.wt/a', name: 'a' }],
-      undefined,
-      true,
-    )
+    const res = await syncWorktreesToBranch('main', [{ path: '/repo.wt/a', name: 'a' }], undefined)
 
     expect(res.synced).toEqual([])
     expect(res.skippedUnmatchedMessages).toEqual([])
@@ -269,12 +278,7 @@ describe('syncWorktreesToBranch', () => {
       mergeBaseFail: new Set(['/repo.wt/a']),
     })
 
-    const res = await syncWorktreesToBranch(
-      'main',
-      [{ path: '/repo.wt/a', name: 'a' }],
-      undefined,
-      true,
-    )
+    const res = await syncWorktreesToBranch('main', [{ path: '/repo.wt/a', name: 'a' }], undefined)
 
     expect(res.synced).toEqual([])
     expect(res.failed).toEqual([{ name: 'a', error: 'merge-base boom' }])
@@ -287,52 +291,10 @@ describe('syncWorktreesToBranch', () => {
       mergeBase: { '/repo.wt/a': 'abc123' },
     })
 
-    const res = await syncWorktreesToBranch(
-      'main',
-      [{ path: '/repo.wt/a', name: 'a' }],
-      undefined,
-      true,
-    )
+    const res = await syncWorktreesToBranch('main', [{ path: '/repo.wt/a', name: 'a' }], undefined)
 
     expect(res.synced).toEqual([])
     expect(res.failed).toEqual([{ name: 'a', error: 'fatal: bad object' }])
-  })
-
-  it('refuses force sync when a unique commit has an empty subject', async () => {
-    const calls = setup({
-      log: {
-        '/repo.wt/a': {
-          'log --format=%s main..HEAD': 'dc2\n\n',
-          'log --format=%s abc123..main': 'dc1\ndc2\n',
-        },
-      },
-      mergeBase: { '/repo.wt/a': 'abc123' },
-    })
-
-    const res = await syncWorktreesToBranch(
-      'main',
-      [{ path: '/repo.wt/a', name: 'a' }],
-      undefined,
-      true,
-    )
-
-    expect(res.synced).toEqual([])
-    expect(res.skippedUnmatchedMessages).toEqual(['a'])
-    expect(calls.some((c) => c.args[0] === 'reset' && c.cwd === '/repo.wt/a')).toBe(false)
-  })
-
-  it('still skips dirty worktrees in force mode', async () => {
-    const calls = setup({ status: { '/repo.wt/a': ' M file.ts\n' } })
-
-    const res = await syncWorktreesToBranch(
-      'main',
-      [{ path: '/repo.wt/a', name: 'a' }],
-      undefined,
-      true,
-    )
-
-    expect(res.skippedDirty).toEqual(['a'])
-    expect(calls.some((c) => c.args[0] === 'reset')).toBe(false)
   })
 
   it('syncs worktrees concurrently and keeps buckets in input order', async () => {
@@ -369,10 +331,12 @@ describe('syncWorktreesToBranch', () => {
     setup({ reset: { '/repo.wt/a': fail('fatal: ambiguous argument') } })
     const res = await syncWorktreesToBranch('main', [{ path: '/repo.wt/a', name: 'a' }], undefined)
 
-    expect(res.synced).toEqual([])
-    expect(res.skippedDirty).toEqual([])
-    expect(res.skippedUnmerged).toEqual([])
-    expect(res.failed).toEqual([{ name: 'a', error: 'fatal: ambiguous argument' }])
+    expect(res).toEqual({
+      synced: [],
+      skippedDirty: [],
+      skippedUnmatchedMessages: [],
+      failed: [{ name: 'a', error: 'fatal: ambiguous argument' }],
+    })
   })
 
   it('records a status failure as a failure, not a skip', async () => {
@@ -382,7 +346,7 @@ describe('syncWorktreesToBranch', () => {
     expect(res.failed).toEqual([{ name: 'a', error: 'status boom' }])
     expect(res.synced).toEqual([])
     expect(res.skippedDirty).toEqual([])
-    expect(res.skippedUnmerged).toEqual([])
+    expect(res.skippedUnmatchedMessages).toEqual([])
   })
 
   it('runs submodule update after reset and counts the worktree as synced when it succeeds', async () => {
@@ -411,6 +375,15 @@ describe('syncWorktreesToBranch', () => {
     expect(res.synced).toEqual(['b'])
     expect(res.failed).toEqual([{ name: 'a', error: 'fatal: submodule init failed' }])
     expect(res.skippedDirty).toEqual([])
-    expect(res.skippedUnmerged).toEqual([])
+    expect(res.skippedUnmatchedMessages).toEqual([])
+  })
+
+  it('never shells out to git cherry', async () => {
+    // The guard used to fall back to a patch-id check in normal mode; the subject
+    // comparison replaced it, and nothing should resurrect the extra round-trip.
+    const calls = setup({})
+    await syncWorktreesToBranch('main', [{ path: '/repo.wt/a', name: 'a' }], undefined)
+
+    expect(calls.some((c) => c.args[0] === 'cherry')).toBe(false)
   })
 })

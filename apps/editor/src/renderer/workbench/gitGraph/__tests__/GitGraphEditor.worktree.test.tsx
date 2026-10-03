@@ -328,6 +328,7 @@ describe('GitGraphEditor worktree sync', () => {
       .getAllByRole('menuitem')
       .map((el) => el.textContent)
     expect(labels).toContain('Sync worktrees to main…')
+    expect(labels).toContain('Force sync worktrees to main…')
   })
 
   it('hides the sync item for a detached target', async () => {
@@ -410,7 +411,7 @@ describe('GitGraphEditor worktree sync', () => {
     )
   })
 
-  it('force-syncs selected clean worktrees while preserving the force flag', async () => {
+  it('force-syncs the picked worktrees and preserves the force flag', async () => {
     gitGraphViewState.result = makeResult([mainWt, featureWt])
     const { executeCommand, quickInput } = renderEditor()
     await flush()
@@ -422,6 +423,8 @@ describe('GitGraphEditor worktree sync', () => {
     picker.triggerOk()
     await flush()
 
+    // Same command as the plain entry, but with `force`: the extension side skips
+    // the commit-message guard and resets any clean worktree.
     expect(executeCommand).toHaveBeenCalledWith(
       GitGraphCommands.syncWorktrees,
       'main',
