@@ -17,7 +17,6 @@ import { join } from 'node:path'
 import type { Page } from '@playwright/test'
 import { test, expect } from '../fixtures/sharedApp.js'
 import { mkTempDir } from '@universe-editor/e2e-harness'
-import type { WorkbenchPO } from '../pages/WorkbenchPO.js'
 
 /** `alphaChild` sits on line 3 of the 2-space-indented file below. */
 const CHILD_LINE = 3
@@ -44,21 +43,6 @@ function groupIds(page: Page): Promise<string[]> {
 async function breadcrumbText(page: Page, groupId: string): Promise<string> {
   const crumbs = page.locator(`[data-group-id="${groupId}"] [data-testid="editor-breadcrumbs"]`)
   return (await crumbs.textContent()) ?? ''
-}
-
-/** Move DOM focus off the editor so the Ctrl+K chord navigation is authoritative. */
-async function focusGroupLeft(page: Page, workbench: WorkbenchPO): Promise<void> {
-  await page.focus('[data-testid="activitybar-item-workbench.view.explorer"]')
-  await expect.poll(() => workbench.getContextKey<boolean>('editorFocus')).toBe(false)
-  await page.keyboard.press('Control+k')
-  await page.keyboard.press('Control+ArrowLeft')
-}
-
-async function focusGroupRight(page: Page, workbench: WorkbenchPO): Promise<void> {
-  await page.focus('[data-testid="activitybar-item-workbench.view.explorer"]')
-  await expect.poll(() => workbench.getContextKey<boolean>('editorFocus')).toBe(false)
-  await page.keyboard.press('Control+k')
-  await page.keyboard.press('Control+ArrowRight')
 }
 
 test.describe('@p1 breadcrumbs', () => {
@@ -95,7 +79,7 @@ test.describe('@p1 breadcrumbs', () => {
 
     // Put the LEFT group's caret inside `alphaChild`, then leave it in the
     // background by focusing the right group.
-    await focusGroupLeft(page, workbench)
+    await workbench.runCommand('workbench.action.focusLeftGroup')
     await expect.poll(() => workbench.getActiveEditorUri()).toBe(uriA)
     await page.evaluate((line) => window.__E2E__!.setActiveEditorCursor(line, 5), CHILD_LINE)
     await expect
@@ -104,7 +88,7 @@ test.describe('@p1 breadcrumbs', () => {
       })
       .toBe('alphaChild')
 
-    await focusGroupRight(page, workbench)
+    await workbench.runCommand('workbench.action.focusRightGroup')
     await expect.poll(() => workbench.getActiveEditorUri()).toBe(uriB)
     await page.evaluate((line) => window.__E2E__!.setActiveEditorCursor(line, 5), CHILD_LINE)
     await expect

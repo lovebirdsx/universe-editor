@@ -537,6 +537,12 @@ markdown job（ubuntu，CI run 31295361355）`markdownPreview.spec.ts:205` 与 `
 验证：本地基线 7/7；点击前临时插入 900ms，旧实现 2 failed / 5 passed；双门控保留相同延迟后 7/7，随后移除临时延迟。累计 `mdparse.chars` 可能重复计尾部，只能作渲染就绪下限，不能宣称它独立证明全文渲染完成。
 锚：`apps/editor/e2e/specs/smoke.agentStreamMemory.spec.ts`、`apps/editor/src/test-fixtures/echoAgent.cjs`；开发说明见 `docs/development/memory-pressure.md`。
 
+**案例 96 — 面包屑回归被切组前的 defocus 阻断：场景搭建不要夹带快捷键测试**
+信号：run `37083025170` 的 Linux shard 2 在 `smoke.breadcrumbs` 的 `focusGroupRight` 中等 `editorFocus=false`，received 恒 true，initial/retry 均超时；trace 显示左组已切换且 `alphaChild` 已就位，右切 chord 尚未发送。本地原用例连续 5 次通过。
+根因：测试只验证各组面包屑，却通过活动栏 `page.focus` → 等编辑器失焦 → Ctrl+K chord 准备场景，把无关的 DOM 移焦成功当成业务前提。现有 CI 产物未记录当时的 activeElement、窗口焦点和焦点事件，不能仅凭恒 true 断定是窗口失焦、焦点恢复抢占或 ContextKey 陈旧；能确认的是失败发生在额外的 defocus 前置，而非面包屑断言。
+修：直接执行快捷键绑定的 `workbench.action.focusLeftGroup` / `focusRightGroup`，保留活动 URI、光标符号及左右组面包屑正反断言，不改产品、不放宽 timeout。全库扫描同类 defocus/chord：`smoke.editorGroupSwitch` 专测键盘路径，已有 bringToFront，保留真实按键；其余场景已有命令式切组，无需迁移。与案例 48 互参：真快捷键测试不能用命令替代。
+锚：`apps/editor/e2e/specs/smoke.breadcrumbs.spec.ts`、`smoke.editorGroupSwitch.spec.ts`。
+
 ---
 - `@parcel/watcher` Windows 多 worker 竞态的长期根治（升级 / 换 watcher / 进一步隔离），替代长期 `--workers=1`（案例 12/16/26/44 的 `@serial` 都是它的 workaround）。
 - DnD 用例稳定化（显式等待 drop 完成态），稳定后摘 `@flaky`（案例 46）。
