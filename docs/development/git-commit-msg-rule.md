@@ -53,3 +53,7 @@ build(dev)!: switch to new build tool
 
 已知类型（feat/fix/perf/security）展示在对应分组，其它类型展示在"其他变更"。
 无 `!` 的提交，无论何种类型，均不出现在发布说明中。
+
+## 禁止署名水印
+
+提交信息（含 trailer）不得包含 AI/工具署名水印，例如 `Co-Authored-By: Claude <noreply@anthropic.com>`：提交只描述变更本身。

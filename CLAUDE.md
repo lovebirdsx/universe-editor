@@ -108,3 +108,4 @@ Prettier：无分号、单引号、`trailingComma: all`、宽度 100。默认不
 - 对于开发者需要关注的功能，包括但不限于 AI 使用规范，编码，测试，发布，检查 `docs/development` 是否有对应文档需要更新
 - 新增知识按归属放置：绑定具体代码目录的写进该目录 CLAUDE.md；memory 只留跨会话教训的一句话索引，memory请放在本目录的 .claude/memory/MEMORY.md 下，不要放在用户目录下
 - 当你想调用子agent来进行任务时，请不要使用异步的方式，而是同步等子agent完成之后，才进行后续工作
+- **提交信息不要包含 AI/工具署名水印**（如 `Co-Authored-By: Claude <noreply@anthropic.com>`）：提交只描述变更本身；格式见 `docs/development/git-commit-msg-rule.md`
