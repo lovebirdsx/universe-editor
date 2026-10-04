@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 let currentUserData = ''
 
@@ -49,7 +49,7 @@ describe('ConfigLocationMainService', () => {
 
   afterEach(async () => {
     try {
-      await fs.rm(tmp, { recursive: true, force: true })
+      removeDirWithRetry(tmp)
     } catch {
       // ignore
     }

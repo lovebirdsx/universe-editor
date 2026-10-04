@@ -7,7 +7,7 @@ import { shell } from 'electron'
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { LogLevel } from '@universe-editor/platform'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 const { mockGetPath, mockOpenPath } = vi.hoisted(() => ({
   mockGetPath: vi.fn((_name: string): string => ''),
@@ -50,7 +50,7 @@ describe('LogFilesMainService', () => {
 
   afterEach(async () => {
     logService.dispose()
-    await fs.rm(tmpDir, { recursive: true, force: true })
+    removeDirWithRetry(tmpDir)
     vi.clearAllMocks()
   })
 

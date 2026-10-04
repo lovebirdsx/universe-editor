@@ -34,7 +34,6 @@
  *  below (pure editor self-consistency, reads no fork) always runs.
  *--------------------------------------------------------------------------------------------*/
 
-import { rmSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   ACP_EXT_METHODS,
@@ -51,7 +50,7 @@ import {
   withTimeout,
 } from '../fixtures/realForkConnection.js'
 import type { SessionConfigOption } from '@agentclientprotocol/sdk'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 // Handshake + newSession over a real subprocess: allow generous headroom (fork
 // cold-start + SDK model list ~1.3s observed) so CI machines don't flake.
@@ -196,7 +195,7 @@ function handshakeSuite(fork: ForkId) {
     afterEach(() => {
       connection.dispose()
       try {
-        rmSync(cwd, { recursive: true, force: true })
+        removeDirWithRetry(cwd)
       } catch {
         // best-effort temp cleanup
       }
@@ -348,7 +347,7 @@ describe.skipIf(!claudeExtReady)('claude ext-method wire contract (real dist)', 
   afterEach(() => {
     connection.dispose()
     try {
-      rmSync(cwd, { recursive: true, force: true })
+      removeDirWithRetry(cwd)
     } catch {
       // best-effort
     }

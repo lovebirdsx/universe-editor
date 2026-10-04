@@ -7,7 +7,7 @@
 
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
-import { rm, writeFile, mkdir, stat, readFile, readdir } from 'node:fs/promises'
+import { writeFile, mkdir, stat, readFile, readdir } from 'node:fs/promises'
 import * as path from 'node:path'
 import { createVsix } from '@universe-editor/extension-packaging'
 import {
@@ -23,7 +23,7 @@ import {
   writeEnablement,
   writeInstalledRecords,
 } from '../installedExtensionsManifest.js'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 const HOST_API = '0.1.0'
 
@@ -80,7 +80,7 @@ describe('extensionInstallEngine', () => {
   })
   afterEach(async () => {
     vi.restoreAllMocks()
-    await rm(root, { recursive: true, force: true })
+    removeDirWithRetry(root)
   })
 
   it('installs a VSIX through the seven-step flow and lists it', async () => {
@@ -241,7 +241,7 @@ describe('extensionInstallEngine', () => {
       source: 'vsix',
       hostApiVersion: HOST_API,
     })
-    await rm(path.join(extDir, 'acme.sample-1.0.0'), { recursive: true, force: true })
+    removeDirWithRetry(path.join(extDir, 'acme.sample-1.0.0'))
 
     expect(await uninstallExtension(extDir, 'acme.sample')).toBe(true)
     expect(await readInstalledRecords(extDir)).toEqual([])

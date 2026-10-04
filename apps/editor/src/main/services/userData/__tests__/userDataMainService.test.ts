@@ -10,7 +10,7 @@ import {
   type IUserDataFileChange,
   type IWorkspace,
 } from '@universe-editor/platform'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 let currentUserData = ''
 
@@ -74,7 +74,7 @@ describe('UserDataMainService', () => {
 
   afterEach(async () => {
     try {
-      await fs.rm(tmp, { recursive: true, force: true })
+      removeDirWithRetry(tmp)
     } catch {
       // ignore
     }

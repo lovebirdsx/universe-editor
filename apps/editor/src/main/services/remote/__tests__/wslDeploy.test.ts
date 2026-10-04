@@ -6,7 +6,7 @@
 
 import { EventEmitter } from 'node:events'
 import { PassThrough, Readable } from 'node:stream'
-import { existsSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -26,7 +26,7 @@ import {
   type RemoteSpawner,
 } from '../remoteDeploy.js'
 import { WslDeployer, stripWslNuls, wslCommandArgs } from '../wslDeploy.js'
-import { getTempRoot, mkTempDir } from '@universe-editor/temp-root'
+import { getTempRoot, mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 const WSL_EXE = 'C:\\Windows\\System32\\wsl.exe'
 const NODE_PATH_PRELUDE = `PATH="$PATH:$HOME/.universe-editor-server/node/v24.19.0/bin"; `
@@ -146,7 +146,7 @@ interface DeployHarness {
 
 const bundleDirs: string[] = []
 afterEach(() => {
-  for (const d of bundleDirs.splice(0)) rmSync(d, { recursive: true, force: true })
+  for (const d of bundleDirs.splice(0)) removeDirWithRetry(d)
 })
 
 function makeBundle(): string {

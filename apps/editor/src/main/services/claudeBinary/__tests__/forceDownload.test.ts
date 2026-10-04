@@ -10,7 +10,7 @@
 import { access, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import * as path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 let userData = ''
 let resourcesPath = ''
@@ -80,8 +80,8 @@ describe('ClaudeBinaryMainService.forceDownload', () => {
   })
 
   afterEach(async () => {
-    await rm(userData, { recursive: true, force: true })
-    await rm(resourcesPath, { recursive: true, force: true })
+    removeDirWithRetry(userData)
+    removeDirWithRetry(resourcesPath)
     vi.restoreAllMocks()
   })
 

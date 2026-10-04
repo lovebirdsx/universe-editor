@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { rm, writeFile } from 'node:fs/promises'
+import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { CancellationError, URI } from '@universe-editor/platform'
 import {
@@ -28,7 +28,7 @@ import type {
 import { ExtensionService } from '../extensionService.js'
 import type { IScannedExtension } from '../extensionScanner.js'
 import { computeActiveExtensions } from '../extensionActivationFilter.js'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 // A standalone ESM extension module that registers a command through the global
 // host bridge — exactly what the bundled extension-api shim does at runtime.
@@ -51,7 +51,7 @@ beforeEach(async () => {
   await writeFile(mainPath, EXT_SOURCE, 'utf8')
 })
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true })
+  removeDirWithRetry(dir)
 })
 
 function recordingMainThread(): {

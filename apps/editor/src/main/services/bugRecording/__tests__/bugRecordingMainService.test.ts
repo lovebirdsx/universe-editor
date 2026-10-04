@@ -12,7 +12,7 @@ import {
   type BugRecordingMainServiceOptions,
 } from '../bugRecordingMainService.js'
 import type { LogMainService } from '../../log/logMainService.js'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 const SESSION_ID = '20260828T101500'
 
@@ -82,7 +82,7 @@ describe('BugRecordingMainService', () => {
   })
 
   afterEach(async () => {
-    await rm(root, { recursive: true, force: true })
+    removeDirWithRetry(root)
   })
 
   function create(

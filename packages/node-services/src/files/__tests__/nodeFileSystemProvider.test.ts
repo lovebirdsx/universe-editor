@@ -9,7 +9,7 @@ import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { FileSystemError, URI } from '@universe-editor/platform'
 import { NodeFileSystemProvider } from '../nodeFileSystemProvider.js'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 describe('NodeFileSystemProvider read-size backstop', () => {
   let dir: string
@@ -19,7 +19,7 @@ describe('NodeFileSystemProvider read-size backstop', () => {
   })
 
   afterEach(async () => {
-    await fs.rm(dir, { recursive: true, force: true })
+    removeDirWithRetry(dir)
   })
 
   it('reads a file under the text cap', async () => {
@@ -69,7 +69,7 @@ describe('NodeFileSystemProvider readFileHead', () => {
   })
 
   afterEach(async () => {
-    await fs.rm(dir, { recursive: true, force: true })
+    removeDirWithRetry(dir)
   })
 
   it('reads only the first maxBytes of a larger file', async () => {
@@ -122,7 +122,7 @@ describe('NodeFileSystemProvider trash capability', () => {
       // The file survives: a failed trash must never fall through to unlink.
       await expect(fs.readFile(file, 'utf8')).resolves.toBe('data')
     } finally {
-      await fs.rm(dir, { recursive: true, force: true })
+      removeDirWithRetry(dir)
     }
   })
 })
@@ -135,7 +135,7 @@ describe('NodeFileSystemProvider read-failure log throttling', () => {
   })
 
   afterEach(async () => {
-    await fs.rm(dir, { recursive: true, force: true })
+    removeDirWithRetry(dir)
   })
 
   /** Collects warn/debug lines from a provider's logger. */

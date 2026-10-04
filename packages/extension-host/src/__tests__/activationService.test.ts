@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { rm, writeFile } from 'node:fs/promises'
+import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { ExtensionActivationService } from '../activationService.js'
 import type { IActivationErrorReport } from '../activationService.js'
 import type { IScannedExtension } from '../extensionScanner.js'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 // An extension module that records its activation by writing to a global the test
 // can read back (the host imports it as a real ESM module).
@@ -25,7 +25,7 @@ beforeEach(async () => {
   ;(globalThis as Record<string, unknown>).__activated = 0
 })
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true })
+  removeDirWithRetry(dir)
   delete (globalThis as Record<string, unknown>).__activated
 })
 

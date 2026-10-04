@@ -15,7 +15,7 @@ import {
   type IFileSearchMatches,
 } from '@universe-editor/platform'
 import { FileSearchService } from '../fileSearchService.js'
-import { mkTempDir, effectiveTempRoot } from '@universe-editor/temp-root'
+import { effectiveTempRoot, mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 /** The listing and scored shapes share no identifying field — discriminate loudly. */
 function asListing(complete: IFileSearchComplete): IFileSearchListing {
@@ -70,7 +70,7 @@ afterEach(async () => {
   for (const root of roots.splice(0)) {
     const resolved = path.resolve(root)
     if (resolved.startsWith(prefix)) {
-      await fs.rm(resolved, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+      removeDirWithRetry(resolved)
     }
   }
 })

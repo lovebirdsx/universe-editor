@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { rm, writeFile } from 'node:fs/promises'
+import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { loadNlsBundle, localizeManifest } from '../nls.js'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 let dir: string
 
@@ -10,7 +10,7 @@ beforeEach(async () => {
   dir = mkTempDir('ue-nls-')
 })
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true })
+  removeDirWithRetry(dir)
 })
 
 describe('localizeManifest', () => {

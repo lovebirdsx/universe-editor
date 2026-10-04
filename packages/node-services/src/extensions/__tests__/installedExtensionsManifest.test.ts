@@ -8,14 +8,14 @@
 
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
-import { rm, readFile } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import * as path from 'node:path'
 import {
   readEnablement,
   readInstalledRecords,
   writeEnablement,
 } from '../installedExtensionsManifest.js'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 function erroring(code: string): NodeJS.ErrnoException {
   const err = new Error(`${code}: operation not permitted, rename`) as NodeJS.ErrnoException
@@ -32,7 +32,7 @@ describe('installedExtensionsManifest atomic write', () => {
 
   afterEach(async () => {
     vi.restoreAllMocks()
-    await rm(dir, { recursive: true, force: true, maxRetries: 5 })
+    removeDirWithRetry(dir)
   })
 
   it('retries the rename through transient EPERM locks and lands the write', async () => {

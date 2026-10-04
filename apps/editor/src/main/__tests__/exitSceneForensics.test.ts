@@ -3,10 +3,10 @@
  *  curve back out of a dead session's log tail.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 import {
   describeExitScene,
   parseExitScene,
@@ -230,7 +230,7 @@ describe('readExitScene', () => {
     try {
       expect(await readExitScene(root, '../../etc')).toBeUndefined()
     } finally {
-      await rm(root, { recursive: true, force: true })
+      removeDirWithRetry(root)
     }
   })
 
@@ -240,7 +240,7 @@ describe('readExitScene', () => {
       await mkdir(join(root, SESSION_ID), { recursive: true })
       expect(await readExitScene(root, SESSION_ID)).toBeUndefined()
     } finally {
-      await rm(root, { recursive: true, force: true })
+      removeDirWithRetry(root)
     }
   })
 
@@ -259,7 +259,7 @@ describe('readExitScene', () => {
       expect(cut?.truncated).toBe(true)
       expect(cut?.sampleCount).toBeGreaterThan(0)
     } finally {
-      await rm(root, { recursive: true, force: true })
+      removeDirWithRetry(root)
     }
   })
 
@@ -278,7 +278,7 @@ describe('readExitScene', () => {
       expect(scene?.source).toBe('rotated')
       expect(scene?.renderers[0]?.pid).toBe(29676)
     } finally {
-      await rm(root, { recursive: true, force: true })
+      removeDirWithRetry(root)
     }
   })
 
@@ -306,7 +306,7 @@ describe('readExitScene', () => {
       expect(capped?.truncated).toBe(true)
       expect(capped?.renderers.some((process) => process.pid === 999)).toBe(false)
     } finally {
-      await rm(root, { recursive: true, force: true })
+      removeDirWithRetry(root)
     }
   })
 })

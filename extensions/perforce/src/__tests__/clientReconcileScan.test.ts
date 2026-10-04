@@ -49,12 +49,12 @@
  *     offline / disposed events query nothing at all.
  */
 import { EventEmitter } from 'node:events'
-import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { FileSystemWatcher } from '@universe-editor/extension-api'
 import { expandP4Argv } from './expandP4Argv.js'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 class FakeChildProcess extends EventEmitter {
   readonly stdout = new EventEmitter()
@@ -3083,7 +3083,7 @@ describe('PerforceClient.runReconcileScan', () => {
       // Patched, not dropped: the next session replays it instead of re-walking.
       expect([...disk.store.keys()].some((k) => k.endsWith(realDir))).toBe(true)
     } finally {
-      rmSync(realDir, { recursive: true, force: true })
+      removeDirWithRetry(realDir)
     }
   })
 
@@ -3247,7 +3247,7 @@ describe('PerforceClient.runReconcileScan', () => {
       expect(argv).toBeDefined()
       expect(reconcileSpecs(argv!)).toEqual([realFile])
     } finally {
-      rmSync(realDir, { recursive: true, force: true })
+      removeDirWithRetry(realDir)
     }
   })
 
@@ -3292,7 +3292,7 @@ describe('PerforceClient.runReconcileScan', () => {
       expect(specs).not.toContain(`${sub}/...`)
       expect(specs.some((s) => s.startsWith(excluded))).toBe(false)
     } finally {
-      rmSync(realDir, { recursive: true, force: true })
+      removeDirWithRetry(realDir)
     }
   })
 
@@ -4603,7 +4603,7 @@ describe('㉑ reconcile-scan checkpoint 跨 session 持久化（真磁盘）', (
 
   afterEach(() => {
     delete (globalThis as Record<string, unknown>)[BRIDGE_KEY]
-    rmSync(root, { recursive: true, force: true })
+    removeDirWithRetry(root)
   })
 
   it('单个外部文件事件不得删除磁盘上的 checkpoint', async () => {

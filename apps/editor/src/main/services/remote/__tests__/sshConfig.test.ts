@@ -3,11 +3,11 @@
  *  Tests for the ~/.ssh/config reader backing Remote-SSH host completion.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { listSshHosts, parseSshHosts, parseSshIncludes } from '../sshConfig.js'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 const dirs: string[] = []
 
@@ -24,7 +24,7 @@ function makeHome(entries: Record<string, string>): string {
 
 afterEach(() => {
   for (const dir of dirs.splice(0)) {
-    rmSync(dir, { recursive: true, force: true })
+    removeDirWithRetry(dir)
   }
 })
 

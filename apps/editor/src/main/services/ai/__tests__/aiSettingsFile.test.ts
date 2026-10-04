@@ -6,10 +6,10 @@
  *  providers and a per-model config back to back) loses one at random.
  *--------------------------------------------------------------------------------------------*/
 
-import { readFile, rm } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 const renameMock = vi.hoisted(() => vi.fn())
 
@@ -34,7 +34,7 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.useRealTimers()
   renameMock.mockReset()
-  await rm(dir, { recursive: true, force: true })
+  removeDirWithRetry(dir)
 })
 
 function transientError(code: string): NodeJS.ErrnoException {

@@ -2,7 +2,7 @@
  *  Tests for apps/editor/src/main/services/telemetry/errorSinkMainService.ts
  *--------------------------------------------------------------------------------------------*/
 
-import { readFileSync, rmSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -11,7 +11,7 @@ import {
   type ErrorJsonlRecord,
 } from '../errorSinkMainService.js'
 import type { WireErrorRecord } from '../../../../shared/ipc/services.js'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 function makeError(message: string, frameFile = 'D:\\app\\src\\thing\\doer.ts', line = 10): Error {
   const err = new Error(message)
@@ -51,7 +51,7 @@ describe('ErrorSinkMainService', () => {
 
   afterEach(() => {
     sink.dispose()
-    rmSync(dir, { recursive: true, force: true })
+    removeDirWithRetry(dir)
   })
 
   function readRecords(): ErrorJsonlRecord[] {

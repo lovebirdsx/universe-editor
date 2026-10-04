@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { promises as fs } from 'node:fs'
 import { join, normalize } from 'node:path'
 import {
   FileSystemError,
@@ -20,7 +19,7 @@ import {
   MEASURE_CONCURRENCY,
   type FileClipboardMeasureLimits,
 } from '../fileClipboardMainService.js'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 interface FakeNode {
   readonly isDirectory: boolean
@@ -170,7 +169,7 @@ afterEach(async () => {
   vi.useRealTimers()
   while (cleanups.length > 0) {
     const dir = cleanups.pop()
-    if (dir) await fs.rm(dir, { recursive: true, force: true })
+    if (dir) removeDirWithRetry(dir)
   }
 })
 

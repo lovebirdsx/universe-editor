@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { rm, writeFile } from 'node:fs/promises'
+import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -79,7 +79,7 @@ vi.mock('@universe-editor/extension-api', () => ({
 import { Repository } from '../repository.js'
 import { pullBranch } from '../gitGraphActions.js'
 import { autoSyncWorktreesAfterPull } from '../worktreeAutoSync.js'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 const execFileAsync = promisify(execFile)
 const tmpRoots: string[] = []
@@ -155,7 +155,7 @@ describe('post-pull worktree sync', () => {
   afterEach(async () => {
     vi.clearAllMocks()
     for (const root of tmpRoots.splice(0)) {
-      await rm(root, { recursive: true, force: true })
+      removeDirWithRetry(root)
     }
   })
 

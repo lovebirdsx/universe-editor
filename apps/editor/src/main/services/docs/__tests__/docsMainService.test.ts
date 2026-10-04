@@ -6,12 +6,12 @@
  *  locale directory is absent.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { DocCategory } from '../../../../shared/ipc/docsService.js'
 import { DocsMainService } from '../docsMainService.js'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 describe('DocsMainService', () => {
   let root: string
@@ -22,7 +22,7 @@ describe('DocsMainService', () => {
   })
 
   afterEach(() => {
-    rmSync(root, { recursive: true, force: true })
+    removeDirWithRetry(root)
   })
 
   function write(rel: string, content: string): void {

@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import { generateKeyPairSync, sign, createPublicKey, createHash } from 'node:crypto'
-import { rm, writeFile } from 'node:fs/promises'
+import { writeFile } from 'node:fs/promises'
 import * as path from 'node:path'
 import {
   hashVsixFile,
@@ -8,7 +8,7 @@ import {
   VsixSignatureError,
   type IVsixSignature,
 } from '../signature.js'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 const KEY_ID = 'market-test'
 
@@ -46,7 +46,7 @@ describe('verifyVsixSignature', () => {
   })
 
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true })
+    removeDirWithRetry(dir)
   })
 
   it('hashVsixFile matches an independent sha256', async () => {

@@ -7,7 +7,7 @@ import { promises as fs } from 'node:fs'
 import { join, normalize } from 'node:path'
 import { FileSystemError, URI } from '@universe-editor/platform'
 import { FileSystemMainService } from '../fileSystemMainService.js'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 const trashItem = vi.fn(async (_p: string) => {})
 vi.mock('electron', () => ({ shell: { trashItem: (p: string) => trashItem(p) } }))
@@ -21,7 +21,7 @@ describe('FileSystemMainService', () => {
   })
 
   afterEach(async () => {
-    await fs.rm(root, { recursive: true, force: true })
+    removeDirWithRetry(root)
   })
 
   it('unregisters the file provider when disposed', () => {

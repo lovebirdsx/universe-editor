@@ -2,11 +2,11 @@
  *  Tests for apps/editor/src/main/services/host/machineId.ts
  *--------------------------------------------------------------------------------------------*/
 
-import { readFile, rm, writeFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { _resetForTests, getMachineId } from '../machineId.js'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 let dir: string
 
@@ -17,7 +17,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   _resetForTests()
-  await rm(dir, { recursive: true, force: true })
+  removeDirWithRetry(dir)
 })
 
 describe('getMachineId', () => {

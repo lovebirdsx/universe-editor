@@ -5,9 +5,9 @@
  * for its disabled/spinner state — a concurrent refresh must now wait for the
  * in-flight pass (which observes the queued flag and runs another round).
  */
-import { rm } from 'node:fs/promises'
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 const gitExecMock = vi.hoisted(() => vi.fn())
 vi.mock('../gitService.js', () => ({ gitExec: gitExecMock, gitExecBinary: vi.fn() }))
@@ -76,7 +76,7 @@ describe('Repository refresh coalescing', () => {
     gitExecMock.mockReset()
   })
   afterEach(async () => {
-    await rm(root, { recursive: true, force: true })
+    removeDirWithRetry(root)
   })
 
   it('a concurrent refresh waits for the in-flight pass and gets its own round', async () => {

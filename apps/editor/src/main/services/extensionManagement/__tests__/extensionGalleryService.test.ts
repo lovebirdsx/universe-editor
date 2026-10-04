@@ -1,10 +1,10 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
-import { rm, readFile } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import * as path from 'node:path'
 import { AssetType } from '@universe-editor/extension-gallery'
 import type { IGalleryExtension } from '@universe-editor/extension-gallery'
 import { ExtensionGalleryMainService } from '../extensionGalleryService.js'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 const realFetch = globalThis.fetch
 
@@ -52,7 +52,7 @@ describe('ExtensionGalleryMainService', () => {
   afterEach(async () => {
     globalThis.fetch = realFetch
     vi.restoreAllMocks()
-    await rm(cacheDir, { recursive: true, force: true })
+    removeDirWithRetry(cacheDir)
   })
 
   it('is disabled when no gallery url is configured', async () => {

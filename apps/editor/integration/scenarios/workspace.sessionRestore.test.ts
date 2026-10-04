@@ -12,7 +12,6 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { app } from 'electron'
-import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { StorageScope, URI } from '@universe-editor/platform'
 import { createStorage } from '../../src/main/storage.js'
@@ -20,7 +19,7 @@ import { MainStorageService } from '../../src/main/services/storage/storageMainS
 import { RecentWorkspacesMainService } from '../../src/main/services/workspace/recentWorkspacesMainService.js'
 import { WorkspaceMainService } from '../../src/main/services/workspace/workspaceMainService.js'
 import { loadSession, serializeWindow } from '../../src/main/windowsSession.js'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 const noopDialog = { showOpenFolderDialog: vi.fn(async () => null) }
 
@@ -33,7 +32,7 @@ describe('workspace.sessionRestore (integration)', () => {
   })
 
   afterEach(async () => {
-    await fs.rm(userDataDir, { recursive: true, force: true })
+    removeDirWithRetry(userDataDir)
     vi.clearAllMocks()
   })
 

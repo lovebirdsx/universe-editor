@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync, readFileSync } from 'node:fs'
 import { Readable } from 'node:stream'
 import { join } from 'node:path'
 import { EventEmitter } from 'node:events'
@@ -41,7 +41,7 @@ import {
   type RemoteRunner,
   type RemoteSpawner,
 } from '../remoteDeploy.js'
-import { getTempRoot, mkTempDir } from '@universe-editor/temp-root'
+import { getTempRoot, mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 const NODE_BIN_PATH = '$HOME/.universe-editor-server/node/v24.19.0/bin'
 const NODE_PATH_PRELUDE = `PATH="$PATH:${NODE_BIN_PATH}"; `
@@ -226,7 +226,7 @@ describe('parseDaemonInfoLine', () => {
 describe('computeBundleHash', () => {
   const dirs: string[] = []
   afterEach(() => {
-    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
+    for (const d of dirs.splice(0)) removeDirWithRetry(d)
   })
 
   function makeBundle(): string {
@@ -583,7 +583,7 @@ describe('pickFastestNodeArchiveUrl', () => {
 describe('downloadNodeArchive', () => {
   const dirs: string[] = []
   afterEach(() => {
-    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
+    for (const d of dirs.splice(0)) removeDirWithRetry(d)
   })
 
   function okResponse(body: string): ReturnType<NodeArchiveFetcher> {
@@ -915,7 +915,7 @@ describe('RemoteDeployer.provisionNodeRuntime', () => {
 describe('RemoteDeployer.deployRemoteServer', () => {
   const dirs: string[] = []
   afterEach(() => {
-    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
+    for (const d of dirs.splice(0)) removeDirWithRetry(d)
   })
 
   function makeBundle(): string {

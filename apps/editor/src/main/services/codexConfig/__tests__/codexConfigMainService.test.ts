@@ -30,7 +30,7 @@ import type {
   IRemoteConnection,
   IRemoteConnectionService,
 } from '../../remote/remoteConnectionMainService.js'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 function configLocation(dir: string): IConfigLocationService {
   return {
@@ -57,7 +57,7 @@ describe('CodexConfigMainService', () => {
 
   afterEach(async () => {
     svc.dispose()
-    await fs.rm(dir, { recursive: true, force: true })
+    removeDirWithRetry(dir)
   })
 
   async function writeToml(text: string): Promise<void> {
@@ -520,7 +520,7 @@ describe('CodexConfigMainService — remote resolveActiveAuth', () => {
   afterEach(async () => {
     for (const s of svcs) s.dispose()
     svcs.length = 0
-    await Promise.all(dirs.splice(0).map((d) => fs.rm(d, { recursive: true, force: true })))
+    await Promise.all(dirs.splice(0).map((d) => removeDirWithRetry(d)))
   })
 
   const REMOTE_ENV: IRemoteEnvironment = {

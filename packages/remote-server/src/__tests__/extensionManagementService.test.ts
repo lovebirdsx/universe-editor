@@ -7,13 +7,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as path from 'node:path'
-import { mkdir, readFile, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, stat, utimes, writeFile } from 'node:fs/promises'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createVsix } from '@universe-editor/extension-packaging'
 import { LogLevel, NullLogger, type ILoggerService } from '@universe-editor/platform'
 import { RemoteExtensionManagementService } from '../extensionManagementService.js'
 import { resolveExtensionGlobalStorageDir, resolveUserExtensionsDir } from '../serverPaths.js'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 const loggerService: ILoggerService = {
   _serviceBrand: undefined,
@@ -34,7 +34,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   svc.dispose()
-  await rm(root, { recursive: true, force: true })
+  removeDirWithRetry(root)
 })
 
 function manifest(overrides: Record<string, unknown> = {}): Record<string, unknown> {

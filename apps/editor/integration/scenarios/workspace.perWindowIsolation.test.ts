@@ -8,14 +8,13 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { app } from 'electron'
-import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { URI } from '@universe-editor/platform'
 import { createStorage } from '../../src/main/storage.js'
 import { MainStorageService } from '../../src/main/services/storage/storageMainService.js'
 import { RecentWorkspacesMainService } from '../../src/main/services/workspace/recentWorkspacesMainService.js'
 import { WorkspaceMainService } from '../../src/main/services/workspace/workspaceMainService.js'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 const noopDialog = { showOpenFolderDialog: vi.fn(async () => null) }
 
@@ -55,7 +54,7 @@ async function createTwoWindows(): Promise<TwoWindows> {
       recents.dispose()
       await storage1.flush()
       await storage2.flush()
-      await fs.rm(userDataDir, { recursive: true, force: true })
+      removeDirWithRetry(userDataDir)
     },
   }
 }

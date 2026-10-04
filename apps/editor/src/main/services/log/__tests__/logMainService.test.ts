@@ -10,7 +10,7 @@ import {
   LogLevel,
   formatLogTimestamp,
 } from '@universe-editor/platform'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 // Mock electron's app before importing logMainService
 const mockGetPath = vi.fn((_name: string): string => '')
@@ -53,7 +53,7 @@ describe('LogMainService', () => {
   })
 
   afterEach(async () => {
-    await fs.rm(tmpDir, { recursive: true, force: true })
+    removeDirWithRetry(tmpDir)
     vi.clearAllMocks()
   })
 
@@ -389,7 +389,7 @@ describe('MainLogChannelService', () => {
   })
 
   afterEach(async () => {
-    await fs.rm(tmpDir, { recursive: true, force: true })
+    removeDirWithRetry(tmpDir)
     vi.clearAllMocks()
   })
 

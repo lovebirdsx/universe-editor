@@ -1,9 +1,9 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
-import { rm, readFile, mkdir, stat, writeFile } from 'node:fs/promises'
+import { readFile, mkdir, stat, writeFile } from 'node:fs/promises'
 import * as path from 'node:path'
 import AdmZip from 'adm-zip'
 import { readVsixManifest, extractVsix, createVsix } from '../vsix.js'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 const validManifest = {
   name: 'sample',
@@ -33,7 +33,7 @@ describe('extension-packaging vsix', () => {
     dir = mkTempDir('vsix-test-')
   })
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true })
+    removeDirWithRetry(dir)
   })
 
   async function writeVsix(name: string, files: Record<string, string>): Promise<string> {

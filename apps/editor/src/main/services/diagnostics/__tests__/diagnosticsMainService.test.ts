@@ -8,7 +8,6 @@ import {
   mkdirSync,
   promises as fsp,
   readFileSync,
-  rmSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs'
@@ -16,7 +15,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AbstractLogger, LogLevel, type ILoggerService } from '@universe-editor/platform'
 import type { HeapSnapshotEvent, WireRendererHeapSample } from '../../../../shared/ipc/services.js'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 declare const __APP_VERSION__: string
 
@@ -65,7 +64,7 @@ describe('DiagnosticsMainService', () => {
 
   afterEach(() => {
     service.dispose()
-    rmSync(root, { recursive: true, force: true })
+    removeDirWithRetry(root)
   })
 
   function seedSession(session: string, errorsJsonl?: string, logs: Record<string, string> = {}) {
@@ -415,7 +414,7 @@ describe('DiagnosticsMainService — renderer heap samples', () => {
 
   afterEach(() => {
     heapService.dispose()
-    rmSync(heapRoot, { recursive: true, force: true })
+    removeDirWithRetry(heapRoot)
   })
 
   const heapLines = (): string[] =>
@@ -741,7 +740,7 @@ describe('DiagnosticsMainService — heap snapshot wiring', () => {
 
   afterEach(() => {
     service.dispose()
-    rmSync(root, { recursive: true, force: true })
+    removeDirWithRetry(root)
   })
 
   /** The real controller, wired the way main-services wires it. */

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { P4CacheDisk } from '../p4CacheDisk.js'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 /** Let the deferred manifest flush (queueMicrotask) run. */
 const flush = () => new Promise<void>((r) => setTimeout(r, 0))
@@ -14,7 +14,7 @@ describe('P4CacheDisk', () => {
     root = mkTempDir('p4cache-')
   })
   afterEach(() => {
-    rmSync(root, { recursive: true, force: true })
+    removeDirWithRetry(root)
   })
 
   it('returns undefined for an empty root or non-positive limit', () => {

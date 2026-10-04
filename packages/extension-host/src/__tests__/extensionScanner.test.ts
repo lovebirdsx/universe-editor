@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { scanExtensions, scanSingleExtension } from '../extensionScanner.js'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 let dir: string
 
@@ -10,7 +10,7 @@ beforeEach(async () => {
   dir = mkTempDir('ue-scan-')
 })
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true })
+  removeDirWithRetry(dir)
 })
 
 async function writeExtension(name: string, manifest: unknown): Promise<void> {
@@ -54,12 +54,12 @@ describe('scanExtensions', () => {
       await symlink(join(outside, 'linked-ext'), join(dir, 'linked-ext'), 'junction')
     } catch {
       // Some sandboxes forbid symlink creation; skip rather than fail spuriously.
-      await rm(outside, { recursive: true, force: true })
+      removeDirWithRetry(outside)
       return
     }
     const ids = (await scanExtensions(dir, false)).map((e) => e.id)
     expect(ids).toContain('linked')
-    await rm(outside, { recursive: true, force: true })
+    removeDirWithRetry(outside)
   })
 
   it('marks results with the builtin flag passed to the scan', async () => {

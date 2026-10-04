@@ -6,7 +6,7 @@
  *  install), keeping download/signature/anti-poisoning verification local.
  *--------------------------------------------------------------------------------------------*/
 
-import { rm, writeFile, readFile } from 'node:fs/promises'
+import { writeFile, readFile } from 'node:fs/promises'
 import { generateKeyPairSync, sign, randomBytes } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import * as path from 'node:path'
@@ -27,7 +27,7 @@ import {
   type IManagementGallery,
 } from '../extensionManagementService.js'
 import type { IRemoteConnectionService } from '../../remote/remoteConnectionMainService.js'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 const HOST_API = '0.1.0'
 const CHUNK = 1024 * 1024
@@ -259,7 +259,7 @@ describe('ExtensionManagementMainService — remote routing', () => {
   })
   afterEach(async () => {
     for (const svc of services) svc.dispose()
-    await rm(root, { recursive: true, force: true })
+    removeDirWithRetry(root)
   })
 
   it('routes getInstalled/getDisabledIds/getLocalIcon through the remote channel, and the local dir without authority', async () => {

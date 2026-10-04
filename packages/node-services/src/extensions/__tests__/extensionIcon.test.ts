@@ -3,10 +3,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as path from 'node:path'
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { readExtensionIconDataUrl } from '../extensionIcon.js'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 let root: string
 
@@ -15,7 +15,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  await rm(root, { recursive: true, force: true })
+  removeDirWithRetry(root)
 })
 
 describe('readExtensionIconDataUrl', () => {

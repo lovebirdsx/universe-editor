@@ -6,10 +6,10 @@
  *  `apps/editor/vendor/...` under the e2e layout.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import * as path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 let appPath = ''
 
@@ -32,7 +32,7 @@ describe('resolveFromRepo', () => {
   })
 
   afterEach(async () => {
-    await rm(repoRoot, { recursive: true, force: true })
+    removeDirWithRetry(repoRoot)
   })
 
   it('resolves from appPath = apps/editor (electron .)', async () => {

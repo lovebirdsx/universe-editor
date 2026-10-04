@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import { StorageScope } from '@universe-editor/platform'
 import { createStorage } from '../../../storage.js'
 import { MainStorageService } from '../storageMainService.js'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 // MainStorageService → workspaceStoragePath() → app.getPath('userData'). Stub it
 // at module level so the workspace files land under a temp dir.
@@ -27,7 +27,7 @@ describe('MainStorageService', () => {
   })
 
   afterEach(async () => {
-    await fs.rm(tmpRoot, { recursive: true, force: true })
+    removeDirWithRetry(tmpRoot)
   })
 
   function buildService(): MainStorageService {

@@ -14,7 +14,7 @@ import {
   createInMemoryWatcherTransport,
   type InMemoryWatcherTransport,
 } from '@universe-editor/node-services'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 function reviveFsPath(c: {
   readonly resource: import('@universe-editor/platform').UriComponents
@@ -73,7 +73,7 @@ describe('FileWatcherMainService', () => {
     svc.dispose()
     client.dispose()
     await Promise.allSettled(transports.map((t) => t.host.dispose()))
-    await fs.rm(root, { recursive: true, force: true })
+    removeDirWithRetry(root)
   })
 
   it(
@@ -218,7 +218,7 @@ describe('FileWatcherMainService', () => {
         }, WAIT)
         c.stop()
       } finally {
-        await fs.rm(outRoot, { recursive: true, force: true })
+        removeDirWithRetry(outRoot)
       }
     },
     WATCHER_TEST_TIMEOUT,
@@ -268,7 +268,7 @@ describe('FileWatcherMainService', () => {
         }, WAIT)
         c.stop()
       } finally {
-        await fs.rm(outRoot, { recursive: true, force: true })
+        removeDirWithRetry(outRoot)
       }
     },
     WATCHER_TEST_TIMEOUT,
@@ -289,7 +289,7 @@ describe('FileWatcherMainService', () => {
       await svc.addOutOfWorkspaceFolder(URI.file(join(outRoot, 'child')))
       expect(svc._extraFolderWatcherCount).toBe(1)
     } finally {
-      await fs.rm(outRoot, { recursive: true, force: true })
+      removeDirWithRetry(outRoot)
     }
   })
 
@@ -304,7 +304,7 @@ describe('FileWatcherMainService', () => {
       await svc.removeOutOfWorkspaceFolder(URI.file(join(outRoot, 'child')))
       expect(svc._extraFolderWatcherCount).toBe(0)
     } finally {
-      await fs.rm(outRoot, { recursive: true, force: true })
+      removeDirWithRetry(outRoot)
     }
   })
 
@@ -316,7 +316,7 @@ describe('FileWatcherMainService', () => {
       await svc.clearOutOfWorkspaceFolders()
       expect(svc._extraFolderWatcherCount).toBe(0)
     } finally {
-      await fs.rm(outRoot, { recursive: true, force: true })
+      removeDirWithRetry(outRoot)
     }
   })
 
@@ -340,7 +340,7 @@ describe('FileWatcherMainService', () => {
         }, WAIT)
         c.stop()
       } finally {
-        await fs.rm(outRoot, { recursive: true, force: true })
+        removeDirWithRetry(outRoot)
       }
     },
     WATCHER_TEST_TIMEOUT,
@@ -364,7 +364,7 @@ describe('FileWatcherMainService', () => {
         }, WAIT)
         c.stop()
       } finally {
-        await fs.rm(outRoot, { recursive: true, force: true })
+        removeDirWithRetry(outRoot)
       }
     },
     WATCHER_TEST_TIMEOUT,
@@ -387,7 +387,7 @@ describe('FileWatcherMainService', () => {
         }, WAIT)
         c.stop()
       } finally {
-        await fs.rm(outRoot, { recursive: true, force: true })
+        removeDirWithRetry(outRoot)
       }
     },
     WATCHER_TEST_TIMEOUT,
@@ -410,7 +410,7 @@ describe('FileWatcherMainService', () => {
         }, WAIT)
         c.stop()
       } finally {
-        await fs.rm(outRoot, { recursive: true, force: true })
+        removeDirWithRetry(outRoot)
       }
     },
     WATCHER_TEST_TIMEOUT,
@@ -433,7 +433,7 @@ describe('FileWatcherMainService', () => {
         }, WAIT)
         c.stop()
       } finally {
-        await fs.rm(outRoot, { recursive: true, force: true })
+        removeDirWithRetry(outRoot)
       }
     },
     WATCHER_TEST_TIMEOUT,
@@ -460,8 +460,8 @@ describe('FileWatcherMainService', () => {
         }, WAIT)
         c.stop()
       } finally {
-        await fs.rm(outRoot, { recursive: true, force: true })
-        await fs.rm(staging, { recursive: true, force: true })
+        removeDirWithRetry(outRoot)
+        removeDirWithRetry(staging)
       }
     },
     WATCHER_TEST_TIMEOUT,
@@ -487,7 +487,7 @@ describe('FileWatcherMainService', () => {
         }, WAIT)
         c.stop()
       } finally {
-        await fs.rm(outRoot, { recursive: true, force: true })
+        removeDirWithRetry(outRoot)
       }
     },
     WATCHER_TEST_TIMEOUT,
@@ -517,7 +517,7 @@ describe('FileWatcherMainService', () => {
         }, WAIT)
         c.stop()
       } finally {
-        await fs.rm(outRoot, { recursive: true, force: true })
+        removeDirWithRetry(outRoot)
       }
     },
     WATCHER_TEST_TIMEOUT,
@@ -918,8 +918,8 @@ describe('FileWatcherMainService focus scopes', () => {
       expect(svc._extraFolderWatcherCount).toBe(1)
     } finally {
       await svc.unwatch()
-      await fs.rm(realRoot, { recursive: true, force: true })
-      await fs.rm(outside, { recursive: true, force: true })
+      removeDirWithRetry(realRoot)
+      removeDirWithRetry(outside)
     }
   })
 
@@ -995,7 +995,7 @@ describe('FileWatcherMainService focus files', () => {
   afterEach(async () => {
     await svc.unwatch()
     svc.dispose()
-    await fs.rm(rootDir, { recursive: true, force: true })
+    removeDirWithRetry(rootDir)
   })
 
   async function collectEvents() {

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 import { promises as fs } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { createStorage, workspaceIdFromUri, workspaceStoragePath } from '../storage.js'
-import { getTempRoot, mkTempDir } from '@universe-editor/temp-root'
+import { getTempRoot, mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 // Stub electron app.getPath() — workspaceStoragePath uses it. We don't import
 // the real module in the test; cheap stub so the function is callable in node.
@@ -46,7 +46,7 @@ describe('createStorage', () => {
   })
 
   afterEach(async () => {
-    await fs.rm(dirname(file), { recursive: true, force: true })
+    removeDirWithRetry(dirname(file))
   })
 
   it('returns undefined for unknown key when file is missing', async () => {
@@ -198,7 +198,7 @@ describe('createStorage — write coalescing', () => {
   afterEach(async () => {
     gate.release()
     vi.restoreAllMocks()
-    await fs.rm(dirname(file), { recursive: true, force: true })
+    removeDirWithRetry(dirname(file))
   })
 
   it('coalesces a burst of sets into far fewer disk writes', async () => {

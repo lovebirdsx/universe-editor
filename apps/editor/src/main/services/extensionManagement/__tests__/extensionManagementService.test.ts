@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
-import { rm, writeFile, mkdir, stat, readFile, readdir } from 'node:fs/promises'
+import { writeFile, mkdir, stat, readFile, readdir } from 'node:fs/promises'
 import { generateKeyPairSync, sign } from 'node:crypto'
 import * as path from 'node:path'
 import AdmZip from 'adm-zip'
@@ -10,7 +10,7 @@ import {
   type IManagementGallery,
 } from '../extensionManagementService.js'
 import { writeInstalledRecords } from '@universe-editor/node-services'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 const HOST_API = '0.1.0'
 
@@ -97,7 +97,7 @@ describe('ExtensionManagementMainService', () => {
   })
   afterEach(async () => {
     svc.dispose()
-    await rm(root, { recursive: true, force: true })
+    removeDirWithRetry(root)
   })
 
   it('installs a VSIX and lists it', async () => {
@@ -285,7 +285,7 @@ describe('ExtensionManagementMainService — gallery install', () => {
     extDir = path.join(root, 'extensions')
   })
   afterEach(async () => {
-    await rm(root, { recursive: true, force: true })
+    removeDirWithRetry(root)
   })
 
   it('installs from the gallery and records gallery metadata', async () => {
@@ -448,7 +448,7 @@ describe('ExtensionManagementMainService — enablement, quarantine, updates', (
     extDir = path.join(root, 'extensions')
   })
   afterEach(async () => {
-    await rm(root, { recursive: true, force: true })
+    removeDirWithRetry(root)
   })
 
   it('persists disabled state and reports disabled ids', async () => {

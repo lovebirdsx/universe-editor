@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
-import { getTempRoot, mkTempDir } from '@universe-editor/temp-root'
+import { getTempRoot, mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 vi.mock('electron', () => ({
   app: { getPath: () => getTempRoot() },
@@ -17,7 +17,7 @@ beforeEach(async () => {
 })
 afterEach(async () => {
   vi.unstubAllGlobals()
-  await fs.rm(cacheDir, { recursive: true, force: true })
+  removeDirWithRetry(cacheDir)
 })
 
 function stubFetch(impl: (url: string, init?: RequestInit) => Promise<Response>): void {

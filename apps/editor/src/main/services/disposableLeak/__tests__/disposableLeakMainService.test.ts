@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { getOriginalConsole } from '@universe-editor/platform'
 import { DisposableLeakMainService } from '../disposableLeakMainService.js'
 import type { IDisposableLeakReport } from '../../../../shared/ipc/services.js'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 const SAMPLE: IDisposableLeakReport = {
   count: 3,
@@ -32,7 +32,7 @@ describe('DisposableLeakMainService', () => {
 
   afterEach(async () => {
     warnSpy.mockRestore()
-    await fs.rm(dir, { recursive: true, force: true })
+    removeDirWithRetry(dir)
   })
 
   it('consumePendingReport returns null when no file exists', async () => {

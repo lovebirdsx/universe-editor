@@ -8,7 +8,7 @@
 import { existsSync, promises as fs, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 import type { HeapSnapshotEvent } from '../../../../shared/ipc/services.js'
 import {
   HEAP_SNAPSHOT_DIR_BUDGET,
@@ -152,7 +152,7 @@ describe('HeapSnapshotController', () => {
     controller.dispose()
     // 用例失败时也可能停在假计时器里；不让它漏给下一个用例。
     vi.useRealTimers()
-    await fs.rm(dir, { recursive: true, force: true })
+    removeDirWithRetry(dir)
   })
 
   function addWindow(windowId: number): FakeWindow {
@@ -896,7 +896,7 @@ describe('HeapSnapshotController', () => {
   })
 
   it('formats a manifest even when the directory does not exist yet', async () => {
-    await fs.rm(dir, { recursive: true, force: true })
+    removeDirWithRetry(dir)
     expect(await controller.listArtifacts()).toEqual([])
     expect(await controller.formatManifest()).toBe('(no heap snapshots)\n')
   })
@@ -1016,7 +1016,7 @@ describe('diskFreeBytesFor', () => {
   })
 
   afterEach(async () => {
-    await fs.rm(base, { recursive: true, force: true })
+    removeDirWithRetry(base)
   })
 
   // The snapshots directory is created by the first successful capture, so the gate

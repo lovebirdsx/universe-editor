@@ -7,10 +7,10 @@
  *  point process.resourcesPath at a temp dir with a staged tsgo/ tree.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import * as path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 const appRoot = path.resolve(import.meta.dirname, '../../../../../../..')
 const appPathHolder = { current: appRoot }
@@ -40,7 +40,7 @@ describe('tsServerPaths preference chain', () => {
 
   afterEach(async () => {
     vi.unstubAllEnvs()
-    await rm(settingsDir, { recursive: true, force: true })
+    removeDirWithRetry(settingsDir)
   })
 
   it('defaults to the shared default when nothing is configured', () => {
@@ -140,7 +140,7 @@ describe('tsServerPaths preference chain', () => {
       expect(spec.version).toBe('5.9.3')
     } finally {
       appPathHolder.current = appRoot
-      await rm(vendorDir, { recursive: true, force: true })
+      removeDirWithRetry(vendorDir)
     }
   })
 
@@ -167,8 +167,8 @@ describe('workspace settings layering', () => {
 
   afterEach(async () => {
     vi.unstubAllEnvs()
-    await rm(settingsDir, { recursive: true, force: true })
-    await rm(workspaceDir, { recursive: true, force: true })
+    removeDirWithRetry(settingsDir)
+    removeDirWithRetry(workspaceDir)
   })
 
   function layerBody(value: unknown): string {
@@ -273,8 +273,8 @@ describe('packaged tsgo resolution', () => {
   afterEach(async () => {
     mockedApp.isPackaged = false
     Reflect.deleteProperty(proc, 'resourcesPath')
-    await rm(settingsDir, { recursive: true, force: true })
-    await rm(resourcesDir, { recursive: true, force: true })
+    removeDirWithRetry(settingsDir)
+    removeDirWithRetry(resourcesDir)
   })
 
   it('resolves the staged tsgo exe and reads its version', async () => {

@@ -15,7 +15,7 @@ import {
   SENTINEL_HEARTBEAT_INTERVAL_MS,
   _resetSentinelForTests,
 } from '../sessionSentinel.js'
-import { mkTempDir } from '@universe-editor/temp-root'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 describe('sessionSentinel', () => {
   let userDataDir: string
@@ -28,7 +28,7 @@ describe('sessionSentinel', () => {
   })
 
   afterEach(async () => {
-    await fs.rm(userDataDir, { recursive: true, force: true })
+    removeDirWithRetry(userDataDir)
   })
 
   it('reports nothing when no sentinel exists', () => {
