@@ -428,7 +428,13 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
         client.onFileEvents((msg) => {
           if (msg.id !== watchId) return
           for (const ev of msg.events) {
-            this._enqueueRemote(remoteFsPathToUri(ev.path, authority), PARCEL_EVENT_TYPE[ev.type])
+            try {
+              this._enqueueRemote(remoteFsPathToUri(ev.path, authority), PARCEL_EVENT_TYPE[ev.type])
+            } catch (err) {
+              // A path the URI encoder cannot express (e.g. a lone surrogate coming
+              // off the remote filesystem) must not swallow the rest of the batch.
+              this._logger.warn(`remote watcher event dropped ${ev.path}`, err)
+            }
           }
         }),
         client.onWatchError((msg) => {

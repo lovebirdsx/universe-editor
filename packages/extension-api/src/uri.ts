@@ -34,9 +34,14 @@ function decodeURIComponentSafe(value: string): string {
 /**
  * Encodes a single component for use in toString. Unlike `encodeURIComponent`,
  * preserves a small set of "safe" characters that are common in paths/queries.
+ *
+ * Unsafe code units are encoded in whole runs rather than one `charAt(pos)` at a
+ * time: `charAt` splits a surrogate pair into two lone surrogates, which
+ * `encodeURIComponent` rejects with `URIError`.
  */
 function encodeURIComponentFast(text: string, allowSlash: boolean): string {
   let res: string | undefined = undefined
+  let nativeEncodePos = -1
   for (let pos = 0; pos < text.length; pos++) {
     const code = text.charCodeAt(pos)
     if (
@@ -62,17 +67,26 @@ function encodeURIComponentFast(text: string, allowSlash: boolean): string {
       code === 64 /* @ */ ||
       (allowSlash && code === 47) /* / */
     ) {
+      if (nativeEncodePos !== -1) {
+        if (res === undefined) res = text.substring(0, nativeEncodePos)
+        res += encodeURIComponent(text.substring(nativeEncodePos, pos))
+        nativeEncodePos = -1
+      }
       if (res !== undefined) res += text.charAt(pos)
-    } else {
-      if (res === undefined) res = text.substring(0, pos)
-      res += encodeURIComponent(text.charAt(pos))
+    } else if (nativeEncodePos === -1) {
+      nativeEncodePos = pos
     }
+  }
+  if (nativeEncodePos !== -1) {
+    if (res === undefined) res = text.substring(0, nativeEncodePos)
+    res += encodeURIComponent(text.substring(nativeEncodePos))
   }
   return res ?? text
 }
 
+/** Same safe set as a query component — reuse the encoder so it lives in one place. */
 function encodeAuthority(authority: string): string {
-  return authority.replace(/[^A-Za-z0-9-._~!$&'()*+,;=:@]/g, (c) => encodeURIComponent(c))
+  return encodeURIComponentFast(authority, false)
 }
 
 /**

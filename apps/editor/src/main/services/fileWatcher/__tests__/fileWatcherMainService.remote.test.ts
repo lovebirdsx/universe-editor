@@ -167,4 +167,35 @@ describe('FileWatcherMainService remote routing', () => {
       vi.useRealTimers()
     }
   })
+
+  it('maps astral event paths and keeps the rest of the batch when one path is unusable', async () => {
+    const h = makeWatcherHarness()
+    const changes: IFileChangeEvent[] = []
+    h.svc.onDidChangeFiles((e) => changes.push(...e))
+
+    const watching = h.svc.watch(remote('host', '/home/user'))
+    await flushMicrotasks()
+    const sub = h.tunnelPosts[0] as WatcherSubscribeRequest
+    h.tunnelMessages.fire({ kind: 'ack', seq: sub.seq })
+    await watching
+
+    h.tunnelMessages.fire({
+      kind: 'events',
+      id: sub.id,
+      events: [
+        { path: '/home/user/🎉.txt', type: 'create' },
+        // A lone surrogate cannot be encoded into a URI at all; dropping it must
+        // not swallow the paths that follow in the same message.
+        { path: '/home/user/\uD83C.txt', type: 'update' },
+        { path: '/home/user/plain.txt', type: 'delete' },
+      ],
+    })
+    h.svc._flushForTests()
+
+    expect(changes.map((c) => c.resource.path)).toEqual([
+      '/home/user/🎉.txt',
+      '/home/user/plain.txt',
+    ])
+    h.cleanup()
+  })
 })

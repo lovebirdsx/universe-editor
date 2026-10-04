@@ -248,6 +248,50 @@ describe('URI — toString() / toJSON() / revive()', () => {
   })
 })
 
+describe('URI — toString() with astral characters', () => {
+  it('encodes a surrogate pair as one code point instead of throwing', () => {
+    const u = URI.from({ scheme: 'file', path: '/a/🎉.txt' })
+    expect(u.toString()).toBe('file:///a/%F0%9F%8E%89.txt')
+  })
+
+  it('encodes a CJK Extension B character', () => {
+    const u = URI.from({ scheme: 'file', path: '/\u{20000}.txt' })
+    expect(u.toString()).toBe('file:///%F0%A0%80%80.txt')
+  })
+
+  it('encodes a space and an emoji in the same run', () => {
+    const u = URI.from({ scheme: 'file', path: '/a 🎉b.txt' })
+    expect(u.toString()).toBe('file:///a%20%F0%9F%8E%89b.txt')
+  })
+
+  it('round-trips astral characters in path, query and fragment', () => {
+    const u = URI.from({ scheme: 'file', path: '/a/🎉/b.txt', query: 'q=🎉', fragment: '🎉' })
+    const reparsed = URI.parse(u.toString())
+    expect(reparsed.path).toBe('/a/🎉/b.txt')
+    expect(reparsed.query).toBe('q=🎉')
+    expect(reparsed.fragment).toBe('🎉')
+    expect(reparsed.toString()).toBe(u.toString())
+  })
+
+  it('survives toJSON / revive and keeps the non-file comparison key stable', () => {
+    const u = URI.from({ scheme: 'remote-ssh', authority: 'host', path: '/home/u/🎉/a.ts' })
+    const revived = URI.revive(JSON.parse(JSON.stringify(u)))!
+    expect(revived.toString()).toBe(u.toString())
+    expect(getResourceComparisonKey(URI.parse(u.toString()), 'linux')).toBe(
+      getResourceComparisonKey(u, 'linux'),
+    )
+  })
+
+  it('leaves an all-safe path unchanged', () => {
+    const u = URI.from({ scheme: 'file', path: '/a/b-c_d.txt' })
+    expect(u.toString()).toBe('file:///a/b-c_d.txt')
+  })
+
+  it('still throws on a lone surrogate', () => {
+    expect(() => URI.from({ scheme: 'file', path: '/a/\uD83C.txt' }).toString()).toThrow(URIError)
+  })
+})
+
 describe('URI — fsPath', () => {
   it('strips leading slash before Windows drive', () => {
     const u = URI.file('D:/foo/bar.lua')

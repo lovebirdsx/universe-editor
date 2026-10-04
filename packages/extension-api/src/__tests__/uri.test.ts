@@ -80,6 +80,43 @@ describe('Uri.parse / toString round-trip', () => {
   })
 })
 
+describe('Uri.toString with astral characters', () => {
+  it('encodes a surrogate pair as one code point instead of throwing', () => {
+    const uri = Uri.from({ scheme: 'file', path: '/a/🎉.txt' })
+    expect(uri.toString()).toBe('file:///a/%F0%9F%8E%89.txt')
+    expect(Uri.parse(uri.toString()).path).toBe('/a/🎉.txt')
+  })
+
+  it('encodes a CJK Extension B character', () => {
+    expect(Uri.from({ scheme: 'file', path: '/\u{20000}.txt' }).toString()).toBe(
+      'file:///%F0%A0%80%80.txt',
+    )
+  })
+
+  it('encodes a space and an emoji in the same run', () => {
+    expect(Uri.from({ scheme: 'file', path: '/a 🎉b.txt' }).toString()).toBe(
+      'file:///a%20%F0%9F%8E%89b.txt',
+    )
+  })
+
+  it('round-trips astral characters through query and fragment', () => {
+    const uri = Uri.from({ scheme: 'file', path: '/a/🎉', query: 'q=🎉', fragment: '🎉' })
+    const reparsed = Uri.parse(uri.toString())
+    expect(reparsed.query).toBe('q=🎉')
+    expect(reparsed.fragment).toBe('🎉')
+    expect(reparsed.toString()).toBe(uri.toString())
+  })
+
+  it('skipEncoding passes an astral path through untouched', () => {
+    expect(Uri.from({ scheme: 'file', path: '/a/🎉 b' }).toString(true)).toBe('file:///a/🎉 b')
+  })
+
+  it('round-trips astral characters through toJSON and from', () => {
+    const uri = Uri.from({ scheme: 'file', path: '/a/🎉/b.txt' })
+    expect(Uri.from(uri.toJSON()).toString()).toBe(uri.toString())
+  })
+})
+
 describe('Uri.joinPath', () => {
   it('joins segments with a single slash', () => {
     expect(Uri.joinPath(Uri.parse('file:///a/b'), 'c', 'd').path).toBe('/a/b/c/d')
