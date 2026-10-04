@@ -253,6 +253,19 @@ describe('openPreviewInGroup', () => {
     expect(group.activeEditor).toBe(preview)
   })
 
+  it('toggle keeps the group lock — the detach is a swap, not an emptied group', async () => {
+    const source = inst.createInstance(FileEditorInput, uriA)
+    group.openEditor(source, { activate: true, pinned: true })
+    group.lock(true)
+
+    const preview = new MarkdownPreviewInput(source)
+    togglePreviewInGroup(groups, group, preview, source)
+    await Promise.resolve()
+
+    expect(group.editors).toEqual([preview])
+    expect(group.isLocked).toBe(true)
+  })
+
   it('opening into a non-active group activates it (reopen / lock-routed paths stay visible)', () => {
     groups.activateGroup(group)
     const preview = new MarkdownPreviewInput(uriA)

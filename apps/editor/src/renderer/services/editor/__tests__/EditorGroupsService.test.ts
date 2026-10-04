@@ -251,17 +251,95 @@ describe('EditorGroupsService — lock-aware routing (activeGroupForOpen)', () =
     expect(svc.count).toBe(2)
     expect(svc.activeGroup).toBe(target)
   })
+})
 
-  it('lock state survives serialize → restore', () => {
+describe('EditorGroupsService — empty group auto-unlock', () => {
+  it('unlocks the only group once its last editor closes, so the next open reuses it', async () => {
+    const svc = new EditorGroupsService()
+    const first = svc.activeGroup
+    const a = make('a')
+    first.openEditor(a)
+    first.lock(true)
+
+    first.closeEditor(a)
+    await Promise.resolve()
+
+    expect(first.isLocked).toBe(false)
+    expect(svc.count).toBe(1)
+    // The regression: a locked empty group would send the next open into a
+    // freshly created group, leaving this one behind as an unusable pane.
+    const target = svc.activeGroupForOpen
+    expect(target).toBe(first)
+    target.openEditor(make('b'))
+    expect(svc.count).toBe(1)
+    expect(first.count).toBe(1)
+  })
+
+  it('keeps the lock when the group is refilled before the microtask runs', async () => {
+    // Toggle preview and the resolver upgrade detach/close the tab and reopen
+    // in place within the same tick: a half-finished swap is not "emptied".
+    const svc = new EditorGroupsService()
+    const first = svc.activeGroup
+    const a = make('a')
+    first.openEditor(a)
+    first.lock(true)
+
+    first.detachEditor(a)
+    expect(first.count).toBe(0)
+    first.openEditor(make('b'))
+    await Promise.resolve()
+
+    expect(first.count).toBe(1)
+    expect(first.isLocked).toBe(true)
+  })
+
+  it('keeps the lock while a sticky editor survives closeAllEditors', async () => {
+    const svc = new EditorGroupsService()
+    const first = svc.activeGroup
+    first.openEditor(make('sticky'), { sticky: true })
+    first.openEditor(make('b'))
+    first.lock(true)
+
+    first.closeAllEditors({ excludeSticky: true })
+    await Promise.resolve()
+
+    expect(first.count).toBe(1)
+    expect(first.isLocked).toBe(true)
+
+    first.closeAllEditors()
+    await Promise.resolve()
+    expect(first.isLocked).toBe(false)
+  })
+
+  it('an emptied locked secondary group is still auto-removed', async () => {
     const svc = new EditorGroupsService()
     const first = svc.activeGroup
     const second = svc.addGroup(first, GroupDirection.Right)
+    const a = make('a')
+    second.openEditor(a)
     second.lock(true)
-    const state = svc.toJSON()
+    const removed = vi.fn()
+    svc.onDidRemoveGroup(removed)
 
-    const other = new EditorGroupsService()
-    other.restore(state)
-    const restoredLocked = other.groups.filter((g) => g.isLocked)
-    expect(restoredLocked).toHaveLength(1)
+    second.closeEditor(a)
+    await Promise.resolve()
+
+    expect(svc.count).toBe(1)
+    expect(removed).toHaveBeenCalledOnce()
+  })
+
+  it('a locked source group does not block moveEditor or its own removal', async () => {
+    const svc = new EditorGroupsService()
+    const first = svc.activeGroup
+    const second = svc.addGroup(first, GroupDirection.Right)
+    const a = make('a')
+    second.openEditor(a)
+    second.lock(true)
+
+    svc.moveEditor(a, first)
+    await Promise.resolve()
+
+    expect(first.count).toBe(1)
+    expect(svc.count).toBe(1)
   })
 })

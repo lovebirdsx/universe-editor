@@ -330,6 +330,20 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
             }
           })
         }
+        // A group that stays empty cannot stay locked: there is nothing left to
+        // protect, and `activeGroupForOpen` would route every open away from it
+        // into a brand-new group. Deferred one microtask — like the removal
+        // above — because "empty" is only meaningful once the current operation
+        // finished: a toggle-preview or resolver upgrade detaches and reopens in
+        // place within the same tick.
+        if (group.count === 0 && group.isLocked) {
+          queueMicrotask(() => {
+            if (group.count === 0 && this._groups.includes(group) && group.isLocked) {
+              group.lock(false)
+              this._logger.debug(`unlocked empty group id=${group.id}`)
+            }
+          })
+        }
       }),
     )
     this._groupWatchers.set(group.id, d)
@@ -456,8 +470,15 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
       )
       const activeIdx = Math.min(leaf.data.activeIndex, hydrated.length - 1)
       if (activeIdx >= 0 && hydrated[activeIdx]) target.setActive(hydrated[activeIdx]!)
-      // Apply the exact locked state (the reused seed group may carry a stale lock).
-      target.lock(leaf.data.locked === true)
+      // Apply the exact locked state (the reused seed group may carry a stale
+      // lock). A leaf that hydrated to zero editors never comes back locked — it
+      // would route every later open into a brand-new group. (An empty leaf is
+      // legitimate: a layout may hold empty groups, and unknown typeIds are
+      // skipped.)
+      if (leaf.data.locked === true && target.count === 0) {
+        this._logger.debug(`restore: dropping lock on empty group id=${target.id}`)
+      }
+      target.lock(leaf.data.locked === true && target.count > 0)
       if (leaf.data.viewStates) EditorViewStateCache.restoreGroup(target.id, leaf.data.viewStates)
       if (target.id === state.activeGroupId) restoredActive = target
     })

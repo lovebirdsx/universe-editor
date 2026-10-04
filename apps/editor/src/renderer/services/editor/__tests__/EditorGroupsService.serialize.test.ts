@@ -177,6 +177,55 @@ describe('EditorGroupsService serialization', () => {
     dst.dispose()
   })
 
+  it('restore leaves a locked-but-empty leaf unlocked', () => {
+    // A layout written before the empty-group auto-unlock (or one whose editors
+    // all failed to deserialize) must not come back as a locked empty group: it
+    // would route every open into a brand-new group.
+    const state: ISerializedEditorGroupsState = {
+      grid: {
+        root: {
+          type: 'branch',
+          size: 1,
+          children: [
+            {
+              type: 'leaf',
+              size: 1,
+              data: { editors: [], activeIndex: 0, locked: true },
+            },
+          ],
+        },
+        orientation: 0, // Horizontal
+        width: 800,
+        height: 600,
+      },
+      activeGroupId: 0,
+    }
+    const dst = new EditorGroupsService()
+    dst.restore(state)
+    expect(dst.groups).toHaveLength(1)
+    expect(dst.groups[0]?.count).toBe(0)
+    expect(dst.groups[0]?.isLocked).toBe(false)
+    dst.dispose()
+  })
+
+  it('toJSON → restore round-trips the lock of a non-empty group', () => {
+    const src = new EditorGroupsService()
+    src.activeGroup.openEditor(new FakeEditorInput())
+    const second = src.addGroup(src.activeGroup, GroupDirection.Right)
+    second.openEditor(new OtherEditorInput())
+    second.lock(true)
+
+    const dst = new EditorGroupsService()
+    dst.restore(src.toJSON())
+    src.dispose()
+
+    expect(dst.groups).toHaveLength(2)
+    expect(dst.groups[1]?.isLocked).toBe(true)
+    // The unlocked sibling must not pick the lock up on the way through.
+    expect(dst.groups[0]?.isLocked).toBe(false)
+    dst.dispose()
+  })
+
   it('toJSON includes untitled editors and serialises their content', () => {
     const svc = new EditorGroupsService()
     const a = new FakeEditorInput()
