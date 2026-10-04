@@ -14,6 +14,7 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.group.resolve': '需要合并',
   'perforce.group.reconcile': '改动',
   'perforce.group.reconcile.scanning': '扫描中 {0}/{1}',
+  'perforce.group.reconcile.scanPhase': '正在扫描 {0}（{1}/{2}）',
   'perforce.group.reconcile.truncated': '仅显示 {0}/{1}',
   // status-bar busy labels (spinner text during long p4 operations)
   'perforce.busy.edit': '正在签出',
@@ -200,6 +201,7 @@ const ZH_CN: Readonly<Record<string, string>> = {
   // 状态栏扫描进度 tooltip
   'perforce.status.scanning': '正在扫描工作区 {0}',
   'perforce.status.scanCounts': '已扫描 {0} 个目录 / 待扫描 {1} 个',
+  'perforce.status.scanPhase': '阶段 {0}/{1}：{2}',
   'perforce.status.scanCurrent': '当前：{0}',
   'perforce.status.scanCurrentRoot': '当前：工作区根目录',
   'perforce.status.scanDrift': '已发现 {0} 个差异文件 · 已耗时 {1}',

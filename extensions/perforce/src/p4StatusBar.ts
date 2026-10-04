@@ -32,7 +32,7 @@ import { uriToFsPath } from './pathUtil.js'
 import { asRev, type FstatInfo } from './fstatParser.js'
 import { formatBytes, formatIoRate, RateWindow } from './processIo.js'
 import { localize } from './nls.js'
-import type { PerforceClient, SyncProgress } from './client.js'
+import { scanPhaseOrdinal, type PerforceClient, type SyncProgress } from './client.js'
 
 /** Truncate a long client name for the busy status-bar text: keep at most `max`
  *  chars of the tail, but never slice mid-word — when the cut lands inside a
@@ -330,11 +330,28 @@ export class P4StatusBarController {
         this._item.text = `$(server) ${short}: ${scanProgress.done}/${total} $(sync~spin)`
         const lines = [
           localize('perforce.status.scanning', 'Scanning workspace {0}', { 0: clientName }),
-          localize('perforce.status.scanCounts', 'Scanned {0} directories / {1} pending', {
-            0: scanProgress.done,
-            1: scanProgress.pending,
-          }),
         ]
+        if (scanProgress.phase !== undefined) {
+          // δ's readout: one whole-scope call, so its ordinals count the fixed
+          // phase ladder (start / analyze / digest / report / done) — there are
+          // no directories to count, and printing them as "scanned N
+          // directories" would be a fabricated number.
+          const phase = scanPhaseOrdinal(scanProgress)
+          lines.push(
+            localize('perforce.status.scanPhase', 'Phase {0}/{1}: {2}', {
+              0: phase.step,
+              1: phase.total,
+              2: scanProgress.phase,
+            }),
+          )
+        } else {
+          lines.push(
+            localize('perforce.status.scanCounts', 'Scanned {0} directories / {1} pending', {
+              0: scanProgress.done,
+              1: scanProgress.pending,
+            }),
+          )
+        }
         if (scanProgress.currentDir !== undefined) {
           lines.push(
             scanProgress.currentDir === '.'

@@ -35,7 +35,8 @@ import { readdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { ConcurrencyGate } from './concurrency.js'
-import { setP4CommandTimeoutSeconds, type P4Connection } from './p4Service.js'
+import { resolveP4Command, setP4CommandTimeoutSeconds, type P4Connection } from './p4Service.js'
+import { probeP4delta, resolveP4deltaCommand } from './p4deltaService.js'
 import { PerforceClient, SYNC_POINT_READBACK_SLOW_EXEC, type P4CacheOptions } from './client.js'
 import type { SyncPreviewFile } from './syncParser.js'
 import { P4CacheDisk } from './p4CacheDisk.js'
@@ -71,7 +72,12 @@ import {
   buildSyncFilespecs,
   type SyncScopeTarget,
 } from './p4Filespec.js'
-import { carveReconcileFilespecs, carveReconcileTargets } from './reconcileCarve.js'
+import {
+  canHandTargetsToP4delta,
+  carveReconcileFilespecs,
+  carveReconcileTargets,
+  p4deltaReconcileTargetSpecs,
+} from './reconcileCarve.js'
 import {
   clSpecOf,
   directSyncPoint,
@@ -416,6 +422,72 @@ interface KnownLanding {
   readonly change: string
 }
 
+/**
+ * The δ engine decision for one session, from the two `perforce.p4delta.*`
+ * settings: the executable (plus the env it must carry) to hand the client, or
+ * undefined when every scan must run on p4.
+ *
+ * Read here (not in the client) because this is where workspace configuration
+ * lives — the client only ever receives an already probed executable. Every
+ * refusal is a log line and nothing else: the engine is an optimization, so a
+ * machine without it must not be interrupted about one, and the native scan is
+ * a complete answer either way.
+ *
+ * `enabled: false` short-circuits before ANY spawn — not even the `--help`
+ * probe. A configured-but-unusable path (`ENOENT`, or a binary that does not
+ * advertise `--json` + `--client-root`) is refused here too, so the client
+ * never gets an executable it would only fail on.
+ *
+ * The p4-script hedge: δ hands files it cannot digest over to `p4`, and it
+ * resolves that `p4` on its own. Under a `UNIVERSE_P4_PATH` script override (the
+ * e2e fake, an escape hatch) the engine's own lookup would land on a DIFFERENT
+ * p4 than this session's, so the conservative default is to stay native. The
+ * exception is a session where δ was named explicitly — `UNIVERSE_P4DELTA_PATH`
+ * or `perforce.p4delta.path` — because that is an operator saying "this pair is
+ * mine": δ is enabled there and told which p4 to hand off to (`P4_EXE`, from
+ * `resolveP4Command` — the script itself, since that is the only form this
+ * session's p4 exists in). It maps to the e2e fixture, which fakes both engines
+ * over one shared depot state.
+ *
+ * Exported for the configuration-gate tests; `activate` is the only production
+ * caller.
+ */
+export async function resolveP4deltaEngine(
+  settings: { readonly enabled: boolean; readonly path: string },
+  log: (msg: string) => void,
+): Promise<{ exe: string; extraEnv?: Readonly<Record<string, string>> } | undefined> {
+  if (!settings.enabled) {
+    log('[perforce] p4delta disabled via perforce.p4delta.enabled; using p4')
+    return undefined
+  }
+  const p4 = resolveP4Command()
+  const p4IsScript = p4.prefixArgs.length > 0
+  // "Named explicitly" is about what the CALLER said, not about what the lookup
+  // returned: a path found on PATH is a machine with δ installed, not a
+  // configured engine. Empty string is the setting's default (same rule
+  // resolveP4deltaCommand uses).
+  const deltaNamed = Boolean(process.env.UNIVERSE_P4DELTA_PATH) || settings.path !== ''
+  if (p4IsScript && !deltaNamed) {
+    log('[perforce] p4delta skipped: p4 resolves to a script override; using p4')
+    return undefined
+  }
+  const exe = resolveP4deltaCommand(settings.path)
+  if (exe === undefined) {
+    log('[perforce] p4delta not found; using p4')
+    return undefined
+  }
+  if (!(await probeP4delta(exe))) {
+    log(`[perforce] p4delta at ${exe} does not support --json/--client-root; using p4`)
+    return undefined
+  }
+  log(`[perforce] p4delta engine: ${exe}`)
+  // Only a script override needs the pointer: a plain `p4` is what δ's own
+  // lookup would find too, and forcing `P4_EXE=p4` would make δ require a FILE
+  // by that name instead.
+  const extraEnv = p4IsScript ? { P4_EXE: p4.prefixArgs[0] ?? p4.command } : undefined
+  return { exe, ...(extraEnv !== undefined ? { extraEnv } : {}) }
+}
+
 export async function activate(context: ExtensionContext): Promise<void> {
   const root = workspace.rootPath
   if (!root) {
@@ -513,6 +585,25 @@ export async function activate(context: ExtensionContext): Promise<void> {
   // that ran the get. See `graphSyncExternal.ts`.
   const externalSyncPoints = ExternalSyncPoints.open(saviorConfigPath(process.env, homedir()), log)
 
+  // The δ engine (`perforce.p4delta.*`): probed once here and handed to every
+  // client built this session, together with the env the engine has to carry
+  // (`P4_EXE` when this session's p4 is a script override).
+  const resolveP4deltaOptions = async (): Promise<
+    { exe: string; extraEnv?: Readonly<Record<string, string>> } | undefined
+  > =>
+    resolveP4deltaEngine(
+      {
+        enabled: await cfg.get('p4delta.enabled', true),
+        path: await cfg.get('p4delta.path', ''),
+      },
+      log,
+    )
+
+  /** Shared by both client construction points (the initial one below and the
+   *  workspace switch command), and refreshed by the config subscription so a
+   *  newly built client inherits the current decision. */
+  let p4deltaOptions = await resolveP4deltaOptions()
+
   // Probe for a p4 CLI + a client for this folder. A missing binary or a folder
   // outside any Perforce workspace disables the provider without crashing.
   let client: PerforceClient | undefined
@@ -521,6 +612,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
       log,
       watchRoot: root,
       createFileSystemWatcher: (glob) => workspace.createFileSystemWatcher(glob),
+      ...(p4deltaOptions !== undefined ? { p4delta: p4deltaOptions } : {}),
     })
   } catch (err) {
     if (isMissingCli(err)) {
@@ -698,6 +790,24 @@ export async function activate(context: ExtensionContext): Promise<void> {
     workspace.onDidChangeConfiguration((e) => {
       if (!e.affectsConfiguration('perforce.reconcileScan')) return
       void applyReconcileScanOptionsAll()
+    }),
+  )
+
+  /**
+   * The δ engine: re-resolve both settings on any `perforce.p4delta.*` change
+   * and hot-swap every live client, so turning the engine off (or pointing it at
+   * another executable) applies to the next scan without a reload. A probe that
+   * now fails is a log line and a switch to native — never an error toast, and
+   * never a scan that silently reports nothing (the client falls back within
+   * the round).
+   */
+  context.subscriptions.push(
+    workspace.onDidChangeConfiguration((e) => {
+      if (!e.affectsConfiguration('perforce.p4delta')) return
+      void (async () => {
+        p4deltaOptions = await resolveP4deltaOptions()
+        for (const c of mgr.all) c.setP4delta(p4deltaOptions?.exe, p4deltaOptions?.extraEnv)
+      })()
     }),
   )
 
@@ -1129,6 +1239,24 @@ export async function activate(context: ExtensionContext): Promise<void> {
     // range, so collect that range rather than degrading the far more frequent
     // path to discovery-only.
     const collectCarved = async (targets: readonly SyncScopeTarget[]): Promise<void> => {
+      // Under δ the exclusions travel inside the write call, so the targets go
+      // through uncarved (and no carve means nothing to warn about) — but only
+      // while the raw paths are shapes δ's grammar reads: the client's
+      // own "spec is not a δ entry → run on p4" guard has no way back to the
+      // raw paths, so a metacharacter here would land the un-carved δ spelling
+      // on native p4 with the exclusions applied by nobody (see
+      // `canHandTargetsToP4delta`). The all-excluded answer is still this
+      // layer's: an entry the user excluded outright is not something either
+      // engine should collect.
+      if (target.reconcileUsesP4delta && canHandTargetsToP4delta(targets)) {
+        const specs = p4deltaReconcileTargetSpecs(targets, target.reconcileExcludeDirs)
+        if (specs.length === 0) {
+          await notifyAllExcluded()
+          return
+        }
+        await target.reconcile(specs)
+        return
+      }
       const carved = await carveReconcileTargets(targets, target.reconcileExcludeDirs)
       await warnUnreadableCarves(carved.unreadableDirs)
       if (carved.specs.length === 0) {
@@ -1470,6 +1598,9 @@ export async function activate(context: ExtensionContext): Promise<void> {
               log,
               watchRoot: root,
               createFileSystemWatcher: (glob) => workspace.createFileSystemWatcher(glob),
+              // The decision the initial client was built with (refreshed on
+              // config changes): a switched workspace gets the same engine.
+              ...(p4deltaOptions !== undefined ? { p4delta: p4deltaOptions } : {}),
             },
           ),
         wire: wireClient,
@@ -1498,8 +1629,10 @@ export async function activate(context: ExtensionContext): Promise<void> {
         return
       }
       // Explorer multi-select: one filespec per element, directories carved
-      // around excluded subtrees. SCM folder rows keep the single recursive
-      // `<dir>/...` filespec (see reconcileUsesSelection).
+      // around excluded subtrees — unless the engine is δ, which takes the
+      // exclusions as entries of the same call (see `collectCarved`). SCM folder
+      // rows keep the single recursive `<dir>/...` filespec (see
+      // reconcileUsesSelection).
       if (reconcileUsesSelection(selection, arg0?.isDirectory === true)) {
         const client = mgr.resolveClient({ resourceUri: selection[0]!.path })
         if (!client) return
@@ -1508,6 +1641,15 @@ export async function activate(context: ExtensionContext): Promise<void> {
         )
         if (remaining.length === 0) {
           await notifyAllExcluded()
+          return
+        }
+        if (client.reconcileUsesP4delta && canHandTargetsToP4delta(remaining)) {
+          const specs = p4deltaReconcileTargetSpecs(remaining, client.reconcileExcludeDirs)
+          if (specs.length === 0) {
+            await notifyAllExcluded()
+            return
+          }
+          await client.reconcile(specs)
           return
         }
         const carved = await carveReconcileTargets(remaining, client.reconcileExcludeDirs)
@@ -1528,7 +1670,14 @@ export async function activate(context: ExtensionContext): Promise<void> {
         return
       }
       const isDirectory = arg0?.isDirectory === true
-      if (isDirectory && client.containsAnyReconcileExclude(path)) {
+      // The δ fork needs the same metacharacter gate as the multi-select one
+      // above: a path δ's grammar cannot read must be carved, not handed over
+      // (see `canHandTargetsToP4delta` for why that is data loss).
+      const handToP4delta =
+        isDirectory &&
+        client.reconcileUsesP4delta &&
+        canHandTargetsToP4delta([{ path, isDirectory }])
+      if (isDirectory && !handToP4delta && client.containsAnyReconcileExclude(path)) {
         const carved = await carveReconcileFilespecs(path, client.reconcileExcludeDirs)
         if (carved === undefined) {
           await warnUnreadableCarves([path])
@@ -2042,9 +2191,23 @@ export async function activate(context: ExtensionContext): Promise<void> {
       if (dirs !== undefined && dirs.length > 0) {
         const kept: string[] = []
         const unreadable: string[] = []
+        // The δ gate is per CALL, not per directory: `cleanOverride` goes to ONE
+        // `p4 clean`, and if any entry sends that call native (the client's
+        // reject, `canHandTargetsToP4delta`) the δ-form entries in it would
+        // lose their exclusions — so the whole set is either handed over
+        // uncarved or carved, never mixed.
+        const handToP4delta =
+          target.reconcileUsesP4delta &&
+          canHandTargetsToP4delta([
+            ...dirs.map((dir) => ({ path: dir, isDirectory: true })),
+            ...plan.unopened.map((path) => ({ path, isDirectory: false })),
+          ])
         for (const dir of dirs) {
           if (target.isReconcileTargetExcluded(dir)) continue
-          if (target.containsAnyReconcileExclude(dir)) {
+          // δ answers the whole directory and applies the exclusions itself
+          // (they ride along as scope entries of the clean call), so nothing is
+          // carved for it — the same fork the collect paths make.
+          if (!handToP4delta && target.containsAnyReconcileExclude(dir)) {
             const carved = await carveReconcileFilespecs(dir, target.reconcileExcludeDirs)
             if (carved === undefined) {
               unreadable.push(dir)

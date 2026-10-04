@@ -152,6 +152,24 @@ function installScmBridge(): void {
   }
 }
 
+/** Per-test reset shared by the two scan describes: the SCM bridge, the spawn
+ *  and readdir mocks, and the spawn / group ledgers. */
+function resetScanHarness(): void {
+  installScmBridge()
+  spawnMock.mockReset()
+  readdirMock.mockReset()
+  // Every directory without a usable checkpoint now gets a cold-prior file
+  // count before its batch; an empty listing ("no files") is the neutral
+  // default so tests only override readdir when the count or a split matters.
+  readdirMock.mockImplementation(async () => [])
+  calls.length = 0
+  groups.length = 0
+  reconcileGroupThrow = false
+  heldChildren.length = 0
+  currentClock = undefined
+  windowMock.showErrorMessage.mockClear()
+}
+
 const { PerforceClient } = await import('../client.js')
 const { ConcurrencyGate } = await import('../concurrency.js')
 const { setP4CommandTimeoutSeconds } = await import('../p4Service.js')
@@ -509,19 +527,7 @@ function driftFiles(client: PerforceClientInstance): string[] {
 
 describe('PerforceClient.runReconcileScan', () => {
   beforeEach(() => {
-    installScmBridge()
-    spawnMock.mockReset()
-    readdirMock.mockReset()
-    // Every directory without a usable checkpoint now gets a cold-prior file
-    // count before its batch; an empty listing ("no files") is the neutral
-    // default so tests only override readdir when the count or a split matters.
-    readdirMock.mockImplementation(async () => [])
-    calls.length = 0
-    groups.length = 0
-    reconcileGroupThrow = false
-    heldChildren.length = 0
-    currentClock = undefined
-    windowMock.showErrorMessage.mockClear()
+    resetScanHarness()
   })
   afterEach(() => {
     delete (globalThis as Record<string, unknown>)[BRIDGE_KEY]
@@ -3413,6 +3419,1165 @@ describe('PerforceClient.runReconcileScan', () => {
     // discovery one.
     expect(groupRows(client)).toEqual([{ path: `${LOCAL}/a.txt`, letter: 'RM' }])
     expect(driftFiles(client).sort()).toEqual([`${LOCAL}/a.txt`, `${LOCAL}/b.txt`])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The δ engine (`perforce.p4delta.*` → `PerforceClientOptions.p4delta`)
+// ---------------------------------------------------------------------------
+//
+// The engine seam is `P4deltaService.prototype.run`: the client builds a real
+// service around the exe it was handed (that is the production wiring, and the
+// point of the option being just an exe), so the stub replaces only the process
+// spawn — the argv the client built is what these tests assert on. Locks in:
+//  1. One whole-scope run with the frozen argv (contract flags + scope entries
+//     + `-`-prefixed exclusions), rows through the ordinary drift pipeline, and
+//     ONE checkpoint under the client root.
+//  2. A fresh checkpoint is replayed with zero spawns; past 24h it is rescanned.
+//  3. δ failures (no summary, non-JSON stdout, usage error, run failure) fall
+//     back to the native scan IN THE SAME ROUND — a broken engine costs a slow
+//     scan, never a missing one — and count toward a 3-strike disarm.
+//  4. A cancel is not a failure: no counter, no fallback.
+//  5. `no-entry-matched` is a normal empty answer, not a failure.
+//  6. The engine is part of the checkpoint fingerprint, so the two engines'
+//     checkpoints never alias.
+
+const { P4deltaService } = await import('../p4deltaService.js')
+type P4deltaRecord = import('../p4deltaService.js').P4deltaRecord
+type P4deltaRunResult = import('../p4deltaService.js').P4deltaRunResult
+
+const P4DELTA_EXE = '/opt/p4delta'
+
+/** δ argv per stubbed run, in call order. */
+const p4deltaCalls: string[][] = []
+
+/** The run options per stubbed run, in call order — how the write tests observe
+ *  the watchdog policy a mutation forwarded to the engine. */
+const p4deltaRunOptionList: Array<import('../p4deltaService.js').P4deltaRunOptions | undefined> = []
+
+interface P4deltaReply {
+  records?: P4deltaRecord[]
+  progress?: P4deltaRecord[]
+  log?: string[]
+  code?: number
+  sawNonJsonStdout?: boolean
+  /** The run stays in flight until this resolves — for observing progress
+   *  mid-run or cancelling it. */
+  hold?: Promise<void>
+}
+
+let p4deltaRunSpy: { mockRestore: () => void } | undefined
+
+/** Stub the δ run. The result is assembled the way the service assembles it
+ *  (`sawSummary` from the records), so a test expresses "no summary" simply by
+ *  leaving the summary record out. */
+function stubP4deltaRun(reply: (args: readonly string[]) => P4deltaReply): void {
+  p4deltaRunSpy = vi
+    .spyOn(P4deltaService.prototype, 'run')
+    .mockImplementation(async (args, options) => {
+      const argv = [...args]
+      p4deltaCalls.push(argv)
+      p4deltaRunOptionList.push(options)
+      const r = reply(argv)
+      if (r.hold) await r.hold
+      const records = r.records ?? []
+      return {
+        code: r.code ?? 0,
+        records,
+        progress: r.progress ?? [],
+        log: r.log ?? [],
+        sawNonJsonStdout: r.sawNonJsonStdout ?? false,
+        sawSummary: records.some((rec) => rec['kind'] === 'summary'),
+        signal: null,
+      } satisfies P4deltaRunResult
+    })
+}
+
+/** One δ `kind:"file"` record in the contract's shape (`mode: "open"`). */
+function deltaFile(rel: string, action: string, klass: string = action): P4deltaRecord {
+  return {
+    kind: 'file',
+    mode: 'open',
+    class: klass,
+    action,
+    depotFile: `//depot/branch_x/${rel}`,
+    clientFile: `//${CLIENT}/${rel}`,
+    rev: '1',
+    applied: false,
+  }
+}
+
+function deltaSummary(overrides: Record<string, unknown> = {}): P4deltaRecord {
+  return {
+    kind: 'summary',
+    mode: 'open',
+    ok: true,
+    applied: false,
+    total: 0,
+    counts: {},
+    scopeMatched: 1,
+    unmatched: 0,
+    elapsedMs: 42,
+    reason: null,
+    ...overrides,
+  }
+}
+
+describe('PerforceClient.runReconcileScan — δ engine', () => {
+  beforeEach(() => {
+    resetScanHarness()
+    p4deltaCalls.length = 0
+  })
+
+  afterEach(() => {
+    p4deltaRunSpy?.mockRestore()
+    p4deltaRunSpy = undefined
+    delete (globalThis as Record<string, unknown>)[BRIDGE_KEY]
+  })
+
+  it('covers the whole scope in one δ run and checkpoints it under the root key', async () => {
+    const disk = fakeDisk()
+    const client = await makeClient({}, disk, fakeClock(), { p4delta: { exe: P4DELTA_EXE } })
+    client.setReconcileScope([LOCAL])
+    client.setReconcileExcludes([`${LOCAL}/ignored`])
+    stubP4deltaRun(() => ({
+      records: [
+        deltaFile('a.txt', 'edit'),
+        deltaFile('b.txt', 'add'),
+        // δ's open mode also reports the `p4 revert -a` groups (action
+        // `revert`) and hands undigestable files off to native p4; neither is a
+        // drift row, and all of them must stay out of the group.
+        deltaFile('c.txt', 'revert', 'revert_edit'),
+        {
+          kind: 'file',
+          mode: 'open',
+          class: 'handoff',
+          handoff: 'reconcile',
+          depotFile: '//depot/branch_x/x.bin',
+          clientFile: `//${CLIENT}/x.bin`,
+          applied: false,
+        },
+        deltaSummary({ total: 2, counts: { add: 1, edit: 1 } }),
+      ],
+      progress: [
+        { kind: 'progress', phase: 'digest', step: 3, total: 5, message: 'Checking digests.' },
+      ],
+      log: ['Timestamp optimization: Skipped 3 of 40 files.'],
+    }))
+
+    await client.runReconcileScan()
+
+    // ONE δ run, contract flags in the frozen order, then the scope entries:
+    // the scanned directory plus every exclusion inside it, `-`-prefixed and
+    // after `--` so they stay positional (δ applies the exclusions itself —
+    // no carve, and `--json`/`--client-root`/`--no-scope-file` are exactly the
+    // switches the contract defines).
+    expect(p4deltaCalls).toEqual([
+      [
+        '--json',
+        '--no-scope-file',
+        '--client-root',
+        ROOT,
+        '--no-revert-groups',
+        '--',
+        `${LOCAL}/...`,
+        `-${LOCAL}/ignored/...`,
+      ],
+    ])
+    // The whole scope was answered by δ: the native walk spawned nothing.
+    expect(reconcileScans()).toEqual([])
+    // Only add/edit/delete become rows — they land in the drift set and the group.
+    expect(groupRows(client)).toEqual([
+      { path: `${LOCAL}/a.txt`, letter: 'RM' },
+      { path: `${LOCAL}/b.txt`, letter: 'RA' },
+    ])
+    expect(driftFiles(client).sort()).toEqual([`${LOCAL}/a.txt`, `${LOCAL}/b.txt`])
+    // ONE checkpoint, keyed by the client root (a δ snapshot is whole-scope).
+    expect(disk.store.size).toBe(1)
+    const [key] = [...disk.store.keys()]
+    expect(key).toMatch(/^reconcileScan\/[0-9a-f]{16}:/)
+    expect(key!.endsWith(`:${ROOT}`)).toBe(true)
+    const entry = JSON.parse(disk.store.get(key!)!) as {
+      completedAt: number
+      files: unknown[]
+      elapsedMs?: number
+    }
+    expect(entry.files).toHaveLength(2)
+    expect(entry.completedAt).toBeTypeOf('number')
+    expect(entry.elapsedMs).toBeTypeOf('number')
+    expect(scannedDirs(client)).toEqual([ROOT])
+  })
+
+  it('reports δ phases instead of a fabricated directory count', async () => {
+    let release!: () => void
+    const held = new Promise<void>((resolve) => (release = resolve))
+    const client = await makeClient({}, undefined, fakeClock(), {
+      p4delta: { exe: P4DELTA_EXE },
+    })
+    client.setReconcileScope([LOCAL])
+    stubP4deltaRun(() => ({
+      hold: held,
+      records: [deltaFile('a.txt', 'edit'), deltaSummary({ total: 1, counts: { edit: 1 } })],
+    }))
+
+    const scan = client.runReconcileScan()
+    // δ is a whole-scope call: the readout counts the phase ladder
+    // (start/analyze/digest/report/done), and the native directory fields are
+    // absent — the status bar renders the phase instead of "0/5 directories".
+    await vi.waitFor(() => {
+      expect(client.status.scanProgress?.phase).toBe('start')
+    })
+    expect(client.status.scanProgress).toMatchObject({ done: 0, pending: 5, step: 1 })
+    expect(client.status.scanProgress?.currentDir).toBeUndefined()
+
+    release()
+    await scan
+    expect(client.status.scanProgress).toBeUndefined()
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/a.txt`, letter: 'RM' }])
+  })
+
+  it('annotates the drift group with the phase ladder, not fabricated directory counts', async () => {
+    let release!: () => void
+    const held = new Promise<void>((resolve) => (release = resolve))
+    const client = await makeClient({}, undefined, fakeClock(), {
+      p4delta: { exe: P4DELTA_EXE },
+      // A scope FILE keeps the scan in flight after the δ run (the per-file
+      // verification is a second δ call), which is the window the group title
+      // is observed in.
+      scopeFileExists: () => true,
+    })
+    client.setReconcileScope([LOCAL], [`${LOCAL}/a.txt`])
+    let runs = 0
+    stubP4deltaRun(() => {
+      runs += 1
+      return runs === 1
+        ? {
+            records: [deltaSummary()],
+            progress: [
+              {
+                kind: 'progress',
+                phase: 'digest',
+                step: 3,
+                total: 5,
+                message: 'Checking digests.',
+              },
+            ],
+          }
+        : { hold: held, records: [deltaSummary()] }
+    })
+
+    const scan = client.runReconcileScan()
+    // The δ run's terminal frame (`done`, the ladder's 5th ordinal) is the one
+    // live while the per-file phase runs. `done`/`pending` count PHASES there,
+    // so the title must render the phase — "scanning 5/5" is the same number
+    // spelled as a directory count the whole-scope run never had.
+    await vi.waitFor(() => {
+      expect(client.reconcileGroupLabel).toBe('Changes (scanning done (5/5))')
+    })
+
+    release()
+    await scan
+    expect(client.reconcileGroupLabel).toBe('Changes')
+  })
+
+  it('falls back to the native scan when δ answers in another mode, and counts it', async () => {
+    const disk = fakeDisk()
+    const client = await makeClient(
+      { reconcile: () => [{ rel: 'native.txt' }] },
+      disk,
+      fakeClock(),
+      { p4delta: { exe: P4DELTA_EXE } },
+    )
+    client.setReconcileScope([LOCAL])
+    // Records and `ok:true`, but the summary says the run answered `clean`. A
+    // scan must not read another mode's file list as its own answer: publishing
+    // it would invent drift rows, and the whole-scope checkpoint would persist
+    // the wrong answer under δ's key for a day.
+    stubP4deltaRun(() => ({
+      records: [
+        deltaFile('a.txt', 'edit'),
+        deltaSummary({ mode: 'clean', applied: true, total: 1, counts: { edit: 1 } }),
+      ],
+    }))
+
+    await client.runReconcileScan()
+
+    expect(p4deltaCalls).toHaveLength(1)
+    expect(client.p4deltaFallbackState).toEqual({ failures: 1, disarmed: false })
+    expect(reconcileScans().length).toBe(1)
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/native.txt`, letter: 'RM' }])
+    // …and the only checkpoint is the native per-directory one: δ's whole-scope
+    // key was never written from the rejected records.
+    const keys = [...disk.store.keys()]
+    expect(keys).toHaveLength(1)
+    expect(keys[0]!.endsWith(`:${LOCAL}`)).toBe(true)
+  })
+
+  it('replays a fresh whole-scope checkpoint with zero spawns, and rescans once expired', async () => {
+    const disk = fakeDisk()
+    const clock = fakeClock()
+    const client = await makeClient({}, disk, clock, { p4delta: { exe: P4DELTA_EXE } })
+    client.setReconcileScope([LOCAL])
+    stubP4deltaRun(() => ({
+      records: [deltaFile('a.txt', 'edit'), deltaSummary({ total: 1, counts: { edit: 1 } })],
+    }))
+    await client.runReconcileScan()
+    expect(p4deltaCalls).toHaveLength(1)
+    const [key] = [...disk.store.keys()]
+    expect(key!.endsWith(`:${ROOT}`)).toBe(true)
+    p4deltaCalls.length = 0
+
+    // Next session, same disk: the snapshot is fresh, so the whole scope is
+    // published from it with no engine (and no p4) spawned at all.
+    const second = await makeClient({}, disk, clock, { p4delta: { exe: P4DELTA_EXE } })
+    second.setReconcileScope([LOCAL])
+    stubP4deltaRun(() => {
+      throw new Error('δ must not run while a fresh checkpoint answers the scope')
+    })
+    await second.runReconcileScan()
+    expect(p4deltaCalls).toEqual([])
+    expect(groupRows(second)).toEqual([{ path: `${LOCAL}/a.txt`, letter: 'RM' }])
+
+    // Past the freshness ceiling the snapshot proves nothing: rescan.
+    clock.advance(24 * 60 * 60 * 1000 + 1)
+    const third = await makeClient({}, disk, clock, { p4delta: { exe: P4DELTA_EXE } })
+    third.setReconcileScope([LOCAL])
+    let runs = 0
+    stubP4deltaRun(() => {
+      runs++
+      return { records: [deltaSummary()] }
+    })
+    await third.runReconcileScan()
+    expect(runs).toBe(1)
+  })
+
+  it('falls back to the native scan when δ prints no summary, and counts it', async () => {
+    const disk = fakeDisk()
+    const client = await makeClient(
+      { reconcile: () => [{ rel: 'native.txt' }] },
+      disk,
+      fakeClock(),
+      { p4delta: { exe: P4DELTA_EXE } },
+    )
+    client.setReconcileScope([LOCAL])
+    // Killed mid-stream: records but no `summary` — the contract's "no
+    // conclusion", which must never be read as "nothing drifted".
+    stubP4deltaRun(() => ({ records: [deltaFile('partial.txt', 'edit')] }))
+
+    await client.runReconcileScan()
+
+    expect(p4deltaCalls).toHaveLength(1)
+    expect(client.p4deltaFallbackState).toEqual({ failures: 1, disarmed: false })
+    // The round still answered — natively, in the same round.
+    expect(reconcileScans().length).toBe(1)
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/native.txt`, letter: 'RM' }])
+    // …and the checkpoint is the native per-directory one, not a δ snapshot.
+    expect(scannedDirs(client)).toEqual([LOCAL])
+    expect(disk.store.size).toBe(1)
+    const [key] = [...disk.store.keys()]
+    expect(key!.endsWith(`:${LOCAL}`)).toBe(true)
+  })
+
+  it('disarms the engine after three consecutive failures; only setP4delta re-arms it', async () => {
+    const clock = fakeClock()
+    const client = await makeClient({ reconcile: () => [] }, undefined, clock, {
+      p4delta: { exe: P4DELTA_EXE },
+    })
+    client.setReconcileScope([LOCAL])
+    stubP4deltaRun(() => ({ sawNonJsonStdout: true, records: [deltaSummary()] }))
+    // Every round must really spawn the native walk, or the spawn count proves
+    // nothing — past the freshness ceiling the checkpoint is rescanned instead
+    // of replayed (the fallback round checkpoints like any native round).
+    const advancePastCeiling = (): void => clock.advance(24 * 60 * 60 * 1000 + 1)
+
+    for (let i = 0; i < 3; i++) {
+      advancePastCeiling()
+      await client.runReconcileScan()
+    }
+
+    expect(p4deltaCalls).toHaveLength(3)
+    expect(client.p4deltaFallbackState).toEqual({ failures: 3, disarmed: true })
+    // Every one of the three rounds still produced a native answer.
+    expect(reconcileScans().length).toBe(3)
+
+    // Disarmed: the next round goes straight to native, with no δ spawn at all.
+    advancePastCeiling()
+    await client.runReconcileScan()
+    expect(p4deltaCalls).toHaveLength(3)
+    expect(reconcileScans().length).toBe(4)
+
+    // A reconfiguration is the only reset — the engine gets a clean ladder and
+    // runs again (the disarm latch is not lifted by anything else).
+    client.setP4delta(P4DELTA_EXE)
+    expect(client.p4deltaFallbackState).toEqual({ failures: 0, disarmed: false })
+    stubP4deltaRun(() => ({
+      records: [deltaFile('a.txt', 'edit'), deltaSummary({ total: 1, counts: { edit: 1 } })],
+    }))
+    await client.runReconcileScan()
+    expect(p4deltaCalls).toHaveLength(4)
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/a.txt`, letter: 'RM' }])
+  })
+
+  it('does not count a user cancel as a failure and does not fall back', async () => {
+    const client = await makeClient({}, undefined, fakeClock(), { p4delta: { exe: P4DELTA_EXE } })
+    client.setReconcileScope([LOCAL])
+    stubP4deltaRun(() => {
+      // The user cancels while the run is in flight: the service kills the
+      // child, so the stream ends without a summary.
+      client.cancelBusy()
+      return { records: [deltaFile('partial.txt', 'edit')] }
+    })
+
+    await client.runReconcileScan()
+
+    expect(p4deltaCalls).toHaveLength(1)
+    expect(client.p4deltaFallbackState).toEqual({ failures: 0, disarmed: false })
+    // Nothing was re-run and nothing was published: a cancel means "stop", not
+    // "the engine is broken".
+    expect(reconcileScans()).toEqual([])
+    expect(groupRows(client)).toEqual([])
+
+    // The engine is still this session's engine.
+    await client.runReconcileScan()
+    expect(p4deltaCalls).toHaveLength(2)
+  })
+
+  it('treats no-entry-matched as the normal empty answer, not a failure', async () => {
+    const disk = fakeDisk()
+    const client = await makeClient({}, disk, fakeClock(), { p4delta: { exe: P4DELTA_EXE } })
+    client.setReconcileScope([`${LOCAL}/gone`])
+    stubP4deltaRun(() => ({
+      records: [
+        { kind: 'unmatched', path: `${LOCAL}/gone` },
+        { kind: 'unmatched', path: `${LOCAL}/gone/...` },
+        deltaSummary({
+          ok: false,
+          total: 0,
+          scopeMatched: 0,
+          unmatched: 2,
+          reason: 'no-entry-matched',
+        }),
+      ],
+    }))
+
+    await client.runReconcileScan()
+
+    expect(p4deltaCalls).toHaveLength(1)
+    expect(client.p4deltaFallbackState).toEqual({ failures: 0, disarmed: false })
+    // "Every entry is gone" is a complete answer for the scope — no native
+    // re-run, and the round is checkpointed as the empty answer it is (the δ
+    // counterpart of "no file(s) to reconcile").
+    expect(reconcileScans()).toEqual([])
+    expect(groupRows(client)).toEqual([])
+    expect(disk.store.size).toBe(1)
+    const [key] = [...disk.store.keys()]
+    expect(key!.endsWith(`:${ROOT}`)).toBe(true)
+  })
+
+  it('does not report a δ round complete when the per-file pass is cut short', async () => {
+    const log: string[] = []
+    let release!: () => void
+    const held = new Promise<void>((resolve) => (release = resolve))
+    const client = await makeClient({}, undefined, fakeClock(), {
+      p4delta: { exe: P4DELTA_EXE },
+      scopeFileExists: () => true,
+      log: (m) => log.push(m),
+    })
+    client.setReconcileScope([LOCAL], [`${LOCAL}/a.txt`])
+    let runs = 0
+    stubP4deltaRun(() => {
+      runs += 1
+      return runs === 1 ? { records: [deltaSummary()] } : { hold: held, records: [deltaSummary()] }
+    })
+
+    const scan = client.runReconcileScan()
+    await vi.waitFor(() => {
+      expect(runs).toBe(2)
+    })
+    // Disposed while the per-file verification is in flight: the pass never
+    // completed, so the round must not claim it did (the native walk returns
+    // early on the same condition).
+    client.dispose()
+    release()
+    await scan
+
+    expect(log.join('\n')).not.toContain('reconcile-scan complete')
+    expect(log.join('\n')).toContain('checkpoints kept')
+  })
+
+  it('keeps the two engines’ checkpoints apart (the engine is part of the fingerprint)', async () => {
+    const disk = fakeDisk()
+    // A native round writes its per-directory checkpoint…
+    const client = await makeClient({ reconcile: () => [{ rel: 'a.txt' }] }, disk)
+    client.setReconcileScope([LOCAL])
+    await client.runReconcileScan()
+    expect(disk.store.size).toBe(1)
+    const [nativeKey] = [...disk.store.keys()]
+    expect(nativeKey!.endsWith(`:${LOCAL}`)).toBe(true)
+
+    // …which a δ round must NOT read as its whole-scope snapshot: the engine
+    // marker puts it in another key space, so δ runs.
+    client.setP4delta(P4DELTA_EXE)
+    stubP4deltaRun(() => ({
+      records: [deltaFile('b.txt', 'add'), deltaSummary({ total: 1, counts: { add: 1 } })],
+    }))
+    await client.runReconcileScan()
+    expect(p4deltaCalls).toHaveLength(1)
+    expect(disk.store.size).toBe(2)
+    const deltaKey = [...disk.store.keys()].find((k) => k !== nativeKey)!
+    expect(deltaKey.endsWith(`:${ROOT}`)).toBe(true)
+    expect(deltaKey.split(':')[0]).not.toBe(nativeKey!.split(':')[0])
+
+    // And back: switching the engine off replays the NATIVE checkpoint (its own
+    // key was never shadowed by δ's), so the native engine spawns nothing —
+    // proof the marker separated the two namespaces in both directions.
+    client.setP4delta(undefined)
+    await client.runReconcileScan()
+    expect(reconcileScans().length).toBe(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Narrow queries on the δ engine: the watcher flush / `checkWorkingTree` path
+// follows the SCAN's engine pick, not a second opinion about the binary.
+// ---------------------------------------------------------------------------
+//
+// Locks in:
+//  1. A watcher flush is answered by ONE δ run with the frozen argv (contract
+//     switches, the batch's specs, `-`-prefixed exclusions) and zero native
+//     `reconcile -n` spawns; δ's rows take the ordinary drift pipeline.
+//  2. `no-entry-matched` is a complete EMPTY answer: the queried paths are
+//     covered and their stale drift rows are cleared, not counted as failures.
+//  3. Every "no conclusion" stream (no summary, non-JSON stdout, `reason:
+//     "error"`) leaves the paths' drift standing and counts on the shared
+//     ladder — and is NOT re-run natively in the same round.
+//  4. Three consecutive failures disarm the engine; later batches run native
+//     with zero δ spawns.
+//  5. A batch carrying a p4 filespec metacharacter routes native without
+//     touching the ladder (routing, not health).
+//  6. Under δ a directory is never carved: it asks `<dir>/...` and every
+//     exclusion travels in the same argv.
+
+/** A client whose SCAN round already ran — and on δ — so its narrow queries
+ *  follow the δ engine too (the verdict is the scan's, see `_narrowQueryEngine`):
+ *  before the first scan round a narrow query is native by design, so the δ
+ *  narrow path is only reachable this way. `narrow` answers every later δ run;
+ *  the scan itself answers an empty (or `scanRows`-seeded) ok:true stream. */
+async function makeDeltaNarrowClient(
+  narrow: (args: readonly string[]) => P4deltaReply,
+  options: {
+    /** Drift rows the δ SCAN answers with — they seed the drift set the narrow
+     *  queries are then observed against. */
+    readonly scanRows?: readonly P4deltaRecord[]
+    /** Native `p4` replies: only a routed/fallback batch ever reaches them. */
+    readonly responds?: RespondOptions
+    readonly clientOptions?: PerforceClientOptions
+    readonly disk?: P4CacheDiskBackend
+  } = {},
+): Promise<{ client: PerforceClientInstance; disk: P4CacheDiskBackend }> {
+  const disk = options.disk ?? fakeDisk()
+  const client = await makeClient(options.responds ?? {}, disk, fakeClock(), {
+    p4delta: { exe: P4DELTA_EXE },
+    ...options.clientOptions,
+  })
+  client.setReconcileScope([LOCAL])
+  let phase: 'scan' | 'narrow' = 'scan'
+  const scanRows = options.scanRows ?? []
+  stubP4deltaRun((args) =>
+    phase === 'scan' ? { records: [...scanRows, deltaSummary()] } : narrow(args),
+  )
+  await client.runReconcileScan()
+  // The scan round is the one that selects the engine: it must have answered on
+  // δ, or every test below would be measuring the native path.
+  expect(client.p4deltaFallbackState).toEqual({ failures: 0, disarmed: false })
+  expect(p4deltaCalls).toHaveLength(1)
+  p4deltaCalls.length = 0
+  phase = 'narrow'
+  return { client, disk }
+}
+
+/** A watcher whose flush drives the narrow query (delay 0: one macrotask). */
+function watchedClientOptions(wt: FakeWatcherController): PerforceClientOptions {
+  return {
+    createFileSystemWatcher: () => wt.watcher,
+    watchRoot: ROOT,
+    externalChangeDebounceMs: 0,
+  }
+}
+
+/** Fire one event and drain the debounced flush it schedules. */
+async function flushEvent(
+  client: PerforceClientInstance,
+  wt: FakeWatcherController,
+  kind: 'create' | 'change' | 'delete',
+  path: string,
+): Promise<void> {
+  wt.fire(kind, path)
+  await nextMacrotask()
+  await client.whenExternalFlushSettled()
+}
+
+describe('PerforceClient narrow queries — δ engine', () => {
+  beforeEach(() => {
+    resetScanHarness()
+    p4deltaCalls.length = 0
+  })
+
+  afterEach(() => {
+    p4deltaRunSpy?.mockRestore()
+    p4deltaRunSpy = undefined
+    delete (globalThis as Record<string, unknown>)[BRIDGE_KEY]
+  })
+
+  it('answers a watcher flush with ONE δ run: the frozen argv, no native reconcile spawn', async () => {
+    const wt = makeFakeWatcher()
+    const { client } = await makeDeltaNarrowClient(
+      () => ({
+        records: [
+          deltaFile('gone/a.txt', 'delete'),
+          deltaSummary({ total: 1, counts: { delete: 1 } }),
+        ],
+      }),
+      { clientOptions: watchedClientOptions(wt) },
+    )
+    client.setReconcileExcludes([`${LOCAL}/ignored`])
+
+    // A deleted directory: `_pathKind` stats for real and ROOT is a fictional
+    // tree, so the path is GONE and the batch carries the spec pair — through δ,
+    // in ONE call, with the exclusion handed over as a `-`-prefixed entry.
+    await flushEvent(client, wt, 'delete', `${LOCAL}/gone`)
+
+    expect(p4deltaCalls).toEqual([
+      [
+        '--json',
+        '--no-scope-file',
+        '--client-root',
+        ROOT,
+        '--no-revert-groups',
+        '--',
+        `${LOCAL}/gone`,
+        `${LOCAL}/gone/...`,
+        `-${LOCAL}/ignored/...`,
+      ],
+    ])
+    // The answer is δ's: p4 was never asked to reconcile.
+    expect(reconcileScans()).toEqual([])
+    // δ's rows exit through the ordinary drift pipeline.
+    expect(driftFiles(client)).toContain(`${LOCAL}/gone/a.txt`)
+    expect(client.p4deltaFallbackState).toEqual({ failures: 0, disarmed: false })
+  })
+
+  it('treats no-entry-matched as a complete empty answer: the paths are covered, not failed', async () => {
+    const wt = makeFakeWatcher()
+    const { client } = await makeDeltaNarrowClient(
+      (args) => ({
+        records: [
+          ...args.slice(args.indexOf('--') + 1).map((path) => ({ kind: 'unmatched', path })),
+          deltaSummary({
+            ok: false,
+            total: 0,
+            scopeMatched: 0,
+            unmatched: 2,
+            reason: 'no-entry-matched',
+          }),
+        ],
+      }),
+      { scanRows: [deltaFile('a.txt', 'edit')], clientOptions: watchedClientOptions(wt) },
+    )
+    expect(driftFiles(client)).toContain(`${LOCAL}/a.txt`)
+
+    await flushEvent(client, wt, 'change', `${LOCAL}/a.txt`)
+
+    expect(p4deltaCalls).toHaveLength(1)
+    // No native re-run: the empty answer IS the answer.
+    expect(reconcileScans()).toEqual([])
+    // Covered, and that is observable here: `_applyDriftFromWatcher` clears the
+    // drift of every covered path the answer left out, so a stale row standing
+    // would mean the path was never covered (read as failed instead).
+    expect(driftFiles(client)).not.toContain(`${LOCAL}/a.txt`)
+    // An answered run is not a failure — the ladder is untouched.
+    expect(client.p4deltaFallbackState).toEqual({ failures: 0, disarmed: false })
+  })
+
+  const noConclusionCases: ReadonlyArray<readonly [string, () => P4deltaReply]> = [
+    ['no summary at all (killed mid-stream)', () => ({ records: [deltaFile('a.txt', 'edit')] })],
+    [
+      'a non-JSON stdout line (not the engine we think it is)',
+      () => ({ records: [deltaSummary()], sawNonJsonStdout: true }),
+    ],
+    [
+      'ok:false with reason "error" (a partial stream)',
+      () => ({
+        records: [
+          deltaFile('a.txt', 'edit'),
+          deltaSummary({ ok: false, total: 1, counts: { edit: 1 }, reason: 'error' }),
+        ],
+      }),
+    ],
+    [
+      'a summary for another mode (an answer to a question nobody asked)',
+      () => ({ records: [deltaSummary({ mode: 'clean', applied: true })] }),
+    ],
+  ]
+
+  for (const [name, reply] of noConclusionCases) {
+    it(`leaves the paths' drift standing and counts it when δ answers with ${name}`, async () => {
+      const wt = makeFakeWatcher()
+      const { client } = await makeDeltaNarrowClient(reply, {
+        scanRows: [deltaFile('a.txt', 'edit')],
+        clientOptions: watchedClientOptions(wt),
+      })
+      expect(driftFiles(client)).toContain(`${LOCAL}/a.txt`)
+
+      await flushEvent(client, wt, 'change', `${LOCAL}/a.txt`)
+
+      expect(p4deltaCalls).toHaveLength(1)
+      // A failed batch never re-runs natively in the same round (the scan's
+      // same-round fallback is a scan-only tradeoff), and the row survives
+      // because an unanswered path is not covered — never read as clean.
+      expect(reconcileScans()).toEqual([])
+      expect(driftFiles(client)).toContain(`${LOCAL}/a.txt`)
+      expect(client.p4deltaFallbackState).toEqual({ failures: 1, disarmed: false })
+    })
+  }
+
+  it('disarms the engine after three consecutive failures; later narrow queries run native', async () => {
+    const wt = makeFakeWatcher()
+    const { client } = await makeDeltaNarrowClient(
+      () => ({ records: [deltaFile('a.txt', 'edit')] }),
+      {
+        scanRows: [deltaFile('a.txt', 'edit')],
+        responds: { reconcile: () => [] },
+        clientOptions: watchedClientOptions(wt),
+      },
+    )
+
+    for (let i = 0; i < 3; i++) {
+      await flushEvent(client, wt, 'change', `${LOCAL}/a.txt`)
+    }
+
+    expect(p4deltaCalls).toHaveLength(3)
+    expect(reconcileScans()).toEqual([])
+    expect(client.p4deltaFallbackState).toEqual({ failures: 3, disarmed: true })
+
+    // Disarmed: the next batch goes to p4 with no δ spawn at all.
+    await flushEvent(client, wt, 'change', `${LOCAL}/a.txt`)
+    expect(p4deltaCalls).toHaveLength(3)
+    expect(narrowScans().length).toBe(1)
+  })
+
+  it('routes a batch carrying a p4 filespec metacharacter to p4, without counting it', async () => {
+    const wt = makeFakeWatcher()
+    const { client } = await makeDeltaNarrowClient(
+      () => {
+        throw new Error('δ must not be asked about a metacharacter batch')
+      },
+      {
+        responds: { reconcile: () => [{ rel: 'weird@name.txt' }] },
+        clientOptions: watchedClientOptions(wt),
+      },
+    )
+
+    await flushEvent(client, wt, 'change', `${LOCAL}/weird@name.txt`)
+
+    expect(p4deltaCalls).toEqual([])
+    expect(narrowScans().length).toBe(1)
+    // Routing is not a health verdict: the ladder is untouched.
+    expect(client.p4deltaFallbackState).toEqual({ failures: 0, disarmed: false })
+  })
+
+  it('does not carve under δ: a directory with an excluded subtree asks `<dir>/...` plus the exclusion', async () => {
+    const realDir = mkTempDir('p4-dirExcl-')
+    const sub = join(realDir, 'sub')
+    const excluded = join(sub, 'excluded')
+    mkdirSync(excluded, { recursive: true })
+    try {
+      const wt = makeFakeWatcher()
+      const { client } = await makeDeltaNarrowClient(() => ({ records: [deltaSummary()] }), {
+        clientOptions: watchedClientOptions(wt),
+      })
+      client.setReconcileScope([realDir])
+      client.setReconcileExcludes([excluded])
+
+      await flushEvent(client, wt, 'change', sub)
+
+      const argv = p4deltaCalls[0]
+      expect(argv).toBeDefined()
+      // One call, whole directory: δ applies the exclusion itself, which is the
+      // entire point of not carving here.
+      expect(argv).toContain(`${sub}/...`)
+      expect(argv).not.toContain(`${sub}/*`)
+      // …and the exclusion must actually be IN that call: an omission would pull
+      // a directory the user excluded back into the answer.
+      expect(argv).toContain(`-${excluded}/...`)
+      expect(reconcileScans()).toEqual([])
+    } finally {
+      rmSync(realDir, { recursive: true, force: true })
+    }
+  })
+
+  it('carves a metacharacter directory: its spec must not reach p4 un-carved', async () => {
+    const realDir = mkTempDir('p4-metaExcl-')
+    const weird = join(realDir, '50%_stuff')
+    const excluded = join(weird, 'excluded')
+    mkdirSync(excluded, { recursive: true })
+    try {
+      const wt = makeFakeWatcher()
+      const { client } = await makeDeltaNarrowClient(() => ({ records: [deltaSummary()] }), {
+        responds: { reconcile: () => [] },
+        clientOptions: watchedClientOptions(wt),
+      })
+      client.setReconcileScope([realDir])
+      client.setReconcileExcludes([excluded])
+
+      await flushEvent(client, wt, 'change', weird)
+
+      // A path δ's grammar reads differently takes the carve branch — that is
+      // the only branch that can still apply the exclusions, because the client
+      // routes every carve product native (they carry `*` / `%25`). Handing δ's
+      // un-carved `<dir>/...` over instead would land it on native p4 and
+      // re-widen the query past the exclusion the user configured.
+      expect(p4deltaCalls).toEqual([])
+      expect(reconcileScans()).toHaveLength(1)
+      const specs = reconcileSpecs(reconcileScans()[0]!)
+      expect(specs.some((s) => s.includes('50%25_stuff/*'))).toBe(true)
+      expect(specs.some((s) => s.includes('excluded'))).toBe(false)
+    } finally {
+      rmSync(realDir, { recursive: true, force: true })
+    }
+  })
+
+  it('splits a mixed batch: the metacharacter spec goes to p4, the δ-form spec stays on δ', async () => {
+    const wt = makeFakeWatcher()
+    const { client } = await makeDeltaNarrowClient(() => ({ records: [deltaSummary()] }), {
+      responds: { reconcile: () => [{ rel: 'we@ird.txt', action: 'edit' }] },
+      clientOptions: watchedClientOptions(wt),
+    })
+
+    // One flush = one batch, carrying a spec δ cannot read (the `@` name, which
+    // native p4 must answer) next to a metachar-free one. Routing the whole
+    // batch native would re-ask the δ spec without the exclusions that only ride
+    // on the δ call — so each half goes to its own engine and the answers merge.
+    wt.fire('change', `${LOCAL}/a.txt`)
+    wt.fire('change', `${LOCAL}/we@ird.txt`)
+    await nextMacrotask()
+    await client.whenExternalFlushSettled()
+
+    expect(p4deltaCalls).toHaveLength(1)
+    expect(p4deltaCalls[0]).toContain(`${LOCAL}/a.txt`)
+    expect(p4deltaCalls[0]).not.toContain(`${LOCAL}/we@ird.txt`)
+    expect(narrowScans()).toHaveLength(1)
+    expect(reconcileSpecs(narrowScans()[0]!)).toContain(`${LOCAL}/we@ird.txt`)
+  })
+
+  it('drops the whole batch when one half cannot answer, so no path is read as clean', async () => {
+    const wt = makeFakeWatcher()
+    const { client } = await makeDeltaNarrowClient(
+      () => ({ records: [] }), // the δ half: no summary → no conclusion
+      {
+        responds: { reconcile: () => [{ rel: 'we@ird.txt', action: 'edit' }] },
+        clientOptions: watchedClientOptions(wt),
+      },
+    )
+
+    wt.fire('change', `${LOCAL}/a.txt`)
+    wt.fire('change', `${LOCAL}/we@ird.txt`)
+    await nextMacrotask()
+    await client.whenExternalFlushSettled()
+
+    // The native half answered, but a half-answer would let `covered` include
+    // paths the δ half never answered for — they keep the drift they had.
+    expect(p4deltaCalls).toHaveLength(1)
+    expect(client.p4deltaFallbackState).toEqual({ failures: 1, disarmed: false })
+    expect(driftFiles(client)).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Writes on the δ engine: collect (`reconcile`), collect-into (`reconcileInto`)
+// and clean (`revertReconcile`) follow the SCAN's engine pick, like narrow
+// queries do. Locks in:
+//  1. The frozen argv per operation — contract switches, the mode flag, `-a`,
+//     `-c` before `--` only when a changelist is named, and EVERY exclusion —
+//     with zero native reconcile/clean spawns, and a success that clears the
+//     ladder and drops the touched paths out of the drift set.
+//  2. Every "no conclusion" stream (no summary, `ok:false`) toasts, counts on
+//     the shared ladder, and is NOT re-run natively in the same round.
+//  3. Three consecutive failures disarm the engine; the next write is native
+//     with zero δ spawns.
+//  4. A spec δ's scope grammar cannot read (a carve product `<dir>/*`, the
+//     `//...` whole-client wildcard) routes native without counting — routing,
+//     not health — while the `//<depot>/...` spelling still goes to δ.
+//  5. A user cancel is neither a failure nor a toast, and the clean direction
+//     forwards the content-transfer watchdog policy (`timeoutMs: 0`).
+
+describe('PerforceClient writes — δ engine', () => {
+  beforeEach(() => {
+    resetScanHarness()
+    p4deltaCalls.length = 0
+    p4deltaRunOptionList.length = 0
+  })
+
+  afterEach(() => {
+    p4deltaRunSpy?.mockRestore()
+    p4deltaRunSpy = undefined
+    delete (globalThis as Record<string, unknown>)[BRIDGE_KEY]
+  })
+
+  /** The native APPLY spawns — `reconcile` without `-n`, and `clean`. The `-n`
+   *  previews belong to the scan and to the narrow queries. */
+  function writeSpawns(): string[][] {
+    return calls.filter(
+      (a) => subcommand(a) === 'clean' || (subcommand(a) === 'reconcile' && !a.includes('-n')),
+    )
+  }
+
+  /** The write argv's fixed head, in the order the contract fixes it. */
+  const DELTA_WRITE_HEAD = [
+    '--json',
+    '--no-scope-file',
+    '--client-root',
+    ROOT,
+    '--no-revert-groups',
+  ]
+
+  it('collects through ONE δ run: the frozen argv, every exclusion, no native spawn', async () => {
+    const { client } = await makeDeltaNarrowClient(
+      () => ({
+        records: [deltaSummary({ mode: 'open', applied: true, total: 1, counts: { edit: 1 } })],
+        log: ['Applied 1 change.'],
+      }),
+      { scanRows: [deltaFile('a.txt', 'edit')] },
+    )
+    client.setReconcileExcludes([`${LOCAL}/ignored`])
+    expect(driftFiles(client)).toContain(`${LOCAL}/a.txt`)
+
+    const ok = await client.reconcile([`${LOCAL}/a.txt`, `${LOCAL}/dir/...`])
+
+    expect(ok).toBe(true)
+    // One call, applied (`-a`), with every exclusion `-`-prefixed after `--`: an
+    // omission would let the write touch a directory the user excluded.
+    expect(p4deltaCalls).toEqual([
+      [
+        ...DELTA_WRITE_HEAD,
+        '-a',
+        '--',
+        `${LOCAL}/a.txt`,
+        `${LOCAL}/dir/...`,
+        `-${LOCAL}/ignored/...`,
+      ],
+    ])
+    // The answer is δ's: p4 was never asked to apply a reconcile.
+    expect(writeSpawns()).toEqual([])
+    // A concluded run clears the ladder, and `_invalidateAfterMutation` drops the
+    // rows the write touched.
+    expect(client.p4deltaFallbackState).toEqual({ failures: 0, disarmed: false })
+    expect(driftFiles(client)).not.toContain(`${LOCAL}/a.txt`)
+    expect(client.reconcileUsesP4delta).toBe(true)
+  })
+
+  it('collects into a named changelist with -c before --, and without -c for default', async () => {
+    const { client } = await makeDeltaNarrowClient(() => ({
+      records: [deltaSummary({ mode: 'open', applied: true, total: 1, counts: { edit: 1 } })],
+    }))
+
+    expect(await client.reconcileInto('1234', [`${LOCAL}/a.txt`])).toBe(true)
+    expect(await client.reconcileInto('default', [`${LOCAL}/b.txt`])).toBe(true)
+
+    expect(p4deltaCalls[0]).toEqual([
+      ...DELTA_WRITE_HEAD,
+      '-c',
+      '1234',
+      '-a',
+      '--',
+      `${LOCAL}/a.txt`,
+    ])
+    expect(p4deltaCalls[1]).toEqual([...DELTA_WRITE_HEAD, '-a', '--', `${LOCAL}/b.txt`])
+    expect(writeSpawns()).toEqual([])
+  })
+
+  it('cleans through δ with --clean -a and the content-transfer watchdog policy', async () => {
+    const { client } = await makeDeltaNarrowClient(() => ({
+      records: [
+        deltaSummary({ mode: 'clean', applied: true, total: 2, counts: { delete: 1, revert: 1 } }),
+      ],
+    }))
+    client.setReconcileExcludes([`${LOCAL}/ignored`])
+
+    const ok = await client.revertReconcile([`${LOCAL}/dir/...`])
+
+    expect(ok).toBe(true)
+    expect(p4deltaCalls).toEqual([
+      [...DELTA_WRITE_HEAD, '--clean', '-a', '--', `${LOCAL}/dir/...`, `-${LOCAL}/ignored/...`],
+    ])
+    // `clean` moves file content, so the native path disarms the watchdog for it
+    // (CONTENT_TRANSFER_EXEC) — the engine is handed the same policy.
+    expect(p4deltaRunOptionList.at(-1)?.timeoutMs).toBe(0)
+    expect(writeSpawns()).toEqual([])
+  })
+
+  const noConclusionCases: ReadonlyArray<readonly [string, () => P4deltaReply]> = [
+    [
+      'no summary at all (killed mid-stream)',
+      () => ({ records: [deltaFile('a.txt', 'edit')], log: ['Scanning the workspace.'] }),
+    ],
+    [
+      'ok:false with reason "error" (a partial stream)',
+      () => ({
+        records: [deltaSummary({ ok: false, reason: 'error' })],
+        log: ['Applied 3 change(s).', 'error: p4 add failed for //depot/branch_x/weird.txt'],
+      }),
+    ],
+    [
+      'ok:true without "applied" (a preview-shaped stream — nothing was written)',
+      () => ({ records: [deltaSummary({ mode: 'open', applied: false })] }),
+    ],
+    [
+      'ok:true for another mode (the other direction answered)',
+      () => ({ records: [deltaSummary({ mode: 'clean', applied: true })] }),
+    ],
+  ]
+
+  for (const [name, reply] of noConclusionCases) {
+    it(`toasts and counts WITHOUT re-running natively when δ answers a write with ${name}`, async () => {
+      const { client } = await makeDeltaNarrowClient(reply)
+
+      const ok = await client.reconcile([`${LOCAL}/a.txt`])
+
+      expect(ok).toBe(false)
+      expect(p4deltaCalls).toHaveLength(1)
+      expect(client.p4deltaFallbackState).toEqual({ failures: 1, disarmed: false })
+      // No same-round native re-run, unlike the scan: `-a` means δ may already
+      // have applied part of the change, and redoing it from a second
+      // implementation's reading of the workspace would double it.
+      expect(writeSpawns()).toEqual([])
+      expect(windowMock.showErrorMessage).toHaveBeenCalledTimes(1)
+      const message = String(windowMock.showErrorMessage.mock.calls[0]?.[0] ?? '')
+      expect(message).toContain('Perforce reconcile failed')
+      expect(message).toContain('p4delta')
+    })
+  }
+
+  it('clears the ladder on the first concluded run after a failure', async () => {
+    let run = 0
+    const { client } = await makeDeltaNarrowClient(() =>
+      (run += 1) === 1
+        ? { records: [] }
+        : { records: [deltaSummary({ mode: 'open', applied: true })] },
+    )
+
+    expect(await client.reconcile([`${LOCAL}/a.txt`])).toBe(false)
+    expect(client.p4deltaFallbackState).toEqual({ failures: 1, disarmed: false })
+
+    // A success resets the count, so a transient failure costs one slow round
+    // rather than leaving the engine one strike from being disarmed all session.
+    expect(await client.reconcile([`${LOCAL}/a.txt`])).toBe(true)
+    expect(client.p4deltaFallbackState).toEqual({ failures: 0, disarmed: false })
+  })
+
+  it('disarms after three consecutive failed writes; the next write is native with zero δ spawns', async () => {
+    const { client } = await makeDeltaNarrowClient(() => ({ records: [] }))
+
+    for (let i = 0; i < 3; i++) {
+      expect(await client.reconcile([`${LOCAL}/a.txt`])).toBe(false)
+    }
+    expect(p4deltaCalls).toHaveLength(3)
+    expect(client.p4deltaFallbackState).toEqual({ failures: 3, disarmed: true })
+
+    // Disarmed: the write goes to p4 with no δ spawn at all.
+    expect(await client.reconcile([`${LOCAL}/a.txt`])).toBe(true)
+    expect(p4deltaCalls).toHaveLength(3)
+    expect(writeSpawns()).toHaveLength(1)
+    expect(client.reconcileUsesP4delta).toBe(false)
+  })
+
+  it('routes specs δ cannot read to p4 without counting them, and still accepts //<depot>/...', async () => {
+    const { client } = await makeDeltaNarrowClient(() => ({
+      records: [deltaSummary({ mode: 'open', applied: true })],
+    }))
+    client.setReconcileExcludes([`${LOCAL}/ignored`])
+
+    // A carve product (`<dir>/*`) the command layer should have skipped under δ,
+    // and the whole-client wildcard: both native, and δ is never asked (the
+    // counts below are what catches a spec that leaked through).
+    expect(await client.reconcile([`${LOCAL}/dir/*`])).toBe(true)
+    expect(await client.reconcile(['//...'])).toBe(true)
+    expect(await client.revertReconcile([`${LOCAL}/dir/*`])).toBe(true)
+
+    expect(p4deltaCalls).toEqual([])
+    expect(writeSpawns()).toHaveLength(3)
+    // Routing is not a health verdict: the ladder is untouched.
+    expect(client.p4deltaFallbackState).toEqual({ failures: 0, disarmed: false })
+
+    // …while the one depot spelling the contract translates does reach the engine.
+    expect(await client.reconcile(['//depot/branch_x/...'])).toBe(true)
+    expect(p4deltaCalls).toHaveLength(1)
+    expect(p4deltaCalls[0]).toContain('//depot/branch_x/...')
+    expect(writeSpawns()).toHaveLength(3)
+  })
+
+  it('warns when an un-carved δ-form spec has to fall back to p4', async () => {
+    const log: string[] = []
+    const { client } = await makeDeltaNarrowClient(() => ({ records: [deltaSummary()] }), {
+      responds: { reconcile: () => [] },
+      clientOptions: { log: (m) => log.push(m) },
+    })
+
+    // `<dir>/...` still carrying a `%` is what a MISSED carve gate looks like —
+    // the command layer has to carve such a path before handing it over, because
+    // this reject cannot: the raw path is gone by here. The call must still fall
+    // back (slow, but the only safe option), and the output channel must say the
+    // exclusions may not have been applied.
+    expect(await client.reconcile([`${LOCAL}/50%25_stuff/...`])).toBe(true)
+    expect(p4deltaCalls).toEqual([])
+    expect(writeSpawns()).toHaveLength(1)
+    expect(log.join('\n')).toContain('WARNING')
+    expect(log.join('\n')).toContain('exclude folders may NOT have been applied')
+
+    // A carve product (`<dir>/*`, and the escaped clean-subdir specs a carve
+    // emits) is the legitimately native shape: routing it must stay silent.
+    log.length = 0
+    expect(await client.reconcile([`${LOCAL}/dir/*`, `${LOCAL}/dir/ok/...`])).toBe(true)
+    expect(writeSpawns()).toHaveLength(2)
+    expect(log.join('\n')).not.toContain('WARNING')
+  })
+
+  it('a reconfiguration retracts the scan verdict: writes run native until δ scans again', async () => {
+    const { client } = await makeDeltaNarrowClient(() => ({ records: [deltaSummary()] }), {
+      responds: { reconcile: () => [] },
+    })
+    expect(client.reconcileUsesP4delta).toBe(true)
+
+    // Re-pointing the session at an engine that has never answered a scan HERE:
+    // the proof belonged to the old binary, and the next click — a whole-set
+    // collect, or a `--clean` — must not be handed to an unproven one.
+    client.setP4delta(P4DELTA_EXE)
+    expect(client.reconcileUsesP4delta).toBe(false)
+    expect(await client.reconcile([`${LOCAL}/a.txt`])).toBe(true)
+    expect(p4deltaCalls).toEqual([])
+    expect(writeSpawns()).toHaveLength(1)
+
+    // A scan round that answers on δ is what restores the routing.
+    await client.runReconcileScan()
+    expect(client.reconcileUsesP4delta).toBe(true)
+  })
+
+  it('treats a user cancel as neither a failure nor a toast', async () => {
+    let release: () => void = () => {}
+    const hold = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const { client } = await makeDeltaNarrowClient(() => ({ hold, records: [] }))
+
+    const pending = client.reconcile([`${LOCAL}/a.txt`])
+    // The δ run is in flight (the stub is holding it open) and cancellable.
+    expect(p4deltaCalls).toHaveLength(1)
+    client.cancelBusy()
+    release()
+
+    expect(await pending).toBe(false)
+    expect(client.p4deltaFallbackState).toEqual({ failures: 0, disarmed: false })
+    expect(windowMock.showErrorMessage).not.toHaveBeenCalled()
   })
 })
 

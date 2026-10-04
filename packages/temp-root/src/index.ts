@@ -82,6 +82,7 @@ export const TEMP_PREFIXES: readonly string[] = [
   'p4-external-store-',
   'p4-fileEvt-',
   'p4-ledger-',
+  'p4-metaExcl-',
   'p4-readback-dialog-',
   'p4-readback-none-',
   'p4-readback-wide-',

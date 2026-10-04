@@ -737,6 +737,17 @@
           "default": "",
           "description": "%perforce.config.client.description%"
         },
+        "perforce.p4delta.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "%perforce.config.p4delta.enabled.description%"
+        },
+        "perforce.p4delta.path": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "%perforce.config.p4delta.path.description%"
+        },
         "perforce.maxConcurrent": {
           "type": "number",
           "default": 4,

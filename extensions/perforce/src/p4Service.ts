@@ -225,6 +225,13 @@ export function setP4CommandTimeoutSeconds(seconds: number): void {
     Number.isFinite(seconds) && seconds > 0 ? Math.floor(seconds * 1000) : Infinity
 }
 
+/** The current {@link moduleDefaultTimeoutMs}, for a caller that builds its own
+ *  command runner and must honor the same `perforce.commandTimeout` ceiling
+ *  (the δ engine's service takes it as a constructor parameter). */
+export function getP4CommandTimeoutMs(): number {
+  return moduleDefaultTimeoutMs
+}
+
 /**
  * Shared spawn-timeout handling for {@link P4Service}: arms a timer that kills
  * the child on expiry and reports whether the close/error path should resolve a

@@ -976,6 +976,32 @@ describe('P4StatusBarController scan progress', () => {
     controller.dispose()
   })
 
+  it('renders the δ phase ladder instead of a fabricated directory count', () => {
+    const controller = new P4StatusBarController({
+      active: makeClient({
+        clientName: 'testuser_dev_branch_xyz',
+        busy: 'Scanning workspace',
+        busyCancellable: false,
+        scanProgress: {
+          done: 2,
+          pending: 3,
+          driftFound: 0,
+          startedAt: Date.now(),
+          phase: 'digest',
+          step: 3,
+        },
+      }),
+    } as never)
+    controller.refresh()
+
+    // One δ call covers the whole scope: there are no directories to print, so
+    // the tooltip shows the phase ordinal δ itself reports (1-based).
+    expect(mocks.item.tooltip).toContain('Phase 3/5: digest')
+    expect(mocks.item.tooltip).not.toContain('Scanned 2 directories')
+    expect(mocks.item.tooltip).not.toContain('Current:')
+    controller.dispose()
+  })
+
   it('keeps the graph command and omits the cancel line when not cancellable', () => {
     const controller = new P4StatusBarController({
       active: makeClient({

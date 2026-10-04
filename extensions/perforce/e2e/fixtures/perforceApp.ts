@@ -32,6 +32,7 @@ import type { UriComponents } from '@universe-editor/extension-api'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const FAKE_P4 = resolve(__dirname, 'fake-p4.mjs')
+const FAKE_P4DELTA = resolve(__dirname, 'fake-p4delta.mjs')
 const { appRoot: APP_ROOT, mainEntry: MAIN_ENTRY } = resolveEditorBuild()
 
 // Only the Perforce extension is activated for these specs (P2 minimal set): its
@@ -154,6 +155,40 @@ const toPosix = (p: string): string => p.split('\\').join('/')
 
 /** The fake p4's depot prefix — every seeded depot path starts with it. */
 export const DEPOT_PREFIX = '//depot'
+
+/**
+ * Opt-in δ engine for a spec (see the `p4delta` fixture). The two fake engines
+ * share one state file, so a spec can drive a write through δ and inspect the
+ * result with the native model (or the other way round).
+ */
+export interface P4deltaFixtureConfig {
+  /**
+   * Injection for EVERY fake p4delta spawn: `UNIVERSE_P4DELTA_FAKE_FAIL`. One of
+   * `crash` / `crash-scan` / `nosummary` / `exit2` / `error` / `unmatched` (see
+   * the fake's header); an unknown value makes the fake exit 2.
+   */
+  readonly fail?: string
+}
+
+/**
+ * One fake's argv log (`UNIVERSE_P4_FAKE_ARGV_LOG` /
+ * `UNIVERSE_P4DELTA_ARGV_LOG`), one spawn per line, '' before the first spawn.
+ *
+ * The fakes answer from a shared on-disk model, so a panel assertion alone
+ * cannot tell which engine was asked or with what argv — these logs are where
+ * the SHAPE of the call (`--json` / `--client-root` / the scope entries /
+ * "no native reconcile at all") is assertable. A missing file is the empty log,
+ * deliberately not an error: "never spawned" is a valid thing to assert.
+ */
+export function readArgvLog(file: string): string[] {
+  try {
+    return readFileSync(file, 'utf8')
+      .split('\n')
+      .filter((line) => line !== '')
+  } catch {
+    return []
+  }
+}
 
 /** The client's have revision of one seeded depot file, read straight from the
  *  fake p4's state file (what a real `p4 fstat` would report as `haveRev`). */
@@ -403,6 +438,7 @@ export const test = base.extend<
     p4Seeds: P4SeedConfig
     openSubdir: string
     p4ExtraEnv: Record<string, string>
+    p4delta: P4deltaFixtureConfig | undefined
   }
 >({
   p4Seeds: [{ files: DEFAULT_SEEDS }, { option: true }],
@@ -413,6 +449,12 @@ export const test = base.extend<
   // which points `UNIVERSE_P4_IO_PROBE` at a deterministic fake sampler and
   // slows the fake p4 down so the run is observable while it is in flight.
   p4ExtraEnv: [{}, { option: true }],
+  // Opt-in only: `test.use({ p4delta: {} })` points the extension at the fake
+  // p4delta engine, `{ fail: '<mode>' }` also injects a fault. LEFT UNSET by
+  // default on purpose — every pre-existing spec runs both engines' wiring
+  // unchanged (p4 alone, no δ), and turning δ on for them would silently move
+  // their scans onto a second fake.
+  p4delta: [undefined, { option: true }],
   // The seeded depot/workspace is a first-class fixture: both electronApp (which
   // launches the app against its state file) and the `perforce` harness read it
   // from here, so nothing has to be smuggled onto the ElectronApplication handle.
@@ -440,7 +482,7 @@ export const test = base.extend<
       fileUrl: (relPath: string) => `file:///${abs(relPath).replace(/^\/+/, '')}`,
     })
   },
-  electronApp: async ({ p4Workspace, p4ExtraEnv }, use) => {
+  electronApp: async ({ p4Workspace, p4ExtraEnv, p4delta }, use) => {
     const userDataDir = mkTempDir('universe-editor-e2e-p4-')
     seedBaselineUserData(userDataDir)
     const app = await launchApp({
@@ -459,6 +501,17 @@ export const test = base.extend<
         // the app reads the real developer's own sync records otherwise, and
         // every assertion below would depend on their machine.
         UNIVERSE_P4_SAVIOR_CONFIG: p4Workspace.saviorFile,
+        // The δ engine, only when the spec asked for it. `UNIVERSE_P4DELTA_PATH`
+        // is what lets the extension keep δ enabled despite `p4` itself being a
+        // script override (the fake above) — see `resolveP4deltaEngine`.
+        ...(p4delta !== undefined
+          ? {
+              UNIVERSE_P4DELTA_PATH: FAKE_P4DELTA,
+              ...(p4delta.fail !== undefined
+                ? { UNIVERSE_P4DELTA_FAKE_FAIL: p4delta.fail }
+                : {}),
+            }
+          : {}),
         ...p4ExtraEnv,
       },
     })

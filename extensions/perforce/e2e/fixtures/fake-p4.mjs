@@ -380,15 +380,27 @@ function computeReconcile(state) {
 }
 
 /** Resolve command file args (paths or wildcards) to depotFiles on disk. Honors
- *  three forms: bare `//...` / `//depot/...` (whole client), a directory-scoped
+ *  four forms: bare `//...` / `//depot/...` (whole client), a directory-scoped
  *  `<path>/...` (only files under that dir — mirrors real p4 and the extension's
- *  narrowed reconcile scope), or explicit file paths.
+ *  narrowed reconcile scope), a level-scoped `<path>/*` (only the DIRECT children
+ *  of that dir — the shape `carveReconcileFilespecs` emits around excluded
+ *  subtrees), or explicit file paths.
  *
  *  The forms are NOT interchangeable and a batch may mix them, so the answers are
  *  UNIONED (each filespec is resolved independently, as p4 does) rather than one
  *  form taking precedence:
  *
  *    - `<path>/...` is a subtree wildcard → prefix match on clientFile.
+ *    - `<path>/*` is p4's level wildcard. Verified against a real p4d
+ *      (P4/LINUX26X86_64/2024.1): `p4 files "//depot/main/src/*"` lists exactly
+ *      src/'s direct child FILES — the `deep/` subdirectory itself does not
+ *      appear and nothing under it does — and it DOES list files the client
+ *      deleted locally. Both halves run through `discovered` below, which
+ *      `computeReconcile` builds from disk PLUS `state.files`: the deletes come
+ *      from the depot side, so a file that left the disk is still in the
+ *      candidate set for its level spec to claim. That is what makes `<dir>/*`
+ *      the correctness core of exclusion carving, and why it cannot be matched
+ *      by walking the disk here.
  *    - a bare path is a SINGLE-FILE spec → it matches only a file whose path it
  *      equals. Nothing is matched by its filesystem shape: a path that no longer
  *      exists names no file at all, and p4 answers "no file(s) to reconcile" for
@@ -405,12 +417,23 @@ function targetsFromArgs(state, args, discovered) {
   const dirScopes = files
     .filter((f) => f.endsWith('/...'))
     .map((f) => normPath(f.slice(0, -'/...'.length)))
-  const exactLocal = new Set(files.filter((f) => !f.endsWith('/...')).map((f) => normPath(f)))
+  const levelScopes = files
+    .filter((f) => f.endsWith('/*'))
+    .map((f) => normPath(f.slice(0, -'/*'.length)))
+  const exactLocal = new Set(
+    files.filter((f) => !f.endsWith('/...') && !f.endsWith('/*')).map((f) => normPath(f)),
+  )
   const exactDepot = new Set(files.filter((f) => f.startsWith('//')))
   return discovered.filter((d) => {
     const abs = normPath(clientOf(state, d.depotFile))
     if (exactLocal.has(abs) || exactDepot.has(d.depotFile)) return true
-    return dirScopes.some((s) => abs === s || abs.startsWith(`${s}/`))
+    if (dirScopes.some((s) => abs === s || abs.startsWith(`${s}/`))) return true
+    // Level spec: the file's PARENT is the spec's dir. One level only — a file
+    // under a subdirectory is claimed by that subdirectory's own `<sub>/...`
+    // spec, never by this directory's `*` (the fake must not recurse here, or a
+    // carve bug that dropped a clean subtree's scope would go unnoticed).
+    const cut = abs.lastIndexOf('/')
+    return cut > 0 && levelScopes.includes(abs.slice(0, cut))
   })
 }
 

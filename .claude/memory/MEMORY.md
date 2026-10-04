@@ -60,6 +60,7 @@
 - [remote 工作区用户扩展支持](remote-user-extensions-management.md) — ExtensionManagement channel(协议v6)+引擎沉 node-services;本地验签+分片上传远端装;目录单一真相 serverPaths;listBuiltin 不路由
 - [Windows SSH 远程主机支持](remote-windows-ssh-support.md) — uname→cmd 探测+cmd 命令族+install.js 独立 entry+WMI 逃 sshd job kill（daemon 无窗口须 DETACHED_PROCESS+类对象 startup info，CREATE_NO_WINDOW 非法值会静默降级，conhost 子进程=有控制台≠有窗口，判弹窗只能靠 EnumWindows）；远端路径展示一律过 toDisplayPath
 - [quick-navigate picker 契约（Ctrl+Tab / Alt+S）](quick-navigate-picker-contract.md) — 契约 `{modifier, triggerKey, initialSelectionIndex}`；keybinding 必须 when: '!quickInputVisible' 否则连点循环被全局 handler 吞；但 when 管不到面板挂载前的 IPC 窗口（重入须宿主自挡 in-flight）；quickNavigate 下 activeItemId 惰性，高亮只认 initialSelectionIndex
+- [perforce 接入 p4delta 可替换引擎](perforce-p4delta-engine-integration.md) — `--json` 契约 + 探测装了就用；sync 系刻意不接（δ `--sync` 是 `-f` 语义会覆盖本地改动）；三条不变量=回退路径的 carve 假设会变（未 carve 的 spec 退回原生＝排除项失效＝不可逆删除）、消费记录流必须核对 `mode`/`applied`（否则 `ok:true` 但记录被丢＝清空漂移集并写 24h checkpoint）、`handoff` 扫描侧也要拒下结论
 
 ## 性能 / 疑难根因
 

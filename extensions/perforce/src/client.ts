@@ -40,10 +40,13 @@ import {
   INTERACTIVE_EXEC,
   P4Service,
   chunkByLength,
+  getP4CommandTimeoutMs,
   type P4Connection,
   type P4ExecOptions,
   type P4ExecResult,
 } from './p4Service.js'
+import { P4deltaService, type P4deltaRecord, type P4deltaRunResult } from './p4deltaService.js'
+import { summarizeRun, toReconcileFiles, type P4deltaSummary } from './p4deltaParser.js'
 import {
   discoverClient,
   connectionFor,
@@ -88,7 +91,11 @@ import {
   type ReconcileScanSplitPrediction,
 } from './reconcileScanBudget.js'
 import { buildScopeFilespec } from './p4Filespec.js'
-import { carveReconcileFilespecs } from './reconcileCarve.js'
+import {
+  canHandTargetsToP4delta,
+  carveReconcileFilespecs,
+  P4DELTA_SCOPE_METACHARS,
+} from './reconcileCarve.js'
 import {
   norm,
   isUnderAny,
@@ -221,20 +228,46 @@ export type ConnectionState = 'connected' | 'offline' | 'not-logged-in'
 
 /** Structured progress of the in-flight background reconcile scan, exposed on
  *  {@link ClientStatus.scanProgress} for the status bar. `done + pending` is the
- *  total directories this run will process (it never shrinks: finishing a
- *  directory is `done+1`/`pending-1`; splitting one grows `pending` by the
- *  subdirectory count). */
+ *  total work this run will process (it never shrinks: finishing a directory is
+ *  `done+1`/`pending-1`; splitting one grows `pending` by the subdirectory
+ *  count). */
 export interface ScanProgress {
   readonly done: number
   readonly pending: number
   /** Directory currently being scanned, relative to the client root for display
    *  (`.` for the root itself). Undefined before the first batch and between
-   *  batches. */
+   *  batches. Absent under the δ engine, which scans the whole scope in one
+   *  call. */
   readonly currentDir?: string
-  /** Cumulative drift files found by this run's `reconcile -n` batches. */
+  /** Cumulative drift files found by this run. */
   readonly driftFound: number
   /** `_now()` at scan start, for the status bar's elapsed readout. */
   readonly startedAt: number
+  /**
+   * Phase of a whole-scope δ run — the contract's fixed ladder `start` /
+   * `analyze` / `digest` / `report` / `done`. Present only while δ is the
+   * engine, and then `done`/`pending` count PHASES, not directories: there are
+   * no directories to count when one call covers the scope. The status bar
+   * renders it instead of the directory counts, which would otherwise be a
+   * fabricated "scanned 2 of 5 directories".
+   *
+   * A replayed phase ladder, not a live feed: the service hands over the stderr
+   * progress records with the run's result.
+   */
+  readonly phase?: string
+  /** The phase's index on that ladder (1-based, monotone) — display only. */
+  readonly step?: number
+}
+
+/**
+ * The ordinals behind the δ phase readout — `done`/`pending` count the fixed
+ * phase ladder there, one whole-scope call, so the ordinal is the step the
+ * engine reported rather than a directory count the run never had. Shared by
+ * the status bar and the drift group title so the two surfaces cannot disagree
+ * about the same run (both would otherwise print a fabricated "2 of 5").
+ */
+export function scanPhaseOrdinal(progress: ScanProgress): { step: number; total: number } {
+  return { step: progress.step ?? progress.done, total: progress.done + progress.pending }
 }
 
 export interface ClientStatus {
@@ -483,6 +516,25 @@ const RECONCILE_SCAN_MIN_BATCH_MS = 1000
  */
 const RECONCILE_SCAN_MAX_CHECKPOINT_AGE_MS = 24 * 60 * 60 * 1000
 
+/**
+ * Consecutive δ scans that failed to answer (no summary, a non-JSON stdout line,
+ * a usage error — never a user cancel) before the engine is disarmed for the
+ * session and every later scan runs on p4.
+ *
+ * The count resets on any success, so a transient failure (a killed child, a
+ * full disk) costs one slow round, not the engine; a broken binary (the wrong
+ * `p4delta`, an uninstalled one) is out after three, which is enough to ride
+ * out a fluke and short enough not to tax every refresh for a whole session.
+ */
+const P4DELTA_MAX_CONSECUTIVE_FAILURES = 3
+
+/**
+ * Steps on δ's fixed progress ladder (`start` `analyze` `digest` `report`
+ * `done`, the contract's phase enum). Only used before the first progress
+ * record arrives — the records carry their own `total`.
+ */
+const P4DELTA_SCAN_PHASE_TOTAL = 5
+
 /** How often scan-progress change emits may fire: batches land every few ms and
  *  each emit re-renders the status bar, so intermediate frames are coalesced to
  *  this interval (terminal frames bypass it via {@link PerforceClient._flushScanProgress}). */
@@ -622,6 +674,16 @@ function firstStderrLine(stderr: string): string | undefined {
     .find((line) => line.length > 0)
 }
 
+/** Last non-empty line — where δ's human-readable stderr report puts its
+ *  conclusion (the report itself runs above the `error: …` chain). */
+function lastNonEmptyLine(lines: readonly string[]): string | undefined {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]!.trim()
+    if (line.length > 0) return line
+  }
+  return undefined
+}
+
 function sameScopeDirs(a: readonly string[], b: readonly string[]): boolean {
   if (a.length !== b.length) return false
   return a.every((dir, i) => scopeKey(dir) === scopeKey(b[i] ?? ''))
@@ -673,6 +735,33 @@ function displayScanDir(dir: string, root: string): string {
   return rel === '' ? '.' : rel.replace(/\\/g, '/')
 }
 
+/**
+ * One δ scope entry for `dir`: the recursive `<dir>/...` form (which δ expands
+ * from the depot/have lists, so a directory that is gone locally still works),
+ * prefixed with `-` for an exclusion.
+ *
+ * The path goes out verbatim — no {@link escapeFilespecPath}. `%`-escaping is
+ * the native engine's rule for a p4 filespec; δ reads its scope entries
+ * literally (the contract makes that the consumer's responsibility), so an
+ * escaped name would name a file nobody has.
+ */
+function p4deltaScopeEntry(dir: string, exclude: boolean): string {
+  const trimmed = dir.replace(/[/\\]+$/, '')
+  return `${exclude ? '-' : ''}${trimmed}/...`
+}
+
+/**
+ * Whether a spec is a depot spelling δ's scope grammar reads: the
+ * `//<depot>/...` form the contract translates into workspace paths, which is
+ * what lets a depot-syntax scope (the graph's, the timeline's) stay on the
+ * engine. `//...` — the whole client — and bare depot file specs are not:
+ * neither names a subtree the engine could map to local paths.
+ */
+function isP4deltaDepotEntry(spec: string): boolean {
+  const match = /^\/\/(.+)\/\.\.\.$/.exec(spec)
+  return match !== null && match[1] !== ''
+}
+
 /** Creates the RPC-backed working-tree watcher; injectable for tests (mirrors
  *  git's `RepositoryWatcher.CreateFileSystemWatcher`). */
 export type CreateFileSystemWatcher = (globPattern: GlobPattern) => FileSystemWatcher
@@ -711,10 +800,54 @@ export interface PerforceClientOptions {
    * root (`X:/p4ws/main`) does not exist on the real filesystem.
    */
   readonly scopeFileExists?: (absolutePath: string) => boolean
+  /**
+   * The δ engine this session may use, or absent when it must not (disabled in
+   * the settings, no executable found, or an executable that failed its
+   * `--help` probe — all decided in `extension.ts`, the only place workspace
+   * configuration is read). `exe` is a probed p4delta binary; the client builds
+   * its own {@link P4deltaService} around it and can be re-pointed at runtime
+   * via {@link PerforceClient.setP4delta}.
+   *
+   * `extraEnv` rides on every δ run of this session. The extension uses it for
+   * `P4_EXE` — the `p4` the engine must hand undigestable files to — when it had
+   * to resolve `p4` itself (a script override), because δ would otherwise look
+   * one up on its own and hand files to a different client.
+   */
+  readonly p4delta?: { readonly exe: string; readonly extraEnv?: Readonly<Record<string, string>> }
 }
 
 export class PerforceClient {
   private readonly _p4: P4Service
+  /** Kept for the δ service, which shares the same gate and connection as
+   *  {@link _p4} but is built (and re-built) by {@link setP4delta}. */
+  private readonly _gate: ConcurrencyGate
+  private readonly _p4Connection: P4Connection
+  /** The δ engine for this session, or undefined while the session runs native
+   *  (no option passed, the setting is off, or the engine was disarmed — see
+   *  {@link _p4deltaDisarmed}). */
+  private _p4delta: P4deltaService | undefined
+  /** Consecutive δ runs that failed to answer — scans and narrow queries share
+   *  one ladder ({@link PerforceClient._narrowQueryBatchViaP4delta}). Reset by
+   *  any run that concluded and by {@link setP4delta}; at
+   *  {@link P4DELTA_MAX_CONSECUTIVE_FAILURES} the engine is disarmed. */
+  private _p4deltaFailures = 0
+  /** Latched once the failure ladder trips: every later scan AND narrow query
+   *  this session runs native ({@link PerforceClient._p4deltaEngine}), and
+   *  only a reconfiguration ({@link setP4delta}) clears it. A success does not:
+   *  the engine already proved it cannot answer this workspace's questions. */
+  private _p4deltaDisarmed = false
+  /** Which engine the current scan round writes checkpoints under — part of the
+   *  key fingerprint ({@link _reconcileScanFingerprint}), so the two engines'
+   *  checkpoints can never alias: a δ snapshot is whole-scope under the client
+   *  root while a native one is per-directory, and replaying one as the other
+   *  would publish a different set of rows. Set by the dispatcher before either
+   *  path runs, and switched back to `'native'` when a failed δ round falls
+   *  through, so the fallback's checkpoints are native ones. Also the verdict
+   *  narrow queries and writes follow ({@link PerforceClient._p4deltaEngine}): the
+   *  round that selected δ is the one that proved δ can answer this workspace.
+   *  A reconfiguration ({@link setP4delta}) retracts that proof as well — it
+   *  belongs to the engine that produced it. */
+  private _reconcileScanEngine: 'native' | 'p4delta' = 'native'
   private readonly _sc: SourceControl
   private readonly _cache: P4Cache
   private readonly _baseline: BaselineProvider
@@ -977,6 +1110,72 @@ export class PerforceClient {
     this._syncParallelThreads = Math.max(0, Math.floor(n))
   }
 
+  /**
+   * Point this session's δ-backed questions at δ (`exe` is a probed p4delta
+   * executable), or take the engine away (`undefined`). Called once from the
+   * constructor and again whenever `perforce.p4delta.*` changes, so a config
+   * edit applies to the next scan and the next narrow query of every live client
+   * without a reload. `extraEnv` is the session-wide environment the engine
+   * carries (see {@link PerforceClientOptions.p4delta}).
+   *
+   * The fallback ladder resets on every call — the whole point of a
+   * reconfiguration is a clean slate, and an engine that was disarmed after
+   * three failures must not be judged by the record of the binary it replaced.
+   * The scan's engine verdict resets with it ({@link _reconcileScanEngine}):
+   * routing writes and narrow queries to δ is a conclusion about the engine
+   * that answered a scan here, and a new binary has not answered one yet.
+   */
+  setP4delta(exe: string | undefined, extraEnv?: Readonly<Record<string, string>>): void {
+    const had = this._p4delta !== undefined
+    this._p4deltaFailures = 0
+    this._p4deltaDisarmed = false
+    // The scan verdict goes with the ladder: `_reconcileScanEngine` is the
+    // record of a round that PROVED this engine answers this workspace, and a
+    // reconfiguration points at a different binary (or at the same one with the
+    // exclusions/settings unchanged but no proof re-run) whose behaviour this
+    // session has not observed. Keeping it would hand the very next click —
+    // a whole-directory `--clean` — to an engine that never scanned here. Back
+    // to `native` until a scan round answers on δ again.
+    this._reconcileScanEngine = 'native'
+    this._p4delta =
+      exe === undefined
+        ? undefined
+        : new P4deltaService(
+            this.root,
+            this._gate,
+            this._p4Connection,
+            exe,
+            this.root,
+            this._log,
+            getP4CommandTimeoutMs(),
+            extraEnv,
+          )
+    if (exe !== undefined) this._log?.(`[perforce] p4delta engine: ${exe}`)
+    else if (had)
+      this._log?.('[perforce] p4delta engine turned off; scans and narrow queries run on p4')
+  }
+
+  /** δ's fallback ladder as tests observe it (production code has no caller):
+   *  how many consecutive runs failed to answer, and whether the engine is
+   *  disarmed for the rest of the session. */
+  get p4deltaFallbackState(): { readonly failures: number; readonly disarmed: boolean } {
+    return { failures: this._p4deltaFailures, disarmed: this._p4deltaDisarmed }
+  }
+
+  /**
+   * Whether the write operations that have a δ counterpart ({@link reconcile} /
+   * {@link reconcileInto} / {@link revertReconcile}) run on δ right now — the
+   * command layer's carve switch ({@link _p4deltaEngine} is the one verdict).
+   *
+   * Under δ a directory answers as its own `<dir>/...`: the exclusions travel in
+   * the same call ({@link _buildP4deltaWriteArgs}), so a carve would only hand
+   * the engine `<dir>/*` fragments its scope grammar cannot read. The native
+   * branch keeps carving, unchanged.
+   */
+  get reconcileUsesP4delta(): boolean {
+    return this._p4deltaEngine() !== undefined
+  }
+
   private constructor(
     readonly root: string,
     private readonly _clientName: string,
@@ -990,7 +1189,10 @@ export class PerforceClient {
     this._watchRoot = options.watchRoot
     this._externalChangeDebounceMs = options.externalChangeDebounceMs ?? EXTERNAL_CHANGE_DEBOUNCE_MS
     this._scopeFileExists = options.scopeFileExists ?? existsSync
+    this._gate = gate
+    this._p4Connection = connection
     this._p4 = new P4Service(root, gate, connection, this._log)
+    this.setP4delta(options.p4delta?.exe, options.p4delta?.extraEnv)
     this._now = cacheOptions.now ?? Date.now
     this._cache = new P4Cache(this._now, cacheOptions.disk, cacheOptions.enabled)
     registerP4CacheNamespaces(this._cache, cacheOptions.workspaceTtlMs)
@@ -1131,6 +1333,13 @@ export class PerforceClient {
     return this._reconcileGroup.resourceStates
   }
 
+  /** The drift group's current title — the scan-progress / truncation
+   *  annotation the group carries while a round is in flight, for the same
+   *  tests (see {@link scanDrift}). Production code has no caller. */
+  get reconcileGroupLabel(): string | undefined {
+    return this._driftLabel
+  }
+
   /**
    * Identity of the cancellable work in flight, or undefined when there is none.
    *
@@ -1251,12 +1460,16 @@ export class PerforceClient {
 
   /** Record a scan-progress transition and schedule a throttled change emit. The
    *  field updates immediately so {@link status} is always fresh; only the notify
-   *  is coalesced (batches land every few ms and each emit re-renders the bar). */
+   *  is coalesced (batches land every few ms and each emit re-renders the bar).
+   *  `phase`/`step` are δ's ladder (see {@link ScanProgress.phase}) and are
+   *  absent on the native per-directory walk. */
   private _setScanProgress(
     done: number,
     pending: number,
     currentDir: string | undefined,
     driftFound: number,
+    phase?: string,
+    step?: number,
   ): void {
     const startedAt = this._scanProgress?.startedAt ?? this._now()
     this._scanProgress = {
@@ -1265,6 +1478,8 @@ export class PerforceClient {
       ...(currentDir !== undefined ? { currentDir: displayScanDir(currentDir, this.root) } : {}),
       driftFound,
       startedAt,
+      ...(phase !== undefined ? { phase } : {}),
+      ...(step !== undefined ? { step } : {}),
     }
     this._bumpScanProgress()
   }
@@ -2099,6 +2314,12 @@ export class PerforceClient {
    * a lie as clean (the extension's hard rule: a failed query logs, it never
    * resolves as clean). Rows are a lower bound in both cases and are returned
    * regardless; only the *silence* is discarded.
+   *
+   * Each batch is answered by whichever engine the session's scan selected
+   * ({@link _narrowQueryBatch}); the three states above are all it may report,
+   * so nothing here depends on that choice. A δ batch that could not answer
+   * lands in `failed` and its paths keep the drift they had — the engine is
+   * deliberately not re-run natively here, see that method.
    */
   private async _rescanReconcilePaths(paths: readonly string[]): Promise<{
     files: ReconcileFile[]
@@ -2123,7 +2344,7 @@ export class PerforceClient {
           // as clean under the channel's existing lower-bound tradeoff; later
           // invalidation (file events / provider refresh / workspace switch) — not a
           // retry — is what corrects that cache entry.
-          const res = await this._reconcileScanBatch(batch)
+          const res = await this._narrowQueryBatch(batch)
           if (res === undefined) return { files: [], failed: batch, partial: [] }
           return { files: res.files, failed: [], partial: res.partial ? batch : [] }
         },
@@ -2196,15 +2417,234 @@ export class PerforceClient {
     return undefined
   }
 
+  /**
+   * One batch of the NARROW `reconcile -n` query — δ for the specs it can read,
+   * the native batch for the rest, merged back into one answer. The answer
+   * keeps {@link _reconcileScanBatch}'s three states, `undefined` included, so
+   * no caller has to know which engine ran.
+   *
+   * The split is per spec, not per batch: the carve products that must run
+   * native (a `*` fragment, an escaped metacharacter) can share a batch with
+   * δ-form `<dir>/...` entries, and answering the whole batch natively would
+   * re-widen every δ entry past its exclusions — a spec carries no exclusions
+   * of its own (they ride on the δ call), so native p4 would traverse the
+   * excluded subtrees it names. See {@link _narrowQuerySpecsFor} for where the
+   * two shapes come from. Routing is not a health verdict: a spec that never
+   * reaches δ never touches the fallback ladder.
+   *
+   * `P4DELTA_SCOPE_METACHARS` is the criterion both engines' spellings agree on
+   * — δ reads an entry literally, native p4 re-interprets these characters —
+   * and it doubles as the write path's reject, so a carve product always routes
+   * the same way in both.
+   */
+  private async _narrowQueryBatch(
+    batch: readonly string[],
+    options?: P4ExecOptions,
+  ): Promise<{ files: ReconcileFile[]; partial: boolean } | undefined> {
+    const engine = this._p4deltaEngine()
+    if (engine === undefined) return this._reconcileScanBatch(batch, options)
+    const readable: string[] = []
+    const nativeOnly: string[] = []
+    for (const spec of batch) {
+      if (P4DELTA_SCOPE_METACHARS.test(spec)) nativeOnly.push(spec)
+      else readable.push(spec)
+    }
+    if (nativeOnly.length === 0) return this._narrowQueryBatchViaP4delta(engine, batch, options)
+    if (readable.length === 0) return this._reconcileScanBatch(batch, options)
+    // Both halves in parallel (the shared gate bounds the real concurrency) and
+    // one answer out: `undefined` from either side means the batch has no
+    // conclusion — a half-answer would let the caller cover paths the other
+    // engine never answered for.
+    const [viaDelta, viaNative] = await Promise.all([
+      this._narrowQueryBatchViaP4delta(engine, readable, options),
+      this._reconcileScanBatch(nativeOnly, options),
+    ])
+    if (viaDelta === undefined || viaNative === undefined) return undefined
+    return {
+      files: [...viaDelta.files, ...viaNative.files],
+      partial: viaDelta.partial || viaNative.partial,
+    }
+  }
+
+  /**
+   * δ for every question this session routes to it — narrow queries
+   * ({@link _narrowQuerySpecsFor}) and the three write operations that have a δ
+   * counterpart ({@link _mutateWrite}) — or undefined while they run native.
+   *
+   * Deliberately the SCAN's verdict ({@link _reconcileScanEngine}) rather than
+   * "an engine is configured": the scan round is the one that actually proved δ
+   * can answer this workspace, and a second, independent health judgement
+   * running alongside it would eventually disagree with the first. So before the
+   * first scan round — and for the rest of the session once the ladder trips —
+   * both narrow queries and writes are native, and only {@link setP4delta} (a
+   * reconfiguration) clears the latch.
+   */
+  private _p4deltaEngine(): P4deltaService | undefined {
+    if (this._p4deltaDisarmed || this._reconcileScanEngine !== 'p4delta') return undefined
+    return this._p4delta
+  }
+
+  /**
+   * δ behind one narrow batch: ONE `p4delta --json` call, exclusions included as
+   * `-`-prefixed entries so the engine applies them itself — the reason this
+   * path needs no carve ({@link _narrowQuerySpecsFor}). Never `-a`: a narrow
+   * query is a preview by construction, and the write path is separate.
+   *
+   * `undefined` is "no conclusion", never an empty row list presented as an
+   * answer. The contract's hard rules decide which is which
+   * ({@link _p4deltaNarrowFailure}): a stream without a summary has no
+   * conclusion (killed / crashed / cancelled), a non-JSON stdout line means the
+   * binary is not the engine we think it is, exit 2 is a usage error, and
+   * `ok:false` outside `no-entry-matched` is a partial stream — reading it as
+   * clean would turn a permission error into "nothing drifted".
+   *
+   * Unlike the scan ({@link _runP4deltaReconcileScan}), a failed batch is NOT
+   * re-run natively in the same round: `undefined` already lands it in
+   * {@link _rescanReconcilePaths}'s `failed` list, which drops its paths out of
+   * `covered` — they keep the drift they had, which is all the safety the scan's
+   * same-round rerun buys — and the narrow query is far too frequent to pay a
+   * second spawn per failure.
+   */
+  private async _narrowQueryBatchViaP4delta(
+    engine: P4deltaService,
+    batch: readonly string[],
+    options?: P4ExecOptions,
+  ): Promise<{ files: ReconcileFile[]; partial: boolean } | undefined> {
+    // No spawn for an answer that could not be used anyway: a disposed client, a
+    // dropped connection and a cancelled caller all mean "no conclusion", and
+    // none of them is the engine's fault, so none touches the ladder.
+    if (!this._narrowQueryRunnable(options)) return undefined
+    const result = await engine.run(this._buildP4deltaNarrowArgs(batch), {
+      // The slot `_reconcileScanBatch` takes by omitting a priority (P4Service's
+      // default is `background`): narrow queries answer watcher and render
+      // traffic, never a user click, so they must not take the gate's reserved
+      // interactive slot — nor jump the scan's own queue.
+      priority: 'background',
+      ...(options?.signal !== undefined ? { signal: options.signal } : {}),
+      ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+    })
+    if (!this._narrowQueryRunnable(options)) return undefined
+    const summary = summarizeRun(result)
+    const failure = this._p4deltaNarrowFailure(result, summary)
+    if (failure !== undefined) {
+      this._noteP4deltaNarrowFailure(batch.length, failure)
+      return undefined
+    }
+    // A run that concluded clears the ladder. `no-entry-matched` is one of those
+    // — the `ok:false` that is a complete answer — and the scan's ladder resets
+    // on it too (see _runP4deltaReconcileScan), so the two paths cannot disagree
+    // about the same binary's health.
+    this._p4deltaFailures = 0
+    if (summary?.ok !== true) {
+      // Every entry was answered "there is nothing here". For a deleted
+      // directory's spec pair, or a path that never existed, that empty IS the
+      // answer — a definite empty, never a missing one.
+      this._log?.(
+        `[perforce] narrow reconcile query (p4delta): no entry matched for ${batch.length} spec(s); answered as clean`,
+      )
+      return { files: [], partial: false }
+    }
+    const files = this._dropOpenedRows(toReconcileFiles(result.records, this.root))
+    this._log?.(
+      `[perforce] narrow reconcile query (p4delta): ${files.length} drift row(s) for ${batch.length} spec(s)`,
+    )
+    return { files, partial: false }
+  }
+
+  /** Whether a narrow δ run may proceed at all — see the call in
+   *  {@link _narrowQueryBatchViaP4delta} for why a refusal is neither counted nor
+   *  retried. */
+  private _narrowQueryRunnable(options?: P4ExecOptions): boolean {
+    return !this._disposed && this._connection === 'connected' && options?.signal?.aborted !== true
+  }
+
+  /**
+   * δ's argv for one narrow batch: the same contract switches as a scan run
+   * ({@link _buildP4deltaScanArgs}), then the batch's specs and EVERY configured
+   * exclusion as a `-`-prefixed entry. The engine applies those exclusions
+   * itself, which is the whole of the equivalence with the native carve: an
+   * exclusion omitted here would put a directory the user explicitly excluded
+   * back into the answer. Paths go out verbatim, like the scan's — `--` keeps a
+   * `-`-prefixed entry positional. No `-a`: narrow queries are previews.
+   */
+  private _buildP4deltaNarrowArgs(batch: readonly string[]): string[] {
+    return [
+      '--json',
+      '--no-scope-file',
+      '--client-root',
+      this.root,
+      '--no-revert-groups',
+      '--',
+      ...batch,
+      ...this._reconcileExcludeDirs.map((dir) => p4deltaScopeEntry(dir, true)),
+    ]
+  }
+
+  /**
+   * Why a δ narrow run does not count as an answer, or undefined when it does.
+   * The same contract rules {@link _p4deltaRunFailure} applies (no summary = no
+   * conclusion, non-JSON stdout = wrong binary, exit 2 = usage error, `ok:false`
+   * = partial stream), plus the `handoff` guard: on this path it is defensive —
+   * the contract has the open-mode preview translate handoff records into normal
+   * file records — so one surviving means δ handed files to native p4 without
+   * giving the action they would take.
+   */
+  private _p4deltaNarrowFailure(
+    result: P4deltaRunResult,
+    summary: P4deltaSummary | undefined,
+  ): string | undefined {
+    if (result.sawNonJsonStdout) return 'stdout carried a non-JSON line'
+    if (result.code === 2) return 'usage error (exit 2)'
+    if (summary === undefined) {
+      return `no summary (exit ${result.code}${result.signal !== null ? `, signal ${result.signal}` : ''})`
+    }
+    if (result.records.some((r) => r['kind'] === 'file' && r['class'] === 'handoff')) {
+      return 'files handed off to p4 with no action reported'
+    }
+    // Same wrong-mode guard as the scan's: a narrow query is an open-mode
+    // preview by construction, and a summary for any other mode must read as
+    // "no conclusion" — its empty file list would otherwise cover paths the
+    // query never examined (silence turned into "clean").
+    if (summary.mode !== 'open') {
+      return `summary reports mode ${summary.mode ?? '<none>'} (expected open)`
+    }
+    if (!summary.ok && summary.reason !== 'no-entry-matched') {
+      return `run did not conclude (${summary.reason ?? 'error'})`
+    }
+    return undefined
+  }
+
+  /** One narrow batch δ could not answer, on the shared fallback ladder
+   *  ({@link P4DELTA_MAX_CONSECUTIVE_FAILURES}). One log line per failure, like
+   *  the scan's — a reader needs the reason, what happened to the paths, and how
+   *  close the engine is to being disarmed. */
+  private _noteP4deltaNarrowFailure(specs: number, failure: string): void {
+    this._p4deltaFailures += 1
+    if (this._p4deltaFailures >= P4DELTA_MAX_CONSECUTIVE_FAILURES) this._p4deltaDisarmed = true
+    this._log?.(
+      `[perforce] narrow reconcile query: p4delta did not answer — ${failure}; ` +
+        `${specs} spec(s) keep the drift they had and stay un-checkpointed` +
+        (this._p4deltaDisarmed
+          ? ` (engine disabled for this session after ${this._p4deltaFailures} consecutive failures; narrow queries and scans stay on p4 until the engine is reconfigured)`
+          : ` (${this._p4deltaFailures}/${P4DELTA_MAX_CONSECUTIVE_FAILURES})`),
+    )
+  }
+
   /** Shape `reconcile -n` records into drift rows, dropping the files the plugin
    *  already has open (their disk state is tracked through the open list, so
    *  listing them again would double-report). Shared by every exit path of
    *  {@link _reconcileScanBatch} so a row can never mean different things
    *  depending on how the batch ended. */
   private _parseReconcileRecords(records: readonly Record<string, unknown>[]): ReconcileFile[] {
-    return parseReconcile(records, this.root).filter(
-      (f) => !f.clientFile || !this._openedPaths.has(norm(f.clientFile)),
-    )
+    return this._dropOpenedRows(parseReconcile(records, this.root))
+  }
+  /** Drop the rows for files already opened in a changelist. Both engines feed
+   *  this same filter: δ's `open` classification reports the `reopen_*` groups
+   *  for opened files exactly like `p4 reconcile -a -e -d` does, and an opened
+   *  file's disk state is tracked through the open list already — a drift row
+   *  for it would double-report (and, in the group, never even render). */
+  private _dropOpenedRows(files: readonly ReconcileFile[]): ReconcileFile[] {
+    return files.filter((f) => !f.clientFile || !this._openedPaths.has(norm(f.clientFile)))
   }
 
   /** Reconcile the live ResourceGroups with the freshly computed groups: create
@@ -2306,7 +2746,12 @@ export class PerforceClient {
   /**
    * Run a mutating p4 command, surface a toast on failure, and always refresh
    * afterwards so the SCM view reflects the new server state. Returns whether it
-   * succeeded. Empty `paths` is a no-op (nothing selected).
+   * succeeded. Empty `args` is a no-op (nothing to run).
+   *
+   * This is the NATIVE spelling of {@link _mutateVia}: it only builds the argv
+   * (the fixed args plus the caller's paths) and hands the run to the shared
+   * skeleton, so the write operations that have a δ counterpart can share every
+   * other line of it ({@link _mutateWrite}).
    */
   private async _mutate(
     label: string,
@@ -2315,14 +2760,38 @@ export class PerforceClient {
     execOptions?: P4ExecOptions,
   ): Promise<boolean> {
     if (args.length === 0) return false
-    this._suppressExternalChanges()
-    return this._withBusy(this._busyLabel(label), async () => {
+    return this._mutateVia(
+      label,
+      paths,
       // Content-transfer mutations (submit/unshelve/revert/clean…) pass
       // CONTENT_TRANSFER_EXEC here: their runtime scales with bytes moved, so the
       // `commandTimeout` watchdog is disarmed and the signal below is the only
       // stop. Metadata/scan mutations omit it and keep the 600s hang guard.
+      (signal, options) => this._p4.exec([...args, ...paths], { signal, ...options }),
+      execOptions,
+    )
+  }
+
+  /**
+   * The engine-agnostic skeleton behind every mutation: status-bar label,
+   * user-cancellable run, and the three exits — cancel (log, refresh, false),
+   * failure (toast, refresh, false), success (invalidate, refresh, true) — from
+   * whichever engine actually ran.
+   *
+   * `run` is handed the cancel signal and the operation's {@link P4ExecOptions},
+   * so the watchdog policy (content-transfer's `timeoutMs: 0`) stays a property
+   * of the OPERATION rather than of the engine that executes it.
+   */
+  private async _mutateVia(
+    label: string,
+    paths: readonly string[],
+    run: (signal: AbortSignal, execOptions?: P4ExecOptions) => Promise<P4ExecResult>,
+    execOptions?: P4ExecOptions,
+  ): Promise<boolean> {
+    this._suppressExternalChanges()
+    return this._withBusy(this._busyLabel(label), async () => {
       const { value: result, cancelled } = await this._cancellable((signal) =>
-        this._p4.exec([...args, ...paths], { signal, ...execOptions }),
+        run(signal, execOptions),
       )
       if (cancelled) {
         // The user asked for this — report it in the log, not as an error toast,
@@ -2340,6 +2809,238 @@ export class PerforceClient {
       await this._refreshAfterMutation()
       return true
     })
+  }
+
+  /**
+   * The write operations that have a δ counterpart ({@link reconcile} /
+   * {@link reconcileInto} / {@link revertReconcile}), as one dispatcher: on δ
+   * when this session's engine answers ({@link _p4deltaEngine}) and the specs
+   * are shapes δ's scope grammar reads, native ({@link _mutate}, byte for byte)
+   * otherwise.
+   *
+   * `open` is the collect direction (`reconcile -a -e -d`, δ's open mode with
+   * `-a`), `clean` the discard direction (`clean -a -e -d`, δ's `--clean -a`),
+   * and `changelist` is {@link reconcileInto}'s target (`'default'` omits `-c`,
+   * as it does natively). Both engines run through the same
+   * {@link _mutateVia} skeleton, so they differ only in which process runs.
+   */
+  private async _mutateWrite(
+    mode: 'open' | 'clean',
+    paths: readonly string[],
+    changelist?: string,
+  ): Promise<boolean> {
+    const label = mode === 'open' ? 'reconcile' : 'clean'
+    const withChangelist = changelist !== undefined && changelist !== 'default'
+    const nativeArgs =
+      mode === 'open'
+        ? ['reconcile', '-a', '-e', '-d', ...(withChangelist ? ['-c', changelist] : [])]
+        : ['clean', '-a', '-e', '-d']
+    // Same policy as the native path's: a clean moves file content, so its
+    // watchdog is disarmed (CONTENT_TRANSFER_EXEC) and the signal is the only
+    // stop — a collect is metadata and keeps the `commandTimeout` hang guard.
+    // Forwarded to δ below, so the policy belongs to the operation.
+    const execOptions = mode === 'clean' ? CONTENT_TRANSFER_EXEC : undefined
+    const engine = this._p4deltaEngine()
+    if (engine === undefined) return this._mutate(label, nativeArgs, paths, execOptions)
+    const rejected = this._p4deltaWriteSpecReject(paths)
+    if (rejected !== undefined) {
+      this._log?.(`[perforce] ${label}: p4delta skipped — ${rejected}; running on p4`)
+      this._warnUncarvedDeltaSpecs(label, paths)
+      return this._mutate(label, nativeArgs, paths, execOptions)
+    }
+    const args = this._buildP4deltaWriteArgs(mode, paths, changelist)
+    return this._mutateVia(
+      label,
+      paths,
+      (signal, options) => this._runP4deltaWrite(engine, label, mode, args, signal, options),
+      execOptions,
+    )
+  }
+
+  /**
+   * δ's argv for a write: the same contract switches a scan or narrow run
+   * carries, then the mode's flag, `-c` for {@link reconcileInto}, and `-a` —
+   * a write applies by definition, which is the whole difference from every
+   * other δ call in this file — before `--` and the specs.
+   *
+   * Every configured exclusion rides along as a `-`-prefixed entry, exactly as
+   * the narrow query's argv does. The engine applies them itself, which is why
+   * the command layer must not carve under δ, and why the list has to be
+   * COMPLETE: an omitted exclusion hands a directory the user explicitly kept
+   * out of reconcile scope to the write, and under `--clean` that is not
+   * recoverable.
+   */
+  private _buildP4deltaWriteArgs(
+    mode: 'open' | 'clean',
+    specs: readonly string[],
+    changelist?: string,
+  ): string[] {
+    return [
+      '--json',
+      '--no-scope-file',
+      '--client-root',
+      this.root,
+      '--no-revert-groups',
+      ...(mode === 'clean' ? ['--clean'] : []),
+      ...(changelist !== undefined && changelist !== 'default' ? ['-c', changelist] : []),
+      '-a',
+      '--',
+      ...specs,
+      ...this._reconcileExcludeDirs.map((dir) => p4deltaScopeEntry(dir, true)),
+    ]
+  }
+
+  /**
+   * One δ write, reported in {@link P4ExecResult}'s shape so
+   * {@link _mutateVia}'s three exits stay the native ones.
+   *
+   * Success is the contract's only positive proof — a summary with `ok:true` —
+   * and everything else is a failure ({@link _p4deltaWriteFailure}): no summary
+   * (killed / crashed), a non-JSON stdout line (not the engine we think it is),
+   * exit 2 (usage error), `ok:false` (a partial stream). The reason, plus δ's
+   * stderr tail, becomes the `stderr` the failure toast renders.
+   *
+   * A failed write is NEVER re-run natively, unlike the scan's same-round
+   * fallback ({@link _runP4deltaReconcileScan}): `-a` means δ may already have
+   * applied part of the change, and a second implementation would redo the work
+   * from its own reading of the workspace — wrong in both directions, and
+   * `--clean` (deleting files, discarding edits) cannot be undone at all. The
+   * user gets the toast and p4 gets the next attempt.
+   *
+   * A cancel (the user's, or dispose, which aborts the same source) is not a
+   * failure: no count, no toast, no spawn if it never started.
+   */
+  private async _runP4deltaWrite(
+    engine: P4deltaService,
+    label: string,
+    mode: 'open' | 'clean',
+    args: readonly string[],
+    signal: AbortSignal,
+    execOptions?: P4ExecOptions,
+  ): Promise<P4ExecResult> {
+    // Cancelled before the run started: spawn nothing. That result is never
+    // read — `_cancellable` reports the abort off this same signal and
+    // `_mutateVia` takes its cancel exit.
+    if (signal.aborted) return { stdout: '', stderr: '', exitCode: 0 }
+    const result = await engine.run(args, {
+      signal,
+      ...(execOptions?.priority !== undefined ? { priority: execOptions.priority } : {}),
+      ...(execOptions?.timeoutMs !== undefined ? { timeoutMs: execOptions.timeoutMs } : {}),
+    })
+    for (const line of result.log) this._log?.(`  p4delta: ${line}`)
+    // Killed under us — the user asked to stop. Not the engine failing to
+    // answer; `_mutateVia` reads the abort and takes its cancel exit.
+    if (signal.aborted) return { stdout: '', stderr: '', exitCode: 0 }
+
+    const summary = summarizeRun(result)
+    const failure = this._p4deltaWriteFailure(result, summary, mode)
+    if (failure === undefined) {
+      this._p4deltaFailures = 0
+      const counts = Object.entries(summary?.counts ?? {})
+        .map(([klass, n]) => `${klass} ${n}`)
+        .join(', ')
+      this._log?.(
+        `[perforce] ${label} (p4delta): ${summary?.total ?? 0} file(s) applied` +
+          (counts.length > 0 ? ` (${counts})` : ''),
+      )
+      return { stdout: '', stderr: '', exitCode: 0 }
+    }
+
+    this._p4deltaFailures += 1
+    if (this._p4deltaFailures >= P4DELTA_MAX_CONSECUTIVE_FAILURES) this._p4deltaDisarmed = true
+    const detail = lastNonEmptyLine(result.log)
+    this._log?.(
+      `[perforce] ${label}: p4delta did not conclude — ${failure}` +
+        (detail !== undefined ? `; ${detail}` : '') +
+        '; not retried on p4 (the engine may already have applied part of the change)' +
+        (this._p4deltaDisarmed
+          ? ` (engine disabled for this session after ${this._p4deltaFailures} consecutive failures; writes, narrow queries and scans stay on p4 until the engine is reconfigured)`
+          : ` (${this._p4deltaFailures}/${P4DELTA_MAX_CONSECUTIVE_FAILURES})`),
+    )
+    return {
+      stdout: '',
+      stderr: `p4delta: ${failure}${detail !== undefined ? `; ${detail}` : ''}`,
+      exitCode: result.code === 0 ? 1 : result.code,
+    }
+  }
+
+  /**
+   * Why a δ WRITE does not count as done, or undefined when it does. The same
+   * contract rules {@link _p4deltaRunFailure} applies, with one deliberate
+   * difference: a write has no "nothing to do" success, so `ok:false` is always
+   * a failure here — including `no-entry-matched`, which a scan and a narrow
+   * query read as the complete answer "there is nothing there". A user who asked
+   * to collect or clean a set of paths, none of which exist, is owed the toast
+   * rather than a silent success.
+   *
+   * `ok:true` alone is NOT success: the summary also has to say the run APPLIED
+   * (`applied:true`, the contract's `-a` marker) and answered the MODE this
+   * operation asked for. A records-complete `ok:true` preview — a build that
+   * ignored `-a`, or a reply for the other direction — would otherwise exit the
+   * success path, which drops the touched paths from the drift set and reports
+   * them handled while nothing on disk or server changed.
+   */
+  private _p4deltaWriteFailure(
+    result: P4deltaRunResult,
+    summary: P4deltaSummary | undefined,
+    expectedMode: 'open' | 'clean',
+  ): string | undefined {
+    if (result.sawNonJsonStdout) return 'stdout carried a non-JSON line'
+    if (result.code === 2) return 'usage error (exit 2)'
+    if (summary === undefined) {
+      return `no summary (exit ${result.code}${result.signal !== null ? `, signal ${result.signal}` : ''})`
+    }
+    if (!summary.ok) return `run did not conclude (${summary.reason ?? 'error'})`
+    if (summary.mode !== expectedMode) {
+      return `summary reports mode ${summary.mode ?? '<none>'} (expected ${expectedMode})`
+    }
+    if (!summary.applied) return 'run did not apply (not marked applied)'
+    return undefined
+  }
+
+  /**
+   * The reason this write's specs have to run on p4 instead of δ, or undefined
+   * when δ's scope grammar reads all of them. A safety net, not a health
+   * verdict: it never touches the fallback ladder, and a spec the command layer
+   * forgot to stop carving (`<dir>/*`) only costs the slow native path.
+   *
+   * Two shapes are outside that grammar: a p4 filespec metacharacter (δ reads
+   * its entries literally, so a `*` would name a file nobody has —
+   * {@link P4DELTA_NARROW_SPEC_METACHARS}), and depot syntax other than the
+   * `//<depot>/...` form the contract translates (`//...`, the whole-client
+   * wildcard, included).
+   */
+  private _p4deltaWriteSpecReject(specs: readonly string[]): string | undefined {
+    for (const spec of specs) {
+      if (P4DELTA_SCOPE_METACHARS.test(spec)) {
+        return `spec carries a p4 filespec metacharacter (${spec})`
+      }
+      if (spec.startsWith('//') && !isP4deltaDepotEntry(spec)) {
+        return `spec is not a p4delta scope entry (${spec})`
+      }
+    }
+    return undefined
+  }
+
+  /**
+   * The last-resort alarm for the one shape that must never land on native p4:
+   * an UN-CARVED δ-form entry — `<dir>/...` still carrying a metacharacter.
+   * Those are exactly the specs the command layer has to carve before handing
+   * over (`canHandTargetsToP4delta`; the raw paths exist only there), so
+   * meeting one here means that gate was missed and the native run about to
+   * happen will walk the excluded subtrees this entry names — for `clean`, that
+   * discard is irreversible. Logged, not acted on: the fallback stays the
+   * fallback (a carve product here is merely slow), and this layer could not
+   * carve even if it wanted to — the raw paths are already gone.
+   */
+  private _warnUncarvedDeltaSpecs(label: string, specs: readonly string[]): void {
+    const suspect = specs.find((s) => s.endsWith('/...') && P4DELTA_SCOPE_METACHARS.test(s))
+    if (suspect === undefined) return
+    this._log?.(
+      `[perforce] ${label}: WARNING ${suspect} looks like an un-carved p4delta scope entry — ` +
+        'the exclude folders may NOT have been applied to this p4 run; check whether the ' +
+        'command layer carved this path (perforce.reconcile.excludeFolders coverage)',
+    )
   }
 
   /** The post-mutation refresh, under its own busy label. The p4 command itself is
@@ -2440,7 +3141,14 @@ export class PerforceClient {
    *  `dir` — the mirror of {@link _invalidateReconcileScanFor}, which drops the
    *  ones that *cover* a path. A directory-recursive mutation stales both: its
    *  own subtree's checkpoints describe only territory the mutation rewrote, and
-   *  an ancestor's checkpoint carries hints for that subtree among its own. */
+   *  an ancestor's checkpoint carries hints for that subtree among its own.
+   *
+   *  Under the δ engine the checkpoint is a single whole-scope snapshot keyed by
+   *  the client root, so any invalidation below the root IS an invalidation of
+   *  the entire snapshot — there is no way to correct part of it, and the test
+   *  below catches it in one of the two directions (the root either contains
+   *  `dir` or sits inside it). The native path is unaffected: each of its
+   *  checkpoints still describes exactly one directory. */
   private _invalidateReconcileScanUnder(dir: string): void {
     this._cache.invalidateWhere(P4CacheNs.reconcileScan, (key) => {
       const scanned = key.slice(key.indexOf(':') + 1)
@@ -2600,6 +3308,46 @@ export class PerforceClient {
     return kind === 'gone' ? [path, ...subtree] : subtree
   }
 
+  /**
+   * The specs a narrow query sends for `path`, engine-aware — the only
+   * difference being whether the exclusions are carved around or handed to the
+   * engine.
+   *
+   * Under δ the exclusion list travels as its own scope entries
+   * ({@link _buildP4deltaNarrowArgs}) and the engine applies it inside the same
+   * call, so nothing is carved: a directory answers to its `<dir>/...` even when
+   * it holds excluded subtrees — answering all of that in one call is the
+   * engine's whole point — and a carve would also hand δ the `<dir>/*` level
+   * fragments its entry syntax has no meaning for. Every configured exclusion
+   * must reach that argv: an omission there would sweep a directory the user
+   * explicitly excluded back into the answer, and that completeness is the
+   * entire equivalence the native carve provides.
+   *
+   * Native keeps today's rule, carve included — a carve that cannot run still
+   * yields no defensible spec at all, and the caller invalidates instead of
+   * querying ({@link _querySpecsFor}).
+   *
+   * The gate is on the RAW path ({@link canHandTargetsToP4delta}), never on the
+   * spec: a path δ's grammar reads differently (a `%`, an `@`) must take the
+   * carve branch, exactly like the write fork — the batch would otherwise send
+   * an un-carved `<dir>/...` to native p4, whose traversal then reaches the
+   * excluded subtrees (for a query: rows the user explicitly filtered out).
+   * The carve products this produces are the shapes
+   * {@link _narrowQueryBatch} routes native.
+   */
+  private async _narrowQuerySpecsFor(
+    path: string,
+    kind: PathKind,
+  ): Promise<readonly string[] | undefined> {
+    if (this._p4deltaEngine() === undefined) return this._querySpecsFor(path, kind)
+    if (!canHandTargetsToP4delta([{ path, isDirectory: kind === 'dir' }])) {
+      return this._querySpecsFor(path, kind)
+    }
+    if (kind === 'file') return [path]
+    const subtree = buildScopeFilespec(path, true)
+    return kind === 'gone' ? [path, subtree] : [subtree]
+  }
+
   /** Human-friendly busy label for a raw p4 command label (e.g. `revert -k` →
    *  "Reverting"). Falls back to a generic "Working" for unmapped commands. */
   private _busyLabel(label: string): string {
@@ -2644,14 +3392,17 @@ export class PerforceClient {
   }
 
   /**
-   * Collect (reconcile) working-tree changes into open state: run the real
-   * `p4 reconcile -a -e -d` on `paths`, which opens each file for the action that
-   * matches its on-disk state (add / edit / delete). The file then stops showing
-   * the Explorer's uncollected-drift hint and appears in a changelist group.
+   * Collect (reconcile) working-tree changes into open state: open each file
+   * for the action that matches its on-disk state (add / edit / delete). The
+   * file then stops showing the Explorer's uncollected-drift hint and appears
+   * in a changelist group.
+   *
+   * Native is `p4 reconcile -a -e -d`; δ's open mode with `-a` answers the same
+   * question in one call over the whole spec list ({@link _mutateWrite}).
    */
   async reconcile(paths: readonly string[]): Promise<boolean> {
     if (paths.length === 0) return false
-    return this._mutate('reconcile', ['reconcile', '-a', '-e', '-d'], paths)
+    return this._mutateWrite('open', paths)
   }
 
   /**
@@ -2664,11 +3415,7 @@ export class PerforceClient {
    */
   async reconcileInto(changelist: string, paths: readonly string[]): Promise<boolean> {
     if (paths.length === 0) return false
-    const args =
-      changelist === 'default'
-        ? ['reconcile', '-a', '-e', '-d']
-        : ['reconcile', '-a', '-e', '-d', '-c', changelist]
-    return this._mutate('reconcile', args, paths)
+    return this._mutateWrite('open', paths, changelist)
   }
 
   /** Revert files — discards the open state and restores the have revision. */
@@ -3216,6 +3963,18 @@ export class PerforceClient {
    * server comparison as the sync itself, so it can hold the user at "counting"
    * for close to a minute before the first byte moves — pure cost, no transfer.
    * The bar reports `done` plus the elapsed clock instead of a `done/total`.
+   *
+   * Deliberately stays on p4 even when δ answers this session's scans and writes
+   * — including a FORCE get, which is where δ's `--sync` would otherwise fit.
+   * δ's `--sync` is `p4 sync -f` semantics (the README says so outright: local
+   * changes on not-opened files ARE overwritten), while this method's default is
+   * a plain `p4 sync`, whose noclobber behavior REFUSES such files and reports
+   * them in `refusedFiles` for the caller to offer collecting. Mapping that
+   * non-force default onto an implementation that always clobbers would discard
+   * the user's uncollected work — a data loss, not a performance tradeoff. The
+   * force path could match δ, but it exists precisely to overwrite files the
+   * user just saw diffed and confirmed, so the one get where clobbering is
+   * intended is also the one least worth an engine swap.
    */
   async sync(
     spec: string,
@@ -4058,16 +4817,18 @@ export class PerforceClient {
 
     // Every path is classified once, and the classification decides its spec:
     // a file answers to its bare path, a directory or a vanished path to its
-    // subtree form. `gone` sends BOTH specs (see _querySpecsFor) so the batch
-    // covers "a file was deleted" and "a directory was deleted" at once; a
+    // subtree form. `gone` sends BOTH specs (see _narrowQuerySpecsFor) so the
+    // batch covers "a file was deleted" and "a directory was deleted" at once; a
     // directory whose excluded subtrees cannot be carved around has no
-    // defensible spec, so it invalidates instead of being queried.
+    // defensible spec, so it invalidates instead of being queried — under δ that
+    // last case cannot arise (the engine applies the exclusions itself and the
+    // spec is never carved, see _narrowQuerySpecsFor).
     const queryPaths: string[] = []
     const subtreeSpecs = new Map<string, readonly string[]>()
     const unanswerable: string[] = []
     for (const path of paths) {
       const kind = await this._pathKind(path)
-      const specs = await this._querySpecsFor(path, kind)
+      const specs = await this._narrowQuerySpecsFor(path, kind)
       if (specs === undefined) {
         unanswerable.push(path)
         continue
@@ -4190,30 +4951,16 @@ export class PerforceClient {
   }
 
   /**
-   * The background reconcile scan: walk the reconcile scope directory by
-   * directory with `reconcile -n -a -e -d` (dry-run), publishing each batch to
-   * the renderer the moment it lands and checkpointing completed directories
-   * into {@link P4CacheNs.reconcileScan} so the next session resumes instead of
-   * rescanning. Before a directory's batch runs, cheap priors decide whether it
-   * would outlast the batch ceiling anyway ({@link predictReconcileScanBatch}):
-   * the elapsed ms persisted on an expired checkpoint (a measurement), or —
-   * when the directory never produced a result — a local early-exit file count
-   * (a coarse estimate). A predicted over-budget directory is split into its
-   * subdirectories without ever spawning the doomed parent batch. A directory
-   * whose batch outlasts
-   * `perforce.reconcileScan.maxBatchDurationMs` AND found drift is split into
-   * its direct subdirectories — each split batch is smaller, so batches
-   * auto-converge to roughly the configured duration. (A slow-but-clean
-   * directory is NOT split: its cost is inherent hashing, and splitting would
-   * re-hash the whole subtree per child for zero new information — it
-   * checkpoints clean and lets the freshness ceiling schedule the rescan.) A
-   * batch that outlasts the ceiling and then FAILS (watchdog kill, dropped
-   * connection) is split the same way: re-running the same doomed parent every
-   * session would never converge. The split itself is checkpointed as a marker
-   * (no hints), so a later session resumes at the subdirectories instead of
-   * re-running the same slow parent batch; result checkpoints older than
-   * {@link RECONCILE_SCAN_MAX_CHECKPOINT_AGE_MS} are rescanned rather than
-   * replayed.
+   * The background reconcile scan, dispatched to whichever engine this session
+   * has: δ when one was probed and the failure ladder has not disarmed it, the
+   * native `reconcile -n` walk otherwise. Both engines publish into the same
+   * drift set / progress / checkpoint pipeline (see {@link _runNativeReconcileScan}
+   * and {@link _runP4deltaReconcileScan}), so the consumer of the scan cannot
+   * tell which one ran except by how fast the answer arrived.
+   *
+   * The native walk is the reference implementation and is documented in full
+   * on {@link _runNativeReconcileScan}; this method only computes the scope and
+   * picks the engine.
    *
    * Read-only by construction, like {@link checkWorkingTree}: it never writes
    * server state, never persists anything but the scan's own checkpoint cache,
@@ -4248,326 +4995,611 @@ export class PerforceClient {
             `${this._reconcileScopeFiles.length} scope file(s), ` +
             `${this._reconcileScanMaxBatchMs}ms batch ceiling`,
         )
-        const queue: string[] = [...scopeDirs]
-        let batches = 0
-        let done = 0
-        let driftFound = 0
-        // `pending` counts directories this run has not finished yet (the in-flight
-        // one plus the queue). `done + pending` is the run's total and never
-        // shrinks — finishing a directory is `done+1`/`pending-1`, splitting one
-        // grows `pending` by the subdirectory count.
-        let pending = scopeDirs.length
-        this._scanProgress = { done, pending, driftFound, startedAt: this._now() }
-        this._emitChange()
         try {
-          while (queue.length > 0) {
-            // The connection guard on top of the abort check: going offline aborts
-            // the scan's source (see _goOffline), but this also covers the window
-            // before the abort propagates — without it, a dropped connection would
-            // spawn one doomed p4 per remaining directory.
-            if (this._disposed || signal.aborted || this._connection !== 'connected') return
-            const dir = queue.shift()!
-            // A hot config reload can exclude a directory after the queue was
-            // built — enqueue-time filtering can't see it, so this is the last
-            // line of defense before p4 does.
-            if (this._isExcluded(dir)) {
-              this._log?.(`[perforce] reconcile-scan: ${dir} excluded mid-scan; skipping`)
-              done += 1
-              pending -= 1
-              this._setScanProgress(done, pending, undefined, driftFound)
-              continue
-            }
-            this._setScanProgress(done, pending, dir, driftFound)
-            const key = this._reconcileScanKey(dir)
-            // Checkpoint probe: a directory scanned by an earlier session is served
-            // from cache — published straight to the renderer, zero p4 spawns.
-            const cached = await this._cache.wrap(
-              P4CacheNs.reconcileScan,
-              key,
-              async () => undefined,
-            )
-            // Warm prior for the budget prediction below: an expired result
-            // checkpoint proves nothing about the disk any more, but its
-            // measured elapsed ms is still the best cost signal for the
-            // directory — keep it across the invalidation.
-            let priorElapsedMs: number | undefined
-            const cachedEntry = cached === undefined ? undefined : parseReconcileScanEntry(cached)
-            if (cached !== undefined && cachedEntry === undefined) {
-              // Unreadable or legacy-shaped checkpoint (an older build persisted
-              // rendered hints, which cannot recover the row's action): drop it and
-              // rescan rather than replay a shape this reader can't use.
-              this._cache.invalidate(P4CacheNs.reconcileScan, key)
-              this._log?.(`[perforce] reconcile-scan: ${dir} checkpoint unusable; rescanning`)
-            }
-            if (cachedEntry !== undefined) {
-              if (cachedEntry.split) {
-                // A split marker means the parent's slow batch was already split in
-                // an earlier session and its own result was published back then.
-                // Replaying the parent's hints here would double-publish (each
-                // subdirectory checkpoint publishes its own), so the replay only
-                // re-enqueues the subdirectories.
-                const subdirs = await this._listSubdirs(dir)
-                if (subdirs.length > 0) {
-                  this._log?.(
-                    `[perforce] reconcile-scan: ${dir} split checkpoint; resuming at ${subdirs.length} subdirectories`,
-                  )
-                  queue.push(...subdirs)
-                  done += 1
-                  pending += subdirs.length - 1
-                  this._setScanProgress(done, pending, undefined, driftFound)
-                  continue
-                }
-                // The directory can no longer be split (gone or unreadable): drop
-                // the marker and fall through to rescan the parent rather than
-                // replaying a split that can never resume.
-                this._cache.invalidate(P4CacheNs.reconcileScan, key)
-              } else if (
-                this._now() - cachedEntry.completedAt <=
-                RECONCILE_SCAN_MAX_CHECKPOINT_AGE_MS
-              ) {
-                this._acceptReconcileScanEntry(dir, cachedEntry)
-                driftFound += cachedEntry.files.length
-                this._log?.(`[perforce] reconcile-scan: ${dir} served from checkpoint`)
-                done += 1
-                pending -= 1
-                this._setScanProgress(done, pending, undefined, driftFound)
-                continue
-              } else {
-                // A checkpoint past the freshness ceiling proves nothing about the
-                // disk any more: drop it and fall through to rescan now, so a
-                // directory whose drift changed between sessions is corrected this
-                // session instead of replaying a stale "clean"/"changed" answer.
-                priorElapsedMs = cachedEntry.elapsedMs
-                this._cache.invalidate(P4CacheNs.reconcileScan, key)
-                this._log?.(`[perforce] reconcile-scan: ${dir} checkpoint expired; rescanning`)
-              }
-            }
-            // Budget prediction before the batch: when cheap priors say the
-            // directory would outlast the ceiling, enqueue its subdirectories
-            // directly instead of spawning the doomed parent batch (the
-            // post-hoc slow/timeout split below stays as the backstop).
-            const prediction = await this._predictReconcileScanBatch(dir, priorElapsedMs, signal)
-            // Re-check after the local awaits above (file count / readdir): a
-            // scope-change abort that landed during them must not write a split
-            // marker under the new fingerprint from this orphaned round.
-            if (this._disposed || signal.aborted) return
-            if (prediction.action === 'split') {
-              const subdirs = await this._listSubdirs(dir)
-              if (subdirs.length > 0) {
-                this._log?.(
-                  `[perforce] reconcile-scan: ${dir} ${this._describeReconcileScanPrediction(prediction)} ` +
-                    `— pre-splitting into ${subdirs.length} subdirectories, skipping the parent batch`,
-                )
-                queue.push(...subdirs)
-                done += 1
-                pending += subdirs.length - 1
-                // Split marker with no hints — the parent batch never ran, so
-                // nothing was published for it; the marker only resumes later
-                // sessions at the subdirectories.
-                await this._writeReconcileScanSplitCheckpoint(key)
-                this._setScanProgress(done, pending, undefined, driftFound)
-                continue
-              }
-              // Predicted over budget but nothing to split into (leaf or
-              // unreadable) — degrade to the normal batch, like every other
-              // split that finds no subdirectories.
-              this._log?.(
-                `[perforce] reconcile-scan: ${dir} ${this._describeReconcileScanPrediction(prediction)} ` +
-                  `but has no subdirectories; scanning normally`,
-              )
-            }
-            let specs: readonly string[]
-            if (this._isExcluded(dir)) {
-              // Re-checked here, not just at the top of the loop: the awaits in
-              // between (checkpoint probe, `_listSubdirs`, budget prediction) let
-              // a config hot-reload land, and `_containsAnyExcluded` answers true
-              // for a directory that just became excluded itself — carving one
-              // would spawn a dry-run batch rooted inside excluded territory.
-              this._log?.(`[perforce] reconcile-scan: ${dir} became excluded; skipping`)
-              done += 1
-              pending -= 1
-              this._setScanProgress(done, pending, undefined, driftFound)
-              continue
-            }
-            if (this._containsAnyExcluded(dir)) {
-              // A directory that contains excluded subtrees can't be answered by a
-              // recursive `<dir>/...` — that filespec drags the excluded subtrees
-              // back into p4's traversal, which is exactly how the exclusion broke.
-              // Carve it into the level's `/*` plus the clean subtrees' `/...`
-              // instead. (`_isExcluded` was tested above — that is the whole-skip
-              // case; this probe really means "has an excluded subtree to carve".)
-              const carved = await carveReconcileFilespecs(dir, this._reconcileExcludeDirs, signal)
-              if (this._disposed || signal.aborted) return
-              if (carved === undefined) {
-                // Carve failure has no safe fallback: `<dir>/...` would re-breach
-                // the exclusion, and a checkpoint would be a lie either way — a
-                // split marker pretends the scan can resume, an empty result
-                // pretends the directory is clean. Leave it un-checkpointed so
-                // the next session retries it.
-                this._log?.(
-                  `[perforce] reconcile-scan: ${dir} contains excluded subtree(s) but carving failed; leaving un-checkpointed`,
-                )
-                done += 1
-                pending -= 1
-                this._setScanProgress(done, pending, undefined, driftFound)
-                continue
-              }
-              specs = carved
-            } else {
-              specs = [buildScopeFilespec(dir, true)]
-            }
-            const started = this._now()
-            const batch = await this._reconcileScanBatch(specs, {
-              signal,
-              // The background scan publishes a lower bound of drift found, so a
-              // timed-out batch keeps whatever it already streamed (more is always
-              // better); `checkWorkingTree` deliberately omits this option.
-              recoverPartialOnTimeout: true,
-            })
-            if (this._disposed || signal.aborted) return
-            const elapsed = this._now() - started
-            if (batch === undefined) {
-              // Failure is not "clean": the directory stays un-checkpointed so the
-              // next session retries it. The single exception is a slow failure —
-              // a batch that already burned the whole ceiling (watchdog kill,
-              // dropped connection) would fail just as slowly next session, so it
-              // is split like a slow success: the subtree is scanned piecemeal now
-              // and a split checkpoint makes later sessions resume at the
-              // subdirectories instead of re-running the same doomed parent batch.
-              const subdirs =
-                elapsed > this._reconcileScanMaxBatchMs ? await this._listSubdirs(dir) : []
-              done += 1
-              pending += subdirs.length - 1
-              if (subdirs.length > 0) {
-                this._log?.(
-                  `[perforce] reconcile-scan: ${dir} failed after ${elapsed}ms — splitting into ${subdirs.length} subdirectories`,
-                )
-                queue.push(...subdirs)
-                await this._writeReconcileScanSplitCheckpoint(key)
-                this._setScanProgress(done, pending, undefined, driftFound)
-                continue
-              }
-              this._log?.(`[perforce] reconcile-scan: ${dir} failed; leaving un-checkpointed`)
-              this._setScanProgress(done, pending, undefined, driftFound)
-              continue
-            }
-            if (batch.partial) {
-              // Keep what streamed before the kill — it is a lower bound of the
-              // directory's drift — but NEVER checkpoint it: a partial result saved
-              // as complete would freeze the missed paths into later sessions (the
-              // exact worst case). A timeout is conclusive proof the directory is
-              // too big, so split unconditionally rather than comparing against
-              // `maxBatchDurationMs` — that ceiling and `commandTimeout` are
-              // independent settings and either may be the larger one.
-              driftFound += batch.files.length
-              const entry: ReconcileScanEntry = {
-                completedAt: this._now(),
-                files: [...batch.files],
-              }
-              // A partial answer is a lower bound, so it may only ADD: replacing the
-              // directory's contribution here would retract rows an earlier batch
-              // legitimately found in the part this run never reached.
-              for (const file of entry.files) this._upsertDriftRow(dir, file)
-              const subdirs = await this._listSubdirs(dir)
-              done += 1
-              pending += subdirs.length - 1
-              if (subdirs.length > 0) {
-                this._log?.(
-                  `[perforce] reconcile-scan: ${dir} timed out after ${elapsed}ms — kept ${entry.files.length} drift row(s), splitting into ${subdirs.length} subdirectories`,
-                )
-                queue.push(...subdirs)
-                // Split marker with no rows — the parent's partial rows are already
-                // in the drift set, so the marker only resumes later sessions at
-                // the subdirectories.
-                await this._writeReconcileScanSplitCheckpoint(key)
-                this._setScanProgress(done, pending, undefined, driftFound)
-                continue
-              }
-              this._log?.(
-                `[perforce] reconcile-scan: ${dir} timed out after ${elapsed}ms — kept ${entry.files.length} drift row(s), no subdirectories to split; leaving un-checkpointed`,
-              )
-              this._setScanProgress(done, pending, undefined, driftFound)
-              continue
-            }
-            driftFound += batch.files.length
-            const entry: ReconcileScanEntry = {
-              completedAt: this._now(),
-              files: [...batch.files],
-              // Warm prior for the next session's budget prediction: a
-              // measurement beats any size estimate, so persist it with the
-              // result.
-              elapsedMs: elapsed,
-            }
-            this._acceptReconcileScanEntry(dir, entry)
-            batches++
-            done += 1
-            pending -= 1
-            // Split only a slow batch that FOUND drift. A slow-but-clean directory
-            // (a huge tree whose hashing cost is inherent, not a sign of scattered
-            // drift) would be re-hashed by every child batch if split — the parent
-            // already hashed the whole subtree, so splitting multiplies the total
-            // work by depth for zero new information. Checkpoint it as a result
-            // and let the freshness ceiling schedule the rescan instead.
-            if (entry.files.length > 0 && elapsed > this._reconcileScanMaxBatchMs) {
-              const subdirs = await this._listSubdirs(dir)
-              if (subdirs.length > 0) {
-                this._log?.(
-                  `[perforce] reconcile-scan: ${dir} took ${elapsed}ms — splitting into ${subdirs.length} subdirectories`,
-                )
-                queue.push(...subdirs)
-                pending += subdirs.length
-                // Checkpoint the split itself (no hints — the parent's result was
-                // published just above): the subdirectory checkpoints as they land
-                // are the actual resume points, and the marker makes the next
-                // session enqueue the subdirectories instead of re-running the
-                // same slow parent batch.
-                await this._writeReconcileScanSplitCheckpoint(key)
-                this._setScanProgress(done, pending, undefined, driftFound)
-                continue
-              }
-            }
-            // Checkpoint: `wrap` with a fetch that just returns the value persists
-            // it (immutable namespace mirrors to disk).
-            await this._cache.wrap(P4CacheNs.reconcileScan, key, async () => JSON.stringify(entry))
-            this._setScanProgress(done, pending, undefined, driftFound)
+          // δ covers the whole scope in one call, so it only applies when there
+          // IS a directory scope to hand it. A files-only focus keeps the native
+          // path: its directory phase is a no-op there anyway, and the per-file
+          // phase is a narrow query either way.
+          const engine = this._p4deltaDisarmed ? undefined : this._p4delta
+          if (engine !== undefined && scopeDirs.length > 0) {
+            this._reconcileScanEngine = 'p4delta'
+            if (await this._runP4deltaReconcileScan(engine, scopeDirs, signal)) return
           }
-          // Per-file fresh verification: each scope FILE (a focus entry that names
-          // one file, not a directory) is re-examined every session by a narrow
-          // `reconcile -n` and NEVER checkpointed. A file entry fed to the
-          // directory phase instead would become the filespec `<file>/...` — a
-          // no-such-file p4 answers as clean (exit 0, empty) — and that empty
-          // answer would be checkpointed forever, so the file's real drift would
-          // never be re-queried (the bug this phase exists to kill). The query is
-          // per-session and uncached precisely so "clean now" and "drifted now"
-          // both reflect the disk at this moment.
-          if (this._reconcileScopeFiles.length > 0) {
-            if (this._disposed || signal.aborted || this._connection !== 'connected') return
-            const existing = this._reconcileScopeFiles.filter((p) => this._scopeFileExists(p))
-            if (existing.length > 0) {
-              this._log?.(
-                `[perforce] reconcile-scan: verifying ${existing.length} scope file(s) fresh (uncached)`,
-              )
-              const { covered, rows } = await this._queryWorkingTreeRows(existing)
-              if (this._disposed || signal.aborted) return
-              this._applyDriftFromWatcher(covered, rows)
-              driftFound += rows.length
-            }
-          }
-          if (signal.aborted) {
-            this._log?.('[perforce] reconcile-scan cancelled; checkpoints kept')
-            return
-          }
-          // Final flush so the group settles in the same tick the scan does — see
-          // _flushDriftApply.
-          this._flushDriftApply()
-          this._log?.(
-            `[perforce] reconcile-scan complete: ${batches} batch(es), ${done} directories, ${driftFound} drift file(s)`,
-          )
+          this._reconcileScanEngine = 'native'
+          await this._runNativeReconcileScan(scopeDirs, signal)
         } finally {
           this._clearScanProgress()
         }
       }, 'reconcile-scan')
     })
+  }
+
+  /**
+   * The native scan: walk the reconcile scope directory by directory with
+   * `reconcile -n -a -e -d` (dry-run), publishing each batch to the renderer the
+   * moment it lands and checkpointing completed directories into
+   * {@link P4CacheNs.reconcileScan} so the next session resumes instead of
+   * rescanning. Before a directory's batch runs, cheap priors decide whether it
+   * would outlast the batch ceiling anyway ({@link predictReconcileScanBatch}):
+   * the elapsed ms persisted on an expired checkpoint (a measurement), or —
+   * when the directory never produced a result — a local early-exit file count
+   * (a coarse estimate). A predicted over-budget directory is split into its
+   * subdirectories without ever spawning the doomed parent batch. A directory
+   * whose batch outlasts
+   * `perforce.reconcileScan.maxBatchDurationMs` AND found drift is split into
+   * its direct subdirectories — each split batch is smaller, so batches
+   * auto-converge to roughly the configured duration. (A slow-but-clean
+   * directory is NOT split: its cost is inherent hashing, and splitting would
+   * re-hash the whole subtree per child for zero new information — it
+   * checkpoints clean and lets the freshness ceiling schedule the rescan.) A
+   * batch that outlasts the ceiling and then FAILS (watchdog kill, dropped
+   * connection) is split the same way: re-running the same doomed parent every
+   * session would never converge. The split itself is checkpointed as a marker
+   * (no hints), so a later session resumes at the subdirectories instead of
+   * re-running the same slow parent batch; result checkpoints older than
+   * {@link RECONCILE_SCAN_MAX_CHECKPOINT_AGE_MS} are rescanned rather than
+   * replayed.
+   *
+   * Also the fallback engine: when a δ round fails to answer,
+   * {@link runReconcileScan} calls straight into this with the same scope and
+   * signal, so the round still produces a native answer — a broken δ costs a
+   * slow scan, never a missing one.
+   */
+  private async _runNativeReconcileScan(
+    scopeDirs: readonly string[],
+    signal: AbortSignal,
+  ): Promise<void> {
+    const queue: string[] = [...scopeDirs]
+    let batches = 0
+    let done = 0
+    let driftFound = 0
+    // `pending` counts directories this run has not finished yet (the in-flight
+    // one plus the queue). `done + pending` is the run's total and never
+    // shrinks — finishing a directory is `done+1`/`pending-1`, splitting one
+    // grows `pending` by the subdirectory count.
+    let pending = scopeDirs.length
+    this._scanProgress = { done, pending, driftFound, startedAt: this._now() }
+    this._emitChange()
+    while (queue.length > 0) {
+      // The connection guard on top of the abort check: going offline aborts
+      // the scan's source (see _goOffline), but this also covers the window
+      // before the abort propagates — without it, a dropped connection would
+      // spawn one doomed p4 per remaining directory.
+      if (this._disposed || signal.aborted || this._connection !== 'connected') return
+      const dir = queue.shift()!
+      // A hot config reload can exclude a directory after the queue was
+      // built — enqueue-time filtering can't see it, so this is the last
+      // line of defense before p4 does.
+      if (this._isExcluded(dir)) {
+        this._log?.(`[perforce] reconcile-scan: ${dir} excluded mid-scan; skipping`)
+        done += 1
+        pending -= 1
+        this._setScanProgress(done, pending, undefined, driftFound)
+        continue
+      }
+      this._setScanProgress(done, pending, dir, driftFound)
+      const key = this._reconcileScanKey(dir)
+      // Checkpoint probe: a directory scanned by an earlier session is served
+      // from cache — published straight to the renderer, zero p4 spawns.
+      const cached = await this._cache.wrap(P4CacheNs.reconcileScan, key, async () => undefined)
+      // Warm prior for the budget prediction below: an expired result
+      // checkpoint proves nothing about the disk any more, but its
+      // measured elapsed ms is still the best cost signal for the
+      // directory — keep it across the invalidation.
+      let priorElapsedMs: number | undefined
+      const cachedEntry = cached === undefined ? undefined : parseReconcileScanEntry(cached)
+      if (cached !== undefined && cachedEntry === undefined) {
+        // Unreadable or legacy-shaped checkpoint (an older build persisted
+        // rendered hints, which cannot recover the row's action): drop it and
+        // rescan rather than replay a shape this reader can't use.
+        this._cache.invalidate(P4CacheNs.reconcileScan, key)
+        this._log?.(`[perforce] reconcile-scan: ${dir} checkpoint unusable; rescanning`)
+      }
+      if (cachedEntry !== undefined) {
+        if (cachedEntry.split) {
+          // A split marker means the parent's slow batch was already split in
+          // an earlier session and its own result was published back then.
+          // Replaying the parent's hints here would double-publish (each
+          // subdirectory checkpoint publishes its own), so the replay only
+          // re-enqueues the subdirectories.
+          const subdirs = await this._listSubdirs(dir)
+          if (subdirs.length > 0) {
+            this._log?.(
+              `[perforce] reconcile-scan: ${dir} split checkpoint; resuming at ${subdirs.length} subdirectories`,
+            )
+            queue.push(...subdirs)
+            done += 1
+            pending += subdirs.length - 1
+            this._setScanProgress(done, pending, undefined, driftFound)
+            continue
+          }
+          // The directory can no longer be split (gone or unreadable): drop
+          // the marker and fall through to rescan the parent rather than
+          // replaying a split that can never resume.
+          this._cache.invalidate(P4CacheNs.reconcileScan, key)
+        } else if (this._now() - cachedEntry.completedAt <= RECONCILE_SCAN_MAX_CHECKPOINT_AGE_MS) {
+          this._acceptReconcileScanEntry(dir, cachedEntry)
+          driftFound += cachedEntry.files.length
+          this._log?.(`[perforce] reconcile-scan: ${dir} served from checkpoint`)
+          done += 1
+          pending -= 1
+          this._setScanProgress(done, pending, undefined, driftFound)
+          continue
+        } else {
+          // A checkpoint past the freshness ceiling proves nothing about the
+          // disk any more: drop it and fall through to rescan now, so a
+          // directory whose drift changed between sessions is corrected this
+          // session instead of replaying a stale "clean"/"changed" answer.
+          priorElapsedMs = cachedEntry.elapsedMs
+          this._cache.invalidate(P4CacheNs.reconcileScan, key)
+          this._log?.(`[perforce] reconcile-scan: ${dir} checkpoint expired; rescanning`)
+        }
+      }
+      // Budget prediction before the batch: when cheap priors say the
+      // directory would outlast the ceiling, enqueue its subdirectories
+      // directly instead of spawning the doomed parent batch (the
+      // post-hoc slow/timeout split below stays as the backstop).
+      const prediction = await this._predictReconcileScanBatch(dir, priorElapsedMs, signal)
+      // Re-check after the local awaits above (file count / readdir): a
+      // scope-change abort that landed during them must not write a split
+      // marker under the new fingerprint from this orphaned round.
+      if (this._disposed || signal.aborted) return
+      if (prediction.action === 'split') {
+        const subdirs = await this._listSubdirs(dir)
+        if (subdirs.length > 0) {
+          this._log?.(
+            `[perforce] reconcile-scan: ${dir} ${this._describeReconcileScanPrediction(prediction)} ` +
+              `— pre-splitting into ${subdirs.length} subdirectories, skipping the parent batch`,
+          )
+          queue.push(...subdirs)
+          done += 1
+          pending += subdirs.length - 1
+          // Split marker with no hints — the parent batch never ran, so
+          // nothing was published for it; the marker only resumes later
+          // sessions at the subdirectories.
+          await this._writeReconcileScanSplitCheckpoint(key)
+          this._setScanProgress(done, pending, undefined, driftFound)
+          continue
+        }
+        // Predicted over budget but nothing to split into (leaf or
+        // unreadable) — degrade to the normal batch, like every other
+        // split that finds no subdirectories.
+        this._log?.(
+          `[perforce] reconcile-scan: ${dir} ${this._describeReconcileScanPrediction(prediction)} ` +
+            `but has no subdirectories; scanning normally`,
+        )
+      }
+      let specs: readonly string[]
+      if (this._isExcluded(dir)) {
+        // Re-checked here, not just at the top of the loop: the awaits in
+        // between (checkpoint probe, `_listSubdirs`, budget prediction) let
+        // a config hot-reload land, and `_containsAnyExcluded` answers true
+        // for a directory that just became excluded itself — carving one
+        // would spawn a dry-run batch rooted inside excluded territory.
+        this._log?.(`[perforce] reconcile-scan: ${dir} became excluded; skipping`)
+        done += 1
+        pending -= 1
+        this._setScanProgress(done, pending, undefined, driftFound)
+        continue
+      }
+      if (this._containsAnyExcluded(dir)) {
+        // A directory that contains excluded subtrees can't be answered by a
+        // recursive `<dir>/...` — that filespec drags the excluded subtrees
+        // back into p4's traversal, which is exactly how the exclusion broke.
+        // Carve it into the level's `/*` plus the clean subtrees' `/...`
+        // instead. (`_isExcluded` was tested above — that is the whole-skip
+        // case; this probe really means "has an excluded subtree to carve".)
+        const carved = await carveReconcileFilespecs(dir, this._reconcileExcludeDirs, signal)
+        if (this._disposed || signal.aborted) return
+        if (carved === undefined) {
+          // Carve failure has no safe fallback: `<dir>/...` would re-breach
+          // the exclusion, and a checkpoint would be a lie either way — a
+          // split marker pretends the scan can resume, an empty result
+          // pretends the directory is clean. Leave it un-checkpointed so
+          // the next session retries it.
+          this._log?.(
+            `[perforce] reconcile-scan: ${dir} contains excluded subtree(s) but carving failed; leaving un-checkpointed`,
+          )
+          done += 1
+          pending -= 1
+          this._setScanProgress(done, pending, undefined, driftFound)
+          continue
+        }
+        specs = carved
+      } else {
+        specs = [buildScopeFilespec(dir, true)]
+      }
+      const started = this._now()
+      const batch = await this._reconcileScanBatch(specs, {
+        signal,
+        // The background scan publishes a lower bound of drift found, so a
+        // timed-out batch keeps whatever it already streamed (more is always
+        // better); `checkWorkingTree` deliberately omits this option.
+        recoverPartialOnTimeout: true,
+      })
+      if (this._disposed || signal.aborted) return
+      const elapsed = this._now() - started
+      if (batch === undefined) {
+        // Failure is not "clean": the directory stays un-checkpointed so the
+        // next session retries it. The single exception is a slow failure —
+        // a batch that already burned the whole ceiling (watchdog kill,
+        // dropped connection) would fail just as slowly next session, so it
+        // is split like a slow success: the subtree is scanned piecemeal now
+        // and a split checkpoint makes later sessions resume at the
+        // subdirectories instead of re-running the same doomed parent batch.
+        const subdirs = elapsed > this._reconcileScanMaxBatchMs ? await this._listSubdirs(dir) : []
+        done += 1
+        pending += subdirs.length - 1
+        if (subdirs.length > 0) {
+          this._log?.(
+            `[perforce] reconcile-scan: ${dir} failed after ${elapsed}ms — splitting into ${subdirs.length} subdirectories`,
+          )
+          queue.push(...subdirs)
+          await this._writeReconcileScanSplitCheckpoint(key)
+          this._setScanProgress(done, pending, undefined, driftFound)
+          continue
+        }
+        this._log?.(`[perforce] reconcile-scan: ${dir} failed; leaving un-checkpointed`)
+        this._setScanProgress(done, pending, undefined, driftFound)
+        continue
+      }
+      if (batch.partial) {
+        // Keep what streamed before the kill — it is a lower bound of the
+        // directory's drift — but NEVER checkpoint it: a partial result saved
+        // as complete would freeze the missed paths into later sessions (the
+        // exact worst case). A timeout is conclusive proof the directory is
+        // too big, so split unconditionally rather than comparing against
+        // `maxBatchDurationMs` — that ceiling and `commandTimeout` are
+        // independent settings and either may be the larger one.
+        driftFound += batch.files.length
+        const entry: ReconcileScanEntry = {
+          completedAt: this._now(),
+          files: [...batch.files],
+        }
+        // A partial answer is a lower bound, so it may only ADD: replacing the
+        // directory's contribution here would retract rows an earlier batch
+        // legitimately found in the part this run never reached.
+        for (const file of entry.files) this._upsertDriftRow(dir, file)
+        const subdirs = await this._listSubdirs(dir)
+        done += 1
+        pending += subdirs.length - 1
+        if (subdirs.length > 0) {
+          this._log?.(
+            `[perforce] reconcile-scan: ${dir} timed out after ${elapsed}ms — kept ${entry.files.length} drift row(s), splitting into ${subdirs.length} subdirectories`,
+          )
+          queue.push(...subdirs)
+          // Split marker with no rows — the parent's partial rows are already
+          // in the drift set, so the marker only resumes later sessions at
+          // the subdirectories.
+          await this._writeReconcileScanSplitCheckpoint(key)
+          this._setScanProgress(done, pending, undefined, driftFound)
+          continue
+        }
+        this._log?.(
+          `[perforce] reconcile-scan: ${dir} timed out after ${elapsed}ms — kept ${entry.files.length} drift row(s), no subdirectories to split; leaving un-checkpointed`,
+        )
+        this._setScanProgress(done, pending, undefined, driftFound)
+        continue
+      }
+      driftFound += batch.files.length
+      const entry: ReconcileScanEntry = {
+        completedAt: this._now(),
+        files: [...batch.files],
+        // Warm prior for the next session's budget prediction: a
+        // measurement beats any size estimate, so persist it with the
+        // result.
+        elapsedMs: elapsed,
+      }
+      this._acceptReconcileScanEntry(dir, entry)
+      batches++
+      done += 1
+      pending -= 1
+      // Split only a slow batch that FOUND drift. A slow-but-clean directory
+      // (a huge tree whose hashing cost is inherent, not a sign of scattered
+      // drift) would be re-hashed by every child batch if split — the parent
+      // already hashed the whole subtree, so splitting multiplies the total
+      // work by depth for zero new information. Checkpoint it as a result
+      // and let the freshness ceiling schedule the rescan instead.
+      if (entry.files.length > 0 && elapsed > this._reconcileScanMaxBatchMs) {
+        const subdirs = await this._listSubdirs(dir)
+        if (subdirs.length > 0) {
+          this._log?.(
+            `[perforce] reconcile-scan: ${dir} took ${elapsed}ms — splitting into ${subdirs.length} subdirectories`,
+          )
+          queue.push(...subdirs)
+          pending += subdirs.length
+          // Checkpoint the split itself (no hints — the parent's result was
+          // published just above): the subdirectory checkpoints as they land
+          // are the actual resume points, and the marker makes the next
+          // session enqueue the subdirectories instead of re-running the
+          // same slow parent batch.
+          await this._writeReconcileScanSplitCheckpoint(key)
+          this._setScanProgress(done, pending, undefined, driftFound)
+          continue
+        }
+      }
+      // Checkpoint: `wrap` with a fetch that just returns the value persists
+      // it (immutable namespace mirrors to disk).
+      await this._cache.wrap(P4CacheNs.reconcileScan, key, async () => JSON.stringify(entry))
+      this._setScanProgress(done, pending, undefined, driftFound)
+    }
+    // Per-file fresh verification: each scope FILE (a focus entry that names
+    // one file, not a directory) is re-examined every session by a narrow
+    // `reconcile -n` and NEVER checkpointed. A file entry fed to the
+    // directory phase instead would become the filespec `<file>/...` — a
+    // no-such-file p4 answers as clean (exit 0, empty) — and that empty
+    // answer would be checkpointed forever, so the file's real drift would
+    // never be re-queried (the bug this phase exists to kill). The query is
+    // per-session and uncached precisely so "clean now" and "drifted now"
+    // both reflect the disk at this moment.
+    const { rows: scopeFileRows, completed } = await this._verifyReconcileScopeFiles(signal)
+    if (!completed) return
+    driftFound += scopeFileRows
+    if (signal.aborted) {
+      this._log?.('[perforce] reconcile-scan cancelled; checkpoints kept')
+      return
+    }
+    // Final flush so the group settles in the same tick the scan does — see
+    // _flushDriftApply.
+    this._flushDriftApply()
+    this._log?.(
+      `[perforce] reconcile-scan complete: ${batches} batch(es), ${done} directories, ${driftFound} drift file(s)`,
+    )
+  }
+
+  /**
+   * Per-file fresh verification of the scope FILES (a focus entry that names
+   * one file, not a directory): a narrow per-session query, never
+   * checkpointed. Returns the rows it found, plus whether it ran to the end —
+   * `false` means the client was disposed, the run was cancelled or the
+   * connection dropped mid-way, which the caller must keep propagating as an
+   * early return rather than treat as an answer.
+   */
+  private async _verifyReconcileScopeFiles(
+    signal: AbortSignal,
+  ): Promise<{ rows: number; completed: boolean }> {
+    if (this._reconcileScopeFiles.length === 0) return { rows: 0, completed: true }
+    if (this._disposed || signal.aborted || this._connection !== 'connected') {
+      return { rows: 0, completed: false }
+    }
+    const existing = this._reconcileScopeFiles.filter((p) => this._scopeFileExists(p))
+    if (existing.length === 0) return { rows: 0, completed: true }
+    this._log?.(
+      `[perforce] reconcile-scan: verifying ${existing.length} scope file(s) fresh (uncached)`,
+    )
+    const { covered, rows } = await this._queryWorkingTreeRows(existing)
+    if (this._disposed || signal.aborted) return { rows: 0, completed: false }
+    this._applyDriftFromWatcher(covered, rows)
+    return { rows: rows.length, completed: true }
+  }
+
+  /**
+   * The whole-scope δ scan: ONE `p4delta --json` call answers every scope
+   * directory at once (that is the engine's point), and its rows then exit
+   * through the same drift / progress / checkpoint pipeline the native walk
+   * uses.
+   *
+   * Returns true when this round has an answer: a fresh whole-scope checkpoint
+   * was replayed, the run concluded, or the round was cancelled. Returns false
+   * when δ could not answer, and the caller re-runs the same scope natively —
+   * a failed engine must never be read as "nothing drifted".
+   *
+   * A cancel (the user's, or the connection dropping, which aborts the same
+   * source) is NOT a failure and does not count toward the fallback ladder:
+   * nothing said the engine is broken, and the native re-run would only spawn
+   * doomed children.
+   */
+  private async _runP4deltaReconcileScan(
+    engine: P4deltaService,
+    scopeDirs: readonly string[],
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    const started = this._now()
+    this._scanProgress = {
+      done: 0,
+      pending: P4DELTA_SCAN_PHASE_TOTAL,
+      driftFound: 0,
+      // δ's ladder is 1-based (`start` is index 0 + 1); the run's own progress
+      // records only arrive with its result, so `start` is what the readout
+      // shows for the whole call.
+      phase: 'start',
+      step: 1,
+      startedAt: this._now(),
+    }
+    this._emitChange()
+
+    // One checkpoint for the whole scope: a fresh one IS the answer, so it is
+    // replayed with zero spawns — the same "a hit is a result" semantics the
+    // native path gives a scanned directory.
+    const key = this._reconcileScanKey(this.root)
+    const cached = await this._cache.wrap(P4CacheNs.reconcileScan, key, async () => undefined)
+    if (this._disposed || signal.aborted) return true
+    if (cached !== undefined) {
+      const cachedEntry = parseReconcileScanEntry(cached)
+      if (
+        cachedEntry !== undefined &&
+        cachedEntry.split !== true &&
+        this._now() - cachedEntry.completedAt <= RECONCILE_SCAN_MAX_CHECKPOINT_AGE_MS
+      ) {
+        this._acceptWholeScopeDrift(cachedEntry.files)
+        this._flushDriftApply()
+        this._log?.(
+          `[perforce] reconcile-scan: p4delta whole-scope checkpoint hit (${cachedEntry.files.length} drift row(s), no spawn)`,
+        )
+        return true
+      }
+      // Unusable (a shape no reader can consume) or past the freshness ceiling:
+      // drop it and rescan, rather than replay an answer that proves nothing.
+      this._cache.invalidate(P4CacheNs.reconcileScan, key)
+      this._log?.(
+        `[perforce] reconcile-scan: p4delta checkpoint ${cachedEntry === undefined ? 'unusable' : 'expired'}; rescanning`,
+      )
+    }
+
+    const args = this._buildP4deltaScanArgs(scopeDirs)
+    this._log?.(
+      `[perforce] reconcile-scan: p4delta covering ${scopeDirs.length} scope dir(s) in one run`,
+    )
+    const result = await engine.run(args, { priority: 'background', signal })
+    if (this._disposed || signal.aborted) return true
+    // The human-readable report (and the engine's own warnings — including the
+    // timestamp-shortcut line) rides stderr; the service collects it, so it is
+    // replayed here into the Perforce output channel.
+    for (const line of result.log) this._log?.(`  p4delta: ${line}`)
+    this._applyP4deltaProgress(result.progress)
+
+    const failure = this._p4deltaRunFailure(result)
+    if (failure !== undefined) {
+      this._p4deltaFailures += 1
+      if (this._p4deltaFailures >= P4DELTA_MAX_CONSECUTIVE_FAILURES) this._p4deltaDisarmed = true
+      this._log?.(
+        `[perforce] reconcile-scan: p4delta did not answer — ${failure}; rerunning this round on p4` +
+          (this._p4deltaDisarmed
+            ? ` (engine disabled for this session after ${this._p4deltaFailures} consecutive failures; scans stay on p4 until the engine is reconfigured)`
+            : ` (${this._p4deltaFailures}/${P4DELTA_MAX_CONSECUTIVE_FAILURES})`),
+      )
+      return false
+    }
+    this._p4deltaFailures = 0
+
+    const summary = summarizeRun(result)
+    const files = this._dropOpenedRows(toReconcileFiles(result.records, this.root))
+    const unmatched = summary?.unmatched ?? 0
+    const elapsed = this._now() - started
+    this._setScanProgress(
+      P4DELTA_SCAN_PHASE_TOTAL,
+      0,
+      undefined,
+      files.length,
+      'done',
+      P4DELTA_SCAN_PHASE_TOTAL,
+    )
+    const entry: ReconcileScanEntry = {
+      completedAt: this._now(),
+      files: [...files],
+      elapsedMs: elapsed,
+    }
+    this._acceptWholeScopeDrift(entry.files)
+    this._flushDriftApply()
+    // `wrap` with a fetch that just returns the value persists it; the key was
+    // just probed, so there is nothing to overwrite.
+    await this._cache.wrap(P4CacheNs.reconcileScan, key, async () => JSON.stringify(entry))
+    // Scope files are re-verified fresh every session and never checkpointed —
+    // the same per-file rule the native path follows, `completed` included: a
+    // dispose/cancel mid-way is not an answer, so the round must not report
+    // itself complete (the δ part already landed; there is nothing to fall back
+    // to, and the caller's `true` only means "this round did not fail").
+    const { rows: scopeFileRows, completed } = await this._verifyReconcileScopeFiles(signal)
+    if (!completed) {
+      this._log?.('[perforce] reconcile-scan cancelled; checkpoints kept')
+      return true
+    }
+    this._log?.(
+      `[perforce] reconcile-scan complete (p4delta): ${files.length} drift file(s) in ${elapsed}ms` +
+        (scopeFileRows > 0 ? `, ${scopeFileRows} scope file(s) verified` : '') +
+        (unmatched > 0 ? `, ${unmatched} scope entry(ies) matched nothing` : ''),
+    )
+    return true
+  }
+
+  /** Build δ's argv for one scan round.
+   *
+   * `--json` selects the machine contract, `--no-scope-file` keeps the scope the
+   * editor owns (the user's focus folders / excludes, not someone's
+   * `.p4delta-scope`), `--client-root` saves the engine a `p4 info` round-trip,
+   * and `--no-revert-groups` brings the `open` classification down to
+   * line-for-line `p4 reconcile -a -e -d`.
+   *
+   * The scope entries are the scanned directories plus the exclusions, all in
+   * ONE call — δ applies the exclusions itself, which is why the native carve
+   * (a spec list per clean subtree) is not needed here. Exclusions must be
+   * complete: an omitted one would pull a directory the user excluded back into
+   * the scan. Paths go out verbatim (no p4 `%xx` escaping) — the contract makes
+   * that the consumer's rule, and δ treats an entry literally. The `--`
+   * separator keeps a `-`-prefixed exclusion a positional entry instead of an
+   * option.
+   */
+  private _buildP4deltaScanArgs(scopeDirs: readonly string[]): string[] {
+    const entries = scopeDirs.map((dir) => p4deltaScopeEntry(dir, false))
+    for (const dir of this._reconcileExcludeDirs) {
+      // Only the exclusions inside the scanned scope matter: one outside it
+      // shields nothing the scan could otherwise reach (`_isExcluded` already
+      // dropped any scope dir that sits under an exclusion).
+      if (isUnderAny(dir, scopeDirs)) entries.push(p4deltaScopeEntry(dir, true))
+    }
+    return [
+      '--json',
+      '--no-scope-file',
+      '--client-root',
+      this.root,
+      '--no-revert-groups',
+      '--',
+      ...entries,
+    ]
+  }
+
+  /**
+   * Why a δ run does not count as an answer, or undefined when it does.
+   *
+   * The contract's hard rules: a stream without a `summary` has no conclusion
+   * (killed, crashed, cancelled), a non-JSON stdout line means the binary is
+   * not the engine we think it is, and exit 2 is a usage error. `ok:false` is a
+   * partial stream too — except `no-entry-matched`, which is the complete,
+   * correct answer for a scope whose entries are all gone (an emptied focus
+   * folder), not a failure.
+   */
+  private _p4deltaRunFailure(result: P4deltaRunResult): string | undefined {
+    if (result.sawNonJsonStdout) return 'stdout carried a non-JSON line'
+    if (result.code === 2) return 'usage error (exit 2)'
+    const summary = summarizeRun(result)
+    if (summary === undefined) {
+      return `no summary (exit ${result.code}${result.signal !== null ? `, signal ${result.signal}` : ''})`
+    }
+    // A summary for another mode answered a different question — a wiring bug,
+    // an engine that picked its own default, or a build whose contract moved.
+    // Reading its records as this run's answer is how a scan ends up publishing
+    // (and CHECKPOINTING) a set the caller never asked about; a wrong answer
+    // must reach the fallback ladder, never the drift set.
+    if (summary.mode !== 'open') {
+      return `summary reports mode ${summary.mode ?? '<none>'} (expected open)`
+    }
+    if (!summary.ok && summary.reason !== 'no-entry-matched') {
+      return `run failed (${summary.reason ?? 'error'})`
+    }
+    return undefined
+  }
+
+  /**
+   * Replay δ's stderr `kind:"progress"` records onto the scan readout. The
+   * records arrive with the run's result (the service collects them), so this
+   * is the phase ladder as it was walked, not a live feed — the phase text and
+   * its messages are still what the status bar and the output channel show for
+   * the round.
+   *
+   * `done`/`pending` keep the "done + pending is this run's total" invariant by
+   * counting phases: there are no directories to count when one call covers
+   * everything. The last ordinal phase (`done`) ends on the total, so the
+   * readout reads as complete just before the progress clears.
+   */
+  private _applyP4deltaProgress(progress: readonly P4deltaRecord[]): void {
+    for (const record of progress) {
+      const phase = typeof record['phase'] === 'string' ? record['phase'] : undefined
+      const step = typeof record['step'] === 'number' ? record['step'] : undefined
+      const message = typeof record['message'] === 'string' ? record['message'] : undefined
+      if (message !== undefined) {
+        this._log?.(`  p4delta: ${phase ?? 'progress'} — ${message}`)
+      }
+      const total = typeof record['total'] === 'number' ? record['total'] : P4DELTA_SCAN_PHASE_TOTAL
+      const done = phase === 'done' ? total : Math.max(0, (step ?? 1) - 1)
+      this._setScanProgress(
+        done,
+        Math.max(0, total - done),
+        undefined,
+        this._scanProgress?.driftFound ?? 0,
+        phase,
+        step,
+      )
+    }
   }
 
   /** The checkpoint key for one scanned directory — the focus fingerprint plus
@@ -4578,12 +5610,18 @@ export class PerforceClient {
     return `${this._reconcileScanFingerprint()}:${dir}`
   }
 
-  /** A stable fingerprint of the reconcile scope AND its exclusions: the sorted,
-   *  case-folded scope directories plus the sorted, case-folded exclude
-   *  directories hashed together, so any focus or exclude change invalidates the
-   *  whole checkpoint batch — an exclude change must orphan the old checkpoints,
-   *  or a directory scanned without the exclusion would replay as if still
-   *  authoritative. */
+  /** A stable fingerprint of the reconcile scope, its exclusions AND the engine
+   *  the round runs on: the sorted, case-folded scope directories plus the
+   *  sorted, case-folded exclude directories plus `native`/`p4delta` hashed
+   *  together, so any focus, exclude or engine change invalidates the whole
+   *  checkpoint batch. An exclude change must orphan the old checkpoints, or a
+   *  directory scanned without the exclusion would replay as if still
+   *  authoritative; the engine marker keeps the two engines' checkpoints from
+   *  ever aliasing — δ's snapshot is whole-scope while a native one is
+   *  per-directory, and replaying either as the other would publish rows for a
+   *  different scope. Switching engines therefore orphans the other's
+   *  checkpoints on purpose: they are correct answers to a question this
+   *  session is no longer asking. */
   private _reconcileScanFingerprint(): string {
     const scopeDirs = this._reconcileScopeDirs.length > 0 ? this._reconcileScopeDirs : [this.root]
     const scopeCanonical = scopeDirs
@@ -4594,7 +5632,7 @@ export class PerforceClient {
       .map((dir) => scopeKey(dir))
       .sort()
       .join('\n')
-    const canonical = `${scopeCanonical}--exclude--${excludeCanonical}`
+    const canonical = `${scopeCanonical}--exclude--${excludeCanonical}--engine--${this._reconcileScanEngine}`
     return createHash('sha1').update(canonical).digest('hex').slice(0, 16)
   }
 
@@ -4678,6 +5716,20 @@ export class PerforceClient {
    */
   private _acceptReconcileScanEntry(dir: string, entry: ReconcileScanEntry): void {
     this._mergeDriftFromScan(dir, entry.files)
+  }
+
+  /**
+   * Accept a WHOLE-SCOPE δ answer — a fresh run or a replayed snapshot. It is
+   * authoritative for every row the scope covers, so it replaces the drift set
+   * outright rather than merging into one directory's contribution: a δ
+   * snapshot answers the scope in one shot, and merging it as if it were the
+   * root's own contribution would leave rows an earlier round of the OTHER
+   * engine left behind under its own ownership key (the keys are engine-
+   * specific, see {@link _reconcileScanEngine}).
+   */
+  private _acceptWholeScopeDrift(files: readonly ReconcileFile[]): void {
+    this._clearDrift()
+    this._mergeDriftFromScan(this.root, files)
   }
 
   /** Replace `dir`'s contribution to the drift set with `files`. Also drops the
@@ -4951,12 +6003,27 @@ export class PerforceClient {
     const notes: string[] = []
     const progress = this._scanProgress
     if (progress !== undefined) {
-      notes.push(
-        localize('perforce.group.reconcile.scanning', 'scanning {0}/{1}', {
-          0: progress.done,
-          1: progress.done + progress.pending,
-        }),
-      )
+      if (progress.phase !== undefined) {
+        // δ's ladder again: `done`/`pending` are phase ordinals there, so the
+        // group title names the phase instead of printing numbers that read as
+        // directory counts (the status bar renders the same ladder —
+        // {@link scanPhaseOrdinal} keeps the two in step).
+        const { step, total } = scanPhaseOrdinal(progress)
+        notes.push(
+          localize('perforce.group.reconcile.scanPhase', 'scanning {0} ({1}/{2})', {
+            0: progress.phase,
+            1: step,
+            2: total,
+          }),
+        )
+      } else {
+        notes.push(
+          localize('perforce.group.reconcile.scanning', 'scanning {0}/{1}', {
+            0: progress.done,
+            1: progress.done + progress.pending,
+          }),
+        )
+      }
     }
     if (this._driftShown < this._driftTotal) {
       notes.push(
@@ -5356,14 +6423,15 @@ export class PerforceClient {
 
   /** Fold a mutation's own reverted paths back into the drift set, in place of the
    *  watcher events the mutation suppressed. Each path is spelled by the same rule
-   *  the watcher flush uses ({@link _querySpecsFor}): a directory — and a path
-   *  that is GONE, which is the case that matters here, since a `revert -k` on a
-   *  directory deleted on disk leaves the files opened but absent — needs its
-   *  `<path>/...` form, because a bare path names no file at all. A `reconcile -n`
-   *  returns the still-diverged rows (a file the mutation un-opened is no longer
-   *  in `_openedPaths`, so it is no longer filtered out), and each is upserted
-   *  exactly like {@link _applyDriftFromWatcher}. A failed query just leaves drift
-   *  where the next session's scan will find it — never recorded as clean. */
+   *  the watcher flush uses ({@link _narrowQuerySpecsFor}): a directory — and a
+   *  path that is GONE, which is the case that matters here, since a `revert -k`
+   *  on a directory deleted on disk leaves the files opened but absent — needs its
+   *  `<path>/...` form, because a bare path names no file at all. A narrow query
+   *  ({@link _narrowQueryBatch}) returns the still-diverged rows (a file the
+   *  mutation un-opened is no longer in `_openedPaths`, so it is no longer
+   *  filtered out), and each is upserted exactly like
+   *  {@link _applyDriftFromWatcher}. A failed query just leaves drift where the
+   *  next session's scan will find it — never recorded as clean. */
   private async _reapplyDriftForMutation(paths: readonly string[]): Promise<void> {
     const specs: string[] = []
     for (const path of paths) {
@@ -5371,7 +6439,7 @@ export class PerforceClient {
         specs.push(path)
         continue
       }
-      const built = await this._querySpecsFor(path, await this._pathKind(path))
+      const built = await this._narrowQuerySpecsFor(path, await this._pathKind(path))
       if (built === undefined) {
         this._log?.(
           `[perforce] revert -k: no usable filespec for ${path} (excluded subtree that could not be carved); its drift is left to the next scan`,
@@ -5382,9 +6450,9 @@ export class PerforceClient {
     }
     if (specs.length === 0) return
     // A `revert -k`'d file is no longer opened, but `_openedPaths` is still the
-    // pre-mutation refresh snapshot. `_reconcileScanBatch` filters rows by it,
-    // so the row would be dropped before it reaches the drift set. Remove the
-    // reverted paths up front so the query's answer lands.
+    // pre-mutation refresh snapshot. The narrow query filters rows by it, so the
+    // row would be dropped before it reaches the drift set. Remove the reverted
+    // paths up front so the query's answer lands.
     for (const path of paths) {
       if (path.endsWith('/...')) {
         const dir = path.slice(0, -4)
@@ -5396,7 +6464,7 @@ export class PerforceClient {
       }
     }
     try {
-      const result = await this._reconcileScanBatch(specs)
+      const result = await this._narrowQueryBatch(specs)
       if (result === undefined || this._disposed || !result.files.length) return
       for (const file of result.files) {
         if (!file.clientFile) continue
@@ -5411,15 +6479,19 @@ export class PerforceClient {
   }
 
   /**
-   * Discard working-tree changes for not-yet-opened files (`p4 clean -a -e -d`):
-   * re-adds files deleted on disk, deletes files added on disk, and reverts
-   * edited-on-disk content back to the have revision. Destructive (local edits
-   * are lost) — the command layer confirms first. `p4 clean` takes the `<dir>/...`
-   * recursive syntax natively, so directory targets need no expansion here.
+   * Discard working-tree changes for not-yet-opened files: re-adds files deleted
+   * on disk, deletes files added on disk, and reverts edited-on-disk content back
+   * to the have revision. Destructive (local edits are lost) — the command layer
+   * confirms first. `p4 clean` takes the `<dir>/...` recursive syntax natively,
+   * so directory targets need no expansion here.
+   *
+   * Native is `p4 clean -a -e -d`; δ's `--clean -a` is the same direction
+   * ({@link _mutateWrite}), and inherits this operation's
+   * {@link CONTENT_TRANSFER_EXEC} policy — no watchdog, cancel signal only.
    */
   async revertReconcile(paths: readonly string[]): Promise<boolean> {
     if (paths.length === 0) return false
-    return this._mutate('clean', ['clean', '-a', '-e', '-d'], paths, CONTENT_TRANSFER_EXEC)
+    return this._mutateWrite('clean', paths)
   }
 
   /**

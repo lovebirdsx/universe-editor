@@ -154,10 +154,12 @@ interface FakeClient {
   cancelBusy: Mock
   isReconcileTargetExcluded(path: string): boolean
   containsAnyReconcileExclude(dir: string): boolean
+  reconcileUsesP4delta: boolean
   reconcile: Mock
   sync: Mock
   openedStateAmong: Mock
   openedInTree: Mock
+  openedInTrees: Mock
   revert: Mock
   revertReconcile: Mock
   changelistOf: Mock
@@ -197,6 +199,7 @@ function makeFakeClient(): FakeClient {
   fake.cancelBusy = vi.fn()
   fake.isReconcileTargetExcluded = (p) => isUnderAny(p, fake.reconcileExcludeDirs)
   fake.containsAnyReconcileExclude = (d) => containsAny(d, fake.reconcileExcludeDirs)
+  fake.reconcileUsesP4delta = false
   fake.reconcile = vi.fn(async () => {})
   fake.sync = vi.fn(async () => ({
     ok: true,
@@ -208,6 +211,7 @@ function makeFakeClient(): FakeClient {
   }))
   fake.openedStateAmong = vi.fn(async () => new Map())
   fake.openedInTree = vi.fn(async () => ({ files: [], unknown: false }))
+  fake.openedInTrees = vi.fn(async () => ({ files: [], unknown: false }))
   fake.revert = vi.fn(async () => {})
   fake.revertReconcile = vi.fn(async () => {})
   fake.changelistOf = vi.fn(() => undefined)
@@ -547,6 +551,183 @@ describe('perforce.revert clean gating', () => {
     expect(windowMock.showInformationMessage).toHaveBeenCalledWith(ALL_EXCLUDED)
     expect(fake.revert).not.toHaveBeenCalled()
     expect(fake.revertReconcile).not.toHaveBeenCalled()
+  })
+})
+
+/** The command layer's δ fork: when the client reports that its writes run on
+ *  δ, every carve point passes the unexcluded targets through as their own
+ *  `<dir>/...` (the engine applies the exclusions inside the write call), so no
+ *  readdir walk happens and no carve warning can — while the "everything
+ *  excluded" answer stays this layer's. */
+describe('carve points under the δ engine', () => {
+  const REFUSAL = {
+    ok: false,
+    cancelled: false,
+    summary: undefined,
+    refusedFiles: [],
+    refusedOverwriteFiles: [],
+    error: { kind: 'clobber', suggestion: "can't update modified file" },
+  }
+
+  beforeEach(() => {
+    fake.reconcileUsesP4delta = true
+  })
+
+  it('multi-select: recursive specs, excluded entries dropped, nothing carved', async () => {
+    fake.reconcileExcludeDirs = [join(SRC, 'gen')]
+    await runCommand('perforce.reconcile', { isDirectory: false }, [
+      { resourceUri: SRC, isDirectory: true },
+      { resourceUri: join(SRC, 'gen', 'skip.txt'), isDirectory: false },
+      { resourceUri: `${ROOT}/keep.txt`, isDirectory: false },
+    ])
+    expect(fake.reconcile).toHaveBeenCalledWith([`${SRC}/...`, `${ROOT}/keep.txt`])
+    expect(readdirMock).not.toHaveBeenCalled()
+    expect(windowMock.showWarningMessage).not.toHaveBeenCalled()
+  })
+
+  it('multi-select: still reports all-excluded without spawning', async () => {
+    fake.reconcileExcludeDirs = [SRC]
+    await runCommand('perforce.reconcile', { isDirectory: false }, [
+      { resourceUri: SRC, isDirectory: true },
+    ])
+    expect(windowMock.showInformationMessage).toHaveBeenCalledWith(ALL_EXCLUDED)
+    expect(fake.reconcile).not.toHaveBeenCalled()
+  })
+
+  it('single directory target: `<dir>/...` instead of a carve around the excluded subtree', async () => {
+    fake.reconcileExcludeDirs = [join(SRC, 'gen')]
+    await runCommand('perforce.reconcile', { resourceUri: SRC, isDirectory: true })
+    expect(fake.reconcile).toHaveBeenCalledWith([`${SRC}/...`])
+    expect(readdirMock).not.toHaveBeenCalled()
+    expect(windowMock.showWarningMessage).not.toHaveBeenCalled()
+  })
+
+  it('collect-after-refusal passes the unexcluded targets through uncarved', async () => {
+    fake.reconcileExcludeDirs = [join(SRC, 'gen')]
+    fake.sync.mockResolvedValueOnce(REFUSAL)
+    windowMock.showErrorMessage.mockResolvedValueOnce(BTN_COLLECT)
+    await runCommand('perforce.syncLatest', { resourceUri: SRC, isDirectory: true })
+    expect(fake.reconcile).toHaveBeenCalledWith([`${SRC}/...`])
+    expect(readdirMock).not.toHaveBeenCalled()
+  })
+
+  it('revert hands clean the whole directory instead of a carve', async () => {
+    fake.reconcileExcludeDirs = [join(SRC, 'gen')]
+    fake.openedInTree.mockResolvedValueOnce({ files: [], unknown: false })
+    windowMock.showWarningMessage.mockResolvedValue(BTN_REVERT)
+    await runCommand('perforce.revert', { resourceUri: SRC, isDirectory: true })
+    expect(fake.revertReconcile).toHaveBeenCalledWith([`${SRC}/...`])
+    expect(readdirMock).not.toHaveBeenCalled()
+    expect(windowMock.showWarningMessage).not.toHaveBeenCalledWith(CARVE_FAILED)
+  })
+})
+
+/** The metacharacter gate on top of the δ fork: the client's own "spec δ cannot
+ *  read → run on p4" guard has no way back to the raw paths (it sees the
+ *  escaped spec list), so an un-carved `<dir>/...` for a path containing a p4
+ *  filespec metacharacter would land on native p4 with the exclusions applied by
+ *  nobody — `p4 clean` deleting inside an excluded directory, and a collect
+ *  opening files the user filtered out. The raw paths exist only at these four
+ *  carve points, so the gate is the carve fork's: metachar-free targets go over
+ *  uncarved, anything else takes the carve path (whose products are exactly the
+ *  shapes the client routes native). */
+describe('carve points under the δ engine — paths δ cannot read', () => {
+  const WEIRD = `${ROOT}/50%_stuff`
+
+  it('multi-select: one metacharacter target carves the whole call', async () => {
+    fake.reconcileUsesP4delta = true
+    fake.reconcileExcludeDirs = [join(WEIRD, 'gen')]
+    readdirMock.mockImplementation(async (d: string) => {
+      if (d === WEIRD) return [dir('gen'), dir('ok')]
+      throw new Error('unexpected readdir')
+    })
+    await runCommand('perforce.reconcile', { isDirectory: false }, [
+      { resourceUri: WEIRD, isDirectory: true },
+      { resourceUri: `${ROOT}/plain`, isDirectory: true },
+    ])
+    // Both targets carved: the call is one p4 invocation, so a metacharacter in
+    // ONE target is enough to take every entry off the δ spelling.
+    expect(fake.reconcile).toHaveBeenCalledWith([
+      `${ROOT}/50%25_stuff/*`,
+      `${ROOT}/50%25_stuff/ok/...`,
+      `${ROOT}/plain/...`,
+    ])
+  })
+
+  it('single directory target: a metacharacter forces the carve', async () => {
+    fake.reconcileUsesP4delta = true
+    fake.reconcileExcludeDirs = [join(WEIRD, 'gen')]
+    readdirMock.mockImplementation(async (d: string) => {
+      if (d === WEIRD) return [dir('gen'), dir('ok')]
+      throw new Error('unexpected readdir')
+    })
+    await runCommand('perforce.reconcile', { resourceUri: WEIRD, isDirectory: true })
+    expect(fake.reconcile).toHaveBeenCalledWith([
+      `${ROOT}/50%25_stuff/*`,
+      `${ROOT}/50%25_stuff/ok/...`,
+    ])
+  })
+
+  it('collect-after-refusal: a metacharacter target carves instead of passing through', async () => {
+    fake.reconcileUsesP4delta = true
+    fake.reconcileExcludeDirs = [join(WEIRD, 'gen')]
+    readdirMock.mockImplementation(async (d: string) => {
+      if (d === WEIRD) return [dir('gen'), dir('ok')]
+      throw new Error('unexpected readdir')
+    })
+    fake.sync.mockResolvedValueOnce({
+      ok: false,
+      cancelled: false,
+      summary: undefined,
+      refusedFiles: [],
+      refusedOverwriteFiles: [],
+      error: { kind: 'clobber', suggestion: "can't update modified file" },
+    })
+    windowMock.showErrorMessage.mockResolvedValueOnce(BTN_COLLECT)
+    await runCommand('perforce.syncLatest', { resourceUri: WEIRD, isDirectory: true })
+    expect(fake.reconcile).toHaveBeenCalledWith([
+      `${ROOT}/50%25_stuff/*`,
+      `${ROOT}/50%25_stuff/ok/...`,
+    ])
+  })
+
+  it('revert: a metacharacter directory is carved instead of handed to clean whole', async () => {
+    fake.reconcileUsesP4delta = true
+    fake.reconcileExcludeDirs = [join(WEIRD, 'gen')]
+    fake.openedInTree.mockResolvedValueOnce({ files: [], unknown: false })
+    readdirMock.mockImplementation(async (d: string) => {
+      if (d === WEIRD) return [dir('gen'), dir('ok')]
+      throw new Error('unexpected readdir')
+    })
+    windowMock.showWarningMessage.mockResolvedValue(BTN_REVERT)
+    await runCommand('perforce.revert', { resourceUri: WEIRD, isDirectory: true })
+    expect(fake.revertReconcile).toHaveBeenCalledWith([
+      `${ROOT}/50%25_stuff/*`,
+      `${ROOT}/50%25_stuff/ok/...`,
+    ])
+  })
+
+  it('revert: an unopened metacharacter FILE forces the whole clean call to carve', async () => {
+    fake.reconcileUsesP4delta = true
+    fake.reconcileExcludeDirs = [join(SRC, 'gen')]
+    // The file entry carries no carve of its own and the client will route the
+    // whole call native for it, so the directory must not ride along un-carved.
+    fake.openedStateAmong.mockResolvedValueOnce(new Map())
+    fake.openedInTrees.mockResolvedValueOnce({ files: [], unknown: false })
+    readdirMock.mockImplementation(async (d: string) => {
+      if (d === SRC) return [dir('gen'), dir('ok')]
+      throw new Error('unexpected readdir')
+    })
+    windowMock.showWarningMessage.mockResolvedValue(BTN_REVERT)
+    await runCommand('perforce.revert', { resourceUri: SRC, isDirectory: true }, [
+      { resourceUri: SRC, isDirectory: true },
+      { resourceUri: `${ROOT}/we@ird.txt` },
+    ])
+    expect(fake.revertReconcile).toHaveBeenCalledWith([
+      `${SRC}/*`,
+      `${join(SRC, 'ok')}/...`,
+      `${ROOT}/we@ird.txt`,
+    ])
   })
 })
 
