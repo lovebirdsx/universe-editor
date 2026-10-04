@@ -90,7 +90,7 @@ contributions/index.ts / actions/index.ts            注册以上
 - **改新建/重命名的输入交互**：对应 action + `IDialogService.prompt`。
 - **改右键菜单项/顺序/可见条件**：`ExplorerMenuContribution.ts`；新 context key 在 `ExplorerContextMenu.tsx`（行属性类）或 `ExplorerClipboardContextContribution.ts`（剪贴板类）里 set。
 - **改树的懒加载/刷新/watcher/exclude**：`ExplorerTreeService` 的 `_loadChildren`/`refresh`/`_onWatcherEvents`/`_onExcludeChange`/`_syncWatch`。
-- **改 compact 折叠**：`_computeCompactChildren`/`_isSingleDirChild`/`_eagerLoadForCompact`（service）+ ExplorerTreeNode 的 segments。红线：补链只挂 dataSource.loadChildren/refresh/_refreshLoadedNodes 三处，**绝不下沉进 `_loadChildren`**（闭环递归）；链成形由 `_compactChainReady` 守（行 id 是链尾，晚成形静默丢焦点）。论证见 `cases-tree-state.md`。
+- **改 compact 折叠**：`_computeCompactChildren`/`_isSingleDirChild`/`_eagerLoadForCompact`（service）+ ExplorerTreeNode 的 segments。红线：补链只挂 dataSource.loadChildren 和刷新共用的 _reloadNodes，**绝不下沉进 `_loadChildren`**（闭环递归）；链成形由 `_compactChainReady` 守（行 id 是链尾，晚成形静默丢焦点）。论证见 `cases-tree-state.md`。
 - **改自动 reveal / active-editor 标记**：`ExplorerAutoRevealContribution.ts`。
 - **rename/move 后要联动别的**：监听 `onDidRunFileOperation`。
 

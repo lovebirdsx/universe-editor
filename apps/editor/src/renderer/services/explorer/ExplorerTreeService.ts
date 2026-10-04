@@ -481,14 +481,19 @@ export class ExplorerTreeService extends Disposable {
     }
   }
 
-  /** Force re-read of a directory's entries, keeping its expanded state. */
-  async refresh(resource: URI): Promise<void> {
-    const node = this._ensureNode(resource)
-    const anchors = this._captureCompactAnchors()
-    await this._loadChildren(resource, node)
-    await this._ensureCompactChainsFor(node.children ?? [])
-    this._model.refresh()
-    this._remapSelectionToCompact(anchors)
+  /** 重读目录；显式递归刷新只覆盖已加载的后代，保留展开状态。 */
+  async refresh(resource: URI, recursive = false): Promise<void> {
+    const resources = [resource]
+    if (recursive) {
+      for (const [key, node] of this._nodes) {
+        const child = URI.parse(key)
+        if (node.children !== null && !sameUri(resource, child) && isDescendant(resource, child)) {
+          resources.push(child)
+        }
+      }
+      this._logger.debug(`refresh subtree ${resource.toString()} directories=${resources.length}`)
+    }
+    await this._reloadNodes(resources)
   }
 
   /**
@@ -849,17 +854,21 @@ export class ExplorerTreeService extends Disposable {
     for (const [key, node] of this._nodes) {
       if (node.children !== null) loaded.push(URI.parse(key))
     }
+    void this._reloadNodes(loaded)
+  }
+
+  private async _reloadNodes(resources: readonly URI[]): Promise<void> {
     const anchors = this._captureCompactAnchors()
-    void Promise.all(loaded.map((u) => this._loadChildren(u, this._ensureNode(u))))
-      .then(() =>
-        Promise.all(
-          loaded.map((u) => this._ensureCompactChainsFor(this._ensureNode(u).children ?? [])),
-        ),
-      )
-      .then(() => {
-        this._model.refresh()
-        this._remapSelectionToCompact(anchors)
-      })
+    await Promise.all(
+      resources.map((resource) => this._loadChildren(resource, this._ensureNode(resource))),
+    )
+    await Promise.all(
+      resources.map((resource) =>
+        this._ensureCompactChainsFor(this._ensureNode(resource).children ?? []),
+      ),
+    )
+    this._model.refresh()
+    this._remapSelectionToCompact(anchors)
   }
 
   /**
@@ -1242,12 +1251,7 @@ export class ExplorerTreeService extends Disposable {
     return node.pending
   }
 
-  /**
-   * Prefetch the single-directory chain of every directory in a listing, so the
-   * rows render compacted on the first frame. Call sites are the three points
-   * that are about to render a listing — never `_loadChildren` itself, which
-   * would re-enter through the recursion below with the depth count reset.
-   */
+  /** 补链只在加载或刷新后渲染前执行；不可从 _loadChildren 调用，否则会重置深度并递归整棵树。 */
   private async _ensureCompactChainsFor(children: readonly IExplorerEntry[]): Promise<void> {
     await Promise.all(
       children.filter((c) => c.isDirectory).map((c) => this._eagerLoadForCompact(c.resource)),

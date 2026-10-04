@@ -44,7 +44,8 @@ export function ExplorerViewToolbar() {
         disabled={!hasRoot}
         onClick={() => {
           const root = tree.root
-          if (root) void tree.refresh(root)
+          // 递归重读：外部新增的嵌套目录（已展开子目录内）在监听漏报时也能刷新出来，保留展开状态。
+          if (root) void tree.refresh(root, true)
         }}
       >
         <RefreshCw size={14} strokeWidth={1.75} aria-hidden="true" />

@@ -25,7 +25,7 @@
 
 压缩行的 id 是**链尾**，晚成形会让行 id 变化并静默丢焦点。所以链的成形时机由 `_compactChainReady` 守：`getChildren` 发现某子目录的链只缓存了一半就返回 `null`，让 `TreeModel.expand` 把它路由回 `loadChildren` 补链。
 
-补链只挂 `dataSource.loadChildren` / `refresh` / `_refreshLoadedNodes` 三处，**绝不下沉进 `_loadChildren`**（会闭环递归整棵树）。链因文件系统变化伸缩时靠 `_captureCompactAnchors`（重读**之前**）+ `_remapSelectionToCompact`（之后）把焦点迁到新行。
+补链只挂 `dataSource.loadChildren` 和刷新共用的 `_reloadNodes`，**绝不下沉进 `_loadChildren`**（会闭环递归整棵树）。链因文件系统变化伸缩时靠 `_captureCompactAnchors`（重读**之前**）+ `_remapSelectionToCompact`（之后）把焦点迁到新行。
 
 ## watcher 冷启动延迟
 

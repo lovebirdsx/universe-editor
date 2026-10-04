@@ -18,10 +18,15 @@ import {
   type ILoggerService as ILoggerServiceType,
   type INotificationService as INotificationServiceType,
 } from '@universe-editor/platform'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { OpenWithDefaultAppAction, activeEditorSelectionText } from '../fileOpenActions.js'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  OpenWithDefaultAppAction,
+  RefreshExplorerAction,
+  activeEditorSelectionText,
+} from '../fileOpenActions.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
+import { IExplorerTreeService } from '../../services/explorer/ExplorerTreeService.js'
 
 function fakeSelection(text: string, isEmpty = false) {
   return { isEmpty: () => isEmpty, __text: text }
@@ -168,5 +173,52 @@ describe('OpenWithDefaultAppAction', () => {
     expect(host.opened).toHaveLength(0)
     expect(notification.notified).toHaveLength(1)
     expect(notification.notified[0]?.severity).toBe(Severity.Info)
+  })
+})
+
+interface FakeTree {
+  root: URI | null
+  refresh: ReturnType<typeof vi.fn>
+}
+
+async function runRefresh(tree: FakeTree, arg?: unknown): Promise<void> {
+  const services = new ServiceCollection()
+  services.set(IExplorerTreeService, tree as unknown as never)
+  const inst = new InstantiationService(services)
+  await inst.invokeFunction(async (accessor) => {
+    const cmd = CommandsRegistry.getCommand(RefreshExplorerAction.ID)!
+    await cmd.handler(accessor, ...(arg === undefined ? [] : [arg]))
+  })
+}
+
+describe('RefreshExplorerAction', () => {
+  const disposables: Array<{ dispose(): void }> = []
+  beforeEach(() => {
+    disposables.push(registerAction2(RefreshExplorerAction))
+  })
+  afterEach(() => {
+    while (disposables.length > 0) disposables.pop()?.dispose()
+  })
+
+  it('refreshes the workspace root recursively when invoked without a target', async () => {
+    const root = URI.file('/ws')
+    const refresh = vi.fn().mockResolvedValue(undefined)
+    await runRefresh({ root, refresh })
+
+    expect(refresh).toHaveBeenCalledTimes(1)
+    expect(refresh.mock.calls[0]?.[0]?.toString()).toBe(root.toString())
+    // 递归为 true：重读已加载的子目录，外部新增的嵌套目录才能显示。
+    expect(refresh.mock.calls[0]?.[1]).toBe(true)
+  })
+
+  it('recurses into the right-clicked directory only, staying on that subtree', async () => {
+    const root = URI.file('/ws')
+    const dir = URI.file('/ws/packages')
+    const refresh = vi.fn().mockResolvedValue(undefined)
+    await runRefresh({ root, refresh }, { resource: dir.toJSON(), isDirectory: true })
+
+    expect(refresh).toHaveBeenCalledTimes(1)
+    expect(refresh.mock.calls[0]?.[0]?.toString()).toBe(dir.toString())
+    expect(refresh.mock.calls[0]?.[1]).toBe(true)
   })
 })

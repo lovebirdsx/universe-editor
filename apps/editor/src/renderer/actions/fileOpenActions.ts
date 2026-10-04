@@ -232,6 +232,7 @@ export class RefreshExplorerAction extends Action2 {
         : (parentArg ?? parentOf(resourceArg) ?? resourceArg)
       : tree.root
     if (!resource) return
-    await tree.refresh(resource)
+    // 递归重读该资源下已加载的子目录（右键时只作用于该子树），保留展开状态。
+    await tree.refresh(resource, true)
   }
 }
