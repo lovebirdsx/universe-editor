@@ -543,6 +543,27 @@ markdown job（ubuntu，CI run 31295361355）`markdownPreview.spec.ts:205` 与 `
 修：直接执行快捷键绑定的 `workbench.action.focusLeftGroup` / `focusRightGroup`，保留活动 URI、光标符号及左右组面包屑正反断言，不改产品、不放宽 timeout。全库扫描同类 defocus/chord：`smoke.editorGroupSwitch` 专测键盘路径，已有 bringToFront，保留真实按键；其余场景已有命令式切组，无需迁移。与案例 48 互参：真快捷键测试不能用命令替代。
 锚：`apps/editor/e2e/specs/smoke.breadcrumbs.spec.ts`、`smoke.editorGroupSwitch.spec.ts`。
 
+**案例 97 — 反向断言「日志为空」其实是一场赛跑：窄查跟随引擎，首次扫描前它就是原生（产品设计，不是 fallback）**
+信号：`extensions/perforce` 的 `perforceP4deltaScan`（@p1/@regression）在 CI 上 initial+retry 同形态挂，失败点 `expect(readArgvLog(p4Log)).toEqual([])`，received 恰**一条** `-Mj reconcile -n -a -e -d clean.txt drifted.txt`——**逐文件**窄查、无任何目录形态。本地稳过，同一 commit 40 分钟前的 run 该项 success（期间只有不参与 e2e 构建的单测文件改动）。
+根因（读产品文档定案，不是猜）：`_reconcileScanEngine` 初值是 `'native'`，只有一轮扫描**证明** δ 之后才翻成 `'p4delta'`；窄查跟随该引擎，所以「首次扫描前 / disarm 后 / 每次 `setP4delta` 之后」的窄查**本来就是原生**（`docs/reconcile.md` 第 13 条）。本 spec 挑起的窄查全是逐文件的（改写种子文件、Explorer 提示问单文件），于是「原生日志为空」只在 δ 的扫描结论**抢赢**第一条逐文件窄查时才成立——一个赛跑窗口，不是产品具有的性质；CI 慢机器上窄查先发即红。
+修（断言强度不变，判据换成形态）：断言改为「原生日志里没有**目录形态**的 spec」——`line.includes('/...') || line.includes('/*')`。原生扫描按目录递归（`buildScopeFilespec(dir, true)` → `<dir>/...`；`reconcileCarve` 的分层扫描 → `<dir>/*`），本 spec 的窄查**不可能**带这两种形态，所以目录 spec 出现即等于原生扫描跑了。
+**信号验证（这一步别省）**：临时把 fixture 切到 `p4delta: { fail: 'crash-scan' }`（只崩预览、`-a` 照常），原生日志实测出现 `<root>/...` 行，新断言在 initial 轮**确实变红**（`+ Received + 3`）⇒ 没有把断言弱化到永不失败。同一次日志还给了判据的旁证：`<root>/...`（扫描）与 `clean.txt drifted.txt`（窄查）**同框**，两种形态一眼可核。验完把临时改动回滚干净。
+**同族扫描（本 skill 第 7 条要求）**：全仓 grep `readArgvLog` 找到另两处同名断言——`perforceP4deltaContract.spec.ts` 那条**安全**（该文件不启 Electron，日志只记本测试自己 spawn 的进程，无竞态）；`perforceP4deltaWrite.spec.ts` 那条**同样暴露**（`checkWorkingTree` 是宿主驱动、与文件是否被改写无关，任何 spec 都可能先吃到一条逐文件原生窄查），同批改判「**没有不带 `-n` 的行**」：全仓原生 `reconcile` 只有两种拼法（`client.ts` grep 可枚举）——`reconcile -n -a -e -d …`（干跑：扫描批 + 全部窄查）与 `reconcile -a -e -d …`（收集写），逐字差分就是 `-n`；原生的清理写是 `clean -a …`，**不进这条日志**（fake 只记 `reconcile`），那个方向由该 spec 的 `--clean -a` 正向断言守。判据换成「无 `-n`」后，设计内的原生窄查不再误伤，而真 fallback 的原生收集仍被抓住——覆盖强度不减。
+
+教训：a) **反向断言的强度要挂在被测行为的固有形态上，别挂在「某个通道一次都没出现」**——后者往往只在时序恰好时成立（同族：案例 1/2 的 count 波动、案例 83 裸 fire 命令的副作用）。b) 产品文档里写明的「这是设计」比日志更权威（本例一条 `docs/reconcile.md` 第 13 条直接定案），改断言前先读它。c) **改完反向断言必须做信号验证**：用 fixture 的故障档把坏行为真造出来，确认仍红；否则可能只是把断言弱化到永不失败。fake 的故障档（`crash-scan`/`nosummary`…）正是为此存在。d) spec 里「只在时序恰当时成立」的前提，注释要写清它**为什么不是产品属性**，否则下一个人会当成回归又把它改回去。e) **形态判据要能从代码里枚举**：把该命令的全部拼法 grep 出来，判据必须是这些拼法的逐字差分（这里是 `-n`），而不是凭印象的近似——枚举完还能顺带发现「有哪些形态根本进不了这条日志」这类覆盖缺口。
+锚：`extensions/perforce/e2e/specs/perforceP4deltaScan.spec.ts`；`extensions/perforce/docs/reconcile.md`（第 13 条：窄查跟随扫描选定的引擎）；`extensions/perforce/src/client.ts`（`_reconcileScanEngine` 初值 `'native'`）；`extensions/perforce/src/p4Filespec.ts`（`buildScopeFilespec` / `buildLevelFilespec` 两个目录形态的来源）；`extensions/perforce/e2e/fixtures/perforceApp.ts`（`p4delta: { fail }`）；`extensions/perforce/e2e/fixtures/fake-p4delta.mjs`（故障档与 argv 日志）。
+
+---
+
+**案例 98 — `type` + `Enter` 的盲打组合是诊断黑洞：门控不透明，只有「对话框没关」这一条线索**
+信号：`apps/editor` 的 `smoke.languageMode`「change language mode switches the language and Auto Detect restores it」（@p1）在 CI 上 `QuickInputPO.waitForHidden` 超时 30s、quick-input 持续可见，retry 同形态；**同一 commit 重跑（新 runner）success**，本地 3/3 稳过。
+定性：重跑即绿 ⇒ 低频环境噪音（非回归），但失败现场只说明「对话框没关」——分不清是按键没落进输入框（焦点竞态：面板挂载时自聚焦，而编辑器组的激活 effect `focusEditorInput` 在慢 runner 上可能迟到）还是列表接受路径没走通（`useDeferredValue` 的旧列表被 accept）。
+**已排除的第二个假设（别再追）**：陈旧列表被 accept（案例 74 那类）——产品侧**已经修好**：`QuickInputPanel` 的 Enter 分支在 `deferredFilterText !== filterText` 时会用实时文本同步重算并 accept 最佳匹配（`listIsCurrent` 分支），不会静默丢弃。且该假设与失败形态不自洽：若焦点丢到编辑器，Enter 根本到不了面板（面板的 React onKeyDown 不触发）→ 面板永不关闭，正是观察到的样子。故按焦点一侧加固。
+**同族扫描（本 skill 第 7 条要求）**：脚本扫过全部 245 个 spec，`keyboard.type` 后 9 行内按 Enter 且中间无落字断言的有 20 处，其中十余处是往 QuickInput/命令面板盲打（`smoke.commandPalette` / `smoke.quickAccess` / `smoke.commandPaletteItemButtons` / `smoke.gitGraphGoToSymbol` / `smoke.keybindings` / `smoke.output` …），形态与本例同源（都是「等 visible → 打字 → Enter → 等 hidden」）。**本轮不批量加门控**：这些用例长期 CI 稳定、曝光未证实，且各自面板的前缀不同（命令面板预填 `>`、文件对话框带目录语义），逐处改写的风险大于收益。判据留档：**若其中某个 spec 出现「overlay 等 hidden 超时且元素一直可见」的形态，按本案处理**（打字前 `input.focus()` + Enter 前断言落字）。
+修（就位门控，非放宽断言）：打字前 `await workbench.quickInput.input.focus()` 重新钉住焦点，`Enter` 前 `await expect(input).toHaveValue('Markdown')` 断言落字。正常路径零行为差异（焦点本就在、字本就落），异常时失败点从「对话框没关」**前移到**「按键落在哪」。
+教训：a) `type` + `Enter` 这类盲打在失败现场是**信息黑洞**——按键打给了谁、字有没有落都没留痕；补一条落字断言的代价几乎为零，把可诊断性买回来（同族：案例 73 的 EditContext 落字赛跑、案例 5 的盲按污染被测对象）。b) 焦点类就位门控优先用 `locator.focus()` 而非 `click()`——后者有 hit-target 检查，被遮挡时会引入**新的**失败模式（案例 42 的遮挡指纹）。c) 判为环境 flake ≠ 什么都不做：可以加零风险的就位门控提升下次的诊断价值，但**不要**改产品、也不要放宽被测断言（本 skill 第一原则）。d) 分类依据要留档：同 commit 重跑即绿是「瞬时竞态」的硬证据，比「本地稳过」强得多。
+锚：`apps/editor/e2e/specs/smoke.languageMode.spec.ts`；`packages/workbench-ui/src/feedback/quickInput/QuickInputPanel.tsx`（挂载时 `inputRef.focus()`、accept 时校验 `deferredFilterText === filterText`）；`apps/editor/src/renderer/workbench/editor/EditorGroupView.tsx`（activation effect 的 `focusEditorInput`）；`apps/editor/src/renderer/main.tsx`（`bootstrapFocusSettled` 链，本 spec 已在 describe 级 beforeEach 门控）。
+
 ---
 - `@parcel/watcher` Windows 多 worker 竞态的长期根治（升级 / 换 watcher / 进一步隔离），替代长期 `--workers=1`（案例 12/16/26/44 的 `@serial` 都是它的 workaround）。
 - DnD 用例稳定化（显式等待 drop 完成态），稳定后摘 `@flaky`（案例 46）。

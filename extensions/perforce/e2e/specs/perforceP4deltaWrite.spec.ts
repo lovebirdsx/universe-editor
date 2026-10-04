@@ -189,9 +189,21 @@ test.describe('@p1 perforce p4delta writes', () => {
       await expect.poll(() => groupIdsFor(drifted.relPath), { timeout: 30_000 }).toEqual(['default'])
     })
 
-    // Neither write ever fell back to the native engine: the native argv log —
-    // which records every `reconcile`/`clean` the extension hands to p4 itself —
-    // is still empty. A single fallback would have logged its full argv here.
-    expect(readArgvLog(p4Log)).toEqual([])
+    // Neither write ever fell back to the native engine. The log records every
+    // `reconcile` the extension hands to p4 itself, and the two native shapes it
+    // can carry are told apart by `-n`: a dry run (`reconcile -n -a -e -d …`) is
+    // the scan batch and the narrow queries, an APPLY (`reconcile -a -e -d …`) is
+    // the collect. A native Clean (`clean -a …`) is a different command and never
+    // reaches this log at all — the `--clean -a` assertion above is what guards
+    // that direction.
+    //
+    // So the predicate is "no apply", not "the log is empty": a narrow query
+    // issued before the first scan round IS native by design — `_reconcileScanEngine`
+    // starts at 'native' and only a proven scan round flips it (docs/reconcile.md)
+    // — so an empty log held only while the δ verdict won the race against the
+    // host's first `checkWorkingTree` batch. That race is not a property the
+    // product has.
+    const nativeApplies = readArgvLog(p4Log).filter((line) => !/(^| )-n( |$)/.test(line))
+    expect(nativeApplies).toEqual([])
   })
 })

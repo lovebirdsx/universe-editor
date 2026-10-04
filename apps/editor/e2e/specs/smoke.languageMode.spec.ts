@@ -93,7 +93,15 @@ test.describe('@p1 language mode', () => {
       void window.__E2E__!.runCommand('workbench.action.editor.changeLanguageMode')
     })
     await workbench.quickInput.waitForVisible()
+    // Re-assert the field's focus before typing. The panel focuses it on mount,
+    // but the editor group's own activation focus (`focusEditorInput`) can land
+    // after that on a loaded runner — the keystrokes then go to the editor and
+    // the picker never closes. Idempotent when nothing raced it.
+    await workbench.quickInput.input.focus()
     await page.keyboard.type('Markdown')
+    // The text must have landed before Enter confirms: a keystroke lost to a
+    // focus race would otherwise surface only as "Enter accepted nothing".
+    await expect(workbench.quickInput.input).toHaveValue('Markdown')
     await page.keyboard.press('Enter')
     await workbench.quickInput.waitForHidden()
     await expect.poll(() => statusBarTexts(workbench)).toContain('Markdown')
@@ -102,7 +110,9 @@ test.describe('@p1 language mode', () => {
       void window.__E2E__!.runCommand('workbench.action.editor.changeLanguageMode')
     })
     await workbench.quickInput.waitForVisible()
+    await workbench.quickInput.input.focus()
     await page.keyboard.type('Auto Detect')
+    await expect(workbench.quickInput.input).toHaveValue('Auto Detect')
     await page.keyboard.press('Enter')
     await workbench.quickInput.waitForHidden()
     await expect.poll(() => statusBarTexts(workbench)).toContain('Dotenv')

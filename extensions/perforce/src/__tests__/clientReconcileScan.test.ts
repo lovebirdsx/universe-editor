@@ -4212,7 +4212,7 @@ describe('PerforceClient narrow queries — δ engine', () => {
       expect(argv).toContain(`-${excluded}/...`)
       expect(reconcileScans()).toEqual([])
     } finally {
-      rmSync(realDir, { recursive: true, force: true })
+      removeDirWithRetry(realDir)
     }
   })
 
@@ -4243,7 +4243,7 @@ describe('PerforceClient narrow queries — δ engine', () => {
       expect(specs.some((s) => s.includes('50%25_stuff/*'))).toBe(true)
       expect(specs.some((s) => s.includes('excluded'))).toBe(false)
     } finally {
-      rmSync(realDir, { recursive: true, force: true })
+      removeDirWithRetry(realDir)
     }
   })
 

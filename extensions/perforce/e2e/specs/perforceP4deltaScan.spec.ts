@@ -8,13 +8,16 @@
  *      scope round (the contract switches + the scope entries after `--`),
  *    - surface the drift where the user sees it: the Changes group row and the
  *      Explorer's RM badge,
- *    - and leave the native engine completely unasked: the native argv log — the
- *      record of every `reconcile` the EXTENSION hands to p4 — stays empty, which
- *      is the only evidence that no silent per-directory fallback ran.
+ *    - and leave the native SCAN unasked: no line in the native argv log — the
+ *      record of every `reconcile` the EXTENSION hands to p4 — describes a
+ *      directory (`<dir>/...` or `<dir>/*`), which is the only evidence that no
+ *      silent per-directory fallback ran. (Not "the log is empty": the narrow
+ *      queries this spec provokes are per-file, and one of them IS native by
+ *      design before the first scan round proves δ — see the assertion.)
  *
  *  Both engines write the SAME disk state (one shared fake state file), so the
  *  panel assertions alone could be satisfied by either one. The logs are what
- *  tell them apart, and the "native never ran" half is asserted last, after every
+ *  tell them apart, and the "no native scan" half is asserted last, after every
  *  positive assertion has settled.
  *--------------------------------------------------------------------------------------------*/
 
@@ -42,7 +45,7 @@ test.describe('@p1 perforce p4delta scan', () => {
     },
   })
 
-  test('routes the drift scan to δ, shows the drift, and never spawns native reconcile @regression', async ({
+  test('routes the drift scan to δ, shows the drift, and never scans with native @regression', async ({
     page,
     workbench,
     perforce,
@@ -103,8 +106,7 @@ test.describe('@p1 perforce p4delta scan', () => {
     // one rides the engine too, which the log proves below).
     await expect
       .poll(
-        () =>
-          page.evaluate((s) => window.__E2E__!.getScmGroupIdsForResource(s), drifted.relPath),
+        () => page.evaluate((s) => window.__E2E__!.getScmGroupIdsForResource(s), drifted.relPath),
         { timeout: 60_000, message: 'the drifted file should land in the Changes group' },
       )
       .toContain('reconcile')
@@ -151,10 +153,22 @@ test.describe('@p1 perforce p4delta scan', () => {
       await page.evaluate((s) => window.__E2E__!.getScmGroupIdsForResource(s), clean.relPath),
     ).toEqual([])
 
-    // Finally the negative half: no native reconcile ran anywhere in this session
-    // — not the scan, not the narrow query. A single fallback would have logged a
-    // line here, so an empty log is the proof that δ carried the whole round.
-    expect(readArgvLog(p4Log)).toEqual([])
+    // Finally the negative half: the drift SCAN never fell back to native. A
+    // native scan walks the scope directory by directory, so its argv carries a
+    // recursive `<dir>/...` (or a carved `<dir>/*`) spec — and every narrow query
+    // THIS spec provokes is per-file (a seeded file is rewritten, the Explorer
+    // hint asks about single files), so a directory spec here can only be the
+    // scan.
+    //
+    // Deliberately not "the log is empty": a narrow query issued before the first
+    // scan round IS native by design — `_reconcileScanEngine` starts at 'native'
+    // and only a proven scan round flips it (docs/reconcile.md) — so an empty log
+    // held only while the δ verdict happened to win the race against the first
+    // per-file query. That race is not a property the product has.
+    const nativeScans = readArgvLog(p4Log).filter(
+      (line) => line.includes('/...') || line.includes('/*'),
+    )
+    expect(nativeScans).toEqual([])
   })
 })
 
