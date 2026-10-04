@@ -3,6 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
+import * as kernel from '../../base/path.js'
 import {
   arePathsEqual,
   basename,
@@ -281,5 +282,41 @@ describe('toDisplayPath', () => {
 
   it('does not treat a colon in a later segment as a drive', () => {
     expect(toDisplayPath('/a/E:/b')).toBe('/a/E:/b')
+  })
+})
+
+describe('leaf re-export', () => {
+  // base/path.ts is a pure re-export of the shared leaf. Identity (not just
+  // equal behaviour) is what keeps it that way: a local copy would pass every
+  // case above while silently forking from the SDK's copy again.
+  it('every kernel helper is the leaf function itself', async () => {
+    const leaf = await import('@universe-editor/primitives')
+    for (const name of [
+      'arePathsEqual',
+      'basename',
+      'dirname',
+      'expandHomeDir',
+      'extname',
+      'getPathComparisonKey',
+      'isAbsolutePath',
+      'isCaseInsensitive',
+      'joinPath',
+      'normalizeDriveLetter',
+      'normalizeFsPath',
+      'pathSeparator',
+      'relativePath',
+      'relativePathUnder',
+      'toDisplayPath',
+    ] as const) {
+      expect(kernel[name], name).toBe(leaf[name])
+    }
+  })
+
+  it('does not re-export the leaf helpers that are not kernel API', async () => {
+    const kernel = await import('../../base/index.js')
+    // strip-all semantics contradict this layer's strip-one baseline; the barrel
+    // turns every export here into platform's public surface, so it stays out.
+    expect('normalizeSlashes' in kernel).toBe(false)
+    expect('parseUriComponents' in kernel).toBe(false)
   })
 })

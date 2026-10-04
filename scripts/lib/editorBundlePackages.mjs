@@ -22,6 +22,7 @@ import { dirname, join, resolve } from 'node:path'
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 
 export const EDITOR_BUNDLE_PACKAGES = [
+  { pkg: '@universe-editor/primitives', main: 'src', renderer: 'src' },
   { pkg: '@universe-editor/platform', main: 'src', renderer: 'src' },
   { pkg: '@universe-editor/node-services', main: 'src' },
   { pkg: '@universe-editor/workbench-ui', renderer: 'src' },

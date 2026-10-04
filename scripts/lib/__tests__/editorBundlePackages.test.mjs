@@ -58,10 +58,11 @@ test('src 模式项的 src/index.ts 存在', () => {
   }
 })
 
-test('inputDirsFor: main 吃 6 项、renderer 吃 4 项（含 extension-gallery/dist）', () => {
+test('inputDirsFor: main 吃 7 项、renderer 吃 5 项（含 extension-gallery/dist）', () => {
   assert.deepEqual(
     inputDirsFor('main').map((p) => p.slice(REPO_ROOT.length + 1).split(sep).join('/')),
     [
+      'packages/primitives/src',
       'packages/platform/src',
       'packages/node-services/src',
       'packages/extensions-common/dist',
@@ -73,6 +74,7 @@ test('inputDirsFor: main 吃 6 项、renderer 吃 4 项（含 extension-gallery/
   assert.deepEqual(
     inputDirsFor('renderer').map((p) => p.slice(REPO_ROOT.length + 1).split(sep).join('/')),
     [
+      'packages/primitives/src',
       'packages/platform/src',
       'packages/workbench-ui/src',
       'packages/extensions-common/src',
@@ -83,17 +85,23 @@ test('inputDirsFor: main 吃 6 项、renderer 吃 4 项（含 extension-gallery/
 
 test('aliasMapFor / externExcludesFor / optimizeExcludesFor 输出快照', () => {
   const mainAlias = aliasMapFor('main')
-  assert.deepEqual(Object.keys(mainAlias), ['@universe-editor/platform', '@universe-editor/node-services'])
+  assert.deepEqual(Object.keys(mainAlias), [
+    '@universe-editor/primitives',
+    '@universe-editor/platform',
+    '@universe-editor/node-services',
+  ])
   for (const target of Object.values(mainAlias)) {
     assert.ok(target.endsWith(`${sep}src${sep}index.ts`), `alias target not src/index.ts: ${target}`)
   }
   const rendererAlias = aliasMapFor('renderer')
   assert.deepEqual(Object.keys(rendererAlias), [
+    '@universe-editor/primitives',
     '@universe-editor/platform',
     '@universe-editor/workbench-ui',
     '@universe-editor/extensions-common',
   ])
   assert.deepEqual(externExcludesFor('main'), [
+    '@universe-editor/primitives',
     '@universe-editor/platform',
     '@universe-editor/node-services',
     '@universe-editor/extensions-common',
@@ -102,16 +110,18 @@ test('aliasMapFor / externExcludesFor / optimizeExcludesFor 输出快照', () =>
     '@universe-editor/extension-packaging',
   ])
   assert.deepEqual(optimizeExcludesFor('renderer'), [
+    '@universe-editor/primitives',
     '@universe-editor/platform',
     '@universe-editor/workbench-ui',
     '@universe-editor/extensions-common',
   ])
 })
 
-test('packagesRequiringDist: 除 workbench-ui 外的 6 项', () => {
+test('packagesRequiringDist: 除 workbench-ui 外的 7 项', () => {
   assert.deepEqual(
     packagesRequiringDist().map((e) => e.pkg),
     [
+      '@universe-editor/primitives',
       '@universe-editor/platform',
       '@universe-editor/node-services',
       '@universe-editor/extensions-common',

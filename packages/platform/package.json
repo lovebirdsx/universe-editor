@@ -20,6 +20,9 @@
     "dev": "tsgo --build --watch",
     "clean": "tsgo --build --clean"
   },
+  "dependencies": {
+    "@universe-editor/primitives": "workspace:*"
+  },
   "devDependencies": {
     "@universe-editor/config-ts": "workspace:*",
     "eslint": "catalog:",

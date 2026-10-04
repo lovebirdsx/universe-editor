@@ -42,6 +42,7 @@ export function activate() {
 
 ## 相关包
 
+- [`@universe-editor/primitives`](https://www.npmjs.com/package/@universe-editor/primitives) — 本包的依赖（零依赖基础件：URI 编解码 / 路径助手）。**内部包，不对扩展作者承诺 API**，随本包自动安装，请勿直接依赖
 - [`@universe-editor/extension-manifest`](https://www.npmjs.com/package/@universe-editor/extension-manifest) — 激活事件构造器 / manifest 类型与校验 / `engines.universe` 协商
 - [`@universe-editor/extension-packaging`](https://www.npmjs.com/package/@universe-editor/extension-packaging) — VSIX 打包
 

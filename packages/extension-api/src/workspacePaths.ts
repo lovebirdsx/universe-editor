@@ -4,16 +4,15 @@
  * cannot reach the platform's path-identity services, so the OS case policy is
  * applied locally (Windows-only case folding, for the containment comparison
  * only — the returned path keeps the caller's casing).
+ *
+ * The slash normalization itself lives in `@universe-editor/primitives`,
+ * shared with the kernel's path helpers — only the policy on top (case folding,
+ * the "outside the root → return the input untouched" contract) stays here.
  */
 
-const _isWindows = typeof process === 'object' && process.platform === 'win32'
+import { basename, normalizeSlashes } from '@universe-editor/primitives'
 
-/** Forward-slash form without trailing slashes (a root `/` is kept). */
-function normalizeSlashes(p: string): string {
-  let out = p.replace(/\\/g, '/')
-  while (out.length > 1 && out.endsWith('/')) out = out.slice(0, -1)
-  return out
-}
+const _isWindows = typeof process === 'object' && process.platform === 'win32'
 
 function foldForCompare(p: string): string {
   return _isWindows ? p.toLowerCase() : p
@@ -21,9 +20,7 @@ function foldForCompare(p: string): string {
 
 /** Basename of a workspace root path, tolerating either separator. */
 export function workspaceFolderName(root: string): string {
-  const norm = normalizeSlashes(root)
-  const idx = norm.lastIndexOf('/')
-  return idx === -1 ? norm : norm.slice(idx + 1)
+  return basename(normalizeSlashes(root))
 }
 
 /**

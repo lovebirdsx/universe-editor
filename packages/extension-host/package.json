@@ -23,6 +23,7 @@
     "@types/node": "catalog:",
     "@universe-editor/config-ts": "workspace:*",
     "@universe-editor/platform": "workspace:*",
+    "@universe-editor/primitives": "workspace:*",
     "@universe-editor/temp-root": "workspace:*",
     "esbuild": "catalog:",
     "eslint": "catalog:",

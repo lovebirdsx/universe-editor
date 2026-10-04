@@ -8,6 +8,7 @@
 
 | 包 | 版本规则 | 内容 |
 |---|---|---|
+| `@universe-editor/primitives` | 独立 semver（0.x，无稳定性承诺），有变更才发 | 零依赖基础件：URI 编解码/规范形状 + 纯文本路径助手。**随 `extension-api` 传递安装，不对扩展作者承诺 API** |
 | `@universe-editor/extension-api` | **版本号 = 编辑器 App 版本**（0.13.0 起单一版本空间，对齐 VSCode 的 product version 即 API 版本），bump 走 [COMPATIBILITY.md](../../packages/extension-api/COMPATIBILITY.md) 的破坏性变更流程（契约测试快照 + 变更记录） | API 面（Universe 版 `vscode.d.ts`） |
 | `@universe-editor/extension-manifest` | 独立 semver，有对外可见变更才发 | manifest 类型/zod 校验、激活事件构造器、`engines.universe` 协商、分类集合 |
 | `@universe-editor/extension-packaging` | 独立 semver，同上 | `createVsix` / `readVsixManifest`（`uex package` 的依赖） |
@@ -17,6 +18,8 @@
 | `@universe-editor/e2e-harness` | **minor 跟随编辑器 minor** | Playwright fixtures / 页面对象 / launch 辅助 |
 
 **版本联动注意**：`create-extension` 的 `src/sdkVersions.ts` 与 `uex` 的 `src/lib/sdkVersion.ts` 是**生成物**（`pnpm ext-packages:gen` 从 extension-api / uex / e2e-contract / e2e-harness 的 `package.json` 与 pnpm-workspace.yaml catalog 生成，勿手改）。由于 `create-extension` 内嵌 extension-api / uex / e2e-contract / e2e-harness 的版本号、`uex` 内嵌 extension-api 的版本号，bump 任一被内嵌包时必须同时 bump create-extension（bump extension-api 时还需同时 bump uex）——否则目标包 npm 发布物里仍是旧版本号，preflight 的版本耦合检查会强制拦截。
+
+`primitives` **不在上表的版本耦合里**：它不被任何包内嵌版本常量，`extension-api` 只是以 `workspace:^` **依赖**它（发布时展开为 `^0.1.0`）。纪律由此而来——**patch bump 随便发**（`^0.1.0` 仍覆盖 0.1.x），但 **minor/major bump 必须同发 extension-api**（`^0.1.0` 匹配不到 0.2.0，否则外部用户装 extension-api 时会按 npm 语义解析到旧 primitives，或直接装不上）。preflight 的依赖完整性检查只保证「被依赖的那个版本在 npm 上存在」，拦不住这种「装上了但语义不对」的漏发，靠这条纪律。
 
 `@universe-editor/extensions-common` **不在发布集合**：它的 RPC 基建（`stdioProtocol` 等）运行时依赖不可发布的 `@universe-editor/platform`。作者面模块已物理迁入 `extension-manifest`，`extensions-common` 依赖并 re-export 它，仓库内消费方零改动。
 
@@ -75,13 +78,14 @@ pnpm ext-packages:publish [-- 选项] [pkg ...]
 #    否则视为破坏性变更流程未走完，禁止发布。
 # 1. 全量校验 + 构建（dist 必须是最新）
 pnpm check
-pnpm --filter @universe-editor/extension-api --filter @universe-editor/extension-manifest --filter @universe-editor/extension-packaging --filter @universe-editor/uex --filter @universe-editor/create-extension --filter @universe-editor/e2e-contract --filter @universe-editor/e2e-harness build
+pnpm --filter @universe-editor/primitives --filter @universe-editor/extension-api --filter @universe-editor/extension-manifest --filter @universe-editor/extension-packaging --filter @universe-editor/uex --filter @universe-editor/create-extension --filter @universe-editor/e2e-contract --filter @universe-editor/e2e-harness build
 
 # 2. 内容检查点：dist 无 __tests__，LICENSE / README.md 在列
 cd packages/extension-api && npm pack --dry-run   # 其余包同样过目
 #    create-extension 额外确认 templates/ 在列、uex/create-extension 的 bin 字段指向 dist/cli.js
 
-# 3. 发布（pnpm 会把 workspace:/catalog: 协议替换为真实版本号）
+# 3. 发布（pnpm 会把 workspace:/catalog: 协议替换为真实版本号；依赖方在后）
+pnpm --filter @universe-editor/primitives publish
 pnpm --filter @universe-editor/extension-api publish
 pnpm --filter @universe-editor/extension-manifest publish
 pnpm --filter @universe-editor/extension-packaging publish
@@ -98,7 +102,7 @@ npm view @universe-editor/e2e-harness dependencies
 # 期望：vscode-languageserver-types / adm-zip / @clack/prompts 是真实版本区间；
 #       @universe-editor/* 互赖是真实版本号（不是 workspace:* / catalog:）
 
-# 5. 打 tag（extension-api 必打；另六个有发布就打）
+# 5. 打 tag（extension-api 必打；另七个有发布就打）
 git tag extension-api@0.7.1 && git push origin extension-api@0.7.1
 ```
 

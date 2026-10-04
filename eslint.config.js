@@ -52,6 +52,11 @@ export default [
   {
     // platform is the zero-dependency kernel: it must not import any other
     // workspace package (that would invert the layering it sits at the bottom of).
+    // `@universe-editor/primitives` is the single exception — it is the leaf both
+    // platform and extension-api depend on, so importing it only shortens the
+    // stack, never inverts it. Its own zero-dependency invariant is enforced by
+    // scripts/check-primitives-deps.mjs (which lint cannot express: bare builtin
+    // names, and package.json).
     files: ['packages/platform/src/**/*.{ts,tsx}'],
     rules: {
       'no-restricted-imports': [
@@ -60,9 +65,13 @@ export default [
           paths: [...pathIdentityRestrictedImports.paths],
           patterns: [
             {
-              group: ['@universe-editor/*'],
+              group: [
+                '@universe-editor/*',
+                '!@universe-editor/primitives',
+                '!@universe-editor/primitives/**',
+              ],
               message:
-                'platform is the zero-dependency kernel — it must not import other @universe-editor/* packages. Keep new shared primitives inside platform, or invert the dependency.',
+                'platform is the zero-dependency kernel — it must not import other @universe-editor/* packages (only @universe-editor/primitives, the shared leaf). Keep new shared primitives inside platform or primitives, or invert the dependency.',
             },
             {
               group: ['**/apps/**', 'apps/**'],

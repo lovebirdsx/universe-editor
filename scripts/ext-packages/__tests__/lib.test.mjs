@@ -71,9 +71,9 @@ test('compareVersions 大小比较与非法版本', () => {
   assert.throws(() => compareVersions('v0.1.0', '0.1.0'), /X\.Y\.Z/)
 })
 
-test('loadPackageManifests 读取真实 7 件套清单', () => {
+test('loadPackageManifests 读取真实 8 件套清单', () => {
   const all = loadPackageManifests(repoRoot, SDK_PACKAGE_DIRS)
-  assert.equal(all.length, 7)
+  assert.equal(all.length, 8)
   for (const p of all) {
     assert.equal(p.name, `@universe-editor/${p.shortName}`)
     assert.match(p.version, /^\d+\.\d+\.\d+$/)
@@ -385,8 +385,9 @@ test('tagName 不带 scope', () => {
   assert.equal(tagName('extension-api', '0.12.0'), 'extension-api@0.12.0')
 })
 
-test('共享清单防线：7 件套、拓扑合法、publish-sdk.mjs 引用共享常量', () => {
+test('共享清单防线：8 件套、拓扑合法、publish-sdk.mjs 引用共享常量', () => {
   assert.deepEqual(SDK_PACKAGE_DIRS, [
+    'packages/primitives',
     'packages/extension-api',
     'packages/extension-manifest',
     'packages/extension-packaging',

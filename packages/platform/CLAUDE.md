@@ -13,6 +13,8 @@
 
 `packages/platform` 是其他子包的依赖，apps 看到的是 `dist/`。改完后 `pnpm dev` 下 watcher 自动重建；离开 dev 模式手动 `pnpm --filter @universe-editor/platform build`。
 
+**唯一的 workspace 依赖是 `@universe-editor/primitives`**（零依赖叶子包，与扩展 SDK 共享 URI 编解码与路径助手）：`base/uri.ts` / `base/path.ts` 现在是「re-export + 本地扩展」——URI/路径的**机制**（编解码、归一化）在叶子里，「策略」（`$mid`、`getResourceComparisonKey`、`fsPath` 不判平台）留在本包。`eslint.config.js` 的零依赖块对 primitives 单独放行；别把它当成可以再引别的 `@universe-editor/*` 的口子。
+
 ## 目录索引
 
 ```

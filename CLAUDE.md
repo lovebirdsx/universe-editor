@@ -10,6 +10,7 @@ pnpm workspace + Turborepo 的 monorepo，全部 ESM (`"type": "module"`)。
 apps/
   editor/   Electron 43 + electron-vite              → apps/editor/CLAUDE.md
 packages/
+  primitives/     零依赖基础件（URI/路径，内核与 SDK 共用） → packages/primitives/CLAUDE.md
   platform/       VSCode 风格内核                    → packages/platform/CLAUDE.md
   config-ts/      共享 tsconfig 预设                 → packages/config-ts/CLAUDE.md
   config-eslint/  共享 ESLint flat config            → packages/config-eslint/CLAUDE.md
@@ -28,6 +29,7 @@ packages/
 | 加 E2E 冒烟场景 | `apps/editor/e2e/specs/` | `apps/editor/CLAUDE.md`（套路 F） | Playwright + `_electron`，通过 `window.__E2E__` 探针调服务；`@p0` 阻塞 CI |
 | 加 AI 供应商（provider） | `apps/editor/src/main/services/ai/providers/` | `apps/editor/CLAUDE.md`（套路 I） | 实现 `IAiModelProvider` + 一行 `registerProvider`；密钥存 `aiSettings.json`（明文 + `chmod 0600`），绝不进日志/AI Debug，UI 一律掩码 |
 | 加 platform 内核 API（DI/Event/Command） | `packages/platform/src/` | `packages/platform/CLAUDE.md` | **必须**在 `packages/platform/src/index.ts` re-export |
+| 改 URI 编解码 / 路径助手（内核与插件 SDK 共用） | `packages/primitives/src/` | `packages/primitives/CLAUDE.md` | 零依赖红线（禁 node 内置/electron/其它 workspace 包，`pnpm primitives-deps:check` 守护）；`toString()` 输出必须逐字节不变；两份实现的差异（`fsPath` 策略、`$mid`、`strict`）是设计不是 bug |
 | 调整 tsconfig 预设 | `packages/config-ts/` | `packages/config-ts/CLAUDE.md` | strict 三件套不可在子包覆盖关掉 |
 | 调整 ESLint 规则 | `packages/config-eslint/` | `packages/config-eslint/CLAUDE.md` | flat config；base + react 两套 |
 | 加扩展 API / 改插件运行时 | `packages/extension-host/` | `packages/extension-host/CLAUDE.md` | 单 host + Workspace Trust；RPC 对端是 renderer 不是 main |

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { PATH_CASES } from '@universe-editor/primitives/testing'
 import { asRelativePathImpl, workspaceFolderName } from '../workspacePaths.js'
 
 const isWindows = process.platform === 'win32'
@@ -13,6 +14,14 @@ describe('workspaceFolderName', () => {
   it('keeps a bare name as-is', () => {
     expect(workspaceFolderName('project')).toBe('project')
   })
+
+  // 与 primitives 的路径用例表同源：这一列是 SDK 侧对共享归一的消费面，
+  // 表变了这里就跟着变，不需要各自维护一份期望值。
+  for (const c of PATH_CASES) {
+    it(`table: ${c.name}`, () => {
+      expect(workspaceFolderName(c.input), c.input).toBe(c.folderName)
+    })
+  }
 })
 
 describe('asRelativePathImpl', () => {

@@ -20,7 +20,14 @@ import { mkTempDir } from '../lib/temp-root.mjs'
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const keep = process.argv.includes('--keep')
 
-const PACKAGES = ['extension-api', 'extension-manifest', 'extension-packaging', 'uex', 'create-extension']
+const PACKAGES = [
+  'primitives',
+  'extension-api',
+  'extension-manifest',
+  'extension-packaging',
+  'uex',
+  'create-extension',
+]
 
 function die(msg) {
   console.error(`error: ${msg}`)
@@ -119,9 +126,13 @@ async function main() {
       ok(`scaffolded ${template}`)
 
       // Point the generated project at the local tarballs instead of the
-      // (possibly not-yet-published) registry versions.
+      // (possibly not-yet-published) registry versions. primitives is renamed
+      // too because extension-api's tarball depends on it: on the registry it
+      // would be an E404 before its first publish, and a stale copy after —
+      // silently smoking an older codec (false green).
       const pkgPath = path.join(projectDir, 'package.json')
       const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'))
+      pkg.devDependencies['@universe-editor/primitives'] = `file:${tarballs.primitives}`
       pkg.devDependencies['@universe-editor/extension-api'] = `file:${tarballs['extension-api']}`
       pkg.devDependencies['@universe-editor/uex'] = `file:${tarballs.uex}`
       writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n')

@@ -4,90 +4,31 @@
  * across the RPC boundary): `Uri.file('C:\\x\\y').path` is the canonical
  * `/C:/x/y` form (leading slash before the drive letter). Instances are created
  * through the static factories (`file` / `parse` / `from` / `joinPath`).
+ *
+ * The percent codec, `file()` normalization, the path-join normalization and the
+ * toString / fsPath skeletons live in `@universe-editor/primitives`, shared with
+ * the kernel. What stays here is the `vscode.d.ts` surface this package promises:
+ * `parse(value, strict)`, `toString(skipEncoding)`, `from()` requiring a scheme,
+ * and the SDK's own filesystem-path policy (drive letter lower-cased, native
+ * separators on Windows — the platform's `fsPath` does neither).
  */
 
-/** Structural URI parts; JSON-serializable so it crosses the host RPC verbatim. */
-export interface UriComponents {
-  scheme: string
-  authority?: string
-  path?: string
-  query?: string
-  fragment?: string
-}
+import {
+  encodeURIComponentFast,
+  formatUri,
+  isLegalScheme,
+  joinUriPath,
+  normalizeFileUriPath,
+  parseUriComponents,
+  uriToFsPath,
+} from '@universe-editor/primitives'
+import type { UriComponents } from '@universe-editor/primitives'
 
-const _schemePattern = /^[A-Za-z][A-Za-z0-9+.-]*$/
 const _empty = ''
-const _slash = '/'
-const _regexp = /^(([^:/?#]+?):)?(\/\/([^/?#]*))?([^?#]*)(\?([^#]*))?(#(.*))?/
 
 const _isWindows = typeof process === 'object' && process.platform === 'win32'
 
-function decodeURIComponentSafe(value: string): string {
-  if (!value || value.indexOf('%') === -1) return value
-  try {
-    return decodeURIComponent(value)
-  } catch {
-    return value
-  }
-}
-
-/**
- * Encodes a single component for use in toString. Unlike `encodeURIComponent`,
- * preserves a small set of "safe" characters that are common in paths/queries.
- *
- * Unsafe code units are encoded in whole runs rather than one `charAt(pos)` at a
- * time: `charAt` splits a surrogate pair into two lone surrogates, which
- * `encodeURIComponent` rejects with `URIError`.
- */
-function encodeURIComponentFast(text: string, allowSlash: boolean): string {
-  let res: string | undefined = undefined
-  let nativeEncodePos = -1
-  for (let pos = 0; pos < text.length; pos++) {
-    const code = text.charCodeAt(pos)
-    if (
-      (code >= 97 /* a */ && code <= 122) /* z */ ||
-      (code >= 65 /* A */ && code <= 90) /* Z */ ||
-      (code >= 48 /* 0 */ && code <= 57) /* 9 */ ||
-      code === 45 /* - */ ||
-      code === 46 /* . */ ||
-      code === 95 /* _ */ ||
-      code === 126 /* ~ */ ||
-      code === 33 /* ! */ ||
-      code === 36 /* $ */ ||
-      code === 38 /* & */ ||
-      code === 39 /* ' */ ||
-      code === 40 /* ( */ ||
-      code === 41 /* ) */ ||
-      code === 42 /* * */ ||
-      code === 43 /* + */ ||
-      code === 44 /* , */ ||
-      code === 59 /* ; */ ||
-      code === 61 /* = */ ||
-      code === 58 /* : */ ||
-      code === 64 /* @ */ ||
-      (allowSlash && code === 47) /* / */
-    ) {
-      if (nativeEncodePos !== -1) {
-        if (res === undefined) res = text.substring(0, nativeEncodePos)
-        res += encodeURIComponent(text.substring(nativeEncodePos, pos))
-        nativeEncodePos = -1
-      }
-      if (res !== undefined) res += text.charAt(pos)
-    } else if (nativeEncodePos === -1) {
-      nativeEncodePos = pos
-    }
-  }
-  if (nativeEncodePos !== -1) {
-    if (res === undefined) res = text.substring(0, nativeEncodePos)
-    res += encodeURIComponent(text.substring(nativeEncodePos))
-  }
-  return res ?? text
-}
-
-/** Same safe set as a query component — reuse the encoder so it lives in one place. */
-function encodeAuthority(authority: string): string {
-  return encodeURIComponentFast(authority, false)
-}
+export type { UriComponents }
 
 /**
  * The skipEncoding form: only `#` and `?` are encoded (they would re-parse as
@@ -106,70 +47,6 @@ function encodeURIComponentMinimal(text: string): string {
     }
   }
   return res ?? text
-}
-
-function joinPaths(basePath: string, segments: readonly string[]): string {
-  let result = basePath
-  for (const seg of segments) {
-    if (!seg) continue
-    if (result.endsWith(_slash)) {
-      result += seg.startsWith(_slash) ? seg.substring(1) : seg
-    } else {
-      result += seg.startsWith(_slash) ? seg : _slash + seg
-    }
-  }
-  // Normalize: collapse `//`, resolve `.` and `..`.
-  const parts = result.split(_slash)
-  const out: string[] = []
-  for (const part of parts) {
-    if (part === '' || part === '.') {
-      if (out.length === 0) out.push(part)
-      continue
-    }
-    if (part === '..') {
-      if (out.length > 1 && out[out.length - 1] !== '..') {
-        out.pop()
-      } else if (out.length === 1 && out[0] === '') {
-        // root: ignore ../
-      } else {
-        out.push(part)
-      }
-      continue
-    }
-    out.push(part)
-  }
-  return out.join(_slash) || _slash
-}
-
-function uriToString(uri: Uri, skipEncoding: boolean): string {
-  const { scheme, authority, path, query, fragment } = uri
-  const encode = skipEncoding
-    ? encodeURIComponentMinimal
-    : (text: string, allowSlash: boolean) => encodeURIComponentFast(text, allowSlash)
-  let res = _empty
-  if (scheme) {
-    res += scheme
-    res += ':'
-  }
-  if (authority || scheme === 'file') {
-    res += _slash
-    res += _slash
-  }
-  if (authority) {
-    res += encodeAuthority(authority)
-  }
-  if (path) {
-    res += encode(path, true)
-  }
-  if (query) {
-    res += '?'
-    res += encode(query, false)
-  }
-  if (fragment) {
-    res += '#'
-    res += encode(fragment, false)
-  }
-  return res
 }
 
 export class Uri implements UriComponents {
@@ -200,21 +77,8 @@ export class Uri implements UriComponents {
    * authority (`file://server/share/...`).
    */
   static file(path: string): Uri {
-    let authority = _empty
-    let p = path.replace(/\\/g, _slash)
-    if (p.startsWith('//')) {
-      const idx = p.indexOf(_slash, 2)
-      if (idx === -1) {
-        authority = p.substring(2)
-        p = _slash
-      } else {
-        authority = p.substring(2, idx)
-        p = p.substring(idx) || _slash
-      }
-    } else if (!p.startsWith(_slash)) {
-      p = _slash + p
-    }
-    return new Uri('file', authority, p, _empty, _empty)
+    const { authority, path: uriPath } = normalizeFileUriPath(path)
+    return new Uri('file', authority, uriPath, _empty, _empty)
   }
 
   /**
@@ -222,27 +86,26 @@ export class Uri implements UriComponents {
    * a missing or illegal scheme throws instead of producing an empty Uri.
    */
   static parse(value: string, strict?: boolean): Uri {
-    const match = _regexp.exec(value)
-    if (!match) {
+    const components = parseUriComponents(value)
+    if (!components) {
       if (strict) throw new Error(`[UriError]: not a well-formed URI: "${value}"`)
       return new Uri(_empty, _empty, _empty, _empty, _empty)
     }
-    const scheme = match[2] ?? _empty
-    if (strict && !_schemePattern.test(scheme)) {
+    if (strict && !isLegalScheme(components.scheme)) {
       throw new Error(`[UriError]: scheme is missing or illegal in "${value}"`)
     }
     return new Uri(
-      scheme,
-      decodeURIComponentSafe(match[4] ?? _empty),
-      decodeURIComponentSafe(match[5] ?? _empty),
-      decodeURIComponentSafe(match[7] ?? _empty),
-      decodeURIComponentSafe(match[9] ?? _empty),
+      components.scheme,
+      components.authority,
+      components.path,
+      components.query,
+      components.fragment,
     )
   }
 
   /** Build a Uri from its components. The scheme is required and must be legal. */
   static from(components: UriComponents): Uri {
-    if (!components.scheme || !_schemePattern.test(components.scheme)) {
+    if (!components.scheme || !isLegalScheme(components.scheme)) {
       throw new Error(`[UriError]: scheme is missing or illegal: "${components.scheme}"`)
     }
     return new Uri(
@@ -265,7 +128,7 @@ export class Uri implements UriComponents {
     return new Uri(
       base.scheme,
       base.authority,
-      joinPaths(base.path, pathSegments),
+      joinUriPath(base.path, pathSegments),
       base.query,
       base.fragment,
     )
@@ -277,21 +140,7 @@ export class Uri implements UriComponents {
    * separators on Windows, forward slashes elsewhere.
    */
   get fsPath(): string {
-    let value: string
-    if (this.authority && this.path.length > 1 && this.scheme === 'file') {
-      value = `//${this.authority}${this.path}`
-    } else if (
-      this.path.charCodeAt(0) === 47 /* / */ &&
-      ((this.path.charCodeAt(1) >= 65 /* A */ && this.path.charCodeAt(1) <= 90) /* Z */ ||
-        (this.path.charCodeAt(1) >= 97 /* a */ && this.path.charCodeAt(1) <= 122)) /* z */ &&
-      this.path.charCodeAt(2) === 58 /* : */
-    ) {
-      // Windows drive letter: `/c:/x` → `c:/x`.
-      value = this.path.charAt(1).toLowerCase() + this.path.substring(2)
-    } else {
-      value = this.path
-    }
-    return _isWindows ? value.replace(/\//g, '\\') : value
+    return uriToFsPath(this, { nativeSeparators: _isWindows, lowercaseDriveLetter: true })
   }
 
   /**
@@ -300,7 +149,10 @@ export class Uri implements UriComponents {
    * characters — pass it when the components are already encoded.
    */
   toString(skipEncoding?: boolean): string {
-    return uriToString(this, skipEncoding === true)
+    return formatUri(
+      this,
+      skipEncoding === true ? encodeURIComponentMinimal : encodeURIComponentFast,
+    )
   }
 
   /** JSON form for persistence/RPC, carrying only the non-empty components. */

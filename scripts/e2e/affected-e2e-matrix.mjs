@@ -82,6 +82,7 @@ const EXTERNAL_SHARED_PATHS = [
   'packages/e2e-harness/',
   'packages/e2e-contract/',
   'packages/extension-host/',
+  'packages/primitives/',
   'packages/extension-api/',
   'scripts/e2e/',
 ]

@@ -5,6 +5,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 export const SDK_PACKAGE_DIRS = [
+  'packages/primitives',
   'packages/extension-api',
   'packages/extension-manifest',
   'packages/extension-packaging',
@@ -22,6 +23,9 @@ export const SDK_PACKAGE_SHORT_NAMES = SDK_PACKAGE_DIRS.map((dir) => dir.split('
  * 由 generate-sdk-versions.mjs 生成）。
  * 源包发布时目标包必须同发，否则目标包 npm 发布物里仍是旧版本常量，无法送达用户。
  * 键 = 源包短名，值 = 引用该源包版本常量的目标包短名列表。
+ *
+ * primitives 有意**不**入此表：它不被任何包内嵌版本常量，extension-api 只是以
+ * `workspace:^` 依赖它——依赖完整性检查已保证「被依赖的版本在 npm 上存在」，无需同发。
  */
 export const SDK_VERSION_COUPLINGS = {
   'extension-api': ['uex', 'create-extension'],
