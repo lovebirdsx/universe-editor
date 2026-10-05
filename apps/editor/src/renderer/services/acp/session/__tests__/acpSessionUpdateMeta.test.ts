@@ -173,6 +173,11 @@ describe('readSubagent', () => {
     expect(readSubagent(update({ claudeCode: { toolName: 'Task', subagent: true } }))).toBe(true)
   })
 
+  it('reads the claude tool name when the marker key is absent (0.85+ fork)', () => {
+    expect(readSubagent(update({ claudeCode: { toolName: 'Agent' } }))).toBe(true)
+    expect(readSubagent(update({ claudeCode: { toolName: 'Task' } }))).toBe(true)
+  })
+
   it('reads the codex marker, whose shape is an object', () => {
     expect(
       readSubagent(
@@ -187,6 +192,9 @@ describe('readSubagent', () => {
 
   it('returns false for an ordinary tool call', () => {
     expect(readSubagent(update({ claudeCode: { toolName: 'Bash' } }))).toBe(false)
+    // Exact match: an MCP tool whose own segment happens to be `Task` is not the
+    // sub-agent launcher.
+    expect(readSubagent(update({ claudeCode: { toolName: 'mcp__x__Task' } }))).toBe(false)
     expect(readSubagent(update({ codex: { collaboration: { tool: 'spawn_agent' } } }))).toBe(false)
   })
 

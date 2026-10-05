@@ -116,25 +116,30 @@ export function readSyntheticDenial(update: SessionUpdate): boolean {
 
 /**
  * Read the fork's sub-agent marker: true when this tool call is a sub-agent
- * card rather than an ordinary tool call. Two wire shapes, one meaning —
- * claude stamps `_meta.claudeCode.subagent: true` on Agent/Task tool uses (the
- * very calls whose `kind` is `think`, i.e. otherwise indistinguishable from a
- * thought row), codex stamps a `_meta.codex.subagent` object on its
- * subAgentActivity items (whose `kind` is only `other`). The codex details are
- * dropped on purpose: the fork already folds the agent path into the card
- * title, and the raw input still carries them. Returns false when absent or
- * malformed.
+ * card rather than an ordinary tool call. Three wire shapes, one meaning —
+ * claude stamps `_meta.claudeCode.subagent: true` on Agent/Task tool uses, but
+ * only in fork builds before 0.85: upstream moved that key under the AIR-only
+ * `_meta.jetbrains.air` namespace, which this client never receives. Current
+ * builds therefore identify the same tools by their `_meta.claudeCode.toolName`
+ * (`Agent` / `Task`) — the very calls whose `kind` is `think`, i.e. otherwise
+ * indistinguishable from a thought row. Codex stamps a `_meta.codex.subagent`
+ * object on its subAgentActivity items (whose `kind` is only `other`). The
+ * codex details are dropped on purpose: the fork already folds the agent path
+ * into the card title, and the raw input still carries them. Returns false
+ * when absent or malformed.
  */
 export function readSubagent(update: SessionUpdate): boolean {
   const meta = (
     update as {
       _meta?: {
-        claudeCode?: { subagent?: unknown } | null
+        claudeCode?: { subagent?: unknown; toolName?: unknown } | null
         codex?: { subagent?: unknown } | null
       } | null
     }
   )._meta
-  if (meta?.claudeCode?.subagent === true) return true
+  const claude = meta?.claudeCode
+  if (claude?.subagent === true) return true
+  if (claude?.toolName === 'Agent' || claude?.toolName === 'Task') return true
   const codex = meta?.codex?.subagent
   // A bare `true` is accepted too: the marker's only job here is to be truthy,
   // so a future codex simplification must not silently drop the glyph.

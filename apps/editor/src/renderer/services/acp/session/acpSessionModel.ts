@@ -154,8 +154,10 @@ export interface AcpToolCall {
    * call. Neither fork encodes it in `kind` — claude maps Agent/Task to `think`,
    * the same string a thought row carries — and it cannot be derived from
    * {@link subagentStats} either (stats are pushed late, and a resumed
-   * sub-agent card may carry none). Drives the card's sub-agent glyph.
-   * Absent for ordinary tools.
+   * sub-agent card may carry none). Claude's launches are identified by the
+   * fork's tool name (`_meta.claudeCode.toolName` `Agent`/`Task`; older builds
+   * stamped `_meta.claudeCode.subagent` instead). Drives the card's sub-agent
+   * glyph. Absent for ordinary tools.
    */
   readonly subagent?: true
   /**

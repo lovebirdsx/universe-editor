@@ -1593,10 +1593,14 @@ describe('AcpSessionService', () => {
       conn.sink.onSessionUpdate(
         taskCall('tc1', { claudeCode: { toolName: 'Task', subagent: true } }),
       )
+      // 0.85+ fork: non-AIR payloads no longer carry the `subagent` key, the
+      // tool name alone identifies the launch.
+      conn.sink.onSessionUpdate(taskCall('tc3', { claudeCode: { toolName: 'Agent' } }))
       conn.sink.onSessionUpdate(taskCall('tc2', { claudeCode: { toolName: 'Bash' } }))
 
       const byId = new Map(s.toolCalls.get().map((c) => [c.id, c]))
       expect(byId.get('tc1')?.subagent).toBe(true)
+      expect(byId.get('tc3')?.subagent).toBe(true)
       expect(byId.get('tc2')?.subagent).toBeUndefined()
     })
 

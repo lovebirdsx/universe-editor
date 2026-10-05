@@ -117,6 +117,7 @@ git push -u origin chore/update-claude-agent-acp
 - **案例 10**：vendor submodule `npm ci` 报 `Missing ... from lock file`（peer 无祖先链节点，上游依赖链演进致老 lock 失效）→ `npm install --package-lock-only --registry=https://registry.npmjs.org` 重生成，`npm ci --dry-run` 验证。与要点 8 是同一 lock 环节的两个坑。
 - **案例 11**（0.62.0→0.64.2）：上游 #881 给「丢弃子代理 text」分支加 forwardSubagentText 门控 → 我方挂分支上的副作用（用量累积）必须提升到分支决策前，否则新路径丢失；replay 强类型辅助撞 union 类型 → 补接口字段；测试尾部相邻 append 冲突在 `=======` 处补闭合括号。
 - **案例 12**（0.64.2→0.85.1，SDK 0.3.287）：升级后契约测试 `session/new` → `set_config_option` 超时——上游后台 `getContextUsage` 虽不 await，但 turn 前不被 CLI 服务、占住串行控制通道 5~8s → fork 加 `hasStartedTurn` 闸门（turn 前不发，resumed 会话照旧）+ 回归测试；含契约测试跑法与干净 `CODEX_HOME`（勿改真实 auth 文件）。
+- **案例 13**（0.64.2→0.85.1 同轮发现，上游 875d75f）：AIR tool-call 契约把子 Agent 标记从所有客户端的 `_meta.claudeCode.subagent` 挪成 AIR 专属 `_meta.jetbrains.air.subagent` → 父项目 `readSubagent` 改按 `_meta.claudeCode.toolName`（`Agent`/`Task`）识别；rebase 时勿丢非 AIR 分支的 `toolName` 透传。
 
 ## 要点速记
 
