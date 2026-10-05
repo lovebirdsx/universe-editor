@@ -10,6 +10,9 @@
      without the inset a row parked under the header counts as visible, so
      scrollTop clamps at the header height and the first row never comes out. */
   --graph-header-height: 24px;
+  /* Must stay identical to `.canvas` below: the lane column is never painted by
+     the rows, so that leaf colour is what the swimlanes (and the holes punched
+     in the current/stash nodes, which use this same token) read as. */
   background: var(--vscode-editor-background);
   color: var(--vscode-editor-foreground);
   font-size: 13px;
@@ -278,6 +281,10 @@
 .canvas {
   position: relative;
   width: 100%;
+  /* Same colour as `.gitGraph` above (and as the holes the current/stash nodes
+     punch): the swimlane column is the rows' un-painted area, so this is the
+     colour the lane lines sit on. */
+  background: var(--vscode-editor-background);
 }
 
 .graphSvg {
@@ -306,15 +313,27 @@
   cursor: pointer;
   content-visibility: auto;
   contain-intrinsic-size: auto 24px;
+  /* Hover/selection fill paints as a gradient that starts at the swimlane column
+     instead of a plain `background`: `.graphSvg` is a positioned sibling *before*
+     `.rows` (both z-index: auto) and therefore paints under the rows, so a
+     full-width row background covers this row's lane lines and node dot. State
+     rules below only set `--row-background` — never `background`, whose shorthand
+     would reset `background-image` and bring the occlusion back. */
+  --row-background: transparent;
+  background-image: linear-gradient(
+    to right,
+    transparent 0 var(--graph-width, 0px),
+    var(--row-background) var(--graph-width, 0px)
+  );
 }
 
 .row:hover {
-  background: var(--vscode-list-hoverBackground);
+  --row-background: var(--vscode-list-hoverBackground);
 }
 
 .rowSelected,
 .rowSelected:hover {
-  background: var(--vscode-list-activeSelectionBackground, var(--vscode-workbench-accent));
+  --row-background: var(--vscode-list-activeSelectionBackground, var(--vscode-workbench-accent));
   color: var(--vscode-list-activeSelectionForeground, var(--vscode-button-foreground));
 }
 

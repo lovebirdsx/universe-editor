@@ -1,6 +1,6 @@
 # 滚动列表的渲染约定
 
-树 / 虚拟列表（`packages/workbench-ui` 的 `Tree` + `VirtualList`）是全仓侧栏与列表视图的共同底座。本文是它们**绘制**层面的三条约定，以及违反之后那一类最难查的故障：**残影**——同一格出现新旧两段文字完全重合，且一直留到重启才消失。
+树 / 虚拟列表（`packages/workbench-ui` 的 `Tree` + `VirtualList`）是全仓侧栏与列表视图的共同底座。本文是它们**绘制**层面的四条约定。其中前三条背后是同一类最难查的故障：**残影**——同一格出现新旧两段文字完全重合，且一直留到重启才消失。
 
 残影的判据很简单：**DOM 是干净的**（每格一行、`data-row-key` 唯一、行矩形互不重叠、文本与数据一致），屏幕上的旧字是**没被清掉的旧栅格像素**。因此它不可能被 DOM 断言或截图比对抓住，只能靠约定 + 结构护栏守住，真正的验证是在真机上肉眼看一次。
 
@@ -33,6 +33,18 @@
 
 > 同样是手写路径：`list/useFlatListNavigation.ts` 的 `revealRow` 仍在 `row.scrollIntoView({ block: 'nearest' })`（快捷键表 / 扩展视图 / AI Debug / 会话列表）。同一类暴露，但那条路径的滚动容器由调用方传入、覆盖四个高频视图，改动要单独评估——**这里先记着，别当它已经干净**。
 
+## 4. 行背景不得画进「跨行装饰层」的列
+
+提交图谱（git / Perforce 共用 `GitGraphEditor.module.css`）是这类布局的样板：**一张 SVG 画跨行的泳道连线与节点，HTML 行只放文字**。两者是兄弟节点（`svg.graphSvg` 在前、`div.rows` 在后，`z-index` 都是 `auto`），于是**行必然后绘制**——行的背景色只要铺满整行，就会把同一行的泳道线段和节点圆点整段盖掉，而它恰好是这张视图唯一表达分支结构的东西。
+
+约定：
+
+- **行高亮（hover / 选中 / 将来的 focus）只能画到装饰列为止**。本仓的实现是 `.row` 上一条在 `var(--graph-width)` 处硬停的 gradient：起始段透明的两个同 px 色标 = 硬边不插值，状态规则只下发 `--row-background` 这个自定义属性，**绝不写 `background` 简写**（简写会按源码序重置 `background-image`，静默退回整行铺满）。新增行状态照抄一行 `--row-background: <token>` 即自动获得同样的裁剪。
+- **装饰列的颜色由承载面显式给出**（图谱里是 `.canvas` 的编辑器底色，与 `.gitGraph` 同色）。挖洞节点（`nodeCurrent` / `stashInner` 用底色填出空心圆）也因此与列底色同源，任何行状态下都正确融合。
+- **不要用「底色填洞 + 抬升 SVG 层（z-index）」补救**：洞色是静态的，感知不到某一行是否被高亮，选中行上会露出一个不匹配的浅色圆盘。
+
+> 只改绘制、不改盒模型：行命中区与点击语义都在 `.row` 上，装饰列上的点击照旧落到行（`svg` 自身 `pointer-events: none`）。
+
 ## 排查套路
 
 怀疑是残影（而不是 DOM 缺陷）时，在出问题的窗口里打开 DevTools 跑：
@@ -49,7 +61,7 @@ console.log(
 document.querySelector('#root').style.opacity = '0.999'
 ```
 
-- 行数 / key / y 全干净 → 像素残留，按上面三条约定查。
+- 行数 / key / y 全干净 → 像素残留，按上面第 1~3 条约定查。
 - 出现重复行、重复 y 或文本与数据不符 → 是 DOM 缺陷，去查 `TreeModel` 的可见节点与 `Tree` 的行 key 归属。
 
 ## 守护
@@ -60,6 +72,7 @@ document.querySelector('#root').style.opacity = '0.999'
 | reveal 在真浏览器里仍然有效 | `apps/editor/e2e/specs/smoke.explorerRevealScroll.spec.ts`（滚动到顶后 reveal 把已选中的行带回来） |
 | 行定位 / spacer 形状 | `packages/workbench-ui/src/__tests__/VirtualList.test.tsx`（`top` 断言、spacer 契约） |
 | 列表重排后仍是「一摞不重叠的行」 | `apps/editor/src/renderer/workbench/swarm/__tests__/SwarmReviewsView.test.tsx` 的 soft refresh 用例（key 唯一、offset 严格递增、换选中不调 `scrollIntoView`）；`extensions/perforce/e2e/specs/swarmReview.spec.ts` 的 dashboard journey 补了真布局版（行矩形互不重叠、`End` 把最后一行底对齐） |
+| 行高亮不画进装饰列 | `apps/editor/src/renderer/workbench/gitGraph/__tests__/rowBackgroundClipping.test.ts`（读 CSS 文本断言：裁剪 gradient 在位、状态规则只许下发 `--row-background`）；`apps/editor/e2e/specs/smoke.gitGraphRowHighlight.spec.ts`（像素级断言：hover / 选中时泳道列内 0 像素变化，同时描述区必须有变化——前半句单独看会被「什么都没画」骗过） |
 
 ⚠️ e2e 那两条是**真布局护栏，不是复现**：残影本身没有可断言的信号（DOM 一直是干净的），而旧的 `scrollIntoView` 实现同样能通过「底对齐最后一行」这条断言。判断某条用例是否真的守住约定，唯一办法是**把实现改回去跑一遍**（`git checkout HEAD -- <file>` + rebuild），看它是否变红。
 

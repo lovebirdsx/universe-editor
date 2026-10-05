@@ -48,6 +48,9 @@ catalogs:
     '@types/node':
       specifier: ^22.0.0
       version: 22.19.17
+    '@types/pixelmatch':
+      specifier: ^5.2.6
+      version: 5.2.6
     '@types/pngjs':
       specifier: ^6.0.0
       version: 6.0.5
@@ -301,6 +304,9 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 22.19.17
+      '@types/pixelmatch':
+        specifier: 'catalog:'
+        version: 5.2.6
       '@types/pngjs':
         specifier: 'catalog:'
         version: 6.0.5
@@ -2502,6 +2508,9 @@ packages:
 
   '@types/node@24.13.3':
     resolution: {integrity: sha512-Dh8vAsV36ig5wa9OX4pXvMc9D3Veibfw2wix0CUwYODLD8nkj9UsLjASr49nPg+2eKzxhBV+v7L8pXvT4e639Q==}
+
+  '@types/pixelmatch@5.2.6':
+    resolution: {integrity: sha512-wC83uexE5KGuUODn6zkm9gMzTwdY5L0chiK+VrKcDfEjzxh1uadlWTvOmAbCpnM9zx/Ww3f8uKlYQVnO/TrqVg==}
 
   '@types/pngjs@6.0.5':
     resolution: {integrity: sha512-0k5eKfrA83JOZPppLtS2C7OUtyNAl2wKNxfyYl9Q5g9lPkgBl/9hNyAu6HuEH2J4XmIv2znEpkDd0SaZVxW6iQ==}
@@ -6286,6 +6295,10 @@ snapshots:
   '@types/node@24.13.3':
     dependencies:
       undici-types: 7.18.2
+
+  '@types/pixelmatch@5.2.6':
+    dependencies:
+      '@types/node': 24.13.3
 
   '@types/pngjs@6.0.5':
     dependencies:
