@@ -120,3 +120,92 @@ test('子 agent 的询问被 CLI 显式否定时仍弹卡 @regression', async ({
   await card.getByRole('button', { name: 'Yes', exact: true }).click()
   await expectSelection(page, 'allow-once')
 })
+
+/** 负例：卡片必须先出现，点选后再断言 Agent 收到的 optionId。 */
+async function respondAndExpect(page: Page, buttonName: string, optionId: string) {
+  const card = page.getByTestId('acp-permission-card')
+  await expect(card).toHaveCount(1)
+  await card.getByRole('button', { name: buttonName, exact: true }).click()
+  await expectSelection(page, optionId)
+}
+
+// 子 agent 的网页/MCP 搜索白名单：真实 kind（WebSearch/WebFetch = fetch，Brave
+// MCP 搜索 = other）、原始 toolName、子归属与肯定标记，且即使 Agent 给出
+// allow-with-updates 仍只选「仅本次允许」。不联网：全为合成请求。
+
+test('子 agent 的 WebSearch（kind=fetch）静默选「仅本次允许」@p1', async ({ page }) => {
+  await startPlanSession(page)
+  await sendPrompt(page, 'approve-web-search')
+
+  await expectSelection(page, 'allow-once')
+  await expect(page.getByTestId('acp-permission-card')).toHaveCount(0)
+})
+
+test('子 agent 的 WebFetch（kind=fetch）静默选「仅本次允许」@p1', async ({ page }) => {
+  await startPlanSession(page)
+  await sendPrompt(page, 'approve-web-fetch')
+
+  await expectSelection(page, 'allow-once')
+  await expect(page.getByTestId('acp-permission-card')).toHaveCount(0)
+})
+
+test('子 agent 的 Brave MCP 搜索（kind=other，两项）静默选「仅本次允许」@p1', async ({ page }) => {
+  await startPlanSession(page)
+  await sendPrompt(page, 'approve-brave-search')
+
+  await expectSelection(page, 'allow-once')
+  await expect(page.getByTestId('acp-permission-card')).toHaveCount(0)
+})
+
+test('主 agent 的 WebSearch 不扩大授权 @regression', async ({ page }) => {
+  await startPlanSession(page)
+  await sendPrompt(page, 'approve-web-main')
+
+  await respondAndExpect(page, 'Yes', 'allow-once')
+})
+
+test('缺 marker 的 WebSearch 回人工确认 @regression', async ({ page }) => {
+  await startPlanSession(page)
+  await sendPrompt(page, 'approve-web-nomarker')
+
+  await respondAndExpect(page, 'Yes', 'allow-once')
+})
+
+test('marker=false 的 WebSearch 回人工确认 @regression', async ({ page }) => {
+  await startPlanSession(page)
+  await sendPrompt(page, 'approve-web-denied')
+
+  await respondAndExpect(page, 'Yes', 'allow-once')
+})
+
+test('命中 ask 规则的 WebSearch 回人工确认 @regression', async ({ page }) => {
+  await startPlanSession(page)
+  await sendPrompt(page, 'approve-web-ask')
+
+  await respondAndExpect(page, 'Yes', 'allow-once')
+})
+
+test('拒绝项置顶的 WebSearch 回人工确认 @regression', async ({ page }) => {
+  await startPlanSession(page)
+  await sendPrompt(page, 'approve-web-reject-first')
+
+  await respondAndExpect(page, 'No', 'reject')
+})
+
+test('未知 MCP 搜索工具回人工确认 @regression', async ({ page }) => {
+  await startPlanSession(page)
+  await sendPrompt(page, 'approve-web-unknown-mcp')
+
+  await respondAndExpect(page, 'Yes', 'allow-once')
+})
+
+test('关闭 acp.plan.autoApproveUnscoped 后 WebSearch 仍弹卡 @regression', async ({ page }) => {
+  await startPlanSession(page)
+  await page.evaluate(
+    (key) => window.__E2E__!.updateConfigValue(key, false),
+    'acp.plan.autoApproveUnscoped',
+  )
+  await sendPrompt(page, 'approve-web-search')
+
+  await respondAndExpect(page, 'Yes', 'allow-once')
+})

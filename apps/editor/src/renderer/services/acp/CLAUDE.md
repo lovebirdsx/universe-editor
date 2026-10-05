@@ -56,7 +56,7 @@ Agent Client Protocol（ACP）客户端层。基于 `@agentclientprotocol/sdk` v
 
 **例外：`switch_mode`（ExitPlanMode）永不走静默自动批准、也不被 `persistAllow` 记住**（守卫在 `onRequestPermission`）。它的自动化由 `acp.plan.autoExecute`（off/bypassPermissions/auto/acceptEdits/default）显式驱动：设置映射到已提供的非 clear 批准选项（`exit-plan-*`）才附 `autoResolve`，否则诊断并回人工确认。卡片倒计时可打断，勿静默短路。
 
-**计划模式静默批准分两级**（默认开、可分别关，都不经 `AcpPermissionHandler`）：`execute`/`read`/`search` 先用 `acp.plan.autoApproveWithUpdates` 选 fork 的 `allow-with-updates`（CLI 固化规则）；本次无该选项时 `acp.plan.autoApproveUnscoped` 选 `allow-once`（放行一次、不写规则；主 agent 要肯定式标记，子 agent 放宽）。判定与风险见 [cases-plan-approve.md](cases-plan-approve.md)。
+**计划模式静默批准分两级**（默认开、可关，不经 `AcpPermissionHandler`）：`execute`/`read`/`search` 先经 `acp.plan.autoApproveWithUpdates` 选 `allow-with-updates`；无它时 `acp.plan.autoApproveUnscoped` 选 `allow-once`（主 agent 要肯定标记，子 agent 放宽），另放行子 agent WebSearch/WebFetch/Brave 搜索（只选 once、不写规则、须肯定标记）。判定与风险见 [cases-plan-approve.md](cases-plan-approve.md)。
 
 ## 套路 ACP-E：扩展会话历史持久化字段
 

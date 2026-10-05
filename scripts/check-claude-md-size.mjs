@@ -11,12 +11,16 @@
  *  .git / dist / out / .turbo. Files over MAX_BYTES are listed; --check exits
  *  with code 1.
  *
+ *  Sizes are LF-normalized: submodule content (vendor/*) sits outside this
+ *  repo's `* text=auto eol=lf` .gitattributes, so a Windows CRLF checkout would
+ *  otherwise read one extra byte per line and falsely trip the budget.
+ *
  *  Usage:
  *    node scripts/check-claude-md-size.mjs           # report only, exit 0
  *    node scripts/check-claude-md-size.mjs --check    # CI: exit 1 on oversize
  *--------------------------------------------------------------------------------------------*/
 
-import { existsSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -58,13 +62,19 @@ function collectFiles(dir, files = []) {
   return files
 }
 
+// submodule 内容不随父仓库 .gitattributes 归一化，Windows 检出是 CRLF；
+// 预算度量的是内容体积，按 LF 归一化统计，保证同一 commit 跨平台判定一致。
+function lfByteSize(file) {
+  return Buffer.byteLength(readFileSync(file, 'utf8').replace(/\r\n/g, '\n'))
+}
+
 export function checkClaudeMdSize({ repoRoot = REPO_ROOT, maxBytes = MAX_BYTES, exempt = EXEMPT } = {}) {
   const files = collectFiles(repoRoot)
   const oversize = []
   for (const file of files) {
     const rel = fmt(relative(repoRoot, file))
     if (exempt.has(rel)) continue
-    const size = statSync(file).size
+    const size = lfByteSize(file)
     if (size > maxBytes) oversize.push({ file: rel, size })
   }
   oversize.sort((a, b) => b.size - a.size)

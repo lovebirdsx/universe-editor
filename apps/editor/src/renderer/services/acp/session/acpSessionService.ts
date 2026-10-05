@@ -130,6 +130,7 @@ import {
 import { isResidentLive } from './acpSessionStatus.js'
 import { MAX_RECOVERY_ATTEMPTS, recoveryBackoffMs } from './acpSessionRecovery.js'
 import {
+  readAgentToolName,
   readClientMayAutoApproveOnce,
   readMatchedAskRule,
   readParentToolUseId,
@@ -447,6 +448,23 @@ const SCOPED_ALLOW_ALWAYS_OPTION_IDS: ReadonlySet<string> = new Set([
   'allow-skill-exact',
   'allow-skill-prefix',
 ])
+
+// 名称和 kind 必须成对匹配，不能把整个 fetch/other 类别当成只读工具。
+const PLAN_SUBAGENT_WEB_TOOLS: ReadonlyMap<string, string> = new Map([
+  ['WebSearch', 'fetch'],
+  ['WebFetch', 'fetch'],
+  ['mcp__brave-search__brave_web_search', 'other'],
+])
+
+function isPlanSubagentWebTool(
+  toolName: string | undefined,
+  kind: string | null | undefined,
+): boolean {
+  return toolName !== undefined && kind != null && PLAN_SUBAGENT_WEB_TOOLS.get(toolName) === kind
+}
+
+/** 二级静默批准的固定策略原因：区分旧无作用域范围与本次新增的网页白名单。 */
+type PlanUnscopedReason = 'unscoped' | 'web'
 
 /** ext-notification method the agent fork uses to forward raw Claude SDK messages. */
 const SDK_MESSAGE_EXT_METHOD = ACP_EXT_METHODS.sdkMessage
@@ -2482,7 +2500,7 @@ export class AcpSessionService
         source: unscoped.source,
       })
       this._logger.debug(
-        `计划模式本次静默批准：optionId=${unscoped.optionId}, source=${unscoped.source}`,
+        `计划模式本次静默批准：optionId=${unscoped.optionId}, source=${unscoped.source}, reason=${unscoped.reason}`,
       )
       return { outcome: { outcome: 'selected', optionId: unscoped.optionId } }
     }
@@ -2622,26 +2640,24 @@ export class AcpSessionService
   }
 
   /**
-   * 计划模式的第二级静默批准：Agent 这次**没有**给出作用域化选项（CLI 想不出可固化
-   * 的规则——heredoc、for 循环、长 cd 链；子 agent 的询问也常落在这里），只剩
-   * 「仅本次允许」。此时替用户点 `allow-once`：只放行这一次，不写任何规则，也不写
-   * `acp.permissions.autoApprove`。与一级正交——一级管「有作用域选项」，二级管「没有」。
-   *
-   * 主 / 子 agent 的边界（用户定）：子 agent 的询问放宽到「不需要 fork 的肯定式标记」，
-   * 但**不**放宽 CLI 的显式否定——`marker === false` 意味着 CLI 要么要了拒绝项优先的提示，
-   * 要么压制了 always-allow 规则（`suppressAlwaysAllowRule`，删除类命令），要么命中了用户的
-   * ask 规则，一律弹卡（前两条的选项顺序代理只覆盖第一条）。主 agent 更严：只在
-   * `marker === true` 时批准（旧 fork 缺字段 = 要求人工回答，fail-closed）。
+   * 二级只批准本次，不写规则。普通范围仅接管无作用域选项的请求；网页白名单例外：
+   * 即使提供持久选项也只选 once，且仅接受带肯定标记的子 agent 请求。
+   * 旧范围对子 agent 缺标记的兼容不扩展到网页工具，也不覆盖 CLI 显式否定或用户 ask。
    */
   private _planAutoApproveUnscoped(
     session: AcpSession,
     params: RequestPermissionRequest,
-  ): { optionId: string; source: 'subagent' | 'main' } | undefined {
+  ): { optionId: string; source: 'subagent' | 'main'; reason: PlanUnscopedReason } | undefined {
     const kind = params.toolCall.kind
-    if (!isPlanAutoApproveKind(kind)) return undefined
+    const webScope = isPlanSubagentWebTool(readAgentToolName(params.toolCall), kind)
+    if (!isPlanAutoApproveKind(kind) && !webScope) return undefined
     if (this._config.get<boolean>('acp.plan.autoApproveUnscoped') === false) return undefined
-    // 一级已接管带作用域选项的请求；本次有作用域选项就不走二级（永不降级成「仅本次」）。
-    if (params.options.some((option) => option.optionId === ALLOW_WITH_UPDATES_OPTION_ID)) {
+    // 一级已接管带作用域选项的旧范围请求；网页范围一级不覆盖，即使有 allow-with-updates
+    // 也仍选 once（只放行本次、不写规则），因此不让这条守卫挡住它。
+    if (
+      !webScope &&
+      params.options.some((option) => option.optionId === ALLOW_WITH_UPDATES_OPTION_ID)
+    ) {
       return undefined
     }
     if (!this._isPlanMode(session)) return undefined
@@ -2662,13 +2678,24 @@ export class AcpSessionService
       return undefined
     }
     const marker = readClientMayAutoApproveOnce(params.toolCall)
+    if (webScope) {
+      // 网页/MCP 范围只对子 agent 放宽，并要求肯定式标记（缺失/畸形 = 要人回答）；
+      // 主 agent、坏父归属与未知工具都不扩大。
+      if (source !== 'subagent' || marker !== true) {
+        this._logger.warn(
+          `计划模式网页工具静默批准回退人工确认：reason=${source !== 'subagent' ? 'not-subagent' : 'marker'}, kind=${kind ?? 'unknown'}, options=${this._optionSummary(params)}`,
+        )
+        return undefined
+      }
+      return { optionId: option.optionId, source, reason: 'web' }
+    }
     if (marker === false || (source === 'main' && marker !== true)) {
       this._logger.warn(
         `计划模式本次静默批准回退人工确认：marker=${marker ?? 'absent'}, source=${source}, options=${this._optionSummary(params)}`,
       )
       return undefined
     }
-    return { optionId: option.optionId, source }
+    return { optionId: option.optionId, source, reason: 'unscoped' }
   }
 
   async onCreateElicitation(params: CreateElicitationRequest): Promise<CreateElicitationResponse> {

@@ -1,7 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Tests for scripts/check-claude-md-size.mjs. Run with `node --test`.
  *  覆盖：递归收集（含 vendor 一层下沉、跳过 node_modules/.git/dist/out/.turbo）、
- *  阈值判定、豁免名单、排序。
+ *  阈值判定、豁免名单、排序、CRLF 归一化。
  *--------------------------------------------------------------------------------------------*/
 
 import { test } from 'node:test'
@@ -77,6 +77,16 @@ test('vendor 只下沉一层收根部 CLAUDE.md，不递归内部', () => {
   const { total, oversize } = checkClaudeMdSize({ repoRoot: root })
   assert.equal(total, 1)
   assert.deepEqual(oversize, [])
+})
+
+test('CRLF 按 LF 归一化统计（submodule 在 Windows 检出后不虚高）', () => {
+  const root = makeRepo()
+  const lines = Array.from({ length: 100 }, () => 'x'.repeat(100))
+  writeFileSync(join(root, 'CLAUDE.md'), lines.join('\r\n')) // 磁盘 10198 字节，LF 归一化 10099
+  assert.deepEqual(checkClaudeMdSize({ repoRoot: root, maxBytes: 10_099 }).oversize, [])
+  const { oversize } = checkClaudeMdSize({ repoRoot: root, maxBytes: 10_098 })
+  assert.equal(oversize.length, 1)
+  assert.equal(oversize[0].size, 10_099)
 })
 
 test('自定义 maxBytes 生效', () => {

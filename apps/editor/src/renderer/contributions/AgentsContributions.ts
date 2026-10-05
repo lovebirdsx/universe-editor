@@ -175,7 +175,7 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
             default: true,
             description: localize(
               'settings.acp.plan.autoApproveUnscoped',
-              'In plan mode, also silently answer "yes, once" for shell commands, file reads and searches (Read/Glob/Grep) when the agent offers no scoped option this time — the command is let through once and no rule is written. Requests the CLI marks as needing a human answer (a decline-first prompt, a suppressed always-allow rule, or an ask rule of your own) are never auto-approved, for a sub-agent either. A sub-agent\'s request is approved even when an older agent reports no marker at all. Turn off to review every such request yourself.',
+              'In plan mode, also silently answer "yes, once" for shell commands, file reads and searches (Read/Glob/Grep) when the agent offers no scoped option this time — the command is let through once and no rule is written. For a sub-agent only, this also covers the web/MCP search tools by their exact name and kind (WebSearch/WebFetch and the Brave search MCP tool): "yes, once" is picked even when a scoped option is offered, still writing no rule — those calls may send data to the service and incur charges. Requests the CLI marks as needing a human answer (a decline-first prompt, a suppressed always-allow rule, or an ask rule of your own) are never auto-approved. A shell/read/search ask from a sub-agent is approved even when an older agent reports no marker at all; a web/MCP search ask — and any ask from the main agent — additionally requires the agent\'s positive "no human needed" marker. Turn off to review every such request yourself.',
             ),
           },
           'acp.plan.autoExecute': {

@@ -8,6 +8,8 @@ import { describe, expect, it } from 'vitest'
 import type { SessionUpdate } from '@agentclientprotocol/sdk'
 import {
   extractModelBreakdown,
+  readAgentToolName,
+  readAgentToolNameForTelemetry,
   readClientMayAutoApproveOnce,
   readFileChanges,
   readMatchedAskRule,
@@ -46,6 +48,36 @@ describe('permission-request `_meta` readers', () => {
     expect(readParentToolUseId(toolCall({ parentToolUseId: 'toolu_task' }))).toBe('toolu_task')
     expect(readParentToolUseId(toolCall({ parentToolUseId: '' }))).toBeUndefined()
     expect(readParentToolUseId(toolCall({}))).toBeUndefined()
+  })
+})
+
+describe('readAgentToolName (any `_meta` carrier)', () => {
+  function carrier(toolName: unknown) {
+    return { toolCallId: 'tc', _meta: { claudeCode: { toolName } } }
+  }
+
+  it('reads the exact raw tool name off a permission carrier, MCP names unfolded', () => {
+    expect(readAgentToolName(carrier('Bash'))).toBe('Bash')
+    expect(readAgentToolName(carrier('mcp__brave-search__brave_web_search'))).toBe(
+      'mcp__brave-search__brave_web_search',
+    )
+  })
+
+  it('returns undefined for absent, empty or malformed names', () => {
+    expect(readAgentToolName(carrier(undefined))).toBeUndefined()
+    expect(readAgentToolName(carrier(''))).toBeUndefined()
+    expect(readAgentToolName(carrier(42))).toBeUndefined()
+    expect(readAgentToolName({ _meta: null })).toBeUndefined()
+    expect(readAgentToolName({})).toBeUndefined()
+    expect(readAgentToolName({ _meta: { claudeCode: 'nope' } })).toBeUndefined()
+  })
+
+  it('the telemetry reader folds MCP names while the raw reader keeps them', () => {
+    const update = carrier('mcp__brave-search__brave_web_search') as unknown as SessionUpdate
+    expect(readAgentToolNameForTelemetry(update)).toBe('mcp__brave-search')
+    expect(readAgentToolName(carrier('mcp__brave-search__brave_web_search'))).toBe(
+      'mcp__brave-search__brave_web_search',
+    )
   })
 })
 

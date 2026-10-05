@@ -7497,5 +7497,251 @@ describe('plan scoped auto-approve (acp.plan.autoApproveWithUpdates)', () => {
         'acp.permission_plan_auto_approved_unscoped',
       )
     })
+
+    describe('子 agent 网页/MCP 搜索白名单：精确 toolName + kind', () => {
+      // fork 在权限请求的 toolCall 上盖 `_meta.claudeCode.toolName`（原始名，MCP 不折叠）
+      // 与 parentToolUseId；claude fork 里 WebSearch/WebFetch 的 kind 是 fetch，
+      // Brave MCP 搜索是 other。
+      const webTools = [
+        ['WebSearch', 'fetch'],
+        ['WebFetch', 'fetch'],
+        ['mcp__brave-search__brave_web_search', 'other'],
+      ] as const
+
+      const webMeta = (toolName: string, overrides?: Record<string, unknown>) => ({
+        claudeCode: {
+          toolName,
+          parentToolUseId: 'toolu_task',
+          clientMayAutoApproveOnce: true,
+          ...overrides,
+        },
+      })
+
+      const webRequest = (
+        toolName: string,
+        kind: RequestPermissionRequest['toolCall']['kind'],
+        options: RequestPermissionRequest['options'],
+        meta?: Record<string, unknown>,
+        sessionId = 'agent-1',
+      ): RequestPermissionRequest => request(kind, options, sessionId, meta ?? webMeta(toolName))
+
+      /**
+       * 驱动一次请求到落点：静默批准直接返回；若落到卡片，观察 pending 后取消，
+       * 让断言看到「carded=true」而不是挂起到超时。
+       */
+      async function settle(
+        svc: AcpSessionService,
+        session: IAcpSession,
+        params: RequestPermissionRequest,
+      ): Promise<{ readonly carded: boolean; readonly result: RequestPermissionResponse }> {
+        const promise = svc.onRequestPermission(params)
+        await new Promise((r) => setTimeout(r, 0))
+        const pending = session.pendingPermission.get()
+        if (pending) pending.cancel()
+        return { carded: pending !== undefined, result: await promise }
+      }
+
+      it.each(webTools)(
+        '%s/%s：三选项（含 allow-with-updates）仍静默选 allow-once，一次响应、不建卡片、不写规则',
+        async (toolName, kind) => {
+          const telemetry = new RecordingTelemetryService()
+          const { svc, session, permission } = await createSession('plan', telemetry)
+
+          const { carded, result } = await settle(
+            svc,
+            session,
+            webRequest(toolName, kind, scopedOptions),
+          )
+
+          expect(carded).toBe(false)
+          expect(result).toEqual({ outcome: { outcome: 'selected', optionId: 'allow-once' } })
+          expect(session.pendingPermission.get()).toBeUndefined()
+          expect(permission.persisted).toEqual([])
+          expect(
+            telemetry.logged.filter(
+              (event) => event.name === 'acp.permission_plan_auto_approved_unscoped',
+            ),
+          ).toHaveLength(1)
+          expect(telemetry.logged).toContainEqual({
+            name: 'acp.permission_plan_auto_approved_unscoped',
+            data: { optionId: 'allow-once', kind, source: 'subagent' },
+          })
+        },
+      )
+
+      it('Brave 无匹配 suggestions（只有 allow-once + reject）时同样静默选 once', async () => {
+        const { svc, session, permission } = await createSession('plan')
+
+        const { carded, result } = await settle(
+          svc,
+          session,
+          webRequest('mcp__brave-search__brave_web_search', 'other', unscopedOptions),
+        )
+
+        expect(carded).toBe(false)
+        expect(result).toEqual({ outcome: { outcome: 'selected', optionId: 'allow-once' } })
+        expect(session.pendingPermission.get()).toBeUndefined()
+        expect(permission.persisted).toEqual([])
+      })
+
+      it.each([
+        ['false', webMeta('WebSearch', { clientMayAutoApproveOnce: false })],
+        ['missing', { claudeCode: { toolName: 'WebSearch', parentToolUseId: 'toolu_task' } }],
+        ['malformed', webMeta('WebSearch', { clientMayAutoApproveOnce: 'yes' })],
+      ])('新范围 marker=%s 必须回人工卡片', async (_label, meta) => {
+        const { svc, session } = await createSession('plan')
+
+        await expectCard(svc, session, webRequest('WebSearch', 'fetch', scopedOptions, meta))
+      })
+
+      it('网页工具命中用户 ask 规则时回人工卡片', async () => {
+        const { svc, session } = await createSession('plan')
+
+        await expectCard(
+          svc,
+          session,
+          webRequest(
+            'WebFetch',
+            'fetch',
+            scopedOptions,
+            webMeta('WebFetch', { matchedAskRule: true }),
+          ),
+        )
+      })
+
+      it('网页工具拒绝项置顶时回人工卡片', async () => {
+        const { svc, session } = await createSession('plan')
+
+        await expectCard(
+          svc,
+          session,
+          webRequest('WebFetch', 'fetch', [...scopedOptions].reverse()),
+        )
+      })
+
+      it('一级关闭、二级开启时网页工具仍静默选 once', async () => {
+        const { svc, session, config } = await createSession('plan')
+        config.update('acp.plan.autoApproveWithUpdates', false, ConfigurationTarget.Memory)
+
+        const { carded, result } = await settle(
+          svc,
+          session,
+          webRequest('WebSearch', 'fetch', scopedOptions),
+        )
+
+        expect(carded).toBe(false)
+        expect(result).toEqual({ outcome: { outcome: 'selected', optionId: 'allow-once' } })
+        expect(session.pendingPermission.get()).toBeUndefined()
+      })
+
+      it('二级关闭时网页工具回人工卡片', async () => {
+        const { svc, session, config } = await createSession('plan')
+        config.update('acp.plan.autoApproveUnscoped', false, ConfigurationTarget.Memory)
+
+        await expectCard(svc, session, webRequest('WebSearch', 'fetch', scopedOptions))
+      })
+
+      it('主 agent（无父归属）不扩大授权，回人工卡片', async () => {
+        const { svc, session } = await createSession('plan')
+        const mainMeta = { claudeCode: { toolName: 'WebSearch', clientMayAutoApproveOnce: true } }
+
+        await expectCard(svc, session, webRequest('WebSearch', 'fetch', scopedOptions, mainMeta))
+      })
+
+      it('父调用 ID 为空的畸形归属回人工卡片', async () => {
+        const { svc, session } = await createSession('plan')
+        const badParent = webMeta('WebSearch', { parentToolUseId: '' })
+
+        await expectCard(svc, session, webRequest('WebSearch', 'fetch', scopedOptions, badParent))
+      })
+
+      it('非 plan 会话网页工具不接管', async () => {
+        const { svc, session } = await createSession('default')
+
+        await expectCard(svc, session, webRequest('WebSearch', 'fetch', scopedOptions))
+      })
+
+      it('未知会话网页工具仍返回 cancelled', async () => {
+        const { svc } = await createSession('plan')
+
+        const result = await svc.onRequestPermission(
+          webRequest('WebSearch', 'fetch', scopedOptions, undefined, 'agent-404'),
+        )
+
+        expect(result).toEqual({ outcome: { outcome: 'cancelled' } })
+      })
+
+      it.each([
+        ['WebSearchTool', 'fetch'],
+        ['websearch', 'fetch'],
+        ['mcp__brave-search__brave_web_search_extra', 'other'],
+        ['mcp__other__search', 'other'],
+      ] as const)('近似名 / 未知 MCP 工具 %s 不接管', async (toolName, kind) => {
+        const { svc, session } = await createSession('plan')
+
+        await expectCard(svc, session, webRequest(toolName, kind, scopedOptions))
+      })
+
+      it.each([
+        ['WebSearch', 'other'],
+        ['mcp__brave-search__brave_web_search', 'fetch'],
+      ] as const)('名称 %s 与 kind %s 不匹配时不接管', async (toolName, kind) => {
+        const { svc, session } = await createSession('plan')
+
+        await expectCard(svc, session, webRequest(toolName, kind, scopedOptions))
+      })
+
+      it('标题冒充 WebSearch（无原始 toolName）不接管', async () => {
+        const { svc, session } = await createSession('plan')
+        const params = {
+          sessionId: 'agent-1',
+          toolCall: {
+            toolCallId: 'tc-web',
+            title: 'WebSearch',
+            kind: 'fetch',
+            _meta: {
+              claudeCode: { parentToolUseId: 'toolu_task', clientMayAutoApproveOnce: true },
+            },
+          },
+          options: scopedOptions,
+        } as RequestPermissionRequest
+
+        await expectCard(svc, session, params)
+      })
+
+      it('只有持久选项、没有 allow-once 时不接管', async () => {
+        const { svc, session } = await createSession('plan')
+        const persistentOnly = [
+          { optionId: 'allow-with-updates', name: 'Always', kind: 'allow_always' },
+          { optionId: 'reject', name: 'No', kind: 'reject_once' },
+        ] as RequestPermissionRequest['options']
+
+        await expectCard(svc, session, webRequest('WebSearch', 'fetch', persistentOnly))
+      })
+
+      it('codex 风格下划线 allow_once 不接管（按 optionId 精确匹配）', async () => {
+        const { svc, session } = await createSession('plan')
+        const codexOptions = [
+          { optionId: 'allow_once', name: 'Yes', kind: 'allow_once' },
+          { optionId: 'reject', name: 'No', kind: 'reject_once' },
+        ] as RequestPermissionRequest['options']
+
+        await expectCard(svc, session, webRequest('WebSearch', 'fetch', codexOptions))
+      })
+
+      it('连续两次网页工具请求都只放行本次，不记忆成永久规则', async () => {
+        const { svc, session, permission } = await createSession('plan')
+
+        const first = await settle(svc, session, webRequest('WebSearch', 'fetch', scopedOptions))
+        const second = await settle(svc, session, webRequest('WebSearch', 'fetch', scopedOptions))
+
+        expect(first.carded).toBe(false)
+        expect(second.carded).toBe(false)
+        expect(first.result).toEqual({ outcome: { outcome: 'selected', optionId: 'allow-once' } })
+        expect(second.result).toEqual({ outcome: { outcome: 'selected', optionId: 'allow-once' } })
+        expect(session.pendingPermission.get()).toBeUndefined()
+        expect(permission.persisted).toEqual([])
+      })
+    })
   })
 })

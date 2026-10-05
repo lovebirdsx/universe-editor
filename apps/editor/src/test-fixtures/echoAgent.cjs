@@ -498,6 +498,74 @@ async function runPrompt(id, params) {
     return reply(id, { stopReason: 'end_turn' })
   }
 
+  // Test directive: plan-mode sub-agent web/MCP search permission asks, shaped
+  // like the Claude fork's non-AIR requests — the raw tool name (MCP names not
+  // folded) + parentToolUseId + the positive auto-approve marker on
+  // toolCall._meta.claudeCode, with the tool's real kind (WebSearch/WebFetch are
+  // `fetch`, the Brave MCP search is `other`). The editor may silently answer
+  // allow-once for these; every variant drops one piece (parent, marker, a
+  // truthful CLI denial, the user's ask rule, the decline-first order) or names
+  // an untrusted MCP tool so the fail-closed branches stay exercised. All echo
+  // the chosen optionId so a spec can assert what the client answered.
+  const WEB_APPROVE_ASKS = {
+    'approve-web-search': { toolName: 'WebSearch', kind: 'fetch' },
+    'approve-web-fetch': { toolName: 'WebFetch', kind: 'fetch' },
+    'approve-brave-search': {
+      toolName: 'mcp__brave-search__brave_web_search',
+      kind: 'other',
+      twoOption: true,
+    },
+    'approve-web-main': { toolName: 'WebSearch', kind: 'fetch', noParent: true },
+    'approve-web-nomarker': { toolName: 'WebSearch', kind: 'fetch', noMarker: true },
+    'approve-web-denied': { toolName: 'WebSearch', kind: 'fetch', marker: false },
+    'approve-web-ask': { toolName: 'WebSearch', kind: 'fetch', askRule: true },
+    'approve-web-reject-first': { toolName: 'WebSearch', kind: 'fetch', rejectFirst: true },
+    'approve-web-unknown-mcp': { toolName: 'mcp__other__search', kind: 'other', twoOption: true },
+  }
+  if (Object.prototype.hasOwnProperty.call(WEB_APPROVE_ASKS, userText)) {
+    const spec = WEB_APPROVE_ASKS[userText]
+    const claudeCode = {
+      toolName: spec.toolName,
+      ...(spec.noParent ? {} : { parentToolUseId: 'echo-task' }),
+      ...(spec.noMarker ? {} : { clientMayAutoApproveOnce: spec.marker !== false }),
+      ...(spec.askRule ? { matchedAskRule: true } : {}),
+    }
+    const options = spec.twoOption
+      ? [
+          { optionId: 'allow-once', name: 'Yes', kind: 'allow_once' },
+          { optionId: 'reject', name: 'No', kind: 'reject_once' },
+        ]
+      : [
+          { optionId: 'allow-once', name: 'Yes', kind: 'allow_once' },
+          {
+            optionId: 'allow-with-updates',
+            name: 'Yes, and allow access to docs.example.com',
+            kind: 'allow_always',
+          },
+          { optionId: 'reject', name: 'No', kind: 'reject_once' },
+        ]
+    if (spec.rejectFirst) options.unshift(options.pop())
+    const result = await requestFromClient('session/request_permission', {
+      sessionId,
+      toolCall: {
+        toolCallId: 'echo-web',
+        title: 'Web search',
+        kind: spec.kind,
+        _meta: { claudeCode },
+      },
+      options,
+    })
+    notify('session/update', {
+      sessionId,
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: userText + ' result: ' + JSON.stringify(result) },
+      },
+    })
+    activeTurns.delete(sessionId)
+    return reply(id, { stopReason: 'end_turn' })
+  }
+
   // Test directive: "elicit-form" asks the client a fixed form elicitation and
   // echoes the user's response (accept+content / decline / cancel).
   if (userText === 'elicit-form') {

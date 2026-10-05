@@ -50,9 +50,16 @@ test('指纹对无关文件（测试/__tests__/node_modules）免疫', () => {
 test('指纹对源码改动、新增、删除、目录缺失都敏感', () => {
   const root = makeVendorTree({ 'src/index.ts': 'export const a = 1' })
   try {
+    const file = join(root, 'src/index.ts')
+    // 显式拨开 mtime：Windows 时钟粒度下同长内容的连续改写可能拿到相同 mtimeMs，
+    // 指纹（mtime+size，不读内容）会漏检，断言随平台抖动。
+    const t0 = new Date(2020, 0, 1)
+    utimesSync(file, t0, t0)
     const baseline = fingerprint([join(root, 'src')])
 
-    writeFileSync(join(root, 'src/index.ts'), 'export const a = 2')
+    writeFileSync(file, 'export const a = 2')
+    const t1 = new Date(2021, 0, 1)
+    utimesSync(file, t1, t1)
     const changed = fingerprint([join(root, 'src')])
     assert.notEqual(changed, baseline)
 

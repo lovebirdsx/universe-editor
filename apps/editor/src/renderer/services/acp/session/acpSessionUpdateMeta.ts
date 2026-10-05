@@ -171,15 +171,11 @@ function readMcpToolName(update: SessionUpdate): { server: string; tool: string 
   return parseMcpToolName(toolName)
 }
 
-/**
- * The agent's own name for the tool behind a `tool_call(_update)` (`Bash`,
- * `Edit`, `mcp__sqlite__query`, …), as reported on `_meta.claudeCode.toolName`.
- * Undefined for agents that don't report it. Kept coarse on purpose — it is a
- * telemetry dimension, so it must never carry arguments or paths.
- */
-export function readAgentToolName(update: SessionUpdate): string | undefined {
-  const meta = (update as { _meta?: { claudeCode?: { toolName?: unknown } } | null })._meta
-  const toolName = meta?.claudeCode?.toolName
+/** 读取更新或权限请求中的原始工具名；权限判断不能使用折叠后的 MCP 遥测名称。 */
+export function readAgentToolName(carrier: {
+  _meta?: Record<string, unknown> | null | undefined
+}): string | undefined {
+  const toolName = readClaudeCodeMeta(carrier)?.['toolName']
   if (typeof toolName !== 'string' || toolName.length === 0) return undefined
   return toolName
 }
