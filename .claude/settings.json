@@ -1,5 +1,8 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "skillOverrides": {
+    "claude-api": "user-invocable-only"
+  },
   "permissions": {
     "deny": [
       "Bash(npx playwright test)",
