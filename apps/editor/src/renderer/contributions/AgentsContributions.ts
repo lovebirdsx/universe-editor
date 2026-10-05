@@ -170,6 +170,14 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
               'In plan mode, silently select the scoped "allow and remember" option ("allow-with-updates") the agent offers for shell commands, file reads and searches (Read/Glob/Grep) instead of showing the permission card: the agent then applies the rule the option carries — usually session-only, though a shell command rule may be written to the project\'s .claude/settings.local.json. Requests the agent marks as needing an explicit answer (decline option first) are never auto-approved; the plan review card is governed by "acp.plan.autoExecute". Turn off to review every such request yourself.',
             ),
           },
+          'acp.plan.autoApproveUnscoped': {
+            type: 'boolean',
+            default: true,
+            description: localize(
+              'settings.acp.plan.autoApproveUnscoped',
+              'In plan mode, also silently answer "yes, once" for shell commands, file reads and searches (Read/Glob/Grep) when the agent offers no scoped option this time — the command is let through once and no rule is written. Requests the CLI marks as needing a human answer (a decline-first prompt, a suppressed always-allow rule, or an ask rule of your own) are never auto-approved, for a sub-agent either. A sub-agent\'s request is approved even when an older agent reports no marker at all. Turn off to review every such request yourself.',
+            ),
+          },
           'acp.plan.autoExecute': {
             type: 'string',
             enum: ['off', 'bypassPermissions', 'auto', 'acceptEdits', 'default'],

@@ -7192,10 +7192,16 @@ describe('plan scoped auto-approve (acp.plan.autoApproveWithUpdates)', () => {
     kind: RequestPermissionRequest['toolCall']['kind'] = 'execute',
     options: RequestPermissionRequest['options'] = scopedOptions,
     sessionId = 'agent-1',
+    meta?: Record<string, unknown>,
   ): RequestPermissionRequest {
     return {
       sessionId,
-      toolCall: { toolCallId: 'tc-shell', title: 'ls -la ~/.codex/sessions', kind },
+      toolCall: {
+        toolCallId: 'tc-shell',
+        title: 'ls -la ~/.codex/sessions',
+        kind,
+        ...(meta ? { _meta: meta } : {}),
+      },
       options,
     } as RequestPermissionRequest
   }
@@ -7327,5 +7333,169 @@ describe('plan scoped auto-approve (acp.plan.autoApproveWithUpdates)', () => {
 
     await promise
     expect(permission.persisted).toEqual(['edit'])
+  })
+
+  describe('二级：无作用域选项时静默选「仅本次允许」（acp.plan.autoApproveUnscoped）', () => {
+    /** CLI 给不出可固化规则时的形状：只有 allow-once + reject。 */
+    const unscopedOptions: RequestPermissionRequest['options'] = [
+      { optionId: 'allow-once', name: 'Yes', kind: 'allow_once' },
+      { optionId: 'reject', name: 'No', kind: 'reject_once' },
+    ]
+
+    /** fork 的肯定式标记：主 agent 只有盖章后才允许静默批准。 */
+    const marked = { claudeCode: { clientMayAutoApproveOnce: true } }
+    const subagent = { claudeCode: { parentToolUseId: 'toolu_task' } }
+
+    it('主 agent 盖章 → 静默选中 allow-once，不建卡片也不写规则', async () => {
+      const telemetry = new RecordingTelemetryService()
+      const { svc, session, permission } = await createSession('plan', telemetry)
+
+      const result = await svc.onRequestPermission(
+        request('execute', unscopedOptions, 'agent-1', marked),
+      )
+
+      expect(result).toEqual({ outcome: { outcome: 'selected', optionId: 'allow-once' } })
+      expect(session.pendingPermission.get()).toBeUndefined()
+      expect(permission.persisted).toEqual([])
+      expect(telemetry.logged).toContainEqual({
+        name: 'acp.permission_plan_auto_approved_unscoped',
+        data: { optionId: 'allow-once', kind: 'execute', source: 'main' },
+      })
+    })
+
+    it.each(['read', 'search'] as const)('%s 同样是覆盖范围', async (kind) => {
+      const { svc, session } = await createSession('plan')
+
+      const result = await svc.onRequestPermission(
+        request(kind, unscopedOptions, 'agent-1', marked),
+      )
+
+      expect(result).toEqual({ outcome: { outcome: 'selected', optionId: 'allow-once' } })
+      expect(session.pendingPermission.get()).toBeUndefined()
+    })
+
+    it('子 agent 无标记也放行（用户选择放宽），source 记为 subagent', async () => {
+      const telemetry = new RecordingTelemetryService()
+      const { svc, session, permission } = await createSession('plan', telemetry)
+
+      const result = await svc.onRequestPermission(
+        request('execute', unscopedOptions, 'agent-1', subagent),
+      )
+
+      expect(result).toEqual({ outcome: { outcome: 'selected', optionId: 'allow-once' } })
+      expect(session.pendingPermission.get()).toBeUndefined()
+      expect(permission.persisted).toEqual([])
+      expect(telemetry.logged).toContainEqual({
+        name: 'acp.permission_plan_auto_approved_unscoped',
+        data: { optionId: 'allow-once', kind: 'execute', source: 'subagent' },
+      })
+    })
+
+    it('子 agent 命中用户自己的 ask 规则时不接管（唯一否决位）', async () => {
+      const { svc, session } = await createSession('plan')
+      const askRule = {
+        claudeCode: { parentToolUseId: 'toolu_task', matchedAskRule: true },
+      }
+
+      await expectCard(svc, session, request('execute', unscopedOptions, 'agent-1', askRule))
+    })
+
+    it('子 agent 被 CLI 显式否定时不接管（放宽只对「没盖章」生效）', async () => {
+      // suppressAlwaysAllowRule（删除类命令）就是这个形状：marker=false，但拒绝项不置顶。
+      const { svc, session } = await createSession('plan')
+      const denied = {
+        claudeCode: { parentToolUseId: 'toolu_task', clientMayAutoApproveOnce: false },
+      }
+
+      await expectCard(svc, session, request('execute', unscopedOptions, 'agent-1', denied))
+    })
+
+    it('主 agent 未盖章（旧 fork / CLI 要求人工回答）不接管，且诊断不泄漏选项文案', async () => {
+      const warn = vi.spyOn(NullLogger.prototype, 'warn')
+      try {
+        const { svc, session } = await createSession('plan')
+
+        await expectCard(svc, session, request('execute', unscopedOptions))
+
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringContaining('计划模式本次静默批准回退人工确认'),
+        )
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('marker=absent'))
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('source=main'))
+        expect(warn.mock.calls.flat().join('\n')).not.toContain('~/.codex')
+      } finally {
+        warn.mockRestore()
+      }
+    })
+
+    it('主 agent 被显式标为不许静默批准时不接管', async () => {
+      const { svc, session } = await createSession('plan')
+      const denied = { claudeCode: { clientMayAutoApproveOnce: false } }
+
+      await expectCard(svc, session, request('execute', unscopedOptions, 'agent-1', denied))
+    })
+
+    it('设置显式关闭时不接管，回落人工卡片', async () => {
+      const { svc, session, config } = await createSession('plan')
+      config.update('acp.plan.autoApproveUnscoped', false, ConfigurationTarget.Memory)
+
+      await expectCard(svc, session, request('execute', unscopedOptions, 'agent-1', marked))
+    })
+
+    it('非 plan 会话不接管', async () => {
+      const { svc, session } = await createSession('default')
+
+      await expectCard(svc, session, request('execute', unscopedOptions, 'agent-1', marked))
+    })
+
+    it('范围外的 kind（edit）不接管', async () => {
+      const { svc, session } = await createSession('plan')
+
+      await expectCard(svc, session, request('edit', unscopedOptions, 'agent-1', marked))
+    })
+
+    it('没有 allow-once 选项时不接管', async () => {
+      const { svc, session } = await createSession('plan')
+      const onlyAlways = [
+        { optionId: 'always', name: 'Allow always', kind: 'allow_always' },
+        { optionId: 'reject', name: 'No', kind: 'reject_once' },
+      ] as RequestPermissionRequest['options']
+
+      await expectCard(svc, session, request('execute', onlyAlways, 'agent-1', marked))
+    })
+
+    it('拒绝项置顶时不接管（标记与顺序矛盾时以拒绝为准）', async () => {
+      const { svc, session } = await createSession('plan')
+
+      await expectCard(
+        svc,
+        session,
+        request('execute', [...unscopedOptions].reverse(), 'agent-1', marked),
+      )
+    })
+
+    it('codex 风格的下划线 allow_once 不接管（按 optionId 精确匹配）', async () => {
+      const { svc, session } = await createSession('plan')
+      const codexOptions = [
+        { optionId: 'allow_once', name: 'Yes', kind: 'allow_once' },
+        { optionId: 'reject', name: 'No', kind: 'reject_once' },
+      ] as RequestPermissionRequest['options']
+
+      await expectCard(svc, session, request('execute', codexOptions, 'agent-1', marked))
+    })
+
+    it('本次带作用域选项时由一级接管，二级不降级成「仅本次」', async () => {
+      const telemetry = new RecordingTelemetryService()
+      const { svc } = await createSession('plan', telemetry)
+
+      const result = await svc.onRequestPermission(
+        request('execute', scopedOptions, 'agent-1', marked),
+      )
+
+      expect(result).toEqual({ outcome: { outcome: 'selected', optionId: 'allow-with-updates' } })
+      expect(telemetry.logged.map((event) => event.name)).not.toContain(
+        'acp.permission_plan_auto_approved_unscoped',
+      )
+    })
   })
 })

@@ -70,3 +70,53 @@ test('拒绝项置顶（defaultToNo）时不静默批准 @regression', async ({ 
   await card.getByRole('button', { name: 'No', exact: true }).click()
   await expectSelection(page, 'reject')
 })
+
+test('无作用域选项时（主 agent 已盖章）静默选「仅本次允许」@p1', async ({ page }) => {
+  await startPlanSession(page)
+  await sendPrompt(page, 'approve-shell-once')
+
+  await expectSelection(page, 'allow-once')
+  await expect(page.getByTestId('acp-permission-card')).toHaveCount(0)
+})
+
+test('关闭 acp.plan.autoApproveUnscoped 后无作用域选项仍弹卡 @regression', async ({ page }) => {
+  await startPlanSession(page)
+  await page.evaluate(
+    (key) => window.__E2E__!.updateConfigValue(key, false),
+    'acp.plan.autoApproveUnscoped',
+  )
+  await sendPrompt(page, 'approve-shell-once')
+
+  const card = page.getByTestId('acp-permission-card')
+  await expect(card).toHaveCount(1)
+  await card.getByRole('button', { name: 'Yes', exact: true }).click()
+  await expectSelection(page, 'allow-once')
+})
+
+test('旧 fork 未盖章时无作用域选项不静默批准 @regression', async ({ page }) => {
+  await startPlanSession(page)
+  await sendPrompt(page, 'approve-shell-once-nomarker')
+
+  const card = page.getByTestId('acp-permission-card')
+  await expect(card).toHaveCount(1)
+  await card.getByRole('button', { name: 'Yes', exact: true }).click()
+  await expectSelection(page, 'allow-once')
+})
+
+test('子 agent 的询问无标记也静默批准 @regression', async ({ page }) => {
+  await startPlanSession(page)
+  await sendPrompt(page, 'approve-shell-once-subagent')
+
+  await expectSelection(page, 'allow-once')
+  await expect(page.getByTestId('acp-permission-card')).toHaveCount(0)
+})
+
+test('子 agent 的询问被 CLI 显式否定时仍弹卡 @regression', async ({ page }) => {
+  await startPlanSession(page)
+  await sendPrompt(page, 'approve-shell-once-subagent-denied')
+
+  const card = page.getByTestId('acp-permission-card')
+  await expect(card).toHaveCount(1)
+  await card.getByRole('button', { name: 'Yes', exact: true }).click()
+  await expectSelection(page, 'allow-once')
+})

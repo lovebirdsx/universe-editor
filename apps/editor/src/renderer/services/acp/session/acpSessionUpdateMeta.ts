@@ -81,10 +81,13 @@ export function readSubagentStats(update: {
  * Read the vendor-specific sub-agent attribution our agent fork stamps onto each
  * SessionUpdate (`_meta.claudeCode.parentToolUseId`). Returns the id of the
  * parent tool call when this update belongs to a sub-agent, else undefined.
+ * Also applies to a permission request's `toolCall`, which is not an update but
+ * carries the same `_meta` namespace.
  */
-export function readParentToolUseId(update: SessionUpdate): string | undefined {
-  const meta = (update as { _meta?: { claudeCode?: { parentToolUseId?: unknown } } | null })._meta
-  const pid = meta?.claudeCode?.parentToolUseId
+export function readParentToolUseId(carrier: {
+  _meta?: Record<string, unknown> | null | undefined
+}): string | undefined {
+  const pid = readClaudeCodeMeta(carrier)?.['parentToolUseId']
   return typeof pid === 'string' && pid.length > 0 ? pid : undefined
 }
 
@@ -275,9 +278,42 @@ export function readFileChanges(update: SessionUpdate): readonly FileChangeDescr
   return readDiffContentChanges(update)
 }
 
-function readClaudeCodeMeta(update: SessionUpdate): Record<string, unknown> | undefined {
-  const cc = (update as { _meta?: { claudeCode?: unknown } | null })._meta?.claudeCode
+function readClaudeCodeMeta(carrier: {
+  _meta?: Record<string, unknown> | null | undefined
+}): Record<string, unknown> | undefined {
+  const cc = carrier._meta?.['claudeCode']
   return cc != null && typeof cc === 'object' ? (cc as Record<string, unknown>) : undefined
+}
+
+/**
+ * Read the fork's answer to "may a host silently pick *yes, once* here?" — the
+ * positive form of `_meta.claudeCode.clientMayAutoApproveOnce` the claude fork
+ * stamps onto a permission request's tool call (never onto AIR clients, which
+ * get the same facts under `_meta.jetbrains.air`). The stamping fork always
+ * writes a boolean: `false` when the CLI wants a human to answer (a
+ * decline-first prompt, a suppressed always-allow rule, the user's own ask
+ * rule), and only an older build leaves the key out entirely. Three states, and
+ * only an explicit `true` may be acted on as-is — `false` means "ask", while
+ * `undefined` may be loosened for a request the agent attributes to a sub-agent.
+ */
+export function readClientMayAutoApproveOnce(carrier: {
+  _meta?: Record<string, unknown> | null | undefined
+}): boolean | undefined {
+  const mark = readClaudeCodeMeta(carrier)?.['clientMayAutoApproveOnce']
+  return typeof mark === 'boolean' ? mark : undefined
+}
+
+/**
+ * Read `_meta.claudeCode.matchedAskRule`: the CLI asked for a prompt because the
+ * user's *own* configured ask rule matched, not because it could think of no
+ * durable rule. Rides beside {@link readClientMayAutoApproveOnce} (which is
+ * already false when set) and exists so a host that is otherwise willing to
+ * widen auto-approval — to a sub-agent, say — still honours the user's rule.
+ */
+export function readMatchedAskRule(carrier: {
+  _meta?: Record<string, unknown> | null | undefined
+}): boolean {
+  return readClaudeCodeMeta(carrier)?.['matchedAskRule'] === true
 }
 
 function readStructuredPatch(update: SessionUpdate): FileChangeDescriptor | undefined {

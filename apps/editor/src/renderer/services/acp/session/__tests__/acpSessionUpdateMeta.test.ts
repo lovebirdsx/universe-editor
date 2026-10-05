@@ -8,11 +8,46 @@ import { describe, expect, it } from 'vitest'
 import type { SessionUpdate } from '@agentclientprotocol/sdk'
 import {
   extractModelBreakdown,
+  readClientMayAutoApproveOnce,
   readFileChanges,
+  readMatchedAskRule,
+  readParentToolUseId,
   readSubagent,
   readSubagentStats,
   readSyntheticDenial,
 } from '../acpSessionUpdateMeta.js'
+
+describe('permission-request `_meta` readers', () => {
+  /** A permission request's tool call is not a SessionUpdate but carries the same `_meta` bag. */
+  function toolCall(claudeCode: Record<string, unknown>) {
+    return { toolCallId: 'tc', _meta: { claudeCode } }
+  }
+
+  it('reads the auto-approve marker as a three-state value', () => {
+    expect(readClientMayAutoApproveOnce(toolCall({ clientMayAutoApproveOnce: true }))).toBe(true)
+    expect(readClientMayAutoApproveOnce(toolCall({ clientMayAutoApproveOnce: false }))).toBe(false)
+    // Absent (an older fork) and malformed both mean "not allowed".
+    expect(readClientMayAutoApproveOnce(toolCall({}))).toBeUndefined()
+    expect(
+      readClientMayAutoApproveOnce(toolCall({ clientMayAutoApproveOnce: 'yes' })),
+    ).toBeUndefined()
+    expect(readClientMayAutoApproveOnce({ _meta: null })).toBeUndefined()
+    expect(readClientMayAutoApproveOnce({})).toBeUndefined()
+  })
+
+  it('reads the ask-rule flag as a plain boolean', () => {
+    expect(readMatchedAskRule(toolCall({ matchedAskRule: true }))).toBe(true)
+    expect(readMatchedAskRule(toolCall({}))).toBe(false)
+    expect(readMatchedAskRule(toolCall({ matchedAskRule: 'yes' }))).toBe(false)
+    expect(readMatchedAskRule({ _meta: { claudeCode: 'nope' } })).toBe(false)
+  })
+
+  it('reads the sub-agent attribution off a tool call too', () => {
+    expect(readParentToolUseId(toolCall({ parentToolUseId: 'toolu_task' }))).toBe('toolu_task')
+    expect(readParentToolUseId(toolCall({ parentToolUseId: '' }))).toBeUndefined()
+    expect(readParentToolUseId(toolCall({}))).toBeUndefined()
+  })
+})
 
 describe('extractModelBreakdown', () => {
   function breakdown(row: Record<string, unknown>) {

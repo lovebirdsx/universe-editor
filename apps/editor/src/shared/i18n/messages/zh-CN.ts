@@ -791,6 +791,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.acp.permissions': '无需提示即可自动批准的工具调用类型（例如 "fs.read"）。',
   'settings.acp.plan.autoApproveWithUpdates':
     '计划模式下，Agent 为 Shell 命令、文件读取与搜索（Read/Glob/Grep）提供带作用域的「允许并记住」选项（allow-with-updates）时，直接静默选择而不显示权限卡片：Agent 会应用该选项携带的规则（通常是会话级；Shell 命令规则可能写入工作区的 .claude/settings.local.json）。Agent 标记为需要明确回答的请求（拒绝项置顶）绝不自动批准；计划确认卡片由 `acp.plan.autoExecute` 控制。关闭后这类请求都恢复人工确认。',
+  'settings.acp.plan.autoApproveUnscoped':
+    '计划模式下，当 Agent 这次没有提供带作用域的选项时（CLI 想不出可固化的规则，如 heredoc、for 循环、长 `cd` 链；子 Agent 的询问也常如此），同样静默选择「仅本次允许」：命令放行这一次，不写入任何规则。CLI 标记为需要人工判断的询问（拒绝项优先、压制了 always-allow 规则、或命中你配置的 ask 规则）绝不自动批准，子 Agent 的请求也一样；子 Agent 的放宽只针对「旧版 Agent 完全没提供标记」这一种情况。关闭后这类请求都恢复人工确认。',
   'settings.acp.plan.autoExecute':
     '计划模式的会话完成计划（"Ready to code?"）后，经确认卡片上的短暂倒计时自动以所选模式继续——悬停或与卡片交互即可接管。"off" 表示始终等待手动选择。计划确认卡片上的复选框会把此设置切换为 "bypassPermissions"。',
   'settings.acp.plan.autoExecute.off': '关闭',

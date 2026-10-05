@@ -457,6 +457,47 @@ async function runPrompt(id, params) {
     return reply(id, { stopReason: 'end_turn' })
   }
 
+  // Test directive: "approve-shell-once" asks for an unscoped shell approval the
+  // way the Claude fork does when the CLI can offer no durable rule this time
+  // (allow_once + reject only) and stamps the auto-approve marker on the tool
+  // call. "...-nomarker" drops the whole `_meta` (an older fork, or an ask the
+  // CLI wants a human to judge), "...-subagent" attributes the ask to a
+  // sub-agent instead, which carries no marker, and "...-subagent-denied" is a
+  // sub-agent ask the CLI explicitly marked as needing a human (the shape of a
+  // suppressed always-allow rule: reject not leading). All echo the optionId.
+  if (userText?.startsWith('approve-shell-once')) {
+    const claudeCode =
+      userText === 'approve-shell-once'
+        ? { clientMayAutoApproveOnce: true }
+        : userText === 'approve-shell-once-subagent'
+          ? { parentToolUseId: 'echo-task' }
+          : userText === 'approve-shell-once-subagent-denied'
+            ? { parentToolUseId: 'echo-task', clientMayAutoApproveOnce: false }
+            : {}
+    const result = await requestFromClient('session/request_permission', {
+      sessionId,
+      toolCall: {
+        toolCallId: 'echo-shell',
+        title: 'python3 - <<EOF',
+        kind: 'execute',
+        ...(Object.keys(claudeCode).length > 0 ? { _meta: { claudeCode } } : {}),
+      },
+      options: [
+        { optionId: 'allow-once', name: 'Yes', kind: 'allow_once' },
+        { optionId: 'reject', name: 'No', kind: 'reject_once' },
+      ],
+    })
+    notify('session/update', {
+      sessionId,
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: userText + ' result: ' + JSON.stringify(result) },
+      },
+    })
+    activeTurns.delete(sessionId)
+    return reply(id, { stopReason: 'end_turn' })
+  }
+
   // Test directive: "elicit-form" asks the client a fixed form elicitation and
   // echoes the user's response (accept+content / decline / cancel).
   if (userText === 'elicit-form') {

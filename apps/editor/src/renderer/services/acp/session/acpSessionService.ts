@@ -129,7 +129,12 @@ import {
 } from './acpSession.js'
 import { isResidentLive } from './acpSessionStatus.js'
 import { MAX_RECOVERY_ATTEMPTS, recoveryBackoffMs } from './acpSessionRecovery.js'
-import { readSyntheticDenial } from './acpSessionUpdateMeta.js'
+import {
+  readClientMayAutoApproveOnce,
+  readMatchedAskRule,
+  readParentToolUseId,
+  readSyntheticDenial,
+} from './acpSessionUpdateMeta.js'
 import {
   ACP_ACTIVE_SESSION_STORAGE_KEY,
   AcpSessionRestoreCoordinator,
@@ -417,6 +422,21 @@ const HISTORY_SCOPE_KEY = 'acp.sessions.historyScope'
  * （updatedPermissions 会一并应用），kind 恒为 `allow_always`，靠 optionId 区分。
  */
 const ALLOW_WITH_UPDATES_OPTION_ID = 'allow-with-updates'
+
+/**
+ * 无作用域选项时的「仅本次允许」选项 id。同样按 id 精确匹配而非 kind：codex fork 的
+ * 对应 id 是下划线风格的 `allow_once`（vendor/codex-acp/src/permissions/option-ids.ts），
+ * 按 kind 匹配会把它一并接管。claude fork 的选项恒为 `allow-once`。
+ */
+const ALLOW_ONCE_OPTION_ID = 'allow-once'
+
+/**
+ * 计划模式下允许静默批准的 tool kind：Shell（execute）与读取类（read/search，即
+ * Read/Glob/Grep）。编辑类仍必须人工确认。
+ */
+function isPlanAutoApproveKind(kind: string | null | undefined): boolean {
+  return kind === 'execute' || kind === 'read' || kind === 'search'
+}
 
 /**
  * 自带作用域的 allow_always 选项：点选它们只应用 Agent 的规则，不等于对整个
@@ -2452,6 +2472,20 @@ export class AcpSessionService
       this._logger.debug(`计划模式作用域批准：optionId=${scopedOptionId}`)
       return { outcome: { outcome: 'selected', optionId: scopedOptionId } }
     }
+    // 二级：Agent 给不出作用域选项时选「仅本次允许」——不建卡片、不写规则；
+    // 开关 acp.plan.autoApproveUnscoped。
+    const unscoped = this._planAutoApproveUnscoped(session, params)
+    if (unscoped) {
+      this._telemetry.publicLog('acp.permission_plan_auto_approved_unscoped', {
+        optionId: unscoped.optionId,
+        kind: params.toolCall.kind ?? 'unknown',
+        source: unscoped.source,
+      })
+      this._logger.debug(
+        `计划模式本次静默批准：optionId=${unscoped.optionId}, source=${unscoped.source}`,
+      )
+      return { outcome: { outcome: 'selected', optionId: unscoped.optionId } }
+    }
     const allowAlways = params.options.find((o) => o.kind === 'allow_always')
     // plan 审查的自动执行：设置非 off 且目标选项确实在本次 options 里才附加
     // （例如 ALLOW_BYPASS 关闭时 bypassPermissions 缺席，降级为普通弹卡）。
@@ -2540,6 +2574,26 @@ export class AcpSessionService
     return { optionId, delayMs: PLAN_AUTO_EXECUTE_DELAY_MS }
   }
 
+  /** 会话当前是否处于 plan 模式（两级静默批准的共同前置条件）。 */
+  private _isPlanMode(session: AcpSession): boolean {
+    return session.configOptions
+      .get()
+      .some((option) => option.category === 'mode' && option.currentValue === 'plan')
+  }
+
+  /**
+   * fork 在 CLI 标记 defaultToNo（安全类询问）时把拒绝项排到最前，明确要求客户端
+   * 不要把批准项当默认；此时退回人工确认。两级静默批准共用这一道否决。
+   */
+  private _rejectOptionFirst(params: RequestPermissionRequest): boolean {
+    const first = params.options[0]
+    return first?.kind === 'reject_once' || first?.kind === 'reject_always'
+  }
+
+  private _optionSummary(params: RequestPermissionRequest): string {
+    return JSON.stringify(params.options.map(({ optionId, kind }) => ({ optionId, kind })))
+  }
+
   /**
    * 计划模式下 Shell（execute）/ 读取类（read/search，即 Read/Glob/Grep）请求的
    * 静默批准。返回 undefined 表示回落普通人工弹卡：设置关闭 / 非 plan 会话 /
@@ -2550,28 +2604,71 @@ export class AcpSessionService
     session: AcpSession,
     params: RequestPermissionRequest,
   ): string | undefined {
-    const kind = params.toolCall.kind
-    if (kind !== 'execute' && kind !== 'read' && kind !== 'search') return undefined
+    if (!isPlanAutoApproveKind(params.toolCall.kind)) return undefined
     if (this._config.get<boolean>('acp.plan.autoApproveWithUpdates') === false) return undefined
-    const isPlanMode = session.configOptions
-      .get()
-      .some((option) => option.category === 'mode' && option.currentValue === 'plan')
-    if (!isPlanMode) return undefined
+    if (!this._isPlanMode(session)) return undefined
     const option = params.options.find(
       (candidate) =>
         candidate.optionId === ALLOW_WITH_UPDATES_OPTION_ID && candidate.kind === 'allow_always',
     )
     if (!option) return undefined
-    // fork 在 CLI 标记 defaultToNo（安全类询问）时把拒绝项排到最前，明确要求客户端
-    // 不要把批准项当默认；此时退回人工确认。
-    const first = params.options[0]
-    if (first?.kind === 'reject_once' || first?.kind === 'reject_always') {
+    if (this._rejectOptionFirst(params)) {
       this._logger.warn(
-        `计划模式作用域批准回退人工确认（拒绝项置顶）：options=${JSON.stringify(params.options.map(({ optionId, kind: optionKind }) => ({ optionId, kind: optionKind })))}`,
+        `计划模式作用域批准回退人工确认（拒绝项置顶）：options=${this._optionSummary(params)}`,
       )
       return undefined
     }
     return option.optionId
+  }
+
+  /**
+   * 计划模式的第二级静默批准：Agent 这次**没有**给出作用域化选项（CLI 想不出可固化
+   * 的规则——heredoc、for 循环、长 cd 链；子 agent 的询问也常落在这里），只剩
+   * 「仅本次允许」。此时替用户点 `allow-once`：只放行这一次，不写任何规则，也不写
+   * `acp.permissions.autoApprove`。与一级正交——一级管「有作用域选项」，二级管「没有」。
+   *
+   * 主 / 子 agent 的边界（用户定）：子 agent 的询问放宽到「不需要 fork 的肯定式标记」，
+   * 但**不**放宽 CLI 的显式否定——`marker === false` 意味着 CLI 要么要了拒绝项优先的提示，
+   * 要么压制了 always-allow 规则（`suppressAlwaysAllowRule`，删除类命令），要么命中了用户的
+   * ask 规则，一律弹卡（前两条的选项顺序代理只覆盖第一条）。主 agent 更严：只在
+   * `marker === true` 时批准（旧 fork 缺字段 = 要求人工回答，fail-closed）。
+   */
+  private _planAutoApproveUnscoped(
+    session: AcpSession,
+    params: RequestPermissionRequest,
+  ): { optionId: string; source: 'subagent' | 'main' } | undefined {
+    const kind = params.toolCall.kind
+    if (!isPlanAutoApproveKind(kind)) return undefined
+    if (this._config.get<boolean>('acp.plan.autoApproveUnscoped') === false) return undefined
+    // 一级已接管带作用域选项的请求；本次有作用域选项就不走二级（永不降级成「仅本次」）。
+    if (params.options.some((option) => option.optionId === ALLOW_WITH_UPDATES_OPTION_ID)) {
+      return undefined
+    }
+    if (!this._isPlanMode(session)) return undefined
+    const option = params.options.find(
+      (candidate) => candidate.optionId === ALLOW_ONCE_OPTION_ID && candidate.kind === 'allow_once',
+    )
+    if (!option) return undefined
+    if (this._rejectOptionFirst(params)) {
+      this._logger.warn(
+        `计划模式本次静默批准回退人工确认（拒绝项置顶）：options=${this._optionSummary(params)}`,
+      )
+      return undefined
+    }
+    const source = readParentToolUseId(params.toolCall) !== undefined ? 'subagent' : 'main'
+    // 用户自己配置的 ask 规则是显式否决位：子 agent 放宽时仍尊重它。
+    if (readMatchedAskRule(params.toolCall)) {
+      this._logger.debug(`计划模式本次静默批准回退人工确认（命中用户 ask 规则）：source=${source}`)
+      return undefined
+    }
+    const marker = readClientMayAutoApproveOnce(params.toolCall)
+    if (marker === false || (source === 'main' && marker !== true)) {
+      this._logger.warn(
+        `计划模式本次静默批准回退人工确认：marker=${marker ?? 'absent'}, source=${source}, options=${this._optionSummary(params)}`,
+      )
+      return undefined
+    }
+    return { optionId: option.optionId, source }
   }
 
   async onCreateElicitation(params: CreateElicitationRequest): Promise<CreateElicitationResponse> {

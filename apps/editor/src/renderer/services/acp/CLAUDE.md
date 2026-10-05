@@ -31,7 +31,7 @@ Agent Client Protocol（ACP）客户端层。基于 `@agentclientprotocol/sdk` v
 
 **入站**：`IAcpHostService.onStdout(chunk)` → `sdkHostStream` 重编码 → `ndJsonStream` → `clientImpl` 回调：`sessionUpdate`（→ `AcpSession.applyUpdate`）、`requestPermission`（tryAutoApprove or PermissionCard）、`unstable_createElicitation`（pendingElicitation + ElicitationCard）、`readTextFile / writeTextFile`（AcpPathPolicy → IFileService）、terminal 五方法（→ IAcpTerminalService，带 ownership 检查）。**stderr 不进 SDK 流**：单独写 `OutputChannel`（喂进去会破坏 JSON 解析）。
 
-**`applyUpdate` 处理八种 SessionUpdate**：`user_message_chunk` / `agent_message_chunk` / `agent_thought_chunk` / `tool_call` / `tool_call_update` / `plan` / `available_commands_update` / `config_option_update`。`config_option_update` delegate 到 `ConfigOptionStateMachine.ingestUpdate`（需 echo 抑制）。
+**`applyUpdate` 处理八种 SessionUpdate**（`user_message_chunk` / `agent_*_chunk` / `tool_call(_update)` / `plan` / `available_commands_update` / `config_option_update`）：`config_option_update` delegate 到 `ConfigOptionStateMachine.ingestUpdate`（需 echo 抑制）。
 
 ## 套路 ACP-A：加一个内置 agent 预设
 
@@ -56,7 +56,7 @@ Agent Client Protocol（ACP）客户端层。基于 `@agentclientprotocol/sdk` v
 
 **例外：`switch_mode`（ExitPlanMode）永不走静默自动批准、也不被 `persistAllow` 记住**（守卫在 `onRequestPermission`）。它的自动化由 `acp.plan.autoExecute`（off/bypassPermissions/auto/acceptEdits/default）显式驱动：设置映射到已提供的非 clear 批准选项（`exit-plan-*`）才附 `autoResolve`，否则诊断并回人工确认。卡片倒计时可打断，勿静默短路。
 
-**计划模式作用域批准**：`acp.plan.autoApproveWithUpdates`（默认开）对 plan 会话的 `execute`/`read`/`search` 静默选中 fork 的 `allow-with-updates`，不经 `AcpPermissionHandler`；判定六条与风险见 [cases-plan-approve.md](cases-plan-approve.md)。
+**计划模式静默批准分两级**（默认开、可分别关，都不经 `AcpPermissionHandler`）：`execute`/`read`/`search` 先用 `acp.plan.autoApproveWithUpdates` 选 fork 的 `allow-with-updates`（CLI 固化规则）；本次无该选项时 `acp.plan.autoApproveUnscoped` 选 `allow-once`（放行一次、不写规则；主 agent 要肯定式标记，子 agent 放宽）。判定与风险见 [cases-plan-approve.md](cases-plan-approve.md)。
 
 ## 套路 ACP-E：扩展会话历史持久化字段
 
@@ -71,7 +71,7 @@ Agent Client Protocol（ACP）客户端层。基于 `@agentclientprotocol/sdk` v
 1. `normalizeMcpServers(raw, onWarn)`：把 **Record 风格**（key=server name，`env`/`headers` 用 Record）或**旧数组格式**统一成 ACP wire `McpServer[]`。坏条目**跳过 + warn 不抛错**。
 2. `filterMcpServersByCapabilities(servers, caps)`：读 `agentCapabilities?.mcpCapabilities`，agent 不通告的 http/sse 进 `dropped`；stdio 是基线**恒留**。`_warnDroppedMcpServers` 逐条 warn + 一次汇总通知。
 
-agent 端（`vendor/claude-agent-acp`）把 wire 的 `env`/`headers` 数组还原成 Record 喂 Claude Agent SDK——连接/工具发现全由 SDK 管，client 只做"配置→wire→门控"。命令入口：`Agents: Open MCP Settings`（`agentActions.ts`）。
+agent 端（`vendor/claude-agent-acp`）把 wire 的 `env`/`headers` 数组还原成 Record 喂 Claude Agent SDK——连接/工具发现全由 SDK 管。命令入口：`Agents: Open MCP Settings`（`agentActions.ts`）。
 
 **默认启用集语义（MCP 定义池 = 分层合并 + 每会话过滤，细节见 [cases-mcp-enablement.md](cases-mcp-enablement.md)）**：
 - **八层优先级（低→高）**：extension → agent-user → VSCodeUser → User → VSCodeWorkspace → Project → Memory → agent-project（`.mcp.json` / `<cwd>/.codex/config.toml`）。
@@ -87,7 +87,7 @@ agent 端（`vendor/claude-agent-acp`）把 wire 的 `env`/`headers` 数组还�
 
 ## 测试模式
 
-主要测试在 `__tests__/`：`AcpSessionService.test.ts`、`acpSessionConfigOptions.test.ts`、`AcpSessionService.resume.test.ts` + `acpSessionRestoreCoordinator.test.ts`、`AcpClientService.terminal.test.ts`、`acpMcpServers.test.ts`、`acpSessionHistory.test.ts`、`sdkHostStream.test.ts`。
+主要测试在 `__tests__/`：`AcpSessionService*` / `acpSessionConfigOptions` / `acpSessionRestoreCoordinator` / `AcpClientService.terminal` / `acpMcpServers` / `acpSessionHistory` / `sdkHostStream` 的 `.test.ts`。
 
 **协议级测试一律走 `testing/inMemoryAcpPair.ts`**（对联构成见「文件归位」）。断言 **fake agent 方法被调用 + 参数对**，而不是 jsonline 字节（会被 SDK wire 格式变化弄碎）。E2E 在 `apps/editor/e2e/`，ACP 未在 `@p0` 冒烟里。
 
@@ -113,7 +113,7 @@ agent 端（`vendor/claude-agent-acp`）把 wire 的 `env`/`headers` 数组还�
 ## 参考路径
 
 - SDK 类型源码：`node_modules/@agentclientprotocol/sdk/dist/schema/types.gen.d.ts`；入口导出 `ClientSideConnection / AgentSideConnection / RequestError / ndJsonStream` + schema 类型
-- 配置 key：`acp.agents` / `acp.permissions.autoApprove` / `acp.plan.autoApproveWithUpdates` / `acp.plan.autoExecute` / `acp.startupTimeoutMs` / `acp.defaultAgentId` / `acp.mcpServers` / `acp.idleProcessTimeoutMs`
+- 配置 key：`acp.agents` / `acp.permissions.autoApprove` / `acp.plan.autoApprove*` / `acp.plan.autoExecute` / `acp.startupTimeoutMs` / `acp.defaultAgentId` / `acp.mcpServers` / `acp.idleProcessTimeoutMs`
 
 ## 案例：输入框（引用 / 图片 / Monaco 编排）
 
