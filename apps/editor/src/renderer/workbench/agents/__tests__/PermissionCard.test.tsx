@@ -36,8 +36,12 @@ function planPermission(overrides?: Partial<AcpPendingPermission>): AcpPendingPe
     title: 'Ready to code?',
     kind: 'switch_mode',
     options: [
-      { optionId: 'default', name: 'Yes, and manually approve edits', kind: 'allow_once' },
-      { optionId: 'plan', name: 'No, keep planning', kind: 'reject_once' },
+      {
+        optionId: 'exit-plan-default',
+        name: 'Yes, and manually approve edits',
+        kind: 'allow_once',
+      },
+      { optionId: 'reject', name: 'No, keep planning', kind: 'reject_once' },
     ],
     resolve: () => {},
     cancel: () => {},
@@ -45,12 +49,17 @@ function planPermission(overrides?: Partial<AcpPendingPermission>): AcpPendingPe
   }
 }
 
-/** plan options mirroring the fork's ExitPlanMode order (bypass first). */
 function forkPlanOptions(): AcpPendingPermission['options'] {
   return [
-    { optionId: 'bypassPermissions', name: 'Yes, and bypass permissions', kind: 'allow_always' },
-    { optionId: 'default', name: 'Yes, and manually approve edits', kind: 'allow_once' },
-    { optionId: 'plan', name: 'No, keep planning', kind: 'reject_once' },
+    {
+      optionId: 'exit-plan-clear-auto',
+      name: 'Yes, clear context (41% used) and use auto mode',
+      kind: 'allow_always',
+    },
+    { optionId: 'exit-plan-auto', name: 'Yes, and use auto mode', kind: 'allow_always' },
+    { optionId: 'exit-plan-bypass', name: 'Yes, and bypass permissions', kind: 'allow_always' },
+    { optionId: 'exit-plan-default', name: 'Yes, and manually approve edits', kind: 'allow_once' },
+    { optionId: 'reject', name: 'No, keep planning', kind: 'reject_once' },
   ]
 }
 
@@ -136,7 +145,7 @@ describe('PermissionCard steering (ExitPlanMode)', () => {
     fireEvent.change(input, { target: { value: '  use a worker pool instead  ' } })
     fireEvent.click(screen.getByTestId('acp-permission-steer-submit'))
 
-    expect(resolve).toHaveBeenCalledWith('plan', 'use a worker pool instead')
+    expect(resolve).toHaveBeenCalledWith('reject', 'use a worker pool instead')
   })
 
   it('submits on Enter (without Shift)', () => {
@@ -147,7 +156,7 @@ describe('PermissionCard steering (ExitPlanMode)', () => {
     fireEvent.change(input, { target: { value: 'rethink the schema' } })
     fireEvent.keyDown(input, { key: 'Enter' })
 
-    expect(resolve).toHaveBeenCalledWith('plan', 'rethink the schema')
+    expect(resolve).toHaveBeenCalledWith('reject', 'rethink the schema')
   })
 
   it('does not submit empty / whitespace-only input', () => {
@@ -172,15 +181,24 @@ describe('PermissionCard auto-execute (acp.plan.autoExecute)', () => {
     return planPermission({
       resolve,
       options: forkPlanOptions(),
-      autoResolve: { optionId: 'bypassPermissions', delayMs: 100 },
+      autoResolve: { optionId: 'exit-plan-bypass', delayMs: 100 },
     })
   }
 
-  it('renders bypass (allow_always) as the first action on the plan review card', () => {
-    renderCard(planPermission({ options: forkPlanOptions() }))
-    const buttons = screen.getAllByRole('button')
-    expect(buttons[0]!.getAttribute('data-testid')).toBe('acp-permission-allow-always')
-    expect(buttons[0]!.textContent).toBe('Yes, and bypass permissions')
+  it('按 agent 顺序展示全部计划选项，不按权限类型去重', () => {
+    const options = forkPlanOptions()
+    renderCard(planPermission({ options }))
+    const buttons = screen.getAllByRole('button').slice(0, options.length)
+    expect(buttons.map((button) => button.textContent)).toEqual(
+      options.map((option) => option.name),
+    )
+  })
+
+  it.each(forkPlanOptions())('点击 $optionId 时回传原始 ID', (option) => {
+    const resolve = vi.fn()
+    renderCard(planPermission({ options: forkPlanOptions(), resolve }))
+    fireEvent.click(screen.getByRole('button', { name: option.name }))
+    expect(resolve).toHaveBeenCalledExactlyOnceWith(option.optionId)
   })
 
   it('keeps the minimal grant (allow_once) first on ordinary tool cards', () => {
@@ -199,7 +217,7 @@ describe('PermissionCard auto-execute (acp.plan.autoExecute)', () => {
     act(() => {
       vi.advanceTimersByTime(150)
     })
-    expect(resolve).toHaveBeenCalledWith('bypassPermissions')
+    expect(resolve).toHaveBeenCalledWith('exit-plan-bypass')
   })
 
   it('pauses the countdown while the card is hovered', () => {
@@ -218,7 +236,31 @@ describe('PermissionCard auto-execute (acp.plan.autoExecute)', () => {
     act(() => {
       vi.advanceTimersByTime(150)
     })
-    expect(resolve).toHaveBeenCalledWith('bypassPermissions')
+    expect(resolve).toHaveBeenCalledWith('exit-plan-bypass')
+  })
+
+  it('聚焦卡片时暂停，失焦后继续倒计时', () => {
+    vi.useFakeTimers()
+    const resolve = vi.fn()
+    renderCard(autoPending(resolve), { 'acp.plan.autoExecute': 'bypassPermissions' })
+    const input = screen.getByTestId('acp-permission-steer-input')
+    fireEvent.focusIn(input)
+    act(() => vi.advanceTimersByTime(200))
+    expect(resolve).not.toHaveBeenCalled()
+    fireEvent.focusOut(input, { relatedTarget: null })
+    act(() => vi.advanceTimersByTime(150))
+    expect(resolve).toHaveBeenCalledExactlyOnceWith('exit-plan-bypass')
+  })
+
+  it('Dismiss 取消请求并清理倒计时', () => {
+    vi.useFakeTimers()
+    const resolve = vi.fn()
+    const cancel = vi.fn()
+    renderCard({ ...autoPending(resolve), cancel }, { 'acp.plan.autoExecute': 'bypassPermissions' })
+    fireEvent.click(screen.getByTestId('acp-permission-cancel'))
+    act(() => vi.advanceTimersByTime(500))
+    expect(cancel).toHaveBeenCalledOnce()
+    expect(resolve).not.toHaveBeenCalled()
   })
 
   it('does not auto-resolve again after a manual choice settles the card', () => {
@@ -227,7 +269,7 @@ describe('PermissionCard auto-execute (acp.plan.autoExecute)', () => {
     renderCard(autoPending(resolve), { 'acp.plan.autoExecute': 'bypassPermissions' })
 
     fireEvent.click(screen.getByTestId('acp-permission-deny'))
-    expect(resolve).toHaveBeenCalledWith('plan')
+    expect(resolve).toHaveBeenCalledWith('reject')
     act(() => {
       vi.advanceTimersByTime(500)
     })

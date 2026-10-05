@@ -34,6 +34,9 @@ function ActivePermissionCard({ pending }: { pending: AcpPendingPermission }) {
   // 意见作为 feedback 一并回传——fork 会将其作为被拒工具的 deny message 反馈给 agent。
   // 这样它落盘为可回放的 tool_result（而非会话结束即丢失的 queued_command），回放可见。
   const isPlanReview = pending.kind === 'switch_mode'
+  const options = isPlanReview
+    ? pending.options
+    : [allowOnce, allowAlways, reject].filter((option) => option !== undefined)
 
   // 本次请求的自动执行倒计时（service 按设置附加 autoResolve；选项缺席时为 undefined）。
   // hover / 聚焦卡片即暂停，取消勾选开关同时作废本次倒计时。
@@ -89,49 +92,25 @@ function ActivePermissionCard({ pending }: { pending: AcpPendingPermission }) {
         {pending.kind && <span className={styles['permissionKind']}>{pending.kind}</span>}
       </header>
       <div className={styles['permissionActions']}>
-        {/* plan 审查卡把 allow_always（bypass）放首位，对齐 CLI 的 plan 退出对话与
-            fork 的 options 顺序——它是绝大多数用户的选择；普通工具卡保持最小授权
-            （allow_once）在前的保守顺序。 */}
-        {isPlanReview && allowAlways && (
-          <button
-            type="button"
-            className={styles['permissionAllow']}
-            onClick={() => pending.resolve(allowAlways.optionId)}
-            data-testid="acp-permission-allow-always"
-          >
-            {allowAlways.name}
-          </button>
-        )}
-        {allowOnce && (
-          <button
-            type="button"
-            className={styles['permissionAllow']}
-            onClick={() => pending.resolve(allowOnce.optionId)}
-            data-testid="acp-permission-allow-once"
-          >
-            {allowOnce.name}
-          </button>
-        )}
-        {!isPlanReview && allowAlways && (
-          <button
-            type="button"
-            className={styles['permissionAllow']}
-            onClick={() => pending.resolve(allowAlways.optionId)}
-            data-testid="acp-permission-allow-always"
-          >
-            {allowAlways.name}
-          </button>
-        )}
-        {reject && (
-          <button
-            type="button"
-            className={styles['permissionDeny']}
-            onClick={() => pending.resolve(reject.optionId)}
-            data-testid="acp-permission-deny"
-          >
-            {reject.name}
-          </button>
-        )}
+        {options.map((option) => {
+          const allowed = option.kind === 'allow_once' || option.kind === 'allow_always'
+          return (
+            <button
+              key={option.optionId}
+              type="button"
+              className={styles[allowed ? 'permissionAllow' : 'permissionDeny']}
+              onClick={() => pending.resolve(option.optionId)}
+              data-option-id={option.optionId}
+              data-testid={
+                allowed
+                  ? `acp-permission-${option.kind === 'allow_once' ? 'allow-once' : 'allow-always'}`
+                  : 'acp-permission-deny'
+              }
+            >
+              {option.name}
+            </button>
+          )
+        })}
         <button
           type="button"
           className={styles['permissionDeny']}

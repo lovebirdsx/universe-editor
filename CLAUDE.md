@@ -86,7 +86,7 @@ pnpm e2e          # 端到端测试（未提交改动仅含 e2e spec 时自动�
 
 **内置 ACP agent（claude-agent-acp fork）**：`vendor/claude-agent-acp` 是 git submodule（我们自维护的 fork），**不在 pnpm workspace 内**，用它自带的 npm 工具链独立构建。
 - 克隆仓库后先 `git submodule update --init`（或 `git clone --recurse-submodules`）。
-- 改动 fork 或拉取上游后，跑 `pnpm agent:build`（npm ci + tsc + prune 生产依赖）生成 `vendor/claude-agent-acp/{dist,node_modules}`。
+- 改动 fork 或拉取上游后，跑 `pnpm agent:build`（npm ci + esbuild bundle）生成 `vendor/{claude-agent-acp,codex-acp}/{dist,node_modules}`。`pnpm dev` / `pnpm dev:run` 启动前会按指纹自检 `dist/` 并按需重建（`scripts/dev/ensure-vendor-agent-build.mjs`），但**不会**替你跑 npm ci——新 clone / worktree 仍需先 `agent:build`。
 - dev 与发布**同一套启动机制**：main 用 Electron 自带 node（`ELECTRON_RUN_AS_NODE`）跑该 fork 的 `dist/index.js`，**不依赖系统 node/npx**。打包时 `electron-builder.yml` 的 `extraResources` 把产物带进 `resources/`（`package:win*` 已串入 `agent:build`）。
 
 ## 代码风格

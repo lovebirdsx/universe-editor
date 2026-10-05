@@ -81,6 +81,17 @@ const vendor = spawnSync(
 )
 if (vendor.status !== 0) process.exit(vendor.status ?? 1)
 
+// Same vendored-agent freshness gate as `pnpm dev` (see scripts/dev/
+// ensure-vendor-agent-build.mjs): dev:run has no watch semantics, so this precheck is the
+// only thing standing between a `git submodule update` and a new editor driving an old
+// agent bundle over a mismatched wire contract.
+const vendorAgents = spawnSync(
+  process.execPath,
+  [resolve(REPO_ROOT, 'scripts/dev/ensure-vendor-agent-build.mjs')],
+  { cwd: REPO_ROOT, stdio: 'inherit' },
+)
+if (vendorAgents.status !== 0) process.exit(vendorAgents.status ?? 1)
+
 // Bundled-into-main workspace packages must have their dist/ built before the
 // electron-vite build below resolves them (see scripts/dev/ensure-workspace-build.mjs).
 // Fast no-op once present; only a fresh clone / cleaned dist pays the turbo build.

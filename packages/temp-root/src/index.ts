@@ -59,6 +59,7 @@ export const TEMP_PREFIXES: readonly string[] = [
   'sensitive-strings-',
   'claude-md-size-',
   'fresh-mtimes-',
+  'vendor-agent-build-',
   'builtin-engines-',
   'ext-release-',
   'sdk-gen-',

@@ -28,6 +28,17 @@ const vendor = spawnSync(
 )
 if (vendor.status !== 0) process.exit(vendor.status ?? 1)
 
+// The vendored agents are built by their own toolchain, not electron-vite: without this
+// guard a `git submodule update` leaves a new editor running against an old agent bundle,
+// and the wire-contract mismatch only shows up as a behavior quirk (see
+// scripts/dev/ensure-vendor-agent-build.mjs). Fast no-op once stamped.
+const vendorAgents = spawnSync(
+  process.execPath,
+  [resolve(REPO_ROOT, 'scripts/dev/ensure-vendor-agent-build.mjs')],
+  { cwd: REPO_ROOT, stdio: 'inherit' },
+)
+if (vendorAgents.status !== 0) process.exit(vendorAgents.status ?? 1)
+
 // Bundled-into-main workspace packages must have their dist/ built before
 // electron-vite resolves them (see scripts/dev/ensure-workspace-build.mjs). Fast no-op
 // once present; only a fresh clone / cleaned dist pays the turbo build.

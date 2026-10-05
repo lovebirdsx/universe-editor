@@ -2471,8 +2471,28 @@ export class AcpSessionService
     if (params.toolCall.kind !== 'switch_mode') return undefined
     const mode = this._config.get<string>('acp.plan.autoExecute')
     if (!mode || mode === 'off') return undefined
-    if (!params.options.some((o) => o.optionId === mode)) return undefined
-    return { optionId: mode, delayMs: PLAN_AUTO_EXECUTE_DELAY_MS }
+    // 设置存权限模式，fork 的 optionId 是独立契约；自动执行不选择清上下文变体。
+    const optionIds = new Map([
+      ['bypassPermissions', 'exit-plan-bypass'],
+      ['auto', 'exit-plan-auto'],
+      ['acceptEdits', 'exit-plan-accept-edits'],
+      ['default', 'exit-plan-default'],
+    ])
+    const optionId = optionIds.get(mode)
+    if (
+      !optionId ||
+      !params.options.some(
+        (option) =>
+          option.optionId === optionId &&
+          (option.kind === 'allow_once' || option.kind === 'allow_always'),
+      )
+    ) {
+      this._logger.warn(
+        `计划自动执行回退人工确认：mode=${mode}, options=${JSON.stringify(params.options.map(({ optionId, kind }) => ({ optionId, kind })))}`,
+      )
+      return undefined
+    }
+    return { optionId, delayMs: PLAN_AUTO_EXECUTE_DELAY_MS }
   }
 
   async onCreateElicitation(params: CreateElicitationRequest): Promise<CreateElicitationResponse> {

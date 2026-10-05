@@ -15,6 +15,7 @@ import {
   Emitter,
   Event,
   NoopTelemetryService,
+  NullLogger,
   observableValue,
   Severity,
   StorageScope,
@@ -1879,32 +1880,82 @@ describe('AcpSessionService', () => {
   })
 
   describe('plan review auto-execute (acp.plan.autoExecute)', () => {
-    const planOptions = [
-      { optionId: 'bypassPermissions', name: 'Yes, and bypass permissions', kind: 'allow_always' },
-      { optionId: 'default', name: 'Yes, and manually approve edits', kind: 'allow_once' },
-      { optionId: 'plan', name: 'No, keep planning', kind: 'reject_once' },
+    const planOptions: RequestPermissionRequest['options'] = [
+      {
+        optionId: 'exit-plan-clear-auto',
+        name: 'Yes, clear context (41% used) and use auto mode',
+        kind: 'allow_always',
+      },
+      { optionId: 'exit-plan-auto', name: 'Yes, and use auto mode', kind: 'allow_always' },
+      { optionId: 'exit-plan-bypass', name: 'Yes, and bypass permissions', kind: 'allow_always' },
+      { optionId: 'exit-plan-default', name: 'Yes, manually approve edits', kind: 'allow_once' },
+      { optionId: 'reject', name: 'No, keep planning', kind: 'reject_once' },
     ]
 
-    function requestPlanReview(sessionId: string): Promise<RequestPermissionResponse> {
+    function requestPlanReview(
+      sessionId: string,
+      options = planOptions,
+    ): Promise<RequestPermissionResponse> {
       return svc.onRequestPermission({
         sessionId,
         toolCall: { toolCallId: 'tcp1', title: 'Ready to code?', kind: 'switch_mode' },
-        options: planOptions,
-      } as RequestPermissionRequest)
+        options,
+      })
     }
 
-    it('attaches autoResolve when the setting names a present option', async () => {
+    it.each([
+      ['bypassPermissions', 'exit-plan-bypass'],
+      ['auto', 'exit-plan-auto'],
+      ['acceptEdits', 'exit-plan-accept-edits'],
+      ['default', 'exit-plan-default'],
+    ])('将 %s 映射为保留上下文的 %s', async (mode, optionId) => {
       const s = await svc.createSession()
       await s.whenConnected()
-      config.update('acp.plan.autoExecute', 'bypassPermissions', ConfigurationTarget.Memory)
-      const promise = requestPlanReview('agent-1')
+      config.update('acp.plan.autoExecute', mode, ConfigurationTarget.Memory)
+      const promise = requestPlanReview('agent-1', [
+        ...planOptions,
+        {
+          optionId: 'exit-plan-accept-edits',
+          name: 'Yes, and auto-accept edits',
+          kind: 'allow_always',
+        },
+      ])
       await new Promise((r) => setTimeout(r, 0))
       const pending = s.pendingPermission.get()
-      expect(pending?.autoResolve).toEqual({
-        optionId: 'bypassPermissions',
-        delayMs: PLAN_AUTO_EXECUTE_DELAY_MS,
-      })
-      pending!.cancel()
+      try {
+        expect(pending?.autoResolve).toEqual({
+          optionId,
+          delayMs: PLAN_AUTO_EXECUTE_DELAY_MS,
+        })
+        pending!.resolve(optionId!)
+        await expect(promise).resolves.toEqual({ outcome: { outcome: 'selected', optionId } })
+      } finally {
+        pending?.cancel()
+      }
+    })
+
+    it.each(['off', 'unknown', 'auto'])('%s 没有对应批准选项时保留人工确认', async (mode) => {
+      const s = await svc.createSession()
+      await s.whenConnected()
+      config.update('acp.plan.autoExecute', mode, ConfigurationTarget.Memory)
+      const promise = requestPlanReview('agent-1', [
+        planOptions[0]!,
+        { optionId: 'exit-plan-auto', name: 'Reject', kind: 'reject_once' },
+      ])
+      await new Promise((r) => setTimeout(r, 0))
+      expect(s.pendingPermission.get()?.autoResolve).toBeUndefined()
+      s.pendingPermission.get()!.cancel()
+      await promise
+    })
+
+    it('只提供清上下文选项时不自动执行', async () => {
+      const s = await svc.createSession()
+      await s.whenConnected()
+      config.update('acp.plan.autoExecute', 'auto', ConfigurationTarget.Memory)
+      const promise = requestPlanReview('agent-1', [planOptions[0]!])
+      await new Promise((r) => setTimeout(r, 0))
+      expect(s.pendingPermission.get()?.autoResolve).toBeUndefined()
+      s.pendingPermission.get()!.cancel()
       await promise
     })
 
@@ -1929,11 +1980,31 @@ describe('AcpSessionService', () => {
       await promise
     })
 
+    it('目标选项缺失时记录诊断，且不输出计划正文', async () => {
+      const warn = vi.spyOn(NullLogger.prototype, 'warn')
+      try {
+        const s = await svc.createSession()
+        await s.whenConnected()
+        config.update('acp.plan.autoExecute', 'acceptEdits', ConfigurationTarget.Memory)
+        const promise = requestPlanReview('agent-1')
+        await new Promise((r) => setTimeout(r, 0))
+        s.pendingPermission.get()!.cancel()
+        await promise
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringContaining('计划自动执行回退人工确认：mode=acceptEdits'),
+        )
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('exit-plan-auto'))
+        expect(warn.mock.calls.flat().join('\n')).not.toContain('Yes, clear context')
+      } finally {
+        warn.mockRestore()
+      }
+    })
+
     it('never silently auto-approves switch_mode even when the handler matches', async () => {
       const s = await svc.createSession()
       await s.whenConnected()
       permission.autoApproveResult = {
-        outcome: { outcome: 'selected', optionId: 'bypassPermissions' },
+        outcome: { outcome: 'selected', optionId: 'exit-plan-bypass' },
       }
       const promise = requestPlanReview('agent-1')
       await new Promise((r) => setTimeout(r, 0))
@@ -1947,9 +2018,9 @@ describe('AcpSessionService', () => {
       await s.whenConnected()
       const promise = requestPlanReview('agent-1')
       await new Promise((r) => setTimeout(r, 0))
-      s.pendingPermission.get()!.resolve('bypassPermissions')
+      s.pendingPermission.get()!.resolve('exit-plan-bypass')
       await expect(promise).resolves.toEqual({
-        outcome: { outcome: 'selected', optionId: 'bypassPermissions' },
+        outcome: { outcome: 'selected', optionId: 'exit-plan-bypass' },
       })
       expect(permission.persisted).toEqual([])
     })

@@ -395,6 +395,33 @@ async function runPrompt(id, params) {
     return reply(id, { stopReason: 'end_turn' })
   }
 
+  if (userText === 'approve-plan') {
+    const result = await requestFromClient('session/request_permission', {
+      sessionId,
+      toolCall: { toolCallId: 'echo-plan', title: 'Approve Plan', kind: 'switch_mode' },
+      options: [
+        {
+          optionId: 'exit-plan-clear-auto',
+          name: 'Yes, clear context (41% used) and use auto mode',
+          kind: 'allow_always',
+        },
+        { optionId: 'exit-plan-auto', name: 'Yes, and use auto mode', kind: 'allow_always' },
+        { optionId: 'exit-plan-bypass', name: 'Yes, and bypass permissions', kind: 'allow_always' },
+        { optionId: 'exit-plan-default', name: 'Yes, manually approve edits', kind: 'allow_once' },
+        { optionId: 'reject', name: 'No, keep planning', kind: 'reject_once' },
+      ],
+    })
+    notify('session/update', {
+      sessionId,
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'approve-plan result: ' + JSON.stringify(result) },
+      },
+    })
+    activeTurns.delete(sessionId)
+    return reply(id, { stopReason: 'end_turn' })
+  }
+
   // Test directive: "elicit-form" asks the client a fixed form elicitation and
   // echoes the user's response (accept+content / decline / cancel).
   if (userText === 'elicit-form') {
