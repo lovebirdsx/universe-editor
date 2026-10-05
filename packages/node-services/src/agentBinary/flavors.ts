@@ -32,6 +32,13 @@ export interface AgentBinaryFlavor {
   readonly id: AgentBinaryId
   /** Version the binary is bundled/pinned at. Claude reads claude-binary.json; codex is a constant. */
   bundledVersion(): Promise<string>
+  /**
+   * Lowest version the binary itself may report via `--version`. This is the
+   * *binary's* namespace, which is not `bundledVersion()`'s for claude (the pin
+   * names the SDK package, the binary prints its CLI version). Null means the
+   * floor is unknown, and callers must skip the check rather than guess.
+   */
+  minimumBinaryVersion(): Promise<string | null>
   /** Detect the current host's platform binary package. */
   detectPlatform(): AgentBinaryPlatform
   /** npm package name for the platform binary, e.g. `@anthropic-ai/claude-agent-sdk-win32-x64`. */
@@ -75,6 +82,23 @@ export function createClaudeFlavor(metaPath: () => string): AgentBinaryFlavor {
       return meta.sdkVersion
     },
 
+    /**
+     * `cliVersion` is sampled at fork-build time off the platform binary the
+     * build machine happened to have (see vendor/claude-agent-acp/esbuild.config.mjs).
+     * Absent on an older meta file or on a build machine that could not run the
+     * probe — both mean "unknown", never "no floor".
+     */
+    async minimumBinaryVersion(): Promise<string | null> {
+      try {
+        const meta = JSON.parse(await readFile(metaPath(), 'utf8')) as { cliVersion?: unknown }
+        return typeof meta.cliVersion === 'string' && meta.cliVersion.length > 0
+          ? meta.cliVersion
+          : null
+      } catch {
+        return null
+      }
+    },
+
     detectPlatform(): AgentBinaryPlatform {
       const arch = process.arch
       if (process.platform === 'win32') return { suffix: `win32-${arch}`, binName: 'claude.exe' }
@@ -109,6 +133,11 @@ export const codexFlavor: AgentBinaryFlavor = {
   id: 'codex',
 
   async bundledVersion(): Promise<string> {
+    return CODEX_VERSION
+  },
+
+  /** For codex the pin and the `codex-cli <version>` banner share one namespace. */
+  async minimumBinaryVersion(): Promise<string | null> {
     return CODEX_VERSION
   },
 

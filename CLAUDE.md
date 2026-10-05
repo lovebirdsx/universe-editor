@@ -88,6 +88,7 @@ pnpm e2e          # 端到端测试（未提交改动仅含 e2e spec 时自动�
 - 克隆仓库后先 `git submodule update --init`（或 `git clone --recurse-submodules`）。
 - 改动 fork 或拉取上游后，跑 `pnpm agent:build`（npm ci + esbuild bundle）生成 `vendor/{claude-agent-acp,codex-acp}/{dist,node_modules}`。`pnpm dev` / `pnpm dev:run` 启动前会按指纹自检 `dist/` 并按需重建（`scripts/dev/ensure-vendor-agent-build.mjs`），但**不会**替你跑 npm ci——新 clone / worktree 仍需先 `agent:build`。
 - dev 与发布**同一套启动机制**：main 用 Electron 自带 node（`ELECTRON_RUN_AS_NODE`）跑该 fork 的 `dist/index.js`，**不依赖系统 node/npx**。打包时 `electron-builder.yml` 的 `extraResources` 把产物带进 `resources/`（`package:win*` 已串入 `agent:build`）。
+- 构建期把该平台二进制的 `--version`（CLI 版本，与 SDK 包版本**不同命名空间**）采样进 `dist/claude-binary.json` 的 `cliVersion`，供编辑器在跑 system/custom 来源时强制「不低于锁定版本」；采样失败写 `null`（运行期跳过校验），**不让可选依赖缺失的构建机打不出包**。
 
 ## 代码风格
 

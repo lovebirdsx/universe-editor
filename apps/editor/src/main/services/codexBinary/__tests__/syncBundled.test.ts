@@ -26,6 +26,12 @@ const { CodexBinaryMainService } = await import('../codexBinaryMainService.js')
 
 /** A previously pinned version, still on disk. */
 const OLD_PIN = '0.100.0'
+/**
+ * A version newer than the pin, i.e. one the user picked by hand. The runtime
+ * floor only replaces an `.active` *below* the pin, so this is what a session can
+ * hold when an editor upgrade moves the pin under it.
+ */
+const PICKED_VERSION = '0.200.0'
 
 async function exists(p: string): Promise<boolean> {
   try {
@@ -82,13 +88,14 @@ describe('CodexBinaryMainService.syncBundled', () => {
 
   it('aligns to the pinned version offline and evicts the cached resolve() path', async () => {
     const svc = new CodexBinaryMainService()
-    await writeBinary(binDir(OLD_PIN))
+    await writeBinary(binDir(PICKED_VERSION))
     await writeBinary(binDir(CODEX_VERSION))
-    await writeActive(OLD_PIN)
+    await writeActive(PICKED_VERSION)
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
 
+    // A hand-picked newer version, which the runtime floor leaves alone.
     const before = await svc.resolve({ source: 'download' })
-    expect(before.path).toBe(binaryIn(binDir(OLD_PIN)))
+    expect(before.path).toBe(binaryIn(binDir(PICKED_VERSION)))
 
     await expect(svc.syncBundled()).resolves.toBe(CODEX_VERSION)
 
@@ -102,12 +109,12 @@ describe('CodexBinaryMainService.syncBundled', () => {
   it('leaves a version the user picked by hand alone while the pin is unchanged', async () => {
     const svc = new CodexBinaryMainService()
     await writeBinary(binDir(CODEX_VERSION))
-    await writeBinary(binDir('9.9.9'))
-    await writeFile(path.join(codexBinDir(), '.active'), '9.9.9', 'utf8')
+    await writeBinary(binDir(PICKED_VERSION))
+    await writeFile(path.join(codexBinDir(), '.active'), PICKED_VERSION, 'utf8')
     await writeFile(path.join(codexBinDir(), '.bundled'), CODEX_VERSION, 'utf8')
 
     await expect(svc.syncBundled()).resolves.toBeNull()
-    expect(await readActive()).toBe('9.9.9')
+    expect(await readActive()).toBe(PICKED_VERSION)
   })
 
   it('returns null without throwing when the alignment download fails, and retries next call', async () => {

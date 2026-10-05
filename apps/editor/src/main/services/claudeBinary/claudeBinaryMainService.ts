@@ -27,7 +27,10 @@ import {
 } from '@universe-editor/platform'
 import {
   AgentBinaryStore,
+  compareBinaryVersions,
   createClaudeFlavor,
+  parseBinaryVersion,
+  probeBinaryVersion,
   type IRemoteAgentBinaryService,
 } from '@universe-editor/node-services'
 import { resolveFromRepo } from '../../repoPaths.js'
@@ -117,10 +120,16 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
     if (opts.authority !== undefined) {
       return this._resolveRemote(opts.authority, opts.allowDownload)
     }
-    // `allowDownload:false` gets its own key so a background probe that hits a
-    // cache miss (fails fast, never cached — see below) can never hand its
-    // fast-fail promise to a concurrent caller that actually wants to download.
-    const key = `${opts.source}:${opts.customPath ?? ''}${opts.allowDownload === false ? ':noDownload' : ''}`
+    // Two paths are deliberately never cached: a background probe that hits a
+    // download cache miss (fails fast, and must not hand its fast-fail promise to
+    // a concurrent caller that actually wants to download), and — now that the
+    // store may fall back to a below-pin binary for it — the same probe's *success*,
+    // which would otherwise outlive the `.active` flip a later foreground download
+    // makes. Both are a few `pathExists` calls, so re-running them is cheap.
+    if (opts.source !== 'custom' && opts.source !== 'system' && opts.allowDownload === false) {
+      return this._resolve(opts)
+    }
+    const key = `${opts.source}:${opts.customPath ?? ''}`
     let pending = this._inflight.get(key)
     if (!pending) {
       pending = this._resolve(opts).catch((err) => {
@@ -205,6 +214,17 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
         ),
       )
     }
+    await this._assertBinaryNotOlder(selected, (found, required) => {
+      return new Error(
+        localize(
+          'claudeBinary.error.customBinaryTooOld',
+          'The configured Claude binary is version {found}, older than the {required} this build ' +
+            'requires. Point `acp.claude.executablePath` at a newer Claude Code binary, or switch ' +
+            '`acp.claude.source` to "download".',
+          { found, required },
+        ),
+      )
+    })
     return { path: selected }
   }
 
@@ -219,6 +239,17 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
         ),
       )
     }
+    await this._assertBinaryNotOlder(resolved, (found, required) => {
+      return new Error(
+        localize(
+          'claudeBinary.error.systemBinaryTooOld',
+          'The system `claude` is version {found}, older than the {required} this build requires. ' +
+            'Upgrade the system install, switch `acp.claude.source` to "download", or point ' +
+            '`acp.claude.executablePath` at a newer binary.',
+          { found, required },
+        ),
+      )
+    })
     this._logger.info(`using system claude at ${resolved}`)
     return resolved
   }
@@ -295,7 +326,50 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
    */
   private _evictResolveCache(): void {
     this._inflight.delete('download:')
-    this._inflight.delete('download::noDownload')
+  }
+
+  /**
+   * Refuses a binary older than the one this build was validated against — the
+   * runtime floor for the two sources the store never sees. Everything uncertain
+   * fails *open*: an unrecorded/unreadable floor or a probe that cannot read a
+   * version leaves a working setup alone (a failed probe must never brick a
+   * session), while a cleanly read older version is fatal and names the fixes.
+   */
+  private async _assertBinaryNotOlder(
+    binaryPath: string,
+    makeError: (found: string, required: string) => Error,
+  ): Promise<void> {
+    let required: string | null
+    try {
+      required = await this._flavor.minimumBinaryVersion()
+    } catch (err) {
+      this._logger.warn(`claude binary: required version unavailable: ${String(err)}`)
+      return
+    }
+    if (required === null) {
+      this._logger.warn(
+        `claude binary: no CLI version was recorded at build time, skipping the version check for ${binaryPath}`,
+      )
+      return
+    }
+    const found = await probeBinaryVersion(binaryPath, 'claude')
+    if (found === null) {
+      this._logger.warn(
+        `claude binary: could not read the version of ${binaryPath}, skipping the version check`,
+      )
+      return
+    }
+    const requiredVersion = parseBinaryVersion(required)
+    const foundVersion = parseBinaryVersion(found)
+    if (requiredVersion === null || foundVersion === null) {
+      this._logger.warn(
+        `claude binary: cannot compare "${found}" against "${required}", skipping the version check`,
+      )
+      return
+    }
+    if (compareBinaryVersions(foundVersion, requiredVersion) < 0) {
+      throw makeError(found, required)
+    }
   }
 
   private _whichClaude(): Promise<string | null> {

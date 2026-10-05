@@ -14,6 +14,10 @@
  *  same version share one fetch. A third pointer, `.bundled`, records the pinned
  *  version the tree was last aligned to — `syncBundled` re-activates the pin when
  *  it changes (an editor upgrade) without ever touching a user's chosen version.
+ *
+ *  Since the pin is a *floor*, not just an idle-time alignment target, resolving
+ *  never serves a binary older than `bundledVersion()`: a `.active` below it is
+ *  replaced by the pin (from disk, or by downloading it). See `_resolveDownload`.
  *--------------------------------------------------------------------------------------------*/
 
 import { createHash } from 'node:crypto'
@@ -31,6 +35,7 @@ import {
   ILoggerService,
 } from '@universe-editor/platform'
 import type { AgentBinaryFlavor, AgentBinaryPlatform } from './flavors.js'
+import { compareBinaryVersions, parseBinaryVersion } from './binaryVersion.js'
 
 const REGISTRY = 'https://registry.npmjs.org'
 
@@ -127,14 +132,21 @@ export class AgentBinaryStore extends Disposable {
    */
   private readonly _activating = new Set<string>()
   /**
-   * The version a `forceDownload` moved away from, kept out of the sweep for the
-   * rest of this process. A session may still be running it (and hold its dir
-   * locked on Windows), and reverting to it offline needs it on disk — a *second
-   * window* opened later sweeps after `.active` has already moved on, so its
-   * keep-set would no longer name the dir. One slot is enough: the pin changes at
-   * most once per build.
+   * The version a switch moved away from, kept out of the sweep for the rest of
+   * this process. A session may still be running it (and hold its dir locked on
+   * Windows), and reverting to it offline needs it on disk — a *second window*
+   * opened later sweeps after `.active` has already moved on, so its keep-set
+   * would no longer name the dir. One slot is enough: the pin changes at most
+   * once per build.
    */
   private _retainedVersion: string | undefined
+  /**
+   * Floor-related warnings already logged, keyed by cause. Every one of them
+   * describes a state that persists (a corrupt pointer, a stale binary) while the
+   * silent resolve path runs on every session connect — without this, one broken
+   * pointer would write a warning per connect for the rest of the session.
+   */
+  private readonly _warnedFloorMessages = new Set<string>()
 
   constructor(options: AgentBinaryStoreOptions) {
     super()
@@ -271,11 +283,27 @@ export class AgentBinaryStore extends Disposable {
   private async _resolveDownload(allowDownload: boolean): Promise<string> {
     const version = await this._flavor.bundledVersion()
     const platform = this._flavor.detectPlatform()
-    const active = (await this._readActiveVersion()) ?? version
-    const cached = this._binaryIn(this._versionDir(active), platform)
-    if (await pathExists(cached)) {
-      this._logger.info(`${this._flavor.id} binary cache hit ${cached}`)
-      return cached
+    const active = await this._readActiveVersion()
+
+    // The active version is served only when it is not older than the pin. An
+    // editor upgrade moves the pin, and the idle alignment (syncBundled) may not
+    // have run yet — but no session may ever launch the stale binary in between.
+    // A version *above* the pin is a deliberate user choice and is left alone.
+    if (active !== null && !this._isBelowLocked(active, version)) {
+      const activeBinary = this._binaryIn(this._versionDir(active), platform)
+      if (await pathExists(activeBinary)) {
+        this._logger.info(`${this._flavor.id} binary cache hit ${activeBinary}`)
+        return activeBinary
+      }
+    }
+
+    // Nothing usable is active, but the pin itself is on disk: switch to it with
+    // zero network — covers a missing/undershooting/vanished `.active` alike.
+    const pinnedBinary = this._binaryIn(this._versionDir(version), platform)
+    if (await pathExists(pinnedBinary)) {
+      await this._activate(version, active)
+      this._logger.info(`${this._flavor.id} binary activated pinned ${version} from disk`)
+      return pinnedBinary
     }
 
     if (this._devBinaryFallback) {
@@ -287,15 +315,82 @@ export class AgentBinaryStore extends Disposable {
     }
 
     if (!allowDownload) {
+      // A background/speculative caller (session hydrate) must never fetch, yet a
+      // stale-but-present binary still beats failing outright: fall back to it and
+      // warn once, so the downgrade is visible instead of silent.
+      if (active !== null) {
+        const stale = this._binaryIn(this._versionDir(active), platform)
+        if (await pathExists(stale)) {
+          this._warnBelowFloorFallback(active, version)
+          return stale
+        }
+      }
       throw new Error(
         `${this._displayName()} binary is not downloaded yet — background probes never trigger a download; ` +
           `start a ${this._displayName()} session or download it explicitly to fetch it.`,
       )
     }
 
+    // The pin is not on disk: fetch exactly it. Never settle for the old binary
+    // here — a failed download must surface, not quietly run below the floor.
     const binaryPath = await this._ensureVersion(version, false)
-    await this._setActiveVersion(version)
+    await this._activate(version, active)
     return binaryPath
+  }
+
+  /**
+   * Points `.active` at `next`, keeping the outgoing version's dir alive for the
+   * rest of this process (a live session may still run it, and an offline revert
+   * needs it on disk). `_activating` is deliberately not involved: the only
+   * versions activated without an `_ensureVersion` of their own are the pin and
+   * `forceDownload`'s target, and the pin is always in the cleanup keep-set.
+   */
+  private async _activate(next: string, previous: string | null): Promise<void> {
+    if (previous === next) return
+    if (previous !== null) this._retainedVersion = previous
+    await this._setActiveVersion(next)
+  }
+
+  /**
+   * Whether a version dir name is older than the pin — the runtime floor for the
+   * download source, the download source's `.active` never being trusted below
+   * it. An unparseable candidate counts as *below*: a corrupt pointer must not
+   * buy a launch, and re-activating the pin is the only sensible repair. An
+   * unparseable pin disables the floor instead — nothing can be compared to it.
+   */
+  private _isBelowLocked(candidate: string, locked: string): boolean {
+    const lockedVersion = parseBinaryVersion(locked)
+    if (lockedVersion === null) {
+      this._warnFloorOnce(
+        `pin:${locked}`,
+        `${this._flavor.id} binary: pinned version "${locked}" is not a version, skipping the version floor`,
+      )
+      return false
+    }
+    const candidateVersion = parseBinaryVersion(candidate)
+    if (candidateVersion === null) {
+      this._warnFloorOnce(
+        `active:${candidate}->${locked}`,
+        `${this._flavor.id} binary: active version "${candidate}" is not a version, treating it as below ${locked}`,
+      )
+      return true
+    }
+    return compareBinaryVersions(candidateVersion, lockedVersion) < 0
+  }
+
+  private _warnBelowFloorFallback(found: string, required: string): void {
+    this._warnFloorOnce(
+      `fallback:${found}->${required}`,
+      `${this._flavor.id} binary ${found} is below the pinned ${required} and downloading is not ` +
+        `allowed on this path; running the older binary for now — start a foreground ` +
+        `${this._displayName()} session to upgrade it.`,
+    )
+  }
+
+  private _warnFloorOnce(key: string, message: string): void {
+    if (this._warnedFloorMessages.has(key)) return
+    this._warnedFloorMessages.add(key)
+    this._logger.warn(message)
   }
 
   async getVersionInfo(): Promise<AgentBinaryVersionInfo> {
@@ -382,11 +477,10 @@ export class AgentBinaryStore extends Disposable {
     // Stale dirs are swept at next startup via cleanupStaleVersions() — except the
     // outgoing version, which `_retainedVersion` protects for this whole process.
     const outgoing = await this._readActiveVersion()
-    if (outgoing !== null && outgoing !== version) this._retainedVersion = outgoing
     this._activating.add(version)
     try {
       const binaryPath = await this._ensureVersion(version, false)
-      await this._setActiveVersion(version)
+      await this._activate(version, outgoing)
       return binaryPath
     } finally {
       this._activating.delete(version)

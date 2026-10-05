@@ -40,6 +40,32 @@ describe('claude flavor', () => {
     await expect(flavor.bundledVersion()).rejects.toThrow(/missing sdkVersion/)
   })
 
+  it('reads the CLI version floor from the meta file', async () => {
+    const dir = await makeTempDir()
+    const metaPath = path.join(dir, 'claude-binary.json')
+    await writeFile(metaPath, JSON.stringify({ sdkVersion: '0.3.220', cliVersion: '2.1.220' }))
+
+    const flavor = createClaudeFlavor(() => metaPath)
+    await expect(flavor.minimumBinaryVersion()).resolves.toBe('2.1.220')
+  })
+
+  it('reports no CLI version floor when the meta file lacks or mistypes cliVersion', async () => {
+    const dir = await makeTempDir()
+    const metaPath = path.join(dir, 'claude-binary.json')
+
+    // An older meta file (or a build machine that could not run the probe) must
+    // mean "unknown", not "no floor": the caller skips the check, never assumes 0.
+    await writeFile(metaPath, JSON.stringify({ sdkVersion: '0.3.220' }))
+    await expect(createClaudeFlavor(() => metaPath).minimumBinaryVersion()).resolves.toBeNull()
+
+    await writeFile(metaPath, JSON.stringify({ sdkVersion: '0.3.220', cliVersion: 42 }))
+    await expect(createClaudeFlavor(() => metaPath).minimumBinaryVersion()).resolves.toBeNull()
+
+    await expect(
+      createClaudeFlavor(() => path.join(dir, 'nope.json')).minimumBinaryVersion(),
+    ).resolves.toBeNull()
+  })
+
   it('exposes claude registry coordinates and single-file extraction', () => {
     const platform = { suffix: 'win32-x64', binName: 'claude.exe' }
     const flavor = createClaudeFlavor(() => '/unused/claude-binary.json')
@@ -62,6 +88,11 @@ describe('claude flavor', () => {
 describe('codex flavor', () => {
   it('pins the bundled version to the CODEX_VERSION constant', async () => {
     await expect(codexFlavor.bundledVersion()).resolves.toBe(CODEX_VERSION)
+  })
+
+  it('uses CODEX_VERSION as the binary version floor', async () => {
+    // For codex the pin and the `codex-cli <version>` banner share a namespace.
+    await expect(codexFlavor.minimumBinaryVersion()).resolves.toBe(CODEX_VERSION)
   })
 
   it('exposes codex registry coordinates and vendor-triple extraction', () => {

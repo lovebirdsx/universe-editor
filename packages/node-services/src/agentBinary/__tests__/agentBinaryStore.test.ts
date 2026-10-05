@@ -1,6 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Tests for AgentBinaryStore's download semantics without touching the network:
  *  the allowDownload fast-fail, the zero-network activation of an on-disk version,
+ *  the runtime version floor (a `.active` below the pin is never launched),
  *  per-version download de-duplication, the download-state channel, and the
  *  cleanupStaleVersions keep-set. The codex flavor is used because its bundled
  *  version is a constant (no claude-binary.json fixture).
@@ -9,6 +10,7 @@
 import { access, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import * as path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { LogLevel, NullLogger, type ILoggerService } from '@universe-editor/platform'
 import { AgentBinaryStore, type AgentBinaryDownloadState } from '../agentBinaryStore.js'
 import { CODEX_VERSION, codexFlavor } from '../flavors.js'
 import { mkTempDir } from '@universe-editor/temp-root'
@@ -21,6 +23,26 @@ async function makeTempDir(): Promise<string> {
   const dir = mkTempDir('universe-editor-agent-store-')
   tempDirs.push(dir)
   return dir
+}
+
+class RecordingLogger extends NullLogger {
+  constructor(private readonly _sink: string[]) {
+    super()
+  }
+
+  protected override _log(_level: LogLevel, message: string): void {
+    this._sink.push(message)
+  }
+}
+
+function capturingLogger(sink: string[]): ILoggerService {
+  const logger = new RecordingLogger(sink)
+  return {
+    _serviceBrand: undefined,
+    createLogger: () => logger,
+    setLevel: () => {},
+    getLevel: () => logger.level,
+  }
 }
 
 async function exists(p: string): Promise<boolean> {
@@ -113,13 +135,184 @@ describe('AgentBinaryStore', () => {
 
   it('returns the `.active` version dir binary on a cache hit, without touching the network', async () => {
     const dir = await makeTempDir()
-    const binary = await writeVersion(dir, '0.9.9')
-    await writeFile(path.join(dir, '.active'), '0.9.9', 'utf8')
+    // Above the pin — see the floor cases below for what a lower one does.
+    const binary = await writeVersion(dir, LATEST)
+    await writeFile(path.join(dir, '.active'), LATEST, 'utf8')
 
     const store = new AgentBinaryStore({ baseDir: dir, flavor: codexFlavor })
     const fetchSpy = offlineFetch()
     try {
       await expect(store.resolveDownload(true)).resolves.toBe(binary)
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      store.dispose()
+    }
+  })
+
+  // Runtime version floor: the pin is a hard minimum, so no path may hand out a
+  // binary older than it — and the download source must repair, not just refuse.
+  it('switches a below-pin `.active` to the pin on disk with zero network, keeping the old dir', async () => {
+    const dir = await makeTempDir()
+    const pinned = await writeVersion(dir, CODEX_VERSION)
+    await writeVersion(dir, '0.1.0')
+    await writeFile(path.join(dir, '.active'), '0.1.0', 'utf8')
+
+    const store = new AgentBinaryStore({ baseDir: dir, flavor: codexFlavor })
+    const fetchSpy = offlineFetch()
+    try {
+      await expect(store.resolveDownload(true)).resolves.toBe(pinned)
+      expect((await readFile(path.join(dir, '.active'), 'utf8')).trim()).toBe(CODEX_VERSION)
+      expect(fetchSpy).not.toHaveBeenCalled()
+
+      // The replaced version stays switchable offline for this process, even when
+      // a second window sweeps after `.active` has already moved on.
+      await store.cleanupStaleVersions()
+      expect(await listVersionDirs(dir)).toEqual(['0.1.0', CODEX_VERSION].sort())
+    } finally {
+      store.dispose()
+    }
+  })
+
+  it('activates the pin when `.active` is missing but the pin is on disk', async () => {
+    const dir = await makeTempDir()
+    const pinned = await writeVersion(dir, CODEX_VERSION)
+
+    const store = new AgentBinaryStore({ baseDir: dir, flavor: codexFlavor })
+    const fetchSpy = offlineFetch()
+    try {
+      await expect(store.resolveDownload(true)).resolves.toBe(pinned)
+      expect((await readFile(path.join(dir, '.active'), 'utf8')).trim()).toBe(CODEX_VERSION)
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      store.dispose()
+    }
+  })
+
+  it('treats an unparseable `.active` as below the pin and repairs it', async () => {
+    const dir = await makeTempDir()
+    const pinned = await writeVersion(dir, CODEX_VERSION)
+    await mkdir(path.join(dir, 'not-a-version'), { recursive: true })
+    await writeFile(path.join(dir, '.active'), 'not-a-version', 'utf8')
+
+    const store = new AgentBinaryStore({ baseDir: dir, flavor: codexFlavor })
+    const fetchSpy = offlineFetch()
+    try {
+      await expect(store.resolveDownload(true)).resolves.toBe(pinned)
+      expect((await readFile(path.join(dir, '.active'), 'utf8')).trim()).toBe(CODEX_VERSION)
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      store.dispose()
+    }
+  })
+
+  it('drops the floor instead of refusing when the pin itself is not a version', async () => {
+    const dir = await makeTempDir()
+    const binary = await writeVersion(dir, '0.1.0')
+    await writeFile(path.join(dir, '.active'), '0.1.0', 'utf8')
+
+    const log: string[] = []
+    const flavor = { ...codexFlavor, bundledVersion: async () => 'not-a-version' }
+    const store = new AgentBinaryStore({
+      baseDir: dir,
+      flavor,
+      logger: capturingLogger(log),
+    })
+    const fetchSpy = offlineFetch()
+    try {
+      // Nothing can be compared against a garbage pin, so the floor is disabled
+      // rather than turning every resolve into a refusal (fail-open by design).
+      await expect(store.resolveDownload(true)).resolves.toBe(binary)
+      await expect(store.resolveDownload(false)).resolves.toBe(binary)
+      expect(fetchSpy).not.toHaveBeenCalled()
+      expect(log.filter((m) => m.includes('skipping the version floor'))).toHaveLength(1)
+    } finally {
+      store.dispose()
+    }
+  })
+
+  it('treats a prerelease of the pin as below it', async () => {
+    const dir = await makeTempDir()
+    const pinned = await writeVersion(dir, CODEX_VERSION)
+    const prerelease = `${CODEX_VERSION}-rc.1`
+    await writeVersion(dir, prerelease)
+    await writeFile(path.join(dir, '.active'), prerelease, 'utf8')
+
+    const store = new AgentBinaryStore({ baseDir: dir, flavor: codexFlavor })
+    const fetchSpy = offlineFetch()
+    try {
+      await expect(store.resolveDownload(true)).resolves.toBe(pinned)
+      expect((await readFile(path.join(dir, '.active'), 'utf8')).trim()).toBe(CODEX_VERSION)
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      store.dispose()
+    }
+  })
+
+  it('falls back to a below-pin binary on a background resolve, warning once', async () => {
+    const dir = await makeTempDir()
+    const stale = await writeVersion(dir, '0.1.0')
+    await writeFile(path.join(dir, '.active'), '0.1.0', 'utf8')
+
+    const log: string[] = []
+    const store = new AgentBinaryStore({
+      baseDir: dir,
+      flavor: codexFlavor,
+      logger: capturingLogger(log),
+    })
+    const fetchSpy = offlineFetch()
+    try {
+      // A speculative caller must never download; running the old binary is the
+      // lesser evil, but it has to be visible in the log rather than silent.
+      await expect(store.resolveDownload(false)).resolves.toBe(stale)
+      expect(fetchSpy).not.toHaveBeenCalled()
+      expect(log.filter((m) => m.includes('below the pinned'))).toHaveLength(1)
+
+      // Warned once per pair, not once per session hydrate.
+      await expect(store.resolveDownload(false)).resolves.toBe(stale)
+      expect(log.filter((m) => m.includes('below the pinned'))).toHaveLength(1)
+    } finally {
+      store.dispose()
+    }
+  })
+
+  it('downloads the pin on a foreground resolve instead of serving a below-pin binary', async () => {
+    const dir = await makeTempDir()
+    await writeVersion(dir, '0.1.0')
+    await writeFile(path.join(dir, '.active'), '0.1.0', 'utf8')
+
+    const gate = deferred<Response>()
+    const fetchSpy = stubRegistry(() => gate.promise)
+    const store = new AgentBinaryStore({ baseDir: dir, flavor: codexFlavor })
+    try {
+      const attempt = store.resolveDownload(true)
+      await waitFor(() => fetchSpy.mock.calls.length >= 1)
+      expect(String(fetchSpy.mock.calls[0]?.[0])).toContain(`@openai/codex/${CODEX_VERSION}-`)
+
+      gate.resolve(jsonResponse({ dist: { tarball: 'https://example.com/pkg.tgz' } }))
+      // A failed download must surface: settling for the old binary here would be
+      // exactly the silent downgrade this floor exists to prevent.
+      await expect(attempt).rejects.toThrow(/tarball fetch not stubbed/)
+      expect((await readFile(path.join(dir, '.active'), 'utf8')).trim()).toBe('0.1.0')
+    } finally {
+      store.dispose()
+    }
+  })
+
+  it('serves the pin after a background fallback once the pin lands on disk', async () => {
+    const dir = await makeTempDir()
+    const stale = await writeVersion(dir, '0.1.0')
+    await writeFile(path.join(dir, '.active'), '0.1.0', 'utf8')
+
+    const store = new AgentBinaryStore({ baseDir: dir, flavor: codexFlavor })
+    const fetchSpy = offlineFetch()
+    try {
+      await expect(store.resolveDownload(false)).resolves.toBe(stale)
+
+      // A foreground download finished meanwhile; nothing may keep handing out
+      // the fallback that was resolved before it.
+      const pinned = await writeVersion(dir, CODEX_VERSION)
+      await writeFile(path.join(dir, '.active'), CODEX_VERSION, 'utf8')
+      await expect(store.resolveDownload(false)).resolves.toBe(pinned)
       expect(fetchSpy).not.toHaveBeenCalled()
     } finally {
       store.dispose()
@@ -146,8 +339,8 @@ describe('AgentBinaryStore', () => {
 
       // Settled promises are dropped: once the binary appears on disk the next
       // call re-runs and takes the cache-hit path instead of the stale rejection.
-      const binary = await writeVersion(dir, '0.9.9')
-      await writeFile(path.join(dir, '.active'), '0.9.9', 'utf8')
+      const binary = await writeVersion(dir, LATEST)
+      await writeFile(path.join(dir, '.active'), LATEST, 'utf8')
       await expect(store.resolveDownload(false)).resolves.toBe(binary)
     } finally {
       store.dispose()

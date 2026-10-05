@@ -3063,6 +3063,10 @@ export const ZH_CN_MESSAGES: MessageMap = {
     'Claude 二进制文件路径不是原生 Windows 可执行文件：{path}。请将 `acp.claude.executablePath` 指向包内的 bin/claude.exe。',
   'claudeBinary.error.noSystemBinary':
     'PATH 中找不到系统 `claude` 可执行文件。请安装 Claude Code，或将 `acp.claude.source` 切换为 "download"。',
+  'claudeBinary.error.systemBinaryTooOld':
+    '系统 `claude` 版本为 {found}，低于本构建要求的 {required}。请升级系统安装、将 `acp.claude.source` 切换为 "download"，或将 `acp.claude.executablePath` 指向更新的二进制文件。',
+  'claudeBinary.error.customBinaryTooOld':
+    '配置的 Claude 二进制文件版本为 {found}，低于本构建要求的 {required}。请将 `acp.claude.executablePath` 指向更新的 Claude Code 二进制文件，或将 `acp.claude.source` 切换为 "download"。',
   'claudeBinary.error.downloadNotAllowed':
     'Claude 二进制文件尚未下载——后台探测不会触发下载；请启动一个 Claude 会话或显式下载以获取。',
   'claudeBinary.error.tarballMissingBinary': '压缩包 {pkg}@{version} 中不包含 {binName}',
@@ -3117,6 +3121,10 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'codexBinary.error.customPathNotFound': '在配置的路径中找不到 Codex 二进制文件：{path}',
   'codexBinary.error.noSystemBinary':
     'PATH 中找不到系统 `codex` 可执行文件。请安装它，或将 `acp.codex.source` 切换为 "download"。',
+  'codexBinary.error.systemBinaryTooOld':
+    '系统 `codex` 版本为 {found}，低于本构建要求的 {required}。请升级系统安装、将 `acp.codex.source` 切换为 "download"，或将 `acp.codex.executablePath` 指向更新的二进制文件。',
+  'codexBinary.error.customBinaryTooOld':
+    '配置的 Codex 二进制文件版本为 {found}，低于本构建要求的 {required}。请将 `acp.codex.executablePath` 指向更新的二进制文件，或将 `acp.codex.source` 切换为 "download"。',
   'codexBinary.error.downloadNotAllowed':
     'Codex 二进制文件尚未下载——后台探测不会触发下载；请启动一个 Codex 会话或显式下载以获取。',
   'codexBinary.error.tarballMissingBinary':

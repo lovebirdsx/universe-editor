@@ -28,6 +28,12 @@ const { ClaudeBinaryMainService } = await import('../claudeBinaryMainService.js'
 const SDK_VERSION = '0.3.186'
 /** A previously pinned version, still on disk. */
 const OLD_PIN = '0.3.100'
+/**
+ * A version newer than the pin, i.e. one the user picked by hand. The runtime
+ * floor only replaces an `.active` *below* the pin, so this is what a session can
+ * hold when an editor upgrade moves the pin under it.
+ */
+const PICKED_VERSION = '0.3.200'
 
 async function exists(p: string): Promise<boolean> {
   try {
@@ -91,14 +97,15 @@ describe('ClaudeBinaryMainService.syncBundled', () => {
 
   it('aligns to a changed pin offline and evicts the resolve() path cached for the old one', async () => {
     const svc = new ClaudeBinaryMainService()
-    await writeBinary(binDir(OLD_PIN))
+    await writeBinary(binDir(PICKED_VERSION))
     await writeBinary(binDir(SDK_VERSION))
-    await writeActive(OLD_PIN)
+    await writeActive(PICKED_VERSION)
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
 
-    // The session resolved (and cached) the previously pinned binary.
+    // The session resolved (and cached) the version that was active before the pin
+    // moved — a hand-picked newer one, which the runtime floor leaves alone.
     const before = await svc.resolve({ source: 'download' })
-    expect(before.path).toBe(path.join(binDir(OLD_PIN), binName()))
+    expect(before.path).toBe(path.join(binDir(PICKED_VERSION), binName()))
 
     await expect(svc.syncBundled()).resolves.toBe(SDK_VERSION)
 
@@ -111,14 +118,17 @@ describe('ClaudeBinaryMainService.syncBundled', () => {
     expect(after.path).toBe(path.join(binDir(SDK_VERSION), binName()))
   })
 
-  it('evicts the allowDownload:false cache key too', async () => {
+  it('observes the flipped .active on a background resolve', async () => {
     const svc = new ClaudeBinaryMainService()
-    await writeBinary(binDir(OLD_PIN))
+    await writeBinary(binDir(PICKED_VERSION))
     await writeBinary(binDir(SDK_VERSION))
-    await writeActive(OLD_PIN)
+    await writeActive(PICKED_VERSION)
 
+    // `allowDownload:false` results are deliberately never cached (the store may
+    // answer with a below-pin fallback), so this must re-read `.active` — the same
+    // guarantee the eviction above provides for the download path.
     const before = await svc.resolve({ source: 'download', allowDownload: false })
-    expect(before.path).toBe(path.join(binDir(OLD_PIN), binName()))
+    expect(before.path).toBe(path.join(binDir(PICKED_VERSION), binName()))
 
     await expect(svc.syncBundled()).resolves.toBe(SDK_VERSION)
 
