@@ -313,9 +313,17 @@ export interface AcpCompaction {
   /** Elapsed ms at settle, computed on `success`/`failed` from `startedAt`. */
   readonly durationMs?: number
   /**
+   * Model this compaction runs under, captured once when `running` begins and
+   * carried through to the settle. Duration tracks the model (a 1M-lane
+   * compaction summarizes ~5x the tokens of a bare 200k one), so the estimate
+   * and the recorded sample must agree on it: a switch mid-compaction must not
+   * re-attribute a run that already started under the previous model.
+   */
+  readonly modelId?: string
+  /**
    * Expected total duration (ms) for this compaction, seeded when `running`
-   * begins from the median of past successful compactions for the same agent
-   * (see {@link IAcpCompactionStatsService}). The card drives its progress
+   * begins from the median of past successful compactions for the same agent and
+   * model (see {@link IAcpCompactionStatsService}). The card drives its progress
    * estimate off this so the bar reaches ~90% around the historically typical
    * finish time instead of a fixed constant. Absent until enough samples exist.
    */

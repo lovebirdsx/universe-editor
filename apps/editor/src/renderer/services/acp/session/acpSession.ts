@@ -56,6 +56,7 @@ import {
 } from '../promptContext.js'
 import { composeImageBlocks, type PromptImage } from '../promptImage.js'
 import { composePromptBlocksFromRefs, type PlacedRef } from '../promptRef.js'
+import { sessionModelId } from '../acpModelCandidates.js'
 import { getAgentCostStrategy, type AcpAgentCostStrategy } from './acpAgentCostStrategy.js'
 import { repriceForeignModelBreakdown } from './acpSessionCost.js'
 import { priceSessionModel, type IAcpSessionProviderContext } from './acpSessionProviderContext.js'
@@ -382,6 +383,7 @@ function settleRunning(compaction: AcpCompaction, reason: string): AcpCompaction
     reason,
     ...(startedAt !== undefined ? { startedAt } : {}),
     ...(startedAt !== undefined ? { durationMs: Math.max(0, Date.now() - startedAt) } : {}),
+    ...(compaction.modelId !== undefined ? { modelId: compaction.modelId } : {}),
     ...(compaction.expectedDurationMs !== undefined
       ? { expectedDurationMs: compaction.expectedDurationMs }
       : {}),
@@ -3982,6 +3984,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     const prevStartedAt = prev?.kind === 'compaction' ? prev.compaction.startedAt : undefined
     const prevExpected =
       prev?.kind === 'compaction' ? prev.compaction.expectedDurationMs : undefined
+    const prevModelId = prev?.kind === 'compaction' ? prev.compaction.modelId : undefined
     // The SDK compaction has no true progress; the card shows a live stopwatch
     // from `startedAt`. Stamp it when `running` begins, then settle a fixed
     // `durationMs` at the terminal phase so the elapsed time freezes. A start
@@ -3992,17 +3995,28 @@ export class AcpSession extends Disposable implements IAcpSession {
       phase !== 'running' && startedAt !== undefined
         ? Math.max(0, Date.now() - startedAt)
         : undefined
+    // Compaction duration tracks the model (a 1M-lane run summarizes ~5x the
+    // tokens of a bare one), so the model is captured once when the run starts
+    // and reused at settle: a switch mid-compaction must not re-attribute work
+    // that already began, and the estimate and the recorded sample have to come
+    // from the same bucket. A run with no captured model — a terminal event with
+    // no slot to inherit from, or a start that happened before the model was
+    // known — falls back to the current one, so its sample still lands on a real
+    // model rather than the unknown bucket.
+    const currentModel = sessionModelId(this._configOptions.configOptions.get())
+    const modelId = phase === 'running' ? currentModel : (prevModelId ?? currentModel)
     // Seed the estimate from observed history when starting; record the real
     // duration back on success so subsequent compactions estimate more sharply.
     const expectedDurationMs =
       phase === 'running'
-        ? this._compactionStats?.getExpectedDurationMs(this.agentId)
+        ? this._compactionStats?.getExpectedDurationMs(this.agentId, modelId)
         : prevExpected
     if (phase === 'success' && durationMs !== undefined) {
-      this._compactionStats?.record(this.agentId, durationMs)
+      this._compactionStats?.record(this.agentId, durationMs, modelId)
     }
     const compaction: AcpCompaction = {
       phase,
+      ...(modelId !== undefined ? { modelId } : {}),
       ...(reason != null ? { reason } : {}),
       ...(startedAt !== undefined ? { startedAt } : {}),
       ...(durationMs !== undefined ? { durationMs } : {}),

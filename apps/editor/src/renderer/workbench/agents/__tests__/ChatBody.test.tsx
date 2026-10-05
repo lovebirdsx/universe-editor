@@ -2286,7 +2286,7 @@ describe('ChatBody — compaction slot', () => {
     ]
     const { container } = renderChat(makeSession('s-cmp3', running))
     const timer = container.querySelector<HTMLElement>('[data-testid="acp-compaction-timer"]')
-    // ~5s in with tau=6s → ~57%; assert the shape rather than the exact value.
+    // ~5s in against the 45s default → ~23%; assert the shape, not the value.
     expect(timer?.textContent).toMatch(/^\d{1,2}% · 5s$/)
     const bar = container.querySelector<HTMLElement>('[role="progressbar"]')
     expect(bar).not.toBeNull()
@@ -2305,6 +2305,33 @@ describe('ChatBody — compaction slot', () => {
     const settledTimer = c2.querySelector<HTMLElement>('[data-testid="acp-compaction-timer"]')
     expect(settledTimer?.textContent).toBe('1:12')
     expect(c2.querySelector('[role="progressbar"]')).toBeNull()
+  })
+
+  it('paces the progress curve off the recorded estimate, not the fixed constant', () => {
+    const card = (id: string, expectedDurationMs?: number): readonly TimelineItem[] => [
+      {
+        kind: 'compaction',
+        id,
+        compaction: {
+          phase: 'running',
+          startedAt: Date.now() - 10_000,
+          ...(expectedDurationMs !== undefined ? { expectedDurationMs } : {}),
+        },
+      },
+    ]
+    const percentOf = (container: HTMLElement): number =>
+      Number(container.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow'))
+    // The curve is scaled so one expected duration lands at ~90%: the 10s record
+    // here is deliberately not the 45s default, so the gap proves the bar
+    // follows the recorded value (~90% after 10s) instead of the default (~40%).
+    // Bands are loose on purpose — a slow render shifts the elapsed time, and
+    // the point is the gap between the two curves, not the exact percentage.
+    const estimated = renderChat(makeSession('s-cmp5', card('compaction:c5', 10_000)))
+    const fixed = renderChat(makeSession('s-cmp6', card('compaction:c6')))
+    expect(percentOf(estimated.container)).toBeGreaterThanOrEqual(88)
+    expect(percentOf(estimated.container)).toBeLessThanOrEqual(92)
+    expect(percentOf(fixed.container)).toBeGreaterThanOrEqual(38)
+    expect(percentOf(fixed.container)).toBeLessThanOrEqual(42)
   })
 })
 

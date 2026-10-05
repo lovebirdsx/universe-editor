@@ -98,6 +98,19 @@ export function sessionModelCandidates(
 }
 
 /**
+ * The model the session is currently set to run (`model` select's currentValue),
+ * or `undefined` when the bag carries no usable model option (not yet
+ * handshaked, or a non-select shape). Raw value: callers that bucket by model
+ * normalize it themselves. Note this follows the user's intent rather than the
+ * agent's confirmation — `ConfigOptionStateMachine` flips `currentValue`
+ * optimistically, before the `set_config_option` round-trip settles.
+ */
+export function sessionModelId(configOptions: readonly SessionConfigOption[]): string | undefined {
+  const modelOption = configOptions.find((o) => o.category === 'model')
+  return modelOption?.type === 'select' ? modelOption.currentValue : undefined
+}
+
+/**
  * Merge candidate id lists in order, deduping on the normalized id and keeping
  * the first spelling that wins. Used to union the session's live model list with
  * the provider's `protocolMap` declaration: the session list already carries the

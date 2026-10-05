@@ -3024,6 +3024,23 @@ describe('AcpSessionService — startup timeout', () => {
 })
 
 describe('AcpSessionService — mcpServers capability gating', () => {
+  // A two-row model select, so compaction timing can be attributed to a bucket.
+  const MODEL_A = 'claude-sonnet-4-6'
+  const MODEL_B = 'claude-opus-4-8'
+  const MODEL_CONFIG: readonly SessionConfigOption[] = [
+    {
+      id: 'model',
+      name: 'Model',
+      category: 'model',
+      type: 'select',
+      currentValue: MODEL_A,
+      options: [
+        { value: MODEL_A, name: 'Sonnet' },
+        { value: MODEL_B, name: 'Opus' },
+      ],
+    } as unknown as SessionConfigOption,
+  ]
+
   function makeService(
     client: FakeAcpClientService,
     config: ConfigurationService,
@@ -3433,13 +3450,15 @@ describe('AcpSessionService — mcpServers capability gating', () => {
   })
 
   it('records the duration of a successful compaction back to the stats service', async () => {
-    const client = new FakeAcpClientService()
+    const client = new FakeAcpClientService({
+      stubOptions: { newSessionConfigOptions: MODEL_CONFIG },
+    })
     const stats = makeCompactionStats()
-    const recorded: Array<{ agentId: string; durationMs: number }> = []
+    const recorded: Array<{ agentId: string; durationMs: number; modelId: string | undefined }> = []
     const origRecord = stats.record.bind(stats)
-    stats.record = (agentId: string, durationMs: number) => {
-      recorded.push({ agentId, durationMs })
-      origRecord(agentId, durationMs)
+    stats.record = (agentId: string, durationMs: number, modelId: string | undefined) => {
+      recorded.push({ agentId, durationMs, modelId })
+      origRecord(agentId, durationMs, modelId)
     }
     const svc = makeService(client, new ConfigurationService(), stats)
     const session = await svc.createSession()
@@ -3455,9 +3474,11 @@ describe('AcpSessionService — mcpServers capability gating', () => {
       id: 'cmp-record',
       phase: 'success',
     })
-    // A settled success feeds the per-agent history so the next run can estimate.
+    // A settled success feeds the history so the next run can estimate — under
+    // the model the session was on, which is the bucket the estimate came from.
     expect(recorded).toHaveLength(1)
     expect(recorded[0]!.agentId).toBe(session.agentId)
+    expect(recorded[0]!.modelId).toBe(MODEL_A)
     expect(recorded[0]!.durationMs).toBeGreaterThanOrEqual(0)
     svc.dispose()
   })
@@ -3469,7 +3490,8 @@ describe('AcpSessionService — mcpServers capability gating', () => {
     const session = await svc.createSession()
     await session.whenConnected()
     // Pre-seed history for this agent so the running card carries an estimate.
-    stats.record(session.agentId, 8000)
+    // No model option in this bag, so the sample lands in the unknown bucket.
+    stats.record(session.agentId, 8000, undefined)
 
     svc.onExtNotification('_universe/compaction', {
       sessionId: session.id,
@@ -3481,6 +3503,87 @@ describe('AcpSessionService — mcpServers capability gating', () => {
       kind: 'compaction',
       compaction: { phase: 'running', expectedDurationMs: 8000 },
     })
+    svc.dispose()
+  })
+
+  it('seeds the estimate from the model the session is on, not from another model', async () => {
+    const client = new FakeAcpClientService({
+      stubOptions: { newSessionConfigOptions: MODEL_CONFIG },
+    })
+    const stats = makeCompactionStats()
+    const svc = makeService(client, new ConfigurationService(), stats)
+    const session = await svc.createSession()
+    await session.whenConnected()
+    // MODEL_B's slow runs must not pace MODEL_A's card.
+    stats.record(session.agentId, 60_000, MODEL_B)
+    stats.record(session.agentId, 8000, MODEL_A)
+
+    svc.onExtNotification('_universe/compaction', {
+      sessionId: session.id,
+      id: 'cmp-scoped',
+      phase: 'start',
+    })
+    const running = session.timeline.get().find((it) => it.kind === 'compaction')
+    expect(running).toMatchObject({
+      kind: 'compaction',
+      compaction: { phase: 'running', modelId: MODEL_A, expectedDurationMs: 8000 },
+    })
+    svc.dispose()
+  })
+
+  it('leaves the estimate unset when only another model has history', async () => {
+    const client = new FakeAcpClientService({
+      stubOptions: { newSessionConfigOptions: MODEL_CONFIG },
+    })
+    const stats = makeCompactionStats()
+    const svc = makeService(client, new ConfigurationService(), stats)
+    const session = await svc.createSession()
+    await session.whenConnected()
+    stats.record(session.agentId, 60_000, MODEL_B)
+
+    svc.onExtNotification('_universe/compaction', {
+      sessionId: session.id,
+      id: 'cmp-unset',
+      phase: 'start',
+    })
+    const slot = session.timeline.get().find((it) => it.kind === 'compaction')
+    const compaction = slot?.kind === 'compaction' ? slot.compaction : undefined
+    // Falls through to the card's own constant rather than borrowing MODEL_B's.
+    expect(compaction?.modelId).toBe(MODEL_A)
+    expect(compaction?.expectedDurationMs).toBeUndefined()
+    svc.dispose()
+  })
+
+  it('records the sample under the model captured when the run started', async () => {
+    const client = new FakeAcpClientService({
+      stubOptions: { newSessionConfigOptions: MODEL_CONFIG },
+    })
+    const stats = makeCompactionStats()
+    const recorded: Array<{ durationMs: number; modelId: string | undefined }> = []
+    const origRecord = stats.record.bind(stats)
+    stats.record = (agentId: string, durationMs: number, modelId: string | undefined) => {
+      recorded.push({ durationMs, modelId })
+      origRecord(agentId, durationMs, modelId)
+    }
+    const svc = makeService(client, new ConfigurationService(), stats)
+    const session = await svc.createSession()
+    await session.whenConnected()
+
+    svc.onExtNotification('_universe/compaction', {
+      sessionId: session.id,
+      id: 'cmp-switch',
+      phase: 'start',
+    })
+    // Switching mid-run must not re-attribute work that already began.
+    await session.setConfigOption('model', MODEL_B)
+    svc.onExtNotification('_universe/compaction', {
+      sessionId: session.id,
+      id: 'cmp-switch',
+      phase: 'success',
+    })
+
+    expect(recorded).toHaveLength(1)
+    expect(recorded[0]!.modelId).toBe(MODEL_A)
     svc.dispose()
   })
 
@@ -3502,7 +3605,7 @@ describe('AcpSessionService — mcpServers capability gating', () => {
       phase: 'failed',
       reason: 'boom',
     })
-    expect(stats.getExpectedDurationMs(session.agentId)).toBeUndefined()
+    expect(stats.getExpectedDurationMs(session.agentId, undefined)).toBeUndefined()
     svc.dispose()
   })
 
@@ -3544,9 +3647,9 @@ describe('AcpSessionService — mcpServers capability gating', () => {
     const stats = makeCompactionStats()
     const recorded: number[] = []
     const origRecord = stats.record.bind(stats)
-    stats.record = (agentId: string, durationMs: number) => {
+    stats.record = (agentId: string, durationMs: number, modelId: string | undefined) => {
       recorded.push(durationMs)
-      origRecord(agentId, durationMs)
+      origRecord(agentId, durationMs, modelId)
     }
     const svc = makeService(client, new ConfigurationService(), stats)
     const session = await svc.createSession()

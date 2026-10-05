@@ -1,16 +1,27 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  AcpCompactionStatsService — durable, per-agent history of how long context
- *  compaction actually takes on this machine, so the CompactionCard's progress
- *  estimate is grounded in observed timing instead of a fixed constant.
+ *  AcpCompactionStatsService — durable history of how long context compaction
+ *  actually takes on this machine, so the CompactionCard's progress estimate is
+ *  grounded in observed timing instead of a fixed constant.
  *
  *  The SDK compaction is an atomic summarization call with no real progress
  *  signal. Before we had samples the card eased toward 100% off a hard-coded
  *  time constant; here we record the real `durationMs` of every successful
- *  compaction (bucketed by agentId, since timing tracks the agent/model, not a
- *  specific session) and expose the median as the expected duration for the
- *  next run. Failed compactions are ignored — an aborted summarization has no
- *  bearing on how long a real one takes.
+ *  compaction and expose the median as the expected duration for the next run.
+ *  Failed compactions are ignored — an aborted summarization has no bearing on
+ *  how long a real one takes.
+ *
+ *  Samples are bucketed by agent AND model: duration tracks the model (a 1M-lane
+ *  compaction summarizes ~5x the tokens of a bare 200k one), so a single
+ *  per-agent median mis-paces the card the moment the user switches model rows.
+ *  A lookup falls back to the bare-agent bucket — the model-unknown samples —
+ *  only while the model's own bucket is empty. That fallback is a bridge, never
+ *  a pool: folding another model's samples into an unsampled one is exactly the
+ *  skew this split removes, so a known model's sample goes to its own bucket and
+ *  never to the bare one.
+ *
+ *  Known limitation: the bucket ignores the connection authority, so a
+ *  remote-host compaction shares the local model's timing.
  *
  *  Storage mirrors AcpSessionFilterService: single GLOBAL bucket via
  *  IStorageService, debounced writes, synchronous flush on dispose.
@@ -27,19 +38,25 @@ import {
   StorageScope,
   type ILogger,
 } from '@universe-editor/platform'
+import { normalizeAnthropicVersionDots } from '../../../../shared/ai/catalog/index.js'
 
 export interface IAcpCompactionStatsService {
   readonly _serviceBrand: undefined
   /** Idempotent. main.tsx fire-and-forgets at startup. */
   initialize(): Promise<void>
-  /** Record the wall-clock duration (ms) of a successful compaction for `agentId`. */
-  record(agentId: string, durationMs: number): void
   /**
-   * Expected duration (ms) of the next compaction for `agentId`, derived as the
-   * median of recorded samples. `undefined` when no samples exist yet, so the
-   * card can fall back to its constant-based estimate.
+   * Record the wall-clock duration (ms) of a successful compaction for `agentId`
+   * under `modelId`. A known model writes only to its own bucket; `undefined`
+   * (the model was unknown) writes to the agent-wide bucket.
    */
-  getExpectedDurationMs(agentId: string): number | undefined
+  record(agentId: string, durationMs: number, modelId: string | undefined): void
+  /**
+   * Expected duration (ms) of the next compaction for `agentId` under `modelId`,
+   * derived as the median of recorded samples: the model's own bucket once it has
+   * samples, otherwise the model-unknown bucket as a cold-start bridge.
+   * `undefined` when neither exists, so the card falls back to its constant.
+   */
+  getExpectedDurationMs(agentId: string, modelId: string | undefined): number | undefined
 }
 
 export const IAcpCompactionStatsService = createDecorator<IAcpCompactionStatsService>(
@@ -47,13 +64,26 @@ export const IAcpCompactionStatsService = createDecorator<IAcpCompactionStatsSer
 )
 
 const STORAGE_KEY = 'acp.compactionStats'
+/**
+ * Deliberately still 1: the persisted shape (`Record<string, number[]>`) is
+ * unchanged, only the key space widens. v1's bare-agentId keys are exactly the
+ * model-unknown bucket, so old samples stay meaningful as the cold-start bridge
+ * instead of being dropped for a version bump that buys nothing.
+ */
 const SCHEMA_VERSION = 1
-/** Keep the most recent N samples per agent; a rolling window tracks drift (model swaps, machine load). */
+/** Keep the most recent N samples per bucket; a rolling window tracks drift (model swaps, machine load). */
 const MAX_SAMPLES = 20
+/** Bucket-key separator. `\0` cannot occur in an agent id or a model id. */
+const KEY_SEP = '\0'
 
 interface PersistedShape {
   readonly schemaVersion: number
-  /** agentId → recent successful compaction durations (ms), oldest first. */
+  /**
+   * bucketKey → recent successful compaction durations (ms), oldest first. A key
+   * is `${agentId}\0${modelId}` for a known model, or a bare `agentId` for the
+   * model-unknown bucket. Keys are opaque to the loader — never parsed back —
+   * which is what lets one flat record cover both shapes.
+   */
   readonly samples: Readonly<Record<string, readonly number[]>>
 }
 
@@ -85,19 +115,31 @@ export class AcpCompactionStatsService extends Disposable implements IAcpCompact
     return this._loadPromise
   }
 
-  record(agentId: string, durationMs: number): void {
+  record(agentId: string, durationMs: number, modelId: string | undefined): void {
     if (!agentId || !Number.isFinite(durationMs) || durationMs <= 0) return
-    const arr = this._samples.get(agentId) ?? []
+    const key = bucketKey(agentId, modelId)
+    const arr = this._samples.get(key) ?? []
     arr.push(Math.round(durationMs))
     if (arr.length > MAX_SAMPLES) arr.splice(0, arr.length - MAX_SAMPLES)
-    this._samples.set(agentId, arr)
+    this._samples.set(key, arr)
+    this._logger.debug(`recorded ${Math.round(durationMs)}ms under "${key}" (n=${arr.length})`)
     this._scheduleWrite()
   }
 
-  getExpectedDurationMs(agentId: string): number | undefined {
-    const arr = this._samples.get(agentId)
-    if (!arr || arr.length === 0) return undefined
-    return median(arr)
+  getExpectedDurationMs(agentId: string, modelId: string | undefined): number | undefined {
+    const key = bucketKey(agentId, modelId)
+    const exact = this._samples.get(key)
+    if (exact && exact.length > 0) return median(exact)
+    // Cold start for this model: bridge with the model-unknown samples rather
+    // than dropping straight to the card's fixed constant. Short lived — the
+    // model's own bucket takes over from its first recorded sample. Only ever
+    // reads the bare-agent bucket, so a second model's samples can never leak in.
+    const bridge = key === agentId ? undefined : this._samples.get(agentId)
+    if (bridge && bridge.length > 0) {
+      this._logger.debug(`no samples under "${key}"; bridging from "${agentId}"`)
+      return median(bridge)
+    }
+    return undefined
   }
 
   override dispose(): void {
@@ -159,6 +201,29 @@ export class AcpCompactionStatsService extends Disposable implements IAcpCompact
       this._logger.warn(`failed to persist compaction stats: ${(err as Error).message}`)
     }
   }
+}
+
+/**
+ * Bucket key for one agent + model. An `undefined` model — or an id that
+ * normalizes to empty — means "unknown", which lands in the bare-agent bucket.
+ */
+function bucketKey(agentId: string, modelId: string | undefined): string {
+  const model = modelId === undefined ? '' : normalizeModelKey(modelId)
+  return model === '' ? agentId : `${agentId}${KEY_SEP}${model}`
+}
+
+/**
+ * Fold the spellings one model can arrive under into a single key. Version dots
+ * are the known divergence (a gateway declares `claude-opus-4.8` while Anthropic
+ * spells `claude-opus-4-8`). The lane suffix is deliberately kept: `[1m]` is a
+ * different compaction workload, not a spelling variant, so it must not fold
+ * into the bare model's bucket. Dated snapshots and aliases
+ * (`claude-opus-4-8-20260101` vs `claude-opus-4-8`) do stay split — the cheaper
+ * mistake, since a split only costs a cold-start bridge while folding could mix
+ * two genuinely different workloads.
+ */
+function normalizeModelKey(modelId: string): string {
+  return normalizeAnthropicVersionDots(modelId.trim().toLowerCase())
 }
 
 /** Median of a non-empty numeric array; even length averages the two middle samples. */

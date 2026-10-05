@@ -10,6 +10,7 @@ import {
   extraModelCandidatesForAgentSettings,
   mergeModelCandidates,
   sessionModelCandidates,
+  sessionModelId,
 } from '../acpModelCandidates.js'
 
 function provider(
@@ -354,6 +355,37 @@ describe('sessionModelCandidates', () => {
       { id: 'model', category: 'model', type: 'boolean', name: 'Model', currentValue: false },
     ] as unknown as readonly SessionConfigOption[]
     expect(sessionModelCandidates(bag)).toEqual([])
+  })
+})
+
+describe('sessionModelId', () => {
+  it('returns the model select current value', () => {
+    const bag = [
+      selectOption({
+        category: 'model',
+        currentValue: 'claude-opus-5',
+        options: [{ value: 'claude-opus-5', name: 'Opus 5' }],
+      }),
+    ]
+    expect(sessionModelId(bag)).toBe('claude-opus-5')
+  })
+
+  it('hands back the 1M lane verbatim, unnormalized', () => {
+    const bag = [
+      selectOption({
+        category: 'model',
+        currentValue: 'Claude-Opus-4.8[1M]',
+        options: [{ value: 'Claude-Opus-4.8[1M]', name: 'Opus 1M' }],
+      }),
+    ]
+    expect(sessionModelId(bag)).toBe('Claude-Opus-4.8[1M]')
+  })
+
+  it('returns undefined without a usable model option', () => {
+    expect(sessionModelId([])).toBeUndefined()
+    // A non-model select (and any non-select shape) carries no model identity.
+    expect(sessionModelId([selectOption({ category: 'thought_level' })])).toBeUndefined()
+    expect(sessionModelId([selectOption({ category: 'model', type: 'boolean' })])).toBeUndefined()
   })
 })
 

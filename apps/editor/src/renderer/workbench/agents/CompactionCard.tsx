@@ -66,8 +66,8 @@ export function CompactionCard({
  * compaction percentage); it clears on settle. When past compactions have been
  * timed (`expectedDurationMs`), the curve is tuned so the bar hits ~90% around
  * that historically typical finish time; without any samples it falls back to a
- * fixed time constant. `elapsed` is a live stopwatch while running, frozen at
- * the recorded `durationMs` once settled.
+ * default expected duration of the same shape. `elapsed` is a live stopwatch
+ * while running, frozen at the recorded `durationMs` once settled.
  */
 function useCompactionProgress(compaction: AcpCompaction): {
   elapsed: string | null
@@ -92,24 +92,28 @@ function useCompactionProgress(compaction: AcpCompaction): {
   return { elapsed: formatElapsed(compaction.durationMs), percent: null }
 }
 
-/** Fallback time constant (ms) when no history exists; ~τ elapsed ≈ 63%. */
-const PROGRESS_TAU_MS = 6000
+/**
+ * Compaction duration assumed while no history exists; same meaning as a
+ * recorded `expectedDurationMs`, just a default rather than an observation.
+ */
+const DEFAULT_EXPECTED_DURATION_MS = 45_000
 /** ln(1 / (1 - 0.9)) — elapsing one expected-duration reaches 90% on the asymptotic curve. */
 const EXPECTED_CURVE_K = 2.302585
 
 /**
- * Asymptotic time-based estimate that approaches but never reaches 100%. With a
- * recorded `expectedDurationMs`, the curve is scaled so `ms === expected` lands
- * at ~90% — grounding the bar in observed timing; otherwise it eases off the
- * fixed {@link PROGRESS_TAU_MS}. Capped at 99 so a slow run past the estimate
- * still reads as in-progress rather than stuck at 100%.
+ * Asymptotic time-based estimate that approaches but never reaches 100%. The
+ * curve is scaled so `ms === expected` lands at ~90% — with a recorded
+ * `expectedDurationMs` the bar is grounded in observed timing, without one it
+ * eases off {@link DEFAULT_EXPECTED_DURATION_MS} through the same scaling.
+ * Capped at 99 so a slow run past the estimate still reads as in-progress
+ * rather than stuck at 100%.
  */
 function estimatePercent(ms: number, expectedDurationMs?: number): number {
-  const tau =
+  const expected =
     expectedDurationMs !== undefined && expectedDurationMs > 0
-      ? expectedDurationMs / EXPECTED_CURVE_K
-      : PROGRESS_TAU_MS
-  const p = (1 - Math.exp(-ms / tau)) * 100
+      ? expectedDurationMs
+      : DEFAULT_EXPECTED_DURATION_MS
+  const p = (1 - Math.exp(-ms / (expected / EXPECTED_CURVE_K))) * 100
   return Math.min(99, Math.round(p))
 }
 
