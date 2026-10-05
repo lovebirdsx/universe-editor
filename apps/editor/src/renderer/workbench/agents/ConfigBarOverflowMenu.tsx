@@ -56,6 +56,7 @@ import {
   categoryIcon,
   ConfigOptionPanel,
   pickConfigValue,
+  useConfigOptionNotes,
   type ConfigBarAnchor,
 } from './ConfigOptionsBar.js'
 import { isMcpPickerHidden, filterPoolForSession, McpPickerPanel } from './McpServerPicker.js'
@@ -392,6 +393,7 @@ function OptionOverflowRow({
 }) {
   const dialogService = useService(IDialogService)
   const notificationService = useService(INotificationService)
+  const optionNotes = useConfigOptionNotes(session, option)
   const Icon = categoryIcon(option.category)
   return (
     <OverflowRowLayout
@@ -402,6 +404,7 @@ function OptionOverflowRow({
       body={
         <ConfigOptionPanel
           option={option}
+          optionNotes={optionNotes}
           onCommit={(value) => {
             // Same order as the inline popover: end the surface (and hand the
             // caret back) before the pick lands, so the async apply cannot hold

@@ -59,6 +59,7 @@ import { AcpCompactionStatsService } from '../acpCompactionStats.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
 import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
 import { AcpAuthGuidanceService } from '../acpAuthGuidanceService.js'
+import { stubAcpCodexAutoReviewGuard } from './stubAcpCodexAutoReviewGuard.js'
 import { AcpSessionFactory } from '../acpSessionFactory.js'
 import { NULL_ACP_MESSAGE_ATTACHMENT_STORE } from '../acpMessageAttachmentStore.js'
 import type { IAcpSessionProviderContext } from '../acpSessionProviderContext.js'
@@ -470,6 +471,7 @@ function buildService(
     new AcpAuthGuidanceService(new StubNotificationService(), {
       executeCommand: async () => undefined,
     } as never),
+    stubAcpCodexAutoReviewGuard(),
     new AcpSessionFactory(
       telemetry,
       history,

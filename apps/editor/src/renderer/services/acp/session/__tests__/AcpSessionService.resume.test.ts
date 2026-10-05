@@ -71,6 +71,7 @@ import type { IAcpPermissionHandler } from '../../acpPermissionHandler.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
 import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
 import { AcpAuthGuidanceService } from '../acpAuthGuidanceService.js'
+import { stubAcpCodexAutoReviewGuard } from './stubAcpCodexAutoReviewGuard.js'
 import { AcpSessionFactory } from '../acpSessionFactory.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
 import { StubConfigOptionsCache } from './stubConfigOptionsCache.js'
@@ -455,6 +456,7 @@ function buildService(
     new StubConfigOptionsCache(),
     FAKE_URI_IDENTITY,
     new AcpAuthGuidanceService(notifications, { executeCommand: async () => undefined } as never),
+    stubAcpCodexAutoReviewGuard(),
     new AcpSessionFactory(
       telemetry,
       history,
@@ -1385,6 +1387,7 @@ describe('AcpSessionService.resumeSession — editor-restart race', () => {
       new StubConfigOptionsCache(),
       FAKE_URI_IDENTITY,
       new AcpAuthGuidanceService(notifications, { executeCommand: async () => undefined } as never),
+      stubAcpCodexAutoReviewGuard(),
       new AcpSessionFactory(
         telemetry,
         history,
@@ -1519,6 +1522,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new StubConfigOptionsCache(),
       FAKE_URI_IDENTITY,
       new AcpAuthGuidanceService(notifications, { executeCommand: async () => undefined } as never),
+      stubAcpCodexAutoReviewGuard(),
       new AcpSessionFactory(
         telemetry,
         history,
@@ -1592,6 +1596,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new StubConfigOptionsCache(),
       FAKE_URI_IDENTITY,
       new AcpAuthGuidanceService(notification, { executeCommand: async () => undefined } as never),
+      stubAcpCodexAutoReviewGuard(),
       new AcpSessionFactory(
         telemetry,
         history,
@@ -1663,6 +1668,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new StubConfigOptionsCache(),
       FAKE_URI_IDENTITY,
       new AcpAuthGuidanceService(notifications, { executeCommand: async () => undefined } as never),
+      stubAcpCodexAutoReviewGuard(),
       new AcpSessionFactory(
         telemetry,
         history,
@@ -1736,6 +1742,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new StubConfigOptionsCache(),
       FAKE_URI_IDENTITY,
       new AcpAuthGuidanceService(notification, { executeCommand: async () => undefined } as never),
+      stubAcpCodexAutoReviewGuard(),
       new AcpSessionFactory(
         telemetry,
         history,

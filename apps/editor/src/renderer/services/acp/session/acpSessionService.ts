@@ -88,6 +88,7 @@ import { isAuthRequiredError } from './acpAuthError.js'
 import { formatAcpErrorMessage, isSessionNotFoundError } from './acpErrorClassify.js'
 import { IAcpPermissionHandler } from '../acpPermissionHandler.js'
 import { IAcpAuthGuidanceService } from './acpAuthGuidanceService.js'
+import { IAcpCodexAutoReviewGuard } from './acpCodexAutoReviewGuard.js'
 import { IAcpSessionFactory } from './acpSessionFactory.js'
 import {
   IAcpModelCandidateService,
@@ -410,6 +411,23 @@ const DEFAULT_IDLE_PROCESS_TIMEOUT_MS = 5 * 60_000
 /** Configuration key controlling which sessions the history list surfaces. */
 const HISTORY_SCOPE_KEY = 'acp.sessions.historyScope'
 
+/**
+ * fork 契约：vendor/claude-agent-acp/src/permissions/options/shared.ts 的
+ * `PERMISSION_OPTION_ID.allowWithUpdates`。带它的选项 = CLI 自己的作用域化批准
+ * （updatedPermissions 会一并应用），kind 恒为 `allow_always`，靠 optionId 区分。
+ */
+const ALLOW_WITH_UPDATES_OPTION_ID = 'allow-with-updates'
+
+/**
+ * 自带作用域的 allow_always 选项：点选它们只应用 Agent 的规则，不等于对整个
+ * tool kind 的永久批准，因此不能写进 `acp.permissions.autoApprove`。
+ */
+const SCOPED_ALLOW_ALWAYS_OPTION_IDS: ReadonlySet<string> = new Set([
+  ALLOW_WITH_UPDATES_OPTION_ID,
+  'allow-skill-exact',
+  'allow-skill-prefix',
+])
+
 /** ext-notification method the agent fork uses to forward raw Claude SDK messages. */
 const SDK_MESSAGE_EXT_METHOD = ACP_EXT_METHODS.sdkMessage
 
@@ -619,6 +637,8 @@ export class AcpSessionService
     private readonly _configOptionsCache: IAcpConfigOptionsCacheService,
     @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
     @IAcpAuthGuidanceService private readonly _authGuidance: IAcpAuthGuidanceService,
+    @IAcpCodexAutoReviewGuard
+    private readonly _autoReviewGuard: IAcpCodexAutoReviewGuard,
     @IAcpSessionFactory private readonly _sessionFactory: IAcpSessionFactory,
     @IFileService private readonly _fileService: IFileService,
     @IExtensionMcpServersService
@@ -872,6 +892,7 @@ export class AcpSessionService
     this._wireAuthGuidance(session)
     this._wireRecovery(session)
     this._wireConfigOptionsCache(session)
+    this._wireAutoReviewGuard(session)
     this._wireMcpDrift(session)
     // Optimistic config bar: seed the last-known option bag for this agent
     // (currentValue overridden by the user's saved per-agent defaults) so the
@@ -1359,6 +1380,7 @@ export class AcpSessionService
       this._wireAuthGuidance(session)
       this._wireRecovery(session)
       this._wireConfigOptionsCache(session)
+      this._wireAutoReviewGuard(session)
       this._wireMcpDrift(session)
       this._mcpSelectionAtAttach.set(session.id, session.mcpServerSelection.get())
       const captured = session
@@ -2293,6 +2315,15 @@ export class AcpSessionService
     )
   }
 
+  /**
+   * Codex's Auto review routes its approvals to a reviewer model served by the
+   * configured provider — one a gateway binding does not define, so every
+   * escalation would fail. The guard says so rather than leaving it a mystery.
+   */
+  private _wireAutoReviewGuard(session: AcpSession): void {
+    this._register(this._autoReviewGuard.watchSession(session))
+  }
+
   // -- IAcpClientNotificationSink ---------------------------------------
 
   onSessionUpdate(params: SessionNotification): void {
@@ -2410,6 +2441,17 @@ export class AcpSessionService
       this._logger.warn(`request_permission for unknown session ${params.sessionId}`)
       return { outcome: { outcome: 'cancelled' } }
     }
+    // 计划模式下替用户接受 Agent 的作用域化批准（CLI 随之固化自己的会话级规则），
+    // 工作区外的读取/命令不再逐条弹卡；开关 acp.plan.autoApproveWithUpdates。
+    const scopedOptionId = this._planAutoApproveWithUpdates(session, params)
+    if (scopedOptionId) {
+      this._telemetry.publicLog('acp.permission_plan_auto_approved', {
+        optionId: scopedOptionId,
+        kind: params.toolCall.kind ?? 'unknown',
+      })
+      this._logger.debug(`计划模式作用域批准：optionId=${scopedOptionId}`)
+      return { outcome: { outcome: 'selected', optionId: scopedOptionId } }
+    }
     const allowAlways = params.options.find((o) => o.kind === 'allow_always')
     // plan 审查的自动执行：设置非 off 且目标选项确实在本次 options 里才附加
     // （例如 ALLOW_BYPASS 关闭时 bypassPermissions 缺席，降级为普通弹卡）。
@@ -2436,7 +2478,10 @@ export class AcpSessionService
             allowAlways &&
             optionId === allowAlways.optionId &&
             params.toolCall.kind &&
-            params.toolCall.kind !== 'switch_mode'
+            params.toolCall.kind !== 'switch_mode' &&
+            // 作用域化选项自带规则（CLI 会应用 updatedPermissions），把它当成
+            // 「整个 kind 永久批准」会远超选项标签承诺的范围。
+            !SCOPED_ALLOW_ALWAYS_OPTION_IDS.has(optionId)
           ) {
             this._permission.persistAllow(params.toolCall.kind)
           }
@@ -2493,6 +2538,40 @@ export class AcpSessionService
       return undefined
     }
     return { optionId, delayMs: PLAN_AUTO_EXECUTE_DELAY_MS }
+  }
+
+  /**
+   * 计划模式下 Shell（execute）/ 读取类（read/search，即 Read/Glob/Grep）请求的
+   * 静默批准。返回 undefined 表示回落普通人工弹卡：设置关闭 / 非 plan 会话 /
+   * 请求 kind 不在覆盖范围 / Agent 未提供作用域化选项 / CLI 要求「不得误批准」
+   * （defaultToNo，拒绝项置顶）。
+   */
+  private _planAutoApproveWithUpdates(
+    session: AcpSession,
+    params: RequestPermissionRequest,
+  ): string | undefined {
+    const kind = params.toolCall.kind
+    if (kind !== 'execute' && kind !== 'read' && kind !== 'search') return undefined
+    if (this._config.get<boolean>('acp.plan.autoApproveWithUpdates') === false) return undefined
+    const isPlanMode = session.configOptions
+      .get()
+      .some((option) => option.category === 'mode' && option.currentValue === 'plan')
+    if (!isPlanMode) return undefined
+    const option = params.options.find(
+      (candidate) =>
+        candidate.optionId === ALLOW_WITH_UPDATES_OPTION_ID && candidate.kind === 'allow_always',
+    )
+    if (!option) return undefined
+    // fork 在 CLI 标记 defaultToNo（安全类询问）时把拒绝项排到最前，明确要求客户端
+    // 不要把批准项当默认；此时退回人工确认。
+    const first = params.options[0]
+    if (first?.kind === 'reject_once' || first?.kind === 'reject_always') {
+      this._logger.warn(
+        `计划模式作用域批准回退人工确认（拒绝项置顶）：options=${JSON.stringify(params.options.map(({ optionId, kind: optionKind }) => ({ optionId, kind: optionKind })))}`,
+      )
+      return undefined
+    }
+    return option.optionId
   }
 
   async onCreateElicitation(params: CreateElicitationRequest): Promise<CreateElicitationResponse> {

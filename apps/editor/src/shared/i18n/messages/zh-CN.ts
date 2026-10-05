@@ -789,6 +789,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.acp.notifications.enabled':
     '当编辑器窗口未聚焦且 Agent 需要注意（权限请求、问题、任务完成或错误）时，显示系统桌面通知。点击通知会聚焦窗口并跳转到该会话。会自动继续的计划确认卡片（见 `acp.plan.autoExecute`）不会通知。',
   'settings.acp.permissions': '无需提示即可自动批准的工具调用类型（例如 "fs.read"）。',
+  'settings.acp.plan.autoApproveWithUpdates':
+    '计划模式下，Agent 为 Shell 命令、文件读取与搜索（Read/Glob/Grep）提供带作用域的「允许并记住」选项（allow-with-updates）时，直接静默选择而不显示权限卡片：Agent 会应用该选项携带的规则（通常是会话级；Shell 命令规则可能写入工作区的 .claude/settings.local.json）。Agent 标记为需要明确回答的请求（拒绝项置顶）绝不自动批准；计划确认卡片由 `acp.plan.autoExecute` 控制。关闭后这类请求都恢复人工确认。',
   'settings.acp.plan.autoExecute':
     '计划模式的会话完成计划（"Ready to code?"）后，经确认卡片上的短暂倒计时自动以所选模式继续——悬停或与卡片交互即可接管。"off" 表示始终等待手动选择。计划确认卡片上的复选框会把此设置切换为 "bypassPermissions"。',
   'settings.acp.plan.autoExecute.off': '关闭',
@@ -2558,6 +2560,10 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.changes.dismissInferred': '非 agent 改动——忽略',
   'acp.changes.treeLabel': '更改的文件',
   'acp.chat.forkFromTip': '从此处分叉',
+  'acp.codex.autoReviewUnavailable':
+    '本会话使用 Auto review，但 Codex 在这里绑定的是自定义 provider：审批用的评审模型 codex-auto-review 不在它提供的模型里，因此所有需要审批的操作都会失败。切到 "Workspace access" 可改为直接由你批准。',
+  'acp.codex.autoReviewUnavailable.switch': '切换到 "Workspace access"',
+  'acp.codex.autoReviewUnavailable.note': '自定义 provider 下审批会失败',
   'acp.collapse.collapsed': '时间线：全部折叠 - 点击全部展开',
   'acp.collapse.default': '时间线：智能折叠 - 点击全部折叠',
   'acp.collapse.expanded': '时间线：全部展开（子 Agent 卡片最多展开一张）- 点击重置',

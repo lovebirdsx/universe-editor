@@ -3273,6 +3273,18 @@
   text-overflow: ellipsis;
 }
 
+/* Caveat beside a row that cannot work here (e.g. Codex's Auto review on a
+   custom provider): keeps the row's own name intact and reads as secondary. */
+.configPopoverItemNote {
+  flex: 0 0 auto;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.85em;
+  opacity: 0.7;
+}
+
 /* Sub-agent model picker (standalone trigger + floating panel). */
 .subagentPanel {
   min-width: 200px;

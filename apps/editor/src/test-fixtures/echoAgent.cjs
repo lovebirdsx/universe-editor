@@ -422,6 +422,41 @@ async function runPrompt(id, params) {
     return reply(id, { stopReason: 'end_turn' })
   }
 
+  // Test directive: "approve-shell" asks for a scoped shell approval the way the
+  // Claude fork does for a command reading outside the workspace (allow_once →
+  // allow-with-updates → reject). "approve-shell-danger" leads with the reject,
+  // which is how the fork marks a CLI `defaultToNo` ask (its stable sort puts
+  // every reject ahead of the approvals). Both echo the chosen optionId so a
+  // spec can assert what the client answered.
+  if (userText === 'approve-shell' || userText === 'approve-shell-danger') {
+    const allowOptions = [
+      { optionId: 'allow-once', name: 'Yes', kind: 'allow_once' },
+      {
+        optionId: 'allow-with-updates',
+        name: 'Yes, and allow access to 05/ and 10/ commands',
+        kind: 'allow_always',
+      },
+      { optionId: 'reject', name: 'No', kind: 'reject_once' },
+    ]
+    const result = await requestFromClient('session/request_permission', {
+      sessionId,
+      toolCall: { toolCallId: 'echo-shell', title: 'ls -la ~/.codex/sessions', kind: 'execute' },
+      options:
+        userText === 'approve-shell-danger'
+          ? [allowOptions[2], allowOptions[0], allowOptions[1]]
+          : allowOptions,
+    })
+    notify('session/update', {
+      sessionId,
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: userText + ' result: ' + JSON.stringify(result) },
+      },
+    })
+    activeTurns.delete(sessionId)
+    return reply(id, { stopReason: 'end_turn' })
+  }
+
   // Test directive: "elicit-form" asks the client a fixed form elicitation and
   // echoes the user's response (accept+content / decline / cancel).
   if (userText === 'elicit-form') {

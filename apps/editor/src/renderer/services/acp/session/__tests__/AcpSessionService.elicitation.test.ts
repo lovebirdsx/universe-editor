@@ -55,6 +55,7 @@ import { AcpSessionHistoryService } from '../acpSessionHistory.js'
 import { AcpCompactionStatsService } from '../acpCompactionStats.js'
 import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
 import { AcpAuthGuidanceService } from '../acpAuthGuidanceService.js'
+import { stubAcpCodexAutoReviewGuard } from './stubAcpCodexAutoReviewGuard.js'
 import { AcpSessionFactory } from '../acpSessionFactory.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
 import { StubConfigOptionsCache } from './stubConfigOptionsCache.js'
@@ -300,6 +301,7 @@ function makeService(client: FakeAcpClientService): AcpSessionService {
     new AcpAuthGuidanceService(notifications, {
       executeCommand: async () => undefined,
     } as never),
+    stubAcpCodexAutoReviewGuard(),
     new AcpSessionFactory(
       telemetry,
       history,

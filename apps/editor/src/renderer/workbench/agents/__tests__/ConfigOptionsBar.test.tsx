@@ -29,6 +29,7 @@ import {
   INotificationService,
   InstantiationService,
   IWorkspaceService,
+  constObservable,
   observableValue,
   ServiceCollection,
 } from '@universe-editor/platform'
@@ -53,6 +54,10 @@ import type {
 import type { AvailableCommand, SessionConfigOption } from '@agentclientprotocol/sdk'
 import { IClaudeConfigService } from '../../../../shared/ipc/claudeConfigService.js'
 import { ConfigOptionsBar, type ConfigOptionsBarHandle } from '../ConfigOptionsBar.js'
+import {
+  IAcpCodexAutoReviewGuard,
+  type AutoReviewAvailability,
+} from '../../../services/acp/session/acpCodexAutoReviewGuard.js'
 import { ServicesContext } from '../../useService.js'
 import {
   FakeResizeObserver,
@@ -115,6 +120,7 @@ function renderWithServices(
   node: React.ReactNode,
   dialogService?: IDialogServiceType,
   notificationService: INotificationService = stubNotificationService,
+  autoReviewGuard?: IAcpCodexAutoReviewGuard,
 ) {
   const services = new ServiceCollection()
   services.set(IFileService, stubFileService)
@@ -122,6 +128,7 @@ function renderWithServices(
   services.set(IClaudeConfigService, stubClaudeConfigService)
   services.set(IAiModelService, stubAiModelService)
   services.set(INotificationService, notificationService)
+  if (autoReviewGuard !== undefined) services.set(IAcpCodexAutoReviewGuard, autoReviewGuard)
   services.set(
     IDialogService,
     dialogService ??
@@ -230,6 +237,32 @@ const MODE_OPTION: SessionConfigOption = {
   ],
 }
 
+/** codex's mode rows, whose "Auto review" is the one that can be unavailable. */
+const CODEX_MODE_OPTION: SessionConfigOption = {
+  id: 'mode',
+  category: 'mode',
+  type: 'select',
+  name: 'Mode',
+  currentValue: 'workspace-write',
+  options: [
+    { value: 'read-only', name: 'Read-only' },
+    { value: 'workspace-write', name: 'Workspace access' },
+    { value: 'agent', name: 'Auto review' },
+  ],
+}
+
+/** A guard that reports one fixed verdict, with a stable observable. */
+function stubAutoReviewGuard(availability: AutoReviewAvailability): IAcpCodexAutoReviewGuard {
+  const verdict = constObservable(availability)
+  return {
+    _serviceBrand: undefined,
+    getAutoReviewAvailability: () => availability,
+    observeAutoReviewAvailability: () => verdict,
+    watchSession: () => ({ dispose: () => {} }),
+    refresh: async () => {},
+  } as unknown as IAcpCodexAutoReviewGuard
+}
+
 const THOUGHT_OPTION: SessionConfigOption = {
   id: 'thought_level',
   category: 'thought_level',
@@ -268,6 +301,71 @@ describe('ConfigOptionsBar', () => {
     const modeTrigger = screen.getByTestId('acp-config-mode-trigger')
     expect(modelTrigger.textContent).toContain('Sonnet 4.6')
     expect(modeTrigger.textContent).toContain('Default')
+  })
+
+  it('marks the Auto review row when the credential cannot serve its reviewer', () => {
+    const session = makeSession([CODEX_MODE_OPTION], { agentId: 'codex' })
+    renderWithServices(
+      <ConfigOptionsBar session={session} />,
+      undefined,
+      stubNotificationService,
+      stubAutoReviewGuard('unavailable'),
+    )
+    fireEvent.click(screen.getByTestId('acp-config-mode-trigger'))
+    const rows = [
+      ...screen.getByTestId('acp-config-mode-popover').querySelectorAll('[role="option"]'),
+    ]
+    const autoReview = rows.find((n) => n.textContent?.includes('Auto review'))
+    expect(autoReview?.textContent).toContain('Approval review fails on a custom provider')
+    expect(rows.find((n) => n.textContent?.includes('Workspace access'))?.textContent).toBe(
+      'Workspace access',
+    )
+  })
+
+  it('leaves the mode rows bare when the reviewer can be served', () => {
+    const session = makeSession([CODEX_MODE_OPTION], { agentId: 'codex' })
+    renderWithServices(
+      <ConfigOptionsBar session={session} />,
+      undefined,
+      stubNotificationService,
+      stubAutoReviewGuard('available'),
+    )
+    fireEvent.click(screen.getByTestId('acp-config-mode-trigger'))
+    const rows = [
+      ...screen.getByTestId('acp-config-mode-popover').querySelectorAll('[role="option"]'),
+    ]
+    expect(rows.some((n) => n.textContent?.includes('Approval review fails'))).toBe(false)
+  })
+
+  it('leaves the mode rows bare while the credential is still unknown', () => {
+    const session = makeSession([CODEX_MODE_OPTION], { agentId: 'codex' })
+    renderWithServices(
+      <ConfigOptionsBar session={session} />,
+      undefined,
+      stubNotificationService,
+      stubAutoReviewGuard('unknown'),
+    )
+    fireEvent.click(screen.getByTestId('acp-config-mode-trigger'))
+    const rows = [
+      ...screen.getByTestId('acp-config-mode-popover').querySelectorAll('[role="option"]'),
+    ]
+    expect(rows.some((n) => n.textContent?.includes('Approval review fails'))).toBe(false)
+  })
+
+  it('keeps the note off options other than the mode picker', () => {
+    const session = makeSession([MODEL_OPTION], { agentId: 'codex' })
+    renderWithServices(
+      <ConfigOptionsBar session={session} />,
+      undefined,
+      stubNotificationService,
+      stubAutoReviewGuard('unavailable'),
+    )
+    fireEvent.click(screen.getByTestId('acp-config-model-trigger'))
+    const rows = [
+      ...screen.getByTestId('acp-config-model-popover').querySelectorAll('[role="option"]'),
+    ]
+    expect(rows.some((n) => n.textContent?.includes('Approval review fails'))).toBe(false)
+    expect(rows[0]?.getAttribute('data-tooltip')).toBe('Sonnet 4.6')
   })
 
   it('clicking a trigger opens the popover; picking an item calls setConfigOption', () => {

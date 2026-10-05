@@ -54,6 +54,12 @@ import {
   IAcpSessionService,
   type IAcpSession,
 } from '../../services/acp/session/acpSessionService.js'
+import {
+  CODEX_AUTO_REVIEW_MODE_ID,
+  IAcpCodexAutoReviewGuard,
+  MODE_CONFIG_ID,
+  type AutoReviewAvailability,
+} from '../../services/acp/session/acpCodexAutoReviewGuard.js'
 import type { McpServerDefinition } from '../../services/acp/acpMcpServers.js'
 import type {
   SessionConfigOption,
@@ -84,6 +90,10 @@ import styles from './agents.module.css'
 // tests) there is no pool observable to read, so the hook count stays fixed
 // by reading from this constant instead.
 const EMPTY_MCP_POOL = constObservable<readonly McpServerDefinition[]>([])
+
+// Same soft-dependency story as EMPTY_MCP_POOL: with no guard registered
+// (unit tests) every session simply has nothing to flag.
+const NO_AUTO_REVIEW_GUARD = constObservable<AutoReviewAvailability>('available')
 
 export { findConfigOptionLabel as findLabel }
 export { compareByCategory }
@@ -571,6 +581,35 @@ export async function pickConfigValue(
   }
 }
 
+/** Per-value caveats to render beside an option's rows (see useConfigOptionNotes). */
+export type ConfigOptionNotes = Readonly<Record<string, string>>
+
+/**
+ * Notes for the rows of one config option in this session. Today that is the one
+ * combination that cannot work: codex's "Auto review" on a credential whose
+ * provider cannot serve the reviewer model it asks for, where every approval
+ * fails. `undefined` when there is nothing to say.
+ */
+export function useConfigOptionNotes(
+  session: IAcpSession,
+  option: SessionConfigOption,
+): ConfigOptionNotes | undefined {
+  const guard = useOptionalService(IAcpCodexAutoReviewGuard)
+  const availability = useObservable(
+    guard?.observeAutoReviewAvailability(session.agentId, session.authority) ??
+      NO_AUTO_REVIEW_GUARD,
+  )
+  return useMemo(() => {
+    if (option.id !== MODE_CONFIG_ID || availability !== 'unavailable') return undefined
+    return {
+      [CODEX_AUTO_REVIEW_MODE_ID]: localize(
+        'acp.codex.autoReviewUnavailable.note',
+        'Approval review fails on a custom provider',
+      ),
+    }
+  }, [option.id, availability])
+}
+
 function ConfigOptionTrigger({
   session,
   option,
@@ -593,6 +632,7 @@ function ConfigOptionTrigger({
 }) {
   const dialogService = useService(IDialogService)
   const notificationService = useService(INotificationService)
+  const optionNotes = useConfigOptionNotes(session, option)
   const Icon = categoryIcon(option.category)
   const currentLabel = findConfigOptionLabel(option.options, option.currentValue)
   const testKey = option.category ?? option.id
@@ -614,6 +654,7 @@ function ConfigOptionTrigger({
       {open && anchor !== null ? (
         <ConfigOptionPopover
           option={option}
+          optionNotes={optionNotes}
           onCommit={(value) => {
             onClose(true)
             void pickConfigValue(session, option, value, dialogService, notificationService)
@@ -632,6 +673,7 @@ function ConfigOptionTrigger({
 
 function ConfigOptionPopover({
   option,
+  optionNotes,
   onCommit,
   onDismiss,
   onEscape,
@@ -641,6 +683,7 @@ function ConfigOptionPopover({
   y,
 }: {
   option: SessionConfigOption & { type: 'select' }
+  optionNotes?: ConfigOptionNotes | undefined
   onCommit: (value: string) => void
   /** Outside press: dismiss, leaving the cursor where the user put it. */
   onDismiss: () => void
@@ -665,7 +708,12 @@ function ConfigOptionPopover({
         } as HTMLAttributes<HTMLDivElement>
       }
     >
-      <ConfigOptionPanel option={option} onCommit={onCommit} onAltDigit={onAltDigit} />
+      <ConfigOptionPanel
+        option={option}
+        optionNotes={optionNotes}
+        onCommit={onCommit}
+        onAltDigit={onAltDigit}
+      />
     </AnchoredSurface>
   )
 }
@@ -679,6 +727,7 @@ function ConfigOptionPopover({
  */
 export function ConfigOptionPanel({
   option,
+  optionNotes,
   onCommit,
   onAltDigit,
   onExitUp,
@@ -686,6 +735,7 @@ export function ConfigOptionPanel({
   onExitLeft,
 }: {
   option: SessionConfigOption & { type: 'select' }
+  optionNotes?: ConfigOptionNotes | undefined
   onCommit: (value: string) => void
   onAltDigit?: ((digit: number) => void) | undefined
   onExitUp?: (() => void) | undefined
@@ -718,7 +768,7 @@ export function ConfigOptionPanel({
     // the listbox: a listbox whose only child is another listbox is invalid, and
     // findRowElement-style lookups go by testid anyway.
     <div ref={nav.containerRef} {...nav.containerProps}>
-      {renderPopoverItems(option.options, option.currentValue, nav)}
+      {renderPopoverItems(option.options, option.currentValue, nav, optionNotes)}
     </div>
   )
 }
@@ -728,13 +778,14 @@ export function renderPopoverItems(
   options: readonly SessionConfigSelectOption[] | readonly SessionConfigSelectGroup[],
   current: string,
   nav: IOverlayListNavigation,
+  notes?: ConfigOptionNotes | undefined,
 ): ReactNode {
   if (options.length === 0) return null
   const first = options[0]!
   if (!('group' in first)) {
     const flat = options as readonly SessionConfigSelectOption[]
     return flat.map((v, i) => (
-      <PopoverItem key={v.value} option={v} current={current} nav={nav} index={i} />
+      <PopoverItem key={v.value} option={v} current={current} nav={nav} index={i} notes={notes} />
     ))
   }
   // Group headings stay visible, but the cursor index still runs straight
@@ -745,7 +796,14 @@ export function renderPopoverItems(
       <div className={styles['configPopoverGroupLabel']}>{g.name}</div>
       {g.options.map((v) => {
         const row = (
-          <PopoverItem key={v.value} option={v} current={current} nav={nav} index={index} />
+          <PopoverItem
+            key={v.value}
+            option={v}
+            current={current}
+            nav={nav}
+            index={index}
+            notes={notes}
+          />
         )
         index += 1
         return row
@@ -759,20 +817,25 @@ function PopoverItem({
   current,
   nav,
   index,
+  notes,
 }: {
   option: SessionConfigSelectOption
   current: string
   nav: IOverlayListNavigation
   index: number
+  notes?: ConfigOptionNotes | undefined
 }) {
+  const note = notes?.[option.value]
+  const tooltip = option.description ?? option.name
   return (
     <div
       {...nav.getItemProps(index)}
       className={styles['configPopoverItem']}
       data-current={option.value === current ? 'true' : undefined}
-      data-tooltip={option.description ?? option.name}
+      data-tooltip={note !== undefined ? `${tooltip} — ${note}` : tooltip}
     >
       <span className={styles['configPopoverItemName']}>{option.name}</span>
+      {note !== undefined ? <span className={styles['configPopoverItemNote']}>{note}</span> : null}
     </div>
   )
 }

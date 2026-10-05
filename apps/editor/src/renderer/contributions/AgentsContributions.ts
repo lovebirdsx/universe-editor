@@ -162,6 +162,14 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
               'Tool-call kinds that are auto-approved without prompting (e.g. "fs.read").',
             ),
           },
+          'acp.plan.autoApproveWithUpdates': {
+            type: 'boolean',
+            default: true,
+            description: localize(
+              'settings.acp.plan.autoApproveWithUpdates',
+              'In plan mode, silently select the scoped "allow and remember" option ("allow-with-updates") the agent offers for shell commands, file reads and searches (Read/Glob/Grep) instead of showing the permission card: the agent then applies the rule the option carries — usually session-only, though a shell command rule may be written to the project\'s .claude/settings.local.json. Requests the agent marks as needing an explicit answer (decline option first) are never auto-approved; the plan review card is governed by "acp.plan.autoExecute". Turn off to review every such request yourself.',
+            ),
+          },
           'acp.plan.autoExecute': {
             type: 'string',
             enum: ['off', 'bypassPermissions', 'auto', 'acceptEdits', 'default'],

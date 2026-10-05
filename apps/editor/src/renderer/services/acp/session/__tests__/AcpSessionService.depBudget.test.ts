@@ -85,7 +85,15 @@ import { AcpSessionService } from '../acpSessionService.js'
 // collaborator (history owns per-session entries, agentDefaults owns
 // configOption values) holds a single last-wins cwd, and the facade's
 // synchronous `createSession` default-cwd gate must read it without IO.
-const MAX_INJECTED = 24
+// +1 IAcpCodexAutoReviewGuard (codex Auto review × custom provider): a sibling
+// of IAcpAuthGuidanceService — per-session advisory notifications, wired at the
+// same two construction points (create + resume). Its state is a credential
+// reverse lookup (ICodexConfigService.resolveActiveAuth per authority) plus a
+// per-session configOptions subscription; nothing on AcpSessionRegistry /
+// AcpSessionRestoreCoordinator owns either, and wiring it from a contribution
+// over `sessions` would fork the per-session wiring path that auth-guidance,
+// recovery, config-options-cache and MCP drift all share on the facade.
+const MAX_INJECTED = 25
 
 describe('AcpSessionService dependency budget', () => {
   it('does not exceed the injected-dependency ceiling', () => {

@@ -8,7 +8,7 @@ Agent Client Protocol（ACP）客户端层。基于 `@agentclientprotocol/sdk` v
 
 ## 文件归位
 
-- **协议装配 / 网关**：`acpClientService.ts`（进程启动 + `ClientSideConnection` 装配 + refcount 连接池 + fs/terminal/permission 网关）、`acpAgentRegistry.ts`（内置预设 + `acp.agents` 合并 + PATH 探测）、`acpPathPolicy.ts`（沙盒纯函数：cwd 相对性 + 敏感前缀拒绝）、`acpPermissionHandler.ts`（自动批准 + Memory 持久化）、`acpElicitationForm.ts`（elicitation → 表单模型）、`sdkHostStream.ts`（字符串 → Uint8Array IO 适配）
+- **协议装配 / 网关**：`acpClientService.ts`（进程启动 + `ClientSideConnection` 装配 + refcount 连接池 + fs/terminal/permission 网关）、`acpAgentRegistry.ts`（内置预设 + `acp.agents` 合并 + PATH 探测）、`acpPathPolicy.ts`（沙盒纯函数：cwd 相对性 + 敏感前缀拒绝）、`acpPermissionHandler.ts`（自动批准）、`acpElicitationForm.ts`（elicitation → 表单模型）、`sdkHostStream.ts`（字符串 → Uint8Array IO 适配）
 - **MCP**：`acpMcpServers.ts`（配置 → wire `McpServer[]` 规范化 + 门控）、`mcpServerEnablementService.ts`（默认启停）、`agentMcpConfigService.ts`（agent 自有 MCP 配置文件路由门面）
 - **输入框引用**：`promptRef.ts` / `promptRefTracker.ts` / `promptMentions.ts` / `promptContextRef.ts` / `contextSuggestions.ts`（@/# 药丸子系，见 [cases-prompt-ref-pills.md](cases-prompt-ref-pills.md)）、`promptContext.ts`（选区上下文组装）、`sessionScope.ts`
 - **其余工具**：`persistedStateBase.ts`（双桶持久化基类）、`markdownRenderer.ts` / `markdownIncremental.ts` / `mentionFileSearch.ts` / `ansi.ts` / `filePathLink.ts` / `chatFindMatcher.ts` / `commandWrapper.ts` / `agentIconData.ts` / `agentNotificationIcon.ts` / `acpProtocolTracer.ts`、`acpModelCandidateService.ts` / `acpModelCandidates.ts` / `modelOneM.ts` / `configOptionLabel.ts` / `aiFixConfig.ts` / `aiFixPrompt.ts`（职责见文件名）
@@ -56,6 +56,8 @@ Agent Client Protocol（ACP）客户端层。基于 `@agentclientprotocol/sdk` v
 
 **例外：`switch_mode`（ExitPlanMode）永不走静默自动批准、也不被 `persistAllow` 记住**（守卫在 `onRequestPermission`）。它的自动化由 `acp.plan.autoExecute`（off/bypassPermissions/auto/acceptEdits/default）显式驱动：设置映射到已提供的非 clear 批准选项（`exit-plan-*`）才附 `autoResolve`，否则诊断并回人工确认。卡片倒计时可打断，勿静默短路。
 
+**计划模式作用域批准**：`acp.plan.autoApproveWithUpdates`（默认开）对 plan 会话的 `execute`/`read`/`search` 请求直接选中 fork 的 `allow-with-updates`（须已提供、拒绝项不在首位，不走 `AcpPermissionHandler`）。见 [cases-plan-approve.md](cases-plan-approve.md)。
+
 ## 套路 ACP-E：扩展会话历史持久化字段
 
 `session/acpSessionHistory.ts` 继承 `PersistedStateBase`：`SCHEMA_VERSION++` → `AcpSessionHistoryEntry` 加字段 → `_deserialize` 的 `migrate()` 加迁移代码。不要随意提 `MAX_ENTRIES=100`（写入是全量序列化）。
@@ -78,16 +80,16 @@ agent 端（`vendor/claude-agent-acp`）把 wire 的 `env`/`headers` 数组还�
 - **union 同名跨 agent 条目（`sharedWith`）**：`filterPoolForSession` 凭它放行，否则同名条目在另一方的 picker 里会彻底消失（尽管该方 wire 路径包含它）。
 - **UI 消费 per-agent 视图统一入口 `filterPoolForSession(pool, agentId)`**（`McpServerPicker.tsx`）：picker / ConfigOptionsBar / ConfigBarOverflowMenu 三处共用。
 - **扩展贡献层**（`contributes.mcpServers`）：`IExtensionMcpServersService` 从 manifest DTO 解析 raw record，**绝不写 settings.json**——卸载/禁用即消失。v1 仅 stdio。
-- **默认启用集 = 池中全部非 `disabled` 条目**。`disabled` 注解来自 **`IMcpServerEnablementService`**（`acp.mcpServerEnablement`，GLOBAL/WORKSPACE 双 scope）：默认启用，定义条目里的 `disabled` 字段一律失效。UI 共用 **`McpEnablementToggles`**（工作区级开关**三态**）。坑：`setEnabled(name, true)` 恒存显式 true 记录；三态 Checkbox 的 onChange 必须忽略入参。两条 wire 路径 `await Promise.all([extensionMcp.whenReady, mcpEnablement.whenReady])` 消除冷启动竞态。
+- **默认启用集 = 池中全部非 `disabled` 条目**：`disabled` 注解来自 **`IMcpServerEnablementService`**（`acp.mcpServerEnablement`，GLOBAL/WORKSPACE 双 scope），定义条目里的 `disabled` 字段一律失效。UI 共用 **`McpEnablementToggles`**（工作区级开关**三态**，坑见 cases）。两条 wire 路径 `await Promise.all([extensionMcp.whenReady, mcpEnablement.whenReady])` 消除冷启动竞态。
 - **picker 左侧勾选只是会话级 pin**（`setSessionMcpServers`），只影响当前会话，**绝不写回默认**（sticky 机制已删）。resume/fork 选择瀑布：history 行 `mcpServerNames`（undefined=跟随默认）→ 否则 `null`（非 disabled 全集）。
 
 **未做**：实验性 `type:'acp'` transport、MCP 状态/工具可观测 UI（ACP 无标准状态推送，MCP 工具以普通 `tool_call` 出现）。
 
 ## 测试模式
 
-主要测试在 `__tests__/`：`AcpSessionService.test.ts`（生命周期/消息/工具/权限分发）、`acpSessionConfigOptions.test.ts`（state machine）、`AcpSessionService.resume.test.ts` + `acpSessionRestoreCoordinator.test.ts`（恢复）、`AcpClientService.terminal.test.ts`（terminal 所有权）、`acpMcpServers.test.ts`、`acpSessionHistory.test.ts`、`sdkHostStream.test.ts`。
+主要测试在 `__tests__/`：`AcpSessionService.test.ts`、`acpSessionConfigOptions.test.ts`、`AcpSessionService.resume.test.ts` + `acpSessionRestoreCoordinator.test.ts`、`AcpClientService.terminal.test.ts`、`acpMcpServers.test.ts`、`acpSessionHistory.test.ts`、`sdkHostStream.test.ts`。
 
-**协议级测试一律走 `testing/inMemoryAcpPair.ts`**：真 `ClientSideConnection` ↔ 桩 `Agent` 对联。断言 **fake agent 方法被调用 + 参数对**，而不是 jsonline 字节（后者会被 SDK wire 格式变化弄碎）。E2E 在 `apps/editor/e2e/`，ACP 未在 `@p0` 冒烟里。
+**协议级测试一律走 `testing/inMemoryAcpPair.ts`**（见「文件归位」）：断言 **fake agent 方法被调用 + 参数对**，而不是 jsonline 字节（后者会被 SDK wire 格式变化弄碎）。E2E 在 `apps/editor/e2e/`，ACP 未在 `@p0` 冒烟里。
 
 ## 持久化
 
@@ -111,11 +113,11 @@ agent 端（`vendor/claude-agent-acp`）把 wire 的 `env`/`headers` 数组还�
 ## 参考路径
 
 - SDK 类型源码：`node_modules/@agentclientprotocol/sdk/dist/schema/types.gen.d.ts`；入口导出 `ClientSideConnection / AgentSideConnection / RequestError / ndJsonStream` + schema 类型
-- 配置 key：`acp.agents` / `acp.permissions.autoApprove` / `acp.startupTimeoutMs` / `acp.defaultAgentId` / `acp.mcpServers` / `acp.idleProcessTimeoutMs`
+- 配置 key：`acp.agents` / `acp.permissions.autoApprove` / `acp.plan.autoApproveWithUpdates` / `acp.plan.autoExecute` / `acp.startupTimeoutMs` / `acp.defaultAgentId` / `acp.mcpServers` / `acp.idleProcessTimeoutMs`
 
-## 案例：输入框 @/# 药丸引用（prompt-ref-pills）
+## 案例：输入框 @/# 药丸引用
 
-分层地图 / 数据流 / 加新 kind 清单 / 易踩坑见 [cases-prompt-ref-pills.md](cases-prompt-ref-pills.md)。两条红线：**引用真身活在 Monaco 上，不是 React state**（旧 by-name 序列化已删，别复活）；**resource_link 的 name/description/_meta 会被 agent 丢弃**，行/列/符号名**只能进 `text` 块正文**——见 [[prompt-hash-context-references-feature]]。
+见 [cases-prompt-ref-pills.md](cases-prompt-ref-pills.md)。两条红线：**引用真身活在 Monaco 上，不是 React state**；**resource_link 的 name/description/_meta 会被 agent 丢弃**，行/列/符号名**只能进 `text` 块正文**——见 [[prompt-hash-context-references-feature]]。
 
 ## 子域导航
 

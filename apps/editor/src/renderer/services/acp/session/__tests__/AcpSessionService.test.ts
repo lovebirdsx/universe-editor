@@ -74,6 +74,7 @@ import {
   SIDE_TASK_ROLE_PROMPT,
   orphanToolCallNotice,
 } from '../acpSession.js'
+import type { IAcpSession } from '../acpSession.js'
 import type { AcpPendingElicitation, AcpPendingPermission } from '../acpSessionModel.js'
 import { ACP_CAPABILITIES_META_KEY, SUBAGENT_TRANSCRIPT_CAPABILITY } from '../acpExtMethods.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
@@ -102,6 +103,7 @@ import type { IAcpPermissionHandler } from '../../acpPermissionHandler.js'
 import { createInMemoryAcpPair } from '../../testing/inMemoryAcpPair.js'
 import { stubEnvSnapshotService } from './stubEnvSnapshotService.js'
 import { stubAcpModelCandidateService } from './stubAcpModelCandidateService.js'
+import { stubAcpCodexAutoReviewGuard } from './stubAcpCodexAutoReviewGuard.js'
 import { stubSubProjectService } from './stubSubProjectService.js'
 import { stubLastSessionCwdServiceForTest } from './stubLastSessionCwdService.js'
 import type { IAcpModelCandidateService } from '../../acpModelCandidateService.js'
@@ -570,6 +572,7 @@ describe('AcpSessionService', () => {
       new StubConfigOptionsCache(),
       FAKE_URI_IDENTITY,
       new AcpAuthGuidanceService(notifications, { executeCommand: async () => undefined } as never),
+      stubAcpCodexAutoReviewGuard(),
       new AcpSessionFactory(
         telemetry,
         history,
@@ -643,6 +646,7 @@ describe('AcpSessionService', () => {
       new StubConfigOptionsCache(),
       FAKE_URI_IDENTITY,
       new AcpAuthGuidanceService(notifications, { executeCommand: async () => undefined } as never),
+      stubAcpCodexAutoReviewGuard(),
       new AcpSessionFactory(
         new NoopTelemetryService(),
         makeHistory(),
@@ -692,6 +696,7 @@ describe('AcpSessionService', () => {
       new StubConfigOptionsCache(),
       FAKE_URI_IDENTITY,
       new AcpAuthGuidanceService(notifications, { executeCommand: async () => undefined } as never),
+      stubAcpCodexAutoReviewGuard(),
       new AcpSessionFactory(
         new NoopTelemetryService(),
         makeHistory(),
@@ -736,6 +741,7 @@ describe('AcpSessionService', () => {
       new StubConfigOptionsCache(),
       FAKE_URI_IDENTITY,
       new AcpAuthGuidanceService(notifications, { executeCommand: async () => undefined } as never),
+      stubAcpCodexAutoReviewGuard(),
       new AcpSessionFactory(
         new NoopTelemetryService(),
         makeHistory(),
@@ -816,6 +822,7 @@ describe('AcpSessionService', () => {
       new StubConfigOptionsCache(),
       FAKE_URI_IDENTITY,
       new AcpAuthGuidanceService(notifications, { executeCommand: async () => undefined } as never),
+      stubAcpCodexAutoReviewGuard(),
       new AcpSessionFactory(
         new NoopTelemetryService(),
         makeHistory(),
@@ -950,6 +957,7 @@ describe('AcpSessionService', () => {
       new StubConfigOptionsCache(),
       FAKE_URI_IDENTITY,
       new AcpAuthGuidanceService(notifications, { executeCommand: async () => undefined } as never),
+      stubAcpCodexAutoReviewGuard(),
       new AcpSessionFactory(
         new NoopTelemetryService(),
         history,
@@ -1214,6 +1222,7 @@ describe('AcpSessionService', () => {
       new StubConfigOptionsCache(),
       FAKE_URI_IDENTITY,
       new AcpAuthGuidanceService(notifications, { executeCommand: async () => undefined } as never),
+      stubAcpCodexAutoReviewGuard(),
       new AcpSessionFactory(
         telemetry,
         history,
@@ -1281,6 +1290,7 @@ describe('AcpSessionService', () => {
       new StubConfigOptionsCache(),
       FAKE_URI_IDENTITY,
       new AcpAuthGuidanceService(notifications, { executeCommand: async () => undefined } as never),
+      stubAcpCodexAutoReviewGuard(),
       new AcpSessionFactory(
         telemetry,
         history,
@@ -1340,6 +1350,7 @@ describe('AcpSessionService', () => {
       new StubConfigOptionsCache(),
       FAKE_URI_IDENTITY,
       new AcpAuthGuidanceService(notifications, { executeCommand: async () => undefined } as never),
+      stubAcpCodexAutoReviewGuard(),
       new AcpSessionFactory(
         telemetry,
         history,
@@ -1415,6 +1426,7 @@ describe('AcpSessionService', () => {
       new StubConfigOptionsCache(),
       FAKE_URI_IDENTITY,
       new AcpAuthGuidanceService(notifications, { executeCommand: async () => undefined } as never),
+      stubAcpCodexAutoReviewGuard(),
       new AcpSessionFactory(
         telemetry,
         history,
@@ -1659,6 +1671,7 @@ describe('AcpSessionService', () => {
         new AcpAuthGuidanceService(notifications, {
           executeCommand: async () => undefined,
         } as never),
+        stubAcpCodexAutoReviewGuard(),
         new AcpSessionFactory(
           new NoopTelemetryService(),
           history,
@@ -2052,6 +2065,7 @@ describe('AcpSessionService — rewind / fork', () => {
       new StubConfigOptionsCache(),
       FAKE_URI_IDENTITY,
       new AcpAuthGuidanceService(notification, { executeCommand: async () => undefined } as never),
+      stubAcpCodexAutoReviewGuard(),
       new AcpSessionFactory(
         telemetry,
         history,
@@ -2999,6 +3013,7 @@ describe('AcpSessionService — startup timeout', () => {
       new StubConfigOptionsCache(),
       FAKE_URI_IDENTITY,
       new AcpAuthGuidanceService(notification, { executeCommand: async () => undefined } as never),
+      stubAcpCodexAutoReviewGuard(),
       new AcpSessionFactory(
         telemetry,
         history,
@@ -3056,6 +3071,7 @@ describe('AcpSessionService — startup timeout', () => {
       new StubConfigOptionsCache(),
       FAKE_URI_IDENTITY,
       new AcpAuthGuidanceService(notification, { executeCommand: async () => undefined } as never),
+      stubAcpCodexAutoReviewGuard(),
       new AcpSessionFactory(
         telemetry,
         history,
@@ -3139,6 +3155,7 @@ describe('AcpSessionService — mcpServers capability gating', () => {
       new StubConfigOptionsCache(),
       FAKE_URI_IDENTITY,
       new AcpAuthGuidanceService(notification, { executeCommand: async () => undefined } as never),
+      stubAcpCodexAutoReviewGuard(),
       new AcpSessionFactory(
         telemetry,
         history,
@@ -3935,6 +3952,7 @@ describe('AcpSessionService — agent MCP config isolation', () => {
       new StubConfigOptionsCache(),
       FAKE_URI_IDENTITY,
       new AcpAuthGuidanceService(notification, { executeCommand: async () => undefined } as never),
+      stubAcpCodexAutoReviewGuard(),
       new AcpSessionFactory(
         telemetry,
         history,
@@ -4129,6 +4147,7 @@ describe('AcpSessionService — session MCP selection', () => {
       new StubConfigOptionsCache(),
       FAKE_URI_IDENTITY,
       new AcpAuthGuidanceService(notification, { executeCommand: async () => undefined } as never),
+      stubAcpCodexAutoReviewGuard(),
       new AcpSessionFactory(
         telemetry,
         history,
@@ -4559,6 +4578,7 @@ describe('AcpSessionService — AI session title push-back', () => {
       new StubConfigOptionsCache(),
       FAKE_URI_IDENTITY,
       new AcpAuthGuidanceService(notification, { executeCommand: async () => undefined } as never),
+      stubAcpCodexAutoReviewGuard(),
       new AcpSessionFactory(
         telemetry,
         history,
@@ -4850,6 +4870,7 @@ describe('AcpSessionService — first-prompt-derived title protection', () => {
       new StubConfigOptionsCache(),
       FAKE_URI_IDENTITY,
       new AcpAuthGuidanceService(notification, { executeCommand: async () => undefined } as never),
+      stubAcpCodexAutoReviewGuard(),
       new AcpSessionFactory(
         telemetry,
         history,
@@ -5065,6 +5086,7 @@ describe('AcpSessionService — first prompt history mirror', () => {
       new StubConfigOptionsCache(),
       FAKE_URI_IDENTITY,
       new AcpAuthGuidanceService(notification, { executeCommand: async () => undefined } as never),
+      stubAcpCodexAutoReviewGuard(),
       new AcpSessionFactory(
         telemetry,
         history,
@@ -5189,6 +5211,7 @@ describe('AcpSessionService — configOptions history snapshot', () => {
       new StubConfigOptionsCache(),
       FAKE_URI_IDENTITY,
       new AcpAuthGuidanceService(notification, { executeCommand: async () => undefined } as never),
+      stubAcpCodexAutoReviewGuard(),
       new AcpSessionFactory(
         telemetry,
         history,
@@ -5255,6 +5278,7 @@ describe('AcpSessionService — stall watchdog', () => {
       new StubConfigOptionsCache(),
       FAKE_URI_IDENTITY,
       new AcpAuthGuidanceService(notifications, { executeCommand: async () => undefined } as never),
+      stubAcpCodexAutoReviewGuard(),
       new AcpSessionFactory(
         new NoopTelemetryService(),
         makeHistory(),
@@ -5731,6 +5755,7 @@ describe('AcpSessionService — idle process reaper', () => {
       new StubConfigOptionsCache(),
       FAKE_URI_IDENTITY,
       new AcpAuthGuidanceService(notifications, { executeCommand: async () => undefined } as never),
+      stubAcpCodexAutoReviewGuard(),
       new AcpSessionFactory(
         new NoopTelemetryService(),
         history,
@@ -5981,6 +6006,7 @@ describe('AcpSessionService builtin agent skills injection', () => {
       new StubConfigOptionsCache(),
       FAKE_URI_IDENTITY,
       new AcpAuthGuidanceService(notification, { executeCommand: async () => undefined } as never),
+      stubAcpCodexAutoReviewGuard(),
       new AcpSessionFactory(
         telemetry,
         history,
@@ -6067,6 +6093,7 @@ describe('AcpSessionService extra model candidates injection', () => {
       new StubConfigOptionsCache(),
       FAKE_URI_IDENTITY,
       new AcpAuthGuidanceService(notification, { executeCommand: async () => undefined } as never),
+      stubAcpCodexAutoReviewGuard(),
       new AcpSessionFactory(
         telemetry,
         history,
@@ -6430,6 +6457,7 @@ describe('AcpSessionService — orphan tool-call sweep', () => {
       new StubConfigOptionsCache(),
       FAKE_URI_IDENTITY,
       new AcpAuthGuidanceService(notifications, { executeCommand: async () => undefined } as never),
+      stubAcpCodexAutoReviewGuard(),
       new AcpSessionFactory(
         new NoopTelemetryService(),
         makeHistory(),
@@ -6949,5 +6977,249 @@ describe('AcpSessionService — orphan tool-call sweep', () => {
     expect(call?.status).toBe('pending')
     expect(call?.settleReason).toBeUndefined()
     svc.dispose()
+  })
+})
+
+describe('plan scoped auto-approve (acp.plan.autoApproveWithUpdates)', () => {
+  class RecordingTelemetryService implements ITelemetryService {
+    declare readonly _serviceBrand: undefined
+    readonly logged: { name: string; data: unknown }[] = []
+    publicLog(name: string, data?: unknown): void {
+      this.logged.push({ name, data })
+    }
+    publicLogMeasure(): void {}
+    publicLogError(): void {}
+    getTelemetryInfo(): Promise<{ sessionId: string; machineId: string }> {
+      return Promise.resolve({ sessionId: 'test', machineId: 'test' })
+    }
+  }
+
+  function modeConfig(currentValue: 'plan' | 'default'): readonly SessionConfigOption[] {
+    return [
+      {
+        id: 'mode',
+        name: 'Mode',
+        category: 'mode',
+        type: 'select',
+        currentValue,
+        options: [
+          { value: 'default', name: 'Default' },
+          { value: 'plan', name: 'Plan' },
+        ],
+      } as unknown as SessionConfigOption,
+    ]
+  }
+
+  /** fork 的常规顺序：allow_once → allow_always（作用域选项）→ reject。 */
+  const scopedOptions: RequestPermissionRequest['options'] = [
+    { optionId: 'allow-once', name: 'Yes', kind: 'allow_once' },
+    {
+      optionId: 'allow-with-updates',
+      name: 'Yes, and allow access to 05/ and 10/ commands',
+      kind: 'allow_always',
+    },
+    { optionId: 'reject', name: 'No', kind: 'reject_once' },
+  ]
+
+  const services: AcpSessionService[] = []
+  afterEach(() => {
+    for (const service of services.splice(0)) service.dispose()
+  })
+
+  /** ECHO_AGENT_CONFIG_OPTIONS 式的会话：session/new 直接通告 mode 的当前值。 */
+  async function createSession(
+    mode: 'plan' | 'default' = 'plan',
+    telemetry: ITelemetryService = new NoopTelemetryService(),
+  ) {
+    const client = new FakeAcpClientService({
+      stubOptions: { newSessionConfigOptions: modeConfig(mode) },
+    })
+    const notifications = new StubNotificationService()
+    const permission = new StubPermissionHandler()
+    const config = new ConfigurationService()
+    const history = makeHistory()
+    const agentDefaults = makeAgentDefaults()
+    const titleService = new StubSessionTitleService()
+    const changeTracker = new StubSessionChangeTracker()
+    const compactionStats = makeCompactionStats()
+    const svc = new AcpSessionService(
+      client,
+      new FakeAgentRegistry(),
+      new FakeWorkspaceService(),
+      config,
+      notifications,
+      telemetry,
+      permission,
+      new StubLoggerService(),
+      history,
+      new FakeStorage(),
+      agentDefaults,
+      new StubConfigOptionsCache(),
+      FAKE_URI_IDENTITY,
+      new AcpAuthGuidanceService(notifications, { executeCommand: async () => undefined } as never),
+      stubAcpCodexAutoReviewGuard(),
+      new AcpSessionFactory(
+        telemetry,
+        history,
+        agentDefaults,
+        changeTracker,
+        titleService,
+        compactionStats,
+      ),
+      new StubFileService(),
+      new StubExtensionMcpServersService(),
+      new StubMcpServerEnablementService(),
+      new StubAgentMcpConfigService(),
+      stubWindowsService(),
+      stubEnvSnapshotService(),
+      stubAcpModelCandidateService(),
+      stubSubProjectService(),
+      stubLastSessionCwdServiceForTest(),
+    )
+    services.push(svc)
+    const session = await svc.createSession('claude-code')
+    await session.whenConnected()
+    return { svc, permission, config, session }
+  }
+
+  function request(
+    kind: RequestPermissionRequest['toolCall']['kind'] = 'execute',
+    options: RequestPermissionRequest['options'] = scopedOptions,
+    sessionId = 'agent-1',
+  ): RequestPermissionRequest {
+    return {
+      sessionId,
+      toolCall: { toolCallId: 'tc-shell', title: 'ls -la ~/.codex/sessions', kind },
+      options,
+    } as RequestPermissionRequest
+  }
+
+  /** 期望落到人工卡片：断言后取消，别让 pending promise 悬挂。 */
+  async function expectCard(
+    svc: AcpSessionService,
+    session: IAcpSession,
+    params: RequestPermissionRequest,
+  ): Promise<AcpPendingPermission> {
+    const promise = svc.onRequestPermission(params)
+    await new Promise((r) => setTimeout(r, 0))
+    const pending = session.pendingPermission.get()
+    expect(pending).toBeDefined()
+    pending!.cancel()
+    await expect(promise).resolves.toEqual({ outcome: { outcome: 'cancelled' } })
+    return pending!
+  }
+
+  it('默认开启：plan + execute + 作用域选项 → 静默选中 allow-with-updates', async () => {
+    const telemetry = new RecordingTelemetryService()
+    const { svc, session, permission } = await createSession('plan', telemetry)
+
+    const result = await svc.onRequestPermission(request())
+
+    expect(result).toEqual({ outcome: { outcome: 'selected', optionId: 'allow-with-updates' } })
+    expect(session.pendingPermission.get()).toBeUndefined()
+    expect(permission.persisted).toEqual([])
+    expect(telemetry.logged).toContainEqual({
+      name: 'acp.permission_plan_auto_approved',
+      data: { optionId: 'allow-with-updates', kind: 'execute' },
+    })
+  })
+
+  it.each(['read', 'search'] as const)(
+    '%s 同样是覆盖范围（工作区外读取/搜索不再弹卡）',
+    async (kind) => {
+      const { svc, session } = await createSession('plan')
+
+      const result = await svc.onRequestPermission(request(kind))
+
+      expect(result).toEqual({ outcome: { outcome: 'selected', optionId: 'allow-with-updates' } })
+      expect(session.pendingPermission.get()).toBeUndefined()
+    },
+  )
+
+  it('设置显式关闭时不接管，回落人工卡片', async () => {
+    const { svc, session, config } = await createSession('plan')
+    config.update('acp.plan.autoApproveWithUpdates', false, ConfigurationTarget.Memory)
+
+    await expectCard(svc, session, request())
+  })
+
+  it('非 plan 会话不接管', async () => {
+    const { svc, session } = await createSession('default')
+
+    await expectCard(svc, session, request())
+  })
+
+  it('范围外的 kind（edit）不接管', async () => {
+    const { svc, session } = await createSession('plan')
+
+    await expectCard(svc, session, request('edit'))
+  })
+
+  it('Agent 未提供作用域选项时不接管', async () => {
+    const { svc, session } = await createSession('plan')
+    const noScoped = scopedOptions.filter((o) => o.optionId !== 'allow-with-updates')
+
+    await expectCard(svc, session, request('execute', noScoped))
+  })
+
+  it('拒绝项置顶（defaultToNo）时不接管，且诊断不泄漏选项文案', async () => {
+    const warn = vi.spyOn(NullLogger.prototype, 'warn')
+    try {
+      const { svc, session } = await createSession('plan')
+      const dangerFirst = [...scopedOptions].reverse()
+
+      await expectCard(svc, session, request('execute', dangerFirst))
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('计划模式作用域批准回退人工确认（拒绝项置顶）'),
+      )
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('allow-with-updates'))
+      expect(warn.mock.calls.flat().join('\n')).not.toContain('05/ and 10/')
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('switch_mode 即使带 allow-with-updates 也不走静默批准', async () => {
+    const { svc, session } = await createSession('plan')
+
+    await expectCard(svc, session, request('switch_mode'))
+  })
+
+  it('未知会话仍按既有语义返回 cancelled', async () => {
+    const { svc } = await createSession('plan')
+
+    const result = await svc.onRequestPermission(request('execute', scopedOptions, 'agent-404'))
+
+    expect(result).toEqual({ outcome: { outcome: 'cancelled' } })
+  })
+
+  it('手点作用域选项不写进 autoApprove（只应用 Agent 的规则）', async () => {
+    const { svc, session, permission } = await createSession('default')
+    const promise = svc.onRequestPermission(request())
+    await new Promise((r) => setTimeout(r, 0))
+
+    session.pendingPermission.get()!.resolve('allow-with-updates')
+
+    await expect(promise).resolves.toEqual({
+      outcome: { outcome: 'selected', optionId: 'allow-with-updates' },
+    })
+    expect(permission.persisted).toEqual([])
+  })
+
+  it('手点通用 allow_always 仍按 kind 记忆（守卫不过度抑制）', async () => {
+    const { svc, session, permission } = await createSession('default')
+    const generic = [
+      { optionId: 'allow-once', name: 'Yes', kind: 'allow_once' },
+      { optionId: 'always', name: 'Allow always', kind: 'allow_always' },
+      { optionId: 'reject', name: 'No', kind: 'reject_once' },
+    ] as RequestPermissionRequest['options']
+    const promise = svc.onRequestPermission(request('edit', generic))
+    await new Promise((r) => setTimeout(r, 0))
+
+    session.pendingPermission.get()!.resolve('always')
+
+    await promise
+    expect(permission.persisted).toEqual(['edit'])
   })
 })

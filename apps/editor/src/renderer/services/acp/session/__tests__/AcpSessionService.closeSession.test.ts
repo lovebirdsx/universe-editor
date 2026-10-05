@@ -50,6 +50,7 @@ import { AcpCompactionStatsService } from '../acpCompactionStats.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
 import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
 import { AcpAuthGuidanceService } from '../acpAuthGuidanceService.js'
+import { stubAcpCodexAutoReviewGuard } from './stubAcpCodexAutoReviewGuard.js'
 import { AcpSessionFactory } from '../acpSessionFactory.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
 import { StubConfigOptionsCache } from './stubConfigOptionsCache.js'
@@ -307,6 +308,7 @@ describe('AcpSessionService — onDidCloseSession', () => {
       new StubConfigOptionsCache(),
       FAKE_URI_IDENTITY,
       new AcpAuthGuidanceService(notification, { executeCommand: async () => undefined } as never),
+      stubAcpCodexAutoReviewGuard(),
       new AcpSessionFactory(
         telemetry,
         history,

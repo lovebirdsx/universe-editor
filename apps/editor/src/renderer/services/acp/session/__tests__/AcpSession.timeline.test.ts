@@ -68,6 +68,7 @@ import { AcpCompactionStatsService } from '../acpCompactionStats.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
 import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
 import { AcpAuthGuidanceService } from '../acpAuthGuidanceService.js'
+import { stubAcpCodexAutoReviewGuard } from './stubAcpCodexAutoReviewGuard.js'
 import { AcpSessionFactory } from '../acpSessionFactory.js'
 import type { IAcpMessageAttachmentStore } from '../acpMessageAttachmentStore.js'
 import type { IAcpSessionProviderContext } from '../acpSessionProviderContext.js'
@@ -397,6 +398,7 @@ function makeService(
     new StubConfigOptionsCache(),
     FAKE_URI_IDENTITY,
     new AcpAuthGuidanceService(notification, { executeCommand: async () => undefined } as never),
+    stubAcpCodexAutoReviewGuard(),
     sessionFactory,
     new StubFileService(),
     new StubExtensionMcpServersService(),
