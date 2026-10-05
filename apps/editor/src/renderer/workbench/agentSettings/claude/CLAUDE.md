@@ -17,14 +17,14 @@ Renderer — 贡献注册（承载壳见 [`../ai/CLAUDE.md`](../ai/CLAUDE.md)）
 
 Renderer — Claude 专属（agentSettings/claude/）：
 - `claude/ClaudeAgentSettings.tsx` — 根组件：`useClaudeConfig()` + 三分类子导航（auth/model/env，`CATEGORIES`）；激活分类/滚动持久化（`agent.settings.claude.activeCategory` / `.scroll.<id>`）。**末行 `registerAgentSettings('claude-code', ClaudeAgentSettings)`**。
-- `claude/AuthenticationPanel.tsx` — 认证页：`AuthenticationSection`（单一认证选择：provider 条目或 `@subscription`；Model + Sub Agent Model 两行 `ModelPickRow` 各带 `1m` 勾选框——**行显示有效 id，勾选框由 id 是否以 `[1m]` 结尾派生**；没选模型时勾选框不出现）+ `LoginForm`（OAuth 登录状态）。**下拉当前值是盘上生效值**（从 `activeAuth` 派生、非声明值；providerId 缺席 → 「外部凭据」）。共享 `../GatewayProviderPicker.js`（`protocol="anthropic-messages"`），派生经 `deriveClaudeAuth`。**没有 "In use" 徽章**；`LoginForm.isActive` 直接读 `activeAuth.kind==='subscription'`；`mask()` 脱敏。
+- `claude/AuthenticationPanel.tsx` — 认证页：`AuthenticationSection`（单一认证选择：provider 条目或 `@subscription`；Model + Sub Agent Model 两行 `ModelPickRow` 各带 `1m` 勾选框——**行显示有效 id，勾选框由 id 是否以 `[1m]` 结尾派生**；没选模型时勾选框不出现）+ `LoginForm`（OAuth 登录状态）。**下拉当前值是盘上生效值**（从 `activeAuth` 派生、非声明值；providerId 缺席 → 「外部凭据」）。共享 `../GatewayProviderPicker.js`（`protocol="anthropic-messages"`），派生经 `deriveClaudeAuth`。**没有 "In use" 徽章**；`LoginForm.isActive` 直接读 `activeAuth.kind==='subscription'`。
 - `claude/ModelThinkingPanel.tsx` — 模型 / 语言 / 思考开关 / effort / availableModels，绑 settings.json。
-- `claude/AdvancedEnvPanel.tsx` — env 开关（PROMPT_CACHING、AUTO_COMPACT）+ 自定义 env 编辑器。隐藏认证类 env（`ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_BASE_URL`）与 `CLAUDE_CODE_SUBAGENT_MODEL`（owner 是认证页）；`ANTHROPIC_SMALL_FAST_MODEL` 已无可视化入口，改手填（**不隐藏**）。
-- `claude/useClaudeConfig.ts` — 配置 hook：聚合 settings/authStatus/**activeAuth** 读取与 patch，订阅 `onDidChangeConfig` 一次刷三样（外部 `claude auth login`、别的窗口、手改文件都能跟上）。`applyAuthentication` **只把匹配凭据 env 注入 settings.json**（互斥清掉另一种凭据）后重读 `activeAuth`——不再持久化声明值；`setModel`/`setSubagentModel` 系列共用 `applyModelPick`，两条不变量：① **每个 setter 只 patch 自己关联的那一个键**（`settings.model` 或 `env.CLAUDE_CODE_SUBAGENT_MODEL`），其余不动；② **在写队列内重新 `service.read()` 拿盘上现值再复合，绝不读 React state**（防陈旧快照盖掉外部编辑）。暴露 `subagentModelEnv`。
+- `claude/AdvancedEnvPanel.tsx` — env 开关（PROMPT_CACHING、AUTO_COMPACT）+ 自定义 env 编辑器。隐藏认证类 env（`ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_BASE_URL`）与 `CLAUDE_CODE_SUBAGENT_MODEL`/`_FORCE` 键对（owner 是认证页）；`ANTHROPIC_SMALL_FAST_MODEL` 无可视化入口、**不隐藏**（手填）。
+- `claude/useClaudeConfig.ts` — 配置 hook：聚合 settings/authStatus/**activeAuth** 读取与 patch，订阅 `onDidChangeConfig` 一次刷三样（外部 `claude auth login`、别的窗口、手改文件都能跟上）。`applyAuthentication` **只把匹配凭据 env 注入 settings.json**（互斥清掉另一种凭据）后重读 `activeAuth`——不再持久化声明值；`setModel`/`setSubagentModel` 系列共用 `applyModelPick`，两条不变量：① **每个 setter 只 patch 自己那一组键**（`settings.model`；subagent 的 model + `_FORCE` 成对同生同灭），其余不动；② **在写队列内重新 `service.read()` 拿盘上现值再复合，绝不读 React state**（防陈旧快照盖掉外部编辑）。暴露 `subagentModelEnv`。
 - `claude/claudeLogin.ts` — `runClaudeLogin()` 开终端跑 `claude auth login --claudeai|--console`。
 
 跨进程三层：
-- `shared/ipc/claudeConfigService.ts` — **wire 契约**：`IClaudeConfigService` + 类型（`ClaudeSettings`/`Patch`/`AuthStatus`；`AgentActiveAuth` 来自 `shared/ai/agentActiveAuth.ts`）。`AGENT_SUBSCRIPTION_AUTH='@subscription'` 哨兵**只是下拉值/入参，不再被持久化**。方法：`read`/`patch`/`configPath`/`readAuthStatus`/**`resolveActiveAuth(authority?)`**/`checkGatewayConnectivity` + 事件 **`onDidChangeConfig`**。`readAgentSettings`/`writeAgentSettings` 已删。
+- `shared/ipc/claudeConfigService.ts` — **wire 契约**：`IClaudeConfigService` + 类型（`ClaudeSettings`/`Patch`/`AuthStatus`；`AgentActiveAuth` 来自 `shared/ai/agentActiveAuth.ts`）。`AGENT_SUBSCRIPTION_AUTH='@subscription'` 哨兵**只是下拉值/入参，不再被持久化**。方法：`read`/`patch`/`configPath`/`readAuthStatus`/**`resolveActiveAuth(authority?)`**/`checkGatewayConnectivity` + 事件 **`onDidChangeConfig`**。
 - `main/services/claudeConfig/claudeConfigMainService.ts` — main 实现：原子写 + 读容错；`resolveActiveAuth` 并行 `read`/`readAuthStatus`/`readResolvedProviders`（共享 helper `aiSettingsProviders.ts`）后交纯函数 `resolveClaudeActiveAuth`；`onDidChangeConfig` 本地直连 store，远端首次带 authority 调用时懒挂载。
 - `__tests__/claudeConfigMainService.test.ts` — readAuthStatus（token 不泄漏断言）+ `resolveActiveAuth`（不 fall through、外部凭据不归属）+ 事件转发。
 
@@ -42,7 +42,7 @@ Renderer — Claude 专属（agentSettings/claude/）：
 | `~/.claude/.credentials.json` | `claude auth login`（OAuth） | agent/SDK | `claudeAiOauth`：accessToken/refreshToken/expiresAt/scopes/subscriptionType/rateLimitTier |
 
 - **🔴 agent 自己的配置文件是唯一真相**：编辑器**不存任何声明值**（`aiSettings.json` 的 `agentSettings.claude` 已废弃、不再被读取），「当前用哪个凭据」一律**反查** `resolveActiveAuth(authority)`（读上面两文件 + 条目正向派生比对）。外部登录、手改、换机器同步都自动跟上（`onDidChangeConfig` 去抖 150ms），不存在「声明与盘上漂移」。
-- **🔴 模型选择同样只有一处真相：settings.json**（`model` 与 `env.CLAUDE_CODE_SUBAGENT_MODEL`）：UI 显示的就是有效 id，`1m` 勾选框由 id 后缀派生。历史教训：镜像版本 + 整块替换写入 = 陈旧快照盖掉别人刚改的选择（真实 bug）。新增模型类选择项一律直写 settings.json。
+- **🔴 模型选择同样只有一处真相：settings.json**（`model` 与 `env.CLAUDE_CODE_SUBAGENT_MODEL`）：UI 显示的就是有效 id，`1m` 勾选框由 id 后缀派生。历史教训：镜像版本 + 整块替换写入 = 陈旧快照盖掉别人刚改的选择（真实 bug）。新增模型类选择项一律直写 settings.json。子 agent 那组另带 `CLAUDE_CODE_SUBAGENT_MODEL_FORCE`（缺它显式设置会被内置 agent 定义压过、静默失效）。
 - 登录(OAuth) 不是一个 provider 条目，走 `.credentials.json`，是反查的最后一档。
 - 切换 Provider 只写三个凭据 env、**不连带清空 model**（独立于认证）；下拉 `pinCurrent` 置顶「当前值不在新候选」的项更关键。
 
@@ -103,7 +103,7 @@ baseUrl **逐字比对不做 URL 归一化**（写盘值与反查同源，归一
 
 ### 入口（打开到 Agents 区）
 
-- 主入口：命令 `ai.manageModels`（标题 “Open AI & Agent Settings”）打开统一 Settings editor。
+- 主入口：命令 `ai.manageModels` 打开统一 Settings editor。
 - agent 专用入口：`workbench.action.agent.openSettings`（`actions/agentActions.ts` 的 `OpenAgentSettingsAction`）——先 `storage.set('settings.activeItem', 'agent:<defaultAgentId>')` 再打开 `AiSettingsEditorInput`，落点在 Agents 区。**此命令 ID 被 AcpSessionEditor 齿轮、`acpSessionService`（两处）引用，勿改 ID。**
 
 ### 关键参考路径

@@ -18,11 +18,14 @@
  *  fingerprint each vendor's input surface (mtime+size aggregate, never file contents) and skip
  *  when it matches the stamp AND the bundle exists. Only stale vendors pay a build, so the npm
  *  layer launch cost is paid at most once per real change. Force with
- *  UNIVERSE_VENDOR_AGENT_BUILD_FORCE=1.
+ *  UNIVERSE_VENDOR_AGENT_BUILD_FORCE=1. Known blind spot of that aggregate: a same-length
+ *  rewrite that doesn't advance the filesystem clock tick (Windows: mtime granularity is the
+ *  system tick, not the file) keeps the fingerprint identical and skips the rebuild.
  *
  *  Input surface (kept slightly wider than the true esbuild graph — a missed input means a
  *  stale bundle, which is worse than one extra rebuild):
- *    - src/ (tests excluded: they never enter the bundle)
+ *    - src/ (`.test.*` / `__tests__/` excluded: they never enter the bundle — note the fork
+ *      layout also keeps non-test helpers under src/tests/, which stay in the surface)
  *    - the build script itself
  *    - package.json + package-lock.json — lock changes swap bundle-inlined deps, and Claude's
  *      dist/claude-binary.json records the Agent SDK version resolved from node_modules

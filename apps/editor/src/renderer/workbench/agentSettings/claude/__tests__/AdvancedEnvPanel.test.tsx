@@ -1,7 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors.
  *  AdvancedEnvPanel tests — the free env editor hides the auth-owned keys and
- *  CLAUDE_CODE_SUBAGENT_MODEL (owned by the Authentication panel's sub-agent pick),
+ *  CLAUDE_CODE_SUBAGENT_MODEL / _FORCE (owned by the Authentication panel's
+ *  sub-agent pick),
  *  while legacy keys without a visual owner (e.g. ANTHROPIC_SMALL_FAST_MODEL) stay
  *  hand-editable.
  *--------------------------------------------------------------------------------------------*/
@@ -34,17 +35,19 @@ function makeConfig(env: Record<string, string>): UseClaudeConfig {
 }
 
 describe('AdvancedEnvPanel custom env editor', () => {
-  it('shows ANTHROPIC_SMALL_FAST_MODEL but hides CLAUDE_CODE_SUBAGENT_MODEL', () => {
+  it('shows ANTHROPIC_SMALL_FAST_MODEL but hides the sub-agent model pair', () => {
     render(
       <AdvancedEnvPanel
         config={makeConfig({
           ANTHROPIC_SMALL_FAST_MODEL: 'sonnet',
           CLAUDE_CODE_SUBAGENT_MODEL: 'opus',
+          CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '1',
         })}
       />,
     )
 
     expect(screen.getByDisplayValue('ANTHROPIC_SMALL_FAST_MODEL')).toBeTruthy()
     expect(screen.queryByDisplayValue('CLAUDE_CODE_SUBAGENT_MODEL')).toBeNull()
+    expect(screen.queryByDisplayValue('CLAUDE_CODE_SUBAGENT_MODEL_FORCE')).toBeNull()
   })
 })

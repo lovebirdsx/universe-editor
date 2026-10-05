@@ -242,7 +242,10 @@ export function SubagentModelPanel({
       <div className={styles['subagentPanelDesc']}>
         {localize(
           'acp.subagent.panelDesc',
-          'Sub agents run with this model. It is read when they spawn, so changes apply from the next session.',
+          // The pin outranks every sub-agent model source, built-in agents
+          // included — say so, or a pick meant for Explore silently retargets
+          // the helpers that were following the main model.
+          'Sub agents run with this model — all of them, including built-in ones that would otherwise follow the main model. It is read when they spawn, so changes apply from the next session.',
         )}
       </div>
       <div role="listbox" aria-label={listLabel}>

@@ -239,7 +239,7 @@ describe('useClaudeConfig', () => {
     expect(result.current.settings.model).toBe('claude-opus-5[1m]')
   })
 
-  it('each setter patches only the one related key, leaving the rest untouched', async () => {
+  it('each setter patches only its own keys, leaving the rest untouched', async () => {
     const { service, patchCalls } = makeClaudeService({
       settings: {
         model: 'old',
@@ -267,21 +267,34 @@ describe('useClaudeConfig', () => {
       await result.current.setSubagentModel('kimi-k3-mini')
     })
     const subPatch = patchCalls[patchCalls.length - 1]!
-    expect(subPatch).toEqual({ env: { CLAUDE_CODE_SUBAGENT_MODEL: 'kimi-k3-mini' } })
-    expect(Object.keys(subPatch.env!)).toEqual(['CLAUDE_CODE_SUBAGENT_MODEL'])
+    // The sub-agent pick owns a pair: the model, plus the CLI force flag that
+    // makes it beat the built-in agents' own `model` (CLI 2.1.28x).
+    expect(subPatch).toEqual({
+      env: {
+        CLAUDE_CODE_SUBAGENT_MODEL: 'kimi-k3-mini',
+        CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '1',
+      },
+    })
+    expect(Object.keys(subPatch.env!).sort()).toEqual([
+      'CLAUDE_CODE_SUBAGENT_MODEL',
+      'CLAUDE_CODE_SUBAGENT_MODEL_FORCE',
+    ])
     expect(result.current.settings.model).toBe('kimi-k3')
     expect(result.current.settings.env).toEqual({
       ANTHROPIC_AUTH_TOKEN: 'tok',
       ANTHROPIC_BASE_URL: 'https://gw',
       FOO: 'bar',
       CLAUDE_CODE_SUBAGENT_MODEL: 'kimi-k3-mini',
+      CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '1',
     })
 
     await act(async () => {
       await result.current.setSubagentModel(undefined)
     })
     const clearPatch = patchCalls[patchCalls.length - 1]!
-    expect(clearPatch).toEqual({ env: { CLAUDE_CODE_SUBAGENT_MODEL: null } })
+    expect(clearPatch).toEqual({
+      env: { CLAUDE_CODE_SUBAGENT_MODEL: null, CLAUDE_CODE_SUBAGENT_MODEL_FORCE: null },
+    })
     expect(result.current.settings.env).toEqual({
       ANTHROPIC_AUTH_TOKEN: 'tok',
       ANTHROPIC_BASE_URL: 'https://gw',

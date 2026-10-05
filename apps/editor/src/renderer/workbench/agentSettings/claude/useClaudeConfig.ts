@@ -67,6 +67,7 @@ const API_KEY = 'ANTHROPIC_API_KEY'
 const AUTH_TOKEN = 'ANTHROPIC_AUTH_TOKEN'
 const BASE_URL = 'ANTHROPIC_BASE_URL'
 const SUBAGENT_MODEL = 'CLAUDE_CODE_SUBAGENT_MODEL'
+const SUBAGENT_MODEL_FORCE = 'CLAUDE_CODE_SUBAGENT_MODEL_FORCE'
 
 export function useClaudeConfig(): UseClaudeConfig {
   const service = useService<IClaudeConfigService>(IClaudeConfigService)
@@ -212,12 +213,23 @@ export function useClaudeConfig(): UseClaudeConfig {
           which === 'model' ? onDisk.model : (onDisk.env?.[SUBAGENT_MODEL] as string | undefined)
         const next = resolve(current ?? '').trim()
         const effective = next === '' ? null : next
-        // Patch only the one key this pick owns — the credential env the
+        // Patch only the keys this pick owns — the credential env the
         // authentication choice injected, and every other key, stay untouched.
         if (which === 'model') {
           await patch({ model: effective })
         } else {
-          await patch({ env: { [SUBAGENT_MODEL]: effective } })
+          // The sub-agent pick owns a pair: the model, plus the CLI's force
+          // flag. Since CLI 2.1.28x an agent definition's own `model` outranks
+          // `CLAUDE_CODE_SUBAGENT_MODEL` — the built-in Explore/Plan pin
+          // `model: "inherit"` and would quietly run the session model instead
+          // of this setting. The flag is what makes the pick win; the two keys
+          // are written and cleared together.
+          await patch({
+            env: {
+              [SUBAGENT_MODEL]: effective,
+              [SUBAGENT_MODEL_FORCE]: effective ? '1' : null,
+            },
+          })
         }
       }),
     [serialize, service, authority, patch],

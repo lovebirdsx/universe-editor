@@ -47,6 +47,7 @@ import { ServicesContext } from '../../useService.js'
 afterEach(() => cleanup())
 
 const SUBAGENT_MODEL = 'CLAUDE_CODE_SUBAGENT_MODEL'
+const SUBAGENT_MODEL_FORCE = 'CLAUDE_CODE_SUBAGENT_MODEL_FORCE'
 
 const GW_ENTRY: AiProviderEntry = {
   id: 'gw',
@@ -266,7 +267,11 @@ describe('SubagentModelPicker', () => {
     claude.flushWrite()
     await act(async () => {})
 
-    expect(claude.patches.at(-1)).toEqual({ env: { [SUBAGENT_MODEL]: 'claude-sonnet-4-6' } })
+    // The pick owns a pair: the model plus the CLI force flag that makes it
+    // beat the built-in agents' own `model` (CLI 2.1.28x).
+    expect(claude.patches.at(-1)).toEqual({
+      env: { [SUBAGENT_MODEL]: 'claude-sonnet-4-6', [SUBAGENT_MODEL_FORCE]: '1' },
+    })
     expect(session.requestProcessRestart).not.toHaveBeenCalled()
   })
 
@@ -288,7 +293,9 @@ describe('SubagentModelPicker', () => {
     claude.flushWrite()
     await act(async () => {})
 
-    expect(claude.patches.at(-1)).toEqual({ env: { [SUBAGENT_MODEL]: null } })
+    expect(claude.patches.at(-1)).toEqual({
+      env: { [SUBAGENT_MODEL]: null, [SUBAGENT_MODEL_FORCE]: null },
+    })
   })
 
   it('keeps a stale current value as a pinned top option', async () => {
@@ -578,7 +585,9 @@ describe('SubagentModelPicker (session catalogue merge)', () => {
     claude.flushWrite()
     await act(async () => {})
 
-    expect(claude.patches.at(-1)).toEqual({ env: { [SUBAGENT_MODEL]: 'claude-opus-5' } })
+    expect(claude.patches.at(-1)).toEqual({
+      env: { [SUBAGENT_MODEL]: 'claude-opus-5', [SUBAGENT_MODEL_FORCE]: '1' },
+    })
   })
 })
 
@@ -605,7 +614,9 @@ describe('SubagentModelPanel (direct render)', () => {
     claude.flushWrite()
     await act(async () => {})
 
-    expect(claude.patches.at(-1)).toEqual({ env: { [SUBAGENT_MODEL]: 'claude-sonnet-4-6' } })
+    expect(claude.patches.at(-1)).toEqual({
+      env: { [SUBAGENT_MODEL]: 'claude-sonnet-4-6', [SUBAGENT_MODEL_FORCE]: '1' },
+    })
     expect(screen.getByTestId('acp-subagent-restart')).toBeTruthy()
   })
 })

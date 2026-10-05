@@ -2516,7 +2516,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.subagent.label': '子 Agent',
   'acp.subagent.triggerInherit': '子 Agent：继承',
   'acp.subagent.panelDesc':
-    '子 Agent 使用此模型运行。该值在子进程启动时读取，修改后从下次会话开始生效。',
+    '子 Agent 使用此模型运行 —— 所有子 Agent，包括原本跟随主模型的内置 Agent。该值在子进程启动时读取，修改后从下次会话开始生效。',
   'acp.subagent.inherit': '跟随主模型',
   'acp.subagent.nextSession': '下次会话生效',
   'acp.subagent.restartNow': '立即重启',
@@ -2945,6 +2945,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'agentSettings.auth.form.provider.none': '选择一个 provider…',
   'agentSettings.auth.form.subagentModel': '子 Agent 模型',
   'agentSettings.auth.form.subagentModel.none': '未设置',
+  'agentSettings.auth.form.subagentModel.note':
+    '所有子 Agent 都用此模型，包括原本跟随主模型的内置 Agent。留空则让子 Agent 跟随主模型。',
   'agentSettings.auth.gateway': '自定义网关 / 认证 token',
   'agentSettings.auth.externalCredential': '当前生效的是在编辑器之外配置的凭据，其费用无法归属。',
   'agentSettings.connectivity.checking': '正在检测连通性…',

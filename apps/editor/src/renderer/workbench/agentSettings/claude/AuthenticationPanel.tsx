@@ -263,6 +263,12 @@ function ModelPicks({
         testIdPrefix="subagentModel"
         onValue={onSubagent}
         onOneM={onSubagentOneM}
+        // The pick outranks every other sub-agent model source (it sets the
+        // CLI's force flag), so built-in helpers stop following the main model.
+        note={localize(
+          'agentSettings.auth.form.subagentModel.note',
+          'Every sub agent runs this model, including built-in ones that would otherwise follow the main model. Leave it unset to let sub agents follow the main model.',
+        )}
       />
     </>
   )
@@ -271,6 +277,7 @@ function ModelPicks({
 function ModelPickRow({
   label,
   hint,
+  note,
   value,
   options,
   emptyLabel,
@@ -281,6 +288,7 @@ function ModelPickRow({
 }: {
   label: string
   hint?: string
+  note?: string
   value: string
   options: readonly string[]
   emptyLabel: string
@@ -335,6 +343,7 @@ function ModelPickRow({
           </span>
         )}
       </div>
+      {note !== undefined && <span className={styles['desc']}>{note}</span>}
     </div>
   )
 }
