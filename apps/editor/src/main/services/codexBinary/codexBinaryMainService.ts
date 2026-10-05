@@ -202,9 +202,7 @@ export class CodexBinaryMainService extends Disposable implements ICodexBinarySe
       const { path } = await this._remoteService(authority).forceDownload('codex', version)
       return { path }
     }
-    // Clear inflight cache so the next resolve() call doesn't return the stale result.
-    this._inflight.delete('download:')
-    this._inflight.delete('download::noDownload')
+    this._evictResolveCache()
     return { path: await this._binaryStore.forceDownload(version) }
   }
 
@@ -214,6 +212,31 @@ export class CodexBinaryMainService extends Disposable implements ICodexBinarySe
       return
     }
     await this._binaryStore.cleanupStaleVersions()
+  }
+
+  async syncBundled(authority?: string): Promise<string | null> {
+    if (authority !== undefined) {
+      const { version } = await this._remoteService(authority).syncBundled('codex')
+      return version
+    }
+    try {
+      return await this._binaryStore.syncBundled()
+    } finally {
+      // After the await: a resolve that raced the sync and re-cached the previous
+      // version's path must be evicted too.
+      this._evictResolveCache()
+    }
+  }
+
+  /**
+   * Drops the cached resolve results for download mode. Both `forceDownload` and
+   * `syncBundled` move `.active`, and `_inflight` otherwise caches a resolved path
+   * for the rest of the session — the next resolve() would keep handing out the
+   * previous version's binary.
+   */
+  private _evictResolveCache(): void {
+    this._inflight.delete('download:')
+    this._inflight.delete('download::noDownload')
   }
 
   private _whichCodex(): Promise<string | null> {

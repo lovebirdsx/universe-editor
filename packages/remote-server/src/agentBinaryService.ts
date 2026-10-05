@@ -82,6 +82,10 @@ export class RemoteAgentBinaryService extends Disposable implements IRemoteAgent
     await this._storeFor(agent).cleanupStaleVersions()
   }
 
+  async syncBundled(agent: AgentBinaryId): Promise<{ readonly version: string | null }> {
+    return { version: await this._storeFor(agent).syncBundled() }
+  }
+
   private _storeFor(agent: AgentBinaryId): AgentBinaryStore {
     let store = this._stores[agent]
     if (!store) {

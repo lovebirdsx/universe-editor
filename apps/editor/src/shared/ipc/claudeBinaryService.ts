@@ -135,6 +135,20 @@ export interface IClaudeBinaryService {
    * runs on that remote host's store instead of the local one.
    */
   cleanupStaleVersions(authority?: string): Promise<void>
+
+  /**
+   * Aligns the managed-download tree with the bundled SDK version after the
+   * editor's pinned version changed (an upgrade), so the user stops running the
+   * previous pin without touching anything. Runs at idle; a version the user
+   * picked by hand is preserved until the pin itself changes again. Returns the
+   * version it switched to, or null when there was nothing to do — the pin never
+   * changed, no managed binary was ever downloaded, or the alignment failed (it
+   * is retried next session). Against the local store it is best-effort and never
+   * throws, so a caller only uses the return value to decide whether to notify;
+   * with `authority` a tunnel failure still rejects (callers there must catch). When `authority` is set, the
+   * alignment happens on that remote host's store.
+   */
+  syncBundled(authority?: string): Promise<string | null>
 }
 
 export const IClaudeBinaryService = createDecorator<IClaudeBinaryService>('claudeBinaryService')

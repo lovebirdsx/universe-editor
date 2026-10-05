@@ -1,14 +1,18 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Tests for AgentBinaryPrefetchContribution — idle maintenance of the Claude /
- *  codex-acp binaries now follows the remote workspace:
- *    - local workspace: local cleanup always runs once, local prefetch runs once
- *      when `acp.prefetchBinaries` is on and the per-agent source is "download".
- *    - remote workspace: the current authority's managed store is swept and
- *      prefetched (once), without running local prefetch; the local source
- *      setting is never consulted across the tunnel.
+ *  codex-acp binaries runs as sweep → align → prefetch and follows the remote
+ *  workspace:
+ *    - local workspace: the local sweep always runs once, then alignment and
+ *      prefetch run once when their settings allow it (`acp.autoUpgradeBinaries` /
+ *      `acp.prefetchBinaries`) and the per-agent source is "download".
+ *    - remote workspace: the current authority's managed store is swept, aligned
+ *      and prefetched (once), without running local alignment/prefetch; the local
+ *      source setting is never consulted across the tunnel.
  *    - remote maintenance is gated on `connected`: a not-yet-connected authority
  *      never triggers a remote call (which would lazily bring up the connection).
+ *    - alignment announces the version it switched to; doing nothing, failing, or
+ *      being disabled stays silent.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -16,14 +20,17 @@ import {
   Emitter,
   IConfigurationService,
   ILoggerService,
+  INotificationService,
   IWorkspaceService,
   InstantiationService,
   NullLogger,
   REMOTE_SCHEME,
   ServiceCollection,
+  Severity,
   URI,
   type IWorkspace,
 } from '@universe-editor/platform'
+import { E2E_PROBE_ENABLED_KEY } from '../../../shared/e2e/contract.js'
 import { IClaudeBinaryService } from '../../../shared/ipc/claudeBinaryService.js'
 import { ICodexBinaryService } from '../../../shared/ipc/codexBinaryService.js'
 import {
@@ -34,11 +41,32 @@ import { AgentBinaryPrefetchContribution } from '../AgentBinaryPrefetchContribut
 
 const AUTHORITY = 'myhost'
 
-function makeBinaryService() {
+/** Records the cross-agent call order of the three phases, when supplied. */
+function makeBinaryService(tag: string, order?: string[]) {
+  const record = (name: string): void => {
+    order?.push(`${tag}.${name}`)
+  }
   return {
     _serviceBrand: undefined,
-    prefetch: vi.fn().mockResolvedValue(undefined),
-    cleanupStaleVersions: vi.fn().mockResolvedValue(undefined),
+    prefetch: vi.fn(async () => {
+      record('prefetch')
+    }),
+    cleanupStaleVersions: vi.fn(async () => {
+      record('cleanup')
+    }),
+    syncBundled: vi.fn<() => Promise<string | null>>(async () => {
+      record('sync')
+      return null
+    }),
+  }
+}
+
+function makeNotifications() {
+  return {
+    _serviceBrand: undefined,
+    notify: vi.fn<(opts: { readonly severity: Severity; readonly message: string }) => void>(
+      () => undefined,
+    ),
   }
 }
 
@@ -79,6 +107,7 @@ function makeRemoteStatus() {
 interface Harness {
   claude: ReturnType<typeof makeBinaryService>
   codex: ReturnType<typeof makeBinaryService>
+  notifications: ReturnType<typeof makeNotifications>
   workspace: ReturnType<typeof makeWorkspace>
   remoteStatus: ReturnType<typeof makeRemoteStatus>
   contribution: AgentBinaryPrefetchContribution
@@ -88,9 +117,11 @@ function setup(opts?: {
   remote?: string
   config?: Record<string, unknown>
   getConnections?: () => Promise<readonly RemoteConnectionStatusDto[]>
+  order?: string[]
 }): Harness {
-  const claude = makeBinaryService()
-  const codex = makeBinaryService()
+  const claude = makeBinaryService('claude', opts?.order)
+  const codex = makeBinaryService('codex', opts?.order)
+  const notifications = makeNotifications()
   const config = makeConfig(opts?.config)
   const folder = opts?.remote
     ? URI.from({ scheme: REMOTE_SCHEME, authority: opts.remote, path: '/' })
@@ -105,10 +136,11 @@ function setup(opts?: {
   services.set(IConfigurationService, config as never)
   services.set(IWorkspaceService, workspace as never)
   services.set(IRemoteStatusService, remoteStatus as never)
+  services.set(INotificationService, notifications as never)
   services.set(ILoggerService, { createLogger: () => new NullLogger() } as never)
   const inst = new InstantiationService(services)
   const contribution = inst.createInstance(AgentBinaryPrefetchContribution)
-  return { claude, codex, workspace, remoteStatus, contribution }
+  return { claude, codex, notifications, workspace, remoteStatus, contribution }
 }
 
 function fireConnected(remoteStatus: ReturnType<typeof makeRemoteStatus>): void {
@@ -233,6 +265,9 @@ describe('AgentBinaryPrefetchContribution', () => {
     expect(claude.cleanupStaleVersions).toHaveBeenCalledTimes(1)
     expect(claude.cleanupStaleVersions).not.toHaveBeenCalledWith(AUTHORITY)
     expect(codex.cleanupStaleVersions).not.toHaveBeenCalledWith(AUTHORITY)
+    // Alignment would lazily bring the connection up just like prefetch does.
+    expect(claude.syncBundled).not.toHaveBeenCalled()
+    expect(codex.syncBundled).not.toHaveBeenCalled()
     expect(claude.prefetch).not.toHaveBeenCalled()
     expect(codex.prefetch).not.toHaveBeenCalled()
 
@@ -317,5 +352,176 @@ describe('AgentBinaryPrefetchContribution', () => {
     expect(codex.prefetch).not.toHaveBeenCalled()
 
     contribution.dispose()
+  })
+
+  const alignOn = {
+    'acp.prefetchBinaries': true,
+    'acp.autoUpgradeBinaries': true,
+    'acp.claude.source': 'download',
+    'acp.codex.source': 'download',
+  }
+
+  it('runs sweep → align → prefetch in order for a local workspace', async () => {
+    const order: string[] = []
+    const { workspace, contribution } = setup({ config: alignOn, order })
+
+    workspace.setCurrent(workspace.current)
+    await settle()
+
+    // Alignment must follow the sweep (its keep-set still names the pre-alignment
+    // active version) and precede the prefetch that may fetch the same version.
+    expect(order).toEqual([
+      'claude.cleanup',
+      'codex.cleanup',
+      'claude.sync',
+      'codex.sync',
+      'claude.prefetch',
+      'codex.prefetch',
+    ])
+
+    contribution.dispose()
+  })
+
+  it('notifies once with the new version after an agent is aligned', async () => {
+    const { claude, workspace, notifications, contribution } = setup({ config: alignOn })
+    claude.syncBundled.mockResolvedValue('0.3.199')
+
+    workspace.setCurrent(workspace.current)
+    await settle()
+
+    expect(notifications.notify).toHaveBeenCalledTimes(1)
+    const arg = notifications.notify.mock.calls[0]![0]
+    expect(arg.severity).toBe(Severity.Info)
+    expect(arg.message).toContain('0.3.199')
+    expect(arg.message).toContain('Claude')
+
+    contribution.dispose()
+  })
+
+  it('stays silent when there was nothing to align', async () => {
+    const { workspace, notifications, contribution } = setup({ config: alignOn })
+
+    workspace.setCurrent(workspace.current)
+    await settle()
+
+    expect(notifications.notify).not.toHaveBeenCalled()
+
+    contribution.dispose()
+  })
+
+  it('swallows an alignment failure without notifying, and still prefetches', async () => {
+    const { claude, workspace, notifications, contribution } = setup({ config: alignOn })
+    claude.syncBundled.mockRejectedValue(new Error('boom'))
+
+    workspace.setCurrent(workspace.current)
+    await settle()
+
+    expect(notifications.notify).not.toHaveBeenCalled()
+    expect(claude.prefetch).toHaveBeenCalledTimes(1)
+
+    contribution.dispose()
+  })
+
+  it('skips alignment but still sweeps and prefetches when acp.autoUpgradeBinaries is false', async () => {
+    const { claude, codex, workspace, contribution } = setup({
+      config: { ...alignOn, 'acp.autoUpgradeBinaries': false },
+    })
+
+    workspace.setCurrent(workspace.current)
+    await settle()
+
+    expect(claude.syncBundled).not.toHaveBeenCalled()
+    expect(codex.syncBundled).not.toHaveBeenCalled()
+    expect(claude.cleanupStaleVersions).toHaveBeenCalledTimes(1)
+    expect(claude.prefetch).toHaveBeenCalledTimes(1)
+
+    contribution.dispose()
+  })
+
+  it('skips alignment for a non-download source while still sweeping', async () => {
+    const { claude, codex, workspace, contribution } = setup({
+      config: {
+        'acp.prefetchBinaries': true,
+        'acp.autoUpgradeBinaries': true,
+        'acp.claude.source': 'system',
+        'acp.codex.source': 'custom',
+      },
+    })
+
+    workspace.setCurrent(workspace.current)
+    await settle()
+
+    // A system/custom binary is not ours to switch.
+    expect(claude.syncBundled).not.toHaveBeenCalled()
+    expect(codex.syncBundled).not.toHaveBeenCalled()
+    expect(claude.cleanupStaleVersions).toHaveBeenCalledTimes(1)
+    expect(codex.cleanupStaleVersions).toHaveBeenCalledTimes(1)
+
+    contribution.dispose()
+  })
+
+  it('aligns the remote host with the authority attached, never the local store', async () => {
+    const { claude, codex, notifications, remoteStatus, contribution } = setup({
+      remote: AUTHORITY,
+      // Local source must not gate the remote alignment: remote is managed download.
+      config: { ...alignOn, 'acp.claude.source': 'system', 'acp.codex.source': 'custom' },
+    })
+    claude.syncBundled.mockResolvedValue('0.3.199')
+
+    fireConnected(remoteStatus)
+    await settle()
+
+    expect(claude.syncBundled).toHaveBeenCalledTimes(1)
+    expect(claude.syncBundled).toHaveBeenCalledWith(AUTHORITY)
+    expect(codex.syncBundled).toHaveBeenCalledWith(AUTHORITY)
+    expect(claude.syncBundled).not.toHaveBeenCalledWith()
+    expect(codex.syncBundled).not.toHaveBeenCalledWith()
+    // The remote notification names the host, since "which machine" is the whole
+    // point of the message there.
+    const arg = notifications.notify.mock.calls[0]![0]
+    expect(arg.message).toContain('0.3.199')
+    expect(arg.message).toContain(AUTHORITY)
+
+    contribution.dispose()
+  })
+
+  it('skips remote alignment when acp.autoUpgradeBinaries is false, still prefetching', async () => {
+    const { claude, codex, remoteStatus, contribution } = setup({
+      remote: AUTHORITY,
+      config: { ...alignOn, 'acp.autoUpgradeBinaries': false },
+    })
+
+    fireConnected(remoteStatus)
+    await settle()
+
+    expect(claude.syncBundled).not.toHaveBeenCalled()
+    expect(codex.syncBundled).not.toHaveBeenCalled()
+    expect(claude.prefetch).toHaveBeenCalledWith(AUTHORITY)
+    expect(codex.prefetch).toHaveBeenCalledWith(AUTHORITY)
+
+    contribution.dispose()
+  })
+
+  it('skips both alignment and prefetch under the e2e probe, but still sweeps', async () => {
+    // renderer-node has no DOM, so the probe flag is stubbed onto globalThis.
+    Object.defineProperty(globalThis, 'window', {
+      value: { [E2E_PROBE_ENABLED_KEY]: true },
+      configurable: true,
+    })
+    try {
+      const { claude, codex, workspace, contribution } = setup({ config: alignOn })
+
+      workspace.setCurrent(workspace.current)
+      await settle()
+
+      expect(claude.cleanupStaleVersions).toHaveBeenCalledTimes(1)
+      expect(codex.cleanupStaleVersions).toHaveBeenCalledTimes(1)
+      expect(claude.syncBundled).not.toHaveBeenCalled()
+      expect(claude.prefetch).not.toHaveBeenCalled()
+
+      contribution.dispose()
+    } finally {
+      Reflect.deleteProperty(globalThis, 'window')
+    }
   })
 })

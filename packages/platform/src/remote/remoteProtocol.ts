@@ -60,10 +60,14 @@ import type { WatcherHostRequest, WatcherHostResponse } from '../files/watcherPr
  * field and applies `maxResults` to the unfiltered walk, so findFiles would come
  * back truncated with matching files silently missing — wrong results rather
  * than an error, which is exactly why the handshake must fail here.
+ * v12 → v13: the agentBinary channel gains `syncBundled` — an older daemon
+ * answers it with an unknown-method error, so the new client could never align a
+ * remote host's managed binary with the editor's pin. The handshake must fail
+ * instead.
  * Remote-workspace users must restart the daemon after upgrading: an old
- * daemon fails the handshake with `protocol version 11 != 12`.
+ * daemon fails the handshake with `protocol version 12 != 13`.
  */
-export const REMOTE_PROTOCOL_VERSION = 12
+export const REMOTE_PROTOCOL_VERSION = 13
 
 /** Scheme of remote workspace resources: `remote-ssh://<authority>/<path>`. */
 export const REMOTE_SCHEME = 'remote-ssh'

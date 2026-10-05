@@ -48,4 +48,14 @@ export interface IRemoteAgentBinaryService {
    * startup/idle.
    */
   cleanupStaleVersions(agent: AgentBinaryId): Promise<void>
+
+  /**
+   * Aligns that host's managed-download tree with the current pin after an editor
+   * upgrade changed it, so a remote session stops running the previous pin's
+   * binary. `version` is the pin it switched to, or null when nothing was done:
+   * the pin never changed since the last alignment, no managed version exists yet,
+   * or the alignment failed (it is retried on the next session). Best-effort and
+   * only meaningful at startup/idle.
+   */
+  syncBundled(agent: AgentBinaryId): Promise<{ readonly version: string | null }>
 }

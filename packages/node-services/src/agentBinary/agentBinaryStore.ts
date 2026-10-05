@@ -11,7 +11,9 @@
  *  version and the latest release costs no network at all: `cleanupStaleVersions`
  *  only sweeps dirs outside {active, bundled, last-seen latest}. Downloads are
  *  de-duplicated per version, so a background prefetch and a user clicking the
- *  same version share one fetch.
+ *  same version share one fetch. A third pointer, `.bundled`, records the pinned
+ *  version the tree was last aligned to — `syncBundled` re-activates the pin when
+ *  it changes (an editor upgrade) without ever touching a user's chosen version.
  *--------------------------------------------------------------------------------------------*/
 
 import { createHash } from 'node:crypto'
@@ -124,6 +126,15 @@ export class AgentBinaryStore extends Disposable {
    * delete the few hundred MB it just downloaded.
    */
   private readonly _activating = new Set<string>()
+  /**
+   * The version a `forceDownload` moved away from, kept out of the sweep for the
+   * rest of this process. A session may still be running it (and hold its dir
+   * locked on Windows), and reverting to it offline needs it on disk — a *second
+   * window* opened later sweeps after `.active` has already moved on, so its
+   * keep-set would no longer name the dir. One slot is enough: the pin changes at
+   * most once per build.
+   */
+  private _retainedVersion: string | undefined
 
   constructor(options: AgentBinaryStoreOptions) {
     super()
@@ -147,6 +158,10 @@ export class AgentBinaryStore extends Disposable {
 
   private _latestFile(): string {
     return path.join(this._baseDir, '.latest')
+  }
+
+  private _bundledFile(): string {
+    return path.join(this._baseDir, '.bundled')
   }
 
   private _binaryIn(dir: string, platform: AgentBinaryPlatform): string {
@@ -190,6 +205,32 @@ export class AgentBinaryStore extends Disposable {
       // Best-effort: this only widens what cleanup keeps, never blocks a download.
       this._logger.warn(`${this._flavor.id} binary: recording latest failed: ${String(err)}`)
     }
+  }
+
+  /**
+   * The pin this tree was last aligned to — deliberately *not* the current pin
+   * (`bundledVersion()`). A missing file means "never aligned": the first idle
+   * sweep after an upgrade aligns once, and a user's hand-picked version is left
+   * alone until the pin itself changes again.
+   */
+  private async _readAlignedPin(): Promise<string | null> {
+    try {
+      const v = (await readFile(this._bundledFile(), 'utf8')).trim()
+      return v || null
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Written only after an alignment actually landed, so a failed one retries next
+   * session. Deliberately absent from the cleanup keep-set: it names a version
+   * `bundledVersion()` already keeps, and the pointer file itself is a dotfile the
+   * sweep skips.
+   */
+  private async _rememberAlignedPin(version: string): Promise<void> {
+    await mkdir(this._baseDir, { recursive: true })
+    await writeFile(this._bundledFile(), version, 'utf8')
   }
 
   private async _queryLatest(): Promise<string | null> {
@@ -338,7 +379,10 @@ export class AgentBinaryStore extends Disposable {
     // makes the version safe from the cleanup sweep. The previous version's dir is
     // deliberately left alone here — it's still locked by the running agent, and
     // removing it would block the upgrade UI for seconds and risk a partial delete.
-    // Stale dirs are swept at next startup via cleanupStaleVersions().
+    // Stale dirs are swept at next startup via cleanupStaleVersions() — except the
+    // outgoing version, which `_retainedVersion` protects for this whole process.
+    const outgoing = await this._readActiveVersion()
+    if (outgoing !== null && outgoing !== version) this._retainedVersion = outgoing
     this._activating.add(version)
     try {
       const binaryPath = await this._ensureVersion(version, false)
@@ -347,6 +391,64 @@ export class AgentBinaryStore extends Disposable {
     } finally {
       this._activating.delete(version)
     }
+  }
+
+  /**
+   * Aligns a managed-download tree with the current pin: after an editor upgrade
+   * changed `bundledVersion()`, the `.active` pointer still names the previous pin
+   * and the user would keep running the old binary forever. Runs at idle (never on
+   * the resolve/spawn path) and only when the pin itself changed — a version the
+   * user picked by hand under the same pin is preserved. Returns the version it
+   * switched to, or null when there was nothing to do (also for every failure —
+   * like `prefetch`, it never throws; the caller only uses the value to decide
+   * whether to notify). Concurrent callers for one pin — two windows share a store
+   * — report the switch only once.
+   */
+  async syncBundled(): Promise<string | null> {
+    try {
+      return await this._syncBundledImpl(await this._flavor.bundledVersion())
+    } catch (err) {
+      this._logger.warn(`${this._flavor.id} binary sync failed: ${String(err)}`)
+      return null
+    }
+  }
+
+  private async _syncBundledImpl(bundled: string): Promise<string | null> {
+    if ((await this._readAlignedPin()) === bundled) return null
+
+    // Nothing of ours to align: no managed version was ever downloaded (the pin
+    // only needs recording so a *later* pin change is detected), or the pin is
+    // already the active one. Either way no download is warranted.
+    const active = await this._readActiveVersion()
+    if (active === null || active === bundled) {
+      await this._rememberAlignedPin(bundled)
+      return null
+    }
+
+    // Dev convenience, mirroring _prefetchImpl: fetching the pin would only
+    // re-download bytes the vendored binary already provides, and the vendored
+    // binary *is* the pin. The activation is skipped as well, deliberately: resolve
+    // prefers `.active` over the vendored binary, so a contributor who once
+    // downloaded a version keeps running it rather than being moved to the vendored
+    // one behind their back.
+    if (this._devBinaryFallback && (await this._devBinaryFallback())) {
+      await this._rememberAlignedPin(bundled)
+      return null
+    }
+
+    this._logger.info(
+      `${this._flavor.id} binary pinned version changed ${active} -> ${bundled}, aligning`,
+    )
+    await this.forceDownload(bundled)
+    // Two windows share this store, and the other one may have landed the very same
+    // alignment while this call was downloading; only the first announces the
+    // switch, so a second window must not report it again.
+    if ((await this._readAlignedPin()) === bundled) return null
+    // Written only on success: a failed alignment leaves the pointer untouched so
+    // the next session retries instead of silently staying on the old binary.
+    await this._rememberAlignedPin(bundled)
+    this._logger.info(`${this._flavor.id} binary aligned to pinned ${bundled}`)
+    return bundled
   }
 
   /**
@@ -384,6 +486,10 @@ export class AgentBinaryStore extends Disposable {
     // Nor has a forced download flipped `.active` yet — that happens after the
     // download settles, i.e. after it left `_downloads`.
     for (const version of this._activating) keep.add(version)
+    // A version an earlier switch moved away from: a live session may still run it
+    // and an offline revert needs its dir, so it survives this process even when a
+    // second window sweeps after `.active` has already moved on.
+    if (this._retainedVersion !== undefined) keep.add(this._retainedVersion)
     // A version staged by the old `.prefetch` scheme is moved into its own dir here
     // — and thereby kept: cleanup runs at idle, i.e. before the user's next click,
     // so reclaiming the staging area blindly would throw away a finished download.

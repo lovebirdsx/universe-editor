@@ -391,4 +391,234 @@ describe('AgentBinaryStore', () => {
       store.dispose()
     }
   })
+
+  it('syncBundled only records the pin when no managed version was ever downloaded', async () => {
+    const dir = await makeTempDir()
+    const store = new AgentBinaryStore({ baseDir: dir, flavor: codexFlavor })
+    const fetchSpy = offlineFetch()
+    try {
+      await expect(store.syncBundled()).resolves.toBeNull()
+      expect((await readFile(path.join(dir, '.bundled'), 'utf8')).trim()).toBe(CODEX_VERSION)
+      // Recording the pin is all it takes for a *later* pin change to be noticed,
+      // but nothing may be downloaded for a binary the user never asked for.
+      expect(await exists(path.join(dir, '.active'))).toBe(false)
+      expect(await listVersionDirs(dir)).toEqual([])
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      store.dispose()
+    }
+  })
+
+  it('syncBundled only records the pin when it is already the active version', async () => {
+    const dir = await makeTempDir()
+    const binary = await writeVersion(dir, CODEX_VERSION)
+    await writeFile(path.join(dir, '.active'), CODEX_VERSION, 'utf8')
+
+    const store = new AgentBinaryStore({ baseDir: dir, flavor: codexFlavor })
+    const fetchSpy = offlineFetch()
+    try {
+      await expect(store.syncBundled()).resolves.toBeNull()
+      expect((await readFile(path.join(dir, '.bundled'), 'utf8')).trim()).toBe(CODEX_VERSION)
+      expect((await readFile(path.join(dir, '.active'), 'utf8')).trim()).toBe(CODEX_VERSION)
+      expect(await exists(binary)).toBe(true)
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      store.dispose()
+    }
+  })
+
+  it('syncBundled flips .active to a changed pin with zero network, keeping the old dir', async () => {
+    const dir = await makeTempDir()
+    const previous = await writeVersion(dir, '0.1.0')
+    const pinned = await writeVersion(dir, CODEX_VERSION)
+    await writeFile(path.join(dir, '.active'), '0.1.0', 'utf8')
+    // The pin the tree was last aligned to; the editor has since moved it.
+    await writeFile(path.join(dir, '.bundled'), '0.0.9', 'utf8')
+
+    const store = new AgentBinaryStore({ baseDir: dir, flavor: codexFlavor })
+    const fetchSpy = offlineFetch()
+    try {
+      await expect(store.syncBundled()).resolves.toBe(CODEX_VERSION)
+      expect((await readFile(path.join(dir, '.active'), 'utf8')).trim()).toBe(CODEX_VERSION)
+      expect((await readFile(path.join(dir, '.bundled'), 'utf8')).trim()).toBe(CODEX_VERSION)
+      // The replaced version is deliberately not deleted here — it is still locked
+      // by the running agent; the next launch's sweep reclaims it.
+      expect(await exists(previous)).toBe(true)
+      expect(await exists(pinned)).toBe(true)
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      store.dispose()
+    }
+  })
+
+  it('syncBundled preserves a version the user picked by hand under an unchanged pin', async () => {
+    const dir = await makeTempDir()
+    await writeVersion(dir, CODEX_VERSION)
+    await writeVersion(dir, LATEST)
+    await writeFile(path.join(dir, '.active'), LATEST, 'utf8')
+    await writeFile(path.join(dir, '.bundled'), CODEX_VERSION, 'utf8')
+
+    const store = new AgentBinaryStore({ baseDir: dir, flavor: codexFlavor })
+    const fetchSpy = offlineFetch()
+    try {
+      await expect(store.syncBundled()).resolves.toBeNull()
+      expect((await readFile(path.join(dir, '.active'), 'utf8')).trim()).toBe(LATEST)
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      store.dispose()
+    }
+  })
+
+  it('a failed alignment returns null, leaves both pointers alone and retries next call', async () => {
+    const dir = await makeTempDir()
+    await writeVersion(dir, '0.1.0')
+    await writeFile(path.join(dir, '.active'), '0.1.0', 'utf8')
+
+    const store = new AgentBinaryStore({ baseDir: dir, flavor: codexFlavor })
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('offline'))
+    try {
+      await expect(store.syncBundled()).resolves.toBeNull()
+      // No `.bundled` means "not aligned yet" ⇒ the next session tries again
+      // instead of silently staying on the old binary forever.
+      expect(await exists(path.join(dir, '.bundled'))).toBe(false)
+      expect((await readFile(path.join(dir, '.active'), 'utf8')).trim()).toBe('0.1.0')
+      expect(fetchSpy).toHaveBeenCalled()
+
+      fetchSpy.mockClear()
+      await expect(store.syncBundled()).resolves.toBeNull()
+      expect(fetchSpy).toHaveBeenCalled()
+    } finally {
+      store.dispose()
+    }
+  })
+
+  it('syncBundled skips the fetch when the dev vendored binary covers the pin', async () => {
+    const dir = await makeTempDir()
+    await writeVersion(dir, '0.1.0')
+    await writeFile(path.join(dir, '.active'), '0.1.0', 'utf8')
+
+    const store = new AgentBinaryStore({
+      baseDir: dir,
+      flavor: codexFlavor,
+      devBinaryFallback: async () => '/vendor/codex',
+    })
+    const fetchSpy = offlineFetch()
+    try {
+      await expect(store.syncBundled()).resolves.toBeNull()
+      expect((await readFile(path.join(dir, '.bundled'), 'utf8')).trim()).toBe(CODEX_VERSION)
+      expect((await readFile(path.join(dir, '.active'), 'utf8')).trim()).toBe('0.1.0')
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      store.dispose()
+    }
+  })
+
+  it('aligns once per pin change, leaving a hand-picked version alone until the pin moves', async () => {
+    const dir = await makeTempDir()
+    let pinned = '0.1.0'
+    const flavor = { ...codexFlavor, bundledVersion: async () => pinned }
+    await writeVersion(dir, '0.1.0')
+    await writeFile(path.join(dir, '.active'), '0.1.0', 'utf8')
+
+    const store = new AgentBinaryStore({ baseDir: dir, flavor })
+    const fetchSpy = offlineFetch()
+    try {
+      // First launch on this pin: recorded, nothing to switch.
+      await expect(store.syncBundled()).resolves.toBeNull()
+      expect((await readFile(path.join(dir, '.bundled'), 'utf8')).trim()).toBe('0.1.0')
+
+      // The user upgrades to latest by hand; the pin has not moved since.
+      await writeVersion(dir, LATEST)
+      await store.forceDownload(LATEST)
+      await expect(store.syncBundled()).resolves.toBeNull()
+      expect((await readFile(path.join(dir, '.active'), 'utf8')).trim()).toBe(LATEST)
+
+      // An editor upgrade moves the pin → the tree is aligned to it, offline.
+      pinned = '0.2.0'
+      await writeVersion(dir, '0.2.0')
+      await expect(store.syncBundled()).resolves.toBe('0.2.0')
+      expect((await readFile(path.join(dir, '.active'), 'utf8')).trim()).toBe('0.2.0')
+      expect((await readFile(path.join(dir, '.bundled'), 'utf8')).trim()).toBe('0.2.0')
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      store.dispose()
+    }
+  })
+
+  it('a version a sync replaced survives this process and is reclaimed by the next one', async () => {
+    const dir = await makeTempDir()
+    await writeVersion(dir, '0.1.0')
+    await writeVersion(dir, CODEX_VERSION)
+    await writeFile(path.join(dir, '.active'), '0.1.0', 'utf8')
+
+    const store = new AgentBinaryStore({ baseDir: dir, flavor: codexFlavor })
+    const fetchSpy = offlineFetch()
+    try {
+      await expect(store.syncBundled()).resolves.toBe(CODEX_VERSION)
+
+      // A second window opened later in the session sweeps after `.active` has
+      // already moved on, so its keep-set no longer names the replaced version —
+      // which a running session may still use, and which an offline revert needs.
+      await store.cleanupStaleVersions()
+      expect(await listVersionDirs(dir)).toEqual(['0.1.0', CODEX_VERSION].sort())
+
+      // Next launch: a fresh store no longer retains it, so the sweep reclaims it.
+      const next = new AgentBinaryStore({ baseDir: dir, flavor: codexFlavor })
+      try {
+        await next.cleanupStaleVersions()
+      } finally {
+        next.dispose()
+      }
+      expect(await listVersionDirs(dir)).toEqual([CODEX_VERSION])
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      store.dispose()
+    }
+  })
+
+  it('a manual switch retains the version it moved away from for this process', async () => {
+    const dir = await makeTempDir()
+    // Neither the pin nor `.latest`: only `_retainedVersion` can keep it.
+    await writeVersion(dir, '0.1.0')
+    await writeVersion(dir, LATEST)
+    await writeFile(path.join(dir, '.active'), '0.1.0', 'utf8')
+
+    const store = new AgentBinaryStore({ baseDir: dir, flavor: codexFlavor })
+    const fetchSpy = offlineFetch()
+    try {
+      await store.forceDownload(LATEST)
+      await store.cleanupStaleVersions()
+
+      expect(await listVersionDirs(dir)).toEqual(['0.1.0', LATEST].sort())
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      store.dispose()
+    }
+  })
+
+  it('the first run on an unaligned tree overrides a hand-picked version once', async () => {
+    const dir = await makeTempDir()
+    await writeVersion(dir, CODEX_VERSION)
+    await writeVersion(dir, LATEST)
+    // No `.bundled`: the tree predates the alignment feature, so "the user picked
+    // this by hand" cannot be told apart from "an older build left it behind" — the
+    // pin wins, which is the one-time migration this feature ships with.
+    await writeFile(path.join(dir, '.active'), LATEST, 'utf8')
+
+    const store = new AgentBinaryStore({ baseDir: dir, flavor: codexFlavor })
+    const fetchSpy = offlineFetch()
+    try {
+      await expect(store.syncBundled()).resolves.toBe(CODEX_VERSION)
+      expect((await readFile(path.join(dir, '.active'), 'utf8')).trim()).toBe(CODEX_VERSION)
+      expect((await readFile(path.join(dir, '.bundled'), 'utf8')).trim()).toBe(CODEX_VERSION)
+
+      // Once, not on every launch: the pick is respected again until the pin moves.
+      await store.forceDownload(LATEST)
+      await expect(store.syncBundled()).resolves.toBeNull()
+      expect((await readFile(path.join(dir, '.active'), 'utf8')).trim()).toBe(LATEST)
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      store.dispose()
+    }
+  })
 })

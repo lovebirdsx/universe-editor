@@ -751,6 +751,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   // --- Settings ---
   'settings.acp.agents':
     '自定义 ACP 兼容 Agent 命令。每项都需要 `id`、`command`；`args`、`env`、`cwd` 可选。Env 值会以明文存储 - 请将 API 密钥保存在真实环境变量中。',
+  'settings.acp.autoUpgradeBinaries':
+    '当编辑器升级改变了内置 Agent 锁定的 Claude / codex-acp 版本时，在后台把受管二进制文件切换到新的锁定版本（仅当正在使用受管下载）。从未下载过二进制的 Agent 不会被下载。手动选过的版本在锁定版本再次变化前保持不变——但本次更新后的首次运行会先对齐一次（此时还没有对齐记录）。远程工作区下在远端主机上切换。关闭则始终停留在当前已安装的版本。',
   'settings.acp.claude.executablePath':
     'Claude 可执行文件的绝对路径。仅当 `acp.claude.source` 为 "custom" 时使用。',
   'settings.tocAriaLabel': '设置分类',
@@ -3125,6 +3127,11 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'codexBinary.error.downloadFailed': '下载 {url} 失败：HTTP {status}',
   'codexBinary.error.integritySha512': '{url} 的完整性校验失败（sha512 不匹配）',
   'codexBinary.error.integritySha1': '{url} 的完整性校验失败（sha1 不匹配）',
+
+  // --- Agent binaries: idle maintenance ---
+  'agentBinary.autoUpgrade.local': '{name} 二进制文件已切换到 {version}（跟随编辑器内置版本）。',
+  'agentBinary.autoUpgrade.remote':
+    '远端主机 {authority} 上的 {name} 二进制文件已切换到 {version}（跟随编辑器内置版本）。',
 
   // --- Codex settings ---
   'codexSettings.approval': '审批策略',

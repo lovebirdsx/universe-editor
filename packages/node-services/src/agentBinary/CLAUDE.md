@@ -2,23 +2,26 @@
 
 Agent 原生二进制（Claude / Codex）的**下载核心**，Electron-free，被**本地 main 进程**与 **remote server** 逐字共用（各自下载到自己那台主机）。本目录只管**下载语义**——系统安装/自定义路径的解析、source 分派、wire 契约都在调用方。
 
-- `agentBinaryStore.ts` — `AgentBinaryStore`：版本目录树、按版本去重下载、进度事件、保留集清理。
+- `agentBinaryStore.ts` — `AgentBinaryStore`：版本目录树、按版本去重下载、进度事件、保留集清理、pin 变更后的空闲对齐（`syncBundled`）。
 - `flavors.ts` — 每个 agent 的 flavor（npm 包名 / 二进制在包内的相对路径 / 内置版本 / 平台探测）。`bundledVersion()` 读随包发布的 meta（claude 是 `claude-binary.json`，codex 是常量）。
 - `agentBinaryProtocol.ts` — 远端 channel 的契约（`RemoteChannels.AgentBinary`，server 端实现见 `packages/remote-server/src/agentBinaryService.ts`）。
 - 消费方：`apps/editor/src/main/services/{claudeBinary,codexBinary}/`、面板 `apps/editor/src/renderer/workbench/agentSettings/{claude/BinaryPanel,codex/CodexBinaryPanel}.tsx`。
 
-## 磁盘布局与两个指针文件
+## 磁盘布局与三个指针文件
 
 ```
 <baseDir>/<version>/…      每个版本一套完整目录树（解压态），版本目录名即版本号
 <baseDir>/.active          激活版本（唯一的「当前生效」真相）
 <baseDir>/.latest          最近一次见过的 registry latest —— 只服务于保留集，不是「当前版本」
+<baseDir>/.bundled         已对齐过的锁定版本 —— 只服务于「pin 变了要对齐一次」的判定
 ```
+
+`.bundled` 不是「当前版本」，也**不进保留集**：它命名的版本由 `bundledVersion()` 天然进 keep-set，指针文件本身是 dotfile（清理与列举都已跳过）。`syncBundled()` 只翻 `.active`、**绝不删目录** —— 被替换掉的旧目录由 `_retainedVersion` 保留到本进程结束（同 `forceDownload`：活跃会话可能还在跑它、离线回退也要靠它，而**第二个窗口在本会话内 sweep 时 keep-set 已不再命名它**），下个进程的 sweep 才回收。写 `.bundled` 的时机是「对齐动作成功之后」：失败不写 ⇒ 下个会话重试；文件缺失 = 从未对齐（老用户首次启动会对每个 agent 各对齐一次）。
 
 ## 三条不变量（改动前先读）
 
 1. **单入口按版本去重**：一切下载走 `_ensureVersion(version, background)` —— 盘上 `<version>/` 命中二进制则直接返回（**零网络**），否则下载；`_inflightEnsures` 保证同版本并发只 fetch 一次（后台 prefetch 与用户点击共享同一次下载），settle 后释放登记。`resolveDownload` / `forceDownload` / `prefetch` 都只是它的调用方，**不要在它们里各写一套下载逻辑**。`forceDownload` = ensure + 写 `.active`——**绝不删目录重下**（盘上已有就该秒切）。去重同时是防损坏的前提：同一版本的两次并发会写同一个 `<destDir>.extract.<pid>` 而互相踩踏。
-2. **保留集永不联网**：`cleanupStaleVersions()` 的 keep-set = `{active} ∪ {bundled} ∪ {上次见到的 latest} ∪ {在飞的下载} ∪ {正在激活的版本} ∪ {从遗留暂存区搬回来的版本}`。cleanup 在启动路径上，联网会让 10s 超时成为最坏路径，故 latest 用 `.latest` 文件记（`getVersionInfo`/`prefetch` 拿到 registry 应答时顺手写）。**`bundledVersion()` 抛错时不能返回空集**——空集等于把用户下过的版本全删，宁可这轮不清理。`_activating` 与「搬回来的版本」这两项是为了堵两个真实窗口：下载已 settle 但 `.active` 还没写、以及 idle 的 cleanup 抢在用户点击之前把暂存区的几百 MB 回收掉。
+2. **保留集永不联网**：`cleanupStaleVersions()` 的 keep-set = `{active} ∪ {bundled} ∪ {上次见到的 latest} ∪ {在飞的下载} ∪ {正在激活的版本} ∪ {被切换掉的旧版本（`_retainedVersion`，本进程内）} ∪ {从遗留暂存区搬回来的版本}`。cleanup 在启动路径上，联网会让 10s 超时成为最坏路径，故 latest 用 `.latest` 文件记（`getVersionInfo`/`prefetch` 拿到 registry 应答时顺手写）。**`bundledVersion()` 抛错时不能返回空集**——空集等于把用户下过的版本全删，宁可这轮不清理。`_activating` 与「搬回来的版本」这两项是为了堵两个真实窗口：下载已 settle 但 `.active` 还没写、以及 idle 的 cleanup 抢在用户点击之前把暂存区的几百 MB 回收掉；`_retainedVersion` 堵的是「第二个窗口在本会话内又 sweep 一次」——那时 `.active` 已经翻走，被替换的版本不再被任何一项命名。
 3. **进度状态活在 store，不在组件里**：`onDidChangeDownload`（数组载荷，`[]` = 空闲）是唯一事件源，`getVersionInfo().downloads` 是同一状态的可查询快照。数组而非单值，是因为后台 prefetch 与用户点击可真实并发；面板靠快照重建跨挂载状态（切走再回来仍要显示进度），故**状态不能退化成组件局部 state**。失败路径必须在 `finally` 清状态，否则 UI 永远卡在「下载中」。
 
 > 教训（已被审查抓到一次）：面板把**快照**当实时集用，点击后进度行与按钮同时出现 —— 判定「某版本是否正在下载」必须喂实时 `downloads`，快照只用来恢复挂载瞬间的状态（`deriveBinaryActionState` 的 `diskState` 参数）。

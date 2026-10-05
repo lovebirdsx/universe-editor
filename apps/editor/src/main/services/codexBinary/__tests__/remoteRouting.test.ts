@@ -38,6 +38,8 @@ class FakeRemoteBinaryService implements IRemoteAgentBinaryService {
   readonly forceDownloads: { agent: AgentBinaryId; version: string }[] = []
   readonly prefetches: AgentBinaryId[] = []
   readonly cleanups: AgentBinaryId[] = []
+  readonly syncs: AgentBinaryId[] = []
+  syncResult: string | null = null
 
   async resolve(
     agent: AgentBinaryId,
@@ -69,6 +71,11 @@ class FakeRemoteBinaryService implements IRemoteAgentBinaryService {
 
   async cleanupStaleVersions(agent: AgentBinaryId): Promise<void> {
     this.cleanups.push(agent)
+  }
+
+  async syncBundled(agent: AgentBinaryId): Promise<{ readonly version: string | null }> {
+    this.syncs.push(agent)
+    return { version: this.syncResult }
   }
 
   fireDownload(e: AgentBinaryRemoteDownloadEvent): void {
@@ -221,6 +228,28 @@ describe('CodexBinaryMainService — remote routing', () => {
       await svc.cleanupStaleVersions()
       expect(spy).toHaveBeenCalledTimes(1)
       expect(fixture.remote.cleanups).toEqual([])
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('routes syncBundled(authority) to the remote channel and unwraps the version', async () => {
+    const fixture = makeFixture()
+    svc = fixture.svc
+    fixture.remote.syncResult = '1.2.3'
+
+    await expect(svc.syncBundled('host')).resolves.toBe('1.2.3')
+    expect(fixture.remote.syncs).toEqual(['codex'])
+  })
+
+  it('syncBundled without authority hits the local store and not the remote proxy', async () => {
+    const fixture = makeFixture()
+    svc = fixture.svc
+    const spy = vi.spyOn(AgentBinaryStore.prototype, 'syncBundled').mockResolvedValue('9.9.9')
+    try {
+      await expect(svc.syncBundled()).resolves.toBe('9.9.9')
+      expect(spy).toHaveBeenCalledTimes(1)
+      expect(fixture.remote.syncs).toEqual([])
     } finally {
       spy.mockRestore()
     }

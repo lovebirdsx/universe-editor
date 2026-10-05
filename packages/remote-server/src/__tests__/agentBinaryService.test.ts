@@ -25,6 +25,9 @@ class FakeStore implements IDisposable {
   readonly forceDownloads: string[] = []
   prefetchCalls: number = 0
   cleanupCalls: number = 0
+  syncBundledCalls: number = 0
+  /** What the next syncBundled() reports as the version it switched to. */
+  syncBundledResult: string | null = null
 
   constructor(
     readonly agent: AgentBinaryId,
@@ -60,6 +63,11 @@ class FakeStore implements IDisposable {
     this.cleanupCalls++
   }
 
+  async syncBundled(): Promise<string | null> {
+    this.syncBundledCalls++
+    return this.syncBundledResult
+  }
+
   fireDownload(downloads: readonly AgentBinaryDownloadState[]): void {
     this._onDownload.fire(downloads)
   }
@@ -76,6 +84,7 @@ function state(received: number, total: number, version = '1.0.0'): AgentBinaryD
 function makeService(
   built: { agent: AgentBinaryId; baseDir: string }[],
   stores: Map<AgentBinaryId, FakeStore>,
+  syncResults: Partial<Record<AgentBinaryId, string>> = {},
 ): RemoteAgentBinaryService {
   return new RemoteAgentBinaryService({
     agentBinaryDir: '/data/agent-bin',
@@ -83,6 +92,7 @@ function makeService(
     createStore: (agent, baseDir) => {
       built.push({ agent, baseDir })
       const store = new FakeStore(agent, baseDir)
+      store.syncBundledResult = syncResults[agent] ?? null
       stores.set(agent, store)
       return store as unknown as AgentBinaryStore
     },
@@ -278,6 +288,32 @@ describe('RemoteAgentBinaryService', () => {
     try {
       await svc.cleanupStaleVersions('codex')
       expect(stores.get('codex')!.cleanupCalls).toBe(1)
+      expect(stores.get('claude')).toBeUndefined()
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('syncBundled delegates to the per-agent store and passes the version through', async () => {
+    const built: { agent: AgentBinaryId; baseDir: string }[] = []
+    const stores = new Map<AgentBinaryId, FakeStore>()
+    const svc = makeService(built, stores, { claude: '1.2.3' })
+    try {
+      await expect(svc.syncBundled('claude')).resolves.toEqual({ version: '1.2.3' })
+      expect(stores.get('claude')!.syncBundledCalls).toBe(1)
+      expect(stores.get('codex')).toBeUndefined()
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('syncBundled reports a null version when the store had nothing to do', async () => {
+    const built: { agent: AgentBinaryId; baseDir: string }[] = []
+    const stores = new Map<AgentBinaryId, FakeStore>()
+    const svc = makeService(built, stores)
+    try {
+      await expect(svc.syncBundled('codex')).resolves.toEqual({ version: null })
+      expect(stores.get('codex')!.syncBundledCalls).toBe(1)
       expect(stores.get('claude')).toBeUndefined()
     } finally {
       svc.dispose()

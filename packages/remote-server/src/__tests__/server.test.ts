@@ -5,7 +5,7 @@
  *  server (createRemoteServer), the other is the client (ProxyChannel.toService).
  *--------------------------------------------------------------------------------------------*/
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import {
@@ -38,6 +38,7 @@ async function makeTempRoot(): Promise<string> {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks()
   await Promise.all(
     tempRoots
       .splice(0)
@@ -107,6 +108,11 @@ describe('createRemoteServer', () => {
       await expect(svc.resolve('codex', { allowDownload: false })).rejects.toThrow(
         /not downloaded yet/,
       )
+      // syncBundled crosses the wire too: nothing was ever downloaded here, so it
+      // only records the pin and reports "nothing to do" — no registry round-trip.
+      const fetchSpy = vi.spyOn(globalThis, 'fetch')
+      await expect(svc.syncBundled('codex')).resolves.toEqual({ version: null })
+      expect(fetchSpy).not.toHaveBeenCalled()
     } finally {
       dispose()
     }

@@ -1,11 +1,21 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Idle-time maintenance of the native Claude / codex-acp binaries:
+ *  Idle-time maintenance of the native Claude / codex-acp binaries. Three phases,
+ *  in this order (the order is load-bearing, see below):
  *    1. Sweeps stale (non-active) version dirs left by a previous upgrade — the
  *       predecessor binary is locked while a session runs, so cleanup is deferred
  *       to the next launch when its lock is gone. The local sweep always runs;
  *       when the active workspace is remote, that host's store is swept too.
- *    2. Background-prefetches the latest binary so a later upgrade activates
+ *    2. Aligns the managed-download tree with the editor's pinned version: an
+ *       editor upgrade changes the pin while `.active` still names the old one, so
+ *       without this the user keeps running the previous binary forever. It is a
+ *       no-op unless the pin itself changed since the last alignment, so a version
+ *       picked by hand survives. Follows the active workspace like the sweep: a
+ *       remote workspace aligns that host's store. Gated on
+ *       `acp.autoUpgradeBinaries`, on the local per-agent `acp.<agent>.source`
+ *       being "download", and on the e2e probe. Success is announced with the new
+ *       version; failures are logged and retried next session.
+ *    3. Background-prefetches the latest binary so a later upgrade activates
  *       instantly instead of waiting on a ~80MB download. Prefetch follows the
  *       active workspace: a remote workspace prefetches that host's managed store
  *       (never the local userData, which wouldn't be used), a local workspace
@@ -15,6 +25,10 @@
  *       with a multi-hundred-MB fetch). Local prefetch additionally requires the
  *       per-agent `acp.claude.source` / `acp.codex.source` to be "download";
  *       remote prefetch never consults source (managed download only).
+ *  Sweeping before aligning is deliberate: the sweep's keep-set still names the
+ *  pre-alignment active version, so the dir the running session uses survives this
+ *  session and is reclaimed at the next launch — exactly the semantics a manual
+ *  upgrade has (and on Windows the running binary still holds its lock anyway).
  *  Each authority (local included) is maintained at most once per session —
  *  workspace/connection events fire repeatedly, but booleans/Set dedupe them.
  *  Remote maintenance is gated on that authority being `connected`: the main-side
@@ -26,11 +40,14 @@
 import {
   Disposable,
   IConfigurationService,
+  INotificationService,
   IWorkspaceService,
   type ILogger,
   ILoggerService,
   type IWorkbenchContribution,
+  Severity,
   createNamedLogger,
+  localize,
   runWhenIdle,
 } from '@universe-editor/platform'
 import { E2E_PROBE_ENABLED_KEY } from '../../shared/e2e/contract.js'
@@ -42,13 +59,19 @@ import {
 } from '../../shared/ipc/remoteStatusService.js'
 import { currentRemoteAuthority } from '../services/remote/windowRemoteAuthority.js'
 
+/** The single call the alignment phase needs; both agent services satisfy it. */
+interface IBundleSyncService {
+  syncBundled(authority?: string): Promise<string | null>
+}
+
 export class AgentBinaryPrefetchContribution extends Disposable implements IWorkbenchContribution {
   private readonly _logger: ILogger
   /** Remote authorities already maintained this session. */
   private readonly _maintained = new Set<string>()
   private readonly _connected = new Set<string>()
-  private _localCleanupDone = false
-  private _localPrefetchDone = false
+  /** The local sweep, started at most once; alignment/prefetch queue behind it. */
+  private _localSweep: Promise<void> | undefined
+  private _localMaintained = false
   /** True when the last connection-state seed failed and a retry is still available. */
   private _seedFailed = false
   /** True once the single on-demand re-seed has been consumed. */
@@ -60,6 +83,7 @@ export class AgentBinaryPrefetchContribution extends Disposable implements IWork
     @ICodexBinaryService private readonly _codex: ICodexBinaryService,
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
     @IRemoteStatusService private readonly _remoteStatus: IRemoteStatusService,
+    @INotificationService private readonly _notifications: INotificationService,
     @ILoggerService loggerService: ILoggerService,
   ) {
     super()
@@ -105,18 +129,16 @@ export class AgentBinaryPrefetchContribution extends Disposable implements IWork
   private _maintain(): void {
     if (this._store.isDisposed) return
 
-    // The local sweep is pure local disk work with no network; run it exactly
-    // once no matter where the window ends up scoped.
-    if (!this._localCleanupDone) {
-      this._localCleanupDone = true
-      void this._cleanupLocal()
-    }
+    // The local sweep is pure local disk work with no network; start it exactly
+    // once no matter where the window ends up scoped (alignment and prefetch wait
+    // on it before touching the same dirs).
+    this._localSweep ??= this._sweepLocal()
 
     const authority = currentRemoteAuthority(this._workspace.current)
     if (authority === undefined) {
-      if (this._localPrefetchDone) return
-      this._localPrefetchDone = true
-      void this._prefetchLocal()
+      if (this._localMaintained) return
+      this._localMaintained = true
+      void this._maintainLocal()
       return
     }
 
@@ -139,7 +161,7 @@ export class AgentBinaryPrefetchContribution extends Disposable implements IWork
     void this._maintainRemote(authority)
   }
 
-  private async _cleanupLocal(): Promise<void> {
+  private async _sweepLocal(): Promise<void> {
     try {
       await this._claude.cleanupStaleVersions()
     } catch (err) {
@@ -150,6 +172,12 @@ export class AgentBinaryPrefetchContribution extends Disposable implements IWork
     } catch (err) {
       this._logger.warn(`codex-acp binary cleanup failed: ${String(err)}`)
     }
+  }
+
+  private async _maintainLocal(): Promise<void> {
+    await this._localSweep
+    await this._alignLocal()
+    await this._prefetchLocal()
   }
 
   private async _maintainRemote(authority: string): Promise<void> {
@@ -163,9 +191,13 @@ export class AgentBinaryPrefetchContribution extends Disposable implements IWork
     } catch (err) {
       this._logger.warn(`codex-acp binary cleanup failed on ${authority}: ${String(err)}`)
     }
+    if (!this._alignGated()) {
+      // Remote binaries are always managed download; the local source setting does
+      // not cross the tunnel, so alignment never consults `acp.*.source` here.
+      await this._alignAgent(this._claude, 'Claude', authority)
+      await this._alignAgent(this._codex, 'Codex', authority)
+    }
     if (this._prefetchGated()) return
-    // Remote binaries are always managed download; the local source setting does
-    // not cross the tunnel, so prefetch never consults `acp.*.source` here.
     try {
       await this._claude.prefetch(authority)
     } catch (err) {
@@ -175,6 +207,51 @@ export class AgentBinaryPrefetchContribution extends Disposable implements IWork
       await this._codex.prefetch(authority)
     } catch (err) {
       this._logger.warn(`codex-acp binary prefetch failed on ${authority}: ${String(err)}`)
+    }
+  }
+
+  private async _alignLocal(): Promise<void> {
+    if (this._alignGated()) return
+    // A system/custom binary isn't ours to switch, so the managed store is only
+    // aligned when it is the one in use.
+    if ((this._config.get<string>('acp.claude.source') ?? 'download') === 'download') {
+      await this._alignAgent(this._claude, 'Claude')
+    }
+    if ((this._config.get<string>('acp.codex.source') ?? 'download') === 'download') {
+      await this._alignAgent(this._codex, 'Codex')
+    }
+  }
+
+  private async _alignAgent(
+    service: IBundleSyncService,
+    name: string,
+    authority?: string,
+  ): Promise<void> {
+    const where = authority === undefined ? '' : ` on ${authority}`
+    try {
+      const version =
+        authority === undefined ? await service.syncBundled() : await service.syncBundled(authority)
+      if (version === null) return
+      this._logger.info(`${name} binary auto-aligned to pinned ${version}${where}`)
+      this._notifications.notify({
+        severity: Severity.Info,
+        message:
+          authority === undefined
+            ? localize(
+                'agentBinary.autoUpgrade.local',
+                'The {name} binary was switched to {version} to match the editor version.',
+                { name, version },
+              )
+            : localize(
+                'agentBinary.autoUpgrade.remote',
+                'The {name} binary on {authority} was switched to {version} to match the editor version.',
+                { name, authority, version },
+              ),
+      })
+    } catch (err) {
+      // Silent for the user on purpose: the next session retries, and a failed
+      // background upgrade is not something they asked for or can act on.
+      this._logger.warn(`${name} binary auto-alignment failed${where}: ${String(err)}`)
     }
   }
 
@@ -196,12 +273,24 @@ export class AgentBinaryPrefetchContribution extends Disposable implements IWork
     }
   }
 
+  /**
+   * True under the e2e probe: every worker launches a fresh profile with no cached
+   * binary, so any real download here would race Playwright's worker teardown,
+   * which isn't sized for a multi-hundred-MB fetch. Local sweeps stay safe (no
+   * network); only the phases that may download are gated.
+   */
+  private _e2eProbeEnabled(): boolean {
+    return typeof window !== 'undefined' && window[E2E_PROBE_ENABLED_KEY] === true
+  }
+
+  private _alignGated(): boolean {
+    if (this._e2eProbeEnabled()) return true
+    if (this._config.get<boolean>('acp.autoUpgradeBinaries') === false) return true
+    return false
+  }
+
   private _prefetchGated(): boolean {
-    // Every e2e worker launches a fresh profile with no cached binary — a real
-    // background download here would race Playwright's worker teardown, which
-    // isn't sized for a multi-hundred-MB fetch. Local cleanup above is safe (no
-    // network); only the download itself is e2e-gated.
-    if (typeof window !== 'undefined' && window[E2E_PROBE_ENABLED_KEY] === true) return true
+    if (this._e2eProbeEnabled()) return true
     if (this._config.get<boolean>('acp.prefetchBinaries') === false) return true
     return false
   }
