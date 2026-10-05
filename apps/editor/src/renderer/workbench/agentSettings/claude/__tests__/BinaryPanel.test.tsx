@@ -13,6 +13,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import {
   Emitter,
   IConfigurationService,
+  IDialogService,
   IHostService,
   INotificationService,
   InstantiationService,
@@ -41,7 +42,7 @@ function versionInfo(overrides: Partial<IClaudeBinaryVersionInfo> = {}): IClaude
   }
 }
 
-function makeHarness(initial: IClaudeBinaryVersionInfo) {
+function makeHarness(initial: IClaudeBinaryVersionInfo, manual = true) {
   let info = initial
   const emitter = new Emitter<IClaudeBinaryDownloadEvent>()
   const getVersionInfo = vi.fn(async () => info)
@@ -56,20 +57,32 @@ function makeHarness(initial: IClaudeBinaryVersionInfo) {
     cleanupStaleVersions: vi.fn(async () => {}),
   } as unknown as IClaudeBinaryService
 
+  const values: Record<string, unknown> = { 'acp.allowManualBinaryVersion': manual }
+  const configEmitter = new Emitter<{ affectsConfiguration(key: string): boolean }>()
+  const update = vi.fn(async (key: string, value: unknown) => {
+    values[key] = value
+    configEmitter.fire({ affectsConfiguration: (k) => k === key })
+  })
+  const confirm = vi.fn(async () => ({ confirmed: true }))
+
   const services = new ServiceCollection()
   services.set(IClaudeBinaryService, service)
   services.set(IConfigurationService, {
-    get: vi.fn(() => undefined),
-    update: vi.fn(async () => {}),
+    get: vi.fn((key: string) => values[key]),
+    update,
+    onDidChangeConfiguration: configEmitter.event,
   } as unknown as IConfigurationService)
   services.set(INotificationService, { notify: vi.fn() } as unknown as INotificationService)
   services.set(IHostService, { platform: 'linux' } as unknown as IHostService)
+  services.set(IDialogService, { confirm } as unknown as IDialogService)
   const inst = new InstantiationService(services)
 
   return {
     emitter,
     getVersionInfo,
     forceDownload,
+    update,
+    confirm,
     setInfo: (next: IClaudeBinaryVersionInfo) => {
       info = next
     },
@@ -209,5 +222,74 @@ describe('BinaryPanel download state', () => {
     expect(() => h.emitter.fire({ downloads: [] })).not.toThrow()
     await flushEffects()
     expect(h.getVersionInfo.mock.calls.length).toBe(before)
+  })
+})
+
+describe('BinaryPanel version policy', () => {
+  it('locks to the pin by default: no latest row, no other version to pick', async () => {
+    const h = makeHarness(versionInfo(), false)
+    h.renderPanel()
+    await flushEffects()
+
+    expect(h.getVersionInfo).toHaveBeenCalledWith('pinned', undefined)
+    expect(screen.getByText(/locked to the version this build is pinned to/)).toBeTruthy()
+    expect(screen.queryByText(/Latest:/)).toBeNull()
+    expect(screen.queryByText(/Available locally:/)).toBeNull()
+    expect(screen.queryByRole('button', { name: /Upgrade|Revert|Switch to/ })).toBeNull()
+  })
+
+  it('offers the pin when it is missing, even while locked', async () => {
+    const h = makeHarness(
+      versionInfo({ installedVersion: null, latestVersion: null, downloadedVersions: [] }),
+      false,
+    )
+    h.renderPanel()
+    await flushEffects()
+
+    // Downloading the pin is not a version choice, it is the lock being honoured.
+    fireEvent.click(screen.getByRole('button', { name: /Download 1\.0\.0/ }))
+    await flushEffects()
+    expect(h.forceDownload).toHaveBeenCalledWith('1.0.0', undefined)
+  })
+
+  it('unlocks only after the confirmation, then re-reads with the manual policy', async () => {
+    const h = makeHarness(versionInfo(), false)
+    h.renderPanel()
+    await flushEffects()
+    expect(h.getVersionInfo).toHaveBeenLastCalledWith('pinned', undefined)
+
+    fireEvent.click(screen.getByTestId('binary-version-manual-toggle'))
+    await flushEffects()
+
+    expect(h.confirm).toHaveBeenCalledTimes(1)
+    expect(h.update).toHaveBeenCalledWith('acp.allowManualBinaryVersion', true, expect.anything())
+    expect(h.getVersionInfo).toHaveBeenLastCalledWith('manual', undefined)
+    expect(screen.getByText(/Latest:/)).toBeTruthy()
+  })
+
+  it('stays locked when the confirmation is dismissed', async () => {
+    const h = makeHarness(versionInfo(), false)
+    h.confirm.mockResolvedValue({ confirmed: false })
+    h.renderPanel()
+    await flushEffects()
+
+    fireEvent.click(screen.getByTestId('binary-version-manual-toggle'))
+    await flushEffects()
+
+    expect(h.update).not.toHaveBeenCalled()
+    expect(h.getVersionInfo).toHaveBeenLastCalledWith('pinned', undefined)
+  })
+
+  it('locking back switches to the pin right away and without a confirmation', async () => {
+    const h = makeHarness(versionInfo({ installedVersion: '2.0.0' }))
+    h.renderPanel()
+    await flushEffects()
+
+    fireEvent.click(screen.getByTestId('binary-version-manual-toggle'))
+    await flushEffects()
+
+    expect(h.confirm).not.toHaveBeenCalled()
+    expect(h.update).toHaveBeenCalledWith('acp.allowManualBinaryVersion', false, expect.anything())
+    expect(h.forceDownload).toHaveBeenCalledWith('1.0.0', undefined)
   })
 })

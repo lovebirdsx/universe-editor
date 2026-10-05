@@ -751,8 +751,10 @@ export const ZH_CN_MESSAGES: MessageMap = {
   // --- Settings ---
   'settings.acp.agents':
     '自定义 ACP 兼容 Agent 命令。每项都需要 `id`、`command`；`args`、`env`、`cwd` 可选。Env 值会以明文存储 - 请将 API 密钥保存在真实环境变量中。',
+  'settings.acp.allowManualBinaryVersion':
+    '允许手动选择 Claude / codex-acp 二进制文件的版本（而不是编辑器内置锁定的那一个）。默认关闭：受管二进制始终跟随内置锁定版本，因此手动选过的版本不会跨编辑器升级存活。打开后可在 Agent 设置的 Binary 区在内置版本与最新版本之间切换——非内置版本未经本构建验证，可能启动失败或行为异常。',
   'settings.acp.autoUpgradeBinaries':
-    '当编辑器升级改变了内置 Agent 锁定的 Claude / codex-acp 版本时，在后台把受管二进制文件切换到新的锁定版本（仅当正在使用受管下载）。从未下载过二进制的 Agent 不会被下载。手动选过的版本在锁定版本再次变化前保持不变——但本次更新后的首次运行会先对齐一次（此时还没有对齐记录）。远程工作区下在远端主机上切换。关闭则始终停留在当前已安装的版本。',
+    '当编辑器升级改变了内置 Agent 锁定的 Claude / codex-acp 版本时，在后台把受管二进制文件切换到新的锁定版本（仅当正在使用受管下载）。仅在 `acp.allowManualBinaryVersion` 打开时起作用——关闭手动选择（默认）时二进制本来就始终跟随锁定版本。从未下载过二进制的 Agent 不会被下载。手动选过的版本在锁定版本再次变化前保持不变——但本次更新后的首次运行会先对齐一次（此时还没有对齐记录）。远程工作区下在远端主机上切换。关闭则始终停留在当前已安装的版本。',
   'settings.acp.claude.executablePath':
     'Claude 可执行文件的绝对路径。仅当 `acp.claude.source` 为 "custom" 时使用。',
   'settings.tocAriaLabel': '设置分类',
@@ -3039,6 +3041,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'binaryPanel.version.download': '下载 {version}',
   'binaryPanel.version.downloadReady': '安装 {version}（本地已有，点击即切换）',
   'binaryPanel.version.downloadedLocally': '本地已有：{versions}',
+  'binaryPanel.version.locked': '版本选择已锁定为编辑器内置的版本。',
   'binaryPanel.version.downloading': '正在下载 {version}…',
   'binaryPanel.version.downloading.mb': '正在下载 {version}… {mb} MB',
   'binaryPanel.version.downloading.pct': '正在下载 {version}… {pct}%',
@@ -3099,6 +3102,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'codexBinaryPanel.version.download': '下载 {version}',
   'codexBinaryPanel.version.downloadReady': '安装 {version}（本地已有，点击即切换）',
   'codexBinaryPanel.version.downloadedLocally': '本地已有：{versions}',
+  'codexBinaryPanel.version.locked': '版本选择已锁定为编辑器内置的版本。',
   'codexBinaryPanel.version.downloading': '正在下载 {version}…',
   'codexBinaryPanel.version.downloading.mb': '正在下载 {version}… {mb} MB',
   'codexBinaryPanel.version.downloading.pct': '正在下载 {version}… {pct}%',
@@ -3140,6 +3144,16 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'agentBinary.autoUpgrade.local': '{name} 二进制文件已切换到 {version}（跟随编辑器内置版本）。',
   'agentBinary.autoUpgrade.remote':
     '远端主机 {authority} 上的 {name} 二进制文件已切换到 {version}（跟随编辑器内置版本）。',
+
+  // --- Agent binaries: manual version selection ---
+  'binaryVersion.manual.label': '允许手动选择版本',
+  'binaryVersion.manual.desc.off':
+    '二进制始终跟随编辑器内置锁定的版本，也就是经过本构建验证的那个版本。',
+  'binaryVersion.manual.desc.on': '可在内置版本与最新版本之间自由切换。非内置版本未经本构建验证。',
+  'binaryVersion.manual.confirm': '允许手动选择 {name} 二进制文件的版本？',
+  'binaryVersion.manual.confirm.detail':
+    '只有内置锁定版本经过本编辑器构建的验证。其它版本可能启动失败或行为异常。',
+  'binaryVersion.manual.confirm.primary': '允许手动选择',
 
   // --- Codex settings ---
   'codexSettings.approval': '审批策略',

@@ -7,7 +7,12 @@
 
 import * as path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { Emitter, type IDisposable, type ILoggerService } from '@universe-editor/platform'
+import {
+  Emitter,
+  type AgentBinaryVersionPolicy,
+  type IDisposable,
+  type ILoggerService,
+} from '@universe-editor/platform'
 import {
   type AgentBinaryDownloadState,
   type AgentBinaryId,
@@ -21,9 +26,14 @@ class FakeStore implements IDisposable {
   private readonly _onDownload = new Emitter<readonly AgentBinaryDownloadState[]>()
   readonly onDidChangeDownload = this._onDownload.event
   readonly resolves: boolean[] = []
+  /** Policy of every resolveDownload() call, in order. */
+  readonly resolvePolicies: AgentBinaryVersionPolicy[] = []
   versionInfoCalls: number = 0
+  readonly versionInfoPolicies: AgentBinaryVersionPolicy[] = []
   readonly forceDownloads: string[] = []
   prefetchCalls: number = 0
+  /** Policy of every prefetch() call, in order. */
+  readonly prefetchPolicies: AgentBinaryVersionPolicy[] = []
   cleanupCalls: number = 0
   syncBundledCalls: number = 0
   /** What the next syncBundled() reports as the version it switched to. */
@@ -34,13 +44,15 @@ class FakeStore implements IDisposable {
     readonly baseDir: string,
   ) {}
 
-  async resolveDownload(allowDownload: boolean): Promise<string> {
+  async resolveDownload(allowDownload: boolean, policy: AgentBinaryVersionPolicy): Promise<string> {
     this.resolves.push(allowDownload)
+    this.resolvePolicies.push(policy)
     return `/fake/${this.agent}`
   }
 
-  async getVersionInfo(): Promise<AgentBinaryVersionInfo> {
+  async getVersionInfo(policy: AgentBinaryVersionPolicy): Promise<AgentBinaryVersionInfo> {
     this.versionInfoCalls++
+    this.versionInfoPolicies.push(policy)
     return {
       bundledVersion: `bundled-${this.agent}`,
       installedVersion: null,
@@ -55,8 +67,9 @@ class FakeStore implements IDisposable {
     return `/fake/${this.agent}/${version}`
   }
 
-  async prefetch(): Promise<void> {
+  async prefetch(policy: AgentBinaryVersionPolicy): Promise<void> {
     this.prefetchCalls++
+    this.prefetchPolicies.push(policy)
   }
 
   async cleanupStaleVersions(): Promise<void> {
@@ -107,11 +120,16 @@ describe('RemoteAgentBinaryService', () => {
     try {
       expect(built).toHaveLength(0)
 
-      await expect(svc.resolve('claude', {})).resolves.toEqual({ path: '/fake/claude' })
+      await expect(svc.resolve('claude', { policy: 'pinned' })).resolves.toEqual({
+        path: '/fake/claude',
+      })
       expect(built).toEqual([{ agent: 'claude', baseDir: path.join('/data/agent-bin', 'claude') }])
       expect(stores.get('claude')!.resolves).toEqual([true])
+      expect(stores.get('claude')!.resolvePolicies).toEqual(['pinned'])
 
-      await expect(svc.resolve('codex', { allowDownload: false })).resolves.toEqual({
+      await expect(
+        svc.resolve('codex', { allowDownload: false, policy: 'manual' }),
+      ).resolves.toEqual({
         path: '/fake/codex',
       })
       expect(built).toEqual([
@@ -119,9 +137,10 @@ describe('RemoteAgentBinaryService', () => {
         { agent: 'codex', baseDir: path.join('/data/agent-bin', 'codex') },
       ])
       expect(stores.get('codex')!.resolves).toEqual([false])
+      expect(stores.get('codex')!.resolvePolicies).toEqual(['manual'])
 
       // Re-resolving an agent reuses its cached store (no rebuild).
-      await svc.resolve('claude', {})
+      await svc.resolve('claude', { policy: 'pinned' })
       expect(built).toHaveLength(2)
     } finally {
       svc.dispose()
@@ -139,7 +158,7 @@ describe('RemoteAgentBinaryService', () => {
       const sub = svc.onDidChangeDownload((e) => events.push(e))
       try {
         // Force construction of the claude store (and its subscription).
-        void svc.resolve('claude', {})
+        void svc.resolve('claude', { policy: 'pinned' })
         const claude = stores.get('claude')!
 
         claude.fireDownload([state(0, 100)]) // set grew from empty → always fires
@@ -177,7 +196,7 @@ describe('RemoteAgentBinaryService', () => {
       const events: AgentBinaryRemoteDownloadEvent[] = []
       const sub = svc.onDidChangeDownload((e) => events.push(e))
       try {
-        void svc.resolve('claude', {})
+        void svc.resolve('claude', { policy: 'pinned' })
         const claude = stores.get('claude')!
 
         // A second, concurrent download (background prefetch + a user click) must
@@ -213,8 +232,8 @@ describe('RemoteAgentBinaryService', () => {
       const events: AgentBinaryRemoteDownloadEvent[] = []
       const sub = svc.onDidChangeDownload((e) => events.push(e))
       try {
-        void svc.resolve('claude', {})
-        void svc.resolve('codex', {})
+        void svc.resolve('claude', { policy: 'pinned' })
+        void svc.resolve('codex', { policy: 'pinned' })
         const claude = stores.get('claude')!
         const codex = stores.get('codex')!
 
@@ -240,7 +259,7 @@ describe('RemoteAgentBinaryService', () => {
     const stores = new Map<AgentBinaryId, FakeStore>()
     const svc = makeService(built, stores)
     try {
-      await expect(svc.getVersionInfo('codex')).resolves.toEqual({
+      await expect(svc.getVersionInfo('codex', 'pinned')).resolves.toEqual({
         bundledVersion: 'bundled-codex',
         installedVersion: null,
         latestVersion: null,
@@ -248,6 +267,7 @@ describe('RemoteAgentBinaryService', () => {
         downloads: [],
       })
       expect(stores.get('codex')!.versionInfoCalls).toBe(1)
+      expect(stores.get('codex')!.versionInfoPolicies).toEqual(['pinned'])
       expect(stores.get('claude')).toBeUndefined()
     } finally {
       svc.dispose()
@@ -273,8 +293,9 @@ describe('RemoteAgentBinaryService', () => {
     const stores = new Map<AgentBinaryId, FakeStore>()
     const svc = makeService(built, stores)
     try {
-      await svc.prefetch('claude')
+      await svc.prefetch('claude', 'manual')
       expect(stores.get('claude')!.prefetchCalls).toBe(1)
+      expect(stores.get('claude')!.prefetchPolicies).toEqual(['manual'])
       expect(stores.get('codex')).toBeUndefined()
     } finally {
       svc.dispose()

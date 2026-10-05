@@ -7,7 +7,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { Emitter, Event, RemoteChannels } from '@universe-editor/platform'
+import {
+  Emitter,
+  Event,
+  RemoteChannels,
+  type AgentBinaryVersionPolicy,
+} from '@universe-editor/platform'
 import {
   AgentBinaryStore,
   type AgentBinaryDownloadState,
@@ -33,24 +38,31 @@ class FakeRemoteBinaryService implements IRemoteAgentBinaryService {
   declare readonly _serviceBrand: undefined
   private readonly _onDownload = new Emitter<AgentBinaryRemoteDownloadEvent>()
   readonly onDidChangeDownload = this._onDownload.event
-  readonly resolves: { agent: AgentBinaryId; allowDownload: boolean }[] = []
-  readonly versionInfos: AgentBinaryId[] = []
+  readonly resolves: {
+    agent: AgentBinaryId
+    allowDownload: boolean
+    policy: AgentBinaryVersionPolicy
+  }[] = []
+  readonly versionInfos: { agent: AgentBinaryId; policy: AgentBinaryVersionPolicy }[] = []
   readonly forceDownloads: { agent: AgentBinaryId; version: string }[] = []
-  readonly prefetches: AgentBinaryId[] = []
+  readonly prefetches: { agent: AgentBinaryId; policy: AgentBinaryVersionPolicy }[] = []
   readonly cleanups: AgentBinaryId[] = []
   readonly syncs: AgentBinaryId[] = []
   syncResult: string | null = null
 
   async resolve(
     agent: AgentBinaryId,
-    opts: { readonly allowDownload?: boolean },
+    opts: { readonly allowDownload?: boolean; readonly policy: AgentBinaryVersionPolicy },
   ): Promise<{ readonly path: string }> {
-    this.resolves.push({ agent, allowDownload: opts.allowDownload ?? true })
+    this.resolves.push({ agent, allowDownload: opts.allowDownload ?? true, policy: opts.policy })
     return { path: `/remote/${agent}` }
   }
 
-  async getVersionInfo(agent: AgentBinaryId): Promise<AgentBinaryVersionInfo> {
-    this.versionInfos.push(agent)
+  async getVersionInfo(
+    agent: AgentBinaryId,
+    policy: AgentBinaryVersionPolicy,
+  ): Promise<AgentBinaryVersionInfo> {
+    this.versionInfos.push({ agent, policy })
     return {
       bundledVersion: `bundled-${agent}`,
       installedVersion: `installed-${agent}`,
@@ -65,8 +77,8 @@ class FakeRemoteBinaryService implements IRemoteAgentBinaryService {
     return { path: `/remote/${agent}/${version}` }
   }
 
-  async prefetch(agent: AgentBinaryId): Promise<void> {
-    this.prefetches.push(agent)
+  async prefetch(agent: AgentBinaryId, policy: AgentBinaryVersionPolicy): Promise<void> {
+    this.prefetches.push({ agent, policy })
   }
 
   async cleanupStaleVersions(agent: AgentBinaryId): Promise<void> {
@@ -131,17 +143,31 @@ describe('ClaudeBinaryMainService — remote routing', () => {
     svc = fixture.svc
 
     await expect(
-      svc.resolve({ source: 'custom', customPath: '/local/claude.exe', authority: 'host' }),
+      svc.resolve({
+        source: 'custom',
+        customPath: '/local/claude.exe',
+        authority: 'host',
+        policy: 'pinned',
+      }),
     ).resolves.toEqual({ path: '/remote/claude' })
-    expect(fixture.remote.resolves).toEqual([{ agent: 'claude', allowDownload: true }])
+    expect(fixture.remote.resolves).toEqual([
+      { agent: 'claude', allowDownload: true, policy: 'pinned' },
+    ])
   })
 
-  it('forwards allowDownload:false verbatim to the remote resolve', async () => {
+  it('forwards allowDownload:false and the policy verbatim to the remote resolve', async () => {
     const fixture = makeFixture()
     svc = fixture.svc
 
-    await svc.resolve({ source: 'download', authority: 'host', allowDownload: false })
-    expect(fixture.remote.resolves).toEqual([{ agent: 'claude', allowDownload: false }])
+    await svc.resolve({
+      source: 'download',
+      authority: 'host',
+      allowDownload: false,
+      policy: 'manual',
+    })
+    expect(fixture.remote.resolves).toEqual([
+      { agent: 'claude', allowDownload: false, policy: 'manual' },
+    ])
   })
 
   it('forwards remote download state with the authority attached, filtering out codex events', async () => {
@@ -150,7 +176,7 @@ describe('ClaudeBinaryMainService — remote routing', () => {
     const events: IClaudeBinaryDownloadEvent[] = []
     const sub = svc.onDidChangeDownload((e) => events.push(e))
     try {
-      await svc.resolve({ source: 'download', authority: 'host' })
+      await svc.resolve({ source: 'download', authority: 'host', policy: 'pinned' })
 
       fixture.remote.fireDownload({ agent: 'claude', downloads: downloading(5, 100) })
       fixture.remote.fireDownload({ agent: 'codex', downloads: downloading(9, 100) })
@@ -165,18 +191,18 @@ describe('ClaudeBinaryMainService — remote routing', () => {
     }
   })
 
-  it('routes getVersionInfo(authority) to the remote channel with the claude agent id', async () => {
+  it('routes getVersionInfo(policy, authority) to the remote channel with the claude agent id', async () => {
     const fixture = makeFixture()
     svc = fixture.svc
 
-    await expect(svc.getVersionInfo('host')).resolves.toEqual({
+    await expect(svc.getVersionInfo('pinned', 'host')).resolves.toEqual({
       bundledVersion: 'bundled-claude',
       installedVersion: 'installed-claude',
       latestVersion: 'latest-claude',
       downloadedVersions: ['installed-claude'],
       downloads: [],
     })
-    expect(fixture.remote.versionInfos).toEqual(['claude'])
+    expect(fixture.remote.versionInfos).toEqual([{ agent: 'claude', policy: 'pinned' }])
   })
 
   it('routes forceDownload(version, authority) to the remote channel and passes the version through', async () => {
@@ -189,12 +215,12 @@ describe('ClaudeBinaryMainService — remote routing', () => {
     expect(fixture.remote.forceDownloads).toEqual([{ agent: 'claude', version: '1.2.3' }])
   })
 
-  it('routes prefetch(authority) to the remote channel with the claude agent id', async () => {
+  it('routes prefetch(policy, authority) to the remote channel with the claude agent id', async () => {
     const fixture = makeFixture()
     svc = fixture.svc
 
-    await svc.prefetch('host')
-    expect(fixture.remote.prefetches).toEqual(['claude'])
+    await svc.prefetch('pinned', 'host')
+    expect(fixture.remote.prefetches).toEqual([{ agent: 'claude', policy: 'pinned' }])
   })
 
   it('routes cleanupStaleVersions(authority) to the remote channel with the claude agent id', async () => {
@@ -210,8 +236,9 @@ describe('ClaudeBinaryMainService — remote routing', () => {
     svc = fixture.svc
     const spy = vi.spyOn(AgentBinaryStore.prototype, 'prefetch').mockResolvedValue(undefined)
     try {
-      await svc.prefetch()
+      await svc.prefetch('manual')
       expect(spy).toHaveBeenCalledTimes(1)
+      expect(spy).toHaveBeenCalledWith('manual')
       expect(fixture.remote.prefetches).toEqual([])
     } finally {
       spy.mockRestore()
@@ -257,17 +284,17 @@ describe('ClaudeBinaryMainService — remote routing', () => {
 
   it('rejects an authority resolve when no connection service is injected', async () => {
     svc = new ClaudeBinaryMainService()
-    await expect(svc.resolve({ source: 'download', authority: 'host' })).rejects.toThrow(
-      /remote connection service not available/,
-    )
+    await expect(
+      svc.resolve({ source: 'download', authority: 'host', policy: 'pinned' }),
+    ).rejects.toThrow(/remote connection service not available/)
   })
 
   it('routes repeated resolves through getServiceProxy with the AgentBinary channel', async () => {
     const fixture = makeFixture()
     svc = fixture.svc
 
-    await svc.resolve({ source: 'download', authority: 'host' })
-    await svc.resolve({ source: 'download', authority: 'host' })
+    await svc.resolve({ source: 'download', authority: 'host', policy: 'pinned' })
+    await svc.resolve({ source: 'download', authority: 'host', policy: 'pinned' })
 
     expect(fixture.proxyCalls).toEqual([
       { authority: 'host', channel: RemoteChannels.AgentBinary },
@@ -281,8 +308,8 @@ describe('ClaudeBinaryMainService — remote routing', () => {
     const events: IClaudeBinaryDownloadEvent[] = []
     const sub = svc.onDidChangeDownload((e) => events.push(e))
     try {
-      await svc.resolve({ source: 'download', authority: 'host' })
-      await svc.resolve({ source: 'download', authority: 'host' })
+      await svc.resolve({ source: 'download', authority: 'host', policy: 'pinned' })
+      await svc.resolve({ source: 'download', authority: 'host', policy: 'pinned' })
 
       fixture.remote.fireDownload({ agent: 'claude', downloads: downloading(5, 100) })
 

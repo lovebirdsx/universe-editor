@@ -11,7 +11,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as path from 'node:path'
-import { Disposable, Emitter, type ILoggerService } from '@universe-editor/platform'
+import {
+  Disposable,
+  Emitter,
+  type AgentBinaryVersionPolicy,
+  type ILoggerService,
+} from '@universe-editor/platform'
 import {
   AgentBinaryStore,
   codexFlavor,
@@ -61,21 +66,26 @@ export class RemoteAgentBinaryService extends Disposable implements IRemoteAgent
 
   async resolve(
     agent: AgentBinaryId,
-    opts: { readonly allowDownload?: boolean },
+    opts: { readonly allowDownload?: boolean; readonly policy: AgentBinaryVersionPolicy },
   ): Promise<{ readonly path: string }> {
-    return { path: await this._storeFor(agent).resolveDownload(opts.allowDownload ?? true) }
+    return {
+      path: await this._storeFor(agent).resolveDownload(opts.allowDownload ?? true, opts.policy),
+    }
   }
 
-  async getVersionInfo(agent: AgentBinaryId): Promise<AgentBinaryVersionInfo> {
-    return this._storeFor(agent).getVersionInfo()
+  async getVersionInfo(
+    agent: AgentBinaryId,
+    policy: AgentBinaryVersionPolicy,
+  ): Promise<AgentBinaryVersionInfo> {
+    return this._storeFor(agent).getVersionInfo(policy)
   }
 
   async forceDownload(agent: AgentBinaryId, version: string): Promise<{ readonly path: string }> {
     return { path: await this._storeFor(agent).forceDownload(version) }
   }
 
-  async prefetch(agent: AgentBinaryId): Promise<void> {
-    await this._storeFor(agent).prefetch()
+  async prefetch(agent: AgentBinaryId, policy: AgentBinaryVersionPolicy): Promise<void> {
+    await this._storeFor(agent).prefetch(policy)
   }
 
   async cleanupStaleVersions(agent: AgentBinaryId): Promise<void> {

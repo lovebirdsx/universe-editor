@@ -22,6 +22,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  type AgentBinaryVersionPolicy,
   createDecorator,
   Disposable,
   DisposableStore,
@@ -89,6 +90,7 @@ import {
 import { IClaudeConfigService } from '../../../shared/ipc/claudeConfigService.js'
 import { IRemoteStatusService } from '../../../shared/ipc/remoteStatusService.js'
 import { IAcpAgentRegistry } from './acpAgentRegistry.js'
+import { binaryVersionPolicy } from './binaryVersionPolicy.js'
 import { IAcpPathPolicy, type AcpPathPolicyEnv } from './acpPathPolicy.js'
 import { SUBAGENT_TRANSCRIPT_CAPABILITY } from './session/acpExtMethods.js'
 import { createSdkHostStream, type SdkHostStream } from './sdkHostStream.js'
@@ -525,7 +527,12 @@ export class AcpClientService extends Disposable implements IAcpClientService {
     // semantics and is deliberately ignored for remote spawns.
     const authority = spec.authority
     const opts: IClaudeBinaryResolveOptions = authority
-      ? { source: 'download', allowDownload: !silent, authority }
+      ? {
+          source: 'download',
+          allowDownload: !silent,
+          authority,
+          policy: binaryVersionPolicy(this._config),
+        }
       : this._localBinaryResolveOpts(silent, 'acp.claude.source', 'acp.claude.executablePath')
 
     const result = await this._resolveBinaryWithProgress(
@@ -582,7 +589,12 @@ export class AcpClientService extends Disposable implements IAcpClientService {
     // and is deliberately ignored for remote spawns.
     const authority = spec.authority
     const opts: ICodexBinaryResolveOptions = authority
-      ? { source: 'download', allowDownload: !silent, authority }
+      ? {
+          source: 'download',
+          allowDownload: !silent,
+          authority,
+          policy: binaryVersionPolicy(this._config),
+        }
       : this._localBinaryResolveOpts(silent, 'acp.codex.source', 'acp.codex.executablePath')
 
     const result = await this._resolveBinaryWithProgress(
@@ -614,12 +626,14 @@ export class AcpClientService extends Disposable implements IAcpClientService {
     readonly source: ClaudeBinarySource
     readonly customPath?: string
     readonly allowDownload: boolean
+    readonly policy: AgentBinaryVersionPolicy
   } {
     const source = (this._config.get<string>(sourceKey) ?? 'download') as ClaudeBinarySource
     const customPath = this._config.get<string>(pathKey) ?? ''
+    const policy = binaryVersionPolicy(this._config)
     return source === 'custom'
-      ? { source, customPath, allowDownload: !silent }
-      : { source, allowDownload: !silent }
+      ? { source, customPath, allowDownload: !silent, policy }
+      : { source, allowDownload: !silent, policy }
   }
 
   /**

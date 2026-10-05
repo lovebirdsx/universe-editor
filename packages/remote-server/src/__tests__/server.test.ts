@@ -105,9 +105,9 @@ describe('createRemoteServer', () => {
       const svc = getClient<IRemoteAgentBinaryService>(RemoteChannels.AgentBinary)
       // A download-mode cache miss with allowDownload:false must fail fast — this
       // proves the channel is wired through to a real store without any network.
-      await expect(svc.resolve('codex', { allowDownload: false })).rejects.toThrow(
-        /not downloaded yet/,
-      )
+      await expect(
+        svc.resolve('codex', { allowDownload: false, policy: 'pinned' }),
+      ).rejects.toThrow(/not downloaded yet/)
       // syncBundled crosses the wire too: nothing was ever downloaded here, so it
       // only records the pin and reports "nothing to do" — no registry round-trip.
       const fetchSpy = vi.spyOn(globalThis, 'fetch')

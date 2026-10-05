@@ -93,13 +93,13 @@ describe('CodexBinaryMainService — runtime version floor', () => {
     const binary = await writeFakeBinary(dir, 'codex', 'codex-cli 0.1.0')
     const svc = new CodexBinaryMainService(loggerService)
     try {
-      await expect(svc.resolve({ source: 'custom', customPath: binary })).rejects.toThrow(
-        /0\.1\.0, older than the 0\.159\.1 this build requires/,
-      )
+      await expect(
+        svc.resolve({ source: 'custom', customPath: binary, policy: 'pinned' }),
+      ).rejects.toThrow(/0\.1\.0, older than the 0\.159\.1 this build requires/)
       // The refused path must name the ways out, not just the error.
-      await expect(svc.resolve({ source: 'custom', customPath: binary })).rejects.toThrow(
-        /acp\.codex\.executablePath/,
-      )
+      await expect(
+        svc.resolve({ source: 'custom', customPath: binary, policy: 'pinned' }),
+      ).rejects.toThrow(/acp\.codex\.executablePath/)
     } finally {
       svc.dispose()
     }
@@ -110,7 +110,9 @@ describe('CodexBinaryMainService — runtime version floor', () => {
     const binary = await writeFakeBinary(dir, 'codex', `codex-cli ${CODEX_VERSION}`)
     const svc = new CodexBinaryMainService(loggerService)
     try {
-      await expect(svc.resolve({ source: 'custom', customPath: binary })).resolves.toEqual({
+      await expect(
+        svc.resolve({ source: 'custom', customPath: binary, policy: 'pinned' }),
+      ).resolves.toEqual({
         path: binary,
       })
     } finally {
@@ -123,7 +125,9 @@ describe('CodexBinaryMainService — runtime version floor', () => {
     const binary = await writeFakeBinary(dir, 'codex', 'codex-cli 0.160.0')
     const svc = new CodexBinaryMainService(loggerService)
     try {
-      await expect(svc.resolve({ source: 'custom', customPath: binary })).resolves.toEqual({
+      await expect(
+        svc.resolve({ source: 'custom', customPath: binary, policy: 'pinned' }),
+      ).resolves.toEqual({
         path: binary,
       })
     } finally {
@@ -136,7 +140,9 @@ describe('CodexBinaryMainService — runtime version floor', () => {
     const binary = await writeFakeBinary(dir, 'codex', 'command not found')
     const svc = new CodexBinaryMainService(loggerService)
     try {
-      await expect(svc.resolve({ source: 'custom', customPath: binary })).resolves.toEqual({
+      await expect(
+        svc.resolve({ source: 'custom', customPath: binary, policy: 'pinned' }),
+      ).resolves.toEqual({
         path: binary,
       })
       expect(logSink.some((m) => m.includes('could not read the version'))).toBe(true)
@@ -151,7 +157,9 @@ describe('CodexBinaryMainService — runtime version floor', () => {
     await writeFile(binary, 'codex-cli 0.1.0\n')
     const svc = new CodexBinaryMainService(loggerService)
     try {
-      await expect(svc.resolve({ source: 'custom', customPath: binary })).resolves.toEqual({
+      await expect(
+        svc.resolve({ source: 'custom', customPath: binary, policy: 'pinned' }),
+      ).resolves.toEqual({
         path: binary,
       })
       expect(logSink.some((m) => m.includes('could not read the version'))).toBe(true)
@@ -166,7 +174,9 @@ describe('CodexBinaryMainService — runtime version floor', () => {
     const svc = new CodexBinaryMainService(loggerService)
     try {
       await withPrependedPath(dir, async () => {
-        await expect(svc.resolve({ source: 'system' })).rejects.toThrow(/0\.150\.0/)
+        await expect(svc.resolve({ source: 'system', policy: 'pinned' })).rejects.toThrow(
+          /0\.150\.0/,
+        )
       })
     } finally {
       svc.dispose()
@@ -179,7 +189,9 @@ describe('CodexBinaryMainService — runtime version floor', () => {
     const svc = new CodexBinaryMainService(loggerService)
     try {
       await withPrependedPath(dir, async () => {
-        await expect(svc.resolve({ source: 'system' })).resolves.toEqual({ path: binary })
+        await expect(svc.resolve({ source: 'system', policy: 'pinned' })).resolves.toEqual({
+          path: binary,
+        })
       })
     } finally {
       svc.dispose()
@@ -197,7 +209,9 @@ describe('CodexBinaryMainService — runtime version floor', () => {
 
     const svc = new CodexBinaryMainService(loggerService)
     try {
-      await expect(svc.resolve({ source: 'download', allowDownload: false })).resolves.toEqual({
+      await expect(
+        svc.resolve({ source: 'download', allowDownload: false, policy: 'manual' }),
+      ).resolves.toEqual({
         path: stale,
       })
 
@@ -207,7 +221,9 @@ describe('CodexBinaryMainService — runtime version floor', () => {
       await writeFile(pinned, 'MZ')
       await writeFile(path.join(baseDir, '.active'), CODEX_VERSION, 'utf8')
 
-      await expect(svc.resolve({ source: 'download', allowDownload: false })).resolves.toEqual({
+      await expect(
+        svc.resolve({ source: 'download', allowDownload: false, policy: 'manual' }),
+      ).resolves.toEqual({
         path: pinned,
       })
     } finally {

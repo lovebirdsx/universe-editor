@@ -28,6 +28,9 @@ import {
 import { useEventSubscription, useService } from '../../useService.js'
 import { useRemoteAuthority } from '../../useRemoteAuthority.js'
 import { computeBinaryVersionActions, deriveBinaryActionState } from '../binaryVersionActions.js'
+import { BinaryVersionToggle } from '../BinaryVersionToggle.js'
+import { useManualBinaryVersion } from '../useManualBinaryVersion.js'
+import { binaryVersionPolicy } from '../../../services/acp/binaryVersionPolicy.js'
 import type { UseClaudeConfig } from './useClaudeConfig.js'
 import styles from '../AgentSettingsEditor.module.css'
 
@@ -37,6 +40,7 @@ export function BinaryPanel(_props: { config: UseClaudeConfig }) {
   const notifications = useService(INotificationService)
   const host = useService(IHostService)
   const authority = useRemoteAuthority()
+  const manual = useManualBinaryVersion()
 
   const [source, setSourceState] = useState<ClaudeBinarySource>(
     () => (config.get<string>('acp.claude.source') ?? 'download') as ClaudeBinarySource,
@@ -57,7 +61,7 @@ export function BinaryPanel(_props: { config: UseClaudeConfig }) {
     setLoadingVersion(true)
     setLoadError(null)
     void claudeBinary
-      .getVersionInfo(authority)
+      .getVersionInfo(binaryVersionPolicy(config), authority)
       .then((info) => {
         setVersionInfo(info)
         if (!sawEventRef.current) {
@@ -67,17 +71,18 @@ export function BinaryPanel(_props: { config: UseClaudeConfig }) {
       })
       .catch((err: unknown) => setLoadError(String(err)))
       .finally(() => setLoadingVersion(false))
-  }, [claudeBinary, authority])
+  }, [claudeBinary, config, authority])
 
   useEffect(() => {
     // A different host has a different download set entirely, so drop what we
     // have before re-reading. (Info itself is kept — clearing it would flash
-    // "Loading…" on every refresh.)
+    // "Loading…" on every refresh.) A policy flip re-reads too: the same tree
+    // reports a different effective version under the other policy.
     sawEventRef.current = false
     downloadsRef.current = []
     setDownloads([])
     loadVersionInfo()
-  }, [loadVersionInfo])
+  }, [loadVersionInfo, manual])
 
   // Long-lived subscription, not one scoped to a click: the download keeps running
   // in the main process while this panel is unmounted, so the state has to be
@@ -148,6 +153,23 @@ export function BinaryPanel(_props: { config: UseClaudeConfig }) {
   )
 
   const isRemote = authority !== undefined
+
+  /**
+   * Locking back is the disruptive direction and needs no confirmation — but it
+   * does need an immediate switch: the pinned version becomes the only choice, so
+   * waiting for the next idle alignment would keep the picked version running in
+   * the meantime. `handleUpgrade` is exactly that switch (download if needed,
+   * notify, reload) and is a no-op when the pin is already installed.
+   */
+  const handleManualChange = useCallback(
+    (next: boolean) => {
+      config.update('acp.allowManualBinaryVersion', next, ConfigurationTarget.User)
+      if (next) return
+      const pin = versionInfo?.bundledVersion
+      if (pin !== undefined && versionInfo?.installedVersion !== pin) handleUpgrade(pin)
+    },
+    [config, versionInfo, handleUpgrade],
+  )
 
   return (
     <div className={styles['panel']}>
@@ -230,8 +252,10 @@ export function BinaryPanel(_props: { config: UseClaudeConfig }) {
             downloads={downloads}
             loadError={loadError}
             loading={loadingVersion}
+            manual={manual}
             onUpgrade={handleUpgrade}
           />
+          <BinaryVersionToggle manual={manual} name="Claude" onChange={handleManualChange} />
         </section>
       )}
     </div>
@@ -304,10 +328,12 @@ interface VersionInfoProps {
   downloads: readonly IClaudeBinaryDownload[]
   loadError: string | null
   loading: boolean
+  /** Manual selection on: the latest version is an actual choice. Off: the pin is the only one. */
+  manual: boolean
   onUpgrade(version: string): void
 }
 
-function VersionInfo({ info, downloads, loadError, loading, onUpgrade }: VersionInfoProps) {
+function VersionInfo({ info, downloads, loadError, loading, manual, onUpgrade }: VersionInfoProps) {
   if (loading && !info) {
     return (
       <div className={styles['statusRow']}>
@@ -334,8 +360,17 @@ function VersionInfo({ info, downloads, loadError, loading, onUpgrade }: Version
   }
 
   const { bundledVersion, installedVersion, latestVersion, downloadedVersions } = info
-  const isUpToDate = latestVersion !== null && installedVersion === latestVersion
-  const { showDownloadBundled, showRevertToBundled, showLatest } = computeBinaryVersionActions(info)
+  // Locked to the pin there is no latest to compare against — the pin's presence
+  // on disk is the whole of "up to date".
+  const isUpToDate = manual
+    ? latestVersion !== null && installedVersion === latestVersion
+    : installedVersion === bundledVersion
+  const { showDownloadBundled, showRevertToBundled, showLatest } = computeBinaryVersionActions({
+    ...info,
+    // Locked: the pin is the only switchable version, so a `latest` a snapshot
+    // taken under the other policy still carries must never become a button.
+    latestVersion: manual ? latestVersion : null,
+  })
   // `downloads` is live, so a download this panel started (or one already running
   // when it mounted) swaps its own button for the progress row immediately.
   const diskState = { downloadedVersions, downloads }
@@ -374,22 +409,35 @@ function VersionInfo({ info, downloads, loadError, loading, onUpgrade }: Version
         )}
       </div>
 
-      {/* Latest version */}
-      <div className={styles['statusRow']}>
-        <span className={styles['statusMuted']}>
-          {latestVersion !== null
-            ? localize('binaryPanel.version.latest', 'Latest: {version}', {
-                version: latestVersion,
-              })
-            : localize(
-                'binaryPanel.version.latestUnavailable',
-                'Latest: unavailable (network error)',
-              )}
-        </span>
-      </div>
+      {/* Latest version — only a real choice while manual selection is on */}
+      {manual && (
+        <div className={styles['statusRow']}>
+          <span className={styles['statusMuted']}>
+            {latestVersion !== null
+              ? localize('binaryPanel.version.latest', 'Latest: {version}', {
+                  version: latestVersion,
+                })
+              : localize(
+                  'binaryPanel.version.latestUnavailable',
+                  'Latest: unavailable (network error)',
+                )}
+          </span>
+        </div>
+      )}
+
+      {!manual && (
+        <div className={styles['statusRow']}>
+          <span className={styles['statusMuted']}>
+            {localize(
+              'binaryPanel.version.locked',
+              'Version selection is locked to the version this build is pinned to.',
+            )}
+          </span>
+        </div>
+      )}
 
       {/* Versions already on disk — a switch to one of these needs no download */}
-      {downloadedVersions.length > 0 && (
+      {manual && downloadedVersions.length > 0 && (
         <div className={styles['statusRow']}>
           <span className={styles['statusMuted']}>
             {localize('binaryPanel.version.downloadedLocally', 'Available locally: {versions}', {

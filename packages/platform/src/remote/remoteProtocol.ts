@@ -64,10 +64,14 @@ import type { WatcherHostRequest, WatcherHostResponse } from '../files/watcherPr
  * answers it with an unknown-method error, so the new client could never align a
  * remote host's managed binary with the editor's pin. The handshake must fail
  * instead.
+ * v13 → v14: the agentBinary channel's `resolve` / `getVersionInfo` / `prefetch`
+ * gain the version policy — an older daemon ignores it and keeps honouring the
+ * host's `.active` pointer, so a client that locked the binary to its pin would
+ * silently keep spawning whatever version a user picked by hand.
  * Remote-workspace users must restart the daemon after upgrading: an old
- * daemon fails the handshake with `protocol version 12 != 13`.
+ * daemon fails the handshake with `protocol version 13 != 14`.
  */
-export const REMOTE_PROTOCOL_VERSION = 13
+export const REMOTE_PROTOCOL_VERSION = 14
 
 /** Scheme of remote workspace resources: `remote-ssh://<authority>/<path>`. */
 export const REMOTE_SCHEME = 'remote-ssh'

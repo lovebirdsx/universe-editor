@@ -104,7 +104,7 @@ describe('ClaudeBinaryMainService.syncBundled', () => {
 
     // The session resolved (and cached) the version that was active before the pin
     // moved — a hand-picked newer one, which the runtime floor leaves alone.
-    const before = await svc.resolve({ source: 'download' })
+    const before = await svc.resolve({ source: 'download', policy: 'manual' })
     expect(before.path).toBe(path.join(binDir(PICKED_VERSION), binName()))
 
     await expect(svc.syncBundled()).resolves.toBe(SDK_VERSION)
@@ -114,7 +114,7 @@ describe('ClaudeBinaryMainService.syncBundled', () => {
     expect(fetchSpy).not.toHaveBeenCalled()
     // The trap this guards: a still-cached resolve would keep handing out the old
     // dir — and thus the old binary — for the rest of the session.
-    const after = await svc.resolve({ source: 'download' })
+    const after = await svc.resolve({ source: 'download', policy: 'manual' })
     expect(after.path).toBe(path.join(binDir(SDK_VERSION), binName()))
   })
 
@@ -124,15 +124,15 @@ describe('ClaudeBinaryMainService.syncBundled', () => {
     await writeBinary(binDir(SDK_VERSION))
     await writeActive(PICKED_VERSION)
 
-    // `allowDownload:false` results are deliberately never cached (the store may
-    // answer with a below-pin fallback), so this must re-read `.active` — the same
-    // guarantee the eviction above provides for the download path.
-    const before = await svc.resolve({ source: 'download', allowDownload: false })
+    // The `allowDownload:false` key is dropped by the same `.active` flip — a
+    // background resolve must re-read the pointer, not hand out the pre-alignment
+    // binary (which the store may even answer from a below-pin fallback).
+    const before = await svc.resolve({ source: 'download', allowDownload: false, policy: 'manual' })
     expect(before.path).toBe(path.join(binDir(PICKED_VERSION), binName()))
 
     await expect(svc.syncBundled()).resolves.toBe(SDK_VERSION)
 
-    const after = await svc.resolve({ source: 'download', allowDownload: false })
+    const after = await svc.resolve({ source: 'download', allowDownload: false, policy: 'manual' })
     expect(after.path).toBe(path.join(binDir(SDK_VERSION), binName()))
   })
 

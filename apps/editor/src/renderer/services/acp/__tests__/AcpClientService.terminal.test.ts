@@ -854,6 +854,7 @@ describe('AcpClientService — remote binary injection', () => {
         source: 'download',
         allowDownload: true,
         authority: REMOTE,
+        policy: 'pinned',
       })
       expect(h.claudeConfigRead).toHaveBeenCalledWith(REMOTE)
     } finally {
@@ -879,6 +880,7 @@ describe('AcpClientService — remote binary injection', () => {
         source: 'download',
         allowDownload: true,
         authority: REMOTE,
+        policy: 'pinned',
       })
     } finally {
       conn.dispose()
@@ -899,7 +901,24 @@ describe('AcpClientService — remote binary injection', () => {
         source: 'download',
         allowDownload: false,
         authority: REMOTE,
+        policy: 'pinned',
       })
+    } finally {
+      conn.dispose()
+    }
+  })
+
+  it('forwards the manual version policy once the user unlocked version selection', async () => {
+    h = makeService({ config: { 'acp.allowManualBinaryVersion': true } })
+    h.claudeResolve.mockResolvedValueOnce({ path: '/remote/bin/claude' })
+
+    const conn = await h.svc.connect('claude-code', {
+      cwd: CWD,
+      authority: REMOTE,
+      leaseFor: SESSION_ID,
+    })
+    try {
+      expect(h.claudeResolve.mock.calls[0]![0]).toMatchObject({ policy: 'manual' })
     } finally {
       conn.dispose()
     }

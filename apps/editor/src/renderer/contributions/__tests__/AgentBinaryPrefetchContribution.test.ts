@@ -4,8 +4,10 @@
  *  codex-acp binaries runs as sweep → align → prefetch and follows the remote
  *  workspace:
  *    - local workspace: the local sweep always runs once, then alignment and
- *      prefetch run once when their settings allow it (`acp.autoUpgradeBinaries` /
- *      `acp.prefetchBinaries`) and the per-agent source is "download".
+ *      prefetch run once when their gates allow it — alignment under the locked
+ *      version policy always, under `'manual'` only while `acp.autoUpgradeBinaries`
+ *      is on; prefetch while `acp.prefetchBinaries` is on — and the per-agent
+ *      source is "download".
  *    - remote workspace: the current authority's managed store is swept, aligned
  *      and prefetched (once), without running local alignment/prefetch; the local
  *      source setting is never consulted across the tunnel.
@@ -179,8 +181,8 @@ describe('AgentBinaryPrefetchContribution', () => {
     expect(codex.cleanupStaleVersions).toHaveBeenCalledTimes(1)
     expect(claude.prefetch).toHaveBeenCalledTimes(1)
     expect(codex.prefetch).toHaveBeenCalledTimes(1)
-    // Local prefetch is called without an authority argument.
-    expect(claude.prefetch).toHaveBeenCalledWith()
+    // Local prefetch carries the version policy but no authority argument.
+    expect(claude.prefetch).toHaveBeenCalledWith('pinned')
 
     contribution.dispose()
   })
@@ -247,10 +249,10 @@ describe('AgentBinaryPrefetchContribution', () => {
     expect(codex.cleanupStaleVersions).toHaveBeenCalledWith(AUTHORITY)
     // Remote prefetch ran once with the authority; local prefetch never ran.
     expect(claude.prefetch).toHaveBeenCalledTimes(1)
-    expect(claude.prefetch).toHaveBeenCalledWith(AUTHORITY)
+    expect(claude.prefetch).toHaveBeenCalledWith('pinned', AUTHORITY)
     expect(codex.prefetch).toHaveBeenCalledTimes(1)
-    expect(codex.prefetch).toHaveBeenCalledWith(AUTHORITY)
-    expect(claude.prefetch).not.toHaveBeenCalledWith(undefined)
+    expect(codex.prefetch).toHaveBeenCalledWith('pinned', AUTHORITY)
+    expect(claude.prefetch).not.toHaveBeenCalledWith('pinned', undefined)
 
     contribution.dispose()
   })
@@ -295,9 +297,9 @@ describe('AgentBinaryPrefetchContribution', () => {
     expect(claude.cleanupStaleVersions).toHaveBeenCalledWith(AUTHORITY)
     expect(codex.cleanupStaleVersions).toHaveBeenCalledWith(AUTHORITY)
     expect(claude.prefetch).toHaveBeenCalledTimes(1)
-    expect(claude.prefetch).toHaveBeenCalledWith(AUTHORITY)
+    expect(claude.prefetch).toHaveBeenCalledWith('pinned', AUTHORITY)
     expect(codex.prefetch).toHaveBeenCalledTimes(1)
-    expect(codex.prefetch).toHaveBeenCalledWith(AUTHORITY)
+    expect(codex.prefetch).toHaveBeenCalledWith('pinned', AUTHORITY)
 
     contribution.dispose()
   })
@@ -357,6 +359,9 @@ describe('AgentBinaryPrefetchContribution', () => {
   const alignOn = {
     'acp.prefetchBinaries': true,
     'acp.autoUpgradeBinaries': true,
+    // Alignment only ever runs while the user has unlocked manual version
+    // selection — under the default lock the pin is already what resolve() uses.
+    'acp.allowManualBinaryVersion': true,
     'acp.claude.source': 'download',
     'acp.codex.source': 'download',
   }
@@ -438,11 +443,45 @@ describe('AgentBinaryPrefetchContribution', () => {
     contribution.dispose()
   })
 
+  it('aligns under the locked policy even when acp.autoUpgradeBinaries is false, prefetching the pin', async () => {
+    const { claude, codex, workspace, contribution } = setup({
+      config: {
+        ...alignOn,
+        'acp.allowManualBinaryVersion': false,
+        'acp.autoUpgradeBinaries': false,
+      },
+    })
+
+    workspace.setCurrent(workspace.current)
+    await settle()
+
+    // Locked: the pin binding is not the user's to turn off, so alignment runs
+    // regardless of `acp.autoUpgradeBinaries` (which only governs manual mode).
+    expect(claude.syncBundled).toHaveBeenCalledTimes(1)
+    expect(codex.syncBundled).toHaveBeenCalledTimes(1)
+    expect(claude.cleanupStaleVersions).toHaveBeenCalledTimes(1)
+    expect(claude.prefetch).toHaveBeenCalledWith('pinned')
+
+    contribution.dispose()
+  })
+
+  it('reads the policy live: unlocking version selection switches alignment and prefetch to manual', async () => {
+    const { claude, workspace, contribution } = setup({ config: alignOn })
+
+    workspace.setCurrent(workspace.current)
+    await settle()
+    expect(claude.syncBundled).toHaveBeenCalledTimes(1)
+    expect(claude.prefetch).toHaveBeenCalledWith('manual')
+
+    contribution.dispose()
+  })
+
   it('skips alignment for a non-download source while still sweeping', async () => {
     const { claude, codex, workspace, contribution } = setup({
       config: {
         'acp.prefetchBinaries': true,
         'acp.autoUpgradeBinaries': true,
+        'acp.allowManualBinaryVersion': true,
         'acp.claude.source': 'system',
         'acp.codex.source': 'custom',
       },
@@ -496,8 +535,8 @@ describe('AgentBinaryPrefetchContribution', () => {
 
     expect(claude.syncBundled).not.toHaveBeenCalled()
     expect(codex.syncBundled).not.toHaveBeenCalled()
-    expect(claude.prefetch).toHaveBeenCalledWith(AUTHORITY)
-    expect(codex.prefetch).toHaveBeenCalledWith(AUTHORITY)
+    expect(claude.prefetch).toHaveBeenCalledWith('manual', AUTHORITY)
+    expect(codex.prefetch).toHaveBeenCalledWith('manual', AUTHORITY)
 
     contribution.dispose()
   })

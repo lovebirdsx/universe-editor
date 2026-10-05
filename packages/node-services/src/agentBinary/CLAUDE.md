@@ -19,6 +19,22 @@ Agent 原生二进制（Claude / Codex）的**下载核心**，Electron-free，�
 
 `.bundled` 不是「当前版本」，也**不进保留集**：它命名的版本由 `bundledVersion()` 天然进 keep-set，指针文件本身是 dotfile（清理与列举都已跳过）。`syncBundled()` 只翻 `.active`、**绝不删目录** —— 被替换掉的旧目录由 `_retainedVersion` 保留到本进程结束（同 `forceDownload`：活跃会话可能还在跑它、离线回退也要靠它，而**第二个窗口在本会话内 sweep 时 keep-set 已不再命名它**），下个进程的 sweep 才回收。写 `.bundled` 的时机是「对齐动作成功之后」：失败不写 ⇒ 下个会话重试；文件缺失 = 从未对齐（老用户首次启动会对每个 agent 各对齐一次）。
 
+## 版本策略：`AgentBinaryVersionPolicy`（`'pinned'` / `'manual'`）
+
+类型唯一定义在 `packages/platform/src/acp/agentBinaryVersion.ts`（node-services / remote-server / editor 三端共用）。用户侧开关是全局布尔 `acp.allowManualBinaryVersion`（默认 `false` → `'pinned'`），renderer 经 `services/acp/binaryVersionPolicy.ts` 派生后**一路显式传参**（wire 契约、main、remote 协议都是 required 参数）。
+
+| | `'pinned'`（默认，锁定） | `'manual'`（用户显式解锁） |
+|---|---|---|
+| `resolveDownload` | **忽略 `.active`**，恒用 `bundledVersion()`；pin 不在盘上就下载它（`allowDownload:false` 仍快速失败） | `.active` 生效，缺省回落到 pin；低于 pin 的 `.active` 由**下限**顶替（见下节） |
+| `getVersionInfo` | 有效版本 = pin（手选版本报 "not installed"）；`latestVersion: null`，**不查 registry** | 现状：`.active` + `/latest` |
+| `prefetch` | 目标 = pin，不查 registry | 目标 = registry latest |
+
+- **`.active` 恒等于 pin**：pinned 下下载/对齐会写 `.active` = pin，且任何在盘上确认到 pin 的入口（resolve 命中 / `getVersionInfo` / `prefetch`）都会补写一次——否则锁定期间指针仍是旧的手选版本，解锁后会「幽灵复活」它。补写按 pin 在进程内记忆一次（避免每次 spawn 读指针），失败只告警、不阻断解析。
+- **`.active` 一动就广播**：`onDidChangeActiveVersion` 在每次指针写入后触发；**凡缓存解析结果者必须订阅它并作废**（main 的 `_inflight` 就是这么做的）。pinned 下指针会在**没有任何下载**的情况下移动（上一行的补写），只看下载事件会漏。缓存 key 仍需含 policy（两种模式的键互不覆盖）。
+- 三个入口（`resolveDownload` / `getVersionInfo` / `prefetch`）的 policy 都是**必填**（无默认值）：漏传会被 TS 拦住，新调用方不会静默落到解锁语义。
+- **UI 侧**：两个 BinaryPanel 共用 `BinaryVersionToggle` + `useManualBinaryVersion`；开启手动选择要 `IDialogService.confirm` 二次确认，关闭时立刻 `forceDownload(pin)` 对齐（不等空闲 alignment）；pinned 下面板隐藏 Latest 行与本地版本列表、只留 pin 的操作按钮。`AgentBinaryPrefetchContribution` 的对齐门控在 pinned 下**始终放行**（pin 绑定不是用户可关的），manual 下才看 `acp.autoUpgradeBinaries`。
+- 改动波及面见下节：policy 进了 remote 协议（bump `REMOTE_PROTOCOL_VERSION`）。
+
 ## 三条不变量（改动前先读）
 
 1. **单入口按版本去重**：一切下载走 `_ensureVersion(version, background)` —— 盘上 `<version>/` 命中二进制则直接返回（**零网络**），否则下载；`_inflightEnsures` 保证同版本并发只 fetch 一次（后台 prefetch 与用户点击共享同一次下载），settle 后释放登记。`resolveDownload` / `forceDownload` / `prefetch` 都只是它的调用方，**不要在它们里各写一套下载逻辑**。`forceDownload` = ensure + 写 `.active`——**绝不删目录重下**（盘上已有就该秒切）。去重同时是防损坏的前提：同一版本的两次并发会写同一个 `<destDir>.extract.<pid>` 而互相踩踏。
@@ -29,15 +45,15 @@ Agent 原生二进制（Claude / Codex）的**下载核心**，Electron-free，�
 
 ## 运行期硬下限（`_resolveDownload` 的分支）
 
-锁定版本是**下限**，不只是空闲期对齐的目标：**任何来源都不得启动低于它的二进制**。`allowDownload` 只影响「要不要花流量」，不影响「能不能低于下限」。
+锁定版本是**下限**，不只是空闲期对齐的目标：**任何来源都不得启动低于它的二进制**。`allowDownload` 只影响「要不要花流量」，不影响「能不能低于下限」。下限只在 `'manual'` 下需要判定——`'pinned'` 连 `.active` 都不看，恒用 pin，比下限更严。
 
 - `download` 来源（本地 + 远端共用）：`.active` 只在**不低于锁定版本**时才被直接返回；低于（或目录名根本不是版本 → **fail-closed**，视为低于）则改走「锁定版本已在盘 → 零网络 `_activate` 切过去 / 不在盘 → `_ensureVersion` 下载」——**前台下载失败必须抛**，绝不退回旧版将就。判据是 `<` 不是 `!==`：用户手选的**更新**版本必须原样放行。
-- `download` + `allowDownload:false`（会话恢复等后台探测）：不能下载，所以退回盘上那个旧二进制，但**去重 warn**（静默路径每次 resolve 都刷日志）。没有可退的旧版才抛既有的 `not downloaded yet`。
+- `download` + `allowDownload:false`（会话恢复等后台探测）：不能下载，所以**在 `'manual'` 下**退回盘上那个旧二进制，但**去重 warn**（静默路径每次 resolve 都刷日志）。`'pinned'` 没有这个回退——除 pin 外的版本本就不该运行，直接抛既有的 `not downloaded yet`；`'manual'` 下没有可退的旧版也抛它。
 - 锁定版本本身不可解析 → warn + **关掉下限**（无从比较，不能拿垃圾值当门槛）。
 - 下限相关的三条 warn 全走 `_warnFloorOnce(key, msg)` 共用一个去重集（键带 `pin:` / `active:` / `fallback:` 前缀）：它们描述的都是**持久状态**，而静默路径每次 connect 都会 resolve 一次。
 - **不写 `.bundled`**：它属于空闲对齐的语义（「pin 变了要对齐一次」），运行期切指针写它只会多出指针状态组合；`syncBundled` 之后看到 `active === bundled` 会直接补记，无冲突。
 - **不加 `_activating`**：强制目标恒为 `bundledVersion()`，它永远在 `cleanupStaleVersions` 的 keep-set 里，不存在「下载完到写 `.active` 之间被 sweep」的窗口。`forceDownload` 也不加守卫——它只下载/切指针不启动进程，下次 resolve 会被强制回来。
-- `_activate(next, previous)` 是唯一的指针写入点（`forceDownload` 与 `_resolveDownload` 共用）：`previous !== next` 时才写，并把 outgoing 版本记进 `_retainedVersion`（离线回退要用 + 活跃会话可能还锁着它）。
+- `_activate(next, previous)` 是**切换**的指针写入点（`forceDownload` 与 `'manual'` 下的 `_resolveDownload` 共用）：`previous !== next` 时才写，并把 outgoing 版本记进 `_retainedVersion`（离线回退要用 + 活跃会话可能还锁着它）。`'pinned'` 下 resolve 命中 pin 时改走 `_reconcilePinnedActive`——那是纯记账（失败只告警），不是切换，没有 outgoing 要保。
 - `system` / `custom` 来源不在 store 里，由两个 main service 各自用 `minimumBinaryVersion()` + `probeBinaryVersion()` 校验（**fail-open**：探测不出来/基准未知就放行，wrapper 脚本不能误杀）。`probeBinaryVersion` 只由这两个 service 调用。
 - `resolve({source:'download', allowDownload:false})` **不进 `_inflight`**：该路径可能返回上面那个「退回的旧版」，缓存它会让随后翻转的 `.active` 永远观测不到（跨窗口更是如此）。这条路径只有几次 `pathExists`，重跑很廉价。
 
@@ -50,8 +66,9 @@ Agent 原生二进制（Claude / Codex）的**下载核心**，Electron-free，�
 
 ## 改动波及面
 
-- 改 `agentBinaryProtocol.ts`（方法/payload）→ **bump** `packages/platform/src/remote/remoteProtocol.ts` 的 `REMOTE_PROTOCOL_VERSION`（老 daemon 握手会失败，需重启远端 daemon）。
+- 改 `agentBinaryProtocol.ts`（方法/payload）→ **bump** `packages/platform/src/remote/remoteProtocol.ts` 的 `REMOTE_PROTOCOL_VERSION`（老 daemon 握手会失败，需重启远端 daemon）。版本策略已进协议（`resolve` 的 `opts.policy` / `getVersionInfo(agent, policy)` / `prefetch(agent, policy)`，v13→v14）。
 - 改 `AgentBinaryVersionInfo` / 下载事件形状 → 编辑器 wire 契约 `apps/editor/src/shared/ipc/{claudeBinaryService,codexBinaryService}.ts`、main 转发（按 agent 过滤 + 附 `authority`）、两个 BinaryPanel，以及 `renderer/services/acp/acpClientService.ts` 的下载进度提示。
+- 改版本策略语义 → 四个消费方都要跟：store、remote-server 服务、main 两个 service（**缓存 key 含 policy**，并订阅 `onDidChangeActiveVersion` 作废缓存）、renderer 的 `binaryVersionPolicy.ts` + `AgentBinaryPrefetchContribution`（alignment 门控）+ `BinaryVersionToggle`/两个 BinaryPanel。
 - 新增 flavor → 加进 `flavors.ts` 并在 `AgentBinaryStore` 调用方接上 `AgentBinaryId`。
 
 ## 测试

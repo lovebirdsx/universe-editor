@@ -111,12 +111,12 @@ describe('ClaudeBinaryMainService — runtime version floor', () => {
       try {
         // The CLI version is compared, never the SDK pin — 2.1.100 is *above*
         // 0.3.220 numerically and must still be refused.
-        await expect(svc.resolve({ source: 'custom', customPath: binary })).rejects.toThrow(
-          /2\.1\.100, older than the 2\.1\.220 this build requires/,
-        )
-        await expect(svc.resolve({ source: 'custom', customPath: binary })).rejects.toThrow(
-          /acp\.claude\.executablePath/,
-        )
+        await expect(
+          svc.resolve({ source: 'custom', customPath: binary, policy: 'pinned' }),
+        ).rejects.toThrow(/2\.1\.100, older than the 2\.1\.220 this build requires/)
+        await expect(
+          svc.resolve({ source: 'custom', customPath: binary, policy: 'pinned' }),
+        ).rejects.toThrow(/acp\.claude\.executablePath/)
       } finally {
         svc.dispose()
       }
@@ -131,10 +131,14 @@ describe('ClaudeBinaryMainService — runtime version floor', () => {
       const newer = await writeFakeBinary(dir, 'claude-newer', '2.1.300 (Claude Code)')
       const svc = new ClaudeBinaryMainService(loggerService)
       try {
-        await expect(svc.resolve({ source: 'custom', customPath: atFloor })).resolves.toEqual({
+        await expect(
+          svc.resolve({ source: 'custom', customPath: atFloor, policy: 'pinned' }),
+        ).resolves.toEqual({
           path: atFloor,
         })
-        await expect(svc.resolve({ source: 'custom', customPath: newer })).resolves.toEqual({
+        await expect(
+          svc.resolve({ source: 'custom', customPath: newer, policy: 'pinned' }),
+        ).resolves.toEqual({
           path: newer,
         })
       } finally {
@@ -150,7 +154,9 @@ describe('ClaudeBinaryMainService — runtime version floor', () => {
       const binary = await writeFakeBinary(dir, 'claude', 'command not found')
       const svc = new ClaudeBinaryMainService(loggerService)
       try {
-        await expect(svc.resolve({ source: 'custom', customPath: binary })).resolves.toEqual({
+        await expect(
+          svc.resolve({ source: 'custom', customPath: binary, policy: 'pinned' }),
+        ).resolves.toEqual({
           path: binary,
         })
         expect(logSink.some((m) => m.includes('could not read the version'))).toBe(true)
@@ -170,7 +176,9 @@ describe('ClaudeBinaryMainService — runtime version floor', () => {
       const binary = await writeFakeBinary(dir, 'claude', '2.1.100 (Claude Code)')
       const svc = new ClaudeBinaryMainService(loggerService)
       try {
-        await expect(svc.resolve({ source: 'custom', customPath: binary })).resolves.toEqual({
+        await expect(
+          svc.resolve({ source: 'custom', customPath: binary, policy: 'pinned' }),
+        ).resolves.toEqual({
           path: binary,
         })
         expect(logSink.some((m) => m.includes('no CLI version was recorded'))).toBe(true)
@@ -188,7 +196,9 @@ describe('ClaudeBinaryMainService — runtime version floor', () => {
       const svc = new ClaudeBinaryMainService(loggerService)
       try {
         await withPrependedPath(dir, async () => {
-          await expect(svc.resolve({ source: 'system' })).rejects.toThrow(/2\.0\.0.*2\.1\.220/)
+          await expect(svc.resolve({ source: 'system', policy: 'pinned' })).rejects.toThrow(
+            /2\.0\.0.*2\.1\.220/,
+          )
         })
       } finally {
         svc.dispose()
@@ -204,7 +214,9 @@ describe('ClaudeBinaryMainService — runtime version floor', () => {
       const svc = new ClaudeBinaryMainService(loggerService)
       try {
         await withPrependedPath(dir, async () => {
-          await expect(svc.resolve({ source: 'system' })).resolves.toEqual({ path: binary })
+          await expect(svc.resolve({ source: 'system', policy: 'pinned' })).resolves.toEqual({
+            path: binary,
+          })
         })
       } finally {
         svc.dispose()

@@ -11,10 +11,13 @@
  *       without this the user keeps running the previous binary forever. It is a
  *       no-op unless the pin itself changed since the last alignment, so a version
  *       picked by hand survives. Follows the active workspace like the sweep: a
- *       remote workspace aligns that host's store. Gated on
- *       `acp.autoUpgradeBinaries`, on the local per-agent `acp.<agent>.source`
- *       being "download", and on the e2e probe. Success is announced with the new
- *       version; failures are logged and retried next session.
+ *       remote workspace aligns that host's store. Gated on the version policy —
+ *       under the locked `'pinned'` policy alignment always runs (the pin binding
+ *       is not the user's to switch off), under `'manual'` only while
+ *       `acp.autoUpgradeBinaries` is on — plus the local per-agent
+ *       `acp.<agent>.source` being "download", and the e2e probe. Success is
+ *       announced with the new version; failures are logged and retried next
+ *       session.
  *    3. Background-prefetches the latest binary so a later upgrade activates
  *       instantly instead of waiting on a ~80MB download. Prefetch follows the
  *       active workspace: a remote workspace prefetches that host's managed store
@@ -58,6 +61,7 @@ import {
   type RemoteConnectionStatusDto,
 } from '../../shared/ipc/remoteStatusService.js'
 import { currentRemoteAuthority } from '../services/remote/windowRemoteAuthority.js'
+import { binaryVersionPolicy } from '../services/acp/binaryVersionPolicy.js'
 
 /** The single call the alignment phase needs; both agent services satisfy it. */
 interface IBundleSyncService {
@@ -198,13 +202,14 @@ export class AgentBinaryPrefetchContribution extends Disposable implements IWork
       await this._alignAgent(this._codex, 'Codex', authority)
     }
     if (this._prefetchGated()) return
+    const policy = binaryVersionPolicy(this._config)
     try {
-      await this._claude.prefetch(authority)
+      await this._claude.prefetch(policy, authority)
     } catch (err) {
       this._logger.warn(`claude binary prefetch failed on ${authority}: ${String(err)}`)
     }
     try {
-      await this._codex.prefetch(authority)
+      await this._codex.prefetch(policy, authority)
     } catch (err) {
       this._logger.warn(`codex-acp binary prefetch failed on ${authority}: ${String(err)}`)
     }
@@ -257,16 +262,17 @@ export class AgentBinaryPrefetchContribution extends Disposable implements IWork
 
   private async _prefetchLocal(): Promise<void> {
     if (this._prefetchGated()) return
+    const policy = binaryVersionPolicy(this._config)
     if ((this._config.get<string>('acp.claude.source') ?? 'download') === 'download') {
       try {
-        await this._claude.prefetch()
+        await this._claude.prefetch(policy)
       } catch (err) {
         this._logger.warn(`claude binary prefetch failed: ${String(err)}`)
       }
     }
     if ((this._config.get<string>('acp.codex.source') ?? 'download') === 'download') {
       try {
-        await this._codex.prefetch()
+        await this._codex.prefetch(policy)
       } catch (err) {
         this._logger.warn(`codex-acp binary prefetch failed: ${String(err)}`)
       }
@@ -283,8 +289,15 @@ export class AgentBinaryPrefetchContribution extends Disposable implements IWork
     return typeof window !== 'undefined' && window[E2E_PROBE_ENABLED_KEY] === true
   }
 
+  /**
+   * The locked policy *is* the pin binding — the managed binary always runs the
+   * version this build was made against — so alignment is not the user's to turn
+   * off there; `acp.autoUpgradeBinaries` only governs the manual policy, where an
+   * editor upgrade would otherwise silently replace a version the user picked.
+   */
   private _alignGated(): boolean {
     if (this._e2eProbeEnabled()) return true
+    if (binaryVersionPolicy(this._config) === 'pinned') return false
     if (this._config.get<boolean>('acp.autoUpgradeBinaries') === false) return true
     return false
   }

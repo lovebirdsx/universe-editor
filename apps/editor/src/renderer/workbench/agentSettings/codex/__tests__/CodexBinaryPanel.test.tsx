@@ -12,6 +12,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import {
   Emitter,
   IConfigurationService,
+  IDialogService,
   IHostService,
   INotificationService,
   InstantiationService,
@@ -39,33 +40,47 @@ function versionInfo(overrides: Partial<ICodexBinaryVersionInfo> = {}): ICodexBi
   }
 }
 
-function makeHarness(initial: ICodexBinaryVersionInfo) {
+function makeHarness(initial: ICodexBinaryVersionInfo, manual = true) {
   let info = initial
   const emitter = new Emitter<ICodexBinaryDownloadEvent>()
   const forceDownload = vi.fn(async () => ({ path: '/fake/codex' }))
+  const getVersionInfo = vi.fn(async () => info)
   const service = {
     _serviceBrand: undefined,
     onDidChangeDownload: emitter.event,
     resolve: vi.fn(async () => ({ path: '/fake/codex' })),
-    getVersionInfo: vi.fn(async () => info),
+    getVersionInfo,
     prefetch: vi.fn(async () => {}),
     forceDownload,
     cleanupStaleVersions: vi.fn(async () => {}),
   } as unknown as ICodexBinaryService
 
+  const values: Record<string, unknown> = { 'acp.allowManualBinaryVersion': manual }
+  const configEmitter = new Emitter<{ affectsConfiguration(key: string): boolean }>()
+  const update = vi.fn(async (key: string, value: unknown) => {
+    values[key] = value
+    configEmitter.fire({ affectsConfiguration: (k) => k === key })
+  })
+  const confirm = vi.fn(async () => ({ confirmed: true }))
+
   const services = new ServiceCollection()
   services.set(ICodexBinaryService, service)
   services.set(IConfigurationService, {
-    get: vi.fn(() => undefined),
-    update: vi.fn(async () => {}),
+    get: vi.fn((key: string) => values[key]),
+    update,
+    onDidChangeConfiguration: configEmitter.event,
   } as unknown as IConfigurationService)
   services.set(INotificationService, { notify: vi.fn() } as unknown as INotificationService)
   services.set(IHostService, { platform: 'linux' } as unknown as IHostService)
+  services.set(IDialogService, { confirm } as unknown as IDialogService)
   const inst = new InstantiationService(services)
 
   return {
     emitter,
     forceDownload,
+    getVersionInfo,
+    update,
+    confirm,
     setInfo: (next: ICodexBinaryVersionInfo) => {
       info = next
     },
@@ -110,5 +125,38 @@ describe('CodexBinaryPanel download state', () => {
     act(() => h.emitter.fire({ downloads: [progress('2.0.0', 51, 100)] }))
     expect(screen.getByText(/51%/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: /2\.0\.0/ })).toBeNull()
+  })
+})
+
+describe('CodexBinaryPanel version policy', () => {
+  it('locks to the pin by default and unlocks only after the confirmation', async () => {
+    const h = makeHarness(versionInfo(), false)
+    h.renderPanel()
+    await flushEffects()
+
+    expect(h.getVersionInfo).toHaveBeenCalledWith('pinned', undefined)
+    expect(screen.getByText(/locked to the version this build is pinned to/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /2\.0\.0/ })).toBeNull()
+
+    fireEvent.click(screen.getByTestId('binary-version-manual-toggle'))
+    await flushEffects()
+
+    expect(h.confirm).toHaveBeenCalledTimes(1)
+    expect(h.update).toHaveBeenCalledWith('acp.allowManualBinaryVersion', true, expect.anything())
+    expect(h.getVersionInfo).toHaveBeenLastCalledWith('manual', undefined)
+    expect(screen.getByRole('button', { name: /2\.0\.0/ })).toBeTruthy()
+  })
+
+  it('locking back switches to the pin right away and without a confirmation', async () => {
+    const h = makeHarness(versionInfo({ installedVersion: '2.0.0' }))
+    h.renderPanel()
+    await flushEffects()
+
+    fireEvent.click(screen.getByTestId('binary-version-manual-toggle'))
+    await flushEffects()
+
+    expect(h.confirm).not.toHaveBeenCalled()
+    expect(h.update).toHaveBeenCalledWith('acp.allowManualBinaryVersion', false, expect.anything())
+    expect(h.forceDownload).toHaveBeenCalledWith('1.0.0', undefined)
   })
 })

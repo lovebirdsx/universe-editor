@@ -35,6 +35,7 @@ import {
   type ClaudeBinarySource,
 } from '../../../../shared/ipc/claudeBinaryService.js'
 import { ITerminalManagerService } from '../../../services/terminal/TerminalManagerService.js'
+import { binaryVersionPolicy } from '../../../services/acp/binaryVersionPolicy.js'
 import { useService } from '../../useService.js'
 import { useRemoteAuthority } from '../../useRemoteAuthority.js'
 
@@ -79,7 +80,8 @@ export function runClaudeLogin(): (kind: ClaudeLoginKind) => Promise<void> {
       try {
         const source = (config.get<string>('acp.claude.source') ?? 'download') as ClaudeBinarySource
         const customPath = config.get<string>('acp.claude.executablePath') ?? ''
-        const opts = source === 'custom' ? { source, customPath } : { source }
+        const policy = binaryVersionPolicy(config)
+        const opts = source === 'custom' ? { source, customPath, policy } : { source, policy }
         notification.notify({
           severity: Severity.Info,
           message: localize('agentSettings.login.preparing', 'Preparing Claude…'),

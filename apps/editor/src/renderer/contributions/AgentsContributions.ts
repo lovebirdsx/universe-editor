@@ -96,12 +96,20 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
               'Download the latest Claude / codex-acp binaries in the background while the editor is idle (managed download only), so upgrading is instant. In a remote workspace the download happens on that host instead of locally. Disable to save bandwidth.',
             ),
           },
+          'acp.allowManualBinaryVersion': {
+            type: 'boolean',
+            default: false,
+            description: localize(
+              'settings.acp.allowManualBinaryVersion',
+              'Allow choosing a Claude / codex-acp binary version other than the one this editor build is pinned to. Off by default: the managed binary always follows the pinned version, so a version picked by hand can never outlive an editor update. Turn it on to switch between the pinned and the latest version in the agent settings "Binary" section — a version other than the pinned one is not verified against this build and may fail to start or behave unexpectedly.',
+            ),
+          },
           'acp.autoUpgradeBinaries': {
             type: 'boolean',
             default: true,
             description: localize(
               'settings.acp.autoUpgradeBinaries',
-              'When an editor update changes the Claude / codex-acp version the built-in agents are pinned to, switch the managed binary to the new pinned version once, in the background (only if a managed binary is already in use). Nothing is downloaded for agents whose binary was never downloaded. A version you picked by hand is kept until the pinned version changes again — except on the first run after this update, which aligns once because no alignment is recorded yet. In a remote workspace the switch happens on that host. Disable to stay on the currently installed version regardless of editor updates.',
+              'When an editor update changes the Claude / codex-acp version the built-in agents are pinned to, switch the managed binary to the new pinned version once, in the background (only if a managed binary is already in use). Only consulted while `acp.allowManualBinaryVersion` is on — with manual selection locked (the default) the binary always follows the pinned version anyway. Nothing is downloaded for agents whose binary was never downloaded. A version you picked by hand is kept until the pinned version changes again — except on the first run after this update, which aligns once because no alignment is recorded yet. In a remote workspace the switch happens on that host. Disable to stay on the currently installed version regardless of editor updates.',
             ),
           },
           'acp.claude.source': {

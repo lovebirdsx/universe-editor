@@ -126,7 +126,7 @@ describe('AgentBinaryStore', () => {
     const store = new AgentBinaryStore({ baseDir: dir, flavor: codexFlavor })
     const fetchSpy = offlineFetch()
     try {
-      await expect(store.resolveDownload(false)).rejects.toThrow(/not downloaded yet/)
+      await expect(store.resolveDownload(false, 'manual')).rejects.toThrow(/not downloaded yet/)
       expect(fetchSpy).not.toHaveBeenCalled()
     } finally {
       store.dispose()
@@ -142,7 +142,7 @@ describe('AgentBinaryStore', () => {
     const store = new AgentBinaryStore({ baseDir: dir, flavor: codexFlavor })
     const fetchSpy = offlineFetch()
     try {
-      await expect(store.resolveDownload(true)).resolves.toBe(binary)
+      await expect(store.resolveDownload(true, 'manual')).resolves.toBe(binary)
       expect(fetchSpy).not.toHaveBeenCalled()
     } finally {
       store.dispose()
@@ -160,7 +160,7 @@ describe('AgentBinaryStore', () => {
     const store = new AgentBinaryStore({ baseDir: dir, flavor: codexFlavor })
     const fetchSpy = offlineFetch()
     try {
-      await expect(store.resolveDownload(true)).resolves.toBe(pinned)
+      await expect(store.resolveDownload(true, 'manual')).resolves.toBe(pinned)
       expect((await readFile(path.join(dir, '.active'), 'utf8')).trim()).toBe(CODEX_VERSION)
       expect(fetchSpy).not.toHaveBeenCalled()
 
@@ -180,7 +180,7 @@ describe('AgentBinaryStore', () => {
     const store = new AgentBinaryStore({ baseDir: dir, flavor: codexFlavor })
     const fetchSpy = offlineFetch()
     try {
-      await expect(store.resolveDownload(true)).resolves.toBe(pinned)
+      await expect(store.resolveDownload(true, 'manual')).resolves.toBe(pinned)
       expect((await readFile(path.join(dir, '.active'), 'utf8')).trim()).toBe(CODEX_VERSION)
       expect(fetchSpy).not.toHaveBeenCalled()
     } finally {
@@ -197,7 +197,7 @@ describe('AgentBinaryStore', () => {
     const store = new AgentBinaryStore({ baseDir: dir, flavor: codexFlavor })
     const fetchSpy = offlineFetch()
     try {
-      await expect(store.resolveDownload(true)).resolves.toBe(pinned)
+      await expect(store.resolveDownload(true, 'manual')).resolves.toBe(pinned)
       expect((await readFile(path.join(dir, '.active'), 'utf8')).trim()).toBe(CODEX_VERSION)
       expect(fetchSpy).not.toHaveBeenCalled()
     } finally {
@@ -221,8 +221,8 @@ describe('AgentBinaryStore', () => {
     try {
       // Nothing can be compared against a garbage pin, so the floor is disabled
       // rather than turning every resolve into a refusal (fail-open by design).
-      await expect(store.resolveDownload(true)).resolves.toBe(binary)
-      await expect(store.resolveDownload(false)).resolves.toBe(binary)
+      await expect(store.resolveDownload(true, 'manual')).resolves.toBe(binary)
+      await expect(store.resolveDownload(false, 'manual')).resolves.toBe(binary)
       expect(fetchSpy).not.toHaveBeenCalled()
       expect(log.filter((m) => m.includes('skipping the version floor'))).toHaveLength(1)
     } finally {
@@ -240,7 +240,7 @@ describe('AgentBinaryStore', () => {
     const store = new AgentBinaryStore({ baseDir: dir, flavor: codexFlavor })
     const fetchSpy = offlineFetch()
     try {
-      await expect(store.resolveDownload(true)).resolves.toBe(pinned)
+      await expect(store.resolveDownload(true, 'manual')).resolves.toBe(pinned)
       expect((await readFile(path.join(dir, '.active'), 'utf8')).trim()).toBe(CODEX_VERSION)
       expect(fetchSpy).not.toHaveBeenCalled()
     } finally {
@@ -263,12 +263,12 @@ describe('AgentBinaryStore', () => {
     try {
       // A speculative caller must never download; running the old binary is the
       // lesser evil, but it has to be visible in the log rather than silent.
-      await expect(store.resolveDownload(false)).resolves.toBe(stale)
+      await expect(store.resolveDownload(false, 'manual')).resolves.toBe(stale)
       expect(fetchSpy).not.toHaveBeenCalled()
       expect(log.filter((m) => m.includes('below the pinned'))).toHaveLength(1)
 
       // Warned once per pair, not once per session hydrate.
-      await expect(store.resolveDownload(false)).resolves.toBe(stale)
+      await expect(store.resolveDownload(false, 'manual')).resolves.toBe(stale)
       expect(log.filter((m) => m.includes('below the pinned'))).toHaveLength(1)
     } finally {
       store.dispose()
@@ -284,7 +284,7 @@ describe('AgentBinaryStore', () => {
     const fetchSpy = stubRegistry(() => gate.promise)
     const store = new AgentBinaryStore({ baseDir: dir, flavor: codexFlavor })
     try {
-      const attempt = store.resolveDownload(true)
+      const attempt = store.resolveDownload(true, 'manual')
       await waitFor(() => fetchSpy.mock.calls.length >= 1)
       expect(String(fetchSpy.mock.calls[0]?.[0])).toContain(`@openai/codex/${CODEX_VERSION}-`)
 
@@ -306,13 +306,13 @@ describe('AgentBinaryStore', () => {
     const store = new AgentBinaryStore({ baseDir: dir, flavor: codexFlavor })
     const fetchSpy = offlineFetch()
     try {
-      await expect(store.resolveDownload(false)).resolves.toBe(stale)
+      await expect(store.resolveDownload(false, 'manual')).resolves.toBe(stale)
 
       // A foreground download finished meanwhile; nothing may keep handing out
       // the fallback that was resolved before it.
       const pinned = await writeVersion(dir, CODEX_VERSION)
       await writeFile(path.join(dir, '.active'), CODEX_VERSION, 'utf8')
-      await expect(store.resolveDownload(false)).resolves.toBe(pinned)
+      await expect(store.resolveDownload(false, 'manual')).resolves.toBe(pinned)
       expect(fetchSpy).not.toHaveBeenCalled()
     } finally {
       store.dispose()
@@ -325,14 +325,14 @@ describe('AgentBinaryStore', () => {
     try {
       // Both cache-miss fast-fails run concurrently and must share one promise
       // (same underlying work), proven by object identity.
-      const first = store.resolveDownload(false)
-      const second = store.resolveDownload(false)
+      const first = store.resolveDownload(false, 'manual')
+      const second = store.resolveDownload(false, 'manual')
       expect(second).toBe(first)
       await expect(first).rejects.toThrow(/not downloaded yet/)
 
       // A download-allowed caller never shares the fast-fail promise.
       const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('offline'))
-      const download = store.resolveDownload(true)
+      const download = store.resolveDownload(true, 'manual')
       expect(download).not.toBe(first)
       await expect(download).rejects.toThrow(/offline/)
       expect(fetchSpy).toHaveBeenCalled()
@@ -341,7 +341,7 @@ describe('AgentBinaryStore', () => {
       // call re-runs and takes the cache-hit path instead of the stale rejection.
       const binary = await writeVersion(dir, LATEST)
       await writeFile(path.join(dir, '.active'), LATEST, 'utf8')
-      await expect(store.resolveDownload(false)).resolves.toBe(binary)
+      await expect(store.resolveDownload(false, 'manual')).resolves.toBe(binary)
     } finally {
       store.dispose()
     }
@@ -414,7 +414,7 @@ describe('AgentBinaryStore', () => {
     const store = new AgentBinaryStore({ baseDir: dir, flavor: codexFlavor })
     try {
       // prefetch() queries /latest first (call 1), then starts the download (call 2).
-      void store.prefetch()
+      void store.prefetch('manual')
       await waitFor(() => fetchSpy.mock.calls.length >= 2)
 
       // The user clicks "upgrade to latest" while the prefetch is still running:
@@ -448,7 +448,7 @@ describe('AgentBinaryStore', () => {
     try {
       // The contract the background contribution relies on: a broken install must
       // not turn into an unhandled rejection on the idle path.
-      await expect(store.prefetch()).resolves.toBeUndefined()
+      await expect(store.prefetch('manual')).resolves.toBeUndefined()
       expect(fetchSpy).not.toHaveBeenCalled()
     } finally {
       store.dispose()
@@ -464,12 +464,12 @@ describe('AgentBinaryStore', () => {
       const attempt = store.forceDownload(LATEST)
       await waitFor(() => fetchSpy.mock.calls.length >= 1)
 
-      const inFlight = await store.getVersionInfo()
+      const inFlight = await store.getVersionInfo('manual')
       expect(inFlight.downloads).toEqual([state(LATEST, 0, 0)])
 
       gate.resolve(jsonResponse({ dist: { tarball: 'https://example.com/pkg.tgz' } }))
       await expect(attempt).rejects.toThrow()
-      expect((await store.getVersionInfo()).downloads).toEqual([])
+      expect((await store.getVersionInfo('manual')).downloads).toEqual([])
     } finally {
       store.dispose()
     }
@@ -480,7 +480,7 @@ describe('AgentBinaryStore', () => {
     stubRegistry(() => Promise.reject(new Error('unused')))
     const store = new AgentBinaryStore({ baseDir: dir, flavor: codexFlavor })
     try {
-      expect((await store.getVersionInfo()).latestVersion).toBe(LATEST)
+      expect((await store.getVersionInfo('manual')).latestVersion).toBe(LATEST)
       expect((await readFile(path.join(dir, '.latest'), 'utf8')).trim()).toBe(LATEST)
     } finally {
       store.dispose()
@@ -497,7 +497,7 @@ describe('AgentBinaryStore', () => {
 
     const store = new AgentBinaryStore({ baseDir: dir, flavor: codexFlavor })
     try {
-      expect((await store.getVersionInfo()).downloadedVersions).toEqual(['0.8.0', '0.9.9'])
+      expect((await store.getVersionInfo('manual')).downloadedVersions).toEqual(['0.8.0', '0.9.9'])
     } finally {
       store.dispose()
     }
@@ -576,7 +576,9 @@ describe('AgentBinaryStore', () => {
       // The version has no dir yet, and `.latest` hasn't been rewritten either, so
       // only the in-flight set keeps it out of the sweep.
       await store.cleanupStaleVersions()
-      expect((await store.getVersionInfo()).downloads.map((d) => d.version)).toEqual([LATEST])
+      expect((await store.getVersionInfo('manual')).downloads.map((d) => d.version)).toEqual([
+        LATEST,
+      ])
 
       gate.resolve(jsonResponse({ dist: { tarball: 'https://example.com/pkg.tgz' } }))
       await expect(attempt).rejects.toThrow()
@@ -809,6 +811,203 @@ describe('AgentBinaryStore', () => {
       await store.forceDownload(LATEST)
       await expect(store.syncBundled()).resolves.toBeNull()
       expect((await readFile(path.join(dir, '.active'), 'utf8')).trim()).toBe(LATEST)
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      store.dispose()
+    }
+  })
+})
+
+describe('AgentBinaryStore version policy', () => {
+  it('pinned hands out the pin and ignores the version `.active` names', async () => {
+    const dir = await makeTempDir()
+    await writeVersion(dir, LATEST)
+    const pinned = await writeVersion(dir, CODEX_VERSION)
+    await writeFile(path.join(dir, '.active'), LATEST, 'utf8')
+
+    const store = new AgentBinaryStore({ baseDir: dir, flavor: codexFlavor })
+    const fetchSpy = offlineFetch()
+    try {
+      expect(await store.resolveDownload(true, 'pinned')).toBe(pinned)
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      store.dispose()
+    }
+  })
+
+  it('pinned downloads the pin instead of falling back to a version on disk', async () => {
+    const dir = await makeTempDir()
+    await writeVersion(dir, LATEST)
+    await writeFile(path.join(dir, '.active'), LATEST, 'utf8')
+    const gate = deferred<Response>()
+    const fetchSpy = stubRegistry(() => gate.promise)
+
+    const store = new AgentBinaryStore({ baseDir: dir, flavor: codexFlavor })
+    try {
+      const attempt = store.resolveDownload(true, 'pinned')
+      await waitFor(() => fetchSpy.mock.calls.length >= 1)
+
+      // The download target is the pin, never the version sitting on disk.
+      expect((await store.getVersionInfo('pinned')).downloads).toEqual([state(CODEX_VERSION, 0, 0)])
+
+      gate.resolve(jsonResponse({ dist: { tarball: 'https://example.com/pkg.tgz' } }))
+      await expect(attempt).rejects.toThrow(/tarball fetch not stubbed/)
+    } finally {
+      store.dispose()
+    }
+  })
+
+  it('pinned version info reports the pin as the effective version and asks no registry', async () => {
+    const dir = await makeTempDir()
+    await writeVersion(dir, LATEST)
+    await writeVersion(dir, CODEX_VERSION)
+    await writeFile(path.join(dir, '.active'), LATEST, 'utf8')
+
+    const store = new AgentBinaryStore({ baseDir: dir, flavor: codexFlavor })
+    const fetchSpy = offlineFetch()
+    try {
+      const info = await store.getVersionInfo('pinned')
+      expect(info.bundledVersion).toBe(CODEX_VERSION)
+      expect(info.installedVersion).toBe(CODEX_VERSION)
+      expect(info.latestVersion).toBeNull()
+      expect(info.downloadedVersions).toEqual([CODEX_VERSION, LATEST].sort())
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      store.dispose()
+    }
+  })
+
+  it('pinned calls a hand-picked version not installed while the pin is missing', async () => {
+    const dir = await makeTempDir()
+    await writeVersion(dir, LATEST)
+    await writeFile(path.join(dir, '.active'), LATEST, 'utf8')
+
+    const store = new AgentBinaryStore({ baseDir: dir, flavor: codexFlavor })
+    const fetchSpy = offlineFetch()
+    try {
+      // The panel must not claim the user runs a binary resolve would never hand out.
+      expect((await store.getVersionInfo('pinned')).installedVersion).toBeNull()
+      expect(fetchSpy).not.toHaveBeenCalled()
+      // The pointer stays where it was: nothing was activated, and writing the pin
+      // would name a version that isn't on disk.
+      expect((await readFile(path.join(dir, '.active'), 'utf8')).trim()).toBe(LATEST)
+      // The manual policy still sees the pick — and is the only one that queries.
+      expect((await store.getVersionInfo('manual')).installedVersion).toBe(LATEST)
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+    } finally {
+      store.dispose()
+    }
+  })
+
+  it('pinned prefetch targets the pin without ever querying the registry latest', async () => {
+    const dir = await makeTempDir()
+    const gate = deferred<Response>()
+    const fetchSpy = stubRegistry(() => gate.promise)
+
+    const store = new AgentBinaryStore({ baseDir: dir, flavor: codexFlavor })
+    try {
+      void store.prefetch('pinned')
+      await waitFor(() => fetchSpy.mock.calls.length >= 1)
+
+      expect(fetchSpy.mock.calls.some((call) => String(call[0]).endsWith('/latest'))).toBe(false)
+      expect((await store.getVersionInfo('pinned')).downloads).toEqual([
+        state(CODEX_VERSION, 0, 0, true),
+      ])
+
+      gate.resolve(jsonResponse({ dist: { tarball: 'https://example.com/pkg.tgz' } }))
+      await expect(store.prefetch('pinned')).resolves.toBeUndefined()
+    } finally {
+      store.dispose()
+    }
+  })
+
+  it('de-dupes in-flight resolves per policy, not per options', async () => {
+    const dir = await makeTempDir()
+    const picked = await writeVersion(dir, LATEST)
+    await writeFile(path.join(dir, '.active'), LATEST, 'utf8')
+    const gate = deferred<Response>()
+    const fetchSpy = stubRegistry(() => gate.promise)
+
+    const store = new AgentBinaryStore({ baseDir: dir, flavor: codexFlavor })
+    try {
+      // The pinned resolve blocks on a download the manual one doesn't need. A cache
+      // key without the policy would hand the manual caller that pending download.
+      const pinned = store.resolveDownload(true, 'pinned')
+      await waitFor(() => fetchSpy.mock.calls.length >= 1)
+      expect(await store.resolveDownload(true, 'manual')).toBe(picked)
+
+      gate.resolve(jsonResponse({ dist: { tarball: 'https://example.com/pkg.tgz' } }))
+      await expect(pinned).rejects.toThrow(/tarball fetch not stubbed/)
+    } finally {
+      store.dispose()
+    }
+  })
+
+  it('reports the pin as the pinned resolve result once it is on disk', async () => {
+    const dir = await makeTempDir()
+    const pinned = await writeVersion(dir, CODEX_VERSION)
+    await writeFile(path.join(dir, '.active'), LATEST, 'utf8')
+
+    const store = new AgentBinaryStore({ baseDir: dir, flavor: codexFlavor })
+    try {
+      await expect(store.resolveDownload(false, 'pinned')).resolves.toBe(pinned)
+      // A locked tree with nothing on disk still fails fast for background probes.
+      const empty = await makeTempDir()
+      const emptyStore = new AgentBinaryStore({ baseDir: empty, flavor: codexFlavor })
+      try {
+        await expect(emptyStore.resolveDownload(false, 'pinned')).rejects.toThrow(
+          /not downloaded yet/,
+        )
+      } finally {
+        emptyStore.dispose()
+      }
+    } finally {
+      store.dispose()
+    }
+  })
+
+  it('reconciles `.active` to the pin on the pinned paths, so unlocking cannot resurrect a pick', async () => {
+    const dir = await makeTempDir()
+    const pinned = await writeVersion(dir, CODEX_VERSION)
+    await writeVersion(dir, LATEST)
+    await writeFile(path.join(dir, '.active'), LATEST, 'utf8')
+
+    const store = new AgentBinaryStore({ baseDir: dir, flavor: codexFlavor })
+    const fetchSpy = offlineFetch()
+    try {
+      await store.resolveDownload(true, 'pinned')
+      expect((await readFile(path.join(dir, '.active'), 'utf8')).trim()).toBe(CODEX_VERSION)
+
+      // Version info and prefetch see the same tree; neither may flip the pointer back.
+      await store.getVersionInfo('pinned')
+      await store.prefetch('pinned')
+      expect((await readFile(path.join(dir, '.active'), 'utf8')).trim()).toBe(CODEX_VERSION)
+
+      // The pick is gone from the pointer, so unlocking resumes the pin — the whole
+      // point of writing `.active` while locked.
+      await expect(store.resolveDownload(true, 'manual')).resolves.toBe(pinned)
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      store.dispose()
+    }
+  })
+
+  it('announces every `.active` write, so path caches know what they hold is stale', async () => {
+    const dir = await makeTempDir()
+    const pinned = await writeVersion(dir, CODEX_VERSION)
+    const store = new AgentBinaryStore({ baseDir: dir, flavor: codexFlavor })
+    const fetchSpy = offlineFetch()
+    let fired = 0
+    store.onDidChangeActiveVersion(() => fired++)
+    try {
+      await store.forceDownload(CODEX_VERSION)
+      expect(fired).toBe(1)
+
+      // The reconcile write is exactly the move a resolve cache cannot see coming:
+      // no download happened, yet the pointer left the version it had cached.
+      await writeFile(path.join(dir, '.active'), LATEST, 'utf8')
+      await expect(store.resolveDownload(true, 'pinned')).resolves.toBe(pinned)
+      expect(fired).toBe(2)
       expect(fetchSpy).not.toHaveBeenCalled()
     } finally {
       store.dispose()

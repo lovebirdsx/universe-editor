@@ -52,9 +52,9 @@ describe('ClaudeBinaryMainService.resolve — allowDownload', () => {
     const svc = new ClaudeBinaryMainService()
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
     try {
-      await expect(svc.resolve({ source: 'download', allowDownload: false })).rejects.toThrow(
-        /not downloaded yet/,
-      )
+      await expect(
+        svc.resolve({ source: 'download', allowDownload: false, policy: 'pinned' }),
+      ).rejects.toThrow(/not downloaded yet/)
       expect(fetchSpy).not.toHaveBeenCalled()
     } finally {
       fetchSpy.mockRestore()

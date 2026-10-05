@@ -42,7 +42,9 @@ describe('CodexBinaryMainService.resolve', () => {
 
     const svc = new CodexBinaryMainService()
     try {
-      await expect(svc.resolve({ source: 'custom', customPath })).resolves.toEqual({
+      await expect(
+        svc.resolve({ source: 'custom', customPath, policy: 'pinned' }),
+      ).resolves.toEqual({
         path: customPath,
       })
     } finally {
@@ -53,7 +55,9 @@ describe('CodexBinaryMainService.resolve', () => {
   it('rejects a custom source with no configured path', async () => {
     const svc = new CodexBinaryMainService()
     try {
-      await expect(svc.resolve({ source: 'custom' })).rejects.toThrow(/no path is configured/)
+      await expect(svc.resolve({ source: 'custom', policy: 'pinned' })).rejects.toThrow(
+        /no path is configured/,
+      )
     } finally {
       svc.dispose()
     }
@@ -64,9 +68,9 @@ describe('CodexBinaryMainService.resolve', () => {
     const missing = path.join(dir, 'nope.exe')
     const svc = new CodexBinaryMainService()
     try {
-      await expect(svc.resolve({ source: 'custom', customPath: missing })).rejects.toThrow(
-        /not found at configured path/,
-      )
+      await expect(
+        svc.resolve({ source: 'custom', customPath: missing, policy: 'pinned' }),
+      ).rejects.toThrow(/not found at configured path/)
     } finally {
       svc.dispose()
     }
@@ -80,8 +84,8 @@ describe('CodexBinaryMainService.resolve', () => {
     const svc = new CodexBinaryMainService()
     try {
       const [a, b] = await Promise.all([
-        svc.resolve({ source: 'custom', customPath }),
-        svc.resolve({ source: 'custom', customPath }),
+        svc.resolve({ source: 'custom', customPath, policy: 'pinned' }),
+        svc.resolve({ source: 'custom', customPath, policy: 'pinned' }),
       ])
       expect(a).toEqual(b)
     } finally {
@@ -94,10 +98,14 @@ describe('CodexBinaryMainService.resolve', () => {
     const customPath = path.join(dir, 'codex.exe')
     const svc = new CodexBinaryMainService()
     try {
-      await expect(svc.resolve({ source: 'custom', customPath })).rejects.toThrow()
+      await expect(
+        svc.resolve({ source: 'custom', customPath, policy: 'pinned' }),
+      ).rejects.toThrow()
       // Now create the file and retry the same options — must not return a cached rejection.
       await writeFile(customPath, 'MZ')
-      await expect(svc.resolve({ source: 'custom', customPath })).resolves.toEqual({
+      await expect(
+        svc.resolve({ source: 'custom', customPath, policy: 'pinned' }),
+      ).resolves.toEqual({
         path: customPath,
       })
     } finally {
@@ -109,9 +117,9 @@ describe('CodexBinaryMainService.resolve', () => {
     const svc = new CodexBinaryMainService()
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
     try {
-      await expect(svc.resolve({ source: 'download', allowDownload: false })).rejects.toThrow(
-        /not downloaded yet/,
-      )
+      await expect(
+        svc.resolve({ source: 'download', allowDownload: false, policy: 'pinned' }),
+      ).rejects.toThrow(/not downloaded yet/)
       expect(fetchSpy).not.toHaveBeenCalled()
     } finally {
       fetchSpy.mockRestore()

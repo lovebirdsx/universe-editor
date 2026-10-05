@@ -6,7 +6,7 @@
  *  downloaded onto the remote host — never the local userData.
  *--------------------------------------------------------------------------------------------*/
 
-import type { Event } from '@universe-editor/platform'
+import type { AgentBinaryVersionPolicy, Event } from '@universe-editor/platform'
 import type { AgentBinaryId } from './flavors.js'
 import type { AgentBinaryDownloadState, AgentBinaryVersionInfo } from './agentBinaryStore.js'
 
@@ -27,20 +27,24 @@ export interface IRemoteAgentBinaryService {
 
   resolve(
     agent: AgentBinaryId,
-    opts: { readonly allowDownload?: boolean },
+    opts: { readonly allowDownload?: boolean; readonly policy: AgentBinaryVersionPolicy },
   ): Promise<{ readonly path: string }>
 
-  getVersionInfo(agent: AgentBinaryId): Promise<AgentBinaryVersionInfo>
+  getVersionInfo(
+    agent: AgentBinaryId,
+    policy: AgentBinaryVersionPolicy,
+  ): Promise<AgentBinaryVersionInfo>
 
   forceDownload(agent: AgentBinaryId, version: string): Promise<{ readonly path: string }>
 
   /**
-   * Background-prefetches the most desirable version (latest when available,
-   * otherwise the bundled/pinned version) into that version's own dir without
-   * activating it, so a later forceDownload needs no network. Managed download
-   * only — remote callers never resolve system/custom sources. Never rejects.
+   * Background-prefetches the most desirable version into that version's own dir
+   * without activating it, so a later forceDownload needs no network: the
+   * registry's latest under `'manual'`, the pin under `'pinned'` (which never
+   * consults the registry at all). Managed download only — remote callers never
+   * resolve system/custom sources. Never rejects.
    */
-  prefetch(agent: AgentBinaryId): Promise<void>
+  prefetch(agent: AgentBinaryId, policy: AgentBinaryVersionPolicy): Promise<void>
 
   /**
    * Removes version dirs outside the keep-set (active, pinned/bundled, last-seen

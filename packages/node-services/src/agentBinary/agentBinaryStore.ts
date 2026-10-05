@@ -15,9 +15,14 @@
  *  version the tree was last aligned to — `syncBundled` re-activates the pin when
  *  it changes (an editor upgrade) without ever touching a user's chosen version.
  *
- *  Since the pin is a *floor*, not just an idle-time alignment target, resolving
- *  never serves a binary older than `bundledVersion()`: a `.active` below it is
- *  replaced by the pin (from disk, or by downloading it). See `_resolveDownload`.
+ *  Which version the tree runs is the caller's call, carried as an
+ *  `AgentBinaryVersionPolicy`: `'manual'` honours the `.active` pointer (a version
+ *  the user picked), `'pinned'` ignores it and always runs the pin — the editor's
+ *  default, so a hand-picked version cannot outlive an editor upgrade. Under
+ *  `'manual'` the pin is still a *floor*, not just an idle-time alignment target:
+ *  resolving never serves a binary older than `bundledVersion()`, replacing such
+ *  an `.active` with the pin (from disk, or by downloading it). See
+ *  `_resolveDownload`.
  *--------------------------------------------------------------------------------------------*/
 
 import { createHash } from 'node:crypto'
@@ -28,6 +33,7 @@ import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { extract as tarExtract } from 'tar'
 import {
+  type AgentBinaryVersionPolicy,
   createNamedLogger,
   Disposable,
   Emitter,
@@ -111,6 +117,14 @@ export class AgentBinaryStore extends Disposable {
   )
   readonly onDidChangeDownload = this._onDidChangeDownload.event
 
+  private readonly _onDidChangeActiveVersion = this._register(new Emitter<void>())
+  /**
+   * Fires whenever `.active` is (re)written. Anything caching a resolved path must
+   * drop it here: the pointer moving is what makes such a cache stale, and under
+   * the locked policy it moves with no download at all (`_reconcilePinnedActive`).
+   */
+  readonly onDidChangeActiveVersion = this._onDidChangeActiveVersion.event
+
   private readonly _logger: ILogger
   private readonly _flavor: AgentBinaryFlavor
   private readonly _baseDir: string
@@ -141,12 +155,19 @@ export class AgentBinaryStore extends Disposable {
    */
   private _retainedVersion: string | undefined
   /**
+  /**
    * Floor-related warnings already logged, keyed by cause. Every one of them
    * describes a state that persists (a corrupt pointer, a stale binary) while the
    * silent resolve path runs on every session connect — without this, one broken
    * pointer would write a warning per connect for the rest of the session.
    */
   private readonly _warnedFloorMessages = new Set<string>()
+  /**
+   * The pin whose `.active` reconcile already ran in this process. The reconcile
+   * only ever has work to do once per pin, and `resolveDownload` runs on every
+   * session spawn — without this, each spawn would pay a pointer-file read.
+   */
+  private _pinnedActiveReconciled: string | undefined
 
   constructor(options: AgentBinaryStoreOptions) {
     super()
@@ -192,6 +213,24 @@ export class AgentBinaryStore extends Disposable {
   private async _setActiveVersion(version: string): Promise<void> {
     await mkdir(this._baseDir, { recursive: true })
     await writeFile(this._activeFile(), version, 'utf8')
+    this._onDidChangeActiveVersion.fire()
+  }
+
+  /**
+   * Keeps `.active` naming the pin while the locked policy is in force. Call only
+   * where the pin's binary was just verified on disk. Without this, a version the
+   * user picked before locking would stay in the pointer — pinned ignores it, but
+   * unlocking again would silently resume that version instead of the pin. Pure
+   * bookkeeping: a failed pointer write must not fail the resolve that found it.
+   */
+  private async _reconcilePinnedActive(pin: string): Promise<void> {
+    if (this._pinnedActiveReconciled === pin) return
+    try {
+      if ((await this._readActiveVersion()) !== pin) await this._setActiveVersion(pin)
+      this._pinnedActiveReconciled = pin
+    } catch (err) {
+      this._logger.warn(`${this._flavor.id} binary .active reconcile failed: ${String(err)}`)
+    }
   }
 
   /**
@@ -266,13 +305,15 @@ export class AgentBinaryStore extends Disposable {
    * Settled promises are dropped — the disk cache-hit path is cheap and a
    * `forceDownload` version flip must be observed by the next call. The
    * `allowDownload:false` fast-fail gets its own key so it never hands its
-   * rejection to a concurrent caller that actually wants to download.
+   * rejection to a concurrent caller that actually wants to download, and the
+   * policy is part of the key so flipping it mid-session (the user unlocking or
+   * locking version selection) can never reuse the other mode's resolved path.
    */
-  resolveDownload(allowDownload: boolean): Promise<string> {
-    const key = allowDownload ? 'download' : 'noDownload'
+  resolveDownload(allowDownload: boolean, policy: AgentBinaryVersionPolicy): Promise<string> {
+    const key = `${policy}:${allowDownload ? 'download' : 'noDownload'}`
     let pending = this._inflightResolves.get(key)
     if (!pending) {
-      pending = this._resolveDownload(allowDownload).finally(() => {
+      pending = this._resolveDownload(allowDownload, policy).finally(() => {
         this._inflightResolves.delete(key)
       })
       this._inflightResolves.set(key, pending)
@@ -280,16 +321,20 @@ export class AgentBinaryStore extends Disposable {
     return pending
   }
 
-  private async _resolveDownload(allowDownload: boolean): Promise<string> {
+  private async _resolveDownload(
+    allowDownload: boolean,
+    policy: AgentBinaryVersionPolicy,
+  ): Promise<string> {
     const version = await this._flavor.bundledVersion()
     const platform = this._flavor.detectPlatform()
     const active = await this._readActiveVersion()
 
-    // The active version is served only when it is not older than the pin. An
-    // editor upgrade moves the pin, and the idle alignment (syncBundled) may not
-    // have run yet — but no session may ever launch the stale binary in between.
-    // A version *above* the pin is a deliberate user choice and is left alone.
-    if (active !== null && !this._isBelowLocked(active, version)) {
+    // Under `'manual'` the pointer is honoured — but never below the pin. The pin
+    // is a *floor*, not just an idle-time alignment target: an editor upgrade moves
+    // it and the idle alignment (syncBundled) may not have run yet, yet no session
+    // may launch the stale binary in between. A version *above* the pin is a
+    // deliberate user choice and is left alone.
+    if (policy === 'manual' && active !== null && !this._isBelowLocked(active, version)) {
       const activeBinary = this._binaryIn(this._versionDir(active), platform)
       if (await pathExists(activeBinary)) {
         this._logger.info(`${this._flavor.id} binary cache hit ${activeBinary}`)
@@ -297,11 +342,21 @@ export class AgentBinaryStore extends Disposable {
       }
     }
 
-    // Nothing usable is active, but the pin itself is on disk: switch to it with
-    // zero network — covers a missing/undershooting/vanished `.active` alike.
+    // Everything else runs the pin: under `'pinned'` the pointer is deliberately
+    // ignored, so a version a user picked by hand can never outlive the editor
+    // upgrade that changed the pin; under `'manual'` it was missing, below the
+    // floor, or its dir had vanished. The pin itself is on disk — switch to it with
+    // zero network.
     const pinnedBinary = this._binaryIn(this._versionDir(version), platform)
     if (await pathExists(pinnedBinary)) {
-      await this._activate(version, active)
+      if (policy === 'pinned') {
+        // Pure bookkeeping here — the pointer merely has to name the pin before the
+        // user unlocks again, and a failed write must not fail a resolve that found
+        // a usable binary. A real switch (below) retains the outgoing dir instead.
+        await this._reconcilePinnedActive(version)
+      } else {
+        await this._activate(version, active)
+      }
       this._logger.info(`${this._flavor.id} binary activated pinned ${version} from disk`)
       return pinnedBinary
     }
@@ -315,10 +370,13 @@ export class AgentBinaryStore extends Disposable {
     }
 
     if (!allowDownload) {
-      // A background/speculative caller (session hydrate) must never fetch, yet a
-      // stale-but-present binary still beats failing outright: fall back to it and
-      // warn once, so the downgrade is visible instead of silent.
-      if (active !== null) {
+      // A background/speculative caller (session hydrate) must never fetch, yet
+      // under `'manual'` a stale-but-present pick still beats failing outright:
+      // fall back to it and warn once, so the downgrade is visible instead of
+      // silent. `'pinned'` has no such fallback — anything but the pin is a version
+      // that mode may not run at all, so it fails fast rather than quietly running
+      // below the lock.
+      if (policy === 'manual' && active !== null) {
         const stale = this._binaryIn(this._versionDir(active), platform)
         if (await pathExists(stale)) {
           this._warnBelowFloorFallback(active, version)
@@ -393,22 +451,37 @@ export class AgentBinaryStore extends Disposable {
     this._logger.warn(message)
   }
 
-  async getVersionInfo(): Promise<AgentBinaryVersionInfo> {
+  /**
+   * Version metadata for the panels. Under `'pinned'` the *effective* version is
+   * the pin — `.active` is not consulted at all, so a hand-picked version left on
+   * disk reads as "not installed" (the panel must not claim the user is running a
+   * binary that resolve would never hand out), and the registry's latest is left
+   * unqueried because a pinned tree can never switch to it. Seeing the pin on disk
+   * also reconciles `.active` to it — see `_reconcilePinnedActive`.
+   */
+  async getVersionInfo(policy: AgentBinaryVersionPolicy): Promise<AgentBinaryVersionInfo> {
     const bundledVersion = await this._flavor.bundledVersion()
     const platform = this._flavor.detectPlatform()
 
-    // The active version's dir name *is* its version; verify the binary still
-    // exists before reporting it. Fall back to the bundled/pinned-version dir for
-    // trees written before the `.active` pointer scheme.
+    // The effective version's dir name *is* its version; verify the binary still
+    // exists before reporting it. Fall back to the pin's dir for trees written
+    // before the `.active` pointer scheme.
     let installedVersion: string | null = null
-    const active = await this._readActiveVersion()
-    if (active && (await pathExists(this._binaryIn(this._versionDir(active), platform)))) {
-      installedVersion = active
-    } else if (await pathExists(this._binaryIn(this._versionDir(bundledVersion), platform))) {
+    const candidate = policy === 'pinned' ? bundledVersion : await this._readActiveVersion()
+    if (candidate && (await pathExists(this._binaryIn(this._versionDir(candidate), platform)))) {
+      installedVersion = candidate
+    } else if (
+      candidate !== bundledVersion &&
+      (await pathExists(this._binaryIn(this._versionDir(bundledVersion), platform)))
+    ) {
       installedVersion = bundledVersion
     }
 
-    const latestVersion = await this._queryLatest()
+    if (policy === 'pinned' && installedVersion === bundledVersion) {
+      await this._reconcilePinnedActive(bundledVersion)
+    }
+
+    const latestVersion = policy === 'pinned' ? null : await this._queryLatest()
     if (latestVersion) await this._rememberLatest(latestVersion)
 
     return {
@@ -421,33 +494,38 @@ export class AgentBinaryStore extends Disposable {
   }
 
   /**
-   * Background-prefetches the most desirable version (latest when available,
-   * otherwise the bundled/pinned one) into its own version dir without flipping
-   * `.active`, so a later `forceDownload` activates it without a network fetch.
-   * Never throws — a failed prefetch must not disrupt the caller.
+   * Background-prefetches the most desirable version into its own version dir
+   * without flipping `.active`, so a later `forceDownload` activates it without a
+   * network fetch: the registry's latest under `'manual'`, the pin itself under
+   * `'pinned'` (which never consults the registry — that mode can only ever run
+   * the pin). Under `'pinned'` the pointer is reconciled to the pin as well: there
+   * it names the only version the mode can run, not a user choice. Never throws —
+   * a failed prefetch must not disrupt the caller.
    */
-  async prefetch(): Promise<void> {
+  async prefetch(policy: AgentBinaryVersionPolicy): Promise<void> {
     try {
-      await this._prefetchImpl()
+      await this._prefetchImpl(policy)
     } catch (err) {
       this._logger.warn(`${this._flavor.id} binary prefetch failed: ${String(err)}`)
     }
   }
 
-  private async _prefetchImpl(): Promise<void> {
+  private async _prefetchImpl(policy: AgentBinaryVersionPolicy): Promise<void> {
     const bundledVersion = await this._flavor.bundledVersion()
     const platform = this._flavor.detectPlatform()
 
-    const latest = await this._queryLatest()
+    const latest = policy === 'pinned' ? null : await this._queryLatest()
     if (latest) await this._rememberLatest(latest)
     const target = latest ?? bundledVersion
 
-    // Already the active version? Nothing worth prefetching.
-    const active = (await this._readActiveVersion()) ?? bundledVersion
+    // Already the effective version? Nothing worth prefetching.
+    const active =
+      policy === 'pinned' ? bundledVersion : ((await this._readActiveVersion()) ?? bundledVersion)
     if (
       active === target &&
       (await pathExists(this._binaryIn(this._versionDir(active), platform)))
     ) {
+      if (policy === 'pinned') await this._reconcilePinnedActive(bundledVersion)
       return
     }
 
@@ -460,6 +538,7 @@ export class AgentBinaryStore extends Disposable {
 
     this._logger.info(`prefetching ${this._flavor.id} binary ${target} in background`)
     await this._ensureVersion(target, true)
+    if (policy === 'pinned') await this._reconcilePinnedActive(target)
     this._logger.info(`${this._flavor.id} binary prefetch ready ${target}`)
   }
 
@@ -497,6 +576,10 @@ export class AgentBinaryStore extends Disposable {
    * like `prefetch`, it never throws; the caller only uses the value to decide
    * whether to notify). Concurrent callers for one pin — two windows share a store
    * — report the switch only once.
+   *
+   * Only meaningful under the `'manual'` policy: a `'pinned'` resolve never reads
+   * `.active` in the first place, so this pass exists there to pre-download a
+   * newly pinned version at idle (the switch itself is already implied).
    */
   async syncBundled(): Promise<string | null> {
     try {

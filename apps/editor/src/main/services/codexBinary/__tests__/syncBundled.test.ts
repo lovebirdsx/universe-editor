@@ -94,7 +94,7 @@ describe('CodexBinaryMainService.syncBundled', () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
 
     // A hand-picked newer version, which the runtime floor leaves alone.
-    const before = await svc.resolve({ source: 'download' })
+    const before = await svc.resolve({ source: 'download', policy: 'manual' })
     expect(before.path).toBe(binaryIn(binDir(PICKED_VERSION)))
 
     await expect(svc.syncBundled()).resolves.toBe(CODEX_VERSION)
@@ -102,7 +102,7 @@ describe('CodexBinaryMainService.syncBundled', () => {
     expect(await readActive()).toBe(CODEX_VERSION)
     expect(await readBundled()).toBe(CODEX_VERSION)
     expect(fetchSpy).not.toHaveBeenCalled()
-    const after = await svc.resolve({ source: 'download' })
+    const after = await svc.resolve({ source: 'download', policy: 'manual' })
     expect(after.path).toBe(binaryIn(binDir(CODEX_VERSION)))
   })
 

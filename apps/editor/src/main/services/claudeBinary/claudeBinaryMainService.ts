@@ -17,6 +17,7 @@ import { access } from 'node:fs/promises'
 import * as path from 'node:path'
 import { app } from 'electron'
 import {
+  type AgentBinaryVersionPolicy,
   createNamedLogger,
   Disposable,
   Emitter,
@@ -42,6 +43,20 @@ import type {
   IClaudeBinaryService,
   IClaudeBinaryVersionInfo,
 } from '../../../shared/ipc/claudeBinaryService.js'
+
+/**
+ * Cache key of a download-mode resolve. The policy is part of it: the same
+ * options must not hand a caller the path resolved under the other policy after
+ * the user locked or unlocked version selection mid-session.
+ */
+function resolveCacheKey(opts: IClaudeBinaryResolveOptions): string {
+  return `${opts.policy}:${opts.source}:${opts.customPath ?? ''}${opts.allowDownload === false ? ':noDownload' : ''}`
+}
+
+/** The download-mode keys, spelled the way `resolveCacheKey` builds them. */
+function downloadResolveKey(policy: AgentBinaryVersionPolicy, allowDownload: boolean): string {
+  return `${policy}:download:${allowDownload ? '' : ':noDownload'}`
+}
 
 async function pathExists(p: string): Promise<boolean> {
   try {
@@ -114,22 +129,27 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
         this._onDidChangeDownload.fire({ downloads })
       }),
     )
+    // `_inflight` caches a path for the rest of the session; the pointer moving is
+    // what makes it stale, and the locked policy moves it with no download at all.
+    this._register(this._binaryStore.onDidChangeActiveVersion(() => this._evictResolveCache()))
   }
 
   resolve(opts: IClaudeBinaryResolveOptions): Promise<IClaudeBinaryResult> {
     if (opts.authority !== undefined) {
-      return this._resolveRemote(opts.authority, opts.allowDownload)
+      return this._resolveRemote(opts.authority, opts.allowDownload, opts.policy)
     }
-    // Two paths are deliberately never cached: a background probe that hits a
-    // download cache miss (fails fast, and must not hand its fast-fail promise to
-    // a concurrent caller that actually wants to download), and — now that the
-    // store may fall back to a below-pin binary for it — the same probe's *success*,
-    // which would otherwise outlive the `.active` flip a later foreground download
-    // makes. Both are a few `pathExists` calls, so re-running them is cheap.
+    // A download-mode probe with `allowDownload:false` is deliberately never cached:
+    // its *success* may be a below-pin fallback, and the `.active` flip that ends
+    // that state can come from another process (a second editor window), which the
+    // store's in-process eviction cannot observe. Re-running costs a few
+    // `pathExists` calls; the store still de-dupes concurrent probes itself. Every
+    // other combination is keyed by `resolveCacheKey` — policy included, so locking
+    // or unlocking version selection mid-session can never reuse the other mode's
+    // resolved path.
     if (opts.source !== 'custom' && opts.source !== 'system' && opts.allowDownload === false) {
       return this._resolve(opts)
     }
-    const key = `${opts.source}:${opts.customPath ?? ''}`
+    const key = resolveCacheKey(opts)
     let pending = this._inflight.get(key)
     if (!pending) {
       pending = this._resolve(opts).catch((err) => {
@@ -150,16 +170,20 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
         return { path: await this._resolveSystem() }
       case 'download':
       default:
-        return { path: await this._binaryStore.resolveDownload(opts.allowDownload ?? true) }
+        return {
+          path: await this._binaryStore.resolveDownload(opts.allowDownload ?? true, opts.policy),
+        }
     }
   }
 
   private async _resolveRemote(
     authority: string,
     allowDownload: boolean | undefined,
+    policy: AgentBinaryVersionPolicy,
   ): Promise<IClaudeBinaryResult> {
     const service = this._remoteService(authority)
     const { path } = await service.resolve('claude', {
+      policy,
       ...(allowDownload !== undefined ? { allowDownload } : {}),
     })
     return { path }
@@ -272,19 +296,22 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
     return (await pathExists(vendor)) ? vendor : null
   }
 
-  async getVersionInfo(authority?: string): Promise<IClaudeBinaryVersionInfo> {
+  async getVersionInfo(
+    policy: AgentBinaryVersionPolicy,
+    authority?: string,
+  ): Promise<IClaudeBinaryVersionInfo> {
     if (authority !== undefined) {
-      return this._remoteService(authority).getVersionInfo('claude')
+      return this._remoteService(authority).getVersionInfo('claude', policy)
     }
-    return this._binaryStore.getVersionInfo()
+    return this._binaryStore.getVersionInfo(policy)
   }
 
-  async prefetch(authority?: string): Promise<void> {
+  async prefetch(policy: AgentBinaryVersionPolicy, authority?: string): Promise<void> {
     if (authority !== undefined) {
-      await this._remoteService(authority).prefetch('claude')
+      await this._remoteService(authority).prefetch('claude', policy)
       return
     }
-    await this._binaryStore.prefetch()
+    await this._binaryStore.prefetch(policy)
   }
 
   async forceDownload(version: string, authority?: string): Promise<IClaudeBinaryResult> {
@@ -292,7 +319,6 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
       const { path } = await this._remoteService(authority).forceDownload('claude', version)
       return { path }
     }
-    this._evictResolveCache()
     return { path: await this._binaryStore.forceDownload(version) }
   }
 
@@ -309,23 +335,20 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
       const { version } = await this._remoteService(authority).syncBundled('claude')
       return version
     }
-    try {
-      return await this._binaryStore.syncBundled()
-    } finally {
-      // After the await: a resolve that raced the sync and re-cached the previous
-      // version's path must be evicted too.
-      this._evictResolveCache()
-    }
+    return await this._binaryStore.syncBundled()
   }
 
   /**
-   * Drops the cached resolve results for download mode. Both `forceDownload` and
-   * `syncBundled` move `.active`, and `_inflight` otherwise caches a resolved path
-   * for the rest of the session — the next resolve() would keep handing out the
-   * previous version's binary.
+   * Drops the cached resolve results for download mode. `_inflight` otherwise caches
+   * a resolved path for the rest of the session, and a moved `.active` — every write
+   * of it is announced, pointer reconciles included — makes such a path stale: the
+   * next resolve() would keep handing out the previous version's binary.
    */
   private _evictResolveCache(): void {
-    this._inflight.delete('download:')
+    for (const policy of ['pinned', 'manual'] as const) {
+      this._inflight.delete(downloadResolveKey(policy, true))
+      this._inflight.delete(downloadResolveKey(policy, false))
+    }
   }
 
   /**

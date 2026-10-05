@@ -8,13 +8,22 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { createDecorator } from '@universe-editor/platform'
-import type { Event } from '@universe-editor/platform'
+import type { AgentBinaryVersionPolicy, Event } from '@universe-editor/platform'
 
 export type ClaudeBinarySource = 'download' | 'system' | 'custom'
 
 export interface IClaudeBinaryResolveOptions {
   /** How to obtain the binary. Defaults to 'download' when omitted by callers. */
   readonly source: ClaudeBinarySource
+  /**
+   * Which version a managed download runs: `'pinned'` (the default the editor
+   * ships with) always runs the version this build was made against, ignoring any
+   * version a user picked; `'manual'` honours the user's pick. Required so a new
+   * caller cannot silently opt out of the lock — pass
+   * `binaryVersionPolicy(config)` from the renderer. Ignored by the system/custom
+   * sources, which never touch the managed tree.
+   */
+  readonly policy: AgentBinaryVersionPolicy
   /** Absolute path to a user-provided binary; required when source is 'custom'. */
   readonly customPath?: string
   /**
@@ -59,7 +68,8 @@ export interface IClaudeBinaryVersionInfo {
   /** SDK version the bundled ACP agent was built against (from claude-binary.json). */
   readonly bundledVersion: string
   /**
-   * Actually-installed binary version on disk — the version named by the `.active`
+   * Actually-installed binary version on disk — the version `resolve` would hand
+   * out: the pin under the locked policy, otherwise the one named by the `.active`
    * pointer file (each version lives in its own dir named after it). null means no
    * binary has been downloaded yet.
    */
@@ -97,24 +107,29 @@ export interface IClaudeBinaryService {
   resolve(opts: IClaudeBinaryResolveOptions): Promise<IClaudeBinaryResult>
 
   /**
-   * Returns version metadata for the download-mode binary. When `authority` is
-   * set, the metadata is read from that remote host's binary store instead of
+   * Returns version metadata for the download-mode binary, as the given policy
+   * would resolve it: under `'pinned'` the effective version is always the pin,
+   * so a version a user picked earlier reports as not installed. When `authority`
+   * is set, the metadata is read from that remote host's binary store instead of
    * the local one.
    */
-  getVersionInfo(authority?: string): Promise<IClaudeBinaryVersionInfo>
+  getVersionInfo(
+    policy: AgentBinaryVersionPolicy,
+    authority?: string,
+  ): Promise<IClaudeBinaryVersionInfo>
 
   /**
-   * Best-effort background download of the most desirable version (latest when
-   * available, otherwise the bundled SDK version) into that version's own dir,
-   * so a later forceDownload() needs no network. No-op when the desired version
-   * is already installed. Never throws — network failures are swallowed so idle
-   * prefetch never disrupts the user.
+   * Best-effort background download of the most desirable version into its own
+   * dir, so a later forceDownload() needs no network: the registry's latest under
+   * `'manual'`, the pinned SDK version under `'pinned'`. No-op when the desired
+   * version is already installed. Never throws — network failures are swallowed so
+   * idle prefetch never disrupts the user.
    *
    * When `authority` is set, the prefetch runs on that remote host's managed
    * store (download semantics only — `acp.claude.source` is a local setting and
    * is not consulted across the tunnel).
    */
-  prefetch(authority?: string): Promise<void>
+  prefetch(policy: AgentBinaryVersionPolicy, authority?: string): Promise<void>
 
   /**
    * Switches to `version` by flipping the `.active` pointer to its own per-version
@@ -140,7 +155,9 @@ export interface IClaudeBinaryService {
    * Aligns the managed-download tree with the bundled SDK version after the
    * editor's pinned version changed (an upgrade), so the user stops running the
    * previous pin without touching anything. Runs at idle; a version the user
-   * picked by hand is preserved until the pin itself changes again. Returns the
+   * picked by hand is preserved until the pin itself changes again (under the
+   * locked policy there is no pick to preserve — `resolve` never reads `.active`).
+   * Returns the
    * version it switched to, or null when there was nothing to do — the pin never
    * changed, no managed binary was ever downloaded, or the alignment failed (it
    * is retried next session). Against the local store it is best-effort and never
