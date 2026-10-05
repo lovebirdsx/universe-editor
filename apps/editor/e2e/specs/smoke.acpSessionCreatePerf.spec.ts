@@ -12,7 +12,9 @@
  *  `git rev-parse` stall in thread/start only reproduces in a git repo),
  *  points `acp.codex.source=custom` at the given binary, and records the
  *  profile to test-results/acp-session-create-perf.json. Use it to compare
- *  codex binary versions (see memory codex-session-skills-scan-slow):
+ *  codex binary versions (the native `thread/start` stall it targets is fixed
+ *  upstream since 0.146.0 — the repo pin `CODEX_VERSION` in
+ *  packages/node-services/src/agentBinary/flavors.ts has no such stall):
  *
  *    pnpm --filter @universe-editor/editor build
  *    cross-env UNIVERSE_E2E_REAL_CODEX=1 UNIVERSE_E2E_CODEX_PATH=C:\\path\\to\\codex.exe \

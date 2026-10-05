@@ -25,6 +25,10 @@
  *  收缩两条时间线用 setBounds 显式改窗口尺寸（任何环境确定生效），等待条件只用
  *  相对阈值；启动竞态时间线仍 seed isMaximized=true 走 main 的真实 maximize 路径，
  *  但不断言 OS 最大化状态。
+ *
+ *  机制与纪律（重挂载空窗、imperative resize 守卫、构造期闭包）见
+ *  docs/development/allotment-layout.md；CI 窗口尺寸约束的通用案例见 skill
+ *  fix-ci-e2e-flake 案例 99。
  *--------------------------------------------------------------------------------------------*/
 
 import { test, expect } from '@playwright/test'

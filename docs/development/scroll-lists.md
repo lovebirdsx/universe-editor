@@ -1,6 +1,6 @@
 # 滚动列表的渲染约定
 
-树 / 虚拟列表（`packages/workbench-ui` 的 `Tree` + `VirtualList`）是全仓侧栏与列表视图的共同底座。本文是它们**绘制**层面的四条约定。其中前三条背后是同一类最难查的故障：**残影**——同一格出现新旧两段文字完全重合，且一直留到重启才消失。
+树 / 虚拟列表（`packages/workbench-ui` 的 `Tree` + `VirtualList`）是全仓侧栏与列表视图的共同底座。本文是它们**绘制**层面的四条约定（§1–3 与 §4 行背景裁剪）；违反前三条时会出现那一类最难查的故障：**残影**——同一格出现新旧两段文字完全重合，且一直留到重启才消失。§5 是另一类问题：`measureDynamically` 下的滚动恢复与导航纪律（内容锚点 + 收敛循环）。
 
 残影的判据很简单：**DOM 是干净的**（每格一行、`data-row-key` 唯一、行矩形互不重叠、文本与数据一致），屏幕上的旧字是**没被清掉的旧栅格像素**。因此它不可能被 DOM 断言或截图比对抓住，只能靠约定 + 结构护栏守住，真正的验证是在真机上肉眼看一次。
 
@@ -45,6 +45,18 @@
 
 > 只改绘制、不改盒模型：行命中区与点击语义都在 `.row` 上，装饰列上的点击照旧落到行（`svg` 自身 `pointer-events: none`）。
 
+## 5. 动态测量下的恢复与导航：内容锚点 + 收敛循环
+
+`measureDynamically` 的列表恢复位置/导航到目标项时，**不能只写 `scrollTop`**：
+
+- **纯 `scrollTop` 恢复必然漂移**：保存的是**真实测量坐标**，恢复时上方行还未测量（估算坐标），同一数值对应更深/更浅的文档位置。正解 = **内容锚点**（首个可见项的 key + 它距视口顶的 offset），恢复时按 DOM rect 逐帧收敛对齐（现役实现：`apps/editor/src/renderer/workbench/agents/ChatBody.tsx:1075-1110` 的 `runScrollConvergence`，600ms 窗口）。
+- **收敛循环必须抑制 tanstack 的尺寸变化锚定**：`virtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => false`，否则 virtualizer 的自动 nudge 与循环每帧写入互相 creep、永远收敛不了。用户输入（`wheel` / `pointerdown` / `keydown`）立即中止循环并让其生效；`restoringRef` 让 handleScroll / ResizeObserver 把中途位置视为「未 settle」，循环结束才统一落位——**程序性滚动期间不写锚点**。
+- **恢复/导航 effect 不能把锚点对象当依赖**：scroll 事件里 saveAnchor 每次产生新对象 → 渲染期读出的引用每轮都变 → effect 被用户自己的滚动反复触发，两个循环互拉。锚点只在 effect 内快照（deps 用 `scrollReady` / `scrollKey` / `registryVersion`）。
+- **导航目标按下标（`itemIndex`）会立刻过期**，须按 id/key 从最新 model 重解析：配置 registry 会动态重排（`ThemesContribution._updateColorThemeSchema` 的 dispose + re-register 把节点挪到 `_nodes` 末尾，主题初始化期间连续 fire ~6 次），见 [packages/platform/CLAUDE.md](../../packages/platform/CLAUDE.md) 的「Configuration 注册表的顺序语义」。model / ranked 必须 `useMemo`（identity 稳定），循环以其为 epoch 在重排时续期窗口。
+- **末尾组物理上无法顶到视口顶**（下方内容不足一屏）：对齐循环要识别「已到底 + header 在视口内」即收敛，否则空转 600ms 停在前面组；此时 scroll spy 高亮落在前面组是 VSCode 同款固有行为，e2e 断言须避开末尾组（锚：`apps/editor/src/renderer/workbench/preferences/SettingsEditor.tsx:209` 的 `scrollToIndex(align:'start')` 与 TOC scroll spy）。
+
+> ⚠️ **现网未用锚点**：`SettingsEditor.tsx:86` 走的是 `useScrollRestore`（纯 `scrollTop`）+ `:323` 的 `measureDynamically`。按上面的机制陈述，这是一个**活的漂移风险**（实机复验前保留本节，别当作已解决删掉）。
+
 ## 排查套路
 
 怀疑是残影（而不是 DOM 缺陷）时，在出问题的窗口里打开 DevTools 跑：
@@ -78,4 +90,4 @@ document.querySelector('#root').style.opacity = '0.999'
 
 注：spacer 的底衬用的是 `var()`，**happy-dom 会丢弃 inline style 里的 `var()`**（那条声明读回空串；若它是该元素唯一的声明，`getAttribute('style')` 直接是 `null`），所以它只能靠代码审查与真机验证，写不成断言。
 
-相关：[浮层层级与裁剪](overlay-layers.md)（浮层挂载与 `--z-*` 分层）。
+相关：[浮层层级与裁剪](overlay-layers.md)（浮层挂载与 `--z-*` 分层）；[Allotment 分割布局](allotment-layout.md)（SplitView 重挂载空窗与 imperative `resize()` 纪律）；[嵌入 Monaco](monaco-embedding.md)（`automaticLayout` 与容器尺寸的反馈死锁）。

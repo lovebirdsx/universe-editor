@@ -54,15 +54,6 @@ pnpm --filter @universe-editor/editor package:win
 
 产物输出到 `apps/editor/release/`：`win-unpacked/` 免安装目录包 + NSIS 安装器。产物默认未签名，首次运行可能触发 SmartScreen 警告。
 
-## 共享 Claude memory
-
-本仓库把 Claude memory 真身放在 `.claude/memory/` 并纳入 git，通过链接实现跨 clone / 跨机共享：
-
-```bash
-pnpm memory:link      # 每个 clone / 每台新机器各跑一次
-pnpm memory:status    # 只查看链接状态
-```
-
 ## 更多
 
 开发约定、各子目录导航与常见套路详见 [CLAUDE.md](./CLAUDE.md)。

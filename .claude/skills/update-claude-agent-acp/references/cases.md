@@ -5,7 +5,7 @@
 ## 案例 1：fork `npm test` 两个 toDisplayPath 测试在 Windows 必失败（非回归）
 - **现象**：`src/tests/acp-agent.test.ts` 的 `should use relative path in title when cwd is provided` 与 `toDisplayPath > should relativize paths inside cwd…` 失败，`Expected "src/main.ts" / Received "src\main.ts"`。
 - **根因**：上游 `src/tools.ts` `toDisplayPath` 用 `path.relative` 返回平台分隔符（Windows `\`），但测试硬编码期望 `/`。上游自带（基线即有），CI 在 Linux/Mac 跑未暴露，与我们改动无关。
-- **解法**：**直接忽略**，不改上游逻辑（保持合并纯粹）。不影响主仓库 `pnpm check`（vendor 不在 workspace）。已记入记忆 `acp-fork-windows-path-test-flake`。
+- **解法**：**直接忽略**，不改上游逻辑（保持合并纯粹）。不影响主仓库 `pnpm check`（vendor 不在 workspace）。
 - **锚点**：`vendor/claude-agent-acp/src/tools.ts`（`toDisplayPath`）。
 
 ## 案例 2：AskUserQuestion — 上游 elicitation 实现与我们的 extMethod 实现冲突（两路并存）
@@ -81,7 +81,7 @@
 - **根因**：某包的 **peerDependencies 在 lock 中无满足节点**——lock 里已有的 X 嵌套在别的包下、不在 peer 消费者的祖先链上，`npm ci` 构建理想树时需要顶层放置新版本（registry 最新），lock 没有即 `EUSAGE`。多由上游依赖链演进（如 `vitest→vite→rolldown→@napi-rs/wasm-runtime` peer `@emnapi/*`）引起，老 lock 突然失效。
 - **解法**：submodule 内 `npm install --package-lock-only --registry=https://registry.npmjs.org`，验证 `npm ci --dry-run` 通过后提交 fork 分支（注意 gitlink 指向的分支可能是 `main-060726` 这类平行分支，先 `git branch -a --contains <gitlink>` 确认），再更新主仓库 gitlink。
 - **Why 必带 `--registry`**：本机 npm 可能配了第三方镜像，不指定 `--registry` 会把镜像 URL 写进 lock 的 `resolved` 字段，CI（境外 runner）拉包慢甚至不通。**凡在 `vendor/*` 重新生成 lock，一律带 `--registry=https://registry.npmjs.org`**；提交后本地 `pnpm agent:build` 全链路验证。
-- **锚点**：`vendor/claude-agent-acp/package-lock.json`、主仓库 `scripts/release/vendor-install.mjs`（`npm ci` 调用处）；与 SKILL.md 要点 8「optional 依赖静默省略导致隔天 `npm ci` 挂」是同一 lock 环节的两个坑。相关记忆 `agent-binary-silent-download-e2e-fix`。
+- **锚点**：`vendor/claude-agent-acp/package-lock.json`、主仓库 `scripts/release/vendor-install.mjs`（`npm ci` 调用处）；与 SKILL.md 要点 8「optional 依赖静默省略导致隔天 `npm ci` 挂」是同一 lock 环节的两个坑。
 
 ## 案例 11（0.62.0→0.64.2 复盘）：上游 #881 嵌套子代理 transcript 撞我方用量累积；尾部相邻 append 冲突的闭合括号套路
 - **现象**：21 个上游提交（SDK 0.3.219→0.3.220，含 #881 Bash 结构化标题/嵌套子代理 transcript、#916/#917/#923 tool_progress/permission_denied 修复、#919 steering host-owned fallback、#929 elicitation custom 字段）。rebase 仅 5 处冲突（package.json、acp-agent.ts×3、测试文件×1），但解完 typecheck 报 1 个 TS2345，属「冲突解完 ≠ 语义正确」的又一例。

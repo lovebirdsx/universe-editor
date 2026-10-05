@@ -30,7 +30,7 @@
 10. **ignore 是纯客户端概念**：`swarmIgnoreStore` 模块单例 + GLOBAL 持久化，dashboard 数据源不变，渲染时 `splitIgnored` 分流（meta 快照是必需兜底）。
 11. **UI 状态持久化三条机制别混**：侧栏折叠/keyword（`swarmReviewsUiStore` GLOBAL，跨重启）/ 筛选条件（`perforce.swarm.*` config）/ 详情页版本/滚动/草稿（内存 Map，仅跨 tab）。
 12. **版本指纹协议**：指纹 = 版本数 + 末版本 `archiveChange ?? change`，**绝不用 rev**；指纹不同即跳最新版本、compare 重置回 depot base，否则 diff 永远停在旧快照。
-13. **头号坑**：renderer Action2 命令**绝不能进扩展 package.json `commands` 数组**（遮蔽 → `executeCommand` 静默返回 undefined、不抛错）；host→renderer 只能走 `_workbench.*` 前缀。memory `[[renderer-action-shadowed-by-extension-command-decl]]`。
+13. **头号坑**：renderer Action2 命令**绝不能进扩展 package.json `commands` 数组**（遮蔽 → `executeCommand` 静默返回 undefined、不抛错）；host→renderer 只能走 `_workbench.*` 前缀。见 skill `create-extension`（commands/menus 贡献点节）。
 14. **密钥红线**：ticket/token/password 只存内存 + Authorization header，**绝不**进 wire DTO / 日志（`swarmApi` 日志只打 URL+状态码）；settings.json / `perforce.*` 配置同父文档红线；独立 token 路径走 `ISecretStorageService`。
 15. **REST 铁律**：comments 是 topic-based（`comments?topic=reviews/{id}`），不是嵌套资源（嵌套 404）；reviews 系列相反全是嵌套路径。对照表见下节。
 16. **状态永远问服务器**：加任何「改状态」入口先 GET transitions 拿合法集，别自己算。
@@ -56,7 +56,7 @@ Swarm 的 comment 端点**不挂在 review 下**——写成嵌套路径会 404�
 |---|---|
 | `packages/extensions-common/src/contracts/swarm.ts` | renderer↔扩展共享 DTO（ReviewDto/DetailDto(含 transitions)/DashboardResult/VoteRequest/TransitionRequest(含 commit?)/AddCommentRequest(含 context?+content?)/…）+ `SwarmCommands` 命令 id 常量；**必须**在 `index.ts` re-export |
 | `extensions/perforce/src/swarm/swarmApi.ts` | 薄 REST 层（get/post/patch，拼 `/api/v{N}/…` URL + Authorization header）；**认了 `UNIVERSE_SWARM_BASE_URL` env 覆盖**（e2e fake server）；日志只打 URL+状态码 |
-| `extensions/perforce/src/swarm/swarmAuth.ts` | `resolveTicket`（`p4 login -p` 取 ticket）+ `buildBasicAuth` + `resolveSwarmCredential`（密钥红线） |
+| `extensions/perforce/src/swarm/swarmAuth.ts` | `resolveTicket`（`p4 tickets` 读已签发票据；**不是** `p4 login -p`——那个会重跑登录）+ `buildBasicAuth` + `resolveSwarmCredential`（密钥红线） |
 | `extensions/perforce/src/swarm/swarmParser.ts` | Swarm JSON → DTO 的**纯函数**（`parseReviewList`/`parseReviewDetail`/`parseTransitions`/`parseComments`…），可对 fixture 单测 |
 | `extensions/perforce/src/swarm/swarmClient.ts` | `SwarmClient`：每个审核操作一个方法（`dashboard`/`listReviews`/`getReview`/`vote`/`transition`/`addComment`…），组合 api + parser；持 `SwarmClientConfig {baseUrl, apiVersion, user}` |
 | `extensions/perforce/src/swarm/swarmCommands.ts` | 注册全部 `perforce.swarm.*` 命令；`guard()` 把「未配置/未授权」失败映射成安全回退值；`SwarmClient` 按 config+active-client 签名懒重建 |
@@ -88,7 +88,7 @@ Swarm 的 comment 端点**不挂在 review 下**——写成嵌套路径会 404�
 
 **深链接**：`universe-editor://swarm/review/<id>` → `swarm.openReview`（`shared/deepLink.ts` 解析 + `DEEP_LINK_ALLOWED_COMMANDS` 白名单，见 `apps/editor/src/renderer/services/opener/CLAUDE.md`）。
 
-**编辑器身份隔离（同类多 tab 必做）**：两个 EditorInput 都覆写 `id` 让不同审核 / 不同 diff = 不同 tab（memory `[[editor-input-identity-isolation]]`）——`SwarmReviewEditorInput`（`id` 含 reviewId，`resource = universe:/swarmReview/{id}`）；`SwarmDiffEditorInput`（`id = swarmDiff:{reviewId}:{depotFile}:{left}-{right}`，**transient**——重启不恢复）。
+**编辑器身份隔离（同类多 tab 必做）**：两个 EditorInput 都覆写 `id` 让不同审核 / 不同 diff = 不同 tab（见 `apps/editor/src/renderer/services/editor/CLAUDE.md`）——`SwarmReviewEditorInput`（`id` 含 reviewId，`resource = universe:/swarmReview/{id}`）；`SwarmDiffEditorInput`（`id = swarmDiff:{reviewId}:{depotFile}:{left}-{right}`，**transient**——重启不恢复）。
 
 ### 验证
 

@@ -3,6 +3,7 @@
   "skillOverrides": {
     "claude-api": "user-invocable-only"
   },
+  "autoMemoryEnabled": false,
   "permissions": {
     "deny": [
       "Bash(npx playwright test)",

@@ -119,7 +119,7 @@ node scripts/release/runtime-resources.mjs verify-source   # 校验 docs/user se
 - `scripts/check-doc-links.mjs` —— `pnpm docs:check` 死链校验
 - `extensions/markdown/e2e/specs/markdownPreview.spec.ts`（`-g "doc center"`）—— 文档中心 E2E
 - 相关：`apps/editor/src/renderer/workbench/markdown/CLAUDE.md`（渲染器/键盘导航共享面，线②）；跨进程服务套路见 apps/editor/CLAUDE.md 套路 C
-- 相关 memory：[[markdown-preview-local-images-app-scheme]]（markdown 渲染相关）
+- 相关：`apps/editor/src/renderer/workbench/markdown/cases-preview.md`（markdown 预览本地图片/链接提示）、`docs/development/app-protocol.md`（universe-app 协议）
 
 ### 其它
 - 后续用本 skill，发现新经验，需同步更新本文件

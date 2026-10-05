@@ -18,7 +18,7 @@ TypeScript 语言能力的内置插件（VSCode「选项 B」形态）：插件�
 ### 插件本体 `extensions/typescript/`
 - `src/extension.ts` —— activate：输出通道+logger → 读 env → LspClient → 注册 17 类 provider（rpc.ts `LanguageProviderType`）+ `createDiagnosticCollection('typescript')` + 文档同步（onDidOpen/Change/Close + 激活时补 didOpen）+ 调试命令 `typescript.restartTsServer`/`openTsServerLog`。CodeLens 的 `onDidChangeCodeLenses` 接 `Emitter<void>`（`client.onCodeLensRefresh` 驱动）。**大文件门**：纯装饰性全文件请求按内容长度跳过——semanticTokens >100K（VSCode parity）、documentSymbol >2M（超大 d.ts 会把串行 tsserver 冻死，Outline 绝不能劫持 server）。
 - `src/logger.ts` —— 分级日志落「TypeScript」输出通道（**禁止 console.error**，会混进共享「Extension Host」通道）。级别：`UNIVERSE_TS_LOG_LEVEL` env > `js/ts.tsserver.log` 设置；verbose 记 server stderr + 每请求耗时（查「server 被慢请求冻住」第一站）。
-- `src/lspClient.ts` —— **唯一与 tsserver 直接对话处**：spawn Electron-as-node + `vscode-jsonrpc` connection + initialize 握手（`initializationOptions.tsserver.path` **Windows 必须 normalize() 成反斜杠**——正斜杠被 TLS 静默回退到工作区 node_modules/typescript，行为/性能对不上，排查史见 [cases-tsserver-investigation.md](cases-tsserver-investigation.md)）。崩溃重启 + 重推 open docs（重放前打 `replaying N open doc(s)`，openDocs 标 `(pinned, project≈X)`）。用户态 `restart()` 优雅停旧进程（stdin EOF 收割 tsserver），不占崩溃预算。**keep-alive pin**：didClose 某项目最后一个 open 文件且无 pin 时转为 pinned（不发 didClose），让崩溃重放能把项目带回来；已有 pin 的项目正常关闭。didOpen/didClose 打 `project≈<tsconfig>` 归属日志（协议拿不到项目名）。**No Project 降级**：tsserver 项目尚未加载时对语义请求回 "No Project."（预期态，非故障），全部语义 provider 统一降级为空结果而不把它抛成 renderer 错误，并在通道打 `no-project degrade <method> <uri> (didOpen/delivered/project≈/openDocs)`——三态即分诊：`didOpen=no` 是我方 document-sync 缺口、`delivered=no` 是握手/重放竞争、两者皆 yes 则是服务端扩展名/tsconfig 归属。CodeLens：initialize capability + `workspace/didChangeConfiguration` 下发 `js/ts.referencesCodeLens.*`/`implementationsCodeLens.*`（默认全关，对齐 VSCode）+ `onRequest('workspace/codeLens/refresh')` 触发刷新。
+- `src/lspClient.ts` —— **唯一与 tsserver 直接对话处**：spawn Electron-as-node + `vscode-jsonrpc` connection + initialize 握手（`initializationOptions.tsserver.path` **Windows 必须 normalize() 成反斜杠**——正斜杠被 TLS 静默回退到工作区 node_modules/typescript，行为/性能对不上，排查史见 [cases-tsserver-investigation.md](cases-tsserver-investigation.md)）。崩溃重启 + 重推 open docs（重放前打 `replaying N open doc(s)`，openDocs 标 `(pinned, project≈X)`）。用户态 `restart()` 优雅停旧进程（stdin EOF 收割 tsserver），不占崩溃预算。**keep-alive pin**：didClose 某项目最后一个 open 文件且无 pin 时转为 pinned（不发 didClose），让崩溃重放能把项目带回来；已有 pin 的项目正常关闭。didOpen/didClose 打 `project≈<tsconfig>` 归属日志（协议拿不到项目名）。**No Project 降级**：tsserver 项目尚未加载时对语义请求回 "No Project."（预期态，非故障），全部语义 provider 统一降级为空结果而不把它抛成 renderer 错误，并在通道打 `no-project degrade <method> <uri> (didOpen/delivered/project≈/openDocs)`——三态即分诊：`didOpen=no` 是我方 document-sync 缺口、`delivered=no` 是握手/重放竞争、两者皆 yes 则是服务端扩展名/tsconfig 归属。CodeLens：initialize capability + `workspace/didChangeConfiguration` 下发 `js/ts.referencesCodeLens.*`/`implementationsCodeLens.*`（默认全关，对齐 VSCode）+ `onRequest('workspace/codeLens/refresh')` 触发刷新。**必须设 `maxTsServerMemory`**（`lspClient.ts:342` 的 `_maxTsServerMemoryMb`，`:1287` 下发），否则大 d.ts 会把 tsserver 打爆；OOM 时状态栏提示可调大 `js/ts.tsserver.maxMemory`（`:1389`）。**didOpen 重推按连接代际去重**：`sentGeneration` 与 `_generation` 比对（`lspClient.ts:231-235`/`:541`），日志带 `gen=`——「多余的全文 didOpen」只有靠「恰好 N 次」的日志断言才暴露，功能测试全绿也抓不到。
 - `package.json`/`package.nls*.json`/`esbuild.config.mjs` —— activationEvents `onLanguage:*` + 2 调试命令；contributes 8 个 `js/ts.*` 配置项；esbuild bundle `vscode-jsonrpc`+`vscode-languageserver-types`。
 
 ### wire 协议 `packages/extensions-common/`
@@ -74,14 +74,14 @@ TypeScript 语言能力的内置插件（VSCode「选项 B」形态）：插件�
 
 ## 历史与排查
 
-- 演进史：renderer core contribution + 主进程 LSP → 选项 A 原型 → 选项 B 全迁入 `extensions/typescript`（M1–M6），见 memory `typescript-builtin-plugin`。后续增量均「照抄套路」——**CodeLens** 是首个「两阶段 resolve + 命令参数转换 + 反向刷新」三合一的 provider，是加同类特性（inlay hints 等）的最全样板。
+- 演进史：renderer core contribution + 主进程 LSP → 选项 A 原型 → 选项 B 全迁入 `extensions/typescript`（M1–M6）。后续增量均「照抄套路」——**CodeLens** 是首个「两阶段 resolve + 命令参数转换 + 反向刷新」三合一的 provider，是加同类特性（inlay hints 等）的最全样板。
 - 大型 depot 工程排查实录（didOpen 超大 d.ts 转圈 60-90s、正斜杠回退 bug、close 不卸载纠偏、keep-alive pin 背景）见 [cases-tsserver-investigation.md](cases-tsserver-investigation.md)。
 
 ## 验证与参考
 
 - 验证：`pnpm check`；改交互链路跑 `pnpm e2e`；逐包顺序 extensions-common → extension-api → extension-host → editor → `pnpm ext:build`。手测：`pnpm dev` → Output「TypeScript」通道打启动日志 → F12/hover/补全/诊断红线。
 - 配套 skill：`extend-language-plugin`（怎么改）、`register-monaco-command`。
-- 配套 memory：`typescript-builtin-plugin`、`extension-system-progress`、`scm-submodule-multirepo`（句柄路由 SCM 蓝本）。
+- 配套：`apps/editor/src/renderer/workbench/scm/CLAUDE.md`（多 repo 句柄路由蓝本）；宿主运行时与 API 契约见 `packages/extension-host/CLAUDE.md`、`packages/extension-api/CLAUDE.md`。
 
 ## 其它
 

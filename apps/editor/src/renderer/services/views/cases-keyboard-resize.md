@@ -13,7 +13,7 @@
 
 - **判定用 `focusedViewPane`**：`ViewPane` 的 `data-view-pane` 派生（`FocusContextKeyContribution`），覆盖**标题栏 + 内容区**——焦点停在折叠箭头或 toolbar 按钮上也算"这个 view"。`focusedView` 保持 ViewBody-only 语义不变：outline / explorer tree / swarm 的键位 gate 在它上面，扩大触发面会连带改变它们。
 - **注册按 viewId 而非容器**：一个 view 只由一个已挂载容器渲染，查找不必猜 owner。`views.length < 2` 不注册（单 view 填满容器，没有邻居可借）。
-- **无人处理返回 false**：调用方保持 part 级行为（侧栏纵向仍是 no-op）。几何未上报（`sizesRef` 长度不匹配、Allotment 重挂载窗口）同属此类。
+- **无人处理返回 false**：调用方保持 part 级行为（侧栏纵向仍是 no-op）。几何未上报（`sizesRef` 长度不匹配、Allotment 重挂载窗口——机制与守卫纪律见 [allotment-layout.md](../../../../../../docs/development/allotment-layout.md)）同属此类。
 
 ## 借还语义（`computeResizeSizes`）
 

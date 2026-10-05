@@ -229,7 +229,7 @@ export class RateWindow {
 /**
  * The Windows sampler script, run through `-EncodedCommand` so no part of it
  * ever reaches a command line (Windows argv quoting is a documented minefield
- * here — see the `win32-spawnsync-cmd-caret-escaping` note).
+ * here — see the win32 cmd escaping section of docs/development/build-tooling.md).
  *
  * Exits on its own when the sampled process disappears, which is the normal end
  * of every sync — including the case where the editor crashed and nothing is

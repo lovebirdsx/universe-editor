@@ -6,7 +6,7 @@
  *  keeps the review/version/file context that the inline-comment layer needs to
  *  anchor comments (Swarm context.leftLine/rightLine + version). The identity is
  *  keyed on review + file + version pair so distinct comparisons never dedupe into
- *  one tab (see memory `editor-input-identity-isolation`).
+ *  one tab (see apps/editor/src/renderer/services/editor/CLAUDE.md).
  *--------------------------------------------------------------------------------------------*/
 
 import { IFileService, URI } from '@universe-editor/platform'

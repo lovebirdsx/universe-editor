@@ -26,8 +26,6 @@
     "dev": "node apps/editor/scripts/dev.mjs",
     "dev:run": "node apps/editor/scripts/dev-run.mjs",
     "start": "pnpm --filter @universe-editor/editor start",
-    "memory:link": "node scripts/link-memory.mjs",
-    "memory:status": "node scripts/link-memory.mjs --status",
     "skills:policy": "node scripts/sync-codex-skill-policy.mjs",
     "skills:policy:check": "node scripts/sync-codex-skill-policy.mjs --check",
     "skills:lint": "node scripts/lint-skills.mjs",

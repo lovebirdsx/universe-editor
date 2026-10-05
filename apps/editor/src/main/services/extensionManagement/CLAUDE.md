@@ -72,6 +72,8 @@
 
 **已知限制**：`quarantineMalicious` 只治理本机；"市场不可达"与"查无此扩展"同显示为不可安装；同 id 本地/远端条目共用同一 enablement 徽标；写序列化按 daemon 进程级隔离。
 
+> 远端路由的坑与决策见 [cases-remote-routing.md](cases-remote-routing.md)
+
 ## ③ shared IPC 契约
 
 `createDecorator` + `ProxyChannel.fromService/toService`（套路 C），通道名在 `shared/ipc/channelNames.ts`。
@@ -119,10 +121,10 @@
 1. **DI 注册顺序：gallery 必须先于 management**（管理服务构造函数注入 `IExtensionGalleryService`）。`main/services/main-services.ts` 里顺序反了运行时报未注册。
 2. **`writeInstalledRecords` 会冲掉 enablement**（勿回退）：任何写 `extensions.json` 的路径都要经 `readManifestFile` 往返保留 enablement。
 3. **纯逻辑包别混进 IO**：`extension-gallery`/`extension-packaging` 零 IO 零 DI；下载、缓存、落盘都在 main 服务。
-4. **workspace 包放 devDependencies + externalizeDeps**：纯逻辑包被 main bundle（`externalizeDeps.exclude`），运行时 npm 依赖才进 `dependencies`。放错会打包崩（见 [[electron-builder-asarunpack-pnpm-workspace]]）。
-5. **Action2 async run 的 accessor 首个 await 即失效**：install/uninstall/update 命令须在第一个 `await` 前同步取完所有 service（见 [[action2-async-accessor-invalidation]]）。
+4. **workspace 包放 devDependencies + externalizeDeps**：纯逻辑包被 main bundle（`externalizeDeps.exclude`），运行时 npm 依赖才进 `dependencies`。放错会打包崩（机制与打包验证见 `docs/development/build-tooling.md`）。
+5. **Action2 async run 的 accessor 首个 await 即失效**：install/uninstall/update 命令须在第一个 `await` 前同步取完所有 service（见 `docs/development/commands-and-context-keys.md`）。
 6. **IStorageService 是 async get/set**（无 StorageTarget），`StorageScope` 只有 `GLOBAL=0`/`WORKSPACE=1`（无 APPLICATION）；`localize` 用具名占位 `{name}`；`IDialogService.confirm` 结果必带 `choice`。
-7. **详情页 EditorInput 身份隔离**：虚拟 scheme `universe:/extension/<id>` 让每个扩展详情页是独立 tab（见 [[editor-input-identity-isolation]]）。
+7. **详情页 EditorInput 身份隔离**：虚拟 scheme `universe:/extension/<id>` 让每个扩展详情页是独立 tab（见 `apps/editor/src/renderer/services/editor/CLAUDE.md`）。
 8. **测恶意隔离要用可变 malicious 列表**：先干净装、再把 id 加进 malicious，然后测 `quarantineMalicious`——否则 install 自身的恶意检查直接拒装。
 9. **VSIX 磁盘缓存必须对 hash 才准命中**：同版本重发后 registry 的 sha256 会变；`download()` 命中前比对 `extension.vsixHash`，不符则删了重下（否则验签永远 hash-mismatch 且无自愈路径）。
 10. **extensions.json 原子写的 rename 必须带重试（勿回退成裸 `fs.rename`）**：Windows 下目标文件会被 host 重扫并发读 / Defender 扫描瞬时持有，rename 直接 EPERM。`writeJsonAtomic` 走 `renameWithRetries`（EPERM/EACCES/EBUSY 10×100ms），有单测守护。
@@ -149,5 +151,5 @@ pnpm e2e specs/smoke.extensions.spec.ts
 
 ## 相关
 
-- 运行时（host/RPC/provider，本文档的下游）：`packages/extension-host/CLAUDE.md`；memory [[extension-system-progress]] / [[remote-user-extensions-management]] / [[extension-api-review-followup-round]]
+- 运行时（host/RPC/provider，本文档的下游）：`packages/extension-host/CLAUDE.md`；远端路由见 [cases-remote-routing.md](cases-remote-routing.md)
 - VSCode 对照：`src/vs/platform/extensionManagement/`；skill：extend-language-plugin / register-monaco-command / fix-disposable-leak

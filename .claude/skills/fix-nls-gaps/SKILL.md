@@ -115,6 +115,7 @@ pnpm e2e:smoke                                 # @p0 冒烟
 - `apps/editor/src/shared/i18n/availableLocales.ts` —— locale 装配（`configureEditorNls`）
 - `apps/editor/src/renderer/workbench/editor/monaco/monacoActionsBridge.ts` —— Monaco 命令 label 的 NLS 查表兜底
 - `packages/platform/src/configuration/sources/cliHelp.ts` —— `--help` 文本生成（英文惯例的例外域）
+- `docs/development/monaco-embedding.md`「0.55 升级踩坑」 —— **monaco 内置 UI**（查找框/右键/peek）的中文不走本表：0.55 起其 NLS 是索引制（prebuilt `localize(786,"EN")` 查 `_VSCODE_NLS_MESSAGES[index]`），走「英文桥接」patch `lookupMessage`——`apps/editor/src/renderer/workbench/editor/monaco/monacoNlsPatch.ts` + 构建脚本 `apps/editor/scripts/build-monaco-nls.mjs`，产物 `apps/editor/src/renderer/vendor/monaco-nls/zh-cn.messages.json`
 
 ## 其它
 

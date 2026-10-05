@@ -24,6 +24,11 @@
 
 **能力探测本身失败（如远端断连）时保留 `useTrash`**——探测失败等于「不知道」，答「没有回收站」会把用户要的「移到回收站」静默变成永久删除；让 provider fail loud，再由回退弹框请用户明确决定。
 
+## 测试
+
+- **桩的错误注入必须能建模「部分成功」**（按目标 + 按 `useTrash` 精确抛）：否则 `exists` 过滤与「重试成功」两条路径零覆盖，断言只能靠 confirm 次数间接推断。已改为**直接断言 deleteCalls 序列**，并用变异测试验证判据能捕获 ENOENT 回归。
+- 审查教训：注释写「别让探测决定破坏数据」而代码 `return false` 的自相矛盾，测试抓不到，**只有人工审查能抓到**——「实现与自己的注释相反」是一类需要人来看的缺陷。
+
 ## URI.fsPath 斜杠方向（path.normalize）
 
 **本仓库 URI.fsPath 是正斜杠**（移植省了 Windows `\` 转换），`shell.trashItem` 走 Windows Shell API 要反斜杠，故 node provider 回收站分支已 `path.normalize(uri.fsPath)`——别退回直接传 fsPath（会 "Failed to parse path"）。

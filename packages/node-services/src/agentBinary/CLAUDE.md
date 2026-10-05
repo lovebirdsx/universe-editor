@@ -35,11 +35,12 @@ Agent 原生二进制（Claude / Codex）的**下载核心**，Electron-free，�
 - **UI 侧**：两个 BinaryPanel 共用 `BinaryVersionToggle` + `useManualBinaryVersion`；开启手动选择要 `IDialogService.confirm` 二次确认，关闭时立刻 `forceDownload(pin)` 对齐（不等空闲 alignment）；pinned 下面板隐藏 Latest 行与本地版本列表、只留 pin 的操作按钮。`AgentBinaryPrefetchContribution` 的对齐门控在 pinned 下**始终放行**（pin 绑定不是用户可关的），manual 下才看 `acp.autoUpgradeBinaries`。
 - 改动波及面见下节：policy 进了 remote 协议（bump `REMOTE_PROTOCOL_VERSION`）。
 
-## 三条不变量（改动前先读）
+## 四条不变量（改动前先读）
 
 1. **单入口按版本去重**：一切下载走 `_ensureVersion(version, background)` —— 盘上 `<version>/` 命中二进制则直接返回（**零网络**），否则下载；`_inflightEnsures` 保证同版本并发只 fetch 一次（后台 prefetch 与用户点击共享同一次下载），settle 后释放登记。`resolveDownload` / `forceDownload` / `prefetch` 都只是它的调用方，**不要在它们里各写一套下载逻辑**。`forceDownload` = ensure + 写 `.active`——**绝不删目录重下**（盘上已有就该秒切）。去重同时是防损坏的前提：同一版本的两次并发会写同一个 `<destDir>.extract.<pid>` 而互相踩踏。
 2. **保留集永不联网**：`cleanupStaleVersions()` 的 keep-set = `{active} ∪ {bundled} ∪ {上次见到的 latest} ∪ {在飞的下载} ∪ {正在激活的版本} ∪ {被切换掉的旧版本（`_retainedVersion`，本进程内）} ∪ {从遗留暂存区搬回来的版本}`。cleanup 在启动路径上，联网会让 10s 超时成为最坏路径，故 latest 用 `.latest` 文件记（`getVersionInfo`/`prefetch` 拿到 registry 应答时顺手写）。**`bundledVersion()` 抛错时不能返回空集**——空集等于把用户下过的版本全删，宁可这轮不清理。`_activating` 与「搬回来的版本」这两项是为了堵两个真实窗口：下载已 settle 但 `.active` 还没写、以及 idle 的 cleanup 抢在用户点击之前把暂存区的几百 MB 回收掉；`_retainedVersion` 堵的是「第二个窗口在本会话内又 sweep 一次」——那时 `.active` 已经翻走，被替换的版本不再被任何一项命名。
 3. **进度状态活在 store，不在组件里**：`onDidChangeDownload`（数组载荷，`[]` = 空闲）是唯一事件源，`getVersionInfo().downloads` 是同一状态的可查询快照。数组而非单值，是因为后台 prefetch 与用户点击可真实并发；面板靠快照重建跨挂载状态（切走再回来仍要显示进度），故**状态不能退化成组件局部 state**。失败路径必须在 `finally` 清状态，否则 UI 永远卡在「下载中」。
+4. **`allowDownload:false` 的快速失败不与他人共享 pending**：后台探测（`connect(agentId, {silent})` → `allowDownload: !silent`，见 `apps/editor/src/renderer/services/acp/acpClientService.ts`）在 cache miss 时必须**立刻失败、不碰网络**；因此 `resolveDownload(allowDownload)` 的 `_inflightResolves` key 按此分桶（`noDownload` 后缀），main 侧 `codexBinaryMainService` 的 `_inflight` 同理——否则一次 fast-fail 的 reject 会被并发的真实下载方复用（反向亦然）。调用方省略 `allowDownload` 时按 `true`（真下载）处理。
 
 > 教训（已被审查抓到一次）：面板把**快照**当实时集用，点击后进度行与按钮同时出现 —— 判定「某版本是否正在下载」必须喂实时 `downloads`，快照只用来恢复挂载瞬间的状态（`deriveBinaryActionState` 的 `diskState` 参数）。
 

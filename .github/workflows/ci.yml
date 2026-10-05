@@ -47,6 +47,15 @@ jobs:
       - name: Docs link check
         run: pnpm docs:check
 
+      # 知识容器（CLAUDE.md / cases-*.md / skills / docs/development）的路径引用与
+      # CLAUDE.md 体积预算。两者只在 `pnpm check` 里，而 CI 不跑 `pnpm check`
+      # （逐条拆开跑），不在这里显式补上就等于从未执行。
+      - name: Knowledge link check
+        run: pnpm knowledge:check
+
+      - name: CLAUDE.md size check
+        run: pnpm claude-md:check
+
       # 内部标识（内网域名/代号/私网地址/本机路径/账号名）不得进入公开仓库。
       # 规则文件 gitignored，走 CI secret（raw JSON 数组）注入：raw 时落盘内容 ===
       # secret 值，任何意外打印都会被 GitHub 自动 mask（base64 解码后 ≠ secret 值，

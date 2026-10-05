@@ -8,7 +8,8 @@
  *
  *  Persisted GLOBAL (Swarm reviews are a server-level resource, unrelated to the
  *  local workspace). Module-level singleton with a never-disposed Emitter (see
- *  memory `strictmode-useref-emitter-dispose-dev-only`) so it outlives any single
+ *  skill `fix-disposable-leak` case 3 — never dispose a ref-held Emitter from an
+ *  effect cleanup) so it outlives any single
  *  mounted view. Mirrors swarmIgnoreStore's attach/isReady contract so the
  *  contribution can hydrate it at app start and the view's first render already
  *  reflects the saved collapse / keyword state.

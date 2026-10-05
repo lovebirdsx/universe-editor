@@ -95,7 +95,10 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 - 非快捷键用例在切组前等 `editorFocus=false` 恒 true、还没按 chord 就超时=场景搭建耦合无关的移焦步骤，改走同一切组命令，保留活动组与业务断言 → 案例 96
 - 反向断言「某日志为空」CI 偶发收到**一条逐文件窄查**=断言挂在一场赛跑上（该通道按设计在特定相位就是会响），改判**形态**（目录 spec `/...`/`/*`）；改完用 fake 故障档验信号仍在 → 案例 97
 - `type`+`Enter` 盲打后 `waitForHidden` 超时、现场只有「对话框没关」=诊断黑洞；打字前 `input.focus()` + Enter 前断言落字，失败点前移（重跑即绿=环境噪音，只加门控不改产品）→ 案例 98
-- `waitForHidden` 超时但现场「**什么都对**」（焦点/值/composing/按键 target 全正常、列表非空且已选中）=光标比列表晚一个 commit 归位（deferred 值 vs effect 修正的索引），Enter 落在中间读越界索引静默 no-op；**窗口每次运行必现（渲染路径计数 `render:1`），命中靠时序**；修产品 accept 路径（越界按实时文本重算），别当环境噪音 retry → 案例 99
+- 等 `isMaximized()` / 绝对宽度阈值（`innerWidth > 1500`）恒不满足、仅 CI 挂=runner 虚拟显示器小（win ≈1024 / xvfb ≈1280）且 xvfb 无窗口管理器，`maximize()` no-op → 窗口尺寸改 `setBounds` + 相对阈值 → 案例 99
+- 发完 prompt / 图片后**紧跟**断言消息或 chip、received 恒空/旧值且加宽窗口无效=`sendAcpPrompt` 的 await 只覆盖派发不覆盖渲染，断言抢跑 → 改 `expect.poll` 等落地 → 案例 100
+- 读**已打开**文档 ✓ / 读**未打开**文件 ✗ 的不对称（received 恒 `[]`）=fs 网关（DocumentStore overlay 不过网关），不是路径计算；先 `pnpm build` 排除陈旧产物 → 案例 101
+- `waitForHidden` 超时但现场「**什么都对**」（焦点/值/composing/按键 target 全正常、列表非空且已选中）=光标比列表晚一个 commit 归位（deferred 值 vs effect 修正的索引），Enter 落在中间读越界索引静默 no-op；**窗口每次运行必现（渲染路径计数 `render:1`），命中靠时序**；修产品 accept 路径（越界按实时文本重算），别当环境噪音 retry → 案例 102
 
 ## 关键参考路径
 - `apps/editor/e2e/specs/` —— 所有 e2e spec；`@p0` 阻塞 CI，`@p1` 次级

@@ -49,7 +49,7 @@ async function pickConfigOption(
   notFound: string,
 ): Promise<void> {
   // Resolve every service up-front: the accessor is invalidated by the first
-  // await (see memory: action2-async-accessor-invalidation).
+  // await (see docs/development/commands-and-context-keys.md).
   const sessionService = accessor.get(IAcpSessionService)
   const notificationService = accessor.get(INotificationService)
   const quickInputService = accessor.get(IQuickInputService)

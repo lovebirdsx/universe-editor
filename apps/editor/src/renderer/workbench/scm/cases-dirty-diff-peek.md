@@ -78,6 +78,14 @@ createDiffEditor(bodyEl, {
 3. **Esc 命令**（`CloseDirtyDiffPeekAction`）：`keybinding{ primary:'escape', when:'dirtyDiffPeekVisible', weight: WorkbenchContrib+50 }`——**weight 必须压过** Monaco 的 Esc 和工作台 `FocusActiveEditorGroupAction`（Esc @ WorkbenchContrib=200），否则编辑器没聚焦时被它抢走。run 里 `DirtyDiffPeekRegistry.getHost()?.closePeek()`。`registerAction2` 在 `actions/index.ts`。
 4. 同理可加"在光标处打开 peek"命令（`ShowChangeAtCursorAction`）。
 
+### 动作接线（Revert / Stage / Open Changes / 收起）
+
+- **Revert = 纯 model `executeEdits`**（`pushUndoStop` 包裹 → 可撤销），不落盘、不走 provider。
+- **Stage 必须先 `workbench.action.files.save` 再 `<providerId>.stageChange`**——stage-hunk 的 diff 是 **index ↔ 磁盘文件**，未保存的缓冲对 git 不可见（provider 泛化后命令 id 为 `<providerId>.stageChange`，git 下即 `git.stageChange`）。
+- **Open Changes 走 `git.openChange(undefined, { pinned: true })`**——pinned 让对比 tab 固定，不占预览槽。
+- **再点同一条 gutter 色条收起 peek**：开 / 切 / 收共用同一个鼠标命中入口。
+- **codicon 图标直接可用**：monaco 的 `editor.main.js` 自带 `codicon.css` + ttf，浮层按钮无需额外资源。
+
 ### E2E 套路
 
 浮层在 overlay 层、命令式，**用 probe + host introspection 验，别靠 DOM 选择器**：probe 加 `openDirtyDiffPeekAtLine/getDirtyDiffPeekState(panelHeightPx,maxHeightPx,editorFirstVisibleLine)/isDirtyDiffPeekVisible/resizeDirtyDiffPeekByPx`（contract.ts 同步加类型）。spec 用真 git 仓库 + 长文件，在**远离顶部**处造一大块改动（既超 1/3 初始上限、又初始在视口外），一次断：①`panelHeightPx>0 且 ≤maxHeightPx`（封顶）②`editorFirstVisibleLine>1`（滚入视口）③`resizeByPx(大值)` 增高且不超上限 ④真 `page.keyboard.press('Escape')` 后 `isDirtyDiffPeekVisible()` 变 false。Esc 必须用**真键盘**（走 useGlobalKeybindingHandler 全链），别用 runCommand 绕过。
@@ -117,5 +125,5 @@ pnpm --filter @universe-editor/git build            # 若动了 Stage 后端（g
 - `apps/editor/e2e/specs/smoke.dirtyDiffPeek.spec.ts` —— 封顶/滚入视口/拖动/Esc 冒烟
 - Stage 后端：`extensions/git/src/hunkPatch.ts`(`selectHunkPatch`)/`repository.ts`(`stageChange`)/`gitService.ts`(`gitExec` stdin)/`packages/extensions-common/src/contracts/dirtyDiff.ts`(命令常量)
 - VSCode 对照源：`vscode/src/vs/workbench/contrib/scm/browser/quickDiffWidget.ts` + `vscode/src/vs/editor/contrib/zoneWidget/browser/zoneWidget.ts`
-- 相关 memory：[[dirty-diff-inline-peek-feature]]（功能状态/索引）、[[linediff-myers-perf]]（region 计算的 Myers 约束，**仅 gutter region 用，peek 面板不用**）
+- 相关：区域计算引擎（`computeLineDiff` 的 Myers 约束，**仅 gutter region 用，peek 面板不用**）见 [cases-dirty-diff-regions.md](cases-dirty-diff-regions.md)；本文件的入口 hook 在 [CLAUDE.md](CLAUDE.md)
 - 相关 skill：[fix-disposable-leak]（peek 的 model/editor 生命周期）、[register-monaco-command]（接命令）、[fix-keybinding-not-firing]（Esc 不触发时诊断）

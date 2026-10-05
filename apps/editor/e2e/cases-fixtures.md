@@ -1,4 +1,4 @@
-# 本文从 e2e/CLAUDE.md 拆出，范围是冷启/共享 fixture 的三个细节专题——自启动 spec、workspaceSeeder、scratchDir。
+# 本文从 e2e/CLAUDE.md 拆出，范围是冷启/共享 fixture 的四个细节专题——自启动 spec、workspaceSeeder、scratchDir、e2e 下的背景下载门禁。
 
 ## 自启动 spec
 
@@ -22,3 +22,7 @@
 **临时目录要被运行中的 app / remote daemon 持有句柄时，用冷启 fixture 的 `scratchDir(prefix?)` 工厂**：它返回 per-test 临时目录，清理在 `closeApp` 之后执行（`electronApp` fixture 依赖 `scratchDir`，利用 Playwright fixture 逆序 teardown，进程树已死、句柄已释放后才 rm）。
 
 典型场景=作为 workspace 打开的根目录（remote daemon 的 watcher 在 Windows 上 pin 住根句柄）；spec 内**禁止**再在 test body 里 `rmSync` 这类目录（Windows 下 EPERM flaky）。范例见 `remote.*` spec。shared fixture 下 `scratchDir` 直接抛错（app 存活跨越测试，没有 post-close 清理点）。
+
+## e2e 下禁背景下载（探针门禁）
+
+`AgentBinaryPrefetchContribution`（Eventually 相位）经 `_prefetchGated()`（`apps/editor/src/renderer/contributions/AgentBinaryPrefetchContribution.ts`）读 `window[E2E_PROBE_ENABLED_KEY]`：e2e 下跳过 `_prefetchLocal()` / `_prefetchRemote()` 的**真下载**，纯本地的 `_cleanupLocal()` / `_cleanupRemote()` 保留——每个 e2e worker 都是全新 profile、无缓存二进制，几百 MB 的后台拉取会和 Playwright worker teardown 抢资源（teardown 没按这个体量设计）。**e2e 下禁一切会拉网络的背景维护任务**。

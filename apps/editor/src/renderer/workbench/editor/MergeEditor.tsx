@@ -128,7 +128,8 @@ export function MergeEditor({ input }: { input: IEditorInput }) {
     // host is not DOM-editable, so the global keybinding handler relies on this
     // key to reserve native editing keys (Delete/Backspace) for the editor —
     // without it a global `delete` binding (delete-file) swallows Delete in the
-    // Result pane. See editor-text-focus-stuck-swallows-keys.
+    // Result pane. See docs/development/commands-and-context-keys.md
+    // (the "focus context keys" section).
     const textFocusSub = resultEditor.onDidFocusEditorText(() =>
       contextKeyService.set('editorTextFocus', true),
     )

@@ -12,7 +12,7 @@
  *  Mount model mirrors LogOutputView: create the editor once, self-own the model
  *  and dispose it on unmount, guard the async init with `disposed`. editContext
  *  is ON — required so CJK IME composition doesn't bold the active line
- *  (monaco 0.55, see memory monaco-055-editcontext-nls).
+ *  (monaco 0.55, see docs/development/monaco-embedding.md).
  *--------------------------------------------------------------------------------------------*/
 
 import { useEffect, useImperativeHandle, useRef, type Ref } from 'react'
@@ -498,7 +498,8 @@ export function PromptMonacoEditor({
       modelRef.current = null
       monacoRef.current = null
       // onDidBlurEditorText may not fire before dispose, leaving
-      // acpPromptInputFocused stuck true (see editor-text-focus-stuck-swallows-keys).
+      // acpPromptInputFocused stuck true (see docs/development/commands-and-context-keys.md,
+      // 「焦点类上下文键」).
       // Clear it so the key never lingers past unmount; also reconcile editorFocus
       // against actual DOM focus now that the prompt's Monaco editor is gone.
       contextKeyService.set('acpPromptInputFocused', false)

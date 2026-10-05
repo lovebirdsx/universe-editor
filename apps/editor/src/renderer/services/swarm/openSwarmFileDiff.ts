@@ -184,8 +184,8 @@ export async function openSwarmFileDiff(
         // Distinct left/right URIs carrying the backing-change pair keep the
         // diff tab's identity unique per comparison (WebviewDiffInput ids by
         // both URIs) — pending versions share a rev, so only the change
-        // distinguishes them. The .xlsx path drives the tab icon. See memory
-        // editor-input-identity-isolation.
+        // distinguishes them. The .xlsx path drives the tab icon. See
+        // apps/editor/src/renderer/services/editor/CLAUDE.md.
         const sideUri = (side: 'l' | 'r', change: string | null): string =>
           URI.from({
             scheme: 'swarm',

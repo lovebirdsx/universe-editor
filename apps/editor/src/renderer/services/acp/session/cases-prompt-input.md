@@ -14,6 +14,14 @@
 
 **路由关键坑**：命令**不能直接调** `widget.addSelectionContext`——用户在文件编辑器里选文本时，目标 session 的 ChatBody 常常**没挂载**（editor 模式 session tab 没打开，或刚 `createSession` 还没渲染），widget 为 undefined 会静默丢弃。正解：`acpPromptContextInbox.ts`（模块单例收件箱，按**本地 session id** 存 + `onDidDeposit` 事件）。命令流程收口在 `actions/_agentChatTarget.ts`：解析目标 session（「添加到已有聊天」= 本窗口**可投递**会话 `!readOnly && isResidentLive`（**休眠也算**，发送时才唤醒）中 0 个则新建兜底 / 1 个直用不弹窗 / 多个 quick pick 让用户选；「添加到新建聊天」= 总是新建）→ `deposit(session.id, contexts)` → `revealChat` 打开并聚焦该 chat。PromptInput 挂载时 `drain` + 订阅 `onDidDeposit` 即时消费，跨「未挂载→挂载」不丢。
 
+## 冷挂载 drain 竞态：inbox 被消费了，setText 却静默丢弃
+
+Monaco 首载是异步的（`MonacoLoader.peek()` 未命中 → `ensureInitialized().then(mount)`），而 `PromptInput` 的三个 inbox drain effect 在 React commit 后**同步**执行——此时 `setText`/`insertRef` 内 `modelRef.current === null` 静默 return，但 `drain()` 已把 inbox 清掉 → **deposit 永久丢失**。deep link 落输入框（首个「session 未 mount 即 deposit」场景）稳定复现；同病的还有 git graph "Send to Agent Chat"、"Add Selection to Chat"、Rewind replace inbox 发到未打开 session 的场景。
+
+修法：`PromptInput` 加 `editorReady` state（`onEditorReady` 时翻转），三个 drain effect 开头 `if (!editorReady) return`（**留队列不消费**）+ 依赖数组加 `editorReady`，ready 后统一 drain；「先 pull 后订阅」的既有顺序保证无缝隙。回归锁：`smoke.deepLinkAgent.spec.ts`（inbox 链路首个 e2e 覆盖）。
+
+Monaco 输入框的其余编排（变更源 `kind`、历史弹窗方向、局部键位分发）见 [cases-prompt-input-monaco.md](../cases-prompt-input-monaco.md)。
+
 ## 发送后附件不能只依赖 agent transcript
 
 agent 回放只保留传输形态（`<context>` / 文件链接 / fallback fence），无法还原行号标签与发送时快照。`acpMessageAttachmentStore.ts` 按 **durable session id + messageId** 保存快照；恢复时 `acpSession.ts` 回填 `selectionContexts` 并严格去掉等值传输文本，避免芯片与原始上下文重复。生命周期必须联动零输出取消、rewind、普通 fork、session 删除/清空；side task 不复制隐藏基线。首条用户消息由 `StickyUserMessageBar` 单独渲染，不走普通 `UserMessageItem`，两处都要接只读芯片。

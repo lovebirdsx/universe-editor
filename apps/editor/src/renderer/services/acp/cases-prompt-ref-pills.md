@@ -47,7 +47,7 @@
 - claude-agent-acp fork `acp-agent.ts` `promptToClaude`：`resource_link` → `formatUriAsLink(uri)`，**连 name 都丢**。
 - codex-acp `CodexAcpClient.ts` `buildPromptItems`：`formatUriAsLink(name, uri)`，用 name 但**丢 description + _meta**。
 
-⇒ 任何**需要 agent 精确消费的结构化位置信息（行/列/符号名）绝不能塞进 resource_link 的 name/description/_meta——只能进 `text` 块正文**。这是本仓库真实 bug 的根因（`#Student` 发过去退化成读整个 hello.ts，因为 line 全在被丢弃的 `_meta.symbol` 里）。修法：符号类 `composeRefBlock` 产 `text` 块，把 ``（`Student` (hello.ts:12:5)）`` 写进正文（`_meta.symbol` 可留作未来 agent 用，但当前逻辑不能依赖它）。指整文件的 kind（file/folder/openEditor）无所谓，仍用 resource_link。见记忆 [[prompt-hash-context-references-feature]]。
+⇒ 任何**需要 agent 精确消费的结构化位置信息（行/列/符号名）绝不能塞进 resource_link 的 name/description/_meta——只能进 `text` 块正文**。这是本仓库真实 bug 的根因（`#Student` 发过去退化成读整个 hello.ts，因为 line 全在被丢弃的 `_meta.symbol` 里）。修法：符号类 `composeRefBlock` 产 `text` 块，把 ``（`Student` (hello.ts:12:5)）`` 写进正文（`_meta.symbol` 可留作未来 agent 用，但当前逻辑不能依赖它）。指整文件的 kind（file/folder/openEditor）无所谓，仍用 resource_link。
 
 诊断辅助：`acpSession.ts` 的 `_dispatchPrompt` 有 `console.debug('[acp-prompt] dispatch', ...)` 打印发出块形状，复现时在 devtools 直接核对。
 
@@ -55,7 +55,7 @@
 
 - **① 药丸贴边**：Monaco 文本贴容器边框——`.promptEditorHost`（agents.module.css）须给 `padding: 0 6px`。药丸自身样式是**全局类** `:global(.acp-prompt-ref-pill)`（Monaco 把 decoration span 渲染在 CSS-module 作用域外）。
 - **② 尾随空格误删药丸（forceMoveMarkers 覆盖 stickiness）**：`insertRef` 在药丸后补空格时，若那次 `applyEdits` 带 `forceMoveMarkers: true`，会**覆盖** decoration 的 `NeverGrowsWhenTypingAtEdges`，把空格吞进追踪 range → range 文本变 `#test.md ` ≠ snapshot `#test.md` → 下次按键 `reconcile()` 误判"药丸被改"删掉整个引用。**补空格的 applyEdits 绝不能带 forceMoveMarkers**，让空格落在 range 之外。
-- **③ programmatic vs user 变更源**：非受控 Monaco 每次 `setValue`/`applyEdits`（历史导航、接受候选、草稿恢复、tracker 自己的 insert/restore）都 fire `onDidChangeModelContent`。`PromptEditorHandle` 命令式方法用 `runProgrammatic` 计数器包裹，`onChange` 带 `source`，`program` 时只 mirror text/caret、**跳过所有用户副作用（reconcile / @@@# 触发 / popover dismiss / history 关闭）**。否则会出现"刚开的弹窗被自己的 setText 关掉""tracker 自插入被自己 reconcile 删掉"。详见记忆 [[prompt-monaco-input-migration]]。
+- **③ programmatic vs user 变更源**：非受控 Monaco 每次 `setValue`/`applyEdits`（历史导航、接受候选、草稿恢复、tracker 自己的 insert/restore）都 fire `onDidChangeModelContent`。`PromptEditorHandle` 命令式方法用 `runProgrammatic` 计数器包裹，`onChange` 带 `source`，`program` 时只 mirror text/caret、**跳过所有用户副作用（reconcile / @@@# 触发 / popover dismiss / history 关闭）**。否则会出现"刚开的弹窗被自己的 setText 关掉""tracker 自插入被自己 reconcile 删掉"。`source` 之上还有 `kind`（content/cursor）一层、以及四类 popover 的方向与键位分发，详见 [cases-prompt-input-monaco.md](cases-prompt-input-monaco.md)。
 
 ### 测试套路
 
@@ -66,5 +66,5 @@
 ### 参考坐标
 
 - 模型/序列化：`promptRef.ts`；追踪：`promptRefTracker.ts`；句柄：`PromptMonacoEditor.tsx`；编排：`PromptInput.tsx`；数据源：`contextSuggestions.ts`
-- 记忆：[[prompt-hash-context-references-feature]]（模型 + 序列化红线）、[[prompt-monaco-input-migration]]（Monaco 迁移的坑）、[[monaco-055-editcontext-nls]]（editContext:true 修中文 IME 必设）
+- 相关：[cases-prompt-input-monaco.md](cases-prompt-input-monaco.md)（Monaco 迁移的坑）、[cases-prompt-images.md](cases-prompt-images.md)（图片输入）、[docs/development/monaco-embedding.md](../../../../../../docs/development/monaco-embedding.md)（editContext 与嵌入实例焦点键）
 - 会话全局上下文（协议/发送链路/双 id）：见 [`session/CLAUDE.md`](session/CLAUDE.md)

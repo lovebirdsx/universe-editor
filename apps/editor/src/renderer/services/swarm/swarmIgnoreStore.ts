@@ -12,8 +12,8 @@
  *  unignore) even when a later dashboard load no longer returns that review — e.g.
  *  its author dropped out of the needsActionAuthors filter.
  *
- *  Module-level singleton with a never-disposed Emitter (see memory
- *  `strictmode-useref-emitter-dispose-dev-only`): it outlives any single mounted
+ *  Module-level singleton with a never-disposed Emitter (see skill
+ *  `fix-disposable-leak` case 3): it outlives any single mounted
  *  component so the sidebar view and a review detail tab share one state and both
  *  react to an ignore/unignore taken in the other.
  *--------------------------------------------------------------------------------------------*/

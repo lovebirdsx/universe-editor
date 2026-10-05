@@ -8,6 +8,8 @@
 
 子系统专精知识（架构地图、案例）不在 skill 里，而是直接放在各子系统目录的 `CLAUDE.md`——改哪个子系统的代码，就先读那个目录的 `CLAUDE.md`。
 
+知识只写三处：绑定代码目录的进该目录 `CLAUDE.md`（放不下拆同目录 `cases-*.md` 并留一行 hook）；跨目录流程/排障进 skill（案例多时放其 `references/`）；跨模块机制/长文进 `docs/development/`。memory 层已下线，不要再建。
+
 回答请使用中文。
 
 ## 自动创建子 agent 的规则

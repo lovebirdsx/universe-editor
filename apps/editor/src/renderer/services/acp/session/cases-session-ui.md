@@ -1,6 +1,6 @@
 # cases-session-ui
 
-> 本文从 `services/acp/session/CLAUDE.md` 拆出，范围是：会话 UI 的逐案坑——标题四个写入方、长 timeline 滚动抖动、第一条用户消息常驻渲染、卡片折叠两层。路由入口见 [CLAUDE.md](CLAUDE.md)「常见任务 → 改哪里」与「易踩坑速记」。
+> 本文从 `services/acp/session/CLAUDE.md` 拆出，范围是：会话 UI 的逐案坑——标题四个写入方 + 跨工作区持久化（`set_session_title`）与跨 bucket 回填、长 timeline 滚动抖动、第一条用户消息常驻渲染、卡片折叠两层、执行时间统计、上游故障呈现（HTTP 200 空 body）、卡片产出文档在侧边组打开。路由入口见 [CLAUDE.md](CLAUDE.md)「常见任务 → 改哪里」与「易踩坑速记」。
 
 ## 会话标题四个写入方，优先级 manual > ai > 首条 prompt 派生（`derivedTitle`）> agent 报告（`session_info_update`/hydrate 的 summary）
 
@@ -27,3 +27,43 @@
 **③ 子 Agent 卡片互斥：聊天区里最多一张展开**（这是**层①上的一条例外**，不是与前两层并列的第三条机制——顶层子 Agent 卡片的折叠态不走 `overrides` / `mode`，别用 ① 的机制去理解它）。顶层子 Agent 卡片（`isSubagentCard`：`subagent` 标记或带 `children` 的 tool call）的折叠态**只由 `CollapseState.openSubagent` 这一个槽位决定**（`resolveCollapsed` 里最先短路）——「任何模式下最多一张展开」因此是结构保证而非维护出来的不变量：打开第二张只是改写该槽位，之前那张自然折起。`ChatBody.openSubagentKey` 随 `AcpChatViewStateCache.collapse.openSubagent` 持久化（纯内存 LRU，无 schema），写入口只有 `handleToggleCollapse`（chevron / `Alt+F` / `Alt+L` / 粘性头）与 `scrollToKey`（Outline / 书签揭示：链上有子 Agent 卡片就改为指定它，只有其余祖先才写 `override`）。**判据必须带顶层约束**——`isSubagentSlot` 要求 key 不含 `/`：复合 key 是卡片**内部的内容**，算成卡片会让「展开嵌套子卡片」把刚打开的父卡片折掉。模式切换：进 `collapsed` 清空槽位（「全部折叠」要连它一起折）并把原值记进 state，离开 `collapsed` 时还原——**用户在这期间新点开的那张优先**（这就是「切到全展开后只留最近打开的那张」），`default ⇄ expanded` 之间直接保留。**互斥的范围是单个 `ChatBody`**：把同一会话分屏到两个编辑器组时两边各挂一个实例、各自维持一张展开（与 `overrides` / `contentExpandedKeys` 既有的每实例语义一致；指定槽位于缓存里是挂载时读一次的快照，不做跨实例同步。同理，自管折叠态的 `ToolCallList` 若重新挂回聊天，也不走这条规则）。**打开 B 会折掉视口上方的 A**，而 A 若已卸载，它在 virtualizer 里量到的旧行高要等重新挂载才刷新——滑动条长度会短暂偏大，属一次性偏差，不是上面那种自持抖动。
 
 "折叠 → 无 DOM → reveal 无从落点"还有一个**未修的同类成因**：无可渲染内容的子消息 `SubMessage` 直接 `return null`（主 timeline 的 `TimelineSlot` 同理），而 `acpTimelineOutline` 仍按模型建符号——这类行在 Outline 里以 role 名兜底显示（如 `agent`），点击只能退化到父卡片。
+
+## 执行时间统计：只计 `status === 'running'` 的净时长
+
+只累计 `status === 'running'` 的净时长（多段累积、持久化恢复）——设计意图是与挂起/等待时间区分，让用户了解 Agent 实际工作了多少。结算在 `acpSession.ts` 的 `_recomputeStatus` / `_finalizeRunningSegment`（`acpSession.ts:2564/2580`，**离开 running 时**结算最后一段）；历史持久化走 `AcpSessionHistoryEntry.accumulatedRunningMs`（可选字段、**无版本迁移**）。两处显示：输入框下方（`PromptInput.tsx`）+ Sessions 面板 session 行（`SessionListBody.tsx`，foreign 会话回退 `useForeignSessionStats`）；公共 hook `useSessionTimer` + `formatRunningTime` 在 `workbench/agents/`。
+
+## 上游故障呈现：网关 HTTP 200 空 body（别与「假拒绝」混淆）
+
+另一类会让会话/子 agent 停住的**独立故障**：网关返回 **HTTP 200 但空 body**——claude 侧落成 `isApiErrorMessage`（claude fork `src/session-failure-extension.ts` 有该字段的消费路径），超时量级 360s，claude-* 模型也中招（实测样本占 50%）。与「假拒绝」的症状相似（都停住）但根因完全不同：假拒绝是 CLI 把任意 tool-queue abort 兜底成 `user-rejected`，呈现侧的修复（fork `_meta.claudeCode.syntheticDenial` + 卡片「上游中断」徽标）见 `vendor/claude-agent-acp/cases-session.md`；本条是上游网关故障，编辑器侧只做呈现、无法修复。
+
+## 卡片文档在侧边组打开（Ctrl/Cmd+点击 / 右键菜单）
+
+ACP 卡片写出的文档除就地打开外，还能落到聊天的**右侧相邻组**：标题行阅读按钮 Ctrl/Cmd+点击，或右键菜单「在侧边打开预览 / 在侧边打开文件」——两个 Action2 的 `when` 互斥，同一张卡只多出一行（口味由 `chatContextSlot` 的 `createdFile` 单键决定：有预览器走预览、否则走文件）。落点收口在 `apps/editor/src/renderer/services/editor/openToSide.ts` 的 `ensureSideGroup(groups, source = activeGroup)`（**「在旁边组打开」的唯一落点**，markdown/html 预览原先那 5 行重复已并入）；「预览 else resolver」收口在 `apps/editor/src/renderer/services/resourcePreview/openResourcePreview.ts` 的 `openResourceForRead`；`useMarkdownFileLink` 的 `toSide` 从死参变成生效，所以 markdown 预览正文里的链接 Ctrl+点击也走这条。调用点 `apps/editor/src/renderer/workbench/agents/ToolCallCard.tsx` 的 `openCreated`。
+
+**红线：`ensureSideGroup` 只能在真正打开的那一帧调用，绝不 hoist 到 `await` 之前。** 新建的空组**不会**被回收（回收只在 group model 变化时触发，仅被 activate 的空组不触发任何变化），提前建组会让「文件不存在 / 多命中 / 目标是目录」这几种结局各留下一个孤儿空组。helper 内先 `activateGroup` 是承重的：打开走 `activeGroupForOpen` 路由，不先激活就落不进侧边组（同 `openToSide.ts` 头注释）。
+
+**坑-载荷两半（写 agent fixture / 断言卡片 UI 必踩）**：卡片的阅读入口（`createdFilePath`，`ToolCallCard.tsx` 用它拿 `createdUri`）**只认 ACP 标准 `content` 里的 diff 块**——`oldText` 为空是唯一的「新建」信号，且须先排除 `memoryTrimmed`；`_meta.claudeCode.structuredPatch` 是**另一半**载荷，只喂 session change tracker。只发后者会得到一张没有阅读按钮、右键菜单也没有 Open File 行的卡，e2e 表现为 locator 静默等 30s 超时。fixture `apps/editor/src/test-fixtures/sessionDiffAgent.cjs` 的 `createmd` / `createtxt` 两半都发。
+
+**落点语义（e2e 已锁）**：点卡片时 group body 的 `onMouseDown` 先激活卡片所在组，所以第二次 Ctrl+点击会**复用**第一次开出来的侧边组，不会一路向右裂开；只有源组本身就是最右组时才再新建（另一支由单测覆盖）。锚 `apps/editor/src/renderer/services/editor/__tests__/ensureSideGroup.test.ts`、`apps/editor/e2e/specs/smoke.acpOpenToSide.spec.ts`。
+
+## AI 标题跨工作区：`universe-editor/set_session_title` ext-method，claude/codex 必须对称
+
+标题的权威副本有两个：本地 history 行（打 `aiTitle`/`manualTitle` flag）与 **agent 侧 durable store**。AI/manual 标题除落本地外，还经 `acpSession.ts` 的 `_pushTitleToAgent` 发 `universe-editor/set_session_title` 持久化回 agent（claude fork 自提交 5593b63 起有，走 `renameSession`；codex 走 app-server `thread/name/set`）——**跨工作区 `session/list` 报的标题就是这条**，本地 flag 只保护本 bucket 不被 hydrate 覆盖。push 是 **best-effort + fire-and-forget**：agent 没实现就 methodNotFound 被静默吞掉；且**不唤醒 dormant 会话**（只为记标题 spawn 进程会抵消 idle reaper 省下的内存），标题缓存在 `_pendingTitle`，由 `attachConnection` 在会话自然唤醒时重放。renderer 侧**从不分 agent**——`_pushTitleToAgent` 本来就对 codex 发，无需按 agentId 分支。
+
+codex 侧曾整条缺链，症状=跨 worktree 看该 codex 会话显示**首条用户消息**：push 被 methodNotFound 吞 → 标题只留工作区作用域；外部 worktree 的行由 hydrate sweep（`session/list`）经 `CodexAcpClient.listSessions` 引入，标题取 `normalizeSessionTitle(thread.name ?? thread.preview)`——`thread.name` 为 null 即回退 `thread.preview`（首条用户消息）。修复=与 claude **对称补齐**：`AcpExtensions.ts` 的 `SET_SESSION_TITLE_METHOD` + `setSessionTitleParamsParser`（并入 `EXTENSION_METHOD_REGISTRATIONS`）、`CodexAppServerClient.threadSetName`（v2 `ThreadSetNameParams{threadId,name}`）、`CodexAcpClient.setSessionName`、`CodexAcpServer.setSessionTitle`（空标题 `RequestError.invalidParams`）。
+
+契约锚点：单一真相表 `acpExtMethods.ts` 的 `ACP_EXT_METHODS.setSessionTitle`；跨仓契约测试 `apps/editor/integration/scenarios/acpForkContract.integration.test.ts` 对**真 fork dist** 断言该方法的路由、`{sessionId, title}` 参数形状与空标题拒绝。
+
+## 跨 worktree 看外部 session：标题冻结在首条消息（跨 bucket 回填，纯渲染层）
+
+**现象**：worktree A 窗口看归属 B 的 session，Side Bar 行 / tab / 窗口标题显示**首条用户消息**而非 AI 标题；在 B 自己窗口看正常。
+
+**根因**：每个 session 的权威标题在**归属工作区的 storage bucket**（`acp.sessionHistory` 条目、`aiTitle:true`）。外部窗口靠 hydrate sweep（`session/list`）把外部 session 拉进自己的 bucket，建行时取 agent 汇报的 summary；而 **hydrate 每个 cwd 只自动跑一次**（`acpSessionRestoreCoordinator.ts` 的 `_hydratedForCwd` 幂等门，只有用户手动 `refresh()` 才绕过并切 replace 模式）→ 首次 hydrate 早于 AI 标题生成/推送时，首条消息标题就被**永久冻结**在外部 bucket。更糟：session JSONL 被删后 SDK `listSessions` 直接 `NOT IN LIST`，`session/list` 永远修不回来。
+
+**修法**（复用既有跨 bucket 回填链路——`useForeignSessionStats` 原本就为外部行回填时长/费用/模型，标题是同类数据却漏了）：① `useForeignSessionStats.ts` 的 `ForeignSessionStat` 加 `title?`，从归属 bucket 读，**仅当该条目 `aiTitle === true`** 才回填（非权威标题不覆盖）；② `SessionListBody.tsx` 行标题取 `foreignStat?.title ?? entry.title`，并加 reconcile effect 把权威标题经 `history.updateInfo(id, { title })` 写回当前 bucket——**title-only，绝不打 `aiTitle`**（打了就挡死后续 hydrate 的更新，把冻结变成永久），使 tab / 窗口标题（读 `history.entries` 经 `resolveLiveSessionTitle`，`acpSessionTitle.ts`）一并自愈。测试 `apps/editor/src/renderer/workbench/agents/__tests__/useForeignSessionStats.test.tsx` 2 例（AI 标题回填 / 非 AI 不回填）。
+
+## 跨 bucket 标题问题的复现与验证手法
+
+- **直接比对两个 bucket**：workspace storage 文件 = `<userData>/workspaces/<id>.json`，`id` 由 `apps/editor/src/main/storage.ts` 的 `workspaceIdFromUri(工作区 URI 字符串)` 算出（sha1 hex 前 16 位）；读其中 `acp.sessionHistory.entries`，对比两个 bucket 里同 session id 条目的 `title`/`aiTitle`。
+- **探 agent 侧真值**：用 fork 的 `@anthropic-ai/claude-agent-sdk` 的 `listSessions({ dir })`；**探针脚本必须放进 vendor 包目录内**才解析得到它的 node_modules。
+- **平台坑**：Windows 盘符大小写会生成两个 project 目录（`d--…` vs `D--…`，同一物理目录），对比时别当成两个会话。

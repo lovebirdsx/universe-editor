@@ -100,11 +100,12 @@ HTML5 DnD 的 **dragover 阶段读不到 `dataTransfer` payload**（只在 drop 
 - **折叠 pane 不持久化尺寸**：onChange/onDragEnd 必须过滤折叠 pane 的 28px 上报，否则展开尺寸被覆盖成 28。
 - **expandedSizesRef 快照**：子组件 effect 先跑，Allotment 的 layout effect 先 fire onChange（clamp 到 minSize）覆盖持久化尺寸——折叠时快照进 ref，展开时优先用 ref。
 - 容器总高变化走 `proportionalLayout`（默认 true）等比缩放。
+- **Allotment 重挂载空窗与 `resize()` 守卫纪律**见 `docs/development/allotment-layout.md`。
 
 ## 易踩坑速记
 
 1. **改了 platform 接口忘 rebuild**：apps 吃 `dist/`，须 build + re-export，否则编译报「不存在」。
-2. **UI 直接读注册表 = 拖动不刷新**：要反映归属/顺序的组件必须 `useViewDescriptors()` 订阅 version。
+2. **UI 直接读注册表 = 拖动不刷新**：必须用 `useViewDescriptors()` 订阅 version。
 3. **mutation 忘自增 version**：不 bump version，UI 完全不动。
 4. **生成容器 load 时漏 re-register**：先 re-register `generatedContainers` 再恢复归属，否则恢复出指向「不存在容器」的 view。
 5. **eager seeding 改变空状态语义**：断言「无内容」用「该 location 无任何容器」而非「无激活容器」（见 `Panel.test.tsx`）。
@@ -132,7 +133,7 @@ pnpm e2e specs/smoke.viewSizes.spec.ts   # @p0 尺寸持久化 + 键盘 resize
 
 **e2e 探针**（`contract.ts` + `renderer/e2e/probe.ts`，委托 `viewDescriptorService`）：`getViewContainerByViewId` / `getViewIdsByContainer` / `getViewContainerIdsByLocation` / `moveViewsToContainer` / `moveViewToLocation` / `moveViewContainerToLocation` / `getViewCollapsed` / `setViewCollapsed` / `getViewSize` / `flushViewCustomizationsSave` / `resetViewLocations`——**绕开 DnD 鼠标几何**直驱 service，测「数据模型+持久化」主链路；`smoke.viewMove.spec.ts` 与 `smoke.viewSizes.spec.ts` 走此探针。
 
-> ⚠️ 本地 Windows e2e 启动可能失败（`--remote-debugging-port=0` 被拒），最终 e2e 验证以 CI 为准（见 memory `e2e-local-windows-launch-fails`）。
+> ⚠️ 本地 Windows e2e 启动可能失败（`--remote-debugging-port=0` 被拒），最终 e2e 验证以 CI 为准（详见 skill `fix-ci-e2e-flake`）。
 
 ## 其它
 

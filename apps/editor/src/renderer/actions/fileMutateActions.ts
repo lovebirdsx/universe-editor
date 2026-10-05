@@ -123,7 +123,7 @@ export class DeleteFileAction extends Action2 {
     const platform = accessor.get(IHostService).platform
     const fileOps = accessor.get(IExplorerFileOperationService)
     // Every service must be resolved before the first await: the accessor is
-    // only valid synchronously (see action2-async-accessor-invalidation).
+    // only valid synchronously (see docs/development/commands-and-context-keys.md).
     const fileService = accessor.get(IFileService)
 
     // The trash is an OS shell facility the local Electron process reaches;

@@ -130,7 +130,7 @@ renderer forkSession(sid, messageId?) → conn.unstable_forkSession({sessionId, 
 8. **Edit 大小写翻文件名**（Windows）：用大写路径 Edit `acpSessionService.ts` 会让磁盘真名变大写触发 `TS1261`；该文件真名是小写，Edit 必用小写路径。
 9. **FakeSession/stub 漏成员**：`IAcpSession` 加 `rewindTo`/`forkSupported`/`rewindSupported` 后，`ChatBody.test.tsx` / `ConfigOptionsBar.test.tsx` / `PromptInput.test.tsx` / `AcpSessionEditor.test.tsx` 的本地 stub 要同步补。
 10. **命令三按钮读 `result.choice` 非 `confirmed`**：有文件改动走三按钮（primary=撤销/secondary=保留/cancel），测试 dialog mock 要带 `choice` 字段。
-11. **accessor 首个 await 后失效**：命令 async run 里 await 前先同步取完所有 service（见 [[action2-async-accessor-invalidation]]）。
+11. **accessor 首个 await 后失效**：命令 async run 里 await 前先同步取完所有 service（见 `docs/development/commands-and-context-keys.md`）。
 
 ### 测试套路
 

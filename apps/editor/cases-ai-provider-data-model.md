@@ -38,6 +38,20 @@
 
 实现：`renderer/services/usage/AccountUsageService.ts`（per-agent 读账号费用）+ `renderer/services/usage/subscriptionUsage.ts` 的 `resolveUsageDisplay`（四态 `'subscription' | 'account' | 'unavailable' | 'hidden'`，优先级注释就在函数上方）+ `workbench/agents/UsageIndicator.tsx`。
 
+**子 Agent 的开销怎么算？两个 agent 机制完全不同，别互相照抄**：
+
+- **claude 天然已含，勿双计**：SDK `result.total_cost_usd` / `modelUsage` 是**进程级会话累计器**（fork `session-cost.ts` 注释：session-cumulative, already folds in sub-agent/Task work），renderer / fork **绝不再**把 `subagentStats` 折进 session 总额。`subagentStats`（`_meta._universe/subagentStats`）只喂 Task 卡片徽章（`workbench/agents/SubagentStatsBadge.tsx`）；claude 侧带 `model` 的条目才经 `_priceSubagentStats` 定价。另注 `result.usage` 正常成功时 = 对 `modelUsage` 求和（会话累计值，**不是 per-turn**）。漂移提醒：网关模型会话现在另走编辑器本地重定价（`apps/editor/src/renderer/services/acp/session/acpSessionCost.ts` 头注释），但「勿双计」不变。
+- **codex 的子线程开销是纯内存快照**：resume / 重开后历史子线程开销丢失，与主线程 `totalTokenUsage` 同为 live-only（新建 `SessionState` 时 `new Map()`，无 rollout 重建）。
+
+「session 开销没算子 Agent」这类观察极易误诊到 claude 侧，反向去「修」claude 就会双计——动 session 成本口径前先按 agent 分数据源看。
+
+## 官方订阅额度指示器：两条红线
+
+指示器形态、`resolveUsageDisplay` 四态与「订阅额度只走 ACP ext-method」见上节。另记两条踩过的红线：
+
+- **「不支持」不是永久判定**：`supported:false` 属于**当时那个账户**，不属于 agent。用户中途登录 claude.ai / ChatGPT 后指示器会永久隐藏，而唯一的重探通道（弹窗里的 force 刷新）恰好长在已不再渲染的弹窗里。修法：订阅会话集合 observable，出现新 session id 就清掉该 `agentId@authority` 的 unsupported 并重探一次——`apps/editor/src/renderer/services/usage/SubscriptionUsageService.ts` 的 `_unsupported` + `_seenSessionIds`（后者随存活会话集合收敛，充当它的上界）。
+- **`idempotencyKey` 语义**：一次用户确认 = 一个 key，重试**复用同一个 key**；`alreadyRedeemed` 视作成功，绝不换新 key 重试（会二次扣额度）。契约就写在 `consumeResetCredit` 的 JSDoc 与 `ResetCreditOutcome` 上，改前先读。
+
 ## 费率解析：单一来源，绝不兜底
 
 `src/shared/ai/resolveProviderPricing.ts` 的 `resolveModelPricing`：费率只由该 provider 的 `pricingSource` 决定——`catalog`（`options.vendor` 查内置官方价目表 `OFFICIAL_CATALOGS`）或 `http-json`（读网关价目表缓存）。**未声明 pricingSource 就是「费率未知」，绝不跨 provider 兜底套官方价**（中转网关有折扣/加价/换币种，套官方价直接记错账）——「费率未知」是 UI 的一个状态，不是编出来的数字。`AiPricingOrigin = 'catalog' | 'gateway'`（`aiModelPricing.ts`）。

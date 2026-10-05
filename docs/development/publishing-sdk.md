@@ -176,6 +176,11 @@ npm i https://<市场地址>/gallery/sdk/universe-editor-extension-manifest-0.1.
 
 每次 npm 发布后应同步跑一遍（一键命令已自动执行）。
 
+## 阶段范围（已拍板）
+
+- **生态范围：先内部后公开**——架构按公开设计（认证/签名留接口不实现），公开阶段的前置项（npm org 注册、CI 自动化、自助发布页 / 邮箱验证 / 防仿冒、开发者登记）**不提前做**。不了解背景的会话容易重新发明或做过头（如提前建注册系统、或把 `extensions-common` 整包发布导致外部解析失败）。
+- **开发宿主 userData 默认隔离**：扩展开发宿主（`--extension-development-path`）用独立 userData（`%APPDATA%/Universe Editor - ExtDev`，模式判定表见 `apps/editor/cases-user-data-dir.md`）——storage 是 JSON 文件，双实例并发写会互相覆盖。
+
 ## 0.x 版本政策（对外的强制声明位）
 
 1.0 之前 **minor 即可携带破坏性变更**（semver 0.x 惯例）。该政策必须在三处反复声明：各包 npm README、`docs/extension-dev/zh-CN/versioning.md`、编辑器 Release Notes。内部阶段是低成本试错窗口，公开前尽量把 API 面收敛到位。

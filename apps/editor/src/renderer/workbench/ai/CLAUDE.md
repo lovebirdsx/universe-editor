@@ -76,7 +76,7 @@ const storage = useService(IStorageService)
 - **改帮助内容/宽度**：`aiSettingsHelpText.ts`(英) + zh-CN.ts(中)；浮层样式 `AiSettingsEditor.module.css` 的 `.helpPopover`。
 - **改命令标题/ID**：`actions/aiActions.ts` / `agentActions.ts`。命令 ID 勿随便改（状态栏/AcpSessionEditor 齿轮/acpSessionService 引用 `workbench.action.agent.openSettings`）；标题改完同步 zh-CN.ts 的 `action.*`。
 
-### 关键架构决策（为什么；完整理由见 [cases-architecture.md](cases-architecture.md)）
+### 关键架构决策（为什么；完整理由见 [cases-architecture.md](cases-architecture.md)、[cases-provider-panel.md](cases-provider-panel.md)）
 
 - **AI 与 Agents 同一壳**：一个虚拟 editor 左侧两组；入口收敛 `ai.manageModels`，`workbench.action.agent.openSettings` 保留为预置定位到 Agents 区。
 - **AI 分类静态数组、Agents 动态注册表**：agent 设置 UI 自包含，壳零改动加新 agent。

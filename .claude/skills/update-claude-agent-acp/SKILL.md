@@ -138,7 +138,7 @@ git push -u origin chore/update-claude-agent-acp
 - `vendor/claude-agent-acp/src/{acp-agent.ts,tools.ts,interactive.ts,elicitation.ts}` + fork 自身 `CLAUDE.md`、`cases-session.md`/`cases-subagent.md`（15KB 预算，长叙事在那）
 - 主仓库 `apps/editor/src/renderer/services/acp/{acpClientService.ts,acpSessionService.ts,acpSession.ts}`（`DEFAULT_INIT_PARAMS` 的 `elicitation.form/url` 声明）、`workbench/agents/QuestionCard.tsx`
 - 跨仓契约测试 `apps/editor/integration/scenarios/acpForkContract.integration.test.ts` + `integration/fixtures/realForkConnection.ts`
-- 记忆 `acp-fork-windows-path-test-flake`
+- 案例库 `references/cases.md`（含 fork 测试 Windows 路径 flake 的忽略判据）
 
 ## 其它
 - 后续用本 skill，发现新经验，需同步更新本文件

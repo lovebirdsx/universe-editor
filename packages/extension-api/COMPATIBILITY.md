@@ -75,7 +75,7 @@ preflight 守护。扩展在自己的 `package.json` 里用 `engines.universe` �
 
 1.0 是 API 表面的稳定承诺起点。冻结条件（达成后发布 1.0）：
 
-- 语言 provider 全量迁移到扩展（见 memory `language-features-plugin-migration-roadmap`）后，
+- 语言 provider 全量迁移到扩展后，
   `languages` namespace 表面趋于稳定；
 - `window` / `workspace` 的编辑器/文档能力补齐至覆盖内置扩展所需；
 - 契约测试覆盖全部 namespace（已达成）。

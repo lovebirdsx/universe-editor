@@ -14,7 +14,7 @@ disable-model-invocation: true
 
 > **合并方式固定用 rebase**（用户已明确要求，不用再问）：历史线性、自定义提交清晰留顶、下次再合更省事；代价是重写历史需 `--force-with-lease` push fork。只需就“推送范围”征询用户。
 
-> ⚠️ 第一原则：**fork 的自定义提交必须完整保留在历史顶部，且其承载的功能（费用累计上报、Claude 式 skills/memory、AI 标题持久化等）不能被上游同名实现覆盖掉**。主仓库 renderer 端依赖这些行为；合并时优先“两条路并存”，而不是二选一。
+> ⚠️ 第一原则：**fork 的自定义提交必须完整保留在历史顶部，且其承载的功能（费用累计上报、Claude 式 skills、AI 标题持久化等）不能被上游同名实现覆盖掉**。主仓库 renderer 端依赖这些行为（memory 注入改服务用户项目、本仓库内已空转，见案例 4）；合并时优先“两条路并存”，而不是二选一。
 
 ## 流程
 
@@ -61,6 +61,7 @@ npx tsc --noEmit       # 类型检查（必跑安全网，rebase 零冲突≠语
 node build.mjs         # esbuild → dist/index.js（+ dist/package.json 标 ESM）
 npm test               # vitest；仅截错误。已知 Windows 路径测试会失败（见案例 1），非回归
 ```
+> ⚠️ **已知坑（fs mock 只桩了 `readFile`）**：`file-change-events.test.ts` 用 `vi.mock('node:fs/promises')` 自建 `mockFiles` Map，**只桩了 `readFile`**——被测代码新增任何 fs 调用（如 `stat`，`ReplayFileRead.readFileWithinCap` 正是 stat 先判）都会在该测试里报 `is not a function`，不是逻辑回归；补桩即可（锚 `src/__tests__/CodexACPAgent/file-change-events.test.ts`）。
 把“后处理改动”（更新的快照等）用 **fixup + autosquash** 并入逻辑所属提交（保持历史干净）：
 ```bash
 git add <改过的快照/测试文件> && git commit --fixup=<对应功能提交sha>
@@ -112,14 +113,15 @@ git push -u origin chore/update-codex-acp
 - **现象**：Windows 本地跑 `npm test`，约 4 个测试失败：`CodexAcpClient.test.ts` 的 skills additional-directories 两条 + `should map events from dump`（报 `Invalid request: AbsolutePathBuf deserialized without a base path`），以及 `load-session.test.ts` 的 history-fallback 一条。diff 全是 `\test\...` vs `/test/...`（反斜杠 vs 正斜杠）。
 - **根因**：测试 fixture 用假 cwd `/test/cwd`。Windows 上 `path.join("/test/cwd", ...)` 产出 `\test\cwd\...`——非盘符绝对路径，真 codex 二进制反序列化 `AbsolutePathBuf` 时拒绝（→ 那条 AbsolutePathBuf 错误）；其余是快照里分隔符不匹配。Linux/Mac CI 上 `/test/cwd/...` 是合法绝对路径，全过。
 - **判别**：**三方验证非回归**——① 纯 `upstream/main` 新建 worktree 跑同样测试也失败；② rebase 前的 `backup-before-rebase-*` 分支跑也失败。两者都失败 ⇒ 与本次 rebase 无关，是既有 Windows 环境差异。
-- **解法**：**直接忽略**，不改测试/不改上游逻辑（改了会破坏 Linux CI）。不影响主仓库 `pnpm check`（vendor 不在 workspace）。与记忆 `codex-claude-skills-memory-parity` 记录的“3 个测试 Windows 反斜杠失败 CI 过”一致。
+- **解法**：**直接忽略**，不改测试/不改上游逻辑（改了会破坏 Linux CI）。不影响主仓库 `pnpm check`（vendor 不在 workspace）。
 - **锚点**：`vendor/codex-acp/src/__tests__/CodexACPAgent/{CodexAcpClient.test.ts,load-session.test.ts}`、`src/app-server/AbsolutePathBuf.ts`、fixture `src/__tests__/acp-test-utils.ts`（`cwd: "/test/cwd"`）。
 
 ### 案例 2：`src/index.ts` — 我方表驱动扩展方法注册 撞 上游 prompt 取消支持
 - **现象**：rebase 到「支持持久化 AI 会话标题」提交时 `src/index.ts` 冲突。HEAD（上游）侧把手写的 `.onRequest("authentication/status"...)` 等逐条注册保留、且给 prompt 加了 `ctx.signal`（来自上游取消支持）；我方侧把这些手写注册重构成表驱动的 `EXTENSION_METHOD_REGISTRATIONS` for 循环、但 prompt 还是旧的 `getAgent().prompt(ctx.params)`（无 signal）。
 - **根因**：两边改同一段 agent builder——上游改控制流（加取消 signal），我方改结构（手写→表驱动）。
 - **解法**：**两者都要**。采用我方 `const agentBuilder = ...` + 表驱动 for 循环结构，同时把 prompt 改成上游的 `getAgent().prompt(ctx.params, ctx.signal)`。先确认我方 `EXTENSION_METHOD_REGISTRATIONS`（在 `AcpExtensions.ts`）已完整覆盖上游那几个手写方法（authentication/status、authentication/logout、legacy set_model，且多了 set_session_title），确认后删掉上游的逐条 `.onRequest(...)` 手写注册与旧 `z`/parser import 残留即可。
-- **锚点**：`src/index.ts`（`startAcpServer` 的 agent builder 链）、`src/AcpExtensions.ts`（`EXTENSION_METHOD_REGISTRATIONS`）。
+- **为什么注册层是承重的（非显然）**：ACP SDK 只把 `index.ts` 里**显式 `.onRequest(method, parser, …)` 注册过**的方法路由进 `extMethod`——未注册的方法 SDK 直接 methodNotFound 拒掉，**根本到不了 `CodexAcpServer` 的 switch**。所以「server 侧实现了方法」≠「客户端调得到」：曾有一轮单测直连 `agent.extMethod(...)` 调用、**绕过了注册层**，测试全绿而真机黑。**验收判据**：测试必须断言目标方法在 `EXTENSION_METHOD_REGISTRATIONS` 列表内（`src/__tests__/CodexACPAgent/set-session-title.test.ts` 的「注册层」回归例，现 7 例），不能只测 server 方法本身。新增 ext-method 只走两步——`AcpExtensions.ts` 加 method+parser 描述符，`index.ts` 的 for 循环自动注册，**别再加手写 `.onRequest`**。
+- **锚点**：`src/index.ts`（`startAcpServer` 的 agent builder 链、`EXTENSION_METHOD_REGISTRATIONS` 循环）、`src/AcpExtensions.ts`（`EXTENSION_METHOD_REGISTRATIONS`）、`src/__tests__/CodexACPAgent/set-session-title.test.ts`。
 
 ### 案例 3：费用补丁的 totalTokenUsage 累计语义 撞 上游 token-usage 快照（更新快照）
 - **现象**：rebase 后 `npm test`，`token-usage-events.test.ts` 6 个 `toMatchFileSnapshot` 失败。diff 显示我方输出 `totalTokens: 5000` 而快照期望 `2500`（测试输入里 `total=5000, last=2500`）。
@@ -132,8 +134,9 @@ git push -u origin chore/update-codex-acp
 ### 案例 4：skills/memory 注入（Claude 兼容）— 我方大改 CodexAcpClient（一般能自动合并，但注意路径构造）
 - **现象**：「支持 Claude 兼容的 skills 和 memory」提交改 `src/CodexAcpClient.ts`：threadStart/threadResume 加 `...buildMemoryInstructions(cwd)`（读 `cwd/.claude/memory/MEMORY.md` 作 developerInstructions）、`refreshSkills` 把 skillExtraRoots 扩成 `.agents/skills` + `cwd/.claude/skills` + `additionalRoots/.claude/skills`。
 - **根因/风险**：上游也在演进 skills（`support-skills-from-additionalRoots` 等分支/PR），两边都动 skills 发现逻辑，可能冲突或语义重叠。
-- **解法**：合并时保留我方的 `.claude/skills` + memory 注入（这是 fork 命脉，主仓库依赖，见记忆 `codex-claude-skills-memory-parity`），与上游的 `.agents/skills` 处理**并存**。注意：我方对 skill root 故意不做存在性检查（保持与上游 `.agents/skills` 对称、最小化 diff），这会在 Windows 假 cwd 测试下触发案例 1 的 AbsolutePathBuf——那是测试环境问题，不是这里的 bug。
-- **锚点**：`src/CodexAcpClient.ts`（`buildMemoryInstructions`、`refreshSkills` 的 `skillExtraRoots`）、`src/AcpExtensions.ts`（`SET_SESSION_TITLE_METHOD`）、记忆 `codex-claude-skills-memory-parity`。
+- **解法**：合并时保留我方的 `.claude/skills` + memory 注入，与上游的 `.agents/skills` 处理**并存**。注意：我方对 skill root 故意不做存在性检查（保持与上游 `.agents/skills` 对称、最小化 diff），这会在 Windows 假 cwd 测试下触发案例 1 的 AbsolutePathBuf——那是测试环境问题，不是这里的 bug。
+- **现状（2026-10 起，别按旧表述理解）**：memory 注入服务的是编辑器**面向用户项目的功能**——「一套 `.claude/` 同时服务 Claude 与 Codex 两个会话」，用户项目 cwd 下照常生效（`buildMemoryInstructions(cwd)` 读 `cwd/.claude/memory/MEMORY.md` 作 `developerInstructions` **附加层**，**绝不**用 `baseInstructions`——那会替换 codex 自身系统提示；索引缺失/为空则不注入，属零改动优雅降级）。**本仓库已下线自建 memory 层（目录已移除，不再是本仓库的知识容器）**，所以在仓库内该注入是空转的——但这**不是**重放时跳过该提交的理由：它服务的是用户项目，rebase **仍必须保留**。
+- **锚点**：`src/CodexAcpClient.ts`（`buildMemoryInstructions` 定义 + 三个调用点）、`src/AcpExtensions.ts`（`SET_SESSION_TITLE_METHOD`）、用户文档 `docs/user/zh-CN/ai-agent/skills-memory-mcp.md`「一套配置服务两个 Agent」。
 
 ### 案例 5：「两者都要」式解冲突丢块 + 语义适配三类（v1.1.7 合并实战）
 - **现象**：rebase 到上游 v1.1.7（steering #309 / goal control #293 / 可配置 provider #272）时，冲突几乎全是「同一位置双方各加各的」（ext-method 类型 union、`isExtMethodRequest`、`EXTENSION_METHOD_REGISTRATIONS`、import 列表、方法块）。手工「两者都要」合并时**把上游 HEAD 侧的 `SessionSteerRequest`/`SessionSteeringResponse`/`SessionSteeringExtRequest` 三个类型定义整块丢了**（new_string 只保留了函数没保留类型），rebase 能完成但 `npx tsc --noEmit` 立刻报一串 TS2304。
@@ -171,7 +174,7 @@ git push -u origin chore/update-codex-acp
 2. **真上游是 `agentclientprotocol/codex-acp`，不是已废弃的 `zed-industries/codex-acp`**。设错会出现 merge-base 为空 / 代码倒退的假象；用 `merge-base 命中基线` + `ahead/behind 与我方提交数吻合` 校验。
 3. submodule 是 detached HEAD；**本地 `main` 常已过时**，基线用 `merge-base HEAD upstream/main` 的真实 sha，别信本地 main。**rebase 前先落 `backup-before-rebase-<sha>` 分支**。
 4. rebase 里 `--ours` = 被 rebase 到的上游侧、`--theirs` = 正在重放的我方提交（与平时相反）。`package-lock.json` 取 `--ours` 后 `npm ci` 重生成。
-5. `src/index.ts` 冲突：我方表驱动注册 + 上游 prompt `ctx.signal` **两者都要**（案例 2）；先确认 `EXTENSION_METHOD_REGISTRATIONS` 覆盖上游手写方法。
+5. `src/index.ts` 冲突：我方表驱动注册 + 上游 prompt `ctx.signal` **两者都要**（案例 2）；先确认 `EXTENSION_METHOD_REGISTRATIONS` 覆盖上游手写方法。**ext-method 的验收必须断言注册层**（SDK 只路由显式注册过的 method，漏注册=methodNotFound、到不了 server 的 switch；见案例 2）。
 6. 费用补丁是 fork 命脉：`_meta.quota` 走 **totalTokenUsage 累计**语义。撞上游 token-usage 快照时**更新快照**并 fixup 进费用提交（案例 3）；别把它改回 lastTokenUsage。
 7. package.json 解冲突当心**重复 key**；version/codex/SDK 依赖取上游。
 8. 后处理改动（更新的快照、适配的测试）用 `git commit --fixup=<sha>` + `GIT_SEQUENCE_EDITOR=true git rebase -i --autosquash` 并入逻辑所属提交。
@@ -184,13 +187,14 @@ git push -u origin chore/update-codex-acp
 15. **取消行为以当前源码为准**：不发 `Conversation interrupted` chunk（编辑器自行渲染，恢复时由回放补 `[Request interrupted by user]`）；不要按本 skill 的历史案例把通知加回来（案例 6）。
 16. **fork 改 elicitation 字段后缀 → 同步主仓** `ElicitationCard.toDisplayFields`（`_custom`/`__other`/`_note` 三种并存），并确认配对只在同名 enum 存在时发生（案例 8）。
 17. 上游 bump `@openai/codex` 时，主仓 `packages/node-services/src/agentBinary/flavors.ts` 的 `CODEX_VERSION` 必须同步到 lock 解析版本，并跑 `pnpm --filter @universe-editor/node-services run test`。
+18. **实测真实 codex 行为**：fork 内 skill `run-codex`（`npm run codex-test`）的脚本已与上游 2.1.1 脱节——2026-10 实测在 initialize 后抛 `codexAcpClient.authRequired is not a function`（`CodexAcpClient` 已无该方法），别在它上面耗时间。改走 codex CLI 直连：`vendor/codex-acp/node_modules/.bin/codex exec -s read-only -C <仓库根>`。两个坑：**必须重定向 stdin**（`< /dev/null`），否则卡在 `Reading additional input from stdin` 不动直到超时；网关不通时表现为 `stream disconnected` + HTTP 451，与本仓库改动无关。
 
 ## 关键参考路径
 - 根 `CLAUDE.md`「内置 ACP agent」段 + `scripts/release/{vendor-install.mjs,runtime-resources.mjs}`、`package.json` 的 `agent:build`（含两个 fork）
 - `vendor/codex-acp/src/{index.ts,CodexAcpClient.ts,CodexEventHandler.ts,CodexAcpServer.ts,AcpExtensions.ts,PathUtils.ts}`
 - codex-acp 构建：`vendor/codex-acp/build.mjs`（esbuild → dist/index.js，external `@openai/codex`），非 bun
 - 主仓库 `apps/editor/src/renderer/services/acp/`（codex 会话/费用/标题消费端）、`scripts/sync-codex-skill-policy.mjs`（codex skills policy 同步）
-- 记忆 `codex-claude-skills-memory-parity`、`codex-ai-title-persistence-parity`、`session-cost-feature`、`session-timer-feature`
+- 标题持久化的消费端 + 跨 bucket 回填案例：`apps/editor/src/renderer/services/acp/session/cases-session-ui.md`
 
 ## 其它
 - 姊妹 skill `update-claude-agent-acp` 是 claude-agent-acp fork 的同类流程，套路互通、案例可互相参考。

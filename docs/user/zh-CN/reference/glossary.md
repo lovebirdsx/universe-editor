@@ -67,7 +67,7 @@
 
 ## 记忆（Memory）
 
-跨会话持久的项目上下文，记录在 `.claude/memory/MEMORY.md`（索引）及其分篇正文里。用来让智能体记住项目设定、术语译法、写作风格，省得每次重复解释。详见 [技能、记忆与 MCP](../ai-agent/skills-memory-mcp.md)。
+跨会话持久的项目上下文。仓库自建 memory 层（`.claude/memory/`）已下线，知识归位到四类容器（目录 `CLAUDE.md`、skills、`docs/development/`、`docs/user/`），Agent 按需读取。用来让智能体记住项目设定、术语译法、写作风格，省得每次重复解释。详见 [技能、记忆与 MCP](../ai-agent/skills-memory-mcp.md)。
 
 ## MCP
 

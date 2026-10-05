@@ -2028,8 +2028,8 @@ describe('PromptInput — focus handoff', () => {
   // must mirror focus onto `acpPromptInputFocused` — NOT `editorTextFocus` — so the
   // global keybinding handler still treats it as a text surface (Delete/Backspace
   // reserved) while commands gated on `editorTextFocus` (findWordAtCursor, …) stay
-  // out of the prompt. See editor-text-focus-stuck-swallows-keys for the
-  // mirror-image bug.
+  // out of the prompt. See docs/development/commands-and-context-keys.md
+  // (the "focus context keys" section) for the mirror-image bug.
   it('sets acpPromptInputFocused (not editorTextFocus) while the prompt editor holds focus, clears on blur', () => {
     const contextKeyService = new ContextKeyService()
     renderWithServices(<PromptInput session={makeSession()} />, { contextKeyService })

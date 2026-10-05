@@ -130,8 +130,8 @@ export function clearSwarmReviewEditorStates(): void {
 
 /**
  * Cross-component bus tying the review detail editor to the Swarm Reviews view.
- * Module-level singleton Emitters (never disposed — see memory
- * `strictmode-useref-emitter-dispose-dev-only`): they outlive any single mounted
+ * Module-level singleton Emitters (never disposed — see skill
+ * `fix-disposable-leak` case 3): they outlive any single mounted
  * component, so the list can react to an action taken in a detail tab.
  */
 const _onDidMutateReview = new Emitter<string>()

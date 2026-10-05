@@ -71,6 +71,10 @@ pnpm e2e          # 端到端测试（未提交改动仅含 e2e spec 时自动�
 
 **包依赖传递**：修改 `platform` 后，apps 看到的是 `dist/`。`pnpm dev` 下 watcher 会自动重建；离开 dev 模式时手动 `pnpm build` 或 `pnpm --filter <pkg> build`，否则 apps 仍使用旧产物。
 
+**路径/URI 身份比较**：唯一入口是内核 `IUriIdentityService`（`packages/platform/src/uriIdentity/`，消费端经 DI 取）；无 DI 的场景（main、纯函数模块）用 `packages/platform` 的 `arePathsEqual` / `relativePathUnder` / `getPathComparisonKey` + `normalizePlatform(process.platform)`（签名必带 platform）。**禁手写 `fsPath.toLowerCase()` / 反斜杠折叠**做路径身份键（ESLint 护栏会拦）。规则、刻意保留的独立身份域例外与形态陷阱见 `packages/platform/CLAUDE.md`。
+
+**配置变更订阅不是前缀匹配**：platform 的 `ConfigurationService.affectsConfiguration` 是**精确匹配**（`packages/platform/src/configuration/configurationService.ts` 的 `changed.has(k)` / `k === key`），订阅必须枚举具体 key——写 `affectsConfiguration('ai')` 这类 section 名会**静默漏事件**（全仓多处 `ai.*` / `editor.*` 订阅点沿用过 section 名）。VSCode 的 section 前缀语义只存在于扩展 API（`packages/extension-host/src/extensionService.ts` 的 `acceptConfigurationChanged`），两者不可类推。
+
 **TS 严格性**：开启 `strict` + `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes`（定义在 `packages/config-ts/base.json`，子包不要覆盖关掉）。这意味着：
 - 数组/对象索引返回 `T | undefined`，必须显式处理
 - 可选属性写 `prop?: T`（而不是 `prop: T | undefined`），二者不可互换
@@ -84,11 +88,17 @@ pnpm e2e          # 端到端测试（未提交改动仅含 e2e spec 时自动�
 
 **ESM only**：所有包 `"type": "module"`；相对导入带 `.js` 后缀（即使源文件是 `.ts`），TS 的 `NodeNext`/`bundler` 模块解析依赖这点。
 
+**命令与快捷键的两条静默失效红线**（全仓遵守，机制与排查见 `docs/development/commands-and-context-keys.md`）：
+
+- **带 `when` 的快捷键若与无 when 的全局绑定同键，必须显式加 `weight`**（如 `KeybindingWeight.WorkbenchContrib + 50`）：`packages/platform/src/command/keybindingRegistry.ts` 的解析只按 weight（高优先）→ 同 weight 后注册优先排序，`when` 仅过滤、不提权——scoped 绑定不会像 VSCode 那样自动赢。用户自定义（User=1000）仍可覆盖。
+- **`Action2.run(accessor)` 的 `ServicesAccessor` 命中第一个 `await` 即失效**（之后 `accessor.get()` 抛 'service accessor is only valid during the invocation of its target method'）：async 的 run 必须在任何 await **之前**同步取完所需 service 并打包成快照传给后续 helper；抽取 async helper 尤其危险。
+
 **内置 ACP agent（claude-agent-acp fork）**：`vendor/claude-agent-acp` 是 git submodule（我们自维护的 fork），**不在 pnpm workspace 内**，用它自带的 npm 工具链独立构建。
 - 克隆仓库后先 `git submodule update --init`（或 `git clone --recurse-submodules`）。
 - 改动 fork 或拉取上游后，跑 `pnpm agent:build`（npm ci + esbuild bundle）生成 `vendor/{claude-agent-acp,codex-acp}/{dist,node_modules}`。`pnpm dev` / `pnpm dev:run` 启动前会按指纹自检 `dist/` 并按需重建（`scripts/dev/ensure-vendor-agent-build.mjs`），但**不会**替你跑 npm ci——新 clone / worktree 仍需先 `agent:build`。
 - dev 与发布**同一套启动机制**：main 用 Electron 自带 node（`ELECTRON_RUN_AS_NODE`）跑该 fork 的 `dist/index.js`，**不依赖系统 node/npx**。打包时 `electron-builder.yml` 的 `extraResources` 把产物带进 `resources/`（`package:win*` 已串入 `agent:build`）。
 - 构建期把该平台二进制的 `--version`（CLI 版本，与 SDK 包版本**不同命名空间**）采样进 `dist/claude-binary.json` 的 `cliVersion`，供编辑器在跑 system/custom 来源时强制「不低于锁定版本」；采样失败写 `null`（运行期跳过校验），**不让可选依赖缺失的构建机打不出包**。
+- **多 fork 架构：改一个 fork 前先核对另一个**——claude 早有 `MAIN_REPLAY_*` cap 而 codex 侧四个同族缺口全部缺席，同一类缺陷能在另一个 fork 上原样复发；移植/对齐时显式对照 `vendor/claude-agent-acp/CLAUDE.md` 与 `vendor/codex-acp/CLAUDE.md` 的「本地改动清单」。
 
 ## 代码风格
 
@@ -109,6 +119,7 @@ Prettier：无分号、单引号、`trailingComma: all`、宽度 100。默认不
 - 如果是修复bug，尽量先通过测试复现问题，然后再编码解决
 - **改动了用户可见功能（命令名、快捷键、界面文案、交互流程等）时，检查 `docs/user/` 下是否有对应文档需要同步更新**；用户文档的内部链接由 `pnpm docs:check` 校验（已接入 CI），不要留死链
 - 对于开发者需要关注的功能，包括但不限于 AI 使用规范，编码，测试，发布，检查 `docs/development` 是否有对应文档需要更新
-- 新增知识按归属放置：绑定具体代码目录的写进该目录 CLAUDE.md；memory 只留跨会话教训的一句话索引，memory请放在本目录的 .claude/memory/MEMORY.md 下，不要放在用户目录下
+- 新增知识只写三处：绑定具体代码目录的写进该目录 CLAUDE.md（放不下就拆同目录 cases-*.md 并留一行 hook）；跨目录流程/排障写进 skill（案例多时放其 references/）；跨模块机制/长文写进 docs/development/。memory 层已下线，不要再建。
+- **CLAUDE.md 有 15000 bytes 硬预算**（`pnpm claude-md:check`，全仓无豁免；`cases-*.md` 不计入）：各文件常年贴顶，加内容前先定「从哪腾」。注意 `check:full` 不含该护栏，组成差异见 `docs/development/build-tooling.md`。
 - 当你想调用子agent来进行任务时，请不要使用异步的方式，而是同步等子agent完成之后，才进行后续工作
 - **提交信息不要包含 AI/工具署名水印**（如 `Co-Authored-By: Claude <noreply@anthropic.com>`）：提交只描述变更本身；格式见 `docs/development/git-commit-msg-rule.md`

@@ -10,7 +10,7 @@
 
 ### 核心事实（务必先懂）
 
-- **双 id 架构**（见 [[async-session-create]]）：`AcpSession.id` = 构造时生成的**本地稳定 uuid**，UI 立即拿到（React key / `activeSessionId` / 运行期缓存）；`sessionIdOnAgent` = **agent 颁发的 durable id**，attach 后才有（history / change tracker / active 持久化 / tab serialize / 协议通知路由）。解耦目的：UI 在握手（1-5s）完成前就渲染并接受输入。`_findSession(id)` **同时匹配两个 id**；**resume 出来的会话 `id === entry.sessionIdOnAgent`**。
+- **双 id 架构**：`AcpSession.id` = 构造时生成的**本地稳定 uuid**，UI 立即拿到（React key / `activeSessionId` / 运行期缓存）；`sessionIdOnAgent` = **agent 颁发的 durable id**，attach 后才有（history / change tracker / active 持久化 / tab serialize / 协议通知路由）。解耦目的：UI 在握手（1-5s）完成前就渲染并接受输入。`_findSession(id)` **同时匹配两个 id**；**resume 出来的会话 `id === entry.sessionIdOnAgent`**。
 - **createSession 异步、立即返回**：同步建好 `AcpSession` + 发布 observable → UI 立即可输入；spawn+initialize 后台 `_connectSession`，完成后 `attachConnection`。连接前 prompt 入 `_queuedPrompts`，attach 后 flush。失败走 `failConnection`（status `errored` + `[error]` 消息，**不再 reject**）。
 - **timeline 是 UI 的唯一真相**：按到达顺序交织 message/tool_call slot（plan 单列）。lane observable（messages/toolCalls/plan）留作 selector 读。
 - 16ms 防抖事务、`T | null` ≠ `T | undefined` 等 SDK 约定 → `../CLAUDE.md`。
@@ -22,7 +22,7 @@
 - **核心三件套**：`acpSessionService.ts`（多会话 facade：observables + `IAcpClientNotificationSink` 分发 + create/`_connectSession`/resume/close + `_findSession`）、`acpSession.ts`（单会话 view-model：observable 全集 + `applyUpdate` 状态机 + 双 id + prompt 队列 + `attachConnection`/`failConnection`/`whenConnected` + 标题派生 + usage/cost）、`acpSessionConfigOptions.ts`（`ConfigOptionStateMachine`：echo 抑制 + 推送 + 持久化分支）
 - **恢复/历史/定位**：`acpSessionRestoreCoordinator.ts`（启动/workspace-swap 恢复 + `session/list` 扫描）、`acpSessionHistory.ts`（`MAX_ENTRIES=100`，键 `sessionIdOnAgent`）、`acpSessionEditorInput.ts`（会话即 editor tab）、`acpChatWidgetService.ts`（ChatBody registry + `lastFocusedWidget`）
 - **标题/状态**：`acpSessionTitleService.ts` / `acpSessionTitle.ts` / `acpSessionTitleEcho.ts` / `sessionTitleFormat.ts`、`acpSessionStatus.ts` / `acpSessionFilterService.ts` / `acpAuthError.ts`（含共享判定 **`isResidentLive`**——「这实例还该被当成活会话用吗」的唯一真相）
-- **改动追踪/附件/草稿**：`sessionChangeTracker.ts`（键 `sessionIdOnAgent`，[[session-diff-feature]]）、`acpMessageAttachmentStore.ts`（已发送消息选区快照）、`acpPromptDraftCache.ts` / `acpQuestionDraftCache.ts` / `acpChatViewStateCache.ts` / `acpPromptCancelledDraftStash.ts`（按**本地 id** 缓存）、`acpPromptHistoryService.ts` / `acpPromptContextInbox.ts` / `acpPromptReplaceInbox.ts` / `acpPromptTextInbox.ts` / `acpElicitationDraftCache.ts`
+- **改动追踪/附件/草稿**：`sessionChangeTracker.ts`（键 `sessionIdOnAgent`，[cases-session-diff.md](cases-session-diff.md)）、`acpMessageAttachmentStore.ts`（已发送消息选区快照）、`acpPromptDraftCache.ts` / `acpQuestionDraftCache.ts` / `acpChatViewStateCache.ts` / `acpPromptCancelledDraftStash.ts`（按**本地 id** 缓存）、`acpPromptHistoryService.ts` / `acpPromptContextInbox.ts` / `acpPromptReplaceInbox.ts` / `acpPromptTextInbox.ts` / `acpElicitationDraftCache.ts`
 - **杂项**：`acpSessionConnection` / `acpSessionContent` / `acpSessionCost` / `acpSessionModel` / `acpSessionFactory` / `acpSessionRecovery` / `acpSessionRegistry` / `acpSessionOutlineRegistry` / `acpSessionUpdateMeta` / `acpTimelineOutline` / `acpAgentDefaultsService` / `acpLastSessionCwdService` / `sessionBookmarks` / `sessionBookmarkService` / `acpCompactionStats` / `acpConfigOptionsCache` / `acpAgentCostStrategy` / `acpAuthGuidanceService` / `acpCodexAutoReviewGuard`（codex Auto review 告警）/ `acpErrors` / `acpErrorClassify` / `acpExtMethods` / `acpAutoResumeGuard` / `acpResidentBudget` / `acpContentLimits` / `modelSwitchContextGuard` / `sessionDiffReconstruct` / `acpSessionProviderContext`（费率归属：`agentId + authority` 复合键，**反查 agent 自己的配置文件**）
 
 #### 同域核心层（上一级）
@@ -35,12 +35,12 @@
 - **输入/消息**：`PromptInput` / `SendButton` / `StopButton`、`MessageList` / `MessageContent` / `UserMessageItem` / `CodeBlock`
 - **工具/计划**：`ToolCallCard` / `ToolCallOutput` / `CommandInvocationBadge` / `InlineDiffPreview` / `lineDiff`、`PlanView` / `StickyPlanBar` / `StickyUserMessageBar` / `StickyScrollOverlay` / `stickyScroll` / `CompactionCard`
 - **卡片/条**：`PermissionCard` / `QuestionCard` / `ElicitationCard`、`ConfigOptionsBar` / `ConfigBarOverflowMenu`、`RecoveryBar` / `ResurrectionCard` / `ForeignSessionPreview` / `SideTasksBar`
-- **列表/改动/用量**：`SessionListPanel` / `SessionListBody` / `SessionsViewToolbar` / `AgentChatContextMenu`、`SessionChangesView` / `sessionChangesViewState`（**用 `sessionIdOnAgent` 查 changesFor**，[[session-diff-feature]]）、`useSessionTimer` / `UsageIndicator` / `SessionCostIndicator` / `useExchangeRate`、`McpServersView` / `McpServerPicker` / `McpEnablementToggles`
+- **列表/改动/用量**：`SessionListPanel` / `SessionListBody` / `SessionsViewToolbar` / `AgentChatContextMenu`、`SessionChangesView` / `sessionChangesViewState`（**用 `sessionIdOnAgent` 查 changesFor**）、`useSessionTimer` / `UsageIndicator` / `SessionCostIndicator` / `useExchangeRate`、`McpServersView` / `McpServerPicker` / `McpEnablementToggles`
 - **辅助**：`ChatFindWidget` / `useChatFind`、`timelineCollapse` / `timelineIcons` / `sessionStatusIcon` / `agentIcon`、`chatContentExpansion` / `contentOverflow` / `timelineVirtualScroll`
 
 #### 跨进程 / 命令 / contributions
 
-- **main**：`src/main/services/acpHost/`（spawn + pump stdio/exit）、`src/main/services/acpTerminal/`（terminal 池）。**无 endStdin，关流走 stop**。
+- **main**：`src/main/services/acpHost/`（spawn + pump stdio/exit）、`src/main/services/acpTerminal/`（terminal 池）。
 - **命令**：`actions/agentActions.ts`（barrel）——NewAgentSession / CancelAgentTurn / ResumeAgentSession / SelectAgent[Model|Mode|ThoughtLevel] …。加命令走 `apps/editor/CLAUDE.md` 套路 A。
 - **contributions**：`AcpInitContribution`（启动 hydrate）/ `AgentBinaryPrefetchContribution` / `AgentFontContribution` / `AgentNotificationContribution` / `AgentsContributions` / `FirstRunAgentOnboardingContribution` / `SessionShutdownParticipant`（退出时优雅关闭）。
 
@@ -79,8 +79,8 @@
 3. **`T | null` ≠ `T | undefined`**——见 `../CLAUDE.md`「SDK 关键约定」#1。
 4. **新增更新没进 16ms 事务**：会抖动/中间态闪烁（`../CLAUDE.md` #9）。
 5. **FakeSession stub 漏新接口成员**：`IAcpSession` 加方法后各 test 本地 stub 同步补。**加数据字段**（如 `authority`）：`as unknown as` 的 stub 静默读 `undefined`、显式 `implements` 的 typecheck 红；**断言分区行为的测试必须显式给 authority**。
-6. **FakeStorage 启动 fire workspace-swap**：启动期 `onDidChangeWorkspaceScope` 微任务会 close 掉刚建未 attach 的 session——测试给 service 自身的 storage 要退订该启动事件。见 [[async-session-create]]。
-7. **其余 SDK 协议坑**（ToolKind 枚举 / cancel 双步 / terminal ownership / stderr 独立通道 / env denylist / stdio MCP 不带 type 等）：全在 `../CLAUDE.md`「SDK 关键约定」#2-#10。
+6. **FakeStorage 启动 fire workspace-swap**：启动期 `onDidChangeWorkspaceScope` 微任务会 close 掉刚建未 attach 的 session——测试给 service 自身的 storage 要退订该启动事件。
+7. **其余 SDK 协议坑**（ToolKind / cancel 双步 / terminal ownership / stderr 通道 / env denylist / stdio MCP 不带 type）：全在 `../CLAUDE.md`「SDK 关键约定」#2-#10。
 8. **会话标题四个写入方，优先级 manual > ai > 首条 prompt 派生 > agent 报告** → [cases-session-ui.md](cases-session-ui.md)。
 9. **长 timeline 从底向上滚动抖动**两条成因（补偿策略太宽 + 行高挂载不稳）→ [cases-session-ui.md](cases-session-ui.md)。
 10. **第一条用户消息不在 `displayTimeline`**：语义操作用完整 `timeline` → [cases-session-ui.md](cases-session-ui.md)。
@@ -92,7 +92,7 @@
 
 ### 测试套路
 
-协议级一律走 `testing/inMemoryAcpPair.ts`（见 `../CLAUDE.md`「测试模式」）。**异步握手**：凡 `createSession` 后要碰连接/通知/history 的，先 `await session.whenConnected()`；resume 路径仍全程 await。主要测试：`AcpSessionService.test.ts`、`acpSessionConfigOptions.test.ts`、`AcpSessionService.resume.test.ts`、`acpSessionRestoreCoordinator.test.ts`；UI 侧 `workbench/agents/__tests__/*`。
+协议级一律走 `testing/inMemoryAcpPair.ts`（见 `../CLAUDE.md`「测试模式」）。**异步握手**：凡 `createSession` 后要碰连接/通知/history 的，先 `await session.whenConnected()`；resume 路径仍全程 await。主要测试：`AcpSessionService*.test.ts`、`acpSessionConfigOptions.test.ts`、`acpSessionRestoreCoordinator.test.ts`；UI 侧 `workbench/agents/__tests__/*`。
 
 ### 验证
 
@@ -103,10 +103,12 @@
 - `acpSessionService.ts` / `acpSession.ts` / `acpSessionConfigOptions.ts`（三层核心）、`acpClientService.ts`（连接池）、`acpSessionRestoreCoordinator.ts`（恢复时序）、`workbench/agents/` + `actions/agentActions.ts`
 - SDK 类型源码与配置 key 见 `../CLAUDE.md`；session 特有配置 key：`acp.defaultCollapseModes`
 
-## 案例（从本文件拆出，按需读对应一份）
+## 案例（按需读）
 
-- **rewind/fork 纵切**：[cases-rewind-fork.md](cases-rewind-fork.md)——SDK 无回退落盘 API 须物理截断磁盘 JSONL、消息锚点、claude/codex 双实现、已修 bug 根因。
-- **恢复/回放**：[cases-session-replay.md](cases-session-replay.md)——compact 边界回放、并行 tool_result 掉链、codex thought 分隔符、custom_tool_call、`[1m]` resumeModel、transcriptPath。
-- **断连/回收/唤醒/cancel**：[cases-session-recovery.md](cases-session-recovery.md)——空闲回收、唤醒两档、isDormant 三符号、挂起卡衔接文案、cancel 三连、retrying 残留。
-- **标题/timeline UI**：[cases-session-ui.md](cases-session-ui.md)。
+- **rewind/fork**：[cases-rewind-fork.md](cases-rewind-fork.md)——SDK 无回退落盘 API、消息锚点、claude/codex 双实现。
+- **恢复/回放**：[cases-session-replay.md](cases-session-replay.md)——compact 边界、并行 tool_result 掉链、codex thought 分隔符、`[1m]` resumeModel、transcriptPath。
+- **会话 diff**：[cases-session-diff.md](cases-session-diff.md)——pinned baseline、fs-watch 兜底、视图同步。
+- **断连/回收/唤醒/cancel/空会话重建**：[cases-session-recovery.md](cases-session-recovery.md)——空闲回收、唤醒两档、isDormant 三符号、挂起卡衔接、cancel 三连。
+- **标题/timeline UI/计时**：[cases-session-ui.md](cases-session-ui.md)。
 - **输入框上下文**：[cases-prompt-input.md](cases-prompt-input.md)。
+- **内存预算**：[cases-memory-budget.md](cases-memory-budget.md)——度量/释放红线、children 修剪。

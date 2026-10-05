@@ -3,8 +3,9 @@
  *  Runs the editor's three tsgo passes with a one-shot self-heal: on failure, drop the
  *  package's incremental state and retry once. tsgo --build trusts tsbuildinfo freshness by
  *  mtime order, and clock skew (WSL RTC drift) can leave that state poisoned — the manual
- *  fix documented in memory was exactly "delete these three files and rerun"; this automates
- *  it. A retry pass that still fails is a real type error.
+ *  fix ("delete these three files and rerun") is automated here; mechanism and the entry
+ *  guard that prevents it live in docs/development/build-tooling.md. A retry pass that
+ *  still fails is a real type error.
  *--------------------------------------------------------------------------------------------*/
 
 import { spawnSync } from 'node:child_process'

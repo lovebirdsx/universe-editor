@@ -1,6 +1,6 @@
 # cases-session-recovery
 
-> 本文从 `services/acp/session/CLAUDE.md` 拆出，范围是：会话**断连/空闲回收/休眠唤醒/取消恢复**的逐案细节——空闲进程回收、唤醒两档策略、lastActivityAt 防抖动、关窗停 agent、`isDormant` 三符号判定、断连时挂起卡、cancel 恢复三连、`_sendWithRecovery` retrying 残留。路由入口见 [CLAUDE.md](CLAUDE.md)「关键架构决策」与「易踩坑速记」。
+> 本文从 `services/acp/session/CLAUDE.md` 拆出，范围是：会话**断连/空闲回收/休眠唤醒/取消恢复/空会话热重连重建**的逐案细节——空闲进程回收、唤醒两档策略、lastActivityAt 防抖动、关窗停 agent、`isDormant` 三符号判定、断连时挂起卡、cancel 恢复三连、`_sendWithRecovery` retrying 残留、CLI usage 记账崩溃的 transient 归类。路由入口见 [CLAUDE.md](CLAUDE.md)「关键架构决策」与「易踩坑速记」。
 
 ## 空闲进程回收
 
@@ -21,6 +21,20 @@
 
 `_handleConnectionLost` 内 bump `_lastActivityAt`——唤醒是用户活动，成功唤醒的 session 因此拿到完整 idleMs 宽限。若不 bump：唤醒耗时十几秒且期间无 wire 流量 → `lastActivityAt` 陈旧 → 下一 tick（≤60s）就被再杀，用户观感是「点开又睡回去」。不会无限续命（唤醒后无交互，idleMs 后照常回收）；唤醒全程 status 是 `connecting`（recovery.phase 为 `reconnecting`），在 `_isIdleReclaimable` 的 status 过滤处就已排除，reaper 本身无需改。
 
+## 空会话热重连走 `session/new` 原地重建，不照抄「关闭+替换」
+
+症状：改 Sub Agent 模型后点「立即重启」（`requestProcessRestart`），会话反复 `reconnect attempt N/3 … Resource not found`，3 次耗尽 seal 成「Automatic recovery failed」。根因：`_reconnectSession` 原来**无条件** `session/resume`，而空会话（history 行 `hasMessages === false`，从未发过 prompt）在 agent 侧没有 transcript，resume 只能回 `resourceNotFound`。修法（`acpSessionService.ts:1581`）：按 `entry?.hasMessages === false && entry.sideTaskOf === undefined` 分派到 `session/new` **原地重建**——不照抄 MCP 变更的 `_reloadSessionForMcpChange`「关闭+替换」，后者会关掉用户的 editor tab、清 draft/viewState、换本地 uuid 让 React 重挂载。
+
+重建会换 durable id，连带四处（漏一处就出现「幽灵会话」）：① `acpSessionHistory.rekey(old, new)` 迁行保留全部字段、同时删旧行与目标 id 上的既有行；② `acpSession._priorAgentSessionIds` 别名集合（cap `MAX_PRIOR_AGENT_SESSION_IDS = 4`）+ `reattachConnection(conn, newId)`；③ `acpSessionRegistry.find()` 别名回退、`liveIds()` 带别名（防 refresh-prune 误删）；④ rebuild 分支**不传 `leaseFor`**（否则 terminal 归属绑到即将作废的死 id）。
+
+三条审查踩坑（harness 开关 `freshSessionIdPerConnect` / `resumeSessionError` / `attachSessionErrorOnConnect` 就是为这三条造的）：
+
+1. **side task 是唯一 `hasMessages: false` 但 agent 侧有 transcript 的会话**——`forkSideTask` 在子会话发首条消息前就把父会话完整历史 fork 到 agent 侧了。所以判定必须带 `entry.sideTaskOf === undefined`，否则 rebuild 会静默丢掉 fork 基线，侧边追问失去讨论对象。
+2. **重试循环持有的 `sid` 必须随 rekey 一起更新**（`let sid`，rekey 后 `sid = rebuiltSessionId`），否则 attach 抛错后重试用死 id 查 history → `entry === undefined` → 退回 resume 死 id → budget 耗尽。
+3. **rekey 必须紧贴 `attachSession` 之前**，中间不能夹任何可能抛错的调用（`setConfigDesired` / `applyInitState` 都挪到 rekey 之前）——否则留下「行在新 id、session 在旧 id」的不一致窗口。
+
+测试全在 `AcpSession.recovery.integration.test.ts`。注意既有那几条「空会话 seal」用例在修复后语义会变，须补前置 `sendPrompt` 让它们继续守护 resume 路径。
+
 ## 关窗/退出时停 agent 走 willShutdown join，不靠 beforeunload
 
 agent 子进程 cwd=workspace（app 单例 acpHost spawn），beforeunload 的 fire-and-forget stop 在页面销毁时 IPC 会被丢弃——shell 包装的 agent（cmd.exe→node.exe）残留并把 cwd 钉在 workspace 上，Windows 下文件夹删不掉直到 app 退出。可靠路径：`RendererLifecycleService.confirmShutdown` 跑完整两阶段（veto + onWillShutdown join），`acpClientService` 在 join 里 `Promise.allSettled(liveHandles.map(stop))`，窗口活着时 IPC 通畅；beforeunload 仅作 reload/崩溃兜底。
@@ -29,13 +43,13 @@ agent 子进程 cwd=workspace（app 单例 acpHost spawn），beforeunload 的 f
 
 agent 进程在闲置期退出时，onClose 的 idle 分支只做**静默 seal**（`status='closed'`、无 `[error]`、无 recovery state），phase 仍是 `'connected'`、死 lease 仍绑在 `_conn` 上、session 未 dispose、history 行保留；用户主动 `close()` 则 phase 转 `'closed'` 且 session dispose，绝不该被复活。三个符号**一套判定不留两份**：
 
-- **`isDormant: IObservable<boolean>`**（`acpSession.ts`）——「被空闲回收的可唤醒休眠态」。**刻意是显式设置观察量而非 `derived(status,phase)`**：`close()` 里 `status.set('closed')` 早于 `_connection.close()`，而 phase 不是 observable，derived 会在那一帧算出 `true` 且此后**没有任何东西能让它失效** → 永久卡 dormant。置位点只有**三处**（`onClose` 静默 seal 分支 → true；`attachConnection` open 成功 → false；`close()` → false）+ `_handleConnectionLost` 内清零，改动时务必保持齐全（有专门用例守护）。不覆盖 `phase==='failed'`（恢复耗尽时 `status==='errored'`，门槛本来就放行，UI 已有 RecoveryBar + Retry）。**`onClose` 的 `deadOnArrival` 参数不可省**：`attachConnection` 里 `_connection.open()` 先把 phase 翻到 `'connected'`，之后才发现 lease 到手即死，所以「启动失败 vs 空闲回收」**无法**靠 phase 区分——只能由那一处同步调用显式告知，否则从未启动成功的会话会挂上月亮图标和「已休眠以节省内存」提示。该分支同时要 reject `open()` 已排空的 `drained` 队列，不然 `sendPrompt` 的 await 永久挂起。**abort 监听必须包一层 `() => onClose()`**：直接把 `onClose` 交给 `addEventListener` 会让 `Event` 对象落进 `deadOnArrival`（真值），于是**每一次真实空闲回收**都不再置 dormant。
+- **`isDormant: IObservable<boolean>`**（`acpSession.ts`）——「被空闲回收的可唤醒休眠态」。**刻意是显式设置观察量而非 `derived(status,phase)`**：`close()` 里 `status.set('closed')` 早于 `_connection.close()`，而 phase 不是 observable，derived 会在那一帧算出 `true` 且此后**没有任何东西能让它失效** → 永久卡 dormant。置位点只有**三处**（`onClose` 静默 seal 分支 → true；`attachConnection` open 成功 → false；`close()` → false）+ `_handleConnectionLost` 内清零，改动时务必保持齐全（有专门用例守护）。不覆盖 `phase==='failed'`（恢复耗尽时 `status==='errored'`，门槛本来就放行，UI 已有 RecoveryBar + Retry）。**`onClose` 的 `deadOnArrival` 参数不可省**：`attachConnection` 里 `_connection.open()` 先把 phase 翻到 `'connected'`，之后才发现 lease 到手即死，所以「启动失败 vs 空闲回收」**无法**靠 phase 区分——只能由那一处同步调用显式告知，否则从未启动成功的会话会挂上月亮图标和「已休眠以节省内存」提示。该分支同时要 reject `open()` 已排空的 `drained` 队列，不然 `sendPrompt` 的 await 永久挂起。**abort 监听必须包一层 `() => onClose()`**：直接把 `onClose` 交给 `addEventListener` 会让 `Event` 对象落进 `deadOnArrival`（真值），于是**每一次真实空闲回收**都不再置 dormant。**扩展「首参会被塞 Event」这类监听签名前，须普查所有 `addEventListener` 注册点**（同类陷阱不限于 `onClose`）。
 - **`_wakeIfDormant()`**（私有，命令式）——死连接检测的**唯一实现**，`sendPrompt` 原先那段守卫已重构成对它的一次调用。命令式读 phase 是安全的（调用时求值），所以它保留比 `isDormant` 更宽的 `phase==='failed'` 分支。命中即 `_handleConnectionLost('wake')`，**复用既有 `onDidLoseConnection → _wireRecovery → _reconnectSession` 通道，不开第二条重连路径**。
 - **`ensureAwake(): Promise<'ready'|'connecting'|'closed'|'failed'>`**（公开，等待版）——显式用户操作的入口。四值不可合并：`'connecting'` 必须与 `'ready'` 区分，因为**初始握手期绝不能 await**（`setConfigOption` 的「连接前本地乐观应用 + 待推」是刻意路径，await 全握手会让配置栏点击阻塞十几秒）；`'failed'` 与 `'closed'` 区分是前者要抛错让调用方 notify、后者静默。facade 侧包了一层 `_awakeSession(sessionId)`（不存在/只读预览/已 close/唤醒失败一律返回 undefined）。
 
 散落的 `status==='closed'` **语义**判定（「这实例还能用吗」）一律改读 **`isResidentLive`**（`acpSessionStatus.ts`）：`resumeSession`（根治「休眠 session 被判死 → 再建一个实例 → 双实例共存 → 通知路由打在幽灵上」）、`resumeSessionReadOnly`、`renameSession`、`setSessionMcpServers`、`SessionListBody` 的行判定与 `onActivate`。**React 侧传不了 reader**，改成并列订阅两个 observable：`SessionListBody` 的 `LiveSessionStatus`（休眠照常出月亮图标）、时间线末尾的 `ForkTipFooter`（把「回合已落定」判成 `status==='idle' || (status==='closed' && isDormant)`——fork 走自己的临时租约读磁盘 transcript，不需要源进程，所以休眠时按钮照常可点）。**只订阅 `status` 会漏掉「关闭一个休眠会话」那一次翻转**：`close()` 先清 `_dormant` 再置 `status`，而 status 本已是 `'closed'`。
 
-**`setConfigOption` 必须保留同步快路径**（曾在此翻车）：`_wakeIfDormant()` 后若非 `_reconnecting` 就**直接同步委托状态机**，只有真要等重连时才 `await ensureAwake()`。把整个方法体放到 await 之后会把状态机的「乐观本地应用 + 同 id echo 抑制门」推到微任务之后，同一 tick 抵达的 `config_option_update` 会覆盖用户刚选的值——`AcpSessionService.configOptions.test.ts` 的两个 echo 用例就是这条不变量的守卫。
+**`setConfigOption` 必须保留同步快路径**（曾在此翻车）：`_wakeIfDormant()` 后若非 `_reconnecting` 就**直接同步委托状态机**，只有真要等重连时才 `await ensureAwake()`。把整个方法体放到 await 之后会把状态机的「乐观本地应用 + 同 id echo 抑制门」推到微任务之后，同一 tick 抵达的 `config_option_update` 会覆盖用户刚选的值——`AcpSessionService.configOptions.test.ts` 的两个 echo 用例就是这条不变量的守卫。**该方法新增的 throw 必须由消费方 catch + notify**（`ConfigOptionsBar.tsx:541` 的 `pickConfigValue` try/catch → `agent.configOption.failed` 通知；`agentModelActions.ts` 同款），否则调用点的 `void pickConfigValue(...)` 会变成静默回滚。
 
 改恢复逻辑时另外两点：① `retryRecovery` 的 `_failedPrompt` 分支有同构死连接检测（置 `_turnInterrupted=true` 必须在 `_handleConnectionLost` 调用**之后**，否则被其 `_inFlight.size>0` 覆写）；② `_reconnectingSessions` 去重会吞 reattach 收尾窗口内的二次断连事件，靠 `_reconnectSession` finally 的 `isReconnecting` 复查补跑，别删（复查时把 `'wake'` 折叠回 `'crash'` 对 wake 无害——无需 pool eviction）。UI 侧 `'wake'` 只是 `RecoveryBar` 多一条文案分支（唤醒中 `status='connecting'` + `recovery.phase='reconnecting'`，现有条自动渲染）。回归测试：`AcpSession.recovery.integration.test.ts`（8 个休眠用例）。
 
@@ -50,3 +64,13 @@ agent 进程在闲置期退出时，onClose 的 idle 分支只做**静默 seal**
 ## `_sendWithRecovery` 返回时 `recovery` 绝不停留在 `phase:'retrying'`
 
 RecoveryBar 只渲染当前 state，倒计时定时器 fire 完就没人再推进它；残留的 `retrying` 会永久转圈且没有 Retry 按钮（症状指纹：状态条卡在「Agent temporarily unavailable. Retrying… (2/3)」、倒计时归零后文案不再变，只能手动点 ×）。收尾责任按出口各自负责、**刻意不用统一 finally**（`agent_crash` 分支把 recovery 交棒给 reconnect tier，统一 finally 会误标成 exhausted）：成功 → clear；abort 分支（`AcpAbortError`）→ clear；退避 sleep 被打断的 catch → clear（这两处都在 `!this._reconnecting` 守卫内——Stop/× 是取消不是失败，不给 manual-retry 条）；`agent_crash` → 交棒 `_handleConnectionLost` 覆盖成 `reconnecting`、**勿收尾**；终止分支 → `!this._reconnecting && (attempt > 1 || verdict.cls === 'transient')` 写 `exhausted` + `_failedPrompt`，`reason: verdict.kind ?? verdict.cls`（非 transient 的 fatal/quota/auth 在「重试后的下一次尝试」收场也要落 exhausted，否则残留 retrying）。配套约定：**看门狗豁免只认 `recovery.hasPending`**（有真实定时器），不认「有 state」——残留 retrying 无定时器必须回落 stall watchdog；**idle reaper 只豁免进行中的 recovery**（`retrying`/`reconnecting`），`exhausted` 是终态不阻止回收，否则 fatal/quota/auth 终态会让 agent 进程永远不被空闲回收（等于用内存不释放换状态残留）。
+
+## claude CLI usage 记账崩溃：按 message 文本归类 transient 自动续跑
+
+**现象**：claude-code 会话在 turn 尾报 `Internal error: undefined is not an object (evaluating 'e.includes')`（2026-08 现场多次），一个几分钟到几十分钟的 turn 被整体作废。
+
+**根因链**（本地已复现）：claude CLI 二进制（bun/JSC 编译，多个近期版本均未修，上游 issue anthropics/claude-code#74059 至今 stale）的 usage 记账路径，对**缺 `model` 字段**的上游 usage 条目做 `includes` 判定、无 undefined 守卫 → TypeError。崩点在 message_stop 记账时，**turn 的工作已全部落盘**；CLI catch 后以 is_error result 结束 turn，fork 原样转发成 internalError（`errorKind` 为 unknown 或缺失）。**编辑器与 fork 都不在数据路径上**，改不了传输内容，所以只能按症状归类恢复。
+
+**编辑器侧修法**：`apps/editor/src/renderer/services/acp/session/acpErrorClassify.ts` 的 `CLI_USAGE_ACCOUNTING_CRASH_TEXT` 按 message 文本识别（JSC 与 V8 两种措辞、任意 minified 标识符）→ 归类 `transient` + kind `cli_usage_accounting_crash` → `_sendWithRecovery` 自动发「继续」续跑，不再 fatal。
+
+**最小复现**：mock Anthropic SSE 端点，让 usage 里出现缺 `model` 的条目（如 `advisor_message`）即复现一字不差的错误。须用 `CLAUDE_CONFIG_DIR` 隔离配置——`--settings '{}'` 屏蔽不了 `~/.claude/settings.json` 里的 env。

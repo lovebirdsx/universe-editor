@@ -3,7 +3,7 @@
  *  SwarmReviewEditorInput — a virtual EditorInput for one Swarm review's detail
  *  tab. The review id is baked into `id` / `resource` so each review opens in its
  *  own tab (different review = different id → openEditor never dedupes two reviews
- *  into one tab). See memory `editor-input-identity-isolation`.
+ *  into one tab). See apps/editor/src/renderer/services/editor/CLAUDE.md.
  *--------------------------------------------------------------------------------------------*/
 
 import { EditorInput, URI } from '@universe-editor/platform'

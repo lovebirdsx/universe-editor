@@ -120,6 +120,14 @@ export function deactivate(): void {} // 通常空实现——subscriptions 已�
 
 **activationEvents** 合法值（`extension-manifest/src/activation.ts`）：`"*"`（eager，慎用）、`"onStartupFinished"`、`"onCommand:<id>"`、`"onLanguage:<id>"`、`"onView:<id>"`、`"onCustomEditor:<viewType>"`。懒激活优先（如命令型插件用 `onCommand:`），全局常驻才用 `onStartupFinished`。
 
+### ⚠️ handler 在 renderer Action2 的命令：只写 `menus`，绝不写 `commands`
+
+内置扩展（git / perforce）贡献到 scm/title 菜单、但真正 handler 在 **renderer Action2** 的命令（如 `git-graph.view` / `perforce-graph.view`），**绝不能**再写进扩展 `package.json` 的 `contributes.commands`：那会在扩展宿主侧注册一个同名、**无 handler** 的命令，执行时它胜出并遮蔽 renderer Action2——`executeCommand` **静默返回 undefined、不抛错**、编辑器不打开（命令「成功」却什么都没发生，极难排查）。
+
+- **做法**：只在 `contributes.menus`（scm / title 等）写菜单项，菜单项自带 `icon` 即可显示图标，title/tooltip 由 renderer Action2 提供。对照 `extensions/git`：`git-graph.view` 只出现在 menus。
+- **排查**：e2e 里用 `getActiveEditorTypeId` / `getActiveGroupEditorCount` 探针对比同结构的 `git-graph.view`（count=1 打开）与被遮蔽命令（count=0 no-op），秒判「命令被吞」而非「组件渲染崩」。
+- 机制细节见 `docs/development/commands-and-context-keys.md` 的「扩展命令与 renderer Action2 的同名遮蔽」节。
+
 ## NLS 本地化 manifest 文案（可选，机制见 `packages/extension-host/src/nls.ts`）
 
 1. manifest 里所有用户可见字符串写 `%key%` 占位（command title / submenu label / config description）
@@ -194,7 +202,7 @@ pnpm check       # lint + typecheck + test，仅看错误输出（被测错误�
 - `packages/extension-host/src/nls.ts` —— manifest `%key%` 本地化实现
 - `apps/editor/src/main/services/extensionHost/extensionHostMainService.ts` —— 扫描目录解析（dev vs packaged）+ env 传参
 - `apps/editor/CLAUDE.md` —— 套路 A（命令/键位 Action2）、套路 D（Contribution）；`docs/user/zh-CN/customization/extensions.md` —— 用户视角说明
-- memory：`extension-system-progress` / `extension-manifest-nls` / `typescript-builtin-plugin`
+- 知识容器：`packages/extension-host/CLAUDE.md`（宿主运行时地图）、`packages/extension-api/CLAUDE.md`（API 版本契约）、`extensions/typescript/CLAUDE.md`（内置语言插件范例）
 
 ## 其它
 

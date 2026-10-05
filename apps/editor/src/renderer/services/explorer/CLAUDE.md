@@ -101,7 +101,7 @@ contributions/index.ts / actions/index.ts            注册以上
 3. **watcher 冷启动窗口不监听**：startWatching() 前外部改动可能漏报，startWatching/_refreshLoadedNodes 会补全量重读——别把「没收到事件」当 bug。
 4. **cut 项被操作后要清剪贴板**：rename/delete/move 命中 cut 项时已自动 clearClipboard；新增移动/删除文件路径记得保持。
 5. **IPC 来的参数是 UriComponents**：先 reviveUri 再用。
-6. **命令层写操作在第一个 await 前取完 service**：accessor 遇 await 即失效，`accessor.get(IExplorerFileOperationService)` 必须在任何 await（prompt/confirm/showOpenDialog）前同步取（见 [[action2-async-accessor-invalidation]]）。
+6. **命令层写操作在第一个 await 前取完 service**：accessor 遇 await 即失效，`accessor.get(IExplorerFileOperationService)` 必须在任何 await（prompt/confirm/showOpenDialog）前同步取（见 `docs/development/commands-and-context-keys.md`）。
 7. **删除撤销靠内存备份非回收站**：关 trash 或远端仍能 Ctrl+Z（>10MB 除外）。
 8. **`_setRoot` 不许清剪贴板**（已修勿回退）：剪贴板是 shared 的镜像不是树根派生态——清了会冷启动竞态清掉 main 快照 + 窗口 B 切文件夹摧毁窗口 A 待粘贴的 cut 状态。论证见 `cases-tree-state.md`。
 9. **useTrash 必须先问 provider 能力**（已修勿回退）：远端无回收站，无条件 `useTrash: true` 会让删除整个失败。判定见「撤销编排层」回收站段。

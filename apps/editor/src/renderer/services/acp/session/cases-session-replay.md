@@ -12,9 +12,19 @@ claude transcript 把同一轮的并行 tool_use 串成链（use1→use2→…�
 
 ## side task 的基线回显：抑制期丢弃的 tool_call id 必须留档
 
-side task 恢复时 `suppressReplayToTimeline` 把锚点之前的整段基线丢掉（含基线里所有 `tool_call`），但 fork 在回放尾部有**两条**回显通道会把它们的 result 再发一遍：`backfillForkedToolResults`（在 `session/load` 的 await 链内）与 Task 卡的 `restampReplayedSubagentStats`（fork 侧 `acp-agent.ts:6409` 是 `void` 调用，**必然越出回放窗口**，在 `endHistoryReplay()` 之后才到）。两者发的 `tool_call_update` 都不带 title/kind，`existing` 又查不到（卡片在抑制期已被丢弃），于是标题落到 `update.toolCallId`，凭空冒出十几张 `call_00_…` 标题、`kind: 'unknown'` 的孤儿卡（截图状：重启编辑器后尾部一排）。
+side task 恢复时 `suppressReplayToTimeline` 把锚点之前的整段基线丢掉（含基线里所有 `tool_call`），但 fork 在回放尾部有**两条**回显通道会把它们的 result 再发一遍：`backfillForkedToolResults`（在 `session/load` 的 await 链内）与 Task 卡的 `restampReplayedSubagentStats`（fork 侧 `acp-agent.ts:7957` 是 `void` 调用，**必然越出回放窗口**，在 `endHistoryReplay()` 之后才到）。两者发的 `tool_call_update` 都不带 title/kind，`existing` 又查不到（卡片在抑制期已被丢弃），于是标题落到 `update.toolCallId`，凭空冒出十几张 `call_00_…` 标题、`kind: 'unknown'` 的孤儿卡（截图状：重启编辑器后尾部一排）。
 
 修法在编辑器侧（fork 拿不到 anchor uuid，且要兼容旧 agent）：抑制期把丢掉的 `tool_call` id 记进 `_suppressedToolCallIds`（`beginHistoryReplay` 重置、FIFO 上限 `MAX_SUPPRESSED_TOOL_CALL_IDS`，**必须比抑制标志活得久**；淘汰数并入同一条汇总日志，否则「淘汰导致的漏网」与「压根没拦」观测上不可分），`applyUpdate` 在 `estimateUpdateCost` 之前拦掉这些 id 的 `tool_call` / `tool_call_update`。两个约束别退化：判据**只认 id 不认回放窗口**（restamp 会越窗；窗口判据还会误伤子卡暂存/合并与 codex 带 title 的孤儿 update），位置**必须在 `_agentOutputCount` 与 change-tracker 之前**（基线回显不该算作本轮 agent 输出、也不该进会话 diff）。标题另加兜底 `update.title ?? existing?.title ?? readAgentToolName(update) ?? localize('acp.session.toolCallUntitled')`——任何路径都不再把不透明协议 id 当标题。对照测试 `AcpSession.timeline.test.ts` 三个用例：回填被丢弃、越窗 restamp 被丢弃、change-tracker 不被污染（第三个是位置约束的唯一守卫，把守卫挪到 tracker 之后只有它会红）。
+
+## 回放预算窗口是**时序性**的：回放类下发必须被 `session/load` await 覆盖
+
+回放断路器 `REPLAY_INGESTION_BUDGET = 256MB`（`acpContentLimits.ts:217`，已含 ×3 视图模型开销）不是按「内容是不是回放」判定的：它的窗口由 `beginHistoryReplay()` / `endHistoryReplay()` 夹住 `session/load` RPC（`acpSessionService.ts:1383` / `:1443`，load 调用在 `:1430`）。**load resolve 之后到达的通知一律按另一套账记**——回放内容晚到，就不再享受回放预算。
+
+事故：fork 的 `replaySubagentTranscripts`（子 agent 嵌套 transcript 回放）曾是 `void` fire-and-forget，子 agent 的嵌套通知在 load resolve **之后**才到，整批绕过回放断路器 → renderer 涨到 5.5GB OOM。
+
+- **红线**：回放类下发必须被 `session/load` **await 覆盖**——判据是「通知**到达时**还在不在窗口里」，不是「发出去时在不在」；**fire-and-forget 下发回放内容是红线**。
+- 修法两面：① fork 侧 `replaySubagentTranscripts` 改 `await`（`vendor/claude-agent-acp/src/acp-agent.ts:10035`，注释写明理由——client 的 history-replay ingestion budget 以 load response 为回放终点，越窗通知会绕过 OOM 断路器）；② sidecar 源头预算（单文件 16MB / 累计 48MB，超限跳卡或停发），即便被越窗夹带也发不出巨量（常量族见 [cases-memory-budget.md](cases-memory-budget.md)）。
+- **对照**：同处的 `restampReplayedSubagentStats` 保持 `void` 是**有意**的——它只回写 disjoint 的 stats 字段、不重发内容，越窗无害（其越窗产生的孤儿 update 由编辑器 `_suppressedToolCallIds` 拦，见上「side task 的基线回显」）。判据是「越窗下发的内容量级」，不是「是不是回放路径的函数」。
 
 ## codex 恢复路径的 thought chunk 必须自带 part 分隔符
 

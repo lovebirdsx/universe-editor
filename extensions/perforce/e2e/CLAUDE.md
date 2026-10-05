@@ -24,6 +24,12 @@ Perforce 扩展的端到端测试。本目录的测试**无需真 p4d 服务器*
    - **删除动作用 `renameSync(dir, <工作区外的同卷兄弟>)`**——与产品走的 `shell.trashItem` 是同一个 syscall 形状，watcher 才只给一条**目录级**删除事件。**绝不要用 `fs.rm`**：Node 逐条删子项会给出逐文件 delete 事件，走「删单文件」路径，症状与目标 bug 完全不同 → **假绿**。
    - **断言「形态不变量」，不只是面板最终状态**：凡提到该子树内路径的 `reconcile -n` 行，必须**同时带该路径的 `/...` 伴随 spec**。这条在「目录级事件」与「逐文件事件」两种世界里都成立，所以不会因 watcher 事件形状不同而假绿/假红（只看面板出没出 `RD` 则可能被别的原因凑对）。面板侧另配一条正向断言（`getScmGroupIdsForResource` 轮询到 `['reconcile']`）+ 一条**反向**断言（未动的文件仍在 reconcile 组外）——只有正向断言会被「整批路径都被当成有改动」蒙混过关。
    - **别用 `getScmWorkingTreeHintForResource` 断言已删除的文件**：它走盘找文件，必然 null，会被误读成「无改动」。
+7. **time travel / force 的种子只有一种造法**（`perforceGraphSync` / `perforceExplorerSyncMultiSelect` 的 `refused` describe）：
+   - **时间旅行只能造正向**：fake-p4 不带 `-f` 的「回退」是 no-op，种子必须形如「`have` 落后、`@CL` 升到中间版本」。
+   - **`submitted` 种子要数组化并带 `rev`**（写 `changeMeta[cl].rev`）——`@cl` 才落得到非 head 的修订。
+   - fake-p4 的 `changes` case **按 submitted 文件集过滤**，但**没有文件集的 annotate-only 种子必须豁免**（滤掉会伤 blame 的用例——它靠这条「不过滤」活着）。
+   - **force 的可观测差异只能靠 `refused: true` 种子**：正向 get 带不带 `-f` 写的是同样的字节，证明不了任何事；`refused` 让 fake 在无 `-f` 时**跳过该文件**（保留本地草稿、have 不动）、带 `-f` 才覆盖——**磁盘内容 + haveRev 双通道**即判据（`activePlans` / `refusedPlans` 在 dry run 与真 sync 之间同源，两条路报同一集合）。
+   - Explorer 的 force e2e 还靠「**落盘修订号既非草稿也非 head**」（`@4521` 落 #2、`#3` 落 #3）同时证明 `-f` 真的到达了 p4、且跑的是所选 spec——只断言「文件变了」会漏掉 `#head` 顶包。
 
 ## 验证
 

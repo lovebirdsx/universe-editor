@@ -151,6 +151,7 @@ pnpm e2e                  # 必要时跑 commandPalette / keyboardShortcut 冒�
 6. **Monaco 是 dynamic import**——单测里 mock `FileEditorRegistry`，用 `_resetForTests()` 清状态，别真加载 worker。
 7. `precondition` 字符串里的 ContextKey 必须已在 `ContextKeyContribution` seed，否则表达式恒 false。
 8. 存疑命令属哪套时，按 action2 处理（trigger 对两类都安全；getAction().run() 只对 EditorAction 有效）。
+9. **反向红线：`editor.addCommand` 没有编辑器作用域**——它注册在共享的 `StandaloneKeybindingService` 上，会在**任意** Monaco 编辑器里触发（曾在 ACP 输入框用它绑 Enter，导致所有编辑器 Enter 被吞）。本 skill 讲的是「把命令接**进**命令面板」的正向流程；若你的键**只该在本编辑器生效**，别用 `addCommand`，走编辑器 DOM 节点上的**作用域化 capture keydown**——见 `docs/development/monaco-embedding.md`「standalone Monaco 的 `addCommand` 无编辑器作用域」。
 
 ## 关键参考路径
 - `apps/editor/src/renderer/actions/gotoLocationActions.ts` —— **action2 型**表驱动 Action2 模板（focus + trigger）

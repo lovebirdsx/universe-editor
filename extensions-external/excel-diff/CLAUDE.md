@@ -118,7 +118,7 @@ E2E 范例 `apps/editor/e2e/specs/smoke.webviewDiff.spec.ts`：内联极简 diff
 - **SCM 复用**：`extensions/git/src/{gitService.ts(gitExecBinary),repository.ts(_openSpreadsheetChange)}` / `extensions/perforce/src/{p4Service.ts(execBinary),baselineProvider.ts(getHaveContentBytes),client.ts(_openSpreadsheetChange)}`
 - **resourceExtname**：`apps/editor/src/renderer/workbench/explorer/ExplorerContextMenu.tsx`
 - **用户文档**：`docs/user/zh-CN/customization/extensions.md`（"扩展可以提供的自定义预览"节）
-- 相关：**`apps/editor/src/renderer/workbench/webview/CLAUDE.md`**（webview 单文件预览基建 + 全部 iframe/CSP/焦点坑，**必读前置**）、skill [create-extension]、`extensions/perforce/CLAUDE.md`（p4 扩展全景）、skill [fix-disposable-leak]、memory [[editor-input-identity-isolation]]（EditorInput id 隔离，WebviewDiffInput 的 id 命名空间遵它）、[[realpath-uri-ipc-revive]]（wire URI revive）
+- 相关：**`apps/editor/src/renderer/workbench/webview/CLAUDE.md`**（webview 单文件预览基建 + 全部 iframe/CSP/焦点坑，**必读前置**）、skill [create-extension]、`extensions/perforce/CLAUDE.md`（p4 扩展全景）、skill [fix-disposable-leak]、`apps/editor/src/renderer/services/editor/CLAUDE.md`（EditorInput id 隔离，WebviewDiffInput 的 id 命名空间遵它）、`packages/platform/CLAUDE.md`（wire URI revive 契约）
 
 ### 其它
 

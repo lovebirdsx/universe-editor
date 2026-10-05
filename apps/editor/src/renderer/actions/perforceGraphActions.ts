@@ -126,7 +126,7 @@ export class ViewPerforceFileHistoryAction extends Action2 {
 
     // File history runs on the SCM host; an off-host resource (a local file in a
     // remote window) has no history there — mirroring dirty-diff's scmHostPath gate.
-    // Read synchronously, before any await (see memory action2-async-accessor-invalidation).
+    // Read synchronously, before any await (see docs/development/commands-and-context-keys.md).
     const authority = currentRemoteAuthority(workspaceService.current)
     const paths: GraphScopePath[] = []
     for (const target of targets) {

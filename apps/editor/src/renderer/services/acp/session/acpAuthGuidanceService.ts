@@ -7,7 +7,8 @@
  *
  *  Extracted from AcpSessionService (roadmap 06 · task 1): the facade should not
  *  own auth-cooldown notification state nor the `ICommandService` dependency it
- *  only used to open Agent Settings. See [[async-session-create]].
+ *  only used to open Agent Settings. See the session subsystem map at
+ *  services/acp/session/CLAUDE.md (核心事实).
  *--------------------------------------------------------------------------------------------*/
 
 import {

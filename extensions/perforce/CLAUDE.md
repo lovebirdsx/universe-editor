@@ -88,7 +88,7 @@ pnpm check                                       # lint+typecheck+全测+docs:ch
 - `packages/extensions-common/src/contracts/{dirtyDiff,blame}.ts` —— provider capability 契约
 - `apps/editor/src/renderer/services/extensions/ScmService.ts` —— `resolveScmProviderId(s)` / `encodeScmProviderIds`
 - `extensions/git/` —— 对照样板
-- 相关 memory：`eslint-path-identity-guardrails` / `path-comparison-convergence` / `renderer-action-shadowed-by-extension-command-decl`
+- 遮蔽坑见 skill `create-extension`；相关：`packages/config-eslint/CLAUDE.md`（路径身份护栏）/ `packages/platform/CLAUDE.md`（路径/URI 身份比较）
 
 ## 其它
 

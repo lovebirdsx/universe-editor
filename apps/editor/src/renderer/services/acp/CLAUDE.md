@@ -1,6 +1,6 @@
 # apps/editor/src/renderer/services/acp/CLAUDE.md
 
-Agent Client Protocol（ACP）客户端层。基于 `@agentclientprotocol/sdk` v1.2.x（ESM-only，zod schema 校验）。协议层完全在 renderer 端，main 端只搬字节（`IAcpHostService` / `IAcpTerminalService`）。
+Agent Client Protocol（ACP）客户端层。基于 `@agentclientprotocol/sdk` v1.2.x（ESM-only，zod schema 校验）。协议层完全在 renderer 端，main 只搬字节。
 
 **关键事实**：
 - SDK 类型直接出现在 service / UI / 测试里——**没有 alias 层**，类型名就是 SDK 导出的名字
@@ -8,9 +8,9 @@ Agent Client Protocol（ACP）客户端层。基于 `@agentclientprotocol/sdk` v
 
 ## 文件归位
 
-- **协议装配 / 网关**：`acpClientService.ts`（进程启动 + `ClientSideConnection` 装配 + refcount 连接池 + fs/terminal/permission 网关）、`acpAgentRegistry.ts`（内置预设 + `acp.agents` 合并 + PATH 探测）、`acpPathPolicy.ts`（沙盒纯函数：cwd 相对性 + 敏感前缀拒绝）、`acpPermissionHandler.ts`（自动批准）、`acpElicitationForm.ts`（elicitation → 表单模型）、`sdkHostStream.ts`（字符串 → Uint8Array IO 适配）
+- **协议装配 / 网关**：`acpClientService.ts`（进程启动 + `ClientSideConnection` 装配 + refcount 连接池 + fs/terminal/permission 网关；**含 NUL 字节，改动前先读 [cases-acp-client-service.md](cases-acp-client-service.md)**）、`acpAgentRegistry.ts`（内置预设 + `acp.agents` 合并 + PATH 探测）、`acpPathPolicy.ts`（沙盒纯函数：cwd 相对性 + 敏感前缀拒绝）、`acpPermissionHandler.ts`（自动批准 + Memory 持久化）、`acpElicitationForm.ts`（elicitation → 表单模型）、`sdkHostStream.ts`（字符串 → Uint8Array IO 适配）
 - **MCP**：`acpMcpServers.ts`（配置 → wire `McpServer[]` 规范化 + 门控）、`mcpServerEnablementService.ts`（默认启停）、`agentMcpConfigService.ts`（agent 自有 MCP 配置文件路由门面）
-- **输入框引用**：`promptRef.ts` / `promptRefTracker.ts` / `promptMentions.ts` / `promptContextRef.ts` / `contextSuggestions.ts`（@/# 药丸子系，见 [cases-prompt-ref-pills.md](cases-prompt-ref-pills.md)）、`promptContext.ts`（选区上下文组装）、`sessionScope.ts`
+- **输入框**：@/# 药丸引用见 [cases-prompt-ref-pills.md](cases-prompt-ref-pills.md)，图片输入见 [cases-prompt-images.md](cases-prompt-images.md)，Monaco 编排见 [cases-prompt-input-monaco.md](cases-prompt-input-monaco.md)；`promptContext.ts`（选区上下文组装）、`sessionScope.ts`
 - **其余工具**：`persistedStateBase.ts`（双桶持久化基类）、`markdownRenderer.ts` / `markdownIncremental.ts` / `mentionFileSearch.ts` / `ansi.ts` / `filePathLink.ts` / `chatFindMatcher.ts` / `commandWrapper.ts` / `agentIconData.ts` / `agentNotificationIcon.ts` / `acpProtocolTracer.ts`、`acpModelCandidateService.ts` / `acpModelCandidates.ts` / `modelOneM.ts` / `configOptionLabel.ts` / `aiFixConfig.ts` / `aiFixPrompt.ts`（职责见文件名）
 - **测试**：`testing/inMemoryAcpPair.ts`（真 `ClientSideConnection` ↔ 桩 `AgentSideConnection` 对联）
 - **会话子系统（37 个文件）**：见 [`session/CLAUDE.md`](session/CLAUDE.md)
@@ -31,7 +31,7 @@ Agent Client Protocol（ACP）客户端层。基于 `@agentclientprotocol/sdk` v
 
 **入站**：`IAcpHostService.onStdout(chunk)` → `sdkHostStream` 重编码 → `ndJsonStream` → `clientImpl` 回调：`sessionUpdate`（→ `AcpSession.applyUpdate`）、`requestPermission`（tryAutoApprove or PermissionCard）、`unstable_createElicitation`（pendingElicitation + ElicitationCard）、`readTextFile / writeTextFile`（AcpPathPolicy → IFileService）、terminal 五方法（→ IAcpTerminalService，带 ownership 检查）。**stderr 不进 SDK 流**：单独写 `OutputChannel`（喂进去会破坏 JSON 解析）。
 
-**`applyUpdate` 处理八种 SessionUpdate**：`user_message_chunk` / `agent_message_chunk` / `agent_thought_chunk` / `tool_call` / `tool_call_update` / `plan` / `available_commands_update` / `config_option_update`。新增类型在 `session/acpSession.ts` 的 `applyUpdate()` switch 加 case。`config_option_update` delegate 到 `ConfigOptionStateMachine.ingestUpdate`（需 echo 抑制）。
+**`applyUpdate` 处理八种 SessionUpdate**：`user_message_chunk` / `agent_message_chunk` / `agent_thought_chunk` / `tool_call` / `tool_call_update` / `plan` / `available_commands_update` / `config_option_update`。`config_option_update` delegate 到 `ConfigOptionStateMachine.ingestUpdate`（需 echo 抑制）。
 
 ## 套路 ACP-A：加一个内置 agent 预设
 
@@ -56,7 +56,7 @@ Agent Client Protocol（ACP）客户端层。基于 `@agentclientprotocol/sdk` v
 
 **例外：`switch_mode`（ExitPlanMode）永不走静默自动批准、也不被 `persistAllow` 记住**（守卫在 `onRequestPermission`）。它的自动化由 `acp.plan.autoExecute`（off/bypassPermissions/auto/acceptEdits/default）显式驱动：设置映射到已提供的非 clear 批准选项（`exit-plan-*`）才附 `autoResolve`，否则诊断并回人工确认。卡片倒计时可打断，勿静默短路。
 
-**计划模式作用域批准**：`acp.plan.autoApproveWithUpdates`（默认开）对 plan 会话的 `execute`/`read`/`search` 请求直接选中 fork 的 `allow-with-updates`（须已提供、拒绝项不在首位，不走 `AcpPermissionHandler`）。见 [cases-plan-approve.md](cases-plan-approve.md)。
+**计划模式作用域批准**：`acp.plan.autoApproveWithUpdates`（默认开）对 plan 会话的 `execute`/`read`/`search` 静默选中 fork 的 `allow-with-updates`，不经 `AcpPermissionHandler`；判定六条与风险见 [cases-plan-approve.md](cases-plan-approve.md)。
 
 ## 套路 ACP-E：扩展会话历史持久化字段
 
@@ -83,13 +83,13 @@ agent 端（`vendor/claude-agent-acp`）把 wire 的 `env`/`headers` 数组还�
 - **默认启用集 = 池中全部非 `disabled` 条目**：`disabled` 注解来自 **`IMcpServerEnablementService`**（`acp.mcpServerEnablement`，GLOBAL/WORKSPACE 双 scope），定义条目里的 `disabled` 字段一律失效。UI 共用 **`McpEnablementToggles`**（工作区级开关**三态**，坑见 cases）。两条 wire 路径 `await Promise.all([extensionMcp.whenReady, mcpEnablement.whenReady])` 消除冷启动竞态。
 - **picker 左侧勾选只是会话级 pin**（`setSessionMcpServers`），只影响当前会话，**绝不写回默认**（sticky 机制已删）。resume/fork 选择瀑布：history 行 `mcpServerNames`（undefined=跟随默认）→ 否则 `null`（非 disabled 全集）。
 
-**未做**：实验性 `type:'acp'` transport、MCP 状态/工具可观测 UI（ACP 无标准状态推送，MCP 工具以普通 `tool_call` 出现）。
+**未做**：实验性 `type:'acp'` transport、MCP 状态/工具可观测 UI。
 
 ## 测试模式
 
 主要测试在 `__tests__/`：`AcpSessionService.test.ts`、`acpSessionConfigOptions.test.ts`、`AcpSessionService.resume.test.ts` + `acpSessionRestoreCoordinator.test.ts`、`AcpClientService.terminal.test.ts`、`acpMcpServers.test.ts`、`acpSessionHistory.test.ts`、`sdkHostStream.test.ts`。
 
-**协议级测试一律走 `testing/inMemoryAcpPair.ts`**（见「文件归位」）：断言 **fake agent 方法被调用 + 参数对**，而不是 jsonline 字节（后者会被 SDK wire 格式变化弄碎）。E2E 在 `apps/editor/e2e/`，ACP 未在 `@p0` 冒烟里。
+**协议级测试一律走 `testing/inMemoryAcpPair.ts`**（对联构成见「文件归位」）。断言 **fake agent 方法被调用 + 参数对**，而不是 jsonline 字节（会被 SDK wire 格式变化弄碎）。E2E 在 `apps/editor/e2e/`，ACP 未在 `@p0` 冒烟里。
 
 ## 持久化
 
@@ -106,7 +106,7 @@ agent 端（`vendor/claude-agent-acp`）把 wire 的 `env`/`headers` 数组还�
 5. **Cancel 双步缺一不可**：(a) `conn.cancel({ sessionId })` 发 notification 给 agent；(b) 本地 `AbortController.abort()` 让 `Promise.race` 立刻 reject。少 (b) 卡死本地 UI，少 (a) agent 不知道。
 6. **Terminal ownership 闭包**：`connect()` 里 `ownedTerminals = new Set<string>()`，五个 terminal 方法都闭包它。**跨连接访问抛 `RequestError.invalidParams`**；连接关闭遍历 `release(id)` 兜底。
 7. **stderr 独立通道**：`IAcpHostService.onStderr` **绝不**喂给 SDK ndJsonStream——单独 `OutputChannel`。
-8. **env denylist**：spawn 前剥 `ELECTRON_RUN_AS_NODE` / `NODE_OPTIONS`，否则 agent 怪异崩溃。main + renderer 两端都要做。**例外**：内置 `runAsNode` agent 由 `acpHostMainService` 剥离**之后有意补回** `ELECTRON_RUN_AS_NODE=1`（它用 Electron-as-node 启动，fork 以 `process.execPath` 重启自己必须继承）。只对可信内置路径开启。
+8. **env denylist**：spawn 前剥 `ELECTRON_RUN_AS_NODE` / `NODE_OPTIONS`，否则 agent 怪异崩溃。main + renderer 两端都要做。**例外**：内置 `runAsNode` agent 由 `acpHostMainService` 剥离**之后有意补回** `ELECTRON_RUN_AS_NODE=1`（Electron-as-node 启动，fork 必须继承）。只对可信内置路径开启。
 9. **16ms 防抖事务**：`applyUpdate` 内 messages / toolCalls / plan 共用一个 `transaction()`，单次 observer 通知。新增更新类别也要进同一事务，否则抖动。
 10. **stdio MCP 条目绝不能带 `type` 字段**：agent 端用 `!('type' in server)` 判定 stdio，带了 `type`（哪怕 `'stdio'`）会**两个分支都不匹配被静默丢弃**。`normalizeMcpServers` 的 stdio 分支刻意不写 type；http/sse 反而**必须**带。env/headers 是 `Array<{name,value}>`（不是 Record）。
 
@@ -115,9 +115,9 @@ agent 端（`vendor/claude-agent-acp`）把 wire 的 `env`/`headers` 数组还�
 - SDK 类型源码：`node_modules/@agentclientprotocol/sdk/dist/schema/types.gen.d.ts`；入口导出 `ClientSideConnection / AgentSideConnection / RequestError / ndJsonStream` + schema 类型
 - 配置 key：`acp.agents` / `acp.permissions.autoApprove` / `acp.plan.autoApproveWithUpdates` / `acp.plan.autoExecute` / `acp.startupTimeoutMs` / `acp.defaultAgentId` / `acp.mcpServers` / `acp.idleProcessTimeoutMs`
 
-## 案例：输入框 @/# 药丸引用
+## 案例：输入框（引用 / 图片 / Monaco 编排）
 
-见 [cases-prompt-ref-pills.md](cases-prompt-ref-pills.md)。两条红线：**引用真身活在 Monaco 上，不是 React state**；**resource_link 的 name/description/_meta 会被 agent 丢弃**，行/列/符号名**只能进 `text` 块正文**——见 [[prompt-hash-context-references-feature]]。
+@/# 药丸引用见「文件归位」；图片与 Monaco 编排见 [cases-prompt-images.md](cases-prompt-images.md) / [cases-prompt-input-monaco.md](cases-prompt-input-monaco.md)。两条红线：**引用真身活在 Monaco 上，不是 React state**（旧 by-name 序列化已删，别复活）；**resource_link 的 name/description/_meta 会被 agent 丢弃**，行/列/符号名**只能进 `text` 块正文**。
 
 ## 子域导航
 

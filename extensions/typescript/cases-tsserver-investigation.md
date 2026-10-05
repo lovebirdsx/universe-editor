@@ -1,6 +1,6 @@
 # cases-tsserver-investigation
 
-> 本文从 `CLAUDE.md` 拆出，范围是：TypeScript 内置插件的 **tsserver 行为排查实录与纠偏**——大型 depot 工程「didOpen 超大 d.ts 后又转圈 60-90s」的四个叠加因素、Windows 正斜杠回退 bug、close 不卸载的实证纠偏（close-probe 探针）、以及由此确立的 keep-alive pin 与诊断方法论。改 `lspClient.ts` / `tsServerPaths.ts` 的 spawn、路径、重启、日志逻辑时先读本文。
+> 本文从 `CLAUDE.md` 拆出，范围是：TypeScript 内置插件的 **tsserver 行为排查实录与纠偏**——大型 depot 工程「didOpen 超大 d.ts 后又转圈 60-90s」的四个叠加因素、Windows 正斜杠回退 bug、close 不卸载的实证纠偏（close-probe 探针）、由此确立的 keep-alive pin 与诊断方法论，以及 `.tsx`/`.jsx` 的 languageId 映射约定。改 `lspClient.ts` / `tsServerPaths.ts` 的 spawn、路径、重启、日志逻辑时先读本文。
 
 ## 排查实录（大型 depot 工程 2026-07）：「didOpen 超大 d.ts 后又转圈 60-90s」
 
@@ -16,3 +16,7 @@
 tsserver **5.9.3 不会**在 configured project 的最后一个 open 文件关闭后卸载它（didClose 后 120s 该项目符号仍可 navto，tsserver 文件日志无 `remove Project`）。此前观察到的「关闭即卸载、重开付 60-90s 全量 reload」其实是第 3 条的正斜杠回退 bug：工作区 TS 4.5.5 假报 config 变更触发整项目重载，表象酷似卸载。修复回退后该表象消失，与 VSCode 行为一致。
 
 真正会丢项目的路径只剩**进程崩溃重启**（`_open` 重放只含仍 open 的文档）——由 keep-alive pin 兜底（见主文档 lspClient.ts 条目）。LSP 协议上观测不到项目归属与加载/卸载明细：didOpen/didClose 打 `project≈<tsconfig>` 归属日志（启发式，`≈` 表示推测），加载明细看 tsserver 文件日志（`UNIVERSE_TS_LOG_LEVEL=verbose`）。
+
+## `.tsx` 的 languageId 必须是 `typescriptreact` / `javascriptreact`
+
+给 tsserver 的 languageId 不能只看「是 TS 还是 JS」：插件 provider 的 selector 与文档同步统一吃 `TS_JS_LANGUAGES`（`extensions/typescript/src/extension.ts`，4 个值 typescript / javascript / typescriptreact / javascriptreact）。`.tsx` / `.jsx` 必须归到 react 变体，否则 JSX 文件拿不到正确语义。

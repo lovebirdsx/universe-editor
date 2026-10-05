@@ -9,7 +9,7 @@
  *
  * All handlers live here (extension host), so these command ids are safe to
  * declare in package.json `commands` (they are not renderer Action2 — see the
- * shadowing guardrail in memory `renderer-action-shadowed-by-extension-command-decl`).
+ * shadowing guardrail in skill `create-extension`).
  */
 import { commands, window, workspace, type Disposable } from '@universe-editor/extension-api'
 import type { SwarmCommandId, SwarmFileContentResult } from '@universe-editor/extensions-common'

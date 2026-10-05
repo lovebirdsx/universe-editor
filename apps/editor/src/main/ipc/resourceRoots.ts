@@ -5,7 +5,7 @@
  *  environment. The protocol handler (resourceProtocol.ts) enforces these.
  *
  *  Path identity (case policy, boundary containment) is delegated to the platform
- *  kernel — see [[path-comparison-convergence]] — never hand-rolled here.
+ *  kernel — see packages/platform/CLAUDE.md (path/URI identity) — never hand-rolled here.
  *--------------------------------------------------------------------------------------------*/
 
 import { resolve } from 'node:path'

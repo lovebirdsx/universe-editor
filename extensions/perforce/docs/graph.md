@@ -20,11 +20,22 @@
 
 `getRepos` / `setRepo` / `getChanges` / `getHaveChange` / `getSyncPoint` / `getChangeDetails` / `getPendingChanges` / `openFileDiff` / `openWorkingTreeFile` / `syncToChange` / `getSyncScopes`。全部走 `commands.registerCommand`（**不进 package.json `commands` 数组**，见头号坑），renderer 用 `commands.executeCommand(PerforceGraphCommands.xxx, ...)` 调用。
 
-除 `syncToChange` 外全部只读。`syncToChange` 是唯一的写命令（P4V 式 "get revision as of a changelist"）：`p4 sync` 到所选 CL，把工作区 have 版本**移动**（可回退可前进）——只动本地工作区，depot 仍只读。范围 = 请求的 `scopePaths`（经 `buildSyncFilespecs` 展开，目录转 `<dir>/...`）或图谱显示范围（`wholeRepo ? '//...' : workspaceScope`）；`@CL` 后缀由 `clSpecOf` 生成（只认纯数字，防任意文本 splice 进 filespec）；执行复用插件的 `runSync`（进度条 / 拒绝处理同一套）；确认策略 = 纯函数 `graphSyncConfirmKind`（`graphSync.ts`，三态）：`force` 请求 → 弹**合并**的强制确认框（覆盖未收集改动 + 时间旅行重置两层语义合成一个 modal，`confirmForceGet(spec, scopeText)`——与 Explorer 的「拉取版本…」强制档**共用同一个**函数与文案，故正文只说「目标版本」不说 changelist）并透传 `force` 给 `runSync` → `p4 sync -f`；否则委托 `graphSyncNeedsConfirm`：`confirmed`（多选目录对话框已确认）/ `isLatest`（目标 = 最新行，等价 get latest）/ 单文件 scope 免确认，目录 / 多路径 / 整显示范围弹时间旅行警告。**`force` 压过全部三条豁免**（`isLatest` / `confirmed` / 单文件都不豁免，见下）。`getSyncScopes` 列图谱 client root 的顶层目录（纯 `readdir`，零 p4 调用，失败读作「无候选」），喂 renderer 的多选目录对话框。
+除 `syncToChange` 外全部只读。`syncToChange` 是唯一的写命令（P4V 式 "get revision as of a changelist"）：`p4 sync` 到所选 CL，把工作区 have 版本**移动**（可回退可前进）——只动本地工作区，depot 仍只读。范围 = 请求的 `scopePaths`（经 `buildSyncFilespecs` 展开，目录转 `<dir>/...`）或图谱显示范围（`wholeRepo ? '//...' : workspaceScope`）；`@CL` 后缀由 `clSpecOf` 生成（只认纯数字，防任意文本 splice 进 filespec）；执行复用插件的 `runSync`（进度条 / 拒绝处理同一套）；确认策略 = 纯函数 `graphSyncConfirmKind`（`graphSync.ts`，三态）：`force` 请求 → 弹**合并**的强制确认框（覆盖未收集改动 + 时间旅行重置两层语义合成一个 modal，`confirmForceGet(spec, scopeText)`——与 Explorer 的「拉取版本…」强制档**共用同一个**函数与文案，故正文只说「目标版本」不说 changelist）并透传 `force` 给 `runSync` → `p4 sync -f`；否则委托 `graphSyncNeedsConfirm`：`confirmed`（多选目录对话框已确认）/ `isLatest`（目标 = 最新行，等价 get latest）/ 单文件 scope 免确认，目录 / 多路径 / 整显示范围弹时间旅行警告。**`force` 压过全部三条豁免**（`isLatest` / `confirmed` / 单文件都不豁免，见下）。`getSyncScopes` 列图谱 client root 的顶层目录（纯 `readdir`，零 p4 调用，失败读作「无候选」），喂 renderer 的多选目录对话框。**`#rev` 后缀只有 Timeline 行右键用**：`perforce.timeline.getThisRevision`（`timelineProvider.ts` 的 handler）是唯一用 `#rev` 的入口，天然文件修订粒度；rev 跨 RPC 来，**必须过数字白名单**（`/^\d+$/`，与 `clSpecOf` 对 `@CL` 同一套思路），白名单不过直接 return。
 
 **红线：`force` 只能升级警告，绝不能豁免警告**。`graphSyncNeedsConfirm` 的入参类型 `GraphSyncConfirmInput` **刻意不含** `force`——把 force 传给它（想借 `isLatest` 免确认）是编译错误；force 一律经 `graphSyncConfirmKind` 短路成 `'force'`。理由：`isLatest` 免确认的前提是「get latest 不是时间旅行」，而 `-f` 无论目标是不是 head 都会重写可写本地副本、销毁未收集的工作；单文件 scope 恰是最需要 force 的场景（have 上但本地改过 → 普通 get 报 up-to-date 什么都不做）。确认文案点名目标版本与 scope（截断 300 字符 + `(N filespecs)`，两侧共用 `syncSpec.ts` 的 `scopeTextOf`）——整仓库图谱的 scope 是 `//...`/工作区根 `...`，那行是用户唯一能察觉「这一下要重拉整仓」的时机。日志行带 `-f` 标记：图谱自己的溯源行（`graph sync -f … to @4521`，非 force 也打），加上 `PerforceClient.sync` 的日志行（`[perforce] sync -f @4521: N applied, …`，**所有** `-f` 入口共用这一处，故 Explorer 侧的强制档同样留有痕迹；带标记的不只是成功汇总——**失败 / 取消 / 已最新**三种结局同样带，被 clobber 挡下的那次强制 get 恰是最需要留下痕迹的）——事后追查「谁覆盖了我的文件」时，这是唯一能区分强制 get 与普通 get 的现场。
 
-## 本地同步点（"已同步"徽章 / 账本 + 手动查询）
+## Explorer「拉取版本…」的决策层（`syncSpec.ts`）
+
+Explorer / 命令面板 `perforce.sync` 的 quick pick 与图谱共用同一套确认函数，纯决策层在 `extensions/perforce/src/syncSpec.ts`：
+
+- `syncPickItems()` —— **8 档字面量（普通 4 + 强制 4），顺序即屏幕顺序**；强制档必须排在最后（列表常被键盘选，`#head -f` 漂到顶部 = 一个误按 Enter 就销毁本地工作）。每档 = `kind` + `force` + `label` + `description`，`labelColor` **只有强制档带**（`SyncPick.labelColor?` 注释即此约定）。
+- `syncPromptOf` —— `Record<Exclude<SyncSpecKind, 'head'>, ValuePrompt>`：**新增 kind 不补 prompt 即编译错误**（head 无需取值，故 Exclude）。
+- `syncSpecOf` —— typed sigil 原样用；否则 rev 补 `#`、其余补 `@`。
+- `effectiveSyncScope` —— 镜像 `client._syncTargets` 的「**空数组同样回落**」语义。
+- `scopeTextOf` —— 300 字符截断 + `(N filespecs)`，与图谱的 `confirmForceGet(spec, scopeText)` 共用，故正文只说「目标版本」。
+- `PerforceGraphSyncDialog`（`apps/editor/src/renderer/workbench/perforceGraph/`）**空候选时显示解释文案 + 确认禁用，不静默回退整工作区**。
+
+三处守卫：`graphSync.test.ts` 的 force 真值表、`PerforceGraphEditor.test.tsx` 对 payload 的 `toEqual` 精确断言（多带 `isLatest` 即红，已变异验证）、`syncSpec.test.ts`（八档顺序、force 组必有 `labelColor`、普通组**必须没有**该键）。
 
 图谱列的是 depot 侧历史，看不出「哪些已经拉到本地」。**本地同步点**补上这一维：该 scope 下**已进入工作区 have 列表的最新已提交 CL**，renderer 在命中行打 `Synced` 徽章，工具栏追加 `· Synced to #NNNN`（徽章只对当前加载页可见，工具栏那句是同步点被分页出去 / 被搜索滤掉时的兜底）。
 
@@ -125,7 +136,7 @@
   - `cancelSyncQueryClock`（换 scope 的 `load()` 里）**连秒表一起清、并释放独占槽**，不写 `done`：那次答案已经被丢弃，报它的耗时会指向一个不存在的结果。
   - **失败是第三种结局**：`stopSyncQueryClock(true)` → 秒表带 `data-done` + `data-failed`，tooltip 说明「没拿到答案」，徽章保持不变。把它和「答复了但没变化」显示成同一个样子，等于让人以为查过了。
   - 组件卸载置 `clockDisposedRef`：晚到的答复仍会走到 `stopSyncQueryClock`（序号在卸载后不再自增），不拦就会再武装一个 2.5s 定时器。「卸载时清 interval + timeout」只覆盖已存在的那一个。
-  - **这个闩必须在 effect 的 setup 里复位**（复现测试：`ends the clock the query started, under StrictMode's dry-run mount`，harness 的 `strict: true`）。dev 的 `<StrictMode>`（`main.tsx`）对每个 effect 做 mount → cleanup → 再 mount，**同一个组件实例**，于是空跑那次 cleanup 把它永久置 true——之后每次 `stopSyncQueryClock` 都在清掉 interval 后提前返回：**秒表数字冻在最后一次 tick、`Spinner` 永不还原，而答案本身照常落地**（`setSyncPoint` 在同一个 `.then` 里，跑在前面）。通式：**凡是在 cleanup 里置位的 ref，setup 里必须复位**，否则该标志在 dev 下等价于「永久卸载」（同 `strictmode-useref-emitter-dispose-dev-only`；prod 不复现，只有单测能守）。
+  - **这个闩必须在 effect 的 setup 里复位**（复现测试：`ends the clock the query started, under StrictMode's dry-run mount`，harness 的 `strict: true`）。dev 的 `<StrictMode>`（`main.tsx`）对每个 effect 做 mount → cleanup → 再 mount，**同一个组件实例**，于是空跑那次 cleanup 把它永久置 true——之后每次 `stopSyncQueryClock` 都在清掉 interval 后提前返回：**秒表数字冻在最后一次 tick、`Spinner` 永不还原，而答案本身照常落地**（`setSyncPoint` 在同一个 `.then` 里，跑在前面）。通式：**凡是在 cleanup 里置位的 ref，setup 里必须复位**，否则该标志在 dev 下等价于「永久卸载」（同 skill `fix-disposable-leak` 案例 3：`useRef` 持有的 disposable 绝不在 cleanup 里 dispose；prod 不复现，只有单测能守）。
 - **「答空」与「没问过」在界面上要分得开**：`queriedEmpty` 记下最后一次查询答的是 `id: null`（该 scope 里没有任何已同步文件），此时 `#?` 的 tooltip 改成「Perforce 答复：该范围里没有已同步的文件」，`load()` 换 scope 时清掉。两者都显示 `#?` 是诚实的（没有可命名的 CL），但 tooltip 说「还不知道」会把刚花几十秒问到的答案说成没问过，并把用户直接送回同一次查询。
 - **右键菜单里同样有这两项**（`Query Sync Point` / `Go to Sync Point`，图标 `sync` / `go-to-definition`）：图谱只有这一个行菜单，而鼠标常常正停在行上；`syncPoint` 未知时**不出现**跳转项（没有目标，点它只会静默 no-op）。菜单项与工具栏按钮走的是**同一个** `refreshSyncPoint('query')` / `revealCommit(id)`，不存在两套语义（独占槽与 toast 也因此自动共用）。
 - **`PerforceGraphEditor.keyboard.test.tsx` 用 `toEqual` 钉住了行菜单的完整标签表**：加/删菜单项必须同步改那处断言（否则 `pnpm check` 会在 renderer-dom 里失败，且失败信息只指向该用例）。
@@ -215,8 +226,9 @@ Action2 在 `actions/index.ts` `registerAction2`。
 - **后果**：`contributes.commands` 会在扩展宿主侧注册一个同名、**无 handler** 的命令。执行时该宿主命令胜出、遮蔽 renderer Action2 → `executeCommand` **静默返回 undefined、不抛错、编辑器不打开**，极难排查（命令"成功"却什么都没发生）。
 - **正确做法**：只在 `contributes.menus`（scm/title）里写该命令项，菜单项自带 `icon` 即可显示图标；title/tooltip 由 renderer Action2 的 `title` 提供。对照 git 扩展：`git-graph.view` 只出现在 menus，从不在 commands 数组。
 - **排查手法**：e2e 探针 `getActiveGroupEditorCount` 对比同结构的 git-graph（count=1 打开）vs perforce-graph（count=0 no-op），秒判是"命令被吞"而非"组件渲染崩"。
+- **红线的第二半：贡献菜单命令必须进 `contributes.commands`**。与 `perforce-graph.*` 恰好相反——Timeline 的右键命令 handler 在**扩展侧**（`timelineProvider.ts` 的 `commands.registerCommand`），它**必须**写进 `package.json` 的 `contributes.commands`（现为 `perforce.timeline.getThisRevision` / `viewCommit` 等），并在 `contributes.commandPalette` 配 `when: false` 把它从命令面板藏掉。**两半必须一起守**：运行时命令进了 `commands` 会遮蔽 renderer Action2（上半），贡献菜单命令不进 `commands` 则菜单项静默失效（下半）——同一个 `contributes.commands` 数组，两个方向各有各的红线。
 
-（这条通用护栏见 memory `renderer-action-shadowed-by-extension-command-decl`。）
+（这条通用护栏见 skill `create-extension` 的「handler 在 renderer Action2 的命令」节。）
 
 ## p4 图谱的数据层红线（-Mj / -ztag / -p）
 

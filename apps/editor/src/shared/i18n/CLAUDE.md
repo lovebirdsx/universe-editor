@@ -33,3 +33,4 @@ locale 取值：`workbench.language` 设 `auto` 时按系统 locale（`zh*`→`z
 1. 代码里 `localize('<key>', '<english default>')`。
 2. 需要中文就加进 `zh-CN.ts`；默认英文串要覆盖就加进 `en-US.ts`。
 3. 菜单/命令标题用 `localize2`（命令面板要能同时匹配英文标题，见 `nls.ts`）。
+4. **第三参 `vars` 是占位对象，不是位置参**：`localize(key, defaultMessage, vars?: Record<string, unknown>)`——传 `{reason}` 这样的对象（`platform/src/nls/nls.ts:64`）；把占位值当第三参直接传会静默丢参或把对象当 vars。

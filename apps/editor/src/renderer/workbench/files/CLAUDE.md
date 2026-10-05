@@ -87,6 +87,14 @@ FileIcon 组件分流（useFileIconThemeActive，订阅 onDidFileIconThemeChange
 
 新增一个独立 monaco 语言 id 要同步四处：本目录 `resourceLanguage.ts`（扩展名映射）+ `languageDisplay.ts`（状态栏显示名）+ `editor/monaco/monacoTsxLanguage.ts` 那样的 monaco 侧配置（语言点 + 语言配置 + Monarch 兜底 + 复用 monaco 自己的 ts-worker adapter，monaco basic-languages 没有 tsx 模式）+ 该语言的 LSP/扩展 provider 语言列表。
 
+## 纯 TextMate 语法语言静默回退 plaintext
+
+**症状**：状态栏显示语言类型正确（`resourceLanguage` 映射生效），但文件内容零高亮。**根因**：monaco `createModel(text, 'toml')` 的 `LanguageService._createAndGetLanguageIdentifier` 对**未注册**的语言 id **静默回退 plaintext**，按语言 id 绑定的 TextMate 工厂永不触发。状态栏与 `FileEditorInput.language` 显示的都是 `languageForResource` 的结果（**同一个源**）、不是 model 的真实语言，造成「类型对、无高亮」的假象。只在**纯 TextMate 语法语言**（toml / dockercompose / cuda-cpp）暴露——basic-languages 覆盖的语言天然已注册 id。
+
+**修复与规范（现状锚）**：`services/textmate/textMateService.ts` 对工厂绑定的每个语言 id 补 `monaco.languages.register({ id })`——现实现为 `_rebuildRegistrations` → `_registerMonacoLanguagePoint` + `_knownLanguages` 去重（`textMateService.ts:210/311`），`_rebuildLanguageRegistrations` 走同一去重（`contributes.languages` 一并覆盖，`textMateService.ts:327`）；已打开的 model 经 `LanguageSelection` 重评估自愈。**新增纯 TextMate 语言只需 grammar + `resourceLanguage.ts` 两处，不要再手注册**。
+
+**排查法与回归**：高亮缺失先确认 **model 真实语言**（`model.getLanguageId()`），别信状态栏；慢交互日志 `file:///a.ts (typescript, 1234 lines)`（`services/performance/interactionPerf.ts:208`）的 lang 取自 `FileEditorInput.language`，与状态栏同源、同样不可信。探针 `getTokenizationSupportInfo(languageId)`（`renderer/e2e/probe.ts:725`）只读 `TokenizationRegistry.get`、不 `getOrCreate`（刻意不掩盖产品自己的 warm-up 路径）。回归测试 `services/textmate/__tests__/textMateService.test.ts`。
+
 ## 易踩坑速记
 
 1. **别手改生成物**：`materialIconMap.ts` / `icons/*.svg` 是脚本产出，改脚本重跑。生成文件顶部 `/* eslint-disable */` 让 4100 行数据免于 prettier lint（否则报 4100 problems）。

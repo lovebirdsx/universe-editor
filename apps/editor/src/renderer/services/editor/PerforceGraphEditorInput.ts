@@ -3,7 +3,7 @@
  *  Built-in Perforce Graph editor input. Optional path scope: a scoped input
  *  bakes its scope into `resource` (and therefore `id`), so each path opens in
  *  its own tab and deserialises back to the same tab on window restore. See
- *  memory `editor-input-identity-isolation`.
+ *  apps/editor/src/renderer/services/editor/CLAUDE.md.
  *--------------------------------------------------------------------------------------------*/
 
 import { EditorInput, URI, localize } from '@universe-editor/platform'

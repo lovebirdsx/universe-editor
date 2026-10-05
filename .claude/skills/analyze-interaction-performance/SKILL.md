@@ -18,6 +18,7 @@ disable-model-invocation: true
 - **阈值语义**：spec 是 observe-only 不设预算断言；「达标」= 慢交互数 0 @ 默认 200ms。降阈值采集（如 50ms）是**放大归因**的手段，不是目标。
 - **slowest 上限 20 条**（`MAX_SLOWEST_ENTRIES`），按时长降序；**`e2e/test-results/` 每次运行被清空**——要对比就备份到目录外。
 - 报告产物：慢交互按场景窗口归桶（同一 `performance.now()` 时间轴），含三段分解 + 相位 + LoAF + target/editor 上下文。探针：`window.__E2E__.getInteractionPerfSummary()`。
+- **切 tab 看门狗（常驻，不依赖上面两个 spec）**：用户报「切 tab 卡」时先看窗口日志 `tabSwitchPerf.log` 的 warn 行（long task + 相位归因）；新嫌疑代码包一层 `recordPerfPhase`（`apps/editor/src/renderer/services/performance/perfPhases.ts`；旧的 `recordTabSwitchPhase` 已下沉/更名，`apps/editor/src/renderer/contributions/TabSwitchPerfContribution.ts` 是接线点）即自动进这份报告与慢交互报告。
 
 ## 采集流程
 
@@ -80,6 +81,7 @@ const { profile } = await session.send('Profiler.stop')   // 写盘后离线分�
 
 - **QuickPickPanel 双重渲染**（2026-08，commit `6d1a7729`）：`useDeferredValue(filterText)` 对 `filterExternally` picker（quick open / workspace symbol / 全局搜索）是纯浪费——deferred 值不进 `filtered` 计算，却每击键多调度一次整树 transition 渲染。修法 = `useDeferredValue(filtersLocally ? filterText : '')`（入参恒定即不调度）。效果：quick-open 首字符 processing 51ms→0，正式阈值下 keydown max 168→136ms。教训：**deferred/transition 类 API 的收益只在消费方真的用 deferred 值时存在**。
 - **FileQuickAccessProvider 每击键全量扫描**（2026-08）：百万级文件工作区（清单封顶 10 万条）上，quick open 每击键在 `onDidChangeValue`（React onChange 派发内）同步对全清单跑 `scoreFileMatch` + 排序，input processing 108~145ms，LoAF 归因 `dispatchDiscreteEvent (BODY.oninput)`；对照小工作区仅 1~5ms（定性=随规模放大的真 JS 瓶颈）。修法 = 自适应：候选池 ≤5000 保持同步（小库零延迟、单测同步断言不破）；大池分块扫描（8ms 时间片 `yieldToMain` + 复用 `seq`/token 过期丢弃 + 行压实控住终排序），且每次**完整**扫描的命中集作为下一次「追加字符」击键的候选池（子序列匹配保证追加只会收缩命中集；新清单落地必须重置收窄池）。效果：50ms 阈值下 loaf 133→13、keydown p95 100→50ms、场景窗口内高 processing 条目清零。教训：**type-to-filter 面的同步扫描要按最大工作区设防——要么限池，要么切片让出**。
+  - **2026-09 续篇（同一工作区、下一层瓶颈）**：分块扫描修掉后 Ctrl+P 仍卡，慢在 **IPC 解码层**——`ipc.decode` 同步 `JSON.parse` 40MB 载荷要 418~695ms，10 万条 `IFileSearchMatch` 每条把 resource / fsPath / relativePath / basename 重复三遍。教训：**修法极易被「优化业务逻辑」带偏；真正的杠杆是把载荷从线上拿掉，不是把 parse 挪快**。完整复盘（DTO 判别联合 / 截断整份丢弃 / 预热双常量 / 200ms 单闸门 / rg `--iglob` 红线）见 `docs/development/file-search-and-listing.md`。
 - 相位归因样板：`fileEditor.setModel`/`applyOptions`/`restoreViewState`/`registerAndFocus`（`workbench/editor/FileEditor.tsx`）、`dirtyDiff.compute`、`mergeConflict.scan`、`quickOpen.filterFiles`（`services/quickInput/providers/FileQuickAccessProvider.ts`）——热路径照此包 `recordPerfPhase`。
 
 ## 收尾验证（分级）
@@ -96,3 +98,4 @@ const { profile } = await session.send('Profiler.stop')   // 写盘后离线分�
 - `apps/editor/src/renderer/services/performance/perfPhases.ts` — `recordPerfPhase`
 - `apps/editor/src/renderer/e2e/probe.ts` — `getInteractionPerfSummary` / `updateConfigValue` 探针
 - `docs/development/testing.md` — @perf tag 分流与 CI 工件
+- `docs/development/file-search-and-listing.md` — Ctrl+P 巨型工作区：慢在 IPC 解码层（非业务）的判序与清单机制

@@ -3,8 +3,8 @@
  *  Swarm renderer actions: focus the Swarm Reviews view, and open a review detail
  *  tab by id (used by the status bar + deep links). Both are renderer Action2s —
  *  their command ids must NOT appear in the perforce extension's package.json
- *  `commands` array (that would shadow them with a no-op host command; see memory
- *  `renderer-action-shadowed-by-extension-command-decl`).
+ *  `commands` array (that would shadow them with a no-op host command; see skill
+ *  `create-extension`).
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -278,8 +278,8 @@ export class FocusSwarmChangesAction extends Action2 {
  * Ctrl+Enter from the Swarm Reviews tree hands keyboard focus to the Swarm
  * Changes file tree — the keyboard twin of "I picked a review, now let me walk
  * its files". Scoped to the reviews view through the root `focusedView` key; the
- * weight must beat any global Ctrl+Enter binding (see memory
- * `keybinding-when-not-priority-weight-wins`). The Tree ignores modifier-key
+ * weight must beat any global Ctrl+Enter binding (see
+ * `docs/development/commands-and-context-keys.md`). The Tree ignores modifier-key
  * combos outright (Tree.tsx's `if (e.altKey || e.ctrlKey || e.metaKey) return`),
  * so the event reaches the global keybinding handler unconsumed.
  */

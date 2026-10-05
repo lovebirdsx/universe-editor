@@ -19,7 +19,7 @@ Workbench 风格 React UI 基础设施。**依赖 React，不依赖 Electron**�
 | `layout/*` | `Sash`（拖拽分隔条）/ `GridLayout`（消费 platform `Grid<T>`）/ `CollapsibleSlot`（图标走 props 注入） |
 | `overlay/*` | `FocusScopeOverlay`（focus trap + Esc）/ `PopoverList<T>`（泛型列表浮层，合并 Slash/Mention 类弹窗）/ `useOverlayListNavigation`（浮层列表键盘导航：六键 + typeahead + `Alt+1~8` + 四个 emacs 别名 `Ctrl+P/N/H/L`。别名的处理**不走 React onKeyDown**：它们本就是全局绑定（转到文件/新建文件/替换/行选择），document capture 的 keybinding dispatcher 会 `stopPropagation` 掉，必须像菜单一样在 **window capture** 先手，且**落空也吞**。`←/→` 走宿主的 `onExitLeft/onExitRight`（带行号、返回 boolean）：宿主返回 false 时**裸箭头放行**（与菜单箭头穿透下层同理），别名照吞。多个浮层同时挂载（溢出面板展开行的 body 嵌在行列表里）时靠「`containerElRef` 是否包含 `activeElement`」定归属，**不靠监听器注册顺序**——两者都在 window capture 上、会同时触发） |
 | `feedback/notifications` | `NotificationsToast` / `NotificationsCenter`（展示组件，吃 `INotification[]` + 回调）。toast 的 message 渲染进 `<p>`，带 `max-height: 7.2em`（约 5 行，内部滚动）且**无 `white-space` 规则**——消息里不要写 `\n`：它不会分行，只会塌成空格并把后半段挤出可视区（`\n\n` 是 dialog `detail` 的用法）。要保证用户读到某句，就把它放到最前面 |
-| `feedback/quickInput` | `QuickInputPanel` + `QuickPickState`（图标走 `renderIcon` 注入） |
+| `feedback/quickInput` | `QuickInputPanel` + `QuickPickState`（图标走 `renderIcon` 注入）；quickNavigate 手势契约见 `docs/development/quick-navigate-pickers.md` |
 | `feedback/progress` | `ProgressDialog` + `DialogProgressState` |
 | `feedback/dialog` | `ConfirmDialog` / `PromptDialog`（队列 + Portal 留在宿主） |
 | `text/fuzzyMatch` | 零依赖模糊匹配纯函数（`fuzzyMatchField` / `scoreFuzzyMatch` / `wordMatchField`） |
@@ -37,33 +37,27 @@ Workbench 风格 React UI 基础设施。**依赖 React，不依赖 Electron**�
 
 **层级（z-index）同理只用 `--z-*` 令牌**：阶梯分三段——视图自己的背板/面板 < `--z-workbench-chrome`（标题栏等应用边框，视图里的东西不许盖住它）< 工作台级浮层（popover → tooltip）；每层语义与取值理由见 `theme/tokens.css` 的注释。判据是「这个浮层能不能盖到自己容器之外」——能就用令牌，只在自己容器内竞争（子菜单相对父浮层、sash 分隔条、tab 拖放指示线、被 stacking context 钳住的标题栏下拉……）就**保持字面量、不要 token 化**，写进阶梯等于宣称它参与全局竞争。两条护栏：本包 `__tests__/zIndexContract.test.ts`（阶梯顺序 + 本包 css 与 tsx 内联不得有 ≥100 字面量）；editor 侧 `services/themes/__tests__/cssVarCoverage.test.ts`（`var(--z-*)` 必须已在 tokens.css 定义 + 字面量不得超过 100）。浮层挂载点与裁剪的完整图景（含 monaco 的两条链路）见 [docs/development/overlay-layers.md](../../docs/development/overlay-layers.md)。
 
+- `tokens.css` 子路径须在 `apps/editor/electron.vite.config.ts` 单列文件粒度 alias、排在包级 prefix 前，否则拼成 `src/index.ts/tokens.css`。
+
 ## 何时新建组件
 
 - 需要 Floating UI 定位能力（popup / tooltip / dropdown）
 - 需要跨组件 DnD 状态共享
 - 需要虚拟滚动（列表 > 200 项时）
 - 通用原子控件 / 反馈类浮层（多处复用、与具体业务解耦）
-
-## Floating UI 用法
-
-```tsx
-import { useFloating, autoPlacement, offset } from '@floating-ui/react'
-
-const { refs, floatingStyles } = useFloating({
-  middleware: [offset(4), autoPlacement()],
-})
-```
+- 迁移现状：`.iconBtn` 仅剩 `workbench/panel/terminal/TerminalViewToolbar.module.css`，`ConfigOptionsBar.tsx` 仍在 `workbench/agents/`，`SessionsPopover` 已不存在；新增控件优先沉淀本包，动到旧 css 顺手迁。
 
 ## 关键约束
 
 - **Floating UI 浮层放进 `FocusScopeOverlay` 有隐性契约**：浮层经 `FloatingPortal` 渲染到 `document.body`，在 `FocusScope contain` 的子树之外，键盘打开时被移进浮层的焦点会被 react-aria 拽回去——所以浮层根节点必须带 `data-react-aria-top-layer`（react-aria 官方逃生口，见其 `isElementInChildScope`；`Select` 已带）。另一半：`FocusScopeOverlay` 的 document 级 Escape 监听先于 floating-ui `useDismiss` 注册，会在关浮层时连带关掉整个 overlay——已在 `FocusScopeOverlay` 侧按「事件源在 `[data-floating-ui-portal]` 内」或「事件源的 `aria-controls` 指向 portal 内元素」（鼠标打开时焦点仍在触发器上，靠后者兜住）放行。新写浮层组件照 `Select` 抄这两点。宿主侧还有第三环（editor 的 `useGlobalKeybindingHandler`：document capture 命中全局键位就 `preventDefault + stopPropagation`，会让 Escape 根本到不了浮层——已按 `[data-floating-ui-portal]` 内的 target 放行，同 `isInsideRendererDialog` 的先例）。
+- **`PopoverList` 报 hover 用 `onMouseMove`，绝不用 `onMouseEnter`**（`overlay/PopoverList.tsx`）：浮层常正好弹在**静止光标**下方，浏览器会给新落到光标下的行派发**合成 `mouseenter`**——用它会在按方向键的那一刻把键盘选中项劫持到鼠标那行。静止光标下的布局变化只发 `mouseenter`/`mouseover`、**不发 `mousemove`**；真移动鼠标才发，所以 hover 挂 `mousemove` 仍生效。回归锁：`__tests__/PopoverList.test.tsx` 的 `does not report hover on mouseenter alone` + e2e 用 `dispatchEvent('mouseenter')` 复现（Playwright 的 `mouse.move` 会真发 mousemove，复现不了）。改完需 `pnpm --filter @universe-editor/workbench-ui build`，否则 apps 用旧 dist。
 - **组件内自建 `TreeModel` 必须用 `useOwnedTreeModel(() => new TreeModel(...))`**：裸 `useRef`/`useMemo` 持有 + `useEffect` cleanup 里 `dispose()` 的写法在 React StrictMode 下会被「卸载演练」dispose 掉并在重挂载时复用 dead 实例（Emitter 不再 fire，`refresh()` 成 no-op），导致树永远不再更新——**dev-only，production build 不复现**（StrictMode 双挂载只在 dev 生效）。TreeModel 由 DI service 持有时不受此影响。
 - **`Tree` 的 reveal 可能在布局前消费**（remount 切换 ViewContainer 时）：layout effect 同步跑在本帧布局计算之前，`clientHeight` 可能仍是内容总高，目标行被误判「已可见」而丢滚动（症状：要按两次 Reveal 才滚动）。所以 reveal 在「无需滚动但视口还覆盖全部内容」时用 rAF 重试到布局落定（`Tree.tsx` reveal effect；守护：e2e `smoke.revealInExplorerScrollOnRemount` + 单测 `Tree.revealScroll`）。**别**在 reveal 路径里读一次 `clientHeight` 就当真值用。
-- **无 Electron 依赖**：不 import `electron` / `@electron/...`
 - **不依赖 platform DI**：通过 props 接收服务实例，不用 `@IFooService` 装饰器
 - **图标走 props/children 注入**：不引应用图标库（如 `lucide-react`）；调用方传入图标元素或 `renderIcon` 回调
 - 可选 className 类 props 声明为 `string | undefined`（兼容调用方传入的 `styles['x']`，应对 `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes`）
 - 测试文件位于 `src/__tests__/`，环境 `happy-dom`
   - ⚠️ happy-dom **丢弃 inline style 里的 `var()`**：那条声明读回空串，若它还是该元素唯一的声明，`el.getAttribute('style')` 直接是 `null`（其余声明正常保留）。涉及 CSS 变量的样式写不成断言（`--view-background` 那条就因此只能靠审查 + 真机验证）。
 - **滚动列表的绘制约定**（滚动内容要不透明底衬 / 行定位用 `top` 不用 `transform` / reveal 只滚自己的 scroller、禁用 `scrollIntoView`）见 [docs/development/scroll-lists.md](../../docs/development/scroll-lists.md)。`Tree`/`VirtualList` 的行是透明底，底衬由 `VirtualList` 的 spacer 打、颜色取宿主 republish 的 `--view-background`——**part 根要设它，未走 portal 且自绘背景的浮层也要设它**：漏前者退回残影，漏后者会把宿主 part 的颜色涂到浮层上。手写虚拟化列表（`ChatBody` / `QuickInputPanel` / `useFlatListNavigation` 的 reveal）尚未跟上这套约定。
+- VirtualList/Tree 虚拟化/滚动容器约定见 [cases-virtualization-scroll.md](cases-virtualization-scroll.md)。
 - 相对导入带 `.js` 后缀（ESM only）

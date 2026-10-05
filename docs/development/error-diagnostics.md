@@ -65,11 +65,12 @@ renderer 未捕获异常 / 服务埋点                main 进程异常
 - `dimensions`：埋点方附带的标量维度（如 ACP 的 sessionId / agent 种类），最多 10 个键、字符串截 200。
 - 写入语义：5s 批量 flush（VSCode `ERROR_FLUSH_TIMEOUT` 同款）、`will-quit`/dispose 时 flush、**文件只增不改**，崩溃截断的末行在读取端跳过。
 
-## 折叠与去重（三层）
+## 折叠与去重（四层）
 
 1. **renderer 端**（`TelemetryClientService`）：`computeErrorDedupKey`（归一化栈帧序列，无栈时归一化消息）为 key 的 `AggregationBuffer`，同 key 只加 `count`；同一 tick 的错误合并成一次 IPC。
 2. **main 端**（`ErrorSinkMainService`）：renderer 来的记录按 `source|event|fingerprint` 再折叠一道（防多窗口/跨 tick 重复），main 自己的错误在 `recordLocal` 里先算指纹再进同一个 buffer。
 3. **用户可见层**：未捕获异常的 sticky toast 按指纹 5s 冷却去重（`main.tsx` 的 `setUnexpectedErrorHandler`），并带「复制详情」action（message + stack 进剪贴板，用户反馈不再要 DevTools）。
+4. **文件系统读失败按 (op, path, code) 窗口去重**（`READ_FAILURE_LOG_WINDOW_MS = 60s`，`packages/node-services/src/files/nodeFileSystemProvider.ts:47/100`）：否则一个永久失败的路径会把诊断导出的 512KB 尾部窗口占满（诊断里同两条路径曾刷 2920 次），让整份日志失去信息量。
 
 ## 脱敏（统一在 main 落盘前）
 
@@ -90,6 +91,7 @@ renderer 未捕获异常 / 服务埋点                main 进程异常
 ## 崩溃闭环
 
 - **minidump**：`crashReporter.start({ uploadToServer: false })`，dump 在 `<userData>/Crashes/`（纯本地）。
+- **手工解析 minidump（没有符号服务器时）**：`.dmp` 是标准 minidump，node 脚本直读即可拿到崩溃点与模块身份。走法：header（`MDMP`）→ stream directory → `ExceptionStream`（**+160 是 ThreadContext**，RVA 指向 CONTEXT，从 `Rip`/`Ebp`/`Rsp` 起做栈扫描）→ `ModuleList`（每模块 base / size / name）→ `Memory64List`（type 9，为栈扫描提供可读内存）。Crashpad 的自定义注解**不走 stream**——直接 `buf.indexOf('process_type')`，在命中位置附近按 key/value 读。**模块身份法**：dump 内模块 size 对比发布版二进制的 PE `SizeOfImage`（例：watcher 的 `watcher.node` 是 `0x88000`），判断崩溃进程加载的是哪一份 build——「换版后还崩不崩」用它一句话定性。实操案例见 [file-watcher.md](file-watcher.md) 的证据链一节。
 - **异常退出哨兵**：`session-sentinel.json`（arm/will-quit disarm）。下次启动发现残留 → `readAbnormalExitReport` 关联该时段的 dump → 写 main.log + `errorSink.recordLocal('abnormalExit', ...)`，并把报告交给 `DiagnosticsMainService`；renderer `AbnormalExitNotificationContribution`（AfterRestore）**消费一次**弹出 sticky 警告 +「打开崩溃目录」action（多窗口只有第一个提示）；通知只拿得到「有没有 dump」，文案保持中立（不指认外部终止，也不提没查过的事件日志），归因只在 main 的取证里做。
 - **连续崩溃计数与跳过恢复**：哨兵 JSON 带 `priorAbnormalExits`（arm 时写入当前 streak），残留被读出时 `consecutiveAbnormalExits = prior + 1`，正常退出删哨兵即归零——无额外状态文件。`shouldOfferRestoreSkip`（阈值 2）判定命中且会话列表有待恢复工作区时，main 在 `restoreSession` 前弹原生对话框提供「跳过恢复（打开空窗口）」，选跳过则清空 sessionList 以空窗口启动（recent 列表不动，目录仍可重进）；默认按钮为正常恢复，**E2E 下跳过弹框**（原生模态会卡死驱动）。用于打破「恢复的工作区本身导致崩溃（如海量文件目录 OOM）」的死循环。
 - **renderer 崩溃**：`render-process-gone`（非 clean-exit）→ 记 errors.jsonl（`renderProcessGone`，source=`renderer:<id>`）+ 模态对话框「重新加载 / 关闭窗口」，`_crashHandled` 去抖防崩溃风暴叠弹窗；**E2E 跳过模态框**（崩溃直接挂测试，不挡驱动）。对话框是**窗口模态**，没人点就永远不 resolve（曾出现黑屏 15 分钟），因此 20s 无人应答即自动重载（`CRASH_RELOAD_TIMEOUT_MS`）；5 分钟内崩 3 次（`CRASH_STORM_THRESHOLD`）则不再自动重载、只留对话框——重载会重跑把它搞崩的恢复流程，风暴下自动重载比黑屏更难收拾。GPU/utility 进程死亡走 `child-process-gone` 同样入 sink。
@@ -141,3 +143,4 @@ renderer 未捕获异常 / 服务埋点                main 进程异常
 - `apps/editor/src/main/werForensics.ts` / `exitSceneForensics.ts` / `abnormalExitConclusion.ts` — 异常退出取证三件套（事件日志分类 / 上一会话现场回放 / 单一判定收口）；前两者是纯解析 + 只读 IO，不 import electron，判定收口在第三个（全平台可跑、可单测）
 - `apps/editor/src/main/sessionSentinel.ts` / `crashMonitoring.ts` / `errors.ts` — 哨兵 / 进程死亡 / main 异常钩子
 - `apps/editor/src/renderer/actions/helpActions.ts` — 报告问题 / 导出诊断包命令
+- 渲染进程 console 输出落 `<userData>/logs/<date>/window-<id>/console.log`；e2e 跑出来的 userData 目录可从 `trace.zip` 的 launch 参数取（拿不准现场是哪个目录时用它定位）

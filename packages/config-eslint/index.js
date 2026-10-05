@@ -67,7 +67,7 @@ const pathIdentityRestrictedImports = {  paths: [
 // their own `no-restricted-imports` blocks. Flat config replaces (not merges)
 // same-named rules across matching config objects, so any block that redefines
 // `no-restricted-imports` for a file scope must fold these paths back in or it
-// silently drops the guard. See memory `eslint-path-identity-guardrails`.
+// silently drops the guard. See packages/config-eslint/CLAUDE.md.
 export { pathIdentityRestrictedImports }
 
 export default tseslint.config(

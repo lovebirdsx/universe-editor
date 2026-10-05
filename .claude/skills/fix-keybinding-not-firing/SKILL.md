@@ -52,6 +52,7 @@ diag: registry=<N> bindings | same-key(ignoring when)=<M> | monaco bridged=<bool
 有候选键，但 when 表达式在当前上下文求值为 false。看 `traceKeystroke` 里每条候选的 when 求值：
 - **ContextKey 没 seed / 值不对** → 表达式里的 key 必须已在 `ContextKeyContribution` seed，否则恒 false。
 - **当前确实不该触发** → 如 `when: editorTextFocus` 要求焦点在编辑器内；日志里 `target=DIV editable=false` 说明编辑器没聚焦，属预期，先点进编辑器再验。
+- **候选里混进了 User 层的导入绑定**：VSCode keybindings.json 导入层按 `KeybindingWeight.User`(1000) 注册，**压过任何 scoped weight**（本仓库 ACP 的 `ACP_SCOPED_KEY_WEIGHT` = `WorkbenchContrib + 50` = 250）。症状是「同键在别处正常、一进某个嵌入式输入框就失效或触发别的命令」——因为那个嵌入表面把全局 `editorTextFocus` 置成了 true，导入层那条 `when: editorTextFocus` 的绑定命中并把键用掉了。User 层按设计必须最高，**不能用 weight 对抗**。见 **案例 6**。
 - **表达式写错** → `contextKeyParser.parse()` 对非法输入返回 `undefined`（**不抛异常**），该条绑定被静默忽略；核对表达式语法。
 
 ### 分叉 C：`result.kind === 'execute'` 但命令没跑 —— 运行期被 guard 拦
@@ -115,6 +116,14 @@ registry 解析出来了，但 `useGlobalKeybindingHandler` 的某道闸把它�
 - **验证**：`action.test.ts` 新增用例（字符串 chord → `resolveKeystroke('ctrl+k')` 返回 `enter-chord` → 第二段返回 `execute`）；e2e `smoke.themes.spec.ts` 新增「ctrl+k ctrl+t chord opens the theme picker」真键盘整链守护。注意 Playwright `--grep` 是正则，标题含 `+` 需转义或换不含 `+` 的 grep 词，否则报 `No tests found`。
 - **锚点**：`packages/platform/src/command/action.ts`（`toKeyOrChords`）、`packages/platform/src/__tests__/command/action.test.ts`（SpaceChordAction 用例）、`apps/editor/src/renderer/actions/preferencesActions.ts`（`SelectColorThemeAction`，事发点）、对照已支持的各层：`UserKeybindingsService.ts:100`、`ExtensionPointTranslator.ts:293`、`monacoKeybindingDecoder.ts:249`。
 
+### 案例 6：嵌入式输入框里「键失效、别处正常」（VSCode 导入层 `editorTextFocus` 绑定以 User 权重抢占）
+- **症状/诊断**：ACP 输入框（嵌入式 Monaco）里按 `alt+up` 没反应 / 触发了 `editor.action.findWordAtCursor`，同一键在编辑器外或文件编辑器里（走本项目绑定）正常；`same-key > 0`、when 看起来也满足。
+- **断在**：解析**权重**——不是「没注册」，也不只是「when 没过」。VSCode keybindings.json 导入层以 `KeybindingWeight.User`(1000) 注册，压过本项目的 scoped 绑定（`ACP_SCOPED_KEY_WEIGHT` = `WorkbenchContrib + 50` = 250）；用户导入的 `alt+up → findWordAtCursor`（`when: editorTextFocus`）在输入框里命中并把键吃掉。
+- **根因**：嵌入式 Monaco 曾把**全局** `editorTextFocus` 置 true。该 key 的全局语义是「活动**文件**编辑器可被操作」（消费方都经 `getActiveTextEditor` 取文件编辑器）——冒充它会让这类命令 when 命中却拿不到目标、静默吞键；且 User 层按设计最高，**不能用 weight 对抗**。
+- **修法**：嵌入表面改用**专用 context key**（ACP prompt = `acpPromptInputFocused`：`ContextKeyContribution` seed + `PromptMonacoEditor` 的 `onDidFocusEditorText`/`onDidBlurEditorText` 桥接），**绝不置 `editorTextFocus`**；`useGlobalKeybindingHandler` 的 inTextSurface 守卫并入该 key（同时兜住 editContext 下焦点宿主非 DOM-editable 的 Delete/Backspace/裸字符保留）。
+- **诊断顺序（用户报「键在输入框里失效、别处正常」）**：① 先查 `%APPDATA%/Code/User/keybindings.json` 导入层是否有同键的 `editorTextFocus` 门控绑定抢占；② 再查本项目注册表冲突。
+- **锚点**：`apps/editor/src/renderer/workbench/useGlobalKeybindingHandler.ts`（inTextSurface 守卫，`acpPromptInputFocused`）、`apps/editor/src/renderer/workbench/agents/PromptMonacoEditor.tsx`（焦点桥接 + 卸载清 key）、`apps/editor/src/renderer/contributions/ContextKeyContribution.ts`（seed）、`apps/editor/src/renderer/actions/_agentShared.ts`（`ACP_SCOPED_KEY_WEIGHT`）；通用机制（嵌入 Monaco 的焦点桥接红线）见 `docs/development/monaco-embedding.md`。
+
 ## 易踩坑速记
 0. **先数日志行**：组合键应有「每修饰键一行 + 主键一行」。**主键那一行整个消失** = 键没到达 document 监听器（分叉 0、案例 4）。**头号嫌疑是编辑器聚焦时 Monaco 内置默认键 `stopPropagation`**（用「点到编辑器外按同键是否出现」区分；OS/显卡热键则编辑器内外都消失）。Monaco 吃键现在可用 keybindings.json 的 `-monacoCommand` 同步解绑（案例 4）。
 1. **`no-match` 先看 `same-key`**（前提：主键已到达、有 `traceKeystroke`）：`0` = 没注册（分叉 A）；`>0` = when/运行期问题（分叉 B/C）。别一上来就改 when。
@@ -126,6 +135,7 @@ registry 解析出来了，但 `useGlobalKeybindingHandler` 的某道闸把它�
 6. **`contextKeyParser.parse()` 不抛异常**，非法 when 返回 `undefined` 被静默忽略——表达式写错不会报错，只会“这条不生效”。
 7. **运行期 guard 会吞键**：可编辑目标保留可打印键、Quick Input 只放 Escape、dialog 自管、editorFocus 切 capture/bubble 把优先权让给 Monaco——`formatGuardStop` 会写明原因。
 8. **先复现再修**：注册期 bug 用 `UserKeybindingsService` 单测确定性复现；e2e 是整链守护、不隔离单条路径；e2e 跑 `out/` 产物。
+9. **嵌入式输入框里「键失效、别处正常」先查导入层**：VSCode keybindings.json 的 `editorTextFocus` 门控绑定以 `User`(1000) 注册，压过一切 scoped weight（案例 6）；正解是嵌入表面用专用 context key，绝不置全局 `editorTextFocus`。
 
 ## 关键参考路径
 - `apps/editor/src/renderer/services/keybindings/UserKeybindingsService.ts` —— 三层汇入点：`_reloadVSCodeFile`（VSCode 只读层，有命令过滤、逐条注册）/ `_reloadFromFile`（应用层，无过滤）/ `_registerEntry` / `reload` 串行化 / `diagnostics`
@@ -140,6 +150,7 @@ registry 解析出来了，但 `useGlobalKeybindingHandler` 的某道闸把它�
 - `apps/editor/src/renderer/services/keybindings/__tests__/UserKeybindingsService.test.ts` —— 注册期复现/判别单测范式
 - `apps/editor/e2e/specs/smoke.vscodeKeybindings.spec.ts` —— 端到端守护范式（`UNIVERSE_VSCODE_KEYBINDINGS_PATH` + `getKeybindingCommandsForKey`）
 - 姊妹 skill `register-monaco-command` —— 当结论是“命令压根没接进来”（命令面板都搜不到）时转去那个
+- 知识文档：`docs/development/commands-and-context-keys.md`（解析只看 weight、`when` 只过滤不提权的机制，焦点类上下文键 DOM 派生，扩展命令遮蔽 renderer Action2）、`apps/editor/src/renderer/services/keybindings/CLAUDE.md`（Keyboard Shortcuts 编辑器子系统地图）、`docs/development/quick-navigate-pickers.md`（按住修饰键、松开即选中的手势契约）
 
 ## 其它
 - 后续用本 skill，发现新经验，需同步更新本文件

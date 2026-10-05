@@ -1,6 +1,6 @@
 # apps/editor/src/renderer/workbench/markdown/CLAUDE.md
 
-markdown 子系统横跨三处：共享渲染器 MarkdownView 在本目录；语言特性插件在 `extensions/markdown/`（进程内 vscode-markdown-languageservice）；预览/成链等 renderer 增强散在 `workbench/editor/`、`contributions/`、`services/`。本文是 markdown 子系统的上下文地图（处理相关任务前通读）。
+markdown 子系统横跨三处：共享渲染器 MarkdownView 在本目录；语言特性插件在 `extensions/markdown/`（进程内 vscode-markdown-languageservice）；预览/成链等 renderer 增强散在 `workbench/editor/`、`contributions/`、`services/`。
 
 > ⚠️ 第一原则：先认领改动落在哪条线——① 语言特性（走插件+句柄路由，与 TS 共用同一套句柄路由/数据流，通用套路见 [extend-language-plugin]）② 预览渲染（纯 renderer，与 LSP 无关）③ 粘贴成链（拖拽/粘贴→链接，纯 renderer 编辑增强，不经插件/LSP）。三条线几乎不相交，改错线白改。
 
@@ -43,9 +43,7 @@ workbench/markdown/MarkdownView.tsx       渲染核心：parseMarkdown AST → R
 services/acp/markdownRenderer.ts          parseMarkdown —— 与 ACP 聊天共享的 AST
 ```
 
-input→组件两处注册：`EditorArea.tsx` 的 `editorComponentMap` + `BuiltInEditorProvidersContribution.ts`，漏一处预览开不出。
-
-> MarkdownView 是**共享渲染器**（ACP 聊天 + 文档预览都用它），改它要同时顾及两个消费方。
+> MarkdownView 是**共享渲染器**（ACP 聊天 + 文档预览都用它），改它要同时顾及两个消费方；image AST 节点走可注入 `renderImage?(src,alt)`（`ImageRenderContext`，默认渲染裸 `<img>`），消费方可替换图片渲染（ACP 聊天用它换成 ChatImage），见 [cases-prompt-images.md](../../services/acp/cases-prompt-images.md)。
 
 **页内锚点**：标题自动 slug（CJK 保留）挂 `data-anchor`；空 HTML 锚点 `<a id="x"></a>` / `<a name="x"></a>` 被 parser 白名单识别（其余 HTML 仍是字面文本），渲染为零占位 `.mdAnchor`（**CSS 必须 `vertical-align: top`**——baseline 会让 scrollIntoView 对齐文字基线、落点偏下一行，已修勿回退；回归 e2e `smoke.markdownAnchorScroll.spec.ts`）。`#frag` 点击/跨文件 `foo.md#frag` 收口 `markdownAnchors.ts::findMarkdownAnchor`：先精确匹配 id（大小写敏感），未命中再 slugify 回退。已知限制：LSP 坏链诊断只认 `id=` 不认 `name=`——锚点统一写 `<a id="..."></a>`。
 
@@ -114,7 +112,6 @@ pnpm --filter @universe-editor/markdown test      # server 单测
 pnpm ext:build                                    # 改插件/server 后必跑
 pnpm --filter @universe-editor/editor build       # e2e 跑 out/ 产物，改 renderer 后必重建
 cd extensions/markdown && pnpm e2e -- specs/markdownLsp.spec.ts    # 扩展自带 e2e 栈，非 apps/editor 冒烟
-pnpm check
 ```
 
 相关单测（`__tests__/`）：`markdownPasteLinks` / `markdownLinkProviderShared` / `markdownAssetLinks` / `markdownAssetDropper` / `fileBulkEditService` / `shouldDeferDropToMarkdownEditor` / `EditorOpenerContribution` / `PendingDocumentSync` / `stdoutProtection`。
@@ -124,7 +121,4 @@ e2e 探针（`renderer/e2e/probe.ts`）：`getMarkdown*` 全家（symbols/worksp
 ## 关键参考
 
 - 相关 skill：[extend-language-plugin]（通用语言插件套路）；TS 子系统对照 `extensions/typescript/CLAUDE.md`
-
-## 其它
-
-- 后续用本文，发现新经验，需同步更新本文件
+- 案例：cases-preview.md / cases-language-service.md

@@ -1,13 +1,16 @@
 # apps/editor/src/renderer/workbench/scm/CLAUDE.md
 
-本目录是 SCM 域 workbench 侧的家：SCM 视图（`ScmView.tsx`）、mergeConflict、dirty-diff 的视图代码（`dirtyDiff/`，gutter 色条与内联 peek）；dirty-diff 的服务端在 `services/scm/`。本文是 SCM 视图侧 + 多 provider 仲裁的上下文地图（处理相关任务前通读）。dirty-diff 内联 peek 的完整案例复盘在 [cases-dirty-diff-peek.md](cases-dirty-diff-peek.md)。
+本目录是 SCM 域 workbench 侧的家：SCM 视图（`ScmView.tsx`）、mergeConflict、dirty-diff 的视图代码（`dirtyDiff/`，gutter 色条与内联 peek）；dirty-diff 的服务端在 `services/scm/`。本文是 SCM 视图侧 + 多 provider 仲裁的上下文地图（处理相关任务前通读）。三份案例复盘按需加载：[cases-dirty-diff-peek.md](cases-dirty-diff-peek.md)（内联 peek）、[cases-dirty-diff-regions.md](cases-dirty-diff-regions.md)（行 diff 引擎）、[cases-commit-changes-graph.md](cases-commit-changes-graph.md)（Commit Changes 视图与图谱联动）。
 
 ## 多 provider 仲裁与双格式冲突标记（SCM 可视化泛化）
 
 gutter / peek / blame / open-changes 对 git 与 perforce 共用同一套 renderer 代码，provider 只在**数据路由层**出现：
 
 - **🔴「resource → host path」一律走 `scmHostPath(resource, remoteAuthority)`**（`services/scm/scmHostPath.ts`）。SCM 线上契约携带的是**裸 host fs-path 字符串**，门控必须按**主机作用域**而非 scheme 白名单：远程窗口里也能打开本地 `file:` 资源，Windows 远端的 `C:\repo\a.ts` 与本机同名路径按 `fsPath` 会跨主机误命中。**禁止**裸 `resource.scheme === 'file'` 门控（曾致远程 gitignore 变暗整体失效）与裸 `scmPathKey(resource.fsPath)` 查表；装饰查表只走 `IScmDecorationsService.getFile/getFolder`（内部已过 scmHostPath）。authority 在 React 里取 `useRemoteAuthority()`（不要 `useMemo` 裸读 `workspace.current`），非 React 取 `currentRemoteAuthority(workspace.current)`；Action2 里须在任何 `await` 之前同步取。
+- **命令式读 authority 的服务要自己给出变更信号**：`ScmDecorationsService` 把 workspace epoch 读进 `decorations` derived（`ScmDecorationsService.ts:139-149`）——`scmHostPath` 是命令式解 host，切工作区时快照本身不变（provider 还是那些），不喂 epoch 就旧颜色粘住，直到下一次 resourceStates 推送才刷新。
+- **主机作用域只属于 SCM**：非 SCM 的「file-backed 资源」门控（Explorer auto-reveal、tab 文件图标、拖拽 uriList）**不需要主机作用域**，用既有 `isFileSystemUri`（`services/files/fileSystemScheme.ts`，同时接受 `file` 与 `remote-ssh`）即可——别把 scmHostPath 的主机作用域误推给它们。
 - **仲裁**：`resolveScmProviderId(sourceControls, fsPath, selectedRootUri?)`（`services/extensions/ScmService.ts`）——selectedRootUri 命中的归属者优先，未命中回退最长前缀；同 root 多 provider 首个命中者赢。消费方从 `scmViewState.selectedRepo` 取当前选择，并挂 `sourceControls` 的 autorun：启动竞态——selectedRepo 从 storage 恢复时目标 provider 的 source control 可能还没注册，仲裁回退到最长前缀；provider 后注册时必须重仲裁，否则回退结果一直粘住。blame 侧另配 `_refreshSeq` 代次守卫：回退 provider 的慢 fetch 后完成时不得覆盖新仲裁结果。
+- **多 repo 路由（git submodule）**：主 repo + 每个已初始化 submodule 各作独立 provider（独立 commit box / 暂存·工作区分组），label 用 `Git` / `Git: <name>`。所有 git source control 的 `id` 固定 `'git'`（菜单 when 与 `providerId === 'git'` 分支依赖它，见 `ScmBlameContribution.ts:55`、`CommitChangesViewToolbar.ts:27`），**命令无法用 id 区分 repo**：provider/group 级命令传 `{ rootUri, sourceControlId }`（`ScmView.tsx` / `ScmViewToolbar.tsx`）；资源/文件夹级用 arg 里的绝对 `resourceUri` 做**最长前缀匹配**（submodule root 是 main root 的子路径，最长者命中），兜底回 active/main。集中路由在 `extensions/git/src/repositoryManager.ts` 的 `RepositoryManager.resolveRepo(arg)`，`norm()` 统一正斜杠 + 去尾斜杠 + 盘符小写。发现逻辑单源 `repoDiscovery.ts`（有界 BFS，`repositoryScanMaxDepth` 默认 3；`possibleRepoWatcher.ts` 负责后出现的根级 `.git`），`extension.ts` 与 `gitGraphSource.ts` 共用，**勿各扫一遍**；状态栏渲染当前 active repo（`extension.ts:156` 的 `statusBarRoot`）。
 - **selectedRepo 的持久化在 workbench 层**（`ScmSelectedRepoContribution`，仿 `OutlineViewStateContribution`）：恢复+写回都不依赖 ScmView 挂载（曾放 ScmView 的 React effect 里，SCM 面板不打开就不恢复，blame/dirty-diff 仲裁一直停在最长前缀回退）。hydrate 只在无内存值时应用存储值，写回 autorun 无 first-pass skip。ScmView 只消费 `scmViewState.selectedRepo`。
 - **选中仓库仲裁有两类语义，别混**：**显示类**（Explorer/标签页装饰 `ScmDecorationsService.decorations`、状态栏条目、ActivityBar 徽章）**全局跟随选中仓库**——装饰侧走 `resolveSelectedSourceControl(sourceControls, selectedRootUri)` 在 derived 里只取选中者；状态栏侧由 `ActiveRepoSyncContribution` 对每个 provider 广播 `<providerId>.setActiveRepo`（选中者发 rootUri、其余不传参——显式 undefined 跨 IPC 会变 null，接收端一律 `== null` 判定），git/p4 各自 `setVisible(false)` 全 hide（可见性用 `mgr.has(root)` 独立标志，**不能**读有回退语义的 `mgr.active`）。**行为类**（gutter dirty-diff、blame、open-changes 路由）仍按 **per-path** 仲裁（`resolveScmProviderId`）——同一文件同属两 provider 时跟随选中，只归未选中 provider 的文件照常可用。**「有没有改动」门控与显示解耦**：`IScmDecorationsService.hasChanges(resource)` 跨**所有** provider 判定（`_anyProviderChanges` derived），供 dirty-diff 门控与 `scmActiveResourceHasChanges` context key 用——显示可以只画选中仓库，但选中 git 时 p4 文件的「打开更改」入口不能消失。
 - **缓存分槽防串扰**：`DirtyDiffContribution` / `ScmBlameContribution` 的缓存 key = `providerId + '\n' + path`；切 repo 时不清缓存，旧槽保留供切回秒显。
@@ -23,7 +26,15 @@ gutter / peek / blame / open-changes 对 git 与 perforce 共用同一套 render
 
 ## 案例：dirty-diff 内联 peek
 
-完整复盘（骨架/布局公式/Esc 接线/E2E 套路/易踩坑/参考路径）已迁至 [cases-dirty-diff-peek.md](cases-dirty-diff-peek.md)——在某行下方弹真 Monaco diff editor 的浮层，做 peek 相关改动前通读。一句话结论：**别手写 DOM diff**；用 overlay-widget + 空 view-zone 占位内嵌 `createDiffEditor`。相关 memory [[dirty-diff-inline-peek-feature]] / [[linediff-myers-perf]]（Myers 约束**仅 gutter region 用，peek 面板不用**）；skills [fix-disposable-leak] / [register-monaco-command] / [fix-keybinding-not-firing]。
+完整复盘（骨架/布局公式/Esc 接线/E2E 套路/易踩坑/参考路径）已迁至 [cases-dirty-diff-peek.md](cases-dirty-diff-peek.md)——在某行下方弹真 Monaco diff editor 的浮层，做 peek 相关改动前通读。一句话结论：**别手写 DOM diff**；用 overlay-widget + 空 view-zone 占位内嵌 `createDiffEditor`。skills [fix-disposable-leak] / [register-monaco-command] / [fix-keybinding-not-firing]。
+
+## 护栏：dirty-diff 区域计算（行 diff 引擎）
+
+🔴 `computeLineDiff`（`workbench/agents/lineDiff.ts`）**必须保持 Myers O(ND)**——它被 `contributions/dirtyDiff.ts` 的 `computeDirtyDiffRegions` 复用做「整个打开文件 vs HEAD」全文 diff，退回任何 O(m·n) 全矩阵实现会让大文件（上万行）切换冻结主线程 ~2s。改动后必跑 `lineDiff.test.ts`（含首尾分散改动的数万行用例）与 `dirtyDiff.test.ts`；每个变更块内 del 必须全部排在 add 之前（区域分类与 InlineDiffPreview 依赖此顺序）。V 数组按编辑距离定容、`MAX_DIFF_BUDGET_MS` 墙钟预算回退、行数组双入口的行切分语义（尾随幻影空行都 pop）见 [cases-dirty-diff-regions.md](cases-dirty-diff-regions.md)——Myers 约束**仅 gutter region 用，peek 面板不用**。
+
+## 案例：Commit Changes 视图与图谱联动
+
+workspace 切换清空 / toolbar（Open in Graph / 折叠展开 / tree-list 持久化）/ 聚焦命令 `workbench.view.scm.commitChanges.focus`（空格预览、回车聚焦 diff）/ 图谱键盘导航（`useGraphKeyboardNav.ts` 被 git/perforce 复用）/ 三个根因坑（reveal 无高亮、点击延迟、静默跟随）与视图交互内核抽取（`workbench/changesTree/`，Session Changes 与 swarm 复用）见 [cases-commit-changes-graph.md](cases-commit-changes-graph.md)。
 
 ## 验证
 

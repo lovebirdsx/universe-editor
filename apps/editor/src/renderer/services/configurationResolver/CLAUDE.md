@@ -102,7 +102,7 @@ renderer 是浏览器上下文，读不到 process.env / os.homedir() / process.
 3. **未解析变量原样保留**：toObject() 对没 resolve 的 ${x} 保留原文不报错。若消费方期望「未知变量清空」，得自己处理。
 4. **需要活动编辑器的变量会抛**：${file}/${selectedText}/${lineNumber} 等无编辑器时 throw VariableError。终端消费方必须 catch 并回退（_resolveCwd 已 try/catch）；直接用 resolveAsync 的新消费方别忘了兜。
 5. **cwd 校验在 main，不在 renderer**：renderer 只算目标路径，statSync 目录校验在 TerminalMainService。
-6. **Action2 里用 resolver 要防 accessor 失效**：resolveAsync 是 async，Action2 的 ServicesAccessor 遇第一个 await 即失效——await 前同步取完 service（见 [[action2-async-accessor-invalidation]]）。
+6. **Action2 里用 resolver 要防 accessor 失效**：resolveAsync 是 async，Action2 的 ServicesAccessor 遇第一个 await 即失效——await 前同步取完 service（见 `docs/development/commands-and-context-keys.md`）。
 7. **path.ts 新函数输出正斜杠**：joinPath/basename/dirname/relativePath 都不带平台原生分隔符（${pathSeparator} 才给 \）。要平台原生分隔符另说，别指望这些函数给。
 8. **env 快照是会话级缓存**：renderer 取一次就不再更新。若将来要运行时重读得改缓存策略（当前刻意对齐 VSCode 一次性 promise）。
 
@@ -126,4 +126,4 @@ pnpm docs:check                                  # 改了 settings.md 变量说�
 - `services/terminal/TerminalManagerService.ts` —— _resolveCwd + computeTerminalCwd（renderer 段）；`main/services/terminal/terminalMainService.ts`（main 段）
 - `docs/user/zh-CN/customization/settings.md` —— 用户侧「在设置值里使用变量」
 - 相关：`services/explorer/CLAUDE.md`（另一个用 workspace/editor 数据源的子系统）；跨进程服务套路见 apps/editor/CLAUDE.md 套路 C
-- 相关 memory：[[action2-async-accessor-invalidation]]（async run 的 accessor 失效）、[[path-comparison-convergence]]（path.ts 路径身份约定）
+- 相关：`packages/platform/CLAUDE.md`（路径/URI 身份比较）；async run 的 accessor 失效见 `docs/development/commands-and-context-keys.md`

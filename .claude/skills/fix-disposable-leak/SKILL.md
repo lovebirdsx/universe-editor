@@ -81,3 +81,4 @@ pnpm --filter @universe-editor/editor lint
 
 ## 其它
 - 后续用本 skill，发现新经验，需同步更新本文件
+- 具体案例（信号 → 根因 → 修法/复现锚点）见 [references/cases.md](references/cases.md)：早退丢弃孤儿 input、reload 同步卸载误报与真泄漏的区分、StrictMode 空跑 dispose 掉 useRef 持有的 Emitter

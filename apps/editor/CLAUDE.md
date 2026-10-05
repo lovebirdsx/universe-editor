@@ -12,9 +12,8 @@ main 入口（`index.ts`）在 service 实例化前调 `applyProductIdentity()` 
 
 - 任何模式可用 `UNIVERSE_USER_DATA_DIR=<absolute>` 或原生 `--user-data-dir=<absolute>` 覆盖（**CLI 优先**）。
 - CLI/env/配置读取收口 `EnvironmentMainService`（`src/main/environment/`），优先级 `cli > env > file > default`；新增启动期配置加声明项。
-- **构建期注入 settings 默认值**：内网地址不进仓库，打包期经 `product.json` 注入出厂默认值。
 
-模式判定表、`--help` 生成、构建期注入出厂默认值的优先级与链路、自动更新 feed url 覆盖见 [cases-user-data-dir.md](cases-user-data-dir.md)。
+模式判定表、`--help` 生成、**构建期注入 settings 默认值**（内网地址不进仓库，打包期经 `product.json` 注入）的优先级与链路、自动更新 feed url 覆盖见 [cases-user-data-dir.md](cases-user-data-dir.md)。
 
 ## renderer 目录归类规则
 
@@ -30,7 +29,7 @@ main 入口（`index.ts`）在 service 实例化前调 `applyProductIdentity()` 
 
 ## 嵌套知识地图
 
-各子系统 CLAUDE.md 是「处理该域任务前通读」的上下文地图：
+各子系统 CLAUDE.md（通读后再动手）：
 
 - [services/acp](src/renderer/services/acp/CLAUDE.md) — ACP 协议客户端
 - [services/acp/session](src/renderer/services/acp/session/CLAUDE.md) — 会话生命周期
@@ -42,8 +41,10 @@ main 入口（`index.ts`）在 service 实例化前调 `applyProductIdentity()` 
 - [main/services/extensionManagement](src/main/services/extensionManagement/CLAUDE.md) — 扩展管理分发
 - [main/services/clipboard](src/main/services/clipboard/CLAUDE.md) — 文件剪贴板 main 侧
 - [services/explorer](src/renderer/services/explorer/CLAUDE.md) — explorer 状态源
+- [services/editor](src/renderer/services/editor/CLAUDE.md) — EditorInput 身份与打开路径
 - [services/opener](src/renderer/services/opener/CLAUDE.md) — IOpenerService 三档
 - [services/views](src/renderer/services/views/CLAUDE.md) — View/ViewContainer 运行时
+- [services/keybindings](src/renderer/services/keybindings/CLAUDE.md) — Keyboard Shortcuts 编辑器
 - [services/configurationResolver](src/renderer/services/configurationResolver/CLAUDE.md) — 配置变量替换
 - [services/dialogs](src/renderer/services/dialogs/CLAUDE.md) — SimpleFileDialog
 - [services/dnd](src/renderer/services/dnd/CLAUDE.md) — 资源拖放
@@ -154,7 +155,7 @@ ContributionsRegistry.registerContribution(
 )
 ```
 
-相位：`BlockStartup`（UI 渲染前：ContextKey 默认/ViewContainer/schema）→ `BlockRestore`（挂载前）→ `AfterRestore`（状态栏/watcher）→ `Eventually`（空闲）。
+相位表（`BlockStartup` / `BlockRestore` / `AfterRestore` / `Eventually` 各自的适用场景）见 `packages/platform/CLAUDE.md` 的「Lifecycle 相位」。
 
 ## 套路 E：加一个 StatusBar 条目
 
@@ -206,7 +207,7 @@ test.describe('@p0 my thing', () => {
 
 ## 套路 H：加一个语言特性（DocumentSymbol / Definition / Reference / Outline）
 
-语言特性走**薄门面 `ILanguageFeaturesService`**（`services/languageFeatures/`）：注册时一边存镜像表（供 Outline 枚举），一边转发 `monaco.languages.register*Provider`——一个 provider 即点亮 **Outline 视图** 与 **F12/Shift+F12 peek**。
+语言特性走**薄门面 `ILanguageFeaturesService`**（`services/languageFeatures/`）：注册时一边存镜像表（供 Outline 枚举），一边转发 `monaco.languages.register*Provider`——一个 provider 即点亮 **Outline 视图** 与 **F12/Shift+F12 peek**。peek 等嵌入编辑器布局见 `docs/development/monaco-embedding.md`。
 
 1. 在 `services/languageFeatures/<lang>/` 写 provider（实现 `monaco.languages.DocumentSymbolProvider` 等）。
 2. 在 `contributions/LanguageFeaturesContribution.ts` 的 `MonacoLoader.ensureInitialized().then(...)` 里 `this._register(langFeatures.registerXxxProvider('<lang>', new XxxProvider()))`。**必须等 Monaco 就绪**。
@@ -241,7 +242,7 @@ AI 服务三层：platform 契约（`IAiModelService` / `IAiModelProvider` / `Ai
 
 ## 常见踩坑
 
-- **ContextKey 有两个求值域，别搞混**：菜单 `when` 走 per-group scoped ctx，keybinding `when` 与 Action2 `precondition` 走 **root** ctx；`ScopedContextKeyService.set()` **只写本地不外溢**——只写 scoped 的 key 在键位解析恒为 `<unset>`，症状「标题栏能点、快捷键没反应、命令面板搜不到」。keybinding 需要的 key 必须在 root 也 seed（`isInDiffEditor` 双写范例）；这类分裂**只有 e2e 能守住**。排查见 skill [fix-keybinding-not-firing]。
+- **ContextKey 有两个求值域**：菜单 `when` 走 per-group scoped ctx，keybinding `when` 与 `precondition` 走 **root** ctx；`ScopedContextKeyService.set()` 只写本地不外溢，keybinding 需要的 key 必须在 root 也 seed（`isInDiffEditor` 双写范例）。症状与排查见 `docs/development/commands-and-context-keys.md`、skill [fix-keybinding-not-firing]。
 - **URI 经 IPC 后**：`fm.resource` 是 `UriComponents` 而非 `URI` 实例，需 `URI.revive(fm.resource) as URI`。
 - **扩展的 `window.show*Message(msg, ...items)` 走 `IConfirmOptions.buttons`**：每个 item 都是动作，取消是额外追加的那一个；回执读 `choiceIndex`。勿回退三槽按钮形态（第 4 项起静默丢弃）。
 
