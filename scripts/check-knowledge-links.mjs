@@ -138,11 +138,23 @@ function extractCandidates(source) {
   return candidates
 }
 
+function isVendorCheckedOut(name) {
+  try {
+    return readdirSync(join(REPO_ROOT, 'vendor', name)).length > 0
+  } catch {
+    return false
+  }
+}
+
 function pathExists(candidate, baseDir) {
   // Strip line refs / anchors / trailing slash
   const cleaned = candidate.replace(/[:#].*$/, '').replace(/\/+$/, '')
   if (!cleaned) return true
   if (/(^|\/)(out|dist|node_modules)(\/|$)/.test(cleaned)) return true
+  // vendor/* 是 submodule，CI 的 checkout 不拉子模块（fork 内部本就在豁免扫描之列），
+  // 此时 fork 内部路径无从核验——跳过而不是误报；拉了的机器上照常校验。
+  const vendorName = cleaned.startsWith('vendor/') ? cleaned.split('/')[1] : undefined
+  if (vendorName !== undefined && !isVendorCheckedOut(vendorName)) return true
   // 优先按仓库根锚定解析；找不到再回退到相对当前文档目录（markdown 链接语义，
   // 与 LSP 一致，如 extensions/perforce/CLAUDE.md 里的 `docs/graph.md`）。
   // 两处都不存在才算死链，校验严格性不变。

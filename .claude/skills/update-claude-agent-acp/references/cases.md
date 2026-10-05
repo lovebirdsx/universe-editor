@@ -102,7 +102,7 @@
 
 ## 案例 13（0.64.2→0.85.1 同轮发现）：AIR tool-call 契约把 subagent 标记挪成 AIR 专属，非 AIR 客户端改用 toolName 识别
 - **现象**：升级后编辑器里 claude 子 Agent 卡片图标由黄色 `Users`（双人）变白色 `Brain`，卡片 kind tooltip 由「Sub Agent」退回「think」，Outline 该行类型从 subagent 降级为普通 tool；token/model 统计徽标不受影响（`_universe/subagentStats` 仍发）。
-- **根因**：上游 875d75f「AIR tool call contract」把 Agent/Task 调用上的 `_meta.claudeCode.subagent: true`（旧 `claudeCodeMetaFromToolUse`，发给所有客户端）移入 `toolUseMeta` 的 AIR 分支，只写给声明 `_meta.jetbrains.air` 的客户端（`docs/air-extensions.md` 的 Agent/Task 行对非 AIR 明确为 none）。编辑器未声明 AIR，`readSubagent` 收不到标记，卡片回落 kind `think` 渲染。
+- **根因**：上游 875d75f「AIR tool call contract」把 Agent/Task 调用上的 `_meta.claudeCode.subagent: true`（旧 `claudeCodeMetaFromToolUse`，发给所有客户端）移入 `toolUseMeta` 的 AIR 分支，只写给声明 `_meta.jetbrains.air` 的客户端（`vendor/claude-agent-acp/docs/air-extensions.md` 的 Agent/Task 行对非 AIR 明确为 none）。编辑器未声明 AIR，`readSubagent` 收不到标记，卡片回落 kind `think` 渲染。
 - **解法**（父项目，编辑器侧）：`readSubagent` 保留旧 `claudeCode.subagent === true` 兼容后，增加 `_meta.claudeCode.toolName` 精确等于 `Agent`/`Task` 的判定；**不给 fork 加自定义提交**（非 AIR 无标记是上游刻意契约，fork 保持 diff 最小）。回归测试：`acpSessionUpdateMeta.test.ts` 的 `readSubagent` describe + `AcpSessionService.test.ts`「marks only the call the fork flagged as a sub-agent launch」。
 - **下次 rebase 注意**：`tool-calls/renderer.ts` 的 `toolUseMeta` 非 AIR 分支必须继续发 `claudeCode.toolName`——编辑器的 MCP 归属与子 Agent 识别都依赖它；AIR 分支的 `subagent` 键与编辑器无关，勿回移。
-- **锚点**：fork `src/tool-calls/renderer.ts`（`toolUseMeta`）、`docs/air-extensions.md`（Agent/Task 行）；父项目 `apps/editor/src/renderer/services/acp/session/acpSessionUpdateMeta.ts`（`readSubagent`）、`acpSessionModel.ts`（`AcpToolCall.subagent`）。
+- **锚点**：fork `src/tool-calls/renderer.ts`（`toolUseMeta`）、`vendor/claude-agent-acp/docs/air-extensions.md`（Agent/Task 行）；父项目 `apps/editor/src/renderer/services/acp/session/acpSessionUpdateMeta.ts`（`readSubagent`）、`acpSessionModel.ts`（`AcpToolCall.subagent`）。
