@@ -278,6 +278,13 @@ interface StubAgentOptions {
   loadSessionHangs?: boolean
   /** configOptions the agent returns from newSession (and loadSession). */
   newSessionConfigOptions?: readonly SessionConfigOption[]
+  /**
+   * configOptions the agent returns from loadSession. Separate from
+   * `newSessionConfigOptions` so a test can model the catalog a resume really
+   * sees (the read-only pin of a side task is only effective when the agent
+   * advertises the pinned value).
+   */
+  loadSessionConfigOptions?: readonly SessionConfigOption[]
   /** Fixed PromptResponse to return (e.g. to echo a specific userMessageId). */
   promptResponse?: PromptResponse
   /** When true, advertise sessionCapabilities.fork so forkSession can proceed. */
@@ -408,6 +415,9 @@ class StubAgent implements Agent {
     this.loadSessionCalls.push(params)
     if (this._opts.loadSessionHangs) return new Promise<never>(() => {})
     const response = {
+      ...(this._opts.loadSessionConfigOptions !== undefined
+        ? { configOptions: this._opts.loadSessionConfigOptions }
+        : {}),
       ...(this._opts.modelKnownInCatalog !== undefined
         ? { _meta: { codex: { modelKnownInCatalog: this._opts.modelKnownInCatalog } } }
         : {}),
@@ -2453,6 +2463,98 @@ describe('AcpSessionService — rewind / fork', () => {
       await svc.forkSideTask(s.id, { text: 'q', label: 'l' })
 
       expect(history.get('agent-side-2')?.configOptions?.['mode']).toBe('dontAsk')
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('forkSideTask pins the agent-advertised read-only mode and pushes it', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const loadBag: readonly SessionConfigOption[] = [
+      {
+        id: 'mode',
+        name: 'Mode',
+        category: 'mode',
+        type: 'select',
+        // The mode the parent's transcript tail carries: the fork inherits it
+        // unless the pin actually lands on the agent.
+        currentValue: 'bypassPermissions',
+        options: [
+          { value: 'bypassPermissions', name: 'Bypass permissions' },
+          { value: 'dontAsk', name: "Don't Ask" },
+        ],
+      } as unknown as SessionConfigOption,
+    ]
+    const client = new FakeAcpClientService({
+      stubOptions: {
+        forkCapable: true,
+        loadSession: true,
+        forkedSessionId: 'agent-side-advertised',
+        loadSessionConfigOptions: loadBag,
+      },
+    })
+    const { svc, history } = makeServiceWithHistory(client, tracker)
+    try {
+      const s = await svc.createSession('claude-code')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+
+      const side = await svc.forkSideTask(s.id, { text: 'q', label: 'l' })
+
+      expect(history.get('agent-side-advertised')?.configOptions?.['mode']).toBe('dontAsk')
+      expect(history.get('agent-side-advertised')?.configLabels?.['mode']).toBe("Don't Ask")
+      const mode = side.configOptions.get().find((o) => o.id === 'mode')
+      expect(mode?.type === 'select' ? mode.currentValue : undefined).toBe('dontAsk')
+      // The push rides a microtask behind the load; wait for it to land.
+      await vi.waitFor(() => {
+        const pushes = client.connected.flatMap((c) => c.agent.setConfigOptionCalls)
+        expect(pushes).toContainEqual(
+          expect.objectContaining({ configId: 'mode', value: 'dontAsk' }),
+        )
+      })
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('keeps the inherited mode when the agent catalog lacks the pinned value', async () => {
+    // Guards the catalog gap itself: a pinned value the agent does not
+    // advertise is not selectable, so the side task falls back to the mode its
+    // transcript carries. This is what the claude fork did before it
+    // advertised dontAsk — the editor must not pretend the pin landed.
+    const tracker = new StubSessionChangeTracker()
+    const loadBag: readonly SessionConfigOption[] = [
+      {
+        id: 'mode',
+        name: 'Mode',
+        category: 'mode',
+        type: 'select',
+        currentValue: 'bypassPermissions',
+        options: [{ value: 'bypassPermissions', name: 'Bypass permissions' }],
+      } as unknown as SessionConfigOption,
+    ]
+    const client = new FakeAcpClientService({
+      stubOptions: {
+        forkCapable: true,
+        loadSession: true,
+        forkedSessionId: 'agent-side-no-catalog-entry',
+        loadSessionConfigOptions: loadBag,
+      },
+    })
+    const { svc, history } = makeServiceWithHistory(client, tracker)
+    try {
+      const s = await svc.createSession('claude-code')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+
+      await svc.forkSideTask(s.id, { text: 'q', label: 'l' })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      expect(history.get('agent-side-no-catalog-entry')?.configOptions?.['mode']).toBe(
+        'bypassPermissions',
+      )
+      const pushes = client.connected.flatMap((c) => c.agent.setConfigOptionCalls)
+      expect(pushes.filter((p) => p.configId === 'mode')).toEqual([])
     } finally {
       svc.dispose()
     }

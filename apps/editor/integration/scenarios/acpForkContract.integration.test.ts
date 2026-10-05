@@ -124,6 +124,12 @@ const EXPECTED_DIST_METHODS: Record<ForkId, readonly string[]> = {
     'universe-editor/capabilities',
     'extraModels',
     'extraModelEffort',
+    // The catalog entry the editor's read-only side-task pin depends on: a
+    // catalog without it silently drops the pin and the fork inherits the
+    // parent's (possibly writable) mode. Scan the label, not `dontAsk` — the
+    // settings alias table in permissions/modes.ts keeps that literal in the
+    // dist either way, so only the label proves the entry itself survived.
+    "Don't Ask",
   ],
   codex: [
     EXPECTED_METHOD_NAMES.setSessionTitle,
@@ -370,6 +376,36 @@ describe.skipIf(!claudeExtReady)('claude ext-method wire contract (real dist)', 
   it('newSession returns a session id offline (no auth needed for handshake)', () => {
     expect(typeof sessionId).toBe('string')
     expect(sessionId.length).toBeGreaterThan(0)
+  })
+
+  it('advertises dontAsk and accepts it — the read-only pin of a side task', async () => {
+    // The editor pins a forked side task to `dontAsk`. A catalog that does not
+    // advertise the value makes that push a no-op (the editor's config state
+    // machine skips values the option does not offer) and the fork inherits
+    // the parent's mode instead — the regression this leg guards.
+    const ns = await withTimeout(
+      connection.conn.newSession({ cwd, mcpServers: [] }),
+      INIT_TIMEOUT_MS,
+      'claude newSession for the mode catalog',
+    ).catch((err: unknown) => {
+      throw new Error(`${String(err)}\n--- fork stderr ---\n${connection.stderr()}`)
+    })
+    const modeOption = ns.configOptions?.find((o) => o.id === 'mode')
+    expect(configOptionValues(modeOption)).toContain('dontAsk')
+
+    const set = await withTimeout(
+      connection.conn.setSessionConfigOption({
+        sessionId: ns.sessionId,
+        configId: 'mode',
+        value: 'dontAsk',
+      }),
+      CALL_TIMEOUT_MS,
+      'claude setSessionConfigOption to dontAsk',
+    ).catch((err: unknown) => {
+      throw new Error(`${String(err)}\n--- fork stderr ---\n${connection.stderr()}`)
+    })
+    const modeAfter = set.configOptions.find((o) => o.id === 'mode')
+    expect(modeAfter?.currentValue).toBe('dontAsk')
   })
 
   it('session/new surfaces client-injected extra models and setSessionConfigOption switches to one', async () => {
