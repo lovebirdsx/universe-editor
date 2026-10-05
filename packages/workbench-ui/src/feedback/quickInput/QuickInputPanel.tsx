@@ -946,13 +946,23 @@ export function QuickPickPanel({
       // Next Group" could accept "Focus Above Group" matched by just "Focus").
       // Re-run the pipeline synchronously against the live text in that window and
       // accept its best match — same outcome the settled render would offer.
+      //
+      // The cursor lags one commit further than the list does: the deferred render
+      // commits the shrunk list first, and only the reconcile effect after it pulls
+      // `focusedIdx` back into range. An Enter landing in between reads a cursor past
+      // the end of the list and accepts nothing at all — no accept, no onOk, and the
+      // panel just sits there (the session switcher: filter, press Enter, nothing
+      // happens). So an out-of-range cursor is one more stale input for the live
+      // re-run, not a "nothing is selectable" answer.
+      const cursorInRange = focusedIdx < sortedFiltered.length
       const listIsCurrent = !filtersLocally || deferredFilterText === filterText
-      const acceptItem = listIsCurrent
-        ? sortedFiltered[focusedIdx]
-        : (() => {
-            const latest = buildDisplayList(baseItems, filterText, displayListOptions)
-            return latest[firstSelectableIndex(latest)]
-          })()
+      const acceptItem =
+        listIsCurrent && cursorInRange
+          ? sortedFiltered[focusedIdx]
+          : (() => {
+              const latest = buildDisplayList(baseItems, filterText, displayListOptions)
+              return latest[firstSelectableIndex(latest)]
+            })()
       if (isSelectable(acceptItem)) accept([acceptItem], { ctrl: e.ctrlKey, alt: e.altKey })
       // No selectable item (e.g. an empty directory in the file dialog): fall back
       // to the host's OK handler so a trailing-separator path can still be opened.

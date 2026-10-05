@@ -565,5 +565,19 @@ markdown job（ubuntu，CI run 31295361355）`markdownPreview.spec.ts:205` 与 `
 锚：`apps/editor/e2e/specs/smoke.languageMode.spec.ts`；`packages/workbench-ui/src/feedback/quickInput/QuickInputPanel.tsx`（挂载时 `inputRef.focus()`、accept 时校验 `deferredFilterText === filterText`）；`apps/editor/src/renderer/workbench/editor/EditorGroupView.tsx`（activation effect 的 `focusEditorInput`）；`apps/editor/src/renderer/main.tsx`（`bootstrapFocusSettled` 链，本 spec 已在 describe 级 beforeEach 门控）。
 
 ---
+
+**案例 99 — 「什么都对但面板就是不关」：光标比列表晚一个 commit 归位，Enter 落在中间会静默 no-op（产品缺陷，非环境噪音）**
+信号：`smoke.sessionSwitcherRevealGroup`（@regression）在 CI 上 `QuickInputPO.waitForHidden` 超时 30s、quick-input 持续可见，**initial + retry 同形态**（retry 救不回）；本地 `pnpm e2ea` 首次运行复现、retry 通过（4.3s）。失败截图纯黑、aria 只剩 alert 空壳——那是 teardown 之后拍的，无诊断价值，别被它带偏。
+现场（临时探针，五路 dump）：面板开着、`input.value` 正确、`readOnly=false`、`document.activeElement` 就是输入框、Enter 的 keydown+keyup 都落在输入框上、`isComposing=false`、列表只剩 1 项且带 `aria-selected`。**一次 dump 把 locked 回弹 / 焦点丢失 / IME 早退 / 按键未达 四个假设全部排除**，只剩「accept 分支读到的项不可选」。
+根因（产品）：`QuickInputPanel` 的 Enter accept 路径读 `sortedFiltered[focusedIdx]`，而这两者**不是同一个 commit 的产物**——`sortedFiltered` 由 `useDeferredValue` 驱动，`focusedIdx` 由上方的 focus-reconcile `useEffect` 修正。打字过滤后先提交的是「列表已收缩」那次渲染，光标要等随后的 effect 才被收回范围内；Enter 落在两者之间就读到越界索引，`isSelectable(undefined)` 为 false，而 `pick()` 路径没设 `state.onOk` ⇒ **既不 accept 也不关面板，零反馈**（用户视角：打完过滤词按回车，没反应）。本 spec 恰好放大它：`computeInitialSelectionIndex` 把初始高亮停在「离当前会话一步」的那一项，而过滤词命中的是另一项 ⇒ 过滤后列表只剩 1 项，光标初始值就是 1。
+定性依据（**别靠复现失败，靠计数**）：在渲染路径埋一个计数器统计 `focusedIdx >= sortedFiltered.length` 的渲染、在 Enter 分支埋一个统计「accept 时越界」，20 轮跑下来 `render:1` **每轮必现**，其中三轮实测 `enter:1` 且那些轮**依然 passed**（修复生效）。也就是说：窗口 100% 存在，Enter 真的会落进去（那几轮就是 CI 上失败的同一时刻，且机器一忙命中率立刻上来），命中与否纯看时序。这是「窗口必然存在、命中靠运气」型 flake；因为根因在产品，「retry 有时能过」并不代表它是环境噪音。
+修（产品侧 accept 路径，非放宽断言）：把「光标越界」与「deferred 文本陈旧」同等对待，一起走实时重算——
+  const cursorInRange = focusedIdx < sortedFiltered.length
+  const acceptItem = listIsCurrent && cursorInRange ? sortedFiltered[focusedIdx] : liveBestMatch()
+正常路径零行为差异（光标本就在范围内）；空列表重算得 undefined 仍落 `onOk`（原语义不变）；`focusedIdx === -1`（file dialog 的显式无高亮，`-1 < len` 恒真）不受影响。验证：修复后同样 20 轮，`render:1` 照旧而 `enter:0`、全绿；`QuickInput.test.tsx` 102 例 + workbench-ui 579 例单测全过。
+教训：a) **同一组件里由两套机制驱动的状态**（deferred 值 vs effect 修正的索引）天然存在「一个 commit 的错位」，任何跨两者读取的代码路径都要假定读到的是错位组合——加 `cursorInRange` 这种范围校验比补时序等待可靠。b) 判定「窗口是否真的存在」不必抓到失败：在渲染路径统计异常组合的出现次数即可，本例把「偶发 flake」变成了「每轮必现的确定性事实」。c) 失败现场先把**决策点的输入**全 dump（焦点/值/composing/事件 target/列表长度与选中项），排除法比猜根因快得多。d) 与案例 98 的关系：那里排除的是 `deferredFilterText !== filterText`（文本陈旧）的一半；`listIsCurrent === true` 时**光标仍可能滞后**——同一处的两个窗口，改这块代码要一起看，别只修一半。e) 温度计式插桩要能**自己证明自己**：把计数与「修复前会走的分支」对齐（这里 `!cursorInRange`），修复后计数归零或保持但测试全绿，都是可判读的信号。
+锚：`packages/workbench-ui/src/feedback/quickInput/QuickInputPanel.tsx`（Enter 分支的 `cursorInRange`；`normalizeSelectableIndex` / `firstSelectableIndex`）；`apps/editor/e2e/specs/smoke.sessionSwitcherRevealGroup.spec.ts`；`apps/editor/src/renderer/actions/agentSessionActions.ts`（`computeInitialSelectionIndex`）。
+
+---
 - `@parcel/watcher` Windows 多 worker 竞态的长期根治（升级 / 换 watcher / 进一步隔离），替代长期 `--workers=1`（案例 12/16/26/44 的 `@serial` 都是它的 workaround）。
 - DnD 用例稳定化（显式等待 drop 完成态），稳定后摘 `@flaky`（案例 46）。
