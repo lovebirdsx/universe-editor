@@ -246,12 +246,26 @@ function handshakeSuite(fork: ForkId) {
         ).catch((err: unknown) => {
           throw new Error(`${String(err)}\n--- fork stderr ---\n${connection.stderr()}`)
         })
+        // provider id 由 fork 声明；按协议发现可配置槽位，避免依赖上游的旧命名。
+        const providers = await withTimeout(
+          connection.conn.unstable_listProviders({}),
+          CALL_TIMEOUT_MS,
+          'codex listProviders',
+        )
+        const gatewayProvider = providers.providers.find(
+          (p) => !p.required && p.supported.includes('openai'),
+        )
+        if (!gatewayProvider) {
+          throw new Error(
+            `codex advertises no configurable openai provider: ${JSON.stringify(providers.providers)}\n--- fork stderr ---\n${connection.stderr()}`,
+          )
+        }
         // Configuring the gateway provider is pure in-memory state; it also
         // flips authRequired() to false so the session open passes without any
         // account on the test machine.
         await withTimeout(
           connection.conn.unstable_setProvider({
-            providerId: 'custom-gateway',
+            providerId: gatewayProvider.providerId,
             apiType: 'openai',
             baseUrl: 'https://gateway.invalid/v1',
           }),

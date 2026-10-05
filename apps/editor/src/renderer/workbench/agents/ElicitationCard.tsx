@@ -97,20 +97,12 @@ function buildContent(
 }
 
 /**
- * Pairs an AskUserQuestion-style free-text field with its enum question so the
- * two render side by side on one row: the select plus an always-visible
- * notes/"Other" input. Two suffix conventions are recognized: claude's fork
- * emits `<name>_custom` per question, codex's fork emits `<name>__other` for
- * request_user_input's other-answer; on submit both values travel together and
- * each agent bridge folds the text into a note on the selection (claude as
- * annotations, codex as `<label>（补充：<note>）`), standing alone as the
- * answer only when nothing is picked. The two controls keep
- * their values independently — clearing either on the other's edit would
- * silently destroy user input.
+ * 将 Claude 的 `_custom`、Codex 的 `_note`（旧版 `__other`）备注与对应枚举并排展示。
+ * 选择和备注独立保存并一起提交，由 agent 折叠；修改其中一个不能清空另一个。
  */
 interface DisplayField {
   readonly field: ElicitationFormField
-  /** The `<field.name>_custom` / `<field.name>__other` free-text field rendered beside this enum's select. */
+  /** 与枚举选择并排展示的备注字段。 */
   readonly customField?: ElicitationStringField
 }
 
@@ -124,7 +116,9 @@ function toDisplayFields(fields: readonly ElicitationFormField[]): DisplayField[
     if (consumed.has(field.name)) continue
     if (field.kind === 'enum') {
       const custom =
-        stringFields.get(`${field.name}_custom`) ?? stringFields.get(`${field.name}__other`)
+        stringFields.get(`${field.name}_custom`) ??
+        stringFields.get(`${field.name}__other`) ??
+        stringFields.get(`${field.name}_note`)
       if (custom) {
         consumed.add(custom.name)
         display.push({ field, customField: custom })

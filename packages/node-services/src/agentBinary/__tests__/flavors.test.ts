@@ -73,10 +73,10 @@ describe('codex flavor', () => {
 
     expect(codexFlavor.id).toBe('codex')
     expect(codexFlavor.platformPackage(platform)).toBe('@openai/codex')
-    expect(codexFlavor.platformVersion('0.146.0', platform)).toBe('0.146.0-win32-x64')
+    expect(codexFlavor.platformVersion('0.159.1', platform)).toBe('0.159.1-win32-x64')
     expect(codexFlavor.latestPackage).toBe('@openai/codex')
-    expect(codexFlavor.binaryIn('/root/0.146.0', platform)).toBe(
-      path.join('/root/0.146.0', 'bin', 'codex.exe'),
+    expect(codexFlavor.binaryIn('/root/0.159.1', platform)).toBe(
+      path.join('/root/0.159.1', 'bin', 'codex.exe'),
     )
 
     const opts = codexFlavor.extractOptions(platform)

@@ -17,7 +17,7 @@ export type AgentBinaryId = 'claude' | 'codex'
  * Pinned `@openai/codex` version to download. Kept in sync with the codex-acp
  * fork's lockfile (`vendor/codex-acp`); bumped by hand when following upstream.
  */
-export const CODEX_VERSION = '0.146.0'
+export const CODEX_VERSION = '0.159.1'
 
 export interface AgentBinaryPlatform {
   /** Platform/arch suffix of the native package, e.g. `win32-x64`, `linux-x64-musl`. */
@@ -36,7 +36,7 @@ export interface AgentBinaryFlavor {
   detectPlatform(): AgentBinaryPlatform
   /** npm package name for the platform binary, e.g. `@anthropic-ai/claude-agent-sdk-win32-x64`. */
   platformPackage(platform: AgentBinaryPlatform): string
-  /** Registry version to fetch for that package, e.g. `0.3.186` (claude) or `0.146.0-win32-x64` (codex). */
+  /** Registry version to fetch for that package, e.g. `0.3.186` (claude) or `0.159.1-win32-x64` (codex). */
   platformVersion(version: string, platform: AgentBinaryPlatform): string
   /** Package name whose `latest` dist-tag is polled for prefetch/version info. */
   readonly latestPackage: string

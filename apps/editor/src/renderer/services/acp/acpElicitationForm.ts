@@ -5,11 +5,9 @@
  *  before submit. Unrecognizable properties are skipped with a warn (never
  *  throw), matching the normalizeMcpServers "bad entries skipped" policy.
  *
- *  The AskUserQuestion bridge shape needs no special-casing: the claude fork's
- *  `question_<n>` (enum / enum-multi) + `question_<n>_custom` (string) and the
- *  codex fork's `<id>` (enum) + `<id>__other` (string) fields fall into the
- *  generic model directly; ElicitationCard pairs the free-text suffix fields
- *  with their enum for side-by-side rendering.
+ *  AskUserQuestion 桥接直接使用通用字段模型：Claude 的 `<name>_custom`、
+ *  Codex 的 `<name>_note`（旧版 `<name>__other`）都是字符串，
+ *  与枚举的配对展示交给 ElicitationCard，不在规范化层特判。
  *--------------------------------------------------------------------------------------------*/
 
 import type {

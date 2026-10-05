@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # 更新 codex-acp（合并上游 + 重建产物）
 
-`vendor/codex-acp` 是我们自维护的 fork，**git submodule，不在 pnpm workspace 内，用自带 npm 工具链独立构建**（见根 CLAUDE.md）。上游是 `https://github.com/agentclientprotocol/codex-acp.git`（npm 包 `@agentclientprotocol/codex-acp`）。我们在某个上游 release 之上叠了若干自定义提交（费用计算、Claude 式 skills/memory、git 工作树会话匹配、跨平台路径比较、AI 会话标题持久化、ESM 标记、回放 shell 解析修复、rewind/fork、重连失败处理、transcriptPath 暴露等，共约 16 个）。
+`vendor/codex-acp` 是我们自维护的 fork，**git submodule，不在 pnpm workspace 内，用自带 npm 工具链独立构建**（见根 CLAUDE.md）。上游是 `https://github.com/agentclientprotocol/codex-acp.git`（npm 包 `@agentclientprotocol/codex-acp`）。我们在某个上游 release 之上叠了若干自定义提交（费用计算、Claude 式 skills/memory、git 工作树会话匹配、跨平台路径比较、AI 会话标题持久化、ESM 标记、rewind/fork、重连失败处理、transcriptPath 暴露、订阅额度、模型注入、request_user_input 回放等）。**提交数随上游替旧/我方加减而变，别照抄历史数字**：2026-10 升级前是 34 个，其中 3 个旧 shell fallback 补丁被上游 typed 实现取代而**有意不再重放**（见案例 7），本次 rebase 后 = 31 个重放 + 1 个新适配提交。
 
 > ⚠️ **真上游踩坑（务必先确认）**：Codex ACP 有**两个**同名仓库。老的 `zed-industries/codex-acp` **已废弃**（README 明确写着开发已迁移），且其 `main` 被回退重写到较旧点、**与我们 fork 无共同祖先**（`git merge-base` 返回空）。**真正的上游是 `agentclientprotocol/codex-acp`**（基于新 Codex App Server）。若误把 upstream 设成 zed-industries，会出现「merge-base 为空 / 代码大幅倒退」的假象。判据：正确上游下 `merge-base` 命中我们的基线、`compare` 显示 **N ahead / M behind** 与我方自定义提交数吻合。
 
@@ -56,7 +56,7 @@ git rebase upstream/main                                    # 把 基线..HEAD �
 ### 3. 重新装依赖 + 构建 + typecheck + 测试
 上游常升级 codex 版本 / ACP SDK / vscode-jsonrpc，rebase 后必须重装依赖再验证：
 ```bash
-npm ci                 # 上游可能升级了 SDK/依赖（本次含 ACP SDK 1.1、vscode-jsonrpc v9）
+npm ci                 # 按 lock 精确安装（不会重生成 lock；manifest 不一致会直接报错，见「冲突套路」）
 npx tsc --noEmit       # 类型检查（必跑安全网，rebase 零冲突≠语义正确，见案例 5 精神）
 node build.mjs         # esbuild → dist/index.js（+ dist/package.json 标 ESM）
 npm test               # vitest；仅截错误。已知 Windows 路径测试会失败（见案例 1），非回归
@@ -77,10 +77,13 @@ git branch -d backup-before-rebase-<短sha>   # 确认无误后再删备份
 ### 5. 主仓库重建产物 + 验证
 ```bash
 cd <repoRoot>
-pnpm agent:build      # = vendor-install(npm ci 生产依赖) + 两个 fork 各自 npm run build；重建 vendor/codex-acp/{dist,node_modules}
+# 上游若 bump 了 @openai/codex，同步主仓二进制钉版：
+#   packages/node-services/src/agentBinary/flavors.ts 的 CODEX_VERSION
+#   （取 fork lock 里解析出的版本，见 `grep -A2 '"@openai/codex"' vendor/codex-acp/package-lock.json`）
+pnpm agent:build      # = vendor-install(按 lock 装依赖) + 两个 fork 各自 npm run build；重建 vendor/codex-acp/{dist,node_modules}
 pnpm check            # lint + typecheck + test，仅截错误
 ```
-> `agent:build` **同时构建 claude-agent-acp 和 codex-acp 两个 fork**，并把 fork 的 `node_modules` prune 成**生产依赖**，之后想再在 fork 跑 `npm test` 需先 `npm ci` 重装 devDeps。
+> `agent:build` **同时构建 claude-agent-acp 和 codex-acp 两个 fork**；`vendor-install` 只在 lock 哈希变化时才 `npm ci`，且**不带 `--omit=dev`**（2026-10 实测：构建后 fork 的 vitest/tsc 仍在，可直接跑 fork 测试；若某次构建后 devDeps 缺失，先 `npm ci` 重装再跑）。
 > `pnpm check` 偶发的 FileWatcher / DiffEditor / `Channel closed`(IPC) 失败是主仓库既有环境 flake，与本次无关——单独 `pnpm --filter @universe-editor/editor run test` 重跑即绿。
 
 ### 6. 提交主仓库 submodule 指针
@@ -94,7 +97,7 @@ git push -u origin chore/update-codex-acp
 
 ## 冲突套路（按文件）
 
-- **`package-lock.json`**：**不要手动解**。rebase 中冲突时 `git checkout --ours package-lock.json && git add`（rebase 里 `--ours`=上游侧），rebase 全部完成后 `npm ci`/`npm install` 一次性重生成。
+- **`package-lock.json`**：**不要手动解**。rebase 中冲突时 `git checkout --ours package-lock.json && git add`（rebase 里 `--ours`=上游侧）。⚠️ **`npm ci` 只按 lock 精确安装、绝不改写 lock**（manifest 与 lock 不一致会直接报错退出），所以它**不能**用来“重生成”lock；只有 merge 后 manifest 与上游 lock 真有分歧时才用 `npm install` 重建 lock，再 `npm ci` 复验。本次合并后 fork 的 `package.json`/`package-lock.json` 与上游逐字节相同（`git diff ca1d971..main -- package*.json` 为空），无需重建。
 - **`package.json`**：`version` 与 codex/SDK/依赖版本取上游；我方特有改动（如 build 脚本、devDep）保留。⚠️ Edit 解冲突当心**重复 key**（冲突标记外的公共行别在 new_string 里重写）。
 - **`src/index.ts`**：agent 注册入口，双方常同改（见案例 2）。
 - **`src/CodexEventHandler.ts` / `src/CodexAcpServer.ts`**：费用/token 上报，我方改了语义，注意与上游 token-usage 演进的冲突（见案例 3）。
@@ -141,12 +144,27 @@ git push -u origin chore/update-codex-acp
   3. **上游注册方式演进撞我方表驱动**：上游把 steering/goal_control 两个新 ext-method 的 parser（`sessionSteerParamsParser`/`goalControlParamsParser`）定义在 `index.ts` 并手写 `.onRequest` 注册——按案例 2 套路搬进 `AcpExtensions.ts` 并加进 `EXTENSION_METHOD_REGISTRATIONS` 表，`index.ts` 里删掉（连带 `import {z} from "zod"` 变成多余）。
 - **锚点**：`src/AcpExtensions.ts`（类型 union / parser / 注册表）、`src/CodexAcpClient.ts`（`forkSession` 的 `collaborationMode`）、`src/__tests__/CodexACPAgent/auth-error-events.test.ts`（`{result: error}` 解构）。
 
-### 案例 6：上游反向删除我方依赖的行为（v1.1.9 合并实战：#358 删 notifyConversationInterrupted）
-- **现象**：rebase 到 v1.1.9 时，我方「修复取消未开始 turn 时缺少中断通知」提交在 `src/CodexAcpServer.ts` 出 3 处冲突。根因是上游 #358「Stop emitting "Conversation interrupted" message」**故意删掉**了 `notifyConversationInterrupted`（定义 + 3 处调用点），而我方提交反其道行之——把通知**收拢进** `cancelledPromptResponse` 让每次 cancel 都发（editor 依赖它渲染中断态，否则只显示 `[cancelled]` 而 agent 还在跑）。
-- **根因**：同一行为双方意图直接相反（上游 JetBrains 客户端自己渲染中断 UI；我方 renderer 依赖该通知）。属「第一原则」场景：我方自定义行为不能被上游同名演进覆盖。
-- **解法**：**保留我方语义**，三层处理——① 调用点冲突取我方 `return await this.cancelledPromptResponse(...)`（含上游新增的 `await eventHandler.flushPendingPlanUpdates()` 行，两者都要）；② 方法定义冲突保留上游新增的 `requestPlanImplementationPermission` + 我方 async 版 `cancelledPromptResponse`；③ 上游删除 `notifyConversationInterrupted` 定义是**自动合入**的（不在冲突块里！），须手动补回该方法并加注释说明为何保留。另外上游 #351 plan review 新流程引入的 3 处 `return this.cancelledPromptResponse(...)`（无 await）要统一改 `return await`，保证中断通知先于响应发出。
-- **教训**：上游「删除函数」若与我方「调用该函数」不落在同一 hunk，删除会静默生效——解完冲突后务必 `grep` 我方提交引入的每个符号，确认其定义仍存在于最终文件。
-- **锚点**：`src/CodexAcpServer.ts`（`cancelledPromptResponse`、`notifyConversationInterrupted`、`requestPlanImplementationPermission`）、上游提交 `efa3789`、我方提交「修复取消未开始 turn 时缺少中断通知」。
+### 案例 6：取消通知语义在 fork 内已两次转向 —— 以**当前** `cancelledPromptResponse` 注释与测试为准（2026-10 重写）
+- **旧行为（已被取代，别再加回来）**：上游 #358 删掉 `notifyConversationInterrupted` 后，我方曾一度把它收拢进 `cancelledPromptResponse`，让每次 cancel 都发一条 `Conversation interrupted`（本案例原文的结论）。
+- **现状**：fork 提交「取消推送中断通知，由编辑器自行渲染」又把语义转回**不发**：`cancelledPromptResponse` 只返回 `stopReason: "cancelled"`，注释写明理由——编辑器自己渲染取消态（零输出取消 = 撤回 prompt + 恢复草稿；部分输出取消 = 自己追加中断标记），agent 再发一条会孤立或重复。`notifyConversationInterrupted` 函数与调用点**不要补回**。
+- **两条必须同时保住的行为**（各自有测试）：
+  1. 「修复取消未开始 turn 时缺少中断通知」保的是**取消生效**不是通知：`cancel()` 在「无 `currentTurnId` 且无 `pendingTurnStarts`」的窗口必须 `activePrompt.requestCancel()` 短路到 `cancelledPromptResponse`，否则新会话刚发送就取消会让 prompt 正常跑完。
+  2. 恢复会话的中断痕迹由**回放**补：`interruptedTurnTailItemIds` 读 `turn.status === "interrupted"` 的 tail item，`streamHistoryItem` 在其上追加 `[Request interrupted by user]`；unmaterialized thread 直接跳过（别对它分页查询）。
+- **判别**：rebase 撞到这类冲突时，以源码注释 + `CodexAcpClient.test.ts` 的 `does not notify "Conversation interrupted"` 测试为真相，不要按本案例的历史版本恢复通知。
+- **锚点**：`src/CodexAcpServer.ts`（`cancelledPromptResponse`、`cancel`、`interruptedTurnTailItemIds` 调用、`streamHistoryItem`）、`src/CodexAcpClient.ts`（`interruptedTurnTailItemIds`）、`src/__tests__/CodexACPAgent/{CodexAcpClient.test.ts,load-session.test.ts}`、上游提交 `#358`。
+
+### 案例 7：上游 2.x 删掉整块旧回放模块 —— 3 个 shell fallback 补丁不再重放，但 request_user_input 窄回放必须移植（2026-10 实战）
+- **现象**：rebase 到上游 2.1.1 时，我方 3 个旧补丁（「跳过 JS REPL 内部 wait 调用」「修复 custom tool call 回退丢失 exec/shell 输出」「修复回放时 shell 指令解析不正确」）整块作废——上游删除了 `ResponseItemHistoryFallback.ts`（及其 shell 解析/回退渲染），改用 typed 流（`thread/turns/list` + `thread/items/list`）自带 tool call 渲染。`git rebase` 会提示这些提交为空/需 skip。
+- **判别**：逐项确认上游 typed 实现**覆盖了旧补丁承载的行为**（tool call 的 create/update、exec/shell 输出、JS REPL wait 过滤）才 skip；只因为「冲突太乱」而丢不行。核对完在重放结果里 `grep` 旧补丁引入的符号，确认上游确有等价实现。
+- **不能丢的例外**：`request_user_input` 的**窄 rollout 补充**必须保住。live 路径的问答对（tool_call/tool_call_update）不落 typed 流，只有 rollout JSONL 里有模型自己的 `function_call`/`function_call_output` 对；丢掉它 = 恢复会话后所有提问卡片消失。移植方式：保留 `RequestUserInputReplay.ts`（只读那一种 pair，**不是**恢复整个旧回放模块）+ `RequestUserInputHistory.ts` + `ReplayFileRead.ts` 的字节上限，靠两个 store 共享的锚点（`call_id` = typed item id、user message 的 `client_id` = `clientId`、agent message 共享文本）把卡片插回 typed 流；typed 流不是完整 rollout（rewind 截断、resume 边界起点晚），窗口外的卡片按 `turnAnchorKey` 丢弃。回放必须**永不 fatal**（rollout 缺失/超限/不可读只损失卡片）。
+- **同源的字节预算**：`ReplayBudget.ts`（会话历史回放总量上限）+ `ReplayFileRead.ts`（`REPLAY_ROLLOUT_READ_CAP_BYTES`）保留，别被上游分页实现冲掉。
+- **锚点**：`src/RequestUserInputReplay.ts`、`src/RequestUserInputHistory.ts`、`src/ReplayBudget.ts`、`src/ReplayFileRead.ts`、`src/CodexAcpServer.ts`（分页 `streamThreadHistory` 与 replay 的衔接）、`src/__tests__/{RequestUserInputReplay.test.ts,ReplayBudget.test.ts,ReplayFileRead.test.ts}`。
+
+### 案例 8：fork 改 elicitation 字段后缀会波及主仓 renderer —— `__other` → `_note`（2026-10）
+- **现象**：上游 #299 重做 request_user_input 表单：自由文本字段从 `<id>__other` 改名 `<id>_note`（且只在 `isOther` 的问题上出现，enum 里多了 `None of the above` 选项）。fork 的 fold 语义不变（非 AIR 客户端仍是 `<选项>（补充：<备注>）`；AIR 走 `None of the above` + `user_note:`），但**主仓 `ElicitationCard.tsx` 靠后缀名配对并排渲染，字段名一改配对即失效**（输入框变成独立一行）。
+- **解法**：主仓 `toDisplayFields` 同时认三种后缀——claude `_custom`、codex 新旧 `__other`/`_note`（保留旧的给其他 agent/旧版本），并保证配对只在存在同名 enum 时发生，别把合法的 `<name>_note` 独立问题吞掉。`acpElicitationForm.ts` 只透传字段、无需改动，但其头注释的后缀清单要同步。
+- **教训**：fork 侧任何**表单字段命名/`_meta` 契约**的变更都要过一遍主仓消费端（`grep -E '_custom|__other|_note' -r apps/editor/src`），升级核对表里把「elicitation 字段后缀」列为固定检查项。
+- **锚点**：`apps/editor/src/renderer/workbench/agents/ElicitationCard.tsx`（`toDisplayFields`）、`apps/editor/src/renderer/services/acp/acpElicitationForm.ts`（头注释）、`apps/editor/src/renderer/workbench/agents/__tests__/ElicitationCard.test.tsx`、fork `src/CodexElicitationHandler.ts`。
 
 ## 检查清单要点
 1. 调查阶段全程只读（`git ls-remote` / `gh api` / 只读 git），别在 plan mode 改 submodule。
@@ -159,9 +177,13 @@ git push -u origin chore/update-codex-acp
 8. 后处理改动（更新的快照、适配的测试）用 `git commit --fixup=<sha>` + `GIT_SEQUENCE_EDITOR=true git rebase -i --autosquash` 并入逻辑所属提交。
 9. **rebase 零冲突 ≠ 语义正确**：`npx tsc --noEmit` **和** `npm test` 都是必跑安全网，别因 rebase 顺利就跳过。
 10. fork 测试已知约 4 个 Windows 路径失败（案例 1）非回归——用「纯 upstream worktree + rebase 前备份分支」两处都失败来判别，别误判为回归，别改测试（会破坏 Linux CI）。
-11. `pnpm agent:build` **同时**构建 claude-agent-acp + codex-acp 两个 fork，并 prune 到生产依赖；之后要再跑 fork 测试先 `npm ci`。
+11. `pnpm agent:build` **同时**构建 claude-agent-acp + codex-acp 两个 fork；`vendor-install` 只在 lock 哈希变化时重装（不带 `--omit=dev`，devDeps 保留，可直接跑 fork 测试；若缺失先 `npm ci`）。
 12. 全流程末尾用 `git diff --submodule=log vendor/codex-acp` 核对“我方提交在顶 + 上游新提交在下”，再提交主仓库指针。
 13. **合并方式固定 rebase，不用再问用户**；只需就“推送范围”征询。选“仅本地不推送”时到本地 `main` 指向合并结果 + 主仓库 `agent:build`/`pnpm check` 验证为止，不 push fork、不提交 submodule 指针。
+14. **自定义提交数别照抄**（会变）；skip 掉的重放项必须逐个确认上游有等价实现：3 个旧 shell fallback 补丁已被上游 typed 回放取代（案例 7），但 `request_user_input` 窄 rollout 回放 + 回放字节预算（`ReplayBudget`/`ReplayFileRead`）是命脉，**不能**随旧模块一起丢。
+15. **取消行为以当前源码为准**：不发 `Conversation interrupted` chunk（编辑器自行渲染，恢复时由回放补 `[Request interrupted by user]`）；不要按本 skill 的历史案例把通知加回来（案例 6）。
+16. **fork 改 elicitation 字段后缀 → 同步主仓** `ElicitationCard.toDisplayFields`（`_custom`/`__other`/`_note` 三种并存），并确认配对只在同名 enum 存在时发生（案例 8）。
+17. 上游 bump `@openai/codex` 时，主仓 `packages/node-services/src/agentBinary/flavors.ts` 的 `CODEX_VERSION` 必须同步到 lock 解析版本，并跑 `pnpm --filter @universe-editor/node-services run test`。
 
 ## 关键参考路径
 - 根 `CLAUDE.md`「内置 ACP agent」段 + `scripts/release/{vendor-install.mjs,runtime-resources.mjs}`、`package.json` 的 `agent:build`（含两个 fork）

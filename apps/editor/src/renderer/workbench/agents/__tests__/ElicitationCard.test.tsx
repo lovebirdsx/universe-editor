@@ -469,8 +469,9 @@ describe('ElicitationCard — AskUserQuestion folding', () => {
 })
 
 describe('ElicitationCard — codex request_user_input folding', () => {
-  // The codex fork emits `<id>` (enum) + `<id>__other` (string) instead of
-  // claude's `_custom` pair; the card must pair them just the same.
+  // The codex fork pairs its choice question `<id>` (enum) with a free-text
+  // field: codex-acp 2.x names it `<id>_note`, older builds `<id>__other`;
+  // claude's fork uses `<id>_custom`. The card must pair all three the same.
   function codexAskRequest(): CreateElicitationRequest {
     return {
       sessionId: 'agent-1',
@@ -518,6 +519,82 @@ describe('ElicitationCard — codex request_user_input folding', () => {
 
     fireEvent.click(screen.getByTestId('acp-elicitation-submit'))
     expect(h.resolved).toEqual([{ action: 'accept', content: { q1: 'red', q1__other: 'green' } }])
+  })
+
+  // codex-acp 2.x renamed the free-text field to `<id>_note` (upstream #299,
+  // where every choice question may carry a note and the enum grows a
+  // `None of the above` option).
+  function codexNoteRequest(): CreateElicitationRequest {
+    return {
+      sessionId: 'agent-1',
+      mode: 'form',
+      message: 'Pick a color',
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          q1: {
+            type: 'string',
+            title: 'Color',
+            oneOf: [
+              { const: 'red', title: 'Red', description: 'warm' },
+              { const: 'blue', title: 'Blue', description: 'cold' },
+              {
+                const: 'None of the above',
+                title: 'None of the above',
+                description: 'Provide a different answer in the note field.',
+              },
+            ],
+          },
+          q1_note: {
+            type: 'string',
+            title: 'Additional answer or note',
+          },
+        },
+      },
+    } as CreateElicitationRequest
+  }
+
+  it('renders the 2.x _note field as an inline input beside the select, not its own row', () => {
+    const h = makePending(codexNoteRequest())
+    render(renderCard(makeSession('A', h.pending)))
+
+    expect(screen.queryByTestId('acp-elicitation-field-q1_note')).toBeNull()
+    const input = screen.getByTestId('acp-elicitation-input-q1_note')
+    expect(input.tagName).toBe('INPUT')
+  })
+
+  it('submits the selection and the _note text together', () => {
+    const h = makePending(codexNoteRequest())
+    render(renderCard(makeSession('A', h.pending)))
+
+    expect(screen.queryByTestId('acp-elicitation-field-q1_note')).toBeNull()
+    fireEvent.click(screen.getByTestId('acp-elicitation-input-q1'))
+    fireEvent.click(screen.getByRole('option', { name: /Red/ }))
+    fireEvent.change(screen.getByTestId('acp-elicitation-input-q1_note'), {
+      target: { value: 'green' },
+    })
+
+    fireEvent.click(screen.getByTestId('acp-elicitation-submit'))
+    expect(h.resolved).toEqual([{ action: 'accept', content: { q1: 'red', q1_note: 'green' } }])
+  })
+
+  it('never hides a legitimately named field: a standalone <name>_note stays its own row', () => {
+    const h = makePending({
+      sessionId: 'agent-1',
+      mode: 'form',
+      message: 'Anything else?',
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          extra_note: { type: 'string', title: 'Extra note' },
+        },
+      },
+    } as CreateElicitationRequest)
+    render(renderCard(makeSession('A', h.pending)))
+
+    // No enum `extra` to pair with — the field renders as a normal row.
+    expect(screen.getByTestId('acp-elicitation-field-extra_note')).toBeTruthy()
+    expect(screen.getByTestId('acp-elicitation-input-extra_note').tagName).toBe('INPUT')
   })
 })
 
