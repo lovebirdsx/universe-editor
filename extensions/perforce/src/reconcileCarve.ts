@@ -23,7 +23,6 @@
  */
 import { readdir } from 'node:fs/promises'
 import type { Dirent } from 'node:fs'
-import { join } from 'node:path'
 import { buildLevelFilespec, buildScopeFilespec } from './p4Filespec.js'
 import type { SyncScopeTarget } from './p4Filespec.js'
 import { containsAny, isUnderAny } from './pathUtil.js'
@@ -56,7 +55,13 @@ export async function carveReconcileFilespecs(
     for (const entry of entries) {
       // Plain files need no spec of their own: the level's `/*` covers them.
       if (!entry.isDirectory()) continue
-      const child = join(current, entry.name)
+      // Join with `/`, never `node:path.join`: join normalizes the WHOLE string,
+      // so on Windows it would flip the caller's forward slashes to backslashes
+      // and the level spec (`<dir>/*`, spelled as handed in) and this child spec
+      // would leave the same call in two spellings. A path on its way back to p4
+      // as a filespec is only ever appended to, never re-spelled — the same rule
+      // `p4deltaScopeEntry` and `p4Filespec` follow.
+      const child = `${current.replace(/[/\\]+$/, '')}/${entry.name}`
       if (isUnderAny(child, excludeDirs)) continue
       const nested = containsAny(child, excludeDirs)
       if (entry.isSymbolicLink()) {

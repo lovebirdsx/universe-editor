@@ -176,17 +176,22 @@ test.describe('@p1 perforce p4delta writes', () => {
       // OPENED for edit in the default changelist — the one thing "collected"
       // means, and the thing a toast would not prove.
       await expect
-        .poll(() => {
-          const state = JSON.parse(readFileSync(p4Workspace.stateFile, 'utf8')) as {
-            opened?: Record<string, { action?: string; change?: string }>
-          }
-          return state.opened?.['//depot/drifted.txt']
-        }, { timeout: 30_000, message: 'the collect should really open the file for edit' })
+        .poll(
+          () => {
+            const state = JSON.parse(readFileSync(p4Workspace.stateFile, 'utf8')) as {
+              opened?: Record<string, { action?: string; change?: string }>
+            }
+            return state.opened?.['//depot/drifted.txt']
+          },
+          { timeout: 30_000, message: 'the collect should really open the file for edit' },
+        )
         .toEqual(expect.objectContaining({ action: 'edit', change: 'default' }))
 
       // …and the panel agrees: the row moved from Changes into the default
       // changelist group.
-      await expect.poll(() => groupIdsFor(drifted.relPath), { timeout: 30_000 }).toEqual(['default'])
+      await expect
+        .poll(() => groupIdsFor(drifted.relPath), { timeout: 30_000 })
+        .toEqual(['default'])
     })
 
     // Neither write ever fell back to the native engine. The log records every

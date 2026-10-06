@@ -151,7 +151,9 @@ interface FakeState {
   annotateCl?: string
 }
 
-const toPosix = (p: string): string => p.split('\\').join('/')
+/** One path spelling for comparisons: specs read logs (always `/`) against
+ *  fixture paths (platform spelling), so they normalize both sides. */
+export const toPosix = (p: string): string => p.split('\\').join('/')
 
 /** The fake p4's depot prefix — every seeded depot path starts with it. */
 export const DEPOT_PREFIX = '//depot'
@@ -412,10 +414,7 @@ export interface P4SubmittedSeed {
  * exist: the app always reads SOME file for this, and pointing it at a real
  * developer's own records would make every journey depend on their machine.
  */
-function seedSaviorConfig(
-  clientRoot: string,
-  seeds: readonly P4SaviorSeed[] | undefined,
-): string {
+function seedSaviorConfig(clientRoot: string, seeds: readonly P4SaviorSeed[] | undefined): string {
   const file = join(mkTempDir('ue2-p4-savior-'), 'sync_config.json')
   if (seeds === undefined || seeds.length === 0) return file
   const byDepot: Record<string, unknown[]> = {}
@@ -507,9 +506,7 @@ export const test = base.extend<
         ...(p4delta !== undefined
           ? {
               UNIVERSE_P4DELTA_PATH: FAKE_P4DELTA,
-              ...(p4delta.fail !== undefined
-                ? { UNIVERSE_P4DELTA_FAKE_FAIL: p4delta.fail }
-                : {}),
+              ...(p4delta.fail !== undefined ? { UNIVERSE_P4DELTA_FAKE_FAIL: p4delta.fail } : {}),
             }
           : {}),
         ...p4ExtraEnv,

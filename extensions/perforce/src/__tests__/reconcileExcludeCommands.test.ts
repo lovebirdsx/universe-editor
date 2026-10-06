@@ -14,10 +14,16 @@
  *     failure skip / excluded skip) while `p4 revert` stays unfiltered.
  *  5. reopenTo drops excluded uncollected files but still reopens opened ones.
  */
-import { join } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { containsAny, isUnderAny, norm } from '../pathUtil.js'
 import { localize } from '../nls.js'
+
+/** Platform-independent path build for fixtures and expectations: the carve walk
+ *  appends children with `/` and keeps the caller's spelling, so the tests must
+ *  do the same rather than inheriting the host separator from `node:path.join`. */
+function posixJoin(...parts: string[]): string {
+  return parts.join('/')
+}
 
 const ROOT = vi.hoisted(() => 'X:/p4ws/main')
 const SRC = `${ROOT}/src`
@@ -268,7 +274,7 @@ beforeEach(async () => {
 
 describe('perforce.reconcile multi-select', () => {
   it('carves excluded subtrees out of directory targets and collects the rest', async () => {
-    fake.reconcileExcludeDirs = [join(SRC, 'gen')]
+    fake.reconcileExcludeDirs = [posixJoin(SRC, 'gen')]
     readdirMock.mockImplementation(async (d: string) => {
       if (d === SRC) return [dir('gen'), dir('sibling'), file('a.txt')]
       throw new Error('unexpected readdir')
@@ -279,20 +285,20 @@ describe('perforce.reconcile multi-select', () => {
     ])
     expect(fake.reconcile).toHaveBeenCalledWith([
       `${SRC}/*`,
-      `${join(SRC, 'sibling')}/...`,
+      `${posixJoin(SRC, 'sibling')}/...`,
       `${ROOT}/keep.txt`,
     ])
   })
 
   it('warns about unreadable directories and still collects the remaining specs', async () => {
-    fake.reconcileExcludeDirs = [join(SRC, 'gen'), join(ROOT, 'broken', 'deep')]
+    fake.reconcileExcludeDirs = [posixJoin(SRC, 'gen'), posixJoin(ROOT, 'broken', 'deep')]
     readdirMock.mockImplementation(async (d: string) => {
       if (d === SRC) return [dir('gen'), file('a.txt')]
       throw new Error('EACCES')
     })
     await runCommand('perforce.reconcile', { isDirectory: false }, [
       { resourceUri: SRC, isDirectory: true },
-      { resourceUri: join(ROOT, 'broken'), isDirectory: true },
+      { resourceUri: posixJoin(ROOT, 'broken'), isDirectory: true },
       { resourceUri: `${ROOT}/keep.txt`, isDirectory: false },
     ])
     expect(windowMock.showWarningMessage).toHaveBeenCalledWith(CARVE_FAILED)
@@ -301,9 +307,9 @@ describe('perforce.reconcile multi-select', () => {
   })
 
   it('reports all-excluded and does not spawn when every target is excluded', async () => {
-    fake.reconcileExcludeDirs = [join(ROOT, 'gen'), SRC]
+    fake.reconcileExcludeDirs = [posixJoin(ROOT, 'gen'), SRC]
     await runCommand('perforce.reconcile', { isDirectory: false }, [
-      { resourceUri: join(ROOT, 'gen', 'a.txt'), isDirectory: false },
+      { resourceUri: posixJoin(ROOT, 'gen', 'a.txt'), isDirectory: false },
       { resourceUri: SRC, isDirectory: true },
     ])
     expect(windowMock.showInformationMessage).toHaveBeenCalledWith(ALL_EXCLUDED)
@@ -314,7 +320,7 @@ describe('perforce.reconcile multi-select', () => {
   it('does not claim all-excluded when the carve failed on every target', async () => {
     // Blaming the config for a read failure would send the user to the wrong
     // setting; the carve warning is the only honest answer here.
-    fake.reconcileExcludeDirs = [join(SRC, 'gen')]
+    fake.reconcileExcludeDirs = [posixJoin(SRC, 'gen')]
     readdirMock.mockImplementation(async () => {
       throw new Error('EACCES')
     })
@@ -329,17 +335,17 @@ describe('perforce.reconcile multi-select', () => {
 
 describe('perforce.reconcile single target', () => {
   it('carves a directory that contains an excluded subtree', async () => {
-    fake.reconcileExcludeDirs = [join(SRC, 'gen')]
+    fake.reconcileExcludeDirs = [posixJoin(SRC, 'gen')]
     readdirMock.mockImplementation(async (d: string) => {
       if (d === SRC) return [dir('gen'), dir('ok')]
       throw new Error('unexpected readdir')
     })
     await runCommand('perforce.reconcile', { resourceUri: SRC, isDirectory: true })
-    expect(fake.reconcile).toHaveBeenCalledWith([`${SRC}/*`, `${join(SRC, 'ok')}/...`])
+    expect(fake.reconcile).toHaveBeenCalledWith([`${SRC}/*`, `${posixJoin(SRC, 'ok')}/...`])
   })
 
   it('aborts with a warning when the carve fails, without spawning', async () => {
-    fake.reconcileExcludeDirs = [join(SRC, 'gen')]
+    fake.reconcileExcludeDirs = [posixJoin(SRC, 'gen')]
     await runCommand('perforce.reconcile', { resourceUri: SRC, isDirectory: true })
     expect(windowMock.showWarningMessage).toHaveBeenCalledWith(CARVE_FAILED)
     expect(fake.reconcile).not.toHaveBeenCalled()
@@ -368,7 +374,7 @@ describe('collect changes after a refused get', () => {
   }
 
   it('carves the selection scope (scopeTargets branch)', async () => {
-    fake.reconcileExcludeDirs = [join(SRC, 'gen')]
+    fake.reconcileExcludeDirs = [posixJoin(SRC, 'gen')]
     readdirMock.mockImplementation(async (d: string) => {
       if (d === SRC) return [dir('gen'), dir('ok')]
       throw new Error('unexpected readdir')
@@ -380,7 +386,7 @@ describe('collect changes after a refused get', () => {
     ])
     expect(fake.reconcile).toHaveBeenCalledWith([
       `${SRC}/*`,
-      `${join(SRC, 'ok')}/...`,
+      `${posixJoin(SRC, 'ok')}/...`,
       `${ROOT}/keep.txt`,
     ])
   })
@@ -388,20 +394,20 @@ describe('collect changes after a refused get', () => {
   it('carves a single directory target (scopeTargets branch)', async () => {
     // A single-target get on a local directory must carve too: the collect
     // button is the one path that turns a refusal into a real p4 mutation.
-    fake.reconcileExcludeDirs = [join(SRC, 'gen')]
+    fake.reconcileExcludeDirs = [posixJoin(SRC, 'gen')]
     readdirMock.mockImplementation(async (d: string) => {
       if (d === SRC) return [dir('gen'), dir('ok')]
       throw new Error('unexpected readdir')
     })
     expectRefusalCollects()
     await runCommand('perforce.syncLatest', { resourceUri: SRC, isDirectory: true })
-    expect(fake.reconcile).toHaveBeenCalledWith([`${SRC}/*`, `${join(SRC, 'ok')}/...`])
+    expect(fake.reconcile).toHaveBeenCalledWith([`${SRC}/*`, `${posixJoin(SRC, 'ok')}/...`])
   })
 
   it('passes a depot-syntax scope through untouched (scope branch)', async () => {
     // The graph's whole-repo `//...` (and the timeline's single depot file)
     // cannot be carved by local exclude dirs, so this branch must not even try.
-    fake.reconcileExcludeDirs = [join(SRC, 'gen')]
+    fake.reconcileExcludeDirs = [posixJoin(SRC, 'gen')]
     expectRefusalCollects()
     await runCommand('perforce-graph.syncToChange', {
       change: '42',
@@ -413,14 +419,14 @@ describe('collect changes after a refused get', () => {
   })
 
   it('carves the default sync-scope dirs (syncScopeDirs branch)', async () => {
-    fake.reconcileExcludeDirs = [join(ROOT, 'gen')]
+    fake.reconcileExcludeDirs = [posixJoin(ROOT, 'gen')]
     readdirMock.mockImplementation(async (d: string) => {
       if (d === ROOT) return [dir('gen'), dir('src'), file('keep.txt')]
       throw new Error('unexpected readdir')
     })
     expectRefusalCollects()
     await runCommand('perforce.syncLatest')
-    expect(fake.reconcile).toHaveBeenCalledWith([`${ROOT}/*`, `${join(ROOT, 'src')}/...`])
+    expect(fake.reconcile).toHaveBeenCalledWith([`${ROOT}/*`, `${posixJoin(ROOT, 'src')}/...`])
   })
 
   it('reports all-excluded without spawning when the whole default scope is excluded', async () => {
@@ -437,7 +443,7 @@ describe('collect changes after a refused get', () => {
     // collected, not reported as an empty carve.
     fake.syncScopeDirs = []
     fake.syncScopes = ['//...']
-    fake.reconcileExcludeDirs = [join(ROOT, 'gen')]
+    fake.reconcileExcludeDirs = [posixJoin(ROOT, 'gen')]
     expectRefusalCollects()
     await runCommand('perforce.syncLatest')
     expect(fake.reconcile).toHaveBeenCalledWith(['//...'])
@@ -452,19 +458,19 @@ describe('perforce.revert clean gating', () => {
   }
 
   it('filters excluded files out of clean and keeps revert untouched', async () => {
-    fake.reconcileExcludeDirs = [join(ROOT, 'gen')]
+    fake.reconcileExcludeDirs = [posixJoin(ROOT, 'gen')]
     fake.openedStateAmong.mockResolvedValueOnce(new Map([[norm(`${ROOT}/a.txt`), 'default']]))
     expectConfirmRevert()
     await runCommand('perforce.revert', { resourceUri: `${ROOT}/a.txt` }, [
       { resourceUri: `${ROOT}/a.txt` },
-      { resourceUri: join(ROOT, 'gen', 'b.txt') },
+      { resourceUri: posixJoin(ROOT, 'gen', 'b.txt') },
     ])
     expect(fake.revert).toHaveBeenCalledWith([`${ROOT}/a.txt`])
     expect(fake.revertReconcile).not.toHaveBeenCalled()
   })
 
   it('carves the directory clean spec and leaves revert as dir/...', async () => {
-    fake.reconcileExcludeDirs = [join(SRC, 'gen')]
+    fake.reconcileExcludeDirs = [posixJoin(SRC, 'gen')]
     fake.openedInTree.mockResolvedValueOnce({
       files: [{ path: `${SRC}/opened.ts`, changelist: '5' }],
       unknown: false,
@@ -476,11 +482,11 @@ describe('perforce.revert clean gating', () => {
     expectConfirmRevert()
     await runCommand('perforce.revert', { resourceUri: SRC, isDirectory: true })
     expect(fake.revert).toHaveBeenCalledWith([`${SRC}/...`])
-    expect(fake.revertReconcile).toHaveBeenCalledWith([`${SRC}/*`, `${join(SRC, 'ok')}/...`])
+    expect(fake.revertReconcile).toHaveBeenCalledWith([`${SRC}/*`, `${posixJoin(SRC, 'ok')}/...`])
   })
 
   it('skips clean when the directory carve fails but still reverts', async () => {
-    fake.reconcileExcludeDirs = [join(SRC, 'gen')]
+    fake.reconcileExcludeDirs = [posixJoin(SRC, 'gen')]
     fake.openedInTree.mockResolvedValueOnce({
       files: [{ path: `${SRC}/opened.ts`, changelist: '5' }],
       unknown: false,
@@ -526,11 +532,11 @@ describe('perforce.revert clean gating', () => {
   })
 
   it('counts only the surviving unopened files in the confirm', async () => {
-    fake.reconcileExcludeDirs = [join(ROOT, 'gen')]
+    fake.reconcileExcludeDirs = [posixJoin(ROOT, 'gen')]
     expectConfirmRevert()
     await runCommand('perforce.revert', { resourceUri: `${ROOT}/a.txt` }, [
       { resourceUri: `${ROOT}/a.txt` },
-      { resourceUri: join(ROOT, 'gen', 'b.txt') },
+      { resourceUri: posixJoin(ROOT, 'gen', 'b.txt') },
     ])
     const message = windowMock.showWarningMessage.mock.calls[0]?.[0] ?? ''
     expect(message).toContain(
@@ -574,10 +580,10 @@ describe('carve points under the δ engine', () => {
   })
 
   it('multi-select: recursive specs, excluded entries dropped, nothing carved', async () => {
-    fake.reconcileExcludeDirs = [join(SRC, 'gen')]
+    fake.reconcileExcludeDirs = [posixJoin(SRC, 'gen')]
     await runCommand('perforce.reconcile', { isDirectory: false }, [
       { resourceUri: SRC, isDirectory: true },
-      { resourceUri: join(SRC, 'gen', 'skip.txt'), isDirectory: false },
+      { resourceUri: posixJoin(SRC, 'gen', 'skip.txt'), isDirectory: false },
       { resourceUri: `${ROOT}/keep.txt`, isDirectory: false },
     ])
     expect(fake.reconcile).toHaveBeenCalledWith([`${SRC}/...`, `${ROOT}/keep.txt`])
@@ -595,7 +601,7 @@ describe('carve points under the δ engine', () => {
   })
 
   it('single directory target: `<dir>/...` instead of a carve around the excluded subtree', async () => {
-    fake.reconcileExcludeDirs = [join(SRC, 'gen')]
+    fake.reconcileExcludeDirs = [posixJoin(SRC, 'gen')]
     await runCommand('perforce.reconcile', { resourceUri: SRC, isDirectory: true })
     expect(fake.reconcile).toHaveBeenCalledWith([`${SRC}/...`])
     expect(readdirMock).not.toHaveBeenCalled()
@@ -603,7 +609,7 @@ describe('carve points under the δ engine', () => {
   })
 
   it('collect-after-refusal passes the unexcluded targets through uncarved', async () => {
-    fake.reconcileExcludeDirs = [join(SRC, 'gen')]
+    fake.reconcileExcludeDirs = [posixJoin(SRC, 'gen')]
     fake.sync.mockResolvedValueOnce(REFUSAL)
     windowMock.showErrorMessage.mockResolvedValueOnce(BTN_COLLECT)
     await runCommand('perforce.syncLatest', { resourceUri: SRC, isDirectory: true })
@@ -612,7 +618,7 @@ describe('carve points under the δ engine', () => {
   })
 
   it('revert hands clean the whole directory instead of a carve', async () => {
-    fake.reconcileExcludeDirs = [join(SRC, 'gen')]
+    fake.reconcileExcludeDirs = [posixJoin(SRC, 'gen')]
     fake.openedInTree.mockResolvedValueOnce({ files: [], unknown: false })
     windowMock.showWarningMessage.mockResolvedValue(BTN_REVERT)
     await runCommand('perforce.revert', { resourceUri: SRC, isDirectory: true })
@@ -636,7 +642,7 @@ describe('carve points under the δ engine — paths δ cannot read', () => {
 
   it('multi-select: one metacharacter target carves the whole call', async () => {
     fake.reconcileUsesP4delta = true
-    fake.reconcileExcludeDirs = [join(WEIRD, 'gen')]
+    fake.reconcileExcludeDirs = [posixJoin(WEIRD, 'gen')]
     readdirMock.mockImplementation(async (d: string) => {
       if (d === WEIRD) return [dir('gen'), dir('ok')]
       throw new Error('unexpected readdir')
@@ -656,7 +662,7 @@ describe('carve points under the δ engine — paths δ cannot read', () => {
 
   it('single directory target: a metacharacter forces the carve', async () => {
     fake.reconcileUsesP4delta = true
-    fake.reconcileExcludeDirs = [join(WEIRD, 'gen')]
+    fake.reconcileExcludeDirs = [posixJoin(WEIRD, 'gen')]
     readdirMock.mockImplementation(async (d: string) => {
       if (d === WEIRD) return [dir('gen'), dir('ok')]
       throw new Error('unexpected readdir')
@@ -670,7 +676,7 @@ describe('carve points under the δ engine — paths δ cannot read', () => {
 
   it('collect-after-refusal: a metacharacter target carves instead of passing through', async () => {
     fake.reconcileUsesP4delta = true
-    fake.reconcileExcludeDirs = [join(WEIRD, 'gen')]
+    fake.reconcileExcludeDirs = [posixJoin(WEIRD, 'gen')]
     readdirMock.mockImplementation(async (d: string) => {
       if (d === WEIRD) return [dir('gen'), dir('ok')]
       throw new Error('unexpected readdir')
@@ -693,7 +699,7 @@ describe('carve points under the δ engine — paths δ cannot read', () => {
 
   it('revert: a metacharacter directory is carved instead of handed to clean whole', async () => {
     fake.reconcileUsesP4delta = true
-    fake.reconcileExcludeDirs = [join(WEIRD, 'gen')]
+    fake.reconcileExcludeDirs = [posixJoin(WEIRD, 'gen')]
     fake.openedInTree.mockResolvedValueOnce({ files: [], unknown: false })
     readdirMock.mockImplementation(async (d: string) => {
       if (d === WEIRD) return [dir('gen'), dir('ok')]
@@ -709,7 +715,7 @@ describe('carve points under the δ engine — paths δ cannot read', () => {
 
   it('revert: an unopened metacharacter FILE forces the whole clean call to carve', async () => {
     fake.reconcileUsesP4delta = true
-    fake.reconcileExcludeDirs = [join(SRC, 'gen')]
+    fake.reconcileExcludeDirs = [posixJoin(SRC, 'gen')]
     // The file entry carries no carve of its own and the client will route the
     // whole call native for it, so the directory must not ride along un-carved.
     fake.openedStateAmong.mockResolvedValueOnce(new Map())
@@ -725,7 +731,7 @@ describe('carve points under the δ engine — paths δ cannot read', () => {
     ])
     expect(fake.revertReconcile).toHaveBeenCalledWith([
       `${SRC}/*`,
-      `${join(SRC, 'ok')}/...`,
+      `${posixJoin(SRC, 'ok')}/...`,
       `${ROOT}/we@ird.txt`,
     ])
   })
@@ -733,26 +739,26 @@ describe('carve points under the δ engine — paths δ cannot read', () => {
 
 describe('perforce.reopenTo exclusion gating', () => {
   it('drops excluded uncollected files from reconcileInto', async () => {
-    fake.reconcileExcludeDirs = [join(ROOT, 'gen')]
+    fake.reconcileExcludeDirs = [posixJoin(ROOT, 'gen')]
     await runCommand('perforce.reopenTo', { scmResourceGroupId: 'cl:5' }, [
       { resourceUri: `${ROOT}/a.txt` },
-      { resourceUri: join(ROOT, 'gen', 'b.txt') },
+      { resourceUri: posixJoin(ROOT, 'gen', 'b.txt') },
     ])
     expect(fake.reconcileInto).toHaveBeenCalledWith('5', [`${ROOT}/a.txt`])
     expect(fake.reopen).not.toHaveBeenCalled()
   })
 
   it('still reopens opened files even under an excluded directory', async () => {
-    fake.reconcileExcludeDirs = [join(ROOT, 'gen')]
+    fake.reconcileExcludeDirs = [posixJoin(ROOT, 'gen')]
     fake.changelistOf.mockImplementation((p: string) =>
-      p === join(ROOT, 'gen', 'b.txt') ? '7' : undefined,
+      p === posixJoin(ROOT, 'gen', 'b.txt') ? '7' : undefined,
     )
     await runCommand('perforce.reopenTo', { scmResourceGroupId: 'cl:5' }, [
       { resourceUri: `${ROOT}/a.txt` },
-      { resourceUri: join(ROOT, 'gen', 'b.txt') },
+      { resourceUri: posixJoin(ROOT, 'gen', 'b.txt') },
     ])
     expect(fake.reconcileInto).toHaveBeenCalledWith('5', [`${ROOT}/a.txt`])
-    expect(fake.reopen).toHaveBeenCalledWith('5', [join(ROOT, 'gen', 'b.txt')])
+    expect(fake.reopen).toHaveBeenCalledWith('5', [posixJoin(ROOT, 'gen', 'b.txt')])
   })
 })
 

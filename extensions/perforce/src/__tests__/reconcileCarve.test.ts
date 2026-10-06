@@ -14,8 +14,14 @@
  *     records unreadable directories without losing the rest, and degrades to
  *     plain recursive specs when there is nothing to exclude.
  */
-import { join } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+/** Platform-independent path build for fixtures and expectations: the carve walk
+ *  appends children with `/` and keeps the caller's spelling, so the tests must
+ *  do the same rather than inheriting the host separator from `node:path.join`. */
+function posixJoin(...parts: string[]): string {
+  return parts.join('/')
+}
 
 const readdirMock = vi.hoisted(() =>
   vi.fn<
@@ -79,56 +85,56 @@ describe('carveReconcileFilespecs', () => {
   })
 
   it('emits level /*, recursive /... for clean subtrees, and re-carves mixed ones', async () => {
-    const excluded = join(ROOT, 'excluded')
-    const exsub = join(ROOT, 'mixed', 'exsub')
+    const excluded = posixJoin(ROOT, 'excluded')
+    const exsub = posixJoin(ROOT, 'mixed', 'exsub')
     readdirMock.mockImplementation(async (d: string) => {
       if (d === ROOT) {
         return [file('a.txt'), dir('clean'), dir('excluded'), dir('mixed'), junction('link')]
       }
-      if (d === join(ROOT, 'mixed')) return [dir('exsub'), dir('sibling')]
+      if (d === posixJoin(ROOT, 'mixed')) return [dir('exsub'), dir('sibling')]
       throw new Error('unexpected readdir')
     })
     const specs = await carveReconcileFilespecs(ROOT, [excluded, exsub])
     expect(specs).toEqual([
       `${ROOT}/*`,
-      `${join(ROOT, 'clean')}/...`,
-      `${join(ROOT, 'link')}/...`,
-      `${join(ROOT, 'mixed')}/*`,
-      `${join(ROOT, 'mixed', 'sibling')}/...`,
+      `${posixJoin(ROOT, 'clean')}/...`,
+      `${posixJoin(ROOT, 'link')}/...`,
+      `${posixJoin(ROOT, 'mixed')}/*`,
+      `${posixJoin(ROOT, 'mixed', 'sibling')}/...`,
     ])
   })
 
   it('never readdirs excluded subtrees or symlinked directories', async () => {
-    const excluded = join(ROOT, 'excluded')
-    const exsub = join(ROOT, 'mixed', 'exsub')
+    const excluded = posixJoin(ROOT, 'excluded')
+    const exsub = posixJoin(ROOT, 'mixed', 'exsub')
     readdirMock.mockImplementation(async (d: string) => {
       if (d === ROOT) return [dir('clean'), dir('excluded'), dir('mixed'), junction('link')]
-      if (d === join(ROOT, 'mixed')) return [dir('exsub'), dir('sibling')]
+      if (d === posixJoin(ROOT, 'mixed')) return [dir('exsub'), dir('sibling')]
       throw new Error('unexpected readdir')
     })
     await carveReconcileFilespecs(ROOT, [excluded, exsub])
     const visited = readdirMock.mock.calls.map((c) => c[0])
-    expect(visited).toEqual([ROOT, join(ROOT, 'mixed')])
+    expect(visited).toEqual([ROOT, posixJoin(ROOT, 'mixed')])
   })
 
   it('drops an excluded junction and one whose subtree holds an exclude', async () => {
     // Exclusion beats coverage for link subtrees: we refuse to walk them (cycle
     // guard), so a `/...` spec is the only alternative and it would widen back
     // into excluded territory.
-    const linkExcluded = join(ROOT, 'linkExcluded')
-    const under = join(ROOT, 'linkNested', 'inner')
+    const linkExcluded = posixJoin(ROOT, 'linkExcluded')
+    const under = posixJoin(ROOT, 'linkNested', 'inner')
     readdirMock.mockImplementation(async (d: string) => {
       if (d === ROOT) return [junction('linkExcluded'), junction('linkNested'), junction('linkOk')]
       throw new Error('a junction must never be read')
     })
     expect(await carveReconcileFilespecs(ROOT, [linkExcluded, under])).toEqual([
       `${ROOT}/*`,
-      `${join(ROOT, 'linkOk')}/...`,
+      `${posixJoin(ROOT, 'linkOk')}/...`,
     ])
   })
 
   it('emits only the level spec when every child is excluded', async () => {
-    const excluded = join(ROOT, 'excluded')
+    const excluded = posixJoin(ROOT, 'excluded')
     readdirMock.mockImplementation(async (d: string) => {
       if (d === ROOT) return [dir('excluded')]
       throw new Error('an excluded subtree must never be read')
@@ -143,7 +149,7 @@ describe('carveReconcileFilespecs', () => {
     })
     expect(await carveReconcileFilespecs(ROOT, [])).toEqual([
       `${ROOT}/*`,
-      `${join(ROOT, 'we%40ird%23dir%251%2A2')}/...`,
+      `${posixJoin(ROOT, 'we%40ird%23dir%251%2A2')}/...`,
     ])
   })
 
@@ -155,7 +161,7 @@ describe('carveReconcileFilespecs', () => {
   })
 
   it('returns undefined when a mixed subtree read fails mid-walk', async () => {
-    const exsub = join(ROOT, 'broken', 'x')
+    const exsub = posixJoin(ROOT, 'broken', 'x')
     readdirMock.mockImplementation(async (d: string) => {
       if (d === ROOT) return [dir('broken')]
       throw new Error('EIO')
@@ -177,7 +183,7 @@ describe('carveReconcileFilespecs', () => {
     // `<dir>/*` spec strings grow with depth and the walk is O(MAX²) string
     // work, tens of seconds on CI.
     const link = Array.from({ length: RECONCILE_SCAN_MAX_COUNTED_DIRECTORIES + 1 }, () => 'd')
-    const excluded = join(ROOT, ...link, 'x')
+    const excluded = posixJoin(ROOT, ...link, 'x')
     readdirMock.mockImplementation(async () => [dir('d')])
     expect(await carveReconcileFilespecs(ROOT, [excluded])).toBeUndefined()
     expect(readdirMock).toHaveBeenCalledTimes(RECONCILE_SCAN_MAX_COUNTED_DIRECTORIES)
@@ -190,55 +196,55 @@ describe('carveReconcileTargets', () => {
   })
 
   it('drops excluded files and keeps the rest', async () => {
-    const excluded = join(ROOT, 'ex')
+    const excluded = posixJoin(ROOT, 'ex')
     const result = await carveReconcileTargets(
       [
-        { path: join(excluded, 'a.txt'), isDirectory: false },
-        { path: join(ROOT, 'keep.txt'), isDirectory: false },
+        { path: posixJoin(excluded, 'a.txt'), isDirectory: false },
+        { path: posixJoin(ROOT, 'keep.txt'), isDirectory: false },
       ],
       [excluded],
     )
-    expect(result).toEqual({ specs: [join(ROOT, 'keep.txt')], unreadableDirs: [] })
+    expect(result).toEqual({ specs: [posixJoin(ROOT, 'keep.txt')], unreadableDirs: [] })
   })
 
   it('handles the three directory states: excluded, clean, and mixed', async () => {
-    const ex = join(ROOT, 'ex')
-    const exsub = join(ROOT, 'mixed', 'exsub')
+    const ex = posixJoin(ROOT, 'ex')
+    const exsub = posixJoin(ROOT, 'mixed', 'exsub')
     readdirMock.mockImplementation(async (d: string) => {
-      if (d === join(ROOT, 'mixed')) return [dir('exsub'), dir('sibling')]
+      if (d === posixJoin(ROOT, 'mixed')) return [dir('exsub'), dir('sibling')]
       throw new Error('unexpected readdir')
     })
     const result = await carveReconcileTargets(
       [
         { path: ex, isDirectory: true },
-        { path: join(ROOT, 'clean'), isDirectory: true },
-        { path: join(ROOT, 'mixed'), isDirectory: true },
+        { path: posixJoin(ROOT, 'clean'), isDirectory: true },
+        { path: posixJoin(ROOT, 'mixed'), isDirectory: true },
       ],
       [ex, exsub],
     )
     expect(result.specs).toEqual([
-      `${join(ROOT, 'clean')}/...`,
-      `${join(ROOT, 'mixed')}/*`,
-      `${join(ROOT, 'mixed', 'sibling')}/...`,
+      `${posixJoin(ROOT, 'clean')}/...`,
+      `${posixJoin(ROOT, 'mixed')}/*`,
+      `${posixJoin(ROOT, 'mixed', 'sibling')}/...`,
     ])
     expect(result.unreadableDirs).toEqual([])
   })
 
   it('records unreadable directories and still produces the remaining specs', async () => {
-    const bad = join(ROOT, 'bad')
+    const bad = posixJoin(ROOT, 'bad')
     readdirMock.mockImplementation(async () => {
       throw new Error('EACCES')
     })
     const result = await carveReconcileTargets(
       [
         { path: bad, isDirectory: true },
-        { path: join(ROOT, 'ok.txt'), isDirectory: false },
-        { path: join(ROOT, 'clean'), isDirectory: true },
+        { path: posixJoin(ROOT, 'ok.txt'), isDirectory: false },
+        { path: posixJoin(ROOT, 'clean'), isDirectory: true },
       ],
-      [join(bad, 'x')],
+      [posixJoin(bad, 'x')],
     )
     expect(result).toEqual({
-      specs: [join(ROOT, 'ok.txt'), `${join(ROOT, 'clean')}/...`],
+      specs: [posixJoin(ROOT, 'ok.txt'), `${posixJoin(ROOT, 'clean')}/...`],
       unreadableDirs: [bad],
     })
   })
@@ -249,13 +255,13 @@ describe('carveReconcileTargets', () => {
     })
     const result = await carveReconcileTargets(
       [
-        { path: join(ROOT, 'dir'), isDirectory: true },
-        { path: join(ROOT, 'a.txt'), isDirectory: false },
+        { path: posixJoin(ROOT, 'dir'), isDirectory: true },
+        { path: posixJoin(ROOT, 'a.txt'), isDirectory: false },
       ],
       [],
     )
     expect(result).toEqual({
-      specs: [`${join(ROOT, 'dir')}/...`, join(ROOT, 'a.txt')],
+      specs: [`${posixJoin(ROOT, 'dir')}/...`, posixJoin(ROOT, 'a.txt')],
       unreadableDirs: [],
     })
     expect(readdirMock).not.toHaveBeenCalled()

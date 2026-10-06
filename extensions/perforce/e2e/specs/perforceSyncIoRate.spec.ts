@@ -166,7 +166,9 @@ test.describe('@p1 perforce sync I/O rate', () => {
             await page.waitForTimeout(2500)
             const after = await totals()
             return (
-              before.read !== undefined && before.read === after.read && before.wrote !== after.wrote
+              before.read !== undefined &&
+              before.read === after.read &&
+              before.wrote !== after.wrote
             )
           },
           { timeout: 30_000, message: 'the sampler should have switched to write-only ticks' },

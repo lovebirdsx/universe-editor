@@ -31,7 +31,7 @@ import type {
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { chmod, readFile, readdir, stat, writeFile } from 'node:fs/promises'
-import { basename, join, relative } from 'node:path'
+import { basename, relative } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { ConcurrencyGate } from './concurrency.js'
 import {
@@ -46,7 +46,13 @@ import {
   type P4ExecResult,
 } from './p4Service.js'
 import { P4deltaService, type P4deltaRecord, type P4deltaRunResult } from './p4deltaService.js'
-import { summarizeRun, toReconcileFiles, type P4deltaSummary } from './p4deltaParser.js'
+import {
+  summarizeRun,
+  toReconcileFiles,
+  toSyncOutcome,
+  appliedSyncFiles,
+  type P4deltaSummary,
+} from './p4deltaParser.js'
 import {
   discoverClient,
   connectionFor,
@@ -762,6 +768,37 @@ function isP4deltaDepotEntry(spec: string): boolean {
   return match !== null && match[1] !== ''
 }
 
+/** The one revision spec δ's `--to` can carry: a changelist. `@0` is excluded on
+ *  purpose — δ's parser rejects it as a usage error (in p4 it means "before the
+ *  first revision", which would delete every local file). */
+const P4DELTA_SYNC_CHANGELIST_SPEC = /^@[1-9]\d*$/
+
+/**
+ * One δ sync record as a progress tick, or undefined when it is not a file
+ * action. The depot path's last segment is the display name — the same one the
+ * native streaming path shows (`syncLineFile` reads the same way), so the bar
+ * looks identical whichever engine is running.
+ */
+function syncProgressTick(record: P4deltaRecord): { file: string | undefined } | undefined {
+  if (record['kind'] !== 'file' || record['mode'] !== 'sync') return undefined
+  const klass = record['class']
+  if (klass !== 'add' && klass !== 'update' && klass !== 'delete' && klass !== 'resolve') {
+    return undefined
+  }
+  const depotFile = record['depotFile']
+  const name =
+    typeof depotFile === 'string' ? depotFile.slice(depotFile.lastIndexOf('/') + 1) : undefined
+  return { file: name !== undefined && name !== '' ? name : undefined }
+}
+
+/** The revision suffix as a log fragment: `#head` is the default and says
+ *  nothing, anything else (`#4`, `@4521`, `@2026/08/01`) is what makes one get
+ *  different from the next — and it is what a user reading "why did this pull
+ *  land an old revision" needs on the line. */
+function specSuffix(spec: string): string {
+  return spec === '#head' ? '' : ` ${spec}`
+}
+
 /** Creates the RPC-backed working-tree watcher; injectable for tests (mirrors
  *  git's `RepositoryWatcher.CreateFileSystemWatcher`). */
 export type CreateFileSystemWatcher = (globPattern: GlobPattern) => FileSystemWatcher
@@ -803,7 +840,7 @@ export interface PerforceClientOptions {
   /**
    * The δ engine this session may use, or absent when it must not (disabled in
    * the settings, no executable found, or an executable that failed its
-   * `--help` probe — all decided in `extension.ts`, the only place workspace
+   * `--version` probe — all decided in `extension.ts`, the only place workspace
    * configuration is read). `exe` is a probed p4delta binary; the client builds
    * its own {@link P4deltaService} around it and can be re-pointed at runtime
    * via {@link PerforceClient.setP4delta}.
@@ -813,7 +850,10 @@ export interface PerforceClientOptions {
    * to resolve `p4` itself (a script override), because δ would otherwise look
    * one up on its own and hand files to a different client.
    */
-  readonly p4delta?: { readonly exe: string; readonly extraEnv?: Readonly<Record<string, string>> }
+  readonly p4delta?: {
+    readonly exe: string
+    readonly extraEnv?: Readonly<Record<string, string>>
+  }
 }
 
 export class PerforceClient {
@@ -826,15 +866,16 @@ export class PerforceClient {
    *  (no option passed, the setting is off, or the engine was disarmed — see
    *  {@link _p4deltaDisarmed}). */
   private _p4delta: P4deltaService | undefined
-  /** Consecutive δ runs that failed to answer — scans and narrow queries share
-   *  one ladder ({@link PerforceClient._narrowQueryBatchViaP4delta}). Reset by
-   *  any run that concluded and by {@link setP4delta}; at
-   *  {@link P4DELTA_MAX_CONSECUTIVE_FAILURES} the engine is disarmed. */
+  /** Consecutive δ runs that failed to answer — gets, writes, narrow queries
+   *  and scans share one ladder. Reset by any run that concluded and by
+   *  {@link setP4delta}; at {@link P4DELTA_MAX_CONSECUTIVE_FAILURES} the engine
+   *  is disarmed. */
   private _p4deltaFailures = 0
-  /** Latched once the failure ladder trips: every later scan AND narrow query
-   *  this session runs native ({@link PerforceClient._p4deltaEngine}), and
-   *  only a reconfiguration ({@link setP4delta}) clears it. A success does not:
-   *  the engine already proved it cannot answer this workspace's questions. */
+  /** Latched once the failure ladder trips: every later get, write, narrow query
+   *  and scan this session runs native ({@link PerforceClient._p4deltaEngine}),
+   *  and only a reconfiguration ({@link setP4delta}) clears it. A success does
+   *  not: the engine already proved it cannot answer this workspace's
+   *  questions. */
   private _p4deltaDisarmed = false
   /** Which engine the current scan round writes checkpoints under — part of the
    *  key fingerprint ({@link _reconcileScanFingerprint}), so the two engines'
@@ -1100,6 +1141,10 @@ export class PerforceClient {
   /** Threads for `sync --parallel=threads=N`; 0 syncs serially. Mutable so the
    *  `perforce.syncParallelThreads` setting hot-applies without a reload. */
   private _syncParallelThreads = 0
+  /** The `syncParallelThreads` value already noted as inapplicable to δ, so the
+   *  advisory is one line per configuration instead of one per get (the default
+   *  is 4, i.e. every get would otherwise print it). */
+  private _p4deltaParallelNoted: number | undefined
   /** Output-channel logger, from {@link PerforceClientOptions.log}. */
   private readonly _log: ((msg: string) => void) | undefined
 
@@ -1152,7 +1197,9 @@ export class PerforceClient {
           )
     if (exe !== undefined) this._log?.(`[perforce] p4delta engine: ${exe}`)
     else if (had)
-      this._log?.('[perforce] p4delta engine turned off; scans and narrow queries run on p4')
+      this._log?.(
+        '[perforce] p4delta engine turned off; gets, writes, narrow queries and scans run on p4',
+      )
   }
 
   /** δ's fallback ladder as tests observe it (production code has no caller):
@@ -2468,16 +2515,23 @@ export class PerforceClient {
 
   /**
    * δ for every question this session routes to it — narrow queries
-   * ({@link _narrowQuerySpecsFor}) and the three write operations that have a δ
-   * counterpart ({@link _mutateWrite}) — or undefined while they run native.
+   * ({@link _narrowQuerySpecsFor}), the three write operations that have a δ
+   * counterpart ({@link _mutateWrite}) and the plain get ({@link sync}) — or
+   * undefined while they run native.
    *
    * Deliberately the SCAN's verdict ({@link _reconcileScanEngine}) rather than
    * "an engine is configured": the scan round is the one that actually proved δ
    * can answer this workspace, and a second, independent health judgement
    * running alongside it would eventually disagree with the first. So before the
    * first scan round — and for the rest of the session once the ladder trips —
-   * both narrow queries and writes are native, and only {@link setP4delta} (a
-   * reconfiguration) clears the latch.
+   * narrow queries, writes and gets are all native, and only {@link setP4delta}
+   * (a reconfiguration) clears the latch.
+   *
+   * The get needs nothing further: a build that answers this probe is at least
+   * `MIN_P4DELTA_VERSION` (0.1.6, `p4deltaService.ts`), i.e. one whose `--sync`
+   * is the NORMAL sync. Before the sync split `--sync` WAS the force repair and
+   * would overwrite uncollected local work, which is why such builds are
+   * rejected at the probe instead.
    */
   private _p4deltaEngine(): P4deltaService | undefined {
     if (this._p4deltaDisarmed || this._reconcileScanEngine !== 'p4delta') return undefined
@@ -2895,7 +2949,7 @@ export class PerforceClient {
    * {@link _mutateVia}'s three exits stay the native ones.
    *
    * Success is the contract's only positive proof — a summary with `ok:true` —
-   * and everything else is a failure ({@link _p4deltaWriteFailure}): no summary
+   * and everything else is a failure ({@link _p4deltaAppliedRunFailure}): no summary
    * (killed / crashed), a non-JSON stdout line (not the engine we think it is),
    * exit 2 (usage error), `ok:false` (a partial stream). The reason, plus δ's
    * stderr tail, becomes the `stderr` the failure toast renders.
@@ -2933,7 +2987,7 @@ export class PerforceClient {
     if (signal.aborted) return { stdout: '', stderr: '', exitCode: 0 }
 
     const summary = summarizeRun(result)
-    const failure = this._p4deltaWriteFailure(result, summary, mode)
+    const failure = this._p4deltaAppliedRunFailure(result, summary, mode)
     if (failure === undefined) {
       this._p4deltaFailures = 0
       const counts = Object.entries(summary?.counts ?? {})
@@ -2965,25 +3019,25 @@ export class PerforceClient {
   }
 
   /**
-   * Why a δ WRITE does not count as done, or undefined when it does. The same
-   * contract rules {@link _p4deltaRunFailure} applies, with one deliberate
-   * difference: a write has no "nothing to do" success, so `ok:false` is always
-   * a failure here — including `no-entry-matched`, which a scan and a narrow
-   * query read as the complete answer "there is nothing there". A user who asked
-   * to collect or clean a set of paths, none of which exist, is owed the toast
-   * rather than a silent success.
+   * Why a δ run does not count as done, or undefined when it does. One reader
+   * for both callers — {@link _runP4deltaWrite} and the get — because the
+   * contract's positive proof is the same for both: a summary that is `ok`, that
+   * APPLIED (`applied:true`, the contract's `-a` marker) and that answers the
+   * MODE this operation asked for.
    *
-   * `ok:true` alone is NOT success: the summary also has to say the run APPLIED
-   * (`applied:true`, the contract's `-a` marker) and answered the MODE this
-   * operation asked for. A records-complete `ok:true` preview — a build that
-   * ignored `-a`, or a reply for the other direction — would otherwise exit the
-   * success path, which drops the touched paths from the drift set and reports
-   * them handled while nothing on disk or server changed.
+   * A records-complete `ok:true` preview — a build that ignored `-a`, or a reply
+   * for the other direction — would otherwise exit the success path, which drops
+   * the touched paths from the drift set and reports them handled while nothing
+   * on disk or server changed. `ok:false` is always a failure here, including
+   * `no-entry-matched`: a scan and a narrow query read that as the complete
+   * answer "there is nothing there", but a user who asked to collect, clean or
+   * get a set of paths, none of which exist, is owed the toast rather than a
+   * silent success.
    */
-  private _p4deltaWriteFailure(
+  private _p4deltaAppliedRunFailure(
     result: P4deltaRunResult,
     summary: P4deltaSummary | undefined,
-    expectedMode: 'open' | 'clean',
+    expectedMode: 'open' | 'clean' | 'sync',
   ): string | undefined {
     if (result.sawNonJsonStdout) return 'stdout carried a non-JSON line'
     if (result.code === 2) return 'usage error (exit 2)'
@@ -3002,22 +3056,32 @@ export class PerforceClient {
    * The reason this write's specs have to run on p4 instead of δ, or undefined
    * when δ's scope grammar reads all of them. A safety net, not a health
    * verdict: it never touches the fallback ladder, and a spec the command layer
-   * forgot to stop carving (`<dir>/*`) only costs the slow native path.
-   *
-   * Two shapes are outside that grammar: a p4 filespec metacharacter (δ reads
-   * its entries literally, so a `*` would name a file nobody has —
-   * {@link P4DELTA_NARROW_SPEC_METACHARS}), and depot syntax other than the
-   * `//<depot>/...` form the contract translates (`//...`, the whole-client
-   * wildcard, included).
+   * forgot to stop carving (`<dir>/*`) only costs the slow native path. The
+   * question asked of each spec is {@link _p4deltaEntryReject}'s.
    */
   private _p4deltaWriteSpecReject(specs: readonly string[]): string | undefined {
     for (const spec of specs) {
-      if (P4DELTA_SCOPE_METACHARS.test(spec)) {
-        return `spec carries a p4 filespec metacharacter (${spec})`
-      }
-      if (spec.startsWith('//') && !isP4deltaDepotEntry(spec)) {
-        return `spec is not a p4delta scope entry (${spec})`
-      }
+      const rejected = this._p4deltaEntryReject(spec)
+      if (rejected !== undefined) return rejected
+    }
+    return undefined
+  }
+
+  /**
+   * The two shapes a single scope entry can have that δ's scope grammar cannot
+   * read: a p4 filespec metacharacter (δ reads its entries LITERALLY, so a `*`
+   * would name a file nobody has — {@link P4DELTA_SCOPE_METACHARS}) and depot
+   * syntax other than the `//<depot>/...` form the contract translates
+   * (`//...`, the whole-client wildcard, included). One entry outside the
+   * grammar poisons the whole call — the engines cannot split a filespec list —
+   * so the get and the write gate ask the same question of every entry, here.
+   */
+  private _p4deltaEntryReject(entry: string): string | undefined {
+    if (P4DELTA_SCOPE_METACHARS.test(entry)) {
+      return `entry carries a p4 filespec metacharacter (${entry})`
+    }
+    if (entry.startsWith('//') && !isP4deltaDepotEntry(entry)) {
+      return `entry is not a p4delta depot entry (${entry})`
     }
     return undefined
   }
@@ -3938,7 +4002,7 @@ export class PerforceClient {
   // --- Sync (get revision) -------------------------------------------------
 
   /**
-   * Run `p4 sync` and report what actually landed.
+   * Run a get and report what actually landed.
    *
    * Deliberately not routed through {@link _mutate}: that returns a bare boolean,
    * and a sync's whole point is the summary — how many files updated, how many
@@ -3951,30 +4015,14 @@ export class PerforceClient {
    * it re-fetches files p4 thinks you already have, and overwrites writable
    * local files, so the caller must confirm first.
    *
-   * `onProgress` fires per output line p4 emits while the sync runs, for a live
-   * progress bar. Streaming and the final summary are one source of truth: both
-   * classify lines with the same {@link classifySyncLine}, so the bar can never
-   * drift from the counts the user is shown at the end. On the streaming path
-   * the buffered stdout never materializes (p4Service skips it — a wide sync is
-   * what overflowed the old 256MB output cap), so the summary is accumulated
-   * line-by-line as p4 emits it instead of re-parsed from a full string.
-   *
-   * No pre-flight `sync -n` count: on a wide scope the dry run walks the same
-   * server comparison as the sync itself, so it can hold the user at "counting"
-   * for close to a minute before the first byte moves — pure cost, no transfer.
-   * The bar reports `done` plus the elapsed clock instead of a `done/total`.
-   *
-   * Deliberately stays on p4 even when δ answers this session's scans and writes
-   * — including a FORCE get, which is where δ's `--sync` would otherwise fit.
-   * δ's `--sync` is `p4 sync -f` semantics (the README says so outright: local
-   * changes on not-opened files ARE overwritten), while this method's default is
-   * a plain `p4 sync`, whose noclobber behavior REFUSES such files and reports
-   * them in `refusedFiles` for the caller to offer collecting. Mapping that
-   * non-force default onto an implementation that always clobbers would discard
-   * the user's uncollected work — a data loss, not a performance tradeoff. The
-   * force path could match δ, but it exists precisely to overwrite files the
-   * user just saw diffed and confirmed, so the one get where clobbering is
-   * intended is also the one least worth an engine swap.
+   * Engine-agnostic by construction: this method owns everything the user sees
+   * (busy label, progress lifecycle, the external-change suspension, cancel) and
+   * hands the run itself to {@link _syncViaP4delta} when this session may use it,
+   * else to {@link _syncViaP4}. The δ path returns undefined when it concluded
+   * nothing AND wrote nothing, which is the cue to take the native path in the
+   * same call — the user asked for a get, and one served slower beats one
+   * refused. Both paths return the same {@link SyncRunResult}, so every caller
+   * (and the whole of `runSync`'s UI) is engine-agnostic.
    */
   async sync(
     spec: string,
@@ -3990,17 +4038,6 @@ export class PerforceClient {
     // `diskWrites`), so there is no single "the" run to match, and the get the
     // user most recently asked for is the label they are looking for.
     this._lastSyncSpec = spec
-    const targets = this._syncTargets(spec, options?.scope)
-    const parallel =
-      this._syncParallelThreads > 0 ? [`--parallel=threads=${this._syncParallelThreads}`] : []
-    const args = ['sync', ...parallel, ...(options?.force === true ? ['-f'] : []), ...targets]
-    const onProgress = options?.onProgress
-    // The `-f` marker is the only trace of a force-get in the log: a plain get
-    // and a force that both succeed print the same counts, and p4's own command
-    // line never reaches this channel. It goes on every outcome, not just the
-    // summary — "was the run that just clobbered me a force-get?" is asked
-    // about the refusals and the cancels at least as often as the successes.
-    const forceMark = options?.force === true ? ' -f' : ''
     this._suppressExternalChanges()
     // Suspend external-drift handling for the sync's whole lifecycle: its own
     // write flood would otherwise leak past the 5s window (a wide sync far
@@ -4014,248 +4051,574 @@ export class PerforceClient {
       // The await is load-bearing: without it the finally below would release
       // the suspension the moment this function returns, before the sync settles.
       return await this._withBusy(localize('perforce.busy.sync', 'Syncing'), async () => {
-        // When streaming, the authoritative summary is accumulated line-by-line as
-        // p4 emits it — the buffered stdout never materializes (p4Service skips it
-        // entirely on this path), so `parseSyncOutput` would see an empty string.
-        // Non-applied outcome lines are also kept verbatim: on a non-zero exit the
-        // error classifier/toast reads stdout+stderr, and stdout is empty here, so
-        // these lines are the only record of what p4 said on that channel. Only the
-        // non-applied outcomes are kept — applied lines are the bulk of a wide sync
-        // and are counted, not stored — so the list is bounded by the run's
-        // exceptional files, not its size.
-        let applied = 0
-        let keptOpen = 0
-        let mustResolve = 0
-        let refusedModified = 0
-        let refusedOverwrite = 0
-        // Measured on P4D 2024.2 the "file(s) up-to-date." notice arrives on
-        // stderr, but parseSyncOutput checks BOTH channels — so the streaming
-        // path watches stdout for it too, keeping the same whole-run verdict
-        // however a future server reports it. It is a whole-run verdict, not a
-        // counted outcome, so it doesn't touch `done`.
-        let sawUpToDateLine = false
-        const outcomeLines: string[] = []
-        // The applied lines as structured rows, kept so the success tail can subtract
-        // exactly the files p4 rewrote from the drift set (see `_removeDriftForSyncRun`).
-        // Only the streaming path needs a running list — the buffered path re-parses
-        // stdout whole — and only on a streaming run is the line otherwise gone once
-        // counted.
-        const appliedRows: SyncPreviewFile[] = []
-        // Lines classifySyncLine couldn't place. Logged whole and as they arrive —
-        // a `--parallel` run whose output shape differs from serial would otherwise
-        // leave the bar at `Syncing 0` with no trace of what p4 said, and the end
-        // of a long run is too late to learn the first refusal's wording. Capped so
-        // a pathological transcript can't flood the output channel.
-        let unrecognizedLogged = 0
-        const MAX_UNRECOGNIZED_LOGGED = 20
-        const doneCount = (): number =>
-          applied + keptOpen + mustResolve + refusedModified + refusedOverwrite
-        const onStdoutLine = onProgress
-          ? (line: string): void => {
-              const kind = classifySyncLine(line)
-              if (kind === undefined) {
-                if (/file\(s\) up-to-date/i.test(line)) sawUpToDateLine = true
-                else if (unrecognizedLogged < MAX_UNRECOGNIZED_LOGGED) {
-                  unrecognizedLogged++
-                  this._log?.(`[perforce] sync: unrecognized stdout line: ${line}`)
-                }
-                return
-              }
-              if (kind === 'applied') {
-                applied++
-                const row = parseSyncAppliedLine(line, this.root)
-                if (row) appliedRows.push(row)
-              } else {
-                if (kind === 'keptOpen') keptOpen++
-                else if (kind === 'mustResolve') mustResolve++
-                else if (kind === 'refused') refusedModified++
-                else refusedOverwrite++
-                outcomeLines.push(line)
-              }
-              const file = syncLineFile(line)
-              this._setSyncProgress(doneCount(), file)
-              onProgress({ done: doneCount(), file })
-            }
-          : undefined
-        try {
-          const { value: result, cancelled } = await this._cancellable(async (signal) => {
-            // Seed the bar immediately — with no pre-flight count, the first line
-            // can take a while on a wide scope (and `--parallel` may hold stdout
-            // longer still), and without this frame the bar sits on the bare
-            // fallback label for that whole span.
-            if (onStdoutLine) this._setSyncProgress(0, undefined)
-            return this._p4.exec(args, {
-              // Sync moves content: its runtime scales with the bytes fetched, so
-              // CONTENT_TRANSFER_EXEC disarms the `commandTimeout` watchdog that
-              // would otherwise kill a healthy whole-repo pull at 600s. The signal
-              // from `_cancellable` is the only stop now.
-              signal,
-              ...CONTENT_TRANSFER_EXEC,
-              // Both are streaming-path only: a non-streaming sync publishes no
-              // progress at all, so there would be nothing for a sample to update.
-              ...(onStdoutLine
-                ? { onStdoutLine, onSpawn: (pid: number) => this._onSyncP4Spawn(pid) }
-                : {}),
-            })
-          })
-          // Clear as soon as the p4 run settles — the count belongs to the
-          // "Syncing" label, and the follow-up refresh runs under its own busy
-          // label ("Refreshing"). The finally below still covers the throws
-          // between here and there (classify, parse, cache invalidation).
-          this._clearSyncProgress()
-          if (cancelled) {
-            // The user asked for this — log it, don't toast it, and still refresh so
-            // the view reflects whatever landed before the abort. Whatever p4 already
-            // reported as applied IS on disk matching its have revision, so those
-            // drift rows are subtracted exactly as on a clean exit.
-            this._log?.(`[perforce] sync${forceMark} cancelled by user`)
-            // Whatever p4 already reported as applied IS on disk matching its have
-            // revision, so those drift rows are subtracted exactly as on a clean
-            // exit. Streaming runs collected them on the way through; a buffered run
-            // re-parses the partial stdout.
-            this._removeDriftForSyncRun(
-              onStdoutLine ? appliedRows : parseSyncApplied(result.stdout, this.root),
-              [],
-              [],
-            )
-            await this._refreshAfterMutation()
-            this._clearBehindDecorations()
-            return {
-              ok: false,
-              cancelled: true,
-              summary: undefined,
-              refusedFiles: [],
-              refusedOverwriteFiles: [],
-              error: undefined,
-            }
-          }
-          const summary: SyncRunSummary = onStdoutLine
-            ? {
-                applied,
-                keptOpen,
-                mustResolve,
-                refusedModified,
-                refusedOverwrite,
-                upToDate: sawUpToDateLine || /file\(s\) up-to-date/i.test(result.stderr),
-                unrecognized: false,
-              }
-            : parseSyncOutput(result.stdout, result.stderr)
-          const refusedFiles = onStdoutLine
-            ? parseSyncRefused(outcomeLines.join('\n'), this.root)
-            : parseSyncRefused(result.stdout, this.root)
-          const refusedOverwriteFiles = onStdoutLine
-            ? parseSyncOverwriteRefused(outcomeLines.join('\n'), this.root)
-            : parseSyncOverwriteRefused(result.stdout, this.root)
-          const appliedFiles = onStdoutLine
-            ? appliedRows
-            : parseSyncApplied(result.stdout, this.root)
-          // Zero counted lines on a streaming run means the bar sat at `Syncing 0`
-          // the whole run; the per-line log above already captured what p4 actually
-          // said, so all that's left is to say so once.
-          if (onStdoutLine && doneCount() === 0 && !sawUpToDateLine && unrecognizedLogged > 0) {
-            this._log?.(
-              `[perforce] sync: ${unrecognizedLogged} unrecognized line(s) logged above; none counted`,
-            )
-          }
-          // Measured on P4D 2024.2: "file(s) up-to-date." arrives on **stderr with
-          // exit 0**. Checked before the exit code so the outcome is the same however
-          // a given server reports it — a future non-zero variant must not read as a
-          // failure, and this one must not read as "applied 0 files, something's off".
-          if (
-            summary.upToDate &&
-            summary.applied === 0 &&
-            summary.refusedModified === 0 &&
-            summary.refusedOverwrite === 0
-          ) {
-            this._log?.(`[perforce] sync${forceMark}: already up to date`)
-            return {
-              ok: true,
-              cancelled: false,
-              summary,
-              refusedFiles,
-              refusedOverwriteFiles,
-              error: undefined,
-            }
-          }
-          if (result.exitCode !== 0) {
-            // Streaming runs have no buffered stdout, so give the classifier the
-            // outcome lines collected on the way through — a `must resolve` abort
-            // would otherwise be invisible (it prints to stdout, not stderr).
-            const errorInput = onStdoutLine
-              ? { ...result, stdout: outcomeLines.join('\n') }
-              : result
-            const error = classifySyncError(errorInput)
-            this._log?.(
-              `[perforce] sync${forceMark} failed (${error.kind}): ${p4ErrorText(errorInput)}`,
-            )
-            await this._refreshAfterMutation()
-            this._clearBehindDecorations()
-            return {
-              ok: false,
-              cancelled: false,
-              summary,
-              refusedFiles,
-              refusedOverwriteFiles,
-              error,
-            }
-          }
-          if (summary.unrecognized) {
-            // Exit 0 with output we couldn't account for: never silent — the counts
-            // shown to the user would otherwise read as "nothing happened".
-            this._log?.(
-              `[perforce] sync: output not parseable, reporting as unknown — ${result.stdout.trim().slice(0, 500)}`,
-            )
-          }
-          // The `-f` marker is the only trace of a force-get in the summary: a
-          // plain get and a force that both succeed print the same counts, so
-          // without it "which operation overwrote my local copy" has no answer
-          // in the log. p4's own command line never reaches this channel.
-          this._log?.(
-            `[perforce] sync${forceMark} ${spec}: ${summary.applied} applied, ${summary.keptOpen} kept open, ` +
-              `${summary.mustResolve} need resolve, ${summary.refusedModified} refused (locally modified), ` +
-              `${summary.refusedOverwrite} refused (untracked file in the way)`,
-          )
-          // A sync only ever REMOVES drift, never adds it: a file p4 rewrote now
-          // matches its (new) have revision, so its drift row is stale; a file p4
-          // refused was left on disk untouched, so its row must survive. Subtract
-          // exactly the server-reported applied set — never the sync targets, which
-          // include up-to-date files that still carry real drift.
-          this._removeDriftForSyncRun(appliedFiles, refusedFiles, refusedOverwriteFiles)
-          if (appliedFiles.length < summary.applied) {
-            // A line the counter accepted but extraction couldn't place: the drift
-            // row for that file is still standing, so re-ask reconcile about what's
-            // left instead of guessing at the gap.
-            this._log?.(
-              `[perforce] sync: ${summary.applied - appliedFiles.length} applied line(s) yielded no local path; revalidating the drift rows`,
-            )
-            await this._revalidateDriftAfterSync()
-          }
-          // A sync rewrites have-revisions across the scope, so every path-keyed
-          // cache entry (fstat/print/filelog) is potentially stale — full clear.
-          this._invalidateWorkspaceState()
-          this._clearBehindDecorations()
-          await this._refreshAfterMutation()
-          return {
-            ok: true,
-            cancelled: false,
-            summary,
-            refusedFiles,
-            refusedOverwriteFiles,
-            error: undefined,
-          }
-        } finally {
-          // Backstop for the throws between the settle and here (classify, parse,
-          // cache invalidation): the bar must never show a stale count.
-          this._clearSyncProgress()
+        // A force get is p4-only by construction: its scope filespecs are the
+        // exact `#rev`s a refusal named — a spelling δ's scope grammar does not
+        // read — and it exists precisely to overwrite files the user just saw
+        // diffed and confirmed, so it is the one get where an engine swap has
+        // the worst failure mode and the least to gain.
+        const engine = options?.force === true ? undefined : this._p4deltaEngine()
+        if (engine !== undefined) {
+          const viaDelta = await this._syncViaP4delta(engine, spec, options)
+          if (viaDelta !== undefined) return viaDelta
         }
+        return await this._syncViaP4(spec, options)
       })
     } finally {
-      // Paired with the arm below `_withBusy`: if `_withBusy`'s own emit (or
+      // Paired with the arm above `_withBusy`: if `_withBusy`'s own emit (or
       // anything in the callback) throws before the settle, the suspension must
       // not outlive the run — this finally is the single release point on every
       // path (success / cancel / throw).
       this._endExternalSuspend()
+      // The same single release point for the progress bar, and the reason it
+      // lives HERE rather than only in the two engine bodies: a count that
+      // outlives its run is not just cosmetic — the bar keeps its 1s heartbeat
+      // armed, the next run inherits this run's `startedAt` (elapsed would count
+      // from the wrong origin), and every later busy operation renders THIS
+      // run's count under its own label. `_clearSyncProgress` is idempotent, so
+      // both bodies clearing early costs nothing.
+      this._clearSyncProgress()
     }
+  }
+
+  /**
+   * The native get: `p4 sync`.
+   *
+   * `onProgress` fires per output line p4 emits while the sync runs, for a live
+   * progress bar. Streaming and the final summary are one source of truth: both
+   * classify lines with the same {@link classifySyncLine}, so the bar can never
+   * drift from the counts the user is shown at the end. On the streaming path
+   * the buffered stdout never materializes (p4Service skips it — a wide sync is
+   * what overflowed the old 256MB output cap), so the summary is accumulated
+   * line-by-line as p4 emits it instead of re-parsed from a full string.
+   *
+   * No pre-flight `sync -n` count: on a wide scope the dry run walks the same
+   * server comparison as the sync itself, so it can hold the user at "counting"
+   * for close to a minute before the first byte moves — pure cost, no transfer.
+   * The bar reports `done` plus the elapsed clock instead of a `done/total`.
+   */
+  private async _syncViaP4(
+    spec: string,
+    options?: {
+      scope?: readonly string[]
+      force?: boolean
+      onProgress?: (progress: { done: number; file: string | undefined }) => void
+    },
+  ): Promise<SyncRunResult> {
+    const targets = this._syncTargets(spec, options?.scope)
+    const parallel =
+      this._syncParallelThreads > 0 ? [`--parallel=threads=${this._syncParallelThreads}`] : []
+    const args = ['sync', ...parallel, ...(options?.force === true ? ['-f'] : []), ...targets]
+    const onProgress = options?.onProgress
+    // The `-f` marker is the only trace of a force-get in the log: a plain get
+    // and a force that both succeed print the same counts, and p4's own command
+    // line never reaches this channel. It goes on every outcome, not just the
+    // summary — "was the run that just clobbered me a force-get?" is asked
+    // about the refusals and the cancels at least as often as the successes.
+    const forceMark = options?.force === true ? ' -f' : ''
+    // When streaming, the authoritative summary is accumulated line-by-line as
+    // p4 emits it — the buffered stdout never materializes (p4Service skips it
+    // entirely on this path), so `parseSyncOutput` would see an empty string.
+    // Non-applied outcome lines are also kept verbatim: on a non-zero exit the
+    // error classifier/toast reads stdout+stderr, and stdout is empty here, so
+    // these lines are the only record of what p4 said on that channel. Only the
+    // non-applied outcomes are kept — applied lines are the bulk of a wide sync
+    // and are counted, not stored — so the list is bounded by the run's
+    // exceptional files, not its size.
+    let applied = 0
+    let keptOpen = 0
+    let mustResolve = 0
+    let refusedModified = 0
+    let refusedOverwrite = 0
+    // Measured on P4D 2024.2 the "file(s) up-to-date." notice arrives on
+    // stderr, but parseSyncOutput checks BOTH channels — so the streaming
+    // path watches stdout for it too, keeping the same whole-run verdict
+    // however a future server reports it. It is a whole-run verdict, not a
+    // counted outcome, so it doesn't touch `done`.
+    let sawUpToDateLine = false
+    const outcomeLines: string[] = []
+    // The applied lines as structured rows, kept so the success tail can subtract
+    // exactly the files p4 rewrote from the drift set (see `_removeDriftForSyncRun`).
+    // Only the streaming path needs a running list — the buffered path re-parses
+    // stdout whole — and only on a streaming run is the line otherwise gone once
+    // counted.
+    const appliedRows: SyncPreviewFile[] = []
+    // Lines classifySyncLine couldn't place. Logged whole and as they arrive —
+    // a `--parallel` run whose output shape differs from serial would otherwise
+    // leave the bar at `Syncing 0` with no trace of what p4 said, and the end
+    // of a long run is too late to learn the first refusal's wording. Capped so
+    // a pathological transcript can't flood the output channel.
+    let unrecognizedLogged = 0
+    const MAX_UNRECOGNIZED_LOGGED = 20
+    const doneCount = (): number =>
+      applied + keptOpen + mustResolve + refusedModified + refusedOverwrite
+    const onStdoutLine = onProgress
+      ? (line: string): void => {
+          const kind = classifySyncLine(line)
+          if (kind === undefined) {
+            if (/file\(s\) up-to-date/i.test(line)) sawUpToDateLine = true
+            else if (unrecognizedLogged < MAX_UNRECOGNIZED_LOGGED) {
+              unrecognizedLogged++
+              this._log?.(`[perforce] sync: unrecognized stdout line: ${line}`)
+            }
+            return
+          }
+          if (kind === 'applied') {
+            applied++
+            const row = parseSyncAppliedLine(line, this.root)
+            if (row) appliedRows.push(row)
+          } else {
+            if (kind === 'keptOpen') keptOpen++
+            else if (kind === 'mustResolve') mustResolve++
+            else if (kind === 'refused') refusedModified++
+            else refusedOverwrite++
+            outcomeLines.push(line)
+          }
+          const file = syncLineFile(line)
+          this._setSyncProgress(doneCount(), file)
+          onProgress({ done: doneCount(), file })
+        }
+      : undefined
+    try {
+      const { value: result, cancelled } = await this._cancellable(async (signal) => {
+        // Seed the bar immediately — with no pre-flight count, the first line
+        // can take a while on a wide scope (and `--parallel` may hold stdout
+        // longer still), and without this frame the bar sits on the bare
+        // fallback label for that whole span.
+        if (onStdoutLine) this._setSyncProgress(0, undefined)
+        return this._p4.exec(args, {
+          // Sync moves content: its runtime scales with the bytes fetched, so
+          // CONTENT_TRANSFER_EXEC disarms the `commandTimeout` watchdog that
+          // would otherwise kill a healthy whole-repo pull at 600s. The signal
+          // from `_cancellable` is the only stop now.
+          signal,
+          ...CONTENT_TRANSFER_EXEC,
+          // Both are streaming-path only: a non-streaming sync publishes no
+          // progress at all, so there would be nothing for a sample to update.
+          ...(onStdoutLine
+            ? { onStdoutLine, onSpawn: (pid: number) => this._onSyncP4Spawn(pid) }
+            : {}),
+        })
+      })
+      // Clear as soon as the p4 run settles — the count belongs to the
+      // "Syncing" label, and the follow-up refresh runs under its own busy
+      // label ("Refreshing"). The finally below still covers the throws
+      // between here and there (classify, parse, cache invalidation).
+      this._clearSyncProgress()
+      if (cancelled) {
+        // The user asked for this — log it, don't toast it, and still refresh so
+        // the view reflects whatever landed before the abort. Whatever p4 already
+        // reported as applied IS on disk matching its have revision, so those
+        // drift rows are subtracted exactly as on a clean exit.
+        this._log?.(`[perforce] sync${forceMark} cancelled by user`)
+        // Whatever p4 already reported as applied IS on disk matching its have
+        // revision, so those drift rows are subtracted exactly as on a clean
+        // exit. Streaming runs collected them on the way through; a buffered run
+        // re-parses the partial stdout.
+        this._removeDriftForSyncRun(
+          onStdoutLine ? appliedRows : parseSyncApplied(result.stdout, this.root),
+          [],
+          [],
+        )
+        await this._refreshAfterMutation()
+        this._clearBehindDecorations()
+        return {
+          ok: false,
+          cancelled: true,
+          summary: undefined,
+          refusedFiles: [],
+          refusedOverwriteFiles: [],
+          error: undefined,
+        }
+      }
+      const summary: SyncRunSummary = onStdoutLine
+        ? {
+            applied,
+            keptOpen,
+            mustResolve,
+            refusedModified,
+            refusedOverwrite,
+            upToDate: sawUpToDateLine || /file\(s\) up-to-date/i.test(result.stderr),
+            unrecognized: false,
+          }
+        : parseSyncOutput(result.stdout, result.stderr)
+      const refusedFiles = onStdoutLine
+        ? parseSyncRefused(outcomeLines.join('\n'), this.root)
+        : parseSyncRefused(result.stdout, this.root)
+      const refusedOverwriteFiles = onStdoutLine
+        ? parseSyncOverwriteRefused(outcomeLines.join('\n'), this.root)
+        : parseSyncOverwriteRefused(result.stdout, this.root)
+      const appliedFiles = onStdoutLine ? appliedRows : parseSyncApplied(result.stdout, this.root)
+      // Zero counted lines on a streaming run means the bar sat at `Syncing 0`
+      // the whole run; the per-line log above already captured what p4 actually
+      // said, so all that's left is to say so once.
+      if (onStdoutLine && doneCount() === 0 && !sawUpToDateLine && unrecognizedLogged > 0) {
+        this._log?.(
+          `[perforce] sync: ${unrecognizedLogged} unrecognized line(s) logged above; none counted`,
+        )
+      }
+      // Measured on P4D 2024.2: "file(s) up-to-date." arrives on **stderr with
+      // exit 0**. Checked before the exit code so the outcome is the same however
+      // a given server reports it — a future non-zero variant must not read as a
+      // failure, and this one must not read as "applied 0 files, something's off".
+      if (
+        summary.upToDate &&
+        summary.applied === 0 &&
+        summary.refusedModified === 0 &&
+        summary.refusedOverwrite === 0
+      ) {
+        this._log?.(`[perforce] sync${forceMark}: already up to date`)
+        return {
+          ok: true,
+          cancelled: false,
+          summary,
+          refusedFiles,
+          refusedOverwriteFiles,
+          error: undefined,
+        }
+      }
+      if (result.exitCode !== 0) {
+        // Streaming runs have no buffered stdout, so give the classifier the
+        // outcome lines collected on the way through — a `must resolve` abort
+        // would otherwise be invisible (it prints to stdout, not stderr).
+        const errorInput = onStdoutLine ? { ...result, stdout: outcomeLines.join('\n') } : result
+        const error = classifySyncError(errorInput)
+        this._log?.(
+          `[perforce] sync${forceMark} failed (${error.kind}): ${p4ErrorText(errorInput)}`,
+        )
+        await this._refreshAfterMutation()
+        this._clearBehindDecorations()
+        return {
+          ok: false,
+          cancelled: false,
+          summary,
+          refusedFiles,
+          refusedOverwriteFiles,
+          error,
+        }
+      }
+      if (summary.unrecognized) {
+        // Exit 0 with output we couldn't account for: never silent — the counts
+        // shown to the user would otherwise read as "nothing happened".
+        this._log?.(
+          `[perforce] sync: output not parseable, reporting as unknown — ${result.stdout.trim().slice(0, 500)}`,
+        )
+      }
+      // The `-f` marker is the only trace of a force-get in the summary: a
+      // plain get and a force that both succeed print the same counts, so
+      // without it "which operation overwrote my local copy" has no answer
+      // in the log. p4's own command line never reaches this channel.
+      this._log?.(
+        `[perforce] sync${forceMark} ${spec}: ${summary.applied} applied, ${summary.keptOpen} kept open, ` +
+          `${summary.mustResolve} need resolve, ${summary.refusedModified} refused (locally modified), ` +
+          `${summary.refusedOverwrite} refused (untracked file in the way)`,
+      )
+      // A sync only ever REMOVES drift, never adds it: a file p4 rewrote now
+      // matches its (new) have revision, so its drift row is stale; a file p4
+      // refused was left on disk untouched, so its row must survive. Subtract
+      // exactly the server-reported applied set — never the sync targets, which
+      // include up-to-date files that still carry real drift.
+      this._removeDriftForSyncRun(appliedFiles, refusedFiles, refusedOverwriteFiles)
+      if (appliedFiles.length < summary.applied) {
+        // A line the counter accepted but extraction couldn't place: the drift
+        // row for that file is still standing, so re-ask reconcile about what's
+        // left instead of guessing at the gap.
+        this._log?.(
+          `[perforce] sync: ${summary.applied - appliedFiles.length} applied line(s) yielded no local path; revalidating the drift rows`,
+        )
+        await this._revalidateDriftAfterSync()
+      }
+      // A sync rewrites have-revisions across the scope, so every path-keyed
+      // cache entry (fstat/print/filelog) is potentially stale — full clear.
+      this._invalidateWorkspaceState()
+      this._clearBehindDecorations()
+      await this._refreshAfterMutation()
+      return {
+        ok: true,
+        cancelled: false,
+        summary,
+        refusedFiles,
+        refusedOverwriteFiles,
+        error: undefined,
+      }
+    } finally {
+      // Backstop for the throws between the settle and here (classify, parse,
+      // cache invalidation): the bar must never show a stale count.
+      this._clearSyncProgress()
+    }
+  }
+
+  /**
+   * The δ get: ONE `p4delta --json --sync -a` call whose records are read back
+   * through {@link toSyncOutcome} into the same {@link SyncRunResult} the native
+   * path produces. What the engine does underneath is still p4's own `sync` —
+   * clobber protection, opened files and the have update are its call — so the
+   * refusals this editor offers remedies for arrive unchanged, as messages on
+   * the engine's stderr.
+   *
+   * Returns undefined when δ must not run this get at all (an ineligible spec or
+   * scope), and when it failed BEFORE its apply phase — the one failure shape
+   * that provably wrote nothing, and therefore the one the caller may serve on
+   * p4 in this same call. A failure past that point is reported, never retried:
+   * `-a` means part of the transfer may already have landed, and running the
+   * scope again under a second implementation is a different operation, not a
+   * retry (same rule as the δ write path, `_runP4deltaWrite`).
+   */
+  private async _syncViaP4delta(
+    engine: P4deltaService,
+    spec: string,
+    options?: {
+      scope?: readonly string[]
+      onProgress?: (progress: { done: number; file: string | undefined }) => void
+    },
+  ): Promise<SyncRunResult | undefined> {
+    const entries =
+      options?.scope !== undefined && options.scope.length > 0 ? options.scope : this._syncScopes
+    const rejected = this._p4deltaSyncReject(spec, entries)
+    if (rejected !== undefined) {
+      this._log?.(`[perforce] sync: p4delta skipped — ${rejected}; running on p4`)
+      return undefined
+    }
+    if (this._syncParallelThreads > 0 && this._p4deltaParallelNoted !== this._syncParallelThreads) {
+      // δ spawns its own p4, so the native `--parallel` knob has nothing to
+      // attach to. Say it rather than let a configured value look applied: a
+      // user who set `perforce.syncParallelThreads` expects it to mean something.
+      // Once per value — the setting defaults to 4, so "once per get" would be
+      // the whole output channel.
+      this._p4deltaParallelNoted = this._syncParallelThreads
+      this._log?.(
+        `[perforce] sync (p4delta): perforce.syncParallelThreads=${this._syncParallelThreads} does not apply to this engine`,
+      )
+    }
+    const args = this._buildP4deltaSyncArgs(spec, entries, true)
+    const onProgress = options?.onProgress
+    // The engine emits its file records per apply batch, so the bar advances in
+    // chunks instead of line by line. Same contract as the native streaming path
+    // (`done` + current file), just a coarser cadence.
+    let done = 0
+    const { value: result, cancelled } = await this._cancellable((signal) => {
+      // Seed the bar before anything else: the engine's own preview pass walks
+      // the scope first and can run for a long time without one file record.
+      this._setSyncProgress(0, undefined)
+      return engine.run(args, {
+        signal,
+        // A get moves content: its runtime scales with the bytes fetched, so the
+        // same watchdog exemption the native path takes applies here — the cancel
+        // signal is the only stop.
+        ...CONTENT_TRANSFER_EXEC,
+        onRecord: (record) => {
+          const tick = syncProgressTick(record)
+          if (tick === undefined) return
+          done += 1
+          this._setSyncProgress(done, tick.file)
+          onProgress?.({ done, file: tick.file })
+        },
+        // The status bar samples this pid's process tree; the engine's own p4
+        // children hang off it, so the disk/IO readout keeps working.
+        onSpawn: (pid) => this._onSyncP4Spawn(pid),
+      })
+    })
+    // Clear as soon as the engine settles — the count belongs to the "Syncing"
+    // label, and the follow-up refresh runs under its own busy label
+    // ("Refreshing"). Same point on the run's timeline as the native path's
+    // clear; `sync()`'s finally is the backstop for both engines.
+    this._clearSyncProgress()
+    for (const line of result.log) this._log?.(`  p4delta: ${line}`)
+    if (cancelled) {
+      this._log?.(`[perforce] sync (p4delta)${specSuffix(spec)} cancelled by user`)
+      // Same rule as the native cancel: whatever the server reported as applied
+      // IS on disk at its have revision, so those drift rows go. A killed stream
+      // has no summary by construction, so the records that already arrived are
+      // the only trace of it.
+      this._removeDriftForSyncRun(appliedSyncFiles(result.records, this.root), [], [])
+      await this._refreshAfterMutation()
+      this._clearBehindDecorations()
+      return {
+        ok: false,
+        cancelled: true,
+        summary: undefined,
+        refusedFiles: [],
+        refusedOverwriteFiles: [],
+        error: undefined,
+      }
+    }
+    const outcome = toSyncOutcome(result, this.root, true)
+    if (outcome === undefined) {
+      const failure =
+        this._p4deltaAppliedRunFailure(result, summarizeRun(result), 'sync') ?? 'no conclusion'
+      if (!this._p4deltaSyncStarted(result)) {
+        // Nothing was applied — the run never reached its apply phase (or never
+        // started). Falling back is free: the user gets the get they asked for,
+        // one engine later, and the log says why.
+        this._log?.(`[perforce] sync: p4delta did not answer — ${failure}; running this get on p4`)
+        return undefined
+      }
+      this._noteP4deltaSyncFailure(failure, result)
+      // The synthesized result keeps every user-facing branch of the native
+      // failure path: `classifySyncError` reads the engine's own error record and
+      // stderr tail, so a clobber abort still offers Collect Changes / Force Get.
+      const error = classifySyncError(this._p4deltaSyncFailureResult(result, failure))
+      await this._refreshAfterMutation()
+      this._clearBehindDecorations()
+      return {
+        ok: false,
+        cancelled: false,
+        summary: undefined,
+        refusedFiles: [],
+        refusedOverwriteFiles: [],
+        error,
+      }
+    }
+    this._p4deltaFailures = 0
+    const summary = outcome.summary
+    if (summary.upToDate) {
+      this._log?.(`[perforce] sync (p4delta)${specSuffix(spec)}: already up to date`)
+      return {
+        ok: true,
+        cancelled: false,
+        summary,
+        refusedFiles: outcome.refusedFiles,
+        refusedOverwriteFiles: outcome.refusedOverwriteFiles,
+        error: undefined,
+      }
+    }
+    const counts =
+      `: ${summary.applied} applied, ${summary.keptOpen} kept open, ` +
+      `${summary.mustResolve} need resolve, ${summary.refusedModified} refused (locally modified), ` +
+      `${summary.refusedOverwrite} refused (untracked file in the way)`
+    if (summary.unrecognized) {
+      // A concluding summary with no record behind it is never silent: the counts
+      // shown to the user would otherwise read as "nothing happened".
+      this._log?.(`[perforce] sync (p4delta): output not parseable, reporting as unknown`)
+    }
+    this._log?.(`[perforce] sync (p4delta)${specSuffix(spec)}${counts}`)
+    // Same drift bookkeeping as the native path: a get only ever REMOVES drift —
+    // the files the engine reported as applied match their (new) have revision,
+    // the refused ones were left untouched and keep their row.
+    this._removeDriftForSyncRun(
+      outcome.appliedFiles,
+      outcome.refusedFiles,
+      outcome.refusedOverwriteFiles,
+    )
+    this._invalidateWorkspaceState()
+    this._clearBehindDecorations()
+    await this._refreshAfterMutation()
+    return {
+      ok: true,
+      cancelled: false,
+      summary,
+      refusedFiles: outcome.refusedFiles,
+      refusedOverwriteFiles: outcome.refusedOverwriteFiles,
+      error: undefined,
+    }
+  }
+
+  /**
+   * Why this get cannot go to δ, or undefined when it can. A reason sends the
+   * whole get to p4 (the two engines cannot split one filespec list), so every
+   * entry has to be a shape δ's scope grammar reads:
+   *
+   * - `spec`: `#head`, or a changelist (`@12345`, δ's `--to`). `#4` is a
+   *   PER-FILE revision and `@2026/08/01` a date — neither has a δ spelling, and
+   *   the per-file force form (`''`, with the `#rev` already inside the specs) is
+   *   force by definition;
+   * - `//...`: δ's entries are local paths or `//<depot>/...` subtrees, and the
+   *   whole-client wildcard maps to neither;
+   * - anything with a p4 filespec metacharacter, which the command layer has
+   *   already `%`-escaped for p4 — δ reads its entries LITERALLY
+   *   ({@link P4DELTA_SCOPE_METACHARS}), so the escaped spelling would name a
+   *   file nobody has.
+   */
+  private _p4deltaSyncReject(spec: string, entries: readonly string[]): string | undefined {
+    if (spec !== '#head' && !P4DELTA_SYNC_CHANGELIST_SPEC.test(spec)) {
+      return `revision spec ${spec === '' ? '(per-file force)' : spec} has no p4delta form`
+    }
+    if (entries.length === 0) return 'no scope entries'
+    for (const entry of entries) {
+      if (entry === '//...') return 'the whole-client scope //... is not a p4delta entry'
+      const rejected = this._p4deltaEntryReject(entry)
+      if (rejected !== undefined) return rejected
+    }
+    return undefined
+  }
+
+  /**
+   * δ's argv for a get: the contract switches every δ call carries, the mode, the
+   * target changelist when there is one, `-a` for a real get (without it the run
+   * is a preview), then `--` and the scope entries.
+   *
+   * Deliberately WITHOUT the configured exclusions: a get has never honoured
+   * `perforce.reconcile.excludeFolders` (only discovery, narrow queries and the
+   * collect/clean writes do), and handing them to an engine that applies them
+   * would silently narrow a range the user asked to sync in full.
+   */
+  private _buildP4deltaSyncArgs(
+    spec: string,
+    entries: readonly string[],
+    apply: boolean,
+  ): string[] {
+    return [
+      '--json',
+      '--no-scope-file',
+      '--client-root',
+      this.root,
+      '--sync',
+      ...(spec === '#head' ? [] : ['--to', spec.slice(1)]),
+      ...(apply ? ['-a'] : []),
+      '--',
+      ...entries,
+    ]
+  }
+
+  /**
+   * Whether a δ get got as far as applying. Its phase table is
+   * `start → preview → filter → apply → done`, and the apply phase is announced
+   * immediately BEFORE the first write — so this is the evidence that decides
+   * whether a failed run may be re-served on p4 ("wrote nothing") or must be
+   * reported as-is ("may have landed part of the transfer").
+   */
+  private _p4deltaSyncStarted(result: P4deltaRunResult): boolean {
+    if (result.records.some((r) => r['kind'] === 'file' && r['stage'] === 'apply')) return true
+    return result.progress.some((r) => r['phase'] === 'apply')
+  }
+
+  /**
+   * A failed δ get in {@link P4ExecResult}'s shape, so the native error
+   * classifier and its user-facing branches read it unchanged. The engine's own
+   * `error` record is the machine-readable reason; its stderr tail is the human
+   * one (a `can't clobber writable file` abort arrives exactly there). */
+  private _p4deltaSyncFailureResult(result: P4deltaRunResult, failure: string): P4ExecResult {
+    const errorRecord = [...result.records].reverse().find((r) => r['kind'] === 'error')
+    const message = errorRecord?.['message']
+    const detail = lastNonEmptyLine(result.log)
+    return {
+      stdout: '',
+      stderr: [`p4delta: ${failure}`, typeof message === 'string' ? message : undefined, detail]
+        .filter((line): line is string => line !== undefined)
+        .join('\n'),
+      exitCode: result.code === 0 ? 1 : result.code,
+    }
+  }
+
+  /**
+   * Record a δ get that failed AFTER applying as an engine failure. Only this
+   * shape counts: a failure the caller transparently re-ran on p4 is not
+   * evidence that the engine cannot work here, and counting it would disarm an
+   * engine the user never saw misbehave. At the cap the whole session's δ
+   * traffic falls back to p4 until a reconfiguration (same ladder as the scans',
+   * shared by every δ path).
+   */
+  private _noteP4deltaSyncFailure(failure: string, result: P4deltaRunResult): void {
+    this._p4deltaFailures += 1
+    if (this._p4deltaFailures >= P4DELTA_MAX_CONSECUTIVE_FAILURES) this._p4deltaDisarmed = true
+    const detail = lastNonEmptyLine(result.log)
+    this._log?.(
+      `[perforce] sync: p4delta did not conclude — ${failure}` +
+        (detail !== undefined ? `; ${detail}` : '') +
+        '; not retried on p4 (the run may already have applied part of the transfer)' +
+        (this._p4deltaDisarmed
+          ? ` (engine disabled for this session after ${this._p4deltaFailures} consecutive failures; gets, writes, narrow queries and scans stay on p4 until the engine is reconfigured)`
+          : ` (${this._p4deltaFailures}/${P4DELTA_MAX_CONSECUTIVE_FAILURES})`),
+    )
   }
 
   /** Sync a specific set of local paths to `spec` (defaults to `#head`). Used by
@@ -4294,6 +4657,9 @@ export class PerforceClient {
    * bounds how many records come back — but **not** how much of the client view
    * the server walks. Pass `timeoutMs` for any caller that must not hold a gate
    * slot for the full command budget.
+   *
+   * A δ session answers this from {@link _p4deltaPreviewSync} when it can, so the
+   * preview and the get it previews agree on which files are behind.
    */
   async previewSync(
     scope?: readonly string[],
@@ -4306,6 +4672,13 @@ export class PerforceClient {
     total: number | undefined
     upToDate: boolean
   }> {
+    // `-m` has no δ spelling, so a bounded preview stays native by construction.
+    const entries = scope !== undefined && scope.length > 0 ? scope : this._syncScopes
+    const engine = limit === undefined ? this._p4deltaEngine() : undefined
+    if (engine !== undefined) {
+      const viaDelta = await this._p4deltaPreviewSync(engine, spec, entries, options)
+      if (viaDelta !== undefined) return viaDelta
+    }
     const targets = this._syncTargets(spec, scope)
     const limitArgs = limit !== undefined && limit > 0 ? ['-m', String(limit)] : []
     const res = await this._p4.execTagged(
@@ -4336,6 +4709,50 @@ export class PerforceClient {
     // which now includes them.
     const total = parseSyncPreviewTotal(res.records)
     return { ok: true, files, total, upToDate: files.length === 0 }
+  }
+
+  /**
+   * The δ dry run (`--sync` without `-a`): what a get would bring in, in the
+   * shape the native `p4 sync -n` reader already produces.
+   *
+   * Read-only, so ANY failure — no summary, a mode mismatch, a spawn failure —
+   * returns undefined and the native preview answers instead: nothing on disk or
+   * server can have changed, which is exactly what makes a same-call fallback
+   * safe here (unlike the write path's, where `-a` may already have landed).
+   */
+  private async _p4deltaPreviewSync(
+    engine: P4deltaService,
+    spec: string,
+    entries: readonly string[],
+    options?: { timeoutMs?: number },
+  ): Promise<
+    | {
+        ok: boolean
+        files: SyncPreviewFile[]
+        total: number | undefined
+        upToDate: boolean
+      }
+    | undefined
+  > {
+    const rejected = this._p4deltaSyncReject(spec, entries)
+    if (rejected !== undefined) {
+      this._log?.(`[perforce] sync -n: p4delta skipped — ${rejected}; running on p4`)
+      return undefined
+    }
+    const result = await engine.run(this._buildP4deltaSyncArgs(spec, entries, false), {
+      ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+    })
+    for (const line of result.log) this._log?.(`  p4delta: ${line}`)
+    const outcome = result.sawNonJsonStdout ? undefined : toSyncOutcome(result, this.root, false)
+    if (outcome === undefined) {
+      this._log?.(`[perforce] sync -n: p4delta did not answer (exit ${result.code}); running on p4`)
+      return undefined
+    }
+    // Refused files fold in exactly as they do on the native path: they ARE
+    // behind and carry uncollected work, so a preview that dropped them would
+    // report "up to date" over a scope the revision chip shows as behind.
+    const files = [...outcome.appliedFiles, ...outcome.refusedFiles]
+    return { ok: true, files, total: files.length, upToDate: outcome.upToDate }
   }
 
   /** Append the revision `spec` to each target filespec, falling back to the
@@ -5642,9 +6059,14 @@ export class PerforceClient {
   private async _listSubdirs(dir: string): Promise<string[]> {
     try {
       const entries = await readdir(dir, { withFileTypes: true })
+      // Same `/`-append rule as the carve walk (`reconcileCarve.ts`): these paths
+      // end up in scan filespecs, and `node:path.join` would normalize the whole
+      // string — flipping the caller's spelling on Windows.
+      const base = dir.replace(/[/\\]+$/, '')
+      const child = (name: string): string => `${base}/${name}`
       return entries
-        .filter((entry) => entry.isDirectory() && !this._isExcluded(join(dir, entry.name)))
-        .map((entry) => join(dir, entry.name))
+        .filter((entry) => entry.isDirectory() && !this._isExcluded(child(entry.name)))
+        .map((entry) => child(entry.name))
     } catch (err) {
       this._log?.(`[perforce] reconcile-scan: readdir ${dir} failed: ${String(err)}`)
       return []

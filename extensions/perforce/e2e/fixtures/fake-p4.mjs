@@ -313,6 +313,20 @@ function emit(records) {
 
 /** Value following a flag in an arg list (e.g. `-c` → the changelist id), or
  *  undefined if the flag is absent / has no following token. */
+/** Append this run's argv to `UNIVERSE_P4_FAKE_ARGV_LOG`, one line per spawn.
+ *  The log records what the EXTENSION handed p4 itself: the delta fake strips
+ *  the variable from the child it delegates to, so a delegated call never
+ *  shows up here — which is what makes "the native engine ran this" provable. */
+function logArgv() {
+  const argvLog = process.env.UNIVERSE_P4_FAKE_ARGV_LOG
+  if (!argvLog) return
+  try {
+    appendFileSync(argvLog, `${process.argv.slice(2).join(' ')}\n`)
+  } catch {
+    // A diagnostic seam must never fail a p4 command.
+  }
+}
+
 function argAfter(args, flag) {
   const idx = args.indexOf(flag)
   return idx >= 0 && idx + 1 < args.length ? args[idx + 1] : undefined
@@ -917,6 +931,19 @@ function main() {
       // "file(s) up-to-date." arrives on **stderr with exit 0**, never non-zero.
       // A real sync prints one plain line per file, `<depot>#<rev> - <verb> as
       // <local>`; `-f` forces it over unchanged/writable/open files.
+      //
+      // `-G` (the mode p4delta drives p4 in) is the one exception to every shape
+      // above: there the per-file outcome IS a marshal record (`code:"stat"`) and
+      // the protection/notice messages ride the record stream as `code:"error"`
+      // (severity 2) / `code:"info"` entries — measured, and what p4delta's own
+      // reader classifies. This fake prints them as text on stderr instead, which
+      // is where that reader re-emits them, so the consumer downstream (δ's
+      // stderr) sees the same words. Plain text on stdout under `-G` would in
+      // fact break a real δ outright: it would fail the run on an undecodable
+      // record. `-ztag`/plain keep the measured stdout text the native reader
+      // parses (`parseSyncRefused` reads `stdout` there).
+      const marshal = mode === 'marshal'
+      logArgv()
       const dryRun = rest.includes('-n')
       const force = rest.includes('-f')
       const max = argAfter(rest, '-m')
@@ -938,13 +965,27 @@ function main() {
       }
       const specTarget = targets.find((t) => /[#@]/.test(t))
       const spec = specTarget ? /[#@].*$/.exec(specTarget)[0] : '#head'
+      // A target may pin ONE file's revision (`//depot/f#2` — the exact-spec
+      // shape δ hands back after its preview) while a run carries several such
+      // targets, so the revision is resolved per file here; entry-shaped targets
+      // (`<dir>/...@<cl>`) fall back to the run-level spec.
+      const pinnedSpecs = new Map()
+      for (const t of targets) {
+        const m = /^(.*?)([#@].*)$/.exec(t)
+        if (m) {
+          pinnedSpecs.set(m[1], m[2])
+          pinnedSpecs.set(normPath(m[1]), m[2])
+        }
+      }
+      const specOf = (depotFile, local) =>
+        pinnedSpecs.get(depotFile) ?? pinnedSpecs.get(normPath(local)) ?? spec
       const plans = []
       for (const [depotFile, known] of Object.entries(state.files)) {
         if (!inScope(depotFile)) continue
-        const toRev = syncTargetRev(spec, headRevOf(known), state, depotFile)
+        const local = clientOf(state, depotFile)
+        const toRev = syncTargetRev(specOf(depotFile, local), headRevOf(known), state, depotFile)
         if (toRev === undefined) continue
         const haveRev = haveRevOf(known)
-        const local = clientOf(state, depotFile)
         let action
         if (!existsSync(local)) action = 'added'
         else if (toRev > haveRev) action = 'updated'
@@ -966,6 +1007,13 @@ function main() {
       const refusalLines = refusedPlans.map(
         (p) => `${p.depotFile}#${p.toRev} - can't update modified file ${p.local}`,
       )
+      /** The protection/notice messages of a run, in the shape the requested
+       *  output mode puts them in (`-G`: text on stderr; else: text on stdout). */
+      const emitMessages = (text) => {
+        if (text.length === 0) return
+        if (marshal) process.stderr.write(text.join('\n') + '\n')
+        else process.stdout.write(text.join('\n') + '\n')
+      }
       if (dryRun) {
         if (plans.length === 0) {
           const scope = targets.length > 0 ? scopes[0] : '//...'
@@ -980,8 +1028,11 @@ function main() {
         // ONE grand total across all filespecs — and `totalFileCount` is the
         // UNTRUNCATED total, never the `-m`-capped `listed` count. It counts the
         // refused files too: they are part of what the sync would act on.
+        // `code` is the marshal record type δ's reader keys on (`stat` = a file
+        // action); the native readers ignore it.
         emit(
           listed.map((p, i) => ({
+            code: 'stat',
             depotFile: p.depotFile,
             clientFile: p.local, // §1: local path
             rev: String(p.toRev),
@@ -997,7 +1048,7 @@ function main() {
         )
         // The plain refusal lines ride alongside the structured records, exactly
         // as the real server prints them — `-ztag` gives them no key prefix.
-        if (refusalLines.length > 0) process.stdout.write(refusalLines.join('\n') + '\n')
+        emitMessages(refusalLines)
         return 0
       }
       // Real sync. The clobber fault aborts the whole run like real p4 (exit 1);
@@ -1016,6 +1067,8 @@ function main() {
         return 1
       }
       const lines = []
+      /** The files this run really rewrote, as marshal records (see `marshal`). */
+      const appliedRecords = []
       for (const p of plans) {
         const opened = state.opened[p.depotFile]
         const known = state.files[p.depotFile]
@@ -1056,11 +1109,23 @@ function main() {
               ? 'refreshing'
               : 'updated as'
         lines.push(`${p.depotFile}#${p.toRev} - ${verb} ${p.local}`)
+        appliedRecords.push({
+          code: 'stat',
+          depotFile: p.depotFile,
+          clientFile: p.local,
+          rev: String(p.toRev),
+          action: p.action,
+        })
       }
       if (lines.length === 0) {
         // §11.1/§11.3: an all-up-to-date sync reports on stderr with exit 0.
         const scope = targets.length > 0 ? scopes[0] : '//...'
         process.stderr.write(`${scope} - file(s) up-to-date.\n`)
+      } else if (marshal) {
+        // Records are the run's body under `-G`; the human lines are the messages
+        // that ride with them, on the channel δ re-emits them from.
+        emit(appliedRecords)
+        emitMessages(lines)
       } else {
         process.stdout.write(lines.join('\n') + '\n')
       }
@@ -1076,14 +1141,7 @@ function main() {
       // by a query that asked the wrong filespec but happened to match, and by
       // one that asked the right spec for the wrong reason. A log of what was
       // actually handed to p4 is the part only the real invocation satisfies.
-      const argvLog = process.env.UNIVERSE_P4_FAKE_ARGV_LOG
-      if (argvLog) {
-        try {
-          appendFileSync(argvLog, `${process.argv.slice(2).join(' ')}\n`)
-        } catch {
-          // A diagnostic seam must never fail a p4 command.
-        }
-      }
+      logArgv()
       const discovered = computeReconcile(state)
       const targets = targetsFromArgs(state, rest, discovered)
       if (dryRun) {

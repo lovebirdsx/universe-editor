@@ -481,10 +481,7 @@ test.describe('@p1 perforce sync', () => {
           // Re-scope to the button: the refusal dialog carried a "Force Get"
           // too, so a bare name query hits both rows while the refusal is
           // still fading out.
-          await dialog
-            .getByRole('button', { name: 'Force Get', exact: true })
-            .last()
-            .click()
+          await dialog.getByRole('button', { name: 'Force Get', exact: true }).last().click()
         }
 
         await expect

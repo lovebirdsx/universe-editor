@@ -36,7 +36,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { ConcurrencyGate } from './concurrency.js'
 import { resolveP4Command, setP4CommandTimeoutSeconds, type P4Connection } from './p4Service.js'
-import { probeP4delta, resolveP4deltaCommand } from './p4deltaService.js'
+import { MIN_P4DELTA_VERSION, probeP4delta, resolveP4deltaCommand } from './p4deltaService.js'
 import { PerforceClient, SYNC_POINT_READBACK_SLOW_EXEC, type P4CacheOptions } from './client.js'
 import type { SyncPreviewFile } from './syncParser.js'
 import { P4CacheDisk } from './p4CacheDisk.js'
@@ -433,10 +433,10 @@ interface KnownLanding {
  * machine without it must not be interrupted about one, and the native scan is
  * a complete answer either way.
  *
- * `enabled: false` short-circuits before ANY spawn — not even the `--help`
- * probe. A configured-but-unusable path (`ENOENT`, or a binary that does not
- * advertise `--json` + `--client-root`) is refused here too, so the client
- * never gets an executable it would only fail on.
+ * `enabled: false` short-circuits before ANY spawn — not even the `--version`
+ * probe. A configured-but-unusable path (`ENOENT`, or a binary older than
+ * `MIN_P4DELTA_VERSION`) is refused here too, so the client never gets an
+ * executable it would only fail on.
  *
  * The p4-script hedge: δ hands files it cannot digest over to `p4`, and it
  * resolves that `p4` on its own. Under a `UNIVERSE_P4_PATH` script override (the
@@ -477,7 +477,14 @@ export async function resolveP4deltaEngine(
     return undefined
   }
   if (!(await probeP4delta(exe))) {
-    log(`[perforce] p4delta at ${exe} does not support --json/--client-root; using p4`)
+    // One version sample answers every objection at once — not a p4delta, older
+    // than the first release carrying what this extension drives, a broken
+    // install, a timeout — so the line names the requirement, not a cause. The
+    // stake: a build below it is one whose `--sync` IS the force repair, which
+    // is why the whole engine stays off rather than only the get.
+    log(
+      `[perforce] p4delta at ${exe} did not report a supported version (>= ${MIN_P4DELTA_VERSION.join('.')}); using p4`,
+    )
     return undefined
   }
   log(`[perforce] p4delta engine: ${exe}`)
@@ -806,7 +813,9 @@ export async function activate(context: ExtensionContext): Promise<void> {
       if (!e.affectsConfiguration('perforce.p4delta')) return
       void (async () => {
         p4deltaOptions = await resolveP4deltaOptions()
-        for (const c of mgr.all) c.setP4delta(p4deltaOptions?.exe, p4deltaOptions?.extraEnv)
+        for (const c of mgr.all) {
+          c.setP4delta(p4deltaOptions?.exe, p4deltaOptions?.extraEnv)
+        }
       })()
     }),
   )

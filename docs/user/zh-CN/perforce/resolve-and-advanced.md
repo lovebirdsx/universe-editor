@@ -48,13 +48,13 @@ Perforce 文件同样支持行内 **Blame（溯源）**，与 Git 共用同一�
 | `perforce.reconcileHint.enabled` | 在资源管理器中标记磁盘上改过但未签出的文件（改动徽标 M/A/D，其父文件夹随之变色），见[收集改动](./daily-workflow.md#收集改动reconcile)。只检查当前显示在屏幕上的行，开销随可见行数而非 depot 规模增长；作用范围跟随聚焦目录 | 开 |
 | `perforce.reconcileScan.maxBatchDurationMs` | 后台预热扫描单个目录批次的时间上限（毫秒，默认 10000），超时批次自动拆分子目录 | 10000 |
 | `perforce.reconcile.excludeFolders` | reconcile 时忽略的目录列表（数组，支持相对/绝对路径）。收集祖先目录时会递归裁剪掉被排除的子目录 | `[]` |
-| `perforce.p4delta.enabled` | 检测到支持 `--json` 的 p4delta 可执行文件时，用它执行后台收集扫描，以及收集改动 / 收集到指定 Changelist / 还原未收集改动（`p4 clean`）这三个写操作；关闭则始终用 p4 原生命令 | 开 |
+| `perforce.p4delta.enabled` | 检测到 **0.1.6 或更新**的 p4delta 可执行文件时，用它执行后台收集扫描、普通拉取（见[拉取由谁执行](./sync-and-status.md#拉取由谁执行)），以及收集改动 / 收集到指定 Changelist / 还原未收集改动（`p4 clean`）这三个写操作；关闭（或本机版本过旧）则始终用 p4 原生命令 | 开 |
 | `perforce.p4delta.path` | p4delta 可执行文件路径；留空则从 `PATH` 查找（远程开发时填远端机器上的路径） | 空 |
 | `perforce.refreshInterval` | 轮询刷新间隔（秒，最小 10，`0` 关闭） | 关 |
 | `perforce.openedByOthers.autoCheck` | 后台「他人占用」扫描 + 灰字 | 开 |
 | `perforce.openedByOthers.intervalSec` | 两次「他人占用」扫描的最小间隔秒数（最小 30） | 300 |
 | `perforce.commandTimeout` | 单个 p4 进程最长存活秒数，超时强杀（`0` 不限制）。约束「永久挂死」而非「执行慢」——卡死在冻结网络盘上的 p4 不会再无限期占住并发槽。**不约束内容传输命令**（sync/submit/shelve/unshelve/revert/clean，它们随字节数增长且可取消） | 600 |
-| `perforce.syncParallelThreads` | `p4 sync` 并行拉取线程数（`--parallel=threads=N`，`0` 串行）。需服务器开 `net.parallel.max`，不支持时 p4 静默回落串行 | 4 |
+| `perforce.syncParallelThreads` | `p4 sync` 并行拉取线程数（`--parallel=threads=N`，`0` 串行）。需服务器开 `net.parallel.max`，不支持时 p4 静默回落串行。只对**由 p4 执行**的拉取生效 | 4 |
 | `perforce.cache.enabled` | 缓存 p4 结果以减少服务器往返 | 开 |
 | `perforce.cache.workspaceTtl` | 工作区状态缓存有效期（毫秒，`0` 关闭工作区缓存） | 4000 |
 | `perforce.cache.diskLimitMb` | 不可变历史数据磁盘缓存上限（MB，`0` 关闭落盘） | 50 |

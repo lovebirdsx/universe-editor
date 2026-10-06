@@ -2,13 +2,14 @@
  * The δ engine gate in `activate`: `resolveP4deltaEngine` is the ONE decision
  * helper both client construction points share, so its rules are pinned here.
  *  1. `perforce.p4delta.enabled: false` must not even RESOLVE the binary — no
- *     path lookup, no `--help` probe spawn.
+ *     path lookup, no `--version` probe spawn.
  *  2. A `p4` script override (the e2e fake) keeps the session native UNLESS the
  *     operator named δ too (the env override or the setting) — that is the e2e
  *     fixture's "both engines are mine" case, and there δ must go out carrying
  *     `P4_EXE` so its hand-offs reach the same fake p4.
- *  3. A missing executable and a failed probe both degrade to native with a log
- *     line — never an error dialog, never a throw.
+ *  3. A missing executable and a rejected probe (a build older than the minimum)
+ *     both degrade to native with a log line — never an error dialog, never a
+ *     throw.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -130,7 +131,10 @@ describe('resolveP4deltaEngine', () => {
     expect(log).toHaveBeenCalledWith(expect.stringContaining('not found'))
   })
 
-  it('degrades to native when the probe rejects the binary', async () => {
+  // The verdict a plain get's safety hangs on: a build below the minimum
+  // predates the sync split, so its `--sync` IS the force repair — the whole
+  // engine stays off (scans included), not just the get.
+  it('degrades to native when the probe rejects the build as too old', async () => {
     p4deltaMocks.resolveP4deltaCommand.mockReturnValue(EXE)
     p4deltaMocks.probeP4delta.mockResolvedValue(false)
     const log = vi.fn()
@@ -138,6 +142,6 @@ describe('resolveP4deltaEngine', () => {
     const engine = await resolveP4deltaEngine({ enabled: true, path: EXE }, log)
 
     expect(engine).toBeUndefined()
-    expect(log).toHaveBeenCalledWith(expect.stringContaining('does not support'))
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('did not report a supported version'))
   })
 })

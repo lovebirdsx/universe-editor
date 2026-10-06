@@ -3,7 +3,7 @@
  *
  *  With `UNIVERSE_P4DELTA_PATH` pointed at the δ fake, opening a workspace that
  *  has drift on disk must:
- *    - admit the engine through its `--help` probe,
+ *    - admit the engine through its `--version` probe,
  *    - answer the background reconcile scan with ONE `p4delta --json` call per
  *      scope round (the contract switches + the scope entries after `--`),
  *    - surface the drift where the user sees it: the Changes group row and the
@@ -24,7 +24,13 @@
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { evaluateWhenRestored, mkTempDir } from '@universe-editor/e2e-harness'
-import { readArgvLog, test, expect, waitForPerforceCommands } from '../fixtures/perforceApp.js'
+import {
+  readArgvLog,
+  test,
+  expect,
+  toPosix,
+  waitForPerforceCommands,
+} from '../fixtures/perforceApp.js'
 import type { SeedFile } from '../fixtures/perforceApp.js'
 
 const drifted: SeedFile = { relPath: 'drifted.txt', content: 'have revision\n' }
@@ -65,11 +71,11 @@ test.describe('@p1 perforce p4delta scan', () => {
       .toBeGreaterThan(0)
     await waitForPerforceCommands(workbench)
 
-    // The engine had to be admitted first: the probe is the only `--help` spawn.
+    // The engine had to be admitted first: the probe is the only `--version` spawn.
     await expect
-      .poll(() => deltaLogLines().filter((l) => l === '--help').length, {
+      .poll(() => deltaLogLines().filter((l) => l === '--version').length, {
         timeout: 30_000,
-        message: 'the δ engine should have been probed with --help before use',
+        message: 'the δ engine should have been probed with --version before use',
       })
       .toBe(1)
 
@@ -77,12 +83,22 @@ test.describe('@p1 perforce p4delta scan', () => {
     // root (the round-trip saver), and the scope as a recursive entry after `--`.
     // A recursive entry is what distinguishes it from the per-file narrow query a
     // hint check issues — both otherwise carry the same switches.
+    //
+    // Paths below are compared separator-blind (`toPosix`): the extension hands
+    // its scope entries to δ in `/` spelling (`pathUtil.norm`) while the fixture's
+    // `clientRoot` / `file()` are platform spelling, so on Windows the same path
+    // reads `E:/ws/x` in the log and `E:\ws\x` in the expectation. What these
+    // assertions are about is WHICH path the engine was handed, not how it was
+    // spelled. (The `--client-root` switch is passed through verbatim, hence its
+    // own assertion stays exact.)
     const scopeEntry = `${perforce.clientRoot}/...`
     await expect
       .poll(
         () =>
           deltaLogLines().filter(
-            (l) => l.includes('--no-revert-groups') && l.split(' -- ').at(-1) === scopeEntry,
+            (l) =>
+              l.includes('--no-revert-groups') &&
+              toPosix(l.split(' -- ').at(-1) ?? '') === toPosix(scopeEntry),
           ).length,
         {
           timeout: 60_000,
@@ -92,7 +108,9 @@ test.describe('@p1 perforce p4delta scan', () => {
       .toBeGreaterThan(0)
 
     const scanLine = deltaLogLines().find(
-      (l) => l.includes('--no-revert-groups') && l.split(' -- ').at(-1) === scopeEntry,
+      (l) =>
+        l.includes('--no-revert-groups') &&
+        toPosix(l.split(' -- ').at(-1) ?? '') === toPosix(scopeEntry),
     )!
     expect(scanLine).toContain('--json')
     expect(scanLine).toContain('--no-scope-file')
@@ -138,7 +156,8 @@ test.describe('@p1 perforce p4delta scan', () => {
       .poll(
         () =>
           deltaLogLines().filter(
-            (l) => l.includes(perforce.file(drifted.relPath)) && !l.includes('/...'),
+            (l) =>
+              toPosix(l).includes(toPosix(perforce.file(drifted.relPath))) && !l.includes('/...'),
           ).length,
         {
           timeout: 30_000,

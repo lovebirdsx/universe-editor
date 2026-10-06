@@ -40,10 +40,18 @@
  *     (`entryMatched`), which is the rule the real tool documents for `unmatched`
  *     (an existing empty directory counts as matched — the real one warns about
  *     that case without failing either).
- *   - sync mode is a delegation to fake-p4's `sync [-n]` with the entries
- *     carrying `@<--to>`. The editor does NOT consume δ's sync (P5 left the sync
- *     family native), so this exists to keep the mode from silently succeeding
- *     on an unimplemented path, not to mirror δ's sync semantics field for field.
+ *   - sync mode IS consumed (a plain get runs on δ, see `docs/reconcile.md`), so
+ *     it mirrors the real contract more closely than the other modes: normal sync
+ *     reports the four classes `add`/`update`/`delete`/`resolve` with `stage`
+ *     (`preview` / `apply`) and p4's own `nativeAction` word, and `--force` runs
+ *     the force repair (`-f` to the delegated call, the force classes). What is
+ *     NOT modelled: the `resolve` class. The real tool finds those opened files
+ *     through two bounded follow-up queries (`p4 opened` + `p4 fstat`); here they
+ *     stay what fake-p4 prints for them, i.e. a message on stderr. A spec that
+ *     needs `keptOpen`/`mustResolve` from a δ get needs a fake that models that
+ *     follow-up. Models the normal-sync classes only — a legacy build's `--sync`
+ *     (= the force repair) is reachable via `UNIVERSE_P4DELTA_FAKE_LEGACY=1` but
+ *     never exercised, because the version gate refuses to drive that build.
  *
  *  Fault injection — `UNIVERSE_P4DELTA_FAKE_FAIL`, one mode per session, every
  *  mode asserted by the e2e suite:
@@ -63,8 +71,8 @@
  *                    reason:"no-entry-matched"`, exit 1: the ONE `ok:false` shape
  *                    a consumer is allowed to read as a complete answer.
  *  An unknown mode is a usage error (exit 2) — a typo'd fault must not look like
- *  a passing test. `--help` is answered BEFORE the fault handling on purpose: the
- *  probe must still accept the binary, since the fault models "a build that
+ *  a passing test. `--version` is answered BEFORE the fault handling on purpose:
+ *  the probe must still accept the binary, since the fault models "a build that
  *  rejects our argv", not "a build that cannot be probed".
  *
  *  `UNIVERSE_P4DELTA_ARGV_LOG` appends one line per spawn — the complete argv,
@@ -86,6 +94,15 @@ import { dirname, join, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const FAKE_P4 = join(dirname(fileURLToPath(import.meta.url)), 'fake-p4.mjs')
+
+/** Model the last release before the sync split — v0.1.5, i.e. below the
+ *  editor's `MIN_P4DELTA_VERSION`. `--version` reports it, which is what the
+ *  probe reads and rejects; for fidelity the help still hides `--force`, the
+ *  flag is unknown to the parser (exit 2), and `--sync` IS the force repair
+ *  (this fake applies `-f` for it) — the destructive behaviour the version gate
+ *  exists to keep a normal get away from. Nothing in the editor may drive it; a
+ *  spec turns it on to prove the gate holds (see `perforceSyncP4delta.spec.ts`). */
+const LEGACY = process.env.UNIVERSE_P4DELTA_FAKE_LEGACY === '1'
 
 const STATE_PATH = process.env.UNIVERSE_P4_FAKE_STATE
 if (!STATE_PATH) {
@@ -137,13 +154,18 @@ function emit(record) {
  *  length. The fake has no digest pass to report, so only the phases it can
  *  honestly claim are emitted. */
 const PHASES = ['start', 'analyze', 'digest', 'report', 'done']
-function emitProgress(phase, message = null) {
+/** Normal sync walks a different ladder — no analyze / digest, but the preview and
+ *  apply segments the other modes do not have. The real tool swaps its phase table
+ *  per mode too, so `step`/`total` stay truthful. */
+const SYNC_PHASES = ['start', 'preview', 'filter', 'apply', 'done']
+const phasesFor = (mode, forceRun = false) => (mode === 'sync' && !forceRun ? SYNC_PHASES : PHASES)
+function emitProgress(phase, message = null, phases = PHASES) {
   writeErr(
     `${JSON.stringify({
       kind: 'progress',
       phase,
-      step: PHASES.indexOf(phase) + 1,
-      total: PHASES.length,
+      step: phases.indexOf(phase) + 1,
+      total: phases.length,
       message,
     })}\n`,
   )
@@ -174,9 +196,10 @@ function normPath(p) {
 
 // ---- help ----------------------------------------------------------------------
 
-/** The probe (`probeP4delta`) accepts a binary whose `--help` mentions BOTH
- *  `--json` and `--client-root`; printing them is this fake's entire admission
- *  ticket. Kept clap-shaped, because that is what the real tool's help is. */
+/** The admission ticket is `--version` (the branch in `main` below), not the
+ *  help text — this help is kept clap-shaped only because that is what the real
+ *  tool prints, and the contract spec pins the parts the editor's argv relies
+ *  on. */
 function printHelp() {
   writeOut(
     [
@@ -184,19 +207,42 @@ function printHelp() {
       '',
       'Usage: p4delta [OPTIONS] [--] [ENTRY]...',
       '',
-      'Modes:',
-      '      --clean                 discard working-tree drift (default: open)',
-      '      --sync                  sync files to a target revision',
-      '',
       'Options:',
-      '      --json                  machine-readable JSON Lines on stdout, report on stderr',
-      '      --no-scope-file         ignore .p4delta-scope',
-      '      --no-revert-groups      open mode must equal `p4 reconcile -a -e -d` line for line',
-      '      --client-root <PATH>    client root, skips the `p4 info` round-trip',
-      '  -a                          apply; without it the run is a preview',
-      '      --to <CHANGELIST>       target change for --sync',
-      '  -c <CHANGELIST>             changelist the opened files go into',
-      '  -h, --help                  Print help',
+      '      --json',
+      '          machine-readable JSON Lines on stdout, report on stderr',
+      '',
+      '      --no-scope-file',
+      '          ignore .p4delta-scope',
+      '',
+      '      --no-revert-groups',
+      '          open mode must equal `p4 reconcile -a -e -d` line for line',
+      '',
+      '      --client-root <PATH>',
+      '          client root, skips the `p4 info` round-trip',
+      '',
+      '  -a',
+      '          apply; without it the run is a preview',
+      '',
+      '      --clean',
+      '          discard working-tree drift (default: open)',
+      '',
+      '      --sync',
+      LEGACY
+        ? '          force-repair the workspace to a target revision'
+        : '          sync files to a target revision',
+      '',
+      // Fidelity only: a pre-split build's help does not list the flag the
+      // split added. The gate itself reads `--version`; this keeps the fake a
+      // faithful model of what 0.1.5 printed.
+      ...(LEGACY ? [] : ['      --force', '          force-repair instead of a normal sync', '']),
+      '      --to <CHANGELIST>',
+      '          target change for --sync',
+      '',
+      '  -c <CHANGELIST>',
+      '          changelist the opened files go into',
+      '',
+      '  -h, --help',
+      '          Print help',
       '',
       'Entries after `--`: <path>, <dir>/... and `-`-prefixed exclusions.',
       '',
@@ -213,6 +259,7 @@ const BOOLEAN_FLAGS = new Set([
   '-a',
   '--clean',
   '--sync',
+  '--force',
 ])
 const VALUE_FLAGS = new Set(['--client-root', '--to', '-c'])
 
@@ -230,7 +277,9 @@ function parseArgv(argv) {
     applied: false,
     clean: false,
     sync: false,
+    force: false,
     help: false,
+    version: false,
     changelist: undefined,
     to: undefined,
     includes: [],
@@ -251,6 +300,13 @@ function parseArgv(argv) {
       opts.help = true
       continue
     }
+    if (arg === '--version' || arg === '-V') {
+      opts.version = true
+      continue
+    }
+    // A pre-split build has no `--force`: the token is as unknown to it as any
+    // other typo, and clap's answer is exit 2.
+    if (arg === '--force' && LEGACY) usageError(`unexpected argument '${arg}' found`)
     if (VALUE_FLAGS.has(arg)) {
       const value = argv[++i]
       if (value === undefined) usageError(`the argument '${arg}' requires a value`)
@@ -263,6 +319,7 @@ function parseArgv(argv) {
       if (arg === '--json') opts.json = true
       else if (arg === '--clean') opts.clean = true
       else if (arg === '--sync') opts.sync = true
+      else if (arg === '--force') opts.force = true
       else if (arg === '-a') opts.applied = true
       // --no-scope-file / --no-revert-groups: accepted, deliberately no-ops (see
       // the header). This fake never reads a `.p4delta-scope` — the same answer
@@ -411,11 +468,28 @@ function cleanClass(action) {
   return 'revert'
 }
 
-/** p4 sync action → sync-mode class: `added` writes back a locally missing file
- *  (`restore`), `updated` pulls the target revision (`update`), and
- *  `refreshing` (a forced re-fetch of the revision the client already has) is the
- *  closest thing the fake has to "target unchanged, local content wrong". */
+/**
+ * p4 sync action → the class a NORMAL sync reports. The contract's vocabulary is
+ * `add` / `update` / `delete` (+ `resolve`, not modelled here): the workspace gets
+ * the file, the file is rewritten in place, or the path is removed. `refreshed`
+ * (a forced re-fetch of the revision the client already has) means the same thing
+ * as `updated` to a consumer — content written to the target — and the real tool
+ * folds it in the same way.
+ */
 function syncClass(action) {
+  if (action === 'added') return 'add'
+  if (action === 'deleted') return 'delete'
+  return 'update'
+}
+
+/**
+ * p4 sync action → the class the FORCE repair reports. That path shares
+ * `mode:"sync"` but has its own two extra classes: `restore` writes back a
+ * locally missing file, `revert` puts drifted local content back to the target.
+ * Only a `--force` run (or a legacy build, where `--sync` IS the force repair)
+ * answers in this vocabulary.
+ */
+function syncForceClass(action) {
   if (action === 'added') return 'restore'
   if (action === 'refreshing') return 'revert'
   return 'update'
@@ -424,43 +498,74 @@ function syncClass(action) {
 const ACTION_FOR_CLASS = {
   open: { add: 'add', edit: 'edit', delete: 'delete' },
   clean: { delete: 'deleting', revert: 'reverting', restore: 'restoring' },
-  sync: { update: 'updating', revert: 'reverting', restore: 'restoring', delete: 'deleting' },
+  sync: {
+    add: 'adding',
+    update: 'updating',
+    delete: 'deleting',
+    resolve: 'scheduling',
+    revert: 'reverting',
+    restore: 'restoring',
+  },
 }
 
-/**
- * Translate a delegated record into the contract's file record. `rev` is passed
- * through as the `-Mj` string — and emitted as JSON null when the child omitted
- * it (an add has no revision), which is what the real tool's serde output does.
- * `applied` describes the RUN (`-a` present), never the individual file.
- */
-function fileRecord(mode, classOfAction, record, applied) {
-  const klass = classOfAction(record.action)
-  return {
+/** p4's own verb -> the contract's `nativeAction`. `refreshing` is the word p4
+ *  prints in its human line; the structured word (the only one δ accepts) is
+ *  `refreshed`. An opened file has no word at all — p4 answers it with a notice,
+ *  so δ looks it up and its record claims none rather than inventing one. */
+const NATIVE_ACTION = {
+  added: 'added',
+  updated: 'updated',
+  deleted: 'deleted',
+  refreshing: 'refreshed',
+}
+
+/** One `kind:"file"` record: the class table's row for this file, plus the run's
+ *  own facts. `run` is the whole run's state, never a single file's — `applied`
+ *  says whether `-a` was handed over, `stage` which half of normal sync the
+ *  record belongs to (absent for the force repair and the other modes), `force`
+ *  whether this was a repair at all. */
+function fileRecord(mode, classOfAction, record, run) {
+  const klass = classOfAction(record)
+  const out = {
     kind: 'file',
     mode,
     class: klass,
     action: ACTION_FOR_CLASS[mode][klass],
     depotFile: record.depotFile,
     clientFile: record.clientFile,
-    rev: record.rev ?? null,
-    applied,
+    applied: run.applied,
+    // Every file record carries it, not just the summary: the force repair shares
+    // this mode and part of its class table, so this is what keeps a repair's
+    // records from being read as a normal get even mid-stream.
+    force: run.force,
   }
+  // Absent, not null, for a file with no revision: the readers test for the key.
+  if (record.rev !== undefined && record.rev !== null) out.rev = record.rev
+  if (run.stage !== undefined) out.stage = run.stage
+  // `nativeAction` is normal sync's alone — the other modes' records carry none,
+  // and neither does an opened file's (p4 never printed a word for it).
+  const native = NATIVE_ACTION[record.action]
+  if (native !== undefined && run.stage !== undefined && klass !== 'resolve') {
+    out.nativeAction = native
+  }
+  return out
 }
 
 // ---- run -----------------------------------------------------------------------
 
 const KNOWN_FAULTS = new Set(['crash', 'crash-scan', 'nosummary', 'exit2', 'error', 'unmatched'])
 
-/**
- * Ask fake-p4 and translate. Preview vs apply is `-a` throughout — the same
- * switch the editor uses, and a run without it must never touch state. For clean
- * the preview delegates to `reconcile -n`: the candidate set is the very same
- * function fake-p4's clean consumes (its clean has no dry run because the editor
- * never asks for one).
- */
-function askAndTranslate(state, opts, mode) {
+/** Ask the delegated p4 for this run's answer and translate it into the
+ *  contract's records. `mode` picks the subcommand and the class table; `phases`
+ *  is the ladder this run's progress rides. */
+function askAndTranslate(state, opts, mode, phases) {
   let delegated
   let classOfAction
+  let plan = { records: [] }
+  let stage
+  const forceRun = opts.force === true
+  const openedOf = (record) => state.opened?.[record.depotFile] !== undefined
+
   if (mode === 'clean') {
     delegated = delegate([
       opts.applied ? 'clean' : 'reconcile',
@@ -469,15 +574,46 @@ function askAndTranslate(state, opts, mode) {
       '-d',
       ...opts.includes,
     ])
-    classOfAction = cleanClass
+    classOfAction = (record) => cleanClass(record.action)
   } else if (mode === 'sync') {
     const suffix = opts.to !== undefined ? `@${opts.to}` : ''
-    delegated = delegate([
-      'sync',
-      ...(opts.applied ? [] : ['-n']),
-      ...opts.includes.map((spec) => `${spec}${suffix}`),
-    ])
-    classOfAction = syncClass
+    const specs = opts.includes.map((spec) => `${spec}${suffix}`)
+    if (forceRun) {
+      // The force repair is not the preview/filter/apply pipeline: it never
+      // previews — there is nothing to ask p4 first — and `-f` is what lets it
+      // walk over local content that is not opened.
+      delegated = delegate(['-G', 'sync', ...(opts.applied ? [] : ['-n']), '-f', ...specs])
+      classOfAction = (record) => syncForceClass(record.action)
+    } else {
+      emitProgress('preview', null, phases)
+      // δ asks p4 what it WOULD do first; that answer is its plan. p4 names an
+      // opened file in a notice instead of a record, so δ looks its identity up
+      // with a second bounded query (`p4 opened` + `fstat`) — this fake reads it
+      // off the plan instead. Either way an opened file is a `resolve` record in
+      // BOTH stages: p4 moves its have and schedules the merge, and never writes
+      // its content.
+      plan = delegate(['-G', 'sync', '-n', ...specs])
+      emitProgress('filter', null, phases)
+      // δ hands p4 the plan's candidates as EXACT specs (`//depot/f#rev`) — which
+      // is also why a file p4 refused in the preview is never mentioned again:
+      // it was never handed over. Nothing to do means no second call at all.
+      const pinned = plan.records.map((record) =>
+        record.rev === undefined || record.rev === null
+          ? String(record.depotFile)
+          : `${record.depotFile}#${record.rev}`,
+      )
+      if (opts.applied && pinned.length > 0) {
+        // The apply segment is announced the moment the writing starts, which is
+        // how a consumer tells "the run died before touching anything" (safe to
+        // re-serve elsewhere) from "part of it may already have landed".
+        emitProgress('apply', null, phases)
+        delegated = delegate(['-G', 'sync', ...pinned])
+      } else {
+        delegated = plan
+      }
+      classOfAction = (record) => (openedOf(record) ? 'resolve' : syncClass(record.action))
+      stage = opts.applied ? 'apply' : 'preview'
+    }
   } else {
     delegated = delegate([
       'reconcile',
@@ -487,12 +623,18 @@ function askAndTranslate(state, opts, mode) {
       ...(opts.changelist !== undefined ? ['-c', opts.changelist] : []),
       ...opts.includes,
     ])
-    classOfAction = openClass
+    classOfAction = (record) => openClass(record.action)
   }
 
   const records = delegated.records
+    // An opened file is in no apply run's records (p4 reports it with notices
+    // only), so its record comes from the plan there; in a preview the plan
+    // already carries it and the class function names it `resolve`.
+    .concat(opts.applied && mode === 'sync' && !forceRun ? plan.records.filter(openedOf) : [])
     .filter((record) => !isExcluded(state, record, opts.excludes))
-    .map((record) => fileRecord(mode, classOfAction, record, opts.applied))
+    .map((record) =>
+      fileRecord(mode, classOfAction, record, { applied: opts.applied, stage, force: forceRun }),
+    )
   const counts = {}
   for (const record of records) counts[record.class] = (counts[record.class] ?? 0) + 1
   return { records, counts }
@@ -500,6 +642,14 @@ function askAndTranslate(state, opts, mode) {
 
 function main() {
   const opts = parseArgv(process.argv.slice(2))
+  if (opts.version) {
+    // The exact shape the editor's probe reads: clap's `<crate name> <version>`
+    // (the crate name is compiled in). LEGACY stands in for v0.1.5, the last
+    // release below the editor's MIN_P4DELTA_VERSION — the gate rejects it
+    // before any δ run happens.
+    writeOut(`p4delta ${LEGACY ? '0.1.5' : '0.1.6'}\n`)
+    return 0
+  }
   if (opts.help) {
     printHelp()
     return 0
@@ -511,16 +661,24 @@ function main() {
     usageError(`UNIVERSE_P4DELTA_FAKE_FAIL='${fail}' is not a known fault mode`)
   }
   // A build that rejects our argv: the fault lands at the parse stage (but after
-  // `--help`, so the probe still accepts the binary) and leaves the same exit 2
-  // a real clap parse error does.
+  // `--version`, so the probe still accepts the binary) and leaves the same exit
+  // 2 a real clap parse error does.
   if (fail === 'exit2') usageError('unexpected argument found (injected fault)')
+
+  // A pre-split build's `--sync` IS the force repair — the split `--force` was
+  // introduced to make is exactly what this fake does not have. One place, so the
+  // delegated `-f`, the class table and the summary's `force` all agree.
+  if (LEGACY && opts.sync) opts.force = true
 
   const state = loadState()
   const mode = opts.clean ? 'clean' : opts.sync ? 'sync' : 'open'
+  // The phase ladder follows the mode: normal sync's has preview/filter/apply,
+  // the others have analyze/digest/report.
+  const phases = phasesFor(mode, opts.force === true)
   const started = Date.now()
 
-  emitProgress('start')
-  const { records, counts } = askAndTranslate(state, opts, mode)
+  emitProgress('start', null, phases)
+  const { records, counts } = askAndTranslate(state, opts, mode, phases)
 
   // Crash: the stream ends mid-flight with no summary. A consumer that reads the
   // partial records as an answer is the bug hard rule 1 exists for.
@@ -541,12 +699,18 @@ function main() {
   // not a crash — the contract keeps it apart for consumers that send the
   // `[<path>, <path>/...]` pair of a deleted directory. With zero entries the
   // same reading is the only one that cannot be mistaken for success.
-  const noEntryMatched = opts.includes.length === 0 || unmatchedPaths.length === opts.includes.length
+  const noEntryMatched =
+    opts.includes.length === 0 || unmatchedPaths.length === opts.includes.length
   const failed = noEntryMatched || fail === 'error'
 
-  emitProgress('report')
+  // No 'report' segment on the sync ladder — the apply phase already closed the
+  // writing half there, and the records below are its outcome.
+  if (mode !== 'sync') emitProgress('report', null, phases)
   if (opts.json) for (const record of records) emit(record)
-  else writeOut(`${records.length} file(s) in ${mode} mode${opts.applied ? ' (applied)' : ' (preview)'}\n`)
+  else
+    writeOut(
+      `${records.length} file(s) in ${mode} mode${opts.applied ? ' (applied)' : ' (preview)'}\n`,
+    )
   for (const path of unmatchedPaths) emit({ kind: 'unmatched', path })
 
   if (failed) {
@@ -572,7 +736,7 @@ function main() {
     return 1
   }
 
-  emitProgress('done')
+  emitProgress('done', null, phases)
   emitSummary(mode, opts, {
     ok: true,
     reason: null,
@@ -593,6 +757,7 @@ function emitSummary(mode, opts, state) {
     mode,
     ok: state.ok,
     applied: opts.applied,
+    force: opts.force === true,
     total,
     counts: state.counts,
     scopeMatched: state.scopeMatched,

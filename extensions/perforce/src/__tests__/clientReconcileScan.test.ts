@@ -50,11 +50,18 @@
  */
 import { EventEmitter } from 'node:events'
 import { mkdirSync, readdirSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { FileSystemWatcher } from '@universe-editor/extension-api'
 import { expandP4Argv } from './expandP4Argv.js'
 import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
+
+/** Platform-independent path build for fixtures and expectations: the scan
+ *  appends subdirectories with `/` and keeps the caller's spelling, so the
+ *  tests must do the same rather than inheriting the host separator from
+ *  `node:path.join`. */
+function posixJoin(...parts: string[]): string {
+  return parts.join('/')
+}
 
 class FakeChildProcess extends EventEmitter {
   readonly stdout = new EventEmitter()
@@ -633,16 +640,17 @@ describe('PerforceClient.runReconcileScan', () => {
     const client = await makeClient(
       {
         reconcile: (filespec) => {
-          // The filespec is `<dir>/...` where <dir> uses the OS separator for
-          // split subdirectories (`path.join`) — compare on the directory.
+          // The filespec is `<dir>/...`; split subdirectories keep this
+          // scenario's spelling with `/` appended (`_listSubdirs`) — compare on
+          // the directory, built the same way (`posixJoin`).
           const dir = filespec.replace(/[/\\]\.\.\.$/, '')
           if (dir === LOCAL) {
             // A slow batch: the injected clock advances past the 10s ceiling.
             clock.advance(20_000)
             return [{ rel: 'top.txt' }]
           }
-          if (dir === join(LOCAL, 'sub1')) return [{ rel: 'sub1/a.txt' }]
-          if (dir === join(LOCAL, 'sub2')) return []
+          if (dir === posixJoin(LOCAL, 'sub1')) return [{ rel: 'sub1/a.txt' }]
+          if (dir === posixJoin(LOCAL, 'sub2')) return []
           return undefined
         },
       },
@@ -654,13 +662,13 @@ describe('PerforceClient.runReconcileScan', () => {
     await client.runReconcileScan()
 
     // The slow parent still publishes (the scan's result is not wasted), then
-    // each subdirectory batch publishes in turn. Subdirectory paths come from
-    // `readdir` + `path.join`, so assert with the same helper, not a hand-built
-    // separator.
-    expect(scannedDirs(client)).toEqual([LOCAL, join(LOCAL, 'sub1'), join(LOCAL, 'sub2')])
+    // each subdirectory batch publishes in turn. Subdirectory paths keep the
+    // scope's spelling with `/` appended (`_listSubdirs`), hence `posixJoin`
+    // rather than the host separator.
+    expect(scannedDirs(client)).toEqual([LOCAL, posixJoin(LOCAL, 'sub1'), posixJoin(LOCAL, 'sub2')])
     expect(client.scanDriftByDir.get(LOCAL)).toHaveLength(1)
-    expect(client.scanDriftByDir.get(join(LOCAL, 'sub1'))).toHaveLength(1)
-    expect(client.scanDriftByDir.get(join(LOCAL, 'sub2'))).toHaveLength(0)
+    expect(client.scanDriftByDir.get(posixJoin(LOCAL, 'sub1'))).toHaveLength(1)
+    expect(client.scanDriftByDir.get(posixJoin(LOCAL, 'sub2'))).toHaveLength(0)
     // The slow parent checkpoints the SPLIT itself (a marker with no files — its
     // result was published just above), so the next session resumes at the
     // subdirectories instead of re-running the slow batch; the two fast
@@ -675,8 +683,8 @@ describe('PerforceClient.runReconcileScan', () => {
     }
     expect(parentEntry.split).toBe(true)
     expect(parentEntry.files).toEqual([])
-    expect(keys.some((k) => k.includes(join(LOCAL, 'sub1')))).toBe(true)
-    expect(keys.some((k) => k.includes(join(LOCAL, 'sub2')))).toBe(true)
+    expect(keys.some((k) => k.includes(posixJoin(LOCAL, 'sub1')))).toBe(true)
+    expect(keys.some((k) => k.includes(posixJoin(LOCAL, 'sub2')))).toBe(true)
   })
 
   it('splits a batch that fails after outlasting the ceiling (watchdog kill)', async () => {
@@ -705,8 +713,8 @@ describe('PerforceClient.runReconcileScan', () => {
         reconcileStderr: () => 'timed out after 600000ms and was killed',
         reconcile: (filespec) => {
           const dir = filespec.replace(/[/\\]\.\.\.$/, '')
-          if (dir === join(LOCAL, 'sub1')) return [{ rel: 'sub1/a.txt' }]
-          if (dir === join(LOCAL, 'sub2')) return []
+          if (dir === posixJoin(LOCAL, 'sub1')) return [{ rel: 'sub1/a.txt' }]
+          if (dir === posixJoin(LOCAL, 'sub2')) return []
           return undefined
         },
       },
@@ -718,9 +726,9 @@ describe('PerforceClient.runReconcileScan', () => {
     await client.runReconcileScan()
 
     // The failed parent publishes nothing, but both subdirectory batches do.
-    expect(scannedDirs(client)).toEqual([join(LOCAL, 'sub1'), join(LOCAL, 'sub2')])
-    expect(client.scanDriftByDir.get(join(LOCAL, 'sub1'))).toHaveLength(1)
-    expect(client.scanDriftByDir.get(join(LOCAL, 'sub2'))).toHaveLength(0)
+    expect(scannedDirs(client)).toEqual([posixJoin(LOCAL, 'sub1'), posixJoin(LOCAL, 'sub2')])
+    expect(client.scanDriftByDir.get(posixJoin(LOCAL, 'sub1'))).toHaveLength(1)
+    expect(client.scanDriftByDir.get(posixJoin(LOCAL, 'sub2'))).toHaveLength(0)
     // The parent checkpoints the SPLIT marker (no files — there was no result);
     // the subdirectories checkpoint their results, so the next session resumes
     // at the subdirectories instead of re-running the doomed parent batch.
@@ -734,8 +742,8 @@ describe('PerforceClient.runReconcileScan', () => {
     }
     expect(parentEntry.split).toBe(true)
     expect(parentEntry.files).toEqual([])
-    expect(keys.some((k) => k.includes(join(LOCAL, 'sub1')))).toBe(true)
-    expect(keys.some((k) => k.includes(join(LOCAL, 'sub2')))).toBe(true)
+    expect(keys.some((k) => k.includes(posixJoin(LOCAL, 'sub1')))).toBe(true)
+    expect(keys.some((k) => k.includes(posixJoin(LOCAL, 'sub2')))).toBe(true)
   })
 
   it('does not split a fast failure (leaves it un-checkpointed)', async () => {
@@ -1340,8 +1348,8 @@ describe('PerforceClient.runReconcileScan', () => {
 
   it('a mutation drops the checkpoint of every directory covering the mutated path', async () => {
     const disk = fakeDisk()
-    const sub1 = join(LOCAL, 'sub1')
-    const sub2 = join(LOCAL, 'sub2')
+    const sub1 = posixJoin(LOCAL, 'sub1')
+    const sub2 = posixJoin(LOCAL, 'sub2')
     const client = await makeClient({ reconcile: () => [{ rel: 'a.txt' }] }, disk)
     client.setReconcileScope([sub1, sub2])
     await client.runReconcileScan()
@@ -1350,7 +1358,7 @@ describe('PerforceClient.runReconcileScan', () => {
     // The same invalidation `_mutate` runs after a successful mutation.
     ;(
       client as unknown as { _invalidateAfterMutation(paths: readonly string[]): void }
-    )._invalidateAfterMutation([join(sub1, 'a.txt')])
+    )._invalidateAfterMutation([posixJoin(sub1, 'a.txt')])
 
     // The covering directory's checkpoint is gone (memory + disk); the sibling's
     // survives — a mutation must never read as a clean directory next session.
@@ -1437,7 +1445,7 @@ describe('PerforceClient.runReconcileScan', () => {
               clientClock.advance(20_000)
               return [{ rel: 'top.txt' }]
             }
-            if (dir === join(LOCAL, 'sub1')) return [{ rel: 'sub1/a.txt' }]
+            if (dir === posixJoin(LOCAL, 'sub1')) return [{ rel: 'sub1/a.txt' }]
             return []
           },
         },
@@ -1472,9 +1480,9 @@ describe('PerforceClient.runReconcileScan', () => {
     // own; in the second session the parent is served from its split marker (which
     // re-enqueues only the subdirectories), so its LOCAL key never re-enters the
     // second client's per-directory index.
-    expect(scannedDirs(first)).toEqual([LOCAL, join(LOCAL, 'sub1'), join(LOCAL, 'sub2')])
+    expect(scannedDirs(first)).toEqual([LOCAL, posixJoin(LOCAL, 'sub1'), posixJoin(LOCAL, 'sub2')])
     expect(driftFiles(first).sort()).toEqual([`${LOCAL}/sub1/a.txt`, `${LOCAL}/top.txt`])
-    expect(scannedDirs(second)).toEqual([join(LOCAL, 'sub1'), join(LOCAL, 'sub2')])
+    expect(scannedDirs(second)).toEqual([posixJoin(LOCAL, 'sub1'), posixJoin(LOCAL, 'sub2')])
     expect(driftFiles(second).sort()).toEqual([`${LOCAL}/sub1/a.txt`])
   })
 
@@ -1624,7 +1632,7 @@ describe('PerforceClient.runReconcileScan', () => {
           }
           return undefined
         },
-        reconcileHold: (filespec) => filespec === `${join(LOCAL, 'sub1')}/...`,
+        reconcileHold: (filespec) => filespec === `${posixJoin(LOCAL, 'sub1')}/...`,
       },
       disk,
       clock,
@@ -1797,7 +1805,7 @@ describe('PerforceClient.runReconcileScan', () => {
             filespec === `${LOCAL}/...` ? [{ rel: 'top.txt' }] : undefined,
           reconcile: (filespec) => {
             const dir = filespec.replace(/[/\\]\.\.\.$/, '')
-            if (dir === join(LOCAL, 'sub1') || dir === join(LOCAL, 'sub2')) return []
+            if (dir === posixJoin(LOCAL, 'sub1') || dir === posixJoin(LOCAL, 'sub2')) return []
             return undefined
           },
         },
@@ -1809,11 +1817,15 @@ describe('PerforceClient.runReconcileScan', () => {
       await client.runReconcileScan()
 
       // The timed-out parent still publishes the drift it streamed…
-      expect(scannedDirs(client)).toEqual([LOCAL, join(LOCAL, 'sub1'), join(LOCAL, 'sub2')])
+      expect(scannedDirs(client)).toEqual([
+        LOCAL,
+        posixJoin(LOCAL, 'sub1'),
+        posixJoin(LOCAL, 'sub2'),
+      ])
       expect(groupRows(client)).toEqual([{ path: `${LOCAL}/top.txt`, letter: 'RM' }])
       expect(client.scanDriftByDir.get(LOCAL)).toHaveLength(1)
-      expect(client.scanDriftByDir.get(join(LOCAL, 'sub1'))).toEqual([])
-      expect(client.scanDriftByDir.get(join(LOCAL, 'sub2'))).toEqual([])
+      expect(client.scanDriftByDir.get(posixJoin(LOCAL, 'sub1'))).toEqual([])
+      expect(client.scanDriftByDir.get(posixJoin(LOCAL, 'sub2'))).toEqual([])
       // …but its checkpoint is the SPLIT marker (no files), not a result entry.
       const keys = [...disk.store.keys()]
       expect(keys).toHaveLength(3)
@@ -1873,7 +1885,7 @@ describe('PerforceClient.runReconcileScan', () => {
           reconcileDelayMs: (filespec) => (filespec === `${LOCAL}/...` ? 2000 : 0),
           reconcile: (filespec) => {
             const dir = filespec.replace(/[/\\]\.\.\.$/, '')
-            return dir === join(LOCAL, 'sub1') ? [] : undefined
+            return dir === posixJoin(LOCAL, 'sub1') ? [] : undefined
           },
         },
         disk,
@@ -1887,7 +1899,7 @@ describe('PerforceClient.runReconcileScan', () => {
       await client.runReconcileScan()
 
       // The zero-drift parent published nothing, but still wrote a split marker…
-      expect(scannedDirs(client)).toEqual([join(LOCAL, 'sub1')])
+      expect(scannedDirs(client)).toEqual([posixJoin(LOCAL, 'sub1')])
       const keys = [...disk.store.keys()]
       expect(keys).toHaveLength(2)
       const parentKey = keys.find((k) => k.includes('reconcileScan/') && !k.includes('sub'))
@@ -1929,7 +1941,7 @@ describe('PerforceClient.runReconcileScan', () => {
           reconcileDelayMs: (filespec) => (filespec === `${LOCAL}/...` ? 20_000 : 0),
           reconcile: (filespec) => {
             const dir = filespec.replace(/[/\\]\.\.\.$/, '')
-            if (dir === join(LOCAL, 'sub1')) return [{ rel: 'sub1/a.txt' }]
+            if (dir === posixJoin(LOCAL, 'sub1')) return [{ rel: 'sub1/a.txt' }]
             return []
           },
         },
@@ -1969,7 +1981,7 @@ describe('PerforceClient.runReconcileScan', () => {
     // slow-but-clean result, not a split), session 2's pre-split never accepted
     // the parent and saw only the subdirectories.
     expect(scannedDirs(first)).toEqual([LOCAL])
-    expect(scannedDirs(second)).toEqual([join(LOCAL, 'sub1'), join(LOCAL, 'sub2')])
+    expect(scannedDirs(second)).toEqual([posixJoin(LOCAL, 'sub1'), posixJoin(LOCAL, 'sub2')])
     expect(groupRows(second)).toEqual([{ path: `${LOCAL}/sub1/a.txt`, letter: 'RM' }])
     expect(disk.store.size).toBe(3)
   })
@@ -2017,7 +2029,7 @@ describe('PerforceClient.runReconcileScan', () => {
       {
         reconcile: (filespec) => {
           const dir = filespec.replace(/[/\\]\.\.\.$/, '')
-          if (dir === join(LOCAL, 'sub1')) return [{ rel: 'sub1/a.txt' }]
+          if (dir === posixJoin(LOCAL, 'sub1')) return [{ rel: 'sub1/a.txt' }]
           return []
         },
       },
@@ -2028,7 +2040,9 @@ describe('PerforceClient.runReconcileScan', () => {
     await client.runReconcileScan()
 
     // The parent batch never ran — only the subdirectory's did.
-    expect(reconcileScans().map((a) => a[a.length - 1])).toEqual([`${join(LOCAL, 'sub1')}/...`])
+    expect(reconcileScans().map((a) => a[a.length - 1])).toEqual([
+      `${posixJoin(LOCAL, 'sub1')}/...`,
+    ])
     // The parent checkpoints the split marker (its batch never produced a
     // result); the subdirectory checkpoints its own result and publishes.
     const keys = [...disk.store.keys()]
@@ -2046,12 +2060,16 @@ describe('PerforceClient.runReconcileScan', () => {
     }
     expect(subEntry.split).toBeUndefined()
     expect(subEntry.files).toHaveLength(1)
-    expect(scannedDirs(client)).toEqual([join(LOCAL, 'sub1')])
+    expect(scannedDirs(client)).toEqual([posixJoin(LOCAL, 'sub1')])
     expect(groupRows(client)).toEqual([{ path: `${LOCAL}/sub1/a.txt`, letter: 'RM' }])
     // Early exit: the count stopped inside LOCAL's own listing and never
     // descended into sub1 — the third readdir is sub1's OWN cold count after
     // it was enqueued, not part of the parent's.
-    expect(readdirMock.mock.calls.map((c) => c[0])).toEqual([LOCAL, LOCAL, join(LOCAL, 'sub1')])
+    expect(readdirMock.mock.calls.map((c) => c[0])).toEqual([
+      LOCAL,
+      LOCAL,
+      posixJoin(LOCAL, 'sub1'),
+    ])
   })
 
   it('still runs the batch when the cold file count is under the threshold (no false pre-split)', async () => {
@@ -2271,11 +2289,11 @@ describe('PerforceClient.runReconcileScan', () => {
             // The exclude lands mid-scan (hot config reload), after the queue
             // was built and after the carve decision for LOCAL — the split
             // below is what must filter it out.
-            client.setReconcileExcludes([join(LOCAL, 'excluded')])
+            client.setReconcileExcludes([posixJoin(LOCAL, 'excluded')])
             clock.advance(20_000)
             return [{ rel: 'top.txt' }]
           }
-          if (dir === join(LOCAL, 'included')) return [{ rel: 'included/a.txt' }]
+          if (dir === posixJoin(LOCAL, 'included')) return [{ rel: 'included/a.txt' }]
           return undefined
         },
       },
@@ -2288,14 +2306,14 @@ describe('PerforceClient.runReconcileScan', () => {
 
     // The slow parent publishes and splits, but the excluded subdirectory is
     // filtered out of the split — only `included` is enqueued and scanned.
-    expect(scannedDirs(client)).toEqual([LOCAL, join(LOCAL, 'included')])
+    expect(scannedDirs(client)).toEqual([LOCAL, posixJoin(LOCAL, 'included')])
     expect(groupRows(client)).toEqual([
       { path: `${LOCAL}/included/a.txt`, letter: 'RM' },
       { path: `${LOCAL}/top.txt`, letter: 'RM' },
     ])
     const specs = reconcileScans().map((a) => a[a.length - 1])
-    expect(specs).toContain(`${join(LOCAL, 'included')}/...`)
-    expect(specs).not.toContain(`${join(LOCAL, 'excluded')}/...`)
+    expect(specs).toContain(`${posixJoin(LOCAL, 'included')}/...`)
+    expect(specs).not.toContain(`${posixJoin(LOCAL, 'excluded')}/...`)
     const keys = [...disk.store.keys()]
     expect(keys.some((k) => k.includes('included'))).toBe(true)
     expect(keys.some((k) => k.includes('excluded'))).toBe(false)
@@ -2309,7 +2327,7 @@ describe('PerforceClient.runReconcileScan', () => {
           { name: 'top.txt', isDirectory: () => false, isSymbolicLink: () => false },
           { name: 'src', isDirectory: () => true, isSymbolicLink: () => false },
         ]
-      if (dir === join(LOCAL, 'src'))
+      if (dir === posixJoin(LOCAL, 'src'))
         return ['included', 'excluded'].map((name) => ({
           name,
           isDirectory: () => true,
@@ -2319,7 +2337,7 @@ describe('PerforceClient.runReconcileScan', () => {
     })
     const client = await makeClient({ reconcile: () => [{ rel: 'top.txt' }] }, disk)
     client.setReconcileScope([LOCAL])
-    client.setReconcileExcludes([join(LOCAL, 'src', 'excluded')])
+    client.setReconcileExcludes([posixJoin(LOCAL, 'src', 'excluded')])
 
     await client.runReconcileScan()
 
@@ -2330,8 +2348,8 @@ describe('PerforceClient.runReconcileScan', () => {
     expect(scans).toHaveLength(1)
     const argv = scans[0]!
     expect(argv).toContain(`${LOCAL}/*`)
-    expect(argv).toContain(`${join(LOCAL, 'src')}/*`)
-    expect(argv).toContain(`${join(LOCAL, 'src', 'included')}/...`)
+    expect(argv).toContain(`${posixJoin(LOCAL, 'src')}/*`)
+    expect(argv).toContain(`${posixJoin(LOCAL, 'src', 'included')}/...`)
     expect(argv).not.toContain(`${LOCAL}/...`)
     expect(argv.some((a) => a.includes('excluded'))).toBe(false)
   })
@@ -2341,7 +2359,7 @@ describe('PerforceClient.runReconcileScan', () => {
     readdirMock.mockImplementation(async (dir: string) => {
       if (dir === LOCAL)
         return [{ name: 'src', isDirectory: () => true, isSymbolicLink: () => false }]
-      if (dir === join(LOCAL, 'src'))
+      if (dir === posixJoin(LOCAL, 'src'))
         return ['included', 'excluded'].map((name) => ({
           name,
           isDirectory: () => true,
@@ -2351,7 +2369,7 @@ describe('PerforceClient.runReconcileScan', () => {
     })
     const client = await makeClient({ reconcile: () => [{ rel: 'src/included/a.txt' }] }, disk)
     client.setReconcileScope([LOCAL])
-    client.setReconcileExcludes([join(LOCAL, 'src', 'excluded')])
+    client.setReconcileExcludes([posixJoin(LOCAL, 'src', 'excluded')])
 
     await client.runReconcileScan()
 
@@ -2369,7 +2387,7 @@ describe('PerforceClient.runReconcileScan', () => {
     })
     const client = await makeClient({ reconcile: () => [{ rel: 'a.txt' }] }, disk)
     client.setReconcileScope([LOCAL])
-    client.setReconcileExcludes([join(LOCAL, 'src', 'excluded')])
+    client.setReconcileExcludes([posixJoin(LOCAL, 'src', 'excluded')])
 
     await client.runReconcileScan()
 
@@ -2388,7 +2406,7 @@ describe('PerforceClient.runReconcileScan', () => {
     readdirMock.mockImplementation(async (dir: string) => {
       if (dir === LOCAL)
         return [{ name: 'src', isDirectory: () => true, isSymbolicLink: () => false }]
-      if (dir === join(LOCAL, 'src'))
+      if (dir === posixJoin(LOCAL, 'src'))
         return ['included', 'excluded'].map((name) => ({
           name,
           isDirectory: () => true,
@@ -2406,7 +2424,7 @@ describe('PerforceClient.runReconcileScan', () => {
       disk,
     )
     client.setReconcileScope([LOCAL])
-    client.setReconcileExcludes([join(LOCAL, 'src', 'excluded')])
+    client.setReconcileExcludes([posixJoin(LOCAL, 'src', 'excluded')])
 
     await client.runReconcileScan()
 
@@ -2422,27 +2440,27 @@ describe('PerforceClient.runReconcileScan', () => {
     const client = await makeClient(
       {
         reconcile: (filespec) => {
-          if (filespec === `${join(LOCAL, 'A')}/...`) {
+          if (filespec === `${posixJoin(LOCAL, 'A')}/...`) {
             // Hot config reload while the scan is in flight: B becomes
             // excluded after the queue was already built from the scope, so
             // enqueue-time filtering can't see it.
-            client.setReconcileExcludes([join(LOCAL, 'B')])
+            client.setReconcileExcludes([posixJoin(LOCAL, 'B')])
             return [{ rel: 'A/a.txt' }]
           }
-          if (filespec === `${join(LOCAL, 'B')}/...`) return [{ rel: 'B/b.txt' }]
+          if (filespec === `${posixJoin(LOCAL, 'B')}/...`) return [{ rel: 'B/b.txt' }]
           return undefined
         },
       },
       disk,
     )
-    client.setReconcileScope([join(LOCAL, 'A'), join(LOCAL, 'B')])
+    client.setReconcileScope([posixJoin(LOCAL, 'A'), posixJoin(LOCAL, 'B')])
 
     await client.runReconcileScan()
 
     // B never reaches p4, publishes nothing and leaves no checkpoint.
     const specs = reconcileScans().map((a) => a[a.length - 1])
-    expect(specs).toEqual([`${join(LOCAL, 'A')}/...`])
-    expect(scannedDirs(client)).toEqual([join(LOCAL, 'A')])
+    expect(specs).toEqual([`${posixJoin(LOCAL, 'A')}/...`])
+    expect(scannedDirs(client)).toEqual([posixJoin(LOCAL, 'A')])
     expect([...disk.store.keys()].some((k) => k.includes('B'))).toBe(false)
   })
 
@@ -3228,7 +3246,7 @@ describe('PerforceClient.runReconcileScan', () => {
     // form must be reachable ONLY from the `dir`/`gone` branches. The path has to
     // exist on disk for this: `_pathKind` stats for real.
     const realDir = mkTempDir('p4-fileEvt-')
-    const realFile = join(realDir, 'a.txt')
+    const realFile = posixJoin(realDir, 'a.txt')
     writeFileSync(realFile, 'x')
     try {
       const wt = makeFakeWatcher()
@@ -3257,10 +3275,10 @@ describe('PerforceClient.runReconcileScan', () => {
     // carve module's red line), so the spec list is carved. The carve walks the
     // real tree, hence the real directories.
     const realDir = mkTempDir('p4-dirExcl-')
-    const sub = join(realDir, 'sub')
-    const excluded = join(sub, 'excluded')
+    const sub = posixJoin(realDir, 'sub')
+    const excluded = posixJoin(sub, 'excluded')
     mkdirSync(excluded, { recursive: true })
-    writeFileSync(join(sub, 'keep.txt'), 'x')
+    writeFileSync(posixJoin(sub, 'keep.txt'), 'x')
     // The mocked readdir must answer for real files here.
     const actualFs = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
     readdirMock.mockImplementation((dir: string) => actualFs.readdir(dir, { withFileTypes: true }))
@@ -3298,8 +3316,8 @@ describe('PerforceClient.runReconcileScan', () => {
 
   it('a directory revert invalidates only the touched subtree checkpoints, not siblings', async () => {
     const disk = fakeDisk()
-    const dirA = join(LOCAL, 'A')
-    const dirB = join(LOCAL, 'B')
+    const dirA = posixJoin(LOCAL, 'A')
+    const dirB = posixJoin(LOCAL, 'B')
     const client = await makeClient({ reconcile: () => [{ rel: 'a.txt' }] }, disk)
     client.setReconcileScope([dirA, dirB])
     await client.runReconcileScan()
@@ -3376,7 +3394,7 @@ describe('PerforceClient.runReconcileScan', () => {
     ])
 
     cleaned = true
-    await client.revertReconcile([`${join(LOCAL, 'sub')}/...`])
+    await client.revertReconcile([`${posixJoin(LOCAL, 'sub')}/...`])
     await client.whenReconcileScanSettled()
 
     // Only the sub tree's row is gone; the sibling row survives its own tint.
@@ -4188,8 +4206,8 @@ describe('PerforceClient narrow queries — δ engine', () => {
 
   it('does not carve under δ: a directory with an excluded subtree asks `<dir>/...` plus the exclusion', async () => {
     const realDir = mkTempDir('p4-dirExcl-')
-    const sub = join(realDir, 'sub')
-    const excluded = join(sub, 'excluded')
+    const sub = posixJoin(realDir, 'sub')
+    const excluded = posixJoin(sub, 'excluded')
     mkdirSync(excluded, { recursive: true })
     try {
       const wt = makeFakeWatcher()
@@ -4218,8 +4236,8 @@ describe('PerforceClient narrow queries — δ engine', () => {
 
   it('carves a metacharacter directory: its spec must not reach p4 un-carved', async () => {
     const realDir = mkTempDir('p4-metaExcl-')
-    const weird = join(realDir, '50%_stuff')
-    const excluded = join(weird, 'excluded')
+    const weird = posixJoin(realDir, '50%_stuff')
+    const excluded = posixJoin(weird, 'excluded')
     mkdirSync(excluded, { recursive: true })
     try {
       const wt = makeFakeWatcher()
@@ -4619,7 +4637,7 @@ describe('㉑ reconcile-scan checkpoint 跨 session 持久化（真磁盘）', (
     await client.whenReconcileScanSettled()
 
     // 扫描完成后 checkpoint 已物理落盘：reconcileScan/ 目录下恰好一个值文件。
-    expect(readdirSync(join(root, 'reconcileScan'))).toHaveLength(1)
+    expect(readdirSync(posixJoin(root, 'reconcileScan'))).toHaveLength(1)
 
     wt.fire('change', `${LOCAL}/a.txt`)
     await nextMacrotask()
@@ -4627,7 +4645,7 @@ describe('㉑ reconcile-scan checkpoint 跨 session 持久化（真磁盘）', (
 
     // 工作区内任意一个文件的 watcher 事件都命中 root checkpoint，但不能把
     // 磁盘上的那个值文件删掉 —— 否则下次重开工作区必然全量重扫。
-    expect(readdirSync(join(root, 'reconcileScan'))).toHaveLength(1)
+    expect(readdirSync(posixJoin(root, 'reconcileScan'))).toHaveLength(1)
   })
 
   it('跨 session 复用 checkpoint，零重扫', async () => {

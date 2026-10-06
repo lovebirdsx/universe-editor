@@ -58,7 +58,12 @@ function makeLogs(): { delta: string; p4: string } {
  *  current Node runtime, the state and the two log seams through the env. */
 function runFake(
   args: readonly string[],
-  opts: { readonly fail?: string; readonly logs: { delta: string; p4: string } },
+  opts: {
+    readonly fail?: string
+    readonly logs: { delta: string; p4: string }
+    /** Extra env for the run — the legacy-build knob and nothing else so far. */
+    readonly env?: Record<string, string>
+  },
   stateFile: string,
 ): FakeRun {
   const res = spawnSync(process.execPath, [FAKE_P4DELTA, ...args], {
@@ -68,6 +73,7 @@ function runFake(
       UNIVERSE_P4DELTA_ARGV_LOG: opts.logs.delta,
       UNIVERSE_P4_FAKE_ARGV_LOG: opts.logs.p4,
       ...(opts.fail !== undefined ? { UNIVERSE_P4DELTA_FAKE_FAIL: opts.fail } : {}),
+      ...opts.env,
     },
     encoding: 'utf8',
   })
@@ -78,7 +84,8 @@ function runFake(
     try {
       records.push(JSON.parse(line) as Record<string, unknown>)
     } catch {
-      // `--help` is human text on purpose; a JSON run leaves this empty.
+      // `--help` / `--version` are human text on purpose; a JSON run leaves this
+      // empty.
       unparsed.push(line)
     }
   }
@@ -90,6 +97,10 @@ const SUMMARY_KEYS = [
   'mode',
   'ok',
   'applied',
+  // Normal sync and the force repair share `mode:"sync"` and part of the class
+  // table; this flag is what tells them apart, on the summary and on every file
+  // record (a consumer must never read a repair as "your local work is safe").
+  'force',
   'total',
   'counts',
   'scopeMatched',
@@ -119,6 +130,34 @@ const scanArgs = (clientRoot: string, entries: readonly string[]): string[] => [
   ...entries,
 ]
 
+/** δ's normal sync, spelled the way the extension spells it: the contract
+ *  switches, then the scope after `--`. */
+const syncArgs = (clientRoot: string, applied: boolean, entries: readonly string[]): string[] => [
+  '--json',
+  '--no-scope-file',
+  '--client-root',
+  clientRoot,
+  '--sync',
+  ...(applied ? ['-a'] : []),
+  '--',
+  ...entries,
+]
+
+/** The progress ladder a run walked, read off stderr (progress is display-only
+ *  and never a stdout record). */
+const phasesOf = (run: FakeRun): string[] =>
+  run.stderr
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith('{'))
+    .map((line) => JSON.parse(line) as { kind: string; phase?: string })
+    .filter((record) => record.kind === 'progress')
+    .map((record) => record.phase ?? '')
+
+/** p4's per-file refusal lines, re-emitted on δ's stderr: under `--json` they
+ *  are the only channel a consumer can learn "p4 refused this file" from. */
+const refusalLines = (run: FakeRun): string[] =>
+  run.stderr.split(/\r?\n/).filter((line) => line.includes("can't "))
+
 /** The same call one switch later: `-a` turns the preview into the write. */
 const applyArgs = (clientRoot: string, entries: readonly string[]): string[] => [
   '--json',
@@ -131,17 +170,183 @@ const applyArgs = (clientRoot: string, entries: readonly string[]): string[] => 
   ...entries,
 ]
 
+// ---- normal sync: δ's own class table, and the build that predates it ----
+
+test.describe('@p1 p4delta fake contract — normal sync', () => {
+  const other: SeedFile = {
+    relPath: 'other.txt',
+    content: 'have o1\n',
+    headRev: 5,
+    headContent: 'head o5\n',
+  }
+  // Locally modified with the noclobber protection on: p4 refuses it, the
+  // classic "your draft survives a get" case. The head content differs from the
+  // disk on purpose — a force repair walking over the draft is only observable
+  // when the two are not the same bytes.
+  const refused: SeedFile = {
+    relPath: 'refused.txt',
+    content: 'draft to keep\n',
+    headRev: 3,
+    headContent: 'head v3\n',
+    haveRev: 1,
+    haveContent: 'have v1\n',
+    refused: true,
+  }
+  // Opened for edit and behind: p4 bumps its have and schedules a merge, and
+  // never writes a byte of it.
+  const opened: SeedFile = {
+    relPath: 'opened.txt',
+    content: 'have v1\n',
+    headRev: 4,
+    headContent: 'head v4\n',
+    opened: { action: 'edit' },
+  }
+  test.use({ p4Seeds: { files: [ahead, other, refused, opened] } })
+
+  const wholeScope = (root: string): string => `${root}/...`
+
+  test('previews per-file revisions, opened files as resolve, refusals on stderr', ({
+    p4Workspace,
+  }) => {
+    const run = runFake(
+      syncArgs(p4Workspace.clientRoot, false, [wholeScope(p4Workspace.clientRoot)]),
+      { logs: makeLogs() },
+      p4Workspace.stateFile,
+    )
+
+    expect(run.code).toBe(0)
+    expect(run.unparsed).toEqual([])
+    // The revision is the one p4 answered for THAT file: a preview carrying a
+    // single target rev for the whole run could not describe two different
+    // heads, and the apply below is built on this list.
+    expect(filesOf(run).map((r) => [r['depotFile'], r['class'], r['rev'], r['stage']])).toEqual([
+      ['//depot/ahead.txt', 'update', '2', 'preview'],
+      ['//depot/other.txt', 'update', '5', 'preview'],
+      // p4 answers an opened file with a notice instead of a record, so δ
+      // looks its identity up and files it as a `resolve` — a class of its
+      // own, with no native word to report.
+      ['//depot/opened.txt', 'resolve', '4', 'preview'],
+    ])
+    expect(filesOf(run)[0]).toMatchObject({ action: 'updating', nativeAction: 'updated' })
+    expect(filesOf(run)[2]).not.toHaveProperty('nativeAction')
+    expect(refusalLines(run)).toEqual([
+      // p4 prints the local path in its own platform spelling; `p4Workspace.file`
+      // hands out the forward-slash form, so normalize before comparing.
+      `//depot/refused.txt#3 - can't update modified file ${resolve(
+        p4Workspace.file('refused.txt'),
+      )}`,
+    ])
+    expect(summaryOf(run)).toMatchObject({
+      mode: 'sync',
+      applied: false,
+      force: false,
+      total: 3,
+      counts: { update: 2, resolve: 1 },
+    })
+    // A preview moves nothing, not even the file it planned for.
+    expect(readFileSync(p4Workspace.file('ahead.txt'), 'utf8')).toBe(ahead.content)
+    expect(readFileSync(p4Workspace.file('other.txt'), 'utf8')).toBe('have o1\n')
+  })
+
+  test('applies the plan as exact specs: each file lands at its own revision', ({
+    p4Workspace,
+  }) => {
+    const run = runFake(
+      syncArgs(p4Workspace.clientRoot, true, [wholeScope(p4Workspace.clientRoot)]),
+      { logs: makeLogs() },
+      p4Workspace.stateFile,
+    )
+
+    expect(run.code).toBe(0)
+    expect(
+      filesOf(run).map((r) => [r['depotFile'], r['class'], r['rev'], r['stage'], r['applied']]),
+    ).toEqual([
+      ['//depot/ahead.txt', 'update', '2', 'apply', true],
+      ['//depot/other.txt', 'update', '5', 'apply', true],
+      ['//depot/opened.txt', 'resolve', '4', 'apply', true],
+    ])
+    expect(readFileSync(p4Workspace.file('ahead.txt'), 'utf8')).toBe('head v2\n')
+    expect(readFileSync(p4Workspace.file('other.txt'), 'utf8')).toBe('head o5\n')
+    // Neither the refusal nor the opened file may be written: the first keeps
+    // the local draft a get has to protect, the second is p4's own "not being
+    // changed" — δ reports its have move, not a transfer.
+    expect(readFileSync(p4Workspace.file('refused.txt'), 'utf8')).toBe('draft to keep\n')
+    expect(readFileSync(p4Workspace.file('opened.txt'), 'utf8')).toBe('have v1\n')
+    // Reported ONCE: the refused file is in no apply plan, so p4 is never
+    // handed its spec and never mentions it a second time.
+    expect(refusalLines(run)).toHaveLength(1)
+
+    const state = JSON.parse(readFileSync(p4Workspace.stateFile, 'utf8')) as {
+      opened: Record<string, { rev: number; unresolved?: boolean }>
+    }
+    expect(state.opened['//depot/opened.txt']).toMatchObject({ rev: 4, unresolved: true })
+  })
+
+  // The build the editor must NOT drive at all: it reports 0.1.5, below the
+  // minimum, and its `--sync` IS the force repair (the split flag did not exist
+  // yet). These are the shapes a consumer would have to refuse; the version gate
+  // means none of them is ever reached.
+  test.describe('a pre-split build', () => {
+    const env = { UNIVERSE_P4DELTA_FAKE_LEGACY: '1' }
+
+    test('reports 0.1.5, the version the probe rejects', ({ p4Workspace }) => {
+      const version = runFake(['--version'], { logs: makeLogs(), env }, p4Workspace.stateFile)
+      expect(version.code).toBe(0)
+      expect(version.stdout.trim()).toBe('p4delta 0.1.5')
+
+      // Fidelity: the pre-split build's help does not list `--force`, and its
+      // parser does not know the flag (clap's exit 2).
+      const help = runFake(['--help'], { logs: makeLogs(), env }, p4Workspace.stateFile)
+      expect(help.code).toBe(0)
+      expect(help.stdout).not.toContain('--force')
+
+      const forced = runFake(
+        ['--json', '--force', '--sync', '--', wholeScope(p4Workspace.clientRoot)],
+        { logs: makeLogs(), env },
+        p4Workspace.stateFile,
+      )
+      expect(forced.code).toBe(2)
+    })
+
+    test('runs --sync as the force repair, over the draft a get would keep', ({ p4Workspace }) => {
+      const run = runFake(
+        syncArgs(p4Workspace.clientRoot, true, [wholeScope(p4Workspace.clientRoot)]),
+        { logs: makeLogs(), env },
+        p4Workspace.stateFile,
+      )
+
+      expect(run.code).toBe(0)
+      expect(summaryOf(run)).toMatchObject({
+        mode: 'sync',
+        ok: true,
+        applied: true,
+        force: true,
+      })
+      // Every record carries the flag and none carries a stage: this is a
+      // repair, and no reader may take it for the preview/apply pipeline.
+      for (const record of filesOf(run)) {
+        expect(record['force']).toBe(true)
+        expect(record).not.toHaveProperty('stage')
+      }
+      // The reason the gate exists: the legacy `--sync` walks over the local
+      // draft a normal get is supposed to protect.
+      expect(readFileSync(p4Workspace.file('refused.txt'), 'utf8')).toBe('head v3\n')
+    })
+  })
+})
+
 test.describe('@p1 p4delta fake contract', () => {
   test.use({ p4Seeds: { files: [tracked, nested, kept, ahead] } })
 
-  test('answers --help with the two switches the probe admits it by', ({ p4Workspace }) => {
-    const run = runFake(['--help'], { logs: makeLogs() }, p4Workspace.stateFile)
+  test('answers --version with the version the probe admits it by', ({ p4Workspace }) => {
+    const run = runFake(['--version'], { logs: makeLogs() }, p4Workspace.stateFile)
 
     expect(run.code).toBe(0)
-    // `probeP4delta` refuses any executable whose help does not mention BOTH:
-    // `--json` is the contract, `--client-root` the round-trip saver.
-    expect(run.stdout).toContain('--json')
-    expect(run.stdout).toContain('--client-root')
+    // `probeP4delta` reads exactly this line — clap's `<crate name> <semver>`,
+    // the crate name compiled in — so the shape is pinned here: a fake that
+    // renamed itself (or dropped below the minimum) would silently keep every
+    // δ journey running on p4.
+    expect(run.stdout.trim()).toBe('p4delta 0.1.6')
   })
 
   test('translates a delegated preview into open-mode records and one summary', ({
@@ -228,17 +433,13 @@ test.describe('@p1 p4delta fake contract', () => {
     // The excluded drift is not in the answer (δ applies exclusions itself, so a
     // caller that carved the scope would answer a DIFFERENT question — this is
     // what proves the entry was honoured).
-    expect(filesOf(run)).toEqual([
-      expect.objectContaining({ depotFile: '//depot/tracked.txt' }),
-    ])
+    expect(filesOf(run)).toEqual([expect.objectContaining({ depotFile: '//depot/tracked.txt' })])
     expect(summaryOf(run)).toMatchObject({ total: 1, scopeMatched: 1, unmatched: 0 })
 
     // …and the entry rode along verbatim, spelled as an exclusion. A dropped
     // separator or a missing entry shows up here, not in the record stream (the
     // delegated child was asked for the union either way).
-    expect(readArgvLog(logs.delta)).toEqual([
-      scanArgs(p4Workspace.clientRoot, entries).join(' '),
-    ])
+    expect(readArgvLog(logs.delta)).toEqual([scanArgs(p4Workspace.clientRoot, entries).join(' ')])
   })
 
   test('cleans the workspace with the clean class table', ({ p4Workspace }) => {
@@ -304,18 +505,11 @@ test.describe('@p1 p4delta fake contract', () => {
   test('syncs the scope to the head revision, preview then apply', ({ p4Workspace }) => {
     const logs = makeLogs()
     const entry = `${p4Workspace.clientRoot}/...`
-    const syncArgs = (applied: boolean): string[] => [
-      '--json',
-      '--no-scope-file',
-      '--client-root',
-      p4Workspace.clientRoot,
-      '--no-revert-groups',
-      '--sync',
-      ...(applied ? ['-a'] : []),
-      '--',
-      entry,
-    ]
-    const preview = runFake(syncArgs(false), { logs }, p4Workspace.stateFile)
+    const preview = runFake(
+      syncArgs(p4Workspace.clientRoot, false, [entry]),
+      { logs },
+      p4Workspace.stateFile,
+    )
 
     expect(filesOf(preview)).toEqual([
       expect.objectContaining({
@@ -324,6 +518,7 @@ test.describe('@p1 p4delta fake contract', () => {
         action: 'updating',
         depotFile: '//depot/ahead.txt',
         applied: false,
+        stage: 'preview',
       }),
     ])
     expect(summaryOf(preview)).toMatchObject({
@@ -335,9 +530,38 @@ test.describe('@p1 p4delta fake contract', () => {
     // content — with `--to` absent that is `#head`.
     expect(readFileSync(p4Workspace.file('ahead.txt'), 'utf8')).toBe(ahead.content)
 
-    const applied = runFake(syncArgs(true), { logs }, p4Workspace.stateFile)
+    const applied = runFake(
+      syncArgs(p4Workspace.clientRoot, true, [entry]),
+      { logs },
+      p4Workspace.stateFile,
+    )
     expect(summaryOf(applied)).toMatchObject({ mode: 'sync', ok: true, applied: true })
+    expect(filesOf(applied)[0]).toMatchObject({ applied: true, stage: 'apply' })
     expect(readFileSync(p4Workspace.file('ahead.txt'), 'utf8')).toBe(ahead.headContent)
+  })
+
+  // Nothing to do: δ stops after the preview — no apply segment, no second p4
+  // call, and the summary still reports the `applied` run it was asked for. The
+  // ladder is how a consumer tells this apart from a run that died before it
+  // wrote anything.
+  test('an up-to-date apply walks no apply segment and reports no records', ({ p4Workspace }) => {
+    const only = `${p4Workspace.clientRoot}/tracked.txt`
+    const run = runFake(
+      syncArgs(p4Workspace.clientRoot, true, [only]),
+      { logs: makeLogs() },
+      p4Workspace.stateFile,
+    )
+
+    expect(run.code).toBe(0)
+    expect(filesOf(run)).toEqual([])
+    expect(phasesOf(run)).toEqual(['start', 'preview', 'filter', 'done'])
+    expect(summaryOf(run)).toMatchObject({
+      ok: true,
+      applied: true,
+      force: false,
+      total: 0,
+      counts: {},
+    })
   })
 
   test('reports entries that matched nothing as a complete answer, exit 1', ({ p4Workspace }) => {

@@ -42,7 +42,7 @@
   "perforce.config.port.description": "当环境变量或 P4CONFIG 均未提供时使用的兜底 P4PORT（server:port）。优先使用 p4 set / P4CONFIG。",
   "perforce.config.user.description": "当环境变量或 P4CONFIG 均未提供时使用的兜底 P4USER。",
   "perforce.config.client.description": "当环境变量或 P4CONFIG 均未提供时使用的兜底 P4CLIENT（工作区）。",
-  "perforce.config.p4delta.enabled.description": "检测到带 --json 的 p4delta 时用它作为引擎；关掉则始终用 p4 原生命令。",
+  "perforce.config.p4delta.enabled.description": "检测到 0.1.6 或更新版本的 p4delta 时用它作为引擎：后台收集扫描、普通拉取（最新版本 / 按 changelist），以及收集 / 清理这几个写操作。关掉则始终用 p4 原生命令。",
   "perforce.config.p4delta.path.description": "p4delta 可执行文件路径；留空则从 PATH 查找。远程开发时这是远端机器上的路径。",
   "perforce.config.maxConcurrent.description": "并发 p4 进程的最大数量。每个 p4 命令都是一次进程启动加一次服务器往返，较低的上限可保护服务器和本机。",
   "perforce.config.commandTimeout.description": "单个 p4 进程的最长存活秒数，超时将被强杀；0 表示不限制。约束的是“永久挂死”而非“执行慢”：否则一个卡死在冻结网络盘或半开网关连接上的 p4 会无限期占住并发槽位。内容传输命令（sync、submit、shelve、unshelve、revert、clean）不受此限——它们的耗时随传输字节数线性增长，且保持可取消。",

@@ -1,16 +1,28 @@
 import { EventEmitter } from 'node:events'
+import { rmSync, writeFileSync } from 'node:fs'
 import { delimiter, join } from 'node:path'
+import { mkTempDir } from '@universe-editor/temp-root'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // `resolveP4deltaCommand` only ever asks the filesystem whether a candidate
-// exists, so the "installed" set is all the fs it needs.
-const { fsState } = vi.hoisted(() => ({ fsState: { existing: new Set<string>() } }))
+// exists, so the "installed" set is all the fs it needs. `statFails` models the
+// OTHER reading the probe takes — a stat that fails while another process holds
+// the file (Windows hands out EPERM/EBUSY for exactly this).
+const { fsState } = vi.hoisted(() => ({
+  fsState: { existing: new Set<string>(), statFails: new Set<string>() },
+}))
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>()
   return {
     ...actual,
     existsSync: (path: unknown) => fsState.existing.has(String(path)),
+    statSync: (path: unknown, ...rest: unknown[]) => {
+      if (fsState.statFails.has(String(path))) {
+        throw Object.assign(new Error(`EBUSY: ${String(path)}`), { code: 'EBUSY' })
+      }
+      return (actual.statSync as (...args: unknown[]) => unknown)(path, ...rest)
+    },
   }
 })
 
@@ -30,12 +42,14 @@ const spawnMock = vi.fn<(...args: unknown[]) => FakeChildProcess>()
 vi.mock('node:child_process', () => ({ spawn: (...args: unknown[]) => spawnMock(...args) }))
 
 const {
+  MIN_P4DELTA_VERSION,
   P4deltaService,
   P4DELTA_PROBE_TIMEOUT_MS,
   clearP4deltaProbeCache,
   p4deltaSpawnCommand,
   probeP4delta,
   resolveP4deltaCommand,
+  supportsP4deltaVersion,
 } = await import('../p4deltaService.js')
 const { ConcurrencyGate } = await import('../concurrency.js')
 
@@ -134,8 +148,12 @@ describe('resolveP4deltaCommand', () => {
   it('looks for p4delta.exe on PATH on Windows', () => {
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
     process.env.PATH = '/tools'
-    fsState.existing.add('/tools/p4delta.exe')
-    expect(resolveP4deltaCommand('')).toBe('/tools/p4delta.exe')
+    // Both sides through `join`: the lookup builds its candidate with the host
+    // separator (mocking `process.platform` does not reach `node:path`), so a
+    // hardcoded forward-slash key would never match on Windows.
+    const installed = join('/tools', 'p4delta.exe')
+    fsState.existing.add(installed)
+    expect(resolveP4deltaCommand('')).toBe(installed)
   })
 
   it('finds the default Windows install location when PATH has nothing', () => {
@@ -182,29 +200,24 @@ describe('probeP4delta', () => {
     vi.useRealTimers()
   })
 
-  it('accepts a build advertising both --json and --client-root', async () => {
+  it('admits a build reporting the minimum version', async () => {
     const probe = probeP4delta('/opt/p4delta')
-    child.stdout.emit(
-      'data',
-      Buffer.from(
-        'Usage: p4delta [OPTIONS]\n  --json   machine-readable output\n  --client-root <PATH>\n',
-      ),
-    )
+    child.stdout.emit('data', Buffer.from(`p4delta ${MIN_P4DELTA_VERSION.join('.')}\n`))
     child.emit('close', 0, null)
     await expect(probe).resolves.toBe(true)
-    expect(spawnMock.mock.calls.at(-1)?.[1]).toEqual(['--help'])
+    expect(spawnMock.mock.calls.at(-1)?.[1]).toEqual(['--version'])
   })
 
-  it('accepts help text printed to stderr', async () => {
+  it('reads the banner off stderr too', async () => {
     const probe = probeP4delta('/opt/p4delta')
-    child.stderr.emit('data', Buffer.from('--json\n--client-root <PATH>\n'))
+    child.stderr.emit('data', Buffer.from('p4delta 0.2.0\n'))
     child.emit('close', 0, null)
     await expect(probe).resolves.toBe(true)
   })
 
-  it('rejects a build without the --json contract', async () => {
+  it('rejects a build older than the minimum', async () => {
     const probe = probeP4delta('/opt/p4delta')
-    child.stdout.emit('data', Buffer.from('Usage: p4delta [OPTIONS]\n  --client-root <PATH>\n'))
+    child.stdout.emit('data', Buffer.from('p4delta 0.1.5\n'))
     child.emit('close', 0, null)
     await expect(probe).resolves.toBe(false)
   })
@@ -223,7 +236,7 @@ describe('probeP4delta', () => {
 
   it('probes each exe path once per session', async () => {
     const first = probeP4delta('/opt/p4delta')
-    child.stdout.emit('data', Buffer.from('--json --client-root'))
+    child.stdout.emit('data', Buffer.from('p4delta 0.1.6\n'))
     child.emit('close', 0, null)
     await expect(first).resolves.toBe(true)
 
@@ -232,7 +245,7 @@ describe('probeP4delta', () => {
     expect(spawnMock).not.toHaveBeenCalled()
   })
 
-  it('kills a hung --help and answers false instead of hanging', async () => {
+  it('kills a hung --version and answers false instead of hanging', async () => {
     vi.useFakeTimers()
     const probe = probeP4delta('/opt/p4delta')
     vi.advanceTimersByTime(P4DELTA_PROBE_TIMEOUT_MS)
@@ -242,13 +255,99 @@ describe('probeP4delta', () => {
 
   it('probes a script override through this runtime too', async () => {
     const probe = probeP4delta('/opt/e2e/fake-p4delta.mjs')
-    child.stdout.emit('data', Buffer.from('--json --client-root'))
+    child.stdout.emit('data', Buffer.from('p4delta 0.1.6\n'))
     child.emit('close', 0, null)
     await expect(probe).resolves.toBe(true)
     const call = spawnMock.mock.calls.at(-1)
     expect(call?.[0]).toBe(process.execPath)
-    expect(call?.[1]).toEqual(['/opt/e2e/fake-p4delta.mjs', '--help'])
+    expect(call?.[1]).toEqual(['/opt/e2e/fake-p4delta.mjs', '--version'])
     expect(spawnedEnv().ELECTRON_RUN_AS_NODE).toBe('1')
+  })
+
+  // Replacing the binary at a path is how a machine ends up with a build older
+  // than the minimum — a path-keyed cache would keep answering "drivable", and
+  // that verdict is the one standing between a plain get and overwriting
+  // uncollected local work.
+  it('re-probes when the binary at a path is replaced', async () => {
+    const dir = mkTempDir('ue2-p4delta-probe-')
+    try {
+      const exe = join(dir, process.platform === 'win32' ? 'p4delta.exe' : 'p4delta')
+      writeFileSync(exe, 'a'.repeat(64))
+      const current = probeP4delta(exe)
+      child.stdout.emit('data', Buffer.from('p4delta 0.1.6\n'))
+      child.emit('close', 0, null)
+      await expect(current).resolves.toBe(true)
+
+      // Same path, different bytes: the pre-0.1.6 build.
+      writeFileSync(exe, 'b'.repeat(32))
+      spawnMock.mockClear()
+      const legacy = probeP4delta(exe)
+      expect(spawnMock).toHaveBeenCalledTimes(1)
+      child.stdout.emit('data', Buffer.from('p4delta 0.1.5\n'))
+      child.emit('close', 0, null)
+      await expect(legacy).resolves.toBe(false)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  // The other half of that rule, and the reason the cache keeps the fingerprint
+  // instead of keying on it: a stat that FAILS is not evidence the binary
+  // changed. Keying on the fingerprint would give this ask a different key than
+  // the first one and spawn the probe again — a duplicate spawn the e2e suite
+  // counts (it asserts the `--version` probe happens once).
+  it('answers from the cache when the file cannot be stat-ed on the next ask', async () => {
+    const dir = mkTempDir('ue2-p4delta-probe-')
+    try {
+      const exe = join(dir, process.platform === 'win32' ? 'p4delta.exe' : 'p4delta')
+      writeFileSync(exe, 'a'.repeat(64))
+      const first = probeP4delta(exe)
+      child.stdout.emit('data', Buffer.from('p4delta 0.1.6\n'))
+      child.emit('close', 0, null)
+      await expect(first).resolves.toBe(true)
+
+      // Windows: another process (a virus scanner, a copy in progress) holds the
+      // file, and statSync throws for as long as it does.
+      fsState.statFails.add(exe)
+      spawnMock.mockClear()
+      await expect(probeP4delta(exe)).resolves.toBe(true)
+      expect(spawnMock).not.toHaveBeenCalled()
+    } finally {
+      fsState.statFails.clear()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('supportsP4deltaVersion', () => {
+  it('reads the version off a clap banner', () => {
+    expect(supportsP4deltaVersion(`p4delta ${MIN_P4DELTA_VERSION.join('.')}\n`)).toBe(true)
+    expect(supportsP4deltaVersion('p4delta 0.1.6')).toBe(true)
+    // Above the minimum, including versions that do not exist yet. The compare
+    // is numeric per segment, so 0.1.10 counts as NEWER than 0.1.6 — a string
+    // compare would read it as older.
+    expect(supportsP4deltaVersion('p4delta 0.2.0\n')).toBe(true)
+    expect(supportsP4deltaVersion('p4delta 0.1.10\n')).toBe(true)
+    expect(supportsP4deltaVersion('p4delta 1.0.0\n')).toBe(true)
+    // A pre-release counts as the version it names: by then that version's flag
+    // set is frozen.
+    expect(supportsP4deltaVersion('p4delta 0.1.6-rc1\n')).toBe(true)
+  })
+
+  it('rejects anything below the minimum', () => {
+    expect(supportsP4deltaVersion('p4delta 0.1.5\n')).toBe(false)
+    expect(supportsP4deltaVersion('p4delta 0.1.3\n')).toBe(false)
+    expect(supportsP4deltaVersion('p4delta 0.0.9\n')).toBe(false)
+    expect(supportsP4deltaVersion('p4delta 0.1.5-rc1\n')).toBe(false)
+  })
+
+  // The prefix is anchored so that a configured path pointing at some OTHER tool
+  // cannot pass: a version number alone is not evidence of p4delta.
+  it('rejects a banner that is not p4delta', () => {
+    expect(supportsP4deltaVersion('git version 2.43.0\n')).toBe(false)
+    expect(supportsP4deltaVersion('0.1.6\n')).toBe(false)
+    expect(supportsP4deltaVersion('p4delta-cli 0.1.6\n')).toBe(false)
+    expect(supportsP4deltaVersion('')).toBe(false)
   })
 })
 
@@ -368,6 +467,57 @@ describe('P4deltaService.run', () => {
     expect(result.records).toHaveLength(2)
     expect(result.sawSummary).toBe(true)
     expect(logs.join('\n')).toMatch(/non-JSON stdout line/)
+  })
+
+  // The streaming seam a get's progress bar rides on: every stdout record, in
+  // arrival order, without buffering the run.
+  it('hands each stdout record to onRecord as it arrives', async () => {
+    const svc = makeService()
+    const seen: unknown[] = []
+    const p = svc.run(['--json', '--sync', '-a'], { onRecord: (record) => seen.push(record) })
+    await flush()
+    expect(seen).toEqual([])
+    child.stdout.emit('data', Buffer.from(FILE_LINE))
+    expect(seen).toEqual([JSON.parse(FILE_LINE)])
+    child.stdout.emit('data', Buffer.from(SUMMARY_LINE))
+    child.emit('close', 0, null)
+    await p
+    expect(seen).toHaveLength(2)
+    // stderr records (progress) are not part of the stream the caller reads.
+    child.stderr.emit('data', Buffer.from('{"kind":"progress","phase":"apply"}\n'))
+    expect(seen).toHaveLength(2)
+  })
+
+  // Red line 4 through the one callback that runs per file: a consumer that
+  // throws must not take the host down, and must not stop the run either.
+  it('swallows a throwing onRecord and keeps parsing', async () => {
+    const svc = makeService()
+    const p = svc.run(['--json', '--sync', '-a'], {
+      onRecord: () => {
+        throw new Error('consumer exploded')
+      },
+    })
+    await flush()
+    child.stdout.emit('data', Buffer.from(FILE_LINE + SUMMARY_LINE))
+    child.emit('close', 0, null)
+    const result = await p
+    expect(result.records).toHaveLength(2)
+    expect(result.sawSummary).toBe(true)
+  })
+
+  it('reports the pid to onSpawn, and tolerates a sampler that throws', async () => {
+    const svc = makeService()
+    const pids: number[] = []
+    const p = svc.run(['--json', '--sync', '-a'], {
+      onSpawn: (pid) => {
+        pids.push(pid)
+        throw new Error('sampler exploded')
+      },
+    })
+    await flush()
+    expect(pids).toEqual([4242])
+    child.emit('close', 0, null)
+    await expect(p).resolves.toMatchObject({ code: 0 })
   })
 
   it('separates stderr progress records from the human log', async () => {

@@ -357,14 +357,21 @@ test.describe('@p1 swarm reviews', () => {
       await page.keyboard.press('End')
 
       await expect(selected).toHaveCount(1)
-      await expect(selected).toHaveAttribute('data-row-key', (await rows.last().getAttribute('data-row-key'))!)
+      await expect(selected).toHaveAttribute(
+        'data-row-key',
+        (await rows.last().getAttribute('data-row-key'))!,
+      )
       const geometry = await tree.evaluate((el) => ({
         scrollTop: el.scrollTop,
         max: el.scrollHeight - el.clientHeight,
       }))
       // Bottom-aligned, and no further — a reveal that overshoots would leave a
-      // row above the cursor out of view.
-      expect(geometry.scrollTop).toBe(Math.max(0, geometry.max))
+      // row above the cursor out of view. `scrollHeight - clientHeight` is the
+      // integer-rounded approximation of the scrollable distance while the real
+      // layout value carries a fraction (the browser clamps `scrollTop` to
+      // that), so compare within the same 1px tolerance the viewport assertion
+      // below uses rather than demanding an exact integer match.
+      expect(geometry.scrollTop).toBeGreaterThanOrEqual(Math.max(0, geometry.max) - 1)
       expect(
         await selected.evaluate((el) => {
           const rect = el.getBoundingClientRect()

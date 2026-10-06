@@ -54,7 +54,7 @@ const disabledP4Log = join(mkTempDir('ue2-p4-argv-'), 'p4.log')
 
 const deltaLines = (log: string): string[] => readArgvLog(log)
 /** The δ SCAN spawns: the contract switches plus a recursive scope entry. The
- *  `--help` probe and any per-file narrow query do not match. */
+ *  `--version` probe and any per-file narrow query do not match. */
 const scanLines = (log: string): string[] =>
   deltaLines(log).filter((l) => l.includes('--no-revert-groups') && l.includes('/...'))
 /** Native `reconcile -n` lines: the log the extension writes when IT asks p4. */
@@ -124,8 +124,7 @@ test.describe('@p1 perforce p4delta fallback', () => {
       for (const seed of DRIFTED_SEEDS) {
         await expect
           .poll(
-            () =>
-              page.evaluate((s) => window.__E2E__!.getScmGroupIdsForResource(s), seed.relPath),
+            () => page.evaluate((s) => window.__E2E__!.getScmGroupIdsForResource(s), seed.relPath),
             { timeout: 60_000, message: `${seed.relPath} should still reach the Changes group` },
           )
           .toContain('reconcile')
@@ -255,17 +254,19 @@ test.describe('@p1 perforce p4delta fallback', () => {
       // The world: the file is really opened (read from the shared fake state,
       // which records what p4 was told) and the row moved to the changelist group.
       await expect
-        .poll(() => {
-          const state = JSON.parse(readFileSync(p4Workspace.stateFile, 'utf8')) as {
-            opened?: Record<string, { action?: string }>
-          }
-          return state.opened?.['//depot/drifted.txt']?.action
-        }, { timeout: 30_000, message: 'the native collect should really open the file' })
+        .poll(
+          () => {
+            const state = JSON.parse(readFileSync(p4Workspace.stateFile, 'utf8')) as {
+              opened?: Record<string, { action?: string }>
+            }
+            return state.opened?.['//depot/drifted.txt']?.action
+          },
+          { timeout: 30_000, message: 'the native collect should really open the file' },
+        )
         .toBe('edit')
       await expect
         .poll(
-          () =>
-            page.evaluate((s) => window.__E2E__!.getScmGroupIdsForResource(s), drifted.relPath),
+          () => page.evaluate((s) => window.__E2E__!.getScmGroupIdsForResource(s), drifted.relPath),
           { timeout: 30_000 },
         )
         .toEqual(['default'])
@@ -320,7 +321,7 @@ test.describe('@p1 perforce p4delta disabled', () => {
 
     // The negative half, in its strongest form: the δ argv log file was never
     // CREATED. A disabled engine must not resolve the path, let alone spawn the
-    // `--help` probe (which is the first thing an enabled session does).
+    // `--version` probe (which is the first thing an enabled session does).
     expect(existsSync(disabledDeltaLog)).toBe(false)
     expect(deltaLines(disabledDeltaLog)).toEqual([])
   })
