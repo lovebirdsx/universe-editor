@@ -3,7 +3,6 @@
  *
  *  With `UNIVERSE_P4DELTA_PATH` pointed at the δ fake, opening a workspace that
  *  has drift on disk must:
- *    - admit the engine through its `--version` probe,
  *    - answer the background reconcile scan with ONE `p4delta --json` call per
  *      scope round (the contract switches + the scope entries after `--`),
  *    - surface the drift where the user sees it: the Changes group row and the
@@ -70,14 +69,6 @@ test.describe('@p1 perforce p4delta scan', () => {
       })
       .toBeGreaterThan(0)
     await waitForPerforceCommands(workbench)
-
-    // The engine had to be admitted first: the probe is the only `--version` spawn.
-    await expect
-      .poll(() => deltaLogLines().filter((l) => l === '--version').length, {
-        timeout: 30_000,
-        message: 'the δ engine should have been probed with --version before use',
-      })
-      .toBe(1)
 
     // The SCAN call: the contract switches the extension always spells, the client
     // root (the round-trip saver), and the scope as a recursive entry after `--`.

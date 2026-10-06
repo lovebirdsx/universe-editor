@@ -1,15 +1,11 @@
 import { EventEmitter } from 'node:events'
-import { rmSync, writeFileSync } from 'node:fs'
 import { delimiter, join } from 'node:path'
-import { mkTempDir } from '@universe-editor/temp-root'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // `resolveP4deltaCommand` only ever asks the filesystem whether a candidate
-// exists, so the "installed" set is all the fs it needs. `statFails` models the
-// OTHER reading the probe takes — a stat that fails while another process holds
-// the file (Windows hands out EPERM/EBUSY for exactly this).
+// exists, so the "installed" set is all the fs it needs.
 const { fsState } = vi.hoisted(() => ({
-  fsState: { existing: new Set<string>(), statFails: new Set<string>() },
+  fsState: { existing: new Set<string>() },
 }))
 
 vi.mock('node:fs', async (importOriginal) => {
@@ -17,12 +13,6 @@ vi.mock('node:fs', async (importOriginal) => {
   return {
     ...actual,
     existsSync: (path: unknown) => fsState.existing.has(String(path)),
-    statSync: (path: unknown, ...rest: unknown[]) => {
-      if (fsState.statFails.has(String(path))) {
-        throw Object.assign(new Error(`EBUSY: ${String(path)}`), { code: 'EBUSY' })
-      }
-      return (actual.statSync as (...args: unknown[]) => unknown)(path, ...rest)
-    },
   }
 })
 
@@ -41,16 +31,8 @@ class FakeChildProcess extends EventEmitter {
 const spawnMock = vi.fn<(...args: unknown[]) => FakeChildProcess>()
 vi.mock('node:child_process', () => ({ spawn: (...args: unknown[]) => spawnMock(...args) }))
 
-const {
-  MIN_P4DELTA_VERSION,
-  P4deltaService,
-  P4DELTA_PROBE_TIMEOUT_MS,
-  clearP4deltaProbeCache,
-  p4deltaSpawnCommand,
-  probeP4delta,
-  resolveP4deltaCommand,
-  supportsP4deltaVersion,
-} = await import('../p4deltaService.js')
+const { P4deltaService, p4deltaSpawnCommand, resolveP4deltaCommand } =
+  await import('../p4deltaService.js')
 const { ConcurrencyGate } = await import('../concurrency.js')
 
 /** The executable name the resolver looks for on THIS platform. */
@@ -124,8 +106,8 @@ describe('resolveP4deltaCommand', () => {
   })
 
   it('honors a configured path verbatim, even when it does not exist yet', () => {
-    // A dangling configured path must surface as a failed probe, not silently
-    // select some other p4delta from PATH.
+    // A dangling configured path must surface as a refusal at the gate, not
+    // silently select some other p4delta from PATH.
     process.env.PATH = ['/usr/bin'].join(delimiter)
     fsState.existing.add(join('/usr/bin', EXE_NAME))
     expect(resolveP4deltaCommand('/configured/p4delta')).toBe('/configured/p4delta')
@@ -185,169 +167,6 @@ describe('p4deltaSpawnCommand', () => {
       command: 'C:/tools/p4delta.exe',
       prefixArgs: [],
     })
-  })
-})
-
-describe('probeP4delta', () => {
-  let child: FakeChildProcess
-  beforeEach(() => {
-    clearP4deltaProbeCache()
-    child = new FakeChildProcess()
-    spawnMock.mockReturnValue(child)
-  })
-  afterEach(() => {
-    spawnMock.mockReset()
-    vi.useRealTimers()
-  })
-
-  it('admits a build reporting the minimum version', async () => {
-    const probe = probeP4delta('/opt/p4delta')
-    child.stdout.emit('data', Buffer.from(`p4delta ${MIN_P4DELTA_VERSION.join('.')}\n`))
-    child.emit('close', 0, null)
-    await expect(probe).resolves.toBe(true)
-    expect(spawnMock.mock.calls.at(-1)?.[1]).toEqual(['--version'])
-  })
-
-  it('reads the banner off stderr too', async () => {
-    const probe = probeP4delta('/opt/p4delta')
-    child.stderr.emit('data', Buffer.from('p4delta 0.2.0\n'))
-    child.emit('close', 0, null)
-    await expect(probe).resolves.toBe(true)
-  })
-
-  it('rejects a build older than the minimum', async () => {
-    const probe = probeP4delta('/opt/p4delta')
-    child.stdout.emit('data', Buffer.from('p4delta 0.1.5\n'))
-    child.emit('close', 0, null)
-    await expect(probe).resolves.toBe(false)
-  })
-
-  it('answers false when the executable cannot be spawned, and caches that verdict', async () => {
-    const probe = probeP4delta('/opt/missing')
-    child.emit('error', Object.assign(new Error('spawn /opt/missing ENOENT'), { code: 'ENOENT' }))
-    await expect(probe).resolves.toBe(false)
-
-    // Second ask: no second spawn — a broken binary is not re-spawned on every
-    // refresh.
-    spawnMock.mockClear()
-    await expect(probeP4delta('/opt/missing')).resolves.toBe(false)
-    expect(spawnMock).not.toHaveBeenCalled()
-  })
-
-  it('probes each exe path once per session', async () => {
-    const first = probeP4delta('/opt/p4delta')
-    child.stdout.emit('data', Buffer.from('p4delta 0.1.6\n'))
-    child.emit('close', 0, null)
-    await expect(first).resolves.toBe(true)
-
-    spawnMock.mockClear()
-    await expect(probeP4delta('/opt/p4delta')).resolves.toBe(true)
-    expect(spawnMock).not.toHaveBeenCalled()
-  })
-
-  it('kills a hung --version and answers false instead of hanging', async () => {
-    vi.useFakeTimers()
-    const probe = probeP4delta('/opt/p4delta')
-    vi.advanceTimersByTime(P4DELTA_PROBE_TIMEOUT_MS)
-    await expect(probe).resolves.toBe(false)
-    expect(child.killed).toBe(true)
-  })
-
-  it('probes a script override through this runtime too', async () => {
-    const probe = probeP4delta('/opt/e2e/fake-p4delta.mjs')
-    child.stdout.emit('data', Buffer.from('p4delta 0.1.6\n'))
-    child.emit('close', 0, null)
-    await expect(probe).resolves.toBe(true)
-    const call = spawnMock.mock.calls.at(-1)
-    expect(call?.[0]).toBe(process.execPath)
-    expect(call?.[1]).toEqual(['/opt/e2e/fake-p4delta.mjs', '--version'])
-    expect(spawnedEnv().ELECTRON_RUN_AS_NODE).toBe('1')
-  })
-
-  // Replacing the binary at a path is how a machine ends up with a build older
-  // than the minimum — a path-keyed cache would keep answering "drivable", and
-  // that verdict is the one standing between a plain get and overwriting
-  // uncollected local work.
-  it('re-probes when the binary at a path is replaced', async () => {
-    const dir = mkTempDir('ue2-p4delta-probe-')
-    try {
-      const exe = join(dir, process.platform === 'win32' ? 'p4delta.exe' : 'p4delta')
-      writeFileSync(exe, 'a'.repeat(64))
-      const current = probeP4delta(exe)
-      child.stdout.emit('data', Buffer.from('p4delta 0.1.6\n'))
-      child.emit('close', 0, null)
-      await expect(current).resolves.toBe(true)
-
-      // Same path, different bytes: the pre-0.1.6 build.
-      writeFileSync(exe, 'b'.repeat(32))
-      spawnMock.mockClear()
-      const legacy = probeP4delta(exe)
-      expect(spawnMock).toHaveBeenCalledTimes(1)
-      child.stdout.emit('data', Buffer.from('p4delta 0.1.5\n'))
-      child.emit('close', 0, null)
-      await expect(legacy).resolves.toBe(false)
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
-  })
-
-  // The other half of that rule, and the reason the cache keeps the fingerprint
-  // instead of keying on it: a stat that FAILS is not evidence the binary
-  // changed. Keying on the fingerprint would give this ask a different key than
-  // the first one and spawn the probe again — a duplicate spawn the e2e suite
-  // counts (it asserts the `--version` probe happens once).
-  it('answers from the cache when the file cannot be stat-ed on the next ask', async () => {
-    const dir = mkTempDir('ue2-p4delta-probe-')
-    try {
-      const exe = join(dir, process.platform === 'win32' ? 'p4delta.exe' : 'p4delta')
-      writeFileSync(exe, 'a'.repeat(64))
-      const first = probeP4delta(exe)
-      child.stdout.emit('data', Buffer.from('p4delta 0.1.6\n'))
-      child.emit('close', 0, null)
-      await expect(first).resolves.toBe(true)
-
-      // Windows: another process (a virus scanner, a copy in progress) holds the
-      // file, and statSync throws for as long as it does.
-      fsState.statFails.add(exe)
-      spawnMock.mockClear()
-      await expect(probeP4delta(exe)).resolves.toBe(true)
-      expect(spawnMock).not.toHaveBeenCalled()
-    } finally {
-      fsState.statFails.clear()
-      rmSync(dir, { recursive: true, force: true })
-    }
-  })
-})
-
-describe('supportsP4deltaVersion', () => {
-  it('reads the version off a clap banner', () => {
-    expect(supportsP4deltaVersion(`p4delta ${MIN_P4DELTA_VERSION.join('.')}\n`)).toBe(true)
-    expect(supportsP4deltaVersion('p4delta 0.1.6')).toBe(true)
-    // Above the minimum, including versions that do not exist yet. The compare
-    // is numeric per segment, so 0.1.10 counts as NEWER than 0.1.6 — a string
-    // compare would read it as older.
-    expect(supportsP4deltaVersion('p4delta 0.2.0\n')).toBe(true)
-    expect(supportsP4deltaVersion('p4delta 0.1.10\n')).toBe(true)
-    expect(supportsP4deltaVersion('p4delta 1.0.0\n')).toBe(true)
-    // A pre-release counts as the version it names: by then that version's flag
-    // set is frozen.
-    expect(supportsP4deltaVersion('p4delta 0.1.6-rc1\n')).toBe(true)
-  })
-
-  it('rejects anything below the minimum', () => {
-    expect(supportsP4deltaVersion('p4delta 0.1.5\n')).toBe(false)
-    expect(supportsP4deltaVersion('p4delta 0.1.3\n')).toBe(false)
-    expect(supportsP4deltaVersion('p4delta 0.0.9\n')).toBe(false)
-    expect(supportsP4deltaVersion('p4delta 0.1.5-rc1\n')).toBe(false)
-  })
-
-  // The prefix is anchored so that a configured path pointing at some OTHER tool
-  // cannot pass: a version number alone is not evidence of p4delta.
-  it('rejects a banner that is not p4delta', () => {
-    expect(supportsP4deltaVersion('git version 2.43.0\n')).toBe(false)
-    expect(supportsP4deltaVersion('0.1.6\n')).toBe(false)
-    expect(supportsP4deltaVersion('p4delta-cli 0.1.6\n')).toBe(false)
-    expect(supportsP4deltaVersion('')).toBe(false)
   })
 })
 

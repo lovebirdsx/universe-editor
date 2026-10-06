@@ -839,11 +839,11 @@ export interface PerforceClientOptions {
   readonly scopeFileExists?: (absolutePath: string) => boolean
   /**
    * The δ engine this session may use, or absent when it must not (disabled in
-   * the settings, no executable found, or an executable that failed its
-   * `--version` probe — all decided in `extension.ts`, the only place workspace
-   * configuration is read). `exe` is a probed p4delta binary; the client builds
-   * its own {@link P4deltaService} around it and can be re-pointed at runtime
-   * via {@link PerforceClient.setP4delta}.
+   * the settings, no executable resolved, or a resolved path that is not there
+   * — all decided in `extension.ts`, the only place workspace configuration is
+   * read). `exe` is the path that gate admitted; the client builds its own
+   * {@link P4deltaService} around it and can be re-pointed at runtime via
+   * {@link PerforceClient.setP4delta}.
    *
    * `extraEnv` rides on every δ run of this session. The extension uses it for
    * `P4_EXE` — the `p4` the engine must hand undigestable files to — when it had
@@ -1156,9 +1156,9 @@ export class PerforceClient {
   }
 
   /**
-   * Point this session's δ-backed questions at δ (`exe` is a probed p4delta
-   * executable), or take the engine away (`undefined`). Called once from the
-   * constructor and again whenever `perforce.p4delta.*` changes, so a config
+   * Point this session's δ-backed questions at δ (`exe` is a p4delta executable
+   * the gate admitted), or take the engine away (`undefined`). Called once from
+   * the constructor and again whenever `perforce.p4delta.*` changes, so a config
    * edit applies to the next scan and the next narrow query of every live client
    * without a reload. `extraEnv` is the session-wide environment the engine
    * carries (see {@link PerforceClientOptions.p4delta}).
@@ -2527,11 +2527,10 @@ export class PerforceClient {
    * narrow queries, writes and gets are all native, and only {@link setP4delta}
    * (a reconfiguration) clears the latch.
    *
-   * The get needs nothing further: a build that answers this probe is at least
-   * `MIN_P4DELTA_VERSION` (0.1.6, `p4deltaService.ts`), i.e. one whose `--sync`
-   * is the NORMAL sync. Before the sync split `--sync` WAS the force repair and
-   * would overwrite uncollected local work, which is why such builds are
-   * rejected at the probe instead.
+   * The get needs nothing further: an engine only reaches this point after
+   * answering this workspace's scan, and the sync reader keeps the contract's
+   * own guard — a stream whose summary reports a force repair is no conclusion,
+   * never an ordinary get.
    */
   private _p4deltaEngine(): P4deltaService | undefined {
     if (this._p4deltaDisarmed || this._reconcileScanEngine !== 'p4delta') return undefined
@@ -5369,7 +5368,7 @@ export class PerforceClient {
 
   /**
    * The background reconcile scan, dispatched to whichever engine this session
-   * has: δ when one was probed and the failure ladder has not disarmed it, the
+   * has: δ when one is configured and the failure ladder has not disarmed it, the
    * native `reconcile -n` walk otherwise. Both engines publish into the same
    * drift set / progress / checkpoint pipeline (see {@link _runNativeReconcileScan}
    * and {@link _runP4deltaReconcileScan}), so the consumer of the scan cannot

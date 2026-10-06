@@ -2,8 +2,8 @@
  * Thin wrapper over the p4delta CLI — the alternative engine for the reconcile /
  * clean / sync questions this extension asks. δ is a one-shot Rust tool that
  * answers them (and the narrow queries built on top) much faster than `p4`, and
- * an optional one: when it is absent or too old everything keeps running on the
- * native `p4` paths.
+ * an optional one: when it is absent everything keeps running on the native
+ * `p4` paths.
  *
  * Same shape as p4Service: spawn with an argument array and `shell: false`,
  * sanitized child env, the shared ConcurrencyGate, a watchdog and a stdout byte
@@ -34,7 +34,7 @@
  *    {@link P4deltaRunOptions.extraEnv}).
  */
 import { spawn } from 'node:child_process'
-import { existsSync, statSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { delimiter, join } from 'node:path'
 import type { ConcurrencyGate, P4Priority } from './concurrency.js'
 import {
@@ -132,39 +132,6 @@ export interface P4deltaRunResult {
   readonly signal: string | null
 }
 
-/** `<exe> --version` budget: a working binary answers instantly, a broken one
- *  must not pin the probe (and the refresh that awaits it) open. */
-export const P4DELTA_PROBE_TIMEOUT_MS = 10_000
-
-/** Cap on the banner a probe accumulates. A real `--version` is one short line;
- *  a "p4delta" that streams forever must not grow a string (or hold the probe)
- *  without bound. */
-const PROBE_OUTPUT_CAP = 64 * 1024
-
-/** The oldest published p4delta this extension drives. 0.1.6 is the FIRST
- *  release carrying the whole surface it uses — `--json`, `--client-root`,
- *  `--no-scope-file` and the sync split (plain `--sync` + `--force`) all landed
- *  between v0.1.5 and v0.1.6 — so this one gate replaces the per-capability help
- *  parsing the probe used to do. Anything older cannot serve ANY δ path, and
- *  its `--sync` IS the force repair. */
-export const MIN_P4DELTA_VERSION = [0, 1, 6] as const
-
-/** Probe verdicts per exe path, plus the fingerprint of the binary that produced
- *  each one ({@link statFingerprint}). One spawn per binary per session — the
- *  failure verdict is cached too, or every refresh would re-spawn a binary we
- *  already know is broken. */
-const probeCache = new Map<
-  string,
-  { readonly fingerprint: string | undefined; readonly verdict: Promise<boolean> }
->()
-
-/** Drop the probe verdicts (tests). A binary replaced in place is re-probed on
- *  its own — each verdict carries the fingerprint of the file it came from, see
- *  {@link statFingerprint} — so nothing in production needs to call this. */
-export function clearP4deltaProbeCache(): void {
-  probeCache.clear()
-}
-
 /**
  * How `exe` must be spawned: the program plus the argv prefix that goes before
  * the engine's own arguments. Same rule and same reason as
@@ -196,9 +163,9 @@ function envForSpawn(command: string, base: NodeJS.ProcessEnv): NodeJS.ProcessEn
  * win32 `p4delta.exe`), then the Windows default install location.
  *
  * A non-empty override is returned verbatim: a configured path that does not
- * exist has to surface as a failed probe (one clear log line), not silently
- * fall through to some other copy of the binary. An empty string counts as
- * unset — that is the setting's default.
+ * exist has to surface as a refusal at the gate (one clear log line), not
+ * silently fall through to some other copy of the binary. An empty string
+ * counts as unset — that is the setting's default.
  */
 export function resolveP4deltaCommand(configuredPath?: string): string | undefined {
   const override = process.env.UNIVERSE_P4DELTA_PATH
@@ -226,120 +193,6 @@ function locateOnPath(exeName: string): string | undefined {
     if (existsSync(candidate)) return candidate
   }
   return undefined
-}
-
-/**
- * Whether `exe` is a p4delta build we can drive. The verdict is one version
- * sample: {@link MIN_P4DELTA_VERSION} is the first release with the whole
- * surface this extension uses, and every earlier published build lacks even
- * `--json` — so `p4delta --version` separates "drivable" from "not" without
- * reading any help text. Not a p4delta, an older build, a crash, a timeout: all
- * a no. Never throws, never rejects.
- */
-export function probeP4delta(exe: string): Promise<boolean> {
-  const fingerprint = statFingerprint(exe)
-  const cached = probeCache.get(exe)
-  // Re-probe only when BOTH readings are known and disagree — i.e. the binary at
-  // this path really is a different file. The asymmetry matters twice over: a
-  // stat that fails (Windows hands out EPERM/EBUSY while another process holds
-  // the file) must NOT read as "changed", or one flaky reading would spawn the
-  // probe twice for the same binary — and the e2e suite counts those spawns.
-  // And when the file DID change, re-probing is what keeps a downgrade in place
-  // from being served the newer build's verdict — the one verdict standing
-  // between a plain get and a build whose `--sync` overwrites uncollected work.
-  if (cached !== undefined) {
-    const replaced =
-      fingerprint !== undefined &&
-      cached.fingerprint !== undefined &&
-      fingerprint !== cached.fingerprint
-    if (!replaced) return cached.verdict
-  }
-  const verdict = runVersionProbe(exe)
-  probeCache.set(exe, { fingerprint, verdict })
-  return verdict
-}
-
-/**
- * Whether a `--version` sample reports a build this extension can drive.
- *
- * The shape read is clap's default for `#[command(version)]`: `<crate name>
- * <semver>` on a line of its own, e.g. `p4delta 0.1.6` — the crate name is
- * compiled in, so renaming the exe does not change it. Anchored at the line
- * start so that a configured path pointing at some OTHER tool cannot pass: a
- * version number alone is not evidence of p4delta. A pre-release suffix
- * (`0.1.6-rc1`) counts as the version it names, and anything above the minimum
- * passes, so future builds need no change here.
- */
-export function supportsP4deltaVersion(output: string): boolean {
-  const m = /^p4delta[ \t]+(\d+)\.(\d+)\.(\d+)/m.exec(output)
-  if (m === null) return false
-  const parts = [Number(m[1]), Number(m[2]), Number(m[3])]
-  for (let i = 0; i < MIN_P4DELTA_VERSION.length; i++) {
-    const delta = (parts[i] ?? 0) - (MIN_P4DELTA_VERSION[i] ?? 0)
-    if (delta !== 0) return delta > 0
-  }
-  return true
-}
-
-/**
- * What a probe verdict is remembered BY: the file's mtime and size, so a binary
- * swapped in at the same path is re-probed. That is not a hypothetical —
- * replacing an install IS how a machine ends up with a build older than
- * {@link MIN_P4DELTA_VERSION}, and a path-only cache would keep answering
- * "drivable", which is the one verdict standing between a plain get and
- * overwriting uncollected local work. `undefined` for a path we cannot stat (a
- * broken install, a file another process is holding): the probe itself is what
- * reports that, as it always has.
- */
-function statFingerprint(exe: string): string | undefined {
-  try {
-    const stats = statSync(exe)
-    return `${stats.mtimeMs}:${stats.size}`
-  } catch {
-    return undefined
-  }
-}
-
-function runVersionProbe(exe: string): Promise<boolean> {
-  return new Promise<boolean>((resolve) => {
-    let settled = false
-    const done = (supported: boolean): void => {
-      if (settled) return
-      settled = true
-      resolve(supported)
-    }
-    const { command, prefixArgs } = p4deltaSpawnCommand(exe)
-    let proc
-    try {
-      proc = spawn(command, [...prefixArgs, '--version'], {
-        env: envForSpawn(command, sanitizeEnv()),
-        windowsHide: true,
-        shell: false,
-      })
-    } catch {
-      done(false)
-      return
-    }
-    // Both streams: clap prints the banner to stdout, but a hand-rolled tool may
-    // use stderr, and the verdict is the same either way.
-    let output = ''
-    const onData = (chunk: Buffer): void => {
-      if (output.length < PROBE_OUTPUT_CAP) output += chunk.toString('utf8')
-    }
-    proc.stdout.on('data', onData)
-    proc.stderr.on('data', onData)
-    proc.on('error', () => done(false))
-    proc.on('close', () => done(supportsP4deltaVersion(output)))
-    // No clearTimeout on the happy path: the guard makes a late firing a no-op,
-    // and the timer is unref'd, so nothing is held open either way.
-    const timer = setTimeout(() => {
-      if (settled) return
-      killQuietly(proc)
-      done(false)
-    }, P4DELTA_PROBE_TIMEOUT_MS)
-    // Never let a probe hold the host process open on its own.
-    timer.unref?.()
-  })
 }
 
 /**
@@ -418,7 +271,7 @@ function parseJsonLine(line: string): P4deltaRecord | undefined {
 /**
  * A bound p4delta command runner: carries the connection, cwd, concurrency gate
  * and optional log so callers just pass the subcommand args. Built per client,
- * next to its {@link P4Service}, once the probe accepted an executable.
+ * next to its {@link P4Service}, once the gate admitted an executable.
  */
 export class P4deltaService {
   /**

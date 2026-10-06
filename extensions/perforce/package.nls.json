@@ -42,7 +42,7 @@
   "perforce.config.port.description": "Fallback P4PORT (server:port) used when no environment variable or P4CONFIG provides one. Prefer p4 set / P4CONFIG.",
   "perforce.config.user.description": "Fallback P4USER used when no environment variable or P4CONFIG provides one.",
   "perforce.config.client.description": "Fallback P4CLIENT (workspace) used when no environment variable or P4CONFIG provides one.",
-  "perforce.config.p4delta.enabled.description": "Use p4delta (version 0.1.6 or newer) as the engine when one is detected: background reconcile scans, plain gets (latest / by changelist), and the collect / clean writes. Turn off to always use the native p4 commands.",
+  "perforce.config.p4delta.enabled.description": "Use p4delta as the engine when one is found: background reconcile scans, plain gets (latest / by changelist), and the collect / clean writes. Turn off to always use the native p4 commands.",
   "perforce.config.p4delta.path.description": "Path to the p4delta executable; empty finds it on PATH. In remote development this is a path on the remote machine.",
   "perforce.config.maxConcurrent.description": "Maximum number of concurrent p4 processes. Each p4 command is a process spawn plus a server round-trip, so a low cap protects the server and this machine.",
   "perforce.config.commandTimeout.description": "Maximum lifetime of a single p4 process in seconds before it is killed; 0 disables the timeout. Bounds 'hung forever', not 'slow': a p4 stuck on a frozen network drive or a half-open gateway connection otherwise holds its concurrency slot indefinitely. Content-transfer commands (sync, submit, shelve, unshelve, revert, clean) are exempt — their runtime scales with the bytes moved and they stay cancellable instead.",

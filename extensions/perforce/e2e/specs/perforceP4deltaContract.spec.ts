@@ -61,8 +61,6 @@ function runFake(
   opts: {
     readonly fail?: string
     readonly logs: { delta: string; p4: string }
-    /** Extra env for the run — the legacy-build knob and nothing else so far. */
-    readonly env?: Record<string, string>
   },
   stateFile: string,
 ): FakeRun {
@@ -73,7 +71,6 @@ function runFake(
       UNIVERSE_P4DELTA_ARGV_LOG: opts.logs.delta,
       UNIVERSE_P4_FAKE_ARGV_LOG: opts.logs.p4,
       ...(opts.fail !== undefined ? { UNIVERSE_P4DELTA_FAKE_FAIL: opts.fail } : {}),
-      ...opts.env,
     },
     encoding: 'utf8',
   })
@@ -170,7 +167,7 @@ const applyArgs = (clientRoot: string, entries: readonly string[]): string[] => 
   ...entries,
 ]
 
-// ---- normal sync: δ's own class table, and the build that predates it ----
+// ---- normal sync: δ's own class table ----
 
 test.describe('@p1 p4delta fake contract — normal sync', () => {
   const other: SeedFile = {
@@ -281,71 +278,18 @@ test.describe('@p1 p4delta fake contract — normal sync', () => {
     }
     expect(state.opened['//depot/opened.txt']).toMatchObject({ rev: 4, unresolved: true })
   })
-
-  // The build the editor must NOT drive at all: it reports 0.1.5, below the
-  // minimum, and its `--sync` IS the force repair (the split flag did not exist
-  // yet). These are the shapes a consumer would have to refuse; the version gate
-  // means none of them is ever reached.
-  test.describe('a pre-split build', () => {
-    const env = { UNIVERSE_P4DELTA_FAKE_LEGACY: '1' }
-
-    test('reports 0.1.5, the version the probe rejects', ({ p4Workspace }) => {
-      const version = runFake(['--version'], { logs: makeLogs(), env }, p4Workspace.stateFile)
-      expect(version.code).toBe(0)
-      expect(version.stdout.trim()).toBe('p4delta 0.1.5')
-
-      // Fidelity: the pre-split build's help does not list `--force`, and its
-      // parser does not know the flag (clap's exit 2).
-      const help = runFake(['--help'], { logs: makeLogs(), env }, p4Workspace.stateFile)
-      expect(help.code).toBe(0)
-      expect(help.stdout).not.toContain('--force')
-
-      const forced = runFake(
-        ['--json', '--force', '--sync', '--', wholeScope(p4Workspace.clientRoot)],
-        { logs: makeLogs(), env },
-        p4Workspace.stateFile,
-      )
-      expect(forced.code).toBe(2)
-    })
-
-    test('runs --sync as the force repair, over the draft a get would keep', ({ p4Workspace }) => {
-      const run = runFake(
-        syncArgs(p4Workspace.clientRoot, true, [wholeScope(p4Workspace.clientRoot)]),
-        { logs: makeLogs(), env },
-        p4Workspace.stateFile,
-      )
-
-      expect(run.code).toBe(0)
-      expect(summaryOf(run)).toMatchObject({
-        mode: 'sync',
-        ok: true,
-        applied: true,
-        force: true,
-      })
-      // Every record carries the flag and none carries a stage: this is a
-      // repair, and no reader may take it for the preview/apply pipeline.
-      for (const record of filesOf(run)) {
-        expect(record['force']).toBe(true)
-        expect(record).not.toHaveProperty('stage')
-      }
-      // The reason the gate exists: the legacy `--sync` walks over the local
-      // draft a normal get is supposed to protect.
-      expect(readFileSync(p4Workspace.file('refused.txt'), 'utf8')).toBe('head v3\n')
-    })
-  })
 })
 
 test.describe('@p1 p4delta fake contract', () => {
   test.use({ p4Seeds: { files: [tracked, nested, kept, ahead] } })
 
-  test('answers --version with the version the probe admits it by', ({ p4Workspace }) => {
+  test('answers --version in the clap banner shape', ({ p4Workspace }) => {
     const run = runFake(['--version'], { logs: makeLogs() }, p4Workspace.stateFile)
 
     expect(run.code).toBe(0)
-    // `probeP4delta` reads exactly this line — clap's `<crate name> <semver>`,
-    // the crate name compiled in — so the shape is pinned here: a fake that
-    // renamed itself (or dropped below the minimum) would silently keep every
-    // δ journey running on p4.
+    // `<crate name> <semver>`, the crate name compiled in — the shape a real
+    // p4delta prints. Nothing in the editor reads it any more (the version gate
+    // is gone); it is pinned so the fake stays a faithful CLI.
     expect(run.stdout.trim()).toBe('p4delta 0.1.6')
   })
 

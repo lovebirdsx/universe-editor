@@ -13,14 +13,11 @@
  *      itself;
  *    - the bytes on disk moved (or, for the refusal, did not).
  *
- *  Three journeys, one cold launch each:
+ *  Two journeys, one cold launch each:
  *  1. A file get runs on δ, lands head, and leaves the sibling alone.
  *  2. A locally-modified file p4 refuses is reported as a refusal — folded into
  *     the answer, NOT re-served natively (the work the refusal protects is
  *     exactly what a second run would put at risk).
- *  3. A build below the editor's minimum (0.1.5, where `--sync` IS the repair)
- *     is rejected at the probe: nothing is ever asked of δ, and the get runs
- *     natively.
  *--------------------------------------------------------------------------------------------*/
 
 import { readFileSync } from 'node:fs'
@@ -205,58 +202,6 @@ test.describe('@p1 perforce p4delta get', () => {
       // overwrites what the refusal just protected.
       expect(deltaSyncLines(logs.delta).length).toBeGreaterThan(0)
       expect(nativeSyncLines(logs.p4)).toEqual([])
-    })
-  })
-
-  // A build below the editor's minimum — the last release before the sync
-  // split, whose `--sync` IS the force repair. The version gate rejects it at
-  // the probe, so the session runs native end to end.
-  test.describe('a build below the minimum version', () => {
-    const logs = makeLogs()
-    test.use({
-      p4Seeds: { files: [behind] },
-      p4delta: {},
-      p4ExtraEnv: {
-        UNIVERSE_P4DELTA_ARGV_LOG: logs.delta,
-        UNIVERSE_P4_FAKE_ARGV_LOG: logs.p4,
-        UNIVERSE_P4DELTA_FAKE_LEGACY: '1',
-      },
-    })
-
-    test('never drives δ: the get runs natively @regression', async ({
-      page,
-      workbench,
-      perforce,
-    }) => {
-      test.setTimeout(120_000)
-      await openSyncWorkspace(page, workbench, perforce.openDir)
-
-      await page.evaluate(
-        (p) => void window.__E2E__!.runCommand('perforce.syncLatest', { resourceUri: p }),
-        perforce.file(behind.relPath),
-      )
-
-      // The get happened — natively. Both halves matter: a build that refused
-      // the get AND left the file behind would look identical on the delta log
-      // alone.
-      await expect
-        .poll(() => readFileSync(perforce.file(behind.relPath), 'utf8'), {
-          timeout: 30_000,
-          message: 'the get should still land the head revision, through p4',
-        })
-        .toBe(HEAD)
-      await expect
-        .poll(() => nativeSyncLines(logs.p4).length, {
-          timeout: 30_000,
-          message: 'the get should have been handed to p4 itself',
-        })
-        .toBeGreaterThan(0)
-
-      // …and nothing else was asked of δ either: the only line its argv log
-      // carries is the rejected probe (written before the version check), so the
-      // scans and narrow queries behind the get ran native too.
-      expect(deltaSyncLines(logs.delta)).toEqual([])
-      expect(readArgvLog(logs.delta).filter((l) => l !== '--version')).toEqual([])
     })
   })
 })

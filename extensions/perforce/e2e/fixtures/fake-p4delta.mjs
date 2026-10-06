@@ -2,10 +2,10 @@
 /*---------------------------------------------------------------------------------------------
  *  Fake `p4delta` CLI for e2e / manual testing of the Perforce extension.
  *
- *  Why it exists: this machine (and CI) has no p4delta build, so the extension's
- *  probe would refuse the engine and every δ-backed path (the whole-scope scan,
- *  the narrow query, the three writes) would silently fall back to native p4 —
- *  the engine's wiring would be untestable end to end. This script stands in.
+ *  Why it exists: this machine (and CI) has no p4delta build, so the extension
+ *  would resolve no engine and every δ-backed path (the whole-scope scan, the
+ *  narrow query, the three writes) would silently fall back to native p4 — the
+ *  engine's wiring would be untestable end to end. This script stands in.
  *
  *  How it answers: it keeps NO depot model of its own. Every question is
  *  DELEGATED to `fake-p4.mjs` (its sibling — the same fake `p4` the extension is
@@ -49,9 +49,7 @@
  *     through two bounded follow-up queries (`p4 opened` + `p4 fstat`); here they
  *     stay what fake-p4 prints for them, i.e. a message on stderr. A spec that
  *     needs `keptOpen`/`mustResolve` from a δ get needs a fake that models that
- *     follow-up. Models the normal-sync classes only — a legacy build's `--sync`
- *     (= the force repair) is reachable via `UNIVERSE_P4DELTA_FAKE_LEGACY=1` but
- *     never exercised, because the version gate refuses to drive that build.
+ *     follow-up.
  *
  *  Fault injection — `UNIVERSE_P4DELTA_FAKE_FAIL`, one mode per session, every
  *  mode asserted by the e2e suite:
@@ -71,9 +69,9 @@
  *                    reason:"no-entry-matched"`, exit 1: the ONE `ok:false` shape
  *                    a consumer is allowed to read as a complete answer.
  *  An unknown mode is a usage error (exit 2) — a typo'd fault must not look like
- *  a passing test. `--version` is answered BEFORE the fault handling on purpose:
- *  the probe must still accept the binary, since the fault models "a build that
- *  rejects our argv", not "a build that cannot be probed".
+ *  a passing test. `--help` and `--version` are answered BEFORE the fault
+ *  handling on purpose: a fault models "a build that rejects our argv", not a
+ *  build that cannot say what it is.
  *
  *  `UNIVERSE_P4DELTA_ARGV_LOG` appends one line per spawn — the complete argv,
  *  written before anything else, so a usage error is recorded too. It is the only
@@ -94,15 +92,6 @@ import { dirname, join, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const FAKE_P4 = join(dirname(fileURLToPath(import.meta.url)), 'fake-p4.mjs')
-
-/** Model the last release before the sync split — v0.1.5, i.e. below the
- *  editor's `MIN_P4DELTA_VERSION`. `--version` reports it, which is what the
- *  probe reads and rejects; for fidelity the help still hides `--force`, the
- *  flag is unknown to the parser (exit 2), and `--sync` IS the force repair
- *  (this fake applies `-f` for it) — the destructive behaviour the version gate
- *  exists to keep a normal get away from. Nothing in the editor may drive it; a
- *  spec turns it on to prove the gate holds (see `perforceSyncP4delta.spec.ts`). */
-const LEGACY = process.env.UNIVERSE_P4DELTA_FAKE_LEGACY === '1'
 
 const STATE_PATH = process.env.UNIVERSE_P4_FAKE_STATE
 if (!STATE_PATH) {
@@ -196,10 +185,8 @@ function normPath(p) {
 
 // ---- help ----------------------------------------------------------------------
 
-/** The admission ticket is `--version` (the branch in `main` below), not the
- *  help text — this help is kept clap-shaped only because that is what the real
- *  tool prints, and the contract spec pins the parts the editor's argv relies
- *  on. */
+/** Kept clap-shaped only because that is what the real tool prints, and the
+ *  contract spec pins the parts the editor's argv relies on. */
 function printHelp() {
   writeOut(
     [
@@ -227,14 +214,11 @@ function printHelp() {
       '          discard working-tree drift (default: open)',
       '',
       '      --sync',
-      LEGACY
-        ? '          force-repair the workspace to a target revision'
-        : '          sync files to a target revision',
+      '          sync files to a target revision',
       '',
-      // Fidelity only: a pre-split build's help does not list the flag the
-      // split added. The gate itself reads `--version`; this keeps the fake a
-      // faithful model of what 0.1.5 printed.
-      ...(LEGACY ? [] : ['      --force', '          force-repair instead of a normal sync', '']),
+      '      --force',
+      '          force-repair instead of a normal sync',
+      '',
       '      --to <CHANGELIST>',
       '          target change for --sync',
       '',
@@ -304,9 +288,6 @@ function parseArgv(argv) {
       opts.version = true
       continue
     }
-    // A pre-split build has no `--force`: the token is as unknown to it as any
-    // other typo, and clap's answer is exit 2.
-    if (arg === '--force' && LEGACY) usageError(`unexpected argument '${arg}' found`)
     if (VALUE_FLAGS.has(arg)) {
       const value = argv[++i]
       if (value === undefined) usageError(`the argument '${arg}' requires a value`)
@@ -486,8 +467,7 @@ function syncClass(action) {
  * p4 sync action → the class the FORCE repair reports. That path shares
  * `mode:"sync"` but has its own two extra classes: `restore` writes back a
  * locally missing file, `revert` puts drifted local content back to the target.
- * Only a `--force` run (or a legacy build, where `--sync` IS the force repair)
- * answers in this vocabulary.
+ * Only a `--force` run answers in this vocabulary.
  */
 function syncForceClass(action) {
   if (action === 'added') return 'restore'
@@ -643,11 +623,10 @@ function askAndTranslate(state, opts, mode, phases) {
 function main() {
   const opts = parseArgv(process.argv.slice(2))
   if (opts.version) {
-    // The exact shape the editor's probe reads: clap's `<crate name> <version>`
-    // (the crate name is compiled in). LEGACY stands in for v0.1.5, the last
-    // release below the editor's MIN_P4DELTA_VERSION — the gate rejects it
-    // before any δ run happens.
-    writeOut(`p4delta ${LEGACY ? '0.1.5' : '0.1.6'}\n`)
+    // Clap's `<crate name> <version>` shape (the crate name is compiled in).
+    // Nothing in the editor reads this — the version gate is gone — but a real
+    // CLI answers it, and a fake that exit-2'd here would be a false signal.
+    writeOut('p4delta 0.1.6\n')
     return 0
   }
   if (opts.help) {
@@ -660,15 +639,9 @@ function main() {
   if (fail !== undefined && fail !== '' && !KNOWN_FAULTS.has(fail)) {
     usageError(`UNIVERSE_P4DELTA_FAKE_FAIL='${fail}' is not a known fault mode`)
   }
-  // A build that rejects our argv: the fault lands at the parse stage (but after
-  // `--version`, so the probe still accepts the binary) and leaves the same exit
-  // 2 a real clap parse error does.
+  // A build that rejects our argv: the fault lands at the parse stage and leaves
+  // the same exit 2 a real clap parse error does.
   if (fail === 'exit2') usageError('unexpected argument found (injected fault)')
-
-  // A pre-split build's `--sync` IS the force repair — the split `--force` was
-  // introduced to make is exactly what this fake does not have. One place, so the
-  // delegated `-f`, the class table and the summary's `force` all agree.
-  if (LEGACY && opts.sync) opts.force = true
 
   const state = loadState()
   const mode = opts.clean ? 'clean' : opts.sync ? 'sync' : 'open'

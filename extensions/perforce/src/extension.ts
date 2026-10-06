@@ -31,12 +31,13 @@ import type {
   P4GraphSyncPoint,
   WorkingTreeChangeDto,
 } from '@universe-editor/extensions-common'
+import { existsSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { ConcurrencyGate } from './concurrency.js'
 import { resolveP4Command, setP4CommandTimeoutSeconds, type P4Connection } from './p4Service.js'
-import { MIN_P4DELTA_VERSION, probeP4delta, resolveP4deltaCommand } from './p4deltaService.js'
+import { resolveP4deltaCommand } from './p4deltaService.js'
 import { PerforceClient, SYNC_POINT_READBACK_SLOW_EXEC, type P4CacheOptions } from './client.js'
 import type { SyncPreviewFile } from './syncParser.js'
 import { P4CacheDisk } from './p4CacheDisk.js'
@@ -428,15 +429,15 @@ interface KnownLanding {
  * undefined when every scan must run on p4.
  *
  * Read here (not in the client) because this is where workspace configuration
- * lives — the client only ever receives an already probed executable. Every
+ * lives — the client only ever receives an already admitted executable. Every
  * refusal is a log line and nothing else: the engine is an optimization, so a
  * machine without it must not be interrupted about one, and the native scan is
  * a complete answer either way.
  *
- * `enabled: false` short-circuits before ANY spawn — not even the `--version`
- * probe. A configured-but-unusable path (`ENOENT`, or a binary older than
- * `MIN_P4DELTA_VERSION`) is refused here too, so the client never gets an
- * executable it would only fail on.
+ * `enabled: false` short-circuits before ANY lookup. A resolved path that is
+ * not there is refused here too (one `existsSync` — the binary is never
+ * version-checked), so the client never gets an executable it would only fail
+ * on.
  *
  * The p4-script hedge: δ hands files it cannot digest over to `p4`, and it
  * resolves that `p4` on its own. Under a `UNIVERSE_P4_PATH` script override (the
@@ -452,10 +453,10 @@ interface KnownLanding {
  * Exported for the configuration-gate tests; `activate` is the only production
  * caller.
  */
-export async function resolveP4deltaEngine(
+export function resolveP4deltaEngine(
   settings: { readonly enabled: boolean; readonly path: string },
   log: (msg: string) => void,
-): Promise<{ exe: string; extraEnv?: Readonly<Record<string, string>> } | undefined> {
+): { exe: string; extraEnv?: Readonly<Record<string, string>> } | undefined {
   if (!settings.enabled) {
     log('[perforce] p4delta disabled via perforce.p4delta.enabled; using p4')
     return undefined
@@ -476,15 +477,13 @@ export async function resolveP4deltaEngine(
     log('[perforce] p4delta not found; using p4')
     return undefined
   }
-  if (!(await probeP4delta(exe))) {
-    // One version sample answers every objection at once — not a p4delta, older
-    // than the first release carrying what this extension drives, a broken
-    // install, a timeout — so the line names the requirement, not a cause. The
-    // stake: a build below it is one whose `--sync` IS the force repair, which
-    // is why the whole engine stays off rather than only the get.
-    log(
-      `[perforce] p4delta at ${exe} did not report a supported version (>= ${MIN_P4DELTA_VERSION.join('.')}); using p4`,
-    )
+  if (!existsSync(exe)) {
+    // The whole admission test, now that no version gate exists: the file has
+    // to be there. A build on this path is taken as able to drive the entire
+    // surface this extension uses — a wrong or half-installed binary is left to
+    // the client's own failure ladder, which falls back within the round and
+    // disarms after three.
+    log(`[perforce] p4delta not found at ${exe}; using p4`)
     return undefined
   }
   log(`[perforce] p4delta engine: ${exe}`)
@@ -592,7 +591,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
   // that ran the get. See `graphSyncExternal.ts`.
   const externalSyncPoints = ExternalSyncPoints.open(saviorConfigPath(process.env, homedir()), log)
 
-  // The δ engine (`perforce.p4delta.*`): probed once here and handed to every
+  // The δ engine (`perforce.p4delta.*`): resolved once here and handed to every
   // client built this session, together with the env the engine has to carry
   // (`P4_EXE` when this session's p4 is a script override).
   const resolveP4deltaOptions = async (): Promise<
@@ -803,10 +802,10 @@ export async function activate(context: ExtensionContext): Promise<void> {
   /**
    * The δ engine: re-resolve both settings on any `perforce.p4delta.*` change
    * and hot-swap every live client, so turning the engine off (or pointing it at
-   * another executable) applies to the next scan without a reload. A probe that
-   * now fails is a log line and a switch to native — never an error toast, and
-   * never a scan that silently reports nothing (the client falls back within
-   * the round).
+   * another executable) applies to the next scan without a reload. A path that
+   * no longer resolves is a log line and a switch to native — never an error
+   * toast, and never a scan that silently reports nothing (the client falls
+   * back within the round).
    */
   context.subscriptions.push(
     workspace.onDidChangeConfiguration((e) => {

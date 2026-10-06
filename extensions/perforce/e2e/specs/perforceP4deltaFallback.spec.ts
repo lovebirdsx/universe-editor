@@ -23,7 +23,7 @@
  *  otherwise coalesce into a single change.
  *
  *  The second half of the file takes the other exit: `perforce.p4delta.enabled:
- *  false` must not even PROBE the engine — with the fixture pointing
+ *  false` must not even resolve the engine — with the fixture pointing
  *  `UNIVERSE_P4DELTA_PATH` at the fake, the δ argv log file must never come into
  *  existence.
  *--------------------------------------------------------------------------------------------*/
@@ -53,8 +53,8 @@ const disabledDeltaLog = join(mkTempDir('ue2-p4delta-argv-'), 'p4delta.log')
 const disabledP4Log = join(mkTempDir('ue2-p4-argv-'), 'p4.log')
 
 const deltaLines = (log: string): string[] => readArgvLog(log)
-/** The δ SCAN spawns: the contract switches plus a recursive scope entry. The
- *  `--version` probe and any per-file narrow query do not match. */
+/** The δ SCAN spawns: the contract switches plus a recursive scope entry. Any
+ *  per-file narrow query does not match. */
 const scanLines = (log: string): string[] =>
   deltaLines(log).filter((l) => l.includes('--no-revert-groups') && l.includes('/...'))
 /** Native `reconcile -n` lines: the log the extension writes when IT asks p4. */
@@ -216,7 +216,7 @@ test.describe('@p1 perforce p4delta fallback', () => {
         })
         .toBeGreaterThan(nativeBefore)
       // …and the engine was not even spawned: the δ log is exactly as long as it
-      // was before the round — no probe, no scan.
+      // was before the round — no spawn, no scan.
       expect(deltaLines(fallbackDeltaLog).length).toBe(deltaBefore)
     })
 
@@ -289,7 +289,7 @@ test.describe('@p1 perforce p4delta disabled', () => {
     },
   })
 
-  test('perforce.p4delta.enabled: false never spawns the engine, not even to probe it @regression', async ({
+  test('perforce.p4delta.enabled: false never spawns the engine at all @regression', async ({
     page,
     workbench,
     perforce,
@@ -320,8 +320,8 @@ test.describe('@p1 perforce p4delta disabled', () => {
     expect(nativeScanLines(disabledP4Log).length).toBeGreaterThan(0)
 
     // The negative half, in its strongest form: the δ argv log file was never
-    // CREATED. A disabled engine must not resolve the path, let alone spawn the
-    // `--version` probe (which is the first thing an enabled session does).
+    // CREATED. A disabled engine must not even resolve its path, so nothing can
+    // spawn it.
     expect(existsSync(disabledDeltaLog)).toBe(false)
     expect(deltaLines(disabledDeltaLog)).toEqual([])
   })
