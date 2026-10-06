@@ -1719,6 +1719,13 @@ export interface E2EProbe {
    */
   updateConfigValue(key: string, value: unknown): void
   /**
+   * Write a configuration value at User scope — the personal settings layer.
+   * Resolves after the user-settings hydration, because a write that lands
+   * before it is dropped. Needed for knobs that deliberately ignore the
+   * workspace/Memory layers, e.g. `agentSettings.claude.planPermissionPolicy`.
+   */
+  updateUserConfigValue(key: string, value: unknown): Promise<void>
+  /**
    * Rename an explorer resource (file/folder) by base name, via
    * ExplorerTreeService (the same path F2 uses). Returns the new URI string.
    * Fires the rename event that drives markdown link updating.

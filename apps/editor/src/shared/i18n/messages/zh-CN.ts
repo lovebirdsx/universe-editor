@@ -789,10 +789,11 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.acp.notifications.enabled':
     '当编辑器窗口未聚焦且 Agent 需要注意（权限请求、问题、任务完成或错误）时，显示系统桌面通知。点击通知会聚焦窗口并跳转到该会话。会自动继续的计划确认卡片（见 `acp.plan.autoExecute`）不会通知。',
   'settings.acp.permissions': '无需提示即可自动批准的工具调用类型（例如 "fs.read"）。',
-  'settings.acp.plan.autoApproveWithUpdates':
-    '计划模式下，Agent 为 Shell 命令、文件读取与搜索（Read/Glob/Grep）提供带作用域的「允许并记住」选项（allow-with-updates）时，直接静默选择而不显示权限卡片：Agent 会应用该选项携带的规则（通常是会话级；Shell 命令规则可能写入工作区的 .claude/settings.local.json）。Agent 标记为需要明确回答的请求（拒绝项置顶）绝不自动批准；计划确认卡片由 `acp.plan.autoExecute` 控制。关闭后这类请求都恢复人工确认。',
-  'settings.acp.plan.autoApproveUnscoped':
-    '计划模式下，当 Agent 这次没有提供带作用域的选项时（CLI 想不出可固化的规则，如 heredoc、for 循环、长 `cd` 链；子 Agent 的询问也常如此），同样静默选择「仅本次允许」：命令放行这一次，不写入任何规则。仅对子 Agent，此范围还按精确工具名与 kind 覆盖网页/MCP 搜索工具（WebSearch/WebFetch 与 Brave 搜索 MCP 工具）——即使 Agent 给出了带作用域的选项也仍只选「仅本次允许」、不写规则；这类调用可能向服务发送数据并产生费用。CLI 标记为需要人工判断的询问（拒绝项优先、压制了 always-allow 规则、或命中你配置的 ask 规则）绝不自动批准，子 Agent 的请求也一样。子 Agent 的 Shell/读取/搜索询问在旧版 Agent 完全没提供标记时仍放宽；网页/MCP 搜索询问（以及主 Agent 的任何询问）还必须带上 Agent 的肯定式标记。关闭后这类请求都恢复人工确认。',
+  'settings.agentSettings.claude.planPermissionPolicy':
+    'Claude 会话处于计划（Plan）模式时，编辑器如何回应权限请求。"skip"（默认）：由编辑器替你选 Agent 给出的「仅本次允许」选项——命令只放行这一次、不写入任何规则，同时关闭 CLI 自带的计划自动分类器，让每个请求都送到编辑器；"auto"：打开该分类器、交给它判断，编辑器自己不再批准任何请求；"manual"：关闭分类器，每个请求都显示权限卡片。这是个人设置：只读用户级配置，工作区/项目里的值一律忽略，且改动只对之后新建或恢复的会话生效。只对 Claude Agent 生效，不接管计划确认卡片（由 `acp.plan.autoExecute` 控制），也不会绕过组织的托管策略。',
+  'settings.agentSettings.claude.planPermissionPolicy.skip': '跳过（仅本次允许）',
+  'settings.agentSettings.claude.planPermissionPolicy.auto': '自动（CLI 分类器）',
+  'settings.agentSettings.claude.planPermissionPolicy.manual': '手动（每次弹卡）',
   'settings.acp.plan.autoExecute':
     '计划模式的会话完成计划（"Ready to code?"）后，经确认卡片上的短暂倒计时自动以所选模式继续——悬停或与卡片交互即可接管。"off" 表示始终等待手动选择。计划确认卡片上的复选框会把此设置切换为 "bypassPermissions"。',
   'settings.acp.plan.autoExecute.off': '关闭',
@@ -3009,6 +3010,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'agentSettings.category.binary': '二进制文件',
   'agentSettings.category.env': '高级（env）',
   'agentSettings.category.model': '模型与思考',
+  'agentSettings.category.permissions': '计划权限',
   'agentSettings.claude.nav': 'Claude 设置分类',
   'agentSettings.customEnv': '自定义环境变量',
   'agentSettings.customEnv.add': '添加变量',
@@ -3027,6 +3029,20 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'agentSettings.model.desc': '覆盖 Agent 使用的模型（Settings.model）。留空则使用默认值。',
   'agentSettings.noSettings': '此 agent 暂无可在编辑器中配置的设置。',
   'agentSettings.openConfigFile': '打开 {path}',
+  'agentSettings.planPermission.title': '计划模式权限',
+  'agentSettings.planPermission.intro':
+    'Claude 会话处于计划（Plan）模式时，编辑器如何回应它的权限请求。只对 Claude Agent 生效，且只对之后新建或恢复的会话起作用。',
+  'agentSettings.planPermission.skip': '跳过（仅本次允许）',
+  'agentSettings.planPermission.skip.desc':
+    '对每个请求替你选 Agent 给出的「仅本次允许」选项——只放行这一次，不写入任何规则；同时关闭 CLI 自带的计划自动分类器，让每个请求都送到编辑器。Shell 命令、文件编辑、子 Agent 与网页/MCP 请求都在此范围内：即使 Agent 把某条命令标为危险，也会不经询问直接放行一次。',
+  'agentSettings.planPermission.auto': '自动（CLI 分类器）',
+  'agentSettings.planPermission.auto.desc':
+    '交给 CLI 自带的计划自动分类器判断并批准；编辑器自己不再批准任何请求，只显示分类器转交过来的询问。若组织的托管策略禁止自动模式，仍以托管策略为准——此设置无法绕过。',
+  'agentSettings.planPermission.manual': '手动（每次弹卡）',
+  'agentSettings.planPermission.manual.desc':
+    '关闭 CLI 自带的计划自动分类器，编辑器也不再批准任何请求：每个权限请求都显示卡片。计划确认卡片（"Ready to code?"）仍按自己的倒计时运行，见 acp.plan.autoExecute。',
+  'agentSettings.planPermission.personalOnly':
+    '这是个人设置：只读用户级配置（工作区/项目里的同名值一律忽略），保存在编辑器自己的 settings.json 里，绝不写入 ~/.claude/settings.json。',
   'agentSettings.promptCaching': '启用 1 小时提示词缓存',
   'agentSettings.showThinkingSummaries': '显示思考摘要',
   'agentSettings.showThinkingSummaries.desc':

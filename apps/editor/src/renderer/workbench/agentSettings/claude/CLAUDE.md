@@ -16,8 +16,9 @@ Renderer — 贡献注册（承载壳见 [`../ai/CLAUDE.md`](../ai/CLAUDE.md)）
 - `agentSettings/AgentSettingsEditor.module.css` — Claude/Codex 共用样式（`--ue-*` token；壳样式用 `--color-*`，两套并存）。
 
 Renderer — Claude 专属（agentSettings/claude/）：
-- `claude/ClaudeAgentSettings.tsx` — 根组件：`useClaudeConfig()` + 三分类子导航（auth/model/env，`CATEGORIES`）；激活分类/滚动持久化（`agent.settings.claude.activeCategory` / `.scroll.<id>`）。**末行 `registerAgentSettings('claude-code', ClaudeAgentSettings)`**。
+- `claude/ClaudeAgentSettings.tsx` — 根组件：`useClaudeConfig()` + 五分类子导航（auth/model/permissions/env/binary）；激活分类/滚动持久化（`agent.settings.claude.activeCategory` / `.scroll.<id>`）。**末行 `registerAgentSettings('claude-code', ClaudeAgentSettings)`**。
 - `claude/AuthenticationPanel.tsx` — 认证页：`AuthenticationSection`（单一认证选择：provider 条目或 `@subscription`；Model + Sub Agent Model 两行 `ModelPickRow` 各带 `1m` 勾选框——**行显示有效 id，勾选框由 id 是否以 `[1m]` 结尾派生**；没选模型时勾选框不出现）+ `LoginForm`（OAuth 登录状态）。**下拉当前值是盘上生效值**（从 `activeAuth` 派生、非声明值；providerId 缺席 → 「外部凭据」）。共享 `../GatewayProviderPicker.js`（`protocol="anthropic-messages"`），派生经 `deriveClaudeAuth`。**没有 "In use" 徽章**；`LoginForm.isActive` 直接读 `activeAuth.kind==='subscription'`。
+- `claude/PlanPermissionPanel.tsx` — 计划权限三档（`agentSettings.claude.planPermissionPolicy`：skip/auto/manual，**只认个人层**、握手时快照）。
 - `claude/ModelThinkingPanel.tsx` — 模型 / 语言 / 思考开关 / effort / availableModels，绑 settings.json。
 - `claude/AdvancedEnvPanel.tsx` — env 开关（PROMPT_CACHING、AUTO_COMPACT）+ 自定义 env 编辑器。隐藏认证类 env（`ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_BASE_URL`）与 `CLAUDE_CODE_SUBAGENT_MODEL`/`_FORCE` 键对（owner 是认证页）；`ANTHROPIC_SMALL_FAST_MODEL` 无可视化入口、**不隐藏**（手填）。
 - `claude/useClaudeConfig.ts` — 配置 hook：聚合 settings/authStatus/**activeAuth** 读取与 patch，订阅 `onDidChangeConfig` 一次刷三样（外部 `claude auth login`、别的窗口、手改文件都能跟上）。`applyAuthentication` **只把匹配凭据 env 注入 settings.json**（互斥清掉另一种凭据）后重读 `activeAuth`——不再持久化声明值；`setModel`/`setSubagentModel` 系列共用 `applyModelPick`，两条不变量：① **每个 setter 只 patch 自己那一组键**（`settings.model`；subagent 的 model + `_FORCE` 成对同生同灭），其余不动；② **在写队列内重新 `service.read()` 拿盘上现值再复合，绝不读 React state**（防陈旧快照盖掉外部编辑）。暴露 `subagentModelEnv`。
@@ -30,7 +31,7 @@ Renderer — Claude 专属（agentSettings/claude/）：
 
 ### claudeConfig 服务接线（5 处，加方法时无需动）
 
-给 `IClaudeConfigService` 加方法只改契约 + main 实现两个文件，下面 5 处接线不用动：
+加方法只改契约 + main 实现两个文件，下面 5 处接线不用动：
 - main 侧：`main/services/main-services.ts`（SyncDescriptor）→ `main/window/scopedServicesFactory.ts`（readonly 字段）→ `main/ipc/registerMainServices.ts`（ProxyChannel.fromService）
 - 通道 + renderer：`shared/ipc/channelNames.ts`（`ClaudeConfig:'claudeConfig'`）→ `renderer/main.tsx`（ProxyChannel.toService）
 
@@ -41,8 +42,8 @@ Renderer — Claude 专属（agentSettings/claude/）：
 | `~/.claude/settings.json` | 编辑器 + CLI 共享 | agent/SDK/CLI | **当前生效**配置：model、env（含激活凭据）、思考开关等 |
 | `~/.claude/.credentials.json` | `claude auth login`（OAuth） | agent/SDK | `claudeAiOauth`：accessToken/refreshToken/expiresAt/scopes/subscriptionType/rateLimitTier |
 
-- **🔴 agent 自己的配置文件是唯一真相**：编辑器**不存任何声明值**（`aiSettings.json` 的 `agentSettings.claude` 已废弃、不再被读取），「当前用哪个凭据」一律**反查** `resolveActiveAuth(authority)`（读上面两文件 + 条目正向派生比对）。外部登录、手改、换机器同步都自动跟上（`onDidChangeConfig` 去抖 150ms），不存在「声明与盘上漂移」。
-- **🔴 模型选择同样只有一处真相：settings.json**（`model` 与 `env.CLAUDE_CODE_SUBAGENT_MODEL`）：UI 显示的就是有效 id，`1m` 勾选框由 id 后缀派生。历史教训：镜像版本 + 整块替换写入 = 陈旧快照盖掉别人刚改的选择（真实 bug）。新增模型类选择项一律直写 settings.json。子 agent 那组另带 `CLAUDE_CODE_SUBAGENT_MODEL_FORCE`（缺它显式设置会被内置 agent 定义压过、静默失效）。
+- **🔴 agent 自己的配置文件是唯一真相**：编辑器**不存任何声明值**，「当前用哪个凭据」一律**反查** `resolveActiveAuth(authority)`（读上面两文件 + 条目正向派生比对）。外部登录、手改、换机器同步都自动跟上（`onDidChangeConfig` 去抖 150ms），不存在「声明与盘上漂移」。
+- **🔴 模型选择同样只有一处真相：settings.json**（`model` 与 `env.CLAUDE_CODE_SUBAGENT_MODEL`）：UI 显示的就是有效 id，`1m` 勾选框由 id 后缀派生。历史教训：镜像版本 + 整块替换写入 = 陈旧快照盖掉别人刚改的选择。新增模型类选择项一律直写 settings.json。子 agent 那组另带 `CLAUDE_CODE_SUBAGENT_MODEL_FORCE`（缺它显式设置会被内置 agent 定义压过、静默失效）。
 - 登录(OAuth) 不是一个 provider 条目，走 `.credentials.json`，是反查的最后一档。
 - 切换 Provider 只写三个凭据 env、**不连带清空 model**（独立于认证）；下拉 `pinCurrent` 置顶「当前值不在新候选」的项更关键。
 
@@ -92,14 +93,14 @@ baseUrl **逐字比对不做 URL 归一化**（写盘值与反查同源，归一
 
 - `useObservable` / `useService` 来自 `renderer/workbench/useService.ts`（面板里的 `../../useService.js`），**不是** `@universe-editor/workbench-ui`。
 - workbench-ui 的 `IconButton` 是 `label` 属性 + `children` 放图标，无 `icon`/`ariaLabel` props。
-- ESM：相对导入带 `.js` 后缀（即使源是 `.ts`）。`claude/` 比外壳深一层，import 路径多一级 `../`。
+- ESM 相对导入带 `.js` 后缀；`claude/` 比外壳深一层，import 路径多一级 `../`。
 - 状态持久化套路：`IStorageService` 存 key + `restoredRef` 守卫防覆盖 + `requestAnimationFrame` 恢复滚动。
-- NLS：`localize(key, '英文默认值', vars?)`，默认值必须英文；中文写进 `shared/i18n/messages/zh-CN.ts`。
+- NLS：文案默认值英文，中文进 zh-CN 表（详见 `shared/i18n/CLAUDE.md`）。
 - 新增 FakeSession 测试桩别忘 `onDidRequireAuth: Event.None`（认证流相关）。
 
 ### 验证
 
-- `pnpm check`（lint + typecheck + test，输出长，只截错误）；改交互逻辑跑 `pnpm e2e`。已知本机 flaky（非回归）：simpleFileDialog / multiFileDragEditor / explorerExternalWatcher / markdown* @p1。
+- `pnpm check`（lint + typecheck + test，输出长，只截错误）；改交互逻辑跑 `pnpm e2e`。已知本机 flaky：simpleFileDialog / multiFileDragEditor / explorerExternalWatcher / markdown* @p1。
 
 ### 入口（打开到 Agents 区）
 

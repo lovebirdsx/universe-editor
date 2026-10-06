@@ -2164,6 +2164,10 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       })),
     updateConfigValue: (key: string, value: unknown): void =>
       services.configurationService.update(key, value, ConfigurationTarget.Memory),
+    updateUserConfigValue: async (key: string, value: unknown): Promise<void> => {
+      await services.userSettingsSync.whenInitialized
+      services.configurationService.update(key, value, ConfigurationTarget.User)
+    },
     renameExplorerResource: async (fsPath: string, newName: string): Promise<string> => {
       const target = await services.explorerTreeService.rename(URI.file(fsPath), newName)
       return target.toString()

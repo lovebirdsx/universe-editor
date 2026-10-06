@@ -281,37 +281,6 @@ function readClaudeCodeMeta(carrier: {
   return cc != null && typeof cc === 'object' ? (cc as Record<string, unknown>) : undefined
 }
 
-/**
- * Read the fork's answer to "may a host silently pick *yes, once* here?" — the
- * positive form of `_meta.claudeCode.clientMayAutoApproveOnce` the claude fork
- * stamps onto a permission request's tool call (never onto AIR clients, which
- * get the same facts under `_meta.jetbrains.air`). The stamping fork always
- * writes a boolean: `false` when the CLI wants a human to answer (a
- * decline-first prompt, a suppressed always-allow rule, the user's own ask
- * rule), and only an older build leaves the key out entirely. Three states, and
- * only an explicit `true` may be acted on as-is — `false` means "ask", while
- * `undefined` may be loosened for a request the agent attributes to a sub-agent.
- */
-export function readClientMayAutoApproveOnce(carrier: {
-  _meta?: Record<string, unknown> | null | undefined
-}): boolean | undefined {
-  const mark = readClaudeCodeMeta(carrier)?.['clientMayAutoApproveOnce']
-  return typeof mark === 'boolean' ? mark : undefined
-}
-
-/**
- * Read `_meta.claudeCode.matchedAskRule`: the CLI asked for a prompt because the
- * user's *own* configured ask rule matched, not because it could think of no
- * durable rule. Rides beside {@link readClientMayAutoApproveOnce} (which is
- * already false when set) and exists so a host that is otherwise willing to
- * widen auto-approval — to a sub-agent, say — still honours the user's rule.
- */
-export function readMatchedAskRule(carrier: {
-  _meta?: Record<string, unknown> | null | undefined
-}): boolean {
-  return readClaudeCodeMeta(carrier)?.['matchedAskRule'] === true
-}
-
 function readStructuredPatch(update: SessionUpdate): FileChangeDescriptor | undefined {
   const meta = (
     update as {

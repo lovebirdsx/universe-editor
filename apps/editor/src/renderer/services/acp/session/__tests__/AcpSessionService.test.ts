@@ -82,6 +82,7 @@ import { AcpCompactionStatsService } from '../acpCompactionStats.js'
 import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
 import { AcpAuthGuidanceService } from '../acpAuthGuidanceService.js'
 import { AcpSessionFactory } from '../acpSessionFactory.js'
+import { PLAN_PERMISSION_POLICY_KEY } from '../planPermissionPolicy.js'
 import { AcpPromptDraftCache } from '../acpPromptDraftCache.js'
 import { AcpPromptCancelledDraftStash } from '../acpPromptCancelledDraftStash.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
@@ -7086,7 +7087,7 @@ describe('AcpSessionService — orphan tool-call sweep', () => {
   })
 })
 
-describe('plan scoped auto-approve (acp.plan.autoApproveWithUpdates)', () => {
+describe('Claude plan permission policy (agentSettings.claude.planPermissionPolicy)', () => {
   class RecordingTelemetryService implements ITelemetryService {
     declare readonly _serviceBrand: undefined
     readonly logged: { name: string; data: unknown }[] = []
@@ -7116,7 +7117,7 @@ describe('plan scoped auto-approve (acp.plan.autoApproveWithUpdates)', () => {
     ]
   }
 
-  /** fork 的常规顺序：allow_once → allow_always（作用域选项）→ reject。 */
+  /** fork 的常规顺序：一次性允许 → 作用域选项（持久）→ 拒绝。 */
   const scopedOptions: RequestPermissionRequest['options'] = [
     { optionId: 'allow-once', name: 'Yes', kind: 'allow_once' },
     {
@@ -7127,27 +7128,50 @@ describe('plan scoped auto-approve (acp.plan.autoApproveWithUpdates)', () => {
     { optionId: 'reject', name: 'No', kind: 'reject_once' },
   ]
 
+  /** CLI 给不出可固化规则时的形状：只有 allow-once + reject。 */
+  const oneShotOptions: RequestPermissionRequest['options'] = [
+    { optionId: 'allow-once', name: 'Yes', kind: 'allow_once' },
+    { optionId: 'reject', name: 'No', kind: 'reject_once' },
+  ]
+
   const services: AcpSessionService[] = []
   afterEach(() => {
     for (const service of services.splice(0)) service.dispose()
   })
 
-  /** ECHO_AGENT_CONFIG_OPTIONS 式的会话：session/new 直接通告 mode 的当前值。 */
-  async function createSession(
-    mode: 'plan' | 'default' = 'plan',
-    telemetry: ITelemetryService = new NoopTelemetryService(),
-  ) {
+  interface Harness {
+    readonly svc: AcpSessionService
+    readonly client: FakeAcpClientService
+    readonly permission: StubPermissionHandler
+    readonly config: ConfigurationService
+    readonly history: AcpSessionHistoryService
+    /** 再建一个同服务、同模式的会话（用于快照 / 多次握手断言）。 */
+    connect(agentId?: string): Promise<IAcpSession>
+  }
+
+  async function makeHarness(
+    options: {
+      mode?: 'plan' | 'default'
+      agentId?: string
+      stubOptions?: StubAgentOptions
+      telemetry?: ITelemetryService
+      /** 在任何握手发生前改配置——策略快照就是从这里读的。 */
+      setup?: (h: Harness) => void
+    } = {},
+  ): Promise<Harness> {
     const client = new FakeAcpClientService({
-      stubOptions: { newSessionConfigOptions: modeConfig(mode) },
+      stubOptions: {
+        ...options.stubOptions,
+        newSessionConfigOptions:
+          options.stubOptions?.newSessionConfigOptions ?? modeConfig(options.mode ?? 'plan'),
+      },
     })
     const notifications = new StubNotificationService()
     const permission = new StubPermissionHandler()
     const config = new ConfigurationService()
+    const telemetry = options.telemetry ?? new NoopTelemetryService()
     const history = makeHistory()
     const agentDefaults = makeAgentDefaults()
-    const titleService = new StubSessionTitleService()
-    const changeTracker = new StubSessionChangeTracker()
-    const compactionStats = makeCompactionStats()
     const svc = new AcpSessionService(
       client,
       new FakeAgentRegistry(),
@@ -7168,9 +7192,9 @@ describe('plan scoped auto-approve (acp.plan.autoApproveWithUpdates)', () => {
         telemetry,
         history,
         agentDefaults,
-        changeTracker,
-        titleService,
-        compactionStats,
+        new StubSessionChangeTracker(),
+        new StubSessionTitleService(),
+        makeCompactionStats(),
       ),
       new StubFileService(),
       new StubExtensionMcpServersService(),
@@ -7183,19 +7207,25 @@ describe('plan scoped auto-approve (acp.plan.autoApproveWithUpdates)', () => {
       stubLastSessionCwdServiceForTest(),
     )
     services.push(svc)
-    const session = await svc.createSession('claude-code')
-    await session.whenConnected()
-    return { svc, permission, config, session }
+    const agentId = options.agentId ?? 'claude-code'
+    const connect = async (id = agentId): Promise<IAcpSession> => {
+      const session = await svc.createSession(id)
+      await session.whenConnected()
+      return session
+    }
+    const harness: Harness = { svc, client, permission, config, history, connect }
+    options.setup?.(harness)
+    return harness
   }
 
   function request(
+    session: IAcpSession,
     kind: RequestPermissionRequest['toolCall']['kind'] = 'execute',
     options: RequestPermissionRequest['options'] = scopedOptions,
-    sessionId = 'agent-1',
     meta?: Record<string, unknown>,
   ): RequestPermissionRequest {
     return {
-      sessionId,
+      sessionId: session.id,
       toolCall: {
         toolCallId: 'tc-shell',
         title: 'ls -la ~/.codex/sessions',
@@ -7221,527 +7251,432 @@ describe('plan scoped auto-approve (acp.plan.autoApproveWithUpdates)', () => {
     return pending!
   }
 
-  it('默认开启：plan + execute + 作用域选项 → 静默选中 allow-with-updates', async () => {
-    const telemetry = new RecordingTelemetryService()
-    const { svc, session, permission } = await createSession('plan', telemetry)
-
-    const result = await svc.onRequestPermission(request())
-
-    expect(result).toEqual({ outcome: { outcome: 'selected', optionId: 'allow-with-updates' } })
+  async function expectSelected(
+    svc: AcpSessionService,
+    session: IAcpSession,
+    params: RequestPermissionRequest,
+    optionId: string,
+  ): Promise<void> {
+    const result = await svc.onRequestPermission(params)
+    expect(result).toEqual({ outcome: { outcome: 'selected', optionId } })
     expect(session.pendingPermission.get()).toBeUndefined()
-    expect(permission.persisted).toEqual([])
-    expect(telemetry.logged).toContainEqual({
-      name: 'acp.permission_plan_auto_approved',
-      data: { optionId: 'allow-with-updates', kind: 'execute' },
-    })
-  })
+  }
 
-  it.each(['read', 'search'] as const)(
-    '%s 同样是覆盖范围（工作区外读取/搜索不再弹卡）',
-    async (kind) => {
-      const { svc, session } = await createSession('plan')
+  /** `_meta.claudeCode` of the first handshake request captured on a connection. */
+  function claudeCodeMetaOf(requests: readonly { _meta?: unknown }[]): Record<string, unknown> {
+    return ((requests[0]?._meta as Record<string, unknown> | undefined)?.['claudeCode'] ??
+      {}) as Record<string, unknown>
+  }
 
-      const result = await svc.onRequestPermission(request(kind))
+  /** `_meta.claudeCode.options.settings.useAutoModeDuringPlan` of the 1st request. */
+  function classifierFlagOf(requests: readonly { _meta?: unknown }[]): unknown {
+    const options = claudeCodeMetaOf(requests)['options'] as Record<string, unknown> | undefined
+    const settings = options?.['settings'] as Record<string, unknown> | undefined
+    return settings?.['useAutoModeDuringPlan']
+  }
 
-      expect(result).toEqual({ outcome: { outcome: 'selected', optionId: 'allow-with-updates' } })
-      expect(session.pendingPermission.get()).toBeUndefined()
-    },
-  )
+  /** `_meta` 分类器开关 captured by the `session/load` for a given durable id. */
+  function loadClassifierFlagOf(h: Harness, sessionIdOnAgent: string): unknown {
+    const call = h.client.connected
+      .flatMap((c) => c.agent.loadSessionCalls)
+      .find((c) => c.sessionId === sessionIdOnAgent)
+    return classifierFlagOf(call ? [call] : [])
+  }
 
-  it('设置显式关闭时不接管，回落人工卡片', async () => {
-    const { svc, session, config } = await createSession('plan')
-    config.update('acp.plan.autoApproveWithUpdates', false, ConfigurationTarget.Memory)
+  const setPolicy = (config: ConfigurationService, value: string): void => {
+    config.update(PLAN_PERMISSION_POLICY_KEY, value, ConfigurationTarget.User)
+  }
 
-    await expectCard(svc, session, request())
-  })
-
-  it('非 plan 会话不接管', async () => {
-    const { svc, session } = await createSession('default')
-
-    await expectCard(svc, session, request())
-  })
-
-  it('范围外的 kind（edit）不接管', async () => {
-    const { svc, session } = await createSession('plan')
-
-    await expectCard(svc, session, request('edit'))
-  })
-
-  it('Agent 未提供作用域选项时不接管', async () => {
-    const { svc, session } = await createSession('plan')
-    const noScoped = scopedOptions.filter((o) => o.optionId !== 'allow-with-updates')
-
-    await expectCard(svc, session, request('execute', noScoped))
-  })
-
-  it('拒绝项置顶（defaultToNo）时不接管，且诊断不泄漏选项文案', async () => {
-    const warn = vi.spyOn(NullLogger.prototype, 'warn')
-    try {
-      const { svc, session } = await createSession('plan')
-      const dangerFirst = [...scopedOptions].reverse()
-
-      await expectCard(svc, session, request('execute', dangerFirst))
-
-      expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining('计划模式作用域批准回退人工确认（拒绝项置顶）'),
-      )
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining('allow-with-updates'))
-      expect(warn.mock.calls.flat().join('\n')).not.toContain('05/ and 10/')
-    } finally {
-      warn.mockRestore()
-    }
-  })
-
-  it('switch_mode 即使带 allow-with-updates 也不走静默批准', async () => {
-    const { svc, session } = await createSession('plan')
-
-    await expectCard(svc, session, request('switch_mode'))
-  })
-
-  it('未知会话仍按既有语义返回 cancelled', async () => {
-    const { svc } = await createSession('plan')
-
-    const result = await svc.onRequestPermission(request('execute', scopedOptions, 'agent-404'))
-
-    expect(result).toEqual({ outcome: { outcome: 'cancelled' } })
-  })
-
-  it('手点作用域选项不写进 autoApprove（只应用 Agent 的规则）', async () => {
-    const { svc, session, permission } = await createSession('default')
-    const promise = svc.onRequestPermission(request())
-    await new Promise((r) => setTimeout(r, 0))
-
-    session.pendingPermission.get()!.resolve('allow-with-updates')
-
-    await expect(promise).resolves.toEqual({
-      outcome: { outcome: 'selected', optionId: 'allow-with-updates' },
-    })
-    expect(permission.persisted).toEqual([])
-  })
-
-  it('手点通用 allow_always 仍按 kind 记忆（守卫不过度抑制）', async () => {
-    const { svc, session, permission } = await createSession('default')
-    const generic = [
-      { optionId: 'allow-once', name: 'Yes', kind: 'allow_once' },
-      { optionId: 'always', name: 'Allow always', kind: 'allow_always' },
-      { optionId: 'reject', name: 'No', kind: 'reject_once' },
-    ] as RequestPermissionRequest['options']
-    const promise = svc.onRequestPermission(request('edit', generic))
-    await new Promise((r) => setTimeout(r, 0))
-
-    session.pendingPermission.get()!.resolve('always')
-
-    await promise
-    expect(permission.persisted).toEqual(['edit'])
-  })
-
-  describe('二级：无作用域选项时静默选「仅本次允许」（acp.plan.autoApproveUnscoped）', () => {
-    /** CLI 给不出可固化规则时的形状：只有 allow-once + reject。 */
-    const unscopedOptions: RequestPermissionRequest['options'] = [
-      { optionId: 'allow-once', name: 'Yes', kind: 'allow_once' },
-      { optionId: 'reject', name: 'No', kind: 'reject_once' },
-    ]
-
-    /** fork 的肯定式标记：主 agent 只有盖章后才允许静默批准。 */
-    const marked = { claudeCode: { clientMayAutoApproveOnce: true } }
-    const subagent = { claudeCode: { parentToolUseId: 'toolu_task' } }
-
-    it('主 agent 盖章 → 静默选中 allow-once，不建卡片也不写规则', async () => {
+  describe('skip（默认）：只选一次性允许，不写规则', () => {
+    it('默认即 skip：plan + execute + 作用域选项 → 选 allow-once，不选 allow-with-updates', async () => {
       const telemetry = new RecordingTelemetryService()
-      const { svc, session, permission } = await createSession('plan', telemetry)
+      const h = await makeHarness({ telemetry })
+      const session = await h.connect()
 
-      const result = await svc.onRequestPermission(
-        request('execute', unscopedOptions, 'agent-1', marked),
-      )
+      await expectSelected(h.svc, session, request(session), 'allow-once')
 
-      expect(result).toEqual({ outcome: { outcome: 'selected', optionId: 'allow-once' } })
-      expect(session.pendingPermission.get()).toBeUndefined()
-      expect(permission.persisted).toEqual([])
+      expect(h.permission.persisted).toEqual([])
       expect(telemetry.logged).toContainEqual({
-        name: 'acp.permission_plan_auto_approved_unscoped',
-        data: { optionId: 'allow-once', kind: 'execute', source: 'main' },
+        name: 'acp.permission_plan_skip_approved',
+        data: { optionId: 'allow-once', kind: 'execute' },
       })
     })
 
-    it.each(['read', 'search'] as const)('%s 同样是覆盖范围', async (kind) => {
-      const { svc, session } = await createSession('plan')
+    it.each(['read', 'search', 'edit', 'delete', 'fetch', 'think', 'other'] as const)(
+      'kind=%s 也静默放行一次（不再区分白名单 kind）',
+      async (kind) => {
+        const h = await makeHarness()
+        const session = await h.connect()
 
-      const result = await svc.onRequestPermission(
-        request(kind, unscopedOptions, 'agent-1', marked),
+        await expectSelected(h.svc, session, request(session, kind, oneShotOptions), 'allow-once')
+      },
+    )
+
+    it('拒绝项置顶也照选 allow-once（不理会 defaultToNo 排序）', async () => {
+      const h = await makeHarness()
+      const session = await h.connect()
+      const dangerFirst = [...oneShotOptions].reverse()
+
+      await expectSelected(h.svc, session, request(session, 'execute', dangerFirst), 'allow-once')
+    })
+
+    it('CLI 的否定标记不再阻止：clientMayAutoApproveOnce=false 仍选 allow-once', async () => {
+      const h = await makeHarness()
+      const session = await h.connect()
+
+      await expectSelected(
+        h.svc,
+        session,
+        request(session, 'execute', oneShotOptions, {
+          claudeCode: { clientMayAutoApproveOnce: false },
+        }),
+        'allow-once',
       )
-
-      expect(result).toEqual({ outcome: { outcome: 'selected', optionId: 'allow-once' } })
-      expect(session.pendingPermission.get()).toBeUndefined()
     })
 
-    it('子 agent 无标记也放行（用户选择放宽），source 记为 subagent', async () => {
-      const telemetry = new RecordingTelemetryService()
-      const { svc, session, permission } = await createSession('plan', telemetry)
+    it('命中用户自己的 ask 规则也选 allow-once（问不问由 CLI 决定）', async () => {
+      const h = await makeHarness()
+      const session = await h.connect()
 
-      const result = await svc.onRequestPermission(
-        request('execute', unscopedOptions, 'agent-1', subagent),
+      await expectSelected(
+        h.svc,
+        session,
+        request(session, 'execute', oneShotOptions, {
+          claudeCode: { clientMayAutoApproveOnce: false, matchedAskRule: true },
+        }),
+        'allow-once',
       )
-
-      expect(result).toEqual({ outcome: { outcome: 'selected', optionId: 'allow-once' } })
-      expect(session.pendingPermission.get()).toBeUndefined()
-      expect(permission.persisted).toEqual([])
-      expect(telemetry.logged).toContainEqual({
-        name: 'acp.permission_plan_auto_approved_unscoped',
-        data: { optionId: 'allow-once', kind: 'execute', source: 'subagent' },
-      })
     })
 
-    it('子 agent 命中用户自己的 ask 规则时不接管（唯一否决位）', async () => {
-      const { svc, session } = await createSession('plan')
-      const askRule = {
-        claudeCode: { parentToolUseId: 'toolu_task', matchedAskRule: true },
+    it('子 agent 的询问同样只放行一次，不写永久规则', async () => {
+      const h = await makeHarness()
+      const session = await h.connect()
+
+      await expectSelected(
+        h.svc,
+        session,
+        request(session, 'execute', scopedOptions, {
+          claudeCode: { parentToolUseId: 'toolu_task', clientMayAutoApproveOnce: false },
+        }),
+        'allow-once',
+      )
+      expect(h.permission.persisted).toEqual([])
+    })
+
+    it('主 agent 的网页搜索（kind=fetch）同样只放行一次', async () => {
+      const h = await makeHarness()
+      const session = await h.connect()
+
+      await expectSelected(
+        h.svc,
+        session,
+        request(session, 'fetch', scopedOptions, {
+          claudeCode: { clientMayAutoApproveOnce: true },
+        }),
+        'allow-once',
+      )
+    })
+
+    it('诊断只记 optionId/kind，不回显命令与选项文案', async () => {
+      const debug = vi.spyOn(NullLogger.prototype, 'debug')
+      try {
+        const h = await makeHarness()
+        const session = await h.connect()
+
+        await expectSelected(h.svc, session, request(session), 'allow-once')
+
+        const output = debug.mock.calls.flat().join('\n')
+        expect(output).toContain('静默选中 allow-once')
+        expect(output).not.toContain('05/ and 10/')
+        expect(output).not.toContain('~/.codex')
+      } finally {
+        debug.mockRestore()
       }
-
-      await expectCard(svc, session, request('execute', unscopedOptions, 'agent-1', askRule))
     })
 
-    it('子 agent 被 CLI 显式否定时不接管（放宽只对「没盖章」生效）', async () => {
-      // suppressAlwaysAllowRule（删除类命令）就是这个形状：marker=false，但拒绝项不置顶。
-      const { svc, session } = await createSession('plan')
-      const denied = {
-        claudeCode: { parentToolUseId: 'toolu_task', clientMayAutoApproveOnce: false },
-      }
-
-      await expectCard(svc, session, request('execute', unscopedOptions, 'agent-1', denied))
-    })
-
-    it('主 agent 未盖章（旧 fork / CLI 要求人工回答）不接管，且诊断不泄漏选项文案', async () => {
+    it('没有一次性允许选项时回人工卡片，绝不退而选择永久授权', async () => {
       const warn = vi.spyOn(NullLogger.prototype, 'warn')
       try {
-        const { svc, session } = await createSession('plan')
-
-        await expectCard(svc, session, request('execute', unscopedOptions))
-
-        expect(warn).toHaveBeenCalledWith(
-          expect.stringContaining('计划模式本次静默批准回退人工确认'),
-        )
-        expect(warn).toHaveBeenCalledWith(expect.stringContaining('marker=absent'))
-        expect(warn).toHaveBeenCalledWith(expect.stringContaining('source=main'))
-        expect(warn.mock.calls.flat().join('\n')).not.toContain('~/.codex')
-      } finally {
-        warn.mockRestore()
-      }
-    })
-
-    it('主 agent 被显式标为不许静默批准时不接管', async () => {
-      const { svc, session } = await createSession('plan')
-      const denied = { claudeCode: { clientMayAutoApproveOnce: false } }
-
-      await expectCard(svc, session, request('execute', unscopedOptions, 'agent-1', denied))
-    })
-
-    it('设置显式关闭时不接管，回落人工卡片', async () => {
-      const { svc, session, config } = await createSession('plan')
-      config.update('acp.plan.autoApproveUnscoped', false, ConfigurationTarget.Memory)
-
-      await expectCard(svc, session, request('execute', unscopedOptions, 'agent-1', marked))
-    })
-
-    it('非 plan 会话不接管', async () => {
-      const { svc, session } = await createSession('default')
-
-      await expectCard(svc, session, request('execute', unscopedOptions, 'agent-1', marked))
-    })
-
-    it('范围外的 kind（edit）不接管', async () => {
-      const { svc, session } = await createSession('plan')
-
-      await expectCard(svc, session, request('edit', unscopedOptions, 'agent-1', marked))
-    })
-
-    it('没有 allow-once 选项时不接管', async () => {
-      const { svc, session } = await createSession('plan')
-      const onlyAlways = [
-        { optionId: 'always', name: 'Allow always', kind: 'allow_always' },
-        { optionId: 'reject', name: 'No', kind: 'reject_once' },
-      ] as RequestPermissionRequest['options']
-
-      await expectCard(svc, session, request('execute', onlyAlways, 'agent-1', marked))
-    })
-
-    it('拒绝项置顶时不接管（标记与顺序矛盾时以拒绝为准）', async () => {
-      const { svc, session } = await createSession('plan')
-
-      await expectCard(
-        svc,
-        session,
-        request('execute', [...unscopedOptions].reverse(), 'agent-1', marked),
-      )
-    })
-
-    it('codex 风格的下划线 allow_once 不接管（按 optionId 精确匹配）', async () => {
-      const { svc, session } = await createSession('plan')
-      const codexOptions = [
-        { optionId: 'allow_once', name: 'Yes', kind: 'allow_once' },
-        { optionId: 'reject', name: 'No', kind: 'reject_once' },
-      ] as RequestPermissionRequest['options']
-
-      await expectCard(svc, session, request('execute', codexOptions, 'agent-1', marked))
-    })
-
-    it('本次带作用域选项时由一级接管，二级不降级成「仅本次」', async () => {
-      const telemetry = new RecordingTelemetryService()
-      const { svc } = await createSession('plan', telemetry)
-
-      const result = await svc.onRequestPermission(
-        request('execute', scopedOptions, 'agent-1', marked),
-      )
-
-      expect(result).toEqual({ outcome: { outcome: 'selected', optionId: 'allow-with-updates' } })
-      expect(telemetry.logged.map((event) => event.name)).not.toContain(
-        'acp.permission_plan_auto_approved_unscoped',
-      )
-    })
-
-    describe('子 agent 网页/MCP 搜索白名单：精确 toolName + kind', () => {
-      // fork 在权限请求的 toolCall 上盖 `_meta.claudeCode.toolName`（原始名，MCP 不折叠）
-      // 与 parentToolUseId；claude fork 里 WebSearch/WebFetch 的 kind 是 fetch，
-      // Brave MCP 搜索是 other。
-      const webTools = [
-        ['WebSearch', 'fetch'],
-        ['WebFetch', 'fetch'],
-        ['mcp__brave-search__brave_web_search', 'other'],
-      ] as const
-
-      const webMeta = (toolName: string, overrides?: Record<string, unknown>) => ({
-        claudeCode: {
-          toolName,
-          parentToolUseId: 'toolu_task',
-          clientMayAutoApproveOnce: true,
-          ...overrides,
-        },
-      })
-
-      const webRequest = (
-        toolName: string,
-        kind: RequestPermissionRequest['toolCall']['kind'],
-        options: RequestPermissionRequest['options'],
-        meta?: Record<string, unknown>,
-        sessionId = 'agent-1',
-      ): RequestPermissionRequest => request(kind, options, sessionId, meta ?? webMeta(toolName))
-
-      /**
-       * 驱动一次请求到落点：静默批准直接返回；若落到卡片，观察 pending 后取消，
-       * 让断言看到「carded=true」而不是挂起到超时。
-       */
-      async function settle(
-        svc: AcpSessionService,
-        session: IAcpSession,
-        params: RequestPermissionRequest,
-      ): Promise<{ readonly carded: boolean; readonly result: RequestPermissionResponse }> {
-        const promise = svc.onRequestPermission(params)
-        await new Promise((r) => setTimeout(r, 0))
-        const pending = session.pendingPermission.get()
-        if (pending) pending.cancel()
-        return { carded: pending !== undefined, result: await promise }
-      }
-
-      it.each(webTools)(
-        '%s/%s：三选项（含 allow-with-updates）仍静默选 allow-once，一次响应、不建卡片、不写规则',
-        async (toolName, kind) => {
-          const telemetry = new RecordingTelemetryService()
-          const { svc, session, permission } = await createSession('plan', telemetry)
-
-          const { carded, result } = await settle(
-            svc,
-            session,
-            webRequest(toolName, kind, scopedOptions),
-          )
-
-          expect(carded).toBe(false)
-          expect(result).toEqual({ outcome: { outcome: 'selected', optionId: 'allow-once' } })
-          expect(session.pendingPermission.get()).toBeUndefined()
-          expect(permission.persisted).toEqual([])
-          expect(
-            telemetry.logged.filter(
-              (event) => event.name === 'acp.permission_plan_auto_approved_unscoped',
-            ),
-          ).toHaveLength(1)
-          expect(telemetry.logged).toContainEqual({
-            name: 'acp.permission_plan_auto_approved_unscoped',
-            data: { optionId: 'allow-once', kind, source: 'subagent' },
-          })
-        },
-      )
-
-      it('Brave 无匹配 suggestions（只有 allow-once + reject）时同样静默选 once', async () => {
-        const { svc, session, permission } = await createSession('plan')
-
-        const { carded, result } = await settle(
-          svc,
-          session,
-          webRequest('mcp__brave-search__brave_web_search', 'other', unscopedOptions),
-        )
-
-        expect(carded).toBe(false)
-        expect(result).toEqual({ outcome: { outcome: 'selected', optionId: 'allow-once' } })
-        expect(session.pendingPermission.get()).toBeUndefined()
-        expect(permission.persisted).toEqual([])
-      })
-
-      it.each([
-        ['false', webMeta('WebSearch', { clientMayAutoApproveOnce: false })],
-        ['missing', { claudeCode: { toolName: 'WebSearch', parentToolUseId: 'toolu_task' } }],
-        ['malformed', webMeta('WebSearch', { clientMayAutoApproveOnce: 'yes' })],
-      ])('新范围 marker=%s 必须回人工卡片', async (_label, meta) => {
-        const { svc, session } = await createSession('plan')
-
-        await expectCard(svc, session, webRequest('WebSearch', 'fetch', scopedOptions, meta))
-      })
-
-      it('网页工具命中用户 ask 规则时回人工卡片', async () => {
-        const { svc, session } = await createSession('plan')
-
-        await expectCard(
-          svc,
-          session,
-          webRequest(
-            'WebFetch',
-            'fetch',
-            scopedOptions,
-            webMeta('WebFetch', { matchedAskRule: true }),
-          ),
-        )
-      })
-
-      it('网页工具拒绝项置顶时回人工卡片', async () => {
-        const { svc, session } = await createSession('plan')
-
-        await expectCard(
-          svc,
-          session,
-          webRequest('WebFetch', 'fetch', [...scopedOptions].reverse()),
-        )
-      })
-
-      it('一级关闭、二级开启时网页工具仍静默选 once', async () => {
-        const { svc, session, config } = await createSession('plan')
-        config.update('acp.plan.autoApproveWithUpdates', false, ConfigurationTarget.Memory)
-
-        const { carded, result } = await settle(
-          svc,
-          session,
-          webRequest('WebSearch', 'fetch', scopedOptions),
-        )
-
-        expect(carded).toBe(false)
-        expect(result).toEqual({ outcome: { outcome: 'selected', optionId: 'allow-once' } })
-        expect(session.pendingPermission.get()).toBeUndefined()
-      })
-
-      it('二级关闭时网页工具回人工卡片', async () => {
-        const { svc, session, config } = await createSession('plan')
-        config.update('acp.plan.autoApproveUnscoped', false, ConfigurationTarget.Memory)
-
-        await expectCard(svc, session, webRequest('WebSearch', 'fetch', scopedOptions))
-      })
-
-      it('主 agent（无父归属）不扩大授权，回人工卡片', async () => {
-        const { svc, session } = await createSession('plan')
-        const mainMeta = { claudeCode: { toolName: 'WebSearch', clientMayAutoApproveOnce: true } }
-
-        await expectCard(svc, session, webRequest('WebSearch', 'fetch', scopedOptions, mainMeta))
-      })
-
-      it('父调用 ID 为空的畸形归属回人工卡片', async () => {
-        const { svc, session } = await createSession('plan')
-        const badParent = webMeta('WebSearch', { parentToolUseId: '' })
-
-        await expectCard(svc, session, webRequest('WebSearch', 'fetch', scopedOptions, badParent))
-      })
-
-      it('非 plan 会话网页工具不接管', async () => {
-        const { svc, session } = await createSession('default')
-
-        await expectCard(svc, session, webRequest('WebSearch', 'fetch', scopedOptions))
-      })
-
-      it('未知会话网页工具仍返回 cancelled', async () => {
-        const { svc } = await createSession('plan')
-
-        const result = await svc.onRequestPermission(
-          webRequest('WebSearch', 'fetch', scopedOptions, undefined, 'agent-404'),
-        )
-
-        expect(result).toEqual({ outcome: { outcome: 'cancelled' } })
-      })
-
-      it.each([
-        ['WebSearchTool', 'fetch'],
-        ['websearch', 'fetch'],
-        ['mcp__brave-search__brave_web_search_extra', 'other'],
-        ['mcp__other__search', 'other'],
-      ] as const)('近似名 / 未知 MCP 工具 %s 不接管', async (toolName, kind) => {
-        const { svc, session } = await createSession('plan')
-
-        await expectCard(svc, session, webRequest(toolName, kind, scopedOptions))
-      })
-
-      it.each([
-        ['WebSearch', 'other'],
-        ['mcp__brave-search__brave_web_search', 'fetch'],
-      ] as const)('名称 %s 与 kind %s 不匹配时不接管', async (toolName, kind) => {
-        const { svc, session } = await createSession('plan')
-
-        await expectCard(svc, session, webRequest(toolName, kind, scopedOptions))
-      })
-
-      it('标题冒充 WebSearch（无原始 toolName）不接管', async () => {
-        const { svc, session } = await createSession('plan')
-        const params = {
-          sessionId: 'agent-1',
-          toolCall: {
-            toolCallId: 'tc-web',
-            title: 'WebSearch',
-            kind: 'fetch',
-            _meta: {
-              claudeCode: { parentToolUseId: 'toolu_task', clientMayAutoApproveOnce: true },
-            },
-          },
-          options: scopedOptions,
-        } as RequestPermissionRequest
-
-        await expectCard(svc, session, params)
-      })
-
-      it('只有持久选项、没有 allow-once 时不接管', async () => {
-        const { svc, session } = await createSession('plan')
+        const h = await makeHarness()
+        const session = await h.connect()
         const persistentOnly = [
           { optionId: 'allow-with-updates', name: 'Always', kind: 'allow_always' },
           { optionId: 'reject', name: 'No', kind: 'reject_once' },
         ] as RequestPermissionRequest['options']
 
-        await expectCard(svc, session, webRequest('WebSearch', 'fetch', persistentOnly))
+        const pending = await expectCard(
+          h.svc,
+          session,
+          request(session, 'execute', persistentOnly),
+        )
+
+        expect(pending.options.map((o) => o.optionId)).toEqual(['allow-with-updates', 'reject'])
+        expect(h.permission.persisted).toEqual([])
+        expect(warn.mock.calls.flat().join('\n')).toContain('未提供一次性允许选项')
+      } finally {
+        warn.mockRestore()
+      }
+    })
+
+    it('不接管 codex 风格的下划线 allow_once（按 optionId 精确匹配）', async () => {
+      const h = await makeHarness()
+      const session = await h.connect()
+      const codexOptions = [
+        { optionId: 'allow_once', name: 'Yes', kind: 'allow_once' },
+        { optionId: 'reject', name: 'No', kind: 'reject_once' },
+      ] as RequestPermissionRequest['options']
+
+      await expectCard(h.svc, session, request(session, 'execute', codexOptions))
+    })
+
+    it('switch_mode（ExitPlanMode）不走 skip：保留 acp.plan.autoExecute 的倒计时', async () => {
+      const h = await makeHarness()
+      h.config.update('acp.plan.autoExecute', 'bypassPermissions', ConfigurationTarget.Memory)
+      const session = await h.connect()
+      const exitPlanOptions = [
+        { optionId: 'exit-plan-bypass', name: 'Yes, and bypass permissions', kind: 'allow_once' },
+        { optionId: 'allow-once', name: 'Yes', kind: 'allow_once' },
+        { optionId: 'reject', name: 'No', kind: 'reject_once' },
+      ] as RequestPermissionRequest['options']
+
+      const promise = h.svc.onRequestPermission(request(session, 'switch_mode', exitPlanOptions))
+      await new Promise((r) => setTimeout(r, 0))
+      const pending = session.pendingPermission.get()
+      expect(pending?.autoResolve?.optionId).toBe('exit-plan-bypass')
+      pending!.cancel()
+      await promise
+    })
+
+    it('未知会话先拒绝', async () => {
+      const h = await makeHarness()
+      const session = await h.connect()
+
+      const result = await h.svc.onRequestPermission({
+        ...request(session),
+        sessionId: 'agent-404',
       })
 
-      it('codex 风格下划线 allow_once 不接管（按 optionId 精确匹配）', async () => {
-        const { svc, session } = await createSession('plan')
-        const codexOptions = [
-          { optionId: 'allow_once', name: 'Yes', kind: 'allow_once' },
-          { optionId: 'reject', name: 'No', kind: 'reject_once' },
-        ] as RequestPermissionRequest['options']
+      expect(result).toEqual({ outcome: { outcome: 'cancelled' } })
+    })
+  })
 
-        await expectCard(svc, session, webRequest('WebSearch', 'fetch', codexOptions))
-      })
+  describe('auto / manual：客户端不再自动批准', () => {
+    it.each(['allow-with-updates', 'allow-skill-exact', 'allow-skill-prefix'])(
+      '人工选择作用域选项 %s 不会记住整个工具类别',
+      async (optionId) => {
+        const h = await makeHarness({ setup: (x) => setPolicy(x.config, 'manual') })
+        const session = await h.connect()
+        const options: RequestPermissionRequest['options'] = [
+          ...oneShotOptions,
+          { optionId, name: 'Allow scoped access', kind: 'allow_always' },
+        ]
+        const promise = h.svc.onRequestPermission(request(session, 'execute', options))
+        await new Promise((r) => setTimeout(r, 0))
+        const pending = session.pendingPermission.get()
+        expect(pending).toBeDefined()
+        pending!.resolve(optionId)
 
-      it('连续两次网页工具请求都只放行本次，不记忆成永久规则', async () => {
-        const { svc, session, permission } = await createSession('plan')
-
-        const first = await settle(svc, session, webRequest('WebSearch', 'fetch', scopedOptions))
-        const second = await settle(svc, session, webRequest('WebSearch', 'fetch', scopedOptions))
-
-        expect(first.carded).toBe(false)
-        expect(second.carded).toBe(false)
-        expect(first.result).toEqual({ outcome: { outcome: 'selected', optionId: 'allow-once' } })
-        expect(second.result).toEqual({ outcome: { outcome: 'selected', optionId: 'allow-once' } })
+        await expect(promise).resolves.toEqual({ outcome: { outcome: 'selected', optionId } })
+        expect(h.permission.persisted).toEqual([])
         expect(session.pendingPermission.get()).toBeUndefined()
-        expect(permission.persisted).toEqual([])
+      },
+    )
+
+    it('manual：Claude 计划会话内旧的通用 autoApprove 旁路也不生效', async () => {
+      const h = await makeHarness({ setup: (x) => setPolicy(x.config, 'manual') })
+      const session = await h.connect()
+      h.permission.autoApproveResult = {
+        outcome: { outcome: 'selected', optionId: 'allow-once' },
+      }
+
+      await expectCard(h.svc, session, request(session))
+      expect(h.permission.persisted).toEqual([])
+    })
+
+    it('auto：客户端同样不批准（放行交给 CLI 分类器）', async () => {
+      const h = await makeHarness({ setup: (x) => setPolicy(x.config, 'auto') })
+      const session = await h.connect()
+      h.permission.autoApproveResult = {
+        outcome: { outcome: 'selected', optionId: 'allow-once' },
+      }
+
+      await expectCard(h.svc, session, request(session))
+    })
+
+    it('非 Claude 的 agent 不受策略影响：通用 autoApprove 仍然生效', async () => {
+      const h = await makeHarness({
+        agentId: 'fake',
+        setup: (x) => setPolicy(x.config, 'manual'),
       })
+      const session = await h.connect()
+      h.permission.autoApproveResult = {
+        outcome: { outcome: 'selected', optionId: 'allow-once' },
+      }
+
+      await expectSelected(h.svc, session, request(session), 'allow-once')
+    })
+
+    it('Claude 但非 plan 模式不受策略影响：通用 autoApprove 仍然生效', async () => {
+      const h = await makeHarness({
+        mode: 'default',
+        setup: (x) => setPolicy(x.config, 'manual'),
+      })
+      const session = await h.connect()
+      h.permission.autoApproveResult = {
+        outcome: { outcome: 'selected', optionId: 'allow-once' },
+      }
+
+      await expectSelected(h.svc, session, request(session), 'allow-once')
+    })
+  })
+
+  describe('配置隔离：只认个人层（User）', () => {
+    it('Project / Memory 层的值一律忽略', async () => {
+      const h = await makeHarness()
+      const session = await h.connect()
+
+      for (const target of [ConfigurationTarget.Project, ConfigurationTarget.Memory]) {
+        h.config.update(PLAN_PERMISSION_POLICY_KEY, 'manual', target)
+        await expectSelected(h.svc, session, request(session), 'allow-once')
+      }
+    })
+
+    it('User 层的无效值回落默认 skip', async () => {
+      const h = await makeHarness({ setup: (x) => setPolicy(x.config, 'yolo') })
+      const session = await h.connect()
+
+      await expectSelected(h.svc, session, request(session), 'allow-once')
+    })
+  })
+
+  describe('会话快照：握手时固定，改配置不影响已建会话', () => {
+    it('skip 建立的会话在配置改为 manual 后仍静默放行一次', async () => {
+      const h = await makeHarness()
+      const session = await h.connect()
+
+      setPolicy(h.config, 'manual')
+
+      await expectSelected(h.svc, session, request(session), 'allow-once')
+    })
+
+    it('manual 建立的会话在配置改回 skip 后仍弹卡', async () => {
+      const h = await makeHarness({ setup: (x) => setPolicy(x.config, 'manual') })
+      const session = await h.connect()
+
+      setPolicy(h.config, 'skip')
+
+      await expectCard(h.svc, session, request(session))
+    })
+
+    it('同一服务内后建的会话用新值（快照按会话，不按服务）', async () => {
+      const h = await makeHarness()
+      const first = await h.connect()
+      setPolicy(h.config, 'manual')
+      const second = await h.connect()
+
+      await expectSelected(h.svc, first, request(first), 'allow-once')
+      await expectCard(h.svc, second, request(second))
+    })
+  })
+
+  describe('原生分类器开关写入各生命周期 _meta', () => {
+    it('session/new 按快照写 useAutoModeDuringPlan（skip → false）', async () => {
+      const h = await makeHarness()
+      await h.connect()
+
+      expect(classifierFlagOf(h.client.connected[0]!.agent.newSessionCalls)).toBe(false)
+    })
+
+    it('auto 会话的 session/new 写 true', async () => {
+      const h = await makeHarness({ setup: (x) => setPolicy(x.config, 'auto') })
+      await h.connect()
+
+      expect(classifierFlagOf(h.client.connected[0]!.agent.newSessionCalls)).toBe(true)
+    })
+
+    it('非 Claude 会话不写分类器开关，只保留 init 消息过滤', async () => {
+      const h = await makeHarness({ agentId: 'fake' })
+      await h.connect()
+
+      const meta = claudeCodeMetaOf(h.client.connected[0]!.agent.newSessionCalls)
+      expect(meta).toEqual({ emitRawSDKMessages: [{ type: 'system', subtype: 'init' }] })
+    })
+
+    it('session/load 沿用会话快照：恢复后改配置，重连仍是原值', async () => {
+      const h = await makeHarness({ stubOptions: { loadSession: true } })
+      h.history.add({
+        agentId: 'claude-code',
+        sessionIdOnAgent: 'agent-load-policy',
+        title: 'resume me',
+        hasMessages: true,
+      })
+
+      const session = await h.svc.resumeSession('agent-load-policy')
+      expect(classifierFlagOf(h.client.connected[0]!.agent.loadSessionCalls)).toBe(false)
+
+      // 快照已固定为 skip；此时改个人设置，并把进程「回收」后重连（dormant resume）。
+      setPolicy(h.config, 'auto')
+      h.client.connected[0]!.disposeLease()
+      await vi.waitFor(() => {
+        expect(session.status.get()).toBe('closed')
+      })
+
+      await h.svc.resumeSession('agent-load-policy')
+      await vi.waitFor(() => {
+        expect(h.client.connected[1]!.agent.resumeSessionCalls.length).toBeGreaterThan(0)
+      })
+      expect(classifierFlagOf(h.client.connected[1]!.agent.resumeSessionCalls)).toBe(false)
+    })
+
+    it('session/fork 用源会话快照，其后的 session/load 与之一致', async () => {
+      const h = await makeHarness({
+        stubOptions: { forkCapable: true, loadSession: true, forkedSessionId: 'agent-forked' },
+      })
+      const source = await h.connect()
+      await source.sendPrompt('first turn')
+      const messageId = source.messages.get().find((m) => m.role === 'user')?.messageId
+
+      setPolicy(h.config, 'auto')
+      await h.svc.forkSession(source.id, messageId)
+
+      const forkConn = h.client.connected.find((c) => c.agent.forkCalls.length > 0)!
+      expect(classifierFlagOf(forkConn.agent.forkCalls)).toBe(false)
+      const loadConn = h.client.connected.find((c) => c.agent.loadSessionCalls.length > 0)!
+      expect(loadConn.agent.loadSessionCalls[0]!.sessionId).toBe('agent-forked')
+      expect(classifierFlagOf(loadConn.agent.loadSessionCalls)).toBe(false)
+    })
+
+    it('非驻留源会话的 fork 读当前值但不把快照钉在源 id 上（其后 resume 源用新值）', async () => {
+      const h = await makeHarness({
+        stubOptions: {
+          forkCapable: true,
+          loadSession: true,
+          loadSessionConfigOptions: modeConfig('plan'),
+          forkedSessionId: 'agent-forked-away',
+        },
+      })
+      const source = await h.connect()
+      await source.sendPrompt('first turn')
+      const messageId = source.messages.get().find((m) => m.role === 'user')?.messageId
+      // 用户关闭 = 真关闭：实例移出 store，只剩历史行 —— fork 落到「源不在内存」分支。
+      await h.svc.closeSession(source.id)
+      expect(h.svc.getById('agent-1')).toBeUndefined()
+
+      setPolicy(h.config, 'auto')
+      const fork = await h.svc.forkSession('agent-1', messageId)
+
+      // fork 请求与它紧随的 load 都用 fork 当时读到的值。
+      const forkConn = h.client.connected.find((c) => c.agent.forkCalls.length > 0)!
+      expect(classifierFlagOf(forkConn.agent.forkCalls)).toBe(true)
+      expect(loadClassifierFlagOf(h, fork.id)).toBe(true)
+
+      // 之后恢复源会话必须读新值：fork 若把 'auto' 钉在源 id 上，这里会沿用 true。
+      setPolicy(h.config, 'skip')
+      const resumed = await h.svc.resumeSession('agent-1')
+
+      expect(resumed.id).toBe('agent-1')
+      expect(loadClassifierFlagOf(h, 'agent-1')).toBe(false)
+      await expectSelected(h.svc, resumed, request(resumed), 'allow-once')
     })
   })
 })

@@ -162,20 +162,21 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
               'Tool-call kinds that are auto-approved without prompting (e.g. "fs.read").',
             ),
           },
-          'acp.plan.autoApproveWithUpdates': {
-            type: 'boolean',
-            default: true,
+          'agentSettings.claude.planPermissionPolicy': {
+            type: 'string',
+            enum: ['skip', 'auto', 'manual'],
+            default: 'skip',
+            enumItemLabels: {
+              skip: localize('settings.agentSettings.claude.planPermissionPolicy.skip', 'Skip'),
+              auto: localize('settings.agentSettings.claude.planPermissionPolicy.auto', 'Auto'),
+              manual: localize(
+                'settings.agentSettings.claude.planPermissionPolicy.manual',
+                'Manual',
+              ),
+            },
             description: localize(
-              'settings.acp.plan.autoApproveWithUpdates',
-              'In plan mode, silently select the scoped "allow and remember" option ("allow-with-updates") the agent offers for shell commands, file reads and searches (Read/Glob/Grep) instead of showing the permission card: the agent then applies the rule the option carries — usually session-only, though a shell command rule may be written to the project\'s .claude/settings.local.json. Requests the agent marks as needing an explicit answer (decline option first) are never auto-approved; the plan review card is governed by "acp.plan.autoExecute". Turn off to review every such request yourself.',
-            ),
-          },
-          'acp.plan.autoApproveUnscoped': {
-            type: 'boolean',
-            default: true,
-            description: localize(
-              'settings.acp.plan.autoApproveUnscoped',
-              'In plan mode, also silently answer "yes, once" for shell commands, file reads and searches (Read/Glob/Grep) when the agent offers no scoped option this time — the command is let through once and no rule is written. For a sub-agent only, this also covers the web/MCP search tools by their exact name and kind (WebSearch/WebFetch and the Brave search MCP tool): "yes, once" is picked even when a scoped option is offered, still writing no rule — those calls may send data to the service and incur charges. Requests the CLI marks as needing a human answer (a decline-first prompt, a suppressed always-allow rule, or an ask rule of your own) are never auto-approved. A shell/read/search ask from a sub-agent is approved even when an older agent reports no marker at all; a web/MCP search ask — and any ask from the main agent — additionally requires the agent\'s positive "no human needed" marker. Turn off to review every such request yourself.',
+              'settings.agentSettings.claude.planPermissionPolicy',
+              'How the editor answers permission requests from a Claude session while it is in plan mode. "Skip" (default) answers with the one-shot "Yes" option the agent offers — the request goes through once and no rule is written — and switches the CLI\'s own plan-auto classifier off, so every request reaches the editor. "Auto" switches that classifier on and lets it decide; the editor approves nothing on its own. "Manual" switches the classifier off and shows every request as a permission card. This is a personal setting: it is read from user settings only, a workspace or project value is ignored, and changing it applies to sessions created or resumed afterwards. It applies to the Claude agent only, never to the plan-review card (governed by "acp.plan.autoExecute"), and never bypasses an organization\'s managed policy.',
             ),
           },
           'acp.plan.autoExecute': {

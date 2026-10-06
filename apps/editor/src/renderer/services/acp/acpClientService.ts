@@ -519,7 +519,10 @@ export class AcpClientService extends Disposable implements IAcpClientService {
     agentId: string,
     silent: boolean,
   ): Promise<AcpLaunchSpec> {
-    if (agentId !== 'claude-code') return spec
+    // `runAsNode` marks the bundled preset. A user `acp.agents` entry can reuse
+    // the id but launches its own command — forcing the bundled native binary
+    // (and its CLAUDE_CODE_EXECUTABLE) into it would break that launch.
+    if (agentId !== 'claude-code' || spec.runAsNode !== true) return spec
 
     // Local binary paths and local credentials never cross the tunnel: a remote
     // spawn resolves its own binary via a managed download on the remote host.

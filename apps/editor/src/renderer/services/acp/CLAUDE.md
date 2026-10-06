@@ -56,7 +56,7 @@ Agent Client Protocol（ACP）客户端层。基于 `@agentclientprotocol/sdk` v
 
 **例外：`switch_mode`（ExitPlanMode）永不走静默自动批准、也不被 `persistAllow` 记住**（守卫在 `onRequestPermission`）。它的自动化由 `acp.plan.autoExecute`（off/bypassPermissions/auto/acceptEdits/default）显式驱动：设置映射到已提供的非 clear 批准选项（`exit-plan-*`）才附 `autoResolve`，否则诊断并回人工确认。卡片倒计时可打断，勿静默短路。
 
-**计划模式静默批准分两级**（默认开、可关，不经 `AcpPermissionHandler`）：`execute`/`read`/`search` 先经 `acp.plan.autoApproveWithUpdates` 选 `allow-with-updates`；无它时 `acp.plan.autoApproveUnscoped` 选 `allow-once`（主 agent 要肯定标记，子 agent 放宽），另放行子 agent WebSearch/WebFetch/Brave 搜索（只选 once、不写规则、须肯定标记）。判定与风险见 [cases-plan-approve.md](cases-plan-approve.md)。
+**Claude 计划会话的三档权限策略**（`agentSettings.claude.planPermissionPolicy`，**只认个人层**，仅对 `claude-code` 且 mode=plan）：`skip`（默认）只代选 Agent 给的**一次性** `allow-once`——没有就回人工卡片、绝不代选持久选项；`auto` / `manual` 客户端一律不批准（`auto` 让 CLI 原生 `useAutoModeDuringPlan` 分类器决定）。策略按**会话快照**（改设置不影响已建会话）经 `_meta.claudeCode.options.settings` 写进各握手路径。语义与风险见 [cases-plan-approve.md](cases-plan-approve.md)。
 
 ## 套路 ACP-E：扩展会话历史持久化字段
 
@@ -83,13 +83,11 @@ agent 端（`vendor/claude-agent-acp`）把 wire 的 `env`/`headers` 数组还�
 - **默认启用集 = 池中全部非 `disabled` 条目**：`disabled` 注解来自 **`IMcpServerEnablementService`**（`acp.mcpServerEnablement`，GLOBAL/WORKSPACE 双 scope），定义条目里的 `disabled` 字段一律失效。UI 共用 **`McpEnablementToggles`**（工作区级开关**三态**，坑见 cases）。两条 wire 路径 `await Promise.all([extensionMcp.whenReady, mcpEnablement.whenReady])` 消除冷启动竞态。
 - **picker 左侧勾选只是会话级 pin**（`setSessionMcpServers`），只影响当前会话，**绝不写回默认**（sticky 机制已删）。resume/fork 选择瀑布：history 行 `mcpServerNames`（undefined=跟随默认）→ 否则 `null`（非 disabled 全集）。
 
-**未做**：实验性 `type:'acp'` transport、MCP 状态/工具可观测 UI。
-
 ## 测试模式
 
 主要测试在 `__tests__/`：`AcpSessionService*` / `acpSessionConfigOptions` / `acpSessionRestoreCoordinator` / `AcpClientService.terminal` / `acpMcpServers` / `acpSessionHistory` / `sdkHostStream` 的 `.test.ts`。
 
-**协议级测试一律走 `testing/inMemoryAcpPair.ts`**（对联构成见「文件归位」）。断言 **fake agent 方法被调用 + 参数对**，而不是 jsonline 字节（会被 SDK wire 格式变化弄碎）。E2E 在 `apps/editor/e2e/`，ACP 未在 `@p0` 冒烟里。
+**协议级测试一律走 `testing/inMemoryAcpPair.ts`**（对联构成见「文件归位」）。断言 **fake agent 方法被调用 + 参数对**，而不是 jsonline 字节（会被 SDK wire 格式变化弄碎）。
 
 ## 持久化
 
@@ -113,11 +111,11 @@ agent 端（`vendor/claude-agent-acp`）把 wire 的 `env`/`headers` 数组还�
 ## 参考路径
 
 - SDK 类型源码：`node_modules/@agentclientprotocol/sdk/dist/schema/types.gen.d.ts`；入口导出 `ClientSideConnection / AgentSideConnection / RequestError / ndJsonStream` + schema 类型
-- 配置 key：`acp.agents` / `acp.permissions.autoApprove` / `acp.plan.autoApprove*` / `acp.plan.autoExecute` / `acp.startupTimeoutMs` / `acp.defaultAgentId` / `acp.mcpServers` / `acp.idleProcessTimeoutMs`
+- 配置 key：`acp.agents` / `acp.permissions.autoApprove` / `agentSettings.claude.planPermissionPolicy` / `acp.plan.autoExecute` / `acp.startupTimeoutMs` / `acp.defaultAgentId` / `acp.mcpServers` / `acp.idleProcessTimeoutMs`
 
 ## 案例：输入框（引用 / 图片 / Monaco 编排）
 
-@/# 药丸引用见「文件归位」；图片与 Monaco 编排见 [cases-prompt-images.md](cases-prompt-images.md) / [cases-prompt-input-monaco.md](cases-prompt-input-monaco.md)。两条红线：**引用真身活在 Monaco 上，不是 React state**（旧 by-name 序列化已删，别复活）；**resource_link 的 name/description/_meta 会被 agent 丢弃**，行/列/符号名**只能进 `text` 块正文**。
+@/# 药丸引用见「文件归位」；图片与 Monaco 编排见 [cases-prompt-images.md](cases-prompt-images.md) / [cases-prompt-input-monaco.md](cases-prompt-input-monaco.md)。两条红线：**引用真身活在 Monaco 上，不是 React state**；**resource_link 的 name/description/_meta 会被 agent 丢弃**，行/列/符号名**只能进 `text` 块正文**。
 
 ## 子域导航
 

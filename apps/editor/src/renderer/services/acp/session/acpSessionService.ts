@@ -129,13 +129,14 @@ import {
 } from './acpSession.js'
 import { isResidentLive } from './acpSessionStatus.js'
 import { MAX_RECOVERY_ATTEMPTS, recoveryBackoffMs } from './acpSessionRecovery.js'
+import { readSyntheticDenial } from './acpSessionUpdateMeta.js'
 import {
-  readAgentToolName,
-  readClientMayAutoApproveOnce,
-  readMatchedAskRule,
-  readParentToolUseId,
-  readSyntheticDenial,
-} from './acpSessionUpdateMeta.js'
+  claudePlanAutoModeOptions,
+  isClaudeAgent,
+  readPlanPermissionPolicy,
+  selectSkipOneShotOption,
+  type PlanPermissionPolicy,
+} from './planPermissionPolicy.js'
 import {
   ACP_ACTIVE_SESSION_STORAGE_KEY,
   AcpSessionRestoreCoordinator,
@@ -425,21 +426,6 @@ const HISTORY_SCOPE_KEY = 'acp.sessions.historyScope'
 const ALLOW_WITH_UPDATES_OPTION_ID = 'allow-with-updates'
 
 /**
- * 无作用域选项时的「仅本次允许」选项 id。同样按 id 精确匹配而非 kind：codex fork 的
- * 对应 id 是下划线风格的 `allow_once`（vendor/codex-acp/src/permissions/option-ids.ts），
- * 按 kind 匹配会把它一并接管。claude fork 的选项恒为 `allow-once`。
- */
-const ALLOW_ONCE_OPTION_ID = 'allow-once'
-
-/**
- * 计划模式下允许静默批准的 tool kind：Shell（execute）与读取类（read/search，即
- * Read/Glob/Grep）。编辑类仍必须人工确认。
- */
-function isPlanAutoApproveKind(kind: string | null | undefined): boolean {
-  return kind === 'execute' || kind === 'read' || kind === 'search'
-}
-
-/**
  * 自带作用域的 allow_always 选项：点选它们只应用 Agent 的规则，不等于对整个
  * tool kind 的永久批准，因此不能写进 `acp.permissions.autoApprove`。
  */
@@ -448,23 +434,6 @@ const SCOPED_ALLOW_ALWAYS_OPTION_IDS: ReadonlySet<string> = new Set([
   'allow-skill-exact',
   'allow-skill-prefix',
 ])
-
-// 名称和 kind 必须成对匹配，不能把整个 fetch/other 类别当成只读工具。
-const PLAN_SUBAGENT_WEB_TOOLS: ReadonlyMap<string, string> = new Map([
-  ['WebSearch', 'fetch'],
-  ['WebFetch', 'fetch'],
-  ['mcp__brave-search__brave_web_search', 'other'],
-])
-
-function isPlanSubagentWebTool(
-  toolName: string | undefined,
-  kind: string | null | undefined,
-): boolean {
-  return toolName !== undefined && kind != null && PLAN_SUBAGENT_WEB_TOOLS.get(toolName) === kind
-}
-
-/** 二级静默批准的固定策略原因：区分旧无作用域范围与本次新增的网页白名单。 */
-type PlanUnscopedReason = 'unscoped' | 'web'
 
 /** ext-notification method the agent fork uses to forward raw Claude SDK messages. */
 const SDK_MESSAGE_EXT_METHOD = ACP_EXT_METHODS.sdkMessage
@@ -480,6 +449,23 @@ const EMIT_INIT_SDK_MESSAGE_META = {
 }
 
 /**
+ * The `_meta.claudeCode` block for a handshake: the init-message filter above,
+ * plus — for a Claude session — this session's plan-permission policy pin
+ * (`_meta.claudeCode.options.settings.useAutoModeDuringPlan`). Non-Claude agents
+ * never get the pin, so their sessions are untouched by the Claude setting.
+ */
+function claudeCodeMeta(
+  planPolicy: PlanPermissionPolicy | undefined,
+  extra?: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    ...EMIT_INIT_SDK_MESSAGE_META.claudeCode,
+    ...(planPolicy !== undefined ? { options: claudePlanAutoModeOptions(planPolicy) } : {}),
+    ...extra,
+  }
+}
+
+/**
  * `_meta` for session/load + session/resume: the init-message filter above,
  * plus the model this session is remembered to run (`history.configOptions.model`).
  * The fork re-asserts it after load — a resume otherwise lands on the
@@ -489,16 +475,14 @@ const EMIT_INIT_SDK_MESSAGE_META = {
 function buildResumeMeta(
   entry: AcpSessionHistoryEntry | undefined,
   candidates: readonly AcpModelCandidate[],
+  planPolicy: PlanPermissionPolicy | undefined,
 ): Record<string, unknown> {
   const resumeModel = entry?.configOptions?.['model']
   const extraModels = candidates.map((c) => c.id)
   const contextWindow = contextWindowFor(candidates, resumeModel)
   const extraModelEffort = buildExtraModelEffortMeta(candidates)
   return {
-    claudeCode: {
-      ...EMIT_INIT_SDK_MESSAGE_META.claudeCode,
-      ...(resumeModel !== undefined ? { resumeModel } : {}),
-    },
+    claudeCode: claudeCodeMeta(planPolicy, resumeModel !== undefined ? { resumeModel } : undefined),
     // Every load/resume rebuilds the fork's model picker from scratch, so the
     // extra candidates must ride along or gateway models vanish from the
     // dropdown (and set_config_option rejects values outside its options).
@@ -523,12 +507,13 @@ function buildResumeMeta(
 function buildNewSessionMeta(
   candidates: readonly AcpModelCandidate[],
   pick: string | undefined,
+  planPolicy: PlanPermissionPolicy | undefined,
 ): Record<string, unknown> {
   const extraModels = candidates.map((c) => c.id)
   const contextWindow = contextWindowFor(candidates, pick)
   const extraModelEffort = buildExtraModelEffortMeta(candidates)
   return {
-    ...EMIT_INIT_SDK_MESSAGE_META,
+    claudeCode: claudeCodeMeta(planPolicy),
     ...(extraModels.length > 0 ? { [ACP_META_KEYS.extraModels]: extraModels } : {}),
     ...(contextWindow !== undefined ? { [ACP_META_KEYS.modelContextWindow]: contextWindow } : {}),
     ...(extraModelEffort.length > 0 ? { [ACP_META_KEYS.extraModelEffort]: extraModelEffort } : {}),
@@ -539,15 +524,20 @@ function buildNewSessionMeta(
  * `_meta` for session/fork: the model candidates and the resolved window only.
  * Deliberately NOT the resume meta — the claudeCode block there tunes the native
  * CLI's raw-message stream for a load, and fork has never asked for it.
+ * 权限快照随 fork 请求传递；当前 fork 仅复制记录，实际设置在后续 load 时生效。
  */
 function buildForkMeta(
   entry: AcpSessionHistoryEntry,
   candidates: readonly AcpModelCandidate[],
+  planPolicy: PlanPermissionPolicy | undefined,
 ): Record<string, unknown> {
   const extraModels = candidates.map((c) => c.id)
   const contextWindow = contextWindowFor(candidates, entry.configOptions?.['model'])
   const extraModelEffort = buildExtraModelEffortMeta(candidates)
   return {
+    ...(planPolicy !== undefined
+      ? { claudeCode: { options: claudePlanAutoModeOptions(planPolicy) } }
+      : {}),
     ...(extraModels.length > 0 ? { [ACP_META_KEYS.extraModels]: extraModels } : {}),
     ...(contextWindow !== undefined ? { [ACP_META_KEYS.modelContextWindow]: contextWindow } : {}),
     ...(extraModelEffort.length > 0 ? { [ACP_META_KEYS.extraModelEffort]: extraModelEffort } : {}),
@@ -609,6 +599,16 @@ export class AcpSessionService
    * dropped by capability gating.
    */
   private readonly _mcpSelectionAtAttach = new Map<string, readonly string[] | null>()
+
+  /**
+   * The Claude plan-permission policy each session was created / resumed under,
+   * keyed by local session id. The native classifier setting is baked into the
+   * agent session at handshake time, so a mid-session edit of the personal
+   * setting must NOT change what the client does for that session: the snapshot
+   * keeps the client's decisions aligned with the CLI's actual configuration.
+   * Reconnects, rebuilds and the load that follows a fork all reuse it.
+   */
+  private readonly _planPolicyBySession = new Map<string, PlanPermissionPolicy>()
 
   /** Session ids (agent-issued) with an MCP reload currently in flight. */
   private readonly _mcpReloadingSessions = new Set<string>()
@@ -1115,11 +1115,14 @@ export class AcpSessionService
         resolvedAgentId,
         authority,
       )
+      // Snapshot the plan-permission policy at the handshake: the value is
+      // pinned onto the agent session here, so this is what both sides run.
+      const planPolicy = this._handshakePlanPolicy(session.id, resolvedAgentId)
       const newParams: NewSessionRequest = {
         cwd: cwd ?? '',
         mcpServers: kept,
         ...(await this._builtinAgentDirs(authority)),
-        _meta: buildNewSessionMeta(extraModels, pick),
+        _meta: buildNewSessionMeta(extraModels, pick, planPolicy),
       }
       profile.step('willNewSession')
       const result = await withTimeout(
@@ -1474,12 +1477,16 @@ export class AcpSessionService
         entry.agentId,
         effectiveAuthority,
       )
+      // A fork seeded its own policy under this durable id before resuming, so
+      // the load below re-uses it and the fork's first plan-mode request is
+      // judged by the same setting the fork was created under.
+      const planPolicy = this._handshakePlanPolicy(entry.sessionIdOnAgent, entry.agentId)
       const loadParams: LoadSessionRequest = {
         sessionId: entry.sessionIdOnAgent,
         cwd: cwd ?? '',
         mcpServers: kept,
         ...(await this._builtinAgentDirs(effectiveAuthority)),
-        _meta: buildResumeMeta(entry, extraModels),
+        _meta: buildResumeMeta(entry, extraModels, planPolicy),
       }
       // Replays take turns across sessions (see _replayQueue). The slot wraps
       // only the session/load RPC — the spawn/initialize handshake above and
@@ -1674,6 +1681,10 @@ export class AcpSessionService
               authority,
             )
             const agentDirs = await this._builtinAgentDirs(authority)
+            // Reconnect keeps the session's original snapshot — the mid-session
+            // setting may have changed, but this session's CLI side is
+            // re-created from the same value it started with.
+            const planPolicy = this._handshakePlanPolicy(session.id, session.agentId)
             let rebuiltSessionId: string | undefined
             // The SDK types these as `T | null` (absent bag), so keep the null
             // and gate on `!= null` at the applyInitState call below.
@@ -1685,7 +1696,7 @@ export class AcpSessionService
                   cwd: cwd ?? '',
                   mcpServers: kept,
                   ...agentDirs,
-                  _meta: buildNewSessionMeta(extraModels, pick),
+                  _meta: buildNewSessionMeta(extraModels, pick, planPolicy),
                 }),
                 timeoutMs,
                 'ACP session/new',
@@ -1700,7 +1711,7 @@ export class AcpSessionService
                   cwd: cwd ?? '',
                   mcpServers: kept,
                   ...agentDirs,
-                  _meta: buildResumeMeta(entry, extraModels),
+                  _meta: buildResumeMeta(entry, extraModels, planPolicy),
                 }),
                 timeoutMs,
                 'ACP session/resume',
@@ -2023,6 +2034,7 @@ export class AcpSessionService
     await session.close()
     this._sessionStore.remove(localId)
     this._mcpSelectionAtAttach.delete(localId)
+    this._planPolicyBySession.delete(localId)
     AcpChatViewStateCache.clear(localId)
     AcpPromptDraftCache.clear(localId)
     AcpElicitationDraftCache.clearSession(localId)
@@ -2269,6 +2281,12 @@ export class AcpSessionService
         mcpServers,
         initResult.agentCapabilities?.mcpCapabilities,
       )
+      // Read the policy once for the whole fork — from the source session's own
+      // snapshot when it is live, so a fork inherits what its parent is actually
+      // running — then seed it under the fork's durable id: the session/load the
+      // caller runs next reuses the seed, so the fork request and the resumed
+      // session cannot disagree.
+      const planPolicy = this._forkPlanPolicy(sourceAgentSessionId, entry.agentId)
       const result = await withTimeout(
         conn.conn.unstable_forkSession({
           sessionId: sourceAgentSessionId,
@@ -2283,6 +2301,7 @@ export class AcpSessionService
             ...buildForkMeta(
               entry,
               (await this._extraModelsFor(entry.agentId, effectiveAuthority)).candidates,
+              planPolicy,
             ),
             // Ask the fork to truncate at this user turn (回退 point) instead of the
             // session tip. Unknown/absent id → the agent forks from the tip.
@@ -2292,6 +2311,9 @@ export class AcpSessionService
         timeoutMs,
         'ACP session/fork',
       )
+      if (planPolicy !== undefined) {
+        this._planPolicyBySession.set(result.sessionId, planPolicy)
+      }
       return result.sessionId
     } finally {
       // Drop the temp lease used only for the fork RPC; the resume below opens
@@ -2465,44 +2487,46 @@ export class AcpSessionService
   }
 
   async onRequestPermission(params: RequestPermissionRequest): Promise<RequestPermissionResponse> {
-    // switch_mode（ExitPlanMode）永不走静默自动批准：它的自动化由
-    // `acp.plan.autoExecute` 显式驱动，落到下方卡片上可见、可打断的倒计时路径。
-    const auto = this._permission.tryAutoApprove(params)
-    if (auto && params.toolCall.kind !== 'switch_mode') {
-      this._telemetry.publicLog('acp.permission_auto_approved', {
-        kind: params.toolCall.kind ?? 'unknown',
-      })
-      return auto
-    }
+    // 未知会话先拒绝：没有会话就没有身份（Claude？）与模式（plan？）可判，
+    // 凭它自动批准等于无凭无据。
     const session = this._findSession(params.sessionId)
     if (!session) {
       this._logger.warn(`request_permission for unknown session ${params.sessionId}`)
       return { outcome: { outcome: 'cancelled' } }
     }
-    // 计划模式下替用户接受 Agent 的作用域化批准（CLI 随之固化自己的会话级规则），
-    // 工作区外的读取/命令不再逐条弹卡；开关 acp.plan.autoApproveWithUpdates。
-    const scopedOptionId = this._planAutoApproveWithUpdates(session, params)
-    if (scopedOptionId) {
-      this._telemetry.publicLog('acp.permission_plan_auto_approved', {
-        optionId: scopedOptionId,
-        kind: params.toolCall.kind ?? 'unknown',
-      })
-      this._logger.debug(`计划模式作用域批准：optionId=${scopedOptionId}`)
-      return { outcome: { outcome: 'selected', optionId: scopedOptionId } }
-    }
-    // 二级：Agent 给不出作用域选项时选「仅本次允许」——不建卡片、不写规则；
-    // 开关 acp.plan.autoApproveUnscoped。
-    const unscoped = this._planAutoApproveUnscoped(session, params)
-    if (unscoped) {
-      this._telemetry.publicLog('acp.permission_plan_auto_approved_unscoped', {
-        optionId: unscoped.optionId,
-        kind: params.toolCall.kind ?? 'unknown',
-        source: unscoped.source,
-      })
-      this._logger.debug(
-        `计划模式本次静默批准：optionId=${unscoped.optionId}, source=${unscoped.source}, reason=${unscoped.reason}`,
-      )
-      return { outcome: { outcome: 'selected', optionId: unscoped.optionId } }
+    // Claude 的计划会话由三档权限策略（agentSettings.claude.planPermissionPolicy）
+    // 接管，且不走旧的通用 kind 自动批准旁路：manual/auto 一律人工，skip 只选
+    // Agent 给的一次性「允许」选项——都不写永久规则。
+    const claudePlan = isClaudeAgent(session.agentId) && this._isPlanMode(session)
+    if (claudePlan) {
+      const policy = this._planPolicy(session.id)
+      if (policy === 'skip') {
+        const optionId = selectSkipOneShotOption(params)
+        if (optionId !== undefined) {
+          this._telemetry.publicLog('acp.permission_plan_skip_approved', {
+            optionId,
+            kind: params.toolCall.kind ?? 'unknown',
+          })
+          this._logger.debug(
+            `计划权限策略 skip：静默选中 ${optionId}（仅本次，不写规则），kind=${params.toolCall.kind ?? 'unknown'}`,
+          )
+          return { outcome: { outcome: 'selected', optionId } }
+        }
+        // 没有精确的一次性允许选项就回人工卡片，绝不退而选择永久授权。
+        this._logger.warn(
+          `计划权限策略 skip 回退人工卡片（未提供一次性允许选项）：options=${this._optionSummary(params)}`,
+        )
+      }
+    } else {
+      // 非 Claude 或非计划会话维持既有行为：通用 kind 自动批准（switch_mode 除外，
+      // ExitPlanMode 的自动化只由 acp.plan.autoExecute 驱动）。
+      const auto = this._permission.tryAutoApprove(params)
+      if (auto && params.toolCall.kind !== 'switch_mode') {
+        this._telemetry.publicLog('acp.permission_auto_approved', {
+          kind: params.toolCall.kind ?? 'unknown',
+        })
+        return auto
+      }
     }
     const allowAlways = params.options.find((o) => o.kind === 'allow_always')
     // plan 审查的自动执行：设置非 off 且目标选项确实在本次 options 里才附加
@@ -2592,7 +2616,7 @@ export class AcpSessionService
     return { optionId, delayMs: PLAN_AUTO_EXECUTE_DELAY_MS }
   }
 
-  /** 会话当前是否处于 plan 模式（两级静默批准的共同前置条件）。 */
+  /** 会话当前是否处于 plan 模式（Claude 计划权限策略的前置条件）。 */
   private _isPlanMode(session: AcpSession): boolean {
     return session.configOptions
       .get()
@@ -2600,102 +2624,43 @@ export class AcpSessionService
   }
 
   /**
-   * fork 在 CLI 标记 defaultToNo（安全类询问）时把拒绝项排到最前，明确要求客户端
-   * 不要把批准项当默认；此时退回人工确认。两级静默批准共用这一道否决。
+   * The plan-permission policy of a Claude session: the snapshot taken at its
+   * first handshake, or — for a session that somehow has none — a fresh read of
+   * the personal setting, pinned so a later edit cannot split the client from
+   * the CLI.
    */
-  private _rejectOptionFirst(params: RequestPermissionRequest): boolean {
-    const first = params.options[0]
-    return first?.kind === 'reject_once' || first?.kind === 'reject_always'
+  private _planPolicy(sessionId: string): PlanPermissionPolicy {
+    const existing = this._planPolicyBySession.get(sessionId)
+    if (existing !== undefined) return existing
+    const policy = readPlanPermissionPolicy(this._config)
+    this._planPolicyBySession.set(sessionId, policy)
+    return policy
+  }
+
+  /** {@link _planPolicy} for a session about to handshake; non-Claude agents get no pin. */
+  private _handshakePlanPolicy(
+    sessionId: string,
+    agentId: string,
+  ): PlanPermissionPolicy | undefined {
+    return isClaudeAgent(agentId) ? this._planPolicy(sessionId) : undefined
+  }
+
+  /**
+   * The policy a fork starts under: the live source session's own snapshot when
+   * it has one (so a fork never disagrees with the session it was split from),
+   * otherwise the personal setting read now. Undefined for non-Claude agents.
+   */
+  private _forkPlanPolicy(
+    sourceAgentSessionId: string,
+    agentId: string,
+  ): PlanPermissionPolicy | undefined {
+    if (!isClaudeAgent(agentId)) return undefined
+    const source = this._findSession(sourceAgentSessionId)
+    return source ? this._planPolicy(source.id) : readPlanPermissionPolicy(this._config)
   }
 
   private _optionSummary(params: RequestPermissionRequest): string {
     return JSON.stringify(params.options.map(({ optionId, kind }) => ({ optionId, kind })))
-  }
-
-  /**
-   * 计划模式下 Shell（execute）/ 读取类（read/search，即 Read/Glob/Grep）请求的
-   * 静默批准。返回 undefined 表示回落普通人工弹卡：设置关闭 / 非 plan 会话 /
-   * 请求 kind 不在覆盖范围 / Agent 未提供作用域化选项 / CLI 要求「不得误批准」
-   * （defaultToNo，拒绝项置顶）。
-   */
-  private _planAutoApproveWithUpdates(
-    session: AcpSession,
-    params: RequestPermissionRequest,
-  ): string | undefined {
-    if (!isPlanAutoApproveKind(params.toolCall.kind)) return undefined
-    if (this._config.get<boolean>('acp.plan.autoApproveWithUpdates') === false) return undefined
-    if (!this._isPlanMode(session)) return undefined
-    const option = params.options.find(
-      (candidate) =>
-        candidate.optionId === ALLOW_WITH_UPDATES_OPTION_ID && candidate.kind === 'allow_always',
-    )
-    if (!option) return undefined
-    if (this._rejectOptionFirst(params)) {
-      this._logger.warn(
-        `计划模式作用域批准回退人工确认（拒绝项置顶）：options=${this._optionSummary(params)}`,
-      )
-      return undefined
-    }
-    return option.optionId
-  }
-
-  /**
-   * 二级只批准本次，不写规则。普通范围仅接管无作用域选项的请求；网页白名单例外：
-   * 即使提供持久选项也只选 once，且仅接受带肯定标记的子 agent 请求。
-   * 旧范围对子 agent 缺标记的兼容不扩展到网页工具，也不覆盖 CLI 显式否定或用户 ask。
-   */
-  private _planAutoApproveUnscoped(
-    session: AcpSession,
-    params: RequestPermissionRequest,
-  ): { optionId: string; source: 'subagent' | 'main'; reason: PlanUnscopedReason } | undefined {
-    const kind = params.toolCall.kind
-    const webScope = isPlanSubagentWebTool(readAgentToolName(params.toolCall), kind)
-    if (!isPlanAutoApproveKind(kind) && !webScope) return undefined
-    if (this._config.get<boolean>('acp.plan.autoApproveUnscoped') === false) return undefined
-    // 一级已接管带作用域选项的旧范围请求；网页范围一级不覆盖，即使有 allow-with-updates
-    // 也仍选 once（只放行本次、不写规则），因此不让这条守卫挡住它。
-    if (
-      !webScope &&
-      params.options.some((option) => option.optionId === ALLOW_WITH_UPDATES_OPTION_ID)
-    ) {
-      return undefined
-    }
-    if (!this._isPlanMode(session)) return undefined
-    const option = params.options.find(
-      (candidate) => candidate.optionId === ALLOW_ONCE_OPTION_ID && candidate.kind === 'allow_once',
-    )
-    if (!option) return undefined
-    if (this._rejectOptionFirst(params)) {
-      this._logger.warn(
-        `计划模式本次静默批准回退人工确认（拒绝项置顶）：options=${this._optionSummary(params)}`,
-      )
-      return undefined
-    }
-    const source = readParentToolUseId(params.toolCall) !== undefined ? 'subagent' : 'main'
-    // 用户自己配置的 ask 规则是显式否决位：子 agent 放宽时仍尊重它。
-    if (readMatchedAskRule(params.toolCall)) {
-      this._logger.debug(`计划模式本次静默批准回退人工确认（命中用户 ask 规则）：source=${source}`)
-      return undefined
-    }
-    const marker = readClientMayAutoApproveOnce(params.toolCall)
-    if (webScope) {
-      // 网页/MCP 范围只对子 agent 放宽，并要求肯定式标记（缺失/畸形 = 要人回答）；
-      // 主 agent、坏父归属与未知工具都不扩大。
-      if (source !== 'subagent' || marker !== true) {
-        this._logger.warn(
-          `计划模式网页工具静默批准回退人工确认：reason=${source !== 'subagent' ? 'not-subagent' : 'marker'}, kind=${kind ?? 'unknown'}, options=${this._optionSummary(params)}`,
-        )
-        return undefined
-      }
-      return { optionId: option.optionId, source, reason: 'web' }
-    }
-    if (marker === false || (source === 'main' && marker !== true)) {
-      this._logger.warn(
-        `计划模式本次静默批准回退人工确认：marker=${marker ?? 'absent'}, source=${source}, options=${this._optionSummary(params)}`,
-      )
-      return undefined
-    }
-    return { optionId: option.optionId, source, reason: 'unscoped' }
   }
 
   async onCreateElicitation(params: CreateElicitationRequest): Promise<CreateElicitationResponse> {

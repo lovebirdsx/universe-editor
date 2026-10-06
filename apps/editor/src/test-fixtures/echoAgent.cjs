@@ -426,9 +426,14 @@ async function runPrompt(id, params) {
   // Claude fork does for a command reading outside the workspace (allow_once →
   // allow-with-updates → reject). "approve-shell-danger" leads with the reject,
   // which is how the fork marks a CLI `defaultToNo` ask (its stable sort puts
-  // every reject ahead of the approvals). Both echo the chosen optionId so a
-  // spec can assert what the client answered.
-  if (userText === 'approve-shell' || userText === 'approve-shell-danger') {
+  // every reject ahead of the approvals); "approve-shell-persistent-only" drops
+  // the one-shot yes entirely. All echo the chosen optionId so a spec can assert
+  // what the client answered.
+  if (
+    userText === 'approve-shell' ||
+    userText === 'approve-shell-danger' ||
+    userText === 'approve-shell-persistent-only'
+  ) {
     const allowOptions = [
       { optionId: 'allow-once', name: 'Yes', kind: 'allow_once' },
       {
@@ -438,13 +443,19 @@ async function runPrompt(id, params) {
       },
       { optionId: 'reject', name: 'No', kind: 'reject_once' },
     ]
+    // "...-persistent-only" is the shape where the CLI can offer no one-shot yes
+    // at all: the client must fall back to the card rather than take the durable
+    // option (and never write a rule by itself).
+    const options =
+      userText === 'approve-shell-danger'
+        ? [allowOptions[2], allowOptions[0], allowOptions[1]]
+        : userText === 'approve-shell-persistent-only'
+          ? [allowOptions[1], allowOptions[2]]
+          : allowOptions
     const result = await requestFromClient('session/request_permission', {
       sessionId,
       toolCall: { toolCallId: 'echo-shell', title: 'ls -la ~/.codex/sessions', kind: 'execute' },
-      options:
-        userText === 'approve-shell-danger'
-          ? [allowOptions[2], allowOptions[0], allowOptions[1]]
-          : allowOptions,
+      options,
     })
     notify('session/update', {
       sessionId,

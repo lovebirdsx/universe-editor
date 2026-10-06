@@ -9,8 +9,10 @@ const ECHO_AGENT_PATH = resolve(
 )
 
 async function requestPlan(page: Page, mode: string) {
+  // 按内置 `claude-code` 身份安装 echo 桩：switch_mode 不走计划权限策略的判据之一是
+  // 「Claude 会话」，用别的 id 就测不到那条排除。
   await page.evaluate(([id, path]) => window.__E2E__!.installAcpEchoAgent(id, path), [
-    'echo',
+    'claude-code',
     ECHO_AGENT_PATH,
   ] as const)
   await page.evaluate(

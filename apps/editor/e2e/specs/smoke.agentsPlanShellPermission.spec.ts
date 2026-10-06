@@ -8,12 +8,21 @@ const ECHO_AGENT_PATH = resolve(
   '../../src/test-fixtures/echoAgent.cjs',
 )
 
-/** ECHO_AGENT_CONFIG_OPTIONS=1 让 session/new 直接通告 mode=plan，省去手动切模式。 */
-async function startPlanSession(page: Page) {
+/** 计划权限策略只对内置 Claude 身份生效；桩 agent 显式占用该 id 来模拟它。 */
+const CLAUDE_AGENT_ID = 'claude-code'
+
+const POLICY_KEY = 'agentSettings.claude.planPermissionPolicy'
+
+/**
+ * ECHO_AGENT_CONFIG_OPTIONS=1 让 session/new 直接通告 mode=plan，省去手动切模式。
+ * 默认按 `claude-code` 身份安装 echo 桩——`isClaudeAgent` 判的是 agentId，别的 id
+ * 走的是通用自动批准路径，测不到计划权限策略。
+ */
+async function startPlanSession(page: Page, agentId: string = CLAUDE_AGENT_ID) {
   await page.evaluate(
     ([id, path]) =>
       window.__E2E__!.installAcpEchoAgent(id, path, { ECHO_AGENT_CONFIG_OPTIONS: '1' }),
-    ['echo', ECHO_AGENT_PATH] as const,
+    [agentId, ECHO_AGENT_PATH] as const,
   )
   await page.evaluate(() => {
     void window.__E2E__!.runCommand('workbench.action.agent.newSession')
@@ -39,88 +48,6 @@ async function expectSelection(page: Page, optionId: string) {
     .toContain(`"optionId":"${optionId}"`)
 }
 
-test('计划模式下作用域化 Shell 权限默认静默批准 @p1', async ({ page }) => {
-  await startPlanSession(page)
-  await sendPrompt(page, 'approve-shell')
-
-  await expectSelection(page, 'allow-with-updates')
-  await expect(page.getByTestId('acp-permission-card')).toHaveCount(0)
-})
-
-test('关闭 acp.plan.autoApproveWithUpdates 后权限卡回归 @regression', async ({ page }) => {
-  await startPlanSession(page)
-  await page.evaluate(
-    (key) => window.__E2E__!.updateConfigValue(key, false),
-    'acp.plan.autoApproveWithUpdates',
-  )
-  await sendPrompt(page, 'approve-shell')
-
-  const card = page.getByTestId('acp-permission-card')
-  await expect(card).toHaveCount(1)
-  await card.getByRole('button', { name: 'Yes', exact: true }).click()
-  await expectSelection(page, 'allow-once')
-})
-
-test('拒绝项置顶（defaultToNo）时不静默批准 @regression', async ({ page }) => {
-  await startPlanSession(page)
-  await sendPrompt(page, 'approve-shell-danger')
-
-  const card = page.getByTestId('acp-permission-card')
-  await expect(card).toHaveCount(1)
-  await card.getByRole('button', { name: 'No', exact: true }).click()
-  await expectSelection(page, 'reject')
-})
-
-test('无作用域选项时（主 agent 已盖章）静默选「仅本次允许」@p1', async ({ page }) => {
-  await startPlanSession(page)
-  await sendPrompt(page, 'approve-shell-once')
-
-  await expectSelection(page, 'allow-once')
-  await expect(page.getByTestId('acp-permission-card')).toHaveCount(0)
-})
-
-test('关闭 acp.plan.autoApproveUnscoped 后无作用域选项仍弹卡 @regression', async ({ page }) => {
-  await startPlanSession(page)
-  await page.evaluate(
-    (key) => window.__E2E__!.updateConfigValue(key, false),
-    'acp.plan.autoApproveUnscoped',
-  )
-  await sendPrompt(page, 'approve-shell-once')
-
-  const card = page.getByTestId('acp-permission-card')
-  await expect(card).toHaveCount(1)
-  await card.getByRole('button', { name: 'Yes', exact: true }).click()
-  await expectSelection(page, 'allow-once')
-})
-
-test('旧 fork 未盖章时无作用域选项不静默批准 @regression', async ({ page }) => {
-  await startPlanSession(page)
-  await sendPrompt(page, 'approve-shell-once-nomarker')
-
-  const card = page.getByTestId('acp-permission-card')
-  await expect(card).toHaveCount(1)
-  await card.getByRole('button', { name: 'Yes', exact: true }).click()
-  await expectSelection(page, 'allow-once')
-})
-
-test('子 agent 的询问无标记也静默批准 @regression', async ({ page }) => {
-  await startPlanSession(page)
-  await sendPrompt(page, 'approve-shell-once-subagent')
-
-  await expectSelection(page, 'allow-once')
-  await expect(page.getByTestId('acp-permission-card')).toHaveCount(0)
-})
-
-test('子 agent 的询问被 CLI 显式否定时仍弹卡 @regression', async ({ page }) => {
-  await startPlanSession(page)
-  await sendPrompt(page, 'approve-shell-once-subagent-denied')
-
-  const card = page.getByTestId('acp-permission-card')
-  await expect(card).toHaveCount(1)
-  await card.getByRole('button', { name: 'Yes', exact: true }).click()
-  await expectSelection(page, 'allow-once')
-})
-
 /** 负例：卡片必须先出现，点选后再断言 Agent 收到的 optionId。 */
 async function respondAndExpect(page: Page, buttonName: string, optionId: string) {
   const card = page.getByTestId('acp-permission-card')
@@ -129,9 +56,68 @@ async function respondAndExpect(page: Page, buttonName: string, optionId: string
   await expectSelection(page, optionId)
 }
 
-// 子 agent 的网页/MCP 搜索白名单：真实 kind（WebSearch/WebFetch = fetch，Brave
-// MCP 搜索 = other）、原始 toolName、子归属与肯定标记，且即使 Agent 给出
-// allow-with-updates 仍只选「仅本次允许」。不联网：全为合成请求。
+test('Claude 计划会话默认 skip：静默选「仅本次允许」且不弹卡 @p1', async ({ page }) => {
+  await startPlanSession(page)
+  await sendPrompt(page, 'approve-shell')
+
+  await expectSelection(page, 'allow-once')
+  await expect(page.getByTestId('acp-permission-card')).toHaveCount(0)
+})
+
+test('skip 覆盖拒绝项置顶（CLI defaultToNo）的询问 @regression', async ({ page }) => {
+  await startPlanSession(page)
+  await sendPrompt(page, 'approve-shell-danger')
+
+  await expectSelection(page, 'allow-once')
+  await expect(page.getByTestId('acp-permission-card')).toHaveCount(0)
+})
+
+test('没有一次性允许选项时回人工卡片，不代选永久授权 @regression', async ({ page }) => {
+  await startPlanSession(page)
+  await sendPrompt(page, 'approve-shell-persistent-only')
+
+  await respondAndExpect(page, 'No', 'reject')
+})
+
+test('User 层设为 manual 后请求回人工卡片 @regression', async ({ page }) => {
+  await page.evaluate((key) => window.__E2E__!.updateUserConfigValue(key, 'manual'), POLICY_KEY)
+  await expect
+    .poll(() =>
+      page.evaluate((key) => window.__E2E__!.getConfigurationValueOrigin(key), POLICY_KEY),
+    )
+    .toBe('user')
+  await startPlanSession(page)
+  await sendPrompt(page, 'approve-shell')
+
+  await respondAndExpect(page, 'Yes', 'allow-once')
+})
+
+test('User 层设为 auto 后客户端不自动批准（放行交给 CLI 分类器）@regression', async ({ page }) => {
+  await page.evaluate((key) => window.__E2E__!.updateUserConfigValue(key, 'auto'), POLICY_KEY)
+  await startPlanSession(page)
+  await sendPrompt(page, 'approve-shell')
+
+  await respondAndExpect(page, 'Yes', 'allow-once')
+})
+
+test('Memory 层的策略值被忽略（仅个人层生效）@regression', async ({ page }) => {
+  await page.evaluate((key) => window.__E2E__!.updateConfigValue(key, 'manual'), POLICY_KEY)
+  await startPlanSession(page)
+  await sendPrompt(page, 'approve-shell')
+
+  await expectSelection(page, 'allow-once')
+  await expect(page.getByTestId('acp-permission-card')).toHaveCount(0)
+})
+
+test('非 Claude 身份不受计划权限策略影响：仍弹卡 @regression', async ({ page }) => {
+  await startPlanSession(page, 'echo')
+  await sendPrompt(page, 'approve-shell')
+
+  await respondAndExpect(page, 'Yes', 'allow-once')
+})
+
+// 子/主 agent 与各类 CLI 标记在 skip 下不再区分：一律只放行一次、不写规则。
+// 这些用例守护的是「不因 kind / 归属 / marker 而漏答或改写策略」。
 
 test('子 agent 的 WebSearch（kind=fetch）静默选「仅本次允许」@p1', async ({ page }) => {
   await startPlanSession(page)
@@ -141,71 +127,26 @@ test('子 agent 的 WebSearch（kind=fetch）静默选「仅本次允许」@p1',
   await expect(page.getByTestId('acp-permission-card')).toHaveCount(0)
 })
 
-test('子 agent 的 WebFetch（kind=fetch）静默选「仅本次允许」@p1', async ({ page }) => {
-  await startPlanSession(page)
-  await sendPrompt(page, 'approve-web-fetch')
-
-  await expectSelection(page, 'allow-once')
-  await expect(page.getByTestId('acp-permission-card')).toHaveCount(0)
-})
-
-test('子 agent 的 Brave MCP 搜索（kind=other，两项）静默选「仅本次允许」@p1', async ({ page }) => {
-  await startPlanSession(page)
-  await sendPrompt(page, 'approve-brave-search')
-
-  await expectSelection(page, 'allow-once')
-  await expect(page.getByTestId('acp-permission-card')).toHaveCount(0)
-})
-
-test('主 agent 的 WebSearch 不扩大授权 @regression', async ({ page }) => {
+test('主 agent 的 WebSearch 同样静默放行一次 @p1', async ({ page }) => {
   await startPlanSession(page)
   await sendPrompt(page, 'approve-web-main')
 
-  await respondAndExpect(page, 'Yes', 'allow-once')
+  await expectSelection(page, 'allow-once')
+  await expect(page.getByTestId('acp-permission-card')).toHaveCount(0)
 })
 
-test('缺 marker 的 WebSearch 回人工确认 @regression', async ({ page }) => {
-  await startPlanSession(page)
-  await sendPrompt(page, 'approve-web-nomarker')
-
-  await respondAndExpect(page, 'Yes', 'allow-once')
-})
-
-test('marker=false 的 WebSearch 回人工确认 @regression', async ({ page }) => {
+test('CLI 显式否定（marker=false）的 WebSearch 同样只放行一次 @regression', async ({ page }) => {
   await startPlanSession(page)
   await sendPrompt(page, 'approve-web-denied')
 
-  await respondAndExpect(page, 'Yes', 'allow-once')
+  await expectSelection(page, 'allow-once')
+  await expect(page.getByTestId('acp-permission-card')).toHaveCount(0)
 })
 
-test('命中 ask 规则的 WebSearch 回人工确认 @regression', async ({ page }) => {
+test('命中用户 ask 规则的 WebSearch 同样只放行一次 @regression', async ({ page }) => {
   await startPlanSession(page)
   await sendPrompt(page, 'approve-web-ask')
 
-  await respondAndExpect(page, 'Yes', 'allow-once')
-})
-
-test('拒绝项置顶的 WebSearch 回人工确认 @regression', async ({ page }) => {
-  await startPlanSession(page)
-  await sendPrompt(page, 'approve-web-reject-first')
-
-  await respondAndExpect(page, 'No', 'reject')
-})
-
-test('未知 MCP 搜索工具回人工确认 @regression', async ({ page }) => {
-  await startPlanSession(page)
-  await sendPrompt(page, 'approve-web-unknown-mcp')
-
-  await respondAndExpect(page, 'Yes', 'allow-once')
-})
-
-test('关闭 acp.plan.autoApproveUnscoped 后 WebSearch 仍弹卡 @regression', async ({ page }) => {
-  await startPlanSession(page)
-  await page.evaluate(
-    (key) => window.__E2E__!.updateConfigValue(key, false),
-    'acp.plan.autoApproveUnscoped',
-  )
-  await sendPrompt(page, 'approve-web-search')
-
-  await respondAndExpect(page, 'Yes', 'allow-once')
+  await expectSelection(page, 'allow-once')
+  await expect(page.getByTestId('acp-permission-card')).toHaveCount(0)
 })
