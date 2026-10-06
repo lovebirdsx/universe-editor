@@ -224,10 +224,15 @@ describe('HeapSnapshotController', () => {
 
   /**
    * 推进真正的宏任务轮次，让文件系统的 I/O 落定。用 `setImmediate` 而不是 `setTimeout`：
-   * 有些用例装着假计时器（只假 `setTimeout`），微任务队列推不动 libuv。轮数之外再给一个
-   * 墙上时间预算——轮次很快，慢机器上几百轮可能还不够一次磁盘 I/O。
+   * 有些用例装着假计时器（只假 `setTimeout`），微任务队列推不动 libuv。轮数是防死循环的
+   * 保险，不是主约束——实测 5000 轮只跑出约 8ms，所以它必须远大于墙上时间预算能跑完的轮数，
+   * 否则预算还没到、轮数先见底，等待会静默缩短成几毫秒。
    */
-  async function until(condition: () => boolean, turns = 5_000, budgetMs = 2_000): Promise<void> {
+  async function until(
+    condition: () => boolean,
+    turns = 2_000_000,
+    budgetMs = 2_000,
+  ): Promise<void> {
     const deadline = Date.now() + budgetMs
     for (let i = 0; i < turns; i++) {
       if (condition()) return
@@ -241,7 +246,10 @@ describe('HeapSnapshotController', () => {
    * 刻 promise 的续体还没跑（libuv 的回调在下一个轮次的 poll 阶段），锁和事件都在那之后。
    */
   async function untilLockReleased(windowId: number): Promise<void> {
+    // windowId 必须是持锁的那个窗口：phase 只对锁的主人说 capturing，等别人等于没等。
     await until(() => controller.status(windowId).phase !== 'capturing')
+    // until 到点会静默返回，那等于把病因推给后面某个超时的 waitFor——这里必须自己响。
+    expect(controller.status(windowId).phase).not.toBe('capturing')
   }
 
   function lastEvent(): HeapSnapshotEvent {
@@ -294,12 +302,17 @@ describe('HeapSnapshotController', () => {
     controller.start(1)
     feedBaseline(1)
     await vi.waitFor(() => expect(snapshots()).toHaveLength(1))
+    // 文件可见不等于抓取结束：写 sidecar 那一步还握着单航班锁，此间喂的样本会被判 busy 跳过
+    // 决策，而这条用例的样本是一次性喂完的，没有下一个来补。
+    await untilLockReleased(1)
 
     // 抓取会把堆推进一次回收，所以参照点是之后的谷底——拿基线本身当参照，会把回升报成增长。
     feed(1, 150 * MIB)
     for (let i = 0; i < 3; i++) feed(1, 600 * MIB, { afterMs: 30_000 })
 
     await vi.waitFor(() => expect(snapshots()).toHaveLength(2))
+    // 同理：artifacts 计数与 round-complete 都在收尾之后才落定，锁没释放时 status 还是 capturing。
+    await untilLockReleased(1)
     expect(controller.status(1)).toMatchObject({
       active: false,
       phase: 'stopped',
@@ -707,6 +720,8 @@ describe('HeapSnapshotController', () => {
     expect(window.calls).toHaveLength(1)
     window.release()
     await vi.waitFor(() => expect(snapshots()).toHaveLength(1))
+    // 锁是随 promise 落定的，不是随文件出现的；不等它，下面那轮 feedBaseline 会被整批丢掉。
+    await untilLockReleased(1)
 
     // 文件是上一轮付过冻结代价的产物，留下；但它的报告属于一个已经不存在的轮次，绝不能
     // 发到新轮次的通知流里（新窗口会把它读成自己这一轮的结果）。
@@ -851,6 +866,8 @@ describe('HeapSnapshotController', () => {
 
     first.release()
     await vi.waitFor(() => expect(snapshots()).toHaveLength(1))
+    // 锁的主人是窗口 1（收尾的是它），而 busy 是全应用级的：喂窗口 2 之前要等的是 1。
+    await untilLockReleased(1)
     feedBaseline(2)
     await vi.waitFor(() => expect(second.calls).toHaveLength(1))
   })
