@@ -1484,6 +1484,111 @@ describe('AcpSession.timeline', () => {
     expect(childTool.call.title).toBe('Edit')
   })
 
+  it.each(['tool_call', 'tool_call_update'] as const)(
+    'ignores a self-parent on %s and completes the top-level agent card',
+    async (selfParentUpdate) => {
+      const s = await svc.createSession()
+      await s.whenConnected()
+      const conn = client.connected[0]!
+      const send = (update: SessionUpdate) =>
+        conn.sink.onSessionUpdate({ sessionId: 'agent-1', update })
+
+      send({
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tcAgent',
+        title: 'Task',
+        kind: 'think',
+        status: 'pending',
+        ...(selfParentUpdate === 'tool_call'
+          ? { _meta: { claudeCode: { parentToolUseId: 'tcAgent' } } }
+          : {}),
+      })
+      send({
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'child output' },
+        _meta: { claudeCode: { parentToolUseId: 'tcAgent' } },
+      })
+      send({
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'tcAgent',
+        status: 'in_progress',
+        _meta: {
+          claudeCode: {
+            parentToolUseId: 'tcAgent',
+            toolName: 'Agent',
+            toolResponse: { elapsedTimeSeconds: 30 },
+          },
+        },
+      })
+      send({
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'tcAgent',
+        status: 'completed',
+        content: [{ type: 'content', content: { type: 'text', text: 'task completed' } }],
+      })
+
+      expect(s.timeline.get().map((item) => item.id)).toEqual(['tcAgent'])
+      expect(s.toolCalls.get().map((call) => call.id)).toEqual(['tcAgent'])
+      const slot = s.timeline.get()[0]!
+      if (slot.kind !== 'toolCall') throw new Error('expected toolCall')
+      expect(slot.call.status).toBe('completed')
+      expect(slot.call.title).toBe('Task')
+      expect(slot.call.kind).toBe('think')
+      expect(slot.call.blocks).toEqual([{ type: 'text', text: 'task completed' }])
+      expect(slot.call.text).toBe('task completed')
+      expect(slot.call.durationMs).toBeGreaterThanOrEqual(0)
+      expect(s.toolCalls.get()[0]!.status).toBe('completed')
+      expect(slot.call.children).toHaveLength(1)
+      const child = slot.call.children![0]!
+      if (child.kind !== 'message') throw new Error('expected message')
+      expect(child.message.text).toBe('child output')
+    },
+  )
+
+  it('preserves the real parent through a child self-parent heartbeat and completion', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+    const send = (update: SessionUpdate) =>
+      conn.sink.onSessionUpdate({ sessionId: 'agent-1', update })
+
+    send({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'tcParent',
+      title: 'Task',
+      kind: 'think',
+      status: 'in_progress',
+    })
+    send({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'tcChild',
+      title: 'Edit',
+      kind: 'edit',
+      status: 'pending',
+      _meta: { claudeCode: { parentToolUseId: 'tcParent' } },
+    })
+    send({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'tcChild',
+      status: 'in_progress',
+      _meta: { claudeCode: { parentToolUseId: 'tcChild' } },
+    })
+    send({ sessionUpdate: 'tool_call_update', toolCallId: 'tcChild', status: 'completed' })
+
+    expect(s.timeline.get().map((item) => item.id)).toEqual(['tcParent'])
+    expect(s.toolCalls.get().map((call) => call.id)).toEqual(['tcParent'])
+    const parent = s.timeline.get()[0]!
+    if (parent.kind !== 'toolCall') throw new Error('expected toolCall')
+    expect(parent.call.status).toBe('in_progress')
+    expect(parent.call.children).toHaveLength(1)
+    const child = parent.call.children![0]!
+    if (child.kind !== 'toolCall') throw new Error('expected toolCall')
+    expect(child.id).toBe('tcChild')
+    expect(child.call.status).toBe('completed')
+    expect(child.call.title).toBe('Edit')
+    expect(child.call.children ?? []).toHaveLength(0)
+  })
+
   it('records Codex Edit diff content as a session file change', async () => {
     svc.dispose()
     const tracker = new StubSessionChangeTracker()

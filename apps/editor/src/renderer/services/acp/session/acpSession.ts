@@ -4250,7 +4250,11 @@ export class AcpSession extends Disposable implements IAcpSession {
    * slot stuck at "pending".
    */
   private _resolveParent(toolCallId: string, parentId: string | undefined): string | undefined {
-    if (parentId != null) {
+    if (parentId === toolCallId) {
+      console.debug(`[acp-tool] 忽略工具自引用父关系: toolCallId=${toolCallId}`)
+    }
+    // 自引用心跳不代表层级；回退已记住的真实父节点，避免嵌套工具脱层。
+    if (parentId != null && parentId !== toolCallId) {
       // Bounded FIFO (Map keeps insertion order). There is no reliable "this
       // link is done with" signal — a late PostToolUse update can arrive long
       // after its card settled — so the map is capped rather than pruned. An
