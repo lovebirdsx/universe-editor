@@ -1,16 +1,33 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Pure helpers over a `SessionConfigOption` bag: resolve a value's friendly
- *  display name, and snapshot the current select selections (value + label) so
- *  the durable history can show model / effort on rows that are no longer live.
- *  Kept out of the UI layer so both services and components can reuse it.
+ *  Pure helpers over a `SessionConfigOption` bag: look a select option up by its
+ *  category, resolve a value's friendly display name, and snapshot the current
+ *  select selections (value + label) so the durable history can show model /
+ *  effort on rows that are no longer live. Kept out of the UI layer so both
+ *  services and components can reuse it.
  *--------------------------------------------------------------------------------------------*/
 
 import type {
   SessionConfigOption,
+  SessionConfigOptionCategory,
   SessionConfigSelectGroup,
   SessionConfigSelectOption,
 } from '@agentclientprotocol/sdk'
+
+/**
+ * The first select option advertising `category`, if any. ConfigIds differ per
+ * agent (codex: `reasoning_effort`, claude: `effort`), so every site that means
+ * "the model / thinking-depth switch" must resolve it by category, never by id.
+ */
+export function findSelectOptionByCategory(
+  bag: readonly SessionConfigOption[],
+  category: SessionConfigOptionCategory,
+): (SessionConfigOption & { type: 'select' }) | undefined {
+  return bag.find(
+    (o): o is SessionConfigOption & { type: 'select' } =>
+      o.type === 'select' && o.category === category,
+  )
+}
 
 /**
  * Whether a select option actually offers `value` among its (possibly grouped)

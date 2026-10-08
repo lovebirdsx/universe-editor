@@ -88,6 +88,15 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
               'Mode for "Fix with AI" sessions. Empty does not pin a mode (AI Fix needs write access to fix files, so no mode is pinned by default).',
             ),
           },
+          'acp.sideTask.models': {
+            type: 'object',
+            default: {},
+            additionalProperties: { type: 'string' },
+            description: localize(
+              'settings.acp.sideTask.models',
+              'Model a newly created side task starts on, keyed by agent ID (e.g. { "claude-code": "haiku", "codex": "gpt-5-codex-mini" }). A side task inherits its parent session\'s agent, so the entry that applies is the parent\'s agent. The value is one of that agent\'s model option values — not an editor AI-settings model ID — so pick it via the "Configure Side Task Model" command. An agent with no entry, or a value the agent does not offer, inherits the parent session\'s model.',
+            ),
+          },
           'acp.prefetchBinaries': {
             type: 'boolean',
             default: true,

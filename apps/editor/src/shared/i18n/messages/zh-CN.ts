@@ -334,6 +334,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.agent.selectModel': '选择 Agent 模型…',
   'action.agent.selectThoughtLevel': '选择 Agent 思考级别…',
   'action.agent.configureAiFix': '配置 AI 修复…',
+  'action.agent.configureSideTaskModel': '配置侧边任务模型…',
   'action.agent.sendCommitToChat': '发送到 Agent 聊天',
   'action.agent.showSessionChanges': '显示会话更改',
   'action.agent.switchSession': '切换会话…',
@@ -775,6 +776,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
     '「使用 AI 修复」会话的思考深度（如 low/medium/high）。留空跟随 Agent 默认；Agent 不提供的值会被忽略并告警。请通过「配置 AI 修复」命令选择。',
   'settings.acp.aiFix.mode':
     '「使用 AI 修复」会话的模式。留空不固定模式（AI 修复需要写权限来改文件，默认不固定）。',
+  'settings.acp.sideTask.models':
+    '新建侧边任务使用的模型，按 Agent ID 分键（如 { "claude-code": "haiku", "codex": "gpt-5-codex-mini" }）。侧边任务继承父会话的 Agent，因此生效的是父会话 Agent 对应的那一项。值是该 Agent 的模型选项值——不是编辑器 AI 设置里的模型 ID——请通过「配置侧边任务模型」命令选择。未配置该 Agent、或值不是该 Agent 可选项时，跟随父会话的模型。',
   'settings.acp.defaultCollapseModes':
     '按 Agent ID 设置新会话的默认时间线折叠模式。可选值："default"（按类型智能折叠）、"collapsed"（全部折叠）、"expanded"（全部展开，但子 Agent 卡片最多保留一张展开）。示例：{ "claude-code": "default", "codex": "collapsed" }。',
   'settings.acp.mcpCard.defaultExpanded':
@@ -2783,6 +2786,10 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.sideTask.bar': '侧边任务',
   'acp.sideTask.forkFailed': '创建侧边聊天失败：{message}',
   'acp.sideTask.forkUnsupported': '该 Agent 不支持创建侧边任务。',
+  'acp.sideTask.modelInvalid':
+    '侧边任务：「{value}」不是 Agent「{agentId}」可选的模型——已忽略，该侧边任务跟随父会话的模型。',
+  'acp.sideTask.noModelOption':
+    '侧边任务：Agent「{agentId}」没有模型选项，配置的「{value}」已忽略——该侧边任务跟随父会话的模型。',
   'acp.sideTask.open.placeholder': '打开一条侧边任务',
   'acp.sideTask.parent': '父会话',
   'acp.sideTask.quoteChip': '{count} 个已选文本片段',
@@ -2923,6 +2930,10 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'agent.configureAiFix.noOptions':
     '该 Agent 还没有缓存的配置项——请先与它开一个会话，然后在这里配置模型/思考深度/模式。',
   'agent.configureAiFix.pickAgent': '选择 AI 修复使用的 Agent',
+  'agent.configureSideTaskModel.followInherit': '（默认）跟随父会话的模型',
+  'agent.configureSideTaskModel.noOptions':
+    '该 Agent 还没有缓存的配置项——请先与它开一个会话，然后在这里为新建侧边任务配置模型。',
+  'agent.configureSideTaskModel.pickAgent': '选择要配置哪个 Agent 的侧边任务模型',
   'agent.switchSession.placeholder': '切换到任意窗口中的会话',
   'agent.switchSession.untitled': '未命名',
 

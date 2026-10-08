@@ -102,6 +102,7 @@ import {
 import type { IAcpAgentRegistry } from '../../acpAgentRegistry.js'
 import type { IAcpPermissionHandler } from '../../acpPermissionHandler.js'
 import { createInMemoryAcpPair } from '../../testing/inMemoryAcpPair.js'
+import { SIDE_TASK_MODELS_KEY } from '../../sideTaskConfig.js'
 import { stubEnvSnapshotService } from './stubEnvSnapshotService.js'
 import { stubAcpModelCandidateService } from './stubAcpModelCandidateService.js'
 import { stubAcpCodexAutoReviewGuard } from './stubAcpCodexAutoReviewGuard.js'
@@ -2060,16 +2061,23 @@ describe('AcpSessionService — rewind / fork', () => {
     return makeServiceWithHistory(client, tracker).svc
   }
 
-  function makeServiceWithHistory(client: FakeAcpClientService, tracker: StubSessionChangeTracker) {
+  function makeServiceWithHistory(
+    client: FakeAcpClientService,
+    tracker: StubSessionChangeTracker,
+    overrides: { readonly candidates?: IAcpModelCandidateService } = {},
+  ) {
     const history = makeHistory()
     const notification = new StubNotificationService()
     const agentDefaults = makeAgentDefaults()
     const telemetry = new NoopTelemetryService()
+    // Exposed so tests can write settings (side-task model pins) and assert the
+    // session never writes its editor-forced values back into per-agent defaults.
+    const config = new ConfigurationService()
     const svc = new AcpSessionService(
       client,
       new FakeAgentRegistry(),
       new FakeWorkspaceService(),
-      new ConfigurationService(),
+      config,
       notification,
       telemetry,
       new StubPermissionHandler(),
@@ -2096,11 +2104,11 @@ describe('AcpSessionService — rewind / fork', () => {
       new StubAgentMcpConfigService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
-      stubAcpModelCandidateService(),
+      overrides.candidates ?? stubAcpModelCandidateService(),
       stubSubProjectService(),
       stubLastSessionCwdServiceForTest(),
     )
-    return { svc, history }
+    return { svc, history, config, notification, agentDefaults }
   }
 
   it('rewindSession sends the rewind ext-method with the target messageId and clears tracked changes', async () => {
@@ -2575,6 +2583,211 @@ describe('AcpSessionService — rewind / fork', () => {
       await svc.forkSideTask(s.id, { text: 'q', label: 'l' })
 
       expect(history.get('agent-side-3')?.configOptions?.['mode']).toBe('read-only')
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  // The model bag both session/new and session/load advertise: the parent runs
+  // on `opus`, and the load carries that same value over — exactly what the
+  // fork inherits unless a configured pin actually lands.
+  function modelBag(): readonly SessionConfigOption[] {
+    return [
+      {
+        id: 'model',
+        name: 'Model',
+        category: 'model',
+        type: 'select',
+        currentValue: 'opus',
+        options: [
+          { value: 'opus', name: 'Opus' },
+          { value: 'sonnet', name: 'Sonnet' },
+        ],
+      } as unknown as SessionConfigOption,
+    ]
+  }
+
+  it('forkSideTask pins the configured side-task model, label, and context window', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const bag = modelBag()
+    const client = new FakeAcpClientService({
+      stubOptions: {
+        forkCapable: true,
+        loadSession: true,
+        forkedSessionId: 'agent-side-pinned',
+        newSessionConfigOptions: bag,
+        loadSessionConfigOptions: bag,
+      },
+    })
+    const candidates = stubAcpModelCandidateService({
+      models: ['sonnet'],
+      contextWindows: { sonnet: 1000 },
+    })
+    const { svc, history, config } = makeServiceWithHistory(client, tracker, { candidates })
+    try {
+      config.update(SIDE_TASK_MODELS_KEY, { 'claude-code': 'sonnet' }, ConfigurationTarget.User)
+      const s = await svc.createSession('claude-code')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+
+      const side = await svc.forkSideTask(s.id, { text: 'q', label: 'l' })
+
+      const entry = history.get('agent-side-pinned')
+      expect(entry?.configOptions?.['model']).toBe('sonnet')
+      expect(entry?.configLabels?.['model']).toBe('Sonnet')
+      // The fork's first turn must run on the pinned model's window, not the
+      // parent's (the pin is resolved before the fork RPC).
+      const forkAgent = client.connected.find((c) => c.agent.forkCalls.length > 0)!
+      expect(forkAgent.agent.forkCalls[0]?._meta).toMatchObject({ modelContextWindow: 1000 })
+      const model = side.configOptions.get().find((o) => o.id === 'model')
+      expect(model?.type === 'select' ? model.currentValue : undefined).toBe('sonnet')
+      // The pin rides the same desired→push path a resume uses.
+      await vi.waitFor(() => {
+        const pushes = client.connected.flatMap((c) => c.agent.setConfigOptionCalls)
+        expect(pushes).toContainEqual(
+          expect.objectContaining({ configId: 'model', value: 'sonnet' }),
+        )
+      })
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('keeps the inherited model when the configured pin is not offered, without notifying', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const bag = modelBag()
+    const client = new FakeAcpClientService({
+      stubOptions: {
+        forkCapable: true,
+        loadSession: true,
+        forkedSessionId: 'agent-side-bad-pin',
+        newSessionConfigOptions: bag,
+        loadSessionConfigOptions: bag,
+      },
+    })
+    const { svc, history, config, notification } = makeServiceWithHistory(client, tracker)
+    try {
+      config.update(SIDE_TASK_MODELS_KEY, { 'claude-code': 'haiku' }, ConfigurationTarget.User)
+      const s = await svc.createSession('claude-code')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+
+      await svc.forkSideTask(s.id, { text: 'q', label: 'l' })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      expect(history.get('agent-side-bad-pin')?.configOptions?.['model']).toBe('opus')
+      const pushes = client.connected.flatMap((c) => c.agent.setConfigOptionCalls)
+      expect(pushes.filter((p) => p.configId === 'model')).toEqual([])
+      // A stale pin is logged, never surfaced: forking is a frequent action.
+      expect(notification.captured).toEqual([])
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('leaves the side task untouched when the parent agent has no configured model', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const bag = modelBag()
+    const client = new FakeAcpClientService({
+      stubOptions: {
+        forkCapable: true,
+        loadSession: true,
+        forkedSessionId: 'agent-side-unpinned',
+        newSessionConfigOptions: bag,
+        loadSessionConfigOptions: bag,
+      },
+    })
+    const { svc, history, config } = makeServiceWithHistory(client, tracker)
+    try {
+      // A pin for a DIFFERENT agent must not touch this fork.
+      config.update(SIDE_TASK_MODELS_KEY, { codex: 'sonnet' }, ConfigurationTarget.User)
+      const s = await svc.createSession('claude-code')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+
+      await svc.forkSideTask(s.id, { text: 'q', label: 'l' })
+
+      expect(history.get('agent-side-unpinned')?.configOptions?.['model']).toBe('opus')
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('applies the pin to every fork level, re-read from settings each time', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const bag = modelBag()
+    const stubOptions: StubAgentOptions = {
+      forkCapable: true,
+      loadSession: true,
+      forkedSessionId: 'agent-side-nested-1',
+      newSessionConfigOptions: bag,
+      loadSessionConfigOptions: bag,
+    }
+    const client = new FakeAcpClientService({ stubOptions })
+    const { svc, history, config } = makeServiceWithHistory(client, tracker)
+    try {
+      config.update(SIDE_TASK_MODELS_KEY, { 'claude-code': 'sonnet' }, ConfigurationTarget.User)
+      const s = await svc.createSession('claude-code')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+      const first = await svc.forkSideTask(s.id, { text: 'q', label: 'l' })
+      expect(history.get('agent-side-nested-1')?.configOptions?.['model']).toBe('sonnet')
+
+      // Forking FROM a side task pins again, against the value configured now —
+      // not the one the parent side task happens to be running.
+      config.update(SIDE_TASK_MODELS_KEY, { 'claude-code': 'opus' }, ConfigurationTarget.User)
+      stubOptions.forkedSessionId = 'agent-side-nested-2'
+      await svc.forkSideTask(first.id, { text: 'q', label: 'l' })
+
+      expect(history.get('agent-side-nested-2')?.configOptions?.['model']).toBe('opus')
+      expect(history.get('agent-side-nested-2')?.sideTaskOf).toBe('agent-side-nested-1')
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('never writes the side-task pins back into the per-agent defaults', async () => {
+    // The read-only mode pin and a configured model pin both ride the
+    // desired→push path; unsuppressed they would `setDefault()` onto every
+    // future session of that agent (a side task silently redefining defaults).
+    const tracker = new StubSessionChangeTracker()
+    const bag: readonly SessionConfigOption[] = [
+      ...modelBag(),
+      {
+        id: 'mode',
+        name: 'Mode',
+        category: 'mode',
+        type: 'select',
+        currentValue: 'bypassPermissions',
+        options: [
+          { value: 'bypassPermissions', name: 'Bypass permissions' },
+          { value: 'dontAsk', name: "Don't Ask" },
+        ],
+      } as unknown as SessionConfigOption,
+    ]
+    const client = new FakeAcpClientService({
+      stubOptions: {
+        forkCapable: true,
+        loadSession: true,
+        forkedSessionId: 'agent-side-isolated',
+        newSessionConfigOptions: bag,
+        loadSessionConfigOptions: bag,
+      },
+    })
+    const { svc, agentDefaults, config } = makeServiceWithHistory(client, tracker)
+    try {
+      config.update(SIDE_TASK_MODELS_KEY, { 'claude-code': 'sonnet' }, ConfigurationTarget.User)
+      const s = await svc.createSession('claude-code')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+
+      await svc.forkSideTask(s.id, { text: 'q', label: 'l' })
+      await vi.waitFor(() => {
+        const pushes = client.connected.flatMap((c) => c.agent.setConfigOptionCalls)
+        expect(pushes).toContainEqual(expect.objectContaining({ configId: 'mode' }))
+      })
+
+      expect(agentDefaults.defaults.get()['claude-code']).toBeUndefined()
     } finally {
       svc.dispose()
     }

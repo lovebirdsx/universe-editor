@@ -172,6 +172,7 @@ export {
 import { AcpForeignWorktreeError } from './acpErrors.js'
 import { shouldPauseAcpAutoResume } from './acpAutoResumeGuard.js'
 import { selectOptionHasValue, snapshotConfigSelections } from '../configOptionLabel.js'
+import { buildSideTaskModelOverrides, readSideTaskModels } from '../sideTaskConfig.js'
 import { IExtensionMcpServersService } from '../../extensions/extensionMcpServersService.js'
 import { IMcpServerEnablementService } from '../mcpServerEnablementService.js'
 
@@ -525,14 +526,18 @@ function buildNewSessionMeta(
  * Deliberately NOT the resume meta — the claudeCode block there tunes the native
  * CLI's raw-message stream for a load, and fork has never asked for it.
  * 权限快照随 fork 请求传递；当前 fork 仅复制记录，实际设置在后续 load 时生效。
+ *
+ * `model` is what the fork will actually run on: a side task's configured pin
+ * wins over the source row's remembered model, and stamping the wrong one would
+ * hand the forked thread one model's window for another until the load lands.
  */
 function buildForkMeta(
-  entry: AcpSessionHistoryEntry,
   candidates: readonly AcpModelCandidate[],
   planPolicy: PlanPermissionPolicy | undefined,
+  model: string | undefined,
 ): Record<string, unknown> {
   const extraModels = candidates.map((c) => c.id)
-  const contextWindow = contextWindowFor(candidates, entry.configOptions?.['model'])
+  const contextWindow = contextWindowFor(candidates, model)
   const extraModelEffort = buildExtraModelEffortMeta(candidates)
   return {
     ...(planPolicy !== undefined
@@ -1413,8 +1418,15 @@ export class AcpSessionService
         // host, which need not be this window's — cost must follow the entry.
         ...(cwd !== undefined ? { cwd } : {}),
         ...(effectiveAuthority !== undefined ? { authority: effectiveAuthority } : {}),
-        // AI Fix sessions keep their defaults-write isolation across restarts.
-        ...(entry.aiFix === true ? { suppressConfigDefaults: true } : {}),
+        // AI Fix sessions keep their defaults-write isolation across restarts,
+        // and so do side tasks: their rows carry editor-forced values (the
+        // read-only mode pin, the configured side-task model) that the state
+        // machine pushes back to the agent. Unsuppressed, those pushes would
+        // `setDefault()` the pins onto every future session of the agent — the
+        // side task would silently redefine that agent's defaults.
+        ...(entry.aiFix === true || entry.sideTaskOf !== undefined
+          ? { suppressConfigDefaults: true }
+          : {}),
       })
       session.attachConnection(conn, entry.sessionIdOnAgent)
       this._register(session)
@@ -2173,8 +2185,6 @@ export class AcpSessionService
     if (!entry) throw new Error(`Unknown session to fork: ${parentSessionId}`)
 
     const forkMcpSelection = this._forkMcpSelection(live, entry)
-    const newSessionId = await this._forkOnAgent(sourceAgentSessionId, entry, forkMcpSelection)
-
     // The child inherits the parent's config but is pinned to the agent's
     // read-only mode so the side chat can explain and query without touching
     // source / files / git. claude uses `dontAsk` (deny-not-pre-approved →
@@ -2184,9 +2194,27 @@ export class AcpSessionService
     // afterwards. Agents whose mode list lacks the value simply ignore the push
     // (the config state machine skips unknown values).
     const readOnlyMode = entry.agentId === 'claude-code' ? 'dontAsk' : 'read-only'
-    const forkConfig = snapshotConfigSelections(live.configOptions.get())
-    const configOptions = { ...forkConfig.values, mode: readOnlyMode }
-    const configLabels = { ...forkConfig.labels, mode: readOnlyMode }
+    const liveBag = live.configOptions.get()
+    const forkConfig = snapshotConfigSelections(liveBag)
+    // A configured side-task model replaces the inherited one — validated
+    // against the parent's LIVE bag, which is the very option list the fork will
+    // advertise (and the only place claude's synthesized `[1m]` lane rows exist).
+    // An unusable pin is dropped with a log line rather than blocking the fork.
+    const sideModel = buildSideTaskModelOverrides(
+      liveBag,
+      entry.agentId,
+      readSideTaskModels(this._config),
+      (msg) => this._logger.warn(msg),
+    )
+    const newSessionId = await this._forkOnAgent(
+      sourceAgentSessionId,
+      entry,
+      forkMcpSelection,
+      undefined,
+      sideModel.model?.value,
+    )
+    const configOptions = { ...forkConfig.values, mode: readOnlyMode, ...sideModel.values }
+    const configLabels = { ...forkConfig.labels, mode: readOnlyMode, ...sideModel.labels }
     const forkAuthority = this._entryAuthority(entry)
     this._history.add({
       agentId: entry.agentId,
@@ -2203,7 +2231,11 @@ export class AcpSessionService
       configOptions,
       configLabels,
     })
-    this._telemetry.publicLog('acp.side_task_forked', { agentId: entry.agentId })
+    // The model value itself stays out of telemetry, like `acp.config_option_set`.
+    this._telemetry.publicLog('acp.side_task_forked', {
+      agentId: entry.agentId,
+      modelPinned: sideModel.model !== undefined,
+    })
     // The replay suppression is derived from the history row's sideTaskOf flag
     // inside _resumeSessionInner. The child is not made active — the caller
     // opens it in a right-split editor tab. The title service rides along so
@@ -2245,6 +2277,7 @@ export class AcpSessionService
     entry: AcpSessionHistoryEntry,
     mcpSelection: readonly string[] | null,
     messageId?: string,
+    modelOverride?: string,
   ): Promise<string> {
     // Fork spawns / resumes the agent against the source's cwd. Refuse a
     // cross-worktree fork for the same reason resume does — it would run the
@@ -2299,9 +2332,9 @@ export class AcpSessionService
             // forked thread runs its first turn on codex's 272K fallback until
             // the resume below re-injects them.
             ...buildForkMeta(
-              entry,
               (await this._extraModelsFor(entry.agentId, effectiveAuthority)).candidates,
               planPolicy,
+              modelOverride ?? entry.configOptions?.['model'],
             ),
             // Ask the fork to truncate at this user turn (回退 point) instead of the
             // session tip. Absent id → the agent forks from the tip; an id the agent

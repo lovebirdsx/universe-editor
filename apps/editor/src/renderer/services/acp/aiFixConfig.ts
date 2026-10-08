@@ -14,7 +14,7 @@
 
 import { IConfigurationService, localize } from '@universe-editor/platform'
 import type { SessionConfigOption } from '@agentclientprotocol/sdk'
-import { selectOptionHasValue } from './configOptionLabel.js'
+import { findSelectOptionByCategory, selectOptionHasValue } from './configOptionLabel.js'
 
 export interface AiFixSettings {
   readonly agentId: string
@@ -76,8 +76,8 @@ export function buildAiFixConfigOverrides(
   }
   for (const { category, read } of wanted) {
     const value = read(settings)
-    const opt = bag.find((o) => o.type === 'select' && o.category === category)
-    if (!opt || opt.type !== 'select') {
+    const opt = findSelectOptionByCategory(bag, category)
+    if (!opt) {
       onWarn(
         localize(
           'acp.aiFix.optionMissing',

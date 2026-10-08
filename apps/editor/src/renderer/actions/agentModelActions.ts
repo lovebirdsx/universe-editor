@@ -21,7 +21,11 @@ import {
 } from '@universe-editor/platform'
 import { IAcpSessionService, type IAcpSession } from '../services/acp/session/acpSessionService.js'
 import type { SessionConfigOptionCategory } from '@agentclientprotocol/sdk'
-import { findConfigOptionLabel, flattenSelectOptions } from '../services/acp/configOptionLabel.js'
+import {
+  findConfigOptionLabel,
+  findSelectOptionByCategory,
+  flattenSelectOptions,
+} from '../services/acp/configOptionLabel.js'
 import {
   AI_FIX_AGENT_ID_KEY,
   AI_FIX_MODE_KEY,
@@ -29,6 +33,7 @@ import {
   AI_FIX_THOUGHT_LEVEL_KEY,
   readAiFixSettings,
 } from '../services/acp/aiFixConfig.js'
+import { readSideTaskModels, SIDE_TASK_MODELS_KEY } from '../services/acp/sideTaskConfig.js'
 import { IAcpAgentRegistry } from '../services/acp/acpAgentRegistry.js'
 import { IAcpConfigOptionsCacheService } from '../services/acp/session/acpConfigOptionsCache.js'
 import {
@@ -340,5 +345,100 @@ export class ConfigureAiFixAction extends Action2 {
         await config.update(step.settingKey, picked.id, ConfigurationTarget.User)
       }
     }
+  }
+}
+
+/**
+ * Model picker for newly created side tasks. A side task runs on its parent
+ * session's agent, so the pin is stored per agent id (`acp.sideTask.models`) —
+ * hence the agent step. Picking the leading "(default)" entry clears that
+ * agent's entry, so its side tasks inherit whatever the parent is running.
+ */
+export class ConfigureSideTaskModelAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.configureSideTaskModel'
+  constructor() {
+    super({
+      id: ConfigureSideTaskModelAction.ID,
+      title: localize2('action.agent.configureSideTaskModel', 'Configure Side Task Model…'),
+      category: CATEGORY,
+      f1: true,
+    })
+  }
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    // Snapshot every service before the first await (the accessor dies there).
+    const registry = accessor.get(IAcpAgentRegistry)
+    const config = accessor.get(IConfigurationService)
+    const cache = accessor.get(IAcpConfigOptionsCacheService)
+    const quickInput = accessor.get(IQuickInputService)
+    const notification = accessor.get(INotificationService)
+
+    const models = readSideTaskModels(config)
+    const currentLabel = localize('agent.configOption.current', 'current')
+    const followInheritLabel = localize(
+      'agent.configureSideTaskModel.followInherit',
+      '(Default) Follow the parent session model',
+    )
+
+    // Step 1: the agent whose side tasks get the pin.
+    const agentItems: IQuickPickItem[] = registry.list().map((a) => ({
+      id: a.id,
+      label: models[a.id] !== undefined ? `${a.name} · ${currentLabel}` : a.name,
+    }))
+    const pickedAgent = await quickInput.pick(agentItems, {
+      placeholder: localize(
+        'agent.configureSideTaskModel.pickAgent',
+        'Select the agent whose side tasks to configure',
+      ),
+    })
+    if (!pickedAgent || pickedAgent.id === undefined) return
+    const agentId = pickedAgent.id
+
+    // Step 2: the model, from the agent's last-known bag — the only catalogue
+    // available outside a live session (a cold cache gets the AI Fix hint).
+    const option = findSelectOptionByCategory(cache.get(agentId), 'model')
+    if (!option) {
+      notification.notify({
+        severity: Severity.Info,
+        message: localize(
+          'agent.configureSideTaskModel.noOptions',
+          'No cached config options for this agent yet — open one session with it first, then configure the side-task model here.',
+        ),
+      })
+      return
+    }
+    const current = models[agentId] ?? ''
+    const flatValues = flattenSelectOptions(option.options)
+    const items: IQuickPickItem[] = [
+      {
+        id: '',
+        label: current === '' ? `${followInheritLabel} · ${currentLabel}` : followInheritLabel,
+      },
+      ...flatValues.map((v) => ({
+        id: v.value,
+        label: v.value === current ? `${v.name} · ${currentLabel}` : v.name,
+        ...(v.description != null ? { description: v.description } : {}),
+      })),
+    ]
+    // A pin the agent no longer offers must stay listed, or it could neither be
+    // seen nor cleared from here.
+    if (current !== '' && !flatValues.some((v) => v.value === current)) {
+      items.push({ id: current, label: current })
+    }
+    const picked = await quickInput.pick(items, {
+      placeholder: localize('agent.selectModel.placeholder', 'Select model'),
+    })
+    if (!picked || picked.id === undefined || picked.id === current) return
+    const next: Record<string, string> = { ...models }
+    if (picked.id === '') {
+      delete next[agentId]
+    } else {
+      next[agentId] = picked.id
+    }
+    // An empty map is removed rather than left as `{}` in settings.json.
+    await config.update(
+      SIDE_TASK_MODELS_KEY,
+      Object.keys(next).length > 0 ? next : undefined,
+      ConfigurationTarget.User,
+    )
   }
 }

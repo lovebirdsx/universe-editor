@@ -370,6 +370,7 @@ import {
   SelectAgentThoughtLevelAction,
   ActivateAgentConfigEntryAction,
   ConfigureAiFixAction,
+  ConfigureSideTaskModelAction,
   ToggleAcpTimelineItemCollapseAction,
   ToggleAcpTimelineCardSubtreeAction,
   CycleAcpTimelineCollapseAction,
@@ -821,6 +822,7 @@ registerAction2(SelectAgentModeAction)
 registerAction2(SelectAgentThoughtLevelAction)
 registerAction2(ActivateAgentConfigEntryAction)
 registerAction2(ConfigureAiFixAction)
+registerAction2(ConfigureSideTaskModelAction)
 registerAction2(ResumeAgentSessionAction)
 registerAction2(ClearAgentSessionHistoryAction)
 registerAction2(RefreshAgentSessionsAction)
