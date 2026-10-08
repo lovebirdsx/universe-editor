@@ -24,6 +24,7 @@ import type { CodeActionContext, DocumentLink, Location, Range } from 'vscode-la
 import { type IMdClient, type IMdServer } from './types.js'
 import { DocumentStore, makeDoc } from './documentStore.js'
 import { LspWorkspace } from './lspWorkspace.js'
+import { uriString } from './uriString.js'
 import { detectFrontmatterRange } from './frontmatter.js'
 
 export interface MdServerHandle {
@@ -129,8 +130,15 @@ export function createMdServer(client: IMdClient, root: URI | undefined): MdServ
     markdownFileExtensions: ['md', 'markdown'],
   })
 
-  const resolveDoc = async (uri: string) =>
-    store.get(uri) ?? (await workspace.openMarkdownDocument(URI.parse(uri)))
+  // Both sides of every entry point (providers, renderer commands) are folded to
+  // the one URI spelling the language service's relative-path math depends on —
+  // see uriString.ts for why a mixed spelling writes absolute links.
+  const canonicalKey = (uri: string): string => uriString(URI.parse(uri))
+
+  const resolveDoc = async (uri: string) => {
+    const key = canonicalKey(uri)
+    return store.get(key) ?? (await workspace.openMarkdownDocument(URI.parse(key)))
+  }
 
   const server: IMdServer = {
     $didOpen: (doc) => {
@@ -147,15 +155,15 @@ export function createMdServer(client: IMdClient, root: URI | undefined): MdServ
     },
 
     $didChangeFiles: async (uris) => {
-      for (const uri of uris) {
+      for (const raw of uris) {
+        const key = canonicalKey(raw)
         // Open documents sync via $didChange; their overlay is the source of truth.
-        if (store.has(uri)) continue
-        const parsed = URI.parse(uri)
-        const text = await client.$readFile(uri)
+        if (store.has(key)) continue
+        const text = await client.$readFile(key)
         if (text === undefined) {
-          store.notifyDiskDelete(parsed)
+          store.notifyDiskDelete(URI.parse(key))
         } else {
-          store.notifyDiskChange(makeDoc(uri, 0, text))
+          store.notifyDiskChange(makeDoc(key, 0, text))
         }
       }
     },
@@ -276,7 +284,10 @@ export function createMdServer(client: IMdClient, root: URI | undefined): MdServ
     $getRenameFileEdits: async (renames) => {
       if (renames.length === 0) return null
       const result = await ls.getRenameFilesInWorkspaceEdit(
-        renames.map((r) => ({ oldUri: URI.parse(r.oldUri), newUri: URI.parse(r.newUri) })),
+        renames.map((r) => ({
+          oldUri: URI.parse(canonicalKey(r.oldUri)),
+          newUri: URI.parse(canonicalKey(r.newUri)),
+        })),
         CancellationToken.None,
       )
       return result?.edit ?? null

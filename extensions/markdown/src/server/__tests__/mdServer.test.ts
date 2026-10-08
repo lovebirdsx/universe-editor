@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest'
 import { URI } from 'vscode-uri'
 import { createMdServer } from '../mdServer.js'
+import { uriString } from '../uriString.js'
 import type { IMdClient, MdFileStat } from '../types.js'
 
 const stubClient: IMdClient = {
@@ -24,6 +25,20 @@ function memoryClient(files: Record<string, string>): IMdClient {
     $readDirectory: () => Promise.resolve([]),
     $findMarkdownFiles: () => Promise.resolve(Object.keys(files).filter((u) => u.endsWith('.md'))),
   }
+}
+
+/** {@link memoryClient} plus a log of the keys `$readFile` was asked for. */
+function recordingClient(files: Record<string, string>) {
+  const base = memoryClient(files)
+  const reads: string[] = []
+  const client: IMdClient = {
+    ...base,
+    $readFile: (uri) => {
+      reads.push(uri)
+      return base.$readFile(uri)
+    },
+  }
+  return { client, reads }
 }
 
 function newServer() {
@@ -90,7 +105,7 @@ describe('createMdServer — diagnostics', () => {
     // stub reports the *real* drive path exists; a doc-dir-joined path would not.
     const stat = (uri: string) =>
       Promise.resolve(
-        uri === URI.file('D:/workspace/vscode').toString()
+        uri === 'file:///D:/workspace/vscode'
           ? ({ type: 'dir', mtime: 0, size: 0 } as const)
           : undefined,
       )
@@ -180,6 +195,34 @@ describe('createMdServer — rename file edits', () => {
     expect(first && 'newText' in first ? first.newText : undefined).toBe('./c.md')
   })
 
+  it('keeps the link relative when the paths carry a Windows drive letter', async () => {
+    // Regression (Windows): the referrer used to reach the language service with a
+    // lower-cased, `%3A`-encoded drive (vscode-uri's toString) while the rename
+    // target kept its upper-case one, so the case-sensitive `path.posix.relative`
+    // degraded the link into `../../../../E:/ws/c.md`.
+    const client = memoryClient({
+      'file:///E:/ws/a.md': '# A\n\n[link](./b.md)\n',
+      'file:///E:/ws/c.md': '# C\n',
+    })
+    const server = createMdServer(client, URI.file('E:/ws')).server
+
+    const edit = await server.$getRenameFileEdits([
+      { oldUri: 'file:///E:/ws/b.md', newUri: 'file:///E:/ws/c.md' },
+    ])
+
+    expect(edit).not.toBeNull()
+    // The service emits its own (vscode-uri) spelling for the edited document, so
+    // match on identity rather than the byte form; the link text is the assertion.
+    const change = edit?.documentChanges?.find(
+      (c) =>
+        'textDocument' in c && uriString(URI.parse(c.textDocument.uri)) === 'file:///E:/ws/a.md',
+    )
+    const edits = change && 'edits' in change ? change.edits : undefined
+    expect(edits?.length).toBe(1)
+    const first = edits?.[0]
+    expect(first && 'newText' in first ? first.newText : undefined).toBe('./c.md')
+  })
+
   it('returns null when no link needs updating', async () => {
     const client = memoryClient({
       'file:///ws/a.md': '# A\n\nno links here\n',
@@ -246,6 +289,22 @@ describe('createMdServer — $didChangeFiles refreshes stale caches', () => {
     // A stale disk read would break the fragment link; open overlay must win.
     files[A] = '# A\n\n[x](#missing)\n'
     await server.$didChangeFiles([A])
+    expect(await server.$computeDiagnostics(A)).toEqual([])
+  })
+
+  it('recognizes an open document reported in the lower-cased editor spelling', async () => {
+    const A = 'file:///E:/ws/a.md'
+    const files: Record<string, string> = { [A]: '# A\n\n[x](#a)\n' }
+    const { client, reads } = recordingClient(files)
+    const server = createMdServer(client, URI.file('E:/ws')).server
+    await server.$didOpen({ uri: A, version: 1, text: files[A]! })
+
+    // The renderer hands back the editor's (vscode-uri) spelling of the same file;
+    // missing the overlay would read it from disk and overwrite the language
+    // service's cache for a document that is actually open.
+    await server.$didChangeFiles(['file:///e%3A/ws/a.md'])
+
+    expect(reads).toEqual([])
     expect(await server.$computeDiagnostics(A)).toEqual([])
   })
 })

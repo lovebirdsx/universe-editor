@@ -9,6 +9,7 @@ import { URI } from 'vscode-uri'
 import type { FileStat, ITextDocument, IWorkspace } from 'vscode-markdown-languageservice'
 import type { IMdClient } from './types.js'
 import { DocumentStore, makeDoc } from './documentStore.js'
+import { uriString } from './uriString.js'
 
 /** Concurrent `$readFile` RPCs while materializing the workspace scan. */
 const READ_CONCURRENCY = 16
@@ -58,11 +59,11 @@ export class LspWorkspace implements IWorkspace {
   }
 
   hasMarkdownDocument(resource: URI): boolean {
-    return this._store.has(resource.toString())
+    return this._store.has(uriString(resource))
   }
 
   async openMarkdownDocument(resource: URI): Promise<ITextDocument | undefined> {
-    const key = resource.toString()
+    const key = uriString(resource)
     const open = this._store.get(key)
     if (open) return open
     const text = await this._client.$readFile(key)
@@ -71,12 +72,12 @@ export class LspWorkspace implements IWorkspace {
   }
 
   async stat(resource: URI): Promise<FileStat | undefined> {
-    const stat = await this._client.$stat(resource.toString())
+    const stat = await this._client.$stat(uriString(resource))
     return stat ? { isDirectory: stat.type === 'dir' } : undefined
   }
 
   async readDirectory(resource: URI): Promise<Iterable<readonly [string, FileStat]>> {
-    const entries = await this._client.$readDirectory(resource.toString())
+    const entries = await this._client.$readDirectory(uriString(resource))
     return entries.map(([name, type]) => [name, { isDirectory: type === 'dir' }] as const)
   }
 }

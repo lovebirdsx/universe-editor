@@ -19,6 +19,7 @@ import {
 import { URI } from 'vscode-uri'
 import { createMdServer } from './server/mdServer.js'
 import type { IMdServer, MdFileRenameDto } from './server/types.js'
+import { uriString } from './server/uriString.js'
 import { createMdFsBridge } from './mdFsBridge.js'
 import { registerEditingCommands, MARKDOWN_COMMANDS } from './edit/commands.js'
 
@@ -30,16 +31,6 @@ const COMPLETION_TRIGGER_CHARACTERS = ['[', '(', '#', '/']
 
 /** Recompute-diagnostics debounce; markdown files are small, full-text each time. */
 const DIDCHANGE_DEBOUNCE_MS = 200
-
-function uriString(uri: UriComponents): string {
-  return URI.from({
-    scheme: uri.scheme,
-    authority: uri.authority ?? '',
-    path: uri.path ?? '',
-    query: uri.query ?? '',
-    fragment: uri.fragment ?? '',
-  }).toString()
-}
 
 function uriComponents(uri: string): UriComponents {
   const u = URI.parse(uri)
