@@ -22,7 +22,7 @@ SHA 记录当前 P2 起点；下表测试结果保留为**首批验收历史**�
 | 项 | 值 | 说明 |
 |---|---|---|
 | P2 起点 SHA | `b868c673531547b60f9abf1ca8c31cc67a5b279a` | 前批 AIR 退役与门禁已提交；主仓起点 `e8b3c229`。本批纯历史解析整理尚未提交，fork HEAD 未动 |
-| 本轮起点 SHA | `90795e5` | fork HEAD：纯历史解析整理（`transcript-history`）已提交。本轮 session-anchor / query-resources 提取、真实 SDK·dist 验收与窗口门禁均在其上，仍未提交（fork 工作树有改动、gitlink 未 bump） |
+| 本轮起点 SHA | `6d86f07` | fork HEAD：session-anchor / query-resources 提取、真实 SDK·dist 验收与窗口门禁均已提交。本批（compact 边界父链兜底）在其上，随子仓提交后主仓 gitlink 一并 bump |
 | 最后整体吸收的上游 SHA | `a44c486` | 分叉点（`#1243`）；**已审阅到的上游 SHA ≠ 其变更已吸收** |
 | `@anthropic-ai/claude-agent-sdk` | `0.3.287` | fork `package.json` dependencies |
 | `@agentclientprotocol/sdk` | `1.7.0` | 同上 |
@@ -45,7 +45,7 @@ SHA 记录当前 P2 起点；下表测试结果保留为**首批验收历史**�
 
 | ID | 必须成立的行为 | 实现入口（fork `src/`） | fork 测试 | 主仓测试 | 验证层级 |
 |---|---|---|---|---|---|
-| CT-COMPACT-RESTORE | 已压缩会话恢复保留压缩前显示内容与 steering；缺磁盘历史时正确降级 | `acp-agent.ts`（`loadSession` / `replaySessionHistory`）、`transcript-history.ts`（`rebuildTranscriptDisplayChain`）、`resumed-session.ts` | `session-contract-guards.test.ts`（实际 load）、`acp-agent.test.ts`（replay across compaction）、`transcript-history.test.ts` | `apps/editor/src/renderer/services/acp/session/__tests__/AcpSession.timeline.test.ts` | 离线；真实 CLI 历史恢复未验证 |
+| CT-COMPACT-RESTORE | 已压缩会话恢复保留压缩前显示内容与 steering；跨 boundary 的父链在 `logicalParentUuid` 为 `null` / 悬空时经 `compactMetadata.preservedSegment.tailUuid` 兜底，不得截断压缩前历史；缺磁盘历史时正确降级 | `acp-agent.ts`（`loadSession` / `replaySessionHistory`）、`transcript-history.ts`（`rebuildTranscriptDisplayChain` / `displayParentOf`）、`resumed-session.ts` | `session-contract-guards.test.ts`（实际 load）、`acp-agent.test.ts`（replay across compaction）、`transcript-history.test.ts` | `apps/editor/src/renderer/services/acp/session/__tests__/AcpSession.timeline.test.ts` | 离线 + 真实 transcript 只读语料核对；真实 CLI 历史恢复未验证 |
 | CT-FORK-ANCHOR | 指定位置分叉：活跃与休眠/新实例均正确定位；显式锚点不存在即报错，不退化成整份复制 | `session-anchor.ts`（`resolveForkAnchor`）、`acp-agent.ts`（`unstable_forkSession` / 薄壳 `forkSliceBefore`）、`transcript-history.ts`（`findFoldedPromptParent`） | `session-anchor.test.ts`、`fork-session-sdk.test.ts`（真实 SDK 文件操作）、`session-contract-guards.test.ts`、`acp-agent.test.ts`（rewind/fork）、`transcript-history.test.ts` | `apps/editor/integration/scenarios/acpForkContract.integration.test.ts`（合成 transcript 的真实 dist 腿）、`apps/editor/src/renderer/services/acp/session/__tests__/AcpSession.poolResume.integration.test.ts` | 离线 + 真实 SDK 文件改写（合成 transcript）；真实模型请求未验证 |
 | CT-SUBAGENT | 非 AIR 输出含 editor 可识别的子 Agent 信息；归属正确、完成即结束；自引用父 ID 不污染状态 | `tools.ts`、`subagent-history.ts`、`acp-agent.ts` | `session-contract-guards.test.ts`（实际 prompt）、`tool-call-contract.test.ts`、`tools.test.ts` | `apps/editor/src/renderer/services/acp/session/__tests__/acpSessionUpdateMeta.test.ts`、同目录 `AcpSession.timeline.test.ts` | 离线；真实子 Agent 业务未验证 |
 | CT-CONTROL-CHANNEL | 新会话首 turn 前不发阻塞性上下文查询；load 不等不必要控制请求；后台刷新只在合法阶段执行 | `acp-agent.ts`（`hasStartedTurn`、`refreshContextWindowInBackground`） | `create-session-options.test.ts`、`session-config-options.test.ts`（deferred 控制请求） | `apps/editor/integration/scenarios/acpForkContract.integration.test.ts` | 离线；真实 CLI 配置路由通过（见验收记录） |
@@ -146,6 +146,20 @@ SHA 记录当前 P2 起点；下表测试结果保留为**首批验收历史**�
 
 - 真实模型请求、生产网关、fork 后 effort 继承仍未授权验证，不宣称覆盖；真实 SDK 文件改写用的是合成 transcript，不等于真实会话复制。
 - 未修改窗口产品实现、未放宽既有断言预算；门禁只加就位等待。
+
+## P2 第三批：compact 边界父链兜底（修复 + 真实语料核对）
+
+起点 fork `6d86f07`（P2 第二批已提交）。
+
+**症状**：编辑器恢复一个已两次 compact 的会话，时间线只剩最后一次压缩之后的历史；恢复后显示的首条用户消息实际是整段会话的最后一条。**根因**：`transcript-history.ts` 的显示链回溯用 `parentUuid ?? logicalParentUuid` 跨 boundary，而 CLI 写 `logicalParentUuid` 有三种形态——正确 / `null` / 指向文件里不存在的 uuid，后两种让 `byUuid.get()` 得 `undefined`，回溯**静默断在 boundary**。目标会话（`fd8a7215`，两个 boundary）：第一个的 `logicalParentUuid` 与其 `compactMetadata.preservedSegment.tailUuid` 一致（`dd377dac…` = line 909 attachment），第二个的 `logicalParentUuid`（`95102dbe…`）全文件仅此一处出现、与自身 tailUuid（`df0cf69c…` = line 1731）不一致。
+
+**修法**：`displayParentOf` 按序取第一个**能在 `byUuid` 里解析**的候选——`parentUuid` → `logicalParentUuid` → `compactMetadata.preservedSegment.tailUuid`。tail 只补位、不改道（语料里「两者同时可解析」的 115 个 boundary 上逐字相等；另有 37 个「lp 有效、tail 悬空」由 skip 语义自然回落，两种顺序在该语料上结果相同）；保留 lp 优先是防御性的——tail 一旦可解析却指错段，反序会劫持整条回溯。非 boundary 行不带后两个候选（137,675/137,675 行，同一快照），行为与旧码逐字一致；候选全不可解析时仍停在 boundary，不退化成文件序。
+
+**真实语料只读核对**（`~/.claude/projects/*/*.jsonl`，核对时快照 306 文件 / 101 个含 boundary 文件；`node --experimental-strip-types` 直载 fork 源的真函数，与旧算法逐文件对照）：lp 有效 152 / `null` 18 / 悬空 10；坏 boundary 上 `preservedSegment.tailUuid` **28/28 可解析**；tail 从不指向 boundary 自身或之后的行，也不指向 sidechain / meta / summary（0/143），46/143 指向 attachment。链变化：**15 个变长 / 0 个变短**，变长链根全部是 `type=user` 的真会话起点；目标会话过滤后链 **200 → 1135**，根回到文件 line 3 的首条用户消息（`09eca67c…`）。该核对**不等于**真实 CLI 历史恢复验证：它验证的是解析逻辑对真实 transcript 形态的恢复能力，未经 `--resume` 走真实 CLI。
+
+**测试与负向验证**：`transcript-history.test.ts` 6 例（悬空 lp / `null` lp / 优先级守卫 / 双坏降级锚 / tail 为 attachment / 两 boundary 且较新那个链接坏）、`session-contract-guards.test.ts` 走真 `session/load` 的 2 例（`it.each` 覆盖两种坏形态，断言 6 项顺序表）、`acp-agent.test.ts` 回放 1 例。**把第三候选删掉（等价旧码）→ 上述 7 例全红**，精确还原后 fork 全量 **2485 通过 / 31 跳过 / 0 失败**（较第二批基线 2476 增 9，即本批新增用例），`typecheck` / `lint` / `format:check` 通过。
+
+**已知限制**：① 链变长使回放字节预算更吃紧（本机增量 ≤3.39 MB/会话，对 `MAIN_REPLAY_TOTAL_CAP_BYTES` 96 MiB 余量充足）；预算触顶的现象是「丢最新尾部」，属独立话题，本批不改。② tail 若指向被 rewind 放弃的分支，回溯会顺它走进去、把 CLI 已丢弃的消息带回时间线（本机语料 0/180；lp 可解析时旧码本就有同一暴露面，文件内无法判别活/弃分支）。③ 链变长后 `backfillForkedToolResults` 与子代理 stats restamp 的扫描面变大，压缩前的分叉 tool_result / 子代理用量会被正确补上——属**期望**变化，不是回归。
 
 ## 后续范围
 
