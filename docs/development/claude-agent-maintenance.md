@@ -17,9 +17,11 @@ adapter 维护**会话生命周期、历史恢复和编辑器消费的 ACP 输�
 
 ## 基线台账
 
+SHA 记录当前 P2 起点；下表测试结果保留为**首批验收历史**，其中「本批」指首批 AIR 退役。P2 实测结果单列在下方，不覆盖历史记录。
+
 | 项 | 值 | 说明 |
 |---|---|---|
-| 本地 SHA | `c2e5da84fcf8fdda5e7c2042999c051db36db83b` | `git -C vendor/claude-agent-acp rev-parse HEAD`，主仓库 gitlink 同此；本批 AIR 退役与测试改动**尚未提交**，HEAD 未动 |
+| P2 起点 SHA | `b868c673531547b60f9abf1ca8c31cc67a5b279a` | 前批 AIR 退役与门禁已提交；主仓起点 `e8b3c229`。本批纯历史解析整理尚未提交，fork HEAD 未动 |
 | 最后整体吸收的上游 SHA | `a44c486` | 分叉点（`#1243`）；**已审阅到的上游 SHA ≠ 其变更已吸收** |
 | `@anthropic-ai/claude-agent-sdk` | `0.3.287` | fork `package.json` dependencies |
 | `@agentclientprotocol/sdk` | `1.7.0` | 同上 |
@@ -42,8 +44,8 @@ adapter 维护**会话生命周期、历史恢复和编辑器消费的 ACP 输�
 
 | ID | 必须成立的行为 | 实现入口（fork `src/`） | fork 测试 | 主仓测试 | 验证层级 |
 |---|---|---|---|---|---|
-| CT-COMPACT-RESTORE | 已压缩会话恢复保留压缩前显示内容与 steering；缺磁盘历史时正确降级 | `acp-agent.ts`（`loadSession` / `replaySessionHistory` / `rebuildTranscriptDisplayChain`）、`resumed-session.ts` | `session-contract-guards.test.ts`（实际 load）、`acp-agent.test.ts`（replay across compaction） | `apps/editor/src/renderer/services/acp/session/__tests__/AcpSession.timeline.test.ts` | 离线；真实 CLI 历史恢复未验证 |
-| CT-FORK-ANCHOR | 指定位置分叉：活跃与休眠/新实例均正确定位；显式锚点不存在即报错，不退化成整份复制 | `acp-agent.ts`（`unstable_forkSession`） | `session-contract-guards.test.ts`、`acp-agent.test.ts`（rewind/fork） | `apps/editor/src/renderer/services/acp/session/__tests__/AcpSession.poolResume.integration.test.ts` | 离线；真实 SDK 复制未验证 |
+| CT-COMPACT-RESTORE | 已压缩会话恢复保留压缩前显示内容与 steering；缺磁盘历史时正确降级 | `acp-agent.ts`（`loadSession` / `replaySessionHistory`）、`transcript-history.ts`（`rebuildTranscriptDisplayChain`）、`resumed-session.ts` | `session-contract-guards.test.ts`（实际 load）、`acp-agent.test.ts`（replay across compaction）、`transcript-history.test.ts` | `apps/editor/src/renderer/services/acp/session/__tests__/AcpSession.timeline.test.ts` | 离线；真实 CLI 历史恢复未验证 |
+| CT-FORK-ANCHOR | 指定位置分叉：活跃与休眠/新实例均正确定位；显式锚点不存在即报错，不退化成整份复制 | `acp-agent.ts`（`unstable_forkSession` / `forkSliceBefore` / `foldedPromptForkPoint`）、`transcript-history.ts`（`findFoldedPromptParent`） | `session-contract-guards.test.ts`、`acp-agent.test.ts`（rewind/fork）、`transcript-history.test.ts` | `apps/editor/src/renderer/services/acp/session/__tests__/AcpSession.poolResume.integration.test.ts` | 离线；真实 SDK 复制未验证 |
 | CT-SUBAGENT | 非 AIR 输出含 editor 可识别的子 Agent 信息；归属正确、完成即结束；自引用父 ID 不污染状态 | `tools.ts`、`subagent-history.ts`、`acp-agent.ts` | `session-contract-guards.test.ts`（实际 prompt）、`tool-call-contract.test.ts`、`tools.test.ts` | `apps/editor/src/renderer/services/acp/session/__tests__/acpSessionUpdateMeta.test.ts`、同目录 `AcpSession.timeline.test.ts` | 离线；真实子 Agent 业务未验证 |
 | CT-CONTROL-CHANNEL | 新会话首 turn 前不发阻塞性上下文查询；load 不等不必要控制请求；后台刷新只在合法阶段执行 | `acp-agent.ts`（`hasStartedTurn`、`refreshContextWindowInBackground`） | `create-session-options.test.ts`、`session-config-options.test.ts`（deferred 控制请求） | `apps/editor/integration/scenarios/acpForkContract.integration.test.ts` | 离线；真实 CLI 配置路由通过（见验收记录） |
 | CT-CONFIG-KEEP | new/load/fork/rewind 的关键 model/effort/权限设置符合现有约定 | `session-config-ids.ts`、`session-model.ts`、`session-effort.ts` | `resumed-model-sync.test.ts`、`session-config-options.test.ts`、`session-contract-guards.test.ts`（合成 fork transcript 的 model/mode 恢复） | `apps/editor/src/renderer/services/acp/session/__tests__/AcpSessionService.test.ts` | 离线；真实 fork 后配置及 effort 继承未验证 |
@@ -82,9 +84,25 @@ adapter 维护**会话生命周期、历史恢复和编辑器消费的 ACP 输�
 
 **验收保留项**：全量 E2E 的 `smoke.windows.spec.ts` 有 3 项首跑在 8 秒内未达到预期、重试后通过：新窗口加载目录、窗口列表数量、退出后关闭所有窗口。最后一项超时时仍有 2 个窗口。三项在本批冒烟中通过，但尚未定位全量运行的首跑超时原因，不能认定为既有 flake 或与本批无关；本批未修改窗口实现或放宽超时。真实模型请求、生产网关、真实 SDK 历史复制及 fork 后 effort 继承仍未验证；性能标签与独立 `e2ea` 回归套件不计入已验证范围。
 
-## 下一批范围（未开始）
+## P2 第一批：纯历史解析边界整理
 
-两个验收阻断项已解决。下一批进入纯历史解析边界整理：核对 `acp-agent.ts` 与 `resumed-session.ts`、`fork-session.ts`、`subagent-history.ts`、`context-compaction*.ts` 的职责，优先提取 transcript 分类、显示链重建、queued-command 合并与锚点解析中不依赖会话状态的逻辑。复用已有解析路径，不建立第二套 replay/rewind 实现；保持 SDK 版本、ACP 输出和异步编排不变。SDK/CLI 边界、生命周期与状态机重构留给之后的独立批次。
+本批从 `acp-agent.ts` 迁出 `RawTranscriptEntry`、transcript 分类、显示链重建、queued-command 合并与共享 origin 常量，集中到 `transcript-history.ts`。新模块仅有 SDK type-only 导入，不依赖文件 IO、SDK runtime、ACP 或 agent 类，也不加入 `lib.ts` 公共 API。folded steering 仅抽出同步 `findFoldedPromptParent`；原方法仍在同一位置读盘、await 并处理失败。
+
+显示链的压缩桥接、最新有效 leaf、环检测与废弃分支过滤保持不变；harness 过滤不进入 `isDisplayMessageEntry`，避免 backfill 漏扫 tool_result。主历史与 `tools.ts` 子 Agent sidechain 判据有意不同，不合并。文件定位、读写、SDK 调用、出站循环及后台调度仍在原边界；SDK/CLI/ACP 版本、快照和 codex 实现均未改。
+
+- **测试迁移**：原 `acp-agent.test.ts` 的 28 个纯用例迁入 `transcript-history.test.ts`，新增 6 个 parent / source UUID / 有效链边界用例，共 34 个。生产入口测试保留，`session-contract-guards.test.ts` 仍为 8 个实际用例（Task / Agent 参数化展开）。
+- **负向证明**：临时移除 `logicalParentUuid` 桥接，8 个纯函数用例及实际 `session/load` 压缩恢复守卫失败；精确恢复后，新模块与入口守卫 **42 / 42 通过**。没有重录快照。
+- **fork 验收**：`typecheck`、`lint`、格式检查通过；全量 **2433 通过 / 31 跳过 / 0 失败**（50 个测试文件通过、3 个跳过）。
+- **产物与跨仓契约**：`pnpm agent:build` 通过；真实 CLI `2.1.287` 下跨仓契约 **42 / 42 通过**。测试使用临时 `CLAUDE_CONFIG_DIR` / `CODEX_HOME`，剥离宿主网关与凭据环境变量，不发模型 prompt。42 项包含前批后已提交的 codex 契约扩充，不是本批新增 5 项。
+- **主仓全量检查**：`pnpm check:full` 通过，94 / 94 任务成功、93 个命中缓存；常规 integration 为 35 通过 / 37 跳过，不替代上述显式启用的真实 CLI 契约。
+- **Electron E2E**：定向 `pnpm e2e specs/smoke.agents.spec.ts` 1 通过；`pnpm e2e:smoke` 106 通过。`pnpm e2e` 成功退出，26 / 26 任务成功、25 个命中缓存；editor core 本批实跑：并行 298 通过 / 3 跳过 / 3 flaky，串行 11 通过，扩展 suite 命中缓存。3 项窗口用例再次首跑超时、重试通过：新窗口加载目录、窗口列表数量、退出后关闭所有窗口；退出用例 8 秒后仍有 2 个窗口。未修改窗口逻辑或放宽超时，原因仍待单独定位。未单独运行 `pnpm e2ea`，不宣称覆盖完整回归套件。
+- **收尾检查**：`pnpm check` 通过，文档链接、敏感串、知识导航与 CLAUDE 大小护栏通过；主仓及 fork `git diff --check` 通过，codex 工作树无变更。
+
+本批只整理内部职责边界，无用户可见行为变化，已检查 `docs/user/`，无需同步。真实模型请求、生产网关、真实 SDK 历史复制及 fork 后 effort 继承仍未验证；不因本批结构整理声称前批窗口超时已修复。
+
+## 后续范围（未开始）
+
+纯历史解析第一批到此收尾。SDK/CLI 边界、生命周期与状态机重构留给之后的独立批次；不自动升级依赖、同步上游或启动下一轮重构。
 
 ## 上游评估记录
 
