@@ -12,6 +12,7 @@ import type {
   AcpPendingPermission,
   IAcpSession,
 } from '../../services/acp/session/acpSessionService.js'
+import { supportsPlanReviewFeedback } from '../../services/acp/session/planAutoExecute.js'
 import { PlanAutoExecuteToggle } from './PlanAutoExecuteToggle.js'
 import styles from './agents.module.css'
 
@@ -37,6 +38,8 @@ function ActivePermissionCard({ pending }: { pending: AcpPendingPermission }) {
   const options = isPlanReview
     ? pending.options
     : [allowOnce, allowAlways, reject].filter((option) => option !== undefined)
+  // codex 的计划审查卡只认 optionId、不读 `_meta.feedback`：意见会被静默丢弃，不渲染输入框。
+  const showSteer = isPlanReview && supportsPlanReviewFeedback(pending.options)
 
   // 本次请求的自动执行倒计时（service 按设置附加 autoResolve；选项缺席时为 undefined）。
   // hover / 聚焦卡片即暂停，取消勾选开关同时作废本次倒计时。
@@ -141,7 +144,7 @@ function ActivePermissionCard({ pending }: { pending: AcpPendingPermission }) {
           )}
         </div>
       )}
-      {isPlanReview && (
+      {showSteer && (
         <div className={styles['permissionSteer']}>
           <textarea
             className={styles['questionFreeform']}

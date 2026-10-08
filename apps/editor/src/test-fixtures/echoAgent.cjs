@@ -422,6 +422,43 @@ async function runPrompt(id, params) {
     return reply(id, { stopReason: 'end_turn' })
   }
 
+  // Test directive: "approve-plan-codex" asks for plan approval the way the codex
+  // fork does — a single approve option (implement_plan) plus a reject
+  // (revise_plan), with none of Claude's exit-plan-* tiers. "-revise-only" drops
+  // the approve option, which must fall back to a manual card. Both echo the
+  // chosen optionId so a spec can assert what the client answered.
+  if (userText === 'approve-plan-codex' || userText === 'approve-plan-codex-revise-only') {
+    const codexPlanOptions = [
+      { optionId: 'implement_plan', name: 'Yes, implement this plan', kind: 'allow_once' },
+      {
+        optionId: 'revise_plan',
+        name: 'No, and tell Codex what to do differently',
+        kind: 'reject_once',
+      },
+    ]
+    const result = await requestFromClient('session/request_permission', {
+      sessionId,
+      toolCall: {
+        toolCallId: 'echo-plan-codex',
+        title: 'Implement this plan?',
+        kind: 'switch_mode',
+      },
+      options:
+        userText === 'approve-plan-codex'
+          ? codexPlanOptions
+          : codexPlanOptions.filter((option) => option.optionId === 'revise_plan'),
+    })
+    notify('session/update', {
+      sessionId,
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'approve-plan-codex result: ' + JSON.stringify(result) },
+      },
+    })
+    activeTurns.delete(sessionId)
+    return reply(id, { stopReason: 'end_turn' })
+  }
+
   // Test directive: "approve-shell" asks for a scoped shell approval the way the
   // Claude fork does for a command reading outside the workspace (allow_once →
   // allow-with-updates → reject). "approve-shell-danger" leads with the reject,

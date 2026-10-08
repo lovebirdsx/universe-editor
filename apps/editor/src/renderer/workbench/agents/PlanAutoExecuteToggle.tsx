@@ -9,10 +9,9 @@
 
 import { useEffect, useState } from 'react'
 import { ConfigurationTarget, IConfigurationService, localize } from '@universe-editor/platform'
+import { PLAN_AUTO_EXECUTE_SETTING } from '../../services/acp/session/planAutoExecute.js'
 import { useService } from '../useService.js'
 import styles from './agents.module.css'
-
-export const AUTO_EXECUTE_SETTING = 'acp.plan.autoExecute'
 
 export function PlanAutoExecuteToggle({
   onUnchecked,
@@ -24,13 +23,13 @@ export function PlanAutoExecuteToggle({
 }) {
   const config = useService(IConfigurationService)
   const [enabled, setEnabled] = useState(() => {
-    const mode = config.get<string>(AUTO_EXECUTE_SETTING)
+    const mode = config.get<string>(PLAN_AUTO_EXECUTE_SETTING)
     return !!mode && mode !== 'off'
   })
   useEffect(() => {
     const sub = config.onDidChangeConfiguration((e) => {
-      if (!e.affectsConfiguration(AUTO_EXECUTE_SETTING)) return
-      const mode = config.get<string>(AUTO_EXECUTE_SETTING)
+      if (!e.affectsConfiguration(PLAN_AUTO_EXECUTE_SETTING)) return
+      const mode = config.get<string>(PLAN_AUTO_EXECUTE_SETTING)
       setEnabled(!!mode && mode !== 'off')
     })
     return () => sub.dispose()
@@ -41,7 +40,7 @@ export function PlanAutoExecuteToggle({
       className={styles['permissionAutoToggle']}
       data-tooltip={localize(
         'acp.permission.autoExecute.tooltip',
-        'When a plan finishes, continue automatically after a short countdown. Choose the mode in setting acp.plan.autoExecute.',
+        'When a plan finishes, continue automatically after a short countdown. Choose the mode in setting acp.plan.autoExecute. Codex has no tiers — any value other than "off" implements the plan.',
       )}
     >
       <input
@@ -49,7 +48,7 @@ export function PlanAutoExecuteToggle({
         checked={enabled}
         onChange={(e) => {
           config.update(
-            AUTO_EXECUTE_SETTING,
+            PLAN_AUTO_EXECUTE_SETTING,
             e.target.checked ? 'bypassPermissions' : 'off',
             ConfigurationTarget.User,
           )

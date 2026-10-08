@@ -1921,6 +1921,17 @@ describe('AcpSessionService', () => {
       { optionId: 'reject', name: 'No, keep planning', kind: 'reject_once' },
     ]
 
+    // codex fork 的计划审查卡只有「实现计划」一个批准项，没有 exit-plan-* 分档
+    // （见 PlanReviewReporter）。选项 id 是独立契约，与 agentId 无关。
+    const codexPlanOptions: RequestPermissionRequest['options'] = [
+      { optionId: 'implement_plan', name: 'Yes, implement this plan', kind: 'allow_once' },
+      {
+        optionId: 'revise_plan',
+        name: 'No, and tell Codex what to do differently',
+        kind: 'reject_once',
+      },
+    ]
+
     function requestPlanReview(
       sessionId: string,
       options = planOptions,
@@ -2052,6 +2063,113 @@ describe('AcpSessionService', () => {
         outcome: { outcome: 'selected', optionId: 'exit-plan-bypass' },
       })
       expect(permission.persisted).toEqual([])
+    })
+
+    it.each(['bypassPermissions', 'auto', 'acceptEdits', 'default'])(
+      'codex 计划审查的 %s 档位自动实现计划 implement_plan',
+      async (mode) => {
+        const s = await svc.createSession()
+        await s.whenConnected()
+        config.update('acp.plan.autoExecute', mode, ConfigurationTarget.Memory)
+        const promise = requestPlanReview('agent-1', codexPlanOptions)
+        await new Promise((r) => setTimeout(r, 0))
+        const pending = s.pendingPermission.get()
+        try {
+          expect(pending?.autoResolve).toEqual({
+            optionId: 'implement_plan',
+            delayMs: PLAN_AUTO_EXECUTE_DELAY_MS,
+          })
+          pending!.resolve('implement_plan')
+          await expect(promise).resolves.toEqual({
+            outcome: { outcome: 'selected', optionId: 'implement_plan' },
+          })
+        } finally {
+          pending?.cancel()
+        }
+      },
+    )
+
+    it('codex 计划只提供 revise_plan 时不自动执行（绝不代选拒绝项）', async () => {
+      const s = await svc.createSession()
+      await s.whenConnected()
+      config.update('acp.plan.autoExecute', 'bypassPermissions', ConfigurationTarget.Memory)
+      const promise = requestPlanReview('agent-1', [codexPlanOptions[1]!])
+      await new Promise((r) => setTimeout(r, 0))
+      expect(s.pendingPermission.get()?.autoResolve).toBeUndefined()
+      s.pendingPermission.get()!.cancel()
+      await promise
+    })
+
+    it('implement_plan 存在但 kind 为 reject 时不自动执行', async () => {
+      const s = await svc.createSession()
+      await s.whenConnected()
+      config.update('acp.plan.autoExecute', 'bypassPermissions', ConfigurationTarget.Memory)
+      const promise = requestPlanReview('agent-1', [
+        { optionId: 'implement_plan', name: 'Implement', kind: 'reject_once' },
+        codexPlanOptions[1]!,
+      ])
+      await new Promise((r) => setTimeout(r, 0))
+      expect(s.pendingPermission.get()?.autoResolve).toBeUndefined()
+      s.pendingPermission.get()!.cancel()
+      await promise
+    })
+
+    it.each(['off', 'typo'])('%s 档位下 codex 计划卡不自动执行', async (mode) => {
+      const s = await svc.createSession()
+      await s.whenConnected()
+      config.update('acp.plan.autoExecute', mode, ConfigurationTarget.Memory)
+      const promise = requestPlanReview('agent-1', codexPlanOptions)
+      await new Promise((r) => setTimeout(r, 0))
+      expect(s.pendingPermission.get()?.autoResolve).toBeUndefined()
+      s.pendingPermission.get()!.cancel()
+      await promise
+    })
+
+    it('两套选项同时存在时优先选设置对应的 exit-plan-* 档位', async () => {
+      const s = await svc.createSession()
+      await s.whenConnected()
+      config.update('acp.plan.autoExecute', 'auto', ConfigurationTarget.Memory)
+      const promise = requestPlanReview('agent-1', [...planOptions, ...codexPlanOptions])
+      await new Promise((r) => setTimeout(r, 0))
+      expect(s.pendingPermission.get()?.autoResolve).toEqual({
+        optionId: 'exit-plan-auto',
+        delayMs: PLAN_AUTO_EXECUTE_DELAY_MS,
+      })
+      s.pendingPermission.get()!.cancel()
+      await promise
+    })
+
+    it('codex 计划自动执行时不再记录回退诊断', async () => {
+      const warn = vi.spyOn(NullLogger.prototype, 'warn')
+      try {
+        const s = await svc.createSession()
+        await s.whenConnected()
+        config.update('acp.plan.autoExecute', 'bypassPermissions', ConfigurationTarget.Memory)
+        const promise = requestPlanReview('agent-1', codexPlanOptions)
+        await new Promise((r) => setTimeout(r, 0))
+        s.pendingPermission.get()!.cancel()
+        await promise
+        expect(warn.mock.calls.flat().join('\n')).not.toContain('计划自动执行')
+      } finally {
+        warn.mockRestore()
+      }
+    })
+
+    it('档位无法识别时给出独立诊断，且不泄露选项文案', async () => {
+      const warn = vi.spyOn(NullLogger.prototype, 'warn')
+      try {
+        const s = await svc.createSession()
+        await s.whenConnected()
+        config.update('acp.plan.autoExecute', 'typo', ConfigurationTarget.Memory)
+        const promise = requestPlanReview('agent-1', codexPlanOptions)
+        await new Promise((r) => setTimeout(r, 0))
+        s.pendingPermission.get()!.cancel()
+        await promise
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('无法识别的设置值 mode=typo'))
+        expect(warn.mock.calls.flat().join('\n')).not.toContain('Yes, implement this plan')
+      } finally {
+        warn.mockRestore()
+      }
     })
   })
 })

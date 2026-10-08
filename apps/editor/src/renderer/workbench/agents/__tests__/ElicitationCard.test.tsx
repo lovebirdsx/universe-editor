@@ -142,6 +142,18 @@ function modeOption(currentValue: string): SessionConfigOption {
   } as unknown as SessionConfigOption
 }
 
+/** codex 的计划模式是独立的 collaboration_mode 配置项，不在 `mode` 里。 */
+function collaborationModeOption(currentValue: string): SessionConfigOption {
+  return {
+    id: 'collaboration_mode',
+    name: 'Collaboration mode',
+    category: 'collaboration_mode',
+    type: 'select',
+    currentValue,
+    options: [],
+  } as unknown as SessionConfigOption
+}
+
 function renderCard(session: IAcpSession, initialConfig?: Record<string, unknown>) {
   const services = new ServiceCollection()
   services.set(IConfigurationService, makeConfig(initialConfig).config)
@@ -770,6 +782,16 @@ describe('ElicitationCard plan auto-execute toggle', () => {
 
   it('does not render the toggle when the agent advertises no mode option', () => {
     renderFormCard([])
+    expect(screen.queryByTestId('acp-elicitation-auto-execute')).toBeNull()
+  })
+
+  it('codex 的 collaboration_mode=plan 也渲染自动执行开关', () => {
+    renderFormCard([collaborationModeOption('plan')])
+    expect(screen.getByTestId('acp-elicitation-auto-execute')).toBeTruthy()
+  })
+
+  it('collaboration_mode 非 plan 时不渲染开关', () => {
+    renderFormCard([collaborationModeOption('default')])
     expect(screen.queryByTestId('acp-elicitation-auto-execute')).toBeNull()
   })
 })

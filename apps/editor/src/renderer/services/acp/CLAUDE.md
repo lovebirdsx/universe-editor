@@ -52,9 +52,9 @@ Agent Client Protocol（ACP）客户端层。基于 `@agentclientprotocol/sdk` v
 
 ## 套路 ACP-D：调整自动批准 / 权限策略
 
-`acpPermissionHandler.ts`：`tryAutoApprove(params)` 决策、`persistAllow(kind)` 写回 `acp.permissions.autoApprove`（Memory）。UI 端 `PermissionCard` 不动——它只展示 SDK 给的 `options[]`。`kind` 是不透明字符串，但**新代码必须用 SDK `ToolKind` 的 10 个值**（见易踩坑 #2）。
+`acpPermissionHandler.ts`：`tryAutoApprove(params)` 决策、`persistAllow(kind)` 写回 `acp.permissions.autoApprove`（Memory）。UI 端 `PermissionCard` 只展示 SDK 给的 `options[]`。`kind` 是不透明字符串，**新代码必须用 SDK `ToolKind` 的 10 个值**（见易踩坑 #2）。
 
-**例外：`switch_mode`（ExitPlanMode）永不走静默自动批准、也不被 `persistAllow` 记住**（守卫在 `onRequestPermission`）。它的自动化由 `acp.plan.autoExecute`（off/bypassPermissions/auto/acceptEdits/default）显式驱动：设置映射到已提供的非 clear 批准选项（`exit-plan-*`）才附 `autoResolve`，否则诊断并回人工确认。卡片倒计时可打断，勿静默短路。
+**例外：`switch_mode`（ExitPlanMode / codex 计划审查）永不走静默自动批准、也不被 `persistAllow` 记住**（守卫在 `onRequestPermission`）。它的自动化由 `acp.plan.autoExecute` 显式驱动：映射到本次已提供的批准选项才附 `autoResolve`，否则回人工确认——两套 fork 的选项契约（Claude `exit-plan-*` / codex `implement_plan`）见 `session/planAutoExecute.ts`。卡片倒计时可打断，勿静默短路。
 
 **Claude 计划会话的三档权限策略**（`agentSettings.claude.planPermissionPolicy`，**只认个人层**，仅对 `claude-code` 且 mode=plan）：`skip`（默认）只代选 Agent 给的**一次性** `allow-once`——没有就回人工卡片、绝不代选持久选项；`auto` / `manual` 客户端一律不批准（`auto` 让 CLI 原生 `useAutoModeDuringPlan` 分类器决定）。策略按**会话快照**（改设置不影响已建会话）经 `_meta.claudeCode.options.settings` 写进各握手路径。语义与风险见 [cases-plan-approve.md](cases-plan-approve.md)。
 

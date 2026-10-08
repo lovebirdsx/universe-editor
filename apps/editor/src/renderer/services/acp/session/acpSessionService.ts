@@ -132,6 +132,12 @@ import { isResidentLive } from './acpSessionStatus.js'
 import { MAX_RECOVERY_ATTEMPTS, recoveryBackoffMs } from './acpSessionRecovery.js'
 import { readSyntheticDenial } from './acpSessionUpdateMeta.js'
 import {
+  PLAN_AUTO_EXECUTE_SETTING,
+  isPlanModeConfigOptions,
+  planApproveOptionIds,
+  selectPlanAutoExecuteOptionId,
+} from './planAutoExecute.js'
+import {
   claudePlanAutoModeOptions,
   isClaudeAgent,
   readPlanPermissionPolicy,
@@ -2616,34 +2622,25 @@ export class AcpSessionService
   }
 
   /**
-   * ExitPlanMode（kind 'switch_mode'）的自动执行判定。返回 undefined 表示走普通人工弹卡：
-   * 设置 off / 非 plan 请求 / 设置值对应的选项不在本次 options 里。
+   * ExitPlanMode / codex plan review（kind 'switch_mode'）的自动执行判定。返回 undefined
+   * 表示走普通人工弹卡：设置 off、非计划请求，或该档位认可的批准选项不在本次 options 里。
    */
   private _planAutoResolve(
     params: RequestPermissionRequest,
   ): { optionId: string; delayMs: number } | undefined {
+    // 非计划请求直接返回，否则每个普通权限请求都会落一条「回退人工确认」诊断。
     if (params.toolCall.kind !== 'switch_mode') return undefined
-    const mode = this._config.get<string>('acp.plan.autoExecute')
-    if (!mode || mode === 'off') return undefined
-    // 设置存权限模式，fork 的 optionId 是独立契约；自动执行不选择清上下文变体。
-    const optionIds = new Map([
-      ['bypassPermissions', 'exit-plan-bypass'],
-      ['auto', 'exit-plan-auto'],
-      ['acceptEdits', 'exit-plan-accept-edits'],
-      ['default', 'exit-plan-default'],
-    ])
-    const optionId = optionIds.get(mode)
-    if (
-      !optionId ||
-      !params.options.some(
-        (option) =>
-          option.optionId === optionId &&
-          (option.kind === 'allow_once' || option.kind === 'allow_always'),
-      )
-    ) {
-      this._logger.warn(
-        `计划自动执行回退人工确认：mode=${mode}, options=${JSON.stringify(params.options.map(({ optionId, kind }) => ({ optionId, kind })))}`,
-      )
+    const mode = this._config.get<string>(PLAN_AUTO_EXECUTE_SETTING)
+    const optionId = mode ? selectPlanAutoExecuteOptionId(params.options, mode) : undefined
+    if (!optionId) {
+      if (mode && mode !== 'off') {
+        const expected = planApproveOptionIds(mode)
+        this._logger.warn(
+          expected.length > 0
+            ? `计划自动执行回退人工确认：mode=${mode}, 期望选项=${expected.join('|')}, options=${this._optionSummary(params)}`
+            : `计划自动执行未生效：无法识别的设置值 mode=${mode}，回退人工确认`,
+        )
+      }
       return undefined
     }
     return { optionId, delayMs: PLAN_AUTO_EXECUTE_DELAY_MS }
@@ -2651,9 +2648,7 @@ export class AcpSessionService
 
   /** 会话当前是否处于 plan 模式（Claude 计划权限策略的前置条件）。 */
   private _isPlanMode(session: AcpSession): boolean {
-    return session.configOptions
-      .get()
-      .some((option) => option.category === 'mode' && option.currentValue === 'plan')
+    return isPlanModeConfigOptions(session.configOptions.get())
   }
 
   /**

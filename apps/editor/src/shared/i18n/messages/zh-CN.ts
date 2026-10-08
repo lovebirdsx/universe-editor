@@ -798,7 +798,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.agentSettings.claude.planPermissionPolicy.auto': '自动（CLI 分类器）',
   'settings.agentSettings.claude.planPermissionPolicy.manual': '手动（每次弹卡）',
   'settings.acp.plan.autoExecute':
-    '计划模式的会话完成计划（"Ready to code?"）后，经确认卡片上的短暂倒计时自动以所选模式继续——悬停或与卡片交互即可接管。"off" 表示始终等待手动选择。计划确认卡片上的复选框会把此设置切换为 "bypassPermissions"。',
+    '计划模式的会话完成计划（"Ready to code?"）后，经确认卡片上的短暂倒计时自动以所选模式继续——悬停或与卡片交互即可接管。"off" 表示始终等待手动选择。计划确认卡片上的复选框会把此设置切换为 "bypassPermissions"。Codex 会话没有分档：任何非 "off" 的档位都会实现计划，且不会改动 Codex 自己的权限模式。',
   'settings.acp.plan.autoExecute.off': '关闭',
   'settings.acp.plan.autoExecute.bypassPermissions': 'Bypass 权限',
   'settings.acp.plan.autoExecute.auto': '自动',
@@ -2479,7 +2479,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   // --- ACP: permission card (plan review) ---
   'acp.permission.autoExecute': '此后自动执行计划',
   'acp.permission.autoExecute.tooltip':
-    '计划完成后经短暂倒计时自动继续。可在设置 acp.plan.autoExecute 中调整模式。',
+    '计划完成后经短暂倒计时自动继续。可在设置 acp.plan.autoExecute 中调整模式。Codex 会话不分档，任何非「关闭」档位都会自动实现计划。',
   'acp.permission.autoExecute.countdown': '{secs} 秒后自动执行',
   'acp.permission.steer.placeholder': '告诉 Claude 应该怎么做…',
   'acp.permission.steer.submit': '发送',

@@ -63,6 +63,17 @@ function forkPlanOptions(): AcpPendingPermission['options'] {
   ]
 }
 
+function codexPlanOptions(): AcpPendingPermission['options'] {
+  return [
+    { optionId: 'implement_plan', name: 'Yes, implement this plan', kind: 'allow_once' },
+    {
+      optionId: 'revise_plan',
+      name: 'No, and tell Codex what to do differently',
+      kind: 'reject_once',
+    },
+  ]
+}
+
 function bashPermission(): AcpPendingPermission {
   return {
     toolCallId: 't2',
@@ -308,5 +319,25 @@ describe('PermissionCard auto-execute (acp.plan.autoExecute)', () => {
   it('does not render the toggle for a non-plan permission', () => {
     renderCard(bashPermission())
     expect(screen.queryByTestId('acp-permission-auto-execute')).toBeNull()
+  })
+
+  it('codex 形状的计划卡不渲染 steer 输入框，但保留全部选项与倒计时', () => {
+    const resolve = vi.fn()
+    renderCard(
+      planPermission({
+        resolve,
+        options: codexPlanOptions(),
+        autoResolve: { optionId: 'implement_plan', delayMs: 100 },
+      }),
+      { 'acp.plan.autoExecute': 'bypassPermissions' },
+    )
+
+    expect(screen.queryByTestId('acp-permission-steer-input')).toBeNull()
+    expect(screen.queryByTestId('acp-permission-steer-submit')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Yes, implement this plan' })).toBeTruthy()
+    expect(
+      screen.getByRole('button', { name: 'No, and tell Codex what to do differently' }),
+    ).toBeTruthy()
+    expect(screen.getByTestId('acp-permission-auto-countdown')).toBeTruthy()
   })
 })

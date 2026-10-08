@@ -204,7 +204,7 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
             },
             description: localize(
               'settings.acp.plan.autoExecute',
-              'When a plan-mode session finishes its plan ("Ready to code?"), automatically continue in the selected mode after a short countdown shown on the confirmation card — hover or interact with the card to take over instead. "off" always waits for a manual choice. The plan review card also offers a checkbox that toggles this setting to "bypassPermissions".',
+              'When a plan-mode session finishes its plan ("Ready to code?"), automatically continue in the selected mode after a short countdown shown on the confirmation card — hover or interact with the card to take over instead. "off" always waits for a manual choice. The plan review card also offers a checkbox that toggles this setting to "bypassPermissions". Codex sessions have no tiers: any value other than "off" implements the plan, and Codex\'s own access mode is left untouched.',
             ),
           },
           'acp.startupTimeoutMs': {

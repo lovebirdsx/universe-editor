@@ -27,6 +27,7 @@ import type {
   IAcpSession,
 } from '../../services/acp/session/acpSessionService.js'
 import type { ElicitationSchema } from '@agentclientprotocol/sdk'
+import { isPlanModeConfigOptions } from '../../services/acp/session/planAutoExecute.js'
 import {
   normalizeElicitationForm,
   validateElicitationValues,
@@ -409,7 +410,7 @@ function FormElicitationCard({
   // 「计划完成后自动执行」的天然触点：此处勾选后，随后的 ExitPlanMode 卡片
   // 就会走倒计时自动执行，无需再手动点选。非 plan 会话不提供该开关。
   const configOptions = useObservable(session.configOptions)
-  const isPlanMode = configOptions.some((o) => o.category === 'mode' && o.currentValue === 'plan')
+  const isPlanMode = isPlanModeConfigOptions(configOptions)
 
   return (
     <ElicitationShell

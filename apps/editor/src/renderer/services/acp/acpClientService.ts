@@ -579,14 +579,17 @@ export class AcpClientService extends Disposable implements IAcpClientService {
    * taken from `acp.codex.apiKey` when set, otherwise the child inherits a real
    * OPENAI_API_KEY / CODEX_API_KEY from the environment. Remote spawns resolve
    * the binary on the remote host and never receive the local apiKey.
-   * Non-codex agents pass through untouched.
+   * Non-runAsNode agents pass through untouched.
    */
   private async _ensureCodexBinary(
     spec: AcpLaunchSpec,
     agentId: string,
     silent: boolean,
   ): Promise<AcpLaunchSpec> {
-    if (agentId !== 'codex') return spec
+    // `runAsNode` marks the bundled preset. A user `acp.agents` entry can reuse
+    // the id but launches its own command — forcing the managed binary (and its
+    // CODEX_PATH) into it would break that launch.
+    if (agentId !== 'codex' || spec.runAsNode !== true) return spec
 
     // Remote spawns resolve the binary on the remote host; never leak the local
     // apiKey config across the tunnel (the remote side uses its own auth). The
