@@ -28,20 +28,25 @@ import {
 const STUB_ENTRY_SOURCE = `
 const fs = require('node:fs')
 const path = require('node:path')
+// 先写同目录临时文件再 rename：writeFileSync 是先建空文件再写内容，父进程的 waitForFile
+// 见到名字就立刻读，会 parse 到空内容（CI 上偶发 Unexpected end of JSON input）。
+function publish(name, data) {
+  const target = path.join(process.cwd(), name)
+  const tmp = target + '.' + process.pid + '.tmp'
+  fs.writeFileSync(tmp, data)
+  fs.renameSync(tmp, target)
+}
 if (process.env.STUB_IGNORE_SIGTERM === '1') {
   process.on('SIGTERM', () => {})
 } else {
   const delay = Number(process.env.STUB_EXIT_DELAY_MS ?? '0')
   process.on('SIGTERM', () => setTimeout(() => {
-    fs.writeFileSync(path.join(process.cwd(), 'child-exit.txt'), 'exited')
+    publish('child-exit.txt', 'exited')
     process.exit(0)
   }, delay))
 }
 // 处理器装好后再落就绪文件：测试见到它才 dispose，避免信号早于处理器被默认动作杀掉。
-fs.writeFileSync(
-  path.join(process.cwd(), 'child-env.json'),
-  JSON.stringify({ codexHome: process.env.CODEX_HOME ?? null, home: process.env.HOME ?? null }),
-)
+publish('child-env.json', JSON.stringify({ codexHome: process.env.CODEX_HOME ?? null, home: process.env.HOME ?? null }))
 setInterval(() => {}, 1000)
 `
 
