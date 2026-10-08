@@ -82,7 +82,7 @@ pnpm agent:build      # = vendor-install + 两个 fork 的 npm run build；重�
 pnpm check            # lint + typecheck + test，仅截错误
 ```
 > `vendor-install`（`scripts/release/vendor-install.mjs`）是**普通 `npm ci`**：按 `package-lock.json` 的 sha256 写 `node_modules/.install-stamp`，lock 未变即跳过；**没有 prune 步骤**，devDeps 保留，之后在 fork 跑单测无需重装（lock 变了才 `npm ci` 重来一遍）。
-> 契约回归：`UNIVERSE_FORK_CONTRACT=1 pnpm --filter @universe-editor/editor test:integration acpForkContract`（先 `agent:build`；本机需 `CLAUDE_CODE_EXECUTABLE` 指向真实 CLI）。**默认 10s 用例超时必须跑得完**——超时不是「加超时」的理由，先查谁占住 SDK 控制通道（案例 12）。codex 腿受用户真实 `~/.codex/auth.json` 拖累（app-server 起步 ~10s/5s），宜用**临时干净 `CODEX_HOME=$(mktemp -d)`** 跑；**绝不改动真实用户 auth 文件**。
+> 契约回归：`UNIVERSE_FORK_CONTRACT=1 pnpm --filter @universe-editor/editor test:integration acpForkContract`（先 `agent:build`；本机需 `CLAUDE_CODE_EXECUTABLE` 指向真实 CLI）。**默认 10s 用例超时必须跑得完**——超时不是「加超时」的理由，先查谁占住 SDK 控制通道（案例 12）。**codex 腿的 `CODEX_HOME` 已由共享 fixture 自动隔离**：`apps/editor/integration/fixtures/realForkConnection.ts` 给每个 codex 连接在建临时 cwd 里 `mkdtemp` 一个干净 home（写 `cli_auth_credentials_store = "file"`，不复制父环境任何东西），故跑契约测试**不再需要**手工 `CODEX_HOME=$(mktemp -d)`，也不会读写开发者真实 `~/.codex`。**但独立跑 codex CLI（不经该 fixture，如 `codex exec`）仍须显式 `CODEX_HOME=$(mktemp -d)`；任何情况下都绝不改动真实用户 auth 文件。**
 > `pnpm check` 偶发的 `FileWatcherMainService` debounce / `DiffEditor getPosition` 失败是主仓库既有环境 flake，与本次无关——重跑即绿（可单独 `pnpm -w run test` 复核）。
 
 ### 6. 提交主仓库 submodule 指针
@@ -116,7 +116,7 @@ git push -u origin chore/update-claude-agent-acp
 - **案例 9**（0.58.1→0.62.0）：上游 #894 contextWindow seeding 也进 resume 关键路径，与案例 8 正面冲突 → 语义合并（以我方零往返为准）；含 5 类坑：dogfood env 污染测试、git 对齐吞噬闭合行、extNotification 旁路 sendUpdate 副作用、autosquash 时序陷阱、rebase 中途 git 操作禁忌。
 - **案例 10**：vendor submodule `npm ci` 报 `Missing ... from lock file`（peer 无祖先链节点，上游依赖链演进致老 lock 失效）→ `npm install --package-lock-only --registry=https://registry.npmjs.org` 重生成，`npm ci --dry-run` 验证。与要点 8 是同一 lock 环节的两个坑。
 - **案例 11**（0.62.0→0.64.2）：上游 #881 给「丢弃子代理 text」分支加 forwardSubagentText 门控 → 我方挂分支上的副作用（用量累积）必须提升到分支决策前，否则新路径丢失；replay 强类型辅助撞 union 类型 → 补接口字段；测试尾部相邻 append 冲突在 `=======` 处补闭合括号。
-- **案例 12**（0.64.2→0.85.1，SDK 0.3.287）：升级后契约测试 `session/new` → `set_config_option` 超时——上游后台 `getContextUsage` 虽不 await，但 turn 前不被 CLI 服务、占住串行控制通道 5~8s → fork 加 `hasStartedTurn` 闸门（turn 前不发，resumed 会话照旧）+ 回归测试；含契约测试跑法与干净 `CODEX_HOME`（勿改真实 auth 文件）。
+- **案例 12**（0.64.2→0.85.1，SDK 0.3.287）：升级后契约测试 `session/new` → `set_config_option` 超时——上游后台 `getContextUsage` 虽不 await，但 turn 前不被 CLI 服务、占住串行控制通道 5~8s → fork 加 `hasStartedTurn` 闸门（turn 前不发，resumed 会话照旧）+ 回归测试；含契约测试跑法（codex 腿 `CODEX_HOME` 现由共享 fixture 自动隔离；独立 CLI 才手工 `CODEX_HOME=$(mktemp -d)`，勿改真实 auth 文件）。
 - **案例 13**（0.64.2→0.85.1 同轮发现，上游 875d75f）：AIR tool-call 契约把子 Agent 标记从所有客户端的 `_meta.claudeCode.subagent` 挪成 AIR 专属 `_meta.jetbrains.air.subagent` → 父项目 `readSubagent` 改按 `_meta.claudeCode.toolName`（`Agent`/`Task`）识别；rebase 时勿丢非 AIR 分支的 `toolName` 透传。
 - **案例 14**（0.85.1 后，上游 #1218）：`session/load` 新增 `resumedMessages` 入参（SDK 有效链，从 compact summary 起）排在 fork 的 `fullChain` 之前 → 已压缩会话恢复后丢压缩前历史、摘要变首条、steering 插话也丢；修法「无条件读 raw transcript + `fullChain ?? resumedMessages ?? merge(...)`」。教训：**本地功能的测试必须至少一条走生产入口的入参形态**，否则上游改入参时零冲突静默失效。
 

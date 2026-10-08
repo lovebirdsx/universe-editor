@@ -280,14 +280,26 @@ jobs:
       - name: Build agent forks
         run: pnpm agent:build
 
-      # Runs the offline contract core: the ext-method NAME table + the
-      # initialize handshake for both forks. The claude ext-method routing leg
-      # self-skips here (it needs a real Claude binary via CLAUDE_CODE_EXECUTABLE,
-      # which CI has no reason to install); it runs in local dev instead.
+      # 两个 fork 握手 + Codex 无模型路由；Claude 路由需显式提供 CLI，CI 中跳过。
       - name: Run ACP contract test
         env:
           UNIVERSE_FORK_CONTRACT: '1'
         run: pnpm --filter @universe-editor/editor test:integration acpForkContract
+
+      # fork 源码检查对齐其自身 CI 的 Node 24，主仓 wire 仍在 Node 22 验证。
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Typecheck codex agent fork
+        run: npm --prefix vendor/codex-acp run typecheck
+
+      # e2e 仅在 RUN_E2E_TESTS === "true" 启用；保留本地 app-server 测试，禁用联网模型。
+      - name: Test codex agent fork
+        env:
+          RUN_E2E_TESTS: 'false'
+        run: npm --prefix vendor/codex-acp run test
 
   # Decide which E2E suites to run. On a PR we scope to what the change touched
   # (turbo affected, base = origin/main); on a main push we force EVERYTHING —

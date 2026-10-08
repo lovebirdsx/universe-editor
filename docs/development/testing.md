@@ -129,6 +129,7 @@ E2E 在 CI 里**按改动范围选择性执行**，避免插件越多 E2E 越重
 - CI 三段式：`detect-affected` 算矩阵 → `e2e`(核心) 按 `core` 门控 → `e2e-extensions` matrix 按 `fromJson(extensions)` 展开，每 suite 按 `prep` 条件化装 vendored tsserver / excel-diff vsix。
 - 核心 scoped fixture 运行时激活 git/typescript/markdown，这三个已声明为 `apps/editor` 的 devDependencies，故 turbo affected 在它们变更时会经依赖图 fanout 到 core（`@universe-editor/editor`），自动触发核心重跑——无需手工维护额外的包清单。
 - **外部扩展**（`extensions-external/*`）turbo 看不见，改用 **git path diff**：`affected-e2e-matrix.mjs` 的 `computeExternalMatrix` 算受影响 suite（改某 suite 目录只跑它，改共享基建 editor / e2e-harness / e2e-contract / extension-host / extension-api / scripts/e2e 扇出全部），输出喂 `e2e-external` matrix job。
+- **跨仓 ACP 契约**（`acp-contract` job）单独门控：git path diff（`computeShouldRunAcpContract`）命中 `vendor/`（含 submodule 指针 gitlink 变更）、`apps/editor/src/renderer/services/acp/`、main 侧 acpHost / claude|codex Binary|Config、integration 的契约/隔离用例与 `vitest.config.ts`、`scripts/e2e/affected-e2e-matrix.mjs`（含其单测）、CI 自身定义，才跑。该 job 先 `agent:build`，再跑真 fork dist 的 wire 契约——**无网络模型**（app-server 由 fork 自带的本地二进制拉起，故别称其「完全离线」）——然后用 **Node 24** 跑 codex fork 自身的 `typecheck` + 单测（`RUN_E2E_TESTS=false`，跳过需真模型的 e2e）。每条保留行为挂在哪个测试入口（真进程 / 桩 / 缺口）见 skill `update-codex-acp` 的 `.claude/skills/update-codex-acp/references/acceptance-matrix.md`。普通 `docs/`（含本文件）不触发它。
 
 本地预演矩阵：
 

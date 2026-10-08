@@ -120,6 +120,20 @@ const ACP_CONTRACT_PATHS = [
   'apps/editor/src/main/services/codexConfig/',
   'apps/editor/integration/fixtures/realForkConnection.ts',
   'apps/editor/integration/scenarios/acpForkContract.integration.test.ts',
+  // The isolation regression test pins the fixture's CODEX_HOME isolation — the
+  // safety property the whole contract run leans on. A change there must re-run
+  // the contract, not just the fixture test.
+  'apps/editor/integration/scenarios/realForkConnection.isolation.test.ts',
+  // The integration harness itself (config + the JSX-free setup it wires).
+  'apps/editor/integration/vitest.config.ts',
+  // This routing script and its unit test: a change to what "affected" means
+  // must re-derive the matrix against the real run, or the gate could silently
+  // stop firing for the paths it was supposed to cover.
+  'scripts/e2e/affected-e2e-matrix.mjs',
+  'scripts/e2e/__tests__/affected-e2e-matrix.test.mjs',
+  // The CI definition of the acp-contract job (its steps, the fork typecheck/test
+  // it now also runs). Editing it is exactly when the job must be exercised.
+  '.github/workflows/ci.yml',
 ]
 
 function parseArgs(argv) {

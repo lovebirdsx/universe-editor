@@ -87,12 +87,17 @@ pnpm check            # lint + typecheck + test，仅截错误
 > `agent:build` **同时构建 claude-agent-acp 和 codex-acp 两个 fork**；`vendor-install` 只在 lock 哈希变化时才 `npm ci`，且**不带 `--omit=dev`**（2026-10 实测：构建后 fork 的 vitest/tsc 仍在，可直接跑 fork 测试；若某次构建后 devDeps 缺失，先 `npm ci` 重装再跑）。
 > `pnpm check` 偶发的 FileWatcher / DiffEditor / `Channel closed`(IPC) 失败是主仓库既有环境 flake，与本次无关——单独 `pnpm --filter @universe-editor/editor run test` 重跑即绿。
 
+> **三层验证阶梯（由内到外，别只跑最外层）**：
+> 1. **fork 自身**：在 `vendor/codex-acp` 内 `npm run typecheck && npm test`（**Node 24**，见 `.github/workflows/ci.yml` 的 `acp-contract` 作业——它也用 `npm --prefix vendor/codex-acp run …` 跑这两条）。先证明 fork 源码自洽。用例入口 / 哪些是真起进程、哪些是桩、哪里仍是缺口 → 见 [references/acceptance-matrix.md](references/acceptance-matrix.md)。
+> 2. **主仓 wire 契约**：`UNIVERSE_FORK_CONTRACT=1 pnpm --filter @universe-editor/editor test:integration acpForkContract`（须在 `pnpm agent:build` 之后）。证明 editor↔fork 的 ext-method / `_meta` 形状没漂；与 CI `acp-contract` 跑的是同一条。
+> 3. **e2e 按交互影响面**：只有改了**会话 / agent UI / 渲染路径**才需要——`pnpm e2e specs/<相关>.spec.ts` 定向，再 `pnpm e2e:smoke`。纯 fork 内部实现改动、wire 形状不变时，①② 已足够，不必拉全量 e2e。
+
 ### 6. 提交主仓库 submodule 指针
 ```bash
 git switch -c chore/update-codex-acp     # 当前多在 main（默认分支），先开分支
 git diff --submodule=log vendor/codex-acp   # 核对：顶部我方提交 + 其下上游新提交
 git add vendor/codex-acp
-git commit   # chore(agent): 更新 codex-acp 至上游 <版本>（codex <x.y.z> / ACP SDK <a.b>），正文记冲突处理 + Co-Authored-By
+git commit   # chore(agent): 更新 codex-acp 至上游 <版本>（codex <x.y.z> / ACP SDK <a.b>），正文记冲突处理。提交信息不带任何 AI/工具署名（无 Co-Authored-By 之类水印）
 git push -u origin chore/update-codex-acp
 ```
 
@@ -103,7 +108,7 @@ git push -u origin chore/update-codex-acp
 - **`src/index.ts`**：agent 注册入口，双方常同改（见案例 2）。
 - **`src/CodexEventHandler.ts` / `src/CodexAcpServer.ts`**：费用/token 上报，我方改了语义，注意与上游 token-usage 演进的冲突（见案例 3）。
 - **`src/CodexAcpClient.ts`**：skills/memory 注入 + session config，我方大改（见案例 4）。
-- 我方新增、上游无的文件（如 `src/PathUtils.ts`、`CLAUDE.md`、set-session-title 测试）→ 一般无冲突，直接保留。
+- 我方新增、上游无的文件（如 `CLAUDE.md`、set-session-title 测试）→ 一般无冲突，直接保留。⚠️ **`src/PathUtils.ts` 不再是 fork 独有**：上游 #377 已引入该文件，我方只在其上做了「跨平台路径比较」改动——按普通「双方都改」的文件解冲突（保留我方跨平台语义），别再当「上游无、直接照搬我方版本」处理。
 
 ## 案例库
 
@@ -173,7 +178,7 @@ git push -u origin chore/update-codex-acp
 1. 调查阶段全程只读（`git ls-remote` / `gh api` / 只读 git），别在 plan mode 改 submodule。
 2. **真上游是 `agentclientprotocol/codex-acp`，不是已废弃的 `zed-industries/codex-acp`**。设错会出现 merge-base 为空 / 代码倒退的假象；用 `merge-base 命中基线` + `ahead/behind 与我方提交数吻合` 校验。
 3. submodule 是 detached HEAD；**本地 `main` 常已过时**，基线用 `merge-base HEAD upstream/main` 的真实 sha，别信本地 main。**rebase 前先落 `backup-before-rebase-<sha>` 分支**。
-4. rebase 里 `--ours` = 被 rebase 到的上游侧、`--theirs` = 正在重放的我方提交（与平时相反）。`package-lock.json` 取 `--ours` 后 `npm ci` 重生成。
+4. rebase 里 `--ours` = 被 rebase 到的上游侧、`--theirs` = 正在重放的我方提交（与平时相反）。`package-lock.json` 取 `--ours` 后用 `npm ci` 验证；仅 manifest 与 lock 不一致时才用 `npm install` 重建 lock。
 5. `src/index.ts` 冲突：我方表驱动注册 + 上游 prompt `ctx.signal` **两者都要**（案例 2）；先确认 `EXTENSION_METHOD_REGISTRATIONS` 覆盖上游手写方法。**ext-method 的验收必须断言注册层**（SDK 只路由显式注册过的 method，漏注册=methodNotFound、到不了 server 的 switch；见案例 2）。
 6. 费用补丁是 fork 命脉：`_meta.quota` 走 **totalTokenUsage 累计**语义。撞上游 token-usage 快照时**更新快照**并 fixup 进费用提交（案例 3）；别把它改回 lastTokenUsage。
 7. package.json 解冲突当心**重复 key**；version/codex/SDK 依赖取上游。
@@ -188,9 +193,13 @@ git push -u origin chore/update-codex-acp
 16. **fork 改 elicitation 字段后缀 → 同步主仓** `ElicitationCard.toDisplayFields`（`_custom`/`__other`/`_note` 三种并存），并确认配对只在同名 enum 存在时发生（案例 8）。
 17. 上游 bump `@openai/codex` 时，主仓 `packages/node-services/src/agentBinary/flavors.ts` 的 `CODEX_VERSION` 必须同步到 lock 解析版本，并跑 `pnpm --filter @universe-editor/node-services run test`。
 18. **实测真实 codex 行为**：fork 内 skill `run-codex`（`npm run codex-test`）的脚本已与上游 2.1.1 脱节——2026-10 实测在 initialize 后抛 `codexAcpClient.authRequired is not a function`（`CodexAcpClient` 已无该方法），别在它上面耗时间。改走 codex CLI 直连：`vendor/codex-acp/node_modules/.bin/codex exec -s read-only -C <仓库根>`。两个坑：**必须重定向 stdin**（`< /dev/null`），否则卡在 `Reading additional input from stdin` 不动直到超时；网关不通时表现为 `stream disconnected` + HTTP 451，与本仓库改动无关。
+19. **四条版本轴分别验收，不捆绑升级**：① adapter：fork `package.json` 的 npm 包版本及上游基线 SHA；② Codex CLI：`@openai/codex` 的 lock 解析版本，主仓 `packages/node-services/src/agentBinary/flavors.ts` 的 `CODEX_VERSION` 必须与之相符；③ app-server 协议：由该 CLI 的 `app-server generate-ts` 生成的 `src/app-server/` 类型（目录 `v2` 不是 adapter 版本，也不能据此认定存在独立 semver）；④ ACP SDK：fork 与 editor 各自的 lock 解析版本，允许不同，但必须通过跨 SDK 的真实 wire 测试。tag、版本声明、生成类型和运行时能力不能互相替代。
+20. **删补丁必须保留承载该行为的测试**：上游实现取代我方补丁时（案例 7 的 skip），删源码的同时要确认**行为测试**仍在（对齐到上游等价实现，或保留我方回归测试）。只删代码不留测试，下次 rebase 就无从判别该行为是否还在——不可逆的静默回归。`request_user_input` 窄回放正是靠 `RequestUserInputReplay.test.ts` / `ReplayBudget.test.ts` / `ReplayFileRead.test.ts` 守住的。
+21. **`npm ci` 不能“重生成”lock**（fork 内同样如此）：它只按 `package-lock.json` 精确安装，manifest 与 lock 不一致会直接报错退出。只有 manifest 与上游 lock 真有分歧时才 `npm install` 重建，再 `npm ci` 复验（见「冲突套路 / package-lock.json」）。
 
 ## 关键参考路径
 - 根 `CLAUDE.md`「内置 ACP agent」段 + `scripts/release/{vendor-install.mjs,runtime-resources.mjs}`、`package.json` 的 `agent:build`（含两个 fork）
+- **行为验收矩阵**（每条保留行为挂在哪个测试入口、真进程还是桩、缺口在哪）→ [references/acceptance-matrix.md](references/acceptance-matrix.md)
 - `vendor/codex-acp/src/{index.ts,CodexAcpClient.ts,CodexEventHandler.ts,CodexAcpServer.ts,AcpExtensions.ts,PathUtils.ts}`
 - codex-acp 构建：`vendor/codex-acp/build.mjs`（esbuild → dist/index.js，external `@openai/codex`），非 bun
 - 主仓库 `apps/editor/src/renderer/services/acp/`（codex 会话/费用/标题消费端）、`scripts/sync-codex-skill-policy.mjs`（codex skills policy 同步）

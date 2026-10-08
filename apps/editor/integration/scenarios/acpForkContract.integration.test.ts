@@ -11,10 +11,14 @@
  *    - the initialize handshake succeeds cross-SDK-version and returns the
  *      capability / _meta shape the editor relies on;
  *    - the client->agent ext-methods (set_session_title / rewind_session) are
- *      routed and parse params into the expected error/response wire shape. The
- *      claude fork spawns its native CLI at session/new, so this leg runs only
- *      when a real Claude binary is reachable (CLAUDE_CODE_EXECUTABLE); the
- *      name-table + handshake legs need no binary and always run.
+ *      routed and parse params into the expected error/response wire shape. Both
+ *      forks implement these two methods (codex leaves file rollback to the
+ *      editor, but the methods exist); they differ only in what a live session
+ *      costs to open. The claude fork spawns its native CLI at session/new, so its
+ *      routing leg runs only when a real Claude binary is reachable
+ *      (CLAUDE_CODE_EXECUTABLE); the codex leg needs just its dist + bundled
+ *      app-server + an in-memory provider, so it always runs when the dist is
+ *      ready. The name-table + handshake legs need neither.
  *    - the editor's shared ext-method NAME table is internally consistent; and,
  *      crucially, each fork's BUILT dist still declares the wire names the editor
  *      calls — an OFFLINE text scan that runs on CI (no binary), catching a
@@ -49,7 +53,7 @@ import {
   spawnForkConnection,
   withTimeout,
 } from '../fixtures/realForkConnection.js'
-import type { SessionConfigOption } from '@agentclientprotocol/sdk'
+import type { NewSessionResponse, SessionConfigOption } from '@agentclientprotocol/sdk'
 import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 // Handshake + newSession over a real subprocess: allow generous headroom (fork
@@ -184,10 +188,107 @@ function configOptionValues(option: SessionConfigOption | undefined): string[] {
   return option.options.flatMap((o) => ('options' in o ? o.options : [o])).map((o) => o.value)
 }
 
+/**
+ * Codex-only offline session bootstrap: handshake, discover the configurable
+ * openai provider, point the fork at a dummy gateway, then open a session.
+ * Pointing at a provider is pure in-memory state and flips `authRequired()` to
+ * false, so a session opens with no account, no network and no model call.
+ * Shared by the extra-models leg and the ext-method contract below.
+ */
+async function connectCodexOfflineSession(
+  connection: RealForkConnection,
+  cwd: string,
+  extraMeta?: Record<string, unknown>,
+): Promise<NewSessionResponse> {
+  await withTimeout(
+    connection.conn.initialize(CLIENT_INIT_PARAMS),
+    INIT_TIMEOUT_MS,
+    'codex initialize',
+  ).catch((err: unknown) => {
+    throw new Error(`${String(err)}\n--- fork stderr ---\n${connection.stderr()}`)
+  })
+  // provider id 由 fork 声明；按协议发现可配置槽位，避免依赖上游的旧命名。
+  const providers = await withTimeout(
+    connection.conn.unstable_listProviders({}),
+    CALL_TIMEOUT_MS,
+    'codex listProviders',
+  )
+  const gatewayProvider = providers.providers.find(
+    (p) => !p.required && p.supported.includes('openai'),
+  )
+  if (!gatewayProvider) {
+    throw new Error(
+      `codex advertises no configurable openai provider: ${JSON.stringify(providers.providers)}\n--- fork stderr ---\n${connection.stderr()}`,
+    )
+  }
+  await withTimeout(
+    connection.conn.unstable_setProvider({
+      providerId: gatewayProvider.providerId,
+      apiType: 'openai',
+      baseUrl: 'https://gateway.invalid/v1',
+    }),
+    CALL_TIMEOUT_MS,
+    'codex setProvider',
+  )
+  return withTimeout(
+    connection.conn.newSession({
+      cwd,
+      mcpServers: [],
+      ...(extraMeta ? { _meta: extraMeta } : {}),
+    }),
+    INIT_TIMEOUT_MS,
+    'codex newSession',
+  ).catch((err: unknown) => {
+    throw new Error(`${String(err)}\n--- fork stderr ---\n${connection.stderr()}`)
+  })
+}
+
+/** The JSON-RPC error a rejected wire call carried. */
+interface WireError {
+  readonly code: number
+  readonly message: string
+  readonly data?: unknown
+}
+
+/**
+ * Await a wire call that MUST reject, and return its JSON-RPC error.
+ *
+ * Stricter than `rejects.toThrow(/.../)` on purpose: a numeric `code` is
+ * required, so a timeout or a transport failure can never masquerade as the
+ * error contract under test. stderr is attached when the shape is wrong.
+ */
+async function wireError(
+  label: string,
+  call: Promise<unknown>,
+  connection: RealForkConnection,
+): Promise<WireError> {
+  const outcome = await call.then(
+    () => undefined,
+    (err: unknown) => err,
+  )
+  if (outcome === undefined) {
+    throw new Error(`${label}: expected a rejection\n--- fork stderr ---\n${connection.stderr()}`)
+  }
+  const candidate = outcome as { code?: unknown; message?: unknown; data?: unknown }
+  if (typeof candidate.code !== 'number') {
+    throw new Error(
+      `${label}: rejected without a JSON-RPC code: ${String(outcome)}\n--- fork stderr ---\n${connection.stderr()}`,
+    )
+  }
+  return { code: candidate.code, message: String(candidate.message), data: candidate.data }
+}
+
+/** Count of zod parse messages a parser rejection attached to `field`. */
+function zodFieldErrors(data: unknown, field: string): number {
+  const entry = (data as Record<string, { _errors?: unknown[] } | undefined> | undefined)?.[field]
+  return entry?._errors?.length ?? 0
+}
+
 // One shared handshake suite per fork. Both forks implement the ACP handshake and
-// session/new without auth; only claude implements the universe-editor/* request
-// ext-methods (rewind/title are Claude-only features — codex does file rollback
-// client-side), so those assertions are claude-scoped.
+// session/new without auth. Both also implement the universe-editor/* request
+// ext-methods (rewind/title — codex only leaves FILE rollback to the editor), but
+// the live legs for those are split by boot cost: claude's needs a native binary,
+// codex's needs only its dist, so codex's sits in its own suite below.
 function handshakeSuite(fork: ForkId) {
   describe.skipIf(!distReady(fork))(`${fork} fork contract (real dist)`, () => {
     let cwd: string
@@ -198,8 +299,8 @@ function handshakeSuite(fork: ForkId) {
       connection = spawnForkConnection(fork, cwd)
     })
 
-    afterEach(() => {
-      connection.dispose()
+    afterEach(async () => {
+      await connection.dispose()
       try {
         removeDirWithRetry(cwd)
       } catch {
@@ -245,52 +346,9 @@ function handshakeSuite(fork: ForkId) {
     // set_config_option mutates pure in-memory session state — no network.
     if (fork === 'codex') {
       it('session/new surfaces client-injected extra models and accepts switching to one', async () => {
-        await withTimeout(
-          connection.conn.initialize(CLIENT_INIT_PARAMS),
-          INIT_TIMEOUT_MS,
-          'codex initialize (extra models leg)',
-        ).catch((err: unknown) => {
-          throw new Error(`${String(err)}\n--- fork stderr ---\n${connection.stderr()}`)
-        })
-        // provider id 由 fork 声明；按协议发现可配置槽位，避免依赖上游的旧命名。
-        const providers = await withTimeout(
-          connection.conn.unstable_listProviders({}),
-          CALL_TIMEOUT_MS,
-          'codex listProviders',
-        )
-        const gatewayProvider = providers.providers.find(
-          (p) => !p.required && p.supported.includes('openai'),
-        )
-        if (!gatewayProvider) {
-          throw new Error(
-            `codex advertises no configurable openai provider: ${JSON.stringify(providers.providers)}\n--- fork stderr ---\n${connection.stderr()}`,
-          )
-        }
-        // Configuring the gateway provider is pure in-memory state; it also
-        // flips authRequired() to false so the session open passes without any
-        // account on the test machine.
-        await withTimeout(
-          connection.conn.unstable_setProvider({
-            providerId: gatewayProvider.providerId,
-            apiType: 'openai',
-            baseUrl: 'https://gateway.invalid/v1',
-          }),
-          CALL_TIMEOUT_MS,
-          'codex setProvider',
-        )
-        const ns = await withTimeout(
-          connection.conn.newSession({
-            cwd,
-            mcpServers: [],
-            _meta: {
-              extraModels: [EXTRA_MODEL_ID],
-              extraModelEffort: [{ id: EXTRA_MODEL_ID, effortLevels: ['low', 'high'] }],
-            },
-          }),
-          INIT_TIMEOUT_MS,
-          'codex newSession with extraModels',
-        ).catch((err: unknown) => {
-          throw new Error(`${String(err)}\n--- fork stderr ---\n${connection.stderr()}`)
+        const ns = await connectCodexOfflineSession(connection, cwd, {
+          extraModels: [EXTRA_MODEL_ID],
+          extraModelEffort: [{ id: EXTRA_MODEL_ID, effortLevels: ['low', 'high'] }],
         })
         const modelOption = ns.configOptions?.find((o) => o.id === 'model')
         expect(configOptionValues(modelOption)).toContain(EXTRA_MODEL_ID)
@@ -335,12 +393,12 @@ function handshakeSuite(fork: ForkId) {
 handshakeSuite('claude')
 handshakeSuite('codex')
 
-// Claude-only: the request-style ext-methods. The claude fork's `session/new`
-// eagerly spawns the Claude native CLI, so these run only when a real binary is
-// reachable via CLAUDE_CODE_EXECUTABLE (local dev with Claude installed); CI
-// without a binary skips them while still enforcing the offline core above. We
-// drive them WITHOUT a real prompt and assert the fork routes the method and
-// parses its params into the documented error/response wire shape.
+// Claude's live ext-method legs. The claude fork's `session/new` eagerly spawns
+// the Claude native CLI, so these run only when a real binary is reachable via
+// CLAUDE_CODE_EXECUTABLE (local dev with Claude installed); CI without a binary
+// skips them while still enforcing the offline core above. We drive them WITHOUT
+// a real prompt and assert the fork routes the method and parses its params into
+// the documented error/response wire shape.
 const claudeExtReady = distReady('claude') && claudeBinaryAvailable()
 
 describe.skipIf(!claudeExtReady)('claude ext-method wire contract (real dist)', () => {
@@ -364,8 +422,8 @@ describe.skipIf(!claudeExtReady)('claude ext-method wire contract (real dist)', 
     sessionId = ns.sessionId
   })
 
-  afterEach(() => {
-    connection.dispose()
+  afterEach(async () => {
+    await connection.dispose()
     try {
       removeDirWithRetry(cwd)
     } catch {
@@ -493,5 +551,135 @@ describe.skipIf(!claudeExtReady)('claude ext-method wire contract (real dist)', 
         'set_session_title empty',
       ),
     ).rejects.toThrow(/title must be non-empty|internal error/i)
+  })
+})
+
+// Codex's live ext-method legs. Codex implements BOTH request ext-methods the
+// editor calls — `rewind_session` and `set_session_title` (the older wording that
+// called them "Claude-only" was wrong: codex merely leaves FILE rollback to the
+// editor, which is a different thing from not having the method). Unlike claude,
+// opening a codex session needs no native binary, so this suite runs whenever the
+// dist is ready. Params are driven WITHOUT a prompt and asserted down to the
+// JSON-RPC error code, so a fork-side change in param parsing or routing fails
+// here instead of silently degrading in the editor.
+describe.skipIf(!distReady('codex'))('codex ext-method wire contract (real dist)', () => {
+  let cwd: string
+  let connection: RealForkConnection
+  let sessionId: string
+
+  beforeEach(async () => {
+    cwd = mkTempDir('acp-contract-codex-ext-')
+    connection = spawnForkConnection('codex', cwd)
+    const ns = await connectCodexOfflineSession(connection, cwd)
+    sessionId = ns.sessionId
+  })
+
+  afterEach(async () => {
+    await connection.dispose()
+    try {
+      removeDirWithRetry(cwd)
+    } catch {
+      // best-effort
+    }
+  })
+
+  // SDK's zod parser rejects a missing/typed-wrong field BEFORE the handler runs,
+  // and its `data` names the offending key — that shape is what distinguishes a
+  // params-contract failure from a handler failure.
+  it('set_session_title rejects a missing title with a param-parser invalid-params', async () => {
+    const err = await wireError(
+      'set_session_title missing title',
+      withTimeout(
+        connection.conn.extMethod(ACP_EXT_METHODS.setSessionTitle, { sessionId }),
+        CALL_TIMEOUT_MS,
+        'codex set_session_title',
+      ),
+      connection,
+    )
+    expect(err.code).toBe(-32602)
+    expect(zodFieldErrors(err.data, 'title')).toBeGreaterThan(0)
+  })
+
+  it('set_session_title rejects a whitespace-only title in the handler', async () => {
+    const err = await wireError(
+      'set_session_title whitespace title',
+      withTimeout(
+        connection.conn.extMethod(ACP_EXT_METHODS.setSessionTitle, {
+          sessionId,
+          title: '   ',
+        }),
+        CALL_TIMEOUT_MS,
+        'codex set_session_title whitespace',
+      ),
+      connection,
+    )
+    // Same code as the parser path, but a bare handler-thrown invalidParams: no
+    // parser `data`. Keeping the two apart is the point of asserting `data`.
+    expect(err.code).toBe(-32602)
+    expect(err.data).toBeUndefined()
+  })
+
+  it('rewind_session rejects a missing messageId with a param-parser invalid-params', async () => {
+    const err = await wireError(
+      'rewind_session missing messageId',
+      withTimeout(
+        connection.conn.extMethod(ACP_EXT_METHODS.rewindSession, { sessionId, dryRun: true }),
+        CALL_TIMEOUT_MS,
+        'codex rewind_session',
+      ),
+      connection,
+    )
+    expect(err.code).toBe(-32602)
+    expect(zodFieldErrors(err.data, 'messageId')).toBeGreaterThan(0)
+  })
+
+  it('rewind_session with valid params for an unknown session reaches the handler', async () => {
+    const unknownSessionId = 'no-such-session'
+    const err = await wireError(
+      'rewind_session unknown session',
+      withTimeout(
+        connection.conn.extMethod(ACP_EXT_METHODS.rewindSession, {
+          sessionId: unknownSessionId,
+          messageId: 'anchor',
+          dryRun: true,
+        }),
+        CALL_TIMEOUT_MS,
+        'codex rewind_session unknown session',
+      ),
+      connection,
+    )
+    // -32603, not -32601: the request routed and parsed, and it is the handler's
+    // own session lookup that failed — the precise "you reached the handler"
+    // contract. A typo'd method name or a dropped registration would be -32601.
+    expect(err.code).toBe(-32603)
+    expect(err.data).toMatchObject({ details: `Session ${unknownSessionId} not found` })
+  })
+
+  // LIMITATION (measured, not assumed): the bundled app-server cannot read an
+  // empty thread's turns yet, so `dryRun` — which reads the thread to test the
+  // anchor — fails with an internal error instead of returning the
+  // `{canRewind:false}` that a live history produces for an unknown anchor.
+  // There is no way to get turns without sending a prompt, which this suite must
+  // not do, so the limitation is pinned exactly rather than asserted loosely.
+  // If the app-server gains turn reads, replace this with the `{canRewind:false}`
+  // check for a non-existent anchor.
+  it('rewind_session dryRun on a session with no turns surfaces the known app-server limitation', async () => {
+    const err = await wireError(
+      'rewind_session empty session dryRun',
+      withTimeout(
+        connection.conn.extMethod(ACP_EXT_METHODS.rewindSession, {
+          sessionId,
+          messageId: 'no-such-message',
+          dryRun: true,
+        }),
+        CALL_TIMEOUT_MS,
+        'codex rewind_session empty session',
+      ),
+      connection,
+    )
+    expect(err.code).toBe(-32603)
+    expect((err.data as { details?: string } | undefined)?.details).toMatch(
+      /list_turns is not supported/,
+    )
   })
 })

@@ -200,11 +200,44 @@ test('a change to the editor↔fork wire surface gates the ACP contract test on'
   }
 })
 
+test('a change to the contract harness / routing / CI definition gates the test on', () => {
+  // The harness the contract runs in (integration config), the isolation fixture
+  // test that guards it, the routing script + its test, and the CI job that runs
+  // it — none are "wire surface" per se, but each edit is exactly when the
+  // contract must be re-run to prove the gate still fires and still passes.
+  for (const p of [
+    'apps/editor/integration/vitest.config.ts',
+    'apps/editor/integration/scenarios/realForkConnection.isolation.test.ts',
+    'scripts/e2e/affected-e2e-matrix.mjs',
+    'scripts/e2e/__tests__/affected-e2e-matrix.test.mjs',
+    '.github/workflows/ci.yml',
+  ]) {
+    assert.equal(computeShouldRunAcpContract([p]), true, `${p} should gate the contract test on`)
+  }
+})
+
+test('a submodule gitlink bump triggers the ACP contract test', () => {
+  // `git diff --name-only` reports a submodule pointer change as the submodule
+  // PATH (no trailing slash), e.g. `vendor/codex-acp` — never a file inside it.
+  // The `vendor/` prefix must still match, or bumping a fork pointer while
+  // touching nothing else would skip the contract run entirely.
+  for (const p of ['vendor/codex-acp', 'vendor/claude-agent-acp']) {
+    assert.equal(
+      computeShouldRunAcpContract([p]),
+      true,
+      `${p} gitlink should gate the contract test on`,
+    )
+  }
+})
+
 test('an unrelated change does NOT trigger the ACP contract test', () => {
   for (const p of [
     'apps/editor/src/renderer/workbench/sidebar/SideBar.tsx',
     'packages/platform/src/ipc/ipc.ts',
     'docs/user/foo.md',
+    // Ordinary docs — including the test doc that DESCRIBES this gating — must
+    // never trigger the expensive fork run.
+    'docs/development/testing.md',
   ]) {
     assert.equal(computeShouldRunAcpContract([p]), false, `${p} should not trigger the contract test`)
   }
