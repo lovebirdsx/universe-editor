@@ -55,9 +55,10 @@ renderer 命令 dryRun 预览 → 确认框（有文件改动=三按钮：撤销
 #### fork（vendor `unstable_forkSession`）
 ```
 renderer forkSession(sid, messageId?) → conn.unstable_forkSession({sessionId, cwd, _meta:{rewindTo:messageId}})
-  ⟨vendor⟩: resolveMessageUuid(rewindTo) → messageUuidBefore(锚点)=前驱 → sdkForkSession(sid,{dir,upToMessageId:前驱})
+  ⟨vendor⟩: forkSliceBefore(rewindTo)=锚点前驱 → sdkForkSession(sid,{dir,upToMessageId:前驱})
   → 返回新 sessionId → renderer temp lease 丢弃 → resumeSession(新id)（自开 lease 做 session/load+replay+setActive）
 ```
+无 `_meta.rewindTo`（tip fork / 命令面板 / side task）= 整份复制，语义不变。有 `rewindTo` 时**分叉点解析失败即报错**（`RequestError.invalidParams`，renderer 侧弹 "Fork failed: …"），绝不静默退回整份复制——见已修 bug #7。
 
 ### 文件地图
 
@@ -69,9 +70,11 @@ renderer forkSession(sid, messageId?) → conn.unstable_forkSession({sessionId, 
 | `prompt()` | 从 `_meta.messageId` 读 client uuid 当 SDK uuid + eager 记 `messageIdToUuid` |
 | `RewindSessionRequest` | `{sessionId, messageId, dryRun?, rewindFiles?}`（rewindFiles 默认 true=回滚） |
 | `rewindSession()` | 三步 rewind：rewindFiles + truncateTranscriptBefore + teardown/resume/replay |
-| `unstable_forkSession()` | 读 `_meta.rewindTo` → 前驱 → `sdkForkSession({upToMessageId})` 写新文件 |
-| `resolveMessageUuid(sid,msgId)` | ACP messageId → SDK uuid（查 `messageIdToUuid`） |
-| `messageUuidBefore(sid,targetUuid,dir?)` | 找 target 的**前驱** uuid（inclusive API 排除锚点用）；首条返 undefined |
+| `unstable_forkSession()` | 读 `_meta.rewindTo` → 前驱 → `sdkForkSession({upToMessageId})` 写新文件；无锚点=整份复制 |
+| `forkSliceBefore(sid,msgId,dir?)` | 锚点解析 + 校验（**唯一入口**）：live 映射 → 磁盘 `getSessionMessages` 匹配 → 折叠 prompt 兜底；解析不到/锚点是首条 → 抛 `RequestError.invalidParams` |
+| `foldedPromptForkPoint(sid,msgId,chain)` | 折叠（steered）prompt 的切点：`readTranscriptEntries` 找 `isQueuedCommandEntry && attachment.source_uuid===msgId` 的行，取其 `parentUuid`（**须在有效链上**，否则算未知） |
+| `resolveMessageUuid(sid,msgId)` | ACP messageId → SDK uuid（只查 `messageIdToUuid`，**仅 live 进程有效**） |
+| `messageUuidBefore(sid,targetUuid,dir?)` | 找 target 的**前驱** uuid（inclusive API 排除锚点用）；首条返 undefined。现只服务 rewind |
 | `truncateTranscriptBefore(sid,anchorUuid,dir?)` | **物理截断磁盘 JSONL**：定位文件→删 `uuid===anchor` 行及之后→tmp+rename 原子写。best-effort（找不到只 log 不抛） |
 | `findTranscriptFile(sid,dir?)` | 先试 encoded-cwd 路径，兜底扫 `CLAUDE_CONFIG_DIR/projects/*/<sid>.jsonl` |
 | `replaySessionHistory(sid,{stopBeforeUuid?})` | replay 时遇锚点 break（磁盘读的是完整 transcript，须自己停在锚点前） |
@@ -108,6 +111,7 @@ renderer forkSession(sid, messageId?) → conn.unstable_forkSession({sessionId, 
 4. **rewind/fork 后运行期 model/effort 丢失回落默认**（claude 专属，codex 无因 thread 存活）：claude rewind teardown+`createSession` 重建 Query 时用的是**最初** `newSessionParams`，effort 又从 settings.json 重新 seed——运行期 `setConfigOption` 改的 model/effort/fast/agent 从未写回。→ vendor `rewindSession` teardown **前** `snapshotRuntimeConfig(session)`（从 live `configOptions` 读 model/mode/effort/fast/agent，model 优先序），重建后 `reapplyRuntimeConfig` 按序走 `setSessionConfigOption`（复用 model→effort 级联），逐项 best-effort（失败只 log）。fork 侧不重建进程但**新 history 行没继承源配置**→ renderer `forkSession` 注册行时带 `snapshotConfigSelections(live.configOptions.get())` 的 `configOptions`/`configLabels`，resume 的 `setConfigDesired` 借现成 flush 机制 push 回 fork 线程（fork 侧零新增 push 逻辑）。
 5. **rewind 后权限模式真实回落 + UI 配置显示与 agent 脱节**（bug #4 机制的两个遗漏）：(a) `snapshotRuntimeConfig` 的 order 原本**缺 `MODE_CONFIG_ID`** → 重建 `createSession` 从 settings `permissions.defaultMode` 重新 seed，bypassPermissions 静默回落 default（transcript 里 rewind 后 prompt 的 `permissionMode:"default"` 可证）。修=order 加 MODE 且必须排在 MODEL **之后**——model 切换的 `applyConfigOptionValue` 会 clamp mode，先 push mode 会被随后的 model push 打回。(b) `reapplyRuntimeConfig` 走的 `setSessionConfigOption` 只把更新后的 bag 放在 RPC **响应**里，而 rewind 场景调用方是 vendor 自己 → client 永远收不到重放后的权威配置，UI 显示重建默认值（如 Sonnet/Manual）而 agent 实际跑快照配置（haiku）。修=reapply 末尾主动发一次 `config_option_update`（renderer `ingestUpdate` 无条件处理、replay 窗口不拦、`_pendingPushes` 此时为空不会误吞）。
 6. **正常 resume 后 mode/effort 被打回默认**（被误认为 #5 的修复所致，实为既有提交 `dd49937` 的行为被 `pnpm agent:build` 重建 dist 才激活——排查此类"我改完就坏"先做日志考古+核对 dist mtime，别只看自己的 diff）：`reconcileResumedSessionModel`（issue #845 的 perf 后台任务）在每次 session/load 后读 live model（`getContextUsage`，秒级），与 reported 不一致时经 `updateConfigOption` **广播整个 configOptions bag**——但 bag 里只有 model 是权威修正值，mode/effort 仍是重建 seed（default/xhigh）；renderer `ingestUpdate` 对 known 非 provisional option verbatim 应用（设计如此，agent 主动变更必须赢），无法区分"权威修正"与"陈旧 seed"，恢复的 mode/effort 被打回。修=**声明式部分更新**：vendor `updateConfigOption` 加 `opts.declareChanged`，对比 apply 前后 bag 把真实变化的 id（目标项+连带 clamp/rebuild）写进广播 `_meta["universe-editor/changedConfigIds"]`（仅 reconcile 调用点传入）；renderer `acpSessionUpdateMeta.readChangedConfigIds` 读声明，`ingestUpdate` 把 source 过滤成声明子集、且声明时不做全量替换只 merge。无 `_meta` 的广播保持全量语义（rewind #5(b)、plan 切换、setSessionMode 均不受影响）。
+7. **从休眠会话「Fork from here」得到整份复制**：分叉点解析只查 live `messageIdToUuid`（agent 进程内存），而 fork 走临时租约、**常落在新 spawn 的进程**（源会话被空闲回收 / 编辑器重启）→ 映射为空 → 省略 `upToMessageId` → SDK 文档 "If omitted, full copy" **静默整份复制**（磁盘可验：fork 文件每行都带 `forkedFrom`，1:1 覆盖源的全部消息）。修=`forkSliceBefore` 以**磁盘 transcript** 为唯一真相兜底（对齐 AIR 路径 `fork-session.ts` 与 codex 侧从持久化 thread 解析的做法），并让解析失败**报错**而非静默降级——与 `rewindSession` / AIR 路径的失败形态一致。**别改回"不唤醒源会话就静默复制"**：`ForkTipFooter` 的设计前提正是"fork 读磁盘而非 live 会话，无需唤醒"。
 
 ### 常见任务 → 改哪里
 
@@ -136,7 +140,7 @@ renderer forkSession(sid, messageId?) → conn.unstable_forkSession({sessionId, 
 
 - **vendor**（`src/tests/acp-agent.test.ts`）：
   - rewind describe：dryRun 预览 / canRewind:false 短路（都在 step2 前，可不 spawn 真 Query）/ rewindFiles:false（`vi.spyOn` 隔离 teardown/createSession/replay/truncateTranscriptBefore，验证跳过 rewindFiles 仍截断）/ 运行期配置 reapply（mock `createSession` 装一个 seed 成默认值的 recreated session，断言 setModel/setPermissionMode 被调 + 最终 configOptions）/ reapply 后 `config_option_update` 通知（client mock 的 `sessionUpdate` 用 `vi.fn` 捕获再过滤）。
-  - fork describe：`vi.mock` 加 `forkSession`(vi.fn) + `getSessionMessages`（默认 `vi.fn(actual.getSessionMessages)` 保真实现，新测试 `mockResolvedValueOnce` 覆盖），验证 upToMessageId=前驱。
+  - fork describe：`vi.mock` 加 `forkSession`(vi.fn) + `getSessionMessages`（默认 `vi.fn(actual.getSessionMessages)` 保真实现，新测试 `mockResolvedValueOnce` 覆盖），验证 upToMessageId=前驱；另有 **非 resident（不 inject session，磁盘兜底）**、**折叠 prompt**（`vi.spyOn(agent as any,"readTranscriptEntries")` 喂带 `attachment.source_uuid` 的 attachment 行）、**解析失败/锚点为首条 → reject 且 `forkSession` 未被调**四类用例守护新语义。
   - truncate describe：**真实 tmp 文件**建在 `CLAUDE_CONFIG_DIR/projects/__rewind_trunc_test_<uuid>/`，afterEach 清理；验证删锚点及之后/首行清空/锚点不存在原样/文件不存在 no-throw。`CLAUDE_CONFIG_DIR` 已 export。
   - **2 个既有 Windows 反斜杠路径失败**（`toDisplayPath`/`Read src\main.ts`）与本功能无关，CI 上绿。
 - **renderer**：`AcpSessionService.test.ts`（rewind 发对 messageId+clear tracker、dryRun 不 cancel、rewindFiles:false 透传+不清 tracker、非 claude no-op、fork `_meta.rewindTo`+setActive）；`agentRewindActions.test.ts`（预览+三按钮各分支+回填、无能力 no-op、fork 开 editor/foreign 提示）；`UserMessageItem.test.tsx`（按钮可见性+委托 arg）。stub 见坑 #9。

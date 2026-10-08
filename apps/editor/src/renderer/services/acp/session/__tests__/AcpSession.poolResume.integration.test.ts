@@ -106,6 +106,7 @@ class StubAgent implements Agent {
   connection?: AgentSideConnection
   readonly loadSessionCalls: string[] = []
   readonly forkSessionCalls: string[] = []
+  readonly forkRewindTo: (string | undefined)[] = []
   newSessionCount = 0
   initializeCount = 0
   private _seq = 0
@@ -136,6 +137,8 @@ class StubAgent implements Agent {
 
   unstable_forkSession(params: ForkSessionRequest): Promise<ForkSessionResponse> {
     this.forkSessionCalls.push(params.sessionId)
+    const rewindTo = (params._meta as { rewindTo?: unknown } | undefined)?.rewindTo
+    this.forkRewindTo.push(typeof rewindTo === 'string' ? rewindTo : undefined)
     return Promise.resolve({
       sessionId: `fork-${++this._forkSeq}`,
     } as unknown as ForkSessionResponse)
@@ -624,12 +627,21 @@ describe('ACP fork on a dormant source — fresh process, source stays asleep', 
     })
     expect(s.status.get()).toBe('closed')
 
-    const fork = await withTimeout(built.svc.forkSession(s.id), 3000, 'fork a dormant session')
+    // Fork from a specific message (the "Fork from here" button) — the anchor
+    // has to reach the agent even though the source is not resident: the agent
+    // resolves it from the transcript on disk (see vendor `forkSliceBefore`).
+    const anchor = 'anchor-message-1'
+    const fork = await withTimeout(
+      built.svc.forkSession(s.id, anchor),
+      3000,
+      'fork a dormant session',
+    )
 
     // The pooled entry is gone, so the fork RPC had to come up on a NEW process
     // — the link the stub-client tests (a pool-less fake) cannot exercise.
     expect(built.bridge.starts()).toBe(2)
     expect(built.bridge.agents[1]!.forkSessionCalls).toEqual([sourceAgentId])
+    expect(built.bridge.agents[1]!.forkRewindTo).toEqual([anchor])
     expect(fork.id).toBe('fork-1')
     // Forking never wakes the source: it is still sealed and asleep.
     expect(s.status.get()).toBe('closed')

@@ -2304,7 +2304,9 @@ export class AcpSessionService
               planPolicy,
             ),
             // Ask the fork to truncate at this user turn (回退 point) instead of the
-            // session tip. Unknown/absent id → the agent forks from the tip.
+            // session tip. Absent id → the agent forks from the tip; an id the agent
+            // cannot resolve to a transcript message (deleted/corrupt transcript) is
+            // REFUSED — it must not hand back a full copy of the source session.
             ...(messageId !== undefined ? { rewindTo: messageId } : {}),
           },
         }),
