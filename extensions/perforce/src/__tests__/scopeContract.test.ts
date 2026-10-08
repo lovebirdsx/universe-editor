@@ -14,6 +14,7 @@ import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 import {
   canonicalLocalPath,
   localPathKey,
+  MACOS_PATH_STYLE,
   pathIsUnderKey,
   resolveScope,
   scopeCoversPath,
@@ -37,7 +38,7 @@ interface FixtureEntry {
 
 interface FixtureCase {
   readonly name: string
-  readonly platform: 'any' | 'windows' | 'unix'
+  readonly platform: 'any' | 'windows' | 'macos' | 'unix'
   readonly config?: string | null
   readonly targets?: readonly FixtureEntry[]
   readonly cliExcludes?: readonly FixtureEntry[]
@@ -61,7 +62,7 @@ interface FixtureFileBytesCase {
 
 interface Fixture {
   readonly version: number
-  readonly roots: { readonly windows: string; readonly unix: string }
+  readonly roots: { readonly windows: string; readonly macos: string; readonly unix: string }
   readonly cases: readonly FixtureCase[]
   readonly fileBytes: { readonly cases: readonly FixtureFileBytesCase[] }
 }
@@ -70,9 +71,14 @@ const fixture = JSON.parse(
   readFileSync(new URL('./fixtures/scope-contract.json', import.meta.url), 'utf8'),
 ) as Fixture
 
+/** 向量声明的档位 → 求值风格与 root。三档是「分隔符形状 × 大小写身份」的组合，互不相容：
+ *  macOS 与另外两档都不同（分隔符同 unix、大小写同 windows），所以它单列一档。 */
 function styleFor(fixtureCase: FixtureCase): { style: PathStyle; root: string } {
   if (fixtureCase.platform === 'windows') {
     return { style: WINDOWS_PATH_STYLE, root: fixture.roots.windows }
+  }
+  if (fixtureCase.platform === 'macos') {
+    return { style: MACOS_PATH_STYLE, root: fixture.roots.macos }
   }
   if (fixtureCase.platform === 'unix') {
     return { style: UNIX_PATH_STYLE, root: fixture.roots.unix }

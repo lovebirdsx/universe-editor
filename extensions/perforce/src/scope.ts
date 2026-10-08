@@ -44,11 +44,13 @@ export interface PathStyle {
 
 export const WINDOWS_PATH_STYLE: PathStyle = { separator: '\\', foldCase: true }
 /** macOS 与 Linux 共用分隔符形状，但只有 macOS 折大小写——所以 sep 与 fold 是两个字段。 */
+export const MACOS_PATH_STYLE: PathStyle = { separator: '/', foldCase: true }
 export const UNIX_PATH_STYLE: PathStyle = { separator: '/', foldCase: false }
 
 export function hostPathStyle(): PathStyle {
   if (process.platform === 'win32') return WINDOWS_PATH_STYLE
-  return { separator: '/', foldCase: process.platform === 'darwin' }
+  if (process.platform === 'darwin') return MACOS_PATH_STYLE
+  return UNIX_PATH_STYLE
 }
 
 /** 一个已定位的范围入口：绝对本地路径（保留原始大小写，盘符统一大写）+ 类型。 */
