@@ -23,6 +23,7 @@ import {
   effectiveEntryAuthority,
   isDescendantOrEqual,
   isForeignWorkspaceSession,
+  isTranscriptlessEmptyRow,
   sideTaskParentOf,
   type AcpSessionHistoryEntry,
 } from '../acpSessionHistory.js'
@@ -2841,5 +2842,43 @@ describe('sideTaskParentOf', () => {
 
   it('returns undefined when the parent row is gone (cascade-deleted)', () => {
     expect(sideTaskParentOf([row('side', 'parent')], 'side')).toBeUndefined()
+  })
+})
+
+describe('isTranscriptlessEmptyRow', () => {
+  const row = (
+    id: string,
+    flags: { hasMessages?: boolean; sideTaskOf?: string } = {},
+  ): AcpSessionHistoryEntry => ({
+    id,
+    agentId: 'fake',
+    sessionIdOnAgent: id,
+    title: id,
+    createdAt: 1,
+    lastUsedAt: 1,
+    ...(flags.hasMessages !== undefined ? { hasMessages: flags.hasMessages } : {}),
+    ...(flags.sideTaskOf !== undefined ? { sideTaskOf: flags.sideTaskOf } : {}),
+  })
+
+  it('rebuilds a row we know was never messaged', () => {
+    expect(isTranscriptlessEmptyRow(row('empty', { hasMessages: false }))).toBe(true)
+  })
+
+  it('never rebuilds a side task, even though the fork leaves it empty', () => {
+    expect(
+      isTranscriptlessEmptyRow(row('side', { hasMessages: false, sideTaskOf: 'parent' })),
+    ).toBe(false)
+  })
+
+  it('resumes a messaged row', () => {
+    expect(isTranscriptlessEmptyRow(row('used', { hasMessages: true }))).toBe(false)
+  })
+
+  it('resumes rows of unknown message count (hydrate sweep imports carry no flag)', () => {
+    expect(isTranscriptlessEmptyRow(row('imported'))).toBe(false)
+  })
+
+  it('resumes when there is no row at all', () => {
+    expect(isTranscriptlessEmptyRow(undefined)).toBe(false)
   })
 })

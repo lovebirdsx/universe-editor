@@ -582,6 +582,30 @@ export function directSideTaskChildren(
     .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
 }
 
+/**
+ * Whether a row we created is known to hold nothing on either side: never
+ * messaged locally (`hasMessages === false`) and with no agent-side transcript
+ * either. Three decisions hinge on that single fact, and re-deriving it inline
+ * is how they drifted apart:
+ *  - reconnect: `session/resume` can only answer resourceNotFound, so the
+ *    session must be rebuilt with `session/new` or it burns the recovery budget;
+ *  - MCP reload: same — the session is replaced instead of close+resumed;
+ *  - resume failure: such a row is discarded silently (no toast), because there
+ *    is nothing left to retry.
+ *
+ * A side task is the one empty session that DOES have an agent-side transcript:
+ * `forkSideTask` copies the parent's full history on the agent before the child
+ * sends anything. So it is never transcriptless — rebuilding it would silently
+ * throw the forked baseline away (and its `sideTaskOf` / read-only mode / model
+ * pin with it), and discarding its row would hide the task from its parent.
+ *
+ * Rows the hydrate sweep imported from `session/list` carry no `hasMessages` at
+ * all — unknown counts as "has a transcript", keeping the agent authoritative.
+ */
+export function isTranscriptlessEmptyRow(entry: AcpSessionHistoryEntry | undefined): boolean {
+  return entry?.hasMessages === false && entry.sideTaskOf === undefined
+}
+
 /** The row `sessionId` was forked from. `undefined` for an ordinary session, and
  *  also when the parent row is gone (cascade-deleted) — in both cases there is
  *  nowhere for the parent-session affordance to go. */

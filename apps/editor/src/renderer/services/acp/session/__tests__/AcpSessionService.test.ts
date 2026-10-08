@@ -4616,6 +4616,85 @@ describe('AcpSessionService — session MCP selection', () => {
     svc.dispose()
   })
 
+  // The mirror of the case above: a side task is created empty too, but the
+  // agent DOES hold a transcript for it — the forked baseline — and its row is
+  // the only home of the side-task identity plus the read-only mode and model
+  // pins. Rebuilding it threw all of that away.
+  it('resumes an empty side task instead of replacing it, keeping its row and pins', async () => {
+    const bag: readonly SessionConfigOption[] = [
+      {
+        id: 'mode',
+        name: 'Mode',
+        category: 'mode',
+        type: 'select',
+        currentValue: 'bypassPermissions',
+        options: [
+          { value: 'bypassPermissions', name: 'Bypass permissions' },
+          { value: 'dontAsk', name: "Don't Ask" },
+        ],
+      } as unknown as SessionConfigOption,
+      {
+        id: 'model',
+        name: 'Model',
+        category: 'model',
+        type: 'select',
+        currentValue: 'opus',
+        options: [
+          { value: 'opus', name: 'Opus' },
+          { value: 'haiku', name: 'Haiku' },
+        ],
+      } as unknown as SessionConfigOption,
+    ]
+    const client = new FakeAcpClientService({
+      stubOptions: { loadSession: true, loadSessionConfigOptions: bag },
+    })
+    const config = new ConfigurationService()
+    await config.update('acp.mcpServers', {
+      fs: { command: 'node', args: [] },
+      docs: { command: 'node', args: [] },
+    })
+    const { svc, history, agentDefaults } = makeService(client, config)
+    // Exactly the row forkSideTask leaves behind before the child's first turn.
+    history.add({
+      agentId: 'claude-code',
+      sessionIdOnAgent: 'agent-side-empty',
+      title: 'side chat',
+      hasMessages: false,
+      sideTaskOf: 'agent-parent',
+      configOptions: { mode: 'dontAsk', model: 'haiku' },
+      configLabels: { mode: "Don't Ask", model: 'Haiku' },
+    })
+    const s = await svc.resumeSession('agent-side-empty')
+
+    svc.setSessionMcpServers(s.id, ['fs'])
+
+    await vi.waitFor(() => {
+      expect(client.connected).toHaveLength(2)
+      expect(client.connected[1]!.agent.loadSessionCalls).toHaveLength(1)
+      expect(svc.getById('agent-side-empty')).toBeDefined()
+    })
+    const loadParams = client.connected[1]!.agent.loadSessionCalls[0]!
+    expect(loadParams.sessionId).toBe('agent-side-empty')
+    expect(loadParams.mcpServers.map((m) => m.name)).toEqual(['fs'])
+    // No session/new on the reload: the durable id, the row and the side-task
+    // links survive, so the task stays out of the session list and attached to
+    // its parent's SideTasksBar.
+    expect(client.connected[1]!.agent.newSessionCalls).toHaveLength(0)
+    expect(svc.activeSession.get()?.id).toBe('agent-side-empty')
+    const entry = history.get('agent-side-empty')
+    expect(entry?.sideTaskOf).toBe('agent-parent')
+    expect(entry?.configOptions?.['mode']).toBe('dontAsk')
+    // Both pins ride the resume's desired→push path…
+    await vi.waitFor(() => {
+      const pushes = client.connected.flatMap((c) => c.agent.setConfigOptionCalls)
+      expect(pushes).toContainEqual(expect.objectContaining({ configId: 'mode', value: 'dontAsk' }))
+      expect(pushes).toContainEqual(expect.objectContaining({ configId: 'model', value: 'haiku' }))
+    })
+    // …without redefining the agent's own new-session defaults.
+    expect(agentDefaults.defaults.get()['claude-code']).toBeUndefined()
+    svc.dispose()
+  })
+
   it('resetting to inherit reloads back to the full wire list and clears the pin', async () => {
     const client = new FakeAcpClientService({ stubOptions: { loadSession: true } })
     const config = new ConfigurationService()

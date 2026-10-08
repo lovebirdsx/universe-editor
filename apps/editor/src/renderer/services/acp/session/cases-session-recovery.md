@@ -23,17 +23,17 @@
 
 ## 空会话热重连走 `session/new` 原地重建，不照抄「关闭+替换」
 
-症状：改 Sub Agent 模型后点「立即重启」（`requestProcessRestart`），会话反复 `reconnect attempt N/3 … Resource not found`，3 次耗尽 seal 成「Automatic recovery failed」。根因：`_reconnectSession` 原来**无条件** `session/resume`，而空会话（history 行 `hasMessages === false`，从未发过 prompt）在 agent 侧没有 transcript，resume 只能回 `resourceNotFound`。修法（`acpSessionService.ts:1581`）：按 `entry?.hasMessages === false && entry.sideTaskOf === undefined` 分派到 `session/new` **原地重建**——不照抄 MCP 变更的 `_reloadSessionForMcpChange`「关闭+替换」，后者会关掉用户的 editor tab、清 draft/viewState、换本地 uuid 让 React 重挂载。
+症状：改 Sub Agent 模型后点「立即重启」（`requestProcessRestart`），会话反复 `reconnect attempt N/3 … Resource not found`，3 次耗尽 seal 成「Automatic recovery failed」。根因：`_reconnectSession` 原来**无条件** `session/resume`，而空会话（history 行 `hasMessages === false`，从未发过 prompt）在 agent 侧没有 transcript，resume 只能回 `resourceNotFound`。修法（`acpSessionService.ts` 的 `_reconnectSession`）：按共享纯谓词 `isTranscriptlessEmptyRow(entry)`（`acpSessionHistory.ts`，即 `hasMessages === false && sideTaskOf === undefined`）分派到 `session/new` **原地重建**——不照抄 MCP 变更的 `_reloadSessionForMcpChange`「关闭+替换」，后者会关掉用户的 editor tab、清 draft/viewState、换本地 uuid 让 React 重挂载。
 
 重建会换 durable id，连带四处（漏一处就出现「幽灵会话」）：① `acpSessionHistory.rekey(old, new)` 迁行保留全部字段、同时删旧行与目标 id 上的既有行；② `acpSession._priorAgentSessionIds` 别名集合（cap `MAX_PRIOR_AGENT_SESSION_IDS = 4`）+ `reattachConnection(conn, newId)`；③ `acpSessionRegistry.find()` 别名回退、`liveIds()` 带别名（防 refresh-prune 误删）；④ rebuild 分支**不传 `leaseFor`**（否则 terminal 归属绑到即将作废的死 id）。
 
 三条审查踩坑（harness 开关 `freshSessionIdPerConnect` / `resumeSessionError` / `attachSessionErrorOnConnect` 就是为这三条造的）：
 
-1. **side task 是唯一 `hasMessages: false` 但 agent 侧有 transcript 的会话**——`forkSideTask` 在子会话发首条消息前就把父会话完整历史 fork 到 agent 侧了。所以判定必须带 `entry.sideTaskOf === undefined`，否则 rebuild 会静默丢掉 fork 基线，侧边追问失去讨论对象。
+1. **side task 是唯一 `hasMessages: false` 但 agent 侧有 transcript 的会话**——`forkSideTask` 在子会话发首条消息前就把父会话完整历史 fork 到 agent 侧了。所以判定必须带 `entry.sideTaskOf === undefined`，否则 rebuild 会静默丢掉 fork 基线，侧边追问失去讨论对象。该谓词是**三个决策的唯一真相**（`isTranscriptlessEmptyRow`），别再各自内联：① 重连分派 rebuild；② MCP 重载分派「关闭+替换」——`_reloadSessionForMcpChange` 曾漏掉 carve-out：空 side task 一改 MCP 就被换成新会话（新 durable id + 新行），丢 `sideTaskOf` / 只读 mode pin / `acp.sideTask.models` 模型 pin，并冒进会话列表；③ `_onResumeFailure` 的静默丢行策略——漏掉则重载失败会把 side task 从父会话「侧边任务」里无声抹掉（agent 权威的 `resourceNotFound` 仍照丢，不受 carve-out 影响）。
 2. **重试循环持有的 `sid` 必须随 rekey 一起更新**（`let sid`，rekey 后 `sid = rebuiltSessionId`），否则 attach 抛错后重试用死 id 查 history → `entry === undefined` → 退回 resume 死 id → budget 耗尽。
 3. **rekey 必须紧贴 `attachSession` 之前**，中间不能夹任何可能抛错的调用（`setConfigDesired` / `applyInitState` 都挪到 rekey 之前）——否则留下「行在新 id、session 在旧 id」的不一致窗口。
 
-测试全在 `AcpSession.recovery.integration.test.ts`。注意既有那几条「空会话 seal」用例在修复后语义会变，须补前置 `sendPrompt` 让它们继续守护 resume 路径。
+测试全在 `AcpSession.recovery.integration.test.ts`。注意既有那几条「空会话 seal」用例在修复后语义会变，须补前置 `sendPrompt` 让它们继续守护 resume 路径。谓词本身在 `acpSessionHistory.test.ts` 有契约测试；MCP 重载的空 side task 回归在 `AcpSessionService.test.ts` 的 `session MCP selection`，resume 失败策略的两条在 `AcpSessionService.resume.test.ts` 的 failure paths。
 
 ## 关窗/退出时停 agent 走 willShutdown join，不靠 beforeunload
 

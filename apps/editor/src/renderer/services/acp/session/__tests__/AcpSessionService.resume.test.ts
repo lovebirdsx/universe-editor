@@ -1318,6 +1318,59 @@ describe('AcpSessionService.resumeSession — failure paths', () => {
       built.notifications.captured.filter((n) => /Failed to resume/.test(n.message)),
     ).not.toEqual([])
   })
+
+  it('keeps an empty side-task row when the resume fails transiently', async () => {
+    // An empty side task carries the same `hasMessages: false` as the silently
+    // discarded empty session above, but the agent holds its forked baseline —
+    // dropping the row would hide the task from the parent's side-task bar with
+    // no way back, when a retry would have worked.
+    const built = buildService({ loadSessionResult: {} })
+    svc = built.svc
+    await built.history.initialize()
+    built.history.add({
+      agentId: 'fake',
+      sessionIdOnAgent: 'agent-side-empty',
+      title: 'side chat',
+      hasMessages: false,
+      sideTaskOf: 'agent-parent',
+    })
+
+    built.client.failConnect = true
+
+    await expect(svc.resumeSession('agent-side-empty')).rejects.toThrow(/timed out/)
+    expect(svc.sessions.get()).toHaveLength(0)
+    expect(built.history.get('agent-side-empty')?.sideTaskOf).toBe('agent-parent')
+    expect(
+      built.notifications.captured.filter((n) => /Failed to resume/.test(n.message)),
+    ).not.toEqual([])
+  })
+
+  it('still discards an empty side-task row the agent reports as not found', async () => {
+    // The not-found verdict is authoritative and outranks the side-task
+    // carve-out: the forked baseline is gone on the agent side too, so the row
+    // would only be a dead entry in the parent's side-task list.
+    const built = buildService({ loadSessionResult: {} })
+    svc = built.svc
+    await built.history.initialize()
+    built.history.add({
+      agentId: 'fake',
+      sessionIdOnAgent: 'agent-side-lost',
+      title: 'side chat',
+      hasMessages: false,
+      sideTaskOf: 'agent-parent',
+    })
+
+    built.client.failConnect = true
+    built.client.connectError = Object.assign(new Error('Resource not found: agent-side-lost'), {
+      code: -32002,
+    })
+
+    await expect(svc.resumeSession('agent-side-lost')).rejects.toThrow(/Resource not found/)
+    expect(built.history.get('agent-side-lost')).toBeUndefined()
+    expect(built.notifications.captured.filter((n) => /Failed to resume/.test(n.message))).toEqual(
+      [],
+    )
+  })
 })
 
 describe('AcpSessionService.resumeSession — editor-restart race', () => {

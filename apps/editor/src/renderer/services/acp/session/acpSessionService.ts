@@ -99,6 +99,7 @@ import {
   effectiveEntryAuthority,
   IAcpSessionHistoryService,
   isForeignWorkspaceSession,
+  isTranscriptlessEmptyRow,
   type AcpSessionHistoryEntry,
   type SessionHistoryScope,
 } from './acpSessionHistory.js'
@@ -1651,13 +1652,8 @@ export class AcpSessionService
           // as "automatic recovery failed". Rebuild it with `session/new`
           // instead: the local session object, its editor tab, draft and config
           // all survive; only the durable id moves (see `rebuiltSessionId`).
-          //
-          // A side task is the one empty session that DOES have a transcript:
-          // `forkSideTask` copies the parent's full history on the agent before
-          // the child sends anything, so rebuilding it would silently throw the
-          // forked baseline away and leave the side chat without the context it
-          // exists to discuss.
-          const rebuild = entry?.hasMessages === false && entry.sideTaskOf === undefined
+          // A side task is excluded by the predicate: it has a transcript.
+          const rebuild = isTranscriptlessEmptyRow(entry)
           if (rebuild) {
             this._logger.info(
               `session ${sid} has no agent-side transcript — rebuilding with session/new instead of resume`,
@@ -2002,7 +1998,9 @@ export class AcpSessionService
    * history row (it leaves the session list) and let the restored editor tab
    * close itself, with NO error notification. Two ways to reach that verdict:
    *
-   *  - `hasMessages === false` — we created it and know it was never messaged.
+   *  - a transcriptless empty row — we created it and know it was never
+   *    messaged. A side task looks empty by the same flag but does have an
+   *    agent-side transcript, so it keeps its row like any other session.
    *  - the agent answered `resourceNotFound` — the authoritative "no such
    *    session". This is the only signal for rows imported by the hydrate sweep
    *    (`bulkMergeFromAgent`), which carry no `hasMessages` at all: `session/list`
@@ -2019,7 +2017,7 @@ export class AcpSessionService
       // Read-only preview failures (e.g. agent without loadSession) are not
       // user errors: the UI falls back to the metadata-only preview. Log only.
       this._logger.info(`read-only resume failed for ${entry.id}: ${msg}`)
-    } else if (entry.hasMessages === false || isSessionNotFoundError(err)) {
+    } else if (isTranscriptlessEmptyRow(entry) || isSessionNotFoundError(err)) {
       this._logger.info(`discarding empty session that failed to resume: ${entry.id}`)
       this._history.remove(entry.id)
       this._sessionFactory.messageAttachments.removeSession(entry.id)
@@ -3075,8 +3073,12 @@ export class AcpSessionService
       // An empty session (created but never messaged) was never persisted by
       // the agent, so session/load cannot revive it — replace it with a fresh
       // session pinned to the new selection instead of resuming the old one.
+      // A side task is excluded there: it HAS an agent-side transcript (the
+      // forked baseline) and carries identity — `sideTaskOf`, the read-only
+      // mode pin and `acp.sideTask.models` — none of which a fresh session
+      // would get back, so it must take the resume path below.
       const entry = this._history.get(sid)
-      if (entry?.hasMessages === false) {
+      if (entry !== undefined && isTranscriptlessEmptyRow(entry)) {
         const pin = session.mcpServerSelection.get()
         const title = session.title
         await this.closeSession(sid)
