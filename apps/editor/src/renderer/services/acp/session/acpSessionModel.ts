@@ -132,9 +132,11 @@ export interface AcpToolCall {
   readonly locations?: readonly AcpToolCallLocation[]
   /**
    * Sub-agent timeline: message / tool_call updates the agent tagged with this
-   * call's id via `_meta.claudeCode.parentToolUseId` (e.g. a Task tool spawning
-   * a subagent). Nested one level deep — the UI folds these inside the parent
-   * card so the subagent's chatter stays out of the main timeline.
+   * call's id — claude via `_meta.claudeCode.parentToolUseId` (e.g. a Task tool
+   * spawning a subagent), codex via `_meta.codex.parentToolCallId` (the
+   * `subAgentActivity` card of the child thread). Nested one level deep — the UI
+   * folds these inside the parent card so the subagent's chatter stays out of
+   * the main timeline.
    */
   readonly children?: readonly AcpChildItem[]
   /**
@@ -156,8 +158,9 @@ export interface AcpToolCall {
    * {@link subagentStats} either (stats are pushed late, and a resumed
    * sub-agent card may carry none). Claude's launches are identified by the
    * fork's tool name (`_meta.claudeCode.toolName` `Agent`/`Task`; older builds
-   * stamped `_meta.claudeCode.subagent` instead). Drives the card's sub-agent
-   * glyph. Absent for ordinary tools.
+   * stamped `_meta.claudeCode.subagent` instead); codex stamps
+   * `_meta.codex.subagent` on its `subAgentActivity` cards. Drives the card's
+   * sub-agent glyph. Absent for ordinary tools.
    */
   readonly subagent?: true
   /**

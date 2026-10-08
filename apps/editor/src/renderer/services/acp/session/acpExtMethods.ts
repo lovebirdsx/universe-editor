@@ -195,11 +195,17 @@ export function readCodexModelKnownInCatalog(meta: unknown): boolean | undefined
 }
 
 /**
- * Key under `initialize` → `clientCapabilities._meta` the editor stamps so the
- * claude fork forwards sub-agent text/thinking chunks (each tagged
- * `_meta.claudeCode.parentToolUseId`, mounted as children of the parent Task
- * card). The fork copies this literal verbatim; without it those chunks are
- * stripped, while tool calls always pass through regardless.
+ * Key under `initialize` → `clientCapabilities._meta` the editor stamps so both
+ * agent forks expose the work of a sub-agent:
+ * - claude forwards sub-agent text/thinking chunks (each tagged
+ *   `_meta.claudeCode.parentToolUseId`, mounted as children of the parent Task
+ *   card); without it those chunks are stripped, while tool calls always pass
+ *   through regardless.
+ * - codex marks its `subAgentActivity` cards with `_meta.codex.subagent` and
+ *   forwards the work of a direct child thread tagged
+ *   `_meta.codex.parentToolCallId` (it has no native subagent sessions for this
+ *   client). A client without the key keeps the flat representation.
+ * Both forks copy this literal verbatim.
  */
 export const SUBAGENT_TRANSCRIPT_CAPABILITY = 'subagent-transcript'
 

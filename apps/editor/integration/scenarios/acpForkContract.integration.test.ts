@@ -257,6 +257,16 @@ const EXPECTED_DIST_METHODS: Record<ForkId, readonly string[]> = {
     // alone satisfies it); that the fork actually REPORTS it on a session
     // response is asserted live in the extra-models leg below.
     'modelKnownInCatalog',
+    // The codex side of the sub-agent trail. The editor sends the capability
+    // under `clientCapabilities._meta` (the claude fork reads the same literal
+    // for its flattened transcript) and reads the two `_meta.codex` keys the
+    // fork stamps back: `subagent` on a `subAgentActivity` card, and
+    // `parentToolCallId` on every update of a child thread. A rebase that drops
+    // either reader leaves the editor with flat, unattributed sub-agent work —
+    // silently, since unknown `_meta` keys are ignored — so both literals are
+    // pinned here the way `extraModels` is.
+    'subagent-transcript',
+    'parentToolCallId',
   ],
 }
 

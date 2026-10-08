@@ -78,17 +78,20 @@ export function readSubagentStats(update: {
 }
 
 /**
- * Read the vendor-specific sub-agent attribution our agent fork stamps onto each
- * SessionUpdate (`_meta.claudeCode.parentToolUseId`). Returns the id of the
- * parent tool call when this update belongs to a sub-agent, else undefined.
- * Also applies to a permission request's `toolCall`, which is not an update but
- * carries the same `_meta` namespace.
+ * Read the vendor-specific sub-agent attribution our agent forks stamp onto each
+ * SessionUpdate: claude's `_meta.claudeCode.parentToolUseId` and codex's
+ * `_meta.codex.parentToolCallId`. Both name the tool call that spawned the sub-agent,
+ * so the update nests under that card. Returns the id of the parent tool call when
+ * this update belongs to a sub-agent, else undefined. Also applies to a permission
+ * request's `toolCall`, which is not an update but carries the same `_meta` namespaces.
  */
-export function readParentToolUseId(carrier: {
+export function readParentToolCallId(carrier: {
   _meta?: Record<string, unknown> | null | undefined
 }): string | undefined {
-  const pid = readClaudeCodeMeta(carrier)?.['parentToolUseId']
-  return typeof pid === 'string' && pid.length > 0 ? pid : undefined
+  const claude = readClaudeCodeMeta(carrier)?.['parentToolUseId']
+  if (typeof claude === 'string' && claude.length > 0) return claude
+  const codex = readVendorMeta(carrier, 'codex')?.['parentToolCallId']
+  return typeof codex === 'string' && codex.length > 0 ? codex : undefined
 }
 
 /**
@@ -277,8 +280,16 @@ export function readFileChanges(update: SessionUpdate): readonly FileChangeDescr
 function readClaudeCodeMeta(carrier: {
   _meta?: Record<string, unknown> | null | undefined
 }): Record<string, unknown> | undefined {
-  const cc = carrier._meta?.['claudeCode']
-  return cc != null && typeof cc === 'object' ? (cc as Record<string, unknown>) : undefined
+  return readVendorMeta(carrier, 'claudeCode')
+}
+
+/** The `_meta` bag of one agent fork: `claudeCode` or `codex`. */
+function readVendorMeta(
+  carrier: { _meta?: Record<string, unknown> | null | undefined },
+  vendor: string,
+): Record<string, unknown> | undefined {
+  const bag = carrier._meta?.[vendor]
+  return bag != null && typeof bag === 'object' ? (bag as Record<string, unknown>) : undefined
 }
 
 function readStructuredPatch(update: SessionUpdate): FileChangeDescriptor | undefined {

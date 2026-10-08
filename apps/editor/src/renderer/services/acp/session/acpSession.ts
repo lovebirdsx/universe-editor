@@ -101,7 +101,7 @@ import {
   readMcpServer,
   readMcpTool,
   readMessageId,
-  readParentToolUseId,
+  readParentToolCallId,
   readSubagent,
   readSubagentStats,
   readSyntheticDenial,
@@ -3242,7 +3242,7 @@ export class AcpSession extends Disposable implements IAcpSession {
         return
       }
     }
-    const parentId = readParentToolUseId(update)
+    const parentId = readParentToolCallId(update)
     if (AGENT_OUTPUT_UPDATE_KINDS.has(update.sessionUpdate)) this._agentOutputCount++
     if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
       for (const change of readFileChanges(update)) {

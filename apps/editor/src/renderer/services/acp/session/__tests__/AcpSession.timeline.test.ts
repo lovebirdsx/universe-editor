@@ -2809,6 +2809,115 @@ describe('AcpSession.timeline — sub-agent streaming runs', () => {
   })
 })
 
+describe('AcpSession.timeline — codex sub-agent trail', () => {
+  let svc: AcpSessionService
+  let client: FakeAcpClientService
+
+  beforeEach(() => {
+    client = new FakeAcpClientService({ stubOptions: { promptHangs: true } })
+    svc = makeService(client)
+  })
+
+  afterEach(() => {
+    svc.dispose()
+  })
+
+  /** The `subAgentActivity` card of the codex fork: an object marker, unlike claude's. */
+  const activityCard = (toolCallId: string, activity: 'started' | 'completed'): SessionUpdate => ({
+    sessionUpdate: 'tool_call',
+    toolCallId,
+    title: activity === 'started' ? 'Start subagent weather' : 'Complete subagent weather',
+    kind: 'other',
+    status: activity === 'started' ? 'in_progress' : 'completed',
+    _meta: { codex: { subagent: { threadId: 'child-thread', path: '/root/weather', activity } } },
+  })
+
+  const child = (update: SessionUpdate, parentId: string): SessionUpdate => ({
+    ...update,
+    _meta: { codex: { parentToolCallId: parentId } },
+  })
+
+  it('marks a codex activity card as a sub-agent and folds the work of its thread inside', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    conn.sink.onSessionUpdate({ sessionId: 'agent-1', update: activityCard('act-1', 'started') })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: child(
+        { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Sunny ' } },
+        'act-1',
+      ),
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: child(
+        { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'in Paris' } },
+        'act-1',
+      ),
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: child(
+        {
+          sessionUpdate: 'tool_call',
+          toolCallId: 'child-cmd',
+          title: 'curl wttr.in',
+          kind: 'execute',
+          status: 'completed',
+        },
+        'act-1',
+      ),
+    })
+
+    const timeline = s.timeline.get()
+    expect(timeline.map((it) => it.kind)).toEqual(['toolCall'])
+    const parent = timeline[0]!
+    if (parent.kind !== 'toolCall') throw new Error('expected toolCall')
+    expect(parent.id).toBe('act-1')
+    expect(parent.call.subagent).toBe(true)
+    const children = parent.call.children ?? []
+    expect(children.map((c) => c.kind)).toEqual(['message', 'toolCall'])
+    const childMsg = children[0]!
+    if (childMsg.kind !== 'message') throw new Error('expected message')
+    expect(childMsg.message.text).toBe('Sunny in Paris')
+    expect(children[1]!.id).toBe('child-cmd')
+    // The child never leaks into the top-level toolCalls observable.
+    expect(s.toolCalls.get().map((t) => t.id)).toEqual(['act-1'])
+  })
+
+  it('adopts a codex child that arrives before the card of its activity', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    // Codex emits child output directly after the spawning collaboration item,
+    // and the activity card may follow.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: child(
+        {
+          sessionUpdate: 'tool_call',
+          toolCallId: 'child-cmd',
+          title: 'curl wttr.in',
+          kind: 'execute',
+          status: 'completed',
+        },
+        'act-1',
+      ),
+    })
+    conn.sink.onSessionUpdate({ sessionId: 'agent-1', update: activityCard('act-1', 'started') })
+
+    const timeline = s.timeline.get()
+    expect(timeline.map((it) => it.kind)).toEqual(['toolCall'])
+    const parent = timeline[0]!
+    if (parent.kind !== 'toolCall') throw new Error('expected toolCall')
+    expect(parent.id).toBe('act-1')
+    expect((parent.call.children ?? []).map((c) => c.id)).toEqual(['child-cmd'])
+  })
+})
+
 describe('AcpSession — universe capabilities from initialize _meta', () => {
   let svc: AcpSessionService | undefined
 

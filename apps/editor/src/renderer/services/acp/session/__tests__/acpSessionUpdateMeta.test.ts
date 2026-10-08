@@ -11,7 +11,7 @@ import {
   readAgentToolName,
   readAgentToolNameForTelemetry,
   readFileChanges,
-  readParentToolUseId,
+  readParentToolCallId,
   readSubagent,
   readSubagentStats,
   readSyntheticDenial,
@@ -24,9 +24,34 @@ describe('permission-request `_meta` readers', () => {
   }
 
   it('reads the sub-agent attribution off a tool call too', () => {
-    expect(readParentToolUseId(toolCall({ parentToolUseId: 'toolu_task' }))).toBe('toolu_task')
-    expect(readParentToolUseId(toolCall({ parentToolUseId: '' }))).toBeUndefined()
-    expect(readParentToolUseId(toolCall({}))).toBeUndefined()
+    expect(readParentToolCallId(toolCall({ parentToolUseId: 'toolu_task' }))).toBe('toolu_task')
+    expect(readParentToolCallId(toolCall({ parentToolUseId: '' }))).toBeUndefined()
+    expect(readParentToolCallId(toolCall({}))).toBeUndefined()
+  })
+})
+
+describe('readParentToolCallId (both forks)', () => {
+  function carrier(meta: Record<string, unknown>) {
+    return { toolCallId: 'tc', _meta: meta }
+  }
+
+  it('reads the codex sub-agent attribution', () => {
+    expect(readParentToolCallId(carrier({ codex: { parentToolCallId: 'act-1' } }))).toBe('act-1')
+    expect(
+      readParentToolCallId(carrier({ codex: { subagent: { threadId: 'child' } } })),
+    ).toBeUndefined()
+    expect(readParentToolCallId(carrier({ codex: { parentToolCallId: '' } }))).toBeUndefined()
+    expect(readParentToolCallId(carrier({ codex: { parentToolCallId: 42 } }))).toBeUndefined()
+    expect(readParentToolCallId(carrier({ codex: 'nope' }))).toBeUndefined()
+    expect(readParentToolCallId(carrier({}))).toBeUndefined()
+  })
+
+  it('prefers the claude key when a carrier holds both namespaces', () => {
+    const both = carrier({
+      claudeCode: { parentToolUseId: 'toolu_task' },
+      codex: { parentToolCallId: 'act-1' },
+    })
+    expect(readParentToolCallId(both)).toBe('toolu_task')
   })
 })
 

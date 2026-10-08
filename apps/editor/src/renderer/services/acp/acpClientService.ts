@@ -227,8 +227,10 @@ const DEFAULT_INIT_PARAMS: InitializeRequest = {
     // UNSTABLE elicitation: form (rendered as a field card) + url (consent
     // card → open-in-browser → elicitation/complete) are both wired.
     elicitation: { form: {}, url: {} },
-    // Sub-agent transcript: lets the claude fork relay sub-agent text/thinking
-    // chunks (parentToolUseId) instead of stripping them.
+    // Sub-agent transcript: lets the forks relay the work of a sub-agent instead
+    // of hiding it — claude sends its text/thinking chunks (parentToolUseId),
+    // codex marks its activity cards (codex.subagent) and nests the child thread
+    // under them (codex.parentToolCallId).
     _meta: { [SUBAGENT_TRANSCRIPT_CAPABILITY]: true },
   },
 }
