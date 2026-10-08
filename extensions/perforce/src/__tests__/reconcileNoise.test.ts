@@ -132,8 +132,12 @@ describe('resolveReconcileExcludes', () => {
   })
 
   it('folds a relative and an absolute spelling of one file where the host folds case', async () => {
+    // The two entries differ in the case of a SEGMENT, never in that of the
+    // drive alone: `norm` folds the drive letter on every host, so a drive-only
+    // difference would collapse everywhere and answer nothing about the host
+    // policy this test is about.
     const noise = await resolveReconcileExcludes(
-      ['notes.txt', `${ROOT}/notes.txt`],
+      ['Notes.txt', `${ROOT}/notes.txt`],
       ROOT,
       statOf({ files: [`${ROOT}/notes.txt`] }),
     )
@@ -142,7 +146,7 @@ describe('resolveReconcileExcludes', () => {
     // case-insensitive host (see pathUtil).
     const caseInsensitive = process.platform === 'win32' || process.platform === 'darwin'
     expect(noise.files).toHaveLength(caseInsensitive ? 1 : 2)
-    expect(noise.files[0]).toBe(`${ROOT}/notes.txt`)
+    expect(noise.files[0]).toBe(`${ROOT}/Notes.txt`)
   })
 })
 
