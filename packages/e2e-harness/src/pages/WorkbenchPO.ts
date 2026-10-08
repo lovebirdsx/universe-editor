@@ -125,6 +125,20 @@ export async function evaluateWhenRestored(page: Page): Promise<void> {
   }
 }
 
+/** 建窗后 renderer 可能仍在 adopt 目录、起扩展宿主，先等一次只读探测往返走通，
+ *  免得紧接着的业务断言空耗预算。 */
+export async function waitForProbeServiceable(page: Page): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        await page.evaluate(() => window.__E2E__!.getOpenWindows())
+        return true
+      },
+      { timeout: 20_000, message: 'the window should service a probe round trip' },
+    )
+    .toBe(true)
+}
+
 export class WorkbenchPO {
   readonly activityBar: ActivityBarPO
   readonly sideBar: SideBarPO

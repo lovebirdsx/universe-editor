@@ -600,5 +600,24 @@ markdown job（ubuntu，CI run 31295361355）`markdownPreview.spec.ts:205` 与 `
 锚：`packages/workbench-ui/src/feedback/quickInput/QuickInputPanel.tsx`（Enter 分支的 `cursorInRange`；`normalizeSelectableIndex` / `firstSelectableIndex`）；`apps/editor/e2e/specs/smoke.sessionSwitcherRevealGroup.spec.ts`；`apps/editor/src/renderer/actions/agentSessionActions.ts`（`computeInitialSelectionIndex`）。
 
 ---
+
+**案例 103 — 新建窗口的固定预算断言在启动竞争里空等：加一次只读 ping 门控（不是就绪信号，也不是性能修复）**
+
+信号：`smoke.windows.spec.ts` 里 `openFolderInNewWindow` 后紧跟的固定预算断言（`expect.poll(..., {timeout: 8000})`）在并行冷启 / 负载高的机器上**首跑超时、retry 多数能过**；`round14` 的「Exit closes every window」`toBe(0)` 实收 2、**重试仍失败**。失败现场彼此矛盾——目标目录在卡顿前已设好、窗口列表正确、且**下一个探测立刻被应答**。
+
+观测（与假设一致，但**不足以证明因果**）：建窗后窗口还要 adopt 目录、起自己的扩展宿主，该段实测卡 7.7–14s（`interactionPerf.log` 的 `slow (non-pointer) pointerout 7736ms`；host 进程在窗口创建后 8–13s 才 spawn）。退出链**一旦被派发约 130ms 走完**——因此证据**支持**「quit 命令的派发被排队」而非 Electron 的 quit 宽限窗口；两者都只是与「机器忙」相关，不能据此把根因钉死为某个具体队列。
+
+修：`waitForProbeServiceable(page)`（`packages/e2e-harness`）——跟一次 **renderer→main 的只读探测往返**（`getOpenWindows()`），走到再开始计时。它**只是一次 ping**：减轻启动竞争，**不等于完整的 extension ready 信号，也不是性能修复 / 根治**。探测抛错**原样上抛**（早期版本用 catch-all 把非 context 错误吞成「未就绪」，会把真实 probe/IPC 故障藏进 poll 的 timeout 消息里，已删除）；探测悬着则由 poll 的 20s 上限兜底。
+
+反证与局限：
+
+- 门禁降低窗口但**不消除**它：早期版本 27 轮 / 135 次执行里仍有 **8 次首跑失败**（多为 retry 救回）、**1 次重试仍失败**；改写后 18 轮 / 90 次执行全绿、再 6 轮 / 30 次全绿——**这些只是实跑计数，不是「已根治」的证明**，且**仅本机 WSL/Linux 验证，Windows 平台未验证**。
+- 别把「负载相关」讲成「因果已证」：本仓库 e2e 默认并行冷启，机器一忙窗口就现；观察到的是相关性与一致的方向，不是受控实验。
+
+教训：a) 固定预算断言前先加「被测对象可服务」门控，**但注释里写清它只是 ping**——否则下一个人会把它当成就绪语义或性能修复。b) 鲁棒化**不要**用宽泛 catch 把错误吞成「重试」：那会把产品 / IPC 故障降级成 timeout 文案，与本 skill 第一原则相悖；让抛错带上原始堆栈。c) 计数如实分栏：门禁改写前后的批次分开记，别把旧版本的成绩当成本轮结果。
+
+锚：`packages/e2e-harness/src/pages/WorkbenchPO.ts`（`waitForProbeServiceable`）、`packages/e2e-harness/src/__tests__/workbenchPO.test.ts`（4 条受控单测）、`apps/editor/e2e/specs/smoke.windows.spec.ts`（`waitForNewWindowReady`）；现场日志 `/tmp/claude-acp-closure/windows/`（旧）与 `/tmp/claude-acp-closure/final-windows/`（本轮）。
+
+---
 - `@parcel/watcher` Windows 多 worker 竞态的长期根治（升级 / 换 watcher / 进一步隔离），替代长期 `--workers=1`（案例 12/16/26/44 的 `@serial` 都是它的 workaround）。
 - DnD 用例稳定化（显式等待 drop 完成态），稳定后摘 `@flaky`（案例 46）。

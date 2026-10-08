@@ -15,7 +15,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { test, expect } from '../fixtures/electronApp.js'
-import { expectNoLeaks, evaluateWhenRestored } from '../pages/WorkbenchPO.js'
+import {
+  expectNoLeaks,
+  evaluateWhenRestored,
+  waitForProbeServiceable,
+} from '../pages/WorkbenchPO.js'
 import type { Page } from '@playwright/test'
 import { mkTempDir } from '@universe-editor/e2e-harness'
 
@@ -32,6 +36,12 @@ async function waitForProbe(page: Page): Promise<void> {
   await evaluateWhenRestored(page)
 }
 
+// restored 后仍可能被启动工作阻塞；先完成一次只读往返，避免占用业务断言的预算。
+async function waitForNewWindowReady(page: Page): Promise<void> {
+  await waitForProbe(page)
+  await waitForProbeServiceable(page)
+}
+
 test.describe('@p0 windows', () => {
   test('Open Folder in New Window creates a second window loading that folder', async ({
     electronApp,
@@ -43,7 +53,7 @@ test.describe('@p0 windows', () => {
     const newWindow = electronApp.waitForEvent('window')
     await workbench.openFolderInNewWindow(folder.dir)
     const newPage = await newWindow
-    await waitForProbe(newPage)
+    await waitForNewWindowReady(newPage)
 
     await expect
       .poll(() => newPage.evaluate(() => window.__E2E__!.getCurrentWorkspacePath()), {
@@ -63,7 +73,7 @@ test.describe('@p0 windows', () => {
     const newWindow = electronApp.waitForEvent('window')
     await workbench.openFolderInNewWindow(folder.dir)
     const newPage = await newWindow
-    await waitForProbe(newPage)
+    await waitForNewWindowReady(newPage)
 
     await expect
       .poll(() => workbench.getOpenWindows().then((w) => w.length), { timeout: 8000 })
@@ -119,7 +129,7 @@ test.describe('@p0 windows', () => {
 
     const newWindow = electronApp.waitForEvent('window')
     await workbench.openFolderInNewWindow(tmpFolder().dir)
-    await waitForProbe(await newWindow)
+    await waitForNewWindowReady(await newWindow)
     expect(electronApp.windows().length).toBe(2)
 
     // app.quit() tears down the process; fire-and-forget and watch windows drain.

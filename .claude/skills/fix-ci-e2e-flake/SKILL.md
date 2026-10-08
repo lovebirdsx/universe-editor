@@ -99,6 +99,7 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 - 发完 prompt / 图片后**紧跟**断言消息或 chip、received 恒空/旧值且加宽窗口无效=`sendAcpPrompt` 的 await 只覆盖派发不覆盖渲染，断言抢跑 → 改 `expect.poll` 等落地 → 案例 100
 - 读**已打开**文档 ✓ / 读**未打开**文件 ✗ 的不对称（received 恒 `[]`）=fs 网关（DocumentStore overlay 不过网关），不是路径计算；先 `pnpm build` 排除陈旧产物 → 案例 101
 - `waitForHidden` 超时但现场「**什么都对**」（焦点/值/composing/按键 target 全正常、列表非空且已选中）=光标比列表晚一个 commit 归位（deferred 值 vs effect 修正的索引），Enter 落在中间读越界索引静默 no-op；**窗口每次运行必现（渲染路径计数 `render:1`），命中靠时序**；修产品 accept 路径（越界按实时文本重算），别当环境噪音 retry → 案例 102
+- 新建窗口后紧跟的固定预算断言首跑超时 / `expect.poll` 空等（并行冷启、机器忙）+ 失败现场「目录已设好、窗口列表对、下一探测立刻应答」=建窗后 adopt 目录 / 起扩展宿主期间的启动竞争，加一次只读 ping 门控（**只是 ping，不是就绪信号、也不是性能修复**；抛错原样上抛，别用宽泛 catch 吞成重试）→ 案例 103
 
 ## 关键参考路径
 - `apps/editor/e2e/specs/` —— 所有 e2e spec；`@p0` 阻塞 CI，`@p1` 次级

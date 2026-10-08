@@ -9,7 +9,11 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { test, expect } from '../fixtures/electronApp.js'
-import { expectNoLeaks, evaluateWhenRestored } from '../pages/WorkbenchPO.js'
+import {
+  expectNoLeaks,
+  evaluateWhenRestored,
+  waitForProbeServiceable,
+} from '../pages/WorkbenchPO.js'
 import { mkTempDir } from '@universe-editor/e2e-harness'
 
 test.describe('@p1 folder drag → new window', () => {
@@ -62,6 +66,7 @@ test.describe('@p1 folder drag → new window', () => {
       Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
     )
     await evaluateWhenRestored(newPage)
+    await waitForProbeServiceable(newPage)
     await expect
       .poll(() => newPage.evaluate(() => window.__E2E__!.getCurrentWorkspacePath()), {
         timeout: 8000,

@@ -10,7 +10,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { test, expect } from '../fixtures/electronApp.js'
-import { evaluateWhenRestored } from '../pages/WorkbenchPO.js'
+import { evaluateWhenRestored, waitForProbeServiceable } from '../pages/WorkbenchPO.js'
 import type { Page } from '@playwright/test'
 
 async function waitForProbe(page: Page): Promise<void> {
@@ -18,6 +18,7 @@ async function waitForProbe(page: Page): Promise<void> {
     Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
   )
   await evaluateWhenRestored(page)
+  await waitForProbeServiceable(page)
 }
 
 async function hidePanel(page: Page): Promise<void> {

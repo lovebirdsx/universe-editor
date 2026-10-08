@@ -16,7 +16,7 @@ import { rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test, expect } from '../fixtures/electronApp.js'
-import { evaluateWhenRestored } from '../pages/WorkbenchPO.js'
+import { evaluateWhenRestored, waitForProbeServiceable } from '../pages/WorkbenchPO.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ECHO_AGENT_PATH = resolve(__dirname, '..', '..', 'src', 'test-fixtures', 'echoAgent.cjs')
@@ -71,6 +71,7 @@ test.describe('window close releases workspace folder', () => {
       Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
     )
     await evaluateWhenRestored(page2)
+    await waitForProbeServiceable(page2)
     await expect.poll(() => electronApp.windows().length, { timeout: 8000 }).toBe(2)
 
     // 关 folderA 所在窗口（走真实 close → veto → willShutdown join 路径）。

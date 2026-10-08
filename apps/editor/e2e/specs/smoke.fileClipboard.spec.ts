@@ -38,7 +38,11 @@ import * as path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { Page } from '@playwright/test'
 import { test, expect } from '../fixtures/electronApp.js'
-import { expectNoLeaks, evaluateWhenRestored } from '../pages/WorkbenchPO.js'
+import {
+  expectNoLeaks,
+  evaluateWhenRestored,
+  waitForProbeServiceable,
+} from '../pages/WorkbenchPO.js'
 
 const SOURCE_FILE = 'copy-me.md'
 const EXTERNAL_FILE = 'os-external.md'
@@ -65,6 +69,7 @@ async function waitForSecondWindowProbe(page: Page): Promise<void> {
     Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
   )
   await evaluateWhenRestored(page)
+  await waitForProbeServiceable(page)
 }
 
 test.describe('@p1 shared file clipboard', () => {

@@ -12,7 +12,11 @@ import { readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test, expect } from '../fixtures/electronApp.js'
-import { expectNoLeaks, evaluateWhenRestored } from '../pages/WorkbenchPO.js'
+import {
+  expectNoLeaks,
+  evaluateWhenRestored,
+  waitForProbeServiceable,
+} from '../pages/WorkbenchPO.js'
 import { mkTempDir } from '@universe-editor/e2e-harness'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -89,6 +93,7 @@ test.describe('@p1 deep link — agent workspace routing', () => {
       Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
     )
     await evaluateWhenRestored(newPage)
+    await waitForProbeServiceable(newPage)
 
     // The new window hosts the link's cwd as its workspace…
     await expect

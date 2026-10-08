@@ -4,4 +4,9 @@
  *  `../pages/WorkbenchPO.js` unchanged.
  *--------------------------------------------------------------------------------------------*/
 
-export { WorkbenchPO, expectNoLeaks, evaluateWhenRestored } from '@universe-editor/e2e-harness'
+export {
+  WorkbenchPO,
+  expectNoLeaks,
+  evaluateWhenRestored,
+  waitForProbeServiceable,
+} from '@universe-editor/e2e-harness'
