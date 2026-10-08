@@ -14,14 +14,15 @@
  *  relaunches the extension host — main-process state a window reload won't reset.
  *--------------------------------------------------------------------------------------------*/
 
-import { test as base, type ElectronApplication, type Page } from '@playwright/test'
+import { test as base, type ElectronApplication, type Page, type TestInfo } from '@playwright/test'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { mkdirSync, writeFileSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
 import {
   WorkbenchPO,
   closeApp,
   expectNoLeaks,
+  installFailureForensics,
   launchApp,
   resolveEditorBuild,
   seedBaselineUserData,
@@ -501,6 +502,106 @@ function seedSaviorConfig(clientRoot: string, seeds: readonly P4SaviorSeed[] | u
   return file
 }
 
+/** The fake-CLI log files a spec can point the run at through `p4ExtraEnv`. */
+const FAKE_CLI_LOG_ENV = [
+  'UNIVERSE_P4DELTA_SCOPE_LOG',
+  'UNIVERSE_P4DELTA_ARGV_LOG',
+  'UNIVERSE_P4_FAKE_ARGV_LOG',
+] as const
+
+/** `work`, or undefined after `ms`: a renderer that stopped answering must not
+ *  hang the teardown that is busy collecting evidence (a `page.evaluate` has no
+ *  timeout of its own). A rejection still propagates — the caller reports it. */
+async function bounded<T>(work: Promise<T>, ms: number): Promise<T | undefined> {
+  const settled = work.then(
+    (value) => ({ value }) as const,
+    (error: unknown) => ({ error }) as const,
+  )
+  const timedOut = Symbol('timeout')
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    const result = await Promise.race([
+      settled,
+      new Promise<typeof timedOut>((resolve) => {
+        timer = setTimeout(() => resolve(timedOut), ms)
+      }),
+    ])
+    if (result === timedOut) return undefined
+    if ('error' in result) throw result.error
+    return result.value
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
+/**
+ * Evidence Playwright's own artifacts cannot carry — screenshots of this app are
+ * black frames and the aria snapshot is taken after the leak gate unmounted
+ * React (see the harness `forensics.ts` header):
+ *
+ * - the extension's **`Perforce` output channel**. It lives in renderer memory,
+ *   so the `<userData>/logs` copy does not contain one line of it, and its lines
+ *   are what tell "the setting never reached the client"
+ *   (`[perforce] reconcile exclusions: 0 dir(s) … (<none>)`) apart from "the
+ *   scan never ran" (`reconcile-scan: …`) or "the client went offline".
+ * - the **fake CLIs' logs**. They carry the assertions of most specs here, and a
+ *   MISSING file is itself an answer ("nothing ever spawned it") that a bare test
+ *   result cannot be told apart from "spawned with the wrong argv".
+ *
+ * Attached only on failure, and best-effort throughout: forensics must never turn
+ * a pass into a failure, fail an already-failing test twice, or hang a teardown.
+ * Read BEFORE `expectNoLeaks(page)` — that is what unmounts React, and with it
+ * the probe.
+ *
+ * Each piece lands TWICE, on purpose: as a file under the test's output dir (CI
+ * uploads `test-results/`, and an in-memory attachment is not in it) and as an
+ * attachment (the list reporter prints text bodies, so the failure is readable
+ * straight from the job log).
+ */
+async function attachPerforceForensics(
+  page: Page,
+  testInfo: TestInfo,
+  env: Record<string, string>,
+): Promise<void> {
+  if (testInfo.status === testInfo.expectedStatus) return
+  const outDir = testInfo.outputPath('perforce-forensics')
+  try {
+    mkdirSync(outDir, { recursive: true })
+  } catch {
+    // Without the dir the attachments below still reach the job log.
+  }
+  const attach = async (name: string, body: string): Promise<void> => {
+    try {
+      writeFileSync(join(outDir, name), body, 'utf8')
+    } catch {
+      // Best-effort: the attachment below is the same text.
+    }
+    try {
+      await testInfo.attach(name, { body, contentType: 'text/plain' })
+    } catch {
+      // Attaching is optional; the test result is not.
+    }
+  }
+
+  let channel: string
+  try {
+    const content = await bounded(
+      page.evaluate((name) => window.__E2E__!.getOutputChannelContent(name), 'Perforce'),
+      10_000,
+    )
+    channel = content ?? '<unavailable: the renderer did not answer within 10s>'
+  } catch (error) {
+    channel = `<unavailable: ${String(error)}>`
+  }
+  await attach('perforce-output-channel.txt', channel)
+  for (const key of FAKE_CLI_LOG_ENV) {
+    const file = env[key]
+    if (file === undefined) continue
+    const body = existsSync(file) ? readFileSync(file, 'utf8') : '<missing: nothing spawned it>'
+    await attach(`${key}.log`, body)
+  }
+}
+
 export const test = base.extend<
   PerforceFixtures & {
     p4Seeds: P4SeedConfig
@@ -550,7 +651,7 @@ export const test = base.extend<
       fileUrl: (relPath: string) => `file:///${abs(relPath).replace(/^\/+/, '')}`,
     })
   },
-  electronApp: async ({ p4Workspace, p4ExtraEnv, p4delta }, use) => {
+  electronApp: async ({ p4Workspace, p4ExtraEnv, p4delta }, use, testInfo) => {
     const userDataDir = mkTempDir('universe-editor-e2e-p4-')
     seedBaselineUserData(userDataDir)
     const app = await launchApp({
@@ -581,14 +682,25 @@ export const test = base.extend<
         ...p4ExtraEnv,
       },
     })
+    // The window is needed HERE only to install failure forensics (the page
+    // fixture makes the real assertions about it). Best-effort: a window that
+    // never appears must fail as the page fixture's problem, not as a forensics
+    // timeout during setup. `firstWindow()` is cached, so the page fixture gets
+    // the same Page.
+    const page = await app.firstWindow().catch(() => undefined)
+    const finalizeForensics =
+      page === undefined ? undefined : installFailureForensics(page, userDataDir)
     await use(app)
     await closeApp(app)
+    // After closeApp: the log files are flushed by then.
+    if (finalizeForensics !== undefined) await finalizeForensics(testInfo)
   },
-  page: async ({ electronApp }, use) => {
+  page: async ({ electronApp, p4ExtraEnv }, use, testInfo) => {
     const page = await electronApp.firstWindow()
     await page.waitForLoadState('domcontentloaded')
     await waitForProbe(page)
     await use(page)
+    await attachPerforceForensics(page, testInfo, p4ExtraEnv)
     await expectNoLeaks(page)
   },
   workbench: async ({ page }, use) => {

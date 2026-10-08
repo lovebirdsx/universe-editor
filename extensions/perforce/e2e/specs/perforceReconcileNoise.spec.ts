@@ -660,6 +660,18 @@ test.describe('@p1 perforce noise configured before the hidden folder exists', (
     const hiddenFile = `file:${toPosix(perforce.file(lateHidden.relPath))}`
 
     await test.step('a folder nobody can stat yet is still resolved as a FOLDER rule', async () => {
+      // Two waits on purpose, as in the first journey: "no round resolved at all"
+      // (the scan never reached δ — a cold start or a host problem) and "a round
+      // that does not carry the rule" (the setting never reached the client) must
+      // not read as the same failure. A round appears in this log only once δ runs:
+      // the narrow queries follow the SCAN's engine verdict, which starts as
+      // native, so a round-less log means the scan never got to the engine.
+      await expect
+        .poll(() => scopeLines(lateScopeLog).filter((r) => r.mode === 'open').length, {
+          timeout: 60_000,
+          message: 'the scan should have resolved an open-mode round',
+        })
+        .toBeGreaterThan(0)
       // The KIND is what δ is told, and it is the whole regression: a `file`
       // entry hides the name `sub/hidden` and nothing under it, so the rule
       // quietly stops covering the tree the moment the tree exists.
@@ -684,12 +696,31 @@ test.describe('@p1 perforce noise configured before the hidden folder exists', (
 
     await test.step('the scan never even asks about the folder that appeared later', async () => {
       // Liveness FIRST: the watcher's round for the visible sibling has to land,
-      // or the negative below would only prove nothing had happened yet.
+      // or the negative below would only prove nothing had happened yet. The three
+      // files appeared in one burst right after activation, and the round the
+      // refresh tail armed can already have been in flight then — one that started
+      // before the batch answers nothing about it. So the poll re-touches the
+      // sibling (same bytes, idempotent) to re-arm a round; bounded, because past
+      // a few nudges the remaining polls should observe rather than keep writing.
+      // The hidden subtree is NEVER touched: it is what the negatives below assert
+      // about, and a nudge there would arrange the very answer they check.
+      let rearms = 0
       await expect
-        .poll(() => groupIdsFor(lateVisible.relPath), {
-          timeout: 60_000,
-          message: 'the late sibling should reach the Changes group',
-        })
+        .poll(
+          async () => {
+            const groups = await groupIdsFor(lateVisible.relPath)
+            if (!groups.includes('reconcile') && rearms < 5) {
+              rearms++
+              writeFileSync(perforce.file(lateVisible.relPath), lateVisible.content, 'utf8')
+            }
+            return groups
+          },
+          {
+            timeout: 60_000,
+            intervals: [500, 1000],
+            message: 'the late sibling should reach the Changes group',
+          },
+        )
         .toContain('reconcile')
       // The hidden pair was created in the same batch: no row, and no round ever
       // named the file inside the folder as a target (the engine that answered
@@ -715,10 +746,16 @@ test.describe('@p1 perforce noise configured before the hidden folder exists', (
       expect(readFileSync(perforce.file(lateHidden.relPath), 'utf8')).toBe(DRIFT)
 
       // …and the write's OWN range says the same: the folder rides along as a
-      // directory exclusion on the round the collect itself produced.
+      // directory exclusion on the round the collect itself produced. The window
+      // is narrowed to the rounds ASKED ABOUT the workspace root: the per-file
+      // narrow queries (the sibling's rewrites re-arm them) carry the same
+      // exclusions, so an unfiltered window could pass without the collect having
+      // carried anything at all.
+      const rootAsked = `directory:${toPosix(perforce.clientRoot)}`
       const writeRounds = scopeLines(lateScopeLog)
         .slice(before)
-        .filter((r) => r.mode === 'open')
+        .filter((r) => r.mode === 'open' && askedFor(r).includes(rootAsked))
+      expect(writeRounds.length).toBeGreaterThan(0)
       expect(writeRounds.flatMap((r) => excludesOf(r))).toContain(hiddenDir)
       expect(readArgvLog(lateP4Log)).toEqual([])
     })

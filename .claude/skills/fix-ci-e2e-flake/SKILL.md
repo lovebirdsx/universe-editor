@@ -100,6 +100,7 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 - 读**已打开**文档 ✓ / 读**未打开**文件 ✗ 的不对称（received 恒 `[]`）=fs 网关（DocumentStore overlay 不过网关），不是路径计算；先 `pnpm build` 排除陈旧产物 → 案例 101
 - `waitForHidden` 超时但现场「**什么都对**」（焦点/值/composing/按键 target 全正常、列表非空且已选中）=光标比列表晚一个 commit 归位（deferred 值 vs effect 修正的索引），Enter 落在中间读越界索引静默 no-op；**窗口每次运行必现（渲染路径计数 `render:1`），命中靠时序**；修产品 accept 路径（越界按实时文本重算），别当环境噪音 retry → 案例 102
 - 新建窗口后紧跟的固定预算断言首跑超时 / `expect.poll` 空等（并行冷启、机器忙）+ 失败现场「目录已设好、窗口列表对、下一探测立刻应答」=建窗后 adopt 目录 / 起扩展宿主期间的启动竞争，加一次只读 ping 门控（**只是 ping，不是就绪信号、也不是性能修复**；抛错原样上抛，别用宽泛 catch 吞成重试）→ 案例 103
+- 等 fake CLI **盘上日志**的断言 60s 恒空 `[]`、而 SCM provider/refresh/探针全程健康（纯黑截图+aria 空壳是已知产物）=产品端「先 `await` 读配置、后 push 订阅」的毫秒窗口吞掉启动期异步载入的工作区设置层（该会话永久为空，retry 救得回但改断言无用）；修=抽 `watchConfig` 先订阅后读（seq 守卫），并给该 fixture 接失败取证（输出通道+fake 日志）。**压测（`--repeat-each=10 --workers=2`）再暴露更深一层**：取证里 `reconcile exclusions: 0 dir(s)` + `--exclude-dir` 全程 0 = 设置层**根本没载入**（跟消费方订阅顺序无关）——`UserSettingsSync` 把 `onDidChangeFile` 注册在 `initialize()` 末尾，而 main 在工作区变更时 fire 的那次「装槽 + 广播」正好落在「首读已发出、监听器未注册」的窗口里被丢（瞬态广播无 replay，之后无人 re-read）；修=订阅移到构造函数 + 可控读闸单测（变异验证）→ 案例 104
 
 ## 关键参考路径
 - `apps/editor/e2e/specs/` —— 所有 e2e spec；`@p0` 阻塞 CI，`@p1` 次级
