@@ -155,6 +155,10 @@ test.describe('@p1 agents session row states', () => {
       await expect
         .poll(() => page.evaluate(() => document.documentElement.dataset.theme))
         .toBe(theme.toLowerCase())
+      // Chromium 把 outline 的 used value 归一到设备像素：DPR≠1 时 CSS 的 1px 会读回 1/DPR
+      // （125% 缩放 → 0.8px）。断言换算回设备像素，写死 '1px' 等于把开发机的显示缩放当回归。
+      const dpr = await page.evaluate(() => window.devicePixelRatio)
+      const devicePx = (value: string) => Number.parseFloat(value) * dpr
 
       await openTwoSessions(page)
       const list = await focusSessionList(page, workbench)
@@ -182,8 +186,8 @@ test.describe('@p1 agents session row states', () => {
       // 3. 打开中的会话行 = 蓝色边框、无填充。
       const openPaint = await rowPaint(open)
       expect(openPaint.outlineStyle).toBe('solid')
-      expect(openPaint.outlineWidth).toBe('1px')
-      expect(openPaint.outlineOffset).toBe('-1px')
+      expect(devicePx(openPaint.outlineWidth)).toBeCloseTo(1, 3)
+      expect(devicePx(openPaint.outlineOffset)).toBeCloseTo(-1, 3)
       expect(openPaint.outline).toEqual(tokens.openBorder)
       expect(openPaint.background[3]).toBe(0)
 

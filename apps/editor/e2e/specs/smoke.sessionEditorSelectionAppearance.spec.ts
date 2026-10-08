@@ -50,6 +50,10 @@ for (const theme of ['Dark', 'Light'] as const) {
     await expect
       .poll(() => page.evaluate(() => document.documentElement.dataset.theme))
       .toBe(theme.toLowerCase())
+    // Chromium 把 outline 的 used value 归一到设备像素：DPR≠1 时 CSS 的 1px 会读回 1/DPR
+    // （125% 缩放 → 0.8px）。断言换算回设备像素，写死 '1px' 等于把开发机的显示缩放当回归。
+    const dpr = await page.evaluate(() => window.devicePixelRatio)
+    const devicePx = (value: string) => Number.parseFloat(value) * dpr
     await page.evaluate(([id, path]) => window.__E2E__!.installAcpEchoAgent(id, path), [
       'echo',
       ECHO_AGENT_PATH,
@@ -77,7 +81,7 @@ for (const theme of ['Dark', 'Light'] as const) {
     await expect.poll(async () => (await outline(card)).alpha).toBe(255)
     const active = await outline(card)
     expect(active.style).toBe('solid')
-    expect(active.width).toBe('1px')
+    expect(devicePx(active.width)).toBeCloseTo(1, 3)
 
     await workbench.runCommand('workbench.action.agent.focusInput')
     await expect.poll(() => workbench.getFocusedChatSurface()).toBe('prompt')

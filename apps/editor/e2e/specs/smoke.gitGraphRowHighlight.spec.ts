@@ -69,20 +69,29 @@ interface Strip {
   height: number
 }
 
-async function shoot(page: Page, strip: Strip): Promise<PNG> {
+async function shoot(page: Page, strip: Strip, dpr: number): Promise<PNG> {
   // Full-page shot + crop, deliberately not `page.screenshot({ clip })`: under
   // this Electron setup the clipped capture hands back a stale surface — a strip
   // kept matching its own baseline while a full shot taken in the same state
   // showed the hover fill — which would make every comparison below vacuously
   // pass. Cropping is also where the bounds check lives.
+  // Strips are described in CSS px (boundingBox / mouse coordinates), the shot is
+  // in device px: scale before cropping, or a DPR ≠ 1 shifts every strip into a
+  // different, static region (at 1.25 both strips landed in the sidebar, so a
+  // hovering row changed 0 pixels and the poll below timed out).
+  const x = Math.round(strip.x * dpr)
+  const y = Math.round(strip.y * dpr)
+  const width = Math.round(strip.width * dpr)
+  const height = Math.round(strip.height * dpr)
   const shot = PNG.sync.read(await page.screenshot())
-  if (strip.x + strip.width > shot.width || strip.y + strip.height > shot.height) {
+  if (x + width > shot.width || y + height > shot.height) {
     throw new Error(
-      `strip ${JSON.stringify(strip)} falls outside the ${shot.width}×${shot.height} page`,
+      `strip ${JSON.stringify(strip)} → ${width}×${height} at ${x},${y} (dpr=${dpr}) ` +
+        `falls outside the ${shot.width}×${shot.height} page`,
     )
   }
-  const out = new PNG({ width: strip.width, height: strip.height })
-  PNG.bitblt(shot, out, strip.x, strip.y, strip.width, strip.height, 0, 0)
+  const out = new PNG({ width, height })
+  PNG.bitblt(shot, out, x, y, width, height, 0, 0)
   return out
 }
 
@@ -126,6 +135,8 @@ test.describe('git graph row highlight', () => {
         Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
       )
       await evaluateWhenRestored(page)
+      // The geometry below is read in CSS px, the shots come back in device px.
+      const dpr = await page.evaluate(() => window.devicePixelRatio)
 
       await expect
         .poll(() => page.evaluate(() => window.__E2E__!.getScmSourceControlCount()), {
@@ -190,8 +201,8 @@ test.describe('git graph row highlight', () => {
       // Baseline: pointer parked outside the commit list.
       await page.mouse.move(0, 0)
       const baseline = await geometry()
-      const laneBaseline = await shoot(page, baseline.lane)
-      const textBaseline = await shoot(page, baseline.text)
+      const laneBaseline = await shoot(page, baseline.lane, dpr)
+      const textBaseline = await shoot(page, baseline.text, dpr)
 
       // Anti-vacuity: with no swimlanes drawn (wrong column width, empty graph)
       // both comparisons below would pass on a flat rectangle of background.
@@ -206,12 +217,20 @@ test.describe('git graph row highlight', () => {
       await expect
         .poll(
           async () =>
-            changedPixels(textBaseline, await shoot(page, (await geometry()).text), FILL_THRESHOLD),
+            changedPixels(
+              textBaseline,
+              await shoot(page, (await geometry()).text, dpr),
+              FILL_THRESHOLD,
+            ),
           { timeout: 10_000, message: 'hovering a row should repaint its description area' },
         )
         .toBeGreaterThan(0)
       expect(
-        changedPixels(laneBaseline, await shoot(page, (await geometry()).lane), LANE_THRESHOLD),
+        changedPixels(
+          laneBaseline,
+          await shoot(page, (await geometry()).lane, dpr),
+          LANE_THRESHOLD,
+        ),
         {
           message: 'hovering a row must leave its swimlane column untouched',
         },
@@ -223,14 +242,22 @@ test.describe('git graph row highlight', () => {
       await expect
         .poll(
           async () =>
-            changedPixels(textBaseline, await shoot(page, (await geometry()).text), FILL_THRESHOLD),
+            changedPixels(
+              textBaseline,
+              await shoot(page, (await geometry()).text, dpr),
+              FILL_THRESHOLD,
+            ),
           { timeout: 10_000, message: 'selecting a row should repaint its description area' },
         )
         .toBeGreaterThan(0)
       // Geometry is re-read above (per shot) and the sizes are compared, so a
       // reflow reads as a size failure rather than as changed pixels.
       expect(
-        changedPixels(laneBaseline, await shoot(page, (await geometry()).lane), LANE_THRESHOLD),
+        changedPixels(
+          laneBaseline,
+          await shoot(page, (await geometry()).lane, dpr),
+          LANE_THRESHOLD,
+        ),
         {
           message: 'selecting a row must leave its swimlane column untouched',
         },

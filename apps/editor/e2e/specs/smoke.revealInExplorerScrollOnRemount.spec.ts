@@ -27,6 +27,14 @@ import { mkTempDir } from '@universe-editor/e2e-harness'
 const FILE_COUNT = 120
 const TARGET = `file-${String(FILE_COUNT - 1).padStart(3, '0')}.txt`
 
+// The containment check below is a strict rect comparison, and at a fractional
+// devicePixelRatio the row heights and the container height land on fractions
+// (125% display scaling: the last row's bottom sits 0.2px past the tree's rect
+// even though the reveal scrolled to the very end). Sub-pixel slack keeps that
+// from reading as "the reveal never scrolled" — the guarded bug is a
+// hundreds-of-pixels miss, so 1px still catches it.
+const SUBPIXEL_SLACK = 1
+
 test.describe('@p1 explorer reveal scroll on remount', () => {
   test('Reveal Active File scrolls the target row into view when the Explorer tree was unmounted @regression', async ({
     workbench,
@@ -108,19 +116,23 @@ test.describe('@p1 explorer reveal scroll on remount', () => {
     await expect
       .poll(
         () =>
-          page.evaluate((targetName) => {
-            const tree = document.querySelector<HTMLElement>('[role="tree"]')
-            if (!tree) return { ok: false, reason: 'no tree' }
-            const treeRect = tree.getBoundingClientRect()
-            const rows = Array.from(tree.querySelectorAll<HTMLElement>('[role="treeitem"]'))
-            const row = rows.find((el) => el.textContent?.includes(targetName))
-            if (!row) return { ok: false, reason: 'no row' }
-            const rowRect = row.getBoundingClientRect()
-            return {
-              ok: rowRect.top >= treeRect.top && rowRect.bottom <= treeRect.bottom,
-              reason: `rowTop=${rowRect.top} rowBottom=${rowRect.bottom} treeTop=${treeRect.top} treeBottom=${treeRect.bottom} scrollTop=${tree.scrollTop} scrollHeight=${tree.scrollHeight}`,
-            }
-          }, TARGET),
+          page.evaluate(
+            ([targetName, slack]) => {
+              const tree = document.querySelector<HTMLElement>('[role="tree"]')
+              if (!tree) return { ok: false, reason: 'no tree' }
+              const treeRect = tree.getBoundingClientRect()
+              const rows = Array.from(tree.querySelectorAll<HTMLElement>('[role="treeitem"]'))
+              const row = rows.find((el) => el.textContent?.includes(targetName))
+              if (!row) return { ok: false, reason: 'no row' }
+              const rowRect = row.getBoundingClientRect()
+              return {
+                ok:
+                  rowRect.top >= treeRect.top - slack && rowRect.bottom <= treeRect.bottom + slack,
+                reason: `rowTop=${rowRect.top} rowBottom=${rowRect.bottom} treeTop=${treeRect.top} treeBottom=${treeRect.bottom} scrollTop=${tree.scrollTop} scrollHeight=${tree.scrollHeight}`,
+              }
+            },
+            [TARGET, SUBPIXEL_SLACK] as const,
+          ),
         { timeout: 5000 },
       )
       .toEqual(expect.objectContaining({ ok: true }))
