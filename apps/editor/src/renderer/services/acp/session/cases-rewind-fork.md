@@ -55,7 +55,7 @@ renderer 命令 dryRun 预览 → 确认框（有文件改动=三按钮：撤销
 #### fork（vendor `unstable_forkSession`）
 ```
 renderer forkSession(sid, messageId?) → conn.unstable_forkSession({sessionId, cwd, _meta:{rewindTo:messageId}})
-  ⟨vendor⟩: forkSliceBefore(rewindTo)=锚点前驱 → sdkForkSession(sid,{dir,upToMessageId:前驱})
+  ⟨vendor⟩: forkSliceBefore(rewindTo) → resolveForkAnchor(磁盘) = 锚点前驱 → sdkForkSession(sid,{dir,upToMessageId:前驱})
   → 返回新 sessionId → renderer temp lease 丢弃 → resumeSession(新id)（自开 lease 做 session/load+replay+setActive）
 ```
 无 `_meta.rewindTo`（tip fork / 命令面板 / side task）= 整份复制，语义不变。有 `rewindTo` 时**分叉点解析失败即报错**（`RequestError.invalidParams`，renderer 侧弹 "Fork failed: …"），绝不静默退回整份复制——见已修 bug #7。
@@ -71,8 +71,8 @@ renderer forkSession(sid, messageId?) → conn.unstable_forkSession({sessionId, 
 | `RewindSessionRequest` | `{sessionId, messageId, dryRun?, rewindFiles?}`（rewindFiles 默认 true=回滚） |
 | `rewindSession()` | 三步 rewind：rewindFiles + truncateTranscriptBefore + teardown/resume/replay |
 | `unstable_forkSession()` | 读 `_meta.rewindTo` → 前驱 → `sdkForkSession({upToMessageId})` 写新文件；无锚点=整份复制 |
-| `forkSliceBefore(sid,msgId,dir?)` | 锚点解析 + 校验（**唯一入口**）：live 映射 → 磁盘 `getSessionMessages` 匹配 → 折叠 prompt 兜底；解析不到/锚点是首条 → 抛 `RequestError.invalidParams` |
-| `foldedPromptForkPoint(sid,msgId,chain)` | 折叠（steered）prompt 的切点：`readTranscriptEntries` 找 `isQueuedCommandEntry && attachment.source_uuid===msgId` 的行，取其 `parentUuid`（**须在有效链上**，否则算未知） |
+| `forkSliceBefore(sid,msgId,dir?)` | 薄壳：注入真实依赖（live 表 / `getSessionMessages` / `readTranscriptEntries` / `messageIdForGrouping`）后调 `resolveForkAnchor`，其余编排（SDK `forkSession`、日志）留在 `unstable_forkSession` |
+| `resolveForkAnchor(deps)`（vendor `session-anchor.ts`） | 锚点解析 + 校验（**唯一入口**）：live 映射 → 磁盘 `getSessionMessages` 匹配 → 折叠 prompt 兜底（复用 `transcript-history.ts` 的 `findFoldedPromptParent`）；解析不到 / 锚点是首条 → 抛 `RequestError.invalidParams`。依赖全部注入，不反向依赖 agent |
 | `resolveMessageUuid(sid,msgId)` | ACP messageId → SDK uuid（只查 `messageIdToUuid`，**仅 live 进程有效**） |
 | `messageUuidBefore(sid,targetUuid,dir?)` | 找 target 的**前驱** uuid（inclusive API 排除锚点用）；首条返 undefined。现只服务 rewind |
 | `truncateTranscriptBefore(sid,anchorUuid,dir?)` | **物理截断磁盘 JSONL**：定位文件→删 `uuid===anchor` 行及之后→tmp+rename 原子写。best-effort（找不到只 log 不抛） |

@@ -272,6 +272,12 @@ jobs:
           path: vendor/codex-acp/node_modules
           key: codex-agent-deps-${{ runner.os }}-${{ hashFiles('vendor/codex-acp/package-lock.json') }}
 
+      # 该护栏断言的是 fork 的 .github/workflows 内容，需要 submodule 检出。普通
+      # `ci` job 不拉子模块（`pnpm test:release` 里此文件自行 skip），只有本 job 有
+      # fork 源码，故显式跑一次，否则退役护栏在 CI 从不真正执行。
+      - name: Fork release-entry guard (claude-agent-acp)
+        run: node --test scripts/__tests__/vendor-release-retirement.test.mjs
+
       # The contract test imports editor renderer source; platform dist must exist.
       - name: Build (platform dist required for integration imports)
         run: pnpm build --filter=@universe-editor/platform...

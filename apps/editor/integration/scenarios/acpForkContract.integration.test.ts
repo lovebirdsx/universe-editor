@@ -57,6 +57,8 @@ import {
 } from '../fixtures/realForkConnection.js'
 import type { NewSessionResponse, SessionConfigOption } from '@agentclientprotocol/sdk'
 import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 
 // Handshake + newSession over a real subprocess: allow generous headroom (fork
 // cold-start + SDK model list ~1.3s observed) so CI machines don't flake.
@@ -93,6 +95,7 @@ const CLI_GATED_LEGS = [
   'claude ext-method wire contract (rewind_session / set_session_title)',
   'claude native model catalog + extra-model injection (session/new)',
   'claude custom-model switch (ANTHROPIC_CUSTOM_MODEL_OPTION)',
+  'claude session/load replay over a synthetic transcript',
 ] as const
 
 interface ForkContractCoverage {
@@ -735,6 +738,221 @@ describe.skipIf(!claudeExtReady)('claude ext-method wire contract (real dist)', 
     ).rejects.toThrow(/title must be non-empty|internal error/i)
   })
 })
+
+// 合成 JSONL 只写临时 CLAUDE_CONFIG_DIR；真实 SDK / CLI 验收不发送 prompt、不读用户历史。
+const SYNTH_SESSION_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+const SYNTH_U1 = '11111111-1111-4111-8111-111111111111'
+const SYNTH_A1 = '22222222-2222-4222-8222-222222222222'
+const SYNTH_U2 = '33333333-3333-4333-8333-333333333333'
+const SYNTH_A2 = '44444444-4444-4444-8444-444444444444'
+const SYNTH_U3 = '55555555-5555-4555-8555-555555555555'
+
+type SynthEntry = Record<string, unknown>
+
+function synthUser(uuid: string, parentUuid: string | null, text: string): SynthEntry {
+  return {
+    type: 'user',
+    uuid,
+    parentUuid,
+    sessionId: SYNTH_SESSION_ID,
+    timestamp: '2026-01-01T00:00:00.000Z',
+    message: { role: 'user', content: [{ type: 'text', text }] },
+  }
+}
+
+function synthAssistant(
+  uuid: string,
+  parentUuid: string | null,
+  apiId: string,
+  text: string,
+): SynthEntry {
+  return {
+    type: 'assistant',
+    uuid,
+    parentUuid,
+    sessionId: SYNTH_SESSION_ID,
+    timestamp: '2026-01-01T00:00:01.000Z',
+    message: {
+      id: apiId,
+      type: 'message',
+      role: 'assistant',
+      model: 'claude',
+      content: [{ type: 'text', text }],
+      stop_reason: 'end_turn',
+      usage: { input_tokens: 1, output_tokens: 1 },
+    },
+  }
+}
+
+function syntheticTranscript(): SynthEntry[] {
+  return [
+    synthUser(SYNTH_U1, null, 'contract first prompt'),
+    synthAssistant(SYNTH_A1, SYNTH_U1, 'api-1', 'contract answer one'),
+    synthUser(SYNTH_U2, SYNTH_A1, 'contract second prompt'),
+    synthAssistant(SYNTH_A2, SYNTH_U2, 'api-2', 'contract answer two'),
+    synthUser(SYNTH_U3, SYNTH_A2, 'contract third prompt'),
+  ]
+}
+
+// 使用 SDK 与 fork 的历史扫描器都能识别的项目目录布局。
+function writeSyntheticTranscript(configDir: string, entries: SynthEntry[]): string {
+  const dir = join(configDir, 'projects', 'acp-contract-synthetic')
+  mkdirSync(dir, { recursive: true })
+  const file = join(dir, `${SYNTH_SESSION_ID}.jsonl`)
+  writeFileSync(file, entries.map((entry) => JSON.stringify(entry)).join('\n') + '\n', 'utf8')
+  return file
+}
+
+function readTranscript(file: string): SynthEntry[] {
+  return readFileSync(file, 'utf8')
+    .trim()
+    .split('\n')
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as SynthEntry)
+}
+
+// 锚定 fork 仅做文件操作，故只要求 dist；空 cwd 验证解析时省略 dir、跨项目查找的契约。
+describe.skipIf(!distReady('claude'))(
+  'claude anchored fork over a synthetic transcript (real dist)',
+  () => {
+    let cwd: string
+    let configDir: string
+    let connection: RealForkConnection
+    let sourceFile: string
+
+    async function initialize(): Promise<void> {
+      await withTimeout(
+        connection.conn.initialize(CLIENT_INIT_PARAMS),
+        INIT_TIMEOUT_MS,
+        'claude initialize',
+      ).catch((err: unknown) => {
+        throw new Error(`${String(err)}\n--- fork stderr ---\n${connection.stderr()}`)
+      })
+    }
+
+    async function forkAt(rewindTo: string) {
+      return withTimeout(
+        connection.conn.unstable_forkSession({
+          sessionId: SYNTH_SESSION_ID,
+          cwd: '',
+          mcpServers: [],
+          _meta: { rewindTo },
+        }),
+        CALL_TIMEOUT_MS,
+        `claude unstable_forkSession (${rewindTo})`,
+      )
+    }
+
+    beforeEach(() => {
+      cwd = mkTempDir('acp-contract-claude-fork-')
+      configDir = mkTempDir('acp-contract-claude-fork-config-')
+      sourceFile = writeSyntheticTranscript(configDir, syntheticTranscript())
+      connection = spawnForkConnection('claude', cwd, { env: claudeNativeEnv(configDir) })
+    })
+
+    afterEach(async () => {
+      await connection.dispose()
+      for (const dir of [cwd, configDir]) {
+        try {
+          removeDirWithRetry(dir)
+        } catch {
+          // 尽力清理临时目录
+        }
+      }
+    })
+
+    it('session/fork slices up to the anchor predecessor and leaves the source untouched', async () => {
+      await initialize()
+      const before = readFileSync(sourceFile)
+
+      const forked = await forkAt(SYNTH_U3)
+
+      expect(typeof forked.sessionId).toBe('string')
+      expect(forked.sessionId).not.toBe(SYNTH_SESSION_ID)
+      expect(readFileSync(sourceFile).equals(before)).toBe(true)
+
+      const forkedFile = join(dirname(sourceFile), `${forked.sessionId}.jsonl`)
+      // SDK 附加的 custom-title 是元数据，不参与消息切点断言。
+      const originals = readTranscript(forkedFile)
+        .filter((entry) => entry['type'] !== 'custom-title')
+        .map((entry) => (entry['forkedFrom'] as { messageUuid?: string } | undefined)?.messageUuid)
+      expect(originals).toEqual([SYNTH_U1, SYNTH_A1, SYNTH_U2, SYNTH_A2])
+      expect(originals).not.toContain(SYNTH_U3)
+    })
+
+    it('rejects an unknown anchor with invalid-params instead of copying the whole session', async () => {
+      await initialize()
+      const err = await wireError(
+        'claude fork unknown anchor',
+        forkAt('no-such-message-id'),
+        connection,
+      )
+      expect(err.code).toBe(-32602)
+      expect(err.message).toMatch(/not found/i)
+      // 拒绝后不能留下整份复制的副本。
+      expect(readdirSync(dirname(sourceFile))).toEqual([`${SYNTH_SESSION_ID}.jsonl`])
+    })
+
+    it('rejects a first-message anchor that has no predecessor', async () => {
+      await initialize()
+      const err = await wireError('claude fork first-message anchor', forkAt(SYNTH_U1), connection)
+      expect(err.code).toBe(-32602)
+      expect(err.message).toMatch(/first message/i)
+    })
+  },
+)
+
+// load 会拉起 CLI；隔离配置与凭据，只验证回放通知，不发送 prompt。
+describe.skipIf(!claudeExtReady)(
+  'claude session/load replays a synthetic transcript (real dist)',
+  () => {
+    let cwd: string
+    let configDir: string
+    let connection: RealForkConnection
+
+    beforeEach(() => {
+      cwd = mkTempDir('acp-contract-claude-load-')
+      configDir = mkTempDir('acp-contract-claude-load-config-')
+      writeSyntheticTranscript(configDir, syntheticTranscript())
+      connection = spawnForkConnection('claude', cwd, { env: claudeNativeEnv(configDir) })
+    })
+
+    afterEach(async () => {
+      await connection.dispose()
+      for (const dir of [cwd, configDir]) {
+        try {
+          removeDirWithRetry(dir)
+        } catch {
+          // 尽力清理临时目录
+        }
+      }
+    })
+
+    it('replays the inherited user turns with no prompt sent', async () => {
+      await withTimeout(
+        connection.conn.initialize(CLIENT_INIT_PARAMS),
+        INIT_TIMEOUT_MS,
+        'claude initialize',
+      ).catch((err: unknown) => {
+        throw new Error(`${String(err)}\n--- fork stderr ---\n${connection.stderr()}`)
+      })
+
+      await withTimeout(
+        connection.conn.loadSession({ sessionId: SYNTH_SESSION_ID, cwd, mcpServers: [] }),
+        INIT_TIMEOUT_MS,
+        'claude loadSession',
+      ).catch((err: unknown) => {
+        throw new Error(`${String(err)}\n--- fork stderr ---\n${connection.stderr()}`)
+      })
+
+      const userTexts = connection.sessionUpdates
+        .filter((n) => n.update.sessionUpdate === 'user_message_chunk')
+        .map((n) => JSON.stringify(n.update))
+      expect(userTexts.some((text) => text.includes('contract first prompt'))).toBe(true)
+      expect(userTexts.some((text) => text.includes('contract second prompt'))).toBe(true)
+    })
+  },
+)
 
 // Codex's live ext-method legs. Codex implements BOTH request ext-methods the
 // editor calls — `rewind_session` and `set_session_title` (the older wording that
