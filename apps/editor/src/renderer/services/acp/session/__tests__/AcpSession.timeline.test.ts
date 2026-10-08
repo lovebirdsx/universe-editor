@@ -2916,6 +2916,97 @@ describe('AcpSession.timeline — codex sub-agent trail', () => {
     expect(parent.id).toBe('act-1')
     expect((parent.call.children ?? []).map((c) => c.id)).toEqual(['child-cmd'])
   })
+
+  /** The `spawnAgent` collaboration card: the parent a codex editor client actually sees. */
+  const spawnCard = (toolCallId: string, timing?: Record<string, number>): SessionUpdate => ({
+    sessionUpdate: 'tool_call',
+    toolCallId,
+    title: 'spawnAgent',
+    kind: 'other',
+    status: 'completed',
+    rawInput: { prompt: 'Find the logging call sites', receiverThreadIds: ['child-thread'] },
+    _meta: {
+      codex: { subagent: { threadId: 'child-thread', activity: 'spawnAgent' } },
+      ...(timing !== undefined ? { '_universe/subagentTiming': timing } : {}),
+    },
+  })
+
+  const timingUpdate = (toolCallId: string, timing: Record<string, number>): SessionUpdate => ({
+    sessionUpdate: 'tool_call_update',
+    toolCallId,
+    _meta: { '_universe/subagentTiming': timing },
+  })
+
+  it('anchors the run clock when the spawn card reports it, and does not freeze it on settle', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: spawnCard('spawn-1', { startedAtMs: 5_000 }),
+    })
+
+    const card = s.toolCalls.get()[0]!
+    expect(card.subagentRunStartedAt).toBe(5_000)
+    // The spawn card settles on the wire in milliseconds while the sub-agent runs on:
+    // a local freeze here would strand the badge at `0s`.
+    expect(card.durationMs).toBeUndefined()
+  })
+
+  it('freezes the run span the fork publishes when the child turn ends', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: spawnCard('spawn-1', { startedAtMs: 5_000 }),
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: timingUpdate('spawn-1', { startedAtMs: 5_000, durationMs: 65_000 }),
+    })
+
+    const card = s.toolCalls.get()[0]!
+    expect(card.durationMs).toBe(65_000)
+    expect(card.subagentRunStartedAt).toBe(5_000)
+  })
+
+  // A replayed card is settled and its run long over: the fork sends the duration it summed
+  // from the child's turns as its own `_meta`-only update, with no anchor.
+  it('takes a replayed run span that arrives as a bare duration update', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    conn.sink.onSessionUpdate({ sessionId: 'agent-1', update: spawnCard('spawn-1') })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: timingUpdate('spawn-1', { durationMs: 4_600 }),
+    })
+
+    const card = s.toolCalls.get()[0]!
+    expect(card.durationMs).toBe(4_600)
+    expect(card.subagentRunStartedAt).toBeUndefined()
+  })
+
+  // Not a shape our forks send today (they split the two halves across updates), but the
+  // reader accepts a full span on one card, so it must land whole.
+  it('takes a whole span reported on the card itself', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: spawnCard('spawn-1', { startedAtMs: 5_000, durationMs: 4_600 }),
+    })
+
+    const card = s.toolCalls.get()[0]!
+    expect(card.durationMs).toBe(4_600)
+    expect(card.subagentRunStartedAt).toBe(5_000)
+  })
 })
 
 describe('AcpSession — universe capabilities from initialize _meta', () => {

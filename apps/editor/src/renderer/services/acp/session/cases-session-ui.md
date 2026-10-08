@@ -1,6 +1,6 @@
 # cases-session-ui
 
-> 本文从 `services/acp/session/CLAUDE.md` 拆出，范围是：会话 UI 的逐案坑——标题四个写入方 + 跨工作区持久化（`set_session_title`）与跨 bucket 回填、长 timeline 滚动抖动、第一条用户消息常驻渲染、卡片折叠两层、执行时间统计、上游故障呈现（HTTP 200 空 body）、卡片产出文档在侧边组打开。路由入口见 [CLAUDE.md](CLAUDE.md)「常见任务 → 改哪里」与「易踩坑速记」。
+> 本文从 `services/acp/session/CLAUDE.md` 拆出，范围是：会话 UI 的逐案坑——标题四个写入方 + 跨工作区持久化（`set_session_title`）与跨 bucket 回填、长 timeline 滚动抖动、第一条用户消息常驻渲染、卡片折叠两层、执行时间统计、子 Agent 卡片（首行：任务标题 / 跑动区间 / 模型与 ≈¥；正文：请求）、上游故障呈现（HTTP 200 空 body）、卡片产出文档在侧边组打开。路由入口见 [CLAUDE.md](CLAUDE.md)「常见任务 → 改哪里」与「易踩坑速记」。
 
 ## 会话标题四个写入方，优先级 manual > ai > 首条 prompt 派生（`derivedTitle`）> agent 报告（`session_info_update`/hydrate 的 summary）
 
@@ -31,6 +31,15 @@
 ## 执行时间统计：只计 `status === 'running'` 的净时长
 
 只累计 `status === 'running'` 的净时长（多段累积、持久化恢复）——设计意图是与挂起/等待时间区分，让用户了解 Agent 实际工作了多少。结算在 `acpSession.ts` 的 `_recomputeStatus` / `_finalizeRunningSegment`（`acpSession.ts:2564/2580`，**离开 running 时**结算最后一段）；历史持久化走 `AcpSessionHistoryEntry.accumulatedRunningMs`（可选字段、**无版本迁移**）。两处显示：输入框下方（`PromptInput.tsx`）+ Sessions 面板 session 行（`SessionListBody.tsx`，foreign 会话回退 `useForeignSessionStats`）；公共 hook `useSessionTimer` + `formatRunningTime` 在 `workbench/agents/`。
+
+## 子 Agent 卡片首行：任务标题 / 跑动区间 / 模型与 ≈¥
+
+claude 的 Task 卡首行一向有「任务描述 · 模型 · 耗时 · ↑↓token · ≈¥」，codex 的 spawn 卡原来只有裸标题 + token。三者各自的落点与坑：
+
+- **标题**：`toolCallDisplay.ts` 的 `subagentTaskTitle`，唯一消费方是 `deriveToolCallDisplay` 的 default 分支。**只认 codex 协作 spawn**——判据 `call.subagent === true` **且** `rawInput` 带 `receiverThreadIds` 数组：claude 的 Task input 同样有 `prompt`，但没有「它创建的线程」这个键，而 claude 卡的首行是 agent 自己写的 description，动不得。取 `prompt` 首个非空行 → 折叠空白 → 超 80 字符截断加 `…`；无 prompt（`capRawInput` 因超 64KB 整体丢弃 rawInput 是最常见的一种）回退 wire title（`spawnAgent`）。放 UI 层而非 ingest 期的理由与 rawInput 的既有定位一致（同 Bash 的 `description` 提升）：纯函数可测，回放自动一致。
+- **跑动区间**：spawn 项在 wire 上只活 30–58ms，而子 Agent 跑几十秒到数分钟，所以**卡片自身的 status/duration 不能当时钟**。fork 上报 `_meta._universe/subagentTiming`（锚点随卡首报、子线程 `turn/completed` 收口、回放按子 turn 时长求和，两半都落成父卡上的 `tool_call(_update)`——叙事见 `vendor/codex-acp/cases-session.md` 与 `cases-replay.md`），编辑器落进 `AcpToolCall.subagentRunStartedAt` / `durationMs`：`tool_call`（live 的锚点走这条）与 `tool_call_update`（live 收口与回放都走这条）两个分支都要读。**有锚点时本地 freeze 必须让位**（`durationMs` 保持 undefined）：否则卡在 wire 上落定时冻结出的那 30ms 会把徽标钉死在 `0s`，而 run-end 之前它本该走秒。`SubagentStatsBadge.useRunDuration` 据此判 running（`status === pending/in_progress` **或**「有锚点无时长」），时钟起点取 `subagentRunStartedAt ?? startedAt`；claude 无此 meta，老路径（本地 freeze）逐字不变。三条边界：① 子 Agent 在父 prompt 之外结束、或孙线程（深度只做一层）的收口到不了 → 停在走秒态；② 一次 spawn 建多个线程时共用卡片与锚点，先结束者会把时长短暂冻结在偏小值、最后一个覆盖为正确值（fork 侧刻意的自愈取舍）；③ 锚点是 **app-server 所在机器**的 epoch ms，remote authority 会话在两台机器间做减法——远端时钟超前会把时钟钉在 `0s`（收口值由 fork 算好，不受影响，run 结束即自愈），偏移大时该会话的走秒不可信。
+- **模型与 ≈¥**：`_universe/subagentStats.model`（spawn 项模型 → 会话当前模型剥 `[...]` 后缀）喂既有 `_priceSubagentStats` → 该 provider 声明的费率源。ChatGPT 订阅 / 未声明费率源时整块省略 ≈¥，绝不跨厂商兜底（沿用 `_priceSubagentStats` 既有红线）；模型也取不到时连模型徽标一起省略。**新字段要进 `trimToolCall` 白名单**（内存裁剪的显式字段表）：`subagentRunStartedAt` 丢了会让正在跑的子 Agent 卡片徽标整体消失（`subagentStats` 同理，两者都已登记）。
+- **请求正文（父 → 子的完整任务描述）**：`toolCallDisplay.ts` 的 `subagentRequest` → `ToolCallCard.tsx` default 分支的 body **最前**一块（`data-testid="acp-subagent-request"`，markdown 渲染**逐字全文**——含与标题相同的那一行，重复是刻意的，别加「与标题相同则隐藏」；不加标签、不折叠；body 只在展开时挂载，折叠态零成本）。两个 fork 同源、都取 `rawInput.prompt`：codex 协作 spawn 卡对非 AIR 客户端不发 `content`（正文原本整块空白，请求只活在 rawInput 里），claude 的 Task 卡跑动中正文本就是这句 prompt、结果到达后 `content` 被整体替换成报告——两边都靠这一块回看请求。**判据与标题刻意不同**：标题的 `subagentTaskTitle` 只认 codex（要 `receiverThreadIds`），正文两个 fork 都认——**别把它当漏改补上门槛**。去重规则 `call.text.trim() === prompt.trim()` 时整块不渲染，即**跑动中＝正文本身就是请求（无独立块）；完成后＝请求块 → 报告 → 子轨迹**；边界已证明不可达：`rawInput` 上限 64KB 且按 `JSON.stringify` 计（≥ prompt 本身），而文本块截断阈值 256KB——能取回 prompt 就永远不是「半截 prompt + 完整请求」同现。四条降级（静默、不报错）：① `rawInput` 超 64KB 被整条丢弃；② 内存裁剪后 `rawInput` 不在 `trimToolCall` 白名单（同标题回退一源）；③ codex 的 spawn `prompt` 可为 null；④ `syntheticDenial` 的卡 body 整体为 null。**未修**：复制「这条消息」不含请求——`acpSessionContent.ts` 的 `toolCallToText` 走模型不走 DOM，只认 title/text，要补得先把 helper 下移到 session 层（依赖方向：services 不引 workbench 的 UI helper）。
 
 ## 上游故障呈现：网关 HTTP 200 空 body（别与「假拒绝」混淆）
 

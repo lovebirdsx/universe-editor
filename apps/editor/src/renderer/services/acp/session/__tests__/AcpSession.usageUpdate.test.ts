@@ -60,6 +60,13 @@ const MOONSHOT_GATEWAY_CTX: SessionProviderContext = {
   cnyPerUsd: 6.73,
 }
 
+/** A codex session on an OpenAI channel: rates come from the built-in catalog. */
+const OPENAI_CATALOG_CTX: SessionProviderContext = {
+  providerId: 'openai',
+  protocol: 'openai-responses',
+  pricingSource: { id: 'catalog', options: { vendor: 'openai' } },
+}
+
 function createSession(ctx: SessionProviderContext | undefined): AcpSession {
   return new AcpSession(
     's1',
@@ -291,5 +298,54 @@ describe('AcpSession — mid-turn usage_update cost', () => {
     // (1_000_000−800_000)*14 + 800_000*1.4 + 10_000*70 = 4_620_000 CNY ÷ 6.73 ÷ 1e6.
     const expected = ((1_000_000 - 800_000) * 14 + 800_000 * 1.4 + 10_000 * 70) / 6.73 / 1e6
     expect(call?.subagentStats?.costUSD).toBeCloseTo(expected, 10)
+  })
+
+  // Codex bills no per-sub-agent figure, so its fork reports the model it spawned the
+  // sub-agent with (`_universe/subagentStats.model`) and the client prices the tally —
+  // against the OpenAI catalog when the session runs on an OpenAI channel. Without a
+  // model there is no rate, so the estimate is omitted rather than guessed.
+  it('prices a codex sub-agent tally from the OpenAI catalog once the fork names the model', () => {
+    session = createSession(OPENAI_CATALOG_CTX)
+
+    session.applyUpdate({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'spawn-1',
+      title: 'spawnAgent',
+      kind: 'other',
+      status: 'completed',
+    } as SessionUpdate)
+    session.applyUpdate({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'spawn-1',
+      _meta: {
+        '_universe/subagentStats': {
+          model: 'gpt-5.5-codex',
+          inputTokens: 1_000_000,
+          cacheReadTokens: 0,
+          cacheCreateTokens: 0,
+          outputTokens: 100_000,
+        },
+      },
+    } as SessionUpdate)
+
+    const priced = session.toolCalls.get()[0]
+    // 1_000_000*5 + 100_000*30 = 8_000_000 USD-ticks ÷ 1e6.
+    expect(priced?.subagentStats?.costUSD).toBeCloseTo(8, 10)
+
+    session.applyUpdate({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'spawn-1',
+      _meta: {
+        '_universe/subagentStats': {
+          inputTokens: 1_000_000,
+          cacheReadTokens: 0,
+          cacheCreateTokens: 0,
+          outputTokens: 100_000,
+        },
+      },
+    } as SessionUpdate)
+
+    const unnamed = session.toolCalls.get()[0]
+    expect(unnamed?.subagentStats?.costUSD).toBeUndefined()
   })
 })

@@ -9,7 +9,7 @@
  *   - other     → inline diff previews + markdown blocks (default behaviour).
  *--------------------------------------------------------------------------------------------*/
 
-import { memo, useState, type ReactNode } from 'react'
+import { memo, useMemo, useState, type ReactNode } from 'react'
 import { Eye, FileSymlink } from 'lucide-react'
 import {
   IConfigurationService,
@@ -49,6 +49,7 @@ import {
   isKeepPlanning,
   isSyntheticDenial,
   keepPlanningFeedback,
+  subagentRequest,
   toolCallKindLabel,
   tryPrettyJson,
 } from './toolCallDisplay.js'
@@ -192,6 +193,16 @@ export const ToolCallCard = memo(function ToolCallCard({
   // 拒绝文案为「上游中断、需要重发」说明——它不是用户拒绝的。
   const syntheticDenial = isSyntheticDenial(call)
 
+  // The request the parent agent sent this sub-agent. claude already renders the prompt as the
+  // body while the Task runs, then the result replaces those blocks — so the request is shown
+  // again above the report, but never twice.
+  const request = subagentRequest(call)
+  const showRequest = request !== undefined && call.text.trim() !== request.trim()
+  const requestBlocks = useMemo(
+    () => (request !== undefined ? [{ type: 'text' as const, text: request }] : []),
+    [request],
+  )
+
   const diffs = hasDiffs && (
     <div className={styles['toolCallDiffs']}>
       {call.diffs.map((d, i) => {
@@ -293,6 +304,11 @@ export const ToolCallCard = memo(function ToolCallCard({
       {diffs}
       {locations}
       {commandDetail}
+      {showRequest && (
+        <div className={styles['toolCallBody']} data-testid="acp-subagent-request">
+          <MessageContent blocks={requestBlocks} />
+        </div>
+      )}
       {keepPlanning
         ? steerFeedback !== undefined && (
             <div className={styles['toolCallFeedback']} data-testid="acp-keep-planning-feedback">

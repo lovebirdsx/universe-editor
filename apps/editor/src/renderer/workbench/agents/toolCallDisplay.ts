@@ -200,6 +200,51 @@ export function deriveToolCallDisplay(call: AcpToolCall): ToolCallDisplay {
     case 'switch_mode':
       return deriveSwitchModeDisplay(call)
     default:
-      return { title: call.title }
+      return { title: subagentTaskTitle(call) ?? call.title }
   }
+}
+
+/**
+ * The full request a sub-agent was given (the task its parent sent it), for the card body. Both
+ * forks name it `rawInput.prompt` — codex's collaboration spawn, and claude's Task, whose body
+ * shows the prompt only until the result replaces it.
+ *
+ * Unlike {@link subagentTaskTitle} there is no `receiverThreadIds` gate: that gate exists to
+ * recognize a codex spawn for the *title* alone, and claude's Task input carries the same `prompt`
+ * without the threads it created. The string is returned as written (no trimming) because the body
+ * renders it as markdown, where leading indentation is content.
+ */
+export function subagentRequest(call: AcpToolCall): string | undefined {
+  if (call.subagent !== true) return undefined
+  const prompt = readStringField(call.rawInput, 'prompt')
+  if (prompt === undefined || prompt.trim().length === 0) return undefined
+  return prompt
+}
+
+/** Longest task line promoted to a card title before it is cut short. */
+const SUBAGENT_TASK_TITLE_MAX_CHARS = 80
+
+/**
+ * The task a sub-agent was given, for the card title of a sub-agent-spawning tool call. Codex
+ * names it in the spawn item's `prompt`, and the card reads far better with the task's first line
+ * than with the wire title (`spawnAgent`); raw input is kept for exactly this kind of friendly
+ * title, and it is dropped outright when oversized — then the wire title stands.
+ *
+ * Only a codex collaboration spawn is touched: the threads it created are the one key claude's
+ * Task input does not carry, and claude's card is already titled with the description the agent
+ * wrote for it.
+ */
+export function subagentTaskTitle(call: AcpToolCall): string | undefined {
+  if (call.subagent !== true) return undefined
+  const raw = call.rawInput
+  if (typeof raw !== 'object' || raw === null) return undefined
+  if (!Array.isArray((raw as { receiverThreadIds?: unknown }).receiverThreadIds)) return undefined
+  const prompt = readStringField(raw, 'prompt')
+  if (prompt === undefined) return undefined
+  const firstLine = prompt.split('\n').find((line) => line.trim().length > 0)
+  if (firstLine === undefined) return undefined
+  const text = firstLine.replace(/\s+/g, ' ').trim()
+  return text.length > SUBAGENT_TASK_TITLE_MAX_CHARS
+    ? `${text.slice(0, SUBAGENT_TASK_TITLE_MAX_CHARS)}…`
+    : text
 }

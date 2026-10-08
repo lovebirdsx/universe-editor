@@ -5,7 +5,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import {
   IConfigurationService,
   IEditorGroupsService,
@@ -412,6 +412,80 @@ describe('ToolCallCard', () => {
     return now - (before.find((s) => s.name === name)?.chars ?? 0)
   }
 
+  describe('sub-agent request body', () => {
+    it('shows the whole task a codex spawn was given, whose card carries no content of its own', () => {
+      // The first line is repeated by the card title — intended: the body is the request verbatim.
+      const prompt = 'Find all logging call sites\nand report them'
+      renderCard(
+        makeCall({
+          kind: 'other',
+          title: 'spawnAgent',
+          subagent: true,
+          rawInput: { prompt, receiverThreadIds: ['t'] },
+        }),
+      )
+      const request = screen.getByTestId('acp-subagent-request')
+      expect(request.textContent).toContain('Find all logging call sites')
+      expect(request.textContent).toContain('and report them')
+    })
+
+    it('does not repeat the prompt a running claude Task already renders as its body', () => {
+      // claude streams the prompt as the display content; it lands in `blocks`/`text` verbatim.
+      const prompt = 'Explore the codebase'
+      renderCard(
+        makeCall({
+          kind: 'think',
+          title: 'Explore the codebase',
+          subagent: true,
+          rawInput: { prompt },
+          text: prompt,
+          blocks: [{ type: 'text', text: prompt }],
+          status: 'in_progress',
+        }),
+      )
+      expect(screen.queryByTestId('acp-subagent-request')).toBeNull()
+      expect(screen.getAllByTestId('acp-markdown')).toHaveLength(1)
+    })
+
+    it('brings the request back above the report once the result replaced the body', () => {
+      renderCard(
+        makeCall({
+          kind: 'think',
+          title: 'Explore the codebase',
+          subagent: true,
+          rawInput: { prompt: 'Explore the codebase' },
+          text: 'Found 3 call sites',
+          blocks: [{ type: 'text', text: 'Found 3 call sites' }],
+        }),
+      )
+      const request = screen.getByTestId('acp-subagent-request')
+      expect(request.textContent).toContain('Explore the codebase')
+      // Request first, report after: the card reads as what was asked, then what came back.
+      expect(screen.getAllByTestId('acp-markdown')[0]).toBe(
+        within(request).getByTestId('acp-markdown'),
+      )
+      expect(screen.getAllByTestId('acp-markdown')[1]?.textContent).toContain('Found 3 call sites')
+    })
+
+    it('stays quiet when the report happens to be the prompt itself', () => {
+      renderCard(
+        makeCall({
+          kind: 'think',
+          subagent: true,
+          rawInput: { prompt: 'Explore the codebase' },
+          text: 'Explore the codebase',
+          blocks: [{ type: 'text', text: 'Explore the codebase' }],
+        }),
+      )
+      expect(screen.queryByTestId('acp-subagent-request')).toBeNull()
+    })
+
+    it('renders no request block on an ordinary tool card', () => {
+      renderCard(makeCall({ kind: 'other', rawInput: { prompt: 'not an agent' } }))
+      expect(screen.queryByTestId('acp-subagent-request')).toBeNull()
+    })
+  })
+
   describe('sub-agent message body', () => {
     // Trailing newline included — that is the fence body the parser yields.
     const CODE = 'const x = 1\n'
@@ -638,14 +712,39 @@ describe('ToolCallCard', () => {
     expect(stats.textContent).toContain('≈¥')
   })
 
-  it('renders tokens without model or cost when the stats carry neither', () => {
+  it('renders a codex-shaped stats line: model + tokens + estimated cost', () => {
+    renderCard(
+      makeCall({
+        kind: 'other',
+        title: 'Find the logging call sites',
+        status: 'completed',
+        durationMs: 12_000,
+        // Codex reports the model it spawned the sub-agent with; the estimated
+        // cost is priced locally (the fork never bills per sub-agent), hence ≈.
+        subagentStats: {
+          model: 'gpt-5.5-codex',
+          inputTokens: 12_000,
+          outputTokens: 3_000,
+          cacheReadTokens: 0,
+          cacheCreateTokens: 0,
+          costUSD: 0.081,
+        },
+      }),
+    )
+    const stats = screen.getByTestId('acp-subagent-stats')
+    expect(stats.textContent).toContain('gpt-5.5-codex')
+    expect(stats.textContent).toContain('12s')
+    expect(stats.textContent).toContain('↑')
+    expect(stats.textContent).toContain('≈¥')
+  })
+
+  it('renders tokens without model or cost when the tally names no model', () => {
     renderCard(
       makeCall({
         kind: 'other',
         title: 'Explore the codebase',
         status: 'completed',
         durationMs: 12_000,
-        // Codex-shaped tally: tokens + duration, no model / no costUSD.
         subagentStats: {
           inputTokens: 12_000,
           outputTokens: 3_000,
@@ -657,9 +756,46 @@ describe('ToolCallCard', () => {
     const stats = screen.getByTestId('acp-subagent-stats')
     expect(stats.textContent).toContain('↑')
     expect(stats.textContent).toContain('↓')
-    // No model badge and no estimated-cost badge.
-    expect(stats.textContent).not.toContain('sonnet-5')
+    // No model badge and no estimated-cost badge — a nameless model is never guessed.
     expect(stats.textContent).not.toContain('¥')
+  })
+
+  it('keeps the run clock ticking on a settled card whose sub-agent is still going', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-01T00:00:10Z'))
+    renderCard(
+      makeCall({
+        status: 'completed',
+        subagent: true,
+        // The spawning item settles in milliseconds while the sub-agent runs on:
+        // the fork's anchor, not the card's own status, says it is still running.
+        subagentRunStartedAt: Date.now() - 5_000,
+      }),
+    )
+    const stats = screen.getByTestId('acp-subagent-stats')
+    expect(stats.textContent).toContain('5s')
+
+    act(() => vi.advanceTimersByTime(3_000))
+    expect(stats.textContent).toContain('8s')
+    vi.useRealTimers()
+  })
+
+  it('freezes the run clock at the span the fork reported', () => {
+    vi.useFakeTimers()
+    renderCard(
+      makeCall({
+        status: 'completed',
+        subagent: true,
+        subagentRunStartedAt: Date.now() - 90_000,
+        durationMs: 12_000,
+      }),
+    )
+    const stats = screen.getByTestId('acp-subagent-stats')
+    expect(stats.textContent).toContain('12s')
+
+    act(() => vi.advanceTimersByTime(3_000))
+    expect(stats.textContent).toContain('12s')
+    vi.useRealTimers()
   })
 
   it('omits the stats line entirely when there is nothing to show', () => {

@@ -267,6 +267,12 @@ const EXPECTED_DIST_METHODS: Record<ForkId, readonly string[]> = {
     // pinned here the way `extraModels` is.
     'subagent-transcript',
     'parentToolCallId',
+    // The run span of a sub-agent, keyed by that same capability: the spawning
+    // item settles in milliseconds while the sub-agent runs for minutes, so the
+    // card's clock and duration come from this key alone (anchor on the card's
+    // first report, duration at the child's turn end / summed over its turns on
+    // replay). Dropping it silently strands every spawn card at `0s`.
+    '_universe/subagentTiming',
   ],
 }
 

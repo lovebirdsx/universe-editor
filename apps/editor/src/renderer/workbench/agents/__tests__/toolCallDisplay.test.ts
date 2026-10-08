@@ -12,6 +12,8 @@ import {
   humanizeMcpTool,
   isKeepPlanning,
   keepPlanningFeedback,
+  subagentRequest,
+  subagentTaskTitle,
   tryPrettyJson,
 } from '../toolCallDisplay.js'
 
@@ -256,5 +258,100 @@ describe('createdFilePath', () => {
 
   it('ignores a card with no diff', () => {
     expect(createdFilePath(makeCall({ kind: 'edit' }))).toBeUndefined()
+  })
+})
+
+describe('subagentTaskTitle', () => {
+  const spawnCall = (rawInput: unknown) =>
+    makeCall({ subagent: true, title: 'spawnAgent', rawInput })
+
+  it('promotes the first line of the task a codex sub-agent was spawned with', () => {
+    expect(
+      subagentTaskTitle(
+        spawnCall({
+          prompt: 'Find all logging call sites\nand report them',
+          receiverThreadIds: ['child-thread'],
+        }),
+      ),
+    ).toBe('Find all logging call sites')
+  })
+
+  it('skips blank leading lines and collapses inner whitespace', () => {
+    expect(
+      subagentTaskTitle(
+        spawnCall({ prompt: '\n\n  Audit   the  cache \n more', receiverThreadIds: ['t'] }),
+      ),
+    ).toBe('Audit the cache')
+  })
+
+  it('cuts a long task short instead of overflowing the header', () => {
+    const title = subagentTaskTitle(
+      spawnCall({ prompt: 'x'.repeat(200), receiverThreadIds: ['t'] }),
+    )
+    expect(title).toHaveLength(81)
+    expect(title?.endsWith('…')).toBe(true)
+  })
+
+  it('leaves a claude Task card to the title the agent wrote for it', () => {
+    // claude's Task input has a prompt too, but no spawned threads: the description stays the title.
+    expect(
+      subagentTaskTitle(makeCall({ subagent: true, rawInput: { prompt: 'Explore the codebase' } })),
+    ).toBeUndefined()
+    expect(
+      deriveToolCallDisplay(
+        makeCall({ subagent: true, kind: 'think', title: 'Explore the codebase' }),
+      ).title,
+    ).toBe('Explore the codebase')
+  })
+
+  it('keeps the wire title when the input is gone (oversized rawInput) or carries no prompt', () => {
+    expect(subagentTaskTitle(makeCall({ subagent: true, title: 'spawnAgent' }))).toBeUndefined()
+    expect(subagentTaskTitle(spawnCall({ receiverThreadIds: ['t'] }))).toBeUndefined()
+    expect(
+      subagentTaskTitle(spawnCall({ prompt: '   ', receiverThreadIds: ['t'] })),
+    ).toBeUndefined()
+  })
+
+  it('leaves an ordinary tool card alone', () => {
+    expect(
+      subagentTaskTitle(
+        makeCall({ kind: 'other', title: 'plain tool', rawInput: { prompt: 'x' } }),
+      ),
+    ).toBeUndefined()
+  })
+})
+
+describe('subagentRequest', () => {
+  it('returns the whole task a codex spawn was given, untrimmed', () => {
+    expect(
+      subagentRequest(
+        makeCall({
+          subagent: true,
+          rawInput: {
+            prompt: 'Find all logging call sites\n\n- list them',
+            receiverThreadIds: ['t'],
+          },
+        }),
+      ),
+    ).toBe('Find all logging call sites\n\n- list them')
+  })
+
+  it('returns a claude Task prompt, which carries no spawned threads', () => {
+    expect(
+      subagentRequest(makeCall({ subagent: true, rawInput: { prompt: 'Explore the codebase' } })),
+    ).toBe('Explore the codebase')
+  })
+
+  it('returns nothing for an ordinary tool card', () => {
+    expect(subagentRequest(makeCall({ rawInput: { prompt: 'x' } }))).toBeUndefined()
+  })
+
+  it('returns nothing when the input is gone (oversized) or carries a blank prompt', () => {
+    expect(subagentRequest(makeCall({ subagent: true }))).toBeUndefined()
+    expect(subagentRequest(makeCall({ subagent: true, rawInput: {} }))).toBeUndefined()
+    expect(
+      subagentRequest(makeCall({ subagent: true, rawInput: { prompt: '  \n ' } })),
+    ).toBeUndefined()
+    expect(subagentRequest(makeCall({ subagent: true, rawInput: { prompt: 42 } }))).toBeUndefined()
   })
 })

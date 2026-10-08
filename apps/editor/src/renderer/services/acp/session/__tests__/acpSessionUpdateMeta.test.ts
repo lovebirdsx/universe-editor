@@ -14,6 +14,7 @@ import {
   readParentToolCallId,
   readSubagent,
   readSubagentStats,
+  readSubagentTiming,
   readSyntheticDenial,
 } from '../acpSessionUpdateMeta.js'
 
@@ -196,6 +197,40 @@ describe('readSubagentStats', () => {
     expect(readSubagentStats({ _meta: {} })).toBeUndefined()
     expect(readSubagentStats({ _meta: { '_universe/subagentStats': 42 } })).toBeUndefined()
     expect(readSubagentStats({ _meta: { '_universe/subagentStats': null } })).toBeUndefined()
+  })
+})
+
+describe('readSubagentTiming', () => {
+  it('reads the run span a fork reported for a sub-agent card', () => {
+    expect(
+      readSubagentTiming({
+        _meta: { '_universe/subagentTiming': { startedAtMs: 1_700, durationMs: 12_000 } },
+      }),
+    ).toEqual({ startedAtMs: 1_700, durationMs: 12_000 })
+  })
+
+  it('accepts an anchor without a duration — a run that is still going', () => {
+    expect(
+      readSubagentTiming({ _meta: { '_universe/subagentTiming': { startedAtMs: 1_700 } } }),
+    ).toEqual({ startedAtMs: 1_700 })
+  })
+
+  it('drops fields that are not usable numbers', () => {
+    expect(
+      readSubagentTiming({
+        _meta: { '_universe/subagentTiming': { startedAtMs: -1, durationMs: 0 } },
+      }),
+    ).toEqual({ durationMs: 0 })
+    expect(
+      readSubagentTiming({ _meta: { '_universe/subagentTiming': { durationMs: '12' } } }),
+    ).toBeUndefined()
+  })
+
+  it('returns undefined when the meta is absent or malformed', () => {
+    expect(readSubagentTiming({})).toBeUndefined()
+    expect(readSubagentTiming({ _meta: {} })).toBeUndefined()
+    expect(readSubagentTiming({ _meta: { '_universe/subagentTiming': 7 } })).toBeUndefined()
+    expect(readSubagentTiming({ _meta: { '_universe/subagentTiming': null } })).toBeUndefined()
   })
 })
 

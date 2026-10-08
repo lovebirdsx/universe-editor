@@ -109,6 +109,7 @@ import {
   readParentToolCallId,
   readSubagent,
   readSubagentStats,
+  readSubagentTiming,
   readSyntheticDenial,
   readTerminalOutput,
 } from './acpSessionUpdateMeta.js'
@@ -333,6 +334,12 @@ function trimToolCall(call: AcpToolCall): AcpToolCall {
     ...(call.locations !== undefined ? { locations: call.locations } : {}),
     ...(call.subagent === true ? { subagent: true } : {}),
     ...(call.subagentStats !== undefined ? { subagentStats: call.subagentStats } : {}),
+    // The anchor alone keeps a running sub-agent's clock alive (its card settled on the
+    // wire long before the run ends); dropping it would silence the badge until the
+    // fork reports the span.
+    ...(call.subagentRunStartedAt !== undefined
+      ? { subagentRunStartedAt: call.subagentRunStartedAt }
+      : {}),
     ...(call.startedAt !== undefined ? { startedAt: call.startedAt } : {}),
     ...(call.durationMs !== undefined ? { durationMs: call.durationMs } : {}),
     ...(call.settleReason !== undefined ? { settleReason: call.settleReason } : {}),
@@ -3356,6 +3363,7 @@ export class AcpSession extends Disposable implements IAcpSession {
         const startedAt = effectiveParent == null ? Date.now() : undefined
         const stats = readSubagentStats(update)
         const subagent = readSubagent(update)
+        const timing = readSubagentTiming(update)
         this._upsertToolCall(
           {
             id: update.toolCallId,
@@ -3372,6 +3380,13 @@ export class AcpSession extends Disposable implements IAcpSession {
             ...(startedAt !== undefined ? { startedAt } : {}),
             ...(subagent ? { subagent: true } : {}),
             ...(stats !== undefined ? { subagentStats: this._priceSubagentStats(stats) } : {}),
+            // The anchor of a spawn card rides its first report (a live codex spawn); a replay's
+            // duration arrives later as its own `_meta`-only update. Accept both here so a fork
+            // that reports the span in one go still lands its full run.
+            ...(timing?.startedAtMs !== undefined
+              ? { subagentRunStartedAt: timing.startedAtMs }
+              : {}),
+            ...(timing?.durationMs !== undefined ? { durationMs: timing.durationMs } : {}),
           },
           effectiveParent,
         )
@@ -3419,10 +3434,20 @@ export class AcpSession extends Disposable implements IAcpSession {
         const status =
           (update.status as AcpToolCallStatus | undefined) ?? existing?.status ?? 'pending'
         const settled = isSettledToolCallStatus(status)
+        // The fork's own span wins over the local freeze: the local one measures how long the card
+        // lived on the wire — for a codex spawn card that is the milliseconds the spawn took — while
+        // the reported value spans the whole run of the sub-agent. A card the fork anchors is timed
+        // by the fork alone: it settles on the wire long before the run does, so freezing the local
+        // span there would strand the badge at `0s` for the rest of the run.
+        const timing = readSubagentTiming(update)
+        const subagentRunStartedAt = timing?.startedAtMs ?? existing?.subagentRunStartedAt
         const durationMs =
-          settled && startedAt !== undefined
-            ? (existing?.durationMs ?? Math.max(0, Date.now() - startedAt))
-            : existing?.durationMs
+          timing?.durationMs ??
+          (subagentRunStartedAt !== undefined
+            ? existing?.durationMs
+            : settled && startedAt !== undefined
+              ? (existing?.durationMs ?? Math.max(0, Date.now() - startedAt))
+              : existing?.durationMs)
         // A `_meta`-only restamp (e.g. the fork's post-load subagent stats) omits
         // `status`, so it inherits `cancelled` from `existing` — carry the reason
         // with it or the card's notice would blink off. A real terminal update
@@ -3454,6 +3479,7 @@ export class AcpSession extends Disposable implements IAcpSession {
           ...(mcpTool !== undefined ? { mcpTool } : {}),
           ...(subagent ? { subagent: true } : {}),
           ...(subagentStats !== undefined ? { subagentStats } : {}),
+          ...(subagentRunStartedAt !== undefined ? { subagentRunStartedAt } : {}),
           ...(startedAt !== undefined ? { startedAt } : {}),
           ...(durationMs !== undefined ? { durationMs } : {}),
           ...(settleReason !== undefined ? { settleReason } : {}),

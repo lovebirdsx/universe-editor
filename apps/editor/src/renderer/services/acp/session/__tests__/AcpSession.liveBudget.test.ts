@@ -180,6 +180,32 @@ describe('AcpSession — live resident budget', () => {
     expect(calls[0]?.subagent).toBe(true)
   })
 
+  it('keeps a trimmed sub-agent card’s run anchor and tally', () => {
+    // A sub-agent keeps working long after its spawn card settles on the wire, so the
+    // anchor is what the header clock runs on: losing it in the trim would silence the
+    // badge until the fork reports the span — on exactly the long runs this card is
+    // oldest for.
+    session = createSession()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    session.applyUpdate(terminalToolCall('tc-a', 'x'.repeat(800), true))
+    session.applyUpdate({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'tc-a',
+      _meta: {
+        '_universe/subagentTiming': { startedAtMs: 5_000 },
+        '_universe/subagentStats': { model: 'gpt-5.5-codex', inputTokens: 10, outputTokens: 2 },
+      },
+    } as SessionUpdate)
+    session.applyUpdate(terminalToolCall('tc-b', 'y'.repeat(800)))
+
+    const card = session.toolCalls.get()[0]!
+    expect(card.memoryTrimmed).toBe(true)
+    expect(card.subagentRunStartedAt).toBe(5_000)
+    expect(card.subagentStats?.model).toBe('gpt-5.5-codex')
+    expect(card.durationMs).toBeUndefined()
+  })
+
   it('keeps trimming the oldest card until the tally is back under budget', () => {
     session = createSession()
     vi.spyOn(console, 'warn').mockImplementation(() => {})

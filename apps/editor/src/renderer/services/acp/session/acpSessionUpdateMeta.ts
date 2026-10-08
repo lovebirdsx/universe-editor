@@ -55,7 +55,8 @@ function numberOr(v: unknown): number {
  * Read the per-sub-agent token/model tally agent forks stamp onto a Task card's
  * `tool_call_update` via `_meta._universe/subagentStats`. Values are the running
  * total for that one sub-agent (all its assistant messages folded); `model` is
- * optional (codex omits it). The fork never reports a per-sub-agent cost, so
+ * optional — both forks report it when they know it, and it is what the local cost
+ * estimate depends on. The fork never reports a per-sub-agent cost, so
  * `costUSD` is estimated downstream. Returns undefined when absent or malformed.
  */
 export function readSubagentStats(update: {
@@ -75,6 +76,41 @@ export function readSubagentStats(update: {
       : {}),
   }
   return stats
+}
+
+/**
+ * The run span of one sub-agent, as our codex fork reports it. The spawning tool item itself is
+ * over in milliseconds while the sub-agent runs for minutes, so the fork anchors the run when it
+ * names the thread and reports the duration when the child's turn ends — on replay, the sum of
+ * the child's recorded turn spans. Either field may be absent: a live run starts with the anchor.
+ */
+export interface AcpSubagentTiming {
+  readonly startedAtMs?: number
+  readonly durationMs?: number
+}
+
+/**
+ * Read the sub-agent run span agent forks stamp onto a card's `tool_call(_update)` via
+ * `_meta._universe/subagentTiming`. Returns undefined when absent or malformed (no usable field),
+ * which is every card of a fork that reports none.
+ */
+export function readSubagentTiming(update: {
+  _meta?: Record<string, unknown> | null | undefined
+}): AcpSubagentTiming | undefined {
+  const raw = update._meta?.['_universe/subagentTiming']
+  if (raw == null || typeof raw !== 'object') return undefined
+  const r = raw as Record<string, unknown>
+  const startedAtMs = nonNegativeOrUndefined(r['startedAtMs'])
+  const durationMs = nonNegativeOrUndefined(r['durationMs'])
+  if (startedAtMs === undefined && durationMs === undefined) return undefined
+  return {
+    ...(startedAtMs !== undefined ? { startedAtMs } : {}),
+    ...(durationMs !== undefined ? { durationMs } : {}),
+  }
+}
+
+function nonNegativeOrUndefined(v: unknown): number | undefined {
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined
 }
 
 /**

@@ -168,7 +168,8 @@ export interface AcpToolCall {
    * (Task/Agent). Accumulated by the agent fork across the sub-agent's messages
    * and forwarded on the parent card via `_meta._universe/subagentStats`; the
    * renderer surfaces model + tokens + estimated cost on the card header. Absent
-   * for ordinary tools; codex reports tokens but no model (so it is not priced).
+   * for ordinary tools; a fork that does not know the model omits it, and the
+   * card then shows no model and no cost.
    */
   readonly subagentStats?: AcpSubagentStats
   /**
@@ -179,6 +180,14 @@ export interface AcpToolCall {
   readonly startedAt?: number
   /** Elapsed ms at settle (`completed`/`failed`/`cancelled`), computed from {@link startedAt}. */
   readonly durationMs?: number
+  /**
+   * Run anchor the agent fork reported for this card's sub-agent
+   * (`_meta._universe/subagentTiming.startedAtMs`). The spawning item itself is over
+   * in milliseconds while the sub-agent keeps working, so the card settles long
+   * before the run ends: while this is set and no duration has arrived, the card
+   * header shows a running clock instead of a frozen `0s`. Agent-side epoch ms.
+   */
+  readonly subagentRunStartedAt?: number
   /**
    * Why this card was settled locally rather than by the agent. Only set on
    * `cancelled` cards (see `AcpSession._settleOrphanToolCalls`); the UI renders

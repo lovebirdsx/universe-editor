@@ -3,7 +3,7 @@
  *  SubagentStatsBadge — a compact metadata line rendered on a sub-agent-spawning
  *  tool call's header (Task/Agent): model · run duration · ↑input ↓output tokens ·
  *  ≈¥cost. Every field is optional — the agent fork reports what it can (Claude:
- *  all four; codex: tokens + duration, no model), and each missing piece is
+ *  model + tokens; codex: model + tokens + a run span), and each missing piece is
  *  simply omitted. Cost is a local token-based estimate (the agent reports no
  *  per-sub-agent cost), so it is always prefixed with ≈ and converted to CNY via
  *  the daily rate.
@@ -11,11 +11,7 @@
 
 import { Bot, Clock, Coins } from 'lucide-react'
 import { localize } from '@universe-editor/platform'
-import type {
-  AcpSubagentStats,
-  AcpToolCall,
-  AcpToolCallStatus,
-} from '../../services/acp/session/acpSessionService.js'
+import type { AcpSubagentStats, AcpToolCall } from '../../services/acp/session/acpSessionService.js'
 import { useElapsedTime } from './elapsedTime.js'
 import { useUsdToCnyRate } from './useExchangeRate.js'
 import { formatCny, formatTokens } from './SessionCostIndicator.js'
@@ -26,7 +22,7 @@ const FALLBACK_RATE = 7.2
 export function SubagentStatsBadge({ call }: { call: AcpToolCall }) {
   const rate = useUsdToCnyRate()
   const stats = call.subagentStats
-  const duration = useRunDuration(call.status, call.startedAt, call.durationMs)
+  const duration = useRunDuration(call)
 
   // Nothing worth showing: no stats and no duration.
   if (stats === undefined && duration === null) return null
@@ -70,15 +66,17 @@ export function SubagentStatsBadge({ call }: { call: AcpToolCall }) {
 }
 
 /**
- * Live stopwatch while the tool call runs, frozen at `durationMs` once settled.
- * Returns null when there's no wall-clock anchor (e.g. history replay).
+ * Live stopwatch while the sub-agent runs, frozen once its span is known. The card's own status is
+ * not the signal here: the spawning item settles in milliseconds while the sub-agent keeps working,
+ * so a reported run anchor without a duration means "still running". Returns null when there is
+ * nothing to show — e.g. a replayed card the fork reported no span for.
  */
-function useRunDuration(
-  status: AcpToolCallStatus,
-  startedAt: number | undefined,
-  durationMs: number | undefined,
-): string | null {
-  return useElapsedTime(status === 'pending' || status === 'in_progress', startedAt, durationMs)
+function useRunDuration(call: AcpToolCall): string | null {
+  const running =
+    call.status === 'pending' ||
+    call.status === 'in_progress' ||
+    (call.subagentRunStartedAt !== undefined && call.durationMs === undefined)
+  return useElapsedTime(running, call.subagentRunStartedAt ?? call.startedAt, call.durationMs)
 }
 
 function tokenSummary(stats: AcpSubagentStats): string | undefined {
