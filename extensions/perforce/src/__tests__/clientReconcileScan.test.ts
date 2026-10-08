@@ -52,8 +52,12 @@ import { EventEmitter } from 'node:events'
 import { mkdirSync, readdirSync, writeFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { FileSystemWatcher } from '@universe-editor/extension-api'
+import type { SyncScopeTarget } from '../p4Filespec.js'
+import { EMPTY_RECONCILE_NOISE, planReconcileNoiseOperations } from '../reconcileNoise.js'
 import { expandP4Argv } from './expandP4Argv.js'
+import { NO_SCOPE_CONFIG, scopeFixture } from './scopeFixture.js'
 import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
+import { clientSpecReply, isClientSpecProbe } from './discoveryProbe.js'
 
 /** Platform-independent path build for fixtures and expectations: the scan
  *  appends subdirectories with `/` and keeps the caller's spelling, so the
@@ -61,6 +65,13 @@ import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
  *  `node:path.join`. */
 function posixJoin(...parts: string[]): string {
   return parts.join('/')
+}
+
+/** The `/`-spelled form of a REAL host path, for the assertions that compare a
+ *  checkpoint key against a directory the test made: the client canonicalises
+ *  every scope path before it keys a checkpoint with it. */
+function posixSpelling(path: string): string {
+  return path.replace(/\\/g, '/')
 }
 
 class FakeChildProcess extends EventEmitter {
@@ -175,6 +186,7 @@ function resetScanHarness(): void {
   heldChildren.length = 0
   currentClock = undefined
   windowMock.showErrorMessage.mockClear()
+  windowMock.showWarningMessage.mockClear()
 }
 
 const { PerforceClient } = await import('../client.js')
@@ -184,8 +196,18 @@ const { RECONCILE_SCAN_PRESPLIT_FILE_COUNT_THRESHOLD } = await import('../reconc
 const { P4CacheDisk } = await import('../p4CacheDisk.js')
 type PerforceClientInstance = import('../client.js').PerforceClient
 type PerforceClientOptions = import('../client.js').PerforceClientOptions
+type ScopeRead = import('./scopeFixture.js').ScopeRead
+type ReconcileNoiseConfig = import('../reconcileNoise.js').ReconcileNoiseConfig
 type P4CacheDiskBackend = import('../p4Cache.js').P4CacheDiskBackend
 type P4CacheDiskInstance = import('../p4CacheDisk.js').P4CacheDisk
+
+/** The rules an operation carries: read ONCE at its start, exactly as the
+ *  command layer reads them, and handed to the write as part of that operation.
+ *  A settings edit afterwards belongs to the NEXT operation — this one stays the
+ *  range the user confirmed. */
+function rulesOf(client: PerforceClientInstance): ReconcileNoiseConfig {
+  return client.reconcileNoise
+}
 
 const ROOT = process.platform === 'win32' ? 'X:\\p4ws\\main' : '/p4ws/main'
 const LOCAL = process.platform === 'win32' ? 'X:/p4ws/main' : '/p4ws/main'
@@ -263,7 +285,7 @@ function releaseHeld(): void {
   for (const child of heldChildren.splice(0)) child.close()
 }
 
-function respond(opts: RespondOptions = {}): void {
+function respond(opts: RespondOptions = {}, clientRoot: string = ROOT): void {
   spawnMock.mockImplementation((...args: unknown[]) => {
     // Expanded, not raw: a narrow query large enough to sit on the char budget
     // trips the spawn layer's `-x <argfile>`, and those paths would otherwise
@@ -272,7 +294,7 @@ function respond(opts: RespondOptions = {}): void {
     calls.push(argv)
     const child = new FakeChildProcess()
     queueMicrotask(() => {
-      const { stdout, stderr, exit, hold } = handle(argv, opts)
+      const { stdout, stderr, exit, hold } = handle(argv, opts, clientRoot)
       if (stdout) child.stdout.emit('data', Buffer.from(stdout))
       if (hold) {
         heldChildren.push({ close: () => child.emit('close', exit ?? 0) })
@@ -317,10 +339,16 @@ function reconcileRows(rows: { rel: string; action?: string }[]): string {
 function handle(
   argv: string[],
   opts: RespondOptions,
+  clientRoot: string,
 ): { stdout: string; stderr?: string; exit?: number; hold?: boolean } {
   const cmd = subcommand(argv)
+  if (isClientSpecProbe(argv)) {
+    return { stdout: clientSpecReply(clientRoot) }
+  }
   if (cmd === 'info') {
-    return { stdout: `... clientName ${CLIENT}\n... clientRoot ${ROOT}\n... userName testuser\n\n` }
+    return {
+      stdout: `... clientName ${CLIENT}\n... clientRoot ${clientRoot}\n... userName testuser\n\n`,
+    }
   }
   if (cmd === 'opened') {
     const rows = opts.opened?.() ?? []
@@ -475,16 +503,34 @@ afterEach(() => {
   createdClients.length = 0
 })
 
+/**
+ * A client with a pre-resolved daily scope (see `scopeFixture`): the scope —
+ * opened workspace ∩ `.p4delta-scope` — is what bounds every discovery, get and
+ * write this client runs, and production resolves it during activation
+ * (`refreshScope`), so the injected answer is applied the same way here. The
+ * default is the whole client root with no exclusions: "the whole workspace,
+ * no config file", the answer a folder with no `.p4delta-scope` resolves to.
+ *
+ * `root` roots the client — and the discovery reply, which has to agree with it
+ * or `PerforceClient.create` reports no client at all — at a REAL temp directory
+ * for the few tests whose paths must exist on disk (`_pathKind` stats for real).
+ *
+ * `scope` may be a getter so a test can swap the answer mid-flight (a config
+ * edit landing while a round is running); the client re-reads it on every
+ * `refreshScope`, exactly as it re-reads the config file.
+ */
 async function makeClient(
   opts: RespondOptions = {},
   disk?: P4CacheDiskBackend,
   clock = fakeClock(),
   clientOptions: PerforceClientOptions = {},
+  readScope: ScopeRead = scopeFixture([LOCAL]),
+  root: string = ROOT,
 ): Promise<PerforceClientInstance> {
   currentClock = clock
-  respond(opts)
+  respond(opts, root)
   const client = await PerforceClient.create(
-    ROOT,
+    root,
     {},
     new ConcurrencyGate(4),
     {
@@ -493,11 +539,58 @@ async function makeClient(
       now: clock.now,
       ...(disk ? { disk } : {}),
     },
-    clientOptions,
+    { readScope, ...clientOptions },
   )
   expect(client).toBeDefined()
   createdClients.push(client!)
+  // Production resolves the daily scope before the first refresh (the
+  // extension's activation-time `applyDailyScope`), so a client whose scan is
+  // scheduled next must not resolve it for the first time inside that round.
+  await client!.refreshScope()
   return client!
+}
+
+/**
+ * A swap-in daily scope for tests where the CONFIG moves while the client is
+ * alive: the exclusion list a scan filters and carves with comes from the
+ * resolved scope, so a hot reload is expressed as a new resolution — the same
+ * thing the extension's config watcher drives.
+ *
+ * `apply` resolves the new answer the way every operation does (through
+ * `refreshScope`), so the client's exclude list, its scope identity and the
+ * scan fingerprints all follow in one step.
+ */
+function scopeSwapper(initial: ScopeRead): {
+  readonly get: () => ScopeRead
+  apply(client: PerforceClientInstance, next: ScopeRead): Promise<void>
+} {
+  let current = initial
+  return {
+    get: () => current,
+    async apply(client, next) {
+      current = next
+      await client.refreshScope()
+    },
+  }
+}
+
+/**
+ * A ONE-SHOT scope reload for a hook that runs while a round is already in
+ * flight (the first `readdir` the scan awaits, a reconcile responder). The
+ * round's discovery was computed under the old answer, so a change landing in
+ * such a hook is the config hot-reload the client's own late re-checks exist
+ * for — the only way an exclusion can reach a round that has already started.
+ */
+function scopeHotReload(
+  scope: ReturnType<typeof scopeSwapper>,
+  client: PerforceClientInstance,
+): (next: ScopeRead) => Promise<void> {
+  let done = false
+  return async (next) => {
+    if (done) return
+    done = true
+    await scope.apply(client, next)
+  }
 }
 
 /** Await a macrotask so the debounce flush (delay 0 in tests) and the re-armed
@@ -991,15 +1084,23 @@ describe('PerforceClient.runReconcileScan', () => {
 
   it('an exclusion change re-preheats under a new fingerprint without clearing unrelated drift', async () => {
     const disk = fakeDisk()
-    const client = await makeClient({ reconcile: () => [{ rel: 'a.txt' }] }, disk)
-    client.setReconcileScope([LOCAL])
+    const scope = scopeSwapper(scopeFixture([LOCAL]))
+    const client = await makeClient(
+      { reconcile: () => [{ rel: 'A/a.txt' }] },
+      disk,
+      undefined,
+      {},
+      (root) => scope.get()(root),
+    )
+    client.setReconcileScope([`${LOCAL}/A`])
     client.scheduleReconcileScan()
     await client.whenReconcileScanSettled()
     expect(reconcileScans()).toHaveLength(1)
-    expect(driftFiles(client)).toEqual([`${LOCAL}/a.txt`])
+    expect(driftFiles(client)).toEqual([`${LOCAL}/A/a.txt`])
 
-    // The exclusion moves the checkpoint fingerprint, so the armed round re-preheats…
-    client.setReconcileExcludes([`${LOCAL}/ignored`])
+    // The exclusion lands beside the walked subtree (a config reload): it moves
+    // the checkpoint fingerprint, so the armed round re-preheats…
+    await scope.apply(client, scopeFixture([LOCAL], [`${LOCAL}/ignored`]))
     await client.whenReconcileScanSettled()
     // Let any settle-triggered replay round finish so no background scan leaks
     // into the next test (the scan is fire-and-forget, not auto-disposed).
@@ -1008,7 +1109,7 @@ describe('PerforceClient.runReconcileScan', () => {
 
     // …but the drift set is NOT cleared (exclusions filter at assign time): the row survives.
     expect(fullScanScans().length).toBeGreaterThanOrEqual(2)
-    expect(driftFiles(client)).toEqual([`${LOCAL}/a.txt`])
+    expect(driftFiles(client)).toEqual([`${LOCAL}/A/a.txt`])
     // Two checkpoints under two different fingerprints.
     const fps = [...disk.store.keys()].map((k) => k.split(':')[0])
     expect(new Set(fps).size).toBe(2)
@@ -1095,34 +1196,40 @@ describe('PerforceClient.runReconcileScan', () => {
 
   it('the drift group retracts a row a stale merge left outside the current scope', async () => {
     // Defense in depth: whatever ends up in `_driftFiles`, the group only renders
-    // rows inside the current scope. A file-only focus narrows the client to
-    // `isScopeFile` matching, so a directory-scan row under the root is out of scope.
-    const runBat = `${LOCAL}/Source/Client/Run.bat`
+    // rows the CURRENT daily scope covers. The row is merged under the wide scope
+    // and the config then narrows (a `.p4delta-scope` edit): the drift set is kept
+    // (a scope reload reassigns the group, it does not clear the rows), and the
+    // out-of-scope row stops rendering while the in-scope one stays.
+    const scope = scopeSwapper(scopeFixture([LOCAL]))
     const client = await makeClient(
       {
-        reconcile: (filespec) => {
-          if (filespec === runBat) return [{ rel: 'Source/Client/Run.bat' }]
-          if (filespec === `${LOCAL}/...`) return [{ rel: 'elsewhere.txt' }]
-          return undefined
-        },
+        reconcile: (filespec) =>
+          filespec === `${LOCAL}/...`
+            ? [{ rel: 'Source/Client/Run.bat' }, { rel: 'other/stale.txt' }]
+            : undefined,
       },
       undefined,
       undefined,
-      { scopeFileExists: (p) => p === runBat },
+      {},
+      (root) => scope.get()(root),
     )
-    // File-only focus: dirs empty, files=[Run.bat]. The recursive phase is
-    // skipped entirely (no dirs-or-root fallback — that would re-walk the whole
-    // depot); only the per-file phase runs, so the group never sees a row for
-    // anything but the scope file.
-    client.setReconcileScope([], [runBat])
+    client.setReconcileScope([LOCAL])
     await client.runReconcileScan()
+    expect(fullScanScans().length).toBeGreaterThanOrEqual(1)
+
+    // A config reload excludes `other/`: the drift set is kept (a scope reload
+    // reassigns the group, it does not clear the rows) and the row the new scope
+    // no longer covers stops rendering while the in-scope one stays.
+    await scope.apply(client, scopeFixture([LOCAL], [`${LOCAL}/other`]))
+    // `_applyDriftGroup` is debounced; in a unit test the cleanest assertion is
+    // to call it directly (the real workspace verify covers the timer path).
+    ;(client as unknown as { _applyDriftGroup: () => void })._applyDriftGroup()
 
     const rendered = groupRows(client).map((r) => r.path)
-    expect(rendered).toContain(runBat)
-    expect(rendered).not.toContain(`${LOCAL}/elsewhere.txt`)
-    // The root recursive filespec must not be scanned at all — that is the whole
-    // point of file-only focus.
-    expect(fullScanScans().some((a) => a.some((x) => x === `${LOCAL}/...`))).toBe(false)
+    expect(rendered).toContain(`${LOCAL}/Source/Client/Run.bat`)
+    expect(rendered).not.toContain(`${LOCAL}/other/stale.txt`)
+    // …and the row was retracted, not deleted: it is still in the drift set.
+    expect(driftFiles(client)).toContain(`${LOCAL}/other/stale.txt`)
   })
 
   it('an unfocused client still falls back to the whole-client root scan', async () => {
@@ -1134,11 +1241,11 @@ describe('PerforceClient.runReconcileScan', () => {
     // this is the defence-in-depth branch: a client whose scope was never set
     // must still scan the whole client.
     const client = await makeClient({
-      reconcile: (filespec) => (filespec === `${ROOT}/...` ? [{ rel: 'a.txt' }] : undefined),
+      reconcile: (filespec) => (filespec === `${LOCAL}/...` ? [{ rel: 'a.txt' }] : undefined),
     })
     await client.runReconcileScan()
 
-    expect(fullScanScans().some((a) => a.some((x) => x === `${ROOT}/...`))).toBe(true)
+    expect(fullScanScans().some((a) => a.some((x) => x === `${LOCAL}/...`))).toBe(true)
     expect(groupRows(client)).toEqual([{ path: `${LOCAL}/a.txt`, letter: 'RM' }])
   })
 
@@ -1207,19 +1314,25 @@ describe('PerforceClient.runReconcileScan', () => {
 
   it('the scope gate matches a file by exact path, never a sibling prefix', async () => {
     // `Run.bat` must be answerable but `Run2.bat` refused at the scope gate — the
-    // file counterpart of the directory boundary. `_queryWorkingTreeRows` drops an
-    // out-of-scope path BEFORE spawning, so Run2 produces neither a spawn nor a hint.
+    // file counterpart of the directory boundary. The gate reads the DAILY scope,
+    // so the range is a scope that names the one file. `_queryWorkingTreeRows`
+    // drops an out-of-scope path BEFORE spawning, so Run2 produces neither a
+    // spawn nor a hint.
     const runBat = `${LOCAL}/Source/Client/Run.bat`
     const run2 = `${LOCAL}/Source/Client/Run2.bat`
-    const client = await makeClient({
-      reconcile: (filespec) => {
-        if (filespec === runBat) return [{ rel: 'Source/Client/Run.bat' }]
-        if (filespec === run2) return [{ rel: 'Source/Client/Run2.bat' }]
-        return undefined
+    const client = await makeClient(
+      {
+        reconcile: (filespec) => {
+          if (filespec === runBat) return [{ rel: 'Source/Client/Run.bat' }]
+          if (filespec === run2) return [{ rel: 'Source/Client/Run2.bat' }]
+          return undefined
+        },
       },
-    })
-    // Scope ONLY Run.bat.
-    client.setReconcileScope([], [runBat])
+      undefined,
+      undefined,
+      {},
+      scopeFixture([{ path: runBat, isDirectory: false }]),
+    )
     const hints = await client.checkWorkingTree([runBat, run2])
 
     // Only the exact scope file came back; Run2 was filtered pre-spawn.
@@ -2211,6 +2324,7 @@ describe('PerforceClient.runReconcileScan', () => {
 
   it('skips an excluded scope subdirectory: not scanned, not published, not checkpointed', async () => {
     const disk = fakeDisk()
+    const scope = scopeSwapper(scopeFixture([`${LOCAL}/included`, `${LOCAL}/excluded`]))
     const client = await makeClient(
       {
         reconcile: (filespec) => {
@@ -2220,9 +2334,19 @@ describe('PerforceClient.runReconcileScan', () => {
         },
       },
       disk,
+      undefined,
+      {},
+      (root) => scope.get()(root),
     )
     client.setReconcileScope([`${LOCAL}/included`, `${LOCAL}/excluded`])
-    client.setReconcileExcludes([`${LOCAL}/excluded`])
+    // The exclusion lands while the round is in flight (a config hot-reload, the
+    // case the scan's late re-checks exist for): the queue was built from the
+    // pre-reload scope, so this is what the walk must filter out.
+    const reload = scopeHotReload(scope, client)
+    readdirMock.mockImplementation(async () => {
+      await reload(scopeFixture([LOCAL], [`${LOCAL}/excluded`]))
+      return []
+    })
 
     await client.runReconcileScan()
 
@@ -2239,13 +2363,20 @@ describe('PerforceClient.runReconcileScan', () => {
 
   it('exits safely when the scope directory itself is excluded', async () => {
     const disk = fakeDisk()
-    const client = await makeClient({ reconcile: () => [{ rel: 'a.txt' }] }, disk)
+    const client = await makeClient(
+      { reconcile: () => [{ rel: 'a.txt' }] },
+      disk,
+      undefined,
+      {},
+      scopeFixture([LOCAL], [LOCAL]),
+    )
     client.setReconcileScope([LOCAL])
-    client.setReconcileExcludes([LOCAL])
 
     await client.runReconcileScan()
 
-    // Nothing to scan: no p4 spawn, no publish, no checkpoint.
+    // Nothing to scan: no p4 spawn, no publish, no checkpoint. A scope whose
+    // whole range is excluded has no native filespec that expresses it, so the
+    // round ends where it stands rather than widening back over the exclusion.
     expect(reconcileScans()).toHaveLength(0)
     expect(scannedDirs(client)).toEqual([])
     expect(groupRows(client)).toEqual([])
@@ -2254,15 +2385,22 @@ describe('PerforceClient.runReconcileScan', () => {
 
   it('an exclude change invalidates the checkpoint (different fingerprint)', async () => {
     const disk = fakeDisk()
-    const client = await makeClient({ reconcile: () => [{ rel: 'a.txt' }] }, disk)
-    client.setReconcileScope([LOCAL])
+    const scope = scopeSwapper(scopeFixture([LOCAL]))
+    const client = await makeClient(
+      { reconcile: () => [{ rel: 'A/a.txt' }] },
+      disk,
+      undefined,
+      {},
+      (root) => scope.get()(root),
+    )
+    client.setReconcileScope([`${LOCAL}/A`])
     await client.runReconcileScan()
     expect(reconcileScans()).toHaveLength(1)
 
-    // The scope is unchanged but the exclusions change: the fingerprint must
-    // change, or the directory would replay a checkpoint that answered a scan
-    // that did NOT exclude anything.
-    client.setReconcileExcludes([`${LOCAL}/ignored`])
+    // The scope still covers the walked directory, but the exclusions change: the
+    // fingerprint must change with them, or the directory would replay a
+    // checkpoint that answered a differently-ranged scan.
+    await scope.apply(client, scopeFixture([LOCAL], [`${LOCAL}/ignored`]))
     await client.runReconcileScan()
 
     // A new spawn proves the old checkpoint was orphaned rather than replayed.
@@ -2281,15 +2419,16 @@ describe('PerforceClient.runReconcileScan', () => {
         }))
       return []
     })
+    const scope = scopeSwapper(scopeFixture([LOCAL]))
     const client = await makeClient(
       {
         reconcile: (filespec) => {
           const dir = filespec.replace(/[/\\]\.\.\.$/, '')
           if (dir === LOCAL) {
-            // The exclude lands mid-scan (hot config reload), after the queue
+            // The exclusion lands mid-scan (hot config reload), after the queue
             // was built and after the carve decision for LOCAL — the split
             // below is what must filter it out.
-            client.setReconcileExcludes([posixJoin(LOCAL, 'excluded')])
+            void reload(scopeFixture([LOCAL], [posixJoin(LOCAL, 'excluded')]))
             clock.advance(20_000)
             return [{ rel: 'top.txt' }]
           }
@@ -2299,8 +2438,11 @@ describe('PerforceClient.runReconcileScan', () => {
       },
       disk,
       clock,
+      {},
+      (root) => scope.get()(root),
     )
     client.setReconcileScope([LOCAL])
+    const reload = scopeHotReload(scope, client)
 
     await client.runReconcileScan()
 
@@ -2321,7 +2463,20 @@ describe('PerforceClient.runReconcileScan', () => {
 
   it('carves a directory containing an excluded subtree instead of scanning it recursively', async () => {
     const disk = fakeDisk()
+    const scope = scopeSwapper(scopeFixture([LOCAL]))
+    const client = await makeClient(
+      { reconcile: () => [{ rel: 'top.txt' }] },
+      disk,
+      undefined,
+      {},
+      (root) => scope.get()(root),
+    )
+    client.setReconcileScope([LOCAL])
+    // The exclusion arrives with a config reload while the round is in flight —
+    // after its discovery was computed, before the carve decision below.
+    const reload = scopeHotReload(scope, client)
     readdirMock.mockImplementation(async (dir: string) => {
+      await reload(scopeFixture([LOCAL], [posixJoin(LOCAL, 'src', 'excluded')]))
       if (dir === LOCAL)
         return [
           { name: 'top.txt', isDirectory: () => false, isSymbolicLink: () => false },
@@ -2335,9 +2490,6 @@ describe('PerforceClient.runReconcileScan', () => {
         }))
       return []
     })
-    const client = await makeClient({ reconcile: () => [{ rel: 'top.txt' }] }, disk)
-    client.setReconcileScope([LOCAL])
-    client.setReconcileExcludes([posixJoin(LOCAL, 'src', 'excluded')])
 
     await client.runReconcileScan()
 
@@ -2356,7 +2508,18 @@ describe('PerforceClient.runReconcileScan', () => {
 
   it('a carved scan keeps the one-publish-per-directory shape and checkpoints once', async () => {
     const disk = fakeDisk()
+    const scope = scopeSwapper(scopeFixture([LOCAL]))
+    const client = await makeClient(
+      { reconcile: () => [{ rel: 'src/included/a.txt' }] },
+      disk,
+      undefined,
+      {},
+      (root) => scope.get()(root),
+    )
+    client.setReconcileScope([LOCAL])
+    const reload = scopeHotReload(scope, client)
     readdirMock.mockImplementation(async (dir: string) => {
+      await reload(scopeFixture([LOCAL], [posixJoin(LOCAL, 'src', 'excluded')]))
       if (dir === LOCAL)
         return [{ name: 'src', isDirectory: () => true, isSymbolicLink: () => false }]
       if (dir === posixJoin(LOCAL, 'src'))
@@ -2367,9 +2530,6 @@ describe('PerforceClient.runReconcileScan', () => {
         }))
       return []
     })
-    const client = await makeClient({ reconcile: () => [{ rel: 'src/included/a.txt' }] }, disk)
-    client.setReconcileScope([LOCAL])
-    client.setReconcileExcludes([posixJoin(LOCAL, 'src', 'excluded')])
 
     await client.runReconcileScan()
 
@@ -2382,12 +2542,20 @@ describe('PerforceClient.runReconcileScan', () => {
 
   it('leaves a directory un-checkpointed when carving fails', async () => {
     const disk = fakeDisk()
+    const scope = scopeSwapper(scopeFixture([LOCAL]))
+    const client = await makeClient(
+      { reconcile: () => [{ rel: 'a.txt' }] },
+      disk,
+      undefined,
+      {},
+      (root) => scope.get()(root),
+    )
+    client.setReconcileScope([LOCAL])
+    const reload = scopeHotReload(scope, client)
     readdirMock.mockImplementation(async () => {
+      await reload(scopeFixture([LOCAL], [posixJoin(LOCAL, 'src', 'excluded')]))
       throw new Error('readdir boom')
     })
-    const client = await makeClient({ reconcile: () => [{ rel: 'a.txt' }] }, disk)
-    client.setReconcileScope([LOCAL])
-    client.setReconcileExcludes([posixJoin(LOCAL, 'src', 'excluded')])
 
     await client.runReconcileScan()
 
@@ -2403,7 +2571,23 @@ describe('PerforceClient.runReconcileScan', () => {
 
   it('filters excluded-directory rows at publish time even when p4 reports them', async () => {
     const disk = fakeDisk()
+    const scope = scopeSwapper(scopeFixture([LOCAL]))
+    const client = await makeClient(
+      {
+        // p4 reports drift inside the excluded directory anyway — a path shape
+        // the carve doesn't cover, or p4's own matching behavior. The publish
+        // filter is the guarantee that drops it.
+        reconcile: () => [{ rel: 'src/included/a.txt' }, { rel: 'src/excluded/bad.txt' }],
+      },
+      disk,
+      undefined,
+      {},
+      (root) => scope.get()(root),
+    )
+    client.setReconcileScope([LOCAL])
+    const reload = scopeHotReload(scope, client)
     readdirMock.mockImplementation(async (dir: string) => {
+      await reload(scopeFixture([LOCAL], [posixJoin(LOCAL, 'src', 'excluded')]))
       if (dir === LOCAL)
         return [{ name: 'src', isDirectory: () => true, isSymbolicLink: () => false }]
       if (dir === posixJoin(LOCAL, 'src'))
@@ -2414,17 +2598,6 @@ describe('PerforceClient.runReconcileScan', () => {
         }))
       return []
     })
-    const client = await makeClient(
-      {
-        // p4 reports drift inside the excluded directory anyway — a path shape
-        // the carve doesn't cover, or p4's own matching behavior. The publish
-        // filter is the guarantee that drops it.
-        reconcile: () => [{ rel: 'src/included/a.txt' }, { rel: 'src/excluded/bad.txt' }],
-      },
-      disk,
-    )
-    client.setReconcileScope([LOCAL])
-    client.setReconcileExcludes([posixJoin(LOCAL, 'src', 'excluded')])
 
     await client.runReconcileScan()
 
@@ -2437,6 +2610,7 @@ describe('PerforceClient.runReconcileScan', () => {
 
   it('skips a directory excluded mid-scan after the queue was built', async () => {
     const disk = fakeDisk()
+    const scope = scopeSwapper(scopeFixture([posixJoin(LOCAL, 'A'), posixJoin(LOCAL, 'B')]))
     const client = await makeClient(
       {
         reconcile: (filespec) => {
@@ -2444,7 +2618,7 @@ describe('PerforceClient.runReconcileScan', () => {
             // Hot config reload while the scan is in flight: B becomes
             // excluded after the queue was already built from the scope, so
             // enqueue-time filtering can't see it.
-            client.setReconcileExcludes([posixJoin(LOCAL, 'B')])
+            void reload(scopeFixture([posixJoin(LOCAL, 'A')], [posixJoin(LOCAL, 'B')]))
             return [{ rel: 'A/a.txt' }]
           }
           if (filespec === `${posixJoin(LOCAL, 'B')}/...`) return [{ rel: 'B/b.txt' }]
@@ -2452,8 +2626,12 @@ describe('PerforceClient.runReconcileScan', () => {
         },
       },
       disk,
+      undefined,
+      {},
+      (root) => scope.get()(root),
     )
     client.setReconcileScope([posixJoin(LOCAL, 'A'), posixJoin(LOCAL, 'B')])
+    const reload = scopeHotReload(scope, client)
 
     await client.runReconcileScan()
 
@@ -2859,17 +3037,29 @@ describe('PerforceClient.runReconcileScan', () => {
 
   it('ignores external events outside the scope or inside an excluded directory', async () => {
     const wt = makeFakeWatcher()
-    const client = await makeClient({ reconcile: () => [] }, fakeDisk(), fakeClock(), {
-      createFileSystemWatcher: () => wt.watcher,
-      watchRoot: ROOT,
-      externalChangeDebounceMs: 0,
-    })
+    const scope = scopeSwapper(scopeFixture([`${LOCAL}/sub`]))
+    const client = await makeClient(
+      { reconcile: () => [] },
+      fakeDisk(),
+      fakeClock(),
+      {
+        createFileSystemWatcher: () => wt.watcher,
+        watchRoot: ROOT,
+        externalChangeDebounceMs: 0,
+      },
+      (root) => scope.get()(root),
+    )
     client.setReconcileScope([`${LOCAL}/sub`])
-    // Applied before the scan so the exclusion takes effect in the same round —
-    // setting it AFTER a settled armed scan would (deliberately) re-preheat.
-    client.setReconcileExcludes([`${LOCAL}/sub/excluded`])
-    client.scheduleReconcileScan()
-    await client.whenReconcileScanSettled()
+    // Scope and exclusion come from the same resolved config: the exclusion
+    // cannot be in place when the round starts (an excluded subtree inside the
+    // walked range is not expressible natively), so it lands as the hot reload
+    // the watcher gate must already see.
+    const reload = scopeHotReload(scope, client)
+    readdirMock.mockImplementation(async () => {
+      await reload(scopeFixture([`${LOCAL}/sub`], [`${LOCAL}/sub/excluded`]))
+      return []
+    })
+    await client.runReconcileScan()
     expect(reconcileScans()).toHaveLength(1)
 
     wt.fire('change', `${LOCAL}/outside/a.txt`)
@@ -2896,7 +3086,7 @@ describe('PerforceClient.runReconcileScan', () => {
     client.setReconcileScope([LOCAL])
 
     // The mutation's own path schedules the first scan round via its refresh tail.
-    await client.reconcile([`${LOCAL}/a.txt`])
+    await client.reconcile({ targets: [{ path: `${LOCAL}/a.txt`, isDirectory: false }] })
     const before = narrowScans().length
     // The watcher then reports the very files the mutation wrote…
     wt.fire('change', `${LOCAL}/a.txt`)
@@ -2929,6 +3119,10 @@ describe('PerforceClient.runReconcileScan', () => {
       fakeDisk(),
       fakeClock(),
       { createFileSystemWatcher: () => wt.watcher, watchRoot: ROOT, externalChangeDebounceMs: 0 },
+      // No config file: the scope-less get here is a native one over the whole
+      // workspace, which a config at the root would make unexpressible (its own
+      // file is an implicit hole in `<root>/...`). See `clientSync.test.ts`.
+      () => NO_SCOPE_CONFIG,
     )
     client.setReconcileScope([LOCAL])
     client.scheduleReconcileScan()
@@ -3052,7 +3246,7 @@ describe('PerforceClient.runReconcileScan', () => {
     // mutation's own narrow invalidation does not cover, so it must survive the
     // window rather than being dropped with the batch.
     wt.fire('change', `${LOCAL}/elsewhere.txt`)
-    await client.reconcile([`${LOCAL}/a.txt`])
+    await client.reconcile({ targets: [{ path: `${LOCAL}/a.txt`, isDirectory: false }] })
     await nextMacrotask()
     await nextMacrotask()
     await client.whenExternalFlushSettled()
@@ -3073,16 +3267,23 @@ describe('PerforceClient.runReconcileScan', () => {
     try {
       const disk = fakeDisk()
       const wt = makeFakeWatcher()
-      const client = await makeClient({ reconcile: () => [] }, disk, fakeClock(), {
-        createFileSystemWatcher: () => wt.watcher,
-        watchRoot: ROOT,
-        externalChangeDebounceMs: 0,
-      })
+      const client = await makeClient(
+        { reconcile: () => [] },
+        disk,
+        fakeClock(),
+        {
+          createFileSystemWatcher: () => wt.watcher,
+          watchRoot: ROOT,
+          externalChangeDebounceMs: 0,
+        },
+        scopeFixture([realDir]),
+        realDir,
+      )
       client.setReconcileScope([realDir])
       client.scheduleReconcileScan()
       await client.whenReconcileScanSettled()
       expect(fullScanScans()).toHaveLength(1)
-      expect([...disk.store.keys()].some((k) => k.endsWith(realDir))).toBe(true)
+      expect([...disk.store.keys()].some((k) => k.endsWith(posixSpelling(realDir)))).toBe(true)
 
       // A directory event (new folder, moved subtree) names no file, so a bare
       // spec would match nothing and "no file(s) to reconcile" would be stamped
@@ -3099,7 +3300,7 @@ describe('PerforceClient.runReconcileScan', () => {
       // because a bare path names no file and would only add a junk spec.
       expect(reconcileSpecs(dirQuery!)).toEqual([`${realDir}/...`])
       // Patched, not dropped: the next session replays it instead of re-walking.
-      expect([...disk.store.keys()].some((k) => k.endsWith(realDir))).toBe(true)
+      expect([...disk.store.keys()].some((k) => k.endsWith(posixSpelling(realDir)))).toBe(true)
     } finally {
       removeDirWithRetry(realDir)
     }
@@ -3250,11 +3451,18 @@ describe('PerforceClient.runReconcileScan', () => {
     writeFileSync(realFile, 'x')
     try {
       const wt = makeFakeWatcher()
-      const client = await makeClient({ reconcile: () => [] }, undefined, fakeClock(), {
-        createFileSystemWatcher: () => wt.watcher,
-        watchRoot: ROOT,
-        externalChangeDebounceMs: 0,
-      })
+      const client = await makeClient(
+        { reconcile: () => [] },
+        undefined,
+        fakeClock(),
+        {
+          createFileSystemWatcher: () => wt.watcher,
+          watchRoot: ROOT,
+          externalChangeDebounceMs: 0,
+        },
+        scopeFixture([realDir]),
+        realDir,
+      )
       client.setReconcileScope([realDir])
 
       wt.fire('change', realFile)
@@ -3284,13 +3492,19 @@ describe('PerforceClient.runReconcileScan', () => {
     readdirMock.mockImplementation((dir: string) => actualFs.readdir(dir, { withFileTypes: true }))
     try {
       const wt = makeFakeWatcher()
-      const client = await makeClient({ reconcile: () => [] }, undefined, fakeClock(), {
-        createFileSystemWatcher: () => wt.watcher,
-        watchRoot: ROOT,
-        externalChangeDebounceMs: 0,
-      })
+      const client = await makeClient(
+        { reconcile: () => [] },
+        undefined,
+        fakeClock(),
+        {
+          createFileSystemWatcher: () => wt.watcher,
+          watchRoot: ROOT,
+          externalChangeDebounceMs: 0,
+        },
+        scopeFixture([realDir], [excluded]),
+        realDir,
+      )
       client.setReconcileScope([realDir])
-      client.setReconcileExcludes([excluded])
 
       wt.fire('change', sub)
       await nextMacrotask()
@@ -3328,7 +3542,7 @@ describe('PerforceClient.runReconcileScan', () => {
     // A directory-scoped mutation rewrites only that subtree, so only its
     // checkpoints are stale — clearing the whole namespace here is what made
     // every directory Revert cost the next workspace open a full rescan.
-    await client.revertReconcile([`${dirA}/...`])
+    await client.revertReconcile({ targets: [{ path: dirA, isDirectory: true }] })
 
     expect([...disk.store.keys()].some((k) => k.includes('A'))).toBe(false)
     expect([...disk.store.keys()].some((k) => k.includes('B'))).toBe(true)
@@ -3343,30 +3557,39 @@ describe('PerforceClient.runReconcileScan', () => {
   // a row anchored disappears with it (ancestors included).
 
   it('a directory revert clears the drift group and the per-directory index', async () => {
+    // The reverted range is a real SUBTREE rather than the client root: the
+    // scope's own config file sits AT the root and is implicitly excluded, so a
+    // `<root>/...` clean has a hole in it and is refused before p4 is asked (that
+    // refusal is the write gate's job — see `clientWriteGate.test.ts`). Nothing
+    // about a directory revert needs the root itself: this is about the drop.
+    const dir = posixJoin(LOCAL, 'dir')
     let cleaned = false
     const disk = fakeDisk()
     const client = await makeClient(
       {
         // Before the revert the directory has drift; after it the disk is clean,
         // and the post-revert refresh re-scans with that truth.
-        reconcile: () => (cleaned ? [] : [{ rel: 'in-a.txt' }]),
+        reconcile: () => (cleaned ? [] : [{ rel: 'dir/in-a.txt' }]),
       },
       disk,
+      fakeClock(),
+      {},
+      scopeFixture([dir]),
     )
-    client.setReconcileScope([LOCAL])
+    client.setReconcileScope([dir])
     await client.runReconcileScan()
-    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/in-a.txt`, letter: 'RM' }])
-    expect(scannedDirs(client)).toEqual([LOCAL])
+    expect(groupRows(client)).toEqual([{ path: `${dir}/in-a.txt`, letter: 'RM' }])
+    expect(scannedDirs(client)).toEqual([dir])
 
     cleaned = true
-    await client.revertReconcile([`${LOCAL}/...`])
+    await client.revertReconcile({ targets: [{ path: dir, isDirectory: true }] })
     // The revert's refresh schedules a background scan; drain it so it cannot
     // re-add rows after this test's assertions.
     await client.whenReconcileScanSettled()
 
     // The drift rows are dropped (not just invalidated) and the group is
     // whole-array assigned empty — the folder tint has nothing left to anchor on.
-    // The per-directory index keeps LOCAL (with an empty list), which is fine: it
+    // The per-directory index keeps `dir` (with an empty list), which is fine: it
     // only records which directories contributed an observation, and the clean
     // scan re-recorded it.
     expect(driftFiles(client)).toEqual([])
@@ -3394,7 +3617,9 @@ describe('PerforceClient.runReconcileScan', () => {
     ])
 
     cleaned = true
-    await client.revertReconcile([`${posixJoin(LOCAL, 'sub')}/...`])
+    await client.revertReconcile({
+      targets: [{ path: posixJoin(LOCAL, 'sub'), isDirectory: true }],
+    })
     await client.whenReconcileScanSettled()
 
     // Only the sub tree's row is gone; the sibling row survives its own tint.
@@ -3403,25 +3628,33 @@ describe('PerforceClient.runReconcileScan', () => {
   })
 
   it('a failed revert clears nothing', async () => {
+    // The same real subtree as above, for the same reason: a clean over the root
+    // carries the config file's implicit exclusion inside its range and is
+    // refused before p4 is asked — while this test is about what a FAILED clean
+    // leaves behind, which needs the clean to actually run.
+    const dir = posixJoin(LOCAL, 'dir')
     const disk = fakeDisk()
     const client = await makeClient(
       {
-        reconcile: () => [{ rel: 'in-a.txt' }],
+        reconcile: () => [{ rel: 'dir/in-a.txt' }],
         cleanExit: 1,
         cleanStderr: 'clean failed: file(s) not opened on this client',
       },
       disk,
+      fakeClock(),
+      {},
+      scopeFixture([dir]),
     )
-    client.setReconcileScope([LOCAL])
+    client.setReconcileScope([dir])
     await client.runReconcileScan()
-    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/in-a.txt`, letter: 'RM' }])
+    expect(groupRows(client)).toEqual([{ path: `${dir}/in-a.txt`, letter: 'RM' }])
 
-    const ok = await client.revertReconcile([`${LOCAL}/...`])
+    const ok = await client.revertReconcile({ targets: [{ path: dir, isDirectory: true }] })
     expect(ok).toBe(false)
     await client.whenReconcileScanSettled()
 
     // The disk was not cleaned, so the drift must survive the failed mutation.
-    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/in-a.txt`, letter: 'RM' }])
+    expect(groupRows(client)).toEqual([{ path: `${dir}/in-a.txt`, letter: 'RM' }])
     expect(windowMock.showErrorMessage).toHaveBeenCalled()
   })
 
@@ -3466,8 +3699,82 @@ type P4deltaRunResult = import('../p4deltaService.js').P4deltaRunResult
 
 const P4DELTA_EXE = '/opt/p4delta'
 
-/** δ argv per stubbed run, in call order. */
+/** δ argv of every run, in call order. */
 const p4deltaCalls: string[][] = []
+
+/**
+ * The TARGETS every run carried, in call order, read back from its argv — the
+ * only place a run states its range now: one argv per target, raw local paths,
+ * `<dir>/...` for a directory. There is no request file and no frozen snapshot
+ * to read instead.
+ */
+const p4deltaRanges: Array<readonly ScopeEntryStub[]> = []
+
+/** The EXCLUSIONS every run carried, in call order (`--exclude-dir` /
+ *  `--exclude-file`), which is what the editor side owes the engine: the scope's
+ *  own `.p4delta-scope` is read by the engine itself, so it never appears here. */
+const p4deltaExcludes: Array<readonly ScopeEntryStub[]> = []
+
+type ScopeEntryStub = { path: string; kind: 'file' | 'directory' }
+
+/** A write RANGE as a call site spells it now: the raw typed targets, never a
+ *  filespec list (the client derives the specs at execution time). */
+const asFile = (path: string): SyncScopeTarget => ({ path, isDirectory: false })
+
+/** What a run carried, as the stub sees it: the targets it was asked about and
+ *  the exclusions it was told to apply. */
+type DeltaCarried = { targets: ScopeEntryStub[]; excludes: ScopeEntryStub[] }
+
+/** The include directories a fixture declares, in the editor's own spelling —
+ *  the focus a real workspace hands `setReconcileScope`. */
+function focusOf(read: ScopeRead, clientRoot = LOCAL): string[] {
+  const answer = read(clientRoot)
+  if (answer.kind !== 'ok') return [clientRoot]
+  return (answer.config.include ?? []).map((entry) =>
+    entry.path === '.' ? clientRoot : `${clientRoot}/${entry.path}`,
+  )
+}
+
+/** The argv positions whose NEXT argv is a value, so the parser below does not
+ *  read that value as a target. */
+const DELTA_VALUE_FLAGS = new Set([
+  '--client-root',
+  '-c',
+  '--exclude-dir',
+  '--exclude-file',
+  '--to',
+])
+
+/** Split a δ argv into its targets and its declared exclusions. */
+function parseDeltaArgs(args: readonly string[]): {
+  targets: ScopeEntryStub[]
+  excludes: ScopeEntryStub[]
+} {
+  const targets: ScopeEntryStub[] = []
+  const excludes: ScopeEntryStub[] = []
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!
+    if (arg === '--exclude-dir' || arg === '--exclude-file') {
+      excludes.push({
+        path: args[i + 1] ?? '',
+        kind: arg === '--exclude-dir' ? 'directory' : 'file',
+      })
+      i += 1
+      continue
+    }
+    if (DELTA_VALUE_FLAGS.has(arg)) {
+      i += 1
+      continue
+    }
+    if (arg.startsWith('-')) continue
+    targets.push(
+      arg.endsWith('/...')
+        ? { path: arg.slice(0, -4), kind: 'directory' }
+        : { path: arg, kind: 'file' },
+    )
+  }
+  return { targets, excludes }
+}
 
 /** The run options per stubbed run, in call order — how the write tests observe
  *  the watchdog policy a mutation forwarded to the engine. */
@@ -3489,16 +3796,24 @@ let p4deltaRunSpy: { mockRestore: () => void } | undefined
 /** Stub the δ run. The result is assembled the way the service assembles it
  *  (`sawSummary` from the records), so a test expresses "no summary" simply by
  *  leaving the summary record out. */
-function stubP4deltaRun(reply: (args: readonly string[]) => P4deltaReply): void {
+function stubP4deltaRun(
+  reply: (
+    args: readonly string[],
+    carried: { targets: ScopeEntryStub[]; excludes: ScopeEntryStub[] },
+  ) => P4deltaReply,
+): void {
   p4deltaRunSpy = vi
     .spyOn(P4deltaService.prototype, 'run')
     .mockImplementation(async (args, options) => {
       const argv = [...args]
+      const carried = parseDeltaArgs(argv)
       p4deltaCalls.push(argv)
+      p4deltaRanges.push(carried.targets)
+      p4deltaExcludes.push(carried.excludes)
       p4deltaRunOptionList.push(options)
-      const r = reply(argv)
+      const r = reply(argv, carried)
       if (r.hold) await r.hold
-      const records = r.records ?? []
+      const records = [...(r.records ?? [])]
       return {
         code: r.code ?? 0,
         records,
@@ -3545,6 +3860,8 @@ describe('PerforceClient.runReconcileScan — δ engine', () => {
   beforeEach(() => {
     resetScanHarness()
     p4deltaCalls.length = 0
+    p4deltaRanges.length = 0
+    p4deltaExcludes.length = 0
   })
 
   afterEach(() => {
@@ -3555,9 +3872,14 @@ describe('PerforceClient.runReconcileScan — δ engine', () => {
 
   it('covers the whole scope in one δ run and checkpoints it under the root key', async () => {
     const disk = fakeDisk()
-    const client = await makeClient({}, disk, fakeClock(), { p4delta: { exe: P4DELTA_EXE } })
-    client.setReconcileScope([LOCAL])
-    client.setReconcileExcludes([`${LOCAL}/ignored`])
+    const scope = scopeFixture([LOCAL], [`${LOCAL}/other`])
+    const client = await makeClient({}, disk, fakeClock(), { p4delta: { exe: P4DELTA_EXE } }, scope)
+    // The exclusion sits BESIDE the walked directory (a sibling of the focus):
+    // the daily scope's range is expressible natively as well, so the round is
+    // not refused — and the exclusion is applied by the engine out of the config
+    // it reads itself, which is what makes the round one call over the whole
+    // directory.
+    client.setReconcileScope([`${LOCAL}/sub`])
     stubP4deltaRun(() => ({
       records: [
         deltaFile('a.txt', 'edit'),
@@ -3566,15 +3888,6 @@ describe('PerforceClient.runReconcileScan — δ engine', () => {
         // `revert`) and hands undigestable files off to native p4; neither is a
         // drift row, and all of them must stay out of the group.
         deltaFile('c.txt', 'revert', 'revert_edit'),
-        {
-          kind: 'file',
-          mode: 'open',
-          class: 'handoff',
-          handoff: 'reconcile',
-          depotFile: '//depot/branch_x/x.bin',
-          clientFile: `//${CLIENT}/x.bin`,
-          applied: false,
-        },
         deltaSummary({ total: 2, counts: { add: 1, edit: 1 } }),
       ],
       progress: [
@@ -3585,23 +3898,21 @@ describe('PerforceClient.runReconcileScan — δ engine', () => {
 
     await client.runReconcileScan()
 
-    // ONE δ run, contract flags in the frozen order, then the scope entries:
-    // the scanned directory plus every exclusion inside it, `-`-prefixed and
-    // after `--` so they stay positional (δ applies the exclusions itself —
-    // no carve, and `--json`/`--client-root`/`--no-scope-file` are exactly the
-    // switches the contract defines).
-    expect(p4deltaCalls).toEqual([
-      [
-        '--json',
-        '--no-scope-file',
-        '--client-root',
-        ROOT,
-        '--no-revert-groups',
-        '--',
-        `${LOCAL}/...`,
-        `-${LOCAL}/ignored/...`,
-      ],
+    // ONE δ run: the contract switches in the frozen order, then the typed
+    // request that carries the range. Deliberately no `--` entries and no
+    // `-`-prefixed exclusions — the exclusions belong to the daily scope inside
+    // the request, so a call site cannot forget one.
+    expect(p4deltaCalls).toHaveLength(1)
+    const argv = p4deltaCalls[0]!
+    expect(argv).toEqual([
+      '--json',
+      '--client-root',
+      ROOT,
+      '--no-revert-groups',
+      `${LOCAL}/sub/...`,
     ])
+    // The scanned range is what the focus ∩ scope resolved to, as typed targets.
+    expect(p4deltaRanges[0]).toEqual([{ path: `${LOCAL}/sub`, kind: 'directory' }])
     // The whole scope was answered by δ: the native walk spawned nothing.
     expect(reconcileScans()).toEqual([])
     // Only add/edit/delete become rows — they land in the drift set and the group.
@@ -3629,9 +3940,16 @@ describe('PerforceClient.runReconcileScan — δ engine', () => {
   it('reports δ phases instead of a fabricated directory count', async () => {
     let release!: () => void
     const held = new Promise<void>((resolve) => (release = resolve))
-    const client = await makeClient({}, undefined, fakeClock(), {
-      p4delta: { exe: P4DELTA_EXE },
-    })
+    const scope = scopeFixture([LOCAL])
+    const client = await makeClient(
+      {},
+      undefined,
+      fakeClock(),
+      {
+        p4delta: { exe: P4DELTA_EXE },
+      },
+      scope,
+    )
     client.setReconcileScope([LOCAL])
     stubP4deltaRun(() => ({
       hold: held,
@@ -3657,13 +3975,20 @@ describe('PerforceClient.runReconcileScan — δ engine', () => {
   it('annotates the drift group with the phase ladder, not fabricated directory counts', async () => {
     let release!: () => void
     const held = new Promise<void>((resolve) => (release = resolve))
-    const client = await makeClient({}, undefined, fakeClock(), {
-      p4delta: { exe: P4DELTA_EXE },
-      // A scope FILE keeps the scan in flight after the δ run (the per-file
-      // verification is a second δ call), which is the window the group title
-      // is observed in.
-      scopeFileExists: () => true,
-    })
+    const scope = scopeFixture([LOCAL])
+    const client = await makeClient(
+      {},
+      undefined,
+      fakeClock(),
+      {
+        p4delta: { exe: P4DELTA_EXE },
+        // A scope FILE keeps the scan in flight after the δ run (the per-file
+        // verification is a second δ call), which is the window the group title
+        // is observed in.
+        scopeFileExists: () => true,
+      },
+      scope,
+    )
     client.setReconcileScope([LOCAL], [`${LOCAL}/a.txt`])
     let runs = 0
     stubP4deltaRun(() => {
@@ -3734,7 +4059,8 @@ describe('PerforceClient.runReconcileScan — δ engine', () => {
   it('replays a fresh whole-scope checkpoint with zero spawns, and rescans once expired', async () => {
     const disk = fakeDisk()
     const clock = fakeClock()
-    const client = await makeClient({}, disk, clock, { p4delta: { exe: P4DELTA_EXE } })
+    const scope = scopeFixture([LOCAL])
+    const client = await makeClient({}, disk, clock, { p4delta: { exe: P4DELTA_EXE } }, scope)
     client.setReconcileScope([LOCAL])
     stubP4deltaRun(() => ({
       records: [deltaFile('a.txt', 'edit'), deltaSummary({ total: 1, counts: { edit: 1 } })],
@@ -3744,6 +4070,8 @@ describe('PerforceClient.runReconcileScan — δ engine', () => {
     const [key] = [...disk.store.keys()]
     expect(key!.endsWith(`:${ROOT}`)).toBe(true)
     p4deltaCalls.length = 0
+    p4deltaRanges.length = 0
+    p4deltaExcludes.length = 0
 
     // Next session, same disk: the snapshot is fresh, so the whole scope is
     // published from it with no engine (and no p4) spawned at all.
@@ -3796,11 +4124,64 @@ describe('PerforceClient.runReconcileScan — δ engine', () => {
     expect(key!.endsWith(`:${LOCAL}`)).toBe(true)
   })
 
+  it('refuses a stream that hands files to p4 with no action: no publish, no δ checkpoint', async () => {
+    const disk = fakeDisk()
+    const client = await makeClient(
+      { reconcile: () => [{ rel: 'native.txt' }] },
+      disk,
+      fakeClock(),
+      { p4delta: { exe: P4DELTA_EXE } },
+    )
+    client.setReconcileScope([LOCAL])
+    // A `handoff` record is δ saying it passed a file to native p4 without
+    // reporting the action it would take. The open-mode contract translates
+    // those into normal file records, so one surviving is a stream with no
+    // conclusion — reading it as "nothing drifted" clears the drift set AND
+    // writes the checkpoint that makes that answer stick. The narrow path
+    // already refused it; the scan's table has to give the same answer.
+    stubP4deltaRun(() => ({
+      records: [
+        deltaFile('a.txt', 'edit'),
+        {
+          kind: 'file',
+          mode: 'open',
+          class: 'handoff',
+          handoff: 'reconcile',
+          depotFile: '//depot/branch_x/x.bin',
+          clientFile: `//${CLIENT}/x.bin`,
+          applied: false,
+        },
+        deltaSummary({ total: 1, counts: { edit: 1 } }),
+      ],
+    }))
+
+    await client.runReconcileScan()
+
+    expect(p4deltaCalls).toHaveLength(1)
+    expect(client.p4deltaFallbackState).toEqual({ failures: 1, disarmed: false })
+    // Nothing from the refused δ stream was published…
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/native.txt`, letter: 'RM' }])
+    expect(driftFiles(client)).not.toContain(`${LOCAL}/a.txt`)
+    // …and the round still answered — natively, in the same round.
+    expect(reconcileScans().length).toBe(1)
+    expect(scannedDirs(client)).toEqual([LOCAL])
+    // The one checkpoint is the native per-directory one, never a δ snapshot of
+    // the handoff set: a δ key here would let the refusal come back as an answer.
+    expect(disk.store.size).toBe(1)
+    const [key] = [...disk.store.keys()]
+    expect(key!.endsWith(`:${LOCAL}`)).toBe(true)
+  })
+
   it('disarms the engine after three consecutive failures; only setP4delta re-arms it', async () => {
     const clock = fakeClock()
-    const client = await makeClient({ reconcile: () => [] }, undefined, clock, {
-      p4delta: { exe: P4DELTA_EXE },
-    })
+    const scope = scopeFixture([LOCAL])
+    const client = await makeClient(
+      { reconcile: () => [] },
+      undefined,
+      clock,
+      { p4delta: { exe: P4DELTA_EXE } },
+      scope,
+    )
     client.setReconcileScope([LOCAL])
     stubP4deltaRun(() => ({ sawNonJsonStdout: true, records: [deltaSummary()] }))
     // Every round must really spawn the native walk, or the spawn count proves
@@ -3862,7 +4243,8 @@ describe('PerforceClient.runReconcileScan — δ engine', () => {
 
   it('treats no-entry-matched as the normal empty answer, not a failure', async () => {
     const disk = fakeDisk()
-    const client = await makeClient({}, disk, fakeClock(), { p4delta: { exe: P4DELTA_EXE } })
+    const scope = scopeFixture([LOCAL])
+    const client = await makeClient({}, disk, fakeClock(), { p4delta: { exe: P4DELTA_EXE } }, scope)
     client.setReconcileScope([`${LOCAL}/gone`])
     stubP4deltaRun(() => ({
       records: [
@@ -3896,11 +4278,18 @@ describe('PerforceClient.runReconcileScan — δ engine', () => {
     const log: string[] = []
     let release!: () => void
     const held = new Promise<void>((resolve) => (release = resolve))
-    const client = await makeClient({}, undefined, fakeClock(), {
-      p4delta: { exe: P4DELTA_EXE },
-      scopeFileExists: () => true,
-      log: (m) => log.push(m),
-    })
+    const scope = scopeFixture([LOCAL])
+    const client = await makeClient(
+      {},
+      undefined,
+      fakeClock(),
+      {
+        p4delta: { exe: P4DELTA_EXE },
+        scopeFileExists: () => true,
+        log: (m) => log.push(m),
+      },
+      scope,
+    )
     client.setReconcileScope([LOCAL], [`${LOCAL}/a.txt`])
     let runs = 0
     stubP4deltaRun(() => {
@@ -3926,7 +4315,14 @@ describe('PerforceClient.runReconcileScan — δ engine', () => {
   it('keeps the two engines’ checkpoints apart (the engine is part of the fingerprint)', async () => {
     const disk = fakeDisk()
     // A native round writes its per-directory checkpoint…
-    const client = await makeClient({ reconcile: () => [{ rel: 'a.txt' }] }, disk)
+    const scope = scopeFixture([LOCAL])
+    const client = await makeClient(
+      { reconcile: () => [{ rel: 'a.txt' }] },
+      disk,
+      undefined,
+      {},
+      scope,
+    )
     client.setReconcileScope([LOCAL])
     await client.runReconcileScan()
     expect(disk.store.size).toBe(1)
@@ -3980,9 +4376,10 @@ describe('PerforceClient.runReconcileScan — δ engine', () => {
  *  follow the δ engine too (the verdict is the scan's, see `_narrowQueryEngine`):
  *  before the first scan round a narrow query is native by design, so the δ
  *  narrow path is only reachable this way. `narrow` answers every later δ run;
- *  the scan itself answers an empty (or `scanRows`-seeded) ok:true stream. */
+ *  the scan itself answers an empty (or `scanRows`-seeded) ok:true stream, over
+ *  the returned `readScope`. */
 async function makeDeltaNarrowClient(
-  narrow: (args: readonly string[]) => P4deltaReply,
+  narrow: (args: readonly string[], carried: DeltaCarried) => P4deltaReply,
   options: {
     /** Drift rows the δ SCAN answers with — they seed the drift set the narrow
      *  queries are then observed against. */
@@ -3991,18 +4388,45 @@ async function makeDeltaNarrowClient(
     readonly responds?: RespondOptions
     readonly clientOptions?: PerforceClientOptions
     readonly disk?: P4CacheDiskBackend
+    /** The config this client reads. Real-directory tests need their own (the
+     *  range must cover the tree they touch). */
+    readonly scope?: ScopeRead
+    /**
+     * The config during the SCAN only, for tests whose final config cannot be
+     * walked natively (an exclusion inside the walked range — the scan refuses
+     * it, see `runReconcileScan`). The swap lands after the scan and before the
+     * narrow phase, exactly like a config edit under a live session.
+     */
+    readonly scanScope?: ScopeRead
+    /** The client root. A test whose range must cover a REAL tree (the carve and
+     *  the `_pathKind` stat both need one) roots the client there: a config
+     *  entry is client-root-relative, so a range outside the root is not one a
+     *  config could name. */
+    readonly root?: string
   } = {},
-): Promise<{ client: PerforceClientInstance; disk: P4CacheDiskBackend }> {
+): Promise<{ client: PerforceClientInstance; disk: P4CacheDiskBackend; scope: ScopeRead }> {
   const disk = options.disk ?? fakeDisk()
-  const client = await makeClient(options.responds ?? {}, disk, fakeClock(), {
-    p4delta: { exe: P4DELTA_EXE },
-    ...options.clientOptions,
-  })
-  client.setReconcileScope([LOCAL])
+  const scope = options.scope ?? scopeFixture([LOCAL])
+  const scanScope = options.scanScope ?? scope
+  const swapper = options.scanScope !== undefined ? scopeSwapper(scanScope) : undefined
+  const client = await makeClient(
+    options.responds ?? {},
+    disk,
+    fakeClock(),
+    {
+      p4delta: { exe: P4DELTA_EXE },
+      ...options.clientOptions,
+    },
+    swapper !== undefined ? (root) => swapper.get()(root) : scope,
+    options.root ?? ROOT,
+  )
+  // The focus follows the fixture's include directories: a real-directory test
+  // walks its own tree, and a hard-coded focus would intersect the range away.
+  client.setReconcileScope(focusOf(scope))
   let phase: 'scan' | 'narrow' = 'scan'
   const scanRows = options.scanRows ?? []
-  stubP4deltaRun((args) =>
-    phase === 'scan' ? { records: [...scanRows, deltaSummary()] } : narrow(args),
+  stubP4deltaRun((args, carried) =>
+    phase === 'scan' ? { records: [...scanRows, deltaSummary()] } : narrow(args, carried),
   )
   await client.runReconcileScan()
   // The scan round is the one that selects the engine: it must have answered on
@@ -4010,8 +4434,11 @@ async function makeDeltaNarrowClient(
   expect(client.p4deltaFallbackState).toEqual({ failures: 0, disarmed: false })
   expect(p4deltaCalls).toHaveLength(1)
   p4deltaCalls.length = 0
+  p4deltaRanges.length = 0
+  p4deltaExcludes.length = 0
+  if (swapper !== undefined) await swapper.apply(client, scope)
   phase = 'narrow'
-  return { client, disk }
+  return { client, disk, scope }
 }
 
 /** A watcher whose flush drives the narrow query (delay 0: one macrotask). */
@@ -4039,6 +4466,8 @@ describe('PerforceClient narrow queries — δ engine', () => {
   beforeEach(() => {
     resetScanHarness()
     p4deltaCalls.length = 0
+    p4deltaRanges.length = 0
+    p4deltaExcludes.length = 0
   })
 
   afterEach(() => {
@@ -4058,25 +4487,29 @@ describe('PerforceClient narrow queries — δ engine', () => {
       }),
       { clientOptions: watchedClientOptions(wt) },
     )
-    client.setReconcileExcludes([`${LOCAL}/ignored`])
 
     // A deleted directory: `_pathKind` stats for real and ROOT is a fictional
-    // tree, so the path is GONE and the batch carries the spec pair — through δ,
-    // in ONE call, with the exclusion handed over as a `-`-prefixed entry.
+    // tree, so the path is GONE and the batch asks about both spellings — through
+    // δ, in ONE call, with the typed request carrying the range.
     await flushEvent(client, wt, 'delete', `${LOCAL}/gone`)
 
-    expect(p4deltaCalls).toEqual([
-      [
-        '--json',
-        '--no-scope-file',
-        '--client-root',
-        ROOT,
-        '--no-revert-groups',
-        '--',
-        `${LOCAL}/gone`,
-        `${LOCAL}/gone/...`,
-        `-${LOCAL}/ignored/...`,
-      ],
+    expect(p4deltaCalls).toHaveLength(1)
+    const argv = p4deltaCalls[0]!
+    expect(argv).toEqual([
+      '--json',
+      '--client-root',
+      ROOT,
+      '--no-revert-groups',
+      `${LOCAL}/gone`,
+      `${LOCAL}/gone/...`,
+    ])
+    // The batch's paths travel as typed targets — no positional entries, and no
+    // `-`-prefixed exclusion a call site could drop: the exclusions are part of
+    // the daily scope the engine applies itself. A vanished path keeps both
+    // spellings (which of "a file" / "a directory" it was cannot be known).
+    expect(p4deltaRanges[0]).toEqual([
+      { path: `${LOCAL}/gone`, kind: 'file' },
+      { path: `${LOCAL}/gone`, kind: 'directory' },
     ])
     // The answer is δ's: p4 was never asked to reconcile.
     expect(reconcileScans()).toEqual([])
@@ -4088,9 +4521,12 @@ describe('PerforceClient narrow queries — δ engine', () => {
   it('treats no-entry-matched as a complete empty answer: the paths are covered, not failed', async () => {
     const wt = makeFakeWatcher()
     const { client } = await makeDeltaNarrowClient(
-      (args) => ({
+      (_args, carried) => ({
         records: [
-          ...args.slice(args.indexOf('--') + 1).map((path) => ({ kind: 'unmatched', path })),
+          ...carried.targets.map((target) => ({
+            kind: 'unmatched',
+            path: target.path,
+          })),
           deltaSummary({
             ok: false,
             total: 0,
@@ -4135,6 +4571,23 @@ describe('PerforceClient narrow queries — δ engine', () => {
     [
       'a summary for another mode (an answer to a question nobody asked)',
       () => ({ records: [deltaSummary({ mode: 'clean', applied: true })] }),
+    ],
+    [
+      'a handoff record (files passed to p4 with no action reported)',
+      () => ({
+        records: [
+          {
+            kind: 'file',
+            mode: 'open',
+            class: 'handoff',
+            handoff: 'reconcile',
+            depotFile: '//depot/branch_x/x.bin',
+            clientFile: `//${CLIENT}/x.bin`,
+            applied: false,
+          },
+          deltaSummary({ total: 0, counts: {} }),
+        ],
+      }),
     ],
   ]
 
@@ -4213,21 +4666,27 @@ describe('PerforceClient narrow queries — δ engine', () => {
       const wt = makeFakeWatcher()
       const { client } = await makeDeltaNarrowClient(() => ({ records: [deltaSummary()] }), {
         clientOptions: watchedClientOptions(wt),
+        // The exclusion lands after the scan (a config edit): a walked range
+        // containing a hole is not expressible natively, and the scan needs a
+        // δ verdict before the narrow path follows it.
+        scope: scopeFixture([realDir], [excluded]),
+        scanScope: scopeFixture([realDir]),
+        root: realDir,
       })
       client.setReconcileScope([realDir])
-      client.setReconcileExcludes([excluded])
 
       await flushEvent(client, wt, 'change', sub)
 
-      const argv = p4deltaCalls[0]
-      expect(argv).toBeDefined()
+      expect(p4deltaCalls).toHaveLength(1)
+      const argv = p4deltaCalls[0]!
       // One call, whole directory: δ applies the exclusion itself, which is the
       // entire point of not carving here.
-      expect(argv).toContain(`${sub}/...`)
+      expect(p4deltaRanges[0]).toEqual([{ path: sub, kind: 'directory' }])
       expect(argv).not.toContain(`${sub}/*`)
-      // …and the exclusion must actually be IN that call: an omission would pull
-      // a directory the user excluded back into the answer.
-      expect(argv).toContain(`-${excluded}/...`)
+      // …and the engine is handed the exclusion through neither the argv nor a
+      // file: the config on disk is what it intersects with, which is exactly
+      // why the editor must not send a second, older copy of the range.
+      expect(p4deltaExcludes[0]).toEqual([])
       expect(reconcileScans()).toEqual([])
     } finally {
       removeDirWithRetry(realDir)
@@ -4244,9 +4703,11 @@ describe('PerforceClient narrow queries — δ engine', () => {
       const { client } = await makeDeltaNarrowClient(() => ({ records: [deltaSummary()] }), {
         responds: { reconcile: () => [] },
         clientOptions: watchedClientOptions(wt),
+        scope: scopeFixture([realDir], [excluded]),
+        scanScope: scopeFixture([realDir]),
+        root: realDir,
       })
       client.setReconcileScope([realDir])
-      client.setReconcileExcludes([excluded])
 
       await flushEvent(client, wt, 'change', weird)
 
@@ -4267,23 +4728,34 @@ describe('PerforceClient narrow queries — δ engine', () => {
 
   it('splits a mixed batch: the metacharacter spec goes to p4, the δ-form spec stays on δ', async () => {
     const wt = makeFakeWatcher()
-    const { client } = await makeDeltaNarrowClient(() => ({ records: [deltaSummary()] }), {
-      responds: { reconcile: () => [{ rel: 'we@ird.txt', action: 'edit' }] },
-      clientOptions: watchedClientOptions(wt),
-    })
+    const { client } = await makeDeltaNarrowClient(
+      () => ({
+        records: [deltaSummary()],
+        // The δ half is asked through the typed request, so the paths it was
+        // asked about are only observable there.
+      }),
+      {
+        responds: { reconcile: () => [{ rel: 'we@ird.txt', action: 'edit' }] },
+        clientOptions: watchedClientOptions(wt),
+      },
+    )
 
     // One flush = one batch, carrying a spec δ cannot read (the `@` name, which
     // native p4 must answer) next to a metachar-free one. Routing the whole
     // batch native would re-ask the δ spec without the exclusions that only ride
-    // on the δ call — so each half goes to its own engine and the answers merge.
+    // in the δ request — so each half goes to its own engine and the answers merge.
     wt.fire('change', `${LOCAL}/a.txt`)
     wt.fire('change', `${LOCAL}/we@ird.txt`)
     await nextMacrotask()
     await client.whenExternalFlushSettled()
 
     expect(p4deltaCalls).toHaveLength(1)
-    expect(p4deltaCalls[0]).toContain(`${LOCAL}/a.txt`)
-    expect(p4deltaCalls[0]).not.toContain(`${LOCAL}/we@ird.txt`)
+    // The batch's δ half is the metachar-free path alone; the `@` name never
+    // appears in it (its spec would name a file nobody has).
+    expect(p4deltaRanges[0]).toEqual([
+      { path: `${LOCAL}/a.txt`, kind: 'file' },
+      { path: `${LOCAL}/a.txt`, kind: 'directory' },
+    ])
     expect(narrowScans()).toHaveLength(1)
     expect(reconcileSpecs(narrowScans()[0]!)).toContain(`${LOCAL}/we@ird.txt`)
   })
@@ -4333,6 +4805,8 @@ describe('PerforceClient writes — δ engine', () => {
   beforeEach(() => {
     resetScanHarness()
     p4deltaCalls.length = 0
+    p4deltaRanges.length = 0
+    p4deltaExcludes.length = 0
     p4deltaRunOptionList.length = 0
   })
 
@@ -4350,14 +4824,13 @@ describe('PerforceClient writes — δ engine', () => {
     )
   }
 
-  /** The write argv's fixed head, in the order the contract fixes it. */
-  const DELTA_WRITE_HEAD = [
-    '--json',
-    '--no-scope-file',
-    '--client-root',
-    ROOT,
-    '--no-revert-groups',
-  ]
+  /** The write argv's fixed head, in the order the contract fixes it. What
+   *  follows are the operation's own targets, one argv each — the engine applies
+   *  the `.p4delta-scope` it reads itself, and the reconcile noise travels as
+   *  `--exclude-dir` / `--exclude-file` when the operation has any.
+   *  `--no-scope-file` is deliberately NOT here: it is the user's own override,
+   *  not a switch every write carries. */
+  const DELTA_WRITE_HEAD = ['--json', '--client-root', ROOT, '--no-revert-groups']
 
   it('collects through ONE δ run: the frozen argv, every exclusion, no native spawn', async () => {
     const { client } = await makeDeltaNarrowClient(
@@ -4365,26 +4838,35 @@ describe('PerforceClient writes — δ engine', () => {
         records: [deltaSummary({ mode: 'open', applied: true, total: 1, counts: { edit: 1 } })],
         log: ['Applied 1 change.'],
       }),
-      { scanRows: [deltaFile('a.txt', 'edit')] },
+      {
+        scanRows: [deltaFile('a.txt', 'edit')],
+        // The exclusion lands after the scan (a config edit): the write must run
+        // under the scope as it stands now, with the exclusion inside its request.
+        scope: scopeFixture([LOCAL], [`${LOCAL}/ignored`]),
+        scanScope: scopeFixture([LOCAL]),
+      },
     )
-    client.setReconcileExcludes([`${LOCAL}/ignored`])
     expect(driftFiles(client)).toContain(`${LOCAL}/a.txt`)
 
-    const ok = await client.reconcile([`${LOCAL}/a.txt`, `${LOCAL}/dir/...`])
+    const ok = await client.reconcile({
+      targets: [
+        { path: `${LOCAL}/a.txt`, isDirectory: false },
+        { path: `${LOCAL}/dir`, isDirectory: true },
+      ],
+    })
 
     expect(ok).toBe(true)
-    // One call, applied (`-a`), with every exclusion `-`-prefixed after `--`: an
-    // omission would let the write touch a directory the user excluded.
+    // One call, applied (`-a`), with the paths as typed targets inside the
+    // request: an omission would let the write touch a directory the user
+    // excluded, so the range travels where a call site cannot drop it.
     expect(p4deltaCalls).toEqual([
-      [
-        ...DELTA_WRITE_HEAD,
-        '-a',
-        '--',
-        `${LOCAL}/a.txt`,
-        `${LOCAL}/dir/...`,
-        `-${LOCAL}/ignored/...`,
-      ],
+      [...DELTA_WRITE_HEAD, '-a', `${LOCAL}/a.txt`, `${LOCAL}/dir/...`],
     ])
+    expect(p4deltaRanges[0]).toEqual([
+      { path: `${LOCAL}/a.txt`, kind: 'file' },
+      { path: `${LOCAL}/dir`, kind: 'directory' },
+    ])
+    expect(p4deltaExcludes[0]).toEqual([])
     // The answer is δ's: p4 was never asked to apply a reconcile.
     expect(writeSpawns()).toEqual([])
     // A concluded run clears the ladder, and `_invalidateAfterMutation` drops the
@@ -4394,40 +4876,119 @@ describe('PerforceClient writes — δ engine', () => {
     expect(client.reconcileUsesP4delta).toBe(true)
   })
 
-  it('collects into a named changelist with -c before --, and without -c for default', async () => {
-    const { client } = await makeDeltaNarrowClient(() => ({
-      records: [deltaSummary({ mode: 'open', applied: true, total: 1, counts: { edit: 1 } })],
-    }))
+  it('lifts the rule for the target the user authorized, and only for it', async () => {
+    const { client } = await makeDeltaNarrowClient(
+      () => {
+        return {
+          records: [deltaSummary({ mode: 'open', applied: true, total: 1, counts: { edit: 1 } })],
+        }
+      },
+      {
+        scanRows: [deltaFile('a.txt', 'edit')],
+        // The fixture is the SCOPE (`.p4delta-scope`), which knows nothing about
+        // the reconcile setting — the two layers are independent, and this call's
+        // range is bounded by the setting alone.
+        scope: scopeFixture([LOCAL]),
+        scanScope: scopeFixture([LOCAL]),
+      },
+    )
+    client.setReconcileExcludes({ dirs: [`${LOCAL}/noise`], files: [] })
+    const targets = [{ path: `${LOCAL}/noise`, isDirectory: true }]
+    // The command layer's own planning: the user named the excluded folder and
+    // chose "run as chosen", so THIS operation carries those targets as
+    // authorized — and nothing else.
+    const op = planReconcileNoiseOperations(targets, rulesOf(client), targets)?.[0]
+    expect(op).toEqual({ targets, confirmedTargets: targets })
 
-    expect(await client.reconcileInto('1234', [`${LOCAL}/a.txt`])).toBe(true)
-    expect(await client.reconcileInto('default', [`${LOCAL}/b.txt`])).toBe(true)
+    expect(await client.reconcile({ targets }, { confirmedTargets: op!.confirmedTargets })).toBe(
+      true,
+    )
 
-    expect(p4deltaCalls[0]).toEqual([
-      ...DELTA_WRITE_HEAD,
-      '-c',
-      '1234',
-      '-a',
-      '--',
-      `${LOCAL}/a.txt`,
-    ])
-    expect(p4deltaCalls[1]).toEqual([...DELTA_WRITE_HEAD, '-a', '--', `${LOCAL}/b.txt`])
+    // The live setting still hides `noise`, and the call δ was asked to run
+    // carries no exclusion at all — the authorization is per TARGET, and the
+    // rules covering it are lifted at the write.
+    expect(client.reconcileNoise).toEqual({ dirs: [`${LOCAL}/noise`], files: [] })
+    expect(p4deltaExcludes[0]).toEqual([])
+    expect(p4deltaRanges[0]).toEqual([{ path: `${LOCAL}/noise`, kind: 'directory' }])
+    expect(writeSpawns()).toEqual([])
+  })
+
+  it('obeys the setting in force at the WRITE, not the reading the dialog showed', async () => {
+    const { client } = await makeDeltaNarrowClient(
+      () => ({
+        records: [deltaSummary({ mode: 'open', applied: true, total: 1, counts: { edit: 1 } })],
+      }),
+      {
+        scope: scopeFixture([LOCAL]),
+        scanScope: scopeFixture([LOCAL]),
+      },
+    )
+    const targets = [{ path: `${LOCAL}/a.txt`, isDirectory: false }]
+    // The dialog's reading was taken while the setting was EMPTY; a rule appears
+    // while the confirmation is still on screen. The dialog authorized nothing
+    // (nothing it showed was covered), so the run carries no authorization — and
+    // the NEW rule applies. Carrying the dialog's reading instead is what let a
+    // freshly added exclusion be ignored by the very run it was added for.
+    expect(rulesOf(client)).toEqual(EMPTY_RECONCILE_NOISE)
+    client.setReconcileExcludes({ dirs: [`${LOCAL}/bin`], files: [] })
+
+    expect(await client.reconcile({ targets })).toBe(true)
+
+    expect(p4deltaExcludes[0]).toEqual([{ path: `${LOCAL}/bin`, kind: 'directory' }])
+    expect(writeSpawns()).toEqual([])
+  })
+
+  it('collects into a named changelist with -c before -a, and without -c for default', async () => {
+    const { client } = await makeDeltaNarrowClient(
+      () => ({
+        records: [deltaSummary({ mode: 'open', applied: true, total: 1, counts: { edit: 1 } })],
+      }),
+      {},
+    )
+
+    expect(
+      await client.reconcileInto('1234', {
+        targets: [{ path: `${LOCAL}/a.txt`, isDirectory: false }],
+      }),
+    ).toBe(true)
+    expect(
+      await client.reconcileInto('default', {
+        targets: [{ path: `${LOCAL}/b.txt`, isDirectory: false }],
+      }),
+    ).toBe(true)
+
+    expect(p4deltaCalls[0]).toEqual([...DELTA_WRITE_HEAD, '-c', '1234', '-a', `${LOCAL}/a.txt`])
+    expect(p4deltaCalls[1]).toEqual([...DELTA_WRITE_HEAD, '-a', `${LOCAL}/b.txt`])
+    expect(p4deltaRanges[0]).toEqual([{ path: `${LOCAL}/a.txt`, kind: 'file' }])
+    expect(p4deltaRanges[1]).toEqual([{ path: `${LOCAL}/b.txt`, kind: 'file' }])
     expect(writeSpawns()).toEqual([])
   })
 
   it('cleans through δ with --clean -a and the content-transfer watchdog policy', async () => {
-    const { client } = await makeDeltaNarrowClient(() => ({
-      records: [
-        deltaSummary({ mode: 'clean', applied: true, total: 2, counts: { delete: 1, revert: 1 } }),
-      ],
-    }))
-    client.setReconcileExcludes([`${LOCAL}/ignored`])
+    const { client } = await makeDeltaNarrowClient(
+      () => ({
+        records: [
+          deltaSummary({
+            mode: 'clean',
+            applied: true,
+            total: 2,
+            counts: { delete: 1, revert: 1 },
+          }),
+        ],
+      }),
+      {
+        scope: scopeFixture([LOCAL], [`${LOCAL}/ignored`]),
+        scanScope: scopeFixture([LOCAL]),
+      },
+    )
 
-    const ok = await client.revertReconcile([`${LOCAL}/dir/...`])
+    const ok = await client.revertReconcile({
+      targets: [{ path: `${LOCAL}/dir`, isDirectory: true }],
+    })
 
     expect(ok).toBe(true)
-    expect(p4deltaCalls).toEqual([
-      [...DELTA_WRITE_HEAD, '--clean', '-a', '--', `${LOCAL}/dir/...`, `-${LOCAL}/ignored/...`],
-    ])
+    expect(p4deltaCalls).toEqual([[...DELTA_WRITE_HEAD, '--clean', '-a', `${LOCAL}/dir/...`]])
+    expect(p4deltaRanges[0]).toEqual([{ path: `${LOCAL}/dir`, kind: 'directory' }])
     // `clean` moves file content, so the native path disarms the watchdog for it
     // (CONTENT_TRANSFER_EXEC) — the engine is handed the same policy.
     expect(p4deltaRunOptionList.at(-1)?.timeoutMs).toBe(0)
@@ -4460,7 +5021,7 @@ describe('PerforceClient writes — δ engine', () => {
     it(`toasts and counts WITHOUT re-running natively when δ answers a write with ${name}`, async () => {
       const { client } = await makeDeltaNarrowClient(reply)
 
-      const ok = await client.reconcile([`${LOCAL}/a.txt`])
+      const ok = await client.reconcile({ targets: [asFile(`${LOCAL}/a.txt`)] })
 
       expect(ok).toBe(false)
       expect(p4deltaCalls).toHaveLength(1)
@@ -4484,12 +5045,12 @@ describe('PerforceClient writes — δ engine', () => {
         : { records: [deltaSummary({ mode: 'open', applied: true })] },
     )
 
-    expect(await client.reconcile([`${LOCAL}/a.txt`])).toBe(false)
+    expect(await client.reconcile({ targets: [asFile(`${LOCAL}/a.txt`)] })).toBe(false)
     expect(client.p4deltaFallbackState).toEqual({ failures: 1, disarmed: false })
 
     // A success resets the count, so a transient failure costs one slow round
     // rather than leaving the engine one strike from being disarmed all session.
-    expect(await client.reconcile([`${LOCAL}/a.txt`])).toBe(true)
+    expect(await client.reconcile({ targets: [asFile(`${LOCAL}/a.txt`)] })).toBe(true)
     expect(client.p4deltaFallbackState).toEqual({ failures: 0, disarmed: false })
   })
 
@@ -4497,67 +5058,217 @@ describe('PerforceClient writes — δ engine', () => {
     const { client } = await makeDeltaNarrowClient(() => ({ records: [] }))
 
     for (let i = 0; i < 3; i++) {
-      expect(await client.reconcile([`${LOCAL}/a.txt`])).toBe(false)
+      expect(await client.reconcile({ targets: [asFile(`${LOCAL}/a.txt`)] })).toBe(false)
     }
     expect(p4deltaCalls).toHaveLength(3)
     expect(client.p4deltaFallbackState).toEqual({ failures: 3, disarmed: true })
 
     // Disarmed: the write goes to p4 with no δ spawn at all.
-    expect(await client.reconcile([`${LOCAL}/a.txt`])).toBe(true)
+    expect(await client.reconcile({ targets: [asFile(`${LOCAL}/a.txt`)] })).toBe(true)
     expect(p4deltaCalls).toHaveLength(3)
     expect(writeSpawns()).toHaveLength(1)
     expect(client.reconcileUsesP4delta).toBe(false)
   })
 
-  it('routes specs δ cannot read to p4 without counting them, and still accepts //<depot>/...', async () => {
-    const { client } = await makeDeltaNarrowClient(() => ({
-      records: [deltaSummary({ mode: 'open', applied: true })],
-    }))
-    client.setReconcileExcludes([`${LOCAL}/ignored`])
+  it('routes a range with no local targets to p4 without counting it as a δ failure', async () => {
+    const { client } = await makeDeltaNarrowClient(
+      () => ({
+        records: [deltaSummary({ mode: 'open', applied: true })],
+      }),
+      {
+        scope: scopeFixture([LOCAL], [`${LOCAL}/ignored`]),
+        scanScope: scopeFixture([LOCAL]),
+      },
+    )
 
-    // A carve product (`<dir>/*`) the command layer should have skipped under δ,
-    // and the whole-client wildcard: both native, and δ is never asked (the
-    // counts below are what catches a spec that leaked through).
-    expect(await client.reconcile([`${LOCAL}/dir/*`])).toBe(true)
-    expect(await client.reconcile(['//...'])).toBe(true)
-    expect(await client.revertReconcile([`${LOCAL}/dir/*`])).toBe(true)
+    // A depot spelling the caller named ITSELF (`//...`, `//depot/x/...`): p4's
+    // own grammar, asked for on purpose, over which the daily scope never had a
+    // vote — and a shape no local target could carry. Native by construction;
+    // the counts below are what catches a spec that leaked to δ (`//...` is the
+    // one a suffix strip would have turned into `/`, an "absolute local path").
+    expect(await client.reconcile({ specs: ['//...'] })).toBe(true)
+    expect(await client.reconcile({ specs: ['//depot/branch_x/...'] })).toBe(true)
+    expect(await client.revertReconcile({ specs: ['//depot/branch_x/...'] })).toBe(true)
 
     expect(p4deltaCalls).toEqual([])
     expect(writeSpawns()).toHaveLength(3)
     // Routing is not a health verdict: the ladder is untouched.
     expect(client.p4deltaFallbackState).toEqual({ failures: 0, disarmed: false })
 
-    // …while the one depot spelling the contract translates does reach the engine.
-    expect(await client.reconcile(['//depot/branch_x/...'])).toBe(true)
+    // …while a range carrying real local targets does reach the engine, as the
+    // typed targets rather than as positional entry text.
+    expect(await client.reconcile({ targets: [asFile(`${LOCAL}/a.txt`)] })).toBe(true)
     expect(p4deltaCalls).toHaveLength(1)
-    expect(p4deltaCalls[0]).toContain('//depot/branch_x/...')
+    expect(p4deltaRanges[0]).toEqual([{ path: `${LOCAL}/a.txt`, kind: 'file' }])
     expect(writeSpawns()).toHaveLength(3)
   })
 
-  it('warns when an un-carved δ-form spec has to fall back to p4', async () => {
+  it('hands a metacharacter path to δ RAW: no carve, no native spawn', async () => {
     const log: string[] = []
+    const { client } = await makeDeltaNarrowClient(
+      () => ({ records: [deltaSummary({ mode: 'open', applied: true })] }),
+      {
+        responds: { reconcile: () => [] },
+        clientOptions: { log: (m) => log.push(m) },
+      },
+    )
+
+    // The caller's TYPED targets are what δ is handed: raw local paths, escaped
+    // at the p4 boundary by the engine itself. That is the whole reason a name
+    // with `%` needs no carve — `50%25_stuff` is a file nobody has, and reading
+    // the escaped SPEC as "unhandable" used to buy a native run whose traversal
+    // applied no exclusion at all. Nothing warns here, because nothing was lost.
+    expect(
+      await client.reconcile({ targets: [{ path: `${LOCAL}/50%_stuff`, isDirectory: true }] }),
+    ).toBe(true)
+    expect(p4deltaCalls).toHaveLength(1)
+    expect(p4deltaRanges[0]).toEqual([{ path: `${LOCAL}/50%_stuff`, kind: 'directory' }])
+    expect(writeSpawns()).toEqual([])
+    expect(log.join('\n')).not.toContain('WARNING')
+
+    // A depot spelling — the one range that never had local targets behind it —
+    // is the legitimately native shape, and routing it must stay silent too.
+    log.length = 0
+    expect(await client.reconcile({ specs: ['//depot/branch_x/...'] })).toBe(true)
+    expect(writeSpawns()).toHaveLength(1)
+    expect(log.join('\n')).not.toContain('WARNING')
+  })
+
+  it('refuses an UNCUT write that falls back to native over a noise-covered target, spawning nothing', async () => {
     const { client } = await makeDeltaNarrowClient(() => ({ records: [deltaSummary()] }), {
       responds: { reconcile: () => [] },
-      clientOptions: { log: (m) => log.push(m) },
     })
+    client.setReconcileExcludes({ dirs: [`${LOCAL}/noise`], files: [] })
+    const targets = [{ path: LOCAL, isDirectory: true }]
+    expect(client.reconcileUsesP4delta).toBe(true)
 
-    // `<dir>/...` still carrying a `%` is what a MISSED carve gate looks like —
-    // the command layer has to carve such a path before handing it over, because
-    // this reject cannot: the raw path is gone by here. The call must still fall
-    // back (slow, but the only safe option), and the output channel must say the
-    // exclusions may not have been applied.
-    expect(await client.reconcile([`${LOCAL}/50%25_stuff/...`])).toBe(true)
+    // The gap this admission check exists for: an engine disarmed, re-pointed or
+    // demoted by a failed round AFTER the caller read its verdict — the fork is
+    // re-made inside `_mutateWrite`, and the raw target list, which only δ may
+    // take uncarved, must never land on native p4, whose traversal walks the
+    // folder this operation was told to hide (for `clean -a`, deletes inside it).
+    client.setP4delta(undefined)
+    expect(client.reconcileUsesP4delta).toBe(false)
+
+    expect(await client.reconcile({ targets })).toBe(false)
+
+    // Zero width on BOTH engines: δ never ran, and p4 was never handed the
+    // uncarved traversal. The refusal names the rule that would have been walked.
     expect(p4deltaCalls).toEqual([])
-    expect(writeSpawns()).toHaveLength(1)
-    expect(log.join('\n')).toContain('WARNING')
-    expect(log.join('\n')).toContain('exclude folders may NOT have been applied')
+    expect(writeSpawns()).toEqual([])
+    expect(String(windowMock.showWarningMessage.mock.calls.at(-1)?.[0] ?? '')).toContain(`${LOCAL}`)
+  })
 
-    // A carve product (`<dir>/*`, and the escaped clean-subdir specs a carve
-    // emits) is the legitimately native shape: routing it must stay silent.
-    log.length = 0
-    expect(await client.reconcile([`${LOCAL}/dir/*`, `${LOCAL}/dir/ok/...`])).toBe(true)
-    expect(writeSpawns()).toHaveLength(2)
-    expect(log.join('\n')).not.toContain('WARNING')
+  it('refuses the same UNCUT fallback over a directory holding a hidden FILE', async () => {
+    const { client } = await makeDeltaNarrowClient(() => ({ records: [deltaSummary()] }), {
+      responds: { reconcile: () => [] },
+    })
+    // The other half of the same hole: a `p4 clean -a` over `<dir>/*` deletes an
+    // unmanaged file the setting names, exactly as it deletes inside a hidden
+    // folder — so the admission check asks about file rules too.
+    client.setReconcileExcludes({ dirs: [], files: [`${LOCAL}/sealed.txt`] })
+    const targets = [{ path: LOCAL, isDirectory: true }]
+    client.setP4delta(undefined)
+
+    expect(await client.reconcile({ targets })).toBe(false)
+    expect(writeSpawns()).toEqual([])
+  })
+
+  it('still runs an UNCUT fallback whose targets no rule reaches', async () => {
+    const { client } = await makeDeltaNarrowClient(() => ({ records: [deltaSummary()] }), {
+      responds: { reconcile: () => [] },
+    })
+    // A rule that lives somewhere else: neither of these targets walks it, so
+    // the fallback is not widened by anything and must still run.
+    client.setReconcileExcludes({ dirs: [`${LOCAL}/elsewhere`], files: [] })
+    const fileTargets = [{ path: `${LOCAL}/a.txt`, isDirectory: false }]
+    const dirTargets = [{ path: `${LOCAL}/clean`, isDirectory: true }]
+    client.setP4delta(undefined)
+
+    expect(await client.reconcile({ targets: fileTargets })).toBe(true)
+    expect(await client.reconcile({ targets: dirTargets })).toBe(true)
+
+    expect(p4deltaCalls).toEqual([])
+    expect(writeSpawns().map((argv) => argv.slice(argv.indexOf('reconcile')))).toEqual([
+      ['reconcile', '-a', '-e', '-d', `${LOCAL}/a.txt`],
+      ['reconcile', '-a', '-e', '-d', `${LOCAL}/clean/...`],
+    ])
+  })
+
+  it('carves for native when the engine goes away after the gate: never δ’s raw target list', async () => {
+    // A REAL subtree, because the carve reads the disk: the exclusion has to be
+    // an entry the walk can actually skip.
+    const realDir = mkTempDir('p4-dirExcl-')
+    const src = posixJoin(realDir, 'src')
+    const excluded = posixJoin(src, 'gen')
+    mkdirSync(excluded, { recursive: true })
+    writeFileSync(posixJoin(src, 'a.txt'), 'a')
+    try {
+      const { client } = await makeDeltaNarrowClient(() => ({ records: [deltaSummary()] }), {
+        responds: { reconcile: () => [] },
+        scope: scopeFixture([src], [excluded]),
+        scanScope: scopeFixture([src]),
+        root: realDir,
+      })
+      const targets = [{ path: src, isDirectory: true }]
+      expect(client.reconcileUsesP4delta).toBe(true)
+
+      // The engine is gone by the time the write runs — disarmed, re-pointed or
+      // demoted by a failed round AFTER the caller read its verdict. The range
+      // the caller gated was the RAW target, which only δ may take uncarved: a
+      // native `<dir>/...` over a directory holding an exclusion would walk (and
+      // for `--clean`, delete inside) exactly what the user shielded.
+      client.setP4delta(undefined)
+
+      expect(await client.reconcile({ targets })).toBe(true)
+
+      expect(p4deltaCalls).toEqual([])
+      const spawns = writeSpawns()
+      expect(spawns).toHaveLength(1)
+      const specs = spawns[0]!.slice(spawns[0]!.indexOf('-d') + 1)
+      // Carved: the excluded subtree is an ABSENT level, not a recursive spec
+      // that would reach it.
+      expect(specs).toHaveLength(1)
+      expect(specs[0]!.replaceAll('\\', '/')).toBe(`${src.replaceAll('\\', '/')}/*`)
+    } finally {
+      removeDirWithRetry(realDir)
+    }
+  })
+
+  it('keeps the noise out of a SCOPE override, and admits a target the user confirmed through it', async () => {
+    const { client } = await makeDeltaNarrowClient(() => ({ records: [deltaSummary()] }), {
+      responds: { reconcile: () => [] },
+    })
+    const noiseDir = `${LOCAL}/noise`
+    client.setReconcileExcludes({ dirs: [noiseDir], files: [] })
+    const parent = [{ path: LOCAL, isDirectory: true }]
+    client.setP4delta(undefined)
+
+    // A scope override runs the paths the user NAMED; it never lifts a noise
+    // rule they did not name. With the engine gone the list carries the
+    // exclusions applied by nobody, so it is refused exactly like the
+    // un-overridden one.
+    expect(await client.reconcile({ targets: parent }, { overrideScope: true })).toBe(false)
+    expect(writeSpawns()).toEqual([])
+
+    // The user named the hidden folder itself and chose "run as chosen": that
+    // operation carries the rule lifted for this target alone, so the same
+    // native list is admitted — the two confirmations are independent in both
+    // directions.
+    const confirmedTargets = [{ path: noiseDir, isDirectory: true }]
+    const op = planReconcileNoiseOperations(
+      confirmedTargets,
+      rulesOf(client),
+      confirmedTargets,
+    )?.[0]
+    expect(op?.confirmedTargets).toEqual(confirmedTargets)
+    expect(
+      await client.reconcile(
+        { targets: confirmedTargets },
+        { confirmedTargets: op!.confirmedTargets },
+      ),
+    ).toBe(true)
+    expect(writeSpawns()).toHaveLength(1)
   })
 
   it('a reconfiguration retracts the scan verdict: writes run native until δ scans again', async () => {
@@ -4571,7 +5282,7 @@ describe('PerforceClient writes — δ engine', () => {
     // collect, or a `--clean` — must not be handed to an unproven one.
     client.setP4delta(P4DELTA_EXE)
     expect(client.reconcileUsesP4delta).toBe(false)
-    expect(await client.reconcile([`${LOCAL}/a.txt`])).toBe(true)
+    expect(await client.reconcile({ targets: [asFile(`${LOCAL}/a.txt`)] })).toBe(true)
     expect(p4deltaCalls).toEqual([])
     expect(writeSpawns()).toHaveLength(1)
 
@@ -4587,9 +5298,11 @@ describe('PerforceClient writes — δ engine', () => {
     })
     const { client } = await makeDeltaNarrowClient(() => ({ hold, records: [] }))
 
-    const pending = client.reconcile([`${LOCAL}/a.txt`])
+    const pending = client.reconcile({ targets: [asFile(`${LOCAL}/a.txt`)] })
     // The δ run is in flight (the stub is holding it open) and cancellable.
-    expect(p4deltaCalls).toHaveLength(1)
+    await vi.waitFor(() => {
+      expect(p4deltaCalls).toHaveLength(1)
+    })
     client.cancelBusy()
     release()
 
@@ -4704,6 +5417,7 @@ describe('PerforceClient.driftGroupPaths', () => {
   })
 
   it('returns only the rows the group renders: not opened, not excluded, sorted', async () => {
+    const scope = scopeSwapper(scopeFixture([LOCAL]))
     const client = await makeClient(
       {
         opened: () => [{ rel: 'opened.txt' }],
@@ -4715,6 +5429,9 @@ describe('PerforceClient.driftGroupPaths', () => {
         ],
       },
       fakeDisk(),
+      undefined,
+      {},
+      (root) => scope.get()(root),
     )
     // Scan WITHOUT the exclusion first so excluded/e.txt is merged into
     // _driftFiles; the carve would otherwise keep p4 from ever reporting it,
@@ -4722,7 +5439,7 @@ describe('PerforceClient.driftGroupPaths', () => {
     client.setReconcileScope([LOCAL])
     await client.refresh()
     await client.runReconcileScan()
-    client.setReconcileExcludes([`${LOCAL}/excluded`])
+    await scope.apply(client, scopeFixture([LOCAL], [`${LOCAL}/excluded`]))
 
     // opened.txt is dropped (still opened), excluded/e.txt is dropped (excluded
     // dir); the rest come back sorted by local path, matching _applyDriftGroup.
@@ -4748,7 +5465,14 @@ describe('PerforceClient.driftGroupPaths', () => {
     // Regression: `driftGroupPaths` filtered on opened/excluded only, so a
     // group-header collect-all would gather rows the narrowed group itself no
     // longer renders. The action targets must be exactly what the user sees.
-    const client = await makeClient({ reconcile: () => [] }, fakeDisk())
+    // The range both predicates read is the DAILY scope, so the fixture names it.
+    const client = await makeClient(
+      { reconcile: () => [] },
+      fakeDisk(),
+      undefined,
+      {},
+      scopeFixture([`${LOCAL}/other`]),
+    )
     client.setReconcileScope([`${LOCAL}/other`])
 
     // Seed a drift row outside the scope directly (a stale checkpoint merge is
@@ -4824,10 +5548,21 @@ describe('PerforceClient.sync and the drift set', () => {
     sync: RespondOptions['sync'],
     rels: string[] = ['a.txt'],
   ): Promise<PerforceClientInstance> {
-    const client = await makeClient({
-      reconcile: () => rels.map((rel) => ({ rel, action: 'edit' })),
-      ...(sync !== undefined ? { sync } : {}),
-    })
+    // A workspace with NO config file. These tests are about the drift set after a
+    // get, and a config at the client root puts its own file inside the root
+    // include — a hole `<root>/...` cannot express, which the native engine
+    // refuses (δ is the engine that applies it; see `clientSync.test.ts`). The
+    // no-config range is the same include with no hole in it.
+    const client = await makeClient(
+      {
+        reconcile: () => rels.map((rel) => ({ rel, action: 'edit' })),
+        ...(sync !== undefined ? { sync } : {}),
+      },
+      undefined,
+      fakeClock(),
+      {},
+      () => NO_SCOPE_CONFIG,
+    )
     client.setReconcileScope([LOCAL])
     await client.runReconcileScan()
     return client
@@ -4979,15 +5714,31 @@ describe('PerforceClient.sync and the drift set', () => {
     // the streaming path (onProgress) — the applied row is collected as it
     // arrives, so it survives the abort; a buffered run's stdout is lost with the
     // killed child and has nothing to subtract.
-    const client = await makeClient({
-      reconcile: () => [{ rel: 'a.txt', action: 'edit' }],
-      sync: () => ({ stdout: `//depot/branch_x/a.txt#1 - refreshing ${LOCAL}/a.txt\n`, exit: 0 }),
-    })
+    const client = await makeClient(
+      {
+        reconcile: () => [{ rel: 'a.txt', action: 'edit' }],
+        sync: () => ({
+          stdout: `//depot/branch_x/a.txt#1 - refreshing ${LOCAL}/a.txt\n`,
+          exit: 0,
+          // Held open: the applied line is already on the wire when the cancel
+          // lands, which is exactly what makes it harvestable.
+          hold: true,
+        }),
+      },
+      undefined,
+      fakeClock(),
+      // No config file: this is a native (force) get over the workspace, and a
+      // config at the root would make that get unexpressible natively. The
+      // refusal is `clientSync.test.ts`'s subject, not this test's.
+      {},
+      () => NO_SCOPE_CONFIG,
+    )
     client.setReconcileScope([LOCAL])
     await client.runReconcileScan()
     expect(groupRows(client)).toEqual([{ path: `${LOCAL}/a.txt`, letter: 'RM' }])
 
     const pending = client.sync('#head', { force: true, onProgress: () => {} })
+    await nextMacrotask()
     client.cancelBusy()
     const result = await pending
 

@@ -9,6 +9,7 @@
  */
 import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { clientSpecReply, isClientSpecProbe } from './discoveryProbe.js'
 
 // A controllable fake child process (mirrors clientGraphCache.test.ts).
 class FakeChildProcess extends EventEmitter {
@@ -52,6 +53,7 @@ const { PerforceClient } = await import('../client.js')
 const { ConcurrencyGate } = await import('../concurrency.js')
 
 const ROOT = process.platform === 'win32' ? 'C:\\ws' : '/ws'
+const DISCOVERY_SPEC = clientSpecReply(ROOT)
 const FILE = `${ROOT}/tracked.txt`
 
 /** Route each spawned fake child by p4 subcommand; `undefined` stdout = hang forever. */
@@ -142,6 +144,9 @@ describe('PerforceClient.getBlame', () => {
     let changesCalls = 0
     respond((argv) => {
       const cmd = subcommand(argv)
+      if (isClientSpecProbe(argv)) {
+        return { stdout: DISCOVERY_SPEC }
+      }
       if (cmd === 'info') {
         return { stdout: `... clientName testclient\n... clientRoot ${ROOT}\n... userName bob\n\n` }
       }
@@ -195,6 +200,9 @@ describe('PerforceClient.getBlame', () => {
     let changesCalls = 0
     respond((argv) => {
       const cmd = subcommand(argv)
+      if (isClientSpecProbe(argv)) {
+        return { stdout: DISCOVERY_SPEC }
+      }
       if (cmd === 'info') {
         return { stdout: `... clientName testclient\n... clientRoot ${ROOT}\n... userName bob\n\n` }
       }
@@ -221,6 +229,9 @@ describe('PerforceClient.getBlame', () => {
   it('still returns blame (metadata-less) when the changes lookup fails', async () => {
     respond((argv) => {
       const cmd = subcommand(argv)
+      if (isClientSpecProbe(argv)) {
+        return { stdout: DISCOVERY_SPEC }
+      }
       if (cmd === 'info') {
         return { stdout: `... clientName testclient\n... clientRoot ${ROOT}\n... userName bob\n\n` }
       }

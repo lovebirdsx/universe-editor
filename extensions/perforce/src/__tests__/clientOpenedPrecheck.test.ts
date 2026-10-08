@@ -7,6 +7,7 @@
 import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { norm } from '../pathUtil.js'
+import { clientSpecReply, isClientSpecProbe } from './discoveryProbe.js'
 
 class FakeChildProcess extends EventEmitter {
   readonly stdout = new EventEmitter()
@@ -49,6 +50,7 @@ const { ConcurrencyGate } = await import('../concurrency.js')
 type PerforceClientInstance = import('../client.js').PerforceClient
 
 const ROOT = process.platform === 'win32' ? 'X:\\p4ws\\main' : '/p4ws/main'
+const DISCOVERY_SPEC = clientSpecReply(ROOT)
 const LOCAL = process.platform === 'win32' ? 'X:/p4ws/main' : '/p4ws/main'
 const CLIENT = 'testclient'
 
@@ -113,6 +115,9 @@ function handle(
   opts: RespondOptions,
 ): { stdout: string; stderr?: string; exit?: number } {
   const cmd = subcommand(argv)
+  if (isClientSpecProbe(argv)) {
+    return { stdout: DISCOVERY_SPEC }
+  }
   if (cmd === 'info') {
     return { stdout: `... clientName ${CLIENT}\n... clientRoot ${ROOT}\n... userName testuser\n\n` }
   }

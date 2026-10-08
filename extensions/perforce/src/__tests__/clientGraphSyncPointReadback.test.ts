@@ -23,6 +23,7 @@
  */
 import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { clientSpecReply, isClientSpecProbe } from './discoveryProbe.js'
 
 class FakeChildProcess extends EventEmitter {
   readonly stdout = new EventEmitter()
@@ -74,6 +75,7 @@ const { ConcurrencyGate } = await import('../concurrency.js')
 const { SYNC_POINT_READBACK_SLOW_EXEC } = await import('../client.js')
 
 const ROOT = process.platform === 'win32' ? 'C:\\ws' : '/ws'
+const DISCOVERY_SPEC = clientSpecReply(ROOT)
 const CLIENT = 'testclient'
 const SCOPES = ['X:/p4ws/main/a.txt', 'X:/p4ws/main/some dir/...']
 
@@ -122,7 +124,9 @@ function harness(opts: HarnessOptions = {}) {
     const answer = (): number => {
       let stdout = ''
       let exit = 0
-      if (cmd === 'info') {
+      if (isClientSpecProbe(argv)) {
+        stdout = DISCOVERY_SPEC
+      } else if (cmd === 'info') {
         stdout = `... clientName ${CLIENT}\n... clientRoot ${ROOT}\n... userName testuser\n\n`
       } else if (cmd === 'changes') {
         const id = opts.id ?? null

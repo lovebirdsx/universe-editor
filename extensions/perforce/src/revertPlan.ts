@@ -28,8 +28,8 @@ export type RevertPlan = {
    */
   openedUnknown?: boolean
   /**
-   * `perforce.reconcile.excludeFolders` covers this directory, so `p4 clean`
-   * is skipped and no uncollected drift will be discarded. Both the confirm
+   * The daily scope's exclusions cover this directory, so `p4 clean` is
+   * skipped and no uncollected drift will be discarded. Both the confirm
    * text and the executed actions must reflect that — promising to discard and
    * then keeping the work is the one outcome a destructive dialog cannot have.
    */

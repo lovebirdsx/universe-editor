@@ -45,6 +45,10 @@
 
 当 `p4 info` 报告不到客户端根目录（该文件夹不在任何 Perforce 工作区内），该文件夹就不会出现 Perforce 提供方。
 
+> 打开的文件夹落在 client 的 **AltRoot**（client spec 里 `Root` 之外的备用根）里时不出现提供方：工作区范围（`.p4delta-scope`）归**固定的 `Root`** 管，多根布局下没有唯一归属，与其读错一份不如不启用——把文件夹换成该 client 的主 `Root` 即可。
+>
+> 同理，读不到 client spec 里固定的 `Root` 时（`p4 client -o` 失败、或 spec 里没有 `Root` 字段）也不启用：报来的根没被证实，可能是 AltRoot，猜一个不如不启用。可在 Perforce 输出通道看到一行 `provider disabled` 说明。
+
 ## 登录与注销
 
 在 Perforce 面板标题栏的 **⋯ 菜单** 里有 **登录** / **注销**：

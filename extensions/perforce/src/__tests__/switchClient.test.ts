@@ -28,8 +28,11 @@ function makeWiring(log: string[]): SwitchClientWiring {
     applyScopes: async (c) => {
       log.push(`applyScopes:${c.root}`)
     },
-    applyExcludes: async (c) => {
-      log.push(`applyExcludes:${c.root}`)
+    applyDailyScope: async (c) => {
+      log.push(`applyDailyScope:${c.root}`)
+    },
+    applyReconcileExcludes: async (c) => {
+      log.push(`applyReconcileExcludes:${c.root}`)
     },
     applyOpenedByOthersOptions: async (c) => {
       log.push(`applyOpenedByOthersOptions:${c.root}`)
@@ -67,9 +70,13 @@ describe('wireSwitchedClient', () => {
       // Scopes before the first refresh: the narrowed working-tree-hint scope
       // must be in place before the client answers any hint query.
       'applyScopes:X:/p4ws/branch_a',
-      // Excludes directly after scopes: without them the client would scan and
-      // collect inside excluded directories until the next config change.
-      'applyExcludes:X:/p4ws/branch_a',
+      // The daily scope right after the focus scope: every discovery, get and
+      // write the new client runs is bounded by it, and a client wired without
+      // it would answer from an unresolved range until the next config change.
+      'applyDailyScope:X:/p4ws/branch_a',
+      // The reconcile noise travels with the client too: a switched workspace
+      // must not discover drift the setting hides.
+      'applyReconcileExcludes:X:/p4ws/branch_a',
       // Background-check option BEFORE the first refresh: the refresh tail's
       // scheduled check reads it and would silently skip on defaults.
       'applyOpenedByOthersOptions:X:/p4ws/branch_a',

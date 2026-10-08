@@ -73,6 +73,12 @@ const workspaceMock = vi.hoisted(() => {
     getConfiguration: vi.fn(() => ({ get })),
     onDidChangeConfiguration: vi.fn(() => ({ dispose: vi.fn() })),
     registerTimelineProvider: vi.fn(() => ({ dispose: vi.fn() })),
+    createFileSystemWatcher: vi.fn(() => ({
+      onDidCreate: vi.fn(() => ({ dispose: vi.fn() })),
+      onDidChange: vi.fn(() => ({ dispose: vi.fn() })),
+      onDidDelete: vi.fn(() => ({ dispose: vi.fn() })),
+      dispose: vi.fn(),
+    })),
   }
 })
 
@@ -81,6 +87,13 @@ vi.mock('@universe-editor/extension-api', () => ({
   window: windowMock,
   workspace: workspaceMock,
   ProgressLocation: { Notification: 15 },
+  FileType: { File: 1, Directory: 2 },
+  RelativePattern: class {
+    constructor(
+      readonly base: unknown,
+      readonly pattern: string,
+    ) {}
+  },
 }))
 
 type Mock = ReturnType<typeof vi.fn>
@@ -104,11 +117,25 @@ interface FakeClient {
   setReconcileLimit: Mock
   setOpenedByOthersOptions: Mock
   setSyncParallelThreads: Mock
-  setSyncScope: Mock
-  setReconcileExcludes: Mock
   dispose: Mock
   cancelBusy: Mock
   reconcile: Mock
+  refreshScope: Mock
+  setScopeNoticeHandler: Mock
+  invalidateScope: Mock
+  scopeState: 'ready'
+  scopeUnusableReason: string | undefined
+  dailyScope: undefined
+  reconcileExcludeDirs: readonly string[]
+  reconcileExcludeFiles: readonly string[]
+  scopeExcludeDirs: readonly string[]
+  reconcileNoise: { dirs: readonly string[]; files: readonly string[] }
+  setReconcileExcludes: Mock
+  nativeWriteReject: Mock
+  isReconcileTargetExcluded: Mock
+  driftGroupPaths: Mock
+  reconcileUsesP4delta: boolean
+  checkScopeTargets: Mock
 }
 
 /** Only what this file's commands touch; everything else is a no-op stub so
@@ -148,11 +175,33 @@ function makeFakeClient(): FakeClient {
   fake.setReconcileLimit = vi.fn()
   fake.setOpenedByOthersOptions = vi.fn()
   fake.setSyncParallelThreads = vi.fn()
-  fake.setSyncScope = vi.fn()
-  fake.setReconcileExcludes = vi.fn()
   fake.dispose = vi.fn()
   fake.cancelBusy = vi.fn()
   fake.reconcile = vi.fn(async () => {})
+  // The daily scope surface `activate` applies and the command layer reads.
+  fake.refreshScope = vi.fn(async () => 'ready')
+  fake.setScopeNoticeHandler = vi.fn()
+  fake.invalidateScope = vi.fn()
+  fake.scopeState = 'ready'
+  fake.scopeUnusableReason = undefined
+  fake.dailyScope = undefined
+  fake.reconcileExcludeDirs = []
+  fake.reconcileExcludeFiles = []
+  fake.scopeExcludeDirs = []
+  fake.reconcileNoise = { dirs: [], files: [] }
+  fake.setReconcileExcludes = vi.fn()
+  fake.nativeWriteReject = vi.fn(() => undefined)
+  fake.isReconcileTargetExcluded = vi.fn(() => false)
+  fake.driftGroupPaths = vi.fn(() => [])
+  fake.reconcileUsesP4delta = false
+  // The command layer's scope gate: everything the tests name is in range, so
+  // the gate never opens a dialog and the operation runs as asked.
+  fake.checkScopeTargets = vi.fn(async (targets: readonly { path: string }[]) => ({
+    state: 'ready' as const,
+    reason: undefined,
+    inside: targets,
+    outside: [],
+  }))
   return fake
 }
 

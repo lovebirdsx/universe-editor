@@ -7,6 +7,7 @@
 import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { expandP4Argv } from './expandP4Argv.js'
+import { clientSpecReply, isClientSpecProbe } from './discoveryProbe.js'
 
 class FakeChildProcess extends EventEmitter {
   readonly stdout = new EventEmitter()
@@ -49,6 +50,7 @@ const { ConcurrencyGate } = await import('../concurrency.js')
 type PerforceClientInstance = import('../client.js').PerforceClient
 
 const ROOT = process.platform === 'win32' ? 'C:\\ws' : '/ws'
+const DISCOVERY_SPEC = clientSpecReply(ROOT)
 const LOCAL = process.platform === 'win32' ? 'C:/ws' : '/ws'
 const CLIENT = 'testclient'
 
@@ -75,6 +77,9 @@ function subcommand(argv: string[]): string | undefined {
 
 function handle(argv: string[], opts: RespondOptions): { stdout: string } {
   const cmd = subcommand(argv)
+  if (isClientSpecProbe(argv)) {
+    return { stdout: DISCOVERY_SPEC }
+  }
   if (cmd === 'info') {
     return { stdout: `... clientName ${CLIENT}\n... clientRoot ${ROOT}\n... userName bob\n\n` }
   }
@@ -175,7 +180,9 @@ describe('PerforceClient refresh fan-out', () => {
     const client = await makeClient()
     calls.length = 0
 
-    await client.reconcileInto('1000', [`${LOCAL}/a.txt`])
+    await client.reconcileInto('1000', {
+      targets: [{ path: `${LOCAL}/a.txt`, isDirectory: false }],
+    })
 
     const real = calls.find(
       (a) => subcommand(a) === 'reconcile' && !a.includes('-n') && a.includes(`${LOCAL}/a.txt`),
@@ -191,7 +198,9 @@ describe('PerforceClient refresh fan-out', () => {
     const client = await makeClient()
     calls.length = 0
 
-    await client.reconcileInto('default', [`${LOCAL}/a.txt`])
+    await client.reconcileInto('default', {
+      targets: [{ path: `${LOCAL}/a.txt`, isDirectory: false }],
+    })
 
     const real = calls.find(
       (a) => subcommand(a) === 'reconcile' && !a.includes('-n') && a.includes(`${LOCAL}/a.txt`),

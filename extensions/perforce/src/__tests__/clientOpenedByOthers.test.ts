@@ -9,7 +9,9 @@
  * OTHER client's `clientFile` is never translated with this client's root (local
  * paths must come from `p4 where` on the depot path, and the other client's
  * client-syntax path must never be sent back to p4), the scheduling guards
- * (auto-check, interval floor, re-entry, connection), and the state invariants: a
+ * (auto-check, interval floor, re-entry, connection), the range guard (blocked
+ * or empty scope = zero spawns, on the schedule and on a direct run alike —
+ * a bare `opened -a` asks about the whole depot), and the state invariants: a
  * failed scan keeps the previous result, and going offline clears the markers
  * because "who has what open" is a claim about the server.
  */
@@ -69,9 +71,12 @@ function installBridge(): void {
 
 const { PerforceClient } = await import('../client.js')
 const { ConcurrencyGate } = await import('../concurrency.js')
-import type { PerforceClient as PerforceClientType } from '../client.js'
+import type { PerforceClient as PerforceClientType, PerforceClientOptions } from '../client.js'
+import { scopeFixture } from './scopeFixture.js'
+import { clientSpecReply, isClientSpecProbe } from './discoveryProbe.js'
 
 const ROOT = process.platform === 'win32' ? 'C:\\ws' : '/ws'
+const DISCOVERY_SPEC = clientSpecReply(ROOT)
 const ROOT_FWD = process.platform === 'win32' ? 'C:/ws' : '/ws'
 
 /**
@@ -179,6 +184,7 @@ function makeHandler(
 ): (argv: string[]) => Reply {
   return (argv) => {
     const cmd = subcommand(argv)
+    if (isClientSpecProbe(argv)) return { stdout: DISCOVERY_SPEC }
     if (cmd === 'info') return { stdout: DISCOVERY }
     if (isOpenedAll(argv)) return openedAllReply(argv)
     if (cmd === 'where') return whereReply(argv)
@@ -190,6 +196,7 @@ async function makeClient(
   openedAllReply: (argv: string[]) => Reply = () => ({ stdout: '' }),
   whereReply: (argv: string[]) => Reply = mapWhere,
   log?: (msg: string) => void,
+  options: PerforceClientOptions = {},
 ): Promise<PerforceClientType> {
   respond(makeHandler(openedAllReply, whereReply))
   const client = await PerforceClient.create(
@@ -197,9 +204,18 @@ async function makeClient(
     {},
     new ConcurrencyGate(4),
     { enabled: true, workspaceTtlMs: 4000, now: () => clock },
-    { ...(log !== undefined ? { log } : {}) },
+    {
+      ...(log !== undefined ? { log } : {}),
+      // The probe has NO range of its own — it asks about the daily sync scope,
+      // so an unresolved scope refuses it outright. Every test that is not about
+      // that refusal starts from a resolved scope; a test that injects its own
+      // config read is asking about resolution and keeps its own answer.
+      ...(options.readScope === undefined ? { readScope: scopeFixture([ROOT_FWD]) } : {}),
+      ...options,
+    },
   )
   expect(client).toBeDefined()
+  await client!.refreshScope()
   return client!
 }
 
@@ -471,6 +487,7 @@ describe('scheduling guards', () => {
     client.setOpenedByOthersOptions({ autoCheck: true, intervalMs: 30_000 })
     respond((argv) => {
       const cmd = subcommand(argv)
+      if (isClientSpecProbe(argv)) return { stdout: DISCOVERY_SPEC }
       if (cmd === 'info') return { stdout: DISCOVERY }
       if (cmd === 'opened') {
         return {
@@ -499,6 +516,60 @@ describe('scheduling guards', () => {
     await client.whenOpenedByOthersSettled()
 
     expect(openedAllArgvs()).toHaveLength(1)
+  })
+})
+
+describe('no range, no probe', () => {
+  it('a blocked scope spawns nothing, on schedule or on a direct run', async () => {
+    // The trap: `p4 opened -a` with no filespec asks about the WHOLE DEPOT, and
+    // the blocked-scope fallback is the client root — neither is the range the
+    // user declared. With no trustworthy range the markers are a claim nobody
+    // can make, so the probe must not even start.
+    const client = await makeClient(
+      () => ({ stdout: openedByOthersRecords(1) }),
+      mapWhere,
+      undefined,
+      {
+        readScope: () => ({
+          kind: 'error',
+          path: `${ROOT_FWD}/.p4delta-scope`,
+          reason: 'the scope file could not be read',
+        }),
+      },
+    )
+    expect(client.scopeState).toBe('blocked')
+    const before = spawned.length
+
+    const res = await client.runOpenedByOthersScan()
+    client.scheduleOpenedByOthers()
+    await client.whenOpenedByOthersSettled()
+
+    expect(openedAllArgvs()).toHaveLength(0)
+    expect(spawned.length).toBe(before)
+    // Not "nobody has anything open" — nothing was asked.
+    expect(res).toEqual({ others: 0, capped: false, ok: false })
+  })
+
+  it('an empty scope spawns nothing, on schedule or on a direct run', async () => {
+    // An empty scope is a KNOWN empty range: `_syncScopes` is empty, and a bare
+    // `opened -a` would silently widen it to the depot. Zero spawns.
+    const client = await makeClient(
+      () => ({ stdout: openedByOthersRecords(1) }),
+      mapWhere,
+      undefined,
+      { readScope: scopeFixture([]) },
+    )
+    expect(client.scopeState).toBe('empty')
+    expect(client.syncScopes).toHaveLength(0)
+    const before = spawned.length
+
+    const res = await client.runOpenedByOthersScan()
+    client.scheduleOpenedByOthers()
+    await client.whenOpenedByOthersSettled()
+
+    expect(openedAllArgvs()).toHaveLength(0)
+    expect(spawned.length).toBe(before)
+    expect(res).toEqual({ others: 0, capped: false, ok: false })
   })
 })
 
@@ -601,6 +672,7 @@ describe('state on disable, failure and offline', () => {
 
     respond((argv) => {
       const cmd = subcommand(argv)
+      if (isClientSpecProbe(argv)) return { stdout: DISCOVERY_SPEC }
       if (cmd === 'info') return { stdout: DISCOVERY }
       if (cmd === 'opened') {
         return {
@@ -616,15 +688,24 @@ describe('state on disable, failure and offline', () => {
     expect(publishedDecorations()).toEqual([])
   })
 
-  it('changing the sync scope clears the markers', async () => {
+  it('changing the daily scope clears the markers', async () => {
     // The markers (and the count behind them) describe the OLD scope; keeping
-    // them would show "someone has X open" next to a sync scope that no
-    // longer covers X.
-    const client = await makeClient(() => ({ stdout: openedByOthersRecords(2) }))
+    // them would show "someone has X open" next to a scope that no longer
+    // covers X.
+    let scope = scopeFixture([ROOT_FWD])
+    const client = await makeClient(
+      () => ({ stdout: openedByOthersRecords(2) }),
+      mapWhere,
+      undefined,
+      { readScope: (root) => scope(root) },
+    )
+    await client.refreshScope()
     await client.runOpenedByOthersScan()
     expect(publishedDecorations()).toHaveLength(2)
 
-    client.setSyncScope([`${ROOT}/other`])
+    scope = scopeFixture([`${ROOT_FWD}/other`])
+    client.invalidateScope()
+    await client.refreshScope()
 
     expect(publishedDecorations()).toEqual([])
   })

@@ -19,6 +19,7 @@
 import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import type { P4ExecOptions, P4ExecResult } from '../p4Service.js'
+import { clientSpecReply, isClientSpecProbe } from './discoveryProbe.js'
 
 class FakeChildProcess extends EventEmitter {
   readonly stdout = new EventEmitter()
@@ -62,6 +63,7 @@ const { ConcurrencyGate } = await import('../concurrency.js')
 type PerforceClientInstance = import('../client.js').PerforceClient
 
 const ROOT = process.platform === 'win32' ? 'C:\\ws' : '/ws'
+const DISCOVERY_SPEC = clientSpecReply(ROOT)
 const ROOT_FWD = process.platform === 'win32' ? 'C:/ws' : '/ws'
 const FILE = `${ROOT_FWD}/tracked.txt`
 const DEPOT = '//depot/tracked.txt'
@@ -162,7 +164,7 @@ const cases: Case[] = [
   },
   {
     name: 'clean (revertReconcile — discard working-tree drift)',
-    invoke: (c) => c.revertReconcile([FILE]),
+    invoke: (c) => c.revertReconcile({ targets: [{ path: FILE, isDirectory: false }] }),
     transfer: ['clean'],
   },
   // --- Metadata / scan mutations: keep the `commandTimeout` watchdog. ---
@@ -214,7 +216,9 @@ describe('content-transfer mutations disarm the watchdog; metadata mutations kee
       spawns.push({ cmd, argv })
       const child = new FakeChildProcess()
       queueMicrotask(() => {
-        if (cmd === 'info') {
+        if (isClientSpecProbe(argv)) {
+          child.stdout.emit('data', Buffer.from(DISCOVERY_SPEC))
+        } else if (cmd === 'info') {
           child.stdout.emit(
             'data',
             Buffer.from(`... clientName testclient\n... clientRoot ${ROOT}\n... userName bob\n\n`),

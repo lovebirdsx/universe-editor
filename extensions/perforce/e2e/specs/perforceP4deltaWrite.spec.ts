@@ -4,8 +4,10 @@
  *  Reads are easy to fake convincingly: the panel would look the same if the
  *  engine were asked and its answer ignored. Writes are where the engine's own
  *  argv decides what happens to the user's disk, so each half asserts BOTH:
- *    - the shape of the call (the switch that makes it a write — `-a` — and the
- *      scope entries `--clean` / collect were handed), and
+ *    - the shape of the call — the switch that makes it a write (`-a`), and the
+ *      range the engine RESOLVED (read from its scope log: the argv names targets,
+ *      and the range also depends on whatever `.p4delta-scope` the client root
+ *      holds — the same file the editor read), and
  *    - the world after it (the file's opened state in the shared fake state file
  *      — the model `p4 opened` reads back — and the bytes on disk).
  *
@@ -18,8 +20,15 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { evaluateWhenRestored, mkTempDir } from '@universe-editor/e2e-harness'
-import { readArgvLog, test, expect, waitForPerforceCommands } from '../fixtures/perforceApp.js'
-import type { SeedFile } from '../fixtures/perforceApp.js'
+import {
+  readArgvLog,
+  readScopeLog,
+  test,
+  expect,
+  toPosix,
+  waitForPerforceCommands,
+} from '../fixtures/perforceApp.js'
+import type { SeedFile, ScopeResolution } from '../fixtures/perforceApp.js'
 
 const drifted: SeedFile = { relPath: 'drifted.txt', content: 'have drifted\n' }
 const inA: SeedFile = { relPath: 'sub/a.txt', content: 'have a\n' }
@@ -30,12 +39,17 @@ const drift = (seed: SeedFile): string => `drifted: ${seed.content}`
 
 const deltaLog = join(mkTempDir('ue2-p4delta-argv-'), 'p4delta.log')
 const p4Log = join(mkTempDir('ue2-p4-argv-'), 'p4.log')
+const scopeLog = join(mkTempDir('ue2-p4delta-scope-'), 'scope.log')
 
 const deltaLines = (): string[] => readArgvLog(deltaLog)
-
-/** The entries of a logged δ argv (what followed the `--` separator), or [] when
- *  the line has no separator. Space-split, so seeded paths must stay space-free. */
-const entriesOf = (line: string): string[] => line.split(' -- ')[1]?.split(' ') ?? []
+const scopeLines = (): ScopeResolution[] => readScopeLog(scopeLog)
+/** The RANGE a run resolved, in the same `<kind>:<path>` spelling the fake logs —
+ *  compared separator-blind, since the extension hands paths in `/` spelling and
+ *  the fixture's `file()` is platform spelling. {@link ScopeResolution.targets}
+ *  would say what the caller NAMED; `includes` says what the engine actually
+ *  worked over (the config can narrow or exclude it). */
+const rangeOf = (resolution: ScopeResolution): string[] =>
+  resolution.includes.map((entry) => toPosix(entry))
 
 test.describe('@p1 perforce p4delta writes', () => {
   test.use({
@@ -44,6 +58,7 @@ test.describe('@p1 perforce p4delta writes', () => {
     p4ExtraEnv: {
       UNIVERSE_P4DELTA_ARGV_LOG: deltaLog,
       UNIVERSE_P4_FAKE_ARGV_LOG: p4Log,
+      UNIVERSE_P4DELTA_SCOPE_LOG: scopeLog,
     },
   })
 
@@ -87,7 +102,6 @@ test.describe('@p1 perforce p4delta writes', () => {
       // directory as both the primary arg and the (materialized) selection. It
       // blocks on its own confirm dialog, so fire-and-forget then click Revert —
       // awaiting the command here would deadlock the test.
-      const dirArgs = { resourceUri: perforce.file('sub'), isDirectory: true }
       void page
         .evaluate(
           (args) =>
@@ -105,25 +119,42 @@ test.describe('@p1 perforce p4delta writes', () => {
       await expect(dialog).toContainText("Discard working-tree changes under 'sub'")
       await dialog.getByRole('button', { name: 'Revert' }).click()
 
-      // The shape: a `--clean` write over the DIRECTORY, as one recursive entry.
-      // `-a` is what separates it from the preview variants, and the directory
-      // entry (not a per-file fan-out) is what makes it the engine's own
-      // exclusion-aware walk instead of a carved list.
+      // The shape: a `--clean` write, as one call over the selected directory.
+      // `-a` is what separates it from the preview variants, and there is no
+      // `--no-scope-file`: the target is inside the daily scope, so the config
+      // stays part of the run.
       await expect
         .poll(
           () =>
             deltaLines().filter(
               (l) =>
-                l.includes('--clean') &&
-                /(^| )-a( |$)/.test(l) &&
-                entriesOf(l).includes(`${perforce.file('sub')}/...`),
+                l.includes('--clean') && /(^| )-a( |$)/.test(l) && !l.includes('--no-scope-file'),
             ).length,
           {
             timeout: 60_000,
-            message: 'the clean should hand δ --clean -a and the directory scope',
+            message: 'the clean should hand δ --clean -a over the selected directory',
           },
         )
         .toBeGreaterThan(0)
+
+      // The range the clean ran over: the SELECTED DIRECTORY, as one directory
+      // entry — the engine's own exclusion-aware walk, instead of a carved list
+      // of files the editor guessed. And not the client root: a clean that
+      // widened to the workspace would take the drift this spec keeps outside.
+      await expect
+        .poll(
+          () =>
+            scopeLines()
+              .filter((r) => r.mode === 'clean')
+              .flatMap((r) => rangeOf(r)),
+          { timeout: 30_000, message: 'the clean should have resolved to the selected directory' },
+        )
+        .toContain(`directory:${toPosix(perforce.file('sub'))}`)
+      expect(
+        scopeLines()
+          .filter((r) => r.mode === 'clean')
+          .flatMap((r) => rangeOf(r)),
+      ).not.toContain(`directory:${toPosix(perforce.clientRoot)}`)
 
       // The world after it: both files are back on their have revision on DISK
       // (`p4 clean` writes content, so a panel-only assertion would miss a run
@@ -142,35 +173,52 @@ test.describe('@p1 perforce p4delta writes', () => {
         .toBe(inB.content)
 
       // …and the rows left the Changes group, while the file OUTSIDE the cleaned
-      // directory still shows its drift (the clean was scoped, not global).
+      // directory still shows its drift (the clean was scoped, not global). That
+      // last one is polled rather than read once: the two empty-group assertions
+      // above are ALSO true in the window where the clean's own refresh has
+      // cleared the group but not yet republished it, so a plain read there
+      // samples that window and calls the surviving row a casualty.
       await expect.poll(() => groupIdsFor(inA.relPath), { timeout: 30_000 }).toEqual([])
       await expect.poll(() => groupIdsFor(inB.relPath), { timeout: 30_000 }).toEqual([])
-      expect(await groupIdsFor(drifted.relPath)).toContain('reconcile')
+      await expect
+        .poll(() => groupIdsFor(drifted.relPath), {
+          timeout: 30_000,
+          message: 'the drift outside the cleaned directory should still be listed',
+        })
+        .toContain('reconcile')
     })
 
     await test.step('collecting through the Changes group header opens the file in δ', async () => {
       const before = deltaLines().length
       await workbench.runCommand('perforce.reconcile', { scmResourceGroupId: 'reconcile' })
 
-      // The shape of the collect: `-a` over the drift rows' own paths (the group
-      // header collects what the group SHOWS), and no `--clean` in sight.
+      // The shape of the collect: `-a` over the drift row's own path, and no
+      // `--clean` in sight.
       await expect
         .poll(
           () =>
             deltaLines()
               .slice(before)
-              .filter(
-                (l) =>
-                  /(^| )-a( |$)/.test(l) &&
-                  !l.includes('--clean') &&
-                  entriesOf(l).includes(perforce.file(drifted.relPath)),
-              ).length,
+              .filter((l) => /(^| )-a( |$)/.test(l) && !l.includes('--clean')).length,
           {
             timeout: 60_000,
-            message: 'the collect should hand δ -a and the drift row it acts on',
+            message: 'the collect should hand δ -a over the drift row',
           },
         )
         .toBeGreaterThan(0)
+
+      // …and the resolved range really named the drift row: the group header
+      // collects what the group SHOWS, as a per-file entry (a directory here
+      // would mean the collect widened to a walk).
+      await expect
+        .poll(
+          () =>
+            scopeLines()
+              .filter((r) => r.mode === 'open')
+              .flatMap((r) => rangeOf(r)),
+          { timeout: 30_000, message: 'the collect should have named the drift row' },
+        )
+        .toContain(`file:${toPosix(perforce.file(drifted.relPath))}`)
 
       // The world after it, read from the shared fake state: the file is now
       // OPENED for edit in the default changelist — the one thing "collected"

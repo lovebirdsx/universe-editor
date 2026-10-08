@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { clientSpecReply, isClientSpecProbe } from './discoveryProbe.js'
 
 class FakeChildProcess extends EventEmitter {
   readonly stdout = new EventEmitter()
@@ -49,6 +50,7 @@ const { PerforceClient } = await import('../client.js')
 const { ConcurrencyGate } = await import('../concurrency.js')
 
 const ROOT = process.platform === 'win32' ? 'C:\\ws' : '/ws'
+const DISCOVERY_SPEC = clientSpecReply(ROOT)
 
 function subcommand(argv: string[]): string | undefined {
   for (let i = 0; i < argv.length; i++) {
@@ -107,7 +109,9 @@ describe('PerforceClient unshelveFiles', () => {
       const argv = (args[1] as string[]) ?? []
       const child = new FakeChildProcess()
       queueMicrotask(() => {
-        if (subcommand(argv) === 'info') {
+        if (isClientSpecProbe(argv)) {
+          child.stdout.emit('data', Buffer.from(DISCOVERY_SPEC))
+        } else if (subcommand(argv) === 'info') {
           child.stdout.emit(
             'data',
             Buffer.from(`... clientName testclient\n... clientRoot ${ROOT}\n... userName bob\n\n`),
@@ -143,7 +147,9 @@ describe('PerforceClient unshelveFiles', () => {
       const child = new FakeChildProcess()
       queueMicrotask(() => {
         const cmd = subcommand(argv)
-        if (cmd === 'info') {
+        if (isClientSpecProbe(argv)) {
+          child.stdout.emit('data', Buffer.from(DISCOVERY_SPEC))
+        } else if (cmd === 'info') {
           child.stdout.emit(
             'data',
             Buffer.from(`... clientName testclient\n... clientRoot ${ROOT}\n... userName bob\n\n`),
@@ -202,7 +208,9 @@ describe('PerforceClient unshelveFiles', () => {
       const argv = (args[1] as string[]) ?? []
       const child = new FakeChildProcess()
       queueMicrotask(() => {
-        if (subcommand(argv) === 'info') {
+        if (isClientSpecProbe(argv)) {
+          child.stdout.emit('data', Buffer.from(DISCOVERY_SPEC))
+        } else if (subcommand(argv) === 'info') {
           child.stdout.emit(
             'data',
             Buffer.from(`... clientName testclient\n... clientRoot ${ROOT}\n... userName bob\n\n`),
@@ -234,7 +242,9 @@ describe('PerforceClient unshelveFiles', () => {
       const child = new FakeChildProcess()
       queueMicrotask(() => {
         const cmd = subcommand(argv)
-        if (cmd === 'info') {
+        if (isClientSpecProbe(argv)) {
+          child.stdout.emit('data', Buffer.from(DISCOVERY_SPEC))
+        } else if (cmd === 'info') {
           child.stdout.emit(
             'data',
             Buffer.from(`... clientName testclient\n... clientRoot ${ROOT}\n... userName bob\n\n`),
@@ -268,7 +278,9 @@ describe('PerforceClient unshelveFiles', () => {
       const argv = (args[1] as string[]) ?? []
       const child = new FakeChildProcess()
       queueMicrotask(() => {
-        if (subcommand(argv) === 'info') {
+        if (isClientSpecProbe(argv)) {
+          child.stdout.emit('data', Buffer.from(DISCOVERY_SPEC))
+        } else if (subcommand(argv) === 'info') {
           child.stdout.emit(
             'data',
             Buffer.from(`... clientName testclient\n... clientRoot ${ROOT}\n... userName bob\n\n`),
@@ -300,7 +312,9 @@ describe('PerforceClient unshelveFiles', () => {
       const child = new FakeChildProcess()
       queueMicrotask(() => {
         const cmd = subcommand(argv)
-        if (cmd === 'info') {
+        if (isClientSpecProbe(argv)) {
+          child.stdout.emit('data', Buffer.from(DISCOVERY_SPEC))
+        } else if (cmd === 'info') {
           child.stdout.emit(
             'data',
             Buffer.from(`... clientName testclient\n... clientRoot ${ROOT}\n... userName bob\n\n`),
@@ -351,7 +365,9 @@ describe('PerforceClient unshelveFiles', () => {
       const child = new FakeChildProcess()
       queueMicrotask(() => {
         const cmd = subcommand(argv)
-        if (cmd === 'info') {
+        if (isClientSpecProbe(argv)) {
+          child.stdout.emit('data', Buffer.from(DISCOVERY_SPEC))
+        } else if (cmd === 'info') {
           child.stdout.emit(
             'data',
             Buffer.from(`... clientName testclient\n... clientRoot ${ROOT}\n... userName bob\n\n`),
@@ -438,7 +454,9 @@ describe('PerforceClient unshelveFiles', () => {
       const child = new FakeChildProcess()
       queueMicrotask(() => {
         const cmd = subcommand(argv)
-        if (cmd === 'info') {
+        if (isClientSpecProbe(argv)) {
+          child.stdout.emit('data', Buffer.from(DISCOVERY_SPEC))
+        } else if (cmd === 'info') {
           child.stdout.emit(
             'data',
             Buffer.from(`... clientName testclient\n... clientRoot ${ROOT}\n... userName bob\n\n`),

@@ -1,7 +1,7 @@
 /**
  * Carve reconcile filespecs around excluded subtrees.
  *
- * `perforce.reconcile.excludeFolders` removes local directories from reconcile
+ * The daily scope's exclusions remove local directories from reconcile
  * discovery. `isUnderAny` alone only answers "is this path excluded?" — this
  * module answers the reverse question and turns it into a spec list: given a
  * directory the caller has already proven is NOT itself excluded, walk it and
@@ -14,18 +14,31 @@
  * the exclusion promise. Failures return `undefined` (readdir failure / abort /
  * directory budget) and the caller decides whether to skip or surface them.
  *
+ * What this module CANNOT express is an excluded FILE at a level it covers: the
+ * level spec is `<dir>/*` (kept as the comment at its push explains) and `*`
+ * matches that file too. δ always reports the config file itself as an excluded
+ * file, so a config-bearing scope always has one; the guard against running a
+ * destructive native call over it lives at the caller
+ * (`PerforceClient._nativeFileExcludeReject`, asked by the write path's own
+ * admission check `_mutateWrite` → `_nativeCarveReject`) — not here, because a
+ * read-only walk (the scan) reaches such a file harmlessly and filters its rows
+ * anyway.
+ *
  * {@link p4deltaReconcileTargetSpecs} is the δ engine's counterpart: the same
- * targets, nothing carved, because δ takes the exclusions as scope entries in
- * the same call. It is another engine's shape, never a degradation of this one
- * — the red line below still governs every carve path. Which of the two a call
- * site may use is {@link canHandTargetsToP4delta}'s verdict, and it has to be
- * asked at the call site: the raw paths exist nowhere else.
+ * targets, nothing carved, because δ takes the exclusions as plain argv in the
+ * same call. It is another engine's shape, never a degradation of this one —
+ * the red line below still governs every carve path. Which of the two a call
+ * site may use is {@link canHandTargetsToP4delta}'s verdict, asked inside
+ * {@link PerforceClient._mutateWrite} — on the same reading of the state as the
+ * carve it replaces, so an engine that goes away in between cannot hand δ's
+ * uncarved targets to p4.
  */
 import { readdir } from 'node:fs/promises'
 import type { Dirent } from 'node:fs'
 import { buildLevelFilespec, buildScopeFilespec } from './p4Filespec.js'
 import type { SyncScopeTarget } from './p4Filespec.js'
 import { containsAny, isUnderAny } from './pathUtil.js'
+import { hostPathStyle, isAbsoluteLocalPath } from './scope.js'
 import { RECONCILE_SCAN_MAX_COUNTED_DIRECTORIES } from './reconcileScanBudget.js'
 
 export async function carveReconcileFilespecs(
@@ -60,7 +73,7 @@ export async function carveReconcileFilespecs(
       // and the level spec (`<dir>/*`, spelled as handed in) and this child spec
       // would leave the same call in two spellings. A path on its way back to p4
       // as a filespec is only ever appended to, never re-spelled — the same rule
-      // `p4deltaScopeEntry` and `p4Filespec` follow.
+      // `p4Filespec` follows.
       const child = `${current.replace(/[/\\]+$/, '')}/${entry.name}`
       if (isUnderAny(child, excludeDirs)) continue
       const nested = containsAny(child, excludeDirs)
@@ -120,12 +133,18 @@ export async function carveReconcileTargets(
  * into the same recursive / bare filespecs, with the same excluded entries
  * dropped — but NOTHING carved.
  *
- * δ applies the exclusions inside the write call itself (they travel as
- * `-`-prefixed scope entries alongside the specs), so there is no subtree to
- * carve around, and a carved `<dir>/*` fragment is not an entry its scope
- * grammar reads. The exclusion filter is not optional here: a target the user
- * excluded outright must not be collected or cleaned by either engine — an
- * excluded SUBTREE is the engine's business, the whole entry is not.
+ * δ applies the exclusions inside the write call itself (they travel as their
+ * own `--exclude-dir` / `--exclude-file` argv), so there is no subtree to carve
+ * around, and a carved `<dir>/*` fragment is not a target its grammar reads. The
+ * exclusion filter is not optional here: a target the user excluded outright
+ * must not be collected or cleaned by either engine — an excluded SUBTREE is the
+ * engine's business, the whole entry is not.
+ *
+ * The result is the ESCAPED spelling, and it is only ever used as the call's
+ * `paths` (cache invalidation, labels): the raw targets travel separately as
+ * positional argv, so δ escapes at the p4 boundary while the caller's spellings
+ * stay unchanged. It is never handed to p4 — a call that does not reach δ takes
+ * the carve below instead, built from the same raw targets at the same instant.
  */
 export function p4deltaReconcileTargetSpecs(
   targets: readonly SyncScopeTarget[],
@@ -141,33 +160,23 @@ export function p4deltaReconcileTargetSpecs(
 }
 
 /**
- * p4 filespec metacharacters, as one verdict for "this RAW path spells
- * differently on the two engines". δ reads its scope entries literally (the
- * contract makes deciding that the consumer's rule) while native p4
- * re-interprets these, so the δ spelling of such a path is not a spec the other
- * engine reads as the same path. Also the client's routing/reject criterion, so
- * the two layers cannot drift apart.
- */
-export const P4DELTA_SCOPE_METACHARS = /[@#*%;]/
-
-/**
- * Whether the command layer may hand these targets to δ WITHOUT carving.
+ * Whether these RAW targets can go to δ without carving.
  *
- * δ applies the exclusions inside the same call — which is why the δ branch is
- * uncarved at all — but "uncarved" is only safe while δ is the engine that
- * actually runs. The client keeps a degrade-to-native guard for specs δ cannot
- * read (`_p4deltaWriteSpecReject`), and that guard carries no way back to the
- * raw paths: it sees the escaped spec list, so it can neither carve nor
- * re-derive the exclusions. Hand it a metacharacter-bearing target's δ spelling
- * and the call lands on native p4 with the exclusions applied by nobody — under
- * `p4 clean` that deletes inside a directory the user explicitly excluded,
- * irreversibly.
+ * δ reads each positional argv as a literal LOCAL path and escapes it once, at
+ * the p4 boundary, so the only shape it cannot take is one that is not a local
+ * path at all — a depot spelling (`//depot/...`), which the client routes
+ * native. A name containing `@`, `#` or `%` is handed over verbatim: the escape
+ * happens at the boundary, which is why a special character no longer forces the
+ * operation onto the native carve.
  *
- * The raw paths exist only at the carve fork, so this is the one place the
- * decision can be made: metachar-free targets go over uncarved, everything else
- * takes the carve path (whose products are native-only shapes by construction —
- * `<dir>/*` and escaped names — so the guard routes them where they belong).
+ * Asked inside {@link PerforceClient._mutateWrite}, on the same reading of the
+ * state as the branch it selects: a caller CANNOT pre-judge it (an engine that
+ * goes away between the caller's read and the write would receive δ's uncarved
+ * targets natively, i.e. run straight through the user's exclusions). The write
+ * path therefore derives both shapes from one answer — δ's target argv when this
+ * is true, the carve when it is not.
  */
 export function canHandTargetsToP4delta(targets: readonly SyncScopeTarget[]): boolean {
-  return targets.every((target) => !P4DELTA_SCOPE_METACHARS.test(target.path))
+  const style = hostPathStyle()
+  return targets.every((target) => isAbsoluteLocalPath(target.path, style))
 }

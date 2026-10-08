@@ -14,13 +14,23 @@
  *      engine is disarmed for the session — the next round does not spawn it at
  *      all, and a collect, which would otherwise be a δ write, goes native too.
  *
- *  Scan rounds are forced through `perforce.reconcile.excludeFolders` — the one
- *  config change that re-arms the once-per-session scan (a plain file change is
- *  answered by a narrow query instead). Each value excludes one more REAL folder
- *  of drifted files, so every write has an observable effect to synchronize on
- *  (that folder's row leaving the Changes group) rather than a timer: the
- *  settings file is read through one watcher, and two writes close together can
- *  otherwise coalesce into a single change.
+ *  Scan rounds are forced by moving the workspace FOCUS
+ *  (`workspace.focusFolders`): the discovery range is `daily scope ∩ focus`, so a
+ *  focus change re-arms the once-per-session scan AND changes the checkpoint
+ *  fingerprint — the next round really spawns the engine instead of replaying a
+ *  previous round's checkpoint. (A plain file change does not re-arm the scan at
+ *  all: it is answered by a narrow per-file query.) Each round is synchronized on
+ *  its OWN answer — the focused folder's row reappearing in the Changes group
+ *  after the focus change dropped every row — rather than on a timer, because the
+ *  settings file goes through one watcher and two writes close together can
+ *  coalesce into a single change.
+ *
+ *  The workspace deliberately has NO `.p4delta-scope`: this file is about the RUN
+ *  fallback, not about config layering, and an unconfigured workspace keeps every
+ *  round's range equal to the opened folder. That leaves the focus changes below
+ *  as the only thing deciding a round's shape — the range is resolved locally
+ *  (the editor reads the same config file the engine would), so nothing here
+ *  depends on the failing engine answering a scope question.
  *
  *  The second half of the file takes the other exit: `perforce.p4delta.enabled:
  *  false` must not even resolve the engine — with the fixture pointing
@@ -31,14 +41,21 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { evaluateWhenRestored, mkTempDir } from '@universe-editor/e2e-harness'
-import { readArgvLog, test, expect, waitForPerforceCommands } from '../fixtures/perforceApp.js'
+import {
+  readArgvLog,
+  readScopeLog,
+  test,
+  expect,
+  toPosix,
+  waitForPerforceCommands,
+} from '../fixtures/perforceApp.js'
 import type { SeedFile } from '../fixtures/perforceApp.js'
 
 const drifted: SeedFile = { relPath: 'drifted.txt', content: 'have revision\n' }
 const clean: SeedFile = { relPath: 'clean.txt', content: 'untouched\n' }
-/** Three folders that exist and hold drift: excluding one is an observable
- *  config change (its row leaves the Changes group), which is what serializes
- *  the scan rounds below. */
+/** Three folders that exist and hold drift: focusing one is an observable change
+ *  (its row is republished by the new round, every other row is dropped), which
+ *  is what serializes the scan rounds below. */
 const exA: SeedFile = { relPath: 'exA/x.txt', content: 'in a\n' }
 const exB: SeedFile = { relPath: 'exB/y.txt', content: 'in b\n' }
 const exC: SeedFile = { relPath: 'exC/z.txt', content: 'in c\n' }
@@ -49,13 +66,14 @@ const DRIFTED_CONTENT = driftOf(drifted)
 
 const fallbackDeltaLog = join(mkTempDir('ue2-p4delta-argv-'), 'p4delta.log')
 const fallbackP4Log = join(mkTempDir('ue2-p4-argv-'), 'p4.log')
+const fallbackScopeLog = join(mkTempDir('ue2-p4delta-scope-'), 'scope.log')
 const disabledDeltaLog = join(mkTempDir('ue2-p4delta-argv-'), 'p4delta.log')
 const disabledP4Log = join(mkTempDir('ue2-p4-argv-'), 'p4.log')
 
 const deltaLines = (log: string): string[] => readArgvLog(log)
-/** The δ SCAN spawns: the contract switches plus a recursive scope entry. Any
- *  per-file narrow query does not match. */
-const scanLines = (log: string): string[] =>
+/** The δ SCAN spawns: the contract switches plus this round's directory target
+ *  (the narrow per-file queries carry `--no-revert-groups` too but no `/...`). */
+const deltaScanLines = (log: string): string[] =>
   deltaLines(log).filter((l) => l.includes('--no-revert-groups') && l.includes('/...'))
 /** Native `reconcile -n` lines: the log the extension writes when IT asks p4. */
 const nativeScanLines = (log: string): string[] =>
@@ -77,6 +95,7 @@ test.describe('@p1 perforce p4delta fallback', () => {
     p4ExtraEnv: {
       UNIVERSE_P4DELTA_ARGV_LOG: fallbackDeltaLog,
       UNIVERSE_P4_FAKE_ARGV_LOG: fallbackP4Log,
+      UNIVERSE_P4DELTA_SCOPE_LOG: fallbackScopeLog,
     },
   })
 
@@ -105,28 +124,44 @@ test.describe('@p1 perforce p4delta fallback', () => {
       .toBeGreaterThan(0)
     await waitForPerforceCommands(workbench)
 
+    const groupIdsFor = (relPath: string) =>
+      page.evaluate((s) => window.__E2E__!.getScmGroupIdsForResource(s), relPath)
+
     await test.step('the drift still surfaces — natively — and the fallback is in the log', async () => {
-      // Round 1 asked δ (and got no summary). The same round then re-ran the scan
-      // natively: the log of what the extension handed p4 is the only place that
-      // shows it, because both engines would produce the same panel.
+      // Round 1 (unfocused) asked δ and got no summary. The same round then re-ran
+      // the scan natively: the log of what the extension handed p4 is the only
+      // place that shows it, because both engines would produce the same panel.
       await expect
         .poll(() => nativeScanLines(fallbackP4Log).length, {
           timeout: 60_000,
           message: 'the native engine should have re-run the scan in the same round',
         })
         .toBeGreaterThan(0)
-      expect(deltaLines(fallbackDeltaLog).length).toBeGreaterThan(0)
+      expect(deltaScanLines(fallbackDeltaLog).length).toBeGreaterThan(0)
+
+      // The δ attempt really covered the workspace: the range it resolved is the
+      // client root — a round that silently planned over nothing would fall back
+      // for the wrong reason.
+      await expect
+        .poll(
+          () =>
+            readScopeLog(fallbackScopeLog)
+              .flatMap((resolution) => resolution.includes)
+              .map((entry) => toPosix(entry)),
+          { timeout: 30_000, message: 'a δ round should have resolved the whole workspace' },
+        )
+        .toContain(`directory:${toPosix(perforce.clientRoot)}`)
 
       // The outcome: the drift is visible — group rows and the Explorer badge. A
       // build that read the summary-less stream as a conclusion would show neither.
       // Every drifted file is asserted, because the `ex*` folders' rows are what
-      // the exclusion steps below watch leave the group.
+      // the focus steps below watch being re-scanned.
       for (const seed of DRIFTED_SEEDS) {
         await expect
-          .poll(
-            () => page.evaluate((s) => window.__E2E__!.getScmGroupIdsForResource(s), seed.relPath),
-            { timeout: 60_000, message: `${seed.relPath} should still reach the Changes group` },
-          )
+          .poll(() => groupIdsFor(seed.relPath), {
+            timeout: 60_000,
+            message: `${seed.relPath} should still reach the Changes group`,
+          })
           .toContain('reconcile')
       }
 
@@ -150,87 +185,69 @@ test.describe('@p1 perforce p4delta fallback', () => {
     })
 
     await test.step('three failed rounds disarm the engine; the next round does not spawn it', async () => {
-      const groupIdsFor = (relPath: string) =>
-        page.evaluate((s) => window.__E2E__!.getScmGroupIdsForResource(s), relPath)
-
-      // Each config change is synchronized on its OBSERVABLE effect — the newly
-      // excluded folder's row leaving the Changes group — before the next write
-      // goes out. The settings file is read through one watcher, so two writes
-      // close together can coalesce into a single change; observing the effect
-      // keeps the changes (and the scan rounds they trigger) serialized instead of
-      // silently collapsing into one.
-      const excludeAndSettle = async (dirs: readonly string[], gone: string) => {
+      /**
+       * Move the focus and wait for THIS round's own answer: the focused folder's
+       * row back in the Changes group, then the round's native end. The focus
+       * change drops every row, so a row being in the group can only come from the
+       * round that followed it.
+       *
+       * Deliberately NOT "did this round spawn δ": the log length can only be
+       * read after the round is over, and a spawn still in flight from the
+       * PREVIOUS round (its own settings write provokes a narrow query) lands in
+       * that window under load — which attributes one round's engine to another
+       * in either direction. The invariant is measured once, below, on a round
+       * that starts from a settled log.
+       *
+       * Under this fault EVERY δ run fails, and they share one ladder — the scan
+       * rounds below, and also the narrow per-file query each settings write
+       * provokes for the settings file itself. So the ceiling is reached at some
+       * round in the middle of this sequence; what the spec pins is the
+       * invariant, not the round number.
+       */
+      const roundFromFocus = async (folder: string, focused: SeedFile): Promise<void> => {
+        const nativeBefore = nativeScanLines(fallbackP4Log).length
         writeProjectSettings(perforce.clientRoot, {
-          'perforce.reconcile.excludeFolders': [...dirs],
+          'workspace.focusEnabled': true,
+          'workspace.focusFolders': { [folder]: true },
         })
         await expect
-          .poll(() => groupIdsFor(gone), {
+          .poll(() => groupIdsFor(focused.relPath), {
             timeout: 60_000,
-            message: `excluding ${gone} should have taken effect (the row should leave the group)`,
+            message: `focusing ${folder} should have re-scanned it (its row should come back)`,
           })
-          .toEqual([])
+          .toContain('reconcile')
+        await expect
+          .poll(() => nativeScanLines(fallbackP4Log).length, {
+            timeout: 60_000,
+            message: `the round for ${folder} should have ended natively`,
+          })
+          .toBeGreaterThan(nativeBefore)
       }
-      // Every round under this fault ends in the native fallback, so "the log has
-      // not moved for a while" means no round is in flight any more.
-      const quiet = (ms = 500) =>
-        expect
-          .poll(
-            async () => {
-              const delta = deltaLines(fallbackDeltaLog).length
-              const native = nativeScanLines(fallbackP4Log).length
-              await new Promise((resolve) => setTimeout(resolve, ms))
-              return (
-                deltaLines(fallbackDeltaLog).length === delta &&
-                nativeScanLines(fallbackP4Log).length === native
-              )
-            },
-            { timeout: 60_000, intervals: [500] },
-          )
-          .toBe(true)
 
-      // Round 1 already failed at this point; two more resets reach the ceiling
-      // of 3 (each reset is one round, and under this fault every round fails).
-      await excludeAndSettle(['exA'], exA.relPath)
-      await excludeAndSettle(['exA', 'exB'], exB.relPath)
-      await excludeAndSettle(['exA', 'exB', 'exC'], exC.relPath)
+      await roundFromFocus('exA', exA)
+      await roundFromFocus('exB', exB)
+      await roundFromFocus('exC', exC)
 
-      // The ladder tripped: the engine was attempted at least three times and
-      // then stopped — further resets add no δ spawns (they answer natively).
-      await expect
-        .poll(() => scanLines(fallbackDeltaLog).length, {
-          timeout: 60_000,
-          message: 'the engine should have been attempted at least 3 times',
-        })
-        .toBeGreaterThanOrEqual(3)
-      await quiet()
-
+      // Round 1 already failed at this point, so the ladder's three consecutive
+      // failures are covered — with the focus rounds or the narrow queries they
+      // provoke. The engine really stopped: one more round spawns nothing at all,
+      // not even for the settings file it just wrote. The log is sampled here,
+      // with every earlier round settled on its own native end, so nothing in
+      // flight can be mistaken for this round's spawn.
+      expect(deltaLines(fallbackDeltaLog).length).toBeGreaterThanOrEqual(3)
       const deltaBefore = deltaLines(fallbackDeltaLog).length
-      const nativeBefore = nativeScanLines(fallbackP4Log).length
-      writeProjectSettings(perforce.clientRoot, {
-        'perforce.reconcile.excludeFolders': ['exA', 'exB', 'exC', 'no-such-d'],
-      })
-      await expect
-        .poll(() => nativeScanLines(fallbackP4Log).length, {
-          timeout: 60_000,
-          message: 'the disarmed round should still answer natively',
-        })
-        .toBeGreaterThan(nativeBefore)
-      // …and the engine was not even spawned: the δ log is exactly as long as it
-      // was before the round — no spawn, no scan.
-      expect(deltaLines(fallbackDeltaLog).length).toBe(deltaBefore)
+      await roundFromFocus('exA', exA)
+      expect(
+        deltaLines(fallbackDeltaLog).length,
+        'the round after the ceiling must not spawn δ',
+      ).toBe(deltaBefore)
     })
 
     await test.step('a collect after the disarm is a native write, and the δ log stays frozen', async () => {
       const deltaBefore = deltaLines(fallbackDeltaLog).length
       // An explicit file-row collect (what the row's inline action runs) rather
       // than the group header: the row is a stable input for the one thing this
-      // step must pin — the ENGINE the write lands on. (The group header used to
-      // be avoided because "an excludeFolders change drops the drift rows of
-      // files sitting directly at the client ROOT". That was the fake not
-      // understanding the carve's `<dir>/*` level spec — it matched no file, so a
-      // carved level lost exactly its direct children — never product behaviour;
-      // `targetsFromArgs` in fixtures/fake-p4.mjs now reads that spec, and
-      // perforceDirectoryRevert.spec.ts pins the level's files surviving a carve.)
+      // step must pin — the ENGINE the write lands on.
       await workbench.runCommand('perforce.reconcile', {
         resourceUri: perforce.file(drifted.relPath),
       })
@@ -240,7 +257,7 @@ test.describe('@p1 perforce p4delta fallback', () => {
       await expect
         .poll(
           () =>
-            deltaLines(fallbackP4Log).filter(
+            readArgvLog(fallbackP4Log).filter(
               (l) =>
                 l.includes('reconcile') &&
                 !l.includes(' -n ') &&
@@ -265,10 +282,7 @@ test.describe('@p1 perforce p4delta fallback', () => {
         )
         .toBe('edit')
       await expect
-        .poll(
-          () => page.evaluate((s) => window.__E2E__!.getScmGroupIdsForResource(s), drifted.relPath),
-          { timeout: 30_000 },
-        )
+        .poll(() => groupIdsFor(drifted.relPath), { timeout: 30_000 })
         .toEqual(['default'])
 
       // δ was not consulted for the write: the engine is disarmed, and the log
@@ -310,14 +324,21 @@ test.describe('@p1 perforce p4delta disabled', () => {
     await waitForPerforceCommands(workbench)
 
     // Liveness first, so a workspace that never came up cannot pass this spec:
-    // the native engine answered the scan and the drift is visible.
+    // the native engine answered the scan and the drift is visible. The scan line
+    // is polled, not read once — the row can be published by the narrow query a
+    // file change provokes before the round's own directory scan is logged.
+    await expect
+      .poll(() => nativeScanLines(disabledP4Log).length, {
+        timeout: 60_000,
+        message: 'the native engine should have answered a scan',
+      })
+      .toBeGreaterThan(0)
     await expect
       .poll(
         () => page.evaluate((s) => window.__E2E__!.getScmGroupIdsForResource(s), drifted.relPath),
         { timeout: 60_000, message: 'the native engine should have found the drift' },
       )
       .toContain('reconcile')
-    expect(nativeScanLines(disabledP4Log).length).toBeGreaterThan(0)
 
     // The negative half, in its strongest form: the δ argv log file was never
     // CREATED. A disabled engine must not even resolve its path, so nothing can

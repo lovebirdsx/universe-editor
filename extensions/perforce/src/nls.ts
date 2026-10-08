@@ -123,10 +123,34 @@ const ZH_CN: Readonly<Record<string, string>> = {
     '强制拉取将用 depot 版本覆盖勾选的文件，其中未收集的本地修改与未被跟踪的占位文件将丢失，且不可撤销。（黄色 = 有本地修改，紫色 = 未被跟踪的同名文件）',
   'perforce.sync.forcePickOk': '强制拉取所选 ({0})',
   'perforce.sync.failed': '拉取版本失败。{0}',
+  'perforce.sync.scopeRefused': '未执行拉取：{0}',
   'perforce.btn.collectChanges': '收集改动',
-  // reconcile（收集改动）—— 排除目录拦截
-  'perforce.reconcile.allExcluded': '所选路径已被 perforce.reconcile.excludeFolders 排除。',
+  // reconcile（收集改动）—— 范围（scope）拦截
+  'perforce.act.get': '拉取文件',
+  'perforce.act.collect': '收集改动',
+  'perforce.act.newChangelist': '收集改动到新 changelist',
+  'perforce.act.clean': '清理文件',
+  'perforce.scope.outsideTargets':
+    '{0} 包含工作区范围未完整覆盖的路径：{1}。这些路径由你明确指定，因此不会被静默裁剪——请选择如何处理。',
+  'perforce.scope.refused': '未执行{0}：{1}。未做任何修改。',
+  'perforce.scope.unusable': '未执行{0}：工作区范围不可用。{1}',
+  'perforce.scope.unusableReason': '请打开工作区范围文件修复它。',
+  'perforce.scope.blockedNotice':
+    '工作区范围无法解析，日常 Perforce 操作（发现、收集、清理）已暂停：{0}',
+  'perforce.scope.btn.obey': '遵守工作区范围',
+  'perforce.scope.btn.run': '按所选执行',
+  // reconcile 降噪排除（perforce.reconcile.excludeFolders）
+  'perforce.noise.coveredTargets':
+    '{0} 包含被 reconcile 排除规则隐藏的路径：{1}。这些路径由你明确指定，因此不会被静默裁剪——请选择如何处理。',
+  'perforce.noise.btn.skip': '跳过它们',
+  'perforce.noise.btn.run': '按所选执行',
+  'perforce.reconcile.allExcluded': '所选路径在工作区范围之外，或被排除规则隐藏。',
   'perforce.reconcile.carveFailed': '部分目录无法读取，其中的文件已被跳过。',
+  // 预览 → 拉取之间配置改动的提示（仅提示；执行按当时的配置）
+  'perforce.sync.previewConfigMoved': '工作区范围在预览之后发生了变化——本次按当前配置执行。',
+  // 清理（p4 clean）的破坏性确认：文件清单在**执行那一刻**才重新确定
+  'perforce.revert.confirmCurrentRules':
+    '本次按当前配置执行：要丢弃的清单在执行时按当时生效的工作区范围与收集排除规则重新确定。',
   'perforce.sync.upToDate': '已是最新版本。',
   'perforce.sync.refusedModified': '{0} 个文件未更新——它们有尚未收集的本地修改',
   'perforce.sync.refusedOverwrite': '{0} 个文件未更新——本地已存在未被跟踪的同名文件，已被跳过',

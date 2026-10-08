@@ -15,6 +15,8 @@ import {
   window,
   ProgressLocation,
   FileType,
+  RelativePattern,
+  type Disposable,
   type ExtensionContext,
 } from '@universe-editor/extension-api'
 import type {
@@ -59,7 +61,14 @@ import {
   viewCommit as viewChangelist,
   type P4GraphFileDiffRequest,
 } from './viewCommit.js'
-import { norm, uriToFsPath } from './pathUtil.js'
+import { norm, scopeKey, uriToFsPath } from './pathUtil.js'
+import {
+  noiseCoversTarget,
+  planReconcileNoiseOperations,
+  resolveReconcileExcludes,
+  type ReconcileNoiseConfig,
+  type ReconcileNoiseOperation,
+} from './reconcileNoise.js'
 import {
   classifyRevertTargets,
   formatRevertConfirm,
@@ -73,12 +82,6 @@ import {
   buildSyncFilespecs,
   type SyncScopeTarget,
 } from './p4Filespec.js'
-import {
-  canHandTargetsToP4delta,
-  carveReconcileFilespecs,
-  carveReconcileTargets,
-  p4deltaReconcileTargetSpecs,
-} from './reconcileCarve.js'
 import {
   clSpecOf,
   directSyncPoint,
@@ -94,7 +97,9 @@ import {
   syncPromptOf,
   syncSpecOf,
 } from './syncSpec.js'
-import { resolveFocusScope, resolveExcludeDirs } from './focusScope.js'
+import { resolveFocusScope } from './focusScope.js'
+import { scopeTargets, scopeTargetsWithin } from './scope.js'
+import { SCOPE_FILE_NAME } from './scopeConfig.js'
 import { registerSwarmCommands } from './swarm/swarmCommands.js'
 import { createSwarmLogger } from './swarm/swarmLog.js'
 import { createPerforceTimelineCommands, PerforceTimelineProvider } from './timelineProvider.js'
@@ -228,16 +233,6 @@ export function reconcileUsesSelection(
   arg0IsDirectory: boolean,
 ): boolean {
   return selection.length > 0 && (selection.some((t) => t.isDirectory) || !arg0IsDirectory)
-}
-
-/** Drop reconcile targets excluded by `perforce.reconcile.excludeFolders`. The
- *  exclusion predicate is injected (`client.isReconcileTargetExcluded` in
- *  production) so the fork is unit-testable without a client. */
-export function filterReconcileTargets(
-  targets: readonly SelectionTarget[],
-  isExcluded: (path: string) => boolean,
-): SelectionTarget[] {
-  return targets.filter((t) => !isExcluded(t.path))
 }
 
 /** Resolve every path a file-scoped command should act on. When the host runs
@@ -512,33 +507,266 @@ export async function activate(context: ExtensionContext): Promise<void> {
   const log = (msg: string): void => out.appendLine(msg)
   setP4OutputShower(() => out.show())
 
-  /** Report directories a carve could not cover: log each one and surface a
-   *  single warning. The caller keeps whatever specs the carve did produce.
-   *  Wording stays action-neutral — both collecting and `p4 clean` skip here. */
-  const warnUnreadableCarves = async (dirs: readonly string[]): Promise<void> => {
-    for (const dir of dirs) {
-      log(`[perforce] cannot carve reconcile scope around excludes, skipping ${dir}`)
-    }
-    if (dirs.length > 0) {
-      await window.showWarningMessage(
-        localize(
-          'perforce.reconcile.carveFailed',
-          'Some directories could not be read, so files under them were skipped.',
-        ),
-      )
-    }
-  }
-
-  /** The whole selection sits inside `perforce.reconcile.excludeFolders`, so
-   *  there is nothing to run p4 on. Only say this when the carve succeeded —
-   *  a read failure is reported by {@link warnUnreadableCarves} instead. */
+  /** The whole selection sits inside the daily scope's exclusions, so there is
+   *  nothing to run p4 on. */
   const notifyAllExcluded = async (): Promise<void> => {
     await window.showInformationMessage(
       localize(
         'perforce.reconcile.allExcluded',
-        'The selected paths are excluded by perforce.reconcile.excludeFolders.',
+        'The selected paths are outside the workspace scope, or hidden by the exclusions in force.',
       ),
     )
+  }
+
+  /** What the scope gate below decided: run the operation (with or without the
+   *  override), or do not run it at all. */
+  type ScopeGateDecision =
+    | {
+        readonly ok: true
+        readonly override: boolean
+        readonly targets: readonly SyncScopeTarget[]
+      }
+    | { readonly ok: false }
+
+  /**
+   * The gate every EXPLICIT operation passes before it reaches p4 or δ: the
+   * paths the user named are checked against the daily scope, and anything the
+   * scope does not cover whole is put to the user.
+   *
+   * The three answers are the whole point — a silent trim is exactly what this
+   * exists to prevent:
+   * - everything covered → run as asked (the common case, no dialog);
+   * - something outside → a dialog naming it, offering "obey the daily scope"
+   *   (drop the uncovered targets; if that leaves nothing, the operation is NOT
+   *   run — an empty range is a different operation, not a smaller one) or "run
+   *   them as chosen" (the client's scope override, good for this call only);
+   * - the scope is unusable (a config that cannot be resolved) → refused with
+   *   the reason: the editor does not know the range, so it cannot say the
+   *   targets are safe.
+   *
+   * The override is the ONLY way past the client's own fail-closed check, and it
+   * is never inferred: it is produced here, by a button the user pressed.
+   */
+  const confirmScopeTargets = async (
+    client: PerforceClient,
+    targets: readonly SyncScopeTarget[],
+    what: string,
+  ): Promise<ScopeGateDecision> => {
+    if (targets.length === 0) return { ok: true, override: false, targets }
+    const check = await client.checkScopeTargets(targets)
+    if (check.outside.length === 0) return { ok: true, override: false, targets }
+    if (check.state !== 'ready') {
+      await window.showWarningMessage(
+        localize(
+          'perforce.scope.unusable',
+          '{0} was not run: the workspace scope is not usable. {1}',
+          {
+            0: what,
+            1:
+              check.reason ??
+              localize('perforce.scope.unusableReason', 'Open the workspace scope file to fix it.'),
+          },
+        ),
+      )
+      return { ok: false }
+    }
+    const outsideText = scopeTextOf(check.outside.map((t) => t.path))
+    const BTN_OBEY = localize('perforce.scope.btn.obey', 'Use the workspace scope')
+    const BTN_RUN = localize('perforce.scope.btn.run', 'Run as chosen')
+    const picked = await window.showWarningMessage(
+      localize(
+        'perforce.scope.outsideTargets',
+        '{0} includes paths the workspace scope does not cover: {1}. They were named explicitly, so nothing was trimmed silently — choose what to do.',
+        { 0: what, 1: outsideText },
+      ),
+      BTN_OBEY,
+      BTN_RUN,
+    )
+    if (picked === BTN_RUN) {
+      log(`[perforce] scope override confirmed for ${what}: ${outsideText}`)
+      return { ok: true, override: true, targets }
+    }
+    if (picked === BTN_OBEY) {
+      if (check.inside.length === 0) {
+        await notifyAllExcluded()
+        return { ok: false }
+      }
+      log(
+        `[perforce] ${what}: narrowed to the workspace scope, dropping ${check.outside.length} target(s)`,
+      )
+      return { ok: true, override: false, targets: check.inside }
+    }
+    return { ok: false }
+  }
+
+  type NoiseGateDecision =
+    | {
+        readonly ok: true
+        readonly operations: readonly ReconcileNoiseOperation[]
+        /** Whether the answer DROPPED targets ("skip them") — the destructive
+         *  confirm below must not keep promising to discard them. */
+        readonly skipped: boolean
+      }
+    | { readonly ok: false }
+
+  /**
+   * The noise gate — `confirmScopeTargets`' sibling for
+   * `perforce.reconcile.excludeFolders`. A target the setting covers is put to
+   * the user, never trimmed silently; what comes back is the LIST of operations
+   * to run, each carrying its own confirmedTargets (see
+   * `planReconcileNoiseOperations`). "Run as chosen" lifts only the rules
+   * covering the targets the user actually named, so a parent directory riding
+   * along in the same selection keeps the noise over the subtree it shields.
+   *
+   * {@link confirmScopeTargets} answers about the SCOPE and this one about the
+   * SETTING: confirming one never confirms the other.
+   */
+  const confirmNoiseTargets = async (
+    targets: readonly SyncScopeTarget[],
+    noise: ReconcileNoiseConfig,
+    what: string,
+  ): Promise<NoiseGateDecision> => {
+    const covered = targets.filter((t) => noiseCoversTarget(noise, t))
+    if (covered.length === 0) {
+      const plan = planReconcileNoiseOperations(targets, noise)
+      return plan === undefined ? { ok: false } : { ok: true, operations: plan, skipped: false }
+    }
+    const coveredText = scopeTextOf(covered.map((t) => t.path))
+    const BTN_SKIP = localize('perforce.noise.btn.skip', 'Skip them')
+    const BTN_RUN = localize('perforce.noise.btn.run', 'Run as chosen')
+    const picked = await window.showWarningMessage(
+      localize(
+        'perforce.noise.coveredTargets',
+        '{0} includes paths the reconcile exclusions hide: {1}. They were named explicitly, so nothing was trimmed silently — choose what to do.',
+        { 0: what, 1: coveredText },
+      ),
+      BTN_SKIP,
+      BTN_RUN,
+    )
+    if (picked !== BTN_SKIP && picked !== BTN_RUN) return { ok: false }
+    if (picked === BTN_RUN) {
+      log(`[perforce] reconcile exclusions lifted for ${what}: ${coveredText}`)
+      const plan = planReconcileNoiseOperations(targets, noise, covered)
+      return plan === undefined ? { ok: false } : { ok: true, operations: plan, skipped: false }
+    }
+    const coveredKeys = new Set(
+      covered.map((t) => `${t.isDirectory ? 'd' : 'f'}:${scopeKey(t.path)}`),
+    )
+    log(`[perforce] reconcile exclusions hide ${coveredText} — skipped for ${what}`)
+    const kept = targets.filter(
+      (t) => !coveredKeys.has(`${t.isDirectory ? 'd' : 'f'}:${scopeKey(t.path)}`),
+    )
+    const plan = planReconcileNoiseOperations(kept, noise)
+    if (plan === undefined) {
+      await notifyAllExcluded()
+      return { ok: false }
+    }
+    return { ok: true, operations: plan, skipped: true }
+  }
+
+  /**
+   * Run ONE collect operation — a target group plus the targets the user
+   * authorized through the noise gate.
+   *
+   * The command layer hands over exactly what the user named and what they
+   * answered: the raw targets, the targets they answered "run as chosen" for, and
+   * the scope override when one was granted. It deliberately builds NO filespec
+   * list and carries NO copy of the rules: δ and p4 need different shapes of the
+   * same range, the engine that runs is not known until the write starts, and the
+   * exclusions in force are the ones in force THEN — a rule set read here would
+   * be a frozen reading of a setting the user can still edit while the dialog is
+   * up (and it would override the newer reading, which is how a freshly added
+   * exclusion used to be ignored by the run it was added for).
+   *
+   * `overrideScope` is the SCOPE confirmation the user granted: it sets the
+   * scope's own exclusions aside (the collect runs as named), while the noise
+   * keeps applying — the two confirmations are independent, and a scope
+   * override never lifts a noise rule the user did not name.
+   */
+  const runCollectOperation = async (
+    client: PerforceClient,
+    op: ReconcileNoiseOperation,
+    options?: { readonly overrideScope?: boolean; readonly changelist?: string },
+  ): Promise<void> => {
+    const runOptions = {
+      ...(op.confirmedTargets.length > 0 ? { confirmedTargets: op.confirmedTargets } : {}),
+      ...(options?.overrideScope === true ? { overrideScope: true } : {}),
+    }
+    const range = { targets: op.targets }
+    if (options?.changelist !== undefined) {
+      await client.reconcileInto(options.changelist, range, runOptions)
+      return
+    }
+    await client.reconcile(range, runOptions)
+  }
+
+  /** A gated collect, ready to run: the operations the user's answer left.
+   *  Held across a dialog by call sites that create a changelist first (see
+   *  `perforce.reconcileIntoNewChangelist`) so the same authorization — never a
+   *  frozen rule set — covers the whole gap. */
+  interface CollectPlan {
+    readonly operations: readonly ReconcileNoiseOperation[]
+    /** Whether the gate dropped targets the caller's own display still shows. */
+    readonly skipped: boolean
+  }
+
+  /**
+   * Read the rules in force and gate the targets, without running anything.
+   *
+   * `explicit` targets are the user's own selection: one the reconcile
+   * exclusions cover is put to them (never trimmed silently). A `discovery`
+   * range — the daily scope, a drift group's own rows — is pruned silently:
+   * those rows are the editor's answer to "what is left to collect", not a
+   * selection to interrogate, and a prompt per collect would be noise of its
+   * own.
+   *
+   * The reading here is the GATE's — which targets the setting covers, and what
+   * the user answered about them. What the gate produces is the split into
+   * groups plus the targets the user authorized; the rules themselves are read
+   * again at the write, so a setting edited while the dialog is up is obeyed
+   * rather than overridden by the copy this dialog showed.
+   */
+  const planCollect = async (
+    client: PerforceClient,
+    targets: readonly SyncScopeTarget[],
+    what: string,
+    mode: 'explicit' | 'discovery',
+  ): Promise<CollectPlan | undefined> => {
+    const noise = client.reconcileNoise
+    if (mode === 'discovery') {
+      const operations = planReconcileNoiseOperations(targets, noise)
+      if (operations === undefined) {
+        await notifyAllExcluded()
+        return undefined
+      }
+      return { operations, skipped: false }
+    }
+    const gate = await confirmNoiseTargets(targets, noise, what)
+    if (!gate.ok) return undefined
+    return { operations: gate.operations, skipped: gate.skipped }
+  }
+
+  const runCollectPlan = async (
+    client: PerforceClient,
+    plan: CollectPlan,
+    options?: { readonly overrideScope?: boolean; readonly changelist?: string },
+  ): Promise<void> => {
+    for (const op of plan.operations) {
+      await runCollectOperation(client, op, options)
+    }
+  }
+
+  /** Gate and run in one step, for the call sites with nothing in between. */
+  const runCollect = async (
+    client: PerforceClient,
+    targets: readonly SyncScopeTarget[],
+    what: string,
+    mode: 'explicit' | 'discovery',
+    options?: { readonly overrideScope?: boolean; readonly changelist?: string },
+  ): Promise<void> => {
+    const plan = await planCollect(client, targets, what, mode)
+    if (plan === undefined) return
+    await runCollectPlan(client, plan, options)
   }
 
   const maxConcurrent = await cfg.get('maxConcurrent', 4)
@@ -617,6 +845,9 @@ export async function activate(context: ExtensionContext): Promise<void> {
     client = await PerforceClient.create(root, fallback, gate, cacheOptions, {
       log,
       watchRoot: root,
+      // The OPENED folder, which need not be the client root: the daily scope is
+      // resolved inside it, and every daily operation is bounded by it.
+      workspaceRoot: root,
       createFileSystemWatcher: (glob) => workspace.createFileSystemWatcher(glob),
       ...(p4deltaOptions !== undefined ? { p4delta: p4deltaOptions } : {}),
     })
@@ -736,13 +967,12 @@ export async function activate(context: ExtensionContext): Promise<void> {
     // for and re-walk the depot the focus was meant to avoid.
     const scoped = dirs.length > 0 || files.length > 0
     target.setReconcileScope(scoped ? dirs : root, scoped ? files : [])
-    // A scope-less "get latest" follows the same folders: pulling the whole
-    // client mapping when the user only opened one subtree is both slow and
-    // surprising. Per-file/folder gets pass their own scope and ignore this.
-    // (Sync stays directory-or-root: a file entry is not a sync scope.)
-    target.setSyncScope(dirs.length > 0 ? dirs : root)
+    // NOTHING else follows the focus. The default get's range is the DAILY scope
+    // (opened folder ∩ `.p4delta-scope`), resolved by `PerforceClient.refreshScope`
+    // — the user's get must not follow what they happen to be looking at, and a
+    // focus folder outside the declared scope must not silently widen it.
     log(
-      `[perforce] reconcile scope: ${dirs.length} dirs, ${files.length} files` +
+      `[perforce] reconcile focus: ${dirs.length} dirs, ${files.length} files` +
         (dirs.length === 0 && files.length === 0 ? ' (<opened folder>)' : ''),
     )
   }
@@ -759,6 +989,52 @@ export async function activate(context: ExtensionContext): Promise<void> {
         return
       }
       void applyReconcileScopeAll()
+    }),
+  )
+
+  /**
+   * Reconcile noise (`perforce.reconcile.excludeFolders`): folders the reconcile
+   * machinery hides — automatic discovery, the uncollected-change hint, narrow
+   * queries, and the unopened half of a collect / clean. Applied before the
+   * first refresh so the scan the refresh tail schedules already honors it.
+   *
+   * Deliberately NOT a scope source: the daily scope (`.p4delta-scope`) remains
+   * the only one, a get runs with noise applied by nobody, and editing this
+   * setting does not invalidate a pending get preview. `noiseApplySeq` makes a
+   * later config apply win over an earlier one still awaiting its stats — the
+   * stat round-trips are async, so two rapid edits could otherwise land out of
+   * order and leave the client hiding the wrong folders.
+   */
+  let noiseApplySeq = 0
+  const applyReconcileExcludes = async (target: PerforceClient): Promise<void> => {
+    const seq = ++noiseApplySeq
+    const values = await cfg.get<string[]>('reconcile.excludeFolders', [])
+    const noise = await resolveReconcileExcludes(values, root, async (p) => {
+      try {
+        const s = await workspace.fs.stat(p)
+        return { isDirectory: s.type === FileType.Directory }
+      } catch {
+        return undefined // gone / unreadable — resolved as a folder (the setting names folders)
+      }
+    })
+    if (seq !== noiseApplySeq) return
+    target.setReconcileExcludes(noise)
+    log(
+      `[perforce] reconcile exclusions: ${noise.dirs.length} dir(s), ${noise.files.length} file(s)` +
+        (noise.dirs.length === 0 && noise.files.length === 0 ? ' (<none>)' : ''),
+    )
+  }
+  const applyReconcileExcludesAll = async (): Promise<void> => {
+    for (const c of mgr.all) await applyReconcileExcludes(c)
+  }
+  await applyReconcileExcludes(client)
+  context.subscriptions.push(
+    workspace.onDidChangeConfiguration((e) => {
+      // The exact key, deliberately: `affectsConfiguration` in this host is an
+      // exact match, so a section name (`perforce.reconcile`) would subscribe to
+      // nothing at all.
+      if (!e.affectsConfiguration('perforce.reconcile.excludeFolders')) return
+      void applyReconcileExcludesAll()
     }),
   )
 
@@ -834,27 +1110,77 @@ export async function activate(context: ExtensionContext): Promise<void> {
   )
 
   /**
-   * Reconcile excludes: directories the on-demand hint, the background scan and
-   * the collect command must all skip (`perforce.reconcile.excludeFolders`).
-   * Applied before the first refresh so the scan the refresh tail schedules
-   * already honors the configured exclusions.
+   * The daily scope: the opened workspace ∩ the `.p4delta-scope` config that
+   * `p4delta` resolves, read from the client so there is exactly ONE
+   * implementation of the rules (config syntax, lookup chain, depot mapping).
+   *
+   * Applied before the first refresh, because everything the refresh tail
+   * schedules — the background scan, the on-demand hint, the default get — is
+   * bounded by it, and a client whose first round ran without a resolved scope
+   * would answer from the wrong range. The exclusions the command layer
+   * pre-checks against (`reconcileExcludeDirs`) come from the same resolution.
    */
-  const applyReconcileExcludes = async (target: PerforceClient): Promise<void> => {
-    const excludes = await cfg.get<string[]>('reconcile.excludeFolders', [])
-    const dirs = resolveExcludeDirs(excludes, root)
-    target.setReconcileExcludes(dirs)
-    log(`[perforce] reconcile excludes: ${dirs.length > 0 ? dirs.join(', ') : '<none>'}`)
+  const applyDailyScope = async (target: PerforceClient): Promise<void> => {
+    // `blocked` means the range is UNKNOWN, and everything the client answers
+    // from an unknown range reads as "nothing to report" (no drift rows, no
+    // hints, no collect). The notice therefore has to fire whenever the scope
+    // BECOMES unusable — not only at activation: a `.p4delta-scope` edited into
+    // a broken state changes the state mid-session, and a user never told would
+    // read the resulting silence as "my workspace is clean". The client owns the
+    // transition (it is the only place that knows the state changed, and it
+    // re-arms the notice on recovery), this layer owns the wording.
+    target.setScopeNoticeHandler((reason) => {
+      log(`[perforce] scope: blocked — ${reason ?? 'unknown reason'}`)
+      void window.showWarningMessage(
+        localize(
+          'perforce.scope.blockedNotice',
+          'The workspace scope could not be resolved, so daily Perforce operations (discovery, collect, clean) are suspended: {0}',
+          { 0: reason ?? '' },
+        ).trim(),
+      )
+    })
+    const state = await target.refreshScope()
+    log(
+      `[perforce] scope: ${state}` +
+        (state === 'ready'
+          ? ` — ${target.reconcileExcludeDirs.length} excluded dir(s), ${target.reconcileExcludeFiles.length} excluded file(s)`
+          : target.scopeUnusableReason !== undefined
+            ? ` — ${target.scopeUnusableReason}`
+            : ''),
+    )
   }
-  const applyReconcileExcludesAll = async (): Promise<void> => {
-    for (const c of mgr.all) await applyReconcileExcludes(c)
+  await applyDailyScope(client)
+
+  /**
+   * Watch the ONE fixed location the config lives in, per client: `<client
+   * root>/.p4delta-scope`. There is no lookup chain any more — the config
+   * belongs to the client root and nowhere else — but the watcher still covers
+   * creation, modification and deletion, because the editor has to notice a
+   * config that appears where there was none and one removed while a range was
+   * in force.
+   *
+   * `invalidateScope` drops the drift rows and the scan checkpoints of the old
+   * range and re-arms the scan, so the next operation re-resolves — including
+   * the background scan, which must not wait for a focus change to notice the
+   * config moved.
+   */
+  const scopeWatchers: Disposable[] = []
+  for (const c of mgr.all) {
+    const watcher = workspace.createFileSystemWatcher(new RelativePattern(c.root, SCOPE_FILE_NAME))
+    const onScopeFileEvent = (kind: string): void => {
+      log(
+        `[perforce] scope: ${SCOPE_FILE_NAME} ${kind} under ${c.root}; re-resolving the daily scope`,
+      )
+      for (const other of mgr.all) other.invalidateScope()
+    }
+    scopeWatchers.push(
+      watcher,
+      watcher.onDidCreate(() => onScopeFileEvent('created')),
+      watcher.onDidChange(() => onScopeFileEvent('changed')),
+      watcher.onDidDelete(() => onScopeFileEvent('deleted')),
+    )
   }
-  await applyReconcileExcludes(client)
-  context.subscriptions.push(
-    workspace.onDidChangeConfiguration((e) => {
-      if (!e.affectsConfiguration('perforce.reconcile.excludeFolders')) return
-      void applyReconcileExcludesAll()
-    }),
-  )
+  context.subscriptions.push(...scopeWatchers)
 
   /**
    * Opened-by-others awareness: how often the client may ask "who has what
@@ -1168,8 +1494,40 @@ export async function activate(context: ExtensionContext): Promise<void> {
        * and its ledger entry stays in one place.
        */
       knownLanding?: KnownLanding
+      /**
+       * Internal: the user already answered this call's scope gate with "run as
+       * chosen". Only the force-retry below sets it — re-running the gate there
+       * would put the same question to the user twice for one decision.
+       */
+      overrideScope?: boolean
     },
   ): Promise<void> => {
+    // The explicit-target gate, before any progress UI and before any spawn: a
+    // get over paths the daily scope does not cover is put to the user, never
+    // trimmed silently. "Obey the scope" rewrites BOTH the filespecs and the
+    // ledger scope, so the recorded history matches what actually ran.
+    let scope = options.scope
+    let ledgerScope = options.ledgerScope
+    // What the refused-get remedy below may collect: narrowed along with the
+    // filespecs when the user chose to obey the scope, so the remedy cannot
+    // reach back out to the very paths the get was refused on.
+    let collectTargets = options.scopeTargets
+    let overrideScope = options.overrideScope === true
+    if (!overrideScope && options.scopeTargets !== undefined && options.scopeTargets.length > 0) {
+      const decision = await confirmScopeTargets(
+        target,
+        options.scopeTargets,
+        localize('perforce.act.get', 'Getting files'),
+      )
+      if (!decision.ok) return
+      if (decision.override) {
+        overrideScope = true
+      } else if (decision.targets !== options.scopeTargets) {
+        scope = buildSyncFilespecs(decision.targets)
+        ledgerScope = decision.targets
+        collectTargets = decision.targets
+      }
+    }
     const res = await window.withProgress(
       {
         location: ProgressLocation.Notification,
@@ -1224,8 +1582,17 @@ export async function activate(context: ExtensionContext): Promise<void> {
           }
           let lastDone = 0
           const run = await target.sync(spec, {
-            ...(options.scope !== undefined ? { scope: options.scope } : {}),
+            ...(scope !== undefined ? { scope } : {}),
+            // The typed targets the specs were built from, and only when this
+            // call site NAMED them (a scope-less get's range is the daily scope,
+            // which is the client's own question to ask): the client checks the
+            // scope against these, so an escaped spelling (`con@tent` travels as
+            // `con%40tent`) cannot make the check invisible.
+            ...(options.scopeTargets !== undefined && ledgerScope.length > 0
+              ? { scopeTargets: ledgerScope }
+              : {}),
             ...(options.force !== undefined ? { force: options.force } : {}),
+            ...(overrideScope ? { overrideScope: true } : {}),
             onProgress: ({ done, file }) => {
               lastDone = done
               report(done, file, false)
@@ -1246,60 +1613,64 @@ export async function activate(context: ExtensionContext): Promise<void> {
     // status-bar entry, the most common one) is refused over its own default
     // range, so collect that range rather than degrading the far more frequent
     // path to discovery-only.
-    const collectCarved = async (targets: readonly SyncScopeTarget[]): Promise<void> => {
-      // Under δ the exclusions travel inside the write call, so the targets go
-      // through uncarved (and no carve means nothing to warn about) — but only
-      // while the raw paths are shapes δ's grammar reads: the client's
-      // own "spec is not a δ entry → run on p4" guard has no way back to the
-      // raw paths, so a metacharacter here would land the un-carved δ spelling
-      // on native p4 with the exclusions applied by nobody (see
-      // `canHandTargetsToP4delta`). The all-excluded answer is still this
-      // layer's: an entry the user excluded outright is not something either
-      // engine should collect.
-      if (target.reconcileUsesP4delta && canHandTargetsToP4delta(targets)) {
-        const specs = p4deltaReconcileTargetSpecs(targets, target.reconcileExcludeDirs)
-        if (specs.length === 0) {
-          await notifyAllExcluded()
-          return
-        }
-        await target.reconcile(specs)
-        return
-      }
-      const carved = await carveReconcileTargets(targets, target.reconcileExcludeDirs)
-      await warnUnreadableCarves(carved.unreadableDirs)
-      if (carved.specs.length === 0) {
-        // An empty carve after a read failure is not "everything is excluded" —
-        // `warnUnreadableCarves` already reported what actually happened, and
-        // claiming the config hid these files would send the user to the wrong
-        // setting.
-        if (carved.unreadableDirs.length === 0) await notifyAllExcluded()
-        return
-      }
-      await target.reconcile(carved.specs)
-    }
     const collectScope = async (): Promise<void> => {
-      if (options.scopeTargets !== undefined) {
-        await collectCarved(options.scopeTargets)
+      const collectLabel = localize('perforce.act.collect', 'Collecting changes')
+      // The get itself ran with no noise (a get is about the daily scope, and
+      // the setting has no say in what a sync transfers) — the COLLECT is a
+      // write over files nobody has collected yet, so it is where the noise
+      // applies. Targets this get named itself are the user's own selection and
+      // get the dialog; the daily range is a discovery answer and is pruned
+      // silently.
+      if (collectTargets !== undefined) {
+        await runCollect(target, collectTargets, collectLabel, 'explicit', {
+          ...(overrideScope ? { overrideScope: true } : {}),
+        })
         return
       }
-      const scope = options.scope
-      if (scope !== undefined && scope.length > 0) {
+      const askedScope = options.scope
+      if (askedScope !== undefined && askedScope.length > 0) {
         // Graph depot-syntax scopes (`//...`) and the timeline's single-file
-        // scope pass through untouched: local exclude directories cannot trim a
-        // depot filespec, so carving them is out of scope on purpose.
-        await target.reconcile(scope)
+        // scope pass through untouched: they are p4's own grammar, named by the
+        // caller, and a local exclude directory cannot trim a depot filespec.
+        await target.reconcile({ specs: askedScope })
         return
       }
-      // `syncScopeDirs` is empty until a scope is configured, while `syncScopes`
-      // still defaults to `//...` — collect that verbatim (same reason as the
-      // depot-syntax branch above) instead of letting an empty carve look like
-      // "everything is excluded".
-      const dirs = target.syncScopeDirs
-      if (dirs.length === 0) {
-        await target.reconcile(target.syncScopes)
+      // The daily scope is the range a scope-less get was bounded by, so that is
+      // what it must collect — as TARGETS, not a `<dir>/...` expansion of it: the
+      // write derives its own filespecs from them under the config in force at
+      // that instant (δ applies the exclusions inside its call, native carves
+      // them out on disk). A scope that cannot be expressed as host paths leaves
+      // nothing to collect beyond the refresh that already ran.
+      const daily = target.dailyScope
+      if (daily !== undefined) {
+        await runCollect(target, scopeTargets(daily), collectLabel, 'discovery')
         return
       }
-      await collectCarved(dirs.map((d) => ({ path: d, isDirectory: true })))
+      // No resolved daily scope. `syncScopes` is the whole client root in that
+      // state, and the exclusions the scope declares are exactly what is unknown
+      // about it — collecting it would open files the scope shields (the config
+      // file above all) on behalf of a range the editor cannot vouch for. The
+      // depot spellings are the caller's own explicit range and pass through.
+      const scopes = target.syncScopes
+      if (target.scopeState !== 'ready' && !scopes.every((spec) => spec.startsWith('//'))) {
+        log(
+          '[perforce] collect: refused — the daily scope is not resolved, so there is no range to collect',
+        )
+        await window.showWarningMessage(
+          localize(
+            'perforce.scope.refused',
+            'The {0} operation was not run: {1}. Nothing was changed.',
+            {
+              0: localize('perforce.act.collect', 'Collecting changes'),
+              1:
+                target.scopeUnusableReason ??
+                'the daily scope is not resolved, so there is no range to collect',
+            },
+          ),
+        )
+        return
+      }
+      await target.reconcile({ specs: scopes })
     }
     if (!res.ok) {
       const suggestion = res.error?.suggestion
@@ -1327,7 +1698,18 @@ export async function activate(context: ExtensionContext): Promise<void> {
             scopeTextOf(effectiveSyncScope(options.scope, target.syncScopes)),
           ))
         ) {
-          await runSync(target, spec, { ...options, force: true })
+          // The retry re-enters the same gate with the scope this call settled
+          // on — so a scope change between the two runs is re-checked rather
+          // than assumed — while the override the user already granted is
+          // carried over instead of asked for twice.
+          await runSync(target, spec, {
+            ...options,
+            force: true,
+            scopeTargets: ledgerScope,
+            ledgerScope,
+            ...(scope !== undefined ? { scope } : {}),
+            ...(overrideScope ? { overrideScope: true } : {}),
+          })
         }
         return
       }
@@ -1351,25 +1733,69 @@ export async function activate(context: ExtensionContext): Promise<void> {
     // position worth knowing, but a run whose outcome p4 never made legible
     // ("exit 0, nothing applied, no up-to-date line") is not — it could mean
     // anything, so nothing is recorded rather than a guess.
+    // The claim the ledger may write is about the range the get ACTUALLY
+    // covered — the daily scope for a get the editor bounded by it (a scope-less
+    // get derives its targets FROM it) — and only when that range is expressible
+    // as host-path entries with no exclusion hole inside any of them: the entry
+    // `<P>/...` over a scope that excludes `P/gen` would claim `P/gen` too,
+    // which no get has ever touched.
+    //
+    // There is no engine echo to prefer any more: δ reads the same config from
+    // the same fixed location, so the LOCAL resolution IS the range both sides
+    // ran over (an external edit inside the spawn window is not something either
+    // side can promise away, and the plan deliberately adds no handshake for it).
+    //
+    // A get that named its own range is NOT bounded by the daily scope, so
+    // intersecting it there would record a narrower range than p4 walked:
+    // `//...` is the whole client mapping, and a target the user confirmed out
+    // of scope runs as chosen. The whole-repo graph then has no record covering
+    // it at all and badges "click to query" straight after its own get.
+    const explicitScope = options.scope !== undefined && options.scope.length > 0
+    const claimSource = explicitScope ? undefined : target.dailyScope
+    const claim =
+      claimSource !== undefined
+        ? scopeTargetsWithin(claimSource, ledgerScope)
+        : // No scope to intersect with: the named targets ARE the range p4 ran
+          // over, so they are the claim.
+          ledgerScope
     if (summary?.upToDate === true || !nothingHappened) {
-      await recordSyncPoint(
-        target,
-        spec,
-        options.ledgerScope,
-        {
-          // A run that refused or skipped files leaves them at their OLD revision,
-          // so the scope is only known to be synced AT LEAST this far. Recorded
-          // either way — "I pulled it, why is nothing shown?" is worse than a
-          // labelled upper bound — but the label has to survive to the badge.
-          complete:
-            summary !== undefined &&
-            summary.refusedModified === 0 &&
-            summary.refusedOverwrite === 0 &&
-            summary.keptOpen === 0 &&
-            summary.mustResolve === 0,
-        },
-        options.knownLanding,
-      )
+      if (claim !== undefined) {
+        await recordSyncPoint(
+          target,
+          spec,
+          claim,
+          {
+            // A run that refused or skipped files leaves them at their OLD revision,
+            // so the scope is only known to be synced AT LEAST this far. Recorded
+            // either way — "I pulled it, why is nothing shown?" is worse than a
+            // labelled upper bound — but the label has to survive to the badge.
+            complete:
+              summary !== undefined &&
+              summary.refusedModified === 0 &&
+              summary.refusedOverwrite === 0 &&
+              summary.keptOpen === 0 &&
+              summary.mustResolve === 0,
+          },
+          options.knownLanding,
+        )
+      } else {
+        // The get's range cannot be stated as a claim at all (a directory with a
+        // hole). Nothing may be recorded FOR it, but an older record over the
+        // same area may now be false — and only a get that could have carried a
+        // file BACKWARD can have done that, so a head get (or a per-file
+        // `#head`) leaves the older records standing as the lower bounds they
+        // are. The floor carries that distinction into the ledger, which is also
+        // what decides which of them is retired.
+        const floor = syncFloorOf(spec, buildSyncFilespecs(ledgerScope))
+        if (floor !== NO_REGRESSION && ledger !== undefined) {
+          ledger.recordUnknown(target.root, ledgerScope, Date.now(), 'sync', floor)
+          log(
+            `[perforce] sync ledger: the range of ${scopeTextOf(
+              buildSyncFilespecs(ledgerScope),
+            )} is not expressible with its exclusions; recorded as unknown (floor=${floor})`,
+          )
+        }
+      }
     }
     if (summary?.upToDate && nothingHappened) {
       await window.showInformationMessage(
@@ -1489,14 +1915,15 @@ export async function activate(context: ExtensionContext): Promise<void> {
    * The scope a scope-less get really covers — for the sync ledger.
    *
    * It is NOT the client root: with no explicit scope, `PerforceClient.sync`
-   * targets `_syncScopes`, which is the opened workspace folder
-   * (`workspace.focusFolders` when configured) and only falls back to `//...`
-   * when no folder is open. Recording the client root here would badge a
-   * whole-repo graph with the newest changelist of the whole client, which the
-   * get never touched — the same over-report the probe's own scope rule exists
-   * to prevent (see `docs/graph.md`, "本地同步点"). The reverse is just as bad:
-   * the get's real scope would then be answered from a wider record and shown as
-   * an upper bound instead of the exact point it is.
+   * targets `_syncScopes`, the DAILY scope's own entries (the opened workspace
+   * ∩ `.p4delta-scope`), and only falls back to the client root when that
+   * scope has no directory entry at all. Focus is deliberately NOT part of it.
+   * Recording the client root here would badge a whole-repo graph with the
+   * newest changelist of the whole client, which the get never touched — the
+   * same over-report the probe's own scope rule exists to prevent (see
+   * `docs/graph.md`, "本地同步点"). The reverse is just as bad: the get's real
+   * scope would then be answered from a wider record and shown as an upper
+   * bound instead of the exact point it is.
    */
   const scopeLessLedgerScope = (target: PerforceClient): SyncScopeTarget[] => {
     const dirs = target.syncScopeDirs
@@ -1547,7 +1974,8 @@ export async function activate(context: ExtensionContext): Promise<void> {
           context.subscriptions.push(timelineProvider.trackClient(c))
         },
         applyScopes: applyReconcileScope,
-        applyExcludes: applyReconcileExcludes,
+        applyDailyScope,
+        applyReconcileExcludes,
         applyOpenedByOthersOptions,
         applySyncParallelThreads,
         startPolling: (c, seconds) => c.startPolling(seconds),
@@ -1605,6 +2033,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
             {
               log,
               watchRoot: root,
+              workspaceRoot: root,
               createFileSystemWatcher: (glob) => workspace.createFileSystemWatcher(glob),
               // The decision the initial client was built with (refreshed on
               // config changes): a switched workspace gets the same engine.
@@ -1624,6 +2053,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
     commands.registerCommand('perforce.reconcile', async (...args: unknown[]) => {
       const arg0 = args[0] as { isDirectory?: boolean } | undefined
       const selection = selectionTargets(args[1])
+      const collectLabel = localize('perforce.act.collect', 'Collecting changes')
       // Group header of the Changes (reconcile) group: collect every drift row
       // the group shows. The header arg carries no resourceUri — file rows in
       // that same group DO carry one and keep their per-path handling below.
@@ -1633,68 +2063,55 @@ export async function activate(context: ExtensionContext): Promise<void> {
         if (!client) return
         const paths = client.driftGroupPaths()
         if (paths.length === 0) return
-        await client.reconcile(paths)
+        // The rows are files this client's own scan produced — a discovery
+        // answer, not a selection — so the exclusions prune it silently (they
+        // already pruned the scan). The typed targets are the rows' own: the
+        // client's scope check is about targets, and a row whose name p4 escapes
+        // (`a@b.txt` travels as `a%40b.txt`) must not read as "unconstrained".
+        await runCollect(
+          client,
+          paths.map((path) => ({ path, isDirectory: false })),
+          collectLabel,
+          'discovery',
+        )
         return
       }
-      // Explorer multi-select: one filespec per element, directories carved
-      // around excluded subtrees — unless the engine is δ, which takes the
-      // exclusions as entries of the same call (see `collectCarved`). SCM folder
-      // rows keep the single recursive `<dir>/...` filespec (see
-      // reconcileUsesSelection).
+      // Explorer multi-select: the raw typed targets go to the client together
+      // with this operation's exclusions (see `runCollectOperation`) — carve or δ
+      // is the client's call, made at execution time. SCM folder rows keep the
+      // single recursive `<dir>/...` filespec (see reconcileUsesSelection).
       if (reconcileUsesSelection(selection, arg0?.isDirectory === true)) {
         const client = mgr.resolveClient({ resourceUri: selection[0]!.path })
         if (!client) return
-        const remaining = filterReconcileTargets(selection, (p) =>
-          client.isReconcileTargetExcluded(p),
-        )
-        if (remaining.length === 0) {
-          await notifyAllExcluded()
-          return
-        }
-        if (client.reconcileUsesP4delta && canHandTargetsToP4delta(remaining)) {
-          const specs = p4deltaReconcileTargetSpecs(remaining, client.reconcileExcludeDirs)
-          if (specs.length === 0) {
-            await notifyAllExcluded()
-            return
-          }
-          await client.reconcile(specs)
-          return
-        }
-        const carved = await carveReconcileTargets(remaining, client.reconcileExcludeDirs)
-        await warnUnreadableCarves(carved.unreadableDirs)
-        if (carved.specs.length === 0) {
-          if (carved.unreadableDirs.length === 0) await notifyAllExcluded()
-          return
-        }
-        await client.reconcile(carved.specs)
+        const targets: SyncScopeTarget[] = selection.map((t) => ({
+          path: t.path,
+          isDirectory: t.isDirectory,
+        }))
+        // The scope gate answers the range question and the noise gate the
+        // setting's; both put what they find to the user instead of dropping it,
+        // and neither confirmation covers the other.
+        const decision = await confirmScopeTargets(client, targets, collectLabel)
+        if (!decision.ok) return
+        await runCollect(client, decision.targets, collectLabel, 'explicit', {
+          ...(decision.override ? { overrideScope: true } : {}),
+        })
         return
       }
       const path = await resolveTargetPath(args[0])
       if (!path) return
       const client = mgr.resolveClient({ resourceUri: path })
       if (!client) return
-      if (client.isReconcileTargetExcluded(path)) {
-        await notifyAllExcluded()
-        return
-      }
       const isDirectory = arg0?.isDirectory === true
-      // The δ fork needs the same metacharacter gate as the multi-select one
-      // above: a path δ's grammar cannot read must be carved, not handed over
-      // (see `canHandTargetsToP4delta` for why that is data loss).
-      const handToP4delta =
-        isDirectory &&
-        client.reconcileUsesP4delta &&
-        canHandTargetsToP4delta([{ path, isDirectory }])
-      if (isDirectory && !handToP4delta && client.containsAnyReconcileExclude(path)) {
-        const carved = await carveReconcileFilespecs(path, client.reconcileExcludeDirs)
-        if (carved === undefined) {
-          await warnUnreadableCarves([path])
-          return
-        }
-        await client.reconcile(carved)
-        return
-      }
-      await client.reconcile([buildScopeFilespec(path, isDirectory)])
+      const single: SyncScopeTarget[] = [{ path, isDirectory }]
+      const decision = await confirmScopeTargets(client, single, collectLabel)
+      if (!decision.ok) return
+      // Everything below runs over the DECISION's targets, never the raw path:
+      // "obey" can narrow a directory into the part that is in range (a scope
+      // with two includes can even split one directory in two), and running the
+      // raw spelling afterwards would reach past the range the user just chose.
+      await runCollect(client, decision.targets, collectLabel, 'explicit', {
+        ...(decision.override ? { overrideScope: true } : {}),
+      })
     }),
 
     // Collect the selected not-yet-opened files into a brand-new numbered
@@ -1704,6 +2121,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
     // open yet, so `reopen` would no-op on them; `reconcile -c` opens them for
     // their on-disk action straight into the new changelist.
     commands.registerCommand('perforce.reconcileIntoNewChangelist', async (...args: unknown[]) => {
+      const intoLabel = localize('perforce.act.newChangelist', 'Collecting into a new changelist')
       // Group header of the Changes (reconcile) group: collect every drift row
       // the group shows into the new changelist. The header arg carries no
       // resourceUri — file rows keep their per-path resolution below.
@@ -1713,26 +2131,53 @@ export async function activate(context: ExtensionContext): Promise<void> {
         if (!target) return
         const paths = target.driftGroupPaths()
         if (paths.length === 0) return
+        // The rows are this client's own scan output, so the exclusions prune
+        // them silently — but the freeze still has to happen before the input
+        // box and the changelist write, or a setting edited in that gap would
+        // slip under the plan.
+        const plan = await planCollect(
+          target,
+          paths.map((path) => ({ path, isDirectory: false })),
+          intoLabel,
+          'discovery',
+        )
+        if (plan === undefined) return
         const description = await window.showInputBox({
           prompt: localize('perforce.newChangelist.prompt', 'New changelist description'),
         })
         if (description === undefined) return
         const created = await target.newChangelist(description)
         if (!created) return
-        await target.reconcileInto(created, paths)
+        await runCollectPlan(target, plan, { changelist: created })
         return
       }
       const paths = await resolveTargetPaths(args)
       if (paths.length === 0) return
       const target = mgr.resolveClient({ resourceUri: paths[0]! })
       if (!target) return
+      // Same explicit-target gates as `perforce.reconcile`: a collect narrows
+      // silently on its own (δ intersects the request), and a file outside the
+      // daily scope — or hidden by the reconcile exclusions — is the user's
+      // call, not the editor's. Both run BEFORE the input box, so a cancelled
+      // dialog leaves no empty changelist behind.
+      const decision = await confirmScopeTargets(
+        target,
+        paths.map((path) => ({ path, isDirectory: false })),
+        intoLabel,
+      )
+      if (!decision.ok) return
+      const plan = await planCollect(target, decision.targets, intoLabel, 'explicit')
+      if (plan === undefined) return
       const description = await window.showInputBox({
         prompt: localize('perforce.newChangelist.prompt', 'New changelist description'),
       })
       if (description === undefined) return
       const created = await target.newChangelist(description)
       if (!created) return
-      await target.reconcileInto(created, paths)
+      await runCollectPlan(target, plan, {
+        changelist: created,
+        ...(decision.override ? { overrideScope: true } : {}),
+      })
     }),
 
     // --- Sync (get revision) ------------------------------------------------
@@ -2095,6 +2540,13 @@ export async function activate(context: ExtensionContext): Promise<void> {
       // else goes per-file, with directory entries merged into `directories`.
       let plan: RevertPlan
       let target: PerforceClient | undefined
+      // The targets the CLEAN half was named over, for the scope gate below.
+      // Only the two callers that named a working-tree range set it: a whole-CL
+      // revert is `p4 revert` over files the user sees open (its clean half is
+      // empty by construction), and the Changes-group header IS the scope's own
+      // drift list — the group's collect does not put those rows to the user
+      // either.
+      let cleanTargets: readonly SyncScopeTarget[] | undefined
       const revertGroupId = (args[0] as { scmResourceGroupId?: string } | undefined)
         ?.scmResourceGroupId
       if (revertGroupId === RECONCILE_GROUP_ID && resourcePath(args[0]) === undefined) {
@@ -2162,6 +2614,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
           directories: [dir],
           ...(tree.unknown ? { openedUnknown: true } : {}),
         }
+        cleanTargets = [{ path: dir, isDirectory: true }]
       } else {
         const files = selection.filter((t) => !t.isDirectory).map((t) => t.path)
         const dirs = selection
@@ -2185,66 +2638,168 @@ export async function activate(context: ExtensionContext): Promise<void> {
           }
           plan = { ...plan, directories: dirs, ...(tree.unknown ? { openedUnknown: true } : {}) }
         }
+        cleanTargets = [
+          ...dirs.map((dir) => ({ path: dir, isDirectory: true })),
+          ...plan.unopened.map((path) => ({ path, isDirectory: false })),
+        ]
       }
 
-      // Exclusions gate `p4 clean` only: it rediscovers working-tree drift,
-      // which is exactly what the exclude folders hide. `p4 revert` acts on
-      // files the user explicitly collected and already sees in the SCM panel,
-      // so it stays unfiltered. Resolved *before* the confirm on purpose — a
-      // dialog that promises to discard uncollected work must not then keep it.
-      let cleanOverride: string[] | undefined
-      let carveFailed = false
-      plan.unopened = plan.unopened.filter((p) => !target.isReconcileTargetExcluded(p))
-      const dirs = plan.directories
-      if (dirs !== undefined && dirs.length > 0) {
-        const kept: string[] = []
-        const unreadable: string[] = []
-        // The δ gate is per CALL, not per directory: `cleanOverride` goes to ONE
-        // `p4 clean`, and if any entry sends that call native (the client's
-        // reject, `canHandTargetsToP4delta`) the δ-form entries in it would
-        // lose their exclusions — so the whole set is either handed over
-        // uncarved or carved, never mixed.
-        const handToP4delta =
-          target.reconcileUsesP4delta &&
-          canHandTargetsToP4delta([
-            ...dirs.map((dir) => ({ path: dir, isDirectory: true })),
-            ...plan.unopened.map((path) => ({ path, isDirectory: false })),
-          ])
-        for (const dir of dirs) {
-          if (target.isReconcileTargetExcluded(dir)) continue
-          // δ answers the whole directory and applies the exclusions itself
-          // (they ride along as scope entries of the clean call), so nothing is
-          // carved for it — the same fork the collect paths make.
-          if (!handToP4delta && target.containsAnyReconcileExclude(dir)) {
-            const carved = await carveReconcileFilespecs(dir, target.reconcileExcludeDirs)
-            if (carved === undefined) {
-              unreadable.push(dir)
-              carveFailed = true
-              continue
-            }
-            kept.push(...carved)
-          } else {
-            kept.push(buildScopeFilespec(dir, true))
+      // `p4 clean` rediscovers working-tree drift — exactly what the reconcile
+      // exclusions hide — while `p4 revert` acts on files the user explicitly
+      // collected and already sees in the SCM panel, so only the clean half is
+      // gated. Both gates run BEFORE the destructive confirm: a dialog that
+      // promises to discard uncollected work must not then keep it, and one that
+      // says nothing about it must not discard it either.
+      const cleanLabel = localize('perforce.act.clean', 'Cleaning files')
+      /** The gated clean, held across the confirm dialog: its rules were read
+       *  once, before the user answered anything. */
+      let cleanPlan: CollectPlan | undefined
+      let cleanRunAsChosen = false
+      // The gate answers about the CLEAN half's range, so a "no" there (a
+      // dismissed dialog, or "obey" with nothing of that range left) drops the
+      // clean — it must not cancel the `p4 revert` half, which acts on files the
+      // user already sees open and which the exclusions were never about.
+      let cleanDropped = false
+      if (cleanTargets !== undefined && cleanTargets.length > 0) {
+        const decision = await confirmScopeTargets(target, cleanTargets, cleanLabel)
+        if (!decision.ok) {
+          cleanDropped = true
+          // The plan must drop them too, or the confirm below would promise to
+          // discard files this run will keep.
+          plan = { ...plan, unopened: [] }
+        } else if (decision.override) {
+          // "Run as chosen": the user's own answer to the RANGE question, so the
+          // clean runs over exactly the named targets — the scope's exclusions
+          // are set aside for this call (the collect paths do the same). The
+          // noise is a different setting and is NOT set aside with it: the gate
+          // below still runs, and its rules still apply.
+          cleanRunAsChosen = true
+        } else if (decision.targets !== cleanTargets) {
+          // Obey: the PLAN narrows, so the confirm below names what will
+          // actually be discarded — a plan left at its full width while the run
+          // uses a narrower one is the same broken promise the noise gate
+          // refuses, in the other direction.
+          plan = {
+            ...plan,
+            unopened: decision.targets.filter((t) => !t.isDirectory).map((t) => t.path),
+            directories: decision.targets.filter((t) => t.isDirectory).map((t) => t.path),
           }
         }
-        if (unreadable.length > 0) await warnUnreadableCarves(unreadable)
-        plan.unopenedExcluded = kept.length === 0
-        cleanOverride = [...kept, ...plan.unopened]
+        if (!cleanDropped) {
+          cleanPlan = await planCollect(
+            target,
+            [
+              ...(plan.directories ?? []).map(
+                (dir): SyncScopeTarget => ({ path: dir, isDirectory: true }),
+              ),
+              ...plan.unopened.map((path): SyncScopeTarget => ({ path, isDirectory: false })),
+            ],
+            cleanLabel,
+            'explicit',
+          )
+          if (cleanPlan === undefined) {
+            // Cancelled, or every clean target is hidden: the clean half is
+            // dropped, the revert half stands.
+            cleanDropped = true
+            plan = { ...plan, unopened: [] }
+          }
+        }
+      } else {
+        // No clean range was named (see `cleanTargets`): the rows are already
+        // the scope's own answer, so an entry the current scope or the
+        // exclusions cover is dropped here instead of being put to the user.
+        // The filter also keeps a stale drift row from making the client refuse
+        // the whole clean.
+        plan.unopened = plan.unopened.filter((p) => !target.isReconcileTargetExcluded(p))
+        if (plan.unopened.length > 0) {
+          cleanPlan = await planCollect(
+            target,
+            plan.unopened.map((path): SyncScopeTarget => ({ path, isDirectory: false })),
+            cleanLabel,
+            'discovery',
+          )
+          if (cleanPlan === undefined) {
+            cleanDropped = true
+            plan = { ...plan, unopened: [] }
+          }
+        }
       }
+      // The confirm counts `plan`, the run executes `cleanRuns`, so the plan's
+      // unopened files narrow to the ones that survived both gates — a dialog
+      // that promises to discard work the clean half keeps is the one thing a
+      // destructive confirm must never do.
+      if (cleanPlan !== undefined) {
+        const kept = cleanPlan.operations.flatMap((op) => op.targets)
+        plan = { ...plan, unopened: kept.filter((t) => !t.isDirectory).map((t) => t.path) }
+        if (cleanPlan.skipped) {
+          // "Skip them" drops a target the user named: it runs nothing at all,
+          // the clean half included. The directory specs are narrowed too — they
+          // still drive `p4 revert <dir>/...`, and there is no reason to revert
+          // a directory the user just answered "skip" for. Only a failed opened
+          // query keeps them: there the subtree spec is the fail-open fallback
+          // the dialog already promised.
+          if (plan.openedUnknown !== true) {
+            plan = { ...plan, directories: kept.filter((t) => t.isDirectory).map((t) => t.path) }
+          }
+          plan.unopenedExcluded = true
+        }
+      }
+      /**
+       * The clean's runs: one per rule group (a confirmed target cannot ride in
+       * the same call as an unconfirmed one — the exclusion list is per call),
+       * each carrying the raw targets and the targets the user authorized for
+       * them. Their filespecs are NOT built here: the client derives them at
+       * execution time from the state in force then, which is the only moment
+       * that can answer for a `p4 clean` — and the same goes for the exclusions
+       * themselves, so a rule added while this dialog was up still shields its
+       * subtree from the clean.
+       */
+      const cleanRuns = (cleanPlan?.operations ?? []).map((op) => ({
+        targets: op.targets,
+        confirmedTargets: op.confirmedTargets,
+      }))
+      /**
+       * Whether the clean half runs at all: neither gate dropped it, and it has
+       * targets. No filespec list is built here — `cleanRuns` hands the client the
+       * raw targets and its rules (see above).
+       */
+      const hasClean = !cleanDropped && cleanRuns.length > 0
 
       const actions = revertActionsOf(plan)
-      if (cleanOverride !== undefined) actions.clean = cleanOverride
-      if (actions.revert.length === 0 && actions.clean.length === 0) {
-        if (!carveFailed) await notifyAllExcluded()
+      if (!hasClean) actions.clean = []
+      // The gate already reported why: an empty clean here is an answer, not a
+      // finding, and re-announcing it would read as a second failure.
+      if (actions.revert.length === 0 && !hasClean) {
+        if (!cleanDropped) await notifyAllExcluded()
         return
       }
 
       const BTN_REVERT = localize('perforce.btn.revert', 'Revert')
-      const confirm = await window.showWarningMessage(formatRevertConfirm(plan), BTN_REVERT)
+      // The clean half's files are derived at execution time, after this dialog:
+      // say so, so a scope or exclusion edited while the dialog is up is
+      // announced rather than silently obeyed.
+      const confirmText = hasClean
+        ? `${formatRevertConfirm(plan)}\n${localize(
+            'perforce.revert.confirmCurrentRules',
+            'It runs under the workspace scope and reconcile exclusions in force when it starts.',
+          )}`
+        : formatRevertConfirm(plan)
+      const confirm = await window.showWarningMessage(confirmText, BTN_REVERT)
       if (confirm !== BTN_REVERT) return
 
       if (actions.revert.length > 0) await target.revert(actions.revert)
-      if (actions.clean.length > 0) await target.revertReconcile(actions.clean)
+      for (const run of cleanRuns) {
+        const ok = await target.revertReconcile(
+          { targets: run.targets },
+          {
+            ...(cleanRunAsChosen ? { overrideScope: true } : {}),
+            ...(run.confirmedTargets.length > 0 ? { confirmedTargets: run.confirmedTargets } : {}),
+          },
+        )
+        // An apply already started: repeating it after a failure is the one
+        // thing a destructive operation must never do.
+        if (!ok) break
+      }
     }),
 
     commands.registerCommand('perforce.revertUnchanged', async (arg) => {
@@ -2420,13 +2975,38 @@ export async function activate(context: ExtensionContext): Promise<void> {
       const changelist = changelistIdFromGroupId(groupId)
       if (changelist !== 'default' && !/^\d+$/.test(changelist)) return
       const opened = paths.filter((p) => target.changelistOf(p) !== undefined)
-      // `reconcileInto` runs the same discovery the exclude folders hide, so
-      // excluded paths must not be collected here; `opened` files were
-      // explicitly collected before and `reopen` stays unfiltered (see revert).
+      // `reconcileInto` runs the same discovery the exclusions hide, so an
+      // excluded path must not be collected here. The two layers answer
+      // differently, exactly as they do in the revert pipeline: a path the
+      // workspace RANGE excludes is this row's own answer and is dropped
+      // silently, while one the reconcile NOISE covers — a path the user dragged
+      // onto a changelist themselves — is put to them ({@link planCollect}).
+      // `opened` files were explicitly collected before and `reopen` stays
+      // unfiltered (see revert).
       const uncollected = paths.filter(
-        (p) => target.changelistOf(p) === undefined && !target.isReconcileTargetExcluded(p),
+        (p) => target.changelistOf(p) === undefined && !target.isScopeTargetExcluded(p),
       )
-      if (uncollected.length > 0) await target.reconcileInto(changelist, uncollected)
+      if (uncollected.length > 0) {
+        const intoLabel = localize('perforce.act.collect', 'Collecting changes')
+        const plan = await planCollect(
+          target,
+          uncollected.map((path): SyncScopeTarget => ({ path, isDirectory: false })),
+          intoLabel,
+          'explicit',
+        )
+        // One `reconcile -c` call per rule group: a target the user confirmed
+        // through must not share a call with one that keeps the noise (the
+        // exclusion list is per call).
+        if (plan !== undefined) {
+          for (const op of plan.operations) {
+            await target.reconcileInto(
+              changelist,
+              { targets: op.targets },
+              op.confirmedTargets.length > 0 ? { confirmedTargets: op.confirmedTargets } : {},
+            )
+          }
+        }
+      }
       if (opened.length > 0) await target.reopen(changelist, opened)
     }),
 

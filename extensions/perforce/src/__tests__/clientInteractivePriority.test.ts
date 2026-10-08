@@ -13,6 +13,7 @@
 import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { P4Priority } from '../concurrency.js'
+import { clientSpecReply, isClientSpecProbe } from './discoveryProbe.js'
 
 class FakeChildProcess extends EventEmitter {
   readonly stdout = new EventEmitter()
@@ -56,6 +57,7 @@ const { ConcurrencyGate } = await import('../concurrency.js')
 type PerforceClientInstance = import('../client.js').PerforceClient
 
 const ROOT = process.platform === 'win32' ? 'C:\\ws' : '/ws'
+const DISCOVERY_SPEC = clientSpecReply(ROOT)
 const FILE = process.platform === 'win32' ? 'C:/ws/tracked.txt' : '/ws/tracked.txt'
 const DEPOT = '//depot/tracked.txt'
 
@@ -260,7 +262,9 @@ describe('interactive p4 reads dispatch with priority interactive', () => {
         queueMicrotask(() => {
           const cmd = subcommand(argv)
           let stdout = ''
-          if (cmd === 'info') {
+          if (isClientSpecProbe(argv)) {
+            stdout = DISCOVERY_SPEC
+          } else if (cmd === 'info') {
             stdout = `... clientName testclient\n... clientRoot ${ROOT}\n... userName bob\n\n`
           } else if (cmd && c.seed?.[cmd]) {
             stdout = c.seed[cmd]!

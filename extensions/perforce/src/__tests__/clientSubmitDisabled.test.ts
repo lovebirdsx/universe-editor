@@ -6,6 +6,7 @@
  */
 import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { clientSpecReply, isClientSpecProbe } from './discoveryProbe.js'
 
 class FakeChildProcess extends EventEmitter {
   readonly stdout = new EventEmitter()
@@ -82,6 +83,7 @@ const { PerforceClient } = await import('../client.js')
 const { ConcurrencyGate } = await import('../concurrency.js')
 
 const ROOT = process.platform === 'win32' ? 'C:\\ws' : '/ws'
+const DISCOVERY_SPEC = clientSpecReply(ROOT)
 const CLIENT = 'testclient'
 
 /** `p4 -Mj opened` record: one edit. `change` swaps between `default` and a
@@ -113,7 +115,9 @@ function subcommand(argv: string[]): string | undefined {
 function finish(child: FakeChildProcess, argv: string[]): void {
   const cmd = subcommand(argv)
   let stdout = ''
-  if (cmd === 'info') {
+  if (isClientSpecProbe(argv)) {
+    stdout = DISCOVERY_SPEC
+  } else if (cmd === 'info') {
     stdout = `... clientName ${CLIENT}\n... clientRoot ${ROOT}\n... userName bob\n\n`
   } else if (cmd === 'opened') {
     stdout = openedStdout

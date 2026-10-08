@@ -8,6 +8,7 @@ import {
   NO_REGRESSION,
   scopeCovers,
   scopeIdentity,
+  UNKNOWN_SYNC_POINT,
   type SyncLedgerRecord,
 } from '../graphSyncLedger.js'
 
@@ -286,6 +287,86 @@ describe('GraphSyncLedger', () => {
     ledger.record(record([CLIENT_ROOT], '8793700', 100))
     ledger.record(record([SRC], '8793491', 200, { floor: 8793700 }))
     expect(ledger.lookup(ROOT, [CLIENT_ROOT])?.record.change).toBe('8793700')
+  })
+
+  it('records an unknown range as no answer, retiring older wider records by newness', () => {
+    // The shape a scope-change fallback sync writes: the engine could not state
+    // what it covered, so nothing may keep answering from before it.
+    const ledger = GraphSyncLedger.open(dir)!
+    ledger.record(record([CLIENT_ROOT], '4522', 100))
+    ledger.record(record([OTHER], '4500', 50))
+    expect(ledger.lookup(ROOT, [SRC])?.record.change).toBe('4522')
+
+    ledger.recordUnknown(ROOT, [SRC], 200, 'sync', 4522)
+
+    // The unknown entry IS the newest claim about this area, so a query inside
+    // it gets no answer from the ledger — the graph offers its own query.
+    expect(ledger.lookup(ROOT, [SRC])).toBeUndefined()
+    expect(ledger.lookup(ROOT, [SRC_A])).toBeUndefined()
+    // A scope the unknown range does not touch keeps answering — here from the
+    // wide record, which the unknown's floor does not retire (it claims exactly
+    // the changelist the operation could have reached back to).
+    expect(ledger.lookup(ROOT, [OTHER])?.record.change).toBe('4522')
+  })
+
+  it('retires an older wider record whose claim the unknown range could have moved past', () => {
+    const ledger = GraphSyncLedger.open(dir)!
+    ledger.record(record([CLIENT_ROOT], '9000000', 100))
+    ledger.recordUnknown(ROOT, [SRC], 200, 'sync', 4522)
+    // The wide record claimed a changelist above the point the operation could
+    // have pulled files back to, and the unknown range lives inside it: its claim
+    // may be false now, so it stops answering anything.
+    expect(ledger.lookup(ROOT, [CLIENT_ROOT])).toBeUndefined()
+    expect(ledger.lookup(ROOT, [SRC])).toBeUndefined()
+    // …but only the CLAIM is dropped. The evidence (this scope really was at
+    // 9000000 once) is what keeps a later, lower record honest.
+    const stored = JSON.parse(readFileSync(join(dir, 'graphSyncLedger.json'), 'utf8')) as {
+      records: SyncLedgerRecord[]
+    }
+    expect(stored.records.map((r) => r.change)).toEqual([UNKNOWN_SYNC_POINT])
+  })
+
+  it('keeps an older wider record at or below the unknown range’s floor', () => {
+    const ledger = GraphSyncLedger.open(dir)!
+    ledger.record(record([CLIENT_ROOT], '4522', 100))
+    ledger.recordUnknown(ROOT, [SRC], 200, 'sync', 4522)
+    // Nothing this operation could have done moves a file below 4522, so the wide
+    // claim is still a valid lower bound — the ordinary floor rule, unchanged.
+    expect(ledger.lookup(ROOT, [CLIENT_ROOT])?.record.change).toBe('4522')
+  })
+
+  it('suppresses an older external record over the same area', () => {
+    const ledger = GraphSyncLedger.open(dir)!
+    const external = [record([CLIENT_ROOT], '8793700', 150, { source: 'external' })]
+    expect(ledger.lookup(ROOT, [SRC], external)?.record.change).toBe('8793700')
+
+    ledger.recordUnknown(ROOT, [SRC], 200, 'sync', 4522)
+
+    // Newness decides, whichever file the record came from: a tool outside the
+    // editor cannot keep claiming a scope this operation just invalidated.
+    expect(ledger.lookup(ROOT, [SRC], external)).toBeUndefined()
+  })
+
+  it('lets a later real answer supersede the unknown event', () => {
+    const ledger = GraphSyncLedger.open(dir)!
+    ledger.recordUnknown(ROOT, [SRC], 200, 'sync', 4522)
+    expect(ledger.lookup(ROOT, [SRC])).toBeUndefined()
+
+    ledger.record(record([SRC], '4560', 300))
+    expect(ledger.lookup(ROOT, [SRC])?.record.change).toBe('4560')
+  })
+
+  it('an unknown event is not an empty answer — the next load cannot read it as "nothing synced"', () => {
+    const ledger = GraphSyncLedger.open(dir)!
+    ledger.recordUnknown(ROOT, [SRC], 200, 'sync', 4522)
+    const reopened = GraphSyncLedger.open(dir)!
+    expect(reopened.lookup(ROOT, [SRC])).toBeUndefined()
+    // …and it stays an unknown marker in the file, not an empty one: the two
+    // suppress a lookup alike but mean opposite things to the floor rule.
+    const stored = JSON.parse(readFileSync(join(dir, 'graphSyncLedger.json'), 'utf8')) as {
+      records: SyncLedgerRecord[]
+    }
+    expect(stored.records.map((r) => r.change)).toEqual([UNKNOWN_SYNC_POINT])
   })
 
   it('retires a wider record a get behind its changelist reached into', () => {

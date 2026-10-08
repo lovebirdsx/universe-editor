@@ -499,6 +499,29 @@ function main() {
       return 0
     }
 
+    case 'client': {
+      // `p4 client -o`: the client spec, whose `Root` is the FIXED root — the one
+      // discovery cross-checks the cwd-dependent `p4 info` `clientRoot` against
+      // (they disagree exactly when the folder sits on an AltRoot). This fake
+      // models the single-Root reality: its state carries one root, and every
+      // folder inside it reports that root from `info` too.
+      const fields = {
+        Client: state.client,
+        Owner: state.user,
+        Root: state.clientRoot,
+        Options: 'noallwrite noclobber nocompress unlocked nomodtime rmdir',
+        SubmitOptions: 'submitunchanged',
+        LineEnd: 'local',
+      }
+      const text = Object.entries(fields)
+        .map(([k, v]) => `${k}: ${v}`)
+        .join('\n')
+      if (mode === 'mj') emitMj([{ data: text, level: 0 }])
+      else if (mode === 'ztag') emitZtag([fields])
+      else process.stdout.write(`${text}\n`)
+      return 0
+    }
+
     case 'opened': {
       const all = rest.includes('-a')
       const max = argAfter(rest, '-m')

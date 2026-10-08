@@ -51,6 +51,12 @@ const workspaceMock = vi.hoisted(() => {
     getConfiguration: vi.fn(() => ({ get })),
     onDidChangeConfiguration: vi.fn(() => ({ dispose: vi.fn() })),
     registerTimelineProvider: vi.fn(() => ({ dispose: vi.fn() })),
+    createFileSystemWatcher: vi.fn(() => ({
+      onDidCreate: vi.fn(() => ({ dispose: vi.fn() })),
+      onDidChange: vi.fn(() => ({ dispose: vi.fn() })),
+      onDidDelete: vi.fn(() => ({ dispose: vi.fn() })),
+      dispose: vi.fn(),
+    })),
   }
 })
 
@@ -59,6 +65,13 @@ vi.mock('@universe-editor/extension-api', () => ({
   window: windowMock,
   workspace: workspaceMock,
   ProgressLocation: { Notification: 15 },
+  FileType: { File: 1, Directory: 2 },
+  RelativePattern: class {
+    constructor(
+      readonly base: unknown,
+      readonly pattern: string,
+    ) {}
+  },
 }))
 
 /** Only what `activate` and the sync-point command touch; the rest are no-op
@@ -83,13 +96,27 @@ function makeFakeClient(root: string) {
     setReconcileLimit: vi.fn(),
     setOpenedByOthersOptions: vi.fn(),
     setSyncParallelThreads: vi.fn(),
-    setSyncScope: vi.fn(),
-    setReconcileExcludes: vi.fn(),
     dispose: vi.fn(),
     cancelBusy: vi.fn(),
     reconcile: vi.fn(async () => {}),
     runReconcileScan: vi.fn(),
     getConfiguration: vi.fn(() => ({ get })),
+    // The daily scope surface `activate` applies and the command layer reads.
+    refreshScope: vi.fn(async () => 'ready'),
+    setScopeNoticeHandler: vi.fn(),
+    invalidateScope: vi.fn(),
+    scopeState: 'ready',
+    scopeUnusableReason: undefined,
+    dailyScope: undefined,
+    reconcileExcludeDirs: [] as readonly string[],
+    reconcileExcludeFiles: [] as readonly string[],
+    scopeExcludeDirs: [] as readonly string[],
+    reconcileNoise: { dirs: [] as readonly string[], files: [] as readonly string[] },
+    setReconcileExcludes: vi.fn(),
+    nativeWriteReject: vi.fn(() => undefined),
+    isReconcileTargetExcluded: vi.fn(() => false),
+    driftGroupPaths: vi.fn(() => []),
+    reconcileUsesP4delta: false,
   }
 }
 

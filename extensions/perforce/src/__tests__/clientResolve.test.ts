@@ -8,6 +8,7 @@
  */
 import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { clientSpecReply, isClientSpecProbe } from './discoveryProbe.js'
 
 class FakeChildProcess extends EventEmitter {
   readonly stdout = new EventEmitter()
@@ -77,6 +78,7 @@ const { norm } = await import('../pathUtil.js')
 type PerforceClientInstance = import('../client.js').PerforceClient
 
 const ROOT = process.platform === 'win32' ? 'C:\\ws' : '/ws'
+const DISCOVERY_SPEC = clientSpecReply(ROOT)
 const CLIENT = 'testclient'
 const DEPOT = '//depot/branch_x'
 const A = process.platform === 'win32' ? 'C:/ws/a.txt' : '/ws/a.txt'
@@ -127,6 +129,9 @@ function fstatUnresolvedRecord(depotFile: string, localPath: string): string {
 /** Default responses: discovery + an empty pending set. */
 function defaultHandler(argv: string[]): { stdout: string; exit?: number } {
   const cmd = subcommand(argv)
+  if (isClientSpecProbe(argv)) {
+    return { stdout: DISCOVERY_SPEC }
+  }
   if (cmd === 'info') {
     return { stdout: `... clientName ${CLIENT}\n... clientRoot ${ROOT}\n... userName bob\n\n` }
   }
@@ -675,7 +680,12 @@ describe('openMergeEditor timeout budget (table-driven)', () => {
             held.push(child)
             return child
           }
-          if (cmd === 'info') {
+          if (isClientSpecProbe(argv)) {
+            queueMicrotask(() => {
+              child.stdout.emit('data', Buffer.from(DISCOVERY_SPEC))
+              child.emit('close', 0)
+            })
+          } else if (cmd === 'info') {
             queueMicrotask(() => {
               child.stdout.emit(
                 'data',

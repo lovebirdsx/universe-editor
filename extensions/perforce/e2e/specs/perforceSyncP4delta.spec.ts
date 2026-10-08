@@ -7,7 +7,7 @@
  *  normal get). An engine swap of a WRITE is only proven by both halves, so
  *  every journey asserts the shape of the call AND the world after it:
  *
- *    - the δ argv carries `--sync -a` and the scope the user asked for, while
+ *    - the δ argv carries `--sync -a` over the target the user asked for, while
  *      the native p4 argv log stays free of `sync` — the delegated child's env
  *      is stripped of that log, so a line there can only be the extension
  *      itself;
@@ -23,7 +23,14 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { evaluateWhenRestored, mkTempDir, type WorkbenchPO } from '@universe-editor/e2e-harness'
-import { readArgvLog, test, expect, waitForPerforceCommands } from '../fixtures/perforceApp.js'
+import {
+  readArgvLog,
+  readScopeLog,
+  test,
+  expect,
+  toPosix,
+  waitForPerforceCommands,
+} from '../fixtures/perforceApp.js'
 import type { SeedFile } from '../fixtures/perforceApp.js'
 import type { Page } from '@playwright/test'
 
@@ -60,10 +67,11 @@ const refused: SeedFile = {
 
 /** Fresh logs per journey: a shared file would make the "never asked natively"
  *  assertion depend on what the other journeys did. */
-function makeLogs(): { delta: string; p4: string } {
+function makeLogs(): { delta: string; p4: string; scope: string } {
   return {
     delta: join(mkTempDir('ue2-p4delta-argv-'), 'p4delta.log'),
     p4: join(mkTempDir('ue2-p4-argv-'), 'p4.log'),
+    scope: join(mkTempDir('ue2-p4delta-scope-'), 'scope.log'),
   }
 }
 
@@ -78,8 +86,17 @@ const deltaSyncLines = (log: string): string[] =>
 const nativeSyncLines = (log: string): string[] =>
   readArgvLog(log).filter((l) => /(^| )sync( |$)/.test(l))
 
-/** The entries of a logged argv (what followed the `--` separator). */
-const entriesOf = (line: string): string[] => line.split(' -- ')[1]?.split(' ') ?? []
+/** The RANGE δ's own get runs cover, in the `<kind>:<path>` spelling the fake
+ *  logs, compared separator-blind (`toPosix`): the extension hands local paths
+ *  in `/` spelling, the fixture's `file()` is platform spelling, and what the
+ *  assertion is about is WHICH path the engine was scoped to. The caller names
+ *  targets and the engine resolves them against the client root's config, so
+ *  `includes` is the range that survived that resolution. */
+const syncRange = (scopeLog: string): string[] =>
+  readScopeLog(scopeLog)
+    .filter((resolution) => resolution.mode === 'sync')
+    .flatMap((resolution) => resolution.includes)
+    .map((entry) => toPosix(entry))
 
 /** Open the seeded workspace, wait for the provider + command registration. */
 async function openSyncWorkspace(
@@ -107,6 +124,7 @@ test.describe('@p1 perforce p4delta get', () => {
       p4ExtraEnv: {
         UNIVERSE_P4DELTA_ARGV_LOG: logs.delta,
         UNIVERSE_P4_FAKE_ARGV_LOG: logs.p4,
+        UNIVERSE_P4DELTA_SCOPE_LOG: logs.scope,
       },
     })
 
@@ -136,18 +154,26 @@ test.describe('@p1 perforce p4delta get', () => {
       // have revision.
       expect(readFileSync(perforce.file(sibling.relPath), 'utf8')).toBe(SIBLING_HAVE)
 
-      // The shape of the call: δ got `--sync -a` over that file's own path. `-a`
-      // is what separates the write from the preview δ runs as its plan, and the
-      // entry is what keeps the run scoped to what the user asked for.
+      // The shape of the call: δ got `--sync -a` over the ONE file the user asked
+      // for, named as a positional target. `-a` is what separates the write from
+      // the preview δ runs as its plan, the target is what keeps the run scoped to
+      // that file, and `--no-scope-file` stays absent: the range was resolved WITH
+      // the config, and only a user-confirmed out-of-scope target may drop it from
+      // that resolution.
+      const target = toPosix(perforce.file(behind.relPath))
       await expect
-        .poll(
-          () =>
-            deltaSyncLines(logs.delta).filter((l) =>
-              entriesOf(l).includes(perforce.file(behind.relPath)),
-            ).length,
-          { timeout: 30_000, message: 'the get should hand δ --sync -a and the file scope' },
-        )
+        .poll(() => deltaSyncLines(logs.delta).filter((l) => l.includes(target)).length, {
+          timeout: 30_000,
+          message: 'the get should hand δ --sync -a over the file',
+        })
         .toBeGreaterThan(0)
+      expect(deltaSyncLines(logs.delta).filter((l) => l.includes('--no-scope-file'))).toEqual([])
+      await expect
+        .poll(() => syncRange(logs.scope), {
+          timeout: 30_000,
+          message: 'the get should have been scoped to the file the user asked for',
+        })
+        .toContain(`file:${toPosix(perforce.file(behind.relPath))}`)
 
       // The other engine never ran a get at all. δ still did its scans, so this
       // is not the "no engine configured" world.
@@ -170,6 +196,7 @@ test.describe('@p1 perforce p4delta get', () => {
       p4ExtraEnv: {
         UNIVERSE_P4DELTA_ARGV_LOG: logs.delta,
         UNIVERSE_P4_FAKE_ARGV_LOG: logs.p4,
+        UNIVERSE_P4DELTA_SCOPE_LOG: logs.scope,
       },
     })
 

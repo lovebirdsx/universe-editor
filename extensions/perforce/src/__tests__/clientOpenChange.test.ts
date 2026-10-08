@@ -10,6 +10,7 @@
  */
 import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { clientSpecReply, isClientSpecProbe } from './discoveryProbe.js'
 
 class FakeChildProcess extends EventEmitter {
   readonly stdout = new EventEmitter()
@@ -65,6 +66,7 @@ const { PerforceClient } = await import('../client.js')
 const { ConcurrencyGate } = await import('../concurrency.js')
 
 const ROOT = process.platform === 'win32' ? 'C:\\ws' : '/ws'
+const DISCOVERY_SPEC = clientSpecReply(ROOT)
 const LOCAL = process.platform === 'win32' ? 'C:/ws/tracked.txt' : '/ws/tracked.txt'
 const DEPOT = '//depot/tracked.txt'
 
@@ -98,6 +100,9 @@ function respond(handler: (argv: string[]) => { stdout: string; exit?: number })
 /** Default responses for discovery + a successful controlled-file diff. */
 function defaultHandler(argv: string[]): { stdout: string; exit?: number } {
   const cmd = subcommand(argv)
+  if (isClientSpecProbe(argv)) {
+    return { stdout: DISCOVERY_SPEC }
+  }
   if (cmd === 'info') {
     return { stdout: `... clientName testclient\n... clientRoot ${ROOT}\n... userName bob\n\n` }
   }
@@ -136,6 +141,7 @@ describe('PerforceClient.openChange', () => {
   it('toasts and returns without fallback when fstat fails', async () => {
     const client = await makeClient((argv) => {
       const cmd = subcommand(argv)
+      if (isClientSpecProbe(argv)) return { stdout: DISCOVERY_SPEC }
       if (cmd === 'info') return defaultHandler(argv)
       if (cmd === 'fstat') return { stdout: '', exit: 1 }
       return { stdout: '' }
@@ -152,6 +158,7 @@ describe('PerforceClient.openChange', () => {
   it('falls back to opening the file when there is no have revision', async () => {
     const client = await makeClient((argv) => {
       const cmd = subcommand(argv)
+      if (isClientSpecProbe(argv)) return { stdout: DISCOVERY_SPEC }
       if (cmd === 'info') return defaultHandler(argv)
       if (cmd === 'fstat') {
         // Controlled but no haveRev (open-for-add): the normal fallback, not a fault.

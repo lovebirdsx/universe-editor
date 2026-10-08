@@ -24,7 +24,13 @@ export interface SwitchClientWiring {
   statusBarRefresh(): void
   trackClient(client: PerforceClient): void
   applyScopes(client: PerforceClient): Promise<void>
-  applyExcludes(client: PerforceClient): Promise<void>
+  /** Resolve the daily scope (`.p4delta-scope`) for the new client — the range
+   *  every discovery, get and write is bounded by. */
+  applyDailyScope(client: PerforceClient): Promise<void>
+  /** Apply `perforce.reconcile.excludeFolders` — the reconcile noise. A client
+   *  wired without it would discover drift the setting hides until the next
+   *  config edit. */
+  applyReconcileExcludes(client: PerforceClient): Promise<void>
   applyOpenedByOthersOptions(client: PerforceClient): Promise<void>
   applySyncParallelThreads(client: PerforceClient): Promise<void>
   startPolling(client: PerforceClient, seconds: number): void
@@ -41,10 +47,9 @@ export interface SwitchedClientConfig {
  * Wire a freshly created client into the manager, mirroring activate's
  * first-client sequence. Order matters: the background-check option
  * (opened-by-others) is set BEFORE the first refresh so the check the refresh
- * tail schedules doesn't silently skip on defaulted options, and the reconcile
- * excludes ride directly after the scopes — a client wired without them would
- * scan and collect inside directories the user excluded until the next
- * config-change notification.
+ * tail schedules doesn't silently skip on defaulted options, and the daily scope
+ * is resolved right after the reconcile focus — a client wired without it would
+ * scan, hint and get over a range nobody resolved until the next config change.
  */
 export async function wireSwitchedClient(
   client: PerforceClient,
@@ -56,7 +61,8 @@ export async function wireSwitchedClient(
   wiring.statusBarRefresh()
   wiring.trackClient(client)
   await wiring.applyScopes(client)
-  await wiring.applyExcludes(client)
+  await wiring.applyDailyScope(client)
+  await wiring.applyReconcileExcludes(client)
   await wiring.applyOpenedByOthersOptions(client)
   await wiring.applySyncParallelThreads(client)
   void client.refresh()

@@ -22,9 +22,22 @@ import { join } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkTempDir } from '@universe-editor/temp-root'
 import type { SyncLedgerRecord } from '../graphSyncLedger.js'
+import type { ScopeView } from '../scope.js'
 
 const ROOT = vi.hoisted(() => 'X:/p4ws/main')
 const SRC = `${ROOT}/src`
+
+/** The daily scope of a config-less workspace opened on `src` (the synthetic
+ *  base `ScopeService` resolves to): the opened folder, no exclusions. */
+function syntheticDailyScope(): ScopeView {
+  return {
+    includes: [{ path: SRC, kind: 'directory' }],
+    excludes: [],
+    implicitExclude: null,
+    clientRoot: ROOT,
+    style: { separator: '/', foldCase: false },
+  }
+}
 
 const commandsMock = vi.hoisted(() => {
   const handlers = new Map<string, (...args: unknown[]) => unknown>()
@@ -58,6 +71,12 @@ const workspaceMock = vi.hoisted(() => {
     getConfiguration: vi.fn(() => ({ get })),
     onDidChangeConfiguration: vi.fn(() => ({ dispose: vi.fn() })),
     registerTimelineProvider: vi.fn(() => ({ dispose: vi.fn() })),
+    createFileSystemWatcher: vi.fn(() => ({
+      onDidCreate: vi.fn(() => ({ dispose: vi.fn() })),
+      onDidChange: vi.fn(() => ({ dispose: vi.fn() })),
+      onDidDelete: vi.fn(() => ({ dispose: vi.fn() })),
+      dispose: vi.fn(),
+    })),
   }
 })
 
@@ -66,6 +85,13 @@ vi.mock('@universe-editor/extension-api', () => ({
   window: windowMock,
   workspace: workspaceMock,
   ProgressLocation: { Notification: 15 },
+  FileType: { File: 1, Directory: 2 },
+  RelativePattern: class {
+    constructor(
+      readonly base: unknown,
+      readonly pattern: string,
+    ) {}
+  },
 }))
 
 type Mock = ReturnType<typeof vi.fn>
@@ -88,11 +114,25 @@ interface FakeClient {
   setReconcileLimit: Mock
   setOpenedByOthersOptions: Mock
   setSyncParallelThreads: Mock
-  setSyncScope: Mock
-  setReconcileExcludes: Mock
   dispose: Mock
   cancelBusy: Mock
   reconcile: Mock
+  refreshScope: Mock
+  setScopeNoticeHandler: Mock
+  invalidateScope: Mock
+  scopeState: 'ready'
+  scopeUnusableReason: string | undefined
+  dailyScope: ScopeView | undefined
+  reconcileExcludeDirs: readonly string[]
+  reconcileExcludeFiles: readonly string[]
+  scopeExcludeDirs: readonly string[]
+  reconcileNoise: { dirs: readonly string[]; files: readonly string[] }
+  setReconcileExcludes: Mock
+  nativeWriteReject: Mock
+  isReconcileTargetExcluded: Mock
+  driftGroupPaths: Mock
+  reconcileUsesP4delta: boolean
+  checkScopeTargets: Mock
 }
 
 /** Only what this file's commands touch; everything else is a no-op stub so
@@ -134,11 +174,33 @@ function makeFakeClient(): FakeClient {
   fake.setReconcileLimit = vi.fn()
   fake.setOpenedByOthersOptions = vi.fn()
   fake.setSyncParallelThreads = vi.fn()
-  fake.setSyncScope = vi.fn()
-  fake.setReconcileExcludes = vi.fn()
   fake.dispose = vi.fn()
   fake.cancelBusy = vi.fn()
   fake.reconcile = vi.fn(async () => {})
+  // The daily scope surface `activate` applies and the command layer reads.
+  fake.refreshScope = vi.fn(async () => 'ready')
+  fake.setScopeNoticeHandler = vi.fn()
+  fake.invalidateScope = vi.fn()
+  fake.scopeState = 'ready'
+  fake.scopeUnusableReason = undefined
+  fake.dailyScope = undefined
+  fake.reconcileExcludeDirs = []
+  fake.reconcileExcludeFiles = []
+  fake.scopeExcludeDirs = []
+  fake.reconcileNoise = { dirs: [], files: [] }
+  fake.setReconcileExcludes = vi.fn()
+  fake.nativeWriteReject = vi.fn(() => undefined)
+  fake.isReconcileTargetExcluded = vi.fn(() => false)
+  fake.driftGroupPaths = vi.fn(() => [])
+  fake.reconcileUsesP4delta = false
+  // The command layer's scope gate: everything the tests name is in range, so
+  // the gate never opens a dialog and the operation runs as asked.
+  fake.checkScopeTargets = vi.fn(async (targets: readonly { path: string }[]) => ({
+    state: 'ready' as const,
+    reason: undefined,
+    inside: targets,
+    outside: [],
+  }))
   return fake
 }
 
@@ -355,6 +417,39 @@ describe('perforce-graph.syncToChange direct bookkeeping', () => {
     // Nothing claimed anything, so nothing is reported: bookkeeping never
     // becomes an error the user has to read.
     expect(windowMock.showErrorMessage).not.toHaveBeenCalled()
+  })
+
+  it('records a whole-repo get under the client root, not under the daily scope', async () => {
+    // The workspace's daily scope is the opened folder (`src`) — what a
+    // config-less workspace resolves to. The `//...` get is NOT bounded by it:
+    // p4 walked the whole client, and the read-back answers for that same range.
+    // Intersecting the claim with the daily scope instead records a range
+    // narrower than the get covered, so the whole-repo tab has no record over
+    // itself and badges `#? (click to query)` right after its own get.
+    fake.dailyScope = syntheticDailyScope()
+    await syncToChange({
+      change: '4522',
+      wholeRepo: true,
+      listScope: { wholeRepo: true },
+      clientRoot: ROOT,
+    })
+    expect(fake.readGraphSyncPoint).toHaveBeenCalledTimes(1)
+    expect(ledgerRecords()[0]).toMatchObject({
+      change: '4521',
+      clientRoot: ROOT,
+      paths: [{ path: ROOT, isDirectory: true }],
+    })
+  })
+
+  it('claims only the daily scope for a scope-less get', async () => {
+    // The other direction: with no scope of its own, the get runs over the
+    // client's configured range — synced UP from the daily scope — so the claim
+    // is the intersection, never the caller's (wider) ledger range.
+    fake.dailyScope = syntheticDailyScope()
+    fake.syncScopeDirs = [ROOT]
+    await runCommand('perforce.syncLatest')
+    expect(fake.sync).toHaveBeenCalledTimes(1)
+    expect(ledgerRecords()[0]).toMatchObject({ paths: [{ path: SRC, isDirectory: true }] })
   })
 
   it('keeps an entry that an unusable claim cannot be replaced by', async () => {

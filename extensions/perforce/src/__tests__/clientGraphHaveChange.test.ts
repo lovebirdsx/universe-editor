@@ -18,6 +18,7 @@
  */
 import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { clientSpecReply, isClientSpecProbe } from './discoveryProbe.js'
 
 class FakeChildProcess extends EventEmitter {
   readonly stdout = new EventEmitter()
@@ -61,6 +62,7 @@ const { ConcurrencyGate } = await import('../concurrency.js')
 const { buildScopeFilespec } = await import('../p4Filespec.js')
 
 const ROOT = process.platform === 'win32' ? 'C:\\ws' : '/ws'
+const DISCOVERY_SPEC = clientSpecReply(ROOT)
 const CLIENT = 'testclient'
 
 function subcommand(argv: string[]): string | undefined {
@@ -128,7 +130,9 @@ function harness(opts: HarnessOptions = {}): Harness {
       const cmd = subcommand(argv)
       let stdout = ''
       let exit = 0
-      if (cmd === 'info') {
+      if (isClientSpecProbe(argv)) {
+        stdout = DISCOVERY_SPEC
+      } else if (cmd === 'info') {
         stdout = `... clientName ${CLIENT}\n... clientRoot ${ROOT}\n... userName testuser\n\n`
       } else if (cmd === 'changes') {
         if (filespecs(argv).some((f) => f.endsWith('#have'))) {

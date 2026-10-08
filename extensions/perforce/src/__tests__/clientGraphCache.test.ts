@@ -6,6 +6,7 @@
  */
 import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { clientSpecReply, isClientSpecProbe } from './discoveryProbe.js'
 
 // A controllable fake child process (mirrors p4Service.test.ts).
 class FakeChildProcess extends EventEmitter {
@@ -50,6 +51,7 @@ const { PerforceClient } = await import('../client.js')
 const { ConcurrencyGate } = await import('../concurrency.js')
 
 const ROOT = process.platform === 'win32' ? 'C:\\ws' : '/ws'
+const DISCOVERY_SPEC = clientSpecReply(ROOT)
 
 /** Feed a command's stdout/exit through the next spawned fake child. `argv` is the
  *  full p4 argv (globals + subcommand); we route by matching the subcommand. */
@@ -97,6 +99,9 @@ describe('PerforceClient graph change-detail caching', () => {
     let whereCalls = 0
     respond((argv) => {
       const cmd = subcommand(argv)
+      if (isClientSpecProbe(argv)) {
+        return { stdout: DISCOVERY_SPEC }
+      }
       if (cmd === 'info') {
         // -ztag info drives discovery; the ambient client owns ROOT.
         return { stdout: `... clientName testclient\n... clientRoot ${ROOT}\n... userName bob\n\n` }

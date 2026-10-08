@@ -58,8 +58,10 @@ const { ConcurrencyGate } = await import('../concurrency.js')
 const { P4Service } = await import('../p4Service.js')
 import type { PerforceClient as PerforceClientType } from '../client.js'
 import type { P4ExecOptions } from '../p4Service.js'
+import { clientSpecReply, isClientSpecProbe } from './discoveryProbe.js'
 
 const ROOT = process.platform === 'win32' ? 'C:\\ws' : '/ws'
+const DISCOVERY_SPEC = clientSpecReply(ROOT)
 const ROOT_FWD = process.platform === 'win32' ? 'C:/ws' : '/ws'
 
 type Reply = { stdout?: string; stderr?: string; exit?: number }
@@ -110,6 +112,7 @@ function ignoresPathArgs(argv: string[]): string[] {
 async function makeClient(extra?: (argv: string[]) => Reply): Promise<PerforceClientType> {
   respond((argv) => {
     const cmd = subcommand(argv)
+    if (isClientSpecProbe(argv)) return { stdout: DISCOVERY_SPEC }
     if (cmd === 'info') return { stdout: DISCOVERY }
     return extra?.(argv) ?? { stdout: '' }
   })

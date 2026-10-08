@@ -76,6 +76,24 @@ export type SyncLedgerSource = 'sync' | 'query' | 'external'
  */
 export const EMPTY_SYNC_POINT = ''
 
+/**
+ * The changelist of a record that says "the state of this scope is NOT KNOWN any
+ * more" — written by an operation whose real range cannot be expressed as a
+ * claim (a get over a directory with an exclusion hole inside it: "everything
+ * under P" would be a statement about the excluded subtree too, which the get
+ * never touched) and which could have carried a file BACKWARD, so an older,
+ * wider claim about the area may no longer be true.
+ *
+ * Deliberately NOT {@link EMPTY_SYNC_POINT}: that one is a positive answer
+ * ("nothing here is synced") and retires wider records on that argument, while
+ * this one answers nothing at all — it exists to stop an older record from
+ * answering, not to replace it with a claim of its own. The two are read the
+ * same way by {@link lookupSyncPoint} (no answer, the graph offers its query)
+ * but they mean opposite things about the workspace, and a file that confused
+ * them would report a fully reverted scope as an unknown one.
+ */
+export const UNKNOWN_SYNC_POINT = '?'
+
 /** One "this scope is synced up to this changelist" fact. */
 export interface SyncLedgerRecord {
   /** Client root the scope belongs to. A record never answers for another
@@ -85,7 +103,9 @@ export interface SyncLedgerRecord {
   /** The scope exactly as the call site named it (host paths + directory-ness). */
   readonly paths: readonly SyncScopeTarget[]
   /** The changelist this scope is known to be synced to, or
-   *  {@link EMPTY_SYNC_POINT} for a queried "nothing synced". */
+   *  {@link EMPTY_SYNC_POINT} for a queried "nothing synced", or
+   *  {@link UNKNOWN_SYNC_POINT} for an operation that could not state what its
+   *  own range was and may have invalidated an older claim about this area. */
   readonly change: string
   /** Whether a get recorded this, a query answered it, or another tool on this
    *  machine recorded it. The graph's tooltip must say which: a recorded answer
@@ -214,7 +234,10 @@ export function contradictedBy(
   if (!scopesMeet(record.paths, newer.paths)) return false
   if (scopeCovers(newer.paths, record.paths)) return false
   // A changelist number, or 0 for a tombstone — which is exactly right: "nothing
-  // in this scope is synced" sits below every changelist there is.
+  // in this scope is synced" sits below every changelist there is. An
+  // UNKNOWN_SYNC_POINT record claims no changelist at all, so it is evidence
+  // against nothing and this answers false for it: an operation that could not
+  // state its own range does not falsify the RANGE it also could not describe.
   const claimed = Number(record.change)
   return Number.isFinite(claimed) && claimed > (newer.floor ?? 0)
 }
@@ -236,8 +259,9 @@ export interface SyncLedgerAnswer {
  * Pick the record answering for `scope`: among every record whose scope COVERS
  * it (the scope itself plus wider ancestors — never a narrower descendant), the
  * one with the newest timestamp. An {@link EMPTY_SYNC_POINT} winner answers
- * "nothing synced" — reported as "no answer", which is how it stops an older,
- * wider record from putting a changelist back on the badge.
+ * "nothing synced" and an {@link UNKNOWN_SYNC_POINT} one answers "not known" —
+ * both reported as "no answer", which is how either stops an older, wider record
+ * from putting a changelist back on the badge.
  *
  * By timestamp, not by depth. "Most specific" reads as more precise and is
  * wrong: after `sync A/B@4520` then `sync A@4560`, the answer for `A/B/C` is
@@ -273,6 +297,10 @@ export function lookupSyncPoint(
   for (const record of records) consider(record)
   if (external) for (const record of external) consider(record)
   if (best === undefined || best.change === EMPTY_SYNC_POINT) return undefined
+  // An unknown answer is no answer HERE like a tombstone, but it was written for
+  // the opposite reason: not "there is nothing", but "what is there cannot be
+  // stated from here". Both leave the graph's query as the only way to know.
+  if (best.change === UNKNOWN_SYNC_POINT) return undefined
   // "Wider" is the same containment question read the other way: among the
   // records that answer at all, this one is wider exactly when the asked-about
   // scope does NOT cover every path the record was built from. Comparing
@@ -433,6 +461,44 @@ export class GraphSyncLedger {
   ): SyncLedgerAnswer | undefined {
     this._reloadIfChanged()
     return lookupSyncPoint(this._records, clientRoot, scope, external)
+  }
+
+  /**
+   * Record that `scope`'s sync state is no longer known, because an operation
+   * that could have moved files inside it (or below it) could not state its own
+   * range.
+   *
+   * `floor` is the same {@link SyncLedgerRecord.floor} a get carries — how far
+   * back the operation could have pushed a file — and the caller only reaches
+   * here when it is a real bound (not {@link NO_REGRESSION}): an operation that
+   * can only carry files FORWARD cannot have falsified an older claim, however
+   * little of its range it can name, so the older record stays as the valid
+   * lower bound it is. `at` is when the unknown state was established, which is
+   * also what makes the entry outrank — for a lookup — any older record, ledger
+   * or external, that would otherwise answer.
+   *
+   * Nothing is deleted: a record whose claim this does not falsify stays, and a
+   * later query over the same scope writes a real answer that supersedes this
+   * one ({@link record}, same identity).
+   */
+  recordUnknown(
+    clientRoot: string,
+    scope: readonly SyncScopeTarget[],
+    at: number,
+    source: SyncLedgerSource,
+    floor: number,
+  ): void {
+    if (scope.length === 0) return
+    this.record({
+      clientRoot,
+      paths: scope,
+      change: UNKNOWN_SYNC_POINT,
+      source,
+      at,
+      // Never a claim, so nothing about it can be complete.
+      complete: false,
+      floor,
+    })
   }
 
   /**

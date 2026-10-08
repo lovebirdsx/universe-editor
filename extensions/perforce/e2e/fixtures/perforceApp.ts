@@ -158,6 +158,43 @@ export const toPosix = (p: string): string => p.split('\\').join('/')
 /** The fake p4's depot prefix — every seeded depot path starts with it. */
 export const DEPOT_PREFIX = '//depot'
 
+/** One entry of the daily scope config, as a spec writes it: a client-root
+ *  relative path, `/`-spelled (an absolute path is relativised against the root).
+ *  A bare string names a DIRECTORY, the common case; `{ path, isDirectory: false }`
+ *  names a single file. */
+export type ScopeConfigEntry = string | { readonly path: string; readonly isDirectory?: boolean }
+
+/** The workspace's daily scope file: `<clientRoot>/.p4delta-scope`, the JSON
+ *  config δ reads (see `docs/reconcile.md`). The FILE is the one persistent
+ *  source of the range — the extension reads exactly this path and applies the
+ *  same algebra, and an operation's positional targets intersect it.
+ *
+ *  `include` OMITTED means the whole client root; `include: []` means explicitly
+ *  nothing (every daily operation is then refused — the two are deliberately not
+ *  the same). `exclude` always wins over either, and the config file excludes
+ *  itself.
+ *
+ *  The extension resolves it itself, so writing one does not need an engine —
+ *  a spec that wants the δ paths to run passes `test.use({ p4delta: {} })`.
+ */
+export function writeScopeFile(
+  clientRoot: string,
+  include?: readonly ScopeConfigEntry[],
+  exclude: readonly ScopeConfigEntry[] = [],
+): string {
+  const entryOf = (value: ScopeConfigEntry): Record<string, string> => {
+    const path = toPosix(typeof value === 'string' ? value : value.path).replace(/^\.\//, '')
+    const isFile = typeof value !== 'string' && value.isDirectory === false
+    return isFile ? { file: path } : { dir: path }
+  }
+  const config: Record<string, unknown> = {}
+  if (include !== undefined) config.include = include.map(entryOf)
+  if (exclude.length > 0) config.exclude = exclude.map(entryOf)
+  const file = join(clientRoot, '.p4delta-scope')
+  writeFileSync(file, JSON.stringify(config), 'utf8')
+  return file
+}
+
 /**
  * Opt-in δ engine for a spec (see the `p4delta` fixture). The two fake engines
  * share one state file, so a spec can drive a write through δ and inspect the
@@ -165,9 +202,9 @@ export const DEPOT_PREFIX = '//depot'
  */
 export interface P4deltaFixtureConfig {
   /**
-   * Injection for EVERY fake p4delta spawn: `UNIVERSE_P4DELTA_FAKE_FAIL`. One of
-   * `crash` / `crash-scan` / `nosummary` / `exit2` / `error` / `unmatched` (see
-   * the fake's header); an unknown value makes the fake exit 2.
+   * Injection for EVERY fake p4delta spawn: `UNIVERSE_P4DELTA_FAKE_FAIL`. The run
+   * faults are `crash` / `crash-scan` / `nosummary` / `exit2` / `error` /
+   * `unmatched` (see the fake's header); an unknown value makes the fake exit 2.
    */
   readonly fail?: string
 }
@@ -178,7 +215,7 @@ export interface P4deltaFixtureConfig {
  *
  * The fakes answer from a shared on-disk model, so a panel assertion alone
  * cannot tell which engine was asked or with what argv — these logs are where
- * the SHAPE of the call (`--json` / `--client-root` / the scope entries /
+ * the SHAPE of the call (`--json` / `--client-root` / `--exclude-dir` /
  * "no native reconcile at all") is assertable. A missing file is the empty log,
  * deliberately not an error: "never spawned" is a valid thing to assert.
  */
@@ -190,6 +227,38 @@ export function readArgvLog(file: string): string[] {
   } catch {
     return []
   }
+}
+
+/**
+ * One δ spawn's RESOLVED SCOPE, as the fake logged it
+ * (`UNIVERSE_P4DELTA_SCOPE_LOG`): the range the run actually worked over, not
+ * the argv that asked for it.
+ *
+ * The caller names targets and δ resolves them against the client root's config,
+ * so the argv line alone cannot say what range the engine ended up with — only
+ * the config read it did says that. That is the whole question the layering work
+ * is about (scope ∩ focus, the config's exclusions). The fake writes one of these
+ * per spawn that resolved a scope, before it executes, so this is also the
+ * surviving evidence of a run that later crashed.
+ */
+export interface ScopeResolution {
+  readonly kind: 'scope-resolution'
+  /** The run's mode: `open`, `clean` or `sync`. */
+  readonly mode: string
+  readonly status: 'resolved' | 'empty'
+  /** `<kind>:<path>` entries, e.g. `directory:E:/ws/src` — the range the run was
+   *  scoped to (the config's includes intersected with {@link targets}, minus the
+   *  exclusions). */
+  readonly includes: readonly string[]
+  readonly excludes: readonly string[]
+  /** The typed positional targets this run was GIVEN, which is the caller's own
+   *  claim about the range; `includes` is what the config left of it. */
+  readonly targets: readonly string[]
+  readonly scopeFile: string | null
+}
+
+export function readScopeLog(file: string): ScopeResolution[] {
+  return readArgvLog(file).map((line) => JSON.parse(line) as ScopeResolution)
 }
 
 /** The client's have revision of one seeded depot file, read straight from the

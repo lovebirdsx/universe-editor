@@ -96,12 +96,38 @@ import {
   type ReconcileScanPrediction,
   type ReconcileScanSplitPrediction,
 } from './reconcileScanBudget.js'
-import { buildScopeFilespec } from './p4Filespec.js'
+import { buildScopeFilespec, type SyncScopeTarget } from './p4Filespec.js'
 import {
   canHandTargetsToP4delta,
   carveReconcileFilespecs,
-  P4DELTA_SCOPE_METACHARS,
+  carveReconcileTargets,
+  p4deltaReconcileTargetSpecs,
 } from './reconcileCarve.js'
+import {
+  canonicalLocalPath,
+  isAbsoluteLocalPath,
+  hostPathStyle,
+  localPathKey,
+  resolveScope,
+  scopeCoversPath,
+  scopeCoversTarget,
+  scopeExcludeEntries,
+  scopeIdentity,
+  scopePartsWithin,
+  scopeTargets,
+  scopeTargetsWithin,
+  targetsFromSpecs,
+  type PathStyle,
+  type ScopeState,
+  type ScopeView,
+} from './scope.js'
+import { readScopeConfig, type ScopeConfigRead } from './scopeConfig.js'
+import {
+  noiseExcludeArgs,
+  noiseFor,
+  EMPTY_RECONCILE_NOISE,
+  type ReconcileNoiseConfig,
+} from './reconcileNoise.js'
 import {
   norm,
   isUnderAny,
@@ -400,6 +426,14 @@ const OPENED_BY_OTHERS_MAX_DECORATIONS = 300
  * than a submitted changelist does.
  */
 const OPENED_BY_OTHERS_MIN_INTERVAL_MS = 30_000
+
+/**
+ * How long a config-file change waits before the daily scope is re-resolved.
+ * An editor's save is several watcher events in a burst (a temp file, a rename,
+ * a truncate+write), and each one would otherwise cost a δ report — and, when
+ * the config is broken, a notice. Silence-based, like every debounce here.
+ */
+const SCOPE_RECHECK_DEBOUNCE_MS = 250
 
 /**
  * Hard ceiling on the `p4 opened -a` pass.
@@ -741,33 +775,6 @@ function displayScanDir(dir: string, root: string): string {
   return rel === '' ? '.' : rel.replace(/\\/g, '/')
 }
 
-/**
- * One δ scope entry for `dir`: the recursive `<dir>/...` form (which δ expands
- * from the depot/have lists, so a directory that is gone locally still works),
- * prefixed with `-` for an exclusion.
- *
- * The path goes out verbatim — no {@link escapeFilespecPath}. `%`-escaping is
- * the native engine's rule for a p4 filespec; δ reads its scope entries
- * literally (the contract makes that the consumer's responsibility), so an
- * escaped name would name a file nobody has.
- */
-function p4deltaScopeEntry(dir: string, exclude: boolean): string {
-  const trimmed = dir.replace(/[/\\]+$/, '')
-  return `${exclude ? '-' : ''}${trimmed}/...`
-}
-
-/**
- * Whether a spec is a depot spelling δ's scope grammar reads: the
- * `//<depot>/...` form the contract translates into workspace paths, which is
- * what lets a depot-syntax scope (the graph's, the timeline's) stay on the
- * engine. `//...` — the whole client — and bare depot file specs are not:
- * neither names a subtree the engine could map to local paths.
- */
-function isP4deltaDepotEntry(spec: string): boolean {
-  const match = /^\/\/(.+)\/\.\.\.$/.exec(spec)
-  return match !== null && match[1] !== ''
-}
-
 /** The one revision spec δ's `--to` can carry: a changelist. `@0` is excluded on
  *  purpose — δ's parser rejects it as a usage error (in p4 it means "before the
  *  first revision", which would delete every local file). */
@@ -799,9 +806,119 @@ function specSuffix(spec: string): string {
   return spec === '#head' ? '' : ` ${spec}`
 }
 
+/**
+ * δ's positional targets: ONE argv per target, a directory spelled with the
+ * explicit recursive suffix and a file with its plain local path.
+ *
+ * The paths are handed over RAW — no p4 filespec escaping. δ escapes at the p4
+ * boundary, so a literal `#`, `@`, `%`, `*` or `?` in a name stays that name;
+ * pre-escaping would make the engine look for a file called `con%40tent`. The
+ * `/...` suffix is the only spelling this side adds, and it is what tells the
+ * engine "this is a directory" for a path that is not on disk yet.
+ */
+function p4deltaTargetArgs(targets: readonly SyncScopeTarget[]): string[] {
+  return targets.map((target) =>
+    target.isDirectory ? `${target.path.replace(/[/\\]+$/, '')}/...` : target.path,
+  )
+}
+
+/**
+ * Why a δ run does not count as an answer, or undefined when it does.
+ *
+ * Shared by the whole-scope scan and the narrow per-batch query on purpose: the
+ * two used to be separate copies of the same table, and the copies had already
+ * drifted — the narrow one rejected a `handoff` record and the scan's did not,
+ * so one and the same stream read as "nothing drifted" on the scan and "no
+ * conclusion" on the narrow query. A scan that reads it the permissive way
+ * publishes an empty drift set AND writes the checkpoint that makes the answer
+ * stick; the same shape must never mean two things.
+ *
+ * The contract's hard rules: a stream without a `summary` has no conclusion
+ * (killed, crashed, cancelled), a non-JSON stdout line means the binary is not
+ * the engine we think it is, and exit 2 is a usage error. `ok:false` is a
+ * partial stream too — except `no-entry-matched`, which is the complete, correct
+ * answer for a scope whose entries are all gone (an emptied focus folder), not a
+ * failure. A summary for another `mode` answered a different question (a wiring
+ * bug, an engine that picked its own default, or a build whose contract moved):
+ * reading its records as this run's answer is how a scan ends up publishing —
+ * and checkpointing — a set the caller never asked about. `handoff` is δ saying
+ * it passed files to native p4 without reporting the action they would take; the
+ * open-mode contract translates those into normal file records, so one surviving
+ * is a stream this reader cannot conclude from.
+ */
+function p4deltaContractFailure(
+  result: P4deltaRunResult,
+  summary: P4deltaSummary | undefined,
+): string | undefined {
+  if (result.sawNonJsonStdout) return 'stdout carried a non-JSON line'
+  if (result.code === 2) return 'usage error (exit 2)'
+  if (summary === undefined) {
+    return `no summary (exit ${result.code}${result.signal !== null ? `, signal ${result.signal}` : ''})`
+  }
+  if (result.records.some((r) => r['kind'] === 'file' && r['class'] === 'handoff')) {
+    return 'files handed off to p4 with no action reported'
+  }
+  if (summary.mode !== 'open') {
+    return `summary reports mode ${summary.mode ?? '<none>'} (expected open)`
+  }
+  if (!summary.ok && summary.reason !== 'no-entry-matched') {
+    return `run did not conclude (${summary.reason ?? 'error'})`
+  }
+  return undefined
+}
+
 /** Creates the RPC-backed working-tree watcher; injectable for tests (mirrors
  *  git's `RepositoryWatcher.CreateFileSystemWatcher`). */
 export type CreateFileSystemWatcher = (globPattern: GlobPattern) => FileSystemWatcher
+
+/**
+ * The range one collect / clean runs over, as the CALLER named it.
+ *
+ * `targets` is the real form, and the only one that survives a dialog: raw typed
+ * local paths (a selection, a drift row, the daily scope's own includes). The
+ * operation re-derives everything from them AT EXECUTION — intersecting the
+ * scope and carving around the exclusions in force then — because a
+ * confirmation may be minutes old when the write starts, and a config edited in
+ * that window must change the run rather than be smuggled past by a list that
+ * was computed before it.
+ *
+ * `specs` exists for the one range with no local targets behind it at all: a
+ * depot spelling the caller named itself (`//...`, `//depot/x#rev`), which p4
+ * reads as written and the daily scope never had a vote over.
+ *
+ * A pre-built carve product (`<dir>/*` fragments) is deliberately NOT
+ * expressible here — that shape is exactly what made the window above unsafe.
+ */
+export interface WriteRange {
+  readonly targets?: readonly SyncScopeTarget[]
+  readonly specs?: readonly string[]
+}
+
+/** What one collect / clean carries besides its range. */
+export interface WriteOptions {
+  /**
+   * The exact targets the user authorized through the noise gate
+   * (`perforce.reconcile.excludeFolders`), never a copy of the rules those
+   * targets were covered by.
+   *
+   * The rules are read HERE, at the write, from the setting in force
+   * ({@link PerforceClient.currentReconcileRules} + `noiseFor`), and only the
+   * rules covering these targets are lifted: a rule that appears between the
+   * dialog and the run still shields everything the user did not name, and a
+   * sibling, parent or nested target riding in the same batch keeps its rules.
+   * Carrying a frozen rule set instead is what let a setting edited while the
+   * dialog was up be silently overridden by the reading the dialog showed.
+   */
+  readonly confirmedTargets?: readonly SyncScopeTarget[]
+  /**
+   * The user's own "run as chosen" answer to the SCOPE question
+   * ({@link PerforceClient.checkScopeTargets}): this call runs over exactly the
+   * targets it names, with the scope's own exclusions set aside — the same thing
+   * δ's `--no-scope-file` says. It never lifts the reconcile rules, and it is
+   * only ever produced by a button the user pressed.
+   */
+  readonly overrideScope?: boolean
+}
 
 /** Construction-time dependencies beyond the positional connection/cache params.
  *  `log` is the output-channel logger; `createFileSystemWatcher` arms the
@@ -826,6 +943,21 @@ export interface PerforceClientOptions {
    * Absent (tests, `switchClient` before a folder is known) → no watch.
    */
   readonly watchRoot?: string
+  /**
+   * The OPENED workspace folder: the boundary of the daily scope. Distinct from
+   * {@link PerforceClient.root} (the client root) whenever the client maps more
+   * than the folder the user opened — which is the normal case for a game
+   * workspace, and exactly why every daily operation is bounded by this one.
+   * Absent (tests, a client built before a folder is known) → the root.
+   */
+  readonly workspaceRoot?: string
+  /** Overrides the `.p4delta-scope` read; tests inject an in-memory answer
+   *  because their client root does not exist on the real filesystem. */
+  readonly readScope?: (clientRoot: string) => ScopeConfigRead
+  /** Overrides the path identity rules the scope arithmetic uses (case folding,
+   *  separator shape). Defaults to the host's; tests pin them so a
+   *  windows-shaped expectation means the same thing on every platform. */
+  readonly scopePathStyle?: PathStyle
   /** Overrides {@link EXTERNAL_CHANGE_DEBOUNCE_MS}; tests pass 0 so the
    *  coalesced flush is a single deterministic macrotask. */
   readonly externalChangeDebounceMs?: number
@@ -975,12 +1107,84 @@ export class PerforceClient {
    *  {@link setReconcileScope}). Empty when no focus entry is a file. */
   private _reconcileScopeFiles: readonly string[] = []
   /** Local directories excluded from reconcile discovery and the background
-   *  scan (see {@link setReconcileExcludes}). Empty means nothing is excluded. */
+   *  scan, as ONE set: the daily scope's own directory exclusions unioned with
+   *  the configured reconcile noise (`perforce.reconcile.excludeFolders`). The
+   *  merge is one-way and deliberate — every consumer of this field is a
+   *  reconcile-style walk, a hint query or a carve, all of which must skip
+   *  both. Anything that answers a question about the WORKSPACE RANGE (the
+   *  daily scope, the default get, the sync ledger, the scope dialog, opened
+   *  changelist operations) reads the scope's own exclusions instead, never this
+   *  field: see {@link _scopeExcludeDirs} / {@link dailyScope}. */
   private _reconcileExcludeDirs: readonly string[] = []
-  /** Filespecs a scope-less `sync` covers. Separate from the reconcile scope on
-   *  purpose (see {@link setSyncScope}). */
-  private _syncScopes: readonly string[] = ['//...']
+  /** Exact local FILES the reconcile machinery must not touch, as one set: the
+   *  scope's file exclusions (the config file's own self-exclusion above all,
+   *  which each side derives from the config it read) plus the noise entries that
+   *  did not resolve to a directory. They are not directories, so no walk skips
+   *  them: they are what {@link nativeWriteReject} refuses a `<dir>/*` spec over
+   *  and what {@link _isExcluded} drops. */
+  private _reconcileExcludeFiles: readonly string[] = []
+  /** The daily scope's OWN directory exclusions, kept apart from the noise so
+   *  the merged set above can be recomputed when either side moves. */
+  private _scopeExcludeDirs: readonly string[] = []
+  /** The daily scope's OWN file exclusions (see {@link scopeExcludeFiles}). */
+  private _scopeExcludeFiles: readonly string[] = []
+  /** The configured reconcile noise (`perforce.reconcile.excludeFolders`), the
+   *  only source of it. Kept typed (dirs vs files) because the δ request carries
+   *  the kind, and separate from the scope's exclusions because the two answer
+   *  different questions: a get runs over the scope with the noise applied by
+   *  nobody, and editing the noise must not orphan a pending get preview. */
+  private _reconcileNoise: ReconcileNoiseConfig = EMPTY_RECONCILE_NOISE
+  /**
+   * The daily scope this session last resolved, or undefined while it is
+   * unresolved/blocked/empty. Computed locally (@link resolveScope) from the
+   * client root's `.p4delta-scope` — no δ round trip, no snapshot file, no
+   * fingerprint: the editor parses the same JSON δ does, so "what range is in
+   * force" is a local answer.
+   */
+  private _scopeView: ScopeView | undefined
+  /** The state {@link _scopeView} is in; see {@link ScopeState}. */
+  private _scopeState: ScopeState = 'unresolved'
+  /** Why the scope is unusable, when {@link _scopeState} says so. */
+  private _scopeReason: string | undefined
+  /** The read that produced {@link _scopeView}, for the log line and for the
+   *  watcher's "did the config actually change" comparison. */
+  private _scopeRead: ScopeConfigRead | undefined
+  /** Path identity rules this client's scope arithmetic uses. */
+  private readonly _style: PathStyle
+  /** The opened workspace folder, canonical — the daily scope's boundary. */
+  private readonly _workspaceRoot: string
+  /** The `.p4delta-scope` read; injectable for tests (see
+   *  {@link PerforceClientOptions.readScope}). */
+  private readonly _readScope: (clientRoot: string) => ScopeConfigRead
+  /** Filespecs a scope-less `sync` covers: the DAILY scope (opened workspace ∩
+   *  `.p4delta-scope`), derived by {@link _applyScopeBase} — never the focus
+   *  folders, and never `//...`. Until the first resolution it is the client
+   *  root, which is the same thing a workspace with no config file resolves to. */
+  private _syncScopes: readonly string[] = []
   private _syncScopeDirs: readonly string[] = []
+  /** Coalesces the watcher burst of one config save into one re-resolution. */
+  private _scopeRecheckTimer: ReturnType<typeof setTimeout> | undefined
+  /** The last scope state the notice saw (see {@link _noteScopeState}). */
+  private _scopeNotice: { state: ScopeState; reason: string | undefined } | undefined
+  /** The command layer's notice for a scope that became unusable. */
+  private _onScopeBlocked: ((reason: string | undefined) => void) | undefined
+  /** Identity of the daily scope the checkpoint keys were built under
+   *  ({@link scopeIdentity}). A local digest of the resolved range, so a config
+   *  edit that moves the range orphans every checkpoint batch at once — and a
+   *  comment-only edit that does not move it leaves them alone. */
+  private _scopeIdentity = 'unresolved'
+  /**
+   * What the last CONCLUDED {@link previewSync} was about — the revision it
+   * asked for and the range identity it read. Kept for exactly one purpose:
+   * telling the user when the get that follows runs under a different range than
+   * the one they just looked at ({@link _noteSyncPreviewDrift}).
+   *
+   * It is not a contract: no token, no TTL, nothing to adopt and nothing a get
+   * must match. Only the preview-relevant inputs are here — the range identity
+   * deliberately excludes the reconcile noise, which no get reads, so editing
+   * that setting cannot make this notice fire.
+   */
+  private _syncPreview: { readonly spec: string; readonly scopeIdentity: string } | undefined
   /** In-flight opened-by-others scan, so it can't overlap itself and tests can
    *  await it. */
   private _backgroundOpenedByOthers: Promise<void> | undefined
@@ -1182,6 +1386,8 @@ export class PerforceClient {
     // a whole-directory `--clean` — to an engine that never scanned here. Back
     // to `native` until a scan round answers on δ again.
     this._reconcileScanEngine = 'native'
+    // The resolved scope is a product of this editor's own reading, so it does
+    // not depend on which engine runs; only the scan verdict above is retracted.
     this._p4delta =
       exe === undefined
         ? undefined
@@ -1209,16 +1415,13 @@ export class PerforceClient {
     return { failures: this._p4deltaFailures, disarmed: this._p4deltaDisarmed }
   }
 
-  /**
-   * Whether the write operations that have a δ counterpart ({@link reconcile} /
-   * {@link reconcileInto} / {@link revertReconcile}) run on δ right now — the
-   * command layer's carve switch ({@link _p4deltaEngine} is the one verdict).
+  /** The engine a write started right now would run on, as tests observe it.
    *
-   * Under δ a directory answers as its own `<dir>/...`: the exclusions travel in
-   * the same call ({@link _buildP4deltaWriteArgs}), so a carve would only hand
-   * the engine `<dir>/*` fragments its scope grammar cannot read. The native
-   * branch keeps carving, unchanged.
-   */
+   *  Deliberately NOT an input to any decision: the engine fork lives inside
+   *  {@link _mutateWrite}, on the same reading of the state as the range it
+   *  builds, so a caller that read this first and branched on it would be
+   *  deciding on a verdict that can move before its own call (and, for a call
+   *  that lands native anyway, would hand p4 δ's uncarved target list). */
   get reconcileUsesP4delta(): boolean {
     return this._p4deltaEngine() !== undefined
   }
@@ -1240,6 +1443,14 @@ export class PerforceClient {
     this._p4Connection = connection
     this._p4 = new P4Service(root, gate, connection, this._log)
     this.setP4delta(options.p4delta?.exe, options.p4delta?.extraEnv)
+    this._style = options.scopePathStyle ?? hostPathStyle()
+    this._readScope = options.readScope ?? readScopeConfig
+    this._workspaceRoot = canonicalLocalPath(options.workspaceRoot ?? root, this._style)
+    // Until the first scope resolution the daily range is the client root — the
+    // same answer a workspace with no config file resolves to — so a get or a
+    // scan that races activation is bounded by something rather than by `//...`.
+    this._syncScopeDirs = [root]
+    this._syncScopes = [buildScopeFilespec(root, true)]
     this._now = cacheOptions.now ?? Date.now
     this._cache = new P4Cache(this._now, cacheOptions.disk, cacheOptions.enabled)
     registerP4CacheNamespaces(this._cache, cacheOptions.workspaceTtlMs)
@@ -1746,16 +1957,25 @@ export class PerforceClient {
     this._swarmAvailable = available
   }
 
-  /** Narrow the on-demand working-tree hint to the given local directories, so a
-   *  query never reports a file the user deliberately scoped out. A directory
-   *  nested under another is dropped, since the shallowest one already covers its
-   *  files. `undefined` or an empty list restores the whole-client default.
+  /**
+   * Narrow the DISCOVERY (the background scan and the explorer's tidying of its
+   * rows) to the given local directories — the workspace focus folders. A
+   * directory nested under another is dropped, since the shallowest one already
+   * covers its files. `undefined` or an empty list restores the whole-workspace
+   * default.
    *
-   *  `scopeFiles` carries the focus entries that resolve to a single file rather
-   *  than a directory. The two buckets are updated in ONE step (one clear + one
-   *  scan reset) so a scope change never lands as a half-applied dirs-only update
-   *  that briefly widens a file-only focus to the whole client. Scope files are
-   *  matched by exact path ({@link isScopeFile}), not directory containment. */
+   * This is now ONLY the focus dimension. The daily range (opened workspace ∩
+   * `.p4delta-scope`) is resolved by {@link refreshScope} and applies to
+   * everything; focus narrows the automatic discovery further, and NOTHING else
+   * — the default get, the per-row hints and every explicit target keep the
+   * daily range regardless of what the user is currently focused on.
+   *
+   * `scopeFiles` carries the focus entries that resolve to a single file rather
+   * than a directory. The two buckets are updated in ONE step (one clear + one
+   * scan reset) so a scope change never lands as a half-applied dirs-only update
+   * that briefly widens a file-only focus to the whole workspace. Scope files
+   * are matched by exact path ({@link isScopeFile}), not directory containment.
+   */
   setReconcileScope(
     localPaths: readonly string[] | string | undefined,
     scopeFiles?: readonly string[],
@@ -1772,31 +1992,401 @@ export class PerforceClient {
     }
     this._reconcileScopeDirs = nextDirs
     this._reconcileScopeFiles = nextFiles
-    // Every row in the drift set answers a question about the old scope, and the
-    // checkpoint fingerprint already orphans the persisted answers for the same
-    // reason. Dropping the rows keeps the panel from listing files the user just
-    // scoped out.
+    // Every row in the drift set answers a question about the old discovery
+    // range, and the checkpoint fingerprint already orphans the persisted
+    // answers for the same reason. Dropping the rows keeps the panel from
+    // listing files the user just scoped out.
     this._clearDrift()
     this._resetReconcileScanForScopeChange()
   }
 
   /**
-   * Narrow the reconcile discovery (both the on-demand hint and the background
-   * scan) to skip the given local directories, the same way
-   * {@link setReconcileScope} narrows it to include them. A directory nested
-   * under another is dropped (the shallowest one already excludes its files).
-   * `undefined` or an empty list restores the no-exclusion default.
+   * Resolve (or re-resolve) the daily scope and re-derive everything that hangs
+   * off it: the exclusion directories the command layer pre-checks against, the
+   * default get's range, and the scan's checkpoint identity.
+   *
+   * Returns the state so a caller can report a blocked or empty scope instead of
+   * running the daily operations — the two cases where the editor does NOT know
+   * the range and must therefore do nothing, rather than fall back to the whole
+   * client.
    */
-  setReconcileExcludes(localPaths: readonly string[] | string | undefined): void {
-    const paths = asScopeList(localPaths)
-    const nextDirs = paths.length === 0 ? [] : normalizeScopeDirs(paths)
-    if (sameScopeDirs(this._reconcileExcludeDirs, nextDirs)) return
-    this._reconcileExcludeDirs = nextDirs
-    // Exclusions are applied when the group is assigned, not when rows are merged,
-    // so a narrowed exclusion list re-admits rows already in the set and a widened
-    // one drops them — one reassignment is the whole update.
-    this._scheduleDriftApply()
+  /**
+   * Resolve (or re-resolve) the daily scope and re-derive everything that hangs
+   * off it: the exclusion directories the command layer pre-checks against, the
+   * default get's range, and the scan's checkpoint identity.
+   *
+   * One local read + one pure computation — the config is parsed here, exactly
+   * as δ parses it, so no process is spawned and no range is negotiated. Returns
+   * the state so a caller can report a blocked or empty scope instead of running
+   * the daily operations — the two cases where the editor does NOT know the
+   * range and must therefore do nothing, rather than fall back to the whole
+   * client.
+   */
+  async refreshScope(): Promise<ScopeState> {
+    const next = this._computeScope()
+    this._applyScopeBase(next)
+    if (next.state === 'blocked') {
+      this._log?.(`[perforce] scope: blocked — ${next.reason ?? 'unknown reason'}`)
+    } else if (next.state === 'empty') {
+      this._log?.(`[perforce] scope: empty — ${next.reason ?? 'empty range'}`)
+    } else if (next.view !== undefined) {
+      this._log?.(`[perforce] scope: ${this._describeScope(next.view)}`)
+    }
+    this._scopeState = next.state
+    this._scopeReason = next.reason
+    this._scopeView = next.view
+    this._noteScopeState(next.state, next.reason)
+    return next.state
+  }
+
+  /**
+   * Read `.p4delta-scope` and resolve the range against the opened workspace.
+   *
+   * The three answers are deliberately distinct: `blocked` (the file is there
+   * but unreadable/illegal — a config the user believes is in force), `empty`
+   * (a legal range with nothing in it, including `include: []`), and `ready`.
+   * Only the first and last are conclusions about the FILE; an ENOENT config is
+   * not an error at all — it means "no extra limit inside the client root", and
+   * the range is then just the opened workspace.
+   */
+  private _computeScope():
+    | { readonly state: 'ready'; readonly view: ScopeView; readonly reason: undefined }
+    | { readonly state: 'empty' | 'blocked'; readonly view: undefined; readonly reason: string } {
+    const read = this._readScope(this.root)
+    this._scopeRead = read
+    if (read.kind === 'error') return { state: 'blocked', view: undefined, reason: read.reason }
+    const resolution = resolveScope({
+      clientRoot: this.root,
+      config: read.kind === 'ok' ? read.config : undefined,
+      scopeFilePath: read.kind === 'ok' ? read.path : null,
+      targets: [{ path: this._workspaceRoot, kind: 'directory' }],
+      targetsDeclared: true,
+      cliExcludes: [],
+      style: this._style,
+    })
+    if (!resolution.ok) return { state: 'empty', view: undefined, reason: resolution.reason }
+    return { state: 'ready', view: resolution.scope, reason: undefined }
+  }
+
+  /** A short, log-safe description of a scope: entry count and the config file.
+   *  Deliberately never prints the entries — a scope over a home directory would
+   *  fill the output channel on every scan. */
+  private _describeScope(view: ScopeView): string {
+    return (
+      `${view.includes.length} include(s), ${view.excludes.length} exclusion(s)` +
+      `, file=${view.implicitExclude ?? '<none>'}`
+    )
+  }
+
+  /** The scope state as the command layer sees it. */
+  get scopeState(): ScopeState {
+    return this._scopeState
+  }
+
+  /** Why the scope is unusable, when {@link scopeState} says so. */
+  get scopeUnusableReason(): string | undefined {
+    return this._scopeReason
+  }
+
+  /** The daily scope's resolved range, for callers that need the actual entries
+   *  (the graph ledger, the command layer's scope picker). */
+  get dailyScope(): ScopeView | undefined {
+    return this._scopeView
+  }
+
+  /**
+   * The base scope when every daily operation may use it, or undefined.
+   *
+   * `ready` is the only state that answers: `empty` is a known-but-empty range
+   * (an operation has nothing to do and must NOT widen to the client), and
+   * `blocked`/`unresolved` mean the editor does not know the range at all. Both
+   * of the latter reads differ from "no constraints", which is why they never
+   * produce a range for a caller to fall back on.
+   */
+  private _readyScope(): ScopeView | undefined {
+    if (this._scopeState !== 'ready') return undefined
+    return this._scopeView
+  }
+
+  /**
+   * Resolve the daily scope on demand, for the entry points that can be reached
+   * before the extension's activation-time {@link refreshScope} (tests, a client
+   * built mid-session). A blocked or empty state is NOT re-resolved here: it
+   * only changes when the config file moves, and the watcher calls
+   * {@link invalidateScope} for that.
+   */
+  private async _ensureScopeResolved(): Promise<void> {
+    if (this._scopeState !== 'unresolved') return
+    await this.refreshScope()
+  }
+
+  /**
+   * The command layer's pre-flight for a get, a collect or a clean that named
+   * paths itself: which parts of those targets the daily scope covers, and which
+   * targets it does not cover WHOLE.
+   *
+   * `inside` is what "obey the workspace scope" runs over — the targets ∩ the
+   * scope's includes, so a target straddling the boundary narrows to its
+   * in-scope part, and a target holding exclusions stays whole: applying those
+   * exclusions IS obeying the scope, and each engine does it inside the call.
+   * `outside` is the dialog's list (targets to decide about, never to trim
+   * silently) and is deliberately the stricter question: any target an
+   * exclusion touches counts, because what the user named in full will not be
+   * what runs.
+   *
+   * `blocked`/`unresolved` report every target as outside with the reason: the
+   * editor cannot tell what is in range, and the safe answer to "may I run this"
+   * is no. The command layer offers the user the explicit override on top of
+   * this — never a silent narrowing.
+   */
+  async checkScopeTargets(targets: readonly SyncScopeTarget[]): Promise<{
+    readonly state: ScopeState
+    readonly reason: string | undefined
+    readonly inside: readonly SyncScopeTarget[]
+    readonly outside: readonly SyncScopeTarget[]
+  }> {
+    await this._ensureScopeResolved()
+    const base = this._readyScope()
+    const inside = base === undefined ? [] : scopePartsWithin(base, targets)
+    const outside =
+      base === undefined
+        ? [...targets]
+        : targets.filter((target) => !scopeCoversTarget(base, target))
+    return {
+      state: this._scopeState,
+      reason: this._scopeReason,
+      inside,
+      outside,
+    }
+  }
+
+  /**
+   * Split this extension's own δ-form filespecs into the typed targets δ takes
+   * on the command line, or report why they cannot be handed over (a p4
+   * metacharacter, a depot spelling, an empty list).
+   *
+   * The reason string is only for the log — every caller's decision is "route
+   * this to the native engine", which is what the undefined answer means.
+   */
+  private _deltaTargetsFor(specs: readonly string[]): SyncScopeTarget[] | undefined {
+    return targetsFromSpecs(specs, this._style)
+  }
+
+  /**
+   * Why native p4 may not run this operation over `targets`, or undefined when
+   * it may: every target has to be covered whole by a RELIABLY resolved scope.
+   *
+   * This is the fail-closed half of the layering. The native engine has no typed
+   * request, so its range is whatever the caller's filespecs say; if the scope
+   * cannot vouch for them, running anyway would reach past the range the user
+   * declared (through an excluded subtree, or outside the boundary entirely).
+   * Refusing is the only answer that cannot do the wrong thing — and the command
+   * layer's out-of-scope confirmation is the one path that legitimately
+   * overrides it.
+   */
+  private _nativeScopeReject(targets: readonly SyncScopeTarget[]): string | undefined {
+    const unusable = this._scopeUnusableReason()
+    if (unusable !== undefined) return unusable
+    const base = this._readyScope()
+    if (base === undefined) return 'the daily scope is not resolved'
+    for (const target of targets) {
+      if (!scopeCoversTarget(base, target)) {
+        // Two different problems wear the same verdict: the target is not in the
+        // scope at all, or it IS in the scope but an exclusion sits inside it —
+        // the two need different answers from the user, so they are not worded
+        // the same. "Some part is in range, yet the whole is refused" is the
+        // hole case.
+        const partsInRange = scopePartsWithin(base, [target]).length > 0
+        return partsInRange
+          ? `the target ${target.path} contains an exclusion a native p4 call cannot apply`
+          : `the target ${target.path} is outside the daily scope`
+      }
+    }
+    return undefined
+  }
+
+  /** Why the daily scope cannot be used at all, or undefined when it is
+   *  `ready`. The half of {@link _nativeScopeReject} that does not depend on
+   *  which targets are being asked about — the carve path needs exactly this
+   *  much, because its spec list deliberately covers targets the whole-target
+   *  test would veto. */
+  private _scopeUnusableReason(): string | undefined {
+    const state = this._scopeState
+    if (state === 'unresolved' || state === 'blocked') {
+      return `the daily scope is not usable (${this._scopeReason ?? state})`
+    }
+    if (state === 'empty') return 'the daily scope resolves to an empty range'
+    if (this._readyScope() === undefined) return 'the daily scope is not resolved'
+    return undefined
+  }
+
+  /**
+   * The native branch's admission, asked inside the branch that is about to run
+   * ({@link _mutateWrite}) — never by the command layer, and never about a list
+   * prepared somewhere else.
+   *
+   * Two answers are possible, and they are different questions:
+   *
+   * - `undefined`: the range is this run's to execute. It is already the
+   *   SCOPE's own intersection (so a target that only partly overlaps the scope
+   *   runs over the part that does), and the carve turns the exclusions sitting
+   *   INSIDE those targets into absent spec levels;
+   * - a reason: nothing here may run. The target list has nothing in the scope
+   *   at all, or an excluded FILE sits at a level the carve must cover with
+   *   `<dir>/*` (see {@link _nativeFileExcludeReject}).
+   *
+   * The scope half is skipped when the user overrode it: "run as chosen" is the
+   * same statement as δ's `--no-scope-file`, and re-applying the config here
+   * would turn the user's own answer into a refusal. The file-exclusion half is
+   * not optional even then — it is about the SHAPE of a spec p4 reads, not about
+   * what the range allows.
+   */
+  private _nativeCarveReject(
+    targets: readonly SyncScopeTarget[],
+    noise: ReconcileNoiseConfig,
+    scopeOverridden: boolean,
+  ): string | undefined {
+    if (!scopeOverridden) {
+      const unusable = this._scopeUnusableReason()
+      if (unusable !== undefined) return unusable
+      const base = this._readyScope()
+      if (base === undefined) return 'the daily scope is not resolved'
+      for (const target of targets) {
+        if (scopePartsWithin(base, [target]).length === 0) {
+          return `the target ${target.path} is outside the daily scope`
+        }
+      }
+    }
+    return this._nativeFileExcludeReject(targets, noise)
+  }
+
+  /**
+   * Drop the resolved scope (a config-file watcher event). The drift rows and
+   * checkpoints of the old range are dropped here, because they answer a
+   * question the new config no longer asks — and the scope is then RE-RESOLVED
+   * (debounced, so an editor's atomic-save dance resolves once), because
+   * invalidating silently is how a config that just became unusable left the user
+   * with a workspace that reported nothing and never said why.
+   */
+  invalidateScope(): void {
+    this._scopeState = 'unresolved'
+    this._scopeReason = undefined
+    this._scopeView = undefined
+    this._clearDrift()
     this._resetReconcileScanForScopeChange()
+    this._scheduleScopeRecheck()
+  }
+
+  /** Re-resolve the scope after a config change, coalescing a burst of watcher
+   *  events into one resolution (and one notice, if it went bad). */
+  private _scheduleScopeRecheck(): void {
+    if (this._scopeRecheckTimer !== undefined) clearTimeout(this._scopeRecheckTimer)
+    const timer = setTimeout(() => {
+      this._scopeRecheckTimer = undefined
+      if (this._disposed) return
+      // Never let this throw: it is a background re-resolution, and an escaping
+      // rejection would take the extension host down (red line).
+      void this.refreshScope().catch((err: unknown) => {
+        this._log?.(`[perforce] scope: re-resolution after a config change failed — ${String(err)}`)
+      })
+    }, SCOPE_RECHECK_DEBOUNCE_MS)
+    timer.unref?.()
+    this._scopeRecheckTimer = timer
+  }
+
+  /**
+   * The command layer's notice for a scope that just became unusable, so the
+   * user learns WHY the workspace went quiet (no drift rows, no hints, refused
+   * collects) instead of concluding it is clean. Wired by `extension.ts`.
+   */
+  setScopeNoticeHandler(handler: ((reason: string | undefined) => void) | undefined): void {
+    this._onScopeBlocked = handler
+  }
+
+  /**
+   * Report a scope state to the notice, once per TRANSITION.
+   *
+   * Deduped on (state, reason) rather than on "blocked": a watcher burst, a
+   * refresh and an operation all resolving the same blocked state must not queue
+   * three identical dialogs — while any move OUT of blocked re-arms the notice,
+   * so a scope that goes bad again (even for the same reason) is news again.
+   */
+  private _noteScopeState(state: ScopeState, reason: string | undefined): void {
+    const previous = this._scopeNotice
+    if (previous !== undefined && previous.state === state && previous.reason === reason) return
+    this._scopeNotice = { state, reason }
+    if (state !== 'blocked') return
+    this._onScopeBlocked?.(reason)
+  }
+
+  private _applyScopeBase(next: {
+    readonly state: ScopeState
+    readonly view: ScopeView | undefined
+    readonly reason: string | undefined
+  }): void {
+    const base = next.view
+    // The EFFECTIVE exclusion set: the declared entries plus the config file's
+    // own implicit exclusion (`scopeExcludeEntries`). Both sides read it the same
+    // way, and the file half is what keeps `p4 clean` from deleting the config
+    // and the reconcile walk from reporting it as new.
+    const excluded = base === undefined ? [] : scopeExcludeEntries(base)
+    const scopeDirs =
+      base === undefined
+        ? []
+        : normalizeScopeDirs(
+            excluded.filter((entry) => entry.kind === 'directory').map((entry) => entry.path),
+          )
+    const scopeFiles =
+      base === undefined
+        ? []
+        : normalizeScopeFiles(
+            excluded.filter((entry) => entry.kind === 'file').map((entry) => entry.path),
+          )
+    const excludesChanged =
+      !sameScopeDirs(this._scopeExcludeDirs, scopeDirs) ||
+      !sameScopeDirs(this._scopeExcludeFiles, scopeFiles)
+    const previousIdentity = this._scopeIdentity
+    this._scopeExcludeDirs = scopeDirs
+    this._scopeExcludeFiles = scopeFiles
+    if (excludesChanged) this._recomputeReconcileExcludes()
+    // The default get's range is the DAILY scope — deliberately not the focus
+    // folders (a get the user did not aim at must not follow what they happen to
+    // be looking at), and deliberately not `//...`.
+    //
+    // No view means the scope is `empty` or `blocked`, and BOTH are a KNOWN range
+    // with nothing to run over: widening to the workspace root here is how a
+    // config that legitimately excludes everything turned back into
+    // "the whole client". Only a ready scope has a view, and the no-config
+    // resolution is ready with the workspace root as its include.
+    const targets = base === undefined ? [] : scopeTargets(base)
+    const dirs = targets.filter((target) => target.isDirectory).map((target) => target.path)
+    this._syncScopeDirs = dirs
+    this._syncScopes = targets.map((target) => buildScopeFilespec(target.path, target.isDirectory))
+    this._scopeIdentity = base === undefined ? next.state : scopeIdentity(base)
+    if (excludesChanged) {
+      // Exclusions are applied when the group is assigned, not when rows are
+      // merged, so a narrowed exclusion list re-admits rows already in the set
+      // and a widened one drops them — one reassignment is the whole update.
+      this._scheduleDriftApply()
+    }
+    if (excludesChanged || previousIdentity !== this._scopeIdentity) {
+      this._resetReconcileScanForScopeChange()
+    }
+    if (previousIdentity !== this._scopeIdentity) {
+      // A different range is a different question. The opened-by-others count is
+      // a claim about the OLD scope (keeping it would show "someone has X open"
+      // next to a scope that no longer covers X), and a behind marker says the
+      // file is behind the revision the OLD range syncs to. Both are dropped
+      // rather than reported against a range nobody asked about.
+      this._openedByOthersCount = undefined
+      this._openedByOthersCapped = false
+      if (this._othersDecorations.size > 0) {
+        this._othersDecorations.clear()
+        this._publishSupplementaryDecorations()
+      }
+      this._clearBehindDecorations()
+      this._emitChange()
+    }
   }
 
   /** Cap on rows shown in the drift group (`perforce.reconcileLimit`). */
@@ -1808,41 +2398,12 @@ export class PerforceClient {
   }
 
   /**
-   * Narrow the default `p4 sync` target the same way {@link setReconcileScope}
-   * narrows discovery — a game workspace's client root can map far more than the
-   * folder the user opened, and "get latest" pulling the whole mapping is both
-   * slow and surprising.
-   *
-   * Kept as its own field rather than reusing the reconcile scope: the two are
-   * configured from the same source today (focus folders) but answer different
-   * questions, and a future "reconcile only src/ but sync everything" must not
-   * require untangling one field into two.
+   * The filespecs a scope-less `sync` would target — the daily scope
+   * (opened workspace ∩ `.p4delta-scope`), or the whole client root when no
+   * scope has been resolved yet. Exposed so a clobber refusal on a scope-less
+   * get can collect exactly the range that get covered, rather than degrading
+   * to a discovery-only refresh that collects nothing.
    */
-  setSyncScope(localPaths: readonly string[] | string | undefined): void {
-    const paths = asScopeList(localPaths)
-    const nextDirs = paths.length === 0 ? [] : normalizeScopeDirs(paths)
-    if (sameScopeDirs(this._syncScopeDirs, nextDirs)) return
-    this._syncScopeDirs = nextDirs
-    this._syncScopes = nextDirs.map((dir) => `${dir}/...`)
-    // A different scope is a different question: the opened-by-others count is
-    // a claim about the old scope, so keeping it would show a stale number.
-    // An UNCHANGED scope (the config-change notification fires for unrelated
-    // keys too) clears nothing — that would burn one expensive pass for no
-    // new information.
-    this._openedByOthersCount = undefined
-    this._openedByOthersCapped = false
-    if (this._othersDecorations.size > 0) {
-      this._othersDecorations.clear()
-      this._publishSupplementaryDecorations()
-    }
-    this._clearBehindDecorations()
-    this._emitChange()
-  }
-
-  /** The filespecs a scope-less `sync` would target — the configured sync scope
-   *  (focus folders) or the whole client mapping. Exposed so a clobber refusal on
-   *  a scope-less get can collect exactly the range that get covered, rather than
-   *  degrading to a discovery-only refresh that collects nothing. */
   get syncScopes(): readonly string[] {
     return this._syncScopes
   }
@@ -1854,13 +2415,37 @@ export class PerforceClient {
     return this._syncScopeDirs
   }
 
-  /** Whether a local path falls inside the current reconcile discovery scope.
-   *  The whole-client default (no scope dirs AND no scope files) matches
-   *  everything; a narrowed scope matches a directory entry by containment
-   *  ({@link isUnderAny}) and a file entry by exact path ({@link isScopeFile}).
-   *  An excluded path never matches, whatever the scope — exclusion wins. */
+  /**
+   * Whether a local path falls inside the DAILY scope: opened workspace ∩ the
+   * resolved `.p4delta-scope`. This is the gate the on-demand hint, the watcher
+   * and every narrow query pass through, so nothing outside the user's declared
+   * range is ever reported or queried.
+   *
+   * Unresolved (no scope resolved yet, or a blocked/empty one) matches NOTHING:
+   * the editor does not know the range, and "unknown" must not read as
+   * "everything is in scope" — that is the direction that reports files the
+   * config excludes. The exception is the whole-workspace default with no config
+   * at all, which IS a resolved range (the opened folder).
+   *
+   * Focus does NOT narrow this: a user who opens a file outside their focused
+   * folders still gets its drift badge. Focus narrows the automatic discovery
+   * only ({@link _isInDiscoveryScope}).
+   */
   private _isInReconcileScope(localPath: string): boolean {
+    const base = this._scopeView
+    if (base === undefined) return false
     if (this._isExcluded(localPath)) return false
+    return scopeCoversPath(base, localPath)
+  }
+
+  /**
+   * Whether a local path is inside the AUTOMATIC DISCOVERY range: the daily
+   * scope further narrowed by the workspace focus folders. Only the background
+   * scan and the drift group's row filter use it — the focus is the user saying
+   * 「watch this while I work」, not a rule about the workspace.
+   */
+  private _isInDiscoveryScope(localPath: string): boolean {
+    if (!this._isInReconcileScope(localPath)) return false
     if (this._reconcileScopeDirs.length === 0 && this._reconcileScopeFiles.length === 0) return true
     return (
       isUnderAny(localPath, this._reconcileScopeDirs) ||
@@ -1868,15 +2453,103 @@ export class PerforceClient {
     )
   }
 
-  /** Whether `localPath` equals or sits under an excluded directory. */
+  /**
+   * Whether a local path may be acted on by the daily machinery: the scope
+   * check, with the ONE answer it cannot give yet — a scope that has not been
+   * resolved — read as "keep it" rather than "drop it".
+   *
+   * The distinction matters only for the watcher queue. A dropped event is LOST
+   * (nothing asks about that path again later), while a kept one is re-checked by
+   * the query that consumes it, which is bounded by the — by then resolved —
+   * scope and refuses what the scope cannot vouch for. Before the first
+   * resolution, a window the host can reach with an edit racing activation,
+   * dropping would silently swallow the user's own change.
+   */
+  private _mayAffectScope(localPath: string): boolean {
+    if (this._scopeView === undefined) return true
+    return this._isInReconcileScope(localPath)
+  }
+
+  /** Whether `localPath` equals or sits under an excluded directory, or IS one
+   *  of the excluded files. The merged view: the scope's own exclusions and the
+   *  configured reconcile noise are both "do not report or act on this" for
+   *  every caller of this predicate (row filters, hint queries, narrow queries,
+   *  walk pruning). */
   private _isExcluded(localPath: string): boolean {
-    return isUnderAny(localPath, this._reconcileExcludeDirs)
+    return (
+      isUnderAny(localPath, this._reconcileExcludeDirs) ||
+      isScopeFile(localPath, this._reconcileExcludeFiles)
+    )
+  }
+
+  /**
+   * The daily scope's excluded FILES as exact local paths — the config file's
+   * own self-exclusion included, and the noise's file entries too. Exposed for
+   * the reconcile-side predicates that answer "is this path in the merged
+   * exclusion set".
+   */
+  get reconcileExcludeFiles(): readonly string[] {
+    return this._reconcileExcludeFiles
+  }
+
+  /**
+   * Why the NATIVE engine may not run a clean / collect over these targets, or
+   * undefined when it may — the file-exclusion half of "can this range be
+   * expressed natively".
+   *
+   * The carve makes excluded SUBTREES native-expressible (their levels never get
+   * a spec, so p4's traversal cannot reach them). An excluded FILE is a
+   * different shape: the level it sits at is covered by `<dir>/*` — kept
+   * verbatim because `reconcile -d` must see locally deleted files, which no
+   * readdir enumeration can supply — and `*` matches the excluded file too. δ
+   * always reports the config file itself as an excluded file, so every
+   * config-bearing scope has this hole, and `p4 clean -a` DELETES unmanaged
+   * files: running anyway would delete the very file the scope shields (a
+   * collect would open it for add instead). δ applies the exclusions inside its
+   * own walk and has no such hole, which is why this only ever refuses the
+   * native engine — and why it is asked inside the native branch of
+   * {@link _mutateWrite}, on the range that branch is about to run.
+   */
+  private _nativeFileExcludeReject(
+    targets: readonly SyncScopeTarget[],
+    noise: ReconcileNoiseConfig,
+  ): string | undefined {
+    // The scope's own file exclusions always apply (a scope override sets the
+    // CONFIG aside, not the shape of a spec p4 cannot express). The noise files
+    // come from the operation's own rules when it has them — an operation whose
+    // target the user confirmed carries that rule LIFTED, and re-applying it here
+    // would refuse a run the user just asked for.
+    const files = [...this._scopeExcludeFiles, ...noise.files]
+    if (files.length === 0) return undefined
+    for (const target of targets) {
+      const hit = files.find((file) =>
+        target.isDirectory
+          ? isUnderAny(file, [target.path])
+          : scopeKey(file) === scopeKey(target.path),
+      )
+      if (hit !== undefined) {
+        return `the scope excludes ${hit}, which a native p4 run over ${target.path}/... would reach`
+      }
+    }
+    return undefined
   }
 
   /** Whether a local path is excluded from reconcile discovery, for the command
    *  layer to gate reconcile/collect interactions before they reach p4. */
   isReconcileTargetExcluded(path: string): boolean {
     return this._isExcluded(path)
+  }
+
+  /**
+   * Whether the SCOPE half alone excludes `path` — the question for a call site
+   * that is about to put a covered target to the user: the two layers have their
+   * own gates, and a path the RANGE excludes is dropped as a range answer, not
+   * offered as a noise choice. Its sibling {@link isReconcileTargetExcluded}
+   * (scope ∪ noise) stays the predicate for batch walks.
+   */
+  isScopeTargetExcluded(path: string): boolean {
+    if (isUnderAny(path, this._scopeExcludeDirs)) return true
+    return this._scopeExcludeFiles.some((file) => scopeKey(file) === scopeKey(path))
   }
 
   /** Whether `dir` — proven by the caller to NOT be excluded itself — contains
@@ -1888,16 +2561,89 @@ export class PerforceClient {
     return containsAny(dir, this._reconcileExcludeDirs)
   }
 
-  /** The command layer's probe for the same question, under the same call-order
-   *  contract as {@link _containsAnyExcluded}. */
-  containsAnyReconcileExclude(dir: string): boolean {
-    return containsAny(dir, this._reconcileExcludeDirs)
-  }
-
   /** The current excluded directories, raw — the command layer passes them to
-   *  the carve functions so its own filespecs respect the same exclusion set. */
+   *  the carve functions so its own filespecs respect the same exclusion set.
+   *  The MERGED set (scope ∪ noise): a carve that dropped either side would walk
+   *  a subtree one of them shields. */
   get reconcileExcludeDirs(): readonly string[] {
     return this._reconcileExcludeDirs
+  }
+
+  /** The configured reconcile noise alone (dirs + files), for the command layer
+   *  that has to decide which of a user's explicitly named targets it covers —
+   *  a question about the SETTING, not about the merged exclusion set. */
+  get reconcileNoise(): ReconcileNoiseConfig {
+    return this._reconcileNoise
+  }
+
+  /** The daily scope's OWN directory exclusions, without the noise. The command
+   *  layer composes the carve list from this and the operation's policy: the
+   *  scope's exclusions apply to a run over the scope (and are set aside by an
+   *  explicit scope override), while the noise applies to both — a confirmation
+   *  of one never confirms the other. */
+  get scopeExcludeDirs(): readonly string[] {
+    return this._scopeExcludeDirs
+  }
+
+  /**
+   * Apply `perforce.reconcile.excludeFolders`: the folders the reconcile
+   * machinery hides. Deliberately NOT {@link invalidateScope} — the setting is
+   * not a range source, so the daily scope, the sync ledger and any pending get
+   * preview stay exactly as they were; only the reconcile-side answers (drift
+   * rows, scan checkpoints, the discovery generation) move with it.
+   */
+  setReconcileExcludes(noise: ReconcileNoiseConfig): void {
+    const next: ReconcileNoiseConfig = {
+      dirs: normalizeScopeDirs(noise.dirs),
+      files: normalizeScopeFiles(noise.files),
+    }
+    if (
+      sameScopeDirs(this._reconcileNoise.dirs, next.dirs) &&
+      sameScopeDirs(this._reconcileNoise.files, next.files)
+    ) {
+      return
+    }
+    this._reconcileNoise = next
+    this._recomputeReconcileExcludes()
+    this._log?.(
+      `[perforce] reconcile exclusions: ${next.dirs.length} dir(s), ${next.files.length} file(s); ` +
+        'drift rows and scan checkpoints of the previous set were dropped',
+    )
+    // Same update out of the two places a merged-exclusion change has to land in
+    // as a scope-exclusion change does: the group's rows are filtered when it is
+    // ASSIGNED (so a narrowed set re-admits rows and a widened one drops them),
+    // and the in-flight round is answering a question nobody asks any more —
+    // its lazily computed checkpoint keys would land old-set answers under the
+    // new fingerprint.
+    this._scheduleDriftApply()
+    this._resetReconcileScanForScopeChange()
+  }
+
+  /** Recompute the merged exclusion view from its two sources. */
+  private _recomputeReconcileExcludes(): void {
+    const scopeDirs = this._scopeExcludeDirs
+    const noiseDirs = this._reconcileNoise.dirs
+    this._reconcileExcludeDirs = normalizeScopeDirs([...scopeDirs, ...noiseDirs])
+    this._reconcileExcludeFiles = normalizeScopeFiles([
+      ...this._scopeExcludeFiles,
+      ...this._reconcileNoise.files.filter((file) => !isUnderAny(file, this._reconcileExcludeDirs)),
+    ])
+  }
+
+  /**
+   * The reconcile rules this operation runs under, read ONCE at its start.
+   *
+   * A confirmation may be minutes old by the time a write starts, and the
+   * promise the dialog made was about the targets the user named — not about a
+   * frozen copy of the settings. So the rules are read here, at the entry, and
+   * the operation runs under whatever is in force; `confirmed` names the targets
+   * the user explicitly lifted a rule for, and only those rules are lifted
+   * ({@link noiseFor}). Nothing is re-derived from a stale plan, and nothing is
+   * refused for having moved: the caller logs the difference and says so.
+   */
+  currentReconcileRules(confirmed: readonly SyncScopeTarget[]): ReconcileNoiseConfig {
+    if (confirmed.length === 0) return this._reconcileNoise
+    return noiseFor(this._reconcileNoise, confirmed)
   }
 
   /**
@@ -2162,9 +2908,9 @@ export class PerforceClient {
    *
    * Filters on two predicates so a row can never say something the changelist
    * decorations would contradict: already opened (the changelist decoration is the
-   * authority), or outside the configured scope — which `_isInReconcileScope`
-   * answers exclusion-first, so `excludeFolders` folds into the same test. When
-   * they filter everything out we return without spawning p4 at all.
+   * authority), or outside the daily scope — which `_isInReconcileScope`
+   * answers exclusion-first, so the scope's own exclusions fold into the same
+   * test. When they filter everything out we return without spawning p4 at all.
    *
    * Results echo back the caller's own path strings — the scan reports paths
    * translated from client syntax against `this.root`, which need not be spelled
@@ -2479,10 +3225,10 @@ export class PerforceClient {
    * two shapes come from. Routing is not a health verdict: a spec that never
    * reaches δ never touches the fallback ladder.
    *
-   * `P4DELTA_SCOPE_METACHARS` is the criterion both engines' spellings agree on
-   * — δ reads an entry literally, native p4 re-interprets these characters —
-   * and it doubles as the write path's reject, so a carve product always routes
-   * the same way in both.
+   * Whether a spec can be handed to δ's typed contract is the criterion the
+   * split uses ({@link _deltaTargetsFor}, which rejects p4-escaped names and
+   * depot spellings), and it is the same one the write path applies, so a carve
+   * product always routes the same way in both.
    */
   private async _narrowQueryBatch(
     batch: readonly string[],
@@ -2493,7 +3239,11 @@ export class PerforceClient {
     const readable: string[] = []
     const nativeOnly: string[] = []
     for (const spec of batch) {
-      if (P4DELTA_SCOPE_METACHARS.test(spec)) nativeOnly.push(spec)
+      // The same criterion the request file itself applies: a spec δ's typed
+      // contract cannot carry is one native p4 must answer — and a native batch
+      // is built by the caller with the exclusions already carved into it
+      // (`<dir>/*` level specs), which is exactly the spelling this routes.
+      if (this._deltaTargetsFor([spec]) === undefined) nativeOnly.push(spec)
       else readable.push(spec)
     }
     if (nativeOnly.length === 0) return this._narrowQueryBatchViaP4delta(engine, batch, options)
@@ -2538,10 +3288,11 @@ export class PerforceClient {
   }
 
   /**
-   * δ behind one narrow batch: ONE `p4delta --json` call, exclusions included as
-   * `-`-prefixed entries so the engine applies them itself — the reason this
-   * path needs no carve ({@link _narrowQuerySpecsFor}). Never `-a`: a narrow
-   * query is a preview by construction, and the write path is separate.
+   * δ behind one narrow batch: ONE `p4delta --json` call carrying the batch as
+   * typed targets, so the daily scope's exclusions are applied by the engine
+   * itself — the reason this path needs no carve ({@link _narrowQuerySpecsFor}).
+   * Never `-a`: a narrow query is a preview by construction, and the write path
+   * is separate.
    *
    * `undefined` is "no conclusion", never an empty row list presented as an
    * answer. The contract's hard rules decide which is which
@@ -2549,7 +3300,10 @@ export class PerforceClient {
    * conclusion (killed / crashed / cancelled), a non-JSON stdout line means the
    * binary is not the engine we think it is, exit 2 is a usage error, and
    * `ok:false` outside `no-entry-matched` is a partial stream — reading it as
-   * clean would turn a permission error into "nothing drifted".
+   * clean would turn a permission error into "nothing drifted". There is no
+   * echoed-scope case to add to those any more: the engine reads the same config
+   * this editor did, so whatever it answers is an answer about the range in
+   * force.
    *
    * Unlike the scan ({@link _runP4deltaReconcileScan}), a failed batch is NOT
    * re-run natively in the same round: `undefined` already lands it in
@@ -2567,7 +3321,18 @@ export class PerforceClient {
     // dropped connection and a cancelled caller all mean "no conclusion", and
     // none of them is the engine's fault, so none touches the ladder.
     if (!this._narrowQueryRunnable(options)) return undefined
-    const result = await engine.run(this._buildP4deltaNarrowArgs(batch), {
+    const targets = this._deltaTargetsFor(batch)
+    if (targets === undefined) {
+      // Nothing should have routed a metacharacter or a depot spelling here
+      // ({@link _narrowQueryBatch} splits on exactly that), so this is a wiring
+      // fault — and the safe reading of one is "no conclusion", never a native
+      // query that would cross the exclusions this request exists to carry.
+      this._log?.(
+        '[perforce] narrow reconcile query: p4delta skipped — the batch is not expressible as local targets',
+      )
+      return undefined
+    }
+    const result = await engine.run(this._buildP4deltaNarrowArgs(targets, this._reconcileNoise), {
       // The slot `_reconcileScanBatch` takes by omitting a priority (P4Service's
       // default is `background`): narrow queries answer watcher and render
       // traffic, never a user click, so they must not take the gate's reserved
@@ -2612,59 +3377,44 @@ export class PerforceClient {
   }
 
   /**
-   * δ's argv for one narrow batch: the same contract switches as a scan run
-   * ({@link _buildP4deltaScanArgs}), then the batch's specs and EVERY configured
-   * exclusion as a `-`-prefixed entry. The engine applies those exclusions
-   * itself, which is the whole of the equivalence with the native carve: an
-   * exclusion omitted here would put a directory the user explicitly excluded
-   * back into the answer. Paths go out verbatim, like the scan's — `--` keeps a
-   * `-`-prefixed entry positional. No `-a`: narrow queries are previews.
+   * δ's argv for one narrow batch: the contract switches, this operation's
+   * exclusions, then the batch's paths as plain positional targets.
+   *
+   * One argv per target — no `;` splitting, no `-` prefix DSL — with directories
+   * spelled `<dir>/...` and files their raw local name. The paths are NOT
+   * pre-escaped for p4: the engine escapes at the p4 boundary, so a literal `#`
+   * or `%` in a name stays the name the user has. Only the operation's OWN
+   * exclusions travel here ({@link ReconcileNoiseConfig}, the reconcile noise):
+   * the daily scope's own exclusions are δ's business — it reads the same
+   * `.p4delta-scope` this editor parsed, and duplicating them would let a stale
+   * copy disagree with the file on disk.
+   *
+   * No `-a`: narrow queries are previews.
    */
-  private _buildP4deltaNarrowArgs(batch: readonly string[]): string[] {
+  private _buildP4deltaNarrowArgs(
+    targets: readonly SyncScopeTarget[],
+    noise: ReconcileNoiseConfig,
+  ): string[] {
     return [
       '--json',
-      '--no-scope-file',
       '--client-root',
       this.root,
       '--no-revert-groups',
-      '--',
-      ...batch,
-      ...this._reconcileExcludeDirs.map((dir) => p4deltaScopeEntry(dir, true)),
+      ...noiseExcludeArgs(noise),
+      ...p4deltaTargetArgs(targets),
     ]
   }
 
   /**
    * Why a δ narrow run does not count as an answer, or undefined when it does.
-   * The same contract rules {@link _p4deltaRunFailure} applies (no summary = no
-   * conclusion, non-JSON stdout = wrong binary, exit 2 = usage error, `ok:false`
-   * = partial stream), plus the `handoff` guard: on this path it is defensive —
-   * the contract has the open-mode preview translate handoff records into normal
-   * file records — so one surviving means δ handed files to native p4 without
-   * giving the action they would take.
+   * {@link p4deltaContractFailure} is the whole table — shared with the scan so
+   * the same stream cannot be "no conclusion" here and "nothing drifted" there.
    */
   private _p4deltaNarrowFailure(
     result: P4deltaRunResult,
     summary: P4deltaSummary | undefined,
   ): string | undefined {
-    if (result.sawNonJsonStdout) return 'stdout carried a non-JSON line'
-    if (result.code === 2) return 'usage error (exit 2)'
-    if (summary === undefined) {
-      return `no summary (exit ${result.code}${result.signal !== null ? `, signal ${result.signal}` : ''})`
-    }
-    if (result.records.some((r) => r['kind'] === 'file' && r['class'] === 'handoff')) {
-      return 'files handed off to p4 with no action reported'
-    }
-    // Same wrong-mode guard as the scan's: a narrow query is an open-mode
-    // preview by construction, and a summary for any other mode must read as
-    // "no conclusion" — its empty file list would otherwise cover paths the
-    // query never examined (silence turned into "clean").
-    if (summary.mode !== 'open') {
-      return `summary reports mode ${summary.mode ?? '<none>'} (expected open)`
-    }
-    if (!summary.ok && summary.reason !== 'no-entry-matched') {
-      return `run did not conclude (${summary.reason ?? 'error'})`
-    }
-    return undefined
+    return p4deltaContractFailure(result, summary)
   }
 
   /** One narrow batch δ could not answer, on the shared fallback ladder
@@ -2691,6 +3441,7 @@ export class PerforceClient {
   private _parseReconcileRecords(records: readonly Record<string, unknown>[]): ReconcileFile[] {
     return this._dropOpenedRows(parseReconcile(records, this.root))
   }
+
   /** Drop the rows for files already opened in a changelist. Both engines feed
    *  this same filter: δ's `open` classification reports the `reopen_*` groups
    *  for opened files exactly like `p4 reconcile -a -e -d` does, and an opened
@@ -2840,6 +3591,11 @@ export class PerforceClient {
     paths: readonly string[],
     run: (signal: AbortSignal, execOptions?: P4ExecOptions) => Promise<P4ExecResult>,
     execOptions?: P4ExecOptions,
+    /** Consulted after a run that succeeded, before the per-path invalidation:
+     *  true widens it to the whole workspace (the δ write path, whose execution
+     *  may have covered a scope other than the one the caller prepared for —
+     *  see {@link _deltaWrite}). */
+    invalidateAll?: () => boolean,
   ): Promise<boolean> {
     this._suppressExternalChanges()
     return this._withBusy(this._busyLabel(label), async () => {
@@ -2858,7 +3614,9 @@ export class PerforceClient {
         await this._refreshAfterMutation()
         return false
       }
-      this._invalidateAfterMutation(paths)
+      // An empty path list is the same signal the small-batch rule uses for
+      // "cannot attribute this to a few files" (see _invalidateAfterMutation).
+      this._invalidateAfterMutation(invalidateAll?.() === true ? [] : paths)
       await this._refreshAfterMutation()
       return true
     })
@@ -2866,21 +3624,40 @@ export class PerforceClient {
 
   /**
    * The write operations that have a δ counterpart ({@link reconcile} /
-   * {@link reconcileInto} / {@link revertReconcile}), as one dispatcher: on δ
-   * when this session's engine answers ({@link _p4deltaEngine}) and the specs
-   * are shapes δ's scope grammar reads, native ({@link _mutate}, byte for byte)
-   * otherwise.
+   * {@link reconcileInto} / {@link revertReconcile}), as one dispatcher — and
+   * the place where BOTH engines' ranges are built.
    *
    * `open` is the collect direction (`reconcile -a -e -d`, δ's open mode with
    * `-a`), `clean` the discard direction (`clean -a -e -d`, δ's `--clean -a`),
    * and `changelist` is {@link reconcileInto}'s target (`'default'` omits `-c`,
-   * as it does natively). Both engines run through the same
-   * {@link _mutateVia} skeleton, so they differ only in which process runs.
+   * as it does natively). Both engines run through the same {@link _mutateVia}
+   * skeleton, so they differ only in which process runs.
+   *
+   * The caller hands over the range the user NAMED ({@link WriteRange}) and the
+   * range decisions the user MADE, never a filespec list it prepared earlier.
+   * Everything downstream of that is derived right here, once, from the state in
+   * force at this instant:
+   *
+   * - the scope is resolved and the drift it names is read NOW, so a config
+   *   edited while the confirmation dialog was up decides what runs (a carve
+   *   built before the dialog would carry the old exclusion list silently);
+   * - the native branch builds its filespecs from the raw targets: intersect
+   *   with the scope, then carve around the exclusions — the merge of the
+   *   scope's own and this operation's rules;
+   * - the engine fork happens here too, on the same reading. A call the command
+   *   layer expected to reach δ but that lands native (an engine disarmed or
+   *   re-pointed in between) therefore gets a CARVE, never δ's wide target list:
+   *   that list is only ever safe inside the engine that applies the exclusions
+   *   itself.
+   *
+   * Nothing is refused for having "moved", and nothing is re-read step by step:
+   * there is one reading per run, and the run is internally consistent with it.
    */
   private async _mutateWrite(
     mode: 'open' | 'clean',
-    paths: readonly string[],
+    range: WriteRange,
     changelist?: string,
+    options?: WriteOptions,
   ): Promise<boolean> {
     const label = mode === 'open' ? 'reconcile' : 'clean'
     const withChangelist = changelist !== undefined && changelist !== 'default'
@@ -2893,53 +3670,207 @@ export class PerforceClient {
     // stop — a collect is metadata and keeps the `commandTimeout` hang guard.
     // Forwarded to δ below, so the policy belongs to the operation.
     const execOptions = mode === 'clean' ? CONTENT_TRANSFER_EXEC : undefined
-    const engine = this._p4deltaEngine()
-    if (engine === undefined) return this._mutate(label, nativeArgs, paths, execOptions)
-    const rejected = this._p4deltaWriteSpecReject(paths)
-    if (rejected !== undefined) {
-      this._log?.(`[perforce] ${label}: p4delta skipped — ${rejected}; running on p4`)
-      this._warnUncarvedDeltaSpecs(label, paths)
-      return this._mutate(label, nativeArgs, paths, execOptions)
+    await this._ensureScopeResolved()
+    const override = options?.overrideScope === true
+    const noise = this.currentReconcileRules(options?.confirmedTargets ?? [])
+    const targets = range.targets
+    // δ's `--no-scope-file` sets the config aside for this call, so a scope that
+    // cannot be resolved is not this call's problem any more; without it, an
+    // unusable scope is a range nobody can name, and both engines fail closed.
+    if (!override) {
+      const unusable = this._scopeUnusableReason()
+      if (unusable !== undefined) return await this._refuseWrite(label, unusable)
     }
-    const args = this._buildP4deltaWriteArgs(mode, paths, changelist)
+    if (targets === undefined || targets.length === 0) {
+      // A range with no typed targets behind it is only a DEPOT spelling the
+      // caller named itself (`//...`, `//depot/x#rev`): p4's own grammar, asked
+      // for on purpose, and the daily scope never had a vote over it. Anything
+      // else fails closed — "unparsable" must never mean "unconstrained".
+      const specs = range.specs ?? []
+      if (specs.length === 0) return false
+      if (!override && !specs.every((spec) => spec.startsWith('//'))) {
+        return await this._refuseWrite(
+          label,
+          'the targets are not expressible as local paths, so the workspace scope cannot vouch for them',
+        )
+      }
+      return this._mutate(label, nativeArgs, specs, execOptions)
+    }
+
+    const engine = this._p4deltaEngine()
+    if (engine !== undefined && canHandTargetsToP4delta(targets)) {
+      // δ reads the config itself and applies every exclusion inside this one
+      // call, so it gets the RAW targets — the spellings `buildScopeFilespec`
+      // would escape are exactly the ones its own p4 boundary must escape.
+      const specs = p4deltaReconcileTargetSpecs(targets, this._carveDirs(override, noise))
+      if (specs.length === 0) {
+        await this._notifyAllExcluded()
+        return false
+      }
+      return await this._deltaWrite(
+        engine,
+        label,
+        mode,
+        targets,
+        changelist,
+        override,
+        specs,
+        execOptions,
+        noise,
+      )
+    }
+
+    // Native. The spec list is built HERE, from the targets and the rules in
+    // force, so nothing about it can be older than this line.
+    const inRange = this._writeRangeTargets(targets, override)
+    if (inRange.length === 0) {
+      return await this._refuseWrite(label, `the given paths are outside the daily scope`)
+    }
+    const rejected = this._nativeCarveReject(inRange, noise, override)
+    if (rejected !== undefined) return await this._refuseWrite(label, rejected)
+    const carved = await carveReconcileTargets(inRange, this._carveDirs(override, noise))
+    await this._noteUnreadableCarves(carved.unreadableDirs)
+    if (carved.specs.length === 0) {
+      // An empty carve after a read failure is not "everything is excluded" —
+      // the warning above already said what happened, and claiming the rules hid
+      // these files would send the user to the wrong setting.
+      if (carved.unreadableDirs.length === 0) await this._notifyAllExcluded()
+      return false
+    }
+    return this._mutate(label, nativeArgs, carved.specs, execOptions)
+  }
+
+  /** The targets a write may run over: the scope's own intersection with what
+   *  the caller named, so a target that only PARTLY overlaps the scope runs over
+   *  the part that does (an exclusion inside it stays a hole the carve fills).
+   *  An override names its targets itself and skips the intersection — that is
+   *  what "run as chosen" means. */
+  private _writeRangeTargets(
+    targets: readonly SyncScopeTarget[],
+    override: boolean,
+  ): readonly SyncScopeTarget[] {
+    if (override) return targets
+    const base = this._readyScope()
+    return base === undefined ? [] : scopePartsWithin(base, targets)
+  }
+
+  /** The directories the carve must avoid walking into: the scope's own
+   *  exclusions (unless the user set the config aside for this call) unioned with
+   *  this operation's rules. Both are read from the state in force now. */
+  private _carveDirs(override: boolean, noise: ReconcileNoiseConfig): string[] {
+    return collapseScopeDirs([...(override ? [] : this._scopeExcludeDirs), ...noise.dirs])
+  }
+
+  /** Report a write that will not run, in the one wording every gate shares. */
+  private async _refuseWrite(label: string, reason: string): Promise<boolean> {
+    this._log?.(`[perforce] ${label}: refused — ${reason}`)
+    await window.showWarningMessage(
+      localize(
+        'perforce.scope.refused',
+        'The {0} operation was not run: {1}. Nothing was changed.',
+        { 0: label, 1: reason },
+      ),
+    )
+    return false
+  }
+
+  /** Report directories the carve could not read. The caller keeps whatever
+   *  specs the carve did produce — this says what was skipped, not that the run
+   *  is cancelled. Wording stays action-neutral: collecting and `p4 clean` both
+   *  skip here. */
+  private async _noteUnreadableCarves(dirs: readonly string[]): Promise<void> {
+    for (const dir of dirs) {
+      this._log?.(`[perforce] cannot carve the scope around exclusions, skipping ${dir}`)
+    }
+    if (dirs.length === 0) return
+    await window.showWarningMessage(
+      localize(
+        'perforce.reconcile.carveFailed',
+        'Some directories could not be read, so files under them were skipped.',
+      ),
+    )
+  }
+
+  /** The whole selection sits outside the range the rules leave — an answer,
+   *  never an empty call (`p4 reconcile` with no path would walk the client). */
+  private async _notifyAllExcluded(): Promise<void> {
+    await window.showInformationMessage(
+      localize(
+        'perforce.reconcile.allExcluded',
+        'The selected paths are outside the workspace scope, or hidden by the exclusions in force.',
+      ),
+    )
+  }
+
+  /**
+   * One collect / clean on δ: the operation's own targets travel as plain
+   * positional argv, its exclusions as `--exclude-dir` / `--exclude-file`, and
+   * the engine applies the `.p4delta-scope` it reads from the client root
+   * itself. Nothing is frozen and nothing is echoed: this is the SAME contract
+   * the editor evaluates locally ({@link resolveScope}), so a config edit between
+   * the user's confirmation and this spawn cannot change what the call means —
+   * both sides read the current file, and the range the user confirmed is the
+   * range on disk.
+   */
+  private async _deltaWrite(
+    engine: P4deltaService,
+    label: string,
+    mode: 'open' | 'clean',
+    targets: readonly SyncScopeTarget[],
+    changelist: string | undefined,
+    overrideScope: boolean,
+    paths: readonly string[],
+    execOptions: P4ExecOptions | undefined,
+    noise: ReconcileNoiseConfig,
+  ): Promise<boolean> {
     return this._mutateVia(
       label,
       paths,
-      (signal, options) => this._runP4deltaWrite(engine, label, mode, args, signal, options),
+      async (signal, runOptions) => {
+        if (signal.aborted) return { stdout: '', stderr: '', exitCode: 0 }
+        const run = await this._runP4deltaWrite(
+          engine,
+          label,
+          mode,
+          this._buildP4deltaWriteArgs(mode, targets, noise, changelist, overrideScope),
+          signal,
+          runOptions,
+        )
+        return { stdout: run.stdout, stderr: run.stderr, exitCode: run.exitCode }
+      },
       execOptions,
     )
   }
 
   /**
-   * δ's argv for a write: the same contract switches a scan or narrow run
-   * carries, then the mode's flag, `-c` for {@link reconcileInto}, and `-a` —
-   * a write applies by definition, which is the whole difference from every
-   * other δ call in this file — before `--` and the specs.
+   * δ's argv for a write: the contract switches every δ call carries, the mode's
+   * flag, `-c` for {@link reconcileInto}, `-a` — a write applies by definition,
+   * which is the whole difference from every other δ call in this file — then
+   * this operation's own exclusions and its targets, one argv per target.
    *
-   * Every configured exclusion rides along as a `-`-prefixed entry, exactly as
-   * the narrow query's argv does. The engine applies them itself, which is why
-   * the command layer must not carve under δ, and why the list has to be
-   * COMPLETE: an omitted exclusion hands a directory the user explicitly kept
-   * out of reconcile scope to the write, and under `--clean` that is not
-   * recoverable.
+   * The paths are raw local paths, never p4-escaped specs: the engine escapes at
+   * the boundary, so a name with `#` or `%` stays the name the user has.
+   * `--no-scope-file` is the explicit scope override and travels only when the
+   * user chose it ({@link checkScopeTargets}).
    */
   private _buildP4deltaWriteArgs(
     mode: 'open' | 'clean',
-    specs: readonly string[],
+    targets: readonly SyncScopeTarget[],
+    noise: ReconcileNoiseConfig,
     changelist?: string,
+    overrideScope = false,
   ): string[] {
     return [
       '--json',
-      '--no-scope-file',
       '--client-root',
       this.root,
       '--no-revert-groups',
       ...(mode === 'clean' ? ['--clean'] : []),
       ...(changelist !== undefined && changelist !== 'default' ? ['-c', changelist] : []),
+      ...(overrideScope ? ['--no-scope-file'] : []),
       '-a',
-      '--',
-      ...specs,
-      ...this._reconcileExcludeDirs.map((dir) => p4deltaScopeEntry(dir, true)),
+      ...noiseExcludeArgs(noise),
+      ...p4deltaTargetArgs(targets),
     ]
   }
 
@@ -2971,10 +3902,11 @@ export class PerforceClient {
     signal: AbortSignal,
     execOptions?: P4ExecOptions,
   ): Promise<P4ExecResult> {
+    const none = { stdout: '', stderr: '', exitCode: 0 }
     // Cancelled before the run started: spawn nothing. That result is never
     // read — `_cancellable` reports the abort off this same signal and
     // `_mutateVia` takes its cancel exit.
-    if (signal.aborted) return { stdout: '', stderr: '', exitCode: 0 }
+    if (signal.aborted) return none
     const result = await engine.run(args, {
       signal,
       ...(execOptions?.priority !== undefined ? { priority: execOptions.priority } : {}),
@@ -2983,7 +3915,7 @@ export class PerforceClient {
     for (const line of result.log) this._log?.(`  p4delta: ${line}`)
     // Killed under us — the user asked to stop. Not the engine failing to
     // answer; `_mutateVia` reads the abort and takes its cancel exit.
-    if (signal.aborted) return { stdout: '', stderr: '', exitCode: 0 }
+    if (signal.aborted) return none
 
     const summary = summarizeRun(result)
     const failure = this._p4deltaAppliedRunFailure(result, summary, mode)
@@ -3049,61 +3981,6 @@ export class PerforceClient {
     }
     if (!summary.applied) return 'run did not apply (not marked applied)'
     return undefined
-  }
-
-  /**
-   * The reason this write's specs have to run on p4 instead of δ, or undefined
-   * when δ's scope grammar reads all of them. A safety net, not a health
-   * verdict: it never touches the fallback ladder, and a spec the command layer
-   * forgot to stop carving (`<dir>/*`) only costs the slow native path. The
-   * question asked of each spec is {@link _p4deltaEntryReject}'s.
-   */
-  private _p4deltaWriteSpecReject(specs: readonly string[]): string | undefined {
-    for (const spec of specs) {
-      const rejected = this._p4deltaEntryReject(spec)
-      if (rejected !== undefined) return rejected
-    }
-    return undefined
-  }
-
-  /**
-   * The two shapes a single scope entry can have that δ's scope grammar cannot
-   * read: a p4 filespec metacharacter (δ reads its entries LITERALLY, so a `*`
-   * would name a file nobody has — {@link P4DELTA_SCOPE_METACHARS}) and depot
-   * syntax other than the `//<depot>/...` form the contract translates
-   * (`//...`, the whole-client wildcard, included). One entry outside the
-   * grammar poisons the whole call — the engines cannot split a filespec list —
-   * so the get and the write gate ask the same question of every entry, here.
-   */
-  private _p4deltaEntryReject(entry: string): string | undefined {
-    if (P4DELTA_SCOPE_METACHARS.test(entry)) {
-      return `entry carries a p4 filespec metacharacter (${entry})`
-    }
-    if (entry.startsWith('//') && !isP4deltaDepotEntry(entry)) {
-      return `entry is not a p4delta depot entry (${entry})`
-    }
-    return undefined
-  }
-
-  /**
-   * The last-resort alarm for the one shape that must never land on native p4:
-   * an UN-CARVED δ-form entry — `<dir>/...` still carrying a metacharacter.
-   * Those are exactly the specs the command layer has to carve before handing
-   * over (`canHandTargetsToP4delta`; the raw paths exist only there), so
-   * meeting one here means that gate was missed and the native run about to
-   * happen will walk the excluded subtrees this entry names — for `clean`, that
-   * discard is irreversible. Logged, not acted on: the fallback stays the
-   * fallback (a carve product here is merely slow), and this layer could not
-   * carve even if it wanted to — the raw paths are already gone.
-   */
-  private _warnUncarvedDeltaSpecs(label: string, specs: readonly string[]): void {
-    const suspect = specs.find((s) => s.endsWith('/...') && P4DELTA_SCOPE_METACHARS.test(s))
-    if (suspect === undefined) return
-    this._log?.(
-      `[perforce] ${label}: WARNING ${suspect} looks like an un-carved p4delta scope entry — ` +
-        'the exclude folders may NOT have been applied to this p4 run; check whether the ' +
-        'command layer carved this path (perforce.reconcile.excludeFolders coverage)',
-    )
   }
 
   /** The post-mutation refresh, under its own busy label. The p4 command itself is
@@ -3376,12 +4253,12 @@ export class PerforceClient {
    * difference being whether the exclusions are carved around or handed to the
    * engine.
    *
-   * Under δ the exclusion list travels as its own scope entries
+   * Under δ the exclusion list travels as its own argv
    * ({@link _buildP4deltaNarrowArgs}) and the engine applies it inside the same
    * call, so nothing is carved: a directory answers to its `<dir>/...` even when
    * it holds excluded subtrees — answering all of that in one call is the
    * engine's whole point — and a carve would also hand δ the `<dir>/*` level
-   * fragments its entry syntax has no meaning for. Every configured exclusion
+   * fragments its target grammar has no meaning for. Every configured exclusion
    * must reach that argv: an omission there would sweep a directory the user
    * explicitly excluded back into the answer, and that completeness is the
    * entire equivalence the native carve provides.
@@ -3390,12 +4267,15 @@ export class PerforceClient {
    * yields no defensible spec at all, and the caller invalidates instead of
    * querying ({@link _querySpecsFor}).
    *
-   * The gate is on the RAW path ({@link canHandTargetsToP4delta}), never on the
-   * spec: a path δ's grammar reads differently (a `%`, an `@`) must take the
-   * carve branch, exactly like the write fork — the batch would otherwise send
-   * an un-carved `<dir>/...` to native p4, whose traversal then reaches the
-   * excluded subtrees (for a query: rows the user explicitly filtered out).
-   * The carve products this produces are the shapes
+   * The batch travels as SPECS (the carve branch on the same batch produces
+   * `<dir>/*` fragments δ has no grammar for), so the δ branch is taken only
+   * when the spec ROUND-TRIPS back to the raw local path: δ reads its targets
+   * as literal local names while p4 escapes these characters, so `con@tent`
+   * arrives as `con%40tent` and cannot be told apart from a name that literally
+   * contains `%`. Handing that spelling to δ would query a file nobody has, and
+   * handing an un-carved `<dir>/...` to native p4 would reach the excluded
+   * subtrees — so such a path takes the carved native branch, which spells and
+   * escapes correctly. The carve products this produces are the shapes
    * {@link _narrowQueryBatch} routes native.
    */
   private async _narrowQuerySpecsFor(
@@ -3403,7 +4283,7 @@ export class PerforceClient {
     kind: PathKind,
   ): Promise<readonly string[] | undefined> {
     if (this._p4deltaEngine() === undefined) return this._querySpecsFor(path, kind)
-    if (!canHandTargetsToP4delta([{ path, isDirectory: kind === 'dir' }])) {
+    if (this._deltaTargetsFor([buildScopeFilespec(path, kind !== 'file')]) === undefined) {
       return this._querySpecsFor(path, kind)
     }
     if (kind === 'file') return [path]
@@ -3458,14 +4338,14 @@ export class PerforceClient {
    * Collect (reconcile) working-tree changes into open state: open each file
    * for the action that matches its on-disk state (add / edit / delete). The
    * file then stops showing the Explorer's uncollected-drift hint and appears
-   * in a changelist group.
+   * in a changelist group. `range` is what the user named, not a filespec list
+   * — the range is derived at execution time ({@link _mutateWrite}).
    *
    * Native is `p4 reconcile -a -e -d`; δ's open mode with `-a` answers the same
-   * question in one call over the whole spec list ({@link _mutateWrite}).
+   * question in one call over the same targets ({@link _mutateWrite}).
    */
-  async reconcile(paths: readonly string[]): Promise<boolean> {
-    if (paths.length === 0) return false
-    return this._mutateWrite('open', paths)
+  async reconcile(range: WriteRange, options?: WriteOptions): Promise<boolean> {
+    return this._mutateWrite('open', range, undefined, options)
   }
 
   /**
@@ -3476,9 +4356,12 @@ export class PerforceClient {
    * opens the not-yet-opened files for their on-disk action directly in
    * `changelist`. `'default'` collects into the default changelist (no `-c`).
    */
-  async reconcileInto(changelist: string, paths: readonly string[]): Promise<boolean> {
-    if (paths.length === 0) return false
-    return this._mutateWrite('open', paths, changelist)
+  async reconcileInto(
+    changelist: string,
+    range: WriteRange,
+    options?: WriteOptions,
+  ): Promise<boolean> {
+    return this._mutateWrite('open', range, changelist, options)
   }
 
   /** Revert files — discards the open state and restores the have revision. */
@@ -4027,8 +4910,21 @@ export class PerforceClient {
     spec: string,
     options?: {
       scope?: readonly string[]
+      /**
+       * The typed targets `scope` was built from. The command layer always has
+       * them (they are what it ran the scope gate on), and they are the only
+       * trustworthy statement of the get's range: a spec list is a SPELLING
+       * (`buildScopeFilespec` escapes `@#*%`), so a spec that will not parse
+       * back must never be read as "no targets to check" — that is how an
+       * "obey the scope" answer ends up fetching an excluded subtree.
+       */
+      scopeTargets?: readonly SyncScopeTarget[]
       force?: boolean
       onProgress?: (progress: { done: number; file: string | undefined }) => void
+      /** The command layer's record of an explicit user choice to run this get
+       *  over targets the daily scope does not cover ({@link checkScopeTargets}).
+       *  Only ever consulted together with an explicit `scope`. */
+      overrideScope?: boolean
     },
   ): Promise<SyncRunResult> {
     // Recorded before the run starts, so the status bar can name the target from
@@ -4047,18 +4943,38 @@ export class PerforceClient {
     // session's reconcile scan cover them.
     this._beginExternalSuspend()
     try {
+      await this._ensureScopeResolved()
+      // A preview is not a contract, and nothing here adopts it: the get runs
+      // over the range in force at this instant. All that survives is the
+      // notice when that range is not the one the user just looked at.
+      await this._noteSyncPreviewDrift(spec, options?.overrideScope === true)
       // The await is load-bearing: without it the finally below would release
       // the suspension the moment this function returns, before the sync settles.
       return await this._withBusy(localize('perforce.busy.sync', 'Syncing'), async () => {
         // A force get is p4-only by construction: its scope filespecs are the
-        // exact `#rev`s a refusal named — a spelling δ's scope grammar does not
-        // read — and it exists precisely to overwrite files the user just saw
-        // diffed and confirmed, so it is the one get where an engine swap has
-        // the worst failure mode and the least to gain.
+        // exact `#rev`s a refusal named — a PER-FILE revision has no δ spelling —
+        // and it exists precisely to overwrite files the user just saw diffed
+        // and confirmed, so it is the one get where an engine swap has the worst
+        // failure mode and the least to gain.
         const engine = options?.force === true ? undefined : this._p4deltaEngine()
         if (engine !== undefined) {
           const viaDelta = await this._syncViaP4delta(engine, spec, options)
           if (viaDelta !== undefined) return viaDelta
+        }
+        const rejected = this._nativeGetReject(options)
+        if (rejected !== undefined) {
+          this._log?.(`[perforce] sync${specSuffix(spec)}: refused — ${rejected}`)
+          await window.showErrorMessage(
+            localize('perforce.sync.scopeRefused', 'The get was not run: {0}', { 0: rejected }),
+          )
+          return {
+            ok: false,
+            cancelled: false,
+            summary: undefined,
+            refusedFiles: [],
+            refusedOverwriteFiles: [],
+            error: undefined,
+          }
         }
         return await this._syncViaP4(spec, options)
       })
@@ -4077,6 +4993,91 @@ export class PerforceClient {
       // both bodies clearing early costs nothing.
       this._clearSyncProgress()
     }
+  }
+
+  /**
+   * Why native p4 may not run this get, or undefined when it may.
+   *
+   * Two kinds of get reach here and they are bounded by different things:
+   *
+   * - A SCOPE-LESS get (the status-bar entry, the marker's default action). Its
+   *   range IS the daily scope — there is nothing else to check, but a scope that
+   *   is not `ready` means the editor does not know the range, and running would
+   *   pull something the user never declared. Refused with the reason.
+   * - An EXPLICIT get (`options.scope`, built from paths the caller named). Here
+   *   the daily scope is a bound the command layer PUT TO THE USER before the run
+   *   (`confirmScopeTargets`: obey → the narrowed filespecs, or run-as-chosen →
+   *   `overrideScope`) — so what reaches the client is already the decided range,
+   *   and what is left to refuse is a range p4 would execute more widely than the
+   *   scope it was checked against ({@link _nativeScopeReject}) and a spec list
+   *   whose RANGE this editor cannot read back at all. The check runs on
+   *   `options.scopeTargets` when the caller has them: `buildScopeFilespec`
+   *   escapes `@#*%`, so an escaped spelling parses back to nothing and must not
+   *   be mistaken for "nothing to check".
+   *   Two unreadable shapes keep their explicit meaning instead: a DEPOT spelling
+   *   the caller named itself (`//...`, `//depot/x#rev` — the whole-client get,
+   *   the graph's time travel, the timeline) and the per-file `#rev` list a
+   *   refusal named (also depot syntax). Those are p4's own grammar, asked for on
+   *   purpose; refusing them would take away the explicit whole-client get the
+   *   plan keeps. Everything else fails closed.
+   *
+   * Per-file force specs are the one explicit shape that also skips the target
+   * check: they are exact FILE targets named by a previous get's refusal, they
+   * carry a `#` no local path may contain, and a depot→local mapping to validate
+   * them would cost a `p4 where` round trip for a target the user just confirmed
+   * one file at a time.
+   */
+  private _nativeGetReject(options?: {
+    readonly scope?: readonly string[]
+    readonly scopeTargets?: readonly SyncScopeTarget[]
+    readonly force?: boolean
+    readonly overrideScope?: boolean
+  }): string | undefined {
+    const explicitScope =
+      options?.scope !== undefined && options.scope.length > 0 ? options.scope : undefined
+    if (options?.overrideScope === true) return undefined
+    if (explicitScope === undefined) {
+      const state = this._scopeState
+      if (state !== 'ready') {
+        if (state === 'empty') return 'the daily scope resolves to an empty range'
+        return `the daily scope is not usable (${this._scopeReason ?? state})`
+      }
+      // A scope-less get's range is the daily scope's includes, spelled
+      // `<include>/...`. An exclusion inside one of them — the config file itself
+      // is always one of those — is not expressible in that spec, and a local
+      // walk cannot substitute for it (a get must also fetch files that were never
+      // downloaded), so the native engine refuses instead of widening past the
+      // range the scope declared.
+      const base = this._readyScope()
+      if (base !== undefined && scopeTargetsWithin(base, scopeTargets(base)) === undefined) {
+        return 'the daily scope excludes entries inside its own range, which a native get cannot express (the p4delta engine applies them)'
+      }
+      return undefined
+    }
+    const specs = explicitScope
+    // The caller's own typed targets win over the specs' own parse. Both name
+    // the same range when the specs are plain, but only the targets survive the
+    // ESCAPED spellings `buildScopeFilespec` produces: `con@tent` reaches p4 as
+    // `con%40tent` (and a whole directory as `<dir>/...`), neither of which
+    // parses back to a target — and reading that failure as "nothing to check"
+    // is how "obey the daily scope" ends up fetching an excluded subtree.
+    const typed = options?.scopeTargets
+    if (typed !== undefined && typed.length > 0) return this._nativeScopeReject(typed)
+    const targets = targetsFromSpecs(specs, this._style)
+    if (targets !== undefined) return this._nativeScopeReject(targets)
+    // No targets to check. Two shapes keep their explicit meaning — a depot
+    // spelling the caller named itself (`//...`, `//depot/x#rev`: the graph's,
+    // the timeline's and the whole-client's ranges, which the daily scope never
+    // had a vote over), and the per-file `#rev` list a refusal named (also depot
+    // syntax). Anything else fails CLOSED: a spec list this editor cannot read
+    // back is not a range it may claim the scope covers.
+    if (specs.every((spec) => spec.startsWith('//'))) {
+      this._log?.(
+        `[perforce] sync: ${specs.length} depot spec(s) run as named by the caller (the daily scope does not bound them)`,
+      )
+      return undefined
+    }
+    return 'the get names paths this editor cannot read back as local paths, so the workspace scope cannot vouch for the range p4 would fetch'
   }
 
   /**
@@ -4367,12 +5368,30 @@ export class PerforceClient {
     spec: string,
     options?: {
       scope?: readonly string[]
+      scopeTargets?: readonly SyncScopeTarget[]
       onProgress?: (progress: { done: number; file: string | undefined }) => void
+      overrideScope?: boolean
     },
   ): Promise<SyncRunResult | undefined> {
-    const entries =
-      options?.scope !== undefined && options.scope.length > 0 ? options.scope : this._syncScopes
-    const rejected = this._p4deltaSyncReject(spec, entries)
+    const override = options?.overrideScope === true
+    const explicit = options?.scope !== undefined && options.scope.length > 0
+    // An override without an explicit scope would have to mean "the daily scope
+    // is wrong, get everything" — which is a widening nobody asked for. The
+    // command layer always carries the user's own selection with an override.
+    if (override && !explicit && options?.scopeTargets === undefined) {
+      this._log?.(
+        '[perforce] sync: p4delta skipped — a scope override needs the explicit targets it overrides for; running on p4',
+      )
+      return undefined
+    }
+    const targets = this._p4deltaGetTargets(options)
+    if (targets === undefined) {
+      this._log?.(
+        '[perforce] sync: p4delta skipped — the scope is not expressible as local targets; running on p4',
+      )
+      return undefined
+    }
+    const rejected = this._p4deltaSyncReject(spec, targets)
     if (rejected !== undefined) {
       this._log?.(`[perforce] sync: p4delta skipped — ${rejected}; running on p4`)
       return undefined
@@ -4388,13 +5407,13 @@ export class PerforceClient {
         `[perforce] sync (p4delta): perforce.syncParallelThreads=${this._syncParallelThreads} does not apply to this engine`,
       )
     }
-    const args = this._buildP4deltaSyncArgs(spec, entries, true)
+    const args = this._buildP4deltaSyncArgs(spec, targets, true, override)
     const onProgress = options?.onProgress
     // The engine emits its file records per apply batch, so the bar advances in
     // chunks instead of line by line. Same contract as the native streaming path
     // (`done` + current file), just a coarser cadence.
     let done = 0
-    const { value: result, cancelled } = await this._cancellable((signal) => {
+    const run = await this._cancellable((signal) => {
       // Seed the bar before anything else: the engine's own preview pass walks
       // the scope first and can run for a long time without one file record.
       this._setSyncProgress(0, undefined)
@@ -4416,6 +5435,8 @@ export class PerforceClient {
         onSpawn: (pid) => this._onSyncP4Spawn(pid),
       })
     })
+    const result = run.value
+    const cancelled = run.cancelled
     // Clear as soon as the engine settles — the count belongs to the "Syncing"
     // label, and the follow-up refresh runs under its own busy label
     // ("Refreshing"). Same point on the run's timeline as the native path's
@@ -4513,58 +5534,96 @@ export class PerforceClient {
 
   /**
    * Why this get cannot go to δ, or undefined when it can. A reason sends the
-   * whole get to p4 (the two engines cannot split one filespec list), so every
-   * entry has to be a shape δ's scope grammar reads:
+   * whole get to p4 (the two engines cannot split one target list), so the
+   * revision spec and every target have to be shapes its command line reads:
    *
    * - `spec`: `#head`, or a changelist (`@12345`, δ's `--to`). `#4` is a
    *   PER-FILE revision and `@2026/08/01` a date — neither has a δ spelling, and
    *   the per-file force form (`''`, with the `#rev` already inside the specs) is
    *   force by definition;
-   * - `//...`: δ's entries are local paths or `//<depot>/...` subtrees, and the
-   *   whole-client wildcard maps to neither;
-   * - anything with a p4 filespec metacharacter, which the command layer has
-   *   already `%`-escaped for p4 — δ reads its entries LITERALLY
-   *   ({@link P4DELTA_SCOPE_METACHARS}), so the escaped spelling would name a
-   *   file nobody has.
+   * - a target that is not an absolute local path (a depot spelling the caller
+   *   named itself, `//...` above all). Local paths — metacharacters and all —
+   *   are fine: the engine escapes at the p4 boundary, which is the whole reason
+   *   its argv takes raw names.
    */
-  private _p4deltaSyncReject(spec: string, entries: readonly string[]): string | undefined {
+  private _p4deltaSyncReject(
+    spec: string,
+    targets: readonly SyncScopeTarget[],
+  ): string | undefined {
+    const specRejected = this._p4deltaSyncSpecReject(spec)
+    if (specRejected !== undefined) return specRejected
+    if (targets.length === 0) return 'no targets'
+    for (const target of targets) {
+      if (!isAbsoluteLocalPath(target.path, this._style)) {
+        return `target ${target.path} is not an absolute local path`
+      }
+    }
+    return undefined
+  }
+
+  /** The revision half of {@link _p4deltaSyncReject}: δ's get takes `#head` or a
+   *  changelist (`@12345`), and nothing else has a spelling in its contract. */
+  private _p4deltaSyncSpecReject(spec: string): string | undefined {
     if (spec !== '#head' && !P4DELTA_SYNC_CHANGELIST_SPEC.test(spec)) {
       return `revision spec ${spec === '' ? '(per-file force)' : spec} has no p4delta form`
-    }
-    if (entries.length === 0) return 'no scope entries'
-    for (const entry of entries) {
-      if (entry === '//...') return 'the whole-client scope //... is not a p4delta entry'
-      const rejected = this._p4deltaEntryReject(entry)
-      if (rejected !== undefined) return rejected
     }
     return undefined
   }
 
   /**
+   * What a δ get runs over: the caller's typed targets, its filespecs parsed back
+   * into targets, or — for a scope-less get — the OPENED WORKSPACE as a hard upper
+   * bound.
+   *
+   * That last one is deliberate, and is where this differs from the native path:
+   * the native engine needs the scope's own include list as its filespecs
+   * ({@link _syncScopes}), while δ reads the same `.p4delta-scope` this editor
+   * parsed and intersects on its side. Handing it a list computed from an older
+   * reading of the config would silently substitute one range for another.
+   *
+   * `undefined` means "no targets this engine can carry": a depot spelling, an
+   * escaped spec list with no raw targets behind it, or an empty list.
+   */
+  private _p4deltaGetTargets(options?: {
+    scope?: readonly string[]
+    scopeTargets?: readonly SyncScopeTarget[]
+  }): SyncScopeTarget[] | undefined {
+    const named = options?.scopeTargets
+    if (named !== undefined && named.length > 0) {
+      return named.every((target) => isAbsoluteLocalPath(target.path, this._style))
+        ? [...named]
+        : undefined
+    }
+    if (options?.scope !== undefined && options.scope.length > 0) {
+      return targetsFromSpecs(options.scope, this._style)
+    }
+    return [{ path: this._workspaceRoot, isDirectory: true }]
+  }
+
+  /**
    * δ's argv for a get: the contract switches every δ call carries, the mode, the
    * target changelist when there is one, `-a` for a real get (without it the run
-   * is a preview), then `--` and the scope entries.
+   * is a preview), then this operation's targets, one argv per target.
    *
-   * Deliberately WITHOUT the configured exclusions: a get has never honoured
-   * `perforce.reconcile.excludeFolders` (only discovery, narrow queries and the
-   * collect/clean writes do), and handing them to an engine that applies them
-   * would silently narrow a range the user asked to sync in full.
+   * The paths are raw local paths, never p4-escaped specs — the engine escapes at
+   * the boundary. `--no-scope-file` is the explicit scope override and travels
+   * only when the user chose it.
    */
   private _buildP4deltaSyncArgs(
     spec: string,
-    entries: readonly string[],
+    targets: readonly SyncScopeTarget[],
     apply: boolean,
+    overrideScope = false,
   ): string[] {
     return [
       '--json',
-      '--no-scope-file',
       '--client-root',
       this.root,
       '--sync',
       ...(spec === '#head' ? [] : ['--to', spec.slice(1)]),
       ...(apply ? ['-a'] : []),
-      '--',
-      ...entries,
+      ...(overrideScope ? ['--no-scope-file'] : []),
+      ...p4deltaTargetArgs(targets),
     ]
   }
 
@@ -4664,7 +5723,7 @@ export class PerforceClient {
     scope?: readonly string[],
     spec = '#head',
     limit?: number,
-    options?: { timeoutMs?: number },
+    options?: { timeoutMs?: number; scopeTargets?: readonly SyncScopeTarget[] },
   ): Promise<{
     ok: boolean
     files: SyncPreviewFile[]
@@ -4672,11 +5731,31 @@ export class PerforceClient {
     upToDate: boolean
   }> {
     // `-m` has no δ spelling, so a bounded preview stays native by construction.
-    const entries = scope !== undefined && scope.length > 0 ? scope : this._syncScopes
+    // The scope is resolved on demand (a preview can be the first thing a fresh
+    // session or a test asks): the range check below is only meaningful with a
+    // scope behind it, and refusing is what happens when there is none.
+    await this._ensureScopeResolved()
     const engine = limit === undefined ? this._p4deltaEngine() : undefined
     if (engine !== undefined) {
-      const viaDelta = await this._p4deltaPreviewSync(engine, spec, entries, options)
-      if (viaDelta !== undefined) return viaDelta
+      const viaDelta = await this._p4deltaPreviewSync(engine, spec, {
+        ...(scope !== undefined ? { scope } : {}),
+        ...(options?.scopeTargets !== undefined ? { scopeTargets: options.scopeTargets } : {}),
+        ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+      })
+      if (viaDelta !== undefined) {
+        if (viaDelta.ok) this._recordSyncPreview(spec)
+        return viaDelta
+      }
+    }
+    // The native preview answers over the same range the get would, and is
+    // refused by the same rule: a `<dir>/...` filespec that cannot express the
+    // scope's exclusions would list files the get is not going to fetch — a
+    // preview that lies about the range is worse than no preview. The
+    // scope-less form is checked against the same implicit range the get uses.
+    const rejected = this._nativeGetReject(scope !== undefined && scope.length > 0 ? { scope } : {})
+    if (rejected !== undefined) {
+      this._log?.(`[perforce] sync -n: refused — ${rejected}`)
+      return { ok: false, files: [], total: undefined, upToDate: false }
     }
     const targets = this._syncTargets(spec, scope)
     const limitArgs = limit !== undefined && limit > 0 ? ['-m', String(limit)] : []
@@ -4695,6 +5774,7 @@ export class PerforceClient {
     // while refusing files in another, and answering "up to date" there would
     // hide exactly the files the user needs to act on.
     if (refused.length === 0 && classifySyncError(res.result).kind === 'upToDate') {
+      this._recordSyncPreview(spec)
       return { ok: true, files: [], total: undefined, upToDate: true }
     }
     if (res.result.exitCode !== 0) {
@@ -4707,7 +5787,53 @@ export class PerforceClient {
     // scope. Where the server omits it, the caller falls back to `files.length`,
     // which now includes them.
     const total = parseSyncPreviewTotal(res.records)
+    this._recordSyncPreview(spec)
     return { ok: true, files, total, upToDate: files.length === 0 }
+  }
+
+  /**
+   * Remember what a concluded preview was about, for the ONE thing the record is
+   * worth: {@link _noteSyncPreviewDrift}. A preview that never concluded
+   * (refused, failed) records nothing — there is no list the user looked at.
+   */
+  private _recordSyncPreview(spec: string): void {
+    this._syncPreview = { spec, scopeIdentity: this._scopeIdentity }
+  }
+
+  /**
+   * Tell the user when the range moved between a `previewSync` and the get it
+   * previewed — the get runs over the config in force NOW either way, and this is
+   * the only part of the old "frozen plan" idea worth keeping.
+   *
+   * Three things keep it honest:
+   * - it is consumed by the first get that follows (one preview, one get), and
+   *   never blocks, delays or refuses anything;
+   * - the identity is the scope's own normalized range ({@link scopeIdentity}),
+   *   so the reconcile NOISE — which no get reads — cannot trigger it, and
+   *   neither can a comment-only config edit;
+   * - a get after a different revision (or an unconcluded preview) matches
+   *   nothing: the preview was not about this run, so there is nothing to point
+   *   at, and the record is dropped silently.
+   *
+   * A get that will not run at all is left to its own refusal message rather than
+   * being announced as "running under the current config".
+   */
+  private async _noteSyncPreviewDrift(spec: string, overrideScope: boolean): Promise<void> {
+    const preview = this._syncPreview
+    this._syncPreview = undefined
+    if (preview === undefined || preview.spec !== spec) return
+    if (preview.scopeIdentity === this._scopeIdentity) return
+    if (!overrideScope && this._scopeState !== 'ready') return
+    this._log?.(
+      `[perforce] sync${specSuffix(spec)}: the previewed range moved ` +
+        `(${preview.scopeIdentity} → ${this._scopeIdentity}); running under the current config`,
+    )
+    await window.showInformationMessage(
+      localize(
+        'perforce.sync.previewConfigMoved',
+        'The workspace scope changed after the preview — this get runs under the config in force now.',
+      ),
+    )
   }
 
   /**
@@ -4718,27 +5844,38 @@ export class PerforceClient {
    * returns undefined and the native preview answers instead: nothing on disk or
    * server can have changed, which is exactly what makes a same-call fallback
    * safe here (unlike the write path's, where `-a` may already have landed).
+   *
+   * The preview is a HINT, not a contract: it runs over the same targets the get
+   * will (the get re-derives them from the same caller-supplied scope), and the
+   * config may move in between. That is not a correctness problem — both sides
+   * read the current file — but it is why this returns no token for the get to
+   * adopt: there is nothing to freeze.
    */
   private async _p4deltaPreviewSync(
     engine: P4deltaService,
     spec: string,
-    entries: readonly string[],
-    options?: { timeoutMs?: number },
+    options?: {
+      scope?: readonly string[]
+      scopeTargets?: readonly SyncScopeTarget[]
+      timeoutMs?: number
+    },
   ): Promise<
-    | {
-        ok: boolean
-        files: SyncPreviewFile[]
-        total: number | undefined
-        upToDate: boolean
-      }
+    | { ok: boolean; files: SyncPreviewFile[]; total: number | undefined; upToDate: boolean }
     | undefined
   > {
-    const rejected = this._p4deltaSyncReject(spec, entries)
+    const targets = this._p4deltaGetTargets(options)
+    if (targets === undefined) {
+      this._log?.(
+        '[perforce] sync -n: p4delta skipped — the scope is not expressible as local targets; running on p4',
+      )
+      return undefined
+    }
+    const rejected = this._p4deltaSyncReject(spec, targets)
     if (rejected !== undefined) {
       this._log?.(`[perforce] sync -n: p4delta skipped — ${rejected}; running on p4`)
       return undefined
     }
-    const result = await engine.run(this._buildP4deltaSyncArgs(spec, entries, false), {
+    const result = await engine.run(this._buildP4deltaSyncArgs(spec, targets, false), {
       ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
     })
     for (const line of result.log) this._log?.(`  p4delta: ${line}`)
@@ -4805,6 +5942,18 @@ export class PerforceClient {
    * mistranslation as the old "edit renders as whole-file delete" bug.
    */
   async runOpenedByOthersScan(): Promise<{ others: number; capped: boolean; ok: boolean }> {
+    // The scan has NO range of its own: it asks about `_syncScopes`, and an
+    // empty list is not "nothing in range" to p4 — `p4 opened -a` with no
+    // filespec asks about the WHOLE DEPOT. A blocked scope is the same trap from
+    // the other side (its fallback is the client root, which is not the range
+    // anyone declared). Neither may be read as "no scope constraints": the
+    // markers are a claim about a range, so with no trustworthy range there is
+    // nothing to claim — and no spawn.
+    const unusable = this._openedByOthersScopeRefusal()
+    if (unusable !== undefined) {
+      this._log?.(`[perforce] opened-by-others: skipped — ${unusable}`)
+      return this._previousOpenedByOthersResult()
+    }
     const probe = OPENED_BY_OTHERS_MAX_DECORATIONS + 1
     const res = await this._p4.execRecords(
       ['opened', '-a', '-m', String(probe), ...this._syncScopes],
@@ -4896,16 +6045,36 @@ export class PerforceClient {
   }
 
   /**
+   * Why the opened-by-others probe has no range to ask about, or undefined when
+   * it has one. The probe's filespecs ARE the daily sync scope, so the same two
+   * states that make a scope unusable for every other operation make it
+   * unusable here — with one extra edge this command owns: an EMPTY scope means
+   * an empty filespec list, and p4 reads a bare `opened -a` as the whole depot.
+   * Never reported as "nobody has anything open" (that is the silent-zero trap
+   * the count's `undefined` state exists for) — the scan simply does not run.
+   */
+  private _openedByOthersScopeRefusal(): string | undefined {
+    const unusable = this._scopeUnusableReason()
+    if (unusable !== undefined) return unusable
+    if (this._syncScopes.length === 0) return 'the daily scope has no sync range to probe'
+    return undefined
+  }
+
+  /**
    * Run an opened-by-others scan in the background if one is due, and never
    * block a caller.
    *
-   * Four guards: auto-check on, no scan in flight, the interval floor elapsed,
-   * client connected.
+   * Five guards: auto-check on, no scan in flight, the interval floor elapsed,
+   * client connected, and a range the probe may ask about (see
+   * {@link _openedByOthersScopeRefusal} — the check is repeated here so a
+   * blocked or empty scope spawns nothing at all, and again inside the scan
+   * itself, because the scope can go bad while a scheduled run waits its turn).
    */
   scheduleOpenedByOthers(): void {
     if (!this._openedByOthersAutoCheck) return
     if (this._backgroundOpenedByOthers) return
     if (this._connection !== 'connected') return
+    if (this._openedByOthersScopeRefusal() !== undefined) return
     const now = this._now()
     if (now - this._lastOpenedByOthersAt < this._openedByOthersIntervalMs) return
     this._lastOpenedByOthersAt = now
@@ -5124,7 +6293,7 @@ export class PerforceClient {
       return
     }
     if (this._now() < this._suppressExternalUntil) return
-    if (!this._isInReconcileScope(path)) return
+    if (!this._mayAffectScope(path)) return
     this._externalChangePending.add(path)
     this._scheduleExternalInvalidation()
   }
@@ -5387,6 +6556,19 @@ export class PerforceClient {
    * static reserve keeps the interactive slot free.
    */
   async runReconcileScan(): Promise<void> {
+    // The daily scope is re-checked on every round: one local read of the fixed
+    // config path is what catches a config created/edited/removed since the last
+    // round, and it costs no process at all.
+    await this.refreshScope()
+    const scopeState = this._scopeState
+    if (scopeState !== 'ready') {
+      this._log?.(
+        `[perforce] reconcile-scan: the daily scope is ${scopeState}` +
+          (this._scopeReason !== undefined ? ` (${this._scopeReason})` : '') +
+          '; nothing scanned — an unusable scope never widens to the whole workspace',
+      )
+      return
+    }
     // Files-only focus (a focus entry naming one file, no directory entries) sets
     // `_reconcileScopeDirs` empty while `_reconcileScopeFiles` is non-empty. Falling
     // back to `[this.root]` there would re-walk the whole depot — the exact
@@ -5399,7 +6581,29 @@ export class PerforceClient {
         : this._reconcileScopeFiles.length > 0
           ? []
           : [this.root]
-    const scopeDirs = rawScopeDirs.filter((d) => !this._isExcluded(d))
+    // Discovery = daily scope ∩ focus (see {@link _isInDiscoveryScope}). The
+    // intersection is computed here, once, and both engines are handed its
+    // result: δ as the call's positional targets, native as the directories to
+    // walk. The two must agree or the engines would answer different questions.
+    //
+    // The PARTS form, deliberately: an exclude inside a covered directory is the
+    // round's own business (native carves that directory level by level, δ
+    // intersects on its own side), and vetoing the hole would let one excluded
+    // subdirectory of the focus stop the whole discovery round — the round that
+    // exists to keep reporting everything else.
+    const focusTargets: SyncScopeTarget[] = [
+      ...rawScopeDirs.map((dir) => ({ path: dir, isDirectory: true })),
+      ...this._reconcileScopeFiles.map((path) => ({ path, isDirectory: false })),
+    ]
+    const discovery = scopePartsWithin(this._scopeView!, focusTargets).filter(
+      // The noise is pruned HERE, before either engine is handed anything: a
+      // focus entry the user hid must not become this round's target (nothing
+      // can then "skip" it after paying for the spawn), while a directory that
+      // merely CONTAINS a noise subtree stays — its own round carves around it,
+      // and vetoing it would let one hidden subfolder stop the whole discovery.
+      (part) => !this._isExcluded(part.path),
+    )
+    const scopeDirs = discovery.filter((t) => t.isDirectory).map((t) => t.path)
     if (scopeDirs.length === 0 && this._reconcileScopeFiles.length === 0) {
       this._log?.(`[perforce] reconcile-scan: no scope dirs and no scope files; nothing to scan`)
       return
@@ -5422,12 +6626,47 @@ export class PerforceClient {
             if (await this._runP4deltaReconcileScan(engine, scopeDirs, signal)) return
           }
           this._reconcileScanEngine = 'native'
-          await this._runNativeReconcileScan(scopeDirs, signal)
+          // The fallback walks directories with native filespecs. Its range is
+          // re-derived from the CURRENT base (a δ round may have died because the
+          // config moved under it), and it is the parts form like the discovery
+          // above: a directory with an excluded subtree is walkable — the scan
+          // carves it level by level — while a directory the scope no longer
+          // covers at all drops out. An empty list is a valid answer (a
+          // files-only focus has no directories to walk by construction): the
+          // per-file phase below still runs.
+          const native = this._nativeScanFallback(scopeDirs)
+          if (native === undefined) {
+            this._log?.(
+              '[perforce] reconcile-scan: the daily scope is not resolved for the native fallback; leaving the drift as it was',
+            )
+            return
+          }
+          await this._runNativeReconcileScan(native, signal)
         } finally {
           this._clearScanProgress()
         }
       }, 'reconcile-scan')
     })
+  }
+
+  /** The directories a native fallback round may walk, or undefined when the
+   *  scope cannot vouch for any range at all (it is no longer resolved). The
+   *  intersection is the {@link scopePartsWithin} form, matching the
+   *  discovery that produced the list: a directory holding an excluded subtree
+   *  stays walkable (the round carves around it), and the answer may be empty —
+   *  a files-only focus legitimately has no directory to walk, and the round
+   *  still owes it the per-file phase. Re-resolves nothing: the base this round
+   *  started under is the one its checkpoints are keyed to, and a config change
+   *  during the round aborts it outright ({@link invalidateScope}). */
+  private _nativeScanFallback(scopeDirs: readonly string[]): readonly string[] | undefined {
+    const base = this._readyScope()
+    if (base === undefined) return undefined
+    return scopePartsWithin(
+      base,
+      scopeDirs.map((dir) => ({ path: dir, isDirectory: true })),
+    )
+      .filter((target) => target.isDirectory)
+      .map((target) => target.path)
   }
 
   /**
@@ -5852,7 +7091,13 @@ export class PerforceClient {
       )
     }
 
-    const args = this._buildP4deltaScanArgs(scopeDirs)
+    const targets: SyncScopeTarget[] = scopeDirs.map((dir) => ({ path: dir, isDirectory: true }))
+    // The round's directories travel as plain positional targets and the noise as
+    // `--exclude-*`: the engine reads the same `.p4delta-scope` this editor just
+    // resolved, so the exclusions (the config's own, and their interaction with
+    // the boundary) are applied by the one implementation that resolved the
+    // scope — and the round must not even walk the folders the user hid.
+    const args = this._buildP4deltaScanArgs(targets, this._reconcileNoise)
     this._log?.(
       `[perforce] reconcile-scan: p4delta covering ${scopeDirs.length} scope dir(s) in one run`,
     )
@@ -5920,69 +7165,38 @@ export class PerforceClient {
 
   /** Build δ's argv for one scan round.
    *
-   * `--json` selects the machine contract, `--no-scope-file` keeps the scope the
-   * editor owns (the user's focus folders / excludes, not someone's
-   * `.p4delta-scope`), `--client-root` saves the engine a `p4 info` round-trip,
-   * and `--no-revert-groups` brings the `open` classification down to
-   * line-for-line `p4 reconcile -a -e -d`.
+   * `--json` selects the machine contract, `--client-root` saves the engine a
+   * `p4 info` round-trip, and `--no-revert-groups` brings the `open`
+   * classification down to line-for-line `p4 reconcile -a -e -d`.
    *
-   * The scope entries are the scanned directories plus the exclusions, all in
-   * ONE call — δ applies the exclusions itself, which is why the native carve
-   * (a spec list per clean subtree) is not needed here. Exclusions must be
-   * complete: an omitted one would pull a directory the user excluded back into
-   * the scan. Paths go out verbatim (no p4 `%xx` escaping) — the contract makes
-   * that the consumer's rule, and δ treats an entry literally. The `--`
-   * separator keeps a `-`-prefixed exclusion a positional entry instead of an
-   * option.
+   * The scanned directories travel as plain positional targets, one argv each,
+   * and the noise as `--exclude-*`: the engine intersects them with the daily
+   * scope it reads from the client root itself, so the exclusions are applied by
+   * the one implementation that resolved the scope instead of being re-derived
+   * here. The paths are raw local names (the engine escapes at the p4 boundary).
    */
-  private _buildP4deltaScanArgs(scopeDirs: readonly string[]): string[] {
-    const entries = scopeDirs.map((dir) => p4deltaScopeEntry(dir, false))
-    for (const dir of this._reconcileExcludeDirs) {
-      // Only the exclusions inside the scanned scope matter: one outside it
-      // shields nothing the scan could otherwise reach (`_isExcluded` already
-      // dropped any scope dir that sits under an exclusion).
-      if (isUnderAny(dir, scopeDirs)) entries.push(p4deltaScopeEntry(dir, true))
-    }
+  private _buildP4deltaScanArgs(
+    targets: readonly SyncScopeTarget[],
+    noise: ReconcileNoiseConfig,
+  ): string[] {
     return [
       '--json',
-      '--no-scope-file',
       '--client-root',
       this.root,
       '--no-revert-groups',
-      '--',
-      ...entries,
+      ...noiseExcludeArgs(noise),
+      ...p4deltaTargetArgs(targets),
     ]
   }
 
   /**
-   * Why a δ run does not count as an answer, or undefined when it does.
-   *
-   * The contract's hard rules: a stream without a `summary` has no conclusion
-   * (killed, crashed, cancelled), a non-JSON stdout line means the binary is
-   * not the engine we think it is, and exit 2 is a usage error. `ok:false` is a
-   * partial stream too — except `no-entry-matched`, which is the complete,
-   * correct answer for a scope whose entries are all gone (an emptied focus
-   * folder), not a failure.
+   * Why a δ scan run does not count as an answer, or undefined when it does.
+   * {@link p4deltaContractFailure} is the whole table — the `handoff` guard
+   * included, so a stream that hands files to p4 without an action reaches the
+   * native re-run instead of publishing (and checkpointing) "nothing drifted".
    */
   private _p4deltaRunFailure(result: P4deltaRunResult): string | undefined {
-    if (result.sawNonJsonStdout) return 'stdout carried a non-JSON line'
-    if (result.code === 2) return 'usage error (exit 2)'
-    const summary = summarizeRun(result)
-    if (summary === undefined) {
-      return `no summary (exit ${result.code}${result.signal !== null ? `, signal ${result.signal}` : ''})`
-    }
-    // A summary for another mode answered a different question — a wiring bug,
-    // an engine that picked its own default, or a build whose contract moved.
-    // Reading its records as this run's answer is how a scan ends up publishing
-    // (and CHECKPOINTING) a set the caller never asked about; a wrong answer
-    // must reach the fallback ladder, never the drift set.
-    if (summary.mode !== 'open') {
-      return `summary reports mode ${summary.mode ?? '<none>'} (expected open)`
-    }
-    if (!summary.ok && summary.reason !== 'no-entry-matched') {
-      return `run failed (${summary.reason ?? 'error'})`
-    }
-    return undefined
+    return p4deltaContractFailure(result, summarizeRun(result))
   }
 
   /**
@@ -6026,29 +7240,48 @@ export class PerforceClient {
     return `${this._reconcileScanFingerprint()}:${dir}`
   }
 
-  /** A stable fingerprint of the reconcile scope, its exclusions AND the engine
-   *  the round runs on: the sorted, case-folded scope directories plus the
-   *  sorted, case-folded exclude directories plus `native`/`p4delta` hashed
-   *  together, so any focus, exclude or engine change invalidates the whole
-   *  checkpoint batch. An exclude change must orphan the old checkpoints, or a
-   *  directory scanned without the exclusion would replay as if still
-   *  authoritative; the engine marker keeps the two engines' checkpoints from
-   *  ever aliasing — δ's snapshot is whole-scope while a native one is
-   *  per-directory, and replaying either as the other would publish rows for a
-   *  different scope. Switching engines therefore orphans the other's
-   *  checkpoints on purpose: they are correct answers to a question this
-   *  session is no longer asking. */
+  /** A stable fingerprint of everything a scan's checkpoints are an answer to:
+   *  the daily scope's IDENTITY ({@link _scopeIdentity} — a digest of the
+   *  RESOLVED range, so a config edit that moves nothing leaves it alone), the
+   *  focus (the discovery range is scope ∩ focus, so a focus change answers a
+   *  different question), the resolved include/exclude entries, the configured
+   *  reconcile noise, and which engine the round runs on. Hashed together, so any
+   *  one of them changing orphans the whole batch at once.
+   *
+   *  The scope identity is what the pre-scope design could not express: an edited
+   *  `.p4delta-scope` can leave the focus and even the exclude list looking
+   *  identical while the range a directory was scanned under changed
+   *  completely — that edit adds or removes an INCLUDE, and replaying the old
+   *  checkpoint would publish rows for a range nobody asked about. The engine
+   *  marker keeps the two engines from aliasing: δ answers the whole scope in one
+   *  round while a native scan is per-directory. The noise belongs here for the same
+   *  reason the focus does: it narrows which files the round ANSWERED for, and
+   *  replayed rows from a round that walked wider folders would list files the
+   *  current setting hides. */
   private _reconcileScanFingerprint(): string {
     const scopeDirs = this._reconcileScopeDirs.length > 0 ? this._reconcileScopeDirs : [this.root]
     const scopeCanonical = scopeDirs
       .map((dir) => scopeKey(dir))
       .sort()
       .join('\n')
-    const excludeCanonical = this._reconcileExcludeDirs
-      .map((dir) => scopeKey(dir))
+    const base = this._scopeView
+    const includeCanonical = (base?.includes ?? [])
+      .map((entry) => `${entry.kind}:${localPathKey(entry.path, this._style)}`)
       .sort()
       .join('\n')
-    const canonical = `${scopeCanonical}--exclude--${excludeCanonical}--engine--${this._reconcileScanEngine}`
+    const excludeCanonical = (base?.excludes ?? [])
+      .map((entry) => `${entry.kind}:${localPathKey(entry.path, this._style)}`)
+      .sort()
+      .join('\n')
+    const noiseCanonical = [
+      ...this._reconcileNoise.dirs.map((dir) => `d:${scopeKey(dir)}`),
+      ...this._reconcileNoise.files.map((file) => `f:${scopeKey(file)}`),
+    ]
+      .sort()
+      .join('\n')
+    const canonical =
+      `${scopeCanonical}--scope--${this._scopeIdentity}--include--${includeCanonical}` +
+      `--exclude--${excludeCanonical}--noise--${noiseCanonical}--engine--${this._reconcileScanEngine}`
     return createHash('sha1').update(canonical).digest('hex').slice(0, 16)
   }
 
@@ -6903,16 +8136,16 @@ export class PerforceClient {
    * Discard working-tree changes for not-yet-opened files: re-adds files deleted
    * on disk, deletes files added on disk, and reverts edited-on-disk content back
    * to the have revision. Destructive (local edits are lost) — the command layer
-   * confirms first. `p4 clean` takes the `<dir>/...` recursive syntax natively,
-   * so directory targets need no expansion here.
+   * confirms first, and the range it runs over is derived HERE, after that
+   * confirmation ({@link _mutateWrite}), so a setting edited while the dialog was
+   * up decides what is deleted rather than being ignored.
    *
-   * Native is `p4 clean -a -e -d`; δ's `--clean -a` is the same direction
-   * ({@link _mutateWrite}), and inherits this operation's
-   * {@link CONTENT_TRANSFER_EXEC} policy — no watchdog, cancel signal only.
+   * Native is `p4 clean -a -e -d`; δ's `--clean -a` is the same direction, and
+   * inherits this operation's {@link CONTENT_TRANSFER_EXEC} policy — no watchdog,
+   * cancel signal only.
    */
-  async revertReconcile(paths: readonly string[]): Promise<boolean> {
-    if (paths.length === 0) return false
-    return this._mutateWrite('clean', paths)
+  async revertReconcile(range: WriteRange, options?: WriteOptions): Promise<boolean> {
+    return this._mutateWrite('clean', range, undefined, options)
   }
 
   /**
@@ -7895,6 +9128,11 @@ export class PerforceClient {
     this._groups.clear()
     this._resolveGroup.dispose()
     this._reconcileGroup.dispose()
+    if (this._scopeRecheckTimer !== undefined) {
+      clearTimeout(this._scopeRecheckTimer)
+      this._scopeRecheckTimer = undefined
+    }
+    this._onScopeBlocked = undefined
     this._sc.dispose()
     this._changeListeners.clear()
   }

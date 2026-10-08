@@ -7,6 +7,7 @@
  */
 import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { clientSpecReply, isClientSpecProbe } from './discoveryProbe.js'
 
 class FakeChildProcess extends EventEmitter {
   readonly stdout = new EventEmitter()
@@ -68,8 +69,9 @@ function subcommand(argv: string[]): string | undefined {
 }
 
 function finish(child: FakeChildProcess, argv: string[]): void {
-  const stdout =
-    subcommand(argv) === 'info'
+  const stdout = isClientSpecProbe(argv)
+    ? clientSpecReply(ROOT)
+    : subcommand(argv) === 'info'
       ? `... clientName ${CLIENT}\n... clientRoot ${ROOT}\n... userName bob\n\n`
       : ''
   queueMicrotask(() => {

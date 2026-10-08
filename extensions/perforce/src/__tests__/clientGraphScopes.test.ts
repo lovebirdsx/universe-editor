@@ -8,6 +8,7 @@
  */
 import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { clientSpecReply, isClientSpecProbe } from './discoveryProbe.js'
 
 class FakeChildProcess extends EventEmitter {
   readonly stdout = new EventEmitter()
@@ -50,6 +51,7 @@ const { PerforceClient } = await import('../client.js')
 const { ConcurrencyGate } = await import('../concurrency.js')
 
 const ROOT = process.platform === 'win32' ? 'C:\\ws' : '/ws'
+const DISCOVERY_SPEC = clientSpecReply(ROOT)
 
 function subcommand(argv: string[]): string | undefined {
   for (let i = 0; i < argv.length; i++) {
@@ -88,7 +90,9 @@ function harness(ids: readonly string[]): Harness {
     queueMicrotask(() => {
       const cmd = subcommand(argv)
       let stdout = ''
-      if (cmd === 'info') {
+      if (isClientSpecProbe(argv)) {
+        stdout = DISCOVERY_SPEC
+      } else if (cmd === 'info') {
         stdout = `... clientName testclient\n... clientRoot ${ROOT}\n... userName testuser\n\n`
       } else if (cmd === 'changes') {
         changesArgvs.push(argv)

@@ -7,6 +7,7 @@
 import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { expandP4Argv } from './expandP4Argv.js'
+import { clientSpecReply, isClientSpecProbe } from './discoveryProbe.js'
 
 class FakeChildProcess extends EventEmitter {
   readonly stdout = new EventEmitter()
@@ -67,6 +68,7 @@ const { ConcurrencyGate } = await import('../concurrency.js')
 type PerforceClientInstance = import('../client.js').PerforceClient
 
 const ROOT = process.platform === 'win32' ? 'C:\\ws' : '/ws'
+const DISCOVERY_SPEC = clientSpecReply(ROOT)
 const CLIENT = 'testclient'
 
 /** p4's own cap on a description reported without `-l`. */
@@ -93,6 +95,9 @@ function subcommand(argv: string[]): string | undefined {
 
 function handle(argv: string[], opts: RespondOptions): { stdout: string } {
   const cmd = subcommand(argv)
+  if (isClientSpecProbe(argv)) {
+    return { stdout: DISCOVERY_SPEC }
+  }
   if (cmd === 'info') {
     return { stdout: `... clientName ${CLIENT}\n... clientRoot ${ROOT}\n... userName bob\n\n` }
   }

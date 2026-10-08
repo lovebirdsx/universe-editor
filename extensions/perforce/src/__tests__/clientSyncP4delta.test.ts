@@ -4,12 +4,17 @@
  * the native path produces, and the failure split — a run that never reached its
  * apply phase is re-served on p4 in the same call, one that did is reported
  * as-is. This locks in:
- *  1. An eligible get runs ONE δ call (`--sync -a -- <entries>`) and no `p4
- *     sync` at all; `@<CL>` becomes `--to`, `#head` adds nothing.
+ *  1. An eligible get runs ONE δ call (`--sync -a <targets>`) and no `p4 sync`
+ *     at all; `@<CL>` becomes `--to`, `#head` adds nothing, and the range
+ *     travels as ordinary argv — the opened workspace as a hard upper bound,
+ *     with the engine applying the scope it reads at its own startup.
  *  2. Everything δ cannot express stays native: `#4`, `@<date>`, per-file force,
- *     the whole-client scope, a filespec metacharacter, and any force get.
+ *     the whole-client scope (a depot spelling), and any force get. A path
+ *     holding a p4 metacharacter is NOT one of them: δ reads raw local paths,
+ *     so such a target is handed over like any other.
  *  3. Records → summary: applied classes become rows, one `resolve` record feeds
- *     both keptOpen and mustResolve, refusals are read back from the engine log.
+ *     both keptOpen and mustResolve, and refusals are read back from the engine
+ *     log.
  *  4. Failures before the apply phase fall back to p4 in the same call and do
  *     NOT count toward the ladder; failures after it are reported, never
  *     retried (the transfer may already have landed) and do count.
@@ -22,11 +27,22 @@
  * client built is what these tests assert on. A get also needs the session
  * verdict only a scan round can give (`_reconcileScanEngine`), so the stub
  * answers the arming scan too and `makeArmedClient` runs one.
+ *
+ * A get's range is no longer set on the client (`setSyncScope` is gone): what
+ * the editor hands over is the caller's typed targets, or the opened workspace
+ * as a hard upper bound, and the daily scope the engine applies is the one IT
+ * reads when its process starts. A get therefore carries no scope of its own to
+ * assert on — only the targets in its argv, which is why the config a client
+ * read is injected here as a `scopeFixture` (the range the editor side of the
+ * run reasons about) while the engine side is out of this file's sight.
  */
 import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PerforceClientOptions } from '../client.js'
+import { NO_SCOPE_CONFIG, scopeFixture } from './scopeFixture.js'
+import { clientSpecReply, isClientSpecProbe } from './discoveryProbe.js'
 type PerforceClientInstance = import('../client.js').PerforceClient
+type ScopeRead = import('./scopeFixture.js').ScopeRead
 
 class FakeChildProcess extends EventEmitter {
   readonly stdout = new EventEmitter()
@@ -95,8 +111,37 @@ type P4deltaRecord = import('../p4deltaService.js').P4deltaRecord
 type P4deltaRunResult = import('../p4deltaService.js').P4deltaRunResult
 
 const ROOT = process.platform === 'win32' ? 'C:\\ws' : '/ws'
+const DISCOVERY_SPEC = clientSpecReply(ROOT)
 const ROOT_FWD = process.platform === 'win32' ? 'C:/ws' : '/ws'
 const CLIENT = 'testclient'
+
+/** The daily scope's one include, in the client's own spelling: the Content
+ *  folder of the client root — the range the tests used to hand the get
+ *  directly (`setSyncScope`), now resolved as a scope and injected. */
+const CONTENT = `${ROOT_FWD}/Content`
+
+/** The config a client resolves for a test: Content, under the client root. */
+function contentScope(): ScopeRead {
+  return scopeFixture([CONTENT])
+}
+
+/** The same config after it narrowed its include. */
+function narrowedScope(): ScopeRead {
+  return scopeFixture([`${CONTENT}/sub`])
+}
+
+/** …and after it added an exclusion (the include list does not move at all). */
+function excludedScope(): ScopeRead {
+  return scopeFixture([CONTENT], [`${CONTENT}/gen`])
+}
+
+/** …and after it WIDENED: the range now covers more than the preview listed. */
+function widenedScope(): ScopeRead {
+  return scopeFixture([CONTENT, `${ROOT_FWD}/Tools`])
+}
+
+/** A folder with no config file at all — the whole opened workspace. */
+const NO_CONFIG: ScopeRead = () => NO_SCOPE_CONFIG
 
 /** The exe the client is handed. The service around it is real; only its
  *  `run` is stubbed, so the argv under test is the one the client built. */
@@ -140,6 +185,7 @@ const DISCOVERY = `... clientName ${CLIENT}\n... clientRoot ${ROOT}\n... userNam
 /** Discovery plus the get every test is about; everything else reads empty. */
 function p4Handler(argv: string[]): Reply {
   const cmd = subcommand(argv)
+  if (isClientSpecProbe(argv)) return { stdout: DISCOVERY_SPEC }
   if (cmd === 'info') return { stdout: DISCOVERY }
   if (cmd === 'sync')
     return { stdout: `//depot/branch_x/native.cpp#9 - updated as ${ROOT_FWD}/native.cpp` }
@@ -194,9 +240,10 @@ function stubP4deltaRun(): void {
       const argv = [...args]
       p4deltaCalls.push(argv)
       p4deltaOptions.push(options)
-      const r: DeltaReply = argv.includes('--sync') ? syncReply(argv) : scanReply(argv)
+      const isGet = argv.includes('--sync')
+      const r: DeltaReply = isGet ? syncReply(argv) : scanReply(argv)
       if (r.hold) await r.hold
-      const records = r.records ?? []
+      const records = [...(r.records ?? [])]
       // The real service hands each record to the caller as its line arrives;
       // replaying them here is what lets a test observe the progress a get
       // publishes mid-run.
@@ -213,9 +260,35 @@ function stubP4deltaRun(): void {
     })
 }
 
-/** The δ argv of the get runs only (the arming scan is not a get). */
+/** The indices of the get runs (the arming scan is not a get). */
+function getIndexes(): number[] {
+  return p4deltaCalls.map((argv, i) => (argv.includes('--sync') ? i : -1)).filter((i) => i >= 0)
+}
+
+/** The δ argv of the get runs only. */
 function getCalls(): string[][] {
-  return p4deltaCalls.filter((a) => a.includes('--sync'))
+  return getIndexes().map((i) => p4deltaCalls[i]!)
+}
+
+/** The targets a δ get was handed — its argv tail, after the switches the
+ *  contract fixes. One argv per target, raw local paths, no scope tail. */
+function deltaTargets(argv: readonly string[]): string[] {
+  let i = 0
+  const skip = (flag: string): void => {
+    if (argv[i] === flag) i += 1
+  }
+  skip('--json')
+  if (argv[i] === '--client-root') i += 2
+  skip('--sync')
+  if (argv[i] === '--to') i += 2
+  skip('-a')
+  skip('--no-scope-file')
+  return [...argv.slice(i)]
+}
+
+/** What every δ get ran over, in call order. */
+function getTargets(): string[][] {
+  return getCalls().map(deltaTargets)
 }
 
 /** One δ `kind:"file"` record of a sync run, in the contract's shape. */
@@ -272,27 +345,46 @@ function deltaSummary(overrides: Record<string, unknown> = {}): P4deltaRecord {
 
 const createdClients: PerforceClientInstance[] = []
 
-async function makeClient(options: PerforceClientOptions = {}): Promise<PerforceClientInstance> {
+async function makeClient(
+  options: PerforceClientOptions = {},
+  readScope: ScopeRead = scopeFixture([CONTENT]),
+): Promise<PerforceClientInstance> {
   respond(p4Handler)
   const client = await PerforceClient.create(
     ROOT,
     {},
     new ConcurrencyGate(4),
     { enabled: true, workspaceTtlMs: 4000 },
-    options,
+    { readScope, ...options },
   )
   expect(client).toBeDefined()
   createdClients.push(client!)
   return client!
 }
 
+/** A client whose injected config can be swapped mid-flight — an edit landing
+ *  between a preview and the get that applies it. */
+async function makeSwappableClient(
+  initial: ScopeRead,
+): Promise<{ client: PerforceClientInstance; setScope: (next: ScopeRead) => void }> {
+  let current = initial
+  const client = await makeArmedClient({}, (root) => current(root))
+  return {
+    client,
+    setScope: (next) => {
+      current = next
+    },
+  }
+}
+
 /** A client whose session has already routed its questions to δ the way
  *  production does: one whole-scope scan round answered by the engine. The get
  *  is served by δ only after that verdict, so every test starts here. */
 async function makeArmedClient(
-  options: PerforceClientOptions = { p4delta: { exe: P4DELTA_EXE } },
+  options: PerforceClientOptions = {},
+  readScope: ScopeRead = scopeFixture([CONTENT]),
 ): Promise<PerforceClientInstance> {
-  const client = await makeClient(options)
+  const client = await makeClient({ p4delta: { exe: P4DELTA_EXE }, ...options }, readScope)
   await client.runReconcileScan()
   return client
 }
@@ -329,22 +421,17 @@ afterEach(() => {
 describe('PerforceClient.sync — δ engine', () => {
   it('serves an eligible get from δ, with the contract argv and no p4 sync', async () => {
     const client = await makeArmedClient()
-    client.setSyncScope([`${ROOT_FWD}/Content`])
     syncReply = () => ({ records: [deltaFile('Content/a.cpp'), deltaSummary()] })
 
     const res = await client.sync('#head')
 
+    // One δ call, plain argv: no `--no-scope-file` (that flag belongs to the
+    // explicit scope override alone), no scope tail and no snapshot. What the
+    // editor hands over is the opened workspace as a HARD UPPER BOUND; the daily
+    // scope is applied by the engine out of the config it reads when it starts,
+    // so a get never carries a list computed from an older reading of that file.
     expect(getCalls()).toEqual([
-      [
-        '--json',
-        '--no-scope-file',
-        '--client-root',
-        ROOT,
-        '--sync',
-        '-a',
-        '--',
-        `${ROOT_FWD}/Content/...`,
-      ],
+      ['--json', '--client-root', ROOT, '--sync', '-a', `${ROOT_FWD}/...`],
     ])
     // The whole point of the engine swap: not one `p4 sync` for this get.
     expect(nativeSyncCalls()).toEqual([])
@@ -368,7 +455,6 @@ describe('PerforceClient.sync — δ engine', () => {
     // round that came back from δ proves it can answer this workspace, and until
     // that round happens the get stays native like every other question.
     const client = await makeClient({ p4delta: { exe: P4DELTA_EXE } })
-    client.setSyncScope([`${ROOT_FWD}/Content`])
 
     const res = await client.sync('#head')
 
@@ -379,37 +465,29 @@ describe('PerforceClient.sync — δ engine', () => {
 
   it('carries a changelist target as --to', async () => {
     const client = await makeArmedClient()
-    client.setSyncScope([`${ROOT_FWD}/Content`])
 
     await client.sync('@4521')
 
-    expect(getCalls()[0]).toEqual([
-      '--json',
-      '--no-scope-file',
-      '--client-root',
-      ROOT,
-      '--sync',
-      '--to',
-      '4521',
-      '-a',
-      '--',
-      `${ROOT_FWD}/Content/...`,
+    expect(getCalls()).toEqual([
+      ['--json', '--client-root', ROOT, '--sync', '--to', '4521', '-a', `${ROOT_FWD}/...`],
     ])
   })
 
-  it('passes a filespec scope through verbatim, without escaping it', async () => {
+  it('keeps a depot-syntax scope off δ, without escaping it', async () => {
     const client = await makeArmedClient()
     // A depot-syntax scope (the graph's / the timeline's), handed in as the
-    // per-call scope. δ reads entries literally, so a `%`-escaped spelling would
-    // name a file nobody has.
-    await client.sync('#head', { scope: ['//depot/branch_x/...'] })
+    // per-call scope. δ reads entries literally, and a typed request carries
+    // absolute LOCAL targets only, so this range is not one δ can be asked for
+    // at all — p4 runs it verbatim, which is the engine that can read it.
+    const res = await client.sync('#head', { scope: ['//depot/branch_x/...'] })
 
-    expect(getCalls()[0]?.slice(-1)).toEqual(['//depot/branch_x/...'])
+    expect(getCalls()).toEqual([])
+    expect(res.ok).toBe(true)
+    expect(nativeSyncCalls().map((a) => a.at(-1))).toEqual(['//depot/branch_x/...#head'])
   })
 
   it('stays on p4 for a revision spec δ cannot express', async () => {
     const client = await makeArmedClient()
-    client.setSyncScope([`${ROOT_FWD}/Content`])
 
     for (const spec of ['#4', '@2026/08/01', '']) {
       await client.sync(spec)
@@ -417,37 +495,49 @@ describe('PerforceClient.sync — δ engine', () => {
 
     expect(getCalls()).toEqual([])
     expect(nativeSyncCalls().map((a) => a.at(-1))).toEqual([
-      `${ROOT_FWD}/Content/...#4`,
-      `${ROOT_FWD}/Content/...@2026/08/01`,
-      `${ROOT_FWD}/Content/...`,
+      `${CONTENT}/...#4`,
+      `${CONTENT}/...@2026/08/01`,
+      `${CONTENT}/...`,
     ])
   })
 
-  it('stays on p4 for a scope δ cannot read', async () => {
-    const client = await makeArmedClient()
-    client.setSyncScope([`${ROOT_FWD}/con@tent`])
-    await client.sync('#head')
-    // Escaped-for-p4 spelling is what the native argv carries; the metacharacter
-    // is exactly why the engine is not asked.
-    expect(getCalls()).toEqual([])
-    expect(nativeSyncCalls()).toHaveLength(1)
+  it('asks δ even when the config names a folder with a p4 metacharacter', async () => {
+    // A config include whose name carries `@` is exactly what the engine escapes
+    // for itself at the p4 boundary, and the get's own argv is the workspace
+    // root either way — so nothing about that name can route the get native.
+    const client = await makeArmedClient({}, scopeFixture([`${ROOT_FWD}/con@tent`]))
+    syncReply = () => ({ records: [deltaFile('Content/a.cpp'), deltaSummary()] })
+    const res = await client.sync('#head')
+
+    expect(getCalls()).toHaveLength(1)
+    expect(nativeSyncCalls()).toEqual([])
+    expect(res.ok).toBe(true)
   })
 
   it('stays on p4 for the whole-client scope', async () => {
     const client = await makeArmedClient()
-    // The default before any focus folder is set: δ's entries are local paths
-    // or `//<depot>/...` subtrees, and `//...` is neither.
-    expect(client.syncScopes).toEqual(['//...'])
+    // The whole client is no longer a default: a scope-less get falls back to
+    // the daily scope, so `//...` only arrives as the command layer's explicit
+    // whole-repo choice — a range outside every daily scope, which the command
+    // layer puts to the user and whose accepted answer is the override.
+    expect(client.syncScopes).toEqual([`${CONTENT}/...`])
 
-    await client.sync('#head')
+    await client.sync('#head', { scope: ['//...'], overrideScope: true })
 
     expect(getCalls()).toEqual([])
     expect(nativeSyncCalls()).toHaveLength(1)
+
+    // …and the depot spelling routes native on its own merits — it is not a
+    // range δ's typed request can carry, so the override is not what decides
+    // here (the command layer is where the user's agreement is obtained).
+    const plain = await client.sync('#head', { scope: ['//...'] })
+    expect(plain.ok).toBe(true)
+    expect(nativeSyncCalls()).toHaveLength(2)
+    expect(nativeSyncCalls()[1]!.at(-1)).toBe('//...#head')
   })
 
   it('stays on p4 for a force get, whose spec δ cannot read', async () => {
     const client = await makeArmedClient()
-    client.setSyncScope([`${ROOT_FWD}/Content`])
 
     await client.sync('#head', { force: true })
 
@@ -457,7 +547,6 @@ describe('PerforceClient.sync — δ engine', () => {
 
   it('maps refusals, opened files and applied rows out of the engine run', async () => {
     const client = await makeArmedClient()
-    client.setSyncScope([`${ROOT_FWD}/Content`])
     syncReply = () => ({
       records: [
         deltaFile('Content/a.cpp'),
@@ -491,7 +580,6 @@ describe('PerforceClient.sync — δ engine', () => {
 
   it('reports an up-to-date run without refreshing', async () => {
     const client = await makeArmedClient()
-    client.setSyncScope([`${ROOT_FWD}/Content`])
     syncReply = () => ({ records: [deltaSummary({ total: 0, counts: {} })] })
 
     const res = await client.sync('#head')
@@ -507,7 +595,6 @@ describe('PerforceClient.sync — δ engine', () => {
   // apply phase, so re-serving the get on p4 in the same call is free.
   it('re-runs an unconcluded get on p4 in the same call, without counting a failure', async () => {
     const client = await makeArmedClient()
-    client.setSyncScope([`${ROOT_FWD}/Content`])
     syncReply = () => ({ code: 1, log: ['boom'] })
 
     const res = await client.sync('#head')
@@ -528,7 +615,6 @@ describe('PerforceClient.sync — δ engine', () => {
   // not a retry.
   it('reports a failure after the apply phase instead of retrying it, and counts it', async () => {
     const client = await makeArmedClient()
-    client.setSyncScope([`${ROOT_FWD}/Content`])
     syncReply = () => ({
       code: 1,
       records: [deltaFile('Content/a.cpp'), { kind: 'error', message: 'connection dropped' }],
@@ -547,7 +633,6 @@ describe('PerforceClient.sync — δ engine', () => {
 
   it('classifies a clobber abort from the engine, keeping the force-get remedy', async () => {
     const client = await makeArmedClient()
-    client.setSyncScope([`${ROOT_FWD}/Content`])
     syncReply = () => ({
       code: 1,
       // The phase record is the engine's own announcement that the apply phase
@@ -566,7 +651,6 @@ describe('PerforceClient.sync — δ engine', () => {
 
   it('drives the progress callback and the io sampler from the record stream', async () => {
     const client = await makeArmedClient()
-    client.setSyncScope([`${ROOT_FWD}/Content`])
     const progress: Array<{ done: number; file: string | undefined }> = []
     syncReply = (argv) => {
       void argv
@@ -601,7 +685,6 @@ describe('PerforceClient.sync — δ engine', () => {
       p4delta: { exe: P4DELTA_EXE },
       log: (msg) => lines.push(msg),
     })
-    client.setSyncScope([`${ROOT_FWD}/Content`])
     // The setting's default is 4, so "once per get" would be every get.
     client.setSyncParallelThreads(8)
     syncReply = () => ({ records: [deltaFile('Content/a.cpp'), deltaSummary()] })
@@ -614,7 +697,6 @@ describe('PerforceClient.sync — δ engine', () => {
 
   it('clears the progress count when the get is done', async () => {
     const client = await makeArmedClient()
-    client.setSyncScope([`${ROOT_FWD}/Content`])
     syncReply = () => ({
       records: [
         deltaFile('Content/a.cpp'),
@@ -643,7 +725,6 @@ describe('PerforceClient.sync — δ engine', () => {
       ],
     })
     await client.runReconcileScan()
-    client.setSyncScope([`${ROOT_FWD}/Content`])
     // The set is keyed by `scopeKey` (folded), so the rows are read by path.
     const drifted = (): Array<string | undefined> =>
       [...client.scanDrift.values()].map((row) => row.clientFile).sort()
@@ -659,7 +740,6 @@ describe('PerforceClient.sync — δ engine', () => {
 
   it('reports a user cancel as cancelled, after subtracting what already landed', async () => {
     const client = await makeArmedClient()
-    client.setSyncScope([`${ROOT_FWD}/Content`])
     let release: () => void = () => {}
     const held = new Promise<void>((r) => (release = r))
     syncReply = () => ({ code: 1, records: [deltaFile('Content/a.cpp')], hold: held })
@@ -685,7 +765,6 @@ describe('PerforceClient.sync — δ engine', () => {
 describe('PerforceClient.previewSync — δ engine', () => {
   it('answers from the engine without -a, folding refusals in', async () => {
     const client = await makeArmedClient()
-    client.setSyncScope([`${ROOT_FWD}/Content`])
     syncReply = () => ({
       records: [
         deltaFile('Content/a.cpp', { stage: 'preview', applied: false }),
@@ -698,15 +777,8 @@ describe('PerforceClient.previewSync — δ engine', () => {
 
     const res = await client.previewSync()
 
-    expect(getCalls()[0]).toEqual([
-      '--json',
-      '--no-scope-file',
-      '--client-root',
-      ROOT,
-      '--sync',
-      '--',
-      `${ROOT_FWD}/Content/...`,
-    ])
+    // The dry run is the same δ call minus `-a`.
+    expect(getCalls()).toEqual([['--json', '--client-root', ROOT, '--sync', `${ROOT_FWD}/...`]])
     expect(res.ok).toBe(true)
     expect(res.files.map((f) => f.clientFile)).toEqual([
       `${ROOT_FWD}/Content/a.cpp`,
@@ -717,7 +789,6 @@ describe('PerforceClient.previewSync — δ engine', () => {
 
   it('falls back to p4 for a bounded preview, which -m cannot express', async () => {
     const client = await makeArmedClient()
-    client.setSyncScope([`${ROOT_FWD}/Content`])
 
     await client.previewSync(undefined, '#head', 50)
 
@@ -727,7 +798,6 @@ describe('PerforceClient.previewSync — δ engine', () => {
 
   it('falls back to p4 when the engine does not answer a read-only preview', async () => {
     const client = await makeArmedClient()
-    client.setSyncScope([`${ROOT_FWD}/Content`])
     syncReply = () => ({ code: 2, sawNonJsonStdout: true })
 
     const res = await client.previewSync()
@@ -736,5 +806,117 @@ describe('PerforceClient.previewSync — δ engine', () => {
     expect(res.ok).toBe(true)
     // Nothing was written, so a failed preview costs nothing but the round trip.
     expect(client.p4deltaFallbackState).toEqual({ failures: 0, disarmed: false })
+  })
+})
+
+/**
+ * A preview and the get that follows it are two ordinary runs, and neither hands
+ * the other a credential: each reads the config in force when IT starts. So an
+ * edit landing in between is not something to unblock — it is simply the next
+ * run's input, the range the workspace asks for now. What must hold is that
+ * nothing is ever frozen: no stored range may outlive the config it came from,
+ * in either direction (narrowed, widened, re-excluded, re-written, or gone).
+ */
+describe('PerforceClient — a config edit between a preview and the get', () => {
+  /** What the stub answers the δ PREVIEW run (`--sync` without `-a`): the same
+   *  file, reported in its preview stage, with a summary that says "not
+   *  applied" — the shape `toSyncOutcome` reads for a dry run. */
+  function previewReply(): DeltaReply {
+    return {
+      records: [
+        deltaFile('Content/a.cpp', { stage: 'preview', applied: false }),
+        deltaSummary({ applied: false, total: 1 }),
+      ],
+    }
+  }
+
+  it('runs the get over the config in force at ITS start, not the preview’s', async () => {
+    const { client, setScope } = await makeSwappableClient(contentScope())
+    syncReply = previewReply
+    expect((await client.previewSync()).ok).toBe(true)
+
+    // The config is edited while the preview is on screen: the get re-resolves
+    // and runs over the range the workspace asks for NOW. No stored plan is
+    // consulted, and nothing about the edit is a refusal.
+    setScope(narrowedScope())
+    await client.refreshScope()
+    syncReply = () => ({ records: [deltaFile('Content/a.cpp'), deltaSummary()] })
+
+    const res = await client.sync('#head')
+
+    expect(res.ok).toBe(true)
+    expect(client.dailyScope?.includes).toEqual([{ path: `${CONTENT}/sub`, kind: 'directory' }])
+    expect(getCalls()).toHaveLength(2)
+    expect(nativeSyncCalls()).toEqual([])
+  })
+
+  it('does not refuse when the config WIDENED its range', async () => {
+    const { client, setScope } = await makeSwappableClient(contentScope())
+    syncReply = previewReply
+    expect((await client.previewSync()).ok).toBe(true)
+
+    setScope(widenedScope())
+    await client.refreshScope()
+    syncReply = () => ({ records: [deltaFile('Content/a.cpp'), deltaSummary()] })
+
+    const res = await client.sync('#head')
+
+    expect(res.ok).toBe(true)
+    expect(client.dailyScope?.includes).toEqual([
+      { path: CONTENT, kind: 'directory' },
+      { path: `${ROOT_FWD}/Tools`, kind: 'directory' },
+    ])
+    expect(getCalls()).toHaveLength(2)
+    expect(nativeSyncCalls()).toEqual([])
+  })
+
+  it('does not refuse when the config gained an exclusion', async () => {
+    const { client, setScope } = await makeSwappableClient(contentScope())
+    syncReply = previewReply
+    expect((await client.previewSync()).ok).toBe(true)
+
+    // An exclusion does not move the INCLUDE list at all, which is exactly why
+    // it used to need a fingerprint nobody could guess: the range's shape says
+    // nothing about it. Reading the file again is what settles it.
+    setScope(excludedScope())
+    await client.refreshScope()
+    syncReply = () => ({ records: [deltaFile('Content/a.cpp'), deltaSummary()] })
+
+    const res = await client.sync('#head')
+
+    expect(res.ok).toBe(true)
+    expect(client.dailyScope?.excludes).toEqual([{ path: `${CONTENT}/gen`, kind: 'directory' }])
+    expect(getCalls()).toHaveLength(2)
+    expect(nativeSyncCalls()).toEqual([])
+  })
+
+  it('does not refuse when the config file is gone', async () => {
+    const { client, setScope } = await makeSwappableClient(contentScope())
+    syncReply = previewReply
+    expect((await client.previewSync()).ok).toBe(true)
+
+    // No config at all any more: the range is the whole opened workspace, which
+    // is strictly wider than what the preview listed — and still not a refusal.
+    setScope(NO_CONFIG)
+    await client.refreshScope()
+    syncReply = () => ({ records: [deltaFile('Content/a.cpp'), deltaSummary()] })
+
+    const res = await client.sync('#head')
+
+    expect(res.ok).toBe(true)
+    expect(client.scopeState).toBe('ready')
+    expect(getCalls()).toHaveLength(2)
+    expect(nativeSyncCalls()).toEqual([])
+  })
+
+  it('resolves a get that had no preview behind it the same way', async () => {
+    const client = await makeArmedClient()
+    syncReply = () => ({ records: [deltaFile('Content/a.cpp'), deltaSummary()] })
+
+    const res = await client.sync('#head')
+
+    expect(res.ok).toBe(true)
+    expect(getCalls()).toHaveLength(1)
+    expect(getTargets()).toEqual([[`${ROOT_FWD}/...`]])
   })
 })

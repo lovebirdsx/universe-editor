@@ -9,6 +9,9 @@ import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { FileSystemWatcher } from '@universe-editor/extension-api'
 import type { PerforceClientOptions, P4CacheOptions } from '../client.js'
+import { localize } from '../nls.js'
+import { scopeFixture } from './scopeFixture.js'
+import { clientSpecReply, isClientSpecProbe } from './discoveryProbe.js'
 type PerforceClientInstance = import('../client.js').PerforceClient
 
 class FakeChildProcess extends EventEmitter {
@@ -56,6 +59,18 @@ const mocks = vi.hoisted(() => ({
   showMessage: vi.fn(),
 }))
 
+/** The extension window, mocked so the scope refusals surface their toast
+ *  instead of reaching a host that is not there. */
+const windowMock = vi.hoisted(() => ({
+  showErrorMessage: vi.fn(),
+  showWarningMessage: vi.fn(),
+  showInformationMessage: vi.fn(),
+}))
+vi.mock('@universe-editor/extension-api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@universe-editor/extension-api')>()
+  return { ...actual, window: windowMock }
+})
+
 vi.mock('node:fs/promises', () => ({
   readFile: vi.fn(async () => ''),
   chmod: vi.fn(async () => undefined),
@@ -93,6 +108,7 @@ const { ConcurrencyGate } = await import('../concurrency.js')
 const { P4Service } = await import('../p4Service.js')
 
 const ROOT = process.platform === 'win32' ? 'C:\\ws' : '/ws'
+const DISCOVERY_SPEC = clientSpecReply(ROOT)
 const ROOT_FWD = process.platform === 'win32' ? 'C:/ws' : '/ws'
 const LOCAL = `${ROOT_FWD}/a.cpp`
 
@@ -208,6 +224,7 @@ const DISCOVERY = `... clientName testclient\n... clientRoot ${ROOT}\n... userNa
 function makeHandler(syncReply: (argv: string[]) => Reply): (argv: string[]) => Reply {
   return (argv) => {
     const cmd = subcommand(argv)
+    if (isClientSpecProbe(argv)) return { stdout: DISCOVERY_SPEC }
     if (cmd === 'info') return { stdout: DISCOVERY }
     if (cmd === 'sync') return syncReply(argv)
     return { stdout: '' }
@@ -290,21 +307,99 @@ describe('PerforceClient.sync', () => {
     })
   })
 
-  it('appends the revision spec to the configured scope', async () => {
-    const client = await makeClient(() => ({ stdout: '' }))
-    client.setSyncScope([`${ROOT_FWD}/Content`])
+  it('appends the revision spec to the daily scope', async () => {
+    const client = await makeClient(() => ({ stdout: '' }), {
+      readScope: scopeFixture([`${ROOT_FWD}/Content`]),
+    })
 
     await client.sync('@12345')
 
     expect(lastSyncArgv()).toEqual(['sync', `${ROOT_FWD}/Content/...@12345`])
   })
 
-  it('defaults to the whole client when no scope is set', async () => {
+  it('defaults to the opened workspace when no scope file exists', async () => {
+    // No `.p4delta-scope` anywhere: the daily scope is the opened workspace, so a
+    // scope-less get is bounded by it — never by `//...`, which would also fetch
+    // the parts of the client the user has not opened.
     const client = await makeClient(() => ({ stdout: '' }))
 
     await client.sync('#head')
 
-    expect(lastSyncArgv()).toEqual(['sync', '//...#head'])
+    expect(lastSyncArgv()).toEqual(['sync', `${ROOT_FWD}/...#head`])
+  })
+
+  it('refuses a scope-less get when the daily scope excludes entries inside its range', async () => {
+    // The config file itself is always an implicit exclusion, and it sits in the
+    // client root — so a config whose include IS (or contains) that root has a
+    // hole inside its own range. `<include>/...` would fetch straight into it, and
+    // a local walk cannot stand in for a get (which must also fetch files that
+    // were never downloaded) — so the native engine refuses instead of widening
+    // past the declared range.
+    const client = await makeClient(() => ({ stdout: '' }), {
+      readScope: scopeFixture([ROOT_FWD]),
+    })
+
+    const res = await client.sync('#head')
+
+    expect(res.ok).toBe(false)
+    expect(lastSyncArgv()).toBeUndefined()
+    expect(windowMock.showErrorMessage).toHaveBeenCalledTimes(1)
+    expect(String(windowMock.showErrorMessage.mock.calls[0]?.[0])).toContain('not run')
+  })
+
+  it('still gets a scope whose exclusions sit outside its includes', async () => {
+    // The refusal is about a hole INSIDE the range, not about the scope having
+    // exclusions at all: an exclusion that shields nothing the get traverses
+    // leaves `<include>/...` exact.
+    const client = await makeClient(() => ({ stdout: '' }), {
+      readScope: scopeFixture([`${ROOT_FWD}/Content`], [`${ROOT_FWD}/Other/Gen`]),
+    })
+
+    const res = await client.sync('#head')
+
+    expect(res.ok).toBe(true)
+    expect(lastSyncArgv()).toEqual(['sync', `${ROOT_FWD}/Content/...#head`])
+  })
+
+  it('refuses an explicit get whose escaped specs hide a hole in the scope', async () => {
+    // The command layer builds `options.scope` with `buildScopeFilespec`, which
+    // ESCAPES the metacharacters (`con@tent` travels as `con%40tent`), so the
+    // specs no longer parse back into targets. The typed `scopeTargets` the
+    // caller named are then the only trustworthy statement of the range — the
+    // hole below (an excluded subdirectory INSIDE the named directory) must
+    // still refuse, or "obey the scope" would fetch the shielded subtree.
+    const client = await makeClient(() => ({ stdout: '' }), {
+      readScope: scopeFixture(
+        [`${ROOT_FWD}/Content`],
+        [{ path: `${ROOT_FWD}/Content/con@tent/sub`, isDirectory: true }],
+      ),
+    })
+
+    const res = await client.sync('#head', {
+      scope: [`${ROOT_FWD}/Content/con%40tent/...`],
+      scopeTargets: [{ path: `${ROOT_FWD}/Content/con@tent`, isDirectory: true }],
+    })
+
+    expect(res.ok).toBe(false)
+    expect(lastSyncArgv()).toBeUndefined()
+    expect(String(windowMock.showErrorMessage.mock.calls[0]?.[0])).toContain('exclusion')
+  })
+
+  it('runs an escaped explicit target the scope covers whole', async () => {
+    // The escape itself is not what refuses: a typed target the scope covers
+    // whole runs on p4 over its escaped spelling, which is the only thing p4
+    // accepts for a name carrying `@`.
+    const client = await makeClient(() => ({ stdout: '' }), {
+      readScope: scopeFixture([`${ROOT_FWD}/Content/con@tent`]),
+    })
+
+    const res = await client.sync('#head', {
+      scope: [`${ROOT_FWD}/Content/con%40tent/...`],
+      scopeTargets: [{ path: `${ROOT_FWD}/Content/con@tent`, isDirectory: true }],
+    })
+
+    expect(res.ok).toBe(true)
+    expect(lastSyncArgv()).toEqual(['sync', `${ROOT_FWD}/Content/con%40tent/...#head`])
   })
 
   it('exposes the scope a scope-less get targets, so a clobber refusal can collect it', async () => {
@@ -312,10 +407,10 @@ describe('PerforceClient.sync', () => {
     // A scope-less get (the status-bar entry — the most common one) has no scope
     // argument to fall back on, so it reads this instead of degrading to a
     // discovery-only refresh that collects nothing.
-    const client = await makeClient(() => ({ stdout: '' }))
-    expect(client.syncScopes).toEqual(['//...'])
-
-    client.setSyncScope([`${ROOT_FWD}/Content`])
+    const client = await makeClient(() => ({ stdout: '' }), {
+      readScope: scopeFixture([`${ROOT_FWD}/Content`]),
+    })
+    await client.refreshScope()
     expect(client.syncScopes).toEqual([`${ROOT_FWD}/Content/...`])
   })
 
@@ -332,7 +427,7 @@ describe('PerforceClient.sync', () => {
 
     await client.sync('#head')
 
-    expect(lastSyncArgv()).toEqual(['sync', '//...#head'])
+    expect(lastSyncArgv()).toEqual(['sync', `${ROOT_FWD}/...#head`])
   })
 
   it('threads > 0 prepends --parallel=threads=N', async () => {
@@ -341,7 +436,7 @@ describe('PerforceClient.sync', () => {
 
     await client.sync('#head', { onProgress: () => {} })
 
-    expect(lastSyncArgv()).toEqual(['sync', '--parallel=threads=4', '//...#head'])
+    expect(lastSyncArgv()).toEqual(['sync', '--parallel=threads=4', `${ROOT_FWD}/...#head`])
   })
 
   it('a 0 thread count syncs serially even after being set', async () => {
@@ -351,7 +446,7 @@ describe('PerforceClient.sync', () => {
 
     await client.sync('#head')
 
-    expect(lastSyncArgv()).toEqual(['sync', '//...#head'])
+    expect(lastSyncArgv()).toEqual(['sync', `${ROOT_FWD}/...#head`])
   })
 
   it('classifies a clobber refusal so the caller can offer to collect first', async () => {
@@ -743,6 +838,126 @@ describe('PerforceClient.previewSync', () => {
 
     expect(res.total).toBe(2)
     expect(res.files).toHaveLength(2)
+  })
+})
+
+/**
+ * What survives of "a preview is not a contract": a NOTICE.
+ *
+ * The get itself always runs under the config in force at that instant — there
+ * is no frozen plan to adopt and nothing to refuse for having moved. The one
+ * thing worth keeping is telling the user when the range they just looked at is
+ * not the range that ran, and this is the whole budget for it: one record, one
+ * get, no token, no TTL, and nothing the get may be refused over.
+ */
+describe('PerforceClient — the preview-drift notice', () => {
+  const MOVED = localize(
+    'perforce.sync.previewConfigMoved',
+    'The workspace scope changed after the preview — this get runs under the config in force now.',
+  )
+
+  it('notices a scope that moved between the preview and the get', async () => {
+    let scope = scopeFixture([`${ROOT_FWD}/Content`])
+    const client = await makeClient(() => ({ stdout: '' }), {
+      readScope: (root) => scope(root),
+    })
+
+    await client.previewSync()
+    // The config is edited while the user reads the preview.
+    scope = scopeFixture([`${ROOT_FWD}/Content`, `${ROOT_FWD}/Other`])
+    await client.refreshScope()
+
+    const res = await client.sync('#head')
+
+    // The get ran (never refused, never re-directed at the old range) and said
+    // what it ran under.
+    expect(res.ok).toBe(true)
+    expect(windowMock.showInformationMessage).toHaveBeenCalledWith(MOVED)
+    expect(lastSyncArgv()!.join(' ')).toContain(`${ROOT_FWD}/Other`)
+  })
+
+  it('consumes the record: no second get is answered by the same preview', async () => {
+    let scope = scopeFixture([`${ROOT_FWD}/Content`])
+    const client = await makeClient(() => ({ stdout: '' }), {
+      readScope: (root) => scope(root),
+    })
+
+    await client.previewSync()
+    scope = scopeFixture([`${ROOT_FWD}/Content`, `${ROOT_FWD}/Other`])
+    await client.refreshScope()
+
+    await client.sync('#head')
+    expect(windowMock.showInformationMessage).toHaveBeenCalledTimes(1)
+    await client.sync('#head')
+    expect(windowMock.showInformationMessage).toHaveBeenCalledTimes(1)
+  })
+
+  it('stays silent when only the reconcile NOISE moved — a get never reads it', async () => {
+    const client = await makeClient(() => ({ stdout: '' }))
+
+    await client.previewSync()
+    client.setReconcileExcludes({ dirs: [`${ROOT_FWD}/gen`], files: [] })
+
+    await client.sync('#head')
+
+    expect(windowMock.showInformationMessage).not.toHaveBeenCalled()
+  })
+
+  it('stays silent when the config did not move at all', async () => {
+    const client = await makeClient(() => ({ stdout: '' }))
+
+    await client.previewSync()
+    await client.sync('#head')
+
+    expect(windowMock.showInformationMessage).not.toHaveBeenCalled()
+  })
+
+  it('is dropped by a get after a DIFFERENT revision — the preview was not about it', async () => {
+    let scope = scopeFixture([`${ROOT_FWD}/Content`])
+    const client = await makeClient(() => ({ stdout: '' }), {
+      readScope: (root) => scope(root),
+    })
+
+    await client.previewSync(undefined, '@12345')
+    scope = scopeFixture([`${ROOT_FWD}/Content`, `${ROOT_FWD}/Other`])
+    await client.refreshScope()
+
+    await client.sync('#head')
+
+    expect(windowMock.showInformationMessage).not.toHaveBeenCalled()
+  })
+
+  it('leaves a get that will not run to its own refusal message', async () => {
+    let scope = scopeFixture([`${ROOT_FWD}/Content`])
+    const client = await makeClient(() => ({ stdout: '' }), {
+      readScope: (root) => scope(root),
+    })
+
+    await client.previewSync()
+    scope = () => ({ kind: 'error', path: `${ROOT_FWD}/.p4delta-scope`, reason: 'unreadable' })
+    await client.refreshScope()
+
+    const res = await client.sync('#head')
+
+    expect(res.ok).toBe(false)
+    expect(windowMock.showInformationMessage).not.toHaveBeenCalled()
+  })
+
+  it('records nothing for a preview that never concluded', async () => {
+    let scope = scopeFixture([`${ROOT_FWD}/Content`])
+    const client = await makeClient(
+      (argv) => (argv.includes('-n') ? { stdout: '', exit: 1 } : { stdout: '' }),
+      { readScope: (root) => scope(root) },
+    )
+
+    const preview = await client.previewSync()
+    expect(preview.ok).toBe(false)
+    scope = scopeFixture([`${ROOT_FWD}/Content`, `${ROOT_FWD}/Other`])
+    await client.refreshScope()
+
+    await client.sync('#head')
+
+    expect(windowMock.showInformationMessage).not.toHaveBeenCalled()
   })
 })
 

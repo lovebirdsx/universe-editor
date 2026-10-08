@@ -30,6 +30,19 @@ class FakeChildProcess extends EventEmitter {
 const spawnMock = vi.fn<(...args: unknown[]) => FakeChildProcess>()
 vi.mock('node:child_process', () => ({ spawn: (...args: unknown[]) => spawnMock(...args) }))
 
+/** The extension window, mocked so a refused write can surface its toast
+ *  without a real host. */
+const windowMock = vi.hoisted(() => ({
+  showErrorMessage: vi.fn(),
+  showWarningMessage: vi.fn(),
+  showInformationMessage: vi.fn(),
+  showQuickPick: vi.fn(),
+}))
+vi.mock('@universe-editor/extension-api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@universe-editor/extension-api')>()
+  return { ...actual, window: windowMock }
+})
+
 const BRIDGE_KEY = '__universeExtensionHostBridge__'
 function installScmBridge(): void {
   ;(globalThis as Record<string, unknown>)[BRIDGE_KEY] = {
@@ -58,10 +71,15 @@ const { PerforceClient } = await import('../client.js')
 const { ConcurrencyGate } = await import('../concurrency.js')
 const { toReconcileResourceState } = await import('../p4Decoration.js')
 const { setP4CommandTimeoutSeconds } = await import('../p4Service.js')
+import { NO_SCOPE_CONFIG, scopeFixture } from './scopeFixture.js'
+import { clientSpecReply, isClientSpecProbe } from './discoveryProbe.js'
 type PerforceClientInstance = import('../client.js').PerforceClient
 type ReconcileFile = import('../reconcileParser.js').ReconcileFile
+type ScopeRead = import('./scopeFixture.js').ScopeRead
+type SyncScopeTarget = import('../p4Filespec.js').SyncScopeTarget
 
 const ROOT = process.platform === 'win32' ? 'X:\\p4ws\\main' : '/p4ws/main'
+const DISCOVERY_SPEC = clientSpecReply(ROOT)
 const LOCAL = process.platform === 'win32' ? 'X:/p4ws/main' : '/p4ws/main'
 const CLIENT = 'testclient'
 
@@ -111,6 +129,9 @@ function handle(
   opts: RespondOptions,
 ): { stdout: string; stderr?: string; exit?: number; hold?: boolean } {
   const cmd = subcommand(argv)
+  if (isClientSpecProbe(argv)) {
+    return { stdout: DISCOVERY_SPEC }
+  }
   if (cmd === 'info') {
     return { stdout: `... clientName ${CLIENT}\n... clientRoot ${ROOT}\n... userName testuser\n\n` }
   }
@@ -164,16 +185,27 @@ function reconcileScans(): string[][] {
   return calls.filter((a) => subcommand(a) === 'reconcile' && a.includes('-n'))
 }
 
-async function makeClient(opts: RespondOptions = {}): Promise<PerforceClientInstance> {
+/**
+ * A client with a pre-resolved daily scope (see `scopeFixture`): the scope is
+ * what bounds every hint query, and production resolves it during activation
+ * (`refreshScope`), so the injected answer is applied the same way here. The
+ * default scope is the whole client root — "the whole workspace, no exclusions",
+ * the answer a folder with no `.p4delta-scope` resolves to.
+ */
+async function makeClient(
+  opts: RespondOptions = {},
+  readScope: ScopeRead = scopeFixture([LOCAL]),
+): Promise<PerforceClientInstance> {
   respond(opts)
   const client = await PerforceClient.create(
     ROOT,
     {},
     new ConcurrencyGate(4),
     { enabled: true, workspaceTtlMs: 4000 },
-    undefined,
+    { readScope },
   )
   expect(client).toBeDefined()
+  await client!.refreshScope()
   return client!
 }
 
@@ -182,6 +214,8 @@ describe('PerforceClient.checkWorkingTree', () => {
     installScmBridge()
     spawnMock.mockReset()
     calls.length = 0
+    windowMock.showWarningMessage.mockClear()
+    windowMock.showInformationMessage.mockClear()
   })
   afterEach(() => {
     delete (globalThis as Record<string, unknown>)[BRIDGE_KEY]
@@ -208,11 +242,11 @@ describe('PerforceClient.checkWorkingTree', () => {
     }
   })
 
-  it('omits paths outside the reconcile discovery scope', async () => {
-    const client = await makeClient({
-      reconcile: () => [{ rel: 'Client/in.txt' }, { rel: 'outside.txt' }],
-    })
-    client.setReconcileScope([`${LOCAL}/Client`])
+  it('omits paths outside the daily scope', async () => {
+    const client = await makeClient(
+      { reconcile: () => [{ rel: 'Client/in.txt' }, { rel: 'outside.txt' }] },
+      scopeFixture([`${LOCAL}/Client`]),
+    )
     calls.length = 0
 
     const result = await client.checkWorkingTree([`${LOCAL}/Client/in.txt`, `${LOCAL}/outside.txt`])
@@ -360,9 +394,10 @@ describe('PerforceClient.checkWorkingTree', () => {
   // --- extra: excluded directories ------------------------------------------
 
   it('spawns nothing when every path is inside an excluded directory', async () => {
-    const client = await makeClient({ reconcile: () => [{ rel: 'Excluded/in.txt' }] })
-    client.setReconcileScope([LOCAL])
-    client.setReconcileExcludes([`${LOCAL}/Excluded`])
+    const client = await makeClient(
+      { reconcile: () => [{ rel: 'Excluded/in.txt' }] },
+      scopeFixture([LOCAL], [`${LOCAL}/Excluded`]),
+    )
     calls.length = 0
 
     const result = await client.checkWorkingTree([
@@ -375,11 +410,10 @@ describe('PerforceClient.checkWorkingTree', () => {
   })
 
   it('omits paths inside an excluded directory (the excluded sibling is never scanned)', async () => {
-    const client = await makeClient({
-      reconcile: () => [{ rel: 'Excluded/in.txt' }, { rel: 'in.txt' }],
-    })
-    client.setReconcileScope([LOCAL])
-    client.setReconcileExcludes([`${LOCAL}/Excluded`])
+    const client = await makeClient(
+      { reconcile: () => [{ rel: 'Excluded/in.txt' }, { rel: 'in.txt' }] },
+      scopeFixture([LOCAL], [`${LOCAL}/Excluded`]),
+    )
     calls.length = 0
 
     const result = await client.checkWorkingTree([`${LOCAL}/Excluded/in.txt`, `${LOCAL}/in.txt`])
@@ -393,16 +427,134 @@ describe('PerforceClient.checkWorkingTree', () => {
     }
   })
 
-  it('omits paths inside an excluded directory when scope is whole-client (empty scopeDirs)', async () => {
-    const client = await makeClient({
-      reconcile: () => [{ rel: 'Excluded/in.txt' }, { rel: 'in.txt' }],
-    })
-    // Leave reconcile scope as whole client (default empty _reconcileScopeDirs)
-    client.setReconcileExcludes([`${LOCAL}/Excluded`])
+  // --- extra: excluded FILES ------------------------------------------------
+
+  it('omits an excluded FILE, which δ reports for the config file itself', async () => {
+    // A file exclusion is a different shape from a directory one: no walk skips
+    // it, so it has to be filtered by path — otherwise the config file the scope
+    // shields shows up as drift in the very row the user is looking at.
+    const config = `${LOCAL}/.p4delta-scope`
+    const client = await makeClient(
+      { reconcile: () => [{ rel: 'in.txt' }] },
+      scopeFixture([LOCAL], [{ path: config, isDirectory: false }]),
+    )
+    calls.length = 0
+
+    const result = await client.checkWorkingTree([config, `${LOCAL}/in.txt`])
+
+    const paths = result.map((d) => d.path)
+    expect(paths).not.toContain(config)
+    expect(paths).toContain(`${LOCAL}/in.txt`)
+    for (const argv of reconcileScans()) {
+      expect(argv).not.toContain(config)
+    }
+  })
+
+  it('reports the file exclusion to the command layer', async () => {
+    const config = `${LOCAL}/.p4delta-scope`
+    const client = await makeClient(
+      {},
+      scopeFixture([LOCAL], [{ path: config, isDirectory: false }]),
+    )
+
+    expect(client.reconcileExcludeFiles).toEqual([config])
+    expect(client.isReconcileTargetExcluded(config)).toBe(true)
+  })
+
+  // --- extra: the native-expressibility verdict ------------------------------
+
+  it('refuses a native range that would reach an excluded file', async () => {
+    // The carve is exact for excluded SUBTREES but covers a level with `<dir>/*`
+    // (kept because `reconcile -d` must see deleted files), and `*` matches an
+    // excluded file too — under `p4 clean -a` that deletes the file the scope
+    // shields, the config file above all. The client refuses inside the native
+    // branch, on the very range that branch is about to run.
+    const config = `${LOCAL}/src/.p4delta-scope`
+    const client = await makeClient(
+      {},
+      scopeFixture([LOCAL], [{ path: config, isDirectory: false }]),
+    )
+    const run = (target: SyncScopeTarget): Promise<boolean> =>
+      client.reconcile({ targets: [target] })
+
+    expect(await run({ path: LOCAL, isDirectory: true })).toBe(false)
+    expect(await run({ path: `${LOCAL}/src`, isDirectory: true })).toBe(false)
+    expect(String(windowMock.showWarningMessage.mock.calls.at(-1)?.[0] ?? '')).toContain(config)
+    // A target the excluded file is NOT under is expressible as it stands.
+    expect(await run({ path: `${LOCAL}/other`, isDirectory: true })).toBe(true)
+    expect(await run({ path: `${LOCAL}/in.txt`, isDirectory: false })).toBe(true)
+    // The excluded file itself is not a range anything may run over.
+    expect(await run({ path: config, isDirectory: false })).toBe(false)
+  })
+
+  it('always carries the config file’s own exclusion, spelled out — not hidden in a snapshot', async () => {
+    const client = await makeClient({}, scopeFixture([LOCAL], [`${LOCAL}/Excluded`]))
+    const config = `${LOCAL}/.p4delta-scope`
+    // A config the user believes is in force must not read as drift, and no
+    // native clean may be handed a range that reaches it: the file the rules
+    // live in is part of the rules, on both sides of the contract.
+    expect(client.reconcileExcludeFiles).toEqual([config])
+    expect(await client.reconcile({ targets: [{ path: LOCAL, isDirectory: true }] })).toBe(false)
+    expect(
+      await client.reconcile({ targets: [{ path: `${LOCAL}/other`, isDirectory: true }] }),
+    ).toBe(true)
+  })
+
+  it('has no file exclusion at all when the folder has no config', async () => {
+    const client = await makeClient({}, () => NO_SCOPE_CONFIG)
+    expect(client.scopeState).toBe('ready')
+    expect(client.reconcileExcludeFiles).toEqual([])
+    expect(await client.reconcile({ targets: [{ path: LOCAL, isDirectory: true }] })).toBe(true)
+  })
+
+  // --- extra: the explicit-target gate ---------------------------------------
+
+  it('narrows "obey the scope" to the in-scope parts instead of dropping them', async () => {
+    // The config file's own self-exclusion makes every ancestor directory "not
+    // covered WHOLE", so a root-level collect does open the dialog — but obeying
+    // must still run over the root with the exclusions applied, not report
+    // "nothing is in scope" and do nothing.
+    const config = `${LOCAL}/.p4delta-scope`
+    const client = await makeClient(
+      {},
+      scopeFixture([`${LOCAL}/src`], [{ path: config, isDirectory: false }]),
+    )
+
+    const check = await client.checkScopeTargets([
+      { path: LOCAL, isDirectory: true },
+      { path: 'X:/elsewhere', isDirectory: true },
+    ])
+
+    // Boundary-wise: the root narrows to the include, the unrelated folder is out.
+    expect(check.inside).toEqual([{ path: `${LOCAL}/src`, isDirectory: true }])
+    expect(check.outside.map((t) => t.path)).toEqual([LOCAL, 'X:/elsewhere'])
+  })
+
+  it('keeps a holed but in-scope directory whole for the obey path', async () => {
+    const config = `${LOCAL}/src/.p4delta-scope`
+    const client = await makeClient(
+      {},
+      scopeFixture([LOCAL], [{ path: config, isDirectory: false }]),
+    )
+
+    const check = await client.checkScopeTargets([{ path: `${LOCAL}/src`, isDirectory: true }])
+
+    expect(check.inside).toEqual([{ path: `${LOCAL}/src`, isDirectory: true }])
+    // Still "not covered whole", so the dialog offers the choice.
+    expect(check.outside.map((t) => t.path)).toEqual([`${LOCAL}/src`])
+  })
+
+  it('omits paths inside an excluded directory when the scope covers the whole client', async () => {
+    const client = await makeClient(
+      { reconcile: () => [{ rel: 'Excluded/in.txt' }, { rel: 'in.txt' }] },
+      scopeFixture([LOCAL], [`${LOCAL}/Excluded`]),
+    )
     calls.length = 0
 
     const result = await client.checkWorkingTree([`${LOCAL}/Excluded/in.txt`, `${LOCAL}/in.txt`])
 
+    // Exclusion wins over coverage: the include covers everything and the
+    // excluded path is still dropped, the same order δ's own answer uses.
     const paths = result.map((d) => d.path)
     expect(paths).not.toContain(`${LOCAL}/Excluded/in.txt`)
     expect(paths).toContain(`${LOCAL}/in.txt`)
