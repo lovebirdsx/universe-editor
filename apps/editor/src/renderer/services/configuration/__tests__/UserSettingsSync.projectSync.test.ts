@@ -40,9 +40,38 @@ class FakeUserData implements IUserDataFilesService {
     []
   private readonly _emitter = new Emitter<IUserDataFileChange>()
   readonly onDidChangeFile = this._emitter.event
+  /** While held, reads of the file stay pending in ISSUE order — the channel's
+   *  own ordering, which the layer loads rely on: the request issued first is
+   *  answered first. */
+  private readonly _heldFiles = new Set<UserDataFile>()
+  private readonly _held: Array<{ file: UserDataFile; release: () => void }> = []
+
+  holdReads(file: UserDataFile, hold: boolean): void {
+    if (hold) {
+      this._heldFiles.add(file)
+      return
+    }
+    this._heldFiles.delete(file)
+    const keep: Array<{ file: UserDataFile; release: () => void }> = []
+    for (const entry of this._held) {
+      if (entry.file === file) entry.release()
+      else keep.push(entry)
+    }
+    this._held.length = 0
+    this._held.push(...keep)
+  }
+
+  heldReads(file: UserDataFile): number {
+    return this._held.filter((entry) => entry.file === file).length
+  }
 
   async read(file: UserDataFile): Promise<string> {
-    return this.files.get(file) ?? ''
+    // Content is captured when the request is MADE, like main's own read.
+    const text = this.files.get(file) ?? ''
+    if (this._heldFiles.has(file)) {
+      await new Promise<void>((release) => this._held.push({ file, release }))
+    }
+    return text
   }
   async write(file: UserDataFile, content: string): Promise<void> {
     this.files.set(file, content)
@@ -159,6 +188,37 @@ describe('UserSettingsSync — Project layer', () => {
         'editor.tabSize'
       ],
     ).toBe(8)
+    sync.dispose()
+    config.dispose()
+  })
+
+  it('a change announced while initialize() is still loading is not dropped', async () => {
+    const files = new FakeUserData()
+    const { sync, config } = makeInstance(files)
+
+    // Startup reads the Project file before any workspace exists, so that read
+    // is answered with nothing. Opening a workspace makes main install that
+    // workspace's settings slot and announce the file — possibly while that
+    // read is still in flight. The announcement must not be lost: nothing
+    // re-reads the file afterwards, so the session would run on the empty
+    // pre-workspace layer with the workspace's values never unpacked.
+    files.holdReads(UserDataFile.ProjectSettings, true)
+    const initializing = sync.initialize()
+    for (let i = 0; i < 50 && files.heldReads(UserDataFile.ProjectSettings) === 0; i++) {
+      await Promise.resolve()
+    }
+    expect(files.heldReads(UserDataFile.ProjectSettings)).toBe(1)
+
+    files.files.set(UserDataFile.ProjectSettings, '{ "editor.tabSize": 8 }')
+    files.fire(UserDataFile.ProjectSettings)
+    files.holdReads(UserDataFile.ProjectSettings, false)
+    await initializing
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(config.getLayerSnapshot(ConfigurationTarget.Project) as Record<string, unknown>).toEqual(
+      { 'editor.tabSize': 8 },
+    )
     sync.dispose()
     config.dispose()
   })

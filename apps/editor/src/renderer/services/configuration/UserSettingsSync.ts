@@ -85,20 +85,14 @@ export class UserSettingsSync extends Disposable implements IUserSettingsSyncSer
     @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
   ) {
     super()
-  }
-
-  async initialize(): Promise<void> {
-    try {
-      await this._migrateLegacyUserSettings()
-      await this._reloadVSCodeUserLayer()
-      await this._reloadUserLayer()
-      await this._reloadProjectLayer()
-      await this._reloadVSCodeLayer()
-    } finally {
-      // Settle even on failure so whenInitialized awaiters never deadlock.
-      this._initialized.complete(undefined)
-    }
-
+    // Subscribed HERE, not at the end of initialize(): a file-change notification
+    // is a transient broadcast with no replay, and one arriving while the initial
+    // loads are still in flight would otherwise be dropped and never re-read.
+    // The project layer is the live case: opening a workspace makes main install
+    // that workspace's settings slot and announce it, and the announcement can
+    // land between the initial project read and the late subscription — the read
+    // then answered with the pre-workspace (empty) file, leaving every unpacked
+    // project-scoped setting on its default for the whole session.
     this._register(
       this._files.onDidChangeFile(({ file, source }) => {
         // Self-writes already updated the in-memory layer; re-reading is a no-op
@@ -115,6 +109,19 @@ export class UserSettingsSync extends Disposable implements IUserSettingsSyncSer
         }
       }),
     )
+  }
+
+  async initialize(): Promise<void> {
+    try {
+      await this._migrateLegacyUserSettings()
+      await this._reloadVSCodeUserLayer()
+      await this._reloadUserLayer()
+      await this._reloadProjectLayer()
+      await this._reloadVSCodeLayer()
+    } finally {
+      // Settle even on failure so whenInitialized awaiters never deadlock.
+      this._initialized.complete(undefined)
+    }
 
     // In-workbench saves of a user-data file bypass UserDataMainService's
     // atomic-write path (FileEditorInput.save writes via IFileService), and the
