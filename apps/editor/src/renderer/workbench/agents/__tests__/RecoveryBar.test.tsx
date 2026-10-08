@@ -54,6 +54,43 @@ describe('RecoveryBar', () => {
     expect(bar.textContent).toContain('Connection lost. Reconnecting… (2/3)')
   })
 
+  it('names the throttle for a rate-limited retry instead of the generic line', () => {
+    // The wait here is minutes, not seconds: the bar must say what we are
+    // waiting for, or a 60s countdown reads as a hang. It also shows the longer
+    // attempt budget, so the user can tell how much patience is left.
+    render(
+      <RecoveryBar
+        session={makeSession({
+          phase: 'retrying',
+          attempt: 3,
+          maxAttempts: 8,
+          reason: 'rate_limited',
+          nextAttemptAt: Date.now() + 95_000,
+        })}
+      />,
+    )
+    const bar = screen.getByTestId('acp-recovery-bar')
+    expect(bar.textContent).toContain('The provider is rate-limiting requests. Retrying in')
+    expect(bar.textContent).toContain('(3/8)')
+    expect(bar.textContent).not.toContain('Agent temporarily unavailable')
+  })
+
+  it('keeps the rate-limit wording once the budget is exhausted', () => {
+    render(
+      <RecoveryBar
+        session={makeSession({
+          phase: 'exhausted',
+          attempt: 8,
+          maxAttempts: 8,
+          reason: 'rate_limited',
+        })}
+      />,
+    )
+    const bar = screen.getByTestId('acp-recovery-bar')
+    expect(bar.textContent).toContain('The provider is still rate-limiting requests')
+    expect(screen.getByTestId('acp-recovery-retry')).toBeTruthy()
+  })
+
   it('shows the waking message when an operation revived an idle-reclaimed session', () => {
     // The idle reaper stopped the agent to save memory, so nothing was lost and
     // nothing crashed — telling the user "connection lost" here would report a

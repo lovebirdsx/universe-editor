@@ -4,10 +4,17 @@
  *  The verdict decides whether the session layer may retry / reconnect without
  *  involving the user:
  *
- *    - `transient`  — worth an automatic retry (rate limit, overloaded, 5xx,
- *                     dropped stream). The agent forks report these via
- *                     structured JSON-RPC error data; text patterns are a
- *                     last-resort fallback for third-party agents.
+ *    - `rate_limited` — the provider is throttling us (HTTP 429). Retryable,
+ *                     but on its own much longer budget than `transient`: a
+ *                     throttling window lasts tens of seconds to minutes, and
+ *                     the agent's own retry loop gives up in seconds. Only a
+ *                     positively identified *rate* limit lands here — an
+ *                     exhausted quota (`usage limit`, `quota`, `billing`)
+ *                     stays `quota` even when the report also says 429.
+ *    - `transient`  — worth an automatic retry (overloaded, 5xx, dropped
+ *                     stream). The agent forks report these via structured
+ *                     JSON-RPC error data; text patterns are a last-resort
+ *                     fallback for third-party agents.
  *    - `quota`      — billing / usage-limit exhausted. Retrying only burns
  *                     time; surface and stop.
  *    - `auth`       — credentials missing/revoked. Never retried (the auth
@@ -24,9 +31,12 @@
  *      'unknown' means the CLI itself could not categorise the failure (an
  *      unrecognised proxy/gateway response, say), so it falls through to the
  *      text fallback rather than forcing `fatal`.
- *    - codex fork: `RequestError.data.codexErrorInfo` — 'usageLimitExceeded',
- *      'unauthorized', or { responseStreamDisconnected | httpConnectionFailed |
- *      responseTooManyFailedAttempts: { httpStatusCode } }.
+ *    - codex fork: `RequestError.data.codexErrorInfo` — a string kind
+ *      ('usageLimitExceeded', 'rateLimitExceeded', 'serverOverloaded',
+ *      'internalServerError', 'unauthorized', …) or a structured
+ *      { responseStreamDisconnected | httpConnectionFailed |
+ *      responseTooManyFailedAttempts: { httpStatusCode } } where 429 is the
+ *      throttle and 5xx the blip.
  *    - ACP SDK catch-all: a non-RequestError thrown inside the agent process
  *      is wrapped as `data.details` = the original message. When the message
  *      reads like a JS-engine runtime error (see RUNTIME_ERROR_TEXT) it marks
@@ -36,7 +46,13 @@
 
 import { localize } from '@universe-editor/platform'
 
-export type AcpErrorClass = 'transient' | 'quota' | 'auth' | 'fatal' | 'agent_crash'
+export type AcpErrorClass =
+  | 'transient'
+  | 'rate_limited'
+  | 'quota'
+  | 'auth'
+  | 'fatal'
+  | 'agent_crash'
 
 export interface AcpErrorVerdict {
   readonly cls: AcpErrorClass
@@ -46,13 +62,15 @@ export interface AcpErrorVerdict {
 
 /** claude fork errorKinds that justify an automatic retry. */
 const CLAUDE_TRANSIENT_KINDS: ReadonlySet<string> = new Set([
-  'rate_limit',
   'overloaded',
   'server_error',
   // The SDK declared the turn over without ever emitting its result (fork-side
   // issue #825): nothing was persisted for the turn, so a retry is safe.
   'no_result',
 ])
+
+/** …and the one that is a throttle rather than a blip: same retry, longer wait. */
+const CLAUDE_RATE_LIMIT_KINDS: ReadonlySet<string> = new Set(['rate_limit'])
 
 const CLAUDE_QUOTA_KINDS: ReadonlySet<string> = new Set(['billing_error'])
 const CLAUDE_AUTH_KINDS: ReadonlySet<string> = new Set([
@@ -62,8 +80,17 @@ const CLAUDE_AUTH_KINDS: ReadonlySet<string> = new Set([
 
 /** Text fallback for agents that report no structured error data. */
 const TRANSIENT_TEXT =
-  /\b429\b|rate.?limit|overloaded|too many requests|temporarily unavailable|service unavailable|\b5\d\d\b|timed? ?out|econnreset|etimedout|epipe|socket hang up|network error|empty or malformed/i
-const QUOTA_TEXT = /quota exceeded|usage limit|billing|insufficient.?quota|credits/i
+  /overloaded|temporarily unavailable|service unavailable|\b5\d\d\b|timed? ?out|econnreset|etimedout|epipe|socket hang up|network error|empty or malformed/i
+const QUOTA_TEXT = /quota exceeded|current quota|usage limit|billing|insufficient.?quota|credits/i
+/**
+ * Rate-limit phrasing. Matched AFTER {@link QUOTA_TEXT}: a real 429 body often
+ * carries both ("you exceeded your current quota … 429"), and an exhausted
+ * quota must never be spent a five-minute retry budget on. The leading `\b` is
+ * load-bearing now that a false positive costs minutes of silent waiting: plain
+ * `rate[ _-]?limit` matches the "rate limit" buried in "moderate limitation".
+ * No trailing boundary, though — "rate limited"/"rate-limited" must still hit.
+ */
+const RATE_LIMIT_TEXT = /\b429\b|\brate[ _-]?limit|too many requests/i
 
 /**
  * Bare runtime-error phrasings of the major JS engines. A match marks the
@@ -115,15 +142,34 @@ function httpStatusOf(info: Record<string, unknown>): number | undefined {
   return undefined
 }
 
+/**
+ * String-valued codex failure kinds we can act on. `vendor/codex-acp`'s
+ * air-extensions table is authoritative for the split: a rate limit is
+ * retryable, an exhausted usage limit is not, and both are `limit` there while
+ * 429 is the only signal that says "wait it out". The remaining string kinds
+ * (contextWindowExceeded, badRequest, sandboxError, …) fall through to the text
+ * fallback rather than being forced to `fatal`.
+ */
+const CODEX_STRING_KINDS: Readonly<Record<string, AcpErrorClass>> = {
+  rateLimitExceeded: 'rate_limited',
+  serverOverloaded: 'transient',
+  internalServerError: 'transient',
+  usageLimitExceeded: 'quota',
+  unauthorized: 'auth',
+}
+
 function classifyCodexInfo(info: unknown): AcpErrorVerdict | undefined {
   if (info === null || info === undefined) return undefined
-  if (info === 'usageLimitExceeded') return { cls: 'quota', kind: 'usageLimitExceeded' }
-  if (info === 'unauthorized') return { cls: 'auth', kind: 'unauthorized' }
+  if (typeof info === 'string') {
+    const cls = CODEX_STRING_KINDS[info]
+    return cls !== undefined ? { cls, kind: info } : undefined
+  }
   if (typeof info === 'object') {
     const status = httpStatusOf(info as Record<string, unknown>)
     if (status !== undefined) {
       if (status === 401 || status === 403) return { cls: 'auth', kind: `http_${status}` }
-      if (status === 429 || status >= 500) return { cls: 'transient', kind: `http_${status}` }
+      if (status === 429) return { cls: 'rate_limited', kind: `http_${status}` }
+      if (status >= 500) return { cls: 'transient', kind: `http_${status}` }
       return { cls: 'fatal', kind: `http_${status}` }
     }
     // Connection-level failure with no status (stream dropped, connect failed):
@@ -135,6 +181,7 @@ function classifyCodexInfo(info: unknown): AcpErrorVerdict | undefined {
 
 function classifyClaudeKind(kind: unknown): AcpErrorVerdict | undefined {
   if (typeof kind !== 'string') return undefined
+  if (CLAUDE_RATE_LIMIT_KINDS.has(kind)) return { cls: 'rate_limited', kind }
   if (CLAUDE_TRANSIENT_KINDS.has(kind)) return { cls: 'transient', kind }
   if (CLAUDE_QUOTA_KINDS.has(kind)) return { cls: 'quota', kind }
   if (CLAUDE_AUTH_KINDS.has(kind)) return { cls: 'auth', kind }
@@ -157,7 +204,8 @@ export function formatAcpErrorMessage(err: unknown): string {
       : typeof err === 'string'
         ? err
         : ''
-  const details = readData(err)?.['details']
+  const data = readData(err)
+  const details = data?.['details']
   const detailsText = typeof details === 'string' && details.length > 0 ? details : undefined
   const blob = detailsText !== undefined ? `${message}\n${detailsText}` : message
   if (/already has an active writer/i.test(blob)) {
@@ -168,6 +216,19 @@ export function formatAcpErrorMessage(err: unknown): string {
   }
   if (detailsText !== undefined && !message.includes(detailsText)) {
     return message.length > 0 ? `${message}: ${detailsText}` : detailsText
+  }
+  // The codex fork's `internalError({ message, codexErrorInfo })` hands the SDK
+  // a data bag whose own message stays the bare "Internal error", while the
+  // readable diagnosis (the provider's own text) sits in `data.message`.
+  // Without this fallback an exhausted rate limit reaches the timeline as
+  // nothing but "Internal error".
+  const carried = data?.['message']
+  if (
+    typeof carried === 'string' &&
+    carried.length > 0 &&
+    /^internal error$/i.test(message.trim())
+  ) {
+    return carried
   }
   return message
 }
@@ -220,16 +281,30 @@ export function classifyAcpError(err: unknown): AcpErrorVerdict {
   const code = (err as { code?: unknown } | undefined)?.code
   if (typeof code === 'number' && code === -32000) return { cls: 'auth' }
   const message = (err as { message?: unknown } | undefined)?.message
-  if (typeof message === 'string') {
-    const lower = message.toLowerCase()
+  // Same carried-message blindness as {@link formatAcpErrorMessage}: the codex
+  // fork's data bag keeps the SDK message at a bare "Internal error" while the
+  // provider's own text (the one that says "429 Too Many Requests") rides in
+  // `data.message`. Classifying on the SDK's word alone would call a throttle
+  // fatal and skip the retry budget this class exists for. Structured kinds are
+  // still consulted first above, so nothing here can override them.
+  const carried = data?.['message']
+  const blob = [
+    typeof message === 'string' ? message : '',
+    typeof carried === 'string' ? carried : '',
+  ]
+    .filter((part) => part.length > 0)
+    .join('\n')
+  if (blob.length > 0) {
+    const lower = blob.toLowerCase()
     if (lower.includes('authentication required') || lower.includes('auth_required')) {
       return { cls: 'auth' }
     }
-    if (CLI_USAGE_ACCOUNTING_CRASH_TEXT.test(message)) {
+    if (CLI_USAGE_ACCOUNTING_CRASH_TEXT.test(blob)) {
       return { cls: 'transient', kind: 'cli_usage_accounting_crash' }
     }
-    if (QUOTA_TEXT.test(message)) return { cls: 'quota' }
-    if (TRANSIENT_TEXT.test(message)) return { cls: 'transient' }
+    if (QUOTA_TEXT.test(blob)) return { cls: 'quota' }
+    if (RATE_LIMIT_TEXT.test(blob)) return { cls: 'rate_limited' }
+    if (TRANSIENT_TEXT.test(blob)) return { cls: 'transient' }
   }
   return { cls: 'fatal' }
 }

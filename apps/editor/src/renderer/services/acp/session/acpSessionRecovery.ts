@@ -9,7 +9,8 @@
  *  Two tiers produce these states:
  *    - `retrying`    — the connection is alive but the turn failed transiently
  *                      (429 / overloaded / 5xx); the session re-dispatches the
- *                      prompt after a backoff.
+ *                      prompt after a backoff — seconds for a blip, minutes for
+ *                      a rate limit (see {@link retryBudgetFor}).
  *    - `reconnecting`— the agent process died (or stalled); the service is
  *                      re-handshaking (spawn + session/resume) in place.
  *    - `exhausted`   — automatic attempts ran out; the timeline shows the
@@ -17,6 +18,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { observableValue, type ISettableObservable } from '@universe-editor/platform'
+import type { AcpErrorClass } from './acpErrorClassify.js'
 
 export type AcpRecoveryPhase = 'retrying' | 'reconnecting' | 'exhausted'
 
@@ -25,34 +27,85 @@ export interface AcpRecoveryState {
   /** 1-based attempt currently in flight (or scheduled). */
   readonly attempt: number
   readonly maxAttempts: number
-  /** Short machine-ish reason for display/telemetry (e.g. `http_429`, `crash`). */
+  /**
+   * Short machine-ish reason for display/telemetry. A stable token where the UI
+   * branches on it (`rate_limited`, `restart`, `wake`, `crash`), otherwise the
+   * classifier's kind (e.g. `http_503`).
+   */
   readonly reason: string
   /** Epoch ms when the next attempt fires; drives the UI countdown. */
   readonly nextAttemptAt?: number
 }
 
-/** Max automatic attempts per recovery episode (retry tier and reconnect tier alike). */
+/**
+ * Max automatic attempts for an in-place retry on the `transient` schedule, and
+ * for one reconnect episode (the service drives that tier). Both want the same
+ * few-second patience — do not raise this to lengthen the rate-limit budget,
+ * which has its own ({@link RATE_LIMIT_MAX_ATTEMPTS}).
+ */
 export const MAX_RECOVERY_ATTEMPTS = 3
 
-/** Backoff per attempt (index 0 = wait before attempt 2). */
-const BACKOFF_MS: readonly number[] = [2_000, 8_000, 20_000]
+/** In-place retry budget: which backoff schedule, and how many attempts it allows. */
+export type AcpRetryProfile = 'transient' | 'rate_limit'
+
+export interface AcpRetryBudget {
+  readonly profile: AcpRetryProfile
+  readonly maxAttempts: number
+}
 
 /**
- * Test-only override for the backoff schedule so recovery tests don't wait
- * real seconds. Production never sets this. Returns a disposer that restores
- * the default schedule.
+ * Budget for an error class that may be retried in place; `undefined` = do not
+ * retry. A throttle needs a different order of magnitude than a blip: codex's
+ * own retry loop exhausts itself within seconds, so if the editor gives up after
+ * ten seconds too, a 429 ends a session that a wait would have saved.
  */
-let backoffOverride: ((nextAttempt: number) => number) | undefined
-export function __setRecoveryBackoffForTests(fn: ((n: number) => number) | undefined): void {
+export function retryBudgetFor(cls: AcpErrorClass): AcpRetryBudget | undefined {
+  if (cls === 'rate_limited') {
+    return { profile: 'rate_limit', maxAttempts: RATE_LIMIT_MAX_ATTEMPTS }
+  }
+  if (cls === 'transient') return { profile: 'transient', maxAttempts: MAX_RECOVERY_ATTEMPTS }
+  return undefined
+}
+
+/** Attempts allowed for one rate-limit episode (7 waits, 8 turns on the wire). */
+export const RATE_LIMIT_MAX_ATTEMPTS = 8
+
+/** Backoff per attempt (index 0 = wait before attempt 2); the last entry clamps. */
+const BACKOFF_MS: Record<AcpRetryProfile, readonly number[]> = {
+  transient: [2_000, 8_000, 20_000],
+  // Cumulative wait 5+15+30+60×4 = 290s ≈ 5min. The single hop is capped at 60s:
+  // a minute-long countdown still reads as "waiting" rather than as a hang, and
+  // since a throttle window clears on the provider's schedule, more attempts
+  // beat a longer gap.
+  rate_limit: [5_000, 15_000, 30_000, 60_000, 60_000, 60_000, 60_000],
+}
+
+/**
+ * Test-only override for the backoff schedule so recovery tests don't wait real
+ * seconds. Receives the same `(nextAttempt, profile)` the real schedule does, so
+ * a test can also assert which schedule the caller asked for. Production never
+ * sets this; pass `undefined` to restore the real schedule.
+ */
+let backoffOverride: ((nextAttempt: number, profile: AcpRetryProfile) => number) | undefined
+export function __setRecoveryBackoffForTests(
+  fn: ((nextAttempt: number, profile: AcpRetryProfile) => number) | undefined,
+): void {
   backoffOverride = fn
 }
 
 /** Delay before attempt `nextAttempt` (1-based: pass the attempt about to run). */
-export function recoveryBackoffMs(nextAttempt: number): number {
-  if (backoffOverride) return backoffOverride(nextAttempt)
-  const base = BACKOFF_MS[Math.min(Math.max(nextAttempt - 2, 0), BACKOFF_MS.length - 1)]!
-  // ±25% jitter so several sessions limited at the same instant don't retry in lockstep.
-  return Math.round(base * (0.75 + Math.random() * 0.5))
+export function recoveryBackoffMs(
+  nextAttempt: number,
+  profile: AcpRetryProfile = 'transient',
+): number {
+  if (backoffOverride) return backoffOverride(nextAttempt, profile)
+  const table = BACKOFF_MS[profile]
+  const base = table[Math.min(Math.max(nextAttempt - 2, 0), table.length - 1)]!
+  // ±25% jitter so several sessions limited at the same instant don't retry in
+  // lockstep. Clamped to `base`: the table value is a ceiling the UI promises
+  // ("at most a minute"), so jitter only pulls a hop earlier, never pushes it
+  // past the cap the countdown text relies on.
+  return Math.min(Math.round(base * (0.75 + Math.random() * 0.5)), base)
 }
 
 /**

@@ -63,7 +63,7 @@ agent 进程在闲置期退出时，onClose 的 idle 分支只做**静默 seal**
 
 ## `_sendWithRecovery` 返回时 `recovery` 绝不停留在 `phase:'retrying'`
 
-RecoveryBar 只渲染当前 state，倒计时定时器 fire 完就没人再推进它；残留的 `retrying` 会永久转圈且没有 Retry 按钮（症状指纹：状态条卡在「Agent temporarily unavailable. Retrying… (2/3)」、倒计时归零后文案不再变，只能手动点 ×）。收尾责任按出口各自负责、**刻意不用统一 finally**（`agent_crash` 分支把 recovery 交棒给 reconnect tier，统一 finally 会误标成 exhausted）：成功 → clear；abort 分支（`AcpAbortError`）→ clear；退避 sleep 被打断的 catch → clear（这两处都在 `!this._reconnecting` 守卫内——Stop/× 是取消不是失败，不给 manual-retry 条）；`agent_crash` → 交棒 `_handleConnectionLost` 覆盖成 `reconnecting`、**勿收尾**；终止分支 → `!this._reconnecting && (attempt > 1 || verdict.cls === 'transient')` 写 `exhausted` + `_failedPrompt`，`reason: verdict.kind ?? verdict.cls`（非 transient 的 fatal/quota/auth 在「重试后的下一次尝试」收场也要落 exhausted，否则残留 retrying）。配套约定：**看门狗豁免只认 `recovery.hasPending`**（有真实定时器），不认「有 state」——残留 retrying 无定时器必须回落 stall watchdog；**idle reaper 只豁免进行中的 recovery**（`retrying`/`reconnecting`），`exhausted` 是终态不阻止回收，否则 fatal/quota/auth 终态会让 agent 进程永远不被空闲回收（等于用内存不释放换状态残留）。
+RecoveryBar 只渲染当前 state，倒计时定时器 fire 完就没人再推进它；残留的 `retrying` 会永久转圈且没有 Retry 按钮（症状指纹：状态条卡在「Agent temporarily unavailable. Retrying… (2/3)」、倒计时归零后文案不再变，只能手动点 ×）。收尾责任按出口各自负责、**刻意不用统一 finally**（`agent_crash` 分支把 recovery 交棒给 reconnect tier，统一 finally 会误标成 exhausted）：成功 → clear；abort 分支（`AcpAbortError`）→ clear；退避 sleep 被打断的 catch → clear（这两处都在 `!this._reconnecting` 守卫内——Stop/× 是取消不是失败，不给 manual-retry 条）；`agent_crash` → 交棒 `_handleConnectionLost` 覆盖成 `reconnecting`、**勿收尾**；终止分支 → `!this._reconnecting && (attempt > 1 || budget !== undefined)` 写 `exhausted` + `_failedPrompt`（`budget` 由 `retryBudgetFor(verdict.cls)` 单点求值，`reason` 走 `retryReason(verdict)`：限流固定成 `'rate_limited'` 这个稳定 token，其余用 `verdict.kind ?? verdict.cls`）——非可重试类的 fatal/quota/auth 在「重试后的下一次尝试」收场也要落 exhausted，否则残留 retrying。配套约定：**看门狗豁免只认 `recovery.hasPending`**（有真实定时器），不认「有 state」——残留 retrying 无定时器必须回落 stall watchdog；**idle reaper 只豁免进行中的 recovery**（`retrying`/`reconnecting`），`exhausted` 是终态不阻止回收，否则 fatal/quota/auth 终态会让 agent 进程永远不被空闲回收（等于用内存不释放换状态残留）。
 
 ## claude CLI usage 记账崩溃：按 message 文本归类 transient 自动续跑
 
@@ -74,3 +74,30 @@ RecoveryBar 只渲染当前 state，倒计时定时器 fire 完就没人再推�
 **编辑器侧修法**：`apps/editor/src/renderer/services/acp/session/acpErrorClassify.ts` 的 `CLI_USAGE_ACCOUNTING_CRASH_TEXT` 按 message 文本识别（JSC 与 V8 两种措辞、任意 minified 标识符）→ 归类 `transient` + kind `cli_usage_accounting_crash` → `_sendWithRecovery` 自动发「继续」续跑，不再 fatal。
 
 **最小复现**：mock Anthropic SSE 端点，让 usage 里出现缺 `model` 的条目（如 `advisor_message`）即复现一字不差的错误。须用 `CLAUDE_CONFIG_DIR` 隔离配置——`--settings '{}'` 屏蔽不了 `~/.claude/settings.json` 里的 env。
+
+## 限流（429）走独立重试档：分钟级预算、单跳 60s 封顶
+
+**现象**：codex 会话跑到一半被 429 打断后彻底报废。现场（rollout `01a11af8-…`，由 universe-editor 驱动）：7 个 turn 有 5 个以 `exceeded retry limit, last status: 429 Too Many Requests` 结束；turn1 跑 16 分钟被 429 打断后，编辑器 2.2 秒发出的「继续」把这一轮救了回来（说明自动重试本身有效），而 turn3 跑 31 分钟被打断后，连续 4 次重试全在 1–13 秒内再撞 429——限流窗口 ≥90 秒，10 秒的预算撑不过去。
+
+**根因链**：codex Rust 层自己的重试（`request_max_retries` / `stream_max_retries`）退避近乎为零，**1–3 秒就耗尽** → 终态 `error` 通知（fork 先发一条错误文本 chunk，再抛 `RequestError.internalError({ message, codexErrorInfo })`）→ 编辑器 `classifyAcpError` 当时把 429 与 5xx 一起归 `transient` → `_sendWithRecovery` 的通用档只有 3 次尝试 / 2s+8s。claude 之所以稳，是因为它的 CLI 二进制内部自带分钟级重试（读 `retry-after`、指数退避、断流续写），codex 侧没有等价物——**能等的那一层只能是编辑器**。
+
+**编辑器侧修法**（分类 / 预算 / UI 三处）：
+
+- **分类**：新增 `rate_limited` 一类——codex 结构化 429（`httpConnectionFailed` / `responseStreamConnectionFailed` / `responseStreamDisconnected` / `responseTooManyFailedAttempts` 任一带 `httpStatusCode: 429`）、字符串 `rateLimitExceeded`、claude `errorKind: 'rate_limit'`、文本兜底 `\b429\b|\brate[ _-]?limit|too many requests`。`overloaded`（529）刻意留在 `transient`：上游忙是短时现象，长窗口语义只给限流。文本兜底**同时看 `data.message`**（见下条「错误文案」）：`codexErrorInfo` 是可选字段，省略时结构化分支什么都拿不到，只读 SDK 的 `Internal error` 会把 429 判成 fatal，一分钟预算都不会给。
+- **文本正则要收紧**：限流档现在是「误判一次白等 5 分钟」，所以 `RATE_LIMIT_TEXT` 写 `\brate[ _-]?limit` 而不是 `rate.?limit`——后者的 `.` 匹配任意字符，且少了前导词界，`moderate limitation` 里就藏着 `rate limit`。前导 `\b` 是承重的，尾界则**不能**加（会连 `rate-limited`/`rate limited` 一起漏掉）。
+- **QUOTA 必须排在限流之前判定**（`QUOTA_TEXT` → `RATE_LIMIT_TEXT` → `TRANSIENT_TEXT` 的顺序即优先级）：真实 429 报文常同时含 `quota`/`usage limit`/`credits`，额度耗尽不可重试，误判成限流会白等 5 分钟。结构化数据永远优先于文本，所以 codex `usageLimitExceeded`、claude `billing_error` 不受这个顺序影响。
+- **预算**（`acpSessionRecovery.ts` 的 `retryBudgetFor`）：限流 8 次尝试、退避 `5/15/30/60×4`（累计 290s ≈ 5 分钟）；其余 transient 保持 3 次 / 2s+8s。**单跳封顶 60s**——状态条只有一行倒计时，两分钟不变的数会被读成卡死；限流窗口按上游自己的节奏放开，买次数比拉长单跳划算。**封顶必须在 jitter 之后**（`Math.min(jittered, base)`）：先封顶再抖动会让末档实际最长 75s，与文案承诺的「单次最多 1 分钟」不符，而表值一旦是硬上限，抖动就只能把某一跳提前——它的目的是打散重试时刻，不是拉长等待。
+- **`MAX_RECOVERY_ATTEMPTS` 仍是重连档的预算**，别跟着改长（`_reconnectSession` 与 `sealRecoveryFailure` 共用它）。
+- **终止分支的判定**从 `verdict.cls === 'transient'` 泛化成 `budget !== undefined`（预算由 `retryBudgetFor(cls)` 单点求值），否则限流重试耗尽后会停在 `retrying`（即本文第 15 条坑）。
+- **UI**：`recovery.reason = 'rate_limited'` 是稳定 token（细粒度 kind 只进遥测），RecoveryBar 据此说「模型服务正在限流」而不是通用的「暂时不可用」，耗尽后同样保持限流文案。
+- **错误文案**：`formatAcpErrorMessage` 增 `data.message` 兜底——codex 的可读文案在 `RequestError.data.message` 里，而 SDK 自己的 message 恒为 `Internal error`；不兜底的话预算耗尽后用户只看到 `[error] Internal error`。`agent_crash` 分支同样改用它：崩溃是从 `data.details` 认出来的，那行的 message 也只是 `Internal error`，改成拼接后用户才看得到真正的 TypeError。
+
+**为什么不改 fork**：`vendor/codex-acp` 的红线是最小 diff（其 CLAUDE.md 明确要求优先在父项目 `apps/editor` 侧解决）；fork 内部重发同一 turn 会与编辑器重试叠成两层循环，且没有倒计时/取消的 UI 反馈。也评估过抬高 codex Rust 层的 `request_max_retries` / `stream_max_retries`：退避太快，救不了分钟级窗口。
+
+**手动 Retry 会开一整份新预算**：`retryRecovery()` 走一遍全新的 `_sendWithRecovery`，所以限流未解除时连点 Retry 会再安静等一轮（有意为之：用户主动要求再试）。
+
+**已知局限（本次不修）**：退避期间用户又发了一条 prompt，新 turn 会踩掉**上一条** loop 的定时器——成功分支的 `recovery.clear()`（`phase === 'retrying'` 才清）、或它自己失败时 `recovery.sleep()` 开头的 `_cancelTimer()`，两者都拒绝旧 loop 挂着的 sleep，使原来那一轮静默结束（无 `[error]`、无 Retry 条），而它对 `_settleOrphanCompactions` 的收尾还可能落到新 turn 正在跑的压缩卡上。触发条件不是「新 prompt 成功」而是「新 prompt 走到任何碰 recovery 的路径」。`SessionRecovery` 的状态与定时器都是 per-session 单例，彻底修要给 episode 加 owner token，并与重连档共用的原语一起改。**本次改动把这个窗口从 ~8 秒放大到 ~5 分钟**，撞上的概率同步放大——所以这条从「边缘情况」升级成值得排期的一项。
+
+**待核实（未取证）**：claude 的订阅上限（5 小时 / 每周额度）如果也是以 `errorKind: 'rate_limit'` 上报，那撞硬上限的用户会从「10 秒后放弃」变成「安静等 5 分钟」。CLI 自己的文案通常带重置时间（「resets at …」），届时可考虑按文案把这类判成 `quota`；但结构化 kind 优先级高于文本，真要做得先在 `classifyClaudeKind` 里开口子。目前只在 claude CLI 实际输出里确认过 `rate_limit` 用于瞬时限流。
+
+**调参入口**：`acpSessionRecovery.ts` 的 `BACKOFF_MS.rate_limit` 与 `RATE_LIMIT_MAX_ATTEMPTS`。刻意不做成设置项：`AcpSession` 没有 `IConfigurationService`，且一个能设成 30 分钟的旋钮会把「看起来卡住」变成用户自己造成的；将来若要加，可经 `AcpSessionService` 把值快照进 `IAcpSessionInitState`。

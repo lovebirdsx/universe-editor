@@ -41,12 +41,17 @@ import { ConfigOptionStateMachine } from './acpSessionConfigOptions.js'
 import { AcpSessionConnection, type QueuedPrompt } from './acpSessionConnection.js'
 import { AcpConnectionError } from './acpErrors.js'
 import { isAuthRequiredError } from './acpAuthError.js'
-import { classifyAcpError } from './acpErrorClassify.js'
+import {
+  classifyAcpError,
+  formatAcpErrorMessage,
+  type AcpErrorVerdict,
+} from './acpErrorClassify.js'
 import { AcpPromptCancelledDraftStash } from './acpPromptCancelledDraftStash.js'
 import {
   MAX_RECOVERY_ATTEMPTS,
   SessionRecovery,
   recoveryBackoffMs,
+  retryBudgetFor,
   type AcpRecoveryState,
 } from './acpSessionRecovery.js'
 import {
@@ -209,6 +214,17 @@ export function recoveryContinuePromptText(): string {
     'acp.recovery.continueAfterInterrupt',
     'Continue. Note: the previous turn was aborted by a connection interruption, not by me. If you had a question or confirmation waiting for my answer at that moment, do not treat it as answered, skipped, or declined — re-ask it now.',
   )
+}
+
+/**
+ * Stable recovery token for the UI. A rate limit keeps its own label through the
+ * whole episode (the recovery bar says the provider is throttling us rather than
+ * the generic "temporarily unavailable"), so it must not collapse into the
+ * classifier's per-transport kind (`http_429`, `rate_limit`, …).
+ */
+function retryReason(verdict: AcpErrorVerdict): string {
+  if (verdict.cls === 'rate_limited') return 'rate_limited'
+  return verdict.kind ?? 'transient'
 }
 
 /**
@@ -2115,17 +2131,18 @@ export class AcpSession extends Disposable implements IAcpSession {
   }
 
   /**
-   * Send one wire prompt with automatic retry on transient failures (429 /
-   * overloaded / 5xx / dropped stream — see classifyAcpError). Between attempts
-   * the prompt stays in-flight (status keeps `running`) and the recovery state
-   * counts down for the UI. A turn that produced partial output is continued
-   * (`继续`) rather than resent, so the agent transcript never duplicates the
-   * user turn; a zero-output turn is resent verbatim with the same messageId.
-   * An agent-internal crash (`agent_crash`) cannot be retried in place — it
-   * diverts to the hot-reconnect path, which resumes this turn after reattach.
-   * Non-transient errors and exhausted retries fall back to the classic
-   * `[error]` timeline message (+ `errored` status), keeping the prompt
-   * snapshot for the UI's manual-retry affordance.
+   * Send one wire prompt with automatic retry on transient failures (rate limit
+   * / overloaded / 5xx / dropped stream — see classifyAcpError and
+   * {@link retryBudgetFor}). Between attempts the prompt stays in-flight (status
+   * keeps `running`) and the recovery state counts down for the UI. A turn that
+   * produced partial output is continued (`继续`) rather than resent, so the
+   * agent transcript never duplicates the user turn; a zero-output turn is
+   * resent verbatim with the same messageId. An agent-internal crash
+   * (`agent_crash`) cannot be retried in place — it diverts to the hot-reconnect
+   * path, which resumes this turn after reattach. Non-retryable errors and
+   * exhausted retries fall back to the classic `[error]` timeline message
+   * (+ `errored` status), keeping the prompt snapshot for the UI's manual-retry
+   * affordance.
    */
   private async _sendWithRecovery(
     conn: IAcpClientConnection,
@@ -2176,9 +2193,13 @@ export class AcpSession extends Disposable implements IAcpSession {
         failure = err as Error
       }
       const verdict = classifyAcpError(failure)
+      // One source of truth for "may this be retried, and with how much slack":
+      // a rate limit is a throttle and gets a minutes-long schedule, a blip
+      // keeps the old few-second one, `undefined` means do not retry in place.
+      const budget = retryBudgetFor(verdict.cls)
       const retryable =
-        verdict.cls === 'transient' &&
-        attempt < MAX_RECOVERY_ATTEMPTS &&
+        budget !== undefined &&
+        attempt < budget.maxAttempts &&
         // The connection must be the one this dispatch started on: a crash
         // mid-backoff swaps `_conn`, and the reconnect path owns continuation.
         this._conn === conn &&
@@ -2196,18 +2217,19 @@ export class AcpSession extends Disposable implements IAcpSession {
             prompt: [{ type: 'text', text: CONTINUE_PROMPT_TEXT }],
           }
         }
-        const delay = recoveryBackoffMs(attempt)
+        const delay = recoveryBackoffMs(attempt, budget.profile)
         this.recovery.set({
           phase: 'retrying',
           attempt,
-          maxAttempts: MAX_RECOVERY_ATTEMPTS,
-          reason: verdict.kind ?? 'transient',
+          maxAttempts: budget.maxAttempts,
+          reason: retryReason(verdict),
           nextAttemptAt: Date.now() + delay,
         })
         this._telemetry.publicLog('acp.prompt_retry', {
           sessionId: sid,
           attempt,
-          kind: verdict.kind ?? 'transient',
+          kind: retryReason(verdict),
+          cls: verdict.cls,
         })
         try {
           // Aborts (Stop / cancelTurn) and recovery cancels both wake the sleep.
@@ -2239,7 +2261,10 @@ export class AcpSession extends Disposable implements IAcpSession {
         // else would ever start recovery. A crashed agent's session state is
         // untrustworthy: hot-reconnect (fresh spawn + session/resume) like a
         // process death, then continueInterruptedTurn resumes this turn.
-        this._appendMessage('agent', `[error] ${failure.message}`)
+        // `agent_crash` is recognised from `data.details`, so the SDK's own
+        // message is the useless "Internal error" — the details are what the
+        // user needs to see. Telemetry keeps the raw message.
+        this._appendMessage('agent', `[error] ${formatAcpErrorMessage(failure)}`)
         this._telemetry.publicLogError('acp.prompt_agent_crash', {
           sessionId: sid,
           error: failure.message,
@@ -2248,15 +2273,15 @@ export class AcpSession extends Disposable implements IAcpSession {
         return
       }
       this._sawError = true
-      this._appendMessage('agent', `[error] ${failure.message}`)
-      // Any episode that already ran an automatic retry (attempt > 1) — or a
-      // transient whose retries ran out — must land on `exhausted`, whatever the
-      // final verdict (fatal / quota / auth). It used to only fire for
+      this._appendMessage('agent', `[error] ${formatAcpErrorMessage(failure)}`)
+      // Any episode that already ran an automatic retry (attempt > 1) — or one
+      // whose class carries a retry budget — must land on `exhausted`, whatever
+      // the final verdict (fatal / quota / auth). It used to only fire for
       // `transient`, so "the retry's next attempt ends in a fatal Internal
       // error" left `recovery` parked on `retrying` with a countdown timer that
       // had already fired: nothing ever advanced it, and the RecoveryBar spun
       // forever with no Retry button.
-      if (!this._reconnecting && (attempt > 1 || verdict.cls === 'transient')) {
+      if (!this._reconnecting && (attempt > 1 || budget !== undefined)) {
         // Retries exhausted — keep the (possibly continuation-switched) prompt
         // so the UI can offer a manual retry from the recovery bar.
         this._failedPrompt = {
@@ -2271,13 +2296,16 @@ export class AcpSession extends Disposable implements IAcpSession {
         this.recovery.set({
           phase: 'exhausted',
           attempt,
-          maxAttempts: MAX_RECOVERY_ATTEMPTS,
-          reason: verdict.kind ?? verdict.cls,
+          maxAttempts: budget?.maxAttempts ?? MAX_RECOVERY_ATTEMPTS,
+          // An exhausted episode keeps the token its run started under, so a
+          // rate limit never degrades into the generic failure text.
+          reason: budget !== undefined ? retryReason(verdict) : (verdict.kind ?? verdict.cls),
         })
       }
       this._telemetry.publicLogError('acp.prompt_failed', {
         sessionId: sid,
         error: failure.message,
+        cls: verdict.cls,
       })
       this._settleOrphanCompactions('turn failed')
       this._scheduleOrphanToolCallSweep('turn failed')

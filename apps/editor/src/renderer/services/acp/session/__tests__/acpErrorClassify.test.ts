@@ -11,7 +11,9 @@ import {
 
 describe('classifyAcpError', () => {
   it('classifies claude fork structured errorKinds', () => {
-    expect(classifyAcpError({ data: { errorKind: 'rate_limit' } }).cls).toBe('transient')
+    // A throttle is retryable but on a minutes-long budget of its own, so it
+    // must stay distinguishable from the few-second `transient` blips.
+    expect(classifyAcpError({ data: { errorKind: 'rate_limit' } }).cls).toBe('rate_limited')
     expect(classifyAcpError({ data: { errorKind: 'overloaded' } }).cls).toBe('transient')
     expect(classifyAcpError({ data: { errorKind: 'server_error' } }).cls).toBe('transient')
     expect(classifyAcpError({ data: { errorKind: 'no_result' } }).cls).toBe('transient')
@@ -41,16 +43,18 @@ describe('classifyAcpError', () => {
   it('classifies codex fork codexErrorInfo', () => {
     expect(classifyAcpError({ data: { codexErrorInfo: 'usageLimitExceeded' } }).cls).toBe('quota')
     expect(classifyAcpError({ data: { codexErrorInfo: 'unauthorized' } }).cls).toBe('auth')
-    expect(
-      classifyAcpError({
-        data: { codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 429 } } },
-      }).cls,
-    ).toBe('transient')
-    expect(
-      classifyAcpError({
-        data: { codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 503 } } },
-      }).cls,
-    ).toBe('transient')
+    // The string kinds the fork's air-extensions table marks retryable; the
+    // rest fall through to the text fallback rather than being forced fatal.
+    expect(classifyAcpError({ data: { codexErrorInfo: 'rateLimitExceeded' } }).cls).toBe(
+      'rate_limited',
+    )
+    expect(classifyAcpError({ data: { codexErrorInfo: 'serverOverloaded' } }).cls).toBe('transient')
+    expect(classifyAcpError({ data: { codexErrorInfo: 'internalServerError' } }).cls).toBe(
+      'transient',
+    )
+    expect(classifyAcpError({ data: { codexErrorInfo: 'contextWindowExceeded' } }).cls).toBe(
+      'fatal',
+    )
     expect(
       classifyAcpError({
         data: { codexErrorInfo: { responseStreamConnectionFailed: { httpStatusCode: 401 } } },
@@ -61,6 +65,25 @@ describe('classifyAcpError', () => {
         data: { codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 400 } } },
       }).cls,
     ).toBe('fatal')
+  })
+
+  it('splits codex HTTP status into throttle / blip / access', () => {
+    // Every structured carrier key the fork can put a status on. 429 is the
+    // throttle: a real session died here because codex's own retry loop gives up
+    // within seconds while the throttling window lasts minutes.
+    for (const key of [
+      'httpConnectionFailed',
+      'responseStreamConnectionFailed',
+      'responseStreamDisconnected',
+      'responseTooManyFailedAttempts',
+    ]) {
+      expect(
+        classifyAcpError({ data: { codexErrorInfo: { [key]: { httpStatusCode: 429 } } } }).cls,
+      ).toBe('rate_limited')
+      expect(
+        classifyAcpError({ data: { codexErrorInfo: { [key]: { httpStatusCode: 503 } } } }).cls,
+      ).toBe('transient')
+    }
   })
 
   it('treats a codex connection failure with no status as transient', () => {
@@ -144,7 +167,9 @@ describe('classifyAcpError', () => {
   })
 
   it('falls back to message text when no structured data', () => {
-    expect(classifyAcpError(new Error('HTTP 429 Too Many Requests')).cls).toBe('transient')
+    expect(classifyAcpError(new Error('HTTP 429 Too Many Requests')).cls).toBe('rate_limited')
+    expect(classifyAcpError(new Error('rate limit exceeded, slow down')).cls).toBe('rate_limited')
+    expect(classifyAcpError(new Error('server said: too many requests')).cls).toBe('rate_limited')
     expect(classifyAcpError(new Error('service temporarily unavailable')).cls).toBe('transient')
     expect(classifyAcpError(new Error('socket hang up')).cls).toBe('transient')
     expect(
@@ -152,6 +177,106 @@ describe('classifyAcpError', () => {
     ).toBe('transient')
     expect(classifyAcpError(new Error('usage limit reached')).cls).toBe('quota')
     expect(classifyAcpError(new Error('some random failure')).cls).toBe('fatal')
+  })
+
+  it('keeps an exhausted quota out of the rate-limit class', () => {
+    // Real throttling bodies mention both ("you exceeded your current quota …
+    // 429"), and the two need opposite handling: waiting out a throttle is
+    // exactly right, waiting out a spent quota just burns five minutes before
+    // showing the same error. Quota wins whenever it is recognisable.
+    expect(classifyAcpError(new Error('You exceeded your current quota (HTTP 429)')).cls).toBe(
+      'quota',
+    )
+    expect(
+      classifyAcpError(new Error('usage limit reached, rate limit applies until reset')).cls,
+    ).toBe('quota')
+    expect(classifyAcpError(new Error('billing error: 429 from upstream')).cls).toBe('quota')
+    // …and structured verdicts are never overridden by text at all.
+    expect(
+      classifyAcpError({
+        message: 'HTTP 429 Too Many Requests',
+        data: { errorKind: 'billing_error' },
+      }).cls,
+    ).toBe('quota')
+    expect(
+      classifyAcpError({
+        message: 'rate limit',
+        data: { codexErrorInfo: 'usageLimitExceeded' },
+      }).cls,
+    ).toBe('quota')
+  })
+
+  it('surfaces the codex textual diagnosis behind the SDK "Internal error"', () => {
+    // shape: RequestError.internalError({ message, codexErrorInfo }) — the SDK
+    // message is the bare "Internal error" and the provider's own text rides in
+    // data.message. Without this the user sees "Internal error" and nothing else.
+    expect(
+      formatAcpErrorMessage({
+        code: -32603,
+        message: 'Internal error',
+        data: {
+          message: 'exceeded retry limit, last status: 429 Too Many Requests',
+          codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 429 } },
+        },
+      }),
+    ).toBe('exceeded retry limit, last status: 429 Too Many Requests')
+    // A data bag without that field keeps the previous behaviour.
+    expect(formatAcpErrorMessage({ code: -32603, message: 'Internal error' })).toBe(
+      'Internal error',
+    )
+    // details (the SDK catch-all) still wins over the carried message.
+    expect(
+      formatAcpErrorMessage({
+        code: -32603,
+        message: 'Internal error',
+        data: { details: 'boom', message: 'carried' },
+      }),
+    ).toBe('Internal error: boom')
+  })
+
+  it('reads the diagnosis the codex fork carries in data.message', () => {
+    // The terminal error notification is re-thrown as
+    // `RequestError.internalError({ message, codexErrorInfo })`: the SDK's own
+    // message stays the bare "Internal error" while the provider's text rides in
+    // `data.message`. `codexErrorInfo` is optional there — when it is absent the
+    // structured branch has nothing, and classifying on the SDK's word alone
+    // would call a throttle fatal and skip the five-minute budget entirely.
+    expect(
+      classifyAcpError({
+        code: -32603,
+        message: 'Internal error',
+        data: { message: 'exceeded retry limit, last status: 429 Too Many Requests' },
+      }).cls,
+    ).toBe('rate_limited')
+    expect(
+      classifyAcpError({
+        code: -32603,
+        message: 'Internal error',
+        data: { message: 'upstream said: usage limit reached' },
+      }).cls,
+    ).toBe('quota')
+    // A body without a carried message keeps the old behaviour.
+    expect(classifyAcpError({ code: -32603, message: 'Internal error' }).cls).toBe('fatal')
+  })
+
+  it('does not read throttle phrasing into ordinary prose', () => {
+    // The rate-limit class now buys minutes of silent waiting, so a false
+    // positive is expensive: without the leading word boundary, `rate[ _-]?limit`
+    // matches the "rate limit" sitting inside "moderate limitation".
+    expect(classifyAcpError(new Error('moderate limitation introduced by the patch')).cls).toBe(
+      'fatal',
+    )
+    // …while every real spelling of the throttle still lands, including the
+    // "-limited" form a trailing boundary would have broken.
+    for (const text of [
+      'rate limited, slow down',
+      'the account is rate-limited',
+      'rate_limit exceeded',
+      'rateLimitExceeded',
+      'ratelimit: retry later',
+    ]) {
+      expect(classifyAcpError(new Error(text)).cls).toBe('rate_limited')
+    }
   })
 
   it('defaults to fatal for unknown shapes', () => {

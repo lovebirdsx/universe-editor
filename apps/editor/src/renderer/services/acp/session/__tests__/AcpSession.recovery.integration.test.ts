@@ -44,7 +44,11 @@ import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
 import { AcpAuthGuidanceService } from '../acpAuthGuidanceService.js'
 import { stubAcpCodexAutoReviewGuard } from './stubAcpCodexAutoReviewGuard.js'
 import { AcpSessionFactory } from '../acpSessionFactory.js'
-import { __setRecoveryBackoffForTests, MAX_RECOVERY_ATTEMPTS } from '../acpSessionRecovery.js'
+import {
+  __setRecoveryBackoffForTests,
+  MAX_RECOVERY_ATTEMPTS,
+  RATE_LIMIT_MAX_ATTEMPTS,
+} from '../acpSessionRecovery.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
 import { StubConfigOptionsCache } from './stubConfigOptionsCache.js'
 import { StubExtensionMcpServersService } from './stubExtensionMcpServers.js'
@@ -427,6 +431,22 @@ function transientError(): Error {
   return Object.assign(new Error('overloaded'), { data: { errorKind: 'overloaded' } })
 }
 
+/**
+ * A 429 as the codex fork delivers it: the terminal error notification is
+ * re-thrown as `RequestError.internalError({ message, codexErrorInfo })`, so the
+ * SDK's own message is the bare "Internal error" and the provider's text rides
+ * in `data.message`.
+ */
+function rateLimitError(): Error {
+  return Object.assign(new Error('Internal error'), {
+    code: -32603,
+    data: {
+      message: 'exceeded retry limit, last status: 429 Too Many Requests',
+      codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 429 } },
+    },
+  })
+}
+
 /** Poll an observable until the predicate holds (or time out). */
 async function waitFor<T>(
   obs: { get(): T },
@@ -703,13 +723,10 @@ describe('AcpSession auto-recovery', () => {
       promptResults: [
         () =>
           Promise.reject(
-            Object.assign(
-              new Error("Internal error: undefined is not an object (evaluating 'e.includes')"),
-              {
-                code: -32603,
-                data: { details: "undefined is not an object (evaluating 'e.includes')" },
-              },
-            ),
+            Object.assign(new Error('Internal error'), {
+              code: -32603,
+              data: { details: "undefined is not an object (evaluating 'e.includes')" },
+            }),
           ),
         // After reconnect, the resumed turn succeeds.
         () => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse),
@@ -731,8 +748,19 @@ describe('AcpSession auto-recovery', () => {
       client.connections[0]!.promptCalls[0]!._meta?.messageId,
     )
     // The crash message stays on the timeline for context, but the session
-    // recovered instead of sealing to `errored`.
+    // recovered instead of sealing to `errored`. `agent_crash` is recognised
+    // from `data.details`, so the SDK's own message is a bare "Internal error" —
+    // the details are the only thing that tells the user what crashed.
     expect(s.messages.get().some((m) => m.text.startsWith('[error]'))).toBe(true)
+    expect(
+      s.messages
+        .get()
+        .some(
+          (m) =>
+            m.text ===
+            "[error] Internal error: undefined is not an object (evaluating 'e.includes')",
+        ),
+    ).toBe(true)
     expect(s.status.get()).toBe('idle')
   })
 
@@ -1670,6 +1698,233 @@ describe('AcpSession auto-recovery', () => {
     expect(client.connections.length).toBe(3)
     expect(client.connections[2]!.promptCalls.length).toBe(1)
     expect(s.messages.get().some((m) => m.text.startsWith('[error]'))).toBe(false)
+  })
+})
+
+describe('rate-limit recovery budget', () => {
+  let svc: AcpSessionService
+  let client: ScriptedClient
+
+  beforeEach(() => {
+    // Near-zero backoff so the (nominal five-minute) schedule runs fast.
+    __setRecoveryBackoffForTests(() => 1)
+  })
+
+  afterEach(() => {
+    __setRecoveryBackoffForTests(undefined)
+    svc.dispose()
+    vi.useRealTimers()
+  })
+
+  it('keeps retrying a throttled turn well past the transient attempt budget', async () => {
+    client = new ScriptedClient({
+      loadSession: true,
+      promptResults: [
+        // Five throttled attempts — twice the transient budget of 3, which is
+        // what killed a real 31-minute turn: the provider's window outlasted the
+        // editor's ten seconds, and codex's own retry loop had already given up.
+        () => Promise.reject(rateLimitError()),
+        () => Promise.reject(rateLimitError()),
+        () => Promise.reject(rateLimitError()),
+        () => Promise.reject(rateLimitError()),
+        () => Promise.reject(rateLimitError()),
+        () => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse),
+      ],
+    })
+    svc = makeService(client, new ConfigurationService())
+    const s = await svc.createSession()
+    await s.whenConnected()
+
+    await s.sendPrompt('do it')
+    await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
+    expect(client.connections[0]!.promptCalls.length).toBe(6)
+    expect(s.messages.get().some((m) => m.text.startsWith('[error]'))).toBe(false)
+  })
+
+  it('labels the episode as rate limiting and reports the longer budget', async () => {
+    __setRecoveryBackoffForTests(() => 200)
+    client = new ScriptedClient({
+      loadSession: true,
+      promptResults: [() => Promise.reject(rateLimitError())],
+    })
+    svc = makeService(client, new ConfigurationService())
+    const s = await svc.createSession()
+    await s.whenConnected()
+
+    void s.sendPrompt('do it')
+    await waitFor(s.recoveryState, (v) => v?.phase === 'retrying')
+    // The UI branches on this token: a throttle must not read as the generic
+    // "agent temporarily unavailable".
+    expect(s.recoveryState.get()).toMatchObject({
+      reason: 'rate_limited',
+      maxAttempts: RATE_LIMIT_MAX_ATTEMPTS,
+    })
+    await s.cancelTurn()
+    await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
+  })
+
+  it('continues the turn when the fork already streamed its error text', async () => {
+    client = new ScriptedClient({
+      loadSession: true,
+      promptResults: [
+        () => {
+          // The fork emits the readable error as an agent chunk before the
+          // prompt rejects, so the failed turn counts as having produced output:
+          // resending the original prompt verbatim would duplicate the user turn
+          // in the agent's transcript.
+          client.emit(0, {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'exceeded retry limit, last status: 429\n\n' },
+          })
+          return Promise.reject(rateLimitError())
+        },
+        () => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse),
+      ],
+    })
+    svc = makeService(client, new ConfigurationService())
+    const s = await svc.createSession()
+    await s.whenConnected()
+
+    await s.sendPrompt('do it')
+    await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
+    const retry = client.connections[0]!.promptCalls[1]!
+    expect(retry.prompt.some((b) => b.type === 'text' && b.text === CONTINUE_PROMPT_TEXT)).toBe(
+      true,
+    )
+    const continuation = s.messages.get().find((m) => m.text === CONTINUE_PROMPT_TEXT)
+    expect(continuation).toMatchObject({ role: 'user', autoRetry: true })
+  })
+
+  it('exhausts the rate-limit budget, keeps a manual retry, and shows the provider text', async () => {
+    client = new ScriptedClient({
+      loadSession: true,
+      promptResults: [
+        ...Array.from(
+          { length: RATE_LIMIT_MAX_ATTEMPTS },
+          () => () => Promise.reject(rateLimitError()),
+        ),
+        // The manual retry goes out on a fresh budget and lands.
+        () => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse),
+      ],
+    })
+    svc = makeService(client, new ConfigurationService())
+    const s = await svc.createSession()
+    await s.whenConnected()
+
+    await s.sendPrompt('do it')
+    await waitFor(s.recoveryState, (v) => v?.phase === 'exhausted')
+    expect(s.status.get()).toBe('errored')
+    expect(s.recoveryState.get()).toMatchObject({
+      reason: 'rate_limited',
+      maxAttempts: RATE_LIMIT_MAX_ATTEMPTS,
+    })
+    expect(client.connections[0]!.promptCalls.length).toBe(RATE_LIMIT_MAX_ATTEMPTS)
+    // Not the useless "Internal error" the SDK wrapper would print on its own.
+    const errorText = 'exceeded retry limit, last status: 429 Too Many Requests'
+    expect(s.messages.get().some((m) => m.text === `[error] ${errorText}`)).toBe(true)
+
+    await s.retryRecovery()
+    await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
+    expect(client.connections[0]!.promptCalls.length).toBe(RATE_LIMIT_MAX_ATTEMPTS + 1)
+  })
+
+  it('still converges to exhausted when a throttled retry ends in a fatal error', async () => {
+    // The recovery bar must never be left parked on `retrying` with a countdown
+    // that already fired — the exact bug the terminal branch guards against.
+    client = new ScriptedClient({
+      loadSession: true,
+      promptResults: [
+        () => Promise.reject(rateLimitError()),
+        () => Promise.reject(new Error('Internal error')),
+      ],
+    })
+    svc = makeService(client, new ConfigurationService())
+    const s = await svc.createSession()
+    await s.whenConnected()
+
+    await s.sendPrompt('do it')
+    await waitFor(s.recoveryState, (v) => v?.phase === 'exhausted')
+    expect(s.recoveryState.get()?.reason).toBe('fatal')
+    expect(s.status.get()).toBe('errored')
+  })
+
+  it('clears the recovery bar when the user stops during a rate-limit backoff', async () => {
+    __setRecoveryBackoffForTests(() => 500)
+    client = new ScriptedClient({
+      loadSession: true,
+      promptResults: [
+        () => Promise.reject(rateLimitError()),
+        () => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse),
+      ],
+    })
+    svc = makeService(client, new ConfigurationService())
+    const s = await svc.createSession()
+    await s.whenConnected()
+
+    void s.sendPrompt('do it')
+    await waitFor(s.recoveryState, (v) => v?.phase === 'retrying')
+    await s.cancelTurn()
+    await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
+    // The long backoff was interrupted before the second attempt went out.
+    expect(client.connections[0]!.promptCalls.length).toBe(1)
+  })
+
+  it('clears the recovery bar when the user cancels it during a rate-limit backoff', async () => {
+    // The × on the status bar is the user's only escape while a five-minute
+    // budget burns down, and it takes a different path than Stop (no abort of
+    // the turn, just the pending sleep rejected) — so it gets its own test.
+    __setRecoveryBackoffForTests(() => 500)
+    client = new ScriptedClient({
+      loadSession: true,
+      promptResults: [
+        () => Promise.reject(rateLimitError()),
+        () => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse),
+      ],
+    })
+    svc = makeService(client, new ConfigurationService())
+    const s = await svc.createSession()
+    await s.whenConnected()
+
+    void s.sendPrompt('do it')
+    await waitFor(s.recoveryState, (v) => v?.phase === 'retrying')
+    s.cancelRecovery()
+    await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
+    expect(client.connections[0]!.promptCalls.length).toBe(1)
+    // A cancel is not a failure: no [error] and no manual-retry bar.
+    expect(s.messages.get().some((m) => m.text.startsWith('[error]'))).toBe(false)
+  })
+
+  it('picks the schedule from the class of the failure it just saw', async () => {
+    // The backoff override swallows the delay, so without this the wiring
+    // classifier → budget → schedule could pass the transient schedule for a
+    // 429 and nothing would go red: the whole rate-limit budget lives in that
+    // second argument.
+    const asked: Array<[number, string]> = []
+    __setRecoveryBackoffForTests((attempt, profile) => {
+      asked.push([attempt, profile])
+      return 1
+    })
+    client = new ScriptedClient({
+      loadSession: true,
+      promptResults: [
+        () => Promise.reject(transientError()),
+        // A blip that turns into a throttle: the budget must upgrade mid-flight.
+        () => Promise.reject(rateLimitError()),
+        () => Promise.reject(rateLimitError()),
+        () => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse),
+      ],
+    })
+    svc = makeService(client, new ConfigurationService())
+    const s = await svc.createSession()
+    await s.whenConnected()
+
+    await s.sendPrompt('do it')
+    await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
+    expect(asked).toEqual([
+      [2, 'transient'],
+      [3, 'rate_limit'],
+      [4, 'rate_limit'],
+    ])
   })
 })
 

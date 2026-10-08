@@ -72,9 +72,14 @@ export function RecoveryBar({ session }: { session: IAcpSession }) {
 }
 
 function describe(state: AcpRecoveryState): string {
-  const { phase, attempt, maxAttempts } = state
+  const { phase, attempt, maxAttempts, reason } = state
   if (phase === 'exhausted') {
-    return localize('acp.recovery.exhausted', 'Automatic recovery failed. You can retry manually.')
+    return reason === 'rate_limited'
+      ? localize(
+          'acp.recovery.exhaustedRateLimited',
+          'The provider is still rate-limiting requests. You can retry manually.',
+        )
+      : localize('acp.recovery.exhausted', 'Automatic recovery failed. You can retry manually.')
   }
   const secs =
     state.nextAttemptAt !== undefined
@@ -107,6 +112,22 @@ function describe(state: AcpRecoveryState): string {
           0: attempt,
           1: maxAttempts,
         })
+  }
+  // A rate limit is not a fault: the provider asked us to come back later, and
+  // the wait is minutes rather than seconds — say what we are waiting for, so a
+  // long countdown does not read as a hang.
+  if (reason === 'rate_limited') {
+    return secs > 0
+      ? localize(
+          'acp.recovery.rateLimitedIn',
+          'The provider is rate-limiting requests. Retrying in {0}s… ({1}/{2})',
+          { 0: secs, 1: attempt, 2: maxAttempts },
+        )
+      : localize(
+          'acp.recovery.rateLimited',
+          'The provider is rate-limiting requests. Retrying… ({0}/{1})',
+          { 0: attempt, 1: maxAttempts },
+        )
   }
   return secs > 0
     ? localize(
