@@ -118,6 +118,7 @@ git push -u origin chore/update-claude-agent-acp
 - **案例 11**（0.62.0→0.64.2）：上游 #881 给「丢弃子代理 text」分支加 forwardSubagentText 门控 → 我方挂分支上的副作用（用量累积）必须提升到分支决策前，否则新路径丢失；replay 强类型辅助撞 union 类型 → 补接口字段；测试尾部相邻 append 冲突在 `=======` 处补闭合括号。
 - **案例 12**（0.64.2→0.85.1，SDK 0.3.287）：升级后契约测试 `session/new` → `set_config_option` 超时——上游后台 `getContextUsage` 虽不 await，但 turn 前不被 CLI 服务、占住串行控制通道 5~8s → fork 加 `hasStartedTurn` 闸门（turn 前不发，resumed 会话照旧）+ 回归测试；含契约测试跑法与干净 `CODEX_HOME`（勿改真实 auth 文件）。
 - **案例 13**（0.64.2→0.85.1 同轮发现，上游 875d75f）：AIR tool-call 契约把子 Agent 标记从所有客户端的 `_meta.claudeCode.subagent` 挪成 AIR 专属 `_meta.jetbrains.air.subagent` → 父项目 `readSubagent` 改按 `_meta.claudeCode.toolName`（`Agent`/`Task`）识别；rebase 时勿丢非 AIR 分支的 `toolName` 透传。
+- **案例 14**（0.85.1 后，上游 #1218）：`session/load` 新增 `resumedMessages` 入参（SDK 有效链，从 compact summary 起）排在 fork 的 `fullChain` 之前 → 已压缩会话恢复后丢压缩前历史、摘要变首条、steering 插话也丢；修法「无条件读 raw transcript + `fullChain ?? resumedMessages ?? merge(...)`」。教训：**本地功能的测试必须至少一条走生产入口的入参形态**，否则上游改入参时零冲突静默失效。
 
 ## 要点速记
 
@@ -130,7 +131,7 @@ git push -u origin chore/update-claude-agent-acp
 7. fork 测试已知 **6 个** Windows 路径分隔符失败是上游缺陷（案例 1 家族，2 个 toDisplayPath + 4 个 #867 refine 测试），别误判为回归；主仓库 `pnpm check` 的 FileWatcher/DiffEditor/`Channel closed`(IPC) 偶发失败是既有 flake，单独 `pnpm --filter @universe-editor/editor run test` 重跑即绿。
 8. `pnpm agent:build` 的 vendor-install 是 **lock-hash 缓存的普通 `npm ci`（无 prune）**，devDeps 保留、fork 单测可直接跑；lock 变了才会重装。⚠️ 在 fork 里跑 `npm install` 重生成 lock 可能把它弄脏（本机 npmmirror registry 元数据更新后重解析 optional devDep，如 `@emnapi/wasi-threads` 小版本漂移 + 补上之前缺失的 `@emnapi/core` 条目）。**别急着丢弃**：npm 对 optional 依赖解析失败会静默省略 lock 条目，rebase 当天生成的 lock 可能因缓存元数据过期而缺条目，当天 `npm ci` 靠同样的缓存蒙混过关，隔天后 `npm ci` 就会报 `Invalid/Missing ... EUSAGE`（`agent:build`/打包必挂）。判别法：`npm ci --dry-run` 能过才算噪音可丢弃；报错就说明脏 lock 才是同步态，必须 commit（并入 esbuild 提交，见要点 6 的非交互重放）。
 9. 全流程末尾用 `git diff --submodule=log vendor/claude-agent-acp` 核对“我方提交在顶 + 上游新提交在下”，再提交主仓库指针。
-10. **rebase 零冲突 ≠ 语义正确**：上游做接口/抽象层重构时，我方挂在旧结构上的接口声明+实现可能被整体顶替而只留调用点（案例 5）；上游新增运行时校验时，我方旧测试的人为构造序列会失效（案例 6）。第 3 步 `npm run typecheck` **和** `npm test` 都是必跑安全网，别因 rebase 顺利就跳过。
+10. **rebase 零冲突 ≠ 语义正确**：上游做接口/抽象层重构时，我方挂在旧结构上的接口声明+实现可能被整体顶替而只留调用点（案例 5）；上游新增运行时校验时，我方旧测试的人为构造序列会失效（案例 6）；上游给已有函数**新增入参**、调用方随之改用该入参时，我方挂在原分支上的功能会被静默遮蔽（案例 14，三道安全网全绿也发现不了，只能靠「生产入口入参形态」的测试守护）。第 3 步 `npm run typecheck` **和** `npm test` 都是必跑安全网，别因 rebase 顺利就跳过。
 11. **合并方式固定 rebase，不用再问用户**；只需就“推送范围”征询。选“仅本地不推送”时到本地 `main` 指向合并结果 + 主仓库 `agent:build`/`pnpm check` 验证为止，不 push fork、不提交 submodule 指针。
 
 ## 关键参考路径
