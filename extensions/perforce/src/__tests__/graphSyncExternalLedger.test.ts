@@ -96,6 +96,7 @@ function makeFakeClient(root: string) {
     setReconcileLimit: vi.fn(),
     setOpenedByOthersOptions: vi.fn(),
     setSyncParallelThreads: vi.fn(),
+    setP4delta: vi.fn(),
     dispose: vi.fn(),
     cancelBusy: vi.fn(),
     reconcile: vi.fn(async () => {}),

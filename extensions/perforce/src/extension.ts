@@ -38,6 +38,7 @@ import { readdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { ConcurrencyGate } from './concurrency.js'
+import { watchConfig } from './configWatch.js'
 import { resolveP4Command, setP4CommandTimeoutSeconds, type P4Connection } from './p4Service.js'
 import { resolveP4deltaCommand } from './p4deltaService.js'
 import { PerforceClient, SYNC_POINT_READBACK_SLOW_EXEC, type P4CacheOptions } from './client.js'
@@ -774,14 +775,22 @@ export async function activate(context: ExtensionContext): Promise<void> {
   // Bounds "hung forever", not "slow": a p4 stuck on a frozen network drive /
   // half-open gateway TCP holds its gate slot until killed (the poll wedge).
   setP4CommandTimeoutSeconds(await cfg.get('commandTimeout', 600))
-  // `maxConcurrent` was read once above; keep the gate's cap in sync so a change
-  // applies without a reload (the background reserve is derived from it).
-  context.subscriptions.push(
-    workspace.onDidChangeConfiguration((e) => {
-      if (!e.affectsConfiguration('perforce.maxConcurrent')) return
-      void cfg.get('maxConcurrent', 4).then((n) => gate.setMax(n))
-    }),
-  )
+  // The watch owns the cap from here on — `setMax` is what a config change does
+  // anyway — and its first read lands before the client below exists, so a
+  // workspace layer arriving after the constructor's read still sizes the gate
+  // before its first command. The read-once value above is overwritten without
+  // anything having observed it.
+  const watchMaxConcurrent = watchConfig<number>({
+    read: () => cfg.get('maxConcurrent', 4),
+    apply: (n) => gate.setMax(n),
+    subscribe: (onChange) =>
+      workspace.onDidChangeConfiguration((e) => {
+        if (!e.affectsConfiguration('perforce.maxConcurrent')) return
+        onChange()
+      }),
+  })
+  context.subscriptions.push(watchMaxConcurrent)
+  await watchMaxConcurrent.ready
   const fallback = await readFallbackConnection()
 
   // Result caching (server round-trips are expensive). Immutable data (submitted
@@ -938,59 +947,54 @@ export async function activate(context: ExtensionContext): Promise<void> {
   // session and never checkpointed. Treating a file as a directory would build
   // the filespec `<file>/...` — a no-such-file p4 answers as clean (exit 0,
   // empty) — and checkpointing that empty answer would pin the file's drift
-  // verdict forever. `scopeApplySeq` makes a later config apply win over an
-  // earlier one still awaiting its stats (the stat round-trips are async, so
-  // two rapid config events could otherwise resolve out of order).
-  let scopeApplySeq = 0
-  const applyReconcileScope = async (target: PerforceClient): Promise<void> => {
-    const seq = ++scopeApplySeq
-    const scopeCfg = workspace.getConfiguration('workspace')
-    const enabled = await scopeCfg.get('focusEnabled', false)
-    const folders = await scopeCfg.get<Record<string, unknown>>('focusFolders', {})
-    const { dirs, files } = await resolveFocusScope({ enabled, folders }, root, async (p) => {
-      try {
-        const s = await workspace.fs.stat(p)
-        return { isDirectory: s.type === FileType.Directory }
-      } catch {
-        return undefined // missing / unreadable — kept in `files` (see resolveFocusScope)
-      }
-    })
-    // A later apply already superseded this one; drop the stale resolution.
-    if (seq !== scopeApplySeq) return
-    // `scoped` is true whenever ANY focus entry survived — dirs or files. Only
-    // then does the scope narrow; with zero surviving entries (focus disabled
-    // or every entry dropped) fall back to the opened folder so the hint
-    // channel keeps its old whole-folder behaviour. Critically, a focus of ONLY
-    // files yields dirs=[] files=[…]: the client must see that narrow file-only
-    // scope (`_isInReconcileScope` then matches by `isScopeFile`), not the whole
-    // root — passing `root` here would defeat the very narrowing the user asked
-    // for and re-walk the depot the focus was meant to avoid.
-    const scoped = dirs.length > 0 || files.length > 0
-    target.setReconcileScope(scoped ? dirs : root, scoped ? files : [])
-    // NOTHING else follows the focus. The default get's range is the DAILY scope
-    // (opened folder ∩ `.p4delta-scope`), resolved by `PerforceClient.refreshScope`
-    // — the user's get must not follow what they happen to be looking at, and a
-    // focus folder outside the declared scope must not silently widen it.
-    log(
-      `[perforce] reconcile focus: ${dirs.length} dirs, ${files.length} files` +
-        (dirs.length === 0 && files.length === 0 ? ' (<opened folder>)' : ''),
-    )
-  }
-  const applyReconcileScopeAll = async (): Promise<void> => {
-    for (const c of mgr.all) await applyReconcileScope(c)
-  }
-  await applyReconcileScope(client)
-  context.subscriptions.push(
-    workspace.onDidChangeConfiguration((e) => {
-      if (
-        !e.affectsConfiguration('workspace.focusEnabled') &&
-        !e.affectsConfiguration('workspace.focusFolders')
-      ) {
-        return
-      }
-      void applyReconcileScopeAll()
-    }),
-  )
+  // verdict forever.
+  const watchReconcileScope = watchConfig<{ dirs: string[]; files: string[] }>({
+    read: async () => {
+      const scopeCfg = workspace.getConfiguration('workspace')
+      const enabled = await scopeCfg.get('focusEnabled', false)
+      const folders = await scopeCfg.get<Record<string, unknown>>('focusFolders', {})
+      return resolveFocusScope({ enabled, folders }, root, async (p) => {
+        try {
+          const s = await workspace.fs.stat(p)
+          return { isDirectory: s.type === FileType.Directory }
+        } catch {
+          return undefined // missing / unreadable — kept in `files` (see resolveFocusScope)
+        }
+      })
+    },
+    apply: ({ dirs, files }) => {
+      // `scoped` is true whenever ANY focus entry survived — dirs or files. Only
+      // then does the scope narrow; with zero surviving entries (focus disabled
+      // or every entry dropped) fall back to the opened folder so the hint
+      // channel keeps its old whole-folder behaviour. Critically, a focus of ONLY
+      // files yields dirs=[] files=[…]: the client must see that narrow file-only
+      // scope (`_isInReconcileScope` then matches by `isScopeFile`), not the whole
+      // root — passing `root` here would defeat the very narrowing the user asked
+      // for and re-walk the depot the focus was meant to avoid.
+      const scoped = dirs.length > 0 || files.length > 0
+      for (const c of mgr.all) c.setReconcileScope(scoped ? dirs : root, scoped ? files : [])
+      // NOTHING else follows the focus. The default get's range is the DAILY scope
+      // (opened folder ∩ `.p4delta-scope`), resolved by `PerforceClient.refreshScope`
+      // — the user's get must not follow what they happen to be looking at, and a
+      // focus folder outside the declared scope must not silently widen it.
+      log(
+        `[perforce] reconcile focus: ${dirs.length} dirs, ${files.length} files` +
+          (dirs.length === 0 && files.length === 0 ? ' (<opened folder>)' : ''),
+      )
+    },
+    subscribe: (onChange) =>
+      workspace.onDidChangeConfiguration((e) => {
+        if (
+          !e.affectsConfiguration('workspace.focusEnabled') &&
+          !e.affectsConfiguration('workspace.focusFolders')
+        ) {
+          return
+        }
+        onChange()
+      }),
+  })
+  context.subscriptions.push(watchReconcileScope)
+  await watchReconcileScope.ready
 
   /**
    * Reconcile noise (`perforce.reconcile.excludeFolders`): folders the reconcile
@@ -1000,80 +1004,87 @@ export async function activate(context: ExtensionContext): Promise<void> {
    *
    * Deliberately NOT a scope source: the daily scope (`.p4delta-scope`) remains
    * the only one, a get runs with noise applied by nobody, and editing this
-   * setting does not invalidate a pending get preview. `noiseApplySeq` makes a
-   * later config apply win over an earlier one still awaiting its stats — the
-   * stat round-trips are async, so two rapid edits could otherwise land out of
-   * order and leave the client hiding the wrong folders.
+   * setting does not invalidate a pending get preview.
+   *
+   * `watchConfig` is what makes "applied before the first refresh" hold even
+   * when the workspace settings layer carrying the value loads mid-activation:
+   * it subscribes before it reads (see its header), so a layer that lands while
+   * the stats are in flight still reaches `apply` — and, through
+   * `setReconcileExcludes`, aborts and re-arms the round the refresh tail
+   * scheduled.
    */
-  let noiseApplySeq = 0
-  const applyReconcileExcludes = async (target: PerforceClient): Promise<void> => {
-    const seq = ++noiseApplySeq
-    const values = await cfg.get<string[]>('reconcile.excludeFolders', [])
-    const noise = await resolveReconcileExcludes(values, root, async (p) => {
-      try {
-        const s = await workspace.fs.stat(p)
-        return { isDirectory: s.type === FileType.Directory }
-      } catch {
-        return undefined // gone / unreadable — resolved as a folder (the setting names folders)
-      }
-    })
-    if (seq !== noiseApplySeq) return
-    target.setReconcileExcludes(noise)
-    log(
-      `[perforce] reconcile exclusions: ${noise.dirs.length} dir(s), ${noise.files.length} file(s)` +
-        (noise.dirs.length === 0 && noise.files.length === 0 ? ' (<none>)' : ''),
-    )
-  }
-  const applyReconcileExcludesAll = async (): Promise<void> => {
-    for (const c of mgr.all) await applyReconcileExcludes(c)
-  }
-  await applyReconcileExcludes(client)
-  context.subscriptions.push(
-    workspace.onDidChangeConfiguration((e) => {
-      // The exact key, deliberately: `affectsConfiguration` in this host is an
-      // exact match, so a section name (`perforce.reconcile`) would subscribe to
-      // nothing at all.
-      if (!e.affectsConfiguration('perforce.reconcile.excludeFolders')) return
-      void applyReconcileExcludesAll()
-    }),
-  )
+  const watchReconcileExcludes = watchConfig<ReconcileNoiseConfig>({
+    read: async () => {
+      const values = await cfg.get<string[]>('reconcile.excludeFolders', [])
+      return resolveReconcileExcludes(values, root, async (p) => {
+        try {
+          const s = await workspace.fs.stat(p)
+          return { isDirectory: s.type === FileType.Directory }
+        } catch {
+          return undefined // gone / unreadable — resolved as a folder (the setting names folders)
+        }
+      })
+    },
+    apply: (noise) => {
+      for (const c of mgr.all) c.setReconcileExcludes(noise)
+      log(
+        `[perforce] reconcile exclusions: ${noise.dirs.length} dir(s), ${noise.files.length} file(s)` +
+          (noise.dirs.length === 0 && noise.files.length === 0 ? ' (<none>)' : ''),
+      )
+    },
+    subscribe: (onChange) =>
+      workspace.onDidChangeConfiguration((e) => {
+        // The exact key is the precise question. Note the extension API is NOT
+        // the kernel service: its `affectsConfiguration` keeps VSCode's SECTION
+        // semantics (`key === section || key.startsWith(section + '.')`, see
+        // `extensionService.acceptConfigurationChanged`), so a section name here
+        // over-fires rather than misses — the opposite of `ConfigurationService`,
+        // whose exact match silently drops section-name subscribers.
+        if (!e.affectsConfiguration('perforce.reconcile.excludeFolders')) return
+        onChange()
+      }),
+  })
+  context.subscriptions.push(watchReconcileExcludes)
+  await watchReconcileExcludes.ready
 
   /**
    * Parallel sync transfer (`p4 sync --parallel=threads=N`). Hot-applied like
    * `maxConcurrent` — a mid-edit change reaches the next sync without a reload.
    */
-  const applySyncParallelThreads = async (target: PerforceClient): Promise<void> => {
-    target.setSyncParallelThreads(await cfg.get('syncParallelThreads', 4))
-  }
-  for (const c of mgr.all) await applySyncParallelThreads(c)
-  context.subscriptions.push(
-    workspace.onDidChangeConfiguration((e) => {
-      if (!e.affectsConfiguration('perforce.syncParallelThreads')) return
-      void (async () => {
-        for (const c of mgr.all) await applySyncParallelThreads(c)
-      })()
-    }),
-  )
+  const watchSyncParallelThreads = watchConfig<number>({
+    read: () => cfg.get('syncParallelThreads', 4),
+    apply: (threads) => {
+      for (const c of mgr.all) c.setSyncParallelThreads(threads)
+    },
+    subscribe: (onChange) =>
+      workspace.onDidChangeConfiguration((e) => {
+        if (!e.affectsConfiguration('perforce.syncParallelThreads')) return
+        onChange()
+      }),
+  })
+  context.subscriptions.push(watchSyncParallelThreads)
+  await watchSyncParallelThreads.ready
 
   /**
    * Background reconcile scan: the per-directory batch ceiling that drives the
    * adaptive split. Applied before the first refresh so the scan the refresh
    * tail schedules already sees the configured ceiling.
    */
-  const applyReconcileScanOptions = async (target: PerforceClient): Promise<void> => {
-    const maxBatchDurationMs = await cfg.get('reconcileScan.maxBatchDurationMs', 10_000)
-    target.setReconcileScanOptions({ maxBatchDurationMs })
-  }
-  const applyReconcileScanOptionsAll = async (): Promise<void> => {
-    for (const c of mgr.all) await applyReconcileScanOptions(c)
-  }
-  await applyReconcileScanOptions(client)
-  context.subscriptions.push(
-    workspace.onDidChangeConfiguration((e) => {
-      if (!e.affectsConfiguration('perforce.reconcileScan')) return
-      void applyReconcileScanOptionsAll()
+  const watchReconcileScanOptions = watchConfig<{ maxBatchDurationMs: number }>({
+    read: async () => ({
+      maxBatchDurationMs: await cfg.get('reconcileScan.maxBatchDurationMs', 10_000),
     }),
-  )
+    apply: (options) => {
+      for (const c of mgr.all) c.setReconcileScanOptions(options)
+    },
+    subscribe: (onChange) =>
+      workspace.onDidChangeConfiguration((e) => {
+        if (!e.affectsConfiguration('perforce.reconcileScan')) return
+        onChange()
+      }),
+  })
+  context.subscriptions.push(watchReconcileScanOptions)
+  await watchReconcileScanOptions.ready
 
   /**
    * The δ engine: re-resolve both settings on any `perforce.p4delta.*` change
@@ -1082,32 +1093,41 @@ export async function activate(context: ExtensionContext): Promise<void> {
    * no longer resolves is a log line and a switch to native — never an error
    * toast, and never a scan that silently reports nothing (the client falls
    * back within the round).
+   *
+   * The `let` is re-assigned here too, not only at the read above: both client
+   * construction points (the initial one and the workspace switch) take the
+   * current decision, so the first client is hot-swapped to it and a later
+   * switch builds on it.
    */
-  context.subscriptions.push(
-    workspace.onDidChangeConfiguration((e) => {
-      if (!e.affectsConfiguration('perforce.p4delta')) return
-      void (async () => {
-        p4deltaOptions = await resolveP4deltaOptions()
-        for (const c of mgr.all) {
-          c.setP4delta(p4deltaOptions?.exe, p4deltaOptions?.extraEnv)
-        }
-      })()
-    }),
-  )
+  const watchP4delta = watchConfig<Awaited<ReturnType<typeof resolveP4deltaOptions>>>({
+    read: resolveP4deltaOptions,
+    apply: (options) => {
+      p4deltaOptions = options
+      for (const c of mgr.all) c.setP4delta(options?.exe, options?.extraEnv)
+    },
+    subscribe: (onChange) =>
+      workspace.onDidChangeConfiguration((e) => {
+        if (!e.affectsConfiguration('perforce.p4delta')) return
+        onChange()
+      }),
+  })
+  context.subscriptions.push(watchP4delta)
+  await watchP4delta.ready
 
   /** Cap on rows in the "Changes" group (`perforce.reconcileLimit`). */
-  const applyReconcileLimit = async (target: PerforceClient): Promise<void> => {
-    target.setReconcileLimit(await cfg.get('reconcileLimit', 10_000))
-  }
-  await applyReconcileLimit(client)
-  context.subscriptions.push(
-    workspace.onDidChangeConfiguration((e) => {
-      if (!e.affectsConfiguration('perforce.reconcileLimit')) return
-      void (async () => {
-        for (const c of mgr.all) await applyReconcileLimit(c)
-      })()
-    }),
-  )
+  const watchReconcileLimit = watchConfig<number>({
+    read: () => cfg.get('reconcileLimit', 10_000),
+    apply: (limit) => {
+      for (const c of mgr.all) c.setReconcileLimit(limit)
+    },
+    subscribe: (onChange) =>
+      workspace.onDidChangeConfiguration((e) => {
+        if (!e.affectsConfiguration('perforce.reconcileLimit')) return
+        onChange()
+      }),
+  })
+  context.subscriptions.push(watchReconcileLimit)
+  await watchReconcileLimit.ready
 
   /**
    * The daily scope: the opened workspace ∩ the `.p4delta-scope` config that
@@ -1192,21 +1212,23 @@ export async function activate(context: ExtensionContext): Promise<void> {
    * and reads these options, so configuring them afterwards would let the very
    * first scan silently skip on a workspace the user has auto-check enabled for.
    */
-  const applyOpenedByOthersOptions = async (target: PerforceClient): Promise<void> => {
-    const autoCheck = await cfg.get('openedByOthers.autoCheck', true)
-    const intervalSec = await cfg.get('openedByOthers.intervalSec', 300)
-    target.setOpenedByOthersOptions({ autoCheck, intervalMs: intervalSec * 1000 })
-  }
-  const applyOpenedByOthersOptionsAll = async (): Promise<void> => {
-    for (const c of mgr.all) await applyOpenedByOthersOptions(c)
-  }
-  await applyOpenedByOthersOptions(client)
-  context.subscriptions.push(
-    workspace.onDidChangeConfiguration((e) => {
-      if (!e.affectsConfiguration('perforce.openedByOthers')) return
-      void applyOpenedByOthersOptionsAll()
-    }),
-  )
+  const watchOpenedByOthers = watchConfig<{ autoCheck: boolean; intervalMs: number }>({
+    read: async () => {
+      const autoCheck = await cfg.get('openedByOthers.autoCheck', true)
+      const intervalSec = await cfg.get('openedByOthers.intervalSec', 300)
+      return { autoCheck, intervalMs: intervalSec * 1000 }
+    },
+    apply: (options) => {
+      for (const c of mgr.all) c.setOpenedByOthersOptions(options)
+    },
+    subscribe: (onChange) =>
+      workspace.onDidChangeConfiguration((e) => {
+        if (!e.affectsConfiguration('perforce.openedByOthers')) return
+        onChange()
+      }),
+  })
+  context.subscriptions.push(watchOpenedByOthers)
+  await watchOpenedByOthers.ready
 
   void client.refresh()
 
@@ -1954,7 +1976,10 @@ export async function activate(context: ExtensionContext): Promise<void> {
   /**
    * Wire a freshly created client in (the switch-workspace quick-pick), applying
    * the same sequence `activate` used for the first client — see
-   * {@link wireSwitchedClient} for why the order matters.
+   * {@link wireSwitchedClient} for why the order matters. The config-driven
+   * steps re-apply through their watches (`refresh`), which is both the same
+   * read+apply activation did and the only path that keeps them under the
+   * newest-read-wins guard.
    */
   const wireClient = async (newClient: PerforceClient): Promise<void> => {
     const refreshInterval = await cfg.get('refreshInterval', 0)
@@ -1973,11 +1998,11 @@ export async function activate(context: ExtensionContext): Promise<void> {
         trackClient: (c) => {
           context.subscriptions.push(timelineProvider.trackClient(c))
         },
-        applyScopes: applyReconcileScope,
+        applyScopes: () => watchReconcileScope.refresh(),
         applyDailyScope,
-        applyReconcileExcludes,
-        applyOpenedByOthersOptions,
-        applySyncParallelThreads,
+        applyReconcileExcludes: () => watchReconcileExcludes.refresh(),
+        applyOpenedByOthersOptions: () => watchOpenedByOthers.refresh(),
+        applySyncParallelThreads: () => watchSyncParallelThreads.refresh(),
         startPolling: (c, seconds) => c.startPolling(seconds),
         setSwarmAvailable: (c, available) => c.setSwarmAvailable(available),
       },

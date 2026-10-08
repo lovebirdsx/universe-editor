@@ -25,20 +25,22 @@ function makeWiring(log: string[]): SwitchClientWiring {
     setActive: (r) => log.push(`setActive:${r}`),
     statusBarRefresh: () => log.push('statusBarRefresh'),
     trackClient: (c) => log.push(`trackClient:${c.root}`),
-    applyScopes: async (c) => {
-      log.push(`applyScopes:${c.root}`)
+    // The config-driven steps re-apply the activation watches, which cover
+    // every live client — hence no client argument.
+    applyScopes: async () => {
+      log.push('applyScopes')
     },
     applyDailyScope: async (c) => {
       log.push(`applyDailyScope:${c.root}`)
     },
-    applyReconcileExcludes: async (c) => {
-      log.push(`applyReconcileExcludes:${c.root}`)
+    applyReconcileExcludes: async () => {
+      log.push('applyReconcileExcludes')
     },
-    applyOpenedByOthersOptions: async (c) => {
-      log.push(`applyOpenedByOthersOptions:${c.root}`)
+    applyOpenedByOthersOptions: async () => {
+      log.push('applyOpenedByOthersOptions')
     },
-    applySyncParallelThreads: async (c) => {
-      log.push(`applySyncParallelThreads:${c.root}`)
+    applySyncParallelThreads: async () => {
+      log.push('applySyncParallelThreads')
     },
     startPolling: (c, s) => log.push(`startPolling:${c.root}:${s}`),
     setSwarmAvailable: (c, a) => log.push(`setSwarmAvailable:${c.root}:${a}`),
@@ -68,19 +70,22 @@ describe('wireSwitchedClient', () => {
       'statusBarRefresh',
       'trackClient:X:/p4ws/branch_a',
       // Scopes before the first refresh: the narrowed working-tree-hint scope
-      // must be in place before the client answers any hint query.
-      'applyScopes:X:/p4ws/branch_a',
-      // The daily scope right after the focus scope: every discovery, get and
-      // write the new client runs is bounded by it, and a client wired without
-      // it would answer from an unresolved range until the next config change.
+      // must be in place before the client answers any hint query. The step has
+      // no client argument because it re-applies the activation watch, which
+      // covers the client added by the first step.
+      'applyScopes',
+      // The daily scope right after the focus scope, and it IS per client: every
+      // discovery, get and write the new client runs is bounded by it, and a
+      // client wired without it would answer from an unresolved range until the
+      // next config change.
       'applyDailyScope:X:/p4ws/branch_a',
       // The reconcile noise travels with the client too: a switched workspace
       // must not discover drift the setting hides.
-      'applyReconcileExcludes:X:/p4ws/branch_a',
+      'applyReconcileExcludes',
       // Background-check option BEFORE the first refresh: the refresh tail's
       // scheduled check reads it and would silently skip on defaults.
-      'applyOpenedByOthersOptions:X:/p4ws/branch_a',
-      'applySyncParallelThreads:X:/p4ws/branch_a',
+      'applyOpenedByOthersOptions',
+      'applySyncParallelThreads',
       'refresh',
       'startPolling:X:/p4ws/branch_a:120',
       'setSwarmAvailable:X:/p4ws/branch_a:true',

@@ -17,22 +17,28 @@ import { localize } from './nls.js'
 
 /** The wiring steps a freshly created client needs, in the order `activate()`
  *  applies them to the first client. Each step is injectable so the sequence
- *  is unit-testable without the extension host. */
+ *  is unit-testable without the extension host.
+ *
+ *  The config-driven steps take no client: they re-apply the ACTIVATION config
+ *  watches (`refresh`), and a watch applies to every live client — the freshly
+ *  added one included, since `add` is the first step. */
 export interface SwitchClientWiring {
   add(client: PerforceClient): void
   setActive(root: string): void
   statusBarRefresh(): void
   trackClient(client: PerforceClient): void
-  applyScopes(client: PerforceClient): Promise<void>
+  /** Re-apply the reconcile focus — the workspace focus folders. */
+  applyScopes(): Promise<void>
   /** Resolve the daily scope (`.p4delta-scope`) for the new client — the range
-   *  every discovery, get and write is bounded by. */
+   *  every discovery, get and write is bounded by. Per client by nature: the
+   *  config lives at the client root. */
   applyDailyScope(client: PerforceClient): Promise<void>
-  /** Apply `perforce.reconcile.excludeFolders` — the reconcile noise. A client
+  /** Re-apply `perforce.reconcile.excludeFolders` — the reconcile noise. A client
    *  wired without it would discover drift the setting hides until the next
    *  config edit. */
-  applyReconcileExcludes(client: PerforceClient): Promise<void>
-  applyOpenedByOthersOptions(client: PerforceClient): Promise<void>
-  applySyncParallelThreads(client: PerforceClient): Promise<void>
+  applyReconcileExcludes(): Promise<void>
+  applyOpenedByOthersOptions(): Promise<void>
+  applySyncParallelThreads(): Promise<void>
   startPolling(client: PerforceClient, seconds: number): void
   setSwarmAvailable(client: PerforceClient, available: boolean): void
 }
@@ -60,11 +66,11 @@ export async function wireSwitchedClient(
   wiring.setActive(client.root)
   wiring.statusBarRefresh()
   wiring.trackClient(client)
-  await wiring.applyScopes(client)
+  await wiring.applyScopes()
   await wiring.applyDailyScope(client)
-  await wiring.applyReconcileExcludes(client)
-  await wiring.applyOpenedByOthersOptions(client)
-  await wiring.applySyncParallelThreads(client)
+  await wiring.applyReconcileExcludes()
+  await wiring.applyOpenedByOthersOptions()
+  await wiring.applySyncParallelThreads()
   void client.refresh()
   wiring.startPolling(client, cfg.refreshIntervalSec)
   wiring.setSwarmAvailable(client, cfg.swarmAvailable)

@@ -187,6 +187,7 @@ interface FakeClient {
   setReconcileLimit: Mock
   setOpenedByOthersOptions: Mock
   setSyncParallelThreads: Mock
+  setP4delta: Mock
   dispose: Mock
   cancelBusy: Mock
   isReconcileTargetExcluded(path: string): boolean
@@ -240,6 +241,7 @@ function makeFakeClient(): FakeClient {
   fake.setReconcileLimit = vi.fn()
   fake.setOpenedByOthersOptions = vi.fn()
   fake.setSyncParallelThreads = vi.fn()
+  fake.setP4delta = vi.fn()
   fake.dispose = vi.fn()
   fake.cancelBusy = vi.fn()
   fake.isScopeTargetExcluded = (p) => isUnderAny(p, fake.scopeExcludeDirs)

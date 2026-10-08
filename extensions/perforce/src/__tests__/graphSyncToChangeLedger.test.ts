@@ -114,6 +114,7 @@ interface FakeClient {
   setReconcileLimit: Mock
   setOpenedByOthersOptions: Mock
   setSyncParallelThreads: Mock
+  setP4delta: Mock
   dispose: Mock
   cancelBusy: Mock
   reconcile: Mock
@@ -174,6 +175,7 @@ function makeFakeClient(): FakeClient {
   fake.setReconcileLimit = vi.fn()
   fake.setOpenedByOthersOptions = vi.fn()
   fake.setSyncParallelThreads = vi.fn()
+  fake.setP4delta = vi.fn()
   fake.dispose = vi.fn()
   fake.cancelBusy = vi.fn()
   fake.reconcile = vi.fn(async () => {})
