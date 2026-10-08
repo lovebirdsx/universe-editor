@@ -1,6 +1,22 @@
 # update-claude-agent-acp 案例库
 
-> 每条：现象 → 根因 → 解法 → 锚点。新经验往下追加，并在 `SKILL.md` 的「案例索引」补一行速查。
+> 每条：现象 → 根因 → 解法 → 锚点。**按症状 / 行为检索（见下表）**；新经验往下追加，并在 `SKILL.md` 的「案例索引」补一行速查。案例正文保留当时的历史背景（含 rebase 期的处置），其中「必须成立的行为」仍是维护期的有效约束。
+
+## 按症状速查
+
+| 症状 | 案例 |
+|---|---|
+| fork `npm test` 报 `src\x` vs `src/x` 路径失败 | 1（扩展见 9 末） |
+| AskUserQuestion 被上游「无 form 就禁用」掐断 / extMethod 丢失 | 2、5 |
+| `npm test` 报 idle-without-result / `no_result` | 6 |
+| SDK 升级后成批类型 / mock 适配报错 | 7、11 |
+| session/load 或 resume 变慢、契约测试超时 | 8、9、12 |
+| 升级后子 Agent 卡片降级成普通 tool | 13 |
+| 已压缩会话恢复后丢压缩前历史 / steering | 14 |
+| `npm ci` 报 `Missing ... from lock file` / EUSAGE | 10 |
+| 测试成片失败、疑似环境变量污染 | 9（坑 1） |
+| 拼接 append 型冲突后丢括号 / 对齐吞噬 | 9（坑 2）、11 |
+| 挂在某分支上的副作用在上游新路径丢失 | 11 |
 
 ## 案例 1：fork `npm test` 两个 toDisplayPath 测试在 Windows 必失败（非回归）
 - **现象**：`src/tests/acp-agent.test.ts` 的 `should use relative path in title when cwd is provided` 与 `toDisplayPath > should relativize paths inside cwd…` 失败，`Expected "src/main.ts" / Received "src\main.ts"`。
@@ -102,10 +118,10 @@
 
 ## 案例 13（0.64.2→0.85.1 同轮发现）：AIR tool-call 契约把 subagent 标记挪成 AIR 专属，非 AIR 客户端改用 toolName 识别
 - **现象**：升级后编辑器里 claude 子 Agent 卡片图标由黄色 `Users`（双人）变白色 `Brain`，卡片 kind tooltip 由「Sub Agent」退回「think」，Outline 该行类型从 subagent 降级为普通 tool；token/model 统计徽标不受影响（`_universe/subagentStats` 仍发）。
-- **根因**：上游 875d75f「AIR tool call contract」把 Agent/Task 调用上的 `_meta.claudeCode.subagent: true`（旧 `claudeCodeMetaFromToolUse`，发给所有客户端）移入 `toolUseMeta` 的 AIR 分支，只写给声明 `_meta.jetbrains.air` 的客户端（`vendor/claude-agent-acp/docs/air-extensions.md` 的 Agent/Task 行对非 AIR 明确为 none）。编辑器未声明 AIR，`readSubagent` 收不到标记，卡片回落 kind `think` 渲染。
+- **根因**：上游 875d75f「AIR tool call contract」把 Agent/Task 调用上的 `_meta.claudeCode.subagent: true`（旧 `claudeCodeMetaFromToolUse`，发给所有客户端）移入 `toolUseMeta` 的 AIR 分支，只写给声明 `_meta.jetbrains.air` 的客户端（当时随该契约发布的上游文档 `air-extensions.md`，其 Agent/Task 行对非 AIR 明确标为 none；该文档与 AIR 专属代码后来一并删除）。编辑器未声明 AIR，`readSubagent` 收不到标记，卡片回落 kind `think` 渲染。
 - **解法**（父项目，编辑器侧）：`readSubagent` 保留旧 `claudeCode.subagent === true` 兼容后，增加 `_meta.claudeCode.toolName` 精确等于 `Agent`/`Task` 的判定；**不给 fork 加自定义提交**（非 AIR 无标记是上游刻意契约，fork 保持 diff 最小）。回归测试：`acpSessionUpdateMeta.test.ts` 的 `readSubagent` describe + `AcpSessionService.test.ts`「marks only the call the fork flagged as a sub-agent launch」。
 - **下次 rebase 注意**：`tool-calls/renderer.ts` 的 `toolUseMeta` 非 AIR 分支必须继续发 `claudeCode.toolName`——编辑器的 MCP 归属与子 Agent 识别都依赖它；AIR 分支的 `subagent` 键与编辑器无关，勿回移。
-- **锚点**：fork `src/tool-calls/renderer.ts`（`toolUseMeta`）、`vendor/claude-agent-acp/docs/air-extensions.md`（Agent/Task 行）；父项目 `apps/editor/src/renderer/services/acp/session/acpSessionUpdateMeta.ts`（`readSubagent`）、`acpSessionModel.ts`（`AcpToolCall.subagent`）。
+- **锚点**：fork `src/tool-calls/renderer.ts`（`toolUseMeta`；其 AIR 分支与当初承载该契约的上游文档 `air-extensions.md` 已随 AIR 专属代码删除）；父项目 `apps/editor/src/renderer/services/acp/session/acpSessionUpdateMeta.ts`（`readSubagent`）、`acpSessionModel.ts`（`AcpToolCall.subagent`）。
 
 ## 案例 14（0.85.1 后续，上游 #1218 `190a00f`）：session/load 的新入参遮蔽了 fork 的压缩历史重建（rebase 零冲突也发现不了的语义回归）
 - **现象**：恢复一个已 compact 的会话，编辑器时间线首条变成压缩摘要（"This session is being continued from a previous conversation…"），压缩前历史整段消失、压缩卡片也不发（升级前正常）。fork 自身单测只剩既有 Windows 路径噪声、rebase 零冲突——**typecheck / npm test / 契约测试三道常规安全网全部发现不了**。

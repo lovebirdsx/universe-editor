@@ -23,12 +23,12 @@
  *      crucially, each fork's BUILT dist still declares the wire names the editor
  *      calls — an OFFLINE text scan that runs on CI (no binary), catching a
  *      fork-side rename the binary-gated routing leg would otherwise miss;
- *    - the client-injected model candidates leg (`_meta.extraModels`): a fresh
- *      session opened with a client-supplied model id surfaces that id in the
- *      model config option and accepts `session/set_config_option` to it. The
- *      claude leg needs its native CLI (session/new spawns it) and self-skips
- *      without one; the codex leg's set_config_option is pure in-memory state
- *      and runs whenever its dist is ready.
+ *    - 客户端注入模型候选 leg（`_meta.extraModels`）：新会话会把客户端给的 id 显示进
+ *      model 选项。claude leg 需真实原生 CLI（session/new 会拉起它），无二进制则自跳过。
+ *      注入只是往 picker 追加一行，所以本 leg 还断言一次切换真正会发生什么：无凭据时
+ *      原生 CLI 校验不了该 id，以 `authentication_failed` 拒绝，且不改会话状态。真正的
+ *      成功切换由同一 leg 经 `ANTHROPIC_CUSTOM_MODEL_OPTION`（CLI 自己支持的方式）覆盖，
+ *      无需网关或凭据。codex leg 的 set_config_option 是纯内存状态，dist 就绪即跑。
  *
  *  The dist-dependent legs are OPT-IN via `UNIVERSE_FORK_CONTRACT=1` (set only by
  *  CI's dedicated `acp-contract` job, which runs `pnpm agent:build` first). Without
@@ -36,6 +36,8 @@
  *  check` would otherwise spawn and assert against a drifted fork, failing with
  *  false negatives) never breaks a routine local run. The offline name-table check
  *  below (pure editor self-consistency, reads no fork) always runs.
+ *
+ *  显式启用后缺少 dist 必须失败；日志只报告运行条件，实际通过/失败/跳过以测试报告为准。
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -84,6 +86,98 @@ const EXPECTED_METHOD_NAMES = {
   mcpServerStatus: '_universe/mcp_server_status',
   sdkMessage: '_claude/sdkMessage',
 } as const
+
+const CONTRACT_REQUIRED_FORKS = ['claude', 'codex'] as const satisfies readonly ForkId[]
+
+const CLI_GATED_LEGS = [
+  'claude ext-method wire contract (rewind_session / set_session_title)',
+  'claude native model catalog + extra-model injection (session/new)',
+  'claude custom-model switch (ANTHROPIC_CUSTOM_MODEL_OPTION)',
+] as const
+
+interface ForkContractCoverage {
+  readonly missingDists: readonly ForkId[]
+  readonly summary: string
+}
+
+function forkContractCoverage(input: {
+  optedIn: boolean
+  distExists: (fork: ForkId) => boolean
+  claudeBinary: boolean
+}): ForkContractCoverage {
+  const distReady: Record<ForkId, boolean> = {
+    claude: input.distExists('claude'),
+    codex: input.distExists('codex'),
+  }
+  const readyForks = CONTRACT_REQUIRED_FORKS.filter((fork) => distReady[fork])
+  const missingDists = input.optedIn
+    ? CONTRACT_REQUIRED_FORKS.filter((fork) => !distReady[fork])
+    : []
+  const notExecuted =
+    input.optedIn && distReady.claude && !input.claudeBinary ? [...CLI_GATED_LEGS] : []
+
+  const lines = [
+    `[fork-contract] opt-in (UNIVERSE_FORK_CONTRACT=1): ${input.optedIn ? 'yes' : 'no'}`,
+    `[fork-contract] fork dist: claude=${distReady.claude ? 'present' : 'missing'} codex=${distReady.codex ? 'present' : 'missing'}`,
+    `[fork-contract] real Claude CLI (CLAUDE_CODE_EXECUTABLE): ${input.claudeBinary ? 'present' : 'absent'}`,
+    '[fork-contract] always-on: editor ext-method name table (offline, reads no fork)',
+    input.optedIn
+      ? `[fork-contract] dist-gated legs: enabled for ${readyForks.join(', ') || 'no fork (dist missing)'}`
+      : '[fork-contract] dist-gated legs: skipped (opt-in not set)',
+  ]
+  if (notExecuted.length > 0) {
+    lines.push(
+      `[fork-contract] NOT EXECUTED — needs a real Claude binary: ${notExecuted.join(' | ')}`,
+    )
+  }
+
+  return { missingDists, summary: lines.join('\n') }
+}
+
+// 测试配置隐藏通过用例的 console 输出，因此运行条件直接写 stdout。
+describe('fork contract run gate', () => {
+  it('prints coverage and fails when an opted-in run is missing a fork dist', () => {
+    const coverage = forkContractCoverage({
+      optedIn: forkContractEnabled,
+      distExists: forkDistExists,
+      claudeBinary: claudeBinaryAvailable(),
+    })
+    process.stdout.write(`\n${coverage.summary}\n`)
+
+    expect(
+      coverage.missingDists,
+      `UNIVERSE_FORK_CONTRACT=1 requires a built dist for every fork; missing: ${
+        coverage.missingDists.join(', ') || '(none)'
+      }. Run \`pnpm agent:build\` first.`,
+    ).toEqual([])
+  })
+})
+
+describe('fork contract gate logic', () => {
+  const coverageFor = (input: Partial<Parameters<typeof forkContractCoverage>[0]>) =>
+    forkContractCoverage({ optedIn: false, distExists: () => false, claudeBinary: false, ...input })
+
+  it('never reds a routine run when not opted in, even with no dist at all', () => {
+    expect(coverageFor({}).missingDists).toEqual([])
+  })
+
+  it('reds for EVERY fork dist missing once opted in', () => {
+    expect(coverageFor({ optedIn: true }).missingDists).toEqual(['claude', 'codex'])
+    expect(
+      coverageFor({ optedIn: true, distExists: (fork) => fork === 'claude' }).missingDists,
+    ).toEqual(['codex'])
+    expect(coverageFor({ optedIn: true, distExists: () => true }).missingDists).toEqual([])
+  })
+
+  it('reports the real-CLI legs as NOT EXECUTED when no binary is reachable', () => {
+    const withoutCli = coverageFor({ optedIn: true, distExists: () => true, claudeBinary: false })
+    expect(withoutCli.summary).toContain('NOT EXECUTED')
+    for (const leg of CLI_GATED_LEGS) expect(withoutCli.summary).toContain(leg)
+
+    const withCli = coverageFor({ optedIn: true, distExists: () => true, claudeBinary: true })
+    expect(withCli.summary).not.toContain('NOT EXECUTED')
+  })
+})
 
 describe('editor ext-method name table is the single source of truth', () => {
   it('matches the literal wire strings the forks expect', () => {
@@ -177,10 +271,17 @@ describe('fork dist declares the ext-method wire names the editor expects', () =
 })
 
 // A model id that exists in NEITHER fork's hardcoded first-party catalogue.
-// The extraModels legs prove it still reaches the session picker's options and
-// passes `session/set_config_option` validation — the two places the forks'
-// hardcoded catalogues would otherwise reject a gateway model.
+// The extraModels legs prove it reaches the session picker's options — the
+// place the forks' hardcoded catalogues would otherwise hide a gateway model.
+// It is NOT a model either fork's CLI can actually serve, which is exactly what
+// the claude leg's refusal assertion needs.
 const EXTRA_MODEL_ID = 'contract-extra-model-v4'
+
+// A non-first-party model id declared THROUGH THE CLI ITSELF, via its supported
+// `ANTHROPIC_CUSTOM_MODEL_OPTION`. This is the "CLI-supported local controlled
+// config" that lets the claude leg verify a real successful switch without a
+// gateway, a credential, or a prompt.
+const CLI_CUSTOM_MODEL_ID = 'contract-local-model'
 
 /** The select values of a session config option, groups flattened. */
 function configOptionValues(option: SessionConfigOption | undefined): string[] {
@@ -399,16 +500,39 @@ handshakeSuite('codex')
 // skips them while still enforcing the offline core above. We drive them WITHOUT
 // a real prompt and assert the fork routes the method and parses its params into
 // the documented error/response wire shape.
+//
+// Every leg here runs against a THROWAWAY `CLAUDE_CONFIG_DIR` and with the
+// ambient gateway routing stripped, i.e. the CLI's NATIVE mode. Two reasons:
+// the machine's own gateway/credential variables must not decide what these
+// assertions observe (and a bare `sessionId`-scoped call must never be steered
+// at a real gateway), and the user's real `~/.claude` must not be read or
+// written by a contract test.
 const claudeExtReady = distReady('claude') && claudeBinaryAvailable()
+
+/** claude 各 leg 的原生模式子进程 env：`undefined` 表示从继承环境里删除该变量
+ *  （见 `SpawnForkOptions`）。`ANTHROPIC_CUSTOM_MODEL_OPTION` 用 CLI 自己支持的
+ *  方式声明一个非一方模型 id，无需任何凭据即可验证成功路径。 */
+function claudeNativeEnv(configDir: string): Record<string, string | undefined> {
+  return {
+    CLAUDE_CONFIG_DIR: configDir,
+    ANTHROPIC_BASE_URL: undefined,
+    ANTHROPIC_AUTH_TOKEN: undefined,
+    ANTHROPIC_API_KEY: undefined,
+    ANTHROPIC_MODEL: undefined,
+    ANTHROPIC_CUSTOM_MODEL_OPTION: CLI_CUSTOM_MODEL_ID,
+  }
+}
 
 describe.skipIf(!claudeExtReady)('claude ext-method wire contract (real dist)', () => {
   let cwd: string
+  let configDir: string
   let connection: RealForkConnection
   let sessionId: string
 
   beforeEach(async () => {
     cwd = mkTempDir('acp-contract-claude-ext-')
-    connection = spawnForkConnection('claude', cwd)
+    configDir = mkTempDir('acp-contract-claude-config-')
+    connection = spawnForkConnection('claude', cwd, { env: claudeNativeEnv(configDir) })
     await withTimeout(
       connection.conn.initialize(CLIENT_INIT_PARAMS),
       INIT_TIMEOUT_MS,
@@ -424,10 +548,12 @@ describe.skipIf(!claudeExtReady)('claude ext-method wire contract (real dist)', 
 
   afterEach(async () => {
     await connection.dispose()
-    try {
-      removeDirWithRetry(cwd)
-    } catch {
-      // best-effort
+    for (const dir of [cwd, configDir]) {
+      try {
+        removeDirWithRetry(dir)
+      } catch {
+        // best-effort
+      }
     }
   })
 
@@ -466,10 +592,10 @@ describe.skipIf(!claudeExtReady)('claude ext-method wire contract (real dist)', 
     expect(modeAfter?.currentValue).toBe('dontAsk')
   })
 
-  it('session/new surfaces client-injected extra models and setSessionConfigOption switches to one', async () => {
-    // The SDK's picker is the hardcoded first-party catalogue; a gateway model
-    // id must arrive via `_meta.extraModels` (appended after the allowlist) and
-    // then pass setSessionConfigOption's options validation.
+  it('session/new offers a client-injected extra model, but the credential-less native CLI refuses the switch', async () => {
+    // 两半契约：`_meta.extraModels` 只把 id 追加进 picker；切它却要过原生 CLI 自己的
+    // 目录校验，本 leg 无凭据 → 校验不了，报缺认证（authentication_failed）而非模型不存在。
+    // 拒绝不能是未包装的 SDK 抛错变成的 Internal error——那会把 CLI 原文留在 details 里。
     const ns = await withTimeout(
       connection.conn.newSession({
         cwd,
@@ -486,8 +612,12 @@ describe.skipIf(!claudeExtReady)('claude ext-method wire contract (real dist)', 
     })
     const modelOption = ns.configOptions?.find((o) => o.id === 'model')
     expect(configOptionValues(modelOption)).toContain(EXTRA_MODEL_ID)
+    const modelBefore = modelOption?.currentValue
+    expect(typeof modelBefore).toBe('string')
+    const originalModelId = typeof modelBefore === 'string' ? modelBefore : 'default'
 
-    const set = await withTimeout(
+    const updatesBefore = connection.sessionUpdates.length
+    const err: { code?: number; message?: string; data?: unknown } = await withTimeout(
       connection.conn.setSessionConfigOption({
         sessionId: ns.sessionId,
         configId: 'model',
@@ -495,18 +625,70 @@ describe.skipIf(!claudeExtReady)('claude ext-method wire contract (real dist)', 
       }),
       CALL_TIMEOUT_MS,
       'claude setSessionConfigOption to extra model',
+    ).then(
+      () => {
+        throw new Error(
+          `the native CLI accepted "${EXTRA_MODEL_ID}", a model outside its catalogue — ` +
+            `the extraModels picker row is being mistaken for availability`,
+        )
+      },
+      (e: { code?: number; message?: string; data?: unknown }) => e,
+    )
+
+    expect(err.code).toBe(-32000)
+    expect(err.data).toMatchObject({ errorKind: 'authentication_failed' })
+    // ACP 兜底会把 CLI 原文塞进 details；fork 必须翻译，不能回显。
+    expect(err.data ?? {}).not.toHaveProperty('details')
+
+    // 被拒就不是成功：不能有任何通知宣告模型换了。
+    const advertised = connection.sessionUpdates
+      .slice(updatesBefore)
+      .filter((n) => n.update.sessionUpdate === 'config_option_update')
+    expect(advertised).toEqual([])
+
+    // 会话仍可继续、仍停在原模型：把原 currentValue 再设回去必须被接受并回读一致
+    // （currentValue 永远是合法目标），证明这次拒绝没把会话搞坏。
+    const reasserted = await withTimeout(
+      connection.conn.setSessionConfigOption({
+        sessionId: ns.sessionId,
+        configId: 'model',
+        value: originalModelId,
+      }),
+      CALL_TIMEOUT_MS,
+      'claude setSessionConfigOption back to the original model',
+    ).catch((e: unknown) => {
+      throw new Error(`${String(e)}\n--- fork stderr ---\n${connection.stderr()}`)
+    })
+    expect(reasserted.configOptions.find((o) => o.id === 'model')?.currentValue).toBe(
+      originalModelId,
+    )
+  })
+
+  it('switches to a non-first-party model the CLI itself declares (ANTHROPIC_CUSTOM_MODEL_OPTION)', async () => {
+    // 成功的一半：同一个调用，唯一差别是这个 id 经 CLI 自己支持的 env 声明过——无网关、
+    // 无凭据也能走通，证明 fork 的成功路径（配置袋 + id 逐字透传）端到端可用。
+    const ns = await withTimeout(
+      connection.conn.newSession({ cwd, mcpServers: [] }),
+      INIT_TIMEOUT_MS,
+      'claude newSession for the custom model',
     ).catch((err: unknown) => {
       throw new Error(`${String(err)}\n--- fork stderr ---\n${connection.stderr()}`)
     })
-    const modelAfter = set.configOptions.find((o) => o.id === 'model')
-    expect(modelAfter?.currentValue).toBe(EXTRA_MODEL_ID)
+    const modelOption = ns.configOptions?.find((o) => o.id === 'model')
+    expect(configOptionValues(modelOption)).toContain(CLI_CUSTOM_MODEL_ID)
 
-    // The injected effort levels must reach the effort option once the gateway
-    // model is current — the `_meta.extraModelEffort` → effort option leg the
-    // model-option assertion alone leaves untested.
-    const effortOption = set.configOptions.find((o) => o.id === 'effort')
-    expect(configOptionValues(effortOption)).toContain('low')
-    expect(configOptionValues(effortOption)).toContain('high')
+    const set = await withTimeout(
+      connection.conn.setSessionConfigOption({
+        sessionId: ns.sessionId,
+        configId: 'model',
+        value: CLI_CUSTOM_MODEL_ID,
+      }),
+      CALL_TIMEOUT_MS,
+      'claude setSessionConfigOption to the CLI-declared custom model',
+    ).catch((err: unknown) => {
+      throw new Error(`${String(err)}\n--- fork stderr ---\n${connection.stderr()}`)
+    })
+    expect(set.configOptions.find((o) => o.id === 'model')?.currentValue).toBe(CLI_CUSTOM_MODEL_ID)
   })
 
   it('rewind_session is routed and validates its params (unknown messageId → structured error)', async () => {

@@ -27,6 +27,7 @@ import {
   type InitializeResponse,
   ndJsonStream,
   PROTOCOL_VERSION,
+  type SessionNotification,
 } from '@agentclientprotocol/sdk'
 import { removeDirWithRetry } from '@universe-editor/temp-root'
 
@@ -57,6 +58,8 @@ export interface RealForkConnection {
   readonly child: ChildProcessWithoutNullStreams
   /** ext-methods the fork received (agent->client direction is recorded here). */
   readonly clientExtMethodCalls: string[]
+  /** session/update notifications the agent pushed, in arrival order. */
+  readonly sessionUpdates: SessionNotification[]
   /** 该连接 spawn 时用的独立 CODEX_HOME（codex 才有），建在调用方 cwd 下。 */
   readonly codexHome: string | undefined
   /** Tail of the fork's stderr, for failure diagnostics. */
@@ -68,6 +71,15 @@ export interface RealForkConnection {
 export interface SpawnForkOptions {
   /** 覆盖 spawn 的入口脚本；fixture 自身测试指向 stub，绝不启动真实 fork。 */
   entry?: string
+  /**
+   * Extra child-process environment for a leg that must not inherit the
+   * developer's ambient configuration. A key mapped to `undefined` is REMOVED
+   * from the inherited env — the only way to take a leg out of a machine's
+   * ambient gateway/credential routing (`ANTHROPIC_BASE_URL`,
+   * `ANTHROPIC_AUTH_TOKEN`, …) so its assertions hold identically on CI, on a
+   * developer box, and in an isolated run.
+   */
+  env?: Readonly<Record<string, string | undefined>>
 }
 
 /** Whether both fork dist artifacts exist (i.e. `pnpm agent:build` has run). */
@@ -204,6 +216,11 @@ export function spawnForkConnection(
       codexHome = createIsolatedCodexHome(cwd)
       env['CODEX_HOME'] = codexHome
     }
+    // 调用方 env 是最后一层：可覆盖或删除上面任何继承或隔离得来的变量。
+    for (const [key, value] of Object.entries(options.env ?? {})) {
+      if (value === undefined) delete env[key]
+      else env[key] = value
+    }
     child = spawn(process.execPath, [entry], {
       cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -247,11 +264,14 @@ export function spawnForkConnection(
   const stream = ndJsonStream(writable, readable)
 
   const clientExtMethodCalls: string[] = []
+  const sessionUpdates: SessionNotification[] = []
   const client: Client = {
     async requestPermission() {
       return { outcome: { outcome: 'cancelled' } }
     },
-    async sessionUpdate() {},
+    async sessionUpdate(notification: SessionNotification) {
+      sessionUpdates.push(notification)
+    },
     async writeTextFile() {
       return {}
     },
@@ -271,6 +291,7 @@ export function spawnForkConnection(
     child,
     clientExtMethodCalls,
     codexHome,
+    sessionUpdates,
     stderr: () => stderrTail,
     dispose() {
       disposePromise ??= shutdownChild(child, closeTracker, codexHome)

@@ -36,7 +36,7 @@ packages/
 | 加通用 UI 控件 | `packages/workbench-ui/` | `packages/workbench-ui/CLAUDE.md` | 纯组件无 DI；editor 侧只留薄 wrapper |
 | 写内置扩展（typescript/perforce/markdown） | `extensions/<name>/` | 各扩展目录 CLAUDE.md | 走 skill `create-extension` 脚手架 |
 | 写预览类扩展范例 | `extensions-external/pdf/` | `extensions-external/pdf/CLAUDE.md` | pdf 是最小可照抄范例 |
-| 改 vendor fork（claude-agent-acp / codex-acp） | `vendor/<fork>/` | 根 CLAUDE.md「内置 ACP agent」节 | 红线=diff 最小；改完 `pnpm agent:build` |
+| 改 vendor fork（claude-agent-acp / codex-acp） | `vendor/<fork>/` | 根 CLAUDE.md「内置 ACP agent」节 | claude=独立维护、行为优先（台账见 `docs/development/claude-agent-maintenance.md`）；codex=diff 最小；改完 `pnpm agent:build` |
 | 做远程开发（remote server / 连接 / 路由） | `packages/remote-server/` + `apps/editor/src/main/services/remote/` | — | 契约单一真相在 `platform/src/remote/remoteProtocol.ts`（改协议须 bump 版本）；架构=常驻 daemon+TCP+PersistentProtocol 透明重连，URI 互译在 server 侧 per-connection codec（DTO 路径一律 URI，字符串路径例外须在协议文件文档化）；文件/搜索/watcher/pty/agentConfig/agentBinary/extensionManagement 核心实现在 `packages/node-services`（main 与 server 共享，勿复制）；main 侧服务按 authority 取远程 channel **一律走 `IRemoteConnectionService.getServiceProxy`**（跨 stop/reconnect 稳定，勿自缓存 `ProxyChannel.toService` 代理——曾致 Stop Server 后死代理挂起）；e2e 直连模式走 `UNIVERSE_REMOTE_SERVER_CMD` |
 | 改更新服务器 / 扩展市场后端 / 部署脚本 | `scripts/server/` | `scripts/server/CLAUDE.md` | 服务器侧脚本只能用 node 内置模块；改行为要 bump `SERVER_VERSION` |
 
@@ -71,7 +71,7 @@ pnpm e2e          # 端到端测试（未提交改动仅含 e2e spec 时自动�
 
 **包依赖传递**：修改 `platform` 后，apps 看到的是 `dist/`。`pnpm dev` 下 watcher 会自动重建；离开 dev 模式时手动 `pnpm build` 或 `pnpm --filter <pkg> build`，否则 apps 仍使用旧产物。
 
-**路径/URI 身份比较**：唯一入口是内核 `IUriIdentityService`（`packages/platform/src/uriIdentity/`，消费端经 DI 取）；无 DI 的场景（main、纯函数模块）用 `packages/platform` 的 `arePathsEqual` / `relativePathUnder` / `getPathComparisonKey` + `normalizePlatform(process.platform)`（签名必带 platform）。**禁手写 `fsPath.toLowerCase()` / 反斜杠折叠**做路径身份键（ESLint 护栏会拦）。规则、刻意保留的独立身份域例外与形态陷阱见 `packages/platform/CLAUDE.md`。
+**路径/URI 身份比较**：唯一入口是内核 `IUriIdentityService`（`packages/platform/src/uriIdentity/`）；无 DI 的场景（main、纯函数模块）用 `packages/platform` 的 `arePathsEqual` / `relativePathUnder` / `getPathComparisonKey` + `normalizePlatform(process.platform)`（签名必带 platform）。**禁手写 `fsPath.toLowerCase()` / 反斜杠折叠**做路径身份键（ESLint 护栏会拦）。规则、例外与形态陷阱见 `packages/platform/CLAUDE.md`。
 
 **配置变更订阅不是前缀匹配**：platform 的 `ConfigurationService.affectsConfiguration` 是**精确匹配**（`packages/platform/src/configuration/configurationService.ts` 的 `changed.has(k)` / `k === key`），订阅必须枚举具体 key——写 `affectsConfiguration('ai')` 这类 section 名会**静默漏事件**（全仓多处 `ai.*` / `editor.*` 订阅点沿用过 section 名）。VSCode 的 section 前缀语义只存在于扩展 API（`packages/extension-host/src/extensionService.ts` 的 `acceptConfigurationChanged`），两者不可类推。
 
@@ -93,12 +93,12 @@ pnpm e2e          # 端到端测试（未提交改动仅含 e2e spec 时自动�
 - **带 `when` 的快捷键若与无 when 的全局绑定同键，必须显式加 `weight`**（如 `KeybindingWeight.WorkbenchContrib + 50`）：`packages/platform/src/command/keybindingRegistry.ts` 的解析只按 weight（高优先）→ 同 weight 后注册优先排序，`when` 仅过滤、不提权——scoped 绑定不会像 VSCode 那样自动赢。用户自定义（User=1000）仍可覆盖。
 - **`Action2.run(accessor)` 的 `ServicesAccessor` 命中第一个 `await` 即失效**（之后 `accessor.get()` 抛 'service accessor is only valid during the invocation of its target method'）：async 的 run 必须在任何 await **之前**同步取完所需 service 并打包成快照传给后续 helper；抽取 async helper 尤其危险。
 
-**内置 ACP agent（claude-agent-acp fork）**：`vendor/claude-agent-acp` 是 git submodule（我们自维护的 fork），**不在 pnpm workspace 内**，用它自带的 npm 工具链独立构建。
+**内置 ACP agent（claude-agent-acp fork）**：`vendor/claude-agent-acp` 是 git submodule（我们自维护的 fork），**不在 pnpm workspace 内**，用它自带的 npm 工具链独立构建。**claude 侧独立维护**（行为优先、按需选择性吸收上游变化，基线与契约台账见 `docs/development/claude-agent-maintenance.md`、流程见 skill `update-claude-agent-acp`）；**codex 侧策略不变**（仍以最小 diff 为目标）。
 - 克隆仓库后先 `git submodule update --init`（或 `git clone --recurse-submodules`）。
-- 改动 fork 或拉取上游后，跑 `pnpm agent:build`（npm ci + esbuild bundle）生成 `vendor/{claude-agent-acp,codex-acp}/{dist,node_modules}`。`pnpm dev` / `pnpm dev:run` 启动前会按指纹自检 `dist/` 并按需重建（`scripts/dev/ensure-vendor-agent-build.mjs`），但**不会**替你跑 npm ci——新 clone / worktree 仍需先 `agent:build`。
+- 改动 fork 或拉取上游后，跑 `pnpm agent:build` 生成 `vendor/{claude-agent-acp,codex-acp}/{dist,node_modules}`。`pnpm dev` / `pnpm dev:run` 启动前会按指纹自检 `dist/` 并按需重建（`scripts/dev/ensure-vendor-agent-build.mjs`），但**不会**替你跑 npm ci——新 clone / worktree 仍需先 `agent:build`。
 - dev 与发布**同一套启动机制**：main 用 Electron 自带 node（`ELECTRON_RUN_AS_NODE`）跑该 fork 的 `dist/index.js`，**不依赖系统 node/npx**。打包时 `electron-builder.yml` 的 `extraResources` 把产物带进 `resources/`（`package:win*` 已串入 `agent:build`）。
 - 构建期把该平台二进制的 `--version`（CLI 版本，与 SDK 包版本**不同命名空间**）采样进 `dist/claude-binary.json` 的 `cliVersion`，供编辑器在跑 system/custom 来源时强制「不低于锁定版本」；采样失败写 `null`（运行期跳过校验），**不让可选依赖缺失的构建机打不出包**。
-- **多 fork 架构：改一个 fork 前先核对另一个**——claude 早有 `MAIN_REPLAY_*` cap 而 codex 侧四个同族缺口全部缺席，同一类缺陷能在另一个 fork 上原样复发；移植/对齐时显式对照 `vendor/claude-agent-acp/CLAUDE.md` 与 `vendor/codex-acp/CLAUDE.md` 的「本地改动清单」。
+- **多 fork 架构：改一个 fork 前先核对另一个**——claude 早有 `MAIN_REPLAY_*` cap 而 codex 侧四个同族缺口全缺席，同类缺陷会在另一 fork 原样复发；对齐时对照两个 fork 的 `CLAUDE.md` 本地行为清单（注意二者维护策略不同，勿互套规则）。
 
 ## 代码风格
 
@@ -110,13 +110,8 @@ Prettier：无分号、单引号、`trailingComma: all`、宽度 100。默认不
   - 任何改动收尾：总是用 `pnpm check`（纯测试/叶子包源码自动走快速路径；需要全量语义时用 `pnpm check:full`）
   - 涉及编辑器交互逻辑：明确知道影响面时先 `pnpm e2e specs/<相关>.spec.ts` 定向验证，再用 `pnpm e2e:smoke` 跑 @p0 冒烟
   - 大重构 / 跨包改动 / 需要回归整体功能：`pnpm e2e` 跑全量；含 bug 守护回归用 `pnpm e2ea`
-  - e2e 一律走 `pnpm e2e` / `pnpm e2ea`（位置参数可给多个 spec）：裸 `playwright test` 只在 cwd 找 config，找不到就跳过 globalSetup——WSL 下窗口直接弹到 Windows 桌面，并丢掉 tag 过滤 / 预检 / 构建守卫（见 `docs/development/wsl-e2e.md`）
-- 完成新功能后，仅在非常必要的场景，才更新 CLAUDE.md
-- 由于该项目还处在开发阶段，功能迭代不用考虑向后兼容
-- 仅在有必要的场景，才在代码里写注释；优先考虑通过命名和结构让代码自解释
-- 对于关键的逻辑，需要加入对应的调试输出，方便后续分析
-- 尽量避免编写重复代码，优先考虑复用，必要时可重构
-- 如果是修复bug，尽量先通过测试复现问题，然后再编码解决
+  - e2e 一律走 `pnpm e2e` / `pnpm e2ea`（位置参数可给多个 spec）：裸 `playwright test` 只在 cwd 找 config，找不到就跳过 globalSetup，丢 tag 过滤/预检/构建守卫，WSL 下窗口还弹到 Windows 桌面（见 `docs/development/wsl-e2e.md`）
+- 编码约定：项目仍在开发阶段，功能迭代不考虑向后兼容；注释只在「为什么」非显然时写一行（优先命名/结构自解释）；关键逻辑加调试输出；避免重复代码、优先复用；修 bug 先写测试复现；完成新功能仅在非常必要时才更新 CLAUDE.md。
 - **改动了用户可见功能（命令名、快捷键、界面文案、交互流程等）时，检查 `docs/user/` 下是否有对应文档需要同步更新**；用户文档的内部链接由 `pnpm docs:check` 校验（已接入 CI），不要留死链
 - 对于开发者需要关注的功能，包括但不限于 AI 使用规范，编码，测试，发布，检查 `docs/development` 是否有对应文档需要更新
 - 新增知识只写三处：绑定具体代码目录的写进该目录 CLAUDE.md（放不下就拆同目录 cases-*.md 并留一行 hook）；跨目录流程/排障写进 skill（案例多时放其 references/）；跨模块机制/长文写进 docs/development/。memory 层已下线，不要再建。

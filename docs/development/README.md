@@ -38,6 +38,7 @@ App 本体的发布（版本 bump、打包、上传，及 push `vX.Y.Z` tag 后�
 - [终端跨折行文件链接](terminal-links.md) — 三个独立根因（conpty 未透传 `windowsPty` / `provideLinks` 越行链接被剪枝 / trimRight 拼串与完整网格坐标失配）的索引与上游 xterm 坐标、测试盲区互补、必须断言 range 的验证流程。
 - [renderer 自定义协议 `universe-app`](app-protocol.md) — 为何 shell 必须搬离 `file://`（Chromium 在请求发起前就拦截跨 origin 的自定义 scheme 资源）、单 handler 双用途（`/_resource_/` 走 allow-list + 服务 shell）、`registerSchemesAsPrivileged` 只能一次且早于 whenReady、dev `webSecurity:false` 的边界与 origin 变更对 localStorage 的影响。
 - [Tree View（扩展贡献的树视图）](tree-views.md) — 链路与拉取式懒加载、handle 跨刷新的三级身份与回收、host 侧命令解析（`$executeTreeItemCommand`，`arguments` 不上 wire）、展开态保留、两个坑（行点击双触发 / epoch 归零致 stale 复活）与验证资产。
+- [claude-agent-acp fork 维护](claude-agent-maintenance.md) — 独立维护定位与 SDK/CLI/ACP/transcript 边界、基线台账与功能契约表、上游选择性吸收的评估记录、发布入口阻断项。
 
 ## 环境与工具（个人笔记）
 

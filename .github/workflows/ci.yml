@@ -280,7 +280,16 @@ jobs:
       - name: Build agent forks
         run: pnpm agent:build
 
+      # 验证主仓固定的 submodule 版本，不依赖 adapter 仓库自己的 CI。
+      - name: Fork typecheck (claude-agent-acp)
+        run: npm --prefix vendor/claude-agent-acp run typecheck
+
+      # 隔离宿主网关配置；失败直接阻断，不掩盖已有或新增回归。
+      - name: Fork unit tests (claude-agent-acp, offline)
+        run: env -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN npm --prefix vendor/claude-agent-acp run test:run
+
       # 两个 fork 握手 + Codex 无模型路由；Claude 路由需显式提供 CLI，CI 中跳过。
+      # 显式启用时缺少 dist 必须失败；真实 CLI 缺失仍标记为未执行。
       - name: Run ACP contract test
         env:
           UNIVERSE_FORK_CONTRACT: '1'
