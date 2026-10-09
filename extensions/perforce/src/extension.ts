@@ -3298,6 +3298,21 @@ export async function activate(context: ExtensionContext): Promise<void> {
       const workspaceScope = buildScopeFilespec(root, true)
 
       /**
+       * One ask, one ruler: the ledger question is narrowed by the SAME helper
+       * the scope-less get's claim goes through (`scopeTargetsWithin`), so the
+       * records those gets write can always answer the question this workspace
+       * asks. `undefined` (no daily scope, or an intersection no claim can state
+       * because an exclusion hole survives inside it) keeps the raw scope: there
+       * neither side can claim the range, and narrowing the ask to nothing would
+       * throw away the answers a wider get's record still honestly gives.
+       */
+      const ledgerAskOf = (target: PerforceClient, scope: SyncScopeTarget[]): SyncScopeTarget[] => {
+        const daily = target.dailyScope
+        if (daily === undefined || scope.length === 0) return scope
+        return scopeTargetsWithin(daily, scope) ?? scope
+      }
+
+      /**
        * The client + filespecs ONE graph read should use, resolved in one place
        * because the listing and the have-point probe are now two separate
        * commands: the renderer badges the row whose id comes back, so a probe
@@ -3323,6 +3338,25 @@ export async function activate(context: ExtensionContext): Promise<void> {
              * keys on THIS.
              */
             ledgerScope: SyncScopeTarget[]
+            /**
+             * The scope `perforce-graph.getSyncPoint` asks the ledger about — the
+             * ONE place narrowed by the daily scope, and deliberately so. A get
+             * records the range it REALLY covered, which in a `.p4delta-scope`
+             * workspace is the daily scope (include ∩ opened folder), strictly
+             * narrower than the tab's own scope. `lookupSyncPoint` only answers
+             * from records that COVER the ask, so asking the raw scope means no
+             * record ever covers it — and the unscoped tab, the one scope that
+             * never probes on its own, would sit at `#? (click to query)` right
+             * after its own successful get. Narrowing the ASK is the honest
+             * direction (see `docs/graph.md`, "本地同步点"): the answer is then
+             * the point this workspace's own range sits at, and a record over a
+             * wider range still answers, labelled as the upper bound it is.
+             *
+             * The probe's coordinates stay `ledgerScope`: it asks p4 about the
+             * rows actually listed, and records what it hears over the same
+             * range it asked about.
+             */
+            ledgerAsk: SyncScopeTarget[]
           }
         | { kind: 'multiClient'; pathCount: number }
         | { kind: 'none' } => {
@@ -3356,6 +3390,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
             have: specs,
             pendingScopes: scopePaths,
             ledgerScope: [...scopePaths],
+            ledgerAsk: ledgerAskOf(owner, [...scopePaths]),
           }
         }
         const target = graphClient()
@@ -3371,6 +3406,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
             list: [workspaceScope],
             have: [workspaceScope],
             ledgerScope: [{ path: root, isDirectory: true }],
+            ledgerAsk: ledgerAskOf(target, [{ path: root, isDirectory: true }]),
           }
         }
         // `//...` cannot carry a revision specifier at all (p4: `Path '…' is not
@@ -3384,6 +3420,11 @@ export async function activate(context: ExtensionContext): Promise<void> {
           list: ['//...'],
           have: [buildScopeFilespec(target.root, true)],
           ledgerScope: [{ path: target.root, isDirectory: true }],
+          // The globe asks the whole client on purpose, so there is nothing to
+          // narrow it to: only a whole-repo get, the query button or an external
+          // record answers it, and the daily scope has no say in a question that
+          // was never about the daily scope.
+          ledgerAsk: [{ path: target.root, isDirectory: true }],
         }
       }
 
@@ -3536,7 +3577,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
             if (resolved.kind !== 'ok') return null
             const answer = ledger.lookup(
               resolved.target.root,
-              resolved.ledgerScope,
+              resolved.ledgerAsk,
               externalSyncPoints.read(resolved.target.root),
             )
             if (!answer) return null
@@ -3544,7 +3585,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
               // Which file it came from is logged where the file is read; this
               // line ties that record to the answer the graph is about to show.
               log(
-                `[perforce] graph sync point: #${answer.record.change} over ${resolved.ledgerScope
+                `[perforce] graph sync point: #${answer.record.change} over ${resolved.ledgerAsk
                   .map((p) => p.path)
                   .join(', ')} recorded outside the editor`,
               )

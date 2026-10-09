@@ -269,6 +269,13 @@ async function runCommand(id: string, ...args: unknown[]): Promise<void> {
   await handler!(...args)
 }
 
+/** The same handler, keeping its answer — for the commands the graph READS. */
+async function commandResult(id: string, ...args: unknown[]): Promise<unknown> {
+  const handler = commandsMock.handlers.get(id)
+  expect(handler, `command ${id} registered`).toBeDefined()
+  return await handler!(...args)
+}
+
 const syncToChange = (...args: unknown[]) => runCommand('perforce-graph.syncToChange', ...args)
 
 beforeEach(async () => {
@@ -454,6 +461,22 @@ describe('perforce-graph.syncToChange direct bookkeeping', () => {
     await runCommand('perforce.syncLatest')
     expect(fake.sync).toHaveBeenCalledTimes(1)
     expect(ledgerRecords()[0]).toMatchObject({ paths: [{ path: SRC, isDirectory: true }] })
+  })
+
+  it('answers an unscoped graph tab from a record over the daily scope', async () => {
+    // 现场回归：带 `.p4delta-scope` 的工作区（include 只列子目录）里，无参数 get 的真实
+    // 范围是日常范围（`src`），而整工作区 tab 的询问 scope 是打开的文件夹（ROOT）。
+    // 两把尺不同时，记录永远覆盖不了询问 —— get 成功提示后徽章仍停在
+    // `#? (click to query)`，而整工作区 tab 恰是唯一不会自己探测的那个。
+    fake.dailyScope = syntheticDailyScope()
+    fake.syncScopeDirs = [SRC]
+    await runCommand('perforce.syncLatest')
+    expect(ledgerRecords()[0]).toMatchObject({
+      change: '4521',
+      paths: [{ path: SRC, isDirectory: true }],
+    })
+    const answer = await commandResult('perforce-graph.getSyncPoint', { wholeRepo: false })
+    expect(answer).toMatchObject({ id: '4521', source: 'sync', widerScope: false })
   })
 
   it('keeps an entry that an unusable claim cannot be replaced by', async () => {

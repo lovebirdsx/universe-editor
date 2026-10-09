@@ -47,7 +47,9 @@ Explorer / 命令面板 `perforce.sync` 的 quick pick 与图谱共用同一套�
 
 **为什么不再自动查宽 scope**：`#have` 的成本 ≈ scope 内文件数（真机百万文件工作区 36–42s，表在 `docs/pitfalls.md`「图谱同步点」节）。旧实现每次打开图谱 / 换 scope / 刷新都付一遍这个成本：**整图未知名 `#? (click to query)` 本身就是「不替用户做这个决定」**。全图（未 scoped 且非 wholeRepo）与 wholeRepo 两条分支的首次打开都走它。
 
-**红线：账本的 scope 坐标是 host path + isDirectory（`SyncScopeTarget`），不是 filespec**。`resolveGraphScope` 一处解析出 `list`/`have`/`ledgerScope`，其中 `list`/`have` 是**转义后、目录展开后**的 p4 filespec——拿它做包含推理必然错（`X:/ws/a` 与 `X:/ws/ab` 的前缀陷阱、`%23` 转义、`<dir>/...` 后缀）。**读写账本一律用 `ledgerScope`**，`buildSyncFilespecs` 只用来喂 p4。
+**红线：账本的 scope 坐标是 host path + isDirectory（`SyncScopeTarget`），不是 filespec**。`resolveGraphScope` 一处解析出 `list`/`have`/`ledgerScope`/`ledgerAsk`，其中 `list`/`have` 是**转义后、目录展开后**的 p4 filespec——拿它做包含推理必然错（`X:/ws/a` 与 `X:/ws/ab` 的前缀陷阱、`%23` 转义、`<dir>/...` 后缀）。**读写账本一律用后面这两个 host-path 坐标**，`buildSyncFilespecs` 只用来喂 p4。
+
+**红线：记账尺与询问尺必须是同一把尺（`ledgerAsk` 存在的全部理由）**。记录写的是本次 get 的**真实范围**——无显式 scope 的 get 就是**日常范围**（打开文件夹 ∩ `.p4delta-scope` 的 include，见「记账的写入点」），而 `lookupSyncPoint` 只让**覆盖**询问 scope 的记录作答；两把尺不同时，配置一存在（include 只列子目录）就**没有任何记录覆盖得了 tab 的原始 scope**，get 成功而徽章停在 `#? (click to query)`——**未 scoped 的整工作区 tab 恰是唯一不会自己探测的那一个**（宽 scope 探针几十秒），于是不会自愈。故 `getSyncPoint` 问的是 `scopeTargetsWithin(dailyScope, rawScope) ?? rawScope`：**与 scope-less get 算 claim 走同一个 helper**，两侧没有第二套逻辑可以漂移；`undefined`（无日常范围，或交集里残留排除空洞、连 claim 都声称不了）退回原始 scope，此时表里也本就没有比它更窄的记录。方向是**只把问题收窄**：更宽的记录照旧作答（`widerScope: true`，UI 标注上界），更窄的记录照旧不答。**wholeRepo 分支不适用**——那是刻意的全 client 之问，日常范围对它没有发言权。
 
 ### 账本（`graphSyncLedger.ts`）
 
@@ -180,6 +182,9 @@ tooltip（`syncPointTooltip`）**先讲来源再讲结论**，因为三种来源
 - **宽 scope 的记账迟到**：回读成本随 scope 宽度增长（工作区根 27.3s），快档 5s 超时后转后台慢档，所以「get 完成后徽章要过十几到几十秒才自己前移」是正常的；期间它答的还是上一处落点（不是错，只是旧），且**这段窗口里关掉图谱不影响落账**（写入在扩展侧，与 UI 无关）。两个例外：单文件这类窄 scope（0.2s，徽章紧跟命令返回），以及**图谱行入口**——判据成立时根本不回读，徽章同样紧跟命令返回。
 - **`wholeRepo` 列表不参与直接记账（刻意，不是缺口）**：`//...` 是 depot 级查询，而账本/回读坐标一律落在 **client root**（`resolveGraphScope` 里既有的「`//...` ≡ client root」假设，探针替换也基于它）。两边不同坐标 ⇒ 覆盖判据退化成「client root 覆盖 client root」，恒真；而真正要证的是「该 CL 碰过本次 get 的 scope」，那需要「`//...` 列出的每个变更都碰过本 client 视图内、root 下面的文件」——这个假设恰恰只在 AltRoots 为空时成立，`#have` 探针只从反方向论证过（它的答案是列表的子集），证不了它。假设不成立时，直接记账会与「同一次 get 的回读」给出不同答案，而查询按钮（真值通道）一按，徽章就当场往回退。所以该分支一律回读，整仓库 tab 保持它一直以来的成本（27.3s）。
 - 标签页关掉再开**不丢**：账本在扩展侧、`view.syncPoint` 也跟着 `result` 一起持久化。
+- **两类「拉取了但徽章不动」是刻意的**（上面「两把尺」那条红线的边界，别再当回归查）：
+  - **地球（整仓库）tab**：工作区级 get 的真实范围是日常范围自身的条目，比 client root 窄，而「更窄的记录绝不回答更宽的问题」——错位在**问题问得太宽**，不是记账尺错了。它有自己的出路：在地球 tab 上发起的 get（含 `Get Revision…`）按 client root 记账，以及「查询同步点」。
+  - **日常范围里带排除项**（include 内嵌 exclude，形成空洞）：那次 get 的真实范围表达不成一条可声称的覆盖（`<dir>/...` 会把被排除的子树也声称进去），于是什么都不记（只在 Perforce 输出频道留一行 `recorded as unknown`）——徽章停在 `#?`，按一次查询即得真值。子目录 tab / 未 scoped tab 在**没有空洞**时都已由 `ledgerAsk` 对齐。
 - 换 scope / 关页签**不取消**在飞的探针（收益只是早释放一个后台槽）。
 - **长同步的 `#head` 回读会读到中途提交**：`readGraphSyncPoint(scopes, '#head')` 问的是「同步这一刻的 head」，若同步跑了几分钟且期间有人提交，回读拿到的可能是**同步期间**提交的 CL——账本因此高报一点点。不修正的理由：真正的落点只有逐个文件 `fstat` 才知道（成本＝scope 规模，正是本功能要躲的开销），而高报一条是新提交、下一次同步就会真正拉下来。
 - **自动探针的答复时间戳最多偏 5 分钟**：scoped tab 的自动探针吃缓存（见上「查询覆盖记账」），它显示在徽章 tooltip 上的 `Answered by Perforce at …` 说的是**这次派发**的时刻，而答复可能来自最多 5 分钟前的一次真实查询。账本不受影响（自动探针不记账），徽章本身的值也不会因此变错——只是那句时间不如它听起来那么精确。
@@ -292,6 +297,7 @@ cd extensions/perforce && pnpm e2eg perforceGraph
 - `extensions/perforce/e2e/specs/perforceGraphHave.spec.ts` —— 同步点十条回归（**打开时不查**、按查询按钮才给出 `#4521`、点工具栏那句跳回该行 / 图谱内 get 后徽章靠**记账**前移、全程零查询 / **打开的是 client 子目录时**，文件夹 scope 答 4521、切到整仓库 scope 必须先回到「未知」再由自己的查询答 4522——第三条刻意让两个 scope 的答案不同，否则断言在点击前后都成立、等于假绿 / 已是最新的 get 也要记账 / 只碰外部目录的同步点跳转落点 / 行 get 零回读、对话框 get 回读、整仓库列表 get 回读 / **外部同步记录**：全新 userData 下账本为空，徽章仍给出外部文件里的 `#4522` 且 tooltip 说来源在编辑器之外——这条专门钉 fixture 对 `UNIVERSE_P4_SAVIOR_CONFIG` 的钉死，开发机上真实存在那个文件；fake-p4 的 `changes` case 认 `#have` 后缀（按**同一个文件**同时过 scope 与 per-file haveRev，seed 用 `SeedFile.haveRev` 把 have 停在中间版本）以及 `<spec>@<cl>` 后缀（sync 后的落点回读按 CL 收窄），两者都必须在**按 scope 过滤之前**剥掉后缀）
   - 最后一条是**迟到落账**的护栏：`UNIVERSE_P4_FAKE_READBACK_MS` 把回读拖过 5s 快档（fake 默认秒答，不拖就永远走不到升级路径），断言 get 结束后徽章**先**仍是未知（证明快档真的被杀了）**再**自己前移到 `#4522`，全程零点击。**两处都做过变异验证**：注掉 `runSync` 里的慢档重试 → 红；注掉 `notifyScmStateChanged()` → 红（终局断言只有「迟到落账 + poke」这一条路能达成，中间那句「先仍是未知」是弱断言，别拿它当护栏）。
   - 另三条是**直接记账**的正反两面，靠 fake 的新缝 `UNIVERSE_P4_FAKE_READBACK_LOG`（带修订后缀的 `changes` 各追加一行 argv）：**正面**＝行 get 后徽章照常前移而日志**仍空**（fake 秒答，所以「徽章动了」这件事本身什么也证明不了——必须日志空才行；同时 `READBACK_MS=40000` 让旧路径不可能在断言前答完）；**反例一**＝整仓库 tab 上右键 4522 → `Get Revision…` → 只勾 `src`（种子让 4521 碰 `src/a.txt`、4522 只碰 `other/b.txt`，两个候选答案不同），日志必须非空、且随后开一个 scoped 到 `src` 的 tab 徽章必须是 **`#4521`**（回读的答案）而非 `#4522`（点的那一行）；**反例二**＝`openSubdir` 打开 client 子目录、点地球开关切到整仓库（先等只属于该列表的 4523 行出现，确保菜单浮在**已换过**的列表上）再对行 get，此时徽章两条路都会前移到同一个号，**只有日志非空**能证明它走了回读——即 wholeRepo 这条刻意的拒绝仍然生效。**三条都做过变异验证**：注掉 `directSyncPoint` → 正面红；对话框那条改传勾选目录（`clientRoot` 保留）→ 反例一红于「日志非空」；把 wholeRepo 的拒绝去掉 → 反例二红（同时正面那条也会红，方向相反，一并说明这条缝在两个方向上都有分辨力）。
+- `extensions/perforce/e2e/specs/perforceGraphScopeSyncPoint.spec.ts` —— **两把尺错位**（上面那条红线）的回归，δ + `.p4delta-scope`（include 只列子目录）四连：①工作区级无参数 get（δ 跑过、原生没跑）后整工作区 tab 的账本查询与工具栏 `#4521` 都前进；②图谱行 get（这次 get 有显式 scope，与 tab 同尺）照旧作答；③同形状换原生 p4，钉住「与引擎无关，是范围配置本身引入的坐标差」；④命令面板的无参**强制** get（草稿被 `-f` 覆盖 + δ 收到 `--force` 是它真跑了的证据）同样落账——现场报告的两条症状就是普通与强制各一次。改回 `resolved.ledgerScope` 即①③④红——这条缝正是真机回归（δ 时代配了范围文件后徽章不再前移）唯一能被抓住的地方：`perforceSyncP4delta.spec.ts` 只看 δ argv 与磁盘字节，`perforceGraphHave.spec.ts` 的十条则全在没有范围配置的工作区里跑（日常范围 = 打开的文件夹，两把尺恰好重合，所以整族用例都看不见这个错位）。
 
 ## 其它
 
