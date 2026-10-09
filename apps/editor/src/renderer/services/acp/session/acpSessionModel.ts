@@ -763,9 +763,10 @@ export interface IAcpSession {
    */
   whenConnected(): Promise<void>
   /**
-   * Mark the start of a `session/load` history replay (resume path). Flips
-   * {@link isReplayingHistory} on so the chat UI shows a loading placeholder
-   * rather than the empty-session hint while the timeline is still empty.
+   * Mark the start of a history replay — the `session/load` resume and the
+   * `rewindTo` truncated-history replay alike. Flips {@link isReplayingHistory}
+   * on so the chat UI shows a loading placeholder rather than the empty-session
+   * hint while the timeline is still empty.
    */
   beginHistoryReplay(): void
   /** Mark the replay finished — see {@link beginHistoryReplay}. */
@@ -781,6 +782,9 @@ export interface IAcpSession {
    * lifts the suppression, so the side task's own turns survive a re-open while
    * the baseline before them stays hidden. Without an anchor (nothing sent
    * yet) the whole replay is dropped.
+   *
+   * Armed by the side-task resume (acpSessionService) and by `rewindTo`'s
+   * replay setup, which re-reads the boundary off the history row.
    *
    * One-shot — cleared by {@link endHistoryReplay}.
    */

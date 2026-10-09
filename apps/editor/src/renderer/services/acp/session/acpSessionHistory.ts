@@ -208,7 +208,9 @@ export interface AcpSessionHistoryEntry {
    * The client-generated messageId of the side task's first own user prompt —
    * the boundary between the forked baseline and the side task's own turns. On
    * a re-open the replay suppresses everything up to this message, then keeps
-   * the side task's own turns from here on. Unset until the first turn is sent.
+   * the side task's own turns from here on. Unset until the first turn is sent;
+   * cleared again by a rewind that truncates that turn away
+   * ({@link IAcpSessionHistoryService.clearSideTaskAnchorMessageId}).
    */
   readonly sideTaskAnchorMessageId?: string
   /**
@@ -302,6 +304,14 @@ export interface IAcpSessionHistoryService {
    * forked baseline apart from the side task's own turns.
    */
   setSideTaskAnchorMessageId(sessionId: string, messageId: string): void
+  /**
+   * Drop a side task's replay anchor. Called by `AcpSession.rewindTo` once the
+   * agent confirmed a truncation that removed the anchor turn itself: the pin
+   * can never match a replay again, and would suppress every later turn on the
+   * next re-open. `sendPrompt` re-pins on the next own prompt. No-op if the id
+   * is unknown or there is no anchor.
+   */
+  clearSideTaskAnchorMessageId(sessionId: string): void
   /**
    * Record a user prompt retracted by cancelTurn's restore (see
    * {@link AcpSessionHistoryEntry.retractedMessageIds}). Deduped; no-op if the
@@ -951,6 +961,18 @@ export class AcpSessionHistoryService
     const cur = this._state[idx]!
     if (cur.sideTaskAnchorMessageId !== undefined) return
     const next: AcpSessionHistoryEntry = { ...cur, sideTaskAnchorMessageId: messageId }
+    this._state = this._state.map((e, i) => (i === idx ? next : e))
+    this._publish()
+    this._scheduleWrite()
+  }
+
+  clearSideTaskAnchorMessageId(sessionId: string): void {
+    const idx = this._state.findIndex((e) => e.id === sessionId)
+    if (idx === -1) return
+    const cur = this._state[idx]!
+    if (cur.sideTaskAnchorMessageId === undefined) return
+    const { sideTaskAnchorMessageId: _drop, ...base } = cur
+    const next: AcpSessionHistoryEntry = base
     this._state = this._state.map((e, i) => (i === idx ? next : e))
     this._publish()
     this._scheduleWrite()

@@ -245,6 +245,33 @@ describe('AcpSessionHistoryService — add / list', () => {
     expect(readded.sideTaskAnchorMessageId).toBe('anchor-1')
   })
 
+  it('clearSideTaskAnchorMessageId un-pins the anchor so the next prompt can re-pin it', async () => {
+    await svc.initialize()
+    svc.add({
+      agentId: 'a',
+      sessionIdOnAgent: 'child-1',
+      title: 'quote summary',
+      sideTaskOf: 'parent-1',
+    })
+    svc.setSideTaskAnchorMessageId('child-1', 'anchor-1')
+
+    svc.clearSideTaskAnchorMessageId('child-1')
+    expect(svc.get('child-1')?.sideTaskAnchorMessageId).toBeUndefined()
+    // The row itself (and its side-task link) survives the clear.
+    expect(svc.get('child-1')?.sideTaskOf).toBe('parent-1')
+
+    // No longer write-once: the next own prompt pins the new boundary.
+    svc.setSideTaskAnchorMessageId('child-1', 'anchor-2')
+    expect(svc.get('child-1')?.sideTaskAnchorMessageId).toBe('anchor-2')
+
+    // Unknown id is a no-op; clearing again is idempotent.
+    svc.clearSideTaskAnchorMessageId('nope')
+    expect(svc.get('nope')).toBeUndefined()
+    svc.clearSideTaskAnchorMessageId('child-1')
+    svc.clearSideTaskAnchorMessageId('child-1')
+    expect(svc.get('child-1')?.sideTaskAnchorMessageId).toBeUndefined()
+  })
+
   it('addRetractedMessageId appends, dedupes, and survives re-add', async () => {
     await svc.initialize()
     svc.add({ agentId: 'a', sessionIdOnAgent: 's1', title: 't' })

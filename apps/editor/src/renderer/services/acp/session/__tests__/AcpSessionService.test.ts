@@ -325,6 +325,16 @@ class StubAgent implements Agent {
   readonly setConfigOptionCalls: SetSessionConfigOptionRequest[] = []
   readonly extMethodCalls: Array<{ method: string; params: Record<string, unknown> }> = []
   readonly forkCalls: ForkSessionRequest[] = []
+  /** Set by the fake client right after construction so the agent can stream. */
+  connection?: AgentSideConnection
+  /**
+   * Updates the rewind ext-method streams before answering — the shortened
+   * history the fork replays while the editor's replay window is still open.
+   * Assigned per test because the anchor messageId only exists after sendPrompt.
+   */
+  rewindSessionUpdates: readonly SessionNotification[] = []
+  /** Awaited inside the rewind ext-method — holds the replay window open. */
+  rewindSessionGate: (() => Promise<void>) | undefined = undefined
   /** Deferred controls for promptControl mode, one per in-flight prompt(). */
   readonly promptDeferreds: Array<{
     resolve: () => void
@@ -441,12 +451,21 @@ class StubAgent implements Agent {
     return Promise.resolve()
   }
 
-  extMethod(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  async extMethod(
+    method: string,
+    params: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
     this.extMethodCalls.push({ method, params })
     if (method === REWIND_SESSION_METHOD) {
-      return Promise.resolve(this._opts.rewindResult ?? { canRewind: true })
+      // Streamed INSIDE the RPC: the editor brackets its replay window around
+      // this call, exactly like the fork's replaySessionHistory does.
+      for (const update of this.rewindSessionUpdates) {
+        await this.connection?.sessionUpdate(update)
+      }
+      await (this.rewindSessionGate?.() ?? Promise.resolve())
+      return this._opts.rewindResult ?? { canRewind: true }
     }
-    return Promise.resolve({})
+    return {}
   }
 
   unstable_forkSession(params: ForkSessionRequest): Promise<ForkSessionResponse> {
@@ -505,6 +524,7 @@ class FakeAcpClientService implements IAcpClientService {
     const pair = createInMemoryAcpPair()
     const agent = new StubAgent(agentSessionId, this._opts.stubOptions ?? {})
     const agentConn = new AgentSideConnection(() => agent, pair.agentStream)
+    agent.connection = agentConn
     const clientImpl: Client = {
       requestPermission: (params) => sink.onRequestPermission(params),
       sessionUpdate: async (params) => {
@@ -2229,6 +2249,30 @@ describe('AcpSessionService — rewind / fork', () => {
     return { svc, history, config, notification, agentDefaults }
   }
 
+  /**
+   * A live side-task session: its history row carries `sideTaskOf`, and the
+   * first own prompt pinned the replay anchor (sendPrompt's write-once pin) —
+   * the boundary the forked baseline ends at.
+   */
+  async function sideTaskSession(
+    svc: AcpSessionService,
+    history: AcpSessionHistoryService,
+    promptCount = 1,
+  ) {
+    const session = await svc.createSession('claude-code')
+    await session.whenConnected()
+    history.add({
+      agentId: 'claude-code',
+      sessionIdOnAgent: 'agent-1',
+      title: 'side chat',
+      sideTaskOf: 'agent-parent',
+    })
+    for (let i = 1; i <= promptCount; i++) await session.sendPrompt(`side q${i}`)
+    const anchor = history.get('agent-1')?.sideTaskAnchorMessageId
+    if (anchor === undefined) throw new Error('side-task anchor was not pinned')
+    return { session, anchor }
+  }
+
   it('rewindSession sends the rewind ext-method with the target messageId and clears tracked changes', async () => {
     const tracker = new StubSessionChangeTracker()
     const client = new FakeAcpClientService({
@@ -2374,6 +2418,209 @@ describe('AcpSessionService — rewind / fork', () => {
       await svc.rewindSession(s.id, messageId!, { rewindFiles: false })
 
       expect(tracker.restoredCalls.some((c) => c.sessionId === 'agent-1')).toBe(false)
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('re-arms the side-task gate on rewind: the forked baseline stays off the timeline', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({ stubOptions: { rewindCapable: true } })
+    const { svc, history } = makeServiceWithHistory(client, tracker)
+    try {
+      const { session, anchor } = await sideTaskSession(svc, history, 2)
+      const target = session.messages.get().find((m) => m.text === 'side q2')?.messageId
+      expect(target).toBeTruthy()
+
+      // Rewind replays the truncated transcript from its HEAD, so the shortened
+      // history starts with the whole forked parent baseline (vendor
+      // acp-agent.ts replaySessionHistory) and only reaches the side task's own
+      // turns at the anchor.
+      client.connected[0]!.agent.rewindSessionUpdates = [
+        {
+          sessionId: 'agent-1',
+          update: {
+            sessionUpdate: 'user_message_chunk',
+            content: { type: 'text', text: 'parent question' },
+            messageId: 'parent-1',
+          } as never,
+        },
+        {
+          sessionId: 'agent-1',
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'parent answer' },
+          },
+        },
+        {
+          sessionId: 'agent-1',
+          update: {
+            sessionUpdate: 'tool_call',
+            toolCallId: 'tcParent',
+            title: 'Parent edit',
+            kind: 'edit',
+            status: 'completed',
+          },
+        },
+        {
+          sessionId: 'agent-1',
+          update: {
+            sessionUpdate: 'plan',
+            entries: [{ content: 'parent task A', priority: 'medium', status: 'pending' }],
+          },
+        },
+        {
+          sessionId: 'agent-1',
+          update: {
+            sessionUpdate: 'user_message_chunk',
+            content: { type: 'text', text: 'side q1' },
+            messageId: anchor,
+          } as never,
+        },
+        {
+          sessionId: 'agent-1',
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'side a1' },
+          },
+        },
+      ]
+
+      await svc.rewindSession(session.id, target!)
+
+      // The baseline never lands — messages, tool cards and the plan bar alike —
+      // while the side task's own first turn (from the anchor on) is replayed.
+      expect(session.messages.get().map((m) => m.text)).toEqual(['side q1', 'side a1'])
+      expect(session.toolCalls.get().map((c) => c.id)).not.toContain('tcParent')
+      expect(session.plan.get()).toEqual([])
+      // The anchor turn survived this truncation, so the row keeps the boundary.
+      expect(history.get('agent-1')?.sideTaskAnchorMessageId).toBe(anchor)
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('clears a side-task anchor the rewind truncated away, so the next prompt re-pins it', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({
+      stubOptions: { rewindCapable: true, filesRolledBackByAgent: false },
+    })
+    const { svc, history } = makeServiceWithHistory(client, tracker)
+    try {
+      const { session, anchor } = await sideTaskSession(svc, history)
+      // Only the baseline comes back: the anchor turn itself was cut.
+      client.connected[0]!.agent.rewindSessionUpdates = [
+        {
+          sessionId: 'agent-1',
+          update: {
+            sessionUpdate: 'user_message_chunk',
+            content: { type: 'text', text: 'parent question' },
+            messageId: 'parent-1',
+          } as never,
+        },
+        {
+          sessionId: 'agent-1',
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'parent answer' },
+          },
+        },
+      ]
+
+      await svc.rewindSession(session.id, anchor)
+
+      expect(session.messages.get()).toEqual([])
+      // A pin that can never match a replay again would make the next resume
+      // suppress the side task's own turns too, so the row must drop it...
+      expect(history.get('agent-1')?.sideTaskAnchorMessageId).toBeUndefined()
+
+      // ...and the next own prompt re-pins the boundary (write-once, now absent).
+      await session.sendPrompt('side q1 again')
+      const repinned = history.get('agent-1')?.sideTaskAnchorMessageId
+      expect(repinned).toBeDefined()
+      expect(repinned).not.toBe(anchor)
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('keeps the side-task anchor when the agent refuses the rewind', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({
+      stubOptions: {
+        rewindCapable: true,
+        filesRolledBackByAgent: false,
+        rewindResult: { canRewind: false },
+      },
+    })
+    const { svc, history } = makeServiceWithHistory(client, tracker)
+    try {
+      const { session, anchor } = await sideTaskSession(svc, history)
+
+      await svc.rewindSession(session.id, anchor)
+
+      // Nothing was truncated, so the boundary is still live.
+      expect(history.get('agent-1')?.sideTaskAnchorMessageId).toBe(anchor)
+      // And the closure released the gate: post-rewind output flows again.
+      client.connected[0]!.sink.onSessionUpdate({
+        sessionId: 'agent-1',
+        update: {
+          sessionUpdate: 'agent_message_chunk',
+          content: { type: 'text', text: 'live after refused rewind' },
+        },
+      })
+      expect(session.messages.get().map((m) => m.text)).toEqual(['live after refused rewind'])
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('still replays the full truncated history when a regular session rewinds', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({ stubOptions: { rewindCapable: true } })
+    const svc = makeService(client, tracker)
+    try {
+      const s = await svc.createSession('claude-code')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+      const first = s.messages.get().find((m) => m.text === 'first turn')?.messageId
+      await s.sendPrompt('second turn')
+      const second = s.messages.get().find((m) => m.text === 'second turn')?.messageId
+
+      client.connected[0]!.agent.rewindSessionUpdates = [
+        {
+          sessionId: 'agent-1',
+          update: {
+            sessionUpdate: 'user_message_chunk',
+            content: { type: 'text', text: 'first turn' },
+            messageId: first,
+          } as never,
+        },
+        {
+          sessionId: 'agent-1',
+          update: {
+            sessionUpdate: 'tool_call',
+            toolCallId: 'tcFirst',
+            title: 'Read file',
+            kind: 'read',
+            status: 'completed',
+          },
+        },
+        {
+          sessionId: 'agent-1',
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'first answer' },
+          },
+        },
+      ]
+
+      await svc.rewindSession(s.id, second!)
+
+      // No side-task row here: the gate must stay off and the replayed history
+      // land whole.
+      expect(s.messages.get().map((m) => m.text)).toEqual(['first turn', 'first answer'])
+      expect(s.toolCalls.get().map((c) => c.id)).toEqual(['tcFirst'])
     } finally {
       svc.dispose()
     }

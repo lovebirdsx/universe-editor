@@ -12,7 +12,7 @@ claude transcript 把同一轮的并行 tool_use 串成链（use1→use2→…�
 
 ## side task 的基线回显：抑制期丢弃的 tool_call id 必须留档
 
-side task 恢复时 `suppressReplayToTimeline` 把锚点之前的整段基线丢掉（含基线里所有 `tool_call`），但 fork 在回放尾部有**两条**回显通道会把它们的 result 再发一遍：`backfillForkedToolResults`（在 `session/load` 的 await 链内）与 Task 卡的 `restampReplayedSubagentStats`（fork 侧 `acp-agent.ts:7957` 是 `void` 调用，**必然越出回放窗口**，在 `endHistoryReplay()` 之后才到）。两者发的 `tool_call_update` 都不带 title/kind，`existing` 又查不到（卡片在抑制期已被丢弃），于是标题落到 `update.toolCallId`，凭空冒出十几张 `call_00_…` 标题、`kind: 'unknown'` 的孤儿卡（截图状：重启编辑器后尾部一排）。
+side task 恢复时 `suppressReplayToTimeline` 把锚点之前的整段基线丢掉（含基线里所有 `tool_call`），但 fork 在回放尾部有**两条**回显通道会把它们的 result 再发一遍：`backfillForkedToolResults`（在 `session/load` 的 await 链内）与 Task 卡的 `restampReplayedSubagentStats`（fork 侧 `acp-agent.ts:7957` 是 `void` 调用，**必然越出回放窗口**，在 `endHistoryReplay()` 之后才到）。两者发的 `tool_call_update` 都不带 title/kind，`existing` 又查不到（卡片在抑制期已被丢弃），于是标题落到 `update.toolCallId`，凭空冒出十几张 `call_00_…` 标题、`kind: 'unknown'` 的孤儿卡（截图状：重启编辑器后尾部一排）。**闸门本身在三条重放路径上都生效**（resume、rewind、重开），三条都按 history 行 `sideTaskOf` 决定是否 arm：`_resumeSessionInner` 与 `AcpSession._beginRewindReplay`（后者在 `_resetForReplay()` 之前读行，锚点被截掉时改用 `undefined` arm 并清掉行上的死锚点）——所以「基线卡片落地」只可能发生在闸门未 arm 的路径上，别把它当成 rewind 专属问题。
 
 修法在编辑器侧（fork 拿不到 anchor uuid，且要兼容旧 agent）：抑制期把丢掉的 `tool_call` id 记进 `_suppressedToolCallIds`（`beginHistoryReplay` 重置、FIFO 上限 `MAX_SUPPRESSED_TOOL_CALL_IDS`，**必须比抑制标志活得久**；淘汰数并入同一条汇总日志，否则「淘汰导致的漏网」与「压根没拦」观测上不可分），`applyUpdate` 在 `estimateUpdateCost` 之前拦掉这些 id 的 `tool_call` / `tool_call_update`。两个约束别退化：判据**只认 id 不认回放窗口**（restamp 会越窗；窗口判据还会误伤子卡暂存/合并与 codex 带 title 的孤儿 update），位置**必须在 `_agentOutputCount` 与 change-tracker 之前**（基线回显不该算作本轮 agent 输出、也不该进会话 diff）。标题另加兜底 `update.title ?? existing?.title ?? readAgentToolName(update) ?? localize('acp.session.toolCallUntitled')`——任何路径都不再把不透明协议 id 当标题。对照测试 `AcpSession.timeline.test.ts` 三个用例：回填被丢弃、越窗 restamp 被丢弃、change-tracker 不被污染（第三个是位置约束的唯一守卫，把守卫挪到 tracker 之后只有它会红）。
 
@@ -23,13 +23,13 @@ side task 恢复时 `suppressReplayToTimeline` 把锚点之前的整段基线丢
 修法在编辑器侧（与上一条同构）：抑制期把丢弃的 `plan` 条目记进 `_suppressedPlanSignatures`（先归一化再取 `status\u0000content` 签名，FIFO 上限 `MAX_SUPPRESSED_PLAN_SIGNATURES`，淘汰数并入同一条汇总日志），`case 'plan'` 应用时**逐条扣除**。四条别退化：
 
 - **判据只认签名不认回放窗口**——重发发生在窗口关闭之后。
-- **台账不许随 `beginHistoryReplay()` 清空**（与 `_suppressedToolCallIds` 相反）：rewind 走 `_resetForReplay()` + `beginHistoryReplay()` 且**不重新 arm 抑制**（全仓只有 `acpSessionService.ts:1478` 一处 arm），vendor 的 rewind 从转录头重放——清了台账，父计划会重新灌回 plan 条并重写镜像（比原 bug 更糟）。台账存活期 = 实例。
+- **台账不许随 `beginHistoryReplay()` 清空**（与 `_suppressedToolCallIds` 相反）：闸门在锚点处解除，而 fork 在**每一轮** prompt 开头重发整份 `taskState`、rewind 的重放越过锚点后也会再发一遍——清了台账，父计划会重新灌回 plan 条并重写镜像（比原 bug 更糟）。台账存活期 = 实例。arm 点共两处（`acpSessionService.ts:1478` 的 resume 与 `AcpSession._beginRewindReplay` 的 rewind），台账与它们无关。
 - **逐条扣除，不能「整条与基线快照相等才丢」**：子会话一旦自建任务，快照就变成「基线 + 新任务」不再相等，父条目会整条放行。
 - **每轮都过滤**，不许收窄成「首轮」。
 
 有意语义：签名含 status，所以契约是「父计划**原样**永不显示」，不是「它的文字永久禁用」——子会话接手（或被 `activeForm` 换过 content）的条目算它自己的新状态。配套两处：`endHistoryReplay()` 末尾的 `_dropSeededBaselinePlan()` 把「历史行已镜像、且全为基线条目」的种子计划就地清掉（打开即自愈，不必等下一轮 prompt）；`_planSeen` / `sealStreamingMessages` 改成扣除后非空才做（被隐藏的 plan 不该劈开正在流式的消息）。codex 侧签名集合恒为空（其 `session/load` 回放不发 plan）→ 过滤是恒等操作，无回归。
 
-对照测试：`AcpSession.timeline.test.ts` 三条（首轮重发被扣除、rewind 不加抑制仍扣除、被突变的基线条目按子会话自己算）+ `AcpSessionService.resume.test.ts` 两条（端到端不显示且不写镜像、旧行种子计划打开即自愈）。
+对照测试：`AcpSession.timeline.test.ts` 三条（首轮重发被扣除、闸门解除后的重放仍扣除、被突变的基线条目按子会话自己算）+ `AcpSessionService.resume.test.ts` 两条（端到端不显示且不写镜像、旧行种子计划打开即自愈）。
 
 ## 回放预算窗口是**时序性**的：回放类下发必须被 `session/load` await 覆盖
 

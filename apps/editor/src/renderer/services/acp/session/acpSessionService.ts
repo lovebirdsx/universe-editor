@@ -1473,7 +1473,8 @@ export class AcpSessionService
       // covers later reopens — restarts and closed-tab resumes, where no fork
       // caller is around to pass the option. The anchor (the side task's first
       // own prompt id, recorded by sendPrompt) lifts the suppression at the
-      // replay boundary so the side task's own turns still land.
+      // replay boundary so the side task's own turns still land. The rewind
+      // replay arms itself the same way off the row (AcpSession._beginRewindReplay).
       if (entry.sideTaskOf !== undefined) {
         session.suppressReplayToTimeline(entry.sideTaskAnchorMessageId)
       }

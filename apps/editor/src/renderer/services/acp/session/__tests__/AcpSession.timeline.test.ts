@@ -1734,7 +1734,7 @@ describe('AcpSession.timeline', () => {
     expect(s.plan.get()).toEqual([])
   })
 
-  it('subtracts the baseline plan on a replay that is not gated (rewind re-arms nothing)', async () => {
+  it('subtracts the baseline plan once the gate has lifted (the ledger outlives beginHistoryReplay)', async () => {
     const s = await svc.createSession()
     await s.whenConnected()
     const conn = client.connected[0]!
@@ -1750,10 +1750,11 @@ describe('AcpSession.timeline', () => {
     })
     s.endHistoryReplay()
 
-    // Rewind resets and replays the whole transcript head WITHOUT re-arming the
-    // gate (_resetForReplay + beginHistoryReplay), so the ledger has to outlive
-    // beginHistoryReplay — cleared with the tool-call ids, the parent plan would
-    // land back on the bar and into the history mirror.
+    // A later replay WITHOUT the gate — the fork re-publishes the accumulated
+    // taskState at the top of every prompt, and a rewind's replay that reaches
+    // past the anchor re-emits it too. The ledger therefore has to outlive both
+    // the gate and beginHistoryReplay: cleared with the tool-call ids, the
+    // parent plan would land back on the bar and into the history mirror.
     s.beginHistoryReplay()
     conn.sink.onSessionUpdate({
       sessionId: 'agent-1',

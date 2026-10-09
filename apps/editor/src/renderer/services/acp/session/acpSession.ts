@@ -967,7 +967,9 @@ export class AcpSession extends Disposable implements IAcpSession {
    * ext-notifications) — and their change-tracker side effects — are dropped so
    * the forked baseline stays invisible (the fork exists only as agent-side
    * context). Config / commands / usage updates still apply. Armed by
-   * {@link suppressReplayToTimeline}, cleared by {@link endHistoryReplay}.
+   * {@link suppressReplayToTimeline} — from the side-task resume
+   * (acpSessionService.ts) and from {@link _beginRewindReplay} — cleared by
+   * {@link endHistoryReplay}.
    */
   private _suppressReplayToTimeline = false
 
@@ -1000,9 +1002,10 @@ export class AcpSession extends Disposable implements IAcpSession {
    * be recognizable by identity instead of by the replay window, exactly like
    * {@link _suppressedToolCallIds}.
    *
-   * Deliberately NOT cleared by {@link beginHistoryReplay}: a rewind resets and
-   * replays the transcript without re-arming the gate (the only arm site is the
-   * side-task resume), and its plan updates must still be subtracted.
+   * Deliberately NOT cleared by {@link beginHistoryReplay}: the gate lifts at
+   * the anchor, and the fork keeps re-publishing that snapshot on every later
+   * prompt (and on a replay that reaches past the anchor), so the entries must
+   * outlive the replay window.
    * The ledger lives for the instance and is bounded FIFO.
    */
   private readonly _suppressedPlanSignatures = new Set<string>()
@@ -1059,7 +1062,9 @@ export class AcpSession extends Disposable implements IAcpSession {
    * task's first own user prompt id. The replayed user chunk carrying this id
    * lifts the suppression so the side task's own turns (from that message on)
    * land on the timeline while the forked baseline before them stays dropped.
-   * `undefined` = no turns sent yet → the whole replay is suppressed.
+   * `undefined` = no turns sent yet → the whole replay is suppressed. A rewind
+   * that truncates the anchor turn away arms with `undefined` (see
+   * {@link _beginRewindReplay}) and drops the row's now-dead pin.
    */
   private _suppressAnchorMessageId: string | undefined
 
@@ -2494,10 +2499,13 @@ export class AcpSession extends Disposable implements IAcpSession {
    *      Query truncated at the message, then replay the shortened history.
    * We reset the local timeline right before the call so the agent's replay
    * (delivered as `session/update` notifications during the ext-method) rebuilds
-   * it cleanly instead of appending onto the stale tail. A `dryRun` skips the
-   * reset and the file/conversation mutation, returning only the impact preview
-   * so the UI can confirm the destructive action first. Returns `undefined` when
-   * there's no live connection / agent-side session id, or for read-only previews.
+   * it cleanly instead of appending onto the stale tail; that reset also re-arms
+   * the side-task replay gate, since the agent replays from the transcript HEAD
+   * and would otherwise put the whole forked baseline back on the timeline (see
+   * {@link _beginRewindReplay}). A `dryRun` skips the reset and the
+   * file/conversation mutation, returning only the impact preview so the UI can
+   * confirm the destructive action first. Returns `undefined` when there's no
+   * live connection / agent-side session id, or for read-only previews.
    */
   async rewindTo(
     messageId: string,
@@ -2564,8 +2572,7 @@ export class AcpSession extends Disposable implements IAcpSession {
           })
         }
       }
-      this._resetForReplay()
-      this.beginHistoryReplay()
+      const truncatedAnchor = this._beginRewindReplay(messageId)
       try {
         const raw = await conn.conn.extMethod(REWIND_SESSION_METHOD, {
           sessionId: sid,
@@ -2578,7 +2585,10 @@ export class AcpSession extends Disposable implements IAcpSession {
           keepFiles,
           canRewind,
         })
-        if (canRewind) this._messageAttachments?.removeMessages(sid, attachmentMessageIds)
+        if (canRewind) {
+          this._messageAttachments?.removeMessages(sid, attachmentMessageIds)
+          this._dropTruncatedSideTaskAnchor(sid, truncatedAnchor)
+        }
         return { canRewind }
       } catch (err) {
         this._telemetry.publicLogError('acp.rewind_failed', {
@@ -2591,10 +2601,7 @@ export class AcpSession extends Disposable implements IAcpSession {
       }
     }
 
-    if (!dryRun) {
-      this._resetForReplay()
-      this.beginHistoryReplay()
-    }
+    const truncatedAnchor = dryRun ? undefined : this._beginRewindReplay(messageId)
     try {
       const raw = await conn.conn.extMethod(REWIND_SESSION_METHOD, {
         sessionId: sid,
@@ -2609,6 +2616,7 @@ export class AcpSession extends Disposable implements IAcpSession {
       if (!dryRun && !keepFiles && result.canRewind !== false) this._changeTracker?.clear(sid)
       if (!dryRun && result.canRewind !== false) {
         this._messageAttachments?.removeMessages(sid, attachmentMessageIds)
+        this._dropTruncatedSideTaskAnchor(sid, truncatedAnchor)
       }
       this._telemetry.publicLog('acp.rewind', {
         sessionId: sid,
@@ -2636,9 +2644,7 @@ export class AcpSession extends Disposable implements IAcpSession {
    */
   private _toolCallIdsAfterMessage(messageId: string): string[] {
     const timeline = this._timeline
-    const anchorIdx = timeline.findIndex(
-      (item) => item.kind === 'message' && item.message.messageId === messageId,
-    )
+    const anchorIdx = this._messageTimelineIndex(messageId)
     if (anchorIdx < 0) return []
     const ids: string[] = []
     for (let i = anchorIdx; i < timeline.length; i++) {
@@ -2650,9 +2656,7 @@ export class AcpSession extends Disposable implements IAcpSession {
 
   /** User attachment records removed by a rewind: the anchor and all later turns. */
   private _userMessageIdsFrom(messageId: string): string[] {
-    const anchorIdx = this._timeline.findIndex(
-      (item) => item.kind === 'message' && item.message.messageId === messageId,
-    )
+    const anchorIdx = this._messageTimelineIndex(messageId)
     if (anchorIdx < 0) return []
     const ids: string[] = []
     for (let i = anchorIdx; i < this._timeline.length; i++) {
@@ -2688,6 +2692,65 @@ export class AcpSession extends Disposable implements IAcpSession {
     // replay re-emits a plan, the applyUpdate mirror writes it back.
     const sid = this.sessionIdOnAgent.get()
     if (sid !== undefined) this._history?.setHistoryPlan(sid, null)
+  }
+
+  /**
+   * Open a rewind's truncated-history replay: reset the timeline, open the replay
+   * window, and — for a side task — re-arm the replay gate. The agent's rewind
+   * replays the transcript from its HEAD up to the truncation point, so for a
+   * side task that replay carries the whole forked parent baseline (messages,
+   * tool calls, compaction cards), exactly like `session/load` — and only the
+   * resume path used to arm the gate (acpSessionService.ts:1478).
+   *
+   * The anchor decision MUST be read before {@link _resetForReplay} empties
+   * `_timeline` — hence the reset lives in here rather than at the call sites.
+   *
+   * Returns the anchor id this truncation removed from the transcript, for the
+   * caller to clear from the history row ONCE the agent confirmed it
+   * ({@link _dropTruncatedSideTaskAnchor}): a refused rewind (`canRewind:false`)
+   * or a failed ext-method leaves the anchor turn in place, and its boundary
+   * must survive.
+   */
+  private _beginRewindReplay(targetMessageId: string): string | undefined {
+    const sid = this.sessionIdOnAgent.get()
+    const row = sid === undefined ? undefined : this._history?.get(sid)
+    const isSideTask = row?.sideTaskOf !== undefined
+    const anchor = isSideTask ? row.sideTaskAnchorMessageId : undefined
+    // The truncation removes the target turn and everything after it. Only when
+    // BOTH ids are on the timeline can their order be trusted: an anchor missing
+    // here was retracted by a cancel-restore and is still IN the transcript.
+    const anchorIdx = anchor === undefined ? -1 : this._messageTimelineIndex(anchor)
+    const targetIdx = this._messageTimelineIndex(targetMessageId)
+    const anchorTruncated = anchorIdx !== -1 && targetIdx !== -1 && anchorIdx >= targetIdx
+
+    this._resetForReplay()
+    this.beginHistoryReplay()
+    if (isSideTask) {
+      // A truncated-away anchor matches nothing; arming with `undefined` says the
+      // truth (no own turn survives in the transcript) and suppresses the whole
+      // replay, which for this window is nothing but the baseline.
+      this.suppressReplayToTimeline(anchorTruncated ? undefined : anchor)
+    }
+    return anchorTruncated ? anchor : undefined
+  }
+
+  /**
+   * Drop a side-task anchor a confirmed rewind truncated out of the transcript
+   * (see {@link _beginRewindReplay}) so the next prompt re-pins the boundary.
+   */
+  private _dropTruncatedSideTaskAnchor(sid: string, truncatedAnchor?: string): void {
+    if (truncatedAnchor === undefined) return
+    this._history?.clearSideTaskAnchorMessageId(sid)
+  }
+
+  /**
+   * Timeline index of the message carrying `messageId`, or -1 (retracted /
+   * never rendered). Timeline order is transcript order for user messages.
+   */
+  private _messageTimelineIndex(messageId: string): number {
+    return this._timeline.findIndex(
+      (item) => item.kind === 'message' && item.message.messageId === messageId,
+    )
   }
 
   private _recomputeStatus(): void {
@@ -3333,7 +3396,7 @@ export class AcpSession extends Disposable implements IAcpSession {
         case 'plan':
           // The snapshot goes from the bar and the mirror, but the fork re-sends
           // the whole accumulated taskState at the top of every later prompt
-          // (and a rewind replays it with the gate off) — remember the entries
+          // (and a replay that reaches past the anchor re-emits it) — remember the entries
           // so those re-sends can be subtracted. See
           // {@link _suppressedPlanSignatures}.
           this._rememberSuppressedPlanEntries(update.entries)
