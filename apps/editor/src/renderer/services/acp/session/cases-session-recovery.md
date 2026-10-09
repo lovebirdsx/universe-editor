@@ -29,7 +29,7 @@
 
 三条审查踩坑（harness 开关 `freshSessionIdPerConnect` / `resumeSessionError` / `attachSessionErrorOnConnect` 就是为这三条造的）：
 
-1. **side task 是唯一 `hasMessages: false` 但 agent 侧有 transcript 的会话**——`forkSideTask` 在子会话发首条消息前就把父会话完整历史 fork 到 agent 侧了。所以判定必须带 `entry.sideTaskOf === undefined`，否则 rebuild 会静默丢掉 fork 基线，侧边追问失去讨论对象。该谓词是**三个决策的唯一真相**（`isTranscriptlessEmptyRow`），别再各自内联：① 重连分派 rebuild；② MCP 重载分派「关闭+替换」——`_reloadSessionForMcpChange` 曾漏掉 carve-out：空 side task 一改 MCP 就被换成新会话（新 durable id + 新行），丢 `sideTaskOf` / 只读 mode pin / `acp.sideTask.models` 模型 pin，并冒进会话列表；③ `_onResumeFailure` 的静默丢行策略——漏掉则重载失败会把 side task 从父会话「侧边任务」里无声抹掉（agent 权威的 `resourceNotFound` 仍照丢，不受 carve-out 影响）。
+1. **side task 是唯一 `hasMessages: false` 但 agent 侧有 transcript 的会话**——`forkSideTask` 在子会话发首条消息前就把父会话完整历史 fork 到 agent 侧了。所以判定必须带 `entry.sideTaskOf === undefined`，否则 rebuild 会静默丢掉 fork 基线，侧边追问失去讨论对象。该谓词是**三个决策的唯一真相**（`isTranscriptlessEmptyRow`），别再各自内联：① 重连分派 rebuild；② MCP 重载分派「关闭+替换」——`_reloadSessionForMcpChange` 曾漏掉 carve-out：空 side task 一改 MCP 就被换成新会话（新 durable id + 新行），丢 `sideTaskOf` / 只读 mode pin / `acp.sideTask.models` 模型 pin，并冒进会话列表；③ `_onResumeFailure` 的静默丢行策略——漏掉则重载失败会把 side task 从父会话「侧边任务」里无声抹掉（agent 权威的 `resourceNotFound` 仍照丢，不受 carve-out 影响）。**症状「side task 冒进会话列表」另有一个同症状不同根因**：history 行被 `MAX_ENTRIES` 淘汰后 sweep 重建出一条无标记的行 → 见 [cases-rewind-fork.md](cases-rewind-fork.md) 已修 bug #11（判据是「行还在不在本地」，与 `hasMessages` 无关）。
 2. **重试循环持有的 `sid` 必须随 rekey 一起更新**（`let sid`，rekey 后 `sid = rebuiltSessionId`），否则 attach 抛错后重试用死 id 查 history → `entry === undefined` → 退回 resume 死 id → budget 耗尽。
 3. **rekey 必须紧贴 `attachSession` 之前**，中间不能夹任何可能抛错的调用（`setConfigDesired` / `applyInitState` 都挪到 rekey 之前）——否则留下「行在新 id、session 在旧 id」的不一致窗口。
 

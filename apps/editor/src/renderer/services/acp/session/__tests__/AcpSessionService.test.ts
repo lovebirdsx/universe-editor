@@ -78,6 +78,7 @@ import type { IAcpSession } from '../acpSession.js'
 import type { AcpPendingElicitation, AcpPendingPermission } from '../acpSessionModel.js'
 import { ACP_CAPABILITIES_META_KEY, SUBAGENT_TRANSCRIPT_CAPABILITY } from '../acpExtMethods.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
+import { AcpSideTaskIndexService } from '../acpSideTaskIndex.js'
 import { AcpCompactionStatsService } from '../acpCompactionStats.js'
 import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
 import { AcpAuthGuidanceService } from '../acpAuthGuidanceService.js'
@@ -235,6 +236,11 @@ function makeHistory(): AcpSessionHistoryService {
     new NoopTelemetryService(),
     new StubLoggerService(),
     FAKE_URI_IDENTITY,
+    new AcpSideTaskIndexService(
+      new FakeStorage(),
+      new NoopTelemetryService(),
+      new StubLoggerService(),
+    ),
   )
 }
 

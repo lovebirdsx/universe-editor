@@ -1299,6 +1299,32 @@ describe('ResumeAgentSessionAction', () => {
     expect(b.resumeSession).toHaveBeenCalledWith('sess-1')
   })
 
+  it('hides side tasks from the picker (their parent popover is the only entry point)', async () => {
+    const parent = makeEntry({ id: 'parent-1', sessionIdOnAgent: 'parent-1', title: 'Parent' })
+    const side = makeEntry({
+      id: 'side-1',
+      sessionIdOnAgent: 'side-1',
+      title: 'Side task',
+      sideTaskOf: 'parent-1',
+    })
+    const b = build({ entries: [parent, side], pickIndex: 0, currentCwd: undefined })
+    await run(b)
+    expect(b.pickedItems[0]!.map((i) => i.id)).toEqual(['parent-1'])
+  })
+
+  it('reports "no previous sessions" when every row is a side task', async () => {
+    const side = makeEntry({
+      id: 'side-1',
+      sessionIdOnAgent: 'side-1',
+      title: 'Side task',
+      sideTaskOf: 'parent-1',
+    })
+    const b = build({ entries: [side], pickIndex: 0, currentCwd: undefined })
+    await run(b)
+    expect(b.pickedItems).toHaveLength(0)
+    expect(b.notify).toHaveBeenCalledTimes(1)
+  })
+
   it('resumes a session rooted in a subdirectory of the open workspace live (not a preview)', async () => {
     const entry = makeEntry({ cwd: '/repo/main/sub', title: 'Sub-project' })
     const b = build({ entries: [entry], pickIndex: 0, currentCwd: '/repo/main' })

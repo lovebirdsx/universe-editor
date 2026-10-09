@@ -69,6 +69,7 @@ import {
 import type { IAcpAgentRegistry } from '../../acpAgentRegistry.js'
 import type { IAcpPermissionHandler } from '../../acpPermissionHandler.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
+import { AcpSideTaskIndexService } from '../acpSideTaskIndex.js'
 import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
 import { AcpAuthGuidanceService } from '../acpAuthGuidanceService.js'
 import { stubAcpCodexAutoReviewGuard } from './stubAcpCodexAutoReviewGuard.js'
@@ -434,6 +435,7 @@ function buildService(
     telemetry,
     new StubLoggerService(),
     FAKE_URI_IDENTITY,
+    new AcpSideTaskIndexService(new FakeStorage(), telemetry, new StubLoggerService()),
   )
   const agentDefaults = new AcpAgentDefaultsService(
     new FakeStorage(),
@@ -1510,6 +1512,7 @@ describe('AcpSessionService.resumeSession — editor-restart race', () => {
       telemetry,
       new StubLoggerService(),
       FAKE_URI_IDENTITY,
+      new AcpSideTaskIndexService(new FakeStorage(), telemetry, new StubLoggerService()),
     )
     const agentDefaults = new AcpAgentDefaultsService(
       new FakeStorage(),
@@ -1645,6 +1648,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       telemetry,
       new StubLoggerService(),
       FAKE_URI_IDENTITY,
+      new AcpSideTaskIndexService(new FakeStorage(), telemetry, new StubLoggerService()),
     )
     const agentDefaults = new AcpAgentDefaultsService(
       new FakeStorage(),
@@ -1718,6 +1722,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       telemetry,
       new StubLoggerService(),
       FAKE_URI_IDENTITY,
+      new AcpSideTaskIndexService(new FakeStorage(), telemetry, new StubLoggerService()),
     )
     const notification = new StubNotificationService()
     const agentDefaults = new AcpAgentDefaultsService(
@@ -1791,6 +1796,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       telemetry,
       new StubLoggerService(),
       FAKE_URI_IDENTITY,
+      new AcpSideTaskIndexService(new FakeStorage(), telemetry, new StubLoggerService()),
     )
     const agentDefaults = new AcpAgentDefaultsService(
       new FakeStorage(),
@@ -1864,6 +1870,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       telemetry,
       new StubLoggerService(),
       FAKE_URI_IDENTITY,
+      new AcpSideTaskIndexService(new FakeStorage(), telemetry, new StubLoggerService()),
     )
     const notification = new StubNotificationService()
     const agentDefaults = new AcpAgentDefaultsService(

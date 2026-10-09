@@ -45,6 +45,7 @@ import {
   IAcpSessionHistoryService,
   type AcpSessionHistoryEntry,
 } from '../../../services/acp/session/acpSessionHistory.js'
+import { AcpSideTaskIndexService } from '../../../services/acp/session/acpSideTaskIndex.js'
 import {
   AcpSessionFilterService,
   IAcpSessionFilterService,
@@ -227,6 +228,7 @@ async function makeHarness(opts: { scope?: string; folder?: URI } = {}): Promise
     new NoopTelemetryService(),
     new StubLoggerService(),
     uriIdentity,
+    new AcpSideTaskIndexService(storage, new NoopTelemetryService(), new StubLoggerService()),
   )
   await history.initialize()
   const filterService = new AcpSessionFilterService(

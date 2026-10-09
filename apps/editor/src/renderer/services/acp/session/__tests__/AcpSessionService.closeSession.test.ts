@@ -48,6 +48,7 @@ import {
 import { AcpSessionService } from '../acpSessionService.js'
 import { AcpCompactionStatsService } from '../acpCompactionStats.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
+import { AcpSideTaskIndexService } from '../acpSideTaskIndex.js'
 import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
 import { AcpAuthGuidanceService } from '../acpAuthGuidanceService.js'
 import { stubAcpCodexAutoReviewGuard } from './stubAcpCodexAutoReviewGuard.js'
@@ -267,6 +268,11 @@ function makeHistory() {
     new NoopTelemetryService(),
     new StubLoggerService(),
     FAKE_URI_IDENTITY,
+    new AcpSideTaskIndexService(
+      new FakeStorage(),
+      new NoopTelemetryService(),
+      new StubLoggerService(),
+    ),
   )
 }
 

@@ -52,6 +52,7 @@ import {
 } from '@agentclientprotocol/sdk'
 import { AcpSessionService } from '../acpSessionService.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
+import { AcpSideTaskIndexService } from '../acpSideTaskIndex.js'
 import { AcpCompactionStatsService } from '../acpCompactionStats.js'
 import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
 import { AcpAuthGuidanceService } from '../acpAuthGuidanceService.js'
@@ -277,6 +278,7 @@ function makeService(client: FakeAcpClientService): AcpSessionService {
     telemetry,
     loggerService,
     FAKE_URI_IDENTITY,
+    new AcpSideTaskIndexService(storage, telemetry, loggerService),
   )
   const agentDefaults = new AcpAgentDefaultsService(
     new FakeStorage(),

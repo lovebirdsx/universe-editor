@@ -57,6 +57,7 @@ import {
 import { AcpSessionService } from '../acpSessionService.js'
 import { AcpCompactionStatsService } from '../acpCompactionStats.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
+import { AcpSideTaskIndexService } from '../acpSideTaskIndex.js'
 import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
 import { AcpAuthGuidanceService } from '../acpAuthGuidanceService.js'
 import { stubAcpCodexAutoReviewGuard } from './stubAcpCodexAutoReviewGuard.js'
@@ -446,6 +447,7 @@ function buildService(
     telemetry,
     new StubLoggerService(),
     FAKE_URI_IDENTITY,
+    new AcpSideTaskIndexService(new FakeStorage(), telemetry, new StubLoggerService()),
   )
   const agentDefaults = new AcpAgentDefaultsService(
     new FakeStorage(),

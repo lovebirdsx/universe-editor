@@ -185,6 +185,8 @@ import { AcpPathPolicy, IAcpPathPolicy } from './services/acp/acpPathPolicy.js'
 import { AcpClientService, IAcpClientService } from './services/acp/acpClientService.js'
 import { AcpSessionService, IAcpSessionService } from './services/acp/session/acpSessionService.js'
 import { IAcpSessionHistoryService } from './services/acp/session/acpSessionHistory.js'
+// Side-effect import: registers IAcpSideTaskIndexService for the same snapshot.
+import './services/acp/session/acpSideTaskIndex.js'
 import {
   IMcpServerEnablementService,
   McpServerEnablementService,

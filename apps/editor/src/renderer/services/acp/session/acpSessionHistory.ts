@@ -30,6 +30,7 @@ import {
   type ISettableObservable,
 } from '@universe-editor/platform'
 import { PersistedStateBase } from '../persistedStateBase.js'
+import { IAcpSideTaskIndexService } from './acpSideTaskIndex.js'
 import type { CollapseMode } from './acpChatViewStateCache.js'
 import type { AcpPlanEntry } from './acpSessionModel.js'
 import { isPromptEchoTitle } from './acpSessionTitleEcho.js'
@@ -252,6 +253,12 @@ export interface IAcpSessionHistoryService {
    */
   rekey(oldId: string, newId: string): void
   remove(id: string): void
+  /**
+   * Drop a side task's durable identity link. Called when the user deletes the
+   * side task for good (SideTasksBar's cascade) so a rebuilt row cannot come
+   * back as a side task if the agent-side `session/delete` failed.
+   */
+  forgetSideTask(id: string): void
   clear(): void
   /**
    * Patch a single configOption value (and optional friendly label) on a
@@ -664,6 +671,7 @@ export class AcpSessionHistoryService
     @ITelemetryService telemetry: ITelemetryService,
     @ILoggerService loggerService: ILoggerService,
     @IUriIdentityService uriIdentity: IUriIdentityService,
+    @IAcpSideTaskIndexService private readonly _sideTaskIndex: IAcpSideTaskIndexService,
   ) {
     super(storage, workspace, telemetry, loggerService, {
       storageKey: STORAGE_KEY,
@@ -673,6 +681,15 @@ export class AcpSessionHistoryService
     })
     this._uriIdentity = uriIdentity
     this.entries = observableValue<readonly AcpSessionHistoryEntry[]>('acp.sessionHistory', [])
+  }
+
+  /**
+   * The side-task index must be loaded before any hydrate sweep can consult it
+   * (`session/list` can report a side task whose row we already evicted), so
+   * both loads are awaited together — callers only await this one.
+   */
+  override async initialize(): Promise<void> {
+    await Promise.all([super.initialize(), this._sideTaskIndex.initialize()])
   }
 
   list(): readonly AcpSessionHistoryEntry[] {
@@ -805,6 +822,12 @@ export class AcpSessionHistoryService
     } else {
       this._state = [next, ...this._state]
     }
+    // Remember the link beyond this row's lifetime: the row is evictable
+    // (MAX_ENTRIES) while the forked agent session is not, and `_mergeOrReplace`
+    // re-marks a rebuilt row from this index.
+    if (next.sideTaskOf !== undefined) {
+      this._sideTaskIndex.remember(next.id, next.sideTaskOf, next.sideTaskQuote)
+    }
     this._truncate()
     this._publish()
     this._scheduleWrite()
@@ -835,6 +858,11 @@ export class AcpSessionHistoryService
     // Drop the old row AND any pre-existing row already sitting on newId, so a
     // rebuild can never leave two rows describing the same session.
     this._state = [next, ...this._state.filter((e) => e.id !== oldId && e.id !== newId)]
+    // The durable side-task link is keyed by row id, which just moved.
+    if (next.sideTaskOf !== undefined) {
+      this._sideTaskIndex.forget(oldId)
+      this._sideTaskIndex.remember(newId, next.sideTaskOf, next.sideTaskQuote)
+    }
     this._publish()
     this._scheduleWrite()
   }
@@ -846,6 +874,10 @@ export class AcpSessionHistoryService
       this._publish()
       this._scheduleWrite()
     }
+  }
+
+  forgetSideTask(id: string): void {
+    this._sideTaskIndex.forget(id)
   }
 
   clear(): void {
@@ -1212,6 +1244,11 @@ export class AcpSessionHistoryService
         changed = true
       } else {
         const created = protocolTs ?? now
+        // The row may be gone while its forked agent session lives on — the
+        // sweep keeps reporting a side task whose row was evicted or dropped.
+        // Restore the identity from the durable index so the rebuilt row stays
+        // hidden from the session list and attached to its parent's popover.
+        const sideTask = this._sideTaskIndex.get(info.sessionId)
         const next: AcpSessionHistoryEntry = {
           id: info.sessionId,
           agentId,
@@ -1221,6 +1258,12 @@ export class AcpSessionHistoryService
           ...(authority !== undefined ? { authority } : {}),
           ...(branch !== undefined ? { branch } : {}),
           ...(transcriptPath !== undefined ? { transcriptPath } : {}),
+          ...(sideTask !== undefined
+            ? {
+                sideTaskOf: sideTask.parent,
+                ...(sideTask.quote !== undefined ? { sideTaskQuote: sideTask.quote } : {}),
+              }
+            : {}),
           createdAt: created,
           lastUsedAt: created,
         }

@@ -142,6 +142,10 @@ export function SideTasksBar({ session }: { session: IAcpSession }) {
         // must not leave the side task undeletable here (same call as the session
         // list's onRemove, which likewise ignores deleteOnAgent's outcome).
         history.remove(id)
+        // Drop the durable side-task link too: if `deleteOnAgent` failed above,
+        // a later sweep would otherwise rebuild the row from the index and the
+        // "deleted" side task would come back under its parent.
+        history.forgetSideTask(id)
       }
       // The button that was clicked has just been unmounted, dropping focus to
       // <body>. Hand it to the trigger so keyboard users stay in the popover's

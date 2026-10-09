@@ -78,6 +78,7 @@ import {
   type IAcpClientNotificationSink,
 } from '../../acpClientService.js'
 import { AcpSessionHistoryService, type SessionHistoryScope } from '../acpSessionHistory.js'
+import { AcpSideTaskIndexService } from '../acpSideTaskIndex.js'
 import type { IAcpAgentRegistry } from '../../acpAgentRegistry.js'
 import { createInMemoryAcpPair } from '../../testing/inMemoryAcpPair.js'
 import type { IAcpSession } from '../acpSession.js'
@@ -394,6 +395,7 @@ function build(opts: BuildOptions = {}): BuildResult {
       new NoopTelemetryService(),
       new StubLoggerService(),
       FAKE_URI_IDENTITY,
+      new AcpSideTaskIndexService(storage, new NoopTelemetryService(), new StubLoggerService()),
     )
   const notifications = new StubNotificationService()
   const resumeCalls: string[] = []
@@ -782,6 +784,7 @@ describe('AcpSessionRestoreCoordinator — hydrate sweep', () => {
       new NoopTelemetryService(),
       new StubLoggerService(),
       FAKE_URI_IDENTITY,
+      new AcpSideTaskIndexService(storage, new NoopTelemetryService(), new StubLoggerService()),
     )
     client.agentOptions.set('fake', {
       capabilities: { sessionCapabilities: { list: {} } } as AgentCapabilities,

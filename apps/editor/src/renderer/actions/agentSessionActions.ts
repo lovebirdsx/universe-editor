@@ -473,7 +473,9 @@ export class ResumeAgentSessionAction extends Action2 {
     const workspace = accessor.get(IWorkspaceService)
     const uriIdentity = accessor.get(IUriIdentityService)
 
-    const entries = history.list()
+    // Side tasks stay out of the picker: they are reachable only from their
+    // parent's side-task popover, same as the Sessions view (SessionListBody).
+    const entries = history.list().filter((e) => e.sideTaskOf === undefined)
     if (entries.length === 0) {
       notification.notify({
         severity: Severity.Info,

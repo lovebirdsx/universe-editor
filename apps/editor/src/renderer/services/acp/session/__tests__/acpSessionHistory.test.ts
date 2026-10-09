@@ -27,6 +27,7 @@ import {
   sideTaskParentOf,
   type AcpSessionHistoryEntry,
 } from '../acpSessionHistory.js'
+import { AcpSideTaskIndexService } from '../acpSideTaskIndex.js'
 import { StubLoggerService } from '../../../../__tests__/_helpers/stubLoggerService.js'
 
 class FakeStorage implements IStorageService {
@@ -111,6 +112,7 @@ function makeService(opts: MakeOptions = {}): {
     new NoopTelemetryService(),
     new StubLoggerService(),
     makeUriIdentity(opts.platform ?? 'linux'),
+    new AcpSideTaskIndexService(storage, new NoopTelemetryService(), new StubLoggerService()),
   )
   return { svc, storage, workspace }
 }
@@ -1281,6 +1283,124 @@ describe('AcpSessionHistoryService — bulkMergeFromAgent', () => {
   })
   afterEach(() => {
     svc.dispose()
+  })
+
+  it('re-marks a rebuilt row as a side task after its row was evicted', async () => {
+    // A side task's only identity marker is this row, while the forked agent
+    // session is durable and keeps being reported by `session/list`. If the row
+    // is evicted, the rebuilt row must still know it is a side task — otherwise
+    // it surfaces as a regular session in the Sessions list (regression: side
+    // tasks appearing after an editor restart).
+    await svc.initialize()
+    svc.add({
+      agentId: 'fake',
+      sessionIdOnAgent: 'side-1',
+      title: 'side',
+      cwd: '/work',
+      hasMessages: false,
+      sideTaskOf: 'parent-1',
+      sideTaskQuote: 'quoted text',
+    })
+    // Overflow the ceiling so the side-task row is evicted, like a busy history.
+    for (let i = 0; i < 100; i++) {
+      svc.add({ agentId: 'fake', sessionIdOnAgent: `s-${i}`, title: `t${i}`, cwd: '/work' })
+    }
+    expect(svc.get('side-1')).toBeUndefined()
+
+    // Restart: the hydrate sweep still reports the forked session (its row was
+    // never deleted on the agent side).
+    svc.bulkMergeFromAgent(
+      'fake',
+      [
+        {
+          sessionId: 'side-1',
+          cwd: '/work',
+          title: 'side',
+          updatedAt: new Date(Date.now() + 60_000).toISOString(),
+        },
+      ],
+      '/work',
+      undefined,
+      'worktree',
+    )
+
+    const rebuilt = svc.get('side-1')
+    expect(rebuilt?.sideTaskOf).toBe('parent-1')
+    expect(rebuilt?.sideTaskQuote).toBe('quoted text')
+  })
+
+  it('re-marks a rebuilt row as a side task after its row was removed', async () => {
+    await svc.initialize()
+    svc.add({
+      agentId: 'fake',
+      sessionIdOnAgent: 'side-2',
+      title: 'side',
+      cwd: '/work',
+      hasMessages: false,
+      sideTaskOf: 'parent-1',
+    })
+    // Internal discard (`_onResumeFailure` drops transcriptless rows this way).
+    svc.remove('side-2')
+    expect(svc.get('side-2')).toBeUndefined()
+
+    svc.bulkMergeFromAgent(
+      'fake',
+      [{ sessionId: 'side-2', cwd: '/work', title: 'side', updatedAt: null }],
+      '/work',
+      undefined,
+      'worktree',
+    )
+    expect(svc.get('side-2')?.sideTaskOf).toBe('parent-1')
+  })
+
+  it('keeps a deleted side task forgettable so the sweep cannot resurrect it', async () => {
+    await svc.initialize()
+    svc.add({
+      agentId: 'fake',
+      sessionIdOnAgent: 'side-3',
+      title: 'side',
+      cwd: '/work',
+      hasMessages: true,
+      sideTaskOf: 'parent-1',
+    })
+    // User deleted the side task: the local row goes AND the durable link with
+    // it, so a failed agent-side delete cannot bring it back as a side task.
+    svc.remove('side-3')
+    svc.forgetSideTask('side-3')
+
+    svc.bulkMergeFromAgent(
+      'fake',
+      [{ sessionId: 'side-3', cwd: '/work', title: 'side', updatedAt: null }],
+      '/work',
+      undefined,
+      'worktree',
+    )
+    expect(svc.get('side-3')?.sideTaskOf).toBeUndefined()
+  })
+
+  it('moves the durable side-task link when a row is rekeyed onto a new id', async () => {
+    await svc.initialize()
+    svc.add({
+      agentId: 'fake',
+      sessionIdOnAgent: 'side-4',
+      title: 'side',
+      cwd: '/work',
+      hasMessages: false,
+      sideTaskOf: 'parent-1',
+      sideTaskQuote: 'quoted',
+    })
+    svc.rekey('side-4', 'side-4-rebuilt')
+    svc.remove('side-4-rebuilt')
+
+    svc.bulkMergeFromAgent(
+      'fake',
+      [{ sessionId: 'side-4-rebuilt', cwd: '/work', title: 'side', updatedAt: null }],
+      '/work',
+      undefined,
+      'worktree',
+    )
+    expect(svc.get('side-4-rebuilt')?.sideTaskOf).toBe('parent-1')
+    expect(svc.get('side-4-rebuilt')?.sideTaskQuote).toBe('quoted')
   })
 
   it('creates fresh rows for protocol sessions that have no local match', async () => {
