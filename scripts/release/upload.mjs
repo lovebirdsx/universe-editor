@@ -244,31 +244,38 @@ export function buildRemoteReplaceFallback({ tempPath, targetPath }) {
  * stays testable; `run` is what tests replace.
  */
 export function createExecutor({ config, sshBase, scpBase, remote, run, warn }) {
+  const dir = (config.dir ?? '').replace(/[\\/]+$/, '')
+  const isWin = isWindowsTarget(config)
+  // plan 里的远端路径一律相对 --dir；scp / mv 收到相对路径会落在远端用户 home（2026-10 发版事故）。
+  const scpPath = (path) => (dir ? `${dir}/${path}` : path)
+  // cmd 命令整条路径用 `\`（plan 里的 `/` 一并转换），scp 用 `/`（Windows 远端同样接受）。
+  const cmdPath = (path) => {
+    const win = isWin ? path.replace(/\//g, '\\') : path
+    return dir ? `${dir}${isWin ? '\\' : '/'}${win}` : win
+  }
   const ssh = (command, opts = {}) =>
     run('ssh', buildSshArgs({ baseArgs: sshBase, remote, command }), {
       timeoutMs: TIMEOUT_MS.ssh,
       ...opts,
     })
   return {
-    mkdir: (dir) =>
-      ssh(buildRemoteMkdirCommand({ dir, isWindowsTarget: isWindowsTarget(config) }), {
-        warnOnly: true,
-      }),
+    mkdir: (target) =>
+      ssh(buildRemoteMkdirCommand({ dir: target, isWindowsTarget: isWin }), { warnOnly: true }),
     probeShell: () => probeRemoteShellAnswer({ baseArgs: sshBase, remote }),
-    probeWrite: (dir) =>
-      ssh(buildRemoteProbeCommand({ dir, isWindowsTarget: isWindowsTarget(config) }), {
+    probeWrite: (target) =>
+      ssh(buildRemoteProbeCommand({ dir: target, isWindowsTarget: isWin }), {
         timeoutMs: TIMEOUT_MS.probe,
       }),
-    upload: (src, remotePath) => {
-      // scp 目标写全路径：源文件名带空格也不需要转义，且能落到子目录。
-      run('scp', [...scpBase, src, `${remote}:${remotePath}`], { timeoutMs: TIMEOUT_MS.scp })
+    upload: (src, path) => {
+      // scp 目标写绝对路径：源文件名带空格也不需要转义，且能落到子目录。
+      run('scp', [...scpBase, src, `${remote}:${scpPath(path)}`], { timeoutMs: TIMEOUT_MS.scp })
     },
     move: (tmp, targetPath) =>
       ssh(
         buildRemoteReplaceCommand({
-          tempPath: tmp,
-          targetPath,
-          isWindowsTarget: isWindowsTarget(config),
+          tempPath: cmdPath(tmp),
+          targetPath: cmdPath(targetPath),
+          isWindowsTarget: isWin,
         }),
       ),
     /**
@@ -277,11 +284,13 @@ export function createExecutor({ config, sshBase, scpBase, remote, run, warn }) 
      * would replace the real cause with a confusing "cmd: not found".
      */
     moveFallback: (tmp, targetPath, cause) => {
-      if (!isWindowsTarget(config)) {
+      if (!isWin) {
         throw cause instanceof Error ? cause : new Error(`原子替换失败：${targetPath}`)
       }
       warn(`原子替换失败，退化 copy /Y + del：${targetPath}`)
-      return ssh(buildRemoteReplaceFallback({ tempPath: tmp, targetPath }))
+      return ssh(
+        buildRemoteReplaceFallback({ tempPath: cmdPath(tmp), targetPath: cmdPath(targetPath) }),
+      )
     },
   }
 }

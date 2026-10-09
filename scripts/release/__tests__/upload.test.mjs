@@ -412,6 +412,54 @@ test('a Windows target keeps the copy /Y + del fallback', () => {
   assert.equal(warnings.length, 1)
 })
 
+// scp 目标写相对路径会落在远端用户 home，而不是 --dir（2026-10 发版事故）；plan 里的路径
+// 一律相对 --dir，executor 必须解析成绝对路径后再拼进 scp / mv。
+test('an executor resolves relative plan paths under --dir', () => {
+  const scpTargets = []
+  const sshCommands = []
+  const run = (cmd, args) => {
+    if (cmd === 'scp') scpTargets.push(String(args.at(-1)))
+    else sshCommands.push(String(args.at(-1)))
+  }
+  const executor = createExecutor({
+    config: { dir: '/srv/site', remoteOs: 'linux' },
+    sshBase: [],
+    scpBase: [],
+    remote: 'deploy@192.0.2.10',
+    run,
+    warn: () => {},
+  })
+  executor.upload('E:/r/index.json', 'notes/.ue-tmp-1-index.json')
+  executor.move('notes/.ue-tmp-1-index.json', 'notes/index.json')
+  assert.deepEqual(scpTargets, ['deploy@192.0.2.10:/srv/site/notes/.ue-tmp-1-index.json'])
+  assert.deepEqual(sshCommands, [
+    "mv -f '/srv/site/notes/.ue-tmp-1-index.json' '/srv/site/notes/index.json'",
+  ])
+})
+
+test('a Windows executor joins --dir with backslashes for cmd commands', () => {
+  const scpTargets = []
+  const sshCommands = []
+  const run = (cmd, args) => {
+    if (cmd === 'scp') scpTargets.push(String(args.at(-1)))
+    else sshCommands.push(String(args.at(-1)))
+  }
+  const executor = createExecutor({
+    config: { dir: 'D:\\site', remoteOs: 'windows' },
+    sshBase: [],
+    scpBase: [],
+    remote: 'deploy@192.0.2.10',
+    run,
+    warn: () => {},
+  })
+  executor.upload('E:/r/notes/index.html', 'notes/index.html')
+  executor.move('notes/.ue-tmp-1-latest.yml', 'latest.yml')
+  assert.deepEqual(scpTargets, ['deploy@192.0.2.10:D:\\site/notes/index.html'])
+  assert.deepEqual(sshCommands, [
+    'cmd /c move /Y "D:\\site\\notes\\.ue-tmp-1-latest.yml" "D:\\site\\latest.yml"',
+  ])
+})
+
 test('a failing payload step aborts the plan before latest.yml is touched', () => {
   const calls = []
   const executor = {
