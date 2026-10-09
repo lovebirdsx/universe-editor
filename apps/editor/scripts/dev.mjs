@@ -79,7 +79,7 @@ const remoteWatch = spawn(process.execPath, [REMOTE_SERVER_ESBUILD, '--watch', '
 // 用户已自带 `--` 段时插到其后合并两边 args（不能用 ELECTRON_CLI_ARGS 环境变量——会被覆盖）。
 const userArgs = process.argv.slice(2)
 const electronViteArgs = [ELECTRON_VITE_BIN, 'dev', ...userArgs]
-const wsl = wslElectronArgs()
+const wsl = await wslElectronArgs()
 if (wsl.active) {
   const separatorIndex = userArgs.indexOf('--')
   if (separatorIndex === -1) {
@@ -88,6 +88,8 @@ if (wsl.active) {
     electronViteArgs.splice(2 + separatorIndex + 1, 0, ...wsl.args)
   }
   console.log(`[dev] WSLg Wayland: injecting ${wsl.args.join(' ')} (${wsl.reason})`)
+} else if (wsl.degraded) {
+  console.log(`[dev] WSLg Wayland: skipped — ${wsl.reason}（回退 X11，窗口可能比宿主模糊）`)
 }
 
 const child = spawn(process.execPath, electronViteArgs, {

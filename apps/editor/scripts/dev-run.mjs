@@ -276,9 +276,11 @@ const electronExe = createRequire(import.meta.url)('electron')
 const t0 = Date.now()
 // WSLg 下注入 Wayland flags 修复 DPI 缩放（见 scripts/lib/wslElectronArgs.mjs 头注释）。
 // 注入放在 electronArgs 之前：Chromium 对重复 switch 取最后值，用户显式传参仍可覆盖。
-const wsl = wslElectronArgs()
+const wsl = await wslElectronArgs()
 if (wsl.active) {
   console.log(`[dev-run] WSLg Wayland: injecting ${wsl.args.join(' ')} (${wsl.reason})`)
+} else if (wsl.degraded) {
+  console.log(`[dev-run] WSLg Wayland: skipped — ${wsl.reason}（回退 X11，窗口可能比宿主模糊）`)
 }
 const child = spawn(electronExe, [OUT_DEV, ...(wsl.active ? wsl.args : []), ...electronArgs], {
   cwd: APP_ROOT,

@@ -158,6 +158,21 @@ sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
 持久化：写 `/etc/sysctl.d/60-unprivileged-userns.conf` 一行 `kernel.apparmor_restrict_unprivileged_userns=0`，再 `sudo sysctl --system`。
 
+### WSLg Wayland socket 丢失 → `pnpm dev` / `pnpm dev:run` 启动即崩
+
+现象：命令启动瞬间退出，日志刷 `Failed to connect to Wayland display` / `Failed to initialize Wayland platform` / `The platform failed to initialize. Exiting.`（SIGTRAP，exit 133）。判据是 `WAYLAND_DISPLAY` 有值但 `$XDG_RUNTIME_DIR/wayland-0` 不存在（`ls /run/user/$(id -u)/` 空或整个目录缺失）：WSLg 的 socket 只在 `/mnt/wslg/runtime-dir/`，靠 WSL 把它 bind 到 `/run/user/$UID`，而这个 bind 会丢——实例重启后若没有 login session，`user-runtime-dir@.service` 不跑，`/run/user/$UID` 根本不存在（`systemctl show user@$(id -u).service -p ActiveEnterTimestamp` 为空即佐证），而 WSLg 注入的环境变量仍在，照旧注入 `--ozone-platform=wayland` 就是启动即崩。当前实例内补回：
+
+```bash
+sudo mkdir -p /run/user/$(id -u)
+sudo chown "$USER" /run/user/$(id -u)
+sudo chmod 700 /run/user/$(id -u)
+sudo mount --bind /mnt/wslg/runtime-dir /run/user/$(id -u)
+```
+
+仅对当前 WSL 实例有效，重启后需重做；彻底恢复用 `wsl --shutdown` 重进（会杀掉该实例内所有进程，多 worktree 并行时注意）。不想动系统状态就用逃生口 `UNIVERSE_WSL_WAYLAND=0`（shell 或 gitignored 的 `.env.local` 均可）回退 X11，代价是 WSLg 下窗口比宿主应用小、整体偏糊。另外多 worktree 同时跑 dev 会撞单实例锁（后启动的那个静默退出、exit 0 无窗口），别误判成同一故障。
+
+[`scripts/lib/wslElectronArgs.mjs`](../../scripts/lib/wslElectronArgs.mjs) 现在注入前会 connect 探测 socket，不可达即自动回退 X11 并打印一行 `WSLg Wayland: skipped — wayland socket unreachable: ...`，不再启动即崩。
+
 ### ELECTRON_RUN_AS_NODE
 
 e2e 不受影响——`packages/e2e-harness` 的 launch 已自动 strip 该变量。但若在 WSL 里直接 `pnpm dev` 跑应用验证，agent/CI 类 shell 可能注入 `ELECTRON_RUN_AS_NODE=1`，Electron 退化成纯 node 导致 ESM 主进程崩溃，先 `unset ELECTRON_RUN_AS_NODE`。
