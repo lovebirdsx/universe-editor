@@ -650,6 +650,32 @@ describe('PerforceClient.sync — δ engine', () => {
     expect(client.status.syncProgress).toBeUndefined()
   })
 
+  // 回退只在原生接得住时才免费：含排除项的根目标没有对应 filespec，原生必然拒绝——把这次失败
+  // 交回 `undefined` 只会让调用方报范围错误、盖住 δ 给的原因。改为如实上报 δ 的失败；未进 apply
+  // 的失败不是引擎证据，不计三振。
+  it('keeps the delta failure when the scope blocks the fallback, and does not count it', async () => {
+    const lines: string[] = []
+    const client = await makeArmedClient({ log: (msg) => lines.push(msg) }, excludedScope())
+    syncReply = () => ({ code: 1, log: ['boom'] })
+
+    const res = await client.sync('#head')
+
+    expect(getCalls()).toHaveLength(1)
+    // 原生一条都没跑：这份范围表达不出它自己的排除项。
+    expect(nativeSyncCalls()).toEqual([])
+    expect(res.ok).toBe(false)
+    expect(res.cancelled).toBe(false)
+    expect(res.summary).toBeUndefined()
+    // 用户拿到的是引擎给的原因，不是盖住它的范围 toast。
+    expect(res.error?.kind).toBe('other')
+    expect(res.error?.suggestion).toContain('boom')
+    expect(client.p4deltaFallbackState).toEqual({ failures: 0, disarmed: false })
+    // 日志说清「为什么不重试」且不假称已写：未进 apply 不算已转交文件。
+    const why = lines.find((l) => l.includes('cannot take this get over'))
+    expect(why).toBeDefined()
+    expect(why).toContain('nothing was applied')
+  })
+
   // Past that point `-a` means part of the transfer may already have landed, and
   // re-running the scope under a second implementation is a different operation,
   // not a retry.

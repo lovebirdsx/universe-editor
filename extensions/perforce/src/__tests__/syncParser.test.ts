@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   classifySyncLine,
+  isForceGettableRefusal,
   parseResolveOutput,
   parseSyncApplied,
   parseSyncAppliedLine,
@@ -280,6 +281,23 @@ describe('parseSyncOutput', () => {
     })
   })
 
+  // 同一个 `allwrite noclobber` 客户端也会拒绝「删除」：目标修订把文件删了，本地却还带着未收集
+  // 改动。同族同计数器——漏计就会像 update 拒绝一样被读成「无事可做」，调用方会在用户草稿还在时
+  // 说文件已是最新。
+  it('counts a delete refusal into the same family and does not call it unrecognized', () => {
+    const out = "//depot/branch_x/gone.txt#1 - can't delete modified file X:/p4ws/main/gone.txt"
+    expect(parseSyncOutput(out, '')).toEqual({
+      applied: 0,
+      keptOpen: 0,
+      mustResolve: 0,
+      refusedModified: 1,
+      refusedOverwrite: 0,
+      handoff: 0,
+      upToDate: false,
+      unrecognized: false,
+    })
+  })
+
   it('counts refusals alongside applied lines in one run', () => {
     const out = [
       '//depot/branch_x/a.cpp#3 - updated as X:/p4ws/main/a.cpp',
@@ -322,6 +340,11 @@ describe('classifySyncLine', () => {
         "//depot/branch_x/b.uasset#1 - can't overwrite existing file X:/p4ws/main/b.uasset",
       ),
     ).toBe('refusedOverwrite')
+    expect(
+      classifySyncLine(
+        "//depot/branch_x/gone.txt#1 - can't delete modified file X:/p4ws/main/gone.txt",
+      ),
+    ).toBe('refused')
   })
 
   it('returns undefined for an unrecognized line', () => {
@@ -421,6 +444,62 @@ describe('parseSyncRefused', () => {
     )
     expect(files[0]?.clientFile).toBe('X:\\p4ws\\main\\a.json')
   })
+
+  // 同族的删除词。它的 `#rev` 是 have 修订（客户端手上已有的版本），因为删除没有可钉的目标修订；
+  // 下游靠 action 区分两类。
+  it('extracts a delete refusal with the have revision and its own action', () => {
+    expect(
+      parseSyncRefused(
+        "//depot/branch_x/gone.txt#1 - can't delete modified file X:/p4ws/main/gone.txt",
+      ),
+    ).toEqual([
+      {
+        depotFile: '//depot/branch_x/gone.txt',
+        clientFile: 'X:/p4ws/main/gone.txt',
+        action: 'not deleted',
+        rev: '1',
+      },
+    ])
+  })
+
+  it('collects update and delete refusals in one list, each with its own action', () => {
+    const files = parseSyncRefused(
+      [
+        "//depot/branch_x/a.json#69 - can't update modified file X:/p4ws/main/a.json",
+        "//depot/branch_x/gone.txt#1 - can't delete modified file X:/p4ws/main/gone.txt",
+      ].join('\n'),
+    )
+    expect(files.map((f) => [f.depotFile, f.action])).toEqual([
+      ['//depot/branch_x/a.json', 'not updated'],
+      ['//depot/branch_x/gone.txt', 'not deleted'],
+    ])
+  })
+})
+
+describe('isForceGettableRefusal', () => {
+  // `buildForceGetFilespecs` 会钉住被拒的 `#rev`，`-f` get 因此不会漂到更新的 head。对 delete
+  // 拒绝来说那个钉就是 have 修订：force `gone.txt#1` 会把旧修订拉回来、复活 depot 已删的文件，
+  // 所以这行绝不能成为逐文件目标。
+  it('refuses to make a per-file force target out of a delete refusal', () => {
+    const [deleted] = parseSyncRefused(
+      "//depot/branch_x/gone.txt#1 - can't delete modified file X:/p4ws/main/gone.txt",
+    )
+    expect(isForceGettableRefusal(deleted!)).toBe(false)
+  })
+
+  it('keeps the update refusal forceable — its #rev IS the target revision', () => {
+    const [updated] = parseSyncRefused(
+      "//depot/branch_x/a.json#69 - can't update modified file X:/p4ws/main/a.json",
+    )
+    expect(isForceGettableRefusal(updated!)).toBe(true)
+  })
+
+  it('keeps the untracked-orphan refusal forceable', () => {
+    const [orphan] = parseSyncOverwriteRefused(
+      "//depot/branch_x/b.uasset#1 - can't overwrite existing file X:/p4ws/main/b.uasset",
+    )
+    expect(isForceGettableRefusal(orphan!)).toBe(true)
+  })
 })
 
 describe('parseSyncOverwriteRefused', () => {
@@ -516,6 +595,7 @@ describe('parseSyncApplied', () => {
   it('extracts nothing from refusal / kept-open / must-resolve / up-to-date lines', () => {
     const negatives = [
       "//depot/branch_x/a.json#69 - can't update modified file X:/p4ws/main/a.json",
+      "//depot/branch_x/gone.txt#1 - can't delete modified file X:/p4ws/main/gone.txt",
       "//depot/branch_x/x.uasset#1 - can't overwrite existing file X:/p4ws/main/x.uasset",
       "//depot/branch_x/b.cpp#4 - is opened and can't be replaced",
       '//depot/branch_x/c.cpp#2 - must resolve #4 before submitting',

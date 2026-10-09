@@ -14,7 +14,8 @@
  * (`- can't overwrite existing file`, stdout, exit 0, run continues — counted by
  * {@link SyncRunSummary.refusedOverwrite}), while a `noallwrite` client aborts
  * the whole run (`can't clobber writable file`, stderr, exit 1 — classified in
- * `p4Error.ts`).
+ * `p4Error.ts`). 同族还有第二个词 `- can't delete modified file`（目标修订把文件删了、本地却仍
+ * 有未收集改动），计入同一个计数器，差别只在行上 `#rev` 的含义——见 {@link isForceGettableRefusal}。
  *
  * Verified against P4D 2024.2 (see `e2e/fixtures/PROBE-FINDINGS.md`).
  */
@@ -113,13 +114,12 @@ export interface SyncRunSummary {
   /** Files p4 reported as needing a resolve first (`must resolve`). */
   readonly mustResolve: number
   /**
-   * Files p4 skipped because they are locally modified but NOT opened — an
-   * `allwrite noclobber` client's per-file refusal (`- can't update modified
-   * file`). Measured on P4D 2024.2: **stdout with exit 0**, and the sync walks
-   * on past them. A clobber refusal (`noallwrite`) is the other shape entirely:
-   * stderr, exit 1, whole run aborted — see {@link classifySyncError}. Both
-   * exist, both must be counted; an unparsed refusal reads as "nothing to do"
-   * and the caller reports the file as already current when it is not.
+   * 本地改了但未打开、被原生逐个跳过的文件——`allwrite noclobber` 客户端的逐文件拒绝，
+   * 含两个词：`- can't update modified file`（文件落后）与 `- can't delete modified file`
+   * （目标修订删掉了它）。两者都是 **stdout、exit 0**、run 继续，都是「有未收集的本地改动」，
+   * 故共用一个计数器与 collect/diff 补救。clobber 拒绝（`noallwrite`）是另一形态：stderr、
+   * exit 1、整轮中断——见 {@link classifySyncError}。漏解析的拒绝会被读成「无事可做」，让调用
+   * 方把落后的文件报成已是最新。
    */
   readonly refusedModified: number
   /**
@@ -156,15 +156,17 @@ const APPLIED_LINE = / - (updated|added|deleted|refreshing|refreshed|updating)( 
 const KEPT_OPEN_LINE = /is opened and (can't be replaced|not being changed)/i
 const MUST_RESOLVE_LINE = / must resolve /i
 const UP_TO_DATE_LINE = /file\(s\) up-to-date/i
-// The `allwrite noclobber` per-file refusal. Does NOT collide with APPLIED_LINE:
-// that one needs `updated`/`updating`/… right after ` - `, and here the word
-// there is `can't`.
-const REFUSED_MODIFIED_LINE = / - can't update modified file /i
+// `allwrite noclobber` 客户端的逐文件拒绝，两个词：`update`（文件落后）与 `delete`（目标修订
+// 删掉了它）。不会与 APPLIED_LINE 相撞：后者要求 ` - ` 后紧跟 updated/updating/…，这里紧跟
+// 的是 `can't`。
+const REFUSED_MODIFIED_LINE = / - can't (?:update|delete) modified file /i
 // The untracked-orphan refusal. Same `allwrite noclobber` client and channel as
 // REFUSED_MODIFIED_LINE, but the file is NOT in the have table — so there is no
 // local modification to collect or diff, and it gets its own counter so the
 // caller can offer force-get instead of the modified-file remedies.
 const REFUSED_OVERWRITE_LINE = / - can't overwrite existing file /i
+// 单独的 delete 词，事后用来区分两类。
+const REFUSED_DELETE_LINE = / - can't delete modified file /i
 
 /**
  * What one line of `p4 sync` stdout means. `file(s) up-to-date.` has no kind
@@ -263,12 +265,33 @@ export function syncLineFile(line: string): string | undefined {
  * `action` is the literal shown in the preview quick-pick and the Explorer
  * badge tooltip, so it reads as prose there, not as a p4 verb.
  */
-const REFUSED_EXTRACT = /^(.*?)#(\d+) - can't update modified file (.*)$/i
+const REFUSED_EXTRACT = /^(.*?)#(\d+) - can't (?:update|delete) modified file (.*)$/i
+
+/**
+ * `#rev` 不是目标修订的那类拒绝的 action。
+ *
+ * update 拒绝带的是要拉进来的目标修订（force 补救会钉住它）；delete 拒绝没有目标修订
+ * （depot 已删），那行 `#rev` 是 have 修订——客户端手上已有的版本。
+ */
+export const REFUSED_DELETE_ACTION = 'not deleted'
+
+/**
+ * 这个被拒文件能否成为逐文件 `-f` 目标
+ * （{@link import('./p4Filespec.js').buildForceGetFilespecs}）。
+ *
+ * delete 拒绝一律否：钉 `depot#<have>` 会把旧修订拉回来，复活一个 depot 已删的文件；不带修订的
+ * depot 路径又是另一种用户没要过的 get。安全答案是不给它逐文件 force——collect/diff 仍适用，
+ * 少一行的代价很小。
+ */
+export function isForceGettableRefusal(file: SyncPreviewFile): boolean {
+  return file.action !== REFUSED_DELETE_ACTION
+}
 
 export function parseSyncRefused(stdout: string, clientRoot?: string): SyncPreviewFile[] {
   const out: SyncPreviewFile[] = []
   for (const raw of stdout.split(/\r?\n/)) {
-    const match = REFUSED_EXTRACT.exec(raw.trim())
+    const line = raw.trim()
+    const match = REFUSED_EXTRACT.exec(line)
     if (!match) continue
     const depotFile = match[1]
     const rev = match[2]
@@ -276,7 +299,12 @@ export function parseSyncRefused(stdout: string, clientRoot?: string): SyncPrevi
     const rawClientFile = match[3] ?? ''
     const clientFile =
       rawClientFile && clientRoot ? clientToLocalPath(rawClientFile, clientRoot) : rawClientFile
-    out.push({ depotFile, clientFile, action: 'not updated', rev })
+    out.push({
+      depotFile,
+      clientFile,
+      action: REFUSED_DELETE_LINE.test(line) ? REFUSED_DELETE_ACTION : 'not updated',
+      rev,
+    })
   }
   return out
 }

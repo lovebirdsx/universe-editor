@@ -5359,8 +5359,9 @@ export class PerforceClient {
    * 路径相同的 {@link SyncRunResult}；普通 get 与强制修复只差 `--force`。
    *
    * 返回 undefined = 资格不允许（spawn 前判定，交给原生），或普通 get 未进 apply 就失败（唯一能
-   * 证明没写盘的形态）。强制修复不论失败形态都绝不重跑：它没有 apply 阶段可观察，且可能已把文件
-   * 转交给原生 p4。
+   * 证明没写盘的形态）且原生确实接得住这份范围。强制修复不论失败形态都绝不重跑：它没有 apply 阶段
+   * 可观察，且可能已把文件转交给原生 p4。普通 get 未进 apply 但原生被范围挡住时也不再交回
+   * undefined——那只会让调用方用范围错误盖住 δ 的真实失败，改为如实上报。
    */
   private async _syncViaP4delta(
     engine: P4deltaService,
@@ -5471,14 +5472,28 @@ export class PerforceClient {
         this._p4deltaAppliedRunFailure(result, summarizeRun(result), 'sync') ?? 'no conclusion'
       // 只有普通 get 且未进 apply 才可改走原生：强制修复没有这一阶段可观察，任何失败形态
       // （含 exit 2）都可能在报错前已覆盖过文件，只能如实上报，绝不自动重跑。
-      if (!force && !this._p4deltaSyncStarted(result)) {
+      const canFallBack = !force && !this._p4deltaSyncStarted(result)
+      // 能回退还不够，原生也得接得住这份范围：含排除项的根目标没有对应 filespec，原生跑起来
+      // 必然失败。此时把 undefined 交回去，调用方只会再报一次范围错误，把 δ 的真实原因盖掉，
+      // 所以改为如实上报 δ 的失败。
+      const reject = canFallBack ? this._nativeGetReject(options) : undefined
+      if (canFallBack && reject === undefined) {
         // Nothing was applied — the run never reached its apply phase (or never
         // started). Falling back is free: the user gets the get they asked for,
         // one engine later, and the log says why.
         this._log?.(`[perforce] sync: p4delta did not answer — ${failure}; running this get on p4`)
         return undefined
       }
-      this._noteP4deltaSyncFailure(failure, result)
+      if (canFallBack) {
+        // 未进 apply（一个字都没写），但仍不能换实现重跑：范围不允许。这条不是引擎的过错，
+        // 不推高失败阶梯；日志说清「没写盘 + 为什么不可回退」，不假称已写。
+        this._log?.(
+          `[perforce] sync: p4delta did not answer — ${failure}; nothing was applied, but p4 ` +
+            `cannot take this get over (${reject}); reporting the engine failure`,
+        )
+      } else {
+        this._noteP4deltaSyncFailure(failure, result)
+      }
       // The synthesized result keeps every user-facing branch of the native
       // failure path: `classifySyncError` reads the engine's own error record and
       // stderr tail, so a clobber abort still offers Collect Changes / Force Get.

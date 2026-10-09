@@ -419,6 +419,34 @@ describe('toSyncOutcome', () => {
     expect(outcome?.summary.unrecognized).toBe(false)
   })
 
+  // δ 的账本只记 apply 的，所以全是拒绝的一轮收口时 `total:0`——拒绝只活在引擎的 stderr 转写上。
+  // 不读它们就会对着「落后且有未收集改动」的文件说「已是最新」，这是绝不能给用户的答案。delete
+  // 词与 update 词同族，一起计数。
+  it('does not call an all-refused run (update + delete) up to date', () => {
+    const outcome = toSyncOutcome(
+      syncRun(
+        [],
+        [
+          `//depot/main/src/a.ts#3 - can't update modified file ${CLIENT_ROOT}/src/a.ts`,
+          `//depot/main/src/gone.ts#1 - can't delete modified file ${CLIENT_ROOT}/src/gone.ts`,
+        ],
+        { total: 0, counts: {} },
+      ),
+      CLIENT_ROOT,
+      true,
+    )
+    expect(outcome?.upToDate).toBe(false)
+    expect(outcome?.summary).toMatchObject({
+      applied: 0,
+      refusedModified: 2,
+      unrecognized: false,
+    })
+    expect(outcome?.refusedFiles.map((f) => [f.depotFile, f.action])).toEqual([
+      ['//depot/main/src/a.ts', 'not updated'],
+      ['//depot/main/src/gone.ts', 'not deleted'],
+    ])
+  })
+
   // The summary claimed work and no record accounted for it — the caller must
   // log that instead of showing "0 applied" as a finished get.
   it('flags a summary whose work no record accounts for as unrecognized', () => {

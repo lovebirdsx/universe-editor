@@ -42,7 +42,7 @@ import { watchConfig } from './configWatch.js'
 import { resolveP4Command, setP4CommandTimeoutSeconds, type P4Connection } from './p4Service.js'
 import { resolveP4deltaCommand } from './p4deltaService.js'
 import { PerforceClient, SYNC_POINT_READBACK_SLOW_EXEC, type P4CacheOptions } from './client.js'
-import type { SyncPreviewFile } from './syncParser.js'
+import { isForceGettableRefusal, type SyncPreviewFile } from './syncParser.js'
 import { P4CacheDisk } from './p4CacheDisk.js'
 import { GraphSyncLedger, NO_REGRESSION } from './graphSyncLedger.js'
 import { ExternalSyncPoints, saviorConfigPath } from './graphSyncExternal.js'
@@ -288,12 +288,16 @@ export function refusedSyncButtons(state: {
   mustResolve: number
   /** False once this run already forced — a second force would refuse the same way. */
   allowForce: boolean
+  /** 逐文件 force 真正能给出的目标数（delete 拒绝带的是 have 修订，不算目标）；为 0 时
+   *  picker 会是空的，按钮就不能出现。 */
+  forceTargets: number
 }): RefusedSyncButton[] {
   const out: RefusedSyncButton[] = []
+  const canForce = state.allowForce && state.forceTargets > 0
   if (state.refusedModified > 0) {
     out.push('collect', 'diff')
-    if (state.allowForce) out.push('force')
-  } else if (state.refusedOverwrite > 0 && state.allowForce) {
+    if (canForce) out.push('force')
+  } else if (state.refusedOverwrite > 0 && canForce) {
     // An untracked orphan has no local modification to collect or diff — the
     // only remedy that moves it is a force get, so it is the only button.
     out.push('force')
@@ -323,6 +327,41 @@ async function confirmForceGet(spec: string, scopeText: string): Promise<boolean
   return confirm === BTN_FORCE
 }
 
+/** 逐文件 force picker 的一行。 */
+export interface RefusedForceRow {
+  label: string
+  description: string
+  picked: boolean
+  labelColor: string
+  depotFile: string
+  rev: string
+}
+
+/**
+ * 逐文件 force picker 的行，合并两个拒绝桶。
+ *
+ * delete 拒绝带的是 have 修订（删除没有可钉的目标修订），拼成 `depot#have` 只会按旧版本
+ * 复活一个 depot 已删的文件，所以这类行直接丢掉、不猜；collect/diff 仍覆盖它们。
+ */
+export function refusedForceRows(
+  refusedModified: readonly SyncPreviewFile[],
+  refusedOverwrite: readonly SyncPreviewFile[],
+): RefusedForceRow[] {
+  const rows = (files: readonly SyncPreviewFile[], labelColor: string): RefusedForceRow[] =>
+    files.map((f) => ({
+      label: displayName(f.depotFile),
+      description: `${f.depotFile}#${f.rev}`,
+      picked: true,
+      labelColor,
+      depotFile: f.depotFile,
+      rev: f.rev,
+    }))
+  return [
+    ...rows(refusedModified.filter(isForceGettableRefusal), 'modified'),
+    ...rows(refusedOverwrite, 'orphan'),
+  ]
+}
+
 /**
  * Per-file force-get: let the user check which refused files to overwrite,
  * then run `sync -f` scoped to exactly those files. Replaces the old
@@ -348,24 +387,7 @@ async function pickForceGetFiles(
   // `showQuickPick` returns the same item objects the caller passed in (the
   // wire round-trips an index, not the payload), so the extra `depotFile`/`rev`
   // fields ride along even though `QuickPickItem` doesn't declare them.
-  const items = [
-    ...refusedModified.map((f) => ({
-      label: displayName(f.depotFile),
-      description: `${f.depotFile}#${f.rev}`,
-      picked: true,
-      labelColor: 'modified',
-      depotFile: f.depotFile,
-      rev: f.rev,
-    })),
-    ...refusedOverwrite.map((f) => ({
-      label: displayName(f.depotFile),
-      description: `${f.depotFile}#${f.rev}`,
-      picked: true,
-      labelColor: 'orphan',
-      depotFile: f.depotFile,
-      rev: f.rev,
-    })),
-  ]
+  const items = refusedForceRows(refusedModified, refusedOverwrite)
   if (items.length === 0) return undefined
   const picked = await window.showQuickPick(items, {
     canPickMany: true,
@@ -1920,6 +1942,8 @@ export async function activate(context: ExtensionContext): Promise<void> {
       refusedOverwrite: summary.refusedOverwrite,
       mustResolve: summary.mustResolve,
       allowForce: options.force !== true,
+      // 实际能给出的 force 目标数：全是 delete 拒绝时它是 0，按钮就不出现。
+      forceTargets: refusedForceRows(res.refusedFiles, res.refusedOverwriteFiles).length,
     })
     if (kinds.length === 0) {
       await window.showInformationMessage(message)
