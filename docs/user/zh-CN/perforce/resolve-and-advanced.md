@@ -63,7 +63,7 @@ Perforce 文件同样支持行内 **Blame（溯源）**，与 Git 共用同一�
 
 ### 关于工作区范围
 
-工作区范围（daily scope）来自 **client 根目录下的 `.p4delta-scope` 范围文件**（固定就是这一个位置，不再沿上级目录链查找），由编辑器与 p4delta 引擎各自读取**同一份文件**。文件是 JSON：
+工作区范围（daily scope）来自 **client 根目录下的 `.p4delta-scope` 范围文件**（固定就是这一个位置，不再沿上级目录链查找），由编辑器与 p4delta 引擎各自读取**同一份文件**。文件是 JSON（名字不带 `.json` 后缀，编辑器按文件名识别为 JSON 并高亮）：
 
 ```json
 {

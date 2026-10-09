@@ -289,6 +289,12 @@
         "category": "Perforce"
       }
     ],
+    "languages": [
+      {
+        "id": "json",
+        "filenames": [".p4delta-scope"]
+      }
+    ],
     "submenus": [
       {
         "id": "perforce.explorerMenu",
