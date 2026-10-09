@@ -73,6 +73,12 @@ function readChildEnv(cwd: string): ChildEnvRecord {
   return JSON.parse(readFileSync(join(cwd, 'child-env.json'), 'utf8')) as ChildEnvRecord
 }
 
+// 子进程已到终态。POSIX 上正常退出报 exitCode、被信号杀死报 signalCode；Windows 上 kill 走
+// TerminateProcess 强杀，只报 signalCode（exitCode 恒为 null），故必须两者兼看。
+function isTerminated(child: ChildProcessWithoutNullStreams): boolean {
+  return child.exitCode !== null || child.signalCode !== null
+}
+
 describe('realForkConnection fixture: isolated codex home', () => {
   let cwd: string
   let parentHome: string
@@ -164,7 +170,8 @@ describe('realForkConnection fixture: isolated codex home', () => {
     if (process.platform !== 'win32') {
       expect(existsSync(join(cwd, 'child-exit.txt'))).toBe(true)
     }
-    expect(connection.child.exitCode).not.toBeNull()
+    // Windows 上孩子被强杀，「等它退出」退化为「dispose 返回时已是终态」，断言同样成立。
+    expect(isTerminated(connection.child)).toBe(true)
     expect(existsSync(home)).toBe(false)
   })
 
@@ -180,7 +187,7 @@ describe('realForkConnection fixture: isolated codex home', () => {
 
     // stub 忽略 SIGTERM：POSIX 上升级 SIGKILL；Windows 上 Node 的 SIGTERM 本就是强杀，
     // 此路径退化为直接退出，下面的断言同样成立。
-    expect(connection.child.exitCode !== null || connection.child.signalCode !== null).toBe(true)
+    expect(isTerminated(connection.child)).toBe(true)
     expect(existsSync(join(cwd, 'child-exit.txt'))).toBe(false) // 从未处理 SIGTERM
     expect(elapsed).toBeLessThan(8_000)
   })
