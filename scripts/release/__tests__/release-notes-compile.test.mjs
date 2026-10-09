@@ -705,13 +705,15 @@ test('a tree without sources skips --bundle but still refuses to fake a GitHub b
 test('collectNoteFiles orders by bytes, not by the host locale', (t) => {
   const dir = mkTempDir('ue-release-notes-order-')
   t.after(() => rmSync(dir, { recursive: true, force: true }))
-  for (const name of ['a.md', 'A.md', 'README.md', '_template.md']) {
+  // `B.md`/`a.md` disagree under both orders while staying distinct names on a
+  // case-insensitive filesystem — `A.md`/`a.md` would collapse into one file there.
+  for (const name of ['a.md', 'B.md', 'README.md', '_template.md']) {
     writeFileSync(join(dir, name), '')
   }
-  // ICU collation puts `A.md` after `a.md`; these names reach manifest.json verbatim.
+  // ICU collation puts `a.md` first, bytes put `B.md` first; these names reach manifest.json verbatim.
   assert.deepEqual(
     collectNoteFiles(dir).map((file) => file.name),
-    ['A.md', 'a.md'],
+    ['B.md', 'a.md'],
   )
 })
 

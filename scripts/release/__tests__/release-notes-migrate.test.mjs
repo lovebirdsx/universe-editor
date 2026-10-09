@@ -37,6 +37,9 @@ import {
 
 const FIXTURE = join(REPO_ROOT, 'scripts/release/__tests__/fixtures/legacy-release-notes.json')
 
+/** Archived legacy notes only — root notes for live versions sit beside the archive now. */
+const archivedNotes = () => loadNotes().filter((note) => note.file === LEGACY_ARCHIVE_REL)
+
 const entry = (overrides = {}) => ({
   version: '0.1.0',
   date: '2026-01-01',
@@ -247,11 +250,10 @@ test('the committed archive is still byte-equal to the pre-migration JSON', () =
 })
 
 test('every archived note is legacy, reviewed, and compiles as-is', () => {
-  const notes = loadNotes()
+  const notes = archivedNotes()
   assert.equal(notes.length, 88)
   assert.ok(notes.every((note) => note.legacy && note.status === 'reviewed'))
   assert.ok(notes.every((note) => !('title' in note) || note.title === ''))
-  assert.ok(notes.every((note) => note.file === LEGACY_ARCHIVE_REL))
   assert.ok(notes.every((note) => existsSync(join(NOTES_SOURCE_DIR, note.file))))
   assert.ok(notes.every((note) => note.body === '' || contentStructure(note.body).length > 0))
   assert.ok(notes.some((note) => note.body === ''))
@@ -263,7 +265,7 @@ test('the archive keeps the exact item count of the pre-migration JSON', () => {
     (sum, item) => sum + item.groups.reduce((groupSum, group) => groupSum + group.items.length, 0),
     0,
   )
-  const actualItems = loadNotes().reduce(
+  const actualItems = archivedNotes().reduce(
     (sum, note) => sum + contentStructure(note.body).filter((node) => node.kind === 'item').length,
     0,
   )
