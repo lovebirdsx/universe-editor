@@ -326,6 +326,7 @@ import {
 import {
   CancelAgentTurnAction,
   ClearAgentSessionHistoryAction,
+  CopyAgentSessionPathAction,
   FocusAgentInputAction,
   FocusNextAcpTimelineItemAction,
   FocusPreviousAcpTimelineItemAction,
@@ -828,6 +829,7 @@ registerAction2(ClearAgentSessionHistoryAction)
 registerAction2(RefreshAgentSessionsAction)
 registerAction2(RenameAgentSessionAction)
 registerAction2(RevealAgentSessionInOSAction)
+registerAction2(CopyAgentSessionPathAction)
 registerAction2(ArchiveAgentSessionAction)
 registerAction2(UnarchiveAgentSessionAction)
 registerAction2(PinAgentSessionAction)

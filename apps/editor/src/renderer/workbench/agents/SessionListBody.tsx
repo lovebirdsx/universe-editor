@@ -849,6 +849,11 @@ export function SessionListBody({
                 sessionId: entry.id,
               })
             }
+            const onCopyPath = () => {
+              void commandService.executeCommand('workbench.action.agent.copySessionPath', {
+                sessionId: entry.id,
+              })
+            }
             const onToggleArchive = isPending
               ? () => {}
               : () => {
@@ -954,6 +959,16 @@ export function SessionListBody({
                   label: localize('acp.sessions.revealTranscript', 'Open Session Location'),
                   disabled: !hasTranscript || revealUnsupported,
                   run: onReveal,
+                })
+                items.push({
+                  kind: 'item',
+                  id: 'copy-path',
+                  icon: 'copy',
+                  label: localize('acp.sessions.copyTranscriptPath', 'Copy Session File Path'),
+                  // `revealUnsupported` deliberately plays no part here: a remote
+                  // session's raw host path is exactly what this copies.
+                  disabled: !hasTranscript,
+                  run: onCopyPath,
                 })
                 items.push({ kind: 'separator' })
               }

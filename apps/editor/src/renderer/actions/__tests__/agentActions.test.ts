@@ -31,6 +31,7 @@ import {
   type IQuickPickItem,
 } from '@universe-editor/platform'
 import {
+  CopyAgentSessionPathAction,
   ResumeAgentSessionAction,
   RevealAgentSessionInOSAction,
   ScrollAcpTimelinePageDownAction,
@@ -1636,6 +1637,201 @@ describe('RevealAgentSessionInOSAction', () => {
     await run(b, { sessionId: 'sess-1' })
     expect(b.showItemInFolder).toHaveBeenCalledWith('\\\\wsl$\\ubuntu-24.04\\home\\u\\sess-1.jsonl')
     expect(b.notify).not.toHaveBeenCalled()
+  })
+})
+
+describe('CopyAgentSessionPathAction', () => {
+  // happy-dom owns this project's global navigator, and sibling describes run in
+  // the same environment — the stub is undone per test so it cannot leak.
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function stubClipboard() {
+    const writeText = vi.fn(async () => {})
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    return writeText
+  }
+
+  function makeEntry(over: Partial<AcpSessionHistoryEntry>): AcpSessionHistoryEntry {
+    return {
+      id: 'sess-1',
+      agentId: 'fake',
+      sessionIdOnAgent: 'sess-1',
+      title: 'Session 1',
+      createdAt: 0,
+      lastUsedAt: 0,
+      ...over,
+    }
+  }
+
+  function build(opts: {
+    entries: readonly AcpSessionHistoryEntry[]
+    activeSessionId?: string
+    liveSessions?: Record<string, IAcpSession>
+  }) {
+    const notify = vi.fn()
+    const resolveTranscriptPath = vi.fn(
+      async (_sessionId: string): Promise<string | undefined> => undefined,
+    )
+    const activeSession = opts.activeSessionId
+      ? ({ id: opts.activeSessionId } as IAcpSession)
+      : undefined
+
+    const sessions = {
+      _serviceBrand: undefined,
+      activeSession: observableValue<IAcpSession | undefined>('test.active', activeSession),
+      getById: (id: string) => opts.liveSessions?.[id],
+      resolveTranscriptPath,
+    } as unknown as IAcpSessionService
+    const history = {
+      _serviceBrand: undefined,
+      get: (id: string) => opts.entries.find((e) => e.id === id),
+    } as unknown as IAcpSessionHistoryService
+    const editor = {
+      _serviceBrand: undefined,
+      activeEditor: observableValue<unknown>('test.activeEditor', undefined),
+    } as unknown as IEditorService
+    const notification = { _serviceBrand: undefined, notify } as unknown as INotificationService
+
+    const services = new ServiceCollection()
+    services.set(IAcpSessionService, sessions)
+    services.set(IAcpSessionHistoryService, history)
+    services.set(IEditorService, editor)
+    services.set(INotificationService, notification)
+    const inst = new InstantiationService(services)
+    return { inst, notify, resolveTranscriptPath }
+  }
+
+  async function run(
+    b: { inst: InstantiationService },
+    arg?: { sessionId?: unknown; resource?: unknown },
+  ): Promise<void> {
+    await b.inst.invokeFunction((accessor) => new CopyAgentSessionPathAction().run(accessor, arg))
+  }
+
+  it('is available from the chat-area context menu even in a remote workspace', () => {
+    // The whole point of the command is the remote case: unlike reveal, a remote
+    // workspace must not hide or disable it. Seeding the two context keys reveal
+    // is gated on proves the copy slot really ignores them.
+    const dispose = registerAction2(CopyAgentSessionPathAction)
+    const revealDispose = registerAction2(RevealAgentSessionInOSAction)
+    const ctx = new ContextKeyService().createScoped({
+      isRemoteWorkspace: true,
+      remoteRevealInOsSupported: false,
+    })
+    try {
+      const items = MenuRegistry.getMenuItems(MenuId.AcpChatContext, ctx).filter(
+        (item) => 'command' in item,
+      )
+      const ids = items.map((item) => ('command' in item ? item.command : ''))
+      expect(ids).toContain(CopyAgentSessionPathAction.ID)
+      expect(ids).not.toContain(RevealAgentSessionInOSAction.ID)
+    } finally {
+      ctx.dispose()
+      revealDispose.dispose()
+      dispose.dispose()
+    }
+  })
+
+  it('copies the transcript path for the given session id', async () => {
+    const writeText = stubClipboard()
+    const entry = makeEntry({ transcriptPath: '/home/u/.claude/projects/x/sess-1.jsonl' })
+    const b = build({ entries: [entry] })
+    await run(b, { sessionId: 'sess-1' })
+    expect(writeText).toHaveBeenCalledWith('/home/u/.claude/projects/x/sess-1.jsonl')
+    expect(b.notify).not.toHaveBeenCalled()
+    // Cached path wins — no on-demand session/list roundtrip.
+    expect(b.resolveTranscriptPath).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the active session when no arg is given', async () => {
+    const writeText = stubClipboard()
+    const entry = makeEntry({ transcriptPath: '/p/sess-1.jsonl' })
+    const b = build({ entries: [entry], activeSessionId: 'sess-1' })
+    await run(b)
+    expect(writeText).toHaveBeenCalledWith('/p/sess-1.jsonl')
+  })
+
+  it('resolves the transcript path on demand when the history row has none', async () => {
+    const writeText = stubClipboard()
+    const entry = makeEntry({})
+    const b = build({ entries: [entry] })
+    b.resolveTranscriptPath.mockResolvedValue('/live/sess-1.jsonl')
+    await run(b, { sessionId: 'sess-1' })
+    expect(b.resolveTranscriptPath).toHaveBeenCalledWith('sess-1')
+    expect(writeText).toHaveBeenCalledWith('/live/sess-1.jsonl')
+    expect(b.notify).not.toHaveBeenCalled()
+  })
+
+  it('copies a WSL session raw host path instead of the UNC mapping', async () => {
+    // Deliberate asymmetry with reveal: this path is meant to be pasted into a
+    // remote shell, so the `\\wsl$\` translation would be wrong here.
+    const writeText = stubClipboard()
+    const entry = makeEntry({
+      authority: 'wsl+ubuntu-24.04',
+      transcriptPath: '/home/u/sess-1.jsonl',
+    })
+    const b = build({ entries: [entry] })
+    await run(b, { sessionId: 'sess-1' })
+    expect(writeText).toHaveBeenCalledWith('/home/u/sess-1.jsonl')
+    expect(writeText).not.toHaveBeenCalledWith('\\\\wsl$\\ubuntu-24.04\\home\\u\\sess-1.jsonl')
+    expect(b.notify).not.toHaveBeenCalled()
+  })
+
+  it('copies a non-WSL remote path instead of notifying', async () => {
+    const writeText = stubClipboard()
+    const entry = makeEntry({
+      authority: 'ssh-remote+host',
+      transcriptPath: '/home/u/sess-1.jsonl',
+    })
+    const b = build({ entries: [entry] })
+    await run(b, { sessionId: 'sess-1' })
+    expect(writeText).toHaveBeenCalledWith('/home/u/sess-1.jsonl')
+    expect(b.notify).not.toHaveBeenCalled()
+  })
+
+  it('notifies and leaves the clipboard alone when no path resolves', async () => {
+    const writeText = stubClipboard()
+    const entry = makeEntry({})
+    const b = build({ entries: [entry] })
+    await run(b, { sessionId: 'sess-1' })
+    expect(b.resolveTranscriptPath).toHaveBeenCalledWith('sess-1')
+    expect(b.notify).toHaveBeenCalledTimes(1)
+    // Clearing the clipboard on a failed lookup would destroy the user's data.
+    expect(writeText).not.toHaveBeenCalled()
+  })
+
+  it('is a no-op when no session id resolves', async () => {
+    const writeText = stubClipboard()
+    const b = build({ entries: [] })
+    await run(b)
+    expect(writeText).not.toHaveBeenCalled()
+    expect(b.notify).not.toHaveBeenCalled()
+  })
+
+  it('resolves the session from the editor tab context menu resource arg', async () => {
+    const writeText = stubClipboard()
+    const entry = makeEntry({ transcriptPath: '/p/sess-1.jsonl' })
+    const b = build({ entries: [entry] })
+    await run(b, { resource: { scheme: 'universe', path: '/acp/session/sess-1' } })
+    expect(writeText).toHaveBeenCalledWith('/p/sess-1.jsonl')
+  })
+
+  it('maps a live session local id to the durable agent id before hitting history', async () => {
+    const writeText = stubClipboard()
+    const entry = makeEntry({
+      id: 'agent-1',
+      sessionIdOnAgent: 'agent-1',
+      transcriptPath: '/p/agent-1.jsonl',
+    })
+    const live = {
+      id: 'local-1',
+      sessionIdOnAgent: observableValue<string | undefined>('test.onAgent', 'agent-1'),
+    } as unknown as IAcpSession
+    const b = build({ entries: [entry], liveSessions: { 'local-1': live } })
+    await run(b, { resource: { scheme: 'universe', path: '/acp/session/local-1' } })
+    expect(writeText).toHaveBeenCalledWith('/p/agent-1.jsonl')
   })
 })
 

@@ -66,3 +66,5 @@ CLI 从 transcript 恢复模型时拿到的是 `claude-fable-5` 而非用户选�
 ## "Open Session Location"（列表右键）依赖 fork 上报 `_meta.transcriptPath`
 
 链路 = fork `session/list` 响应 `SessionInfo._meta.transcriptPath` → `acpSessionRestoreCoordinator.toBulkMergeInfo`（agent 无关通用提取）→ `acpSessionHistory` → `RevealAgentSessionInOSAction`（`host.showItemInFolder`）。claude fork 用 `findTranscriptFile` 查 `~/.claude/projects/...`；codex fork 直接映射 app-server `thread/list` 返回的 `Thread.path`（rollout JSONL，ephemeral 线程为 null 则省略）。**运行中 session 的 history 行在下次 hydrate 前没有 transcriptPath**：菜单项对 live session 保持可用，`RevealAgentSessionInOSAction` 缓存未命中时走 facade `resolveTranscriptPath` → coordinator `fetchTranscriptPath` 按需发一次 `session/list`（capability 门控、silent 连接、游标翻页）解析并经 `setHistoryTranscriptPath` 写回 history，解析不到才提示无 transcript。仅当行既非 live 又无缓存路径时菜单项才灰掉 = 其 fork 没上报，编辑器侧无需改。
+
+同一份 `transcriptPath` 也是 `CopyAgentSessionPathAction`（"复制会话文件路径"）的数据源，两者共用 `resolveSessionTranscriptPath`。差异只在拿到路径之后：copy 复制**原始路径**、不做 WSL UNC 映射、菜单不按 authority 置灰（远端会话复制的就是宿主路径，正适合粘进远端 shell），因此它只快照 `IAcpSessionService / IAcpSessionHistoryService / IEditorService / INotificationService`，不碰 `IHostService`。

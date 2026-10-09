@@ -492,6 +492,46 @@ describe('SessionListBody — archive / pin', () => {
     })
   })
 
+  it('context menu offers Copy Session File Path and dispatches the command', () => {
+    const { history, executeCommand } = harness
+    addEntry(history, 'a', 'alpha', 1000)
+    act(() => {
+      history.setHistoryTranscriptPath('a', '/home/u/.claude/projects/x/a.jsonl')
+    })
+    fireEvent.contextMenu(screen.getByTestId('session-row-a'), { detail: 1 })
+    expect(screen.getByText('Open Session Location')).toBeTruthy()
+    fireEvent.click(screen.getByText('Copy Session File Path'))
+    expect(executeCommand).toHaveBeenCalledWith('workbench.action.agent.copySessionPath', {
+      sessionId: 'a',
+    })
+  })
+
+  it('keeps Copy Session File Path enabled on a remote row where reveal is disabled', () => {
+    const { history } = harness
+    // A non-WSL authority: without a local path, reveal greys out while the raw
+    // host path stays copyable. (The harness registers no IHostService, so the
+    // WSL branch would dereference an undefined service.)
+    addEntry(history, 'r', 'remote', 1000, 'fake', '/work', { authority: 'ssh-remote+host' })
+    act(() => {
+      history.setHistoryTranscriptPath('r', '/home/u/sess.jsonl')
+    })
+    fireEvent.contextMenu(screen.getByTestId('session-row-r'), { detail: 1 })
+    const copy = screen.getByRole('menuitem', { name: 'Copy Session File Path' })
+    const reveal = screen.getByRole('menuitem', { name: 'Open Session Location' })
+    expect(copy.getAttribute('aria-disabled')).toBeNull()
+    expect(reveal.getAttribute('aria-disabled')).toBe('true')
+  })
+
+  it('disables Copy Session File Path for a history row with no transcript', () => {
+    const { history, executeCommand } = harness
+    addEntry(history, 'a', 'alpha', 1000)
+    fireEvent.contextMenu(screen.getByTestId('session-row-a'), { detail: 1 })
+    const copy = screen.getByRole('menuitem', { name: 'Copy Session File Path' })
+    expect(copy.getAttribute('aria-disabled')).toBe('true')
+    fireEvent.click(copy)
+    expect(executeCommand).not.toHaveBeenCalled()
+  })
+
   it('opens the row menu with the ContextMenu key, already highlighted and drivable', async () => {
     const { history } = harness
     addEntry(history, 'a', 'alpha', 1000)

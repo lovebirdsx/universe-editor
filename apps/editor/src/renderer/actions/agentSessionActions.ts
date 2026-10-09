@@ -816,11 +816,8 @@ export class RevealAgentSessionInOSAction extends Action2 {
     const durableId = durableSessionId(sessions, sessionId)
 
     const entry = history.get(durableId)
-    let transcriptPath = entry?.transcriptPath
-    if (transcriptPath === undefined || transcriptPath.length === 0) {
-      transcriptPath = await sessions.resolveTranscriptPath(durableId)
-    }
-    if (transcriptPath === undefined || transcriptPath.length === 0) {
+    const transcriptPath = await resolveSessionTranscriptPath(sessions, history, durableId)
+    if (transcriptPath === undefined) {
       notifications.notify({
         severity: Severity.Info,
         message: localize(
@@ -866,6 +863,84 @@ export class RevealAgentSessionInOSAction extends Action2 {
         'The file is on a remote host and cannot be opened in the local file manager.',
       ),
     })
+  }
+}
+
+/**
+ * Copy a session's transcript file path to the clipboard. Target resolution and
+ * path lookup are identical to {@link RevealAgentSessionInOSAction}: explicit
+ * `{ sessionId }` arg (session list / chat-area context menu), the editor-tab
+ * `{ resource }` arg, the active session editor, else the active session.
+ *
+ * Unlike reveal, the payload is the path exactly as the agent reported it — no
+ * platform/authority mapping. A remote session's path is meant to be pasted into
+ * a remote shell or another editor, so the `\\wsl$\` translation reveal applies
+ * would be actively wrong here; that is also why neither menu slot is gated on
+ * the workspace being remote.
+ */
+export class CopyAgentSessionPathAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.copySessionPath'
+  constructor() {
+    super({
+      id: CopyAgentSessionPathAction.ID,
+      icon: 'copy',
+      title: localize2('action.agent.copySessionPath', 'Copy Session Transcript Path'),
+      category: CATEGORY,
+      menu: [
+        {
+          id: MenuId.AcpChatContext,
+          group: ACP_CHAT_SESSION_GROUP,
+          order: 5,
+          // Match the session list's context menu label for the same action.
+          title: localize2('acp.sessions.copyTranscriptPath', 'Copy Session File Path'),
+        },
+        {
+          id: MenuId.EditorTabContext,
+          when: `activeEditorType == '${AcpSessionEditorInput.TYPE_ID}'`,
+          group: '1_session',
+          order: 3,
+          title: localize2('acp.sessions.copyTranscriptPath', 'Copy Session File Path'),
+        },
+      ],
+      f1: true,
+    })
+  }
+  override async run(
+    accessor: ServicesAccessor,
+    arg?: { sessionId?: unknown; resource?: unknown },
+  ): Promise<void> {
+    // Snapshot every service synchronously — the accessor is invalid after the
+    // first await (the on-demand transcript lookup and the clipboard write).
+    // No IHostService / IWorkspaceService / ILoggerService: this command never
+    // touches the local file manager, which is the whole point of its remote
+    // behaviour.
+    const sessions = accessor.get(IAcpSessionService)
+    const history = accessor.get(IAcpSessionHistoryService)
+    const editor = accessor.get(IEditorService)
+    const notifications = accessor.get(INotificationService)
+
+    const sessionId = resolveSessionTargetId(arg, editor, sessions)
+    if (sessionId === undefined) return
+
+    // History rows are keyed by the agent-issued durable id; a live session
+    // created in this window is addressed by its local id, so map it first.
+    const durableId = durableSessionId(sessions, sessionId)
+
+    const transcriptPath = await resolveSessionTranscriptPath(sessions, history, durableId)
+    if (transcriptPath === undefined) {
+      // The clipboard is deliberately left untouched — clearing it on a failed
+      // lookup would silently destroy whatever the user copied before.
+      notifications.notify({
+        severity: Severity.Info,
+        message: localize(
+          'agent.copySessionPath.noTranscript',
+          'This session has no transcript file to copy.',
+        ),
+      })
+      return
+    }
+
+    await navigator.clipboard.writeText(transcriptPath)
   }
 }
 
@@ -1012,6 +1087,25 @@ function resolveSessionTargetId(
  */
 function durableSessionId(sessions: IAcpSessionService, sessionId: string): string {
   return sessions.getById(sessionId)?.sessionIdOnAgent.get() ?? sessionId
+}
+
+/**
+ * The transcript file path for a session addressed by its *durable* id: the
+ * history row's cached path when it has one, else one on-demand `session/list`
+ * round-trip through the owning agent (a session created during this window's
+ * lifetime has no cached path until the next hydrate sweep). `undefined` means
+ * no path — never an empty string. Callers must pass already-snapshotted
+ * services: this awaits, so it can never be handed a ServicesAccessor.
+ */
+async function resolveSessionTranscriptPath(
+  sessions: IAcpSessionService,
+  history: IAcpSessionHistoryService,
+  durableId: string,
+): Promise<string | undefined> {
+  const cached = history.get(durableId)?.transcriptPath
+  if (cached !== undefined && cached.length > 0) return cached
+  const resolved = await sessions.resolveTranscriptPath(durableId)
+  return resolved !== undefined && resolved.length > 0 ? resolved : undefined
 }
 
 function resolveEditorGroup(

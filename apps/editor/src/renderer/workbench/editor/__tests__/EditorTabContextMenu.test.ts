@@ -31,6 +31,7 @@ import {
   UnpinEditorAction,
 } from '../../../actions/editorActions.js'
 import {
+  CopyAgentSessionPathAction,
   RenameAgentSessionAction,
   RevealAgentSessionInOSAction,
 } from '../../../actions/agentSessionActions.js'
@@ -49,6 +50,7 @@ function register(): void {
     registerAction2(ReopenWithAction),
     registerAction2(RenameAgentSessionAction),
     registerAction2(RevealAgentSessionInOSAction),
+    registerAction2(CopyAgentSessionPathAction),
     // "Reopen With…" is registered as a bare MenuRegistry item (not via the
     // ReopenWithAction's own menu), mirroring BuiltInEditorBindingsContribution.
     MenuRegistry.addMenuItem(MenuId.EditorTabContext, {
@@ -134,7 +136,22 @@ describe('EditorTabContext menu — per-tab gating', () => {
     expect(commands).toContain(CopyEditorNameAction.ID)
     expect(commands).toContain(RenameAgentSessionAction.ID)
     expect(commands).toContain(RevealAgentSessionInOSAction.ID)
+    expect(commands).toContain(CopyAgentSessionPathAction.ID)
     for (const id of PATH_COMMANDS) expect(commands).not.toContain(id)
+  })
+
+  it('a session tab keeps Copy Session File Path where a remote workspace hides reveal', () => {
+    // Copying the path stays useful on a remote host — it is a string, not a
+    // local file manager entry — so its slot must not inherit reveal's gate.
+    register()
+    const commands = menuCommandsFor({
+      resourceScheme: 'universe',
+      activeEditorType: AcpSessionEditorInput.TYPE_ID,
+      isRemoteWorkspace: true,
+      remoteRevealInOsSupported: false,
+    })
+    expect(commands).toContain(CopyAgentSessionPathAction.ID)
+    expect(commands).not.toContain(RevealAgentSessionInOSAction.ID)
   })
 
   it('a remote-ssh tab shows Copy Name and the filesystem path commands, not OS reveal nor Reopen With', () => {
@@ -150,6 +167,7 @@ describe('EditorTabContext menu — per-tab gating', () => {
     register()
     const commands = menuCommandsFor({ resourceScheme: 'file', activeEditorType: 'file' })
     expect(commands).not.toContain(RevealAgentSessionInOSAction.ID)
+    expect(commands).not.toContain(CopyAgentSessionPathAction.ID)
   })
 })
 
