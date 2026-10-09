@@ -37,7 +37,7 @@ Universe Editor 通过 **electron-updater 的 generic provider** 从一个**静�
 | `bundle.mjs` | 打包脚本（`pnpm server:bundle`）：把 server + 发布依赖（adm-zip/zod/extension-packaging）esbuild 成单文件产物 `dist/server.js`。**部署跑的是这个产物**（服务器上无 node_modules）。加 `-- --env <mode>` 时按开发机 `.env.<mode>` 一并生成 `dist/server.env`，让首装即带配置。 |
 | `deploy.mjs` | 一键部署脚本（`pnpm server:deploy -- --env prod`）：比对远端 `SERVER_VERSION` → 交互确认 → 打包 → scp 上传 → 远端安装重启（Ubuntu=免密 sudo + systemctl，Windows=schtasks）→ 轮询健康检查断言新版本。按 `--app-dir` 是否为 Windows 路径自动识别远端形态，详见[第六节](#六更新服务器程序改了-servermjs-后)。 |
 | `setupRemote.mjs` | 远程首装/运维脚本（`pnpm server:setup -- --env prod`）：不登服务器，本地一条命令完成首次安装——打包 → tar+scp 上传 → 远端解包 → 提权首装（Linux 本地星号回显读 sudo 密码、经 ssh stdin 喂远端 `sudo -S`；Windows 管理员 ssh 会话自带提升令牌）→ 健康检查；`--action status/restart/uninstall` 直发原生命令做日常运维。详见[第一节方式 B](#方式-b本地一条命令远程首装推荐)。 |
-| `download-page/index.html` | 面向用户的静态下载页。纯前端，运行时读同目录 `latest.yml` / `release-notes.json`，展示最新版本、发布日期与更新日志，并提供下载按钮；卡片右上角以图标入口链接到注册页与审批管理页（悬停/聚焦显示说明，相对路径 `gallery/register` / `gallery/admin`）。它是发布目录的数据文件（不进 bundle）：首装由 `setup` 落地到 `<root>/index.html`，之后由 `server:deploy` 随 `SERVER_VERSION` 一并同步。 |
+| `download-page/index.html` | 面向用户的静态下载页。纯前端，运行时读同目录 `latest.yml`（版本与安装包），更新说明按 `notes/index.json` → `release-notes.json` → 隐藏该区块 逐级降级（前者是编译产物，带每版静态页路径；后者只有元数据）。卡片右上角以图标入口链接到注册页与审批管理页（悬停/聚焦显示说明，相对路径 `gallery/register` / `gallery/admin`）。它是发布目录的数据文件（不进 bundle）：首装由 `setup` 落地到 `<root>/index.html`，之后由 `server:deploy` 随 `SERVER_VERSION` 一并同步。 |
 | `pageStyles.mjs` | `registerPage.mjs` / `adminPage.mjs` 共享的深色基础样式（与下载页同一套设计令牌；下载页是静态 HTML 无法 import，令牌在两处各存一份，改主题时两边同步）。 |
 | `setup.mjs` | 跨平台部署逻辑（按平台分支）：拷 `dist/server.js` / 写 `server.env` / 注册服务 / 自动生成缺失的签名私钥与管理令牌 / 防火墙 / 启停 / 卸载。 |
 | `serverEnv.mjs` | 服务端运行时配置（`UE_SERVER_*`）的单一事实源：白名单、默认值派生、`server.env` 读写。`setup.mjs` 与 `deploy.mjs` 共用。 |
@@ -191,7 +191,7 @@ Permission denied。
 服务端在 publish/unpublish 时自写的市场文件（`registry.json`、`assets/**`）会主动保持组可写（文件 0664、
 目录 02775 setgid），不会再被服务进程用 umask 022 重建出的 644 把 scp 发布通道锁死。**旧部署升级**需一次性
 修复现存权限：带 `--deploy-user` 重跑 `pnpm server:setup`（install 幂等，会重新 `chmod -R g+w` 覆盖旧 644），
-并 `pnpm server:deploy` 让 SERVER_VERSION 8 生效。
+并 `pnpm server:deploy` 让新版服务端生效。
 
 ### 首装会自动生成的机密
 
@@ -258,9 +258,15 @@ pnpm release:upload --host <IP> --user deploy --dir /srv/universe-editor
 
 客户端下次启动检查（或命令面板 **Check for Updates**）即从 `…/latest.yml` 发现新版本。
 
-`release:upload` 会一并同步**更新日志 `release-notes.json`** 到发布目录；**下载页 `index.html`**
+`release:upload` 会一并同步**版本介绍发布包**：`release-notes.json`（应用内更新说明）与 `notes/`
+（`index.json` / `index.html` / 每版 `v<version>.html`，供下载页展示与「全部版本介绍」）；**下载页 `index.html`**
 则由 `server:deploy` 同步（随 `SERVER_VERSION` 走，首装时 `setup` 已落地）：
 浏览器访问 `http://<IP>/universe-editor/`（即 `--base` 路径）即可看到下载页，一键下载最新版。
+
+> **顺序**：下载页数据源与展示逻辑变化时，先 `pnpm server:deploy` 让新页面生效，再发版（`release:upload`）。
+> 反过来也不致命（老页面读不到 `notes/` 会自动降级到 `release-notes.json`），但新介绍页会晚一步上线。
+> 本次改动把 `SERVER_VERSION` 提到 10——沿用旧 `SERVER_VERSION` 的部署会被 `server:deploy` 以「远端版本
+> 相同」拦下，因此必须先部署服务端再发版。
 
 > **历史版本不要删**：保留旧 `.exe` / `.blockmap`，electron-updater 的差分下载需要它们，也方便回滚。
 
@@ -276,10 +282,14 @@ pnpm server:serve                  # = node scripts/server/server.mjs --root app
 
 配合未打包的 dev 构建，可走完 检查 → 下载 → 重启安装 全链路。
 
-本地预览提示：pnpm server:serve 默认指向 apps/editor/release/（没有 index.html）。想本地看页面效果，把 scripts/server/download-page/index.html 和 apps/editor/resources/release-notes.json 拷进 release/ 目录再起服务即可（生产上 index.html 由 server:deploy 同步、release-notes.json 由 release:upload 同步，无此问题）。
+本地预览提示：pnpm server:serve 默认指向 apps/editor/release/（没有 index.html）。想本地看页面效果，把下载页与
+release notes 编译快照拷进 release/ 目录再起服务即可（生产上 index.html 由 server:deploy 同步、
+其余由 release:upload 同步，无此问题）。`apps/editor/release/` 已在 `.gitignore` 里，拷进去不会误提交。
+
 ```bash
+pnpm release:notes -- --version "$(node -p "require('./apps/editor/package.json').version")"   # 生成快照（含 notes/）
+cp -r apps/editor/.release-notes-build/. apps/editor/release/
 cp scripts/server/download-page/index.html apps/editor/release/
-cp apps/editor/resources/release-notes.json apps/editor/release/
 ```
 
 ---
@@ -433,9 +443,9 @@ Copy-Item scripts\server\dist\server.js C:\universe-editor\app\server.mjs -Force
 > Windows 侧 `End`+`Run`），但它还会重写 `server.env` 与服务定义；只改了 `server.mjs`、
 > 没动配置时，上面这套「拷文件 + 重启」最干净，不动 unit、防火墙与目录权限。
 >
-> 若改动**新增了发布目录里的静态资源**（如下载页 `index.html`、`release-notes.json`），重启 server 只是让它
-> 能服务这些文件；文件本身要进发布目录——`index.html` 下次 `server:deploy` 随版本同步（须 bump
-> `SERVER_VERSION`），`release-notes.json` 下次 `release:upload` 同步；想立刻生效均可手动 `scp` 一次。
+> 若改动**新增了发布目录里的静态资源**（如下载页 `index.html`、`release-notes.json`、`notes/**`），重启 server
+> 只是让它能服务这些文件；文件本身要进发布目录——`index.html` 下次 `server:deploy` 随版本同步（须 bump
+> `SERVER_VERSION`），其余下次 `release:upload` 同步；想立刻生效均可手动 `scp` 一次。
 
 手动方式完成后用下一节的 `curl` 验证（`server:deploy` 已内置健康检查，无需再验）。
 

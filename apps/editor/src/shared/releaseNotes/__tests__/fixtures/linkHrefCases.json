@@ -1,0 +1,112 @@
+{
+  "schema": 1,
+  "comment": "Shared link-classification cases. Asserted by the build-time compiler (scripts/release/__tests__/release-notes-source.test.mjs) and the renderer guard (apps/editor/src/shared/releaseNotes/__tests__/linkPolicy.test.ts) — both must classify every case identically.",
+  "cases": [
+    { "href": "#overview", "expect": { "kind": "anchor", "anchor": "overview" } },
+    { "href": "#本次重点", "expect": { "kind": "anchor", "anchor": "本次重点" } },
+    { "href": "#", "expect": { "kind": "invalid", "reason": "空锚点" } },
+    { "href": "", "expect": { "kind": "invalid", "reason": "空链接" } },
+    { "href": "   ", "expect": { "kind": "invalid", "reason": "空链接" } },
+    {
+      "href": "doc:getting-started/interface-tour",
+      "expect": { "kind": "doc", "docId": "getting-started/interface-tour" }
+    },
+    { "href": "doc:ai/agent/overview", "expect": { "kind": "doc", "docId": "ai/agent/overview" } },
+    {
+      "href": "doc:../secrets",
+      "expect": { "kind": "invalid", "reason": "非法的文档 id：../secrets" }
+    },
+    {
+      "href": "doc:/etc/passwd",
+      "expect": { "kind": "invalid", "reason": "非法的文档 id：/etc/passwd" }
+    },
+    { "href": "doc:_draft", "expect": { "kind": "invalid", "reason": "非法的文档 id：_draft" } },
+    { "href": "doc:a/./b", "expect": { "kind": "invalid", "reason": "非法的文档 id：a/./b" } },
+    { "href": "doc:a/../b", "expect": { "kind": "invalid", "reason": "非法的文档 id：a/../b" } },
+    { "href": "doc:a//b", "expect": { "kind": "invalid", "reason": "非法的文档 id：a//b" } },
+    { "href": "doc:a\\b", "expect": { "kind": "invalid", "reason": "非法的文档 id：a\\b" } },
+    { "href": "doc:a/", "expect": { "kind": "invalid", "reason": "非法的文档 id：a/" } },
+    { "href": "doc:a/%2e%2e/b", "expect": { "kind": "invalid", "reason": "非法的文档 id：a/%2e%2e/b" } },
+    { "href": "doc:", "expect": { "kind": "invalid", "reason": "非法的文档 id：" } },
+    {
+      "href": "command:workbench.action.openSettings",
+      "expect": { "kind": "command", "commandId": "workbench.action.openSettings" }
+    },
+    {
+      "href": "command:workbench.action.selectTheme",
+      "expect": { "kind": "command", "commandId": "workbench.action.selectTheme" }
+    },
+    {
+      "href": "command:workbench.action.terminal.new",
+      "expect": {
+        "kind": "invalid",
+        "reason": "命令不在允许清单内：workbench.action.terminal.new"
+      }
+    },
+    {
+      "href": "command:workbench.action.files.delete",
+      "expect": {
+        "kind": "invalid",
+        "reason": "命令不在允许清单内：workbench.action.files.delete"
+      }
+    },
+    {
+      "href": "command:workbench.action.openSettings --flag",
+      "expect": {
+        "kind": "invalid",
+        "reason": "非法的命令 id：workbench.action.openSettings --flag"
+      }
+    },
+    {
+      "href": "https://example.com/releases",
+      "expect": { "kind": "external", "url": "https://example.com/releases" }
+    },
+    { "href": "http://192.0.2.10:8080/docs", "expect": { "kind": "external", "url": "http://192.0.2.10:8080/docs" } },
+    { "href": "file:///etc/passwd", "expect": { "kind": "invalid", "reason": "不允许的链接协议：file:" } },
+    {
+      "href": "javascript:alert(1)",
+      "expect": { "kind": "invalid", "reason": "不允许的链接协议：javascript:" }
+    },
+    {
+      "href": "data:text/html,<b>x</b>",
+      "expect": { "kind": "invalid", "reason": "不允许的链接协议：data:" }
+    },
+    {
+      "href": "mailto:dev@example.com",
+      "expect": { "kind": "invalid", "reason": "不允许的链接协议：mailto:" }
+    },
+    {
+      "href": "vscode://file/x",
+      "expect": { "kind": "invalid", "reason": "不允许的链接协议：vscode:" }
+    },
+    {
+      "href": "//evil.example.com/x",
+      "expect": {
+        "kind": "invalid",
+        "reason": "相对路径链接不受支持（请用 doc: 指向文档）：//evil.example.com/x"
+      }
+    },
+    {
+      "href": "getting-started/interface-tour.md",
+      "expect": {
+        "kind": "invalid",
+        "reason": "相对路径链接不受支持（请用 doc: 指向文档）：getting-started/interface-tour.md"
+      }
+    },
+    {
+      "href": "./v0.14.9.html",
+      "expect": {
+        "kind": "invalid",
+        "reason": "相对路径链接不受支持（请用 doc: 指向文档）：./v0.14.9.html"
+      }
+    },
+    {
+      "href": "https://",
+      "expect": { "kind": "invalid", "reason": "非法链接：https://" }
+    },
+    {
+      "href": "DOC:getting-started/interface-tour",
+      "expect": { "kind": "invalid", "reason": "不允许的链接协议：doc:" }
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "publicRepoBase": "https://github.com/lovebirdsx/universe-editor",
+  "docScheme": "doc",
+  "commandScheme": "command",
+  "allowedExternalSchemes": ["http", "https"],
+  "docsRoot": "docs/user",
+  "docsLocale": "zh-CN",
+  "docBlobPathTemplate": "/blob/v{version}/docs/user/{locale}/{docId}.md",
+  "docIdPattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$",
+  "maxDocIdLength": 200,
+  "allowedCommandIds": [
+    "workbench.action.openSettings",
+    "workbench.action.openSettingsJson",
+    "workbench.action.openGlobalKeybindings",
+    "workbench.action.openKeybindingsJson",
+    "workbench.action.openWorkspaceSettings",
+    "workbench.action.selectTheme",
+    "workbench.action.configureDisplayLanguage"
+  ]
+}

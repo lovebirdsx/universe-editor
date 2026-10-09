@@ -19,7 +19,7 @@ import { ReleaseNotesInput } from '../services/editor/ReleaseNotesInput.js'
 import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
 import {
   compareVersions,
-  renderReleaseNotesMarkdown,
+  notesUpToVersion,
   selectNotesInRange,
 } from '../services/releaseNotes/releaseNotes.js'
 
@@ -47,7 +47,8 @@ export class ReleaseNotesContribution extends Disposable implements IWorkbenchCo
   }
 
   private async _showIfUpgraded(): Promise<void> {
-    const { currentVersion, notes } = await this._releaseNotes.getReleaseNotes()
+    const { currentVersion, notes: allNotes } = await this._releaseNotes.getReleaseNotes()
+    const notes = notesUpToVersion(allNotes, currentVersion)
     const lastVersion = await this._storage.get<string>(LAST_VERSION_KEY, StorageScope.GLOBAL)
     let fromVersion = lastVersion
 
@@ -65,7 +66,7 @@ export class ReleaseNotesContribution extends Disposable implements IWorkbenchCo
     const range = selectNotesInRange(notes, fromVersion, currentVersion)
     if (range.length > 0) {
       const input = new ReleaseNotesInput(
-        renderReleaseNotesMarkdown(range),
+        range,
         localize('releaseNotes.whatsNew', "What's New in {version}", { version: currentVersion }),
         'whatsNew',
       )

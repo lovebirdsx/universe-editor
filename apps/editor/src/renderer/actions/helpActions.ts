@@ -38,7 +38,7 @@ import {
 } from '../services/diagnostics/diagnosisReloadSession.js'
 import { ReleaseNotesInput } from '../services/editor/ReleaseNotesInput.js'
 import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
-import { renderReleaseNotesMarkdown } from '../services/releaseNotes/releaseNotes.js'
+import { notesUpToVersion } from '../services/releaseNotes/releaseNotes.js'
 import { runReportIssueFlow } from '../services/issueReporter/reportIssue.js'
 
 export class OpenDocsAction extends Action2 {
@@ -124,13 +124,9 @@ export class ShowReleaseNotesAction extends Action2 {
   override async run(accessor: ServicesAccessor): Promise<void> {
     const releaseNotes = accessor.get(IReleaseNotesService)
     const groups = accessor.get(IEditorGroupsService)
-    const { notes } = await releaseNotes.getReleaseNotes()
-    const markdown =
-      notes.length > 0
-        ? renderReleaseNotesMarkdown(notes)
-        : localize('releaseNotes.empty', 'No release notes are available.')
+    const { currentVersion, notes } = await releaseNotes.getReleaseNotes()
     const input = new ReleaseNotesInput(
-      markdown,
+      notesUpToVersion(notes, currentVersion),
       localize('releaseNotes.title', 'Release Notes'),
       'all',
     )

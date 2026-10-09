@@ -853,3 +853,104 @@ describe('DocLinkContext', () => {
     windowOpen.mockRestore()
   })
 })
+
+describe('linkHandler + extraHrefSchemes', () => {
+  const SCHEMES = ['doc', 'command']
+
+  function renderWithHandler(
+    text: string,
+    linkHandler: (href: string, opts: { toSide: boolean }) => boolean,
+  ) {
+    const services = new ServiceCollection()
+    services.set(IEditorResolverService, makeResolver())
+    services.set(IConfigurationService, makeConfig())
+    const inst = new InstantiationService(services)
+    return render(
+      <ServicesContext.Provider value={inst}>
+        <MarkdownView text={text} extraHrefSchemes={SCHEMES} linkHandler={linkHandler} />
+      </ServicesContext.Provider>,
+    )
+  }
+
+  it('keeps a controlled scheme as literal text without a handler', () => {
+    renderMarkdown('[设置](command:workbench.action.openSettings)')
+    expect(screen.queryByRole('link')).toBeNull()
+    expect(screen.getByText('[设置](command:workbench.action.openSettings)')).toBeTruthy()
+  })
+
+  it('links an opted-in scheme and hands the click to the handler', () => {
+    const handler = vi.fn(() => true)
+    renderWithHandler('[设置](command:workbench.action.openSettings)', handler)
+    const link = screen.getByRole('link', { name: '设置' })
+    expect(link.getAttribute('target')).toBeNull()
+    link.click()
+    expect(handler).toHaveBeenCalledWith('command:workbench.action.openSettings', {
+      toSide: false,
+    })
+  })
+
+  it('passes toSide for ctrl/cmd clicks', () => {
+    const handler = vi.fn(() => true)
+    renderWithHandler('[文档](doc:getting-started/x)', handler)
+    screen
+      .getByRole('link', { name: '文档' })
+      .dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }))
+    expect(handler).toHaveBeenCalledWith('doc:getting-started/x', { toSide: true })
+  })
+
+  it('never falls back to window.open when the handler declines', () => {
+    const windowOpen = vi.spyOn(window, 'open').mockImplementation(() => null)
+    const handler = vi.fn(() => false)
+    renderWithHandler('[设置](command:workbench.action.openSettings)', handler)
+    screen.getByRole('link', { name: '设置' }).click()
+    expect(handler).toHaveBeenCalled()
+    expect(windowOpen).not.toHaveBeenCalled()
+    windowOpen.mockRestore()
+  })
+
+  it('still lets http(s) use the default handling when the handler declines', () => {
+    const windowOpen = vi.spyOn(window, 'open').mockImplementation(() => null)
+    const handler = vi.fn(() => false)
+    renderWithHandler('[外部](https://example.com)', handler)
+    const link = screen.getByRole('link', { name: '外部' })
+    expect(link.getAttribute('target')).toBe('_blank')
+    link.click()
+    expect(handler).toHaveBeenCalledWith('https://example.com', { toSide: false })
+    expect(windowOpen).toHaveBeenCalledWith('https://example.com', '_blank', 'noopener,noreferrer')
+    windowOpen.mockRestore()
+  })
+
+  it('does not intercept in-page anchors', () => {
+    const handler = vi.fn(() => true)
+    renderWithHandler('<a id="x"></a>\n\n[跳到 x](#x)', handler)
+    screen.getByRole('link', { name: '跳到 x' }).click()
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  it('does not autolink bare controlled-scheme text', () => {
+    const handler = vi.fn(() => true)
+    renderWithHandler('doc:getting-started/x and command:workbench.action.openSettings', handler)
+    expect(screen.queryByRole('link')).toBeNull()
+  })
+
+  it('renders bare paths as plain text while the host owns link resolution', () => {
+    // Without a handler these become md-filepath links (covered above); with one, the
+    // host decides every clickable target, so the renderer must not invent file links.
+    const handler = vi.fn(() => true)
+    renderWithHandler('改 apps/editor/src/main.ts 里的解析', handler)
+    expect(screen.queryByTestId('md-filepath')).toBeNull()
+    expect(screen.queryByRole('link')).toBeNull()
+    expect(screen.getByText(/apps\/editor\/src\/main\.ts/)).toBeTruthy()
+  })
+
+  it('renders inline-code and fenced paths as plain text while the host owns links', () => {
+    const handler = vi.fn(() => true)
+    const { container } = renderWithHandler(
+      '看 `apps/editor/src/main.ts`\n\n```ts\nsrc/renderer/main.tsx\n```\n',
+      handler,
+    )
+    expect(screen.queryByTestId('md-filepath')).toBeNull()
+    expect(screen.queryByRole('link')).toBeNull()
+    expect(container.querySelector('code')?.textContent).toBe('apps/editor/src/main.ts')
+  })
+})

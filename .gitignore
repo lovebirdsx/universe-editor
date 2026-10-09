@@ -9,6 +9,8 @@ release/
 market-stage/
 market-key.pem
 apps/editor/.runtime-resources/
+# release notes 编译快照（pnpm release:notes 产物，打包链的上传包从这里落地）
+apps/editor/.release-notes-build/
 !scripts/release/
 .turbo/
 *.tsbuildinfo

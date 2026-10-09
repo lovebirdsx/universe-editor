@@ -8,6 +8,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import {
   cpSync,
   existsSync,
@@ -36,6 +37,13 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(__dirname, '../..')
 const editorRoot = join(repoRoot, 'apps/editor')
 const releaseResourcesRoot = join(editorRoot, 'release/win-unpacked/resources')
+// Release notes take a detour through the compiler: docs/release-notes/*.md →
+// .release-notes-build/ (gitignored snapshot) → resources/release-notes.json
+// (canonical, Git-tracked) → this staging dir. Staging reads the SNAPSHOT, never the
+// canonical file, so a hand-edited or stale JSON cannot slip into a package.
+const notesSnapshotPath = join(editorRoot, '.release-notes-build/release-notes.json')
+const notesCanonicalPath = join(editorRoot, 'resources/release-notes.json')
+const notesSourceDir = join(repoRoot, 'docs/release-notes')
 
 const requireFromEditor = createRequire(join(editorRoot, 'package.json'))
 const jsonc = requireFromEditor('jsonc-parser')
@@ -51,7 +59,9 @@ const TSGO_EXE = process.platform === 'win32' ? 'tsgo.exe' : 'tsgo'
 // (realpath first: pnpm's hoisted entry is a symlink).
 function resolveTsgoPlatformPackageDir() {
   const previewPkg = realpathSync(
-    createRequire(join(repoRoot, 'package.json')).resolve('@typescript/native-preview/package.json'),
+    createRequire(join(repoRoot, 'package.json')).resolve(
+      '@typescript/native-preview/package.json',
+    ),
   )
   const platformPackage = `@typescript/native-preview-${process.platform}-${process.arch}`
   return dirname(createRequire(previewPkg).resolve(`${platformPackage}/package.json`))
@@ -93,7 +103,10 @@ const REQUIRED_SOURCE_FILES = [
   },
   {
     label: 'tsserver (typescript)',
-    source: join(repoRoot, 'vendor/typescript-language-server/node_modules/typescript/lib/tsserver.js'),
+    source: join(
+      repoRoot,
+      'vendor/typescript-language-server/node_modules/typescript/lib/tsserver.js',
+    ),
     packaged: 'typescript-language-server/node_modules/typescript/lib/tsserver.js',
   },
   {
@@ -110,11 +123,6 @@ const REQUIRED_SOURCE_FILES = [
     label: 'tsgo package.json',
     source: join(resolveTsgoPlatformPackageDir(), 'package.json'),
     packaged: 'tsgo/package.json',
-  },
-  {
-    label: 'release notes',
-    source: join(editorRoot, 'resources/release-notes.json'),
-    packaged: 'release-notes.json',
   },
   {
     label: 'product defaults',
@@ -138,7 +146,10 @@ const REQUIRED_SOURCE_FILES = [
   },
   {
     label: 'built-in agent skill (port-vscode-extension)',
-    source: join(editorRoot, 'resources/agent-skills/.claude/skills/port-vscode-extension/SKILL.md'),
+    source: join(
+      editorRoot,
+      'resources/agent-skills/.claude/skills/port-vscode-extension/SKILL.md',
+    ),
     packaged: 'agent-skills/.claude/skills/port-vscode-extension/SKILL.md',
   },
 ]
@@ -228,6 +239,35 @@ function ensureRemoteServerBundle() {
   if (result.status !== 0) fail(`remote server bundle ensure failed (exit ${result.status})`)
 }
 
+/**
+ * Where the release-notes JSON for this tree comes from. A tree with Markdown sources
+ * is the modern flow and stages the compiled snapshot; a historical tag rebuilt without
+ * them (`docs/release-notes/` did not exist yet) has only the Git-tracked JSON, and is
+ * left alone — old tags must keep packaging.
+ */
+function releaseNotesSource({
+  sourceDir = notesSourceDir,
+  snapshotPath = notesSnapshotPath,
+  canonicalPath = notesCanonicalPath,
+} = {}) {
+  if (!existsSync(sourceDir)) {
+    return { label: 'release notes (legacy tag: tracked JSON)', source: canonicalPath }
+  }
+  if (!existsSync(snapshotPath)) {
+    throw new Error(
+      `缺少 release notes 编译快照 ${snapshotPath}；先运行 pnpm release:notes -- --version <目标版本>`,
+    )
+  }
+  return { label: 'release notes (compiled snapshot)', source: snapshotPath }
+}
+
+export { releaseNotesSource }
+
+/** True when this tree carries Markdown release-note sources (modern flow). */
+export function hasReleaseNotesSources() {
+  return existsSync(notesSourceDir)
+}
+
 function assertPackagedFile(root, relativePath, label) {
   assertExists(join(root, ...relativePath.split('/')), label)
 }
@@ -237,6 +277,8 @@ function assertSourceFile(relativeRoot, relativePath, label) {
 }
 
 export function verifySourceRuntimeResources() {
+  const notes = releaseNotesSource()
+  assertExists(notes.source, notes.label)
   for (const required of REQUIRED_SOURCE_FILES) {
     assertExists(required.source, required.label)
   }
@@ -277,7 +319,7 @@ export function stageRuntimeResources(stageDir = runtimeResourcesDir) {
   const tsgoPkgDir = resolveTsgoPlatformPackageDir()
   copyPath(join(tsgoPkgDir, 'lib'), join(stageDir, 'tsgo/lib'))
   copyPath(join(tsgoPkgDir, 'package.json'), join(stageDir, 'tsgo/package.json'))
-  copyPath(join(editorRoot, 'resources/release-notes.json'), join(stageDir, 'release-notes.json'))
+  copyPath(releaseNotesSource().source, join(stageDir, 'release-notes.json'))
   stageProductJson(stageDir)
 
   // User guide docs (docs/user/<locale>/**/*.md) ship as plain files beside
@@ -338,10 +380,23 @@ export function verifyPackagedRuntimeResources(resourcesRoot = releaseResourcesR
   assertPackagedFile(resourcesRoot, 'remote-server/bootstrap.js', 'remote server bootstrap')
   assertPackagedFile(resourcesRoot, 'remote-server/package.json', 'remote server manifest')
 
+  // Legacy tags ship the pre-Markdown JSON shape; only the modern flow can be held to
+  // the compiled contract.
+  if (hasReleaseNotesSources()) verifyReleaseNotesArtifacts({ resourcesRoot })
+  else assertPackagedFile(resourcesRoot, 'release-notes.json', 'release notes (legacy tag)')
+
   for (const extension of discoverBuiltinExtensions()) {
-    assertPackagedFile(resourcesRoot, `extensions/${extension.id}/package.json`, `${extension.id} manifest`)
+    assertPackagedFile(
+      resourcesRoot,
+      `extensions/${extension.id}/package.json`,
+      `${extension.id} manifest`,
+    )
     for (const file of extensionPackageFiles(extension.manifest)) {
-      assertPackagedFile(resourcesRoot, `extensions/${extension.id}/${file}`, `${extension.id} packaged file`)
+      assertPackagedFile(
+        resourcesRoot,
+        `extensions/${extension.id}/${file}`,
+        `${extension.id} packaged file`,
+      )
     }
     if (extension.manifest.main) {
       assertPackagedFile(
@@ -351,6 +406,87 @@ export function verifyPackagedRuntimeResources(resourcesRoot = releaseResourcesR
       )
     }
   }
+}
+
+const NOTES_VERSION_PATTERN = /^\d+\.\d+\.\d+$/
+
+function notesEntryProblem(index, raw) {
+  const where = `第 ${index + 1} 条`
+  if (raw === null || typeof raw !== 'object') return `${where}不是对象`
+  for (const key of ['version', 'title', 'summary', 'body']) {
+    if (typeof raw[key] !== 'string') return `${where}的 ${key} 不是字符串`
+  }
+  if (!NOTES_VERSION_PATTERN.test(raw.version)) return `${where}的 version 非法：${raw.version}`
+  return undefined
+}
+
+function compareDotted(a, b) {
+  const pa = a.split('.').map(Number)
+  const pb = b.split('.').map(Number)
+  for (let i = 0; i < 3; i++) {
+    const diff = (pa[i] ?? 0) - (pb[i] ?? 0)
+    if (diff !== 0) return diff
+  }
+  return 0
+}
+
+/**
+ * The package ships release notes that are compiled, Git-tracked and (at release time)
+ * uploaded — three copies of one artifact. This closes the loop for the packaged one:
+ * byte-identical to the canonical JSON, well-formed for the app's runtime contract, and
+ * (when a bundle dir is given) the very bytes the upload manifest describes.
+ */
+export function verifyReleaseNotesArtifacts({
+  resourcesRoot = releaseResourcesRoot,
+  canonicalPath = notesCanonicalPath,
+  bundleDir,
+} = {}) {
+  const packagedPath = join(resourcesRoot, 'release-notes.json')
+  assertExists(packagedPath, 'packaged release notes')
+  assertExists(canonicalPath, 'canonical release notes')
+  const packaged = readFileSync(packagedPath, 'utf8')
+  const canonical = readFileSync(canonicalPath, 'utf8')
+  if (packaged !== canonical) {
+    throw new Error(
+      `打包内的 release-notes.json 与 canonical 不一致（打包 ${sha256Of(packaged)} ≠ canonical ${sha256Of(canonical)}）；` +
+        '先跑 pnpm release:notes 再重新打包',
+    )
+  }
+
+  let entries
+  try {
+    entries = JSON.parse(packaged)
+  } catch (error) {
+    throw new Error(`打包内的 release-notes.json 不是合法 JSON：${error.message}`)
+  }
+  if (!Array.isArray(entries)) throw new Error('打包内的 release-notes.json 顶层不是数组')
+  let previous
+  for (const [index, raw] of entries.entries()) {
+    const problem = notesEntryProblem(index, raw)
+    if (problem) throw new Error(`打包内的 release-notes.json ${problem}`)
+    if (previous !== undefined && compareDotted(raw.version, previous) >= 0) {
+      throw new Error(`打包内的 release-notes.json 版本未严格降序：${previous} → ${raw.version}`)
+    }
+    previous = raw.version
+  }
+
+  if (bundleDir !== undefined) {
+    const manifestPath = join(bundleDir, 'manifest.json')
+    assertExists(manifestPath, 'release notes bundle manifest')
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+    const artifact = manifest.artifacts?.find((entry) => entry.path === 'release-notes.json')
+    if (!artifact) throw new Error(`${manifestPath} 的 artifacts 缺少 release-notes.json`)
+    if (artifact.sha256 !== sha256Of(packaged)) {
+      throw new Error(
+        `上传包里的 release-notes.json 与安装包不一致（manifest ${artifact.sha256} ≠ 打包 ${sha256Of(packaged)}）`,
+      )
+    }
+  }
+  return entries
+}
+
+function sha256Of(content) {
+  return createHash('sha256').update(content).digest('hex')
 }
 
 function usage() {
@@ -387,7 +523,11 @@ function main(argv) {
 }
 
 const isMain =
-  process.argv[1] && realpathSync(process.argv[1]).split(sep).join('/') === fileURLToPath(import.meta.url).split(sep).join('/')
+  process.argv[1] &&
+  realpathSync(process.argv[1]).split(sep).join('/') ===
+    fileURLToPath(import.meta.url)
+      .split(sep)
+      .join('/')
 if (isMain) {
   try {
     loadEnv()

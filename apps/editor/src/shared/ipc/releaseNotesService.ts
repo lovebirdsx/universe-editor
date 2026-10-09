@@ -1,33 +1,32 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Cross-process contract for release notes. The data is generated at build time
- *  from git history (scripts/release/changelog.mjs), shipped inside the installer
- *  (electron-builder extraResources), and read by the main process. The renderer
- *  filters the version range it cares about and renders it as a markdown tab.
+ *
+ *  Cross-process contract for release notes. The data is the compiled derivative of the
+ *  Markdown sources in docs/release-notes/ (scripts/release/release-notes/compile.mjs),
+ *  shipped inside the installer (electron-builder extraResources) and read by the main
+ *  process. The renderer filters the version range it cares about and renders each
+ *  version's `body` markdown on its own.
  *--------------------------------------------------------------------------------------------*/
 
 import { createDecorator } from '@universe-editor/platform'
 
-/** One group of changes within a version, keyed by commit type (feat/fix/…). */
-export interface IReleaseNoteGroup {
-  readonly type: string
-  /** Localized heading, e.g. `新功能`. */
-  readonly title: string
-  readonly items: readonly string[]
-}
-
-/** Changes shipped in a single released version. */
+/** One released version. `title`/`summary` are empty for the migrated (legacy) archive. */
 export interface IReleaseNote {
   readonly version: string
-  /** ISO date (YYYY-MM-DD) of the tag, when available. */
+  /** ISO date (YYYY-MM-DD) of the tag, when the source carried one. */
   readonly date?: string
-  readonly groups: readonly IReleaseNoteGroup[]
+  /** Short headline shown in the version header and version lists. */
+  readonly title: string
+  /** One-sentence summary, used by the download page list. */
+  readonly summary: string
+  /** Version body markdown (starts at `##`; the version title is rendered by the consumer). */
+  readonly body: string
 }
 
 export interface IReleaseNotesData {
   /** App version currently running (`getAppVersion()`). */
   readonly currentVersion: string
-  /** All released versions, newest first. */
+  /** Every released version the install knows about, newest first. */
   readonly notes: readonly IReleaseNote[]
 }
 

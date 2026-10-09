@@ -22,6 +22,8 @@
 
 App 本体的发布（版本 bump、打包、上传，及 push `vX.Y.Z` tag 后自动创建 GitHub Release 并触发 samples 仓库 CI）见 [`scripts/release/README.md`](../../scripts/release/README.md)；市场运维脚本细节见 [`scripts/gallery/README.md`](../../scripts/gallery/README.md)。
 
+版本介绍（release notes）的单源流程——`docs/release-notes/<version>.md` 起草 → 人工确认 → 发版确定性编译到应用 / 下载站 / GitHub Release，起草用 skill `generate-release-notes` — 见 [docs/release-notes/README.md](../release-notes/README.md)。
+
 ## 架构与约定
 
 - [浮层层级与裁剪](overlay-layers.md) — tooltip / 菜单 / 对话框的四条挂载链路（React portal、monaco 平台层、monaco 编辑器内容层、视图自绘）、`--z-*` 三段式分层与「该不该 token 化」的判据、外部占位层、浮层排查套路。
@@ -30,7 +32,7 @@ App 本体的发布（版本 bump、打包、上传，及 push `vX.Y.Z` tag 后�
 - [嵌入 Monaco](monaco-embedding.md) — 嵌入编辑器的四类陷阱：宿主 `automaticLayout` 经 `getRawOptions` 渗进所有嵌入编辑器（peek / hover / diff）与 `inline-block` 容器互相观察成环（Peek References 预览 blank 的根因与 CSS 断环）；`editContext` 下的输入事件派发边界（宿主元素 + capture）；嵌入实例的焦点桥接（专用 context key，勿冒充 `editorTextFocus`）；standalone `addCommand` 的跨编辑器键泄漏；0.55 升级（命名空间顶层化 / NLS 索引制英文桥接）。
 - [命令、快捷键与上下文键](commands-and-context-keys.md) — `Action2` 的 `menu`（`precondition` 会 AND 进每一行、面板打开时 `editorAreaFocus` 必为 false）、快捷键解析（weight 优先、`when` 只过滤）、焦点类上下文键一律 DOM 派生、`ScopedContextKeyService` 的静默 dispose、异步 run 的 accessor 寿命、扩展命令遮蔽 renderer Action2——六条会静默失效的判据与正确写法。
 - [Quick-navigate picker](quick-navigate-pickers.md) — 「按住修饰键、松开即选中」手势：`IQuickNavigateOptions`（modifier / triggerKey / initialSelectionIndex）、面板锁定态与 keyup-accept 语义、两条边界（宿主 `when: '!quickInputVisible'` 管不到 IPC 窗口、quickNavigate 下 `activeItemId` 惰性）与验证资产。
-- [Git 提交信息规范](git-commit-msg-rule.md) — 提交格式、类型前缀、发布说明收录规则。
+- [Git 提交信息规范](git-commit-msg-rule.md) — 提交格式、类型前缀（发布说明不再由提交生成，见下条）。
 - [远程开发（remote-ssh / WSL）](remote-dev.md) — daemon+TCP 传输与协议 bump 自愈链、URI/scheme 与 authority 规范形、部署链（tar/scp 盘符、bundle 哈希）、Windows 远端主机（平台探测 / cmd 契约 / WMI 逃 job kill / 路径展示）、WSL 直连、远端终端与 extension host、远端 agent 二进制受管下载、实机验收方法论与已知限制。
 - [AI 模型层：定向解析、发现超时与枚举缓存](ai-model-layer.md) — 热路径按 modelId 定向解析（禁「拉全量再 find」）、discovery deadline 2.5s 与失败冷却 30s（只记 timeout）、枚举缓存的 provider 指纹与 knowledge 全量失效。
 - [文件监视：UtilityProcess 隔离与 win32 崩溃复盘](file-watcher.md) — parcel watcher 的 win32 unsubscribe UAF 证据链（两 dump 同偏移）、native 崩溃为何不能留在 main 进程、desired-state 重放自愈链与 re-subscribe 合并常量、崩溃复现的 e2e 视角交叉引用。

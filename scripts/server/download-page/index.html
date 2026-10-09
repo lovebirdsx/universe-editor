@@ -210,6 +210,35 @@
         line-height: 1.7;
         color: var(--muted);
       }
+      .entry-summary {
+        margin: 0 0 10px;
+        font-size: 14px;
+        line-height: 1.7;
+        color: var(--muted);
+      }
+      .entry-more {
+        display: inline-block;
+        margin-top: 6px;
+        font-size: 13px;
+        color: var(--accent);
+        text-decoration: none;
+      }
+      .entry-more:hover {
+        text-decoration: underline;
+      }
+      .notes-more {
+        margin-top: 20px;
+        padding-top: 18px;
+        border-top: 1px solid var(--border);
+      }
+      .notes-more a {
+        font-size: 13px;
+        color: var(--accent);
+        text-decoration: none;
+      }
+      .notes-more a:hover {
+        text-decoration: underline;
+      }
       .state {
         color: var(--muted);
         font-size: 14px;
@@ -285,8 +314,11 @@
         </a>
 
         <section class="notes hidden" id="notes">
-          <h2>最近 7 天更新</h2>
-          <div id="groups"></div>
+          <h2>更新说明</h2>
+          <div id="entries"></div>
+          <div class="notes-more hidden" id="notes-more">
+            <a id="all-versions" href="notes/index.html">全部版本介绍 →</a>
+          </div>
         </section>
       </div>
 
@@ -296,7 +328,11 @@
     </main>
 
     <script>
-      // 轻量解析 electron-builder 生成的 latest.yml：只取页面要用的字段，避免引入 YAML 库。
+      // 更新说明区块的数据来源（逐级降级，任一环失败都不影响下载按钮）：
+      //   1. notes/index.json —— 编译产物，带每版静态页路径（可点进完整介绍）
+      //   2. release-notes.json —— 只有元数据，没有页面可链接
+      //   3. 都没有 —— 隐藏整个区块
+      // 版本上限取 latest.yml：绝不宣传还没发布的版本。
       const NOTE_WINDOW_DAYS = 7
       const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -384,6 +420,49 @@
         return Math.floor(time / DAY_MS)
       }
 
+      // 数值分段比较（与服务端/应用一致）：0.10.0 > 0.9.0。
+      function compareVersions(a, b) {
+        const pa = String(a || '').replace(/^v/, '').split(/[-+]/)[0].split('.')
+        const pb = String(b || '').replace(/^v/, '').split(/[-+]/)[0].split('.')
+        const len = Math.max(pa.length, pb.length)
+        for (let i = 0; i < len; i++) {
+          const diff = (Number.parseInt(pa[i], 10) || 0) - (Number.parseInt(pb[i], 10) || 0)
+          if (diff !== 0) return diff < 0 ? -1 : 1
+        }
+        return 0
+      }
+
+      function asText(value) {
+        return typeof value === 'string' ? value : ''
+      }
+
+      function normalizeIndex(raw) {
+        if (!raw || !Array.isArray(raw.versions)) return null
+        return raw.versions
+          .filter((entry) => entry && asText(entry.version))
+          .map((entry) => ({
+            version: asText(entry.version),
+            date: asText(entry.date),
+            title: asText(entry.title),
+            summary: asText(entry.summary),
+            path: asText(entry.path),
+          }))
+      }
+
+      // 旧形态（应用内发布的 release-notes.json）：只有元数据，没有静态页。
+      function normalizeRuntime(raw) {
+        if (!Array.isArray(raw)) return null
+        return raw
+          .filter((entry) => entry && asText(entry.version))
+          .map((entry) => ({
+            version: asText(entry.version),
+            date: asText(entry.date),
+            title: asText(entry.title),
+            summary: asText(entry.summary),
+            path: '',
+          }))
+      }
+
       function show(id) {
         document.getElementById(id).classList.remove('hidden')
       }
@@ -391,73 +470,86 @@
         document.getElementById(id).classList.add('hidden')
       }
 
-      function findNoteByVersion(notes, version) {
-        return Array.isArray(notes) ? notes.find((n) => n && n.version === version) : null
+      /**
+       * 最近窗口内的版本；最新版本的介绍永远保留（发布日缺失或窗口落空都不能让它消失），
+       * 且不展示高于 latest.yml 的版本。
+       */
+      function selectEntries(versions, latest) {
+        const capped = versions.filter((entry) => compareVersions(entry.version, latest.version) <= 0)
+        if (capped.length === 0) return []
+        const current = capped.find((entry) => entry.version === latest.version)
+        const anchorKey = (current && toDateKey(current.date)) || toDateKey(latest.releaseDate)
+        const anchorDay = anchorKey ? dateKeyToDay(anchorKey) : Number.NaN
+        const startDay = Number.isNaN(anchorDay) ? Number.NaN : anchorDay - NOTE_WINDOW_DAYS + 1
+        let recent = Number.isNaN(startDay)
+          ? []
+          : capped.filter((entry) => {
+              const day = dateKeyToDay(toDateKey(entry.date))
+              return !Number.isNaN(day) && day >= startDay && day <= anchorDay
+            })
+        if (current && !recent.some((entry) => entry.version === current.version)) {
+          recent = [current, ...recent]
+        }
+        return recent
       }
 
-      function selectRecentNotes(notes, latest) {
-        if (!Array.isArray(notes)) return []
-        const current = findNoteByVersion(notes, latest.version)
-        const anchorKey = toDateKey(current && current.date) || toDateKey(latest.releaseDate)
-        if (!anchorKey) return []
-        const anchorDay = dateKeyToDay(anchorKey)
-        const startDay = anchorDay - NOTE_WINDOW_DAYS + 1
-        return notes.filter((note) => {
-          if (!note) return false
-          const noteDay = dateKeyToDay(toDateKey(note.date))
-          return noteDay >= startDay && noteDay <= anchorDay
-        })
-      }
-
-      function hasRenderableGroups(entry) {
-        return (
-          entry &&
-          Array.isArray(entry.groups) &&
-          entry.groups.some((group) => Array.isArray(group.items) && group.items.length > 0)
-        )
-      }
-
-      function renderNotes(notes, latest) {
-        const recent = selectRecentNotes(notes, latest)
-        const current = findNoteByVersion(notes, latest.version)
-        const entries = recent.length > 0 ? recent : current ? [current] : []
-        if (entries.length === 0) return
-        const container = document.getElementById('groups')
+      function renderEntries(versions, latest, { pages }) {
+        const entries = selectEntries(versions, latest)
+        if (entries.length === 0) return false
+        const container = document.getElementById('entries')
         container.textContent = ''
         for (const entry of entries) {
-          if (!hasRenderableGroups(entry)) continue
-          renderVersionHeader(container, entry)
-          for (const group of entry.groups) {
-            renderGroup(container, group)
-          }
+          renderEntry(container, entry, pages)
         }
-        if (container.children.length > 0) show('notes')
+        return container.children.length > 0
       }
 
-      function renderVersionHeader(container, entry) {
+      function renderEntry(container, entry, pages) {
+        const wrap = document.createElement('div')
+        wrap.className = 'group'
         const title = document.createElement('div')
         title.className = 'version-title'
         const date = formatDate(entry.date)
         title.textContent = date ? `v${entry.version} · ${date}` : `v${entry.version}`
-        container.appendChild(title)
+        wrap.appendChild(title)
+        if (entry.title) {
+          const headline = document.createElement('div')
+          headline.className = 'group-title'
+          headline.textContent = entry.title
+          wrap.appendChild(headline)
+        }
+        if (entry.summary) {
+          const summary = document.createElement('p')
+          summary.className = 'entry-summary'
+          summary.textContent = entry.summary
+          wrap.appendChild(summary)
+        }
+        if (pages && entry.path) {
+          const more = document.createElement('a')
+          more.className = 'entry-more'
+          more.href = `notes/${entry.path}`
+          more.textContent = '查看完整介绍 →'
+          wrap.appendChild(more)
+        }
+        container.appendChild(wrap)
       }
 
-      function renderGroup(container, group) {
-        if (!Array.isArray(group.items) || group.items.length === 0) return
-        const wrap = document.createElement('div')
-        wrap.className = 'group'
-        const title = document.createElement('div')
-        title.className = 'group-title'
-        title.textContent = group.title || group.type || ''
-        const ul = document.createElement('ul')
-        for (const item of group.items) {
-          const li = document.createElement('li')
-          li.textContent = item
-          ul.appendChild(li)
+      async function fetchJson(url) {
+        const res = await fetch(url, { cache: 'no-store' })
+        if (!res.ok) return null
+        try {
+          return await res.json()
+        } catch {
+          return null
         }
-        wrap.appendChild(title)
-        wrap.appendChild(ul)
-        container.appendChild(wrap)
+      }
+
+      async function loadNotes() {
+        const index = normalizeIndex(await fetchJson('notes/index.json'))
+        if (index) return { versions: index, pages: true }
+        const runtime = normalizeRuntime(await fetchJson('release-notes.json'))
+        if (runtime) return { versions: runtime, pages: false }
+        return null
       }
 
       async function main() {
@@ -478,12 +570,15 @@
           hide('loading')
           show('content')
 
-          // 更新日志失败不影响主流程：单独 try，拿不到就只展示下载按钮。
+          // 更新说明失败不影响主流程：单独 try，拿不到就只展示下载按钮。
           try {
-            const notesRes = await fetch('release-notes.json', { cache: 'no-store' })
-            if (notesRes.ok) renderNotes(await notesRes.json(), latest)
+            const notes = await loadNotes()
+            if (notes && renderEntries(notes.versions, latest, notes)) {
+              show('notes')
+              if (notes.pages) show('notes-more')
+            }
           } catch {
-            /* 忽略：无更新日志时不展示该区块 */
+            /* 忽略：无更新说明时不展示该区块 */
           }
         } catch {
           hide('loading')
@@ -491,7 +586,18 @@
         }
       }
 
-      main()
+      // 测试入口：给用例确定性地 await 渲染结果，而不是数 setTimeout。
+      globalThis.__ueDownloadPage = {
+        main,
+        parseLatestYml,
+        compareVersions,
+        selectEntries,
+        normalizeIndex,
+        normalizeRuntime,
+        formatDate,
+        formatSize,
+      }
+      if (!globalThis.__UE_DOWNLOAD_PAGE_NO_AUTORUN__) main()
     </script>
   </body>
 </html>

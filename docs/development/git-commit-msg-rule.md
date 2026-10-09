@@ -43,16 +43,10 @@ docs(api): clarify rate limit behavior
 
 ## 发布说明
 
-发布说明只收录带 `!` 标记的提交：
+发布说明**不由提交信息自动生成**：每个版本的正文是 `docs/release-notes/<version>.md`，由人工（可借助 skill `generate-release-notes`）整理、确认后发版编译（见 [docs/release-notes/README.md](../release-notes/README.md)）。提交信息只是整理事实与追溯变化的线索，因此：
 
-```text
-feat!: add SSO login
-fix(billing)!: correct tax calculation
-build(dev)!: switch to new build tool
-```
-
-已知类型（feat/fix/perf/security）展示在对应分组，其它类型展示在"其他变更"。
-无 `!` 的提交，无论何种类型，均不出现在发布说明中。
+- 写提交信息时不必为「进发布说明」做额外标记；`!` 仍按 conventional commits 惯例用于标识**破坏性变化**，但收录与否由正文作者按用户可见性判断。
+- 用户可见的变化不要只写在提交里——必须同步 `docs/user/` 文档（仓库硬约定），并在该版本的正式稿里体现。
 
 ## 禁止署名水印
 

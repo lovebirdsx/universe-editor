@@ -1,29 +1,25 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Tests for the pure release-notes helpers: version comparison, range selection,
- *  and markdown rendering.
+ *  Tests for the pure release-notes helpers: version comparison, range selection, and
+ *  the version ceiling the running install may show.
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
-import { compareVersions, renderReleaseNotesMarkdown, selectNotesInRange } from '../releaseNotes.js'
+import { compareVersions, notesUpToVersion, selectNotesInRange } from '../releaseNotes.js'
 import type { IReleaseNote } from '../../../../shared/ipc/releaseNotesService.js'
 
+const note = (version: string, date?: string): IReleaseNote => ({
+  version,
+  ...(date !== undefined ? { date } : {}),
+  title: '',
+  summary: '',
+  body: `## ${version}\n\n- 条目\n`,
+})
+
 const notes: IReleaseNote[] = [
-  {
-    version: '0.1.3',
-    date: '2026-06-02',
-    groups: [{ type: 'feat', title: '新功能', items: ['C'] }],
-  },
-  {
-    version: '0.1.2',
-    date: '2026-05-20',
-    groups: [{ type: 'fix', title: 'Bug 修复', items: ['B'] }],
-  },
-  {
-    version: '0.1.1',
-    date: '2026-05-01',
-    groups: [{ type: 'feat', title: '新功能', items: ['A'] }],
-  },
+  note('0.1.3', '2026-06-02'),
+  note('0.1.2', '2026-05-20'),
+  note('0.1.1', '2026-05-01'),
 ]
 
 describe('compareVersions', () => {
@@ -56,20 +52,14 @@ describe('selectNotesInRange', () => {
   })
 })
 
-describe('renderReleaseNotesMarkdown', () => {
-  it('renders headings, group titles, and bullet lists', () => {
-    const md = renderReleaseNotesMarkdown([notes[1]!])
-    expect(md).toContain('## 0.1.2 (2026-05-20)')
-    expect(md).toContain('### Bug 修复')
-    expect(md).toContain('- B')
+describe('notesUpToVersion', () => {
+  it('drops versions the running app has never been', () => {
+    const picked = notesUpToVersion([note('0.2.0'), ...notes], '0.1.3')
+    expect(picked.map((n) => n.version)).toEqual(['0.1.3', '0.1.2', '0.1.1'])
   })
 
-  it('omits the date when absent and skips empty groups', () => {
-    const md = renderReleaseNotesMarkdown([
-      { version: '9.9.9', groups: [{ type: 'feat', title: '新功能', items: [] }] },
-    ])
-    expect(md).toContain('## 9.9.9')
-    expect(md).not.toContain('(')
-    expect(md).not.toContain('### 新功能')
+  it('keeps a versionless entry (a tab restored from pre-schema-2 state)', () => {
+    const legacy = note('')
+    expect(notesUpToVersion([legacy], '0.1.3')).toEqual([legacy])
   })
 })

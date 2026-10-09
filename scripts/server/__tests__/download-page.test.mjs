@@ -1,6 +1,12 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Tests for the static download page's embedded release-notes filtering logic.
+ *  Tests for the static download page's embedded update-notes logic: the data-source
+ *  fallback chain (notes/index.json → release-notes.json → hidden), the latest.yml version
+ *  ceiling, and the 7-day window that must never drop the newest release.
+ *
+ *  The page exposes `globalThis.__ueDownloadPage` and starts itself only when
+ *  `__UE_DOWNLOAD_PAGE_NO_AUTORUN__` is unset, so these cases await the real render instead
+ *  of counting macrotasks.
  *--------------------------------------------------------------------------------------------*/
 
 import { test } from 'node:test'
@@ -21,10 +27,15 @@ class Element {
   textContent = ''
   className = ''
   href = ''
+  hidden = false
 
   classList = {
-    add: () => {},
-    remove: () => {},
+    add: (name) => {
+      if (name === 'hidden') this.hidden = true
+    },
+    remove: (name) => {
+      if (name === 'hidden') this.hidden = false
+    },
   }
 
   constructor(tag = 'div') {
@@ -41,11 +52,27 @@ class Element {
   }
 }
 
+// 页面里带 class="… hidden" 的元素开局就是隐藏的；假 document 必须复现这一点，
+// 否则「没数据时不展示」的用例会永远看到可见。
+const INITIALLY_HIDDEN = new Set(
+  (pageHtml.match(/<(?:div|section|span|a|nav|main)[^>]*>/g) ?? [])
+    .map((tag) => ({
+      id: /id="([^"]+)"/.exec(tag)?.[1],
+      cls: /class="([^"]*)"/.exec(tag)?.[1] ?? '',
+    }))
+    .filter((entry) => entry.id && /\bhidden\b/.test(entry.cls))
+    .map((entry) => entry.id),
+)
+
 function createDocument() {
   const elements = new Map()
   return {
     getElementById(id) {
-      if (!elements.has(id)) elements.set(id, new Element())
+      if (!elements.has(id)) {
+        const element = new Element()
+        element.hidden = INITIALLY_HIDDEN.has(id)
+        elements.set(id, element)
+      }
       return elements.get(id)
     },
     createElement(tag) {
@@ -58,63 +85,166 @@ function collectText(element) {
   return [element.textContent, ...element.children.map(collectText)].filter(Boolean).join('\n')
 }
 
-async function renderDownloadPage({ latestYml, notes }) {
-  const document = createDocument()
-  const sandbox = {
-    document,
-    fetch: async (url) => {
-      if (url === 'latest.yml') return { ok: true, text: async () => latestYml }
-      if (url === 'release-notes.json') return { ok: true, json: async () => notes }
-      throw new Error(`unexpected fetch: ${url}`)
-    },
-  }
-
-  new Function(pageScript)
-  vm.createContext(sandbox)
-  vm.runInContext(pageScript, sandbox)
-  await new Promise((resolve) => setTimeout(resolve, 0))
-  await new Promise((resolve) => setTimeout(resolve, 0))
-  return collectText(document.getElementById('groups'))
-}
-
-test('download page renders all release notes within the latest version week', async () => {
-  const text = await renderDownloadPage({
-    latestYml: `version: 0.1.7
+const LATEST_YML = `version: 0.1.7
 files:
   - url: Universe Editor-0.1.7-win-x64.exe
     size: 1048576
 releaseDate: '2026-06-10T00:00:00.000Z'
-`,
-    notes: [
-      { version: '0.1.7', date: '2026-06-03', groups: [{ title: '新功能', items: ['C'] }] },
-      { version: '0.1.6', date: '2026-06-02', groups: [{ title: 'Bug 修复', items: ['B'] }] },
-      { version: '0.1.2', date: '2026-05-27', groups: [{ title: '旧版本', items: ['A'] }] },
-    ],
+`
+
+/**
+ * Run the page against a fake file set. `files` maps a fetched path to its body; anything
+ * absent answers 404 — the same shape the static server gives for a file the deployment
+ * never uploaded.
+ */
+async function renderDownloadPage(files) {
+  const document = createDocument()
+  const requested = []
+  const sandbox = {
+    document,
+    __UE_DOWNLOAD_PAGE_NO_AUTORUN__: true,
+    fetch: async (url) => {
+      requested.push(url)
+      if (!(url in files)) return { ok: false, status: 404 }
+      const body = files[url]
+      return { ok: true, json: async () => JSON.parse(body), text: async () => body }
+    },
+  }
+  vm.createContext(sandbox)
+  vm.runInContext(pageScript, sandbox)
+  await sandbox.__ueDownloadPage.main()
+  return {
+    requested,
+    notesText: collectText(document.getElementById('entries')),
+    notesHidden: document.getElementById('notes').hidden,
+    moreHidden: document.getElementById('notes-more').hidden,
+  }
+}
+
+const indexJson = (versions) => JSON.stringify({ schema: 1, versions })
+const runtimeJson = (versions) => JSON.stringify(versions)
+
+test('renders the 7-day window from notes/index.json with links to the version pages', async () => {
+  const result = await renderDownloadPage({
+    'latest.yml': LATEST_YML,
+    'notes/index.json': indexJson([
+      {
+        version: '0.1.7',
+        date: '2026-06-03',
+        title: '启动更快',
+        summary: '摘要 7',
+        path: 'v0.1.7.html',
+      },
+      { version: '0.1.6', date: '2026-06-02', title: '', summary: '摘要 6', path: 'v0.1.6.html' },
+      { version: '0.1.2', date: '2026-05-27', title: '', summary: '摘要 2', path: 'v0.1.2.html' },
+    ]),
   })
 
-  assert.match(text, /v0\.1\.7/)
-  assert.match(text, /C/)
-  assert.match(text, /v0\.1\.6/)
-  assert.match(text, /B/)
-  assert.doesNotMatch(text, /v0\.1\.2/)
-  assert.doesNotMatch(text, /A/)
+  assert.equal(result.notesHidden, false)
+  assert.equal(result.moreHidden, false)
+  // 「全部版本介绍」是静态链接，指向编译产物里的历史索引页。
+  assert.match(pageHtml, /<a id="all-versions" href="notes\/index\.html">/)
+  assert.match(result.notesText, /v0\.1\.7/)
+  assert.match(result.notesText, /启动更快/)
+  assert.match(result.notesText, /摘要 7/)
+  assert.match(result.notesText, /v0\.1\.6/)
+  assert.doesNotMatch(result.notesText, /v0\.1\.2/)
+  // Only the index is read when it exists — the runtime JSON is the fallback.
+  assert.deepEqual(result.requested, ['latest.yml', 'notes/index.json'])
 })
 
-test('download page falls back to the latest version when note dates are unavailable', async () => {
-  const text = await renderDownloadPage({
-    latestYml: `version: 0.1.7
-files:
-  - url: Universe Editor-0.1.7-win-x64.exe
-    size: 1048576
-`,
-    notes: [
-      { version: '0.1.7', groups: [{ title: '新功能', items: ['C'] }] },
-      { version: '0.1.6', groups: [{ title: 'Bug 修复', items: ['B'] }] },
-    ],
+test('never advertises a version above latest.yml', async () => {
+  const result = await renderDownloadPage({
+    'latest.yml': LATEST_YML,
+    'notes/index.json': indexJson([
+      {
+        version: '0.2.0',
+        date: '2026-06-03',
+        title: '未来',
+        summary: '尚未发布',
+        path: 'v0.2.0.html',
+      },
+      { version: '0.1.7', date: '2026-06-03', title: '', summary: '摘要 7', path: 'v0.1.7.html' },
+    ]),
   })
+  assert.doesNotMatch(result.notesText, /未来/)
+  assert.doesNotMatch(result.notesText, /尚未发布/)
+  assert.match(result.notesText, /摘要 7/)
+})
 
-  assert.match(text, /v0\.1\.7/)
-  assert.match(text, /C/)
-  assert.doesNotMatch(text, /v0\.1\.6/)
-  assert.doesNotMatch(text, /B/)
+test('keeps the newest release visible when its date falls outside the window', async () => {
+  const result = await renderDownloadPage({
+    'latest.yml': `version: 0.1.7
+files:
+  - url: Setup.exe
+    size: 1024
+`,
+    'notes/index.json': indexJson([
+      { version: '0.1.7', date: '2026-01-01', title: '', summary: '很久以前', path: 'v0.1.7.html' },
+      { version: '0.1.6', date: '2026-06-02', title: '', summary: '摘要 6', path: 'v0.1.6.html' },
+    ]),
+  })
+  assert.match(result.notesText, /很久以前/)
+  assert.doesNotMatch(result.notesText, /摘要 6/)
+})
+
+test('falls back to release-notes.json (metadata only, no page links)', async () => {
+  const result = await renderDownloadPage({
+    'latest.yml': LATEST_YML,
+    'release-notes.json': runtimeJson([
+      { version: '0.1.7', date: '2026-06-03', title: '标题', summary: '摘要 7', body: '## x' },
+      { version: '0.1.6', date: '2026-06-02', title: '', summary: '摘要 6', body: '## y' },
+    ]),
+  })
+  assert.equal(result.notesHidden, false)
+  assert.equal(result.moreHidden, true)
+  assert.match(result.notesText, /摘要 7/)
+  assert.match(result.notesText, /v0\.1\.6/)
+  assert.deepEqual(result.requested, ['latest.yml', 'notes/index.json', 'release-notes.json'])
+})
+
+test('hides the notes section entirely when neither source is deployed', async () => {
+  const result = await renderDownloadPage({ 'latest.yml': LATEST_YML })
+  assert.equal(result.notesHidden, true)
+  assert.equal(result.moreHidden, true)
+  assert.equal(result.notesText, '')
+})
+
+test('a legacy notes file without metadata degrades to no notes, not a broken page', async () => {
+  const result = await renderDownloadPage({
+    'latest.yml': LATEST_YML,
+    // 旧形态（groups/items）：没有 title/summary/date，页面不应渲染出空壳。
+    'notes/index.json': JSON.stringify({ versions: [] }),
+    'release-notes.json': JSON.stringify([
+      { version: '0.1.7', groups: [{ title: 'x', items: ['y'] }] },
+    ]),
+  })
+  assert.equal(result.notesHidden, true)
+})
+
+test('the page never injects fetched content as HTML and loads no external resources', () => {
+  // No innerHTML anywhere the fetched data could reach it.
+  assert.doesNotMatch(pageScript, /innerHTML/)
+  assert.doesNotMatch(pageScript, /insertAdjacentHTML/)
+  assert.doesNotMatch(pageScript, /document\.write/)
+  // Zero external resources: no <script src>, no <link>, and no remote URLs in the page.
+  assert.doesNotMatch(pageHtml, /<script[^>]+src=/i)
+  assert.doesNotMatch(pageHtml, /<link[^>]+href=["']https?:/i)
+  assert.doesNotMatch(pageHtml, /https?:\/\/[^\s"']+\.(?:js|css)/i)
+})
+
+test('the page exposes its helpers and does not auto-run under the test flag', async () => {
+  const document = createDocument()
+  const sandbox = {
+    document,
+    __UE_DOWNLOAD_PAGE_NO_AUTORUN__: true,
+    fetch: async () => ({ ok: false }),
+  }
+  vm.createContext(sandbox)
+  vm.runInContext(pageScript, sandbox)
+  assert.equal(typeof sandbox.__ueDownloadPage.main, 'function')
+  assert.equal(sandbox.__ueDownloadPage.compareVersions('0.10.0', '0.9.0'), 1)
+  assert.equal(sandbox.__ueDownloadPage.formatSize(1048576), '1.0 MB')
+  // Rendering only happens when main() is called.
+  assert.equal(document.getElementById('entries').children.length, 0)
 })

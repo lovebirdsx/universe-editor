@@ -19,6 +19,7 @@ import {
   type MdInline,
   type MdNode,
 } from '../markdownRenderer.js'
+import headingSlugCases from '../../../../shared/releaseNotes/__tests__/fixtures/headingSlugCases.json' with { type: 'json' }
 
 const text = (s: string): MdInline => ({ type: 'text', text: s })
 
@@ -1045,5 +1046,123 @@ describe('slugifyHeading', () => {
   it('keeps CJK letters and matches an authored #anchor target', () => {
     expect(slugifyHeading('子结构：ITalkItem')).toBe('子结构italkitem')
     expect(slugifyHeading('### 子结构：ITalkItem'.replace(/^#+\s*/, ''))).toBe('子结构italkitem')
+  })
+
+  it('matches the shared fixture table (same table as the release-notes compiler)', () => {
+    // The compiler writes this slug as the site's heading id; a divergence would make an
+    // in-app anchor work while the published page dead-links.
+    const { cases } = headingSlugCases
+    expect(cases.length).toBeGreaterThan(5)
+    for (const { text, slug } of cases) {
+      expect(slugifyHeading(text), text).toBe(slug)
+    }
+  })
+})
+
+describe('extraHrefSchemes — opt-in explicit-link schemes', () => {
+  const OPTIONS = { extraHrefSchemes: ['doc', 'command'] }
+
+  it('keeps unknown schemes as literal text by default', () => {
+    const nodes = parseInline('[设置](command:workbench.action.openSettings)')
+    expect(nodes).toEqual([text('[设置](command:workbench.action.openSettings)')])
+    expect(parseInline('[文档](doc:getting-started/x)')).toEqual([
+      text('[文档](doc:getting-started/x)'),
+    ])
+  })
+
+  it('links an opted-in scheme and keeps the raw href', () => {
+    expect(parseInline('[设置](command:workbench.action.openSettings)', OPTIONS)).toEqual([
+      { type: 'link', href: 'command:workbench.action.openSettings', children: [text('设置')] },
+    ])
+  })
+
+  it('is case-insensitive about the scheme but never accepts other schemes', () => {
+    expect(parseInline('[x](DOC:a/b)', OPTIONS)[0]).toMatchObject({ type: 'link' })
+    expect(parseInline('[x](javascript:alert(1))', OPTIONS)[0]).toEqual({
+      type: 'text',
+      text: '[x](javascript:alert(1))',
+    })
+    // `file:` is a pre-existing safe scheme, so opting in changes nothing here.
+    expect(parseInline('[x](file:///etc/passwd)', OPTIONS)[0]).toMatchObject({
+      type: 'link',
+      href: 'file:///etc/passwd',
+    })
+    expect(parseInline('[x](data:text/html,<b>)', OPTIONS)[0]).toEqual({
+      type: 'text',
+      text: '[x](data:text/html,<b>)',
+    })
+  })
+
+  it('never turns bare text into a link', () => {
+    expect(parseInline('command:workbench.action.openSettings', OPTIONS)).toEqual([
+      text('command:workbench.action.openSettings'),
+    ])
+    expect(parseInline('<command:workbench.action.openSettings>', OPTIONS)).toEqual([
+      text('<command:workbench.action.openSettings>'),
+    ])
+  })
+
+  it('reaches nested blocks (list items, quotes, tables) without enabling frontmatter', () => {
+    const nodes = parseMarkdown(
+      [
+        '- 见 [文档](doc:a/b)',
+        '',
+        '> [设置](command:workbench.action.openSettings)',
+        '',
+        '| 列 |',
+        '| --- |',
+        '| [文档](doc:a/b) |',
+      ].join('\n'),
+      OPTIONS,
+    )
+    const seen: string[] = []
+    const visitInline = (inline: readonly MdInline[]): void => {
+      for (const node of inline) {
+        if (node.type === 'link') {
+          seen.push(node.href)
+          visitInline(node.children)
+        } else if (node.type === 'bold' || node.type === 'italic' || node.type === 'strike') {
+          visitInline(node.children)
+        }
+      }
+    }
+    const visitNodes = (list: readonly MdNode[]): void => {
+      for (const node of list) {
+        switch (node.type) {
+          case 'paragraph':
+          case 'heading':
+            visitInline(node.children)
+            break
+          case 'list':
+            for (const item of node.items) {
+              visitInline(item.inline)
+              if (item.children) visitNodes(item.children)
+            }
+            break
+          case 'blockquote':
+            visitNodes(node.children)
+            break
+          case 'table':
+            for (const cell of node.header) visitInline(cell)
+            for (const row of node.rows) for (const cell of row) visitInline(cell)
+            break
+          default:
+            break
+        }
+      }
+    }
+    visitNodes(nodes)
+    expect(seen).toEqual(['doc:a/b', 'command:workbench.action.openSettings', 'doc:a/b'])
+
+    // A `---` inside a nested block stays an hr, and a leading one is still only
+    // frontmatter when the caller asked for it.
+    const withHr = parseMarkdown('---\n\n- x\n', OPTIONS)
+    expect(withHr[0]).toEqual({ type: 'hr', line: 0 })
+  })
+
+  it('applies to the shared link matcher only through the option', () => {
+    expect(matchMarkdownLinkAt('[x](doc:a)', 0)).toBeNull()
+    expect(matchMarkdownLinkAt('[x](doc:a)', 0, OPTIONS)).toMatchObject({ href: 'doc:a' })
+    expect(matchMarkdownLinkAt('[x](doc:a)', 0, { extraHrefSchemes: [] })).toBeNull()
   })
 })

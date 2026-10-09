@@ -10,8 +10,19 @@ Universe Editor 通过 **electron-updater 的 generic provider** 从内网静态
   pnpm package:win  ──►  apps/editor/release/   ──upload.mjs(scp)──►  /srv/universe-editor/  ──HTTP──►  autoUpdater
                          ├─ *.exe                                     ├─ *.exe
                          ├─ *.blockmap                                ├─ *.blockmap
-                         └─ latest.yml                                └─ latest.yml  ← 客户端先读这个比对版本
+                         ├─ latest.yml                                ├─ latest.yml   ← 客户端先读这个比对版本
+                         └─ release-notes/                            ├─ release-notes.json（应用内更新说明）
+                            ├─ release-notes.json                     └─ notes/       ← 下载站每版介绍页
+                            ├─ notes/index.{json,html}                   ├─ index.json / index.html
+                            ├─ notes/v<version>.html                     └─ v<version>.html
+                            └─ manifest.json（逐产物 sha256）
 ```
+
+版本介绍（release notes）的**唯一正式来源**是 `docs/release-notes/<version>.md`（历史版本已发布内容位于
+`docs/release-notes/archive/*.md` 的冻结分节，只读）：发版时由
+`scripts/release/release-notes/compile.mjs` 确定性编译成安装包内的 `release-notes.json`、下载站静态页
+与 GitHub Release 正文（无 AI、无网络、无 wall-clock；同输入必然同字节）。契约与写作规范见
+[docs/release-notes/README.md](../../docs/release-notes/README.md)，起草流程见 skill `generate-release-notes`。
 
 ---
 
@@ -141,18 +152,20 @@ pnpm release -- --bump patch
 pnpm release -- --version 0.1.5
 ```
 
-`pnpm release` 会按顺序执行：
+`pnpm release` 会按顺序执行（步骤表在 `release.mjs` 的 `RELEASE_STEPS`，`runRelease` 严格按表走）：
 
-1. 预检：工作区干净、在 `main`、与 upstream 同步、目标 tag 不冲突、上传配置存在。
-2. 更新 `apps/editor/package.json` 的版本号。
-3. 在 tag 创建前生成 `apps/editor/resources/release-notes.json`。
-4. 提交版本与 release notes：`chore(release): X.Y.Z`。
-5. 运行 `pnpm check` 与 `pnpm test:release`。
-6. 清理并重新生成 `apps/editor/release/` 安装包产物。
-7. 校验 `latest.yml` 的版本与目标版本一致，并生成 `release-report-vX.Y.Z.md`。
-8. 创建 annotated tag：`vX.Y.Z`。
-9. push `main` 与 tag。
-10. 上传 `.exe` / `.blockmap`，最后上传 `latest.yml`。
+1. 解析目标版本与上一个发布 tag，运行只读预检：工作区干净、在 `main`、与 upstream 同步、目标 tag 不冲突、上传配置存在。
+2. **release notes 门禁**：要求 `docs/release-notes/<version>.md` 已存在且 `status: reviewed`（或历史迁移稿），文件名/`version` 与目标版本一致、`sourceFrom` 对齐上一个 tag；否则**在改版本号之前**直接失败。若 `sourceTo` 之后还有提交，只打印提醒让人复核（不阻断）。
+3. 更新 `apps/editor/package.json` 的版本号。
+4. 编译正式稿：`compile.mjs --version X.Y.Z --expect-version X.Y.Z` → 重写 `apps/editor/resources/release-notes.json`（canonical）与 `.release-notes-build/` 快照。
+5. 提交版本与派生 JSON：`chore(release): X.Y.Z`（派生 JSON 随这次 commit 一起进 Git，**正式稿应在发版前已提交**）。
+6. 运行 `pnpm check` 与 `pnpm test:release`。
+7. 清理并重新生成 `apps/editor/release/` 安装包产物（内部依次跑编译快照 → `runtime:stage` → build → electron-builder → `verify-packaged` → 生成 `release/release-notes/` 上传包）。
+8. 校验安装包内的 `release-notes.json` 与 canonical、上传包、manifest 逐字节一致，且 `latest.yml` 版本与产物齐备。
+9. 生成 `release-report-vX.Y.Z.md`（含各 notes 产物 sha256，仅本地审计）。
+10. 创建 annotated tag：`vX.Y.Z`。
+11. push `main` 与 tag。
+12. 上传 `.exe` / `.blockmap` → `release-notes/` 发布包 → **最后** `latest.yml`。
 
 常用选项：
 
@@ -170,12 +183,43 @@ pnpm release -- --version 0.1.5
 | `--package-script <script>`  | 覆盖默认打包脚本，默认 `package:win:installer`        |
 | `--env <mode>`               | 指定加载仓库根 `.env.<mode>` 分层文件，默认 `dev`      |
 
-> **版本说明从哪来**：`release:notes` 遍历所有 `vX.Y.Z` tag，对每个 tag 与其前驱之间的提交
-> 按 `<type>(<scope>): <summary>` 解析（见 `docs/development/git-commit-msg-rule.md`），
-> 默认只收录 `feat`/`fix`/`perf`/`security`，其它类型加 `!` 标记才收录。`pnpm release`
-> 会在创建 tag 前用 `--pending-version` 生成当前目标版本的说明；生成的 JSON 通过
-> `electron-builder.yml` 的 `extraResources` 打进安装包；客户端升级后自动弹出「上次看到的版本 →
-> 当前版本」区间内所有版本的更新（命令面板 **Show Release Notes** 可随时回看）。
+### 三种模式（`--resume` / `--upload-only`）
+
+`--resume` 用于「release commit 已生成、tag 已指向 HEAD，但后续步骤中断」；`--upload-only` 用于「只重传已发布版本」。
+两者都**只校验、不重写**——不会改版本号、不会产生新提交、不会移动 tag：
+
+| 步骤 | full | resume | upload-only |
+| ---- | ---- | ------ | ----------- |
+| release notes 门禁（只读） | ✅ | ✅ | ✅ |
+| 改版本号 / 提交 | ✅ | — | — |
+| 编译 notes | 写入 | `--check`（漂移即失败） | `--check` |
+| `pnpm check` | ✅ | ✅ | — |
+| 打包 + 包内一致性校验 | ✅ | ✅ | ✅ |
+| 创建 tag / push | ✅ | ✅ | — |
+| 上传 | ✅ | ✅ | ✅ |
+
+> `--resume` / `--upload-only` 下编译退化为 `--check`：重编译必须与已提交的 canonical 逐字节相同，
+> 任何漂移都会失败并报出两侧 sha256（此时应回到 full 流程或修正源文件，**不要手改 JSON**）。
+
+> **版本说明从哪来**：不再是「从提交列表生成」。每个版本的正文是 `docs/release-notes/<version>.md`
+> （`status: reviewed` 才可发版），发版时确定性编译进安装包、下载站与 GitHub Release。Git 提交只是
+> 整理事实的线索（agent 起草流程见 skill `generate-release-notes`）。客户端升级后自动弹出「上次看到的
+> 版本 → 当前版本」区间内所有版本的介绍（命令面板 **Show Release Notes** 可随时回看）。
+
+### 单独编译 / 校验 release notes
+
+```bash
+pnpm release:notes -- --version 0.15.0   # 编译截至该版本 → release-notes.json + .release-notes-build/
+pnpm release:notes:check                 # 无写入：源文件语法/链接 + canonical 是否漂移（接入 pnpm check 与 CI）
+node scripts/release/release-notes/compile.mjs --bundle apps/editor/release/release-notes   # 物化上传包
+```
+
+`--check` 的版本上界是 `apps/editor/package.json` 的当前版本，因此版本号还没 bump 时，
+更新的（reviewed）正式稿不会被算进 drift 判定——它只在 bump 之后才要求重建派生 JSON。
+
+> 没有 `docs/release-notes/` 的树（历史 tag、稀疏检出）一律 legacy 降级：编译、打包链、
+> `--bundle` 全部跳过并打印提示。此时上传会明确拒绝（`缺少 release notes 上传包`）——
+> 这是设计：宁可不传，也不让旧内容配新安装包。要上传就得先有该版本的正式稿。
 
 > ⚠️ **Windows 用 PowerShell / cmd 运行上传命令，不要用 Git Bash。** Git Bash（MSYS）会把
 > `--dir /srv/universe-editor` 这类以 `/` 开头的远程路径自动改写成本地 Windows 路径
@@ -191,10 +235,15 @@ pnpm release -- --version 0.1.5
 
 ### GitHub Release 与 samples CI（自动）
 
-`pnpm release` 第 9 步 push 出 `vX.Y.Z` tag 后，GitHub Actions 会自动接着做两件事（无需本地干预）：
+`pnpm release` push 出 `vX.Y.Z` tag 后，GitHub Actions 会自动接着做两件事（无需本地干预）：
 
 1. `.github/workflows/release-editor.yml` 监听到 `v*` tag push，创建同名 GitHub Release（标题 `Universe Editor X.Y.Z`），打包并上传 `universe-editor-linux-x64.zip`（含 `linux-unpacked/`）与 `universe-editor-win-x64.zip`（含 `win-unpacked/`）。
 2. 随后向 samples 仓库（`lovebirdsx/universe-editor-extension-samples`）发 `repository_dispatch`（`event_type=editor-release`，payload 携带 `tag`），触发其 CI 下载上述 zip 跑 e2e。
+
+**Release 正文**：workflow checkout 到该 tag（纯 node，不跑 `pnpm install`）后调用
+`compile.mjs --github-body <version> --github-out release-body.md`，用与安装包/下载站**同一份**正式稿渲染正文
+（`doc:` 链接改写为对应 tag 的 GitHub 文档地址，技术附录由编译器追加），创建与更新都用这个文件。
+老 tag（`docs/release-notes/` 尚不存在的版本）回填时降级为固定文案 + `::warning::`，不会红。
 
 **前置配置**：在主仓库 Settings → Secrets and variables → Actions 里配置 `SAMPLES_DISPATCH_TOKEN`——一个对 samples 仓库有 Contents read/write 权限的 fine-grained PAT，或 repo scope 的 classic PAT。未配置时 workflow 不会挂红，只会打印 `SAMPLES_DISPATCH_TOKEN 未配置，跳过 samples CI 触发` 警告并跳过第 2 步。
 
@@ -233,7 +282,17 @@ pnpm release:upload --host <IP> --user <user> --dir <远程目录> [选项]
 > 脚本检测到盘符/反斜杠会自动用 `cmd /c if not exist … md …` 建目录（兼容远端 cmd 与 PowerShell），
 > 且“目录已存在”只告警不中断。判断有误时可用 `--remote-os windows|linux` 显式覆盖。
 
-**上传顺序**：先传 `.exe` / `.blockmap`，最后才传 `latest.yml` —— 保证客户端读到清单时安装包已就位，避免拉到半包。
+**上传顺序与原子性**（`buildUploadPlan` / `assertPlanConsistency` 守护，单测在 `__tests__/upload.test.mjs`）：
+
+1. `.exe` / `.blockmap`（安装包，直传）
+2. `release-notes/` 发布包：`release-notes.json`、`notes/index.json`、`notes/index.html` 先传同目录临时名再原子替换
+   （Linux `mv -f`；Windows `cmd /c move /Y`，失败退化为 `copy /Y` + `del` 并告警），`notes/v<version>.html` 直传；
+   缺失的 `notes/` 子目录会先建
+3. **最后** `latest.yml`（同样原子替换）——它是 autoUpdater 读的清单，必须等安装包与新下载页内容全部落地后才覆盖
+
+上传前会逐产物核对 `release/release-notes/manifest.json` 里的 sha256 与字节数（对不上直接中止，一个字节都不发）；
+任一步失败即退出，**绝不会走到 `latest.yml`**，所以半截上传不会变成「客户端能看到但下载不到」的版本。
+`manifest.version` 与 `latest.yml` 的版本不一致会被拒绝（防止混用两次构建的产物）。
 
 环境变量方式（适合写进 CI 或本地 shell profile）：
 

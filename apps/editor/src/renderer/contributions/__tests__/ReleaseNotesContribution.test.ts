@@ -23,19 +23,17 @@ const NOTES: IReleaseNote[] = [
   {
     version: '0.1.3',
     date: '2026-06-02',
-    groups: [{ type: 'feat', title: '新功能', items: ['C'] }],
+    title: '三版',
+    summary: '摘要 C',
+    body: '## 新功能\n\n- C\n',
   },
-  {
-    version: '0.1.2',
-    date: '2026-05-20',
-    groups: [{ type: 'fix', title: 'Bug 修复', items: ['B'] }],
-  },
-  {
-    version: '0.1.1',
-    date: '2026-05-01',
-    groups: [{ type: 'feat', title: '新功能', items: ['A'] }],
-  },
+  { version: '0.1.2', date: '2026-05-20', title: '', summary: '', body: '## Bug 修复\n\n- B\n' },
+  { version: '0.1.1', date: '2026-05-01', title: '', summary: '', body: '## 新功能\n\n- A\n' },
 ]
+
+function versions(input: IEditorInput): string[] {
+  return (input as ReleaseNotesInput).notes.map((note) => note.version)
+}
 
 function fakeReleaseNotes(currentVersion: string, notes = NOTES): IReleaseNotesService {
   return {
@@ -109,11 +107,10 @@ describe('ReleaseNotesContribution', () => {
     )
     await contrib.whenReady
     expect(groups.opened).toHaveLength(1)
-    const input = groups.opened[0]
+    const input = groups.opened[0]!
     expect(input).toBeInstanceOf(ReleaseNotesInput)
-    const md = (input as ReleaseNotesInput).markdown
-    expect(md).toContain('## 0.1.3')
-    expect(md).not.toContain('## 0.1.2')
+    expect(versions(input)).toEqual(['0.1.3'])
+    expect((input as ReleaseNotesInput).notes[0]?.body).toContain('- C')
     expect(storage.read()).toBe('0.1.3')
   })
 
@@ -127,12 +124,9 @@ describe('ReleaseNotesContribution', () => {
     )
     await contrib.whenReady
     expect(groups.opened).toHaveLength(1)
-    const input = groups.opened[0]
+    const input = groups.opened[0]!
     expect(input).toBeInstanceOf(ReleaseNotesInput)
-    const md = (input as ReleaseNotesInput).markdown
-    expect(md).toContain('## 0.1.3')
-    expect(md).toContain('## 0.1.2')
-    expect(md).not.toContain('## 0.1.1')
+    expect(versions(input)).toEqual(['0.1.3', '0.1.2'])
     expect(storage.read()).toBe('0.1.3')
   })
 
@@ -161,6 +155,23 @@ describe('ReleaseNotesContribution', () => {
     )
     await contrib.whenReady
     expect(groups.opened).toHaveLength(0)
+  })
+
+  it('never shows a version newer than the running app', async () => {
+    const storage = fakeStorage('0.1.1')
+    const groups = fakeGroups()
+    const withFuture: IReleaseNote[] = [
+      { version: '0.2.0', title: '', summary: '', body: '## 未来\n' },
+      ...NOTES,
+    ]
+    const contrib = new ReleaseNotesContribution(
+      fakeReleaseNotes('0.1.3', withFuture),
+      storage.service,
+      groups.service,
+    )
+    await contrib.whenReady
+    // A shipped file can carry newer versions; this install can't vouch for them.
+    expect(versions(groups.opened[0]!)).toEqual(['0.1.3', '0.1.2'])
   })
 
   it('advances the version without a tab when the range has no notes', async () => {

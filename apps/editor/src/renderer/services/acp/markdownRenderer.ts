@@ -20,6 +20,7 @@
  *    - ~~strikethrough~~
  *    - `inline code`
  *    - [label](url)
+ *    - [label](scheme:target)  (only schemes the consumer opted into via `extraHrefSchemes`)
  *    - ![alt](url)       (image — https/file only)
  *    - <url>           (autolink — http/https/file only)
  *    - <a id="x"></a> / <a name="x"></a> (empty in-document anchor target)
@@ -100,14 +101,29 @@ export type MdInline =
   | { readonly type: 'anchor'; readonly id: string }
   | { readonly type: 'softbreak' }
 
+/** The subset of options nested blocks inherit (see `parseMarkdown`). */
+function toChildOptions(
+  options: ParseMarkdownOptions | undefined,
+): ParseMarkdownOptions | undefined {
+  const schemes = options?.extraHrefSchemes
+  return schemes !== undefined && schemes.length > 0 ? { extraHrefSchemes: schemes } : undefined
+}
+
 /**
  * Options for {@link parseMarkdown}. `frontmatter` enables YAML preamble
  * handling: when set, a `---`-fenced block at the very start of the document
  * becomes a single `frontmatter` node instead of an `hr` + paragraph. Off by
  * default so the ACP chat and other streaming consumers treat `---` as an `hr`.
+ *
+ * `extraHrefSchemes` opts specific consumers into additional explicit-link
+ * schemes (`[label](doc:x)`) — the release-notes view passes its policy's
+ * `doc:`/`command:` so those targets survive as link nodes instead of degrading
+ * to literal text. Empty by default: ACP chat, docs and previews keep treating
+ * every unknown scheme as literal text.
  */
 export interface ParseMarkdownOptions {
   readonly frontmatter?: boolean
+  readonly extraHrefSchemes?: readonly string[]
 }
 
 /**
@@ -131,6 +147,9 @@ export function parseMarkdown(
   const lines = input.replace(/\r\n?/g, '\n').split('\n')
   const out: MdNode[] = []
   let i = 0
+  // Inline/container blocks inherit the extra link schemes, never `frontmatter`:
+  // a `---` inside a nested block is an hr, not a second preamble.
+  const childOptions = toChildOptions(options)
 
   // YAML frontmatter: a `---` on the first line closed by a later `---`/`...`.
   // Emitted as one node the preview renders as a table; skipped otherwise.
@@ -191,7 +210,7 @@ export function parseMarkdown(
       out.push({
         type: 'heading',
         level,
-        children: parseInline(heading[2] ?? ''),
+        children: parseInline(heading[2] ?? '', childOptions),
         line: blockStart + lineOffset,
       })
       i++
@@ -217,7 +236,7 @@ export function parseMarkdown(
       }
       out.push({
         type: 'blockquote',
-        children: parseMarkdown(buf.join('\n'), undefined, lineOffset + blockStart),
+        children: parseMarkdown(buf.join('\n'), childOptions, lineOffset + blockStart),
         line: blockStart + lineOffset,
       })
       continue
@@ -297,13 +316,13 @@ export function parseMarkdown(
           i++
         }
         const children = childLines.some((l) => l.trim() !== '')
-          ? parseMarkdown(childLines.join('\n'), undefined, lineOffset + childStart)
+          ? parseMarkdown(childLines.join('\n'), childOptions, lineOffset + childStart)
           : undefined
         const taskMatch = /^\[([ xX])\]\s+(.*)$/.exec(firstLine)
         const leadingText = taskMatch ? (taskMatch[2] ?? '') : firstLine
         const itemText = [leadingText, ...continuationLines].join('\n')
         items.push({
-          inline: [...parseInline(itemText)],
+          inline: [...parseInline(itemText, childOptions)],
           checked: taskMatch ? taskMatch[1] !== ' ' : null,
           ...(children !== undefined ? { children } : {}),
         })
@@ -324,13 +343,13 @@ export function parseMarkdown(
     if (line.includes('|') && isTableDelimiterRow(lines[i + 1] ?? '')) {
       const align = parseTableDelimiter(lines[i + 1] ?? '')
       const cols = align.length
-      const header = splitTableRow(line, cols)
+      const header = splitTableRow(line, cols, childOptions)
       i += 2
       const rows: MdInline[][][] = []
       while (i < lines.length) {
         const cur = lines[i] ?? ''
         if (cur.trim() === '' || !cur.includes('|')) break
-        rows.push(splitTableRow(cur, cols))
+        rows.push(splitTableRow(cur, cols, childOptions))
         i++
       }
       out.push({ type: 'table', align, header, rows, line: blockStart + lineOffset })
@@ -356,7 +375,7 @@ export function parseMarkdown(
     }
     out.push({
       type: 'paragraph',
-      children: parseInline(para.join('\n')),
+      children: parseInline(para.join('\n'), childOptions),
       line: blockStart + lineOffset,
     })
   }
@@ -453,7 +472,7 @@ function isTopLevelBlockStart(line: string, nextLine: string): boolean {
  * nodes. We accept only http/https/file URLs for autolinks and bare URLs to
  * keep the renderer's attack surface small.
  */
-export function parseInline(text: string): readonly MdInline[] {
+export function parseInline(text: string, options?: ParseMarkdownOptions): readonly MdInline[] {
   const out: MdInline[] = []
   let buf = ''
   const flush = (): void => {
@@ -505,7 +524,7 @@ export function parseInline(text: string): readonly MdInline[] {
       const closeIdx = text.indexOf('~~', i + 2)
       if (closeIdx !== -1 && closeIdx > i + 2) {
         flush()
-        out.push({ type: 'strike', children: parseInline(text.slice(i + 2, closeIdx)) })
+        out.push({ type: 'strike', children: parseInline(text.slice(i + 2, closeIdx), options) })
         i = closeIdx + 2
         continue
       }
@@ -540,7 +559,7 @@ export function parseInline(text: string): readonly MdInline[] {
       const end = findBoldClose(text, i + 2, ch)
       if (end !== -1 && end > i + 2) {
         flush()
-        out.push({ type: 'bold', children: parseInline(text.slice(i + 2, end)) })
+        out.push({ type: 'bold', children: parseInline(text.slice(i + 2, end), options) })
         i = end + 2
         continue
       }
@@ -554,7 +573,7 @@ export function parseInline(text: string): readonly MdInline[] {
       const end = findItalicClose(text, i + 1, ch)
       if (end !== -1 && end > i + 1) {
         flush()
-        out.push({ type: 'italic', children: parseInline(text.slice(i + 1, end)) })
+        out.push({ type: 'italic', children: parseInline(text.slice(i + 1, end), options) })
         i = end + 1
         continue
       }
@@ -566,13 +585,13 @@ export function parseInline(text: string): readonly MdInline[] {
     // image (the label becomes its alt text). Anything the href predicate
     // rejects stays literal text: the scan falls through to the bare-URL /
     // bare-path probes one character later.
-    const link = matchMarkdownLinkAt(text, i)
+    const link = matchMarkdownLinkAt(text, i, options)
     if (link) {
       flush()
       out.push(
         link.image
           ? { type: 'image', src: link.href, alt: link.label }
-          : { type: 'link', href: link.href, children: parseInline(link.label) },
+          : { type: 'link', href: link.href, children: parseInline(link.label, options) },
       )
       i = link.end
       continue
@@ -660,9 +679,14 @@ export interface MarkdownLinkMatch {
  * into pictures, while the plain scanner keeps those — and same-document
  * anchors (`#x`), which have no target there — literal. Anything the href
  * predicate rejects returns null, leaving the text to the character-by-character
- * scan (`[x](javascript:alert(1))` stays literal).
+ * scan (`[x](javascript:alert(1))` stays literal). `options.extraHrefSchemes`
+ * widens the predicate for explicit links only (see {@link ParseMarkdownOptions}).
  */
-export function matchMarkdownLinkAt(text: string, i: number): MarkdownLinkMatch | null {
+export function matchMarkdownLinkAt(
+  text: string,
+  i: number,
+  options?: ParseMarkdownOptions,
+): MarkdownLinkMatch | null {
   if (text[i] !== '[') return null
   const labelEnd = findMatching(text, i, '[', ']')
   if (labelEnd === -1 || text[labelEnd + 1] !== '(') return null
@@ -679,12 +703,25 @@ export function matchMarkdownLinkAt(text: string, i: number): MarkdownLinkMatch 
     isSafeHref(href) ||
     looksLikeFilePath(href) ||
     isAnchorHref(href) ||
+    hasExtraHrefScheme(href, options) ||
     // A `path#fragment` href: the path portion is what decides (pitfall 11 in
     // the markdown subsystem map: the fragment is split off by the opener).
     (href.includes('#') &&
       !href.startsWith('#') &&
       looksLikeFilePath(href.slice(0, href.indexOf('#'))))
   return accepted ? { label, href, end: urlEnd + 1, image: isImage } : null
+}
+
+/**
+ * True when the href uses one of the consumer-opted-in schemes. Only an explicit
+ * `[label](scheme:target)` can reach this: bare-URL and autolink scanning stay
+ * restricted to http(s)/file, so opting in never makes arbitrary text clickable.
+ */
+function hasExtraHrefScheme(href: string, options: ParseMarkdownOptions | undefined): boolean {
+  const schemes = options?.extraHrefSchemes
+  if (schemes === undefined || schemes.length === 0) return false
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(href)?.[1]?.toLowerCase()
+  return scheme !== undefined && schemes.includes(scheme)
 }
 
 /**
@@ -904,8 +941,8 @@ function parseTableDelimiter(line: string): (TableAlign | null)[] {
  * Extra cells are dropped and missing cells padded with empty content, matching
  * GFM's column-count normalization against the header.
  */
-function splitTableRow(line: string, cols: number): MdInline[][] {
-  const cells = splitPipes(line).map((cell) => [...parseInline(cell.trim())])
+function splitTableRow(line: string, cols: number, options?: ParseMarkdownOptions): MdInline[][] {
+  const cells = splitPipes(line).map((cell) => [...parseInline(cell.trim(), options)])
   while (cells.length < cols) cells.push([])
   cells.length = cols
   return cells

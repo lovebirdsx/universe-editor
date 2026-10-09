@@ -1,7 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Pure helpers for release notes: semver comparison, range selection, and
- *  markdown rendering. Kept free of platform/React deps so they unit-test plainly.
+ *  Pure helpers for release notes: semver comparison and range selection. Kept free
+ *  of platform/React deps so they unit-test plainly. Link classification lives in the
+ *  shared policy (shared/releaseNotes/linkPolicy.ts) — the compiler uses the same one.
  *--------------------------------------------------------------------------------------------*/
 
 import type { IReleaseNote } from '../../../shared/ipc/releaseNotesService.js'
@@ -39,16 +40,14 @@ export function selectNotesInRange(
   )
 }
 
-/** Render release notes to markdown: `## version (date)` + `### group` + bullet list. */
-export function renderReleaseNotesMarkdown(notes: readonly IReleaseNote[]): string {
-  const out: string[] = []
-  for (const note of notes) {
-    out.push(note.date ? `## ${note.version} (${note.date})` : `## ${note.version}`)
-    for (const group of note.groups) {
-      if (group.items.length === 0) continue
-      out.push(`### ${group.title}`)
-      out.push(group.items.map((item) => `- ${item}`).join('\n'))
-    }
-  }
-  return out.join('\n\n') + '\n'
+/**
+ * Notes this install may show: everything up to the running app version. A shipped
+ * file can carry newer versions (a stale install reading a newer JSON), and the
+ * install cannot vouch for what it has never run.
+ */
+export function notesUpToVersion(
+  notes: readonly IReleaseNote[],
+  currentVersion: string,
+): IReleaseNote[] {
+  return notes.filter((n) => n.version === '' || compareVersions(n.version, currentVersion) <= 0)
 }

@@ -3,3 +3,5 @@ dist
 .turbo
 *.tsbuildinfo
 pnpm-lock.yaml
+# 逐字节生成的冻结归档：重排会破坏与迁移前 JSON 的等价校验
+docs/release-notes/archive/

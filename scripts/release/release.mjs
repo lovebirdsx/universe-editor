@@ -3,7 +3,13 @@
  *  Universe Editor release orchestrator.
  *
  *  This script keeps the mutable release steps in one place:
- *  version bump -> release notes -> commit -> checks -> package -> tag -> push -> upload.
+ *  notes gate -> version bump -> compile notes -> commit -> checks -> package -> tag ->
+ *  push -> upload.
+ *
+ *  Release notes are NOT written here anymore: the formal text is docs/release-notes/<v>.md
+ *  (AI-drafted, human-reviewed, committed before the release). A full release only compiles
+ *  it; --resume / --upload-only merely re-verify that the compiled artifacts still match the
+ *  committed sources (their tag already points at HEAD, so any drift is fatal).
  *--------------------------------------------------------------------------------------------*/
 
 import { spawnSync, execFileSync } from 'node:child_process'
@@ -20,7 +26,16 @@ import {
 } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { verifyPackagedRuntimeResources } from './runtime-resources.mjs'
+import {
+  verifyPackagedRuntimeResources,
+  verifyReleaseNotesArtifacts,
+} from './runtime-resources.mjs'
+import {
+  assertReleaseNotesReady,
+  BUILD_SNAPSHOT_DIR,
+  RUNTIME_JSON_PATH,
+} from './release-notes/source.mjs'
+import { loadNotes } from './release-notes/compile.mjs'
 import { generateSdkVersions } from '../ext-packages/generate-sdk-versions.mjs'
 import { loadEnv } from '../lib/env.mjs'
 
@@ -31,7 +46,10 @@ const repoRoot = resolve(__dirname, '../..')
 const editorPackageJson = join(repoRoot, 'apps/editor/package.json')
 const extensionApiPackageJson = join(repoRoot, 'packages/extension-api/package.json')
 const extensionApiIndexTs = join(repoRoot, 'packages/extension-api/src/index.ts')
-const releaseNotesJson = join(repoRoot, 'apps/editor/resources/release-notes.json')
+const releaseNotesJson = RUNTIME_JSON_PATH
+const releaseNotesSnapshotDir = BUILD_SNAPSHOT_DIR
+/** Where package-editor lands the upload bundle (see defaultBundleDir there). */
+const notesBundleDir = join(repoRoot, 'apps/editor/release/release-notes')
 const releaseDir = join(repoRoot, 'apps/editor/release')
 
 const BOOL_OPTIONS = new Set([
@@ -67,6 +85,9 @@ export function parseArgs(argv) {
   const out = {}
   for (let i = 0; i < argv.length; i++) {
     const raw = argv[i]
+    // `pnpm release -- --bump patch` forwards the separator verbatim (pnpm 11); the
+    // documented repo-wide form must keep working.
+    if (raw === '--') continue
     if (!raw.startsWith('--')) throw new Error(`无法识别参数: ${raw}`)
     const name = raw.slice(2)
     const key = camelCaseFlag(name)
@@ -322,7 +343,9 @@ function syncVersionSpace(version, dryRun) {
     log(`版本: extension-api index.ts version 常量 ${version}`)
   }
   if (dryRun) {
-    log('  [dry-run] 将重新生成 SDK 版本常量（uex sdkVersion.ts / create-extension sdkVersions.ts）')
+    log(
+      '  [dry-run] 将重新生成 SDK 版本常量（uex sdkVersion.ts / create-extension sdkVersions.ts）',
+    )
   } else {
     const { updated } = generateSdkVersions({ repoRoot })
     for (const rel of updated) log(`版本: 已重新生成 ${rel}`)
@@ -330,8 +353,44 @@ function syncVersionSpace(version, dryRun) {
   run(process.execPath, ['scripts/check-builtin-extensions-engines.mjs', '--fix'], { dryRun })
 }
 
-function generateReleaseNotes(version, dryRun) {
-  run(process.execPath, ['scripts/release/changelog.mjs', '--version', version], { dryRun })
+/**
+ * Release-notes gate, run BEFORE anything is written: a missing / still-draft target note,
+ * a filename that disagrees with its frontmatter, a duplicate version or a `sourceFrom`
+ * that does not match the previous tag all stop the release here — not after the version
+ * bump has already rewritten half the tree.
+ */
+export function assertReleaseNotesPreflight({ version, previousTag, notesDir }) {
+  const notes = loadNotes(notesDir)
+  return assertReleaseNotesReady({ notes, version, previousTag })
+}
+
+/**
+ * Commits made after the note's `sourceTo` are not covered by the draft's review. Report
+ * them (never block): the author decides whether the note needs another pass.
+ */
+function reportCommitsAfterSourceTo(note) {
+  if (!note.sourceTo) return
+  const out = gitMaybe(['log', `${note.sourceTo}..HEAD`, '--no-merges', '--pretty=format:%h %s'])
+  if (!out) return
+  log(`注意: ${note.file} 的 sourceTo ${note.sourceTo} 之后还有提交（未纳入本次复核，仅提醒）：`)
+  for (const line of out.split('\n')) log(`  ${line}`)
+}
+
+/**
+ * Compile (full) or verify (resume / upload-only) the release notes. A full run writes the
+ * canonical JSON + the build snapshot; the other modes must produce byte-identical output,
+ * otherwise the tag that is already at HEAD no longer describes what would ship.
+ */
+function compileReleaseNotes(version, args, dryRun) {
+  const verifyOnly = Boolean(args.resume || args.uploadOnly)
+  const cliArgs = [
+    ...(verifyOnly ? ['--check'] : []),
+    '--version',
+    version,
+    '--expect-version',
+    version,
+  ]
+  run(process.execPath, [join(__dirname, 'release-notes', 'compile.mjs'), ...cliArgs], { dryRun })
   if (dryRun) return
   const top = releaseNotesTopVersion()
   if (top !== version) die(`release-notes.json 顶部版本是 ${top || '(空)'}，期望 ${version}`)
@@ -414,6 +473,7 @@ export function buildReport({
   commits,
   artifacts,
   uploadTarget,
+  notes,
 }) {
   const lines = [
     `# Universe Editor ${version}`,
@@ -436,6 +496,17 @@ export function buildReport({
       lines.push(`  sha512: ${artifact.sha512}`)
     }
   }
+  lines.push('', '## Release notes', '')
+  if (!notes) {
+    lines.push('- (not compiled)')
+  } else {
+    lines.push(`- source version: ${notes.version}`)
+    for (const artifact of notes.artifacts) {
+      const suffix = artifact.upload ? '' : ' (本地，不上传)'
+      lines.push(`- ${artifact.path} (${artifact.bytes} B)${suffix}`)
+      lines.push(`  sha256: ${artifact.sha256}`)
+    }
+  }
   lines.push('')
   return `${lines.join('\n')}\n`
 }
@@ -448,7 +519,7 @@ function uploadTarget(args) {
   return `${user}@${host}:${dir}`
 }
 
-function writeReport(version, previousTag, args, dryRun) {
+function writeReport(version, previousTag, args, dryRun, notes) {
   const commitRange = previousTag ? `${previousTag}..HEAD` : 'HEAD'
   const report = buildReport({
     version,
@@ -457,6 +528,7 @@ function writeReport(version, previousTag, args, dryRun) {
     commits: commitSubjects(commitRange),
     artifacts: artifactInfo(),
     uploadTarget: args.noUpload ? '' : uploadTarget(args),
+    ...(notes ? { notes } : {}),
   })
   const reportPath = join(releaseDir, `release-report-v${version}.md`)
   if (dryRun) {
@@ -468,6 +540,39 @@ function writeReport(version, previousTag, args, dryRun) {
   log(`报告: ${reportPath}`)
 }
 
+/**
+ * The unpacked app dir depends on the packaging target; the notes check needs the one this
+ * run produced (win by default, linux for `--package-script package:linux:dir`).
+ */
+export function packagedResourcesRoot({ winRoot, linuxRoot, exists = existsSync } = {}) {
+  const candidates = [
+    winRoot ?? join(releaseDir, 'win-unpacked/resources'),
+    linuxRoot ?? join(releaseDir, 'linux-unpacked/resources'),
+  ]
+  return candidates.find((root) => exists(root)) ?? candidates[0]
+}
+
+function verifyReleaseNotesConsistency(version, packagedRoot) {
+  if (!existsSync(notesBundleDir)) {
+    die(`缺少 release notes 上传包 ${notesBundleDir}；打包链应已生成（package-editor 的最后一步）`)
+  }
+  const manifestPath = join(notesBundleDir, 'manifest.json')
+  const manifest = readJson(manifestPath)
+  if (manifest.version !== version) {
+    die(`notes 上传包版本是 ${manifest.version || '(空)'}，期望 ${version}`)
+  }
+  try {
+    // Also asserts packaged ≡ canonical and packaged ≡ the upload manifest's sha256.
+    verifyReleaseNotesArtifacts({ resourcesRoot: packagedRoot, bundleDir: notesBundleDir })
+  } catch (error) {
+    die(error instanceof Error ? error.message : String(error))
+  }
+  if (!existsSync(releaseNotesSnapshotDir)) {
+    die(`缺少 release notes 编译快照 ${releaseNotesSnapshotDir}；打包链应已重新生成`)
+  }
+  return manifest
+}
+
 function verifyPackagedVersion(version) {
   const packagedVersion = latestYmlVersion()
   if (packagedVersion !== version) {
@@ -477,11 +582,13 @@ function verifyPackagedVersion(version) {
   if (!artifacts.some((file) => file.endsWith('.exe'))) die('release/ 下没有 .exe 产物')
   if (!artifacts.some((file) => file.endsWith('.blockmap'))) die('release/ 下没有 .blockmap 产物')
   if (!artifacts.includes('latest.yml')) die('release/ 下没有 latest.yml')
+  const packagedRoot = packagedResourcesRoot()
   try {
-    verifyPackagedRuntimeResources()
+    verifyPackagedRuntimeResources(packagedRoot)
   } catch (error) {
     die(error instanceof Error ? error.message : String(error))
   }
+  return verifyReleaseNotesConsistency(version, packagedRoot)
 }
 
 function createTagIfNeeded(tag, dryRun, resume) {
@@ -547,6 +654,87 @@ function assertCurrentVersionHasTagBeforeNextRelease(currentVersion, targetVersi
   }
 }
 
+/** Which of the three release modes this invocation is in. */
+export function releaseMode(args) {
+  if (args.uploadOnly) return 'upload-only'
+  if (args.resume) return 'resume'
+  return 'full'
+}
+
+/**
+ * The release sequence, in order — `runRelease` walks exactly this list (read-only preflight
+ * runs before the loop; nothing else is hard-coded there).
+ *
+ * Two invariants are encoded here rather than in prose: `notesGate` runs in every mode and
+ * always before `versionBump` (a missing/draft note must not leave a half-bumped tree), and
+ * only a full release mutates the tree (`versionBump` / `commit` / the notes write) while
+ * `--resume` / `--upload-only` merely re-verify the already-tagged HEAD.
+ */
+export const RELEASE_STEPS = [
+  { id: 'notesGate', modes: ['full', 'resume', 'upload-only'] },
+  { id: 'versionBump', modes: ['full'] },
+  { id: 'compileNotes', modes: ['full', 'resume', 'upload-only'] },
+  { id: 'commit', modes: ['full'] },
+  { id: 'checks', modes: ['full', 'resume'] },
+  { id: 'package', modes: ['full', 'resume', 'upload-only'] },
+  { id: 'verifyPackaged', modes: ['full', 'resume', 'upload-only'] },
+  { id: 'report', modes: ['full', 'resume', 'upload-only'] },
+  { id: 'tag', modes: ['full', 'resume'] },
+  { id: 'push', modes: ['full', 'resume'] },
+  { id: 'upload', modes: ['full', 'resume', 'upload-only'] },
+]
+
+/** One implementation per RELEASE_STEPS id; the table decides when each one runs. */
+function releaseRunners({ state, args, dryRun }) {
+  const { targetVersion, targetTag, previousTag } = state
+  return {
+    notesGate: () => {
+      try {
+        state.note = assertReleaseNotesPreflight({ version: targetVersion, previousTag })
+      } catch (error) {
+        die(error instanceof Error ? error.message : String(error))
+      }
+      if (!state.note.legacy) reportCommitsAfterSourceTo(state.note)
+    },
+    versionBump: () => updateEditorVersion(targetVersion, dryRun),
+    compileNotes: () => compileReleaseNotes(targetVersion, args, dryRun),
+    commit: () => commitReleaseFiles(targetVersion, dryRun),
+    checks: () => runChecks(args, dryRun),
+    package: () => packageRelease(args, dryRun),
+    verifyPackaged: () => {
+      if (!dryRun) state.notesManifest = verifyPackagedVersion(targetVersion)
+    },
+    report: () => writeReport(targetVersion, previousTag, args, dryRun, state.notesManifest),
+    tag: () => createTagIfNeeded(targetTag, dryRun, args.resume),
+    push: () => {
+      if (!args.noPush) pushRelease(targetTag, dryRun)
+    },
+    upload: () => {
+      if (!args.noUpload) {
+        run(process.execPath, ['scripts/release/upload.mjs', ...uploadArgs(args)], { dryRun })
+      }
+    },
+  }
+}
+
+/** True when `stepId` runs in `mode`. Unknown ids throw — a typo must not silently skip. */
+export function stepRuns(stepId, mode) {
+  const step = RELEASE_STEPS.find((candidate) => candidate.id === stepId)
+  if (!step) throw new Error(`未知的发布步骤：${stepId}`)
+  return step.modes.includes(mode)
+}
+
+/** Steps that only re-verify (never rewrite) in the given mode. */
+export function compilesNotesForWrite(mode) {
+  return mode === 'full'
+}
+
+/**
+ * Read-only gate. It also refreshes tags, which is why it returns `previousTag`: callers
+ * cannot resolve that value beforehand without risking a stale local tag list (a fresh
+ * clone, or a tag a teammate just pushed, would otherwise fail the notes gate against the
+ * wrong baseline). `--dry-run`/`--no-push` intentionally skip the fetch and stay offline.
+ */
 function preflight(args, currentVersion, targetVersion, targetTag) {
   assertCleanWorktree(args.dryRun)
   assertMainBranch(args.allowNonMain)
@@ -563,6 +751,7 @@ function preflight(args, currentVersion, targetVersion, targetTag) {
   if (!args.uploadOnly && compareVersions(targetVersion, currentVersion) < 0) {
     die(`目标版本 ${targetVersion} 低于当前版本 ${currentVersion}`)
   }
+  return { previousTag: previousTagFor(targetTag) }
 }
 
 function runRelease(args) {
@@ -575,33 +764,30 @@ function runRelease(args) {
   }
   const targetTag = `v${targetVersion}`
   const dryRun = Boolean(args.dryRun)
+  const mode = releaseMode(args)
 
   log(`\nUniverse Editor release ${targetVersion}`)
-  log(
-    `Mode: ${args.uploadOnly ? 'upload-only' : args.resume ? 'resume' : 'full'}${dryRun ? ' (dry-run)' : ''}`,
-  )
+  log(`Mode: ${mode}${dryRun ? ' (dry-run)' : ''}`)
   log('')
 
-  preflight(args, currentVersion, targetVersion, targetTag)
-  const previousTag = previousTagFor(targetTag)
+  // Read-only gate first (it also does `git fetch`): the notes step inside the loop then
+  // guarantees a missing/draft note never leaves a half-bumped tree behind. `previousTag`
+  // comes back from it so the tag list it was derived from is the freshly fetched one.
+  const { previousTag } = preflight(args, currentVersion, targetVersion, targetTag)
   log(`Previous tag: ${previousTag || '(none)'}`)
   log('')
 
-  if (!args.uploadOnly) {
-    updateEditorVersion(targetVersion, dryRun)
-    generateReleaseNotes(targetVersion, dryRun)
-    commitReleaseFiles(targetVersion, dryRun)
-    runChecks(args, dryRun)
+  // The table (RELEASE_STEPS), not this loop, decides the order: `compileNotes` must run
+  // before `commit` so the regenerated release-notes.json lands in the release commit
+  // (tagging a tree whose JSON lacks the new version would ship a stale intro page).
+  const state = { targetVersion, targetTag, previousTag, note: undefined, notesManifest: undefined }
+  const runners = releaseRunners({ state, args, dryRun })
+  for (const step of RELEASE_STEPS) {
+    if (!stepRuns(step.id, mode)) continue
+    const runner = runners[step.id]
+    if (!runner) die(`发布步骤 ${step.id} 没有实现`)
+    runner()
   }
-
-  packageRelease(args, dryRun)
-  if (!dryRun) verifyPackagedVersion(targetVersion)
-  writeReport(targetVersion, previousTag, args, dryRun)
-
-  if (!args.uploadOnly) createTagIfNeeded(targetTag, dryRun, args.resume)
-  if (!args.noPush && !args.uploadOnly) pushRelease(targetTag, dryRun)
-  if (!args.noUpload)
-    run(process.execPath, ['scripts/release/upload.mjs', ...uploadArgs(args)], { dryRun })
 
   log(`\n完成: Universe Editor ${targetVersion}`)
 }

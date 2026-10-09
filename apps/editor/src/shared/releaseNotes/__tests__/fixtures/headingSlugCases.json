@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "comment": "Shared heading-slug cases. Asserted by the build-time compiler (scripts/release/__tests__/release-notes-source.test.mjs) and the app renderer (apps/editor/src/renderer/services/acp/__tests__/markdownRenderer.test.ts) — both must derive the same `id`/`data-anchor` for every heading, or a `#anchor` link works on one surface and dead-links on the other.",
+  "cases": [
+    { "text": "子结构：ITalkItem", "slug": "子结构italkitem" },
+    { "text": "升级注意事项", "slug": "升级注意事项" },
+    { "text": "Hello World!", "slug": "hello-world" },
+    { "text": "  Trim  Me  ", "slug": "trim-me" },
+    { "text": "用 a_b 与 粗体 说明", "slug": "用-ab-与-粗体-说明" },
+    { "text": "Release v0.15.0", "slug": "release-v0150" },
+    { "text": "性能：启动慢 30%", "slug": "性能启动慢-30" },
+    { "text": "C++ / C#", "slug": "c--c" },
+    { "text": "——", "slug": "" }
+  ]
+}

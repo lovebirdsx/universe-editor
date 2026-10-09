@@ -14,7 +14,7 @@ Universe Editor 的**更新分发 + 扩展市场后端**：单文件 Node 服务
 | `galleryPublish.mjs` | 服务器 | 自助发布 + 审批管理 API。被 `server.mjs` 在命中 `gallery/api/*` 时 lazy import。engines.universe 的 range 语法与 uex 同源 fail-closed 拦截（`\|\|` / hyphen 拒发，见 `gallery/lib.mjs` `UNSUPPORTED_RANGE`，改 uex 那份时两边同步） |
 | `registerPage.mjs` / `adminPage.mjs` | 服务器 | 内嵌 HTML 页面（零外部资源） |
 | `pageStyles.mjs` | 服务器 | 两页面共享的深色基础样式（与下载页同一套令牌；下载页是静态 HTML 无法 import，令牌各存一份，改主题两边同步） |
-| `download-page/index.html` | 开发机 → 发布根 | 面向用户的静态下载页（发布目录数据文件，**不进 bundle**）。首装由 `setup.mjs` 落到 `<UE_SERVER_ROOT>/index.html`，之后 `server:deploy` 随 `SERVER_VERSION` 同步（staged `index.html.v*`，sudoers 第三条 cp 通道） |
+| `download-page/index.html` | 开发机 → 发布根 | 面向用户的静态下载页（发布目录数据文件，**不进 bundle**）。更新说明按 `notes/index.json`（`release:upload` 同步的编译产物，带每版静态页路径）→ `release-notes.json`（仅元数据）→ 隐藏区块 逐级降级，版本上限取 `latest.yml`（绝不宣传未发布版本）。首装由 `setup.mjs` 落到 `<UE_SERVER_ROOT>/index.html`，之后 `server:deploy` 随 `SERVER_VERSION` 同步（staged `index.html.v*`，sudoers 第三条 cp 通道）；改页面内容必须 bump `SERVER_VERSION`，且发版前先部署服务端 |
 | `serverEnv.mjs` | **两边** | 运行时配置的单一事实源：白名单、默认值派生、`server.env` 读写、deploy 免密 sudoers 规则文本 |
 | `setup.mjs` | 服务器 | 装服务：拷产物 / 写 `server.env` / 注册服务 / 自动生成机密 / 防火墙 / 启停卸载 / `--deploy-user` 写 deploy sudoers |
 | `setup.sh` / `setup.ps1` | 服务器 | 平台入口：装 Node → 调 `setup.mjs` |

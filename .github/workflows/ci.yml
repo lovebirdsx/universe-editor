@@ -56,6 +56,12 @@ jobs:
       - name: CLAUDE.md size check
         run: pnpm claude-md:check
 
+      # 版本介绍的唯一正式来源是 docs/release-notes/*.md；apps/editor/resources/
+      # release-notes.json 是它的确定性派生物（含语法子集/链接白名单校验）。
+      # 同样只在 `pnpm check` 里，CI 逐条拆跑必须显式补上。
+      - name: Release notes check
+        run: pnpm release:notes:check
+
       # 内部标识（内网域名/代号/私网地址/本机路径/账号名）不得进入公开仓库。
       # 规则文件 gitignored，走 CI secret（raw JSON 数组）注入：raw 时落盘内容 ===
       # secret 值，任何意外打印都会被 GitHub 自动 mask（base64 解码后 ≠ secret 值，

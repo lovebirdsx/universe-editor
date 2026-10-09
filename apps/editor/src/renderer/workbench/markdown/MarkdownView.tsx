@@ -28,6 +28,7 @@ import {
   type MdInline,
   type MdListItem,
   type MdNode,
+  type ParseMarkdownOptions,
   type TableAlign,
 } from '../../services/acp/markdownRenderer.js'
 import {
@@ -89,7 +90,24 @@ interface MarkdownViewProps {
    * passes this, driven by the `markdown.preview.renderYamlFrontmatter` setting.
    */
   readonly frontmatter?: 'table' | 'hidden'
+  /**
+   * Additional explicit-link schemes (`[label](doc:x)`) this consumer accepts.
+   * Empty by default: ACP chat, docs and previews keep treating unknown schemes
+   * as literal text.
+   */
+  readonly extraHrefSchemes?: readonly string[]
+  /**
+   * Takes over link activation for the consumers that own their own navigation
+   * (release notes). Returning true consumes the click. Declining an href is
+   * NOT a fallback to the file/external handling: outside http(s)/anchors the
+   * handler is the only path, so a controlled scheme can never reach
+   * `window.open` or the file opener by accident.
+   */
+  readonly linkHandler?: MarkdownLinkHandler
 }
+
+/** Return true to consume the click; false lets http(s)/anchor links use the defaults. */
+export type MarkdownLinkHandler = (href: string, opts: { readonly toSide: boolean }) => boolean
 
 export function MarkdownView({
   text,
@@ -101,11 +119,18 @@ export function MarkdownView({
   initialAnchor,
   renderImage,
   frontmatter,
+  extraHrefSchemes,
+  linkHandler,
 }: MarkdownViewProps) {
+  // Identity of the scheme list drives the parse memo; the array prop itself is
+  // usually an inline literal, so comparing references would re-parse forever.
+  const schemesKey =
+    extraHrefSchemes !== undefined && extraHrefSchemes.length > 0 ? extraHrefSchemes.join(',') : ''
   const { nodes, sealedNodes, tailChars } = useMarkdownNodes(
     text,
     streaming ?? false,
     frontmatter !== undefined,
+    schemesKey,
   )
   // Absolute readings for the heap report: node counts are what move when a growing
   // message re-renders, and they are invisible to the V8 heap number. Registered
@@ -165,22 +190,26 @@ export function MarkdownView({
           <InlineCodeMarkdownLinkContext.Provider value={previewLinks ?? false}>
             <ImageRenderContext.Provider value={renderImage ?? defaultRenderImage}>
               <FrontmatterModeContext.Provider value={frontmatter}>
-                <div
-                  ref={rootRef}
-                  className={className ? `${styles['markdown']} ${className}` : styles['markdown']}
-                  {...(testId !== undefined ? { 'data-testid': testId } : {})}
-                >
-                  {streaming ? (
-                    <>
-                      <SealedNodes nodes={sealedNodes} />
-                      <MarkdownStreamingContext.Provider value={true}>
-                        <TailNodes nodes={nodes} from={sealedNodes.length} />
-                      </MarkdownStreamingContext.Provider>
-                    </>
-                  ) : (
-                    nodes.map((node, i) => <MemoBlock key={i} node={node} />)
-                  )}
-                </div>
+                <LinkHandlerContext.Provider value={linkHandler}>
+                  <div
+                    ref={rootRef}
+                    className={
+                      className ? `${styles['markdown']} ${className}` : styles['markdown']
+                    }
+                    {...(testId !== undefined ? { 'data-testid': testId } : {})}
+                  >
+                    {streaming ? (
+                      <>
+                        <SealedNodes nodes={sealedNodes} />
+                        <MarkdownStreamingContext.Provider value={true}>
+                          <TailNodes nodes={nodes} from={sealedNodes.length} />
+                        </MarkdownStreamingContext.Provider>
+                      </>
+                    ) : (
+                      nodes.map((node, i) => <MemoBlock key={i} node={node} />)
+                    )}
+                  </div>
+                </LinkHandlerContext.Provider>
               </FrontmatterModeContext.Provider>
             </ImageRenderContext.Provider>
           </InlineCodeMarkdownLinkContext.Provider>
@@ -209,6 +238,7 @@ function useMarkdownNodes(
   text: string,
   streaming: boolean,
   frontmatter: boolean,
+  schemesKey: string,
 ): {
   readonly nodes: readonly MdNode[]
   readonly sealedNodes: readonly MdNode[]
@@ -216,9 +246,20 @@ function useMarkdownNodes(
   readonly tailChars: number
 } {
   const cacheRef = useRef(createMarkdownStreamCache())
+  const parseOptions = useMemo<ParseMarkdownOptions | undefined>(
+    () =>
+      schemesKey === ''
+        ? undefined
+        : { extraHrefSchemes: schemesKey.split(',').filter((scheme) => scheme.length > 0) },
+    [schemesKey],
+  )
   const staticNodes = useMemo(
-    () => (streaming ? undefined : parseMarkdown(text, { frontmatter })),
-    [text, streaming, frontmatter],
+    () => (streaming ? undefined : parseMarkdown(text, { frontmatter, ...(parseOptions ?? {}) })),
+    [text, streaming, frontmatter, parseOptions],
+  )
+  const parse = useMemo(
+    () => (input: string) => parseMarkdown(input, { frontmatter, ...(parseOptions ?? {}) }),
+    [frontmatter, parseOptions],
   )
   const cache = cacheRef.current
   if (staticNodes !== undefined) {
@@ -228,7 +269,7 @@ function useMarkdownNodes(
       tailChars: text.length - cache.sealedText.length,
     }
   }
-  const nodes = parseMarkdownStreaming(text, cache)
+  const nodes = parseMarkdownStreaming(text, cache, parse)
   return { nodes, sealedNodes: cache.sealedNodes, tailChars: text.length - cache.sealedText.length }
 }
 
@@ -262,6 +303,13 @@ const BaseUriContext = createContext<URI | undefined>(undefined)
 const AnchorScrollContext = createContext<(id: string) => void>(() => {})
 
 const InlineCodeMarkdownLinkContext = createContext(false)
+
+/**
+ * Consumer-owned link activation (release notes). While set, a non-http(s),
+ * non-anchor href is the handler's alone: declining it does nothing rather than
+ * falling through to the file/external branches.
+ */
+const LinkHandlerContext = createContext<MarkdownLinkHandler | undefined>(undefined)
 
 // True while rendering the children of an anchor (SafeLink). Nested interactive
 // inline renderers (FilePathLink, inline-code links) must demote to plain
@@ -397,15 +445,17 @@ function TailNodes({ nodes, from }: { readonly nodes: readonly MdNode[]; from: n
 
 /**
  * A non-mermaid code fence. Wraps {@link CodeBlock} so it can read the file-link
- * opener from context and turn bare paths inside the block into clickable links.
+ * opener from context and turn bare paths inside the block into clickable links —
+ * unless a link handler owns resolution, in which case the block stays inert.
  */
 function CodeFenceBlock({ node }: { node: Extract<MdNode, { type: 'code_fence' }> }): ReactNode {
   const openFileLink = useContext(FileLinkContext)
+  const handlerOwnsLinks = useContext(LinkHandlerContext) !== undefined
   return (
     <CodeBlock
       code={node.code}
       lang={node.lang}
-      onOpenFilePath={openFileLink}
+      {...(handlerOwnsLinks ? {} : { onOpenFilePath: openFileLink })}
       {...(node.line !== undefined ? { line: node.line } : {})}
     />
   )
@@ -520,11 +570,17 @@ function InlineCode({ text }: { text: string }) {
   const openFileLink = useContext(FileLinkContext)
   const insideLink = useContext(InsideLinkContext)
   const renderMarkdownLink = useContext(InlineCodeMarkdownLinkContext)
+  // A host that owns link resolution (LinkHandlerContext) must not get file links
+  // invented on its behalf — the release-notes viewer promises the only clickable
+  // targets are doc:/command:/https/#anchor.
+  const handlerOwnsLinks = useContext(LinkHandlerContext) !== undefined
   const link = renderMarkdownLink && !insideLink ? parseInlineCodeMarkdownLink(text) : undefined
   if (link) return <SafeLink href={link.href}>{renderInline(link.children)}</SafeLink>
 
   const match = matchFullFilePath(text)
-  if (!match || insideLink) return <code className={styles['inlineCode']}>{text}</code>
+  if (!match || insideLink || handlerOwnsLinks) {
+    return <code className={styles['inlineCode']}>{text}</code>
+  }
   const onClick = (e: React.MouseEvent<HTMLAnchorElement>): void => {
     e.preventDefault()
     openFileLink(match.path, match.line, match.col, match.endLine, {
@@ -558,6 +614,7 @@ function SafeLink({ href, children }: { href: string; children: ReactNode }) {
   const openFileLink = useContext(FileLinkContext)
   const scrollToAnchor = useContext(AnchorScrollContext)
   const openDocLink = useContext(DocLinkContext)
+  const linkHandler = useContext(LinkHandlerContext)
   const isAnchor = isAnchorHref(href)
   // Case-insensitive: a bare `FILE:///…` autolink carries the scheme as typed.
   const isFile = /^file:/i.test(href)
@@ -565,11 +622,20 @@ function SafeLink({ href, children }: { href: string; children: ReactNode }) {
   // A relative doc link: starts with ./ or ../ and the path portion ends in .md
   const isRelativeDocLink =
     openDocLink !== undefined && /^\.\.?\//.test(href) && /\.md(#[^#]*)?$/.test(href)
+  // http(s) is the one family that keeps its default handling when a handler
+  // declines; everything else belongs to the handler (or to no one).
+  const isExternalUrl = /^https?:/i.test(href)
+  const handlerOwnsHref = linkHandler !== undefined && !isAnchor && !isExternalUrl
   const onClick = (e: React.MouseEvent<HTMLAnchorElement>): void => {
     e.preventDefault()
     if (isAnchor) {
       scrollToAnchor(href)
       return
+    }
+    if (linkHandler) {
+      const toSide = e.ctrlKey || e.metaKey
+      if (linkHandler(href, { toSide })) return
+      if (handlerOwnsHref) return
     }
     // Doc-to-doc relative link: intercept before file-path resolution.
     if (isRelativeDocLink && openDocLink) {
@@ -608,7 +674,11 @@ function SafeLink({ href, children }: { href: string; children: ReactNode }) {
     <a
       href={href}
       onClick={onClick}
-      target={isFile || isFilePath || isAnchor || isRelativeDocLink ? undefined : '_blank'}
+      target={
+        isFile || isFilePath || isAnchor || isRelativeDocLink || handlerOwnsHref
+          ? undefined
+          : '_blank'
+      }
       rel="noopener noreferrer"
       className={styles['mdLink']}
     >
@@ -630,13 +700,15 @@ function FilePathLink({
 }) {
   const openFileLink = useContext(FileLinkContext)
   const insideLink = useContext(InsideLinkContext)
+  const handlerOwnsLinks = useContext(LinkHandlerContext) !== undefined
   const label =
     line !== undefined
       ? `${path}:${line}${col !== undefined ? `:${col}` : endLine !== undefined ? `-${endLine}` : ''}`
       : path
   // Inside another anchor the outer link already owns the click; a nested <a>
-  // would be invalid HTML, so render as plain text.
-  if (insideLink) return <Fragment>{label}</Fragment>
+  // would be invalid HTML, so render as plain text. Same when a link handler owns
+  // resolution: it decides what is clickable, not the renderer.
+  if (insideLink || handlerOwnsLinks) return <Fragment>{label}</Fragment>
   const onClick = (e: React.MouseEvent<HTMLAnchorElement>): void => {
     e.preventDefault()
     openFileLink(path, line, col, endLine, { toSide: e.ctrlKey || e.metaKey })

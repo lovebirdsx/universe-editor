@@ -51,20 +51,74 @@ jobs:
     timeout-minutes: 5
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      # 本 job 不 checkout，gh 需要显式仓库上下文。
+      # gh 需要显式仓库上下文；checkout 只为了拿 docs/release-notes 源文件。
       GH_REPO: ${{ github.repository }}
     steps:
+      # 只 checkout 目标 tag，**不带 submodules**：本 job 只跑编译器，不打包。
+      - name: Checkout tag
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+
+      # 历史 tag（workflow_dispatch 回填）没有 docs/release-notes/，那条路只 cp 固定文案，
+      # 因此连依赖都不装——旧 tag 的 lockfile / 依赖状态与本 job 完全无关，回填不会因环境变红。
+      - name: Detect release-notes sources
+        id: notes
+        run: |
+          set -euo pipefail
+          if [ -d docs/release-notes ]; then
+            echo "present=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: pnpm/action-setup@v4.4.0
+        if: steps.notes.outputs.present == '1'
+
+      - uses: actions/setup-node@v5
+        if: steps.notes.outputs.present == '1'
+        with:
+          node-version: 22
+          cache: pnpm
+          package-manager-cache: false
+
+      # 链接改写要按 markdown 结构跳过代码块/行内代码里的同名字符串，所以编译器真的用
+      # markdown-it（devDependencies）分词——这条路径需要依赖，但不跑任何构建。
+      - name: Install dependencies
+        if: steps.notes.outputs.present == '1'
+        run: pnpm install --frozen-lockfile
+
+      # 正文与应用内 / 下载站同源：同一份 docs/release-notes/<version>.md 编译而来。
+      # 源目录不存在时降级为固定文案，绝不从提交列表回退生成。
+      - name: Compile release body
+        env:
+          RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          body="release-body.md"
+          fallback="release-body-fallback.md"
+          cat > "$fallback" <<'EOF'
+          双平台编辑器产物，供 samples 仓库 e2e 下载。可执行文件：linux-unpacked/universe-editor、win-unpacked/Universe Editor.exe
+          EOF
+          if [ -d docs/release-notes ]; then
+            node scripts/release/release-notes/compile.mjs --github-body "$version" --github-out "$body"
+          else
+            echo "::warning::tag $RELEASE_TAG 没有 docs/release-notes 源文件，Release 正文使用固定文案（不支持从提交列表回退）"
+            cp "$fallback" "$body"
+          fi
+          test -s "$body"
+
       - name: Create or update release
         env:
           RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
           RELEASE_TITLE: ${{ needs.resolve.outputs.title }}
         run: |
           set -euo pipefail
-          notes="双平台编辑器产物，供 samples 仓库 e2e 下载。可执行文件：linux-unpacked/universe-editor、win-unpacked/Universe Editor.exe"
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release edit "$RELEASE_TAG" --title "$RELEASE_TITLE" --notes "$notes"
+            gh release edit "$RELEASE_TAG" --title "$RELEASE_TITLE" --notes-file release-body.md
           else
-            gh release create "$RELEASE_TAG" --title "$RELEASE_TITLE" --notes "$notes"
+            gh release create "$RELEASE_TAG" --title "$RELEASE_TITLE" --notes-file release-body.md
           fi
 
   package-linux:

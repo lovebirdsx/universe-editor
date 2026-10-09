@@ -1,6 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  ReleaseNotesEditor styles — a scrollable reading pane with a headline banner.
+ *  ReleaseNotesEditor styles — a scrollable reading pane with one section per version.
  *--------------------------------------------------------------------------------------------*/
 
 .root {
@@ -18,10 +18,77 @@
   font-weight: 600;
 }
 
-.body {
+.index {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
   max-width: 860px;
   margin: 0 auto;
-  padding: 16px 32px 24px;
+  padding: 12px 32px 0;
+}
+
+.indexItem {
+  padding: 2px 8px;
+  border: 1px solid var(--vscode-panel-border, #3c3c3c);
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.indexItem:hover {
+  background: var(--vscode-list-hoverBackground, #2a2d2e);
+}
+
+.empty {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 16px 32px;
+}
+
+.version {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 8px 32px 20px;
+}
+
+.version + .version {
+  border-top: 1px solid var(--vscode-panel-border, #3c3c3c);
+}
+
+.versionHeader {
+  padding: 16px 0 0;
+}
+
+.versionTitle {
+  display: inline;
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.versionName {
+  margin-left: 8px;
+  font-size: 16px;
+  font-weight: 600;
+  opacity: 0.9;
+}
+
+.versionDate {
+  margin-left: 8px;
+  font-size: 12px;
+  opacity: 0.6;
+}
+
+.versionSummary {
+  margin: 6px 0 0;
+  opacity: 0.85;
+}
+
+.body {
+  padding: 8px 0 0;
   font-size: 14px;
   line-height: 1.6;
   gap: 8px;

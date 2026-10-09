@@ -1701,6 +1701,9 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'releaseNotes.show': '显示发行说明',
   'releaseNotes.title': '发行说明',
   'releaseNotes.whatsNew': '{version} 中的新功能',
+  'releaseNotes.docMissing': '这个版本的文档未随应用提供：{docId}',
+  'releaseNotes.docMissing.open': '在 GitHub 上查看该版本文档',
+  'releaseNotes.linkRejected': '无法打开的链接：{reason}',
 
   // --- Schema viewer ---
   'schemaViewer.name': 'Schema：{name}',

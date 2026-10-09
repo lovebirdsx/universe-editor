@@ -6,13 +6,14 @@
     "declaration": true,
     "declarationMap": true,
     "experimentalDecorators": true,
+    "resolveJsonModule": true,
     "outDir": "dist/types/node",
     "rootDir": "src",
     "tsBuildInfoFile": "dist/.tsbuildinfo-node",
     "types": ["node", "electron-vite/node"],
     "lib": ["ES2022"]
   },
-  "include": ["src/main", "src/preload", "src/shared"],
+  "include": ["src/main", "src/preload", "src/shared", "src/**/*.json"],
   "references": [
     { "path": "../../packages/platform" }
   ]
