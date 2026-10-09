@@ -17,7 +17,6 @@ import {
   Emitter,
   createDecorator,
   type Event,
-  type IDirectoryEntry,
   type IFileChangeEvent,
   IFileService,
   IFileWatcherService,
@@ -47,20 +46,14 @@ import {
   relativeTo,
   sameUri,
 } from './explorerTreeUtils.js'
+import { processDirectoryEntries, type IExplorerEntry } from './explorerEntries.js'
 import { IExcludeService } from '../exclude/ExcludeService.js'
 import { IFocusScopeService } from '../focus/FocusScopeService.js'
 import { basenameOf, incrementFileName, targetInDirectory } from './explorerFileOperations.js'
 import { IFileClipboardService } from '../../../shared/ipc/fileClipboardService.js'
+import { pushPerfPhaseSample } from '../performance/perfPhases.js'
 
-export interface IExplorerEntry {
-  readonly resource: URI
-  readonly name: string
-  readonly isDirectory: boolean
-  readonly isSymbolicLink?: boolean
-  readonly compactName?: string
-  /** The topmost directory in the compact chain — used as drag source. */
-  readonly compactRoot?: URI
-}
+export type { IExplorerEntry } from './explorerEntries.js'
 
 export const IExplorerTreeService = createDecorator<ExplorerTreeService>('explorerTreeService')
 
@@ -76,31 +69,44 @@ export interface IFileRenameOperation {
   readonly isDirectory: boolean
 }
 
+/** Which entry point asked for a directory read — perf attribution only. */
+type LoadSource = 'expand' | 'compact' | 'refresh'
+
+/** Warn/push a perf sample past any of these. */
+const SLOW_LIST_READ_MS = 200
+const SLOW_LIST_PROCESS_MS = 50
+const LARGE_DIRECTORY_ENTRIES = 10_000
+
+/** 一次目录读取的耗时剖面（slow-path 归因用）。 */
+interface IDirectoryReadReport {
+  resource: URI
+  source: LoadSource
+  total: number
+  visible: number
+  readStart: number
+  /** list 墙钟（IPC + await），非 CPU。 */
+  readWall: number
+  processStart: number
+  /** 过滤 + 构造 + 排序的墙钟，含 yield 等待，非 CPU。 */
+  processWall: number
+  /** 其中单次同步排序耗时——真实的同步阻塞。 */
+  sortMs: number
+  sortStart: number
+}
+
 interface NodeState {
   children: IExplorerEntry[] | null
   loading: boolean
   error: string | null
-  // In-flight listing. The compact-chain prefetch shares it with expand(), so
-  // the two paths never fire two list IPC for the same directory.
+  /** 在途读取；expand / compact 预取 / refresh 共用，同一目录不并发 list。 */
   pending: Promise<void> | null
+  /** 在途期间到达的请求由此标记再读一轮：一轮内的多次刷新合并，尾读期间来的再赢得一轮。 */
+  trailing: boolean
+  source: LoadSource
 }
 
 function basename(resource: URI): string {
   return basenameOf(resource)
-}
-
-function sortEntries(entries: readonly IDirectoryEntry[], parent: URI): IExplorerEntry[] {
-  return entries
-    .map((e) => ({
-      resource: URI.joinPath(parent, e.name),
-      name: e.name,
-      isDirectory: e.isDirectory,
-      ...(e.isSymbolicLink ? { isSymbolicLink: true } : {}),
-    }))
-    .sort((a, b) => {
-      if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1
-      return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
-    })
 }
 
 export class ExplorerTreeService extends Disposable {
@@ -134,6 +140,8 @@ export class ExplorerTreeService extends Disposable {
   // restore replays the persisted set (those flips are not user gestures).
   private _restoreGeneration = 0
   private _restoring = false
+  /** `_setRoot` / `dispose()` 递增；每个跨 await 的路径回写前比对，旧树在途读取既不发布也不建节点。 */
+  private _generation = 0
 
   private readonly _dataSource: ITreeDataSource<IExplorerEntry> = {
     getId: (e) => e.resource.toString(),
@@ -149,8 +157,11 @@ export class ExplorerTreeService extends Disposable {
       return this._computeCompactChildren(raw)
     },
     loadChildren: async (e) => {
-      await this._ensureChildrenLoaded(e.resource)
-      await this._ensureCompactChainsFor(this._ensureNode(e.resource).children ?? [])
+      const generation = this._generation
+      await this._ensureChildrenLoaded(e.resource, 'expand')
+      // 读取期间换根会作废本次将触碰的全部节点；继续走会把旧根目录 _ensureNode 回新树。
+      if (generation !== this._generation) return
+      await this._ensureCompactChainsFor(this._ensureNode(e.resource).children ?? [], generation)
     },
     getRoots: () => (this._root ? [this._rootEntry(this._root)] : []),
     getParent: (e) => {
@@ -268,6 +279,11 @@ export class ExplorerTreeService extends Disposable {
   /** The TreeModel powering this view — consumed directly by ExplorerView's <Tree>. */
   get model(): TreeModel<IExplorerEntry> {
     return this._model
+  }
+
+  override dispose(): void {
+    this._generation++ // abandon every in-flight read / prefetch step
+    super.dispose()
   }
 
   get root(): URI | null {
@@ -746,6 +762,7 @@ export class ExplorerTreeService extends Disposable {
     const rootChanged = normalized?.toString() !== this._root?.toString()
     if (rootChanged && this._root) this._persistExpansion(true)
     this._restoreGeneration++ // abandon any in-flight restore of the old root
+    this._generation++ // abandon every in-flight read / prefetch step
     this._root = normalized
     this._nodes.clear()
     this._activeEditorResource = null
@@ -858,15 +875,16 @@ export class ExplorerTreeService extends Disposable {
   }
 
   private async _reloadNodes(resources: readonly URI[]): Promise<void> {
+    const generation = this._generation
     const anchors = this._captureCompactAnchors()
-    await Promise.all(
-      resources.map((resource) => this._loadChildren(resource, this._ensureNode(resource))),
-    )
+    await Promise.all(resources.map((resource) => this._reloadNode(resource, generation)))
+    if (generation !== this._generation) return
     await Promise.all(
       resources.map((resource) =>
-        this._ensureCompactChainsFor(this._ensureNode(resource).children ?? []),
+        this._ensureCompactChainsFor(this._ensureNode(resource).children ?? [], generation),
       ),
     )
+    if (generation !== this._generation) return
     this._model.refresh()
     this._remapSelectionToCompact(anchors)
   }
@@ -1042,7 +1060,14 @@ export class ExplorerTreeService extends Disposable {
     const key = resource.toString()
     let node = this._nodes.get(key)
     if (!node) {
-      node = { children: null, loading: false, error: null, pending: null }
+      node = {
+        children: null,
+        loading: false,
+        error: null,
+        pending: null,
+        trailing: false,
+        source: 'expand',
+      }
       this._nodes.set(key, node)
     }
     return node
@@ -1240,49 +1265,170 @@ export class ExplorerTreeService extends Disposable {
   }
 
   /** List only when children are unknown; concurrent callers share one IPC. */
-  private _ensureChildrenLoaded(resource: URI): Promise<void> {
+  private _ensureChildrenLoaded(resource: URI, source: LoadSource = 'expand'): Promise<void> {
+    return this._scheduleLoad(resource, false, source, this._generation)
+  }
+
+  /** Re-read regardless of what is cached. */
+  private _reloadNode(resource: URI, generation = this._generation): Promise<void> {
+    return this._scheduleLoad(resource, true, 'refresh', generation)
+  }
+
+  /**
+   * 所有目录读取的唯一入口（single-flight）。force（刷新 / watcher）不给在途读取另起并发 list，
+   * 而是打 trailing 标记让 drain 循环再读一轮。
+   */
+  private _scheduleLoad(
+    resource: URI,
+    force: boolean,
+    source: LoadSource,
+    generation: number,
+  ): Promise<void> {
+    if (generation !== this._generation) return Promise.resolve()
     const node = this._ensureNode(resource)
-    if (node.children !== null) return Promise.resolve()
-    if (!node.pending) {
-      node.pending = this._loadChildren(resource, node).finally(() => {
-        node.pending = null
-      })
-    }
+    if (!force && node.children !== null && !node.trailing) return Promise.resolve()
+    node.source = source
+    if (force) node.trailing = true
+    if (!node.pending) node.pending = this._drainLoads(resource, node, generation)
     return node.pending
   }
 
+  private async _drainLoads(resource: URI, node: NodeState, generation: number): Promise<void> {
+    const key = resource.toString()
+    try {
+      do {
+        node.trailing = false
+        await this._loadChildren(resource, node, generation, node.source)
+      } while (node.trailing && this._isLiveLoad(key, node, generation))
+    } finally {
+      // pending 与循环退场在同一同步时刻清空：晚一个微任务会把落在窗口里的请求挂到已停的循环上。
+      node.pending = null
+    }
+  }
+
   /** 补链只在加载或刷新后渲染前执行；不可从 _loadChildren 调用，否则会重置深度并递归整棵树。 */
-  private async _ensureCompactChainsFor(children: readonly IExplorerEntry[]): Promise<void> {
+  private async _ensureCompactChainsFor(
+    children: readonly IExplorerEntry[],
+    generation = this._generation,
+  ): Promise<void> {
     await Promise.all(
-      children.filter((c) => c.isDirectory).map((c) => this._eagerLoadForCompact(c.resource)),
+      children
+        .filter((c) => c.isDirectory)
+        .map((c) => this._eagerLoadForCompact(c.resource, 0, generation)),
     )
   }
 
-  private async _eagerLoadForCompact(resource: URI, depth = 0): Promise<void> {
+  private async _eagerLoadForCompact(
+    resource: URI,
+    depth = 0,
+    generation = this._generation,
+  ): Promise<void> {
     if (depth >= 20) return
-    await this._ensureChildrenLoaded(resource)
+    if (generation !== this._generation) return
+    await this._ensureChildrenLoaded(resource, 'compact')
+    if (generation !== this._generation) return
     const ch = this._ensureNode(resource).children
     if (ch && ch.length === 1 && (ch[0]?.isDirectory ?? false)) {
-      await this._eagerLoadForCompact(ch[0]!.resource, depth + 1)
+      await this._eagerLoadForCompact(ch[0]!.resource, depth + 1, generation)
     }
   }
 
-  private async _loadChildren(resource: URI, node: NodeState): Promise<void> {
+  private async _loadChildren(
+    resource: URI,
+    node: NodeState,
+    generation: number,
+    source: LoadSource,
+  ): Promise<void> {
+    const key = resource.toString()
     node.loading = true
     node.error = null
+    const readStart = performance.now()
+    let readWall = 0
+    let processStart = readStart
+    let processWall = 0
+    let sortMs = 0
+    let sortStart = readStart
     try {
       const entries = await this._fileService.list(resource)
-      const sorted = sortEntries(entries, resource)
+      // list 跨 IPC + provider await：readWall 是 renderer 等待的墙钟，不是 CPU。
+      readWall = performance.now() - readStart
+      if (!this._isLiveLoad(key, node, generation)) return
       const root = this._root
-      node.children = root ? sorted.filter((e) => this._isEntryVisible(root, e)) : sorted
-      this._logger.debug(`loadChildren ${resource.toString()} entries=${node.children.length}`)
+      processStart = performance.now()
+      const children = await processDirectoryEntries(
+        entries,
+        resource,
+        root ? relativeTo(root, resource) : '',
+        root ? (relPath, isDirectory) => this._isPathVisible(relPath, isDirectory) : undefined,
+        (ms, startTime) => {
+          sortMs = ms
+          sortStart = startTime
+        },
+      )
+      processWall = performance.now() - processStart
+      if (!this._isLiveLoad(key, node, generation)) return
+      node.children = children
+      this._logger.debug(`loadChildren ${key} entries=${children.length}`)
+      this._reportDirectoryRead({
+        resource,
+        source,
+        total: entries.length,
+        visible: children.length,
+        readStart,
+        readWall,
+        processStart,
+        processWall,
+        sortMs,
+        sortStart,
+      })
     } catch (err) {
+      if (!this._isLiveLoad(key, node, generation)) return
       node.children = []
       node.error = err instanceof Error ? err.message : String(err)
-      this._logger.warn(`loadChildren failed ${resource.toString()}`, node.error)
+      this._logger.warn(`loadChildren failed ${key}`, node.error)
     } finally {
       node.loading = false
     }
+  }
+
+  /** 这次读取仍是树想要的：generation 未变且 key 上还是同一节点对象。 */
+  private _isLiveLoad(key: string, node: NodeState, generation: number): boolean {
+    return generation === this._generation && this._nodes.get(key) === node
+  }
+
+  /** 慢/超大目录的归因入口，只记条数、来源与 URI，绝不记文件名。 */
+  private _reportDirectoryRead(report: IDirectoryReadReport): void {
+    const {
+      resource,
+      source,
+      total,
+      visible,
+      readStart,
+      readWall,
+      processStart,
+      processWall,
+      sortMs,
+      sortStart,
+    } = report
+    if (
+      readWall < SLOW_LIST_READ_MS &&
+      processWall < SLOW_LIST_PROCESS_MS &&
+      total < LARGE_DIRECTORY_ENTRIES
+    ) {
+      return
+    }
+    pushPerfPhaseSample(`explorer.listReadWall (${source}, ipc, not cpu)`, readStart, readWall)
+    pushPerfPhaseSample(
+      `explorer.processWall (${source}, awaits, not cpu)`,
+      processStart,
+      processWall,
+    )
+    if (sortMs > 0) {
+      pushPerfPhaseSample(`explorer.sortEntries (${source}, sync)`, sortStart, sortMs)
+    }
+    this._logger.warn(
+      `slow directory ${resource.toString()} entries=${total} visible=${visible} source=${source} readWall=${readWall.toFixed(1)}ms processWall=${processWall.toFixed(1)}ms sort=${sortMs.toFixed(1)}ms`,
+    )
   }
 
   /**
@@ -1291,9 +1437,12 @@ export class ExplorerTreeService extends Disposable {
    * ancestor directories of a focus folder visible so the subtree stays
    * reachable — see focusScopeUtils.
    */
+  private _isPathVisible(relPath: string, isDirectory: boolean): boolean {
+    if (this._exclude.isExcluded(relPath, 'files')) return false
+    return this._focus.isVisible(relPath, isDirectory)
+  }
+
   private _isEntryVisible(root: URI, entry: IExplorerEntry): boolean {
-    const rel = relativeTo(root, entry.resource)
-    if (this._exclude.isExcluded(rel, 'files')) return false
-    return this._focus.isVisible(rel, entry.isDirectory)
+    return this._isPathVisible(relativeTo(root, entry.resource), entry.isDirectory)
   }
 }
