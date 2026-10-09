@@ -863,6 +863,98 @@ describe('AcpSessionService.resumeSession — happy path', () => {
     expect(resumed.plan.get()).toEqual([])
   })
 
+  it('never shows or mirrors the forked baseline plan on a side-task resume', async () => {
+    const built = buildService({
+      loadSessionUpdates: [
+        {
+          // The fork rebuilds its taskState from the inherited Task* results and
+          // publishes a full snapshot per result while session/load replays the
+          // baseline (vendor acp-agent.ts:12826).
+          sessionId: 'agent-side-plan',
+          update: {
+            sessionUpdate: 'plan',
+            entries: [{ content: 'parent task A', priority: 'medium', status: 'pending' }],
+          },
+        },
+        {
+          // The side task's first own prompt — the anchor that ends the baseline.
+          sessionId: 'agent-side-plan',
+          update: {
+            sessionUpdate: 'user_message_chunk',
+            content: { type: 'text', text: 'explain this' },
+            messageId: 'anchor-msg',
+          } as never,
+        },
+      ],
+      loadSessionResult: {},
+    })
+    svc = built.svc
+    await built.history.initialize()
+    built.history.add({
+      agentId: 'fake',
+      sessionIdOnAgent: 'agent-side-plan',
+      title: 'side chat',
+      sideTaskOf: 'agent-parent',
+      sideTaskAnchorMessageId: 'anchor-msg',
+    })
+
+    const side = await svc.resumeSession('agent-side-plan')
+    expect(side.plan.get()).toEqual([])
+    expect(built.history.get('agent-side-plan')?.plan).toBeUndefined()
+
+    // The fork re-publishes the accumulated taskState at the top of every prompt
+    // (vendor acp-agent.ts:3746) — after endHistoryReplay, so the gate is gone.
+    // The inherited entry must stay out of the bar AND out of the mirror (which
+    // would otherwise reseed it through initState.plan on the next reopen).
+    built.client.connected.at(-1)!.sink.onSessionUpdate({
+      sessionId: 'agent-side-plan',
+      update: {
+        sessionUpdate: 'plan',
+        entries: [
+          { content: 'parent task A', priority: 'medium', status: 'pending' },
+          { content: 'side task own step', priority: 'medium', status: 'pending' },
+        ],
+      },
+    })
+    expect(side.plan.get().map((e) => e.content)).toEqual(['side task own step'])
+    expect(built.history.get('agent-side-plan')?.plan?.map((e) => e.content)).toEqual([
+      'side task own step',
+    ])
+  })
+
+  it('drops a stale baseline plan mirrored on a side-task row before the ledger existed', async () => {
+    const built = buildService({
+      loadSessionUpdates: [
+        {
+          sessionId: 'agent-side-stale',
+          update: {
+            sessionUpdate: 'plan',
+            entries: [{ content: 'parent task A', priority: 'medium', status: 'pending' }],
+          },
+        },
+      ],
+      loadSessionResult: {},
+    })
+    svc = built.svc
+    await built.history.initialize()
+    // A row an older build mirrored the parent's plan onto: the snapshot is
+    // seeded into the session before the gate drops the replay's own copy, and
+    // nothing else would clear it until the next prompt.
+    built.history.add({
+      agentId: 'fake',
+      sessionIdOnAgent: 'agent-side-stale',
+      title: 'side chat',
+      sideTaskOf: 'agent-parent',
+    })
+    built.history.setHistoryPlan('agent-side-stale', [
+      { content: 'parent task A', status: 'pending' },
+    ])
+
+    const side = await svc.resumeSession('agent-side-stale')
+    expect(side.plan.get()).toEqual([])
+    expect(built.history.get('agent-side-stale')?.plan).toBeUndefined()
+  })
+
   it('routes session/update notifications streamed DURING session/load to the resumed session', async () => {
     const built = buildService({
       loadSessionUpdates: [

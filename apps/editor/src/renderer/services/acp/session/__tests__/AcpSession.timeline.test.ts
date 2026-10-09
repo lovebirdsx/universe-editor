@@ -1688,6 +1688,118 @@ describe('AcpSession.timeline', () => {
     expect(item.message.text).toBe('fresh message')
   })
 
+  it('keeps the forked baseline plan out of the bar when the fork re-sends taskState', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    s.beginHistoryReplay()
+    s.suppressReplayToTimeline('anchor-msg')
+    // The replay rebuilds the fork's taskState from the inherited Task* results
+    // and publishes a full snapshot per result — the parent's plan.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'plan',
+        entries: [{ content: 'parent task A', priority: 'medium', status: 'pending' }],
+      },
+    })
+    expect(s.plan.get()).toEqual([])
+
+    s.endHistoryReplay()
+
+    // The fork re-publishes the accumulated taskState at the top of every prompt
+    // (vendor acp-agent.ts:3746) — after the gate is gone. The inherited entry
+    // must not resurface; the side task's own entry must.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'plan',
+        entries: [
+          { content: 'parent task A', priority: 'medium', status: 'pending' },
+          { content: 'side task own step', priority: 'medium', status: 'pending' },
+        ],
+      },
+    })
+    expect(s.plan.get().map((e) => e.content)).toEqual(['side task own step'])
+
+    // A snapshot that is nothing but the baseline leaves the bar empty.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'plan',
+        entries: [{ content: 'parent task A', priority: 'medium', status: 'pending' }],
+      },
+    })
+    expect(s.plan.get()).toEqual([])
+  })
+
+  it('subtracts the baseline plan on a replay that is not gated (rewind re-arms nothing)', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    s.beginHistoryReplay()
+    s.suppressReplayToTimeline('anchor-msg')
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'plan',
+        entries: [{ content: 'parent task A', priority: 'medium', status: 'pending' }],
+      },
+    })
+    s.endHistoryReplay()
+
+    // Rewind resets and replays the whole transcript head WITHOUT re-arming the
+    // gate (_resetForReplay + beginHistoryReplay), so the ledger has to outlive
+    // beginHistoryReplay — cleared with the tool-call ids, the parent plan would
+    // land back on the bar and into the history mirror.
+    s.beginHistoryReplay()
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'plan',
+        entries: [
+          { content: 'parent task A', priority: 'medium', status: 'pending' },
+          { content: 'side task own step', priority: 'medium', status: 'pending' },
+        ],
+      },
+    })
+    expect(s.plan.get().map((e) => e.content)).toEqual(['side task own step'])
+    s.endHistoryReplay()
+  })
+
+  it('treats a baseline entry the side task itself mutated as the side task’s own', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    s.beginHistoryReplay()
+    s.suppressReplayToTimeline('anchor-msg')
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'plan',
+        entries: [{ content: 'parent task A', priority: 'medium', status: 'pending' }],
+      },
+    })
+    s.endHistoryReplay()
+
+    // The signature is status + content, so the contract is "the parent's plan
+    // never shows as-is" — not "its text is banned forever". An entry the side
+    // task picks up (or that the fork re-labels through activeForm) is its own.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'plan',
+        entries: [{ content: 'parent task A', priority: 'medium', status: 'in_progress' }],
+      },
+    })
+    expect(s.plan.get().map((e) => `${e.status}:${e.content}`)).toEqual([
+      'in_progress:parent task A',
+    ])
+  })
+
   it('anchor lifts suppression at the boundary user chunk, keeping the side task’s own turns', async () => {
     const s = await svc.createSession()
     await s.whenConnected()

@@ -289,6 +289,17 @@ export const MAX_ORPHAN_PARENT_ENTRIES = 64
  */
 export const MAX_SUPPRESSED_TOOL_CALL_IDS = 2048
 
+/**
+ * Cap on the dropped-baseline plan-entry signatures a side task remembers (see
+ * `AcpSession._suppressedPlanSignatures`). Bounded FIFO for the same reason as
+ * the tool-call ids: the record has to outlive the replay window, because the
+ * fork re-publishes the inherited task list at the top of every prompt
+ * afterwards. Unlike a tool-call id, an evicted signature *can* resurface the
+ * parent's entry, so the cap is deliberately loose — it only binds once a
+ * baseline has carried this many distinct entry states.
+ */
+export const MAX_SUPPRESSED_PLAN_SIGNATURES = 4096
+
 /** UTF-16 byte size of a string: `length` counts code units, each 2 bytes. */
 function utf16Bytes(s: string): number {
   return s.length * 2

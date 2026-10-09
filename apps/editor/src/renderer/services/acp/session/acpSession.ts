@@ -23,6 +23,7 @@ import {
 import type {
   AvailableCommand,
   ContentBlock,
+  PlanEntry,
   PromptRequest,
   PromptResponse,
   SessionConfigOption,
@@ -72,6 +73,7 @@ import {
   MAX_ORPHAN_PARENT_ENTRIES,
   MAX_PLAN_ENTRIES,
   MAX_PLAN_ENTRY_CHARS,
+  MAX_SUPPRESSED_PLAN_SIGNATURES,
   MAX_SUPPRESSED_TOOL_CALL_IDS,
   MAX_TOOL_CALL_PARENT_ENTRIES,
   MESSAGE_TRIM_PREVIEW_CHARS,
@@ -542,6 +544,32 @@ function selectionReplayTransports(selection: SelectionContext): readonly string
   return [link, `\n${context}`, context, `${link}\n${context}`, formatSelectionFallback(selection)]
 }
 
+/**
+ * Normalize a plan snapshot exactly as the plan bar stores it. The suppression
+ * ledger and the apply path must both go through this, or their truncation
+ * differs and the signatures never match.
+ */
+function normalizePlanEntries(entries: readonly PlanEntry[]): readonly AcpPlanEntry[] {
+  return entries.slice(0, MAX_PLAN_ENTRIES).map((e) => ({
+    content:
+      e.content.length > MAX_PLAN_ENTRY_CHARS
+        ? e.content.slice(0, MAX_PLAN_ENTRY_CHARS)
+        : e.content,
+    status: e.status,
+    ...(e.priority !== undefined ? { priority: e.priority } : {}),
+  }))
+}
+
+/**
+ * Identity of one plan entry for the dropped-baseline ledger. Status is part of
+ * it on purpose: the contract is "the parent's plan never shows as-is", not "its
+ * text is banned forever" — an entry the side task itself picks up (or that the
+ * fork re-labels through `activeForm`) is the side task's own state.
+ */
+function planEntrySignature(e: AcpPlanEntry): string {
+  return `${e.status}\u0000${e.content}`
+}
+
 /** Why the session's connection was lost — drives the service's recovery path. */
 export interface AcpConnectionLostEvent {
   /**
@@ -963,6 +991,24 @@ export class AcpSession extends Disposable implements IAcpSession {
    * so the "silently un-suppressed" case is distinguishable from "none at all".
    */
   private _suppressedIdsEvicted = 0
+
+  /**
+   * Signatures of the baseline `plan` entries {@link _suppressReplayToTimeline}
+   * dropped. The fork rebuilds its task list from the replayed transcript and
+   * re-publishes the whole accumulated snapshot at the top of EVERY prompt
+   * (vendor acp-agent.ts:3746) — once the gate is gone — so the entries have to
+   * be recognizable by identity instead of by the replay window, exactly like
+   * {@link _suppressedToolCallIds}.
+   *
+   * Deliberately NOT cleared by {@link beginHistoryReplay}: a rewind resets and
+   * replays the transcript without re-arming the gate (the only arm site is the
+   * side-task resume), and its plan updates must still be subtracted.
+   * The ledger lives for the instance and is bounded FIFO.
+   */
+  private readonly _suppressedPlanSignatures = new Set<string>()
+
+  /** Signatures evicted past {@link MAX_SUPPRESSED_PLAN_SIGNATURES} — see the tally log. */
+  private _suppressedPlanEvicted = 0
 
   /**
    * Replay ingestion accounting (session/load, rewind): tallies the resident
@@ -1785,6 +1831,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     // user sends another prompt. The window also covers the fork's tail-end
     // backfill of tool results that fell off the transcript's display chain.
     this._scheduleOrphanToolCallSweep('history replayed')
+    this._dropSeededBaselinePlan()
     this._flushSuppressedEchoLog()
   }
 
@@ -1813,18 +1860,65 @@ export class AcpSession extends Disposable implements IAcpSession {
     if (!this.isReplayingHistory.get()) this._flushSuppressedEchoLog()
   }
 
+  /** Record a baseline `plan` snapshot's entries, bounded FIFO (see
+   * {@link _suppressedPlanSignatures}). */
+  private _rememberSuppressedPlanEntries(raw: readonly PlanEntry[]): void {
+    for (const entry of normalizePlanEntries(raw)) {
+      const signature = planEntrySignature(entry)
+      if (this._suppressedPlanSignatures.has(signature)) continue
+      if (this._suppressedPlanSignatures.size >= MAX_SUPPRESSED_PLAN_SIGNATURES) {
+        const oldest = this._suppressedPlanSignatures.values().next().value
+        if (oldest !== undefined) {
+          this._suppressedPlanSignatures.delete(oldest)
+          this._suppressedPlanEvicted++
+        }
+      }
+      this._suppressedPlanSignatures.add(signature)
+    }
+  }
+
+  /**
+   * Drop a plan the history row seeded (`initState.plan`) that turns out to be
+   * nothing but baseline entries — the parent's plan re-entering a side task
+   * through a row mirrored before the ledger existed. The gate dropped the
+   * replay's own snapshots, so without this the stale mirror would stay on the
+   * bar until the next prompt re-publishes a (subtracted) snapshot. Only an
+   * all-baseline plan is dropped, so a side task carrying its own entries keeps
+   * them.
+   */
+  private _dropSeededBaselinePlan(): void {
+    if (this._suppressedPlanSignatures.size === 0) return
+    const entries = this.plan.get()
+    if (entries.length === 0) return
+    if (!entries.every((e) => this._suppressedPlanSignatures.has(planEntrySignature(e)))) return
+    this._setImmediate(this.plan, [])
+    const sid = this.sessionIdOnAgent.get()
+    if (sid !== undefined) this._history?.setHistoryPlan(sid, null)
+  }
+
   private _flushSuppressedEchoLog(): void {
-    if (this._suppressedEchoCount === 0 && this._suppressedIdsEvicted === 0) return
+    if (
+      this._suppressedEchoCount === 0 &&
+      this._suppressedIdsEvicted === 0 &&
+      this._suppressedPlanEvicted === 0
+    ) {
+      return
+    }
     const evicted =
       this._suppressedIdsEvicted > 0
         ? ` (${this._suppressedIdsEvicted} baseline id(s) evicted past ${MAX_SUPPRESSED_TOOL_CALL_IDS})`
         : ''
+    const planEvicted =
+      this._suppressedPlanEvicted > 0
+        ? ` (${this._suppressedPlanEvicted} baseline plan signature(s) evicted past ${MAX_SUPPRESSED_PLAN_SIGNATURES})`
+        : ''
     console.debug(
       `[acp] session ${this.id}: dropped ${this._suppressedEchoCount} side-task ` +
-        `baseline echo(es)${evicted}`,
+        `baseline echo(es)${evicted}${planEvicted}`,
     )
     this._suppressedEchoCount = 0
     this._suppressedIdsEvicted = 0
+    this._suppressedPlanEvicted = 0
   }
 
   setRetractedMessageIds(ids: readonly string[] | undefined): void {
@@ -3236,6 +3330,14 @@ export class AcpSession extends Disposable implements IAcpSession {
           // replay is over — remember the id so those echoes can be dropped too.
           this._rememberSuppressedToolCallId(update.toolCallId)
           return
+        case 'plan':
+          // The snapshot goes from the bar and the mirror, but the fork re-sends
+          // the whole accumulated taskState at the top of every later prompt
+          // (and a rewind replays it with the gate off) — remember the entries
+          // so those re-sends can be subtracted. See
+          // {@link _suppressedPlanSignatures}.
+          this._rememberSuppressedPlanEntries(update.entries)
+          return
         default:
           return
       }
@@ -3507,29 +3609,31 @@ export class AcpSession extends Disposable implements IAcpSession {
         break
       }
       case 'plan': {
+        const entries = normalizePlanEntries(update.entries)
+        // The fork re-publishes the inherited task list at the top of every
+        // prompt, so the ledger is consulted unconditionally — not just on the
+        // first one. Subtract entry by entry: once the side task adds one of its
+        // own, the snapshot no longer equals the baseline and a whole-snapshot
+        // comparison would let the parent's entries ride along.
+        const kept =
+          this._suppressedPlanSignatures.size === 0
+            ? entries
+            : entries.filter((e) => !this._suppressedPlanSignatures.has(planEntrySignature(e)))
         // Seal streaming only when the plan first appears. Plan no longer enters
         // the timeline (it renders as a sticky bar off the scroll), so we track
-        // first appearance with a flag instead of scanning the timeline.
-        if (!this._planSeen) {
+        // first appearance with a flag instead of scanning the timeline. A
+        // snapshot that is nothing but baseline never appears, so it must not
+        // split a streaming message either.
+        if (kept.length > 0 && !this._planSeen) {
           this._planSeen = true
           this._sealStreamingMessages()
         }
-        const entries: readonly AcpPlanEntry[] = update.entries
-          .slice(0, MAX_PLAN_ENTRIES)
-          .map((e) => ({
-            content:
-              e.content.length > MAX_PLAN_ENTRY_CHARS
-                ? e.content.slice(0, MAX_PLAN_ENTRY_CHARS)
-                : e.content,
-            status: e.status,
-            ...(e.priority !== undefined ? { priority: e.priority } : {}),
-          }))
-        this.plan.set(entries, this._batchedTx())
+        this.plan.set(kept, this._batchedTx())
         // Mirror onto history so the plan bar survives resume — codex's
-        // session/load replay does not re-emit plan. An empty snapshot clears
-        // the mirror so a cleared plan doesn't resurrect on restart.
-        if (sid !== undefined)
-          this._history?.setHistoryPlan(sid, entries.length > 0 ? entries : null)
+        // session/load replay does not re-emit plan. An empty (or fully
+        // subtracted) snapshot clears the mirror, so a baseline plan cannot
+        // resurrect through initState.plan on the next reopen.
+        if (sid !== undefined) this._history?.setHistoryPlan(sid, kept.length > 0 ? kept : null)
         break
       }
       case 'available_commands_update':
