@@ -25,20 +25,28 @@
   max-width: 860px;
   margin: 0 auto;
   padding: 12px 32px 0;
+  /* Every shipped version gets a chip; without a ceiling the all-versions tab opens
+     on a wall of buttons and the version you came to read is below the fold.
+     Three rows, then scroll on the app-wide scrollbar. */
+  max-height: calc(22px * 3 + 6px * 2);
+  overflow-y: auto;
 }
 
 .indexItem {
-  padding: 2px 8px;
-  border: 1px solid var(--vscode-panel-border, #3c3c3c);
-  border-radius: 10px;
+  padding: 1px 7px;
+  border: 1px solid var(--vscode-workbench-borderSubtle, rgba(127, 127, 127, 0.2));
+  border-radius: 9px;
   background: transparent;
-  color: inherit;
+  color: var(--vscode-descriptionForeground, #b0b0bc);
   font: inherit;
-  font-size: 12px;
+  font-size: 11px;
+  line-height: 18px;
   cursor: pointer;
 }
 
 .indexItem:hover {
+  color: var(--vscode-editor-foreground, #d4d4d4);
+  border-color: var(--vscode-workbench-border, #3c3c3c);
   background: var(--vscode-list-hoverBackground, #2a2d2e);
 }
 
@@ -55,36 +63,40 @@
 }
 
 .version + .version {
-  border-top: 1px solid var(--vscode-panel-border, #3c3c3c);
+  border-top: 1px solid var(--vscode-workbench-borderSubtle, rgba(127, 127, 127, 0.2));
 }
 
 .versionHeader {
   padding: 16px 0 0;
 }
 
+/* Above the body's own headings (markdown h2 renders at 1.35em ≈ 19px): a version
+   header that loses to the section headings inside it reads as a stray line. */
 .versionTitle {
   display: inline;
   margin: 0;
-  font-size: 18px;
+  font-size: 20px;
   font-weight: 600;
+  color: var(--vscode-workbench-foregroundBright, var(--vscode-editor-foreground, currentColor));
 }
 
 .versionName {
   margin-left: 8px;
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 600;
-  opacity: 0.9;
+  color: var(--vscode-descriptionForeground, #b0b0bc);
 }
 
 .versionDate {
   margin-left: 8px;
   font-size: 12px;
-  opacity: 0.6;
+  color: var(--vscode-descriptionForeground, #b0b0bc);
 }
 
 .versionSummary {
   margin: 6px 0 0;
-  opacity: 0.85;
+  font-size: 13px;
+  color: var(--vscode-descriptionForeground, #b0b0bc);
 }
 
 .body {

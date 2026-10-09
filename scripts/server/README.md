@@ -265,7 +265,7 @@ pnpm release:upload --host <IP> --user deploy --dir /srv/universe-editor
 
 > **顺序**：下载页数据源与展示逻辑变化时，先 `pnpm server:deploy` 让新页面生效，再发版（`release:upload`）。
 > 反过来也不致命（老页面读不到 `notes/` 会自动降级到 `release-notes.json`），但新介绍页会晚一步上线。
-> 本次改动把 `SERVER_VERSION` 提到 10——沿用旧 `SERVER_VERSION` 的部署会被 `server:deploy` 以「远端版本
+> 本次改动把 `SERVER_VERSION` 提到 11——沿用旧 `SERVER_VERSION` 的部署会被 `server:deploy` 以「远端版本
 > 相同」拦下，因此必须先部署服务端再发版。
 
 > **历史版本不要删**：保留旧 `.exe` / `.blockmap`，electron-updater 的差分下载需要它们，也方便回滚。

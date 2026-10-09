@@ -185,40 +185,28 @@
         font-size: 14px;
         font-weight: 600;
         color: var(--fg);
-        margin: 0 0 10px;
+        margin: 0 0 8px;
       }
-      .version-title:not(:first-child) {
-        margin-top: 24px;
-        padding-top: 22px;
+      .entry + .entry {
+        margin-top: 22px;
+        padding-top: 20px;
         border-top: 1px solid var(--border);
       }
-      .group {
-        margin-bottom: 18px;
-      }
-      .group-title {
+      .entry-title {
         font-size: 13px;
         font-weight: 600;
         margin-bottom: 8px;
         color: var(--fg);
       }
-      .group ul {
-        margin: 0;
-        padding-left: 20px;
-      }
-      .group li {
-        font-size: 14px;
-        line-height: 1.7;
-        color: var(--muted);
-      }
       .entry-summary {
-        margin: 0 0 10px;
+        margin: 0;
         font-size: 14px;
         line-height: 1.7;
         color: var(--muted);
       }
       .entry-more {
         display: inline-block;
-        margin-top: 6px;
+        margin-top: 8px;
         font-size: 13px;
         color: var(--accent);
         text-decoration: none;
@@ -422,8 +410,14 @@
 
       // 数值分段比较（与服务端/应用一致）：0.10.0 > 0.9.0。
       function compareVersions(a, b) {
-        const pa = String(a || '').replace(/^v/, '').split(/[-+]/)[0].split('.')
-        const pb = String(b || '').replace(/^v/, '').split(/[-+]/)[0].split('.')
+        const pa = String(a || '')
+          .replace(/^v/, '')
+          .split(/[-+]/)[0]
+          .split('.')
+        const pb = String(b || '')
+          .replace(/^v/, '')
+          .split(/[-+]/)[0]
+          .split('.')
         const len = Math.max(pa.length, pb.length)
         for (let i = 0; i < len; i++) {
           const diff = (Number.parseInt(pa[i], 10) || 0) - (Number.parseInt(pb[i], 10) || 0)
@@ -475,7 +469,9 @@
        * 且不展示高于 latest.yml 的版本。
        */
       function selectEntries(versions, latest) {
-        const capped = versions.filter((entry) => compareVersions(entry.version, latest.version) <= 0)
+        const capped = versions.filter(
+          (entry) => compareVersions(entry.version, latest.version) <= 0,
+        )
         if (capped.length === 0) return []
         const current = capped.find((entry) => entry.version === latest.version)
         const anchorKey = (current && toDateKey(current.date)) || toDateKey(latest.releaseDate)
@@ -506,7 +502,7 @@
 
       function renderEntry(container, entry, pages) {
         const wrap = document.createElement('div')
-        wrap.className = 'group'
+        wrap.className = 'entry'
         const title = document.createElement('div')
         title.className = 'version-title'
         const date = formatDate(entry.date)
@@ -514,7 +510,7 @@
         wrap.appendChild(title)
         if (entry.title) {
           const headline = document.createElement('div')
-          headline.className = 'group-title'
+          headline.className = 'entry-title'
           headline.textContent = entry.title
           wrap.appendChild(headline)
         }

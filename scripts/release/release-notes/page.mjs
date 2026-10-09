@@ -2,54 +2,60 @@
 /*---------------------------------------------------------------------------------------------
  *  Static pages for the download site: one page per version, plus the history index.
  *  Self-contained (inline styles, no scripts, no external assets), readable on phones,
- *  light and dark. Everything interpolated here is escaped; the body HTML comes from
- *  markdown-it with `html: false` and a link policy that rejects everything undeclared.
+ *  dark like the download page. Everything interpolated here is escaped; the body HTML
+ *  comes from markdown-it with `html: false` and a link policy that rejects everything
+ *  undeclared.
  *--------------------------------------------------------------------------------------------*/
 
 import { escapeHtml } from './markdown.mjs'
 import { versionHeading } from './source.mjs'
 
+// Same dark tokens as the download page / gallery pages (server/pageStyles.mjs):
+// a note page is reached from the download card, so it must not change design
+// language mid-click. Kept in sync by hand — the static page cannot import.
 const PAGE_CSS = `
 :root {
-  color-scheme: light dark;
-  --bg: #f6f7f9;
-  --card: #ffffff;
-  --fg: #1c1f26;
-  --muted: #5c6472;
-  --accent: #2563eb;
-  --border: #e2e5ea;
-  --code-bg: #f0f2f5;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f1115;
-    --card: #171a21;
-    --fg: #e7e9ee;
-    --muted: #9aa3b2;
-    --accent: #6ea1ff;
-    --border: #262b36;
-    --code-bg: #1f232c;
-  }
+  color-scheme: dark;
+  --bg: #0f1115;
+  --card: #171a21;
+  --fg: #e7e9ee;
+  --muted: #9aa3b2;
+  --accent: #4c8dff;
+  --accent-hover: #3b7af0;
+  --border: #262b36;
 }
 * { box-sizing: border-box; }
 body {
   margin: 0;
-  padding: 24px 16px 64px;
+  padding: 24px;
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
   font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Microsoft YaHei', sans-serif;
-  font-size: 15px;
-  line-height: 1.7;
-  background: var(--bg);
+  font-size: 14px;
+  line-height: 1.75;
+  background: radial-gradient(1200px 600px at 50% -10%, #1b2130, var(--bg));
   color: var(--fg);
 }
-main { max-width: 760px; margin: 0 auto; }
-a { color: var(--accent); }
-.back { display: inline-block; margin-bottom: 16px; font-size: 14px; text-decoration: none; }
-header { margin-bottom: 24px; }
-h1 { margin: 0 0 6px; font-size: 24px; line-height: 1.35; }
-.meta, .summary { margin: 0; color: var(--muted); font-size: 14px; }
-.summary { margin-top: 6px; }
-article h2 { margin: 28px 0 10px; font-size: 18px; }
-article h3 { margin: 22px 0 8px; font-size: 16px; }
+.card {
+  width: 100%;
+  max-width: 720px;
+  height: fit-content;
+  padding: 28px 32px 32px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.back { display: inline-block; margin-bottom: 18px; font-size: 13px; color: var(--muted); }
+.back:hover { color: var(--fg); }
+header { margin-bottom: 22px; }
+h1 { margin: 0; font-size: 20px; font-weight: 600; line-height: 1.4; }
+.meta, .summary { margin: 6px 0 0; color: var(--muted); font-size: 13px; line-height: 1.7; }
+article h2 { margin: 26px 0 10px; font-size: 17px; }
+article h3 { margin: 20px 0 8px; font-size: 15px; }
 article ul, article ol { margin: 8px 0; padding-left: 22px; }
 article li { margin: 4px 0; }
 article blockquote {
@@ -61,29 +67,42 @@ article blockquote {
 article code {
   padding: 1px 5px;
   border-radius: 4px;
-  background: var(--code-bg);
-  font-size: 13px;
+  background: rgba(255, 255, 255, 0.08);
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
 }
 article pre {
   padding: 12px 14px;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: var(--code-bg);
+  background: var(--bg);
   overflow: auto;
 }
 article pre code { padding: 0; background: none; }
-article table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 14px; }
+article table {
+  display: block;
+  overflow-x: auto;
+  margin: 12px 0;
+  border-collapse: collapse;
+  font-size: 13px;
+}
 article th, article td { padding: 6px 10px; border: 1px solid var(--border); text-align: left; }
+article th { background: rgba(255, 255, 255, 0.04); }
 article hr { margin: 24px 0; border: 0; border-top: 1px solid var(--border); }
 article img { max-width: 100%; }
 .list { list-style: none; margin: 0; padding: 0; }
 .list li { padding: 14px 0; border-top: 1px solid var(--border); }
+.list li:last-child { padding-bottom: 0; }
+.list a { color: inherit; }
 .list .v { font-weight: 600; }
-.list .d { color: var(--muted); font-size: 13px; margin-left: 8px; }
-.list .s { display: block; margin-top: 4px; color: var(--muted); font-size: 14px; }
-.list a { text-decoration: none; }
-.list a:hover .v, .list a:focus-visible .v { text-decoration: underline; }
+.list a:hover .v, .list a:focus-visible .v { color: var(--accent); text-decoration: underline; }
+.list .d { margin-left: 8px; color: var(--muted); font-size: 12px; }
+.list .s { display: block; margin-top: 4px; color: var(--muted); font-size: 13px; }
 .empty { color: var(--muted); }
+@media (max-width: 560px) {
+  body { padding: 12px; }
+  .card { padding: 20px 18px 24px; border-radius: 12px; }
+}
 `.trim()
 
 function shell({ title, description, body, backHref, backLabel }) {
@@ -99,7 +118,7 @@ ${PAGE_CSS}
     </style>
   </head>
   <body>
-    <main>
+    <main class="card">
       <a class="back" href="${escapeHtml(backHref)}">${escapeHtml(backLabel)}</a>
 ${body}
     </main>
