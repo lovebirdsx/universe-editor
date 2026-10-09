@@ -345,6 +345,7 @@ describe('toSyncOutcome', () => {
       mustResolve: 0,
       refusedModified: 0,
       refusedOverwrite: 0,
+      handoff: 0,
       upToDate: false,
       unrecognized: false,
     })
@@ -448,17 +449,14 @@ describe('toSyncOutcome', () => {
     expect(toSyncOutcome(syncRun([syncFile()]), CLIENT_ROOT, false)).toBeUndefined()
   })
 
-  // The one question a force summary must never be read as: "your local work is
-  // untouched". The editor never asks δ for one, so seeing it means the engine
-  // ran something else entirely.
+  // 普通 get 收到 force summary，等于流在回答另一个问题（修复档由下面专门的用例认领）。
   it('has no conclusion for a force run, which shares this mode', () => {
     expect(
       toSyncOutcome(syncRun([syncFile()], [], { force: true }), CLIENT_ROOT, true),
     ).toBeUndefined()
   })
 
-  // `handoff` and the force classes (`revert`/`restore`) come from another mode's
-  // vocabulary: the stream is answering a question nobody asked.
+  // 两档共有 `mode` 与部分类表，所以两个类表互为对方的「异类」。
   it('has no conclusion for a record outside the normal-sync classes', () => {
     for (const foreign of [
       { class: 'handoff', action: 'handoff' },
@@ -487,6 +485,201 @@ describe('toSyncOutcome', () => {
       true,
     )
     expect(outcome?.appliedFiles[0]?.clientFile).toBe('X:/p4ws/main/src/a.ts')
+  })
+})
+
+// --- δ force repair (`--sync --force`) --------------------------------------
+
+/** 强制修复档的一条 `kind:"file"` 记录：同样是 `mode:"sync"`，用自己的类表
+ *  （`update` / `revert` / `restore` / `delete`），且没有普通 get 的 `stage` 标记。 */
+function forceFile(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  const depotFile = (overrides['depotFile'] as string | undefined) ?? '//depot/main/src/a.ts'
+  return {
+    kind: 'file',
+    mode: 'sync',
+    class: 'update',
+    action: 'updating',
+    depotFile,
+    clientFile: depotFile.replace('//depot/', '//'),
+    rev: '2',
+    applied: true,
+    force: true,
+    ...overrides,
+  }
+}
+
+/** 一次有结论的强制修复。 */
+function forceRun(
+  records: Record<string, unknown>[],
+  log: string[] = [],
+  summary: Record<string, unknown> = {},
+): P4deltaRunResult {
+  return syncRun(records, log, { force: true, ...summary })
+}
+
+describe('toSyncOutcome — force repair', () => {
+  it('maps the four repair classes to applied rows when the get asked for force', () => {
+    const outcome = toSyncOutcome(
+      forceRun(
+        [
+          forceFile(),
+          forceFile({ class: 'revert', action: 'reverting', depotFile: '//depot/main/src/b.ts' }),
+          forceFile({
+            class: 'restore',
+            action: 'restoring',
+            depotFile: '//depot/main/src/c.ts',
+          }),
+          forceFile({ class: 'delete', action: 'deleting', depotFile: '//depot/main/src/d.ts' }),
+        ],
+        [],
+        { total: 4, counts: { update: 1, revert: 1, restore: 1, delete: 1 } },
+      ),
+      CLIENT_ROOT,
+      true,
+      true,
+    )
+    expect(outcome?.appliedFiles).toEqual([
+      {
+        depotFile: '//depot/main/src/a.ts',
+        clientFile: '/p4ws/main/src/a.ts',
+        action: 'updating',
+        rev: '2',
+      },
+      {
+        depotFile: '//depot/main/src/b.ts',
+        clientFile: '/p4ws/main/src/b.ts',
+        action: 'reverting',
+        rev: '2',
+      },
+      {
+        depotFile: '//depot/main/src/c.ts',
+        clientFile: '/p4ws/main/src/c.ts',
+        action: 'restoring',
+        rev: '2',
+      },
+      {
+        depotFile: '//depot/main/src/d.ts',
+        clientFile: '/p4ws/main/src/d.ts',
+        action: 'deleting',
+        rev: '2',
+      },
+    ])
+    expect(outcome?.summary).toMatchObject({
+      applied: 4,
+      handoff: 0,
+      upToDate: false,
+      unrecognized: false,
+    })
+  })
+
+  it('requires the force flag to match the request, in both directions', () => {
+    // 把修复读成普通 get 是最不能发生的一读：被覆盖的本地改动会变成一次普通拉取。
+    expect(toSyncOutcome(forceRun([forceFile()]), CLIENT_ROOT, true)).toBeUndefined()
+    // force:false 的回答（忽略了 `--force` 的构建，或普通 get 的形状）不是用户要的修复。
+    expect(toSyncOutcome(syncRun([syncFile()]), CLIENT_ROOT, true, true)).toBeUndefined()
+  })
+
+  it('answers only a request that was applied — a preview is not the repair', () => {
+    expect(
+      toSyncOutcome(forceRun([forceFile()], [], { applied: false }), CLIENT_ROOT, true, true),
+    ).toBeUndefined()
+    expect(toSyncOutcome(forceRun([forceFile()]), CLIENT_ROOT, false, true)).toBeUndefined()
+  })
+
+  it('has no conclusion without a summary, on a failed one, or for another mode', () => {
+    expect(toSyncOutcome(runOf([forceFile()]), CLIENT_ROOT, true, true)).toBeUndefined()
+    expect(
+      toSyncOutcome(
+        forceRun([forceFile()], [], { ok: false, reason: 'error' }),
+        CLIENT_ROOT,
+        true,
+        true,
+      ),
+    ).toBeUndefined()
+    expect(
+      toSyncOutcome(forceRun([forceFile()], [], { mode: 'clean' }), CLIENT_ROOT, true, true),
+    ).toBeUndefined()
+  })
+
+  // δ 处理不了的文件整批转交原生 `p4 sync -f`，记为 `class:"handoff"`：只知那条命令成功，
+  // 没有逐文件证据，所以单独计数，绝不混进调用方用来扣漂移的 applied 行。
+  it('counts a handoff as its own tally, never as an applied row', () => {
+    const outcome = toSyncOutcome(
+      forceRun(
+        [
+          forceFile(),
+          forceFile({
+            class: 'handoff',
+            action: 'sync',
+            handoff: 'sync',
+            depotFile: '//depot/main/src/bin.bin',
+            rev: undefined,
+          }),
+        ],
+        [],
+        { total: 1, counts: { update: 1 } },
+      ),
+      CLIENT_ROOT,
+      true,
+      true,
+    )
+    expect(outcome?.appliedFiles.map((f) => f.depotFile)).toEqual(['//depot/main/src/a.ts'])
+    expect(outcome?.summary).toMatchObject({
+      applied: 1,
+      handoff: 1,
+      upToDate: false,
+      // handoff 已经解释了账本为什么不提它，所以不算「无法识别」。
+      unrecognized: false,
+    })
+  })
+
+  it('reports a handoff-only repair as work done, not as up to date', () => {
+    const outcome = toSyncOutcome(
+      forceRun([forceFile({ class: 'handoff', action: 'sync', handoff: 'sync' })], [], {
+        total: 0,
+        counts: {},
+      }),
+      CLIENT_ROOT,
+      true,
+      true,
+    )
+    expect(outcome?.appliedFiles).toEqual([])
+    expect(outcome?.summary).toMatchObject({
+      applied: 0,
+      handoff: 1,
+      upToDate: false,
+      unrecognized: false,
+    })
+  })
+
+  it('has no conclusion for a handoff bound for another mode', () => {
+    // handoff 字段写明交给了哪条原生命令；sync 档里冒出 `clean` 说明是别档的流。
+    expect(
+      toSyncOutcome(
+        forceRun([forceFile({ class: 'handoff', action: 'clean', handoff: 'clean' })]),
+        CLIENT_ROOT,
+        true,
+        true,
+      ),
+    ).toBeUndefined()
+  })
+
+  // `resolve` 属于普通 get，`add` 也不在修复档的类表里（`added` 映射成 `restore`），
+  // 出现任一个都说明这不是用户要的修复。
+  it('has no conclusion for a record outside the force classes', () => {
+    for (const foreign of [
+      { class: 'resolve', action: 'scheduling' },
+      { class: 'add', action: 'adding' },
+      { class: undefined, action: undefined },
+    ]) {
+      expect(toSyncOutcome(forceRun([forceFile(foreign)]), CLIENT_ROOT, true, true)).toBeUndefined()
+    }
+  })
+
+  it('reports a repair with no work at all as up to date', () => {
+    const outcome = toSyncOutcome(forceRun([]), CLIENT_ROOT, true, true)
+    expect(outcome?.upToDate).toBe(true)
+    expect(outcome?.summary.handoff).toBe(0)
   })
 })
 
@@ -536,5 +729,11 @@ describe('appliedSyncFiles', () => {
         CLIENT_ROOT,
       ),
     ).toEqual([])
+  })
+
+  // 被取消的强制修复记录里没有 `stage`，这个读取器必须什么都读不到：为一次被杀掉的修复扣漂移，
+  // 只会把已被覆盖的本地改动藏起来。
+  it('reads nothing out of a force repair, whose records carry no apply marker', () => {
+    expect(appliedSyncFiles([forceFile()], CLIENT_ROOT)).toEqual([])
   })
 })

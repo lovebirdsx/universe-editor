@@ -71,7 +71,8 @@
  *     it mirrors the real contract more closely than the other modes: normal sync
  *     reports the four classes `add`/`update`/`delete`/`resolve` with `stage`
  *     (`preview` / `apply`) and p4's own `nativeAction` word, and `--force` runs
- *     the force repair (`-f` to the delegated call, the force classes). What is
+ *     the force repair（无 `stage`；排除项先于任何写入滤掉，委托调用只收精确到
+ *     `//depot/f#rev` 的规格，故排除子树不受影响、`--to <CL>` 也跑不到 head）。What is
  *     NOT modelled: the `resolve` class for the opened-file follow-up query — the
  *     real tool finds those opened files through two bounded follow-up queries
  *     (`p4 opened` + `p4 fstat`); here they stay what fake-p4 prints for them.
@@ -1095,10 +1096,14 @@ function askAndTranslate(state, opts, mode, phases) {
     const suffix = opts.to !== undefined ? `@${opts.to}` : ''
     const versioned = specs.map((spec) => `${spec}${suffix}`)
     if (forceRun) {
-      // The force repair is not the preview/filter/apply pipeline: it never
-      // previews — there is nothing to ask p4 first — and `-f` is what lets it
-      // walk over local content that is not opened.
-      delegated = delegate(['-G', 'sync', ...(opts.applied ? [] : ['-n']), '-f', ...versioned])
+      // 强制修复无 preview/filter/apply 流水线，真工具本地算集合、只把精确到修订的规格交给 p4：
+      // 先 `-f` 问缺什么（否则 have 在线的漂移文件被跳过），滤掉排除项后按 `//depot/f#rev` 下发（钉住修订，`--to <CL>` 不跑到 head）。
+      plan = delegate(['-G', 'sync', '-n', '-f', ...versioned])
+      const pinned = plan.records
+        .filter((record) => !isExcluded(state, record, opts.resolved.excludes))
+        .map((record) => `${record.depotFile}#${record.rev}`)
+      if (opts.applied && pinned.length > 0) delegated = delegate(['-G', 'sync', '-f', ...pinned])
+      else delegated = plan
       classOfAction = (record) => syncForceClass(record.action)
     } else {
       emitProgress('preview', null, phases)

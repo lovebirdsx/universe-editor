@@ -133,6 +133,11 @@ export interface SyncRunSummary {
    */
   readonly refusedOverwrite: number
   /**
+   * δ 强制修复整批转交给原生 `p4` 的文件（`class:"handoff"`）：只能证明那条原生命令执行成功，
+   * 逐文件结果未知，所以单独计数、不折进 {@link applied}，也不参与漂移计算；原生路径恒为 0。
+   */
+  readonly handoff: number
+  /**
    * True when p4 reported `file(s) up-to-date.`. Measured on P4D 2024.2: this
    * arrives on **stderr with exit 0** — nothing to do, not a failure.
    */
@@ -217,6 +222,8 @@ export function parseSyncOutput(stdout: string, stderr: string): SyncRunSummary 
     mustResolve,
     refusedModified,
     refusedOverwrite,
+    // 原生 p4 没有转交这种形态，该字段是给 δ 读取器的共享形状。
+    handoff: 0,
     upToDate,
     unrecognized,
   }

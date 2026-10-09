@@ -1741,13 +1741,15 @@ export async function activate(context: ExtensionContext): Promise<void> {
     const summary = res.summary
     // "Nothing happened" has to account for refusals too, or a run that only
     // refused files reads as an unparseable no-op.
+    // 转交给 p4 的那批也算「发生了事」：命令确实跑了，只是没有逐文件计数。
     const nothingHappened =
       !summary ||
       (summary.applied === 0 &&
         summary.keptOpen === 0 &&
         summary.mustResolve === 0 &&
         summary.refusedModified === 0 &&
-        summary.refusedOverwrite === 0)
+        summary.refusedOverwrite === 0 &&
+        summary.handoff === 0)
     // Record where this get landed BEFORE reporting it: the graph's badge is
     // read back from the ledger by whoever revalidates next (this very sync's
     // `getThenRevalidate`, another tab, another window), so the entry has to be
@@ -1791,12 +1793,14 @@ export async function activate(context: ExtensionContext): Promise<void> {
             // so the scope is only known to be synced AT LEAST this far. Recorded
             // either way — "I pulled it, why is nothing shown?" is worse than a
             // labelled upper bound — but the label has to survive to the badge.
+            // 转交批次同样算进来：只知整批命令执行成功，落点只能算下界。
             complete:
               summary !== undefined &&
               summary.refusedModified === 0 &&
               summary.refusedOverwrite === 0 &&
               summary.keptOpen === 0 &&
-              summary.mustResolve === 0,
+              summary.mustResolve === 0 &&
+              summary.handoff === 0,
           },
           options.knownLanding,
         )
@@ -1868,9 +1872,22 @@ export async function activate(context: ExtensionContext): Promise<void> {
     }
     // "Updated 0 file(s)" is worth saying on its own, but next to a refusal it is
     // noise — there the refusal already is the story.
-    if (summary.applied > 0 || (summary.refusedModified === 0 && summary.refusedOverwrite === 0)) {
+    // 面对转交批次同理：那一行才是故事。
+    if (
+      summary.applied > 0 ||
+      (summary.refusedModified === 0 && summary.refusedOverwrite === 0 && summary.handoff === 0)
+    ) {
       parts.push(
         localize('perforce.sync.applied', 'Updated {0} file(s)', { 0: String(summary.applied) }),
+      )
+    }
+    // δ 自己处理不了、整批转交给原生 p4 的文件：只知其命令执行成功，逐文件结果未知，
+    // 所以单独一行，不折进「已更新」。
+    if (summary.handoff > 0) {
+      parts.push(
+        localize('perforce.sync.handoff', '{0} file(s) handed to p4 for syncing', {
+          0: String(summary.handoff),
+        }),
       )
     }
     if (summary.keptOpen > 0) {

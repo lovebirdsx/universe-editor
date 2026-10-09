@@ -12,7 +12,7 @@
 - [搁置发现绝不扇出 `describe -S -s`](#搁置发现绝不扇出-describe--s--s同款挂死风险)
 - [`opened`/`reconcile -n` 的 `clientFile` 是 client 语法](#openedreconcile--n-的-clientfile-是-client-语法不是本地路径踩过)
 - [sync 拒绝有三个形态](#sync-拒绝有三个形态只解析一个就会谎报已是最新踩过)
-- [δ 的普通 get：五条只有契约才说得清的事](#-δ-的普通-get五条只有契约才说得清的事--sync-拆分后)
+- [δ 的 get：七条只有契约才说得清的事](#-δ-的-get七条只有契约才说得清的事--sync--force)
 - [`P4Service` 首条流式通道：`onStdoutLine`](#p4service-首条流式通道p4execoptionsonstdoutlinesync-进度条数据源)
 - [`--parallel` 下 stdout 突发输出 → 状态栏数字冻结数分钟](#--parallel-下-stdout-成突发输出--状态栏数字冻结数分钟真机实测)
 - [unresolved 信号只认 `fstat -Ru`](#unresolved-信号只认-fstat--ruopened-从不报真机实测)
@@ -121,14 +121,15 @@
 - **「查看差异」直调 `target.openChange`，不要绕回 `perforce.openChange` 命令**。runSync 已经持有发起这次 get 的 client；命令版会用 `resolveClient` 从路径重新解析，而它在无 root 命中时回退 active repository——那是命令路由语义，对一个我们已知归属的文件是错的。
 - **加任何新的 sync 输出解析前**：先想「这条行走 stdout 还是 stderr、exit 几、中断还是跳过」四问，四个答案都不同就是一个新形态——再追问第五问「文件在 have 表里吗」，在/不在决定了它进 `refusedModified` 还是 `refusedOverwrite`。
 
-## ⚠️ δ 的普通 get：五条只有契约才说得清的事（`--sync` 拆分后）
+## ⚠️ δ 的 get：七条只有契约才说得清的事（`--sync` 与 `--force`）
 
-`p4delta --sync`（不带 `--force`）是普通同步，但它的记录流与原生 stdout 是**两套形状**。把原生那套解析套上去（或反过来）都不会报错，只会静默丢事：
+`p4delta --sync` 是普通同步，加 `--force` 则是强制修复；两档共用一条 argv 与 `mode:"sync"`，但它们的记录流与原生 stdout 都是**两套形状**。把原生那套解析套上去（或反过来）都不会报错，只会静默丢事：
 
 - **拒绝与 opened 提示走 δ 的 stderr，不是记录**。`--json` 下 p4 的 severity<3 消息（`can't update modified file`、`is opened and not being changed`）由 δ 原样转写到自己的 stderr，stdout 里一条都没有；照原生那套去 stdout 找文本会得到「0 个文件被跳过」的假成功。解析仍用既有 `parseSyncRefused`（逐行正则）——p4 的原文一字未改。
 - **`class: resolve` 一条记录要喂两个计数器**。原生对「已打开、have 不在目标版本」的文件打印两行（`is opened and not being changed` + `must resolve #N`），δ 收成一条 `resolve`；只给 `keptOpen` 或只给 `mustResolve` 加一，「Resolve Conflicts」按钮与 `recordSyncPoint` 的 complete 判定会各错一半。
-- **只有 `stage:"apply"` 记录或 `phase:"apply"` 进度能证明「已经动过盘」**，而它是失败分层的唯一依据：没进 apply → 同轮回退原生（一个字都没写，纯收益）；已进 apply → **绝不重跑**（`-a` 可能已落一部分，换实现按自己的读法重跑，两个方向都可能做过头），合成 `P4ExecResult` 交 `classifySyncError` 并计入三振梯子。取消路径用「已收到的记录」扣漂移时**要额外核对 `stage === 'apply'`**：契约说 `-a` 只发 apply 段记录，但这里是唯一一个「读错会**藏起**本地改动」的读者（把预演当已落盘，就删掉了那条文件的漂移行），核对一下的代价远小于假定。
-- **`--sync` 与强制修复共用 `mode:"sync"` 与部分 class 表**，靠 summary 与**每条文件记录**的 `force` 布尔区分（契约里与 `applied` 同为「只有显式 true 才算」）。读流时不看它，一次强制修复会被读成「你的本地改动一切安好」——恰是它最不能出错的语义。**编辑器已不校验 δ 版本**（原先靠一次 `p4delta --version` 把 < 0.1.6 的构建整个挡在门外，那些构建的 `--sync` 就是强制修复），所以这条读法是普通 get 与强制修复之间仅剩的防线：它只兜得住「旧 build **自报** `force`」这一形态，不是对真 0.1.5 的保证。
+- **只有 `stage:"apply"` 记录或 `phase:"apply"` 进度能证明「已经动过盘」**，而它是失败分层的唯一依据：没进 apply → 同轮回退原生（一个字都没写，纯收益）；已进 apply → **绝不重跑**（`-a` 可能已落一部分，换实现按自己的读法重跑，两个方向都可能做过头），合成 `P4ExecResult` 交 `classifySyncError` 并计入三振梯子。取消路径用「已收到的记录」扣漂移时**要额外核对 `stage === 'apply'`**：契约说 `-a` 只发 apply 段记录，但这里是唯一一个「读错会**藏起**本地改动」的读者（把预演当已落盘，就删掉了那条文件的漂移行），核对一下的代价远小于假定。**这条守卫只属于普通 get**：force 档没有 apply 阶段，`_p4deltaSyncStarted` 对它永答 false——恰好是「一个字都没写、可以放心重跑」这个唯一不能给出的答案——所以守卫显式写成 `!force && !started`：**force 的任何失败（exit 2 也一样）都如实报错、绝不自动重跑**，它在失败前可能已经覆盖了一部分文件。取消同理，force **一个漂移行都不清**（记录里看不出哪个文件已被覆盖，交给紧随的 refresh 用 have 重新对账）。
+- **force 档的 `handoff` 是正常输出，不是违约**。δ 把一部分文件交回原生 p4 直接处理时发 `class:"handoff"`（`handoff:"sync"`），它们**不进 `counts`/`total`**，也拿不出逐文件的动作。所以它单独计数（`SyncRunSummary.handoff`；原生路径恒为 0），**不折进 `applied`、也不减漂移**——没有逐文件证据就不假装覆盖到了；`upToDate` / `unrecognized`（以及成功收口 `recordSyncPoint` 的 complete 判定）都额外要求 `handoff === 0`，否则「已是最新」会在真的有一批文件被改动时说出口。扫描 / 窄查那两条路径上 `handoff` 仍一律判「无结论」——它们问的是「有没有漂移」，一个没给出动作的文件答不了。
+- **`--sync` 与 force 修复共用 `mode:"sync"` 与部分 class 表**，靠 summary 与**每条文件记录**的 `force` 布尔区分（契约里与 `applied` 同为「只有显式 true 才算」），所以这个布尔必须**与本次请求逐字相符**才算一条结论：普通 get 收到 `force:true` 是旧 build 的强制修复混了进来（**编辑器已不校验 δ 版本**——原先靠一次 `p4delta --version` 把 < 0.1.6 的构建整个挡在门外，那些构建的 `--sync` 就是强制修复——这条只剩「旧 build **自报** `force`」这一形态的防线，不是对真 0.1.5 的保证），force 收到 `force:false` 则是这一轮根本没按用户确认的方式跑。class 表也按档位选：普通 get 认 `add|update|delete`，force 认 `update|revert|restore|delete`——**force 的记录没有 `stage`、没有 `nativeAction`**，拿普通那套去读它只会得到「什么都没发生」。force 这一档在本地算完修复集后，按 `//depot/file#rev` 的精确规格直接交回 p4（没有预演 → apply 两段）。
 - **别指望 `perforce.syncParallelThreads`**：δ 自己发 p4、自己调度，`--parallel` 不随行（同一个值只记一行日志——该设置默认就是 4，按次记会把输出通道刷满）。宽 scope 下首字节延迟也比原生久——δ 先跑一次 `p4 sync -n` 预演，然后才动手。
 
 ## ⚠️ `P4Service` 首条流式通道：`P4ExecOptions.onStdoutLine`（sync 进度条数据源）

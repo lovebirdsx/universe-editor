@@ -172,9 +172,12 @@ export interface P4deltaSyncOutcome {
   readonly upToDate: boolean
 }
 
-/** Sync classes that mean content landed on disk. `resolve` is the fourth — an
- *  opened file whose have moved to the target, with its content untouched. */
+/** 内容真正落盘的同步类；`resolve` 是它的第四个（已签出文件，have 前进但内容未动）。 */
 const APPLIED_SYNC_CLASSES = new Set(['add', 'update', 'delete'])
+
+/** 强制修复档的类表：与普通 get 共有 `update`/`delete`，另有 `revert`（漂移内容写回目标）与
+ *  `restore`（本地缺失的文件补回）；没有 `add`（p4 把写回报成 `restore`）。 */
+const APPLIED_FORCE_CLASSES = new Set(['update', 'revert', 'restore', 'delete'])
 
 /** What one sync run's file records say, before any conclusion is drawn. */
 interface SyncRecordTally {
@@ -182,28 +185,44 @@ interface SyncRecordTally {
   readonly applied: SyncPreviewFile[]
   /** `class:"resolve"` records: opened files whose have moved to the target. */
   readonly resolve: number
-  /** A record outside this mode's class set — the force-repair classes
-   *  (`revert`/`restore`), a `handoff`, or something a future build invented.
-   *  The stream is then answering a different question than the one asked. */
+  /** `class:"handoff"`：整批转交给原生 p4 的文件，只有强制修复档会发（见
+   *  {@link SyncRunSummary.handoff}）。 */
+  readonly handoff: number
+  /** 不属于本档类表的记录（另一档的词汇、绑给别的 mode 的 `handoff`，或未来版本的新类）：
+   *  流在回答另一个问题。 */
   readonly foreign: boolean
 }
 
-function tallySyncRecords(records: readonly P4deltaRecord[], clientRoot: string): SyncRecordTally {
+function tallySyncRecords(
+  records: readonly P4deltaRecord[],
+  clientRoot: string,
+  force: boolean,
+): SyncRecordTally {
   const applied: SyncPreviewFile[] = []
   let resolve = 0
+  let handoff = 0
   for (const record of records) {
     if (record['kind'] !== 'file' || record['mode'] !== 'sync') continue
     const klass = asString(record['class'])
-    if (klass === undefined) return { applied, resolve, foreign: true }
-    if (klass === 'resolve') {
+    if (klass === undefined) return { applied, resolve, handoff, foreign: true }
+    if (klass === 'handoff') {
+      // handoff 字段写明这批文件交给了哪条原生命令，修复档是 `sync`；
+      // clean/reconcile 的属于别档的流，普通 get 根本不发。
+      if (!force || record['handoff'] !== 'sync')
+        return { applied, resolve, handoff, foreign: true }
+      handoff += 1
+      continue
+    }
+    if (!force && klass === 'resolve') {
       resolve += 1
       continue
     }
-    if (!APPLIED_SYNC_CLASSES.has(klass)) return { applied, resolve, foreign: true }
+    const allowed = force ? APPLIED_FORCE_CLASSES : APPLIED_SYNC_CLASSES
+    if (!allowed.has(klass)) return { applied, resolve, handoff, foreign: true }
     const row = syncFileRow(record, clientRoot)
     if (row !== undefined) applied.push(row)
   }
-  return { applied, resolve, foreign: false }
+  return { applied, resolve, handoff, foreign: false }
 }
 
 /**
@@ -226,22 +245,23 @@ export function appliedSyncFiles(
   return tallySyncRecords(
     records.filter((record) => record['stage'] === 'apply'),
     clientRoot,
+    false,
   ).applied
 }
 
 /**
- * Read a δ normal-sync run (`--sync`, no `--force`), or undefined when the
- * stream has no conclusion. Undefined is load-bearing and means the same thing
- * it does for {@link summarizeRun}: the caller must not read partial records as
- * an answer.
+ * Read a δ sync run, or undefined when the stream has no conclusion. Undefined
+ * is load-bearing and means the same thing it does for {@link summarizeRun}: the
+ * caller must not read partial records as an answer.
  *
  * `applied` is the run the caller ASKED for: true for a real get (`-a`), false
  * for a preview. A summary that does not match it (a build that ignored `-a`, or
  * an answer for the other direction) is not an answer to this question — a
  * preview-shaped stream read as a write would drop drift rows while nothing on
- * disk changed. Same for `force`: this editor never asks δ for a force repair
- * (that spec has no δ form), so one coming back is an answer to another question,
- * and the one question it must never be read as is "your local work is safe".
+ * disk changed.
+ *
+ * `expectForce` 是请求的另一半：两档共用 `mode:"sync"` 与部分类表，这个布尔是唯一区分——读错任
+ * 一方向都会把「覆盖」与「普通拉取」互认，所以每档只认自己的类表。
  *
  * Refusals never reach the records: p4 reports them as per-file messages on
  * stderr (which the engine passes through verbatim under `--json`), so they are
@@ -252,11 +272,14 @@ export function toSyncOutcome(
   result: P4deltaRunResult,
   clientRoot: string,
   applied: boolean,
+  expectForce = false,
 ): P4deltaSyncOutcome | undefined {
   const summary = summarizeRun(result)
   if (summary === undefined || !summary.ok) return undefined
-  if (summary.mode !== 'sync' || summary.applied !== applied || summary.force) return undefined
-  const tally = tallySyncRecords(result.records, clientRoot)
+  if (summary.mode !== 'sync' || summary.applied !== applied || summary.force !== expectForce) {
+    return undefined
+  }
+  const tally = tallySyncRecords(result.records, clientRoot, expectForce)
   if (tally.foreign) return undefined
 
   const logText = result.log.join('\n')
@@ -271,15 +294,18 @@ export function toSyncOutcome(
   const mustResolve = tally.resolve
   const refusedModified = refusedFiles.length
   const refusedOverwrite = refusedOverwriteFiles.length
+  const handoff = tally.handoff
   // `total` is the run's own ledger — in an applied run it counts exactly the
   // records above — so a zero total is the engine saying "no files to sync".
   // Refusals outrank it, same rule as the native parser's.
+  // 转交出去的那批同样优先：账本刻意不记它，但它是真实发生的工作。
   const upToDate =
     summary.total === 0 &&
     tally.applied.length === 0 &&
     keptOpen === 0 &&
     refusedModified === 0 &&
-    refusedOverwrite === 0
+    refusedOverwrite === 0 &&
+    handoff === 0
   return {
     summary: {
       applied: tally.applied.length,
@@ -287,6 +313,7 @@ export function toSyncOutcome(
       mustResolve,
       refusedModified,
       refusedOverwrite,
+      handoff,
       upToDate,
       // The ledger claimed work and nothing at all accounts for it — the caller
       // must log that rather than show "0 applied" as a finished get. A refusal
@@ -297,7 +324,8 @@ export function toSyncOutcome(
         tally.applied.length === 0 &&
         tally.resolve === 0 &&
         refusedModified === 0 &&
-        refusedOverwrite === 0,
+        refusedOverwrite === 0 &&
+        handoff === 0,
     },
     appliedFiles: tally.applied,
     refusedFiles,

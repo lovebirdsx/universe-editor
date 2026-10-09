@@ -789,7 +789,15 @@ const P4DELTA_SYNC_CHANGELIST_SPEC = /^@[1-9]\d*$/
 function syncProgressTick(record: P4deltaRecord): { file: string | undefined } | undefined {
   if (record['kind'] !== 'file' || record['mode'] !== 'sync') return undefined
   const klass = record['class']
-  if (klass !== 'add' && klass !== 'update' && klass !== 'delete' && klass !== 'resolve') {
+  // revert / restore 是强制修复档的类（普通 get 不会发），同样要推进进度条。
+  if (
+    klass !== 'add' &&
+    klass !== 'update' &&
+    klass !== 'delete' &&
+    klass !== 'resolve' &&
+    klass !== 'revert' &&
+    klass !== 'restore'
+  ) {
     return undefined
   }
   const depotFile = record['depotFile']
@@ -4951,12 +4959,9 @@ export class PerforceClient {
       // The await is load-bearing: without it the finally below would release
       // the suspension the moment this function returns, before the sync settles.
       return await this._withBusy(localize('perforce.busy.sync', 'Syncing'), async () => {
-        // A force get is p4-only by construction: its scope filespecs are the
-        // exact `#rev`s a refusal named — a PER-FILE revision has no δ spelling —
-        // and it exists precisely to overwrite files the user just saw diffed
-        // and confirmed, so it is the one get where an engine swap has the worst
-        // failure mode and the least to gain.
-        const engine = options?.force === true ? undefined : this._p4deltaEngine()
+        // 换引擎只由资格决定，强制拉取不再预先排除：普通 get 与修复是同一个请求加一个
+        // `--force`，δ 读不懂的 spec（如拒绝清单点名的 `#rev`）照旧由 `_p4deltaSyncReject` 挡回原生。
+        const engine = this._p4deltaEngine()
         if (engine !== undefined) {
           const viaDelta = await this._syncViaP4delta(engine, spec, options)
           if (viaDelta !== undefined) return viaDelta
@@ -5237,6 +5242,8 @@ export class PerforceClient {
             mustResolve,
             refusedModified,
             refusedOverwrite,
+            // 原生 p4 不会把文件转交出去，只有 δ 的修复档会发 handoff。
+            handoff: 0,
             upToDate: sawUpToDateLine || /file\(s\) up-to-date/i.test(result.stderr),
             unrecognized: false,
           }
@@ -5348,20 +5355,12 @@ export class PerforceClient {
   }
 
   /**
-   * The δ get: ONE `p4delta --json --sync -a` call whose records are read back
-   * through {@link toSyncOutcome} into the same {@link SyncRunResult} the native
-   * path produces. What the engine does underneath is still p4's own `sync` —
-   * clobber protection, opened files and the have update are its call — so the
-   * refusals this editor offers remedies for arrive unchanged, as messages on
-   * the engine's stderr.
+   * δ 的 get：一次 `p4delta --json --sync [-a] [--force]`，记录经 {@link toSyncOutcome} 归约成与原生
+   * 路径相同的 {@link SyncRunResult}；普通 get 与强制修复只差 `--force`。
    *
-   * Returns undefined when δ must not run this get at all (an ineligible spec or
-   * scope), and when it failed BEFORE its apply phase — the one failure shape
-   * that provably wrote nothing, and therefore the one the caller may serve on
-   * p4 in this same call. A failure past that point is reported, never retried:
-   * `-a` means part of the transfer may already have landed, and running the
-   * scope again under a second implementation is a different operation, not a
-   * retry (same rule as the δ write path, `_runP4deltaWrite`).
+   * 返回 undefined = 资格不允许（spawn 前判定，交给原生），或普通 get 未进 apply 就失败（唯一能
+   * 证明没写盘的形态）。强制修复不论失败形态都绝不重跑：它没有 apply 阶段可观察，且可能已把文件
+   * 转交给原生 p4。
    */
   private async _syncViaP4delta(
     engine: P4deltaService,
@@ -5369,10 +5368,12 @@ export class PerforceClient {
     options?: {
       scope?: readonly string[]
       scopeTargets?: readonly SyncScopeTarget[]
+      force?: boolean
       onProgress?: (progress: { done: number; file: string | undefined }) => void
       overrideScope?: boolean
     },
   ): Promise<SyncRunResult | undefined> {
+    const force = options?.force === true
     const override = options?.overrideScope === true
     const explicit = options?.scope !== undefined && options.scope.length > 0
     // An override without an explicit scope would have to mean "the daily scope
@@ -5407,7 +5408,7 @@ export class PerforceClient {
         `[perforce] sync (p4delta): perforce.syncParallelThreads=${this._syncParallelThreads} does not apply to this engine`,
       )
     }
-    const args = this._buildP4deltaSyncArgs(spec, targets, true, override)
+    const args = this._buildP4deltaSyncArgs(spec, targets, true, override, force)
     const onProgress = options?.onProgress
     // The engine emits its file records per apply batch, so the bar advances in
     // chunks instead of line by line. Same contract as the native streaming path
@@ -5449,7 +5450,10 @@ export class PerforceClient {
       // IS on disk at its have revision, so those drift rows go. A killed stream
       // has no summary by construction, so the records that already arrived are
       // the only trace of it.
-      this._removeDriftForSyncRun(appliedSyncFiles(result.records, this.root), [], [])
+      //
+      // 强制修复的记录没有 stage，看不出哪个文件真的被覆盖过，所以一个漂移行都不清，
+      // 交给紧随的 refresh 用 have 重新对账。
+      this._removeDriftForSyncRun(force ? [] : appliedSyncFiles(result.records, this.root), [], [])
       await this._refreshAfterMutation()
       this._clearBehindDecorations()
       return {
@@ -5461,11 +5465,13 @@ export class PerforceClient {
         error: undefined,
       }
     }
-    const outcome = toSyncOutcome(result, this.root, true)
+    const outcome = toSyncOutcome(result, this.root, true, force)
     if (outcome === undefined) {
       const failure =
         this._p4deltaAppliedRunFailure(result, summarizeRun(result), 'sync') ?? 'no conclusion'
-      if (!this._p4deltaSyncStarted(result)) {
+      // 只有普通 get 且未进 apply 才可改走原生：强制修复没有这一阶段可观察，任何失败形态
+      // （含 exit 2）都可能在报错前已覆盖过文件，只能如实上报，绝不自动重跑。
+      if (!force && !this._p4deltaSyncStarted(result)) {
         // Nothing was applied — the run never reached its apply phase (or never
         // started). Falling back is free: the user gets the get they asked for,
         // one engine later, and the log says why.
@@ -5504,7 +5510,9 @@ export class PerforceClient {
     const counts =
       `: ${summary.applied} applied, ${summary.keptOpen} kept open, ` +
       `${summary.mustResolve} need resolve, ${summary.refusedModified} refused (locally modified), ` +
-      `${summary.refusedOverwrite} refused (untracked file in the way)`
+      `${summary.refusedOverwrite} refused (untracked file in the way)` +
+      // 只有强制修复档会记这个数，普通 get 恒为 0。
+      (summary.handoff > 0 ? `, ${summary.handoff} handed to p4` : '')
     if (summary.unrecognized) {
       // A concluding summary with no record behind it is never silent: the counts
       // shown to the user would otherwise read as "nothing happened".
@@ -5540,7 +5548,8 @@ export class PerforceClient {
    * - `spec`: `#head`, or a changelist (`@12345`, δ's `--to`). `#4` is a
    *   PER-FILE revision and `@2026/08/01` a date — neither has a δ spelling, and
    *   the per-file force form (`''`, with the `#rev` already inside the specs) is
-   *   force by definition;
+   *   force by definition. 强制拉取沿用同一判据：修复目标还是同一个 spec，所以只有
+   *   `#head` / `@<CL>` 能交给 δ，拒绝清单点名的逐文件 `#rev` 正是它读不懂的形态；
    * - a target that is not an absolute local path (a depot spelling the caller
    *   named itself, `//...` above all). Local paths — metacharacters and all —
    *   are fine: the engine escapes at the p4 boundary, which is the whole reason
@@ -5605,6 +5614,8 @@ export class PerforceClient {
    * target changelist when there is one, `-a` for a real get (without it the run
    * is a preview), then this operation's targets, one argv per target.
    *
+   * `--force` 只在用户确认过的强制修复档出现。
+   *
    * The paths are raw local paths, never p4-escaped specs — the engine escapes at
    * the boundary. `--no-scope-file` is the explicit scope override and travels
    * only when the user chose it.
@@ -5614,12 +5625,14 @@ export class PerforceClient {
     targets: readonly SyncScopeTarget[],
     apply: boolean,
     overrideScope = false,
+    force = false,
   ): string[] {
     return [
       '--json',
       '--client-root',
       this.root,
       '--sync',
+      ...(force ? ['--force'] : []),
       ...(spec === '#head' ? [] : ['--to', spec.slice(1)]),
       ...(apply ? ['-a'] : []),
       ...(overrideScope ? ['--no-scope-file'] : []),
@@ -5628,11 +5641,14 @@ export class PerforceClient {
   }
 
   /**
-   * Whether a δ get got as far as applying. Its phase table is
+   * Whether a δ PLAIN get got as far as applying. Its phase table is
    * `start → preview → filter → apply → done`, and the apply phase is announced
    * immediately BEFORE the first write — so this is the evidence that decides
    * whether a failed run may be re-served on p4 ("wrote nothing") or must be
    * reported as-is ("may have landed part of the transfer").
+   *
+   * 强制修复档不问这个问题：它的流里没有任何能证明「没写盘」的标记（没有 apply 记录或
+   * apply 阶段），问了只会得到「一个字都没写」——那正是唯一绝不能给出的答案。
    */
   private _p4deltaSyncStarted(result: P4deltaRunResult): boolean {
     if (result.records.some((r) => r['kind'] === 'file' && r['stage'] === 'apply')) return true

@@ -171,6 +171,7 @@ describe('parseSyncOutput', () => {
       mustResolve: 1,
       refusedModified: 0,
       refusedOverwrite: 0,
+      handoff: 0,
       upToDate: false,
       unrecognized: false,
     })
@@ -183,6 +184,7 @@ describe('parseSyncOutput', () => {
       mustResolve: 0,
       refusedModified: 0,
       refusedOverwrite: 0,
+      handoff: 0,
       upToDate: true,
       unrecognized: false,
     })
@@ -195,6 +197,7 @@ describe('parseSyncOutput', () => {
       mustResolve: 0,
       refusedModified: 0,
       refusedOverwrite: 0,
+      handoff: 0,
       upToDate: false,
       unrecognized: false,
     })
@@ -208,6 +211,7 @@ describe('parseSyncOutput', () => {
       mustResolve: 0,
       refusedModified: 0,
       refusedOverwrite: 0,
+      handoff: 0,
       upToDate: false,
       unrecognized: true,
     })
@@ -252,6 +256,7 @@ describe('parseSyncOutput', () => {
       mustResolve: 0,
       refusedModified: 1,
       refusedOverwrite: 0,
+      handoff: 0,
       upToDate: false,
       unrecognized: false,
     })
@@ -269,6 +274,7 @@ describe('parseSyncOutput', () => {
       mustResolve: 0,
       refusedModified: 0,
       refusedOverwrite: 1,
+      handoff: 0,
       upToDate: false,
       unrecognized: false,
     })

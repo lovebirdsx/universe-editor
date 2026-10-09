@@ -9,15 +9,17 @@
  *     travels as ordinary argv — the opened workspace as a hard upper bound,
  *     with the engine applying the scope it reads at its own startup.
  *  2. Everything δ cannot express stays native: `#4`, `@<date>`, per-file force,
- *     the whole-client scope (a depot spelling), and any force get. A path
- *     holding a p4 metacharacter is NOT one of them: δ reads raw local paths,
- *     so such a target is handed over like any other.
+ *     the whole-client scope (a depot spelling). A path holding a p4
+ *     metacharacter is NOT one of them: δ reads raw local paths, so such a
+ *     target is handed over like any other. δ 能读的范围上的强制拉取也交给 δ
+ *     （`--sync --force`），其类表、缺 apply 阶段与失败安全见文末的 force 用例。
  *  3. Records → summary: applied classes become rows, one `resolve` record feeds
  *     both keptOpen and mustResolve, and refusals are read back from the engine
  *     log.
  *  4. Failures before the apply phase fall back to p4 in the same call and do
  *     NOT count toward the ladder; failures after it are reported, never
  *     retried (the transfer may already have landed) and do count.
+ *     强制拉取没有 apply 阶段可判断、且可能先把文件交给原生 p4，所以永不重跑、失败一律上报并计数。
  *  5. Cancel, progress callbacks and the drift subtraction all follow the native
  *     path's rules.
  *
@@ -324,6 +326,34 @@ function nativeActionFor(klass: string): string | undefined {
   return 'updated'
 }
 
+/** 强制修复档的一条 `kind:"file"` 记录：同样是 `mode:"sync"`，用修复档自己的类表
+ *  （`update` / `revert` / `restore` / `delete`），且没有 `stage` / `nativeAction`。 */
+function deltaForceFile(rel: string, overrides: Record<string, unknown> = {}): P4deltaRecord {
+  const klass = (overrides['class'] as string | undefined) ?? 'update'
+  const action =
+    klass === 'revert'
+      ? 'reverting'
+      : klass === 'restore'
+        ? 'restoring'
+        : klass === 'delete'
+          ? 'deleting'
+          : klass === 'handoff'
+            ? 'sync'
+            : 'updating'
+  return {
+    kind: 'file',
+    mode: 'sync',
+    class: klass,
+    action,
+    depotFile: `//depot/branch_x/${rel}`,
+    clientFile: `//${CLIENT}/${rel}`,
+    rev: '2',
+    applied: true,
+    force: true,
+    ...overrides,
+  }
+}
+
 function deltaSummary(overrides: Record<string, unknown> = {}): P4deltaRecord {
   return {
     kind: 'summary',
@@ -443,6 +473,7 @@ describe('PerforceClient.sync — δ engine', () => {
       mustResolve: 0,
       refusedModified: 0,
       refusedOverwrite: 0,
+      handoff: 0,
       upToDate: false,
       unrecognized: false,
     })
@@ -536,13 +567,22 @@ describe('PerforceClient.sync — δ engine', () => {
     expect(nativeSyncCalls()[1]!.at(-1)).toBe('//...#head')
   })
 
-  it('stays on p4 for a force get, whose spec δ cannot read', async () => {
+  // δ 读不懂的形态留在原生：逐文件修订号、日期，以及拒绝清单点名的 per-file force
+  // （spec `''`，filespec 里已经钉了 `#rev`）。δ 能读的范围上的强制拉取见下面的 force 用例。
+  it('stays on p4 for the force specs δ cannot express', async () => {
     const client = await makeArmedClient()
 
-    await client.sync('#head', { force: true })
+    for (const spec of ['#4', '@2026/08/01', '']) {
+      await client.sync(spec, { force: true })
+    }
 
     expect(getCalls()).toEqual([])
-    expect(nativeSyncCalls()[0]).toContain('-f')
+    expect(nativeSyncCalls().every((a) => a.includes('-f'))).toBe(true)
+    expect(nativeSyncCalls().map((a) => a.at(-1))).toEqual([
+      `${CONTENT}/...#4`,
+      `${CONTENT}/...@2026/08/01`,
+      `${CONTENT}/...`,
+    ])
   })
 
   it('maps refusals, opened files and applied rows out of the engine run', async () => {
@@ -759,6 +799,173 @@ describe('PerforceClient.sync — δ engine', () => {
     // …and the bar is released on this exit too — a cancelled run is exactly the
     // one that would otherwise leave its count standing.
     expect(client.status.syncProgress).toBeUndefined()
+  })
+})
+
+describe('PerforceClient.sync — a force get over a scope δ can read', () => {
+  /** 预热扫描发布的漂移行，按发布顺序。 */
+  const driftedOf = (client: PerforceClientInstance): Array<string | undefined> =>
+    [...client.scanDrift.values()].map((row) => row.clientFile).sort()
+
+  it('serves the repair from δ with --force, and never asks p4 for it', async () => {
+    const client = await makeArmedClient()
+    syncReply = () => ({
+      records: [deltaForceFile('Content/a.cpp'), deltaSummary({ force: true })],
+    })
+
+    const res = await client.sync('#head', { force: true })
+
+    expect(getCalls()).toEqual([
+      ['--json', '--client-root', ROOT, '--sync', '--force', '-a', `${ROOT_FWD}/...`],
+    ])
+    // 修复是最具破坏性的一条路：「谁执行的」就是全部问题，δ 之外不能出现任何 p4 sync。
+    expect(nativeSyncCalls()).toEqual([])
+    expect(res.ok).toBe(true)
+    expect(res.summary).toMatchObject({ applied: 1, handoff: 0, upToDate: false })
+  })
+
+  it('carries a picked changelist as --to on the repair', async () => {
+    const client = await makeArmedClient()
+    syncReply = () => ({
+      records: [deltaForceFile('Content/a.cpp'), deltaSummary({ force: true })],
+    })
+
+    await client.sync('@4521', { force: true })
+
+    expect(getCalls()).toEqual([
+      [
+        '--json',
+        '--client-root',
+        ROOT,
+        '--sync',
+        '--force',
+        '--to',
+        '4521',
+        '-a',
+        `${ROOT_FWD}/...`,
+      ],
+    ])
+  })
+
+  it('keeps the user-confirmed scope override on the repair', async () => {
+    const client = await makeArmedClient()
+    syncReply = () => ({
+      records: [deltaForceFile('Content/a.cpp'), deltaSummary({ force: true })],
+    })
+
+    await client.sync('#head', {
+      force: true,
+      overrideScope: true,
+      scope: [`${ROOT_FWD}/Content/...`],
+      scopeTargets: [{ path: `${ROOT_FWD}/Content`, isDirectory: true }],
+    })
+
+    expect(getCalls()).toEqual([
+      [
+        '--json',
+        '--client-root',
+        ROOT,
+        '--sync',
+        '--force',
+        '-a',
+        '--no-scope-file',
+        `${ROOT_FWD}/Content/...`,
+      ],
+    ])
+  })
+
+  // 强制修复没有 apply 阶段可观察，且可能在失败前已把文件交给原生 p4：没有结论的流不能当作
+  // 「没写盘」的证据，所以只上报、绝不换一份实现把同一次破坏性运行再做一遍。
+  it('reports a failed repair instead of re-running it on p4, and counts it', async () => {
+    const client = await makeArmedClient()
+    syncReply = () => ({ code: 1, log: ['connection dropped'] })
+
+    const res = await client.sync('#head', { force: true })
+
+    expect(getCalls()).toHaveLength(1)
+    expect(nativeSyncCalls()).toEqual([])
+    expect(res.ok).toBe(false)
+    expect(res.cancelled).toBe(false)
+    expect(res.summary).toBeUndefined()
+    expect(client.p4deltaFallbackState).toEqual({ failures: 1, disarmed: false })
+  })
+
+  // 连普通 get 总能重服务的 exit 2 也不例外：它读的 argv 来自编辑器管不到的构建，而已发生的
+  // 覆盖不可撤销。
+  it('does not re-serve a repair that failed at the parse stage either', async () => {
+    const client = await makeArmedClient()
+    syncReply = () => ({ code: 2 })
+
+    const res = await client.sync('#head', { force: true })
+
+    expect(getCalls()).toHaveLength(1)
+    expect(nativeSyncCalls()).toEqual([])
+    expect(res.ok).toBe(false)
+    expect(client.p4deltaFallbackState).toEqual({ failures: 1, disarmed: false })
+  })
+
+  it('answers a repair the engine ignored --force for as a failure, not a fallback', async () => {
+    const client = await makeArmedClient()
+    // force:false 的 summary 是普通 get 的形状，不是用户要的修复。
+    syncReply = () => ({ records: [deltaFile('Content/a.cpp'), deltaSummary()] })
+
+    const res = await client.sync('#head', { force: true })
+
+    expect(getCalls()).toHaveLength(1)
+    expect(nativeSyncCalls()).toEqual([])
+    expect(res.ok).toBe(false)
+  })
+
+  it('subtracts the verified repair rows from drift, but not the handed-off ones', async () => {
+    const client = await makeClient({ p4delta: { exe: P4DELTA_EXE } })
+    scanReply = () => ({
+      records: [
+        deltaFile('Content/a.cpp', { class: 'edit', action: 'edit', mode: 'open' }),
+        deltaFile('Content/b.cpp', { class: 'edit', action: 'edit', mode: 'open' }),
+        deltaSummary({ mode: 'open', applied: false, total: 2, counts: { edit: 2 } }),
+      ],
+    })
+    await client.runReconcileScan()
+    expect(driftedOf(client)).toEqual([`${ROOT_FWD}/Content/a.cpp`, `${ROOT_FWD}/Content/b.cpp`])
+    syncReply = () => ({
+      records: [
+        deltaForceFile('Content/a.cpp'),
+        deltaForceFile('Content/b.cpp', { class: 'handoff', handoff: 'sync' }),
+        deltaSummary({ force: true, counts: { update: 1 } }),
+      ],
+    })
+
+    await client.sync('#head', { force: true })
+
+    // a.cpp 是 δ 自己修的，漂移行清掉；b.cpp 只是整批转交，逐文件结果未知，行留着等
+    // refresh 与下一轮扫描按磁盘重新给答案。
+    expect(driftedOf(client)).toEqual([`${ROOT_FWD}/Content/b.cpp`])
+  })
+
+  it('leaves the drift untouched when a repair is cancelled', async () => {
+    const client = await makeClient({ p4delta: { exe: P4DELTA_EXE } })
+    scanReply = () => ({
+      records: [
+        deltaFile('Content/a.cpp', { class: 'edit', action: 'edit', mode: 'open' }),
+        deltaFile('Content/b.cpp', { class: 'edit', action: 'edit', mode: 'open' }),
+        deltaSummary({ mode: 'open', applied: false, total: 2, counts: { edit: 2 } }),
+      ],
+    })
+    await client.runReconcileScan()
+    let release: () => void = () => {}
+    const held = new Promise<void>((r) => (release = r))
+    syncReply = () => ({ code: 1, records: [deltaForceFile('Content/a.cpp')], hold: held })
+
+    const pending = client.sync('#head', { force: true })
+    await flush()
+    expect(getCalls()).toHaveLength(1)
+    client.cancelBusy()
+    release()
+    const res = await pending
+
+    expect(res.cancelled).toBe(true)
+    // 修复的记录没有 `stage`，被杀掉的流证明不了落盘情况，两行都留着，绝不藏起本地改动。
+    expect(driftedOf(client)).toEqual([`${ROOT_FWD}/Content/a.cpp`, `${ROOT_FWD}/Content/b.cpp`])
   })
 })
 
