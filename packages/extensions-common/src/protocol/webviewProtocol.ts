@@ -9,7 +9,7 @@
  *
  * KEEP IN SYNC with `apps/editor/src/main/ipc/resourceProtocol.ts`
  * (`APP_PROTOCOL_SCHEME` / `RESOURCE_PATH_PREFIX`) and the renderer's
- * `workbench/markdown/resourceUri.ts` — same scheme, authority and prefix.
+ * `shared/appResourceUrl.ts` — same scheme, authority and prefix.
  */
 
 /** The privileged app scheme that serves both the shell and local resources. */
@@ -55,7 +55,7 @@ export const WEBVIEW_CSP_SOURCE = WEBVIEW_ORIGIN
 /**
  * Percent-encode an absolute fs path into a
  * `universe-app://root/_resource_/<path>` URL. Mirrors `toResourceUrl` in the
- * renderer's `resourceUri.ts`: back-slashes are normalized, each segment is
+ * renderer's `shared/appResourceUrl.ts`: back-slashes are normalized, each segment is
  * `encodeURIComponent`-escaped, and a leading slash is ensured.
  */
 export function fsPathToWebviewUrl(fsPath: string): string {

@@ -12,31 +12,16 @@
  *      universe-app URL (relative paths resolve against the document dir,
  *      then the workspace root — same order as clicked file links)
  *    - anything else (javascript:, etc.) → undefined (not rendered)
+ *
+ *  The URL codec itself (and its inverse) lives in `shared/appResourceUrl.ts`.
  *--------------------------------------------------------------------------------------------*/
 
 import { URI } from '@universe-editor/platform'
+import { toResourceUrl } from '../../../shared/appResourceUrl.js'
 import { isAbsolutePath } from './markdownLinkResolve.js'
-
-export const RESOURCE_PROTOCOL_SCHEME = 'universe-app'
-// Resources share the shell's origin (authority `root`) and are addressed by a
-// path prefix — a secure custom scheme treats a different authority as a separate
-// origin, and a cross-origin <img> to a custom scheme is blocked before it can be
-// served. Keep this in sync with RESOURCE_PATH_PREFIX in the main handler.
-const RESOURCE_URL_BASE = `${RESOURCE_PROTOCOL_SCHEME}://root/_resource_`
 
 function isHttpOrData(src: string): boolean {
   return /^(?:https?:|data:image\/)/i.test(src)
-}
-
-/** Percent-encode an absolute fs path into a `universe-app://root/_resource_/...` URL. */
-export function toResourceUrl(fsPath: string): string {
-  const forward = fsPath.replace(/\\/g, '/')
-  const encoded = forward
-    .split('/')
-    .map((seg) => encodeURIComponent(seg))
-    .join('/')
-  const leading = encoded.startsWith('/') ? '' : '/'
-  return `${RESOURCE_URL_BASE}${leading}${encoded}`
 }
 
 /**

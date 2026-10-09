@@ -90,6 +90,8 @@ universe-editor 的资源拖放统一成「**源端发布资源 URI → 目标�
 
 **⑦ `void` promise 吞掉导入失败（「拖了没反应」的根因）。** ExplorerView 的落点以 `void importDroppedResources(...)` fire-and-forget；旧实现里 `fileService.copy` 抛错（典型如跨 scheme 的 "Cross-scheme copy is not supported"）会直接变成未处理的 promise rejection，UI 零反馈——用户只看到「拖了没反应」。现在逐文件 try/catch + 末尾聚合弹窗（`dnd.copyFailed.*` 文案）；新增落点逻辑时别再用 `void` 把错误直接丢掉，至少接住并上报。
 
+**⑧ 预览/webview 的 `<img>` 拖拽带的是 `universe-app` transport URL，不是资源身份。** 预览图片 src 是本仓的 `asWebviewUri`（`universe-app://root/_resource_/<编码后的绝对路径>`），图片无自定义拖拽源 → Chromium 原生图片拖拽把它原样写进 `text/uri-list`（**没有**私有镜像）。收口在 `readDroppedResources`：先经 `shared/appResourceUrl.ts` 的 `resourceUrlToFsPath` 还原成本机 `file:` URI。漏了它：解析器只按 `uri.path` 匹配 → 图片扩展名命中图片编辑器 → 它把 `_resource_/F:/…` 当本机路径拼 `ue-file:` → `ERR_FILE_NOT_FOUND` + 一个"空编辑器"（回归 e2e `smoke.markdownImageDrop.spec.ts`）。任何读 uri-list 的新落点都要过这一层（成链路径见 `markdownPasteLinks.tryParseFileUri`）。
+
 ## 测试与取证
 
 - **单测**（快、确定）：`packages/workbench-ui/src/__tests__/uriList.test.ts`（readUriList 优先私有镜像 / 粘连恢复 / CR / 回退）、`apps/editor/src/renderer/services/dnd/__tests__/`（`resourceDropTransfer` / `openDroppedResource` / `resourceDrag`）。新逻辑优先抽成纯函数放 `services/dnd/` 单测。

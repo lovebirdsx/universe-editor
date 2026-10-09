@@ -55,6 +55,19 @@ describe('markdownLinksFromUriList', () => {
     expect(markdownLinksFromUriList('https://example.com', TARGET_DIR, 'win32')).toBeUndefined()
   })
 
+  // Repro: Shift-dragging a picture out of the markdown preview / an html-preview
+  // iframe hands us its `universe-app://root/_resource_/…` src (see resourceUri.ts).
+  // Before the fix only `file:` prefixes parsed, so the whole drop fell through and
+  // no link was inserted.
+  it('resolves a preview resource URL to the file it points at', () => {
+    const out = markdownLinksFromUriList(
+      'universe-app://root/_resource_/C%3A/work/project/img/p.png',
+      TARGET_DIR,
+      'win32',
+    )
+    expect(out).toBe('![${1:alt text}](img/p.png)')
+  })
+
   it('handles a posix target directory', () => {
     const out = markdownLinksFromUriList('file:///home/u/proj/a.md', '/home/u/proj', 'linux')
     expect(out).toBe('[${1:text}](a.md)')

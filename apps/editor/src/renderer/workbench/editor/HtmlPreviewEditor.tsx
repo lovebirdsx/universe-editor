@@ -22,9 +22,9 @@ import {
   markAsSingleton,
   type IEditorInput,
 } from '@universe-editor/platform'
+import { toResourceUrl } from '../../../shared/appResourceUrl.js'
 import { IResourceAccessService } from '../../../shared/ipc/resourceAccessService.js'
 import { HtmlPreviewInput } from '../../services/editor/HtmlPreviewInput.js'
-import { toResourceUrl } from '../markdown/resourceUri.js'
 import { useOptionalService } from '../useService.js'
 import styles from './HtmlPreviewEditor.module.css'
 

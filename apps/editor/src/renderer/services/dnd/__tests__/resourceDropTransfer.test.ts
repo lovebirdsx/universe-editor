@@ -70,6 +70,28 @@ describe('resourceDropTransfer', () => {
       ])
     })
 
+    // Repro: an <img> in the markdown preview / an html-preview iframe carries a
+    // `universe-app://root/_resource_/…` src, and Chromium's native image drag puts
+    // that transport URL into the standard text/uri-list (no private mirror). Before
+    // the fix it was taken as the resource identity: the resolver matched `**/*.svg`
+    // by path and opened a phantom image tab whose bytes came from the bogus path
+    // `/_resource_/F:/…` (net::ERR_FILE_NOT_FOUND).
+    it('resolves a preview image resource URL back to the file it points at', () => {
+      vi.stubGlobal('window', { ipc: { getPathForFile: () => '' } })
+      const out = readDroppedResources(
+        dropEvent({
+          uriList: 'universe-app://root/_resource_/F%3A/test/test/md/folder-context.svg',
+        }),
+      )
+      expect(out.map((u) => u.toString())).toEqual(['file:///F:/test/test/md/folder-context.svg'])
+    })
+
+    it('leaves non-resource universe-app URLs alone', () => {
+      vi.stubGlobal('window', { ipc: { getPathForFile: () => '' } })
+      const out = readDroppedResources(dropEvent({ uriList: 'universe-app://root/index.html' }))
+      expect(out.map((u) => u.scheme)).toEqual(['universe-app'])
+    })
+
     it('returns empty when there is no dataTransfer', () => {
       expect(readDroppedResources({ dataTransfer: null })).toEqual([])
     })

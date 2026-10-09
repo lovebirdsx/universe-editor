@@ -6,6 +6,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { relativePath, type HostPlatform } from '@universe-editor/platform'
+import { resourceUrlToFsPath } from '../../shared/appResourceUrl.js'
 
 const IMAGE_EXTENSIONS = new Set([
   '.png',
@@ -33,7 +34,15 @@ export function encodeLinkTarget(target: string): string {
   return /[\s()]/.test(target) ? `<${target}>` : target
 }
 
+/**
+ * A uri-list entry → absolute fs path, or undefined when it names no on-disk file.
+ * Besides a plain `file:` URL this accepts our own `universe-app://root/_resource_/…`
+ * resource URL: dragging a picture out of the markdown / html preview hands us that
+ * address instead of a `file:` one (see `shared/appResourceUrl.ts`).
+ */
 function tryParseFileUri(entry: string): string | undefined {
+  const resourceFsPath = resourceUrlToFsPath(entry)
+  if (resourceFsPath) return resourceFsPath
   if (!entry.startsWith('file:')) return undefined
   try {
     const decoded = decodeURIComponent(new URL(entry).pathname)

@@ -29,8 +29,8 @@ import {
   type IWorkbenchContribution,
 } from '@universe-editor/platform'
 import { IOutOfWorkspaceWatchService } from '../services/files/outOfWorkspaceWatchService.js'
+import { toResourceUrl } from '../../shared/appResourceUrl.js'
 import { IResourceAccessService } from '../../shared/ipc/resourceAccessService.js'
-import { toResourceUrl } from '../workbench/markdown/resourceUri.js'
 import { initMonacoThemeBridge } from '../services/themes/monacoThemeBridge.js'
 import { initMonacoSemanticThemeBridge } from '../services/themes/monacoSemanticThemeBridge.js'
 import {

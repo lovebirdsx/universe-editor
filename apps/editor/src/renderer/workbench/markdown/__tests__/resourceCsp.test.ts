@@ -10,7 +10,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, it, expect } from 'vitest'
-import { RESOURCE_PROTOCOL_SCHEME } from '../resourceUri.js'
+import { RESOURCE_PROTOCOL_SCHEME } from '../../../../shared/appResourceUrl.js'
 
 const indexHtml = readFileSync(
   fileURLToPath(new URL('../../../index.html', import.meta.url)),

@@ -2,13 +2,15 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Reads resources out of a drop event regardless of origin: OS-external files
  *  (mapped via `webUtils.getPathForFile`, exposed on `window.ipc`) and our own
- *  cross-panel drags (the `text/uri-list` payload written by `useDragHandle`).
- *  Pure helpers shared by every drop target (Explorer / Editor / Terminal /
- *  Session), so the per-target wiring only decides what to *do* with the URIs.
+ *  cross-panel drags (the `text/uri-list` payload written by `useDragHandle`, or by
+ *  a native image drag out of a preview/webview). Pure helpers shared by every drop
+ *  target (Explorer / Editor / Terminal / Session), so the per-target wiring only
+ *  decides what to *do* with the URIs.
  *--------------------------------------------------------------------------------------------*/
 
 import { URI } from '@universe-editor/platform'
 import { readUriList } from '@universe-editor/workbench-ui'
+import { resourceUrlToFsPath } from '../../../shared/appResourceUrl.js'
 import { resourceDisplayPath } from '../files/fileSystemScheme.js'
 
 /**
@@ -39,15 +41,34 @@ export function readDroppedResources(e: { dataTransfer: DataTransfer | null }): 
 
   if (out.length === 0) {
     for (const line of readUriList(dt)) {
-      try {
-        push(URI.parse(line))
-      } catch {
-        // skip malformed entries
-      }
+      const uri = toResourceUri(line)
+      if (uri) push(uri)
     }
   }
 
   return out
+}
+
+/**
+ * One uri-list entry → resource URI. An entry can name a resource through our own
+ * privileged scheme (`universe-app://root/_resource_/…`): that is what an `<img>` in
+ * the markdown/html preview (or a webview iframe) has as its `src`, and Chromium's
+ * native image drag copies the address verbatim into `text/uri-list` — no private
+ * mirror. Map it back to the file it serves before it can be mistaken for a resource
+ * identity of its own.
+ *
+ * `universe-app` only serves files of THIS machine, so the result is a plain `file:`
+ * URI whatever the workspace's remote authority (see `resourceUri.ts`).
+ */
+function toResourceUri(entry: string): URI | undefined {
+  const fsPath = resourceUrlToFsPath(entry)
+  if (fsPath) return URI.file(fsPath)
+  try {
+    return URI.parse(entry)
+  } catch {
+    // skip malformed entries
+    return undefined
+  }
 }
 
 /**
