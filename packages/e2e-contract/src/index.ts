@@ -218,6 +218,15 @@ export interface E2EExtensionUpdate {
   readonly toVersion: string
 }
 
+/** The Extensions view's in-view notification strip, flattened for assertions. */
+export interface E2EExtensionNotification {
+  readonly kind: string
+  readonly severity: string
+  readonly message: string
+  /** Action button labels, in render order. */
+  readonly actions: readonly string[]
+}
+
 export interface E2EAiDebugRecord {
   readonly id: string
   readonly purpose?: string
@@ -1394,6 +1403,19 @@ export interface E2EProbe {
   getInstalledExtensionVersions(): Promise<readonly E2EInstalledExtension[]>
   /** Run the marketplace update check; returns only the compatible pending updates. */
   checkForExtensionUpdates(): Promise<readonly E2EExtensionUpdate[]>
+  /**
+   * Drive one renderer-side update cycle — the same path the 12h background check
+   * takes (policy + auto-install when `auto`). Returns the pending updates the
+   * cycle found, so a spec can assert detection without relying on a timer.
+   */
+  runExtensionsUpdateCycle(auto?: boolean): Promise<readonly E2EExtensionUpdate[]>
+  /** The Extensions view's in-view notification strip, or null when there is none. */
+  getExtensionUpdateNotification(): Promise<E2EExtensionNotification | null>
+  /**
+   * Update one extension through the workbench facade — the path the row's Update
+   * button takes, trust gates included. Returns false when it was skipped.
+   */
+  updateExtensionViaWorkbench(identifier: string): Promise<boolean>
   /** Identifiers of every bundled built-in extension. */
   getBuiltinExtensionIds(): Promise<readonly string[]>
   /**

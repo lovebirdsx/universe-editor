@@ -15,7 +15,11 @@ import { promises as fs } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import * as path from 'node:path'
 import { localize, type ILogger } from '@universe-editor/platform'
-import { satisfies, type IExtensionManifest } from '@universe-editor/extensions-common'
+import {
+  compareVersions,
+  satisfies,
+  type IExtensionManifest,
+} from '@universe-editor/extensions-common'
 import { parseManifest } from '@universe-editor/extensions-common/manifest-schema'
 import { readVsixManifest, extractVsix } from '@universe-editor/extension-packaging'
 import type {
@@ -127,7 +131,9 @@ export async function listInstalledExtensions(
 
 /**
  * Look up a single installed extension by identifier, parsing only that one's
- * manifest. Returns undefined when it isn't installed or its manifest can't be read.
+ * manifest. Picks the newest record when duplicates linger from an install made
+ * before upgrades started reclaiming the superseded version. Returns undefined
+ * when it isn't installed or its manifest can't be read.
  */
 export async function findInstalledExtension(
   dir: string,
@@ -135,13 +141,26 @@ export async function findInstalledExtension(
   locale?: string,
 ): Promise<InstalledExtension | undefined> {
   const records = await readInstalledRecords(dir)
-  const rec = records.find((r) => r.identifier === identifier)
+  const rec = newestRecordFor(records, identifier)
   if (!rec) return undefined
   try {
     return await readInstalledExtension(dir, rec, locale)
   } catch {
     return undefined
   }
+}
+
+/** The highest-versioned record for `identifier`, or undefined when absent. */
+function newestRecordFor(
+  records: readonly IInstalledExtensionRecord[],
+  identifier: string,
+): IInstalledExtensionRecord | undefined {
+  let best: IInstalledExtensionRecord | undefined
+  for (const record of records) {
+    if (record.identifier !== identifier) continue
+    if (best === undefined || compareVersions(record.version, best.version) > 0) best = record
+  }
+  return best
 }
 
 /** Re-read the installed manifest with NLS localization; falls back to `fallback`. */
@@ -158,12 +177,74 @@ async function readInstalledManifestLocalized(
   }
 }
 
+/** How a (re)install into one folder reshapes the records of the same identifier. */
+interface ISupersedePlan {
+  /** The survivor set to write to `extensions.json`. */
+  readonly kept: IInstalledExtensionRecord[]
+  /** Records whose folders must be deleted — never includes `keepLocation`. */
+  readonly folders: IInstalledExtensionRecord[]
+}
+
+/**
+ * Plan the record reshuffle for installing `id` into `keepLocation`. Every other
+ * record of the same id is superseded; `keepRecordAtLocation` decides whether an
+ * existing record already sitting at `keepLocation` survives (the idempotent
+ * reinstall path keeps it, the normal path replaces it with a fresh one).
+ */
+function planSupersede(
+  records: readonly IInstalledExtensionRecord[],
+  id: string,
+  keepLocation: string,
+  options: { readonly keepRecordAtLocation: boolean },
+): ISupersedePlan {
+  const kept: IInstalledExtensionRecord[] = []
+  const folders: IInstalledExtensionRecord[] = []
+  for (const record of records) {
+    if (record.identifier !== id) {
+      kept.push(record)
+      continue
+    }
+    if (record.location === keepLocation) {
+      if (options.keepRecordAtLocation) kept.push(record)
+      continue
+    }
+    folders.push(record)
+  }
+  return { kept, folders }
+}
+
+/**
+ * Delete the folders of superseded records (rename-then-delete, falling back to
+ * an `.obsolete` mark for a locked folder). Call only after the manifest write —
+ * `extensions.json` must never reference a folder that is already gone.
+ */
+async function deleteSupersededFolders(
+  dir: string,
+  removed: readonly IInstalledExtensionRecord[],
+  logger?: ExtensionEngineLogger,
+): Promise<void> {
+  if (removed.length === 0) return
+  const marks = await readObsolete(dir)
+  let marked = false
+  for (const record of removed) {
+    if (await deleteExtensionFolder(dir, record.location)) {
+      logger?.info(`removed superseded extension folder ${record.location}`)
+    } else {
+      logger?.warn(`could not remove ${record.location} now, marking obsolete for next start`)
+      marks[record.location] = true
+      marked = true
+    }
+  }
+  if (marked) await writeObsolete(dir, marks)
+}
+
 /**
  * Install a `.vsix` from a path into `dir`. The seven-step on-disk semantics:
  * engine check (when `hostApiVersion` is set) → mkdir → idempotent short-circuit
  * for a local re-install of the same id+version (gallery overwrites by design) →
  * clear obsolete mark → extract to a temp dir + rename-then-delete the target +
- * atomic rename into place → write `extensions.json`.
+ * atomic rename into place → write `extensions.json` → delete the superseded
+ * version's record and folder (an upgrade replaces, never accumulates).
  */
 export async function installVsix(
   dir: string,
@@ -200,6 +281,13 @@ export async function installVsix(
   const existing = records.find((r) => r.identifier === id && r.version === version)
   if (source === 'vsix' && existing && (await pathExists(targetDir))) {
     logger?.info(`extension ${id}@${version} already installed`)
+    const { kept, folders } = planSupersede(records, id, location, {
+      keepRecordAtLocation: true,
+    })
+    if (folders.length > 0) {
+      await writeInstalledRecords(dir, kept)
+      await deleteSupersededFolders(dir, folders, logger)
+    }
     return {
       record: existing,
       location: targetDir,
@@ -231,8 +319,11 @@ export async function installVsix(
     installedAt: Date.now(),
     ...(galleryMetadata ? { galleryMetadata } : {}),
   }
-  const next = [...records.filter((r) => r.identifier !== id || r.version !== version), record]
-  await writeInstalledRecords(dir, next)
+  const { kept, folders } = planSupersede(records, id, location, {
+    keepRecordAtLocation: false,
+  })
+  await writeInstalledRecords(dir, [...kept, record])
+  await deleteSupersededFolders(dir, folders, logger)
 
   logger?.info(`installed extension ${id}@${version} from ${source}`)
   return {
@@ -254,28 +345,22 @@ export async function uninstallExtension(
   logger?: ExtensionEngineLogger,
 ): Promise<boolean> {
   const records = await readInstalledRecords(dir)
-  const record = records.find((r) => r.identifier === identifier)
-  if (!record) {
+  const removed = records.filter((r) => r.identifier === identifier)
+  if (removed.length === 0) {
     logger?.warn(`uninstall: ${identifier} is not installed`)
     return false
   }
 
-  const next = records.filter((r) => r.identifier !== identifier)
-  await writeInstalledRecords(dir, next)
+  await writeInstalledRecords(
+    dir,
+    records.filter((r) => r.identifier !== identifier),
+  )
 
   // Rename-then-delete: the folder name disappears atomically so a host rescan
   // can't re-adopt a half-deleted directory. Only if even the rename fails do we
   // fall back to an obsolete mark for the startup sweep.
-  if (await deleteExtensionFolder(dir, record.location)) {
-    logger?.info(`uninstalled extension ${identifier}`)
-  } else {
-    logger?.warn(
-      `uninstall ${identifier}: could not remove folder now, marking obsolete for next start`,
-    )
-    const marks = await readObsolete(dir)
-    marks[record.location] = true
-    await writeObsolete(dir, marks)
-  }
+  await deleteSupersededFolders(dir, removed, logger)
+  logger?.info(`uninstalled extension ${identifier}`)
   return true
 }
 
@@ -296,4 +381,40 @@ export async function sweepObsolete(dir: string): Promise<void> {
     }
   }
   if (changed) await writeObsolete(dir, remaining)
+}
+
+/**
+ * Collapse duplicate records for one identifier down to the newest version and
+ * delete the folders of the others. Repairs installs written before upgrades
+ * replaced the superseded version; runs alongside the startup sweeps so the
+ * manifest is clean before the extension host scans.
+ */
+export async function reconcileInstalledRecords(
+  dir: string,
+  logger?: ExtensionEngineLogger,
+): Promise<void> {
+  const records = await readInstalledRecords(dir)
+  const dropped = new Set<IInstalledExtensionRecord>()
+  const seen = new Map<string, IInstalledExtensionRecord>()
+  for (const record of records) {
+    const best = seen.get(record.identifier)
+    if (best === undefined) {
+      seen.set(record.identifier, record)
+      continue
+    }
+    if (compareVersions(record.version, best.version) > 0) {
+      seen.set(record.identifier, record)
+      dropped.add(best)
+    } else {
+      dropped.add(record)
+    }
+  }
+  if (dropped.size === 0) return
+
+  await writeInstalledRecords(
+    dir,
+    records.filter((r) => !dropped.has(r)),
+  )
+  await deleteSupersededFolders(dir, [...dropped], logger)
+  logger?.info(`reconciled ${dropped.size} superseded extension record(s)`)
 }

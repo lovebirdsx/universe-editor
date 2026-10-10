@@ -228,6 +228,10 @@ import {
   ExtensionsWorkbenchService,
   IExtensionsWorkbenchService,
 } from './services/extensionsWorkbench/ExtensionsWorkbenchService.js'
+import {
+  ExtensionsUpdateService,
+  IExtensionsUpdateService,
+} from './services/extensionsUpdates/ExtensionsUpdateService.js'
 import { IScmService, ScmService } from './services/extensions/ScmService.js'
 import { IWebviewService, WebviewService } from './services/extensions/WebviewService.js'
 import { ITimelineService, TimelineService } from './services/timeline/TimelineService.js'
@@ -991,6 +995,13 @@ async function bootstrapWorkbench(): Promise<void> {
   )
   services.set(IExtensionsWorkbenchService, extensionsWorkbenchService)
 
+  // Extension update cycles: reads the auto-update settings and applies the policy.
+  // Set after the facade it drives; the scheduling contribution injects it.
+  const extensionsUpdateService = workbenchStore.add(
+    instantiation.createInstance(ExtensionsUpdateService),
+  )
+  services.set(IExtensionsUpdateService, extensionsUpdateService)
+
   // Official-subscription usage (Claude plan windows / Codex rate limits). Reads
   // over an ACP ext-method on whatever session connection is already open, so it
   // must come after IAcpSessionService is registered.
@@ -1102,6 +1113,8 @@ async function bootstrapWorkbench(): Promise<void> {
     extensionGalleryService: services.get(IExtensionGalleryService) as IExtensionGalleryService,
     extensionEnablementService,
     extensionHostClientService,
+    extensionsWorkbenchService,
+    extensionsUpdateService,
     outputModelService: instantiation.invokeFunction((a) => a.get(IOutputModelService)),
     loggerService,
     userKeybindingsService: instantiation.invokeFunction((a) => a.get(IUserKeybindingsService)),

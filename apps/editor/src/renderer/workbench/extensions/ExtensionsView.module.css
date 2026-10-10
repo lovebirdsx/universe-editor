@@ -183,3 +183,30 @@
   font-size: 12px;
   opacity: 0.6;
 }
+
+.notification {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 12px;
+  border-bottom: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+  background: var(--vscode-notifications-infoBackground, rgba(56, 128, 214, 0.15));
+  color: var(--vscode-sideBar-foreground, #cccccc);
+  font-size: 12px;
+}
+
+.notificationWarning {
+  background: var(--vscode-warning-background, rgba(229, 192, 123, 0.12));
+}
+
+.notificationMessage {
+  flex: 1;
+  min-width: 0;
+}
+
+.notificationActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}

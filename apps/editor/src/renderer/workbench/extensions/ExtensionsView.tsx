@@ -47,15 +47,17 @@ import {
   parseExtensionListQuery,
 } from '../../services/extensionsWorkbench/extensionListQuery.js'
 import { ExtensionEditorInput } from '../../services/editor/ExtensionEditorInput.js'
+import { EXTENSIONS_VIEW_ID } from '../../services/extensionsWorkbench/extensionsViewIds.js'
 import { ExtensionIcon } from './ExtensionIcon.js'
 import { InstallInRemoteButton } from './InstallInRemoteButton.js'
+import { ExtensionsViewNotification } from './ExtensionsViewNotification.js'
 import { ExtensionActionsMenu, type ExtensionActionsMenuState } from './ExtensionActionsMenu.js'
 import styles from './ExtensionsView.module.css'
 
 const SEARCH_DEBOUNCE_MS = 300
 
-/** The view id — must match the descriptor registered in ExtensionsViewContribution. */
-const VIEW_ID = 'workbench.view.extensions.main'
+/** The view id — registered in ExtensionsViewContribution, also used by the badge. */
+const VIEW_ID = EXTENSIONS_VIEW_ID
 
 interface ExtensionsSection {
   readonly id: string
@@ -136,7 +138,7 @@ export function ExtensionsView() {
   const notificationService = useService(INotificationService)
 
   // Re-read the facade's live snapshot whenever it fires onDidChange.
-  const { installed, searching, results, remoteLabel } = useEventValue(
+  const { installed, searching, results, remoteLabel, notification } = useEventValue(
     service.onDidChange,
     useCallback(
       () => ({
@@ -144,6 +146,7 @@ export function ExtensionsView() {
         searching: service.searching,
         results: service.getSearchResults(),
         remoteLabel: service.remoteLabel,
+        notification: service.getExtensionsNotification(),
       }),
       [service],
     ),
@@ -181,9 +184,10 @@ export function ExtensionsView() {
       setQuery(value)
       if (debounceRef.current) clearTimeout(debounceRef.current)
       debounceRef.current = setTimeout(() => {
-        // Local queries (@builtin / plain text over the installed list) never
-        // hit the marketplace.
-        if (parseExtensionListQuery(value).builtin) return
+        // Local queries (@builtin / @updates / plain text over the installed
+        // list) never hit the marketplace.
+        const local = parseExtensionListQuery(value)
+        if (local.builtin || local.outdated) return
         if (value.trim()) void service.search(value)
         else void service.loadFeatured()
       }, SEARCH_DEBOUNCE_MS)
@@ -267,7 +271,7 @@ export function ExtensionsView() {
             : localize('extensions.noneInstalled', 'No extensions installed'),
       })
     }
-    if (marketplaceEnabled && !listQuery.builtin) {
+    if (marketplaceEnabled && !listQuery.builtin && !listQuery.outdated) {
       list.push({
         id: 'marketplace',
         title: localize('extensions.group.marketplace', 'Market Extensions'),
@@ -281,6 +285,7 @@ export function ExtensionsView() {
     installed,
     remoteLabel,
     listQuery.builtin,
+    listQuery.outdated,
     listQuery.text,
     marketplaceEnabled,
     searching,
@@ -409,11 +414,18 @@ export function ExtensionsView() {
           onChange={(e) => onQueryChange(e.target.value)}
           placeholder={localize(
             'extensions.search.placeholder',
-            'Search Extensions (@builtin for built-ins)',
+            'Search Extensions (@builtin for built-ins, @updates for outdated)',
           )}
           aria-label={localize('extensions.search.label', 'Search Extensions')}
         />
       </div>
+
+      {notification && (
+        <ExtensionsViewNotification
+          notification={notification}
+          onDismiss={() => service.dismissExtensionsNotification()}
+        />
+      )}
 
       <div {...nav.containerProps} className={styles.scroll} ref={scrollRef}>
         {rows.map((row, index) => {
@@ -444,6 +456,7 @@ export function ExtensionsView() {
               entry={row.entry}
               onOpen={openDetail}
               onInstall={() => void service.install(row.entry)}
+              onUpdate={() => void service.update(row.entry.id)}
               onOpenMenu={openMenu}
               rowProps={rowProps}
             />
@@ -460,6 +473,8 @@ export function ExtensionsView() {
             onUninstall: (entry) => void service.uninstall(entry),
             onSetEnablement: (entry, state) => void service.setEnablement(entry, state),
             onInstallInRemote: (entry) => void service.installInRemote(entry),
+            onSetAutoUpdate: (entry, enabled) =>
+              void service.setAutoUpdateEnabled(entry.id, enabled),
           }}
           onClose={() => setMenu(undefined)}
         />
@@ -501,12 +516,14 @@ function ExtensionRow({
   entry,
   onOpen,
   onInstall,
+  onUpdate,
   onOpenMenu,
   rowProps,
 }: {
   entry: IExtensionEntry
   onOpen: (entry: IExtensionEntry) => void
   onInstall: () => void
+  onUpdate: () => void
   onOpenMenu: (entry: IExtensionEntry, x: number, y: number, keyboard?: boolean) => void
   rowProps: IFlatListRowProps
 }) {
@@ -608,30 +625,43 @@ function ExtensionRow({
             )}
             {entry.installing ? (
               <Spinner size={14} />
-            ) : entry.installableInRemote ? (
-              <InstallInRemoteButton
-                entry={entry}
-                label={localize('extensions.installInRemote', 'Install in Remote')}
-                badgeClassName={styles.badge}
-              />
-            ) : entry.installed ? (
-              <IconButton
-                label={localize('extensions.manage', 'Manage')}
-                onClick={(e) =>
-                  onOpenMenu(
-                    entry,
-                    e.currentTarget.getBoundingClientRect().left,
-                    e.currentTarget.getBoundingClientRect().bottom,
-                  )
-                }
-                data-testid="extension-manage"
-              >
-                <Settings size={16} />
-              </IconButton>
             ) : (
-              <Button onClick={onInstall} disabled={entry.installIncompatible}>
-                {localize('extensions.install', 'Install')}
-              </Button>
+              <>
+                {/* Sits beside the gear rather than replacing it: the user can
+                    still inspect or uninstall instead of updating. */}
+                {entry.updateVersion !== undefined && (
+                  <Button onClick={onUpdate} data-testid="extension-update">
+                    {localize('extensions.updateTo', 'Update to v{version}', {
+                      version: entry.updateVersion,
+                    })}
+                  </Button>
+                )}
+                {entry.installableInRemote ? (
+                  <InstallInRemoteButton
+                    entry={entry}
+                    label={localize('extensions.installInRemote', 'Install in Remote')}
+                    badgeClassName={styles.badge}
+                  />
+                ) : entry.installed ? (
+                  <IconButton
+                    label={localize('extensions.manage', 'Manage')}
+                    onClick={(e) =>
+                      onOpenMenu(
+                        entry,
+                        e.currentTarget.getBoundingClientRect().left,
+                        e.currentTarget.getBoundingClientRect().bottom,
+                      )
+                    }
+                    data-testid="extension-manage"
+                  >
+                    <Settings size={16} />
+                  </IconButton>
+                ) : (
+                  <Button onClick={onInstall} disabled={entry.installIncompatible}>
+                    {localize('extensions.install', 'Install')}
+                  </Button>
+                )}
+              </>
             )}
           </div>
         </div>

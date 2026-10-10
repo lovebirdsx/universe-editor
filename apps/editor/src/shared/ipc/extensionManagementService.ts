@@ -139,13 +139,24 @@ export interface IExtensionManagementService {
 
   /**
    * Check the marketplace for newer versions of installed gallery-sourced
-   * extensions. Returns the ones with an available update. With `authority`,
-   * checks the remote host's installed set against the local marketplace.
+   * extensions. With `authority`, checks the remote host's installed set against
+   * the local marketplace.
    */
-  checkForUpdates(authority?: string): Promise<IExtensionUpdate[]>
+  checkForUpdates(authority?: string): Promise<IExtensionUpdateCheckResult>
 
   /** Install the newer version for a pending update (remote when `authority` set). */
   updateExtension(update: IExtensionUpdate, authority?: string): Promise<ILocalExtension>
+
+  /**
+   * Install several pending updates under one batch. Every entry still runs the
+   * full gate chain (malicious / anti-poisoning / signature / engine), but the
+   * change event fires once — each install restarts the extension host, so N
+   * separate calls would mean N serialized restarts.
+   */
+  updateExtensions(
+    updates: readonly IExtensionUpdate[],
+    authority?: string,
+  ): Promise<readonly IExtensionUpdateOutcome[]>
 }
 
 /** A pending update: an installed extension with a newer gallery version. */
@@ -154,6 +165,22 @@ export interface IExtensionUpdate {
   readonly fromVersion: string
   readonly toVersion: string
   readonly gallery: IGalleryExtension
+}
+
+/**
+ * Result of an update check. `failure` means the marketplace was never consulted
+ * (unreachable / errored) — callers must not report "up to date" in that case.
+ */
+export interface IExtensionUpdateCheckResult {
+  readonly updates: readonly IExtensionUpdate[]
+  readonly failure?: string
+}
+
+/** Per-identifier result of a batched update run. */
+export interface IExtensionUpdateOutcome {
+  readonly identifier: string
+  readonly version?: string
+  readonly error?: string
 }
 
 export const IExtensionManagementService = createDecorator<IExtensionManagementService>(

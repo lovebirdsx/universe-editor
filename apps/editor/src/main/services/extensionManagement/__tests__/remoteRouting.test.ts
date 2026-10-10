@@ -336,7 +336,7 @@ describe('ExtensionManagementMainService — remote routing', () => {
     const gallery: IManagementGallery = {
       download: async () => vsixPath,
       getControlManifest: async () => ({ malicious: [] }),
-      getExtensions: async () => [],
+      getExtensionsForUpdate: async () => ({ extensions: [] }),
     }
     const fixture = makeFixture({ gallery })
 
@@ -354,7 +354,7 @@ describe('ExtensionManagementMainService — remote routing', () => {
     const gallery: IManagementGallery = {
       download: async () => vsixPath,
       getControlManifest: async () => ({ malicious: [] }),
-      getExtensions: async () => [],
+      getExtensionsForUpdate: async () => ({ extensions: [] }),
     }
     const fixture = makeFixture({ gallery })
 
@@ -395,12 +395,12 @@ describe('ExtensionManagementMainService — remote routing', () => {
         throw new Error('not used')
       },
       getControlManifest: async () => ({ malicious: [] }),
-      getExtensions: async () => [galleryExt({ version: '2.0.0' })],
+      getExtensionsForUpdate: async () => ({ extensions: [galleryExt({ version: '2.0.0' })] }),
     }
     const fixture = makeFixture({ gallery })
     fixture.remote.installed = [remoteExt('acme.sample', '1.0.0', 'gallery')]
 
-    const updates = await fixture.svc.checkForUpdates('host')
+    const { updates } = await fixture.svc.checkForUpdates('host')
     expect(updates).toHaveLength(1)
     expect(updates[0]).toMatchObject({
       identifier: 'acme.sample',

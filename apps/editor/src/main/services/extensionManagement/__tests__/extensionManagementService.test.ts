@@ -4,7 +4,10 @@ import { generateKeyPairSync, sign } from 'node:crypto'
 import * as path from 'node:path'
 import AdmZip from 'adm-zip'
 import { hashVsixFile } from '@universe-editor/extension-packaging'
-import type { IGalleryExtensionVersion } from '@universe-editor/extension-gallery'
+import type {
+  IGalleryExtension,
+  IGalleryExtensionVersion,
+} from '@universe-editor/extension-gallery'
 import {
   ExtensionManagementMainService,
   type IManagementGallery,
@@ -191,13 +194,16 @@ describe('ExtensionManagementMainService', () => {
     expect(await exists(path.join(extDir, 'sample-1.0.0'))).toBe(true)
   })
 
-  it('keeps two versions of the same extension side by side', async () => {
+  it('replaces the previous version instead of keeping both side by side', async () => {
     const v1 = await makeVsix(root, 'v1.vsix', manifest({ version: '1.0.0' }))
     const v2 = await makeVsix(root, 'v2.vsix', manifest({ version: '2.0.0' }))
     await svc.installVSIX(v1)
     await svc.installVSIX(v2)
     const list = await svc.getInstalled()
-    expect(list.map((l) => l.version).sort()).toEqual(['1.0.0', '2.0.0'])
+    // Two folders of one id would make activation depend on readdir order (the host
+    // scanner has no id dedupe) and leave uninstall deleting only one of them.
+    expect(list.map((l) => l.version)).toEqual(['2.0.0'])
+    expect(await exists(path.join(extDir, 'acme.sample-1.0.0'))).toBe(false)
   })
 
   it('sweeps obsolete-marked folders on startup', async () => {
@@ -262,7 +268,7 @@ describe('ExtensionManagementMainService — gallery install', () => {
     const gallery: IManagementGallery = {
       download: async () => vsixPath,
       getControlManifest: async () => ({ malicious }),
-      getExtensions: async () => [],
+      getExtensionsForUpdate: async () => ({ extensions: [] }),
     }
     return { gallery, signing, vsixPath }
   }
@@ -349,7 +355,7 @@ describe('ExtensionManagementMainService — gallery install', () => {
     const gallery: IManagementGallery = {
       download: async () => current.vsixPath,
       getControlManifest: async () => ({ malicious: [] }),
-      getExtensions: async () => [],
+      getExtensionsForUpdate: async () => ({ extensions: [] }),
     }
     const svc = gallerySvc(gallery)
 
@@ -478,7 +484,7 @@ describe('ExtensionManagementMainService — enablement, quarantine, updates', (
     const gallery = {
       download: async () => '',
       getControlManifest: async () => ({ malicious }),
-      getExtensions: async () => [],
+      getExtensionsForUpdate: async () => ({ extensions: [] }),
     }
     const svc = new ExtensionManagementMainService(() => extDir, HOST_API, gallery)
     // Install while clean, then the control manifest later flags it malicious.
@@ -508,7 +514,7 @@ describe('ExtensionManagementMainService — enablement, quarantine, updates', (
     const gallery = {
       download: async () => vsixPath,
       getControlManifest: async () => ({ malicious: [] as string[] }),
-      getExtensions: async () => [galleryEntry],
+      getExtensionsForUpdate: async () => ({ extensions: [galleryEntry] }),
     }
     const svc = new ExtensionManagementMainService(
       () => extDir,
@@ -526,7 +532,7 @@ describe('ExtensionManagementMainService — enablement, quarantine, updates', (
       versions: versionOf({ version: '1.0.0', vsixUrl: 'https://host/sample.vsix', ...signing }),
     })
 
-    const updates = await svc.checkForUpdates()
+    const { updates } = await svc.checkForUpdates()
     expect(updates).toHaveLength(1)
     expect(updates[0]).toMatchObject({
       identifier: 'acme.sample',
@@ -556,7 +562,7 @@ describe('ExtensionManagementMainService — enablement, quarantine, updates', (
     const gallery = {
       download: async () => vsixPath,
       getControlManifest: async () => ({ malicious: [] as string[] }),
-      getExtensions: async () => [galleryEntry],
+      getExtensionsForUpdate: async () => ({ extensions: [galleryEntry] }),
     }
     const svc = new ExtensionManagementMainService(
       () => extDir,
@@ -575,7 +581,7 @@ describe('ExtensionManagementMainService — enablement, quarantine, updates', (
     })
 
     // The newest gallery version (2.0.0) is incompatible → no update offered.
-    const updates = await svc.checkForUpdates()
+    const { updates } = await svc.checkForUpdates()
     expect(updates).toHaveLength(0)
     svc.dispose()
   })
@@ -735,4 +741,135 @@ describe('ExtensionManagementMainService — enablement, quarantine, updates', (
     expect(url.startsWith('data:image/png;base64,')).toBe(true)
     svc2.dispose()
   })
+
+  it('reports a failure rather than an empty list when the marketplace is unreachable', async () => {
+    const vsixPath = await makeVsix(root, 'dl.vsix', manifest())
+    const entry = galleryEntryFor('sample', '1.0.0', await signedByTestKey(vsixPath))
+    let reachable = true
+    const gallery: IManagementGallery = {
+      download: async () => vsixPath,
+      getControlManifest: async () => ({ malicious: [] }),
+      getExtensionsForUpdate: async () =>
+        reachable ? { extensions: [entry] } : { extensions: [], failure: 'registry down' },
+    }
+    const svc = new ExtensionManagementMainService(
+      () => extDir,
+      HOST_API,
+      gallery,
+      undefined,
+      undefined,
+      undefined,
+      TEST_PUBLIC_KEYS,
+    )
+    await svc.installFromGallery(entry)
+
+    reachable = false
+    expect(await svc.checkForUpdates()).toEqual({ updates: [], failure: 'registry down' })
+    svc.dispose()
+  })
+
+  it('updateExtensions installs every update and emits a single change event', async () => {
+    const fixtures = new Map<string, { path: string; entry: IGalleryExtension }>()
+    for (const name of ['a', 'b']) {
+      const vsixPath = await makeVsix(root, `${name}.vsix`, manifest({ name, version: '2.0.0' }))
+      fixtures.set(`acme.${name}`, {
+        path: vsixPath,
+        entry: galleryEntryFor(name, '2.0.0', await signedByTestKey(vsixPath)),
+      })
+    }
+    const gallery: IManagementGallery = {
+      download: async (extension) => fixtures.get(extension.identifier)!.path,
+      getControlManifest: async () => ({ malicious: [] }),
+      getExtensionsForUpdate: async () => ({ extensions: [] }),
+    }
+    const svc = new ExtensionManagementMainService(
+      () => extDir,
+      HOST_API,
+      gallery,
+      undefined,
+      undefined,
+      undefined,
+      TEST_PUBLIC_KEYS,
+    )
+
+    const updates = ['a', 'b'].map((name) => {
+      const { entry } = fixtures.get(`acme.${name}`)!
+      return {
+        identifier: entry.identifier,
+        fromVersion: '1.0.0',
+        toVersion: '2.0.0',
+        gallery: entry,
+      }
+    })
+
+    let changes = 0
+    svc.onDidChangeExtensions(() => changes++)
+
+    expect(await svc.updateExtensions(updates)).toEqual([
+      { identifier: 'acme.a', version: '2.0.0' },
+      { identifier: 'acme.b', version: '2.0.0' },
+    ])
+    // One event for the whole batch: every install restarts the extension host.
+    expect(changes).toBe(1)
+    expect((await svc.getInstalled()).map((e) => e.identifier).sort()).toEqual(['acme.a', 'acme.b'])
+    svc.dispose()
+  })
+
+  it('updateExtensions reports a per-identifier error without aborting the rest', async () => {
+    const goodVsix = await makeVsix(root, 'good.vsix', manifest({ name: 'good', version: '2.0.0' }))
+    const good = galleryEntryFor('good', '2.0.0', await signedByTestKey(goodVsix))
+    const gallery: IManagementGallery = {
+      download: async (extension) => {
+        if (extension.identifier === 'acme.bad') throw new Error('download failed')
+        return goodVsix
+      },
+      getControlManifest: async () => ({ malicious: [] }),
+      getExtensionsForUpdate: async () => ({ extensions: [] }),
+    }
+    const svc = new ExtensionManagementMainService(
+      () => extDir,
+      HOST_API,
+      gallery,
+      undefined,
+      undefined,
+      undefined,
+      TEST_PUBLIC_KEYS,
+    )
+
+    const outcomes = await svc.updateExtensions([
+      {
+        identifier: 'acme.bad',
+        fromVersion: '1.0.0',
+        toVersion: '2.0.0',
+        gallery: { ...good, identifier: 'acme.bad' },
+      },
+      { identifier: 'acme.good', fromVersion: '1.0.0', toVersion: '2.0.0', gallery: good },
+    ])
+
+    expect(outcomes[0]?.identifier).toBe('acme.bad')
+    expect(outcomes[0]?.error).toBeTruthy()
+    expect(outcomes[1]).toEqual({ identifier: 'acme.good', version: '2.0.0' })
+    expect((await svc.getInstalled()).map((e) => e.identifier)).toEqual(['acme.good'])
+    svc.dispose()
+  })
 })
+
+/** A gallery entry for a test VSIX (uses the top-level signing fields the installer verifies). */
+function galleryEntryFor(
+  name: string,
+  version: string,
+  signing: Awaited<ReturnType<typeof signedByTestKey>>,
+): IGalleryExtension {
+  const vsixUrl = `https://host/${name}.vsix`
+  return {
+    identifier: `acme.${name}`,
+    name,
+    publisher: 'acme',
+    displayName: name,
+    description: '',
+    version,
+    vsixUrl,
+    ...signing,
+    versions: versionOf({ version, vsixUrl, ...signing }),
+  } as IGalleryExtension
+}

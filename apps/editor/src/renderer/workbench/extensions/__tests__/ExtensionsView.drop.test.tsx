@@ -42,6 +42,9 @@ function makeWorkbench() {
     getReadme: vi.fn(async () => ''),
     getIcon: vi.fn(async () => ''),
     find: vi.fn(() => undefined),
+    getExtensionsNotification: vi.fn(() => undefined),
+    dismissExtensionsNotification: vi.fn(),
+    update: vi.fn(async () => true),
   }
 }
 

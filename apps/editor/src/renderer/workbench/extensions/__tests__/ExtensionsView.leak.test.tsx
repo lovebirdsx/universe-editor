@@ -61,6 +61,9 @@ function setup() {
     getReadme: vi.fn(async () => ''),
     getIcon: vi.fn(async () => ''),
     find: vi.fn(() => undefined),
+    getExtensionsNotification: vi.fn(() => undefined),
+    dismissExtensionsNotification: vi.fn(),
+    update: vi.fn(async () => true),
   }
   const services = new ServiceCollection()
   services.set(IExtensionsWorkbenchService, workbench as unknown as IExtensionsWorkbenchService)

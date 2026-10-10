@@ -13,6 +13,7 @@ import { createVsix } from '@universe-editor/extension-packaging'
 import {
   installVsix,
   listInstalledExtensions,
+  reconcileInstalledRecords,
   sweepObsolete,
   uninstallExtension,
 } from '../extensionInstallEngine.js'
@@ -68,6 +69,33 @@ function erroring(code: string): NodeJS.ErrnoException {
   const err = new Error(`${code}: operation not permitted, rename`) as NodeJS.ErrnoException
   err.code = code
   return err
+}
+
+/** Legacy state: two versions of one id recorded with both folders on disk. */
+async function seedDuplicateVersions(extDir: string): Promise<void> {
+  await mkdir(path.join(extDir, 'acme.sample-1.0.0'), { recursive: true })
+  await mkdir(path.join(extDir, 'acme.sample-2.0.0'), { recursive: true })
+  await writeInstalledRecords(extDir, [
+    {
+      identifier: 'acme.sample',
+      version: '1.0.0',
+      location: 'acme.sample-1.0.0',
+      source: 'gallery',
+      installedAt: 1,
+    },
+    {
+      identifier: 'acme.sample',
+      version: '2.0.0',
+      location: 'acme.sample-2.0.0',
+      source: 'gallery',
+      installedAt: 2,
+    },
+  ])
+}
+
+/** Extension folders among directory entries, ignoring the manifest + markers. */
+function installedFolders(entries: readonly string[]): string[] {
+  return entries.filter((name) => name.startsWith('acme.sample-')).sort()
 }
 
 describe('extensionInstallEngine', () => {
@@ -139,6 +167,92 @@ describe('extensionInstallEngine', () => {
     expect(await listInstalledExtensions(extDir)).toHaveLength(1)
   })
 
+  it('an upgrade replaces the superseded version record and folder', async () => {
+    await installVsix(extDir, await makeVsix(root, 'v1', manifest()), {
+      source: 'gallery',
+      hostApiVersion: HOST_API,
+    })
+    await installVsix(extDir, await makeVsix(root, 'v2', manifest({ version: '2.0.0' })), {
+      source: 'gallery',
+      hostApiVersion: HOST_API,
+    })
+
+    expect((await readInstalledRecords(extDir)).map((r) => r.version)).toEqual(['2.0.0'])
+    expect(await exists(path.join(extDir, 'acme.sample-1.0.0'))).toBe(false)
+    expect(await exists(path.join(extDir, 'acme.sample-2.0.0'))).toBe(true)
+    expect(await listInstalledExtensions(extDir)).toHaveLength(1)
+  })
+
+  it('an upgrade preserves the identifier disablement', async () => {
+    await installVsix(extDir, await makeVsix(root, 'v1', manifest()), {
+      source: 'gallery',
+      hostApiVersion: HOST_API,
+    })
+    await writeEnablement(extDir, { 'acme.sample': false })
+    await installVsix(extDir, await makeVsix(root, 'v2', manifest({ version: '2.0.0' })), {
+      source: 'gallery',
+      hostApiVersion: HOST_API,
+    })
+    expect(await readEnablement(extDir)).toEqual({ 'acme.sample': false })
+  })
+
+  it('a same-version reinstall reclaims a lingering older version', async () => {
+    await seedDuplicateVersions(extDir)
+
+    await installVsix(extDir, await makeVsix(root, 'v2', manifest({ version: '2.0.0' })), {
+      source: 'vsix',
+      hostApiVersion: HOST_API,
+    })
+
+    expect((await readInstalledRecords(extDir)).map((r) => r.version)).toEqual(['2.0.0'])
+    expect(installedFolders(await readdir(extDir))).toEqual(['acme.sample-2.0.0'])
+  })
+
+  it('marks a locked superseded folder obsolete during an upgrade, then sweeps it', async () => {
+    await installVsix(extDir, await makeVsix(root, 'v1', manifest()), {
+      source: 'gallery',
+      hostApiVersion: HOST_API,
+    })
+    const realRename = fs.rename
+    vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (String(to).includes('.vsctmp')) throw erroring('EPERM')
+      return realRename(from, to)
+    })
+
+    await installVsix(extDir, await makeVsix(root, 'v2', manifest({ version: '2.0.0' })), {
+      source: 'gallery',
+      hostApiVersion: HOST_API,
+    })
+    vi.restoreAllMocks()
+
+    expect((await readInstalledRecords(extDir)).map((r) => r.version)).toEqual(['2.0.0'])
+    expect(await exists(path.join(extDir, 'acme.sample-1.0.0'))).toBe(true)
+    expect(await readObsolete(extDir)).toEqual({ 'acme.sample-1.0.0': true })
+
+    await sweepObsolete(extDir)
+    expect(await exists(path.join(extDir, 'acme.sample-1.0.0'))).toBe(false)
+  })
+
+  it('reconciles duplicate records down to the newest version', async () => {
+    await seedDuplicateVersions(extDir)
+    await writeEnablement(extDir, { 'acme.sample': false })
+
+    await reconcileInstalledRecords(extDir)
+
+    expect((await readInstalledRecords(extDir)).map((r) => r.version)).toEqual(['2.0.0'])
+    expect(installedFolders(await readdir(extDir))).toEqual(['acme.sample-2.0.0'])
+    expect(await readEnablement(extDir)).toEqual({ 'acme.sample': false })
+  })
+
+  it('leaves a single-version install untouched when reconciling', async () => {
+    await installVsix(extDir, await makeVsix(root, 'v1', manifest()), {
+      source: 'vsix',
+      hostApiVersion: HOST_API,
+    })
+    await reconcileInstalledRecords(extDir)
+    expect((await readInstalledRecords(extDir)).map((r) => r.version)).toEqual(['1.0.0'])
+  })
+
   it('uninstall removes the record and folder, returning true', async () => {
     await installVsix(extDir, await makeVsix(root, 'sample', manifest()), {
       source: 'vsix',
@@ -153,6 +267,14 @@ describe('extensionInstallEngine', () => {
 
   it('uninstall of a non-installed identifier returns false', async () => {
     expect(await uninstallExtension(extDir, 'not.installed')).toBe(false)
+  })
+
+  it('uninstall removes every folder of a duplicated identifier', async () => {
+    await seedDuplicateVersions(extDir)
+
+    expect(await uninstallExtension(extDir, 'acme.sample')).toBe(true)
+    expect(await readInstalledRecords(extDir)).toEqual([])
+    expect(installedFolders(await readdir(extDir))).toEqual([])
   })
 
   it('falls back to an obsolete mark when the folder rename fails, then sweeps it', async () => {

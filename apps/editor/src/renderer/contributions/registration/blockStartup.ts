@@ -29,6 +29,7 @@ import { JsonSchemaBridgeContribution } from '../JsonSchemaBridgeContribution.js
 import { JsonSchemaAssociationsContribution } from '../JsonSchemaAssociationsContribution.js'
 import { InlineCompletionConfigurationContribution } from '../InlineCompletionConfigurationContribution.js'
 import { MarkdownConfigurationContribution } from '../MarkdownConfigurationContribution.js'
+import { ExtensionsConfigurationContribution } from '../ExtensionsConfigurationContribution.js'
 import { WindowZoomConfigurationContribution } from '../WindowZoomConfigurationContribution.js'
 import { ScmConfigurationContribution } from '../ScmConfigurationContribution.js'
 import { BuiltInEditorBindingsContribution } from '../BuiltInEditorBindingsContribution.js'
@@ -241,6 +242,14 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.markdownConfiguration',
   MarkdownConfigurationContribution,
+  WorkbenchPhase.BlockStartup,
+)
+
+// extensions.* update-checker settings. BlockStartup so the schedule contribution
+// reads registered defaults rather than undefined.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.extensionsConfiguration',
+  ExtensionsConfigurationContribution,
   WorkbenchPhase.BlockStartup,
 )
 

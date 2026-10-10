@@ -47,6 +47,15 @@ export interface IExtensionGalleryService {
   getExtensions(ids: readonly string[]): Promise<IGalleryExtension[]>
 
   /**
+   * The update check's lookup: same query as `getExtensions`, but an unreachable
+   * marketplace is reported as `failure` instead of degrading to an empty list —
+   * for the update check an empty list is a claim ("nothing newer exists").
+   */
+  getExtensionsForUpdate(
+    ids: readonly string[],
+  ): Promise<{ extensions: IGalleryExtension[]; failure?: string }>
+
+  /**
    * Download an extension's VSIX into the on-disk cache and return its local path.
    * Cached by `<publisher>.<name>-<version>.vsix`; a present cache hit is reused.
    */

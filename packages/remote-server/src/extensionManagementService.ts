@@ -25,6 +25,7 @@ import {
   listInstalledExtensions,
   readEnablement,
   readExtensionIconDataUrl,
+  reconcileInstalledRecords,
   sweepObsolete,
   uninstallExtension,
   writeEnablement,
@@ -217,10 +218,11 @@ export class RemoteExtensionManagementService
     return run
   }
 
-  /** Best-effort startup cleanup: obsolete marks + stale temp-vsix orphans. */
+  /** Best-effort startup cleanup: obsolete marks + duplicate records + stale temp-vsix orphans. */
   private async _sweepOnStartup(): Promise<void> {
     try {
       await sweepObsolete(this._userExtensionsDir)
+      await reconcileInstalledRecords(this._userExtensionsDir, this._log)
     } catch (err) {
       this._log.warn(`startup obsolete sweep failed: ${(err as Error).message}`)
     }

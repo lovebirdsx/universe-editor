@@ -114,6 +114,52 @@ describe('ExtensionGalleryMainService', () => {
     expect(await svc.query({ text: 'demo' })).toEqual({ extensions: [], total: 0 })
   })
 
+  // The update check asks "is anything newer?" — an unreachable marketplace must
+  // answer that with a failure, unlike the browsing callers above.
+  it('reports a failure for the update lookup instead of an empty list', async () => {
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error('offline')
+    }) as unknown as typeof fetch
+    const enabled = new ExtensionGalleryMainService({ galleryUrl: 'https://x' }, cacheDir)
+    expect(await enabled.getExtensionsForUpdate(['acme.demo'])).toEqual({
+      extensions: [],
+      failure: 'offline',
+    })
+
+    const disabled = new ExtensionGalleryMainService({ galleryUrl: undefined }, cacheDir)
+    const noMarketplace = await disabled.getExtensionsForUpdate(['acme.demo'])
+    expect(noMarketplace.extensions).toEqual([])
+    expect(noMarketplace.failure).toBeTruthy()
+  })
+
+  it('returns the matched extensions for the update lookup on success', async () => {
+    globalThis.fetch = vi.fn(async () =>
+      jsonResponse({
+        results: [
+          {
+            extensions: [
+              {
+                extensionName: 'demo',
+                displayName: 'Demo',
+                publisher: { publisherName: 'acme' },
+                versions: [
+                  {
+                    version: '2.0.0',
+                    files: [{ assetType: AssetType.Vsix, source: 'https://host/demo.vsix' }],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+    ) as unknown as typeof fetch
+    const svc = new ExtensionGalleryMainService({ galleryUrl: 'https://x' }, cacheDir)
+    const result = await svc.getExtensionsForUpdate(['acme.demo'])
+    expect(result.failure).toBeUndefined()
+    expect(result.extensions[0]?.version).toBe('2.0.0')
+  })
+
   it('downloads a vsix into the cache and reuses it on a second call', async () => {
     const fetchMock = vi.fn(async () => {
       const res = jsonResponse('')

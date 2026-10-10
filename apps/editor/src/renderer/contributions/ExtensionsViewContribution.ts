@@ -13,6 +13,10 @@ import {
   localize,
 } from '@universe-editor/platform'
 import { registerViewWithComponent } from '../services/views/ViewComponentRegistry.js'
+import {
+  EXTENSIONS_VIEW_CONTAINER_ID,
+  EXTENSIONS_VIEW_ID,
+} from '../services/extensionsWorkbench/extensionsViewIds.js'
 import { ExtensionsView } from '../workbench/extensions/ExtensionsView.js'
 
 export class ExtensionsViewContribution extends Disposable implements IWorkbenchContribution {
@@ -21,7 +25,7 @@ export class ExtensionsViewContribution extends Disposable implements IWorkbench
 
     this._register(
       ViewContainerRegistry.registerViewContainer({
-        id: 'workbench.view.extensions',
+        id: EXTENSIONS_VIEW_CONTAINER_ID,
         label: localize('viewContainer.extensions', 'Extensions'),
         icon: 'extensions',
         order: 6,
@@ -32,9 +36,9 @@ export class ExtensionsViewContribution extends Disposable implements IWorkbench
     this._register(
       registerViewWithComponent(
         {
-          id: 'workbench.view.extensions.main',
+          id: EXTENSIONS_VIEW_ID,
           name: localize('view.extensions', 'Extensions'),
-          containerId: 'workbench.view.extensions',
+          containerId: EXTENSIONS_VIEW_CONTAINER_ID,
           icon: 'extensions',
           order: 1,
         },

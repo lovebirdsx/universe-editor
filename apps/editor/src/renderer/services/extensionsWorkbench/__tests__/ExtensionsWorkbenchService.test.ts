@@ -74,6 +74,7 @@ function galleryExtension(overrides: Partial<IGalleryExtension> = {}): IGalleryE
 function makeMocks() {
   const onDidChangeExtensions = new Emitter<void>()
   const onDidChangeEnablement = new Emitter<void>()
+  const onDidChangeWorkspace = new Emitter<IWorkspaceService['current']>()
   const management = {
     onDidChangeExtensions: onDidChangeExtensions.event,
     getInstalled: vi.fn(async () => [] as ILocalExtension[]),
@@ -83,6 +84,9 @@ function makeMocks() {
     installVSIX: vi.fn(async () => localExtension()),
     uninstall: vi.fn(async () => undefined),
     getLocalIcon: vi.fn(async () => ''),
+    checkForUpdates: vi.fn(async () => ({ updates: [] })),
+    updateExtension: vi.fn(async () => localExtension()),
+    updateExtensions: vi.fn(async () => []),
   } as unknown as IExtensionManagementService
   const gallery = {
     isEnabled: vi.fn(async () => true),
@@ -95,9 +99,12 @@ function makeMocks() {
   const dialog = {
     confirm: vi.fn(async () => ({ confirmed: true, choice: 'primary' })),
   } as unknown as IDialogService
-  // Storage: trusts every publisher by default so install() doesn't prompt.
+  // Storage: trusts every publisher by default so install() doesn't prompt; the
+  // auto-update opt-out list starts empty so nothing is silently excluded.
   const storage = {
-    get: vi.fn(async () => ['acme']),
+    get: vi.fn(async (key: string) =>
+      key === 'extensions.trustedPublishers' ? ['acme'] : undefined,
+    ),
     set: vi.fn(async () => undefined),
   } as unknown as IStorageService
   const notification = { notify: vi.fn() } as unknown as INotificationService
@@ -119,7 +126,7 @@ function makeMocks() {
   const workspace = {
     _serviceBrand: undefined,
     current: null as IWorkspaceService['current'],
-    onDidChangeWorkspace: new Emitter().event,
+    onDidChangeWorkspace: onDidChangeWorkspace.event,
     recent: [] as IWorkspaceService['recent'],
     onDidChangeRecent: new Emitter().event,
     whenReady: Promise.resolve(),
@@ -145,6 +152,7 @@ function makeMocks() {
     onDidChangeEnablement,
     onDidActivationError,
     onDidChangeContributions,
+    onDidChangeWorkspace,
   }
 }
 
@@ -811,5 +819,271 @@ describe('ExtensionsWorkbenchService', () => {
     expect(fallback?.installCompatibleVersion).toBe('1.0.0')
     expect(broken?.installIncompatible).toBe(true)
     expect(broken?.installCompatibleVersion).toBeUndefined()
+  })
+})
+
+describe('ExtensionsWorkbenchService — pending updates', () => {
+  function updateFor(toVersion = '2.0.0') {
+    return {
+      identifier: 'acme.installed',
+      fromVersion: '1.0.0',
+      toVersion,
+      gallery: galleryExtension({
+        identifier: 'acme.installed',
+        name: 'installed',
+        version: toVersion,
+      }),
+    }
+  }
+
+  async function checked(mocks: ReturnType<typeof makeMocks>, toVersion = '2.0.0') {
+    vi.mocked(mocks.management.getInstalled).mockResolvedValue([localExtension()])
+    vi.mocked(mocks.management.checkForUpdates).mockResolvedValue({
+      updates: [updateFor(toVersion)],
+    })
+    const svc = makeService(mocks)
+    await svc.refreshInstalled()
+    await svc.checkForUpdates()
+    return svc
+  }
+
+  it('marks the installed entry outdated with the offered version', async () => {
+    const svc = await checked(makeMocks())
+    expect(svc.getInstalled()[0]).toMatchObject({
+      id: 'acme.installed',
+      outdated: true,
+      updateVersion: '2.0.0',
+    })
+    expect(svc.getPendingUpdates()).toHaveLength(1)
+  })
+
+  it('clears the pending update once the installed version catches up', async () => {
+    const mocks = makeMocks()
+    const svc = await checked(mocks)
+    expect(svc.getInstalled()[0]?.outdated).toBe(true)
+
+    vi.mocked(mocks.management.getInstalled).mockResolvedValue([
+      localExtension({ version: '2.0.0' }),
+    ])
+    await svc.refreshInstalled()
+
+    expect(svc.getInstalled()[0]).toMatchObject({ outdated: false })
+    expect(svc.getInstalled()[0]?.updateVersion).toBeUndefined()
+    expect(svc.getPendingUpdates()).toHaveLength(0)
+  })
+
+  it('announces a background check only when the pending set changes', async () => {
+    const mocks = makeMocks()
+    vi.mocked(mocks.management.getInstalled).mockResolvedValue([localExtension()])
+    vi.mocked(mocks.management.checkForUpdates).mockResolvedValue({ updates: [updateFor()] })
+    const svc = makeService(mocks)
+    await svc.refreshInstalled()
+
+    await svc.checkForUpdates()
+    expect(mocks.notification.notify).toHaveBeenCalledTimes(1)
+
+    // Same set again → the 12h tick must not repeat itself.
+    await svc.checkForUpdates()
+    expect(mocks.notification.notify).toHaveBeenCalledTimes(1)
+
+    // A different set is news again.
+    vi.mocked(mocks.management.checkForUpdates).mockResolvedValue({ updates: [updateFor('3.0.0')] })
+    await svc.checkForUpdates()
+    expect(mocks.notification.notify).toHaveBeenCalledTimes(2)
+  })
+
+  it('stays silent on a background check that finds nothing', async () => {
+    const mocks = makeMocks()
+    vi.mocked(mocks.management.getInstalled).mockResolvedValue([localExtension()])
+    const svc = makeService(mocks)
+    await svc.refreshInstalled()
+
+    await svc.checkForUpdates()
+    expect(mocks.notification.notify).not.toHaveBeenCalled()
+  })
+
+  it('always reports the outcome of a user-initiated check', async () => {
+    const mocks = makeMocks()
+    vi.mocked(mocks.management.getInstalled).mockResolvedValue([localExtension()])
+    const svc = makeService(mocks)
+    await svc.refreshInstalled()
+
+    await svc.checkForUpdates({ explicit: true })
+    expect(mocks.notification.notify).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: Severity.Info }),
+    )
+  })
+
+  it('reports an unreachable marketplace instead of claiming everything is up to date', async () => {
+    const mocks = makeMocks()
+    vi.mocked(mocks.management.getInstalled).mockResolvedValue([localExtension()])
+    vi.mocked(mocks.management.checkForUpdates).mockResolvedValue({
+      updates: [],
+      failure: 'registry down',
+    })
+    const svc = makeService(mocks)
+    await svc.refreshInstalled()
+    await svc.checkForUpdates({ explicit: true })
+
+    expect(mocks.notification.notify).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: Severity.Warning }),
+    )
+    expect(svc.getExtensionsNotification()).toMatchObject({
+      kind: 'failed',
+      severity: Severity.Warning,
+    })
+  })
+
+  it('refuses a silent update from an untrusted publisher without prompting', async () => {
+    const mocks = makeMocks()
+    const svc = await checked(mocks)
+    vi.mocked(mocks.storage.get).mockResolvedValue([])
+
+    expect(await svc.update('acme.installed', { silent: true })).toBe(false)
+    expect(mocks.dialog.confirm).not.toHaveBeenCalled()
+    expect(mocks.management.updateExtension).not.toHaveBeenCalled()
+  })
+
+  it('applies a single update through the per-extension call and refreshes', async () => {
+    const mocks = makeMocks()
+    const svc = await checked(mocks)
+
+    expect(await svc.update('acme.installed')).toBe(true)
+    expect(mocks.management.updateExtension).toHaveBeenCalledWith(
+      expect.objectContaining({ identifier: 'acme.installed' }),
+      undefined,
+    )
+  })
+
+  it('applies every pending update as one batch with a single summary toast', async () => {
+    const mocks = makeMocks()
+    vi.mocked(mocks.management.getInstalled).mockResolvedValue([localExtension()])
+    vi.mocked(mocks.management.checkForUpdates).mockResolvedValue({
+      updates: [updateFor('2.0.0'), { ...updateFor('2.0.0'), identifier: 'acme.other' }],
+    })
+    vi.mocked(mocks.management.updateExtensions).mockImplementation(async (updates) =>
+      updates.map((update) => ({ identifier: update.identifier, version: update.toVersion })),
+    )
+    const svc = makeService(mocks)
+    await svc.refreshInstalled()
+    await svc.checkForUpdates()
+    vi.mocked(mocks.notification.notify).mockClear()
+
+    // acme.other is not installed on this side, so it is not a target.
+    const result = await svc.updateAll()
+
+    expect(mocks.management.updateExtensions).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(mocks.management.updateExtensions).mock.calls[0]?.[0]).toHaveLength(1)
+    expect(result).toEqual({ updated: ['acme.installed'], failed: [], skipped: [] })
+    expect(mocks.notification.notify).toHaveBeenCalledTimes(1)
+  })
+
+  it('drops the pending set when the workspace changes under it', async () => {
+    const mocks = makeMocks()
+    const svc = await checked(mocks)
+    expect(svc.getPendingUpdates()).toHaveLength(1)
+
+    // The window moves to a remote host: the set described the local one, and an
+    // install must never be aimed at a host the user has already left.
+    ;(mocks.workspace as { current: IWorkspaceService['current'] }).current = {
+      folder: URI.from({ scheme: REMOTE_SCHEME, authority: 'host', path: '/root' }),
+      name: 'root',
+    }
+    mocks.onDidChangeWorkspace.fire(null)
+
+    expect(svc.getPendingUpdates()).toHaveLength(0)
+    expect(svc.getInstalled()[0]?.updateVersion).toBeUndefined()
+    expect(await svc.update('acme.installed')).toBe(false)
+    expect(mocks.management.updateExtension).not.toHaveBeenCalled()
+    expect(svc.getExtensionsNotification()).toBeUndefined()
+  })
+
+  it('reports the updates a declined trust prompt left behind', async () => {
+    const mocks = makeMocks()
+    const svc = await checked(mocks)
+    vi.mocked(mocks.storage.get).mockResolvedValue([])
+    vi.mocked(mocks.dialog.confirm).mockResolvedValue({ confirmed: false, choice: 'cancel' })
+    vi.mocked(mocks.notification.notify).mockClear()
+
+    const result = await svc.updateAll()
+
+    expect(result).toEqual({ updated: [], failed: [], skipped: ['acme.installed'] })
+    expect(mocks.management.updateExtensions).not.toHaveBeenCalled()
+    // Doing nothing on a run the user started has to say so.
+    expect(mocks.notification.notify).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: Severity.Info }),
+    )
+  })
+
+  it('stays quiet when a silent run skips an untrusted publisher', async () => {
+    const mocks = makeMocks()
+    const svc = await checked(mocks)
+    vi.mocked(mocks.storage.get).mockResolvedValue([])
+    vi.mocked(mocks.notification.notify).mockClear()
+
+    const result = await svc.updateAll(undefined, { silent: true })
+
+    expect(result).toEqual({ updated: [], failed: [], skipped: ['acme.installed'] })
+    // No prompt, no toast — the update stays pending in the badge and the strip.
+    expect(mocks.dialog.confirm).not.toHaveBeenCalled()
+    expect(mocks.notification.notify).not.toHaveBeenCalled()
+  })
+
+  it('reports a batched failure once, alongside the successes', async () => {
+    const mocks = makeMocks()
+    const svc = await checked(mocks)
+    vi.mocked(mocks.management.updateExtensions).mockResolvedValue([
+      { identifier: 'acme.installed', error: 'signature mismatch' },
+    ])
+    vi.mocked(mocks.notification.notify).mockClear()
+
+    const result = await svc.updateAll()
+
+    expect(result.updated).toEqual([])
+    expect(result.failed).toEqual([{ identifier: 'acme.installed', error: 'signature mismatch' }])
+    expect(mocks.notification.notify).toHaveBeenCalledTimes(1)
+    expect(mocks.notification.notify).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: Severity.Error }),
+    )
+  })
+
+  it('exposes the strip variants and honours a dismissal until the state changes', async () => {
+    const mocks = makeMocks()
+    const svc = await checked(mocks)
+
+    expect(svc.getExtensionsNotification()).toMatchObject({ kind: 'updates' })
+    svc.dismissExtensionsNotification()
+    expect(svc.getExtensionsNotification()).toBeUndefined()
+
+    // A new pending set un-dismisses it.
+    vi.mocked(mocks.management.checkForUpdates).mockResolvedValue({ updates: [updateFor('3.0.0')] })
+    await svc.checkForUpdates()
+    expect(svc.getExtensionsNotification()).toMatchObject({ kind: 'updates' })
+  })
+
+  it('reports up-to-date in the strip after a check that finds nothing', async () => {
+    const mocks = makeMocks()
+    vi.mocked(mocks.management.getInstalled).mockResolvedValue([localExtension()])
+    const svc = makeService(mocks)
+    await svc.refreshInstalled()
+    await svc.checkForUpdates()
+
+    expect(svc.getExtensionsNotification()).toMatchObject({ kind: 'up-to-date' })
+  })
+
+  it('persists the per-extension auto-update opt-out and surfaces it on the entry', async () => {
+    const mocks = makeMocks()
+    const svc = await checked(mocks)
+
+    await svc.setAutoUpdateEnabled('acme.installed', false)
+    expect(svc.getInstalled()[0]?.autoUpdate).toBe(false)
+    expect(mocks.storage.set).toHaveBeenCalledWith(
+      'extensions.autoUpdateDisabled',
+      ['acme.installed'],
+      expect.anything(),
+    )
+
+    await svc.setAutoUpdateEnabled('acme.installed', true)
+    expect(svc.getInstalled()[0]?.autoUpdate).toBeUndefined()
   })
 })

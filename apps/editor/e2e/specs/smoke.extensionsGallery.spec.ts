@@ -36,6 +36,9 @@ const PRIVATE_PEM = KEY_PAIR.privateKey.export({ format: 'pem', type: 'pkcs8' })
 const EXT_ID = 'acme.e2e-gallery'
 const COMMAND_ID = 'e2eGallery.hello'
 const VERSIONED_EXT_ID = 'acme.e2e-versions'
+// Published at 1.0.0 only; the update-cycle case publishes 2.0.0 itself.
+const UPDATES_EXT_ID = 'acme.e2e-updates'
+const AUTO_EXT_ID = 'acme.e2e-auto'
 
 // The gallery URL is only known once beforeAll has bound a free port. The env
 // object is shared by reference with the fixture, and launchApp reads it at
@@ -54,15 +57,16 @@ const test = createColdAppTest({
 })
 
 let stageDir: string
+let keyFile: string
 let server: ChildProcess
 let galleryUrl: string
 
-/** Build the sample extension VSIX contributing one command. */
-async function makeVsix(dir: string): Promise<string> {
+/** Build one version of the sample extension VSIX contributing one command. */
+async function makeVsix(dir: string, version = '1.0.0'): Promise<string> {
   const manifest = {
     name: 'e2e-gallery',
     publisher: 'acme',
-    version: '1.0.0',
+    version,
     displayName: 'E2E Gallery Sample',
     engines: { universe: '*' },
     main: 'dist/extension.js',
@@ -76,9 +80,56 @@ async function makeVsix(dir: string): Promise<string> {
     'extension/dist/extension.js',
     Buffer.from('module.exports = { activate() {}, deactivate() {} }'),
   )
-  const vsixPath = path.join(dir, 'e2e-gallery.vsix')
+  const vsixPath = path.join(dir, `e2e-gallery-${version}.vsix`)
   await fs.writeFile(vsixPath, zip.toBuffer())
   return vsixPath
+}
+
+/**
+ * Build one version of the update-cycle samples. Each gets its own id so that
+ * publishing a newer version for one case cannot disturb another's expectations
+ * (the stage is shared by every case in this file).
+ */
+async function makeUpdateVsix(
+  dir: string,
+  name: 'e2e-updates' | 'e2e-auto',
+  version: string,
+): Promise<string> {
+  const manifest = {
+    name,
+    publisher: 'acme',
+    version,
+    displayName: `E2E ${name} Sample`,
+    engines: { universe: '*' },
+    main: 'dist/extension.js',
+    contributes: {
+      commands: [{ command: `${name}.hello`, title: `E2E ${name}: Hello` }],
+    },
+  }
+  const zip = new AdmZip()
+  zip.addFile('extension/package.json', Buffer.from(JSON.stringify(manifest)))
+  zip.addFile(
+    'extension/dist/extension.js',
+    Buffer.from('module.exports = { activate() {}, deactivate() {} }'),
+  )
+  const vsixPath = path.join(dir, `${name}-${version}.vsix`)
+  await fs.writeFile(vsixPath, zip.toBuffer())
+  return vsixPath
+}
+
+/** Sign + publish one or more VSIX into the shared stage. */
+async function publish(...vsixPaths: readonly string[]): Promise<void> {
+  const result = await run(process.execPath, [
+    PUBLISH_SCRIPT,
+    '--stage',
+    stageDir,
+    '--signing-key-file',
+    keyFile,
+    '--key-id',
+    KEY_ID,
+    ...vsixPaths,
+  ])
+  if (result.code !== 0) throw new Error(`publish.mjs failed: ${result.stderr}`)
 }
 
 /** Build one version of the version-selection extension with an explicit engine range. */
@@ -160,20 +211,10 @@ test.describe('@p1 extensions gallery', () => {
   test.beforeAll(async () => {
     stageDir = mkTempDir('ue2-gallery-')
     const vsixPath = await makeVsix(stageDir)
-    const keyFile = path.join(stageDir, 'market-key.pem')
+    keyFile = path.join(stageDir, 'market-key.pem')
     await fs.writeFile(keyFile, PRIVATE_PEM)
 
-    const publish = await run(process.execPath, [
-      PUBLISH_SCRIPT,
-      '--stage',
-      stageDir,
-      '--signing-key-file',
-      keyFile,
-      '--key-id',
-      KEY_ID,
-      vsixPath,
-    ])
-    if (publish.code !== 0) throw new Error(`publish.mjs failed: ${publish.stderr}`)
+    await publish(vsixPath)
 
     // A second extension with two versions: 1.0.0 compatible with any host,
     // 2.0.0 requiring a future editor (>=99.0.0). The host version in e2e is
@@ -182,20 +223,12 @@ test.describe('@p1 extensions gallery', () => {
     // the selection assertion independent of the launch-mode version.
     const v1Path = await makeVersionedVsix(stageDir, '1.0.0', '*')
     const v2Path = await makeVersionedVsix(stageDir, '2.0.0', '>=99.0.0')
-    const publishVersions = await run(process.execPath, [
-      PUBLISH_SCRIPT,
-      '--stage',
-      stageDir,
-      '--signing-key-file',
-      keyFile,
-      '--key-id',
-      KEY_ID,
-      v1Path,
-      v2Path,
-    ])
-    if (publishVersions.code !== 0) {
-      throw new Error(`publish.mjs failed (versions): ${publishVersions.stderr}`)
-    }
+    await publish(v1Path, v2Path)
+
+    await publish(
+      await makeUpdateVsix(stageDir, 'e2e-updates', '1.0.0'),
+      await makeUpdateVsix(stageDir, 'e2e-auto', '1.0.0'),
+    )
 
     const port = await getFreePort()
     galleryUrl = `http://127.0.0.1:${port}`
@@ -230,6 +263,15 @@ test.describe('@p1 extensions gallery', () => {
     if (outcome !== 'ready') {
       throw new Error(`gallery server exited before listening (code ${outcome}): ${serverStderr}`)
     }
+  })
+
+  // The first automatic check fires 30s after startup — long enough to land in
+  // the middle of a case and install an update behind the assertions' back.
+  // Memory scope: no settings file to clean up, and it holds for the whole case.
+  test.beforeEach(async ({ workbench }) => {
+    await workbench.page.evaluate(() => {
+      window.__E2E__!.updateConfigValue('extensions.autoCheckUpdates', false)
+    })
   })
 
   test.afterAll(async () => {
@@ -309,5 +351,131 @@ test.describe('@p1 extensions gallery', () => {
     expect(updates.filter((u) => u.identifier === VERSIONED_EXT_ID)).toHaveLength(0)
 
     await workbench.page.evaluate((id) => window.__E2E__!.uninstallExtension(id), VERSIONED_EXT_ID)
+  })
+
+  test('detects a new version, offers it, and installs it through the facade', async ({
+    workbench,
+  }) => {
+    await workbench.waitForRestored()
+
+    const installedId = await workbench.page.evaluate(
+      (id) => window.__E2E__!.installGalleryExtension(id),
+      UPDATES_EXT_ID,
+    )
+    expect(installedId).toBe(UPDATES_EXT_ID)
+    await expect
+      .poll(() => workbench.page.evaluate(() => window.__E2E__!.getInstalledExtensionVersions()), {
+        timeout: 10000,
+      })
+      .toContainEqual({ identifier: UPDATES_EXT_ID, version: '1.0.0' })
+
+    // Published only now, so the install above resolved the older version.
+    await publish(await makeUpdateVsix(stageDir, 'e2e-updates', '2.0.0'))
+
+    // An explicit cycle detects but never installs on its own.
+    const pending = await workbench.page.evaluate(() => window.__E2E__!.runExtensionsUpdateCycle())
+    expect(pending).toContainEqual({
+      identifier: UPDATES_EXT_ID,
+      fromVersion: '1.0.0',
+      toVersion: '2.0.0',
+    })
+
+    const offered = await workbench.page.evaluate(() =>
+      window.__E2E__!.getExtensionUpdateNotification(),
+    )
+    expect(offered?.kind).toBe('updates')
+    expect(offered?.actions).toContain('Update All')
+    expect(await workbench.getContextKey<boolean>('extensionsHasUpdates')).toBe(true)
+    expect(
+      await workbench.page.evaluate(() => window.__E2E__!.getInstalledExtensionVersions()),
+    ).toContainEqual({ identifier: UPDATES_EXT_ID, version: '1.0.0' })
+
+    // The row-button path: install one extension through the facade.
+    const updated = await workbench.page.evaluate(
+      (id) => window.__E2E__!.updateExtensionViaWorkbench(id),
+      UPDATES_EXT_ID,
+    )
+    expect(updated).toBe(true)
+
+    await expect
+      .poll(() => workbench.page.evaluate(() => window.__E2E__!.getInstalledExtensionVersions()), {
+        timeout: 20000,
+      })
+      .toContainEqual({ identifier: UPDATES_EXT_ID, version: '2.0.0' })
+
+    // The pending state cleared with the version: no strip, no badge.
+    await expect
+      .poll(() => workbench.page.evaluate(() => window.__E2E__!.getExtensionUpdateNotification()))
+      .toBeNull()
+    await expect.poll(() => workbench.getContextKey<boolean>('extensionsHasUpdates')).toBe(false)
+  })
+
+  test('auto-installs a new version once the publish delay has elapsed', async ({ workbench }) => {
+    await workbench.waitForRestored()
+
+    await workbench.page.evaluate((id) => window.__E2E__!.installGalleryExtension(id), AUTO_EXT_ID)
+    await expect
+      .poll(() => workbench.page.evaluate(() => window.__E2E__!.getInstalledExtensionVersions()), {
+        timeout: 10000,
+      })
+      .toContainEqual({ identifier: AUTO_EXT_ID, version: '1.0.0' })
+
+    await publish(await makeUpdateVsix(stageDir, 'e2e-auto', '2.0.0'))
+
+    // Without this the 2-hour publish delay defers the candidate; Memory scope so
+    // nothing is written to disk.
+    await workbench.page.evaluate(() => {
+      window.__E2E__!.updateConfigValue('extensions.autoUpdateDelay', 0)
+      window.__E2E__!.updateConfigValue('extensions.autoUpdate', true)
+    })
+
+    const found = await workbench.page.evaluate(() =>
+      window.__E2E__!.runExtensionsUpdateCycle(true),
+    )
+    expect(found).toContainEqual({
+      identifier: AUTO_EXT_ID,
+      fromVersion: '1.0.0',
+      toVersion: '2.0.0',
+    })
+
+    await expect
+      .poll(() => workbench.page.evaluate(() => window.__E2E__!.getInstalledExtensionVersions()), {
+        timeout: 20000,
+      })
+      .toContainEqual({ identifier: AUTO_EXT_ID, version: '2.0.0' })
+
+    await expect
+      .poll(() => workbench.page.evaluate(() => window.__E2E__!.getExtensionUpdateNotification()))
+      .toBeNull()
+
+    // One Info toast for the whole batch, not one per extension.
+    await expect
+      .poll(() =>
+        workbench.page.evaluate(() =>
+          window.__E2E__!.getNotifications().some((n) => n.message.includes('Updated 1 extension')),
+        ),
+      )
+      .toBe(true)
+  })
+
+  test('reports an explicit cycle as up to date when nothing is behind', async ({ workbench }) => {
+    await workbench.waitForRestored()
+
+    await workbench.page.evaluate((id) => window.__E2E__!.installGalleryExtension(id), EXT_ID)
+    await expect
+      .poll(() => workbench.page.evaluate(() => window.__E2E__!.getInstalledExtensionVersions()), {
+        timeout: 10000,
+      })
+      .toContainEqual({ identifier: EXT_ID, version: '1.0.0' })
+
+    // Explicit (not auto): it must report the outcome, and install nothing.
+    const updates = await workbench.page.evaluate(() => window.__E2E__!.runExtensionsUpdateCycle())
+    expect(updates.filter((u) => u.identifier === EXT_ID)).toHaveLength(0)
+
+    const notification = await workbench.page.evaluate(() =>
+      window.__E2E__!.getExtensionUpdateNotification(),
+    )
+    expect(notification?.kind).toBe('up-to-date')
+    expect(notification?.actions).toEqual([])
   })
 })

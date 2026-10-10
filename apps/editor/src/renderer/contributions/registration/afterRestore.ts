@@ -37,6 +37,7 @@ import { NotificationStatusContribution } from '../NotificationStatusContributio
 import { WorkspaceTrustContribution } from '../WorkspaceTrustContribution.js'
 import { ExtensionDevelopmentContribution } from '../ExtensionDevelopmentContribution.js'
 import { ExtensionDevelopmentAutoReloadContribution } from '../ExtensionDevelopmentAutoReloadContribution.js'
+import { ExtensionsUpdateContribution } from '../ExtensionsUpdateContribution.js'
 import { UpdateContribution } from '../UpdateContribution.js'
 import { ReleaseNotesContribution } from '../ReleaseNotesContribution.js'
 import { LogTailContribution } from '../LogTailContribution.js'
@@ -355,6 +356,14 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.extensionDevelopmentAutoReload',
   ExtensionDevelopmentAutoReloadContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Extension update checks: 30s after restore, then every 12h, plus the Extensions
+// Activity Bar badge. AfterRestore so the first check never competes with startup.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.extensionsUpdate',
+  ExtensionsUpdateContribution,
   WorkbenchPhase.AfterRestore,
 )
 

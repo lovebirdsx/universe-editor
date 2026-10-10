@@ -36,6 +36,7 @@ export interface ExtensionActionsMenuHandlers {
   readonly onUninstall: (entry: IExtensionEntry) => void
   readonly onSetEnablement: (entry: IExtensionEntry, state: EnablementState) => void
   readonly onInstallInRemote: (entry: IExtensionEntry) => void
+  readonly onSetAutoUpdate: (entry: IExtensionEntry, enabled: boolean) => void
   readonly hasWorkspace: boolean
 }
 
@@ -123,7 +124,26 @@ function buildItems(entry: IExtensionEntry, h: ExtensionActionsMenuHandlers): Li
   }
 
   items.push({ kind: 'separator' }, viewDetails)
-  if (!entry.isBuiltin) items.push({ kind: 'separator' }, uninstall)
+  if (!entry.isBuiltin) {
+    // The state rides in `hint` rather than a checkbox glyph: the row model has
+    // no checked kind, and a check icon would read as "run this" not "currently on".
+    const autoUpdate = entry.autoUpdate !== false
+    items.push(
+      { kind: 'separator' },
+      {
+        kind: 'item',
+        id: 'autoUpdate',
+        icon: 'sync',
+        label: localize('extensions.autoUpdate.toggle', 'Auto Update'),
+        hint: autoUpdate
+          ? localize('extensions.autoUpdate.on', 'On')
+          : localize('extensions.autoUpdate.off', 'Off'),
+        run: () => h.onSetAutoUpdate(entry, !autoUpdate),
+      },
+      { kind: 'separator' },
+      uninstall,
+    )
+  }
 
   return items
 }

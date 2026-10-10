@@ -105,6 +105,30 @@ export class ExtensionGalleryMainService extends Disposable implements IExtensio
     }
   }
 
+  /**
+   * `getExtensions` for the update check, where an empty list is a *claim* ("nothing
+   * newer exists") rather than a degraded display — so an unreachable marketplace
+   * has to say so instead of masquerading as "up to date".
+   */
+  async getExtensionsForUpdate(
+    ids: readonly string[],
+  ): Promise<{ extensions: IGalleryExtension[]; failure?: string }> {
+    const base = this._galleryUrl
+    if (!base) {
+      return { extensions: [], failure: 'the extension marketplace is not configured' }
+    }
+    if (ids.length === 0) return { extensions: [] }
+
+    try {
+      const raw = await this._postQuery(base, buildQuery({ names: [...ids], pageSize: ids.length }))
+      return { extensions: parseQueryResult(raw).extensions }
+    } catch (err) {
+      const failure = (err as Error).message
+      this._logger.warn(`getExtensionsForUpdate failed: ${failure}`)
+      return { extensions: [], failure }
+    }
+  }
+
   async download(extension: IGalleryExtension): Promise<string> {
     await fs.mkdir(this._cacheDir, { recursive: true })
     const file = join(this._cacheDir, vsixFileName(extension))

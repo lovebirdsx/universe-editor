@@ -39,6 +39,7 @@ import {
   readExtensionIconDataUrl,
   readInstalledRecords,
   readManifestJson,
+  reconcileInstalledRecords,
   sweepObsolete,
   uninstallExtension,
   writeEnablement,
@@ -51,6 +52,8 @@ import type {
   IExtensionGalleryMetadata,
   IExtensionManagementService,
   IExtensionUpdate,
+  IExtensionUpdateCheckResult,
+  IExtensionUpdateOutcome,
 } from '../../../shared/ipc/extensionManagementService.js'
 import { IExtensionGalleryService } from '../../../shared/ipc/extensionGalleryService.js'
 import { IRemoteConnectionService } from '../remote/remoteConnectionMainService.js'
@@ -69,7 +72,15 @@ export type UserExtensionsDirResolver = () => string
 export interface IManagementGallery {
   download(extension: IGalleryExtension): Promise<string>
   getControlManifest(): Promise<{ malicious: readonly string[] }>
-  getExtensions(ids: readonly string[]): Promise<IGalleryExtension[]>
+  /**
+   * Update-check lookup. Reports a failure instead of degrading to an empty list:
+   * "the marketplace is unreachable" and "nothing newer exists" must not be the
+   * same answer (the UI-facing `getExtensions` does degrade — that one only feeds
+   * a browsing list).
+   */
+  getExtensionsForUpdate(
+    ids: readonly string[],
+  ): Promise<{ extensions: IGalleryExtension[]; failure?: string }>
 }
 
 /** `<publisher>.<name>` when a publisher is present, else `<name>`. */
@@ -106,6 +117,10 @@ export class ExtensionManagementMainService
 
   /** identifier → local icon data URL ('' when none); invalidated on install/uninstall. */
   private readonly _localIconCache = new Map<string, string>()
+
+  /** >0 while a batched update is running; change events are coalesced until it returns to 0. */
+  private _batchDepth = 0
+  private _pendingNotify = false
 
   /** Resolves when the constructor's best-effort startup sweep finishes (tests await this). */
   readonly whenStartupSweepSettled: Promise<void>
@@ -145,6 +160,11 @@ export class ExtensionManagementMainService
   /** Icon cache is keyed by identifier but folders change on install; drop it + notify. */
   private _notifyChanged(): void {
     this._localIconCache.clear()
+    // Inside a batch the event is deferred so the whole batch restarts the host once.
+    if (this._batchDepth > 0) {
+      this._pendingNotify = true
+      return
+    }
     this._onDidChangeExtensions.fire()
   }
 
@@ -624,8 +644,8 @@ export class ExtensionManagementMainService
     })
   }
 
-  async checkForUpdates(authority?: string): Promise<IExtensionUpdate[]> {
-    if (!this._gallery) return []
+  async checkForUpdates(authority?: string): Promise<IExtensionUpdateCheckResult> {
+    if (!this._gallery) return { updates: [] }
     const installed = await this.getInstalled(authority)
     return this._computeUpdates(this._gallery, installed)
   }
@@ -634,16 +654,18 @@ export class ExtensionManagementMainService
   private async _computeUpdates(
     gallery: IManagementGallery,
     installed: readonly ILocalExtension[],
-  ): Promise<IExtensionUpdate[]> {
+  ): Promise<IExtensionUpdateCheckResult> {
     const galleryInstalled = installed.filter((e) => e.source === 'gallery')
-    if (galleryInstalled.length === 0) return []
+    if (galleryInstalled.length === 0) return { updates: [] }
 
-    let latest: IGalleryExtension[]
-    try {
-      latest = await gallery.getExtensions(galleryInstalled.map((e) => e.identifier))
-    } catch (err) {
-      this._logger.warn(`update check failed: ${(err as Error).message}`)
-      return []
+    const { extensions: latest, failure } = await gallery.getExtensionsForUpdate(
+      galleryInstalled.map((e) => e.identifier),
+    )
+    if (failure !== undefined) {
+      this._logger.warn(`update check failed: ${failure}`)
+      // Report the failure rather than an empty list — otherwise "the registry is
+      // unreachable" and "everything is up to date" are the same answer.
+      return { updates: [], failure }
     }
 
     const updates: IExtensionUpdate[] = []
@@ -662,16 +684,55 @@ export class ExtensionManagementMainService
         })
       }
     }
-    return updates
+    return { updates }
   }
 
   async updateExtension(update: IExtensionUpdate, authority?: string): Promise<ILocalExtension> {
     return this.installFromGallery(update.gallery, authority)
   }
 
-  /** Delete every folder still marked obsolete; drop the ones we manage to remove. */
+  updateExtensions(
+    updates: readonly IExtensionUpdate[],
+    authority?: string,
+  ): Promise<readonly IExtensionUpdateOutcome[]> {
+    return this._enqueue(() => this._updateExtensions(updates, authority))
+  }
+
+  private async _updateExtensions(
+    updates: readonly IExtensionUpdate[],
+    authority: string | undefined,
+  ): Promise<readonly IExtensionUpdateOutcome[]> {
+    const outcomes: IExtensionUpdateOutcome[] = []
+    // One change event for the whole batch: each install restarts the extension
+    // host, and N events would mean N serialized restarts.
+    this._batchDepth++
+    try {
+      for (const update of updates) {
+        try {
+          const installed =
+            authority !== undefined
+              ? await this._installFromGalleryRemote(update.gallery, authority)
+              : await this._installFromGallery(update.gallery)
+          outcomes.push({ identifier: update.identifier, version: installed.version })
+        } catch (err) {
+          outcomes.push({ identifier: update.identifier, error: (err as Error).message })
+        }
+      }
+    } finally {
+      this._batchDepth--
+      if (this._batchDepth === 0 && this._pendingNotify) {
+        this._pendingNotify = false
+        this._onDidChangeExtensions.fire()
+      }
+    }
+    return outcomes
+  }
+
+  /** Startup cleanup: obsolete marks + duplicate records left by older installs. */
   private async _sweepObsolete(): Promise<void> {
-    await sweepObsolete(this._resolveDir())
+    const dir = this._resolveDir()
+    await sweepObsolete(dir)
+    await reconcileInstalledRecords(dir, this._logger)
   }
 }
 

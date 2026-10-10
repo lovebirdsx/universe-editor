@@ -93,6 +93,11 @@ function Header({
         <div className={styles.headerTitle}>
           <span className={styles.headerName}>{entry.displayName}</span>
           <span className={styles.headerVersion}>v{entry.version}</span>
+          {entry.updateVersion !== undefined && (
+            <span className={styles.headerVersion} data-testid="extension-update-version">
+              → v{entry.updateVersion}
+            </span>
+          )}
         </div>
         <div className={styles.headerMeta}>
           <span>{entry.publisherDisplayName ?? entry.publisher}</span>
@@ -126,6 +131,16 @@ function Header({
             </>
           ) : entry.installed ? (
             <>
+              {entry.updateVersion !== undefined && (
+                <Button
+                  onClick={() => void service.update(entry.id)}
+                  data-testid="extension-update"
+                >
+                  {localize('extensions.updateTo', 'Update to v{version}', {
+                    version: entry.updateVersion,
+                  })}
+                </Button>
+              )}
               {!entry.isUnderDevelopment && !entry.isVersionIncompatible && (
                 <EnablementActions entry={entry} service={service} />
               )}

@@ -12,6 +12,7 @@ import {
   ILayoutService,
   INotificationService,
   IQuickInputService,
+  MenuId,
   Severity,
   localize,
   localize2,
@@ -25,6 +26,10 @@ import {
 } from '../services/extensions/ExtensionEnablementService.js'
 import { IExtensionHostClientService } from '../services/extensions/ExtensionHostClientService.js'
 import { IExtensionsWorkbenchService } from '../services/extensionsWorkbench/ExtensionsWorkbenchService.js'
+import {
+  EXTENSIONS_HAS_UPDATES_KEY,
+  EXTENSIONS_VIEW_ID,
+} from '../services/extensionsWorkbench/extensionsViewIds.js'
 
 const CATEGORY = localize2('command.category.extensions', 'Extensions')
 
@@ -201,43 +206,42 @@ export class CheckForExtensionUpdatesAction extends Action2 {
   }
 
   override async run(accessor: ServicesAccessor): Promise<void> {
-    // Snapshot every service synchronously — the accessor is invalid after the
-    // first await.
-    const management = accessor.get(IExtensionManagementService)
-    const notification = accessor.get(INotificationService)
-    const authority = accessor.get(IExtensionsWorkbenchService).authority
+    // Snapshot before the first await — the accessor is invalid afterwards.
+    const workbench = accessor.get(IExtensionsWorkbenchService)
+    // Report only: installing here would silently replace every extension the
+    // moment the command is run. The result (and its "Update All" button) comes
+    // back through the facade's notification.
+    await workbench.checkForUpdates({ explicit: true })
+  }
+}
 
-    const updates = await management.checkForUpdates(authority)
-    if (updates.length === 0) {
-      notification.notify({
-        severity: Severity.Info,
-        message: localize(
-          'action.extensions.checkForUpdates.none',
-          'All extensions are up to date.',
-        ),
-      })
-      return
-    }
-
-    for (const update of updates) {
-      try {
-        await management.updateExtension(update, authority)
-      } catch (err) {
-        notification.notify({
-          severity: Severity.Error,
-          message: localize('action.extensions.update.failed', 'Failed to update {name}: {error}', {
-            name: update.identifier,
-            error: (err as Error).message,
-          }),
-        })
-      }
-    }
-    notification.notify({
-      severity: Severity.Info,
-      message: localize('action.extensions.checkForUpdates.done', 'Updated {count} extension(s).', {
-        count: updates.length,
-      }),
+export class UpdateAllExtensionsAction extends Action2 {
+  static readonly ID = 'workbench.extensions.action.updateAll'
+  constructor() {
+    super({
+      id: UpdateAllExtensionsAction.ID,
+      title: localize2('action.extensions.updateAll', 'Update All Extensions'),
+      category: CATEGORY,
+      icon: 'cloud-download',
+      // Only offered while something is actually pending — the same count the
+      // activity-bar badge shows.
+      precondition: EXTENSIONS_HAS_UPDATES_KEY,
+      f1: true,
+      menu: [
+        {
+          id: MenuId.ViewTitle,
+          when: `view == ${EXTENSIONS_VIEW_ID}`,
+          group: 'navigation',
+          order: 1,
+        },
+      ],
     })
+  }
+
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    // Snapshot before the first await — the accessor is invalid afterwards.
+    const workbench = accessor.get(IExtensionsWorkbenchService)
+    await workbench.updateAll()
   }
 }
 

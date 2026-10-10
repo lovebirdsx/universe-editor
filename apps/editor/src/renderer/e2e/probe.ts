@@ -117,6 +117,7 @@ import {
   type E2EDirtyDiffDecoration,
   type E2EDocumentSyncStats,
   type E2EEditorDecoration,
+  type E2EExtensionNotification,
   type E2EExtensionUpdate,
   type E2EFindWidgetState,
   type E2EGcControlState,
@@ -154,6 +155,8 @@ import type { IExtensionManagementService } from '../../shared/ipc/extensionMana
 import type { IExtensionGalleryService } from '../../shared/ipc/extensionGalleryService.js'
 import type { IExtensionEnablementService } from '../services/extensions/ExtensionEnablementService.js'
 import type { IExtensionHostClientService } from '../services/extensions/ExtensionHostClientService.js'
+import type { IExtensionsWorkbenchService } from '../services/extensionsWorkbench/ExtensionsWorkbenchService.js'
+import type { IExtensionsUpdateService } from '../services/extensionsUpdates/ExtensionsUpdateService.js'
 import { EnablementState } from '../services/extensions/ExtensionEnablementService.js'
 import type { IUserKeybindingsService } from '../services/keybindings/UserKeybindingsService.js'
 import type { WorkbenchThemeService } from '../services/themes/workbenchThemeService.js'
@@ -210,6 +213,8 @@ export interface E2EProbeServices {
   readonly extensionGalleryService: IExtensionGalleryService
   readonly extensionEnablementService: IExtensionEnablementService
   readonly extensionHostClientService: IExtensionHostClientService
+  readonly extensionsWorkbenchService: IExtensionsWorkbenchService
+  readonly extensionsUpdateService: IExtensionsUpdateService
   readonly outputModelService: IOutputModelService
   readonly loggerService: ILoggerService
   readonly userKeybindingsService: IUserKeybindingsService
@@ -315,6 +320,9 @@ const NONE_TOKEN = {
 } as import('../workbench/editor/monaco/MonacoLoader.js').monaco.CancellationToken
 
 /** Same none-token, widened for the platform-typed workspace symbol providers. */
+/** Mirrors the workbench facade's publisher-trust storage key. */
+const TRUSTED_PUBLISHERS_KEY = 'extensions.trustedPublishers'
+
 const NONE_PLATFORM_TOKEN =
   NONE_TOKEN as unknown as import('@universe-editor/platform').CancellationToken
 
@@ -1299,6 +1307,23 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     installGalleryExtension: async (identifier: string): Promise<string> => {
       const [gallery] = await services.extensionGalleryService.getExtensions([identifier])
       if (!gallery) throw new Error(`marketplace has no extension ${identifier}`)
+      // Raw management install bypasses the facade's trust prompt — record the
+      // publisher here too, or a later facade update path (row button, auto
+      // update) pops a dialog no one can answer inside a spec.
+      if (gallery.publisher) {
+        const stored = await services.storageService.get<string[]>(
+          TRUSTED_PUBLISHERS_KEY,
+          StorageScope.GLOBAL,
+        )
+        const trusted = Array.isArray(stored) ? stored : []
+        if (!trusted.includes(gallery.publisher)) {
+          await services.storageService.set(
+            TRUSTED_PUBLISHERS_KEY,
+            [...trusted, gallery.publisher],
+            StorageScope.GLOBAL,
+          )
+        }
+      }
       const local = await services.extensionManagementService.installFromGallery(gallery)
       return local.identifier
     },
@@ -1313,13 +1338,34 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       return list.map((e) => ({ identifier: e.identifier, version: e.version }))
     },
     checkForExtensionUpdates: async (): Promise<readonly E2EExtensionUpdate[]> => {
-      const updates = await services.extensionManagementService.checkForUpdates()
+      const { updates } = await services.extensionManagementService.checkForUpdates()
       return updates.map((u) => ({
         identifier: u.identifier,
         fromVersion: u.fromVersion,
         toVersion: u.toVersion,
       }))
     },
+    runExtensionsUpdateCycle: async (auto = false): Promise<readonly E2EExtensionUpdate[]> => {
+      const { updates } = await services.extensionsUpdateService.check({ auto })
+      return updates.map((u) => ({
+        identifier: u.identifier,
+        fromVersion: u.fromVersion,
+        toVersion: u.toVersion,
+      }))
+    },
+    getExtensionUpdateNotification: async (): Promise<E2EExtensionNotification | null> => {
+      const notification = services.extensionsWorkbenchService.getExtensionsNotification()
+      return notification
+        ? {
+            kind: notification.kind,
+            severity: severityName(notification.severity),
+            message: notification.message,
+            actions: notification.actions.map((action) => action.label),
+          }
+        : null
+    },
+    updateExtensionViaWorkbench: (identifier: string): Promise<boolean> =>
+      services.extensionsWorkbenchService.update(identifier),
     getBuiltinExtensionIds: async (): Promise<readonly string[]> => {
       const list = await services.extensionManagementService.listBuiltinExtensions()
       return list.map((e) => e.identifier)

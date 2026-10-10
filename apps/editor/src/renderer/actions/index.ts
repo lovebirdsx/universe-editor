@@ -430,6 +430,7 @@ import {
   RestartExtensionHostAction,
   ShowExtensionsAction,
   UninstallExtensionAction,
+  UpdateAllExtensionsAction,
 } from './extensionsActions.js'
 import {
   GrantWorkspaceTrustAction,
@@ -921,6 +922,7 @@ registerAction2(InstallExtensionFromVsixAction)
 registerAction2(UninstallExtensionAction)
 registerAction2(ShowExtensionsAction)
 registerAction2(CheckForExtensionUpdatesAction)
+registerAction2(UpdateAllExtensionsAction)
 registerAction2(RestartExtensionHostAction)
 registerAction2(EnableExtensionGloballyAction)
 registerAction2(DisableExtensionGloballyAction)

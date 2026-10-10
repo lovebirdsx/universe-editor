@@ -4,7 +4,9 @@
  *  services (gallery + management). The only mediator the UI depends on: it
  *  aggregates `ILocalExtension` (installed) and `IGalleryExtension` (marketplace)
  *  into one `IExtensionEntry` view model, tracks installing/searching state, and
- *  re-emits change events so React views refresh. Mirrors VSCode's
+ *  re-emits change events so React views refresh. Also owns the pending-update
+ *  state: what the marketplace offers, what the badge/strip/toasts say about it,
+ *  and the per-extension auto-update opt-out. Mirrors VSCode's
  *  `IExtensionsWorkbenchService`.
  *--------------------------------------------------------------------------------------------*/
 
@@ -20,10 +22,14 @@ import {
   StorageScope,
   localize,
   remoteAuthorityLabel,
+  type IPromptChoice,
 } from '@universe-editor/platform'
 import {
   IExtensionManagementService,
   type ILocalExtension,
+  type IExtensionUpdate,
+  type IExtensionUpdateCheckResult,
+  type IExtensionUpdateOutcome,
 } from '../../../shared/ipc/extensionManagementService.js'
 import {
   IExtensionGalleryService,
@@ -31,16 +37,21 @@ import {
   type IQueryOptions,
 } from '../../../shared/ipc/extensionGalleryService.js'
 import { GallerySortBy, pickCompatibleVersion } from '@universe-editor/extension-gallery'
+import { compareVersions } from '@universe-editor/extensions-common'
 import {
   IExtensionEnablementService,
   EnablementState,
 } from '../extensions/ExtensionEnablementService.js'
 import { IExtensionHostClientService } from '../extensions/ExtensionHostClientService.js'
+import { updateSetSignature } from '../extensionsUpdates/extensionUpdatePolicy.js'
 
 export { EnablementState }
 
 /** Storage key (APPLICATION scope) for the remembered set of trusted publishers. */
 const TRUSTED_PUBLISHERS_KEY = 'extensions.trustedPublishers'
+
+/** Storage key (GLOBAL scope, like trustedPublishers) for ids the user opted out of auto-update. */
+const AUTO_UPDATE_OPT_OUT_KEY = 'extensions.autoUpdateDisabled'
 
 /** Unified view model the Extensions UI renders. Aggregates installed + gallery. */
 export interface IExtensionEntry {
@@ -56,6 +67,10 @@ export interface IExtensionEntry {
   readonly installed: boolean
   /** A newer gallery version exists than the installed one. */
   readonly outdated: boolean
+  /** The newer version the marketplace offers, when the last check found one. */
+  readonly updateVersion?: string
+  /** False when the user opted this extension out of automatic updates. Absent = on. */
+  readonly autoUpdate?: boolean
   /** An install/uninstall is in flight for this id. */
   readonly installing: boolean
   /** A bundled built-in extension (git / typescript / …); cannot be uninstalled. */
@@ -110,6 +125,30 @@ export interface IExtensionEntry {
 export interface IExtensionActivationError {
   readonly message: string
   readonly stack?: string
+}
+
+/** Outcome of applying one or more pending updates. */
+export interface IExtensionsUpdateRunResult {
+  readonly updated: readonly string[]
+  readonly failed: readonly { readonly identifier: string; readonly error: string }[]
+  /**
+   * Pending updates the run left alone — the publisher's trust was declined, or a
+   * silent (automatic) run found it untrusted. They stay pending, not failed.
+   */
+  readonly skipped: readonly string[]
+}
+
+export type ExtensionsNotificationKind = 'updates' | 'up-to-date' | 'failed'
+
+/**
+ * The Extensions view's in-view notification strip. `kind` exists so callers (and
+ * e2e probes) can branch on state without matching a localized string.
+ */
+export interface IExtensionsNotification {
+  readonly kind: ExtensionsNotificationKind
+  readonly severity: Severity
+  readonly message: string
+  readonly actions: readonly IPromptChoice[]
 }
 
 export interface IExtensionsWorkbenchService {
@@ -190,6 +229,40 @@ export interface IExtensionsWorkbenchService {
    * false when the marketplace has no entry for it (pure local VSIX / unreachable).
    */
   installInRemote(entry: IExtensionEntry): Promise<boolean>
+
+  /** Pending updates by identifier, as of the last check (empty before any check). */
+  getPendingUpdates(): readonly IExtensionUpdate[]
+
+  /**
+   * Refresh pending updates from the marketplace. `explicit` marks a user-initiated
+   * check, whose outcome is announced even when there is nothing to report.
+   */
+  checkForUpdates(options?: { explicit?: boolean }): Promise<readonly IExtensionUpdate[]>
+
+  /**
+   * Apply one pending update through the same gates as `install()`. `silent` skips
+   * the publisher-trust prompt instead of answering it — an untrusted publisher's
+   * update is refused, not installed.
+   */
+  update(id: string, options?: { silent?: boolean }): Promise<boolean>
+
+  /**
+   * Apply several pending updates as one batch (one extension-host restart). With
+   * no `ids`, applies every pending update. At most one Info + one Error toast.
+   */
+  updateAll(
+    ids?: readonly string[],
+    options?: { silent?: boolean },
+  ): Promise<IExtensionsUpdateRunResult>
+
+  /** The strip to show above the list, or undefined when there is nothing to say. */
+  getExtensionsNotification(): IExtensionsNotification | undefined
+
+  /** Hide the current strip until the pending set or the check outcome changes. */
+  dismissExtensionsNotification(): void
+
+  /** Opt one identifier in or out of automatic updates (persisted per machine). */
+  setAutoUpdateEnabled(id: string, enabled: boolean): Promise<void>
 }
 
 export const IExtensionsWorkbenchService = createDecorator<IExtensionsWorkbenchService>(
@@ -231,6 +304,18 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
   private _enablementStates = new Map<string, EnablementState>()
   /** Activation failures keyed by extension id (cleared when the host relaunches). */
   private readonly _activationErrors = new Map<string, IExtensionActivationError>()
+  /** Pending updates for the side the last check covered; replaced, never mutated. */
+  private _pending = new Map<string, IExtensionUpdate>()
+  /** Authority the pending set was computed for (undefined = this machine's user extensions). */
+  private _pendingAuthority: string | undefined
+  /** Transient outcome of the most recent check; drives the strip's non-update variants. */
+  private _checkOutcome: { kind: 'up-to-date' | 'failed'; message?: string } | undefined
+  /** Strip signature the user dismissed, so a dismissal survives unrelated re-renders. */
+  private _dismissedSignature: string | undefined
+  /** Signature last announced by a background check (the anti-spam gate). */
+  private _notifiedSignature: string | undefined
+  /** Identifiers the user opted out of automatic updates (GLOBAL storage). */
+  private readonly _autoUpdateOptOut = new Set<string>()
 
   constructor(
     @IExtensionManagementService private readonly _management: IExtensionManagementService,
@@ -252,6 +337,12 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
         const next = this._currentAuthority()
         if (next === this._authority) return
         this._authority = next
+        // The pending set describes the host we just left. Keeping it would offer
+        // updates for extensions this window can no longer see or install.
+        this._pending = new Map()
+        this._pendingAuthority = undefined
+        this._checkOutcome = undefined
+        this._dismissedSignature = undefined
         void this.refreshInstalled()
       }),
     )
@@ -268,6 +359,7 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
       })
     this._register(this._management.onDidChangeExtensions(() => void this.refreshInstalled()))
     this._register(this._enablement.onDidChangeEnablement(() => void this.refreshInstalled()))
+    void this._loadAutoUpdateOptOut()
     this._register(
       this._hostClient.onDidActivationError((error) => {
         this._activationErrors.set(error.extensionId, {
@@ -351,6 +443,7 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
     const states = await Promise.all(ids.map((id) => this._enablement.getEnablementState(id)))
     if (seq !== this._refreshSeq) return
     this._enablementStates = new Map(ids.map((id, i) => [id, states[i]!]))
+    this._prunePendingUpdates()
     this._onDidChange.fire()
   }
 
@@ -603,6 +696,366 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
     return true
   }
 
+  getPendingUpdates(): readonly IExtensionUpdate[] {
+    if (!this._pendingBelongsToCurrentWorkspace()) return []
+    return [...this._pending.values()]
+  }
+
+  async checkForUpdates(
+    options: { explicit?: boolean } = {},
+  ): Promise<readonly IExtensionUpdate[]> {
+    const explicit = options.explicit === true
+    const authority = this._authority
+    if (!(await this._gallery.isEnabled())) {
+      if (explicit) {
+        this._notification.notify({
+          severity: Severity.Warning,
+          message: localize(
+            'extensions.check.noMarketplace',
+            'The extension marketplace is not configured, so updates cannot be checked.',
+          ),
+        })
+      }
+      return []
+    }
+
+    let result: IExtensionUpdateCheckResult
+    try {
+      result = await this._management.checkForUpdates(authority)
+    } catch (err) {
+      result = { updates: [], failure: (err as Error).message }
+    }
+    // Guard the whole state mutation, failure included: the workspace may have
+    // switched mid-flight, and that refresh owns the state now.
+    if (authority !== this._authority) return result.updates
+
+    this._pending = new Map(result.updates.map((update) => [update.identifier, update]))
+    this._pendingAuthority = authority
+    // An explicit check answers the question the user just asked, so it brings the
+    // strip back; a background check leaves a dismissal alone (the signature
+    // re-shows it on its own once the set or the outcome actually changes).
+    if (explicit) this._dismissedSignature = undefined
+    this._checkOutcome =
+      result.failure !== undefined
+        ? { kind: 'failed', message: result.failure }
+        : result.updates.length === 0
+          ? { kind: 'up-to-date' }
+          : undefined
+    this._onDidChange.fire()
+
+    if (explicit) this._notifyExplicitOutcome(result)
+    else this._notifyPendingTransition(result.updates)
+    return result.updates
+  }
+
+  async update(id: string, options: { silent?: boolean } = {}): Promise<boolean> {
+    // Not a raw map lookup: the pending set belongs to one side of one workspace,
+    // and an install must never target a host the user has already left. The host is
+    // snapshotted before the first await so a switch mid-flight can't retarget it.
+    const authority = this._pendingAuthority
+    const update = this._pendingBelongsToCurrentWorkspace() ? this._pending.get(id) : undefined
+    const entry = this.find(id)
+    if (!update || !entry) return false
+    // `silent` means "do not prompt", never "skip the trust gate": an update from a
+    // publisher the user has not trusted waits for a manual click.
+    if (options.silent === true && !(await this._isPublisherTrusted(entry.publisher))) return false
+    if (!(await this._ensurePublisherTrusted(entry))) return false
+
+    this._installing.add(id)
+    this._onDidChange.fire()
+    try {
+      await this._management.updateExtension(update, authority)
+    } catch (err) {
+      this._notification.notify({
+        severity: Severity.Error,
+        message: localize('extensions.update.failed', 'Failed to update {name}: {error}', {
+          name: entry.displayName,
+          error: (err as Error).message,
+        }),
+      })
+      return false
+    } finally {
+      this._installing.delete(id)
+    }
+    await this.refreshInstalled()
+    return true
+  }
+
+  async updateAll(
+    ids?: readonly string[],
+    options: { silent?: boolean } = {},
+  ): Promise<IExtensionsUpdateRunResult> {
+    const silent = options.silent === true
+    // Same rule as `update`: the host the pending set came from, snapshotted before
+    // the first await (the trust dialogs below can take arbitrarily long).
+    const authority = this._pendingAuthority
+    const requested = this._pendingBelongsToCurrentWorkspace()
+      ? (ids ?? [...this._pending.keys()])
+      : []
+    const targets = requested
+      .map((id) => this._pending.get(id))
+      .filter((update): update is IExtensionUpdate => update !== undefined)
+    if (targets.length === 0) return { updated: [], failed: [], skipped: [] }
+
+    // Trust is settled up front and sequentially (the dialog is per publisher), so
+    // the install below is one main-process call and the host restarts once.
+    const approved: IExtensionUpdate[] = []
+    const skipped: string[] = []
+    for (const target of targets) {
+      const entry = this.find(target.identifier)
+      // A pending id with no entry is not a user decision, just a stale item the next
+      // refresh prunes — it is neither skipped-for-a-reason nor worth reporting.
+      if (!entry) continue
+      if (silent) {
+        if (await this._isPublisherTrusted(entry.publisher)) approved.push(target)
+        else skipped.push(target.identifier)
+      } else if (await this._ensurePublisherTrusted(entry)) {
+        approved.push(target)
+      } else {
+        skipped.push(target.identifier)
+      }
+    }
+    if (approved.length === 0) {
+      const result: IExtensionsUpdateRunResult = { updated: [], failed: [], skipped }
+      this._notifyUpdateRun(result, silent)
+      return result
+    }
+
+    for (const target of approved) this._installing.add(target.identifier)
+    this._onDidChange.fire()
+    let outcomes: readonly IExtensionUpdateOutcome[]
+    try {
+      outcomes = await this._management.updateExtensions(approved, authority)
+    } catch (err) {
+      const error = (err as Error).message
+      outcomes = approved.map((target) => ({ identifier: target.identifier, error }))
+    } finally {
+      for (const target of approved) this._installing.delete(target.identifier)
+    }
+
+    const result: IExtensionsUpdateRunResult = {
+      updated: outcomes.filter((o) => o.error === undefined).map((o) => o.identifier),
+      failed: outcomes
+        .filter((o): o is IExtensionUpdateOutcome & { error: string } => o.error !== undefined)
+        .map((o) => ({ identifier: o.identifier, error: o.error })),
+      skipped,
+    }
+    await this.refreshInstalled()
+    this._notifyUpdateRun(result, silent)
+    return result
+  }
+
+  getExtensionsNotification(): IExtensionsNotification | undefined {
+    const pending = this.getPendingUpdates()
+    if (this._dismissedSignature === this._stripSignature(pending)) return undefined
+
+    if (pending.length > 0) {
+      return {
+        kind: 'updates',
+        severity: Severity.Info,
+        message: localize(
+          'extensions.updates.available',
+          '{count} extension update(s) are available.',
+          { count: pending.length },
+        ),
+        actions: [
+          {
+            label: localize('extensions.update.all', 'Update All'),
+            run: () => void this.updateAll(),
+          },
+        ],
+      }
+    }
+    if (this._checkOutcome?.kind === 'up-to-date') {
+      return {
+        kind: 'up-to-date',
+        severity: Severity.Info,
+        message: localize(
+          'action.extensions.checkForUpdates.none',
+          'All extensions are up to date.',
+        ),
+        actions: [],
+      }
+    }
+    if (this._checkOutcome?.kind === 'failed') {
+      return {
+        kind: 'failed',
+        severity: Severity.Warning,
+        message: localize('extensions.check.failed', 'Could not check for updates: {error}', {
+          error: this._checkOutcome.message ?? '',
+        }),
+        actions: [
+          {
+            label: localize('extensions.check.retry', 'Retry'),
+            run: () => void this.checkForUpdates({ explicit: true }),
+          },
+        ],
+      }
+    }
+    return undefined
+  }
+
+  dismissExtensionsNotification(): void {
+    this._dismissedSignature = this._stripSignature(this.getPendingUpdates())
+    this._onDidChange.fire()
+  }
+
+  async setAutoUpdateEnabled(id: string, enabled: boolean): Promise<void> {
+    if (enabled) this._autoUpdateOptOut.delete(id)
+    else this._autoUpdateOptOut.add(id)
+    await this._storage.set(
+      AUTO_UPDATE_OPT_OUT_KEY,
+      [...this._autoUpdateOptOut],
+      StorageScope.GLOBAL,
+    )
+    this._onDidChange.fire()
+  }
+
+  /** Strip identity: a new pending set or a new check outcome un-dismisses it. */
+  private _stripSignature(pending: readonly IExtensionUpdate[]): string {
+    return `${updateSetSignature(pending)}|${this._checkOutcome?.kind ?? ''}`
+  }
+
+  /**
+   * The pending set was computed for one side of one workspace; a switch makes it
+   * stale. `undefined` is a legitimate authority (local), so compare, never test
+   * for truthiness.
+   */
+  private _pendingBelongsToCurrentWorkspace(): boolean {
+    return this._pendingAuthority === this._authority
+  }
+
+  /**
+   * The pending update for `id` on the side the entry belongs to. A check covers
+   * one side at a time — in a remote workspace that is the effective (remote) side,
+   * so local-side rows show no Update affordance.
+   */
+  private _pendingFor(id: string, remote: boolean): IExtensionUpdate | undefined {
+    if (!this._pendingBelongsToCurrentWorkspace()) return undefined
+    if (remote !== (this._pendingAuthority !== undefined)) return undefined
+    return this._pending.get(id)
+  }
+
+  /** Drop pending updates that no longer apply: gone, or the version caught up. */
+  private _prunePendingUpdates(): void {
+    if (this._pending.size === 0) return
+    const list = this._pendingAuthority !== undefined ? this._remoteInstalled : this._installed
+    const versions = new Map(list.map((local) => [local.identifier, local.version]))
+    for (const [id, update] of this._pending) {
+      const version = versions.get(id)
+      if (version === undefined || compareVersions(version, update.toVersion) >= 0) {
+        this._pending.delete(id)
+      }
+    }
+  }
+
+  /**
+   * A background check announces a *change* in the pending set, at most once per
+   * distinct set per session: repeating "3 updates are available" every 12 hours is
+   * noise, and the badge + strip keep the state visible without it.
+   */
+  private _notifyPendingTransition(updates: readonly IExtensionUpdate[]): void {
+    const signature = updateSetSignature(updates)
+    if (signature === this._notifiedSignature) return
+    this._notifiedSignature = signature
+    if (updates.length === 0) return
+    this._notifyUpdatesAvailable(updates.length)
+  }
+
+  /** A user-initiated check always reports its outcome — including "nothing to do". */
+  private _notifyExplicitOutcome(result: IExtensionUpdateCheckResult): void {
+    if (result.failure !== undefined) {
+      this._notification.notify({
+        severity: Severity.Warning,
+        message: localize('extensions.check.failed', 'Could not check for updates: {error}', {
+          error: result.failure,
+        }),
+      })
+      return
+    }
+    if (result.updates.length === 0) {
+      this._notification.notify({
+        severity: Severity.Info,
+        message: localize(
+          'action.extensions.checkForUpdates.none',
+          'All extensions are up to date.',
+        ),
+      })
+      return
+    }
+    this._notifyUpdatesAvailable(result.updates.length)
+  }
+
+  private _notifyUpdatesAvailable(count: number): void {
+    this._notification.notify({
+      severity: Severity.Info,
+      message: localize(
+        'extensions.updates.available',
+        '{count} extension update(s) are available.',
+        { count },
+      ),
+      actions: [
+        {
+          label: localize('extensions.update.all', 'Update All'),
+          run: () => void this.updateAll(),
+        },
+        {
+          label: localize('extensions.update.later', 'Later'),
+          isSecondary: true,
+          run: () => undefined,
+        },
+      ],
+    })
+  }
+
+  /** At most one Info + one Error toast per run, never one per extension. */
+  private _notifyUpdateRun(result: IExtensionsUpdateRunResult, silent: boolean): void {
+    if (result.updated.length > 0) {
+      this._notification.notify({
+        severity: Severity.Info,
+        message: localize('extensions.updateAll.done', 'Updated {count} extension(s).', {
+          count: result.updated.length,
+        }),
+      })
+    }
+    if (result.failed.length > 0) {
+      this._notification.notify({
+        severity: Severity.Error,
+        message: localize(
+          'extensions.updateAll.failed',
+          'Failed to update {count} extension(s): {names}',
+          {
+            count: result.failed.length,
+            names: result.failed.map((failed) => failed.identifier).join(', '),
+          },
+        ),
+      })
+    }
+    // An automatic run skips untrusted publishers by design and says nothing (the
+    // update stays pending in the badge and strip); a run the user asked for owes
+    // them an answer when their own trust decision left extensions behind.
+    if (!silent && result.skipped.length > 0) {
+      this._notification.notify({
+        severity: Severity.Info,
+        message: localize(
+          'extensions.updateAll.skipped',
+          'Skipped {count} extension update(s): {names}',
+          {
+            count: result.skipped.length,
+            names: result.skipped.join(', '),
+          },
+        ),
+      })
+    }
+  }
+
+  private async _loadAutoUpdateOptOut(): Promise<void> {
+    const stored = await this._storage.get<string[]>(AUTO_UPDATE_OPT_OUT_KEY, StorageScope.GLOBAL)
+    if (!Array.isArray(stored)) return
+    for (const id of stored) this._autoUpdateOptOut.add(id)
+    this._onDidChange.fire()
+  }
+
   /** Look up a local-side id in the marketplace (empty when unreachable / pure local VSIX). */
   private async _resolveRemoteGallery(id: string): Promise<IGalleryExtension | undefined> {
     if (this._remoteGalleryPrefetch !== undefined && this._remoteGalleryPrefetchedIds.has(id)) {
@@ -665,6 +1118,7 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
     const activationError = this._activationErrors.get(local.identifier)
     const isBuiltin = local.source === 'builtin'
     const isDev = local.source === 'development'
+    const update = this._pendingFor(local.identifier, remote)
     return {
       id: local.identifier,
       displayName: m.displayName ?? m.name,
@@ -672,7 +1126,9 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
       description: m.description ?? '',
       version: local.version,
       installed: true,
-      outdated: false,
+      outdated: update !== undefined,
+      ...(update !== undefined ? { updateVersion: update.toVersion } : {}),
+      ...(this._autoUpdateOptOut.has(local.identifier) ? { autoUpdate: false } : {}),
       installing: this._installing.has(local.identifier),
       isBuiltin,
       isUnderDevelopment: isDev,
@@ -708,6 +1164,9 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
     const installIncompatible = this._hostVersion !== undefined && picked === undefined
     const installCompatibleVersion =
       picked !== undefined && picked.version !== gallery.version ? picked.version : undefined
+    // Compare against the version install would actually pick, so a gallery whose
+    // newest release needs a newer editor doesn't read as outdated.
+    const best = picked?.version ?? gallery.version
     return {
       id: gallery.identifier,
       displayName: gallery.displayName,
@@ -715,7 +1174,7 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
       description: gallery.description,
       version: gallery.version,
       installed: local !== undefined,
-      outdated: local !== undefined && local.version !== gallery.version,
+      outdated: local !== undefined && compareVersions(best, local.version) > 0,
       installing: this._installing.has(gallery.identifier),
       isBuiltin: false,
       isUnderDevelopment: false,
