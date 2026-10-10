@@ -97,6 +97,7 @@ import {
   type ReconcileScanSplitPrediction,
 } from './reconcileScanBudget.js'
 import { buildScopeFilespec, type SyncScopeTarget } from './p4Filespec.js'
+import type { SyncRunFacts } from './syncHistory.js'
 import {
   canHandTargetsToP4delta,
   carveReconcileFilespecs,
@@ -697,6 +698,21 @@ export interface SyncRunResult {
    */
   readonly refusedOverwriteFiles: readonly SyncPreviewFile[]
   readonly error: { kind: SyncErrorKind; suggestion: string } | undefined
+  /**
+   * The editor refused this get before any engine could run it (see
+   * {@link _nativeGetReject}). `ok: false` alone cannot say that: it also means
+   * "p4 ran and failed", which is a different fact about a different process —
+   * a refusal has no engine to name, no summary, and no transfer time. The
+   * reason itself travels in {@link error}.
+   */
+  readonly notRun?: boolean
+  /**
+   * What only this class can observe about the run — the engine that served it,
+   * the parallel-thread knob in force, and the I/O counters snapshotted before
+   * the sync teardown zeroes them (see {@link _withSyncFacts}). Consumed by the
+   * sync history; absent only for results this client did not decorate.
+   */
+  readonly facts?: SyncRunFacts
 }
 
 /** True when a path is a spreadsheet the Excel extension should diff in a webview. */
@@ -1301,6 +1317,12 @@ export class PerforceClient {
   private _syncIoReadBytes = 0
   private _syncIoWriteBytes = 0
   private _syncIoActive = false
+  /** Whether any sample actually arrived for this run. {@link _syncIoActive}
+   *  says a sampler exists; this says it reported — the difference is a get that
+   *  finished within one sampling tick, which has a sampler and zero samples.
+   *  {@link _withSyncFacts} records "no sampler" there rather than a misleading
+   *  0 B, and the status bar keeps showing its zeroed rate either way. */
+  private _syncIoSampled = false
   /** Live samplers, one per spawned p4 (see {@link _onSyncP4Spawn}), released
    *  when the suspension releases and in {@link dispose}. */
   private readonly _syncIoProbes = new Map<number, P4IoProbe>()
@@ -1868,6 +1890,7 @@ export class PerforceClient {
    *  stdout/timer callback — never throws. */
   private _onSyncIoSample(sample: P4IoSample): void {
     if (this._disposed) return
+    this._syncIoSampled = true
     this._syncIoReadBytes += sample.read
     this._syncIoWriteBytes += sample.write
     if (this._syncProgress === undefined) return
@@ -1918,6 +1941,7 @@ export class PerforceClient {
     }
     this._syncIoProbes.clear()
     this._syncIoActive = false
+    this._syncIoSampled = false
     this._syncIoReadBytes = 0
     this._syncIoWriteBytes = 0
   }
@@ -4956,15 +4980,28 @@ export class PerforceClient {
       // over the range in force at this instant. All that survives is the
       // notice when that range is not the one the user just looked at.
       await this._noteSyncPreviewDrift(spec, options?.overrideScope === true)
+      // The run's own clock, carried out on {@link SyncRunFacts} so the
+      // history's duration is measured around the whole get rather than around
+      // the spawn. Taken after the drift notice, whose dialog the user may sit
+      // on for minutes: it is an episode BEFORE the get, not part of it.
+      const startedAt = this._now()
       // The await is load-bearing: without it the finally below would release
       // the suspension the moment this function returns, before the sync settles.
-      return await this._withBusy(localize('perforce.busy.sync', 'Syncing'), async () => {
+      // `deltaAttempted`/`usedDelta` are what tell the history whether δ was
+      // merely unavailable or was tried and handed the run back to native p4.
+      let deltaAttempted = false
+      let usedDelta = false
+      const run = await this._withBusy(localize('perforce.busy.sync', 'Syncing'), async () => {
         // 换引擎只由资格决定，强制拉取不再预先排除：普通 get 与修复是同一个请求加一个
         // `--force`，δ 读不懂的 spec（如拒绝清单点名的 `#rev`）照旧由 `_p4deltaSyncReject` 挡回原生。
         const engine = this._p4deltaEngine()
         if (engine !== undefined) {
+          deltaAttempted = true
           const viaDelta = await this._syncViaP4delta(engine, spec, options)
-          if (viaDelta !== undefined) return viaDelta
+          if (viaDelta !== undefined) {
+            usedDelta = true
+            return viaDelta
+          }
         }
         const rejected = this._nativeGetReject(options)
         if (rejected !== undefined) {
@@ -4975,14 +5012,22 @@ export class PerforceClient {
           return {
             ok: false,
             cancelled: false,
+            notRun: true,
             summary: undefined,
             refusedFiles: [],
             refusedOverwriteFiles: [],
-            error: undefined,
-          }
+            // The reason rides along so callers that record the run (the sync
+            // history) can show WHY nothing ran instead of a generic failure —
+            // and `'other'` keeps it out of the command layer's clobber remedy,
+            // whose retry would only be refused again.
+            error: { kind: 'other', suggestion: rejected },
+          } satisfies SyncRunResult
         }
         return await this._syncViaP4(spec, options)
       })
+      // Snapshot before the finally: `_endExternalSuspend` releases the samplers
+      // and `_stopSyncIoProbes` zeroes the very byte totals this reads.
+      return this._withSyncFacts(run, startedAt, deltaAttempted, usedDelta)
     } finally {
       // Paired with the arm above `_withBusy`: if `_withBusy`'s own emit (or
       // anything in the callback) throws before the settle, the suspension must
@@ -4997,6 +5042,49 @@ export class PerforceClient {
       // run's count under its own label. `_clearSyncProgress` is idempotent, so
       // both bodies clearing early costs nothing.
       this._clearSyncProgress()
+    }
+  }
+
+  /**
+   * Attach the run's {@link SyncRunFacts}: the engine that served it, the
+   * parallel-thread knob in force, and the I/O counters.
+   *
+   * MUST run before {@link _endExternalSuspend} — that releases the samplers and
+   * calls {@link _stopSyncIoProbes}, which zeroes the byte totals; a snapshot
+   * taken after it always reads "no sampler".
+   *
+   * A run the editor itself refused gets no facts at all: `engine: 'p4'` would
+   * name a process that never started, `parallelThreads` a knob with nothing to
+   * bound, and the shared I/O counters whatever an OVERLAPPING get happened to
+   * move. Absent facts say the only true thing — there is nothing to report.
+   *
+   * `io` is present only when a sampler actually REPORTED for this run
+   * ({@link _syncIoSampled}), not merely existed: a get that finishes within one
+   * 1s tick has an active sampler and zero samples, and publishing that as 0 B
+   * would read as "this get moved nothing". Overlapping syncs share one set of
+   * counters (see {@link SyncProgress.diskWrites}), so the numbers are the sum
+   * for every run in the overlap.
+   */
+  private _withSyncFacts(
+    run: SyncRunResult,
+    startedAt: number,
+    deltaAttempted: boolean,
+    usedDelta: boolean,
+  ): SyncRunResult {
+    if (run.notRun === true) return run
+    return {
+      ...run,
+      facts: {
+        engine: usedDelta ? 'p4delta' : 'p4',
+        engineFallback: deltaAttempted && !usedDelta,
+        parallelThreads: this._syncParallelThreads,
+        startedAt,
+        endedAt: this._now(),
+        ...(this._syncIoSampled
+          ? { io: { readBytes: this._syncIoReadBytes, writeBytes: this._syncIoWriteBytes } }
+          : {}),
+        diskWrites: this._syncDiskWrites,
+      },
     }
   }
 
@@ -6543,6 +6631,7 @@ export class PerforceClient {
       this._syncIoReadBytes = 0
       this._syncIoWriteBytes = 0
       this._syncIoActive = false
+      this._syncIoSampled = false
     }
     this._externalSuspendCount++
   }

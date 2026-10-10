@@ -87,6 +87,7 @@ export const TEMP_PREFIXES = [
   'p4-readback-wide-',
   'p4-savior-',
   'p4-scope-bytes-',
+  'p4-sync-history-',
   'p4cache-',
   'tracker-test-',
   'ued-',

@@ -303,3 +303,4 @@ cd extensions/perforce && pnpm e2eg perforceGraph
 
 - 图谱仍**以只读浏览为主**：提交/签出等写操作在 SCM 侧栏（见 `../CLAUDE.md`）。唯一的例外是右键 "Get This Revision / Get Revision… / Force Get (Overwrite Local Files)"（`syncToChange`，见命令清单）——前两者只把工作区 have 版本移动到所选 CL，depot 仍只读；**Force Get 额外销毁目标 scope 内的本地未收集改动**（`p4 sync -f`，确认后执行，见 `../docs/pitfalls.md` 的 `-f` 逃生阀节）。右键其余项是"复制变更号/复制提交信息/发送到 Agent Chat"。
 - 加分页/加载更多：`P4GraphLoadResult.moreAvailable` + `PERFORCE_GRAPH_PAGE_SIZE`，`getGraphChanges` 跑 `-m <max+1>` 探测是否还有更多。
+- 每次拉取的**历史记录**（耗时 / 文件数 / 进程读写字节 / 引擎 / 入口 / 范围）是另一个页面：见 [`sync-history.md`](sync-history.md)。它记的是事件流（失败与取消也各一条），与本文的**同步账本**（每范围的最新位置）刻意分开、互不读写——两者的分工与 `facts` 快照时机都写在那里。

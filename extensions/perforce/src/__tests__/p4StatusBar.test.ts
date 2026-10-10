@@ -143,7 +143,7 @@ describe('P4StatusBarController revision chip', () => {
 
     await vi.waitFor(() => expect(mocks.revItem.text).toBe('#3 / ↓#5'))
     // The chip describes ONE file, so it stays file-scoped.
-    expect(mocks.revItem.command).toBe('perforce.syncLatest')
+    expect(mocks.revItem.command).toBe('perforce.syncLatestFromStatusBar')
     expect(mocks.revItem.tooltip).toContain('this file')
     controller.dispose()
   })

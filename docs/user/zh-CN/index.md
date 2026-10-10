@@ -78,6 +78,8 @@ Perforce 集成：连接登录、changelist 管理、签出/提交/对比、搁�
 
 - [概览与连接](./perforce/overview.md)
 - [日常操作：签出、提交、对比](./perforce/daily-workflow.md)
+- [拉取版本与状态感知](./perforce/sync-and-status.md)
+- [拉取历史记录（同步历史）](./perforce/sync-history.md)
 - [Changelist 与搁置](./perforce/changelists-and-shelving.md)
 - [提交历史图（Perforce 图谱）](./perforce/perforce-graph.md)
 - [Swarm 代码审核（P4 Code Review）](./perforce/swarm-code-review.md)

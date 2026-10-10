@@ -231,6 +231,29 @@ export function parseSyncOutput(stdout: string, stderr: string): SyncRunSummary 
   }
 }
 
+/**
+ * Whether a run left nothing to report: no summary at all, or every one of the
+ * six counts at zero.
+ *
+ * Shared by `runSync`'s result branches and the sync history, because the two
+ * must agree on what "nothing happened" means — the toast decides between
+ * "already at the latest revision" and "returned no recognized result" with
+ * it, and the history stores the same verdict as `upToDate` / `unrecognized`.
+ * Two copies of the six-way count would drift the moment a seventh counter is
+ * added (handoff was the last one to join).
+ */
+export function syncNothingHappened(summary: SyncRunSummary | undefined): boolean {
+  return (
+    summary === undefined ||
+    (summary.applied === 0 &&
+      summary.keptOpen === 0 &&
+      summary.mustResolve === 0 &&
+      summary.refusedModified === 0 &&
+      summary.refusedOverwrite === 0 &&
+      summary.handoff === 0)
+  )
+}
+
 // The depot path leads every sync line (`//depot/branch_x/a.cpp[#3]`, with a
 // `... ` prefix on must-resolve previews), while the local path appears only
 // on some shapes and may contain spaces — so the last depot segment is the

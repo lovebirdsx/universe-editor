@@ -42,9 +42,20 @@ import { watchConfig } from './configWatch.js'
 import { resolveP4Command, setP4CommandTimeoutSeconds, type P4Connection } from './p4Service.js'
 import { resolveP4deltaCommand } from './p4deltaService.js'
 import { PerforceClient, SYNC_POINT_READBACK_SLOW_EXEC, type P4CacheOptions } from './client.js'
-import { isForceGettableRefusal, type SyncPreviewFile } from './syncParser.js'
+import { isForceGettableRefusal, syncNothingHappened, type SyncPreviewFile } from './syncParser.js'
 import { P4CacheDisk } from './p4CacheDisk.js'
 import { GraphSyncLedger, NO_REGRESSION } from './graphSyncLedger.js'
+import {
+  buildSyncHistoryEntry,
+  DEFAULT_RUNS_PAGE,
+  nextSyncHistoryId,
+  outcomeOfRun,
+  SyncHistoryLog,
+  toRunDetailDto,
+  toRunDto,
+  type SyncHistoryTrigger,
+  type SyncRunHistoryInput,
+} from './syncHistory.js'
 import { ExternalSyncPoints, saviorConfigPath } from './graphSyncExternal.js'
 import { ClientManager } from './clientManager.js'
 import { formatScanElapsed, P4StatusBarController } from './p4StatusBar.js'
@@ -843,6 +854,15 @@ export async function activate(context: ExtensionContext): Promise<void> {
     ? GraphSyncLedger.open(context.globalStoragePath, log)
     : undefined
 
+  // The sync history: one record per get this editor ran, including the runs the
+  // ledger above must NOT record (cancelled, failed, refused at the scope gate).
+  // A separate file with a separate retention rule — see `syncHistory.ts` for why
+  // the two are not merged. Also under `globalStoragePath`, so every window of
+  // this install shares one history.
+  const history = context.globalStoragePath
+    ? SyncHistoryLog.open(context.globalStoragePath, log)
+    : undefined
+
   // What the OTHER tools on this machine pulled (the savior helper's own config
   // under the user's home, and UGS's state file inside the workspace). Read-only
   // and independent of `globalStoragePath`: a workspace pulled by one of them
@@ -950,6 +970,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
         scope: targets.map((t) => buildScopeFilespec(t.path, t.isDirectory)),
         scopeTargets: targets,
         ledgerScope: targets,
+        trigger: 'timeline',
       }),
     ),
   )
@@ -1323,6 +1344,43 @@ export async function activate(context: ExtensionContext): Promise<void> {
   }
 
   /**
+   * Write one get into the sync history. Called from every path that ends a get —
+   * including the ones that end it early (cancelled, failed, refused at the scope
+   * gate) — and deliberately not awaited: the record is a synchronous small-file
+   * write, and nothing about a get may wait on a history entry.
+   *
+   * Must run BEFORE whatever dialog the caller goes on to show: the stored
+   * duration has to measure the get, not the time the user spent reading a toast.
+   */
+  const recordSyncHistory = (input: {
+    target: PerforceClient
+    spec: string
+    trigger: SyncHistoryTrigger
+    force: boolean
+    /** The range the get covered, as host paths (`ledgerScope`'s coordinates). */
+    scope: readonly SyncScopeTarget[]
+    scopeNarrowed: boolean
+    run: SyncRunHistoryInput | undefined
+  }): void => {
+    if (history === undefined) return
+    const at = Date.now()
+    history.record(
+      buildSyncHistoryEntry({
+        id: nextSyncHistoryId(at),
+        at,
+        clientRoot: input.target.root,
+        spec: input.spec,
+        force: input.force,
+        trigger: input.trigger,
+        scope: input.scope,
+        scopeNarrowed: input.scopeNarrowed,
+        outcome: outcomeOfRun(input.run),
+        run: input.run,
+      }),
+    )
+  }
+
+  /**
    * Write down where a get landed, for the graph's local-sync-point badge.
    *
    * The recorded changelist is READ BACK from p4 (`readGraphSyncPoint`), not
@@ -1544,6 +1602,12 @@ export async function activate(context: ExtensionContext): Promise<void> {
        * would put the same question to the user twice for one decision.
        */
       overrideScope?: boolean
+      /**
+       * Which surface started this get — recorded in the sync history. Required
+       * for the same reason {@link ledgerScope} is: a call site that stays silent
+       * about itself would put a guess in the history's trigger column.
+       */
+      trigger: SyncHistoryTrigger
     },
   ): Promise<void> => {
     // The explicit-target gate, before any progress UI and before any spawn: a
@@ -1557,19 +1621,36 @@ export async function activate(context: ExtensionContext): Promise<void> {
     // reach back out to the very paths the get was refused on.
     let collectTargets = options.scopeTargets
     let overrideScope = options.overrideScope === true
+    /** The gate rewrote this get's range to the daily scope (history detail). */
+    let scopeNarrowed = false
     if (!overrideScope && options.scopeTargets !== undefined && options.scopeTargets.length > 0) {
       const decision = await confirmScopeTargets(
         target,
         options.scopeTargets,
         localize('perforce.act.get', 'Getting files'),
       )
-      if (!decision.ok) return
+      if (!decision.ok) {
+        // The one path that ends a get before any engine could run. Still a
+        // record: "I clicked get and nothing happened" deserves a trace, and
+        // `declined` is the only outcome that distinguishes it from a failure.
+        recordSyncHistory({
+          target,
+          spec,
+          trigger: options.trigger,
+          force: options.force === true,
+          scope: options.ledgerScope,
+          scopeNarrowed: false,
+          run: undefined,
+        })
+        return
+      }
       if (decision.override) {
         overrideScope = true
       } else if (decision.targets !== options.scopeTargets) {
         scope = buildSyncFilespecs(decision.targets)
         ledgerScope = decision.targets
         collectTargets = decision.targets
+        scopeNarrowed = true
       }
     }
     const res = await window.withProgress(
@@ -1649,7 +1730,24 @@ export async function activate(context: ExtensionContext): Promise<void> {
         }
       },
     )
+    // Recorded here, before every `await` that puts a dialog in front of the
+    // user: a cancelled / failed / up-to-date run is as much a fact as an
+    // applied one, and `durationMs` has to measure the get rather than however
+    // long the user left a toast on screen.
+    recordSyncHistory({
+      target,
+      spec,
+      trigger: options.trigger,
+      force: options.force === true,
+      scope: ledgerScope,
+      scopeNarrowed,
+      run: res,
+    })
     if (res.cancelled) return
+    // The client refused this get before spawning anything and already said why
+    // (`perforce.sync.scopeRefused`). The failure branch below would repeat that
+    // reason under a "Get revision failed" headline for a get that never ran.
+    if (res.notRun === true) return
     // Collect exactly what this get was refused on. Falling back to a clean
     // refresh would only *discover* the drift and leave the files still
     // uncollected — a button labelled "Collect Changes" that collects nothing is
@@ -1753,6 +1851,10 @@ export async function activate(context: ExtensionContext): Promise<void> {
             ledgerScope,
             ...(scope !== undefined ? { scope } : {}),
             ...(overrideScope ? { overrideScope: true } : {}),
+            // A retry is its own get with its own record, and it is not the
+            // surface the user first clicked: `recovery` is what tells the two
+            // entries apart in the history.
+            trigger: 'recovery',
           })
         }
         return
@@ -1762,16 +1864,14 @@ export async function activate(context: ExtensionContext): Promise<void> {
     }
     const summary = res.summary
     // "Nothing happened" has to account for refusals too, or a run that only
-    // refused files reads as an unparseable no-op.
+    // refused files reads as an unparseable no-op. Shared with the history
+    // (`syncNothingHappened`), which classifies the same run as `upToDate` or
+    // `unrecognized` off this one question — two spellings of it would let the
+    // toast and the recorded outcome disagree about the same get.
     // 转交给 p4 的那批也算「发生了事」：命令确实跑了，只是没有逐文件计数。
-    const nothingHappened =
-      !summary ||
-      (summary.applied === 0 &&
-        summary.keptOpen === 0 &&
-        summary.mustResolve === 0 &&
-        summary.refusedModified === 0 &&
-        summary.refusedOverwrite === 0 &&
-        summary.handoff === 0)
+    // The `undefined` half is written out here purely so the checks below narrow
+    // `summary` to a record; the helper answers the same.
+    const nothingHappened = summary === undefined || syncNothingHappened(summary)
     // Record where this get landed BEFORE reporting it: the graph's badge is
     // read back from the ledger by whoever revalidates next (this very sync's
     // `getThenRevalidate`, another tab, another window), so the entry has to be
@@ -1959,7 +2059,9 @@ export async function activate(context: ExtensionContext): Promise<void> {
       // handful of files. Let the user check which to overwrite, then sync
       // exactly those (the picker's title is the confirmation).
       const specs = await pickForceGetFiles(res.refusedFiles, res.refusedOverwriteFiles)
-      if (specs !== undefined) await runSync(target, '', { ...options, force: true, scope: specs })
+      if (specs !== undefined) {
+        await runSync(target, '', { ...options, force: true, scope: specs, trigger: 'recovery' })
+      }
     } else if (kind === 'resolve') {
       await commands.executeCommand('perforce.resolveChangelist', { rootUri: target.root })
     }
@@ -2068,6 +2170,57 @@ export async function activate(context: ExtensionContext): Promise<void> {
       ),
     )
     return undefined
+  }
+
+  /** Get the latest revision of one target — the body behind both the
+   *  `perforce.syncLatest` command and the status bar's revision chip, which
+   *  differ only in the surface they report. A get that names its own target
+   *  came from a menu (a resource argument), so the caller's `trigger` decides
+   *  only the argument-less case — where the target is whatever the active
+   *  editor shows, and where "who asked for this" is a real question. */
+  const syncLatestFor = async (
+    args: readonly unknown[],
+    trigger: SyncHistoryTrigger,
+  ): Promise<void> => {
+    // Explorer/SCM multi-select: one filespec per element, directories kept
+    // as directories — buildSyncFilespecs expands them to `<dir>/...`.
+    const selection = selectionTargets(args[1])
+    if (selection.length > 0) {
+      const owner = await syncSelectionOwner(selection)
+      if (!owner) return
+      await runSync(owner, '#head', {
+        scope: buildSyncFilespecs(selection),
+        scopeTargets: selection,
+        ledgerScope: selection,
+        trigger: 'explorer',
+      })
+      return
+    }
+    // The trigger is decided by the ARGUMENT, not by whether a path could be
+    // resolved: an argument-less call (the status-bar chip, the palette) falls
+    // back to the active editor's file, so a resolved path says nothing about
+    // who asked. The chip describes the file the editor is showing, so it keeps
+    // that fallback for its SCOPE — only the history's trigger must not become
+    // "explorer" for a click that never touched the Explorer.
+    const namedResource = resourcePath(args[0]) !== undefined
+    const path = await resolveTargetPath(args[0])
+    const target = path
+      ? mgr.resolveClient({ resourceUri: path })
+      : (mgr.resolveClient(args[0]) ?? mgr.active)
+    if (!target) return
+    const single = path ? singleSyncTarget(args[0], path) : undefined
+    await runSync(
+      target,
+      '#head',
+      single !== undefined
+        ? {
+            scope: [buildScopeFilespec(single.path, single.isDirectory)],
+            scopeTargets: [single],
+            ledgerScope: [single],
+            trigger: namedResource ? 'explorer' : trigger,
+          }
+        : { ledgerScope: scopeLessLedgerScope(target), trigger },
+    )
   }
 
   context.subscriptions.push(
@@ -2253,41 +2406,26 @@ export async function activate(context: ExtensionContext): Promise<void> {
     // file — the revision chip in the status bar is per-file, and that is the file
     // it describes.
     commands.registerCommand('perforce.syncLatest', async (...args: unknown[]) => {
-      // Explorer/SCM multi-select: one filespec per element, directories kept
-      // as directories — buildSyncFilespecs expands them to `<dir>/...`.
-      const selection = selectionTargets(args[1])
-      if (selection.length > 0) {
-        const owner = await syncSelectionOwner(selection)
-        if (!owner) return
-        await runSync(owner, '#head', {
-          scope: buildSyncFilespecs(selection),
-          scopeTargets: selection,
-          ledgerScope: selection,
-        })
-        return
-      }
-      const path = await resolveTargetPath(args[0])
-      const target = path
-        ? mgr.resolveClient({ resourceUri: path })
-        : (mgr.resolveClient(args[0]) ?? mgr.active)
-      if (!target) return
-      const single = path ? singleSyncTarget(args[0], path) : undefined
-      await runSync(
-        target,
-        '#head',
-        single !== undefined
-          ? {
-              scope: [buildScopeFilespec(single.path, single.isDirectory)],
-              scopeTargets: [single],
-              ledgerScope: [single],
-            }
-          : { ledgerScope: scopeLessLedgerScope(target) },
-      )
+      // The command palette passes nothing; a menu that carries a resource does.
+      // That difference is exactly what `trigger` records, and only the entry
+      // point can see it.
+      await syncLatestFor(args, args.length > 0 ? 'explorer' : 'command')
+    }),
+
+    // The revision chip's "behind" hint. Its command is a bare string with no
+    // argument channel (`StatusBarItem.command`), so the surface cannot identify
+    // itself — a separate id exists purely to carry `trigger: 'statusBar'`, the
+    // same reason `perforce.cancelBusy` is not in `contributes.commands`.
+    commands.registerCommand('perforce.syncLatestFromStatusBar', async (...args: unknown[]) => {
+      await syncLatestFor(args, 'statusBar')
     }),
 
     // Get a specific revision: four ways to name one, each also available as a
     // force-get, matching what P4V offers.
     commands.registerCommand('perforce.sync', async (...args: unknown[]) => {
+      // Same split as `perforce.syncLatest`: a resource-bearing invocation comes
+      // from a menu, a bare one from the palette.
+      const trigger: SyncHistoryTrigger = args.length > 0 ? 'explorer' : 'command'
       const selection = selectionTargets(args[1])
       if (selection.length > 0) {
         const owner = await syncSelectionOwner(selection)
@@ -2301,6 +2439,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
           scopeTargets: selection,
           ledgerScope: selection,
           ...(spec.force ? { force: true } : {}),
+          trigger,
         })
         return
       }
@@ -2330,7 +2469,49 @@ export async function activate(context: ExtensionContext): Promise<void> {
       await runSync(target, spec.spec, {
         ...(scoped !== undefined ? scoped : { ledgerScope: scopeLessLedgerScope(target) }),
         ...(spec.force ? { force: true } : {}),
+        trigger,
       })
+    }),
+
+    // --- Sync history (the local record of every get this editor ran) --------
+    // Both handlers answer from a JSON file under `globalStoragePath`: zero p4
+    // calls, so they never take a slot in the concurrency gate. The renderer is
+    // the only caller and narrows before it calls, but a command argument is
+    // untrusted input all the same — each field is checked here again and
+    // anything that does not fit is dropped rather than coerced.
+
+    commands.registerCommand('perforce-sync-history.getRuns', (...args: unknown[]) => {
+      if (history === undefined) return { runs: [], total: 0, hasMore: false }
+      const options = (args[0] ?? {}) as {
+        max?: unknown
+        root?: unknown
+      }
+      const page = history.list({
+        max:
+          typeof options.max === 'number' && Number.isFinite(options.max)
+            ? options.max
+            : DEFAULT_RUNS_PAGE,
+        ...(typeof options.root === 'string' && options.root.length > 0
+          ? { root: options.root }
+          : {}),
+      })
+      return {
+        runs: page.entries.map(toRunDto),
+        total: page.total,
+        hasMore: page.hasMore,
+      }
+    }),
+
+    commands.registerCommand('perforce-sync-history.getRun', (...args: unknown[]) => {
+      const id = typeof args[0] === 'string' ? args[0] : undefined
+      if (id === undefined) return null
+      const entry = history?.get(id)
+      // `null` (not `undefined`): this command ran and the history does not have
+      // that record — no store and a rotated-out id are the same answer here.
+      // `undefined` is what the renderer gets when the command does not exist at
+      // all (no perforce extension / not activated), so the two must not share a
+      // spelling: conflating them reports a missing extension as a stale record.
+      return entry === undefined ? null : toRunDetailDto(entry)
     }),
 
     // Dry-run: what would a get bring in. Read-only, so no confirmation.
@@ -3837,6 +4018,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
             ledgerScope,
             ...(knownLanding !== undefined ? { knownLanding } : {}),
             ...(req.force === true ? { force: true } : {}),
+            trigger: 'graph',
           })
         }),
         // The top-level directories of the graph client's root, for the

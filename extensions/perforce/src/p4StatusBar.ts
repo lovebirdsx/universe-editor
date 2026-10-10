@@ -517,8 +517,10 @@ export class P4StatusBarController {
     const behind = have < head
     this._revItem.text = behind ? `#${have} / ↓#${head}` : `#${have} / #${head}`
     // Behind is actionable (click gets the file's latest); current is not. This
-    // chip describes ONE file, so it stays on the file-scoped command.
-    this._revItem.command = behind ? 'perforce.syncLatest' : undefined
+    // chip describes ONE file, so it stays on the file-scoped command — the
+    // status-bar twin of `perforce.syncLatest`, a runtime id that exists only
+    // because this field cannot carry the argument a trigger needs.
+    this._revItem.command = behind ? 'perforce.syncLatestFromStatusBar' : undefined
     this._revItem.tooltip = behind
       ? localize(
           'perforce.status.revTooltipBehind',

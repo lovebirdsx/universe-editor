@@ -1,0 +1,232 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--vscode-foreground, #cccccc);
+  background: var(--vscode-editor-background, #1e1e1e);
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 8px 0 12px;
+  border-bottom: 1px solid var(--vscode-sideBar-border, rgba(255, 255, 255, 0.08));
+  flex-shrink: 0;
+}
+
+.count {
+  flex: 1;
+  opacity: 0.7;
+}
+
+.toolButton {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.toolButton:hover {
+  background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.08));
+}
+
+.body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.listPane {
+  display: flex;
+  flex-direction: column;
+  /* Fixed width: the rows are one-line summaries and the detail is prose, so a
+     draggable sash would buy nothing worth its state. */
+  width: 360px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--vscode-sideBar-border, rgba(255, 255, 255, 0.08));
+  min-height: 0;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 2px 0;
+  overflow: auto;
+  flex: 1;
+  outline: none;
+}
+
+.list:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: -1px;
+}
+
+.empty {
+  padding: 12px;
+  line-height: 1.5;
+  opacity: 0.6;
+}
+
+.loadMore {
+  appearance: none;
+  border: none;
+  border-top: 1px solid var(--vscode-sideBar-border, rgba(255, 255, 255, 0.08));
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  padding: 6px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.loadMore:hover {
+  background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.08));
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 8px 0 12px;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.row:hover {
+  background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.06));
+}
+
+.row[data-selected='true'] {
+  background: var(--vscode-list-activeSelectionBackground, rgba(255, 255, 255, 0.1));
+}
+
+.list:not([data-focused='true']) .row[data-selected='true'] {
+  background: var(--vscode-list-inactiveSelectionBackground, rgba(255, 255, 255, 0.06));
+}
+
+.rowTime {
+  flex-shrink: 0;
+  width: 62px;
+  opacity: 0.7;
+}
+
+/* The outcome is the column a user scans for, so it carries the colour — and a
+   failed or cancelled run must not look like a successful one at a glance. */
+.rowOutcome {
+  flex-shrink: 0;
+  width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rowOutcome[data-outcome='failed'] {
+  color: var(--vscode-errorForeground, #f48771);
+}
+
+.rowOutcome[data-outcome='unrecognized'] {
+  color: var(--vscode-warning-foreground, #cca700);
+}
+
+.rowOutcome[data-outcome='cancelled'],
+.rowOutcome[data-outcome='declined'] {
+  opacity: 0.6;
+}
+
+.rowTarget {
+  flex-shrink: 0;
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.85;
+}
+
+.rowMeta {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.6;
+}
+
+.rowDuration {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.detail {
+  flex: 1;
+  overflow: auto;
+  padding: 10px 14px;
+  min-width: 0;
+}
+
+.hint {
+  padding: 4px 0;
+  opacity: 0.6;
+}
+
+.section {
+  margin-bottom: 16px;
+}
+
+.sectionTitle {
+  margin: 0 0 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.6;
+  font-weight: 600;
+}
+
+.kv {
+  display: grid;
+  grid-template-columns: 130px 1fr;
+  gap: 3px 10px;
+  margin: 0;
+}
+
+.kv dt {
+  opacity: 0.6;
+}
+
+.kv dd {
+  margin: 0;
+  word-break: break-all;
+}
+
+.mono {
+  font-family: var(--font-mono, monospace);
+}
+
+.muted {
+  margin-top: 4px;
+  opacity: 0.6;
+}
+
+.note {
+  margin-top: 6px;
+  opacity: 0.55;
+  line-height: 1.45;
+}
+
+.scopeList {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.error {
+  color: var(--vscode-errorForeground, #f48771);
+  font-family: var(--font-mono, monospace);
+}

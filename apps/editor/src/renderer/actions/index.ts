@@ -239,6 +239,7 @@ import {
   OpenPerforceGraphFromExtensionAction,
   ViewPerforceFileHistoryAction,
 } from './perforceGraphActions.js'
+import { ViewPerforceSyncHistoryAction } from './perforceSyncHistoryActions.js'
 import { SwitchScmRepoAction } from './scmActions.js'
 import { ScmOpenFileAction, ScmOpenPreviewAction } from './scmResourceActions.js'
 import {
@@ -697,6 +698,8 @@ registerAction2(ViewPerforceGraphAction)
 registerAction2(PerforceGraphFocusSearchAction)
 registerAction2(PerforceGraphRefreshAction)
 registerAction2(ViewPerforceFileHistoryAction)
+// Perforce Sync History
+registerAction2(ViewPerforceSyncHistoryAction)
 
 // Source Control
 registerAction2(SwitchScmRepoAction)

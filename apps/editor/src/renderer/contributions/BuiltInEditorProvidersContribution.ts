@@ -40,6 +40,7 @@ import { UntitledEditorInput } from '../services/editor/UntitledEditorInput.js'
 import { WelcomeEditorInput } from '../services/editor/WelcomeEditorInput.js'
 import { GitGraphEditorInput } from '../services/editor/GitGraphEditorInput.js'
 import { PerforceGraphEditorInput } from '../services/editor/PerforceGraphEditorInput.js'
+import { PerforceSyncHistoryEditorInput } from '../services/editor/PerforceSyncHistoryEditorInput.js'
 import { SwarmReviewEditorInput } from '../services/editor/SwarmReviewEditorInput.js'
 import { SwarmDiffEditorInput } from '../services/editor/SwarmDiffEditorInput.js'
 import { type EditorComponent } from '../services/editor/EditorComponentRegistry.js'
@@ -61,6 +62,7 @@ import { DocEditor } from '../workbench/editor/DocEditor.js'
 import { TerminalEditorView } from '../workbench/editor/TerminalEditorView.js'
 import { GitGraphEditor } from '../workbench/gitGraph/GitGraphEditor.js'
 import { PerforceGraphEditor } from '../workbench/perforceGraph/PerforceGraphEditor.js'
+import { PerforceSyncHistoryEditor } from '../workbench/perforceSyncHistory/PerforceSyncHistoryEditor.js'
 import { SwarmReviewEditor } from '../workbench/swarm/SwarmReviewEditor.js'
 import { SwarmDiffEditor } from '../workbench/swarm/SwarmDiffEditor.js'
 import { ExtensionEditor } from '../workbench/extensions/ExtensionEditor.js'
@@ -278,6 +280,15 @@ export class BuiltInEditorProvidersContribution
           deserialize: (data) => PerforceGraphEditorInput.deserialize(data),
         },
         PerforceGraphEditor,
+      ),
+    )
+    this._register(
+      registerEditorWithComponent(
+        {
+          typeId: PerforceSyncHistoryEditorInput.TYPE_ID,
+          deserialize: (data) => PerforceSyncHistoryEditorInput.deserialize(data),
+        },
+        PerforceSyncHistoryEditor,
       ),
     )
     this._register(

@@ -72,6 +72,7 @@ Perforce 的状态在服务器上，没有本地文件监视器。集成会识�
 ## 接下来去哪
 
 - [拉取版本与状态感知](./sync-and-status.md)
+- [拉取历史记录（同步历史）](./sync-history.md)
 - [日常操作：签出、提交、对比](./daily-workflow.md)
 - [Changelist 与搁置](./changelists-and-shelving.md)
 - [提交历史图（Perforce 图谱）](./perforce-graph.md)
