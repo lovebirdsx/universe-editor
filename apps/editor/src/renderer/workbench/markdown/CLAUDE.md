@@ -96,7 +96,7 @@ contributions/MarkdownPasteContribution.ts / MarkdownDropContribution.ts  注册
 7. **预览 input→组件两处必同步**：`EditorArea.tsx` + `BuiltInEditorProvidersContribution.ts`，漏一处预览开不出或恢复不了。
 8. **host stdout 就是 RPC 线，禁止任何 console.log**（已修勿回退）：`protectStdout()`（`packages/extension-host/src/stdoutProtection.ts`）把 host console 重定向 stderr；升级 md LS / 改 host bootstrap 别破坏。
 9. **header-fragment 链接 setSelection 崩溃**（已修勿回退）：`EditorOpenerContribution.normalizeOpenRange` 把缺省 end 补成 start，再 setSelection/reveal。
-10. **补全 vs 文档同步防抖竞态**（已修勿回退）：即时触发的 provider 调前先 `await PendingDocumentSync.flush(uri)`（`renderer/services/extensions/PendingDocumentSync.ts`）。
+10. **provider vs 文档同步防抖竞态**（已修勿回退）：补全 / code action / documentSymbol 等即时触发的 provider 调前先 `await PendingDocumentSync.flush(uri)`；漏掉会用宿主旧镜像算树并被版本缓存固化。
 11. **预览链接点击不走 LSP documentLink**：`MarkdownView`/`SafeLink` 自路由；`./foo.md#hello` 拆「文件路径+fragment」先开 MarkdownPreviewInput 再 `MarkdownPreviewRegistry.revealAnchor`；`@path/to/file` 是文件 mention，解析/打开前剥 `@`。别让 `#fragment`/`@` 进 `markdownLinkCandidates`。
 12. **vim 导览键吞预览内输入框字符**（已修勿回退）：容器级键盘监听开头 `if (isEditableTarget(e.target)) return`；`isEditableTarget` 已抽到共享 `renderer/workbench/domUtils.ts`。
 13. **预览本地链接 %20 空格**（已修勿回退）：decodeURIComponent 只在 `workbench/markdown/markdownLinkResolve.ts` 的文件路径候选做（解码候选优先、原样兜底并去重）；别在 parser 阶段全局 decode href、别改 `URI.file`。

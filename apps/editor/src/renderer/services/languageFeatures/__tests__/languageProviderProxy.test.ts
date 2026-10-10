@@ -191,8 +191,14 @@ describe('createDocumentSymbolProxy pull cache', () => {
   })
 
   it('coalesces concurrent pulls for the same version onto one wire call', async () => {
-    let resolve!: (v: (typeof lspSymbol)[]) => void
-    const pull = vi.fn().mockReturnValue(new Promise((r) => (resolve = r)))
+    // 拉取前有 flush 闸门（未跟踪的 URI 也让出一个微任务），所以线上调用不再发生在
+    // 同一 tick 内——合并的证据改成「两次调用拿到同一个 promise」，调用次数在两侧落地后核对。
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const pull = vi.fn(async () => {
+      await gate
+      return [lspSymbol]
+    })
     const proxy = createDocumentSymbolProxy(1, {
       $provideDocumentSymbols: pull,
     } as unknown as IExtHostLanguages)
@@ -200,9 +206,10 @@ describe('createDocumentSymbolProxy pull cache', () => {
     const model = makeModel('file:///a.ts')
     const p1 = proxy.provideDocumentSymbols(model, null as never)
     const p2 = proxy.provideDocumentSymbols(model, null as never)
-    expect(pull).toHaveBeenCalledTimes(1)
-    resolve([lspSymbol])
+    expect(p2).toBe(p1)
+    release()
     expect(await p2).toEqual(await p1)
+    expect(pull).toHaveBeenCalledTimes(1)
   })
 
   it('does not cache empty results (server still warming up)', async () => {
@@ -228,6 +235,91 @@ describe('createDocumentSymbolProxy pull cache', () => {
     await expect(proxy.provideDocumentSymbols(model, null as never)).rejects.toThrow('boom')
     expect(await proxy.provideDocumentSymbols(model, null as never)).toHaveLength(1)
     expect(pull).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('document symbol 文档版本一致性', () => {
+  const uri = 'file:///workspace/readme.md'
+
+  function symbolProxy(pull: ReturnType<typeof vi.fn>) {
+    return createDocumentSymbolProxy(1, {
+      $provideDocumentSymbols: pull,
+    } as unknown as IExtHostLanguages)
+  }
+
+  it('镜像同步完成前不发请求', async () => {
+    let resume!: () => void
+    PendingDocumentSync.register(
+      uri,
+      () =>
+        new Promise<void>((resolve) => {
+          resume = resolve
+        }),
+    )
+    try {
+      const pull = vi.fn().mockResolvedValue([lspSymbol])
+      const pending = symbolProxy(pull).provideDocumentSymbols(makeModel(uri), null as never)
+      expect(pull).not.toHaveBeenCalled()
+      resume()
+      expect(await pending).toHaveLength(1)
+      expect(pull).toHaveBeenCalledTimes(1)
+    } finally {
+      PendingDocumentSync.unregister(uri)
+    }
+  })
+
+  it('同步失败不算符号，也不把失败当成缓存命中', async () => {
+    const error = new Error('同步失败')
+    PendingDocumentSync.register(uri, async () => {
+      throw error
+    })
+    try {
+      const pull = vi.fn().mockResolvedValue([lspSymbol])
+      const proxy = symbolProxy(pull)
+      const model = makeModel(uri)
+      await expect(proxy.provideDocumentSymbols(model, null as never)).rejects.toBe(error)
+      expect(pull).not.toHaveBeenCalled()
+
+      // 失败不入版本缓存：同步恢复后同一版本必须重新拉取。
+      PendingDocumentSync.unregister(uri)
+      PendingDocumentSync.register(uri, async () => {})
+      expect(await proxy.provideDocumentSymbols(model, null as never)).toHaveLength(1)
+      expect(pull).toHaveBeenCalledTimes(1)
+    } finally {
+      PendingDocumentSync.unregister(uri)
+    }
+  })
+
+  it('同一版本重问走版本缓存，不再 flush', async () => {
+    const flush = vi.fn(async () => {})
+    PendingDocumentSync.register(uri, flush)
+    try {
+      const pull = vi.fn().mockResolvedValue([lspSymbol])
+      const proxy = symbolProxy(pull)
+      const model = makeModel(uri)
+      const first = await proxy.provideDocumentSymbols(model, null as never)
+      const second = await proxy.provideDocumentSymbols(model, null as never)
+      expect(flush).toHaveBeenCalledTimes(1)
+      expect(pull).toHaveBeenCalledTimes(1)
+      expect(second).toBe(first)
+    } finally {
+      PendingDocumentSync.unregister(uri)
+    }
+  })
+
+  it('模型版本前进后各自 flush 一次', async () => {
+    const flush = vi.fn(async () => {})
+    PendingDocumentSync.register(uri, flush)
+    try {
+      const pull = vi.fn().mockResolvedValue([lspSymbol])
+      const proxy = symbolProxy(pull)
+      await proxy.provideDocumentSymbols(makeModel(uri, 1), null as never)
+      await proxy.provideDocumentSymbols(makeModel(uri, 2), null as never)
+      expect(flush).toHaveBeenCalledTimes(2)
+      expect(pull).toHaveBeenCalledTimes(2)
+    } finally {
+      PendingDocumentSync.unregister(uri)
+    }
   })
 })
 

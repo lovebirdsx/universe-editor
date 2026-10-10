@@ -99,7 +99,7 @@ workbench/editor/previewScrollMap.ts            纯函数：源行号↔预览�
 1. **revealSymbol 漏 focus**（已修勿回退）：preview 分支 `scrollToLine` 后再 `focus()`，file 分支末尾 `editor.focus()`，否则回车后焦点滞留在大纲树。
 2. **TreeModel 切文档不清 `_focused`**：`onTreeFocus` guard 判「焦点项仍可见」，不能只判 `focused != null`。
 3. **聚焦自动选中用 Tree 的 onFocus prop**：大纲常空挂载（冷启动），手动 `containerRef.addEventListener('focus')` 会因挂载时 ref 为 null 且 effect 不重跑而永远漏挂。
-4. **预览源 model 用 `peek` 不用 `acquire`**：`_attachPreview` 只读源 model，acquire 会泄漏引用；「孤立预览」（源文件从未打开）peek 拿不到 → 大纲暂空（已知限制）。
+4. **预览源 model 用 `peek` 不用 `acquire`**：`_attachPreview` 只读源 model，acquire 会泄漏引用；「孤立预览」（源文件从未打开）peek 拿不到时由预览组件 acquire 补上；该路径符号拉取须先 flush 镜像（旧树会按新版本固化）。
 5. **data-line 0-based vs 行号 1-based**：`previewScrollMap.collectEntries` 读的 `data-line` 是 0-based，映射函数对外用 1-based，跨这层别忘 ±1。
 6. **加 View 三件套缺一不可**：Container/View/ViewComponentRegistry 漏一处，大纲标签页出不来或空白（apps/editor/CLAUDE.md 套路 B）。
 7. **`FileEditorRegistry.get(input)` 不带 groupId = 取「最后注册」的实例**（分屏双开时是另一组的 Monaco）；tracker 内一律 `get(input, this._groupId)`。本组未挂载时它返回 undefined——活动符号暂空，挂载后 `onDidChange` 触发 re-attach 补上。

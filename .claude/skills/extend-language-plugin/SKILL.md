@@ -134,6 +134,8 @@ pnpm e2e          # 改了交互链路时跑冒烟，仅截错误
 
 13. **异步请求的 range 属于发起时的文档版本**：发送前 flush 只能保证入口一致；TSLS codeAction 等诊断后仍会拿旧 range 请求重构。须在服务端 await 后检查文档版本、对象身份及取消状态，不用 clamp 或隐藏错误兜底。持久补丁见 `vendor/typescript-language-server/patch.mjs`（npm postinstall、缓存命中和远程部署均须覆盖），回归见 `tsCodeActionStaleRange.spec.ts`。取证同时看通知、输出通道及 tsserver 请求日志，单看 console 可能假绿。
 
+14. **自动触发的拉取（documentSymbol）同样要先 flush**：大纲/面包屑/粘性滚动的符号拉取与文档镜像的 200ms 防抖同拍，谁先订阅同一 `model.onDidChangeContent` 谁的定时器先 fire——孤立预览（源文件没有 FileEditorInput 标签，model 由预览组件 acquire）这条路上 tracker 先订阅，符号请求先到宿主，语言服务按**旧镜像**算出非空树，再被按**新** model 版本缓存（wire 层 `createVersionedPullCache` + 消费方各自的版本缓存），此后每次重算都命中缓存直接复用 → 陈旧树永久固化（回归 `smoke.outlineExternalRewrite.spec.ts`）。修法与补全/code action 同款：`renderer/services/languageFeatures/languageProviderProxy.ts` 的 `createDocumentSymbolProxy` 在 `cache.pull` 的 run 内 `await PendingDocumentSync.flush(uri)`，且**不 catch**（吃掉失败就回到「用旧镜像算树」的固化路径）。
+
 ## 关键参考路径
 - `extensions/typescript/src/extension.ts` —— 插件入口：activate + 10 类 provider 注册 + 文档同步（**新语言插件模板**）
 - `extensions/typescript/src/lspClient.ts` —— 插件内 LSP 客户端：spawn / initialize / sendRequest / 诊断 / 崩溃重启

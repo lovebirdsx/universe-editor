@@ -220,9 +220,19 @@ export function createDocumentSymbolProxy(
   const cache = createVersionedPullCache<monaco.languages.DocumentSymbol[]>((v) => v.length === 0)
   return {
     provideDocumentSymbols: (model) =>
-      cache.pull(model, async () =>
-        documentSymbolsToMonaco(await extHost.$provideDocumentSymbols(handle, model.uri)),
-      ),
+      cache.pull(model, async () => {
+        // Symbols are pulled automatically (outline / breadcrumbs / sticky scroll), so
+        // this runs in lockstep with the document mirror's own 200ms debounce — and on
+        // the isolated-preview path (the preview acquired the source model itself) the
+        // tracker subscribes to onDidChangeContent BEFORE DocumentSyncContribution, so
+        // the pull leaves first and an LS with a URI-keyed cache of the old text answers
+        // with the stale tree. That non-empty tree then gets cached under the NEW model
+        // version and is republished forever. Flush first, like completion and code
+        // action; and do NOT catch: a swallowed failure returns symbols for the stale
+        // mirror, which caches exactly the same way.
+        await PendingDocumentSync.flush(model.uri.toString())
+        return documentSymbolsToMonaco(await extHost.$provideDocumentSymbols(handle, model.uri))
+      }),
   }
 }
 
