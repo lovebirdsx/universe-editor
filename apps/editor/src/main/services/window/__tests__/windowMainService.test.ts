@@ -192,6 +192,7 @@ function makeOpts() {
       fileWatcher: {} as never,
       recentWorkspaces: {} as never,
       acpHost: { stopAllForWindow: () => Promise.resolve() } as never,
+      mcpClient: { stopAllForWindow: () => Promise.resolve() } as never,
       acpTerminal: {} as never,
       extensionHost: { stopAllForWindow: () => Promise.resolve() } as never,
       extensionManagement: {} as never,
@@ -311,16 +312,19 @@ describe('WindowMainService', () => {
       })
     })
 
-    it("reclaims the crashed window's agents and extension host via stopAllForWindow", async () => {
+    it("reclaims the crashed window's agents, MCP servers and extension host via stopAllForWindow", async () => {
       const opts = makeOpts()
       const acpStopAll = vi.fn(() => Promise.resolve())
+      const mcpStopAll = vi.fn(() => Promise.resolve())
       const extHostStopAll = vi.fn(() => Promise.resolve())
       opts.appServices.acpHost = { stopAllForWindow: acpStopAll } as never
+      opts.appServices.mcpClient = { stopAllForWindow: mcpStopAll } as never
       opts.appServices.extensionHost = { stopAllForWindow: extHostStopAll } as never
       const svc = makeService(opts)
       const id = await svc.createWindow()
       grabRenderProcessGoneHandler()(undefined, { reason: 'oom' })
       expect(acpStopAll).toHaveBeenCalledWith(id)
+      expect(mcpStopAll).toHaveBeenCalledWith(id)
       expect(extHostStopAll).toHaveBeenCalledWith(id)
     })
 

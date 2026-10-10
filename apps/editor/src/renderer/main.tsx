@@ -195,6 +195,7 @@ import {
   AgentMcpConfigService,
   IAgentMcpConfigService,
 } from './services/acp/agentMcpConfigService.js'
+import { IMcpDebugService, McpDebugService } from './services/acp/mcp/mcpDebugService.js'
 import {
   AcpPromptHistoryService,
   IAcpPromptHistoryService,
@@ -1009,6 +1010,12 @@ async function bootstrapWorkbench(): Promise<void> {
     instantiation.createInstance(SubscriptionUsageService),
   )
   services.set(ISubscriptionUsageService, subscriptionUsageService)
+
+  // MCP tool replay debugger: opens a tab per (session, server) and drives
+  // IMcpClientService. Injects IAcpSessionService (layered config) and the
+  // editor groups service, so it is created after both are registered.
+  const mcpDebugService = workbenchStore.add(instantiation.createInstance(McpDebugService))
+  services.set(IMcpDebugService, mcpDebugService)
 
   // Warm the built-in guide-doc cache from disk before contributions run:
   // WorkspaceRestoreContribution deserializes DocEditorInput tabs synchronously

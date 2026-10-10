@@ -15,6 +15,7 @@ describe('ApplicationServices type', () => {
       textSearch: {} as ApplicationServices['textSearch'],
       recentWorkspaces: {} as ApplicationServices['recentWorkspaces'],
       acpHost: {} as ApplicationServices['acpHost'],
+      mcpClient: {} as ApplicationServices['mcpClient'],
       acpTerminal: {} as ApplicationServices['acpTerminal'],
       extensionHost: {} as ApplicationServices['extensionHost'],
       extensionManagement: {} as ApplicationServices['extensionManagement'],
@@ -45,7 +46,7 @@ describe('ApplicationServices type', () => {
       remoteConnection: {} as ApplicationServices['remoteConnection'],
       remoteStatus: {} as ApplicationServices['remoteStatus'],
     }
-    expect(Object.keys(svc)).toHaveLength(36)
+    expect(Object.keys(svc)).toHaveLength(37)
   })
 })
 

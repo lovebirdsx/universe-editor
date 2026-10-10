@@ -6,7 +6,9 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   filterMcpServersByCapabilities,
   filterWireByNames,
+  findMcpServerByName,
   mcpServerRawToRecord,
+  mcpServerToTarget,
   mcpServerTransport,
   mergeMcpServerDefinitions,
   mergeMcpServerRawLayers,
@@ -732,5 +734,66 @@ describe('writeMcpServerEntry', () => {
   it('normalizes the legacy array form to the Record form on write', () => {
     const out = writeMcpServerEntry([{ name: 'fs', command: 'node' }], 'fs', undefined)
     expect(out).toEqual({})
+  })
+})
+
+describe('findMcpServerByName', () => {
+  const servers = normalizeMcpServers({
+    fs: { command: 'node', args: ['server.js'] },
+    docs: { type: 'http', url: 'http://x' },
+  })
+
+  it('finds by name and returns undefined otherwise', () => {
+    expect(findMcpServerByName(servers, 'fs')?.name).toBe('fs')
+    expect(findMcpServerByName(servers, 'nope')).toBeUndefined()
+    expect(findMcpServerByName([], 'fs')).toBeUndefined()
+  })
+})
+
+describe('mcpServerToTarget', () => {
+  it('folds stdio env pairs into a Record and carries cwd', () => {
+    const target = mcpServerToTarget(
+      { name: 'fs', command: 'npx', args: ['-y', 'srv'], env: [{ name: 'KEY', value: 'v' }] },
+      '/work',
+    )
+    expect(target).toEqual({
+      kind: 'stdio',
+      command: 'npx',
+      args: ['-y', 'srv'],
+      env: { KEY: 'v' },
+      cwd: '/work',
+    })
+  })
+
+  it('omits env / cwd when empty or absent', () => {
+    const target = mcpServerToTarget({ name: 'fs', command: 'node', args: [], env: [] })
+    expect(target).toEqual({ kind: 'stdio', command: 'node', args: [] })
+    expect(target !== undefined && 'env' in target).toBe(false)
+    expect(target !== undefined && 'cwd' in target).toBe(false)
+  })
+
+  it('maps http/sse header pairs and never carries cwd for them', () => {
+    const http = mcpServerToTarget(
+      {
+        type: 'http',
+        name: 'docs',
+        url: 'https://example.com/mcp',
+        headers: [{ name: 'Authorization', value: 'Bearer t' }],
+      },
+      '/work',
+    )
+    expect(http).toEqual({
+      kind: 'http',
+      url: 'https://example.com/mcp',
+      headers: { Authorization: 'Bearer t' },
+    })
+    expect(mcpServerToTarget({ type: 'sse', name: 's', url: 'http://x', headers: [] })).toEqual({
+      kind: 'sse',
+      url: 'http://x',
+    })
+  })
+
+  it('returns undefined for the acp transport — that server lives on the ACP connection', () => {
+    expect(mcpServerToTarget({ type: 'acp', name: 'hosted', serverId: 'srv-1' })).toBeUndefined()
   })
 })

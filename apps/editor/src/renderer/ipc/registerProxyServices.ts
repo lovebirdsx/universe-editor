@@ -36,6 +36,7 @@ import {
 import { IResourceAccessService } from '../../shared/ipc/resourceAccessService.js'
 import { IRemoteStatusService } from '../../shared/ipc/remoteStatusService.js'
 import { IAcpHostService } from '../../shared/ipc/acpHostService.js'
+import { IMcpClientService } from '../../shared/ipc/mcpClientService.js'
 import { IExtensionHostService } from '../../shared/ipc/extensionHostService.js'
 import { IExtensionManagementService } from '../../shared/ipc/extensionManagementService.js'
 import { IExtensionGalleryService } from '../../shared/ipc/extensionGalleryService.js'
@@ -82,6 +83,7 @@ export const PROXY_SERVICE_BINDINGS: readonly ProxyServiceBinding[] = [
   { id: IConfigLocationService, channel: ServiceChannels.ConfigLocation },
   { id: ILogFilesService, channel: ServiceChannels.LogFiles },
   { id: IAcpHostService, channel: ServiceChannels.AcpHost },
+  { id: IMcpClientService, channel: ServiceChannels.McpClient },
   { id: IExtensionHostService, channel: ServiceChannels.ExtensionHost },
   { id: IExtensionManagementService, channel: ServiceChannels.ExtensionManagement },
   { id: IExtensionGalleryService, channel: ServiceChannels.ExtensionGallery },

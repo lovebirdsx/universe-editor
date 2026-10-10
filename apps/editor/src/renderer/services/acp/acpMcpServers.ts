@@ -17,6 +17,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { EnvVariable, HttpHeader, McpCapabilities, McpServer } from '@agentclientprotocol/sdk'
+import type { McpConnectTargetDto } from '../../../shared/ipc/mcpClientService.js'
 
 type WarnFn = (msg: string) => void
 
@@ -133,6 +134,60 @@ export type McpTransport = 'stdio' | 'http' | 'sse'
 export function mcpServerTransport(server: McpServer): McpTransport {
   if (!('type' in server)) return 'stdio'
   return server.type === 'http' ? 'http' : server.type === 'sse' ? 'sse' : 'stdio'
+}
+
+/** Look up one wire entry by name — the name is the join key for every layer merge. */
+export function findMcpServerByName(
+  servers: readonly McpServer[],
+  name: string,
+): McpServer | undefined {
+  return servers.find((s) => s.name === name)
+}
+
+/** The two wire variants that are dialable over the network (the `acp` variant is not). */
+type DialableMcpServer = Extract<McpServer, { type: 'http' | 'sse' }>
+
+function isDialableMcpServer(server: McpServer): server is DialableMcpServer {
+  return 'type' in server && (server.type === 'http' || server.type === 'sse')
+}
+
+/**
+ * Convert a wire `McpServer` into the target the main-process MCP client dials.
+ * `env` / `headers` are `{name,value}` arrays on the wire and become Records here —
+ * the shape every transport implementation consumes. `cwd` applies to stdio only
+ * (the caller passes the session's cwd so relative args resolve as the agent saw them).
+ *
+ * `undefined` for the `acp` transport: that server is served over the ACP connection
+ * itself, so there is nothing for us to dial.
+ */
+export function mcpServerToTarget(
+  server: McpServer,
+  cwd?: string,
+): McpConnectTargetDto | undefined {
+  if (isDialableMcpServer(server)) {
+    const headers = pairsToRecord(server.headers)
+    return {
+      kind: server.type,
+      url: server.url,
+      ...(headers !== undefined ? { headers } : {}),
+    }
+  }
+  if ('type' in server) return undefined
+  const env = pairsToRecord(server.env)
+  return {
+    kind: 'stdio',
+    command: server.command,
+    args: server.args,
+    ...(env !== undefined ? { env } : {}),
+    ...(cwd !== undefined ? { cwd } : {}),
+  }
+}
+
+function pairsToRecord(
+  pairs: readonly { name: string; value: string }[],
+): Record<string, string> | undefined {
+  if (pairs.length === 0) return undefined
+  return Object.fromEntries(pairs.map((p) => [p.name, p.value]))
 }
 
 // ---------------------------------------------------------------------------

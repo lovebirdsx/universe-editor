@@ -400,6 +400,7 @@ import {
   ChatFindCloseAction,
 } from './agentActions.js'
 import { agentContextActions } from './agentContextActions.js'
+import { OpenMcpDebuggerAction } from './mcpDebugActions.js'
 import {
   ToggleSessionBookmarkActions,
   JumpToSessionBookmarkActions,
@@ -877,6 +878,7 @@ registerAction2(CopyAcpResourcePathAction)
 registerAction2(CopyAcpContextTextAction)
 registerAction2(CopyAcpReferenceAction)
 registerAction2(CopyAcpSubAgentTranscriptAction)
+registerAction2(OpenMcpDebuggerAction)
 registerAction2(OpenAcpToolCallPreviewAction)
 registerAction2(OpenAcpToolCallFileAction)
 registerAction2(OpenAcpToolCallPreviewToSideAction)

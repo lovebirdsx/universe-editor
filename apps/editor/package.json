@@ -52,6 +52,7 @@
     "@agentclientprotocol/sdk": "catalog:",
     "@floating-ui/react": "catalog:",
     "@fontsource/roboto": "catalog:",
+    "@modelcontextprotocol/sdk": "catalog:",
     "@playwright/test": "catalog:",
     "@react-aria/focus": "catalog:",
     "@tanstack/react-virtual": "catalog:",

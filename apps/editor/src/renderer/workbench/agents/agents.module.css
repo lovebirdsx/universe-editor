@@ -702,11 +702,17 @@
   gap: 8px;
 }
 
+/* One alignment model for the whole row — `center`, like every sibling header
+   (`.collapsibleHeader` / `.slotTitle` / `.slotActions`). This row mixes a title
+   text with pills, icon-only buttons and the elapsed-time line; under `baseline`
+   each non-text child has to opt out with its own `align-self: center`, and the
+   ones that don't (the stats line, the MCP badge) hang off the row's centerline
+   — and a wrapped title strands the icons on the first line's baseline. */
 .toolCallTitle {
   flex: 1;
   font-weight: 600;
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
   min-width: 0;
 }
@@ -726,7 +732,6 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  align-self: center;
   padding: 2px;
   border-radius: 3px;
   color: var(--vscode-descriptionForeground, #8a8a92);
@@ -735,6 +740,42 @@
 
 .toolCallReadAction + .subagentStats {
   margin-left: 0;
+}
+
+/* MCP replay sits between the read action and the stats badge. It carries the
+   same auto margin so it still reaches the right edge when the read action is
+   absent; the sibling rules below collapse the margin whenever something else
+   already claimed it (two auto margins would push the group apart). */
+.mcpReplayAction {
+  flex: none;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border-radius: 3px;
+  color: var(--vscode-descriptionForeground, #8a8a92);
+  cursor: pointer;
+}
+
+.toolCallReadAction + .mcpReplayAction,
+.mcpReplayAction + .subagentStats {
+  margin-left: 0;
+}
+
+.mcpReplayAction:hover {
+  background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.06));
+  color: var(--vscode-foreground, #ccc);
+}
+
+.mcpReplayAction[data-disabled='true'] {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.mcpReplayAction[data-disabled='true']:hover {
+  background: transparent;
+  color: var(--vscode-descriptionForeground, #8a8a92);
 }
 
 .toolCallReadAction:hover {

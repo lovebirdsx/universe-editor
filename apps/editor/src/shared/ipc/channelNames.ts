@@ -23,6 +23,7 @@ export const ServiceChannels = {
   Window: 'window',
   AcpHost: 'acpHost',
   AcpTerminal: 'acpTerminal',
+  McpClient: 'mcpClient',
   Terminal: 'terminal',
   ClaudeBinary: 'claudeBinary',
   ClaudeConfig: 'claudeConfig',

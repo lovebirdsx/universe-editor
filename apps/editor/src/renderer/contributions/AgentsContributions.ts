@@ -27,7 +27,9 @@ import { SessionListPanel } from '../workbench/agents/SessionListPanel.js'
 import { SessionsViewToolbar } from '../workbench/agents/SessionsViewToolbar.js'
 import { McpServersView } from '../workbench/agents/McpServersView.js'
 import { AcpSessionEditor } from '../workbench/agents/AcpSessionEditor.js'
+import { McpDebugPanel } from '../workbench/agents/McpDebugPanel.js'
 import { AcpSessionEditorInput } from '../services/acp/session/acpSessionEditorInput.js'
+import { McpDebugEditorInput } from '../services/acp/mcp/mcpDebugEditorInput.js'
 import { findSessionEditor } from '../services/acp/session/revealSessionEditorTab.js'
 import { IAcpSessionService } from '../services/acp/session/acpSessionService.js'
 import { AGENT_FONT_SIZE_DEFAULT } from '../services/configuration/fontDefaults.js'
@@ -485,6 +487,11 @@ export class AgentsEditorProviderContribution extends Disposable implements IWor
         },
         AcpSessionEditor,
       ),
+    )
+    // No deserialize: the debugger tab is deliberately not restored across a
+    // window reload — see McpDebugEditorInput.
+    this._register(
+      registerEditorWithComponent({ typeId: McpDebugEditorInput.TYPE_ID }, McpDebugPanel),
     )
   }
 }

@@ -9,7 +9,7 @@ Agent Client Protocol（ACP）客户端层。基于 `@agentclientprotocol/sdk` v
 ## 文件归位
 
 - **协议装配 / 网关**：`acpClientService.ts`（进程启动 + `ClientSideConnection` 装配 + refcount 连接池 + fs/terminal/permission 网关；**含 NUL 字节，改动前先读 [cases-acp-client-service.md](cases-acp-client-service.md)**）、`acpAgentRegistry.ts`（内置预设 + `acp.agents` 合并 + PATH 探测）、`acpPathPolicy.ts`（沙盒纯函数：cwd 相对性 + 敏感前缀拒绝）、`acpPermissionHandler.ts`（自动批准 + Memory 持久化）、`acpElicitationForm.ts`（elicitation → 表单模型）、`sdkHostStream.ts`（字符串 → Uint8Array IO 适配）
-- **MCP**：`acpMcpServers.ts`（配置 → wire `McpServer[]` 规范化 + 门控）、`mcpServerEnablementService.ts`（默认启停）、`agentMcpConfigService.ts`（agent 自有 MCP 配置文件路由门面）
+- **MCP**：`acpMcpServers.ts`（配置 → wire 规范化 + 门控）、`mcpServerEnablementService.ts`（默认启停）、`agentMcpConfigService.ts`（agent 配置路由）、`mcp/`（重放调试器 [cases-mcp-debug.md](cases-mcp-debug.md)）
 - **输入框**：@/# 药丸引用见 [cases-prompt-ref-pills.md](cases-prompt-ref-pills.md)，图片输入见 [cases-prompt-images.md](cases-prompt-images.md)，Monaco 编排见 [cases-prompt-input-monaco.md](cases-prompt-input-monaco.md)；`promptContext.ts`（选区上下文组装）、`sessionScope.ts`
 - **其余工具**：`persistedStateBase.ts`（双桶持久化基类）、`markdownRenderer.ts` / `markdownIncremental.ts` / `mentionFileSearch.ts` / `ansi.ts` / `filePathLink.ts` / `chatFindMatcher.ts` / `commandWrapper.ts` / `agentIconData.ts` / `agentNotificationIcon.ts` / `acpProtocolTracer.ts`、`acpModelCandidateService.ts` / `acpModelCandidates.ts` / `modelOneM.ts` / `configOptionLabel.ts` / `aiFixConfig.ts` / `sideTaskConfig.ts` / `aiFixPrompt.ts`（职责见文件名）
 - **测试**：`testing/inMemoryAcpPair.ts`（真 `ClientSideConnection` ↔ 桩 `AgentSideConnection` 对联）
@@ -75,7 +75,7 @@ agent 端（`vendor/claude-agent-acp`）把 wire 的 `env`/`headers` 数组还�
 
 **默认启用集语义（MCP 定义池 = 分层合并 + 每会话过滤，细节见 [cases-mcp-enablement.md](cases-mcp-enablement.md)）**：
 - **八层优先级（低→高）**：extension → agent-user → VSCodeUser → User → VSCodeWorkspace → Project → Memory → agent-project（`.mcp.json` / `<cwd>/.codex/config.toml`）。
-- **agent 自有配置文件只读导入**：编辑器只读不写；路由门面 `IAgentMcpConfigService`（`agentMcpConfigService.ts`）按 agentId 分发到 main 侧 `IClaudeConfigService` / `ICodexConfigService`。
+- **agent 自有配置文件只读导入**：编辑器只读不写；路由门面 `IAgentMcpConfigService` 按 agentId 分发到 main 侧 `IClaudeConfigService` / `ICodexConfigService`。
 - **per-agent 隔离（行为变更）**：agent 来源条目带 `McpAgentAffinity`；`readMcpServerDefinitionsLayered` 第 4 参省略 = union 视图（picker/设置面板），传值 = 丢弃 affinity 不匹配的 agent 层（两条 wire 路径）。**`.mcp.json` 收窄为只对 claude-code 会话生效**（不留 fallback 的行为破坏性变更）。
 - **union 同名跨 agent 条目（`sharedWith`）**：`filterPoolForSession` 凭它放行，否则同名条目在另一方的 picker 里会彻底消失（尽管该方 wire 路径包含它）。
 - **UI 消费 per-agent 视图统一入口 `filterPoolForSession(pool, agentId)`**（`McpServerPicker.tsx`）：picker / ConfigOptionsBar / ConfigBarOverflowMenu 三处共用。

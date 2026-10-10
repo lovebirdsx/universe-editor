@@ -360,6 +360,7 @@ export class WindowMainService implements IWindowMainService {
       // orphan (the host's tsserver tree keeps running too). Reclaim exactly
       // this window's local processes.
       void appServices.acpHost.stopAllForWindow(win.id)
+      void appServices.mcpClient.stopAllForWindow(win.id)
       void appServices.extensionHost.stopAllForWindow(win.id)
       if (e2eEnabled) return
       if (this._crashHandled.has(win.id)) return
@@ -448,6 +449,7 @@ export class WindowMainService implements IWindowMainService {
       this._rendererEpochs.set(win.id, this.getRendererEpoch(win.id) + 1)
       appServices.diagnostics.invalidateWindowRenderer(win.id, 'window-reloaded')
       void appServices.acpHost.stopAllForWindow(win.id)
+      void appServices.mcpClient.stopAllForWindow(win.id)
       void appServices.extensionHost.stopAllForWindow(win.id)
     })
 

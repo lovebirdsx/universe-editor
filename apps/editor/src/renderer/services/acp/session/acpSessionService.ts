@@ -58,6 +58,7 @@ import {
   agentIdToMcpAffinity,
   filterMcpServersByCapabilities,
   filterWireByNames,
+  findMcpServerByName,
   mcpServerRawToRecord,
   mcpServerTransport,
   mergeMcpServerRawLayers,
@@ -242,6 +243,10 @@ export interface IAcpCreateSessionOptions {
   readonly configDesiredOverrides?: Readonly<Record<string, string>>
 }
 
+export type McpServerConnectionResolution =
+  | { readonly kind: 'ok'; readonly server: McpServer }
+  | { readonly kind: 'not-found' }
+
 export interface IAcpSessionService {
   readonly _serviceBrand: undefined
   readonly sessions: IObservable<readonly IAcpSession[]>
@@ -392,6 +397,19 @@ export interface IAcpSessionService {
    * claude-code sessions (per-agent isolation).
    */
   readProjectMcpJson(): Promise<Record<string, unknown>>
+  /**
+   * Resolve ONE MCP server's full connection config by name, as the replay
+   * debugger needs it — the layer stack the wire path uses, but deliberately
+   * without the session whitelist and the default-disable overrides: replaying
+   * a server the session currently has *off* is exactly what a debugger is for.
+   * `not-found` means no layer for this agent declares that name.
+   */
+  resolveMcpServerConnection(args: {
+    readonly agentId: string | undefined
+    readonly serverName: string
+    readonly cwd?: string
+    readonly authority?: string
+  }): Promise<McpServerConnectionResolution>
   /**
    * Change the session's MCP whitelist (`null` = inherit the defaults).
    * Persists the pin to the history row (once the durable id exists), then
@@ -2887,6 +2905,22 @@ export class AcpSessionService
     } catch {
       return {}
     }
+  }
+
+  async resolveMcpServerConnection(args: {
+    readonly agentId: string | undefined
+    readonly serverName: string
+    readonly cwd?: string
+    readonly authority?: string
+  }): Promise<McpServerConnectionResolution> {
+    // Same cold-start barrier as both wire paths: the extension layer resolves
+    // asynchronously and the enablement overrides hydrate from storage, so an
+    // unguarded read can miss the very entry being asked for.
+    await Promise.all([this._extensionMcpServers.whenReady, this._mcpEnablement.whenReady])
+    const layers = await this._mcpLayers(args.agentId, args.cwd, args.authority)
+    const wire = this._readMcpServers(layers, agentIdToMcpAffinity(args.agentId))
+    const server = findMcpServerByName(wire, args.serverName)
+    return server !== undefined ? { kind: 'ok', server } : { kind: 'not-found' }
   }
 
   async refreshMcpServerDefinitions(agentId?: string): Promise<void> {

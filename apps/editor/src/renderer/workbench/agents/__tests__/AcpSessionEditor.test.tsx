@@ -35,6 +35,7 @@ import {
   IAcpSessionService,
   type IAcpSession,
   type IAcpSessionService as IAcpSessionServiceType,
+  type McpServerConnectionResolution,
 } from '../../../services/acp/session/acpSessionService.js'
 import {
   IAcpSessionHistoryService,
@@ -119,6 +120,9 @@ function makeService(
     setSessionMcpServers(): void {},
     async readProjectMcpJson(): Promise<Record<string, unknown>> {
       return {}
+    },
+    async resolveMcpServerConnection(): Promise<McpServerConnectionResolution> {
+      return { kind: 'not-found' }
     },
     getSessionCreateProfiles: () => [],
   } satisfies FakeAcpSessionService

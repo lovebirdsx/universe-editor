@@ -39,6 +39,7 @@ import {
   IPingService,
 } from '../../shared/ipc/services.js'
 import { IAcpHostService } from '../../shared/ipc/acpHostService.js'
+import { IMcpClientService } from '../../shared/ipc/mcpClientService.js'
 import { IExtensionHostService } from '../../shared/ipc/extensionHostService.js'
 import { IExtensionManagementService } from '../../shared/ipc/extensionManagementService.js'
 import { IExtensionGalleryService } from '../../shared/ipc/extensionGalleryService.js'
@@ -73,6 +74,7 @@ import {
   RecentWorkspacesMainService,
 } from './workspace/recentWorkspacesMainService.js'
 import { AcpHostMainService } from './acpHost/acpHostMainService.js'
+import { McpClientMainService } from './mcpClient/mcpClientMainService.js'
 import { ExtensionHostMainService } from './extensionHost/extensionHostMainService.js'
 import { RemoteExtensionHostService } from './extensionHost/remoteExtensionHostService.js'
 import { createTsServerSpecResolver } from './extensionHost/tsServerPaths.js'
@@ -164,6 +166,13 @@ registerSingletonFactory(
       acc.get(ILoggerService),
       acc.get(IRemoteConnectionService),
     ),
+)
+registerSingletonFactory(
+  IMcpClientService,
+  (acc) =>
+    new McpClientMainService(acc.get(ILoggerService), {
+      clientVersion: getAppVersion(),
+    }),
 )
 registerSingletonFactory(
   IExtensionHostService,

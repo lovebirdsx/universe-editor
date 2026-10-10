@@ -2149,6 +2149,7 @@ const TimelineSlot = memo(function TimelineSlot({
       return (
         <ToolCallCard
           call={item.call}
+          session={session}
           dataTimelineKey={key}
           dataStickyKey={key}
           dataStickyDepth={0}

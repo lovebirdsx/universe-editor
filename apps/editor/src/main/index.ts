@@ -76,7 +76,9 @@ import {
   IPerformanceMarksService,
 } from '../shared/ipc/services.js'
 import { IAcpHostService } from '../shared/ipc/acpHostService.js'
+import { IMcpClientService } from '../shared/ipc/mcpClientService.js'
 import { AcpHostMainService } from './services/acpHost/acpHostMainService.js'
+import { McpClientMainService } from './services/mcpClient/mcpClientMainService.js'
 import { IExtensionHostService } from '../shared/ipc/extensionHostService.js'
 import { ExtensionHostMainService } from './services/extensionHost/extensionHostMainService.js'
 import { IExtensionManagementService } from '../shared/ipc/extensionManagementService.js'
@@ -573,6 +575,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       textSearch: accessor.get(ITextSearchMainService),
       recentWorkspaces: accessor.get(IRecentWorkspacesService),
       acpHost: accessor.get(IAcpHostService) as AcpHostMainService,
+      mcpClient: accessor.get(IMcpClientService) as McpClientMainService,
       extensionHost: accessor.get(IExtensionHostService) as ExtensionHostMainService,
       extensionManagement: accessor.get(IExtensionManagementService),
       extensionGallery: accessor.get(IExtensionGalleryService),

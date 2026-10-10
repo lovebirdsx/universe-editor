@@ -20,6 +20,9 @@ allowedDeprecatedVersions:
 catalog:
   # Core
   '@agentclientprotocol/sdk': 1.2.1
+  # MCP 客户端（编辑器侧「重放 MCP 工具调用」调试器用）。与 vendor fork 内的
+  # 版本同 minor，避免两边协议行为漂移。
+  '@modelcontextprotocol/sdk': 1.32.1
   zod: ^3.25.0
   # TypeScript native (Go port) LSP preview — opt-in via UNIVERSE_TS_SERVER=native
   '@typescript/native-preview': 7.0.0-dev.20260707.2

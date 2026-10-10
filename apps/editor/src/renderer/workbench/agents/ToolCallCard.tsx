@@ -43,6 +43,7 @@ import { CodeBlock } from './CodeBlock.js'
 import { MessageContent } from './MessageContent.js'
 import { TerminalOutput, ToolCallSection, ToolCallStatusIcon } from './ToolCallOutput.js'
 import { SubagentStatsBadge } from './SubagentStatsBadge.js'
+import { McpReplayAction } from './McpReplayAction.js'
 import {
   deriveToolCallDisplay,
   createdFilePath,
@@ -102,7 +103,7 @@ export function ToolCallList({ session }: { session: IAcpSession }) {
   return (
     <ul className={styles['toolCallList']} data-testid="acp-toolcall-list">
       {calls.map((c) => (
-        <ToolCallCard key={c.id} call={c} />
+        <ToolCallCard key={c.id} call={c} session={session} />
       ))}
     </ul>
   )
@@ -110,6 +111,7 @@ export function ToolCallList({ session }: { session: IAcpSession }) {
 
 export const ToolCallCard = memo(function ToolCallCard({
   call,
+  session,
   extraClassName,
   dataTimelineKey,
   dataStickyKey,
@@ -120,6 +122,8 @@ export const ToolCallCard = memo(function ToolCallCard({
   badge,
 }: {
   call: AcpToolCall
+  /** Owning session — needed by the MCP replay action; absent in detached previews. */
+  session?: IAcpSession | undefined
   extraClassName?: string
   dataTimelineKey?: string
   dataStickyKey?: string
@@ -337,7 +341,7 @@ export const ToolCallCard = memo(function ToolCallCard({
         // children render bare, without sticky keys or focus rings.
         if (!subtreeCollapse) {
           if (c.kind === 'message') return <SubMessage key={c.id} message={c.message} />
-          return <ToolCallCard key={c.id} call={c.call} />
+          return <ToolCallCard key={c.id} call={c.call} session={session} />
         }
         const childKey = buildStickyKey(subtreeCollapse.stickyKey, c)
         const childFocused = subtreeCollapse.focusedKey === childKey
@@ -359,6 +363,7 @@ export const ToolCallCard = memo(function ToolCallCard({
           <ToolCallCard
             key={c.id}
             call={c.call}
+            session={session}
             collapsed={resolveCollapsed(childKey, c, subtreeCollapse.collapse)}
             onToggleCollapse={() => subtreeCollapse.toggle(childKey)}
             subtreeCollapse={{
@@ -454,6 +459,7 @@ export const ToolCallCard = memo(function ToolCallCard({
         </span>
       )}
       {readAction}
+      <McpReplayAction call={call} session={session} />
       <SubagentStatsBadge call={call} />
     </span>
   )
