@@ -28,6 +28,7 @@
 - **必须自带 clamp**：Allotment 对越界请求只静默 clamp，屏上值与 persisted 值就此漂移，下一次按键会从错误的基线起算。
 - **不要 bump version**：`setViewSizes` 有意不 bump（高频按键会变成高频整树 re-render）；DOM 已由 `resize()` 更新。
 - **键盘与拖动共用 `userResizedRef`**：在 `handle.resize()` 前置位，阻止启动窗口内的 `onChange` 按旧持久化值撤销本次操作；`sashDraggingRef` 仍只表示正在拖动。连续 grow → shrink 是必要回归场景，单次按键无法暴露旧尺寸覆盖。
+- **恢复校正「未应用即保持武装」（跨重载恢复的兜底）**：`correctToStoredSizes` 返回「是否已按持久化值对齐」；`storedSizesKey` 代表的这次恢复只在返回 true 后才算消费——几何未上报 / 有折叠 pane / 容器装不下（`deficit<0`）都保持 pending，由后续 onChange 重试，**不受 600ms 窗口限制**。窗口只约束「启动几何沉降需要的额外校正」，不是恢复的截止时间：慢机上 reconcile 会早于 Allotment 首次上报几何落地、首帧容器又常小于持久化总和，两条老路径（窗口内 onChange + 一次性 key effect）会同时失守，等分被 `proportionalLayout` 原样保持、5s 内无人拉回（CI 现象：reload 后 pane 高度恰差一个 `RESIZE_STEP`）。用户操作（`userResizedRef`）作废 pending，用户优先语义不变。
 
 ## 验证
 

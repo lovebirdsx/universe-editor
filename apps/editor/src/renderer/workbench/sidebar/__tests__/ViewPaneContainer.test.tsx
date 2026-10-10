@@ -474,4 +474,93 @@ describe('ViewPaneContainer', () => {
     expect(paneHeightPx('test.view.a')).toBe(200)
     expect(paneHeightPx('test.view.b')).toBe(400)
   })
+
+  it('restores the persisted split when the first geometry report lands past the settle window', async () => {
+    // A container activated late by the restore path itself (SCM) mounts while
+    // reconcileFromStorage() is still in flight: the stored-sizes effect fires
+    // with Allotment's geometry still unreported (it is edge-triggered, so it
+    // never runs again) and the first onChange can land after the 600 ms settle
+    // window. Neither correction path can help — the restore must survive on
+    // its own, because the panes are only built by that first layout, which is
+    // exactly when preferredSize is read.
+    vi.useFakeTimers()
+    try {
+      const storage = makeStorage()
+      storage.get = vi.fn().mockResolvedValue({
+        viewStates: {
+          'test.view.a': { size: 200 },
+          'test.view.b': { size: 400 },
+        },
+      })
+      const viewDescriptorService = new ViewDescriptorService(
+        storage,
+        stubWorkspace,
+        new ContextKeyService(),
+        stubLoggerService,
+      )
+      renderSideBar(viewDescriptorService)
+
+      // The reconcile lands before Allotment ever reported any geometry.
+      await act(async () => {
+        await viewDescriptorService.reconcileFromStorage()
+      })
+      expect(viewDescriptorService.getPersistedViewSize('test.view.a')).toBe(200)
+      // Precondition: Allotment has not added the panes yet — no geometry.
+      expect(
+        screen.getByTestId('view-pane-test.view.a').closest('[data-testid="split-view-view"]'),
+      ).toBeNull()
+
+      // A slow first layout: the ResizeObserver only reports once the settle
+      // window has expired.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000)
+      })
+      act(() => fireLastResizeObserver(800, 600))
+
+      expect(paneHeightPx('test.view.a')).toBe(200)
+      expect(paneHeightPx('test.view.b')).toBe(400)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps chasing the persisted split after the container grows past the settle window', async () => {
+    // The deferred branch of the correction: a container too short for the
+    // persisted total must not be resized (the request would be clamped and
+    // the correction would chase its own clamp), but the growth that follows
+    // — possibly long after the settle window — must still land on it.
+    vi.useFakeTimers()
+    try {
+      const storage = makeStorage()
+      storage.get = vi.fn().mockResolvedValue({
+        viewStates: {
+          'test.view.a': { size: 200 },
+          'test.view.b': { size: 400 },
+        },
+      })
+      const viewDescriptorService = new ViewDescriptorService(
+        storage,
+        stubWorkspace,
+        new ContextKeyService(),
+        stubLoggerService,
+      )
+      renderSideBar(viewDescriptorService)
+      await act(async () => {
+        await viewDescriptorService.reconcileFromStorage()
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000)
+      })
+
+      // First geometry: container (300) is shorter than the persisted total.
+      act(() => fireLastResizeObserver(800, 300))
+      // It grows — outside the settle window — into the persisted split.
+      act(() => fireLastResizeObserver(800, 600))
+
+      expect(paneHeightPx('test.view.a')).toBe(200)
+      expect(paneHeightPx('test.view.b')).toBe(400)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

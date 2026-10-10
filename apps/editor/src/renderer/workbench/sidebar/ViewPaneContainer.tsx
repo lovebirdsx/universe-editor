@@ -240,13 +240,17 @@ export function ViewPaneContainer({
   // re-entering the correction from that nested report could recurse (or ping
   // -pong when the container is smaller than the persisted total).
   const correctingRef = useRef(false)
-  const correctToStoredSizes = (sizes: readonly number[]) => {
-    if (sashDraggingRef.current || correctingRef.current) return
-    if (sizes.length !== views.length) return
+  // True when the panes hold the persisted split afterwards. False means the
+  // request has to stay armed for a later geometry report (see onChange) —
+  // geometry not reported yet, a collapsed pane owning the split, or a
+  // container too short for the persisted total.
+  const correctToStoredSizes = (sizes: readonly number[]): boolean => {
+    if (sashDraggingRef.current || correctingRef.current) return false
+    if (sizes.length !== views.length) return false
     // With a collapsed pane the split is owned by the toggle effect above
     // (collapsed pane pinned to its header, the open panes absorb the rest) —
     // a persisted-size correction would fight that distribution.
-    if (views.some((v) => collapsed(v.id))) return
+    if (views.some((v) => collapsed(v.id))) return false
     // Keep the container's current total: only re-distribute it among the
     // panes (VSCode sash semantics — a sash move never changes the container
     // size). Scaling a persisted total down into a smaller container gets
@@ -260,9 +264,9 @@ export function ViewPaneContainer({
     const deficit = total - baseSum
     // Container smaller than the persisted total: stay out — Allotment's own
     // clamped distribution is the reasonable one, and chasing absolute sizes
-    // into it would loop resize→clamp→report→resize. When the container grows
-    // to fit (startup geometry settle), the next report corrects the split.
-    if (deficit < 0) return
+    // into it would loop resize→clamp→report→resize. The request stays armed,
+    // so the split is still corrected when the container grows to fit.
+    if (deficit < 0) return false
     // Hand any extra room (container taller than the persisted total) to the
     // bottom-most pane, mirroring the greedy SplitView distribution.
     const target = bases.map((size, i) => (i === bases.length - 1 ? size + deficit : size))
@@ -274,22 +278,25 @@ export function ViewPaneContainer({
         correctingRef.current = false
       }
     }
+    return true
   }
   // A reconcile landing AFTER the first layout surfaces as a stored-sizes key
-  // change (reconcileFromStorage bumps the version): correct the split. The
-  // key is consumed only once the mounted Allotment has reported real geometry
-  // — before that the first-onChange correction above owns the window.
+  // change (reconcileFromStorage bumps the version): correct the split. A key
+  // whose correction could not be applied stays pending and is retried from
+  // onChange — a late reconcile on a slow machine must not lose the restore
+  // once the settle window has passed. User actions retire it instead.
   const storedSizesKey = views
     .map((v) => (collapsed(v.id) ? '' : String(viewDescriptors.getPersistedViewSize(v.id) ?? '')))
     .join('|')
-  const prevStoredSizesKeyRef = useRef(storedSizesKey)
+  const storedSizesKeyRef = useRef(storedSizesKey)
+  storedSizesKeyRef.current = storedSizesKey
+  const appliedStoredSizesKeyRef = useRef(storedSizesKey)
   useLayoutEffect(() => {
-    const prevKey = prevStoredSizesKeyRef.current
+    if (appliedStoredSizesKeyRef.current === storedSizesKey) return
     const handle = allotmentRef.current
     const sizes = sizesRef.current
-    if (!handle || prevKey === storedSizesKey || sizes.length !== views.length) return
-    prevStoredSizesKeyRef.current = storedSizesKey
-    correctToStoredSizes(sizes)
+    if (!handle || sizes.length !== views.length) return
+    if (correctToStoredSizes(sizes)) appliedStoredSizesKeyRef.current = storedSizesKey
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storedSizesKey])
 
@@ -374,8 +381,20 @@ export function ViewPaneContainer({
           // an earlier correction — e.g. the window's own startup geometry
           // settle re-layouts the container a second time — with no further
           // stored-sizes key change to retrigger the effect above. A user
-          // sash drag takes precedence (sashDraggingRef / userResizedRef).
-          if (!isLayoutSettledRef.current && !userResizedRef.current) correctToStoredSizes(s)
+          // sash drag takes precedence (sashDraggingRef / userResizedRef). A
+          // restore still pending from the effect above is retried on every
+          // report, however late it arrives — the settle window only bounds
+          // the *extra* corrections the startup geometry settle needs.
+          if (userResizedRef.current) {
+            appliedStoredSizesKeyRef.current = storedSizesKeyRef.current
+          } else if (
+            appliedStoredSizesKeyRef.current !== storedSizesKeyRef.current ||
+            !isLayoutSettledRef.current
+          ) {
+            if (correctToStoredSizes(s)) {
+              appliedStoredSizesKeyRef.current = storedSizesKeyRef.current
+            }
+          }
           // In-memory bookkeeping only (drives collapse/expand restore math
           // and the collapse-time remembered-size snapshot). Persisting here
           // would let layout noise — notably the pre-reconcile equal split —

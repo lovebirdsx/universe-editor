@@ -262,6 +262,17 @@ test.describe('@p0 view pane sizes', () => {
 
         const mainBefore = await paneHeight(page, SCM_VIEW)
         const commitBefore = await paneHeight(page, COMMIT_CHANGES_VIEW)
+        // The persisted (authoritative) sizes as the renderer currently sees
+        // them — the diagnostic that separates "never reached the disk" from
+        // "the restore did not apply it".
+        const persistedSizes = () =>
+          page.evaluate(
+            (ids) => ({
+              main: window.__E2E__!.getPersistedViewSize(ids.main),
+              commit: window.__E2E__!.getPersistedViewSize(ids.commit),
+            }),
+            { main: SCM_VIEW, commit: COMMIT_CHANGES_VIEW },
+          )
 
         // Commit Changes sits below Source Control, so growing it borrows upward
         // by exactly one step — the chrome (the sidebar's own width) is untouched.
@@ -305,6 +316,16 @@ test.describe('@p0 view pane sizes', () => {
           )
           .toBeLessThanOrEqual(3)
         await page.evaluate(() => window.__E2E__!.flushViewCustomizationsSave())
+        // Pin the value on its way to disk: when the reload lands on an equal
+        // split again, this separates "the keypress never reached the disk"
+        // from "the restore did not apply it" instead of leaving the pane
+        // height assertion to guess between the two.
+        const persistedBefore = await persistedSizes()
+        console.log(`[viewSizes] persisted before reload: ${JSON.stringify(persistedBefore)}`)
+        expect(
+          Math.abs((persistedBefore.commit ?? -1) - (commitBefore + RESIZE_STEP)),
+          'the keyboard resize must reach the persisted map before the reload',
+        ).toBeLessThanOrEqual(3)
 
         const loaded = page.waitForEvent('load')
         void page
@@ -319,6 +340,21 @@ test.describe('@p0 view pane sizes', () => {
         )
         await waitForViewPane(page, SCM_VIEW)
         await waitForViewPane(page, COMMIT_CHANGES_VIEW)
+
+        // The reloaded window must read the persisted split back (the renderer
+        // reconcile can land after the container mounts, so this polls rather
+        // than sampling once). Failing here means the read/restore path, not
+        // the keyboard-resize write path above.
+        await expect
+          .poll(
+            async () =>
+              Math.abs(((await persistedSizes()).commit ?? -1) - (commitBefore + RESIZE_STEP)),
+            {
+              message: 'the reloaded window must read the keyboard resize back',
+              timeout: 5000,
+            },
+          )
+          .toBeLessThanOrEqual(3)
 
         await expect
           .poll(
