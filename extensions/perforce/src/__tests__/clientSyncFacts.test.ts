@@ -101,7 +101,7 @@ function installBridge(): void {
 
 const { PerforceClient } = await import('../client.js')
 const { ConcurrencyGate } = await import('../concurrency.js')
-const { P4deltaService } = await import('../p4deltaService.js')
+const { P4deltaService } = await import('../p4delta/p4deltaService.js')
 
 const ROOT = process.platform === 'win32' ? 'C:\\ws' : '/ws'
 const DISCOVERY_SPEC = clientSpecReply(ROOT)

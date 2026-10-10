@@ -274,6 +274,17 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.swarm.updateReview.pickPlaceholder': '选择要用 changelist {0} 更新的 Swarm 审核',
   'perforce.swarm.updateReview.noneAuthored': '你没有进行中的审核——请输入要更新的审核编号',
   'perforce.swarm.updateReview.idPrompt': '要更新的 Swarm 审核编号',
+  // p4delta managed copy (perforce.p4delta.autoInstall / the install command)
+  'perforce.p4delta.installed': '已安装 p4delta {0}。',
+  'perforce.p4delta.updated': '已安装 p4delta {0}（原为 {1}）。',
+  'perforce.p4delta.install.title': '正在安装 p4delta',
+  'perforce.p4delta.install.showLog': '显示日志',
+  'perforce.p4delta.install.upToDate': 'p4delta {0} 已是当前版本。',
+  'perforce.p4delta.install.failed': '无法安装 p4delta：{0}',
+  'perforce.p4delta.install.throttled': '刚刚检查过，请稍后再试',
+  'perforce.p4delta.install.noStorage': '此宿主没有扩展存储目录，无法安装托管的 p4delta。',
+  'perforce.p4delta.install.unsupportedPlatform':
+    'p4delta 没有为当前平台发布构建。请自行安装并设置 perforce.p4delta.path。',
 }
 
 const useZhCn = (process.env.UNIVERSE_DISPLAY_LOCALE ?? '').toLowerCase().startsWith('zh')

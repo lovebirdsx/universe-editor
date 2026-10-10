@@ -108,9 +108,9 @@ function installBridge(): void {
 
 const { PerforceClient } = await import('../client.js')
 const { ConcurrencyGate } = await import('../concurrency.js')
-const { P4deltaService } = await import('../p4deltaService.js')
-type P4deltaRecord = import('../p4deltaService.js').P4deltaRecord
-type P4deltaRunResult = import('../p4deltaService.js').P4deltaRunResult
+const { P4deltaService } = await import('../p4delta/p4deltaService.js')
+type P4deltaRecord = import('../p4delta/p4deltaService.js').P4deltaRecord
+type P4deltaRunResult = import('../p4delta/p4deltaService.js').P4deltaRunResult
 
 const ROOT = process.platform === 'win32' ? 'C:\\ws' : '/ws'
 const DISCOVERY_SPEC = clientSpecReply(ROOT)
@@ -209,7 +209,8 @@ const p4deltaCalls: string[][] = []
 
 /** The run options per stubbed run — how a test observes (and drives) the
  *  progress and pid callbacks a get forwards to the engine. */
-const p4deltaOptions: Array<import('../p4deltaService.js').P4deltaRunOptions | undefined> = []
+const p4deltaOptions: Array<import('../p4delta/p4deltaService.js').P4deltaRunOptions | undefined> =
+  []
 
 interface DeltaReply {
   records?: P4deltaRecord[]

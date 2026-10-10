@@ -1,5 +1,7 @@
 import { EventEmitter } from 'node:events'
+import { writeFileSync } from 'node:fs'
 import { delimiter, join } from 'node:path'
+import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // `resolveP4deltaCommand` only ever asks the filesystem whether a candidate
@@ -32,7 +34,7 @@ const spawnMock = vi.fn<(...args: unknown[]) => FakeChildProcess>()
 vi.mock('node:child_process', () => ({ spawn: (...args: unknown[]) => spawnMock(...args) }))
 
 const { P4deltaService, p4deltaSpawnCommand, resolveP4deltaCommand } =
-  await import('../p4deltaService.js')
+  await import('../p4delta/p4deltaService.js')
 const { ConcurrencyGate } = await import('../concurrency.js')
 
 /** The executable name the resolver looks for on THIS platform. */
@@ -102,7 +104,10 @@ describe('resolveP4deltaCommand', () => {
     process.env.UNIVERSE_P4DELTA_PATH = '/opt/e2e/p4delta'
     process.env.PATH = ['/usr/bin'].join(delimiter)
     fsState.existing.add(join('/usr/bin', EXE_NAME))
-    expect(resolveP4deltaCommand('/configured/p4delta')).toBe('/opt/e2e/p4delta')
+    expect(resolveP4deltaCommand('/configured/p4delta')).toEqual({
+      exe: '/opt/e2e/p4delta',
+      source: 'env',
+    })
   })
 
   it('honors a configured path verbatim, even when it does not exist yet', () => {
@@ -110,14 +115,18 @@ describe('resolveP4deltaCommand', () => {
     // silently select some other p4delta from PATH.
     process.env.PATH = ['/usr/bin'].join(delimiter)
     fsState.existing.add(join('/usr/bin', EXE_NAME))
-    expect(resolveP4deltaCommand('/configured/p4delta')).toBe('/configured/p4delta')
+    expect(resolveP4deltaCommand('/configured/p4delta')).toEqual({
+      exe: '/configured/p4delta',
+      source: 'configured',
+    })
   })
 
   it('falls through an empty setting to PATH', () => {
     process.env.PATH = ['/empty', '/usr/bin'].join(delimiter)
     fsState.existing.add(join('/usr/bin', EXE_NAME))
-    expect(resolveP4deltaCommand('')).toBe(join('/usr/bin', EXE_NAME))
-    expect(resolveP4deltaCommand(undefined)).toBe(join('/usr/bin', EXE_NAME))
+    const expected = { exe: join('/usr/bin', EXE_NAME), source: 'path' }
+    expect(resolveP4deltaCommand('')).toEqual(expected)
+    expect(resolveP4deltaCommand(undefined)).toEqual(expected)
   })
 
   it('returns undefined when nothing is installed', () => {
@@ -135,7 +144,7 @@ describe('resolveP4deltaCommand', () => {
     // hardcoded forward-slash key would never match on Windows.
     const installed = join('/tools', 'p4delta.exe')
     fsState.existing.add(installed)
-    expect(resolveP4deltaCommand('')).toBe(installed)
+    expect(resolveP4deltaCommand('')).toEqual({ exe: installed, source: 'path' })
   })
 
   it('finds the default Windows install location when PATH has nothing', () => {
@@ -144,7 +153,73 @@ describe('resolveP4deltaCommand', () => {
     process.env.LOCALAPPDATA = '/Users/testuser/AppData/Local'
     const installed = join('/Users/testuser/AppData/Local', 'Programs', 'p4delta', 'p4delta.exe')
     fsState.existing.add(installed)
-    expect(resolveP4deltaCommand('')).toBe(installed)
+    expect(resolveP4deltaCommand('')).toEqual({ exe: installed, source: 'localAppData' })
+  })
+})
+
+// The managed copy is the LAST tier: a machine that already has its own δ keeps
+// using it, and only a machine with nothing else falls through to the tree the
+// extension maintains. These read a real `.active` file (only `existsSync` is
+// faked in this suite), so they get a real directory.
+describe('resolveP4deltaCommand: the managed tier', () => {
+  let root: string
+  const savedPath = process.env.PATH
+  const savedLocalAppData = process.env.LOCALAPPDATA
+
+  beforeEach(() => {
+    root = mkTempDir('ue-p4delta-cmd-')
+    fsState.existing.clear()
+    delete process.env.UNIVERSE_P4DELTA_PATH
+    process.env.PATH = ['/empty'].join(delimiter)
+    process.env.LOCALAPPDATA = '/nonexistent'
+  })
+
+  afterEach(() => {
+    removeDirWithRetry(root)
+    if (savedPath === undefined) delete process.env.PATH
+    else process.env.PATH = savedPath
+    if (savedLocalAppData === undefined) delete process.env.LOCALAPPDATA
+    else process.env.LOCALAPPDATA = savedLocalAppData
+    fsState.existing.clear()
+  })
+
+  const activate = (version: string): string => {
+    writeFileSync(join(root, '.active'), version)
+    const exe = join(root, version, 'p4delta.exe')
+    fsState.existing.add(exe)
+    return exe
+  }
+
+  it('answers only after every self-installed tier came up empty', () => {
+    const managed = activate('0.1.10')
+    expect(resolveP4deltaCommand('', root)).toEqual({ exe: managed, source: 'managed' })
+  })
+
+  it('yields to a copy the machine already has', () => {
+    process.env.PATH = ['/usr/bin'].join(delimiter)
+    const onPath = join('/usr/bin', EXE_NAME)
+    fsState.existing.add(onPath)
+    activate('0.1.10')
+    expect(resolveP4deltaCommand('', root)).toEqual({ exe: onPath, source: 'path' })
+  })
+
+  it('yields to a configured path', () => {
+    activate('0.1.10')
+    expect(resolveP4deltaCommand('/configured/p4delta', root)).toEqual({
+      exe: '/configured/p4delta',
+      source: 'configured',
+    })
+  })
+
+  it('is skipped entirely without a root', () => {
+    activate('0.1.10')
+    expect(resolveP4deltaCommand('', undefined)).toBeUndefined()
+    expect(resolveP4deltaCommand('', '')).toBeUndefined()
+  })
+
+  it('reports nothing for a pointer with no copy behind it', () => {
+    writeFileSync(join(root, '.active'), '0.1.10')
+    expect(resolveP4deltaCommand('', root)).toBeUndefined()
   })
 })
 

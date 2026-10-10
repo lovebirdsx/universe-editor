@@ -11,8 +11,12 @@
  *     there) degrades to native with a log line — never an error dialog, never a
  *     throw. The binary itself is taken as capable of the whole surface the
  *     extension drives: there is no version gate.
+ *  4. The managed copy (p4deltaStore) is the LAST tier: `managedRoot` reaches the
+ *     resolver, and whatever it answers is admitted on existence like any other
+ *     source — a managed path that is not there degrades to native too.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { P4deltaCandidate } from '../p4delta/p4deltaService.js'
 
 // extension.ts pulls in the whole extension surface at import time; stub the API
 // so importing the gate helper doesn't require the real host (same shape as
@@ -24,14 +28,15 @@ vi.mock('@universe-editor/extension-api', () => ({
 }))
 
 const p4deltaMocks = vi.hoisted(() => ({
-  resolveP4deltaCommand: vi.fn<(configuredPath?: string) => string | undefined>(),
+  resolveP4deltaCommand:
+    vi.fn<(configuredPath?: string, managedRoot?: string) => P4deltaCandidate | undefined>(),
 }))
-vi.mock('../p4deltaService.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../p4deltaService.js')>()
+vi.mock('../p4delta/p4deltaService.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../p4delta/p4deltaService.js')>()
   return {
     ...actual,
-    resolveP4deltaCommand: (configuredPath?: string) =>
-      p4deltaMocks.resolveP4deltaCommand(configuredPath),
+    resolveP4deltaCommand: (configuredPath?: string, managedRoot?: string) =>
+      p4deltaMocks.resolveP4deltaCommand(configuredPath, managedRoot),
   }
 })
 
@@ -60,6 +65,11 @@ const { resolveP4deltaEngine } = await import('../extension.js')
 
 const EXE = process.platform === 'win32' ? 'C:/tools/p4delta.exe' : '/opt/p4delta'
 const P4_SCRIPT = process.platform === 'win32' ? 'C:/e2e/fake-p4.mjs' : '/e2e/fake-p4.mjs'
+const MANAGED_ROOT = process.platform === 'win32' ? 'C:/store/p4delta' : '/store/p4delta'
+const MANAGED_EXE =
+  process.platform === 'win32'
+    ? 'C:/store/p4delta/0.1.10/p4delta.exe'
+    : '/store/p4delta/0.1.10/p4delta.exe'
 
 describe('resolveP4deltaEngine', () => {
   beforeEach(() => {
@@ -93,7 +103,7 @@ describe('resolveP4deltaEngine', () => {
 
   it('keeps the engine under a p4 script override when the δ path is configured', () => {
     p4Mocks.resolveP4Command.mockReturnValue({ command: 'node', prefixArgs: [P4_SCRIPT] })
-    p4deltaMocks.resolveP4deltaCommand.mockReturnValue(EXE)
+    p4deltaMocks.resolveP4deltaCommand.mockReturnValue({ exe: EXE, source: 'path' })
     fsState.existing.add(EXE)
     const log = vi.fn()
 
@@ -108,7 +118,7 @@ describe('resolveP4deltaEngine', () => {
   it('keeps the engine under a p4 script override when UNIVERSE_P4DELTA_PATH names it', () => {
     process.env.UNIVERSE_P4DELTA_PATH = EXE
     p4Mocks.resolveP4Command.mockReturnValue({ command: 'node', prefixArgs: [P4_SCRIPT] })
-    p4deltaMocks.resolveP4deltaCommand.mockReturnValue(EXE)
+    p4deltaMocks.resolveP4deltaCommand.mockReturnValue({ exe: EXE, source: 'path' })
     fsState.existing.add(EXE)
 
     const engine = resolveP4deltaEngine({ enabled: true, path: '' }, vi.fn())
@@ -117,7 +127,7 @@ describe('resolveP4deltaEngine', () => {
   })
 
   it('returns the resolved executable', () => {
-    p4deltaMocks.resolveP4deltaCommand.mockReturnValue(EXE)
+    p4deltaMocks.resolveP4deltaCommand.mockReturnValue({ exe: EXE, source: 'path' })
     fsState.existing.add(EXE)
     const log = vi.fn()
 
@@ -126,7 +136,7 @@ describe('resolveP4deltaEngine', () => {
     // A real p4 needs no pointer: δ's own lookup finds the same one, and forcing
     // P4_EXE would make it demand a file literally named `p4`.
     expect(engine).toEqual({ exe: EXE })
-    expect(p4deltaMocks.resolveP4deltaCommand).toHaveBeenCalledWith('')
+    expect(p4deltaMocks.resolveP4deltaCommand).toHaveBeenCalledWith('', undefined)
     expect(log).toHaveBeenCalledWith(expect.stringContaining(EXE))
   })
 
@@ -143,12 +153,41 @@ describe('resolveP4deltaEngine', () => {
   // The whole admission test, now that no version gate exists: the file has to
   // be there. Nothing about the binary is sampled.
   it('degrades to native when the resolved path is not there', () => {
-    p4deltaMocks.resolveP4deltaCommand.mockReturnValue(EXE)
+    p4deltaMocks.resolveP4deltaCommand.mockReturnValue({ exe: EXE, source: 'path' })
     const log = vi.fn()
 
     const engine = resolveP4deltaEngine({ enabled: true, path: EXE }, log)
 
     expect(engine).toBeUndefined()
     expect(log).toHaveBeenCalledWith(expect.stringContaining('not found'))
+  })
+
+  it('hands the managed root to the resolver and admits what it answers', () => {
+    p4deltaMocks.resolveP4deltaCommand.mockReturnValue({ exe: MANAGED_EXE, source: 'managed' })
+    fsState.existing.add(MANAGED_EXE)
+    const log = vi.fn()
+
+    const engine = resolveP4deltaEngine({ enabled: true, path: '' }, log, MANAGED_ROOT)
+
+    expect(engine).toEqual({ exe: MANAGED_EXE })
+    expect(p4deltaMocks.resolveP4deltaCommand).toHaveBeenCalledWith('', MANAGED_ROOT)
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('(managed)'))
+  })
+
+  it('degrades to native when the managed copy is gone between resolution and admission', () => {
+    p4deltaMocks.resolveP4deltaCommand.mockReturnValue({ exe: MANAGED_EXE, source: 'managed' })
+    const log = vi.fn()
+
+    const engine = resolveP4deltaEngine({ enabled: true, path: '' }, log, MANAGED_ROOT)
+
+    expect(engine).toBeUndefined()
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('not found'))
+  })
+
+  it('disables the managed tier entirely without a root', () => {
+    p4deltaMocks.resolveP4deltaCommand.mockReturnValue(undefined)
+
+    expect(resolveP4deltaEngine({ enabled: true, path: '' }, vi.fn())).toBeUndefined()
+    expect(p4deltaMocks.resolveP4deltaCommand).toHaveBeenCalledWith('', undefined)
   })
 })

@@ -36,12 +36,13 @@
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { delimiter, join } from 'node:path'
-import type { ConcurrencyGate, P4Priority } from './concurrency.js'
+import type { ConcurrencyGate, P4Priority } from '../concurrency.js'
 import {
   DEFAULT_MAX_OUTPUT_BYTES,
   DEFAULT_P4_COMMAND_TIMEOUT_MS,
   type P4Connection,
-} from './p4Service.js'
+} from '../p4Service.js'
+import { activeManagedP4delta } from './p4deltaStore.js'
 
 /** One parsed JSON line. Fields stay loose: the contract guarantees more than
  *  the readers assume, so every read validates (see p4deltaParser). */
@@ -157,31 +158,70 @@ function envForSpawn(command: string, base: NodeJS.ProcessEnv): NodeJS.ProcessEn
 }
 
 /**
+ * Where a resolved copy came from. The gate treats `env` / `configured`
+ * differently from the rest: those two are an operator naming a binary, so a
+ * refusal there must not silently fall through to another copy.
+ */
+export type P4deltaSource = 'env' | 'configured' | 'path' | 'localAppData' | 'managed'
+
+export interface P4deltaCandidate {
+  readonly exe: string
+  readonly source: P4deltaSource
+}
+
+/**
  * The p4delta executable to spawn, or undefined when this machine has none.
- * Order: `UNIVERSE_P4DELTA_PATH` (the e2e / escape-hatch override, mirroring
- * `UNIVERSE_P4_PATH`), then the configured path, then `p4delta` on PATH (on
- * win32 `p4delta.exe`), then the Windows default install location.
+ *
+ * Order — self-installed copies first, the editor's own copy last:
+ * `UNIVERSE_P4DELTA_PATH` (the e2e / escape-hatch override, mirroring
+ * `UNIVERSE_P4_PATH`), then the configured path, then `p4delta` on PATH, then
+ * the Windows default install location, then the managed copy under
+ * `managedRoot` (see p4deltaStore). A machine that already has its own δ keeps
+ * using it; the managed one exists so that a machine without one still gets δ,
+ * and it is only ever consulted when nothing else answered.
  *
  * A non-empty override is returned verbatim: a configured path that does not
  * exist has to surface as a refusal at the gate (one clear log line), not
  * silently fall through to some other copy of the binary. An empty string
- * counts as unset — that is the setting's default.
+ * counts as unset — that is the setting's default. The same rule applies to
+ * `managedRoot`: absent or empty disables the managed tier entirely, and the
+ * order is then byte-for-byte what it was before that tier existed.
  */
-export function resolveP4deltaCommand(configuredPath?: string): string | undefined {
+export function resolveP4deltaCommand(
+  configuredPath?: string,
+  managedRoot?: string,
+): P4deltaCandidate | undefined {
   const override = process.env.UNIVERSE_P4DELTA_PATH
-  if (override) return override
-  if (configuredPath) return configuredPath
+  if (override) return { exe: override, source: 'env' }
+  if (configuredPath) return { exe: configuredPath, source: 'configured' }
   const exeName = process.platform === 'win32' ? 'p4delta.exe' : 'p4delta'
   const onPath = locateOnPath(exeName)
-  if (onPath) return onPath
+  if (onPath) return { exe: onPath, source: 'path' }
   if (process.platform === 'win32') {
     const localAppData = process.env.LOCALAPPDATA
     if (localAppData) {
       const installed = join(localAppData, 'Programs', 'p4delta', 'p4delta.exe')
-      if (existsSync(installed)) return installed
+      if (existsSync(installed)) return { exe: installed, source: 'localAppData' }
     }
   }
+  if (managedRoot !== undefined && managedRoot !== '') {
+    const managed = activeManagedP4delta(managedRoot)
+    if (managed !== undefined) return { exe: managed, source: 'managed' }
+  }
   return undefined
+}
+
+/**
+ * Whether the session named an engine explicitly — `UNIVERSE_P4DELTA_PATH` or a
+ * non-empty `perforce.p4delta.path` — as opposed to the editor finding one.
+ *
+ * Two callers share this one predicate: the gate uses it for the p4-script
+ * hedge (an explicitly named pair is the operator saying "these two are mine"),
+ * and the installer uses it to stay out of the way (a named engine is a
+ * deliberate choice, and downloading a second copy would be noise).
+ */
+export function p4deltaNamedExplicitly(configuredPath: string): boolean {
+  return Boolean(process.env.UNIVERSE_P4DELTA_PATH) || configuredPath !== ''
 }
 
 function locateOnPath(exeName: string): string | undefined {

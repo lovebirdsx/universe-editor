@@ -4,8 +4,8 @@ import {
   summarizeRun,
   toReconcileFiles,
   toSyncOutcome,
-} from '../p4deltaParser.js'
-import type { P4deltaRunResult } from '../p4deltaService.js'
+} from '../p4delta/p4deltaParser.js'
+import type { P4deltaRunResult } from '../p4delta/p4deltaService.js'
 
 const CLIENT_ROOT = '/p4ws/main'
 

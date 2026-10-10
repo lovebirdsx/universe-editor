@@ -10,16 +10,16 @@
  * undefined for such a stream, and every caller reads that as "no answer — ask
  * the other engine", never as "nothing to report".
  */
-import type { P4Action } from './changelist.js'
+import type { P4Action } from '../changelist.js'
 import type { P4deltaRecord, P4deltaRunResult } from './p4deltaService.js'
-import { clientToLocalPath } from './pathUtil.js'
-import type { ReconcileFile } from './reconcileParser.js'
+import { clientToLocalPath } from '../pathUtil.js'
+import type { ReconcileFile } from '../reconcileParser.js'
 import {
   parseSyncOverwriteRefused,
   parseSyncRefused,
   type SyncPreviewFile,
   type SyncRunSummary,
-} from './syncParser.js'
+} from '../syncParser.js'
 
 /** The three actions δ's `open` mode shares with `p4 reconcile -a -e -d`. */
 type ReconcileAction = Extract<P4Action, 'add' | 'edit' | 'delete'>

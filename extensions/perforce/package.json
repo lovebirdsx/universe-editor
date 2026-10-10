@@ -287,6 +287,11 @@
         "command": "perforce.viewCommit",
         "title": "%perforce.command.viewCommit.title%",
         "category": "Perforce"
+      },
+      {
+        "command": "perforce.p4delta.install",
+        "title": "%perforce.command.p4deltaInstall.title%",
+        "category": "Perforce"
       }
     ],
     "languages": [
@@ -754,6 +759,17 @@
           "scope": "machine",
           "description": "%perforce.config.p4delta.path.description%"
         },
+        "perforce.p4delta.autoInstall": {
+          "type": "boolean",
+          "default": true,
+          "description": "%perforce.config.p4delta.autoInstall.description%"
+        },
+        "perforce.p4delta.downloadBaseUrl": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "%perforce.config.p4delta.downloadBaseUrl.description%"
+        },
         "perforce.maxConcurrent": {
           "type": "number",
           "default": 4,
@@ -904,12 +920,14 @@
   },
   "devDependencies": {
     "@playwright/test": "catalog:",
+    "@types/adm-zip": "catalog:",
     "@types/node": "catalog:",
     "@universe-editor/config-ts": "workspace:*",
     "@universe-editor/e2e-harness": "workspace:*",
     "@universe-editor/extension-api": "workspace:*",
     "@universe-editor/extensions-common": "workspace:*",
     "@universe-editor/temp-root": "workspace:*",
+    "adm-zip": "catalog:",
     "cross-env": "catalog:",
     "esbuild": "catalog:",
     "eslint": "catalog:",

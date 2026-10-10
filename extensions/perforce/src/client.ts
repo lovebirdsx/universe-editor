@@ -45,14 +45,18 @@ import {
   type P4ExecOptions,
   type P4ExecResult,
 } from './p4Service.js'
-import { P4deltaService, type P4deltaRecord, type P4deltaRunResult } from './p4deltaService.js'
+import {
+  P4deltaService,
+  type P4deltaRecord,
+  type P4deltaRunResult,
+} from './p4delta/p4deltaService.js'
 import {
   summarizeRun,
   toReconcileFiles,
   toSyncOutcome,
   appliedSyncFiles,
   type P4deltaSummary,
-} from './p4deltaParser.js'
+} from './p4delta/p4deltaParser.js'
 import {
   discoverClient,
   connectionFor,

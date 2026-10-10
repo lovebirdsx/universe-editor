@@ -40,7 +40,10 @@ import { join } from 'node:path'
 import { ConcurrencyGate } from './concurrency.js'
 import { watchConfig } from './configWatch.js'
 import { resolveP4Command, setP4CommandTimeoutSeconds, type P4Connection } from './p4Service.js'
-import { resolveP4deltaCommand } from './p4deltaService.js'
+import { ensureP4delta, type P4deltaEnsureResult } from './p4delta/p4deltaEnsure.js'
+import { p4deltaNamedExplicitly, resolveP4deltaCommand } from './p4delta/p4deltaService.js'
+import type { P4deltaSyncOutcome } from './p4delta/p4deltaStore.js'
+import { resolveP4deltaSource, type P4deltaSource } from './p4delta/p4deltaUpstream.js'
 import { PerforceClient, SYNC_POINT_READBACK_SLOW_EXEC, type P4CacheOptions } from './client.js'
 import { isForceGettableRefusal, syncNothingHappened, type SyncPreviewFile } from './syncParser.js'
 import { P4CacheDisk } from './p4CacheDisk.js'
@@ -481,10 +484,17 @@ interface KnownLanding {
  *
  * Exported for the configuration-gate tests; `activate` is the only production
  * caller.
+ *
+ * `managedRoot` is the managed copy's root (`<globalStoragePath>/p4delta`, see
+ * p4deltaStore's `activeManagedP4delta`). It is the LAST tier of the lookup: a
+ * machine that already has its own δ keeps using it, and the managed copy
+ * answers only when nothing else did. Omitting it — or passing an empty string
+ * — reproduces the order from before the managed tier existed, byte for byte.
  */
 export function resolveP4deltaEngine(
   settings: { readonly enabled: boolean; readonly path: string },
   log: (msg: string) => void,
+  managedRoot?: string,
 ): { exe: string; extraEnv?: Readonly<Record<string, string>> } | undefined {
   if (!settings.enabled) {
     log('[perforce] p4delta disabled via perforce.p4delta.enabled; using p4')
@@ -496,31 +506,31 @@ export function resolveP4deltaEngine(
   // returned: a path found on PATH is a machine with δ installed, not a
   // configured engine. Empty string is the setting's default (same rule
   // resolveP4deltaCommand uses).
-  const deltaNamed = Boolean(process.env.UNIVERSE_P4DELTA_PATH) || settings.path !== ''
+  const deltaNamed = p4deltaNamedExplicitly(settings.path)
   if (p4IsScript && !deltaNamed) {
     log('[perforce] p4delta skipped: p4 resolves to a script override; using p4')
     return undefined
   }
-  const exe = resolveP4deltaCommand(settings.path)
-  if (exe === undefined) {
+  const candidate = resolveP4deltaCommand(settings.path, managedRoot)
+  if (candidate === undefined) {
     log('[perforce] p4delta not found; using p4')
     return undefined
   }
-  if (!existsSync(exe)) {
+  if (!existsSync(candidate.exe)) {
     // The whole admission test, now that no version gate exists: the file has
     // to be there. A build on this path is taken as able to drive the entire
     // surface this extension uses — a wrong or half-installed binary is left to
     // the client's own failure ladder, which falls back within the round and
     // disarms after three.
-    log(`[perforce] p4delta not found at ${exe}; using p4`)
+    log(`[perforce] p4delta not found at ${candidate.exe}; using p4`)
     return undefined
   }
-  log(`[perforce] p4delta engine: ${exe}`)
+  log(`[perforce] p4delta engine: ${candidate.exe} (${candidate.source})`)
   // Only a script override needs the pointer: a plain `p4` is what δ's own
   // lookup would find too, and forcing `P4_EXE=p4` would make δ require a FILE
   // by that name instead.
   const extraEnv = p4IsScript ? { P4_EXE: p4.prefixArgs[0] ?? p4.command } : undefined
-  return { exe, ...(extraEnv !== undefined ? { extraEnv } : {}) }
+  return { exe: candidate.exe, ...(extraEnv !== undefined ? { extraEnv } : {}) }
 }
 
 export async function activate(context: ExtensionContext): Promise<void> {
@@ -873,6 +883,14 @@ export async function activate(context: ExtensionContext): Promise<void> {
   // The δ engine (`perforce.p4delta.*`): resolved once here and handed to every
   // client built this session, together with the env the engine has to carry
   // (`P4_EXE` when this session's p4 is a script override).
+  //
+  // `managedRoot` is where the auto-installer keeps the copy this editor
+  // downloads for itself. It is the LAST tier of the lookup (see
+  // resolveP4deltaEngine): a machine that already has its own p4delta keeps
+  // using it untouched, and this exists so a machine without one still gets δ.
+  // Empty on a host with no global storage, which switches the installer off
+  // while leaving the lookup exactly as it was before that tier existed.
+  const managedRoot = context.globalStoragePath ? join(context.globalStoragePath, 'p4delta') : ''
   const resolveP4deltaOptions = async (): Promise<
     { exe: string; extraEnv?: Readonly<Record<string, string>> } | undefined
   > =>
@@ -882,6 +900,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
         path: await cfg.get('p4delta.path', ''),
       },
       log,
+      managedRoot,
     )
 
   /** Shared by both client construction points (the initial one below and the
@@ -1156,6 +1175,118 @@ export async function activate(context: ExtensionContext): Promise<void> {
   })
   context.subscriptions.push(watchP4delta)
   await watchP4delta.ready
+
+  // The managed copy (`perforce.p4delta.autoInstall`): make sure one exists, or
+  // is current, WITHOUT blocking activation. The gate above already resolved
+  // against whatever is on disk right now, and a run that activates a version
+  // re-resolves it through the very path a configuration change uses.
+  //
+  // Every refusal inside — unsupported platform, no storage, an engine named
+  // explicitly, a copy this machine already has — is a log line and nothing
+  // else, exactly like the gate's own refusals.
+  const p4deltaSourceFrom = async (): Promise<P4deltaSource> =>
+    resolveP4deltaSource(
+      process.env.UNIVERSE_P4DELTA_DOWNLOAD_BASE,
+      await cfg.get('p4delta.downloadBaseUrl', ''),
+      log,
+    )
+
+  const runP4deltaInstall = async (
+    force: boolean,
+    extra?: {
+      readonly signal?: AbortSignal
+      readonly onProgress?: (received: number, total: number | undefined) => void
+    },
+  ): Promise<P4deltaEnsureResult> => {
+    const result = await ensureP4delta(
+      {
+        root: managedRoot,
+        // The two settings gate different paths: `enabled` is the master switch,
+        // `autoInstall` only the background run (the install command exists for
+        // whoever turned it off).
+        enabled: await cfg.get('p4delta.enabled', true),
+        autoInstall: await cfg.get('p4delta.autoInstall', true),
+        configuredPath: await cfg.get('p4delta.path', ''),
+        p4IsScriptOverride: resolveP4Command().prefixArgs.length > 0,
+        source: await p4deltaSourceFrom(),
+        log,
+        ...(extra?.signal !== undefined ? { signal: extra.signal } : {}),
+        ...(extra?.onProgress !== undefined ? { onProgress: extra.onProgress } : {}),
+      },
+      force,
+    )
+    if (result.changed) await watchP4delta.refresh()
+    return result
+  }
+
+  /** Every δ notification carries this button; picking it opens the channel. */
+  const showPerforceLogIfAsked = async (
+    picked: string | undefined,
+    showLog: string,
+  ): Promise<void> => {
+    if (picked === showLog) out.show()
+  }
+
+  /** For the download progress line: the archive is a few MB, so MB/KB is enough. */
+  const formatBytes = (bytes: number): string => {
+    const mb = bytes / (1024 * 1024)
+    return mb >= 1 ? `${mb.toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`
+  }
+
+  /** Why a run that produced no version came out that way, for a toast. The
+   *  parameter excludes the outcomes the command answers itself, so a new one
+   *  cannot slip through and render an empty reason. */
+  const describeP4deltaOutcome = (
+    outcome: Extract<P4deltaSyncOutcome, { kind: 'failed' | 'skipped' | 'throttled' }>,
+  ): string => {
+    switch (outcome.kind) {
+      case 'failed':
+      case 'skipped':
+        return outcome.reason
+      case 'throttled':
+        return localize('perforce.p4delta.install.throttled', 'checked recently; try again later')
+    }
+  }
+
+  /**
+   * The background run. A managed copy appearing or moving earns ONE
+   * notification: it is the only thing this extension does that writes to the
+   * user's disk and uses their network on its own, and it should not be a
+   * mystery how δ showed up. Every other outcome — including every refusal and
+   * every failure — stays in the log, keeping the "δ is an optimization, never
+   * interrupt about one" rule intact.
+   */
+  const scheduleP4deltaInstall = (force: boolean): void => {
+    void runP4deltaInstall(force)
+      .then(async (result) => {
+        const { outcome } = result
+        if (outcome.kind !== 'installed') return
+        const showLog = localize('perforce.p4delta.install.showLog', 'Show Log')
+        const picked = await window.showInformationMessage(
+          outcome.previousVersion !== undefined
+            ? localize('perforce.p4delta.updated', 'p4delta {0} installed (was {1}).', {
+                0: outcome.version,
+                1: outcome.previousVersion,
+              })
+            : localize('perforce.p4delta.installed', 'p4delta {0} installed.', {
+                0: outcome.version,
+              }),
+          showLog,
+        )
+        await showPerforceLogIfAsked(picked, showLog)
+      })
+      .catch((error: unknown) => {
+        console.error('[perforce] p4delta auto-install failed', error)
+      })
+  }
+
+  scheduleP4deltaInstall(false)
+  context.subscriptions.push(
+    workspace.onDidChangeConfiguration((e) => {
+      if (!e.affectsConfiguration('perforce.p4delta')) return
+      scheduleP4deltaInstall(false)
+    }),
+  )
 
   /** Cap on rows in the "Changes" group (`perforce.reconcileLimit`). */
   const watchReconcileLimit = watchConfig<number>({
@@ -2578,6 +2709,99 @@ export async function activate(context: ExtensionContext): Promise<void> {
     }),
 
     commands.registerCommand('perforce.showOutput', () => out.show()),
+
+    // Install or update the managed p4delta copy on request. The background run
+    // does the same thing silently; this is how a user asks for it NOW — after a
+    // failure, or on a machine whose own copy the editor deliberately leaves
+    // alone (one named explicitly, or the one P4V uses).
+    commands.registerCommand('perforce.p4delta.install', async () => {
+      if (managedRoot === '') {
+        await window.showWarningMessage(
+          localize(
+            'perforce.p4delta.install.noStorage',
+            'This host has no extension storage directory, so a managed p4delta cannot be installed.',
+          ),
+        )
+        return
+      }
+      if (process.platform !== 'win32') {
+        await window.showWarningMessage(
+          localize(
+            'perforce.p4delta.install.unsupportedPlatform',
+            'p4delta publishes no build for this platform. Install it yourself and set perforce.p4delta.path.',
+          ),
+        )
+        return
+      }
+      const showLog = localize('perforce.p4delta.install.showLog', 'Show Log')
+      const result = await window.withProgress(
+        {
+          location: ProgressLocation.Notification,
+          title: localize('perforce.p4delta.install.title', 'Installing p4delta'),
+          cancellable: true,
+        },
+        async (progress, token) => {
+          const controller = new AbortController()
+          const cancelSub = token.onCancellationRequested(() => controller.abort())
+          // `increment` accumulates, so feed it the delta since the last report.
+          let reported = 0
+          try {
+            return await runP4deltaInstall(true, {
+              signal: controller.signal,
+              onProgress: (received, total) => {
+                const message =
+                  total !== undefined && total > 0
+                    ? `${formatBytes(received)} / ${formatBytes(total)}`
+                    : formatBytes(received)
+                if (total === undefined || total <= 0) {
+                  progress.report({ message })
+                  return
+                }
+                const percent = (received / total) * 100
+                progress.report({ message, increment: percent - reported })
+                reported = percent
+              },
+            })
+          } finally {
+            cancelSub.dispose()
+          }
+        },
+      )
+      const { outcome } = result
+      // Cancelling is its own ending: the user asked to stop, so saying more
+      // than "stopped" would be noise.
+      if (outcome.kind === 'cancelled') return
+      if (outcome.kind === 'installed') {
+        const picked = await window.showInformationMessage(
+          outcome.previousVersion !== undefined
+            ? localize('perforce.p4delta.updated', 'p4delta {0} installed (was {1}).', {
+                0: outcome.version,
+                1: outcome.previousVersion,
+              })
+            : localize('perforce.p4delta.installed', 'p4delta {0} installed.', {
+                0: outcome.version,
+              }),
+          showLog,
+        )
+        await showPerforceLogIfAsked(picked, showLog)
+        return
+      }
+      if (outcome.kind === 'up-to-date') {
+        await window.showInformationMessage(
+          localize('perforce.p4delta.install.upToDate', 'p4delta {0} is already installed.', {
+            0: outcome.version,
+          }),
+        )
+        return
+      }
+      const picked = await window.showWarningMessage(
+        localize('perforce.p4delta.install.failed', 'p4delta could not be installed: {0}', {
+          0: describeP4deltaOutcome(outcome),
+        }),
+        showLog,
+      )
+      await showPerforceLogIfAsked(picked, showLog)
+    }),
 
     // Stop whatever cancellable p4 operation is in flight. Wired to the
     // status-bar spinner's click while it's busy, so a slow operation doesn't

@@ -11,6 +11,7 @@
 | 工作区范围（daily scope）/ 收集修改 / Explorer 改动徽标 / 落后灰字 | [`docs/reconcile.md`](docs/reconcile.md) |
 | 菜单贡献 / when 子句 / 图标 / 多选拖放 | [`docs/menus.md`](docs/menus.md) |
 | e2e / fake-p4 | [`e2e/CLAUDE.md`](e2e/CLAUDE.md) |
+| δ 引擎 / 自装副本（下载·校验·升级） | [`src/p4delta/CLAUDE.md`](src/p4delta/CLAUDE.md) |
 | 任何 p4 命令行为 / 解析 | [`docs/pitfalls.md`](docs/pitfalls.md)（踩坑完整叙事） |
 
 > 先读 skill `create-extension`（插件通用骨架、manifest 贡献点、engines 红线、NLS）——本文档只讲 p4 特有的东西。
@@ -24,7 +25,7 @@
 | 输出解析 | `p4Output.ts` | 纯函数：`parseMarshalJson`（`-Mj` 每行一 JSON）、`parseZtag`（`... key value`，空行分记录）、`collapseNumberedKeys`（并行键折叠成数组） |
 | 领域解析 | `openedParser.ts` `fstatParser.ts` `shelveParser.ts` `blameSource.ts` `changeSpec.ts` `changelist.ts` `filelogParser.ts` | 把 p4 记录 → 领域模型 / 分组。**纯，无 p4 I/O**，各带 `__tests__` |
 | 连接发现 | `clientDiscovery.ts` | 无连接 `p4 -ztag info` 解析 client/root/user（**不取 port**）；`perforce.port/user/client` 兜底；folder 不在 workspace 内 → 返回 undefined |
-| 工作区范围 | `scopeConfig.ts` `scope.ts` | 日常范围：client root 下固定位置 `.p4delta-scope` 的**严格解析**（`scopeConfig.ts`，纯函数）+ 集合代数 / 路径身份 / 「目标是否被完整覆盖」的**本地计算**（`scope.ts`，纯函数）；编辑器与 δ 各读同一份文件，**没有运行时协议** |
+| 工作区范围 | `scopeConfig.ts` `scope.ts` | 日常范围：client root 下固定位置 `.p4delta-scope` 的**严格解析**（纯函数）+ 集合代数 / 路径身份 / 「目标是否被完整覆盖」的**本地计算**（纯函数）；编辑器与 δ 各读同一份文件，**没有运行时协议** |
 | client 编排 | `client.ts` `clientManager.ts` `baselineProvider.ts` | `PerforceClient` = 一个 client 一个 `SourceControl` + 动态 changelist 分组 + refresh 编排 + 所有 p4 操作方法；`ClientManager` 按 root 路由；`BaselineProvider` = `#have` 内容缓存 |
 | 入口 & UI 挂钩 | `extension.ts` `p4StatusBar.ts` `autoEdit.ts` `p4Decoration.ts` `p4Error.ts` `nls.ts` | `activate` 发现 client → 注册全部命令；状态栏、autoEdit、行装饰、错误分类/toast、本地化 |
 
@@ -43,7 +44,7 @@
 
 ## 操作方法约定（`client.ts`）
 
-绝大多数 mutating 操作走 `_mutate(label, args, paths?, options?)`：跑 p4（可取消）→ 失败 toast（`notifyP4Failure`）→ **按文件失效缓存** → **refresh**。加新操作时优先复用它。它只负责拼 argv，骨架在 `_mutateVia` 上——δ 引擎（`perforce.p4delta.enabled`/`path`）接**收集 / 收集到指定 CL / 清理**这三个写操作（经 `_mutateWrite`，同骨架、同三条出口）与 **get**（`#head`/`@<CL>` 普通与强制都走 `_syncViaP4delta`；`#rev`/日期等 spec 保持原生），其余写操作固定原生；写操作与 get 都先 `_ensureScopeResolved`（范围 `blocked`/`empty` 时直接拒绝而不是回退整个工作区），δ 的调用只带**本操作自己的**排除项、范围文件的排除由 δ 自己读；范围分层、选择规则、失败处置与退回原生的守卫见 [docs/reconcile.md](docs/reconcile.md)。
+绝大多数 mutating 操作走 `_mutate(label, args, paths?, options?)`：跑 p4（可取消）→ 失败 toast（`notifyP4Failure`）→ **按文件失效缓存** → **refresh**。加新操作时优先复用它。它只负责拼 argv，骨架在 `_mutateVia` 上——δ 引擎（`p4delta.*`）接**收集 / 收集到指定 CL / 清理**这三个写操作（经 `_mutateWrite`，同骨架、同三条出口）与 **get**（`#head`/`@<CL>` 普通与强制都走 `_syncViaP4delta`；`#rev`/日期等 spec 保持原生），其余写操作固定原生；写操作与 get 都先 `_ensureScopeResolved`（范围 `blocked`/`empty` 时直接拒绝而不是回退整个工作区），δ 的调用只带**本操作自己的**排除项、范围文件的排除由 δ 自己读；范围分层、选择规则、失败处置与退回原生的守卫见 [docs/reconcile.md](docs/reconcile.md)。
 
 - **缓存失效按文件**（`_invalidateAfterMutation`）：小批量（≤64 且无 `/...`）逐条 `_cache.invalidateFile(p)` 并显式清 `P4CacheNs.opened`；空 paths/批量/目录递归 → `invalidateWorkspace()`。
 - **取消能力三层管道**：`P4ExecOptions.signal`（abort 即 kill + resolve 失败）→ `client._cancellable(fn)`（压 `_cancelSources` 栈 + 上报 `busyCancellable` + bump `cancellableEpoch`）→ UI **两个入口统一经 `extension.ts` 的 `confirmAndCancelBusy` 二次确认**（状态栏 spinner 点击 = `perforce.cancelBusy`，**运行时命令，不进 `contributes.commands`**；以及 sync 通知进度条的取消按钮）。`cancelBusy` 是全杀（abort 掉该 client 所有在飞源），故确认框文案须点明会一并停止同工作区其它 p4 操作；确认框是异步缺口，确认后必须复查 `client.cancellableEpoch` 未变才 `cancelBusy()`——否则会误杀确认期间新起的操作（如 get 后的 collect）。取消后不弹错误 toast。
@@ -62,7 +63,7 @@ dirty-diff gutter 与 inline blame 原本硬编码 `git.*` 命令；已抽象为
 
 ## 配置项（`perforce.*`）
 
-`enabled`(true)、`port`/`user`/`client`（连接兜底，优先 `p4 set`/P4CONFIG）、`p4delta.enabled`(true)/`p4delta.path`（δ 引擎；只在 `extension.ts` 的 `resolveP4deltaEngine` 读）、`maxConcurrent`(4)、`commandTimeout`(600s，0=不限——约束「永久挂死」而非「执行慢」)、`refreshInterval`(0=关，最小 10s)、`autoEdit`(false)、`reconcileHint.enabled`(true)、`openedByOthers.autoCheck`(true)/`openedByOthers.intervalSec`(300s)、`timeline.showPending`(true)、`syncParallelThreads`(4，0=串行)、`cache.*`。`reconcile.excludeFolders`（收集降噪，不是范围来源，见红线 6）。加新配置：`package.json` `contributes.configuration` + nls description key。
+`enabled`(true)、`port`/`user`/`client`（连接兜底，优先 `p4 set`/P4CONFIG）、`p4delta.*`（δ 引擎与自装副本，见 `src/p4delta/CLAUDE.md`）、`maxConcurrent`(4)、`commandTimeout`(600s，0=不限——约束「永久挂死」而非「执行慢」)、`refreshInterval`(0=关，最小 10s)、`autoEdit`(false)、`reconcileHint.enabled`(true)、`openedByOthers.autoCheck`(true)/`openedByOthers.intervalSec`(300s)、`timeline.showPending`(true)、`syncParallelThreads`(4，0=串行)、`cache.*`。`reconcile.excludeFolders`（收集降噪，不是范围来源，见红线 6）。加新配置：`package.json` `contributes.configuration` + nls description key。
 
 ## 验证
 

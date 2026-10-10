@@ -3693,9 +3693,9 @@ describe('PerforceClient.runReconcileScan', () => {
 //  6. The engine is part of the checkpoint fingerprint, so the two engines'
 //     checkpoints never alias.
 
-const { P4deltaService } = await import('../p4deltaService.js')
-type P4deltaRecord = import('../p4deltaService.js').P4deltaRecord
-type P4deltaRunResult = import('../p4deltaService.js').P4deltaRunResult
+const { P4deltaService } = await import('../p4delta/p4deltaService.js')
+type P4deltaRecord = import('../p4delta/p4deltaService.js').P4deltaRecord
+type P4deltaRunResult = import('../p4delta/p4deltaService.js').P4deltaRunResult
 
 const P4DELTA_EXE = '/opt/p4delta'
 
@@ -3778,7 +3778,9 @@ function parseDeltaArgs(args: readonly string[]): {
 
 /** The run options per stubbed run, in call order — how the write tests observe
  *  the watchdog policy a mutation forwarded to the engine. */
-const p4deltaRunOptionList: Array<import('../p4deltaService.js').P4deltaRunOptions | undefined> = []
+const p4deltaRunOptionList: Array<
+  import('../p4delta/p4deltaService.js').P4deltaRunOptions | undefined
+> = []
 
 interface P4deltaReply {
   records?: P4deltaRecord[]
