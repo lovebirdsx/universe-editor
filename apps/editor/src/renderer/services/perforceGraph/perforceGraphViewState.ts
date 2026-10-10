@@ -35,7 +35,7 @@ export interface PerforceGraphViewState {
    *  PerforceGraphEditorInput.focus() so opening/activating the tab lands
    *  keyboard focus on the changes (arrow keys work without a prior click). */
   focusRows: (() => void) | null
-  /** Callback registered by the mounted editor to reload the graph (toolbar ↺). */
+  /** Callback registered by the mounted editor to reload the graph (toolbar refresh). */
   refresh: (() => void) | null
   /** Callback registered by the mounted editor to select + scroll to a change,
    *  paging in more history until the change is loaded. */

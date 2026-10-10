@@ -13,7 +13,9 @@ import {
   Event,
   ICommandService,
   InstantiationService,
+  IStorageService,
   ServiceCollection,
+  StorageScope,
 } from '@universe-editor/platform'
 import {
   PerforceSyncHistoryCommands,
@@ -26,6 +28,7 @@ import {
   _resetForTests,
   perforceSyncHistoryViewState,
 } from '../../../services/perforceSyncHistory/syncHistoryViewState.js'
+import { ExportPerforceSyncHistoryAction } from '../../../actions/perforceSyncHistoryActions.js'
 import { PerforceSyncHistoryEditor } from '../PerforceSyncHistoryEditor.js'
 
 const ROOT = 'X:/p4ws/main'
@@ -89,15 +92,26 @@ function makeCommandService(
   } as unknown as ICommandService
 }
 
-function renderEditor(commandService: ICommandService) {
+function makeStorageService(): IStorageService {
+  return {
+    _serviceBrand: undefined,
+    get: vi.fn().mockResolvedValue(undefined),
+    set: vi.fn().mockResolvedValue(undefined),
+    remove: vi.fn().mockResolvedValue(undefined),
+    onDidChangeWorkspaceScope: () => ({ dispose: () => {} }),
+  } as unknown as IStorageService
+}
+
+function renderEditor(commandService: ICommandService, storage = makeStorageService()) {
   const services = new ServiceCollection()
   services.set(ICommandService, commandService)
+  services.set(IStorageService, storage)
   const utils = render(
     <ServicesContext.Provider value={new InstantiationService(services)}>
       <PerforceSyncHistoryEditor input={{} as never} />
     </ServicesContext.Provider>,
   )
-  return utils
+  return { storage, ...utils }
 }
 
 /** Let the mount → getRuns → setState → getRun chain settle. The macrotask
@@ -475,5 +489,126 @@ describe('PerforceSyncHistoryEditor', () => {
     expect(perforceSyncHistoryViewState.selectedId).toBe('run-1')
     expect(screen.queryByTestId('perforce-sync-history-no-selection')).toBeNull()
     expect(screen.getByTestId('perforce-sync-history-detail-target').textContent).toContain('#head')
+  })
+
+  it('presents refresh as a real button', async () => {
+    renderEditor(makeCommandService(makePage([makeRun()]), new Map()))
+    await flush()
+
+    expect(screen.getByRole('button', { name: 'Refresh' })).toBeTruthy()
+  })
+
+  it('hands the CSV export to its action instead of exporting in the page', async () => {
+    const commands = makeCommandService(makePage([makeRun()]), new Map())
+    renderEditor(commands)
+    await flush()
+
+    fireEvent.click(screen.getByTestId('perforce-sync-history-export'))
+
+    expect(commands.executeCommand).toHaveBeenCalledWith(ExportPerforceSyncHistoryAction.ID)
+  })
+
+  it('hides the CSV export while the extension is unavailable', async () => {
+    const commands = {
+      _serviceBrand: undefined,
+      executeCommand: vi.fn(async () => undefined),
+      onWillExecuteCommand: Event.None,
+      onDidExecuteCommand: Event.None,
+    } as unknown as ICommandService
+    renderEditor(commands)
+    await flush()
+
+    expect(screen.getByTestId('perforce-sync-history-unavailable')).toBeTruthy()
+    expect(screen.queryByTestId('perforce-sync-history-export')).toBeNull()
+  })
+
+  it('offers a sash between the list and the detail', async () => {
+    renderEditor(makeCommandService(makePage([makeRun()]), new Map()))
+    await flush()
+
+    expect(screen.getByRole('separator')).toBeTruthy()
+  })
+
+  it('keeps the sash out of the unavailable page', async () => {
+    const commands = {
+      _serviceBrand: undefined,
+      executeCommand: vi.fn(async () => undefined),
+      onWillExecuteCommand: Event.None,
+      onDidExecuteCommand: Event.None,
+    } as unknown as ICommandService
+    renderEditor(commands)
+    await flush()
+
+    expect(screen.queryByRole('separator')).toBeNull()
+  })
+
+  it('applies a dragged sash width and persists it', async () => {
+    const { storage } = renderEditor(makeCommandService(makePage([makeRun()]), new Map()))
+    await flush()
+
+    const sash = screen.getByRole('separator')
+    fireEvent.mouseDown(sash, { clientX: 400 })
+    // The sash installs its window listeners in an effect, so the drag has to
+    // wait for a render round before it can move.
+    await flush()
+    fireEvent.mouseMove(window, { clientX: 460 })
+    fireEvent.mouseUp(window)
+    await flush()
+
+    // happy-dom does no layout, so the drag starts from the fallback width —
+    // which is why that constant exists and why 360 + 60 is a stable number.
+    expect(storage.set).toHaveBeenCalledWith(
+      'perforceSyncHistory.listWidth',
+      420,
+      StorageScope.GLOBAL,
+    )
+    expect(screen.getByTestId('perforce-sync-history-list-pane').getAttribute('style')).toContain(
+      '420px',
+    )
+  })
+
+  it('clamps a dragged width to the minimum', async () => {
+    const { storage } = renderEditor(makeCommandService(makePage([makeRun()]), new Map()))
+    await flush()
+
+    const sash = screen.getByRole('separator')
+    fireEvent.mouseDown(sash, { clientX: 400 })
+    await flush()
+    fireEvent.mouseMove(window, { clientX: -1000 })
+    fireEvent.mouseUp(window)
+    await flush()
+
+    expect(storage.set).toHaveBeenCalledWith(
+      'perforceSyncHistory.listWidth',
+      200,
+      StorageScope.GLOBAL,
+    )
+    expect(screen.getByTestId('perforce-sync-history-list-pane').getAttribute('style')).toContain(
+      '200px',
+    )
+  })
+
+  it('does not freeze the content-sized width when the sash is only clicked', async () => {
+    const { storage } = renderEditor(makeCommandService(makePage([makeRun()]), new Map()))
+    await flush()
+
+    fireEvent.mouseDown(screen.getByRole('separator'), { clientX: 400 })
+    fireEvent.mouseUp(window)
+    await flush()
+
+    expect(storage.set).not.toHaveBeenCalled()
+    expect(screen.getByTestId('perforce-sync-history-list-pane').getAttribute('style')).toBeNull()
+  })
+
+  it('restores the persisted width on mount', async () => {
+    const storage = makeStorageService()
+    ;(storage.get as ReturnType<typeof vi.fn>).mockResolvedValue(420)
+    renderEditor(makeCommandService(makePage([makeRun()]), new Map()), storage)
+    await flush()
+
+    expect(storage.get).toHaveBeenCalledWith('perforceSyncHistory.listWidth', StorageScope.GLOBAL)
+    expect(screen.getByTestId('perforce-sync-history-list-pane').getAttribute('style')).toContain(
+      '420px',
+    )
   })
 })

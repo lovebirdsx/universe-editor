@@ -24,8 +24,8 @@
  *  fact for an applied, a failed and a cancelled run alike.
  *--------------------------------------------------------------------------------------------*/
 
-import { dirname, resolve } from 'node:path'
-import { readFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
+import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import {
   test,
@@ -256,6 +256,52 @@ test.describe('@p1 perforce sync history', () => {
       for (const id of ['perforce-sync-history-detail-read', 'perforce-sync-history-detail-write']) {
         await expect(view.getByTestId(id)).toHaveText('unavailable (no sampler on this platform)')
       }
+    })
+  })
+
+  test.describe('exporting the history', () => {
+    test.use({ p4Seeds: { files: [behind] } })
+
+    test('writes every recorded run to a CSV through the save dialog', async ({
+      page,
+      workbench,
+      perforce,
+    }) => {
+      await openPerforceWorkspace(page, workbench, perforce.openDir)
+
+      await startGet(page, perforce.file('src/a.txt'))
+      await waitForRecordCount(page, 1)
+
+      // In through the graph's own toolbar icon: the entry the page gained, and
+      // the one journey that shows it lands on the same page the command opens.
+      await workbench.runCommand('perforce-graph.view')
+      const graph = page.locator('[data-testid="perforceGraph-editor"]')
+      await expect(graph).toBeVisible()
+      await graph.getByTestId('perforceGraph-openSyncHistory').click()
+
+      const view = page.getByTestId('perforce-sync-history')
+      await expect(view).toBeVisible({ timeout: 30_000 })
+      await expect(view.getByTestId('perforce-sync-history-row')).toHaveCount(1)
+
+      await view.getByTestId('perforce-sync-history-export').click()
+      await workbench.quickInput.waitForVisible()
+      // The dialog opens on the workspace folder with the file name prefilled —
+      // OK takes it as-is (no overwrite prompt: the file is not there yet).
+      await expect(workbench.quickInput.input).toHaveValue(/perforce-sync-history\.csv$/)
+      await workbench.quickInput.dialog.getByTestId('quick-input-ok').click()
+      await workbench.quickInput.waitForHidden()
+
+      const csvPath = join(perforce.openDir, 'perforce-sync-history.csv')
+      await expect.poll(() => existsSync(csvPath)).toBe(true)
+      const csv = readFileSync(csvPath, 'utf8')
+      // The BOM (U+FEFF, asserted by code point so no source encoding can eat
+      // it) is what makes Excel read the file as UTF-8; the header is the DTO's
+      // own field names, so the columns do not move with the UI language.
+      expect(csv.codePointAt(0)).toBe(0xfeff)
+      expect(csv).toContain('id,at,startedAt,durationMs,outcome,spec')
+      const rows = csv.split('\r\n').filter((line) => line !== '')
+      expect(rows).toHaveLength(2) // the header plus the one recorded get
+      expect(rows[1]).toContain(',applied,#head,')
     })
   })
 })

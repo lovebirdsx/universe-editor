@@ -1454,6 +1454,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'perforceGraph.scope.toggle': '切换仓库范围',
   'perforceGraph.scopedEmpty': '没有影响此路径的已提交更改。',
   'perforceGraph.scopedTitle': '历史：{label}',
+  'perforceGraph.syncHistory': '同步历史',
   'perforceGraph.sync.confirm': '获取修订（{count}）',
   'perforceGraph.sync.description': '选择要同步到该变更列表状态的文件夹。',
   'perforceGraph.sync.noFolders': '无法列出工作区文件夹。请改用“获取此修订”同步整个显示范围。',
@@ -1466,10 +1467,15 @@ export const ZH_CN_MESSAGES: MessageMap = {
 
   // --- Perforce Sync History ---
   'action.perforceSyncHistory.view': '查看同步历史',
+  'action.perforceSyncHistory.exportCsv': '导出同步历史为 CSV',
   'perforceSyncHistory.title': 'Perforce 同步历史',
   'perforceSyncHistory.list': '已记录的同步',
   'perforceSyncHistory.count': '{0} 次同步',
   'perforceSyncHistory.refresh': '刷新',
+  'perforceSyncHistory.exportCsv': '导出 CSV…',
+  'perforceSyncHistory.exportCsv.title': '导出同步历史',
+  'perforceSyncHistory.exportCsv.done': '已导出 {0} 条记录到 {1}',
+  'perforceSyncHistory.exportCsv.failed': '导出同步历史失败：{0}',
   'perforceSyncHistory.loading': '正在加载…',
   'perforceSyncHistory.loadMore': '加载更多',
   'perforceSyncHistory.none':

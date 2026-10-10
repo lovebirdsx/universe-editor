@@ -45,6 +45,7 @@ import { scmViewState } from '../../scm/scmViewState.js'
 import { _clearGraphPayloadCacheForTests } from '../../scm/commitChanges/graphPayloadCache.js'
 import { ServicesContext } from '../../useService.js'
 import { ShowCommitChangesAction } from '../../../actions/commitChangesActions.js'
+import { ViewPerforceSyncHistoryAction } from '../../../actions/perforceSyncHistoryActions.js'
 import { PerforceGraphEditor } from '../PerforceGraphEditor.js'
 
 const REPO: P4GraphRepoDto = { root: 'C:/ws/main', name: 'alice-ws' }
@@ -333,6 +334,15 @@ describe('PerforceGraphEditor', () => {
     )
   })
 
+  it('opens the sync history page from the toolbar icon', async () => {
+    const { commandService } = renderEditor()
+    await flush()
+
+    fireEvent.click(screen.getByTestId('perforceGraph-openSyncHistory'))
+
+    expect(commandService.executeCommand).toHaveBeenCalledWith(ViewPerforceSyncHistoryAction.ID)
+  })
+
   it('claims the rows on screen, not the scope the tab has since moved to', async () => {
     // A reload for a new scope that FAILS leaves the previous rows rendered —
     // `loading` covers the list only while the read is out, and it is cleared in
@@ -602,6 +612,15 @@ describe('PerforceGraphEditor scoped history', () => {
       PerforceGraphCommands.setRepo,
       expect.anything(),
     )
+  })
+
+  it('offers the same sync-history entry on a scoped history', async () => {
+    const { commandService } = renderScoped([{ path: 'X:/p4ws/main', isDirectory: true }])
+    await flush()
+
+    fireEvent.click(screen.getByTestId('perforceGraph-openSyncHistory'))
+
+    expect(commandService.executeCommand).toHaveBeenCalledWith(ViewPerforceSyncHistoryAction.ID)
   })
 
   it('single-file scope adds an "Open Changes" menu item for the matching file', async () => {

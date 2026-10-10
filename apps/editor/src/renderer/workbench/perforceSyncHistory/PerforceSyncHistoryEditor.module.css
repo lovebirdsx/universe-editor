@@ -23,21 +23,6 @@
   opacity: 0.7;
 }
 
-.toolButton {
-  appearance: none;
-  border: none;
-  background: transparent;
-  color: inherit;
-  font-size: 12px;
-  padding: 2px 8px;
-  border-radius: 4px;
-  cursor: pointer;
-}
-
-.toolButton:hover {
-  background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.08));
-}
-
 .body {
   display: flex;
   flex: 1;
@@ -47,9 +32,12 @@
 .listPane {
   display: flex;
   flex-direction: column;
-  /* Fixed width: the rows are one-line summaries and the detail is prose, so a
-     draggable sash would buy nothing worth its state. */
-  width: 360px;
+  /* The rows are one-line summaries, so the pane sizes itself to the widest row
+     up to a ceiling — past the ceiling the flexible text columns ellipsize, and
+     the sash lets the reader trade detail width for list width. */
+  width: max-content;
+  min-width: 200px;
+  max-width: 60%;
   flex-shrink: 0;
   border-right: 1px solid var(--vscode-sideBar-border, rgba(255, 255, 255, 0.08));
   min-height: 0;
@@ -73,6 +61,10 @@
   padding: 12px;
   line-height: 1.5;
   opacity: 0.6;
+  /* Caps how wide the prose can make the pane while it is the only thing in it
+     (an unwrapped sentence would otherwise claim the whole 60% ceiling). */
+  max-width: 320px;
+  white-space: normal;
 }
 
 .loadMore {
@@ -114,19 +106,19 @@
   background: var(--vscode-list-inactiveSelectionBackground, rgba(255, 255, 255, 0.06));
 }
 
+/* The columns are sized by their content, not by fixed widths: the pane is only
+   as wide as its widest row, so nothing is clipped until the 60% ceiling (or a
+   dragged width) is reached — and then only the two text columns give way,
+   since `overflow: hidden` lets them shrink past their content. */
 .rowTime {
-  flex-shrink: 0;
-  width: 62px;
+  flex: 0 0 auto;
   opacity: 0.7;
 }
 
 /* The outcome is the column a user scans for, so it carries the colour — and a
    failed or cancelled run must not look like a successful one at a glance. */
 .rowOutcome {
-  flex-shrink: 0;
-  width: 96px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  flex: 0 0 auto;
 }
 
 .rowOutcome[data-outcome='failed'] {
@@ -143,22 +135,22 @@
 }
 
 .rowTarget {
-  flex-shrink: 0;
-  max-width: 96px;
+  flex: 0 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   opacity: 0.85;
 }
 
 .rowMeta {
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   opacity: 0.6;
 }
 
 .rowDuration {
-  flex-shrink: 0;
+  flex: 0 0 auto;
   opacity: 0.7;
 }
 

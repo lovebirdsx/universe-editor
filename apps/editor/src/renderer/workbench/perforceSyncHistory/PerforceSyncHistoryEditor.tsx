@@ -18,7 +18,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ICommandService, localize, type IEditorInput } from '@universe-editor/platform'
+import {
+  ICommandService,
+  IStorageService,
+  StorageScope,
+  localize,
+  type IEditorInput,
+} from '@universe-editor/platform'
 import {
   PerforceSyncHistoryCommands,
   type P4SyncHistoryLoadResult,
@@ -26,6 +32,8 @@ import {
   type P4SyncRunDto,
 } from '@universe-editor/extensions-common'
 import {
+  Button,
+  Sash,
   useFlatListNavigation,
   useScrollRestore,
   type IFlatListRowProps,
@@ -36,6 +44,7 @@ import {
   perforceSyncHistoryViewState,
   SYNC_HISTORY_PAGE_SIZE,
 } from '../../services/perforceSyncHistory/syncHistoryViewState.js'
+import { ExportPerforceSyncHistoryAction } from '../../actions/perforceSyncHistoryActions.js'
 import {
   countsLine,
   engineLabel,
@@ -51,9 +60,21 @@ import {
 import styles from './PerforceSyncHistoryEditor.module.css'
 
 const SCROLL_KEY = 'perforce-sync-history'
+/** The dragged list-pane width, per install: the page itself is
+ *  workspace-agnostic (the records live in the extension's global storage), so
+ *  the width follows the page, not the folder. */
+const LIST_WIDTH_KEY = 'perforceSyncHistory.listWidth'
+const MIN_LIST_PANE_WIDTH = 200
+/** Past this share of the editor group the rows ellipsize rather than eat the
+ *  detail pane; mirrors `.listPane`'s CSS `max-width`. */
+const MAX_LIST_PANE_FRACTION = 0.6
+/** Fallback for a container with no layout (tests): `getBoundingClientRect`
+ *  reports 0, and a drag has to start from something. */
+const DEFAULT_LIST_PANE_WIDTH = 360
 
 export function PerforceSyncHistoryEditor(_props: { input: IEditorInput }) {
   const commands = useService(ICommandService)
+  const storage = useService(IStorageService)
   const state = perforceSyncHistoryViewState
 
   const [runs, setRuns] = useState<readonly P4SyncRunDto[]>(state.runs)
@@ -62,8 +83,13 @@ export function PerforceSyncHistoryEditor(_props: { input: IEditorInput }) {
   const [loaded, setLoaded] = useState(state.loaded)
   const [selectedId, setSelectedId] = useState<string | null>(state.selectedId)
   const [unavailable, setUnavailable] = useState(false)
+  const [listWidth, setListWidth] = useState<number | null>(state.listWidth)
 
   const listRef = useRef<HTMLUListElement | null>(null)
+  const listPaneRef = useRef<HTMLDivElement | null>(null)
+  const bodyRef = useRef<HTMLDivElement | null>(null)
+  const dragBaseRef = useRef<number | null>(null)
+  const dragMovedRef = useRef(false)
   const getContainer = useCallback(() => listRef.current, [])
   useScrollRestore(SCROLL_KEY, getContainer)
 
@@ -138,6 +164,70 @@ export function PerforceSyncHistoryEditor(_props: { input: IEditorInput }) {
     state.selectedId = selectedId
   }, [state, selectedId])
 
+  useEffect(() => {
+    // The module state already holds this session's width; storage is only read
+    // on the first mount after a restart.
+    if (state.listWidth !== null) return
+    let alive = true
+    void storage
+      .get<number>(LIST_WIDTH_KEY, StorageScope.GLOBAL)
+      .then((stored) => {
+        if (!alive || typeof stored !== 'number' || !Number.isFinite(stored)) return
+        const width = Math.max(MIN_LIST_PANE_WIDTH, Math.round(stored))
+        state.listWidth = width
+        setListWidth(width)
+      })
+      .catch(() => {
+        // Unreadable storage just means the pane keeps sizing to its content.
+      })
+    return () => {
+      alive = false
+    }
+  }, [storage, state])
+
+  const measuredPaneWidth = useCallback((): number => {
+    const width = listPaneRef.current?.getBoundingClientRect().width ?? 0
+    return width > 0 ? width : DEFAULT_LIST_PANE_WIDTH
+  }, [])
+
+  const maxPaneWidth = useCallback((): number => {
+    // `|| window.innerWidth`: a container with no layout yet (or a hidden group)
+    // reports 0, and 0 must not collapse the ceiling to the minimum.
+    const available = bodyRef.current?.clientWidth || window.innerWidth
+    return Math.max(MIN_LIST_PANE_WIDTH, Math.round(available * MAX_LIST_PANE_FRACTION))
+  }, [])
+
+  const onSashStart = useCallback((): void => {
+    dragMovedRef.current = false
+    // From what is on screen, not from state: a stored width the CSS has since
+    // clamped (narrower window) must not make the first drag jump.
+    dragBaseRef.current = measuredPaneWidth()
+  }, [measuredPaneWidth])
+
+  const onSashResize = useCallback(
+    (delta: number): void => {
+      const next = Math.min(
+        Math.max((dragBaseRef.current ?? measuredPaneWidth()) + delta, MIN_LIST_PANE_WIDTH),
+        maxPaneWidth(),
+      )
+      dragBaseRef.current = next
+      dragMovedRef.current = true
+      setListWidth(next)
+    },
+    [measuredPaneWidth, maxPaneWidth],
+  )
+
+  const onSashEnd = useCallback((): void => {
+    const width = dragBaseRef.current
+    dragBaseRef.current = null
+    // A plain click is not a resize: it must not freeze the pane's
+    // content-sized width into a pixel value.
+    if (!dragMovedRef.current || width === null) return
+    dragMovedRef.current = false
+    state.listWidth = width
+    void storage.set(LIST_WIDTH_KEY, width, StorageScope.GLOBAL)
+  }, [storage, state])
+
   const focusedIndex = useMemo(
     () => (selectedId === null ? -1 : runs.findIndex((r) => r.id === selectedId)),
     [runs, selectedId],
@@ -159,14 +249,14 @@ export function PerforceSyncHistoryEditor(_props: { input: IEditorInput }) {
     return (
       <div className={styles['root']} data-testid="perforce-sync-history">
         <div className={styles['toolbar']}>
-          <button
-            type="button"
-            className={styles['toolButton']}
+          <Button
+            variant="secondary"
+            size="sm"
             data-testid="perforce-sync-history-refresh"
             onClick={refresh}
           >
             {localize('perforceSyncHistory.refresh', 'Refresh')}
-          </button>
+          </Button>
         </div>
         <div className={styles['empty']} data-testid="perforce-sync-history-unavailable">
           {localize(
@@ -184,17 +274,30 @@ export function PerforceSyncHistoryEditor(_props: { input: IEditorInput }) {
         <span className={styles['count']} data-testid="perforce-sync-history-count">
           {localize('perforceSyncHistory.count', '{0} run(s)', { 0: String(total) })}
         </span>
-        <button
-          type="button"
-          className={styles['toolButton']}
+        <Button
+          variant="secondary"
+          size="sm"
           data-testid="perforce-sync-history-refresh"
           onClick={refresh}
         >
           {localize('perforceSyncHistory.refresh', 'Refresh')}
-        </button>
+        </Button>
+        <Button
+          variant="secondary"
+          size="sm"
+          data-testid="perforce-sync-history-export"
+          onClick={() => void commands.executeCommand(ExportPerforceSyncHistoryAction.ID)}
+        >
+          {localize('perforceSyncHistory.exportCsv', 'Export CSV…')}
+        </Button>
       </div>
-      <div className={styles['body']}>
-        <div className={styles['listPane']}>
+      <div className={styles['body']} ref={bodyRef}>
+        <div
+          className={styles['listPane']}
+          ref={listPaneRef}
+          data-testid="perforce-sync-history-list-pane"
+          {...(listWidth !== null ? { style: { width: `${listWidth}px` } } : {})}
+        >
           <ul {...nav.containerProps} className={styles['list']} ref={listRef}>
             {runs.length === 0 && (
               <li
@@ -230,6 +333,12 @@ export function PerforceSyncHistoryEditor(_props: { input: IEditorInput }) {
             </button>
           )}
         </div>
+        <Sash
+          orientation="vertical"
+          onStart={onSashStart}
+          onResize={onSashResize}
+          onEnd={onSashEnd}
+        />
         <div className={styles['detail']}>
           {selectedId === null ? (
             <div className={styles['hint']} data-testid="perforce-sync-history-no-selection">

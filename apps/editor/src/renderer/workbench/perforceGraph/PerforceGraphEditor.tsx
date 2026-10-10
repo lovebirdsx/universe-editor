@@ -45,7 +45,7 @@ import {
   localize,
   type IEditorInput,
 } from '@universe-editor/platform'
-import { Globe, RefreshCw } from 'lucide-react'
+import { Globe, History, RefreshCw } from 'lucide-react'
 import {
   PerforceGraphCommands,
   type P4GraphChangeDto,
@@ -100,6 +100,7 @@ import {
 import { useGraphKeyboardNav } from '../gitGraph/useGraphKeyboardNav.js'
 import { usePersistedGraphSelection } from '../gitGraph/usePersistedGraphSelection.js'
 import { SendCommitToAgentChatAction } from '../../actions/agentContextActions.js'
+import { ViewPerforceSyncHistoryAction } from '../../actions/perforceSyncHistoryActions.js'
 import styles from '../gitGraph/GitGraphEditor.module.css'
 
 const ROW_HEIGHT = 24
@@ -1798,7 +1799,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
         {scope === undefined && (
           <button
             type="button"
-            className={`${styles['toolBtn']} ${wholeRepo ? styles['toolBtnActive'] : ''}`}
+            className={`${styles['toolIconBtn']} ${wholeRepo ? styles['toolBtnActive'] : ''}`}
             onClick={() => setWholeRepo((v) => !v)}
             data-tooltip={
               wholeRepo
@@ -1808,17 +1809,30 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
             aria-label={localize('perforceGraph.scope.toggle', 'Toggle repository scope')}
             aria-pressed={wholeRepo}
           >
-            <Globe size={14} />
+            <Globe size={14} aria-hidden="true" />
           </button>
         )}
         <button
           type="button"
-          className={styles['toolBtn']}
+          className={styles['toolIconBtn']}
           onClick={() => load()}
           data-tooltip={localize('common.refresh', 'Refresh')}
           aria-label={localize('common.refresh', 'Refresh')}
         >
-          ↺
+          <RefreshCw size={14} aria-hidden="true" />
+        </button>
+        {/* The sync history is a page of its own, global to the install — the
+            graph's scope does not narrow it, so both this view and the scoped
+            one offer the same entry. */}
+        <button
+          type="button"
+          className={styles['toolIconBtn']}
+          onClick={() => void commands.executeCommand(ViewPerforceSyncHistoryAction.ID)}
+          data-tooltip={localize('perforceGraph.syncHistory', 'Sync History')}
+          aria-label={localize('perforceGraph.syncHistory', 'Sync History')}
+          data-testid="perforceGraph-openSyncHistory"
+        >
+          <History size={14} aria-hidden="true" />
         </button>
       </div>
 

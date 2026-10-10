@@ -93,6 +93,34 @@
   border-color: var(--vscode-workbench-border);
 }
 
+/* Perforce graph's view controls (scope globe / refresh / sync history): lucide
+   SVGs centred in a square hit target. `.toolBtn`'s glyphs sit on the text
+   baseline, which floats them a few px above the toolbar's centre line — beside
+   the search input that reads as misaligned. */
+.toolIconBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  color: var(--vscode-editor-foreground);
+  border: 1px solid transparent;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.toolIconBtn:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+/* One cluster, one rhythm: pulling the siblings in by the box slack makes every
+   gap in the row — search input to globe included — the same distance. */
+.toolIconBtn + .toolIconBtn {
+  margin-left: -4px;
+}
+
 /* The toolbar's "· Synced to #4521" changelist: a button because clicking it
    reveals that row (and, when nothing is known yet, queries the server instead).
    Styled to sit inline in the count line, not to look like a toolbar control. */

@@ -16,12 +16,17 @@ import type { P4SyncRunDto } from '@universe-editor/extensions-common'
 /** Page size for the first load and each "Load more". */
 export const SYNC_HISTORY_PAGE_SIZE = 50
 
+/** `max` for the CSV export: the extension keeps at most this many records
+ *  (`MAX_ENTRIES` in `extensions/perforce/src/syncHistory.ts`), so asking for
+ *  200 is asking for the whole history. Raise it if that cap ever grows. */
+export const SYNC_HISTORY_EXPORT_MAX = 200
+
 export interface PerforceSyncHistoryViewState {
   /** Callback registered by the mounted editor to focus the row list, used by
    *  `PerforceSyncHistoryEditorInput.focus()` so opening or activating the tab
    *  lands keyboard focus on the runs (arrow keys work without a prior click). */
   focusRows: (() => void) | null
-  /** Callback registered by the mounted editor to reload the page (toolbar ↺). */
+  /** Callback registered by the mounted editor to reload the page (toolbar Refresh). */
   refresh: (() => void) | null
   /** The loaded page, newest first. Empty until the first load settles. */
   runs: P4SyncRunDto[]
@@ -35,6 +40,10 @@ export interface PerforceSyncHistoryViewState {
   /** True once a load has settled, so an empty list can say "none yet" rather
    *  than looking like a load that never finished. */
   loaded: boolean
+  /** Width (px) the user dragged the list pane to; null = never dragged, so the
+   *  pane keeps sizing to its content. This is the session's cache — the
+   *  persisted value is the `IStorageService` entry the editor reads on mount. */
+  listWidth: number | null
 }
 
 function createState(): PerforceSyncHistoryViewState {
@@ -47,6 +56,7 @@ function createState(): PerforceSyncHistoryViewState {
     selectedId: null,
     limit: SYNC_HISTORY_PAGE_SIZE,
     loaded: false,
+    listWidth: null,
   }
 }
 

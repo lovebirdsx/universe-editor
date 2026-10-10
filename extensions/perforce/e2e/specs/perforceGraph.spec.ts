@@ -18,4 +18,20 @@ test.describe('@p1 perforce graph', () => {
     // The toolbar title renders even before/without any data.
     await expect(editor.getByText('Perforce Graph', { exact: true })).toBeVisible()
   })
+
+  test('opens the sync history page from the toolbar icon', async ({ page, workbench }) => {
+    await workbench.runCommand('perforce-graph.view')
+
+    const editor = page.locator('[data-testid="perforceGraph-editor"]')
+    await expect(editor).toBeVisible()
+
+    await editor.getByTestId('perforceGraph-openSyncHistory').click()
+
+    // The records live in the extension's own file, so the page renders with or
+    // without a workspace — "no extension here" is a state of its own, not a
+    // missing page. Refresh is the one control every state has.
+    const history = page.getByTestId('perforce-sync-history')
+    await expect(history).toBeVisible({ timeout: 30_000 })
+    await expect(history.getByTestId('perforce-sync-history-refresh')).toBeVisible()
+  })
 })

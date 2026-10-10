@@ -12,8 +12,8 @@
 | 数据层 | `extensions/perforce/src/syncHistory.ts` | 纯函数 `outcomeOfRun` / `syncNothingHappened`（**与 toast 分支共用一份**）/ `buildSyncHistoryEntry` / `isEntry` / `toRunDto` / `toRunDetailDto`；持久化类 `SyncHistoryLog`（`<globalStoragePath>/syncHistory.json`，per-process tmp + rename 原子写，mtime+size stamp 跨窗口重载，整段 best-effort） |
 | 事实来源 | `extensions/perforce/src/client.ts` | `SyncRunResult.facts`（引擎 / 线程 / `startedAt` / `io` / `diskWrites`）+ `_withSyncFacts`。δ 与原生两条路都经它装饰；**编辑器自己预检拒绝的 run（`notRun`）不贴 facts**（见下） |
 | 记录点 | `extensions/perforce/src/extension.ts` | `recordSyncHistory` helper + **两个**落账点（见下）+ `perforce-sync-history.getRuns/getRun` 两个只读命令 |
-| 宿主页 | `apps/editor/src/renderer/workbench/perforceSyncHistory/` | `PerforceSyncHistoryEditor.tsx` + `syncHistoryFormat.ts`（纯格式化，**镜像**扩展侧的字节格式化，绝不 import 扩展代码） |
-| 输入/状态/动作 | `apps/editor/src/renderer/services/editor/PerforceSyncHistoryEditorInput.ts` · `services/perforceSyncHistory/syncHistoryViewState.ts` · `actions/perforceSyncHistoryActions.ts` | EditorInput（常量 URI 单例）· **单桶** module-level view-state（不像 graph 那样按 input id 分桶——这个 tab 只有一个实例）· Action2 `perforce-sync-history.view` |
+| 宿主页 | `apps/editor/src/renderer/workbench/perforceSyncHistory/` | `PerforceSyncHistoryEditor.tsx`（列表 + 详情，中间 `Sash` 可拖、宽度持久化）+ `syncHistoryFormat.ts`（纯格式化，**镜像**扩展侧的字节格式化，绝不 import 扩展代码）+ `syncHistoryCsv.ts`（导出用的 CSV 渲染：表头 = DTO 字段名，缺项留空而非 0） |
+| 输入/状态/动作 | `apps/editor/src/renderer/services/editor/PerforceSyncHistoryEditorInput.ts` · `services/perforceSyncHistory/syncHistoryViewState.ts` · `actions/perforceSyncHistoryActions.ts` | EditorInput（常量 URI 单例）· **单桶** module-level view-state（不像 graph 那样按 input id 分桶——这个 tab 只有一个实例；拖过的列表宽度也在其中，storage 侧是 `perforceSyncHistory.listWidth`）· 两个 Action2：`perforce-sync-history.view`、`perforce-sync-history.exportCsv`（重新拉**全量**再经保存对话框写文件，不改页面状态） |
 
 宿主侧只经 `ICommandService` 调 `PerforceSyncHistoryCommands.*`；扩展侧对这些 id 写字面量（`import type` 契约，运行时擦除），与 `perforce-graph.*` 同一套纪律。
 
