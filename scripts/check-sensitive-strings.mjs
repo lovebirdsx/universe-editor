@@ -7,6 +7,16 @@
  *  not appear in the public repository. Rules are loaded from an external
  *  JSON configuration file to keep the scanner itself free of sensitive data.
  *
+ *  The scan set comes from git (`ls-files -c -o --exclude-standard`): tracked plus
+ *  untracked-but-not-ignored files, i.e. exactly what could reach the public repo.
+ *  `.gitignore` stays the single source of truth for exclusions — never mirror it here.
+ *  `-o` is load-bearing: a file written but not yet `git add`ed is the one most likely
+ *  to leak, and dropping it would silently unguard the pre-commit case.
+ *  `--exclude-standard` also honours `.git/info/exclude` and the user's global excludes,
+ *  so a local machine can scan slightly less than CI does; CI is the authority.
+ *  Without git (no binary / not a repo / tarball export) it falls back to a directory
+ *  walk, which cannot honour ignore rules and keeps its own prune list (SKIP_DIRS).
+ *
  *  Usage:
  *    node scripts/check-sensitive-strings.mjs                 # Report, exit 0
  *    node scripts/check-sensitive-strings.mjs --check         # CI: exit 1 on hits / missing rules
@@ -16,15 +26,22 @@
  *    SENSITIVE_STRINGS_ALLOW_MISSING=1  # downgrade a missing rules file to a warning (exit 0)
  *--------------------------------------------------------------------------------------------*/
 
+import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { readdirSync, readFileSync, existsSync, realpathSync } from 'node:fs'
-import { dirname, extname, join, resolve, relative } from 'node:path'
+import { readdirSync, readFileSync, existsSync, lstatSync, realpathSync } from 'node:fs'
+import { basename, dirname, extname, isAbsolute, join, resolve, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const DEFAULT_RULES_PATH = join(REPO_ROOT, 'scripts', 'sensitive-rules.json')
 
-/** Directories to skip: build outputs, dependencies, vendor forks, gitignored local files. */
+/**
+ * Fallback-only directory prune list: used when the scan set cannot come from git
+ * (no binary / not a repo / tarball), because then no ignore rules are available.
+ * In git mode `.gitignore` alone decides what is excluded — do NOT re-add gitignore
+ * entries here to "fix" a hit, that is exactly the hand-copied list this replaced
+ * (`.tmp-*` was missing from it, so a local `.tmp-bug/` recording turned the guard red).
+ */
 const SKIP_DIRS = new Set([
   'node_modules',
   '.git',
@@ -39,11 +56,13 @@ const SKIP_DIRS = new Set([
   'playwright-report',
   'test-results',
   '.next',
-  // vendor / extensions-external are git submodules: the main repo records only
-  // gitlinks, cleanup must happen inside each fork — intentionally out of scope here
+  // Only vendor/{claude-agent-acp,codex-acp} are real submodules (the main repo records
+  // gitlinks); their forks are maintained separately, so their contents are out of scope.
+  // extensions-external/* is plain tracked content of THIS repo — git mode scans it.
   'vendor',
   'extensions-external',
-  // gitignored local artifacts: not in public repo
+  // gitignored local artifacts (.claude/plans, .claude/explore-results, …): they hold real
+  // internal names, so the walk — which cannot see .gitignore — must keep pruning them
   'plans',
   'explore-results',
   'handoff',
@@ -146,6 +165,73 @@ export function loadRules(configPath = DEFAULT_RULES_PATH) {
   }
 }
 
+const GIT_LS_FILES_ARGS = ['ls-files', '-c', '-o', '--exclude-standard', '-z']
+
+// GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE are inherited from the caller's environment and
+// would silently swap the listing for another tree or index — scan what is on disk here.
+function gitEnv() {
+  const env = { ...process.env }
+  delete env.GIT_DIR
+  delete env.GIT_WORK_TREE
+  delete env.GIT_INDEX_FILE
+  return env
+}
+
+// maxBuffer matches the in-repo precedent (scripts/test-changed.mjs): the listing is ~280 KB
+// today, too close to spawnSync's 1 MiB default for comfort.
+function defaultRunGit(args, cwd) {
+  return spawnSync('git', args, {
+    cwd,
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+    env: gitEnv(),
+  })
+}
+
+/**
+ * Paths git considers part of the repo: tracked + untracked-but-not-ignored.
+ * Returns null when git is unusable (missing binary, not a repo, non-zero exit, truncated
+ * output) so the caller can fall back to a directory walk.
+ */
+export function listGitFiles(repoRoot, runGit = defaultRunGit) {
+  const res = runGit(GIT_LS_FILES_ARGS, repoRoot)
+  if (!res || res.error || res.status !== 0 || typeof res.stdout !== 'string') return null
+  const paths = new Set()
+  for (const entry of res.stdout.split('\0')) {
+    if (entry === '') continue
+    // `-c` repeats a path once per unmerged stage, hence the Set. A listing that escapes
+    // repoRoot (version-dependent edge) must never reach the log — distrust it entirely.
+    if (isAbsolute(entry) || entry.startsWith('../')) return null
+    paths.add(entry)
+  }
+  return [...paths]
+}
+
+/** The scan set: git's view of the repo when available, else the walk over SKIP_DIRS. */
+export function collectScanFiles(repoRoot, listGit = listGitFiles) {
+  const listed = listGit(repoRoot)
+  if (listed === null) return { files: collectFiles(repoRoot), viaGit: false }
+
+  const files = []
+  for (const rel of listed) {
+    const name = basename(rel)
+    if (SKIP_FILES.has(name)) continue
+    if (!SCAN_NAMES.has(name) && !SCAN_EXTS.has(extname(rel))) continue
+    const abs = join(repoRoot, rel)
+    let isFile = false
+    try {
+      // Directories (submodule gitlinks), tracked-but-deleted files and unreadable paths:
+      // readFileSync on any of them either throws or yields nothing worth scanning.
+      isFile = lstatSync(abs).isFile()
+    } catch {
+      // not scannable
+    }
+    if (isFile) files.push(abs)
+  }
+  return { files, viaGit: true }
+}
+
+/** Fallback traversal, used only when the scan set cannot come from git. */
 export function collectFiles(dir, files = []) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (entry.isDirectory()) {
@@ -221,6 +307,7 @@ export function checkSensitiveStrings({
   configPath = DEFAULT_RULES_PATH,
   check = false,
   allowMissing = false,
+  listGit = listGitFiles,
 } = {}) {
   const loaded = loadRules(configPath)
 
@@ -229,7 +316,7 @@ export function checkSensitiveStrings({
   }
 
   if (loaded.status === 'ok') {
-    const files = collectFiles(repoRoot)
+    const { files, viaGit } = collectScanFiles(repoRoot, listGit)
     const findings = []
     for (const file of files) {
       for (const hit of scanFile(file, loaded.rules)) {
@@ -237,7 +324,14 @@ export function checkSensitiveStrings({
       }
     }
     const exit = check && findings.length > 0 ? 1 : 0
-    return { exit, status: 'ok', findings, fileCount: files.length, ruleCount: loaded.rules.length }
+    return {
+      exit,
+      status: 'ok',
+      findings,
+      fileCount: files.length,
+      ruleCount: loaded.rules.length,
+      source: viaGit ? 'git' : 'walk',
+    }
   }
 
   return {
@@ -257,6 +351,22 @@ function main() {
   const allowMissing = process.env.SENSITIVE_STRINGS_ALLOW_MISSING === '1'
 
   const result = checkSensitiveStrings({ check, allowMissing })
+
+  if (result.status === 'ok') {
+    if (result.source === 'walk') {
+      // The silent downgrade to a walk is the one failure mode that still looks green:
+      // it re-scans gitignored local artifacts and misses tracked files the walk prunes.
+      // Never echo git's own stderr here — it embeds absolute paths.
+      console.error(
+        existsSync(join(REPO_ROOT, '.git'))
+          ? '[sensitive-strings] 警告：这是 git 工作树，但 git 调用失败，已回退目录遍历——扫描集合可能与公开仓不一致，请检查 git 是否可用'
+          : '[sensitive-strings] 未检测到 git 仓库，扫描集合来自目录遍历（忽略规则不生效，含本地忽略文件）',
+      )
+    }
+    if (result.fileCount === 0) {
+      console.error('[sensitive-strings] 警告：扫描集合为空，请检查扫描根与过滤规则')
+    }
+  }
 
   if (result.status === 'ok' && result.findings.length === 0) {
     console.log(

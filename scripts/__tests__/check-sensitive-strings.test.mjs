@@ -1,26 +1,42 @@
 /*---------------------------------------------------------------------------------------------
  *  Tests for scripts/check-sensitive-strings.mjs. Run with `node --test`.
  *  覆盖：规则加载四态（missing/empty/parse-error/ok）、--check 的退出码、掩码输出、
- *  allow/allowMatch/sensitive-strings:allow 三级豁免、compileRule 结构映射。
+ *  allow/allowMatch/sensitive-strings:allow 三级豁免、compileRule 结构映射、
+ *  扫描集合来源（git 列表 vs 非 git 回退遍历）与 listGitFiles 的失败态。
  *  只打纯函数，绝不触发 process.exit（这是纯函数化的意义）。
  *--------------------------------------------------------------------------------------------*/
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   checkSensitiveStrings,
   collectFiles,
+  collectScanFiles,
   compileRule,
   formatGroupHeader,
   formatHit,
+  listGitFiles,
   maskMatch,
 } from '../check-sensitive-strings.mjs'
 import { mkTempDir } from '../lib/temp-root.mjs'
 
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
+const HAS_GIT = (() => {
+  const res = spawnSync('git', ['--version'], { stdio: 'ignore' })
+  return !res.error && res.status === 0
+})()
+
 function makeRepo() {
   return mkTempDir('sensitive-strings-')
+}
+
+function git(cwd, args) {
+  const res = spawnSync('git', args, { cwd, stdio: 'ignore' })
+  assert.equal(res.status, 0, `git ${args.join(' ')} failed`)
 }
 
 function writeConfig(root, content) {
@@ -302,4 +318,178 @@ test('collectFiles：SCAN_NAMES 收无扩展名文件、SKIP_FILES/SKIP_DIRS 跳
 
   const names = collectFiles(root).map((f) => f.slice(root.length + 1).replace(/\\/g, '/'))
   assert.deepEqual(names.sort(), ['.gitmodules', '.npmrc', 'src/a.ts'])
+})
+
+/*---- 扫描集合来源：git 列表优先，非 git 场景回退目录遍历 ----*/
+
+const LEAK_RULE = JSON.stringify([
+  { id: 'probe', desc: 'probe rule', pattern: 'leak\\.example\\.com', flags: 'gi' },
+])
+
+/** 把临时命中串写进夹具文件，避免测试自身被扫描器命中。 */
+function leakLine() {
+  return 'const u = "https://leak.example.com"\n'
+}
+
+// 本机全局 excludes（~/.config/git/ignore 之类）能让探针文件在 git 模式下凭空消失，
+// 真 git 用例必须把 HOME/XDG 隔离到临时根。扫描器内部的 git 调用读的是 process.env，
+// 所以只能临时改写进程环境。
+function withIsolatedGitEnv(root, fn) {
+  const keys = [
+    'HOME',
+    'USERPROFILE',
+    'XDG_CONFIG_HOME',
+    'GIT_CONFIG_NOSYSTEM',
+    'GIT_CONFIG_GLOBAL',
+    'GIT_CONFIG_SYSTEM',
+    'GIT_DIR',
+    'GIT_WORK_TREE',
+    'GIT_INDEX_FILE',
+  ]
+  const saved = new Map(keys.map((key) => [key, process.env[key]]))
+  process.env.HOME = root
+  process.env.USERPROFILE = root
+  process.env.XDG_CONFIG_HOME = join(root, 'xdg-config')
+  process.env.GIT_CONFIG_NOSYSTEM = '1'
+  for (const key of [
+    'GIT_CONFIG_GLOBAL',
+    'GIT_CONFIG_SYSTEM',
+    'GIT_DIR',
+    'GIT_WORK_TREE',
+    'GIT_INDEX_FILE',
+  ]) {
+    delete process.env[key]
+  }
+  try {
+    return fn()
+  } finally {
+    for (const [key, value] of saved) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+}
+
+test('被忽略的目录不扫：.gitignore 说了算，不再靠手抄清单', { skip: !HAS_GIT }, () => {
+  const root = makeRepo()
+  const configPath = writeConfig(root, LEAK_RULE)
+  let result
+  withIsolatedGitEnv(root, () => {
+    git(root, ['init'])
+    writeSource(root, '.gitignore', '.tmp-probe-*/\n')
+    writeSource(root, '.tmp-probe-bug/recording.md', leakLine())
+    writeSource(root, 'src/a.ts', 'nothing here\n')
+    result = checkSensitiveStrings({ repoRoot: root, configPath, check: true })
+  })
+  assert.equal(result.source, 'git')
+  assert.equal(result.exit, 0)
+  assert.deepEqual(result.findings, [])
+
+  // 同一夹具用回退遍历必须能捞到：证明这条例子真在验 git 忽略语义，而不是夹具写错
+  const walked = collectScanFiles(root, () => null)
+  assert.equal(walked.viaGit, false)
+  assert.ok(walked.files.some((f) => f.endsWith('recording.md')))
+})
+
+test('未跟踪但未被忽略的新文件仍扫，已跟踪的同样扫', { skip: !HAS_GIT }, () => {
+  const root = makeRepo()
+  const configPath = writeConfig(root, LEAK_RULE)
+  let result
+  withIsolatedGitEnv(root, () => {
+    git(root, ['init'])
+    writeSource(root, 'src/tracked.ts', leakLine())
+    writeSource(root, 'src/untracked.ts', leakLine())
+    git(root, ['add', 'src/tracked.ts'])
+    result = checkSensitiveStrings({ repoRoot: root, configPath, check: true })
+  })
+  assert.equal(result.source, 'git')
+  assert.equal(result.exit, 1)
+  assert.deepEqual(result.findings.map((f) => f.file).sort(), [
+    'src/tracked.ts',
+    'src/untracked.ts',
+  ])
+})
+
+test('非 git 场景回退到目录遍历，剪枝语义与今天一致', () => {
+  const root = makeRepo()
+  const configPath = writeConfig(root, LEAK_RULE)
+  writeSource(root, 'src/a.ts', leakLine())
+  writeSource(root, 'node_modules/dep/index.js', leakLine())
+
+  const walked = collectScanFiles(root, () => null)
+  assert.equal(walked.viaGit, false)
+  assert.deepEqual(walked.files.slice().sort(), collectFiles(root).slice().sort())
+
+  const result = checkSensitiveStrings({
+    repoRoot: root,
+    configPath,
+    check: true,
+    listGit: () => null,
+  })
+  assert.equal(result.source, 'walk')
+  assert.equal(result.exit, 1)
+  assert.deepEqual(
+    result.findings.map((f) => f.file),
+    ['src/a.ts'],
+  )
+
+  // 真环境（没有 git init 的临时目录）：命中照报，回退是否生效不影响可观测行为
+  const ambient = checkSensitiveStrings({ repoRoot: root, configPath, check: true })
+  assert.equal(ambient.exit, 1)
+  assert.equal(ambient.findings[0].file, 'src/a.ts')
+})
+
+test('listGitFiles：失败与越界一律 null，成功态解析 -z 输出', () => {
+  const root = makeRepo()
+  const calls = []
+  const run = (res) => (args, cwd) => {
+    calls.push({ args, cwd })
+    return res
+  }
+
+  assert.deepEqual(
+    listGitFiles(root, run({ status: 0, stdout: 'a.ts\0src/b b.ts\0中文/名.md\0\0' })),
+    ['a.ts', 'src/b b.ts', '中文/名.md'],
+  )
+  assert.deepEqual(calls[0].args, ['ls-files', '-c', '-o', '--exclude-standard', '-z'])
+  assert.equal(calls[0].cwd, root)
+
+  // -c 在冲突未解决时按 stage 重复输出同一路径
+  assert.deepEqual(listGitFiles(root, run({ status: 0, stdout: 'a.ts\0a.ts\0' })), ['a.ts'])
+
+  assert.equal(listGitFiles(root, run({ status: 128, stdout: '' })), null) // 非仓库
+  assert.equal(
+    listGitFiles(root, run({ status: null, stdout: null, error: new Error('ENOENT') })),
+    null,
+  )
+  assert.equal(listGitFiles(root, run({ status: 0, stdout: null })), null) // 截断 / 异常
+  assert.equal(listGitFiles(root, run({ status: 0, stdout: '../escape.ts\0' })), null)
+  assert.equal(listGitFiles(root, run({ status: 0, stdout: '/etc/passwd\0' })), null)
+})
+
+test('git 模式不套 SKIP_DIRS，但目录/gitlink/已删文件会被跳过', () => {
+  const root = makeRepo()
+  writeSource(root, 'release/x.ts', 'x\n')
+  writeSource(root, 'node_modules/y.ts', 'x\n')
+  writeSource(root, 'pnpm-lock.yaml', 'x\n')
+  writeSource(root, 'src/a.png', 'x\n')
+  mkdirSync(join(root, 'sub'), { recursive: true })
+
+  const { files, viaGit } = collectScanFiles(root, () => [
+    'release/x.ts',
+    'node_modules/y.ts',
+    'sub', // 目录：submodule 在主仓只以 gitlink 出现
+    'src/gone.ts', // index 里有、盘上已删
+    'pnpm-lock.yaml', // SKIP_FILES
+    'src/a.png', // SCAN_EXTS 之外
+  ])
+  assert.equal(viaGit, true)
+  const rel = files.map((f) => f.slice(root.length + 1).replace(/\\/g, '/'))
+  assert.deepEqual(rel.sort(), ['node_modules/y.ts', 'release/x.ts'])
+})
+
+test('金丝雀：本仓的扫描集合确实来自 git', { skip: !HAS_GIT }, () => {
+  const { files, viaGit } = collectScanFiles(REPO_ROOT)
+  assert.equal(viaGit, true)
+  assert.ok(files.length > 1000, `scan set looks too small: ${files.length}`)
 })
