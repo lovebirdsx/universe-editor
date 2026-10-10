@@ -78,17 +78,34 @@ export function gitCommitActions(): Command[] {
   ]
 }
 
-/** Pick the SCM input box's primary action from the repo's change / sync state. */
+/** Pick the SCM input box's primary action from the repo's change / sync state.
+ *  Mirrors VSCode's action-button chain: with changes the Commit button wins,
+ *  then an unpublished branch offers to publish, then the sync states. */
 export function gitPrimaryInputCommand({
   hasChanges,
+  branch,
+  upstream,
+  headRevision,
   ahead,
   behind,
 }: {
   readonly hasChanges: boolean
+  readonly branch: string | undefined
+  readonly upstream: string | undefined
+  readonly headRevision: string | undefined
   readonly ahead: number
   readonly behind: number
 }): Command {
   if (hasChanges) return GIT_COMMIT_INPUT_COMMAND
+  // A named branch with a commit but no upstream is what `git push -u` publishes.
+  // An unborn branch (no commit) has nothing to push, and porcelain reports no
+  // ahead/behind without an upstream, so both fall through to the disabled Commit.
+  if (branch !== undefined && upstream === undefined && headRevision !== undefined) {
+    return {
+      command: 'git.publishBranch',
+      title: localize('git.command.publishBranch', 'Publish Branch'),
+    }
+  }
   if (ahead > 0 && behind > 0) return GIT_PULL_REBASE_INPUT_COMMAND
   if (ahead > 0) return GIT_PUSH_INPUT_COMMAND
   if (behind > 0) return GIT_PULL_INPUT_COMMAND

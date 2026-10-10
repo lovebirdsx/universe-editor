@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   classifyWorktreeRemoveFailure,
   gitPrimaryInputCommand,
+  initPublishConfirmation,
   parseWorktrees,
   Repository,
 } from '../repository.js'
@@ -33,10 +34,13 @@ interface FakeSourceControl {
 
 const extensionApiMock = vi.hoisted(() => {
   const sourceControls: FakeSourceControl[] = []
+  const showWarningMessage = vi.fn()
   return {
     sourceControls,
+    showWarningMessage,
     reset() {
       sourceControls.length = 0
+      showWarningMessage.mockReset()
     },
   }
 })
@@ -84,7 +88,7 @@ vi.mock('@universe-editor/extension-api', () => ({
     showErrorMessage: vi.fn(),
     showInformationMessage: vi.fn(),
     showQuickPick: vi.fn(),
-    showWarningMessage: vi.fn(),
+    showWarningMessage: extensionApiMock.showWarningMessage,
   },
   workspace: {
     getConfiguration: vi.fn(() => ({
@@ -161,41 +165,100 @@ afterEach(async () => {
   )
 })
 
+/** Input-command state; the head fields default to a published `main`. */
+function primaryCommand(
+  sync: { hasChanges: boolean; ahead: number; behind: number },
+  head: {
+    branch: string | undefined
+    upstream: string | undefined
+    headRevision: string | undefined
+  } = { branch: 'main', upstream: 'origin/main', headRevision: 'abc123' },
+): ReturnType<typeof gitPrimaryInputCommand> {
+  return gitPrimaryInputCommand({ ...sync, ...head })
+}
+
 describe('gitPrimaryInputCommand', () => {
   it('uses Commit when local changes are present', () => {
-    expect(gitPrimaryInputCommand({ hasChanges: true, ahead: 1, behind: 1 })).toEqual({
+    expect(primaryCommand({ hasChanges: true, ahead: 1, behind: 1 })).toEqual({
       command: 'git.commit',
       title: 'Commit',
     })
   })
 
   it('uses Pull Rebase when local and remote commits both exist', () => {
-    expect(gitPrimaryInputCommand({ hasChanges: false, ahead: 1, behind: 1 })).toEqual({
+    expect(primaryCommand({ hasChanges: false, ahead: 1, behind: 1 })).toEqual({
       command: 'git.pullRebase',
       title: 'Pull Rebase',
     })
   })
 
   it('uses Push when only local commits exist', () => {
-    expect(gitPrimaryInputCommand({ hasChanges: false, ahead: 1, behind: 0 })).toEqual({
+    expect(primaryCommand({ hasChanges: false, ahead: 1, behind: 0 })).toEqual({
       command: 'git.push',
       title: 'Push',
     })
   })
 
   it('uses Pull when only remote commits exist', () => {
-    expect(gitPrimaryInputCommand({ hasChanges: false, ahead: 0, behind: 1 })).toEqual({
+    expect(primaryCommand({ hasChanges: false, ahead: 0, behind: 1 })).toEqual({
       command: 'git.pull',
       title: 'Pull',
     })
   })
 
   it('disables Commit when there is nothing to synchronize', () => {
-    expect(gitPrimaryInputCommand({ hasChanges: false, ahead: 0, behind: 0 })).toEqual({
+    expect(primaryCommand({ hasChanges: false, ahead: 0, behind: 0 })).toEqual({
       command: 'git.commit',
       title: 'Commit',
       disabled: true,
     })
+  })
+
+  it('offers Publish Branch on a clean branch with no upstream', () => {
+    expect(
+      primaryCommand(
+        { hasChanges: false, ahead: 0, behind: 0 },
+        { branch: 'feature/x', upstream: undefined, headRevision: 'abc123' },
+      ),
+    ).toEqual({ command: 'git.publishBranch', title: 'Publish Branch' })
+  })
+
+  it('prefers Publish Branch over the sync states when there is no upstream', () => {
+    // Porcelain reports no ahead/behind without an upstream; this pins the chain
+    // order regardless of what a caller passes.
+    expect(
+      primaryCommand(
+        { hasChanges: false, ahead: 1, behind: 1 },
+        { branch: 'feature/x', upstream: undefined, headRevision: 'abc123' },
+      ),
+    ).toEqual({ command: 'git.publishBranch', title: 'Publish Branch' })
+  })
+
+  it('keeps Commit ahead of Publish when local changes are present', () => {
+    expect(
+      primaryCommand(
+        { hasChanges: true, ahead: 0, behind: 0 },
+        { branch: 'feature/x', upstream: undefined, headRevision: 'abc123' },
+      ),
+    ).toEqual({ command: 'git.commit', title: 'Commit' })
+  })
+
+  it('does not offer Publish on a detached HEAD', () => {
+    expect(
+      primaryCommand(
+        { hasChanges: false, ahead: 0, behind: 0 },
+        { branch: undefined, upstream: undefined, headRevision: 'abc123' },
+      ),
+    ).toEqual({ command: 'git.commit', title: 'Commit', disabled: true })
+  })
+
+  it('does not offer Publish on an unborn branch, which has nothing to push', () => {
+    expect(
+      primaryCommand(
+        { hasChanges: false, ahead: 0, behind: 0 },
+        { branch: 'main', upstream: undefined, headRevision: undefined },
+      ),
+    ).toEqual({ command: 'git.commit', title: 'Commit', disabled: true })
   })
 })
 
@@ -320,6 +383,115 @@ describe('Repository remote state refresh', () => {
     await expect(refreshCommandFor(local)).resolves.toEqual({
       command: 'git.pullRebase',
       title: 'Pull Rebase',
+    })
+  })
+
+  it('shows Publish Branch on a clean branch that was never published', async () => {
+    const { local } = await createRemoteBackedRepo()
+    await git(['checkout', '-b', 'feature'], local)
+
+    await expect(refreshCommandFor(local)).resolves.toEqual({
+      command: 'git.publishBranch',
+      title: 'Publish Branch',
+    })
+  })
+
+  it('disables Commit once the branch is published and in sync', async () => {
+    const { local } = await createRemoteBackedRepo()
+
+    await expect(refreshCommandFor(local)).resolves.toEqual({
+      command: 'git.commit',
+      title: 'Commit',
+      disabled: true,
+    })
+  })
+
+  it('drops Publish after the branch gains an upstream', async () => {
+    const { local } = await createRemoteBackedRepo()
+    await git(['checkout', '-b', 'feature'], local)
+    await git(['push', '-u', 'origin', 'feature'], local)
+
+    await expect(refreshCommandFor(local)).resolves.toEqual({
+      command: 'git.commit',
+      title: 'Commit',
+      disabled: true,
+    })
+  })
+
+  it('does not offer Publish on an unborn branch, which has nothing to push', async () => {
+    const root = mkTempDir('ue-git-unborn-')
+    tmpRoots.push(root)
+    await git(['init', root])
+
+    await expect(refreshCommandFor(root)).resolves.toEqual({
+      command: 'git.commit',
+      title: 'Commit',
+      disabled: true,
+    })
+  })
+})
+
+describe('Repository push without an upstream', () => {
+  /** Run `push` on a fresh Repository, answering the publish prompt with `picker`. */
+  async function pushOn(repoPath: string, picker: string | undefined): Promise<void> {
+    extensionApiMock.showWarningMessage.mockResolvedValue(picker)
+    const repo = new Repository(repoPath)
+    try {
+      await repo.refresh({ fetch: true })
+      await repo.push()
+    } finally {
+      repo.dispose()
+    }
+  }
+
+  it('offers to publish, and publishes when the prompt is accepted', async () => {
+    const { local } = await createRemoteBackedRepo()
+    await git(['checkout', '-b', 'feature'], local)
+
+    await pushOn(local, 'Publish Branch')
+
+    expect(extensionApiMock.showWarningMessage).toHaveBeenCalledTimes(1)
+    expect(extensionApiMock.showWarningMessage.mock.calls[0]?.[0]).toContain('feature')
+    // Published now, so the button falls back to the in-sync state.
+    await expect(refreshCommandFor(local)).resolves.toEqual({
+      command: 'git.commit',
+      title: 'Commit',
+      disabled: true,
+    })
+  })
+
+  it('leaves the branch unpublished when the prompt is dismissed', async () => {
+    const { local } = await createRemoteBackedRepo()
+    await git(['checkout', '-b', 'feature'], local)
+
+    await pushOn(local, undefined)
+
+    await expect(refreshCommandFor(local)).resolves.toEqual({
+      command: 'git.publishBranch',
+      title: 'Publish Branch',
+    })
+  })
+
+  it('stops asking after "Don\'t Ask Again" and publishes directly', async () => {
+    const { local } = await createRemoteBackedRepo()
+    const persist = vi.fn()
+    initPublishConfirmation(true, persist)
+    try {
+      await git(['checkout', '-b', 'feature'], local)
+      await pushOn(local, "Don't Ask Again")
+      expect(persist).toHaveBeenCalledWith(false)
+
+      await git(['checkout', '-b', 'feature2'], local)
+      await pushOn(local, undefined)
+      // The second branch published without a second prompt.
+      expect(extensionApiMock.showWarningMessage).toHaveBeenCalledTimes(1)
+    } finally {
+      initPublishConfirmation(true, () => {})
+    }
+    await expect(refreshCommandFor(local)).resolves.toEqual({
+      command: 'git.commit',
+      title: 'Commit',
+      disabled: true,
     })
   })
 })

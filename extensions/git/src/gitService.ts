@@ -4,7 +4,7 @@
  * shell syntax. The child env is sanitized the same way the main process
  * sanitizes the extension host's: the ELECTRON_* / NODE_OPTIONS denylist is
  * stripped so a Node-shaped child can't be steered, even though `git` itself
- * isn't Node.
+ * isn't Node. The locale is pinned to English so diagnostics stay parseable.
  */
 import { spawn } from 'node:child_process'
 
@@ -31,6 +31,12 @@ function sanitizeEnv(): NodeJS.ProcessEnv {
     if (ENV_DENYLIST.includes(k)) continue
     out[k] = v
   }
+  // git translates its diagnostics; the extension reads them in English
+  // (`classifyGitError`, the no-upstream push probe), so pin the child's locale
+  // the way VSCode's git extension does.
+  out['LANGUAGE'] = 'en'
+  out['LC_ALL'] = 'en_US.UTF-8'
+  out['LANG'] = 'en_US.UTF-8'
   return out
 }
 

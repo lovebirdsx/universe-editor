@@ -24,9 +24,42 @@ describe('parseStatus', () => {
     expect(status.headRevision).toBe('deadbeef')
   })
 
+  it('reads the upstream ref when the branch is published', () => {
+    const status = parseStatus(
+      z(
+        '# branch.oid abc123',
+        '# branch.head feature/x',
+        '# branch.upstream origin/feature/x',
+        '# branch.ab +0 -0',
+      ),
+    )
+    expect(status.upstream).toBe('origin/feature/x')
+  })
+
+  it('leaves upstream undefined for a branch that was never published', () => {
+    // Porcelain omits both `branch.upstream` and `branch.ab` here, so ahead /
+    // behind stay 0 and only this field tells the two cases apart.
+    const status = parseStatus(z('# branch.oid abc123', '# branch.head feature/x'))
+    expect(status.branch).toBe('feature/x')
+    expect(status.upstream).toBeUndefined()
+    expect(status.ahead).toBe(0)
+    expect(status.behind).toBe(0)
+  })
+
+  it('still reads the upstream line git prints for a detached HEAD', () => {
+    // Detached HEAD reports the branch it was detached from; consumers key the
+    // publish decision on `branch`, not on this stray line.
+    const status = parseStatus(
+      z('# branch.oid deadbeef', '# branch.head (detached)', '# branch.upstream origin/main'),
+    )
+    expect(status.branch).toBeUndefined()
+    expect(status.upstream).toBe('origin/main')
+  })
+
   it('reports no HEAD revision for an empty repo (`branch.oid (initial)`)', () => {
     const status = parseStatus(z('# branch.oid (initial)', '# branch.head main'))
     expect(status.headRevision).toBeUndefined()
+    expect(status.upstream).toBeUndefined()
   })
 
   it('splits ordinary entries into index (X) and working-tree (Y) status', () => {

@@ -25,7 +25,7 @@ import {
   type SourceControlResourceGroup,
 } from '@universe-editor/extension-api'
 import { localize } from './nls.js'
-import { gitExec, gitExecBinary } from './gitService.js'
+import { gitExec, gitExecBinary, type GitExecResult } from './gitService.js'
 import { selectHunkPatch } from './hunkPatch.js'
 import { notifyGitFailure } from './gitError.js'
 import { parseStatus } from './statusParser.js'
@@ -69,6 +69,21 @@ const AUTO_REFRESH_BLUR_MAX_WAIT_MS = 60_000
 const AUTOFETCH_INITIAL_MIN_MS = 3000
 const AUTOFETCH_INITIAL_SPREAD_MS = 5000
 const AUTOFETCH_JITTER = 0.2
+
+/** git's refusal to push a branch that has no upstream (`builtin/push.c`). git's
+ *  diagnostics are pinned to English in gitService so this stays matchable. */
+const NO_UPSTREAM_BRANCH = 'has no upstream branch'
+
+/** The persisted `confirmBranchPublish` preference: whether a push that can't
+ *  proceed asks before publishing the branch. `activate` seeds it from globalState. */
+let confirmBranchPublish = true
+let persistBranchPublishConfirmation: (ask: boolean) => void = () => {}
+
+/** Wire the persisted `confirmBranchPublish` preference. Called from `activate`. */
+export function initPublishConfirmation(ask: boolean, persist: (ask: boolean) => void): void {
+  confirmBranchPublish = ask
+  persistBranchPublishConfirmation = persist
+}
 
 /** True when a path is a spreadsheet the Excel extension should diff in a webview. */
 function isSpreadsheetPath(path: string): boolean {
@@ -262,6 +277,9 @@ export class Repository {
     const hasChanges = staged.length + working.length > 0
     this._sc.acceptInputCommand = gitPrimaryInputCommand({
       hasChanges,
+      branch: status.branch,
+      upstream: status.upstream,
+      headRevision: status.headRevision,
       ahead: status.ahead,
       behind: status.behind,
     })
@@ -466,10 +484,38 @@ export class Repository {
   }
 
   async push(): Promise<void> {
-    await this._run(['push'], 'push', {
-      text: localize('git.progress.pushing', 'Pushing…'),
-      kind: 'syncing',
-    })
+    await this._run(
+      ['push'],
+      'push',
+      { text: localize('git.progress.pushing', 'Pushing…'), kind: 'syncing' },
+      (res) => this._offerPublishUnpublishedBranch(res),
+    )
+  }
+
+  /**
+   * A push git refused because the branch has no upstream offers to publish it
+   * instead of the generic failure toast. Returns true when it was handled here.
+   */
+  private async _offerPublishUnpublishedBranch(res: GitExecResult): Promise<boolean> {
+    if (!`${res.stderr}\n${res.stdout}`.includes(NO_UPSTREAM_BRANCH)) return false
+    if (confirmBranchPublish) {
+      const publish = localize('git.command.publishBranch', 'Publish Branch')
+      const never = localize('git.btn.dontAskAgain', "Don't Ask Again")
+      const picked = await window.showWarningMessage(
+        localize('git.push.noUpstream', 'The branch "{0}" has no remote branch. Publish it now?', {
+          0: this._branch ?? '',
+        }),
+        publish,
+        never,
+      )
+      if (picked !== publish && picked !== never) return true
+      if (picked === never) {
+        confirmBranchPublish = false
+        persistBranchPublishConfirmation(false)
+      }
+    }
+    await this.publishBranch()
+    return true
   }
 
   async pushForce(): Promise<void> {
@@ -628,8 +674,13 @@ export class Repository {
       return
     }
     const remotes = await this._listRemotes()
-    let remote = remotes[0] ?? 'origin'
-    if (remotes.length > 1) {
+    const [defaultRemote, ...otherRemotes] = remotes
+    if (defaultRemote === undefined) {
+      void window.showWarningMessage(localize('git.remote.none', 'No remotes configured.'))
+      return
+    }
+    let remote = defaultRemote
+    if (otherRemotes.length > 0) {
       const pick = await window.showQuickPick(remotes, {
         placeHolder: localize('git.pick.remote', 'Select a remote'),
       })
@@ -1072,6 +1123,8 @@ export class Repository {
     args: readonly string[],
     label: string,
     progress?: { text: string; kind: 'syncing' | 'spinning' },
+    /** Handles a non-zero exit; return true when it took over the notification. */
+    onFailure?: (res: GitExecResult) => Promise<boolean>,
   ): Promise<boolean> {
     this._beginOperation()
     if (progress) this._beginProgress(progress.text, progress.kind)
@@ -1079,7 +1132,8 @@ export class Repository {
     try {
       const res = await gitExec(args, this.root, this._log)
       if (res.exitCode !== 0) {
-        await notifyGitFailure(label, res)
+        const handled = onFailure !== undefined && (await onFailure(res))
+        if (!handled) await notifyGitFailure(label, res)
       } else {
         ok = true
       }

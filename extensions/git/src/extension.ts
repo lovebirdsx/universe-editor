@@ -35,7 +35,7 @@ import {
 import { PossibleRepoWatcher, joinCandidate } from './possibleRepoWatcher.js'
 import { detectRepoRoot } from './gitService.js'
 import { norm } from './pathUtil.js'
-import type { Repository } from './repository.js'
+import { initPublishConfirmation, type Repository } from './repository.js'
 import {
   getCommits as getGitGraphCommits,
   getCommitDetails as getGitGraphCommitDetails,
@@ -696,6 +696,11 @@ export async function activate(context: ExtensionContext): Promise<void> {
   const log = (msg: string): void => out.appendLine(msg)
   // Let failure toasts offer an "Open Git Log" button that reveals this channel.
   setGitLogShower(() => out.show())
+  // "Don't ask again" for the push-that-needs-publishing prompt persists here.
+  initPublishConfirmation(
+    context.globalState.get('confirmBranchPublish', true),
+    (ask) => void context.globalState.update('confirmBranchPublish', ask),
+  )
 
   const scanOpts = await readScanConfig()
   const env: GitEnv = { root, scanOpts, log }

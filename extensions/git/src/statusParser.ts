@@ -28,6 +28,8 @@ export interface GitFileStatus {
 
 export interface GitStatus {
   readonly branch: string | undefined
+  /** Upstream tracking ref (e.g. `origin/main`); undefined until the branch is published. */
+  readonly upstream: string | undefined
   readonly ahead: number
   readonly behind: number
   /** HEAD commit oid; undefined for an empty repo (`# branch.oid (initial)`). */
@@ -38,6 +40,7 @@ export interface GitStatus {
 export function parseStatus(raw: string): GitStatus {
   const tokens = raw.split('\0')
   let branch: string | undefined
+  let upstream: string | undefined
   let ahead = 0
   let behind = 0
   let headRevision: string | undefined
@@ -55,6 +58,8 @@ export function parseStatus(raw: string): GitStatus {
       } else if (header.startsWith('branch.oid ')) {
         const oid = header.slice('branch.oid '.length)
         headRevision = oid === '(initial)' ? undefined : oid
+      } else if (header.startsWith('branch.upstream ')) {
+        upstream = header.slice('branch.upstream '.length)
       } else if (header.startsWith('branch.ab ')) {
         const m = /\+(\d+) -(\d+)/.exec(header)
         if (m) {
@@ -116,5 +121,5 @@ export function parseStatus(raw: string): GitStatus {
     // '! ' (ignored) and anything else are dropped.
   }
 
-  return { branch, ahead, behind, headRevision, files }
+  return { branch, upstream, ahead, behind, headRevision, files }
 }
