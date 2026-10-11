@@ -14,6 +14,8 @@
 
 **该不该装**（`ensureP4delta`，六条零网络早退，各一行日志）：`root === ''` → 非 win32 → `!enabled`（总开关 `p4delta.enabled`）→ `!autoInstall && !force`（`autoInstall` 只约束后台路径）→ `namedExplicitly` → **本会话 p4 是脚本覆盖**（门在那种形状下根本不启用托管副本，装了只会闲置；注入 `p4IsScriptOverride`，`extension.ts` 从 `resolveP4Command()` 现算）→ 机器已有自装副本。`force=true`（手动命令）跳过中间第二条与最后三条，**只有总开关拦得住它**——关掉 `autoInstall` 的人正是这条命令的目标用户。
 
+**装成之后**（`result.changed` → `watchP4delta.refresh()` → 每个 client 的 `setP4delta`）：新的 exe 与「重排本会话扫描轮」是同一件事的两半——`setP4delta` 会撤回「δ 能答这个工作区」的扫描判定（证明属于跑过扫描的那个二进制），没有重排它就一直停在 native、装好也整会话用不上；升级（换 exe）同一条路径，且 δ 的 checkpoint 键带 exe 身份，旧 build 的快照不会被新 build 重放。见 [`../../docs/reconcile.md`](../../docs/reconcile.md) 的「扫描引擎按会话择一」。
+
 **磁盘布局**（`<globalStoragePath>/p4delta`，全局共享、跨工作区跨窗口）：
 
 ```

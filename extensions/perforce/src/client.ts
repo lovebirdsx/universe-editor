@@ -1239,18 +1239,24 @@ export class PerforceClient {
    *  a submit, owns its own failure reporting and must not be killed). */
   private _reconcileScanCancelSource: AbortController | undefined
   /** Whether the scan for this session has been armed. Set when the scan is
-   *  scheduled and cleared on two occasions: when the connection drops
+   *  scheduled and cleared on three occasions: when the connection drops
    *  ({@link _goOffline}) — a scan that never finished because the server went
    *  away must be able to re-arm when the connection comes back, because the
-   *  un-scanned directories have no checkpoints to resume from — and when the
+   *  un-scanned directories have no checkpoints to resume from — when the
    *  reconcile scope or its exclusions change
-   *  ({@link _resetReconcileScanForScopeChange}), so the new scope re-preheats.
-   *  Those are the ONLY re-arms: an external file change deliberately does not
-   *  clear this, because its narrow query already published the drift for this
-   *  session (see {@link _flushExternalChanges}) and the invalidated checkpoint
-   *  is there for the NEXT one. A user-initiated cancel keeps it set: that is a
-   *  deliberate "stop scanning this session", and completed checkpoints survive
-   *  for the next one. */
+   *  ({@link _resetReconcileScanForScopeChange}), so the new scope re-preheats,
+   *  and when the δ engine is (re)configured ({@link setP4delta}), because a
+   *  round that proved a replaced binary says nothing about its successor. Those
+   *  are the ONLY re-arms. The scope and engine resets both land in
+   *  {@link _restartReconcileScan}; the offline clear does not go through it —
+   *  the reconnect's refresh tail does that re-arming, and
+   *  `scheduleReconcileScan`'s connection guard is what defers it until then. An
+   *  external file change deliberately does not clear this, because its narrow
+   *  query already published the drift for this session (see
+   *  {@link _flushExternalChanges}) and the invalidated checkpoint is there for
+   *  the NEXT one. A user-initiated cancel keeps it set: that is a deliberate
+   *  "stop scanning this session", and completed checkpoints survive for the
+   *  next one. */
   private _reconcileScanArmed = false
   /** Configured ceiling for one directory batch (`perforce.reconcileScan.maxBatchDurationMs`). */
   private _reconcileScanMaxBatchMs = RECONCILE_SCAN_DEFAULT_MAX_BATCH_MS
@@ -1406,7 +1412,10 @@ export class PerforceClient {
    * three failures must not be judged by the record of the binary it replaced.
    * The scan's engine verdict resets with it ({@link _reconcileScanEngine}):
    * routing writes and narrow queries to δ is a conclusion about the engine
-   * that answered a scan here, and a new binary has not answered one yet.
+   * that answered a scan here, and a new binary has not answered one yet. A
+   * fresh round re-earns it ({@link _restartReconcileScan}) — this is also the
+   * path the managed copy's install/upgrade takes, where the round that would
+   * have proved the engine ran long before the binary landed.
    */
   setP4delta(exe: string | undefined, extraEnv?: Readonly<Record<string, string>>): void {
     const had = this._p4delta !== undefined
@@ -1440,6 +1449,16 @@ export class PerforceClient {
       this._log?.(
         '[perforce] p4delta engine turned off; gets, writes, narrow queries and scans run on p4',
       )
+    // Retracting the verdict is only half of it: the proof above must be
+    // re-earned, and the session's scan runs once ({@link _reconcileScanArmed})
+    // — long before a managed copy installs. Without the re-run the retraction
+    // is permanent: gets, writes and narrow queries keep running native with an
+    // engine sitting right there. Turning the engine OFF needs no round: there
+    // is nothing to prove, and one would only re-walk the workspace to confirm
+    // a verdict that cannot change.
+    if (exe !== undefined) {
+      this._restartReconcileScan('p4delta engine reconfigured; re-running to prove it')
+    }
   }
 
   /** δ's fallback ladder as tests observe it (production code has no caller):
@@ -6239,18 +6258,25 @@ export class PerforceClient {
   }
 
   /**
-   * The reconcile scope (or its exclusions) changed: the checkpoint fingerprint
-   * moved, so an in-flight round is answering a question nobody asked any more —
-   * and, since the round computes each directory's checkpoint key lazily, letting
-   * it finish would write old-scope answers under NEW-fingerprint keys and burn
-   * tens of minutes on directories the new scope may not even contain. Abort it
-   * (completed checkpoints survive but the fingerprint change orphans them),
-   * disarm, and re-arm for the new scope.
+   * The scan's verdict is about a question — the scope, its exclusions, and the
+   * engine that answered it — and when any of those moves, an in-flight round is
+   * answering a question nobody is asking any more. Abort it (completed
+   * checkpoints survive, but a moved fingerprint orphans them), clear the armed
+   * flag, and re-arm.
+   *
+   * The abort is load-bearing, not tidiness: a round allowed to run to the end
+   * would do so AFTER its verdict was retracted — and since the retraction
+   * ({@link setP4delta}, the scope appliers) is what got us here, nothing would
+   * write a verdict back. The once-per-session scan ({@link _reconcileScanArmed})
+   * would never run again, and the session would keep the retracted answer, which
+   * is exactly the "engine is configured but gets, writes and narrow queries run
+   * native all session" state. Aborting also stops the round from writing
+   * old-question answers under the new fingerprint's keys.
    *
    * Uses the pinned per-scan source ({@link _reconcileScanCancelSource}), NOT
-   * {@link cancelBusy}: a scope change is config-driven, not a user cancel, and
-   * must not abort an in-flight submit or other cancellable work. This mirrors
-   * the targeted abort {@link _goOffline} performs.
+   * {@link cancelBusy}: a configuration change is not a user cancel, and must not
+   * abort an in-flight submit or other cancellable work. This mirrors the
+   * targeted abort {@link _goOffline} performs.
    *
    * The re-arm while the aborted round is still settling is deferred to that
    * round's settle: `scheduleReconcileScan`'s singleton guard swallows an
@@ -6258,17 +6284,36 @@ export class PerforceClient {
    * armed flag false (see the `finally` in {@link scheduleReconcileScan}). The
    * immediate `scheduleReconcileScan()` here covers the no-round-in-flight case.
    *
-   * A client that never armed its scan this session (the initial configuration
-   * apply, tests driving {@link runReconcileScan} directly) is left alone — the
-   * refresh tail remains the only arming point for the first scan, which is what
-   * keeps the scan options (batch ceiling) applied before it starts.
+   * A round that has not yet registered its cancel source (still in the
+   * refresh-scope / discovery / busy-queue window) cannot be aborted and runs to
+   * the end — correctly, on the new state, since it reads the engine and builds
+   * its checkpoint keys after this returns. The settle's re-arm then adds one
+   * round that normally replays the checkpoint the first one just wrote: extra
+   * work in a rare window, never a wrong session.
+   *
+   * A client that never armed its scan this session (the constructor's own
+   * {@link setP4delta}, the initial configuration apply, tests driving
+   * {@link runReconcileScan} directly) is left alone — the refresh tail remains
+   * the only arming point for the first scan, which is what keeps the scan
+   * options (batch ceiling) applied before it starts.
    */
-  private _resetReconcileScanForScopeChange(): void {
+  private _restartReconcileScan(reason: string): void {
     if (!this._reconcileScanArmed && !this._backgroundReconcileScan) return
     this._reconcileScanCancelSource?.abort()
     this._reconcileScanArmed = false
-    this._log?.(`[perforce] reconcile-scan: scope changed; resetting for the new scope`)
+    this._log?.(`[perforce] reconcile-scan: ${reason}`)
     this.scheduleReconcileScan()
+  }
+
+  /**
+   * The reconcile scope (or its exclusions) changed: the checkpoint fingerprint
+   * moved, so the round is answering a question nobody asked any more — and,
+   * since it computes each directory's checkpoint key lazily, letting it finish
+   * would write old-scope answers under NEW-fingerprint keys and burn tens of
+   * minutes on directories the new scope may not even contain.
+   */
+  private _resetReconcileScanForScopeChange(): void {
+    this._restartReconcileScan('scope changed; resetting for the new scope')
   }
 
   /**
@@ -6278,9 +6323,11 @@ export class PerforceClient {
    * scan (or a user-cancelled one, whose checkpoints survive) has nothing left
    * to do until the next session. Re-arming happens only when the armed flag is
    * cleared — by going offline ({@link _goOffline}) so the un-scanned
-   * directories are picked up on reconnect, or by a reconcile-scope / exclusion
+   * directories are picked up on reconnect, by a reconcile-scope / exclusion
    * change ({@link _resetReconcileScanForScopeChange}) so the new scope
-   * re-preheats; in the in-flight case the reset aborts and disarms, and the
+   * re-preheats, or by an engine (re)configuration ({@link setP4delta}) so a
+   * newly delivered binary gets the round that proves it; in the in-flight case
+   * the reset ({@link _restartReconcileScan}) aborts and disarms, and the
    * settling round's `finally` below re-arms. An external file change notably
    * does NOT re-arm: it is answered by a narrow per-file query instead
    * ({@link _flushExternalChanges}), because re-walking a directory to learn
@@ -6330,9 +6377,11 @@ export class PerforceClient {
         for (const path of stale) {
           if (!patched.has(path)) this._invalidateReconcileScanFor(path)
         }
-        // A scope change during the round disarmed it
-        // ({@link _resetReconcileScanForScopeChange}); that is the signal to
-        // re-arm for the new scope. Runs AFTER the invalidation replay above so
+        // A scope change or an engine reconfiguration during the round disarmed
+        // it ({@link _restartReconcileScan}, from
+        // {@link _resetReconcileScanForScopeChange} / {@link setP4delta}); that
+        // is the signal to re-arm for the new question. Runs AFTER the
+        // invalidation replay above so
         // the new round reads the checkpoints the replay just invalidated, and
         // after the singleton was cleared so the schedule is not swallowed. A
         // user cancel and a normal completion keep armed set (no re-arm); going
@@ -7369,8 +7418,10 @@ export class PerforceClient {
    *  RESOLVED range, so a config edit that moves nothing leaves it alone), the
    *  focus (the discovery range is scope ∩ focus, so a focus change answers a
    *  different question), the resolved include/exclude entries, the configured
-   *  reconcile noise, and which engine the round runs on. Hashed together, so any
-   *  one of them changing orphans the whole batch at once.
+   *  reconcile noise, and which engine the round runs on — for δ, down to the
+   *  executable's identity, so a replaced build's snapshot cannot pass as the new
+   *  one's answer. Hashed together, so any one of them changing orphans the whole
+   *  batch at once.
    *
    *  The scope identity is what the pre-scope design could not express: an edited
    *  `.p4delta-scope` can leave the focus and even the exclude list looking
@@ -7378,7 +7429,9 @@ export class PerforceClient {
    *  completely — that edit adds or removes an INCLUDE, and replaying the old
    *  checkpoint would publish rows for a range nobody asked about. The engine
    *  marker keeps the two engines from aliasing: δ answers the whole scope in one
-   *  round while a native scan is per-directory. The noise belongs here for the same
+   *  round while a native scan is per-directory — and for δ it carries the
+   *  executable's path too, so an upgraded build starts from its own keys instead
+   *  of replaying the snapshot of the binary it replaced. The noise belongs here for the same
    *  reason the focus does: it narrows which files the round ANSWERED for, and
    *  replayed rows from a round that walked wider folders would list files the
    *  current setting hides. */
@@ -7403,9 +7456,21 @@ export class PerforceClient {
     ]
       .sort()
       .join('\n')
+    // The engine's IDENTITY, not just its name: a δ checkpoint is one build's
+    // answer, and the managed copy's upgrade IS a different executable —
+    // replaying the predecessor's snapshot would hand this session a proof the
+    // new build never gave. The identity is a path, not a content hash (an
+    // executable overwritten in place is not noticed; the managed copy's
+    // versioned directories are what make "an upgrade changes the path" true).
+    // The native marker carries no path: there is no binary behind it, so a
+    // non-δ session's keys stay byte-for-byte what they were.
+    const engineMarker =
+      this._reconcileScanEngine === 'p4delta' && this._p4delta !== undefined
+        ? `${this._reconcileScanEngine}:${localPathKey(this._p4delta.exe, this._style)}`
+        : this._reconcileScanEngine
     const canonical =
       `${scopeCanonical}--scope--${this._scopeIdentity}--include--${includeCanonical}` +
-      `--exclude--${excludeCanonical}--noise--${noiseCanonical}--engine--${this._reconcileScanEngine}`
+      `--exclude--${excludeCanonical}--noise--${noiseCanonical}--engine--${engineMarker}`
     return createHash('sha1').update(canonical).digest('hex').slice(0, 16)
   }
 

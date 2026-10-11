@@ -3690,14 +3690,22 @@ describe('PerforceClient.runReconcileScan', () => {
 //     scan, never a missing one — and count toward a 3-strike disarm.
 //  4. A cancel is not a failure: no counter, no fallback.
 //  5. `no-entry-matched` is a normal empty answer, not a failure.
-//  6. The engine is part of the checkpoint fingerprint, so the two engines'
-//     checkpoints never alias.
+//  6. The engine is part of the checkpoint fingerprint — its NAME, and for δ the
+//     executable's identity — so the two engines' checkpoints never alias, and
+//     neither does a replaced build's.
+//  7. A session that gets its engine mid-flight (the managed copy installing, or
+//     an upgrade replacing the binary) re-runs the scan and re-earns the verdict
+//     in THIS session; a reconfiguration before the session armed its scan
+//     starts nothing.
 
 const { P4deltaService } = await import('../p4delta/p4deltaService.js')
 type P4deltaRecord = import('../p4delta/p4deltaService.js').P4deltaRecord
 type P4deltaRunResult = import('../p4delta/p4deltaService.js').P4deltaRunResult
 
 const P4DELTA_EXE = '/opt/p4delta'
+/** The next build of the same engine (the managed copy's upgrade): the name is
+ *  the same, the executable is not. */
+const P4DELTA_EXE_V2 = '/opt/p4delta.v2'
 
 /** δ argv of every run, in call order. */
 const p4deltaCalls: string[][] = []
@@ -3795,6 +3803,11 @@ interface P4deltaReply {
 
 let p4deltaRunSpy: { mockRestore: () => void } | undefined
 
+/** The executable each stubbed run was built around, in call order. A swap is
+ *  observable through the checkpoint key space too, but this says directly WHICH
+ *  binary a round ran on. */
+const p4deltaExes: string[] = []
+
 /** Stub the δ run. The result is assembled the way the service assembles it
  *  (`sawSummary` from the records), so a test expresses "no summary" simply by
  *  leaving the summary record out. */
@@ -3806,7 +3819,10 @@ function stubP4deltaRun(
 ): void {
   p4deltaRunSpy = vi
     .spyOn(P4deltaService.prototype, 'run')
-    .mockImplementation(async (args, options) => {
+    // A plain function, not an arrow: `this` is the service instance the client
+    // called, whose `exe` is the binary this round actually ran on.
+    .mockImplementation(async function (this: unknown, args, options) {
+      p4deltaExes.push((this as { exe: string }).exe)
       const argv = [...args]
       const carried = parseDeltaArgs(argv)
       p4deltaCalls.push(argv)
@@ -3864,6 +3880,7 @@ describe('PerforceClient.runReconcileScan — δ engine', () => {
     p4deltaCalls.length = 0
     p4deltaRanges.length = 0
     p4deltaExcludes.length = 0
+    p4deltaExes.length = 0
   })
 
   afterEach(() => {
@@ -4350,6 +4367,189 @@ describe('PerforceClient.runReconcileScan — δ engine', () => {
     client.setP4delta(undefined)
     await client.runReconcileScan()
     expect(reconcileScans().length).toBe(1)
+  })
+
+  // --- ⑦ mid-session engine delivery (the managed copy) ----------------------
+  //
+  // The engine arrives through `setP4delta` when the installer lands — long
+  // after this session's one scan round finished. The call retracts the scan
+  // verdict by design (the proof belongs to the binary that answered a round
+  // here), so it must also arrange for a round to re-earn it: otherwise the
+  // retraction lasts the whole session and every get, write and narrow query
+  // keeps running native with an engine sitting right there.
+
+  it('an engine delivered mid-session re-runs the scan and re-earns the verdict', async () => {
+    const disk = fakeDisk()
+    const client = await makeClient({ reconcile: () => [] }, disk)
+    client.setReconcileScope([LOCAL])
+    // The session's one round ran before the managed copy landed: no engine was
+    // configured, so it walked natively.
+    client.scheduleReconcileScan()
+    await client.whenReconcileScanSettled()
+    expect(fullScanScans()).toHaveLength(1)
+    expect(client.reconcileUsesP4delta).toBe(false)
+
+    stubP4deltaRun(() => ({
+      records: [deltaFile('a.txt', 'edit'), deltaSummary({ total: 1, counts: { edit: 1 } })],
+    }))
+    client.setP4delta(P4DELTA_EXE)
+    await client.whenReconcileScanSettled()
+
+    expect(p4deltaCalls).toHaveLength(1)
+    expect(p4deltaExes).toEqual([P4DELTA_EXE])
+    expect(client.reconcileUsesP4delta).toBe(true)
+    expect(driftFiles(client)).toEqual([`${LOCAL}/a.txt`])
+
+    // At most one extra round: the re-run is not a loop.
+    await nextMacrotask()
+    await client.whenReconcileScanSettled()
+    expect(p4deltaCalls).toHaveLength(1)
+    expect(fullScanScans()).toHaveLength(1)
+  })
+
+  it('a replaced binary answers on the new executable, not the old one’s snapshot', async () => {
+    const disk = fakeDisk()
+    const client = await makeClient({}, disk, fakeClock(), { p4delta: { exe: P4DELTA_EXE } })
+    client.setReconcileScope([LOCAL])
+    stubP4deltaRun(() => ({
+      records: [deltaFile('a.txt', 'edit'), deltaSummary({ total: 1, counts: { edit: 1 } })],
+    }))
+    client.scheduleReconcileScan()
+    await client.whenReconcileScanSettled()
+    expect(p4deltaCalls).toHaveLength(1)
+    expect(disk.store.size).toBe(1)
+
+    // The managed copy upgrades: same engine name, a different executable. The
+    // old build's whole-scope snapshot is not this build's proof of anything.
+    stubP4deltaRun(() => ({
+      records: [deltaFile('b.txt', 'add'), deltaSummary({ total: 1, counts: { add: 1 } })],
+    }))
+    client.setP4delta(P4DELTA_EXE_V2)
+    await client.whenReconcileScanSettled()
+
+    expect(p4deltaCalls).toHaveLength(2)
+    expect(p4deltaExes).toEqual([P4DELTA_EXE, P4DELTA_EXE_V2])
+    expect(client.reconcileUsesP4delta).toBe(true)
+    expect(driftFiles(client)).toEqual([`${LOCAL}/b.txt`])
+    // The two builds' snapshots live in different key spaces: neither can be
+    // replayed as the other's answer.
+    const keys = [...disk.store.keys()]
+    expect(disk.store.size).toBe(2)
+    expect(keys.every((k) => k.endsWith(`:${ROOT}`))).toBe(true)
+    expect(new Set(keys.map((k) => k.split(':')[0])).size).toBe(2)
+  })
+
+  it('re-pointing at the same executable replays its snapshot instead of re-walking', async () => {
+    const disk = fakeDisk()
+    const client = await makeClient({}, disk, fakeClock(), { p4delta: { exe: P4DELTA_EXE } })
+    client.setReconcileScope([LOCAL])
+    stubP4deltaRun(() => ({
+      records: [deltaFile('a.txt', 'edit'), deltaSummary({ total: 1, counts: { edit: 1 } })],
+    }))
+    client.scheduleReconcileScan()
+    await client.whenReconcileScanSettled()
+    expect(p4deltaCalls).toHaveLength(1)
+
+    // A settings edit that does not move the executable (`downloadBaseUrl` and
+    // friends) re-applies the same engine: the verdict is re-earned from that
+    // binary's own fresh checkpoint — zero spawns.
+    client.setP4delta(P4DELTA_EXE)
+    await client.whenReconcileScanSettled()
+
+    expect(p4deltaCalls).toHaveLength(1)
+    // Only the first round ran: the second one replayed that binary's snapshot
+    // instead of walking the workspace again.
+    expect(p4deltaExes).toEqual([P4DELTA_EXE])
+    expect(client.reconcileUsesP4delta).toBe(true)
+    expect(driftFiles(client)).toEqual([`${LOCAL}/a.txt`])
+  })
+
+  it('a reconfiguration before the session armed its scan starts nothing', async () => {
+    const client = await makeClient({}, undefined, fakeClock(), { p4delta: { exe: P4DELTA_EXE } })
+    client.setReconcileScope([LOCAL])
+    stubP4deltaRun(() => ({ records: [deltaSummary()] }))
+
+    // No round was ever armed — the refresh tail is the only arming point for
+    // the first one — so an engine (re)configuration must not start a
+    // background round: that first scan still belongs to the refresh tail,
+    // which is what applies the scan options before it runs.
+    client.setP4delta(P4DELTA_EXE)
+    await nextMacrotask()
+    await client.whenReconcileScanSettled()
+    await nextMacrotask()
+
+    expect(p4deltaCalls).toEqual([])
+    expect(reconcileScans()).toEqual([])
+    expect(client.reconcileUsesP4delta).toBe(false)
+  })
+
+  it('an engine swap during an in-flight δ round re-runs it on the new binary', async () => {
+    const disk = fakeDisk()
+    const client = await makeClient({}, disk, fakeClock(), { p4delta: { exe: P4DELTA_EXE } })
+    client.setReconcileScope([LOCAL])
+    let releaseFirst!: () => void
+    const firstHeld = new Promise<void>((resolve) => {
+      releaseFirst = resolve
+    })
+    let run = 0
+    stubP4deltaRun(() => {
+      run += 1
+      return run === 1
+        ? {
+            records: [
+              deltaFile('old.txt', 'edit'),
+              deltaSummary({ total: 1, counts: { edit: 1 } }),
+            ],
+            hold: firstHeld,
+          }
+        : { records: [deltaFile('new.txt', 'add'), deltaSummary({ total: 1, counts: { add: 1 } })] }
+    })
+    client.scheduleReconcileScan()
+    await vi.waitFor(() => expect(p4deltaCalls).toHaveLength(1))
+
+    // The upgrade lands while the old build's round is in flight. That round is
+    // about an engine that is gone: it is aborted (a round that ends after
+    // `setP4delta` retracted the verdict would never write it back), and the
+    // re-armed round answers on the new binary.
+    client.setP4delta(P4DELTA_EXE_V2)
+    releaseFirst()
+    await client.whenReconcileScanSettled()
+    await nextMacrotask()
+    await client.whenReconcileScanSettled()
+
+    expect(p4deltaCalls).toHaveLength(2)
+    expect(p4deltaExes).toEqual([P4DELTA_EXE, P4DELTA_EXE_V2])
+    expect(client.reconcileUsesP4delta).toBe(true)
+    expect(driftFiles(client)).toEqual([`${LOCAL}/new.txt`])
+    // The aborted round left no snapshot behind: the only checkpoint is the one
+    // the new build wrote.
+    expect(disk.store.size).toBe(1)
+  })
+
+  it('an engine delivered while the native walk is in flight takes over from it', async () => {
+    const disk = fakeDisk()
+    const client = await makeClient(
+      { reconcile: () => [], reconcileHold: (filespec) => filespec === `${LOCAL}/...` },
+      disk,
+    )
+    client.setReconcileScope([LOCAL])
+    client.scheduleReconcileScan()
+    await vi.waitFor(() => expect(fullScanScans()).toHaveLength(1))
+
+    stubP4deltaRun(() => ({
+      records: [deltaFile('a.txt', 'edit'), deltaSummary({ total: 1, counts: { edit: 1 } })],
+    }))
+    client.setP4delta(P4DELTA_EXE)
+    // The aborted walk settles on its own (its child is killed), and the
+    // re-armed round is the δ one.
+    await client.whenReconcileScanSettled()
+    await nextMacrotask()
+    await client.whenReconcileScanSettled()
+
+    expect(fullScanScans()).toHaveLength(1)
+    expect(p4deltaCalls).toHaveLength(1)
+    expect(p4deltaExes).toEqual([P4DELTA_EXE])
+    expect(client.reconcileUsesP4delta).toBe(true)
   })
 })
 
