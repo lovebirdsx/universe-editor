@@ -43,6 +43,10 @@ const COLUMNS = [
   'io.readBytes',
   'io.writeBytes',
   'diskWrites',
+  'p4Calls.total',
+  'p4Calls.native',
+  'p4Calls.p4delta',
+  'p4Calls.complete',
   'error.kind',
   'error.message',
   'scopeNarrowed',
@@ -82,6 +86,12 @@ function rowOf(run: P4SyncRunDto): string {
     optional(run.io?.readBytes),
     optional(run.io?.writeBytes),
     optional(run.diskWrites),
+    // The total is written even when `complete` is false — the completeness
+    // column is what keeps a lower bound from reading as an exact number.
+    optional(run.p4Calls !== undefined ? run.p4Calls.native + run.p4Calls.p4delta : undefined),
+    optional(run.p4Calls?.native),
+    optional(run.p4Calls?.p4delta),
+    bool(run.p4Calls?.complete),
     run.error?.kind ?? '',
     run.error?.message ?? '',
     bool(run.scopeNarrowed),

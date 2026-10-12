@@ -5,6 +5,7 @@ import {
   isEntry,
   nextSyncHistoryId,
   outcomeOfRun,
+  SyncP4CallCounter,
   toRunDetailDto,
   toRunDto,
   type BuildSyncHistoryInput,
@@ -43,6 +44,7 @@ function facts(extra: Partial<SyncRunFacts> = {}): SyncRunFacts {
     startedAt: 1000,
     endedAt: 2000,
     diskWrites: 7,
+    p4Calls: { native: 1, p4delta: 0, complete: true },
     ...extra,
   }
 }
@@ -182,6 +184,20 @@ describe('buildSyncHistoryEntry', () => {
     expect(entry.engine).toBe('p4')
     expect(entry.parallelThreads).toBe(4)
     expect(entry.diskWrites).toBe(7)
+    expect(entry.p4Calls).toEqual({ native: 1, p4delta: 0, complete: true })
+  })
+
+  it('carries a δ run’s split count and its incompleteness', () => {
+    const entry = build({
+      run: run({
+        facts: facts({
+          engine: 'p4delta',
+          p4Calls: { native: 0, p4delta: 9, complete: false },
+        }),
+      }),
+    })
+    expect(entry.engine).toBe('p4delta')
+    expect(entry.p4Calls).toEqual({ native: 0, p4delta: 9, complete: false })
   })
 
   it('carries the io sample and the engine fallback flag', () => {
@@ -259,6 +275,24 @@ describe('isEntry', () => {
     expect(isEntry({ ...entry, error: { kind: 'x' } })).toBe(false)
     expect(isEntry({ ...entry, engine: 'git' })).toBe(false)
   })
+
+  it('rejects a malformed p4-call group but accepts an absent one', () => {
+    const entry = build()
+    expect(isEntry({ ...entry, p4Calls: undefined })).toBe(true)
+    expect(isEntry({ ...entry, p4Calls: { native: 1, p4delta: 0, complete: true } })).toBe(true)
+    // A hand-edited file must not be able to serve a fabricated count: negative,
+    // fractional, non-safe-integer and shape-wrong groups all drop the entry.
+    expect(isEntry({ ...entry, p4Calls: { native: -1, p4delta: 0, complete: true } })).toBe(false)
+    expect(isEntry({ ...entry, p4Calls: { native: 0, p4delta: 1.5, complete: true } })).toBe(false)
+    expect(
+      isEntry({
+        ...entry,
+        p4Calls: { native: Number.MAX_SAFE_INTEGER + 1, p4delta: 0, complete: true },
+      }),
+    ).toBe(false)
+    expect(isEntry({ ...entry, p4Calls: { native: 1, p4delta: 0 } })).toBe(false)
+    expect(isEntry({ ...entry, p4Calls: { native: 1, p4delta: 0, complete: 'yes' } })).toBe(false)
+  })
 })
 
 describe('toRunDto / toRunDetailDto', () => {
@@ -299,5 +333,64 @@ describe('toRunDto / toRunDetailDto', () => {
     expect('engine' in dto).toBe(false)
     expect('counts' in dto).toBe(false)
     expect('error' in dto).toBe(false)
+    expect('p4Calls' in dto).toBe(false)
+  })
+
+  it('carries the p4-call split through to the DTO', () => {
+    const dto = toRunDto(
+      build({
+        run: run({ facts: facts({ p4Calls: { native: 0, p4delta: 4, complete: true } }) }),
+      }),
+    )
+    expect(dto.p4Calls).toEqual({ native: 0, p4delta: 4, complete: true })
+  })
+})
+
+describe('SyncP4CallCounter', () => {
+  it('counts native spawns and stays complete with no δ side', () => {
+    const counter = new SyncP4CallCounter()
+    counter.countNative()
+    expect(counter.snapshot()).toEqual({ native: 1, p4delta: 0, complete: true })
+  })
+
+  it('trusts a summary’s final δ count that is at least what was observed', () => {
+    const counter = new SyncP4CallCounter()
+    counter.noteDelta({ spawned: true, observed: 3, reported: 5 })
+    expect(counter.snapshot()).toEqual({ native: 0, p4delta: 5, complete: true })
+  })
+
+  it('keeps the observed lower bound and marks the run incomplete without a summary', () => {
+    const counter = new SyncP4CallCounter()
+    counter.noteDelta({ spawned: true, observed: 3, reported: undefined })
+    expect(counter.snapshot()).toEqual({ native: 0, p4delta: 3, complete: false })
+  })
+
+  it('falls back to the observed value when the summary lags behind it', () => {
+    // A malformed or buggy summary claiming fewer calls than the stream showed
+    // must not shrink the count.
+    const counter = new SyncP4CallCounter()
+    counter.noteDelta({ spawned: true, observed: 4, reported: 2 })
+    expect(counter.snapshot()).toEqual({ native: 0, p4delta: 4, complete: false })
+  })
+
+  it('lets a δ attempt that fell back to native accumulate both halves', () => {
+    const counter = new SyncP4CallCounter()
+    counter.noteDelta({ spawned: true, observed: 2, reported: undefined })
+    counter.countNative()
+    expect(counter.snapshot()).toEqual({ native: 1, p4delta: 2, complete: false })
+  })
+
+  it('does not let an unstarted δ attempt turn an exact native count into unknown', () => {
+    // δ refused the work before ever starting: there is no δ side to be missing.
+    const counter = new SyncP4CallCounter()
+    counter.noteDelta({ spawned: false, observed: 0, reported: undefined })
+    counter.countNative()
+    expect(counter.snapshot()).toEqual({ native: 1, p4delta: 0, complete: true })
+  })
+
+  it('keeps what a cancelled δ run had already observed', () => {
+    const counter = new SyncP4CallCounter()
+    counter.noteDelta({ spawned: true, observed: 6, reported: undefined })
+    expect(counter.snapshot()).toEqual({ native: 0, p4delta: 6, complete: false })
   })
 })

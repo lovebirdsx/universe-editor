@@ -1026,9 +1026,10 @@ describe('PerforceClient.sync onProgress', () => {
       const call = spy.mock.calls.find(([args]) => Array.isArray(args) && args[0] === 'sync')
       expect(call).toBeDefined()
       expect(call![1]).not.toHaveProperty('onStdoutLine')
-      // The sampler rides the same path: a non-streaming sync publishes no
-      // progress, so there is nothing for a sample to update.
-      expect(call![1]).not.toHaveProperty('onSpawn')
+      // `onSpawn` IS always handed over — it is the p4-call counter's hook, not
+      // the sampler's — but a non-streaming sync must still install no probe:
+      // no progress is published, so there is nothing for a sample to update.
+      expect(typeof call![1]?.onSpawn).toBe('function')
       expect(ioMock.probes).toHaveLength(0)
     } finally {
       spy.mockRestore()

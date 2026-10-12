@@ -114,6 +114,7 @@ interface FakeRunResult {
     endedAt: number
     io?: { readBytes: number; writeBytes: number }
     diskWrites: number
+    p4Calls: { native: number; p4delta: number; complete: boolean }
   }
 }
 
@@ -357,6 +358,8 @@ describe('one record per get', () => {
     expect(entries[0]?.engine).toBeUndefined()
     expect(entries[0]?.io).toBeUndefined()
     expect(entries[0]?.diskWrites).toBeUndefined()
+    // A get with no facts must not read as "asked p4 nothing".
+    expect(entries[0]?.p4Calls).toBeUndefined()
   })
 
   it('carries the client facts onto the record', async () => {
@@ -371,6 +374,7 @@ describe('one record per get', () => {
           endedAt: Date.now(),
           io: { readBytes: 4096, writeBytes: 512 },
           diskWrites: 12,
+          p4Calls: { native: 0, p4delta: 9, complete: true },
         },
       }),
     )
@@ -384,6 +388,7 @@ describe('one record per get', () => {
       parallelThreads: 6,
       io: { readBytes: 4096, writeBytes: 512 },
       diskWrites: 12,
+      p4Calls: { native: 0, p4delta: 9, complete: true },
       startedAt,
     })
     // The duration comes from the client's own clock, not from the command
@@ -613,6 +618,31 @@ describe('perforce-sync-history read commands', () => {
     expect(detail.id).toBe(id)
     expect(detail.scope).toEqual([{ path: SRC, isDirectory: true }])
     expect(detail.scopeOmitted).toBe(0)
+  })
+
+  it('carries the p4-call split through to the list DTO', async () => {
+    fake.sync.mockResolvedValue(
+      appliedRun({
+        facts: {
+          engine: 'p4',
+          engineFallback: false,
+          parallelThreads: 4,
+          startedAt: Date.now() - 100,
+          endedAt: Date.now(),
+          diskWrites: 0,
+          p4Calls: { native: 1, p4delta: 0, complete: true },
+        },
+      }),
+    )
+    await runCommand('perforce.syncLatest')
+
+    const page = (await commandResult('perforce-sync-history.getRuns', {
+      max: 10,
+    })) as P4SyncHistoryLoadResult
+
+    // The page the Sync History UI reads is where the row gets its count; a
+    // record with the group absent must keep it absent here (no `?? 0`).
+    expect(page.runs[0]?.p4Calls).toEqual({ native: 1, p4delta: 0, complete: true })
   })
 
   it('answers an unknown id and a missing file without inventing a record', async () => {

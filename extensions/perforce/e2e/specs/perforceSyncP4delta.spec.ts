@@ -29,6 +29,7 @@ import { evaluateWhenRestored, mkTempDir, type WorkbenchPO } from '@universe-edi
 import {
   readArgvLog,
   readHaveRev,
+  readP4CallLog,
   readScopeLog,
   test,
   expect,
@@ -117,12 +118,35 @@ const FORCE_SUBMITTED: readonly P4SubmittedSeed[] = [
 
 /** Fresh logs per journey: a shared file would make the "never asked natively"
  *  assertion depend on what the other journeys did. */
-function makeLogs(): { delta: string; p4: string; scope: string } {
+function makeLogs(): { delta: string; p4: string; scope: string; p4calls: string } {
   return {
     delta: join(mkTempDir('ue2-p4delta-argv-'), 'p4delta.log'),
     p4: join(mkTempDir('ue2-p4-argv-'), 'p4.log'),
     scope: join(mkTempDir('ue2-p4delta-scope-'), 'scope.log'),
+    p4calls: join(mkTempDir('ue2-p4delta-p4calls-'), 'p4calls.log'),
   }
+}
+
+/** The history command the Sync History page itself reads. */
+const GET_RUNS = 'perforce-sync-history.getRuns'
+
+interface RecordedRun {
+  readonly outcome: string
+  readonly p4Calls?: {
+    readonly native: number
+    readonly p4delta: number
+    readonly complete: boolean
+  }
+}
+
+/** The recorded runs, read through the command the page itself reads. */
+async function recordedRuns(page: Page): Promise<readonly RecordedRun[]> {
+  return page.evaluate(async (cmd: string) => {
+    const p = (await window.__E2E__!.runCommand(cmd, {})) as
+      | { runs?: readonly RecordedRun[] }
+      | undefined
+    return p?.runs ?? []
+  }, GET_RUNS)
 }
 
 /** δ's own gets, by the two flags that make one: `--sync` and the `-a` that
@@ -188,6 +212,7 @@ test.describe('@p1 perforce p4delta get', () => {
         UNIVERSE_P4DELTA_ARGV_LOG: logs.delta,
         UNIVERSE_P4_FAKE_ARGV_LOG: logs.p4,
         UNIVERSE_P4DELTA_SCOPE_LOG: logs.scope,
+        UNIVERSE_P4DELTA_P4CALL_LOG: logs.p4calls,
       },
     })
 
@@ -242,6 +267,32 @@ test.describe('@p1 perforce p4delta get', () => {
       // is not the "no engine configured" world.
       expect(nativeSyncLines(logs.p4)).toEqual([])
       expect(readArgvLog(logs.delta).length).toBeGreaterThan(0)
+
+      // 用同步进程的独立日志校验落档值，不能拿记录自身充当期望值。
+      await expect
+        .poll(async () => (await recordedRuns(page)).length, {
+          timeout: 30_000,
+          message: 'the get should have left one sync-history record',
+        })
+        .toBeGreaterThan(0)
+      const expectedP4Calls = readP4CallLog(logs.p4calls).at(-1)
+      expect(expectedP4Calls).toBeGreaterThan(0)
+      await expect
+        .poll(async () => (await recordedRuns(page))[0]?.p4Calls, {
+          timeout: 30_000,
+          message: 'the get should have recorded its p4-call count',
+        })
+        .toMatchObject({ native: 0, complete: true })
+      const calls = (await recordedRuns(page))[0]!.p4Calls!
+      expect(calls.p4delta).toBe(expectedP4Calls)
+
+      // …and the history page shows it, both as the row total and the detail.
+      await workbench.runCommand('perforce-sync-history.view')
+      const history = page.getByTestId('perforce-sync-history')
+      await expect(history).toBeVisible({ timeout: 30_000 })
+      await expect(history.getByTestId('perforce-sync-history-detail-p4calls')).toHaveText(
+        `${calls.p4delta} p4 command(s) (0 native · ${calls.p4delta} δ)`,
+      )
 
       await expect(
         page

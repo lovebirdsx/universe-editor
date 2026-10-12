@@ -281,6 +281,15 @@ export function readScopeLog(file: string): ScopeResolution[] {
   return readArgvLog(file).map((line) => JSON.parse(line) as ScopeResolution)
 }
 
+/**
+ * δ 同步（`--sync -a`）实际启动的 p4 累计日志，不包含后台扫描。
+ * 末行用于交叉核对同步历史；每个测试仅运行一次同步，避免不同轮次串账。
+ * 缺失文件表示没有观测到启动。
+ */
+export function readP4CallLog(file: string): number[] {
+  return readArgvLog(file).map((line) => Number(line))
+}
+
 /** The client's have revision of one seeded depot file, read straight from the
  *  fake p4's state file (what a real `p4 fstat` would report as `haveRev`). */
 export function readHaveRev(stateFile: string, relPath: string): number | undefined {
@@ -525,6 +534,7 @@ function seedSaviorConfig(clientRoot: string, seeds: readonly P4SaviorSeed[] | u
 const FAKE_CLI_LOG_ENV = [
   'UNIVERSE_P4DELTA_SCOPE_LOG',
   'UNIVERSE_P4DELTA_ARGV_LOG',
+  'UNIVERSE_P4DELTA_P4CALL_LOG',
   'UNIVERSE_P4_FAKE_ARGV_LOG',
 ] as const
 

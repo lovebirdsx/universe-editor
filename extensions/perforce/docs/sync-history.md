@@ -1,19 +1,19 @@
 # Perforce Sync History（拉取历史）
 
-宿主里的一个虚拟编辑器标签页（URI `universe:/perforceSyncHistory`）：把**每一次拉取**渲染成一条记录——耗时、六类文件计数、进程读写字节、磁盘写入事件数、引擎 / 目标修订 / force / 并行线程、范围与触发入口。数据全部来自扩展写在本地的一份 JSON，宿主经两个只读命令取 DTO，**这条链上一个 p4 都不用跑**。
+宿主里的一个虚拟编辑器标签页（URI `universe:/perforceSyncHistory`）：把**每一次拉取**渲染成一条记录——耗时、六类文件计数、进程读写字节、磁盘写入事件数、**p4 调用次数（原生 / δ 两个来源）**、引擎 / 目标修订 / force / 并行线程、范围与触发入口。数据全部来自扩展写在本地的一份 JSON，宿主经两个只读命令取 DTO，**这条链上一个 p4 都不用跑**。
 
 > 先读 `../CLAUDE.md`。本文只讲拉取历史特有的东西：与图谱账本的分工（为何不能合并）、`facts` 快照的时机、两个记录点、触发入口表与测试地图。
 
 ## 三层技术栈（自底向上）
 
-| 层 | 文件 | 职责 |
-|---|---|---|
-| wire 类型 | `packages/extensions-common/src/contracts/perforceSyncHistory.ts` | `P4SyncRunDto` / `P4SyncRunDetailDto`（多了完整 scope）/ `P4SyncHistoryLoadOptions` / `P4SyncHistoryLoadResult` + `PerforceSyncHistoryCommands`（`getRuns` / `getRun`）。改动要 bump 时先 `pnpm --filter @universe-editor/extensions-common build` |
-| 数据层 | `extensions/perforce/src/syncHistory.ts` | 纯函数 `outcomeOfRun` / `syncNothingHappened`（**与 toast 分支共用一份**）/ `buildSyncHistoryEntry` / `isEntry` / `toRunDto` / `toRunDetailDto`；持久化类 `SyncHistoryLog`（`<globalStoragePath>/syncHistory.json`，per-process tmp + rename 原子写，mtime+size stamp 跨窗口重载，整段 best-effort） |
-| 事实来源 | `extensions/perforce/src/client.ts` | `SyncRunResult.facts`（引擎 / 线程 / `startedAt` / `io` / `diskWrites`）+ `_withSyncFacts`。δ 与原生两条路都经它装饰；**编辑器自己预检拒绝的 run（`notRun`）不贴 facts**（见下） |
-| 记录点 | `extensions/perforce/src/extension.ts` | `recordSyncHistory` helper + **两个**落账点（见下）+ `perforce-sync-history.getRuns/getRun` 两个只读命令 |
-| 宿主页 | `apps/editor/src/renderer/workbench/perforceSyncHistory/` | `PerforceSyncHistoryEditor.tsx`（列表 + 详情，中间 `Sash` 可拖、宽度持久化）+ `syncHistoryFormat.ts`（纯格式化，**镜像**扩展侧的字节格式化，绝不 import 扩展代码）+ `syncHistoryCsv.ts`（导出用的 CSV 渲染：表头 = DTO 字段名，缺项留空而非 0） |
-| 输入/状态/动作 | `apps/editor/src/renderer/services/editor/PerforceSyncHistoryEditorInput.ts` · `services/perforceSyncHistory/syncHistoryViewState.ts` · `actions/perforceSyncHistoryActions.ts` | EditorInput（常量 URI 单例）· **单桶** module-level view-state（不像 graph 那样按 input id 分桶——这个 tab 只有一个实例；拖过的列表宽度也在其中，storage 侧是 `perforceSyncHistory.listWidth`）· 两个 Action2：`perforce-sync-history.view`、`perforce-sync-history.exportCsv`（重新拉**全量**再经保存对话框写文件，不改页面状态） |
+| 层             | 文件                                                                                                                                                                            | 职责                                                                                                                                                                                                                                                                                                                                                         |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| wire 类型      | `packages/extensions-common/src/contracts/perforceSyncHistory.ts`                                                                                                               | `P4SyncRunDto` / `P4SyncRunDetailDto`（多了完整 scope）/ `P4SyncHistoryLoadOptions` / `P4SyncHistoryLoadResult` + `PerforceSyncHistoryCommands`（`getRuns` / `getRun`）。改动要 bump 时先 `pnpm --filter @universe-editor/extensions-common build`                                                                                                           |
+| 数据层         | `extensions/perforce/src/syncHistory.ts`                                                                                                                                        | 纯函数 `outcomeOfRun` / `syncNothingHappened`（**与 toast 分支共用一份**）/ `buildSyncHistoryEntry` / `isEntry` / `toRunDto` / `toRunDetailDto`；每次 run 一个的 `SyncP4CallCounter`（见下）；持久化类 `SyncHistoryLog`（`<globalStoragePath>/syncHistory.json`，per-process tmp + rename 原子写，mtime+size stamp 跨窗口重载，整段 best-effort）            |
+| 事实来源       | `extensions/perforce/src/client.ts`                                                                                                                                             | `SyncRunResult.facts`（引擎 / 线程 / `startedAt` / `io` / `diskWrites` / `p4Calls`）+ `_withSyncFacts`。δ 与原生两条路都经它装饰；**编辑器自己预检拒绝的 run（`notRun`）不贴 facts**（见下）                                                                                                                                                                 |
+| 记录点         | `extensions/perforce/src/extension.ts`                                                                                                                                          | `recordSyncHistory` helper + **两个**落账点（见下）+ `perforce-sync-history.getRuns/getRun` 两个只读命令                                                                                                                                                                                                                                                     |
+| 宿主页         | `apps/editor/src/renderer/workbench/perforceSyncHistory/`                                                                                                                       | `PerforceSyncHistoryEditor.tsx`（列表 + 详情，中间 `Sash` 可拖、宽度持久化）+ `syncHistoryFormat.ts`（纯格式化，**镜像**扩展侧的字节格式化，绝不 import 扩展代码；`p4CallsLabel`/`p4CallsRowLabel` 管调用数的三态）+ `syncHistoryCsv.ts`（导出用的 CSV 渲染：表头 = DTO 字段名，缺项留空而非 0；调用数拆成 `p4Calls.total/.native/.p4delta/.complete` 四列） |
+| 输入/状态/动作 | `apps/editor/src/renderer/services/editor/PerforceSyncHistoryEditorInput.ts` · `services/perforceSyncHistory/syncHistoryViewState.ts` · `actions/perforceSyncHistoryActions.ts` | EditorInput（常量 URI 单例）· **单桶** module-level view-state（不像 graph 那样按 input id 分桶——这个 tab 只有一个实例；拖过的列表宽度也在其中，storage 侧是 `perforceSyncHistory.listWidth`）· 两个 Action2：`perforce-sync-history.view`、`perforce-sync-history.exportCsv`（重新拉**全量**再经保存对话框写文件，不改页面状态）                            |
 
 宿主侧只经 `ICommandService` 调 `PerforceSyncHistoryCommands.*`；扩展侧对这些 id 写字面量（`import type` 契约，运行时擦除），与 `perforce-graph.*` 同一套纪律。
 
@@ -21,12 +21,12 @@
 
 两个文件并列放在 `globalStoragePath` 下、互不读写，语义**刻意不同**：
 
-| | 账本（graphSyncLedger） | 历史（syncHistory） |
-|---|---|---|
-| 语义 | 每范围的**最新同步位置**，`contradictedBy` 退休旧记录 | 每次 run 一条**事件流，永不去重** |
-| 身份 | `(clientRoot, scope)`，内容被后来的记录覆盖 | `id`（`at`-pid-seq），scope 只是内容 |
-| scope | 必须**完整**（身份依赖它） | 可截断（`MAX_SCOPE_PATHS=64` + `scopeOmitted`），仅展示 |
-| 覆盖 | 只记能表达为 claim 的**成功** run | 取消 / 失败 / 无法识别 / **被门拒绝**也各一条 |
+|       | 账本（graphSyncLedger）                               | 历史（syncHistory）                                     |
+| ----- | ----------------------------------------------------- | ------------------------------------------------------- |
+| 语义  | 每范围的**最新同步位置**，`contradictedBy` 退休旧记录 | 每次 run 一条**事件流，永不去重**                       |
+| 身份  | `(clientRoot, scope)`，内容被后来的记录覆盖           | `id`（`at`-pid-seq），scope 只是内容                    |
+| scope | 必须**完整**（身份依赖它）                            | 可截断（`MAX_SCOPE_PATHS=64` + `scopeOmitted`），仅展示 |
+| 覆盖  | 只记能表达为 claim 的**成功** run                     | 取消 / 失败 / 无法识别 / **被门拒绝**也各一条           |
 
 **为什么不能只留一个**：账本回答「这个范围现在停在哪」，历史回答「昨天那次为什么这么慢」。把失败也塞进账本会让徽章逻辑面对一堆无法表达为 claim 的行；把去重逻辑搬进历史则会抹掉恰恰最想要的那几条（失败与取消）。图谱徽章的读法见 `docs/graph.md`。
 
@@ -44,6 +44,24 @@ run 的时钟（`facts.startedAt`）在 `await this._noteSyncPreviewDrift(...)` 
 - **重叠 sync 共享计数器**：io 与 `diskWrites` 是该 client 的全局累计，两次重叠的 run 各自记到的都是**两跑之和**（与状态栏速率同口径）。
 - **`'transient'` 采样失败会丢弃已采字节** → 该 run 记为无采样。
 
+## p4 调用次数（`p4Calls`）：口径、三态与「为什么是下界」
+
+`facts.p4Calls = { native, p4delta, complete }`，即**这一次 get 起了多少个 p4 client 进程**（`SyncP4CallCounter`，每次 run 一个，绝不共享——重叠的两次 get 各记各的，也不会把 runs 之间的后台命令算进来）。
+
+**口径 = client 命令进程的启动次数**，不是服务器日志行数：
+
+- **原生**：`_syncViaP4` 那次 `p4 sync` 的 `onSpawn` 回调 +1。**spawn 失败 / ENOENT 不计**（一个字节的请求都没发出去），排队取消但进程已起**计**（进程真实存在过），命令本身退出非零**也计**（往返与进程开销都发生了）。原生这一半**永远精确**（`complete` 不被它改写）。
+- **δ**：δ 自己上报。`--json` 流先发一条 `{kind:'p4CommandCount',count:0}`，此后每**成功启动**一个原生 p4（字符集 `p4 set`、client / fstat / have / sync…）再发一条自增事件；summary 的 `p4Calls` 是最终累计数。消费方 `readP4deltaCallCount` 对事件取 **max**（事件串行化，严格递增，取最后一个等价于取 max）。**只按流里真实出现的调用累计，绝不把每次 δ 调用当成 1 次**。
+- **不统计 δ 进程自身**，也不统计 p4 内部再发的子请求（服务端往返、p4 自己 fork 的东西）——那些从外面数不出来，报一个估出来的数比不报更糟。
+- **失败回退两半相加**：δ 起了几个进程后死掉、本轮转原生兜底，两段都留在同一个计数器里（丢掉前一段就是谎报更便宜的一次 run）。
+- **取消是下界**：`cancelBusy` 杀在半途时，δ 侧只能给出已经观测到的数。
+
+**三态由 `complete` 承载**（`SyncP4CallCounter.noteDelta`）：δ **从未 spawn** → 不改写 `complete`（原生那一半仍是确数，不是「未知」）；δ spawn 了但 summary 缺席 / 非法 / 报的值**小于**已观测值 → 保留观测下界并置 `complete=false`。**统计绝不参与操作成败或回退判定**——它只是 facts 的一个字段。
+
+**老记录 = 「未采集」**：DTO 里 `p4Calls` 是可选的，早于该字段的记录**没有这一组**，UI 必须显示「未采集（此记录早于该字段）」，**绝不当成 0**；`complete=false` 且总数为 0 时显示「未完整采集」，同样**绝不显示成总数 0**。CSV 把这四点拆成四列，缺字段留空、总数照写、完整性单列标记。`isEntry` 对畸形组（负 / 小数 / 非安全整数 / 形状不对）**丢弃整条**。
+
+**δ 侧只有源码改了**：外部 `p4delta` 必须**重新构建并安装**才会上报；老版本 δ 不发 `p4CommandCount` / summary 无 `p4Calls` → `complete=false`，UI 说未完整采集。**没有版本门探测**——不识别的字段天然就是「未上报」。
+
 ## 两个记录点（都在 `extension.ts` 的 `runSync` 收尾处）
 
 1. **落账点 A**：`const res = await window.withProgress(...)` 之后、`if (res.cancelled) return` **之前**。此刻 applied / upToDate / unrecognized / failed / cancelled 全部已定，而**任何 toast 与补救对话框都还没 await**——所以 `durationMs` 量的是拉取本身，不是你盯着弹窗读了多久。失败与取消也因此各留一条。
@@ -57,14 +75,14 @@ run 的时钟（`facts.startedAt`）在 `await this._noteSyncPreviewDrift(...)` 
 
 ## 触发入口表（`options.trigger` 必填）
 
-| 调用点 | 值 |
-|---|---|
-| Timeline runner（`perforce.timeline.getThisRevision`） | `timeline` |
-| `perforce.syncLatest` / `perforce.sync` 带 resource/selection | `explorer` |
-| 同上的**无参**分支（命令面板） | `command` |
-| `perforce-graph.syncToChange` | `graph` |
-| 状态栏修订标记 chip | `statusBar` |
-| 内部补救（clobber 后的强制重试、逐文件 force 重试） | `recovery`（放在 spread **之后**覆盖调用方的值） |
+| 调用点                                                        | 值                                               |
+| ------------------------------------------------------------- | ------------------------------------------------ |
+| Timeline runner（`perforce.timeline.getThisRevision`）        | `timeline`                                       |
+| `perforce.syncLatest` / `perforce.sync` 带 resource/selection | `explorer`                                       |
+| 同上的**无参**分支（命令面板）                                | `command`                                        |
+| `perforce-graph.syncToChange`                                 | `graph`                                          |
+| 状态栏修订标记 chip                                           | `statusBar`                                      |
+| 内部补救（clobber 后的强制重试、逐文件 force 重试）           | `recovery`（放在 spread **之后**覆盖调用方的值） |
 
 `trigger` 必填的理由同 `ledgerScope`：每个入口自报家门，否则那一列就是谎言。判定只看**实参**：`syncLatestFor` 用 `resourcePath(args[0])` 判「调用方点名了资源吗」，点名才是 `explorer`，无参（状态栏 chip、命令面板）一律用调用方传入的 `trigger`。**活动文件回落只影响 scope、不影响 trigger**——`resolveTargetPath` 在没有资源参数时会回落到 `_workbench.getActiveEditorFile`，若拿「是否解析出路径」当判据，任何有活动文件的无参调用都会被记成资源管理器点击。**状态栏 chip 是唯一需要额外接线的入口**——`StatusBarItem.command` 是 `string | undefined`、**没有传参通道**，所以新增了一个运行时命令 `perforce.syncLatestFromStatusBar`（**不进 `contributes.commands`**，照 `perforce.cancelBusy` 先例）；`perforce.syncLatest` 的函数体提成局部 `syncLatestFor(args, trigger)`，两个 id 各自转发。
 
@@ -79,19 +97,22 @@ run 的时钟（`facts.startedAt`）在 `await this._noteSyncPreviewDrift(...)` 
 1. **扩展不可用**（命令未注册 → resolve `undefined`，或调用 reject）≠「你从没拉过」——前者说扩展不可用（该态带刷新按钮，扩展可能稍后才起来），后者才是空历史。
 2. **`io` 缺席 → 「不可用（此平台没有采样器）」**，绝不显示 `0B`。
 3. **`diskWrites` 一律 `≥N`**：它来自 renderer 的 watcher（会截断、遵循 `watcherExclude`），是下界不是确数。
+4. **`p4Calls` 缺席 → 「未采集」**，`complete=false` → 总数带 `≥` 且注明「未完整采集」，**0 且不完整绝不显示成总数 0**（见上一节的口径）。
 
 另有一条容易忽略的：**失败 / 取消的 run 会带一份全零 summary**（p4 还没报数就中断了），把它渲染成「无需传输」等于说「本来就没东西要拉」——恰是「被拒绝」的反面。所以计数行只有在**确实有非零计数**或结果是 `upToDate` 时才显示 `nothing to transfer`，否则说「p4 未报告」（`filesLabel` / `countsLine` 的判据，单测钉着）。
 
 ## 测试地图
 
-| 文件 | 钉什么 |
-|---|---|
-| `src/__tests__/syncHistory.test.ts` | `outcomeOfRun` 六态与优先级（含 `notRun` → `declined`）、`buildSyncHistoryEntry` 的搬运与截断、declined 恒 0 耗时 / 无 facts、DTO 映射的 `scopeFirst` |
-| `src/__tests__/syncHistoryLog.test.ts` | 追加 / 排序 / 分页（total + hasMore）/ 201 条淘汰最老（乱序写入验证是排序裁剪）/ 损坏 JSON / 伪造条目被 `isEntry` 丢弃（含超长 scope）/ 跨窗口重载 |
-| `src/__tests__/clientSyncFacts.test.ts` | 引擎与 `engineFallback` 四态、**快照早于清零**的回归、无采样 → `io` 缺席（不是 0）、预检拒绝 → `notRun` 且**整组 facts 缺席** |
-| `src/__tests__/extensionSyncHistory.test.ts` | 捕获 activate 注册的 handler + 真 `SyncHistoryLog`：恰好一条 / facts 落到记录 / 六种 trigger（含无参调用不被记成 explorer）/ clobber 补救两条（`failed` + `recovery`）/ 门拒绝与预检拒绝 → `declined` 且没跑 p4、也不再补一条失败 toast / `getRuns` 参数窄化 / `getRun` 用 `null` 说「没有」 |
-| `apps/editor/.../__tests__/syncHistoryFormat.test.ts` · `PerforceSyncHistoryEditor.test.tsx` | 「不可用而非 0B」「≥N」「δ 不使用线程」「失败 ≠ 从未执行」、空态 vs 加载中、命令**未注册（resolve `undefined`）**→ 扩展不可用（且与「记录被顶掉」分开）、畸形返回、不可用态可刷新且不注册 `focusRows`、切行即清上一条详情、重挂不重取、首次加载跨卸载仍保住选中 |
-| `e2e/specs/perforceSyncHistory.spec.ts` | 四条 journey：一次 get 恰好一行且详情正确 / **失败也留档**（且记录早于错误弹窗）/ IO 非零 / `UNIVERSE_P4_IO_PROBE=off` → 不可用 |
+| 文件                                                                                         | 钉什么                                                                                                                                                                                                                                                                                                                       |
+| -------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/__tests__/syncHistory.test.ts`                                                          | `outcomeOfRun` 六态与优先级（含 `notRun` → `declined`）、`buildSyncHistoryEntry` 的搬运与截断、declined 恒 0 耗时 / 无 facts、DTO 映射的 `scopeFirst` 与 `p4Calls`、`isEntry` 丢弃畸形 `p4Calls`、`SyncP4CallCounter` 七态（含未 spawn 不污染确数、回退两半相加、summary 落后取观测）                                        |
+| `src/__tests__/syncHistoryLog.test.ts`                                                       | 追加 / 排序 / 分页（total + hasMore）/ 201 条淘汰最老（乱序写入验证是排序裁剪）/ 损坏 JSON / 伪造条目被 `isEntry` 丢弃（含超长 scope）/ 跨窗口重载                                                                                                                                                                           |
+| `src/__tests__/clientSyncFacts.test.ts`                                                      | 引擎与 `engineFallback` 四态、**快照早于清零**的回归、无采样 → `io` 缺席（不是 0）、预检拒绝 → `notRun` 且**整组 facts 缺席**；`p4Calls` 的原生成功 / 失败 / 取消 / 重叠隔离、δ 确认 / 只观测下界 / 未 spawn 后走原生仍精确                                                                                                  |
+| `src/__tests__/p4deltaParser.test.ts`                                                        | JSONL 解析；`readP4deltaCallCount` 取 max 高水位、summary 落后 / 畸形事件 / 无 summary 只给下界                                                                                                                                                                                                                              |
+| `src/__tests__/extensionSyncHistory.test.ts`                                                 | 捕获 activate 注册的 handler + 真 `SyncHistoryLog`：恰好一条 / facts 落到记录（含 `p4Calls`）/ 六种 trigger（含无参调用不被记成 explorer）/ clobber 补救两条（`failed` + `recovery`）/ 门拒绝与预检拒绝 → `declined` 且没跑 p4、也不再补一条失败 toast / `getRuns` 参数窄化与 `p4Calls` 透传 / `getRun` 用 `null` 说「没有」 |
+| `apps/editor/.../__tests__/syncHistoryFormat.test.ts` · `PerforceSyncHistoryEditor.test.tsx` | 「不可用而非 0B」「≥N」「δ 不使用线程」「失败 ≠ 从未执行」、`p4Calls` 的精确 / 下界 / 未采集三态（列表行同款）、空态 vs 加载中、命令**未注册（resolve `undefined`）**→ 扩展不可用（且与「记录被顶掉」分开）、畸形返回、不可用态可刷新且不注册 `focusRows`、切行即清上一条详情、重挂不重取、首次加载跨卸载仍保住选中          |
+| `e2e/specs/perforceSyncHistory.spec.ts`                                                      | 四条 journey：一次 get 恰好一行且详情正确（含 `p4Calls {native:1,p4delta:0,complete:true}` 与详情行、CSV 四列）/ **失败也留档**（且记录早于错误弹窗）/ IO 非零 / `UNIVERSE_P4_IO_PROBE=off` → 不可用                                                                                                                         |
+| `e2e/specs/perforceSyncP4delta.spec.ts`                                                      | δ 服务 get 时落档调用数为 `{native:0, p4delta:<fake 实际 spawn 数>, complete:true}`，期望值取自 `UNIVERSE_P4DELTA_P4CALL_LOG` 的末行（不硬编码）                                                                                                                                                                             |
 
 e2e 的**稳态信号是记录本身**（`perforce-sync-history.getRuns` 轮询），不是行文本、也不是完成 toast：行文本全是一个样，toast 会消失，而记录对 applied / failed / cancelled 一视同仁。另注意 fake p4 在**文件落到 head 时会删掉显式 `haveRev`**（对齐真服务器），所以断言「这次 get 真的落盘了」要看磁盘内容，不要看 `readHaveRev`。
 
@@ -109,8 +130,9 @@ cd extensions/perforce && UNIVERSE_E2E_NO_TAG_FILTER=1 pnpm e2eg perforceSyncHis
 ## 关键参考路径
 
 - `packages/extensions-common/src/contracts/perforceSyncHistory.ts` —— DTO + 命令 id
-- `extensions/perforce/src/syncHistory.ts` —— 纯函数 + `SyncHistoryLog`（对着 `graphSyncLedger.ts` 写，但**语义不同**，别照抄）
-- `extensions/perforce/src/client.ts` —— 搜 `_withSyncFacts` / `SyncRunFacts` / `_syncIoSampled`
+- `extensions/perforce/src/syncHistory.ts` —— 纯函数 + `SyncP4CallCounter` + `SyncHistoryLog`（对着 `graphSyncLedger.ts` 写，但**语义不同**，别照抄）
+- `extensions/perforce/src/client.ts` —— 搜 `_withSyncFacts` / `SyncRunFacts` / `SyncP4CallCounter` / `_syncIoSampled`
+- `extensions/perforce/src/p4delta/p4deltaParser.ts` —— 搜 `readP4deltaCallCount`（δ 侧的观测下界）
 - `extensions/perforce/src/extension.ts` —— 搜 `recordSyncHistory`（helper、两个落账点、两个只读命令）
 - `extensions/perforce/src/processIo.ts` —— 采样器（`UNIVERSE_P4_IO_PROBE` 是 e2e 的缝）
 - `apps/editor/src/renderer/workbench/perforceSyncHistory/` —— 页面与纯格式化

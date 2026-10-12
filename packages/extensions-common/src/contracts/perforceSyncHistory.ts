@@ -22,6 +22,14 @@
  * - `diskWrites` is a LOWER BOUND from the renderer's file watcher (each push
  *   is truncated at 5000 events and `files.watcherExclude` applies), and 0 can
  *   also mean there is no watcher at all. Render it as "≥N".
+ * - `p4Calls` counts p4 COMMAND PROCESSES this get started, split by which side
+ *   started them: `native` are the ones the editor spawned itself, `p4delta` the
+ *   ones the δ engine reported spawning internally (charset `p4 set`, client /
+ *   fstat / have queries, the transfer). It is NOT a count of server log lines
+ *   (a `p4 set` may stay local; `--parallel` transmits over one process) and not
+ *   a count of δ invocations. Absent = the record predates this field; when
+ *   present, `complete: false` means at least the δ side is a LOWER BOUND (its
+ *   run ended without a valid summary), so only the native number is exact.
  */
 
 /** Where a get was started from. */
@@ -68,6 +76,26 @@ export interface P4SyncRunScopeDto {
 }
 
 /**
+ * How many p4 command processes this get started, split by origin.
+ *
+ * `native` = processes the editor spawned itself for the run (a native get, or
+ * the native fallback δ handed back). `p4delta` = processes the δ engine
+ * reported starting inside its own run. A δ run with no fallback therefore has
+ * `native: 0` and a nonzero `p4delta`.
+ *
+ * `complete: false` means the δ side could not be confirmed final (its run
+ * ended without a valid summary — killed, cancelled, crashed, or an engine that
+ * predates the count), so `p4delta` is a lower bound. The native side is always
+ * exact: it is counted from spawn events. Never render an incomplete total as an
+ * exact number.
+ */
+export interface P4SyncCallCountsDto {
+  readonly native: number
+  readonly p4delta: number
+  readonly complete: boolean
+}
+
+/**
  * One run, as the history page's list row — and the base of the detail DTO.
  *
  * `scopeFirst` carries only the first few entries so a 200-row page stays
@@ -104,6 +132,10 @@ export interface P4SyncRunDto {
   /** Lower bound (watcher events); render as "≥N". Absent = nothing was
    *  observed for this run (declined at the scope gate). */
   readonly diskWrites?: number
+  /** p4 command processes this run started, split native / δ. Absent = the
+   *  record predates the field; `complete: false` = the δ side is a lower
+   *  bound. Never render an incomplete total as exact. */
+  readonly p4Calls?: P4SyncCallCountsDto
   readonly error?: { readonly kind: string; readonly message: string }
   /** The scope gate narrowed the user's selection to the daily scope. */
   readonly scopeNarrowed: boolean

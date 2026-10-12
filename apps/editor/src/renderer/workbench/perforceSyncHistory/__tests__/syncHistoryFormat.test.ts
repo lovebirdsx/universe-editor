@@ -21,6 +21,8 @@ import {
   formatDuration,
   formatTarget,
   outcomeLabel,
+  p4CallsLabel,
+  p4CallsRowLabel,
   scopeLines,
   triggerLabel,
 } from '../syncHistoryFormat.js'
@@ -156,6 +158,49 @@ describe('filesLabel', () => {
   it('lets an up-to-date run say there was nothing to transfer', () => {
     expect(filesLabel(run({ outcome: 'upToDate', counts: NO_COUNTS }))).toBe('nothing to transfer')
     expect(countsLine(run({ outcome: 'upToDate', counts: NO_COUNTS }))).toBe('nothing to transfer')
+  })
+})
+
+describe('p4CallsLabel', () => {
+  it('states the total and the native / δ split of an exact run', () => {
+    expect(p4CallsLabel(run({ p4Calls: { native: 1, p4delta: 0, complete: true } }))).toBe(
+      '1 p4 command(s) (1 native · 0 δ)',
+    )
+    expect(p4CallsLabel(run({ p4Calls: { native: 2, p4delta: 5, complete: true } }))).toBe(
+      '7 p4 command(s) (2 native · 5 δ)',
+    )
+  })
+
+  it('never prints an incomplete count as a bare total', () => {
+    // The `≥` plus the explanation is what keeps the number from reading as
+    // exact — a failure that fell back to native reported only a lower bound.
+    expect(p4CallsLabel(run({ p4Calls: { native: 1, p4delta: 3, complete: false } }))).toBe(
+      '≥4 p4 command(s) (1 native · 3 δ, not fully collected)',
+    )
+  })
+
+  it('does not claim a run asked p4 nothing when the bound is 0 and incomplete', () => {
+    // "0 p4 command(s)" here would be a lie the run cannot support.
+    expect(p4CallsLabel(run({ p4Calls: { native: 0, p4delta: 0, complete: false } }))).toBe(
+      'not fully collected',
+    )
+  })
+
+  it('reads an absent field as not collected, never as 0', () => {
+    expect(p4CallsLabel(run())).toBe('not collected (this record predates the field)')
+  })
+
+  it('gives the list row a compact form and no line at all when uncollected', () => {
+    expect(p4CallsRowLabel(run({ p4Calls: { native: 1, p4delta: 0, complete: true } }))).toBe(
+      '1 p4 calls',
+    )
+    expect(p4CallsRowLabel(run({ p4Calls: { native: 1, p4delta: 3, complete: false } }))).toBe(
+      '≥4 p4 calls',
+    )
+    expect(p4CallsRowLabel(run({ p4Calls: { native: 0, p4delta: 0, complete: false } }))).toBe(
+      'p4 calls unknown',
+    )
+    expect(p4CallsRowLabel(run())).toBeUndefined()
   })
 })
 

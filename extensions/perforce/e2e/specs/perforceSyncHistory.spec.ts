@@ -65,6 +65,11 @@ interface RecordedRun {
   readonly spec: string
   readonly trigger: string
   readonly counts?: { readonly applied: number }
+  readonly p4Calls?: {
+    readonly native: number
+    readonly p4delta: number
+    readonly complete: boolean
+  }
 }
 
 async function openPerforceWorkspace(
@@ -133,6 +138,12 @@ test.describe('@p1 perforce sync history', () => {
 
       await startGet(page, perforce.file('src/a.txt'))
       await waitForRecordCount(page, 1)
+      // The native get really started one p4 process, counted from the spawn hook.
+      // An absent group would read as "not collected"; a 0 would read as "no call",
+      // which a get that moved bytes cannot be.
+      await expect
+        .poll(async () => (await recordedRuns(page))[0]?.p4Calls, { timeout: 30_000 })
+        .toEqual({ native: 1, p4delta: 0, complete: true })
       // The record precedes the completion toast, so this is what makes it a
       // record of a get that really landed rather than of an attempted one. The
       // disk is the signal, not `haveRev`: the fake (like the real server)
@@ -160,6 +171,10 @@ test.describe('@p1 perforce sync history', () => {
       await expect(view.getByTestId('perforce-sync-history-detail-scope')).toContainText('a.txt')
       // And the surface the user actually clicked.
       await expect(view.getByTestId('perforce-sync-history-detail-trigger')).toHaveText('Explorer')
+      // The P4 call count: one native process, no δ side, exact.
+      await expect(view.getByTestId('perforce-sync-history-detail-p4calls')).toHaveText(
+        '1 p4 command(s) (1 native · 0 δ)',
+      )
     })
   })
 
@@ -300,9 +315,14 @@ test.describe('@p1 perforce sync history', () => {
       // own field names, so the columns do not move with the UI language.
       expect(csv.codePointAt(0)).toBe(0xfeff)
       expect(csv).toContain('id,at,startedAt,durationMs,outcome,spec')
+      // The p4-call columns carry their sources AND a completeness flag, so an
+      // incomplete total can never be read as exact.
+      expect(csv).toContain('p4Calls.total,p4Calls.native,p4Calls.p4delta,p4Calls.complete')
       const rows = csv.split('\r\n').filter((line) => line !== '')
       expect(rows).toHaveLength(2) // the header plus the one recorded get
       expect(rows[1]).toContain(',applied,#head,')
+      // The one native process, its δ side at 0, and the run marked complete.
+      expect(rows[1]).toContain(',1,1,0,true,')
     })
   })
 })

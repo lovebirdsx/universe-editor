@@ -55,6 +55,7 @@ import {
   toReconcileFiles,
   toSyncOutcome,
   appliedSyncFiles,
+  readP4deltaCallCount,
   type P4deltaSummary,
 } from './p4delta/p4deltaParser.js'
 import {
@@ -101,7 +102,7 @@ import {
   type ReconcileScanSplitPrediction,
 } from './reconcileScanBudget.js'
 import { buildScopeFilespec, type SyncScopeTarget } from './p4Filespec.js'
-import type { SyncRunFacts } from './syncHistory.js'
+import { SyncP4CallCounter, type SyncRunFacts } from './syncHistory.js'
 import {
   canHandTargetsToP4delta,
   carveReconcileFilespecs,
@@ -5005,13 +5006,16 @@ export class PerforceClient {
       // merely unavailable or was tried and handed the run back to native p4.
       let deltaAttempted = false
       let usedDelta = false
+      // Per-run, threaded into both engine bodies: a client field would bill this
+      // get for whatever else the shared P4Service is running (see the class).
+      const calls = new SyncP4CallCounter()
       const run = await this._withBusy(localize('perforce.busy.sync', 'Syncing'), async () => {
         // 换引擎只由资格决定，强制拉取不再预先排除：普通 get 与修复是同一个请求加一个
         // `--force`，δ 读不懂的 spec（如拒绝清单点名的 `#rev`）照旧由 `_p4deltaSyncReject` 挡回原生。
         const engine = this._p4deltaEngine()
         if (engine !== undefined) {
           deltaAttempted = true
-          const viaDelta = await this._syncViaP4delta(engine, spec, options)
+          const viaDelta = await this._syncViaP4delta(engine, spec, options, calls)
           if (viaDelta !== undefined) {
             usedDelta = true
             return viaDelta
@@ -5037,11 +5041,11 @@ export class PerforceClient {
             error: { kind: 'other', suggestion: rejected },
           } satisfies SyncRunResult
         }
-        return await this._syncViaP4(spec, options)
+        return await this._syncViaP4(spec, options, calls)
       })
       // Snapshot before the finally: `_endExternalSuspend` releases the samplers
       // and `_stopSyncIoProbes` zeroes the very byte totals this reads.
-      return this._withSyncFacts(run, startedAt, deltaAttempted, usedDelta)
+      return this._withSyncFacts(run, startedAt, deltaAttempted, usedDelta, calls)
     } finally {
       // Paired with the arm above `_withBusy`: if `_withBusy`'s own emit (or
       // anything in the callback) throws before the settle, the suspension must
@@ -5078,12 +5082,17 @@ export class PerforceClient {
    * would read as "this get moved nothing". Overlapping syncs share one set of
    * counters (see {@link SyncProgress.diskWrites}), so the numbers are the sum
    * for every run in the overlap.
+   *
+   * `p4Calls` is the opposite: it is the run's OWN counter
+   * ({@link SyncP4CallCounter}), so an overlapping get does not inflate it. Its
+   * `complete` flag is false when the δ side was never confirmed final.
    */
   private _withSyncFacts(
     run: SyncRunResult,
     startedAt: number,
     deltaAttempted: boolean,
     usedDelta: boolean,
+    calls: SyncP4CallCounter,
   ): SyncRunResult {
     if (run.notRun === true) return run
     return {
@@ -5098,6 +5107,7 @@ export class PerforceClient {
           ? { io: { readBytes: this._syncIoReadBytes, writeBytes: this._syncIoWriteBytes } }
           : {}),
         diskWrites: this._syncDiskWrites,
+        p4Calls: calls.snapshot(),
       },
     }
   }
@@ -5205,11 +5215,14 @@ export class PerforceClient {
    */
   private async _syncViaP4(
     spec: string,
-    options?: {
-      scope?: readonly string[]
-      force?: boolean
-      onProgress?: (progress: { done: number; file: string | undefined }) => void
-    },
+    options:
+      | {
+          scope?: readonly string[]
+          force?: boolean
+          onProgress?: (progress: { done: number; file: string | undefined }) => void
+        }
+      | undefined,
+    calls: SyncP4CallCounter,
   ): Promise<SyncRunResult> {
     const targets = this._syncTargets(spec, options?.scope)
     const parallel =
@@ -5299,11 +5312,18 @@ export class PerforceClient {
           // from `_cancellable` is the only stop now.
           signal,
           ...CONTENT_TRANSFER_EXEC,
-          // Both are streaming-path only: a non-streaming sync publishes no
-          // progress at all, so there would be nothing for a sample to update.
-          ...(onStdoutLine
-            ? { onStdoutLine, onSpawn: (pid: number) => this._onSyncP4Spawn(pid) }
-            : {}),
+          // Counted on EVERY get, streaming or not: this is the one native p4
+          // process the run starts, and the count is per-run (the counter is not
+          // the client's). A process that never spawned (ENOENT, killed while
+          // queued) fires no hook and is not counted; one that started and then
+          // failed is, which is what "a call that happened" means.
+          onSpawn: (pid: number) => {
+            calls.countNative()
+            // The I/O sampler is streaming-only: a non-streaming sync publishes
+            // no progress, so there would be nothing for a sample to update.
+            if (onStdoutLine) this._onSyncP4Spawn(pid)
+          },
+          ...(onStdoutLine ? { onStdoutLine } : {}),
         })
       })
       // Clear as soon as the p4 run settles — the count belongs to the
@@ -5468,13 +5488,16 @@ export class PerforceClient {
   private async _syncViaP4delta(
     engine: P4deltaService,
     spec: string,
-    options?: {
-      scope?: readonly string[]
-      scopeTargets?: readonly SyncScopeTarget[]
-      force?: boolean
-      onProgress?: (progress: { done: number; file: string | undefined }) => void
-      overrideScope?: boolean
-    },
+    options:
+      | {
+          scope?: readonly string[]
+          scopeTargets?: readonly SyncScopeTarget[]
+          force?: boolean
+          onProgress?: (progress: { done: number; file: string | undefined }) => void
+          overrideScope?: boolean
+        }
+      | undefined,
+    calls: SyncP4CallCounter,
   ): Promise<SyncRunResult | undefined> {
     const force = options?.force === true
     const override = options?.overrideScope === true
@@ -5517,6 +5540,11 @@ export class PerforceClient {
     // chunks instead of line by line. Same contract as the native streaming path
     // (`done` + current file), just a coarser cadence.
     let done = 0
+    // Whether δ actually started. Set from the engine's spawn hook, which is the
+    // only evidence: a run refused before `engine.run` (the eligibility checks
+    // above) must not leave a "δ side missing" mark on an otherwise exact native
+    // count — there is no δ side to be missing.
+    let deltaSpawned = false
     const run = await this._cancellable((signal) => {
       // Seed the bar before anything else: the engine's own preview pass walks
       // the scope first and can run for a long time without one file record.
@@ -5535,12 +5563,20 @@ export class PerforceClient {
           onProgress?.({ done, file: tick.file })
         },
         // The status bar samples this pid's process tree; the engine's own p4
-        // children hang off it, so the disk/IO readout keeps working.
-        onSpawn: (pid) => this._onSyncP4Spawn(pid),
+        // children hang off it, so the disk/IO readout keeps working. The same
+        // hook is the evidence that δ really started — see `deltaSpawned`.
+        onSpawn: (pid) => {
+          deltaSpawned = true
+          this._onSyncP4Spawn(pid)
+        },
       })
     })
     const result = run.value
     const cancelled = run.cancelled
+    // Counted before the cancel/failure branches: δ really did start those p4
+    // processes, so a killed or failed run keeps what it observed (as a lower
+    // bound when its stream never reached a valid summary).
+    calls.noteDelta({ spawned: deltaSpawned, ...readP4deltaCallCount(result) })
     // Clear as soon as the engine settles — the count belongs to the "Syncing"
     // label, and the follow-up refresh runs under its own busy label
     // ("Refreshing"). Same point on the run's timeline as the native path's

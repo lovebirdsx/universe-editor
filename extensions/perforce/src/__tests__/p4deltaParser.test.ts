@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   appliedSyncFiles,
+  readP4deltaCallCount,
   summarizeRun,
   toReconcileFiles,
   toSyncOutcome,
@@ -763,5 +764,50 @@ describe('appliedSyncFiles', () => {
   // 只会把已被覆盖的本地改动藏起来。
   it('reads nothing out of a force repair, whose records carry no apply marker', () => {
     expect(appliedSyncFiles([forceFile()], CLIENT_ROOT)).toEqual([])
+  })
+})
+
+describe('readP4deltaCallCount', () => {
+  it('takes the highest cumulative event and the summary’s final number', () => {
+    const run = runOf([
+      { kind: 'p4CommandCount', count: 0 },
+      { kind: 'p4CommandCount', count: 1 },
+      { kind: 'p4CommandCount', count: 5 },
+      { kind: 'summary', p4Calls: 5 },
+    ])
+    expect(readP4deltaCallCount(run)).toEqual({ observed: 5, reported: 5 })
+  })
+
+  it('keeps the high-water mark as a lower bound when no summary arrived', () => {
+    // A killed / cancelled / crashed run: the events that made it out are all
+    // the evidence there is, and the consumer must mark the total incomplete.
+    const run = runOf([{ kind: 'p4CommandCount', count: 3 }])
+    expect(readP4deltaCallCount(run)).toEqual({ observed: 3, reported: undefined })
+  })
+
+  it('drops malformed events instead of trusting them', () => {
+    const run = runOf([
+      { kind: 'p4CommandCount', count: -1 },
+      { kind: 'p4CommandCount', count: Number.NaN },
+      { kind: 'p4CommandCount', count: 1.5 },
+      { kind: 'p4CommandCount', count: Number.MAX_SAFE_INTEGER + 1 },
+      { kind: 'p4CommandCount', count: '4' },
+      { kind: 'p4CommandCount' },
+      { kind: 'p4CommandCount', count: 2 },
+    ])
+    expect(readP4deltaCallCount(run)).toEqual({ observed: 2, reported: undefined })
+  })
+
+  it('ignores a malformed summary count and keeps a valid later one', () => {
+    const run = runOf([
+      { kind: 'p4CommandCount', count: 0 },
+      { kind: 'summary', p4Calls: 'many' },
+      { kind: 'summary', p4Calls: 4 },
+    ])
+    expect(readP4deltaCallCount(run)).toEqual({ observed: 0, reported: 4 })
+  })
+
+  it('reports nothing observed and nothing reported for a bare stream', () => {
+    expect(readP4deltaCallCount(runOf([]))).toEqual({ observed: 0, reported: undefined })
   })
 })

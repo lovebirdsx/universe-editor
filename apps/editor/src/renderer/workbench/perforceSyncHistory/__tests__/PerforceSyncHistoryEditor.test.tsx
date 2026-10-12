@@ -204,6 +204,48 @@ describe('PerforceSyncHistoryEditor', () => {
     expect(screen.getByTestId('perforce-sync-history-detail-write').textContent).not.toContain('0B')
   })
 
+  it('shows the run’s p4 command count, and marks an old record as uncollected', async () => {
+    const counted = makeRun({ id: 'run-2', p4Calls: { native: 1, p4delta: 2, complete: true } })
+    // A record written before the field existed: the group is ABSENT, and the
+    // pane has to say so rather than print a 0 the run never reported.
+    const legacy = makeRun({ id: 'run-1' })
+    renderEditor(
+      makeCommandService(
+        makePage([counted, legacy]),
+        new Map([
+          ['run-2', makeDetail(counted)],
+          ['run-1', makeDetail(legacy)],
+        ]),
+      ),
+    )
+    await flush()
+
+    expect(screen.getByTestId('perforce-sync-history-detail-p4calls').textContent).toBe(
+      '3 p4 command(s) (1 native · 2 δ)',
+    )
+    // The same total rides on the list row.
+    const rows = screen.getAllByTestId('perforce-sync-history-row')
+    expect(rows[0]!.textContent).toContain('3 p4 calls')
+
+    fireEvent.click(rows[1]!)
+    await flush()
+    expect(screen.getByTestId('perforce-sync-history-detail-p4calls').textContent).toBe(
+      'not collected (this record predates the field)',
+    )
+    // …and the row says nothing rather than claiming a count of 0.
+    expect(rows[1]!.textContent).not.toContain('p4 calls')
+  })
+
+  it('states an incomplete p4 count as a lower bound, never as a total', async () => {
+    const run = makeRun({ p4Calls: { native: 1, p4delta: 3, complete: false } })
+    renderEditor(makeCommandService(makePage([run]), new Map([['run-1', makeDetail(run)]])))
+    await flush()
+
+    const calls = screen.getByTestId('perforce-sync-history-detail-p4calls').textContent ?? ''
+    expect(calls).toContain('≥4')
+    expect(calls).toContain('not fully collected')
+  })
+
   it('marks the disk-write count as a lower bound', async () => {
     const run = makeRun({ diskWrites: 3 })
     renderEditor(makeCommandService(makePage([run]), new Map([['run-1', makeDetail(run)]])))

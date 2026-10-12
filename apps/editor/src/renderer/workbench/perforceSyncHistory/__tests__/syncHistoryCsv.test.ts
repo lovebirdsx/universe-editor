@@ -21,6 +21,7 @@ const HEADER =
   'id,at,startedAt,durationMs,outcome,spec,engine,engineFallback,force,parallelThreads,' +
   'clientRoot,trigger,counts.applied,counts.refusedModified,counts.refusedOverwrite,' +
   'counts.keptOpen,counts.mustResolve,counts.handoff,io.readBytes,io.writeBytes,diskWrites,' +
+  'p4Calls.total,p4Calls.native,p4Calls.p4delta,p4Calls.complete,' +
   'error.kind,error.message,scopeNarrowed,scopeCount,scopeFirst'
 
 function makeRun(overrides: Partial<P4SyncRunDto> = {}): P4SyncRunDto {
@@ -47,6 +48,7 @@ function makeRun(overrides: Partial<P4SyncRunDto> = {}): P4SyncRunDto {
     },
     io: { readBytes: 4096, writeBytes: 1024 },
     diskWrites: 3,
+    p4Calls: { native: 1, p4delta: 2, complete: true },
     scopeNarrowed: false,
     scopeFirst: [{ path: `${ROOT}/src`, isDirectory: true }],
     scopeCount: 1,
@@ -112,6 +114,10 @@ describe('runsToCsv', () => {
         '4096',
         '1024',
         '3',
+        '3',
+        '1',
+        '2',
+        'true',
         '',
         '',
         'false',
@@ -139,6 +145,7 @@ describe('runsToCsv', () => {
       parallelThreads: _threads,
       counts: _counts,
       diskWrites: _diskWrites,
+      p4Calls: _p4Calls,
       ...rest
     } = makeRun()
     const run: P4SyncRunDto = { ...rest, spec: '', outcome: 'declined' }
@@ -149,6 +156,17 @@ describe('runsToCsv', () => {
     expect(cells[9]).toBe('') // parallelThreads
     expect(cells.slice(12, 18)).toEqual(['', '', '', '', '', '']) // the six counts
     expect(cells[20]).toBe('') // diskWrites
+    // A record written before the field existed: all four cells blank, never 0 —
+    // and `complete` blank too, so the count is not claimed exact either.
+    expect(cells.slice(21, 25)).toEqual(['', '', '', ''])
+  })
+
+  it('writes the p4-call total, its two sources and the completeness flag', () => {
+    // An incomplete count still writes its total; the `complete` cell is what
+    // keeps it from reading as exact.
+    const run = makeRun({ p4Calls: { native: 2, p4delta: 5, complete: false } })
+    const cells = (logicalLines(runsToCsv([run]))[1] ?? '').split(',')
+    expect(cells.slice(21, 25)).toEqual(['7', '2', '5', 'false'])
   })
 
   it('quotes delimiters, quotes, line breaks and surrounding blanks', () => {

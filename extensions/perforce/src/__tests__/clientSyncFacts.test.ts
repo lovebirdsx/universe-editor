@@ -238,6 +238,11 @@ interface DeltaReply {
 
 let syncDeltaReply: (argv: readonly string[]) => DeltaReply = () => ({})
 
+/** The pid a started δ run would have. Handed to the run's spawn hook, which is
+ *  the evidence the client reads as "δ really started" — a stub that stayed
+ *  silent would model a run that never spawned. */
+const DELTA_PID = 9001
+
 function stubP4deltaRun(): void {
   vi.spyOn(P4deltaService.prototype, 'run').mockImplementation(async (args, options) => {
     const isGet = args.includes('--sync')
@@ -246,6 +251,7 @@ function stubP4deltaRun(): void {
       : { records: [deltaSummary({ mode: 'open', applied: false, total: 0, counts: {} })] }
     const records = [...(r.records ?? [])] as never[]
     for (const record of records) options?.onRecord?.(record)
+    if (isGet) options?.onSpawn?.(DELTA_PID)
     return {
       code: r.code ?? 0,
       records,
@@ -267,6 +273,9 @@ function deltaSummary(overrides: Record<string, unknown> = {}): Record<string, u
     force: false,
     total: 1,
     counts: { update: 1 },
+    // The real engine always states a final p4 command count on its summary;
+    // a stub that omitted it would read as an incomplete (lower-bound) run.
+    p4Calls: 0,
     scopeMatched: null,
     unmatched: 0,
     elapsedMs: 5,
@@ -332,6 +341,8 @@ describe('SyncRunResult.facts', () => {
     expect(res.facts?.engineFallback).toBe(false)
     expect(res.facts?.parallelThreads).toBe(6)
     expect(res.facts?.startedAt).toBeLessThanOrEqual(res.facts!.endedAt)
+    // The one p4 process this get started, counted from its spawn hook.
+    expect(res.facts?.p4Calls).toEqual({ native: 1, p4delta: 0, complete: true })
   })
 
   it('carries the sampled byte totals out of a finished run', async () => {
@@ -406,6 +417,40 @@ describe('SyncRunResult.facts', () => {
 
     expect(res.ok).toBe(false)
     expect(res.facts?.engine).toBe('p4')
+    // Failure is still a call: the process started and made its round trip.
+    expect(res.facts?.p4Calls).toEqual({ native: 1, p4delta: 0, complete: true })
+  })
+
+  it('counts the process a cancelled get did start', async () => {
+    const client = await makeClient((argv) => {
+      // Abort while the sync is in flight; the service resolves a failure
+      // result whose stderr says it was cancelled.
+      if (!argv.includes('-n')) client.cancelBusy()
+      return { stdout: '', stderr: 'was cancelled', exit: 1 }
+    })
+
+    const res = await client.sync('#head')
+
+    expect(res.cancelled).toBe(true)
+    // The count stays exact: the process existed, so there is nothing unknown.
+    expect(res.facts?.p4Calls).toEqual({ native: 1, p4delta: 0, complete: true })
+  })
+
+  it('keeps concurrent gets’ counts apart', async () => {
+    // A client-global counter would bill the second get for the first one's
+    // process (and for any background command in between); the per-run counter
+    // must not.
+    const client = await makeClient(() => ({}), {}, true)
+    const first = client.sync('#head')
+    await vi.waitFor(() => expect(heldChildren.length).toBe(1))
+    const second = client.sync('#head')
+    await vi.waitFor(() => expect(heldChildren.length).toBe(2))
+    finishHeld()
+    finishHeld()
+
+    const [a, b] = await Promise.all([first, second])
+    expect(a.facts?.p4Calls).toEqual({ native: 1, p4delta: 0, complete: true })
+    expect(b.facts?.p4Calls).toEqual({ native: 1, p4delta: 0, complete: true })
   })
 
   it('leaves a get the editor refused undecorated, and carries the reason out', async () => {
@@ -444,6 +489,38 @@ describe('SyncRunResult.facts', () => {
     expect(res.facts?.engineFallback).toBe(false)
   })
 
+  it('reports δ’s own p4 command count, confirmed by its summary', async () => {
+    const client = await makeArmedClient()
+    syncDeltaReply = () => ({
+      records: [
+        { kind: 'p4CommandCount', count: 0 },
+        deltaFile('Content/a.cpp'),
+        { kind: 'p4CommandCount', count: 7 },
+        deltaSummary({ p4Calls: 7 }),
+      ],
+    })
+
+    const res = await client.sync('#head')
+
+    // δ served this get itself, so the editor started no p4 process: the whole
+    // count is the engine's own, and the summary confirms it final.
+    expect(res.facts?.p4Calls).toEqual({ native: 0, p4delta: 7, complete: true })
+  })
+
+  it('accumulates δ’s observed calls and the native fallback, marking the δ side inexact', async () => {
+    const client = await makeArmedClient()
+    // δ starts, gets a few calls in, then dies without a summary: the get is
+    // re-served natively. Both halves must survive — dropping the first would
+    // report a cheaper run than happened.
+    syncDeltaReply = () => ({ records: [{ kind: 'p4CommandCount', count: 3 }], code: 1 })
+
+    const res = await client.sync('#head')
+
+    expect(res.facts?.engine).toBe('p4')
+    expect(res.facts?.engineFallback).toBe(true)
+    expect(res.facts?.p4Calls).toEqual({ native: 1, p4delta: 3, complete: false })
+  })
+
   it('flags the fallback when δ was tried and the run went to native p4', async () => {
     const client = await makeArmedClient()
 
@@ -453,6 +530,9 @@ describe('SyncRunResult.facts', () => {
 
     expect(res.facts?.engine).toBe('p4')
     expect(res.facts?.engineFallback).toBe(true)
+    // δ never started, so there is no δ side to be missing: the native count is
+    // exact and complete, not an unknown.
+    expect(res.facts?.p4Calls).toEqual({ native: 1, p4delta: 0, complete: true })
   })
 
   it('does not flag a fallback when the engine was never on the table', async () => {

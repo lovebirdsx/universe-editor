@@ -116,11 +116,31 @@ const SUMMARY_KEYS = [
   'force',
   'total',
   'counts',
+  // The final native p4 process count. The per-call `p4CommandCount` events are
+  // only observations; this key is the conclusion the editor reads. It sits
+  // between `counts` and `scopeMatched` because that is where the engine emits
+  // it (the list is compared against `Object.keys`, so the ORDER is part of it).
+  'p4Calls',
   'scopeMatched',
   'unmatched',
   'elapsedMs',
   'reason',
 ]
+
+/** The `kind` of every record in a `--json` run, in stream order. The count
+ *  observation is emitted by every JSON run (before any p4 can start), so the
+ *  record-set assertions below read through this helper rather than spelling the
+ *  observation out at each call site. */
+const kindsOf = (run: FakeRun): unknown[] => run.records.map((r) => r['kind'])
+
+/** The observed p4-call counts, in the order the run emitted them. */
+const p4CallCounts = (run: FakeRun): unknown[] =>
+  run.records.filter((r) => r['kind'] === 'p4CommandCount').map((r) => r['count'])
+
+/** The `error` record's message — looked up by kind, not by index, since the
+ *  count observation sits ahead of it in the stream. */
+const errorMessageOf = (run: FakeRun): string =>
+  String(run.records.find((r) => r['kind'] === 'error')?.['message'])
 
 function summaryOf(run: FakeRun): Record<string, unknown> {
   const summary = run.records.find((r) => r['kind'] === 'summary')
@@ -572,6 +592,29 @@ test.describe('@p1 p4delta fake contract', () => {
     expect(readFileSync(p4Workspace.file('ahead.txt'), 'utf8')).toBe(ahead.headContent)
   })
 
+  test('observes every p4 process it starts, ending at the summary’s p4Calls', ({
+    p4Workspace,
+  }) => {
+    const run = runFake(
+      syncArgs(p4Workspace.clientRoot, false, [dirTarget(p4Workspace.clientRoot)]),
+      { logs: makeLogs() },
+      p4Workspace.stateFile,
+    )
+
+    const counts = p4CallCounts(run)
+    // The stream opens at 0 before any p4 can start, so the first real call is
+    // never reported one short; a preview really queried p4, so the count grew.
+    expect(counts[0]).toBe(0)
+    expect(counts.length).toBeGreaterThan(1)
+    // Serialized accounting: the consumer takes the last observation as the max.
+    for (let i = 1; i < counts.length; i += 1) {
+      expect(counts[i] as number).toBeGreaterThan(counts[i - 1] as number)
+    }
+    // The events are observations; the summary is the conclusion, and it agrees
+    // with the final observation.
+    expect(summaryOf(run)['p4Calls']).toBe(counts[counts.length - 1])
+  })
+
   // Nothing to do: δ stops after the preview — no apply segment, no second p4
   // call, and the summary still reports the `applied` run it was asked for. The
   // ladder is how a consumer tells this apart from a run that died before it
@@ -798,7 +841,7 @@ test.describe('@p1 p4delta fake contract — scope config', () => {
     // file record at all — only the error and an `ok:false` summary. It never
     // falls back to the workspace, and never to the config's own includes.
     expect(outside.code).toBe(1)
-    expect(outside.records.map((r) => r['kind'])).toEqual(['error', 'summary'])
+    expect(kindsOf(outside)).toEqual(['p4CommandCount', 'error', 'summary'])
     expect(summaryOf(outside)).toMatchObject({ ok: false, reason: 'error', total: 0 })
     // …and the range it resolved is still on the record, empty: "the config left
     // nothing here", not "the engine never got that far".
@@ -833,8 +876,8 @@ test.describe('@p1 p4delta fake contract — scope config', () => {
     // `--clean -a` "the whole client" is destructive, and the caller clearly
     // meant to name something.
     expect(run.code).toBe(1)
-    expect(run.records.map((r) => r['kind'])).toEqual(['error', 'summary'])
-    expect(String(run.records[0]!['message'])).toContain('No path given')
+    expect(kindsOf(run)).toEqual(['p4CommandCount', 'error', 'summary'])
+    expect(errorMessageOf(run)).toContain('No path given')
     expect(summaryOf(run)).toMatchObject({ ok: false, reason: 'error' })
   })
 
@@ -890,13 +933,10 @@ test.describe('@p1 p4delta fake contract — scope config', () => {
         p4Workspace.stateFile,
       )
       expect(run.code, label).toBe(1)
-      expect(
-        run.records.map((r) => r['kind']),
-        label,
-      ).toEqual(['error', 'summary'])
+      expect(kindsOf(run), label).toEqual(['p4CommandCount', 'error', 'summary'])
       // The refusal names what is wrong, not just "the config is bad": the whole
       // rule exists for a hand-edited config a team shares.
-      expect(String(run.records[0]!['message']), label).toContain(fragment)
+      expect(String(errorMessageOf(run)), label).toContain(fragment)
       expect(summaryOf(run), label).toMatchObject({ ok: false, reason: 'error' })
     }
 
@@ -907,7 +947,7 @@ test.describe('@p1 p4delta fake contract — scope config', () => {
       { logs: makeLogs() },
       p4Workspace.stateFile,
     )
-    const message = String(named.records[0]!['message'])
+    const message = errorMessageOf(named)
     expect(message).toContain('include[0]')
     expect(message).toContain('leaves the client root')
   })
@@ -923,7 +963,7 @@ test.describe('@p1 p4delta fake contract — scope config', () => {
     )
 
     expect(run.code).toBe(1)
-    expect(String(run.records[0]!['message'])).toContain('exclude[0]')
+    expect(errorMessageOf(run)).toContain('exclude[0]')
     expect(summaryOf(run)).toMatchObject({ ok: false, reason: 'error' })
   })
 
@@ -1024,7 +1064,7 @@ test.describe('@p1 p4delta fake contract — scope config', () => {
     // empty range is a refusal. Reporting it as "nothing to do" would look like
     // an ordinary answer for a run the caller scoped wrongly.
     expect(run.code).toBe(1)
-    expect(run.records.map((r) => r['kind'])).toEqual(['error', 'summary'])
+    expect(kindsOf(run)).toEqual(['p4CommandCount', 'error', 'summary'])
     expect(summaryOf(run)).toMatchObject({ ok: false, reason: 'error' })
   })
 

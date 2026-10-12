@@ -155,6 +155,41 @@ function readCounts(raw: unknown): Record<string, number> {
   return counts
 }
 
+/**
+ * How many native p4 processes a δ run reported starting (contract:
+ * `kind:"p4CommandCount"` on stdout, and the final number on `summary.p4Calls`).
+ *
+ * `observed` is the highest count the event stream carried — a LOWER BOUND when
+ * no summary arrived (the run was killed, cancelled or crashed). `reported` is
+ * the summary's own final number, or undefined when there is no summary or it
+ * carried no valid one. Malformed values (negative, NaN, fractional, beyond the
+ * safe-integer range, non-numbers) are ignored rather than trusted: this stream
+ * is an engine's own output, and one bad event must not fabricate a count.
+ */
+export interface P4deltaCallCount {
+  readonly observed: number
+  readonly reported: number | undefined
+}
+
+function asCallCount(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined
+}
+
+export function readP4deltaCallCount(result: P4deltaRunResult): P4deltaCallCount {
+  let observed = 0
+  let reported: number | undefined
+  for (const record of result.records) {
+    if (record['kind'] === 'p4CommandCount') {
+      const count = asCallCount(record['count'])
+      if (count !== undefined && count > observed) observed = count
+    } else if (record['kind'] === 'summary') {
+      // Last summary wins — same rule as {@link summarizeRun}.
+      reported = asCallCount(record['p4Calls'])
+    }
+  }
+  return { observed, reported }
+}
+
 /** A δ normal-sync run's answer, in the shapes the get pipeline already reads. */
 export interface P4deltaSyncOutcome {
   /** The tally in {@link SyncRunSummary}'s own terms — the caller shows it to the

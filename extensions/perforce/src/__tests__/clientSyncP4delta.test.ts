@@ -232,6 +232,9 @@ let scanReply: (argv: readonly string[]) => DeltaReply = () => ({
   records: [deltaSummary({ mode: 'open', applied: false, total: 0, counts: {} })],
 })
 
+/** The pid a started δ run would have, handed to the get's spawn hook. */
+const DELTA_PID = 9001
+
 /** Stub the engine. A run whose argv carries `--sync` is a get and gets the
  *  test's reply; any other run is a scan round. The result is assembled the way
  *  the service assembles it (`sawSummary` from the records), so "no summary" is
@@ -245,6 +248,11 @@ function stubP4deltaRun(): void {
       p4deltaOptions.push(options)
       const isGet = argv.includes('--sync')
       const r: DeltaReply = isGet ? syncReply(argv) : scanReply(argv)
+      // The real service calls this right after a successful spawn, before any
+      // output — the evidence `PerforceClient` reads as "δ really started", and
+      // the pid the status bar samples. Only get runs carry it (scans pass no
+      // hook), so it is safe to model here.
+      if (isGet) options?.onSpawn?.(DELTA_PID)
       if (r.hold) await r.hold
       const records = [...(r.records ?? [])]
       // The real service hands each record to the caller as its line arrives;
@@ -364,6 +372,9 @@ function deltaSummary(overrides: Record<string, unknown> = {}): P4deltaRecord {
     force: false,
     total: 1,
     counts: { update: 1 },
+    // The real engine states a final p4 command count on its summary; a stub
+    // that omitted it would read as an incomplete (lower-bound) run.
+    p4Calls: 0,
     scopeMatched: null,
     unmatched: 0,
     elapsedMs: 5,
@@ -739,11 +750,12 @@ describe('PerforceClient.sync — δ engine', () => {
       { done: 3, file: 'open.cpp' },
     ])
     // The status bar samples the engine's own process tree (its p4 children hang
-    // off it), so the pid δ spawned is what gets handed to the sampler.
+    // off it), so the pid δ spawned is what gets handed to the sampler. The get
+    // already forwarded the stub's pid; a second call must reach the sampler too.
     const onSpawn = p4deltaOptions.find((o) => o?.onSpawn !== undefined)?.onSpawn
     expect(onSpawn).toBeTypeOf('function')
     onSpawn?.(1234)
-    expect(ioMock.pids).toEqual([1234])
+    expect(ioMock.pids).toEqual([DELTA_PID, 1234])
   })
 
   it('notes an inapplicable syncParallelThreads once per value, not once per get', async () => {

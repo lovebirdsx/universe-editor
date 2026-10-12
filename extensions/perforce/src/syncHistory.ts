@@ -84,6 +84,78 @@ export type SyncHistoryOutcome =
 /** The engine that served the run. */
 export type SyncHistoryEngine = 'p4delta' | 'p4'
 
+/**
+ * How many p4 command processes a run started, split by origin.
+ *
+ * `native` = processes the editor spawned itself (a native get, or the native
+ * fallback δ handed back); `p4delta` = processes the δ engine reported spawning
+ * inside its own run. A pure δ run has `native: 0` and a nonzero `p4delta`.
+ *
+ * `complete: false` = the δ side could not be confirmed final (its run ended
+ * without a valid summary: killed, cancelled, crashed, or an engine that
+ * predates the count), so `p4delta` is a lower bound. The native number is
+ * always exact — it is counted from spawn events — so an incomplete run still
+ * has one exact half, which is why the two are kept apart rather than summed
+ * into a single number the UI would have to over- or under-claim.
+ *
+ * What it is NOT: server log lines (a `p4 set` may never leave the machine, a
+ * `--parallel` sync transmits over one process) and not a count of δ
+ * invocations (one δ process may start many p4 processes).
+ */
+export interface SyncP4CallCounts {
+  readonly native: number
+  readonly p4delta: number
+  readonly complete: boolean
+}
+
+/**
+ * Per-run accumulator for {@link SyncP4CallCounts}. One instance per `sync()`
+ * call, threaded through the engine bodies — NEVER a field on the client, whose
+ * P4Service is shared by every concurrent command: a counter there would bill
+ * this get for a background reconcile scan or an overlapping get. Both counting
+ * paths write into the SAME instance so a δ attempt that fell back to native
+ * accumulates both halves instead of losing the first.
+ */
+export class SyncP4CallCounter {
+  private _native = 0
+  private _p4delta = 0
+  private _complete = true
+
+  /** One p4 process the editor itself started for this run. Called from the
+   *  spawn hook, so a command that never spawned (ENOENT, killed in the
+   *  concurrency queue) is not counted, while one that started and then failed
+   *  is. */
+  countNative(): void {
+    this._native += 1
+  }
+
+  /**
+   * Fold in what a δ attempt observed. `spawned: false` = the engine was never
+   * started (refused by the eligibility checks before its run), which
+   * contributes nothing and must NOT turn an otherwise exact native count into
+   * an unknown — there is no δ side to be missing.
+   *
+   * When the engine did start, the summary's own final count is trusted only if
+   * it is at least the highest count observed on the event stream; otherwise the
+   * observed value is kept and the run is marked incomplete (a lower bound).
+   * Either way the count is kept for a cancelled or failed run — δ really did
+   * start those processes.
+   */
+  noteDelta(attempt: { spawned: boolean; observed: number; reported: number | undefined }): void {
+    if (!attempt.spawned) return
+    if (attempt.reported !== undefined && attempt.reported >= attempt.observed) {
+      this._p4delta = attempt.reported
+      return
+    }
+    this._p4delta = attempt.observed
+    this._complete = false
+  }
+
+  snapshot(): SyncP4CallCounts {
+    return { native: this._native, p4delta: this._p4delta, complete: this._complete }
+  }
+}
+
 /** The six per-file counts, copied off {@link SyncRunSummary}. */
 export interface SyncHistoryCounts {
   readonly applied: number
@@ -123,6 +195,9 @@ export interface SyncRunFacts {
   readonly endedAt: number
   readonly io?: { readonly readBytes: number; readonly writeBytes: number }
   readonly diskWrites: number
+  /** p4 command processes this run started, split native / δ (see
+   *  {@link SyncP4CallCounts}). Always present on a run that had facts. */
+  readonly p4Calls: SyncP4CallCounts
 }
 
 /** One get, as persisted. */
@@ -159,6 +234,9 @@ export interface SyncHistoryEntry {
   readonly io?: { readonly readBytes: number; readonly writeBytes: number }
   /** Lower bound (watcher events); absent when no run was observed at all. */
   readonly diskWrites?: number
+  /** p4 command processes this run started, split native / δ. Absent on records
+   *  written before the field existed, and on runs with no facts. */
+  readonly p4Calls?: SyncP4CallCounts
   readonly error?: { readonly kind: string; readonly message: string }
 }
 
@@ -263,6 +341,7 @@ export function buildSyncHistoryEntry(input: BuildSyncHistoryInput): SyncHistory
           parallelThreads: facts.parallelThreads,
           ...(facts.io !== undefined ? { io: facts.io } : {}),
           diskWrites: facts.diskWrites,
+          p4Calls: { ...facts.p4Calls },
         }
       : {}),
     ...(summary !== undefined ? { counts: countsOf(summary) } : {}),
@@ -330,6 +409,16 @@ function isIo(value: unknown): value is { readBytes: number; writeBytes: number 
   return isCount(io['readBytes']) && isCount(io['writeBytes'])
 }
 
+/** A p4-call group must be three well-formed numbers/boolean. Negative, NaN,
+ *  fractional and non-safe-integer counts are rejected the same way every other
+ *  count is — a hand-edited file must not be able to serve a fabricated one. */
+function isP4Calls(value: unknown): value is SyncP4CallCounts {
+  if (value === null || typeof value !== 'object') return false
+  const c = value as Record<string, unknown>
+  const count = (n: unknown): n is number => isCount(n) && Number.isSafeInteger(n)
+  return count(c['native']) && count(c['p4delta']) && typeof c['complete'] === 'boolean'
+}
+
 /**
  * A record must be shaped like one this module writes; anything else is
  * dropped rather than trusted. The file is plain JSON in a directory other
@@ -359,6 +448,7 @@ export function isEntry(value: unknown): value is SyncHistoryEntry {
   if (e['counts'] !== undefined && !isCounts(e['counts'])) return false
   if (e['io'] !== undefined && !isIo(e['io'])) return false
   if (e['diskWrites'] !== undefined && !isCount(e['diskWrites'])) return false
+  if (e['p4Calls'] !== undefined && !isP4Calls(e['p4Calls'])) return false
   const err = e['error']
   if (err !== undefined) {
     if (err === null || typeof err !== 'object') return false
@@ -396,6 +486,7 @@ export function toRunDto(entry: SyncHistoryEntry): P4SyncRunDto {
     ...(entry.counts !== undefined ? { counts: toCountsDto(entry.counts) } : {}),
     ...(entry.io !== undefined ? { io: { ...entry.io } } : {}),
     ...(entry.diskWrites !== undefined ? { diskWrites: entry.diskWrites } : {}),
+    ...(entry.p4Calls !== undefined ? { p4Calls: { ...entry.p4Calls } } : {}),
     ...(entry.error !== undefined ? { error: { ...entry.error } } : {}),
     scopeNarrowed: entry.scopeNarrowed,
     scopeFirst: entry.scope.slice(0, SCOPE_FIRST).map(toScopeDto),

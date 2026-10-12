@@ -169,6 +169,51 @@ export function formatDiskWrites(diskWrites: number): string {
   return localize('perforceSyncHistory.diskWrites', '≥{0} file events', { 0: String(diskWrites) })
 }
 
+/**
+ * The p4 command processes a run started, with its native / δ split.
+ *
+ * Three facts have to survive here, the same way `io`'s does: a record written
+ * before the field existed reads as "not collected" rather than as 0; an
+ * incomplete count is stated as a lower bound (`≥`) and only ever alongside the
+ * explanation — never as a bare number; and a 0 that is only a lower bound is
+ * not printed as a total at all (it would claim the run asked p4 nothing).
+ */
+export function p4CallsLabel(run: P4SyncRunDto): string {
+  const calls = run.p4Calls
+  if (calls === undefined) {
+    return localize(
+      'perforceSyncHistory.p4Calls.unavailable',
+      'not collected (this record predates the field)',
+    )
+  }
+  const total = calls.native + calls.p4delta
+  if (!calls.complete && total === 0) {
+    return localize('perforceSyncHistory.p4Calls.incomplete', 'not fully collected')
+  }
+  const split = { 0: String(total), 1: String(calls.native), 2: String(calls.p4delta) }
+  return calls.complete
+    ? localize('perforceSyncHistory.p4Calls.exact', '{0} p4 command(s) ({1} native · {2} δ)', split)
+    : localize(
+        'perforceSyncHistory.p4Calls.atLeast',
+        '≥{0} p4 command(s) ({1} native · {2} δ, not fully collected)',
+        split,
+      )
+}
+
+/** The list row's compact form of {@link p4CallsLabel}, or undefined when the
+ *  record has nothing to say — the rows are already dense. */
+export function p4CallsRowLabel(run: P4SyncRunDto): string | undefined {
+  const calls = run.p4Calls
+  if (calls === undefined) return undefined
+  const total = calls.native + calls.p4delta
+  if (!calls.complete && total === 0) {
+    return localize('perforceSyncHistory.p4Calls.unknown', 'p4 calls unknown')
+  }
+  return calls.complete
+    ? localize('perforceSyncHistory.p4Calls.rowExact', '{0} p4 calls', { 0: String(total) })
+    : localize('perforceSyncHistory.p4Calls.rowAtLeast', '≥{0} p4 calls', { 0: String(total) })
+}
+
 function countsTotal(counts: P4SyncCountsDto): number {
   return (
     counts.applied +

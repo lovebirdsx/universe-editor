@@ -147,6 +147,20 @@ function logScope(entry) {
   }
 }
 
+/** One line per native p4 process this engine actually started — the same fact the
+ *  `p4CommandCount` events carry, in a form a spec can read back and compare the
+ *  recorded history against without hard-coding how many calls a run makes. */
+const p4CallLogPath = process.env.UNIVERSE_P4DELTA_P4CALL_LOG
+function logP4Call(count) {
+  // 只观测真正的同步，避免同一工作区的后台扫描混入断言。
+  if (!p4CallLogPath || !process.argv.includes('--sync') || !process.argv.includes('-a')) return
+  try {
+    appendFileSync(p4CallLogPath, `${count}\n`)
+  } catch {
+    // Diagnostic seam: never fail a p4 command.
+  }
+}
+
 /** All output goes through `writeSync`: the crash faults must be able to end the
  *  process immediately with `process.exit`, and on POSIX a pending async
  *  `process.stdout.write` would be dropped there — the partial (pre-crash)
@@ -790,6 +804,18 @@ function typedExcludes(opts, clientRoot) {
 // ---- delegation ----------------------------------------------------------------
 
 /**
+ * Native p4 processes this run started, and the events reporting the cumulative
+ * value — the contract's `kind:"p4CommandCount"`. Counted where the spawn really
+ * happens ({@link delegate}), not from a table of expected calls: a spec then
+ * checks the recorded number against what the engine actually did.
+ */
+let p4CallCount = 0
+
+function emitP4CommandCount() {
+  emit({ kind: 'p4CommandCount', count: p4CallCount })
+}
+
+/**
  * Run fake-p4 with `args` and hand back its captured streams.
  *
  * The argv log is stripped from the child env: a delegated call is this engine's
@@ -819,6 +845,12 @@ function delegate(args) {
     writeErr(`fake-p4delta: delegated p4 failed to start: ${res.error.message}\n`)
     process.exit(1)
   }
+  // A process that started counts even if it later failed — exactly the
+  // contract's rule. Counted before parsing so the event rides the stream the
+  // consumer actually reads.
+  p4CallCount += 1
+  logP4Call(p4CallCount)
+  emitP4CommandCount()
   if (res.stderr) writeErr(res.stderr)
   return { records: parseMj(res.stdout ?? '') }
 }
@@ -1200,6 +1232,13 @@ function main() {
   }
   if (opts.verifyAll && opts.force !== true) usageError('--verify-all requires --force')
 
+  // Past the parse stage at last: the contract opens the stream with `count:0`
+  // before any p4 could start, so the first reported number is never off by the
+  // run's first call. Every argv rejection above is a clap-level exit 2 that
+  // writes NOTHING to stdout — emitting here would be the one visible
+  // difference between a refusal and a run.
+  if (opts.json) emitP4CommandCount()
+
   // The range is resolved BEFORE anything else, out of the client root's config
   // and this run's own targets/exclusions. A config that cannot be read — or a
   // target no exclusion may swallow — fails the run closed here, before any p4.
@@ -1340,6 +1379,9 @@ function emitSummary(mode, opts, state) {
     force: opts.force === true,
     total,
     counts: state.counts,
+    // The contract's final observation. Present on every summary, including a
+    // failing one — it states a fact about the run, not its outcome.
+    p4Calls: p4CallCount,
     scopeMatched: state.scopeMatched,
     unmatched: state.unmatched,
     elapsedMs: Date.now() - state.started,

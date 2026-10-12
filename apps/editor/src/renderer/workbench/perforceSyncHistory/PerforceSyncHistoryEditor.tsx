@@ -54,6 +54,8 @@ import {
   formatDuration,
   formatTarget,
   outcomeLabel,
+  p4CallsLabel,
+  p4CallsRowLabel,
   scopeLines,
   triggerLabel,
 } from './syncHistoryFormat.js'
@@ -367,6 +369,12 @@ function RunRow({
   selected: boolean
   rowProps: IFlatListRowProps
 }) {
+  // The p4-call total rides on the same line as the counts: it answers "how
+  // expensive was this get" at a glance, and it is omitted (not zeroed) when the
+  // record has nothing to say.
+  const meta = [countsLine(run), p4CallsRowLabel(run)]
+    .filter((part) => part !== undefined)
+    .join(' · ')
   return (
     <li
       {...rowProps}
@@ -383,7 +391,7 @@ function RunRow({
         {outcomeLabel(run.outcome)}
       </span>
       <span className={styles['rowTarget']}>{formatTarget(run.spec)}</span>
-      <span className={styles['rowMeta']}>{countsLine(run) ?? ''}</span>
+      <span className={styles['rowMeta']}>{meta}</span>
       <span className={styles['rowDuration']}>{formatDuration(run.durationMs)}</span>
     </li>
   )
@@ -570,6 +578,8 @@ function RunDetail({ id }: { id: string }) {
                   : String(detail.parallelThreads)
                 : localize('perforceSyncHistory.notRun', 'this get never ran')}
           </dd>
+          <dt>{localize('perforceSyncHistory.field.p4Calls', 'P4 calls')}</dt>
+          <dd data-testid="perforce-sync-history-detail-p4calls">{p4CallsLabel(detail)}</dd>
         </dl>
       </Section>
 
