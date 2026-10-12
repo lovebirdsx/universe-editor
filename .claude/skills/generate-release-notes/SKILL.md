@@ -16,7 +16,7 @@ disable-model-invocation: true
 
 | | |
 | --- | --- |
-| 唯一落点 | `docs/release-notes/<version>.md`（契约与 frontmatter 表见 `docs/release-notes/README.md`） |
+| 唯一落点 | 常规发布 `docs/release-notes/<version>.md`；一次性修复用轻量补丁记录 `docs/release-notes/patches/<version>.md`（见「补丁记录」；契约与 frontmatter 表见 `docs/release-notes/README.md`） |
 | 归档只读 | `docs/release-notes/archive/*.md` 是历史版本的冻结聚合（按字节校验），不新增、不改写、不重排 |
 | 初始状态 | `status: draft`；**用户明确确认后**才改 `reviewed`（发版预检只认 reviewed） |
 | 不写 JSON | `apps/editor/resources/release-notes.json` 是编译产物，由 `pnpm release:notes` 从正式稿生成；手改必被漂移校验拦下 |
@@ -107,9 +107,30 @@ urgency: normal
 - `sourceTo` 用完整 SHA；它只是追溯线索，不声称覆盖完整。
 - `urgency` 默认 `normal`，**不要顺手改成 `important`**：它是唯一会改变客户端行为的字段（`start`/`default` 模式下后台静默下载）。只有阻塞性 bug / 数据损坏 / 安全事故才够格，且必须单独向用户点明这个后果再改。
 
-### 紧急补丁（hotfix）
+### 补丁记录（patch）
 
-时间紧时不要为了凑结构拖时间——**只留 `summary` 与 `## 问题修复`（一两条）就是合法正式稿**，「本次重点」「按场景分组」整节删掉。步骤可以压缩：定范围只跑 `git log --oneline <上一个 tag>..HEAD` 逐条过一遍，表述只写「修好了什么、触发条件是什么」。`status: reviewed` / `sourceFrom` / `sourceTo` 仍然强制，不压缩。
+一次**修复发布**不要新写一篇独立文章——加一份轻量补丁记录 `docs/release-notes/patches/<version>.md`，编译期归并进它所属的主稿（主稿版本不变，同一篇不会被重复弹出，自动下载的紧急标记也不受影响）。
+
+- frontmatter 只有 `version`、`notesVersion`、`date`、`status`、`sourceFrom`、`sourceTo`、`urgency`，**没有 `title` / `summary`**。
+- `notesVersion` 指向**同一 major/minor 系列里、该补丁之前最新的 reviewed 常规主稿**；写错（跨系列 / 引用补丁 / 引用更旧的主稿 / 目标不存在）编译期直接失败。拿不准就列出该系列已有的根目录主稿取最新的一个。
+- 正文只写简短修复条目（`## 问题修复` 起），落盘时 `status: draft`，**同样要走完「用户确认后改 `reviewed`」**：`reviewed` 补丁记录必须有非空正文与 `sourceFrom` / `sourceTo`。
+- **归并不缩小发布范围**：trunk-based 的补丁版仍带出自上一个 tag 以来的全部提交——定范围、筛选、交叉检查的步骤一个都不能省，只是正文写法更短。步骤可压缩为：定范围只跑 `git log --oneline <上一个 tag>..HEAD` 逐条过一遍，表述只写「修好了什么、触发条件是什么」。
+
+```markdown
+---
+version: 0.15.2
+notesVersion: 0.15.1
+date: 2026-10-13
+status: draft
+sourceFrom: v0.15.1
+sourceTo: <40 位提交 SHA>
+urgency: normal
+---
+
+## 问题修复
+
+- 修好了什么，触发条件是什么。
+```
 
 ## 6. 复核与确认
 

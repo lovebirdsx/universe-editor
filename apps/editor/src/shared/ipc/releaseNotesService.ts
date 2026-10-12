@@ -9,6 +9,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { createDecorator } from '@universe-editor/platform'
+import type { IReleaseNoteBodySection } from '../releaseNotes/bodySections.js'
 
 /** One released version. `title`/`summary` are empty for the migrated (legacy) archive. */
 export interface IReleaseNote {
@@ -21,6 +22,11 @@ export interface IReleaseNote {
   readonly summary: string
   /** Version body markdown (starts at `##`; the version title is rendered by the consumer). */
   readonly body: string
+  /**
+   * 合并补丁稿的正文分段（编译器输出的字符偏移）。缺省表示整篇单段——普通稿与历史产物
+   * 都不带此字段，因此不受影响。
+   */
+  readonly bodySections?: readonly IReleaseNoteBodySection[]
 }
 
 export interface IReleaseNotesData {

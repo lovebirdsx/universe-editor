@@ -16,6 +16,7 @@ import { app } from 'electron'
 import { getAppVersion } from '../../appVersion.js'
 import { createNamedLogger, type ILogger, ILoggerService } from '@universe-editor/platform'
 import { resolveFromRepo } from '../../repoPaths.js'
+import { normalizeBodySections } from '../../../shared/releaseNotes/bodySections.js'
 import type {
   IReleaseNote,
   IReleaseNotesData,
@@ -81,6 +82,10 @@ export function parseReleaseNotes(value: unknown): {
       if (typeof entry.date === 'string' && DATE_PATTERN.test(entry.date)) date = entry.date
       else problems.push(`${where}（${version}）的 date 非法（已忽略）：${String(entry.date)}`)
     }
+    // 分段元数据非法只诊断并退回单段，正文仍可渲染——文件由安装包携带，不能整条丢弃。
+    const sections = normalizeBodySections(entry.bodySections, version, text['body'] ?? '')
+    if (sections.problem !== undefined)
+      problems.push(`${where}（${version}）的 ${sections.problem}`)
     seen.add(version)
     notes.push({
       version,
@@ -88,6 +93,7 @@ export function parseReleaseNotes(value: unknown): {
       title: text['title'] ?? '',
       summary: text['summary'] ?? '',
       body: text['body'] ?? '',
+      ...(sections.sections !== undefined ? { bodySections: sections.sections } : {}),
     })
   })
   return { notes, problems }

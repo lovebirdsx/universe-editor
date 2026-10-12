@@ -7,7 +7,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { mkTempDir } from '../../lib/temp-root.mjs'
 import {
   assertExpectedVersion,
@@ -34,9 +35,15 @@ import {
   renderMarkdown,
 } from '../release-notes/markdown.mjs'
 import { renderIndexPage, renderNotePage } from '../release-notes/page.mjs'
-import { LINK_POLICY, legacySectionMarker, parseNote } from '../release-notes/source.mjs'
+import {
+  LINK_POLICY,
+  legacySectionMarker,
+  parseNote,
+  parsePatchNote,
+} from '../release-notes/source.mjs'
 
 const DOC_ID = 'getting-started/interface-tour'
+const PATCH_DOC_ID = 'getting-started/patch-notes'
 
 function noteText(
   { version = '0.15.0', date = '2026-10-01', ...fields } = {},
@@ -80,6 +87,34 @@ function writeNote(dir, version, text) {
   writeFileSync(join(dir, `${version}.md`), text, 'utf8')
 }
 
+/** Lightweight patch source, matching docs/release-notes/patches/<version>.md. */
+function patchText(fields = {}, body = '## 问题修复\n\n- 修好了崩溃\n') {
+  const {
+    version = '0.15.3',
+    notesVersion = '0.15.1',
+    date = '2026-10-12',
+    status = 'reviewed',
+    sourceFrom = 'v0.15.2',
+    sourceTo = 'b'.repeat(40),
+    urgency,
+  } = fields
+  const lines = ['---']
+  if (version !== null) lines.push(`version: ${version}`)
+  if (notesVersion !== null) lines.push(`notesVersion: ${notesVersion}`)
+  if (date !== null) lines.push(`date: ${date}`)
+  if (status !== null) lines.push(`status: ${status}`)
+  if (sourceFrom !== null) lines.push(`sourceFrom: ${sourceFrom}`)
+  if (sourceTo !== null) lines.push(`sourceTo: ${sourceTo}`)
+  if (urgency !== undefined && urgency !== null) lines.push(`urgency: ${urgency}`)
+  lines.push('---', '')
+  return `${lines.join('\n')}\n${body}`
+}
+
+function writePatch(dir, version, text) {
+  mkdirSync(join(dir, 'patches'), { recursive: true })
+  writeFileSync(join(dir, 'patches', `${version}.md`), text, 'utf8')
+}
+
 const legacyNote = (version, body = '## 新功能\n\n- 归档\n') =>
   noteText({ version, date: null, legacy: 'true', status: 'reviewed' }, body)
 
@@ -118,10 +153,7 @@ test('loadNotes reads root notes and archive sections alike', (t) => {
   writeNote(notesDir, '0.15.0', reviewedNote())
   writeArchive(notesDir, [{ version: '0.14.0', text: legacyNote('0.14.0') }])
   const notes = loadNotes(notesDir)
-  assert.deepEqual(
-    notes.map((note) => note.version).sort(),
-    ['0.14.0', '0.15.0'],
-  )
+  assert.deepEqual(notes.map((note) => note.version).sort(), ['0.14.0', '0.15.0'])
   const archived = notes.find((note) => note.version === '0.14.0')
   assert.equal(archived.file, 'archive/legacy.md')
   assert.equal(archived.label, 'archive/legacy.md（0.14.0 分节）')
@@ -248,11 +280,7 @@ test('compileNotes ships only reviewed notes at or below the bound, bytes stable
 
 test('urgency reaches the site index but never the in-app runtime JSON', (t) => {
   const { notesDir, root } = makeTree(t)
-  writeNote(
-    notesDir,
-    '0.15.0',
-    reviewedNote({ urgency: 'important' }, '## 问题修复\n\n- 修好了\n'),
-  )
+  writeNote(notesDir, '0.15.0', reviewedNote({ urgency: 'important' }, '## 问题修复\n\n- 修好了\n'))
   writeNote(notesDir, '0.15.1', reviewedNote({ version: '0.15.1', sourceFrom: 'v0.15.0' }))
   const notes = loadNotes(notesDir)
 
@@ -321,7 +349,10 @@ test('bare text is never auto-linked — only an explicit scheme links', () => {
   assert.ok(!html.includes('<a href="http://'), '不得凭裸文本编造 http 链接')
   for (const word of ['message.id', 'CLAUDE.md', 'install.sh', 'run.py', 'foo.io']) {
     assert.ok(html.includes(word), `${word} 应保留为文字`)
-    assert.ok(!new RegExp(`<a[^>]*>[^<]*${word.replace('.', '\\.')}`).test(html), `${word} 不得成链`)
+    assert.ok(
+      !new RegExp(`<a[^>]*>[^<]*${word.replace('.', '\\.')}`).test(html),
+      `${word} 不得成链`,
+    )
   }
 
   const notes = [parseNote(reviewedNote({}, body), { file: '0.15.0.md' })]
@@ -754,4 +785,302 @@ test('the subset validator and the serializer agree on the token vocabulary', ()
   const unknown = [{ type: 'mystery', tag: 'x', map: [0, 1] }]
   assert.throws(() => assertSupportedSubset(unknown, {}, { label: 'x.md' }), /mystery <x>/)
   assert.throws(() => renderMarkdown(unknown), /未覆盖的语法：mystery <x>/)
+})
+
+// ------------------------------------------------------------------ patch merging
+
+test('patches merge into their main note without a separate page or runtime entry', (t) => {
+  const { notesDir, root } = makeTree(t)
+  writeNote(
+    notesDir,
+    '0.15.1',
+    reviewedNote({ version: '0.15.1', sourceFrom: 'v0.15.0' }, '## 本次重点\n\n- 主稿内容\n'),
+  )
+  writePatch(notesDir, '0.15.3', patchText({ notesVersion: '0.15.1' }))
+
+  const compiled = compileAll({ maxVersion: '0.15.3', notesDir, repoRoot: root })
+  const runtime = JSON.parse(compiled.runtimeJson)
+  assert.deepEqual(
+    runtime.map((entry) => entry.version),
+    ['0.15.1'],
+  )
+  assert.match(runtime[0].body, /- 主稿内容/)
+  assert.match(runtime[0].body, /## v0\.15\.3 补丁修复/)
+  assert.match(runtime[0].body, /- 修好了崩溃/)
+  assert.ok(!runtime.some((entry) => entry.version === '0.15.3'))
+
+  assert.ok(compiled.files.has('notes/v0.15.1.html'))
+  assert.ok(!compiled.files.has('notes/v0.15.3.html'), '不生成独立补丁页')
+  const page = compiled.files.get('notes/v0.15.1.html')
+  assert.match(page, /v0\.15\.3 补丁修复/)
+  assert.match(page, /修好了崩溃/)
+
+  const index = JSON.parse(compiled.files.get('notes/index.json'))
+  assert.deepEqual(
+    index.versions.map((entry) => [entry.version, entry.notesVersion, entry.path]),
+    [
+      ['0.15.3', '0.15.1', 'v0.15.1.html'],
+      ['0.15.1', '0.15.1', 'v0.15.1.html'],
+    ],
+  )
+})
+
+test('older targets never merge future or draft patches', (t) => {
+  const { notesDir, root } = makeTree(t)
+  writeNote(notesDir, '0.15.1', reviewedNote({ version: '0.15.1', sourceFrom: 'v0.15.0' }))
+  writePatch(notesDir, '0.15.3', patchText({ notesVersion: '0.15.1' }))
+  writePatch(
+    notesDir,
+    '0.15.2',
+    patchText(
+      {
+        version: '0.15.2',
+        notesVersion: '0.15.1',
+        status: 'draft',
+        sourceFrom: null,
+        sourceTo: null,
+      },
+      '## 问题修复\n\n- 草稿\n',
+    ),
+  )
+
+  const older = compileAll({ maxVersion: '0.15.1', notesDir, repoRoot: root })
+  const oldRuntime = JSON.parse(older.runtimeJson)
+  assert.ok(!oldRuntime[0].body.includes('补丁修复'), '旧目标不混入未来补丁')
+  const oldIndex = JSON.parse(older.files.get('notes/index.json'))
+  assert.deepEqual(
+    oldIndex.versions.map((entry) => entry.version),
+    ['0.15.1'],
+  )
+
+  const newer = compileAll({ maxVersion: '0.15.3', notesDir, repoRoot: root })
+  const newRuntime = JSON.parse(newer.runtimeJson)
+  assert.match(newRuntime[0].body, /## v0\.15\.3 补丁修复/)
+  assert.ok(!newRuntime[0].body.includes('草稿'), '草稿补丁不进发布产物')
+})
+
+test('merged patch doc links pin to the patch version, not the main tag', (t) => {
+  const { notesDir, root } = makeTree(t)
+  writeFileSync(join(root, `docs/user/zh-CN/${PATCH_DOC_ID}.md`), '# 补丁文档\n', 'utf8')
+  writeNote(
+    notesDir,
+    '0.15.1',
+    reviewedNote(
+      { version: '0.15.1', sourceFrom: 'v0.15.0' },
+      `## 本次重点\n\n见 [界面导览](doc:${DOC_ID})。\n`,
+    ),
+  )
+  writePatch(
+    notesDir,
+    '0.15.3',
+    patchText({ notesVersion: '0.15.1' }, `## 问题修复\n\n见 [补丁文档](doc:${PATCH_DOC_ID})。\n`),
+  )
+
+  const compiled = compileAll({ maxVersion: '0.15.3', notesDir, repoRoot: root })
+  const page = compiled.files.get('notes/v0.15.1.html')
+  assert.ok(
+    page.includes(`${LINK_POLICY.publicRepoBase}/blob/v0.15.1/docs/user/zh-CN/${DOC_ID}.md`),
+    '主稿段落固定到主稿版本',
+  )
+  assert.ok(
+    page.includes(`${LINK_POLICY.publicRepoBase}/blob/v0.15.3/docs/user/zh-CN/${PATCH_DOC_ID}.md`),
+    '补丁段落固定到补丁版本',
+  )
+  // The in-app runtime body keeps the doc: scheme so the bundled doc opens offline.
+  const runtime = JSON.parse(compiled.runtimeJson)
+  assert.match(runtime[0].body, new RegExp(`\\[补丁文档\\]\\(doc:${PATCH_DOC_ID}\\)`))
+})
+
+test('a target patch that links a missing doc fails closed', (t) => {
+  const { notesDir, root } = makeTree(t)
+  writeNote(notesDir, '0.15.1', reviewedNote({ version: '0.15.1', sourceFrom: 'v0.15.0' }))
+  writePatch(
+    notesDir,
+    '0.15.3',
+    patchText({ notesVersion: '0.15.1' }, '## 问题修复\n\n见 [缺失](doc:missing/doc)。\n'),
+  )
+  assert.throws(
+    () => compileAll({ maxVersion: '0.15.3', notesDir, repoRoot: root }),
+    /docs\/release-notes\/patches\/0\.15\.3\.md:.*目标版本文档 docs\/user\/zh-CN\/missing\/doc\.md 不存在/,
+  )
+})
+
+test('the GitHub body for a patch carries only that fix and links the main note', () => {
+  const notes = [
+    parseNote(
+      reviewedNote({ version: '0.15.1', sourceFrom: 'v0.15.0' }, '## 本次重点\n\n- 主稿内容\n'),
+      { file: '0.15.1.md' },
+    ),
+  ]
+  const patches = [
+    parsePatchNote(patchText({ notesVersion: '0.15.1' }, '## 问题修复\n\n- 修好了崩溃\n'), {
+      file: 'patches/0.15.3.md',
+    }),
+  ]
+  const body = buildGithubBody({ notes, patches, version: '0.15.3' })
+  assert.ok(body.startsWith('# Universe Editor v0.15.3'))
+  assert.ok(body.includes(`${LINK_POLICY.publicRepoBase}/releases/tag/v0.15.1`), '关联原稿')
+  assert.ok(body.includes('修好了崩溃'))
+  assert.ok(!body.includes('主稿内容'), '补丁正文不带主稿内容')
+})
+
+test('patch sources reach the manifest and block a stale upload bundle', (t) => {
+  const { notesDir, root } = makeTree(t)
+  writeNote(notesDir, '0.15.1', reviewedNote({ version: '0.15.1', sourceFrom: 'v0.15.0' }))
+  writePatch(notesDir, '0.15.3', patchText({ notesVersion: '0.15.1' }))
+  const compiled = compileAll({ maxVersion: '0.15.3', notesDir, repoRoot: root })
+  assert.deepEqual(
+    compiled.manifest.source.files.map((entry) => [entry.file, entry.kind, entry.versions]),
+    [
+      ['0.15.1.md', 'note', ['0.15.1']],
+      ['patches/0.15.3.md', 'patch', ['0.15.3']],
+    ],
+  )
+
+  const snapshotDir = join(root, '.snapshot')
+  const bundleDir = join(root, 'bundle')
+  writeSnapshot({ snapshotDir, compiled })
+  writePatch(notesDir, '0.15.3', patchText({ notesVersion: '0.15.1' }, '## 问题修复\n\n- 改过\n'))
+  assert.throws(
+    () => materializeBundle({ bundleDir, snapshotDir, notesDir }),
+    /源文件在打包后发生变化（patches\/0\.15\.3\.md）/,
+  )
+})
+
+test('merging is deterministic and emits a patch release GitHub body', (t) => {
+  const { notesDir, root } = makeTree(t)
+  writeNote(notesDir, '0.15.1', reviewedNote({ version: '0.15.1', sourceFrom: 'v0.15.0' }))
+  writePatch(notesDir, '0.15.3', patchText({ notesVersion: '0.15.1' }))
+
+  const first = compileAll({ maxVersion: '0.15.3', notesDir, repoRoot: root })
+  const second = compileAll({ maxVersion: '0.15.3', notesDir, repoRoot: root })
+  assert.equal(first.runtimeJson, second.runtimeJson)
+  assert.deepEqual([...first.files], [...second.files])
+
+  assert.ok(first.files.has('github-release-0.15.3.md'))
+  assert.ok(!first.files.has('github-release-0.15.1.md'))
+  assert.match(first.files.get('github-release-0.15.3.md'), /修好了崩溃/)
+})
+
+// ------------------------------------------------------------------ bodySections 契约
+
+/** main / 渲染端共用的分段契约夹具；源见 fixtures/mergedRuntimeEntries.json。 */
+const MERGED_FIXTURE_PATH = join(
+  dirname(fileURLToPath(import.meta.url)),
+  '../../../apps/editor/src/shared/releaseNotes/__tests__/fixtures/mergedRuntimeEntries.json',
+)
+
+function writeMergedFixtureTree(t) {
+  const { root, notesDir } = makeTree(t)
+  writeFileSync(join(root, 'docs/user/zh-CN/getting-started/x.md'), '# X\n', 'utf8')
+  writeNote(
+    notesDir,
+    '0.15.0',
+    noteText(
+      {
+        version: '0.15.0',
+        date: '2026-10-01',
+        title: '普通稿',
+        summary: '无补丁，元数据缺省。',
+        status: 'reviewed',
+        sourceFrom: 'v0.14.9',
+        sourceTo: 'a'.repeat(40),
+      },
+      '## 本次重点\n\n- 普通稿一条\n',
+    ),
+  )
+  writeNote(
+    notesDir,
+    '0.15.1',
+    noteText(
+      {
+        version: '0.15.1',
+        date: '2026-10-02',
+        title: '主稿',
+        summary: '带补丁归并。',
+        status: 'reviewed',
+        sourceFrom: 'v0.15.0',
+        sourceTo: 'b'.repeat(40),
+      },
+      '## 本次重点\n\n- 见 [本节](#本次重点)\n- 见 [文档](doc:getting-started/x)\n',
+    ),
+  )
+  writePatch(
+    notesDir,
+    '0.15.2',
+    patchText(
+      {
+        version: '0.15.2',
+        notesVersion: '0.15.1',
+        date: '2026-10-03',
+        sourceFrom: 'v0.15.1',
+        sourceTo: 'c'.repeat(40),
+      },
+      '## 问题修复\n\n- 修好了 A\n\n```text\n## v9.9.9 补丁修复\n```\n',
+    ),
+  )
+  writePatch(
+    notesDir,
+    '0.15.3',
+    patchText(
+      {
+        version: '0.15.3',
+        notesVersion: '0.15.1',
+        date: '2026-10-04',
+        sourceFrom: 'v0.15.2',
+        sourceTo: 'd'.repeat(40),
+      },
+      '## 问题修复\n\n- 修好了 B\n- 见 [补丁文档](doc:getting-started/x)\n',
+    ),
+  )
+  return { root, notesDir }
+}
+
+test('合并补丁稿输出 bodySections 偏移，字节与共享夹具一致', (t) => {
+  const { root, notesDir } = writeMergedFixtureTree(t)
+  const compiled = compileAll({ maxVersion: '0.15.3', notesDir, repoRoot: root })
+  assert.equal(compiled.runtimeJson, readFileSync(MERGED_FIXTURE_PATH, 'utf8'))
+
+  const runtime = JSON.parse(compiled.runtimeJson)
+  const merged = runtime.find((entry) => entry.version === '0.15.1')
+  assert.deepEqual(merged.bodySections, [
+    { version: '0.15.1', offset: 0 },
+    { version: '0.15.2', offset: 58 },
+    { version: '0.15.3', offset: 121 },
+  ])
+  // 每个偏移落在真正的补丁标题首字符上；代码块里的假标题（## v9.9.9）不产生分段。
+  for (const section of merged.bodySections.slice(1)) {
+    assert.match(
+      merged.body.slice(section.offset),
+      new RegExp(`^## v${section.version} 补丁修复\\n`),
+    )
+  }
+  assert.equal(merged.body.split('## v9.9.9 补丁修复').length - 1, 1)
+
+  // 无补丁的普通稿不带该字段，历史产物字节不变。
+  const plain = runtime.find((entry) => entry.version === '0.15.0')
+  assert.equal('bodySections' in plain, false)
+})
+
+test('锚点只在各自段落内校验：跨段锚点在编译期即被拒绝', (t) => {
+  const { root, notesDir } = makeTree(t)
+  // 主稿正文引用 `#问题修复`，而该标题只出现在补丁段——分段渲染（每段一个 MarkdownView）
+  // 会把它变成段内死链，所以编译器必须在这里拦下，保证合法锚点永远落在本段内。
+  writeNote(
+    notesDir,
+    '0.15.1',
+    reviewedNote(
+      { version: '0.15.1', sourceFrom: 'v0.15.0' },
+      '## 本次重点\n\n- 见 [补丁标题](#问题修复)\n',
+    ),
+  )
+  writePatch(
+    notesDir,
+    '0.15.2',
+    patchText({ version: '0.15.2', notesVersion: '0.15.1' }, '## 问题修复\n\n- 修好了 A\n'),
+  )
+  assert.throws(
+    () => compileAll({ maxVersion: '0.15.2', notesDir, repoRoot: root }),
+    /锚点 #问题修复 在本稿内没有对应标题/,
+  )
 })

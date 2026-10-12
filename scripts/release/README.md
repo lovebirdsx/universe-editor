@@ -18,8 +18,9 @@ Universe Editor 通过 **electron-updater 的 generic provider** 从内网静态
                             └─ manifest.json（逐产物 sha256）
 ```
 
-版本介绍（release notes）的**唯一正式来源**是 `docs/release-notes/<version>.md`（历史版本已发布内容位于
-`docs/release-notes/archive/*.md` 的冻结分节，只读）：发版时由
+版本介绍（release notes）的来源：常规发布用 `docs/release-notes/<version>.md`，一次性修复用轻量补丁记录
+`docs/release-notes/patches/<version>.md`（归并进它所属的主稿，不单独成篇）；历史版本已发布内容位于
+`docs/release-notes/archive/*.md` 的冻结分节（只读）。发版时由
 `scripts/release/release-notes/compile.mjs` 确定性编译成安装包内的 `release-notes.json`、下载站静态页
 与 GitHub Release 正文（无 AI、无网络、无 wall-clock；同输入必然同字节）。契约与写作规范见
 [docs/release-notes/README.md](../../docs/release-notes/README.md)，起草流程见 skill `generate-release-notes`。
@@ -155,7 +156,7 @@ pnpm release -- --version 0.1.5
 `pnpm release` 会按顺序执行（步骤表在 `release.mjs` 的 `RELEASE_STEPS`，`runRelease` 严格按表走）：
 
 1. 解析目标版本与上一个发布 tag，运行只读预检：工作区干净、在 `main`、与 upstream 同步、目标 tag 不冲突、上传配置存在。
-2. **release notes 门禁**：要求 `docs/release-notes/<version>.md` 已存在且 `status: reviewed`（或历史迁移稿），文件名/`version` 与目标版本一致、`sourceFrom` 对齐上一个 tag；否则**在改版本号之前**直接失败。若 `sourceTo` 之后还有提交，只打印提醒让人复核（不阻断）。
+2. **release notes 门禁**：要求 `docs/release-notes/<version>.md` 已存在且 `status: reviewed`（或历史迁移稿），或存在 `status: reviewed` 的补丁记录 `docs/release-notes/patches/<version>.md`（其 `notesVersion` 解析出归并到的主稿）；文件名/`version` 与目标版本一致、`sourceFrom` 对齐上一个 tag；否则**在改版本号之前**直接失败。若 `sourceTo` 之后还有提交，只打印提醒让人复核（不阻断）。
 3. 更新 `apps/editor/package.json` 的版本号。
 4. 编译正式稿：`compile.mjs --version X.Y.Z --expect-version X.Y.Z` → 重写 `apps/editor/resources/release-notes.json`（canonical）与 `.release-notes-build/` 快照。
 5. 提交版本与派生 JSON：`chore(release): X.Y.Z`（派生 JSON 随这次 commit 一起进 Git，**正式稿应在发版前已提交**）。
@@ -191,17 +192,19 @@ pnpm release -- --version 0.1.5
 
 **档 1 · 常规补丁**（绝大多数临时 bug）
 
-1. 在 `main` 上修复。发行说明写**极简正式稿**即可：`summary` 一句话 + `## 问题修复` 一两条，
-   「本次重点」「按模块分组」都可以整节删掉（见 `docs/release-notes/README.md`）。
-   `status: reviewed` / `sourceFrom` / `sourceTo` 仍然强制——发版门禁要的是「有人确认过这个版本说什么」，
-   不是篇幅。
-2. 发版前复核变更集。`pnpm release` 的 notes 门禁会打印 `上一个 tag..HEAD` 的**完整提交清单**，
-   逐条确认每一条都能见人。
+1. 在 `main` 上修复。**不新写一篇独立发行说明**，而是加一份轻量补丁记录
+   `docs/release-notes/patches/<version>.md`：frontmatter 写明 `notesVersion`（同一 major/minor 系列里、
+   该补丁之前最新的 reviewed 常规主稿），正文只写简短修复条目（`## 问题修复`），**不要求 `title`/`summary`**。
+   编译时它会被追加到主稿正文的 `## vX.Y.Z 补丁修复` 段——主稿版本不变，已看过主稿的用户不会被重复弹窗，
+   手动回看仍能看到修复内容。`status: reviewed` / `sourceFrom` / `sourceTo` 仍然强制（见
+   [docs/release-notes/README.md](../../docs/release-notes/README.md)）。
+2. 发版前复核变更集。**归并不等于只发这一条修复**——trunk-based 的补丁版仍带出自上一个 tag 以来的全部提交；
+   `pnpm release` 的 notes 门禁会打印 `上一个 tag..HEAD` 的**完整提交清单**，逐条确认每一条都能见人。
 3. `pnpm release --bump patch`。
 
 **档 2 · 紧急修复**（用户被阻塞，但不必当场重启）
 
-档 1，外加把正式稿标成 `urgency: important`（frontmatter 字段，见 `docs/release-notes/README.md`）。
+档 1，外加把记录标成 `urgency: important`（补丁记录同样有这个 frontmatter 字段，见 `docs/release-notes/README.md`）。
 效果：客户端在 `update.mode` 为 `start` / `default` 时**后台静默下载**，下载完弹强提示；
 由于 `autoInstallOnAppQuit` 已开启，用户正常退出编辑器就会装上——所以群里说一句
 「重启一下编辑器」即可，不需要强制重启。
@@ -246,9 +249,14 @@ pnpm release:upload --dir /srv/universe-editor/staging
 > 任何漂移都会失败并报出两侧 sha256（此时应回到 full 流程或修正源文件，**不要手改 JSON**）。
 
 > **版本说明从哪来**：不再是「从提交列表生成」。每个版本的正文是 `docs/release-notes/<version>.md`
-> （`status: reviewed` 才可发版），发版时确定性编译进安装包、下载站与 GitHub Release。Git 提交只是
-> 整理事实的线索（agent 起草流程见 skill `generate-release-notes`）。客户端升级后自动弹出「上次看到的
-> 版本 → 当前版本」区间内所有版本的介绍（命令面板 **Show Release Notes** 可随时回看）。
+> （`status: reviewed` 才可发版）；一次性修复用轻量补丁记录 `patches/<version>.md`，编译期归并进主稿。
+> 发版时确定性编译进安装包、下载站与 GitHub Release。Git 提交只是整理事实的线索（agent 起草流程见
+> skill `generate-release-notes`）。客户端升级后自动弹出「上次看到的版本 → 当前版本」区间内所有版本的
+> 介绍（命令面板 **Show Release Notes** 可随时回看）——归并的补丁段包含在对应主稿里，同一篇不会被重复弹出。
+>
+> ⚠️ **下载页先行**：下载页按 `notesVersion` 归组、一篇主稿只展示一次（展示最新适用安装版本）依赖服务端
+> 的新页面。首次使用该展示前，先把服务端部署上去（`scripts/server` 的 `SERVER_VERSION` 已 bump，
+> `server:deploy` 会随之同步下载页），否则老下载页仍按安装版本逐个列出补丁条目。
 
 ### 单独编译 / 校验 release notes
 

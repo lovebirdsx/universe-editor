@@ -5,15 +5,18 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { mkTempDir } from '../../lib/temp-root.mjs'
 import {
   LEGACY_MAX_VERSION,
   LINK_POLICY,
   REPO_ROOT,
+  assertPatchOwnership,
   assertReleaseNotesReady,
   buildRuntimeEntries,
   buildSiteIndex,
+  bodySectionsProblem,
   classifyHref,
   compareVersions,
   docSourcePath,
@@ -27,12 +30,15 @@ import {
   legacySectionMarker,
   parseFrontmatter,
   parseNote,
+  parsePatchNote,
   selectReleasableNotes,
+  selectReleasablePatches,
   serializeRuntimeJson,
   sortNotesNewestFirst,
   splitAggregate,
   versionHeading,
 } from '../release-notes/source.mjs'
+import { loadReleaseSources } from '../release-notes/compile.mjs'
 import { slugifyHeading } from '../release-notes/markdown.mjs'
 
 /** `null` omits a frontmatter line entirely (unlike `undefined`, which JS defaults away). */
@@ -288,7 +294,8 @@ test('splitAggregate fails loud on malformed archives', () => {
     /第 9 行：版本 0\.1\.3 重复（第 1 行已出现）/,
   )
   assert.throws(
-    () => splitAggregate(`${section}\n\`\`\`\n${legacySectionMarker('0.1.2')}\n\`\`\`\n`, { label }),
+    () =>
+      splitAggregate(`${section}\n\`\`\`\n${legacySectionMarker('0.1.2')}\n\`\`\`\n`, { label }),
     /分节标记出现在 fenced code block 内/,
   )
 })
@@ -368,7 +375,8 @@ test('release gate guidance names the missing file and the draft state', () => {
   )
   const ready = { ...draft, status: 'reviewed' }
   assert.equal(
-    assertReleaseNotesReady({ notes: [ready], version: '0.15.0', previousTag: 'v0.14.9' }).version,
+    assertReleaseNotesReady({ notes: [ready], version: '0.15.0', previousTag: 'v0.14.9' }).note
+      .version,
     '0.15.0',
   )
   assert.throws(
@@ -384,7 +392,10 @@ test('release gate guidance names the missing file and the draft state', () => {
 
 test('legacy notes pass the review gate', () => {
   const legacyNote = { version: '0.14.9', status: 'reviewed', legacy: true, file: '0.14.9.md' }
-  assert.equal(assertReleaseNotesReady({ notes: [legacyNote], version: '0.14.9' }).legacy, true)
+  assert.equal(
+    assertReleaseNotesReady({ notes: [legacyNote], version: '0.14.9' }).note.legacy,
+    true,
+  )
   assert.throws(
     () => assertReleaseNotesReady({ notes: [], version: '0.14.9' }),
     /缺少 docs\/release-notes\/archive\/legacy\.md（0\.14\.9 分节）/,
@@ -420,6 +431,72 @@ test('runtime entries keep a fixed key order and drop an absent date', () => {
   assert.equal(serializeRuntimeJson(notes), json)
 })
 
+test('bodySections 仅在声明时序列化，键序排在 body 之后', () => {
+  const merged = {
+    ...reviewed(),
+    bodySections: [
+      { version: '0.15.0', offset: 0 },
+      { version: '0.15.2', offset: 6 },
+    ],
+  }
+  const [entry] = buildRuntimeEntries([merged])
+  assert.deepEqual(Object.keys(entry), [
+    'version',
+    'date',
+    'title',
+    'summary',
+    'body',
+    'bodySections',
+  ])
+  assert.deepEqual(entry.bodySections, [
+    { version: '0.15.0', offset: 0 },
+    { version: '0.15.2', offset: 6 },
+  ])
+  assert.equal('bodySections' in buildRuntimeEntries([reviewed()])[0], false)
+})
+
+test('bodySectionsProblem 逐一拦下偏移与版本违规', () => {
+  const base = { version: '0.15.1', body: '## a\n\n## v0.15.2 x\n' }
+  const problem = (sections) => bodySectionsProblem({ ...base, bodySections: sections })
+  assert.equal(bodySectionsProblem(base), undefined)
+  assert.match(problem([]), /不能为空/)
+  assert.match(problem('x'), /不是数组/)
+  assert.match(problem([null]), /不是对象/)
+  assert.match(problem([{ version: 'x', offset: 0 }]), /version 非法/)
+  assert.match(problem([{ version: '0.15.1', offset: -1 }]), /非负整数/)
+  assert.match(problem([{ version: '0.15.1', offset: 1 }]), /首段 offset 必须为 0/)
+  assert.match(problem([{ version: '0.15.2', offset: 0 }]), /首段 version/)
+  assert.match(
+    problem([
+      { version: '0.15.1', offset: 0 },
+      { version: '0.15.2', offset: 0 },
+    ]),
+    /未严格递增/,
+  )
+  assert.match(
+    problem([
+      { version: '0.15.1', offset: 0 },
+      { version: '0.15.2', offset: 999 },
+    ]),
+    /超出正文范围/,
+  )
+  assert.match(
+    problem([
+      { version: '0.15.1', offset: 0 },
+      { version: '0.15.0', offset: 6 },
+    ]),
+    /必须大于主稿/,
+  )
+  assert.match(
+    problem([
+      { version: '0.15.1', offset: 0 },
+      { version: '0.15.2', offset: 6 },
+      { version: '0.15.2', offset: 10 },
+    ]),
+    /未升序/,
+  )
+})
+
 test('site index carries metadata and page paths, never bodies', () => {
   const index = buildSiteIndex([reviewed()])
   assert.deepEqual(Object.keys(index.versions[0]), [
@@ -428,9 +505,11 @@ test('site index carries metadata and page paths, never bodies', () => {
     'title',
     'summary',
     'urgency',
+    'notesVersion',
     'path',
   ])
   assert.equal(index.versions[0].path, 'v0.15.0.html')
+  assert.equal(index.versions[0].notesVersion, '0.15.0')
   assert.equal(index.versions[0].urgency, 'normal')
   assert.equal(index.schema, 1)
   assert.ok(!JSON.stringify(index).includes('本次重点'))
@@ -519,4 +598,299 @@ test('the public repo base is the one the packages declare', () => {
     'schema',
   ])
   assert.deepEqual(LINK_POLICY.allowedExternalSchemes, ['http', 'https'])
+})
+
+// ------------------------------------------------------------------ patch records
+
+/** Lightweight patch source: version/notesVersion/date/status/source fields/urgency + body. */
+function patchText(fields = {}, body = '## 问题修复\n\n- 修好了崩溃\n') {
+  const {
+    version = '0.15.3',
+    notesVersion = '0.15.1',
+    date = '2026-10-12',
+    status = 'reviewed',
+    sourceFrom = 'v0.15.2',
+    sourceTo = 'b'.repeat(40),
+    urgency,
+    ...extra
+  } = fields
+  const lines = ['---']
+  if (version !== null) lines.push(`version: ${version}`)
+  if (notesVersion !== null) lines.push(`notesVersion: ${notesVersion}`)
+  if (date !== null) lines.push(`date: ${date}`)
+  if (status !== null) lines.push(`status: ${status}`)
+  if (sourceFrom !== null) lines.push(`sourceFrom: ${sourceFrom}`)
+  if (sourceTo !== null) lines.push(`sourceTo: ${sourceTo}`)
+  if (urgency !== undefined && urgency !== null) lines.push(`urgency: ${urgency}`)
+  for (const [key, value] of Object.entries(extra)) {
+    if (value !== null && value !== undefined) lines.push(`${key}: ${value}`)
+  }
+  lines.push('---', '')
+  return `${lines.join('\n')}\n${body}`
+}
+
+const patchFile = (version = '0.15.3') => ({ file: `patches/${version}.md` })
+
+test('parsePatchNote reads a lightweight patch record without title/summary', () => {
+  const patch = parsePatchNote(
+    patchText({ urgency: 'important' }, '## 问题修复\n\n- 修好了\n'),
+    patchFile(),
+  )
+  assert.equal(patch.kind, 'patch')
+  assert.equal(patch.version, '0.15.3')
+  assert.equal(patch.notesVersion, '0.15.1')
+  assert.equal(patch.urgency, 'important')
+  assert.equal(patch.date, '2026-10-12')
+  assert.equal(patch.label, 'patches/0.15.3.md')
+  assert.equal(patch.body, '## 问题修复\n\n- 修好了\n')
+  assert.equal(patch.legacy, undefined)
+  assert.equal(patch.title, undefined)
+  assert.equal(patch.summary, undefined)
+  assert.equal(patch.sourceFrom, 'v0.15.2')
+  assert.equal(patch.sourceTo, 'b'.repeat(40))
+})
+
+test('patch records fail closed on missing or malformed fields', () => {
+  assert.throws(
+    () => parsePatchNote(patchText({ version: null }), patchFile()),
+    /缺少必填字段 version/,
+  )
+  assert.throws(
+    () => parsePatchNote(patchText({ notesVersion: null }), patchFile()),
+    /缺少必填字段 notesVersion/,
+  )
+  assert.throws(
+    () => parsePatchNote(patchText({ notesVersion: '0.15' }), patchFile()),
+    /notesVersion 必须是 X\.Y\.Z/,
+  )
+  assert.throws(
+    () => parsePatchNote(patchText(), patchFile('0.15.4')),
+    /文件名 0\.15\.4\.md 与 frontmatter version 0\.15\.3 不一致/,
+  )
+  assert.throws(
+    () => parsePatchNote(patchText({ status: 'published' }), patchFile()),
+    /status 必须是 draft \| reviewed/,
+  )
+  assert.throws(() => parsePatchNote(patchText({ date: null }), patchFile()), /缺少必填字段 date/)
+  assert.throws(
+    () => parsePatchNote(patchText({ date: '2026-02-30' }), patchFile()),
+    /date 必须是合法 YYYY-MM-DD/,
+  )
+  assert.throws(
+    () => parsePatchNote(patchText({ urgency: 'critical' }), patchFile()),
+    /urgency 必须是 normal \| important/,
+  )
+  assert.throws(
+    () => parsePatchNote(patchText({ sourceFrom: null, sourceTo: null }), patchFile()),
+    /必须记录 sourceFrom \/ sourceTo/,
+  )
+  assert.throws(
+    () => parsePatchNote(patchText({ sourceFrom: '0.15.2' }), patchFile()),
+    /sourceFrom 必须是 tag 形式/,
+  )
+  assert.throws(
+    () => parsePatchNote(patchText({ sourceTo: 'HEAD' }), patchFile()),
+    /sourceTo 必须是提交 SHA/,
+  )
+  assert.throws(() => parsePatchNote(patchText({}, ''), patchFile()), /不能是空正文/)
+  assert.throws(() => parsePatchNote(patchText({}, '# 一级标题\n'), patchFile()), /不要写一级标题/)
+  assert.throws(() => parsePatchNote(patchText({ title: 'x' }), patchFile()), /未知字段 title/)
+  assert.throws(() => parsePatchNote(patchText({ summary: 'x' }), patchFile()), /未知字段 summary/)
+  assert.throws(() => parsePatchNote(patchText({ legacy: 'true' }), patchFile()), /未知字段 legacy/)
+
+  // A draft may omit the review fields but must still carry a date.
+  const draft = parsePatchNote(
+    patchText({ status: 'draft', sourceFrom: null, sourceTo: null }),
+    patchFile(),
+  )
+  assert.equal(draft.status, 'draft')
+})
+
+test('patch ownership: same series, latest reviewed main, no forward or cross refs', () => {
+  const main = (version, extra = {}) => ({
+    version,
+    status: 'reviewed',
+    legacy: false,
+    file: `${version}.md`,
+    ...extra,
+  })
+  const patch = (version, notesVersion) => ({
+    version,
+    notesVersion,
+    status: 'reviewed',
+    file: `patches/${version}.md`,
+  })
+  const notes = [main('0.15.0'), main('0.15.1')]
+
+  assert.doesNotThrow(() => assertPatchOwnership({ notes, patches: [patch('0.15.3', '0.15.1')] }))
+  // The owner must be the latest reviewed main before the patch, not a superseded one.
+  assert.throws(
+    () => assertPatchOwnership({ notes, patches: [patch('0.15.3', '0.15.0')] }),
+    /应为 0\.15\.1/,
+  )
+  // A missing owner fails closed.
+  assert.throws(
+    () => assertPatchOwnership({ notes, patches: [patch('0.15.3', '0.15.2')] }),
+    /没有对应的常规主稿/,
+  )
+  // Cross-series references are rejected.
+  assert.throws(
+    () => assertPatchOwnership({ notes: [main('0.15.1')], patches: [patch('0.16.3', '0.15.1')] }),
+    /不在同一 major\/minor 系列/,
+  )
+  // Forward / self references are rejected.
+  assert.throws(
+    () => assertPatchOwnership({ notes: [main('0.15.3')], patches: [patch('0.15.3', '0.15.3')] }),
+    /必须早于补丁版本/,
+  )
+  // The owner must be reviewed.
+  assert.throws(
+    () =>
+      assertPatchOwnership({
+        notes: [main('0.15.1', { status: 'draft' })],
+        patches: [patch('0.15.3', '0.15.1')],
+      }),
+    /主稿仍是 status: draft/,
+  )
+  // A draft main note does not count as the latest reviewed owner.
+  assert.doesNotThrow(() =>
+    assertPatchOwnership({
+      notes: [main('0.15.1'), main('0.15.2', { status: 'draft' })],
+      patches: [patch('0.15.3', '0.15.1')],
+    }),
+  )
+})
+
+test('loadReleaseSources reads patches and rejects cross-record version conflicts', (t) => {
+  const dir = mkTempDir('ue-release-sources-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  writeFileSync(
+    join(dir, '0.15.1.md'),
+    noteText({
+      version: '0.15.1',
+      title: '主稿',
+      summary: '摘要。',
+      status: 'reviewed',
+      sourceFrom: 'v0.15.0',
+      sourceTo: 'a'.repeat(40),
+    }),
+    'utf8',
+  )
+  mkdirSync(join(dir, 'patches'), { recursive: true })
+  writeFileSync(join(dir, 'patches/0.15.3.md'), patchText(), 'utf8')
+
+  const { notes, patches } = loadReleaseSources(dir)
+  assert.deepEqual(
+    notes.map((note) => note.version),
+    ['0.15.1'],
+  )
+  assert.deepEqual(
+    patches.map((patch) => patch.version),
+    ['0.15.3'],
+  )
+
+  // The same version cannot be both a main note and a patch record.
+  writeFileSync(
+    join(dir, '0.15.3.md'),
+    noteText({
+      version: '0.15.3',
+      title: '冲突',
+      summary: '摘要。',
+      status: 'reviewed',
+      sourceFrom: 'v0.15.2',
+      sourceTo: 'a'.repeat(40),
+    }),
+    'utf8',
+  )
+  assert.throws(() => loadReleaseSources(dir), /同时有常规稿 .* 与补丁记录/)
+})
+
+test('only reviewed patches at or below the bound are releasable, newest first', () => {
+  const reviewed = { version: '0.15.3', status: 'reviewed', notesVersion: '0.15.1' }
+  const draft = { version: '0.15.2', status: 'draft', notesVersion: '0.15.1' }
+  const future = { version: '0.15.5', status: 'reviewed', notesVersion: '0.15.1' }
+  const selected = selectReleasablePatches([draft, reviewed, future], '0.15.4')
+  assert.deepEqual(
+    selected.map((patch) => patch.version),
+    ['0.15.3'],
+  )
+  assert.equal(selectReleasablePatches([draft], undefined).length, 0)
+})
+
+test('site index lists every install version, patching to the main page', () => {
+  const index = buildSiteIndex(
+    [
+      {
+        version: '0.15.1',
+        date: '2026-10-10',
+        title: '主稿',
+        summary: '摘要',
+        urgency: 'normal',
+      },
+    ],
+    [{ version: '0.15.3', date: '2026-10-12', urgency: 'important', notesVersion: '0.15.1' }],
+  )
+  assert.deepEqual(
+    index.versions.map((entry) => [entry.version, entry.notesVersion, entry.path, entry.urgency]),
+    [
+      ['0.15.3', '0.15.1', 'v0.15.1.html', 'important'],
+      ['0.15.1', '0.15.1', 'v0.15.1.html', 'normal'],
+    ],
+  )
+  assert.deepEqual(Object.keys(index.versions[0]), [
+    'version',
+    'date',
+    'title',
+    'summary',
+    'urgency',
+    'notesVersion',
+    'path',
+  ])
+})
+
+test('release gate accepts a reviewed patch and resolves its main-note version', () => {
+  const notes = [
+    {
+      version: '0.15.1',
+      status: 'reviewed',
+      legacy: false,
+      file: '0.15.1.md',
+      sourceFrom: 'v0.15.0',
+    },
+  ]
+  const patches = [
+    {
+      version: '0.15.3',
+      notesVersion: '0.15.1',
+      status: 'reviewed',
+      file: 'patches/0.15.3.md',
+      sourceFrom: 'v0.15.2',
+    },
+  ]
+  const ready = assertReleaseNotesReady({
+    notes,
+    patches,
+    version: '0.15.3',
+    previousTag: 'v0.15.2',
+  })
+  assert.equal(ready.note.version, '0.15.3')
+  assert.equal(ready.notesVersion, '0.15.1')
+
+  assert.throws(
+    () => assertReleaseNotesReady({ notes, patches, version: '0.15.3', previousTag: 'v0.15.1' }),
+    /sourceFrom 是 v0\.15\.2，期望 v0\.15\.1/,
+  )
+
+  const draft = [{ ...patches[0], status: 'draft' }]
+  assert.throws(
+    () =>
+      assertReleaseNotesReady({ notes, patches: draft, version: '0.15.3', previousTag: 'v0.15.2' }),
+    /仍是 status: draft/,
+  )
+
+  // The missing-record hint mentions the patch location too.
+  assert.throws(
+    () => assertReleaseNotesReady({ notes, patches, version: '0.15.4', previousTag: 'v0.15.3' }),
+    /docs\/release-notes\/patches\/0\.15\.4\.md/,
+  )
 })

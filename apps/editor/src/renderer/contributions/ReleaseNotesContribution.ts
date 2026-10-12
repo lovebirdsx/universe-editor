@@ -54,7 +54,7 @@ export class ReleaseNotesContribution extends Disposable implements IWorkbenchCo
 
     if (!fromVersion) {
       if (await this._hasExistingInstallMarker()) {
-        fromVersion = findPreviousReleaseVersion(notes, currentVersion)
+        fromVersion = baselineFromVersion(notes)
       }
       if (!fromVersion) {
         await this._storage.set(LAST_VERSION_KEY, currentVersion, StorageScope.GLOBAL)
@@ -88,14 +88,13 @@ export class ReleaseNotesContribution extends Disposable implements IWorkbenchCo
   }
 }
 
-function findPreviousReleaseVersion(
-  notes: readonly { readonly version: string }[],
-  currentVersion: string,
-): string | undefined {
-  let previous: string | undefined
-  for (const note of notes) {
-    if (compareVersions(note.version, currentVersion) >= 0) continue
-    if (!previous || compareVersions(note.version, previous) > 0) previous = note.version
-  }
-  return previous
+/**
+ * 旧版未知（有安装痕迹但没记过 lastVersion）时的展示基线：最新主稿的前一篇，没有则 0.0.0。
+ * 取「最新主稿」而非「当前版本的前一篇」是因为当前可能是补丁版——按补丁找前一篇会解析回当前
+ * 主稿，range 落空，来自更老系列的用户反而什么都看不到。
+ */
+function baselineFromVersion(notes: readonly { readonly version: string }[]): string {
+  const latest = notes.findIndex((note) => note.version !== '')
+  if (latest < 0) return '0.0.0'
+  return notes[latest + 1]?.version ?? '0.0.0'
 }

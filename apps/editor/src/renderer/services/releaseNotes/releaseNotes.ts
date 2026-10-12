@@ -5,6 +5,10 @@
  *  shared policy (shared/releaseNotes/linkPolicy.ts) — the compiler uses the same one.
  *--------------------------------------------------------------------------------------------*/
 
+import {
+  normalizeBodySections,
+  type IReleaseNoteBodySection,
+} from '../../../shared/releaseNotes/bodySections.js'
 import type { IReleaseNote } from '../../../shared/ipc/releaseNotesService.js'
 
 /**
@@ -50,4 +54,28 @@ export function notesUpToVersion(
   currentVersion: string,
 ): IReleaseNote[] {
   return notes.filter((n) => n.version === '' || compareVersions(n.version, currentVersion) <= 0)
+}
+
+export interface IReleaseNoteSection {
+  /** 该段链接缺失文档时回退要固定的版本（补丁段固定到补丁 tag，不是主稿 tag）。 */
+  readonly version: string
+  /** 该段 markdown（含段首标题）。 */
+  readonly markdown: string
+}
+
+/**
+ * 按编译器输出的分段元数据（字符偏移）切正文。缺元数据或元数据不可信时整篇作一段，
+ * 普通稿与历史产物渲染不变；切分不依赖标题文案。
+ */
+export function splitNoteBodySections(
+  body: string,
+  noteVersion: string,
+  bodySections?: readonly IReleaseNoteBodySection[],
+): IReleaseNoteSection[] {
+  const { sections } = normalizeBodySections(bodySections, noteVersion, body)
+  if (sections === undefined) return [{ version: noteVersion, markdown: body }]
+  return sections.map((section, i) => ({
+    version: section.version,
+    markdown: body.slice(section.offset, sections[i + 1]?.offset ?? body.length),
+  }))
 }

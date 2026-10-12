@@ -321,6 +321,8 @@
       //   2. release-notes.json —— 只有元数据，没有页面可链接
       //   3. 都没有 —— 隐藏整个区块
       // 版本上限取 latest.yml：绝不宣传还没发布的版本。
+      // 补丁安装版本按 notesVersion 归到同一篇主稿，列表里一篇主稿只出现一次（展示组内最新
+      // 适用版本、用主稿标题摘要、链接指向主稿页）。
       const NOTE_WINDOW_DAYS = 7
       const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -434,13 +436,19 @@
         if (!raw || !Array.isArray(raw.versions)) return null
         return raw.versions
           .filter((entry) => entry && asText(entry.version))
-          .map((entry) => ({
-            version: asText(entry.version),
-            date: asText(entry.date),
-            title: asText(entry.title),
-            summary: asText(entry.summary),
-            path: asText(entry.path),
-          }))
+          .map((entry) => {
+            const version = asText(entry.version)
+            return {
+              version,
+              date: asText(entry.date),
+              title: asText(entry.title),
+              summary: asText(entry.summary),
+              urgency: asText(entry.urgency) || 'normal',
+              // 补丁条目由编译期写入 notesVersion；旧索引缺省时视为自身版本（独立一篇）。
+              notesVersion: asText(entry.notesVersion) || version,
+              path: asText(entry.path),
+            }
+          })
       }
 
       // 旧形态（应用内发布的 release-notes.json）：只有元数据，没有静态页。
@@ -448,13 +456,18 @@
         if (!Array.isArray(raw)) return null
         return raw
           .filter((entry) => entry && asText(entry.version))
-          .map((entry) => ({
-            version: asText(entry.version),
-            date: asText(entry.date),
-            title: asText(entry.title),
-            summary: asText(entry.summary),
-            path: '',
-          }))
+          .map((entry) => {
+            const version = asText(entry.version)
+            return {
+              version,
+              date: asText(entry.date),
+              title: asText(entry.title),
+              summary: asText(entry.summary),
+              urgency: asText(entry.urgency) || 'normal',
+              notesVersion: asText(entry.notesVersion) || version,
+              path: '',
+            }
+          })
       }
 
       function show(id) {
@@ -465,26 +478,65 @@
       }
 
       /**
-       * 最近窗口内的版本；最新版本的介绍永远保留（发布日缺失或窗口落空都不能让它消失），
-       * 且不展示高于 latest.yml 的版本。
+       * 把安装版本按 notesVersion 归到同一篇主稿：一篇主稿只出现一次，展示该组内最新的
+       * 适用安装版本，标题/摘要取主稿条目，链接指向主稿页（补丁条目的 path 已是主稿页）。
+       * 组按最新安装版本降序，与服务端索引的同序保持一致。
+       */
+      function groupByNotes(versions) {
+        const byNotes = new Map()
+        for (const entry of versions) {
+          const key = entry.notesVersion || entry.version
+          const list = byNotes.get(key)
+          if (list) list.push(entry)
+          else byNotes.set(key, [entry])
+        }
+        const groups = []
+        for (const [notesVersion, entries] of byNotes) {
+          let newest = entries[0]
+          let main = entries[0]
+          for (const entry of entries) {
+            if (compareVersions(entry.version, newest.version) > 0) newest = entry
+            if (entry.version === notesVersion) main = entry
+          }
+          groups.push({
+            version: newest.version,
+            date: newest.date,
+            title: main.title,
+            summary: main.summary,
+            urgency: newest.urgency,
+            notesVersion,
+            path: main.path || newest.path,
+          })
+        }
+        groups.sort((a, b) => compareVersions(b.version, a.version))
+        return groups
+      }
+
+      /**
+       * 归组后的展示条目：先按 latest.yml 截断（绝不宣传还没发布的版本），再在最近窗口内
+       * 筛选。最新归属永远保留——优先 latest.yml 版本所在的组，索引里还没有该版本时取最新
+       * 一组，其发布日缺失或落在窗口外都不能让它消失。
        */
       function selectEntries(versions, latest) {
         const capped = versions.filter(
           (entry) => compareVersions(entry.version, latest.version) <= 0,
         )
         if (capped.length === 0) return []
+        const groups = groupByNotes(capped)
         const current = capped.find((entry) => entry.version === latest.version)
         const anchorKey = (current && toDateKey(current.date)) || toDateKey(latest.releaseDate)
         const anchorDay = anchorKey ? dateKeyToDay(anchorKey) : Number.NaN
         const startDay = Number.isNaN(anchorDay) ? Number.NaN : anchorDay - NOTE_WINDOW_DAYS + 1
         let recent = Number.isNaN(startDay)
           ? []
-          : capped.filter((entry) => {
-              const day = dateKeyToDay(toDateKey(entry.date))
+          : groups.filter((group) => {
+              const day = dateKeyToDay(toDateKey(group.date))
               return !Number.isNaN(day) && day >= startDay && day <= anchorDay
             })
-        if (current && !recent.some((entry) => entry.version === current.version)) {
-          recent = [current, ...recent]
+        const pinnedKey = current ? current.notesVersion || current.version : groups[0].notesVersion
+        if (!recent.some((group) => group.notesVersion === pinnedKey)) {
+          const pinned = groups.find((group) => group.notesVersion === pinnedKey)
+          if (pinned) recent = [pinned, ...recent]
         }
         return recent
       }

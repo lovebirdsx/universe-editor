@@ -170,6 +170,10 @@ test('verifyReleaseNotesArtifacts rejects a malformed or unordered payload', () 
         '[{"version":"0.14.0","title":"","summary":"","body":""},{"version":"0.15.0","title":"","summary":"","body":""}]\n',
         /未严格降序/,
       ],
+      [
+        '[{"version":"0.15.0","title":"","summary":"","body":"## a\\n","bodySections":[{"version":"0.15.0","offset":3}]}]\n',
+        /首段 offset 必须为 0/,
+      ],
     ]) {
       writeFileSync(packaged, payload, 'utf8')
       writeFileSync(canonical, payload, 'utf8')
@@ -183,6 +187,38 @@ test('verifyReleaseNotesArtifacts rejects a malformed or unordered payload', () 
         payload,
       )
     }
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('verifyReleaseNotesArtifacts accepts a merged note with valid bodySections', () => {
+  const root = notesFixture()
+  const body = '## a\n\n## v0.15.2 补丁修复\n\n- x\n'
+  const payload = `${JSON.stringify(
+    [
+      {
+        version: '0.15.0',
+        title: '',
+        summary: '',
+        body,
+        bodySections: [
+          { version: '0.15.0', offset: 0 },
+          { version: '0.15.2', offset: 6 },
+        ],
+      },
+    ],
+    null,
+    2,
+  )}\n`
+  try {
+    writeFileSync(join(root, 'resources/release-notes.json'), payload, 'utf8')
+    writeFileSync(join(root, 'canonical.json'), payload, 'utf8')
+    const entries = verifyReleaseNotesArtifacts({
+      resourcesRoot: join(root, 'resources'),
+      canonicalPath: join(root, 'canonical.json'),
+    })
+    assert.equal(entries[0].bodySections.length, 2)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

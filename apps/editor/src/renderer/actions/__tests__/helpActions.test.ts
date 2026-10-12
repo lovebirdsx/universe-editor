@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
   IDialogService,
+  IEditorGroupsService,
   IHostService,
   ILifecycleService,
   INotificationService,
@@ -11,11 +12,14 @@ import {
   ServiceCollection,
   Severity,
   registerAction2,
+  type IEditorInput,
   type IConfirmOptions,
   type IConfirmResult,
   type IDisposable,
 } from '@universe-editor/platform'
 import { IDiagnosticsService, type HeapSnapshotStatus } from '../../../shared/ipc/services.js'
+import { IReleaseNotesService, type IReleaseNote } from '../../../shared/ipc/releaseNotesService.js'
+import { ReleaseNotesInput } from '../../services/editor/ReleaseNotesInput.js'
 import {
   OpenExtensionDocsAction,
   OpenHeapSnapshotsFolderAction,
@@ -58,6 +62,52 @@ describe('helpActions', () => {
       group: '0_docs',
       order: 3,
     })
+  })
+})
+
+describe('ShowReleaseNotesAction', () => {
+  const disposables: IDisposable[] = []
+
+  afterEach(() => {
+    while (disposables.length > 0) disposables.pop()?.dispose()
+  })
+
+  // A patch merges into its main note: the runtime entry keeps the main version but its
+  // body carries the patch's fixes, so the manual "all versions" view shows them too.
+  const MERGED: IReleaseNote = {
+    version: '0.15.1',
+    date: '2026-10-12',
+    title: '主稿',
+    summary: '摘要',
+    body: '## 本次重点\n\n- 主稿内容\n\n## v0.15.2 补丁修复\n\n- 修好了 X\n',
+  }
+
+  it('shows every known version up to the running app, merged sections included', async () => {
+    disposables.push(registerAction2(ShowReleaseNotesAction))
+    const opened: IEditorInput[] = []
+    const groups = {
+      activeGroup: {
+        openEditor(input: IEditorInput) {
+          opened.push(input)
+        },
+      },
+    } as unknown as IEditorGroupsService
+    const notes: IReleaseNote[] = [{ version: '0.16.0', title: '', summary: '', body: '' }, MERGED]
+    const releaseNotes = {
+      _serviceBrand: undefined,
+      getReleaseNotes: async () => ({ currentVersion: '0.15.2', notes }),
+    } as unknown as IReleaseNotesService
+    const services = new ServiceCollection()
+    services.set(IReleaseNotesService, releaseNotes)
+    services.set(IEditorGroupsService, groups)
+
+    await runCommand(ShowReleaseNotesAction.ID, services)
+
+    expect(opened).toHaveLength(1)
+    const input = opened[0] as ReleaseNotesInput
+    // 0.16.0 is newer than the running app and never shown.
+    expect(input.notes.map((note) => note.version)).toEqual(['0.15.1'])
+    expect(input.notes[0]?.body).toContain('## v0.15.2 补丁修复')
   })
 })
 

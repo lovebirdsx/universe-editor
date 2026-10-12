@@ -35,7 +35,7 @@ import {
   BUILD_SNAPSHOT_DIR,
   RUNTIME_JSON_PATH,
 } from './release-notes/source.mjs'
-import { loadNotes } from './release-notes/compile.mjs'
+import { loadReleaseSources } from './release-notes/compile.mjs'
 import { generateSdkVersions } from '../ext-packages/generate-sdk-versions.mjs'
 import { loadEnv } from '../lib/env.mjs'
 
@@ -360,8 +360,16 @@ function syncVersionSpace(version, dryRun) {
  * bump has already rewritten half the tree.
  */
 export function assertReleaseNotesPreflight({ version, previousTag, notesDir }) {
-  const notes = loadNotes(notesDir)
-  return assertReleaseNotesReady({ notes, version, previousTag })
+  const { notes, patches } = loadReleaseSources(notesDir)
+  return assertReleaseNotesReady({ notes, patches, version, previousTag })
+}
+
+/**
+ * The version the compiled runtime JSON must expose at its top: a main note's own version,
+ * or — for a patch release — the `notesVersion` of the main note it merges into.
+ */
+export function expectedNotesTopVersion(resolved) {
+  return resolved.notesVersion
 }
 
 /**
@@ -390,7 +398,7 @@ function reportChangeSet(note, previousTag) {
  * canonical JSON + the build snapshot; the other modes must produce byte-identical output,
  * otherwise the tag that is already at HEAD no longer describes what would ship.
  */
-function compileReleaseNotes(version, args, dryRun) {
+function compileReleaseNotes(version, args, dryRun, notesTopVersion) {
   const verifyOnly = Boolean(args.resume || args.uploadOnly)
   const cliArgs = [
     ...(verifyOnly ? ['--check'] : []),
@@ -402,7 +410,9 @@ function compileReleaseNotes(version, args, dryRun) {
   run(process.execPath, [join(__dirname, 'release-notes', 'compile.mjs'), ...cliArgs], { dryRun })
   if (dryRun) return
   const top = releaseNotesTopVersion()
-  if (top !== version) die(`release-notes.json 顶部版本是 ${top || '(空)'}，期望 ${version}`)
+  if (top !== notesTopVersion) {
+    die(`release-notes.json 顶部版本是 ${top || '(空)'}，期望 ${notesTopVersion}（目标发布记录的说明归属）`)
+  }
 }
 
 /** 随 release commit 一起提交的版本相关文件（单一版本空间的全部落点）。 */
@@ -699,14 +709,20 @@ function releaseRunners({ state, args, dryRun }) {
   return {
     notesGate: () => {
       try {
-        state.note = assertReleaseNotesPreflight({ version: targetVersion, previousTag })
+        state.release = assertReleaseNotesPreflight({ version: targetVersion, previousTag })
       } catch (error) {
         die(error instanceof Error ? error.message : String(error))
       }
-      if (!state.note.legacy) reportChangeSet(state.note, previousTag)
+      if (!state.release.note.legacy) reportChangeSet(state.release.note, previousTag)
     },
     versionBump: () => updateEditorVersion(targetVersion, dryRun),
-    compileNotes: () => compileReleaseNotes(targetVersion, args, dryRun),
+    compileNotes: () =>
+      compileReleaseNotes(
+        targetVersion,
+        args,
+        dryRun,
+        expectedNotesTopVersion(state.release),
+      ),
     commit: () => commitReleaseFiles(targetVersion, dryRun),
     checks: () => runChecks(args, dryRun),
     package: () => packageRelease(args, dryRun),
@@ -789,7 +805,13 @@ function runRelease(args) {
   // The table (RELEASE_STEPS), not this loop, decides the order: `compileNotes` must run
   // before `commit` so the regenerated release-notes.json lands in the release commit
   // (tagging a tree whose JSON lacks the new version would ship a stale intro page).
-  const state = { targetVersion, targetTag, previousTag, note: undefined, notesManifest: undefined }
+  const state = {
+    targetVersion,
+    targetTag,
+    previousTag,
+    release: undefined,
+    notesManifest: undefined,
+  }
   const runners = releaseRunners({ state, args, dryRun })
   for (const step of RELEASE_STEPS) {
     if (!stepRuns(step.id, mode)) continue

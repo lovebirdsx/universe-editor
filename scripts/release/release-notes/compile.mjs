@@ -39,14 +39,18 @@ import {
   NOTES_SOURCE_DIR,
   REPO_ROOT,
   RUNTIME_JSON_PATH,
+  assertPatchOwnership,
   assertReleaseNotesReady,
   buildSiteIndex,
   compareVersions,
   docSourcePath,
   indexNotesByVersion,
+  indexReleaseVersions,
   isNoteFileName,
   parseNote,
+  parsePatchNote,
   selectReleasableNotes,
+  selectReleasablePatches,
   serializeRuntimeJson,
   splitAggregate,
 } from './source.mjs'
@@ -72,32 +76,48 @@ function appVersion(packageJsonPath = EDITOR_PACKAGE_JSON) {
 
 export function collectNoteFiles(dir = NOTES_SOURCE_DIR) {
   if (!existsSync(dir)) return []
-  return readdirSync(dir)
-    .filter(isNoteFileName)
-    // Byte order, not localeCompare: this order reaches manifest.json, whose bytes must not
-    // depend on the host's locale/ICU (same reasoning as classifyReleaseDir in upload.mjs).
-    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
-    .map((name) => ({ name, path: join(dir, name) }))
+  return (
+    readdirSync(dir)
+      .filter(isNoteFileName)
+      // Byte order, not localeCompare: this order reaches manifest.json, whose bytes must not
+      // depend on the host's locale/ICU (same reasoning as classifyReleaseDir in upload.mjs).
+      .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+      .map((name) => ({ name, path: join(dir, name) }))
+  )
 }
 
 /** Aggregate archives: each `archive/*.md` holds many frozen legacy notes as sections. */
 export function collectArchiveFiles(dir = NOTES_SOURCE_DIR) {
   const archiveDir = join(dir, 'archive')
   if (!existsSync(archiveDir)) return []
-  return readdirSync(archiveDir, { withFileTypes: true })
+  return (
+    readdirSync(archiveDir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && isNoteFileName(entry.name))
+      .map((entry) => entry.name)
+      .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+      // `rel` is a POSIX-style relative path by construction — path.join would emit
+      // backslashes on Windows and manifest.json bytes must not depend on the host.
+      .map((name) => ({ rel: `archive/${name}`, path: join(archiveDir, name) }))
+  )
+}
+
+/** Patch records: `patches/<version>.md`, one lightweight fix note per patch release. */
+export function collectPatchFiles(dir = NOTES_SOURCE_DIR) {
+  const patchesDir = join(dir, 'patches')
+  if (!existsSync(patchesDir)) return []
+  return readdirSync(patchesDir, { withFileTypes: true })
     .filter((entry) => entry.isFile() && isNoteFileName(entry.name))
     .map((entry) => entry.name)
     .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
-    // `rel` is a POSIX-style relative path by construction — path.join would emit
-    // backslashes on Windows and manifest.json bytes must not depend on the host.
-    .map((name) => ({ rel: `archive/${name}`, path: join(archiveDir, name) }))
+    .map((name) => ({ rel: `patches/${name}`, path: join(patchesDir, name) }))
 }
 
-/** Every physical source file — root notes and archives alike — ordered by `rel`. */
+/** Every physical source file — notes, archives and patches — ordered by `rel`. */
 export function collectSourceFiles(dir = NOTES_SOURCE_DIR) {
   const sources = [
     ...collectNoteFiles(dir).map((file) => ({ rel: file.name, path: file.path, kind: 'note' })),
     ...collectArchiveFiles(dir).map((file) => ({ ...file, kind: 'archive' })),
+    ...collectPatchFiles(dir).map((file) => ({ ...file, kind: 'patch' })),
   ]
   return sources.sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0))
 }
@@ -113,6 +133,7 @@ export function loadNotes(dir = NOTES_SOURCE_DIR) {
   const notes = []
   const errors = []
   for (const file of collectSourceFiles(dir)) {
+    if (file.kind === 'patch') continue
     if (file.kind === 'note') {
       try {
         notes.push(parseNote(readFileSync(file.path, 'utf8'), { file: file.rel }))
@@ -157,59 +178,149 @@ export function loadNotes(dir = NOTES_SOURCE_DIR) {
   return notes
 }
 
+/** Parse every patch record under `patches/`, aggregating errors like loadNotes. */
+export function loadPatches(dir = NOTES_SOURCE_DIR) {
+  const patches = []
+  const errors = []
+  for (const file of collectPatchFiles(dir)) {
+    try {
+      patches.push(parsePatchNote(readFileSync(file.path, 'utf8'), { file: file.rel }))
+    } catch (error) {
+      errors.push(errorMessage(error))
+    }
+  }
+  if (errors.length > 0) {
+    throw new Error(`release notes 校验失败：\n  - ${errors.join('\n  - ')}`)
+  }
+  return patches
+}
+
+/**
+ * The single source-loading entry point: parse both record kinds, reject a version that
+ * is both a main note and a patch, and enforce patch ownership. Every release path goes
+ * through here so no consumer can see an unvalidated patch set.
+ */
+export function loadReleaseSources(dir = NOTES_SOURCE_DIR) {
+  const notes = loadNotes(dir)
+  const patches = loadPatches(dir)
+  indexReleaseVersions(notes, patches)
+  assertPatchOwnership({ notes, patches })
+  return { notes, patches }
+}
+
 function makeDocExists(repoRoot) {
   return (docId) => existsSync(join(repoRoot, docSourcePath(docId)))
 }
 
 /**
- * Validate every note (drafts included — a draft with broken syntax must fail early),
+ * Validate every record (drafts included — a draft with broken syntax must fail early),
  * then render the ones a release may ship. `maxVersion` is the upper bound: future
  * versions and drafts never leak into an older release.
+ *
+ * Reviewed patches at or below `maxVersion` are merged into the main note they belong to:
+ * the runtime entry keeps the main version and gains a `## vX.Y.Z 补丁修复` section per
+ * patch. No separate page or runtime entry is produced — the site index still lists every
+ * install version so the app can resolve a patch release's urgency.
  */
-export function compileNotes({ notes, maxVersion, repoRoot = REPO_ROOT }) {
+export function compileNotes({ notes, patches = [], maxVersion, repoRoot = REPO_ROOT }) {
   const docExists = makeDocExists(repoRoot)
   const warnings = []
   const parsed = new Map()
-  for (const note of notes) {
-    const label = `docs/release-notes/${note.label}`
+  for (const record of [...notes, ...patches]) {
+    const label = `docs/release-notes/${record.label}`
     // Missing docs are fatal for the version being released and a warning for the rest
     // (the app falls back to the version-pinned public link for historical notes).
-    const isTarget = note.version === maxVersion
-    const { tokens, warnings: linkWarnings } = parseNoteBody(note.body, {
+    const isTarget = record.version === maxVersion
+    const { tokens, warnings: linkWarnings } = parseNoteBody(record.body, {
       label,
-      lineOffset: note.bodyLine - 1,
+      lineOffset: record.bodyLine - 1,
       ...(isTarget ? {} : { docExists }),
     })
     warnings.push(...linkWarnings)
-    parsed.set(note.version, tokens)
+    parsed.set(record.version, tokens)
   }
 
   const selected = selectReleasableNotes(notes, maxVersion)
-  for (const note of selected) {
-    if (note.version !== maxVersion) continue
-    for (const { href, line } of collectDocLinks(parsed.get(note.version), note.bodyLine - 1)) {
+  const releasablePatches = selectReleasablePatches(patches, maxVersion)
+  const patchesByMain = groupPatchesByMain(releasablePatches)
+
+  for (const record of [...selected, ...releasablePatches]) {
+    if (record.version !== maxVersion) continue
+    for (const { href, line } of collectDocLinks(parsed.get(record.version), record.bodyLine - 1)) {
       if (!docExists(href)) {
         throw new Error(
-          `docs/release-notes/${note.label}:${line}: 目标版本文档 ${docSourcePath(href)} 不存在`,
+          `docs/release-notes/${record.label}:${line}: 目标版本文档 ${docSourcePath(href)} 不存在`,
         )
       }
     }
   }
 
-  const runtimeJson = serializeRuntimeJson(selected)
+  const runtimeJson = serializeRuntimeJson(
+    selected.map((note) => {
+      const { body, sections } = mergePatchSections(note, patchesByMain.get(note.version) ?? [])
+      return sections === undefined ? { ...note, body } : { ...note, body, bodySections: sections }
+    }),
+  )
   const siteFiles = new Map()
   for (const note of selected) {
-    const tokens = prepareTokens(parsed.get(note.version), { version: note.version })
-    siteFiles.set(
-      `notes/v${note.version}.html`,
-      renderNotePage({ note, bodyHtml: renderHtml(tokens) }),
-    )
+    const patches = patchesByMain.get(note.version) ?? []
+    const parts = [renderHtml(prepareTokens(parsed.get(note.version), { version: note.version }))]
+    for (const patch of patches) {
+      parts.push(renderPatchSectionHtml(patch, parsed.get(patch.version)))
+    }
+    siteFiles.set(`notes/v${note.version}.html`, renderNotePage({ note, bodyHtml: parts.join('') }))
   }
   siteFiles.set('notes/index.html', renderIndexPage({ notes: selected }))
-  const index = `${JSON.stringify(buildSiteIndex(selected), null, 2)}\n`
+  const index = `${JSON.stringify(buildSiteIndex(selected, releasablePatches), null, 2)}\n`
   siteFiles.set('notes/index.json', index)
 
-  return { selected, runtimeJson, siteFiles, warnings }
+  return { selected, releasablePatches, runtimeJson, siteFiles, warnings }
+}
+
+/** Stable ascending order per main note — the merge appends oldest patch first. */
+function groupPatchesByMain(patches) {
+  const byMain = new Map()
+  for (const patch of [...patches].sort((a, b) => compareVersions(a.version, b.version))) {
+    const list = byMain.get(patch.notesVersion) ?? []
+    list.push(patch)
+    byMain.set(patch.notesVersion, list)
+  }
+  return byMain
+}
+
+/** The heading that introduces one patch's fixes inside the merged main note body. */
+export function patchSectionHeading(patch) {
+  return `## v${patch.version} 补丁修复`
+}
+
+/**
+ * 把 reviewed 补丁段追加到主稿正文末尾，并给出各段起点。分段用字符偏移（首段 0，后段是
+ * 追加的补丁标题首字符）描述，渲染端据此切段，不再按标题文案识别——标题改写或代码块里的
+ * 假标题都影响不了切分。无补丁时不返回 sections，保持历史产物字节不变。
+ */
+function mergePatchSections(note, patches) {
+  let body = note.body
+  if (patches.length === 0) return { body, sections: undefined }
+  const sections = [{ version: note.version, offset: 0 }]
+  for (const patch of patches) {
+    const offset = body.length + 1 // 跳过分隔用换行，指向补丁标题首字符
+    body += `\n${patchSectionHeading(patch)}\n\n${patch.body}`
+    sections.push({ version: patch.version, offset })
+  }
+  return { body, sections }
+}
+
+/**
+ * Patch sections are rendered with their own version so a `doc:` link added by the fix
+ * pins to the tag it actually shipped at, never to the (older) main note tag.
+ */
+function renderPatchSectionHtml(patch, tokens) {
+  const label = `docs/release-notes/${patch.label}`
+  const heading = parseNoteBody(patchSectionHeading(patch), { label }).tokens
+  return (
+    renderHtml(prepareTokens(heading, { version: patch.version })) +
+    renderHtml(prepareTokens(tokens, { version: patch.version }))
+  )
 }
 
 function collectDocLinks(tokens, lineOffset = 0) {
@@ -230,7 +341,44 @@ function collectDocLinks(tokens, lineOffset = 0) {
   return links
 }
 
-export function buildGithubBody({ notes, version }) {
+/**
+ * The GitHub Release body for the target version. A main note keeps its full body; a
+ * patch release carries only that patch's fix and links the main note it merges into, so
+ * a reader on GitHub still finds the complete story.
+ */
+export function buildGithubBody({ notes, patches = [], version }) {
+  const patch = patches.find((candidate) => candidate.version === version)
+  if (patch) {
+    const heading = patch.date ? `v${version} · ${patch.date}` : `v${version}`
+    const lines = [`# Universe Editor ${heading}`, '']
+    const main = indexNotesByVersion(notes).get(patch.notesVersion)
+    if (main) {
+      lines.push(
+        `本页是补丁修复记录，完整版本说明见 ` +
+          `[v${main.version}](${LINK_POLICY.publicRepoBase}/releases/tag/v${main.version})。`,
+        '',
+      )
+    }
+    const { tokens } = parseNoteBody(patch.body, {
+      label: `docs/release-notes/${patch.label}`,
+      lineOffset: patch.bodyLine - 1,
+    })
+    const body = renderMarkdown(prepareTokens(tokens, { version }))
+    lines.push(
+      '---',
+      '',
+      patchSectionHeading(patch),
+      '',
+      body.trimEnd(),
+      '',
+      '---',
+      '',
+      GITHUB_APPENDIX,
+      '',
+    )
+    return lines.join('\n')
+  }
+
   const note = indexNotesByVersion(notes).get(version)
   if (!note)
     throw new Error(`docs/release-notes/${version}.md 不存在，无法生成 GitHub Release 正文`)
@@ -247,12 +395,12 @@ export function buildGithubBody({ notes, version }) {
   return lines.join('\n')
 }
 
-function buildManifest({ notes, artifacts, version, notesDir = NOTES_SOURCE_DIR }) {
+function buildManifest({ notes, patches = [], artifacts, version, notesDir = NOTES_SOURCE_DIR }) {
   const versionsByFile = new Map()
-  for (const note of notes) {
-    const versions = versionsByFile.get(note.file) ?? []
-    versions.push(note.version)
-    versionsByFile.set(note.file, versions)
+  for (const record of [...notes, ...patches]) {
+    const versions = versionsByFile.get(record.file) ?? []
+    versions.push(record.version)
+    versionsByFile.set(record.file, versions)
   }
   const sourceFiles = collectSourceFiles(notesDir).map((file) => {
     const content = readFileSync(file.path, 'utf8').replace(/\r\n/g, '\n')
@@ -291,16 +439,20 @@ function artifactEntry(path, kind, upload, mode, content) {
  * and the bundle uploaded next to it are provably the same bytes.
  */
 export function compileAll({ maxVersion, notesDir = NOTES_SOURCE_DIR, repoRoot = REPO_ROOT } = {}) {
-  const notes = loadNotes(notesDir)
+  const { notes, patches } = loadReleaseSources(notesDir)
   const bound = maxVersion ?? appVersion()
-  const { selected, runtimeJson, siteFiles, warnings } = compileNotes({
+  const { selected, releasablePatches, runtimeJson, siteFiles, warnings } = compileNotes({
     notes,
+    patches,
     maxVersion: bound,
     repoRoot,
   })
-  const githubBody = selected.some((note) => note.version === bound)
-    ? buildGithubBody({ notes, version: bound })
-    : undefined
+  // A patch release has no main note at `bound`, so the target is whichever record owns
+  // that version. No target -> no GitHub body (the version was never released).
+  const hasTarget =
+    patches.some((patch) => patch.version === bound) ||
+    selected.some((note) => note.version === bound)
+  const githubBody = hasTarget ? buildGithubBody({ notes, patches, version: bound }) : undefined
 
   const files = new Map()
   files.set('release-notes.json', runtimeJson)
@@ -322,9 +474,19 @@ export function compileAll({ maxVersion, notesDir = NOTES_SOURCE_DIR, repoRoot =
     )
   }
 
-  const manifest = buildManifest({ notes, artifacts, version: bound, notesDir })
+  const manifest = buildManifest({ notes, patches, artifacts, version: bound, notesDir })
   files.set('manifest.json', `${JSON.stringify(manifest, null, 2)}\n`)
-  return { notes, selected, files, runtimeJson, manifest, warnings, version: bound }
+  return {
+    notes,
+    patches,
+    selected,
+    releasablePatches,
+    files,
+    runtimeJson,
+    manifest,
+    warnings,
+    version: bound,
+  }
 }
 
 function writeFileAtomic(path, content) {
@@ -500,8 +662,8 @@ function main(argv) {
   if (args.expectVersion) assertExpectedVersion(args.expectVersion)
 
   if (args.githubBody) {
-    const notes = loadNotes()
-    const body = buildGithubBody({ notes, version: args.githubBody })
+    const { notes, patches } = loadReleaseSources()
+    const body = buildGithubBody({ notes, patches, version: args.githubBody })
     if (args.githubOut) {
       writeFileAtomic(resolve(REPO_ROOT, args.githubOut), body)
       log(`GitHub Release 正文已生成：${args.githubOut}`)
@@ -524,7 +686,11 @@ function main(argv) {
   }
 
   if (args.version) {
-    assertReleaseNotesReady({ notes: compiled.notes, version: args.version })
+    assertReleaseNotesReady({
+      notes: compiled.notes,
+      patches: compiled.patches,
+      version: args.version,
+    })
   }
 
   if (args.out) {

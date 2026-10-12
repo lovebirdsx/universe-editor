@@ -1,0 +1,30 @@
+[
+  {
+    "version": "0.15.1",
+    "date": "2026-10-02",
+    "title": "主稿",
+    "summary": "带补丁归并。",
+    "body": "## 本次重点\n\n- 见 [本节](#本次重点)\n- 见 [文档](doc:getting-started/x)\n\n## v0.15.2 补丁修复\n\n## 问题修复\n\n- 修好了 A\n\n```text\n## v9.9.9 补丁修复\n```\n\n## v0.15.3 补丁修复\n\n## 问题修复\n\n- 修好了 B\n- 见 [补丁文档](doc:getting-started/x)\n",
+    "bodySections": [
+      {
+        "version": "0.15.1",
+        "offset": 0
+      },
+      {
+        "version": "0.15.2",
+        "offset": 58
+      },
+      {
+        "version": "0.15.3",
+        "offset": 121
+      }
+    ]
+  },
+  {
+    "version": "0.15.0",
+    "date": "2026-10-01",
+    "title": "普通稿",
+    "summary": "无补丁，元数据缺省。",
+    "body": "## 本次重点\n\n- 普通稿一条\n"
+  }
+]

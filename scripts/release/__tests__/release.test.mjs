@@ -4,7 +4,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { mkTempDir } from '../../lib/temp-root.mjs'
 import {
@@ -14,6 +14,7 @@ import {
   commandName,
   compareVersions,
   compilesNotesForWrite,
+  expectedNotesTopVersion,
   packagedResourcesRoot,
   parseArgs,
   readLatestYmlVersion,
@@ -159,8 +160,9 @@ test('assertReleaseNotesPreflight returns the ready note for the target version'
       previousTag: 'v0.14.9',
       notesDir: dir,
     })
-    assert.equal(note.version, '0.15.0')
-    assert.equal(note.legacy, false)
+    assert.equal(note.note.version, '0.15.0')
+    assert.equal(note.notesVersion, '0.15.0')
+    assert.equal(note.note.legacy, false)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -233,10 +235,89 @@ test('a legacy archive note satisfies the gate without a source range', () => {
       previousTag: 'v0.14.8',
       notesDir: dir,
     })
-    assert.equal(note.legacy, true)
+    assert.equal(note.note.legacy, true)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+function patchText({
+  version = '0.15.3',
+  notesVersion = '0.15.1',
+  status = 'reviewed',
+  sourceFrom = 'v0.15.2',
+} = {}) {
+  return [
+    '---',
+    `version: ${version}`,
+    `notesVersion: ${notesVersion}`,
+    'date: 2026-10-12',
+    `status: ${status}`,
+    `sourceFrom: ${sourceFrom}`,
+    `sourceTo: ${'b'.repeat(40)}`,
+    '---',
+    '',
+    '## 问题修复',
+    '',
+    '- 修好了崩溃',
+    '',
+  ].join('\n')
+}
+
+test('preflight allows a reviewed patch and resolves its main-note version', () => {
+  const dir = mkTempDir('ue-release-notes-patch-')
+  try {
+    writeFileSync(
+      join(dir, '0.15.1.md'),
+      noteText({ version: '0.15.1', sourceFrom: 'v0.15.0' }),
+      'utf8',
+    )
+    mkdirSync(join(dir, 'patches'), { recursive: true })
+    writeFileSync(join(dir, 'patches/0.15.3.md'), patchText(), 'utf8')
+
+    const resolved = assertReleaseNotesPreflight({
+      version: '0.15.3',
+      previousTag: 'v0.15.2',
+      notesDir: dir,
+    })
+    assert.equal(resolved.note.kind, 'patch')
+    assert.equal(resolved.note.version, '0.15.3')
+    assert.equal(resolved.notesVersion, '0.15.1')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('preflight blocks a draft patch and a misaligned sourceFrom', () => {
+  const dir = mkTempDir('ue-release-notes-patch-')
+  try {
+    writeFileSync(
+      join(dir, '0.15.1.md'),
+      noteText({ version: '0.15.1', sourceFrom: 'v0.15.0' }),
+      'utf8',
+    )
+    mkdirSync(join(dir, 'patches'), { recursive: true })
+    writeFileSync(join(dir, 'patches/0.15.3.md'), patchText({ status: 'draft' }), 'utf8')
+    assert.throws(
+      () =>
+        assertReleaseNotesPreflight({ version: '0.15.3', previousTag: 'v0.15.2', notesDir: dir }),
+      /仍是 status: draft/,
+    )
+
+    writeFileSync(join(dir, 'patches/0.15.3.md'), patchText({ sourceFrom: 'v0.15.0' }), 'utf8')
+    assert.throws(
+      () =>
+        assertReleaseNotesPreflight({ version: '0.15.3', previousTag: 'v0.15.2', notesDir: dir }),
+      /sourceFrom 是 v0\.15\.0，期望 v0\.15\.2/,
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('the compiled notes top version aligns with the resolved notes version', () => {
+  assert.equal(expectedNotesTopVersion({ note: { version: '0.15.1' }, notesVersion: '0.15.1' }), '0.15.1')
+  assert.equal(expectedNotesTopVersion({ note: { version: '0.15.3' }, notesVersion: '0.15.1' }), '0.15.1')
 })
 
 test('RELEASE_STEPS gates the notes before the version bump, and modes only re-verify', () => {

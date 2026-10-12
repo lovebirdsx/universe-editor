@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 export const REPO_ROOT = resolve(__dirname, '../../..')
 export const NOTES_SOURCE_DIR = join(REPO_ROOT, 'docs/release-notes')
+export const PATCHES_SOURCE_DIR = join(NOTES_SOURCE_DIR, 'patches')
 export const RUNTIME_JSON_PATH = join(REPO_ROOT, 'apps/editor/resources/release-notes.json')
 export const EDITOR_PACKAGE_JSON = join(REPO_ROOT, 'apps/editor/package.json')
 export const BUILD_SNAPSHOT_DIR = join(REPO_ROOT, 'apps/editor/.release-notes-build')
@@ -50,6 +51,21 @@ const FRONTMATTER_KEYS = new Set([
   'sourceTo',
   'urgency',
   'legacy',
+])
+
+/**
+ * Patch records (`patches/<version>.md`) are deliberately lighter than main notes: the
+ * directory carries the "this is a patch" fact, so there is no `kind`, and a merge only
+ * needs a short body plus the main note it belongs to — no title/summary.
+ */
+const PATCH_FRONTMATTER_KEYS = new Set([
+  'version',
+  'notesVersion',
+  'date',
+  'status',
+  'sourceFrom',
+  'sourceTo',
+  'urgency',
 ])
 
 export const LINK_POLICY = JSON.parse(readFileSync(LINK_POLICY_PATH, 'utf8'))
@@ -259,6 +275,7 @@ export function parseNote(text, { file, expectedVersion, lineOffset = 0 }) {
   }
 
   return {
+    kind: 'note',
     file,
     label,
     version,
@@ -267,6 +284,80 @@ export function parseNote(text, { file, expectedVersion, lineOffset = 0 }) {
     date: date ? date : undefined,
     title,
     summary,
+    urgency,
+    sourceFrom: sourceFrom ?? undefined,
+    sourceTo: sourceTo ?? undefined,
+    bodyLine,
+    body,
+  }
+}
+
+/**
+ * Parse and validate one patch record (`patches/<version>.md`). A patch is a fix that
+ * merges into the main note named by `notesVersion` — it never gets its own version page
+ * or runtime entry, so `title`/`summary` are not part of its shape.
+ */
+export function parsePatchNote(text, { file }) {
+  const label = file
+  const { fields, body, bodyLine } = parseFrontmatter(text, label)
+  for (const key of fields.keys()) {
+    if (!PATCH_FRONTMATTER_KEYS.has(key))
+      fail(label, `未知字段 ${key}（补丁记录允许：${[...PATCH_FRONTMATTER_KEYS].join(', ')}）`)
+  }
+
+  const version = fields.get('version') ?? ''
+  if (!version) fail(label, '缺少必填字段 version')
+  if (!isValidVersion(version)) fail(label, `version 必须是 X.Y.Z：${version}`)
+  const stem = basename(file, '.md')
+  if (version !== stem) fail(label, `文件名 ${stem}.md 与 frontmatter version ${version} 不一致`)
+
+  const notesVersion = fields.get('notesVersion') ?? ''
+  if (!notesVersion) fail(label, '缺少必填字段 notesVersion（补丁归属的常规主稿版本）')
+  if (!isValidVersion(notesVersion)) fail(label, `notesVersion 必须是 X.Y.Z：${notesVersion}`)
+
+  const status = fields.get('status') ?? ''
+  if (!STATUSES.includes(status))
+    fail(label, `status 必须是 ${STATUSES.join(' | ')}：${status || '(空)'}`)
+
+  const urgencyRaw = fields.get('urgency')
+  if (urgencyRaw !== undefined && !URGENCIES.includes(urgencyRaw)) {
+    fail(label, `urgency 必须是 ${URGENCIES.join(' | ')}：${urgencyRaw}`)
+  }
+  const urgency = urgencyRaw ?? 'normal'
+
+  const date = fields.get('date')
+  if (date === undefined || date === '') {
+    fail(label, '缺少必填字段 date（合法 YYYY-MM-DD）')
+  } else if (!isValidDate(date)) {
+    fail(label, `date 必须是合法 YYYY-MM-DD：${date}`)
+  }
+
+  const sourceFrom = fields.get('sourceFrom')
+  if (sourceFrom !== undefined && !/^v\d+\.\d+\.\d+$/.test(sourceFrom)) {
+    fail(label, `sourceFrom 必须是 tag 形式（如 v0.15.2）：${sourceFrom}`)
+  }
+  const sourceTo = fields.get('sourceTo')
+  if (sourceTo !== undefined && !/^[0-9a-f]{7,40}$/.test(sourceTo)) {
+    fail(label, `sourceTo 必须是提交 SHA：${sourceTo}`)
+  }
+  if (status === 'reviewed' && sourceFrom === undefined && sourceTo === undefined) {
+    fail(label, 'reviewed 补丁记录必须记录 sourceFrom / sourceTo（供复核追溯）')
+  }
+  if (status === 'reviewed' && body.trim() === '') {
+    fail(label, 'reviewed 补丁记录不能是空正文（无用户可见变更请显式写明）')
+  }
+  if (hasH1(body)) {
+    fail(label, '正文不要写一级标题（版本标题由应用/站点渲染），请从 `## ` 开始')
+  }
+
+  return {
+    kind: 'patch',
+    file,
+    label,
+    version,
+    notesVersion,
+    status,
+    date,
     urgency,
     sourceFrom: sourceFrom ?? undefined,
     sourceTo: sourceTo ?? undefined,
@@ -327,7 +418,10 @@ export function splitAggregate(source, { label }) {
     if (current === undefined) {
       if (line.trim() === '') continue
       if (MARKER_LOOKALIKE_RE.test(line)) {
-        fail(label, `第 ${i + 1} 行：分节标记格式非法（应为 <!-- release-note: X.Y.Z --> 单独一行）`)
+        fail(
+          label,
+          `第 ${i + 1} 行：分节标记格式非法（应为 <!-- release-note: X.Y.Z --> 单独一行）`,
+        )
       }
       fail(label, `第 ${i + 1} 行：归档文件必须以分节标记开头（<!-- release-note: X.Y.Z -->）`)
     }
@@ -363,12 +457,105 @@ export function indexNotesByVersion(notes) {
   return byVersion
 }
 
+/** Both record kinds under one version index — a version may be a note OR a patch, never both. */
+export function indexReleaseVersions(notes, patches) {
+  const byVersion = indexNotesByVersion(notes)
+  for (const patch of patches) {
+    const existing = byVersion.get(patch.version)
+    if (existing) {
+      throw new Error(
+        `版本 ${patch.version} 同时有常规稿 ${existing.file} 与补丁记录 ${patch.file}` +
+          '（同一版本只能有一种记录）',
+      )
+    }
+    byVersion.set(patch.version, patch)
+  }
+  return byVersion
+}
+
+function sameSeries(a, b) {
+  const [amajor, aminor] = parseVersionParts(a)
+  const [bmajor, bminor] = parseVersionParts(b)
+  return amajor === bmajor && aminor === bminor
+}
+
+/** Newest reviewed main note (legacy counts) in `patch`'s series and earlier than it. */
+function latestReviewedMainBefore(notes, patch) {
+  let latest
+  for (const note of notes) {
+    if (!note.legacy && note.status !== 'reviewed') continue
+    if (!sameSeries(note.version, patch.version)) continue
+    if (compareVersions(note.version, patch.version) >= 0) continue
+    if (latest === undefined || compareVersions(note.version, latest) > 0) latest = note.version
+  }
+  return latest
+}
+
+/**
+ * Fail closed unless every patch names the latest reviewed main note of its own
+ * major/minor series that predates it. This keeps a patch from being pinned to a stale
+ * note (or a different series) and refuses forward/self references. Errors are collected
+ * so one run reports every broken patch.
+ */
+export function assertPatchOwnership({ notes, patches }) {
+  if (patches.length === 0) return
+  const byVersion = indexNotesByVersion(notes)
+  const errors = []
+  for (const patch of patches) {
+    const main = byVersion.get(patch.notesVersion)
+    if (!main) {
+      errors.push(
+        `${patch.label}: notesVersion ${patch.notesVersion} 没有对应的常规主稿` +
+          `（docs/release-notes/${patch.notesVersion}.md）`,
+      )
+      continue
+    }
+    if (compareVersions(patch.notesVersion, patch.version) >= 0) {
+      errors.push(
+        `${patch.label}: notesVersion ${patch.notesVersion} 必须早于补丁版本 ${patch.version}`,
+      )
+      continue
+    }
+    if (!sameSeries(patch.notesVersion, patch.version)) {
+      errors.push(
+        `${patch.label}: notesVersion ${patch.notesVersion} 与补丁 ${patch.version} 不在同一 major/minor 系列`,
+      )
+      continue
+    }
+    if (!(main.legacy || main.status === 'reviewed')) {
+      errors.push(
+        `${patch.label}: notesVersion ${patch.notesVersion} 的主稿仍是 status: ${main.status}`,
+      )
+      continue
+    }
+    const expected = latestReviewedMainBefore(notes, patch)
+    if (expected !== main.version) {
+      errors.push(
+        `${patch.label}: notesVersion 应为 ${expected ?? '(无)'}` +
+          `（该系列中补丁之前最新的 reviewed 常规主稿），而不是 ${patch.notesVersion}`,
+      )
+    }
+  }
+  if (errors.length > 0) {
+    throw new Error(`release notes 补丁归属校验失败：\n  - ${errors.join('\n  - ')}`)
+  }
+}
+
 /** Notes that may enter a release: reviewed (or migrated legacy), at most `maxVersion`. */
 export function selectReleasableNotes(notes, maxVersion) {
   return sortNotesNewestFirst(notes).filter(
     (note) =>
       (note.legacy || note.status === 'reviewed') &&
       (maxVersion === undefined || compareVersions(note.version, maxVersion) <= 0),
+  )
+}
+
+/** Reviewed patches at or below `maxVersion`, newest first (drafts never ship). */
+export function selectReleasablePatches(patches, maxVersion) {
+  return sortNotesNewestFirst(patches).filter(
+    (patch) =>
+      patch.status === 'reviewed' &&
+      (maxVersion === undefined || compareVersions(patch.version, maxVersion) <= 0),
   )
 }
 
@@ -379,8 +566,54 @@ export function buildRuntimeEntries(notes) {
     entry.title = note.title
     entry.summary = note.summary
     entry.body = note.body
+    // 仅合并补丁稿带 bodySections；缺省时序列化结果与历史产物逐字节一致（--check 依赖这点）。
+    if (note.bodySections !== undefined) entry.bodySections = note.bodySections
     return entry
   })
+}
+
+/**
+ * 校验合并补丁稿的分段元数据 bodySections。缺省（普通稿）返回 undefined，否则返回问题描述。
+ * 规则必须与 app 侧 shared/releaseNotes/bodySections.ts 一致——运行时与打包守卫共用同一契约。
+ */
+export function bodySectionsProblem(entry) {
+  const sections = entry.bodySections
+  if (sections === undefined) return undefined
+  if (!Array.isArray(sections)) return 'bodySections 不是数组'
+  if (sections.length === 0) return 'bodySections 不能为空'
+  const body = typeof entry.body === 'string' ? entry.body : ''
+  let previousOffset = -1
+  let previousVersion
+  for (let i = 0; i < sections.length; i++) {
+    const section = sections[i]
+    const where = `bodySections 第 ${i + 1} 段`
+    if (section === null || typeof section !== 'object') return `${where}不是对象`
+    const { version, offset } = section
+    if (typeof version !== 'string' || !isValidVersion(version)) {
+      return `${where} version 非法：${String(version)}`
+    }
+    if (!Number.isInteger(offset) || offset < 0) {
+      return `${where} offset 必须是非负整数：${String(offset)}`
+    }
+    if (offset <= previousOffset) return `${where} offset 未严格递增：${previousOffset} → ${offset}`
+    if (offset >= body.length) return `${where} offset 超出正文范围：${offset} >= ${body.length}`
+    if (i === 0) {
+      if (offset !== 0) return `bodySections 首段 offset 必须为 0：${offset}`
+      if (version !== entry.version) {
+        return `bodySections 首段 version ${version} 必须是主稿版本 ${entry.version}`
+      }
+    } else {
+      if (compareVersions(version, entry.version) <= 0) {
+        return `${where} version ${version} 必须大于主稿 ${entry.version}`
+      }
+      if (compareVersions(version, previousVersion) <= 0) {
+        return `${where} version 未升序：${previousVersion} → ${version}`
+      }
+    }
+    previousOffset = offset
+    previousVersion = version
+  }
+  return undefined
 }
 
 /** Deterministic serialization: fixed key order, 2-space indent, single trailing newline. */
@@ -392,19 +625,35 @@ export function serializeRuntimeJson(notes) {
  * Site index: metadata + page path only — the download page never fetches full bodies.
  * The app also reads it (via the update feed) to learn a new version's urgency, so this
  * file is a runtime contract, not just a download-page detail.
+ *
+ * Every *install* version gets an entry, patch versions included: a merge gives the fix
+ * a patch version, and the client looks up that exact version to decide urgency. Patch
+ * entries point at their main note's page (`path`) and carry `notesVersion` so the
+ * download page can group them — the main note is shown once per group.
  */
-export function buildSiteIndex(notes) {
-  return {
-    schema: 1,
-    versions: notes.map((note) => ({
+export function buildSiteIndex(notes, patches = []) {
+  const entries = [
+    ...notes.map((note) => ({
       version: note.version,
       date: note.date ?? '',
       title: note.title,
       summary: note.summary,
       urgency: note.urgency,
+      notesVersion: note.version,
       path: `v${note.version}.html`,
     })),
-  }
+    ...patches.map((patch) => ({
+      version: patch.version,
+      date: patch.date ?? '',
+      title: '',
+      summary: '',
+      urgency: patch.urgency,
+      notesVersion: patch.notesVersion,
+      path: `v${patch.notesVersion}.html`,
+    })),
+  ]
+  entries.sort((a, b) => compareVersions(b.version, a.version))
+  return { schema: 1, versions: entries }
 }
 
 export function isValidDocId(docId) {
@@ -491,16 +740,35 @@ function noteSourceHint(version) {
 }
 
 /**
- * Release gate: the target version must have a reviewed (or migrated legacy) note,
- * and its traceability fields must line up with the previous tag.
+ * Release gate: the target version must have a reviewed note — a main note, or a patch
+ * record that merges into one. For a main note the traceability fields must line up with
+ * the previous tag; a patch resolves to the main note it names (`notesVersion`), which is
+ * the version the compiled top entry (and its page) will carry.
  */
-export function assertReleaseNotesReady({ notes, version, previousTag }) {
+export function assertReleaseNotesReady({ notes, patches = [], version, previousTag }) {
+  const patch = patches.find((candidate) => candidate.version === version)
+  if (patch) {
+    if (patch.status !== 'reviewed') {
+      throw new Error(
+        `docs/release-notes/patches/${version}.md 仍是 status: ${patch.status}；` +
+          `经确认后改为 status: reviewed 再发版`,
+      )
+    }
+    if (previousTag && patch.sourceFrom !== previousTag) {
+      throw new Error(
+        `docs/release-notes/patches/${version}.md 的 sourceFrom 是 ${patch.sourceFrom || '(空)'}，` +
+          `期望 ${previousTag}（上一个发布 tag）；请核对整理范围`,
+      )
+    }
+    return { note: patch, notesVersion: patch.notesVersion }
+  }
+
   const byVersion = indexNotesByVersion(notes)
   const note = byVersion.get(version)
   if (!note) {
     throw new Error(
-      `缺少 ${noteSourceHint(version)}；发版要求先提交 status: reviewed 的正式稿` +
-        `（不再从 git 提交列表生成正文）`,
+      `缺少 ${noteSourceHint(version)}（或补丁记录 docs/release-notes/patches/${version}.md）；` +
+        `发版要求先提交 status: reviewed 的正式稿（不再从 git 提交列表生成正文）`,
     )
   }
   if (!note.legacy && note.status !== 'reviewed') {
@@ -515,5 +783,5 @@ export function assertReleaseNotesReady({ notes, version, previousTag }) {
         `期望 ${previousTag}（上一个发布 tag）；请核对整理范围`,
     )
   }
-  return note
+  return { note, notesVersion: note.version }
 }

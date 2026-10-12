@@ -31,6 +31,7 @@ import { ReleaseNotesInput } from '../../../services/editor/ReleaseNotesInput.js
 import { DocEditorInput } from '../../../services/editor/DocEditorInput.js'
 import { initUserDocsForTests } from '../../../services/editor/docRegistry.js'
 import type { IReleaseNote } from '../../../../shared/ipc/releaseNotesService.js'
+import mergedRuntime from '../../../../shared/releaseNotes/__tests__/fixtures/mergedRuntimeEntries.json'
 import { ServicesContext } from '../../useService.js'
 import { EditorGroupContext } from '../EditorGroupContext.js'
 import { ReleaseNotesEditor } from '../ReleaseNotesEditor.js'
@@ -263,12 +264,133 @@ describe('ReleaseNotesEditor — restricted navigation', () => {
   })
 })
 
+describe('ReleaseNotesEditor — merged patch sections', () => {
+  // A patch never gets its own runtime entry: the compiler appends its fixes to the
+  // main note it belongs to and records the section start as a `bodySections` offset.
+  const MERGED_BODY = [
+    '## 本次重点',
+    '',
+    '- 主稿里的 [主稿文档](doc:main/doc)',
+    '',
+    '## v0.15.2 补丁修复',
+    '',
+    '- 修复见 [补丁新文档](doc:patch/added)',
+    '',
+  ].join('\n')
+  const MERGED: IReleaseNote = {
+    version: '0.15.1',
+    date: '2026-10-01',
+    title: '主稿',
+    summary: '摘要。',
+    body: MERGED_BODY,
+    bodySections: [
+      { version: '0.15.1', offset: 0 },
+      { version: '0.15.2', offset: MERGED_BODY.indexOf('## v0.15.2 补丁修复') },
+    ],
+  }
+
+  it('renders the main body and the merged patch section as one version', () => {
+    const harness = renderEditor([MERGED])
+    expect(screen.getAllByTestId('release-note-version')).toHaveLength(1)
+    expect(screen.getByText('本次重点').tagName).toBe('H2')
+    expect(screen.getByText('v0.15.2 补丁修复').tagName).toBe('H2')
+    expect(harness.container.textContent).toContain('修复见')
+  })
+
+  it('pins a missing doc in a patch section to the patch tag, not the main tag', () => {
+    initUserDocsForTests({ 'zh-CN': {}, 'en-US': {} })
+    const harness = renderEditor([MERGED])
+    screen.getByRole('link', { name: '补丁新文档' }).click()
+    expect(harness.notices).toHaveLength(1)
+    harness.notices[0]?.actions[0]?.run()
+    expect(harness.openerCalls[0]?.target).toBe(
+      'https://github.com/lovebirdsx/universe-editor/blob/v0.15.2/docs/user/zh-CN/patch/added.md',
+    )
+  })
+
+  it('keeps a missing doc in the main body pinned to the main tag', () => {
+    initUserDocsForTests({ 'zh-CN': {}, 'en-US': {} })
+    const harness = renderEditor([MERGED])
+    screen.getByRole('link', { name: '主稿文档' }).click()
+    harness.notices[0]?.actions[0]?.run()
+    expect(harness.openerCalls[0]?.target).toBe(
+      'https://github.com/lovebirdsx/universe-editor/blob/v0.15.1/docs/user/zh-CN/main/doc.md',
+    )
+  })
+
+  it('still opens a doc bundled from a patch section locally', () => {
+    initUserDocsForTests({ 'zh-CN': { 'patch/added': '# X\n' }, 'en-US': {} })
+    const harness = renderEditor([MERGED])
+    screen.getByRole('link', { name: '补丁新文档' }).click()
+    expect(harness.opened[0]).toBeInstanceOf(DocEditorInput)
+    expect((harness.opened[0] as DocEditorInput).docId).toBe('patch/added')
+    expect(harness.openerCalls).toEqual([])
+    expect(harness.notices).toEqual([])
+  })
+
+  it('splits by the compiler metadata and ignores a fake heading inside a code fence', () => {
+    const merged = (mergedRuntime as unknown as IReleaseNote[])[0]!
+    renderEditor([merged])
+    expect(screen.getByText('v0.15.2 补丁修复').tagName).toBe('H2')
+    expect(screen.getByText('v0.15.3 补丁修复').tagName).toBe('H2')
+    // 代码块里的 `## v9.9.9 补丁修复` 只是段内文本，既不成为标题也不多切一段。
+    expect(screen.queryByRole('heading', { name: 'v9.9.9 补丁修复' })).toBeNull()
+  })
+
+  it('keeps a note without metadata as one section, whatever its body looks like', () => {
+    // 去掉 bodySections：与补丁标题长得一样的行不再被当作边界，缺文档仍固定到主稿 tag。
+    const { bodySections: _ignored, ...plain } = MERGED
+    initUserDocsForTests({ 'zh-CN': {}, 'en-US': {} })
+    const harness = renderEditor([plain])
+    screen.getByRole('link', { name: '补丁新文档' }).click()
+    harness.notices[0]?.actions[0]?.run()
+    expect(harness.openerCalls[0]?.target).toBe(
+      'https://github.com/lovebirdsx/universe-editor/blob/v0.15.1/docs/user/zh-CN/patch/added.md',
+    )
+  })
+
+  it('renders each section’s own heading anchors (metadata split keeps them addressable)', () => {
+    const merged = (mergedRuntime as unknown as IReleaseNote[])[0]!
+    const harness = renderEditor([merged])
+    expect(screen.getByRole('link', { name: '本节' }).getAttribute('href')).toBe('#本次重点')
+    expect(screen.getByText('本次重点').getAttribute('data-anchor')).toBe('本次重点')
+    expect(harness.notices).toEqual([])
+  })
+})
+
 describe('ReleaseNotesInput — persisted state', () => {
   it('round-trips a schema-2 payload', () => {
     const input = new ReleaseNotesInput([NOTE], '更新说明', 'whatsNew')
     const revived = ReleaseNotesInput.deserialize(JSON.parse(JSON.stringify(input.serialize())))
     expect(revived?.notes).toEqual([NOTE])
     expect(revived?.id).toBe('release-notes:whatsNew')
+  })
+
+  it('round-trips bodySections and drops only invalid metadata on restore', () => {
+    const body = '## a\n\n## v0.15.2 补丁修复\n- x\n'
+    const merged: IReleaseNote = {
+      version: '0.15.1',
+      title: '',
+      summary: '',
+      body,
+      bodySections: [
+        { version: '0.15.1', offset: 0 },
+        { version: '0.15.2', offset: 6 },
+      ],
+    }
+    const revived = ReleaseNotesInput.deserialize(
+      JSON.parse(JSON.stringify(new ReleaseNotesInput([merged], 't', 'all').serialize())),
+    )
+    expect(revived?.notes).toEqual([merged])
+
+    const broken = ReleaseNotesInput.deserialize({
+      schema: 2,
+      notes: [{ ...merged, bodySections: [{ version: '0.15.1', offset: 99 }] }],
+      title: 't',
+      key: 'all',
+    })
+    expect(broken?.notes[0]?.body).toBe(body)
+    expect(broken?.notes[0]?.bodySections).toBeUndefined()
   })
 
   it('degrades a pre-schema-2 tab to one opaque note instead of going blank', () => {

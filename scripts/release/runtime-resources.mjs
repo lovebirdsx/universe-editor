@@ -32,6 +32,7 @@ import {
   extensionPackageFiles as sharedExtensionPackageFiles,
   normalizePackageFileEntry as sharedNormalizePackageFileEntry,
 } from '../../packages/extension-packaging/dist/packageFiles.js'
+import { bodySectionsProblem } from './release-notes/source.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(__dirname, '../..')
@@ -417,6 +418,8 @@ function notesEntryProblem(index, raw) {
     if (typeof raw[key] !== 'string') return `${where}的 ${key} 不是字符串`
   }
   if (!NOTES_VERSION_PATTERN.test(raw.version)) return `${where}的 version 非法：${raw.version}`
+  const sectionsProblem = bodySectionsProblem(raw)
+  if (sectionsProblem) return `${where}的 ${sectionsProblem}`
   return undefined
 }
 

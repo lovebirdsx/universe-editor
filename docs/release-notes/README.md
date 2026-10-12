@@ -3,8 +3,9 @@
 每个已发布版本的**唯一正式来源**。应用内「更新说明」、下载站每版介绍页、GitHub Release 正文都由这里的 Markdown 确定性编译而来——不存在第二份手写文案。
 
 ```text
-docs/release-notes/<version>.md   唯一正式来源（提交进 Git）
-docs/release-notes/archive/*.md   已发布历史的冻结聚合（分节存档，只读）
+docs/release-notes/<version>.md         常规主稿：唯一正式来源（提交进 Git）
+docs/release-notes/patches/<version>.md 轻量补丁记录：归并进所属主稿，不单独成篇
+docs/release-notes/archive/*.md         已发布历史的冻结聚合（分节存档，只读）
       │  pnpm release:notes        确定性编译（无 AI / 无网络 / 无 wall-clock）
       ▼
 apps/editor/resources/release-notes.json   运行时派生物（受 Git 管理）
@@ -20,9 +21,10 @@ Git 提交只是**整理事实与追溯变化的输入**（见 skill `generate-r
 ## 文件名
 
 - 版本正文：`<version>.md`，如 `0.15.0.md`（**不带 `v` 前缀**，必须与 frontmatter `version` 一致）。
+- 补丁记录：`patches/<version>.md`，如 `patches/0.15.2.md`（目录本身就表示「这是补丁」，frontmatter 里不再写类型字段）。
 - 历史归档：`archive/*.md`，一个文件用分节标记装多个已发布版本（见「历史归档」）；新稿一律写在根目录，**不要**往归档里加内容。
-- `README.md`（本文件）与 `_template.md` 不是版本稿，永不进入发布产物。
-- 一个版本只能有**一份正文**；重复版本号（含归档内重复分节）直接编译失败。
+- `README.md`、`_template.md`（根目录与 `patches/` 下）不是版本稿，永不进入发布产物。
+- 一个版本只能有**一份记录**；重复版本号（含归档内重复分节）直接编译失败。
 
 ## frontmatter
 
@@ -32,8 +34,8 @@ Git 提交只是**整理事实与追溯变化的输入**（见 skill `generate-r
 | --- | --- | --- |
 | `version` | 是 | `X.Y.Z`，与文件名一致 |
 | `date` | 是（legacy 可缺） | 合法 `YYYY-MM-DD`，由作者明确填写；编译器**不会**用「今天」补历史日期 |
-| `title` | 新稿是 | 短标题（列表与版本头展示） |
-| `summary` | 新稿是 | 一句话摘要；下载页列表用它 |
+| `title` | 常规主稿是 | 短标题（列表与版本头展示）；补丁记录不写 |
+| `summary` | 常规主稿是 | 一句话摘要；下载页列表用它；补丁记录不写 |
 | `status` | 是 | `draft` 或 `reviewed`；**只有 reviewed 进发布产物** |
 | `sourceFrom` | 发布前填 | 上次发布的 tag，如 `v0.14.9` |
 | `sourceTo` | 发布前填 | 整理到的完整提交 SHA（供复核追溯，不用会移动的 `HEAD`） |
@@ -41,6 +43,32 @@ Git 提交只是**整理事实与追溯变化的输入**（见 skill `generate-r
 | `legacy` | 仅迁移稿 | `true` = 本轮从旧 JSON 归档的已发布内容 |
 
 `sourceTo` 只作追溯线索，**不声称覆盖完整**；发版预检会打印 `上一个 tag..HEAD` 的完整提交清单（本次发布真正带出去的变更集）与 `sourceTo` 之后的提交，供复核，但不会用 `sourceTo === HEAD` 阻断发布。若之后又出现用户可见变化，必须补审并更新正文。
+
+## 补丁记录（patches/）
+
+一次修复发布**不占用一篇独立文章**：它是一份轻量记录，编译期归并进所属的常规主稿，读者在同一篇说明里就能看到修复内容。
+
+- 落点 `docs/release-notes/patches/<version>.md`，只写简短修复条目；**不要求 `title` / `summary`**，正文从 `## ` 起（同样是「需要有人确认过这个版本说什么」，不是可以省略的草稿）。
+- frontmatter 字段比主稿少，只有下列这些（多余字段报错）：
+
+  | 字段 | 必填 | 说明 |
+  | --- | --- | --- |
+  | `version` | 是 | 本次安装版本 `X.Y.Z`，与文件名一致 |
+  | `notesVersion` | 是 | 归并到的常规主稿版本（见下） |
+  | `date` | 是 | 合法 `YYYY-MM-DD` |
+  | `status` | 是 | `draft` 或 `reviewed`；**只有 reviewed 进发布产物** |
+  | `sourceFrom` | 发布前填 | 上次发布的 tag，如 `v0.15.1` |
+  | `sourceTo` | 发布前填 | 整理到的完整提交 SHA |
+  | `urgency` | 否 | `normal`（默认）或 `important`；语义与主稿一致 |
+
+- `notesVersion` 必须指向**同一 major/minor 系列里、该补丁之前最新的 reviewed 常规主稿**：禁止跨系列引用、引用补丁、前向/自引用，也不允许与该版本已有主稿冲突。这样补丁不会挂在已被新主稿取代的旧说明上，也不新增别名链。
+- **归并 ≠ 只发这一条修复**。仓库是 trunk-based，补丁版仍然带出自上一个 tag 以来的**全部真实提交**；`sourceFrom` 必须等于紧邻的上一个 tag，发版预检照常打印完整提交清单供复核。是否归并只影响正文怎么呈现，不缩小发布范围。
+- **编译归并**：reviewed 且版本不超过本次目标版本的补丁，被追加到所属主稿正文末尾的 `## vX.Y.Z 补丁修复` 段（按版本升序）。运行期 JSON、下载站历史目录**只有主稿条目**，条目 `version` 保持主稿版本，不生成独立补丁页面；补丁段里的 `doc:` 链接按**补丁自己的版本**固定，新加的文档不会错指到主稿更旧的 tag。
+- 归并稿在运行期 JSON 里额外带 `bodySections: [{ version, offset }]`：`offset` 是该段在 `body` 内的字符起点（首段 0，后段是追加的补丁标题起点）。应用据此分段渲染、给每段的链接选回退版本，**不按标题文案识别**（标题改写、代码块里的假标题都影响不了切分）。无补丁的普通稿不带该字段，历史产物字节不变。
+- **`notes/index.json` 每个安装版本都有条目**（普通与 important 一视同仁），补丁条目 `path` 指向主稿页并携带 `notesVersion` 供下载页归组——任何安装版本的紧急程度都能被客户端查到。
+- 下载页按 `notesVersion` 归组：一篇主稿只展示一次，用主稿标题/摘要，展示组内**最新的适用安装版本**并链接到主稿页；最新归属不因 7 天时间窗消失。旧条目没有 `notesVersion` 时按自身版本处理。
+- 仍需**用户明确审核后**把 `status` 改成 `reviewed`；`reviewed` 补丁记录必须有非空正文与 `sourceFrom` / `sourceTo`。
+- **部署先行**：下载页的新归组逻辑随服务端版本发布（`scripts/server` 的 `SERVER_VERSION` 已 bump）。首次使用该展示前，先把服务端部署上去，否则老下载页不会按 `notesVersion` 归组。
 
 ## 紧急版本
 
@@ -102,7 +130,7 @@ Git 提交只是**整理事实与追溯变化的输入**（见 skill `generate-r
 
 ## 审阅流程
 
-1. 用 skill `generate-release-notes` 按「待发布版本 + 基准 tag + 目标 SHA」整理，产出 `docs/release-notes/<version>.md`，`status: draft`。
+1. 用 skill `generate-release-notes` 按「待发布版本 + 基准 tag + 目标 SHA」整理，产出 `docs/release-notes/<version>.md`，`status: draft`。修复发布产出 `docs/release-notes/patches/<version>.md`（写明 `notesVersion`），同样是 `status: draft`。
 2. 在对话中逐条复核证据（功能是否真的在发布树里、菜单/命令/文档是否可用）。
 3. **用户明确确认后**才把 `status` 改成 `reviewed`。提交记录或字段本身不是可验证的「人类签名」。
 
@@ -111,14 +139,15 @@ Git 提交只是**整理事实与追溯变化的输入**（见 skill `generate-r
 ## 编译与校验
 
 ```bash
-pnpm release:notes -- --version 0.15.0   # 编译截至该版本的 reviewed 稿 → 运行时 JSON（不改源文件）
+pnpm release:notes -- --version 0.15.0   # 编译截至该版本的 reviewed 稿（含补丁归并）→ 运行时 JSON（不改源文件）
 pnpm release:notes:check                 # 无写入校验：全部文档语法 + 派生物一致性（接入 pnpm check 与 CI）
 ```
 
-- 发版（`pnpm release`）在**改版本号之前**要求目标版本已存在 `reviewed` 正式稿，否则直接失败。
+- 发版（`pnpm release`）在**改版本号之前**要求目标版本已存在 `reviewed` 正式稿或 `reviewed` 补丁记录，否则直接失败。
 - 缺稿 / draft / 空新稿 / 重复版本 / 非法日期 / 坏链接 / 不支持语法一律 fail-closed。
+- 补丁归属错误（`notesVersion` 缺失 / 跨系列 / 前向引用 / 指向非最新主稿 / 与主稿版本冲突）同样编译失败。
 - 未来版本与 draft 不得混入较早版本的发布产物。
-- `--resume` 与 `--upload-only` 只做一致性校验（重编译必须逐字节相同），不会重写正文，也不会产生新提交。
+- `--resume` 与 `--upload-only` 只做一致性校验（重编译必须逐字节相同），不会重写正文，也不会产生新提交。主稿与补丁记录都纳入打包快照的来源摘要，任何一个源文件改动都会阻断复用旧快照。
 
 ## 历史归档（legacy）
 

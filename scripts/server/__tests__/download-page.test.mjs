@@ -2,7 +2,8 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Tests for the static download page's embedded update-notes logic: the data-source
  *  fallback chain (notes/index.json → release-notes.json → hidden), the latest.yml version
- *  ceiling, and the 7-day window that must never drop the newest release.
+ *  ceiling, the 7-day window that must never drop the newest release, and the grouping that
+ *  shows one entry per main note (patches merge under the note they belong to).
  *
  *  The page exposes `globalThis.__ueDownloadPage` and starts itself only when
  *  `__UE_DOWNLOAD_PAGE_NO_AUTORUN__` is unset, so these cases await the real render instead
@@ -85,6 +86,11 @@ function collectText(element) {
   return [element.textContent, ...element.children.map(collectText)].filter(Boolean).join('\n')
 }
 
+function collectLinks(element) {
+  const own = element.tag === 'a' && element.href ? [element.href] : []
+  return [...own, ...element.children.flatMap(collectLinks)]
+}
+
 const LATEST_YML = `version: 0.1.7
 files:
   - url: Universe Editor-0.1.7-win-x64.exe
@@ -116,6 +122,7 @@ async function renderDownloadPage(files) {
   return {
     requested,
     notesText: collectText(document.getElementById('entries')),
+    links: collectLinks(document.getElementById('entries')),
     notesHidden: document.getElementById('notes').hidden,
     moreHidden: document.getElementById('notes-more').hidden,
   }
@@ -186,6 +193,163 @@ files:
   })
   assert.match(result.notesText, /很久以前/)
   assert.doesNotMatch(result.notesText, /摘要 6/)
+})
+
+test('groups a patch install under its main note and shows the newest applicable version once', async () => {
+  const result = await renderDownloadPage({
+    'latest.yml': `version: 0.1.7
+files:
+  - url: Setup.exe
+    size: 1024
+releaseDate: '2026-06-10T00:00:00.000Z'
+`,
+    'notes/index.json': indexJson([
+      {
+        version: '0.1.7',
+        date: '2026-06-10',
+        title: '启动更快',
+        summary: '摘要 7',
+        urgency: 'normal',
+        notesVersion: '0.1.7',
+        path: 'v0.1.7.html',
+      },
+      // 补丁：安装版本 0.1.6 归到主稿 0.1.5，自身没有标题/摘要与页面。
+      {
+        version: '0.1.6',
+        date: '2026-06-09',
+        urgency: 'normal',
+        notesVersion: '0.1.5',
+        path: 'v0.1.5.html',
+      },
+      {
+        version: '0.1.5',
+        date: '2026-06-02',
+        title: '上一个版本',
+        summary: '摘要 5',
+        urgency: 'normal',
+        notesVersion: '0.1.5',
+        path: 'v0.1.5.html',
+      },
+    ]),
+  })
+
+  // 主稿 0.1.5 只出现一次，用主稿标题/摘要，展示组内最新安装版本 0.1.6，链接指向主稿页。
+  assert.match(result.notesText, /上一个版本/)
+  assert.match(result.notesText, /摘要 5/)
+  assert.match(result.notesText, /v0\.1\.6/)
+  assert.doesNotMatch(result.notesText, /v0\.1\.5/)
+  assert.ok(result.links.includes('notes/v0.1.5.html'))
+  assert.ok(!result.links.includes('notes/v0.1.6.html'))
+  // 主稿 0.1.7 组仍是独立一篇。
+  assert.match(result.notesText, /摘要 7/)
+  assert.ok(result.links.includes('notes/v0.1.7.html'))
+})
+
+test('collapses several patches of one main note into a single entry', async () => {
+  const result = await renderDownloadPage({
+    'latest.yml': `version: 0.1.7
+files:
+  - url: Setup.exe
+    size: 1024
+releaseDate: '2026-06-10T00:00:00.000Z'
+`,
+    'notes/index.json': indexJson([
+      {
+        version: '0.1.7',
+        date: '2026-06-09',
+        urgency: 'normal',
+        notesVersion: '0.1.4',
+        path: 'v0.1.4.html',
+      },
+      {
+        version: '0.1.6',
+        date: '2026-06-08',
+        urgency: 'normal',
+        notesVersion: '0.1.4',
+        path: 'v0.1.4.html',
+      },
+      {
+        version: '0.1.4',
+        date: '2026-06-01',
+        title: '主稿标题',
+        summary: '主稿摘要',
+        urgency: 'normal',
+        notesVersion: '0.1.4',
+        path: 'v0.1.4.html',
+      },
+    ]),
+  })
+
+  assert.equal(result.notesText.match(/主稿标题/g)?.length, 1)
+  assert.equal(result.notesText.match(/v0\.1\.7/g)?.length, 1)
+  assert.equal(result.links.filter((href) => href === 'notes/v0.1.4.html').length, 1)
+})
+
+test('keeps the newest group visible when no index entry matches latest.yml and its date is stale', async () => {
+  const result = await renderDownloadPage({
+    'latest.yml': `version: 0.1.9
+files:
+  - url: Setup.exe
+    size: 1024
+releaseDate: '2026-06-10T00:00:00.000Z'
+`,
+    'notes/index.json': indexJson([
+      // 最新一组（主稿 0.1.7 + 补丁 0.1.8）发布日期远早于窗口，仍必须展示。
+      {
+        version: '0.1.8',
+        date: '2026-01-02',
+        urgency: 'important',
+        notesVersion: '0.1.7',
+        path: 'v0.1.7.html',
+      },
+      {
+        version: '0.1.7',
+        date: '2026-01-01',
+        title: '很久以前',
+        summary: '摘要 7',
+        urgency: 'normal',
+        notesVersion: '0.1.7',
+        path: 'v0.1.7.html',
+      },
+      {
+        version: '0.1.6',
+        date: '2026-06-05',
+        title: '窗口内',
+        summary: '摘要 6',
+        urgency: 'normal',
+        notesVersion: '0.1.6',
+        path: 'v0.1.6.html',
+      },
+    ]),
+  })
+
+  // 最新归属不能被时间窗过滤掉，且展示组内最新的安装版本 0.1.8。
+  assert.match(result.notesText, /很久以前/)
+  assert.match(result.notesText, /v0\.1\.8/)
+  assert.match(result.notesText, /窗口内/)
+  assert.ok(result.links.includes('notes/v0.1.7.html'))
+})
+
+test('normalizeIndex keeps notesVersion (defaulting to version) and urgency, including normal', async () => {
+  const document = createDocument()
+  const sandbox = {
+    document,
+    __UE_DOWNLOAD_PAGE_NO_AUTORUN__: true,
+    fetch: async () => ({ ok: false }),
+  }
+  vm.createContext(sandbox)
+  vm.runInContext(pageScript, sandbox)
+  const normalized = sandbox.__ueDownloadPage.normalizeIndex({
+    versions: [
+      { version: '0.1.7', urgency: 'normal', notesVersion: '0.1.5', path: 'v0.1.5.html' },
+      { version: '0.1.6', urgency: 'important', path: 'v0.1.6.html' },
+    ],
+  })
+  assert.deepEqual(normalized[0].notesVersion, '0.1.5')
+  assert.equal(normalized[0].urgency, 'normal')
+  // 缺 notesVersion 时回落为自身版本；缺 urgency 时视为 normal。
+  assert.equal(normalized[1].notesVersion, '0.1.6')
+  assert.equal(normalized[1].urgency, 'important')
 })
 
 test('falls back to release-notes.json (metadata only, no page links)', async () => {

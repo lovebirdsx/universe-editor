@@ -187,4 +187,114 @@ describe('ReleaseNotesContribution', () => {
     expect(groups.opened).toHaveLength(0)
     expect(storage.read()).toBe('0.2.0')
   })
+
+  it('shows the only known note once for an existing install with no version marker', async () => {
+    const storage = fakeStorage({ [EXISTING_INSTALL_MARKER_KEY]: [{ id: 1 }] })
+    const groups = fakeGroups()
+    const contrib = new ReleaseNotesContribution(
+      fakeReleaseNotes('0.1.3', [NOTES[0]!]),
+      storage.service,
+      groups.service,
+    )
+    await contrib.whenReady
+    expect(versions(groups.opened[0]!)).toEqual(['0.1.3'])
+    expect(storage.read()).toBe('0.1.3')
+  })
+})
+
+// A patch never gets its own runtime entry — the compiler merges its fixes into the
+// main note it belongs to (headed `## vX.Y.Z 补丁修复`), so a merged body is still one
+// runtime note at the main version.
+const MERGED_NOTES: IReleaseNote[] = [
+  {
+    version: '0.15.1',
+    date: '2026-10-12',
+    title: '主稿',
+    summary: '摘要',
+    body: '## 本次重点\n\n- 主稿内容\n\n## v0.15.2 补丁修复\n\n- 修好了 X\n',
+  },
+]
+
+describe('ReleaseNotesContribution — merged patches', () => {
+  it('does not pop for a patch-only upgrade under a seen main note, but records the version', async () => {
+    const storage = fakeStorage('0.15.1')
+    const groups = fakeGroups()
+    const contrib = new ReleaseNotesContribution(
+      fakeReleaseNotes('0.15.3', MERGED_NOTES),
+      storage.service,
+      groups.service,
+    )
+    await contrib.whenReady
+    expect(groups.opened).toHaveLength(0)
+    expect(storage.read()).toBe('0.15.3')
+  })
+
+  it('shows the unseen main note — merged patch section included — when crossing series', async () => {
+    const storage = fakeStorage('0.14.9')
+    const groups = fakeGroups()
+    const contrib = new ReleaseNotesContribution(
+      fakeReleaseNotes('0.15.3', MERGED_NOTES),
+      storage.service,
+      groups.service,
+    )
+    await contrib.whenReady
+    expect(groups.opened).toHaveLength(1)
+    const input = groups.opened[0]!
+    expect(versions(input)).toEqual(['0.15.1'])
+    expect((input as ReleaseNotesInput).notes[0]?.body).toContain('## v0.15.2 补丁修复')
+    expect((input as ReleaseNotesInput).notes[0]?.body).toContain('修好了 X')
+  })
+
+  it('records silently on first install of a patch build', async () => {
+    const storage = fakeStorage(undefined)
+    const groups = fakeGroups()
+    const contrib = new ReleaseNotesContribution(
+      fakeReleaseNotes('0.15.2', MERGED_NOTES),
+      storage.service,
+      groups.service,
+    )
+    await contrib.whenReady
+    expect(groups.opened).toHaveLength(0)
+    expect(storage.read()).toBe('0.15.2')
+  })
+
+  it('shows the latest main draft once for an old install (marker, no lastVersion) that lands on a patch', async () => {
+    const storage = fakeStorage({ [EXISTING_INSTALL_MARKER_KEY]: [{ id: 1 }] })
+    const groups = fakeGroups()
+    const contrib = new ReleaseNotesContribution(
+      fakeReleaseNotes('0.15.2', MERGED_NOTES),
+      storage.service,
+      groups.service,
+    )
+    await contrib.whenReady
+    // 旧版未知：按「最新主稿的前一篇（或 0.0.0）」作基线，range 命中最新主稿一次；
+    // 若按当前补丁找前一篇会解析回 0.15.1，range 落空，来自更老系列的用户反而什么都看不到。
+    expect(groups.opened).toHaveLength(1)
+    const input = groups.opened[0]!
+    expect(versions(input)).toEqual(['0.15.1'])
+    expect((input as ReleaseNotesInput).notes[0]?.body).toContain('## v0.15.2 补丁修复')
+    expect(storage.read()).toBe('0.15.2')
+  })
+
+  it('uses the previous main draft as the baseline so only the newest main note shows', async () => {
+    const storage = fakeStorage({ [EXISTING_INSTALL_MARKER_KEY]: [{ id: 1 }] })
+    const groups = fakeGroups()
+    const notes: IReleaseNote[] = [
+      {
+        version: '0.15.1',
+        title: '主稿',
+        summary: '摘要',
+        body: '## 本次重点\n\n- 主稿内容\n',
+      },
+      { version: '0.15.0', title: '', summary: '', body: '## 上一稿\n\n- 旧内容\n' },
+    ]
+    const contrib = new ReleaseNotesContribution(
+      fakeReleaseNotes('0.15.3', notes),
+      storage.service,
+      groups.service,
+    )
+    await contrib.whenReady
+    expect(versions(groups.opened[0]!)).toEqual(['0.15.1'])
+    expect(storage.read()).toBe('0.15.3')
+  })
 })

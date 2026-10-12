@@ -6,8 +6,9 @@
  *
  *  Release notes are the one consumer allowed to link with `doc:` / `command:`, and
  *  this editor is the only place that grants it. "Missing doc" is NOT resolved against
- *  the running install: the note's own version decides the GitHub fallback, so a note
- *  about 0.12.0 can never link at main or at the current release.
+ *  the running install: each body section's own version decides the GitHub fallback
+ *  (a merged patch pins to the patch's tag), so a note about 0.12.0 can never link at
+ *  main or at the current release.
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useMemo, useRef } from 'react'
@@ -30,6 +31,7 @@ import { DocEditorInput } from '../../services/editor/DocEditorInput.js'
 import { isDocId } from '../../services/editor/docRegistry.js'
 import { openDocInGroup } from '../../services/editor/openDoc.js'
 import { ReleaseNotesInput } from '../../services/editor/ReleaseNotesInput.js'
+import { splitNoteBodySections } from '../../services/releaseNotes/releaseNotes.js'
 import { useService } from '../useService.js'
 import { MarkdownView, type MarkdownLinkHandler } from '../markdown/MarkdownView.js'
 import { useEditorGroup } from './EditorGroupContext.js'
@@ -41,7 +43,11 @@ function versionAnchor(version: string): string {
   return `version-${version.replace(/[^A-Za-z0-9]+/g, '-')}`
 }
 
-function ReleaseNoteSection({ note }: { readonly note: IReleaseNote }) {
+/**
+ * 一段正文：缺文档的链接按该段自己的版本回退。合并稿的分段来自编译器输出的 bodySections
+ * 偏移，补丁段因此固定到补丁 tag；随包文档两边都本地打开。
+ */
+function NoteBody({ markdown, version }: { readonly markdown: string; readonly version: string }) {
   const groups = useEditorGroup()
   const editorService = useService(IEditorService)
   const opener = useService(IOpenerService)
@@ -54,10 +60,10 @@ function ReleaseNoteSection({ note }: { readonly note: IReleaseNote }) {
     [opener],
   )
 
-  // A doc this install does not bundle: offer the note's own version on GitHub.
+  // 随包未提供的文档：用该段自己的版本给 GitHub 回退链接。
   const reportMissingDoc = useCallback(
     (docId: string) => {
-      const url = note.version === '' ? undefined : releaseNoteDocUrl(note.version, docId)
+      const url = version === '' ? undefined : releaseNoteDocUrl(version, docId)
       notifications.notify({
         severity: Severity.Warning,
         message: localize('releaseNotes.docMissing', '这个版本的文档未随应用提供：{docId}', {
@@ -75,7 +81,7 @@ function ReleaseNoteSection({ note }: { readonly note: IReleaseNote }) {
           : {}),
       })
     },
-    [note.version, notifications, openExternal],
+    [version, notifications, openExternal],
   )
 
   const handleLink = useCallback<MarkdownLinkHandler>(
@@ -119,6 +125,21 @@ function ReleaseNoteSection({ note }: { readonly note: IReleaseNote }) {
   )
 
   return (
+    <MarkdownView
+      text={markdown}
+      className={styles['body'] ?? ''}
+      extraHrefSchemes={MD_LINK_SCHEMES}
+      linkHandler={handleLink}
+    />
+  )
+}
+
+function ReleaseNoteSection({ note }: { readonly note: IReleaseNote }) {
+  const sections = useMemo(
+    () => splitNoteBodySections(note.body, note.version, note.bodySections),
+    [note.body, note.version, note.bodySections],
+  )
+  return (
     <section
       className={styles['version'] ?? ''}
       data-testid="release-note-version"
@@ -135,12 +156,9 @@ function ReleaseNoteSection({ note }: { readonly note: IReleaseNote }) {
           {note.summary !== '' && <p className={styles['versionSummary'] ?? ''}>{note.summary}</p>}
         </header>
       )}
-      <MarkdownView
-        text={note.body}
-        className={styles['body'] ?? ''}
-        extraHrefSchemes={MD_LINK_SCHEMES}
-        linkHandler={handleLink}
-      />
+      {sections.map((section, i) => (
+        <NoteBody key={i} markdown={section.markdown} version={section.version} />
+      ))}
     </section>
   )
 }

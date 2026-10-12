@@ -9,6 +9,7 @@ import { join } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkTempDir } from '@universe-editor/temp-root'
 import type { ILogger } from '@universe-editor/platform'
+import mergedRuntime from '../../../../shared/releaseNotes/__tests__/fixtures/mergedRuntimeEntries.json' with { type: 'json' }
 
 declare const __APP_VERSION__: string
 
@@ -70,6 +71,72 @@ describe('parseReleaseNotes', () => {
     expect(log).toContain('title 不是字符串')
     expect(log).toContain('body 不是字符串')
     expect(log).toContain('date 非法')
+  })
+
+  it('accepts the shared fixture — real compiler output with bodySections', () => {
+    const { notes, problems } = parseReleaseNotes(mergedRuntime)
+    expect(problems).toEqual([])
+    const merged = notes.find((entry) => entry.version === '0.15.1')!
+    expect(merged.bodySections).toEqual([
+      { version: '0.15.1', offset: 0 },
+      { version: '0.15.2', offset: 58 },
+      { version: '0.15.3', offset: 121 },
+    ])
+    // 无补丁的普通稿保持无该字段。
+    expect(notes.find((entry) => entry.version === '0.15.0')?.bodySections).toBeUndefined()
+  })
+
+  it('drops invalid metadata with a diagnostic but keeps the body renderable', () => {
+    const body = '## a\n\n## v0.15.2 补丁修复\n\n- x\n'
+    const problemsFor = (bodySections: unknown) =>
+      parseReleaseNotes([{ version: '0.15.1', title: 't', summary: 's', body, bodySections }])
+    for (const [sections, pattern] of [
+      [[{ version: '0.15.1', offset: 3 }], /首段 offset 必须为 0/],
+      [
+        [
+          { version: '0.15.1', offset: 0 },
+          { version: '0.15.0', offset: 6 },
+        ],
+        /必须大于主稿/,
+      ],
+      [
+        [
+          { version: '0.15.1', offset: 0 },
+          { version: '0.15.2', offset: 0 },
+        ],
+        /未严格递增/,
+      ],
+      [
+        [
+          { version: '0.15.1', offset: 0 },
+          { version: '0.15.2', offset: 999 },
+        ],
+        /超出正文范围/,
+      ],
+      [
+        [
+          { version: '0.15.1', offset: 0 },
+          { version: '0.15.2', offset: 1.5 },
+        ],
+        /非负整数/,
+      ],
+      [
+        [
+          { version: '0.15.2', offset: 0 },
+          { version: '0.15.3', offset: 6 },
+        ],
+        /首段 version/,
+      ],
+      ['nope', /不是数组/],
+    ] as const) {
+      const { notes, problems } = problemsFor(sections)
+      expect(problems).toHaveLength(1)
+      expect(problems[0]).toMatch(pattern)
+      // 元数据无效不丢正文：条目保留、bodySections 退回缺省（单段渲染）。
+      expect(notes).toHaveLength(1)
+      expect(notes[0]?.body).toBe(body)
+      expect(notes[0]?.bodySections).toBeUndefined()
+    }
   })
 })
 

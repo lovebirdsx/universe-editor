@@ -8,6 +8,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { EditorInput, URI } from '@universe-editor/platform'
+import { normalizeBodySections } from '../../../shared/releaseNotes/bodySections.js'
 import type { IReleaseNote } from '../../../shared/ipc/releaseNotesService.js'
 
 export const RELEASE_NOTES_SCHEMA = 2
@@ -35,20 +36,16 @@ function toReleaseNote(value: unknown): IReleaseNote | undefined {
   if (typeof note['summary'] !== 'string') return undefined
   if (typeof note['body'] !== 'string') return undefined
   if (note['date'] !== undefined && typeof note['date'] !== 'string') return undefined
-  return note['date'] === undefined
-    ? {
-        version: note['version'],
-        title: note['title'],
-        summary: note['summary'],
-        body: note['body'],
-      }
-    : {
-        version: note['version'],
-        date: note['date'] as string,
-        title: note['title'],
-        summary: note['summary'],
-        body: note['body'],
-      }
+  // 分段元数据非法时退回单段（缺省），不拖累整条 note 的恢复。
+  const { sections } = normalizeBodySections(note['bodySections'], note['version'], note['body'])
+  return {
+    version: note['version'],
+    ...(note['date'] !== undefined ? { date: note['date'] as string } : {}),
+    title: note['title'],
+    summary: note['summary'],
+    body: note['body'],
+    ...(sections !== undefined ? { bodySections: sections } : {}),
+  }
 }
 
 export class ReleaseNotesInput extends EditorInput {

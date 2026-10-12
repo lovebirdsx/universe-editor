@@ -104,6 +104,23 @@ describe('urgencyForVersion', () => {
     expect(urgencyForVersion(index, '9.9.9')).toBe('normal')
   })
 
+  it('keys a merged patch by its install version, not the notes version it points at', () => {
+    // A merged patch's entry keeps the patch's own version with `path` naming the main
+    // note's page and `notesVersion` its owner. The client looks up the version it is
+    // being offered, so an important patch is found even though it has no page of its own.
+    const merged = {
+      versions: [
+        {
+          version: '0.15.2',
+          urgency: 'important',
+          notesVersion: '0.15.1',
+          path: 'v0.15.1.html',
+        },
+      ],
+    }
+    expect(urgencyForVersion(merged, '0.15.2')).toBe('important')
+  })
+
   it('returns undefined for a shape it cannot read', () => {
     expect(urgencyForVersion(undefined, '0.15.2')).toBeUndefined()
     expect(urgencyForVersion(null, '0.15.2')).toBeUndefined()
