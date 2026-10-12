@@ -79,8 +79,16 @@ const CHECK_RECORD = '.check'
 const SUCCESS_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
 /** Backoff after a failed check (offline, DNS, 5xx). */
 const FAILURE_RETRY_INTERVAL_MS = 60 * 60 * 1000
-/** Upper bound for an honoured `Retry-After` — a rate limit must not park the check for days. */
+/**
+ * Upper bound for an honoured rate-limit hint — `Retry-After`, or the
+ * `x-ratelimit-reset` GitHub sends instead of it. A rate limit must not park the
+ * check for days.
+ */
 const MAX_RETRY_AFTER_MS = 24 * 60 * 60 * 1000
+/** How much of a failed response's body is read; a block page explains itself up top. */
+const ERROR_BODY_MAX_BYTES = 4096
+/** How much of that body reaches the log line. */
+const ERROR_SNIPPET_MAX_CHARS = 200
 /** Bounds the connect/headers phase only; once headers arrive the body streams unbounded. */
 const DEFAULT_CONNECT_TIMEOUT_MS = 30_000
 /**
@@ -227,6 +235,68 @@ function parseRetryAfter(value: string | null, now: number): number | undefined 
   return Number.isFinite(date) ? Math.max(0, date - now) : undefined
 }
 
+/**
+ * The wait GitHub's primary rate limit asks for, in ms. It sends no `Retry-After`
+ * for those — only this epoch-seconds stamp — and without reading it a rate
+ * limit is indistinguishable from any other 403.
+ */
+function parseRateLimitReset(value: string | null, now: number): number | undefined {
+  if (value === null) return undefined
+  const seconds = Number(value.trim())
+  if (!Number.isFinite(seconds)) return undefined
+  return Math.max(0, seconds * 1000 - now)
+}
+
+/**
+ * What went wrong, in one line the log can carry.
+ *
+ * The status alone has proved not to be enough: a 403 from a shared egress IP is
+ * a spent API quota, a 403 from a corporate proxy is a blocked site, and the two
+ * want opposite responses. The counters and the body say which one it was.
+ */
+async function describeHttpFailure(res: Response, url: string, now: number): Promise<string> {
+  const parts = [`HTTP ${res.status} for ${url}`]
+  const remaining = res.headers.get('x-ratelimit-remaining')
+  if (remaining !== null) {
+    const limit = res.headers.get('x-ratelimit-limit')
+    const resetMs = parseRateLimitReset(res.headers.get('x-ratelimit-reset'), now)
+    parts.push(
+      `[rate limit ${limit === null ? remaining : `${remaining}/${limit}`} left` +
+        (resetMs === undefined ? '' : `, resets at ${new Date(now + resetMs).toISOString()}`) +
+        ']',
+    )
+  }
+  const body = await readErrorBody(res)
+  if (body !== '') parts.push(`— ${body}`)
+  return parts.join(' ')
+}
+
+/** The head of a failed response's body; reading it must not become its own failure. */
+async function readErrorBody(res: Response): Promise<string> {
+  const body = res.body
+  if (body === null) return ''
+  const reader = body.getReader()
+  const chunks: Uint8Array[] = []
+  let size = 0
+  try {
+    while (size < ERROR_BODY_MAX_BYTES) {
+      const { done, value } = await reader.read()
+      if (done || value === undefined) break
+      chunks.push(value)
+      size += value.byteLength
+    }
+  } catch {
+    // Whatever arrived before the body died is still better than nothing.
+  } finally {
+    void reader.cancel().catch(() => {})
+  }
+  return Buffer.concat(chunks)
+    .toString('utf8')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, ERROR_SNIPPET_MAX_CHARS)
+}
+
 /** In-process de-duplication: two `sync()` calls for one root share a single run. */
 const inflightSyncs = new Map<string, Promise<P4deltaSyncOutcome>>()
 
@@ -325,9 +395,8 @@ class P4deltaStoreImpl implements P4deltaStore {
 
     let latest: P4deltaVersion
     try {
-      const json = await this._fetchJson(latestUrl(this._source), opts?.signal)
-      const parsed = latestVersionFrom(this._source, json)
-      if (parsed === undefined) throw new Error('latest-release document names no version')
+      const parsed = await this._fetchLatestVersion(opts?.signal)
+      if (parsed === undefined) throw new Error('the latest-release answer names no version')
       latest = parsed
     } catch (err) {
       // A user cancel says nothing about the upstream, so it must not stamp the
@@ -505,8 +574,38 @@ class P4deltaStoreImpl implements P4deltaStore {
     throw lastErr
   }
 
+  /**
+   * The version upstream currently offers.
+   *
+   * GitHub answers its release page with a redirect, so this asks for the
+   * `Location` WITHOUT following it: the tag page is a whole HTML document we
+   * have no use for, and the API that would name the tag in JSON spends a quota
+   * every machine behind one egress IP shares (see `p4deltaUpstream`).
+   */
+  private async _fetchLatestVersion(
+    signal: AbortSignal | undefined,
+  ): Promise<P4deltaVersion | undefined> {
+    const url = latestUrl(this._source)
+    if (this._source.mode === 'github') {
+      const location = await this._fetchRedirectLocation(url, signal)
+      if (location === null) throw new Error(`${url} did not redirect to a release`)
+      return latestVersionFrom(this._source, location)
+    }
+    return latestVersionFrom(this._source, await this._fetchJson(url, signal))
+  }
+
+  /** The `Location` of a redirect, or null when the answer was not one. */
+  private async _fetchRedirectLocation(
+    url: string,
+    signal: AbortSignal | undefined,
+  ): Promise<string | null> {
+    const res = await this._fetchBounded(url, signal, 'text/html', 'manual')
+    return res.headers.get('location')
+  }
+
+  /** The mirror's `latest.json`. */
   private async _fetchJson(url: string, signal: AbortSignal | undefined): Promise<unknown> {
-    const res = await this._fetchBounded(url, signal, 'application/vnd.github+json')
+    const res = await this._fetchBounded(url, signal, 'application/json')
     return await res.json()
   }
 
@@ -524,6 +623,7 @@ class P4deltaStoreImpl implements P4deltaStore {
     url: string,
     signal: AbortSignal | undefined,
     accept: string,
+    redirect: 'follow' | 'manual' = 'follow',
   ): Promise<Response> {
     const controller = new AbortController()
     const timer = setTimeout(
@@ -537,17 +637,21 @@ class P4deltaStoreImpl implements P4deltaStore {
     try {
       res = await this._fetch(url, {
         signal: combined,
-        redirect: 'follow',
+        redirect,
         headers: { accept, 'user-agent': USER_AGENT },
       })
     } finally {
       clearTimeout(timer)
     }
-    if (!res.ok) {
+    // Under `manual` a 3xx IS the answer — that is the only reason to ask that way.
+    const answered = res.ok || (redirect === 'manual' && res.status >= 300 && res.status < 400)
+    if (!answered) {
+      const now = this._now()
       throw new HttpError(
         res.status,
-        parseRetryAfter(res.headers.get('retry-after'), this._now()),
-        `HTTP ${res.status} for ${url}`,
+        parseRetryAfter(res.headers.get('retry-after'), now) ??
+          parseRateLimitReset(res.headers.get('x-ratelimit-reset'), now),
+        await describeHttpFailure(res, url, now),
       )
     }
     return res

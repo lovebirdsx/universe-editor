@@ -40,20 +40,26 @@ vi.mock('node:fs', async (importOriginal) => {
 })
 
 const MIRROR: P4deltaSource = { mode: 'mirror', baseUrl: 'https://updates.example.com/p4delta' }
+const GITHUB: P4deltaSource = { mode: 'github', repo: 'lovebirdsx/p4delta' }
 const VERSION = '0.1.10'
 const TRIPLE = 'x86_64-pc-windows-msvc'
 const ASSET = `p4delta-${VERSION}-${TRIPLE}.zip`
 const EXE_BYTES = Buffer.from('MZ this stands in for the real p4delta.exe')
+const tagUrl = (version = VERSION): string =>
+  `https://github.com/lovebirdsx/p4delta/releases/tag/v${version}`
 
 let root: string
 let clock: number
 /** URLs the stub fetch was asked for, in order. */
 let calls: string[]
+/** The `redirect` mode of each call, so a source cannot quietly start following. */
+let redirects: (string | undefined)[]
 
 beforeEach(() => {
   root = mkTempDir('ue-p4delta-')
   clock = 1_700_000_000_000
   calls = []
+  redirects = []
   fsHooks.renameFail = undefined
 })
 
@@ -77,6 +83,12 @@ interface Upstream {
   /** Payload of the latest-release document; a number means "respond with that HTTP status". */
   latest?: unknown
   retryAfter?: string
+  /** Headers on a latest-release answer that carries an error status. */
+  latestHeaders?: Record<string, string>
+  /** Body of such an answer. */
+  latestBody?: string
+  /** `Location` of the GitHub release redirect; null answers a 302 without one. */
+  redirect?: string | null
   /** Body of SHA256SUMS; undefined means 404. */
   sums?: string | undefined
   zip?: Buffer
@@ -91,16 +103,29 @@ function stubFetch(upstream: Upstream): typeof fetch {
   return (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
     const url = String(input)
     calls.push(url)
+    redirects.push(init?.redirect === undefined ? undefined : String(init.redirect))
     if (upstream.gate !== undefined) await upstream.gate
     // Real fetch rejects on an aborted signal; the store reads `signal.aborted`
     // to tell that apart from a network failure, so the stub must honour it.
     if (init?.signal?.aborted === true) throw new Error('This operation was aborted')
+    const latestFailure = (): Response | undefined => {
+      if (typeof upstream.latest !== 'number') return undefined
+      const headers: Record<string, string> = { ...upstream.latestHeaders }
+      if (upstream.retryAfter !== undefined) headers['retry-after'] = upstream.retryAfter
+      return new Response(upstream.latestBody ?? 'nope', { status: upstream.latest, headers })
+    }
+    if (url.endsWith('/releases/latest')) {
+      const failure = latestFailure()
+      if (failure !== undefined) return failure
+      const location = upstream.redirect === undefined ? tagUrl() : upstream.redirect
+      return new Response(null, {
+        status: 302,
+        ...(location === null ? {} : { headers: { location } }),
+      })
+    }
     if (url.endsWith('/latest.json')) {
-      if (typeof upstream.latest === 'number') {
-        const headers =
-          upstream.retryAfter !== undefined ? { 'retry-after': upstream.retryAfter } : undefined
-        return new Response('nope', { status: upstream.latest, ...(headers ? { headers } : {}) })
-      }
+      const failure = latestFailure()
+      if (failure !== undefined) return failure
       return new Response(JSON.stringify(upstream.latest ?? { version: VERSION }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
@@ -230,6 +255,24 @@ describe('p4delta store: install', () => {
     expect((outcome as { reason: string }).reason).toContain('500')
   })
 
+  // A 403 is two very different problems — a spent rate limit, or a proxy
+  // refusing the site — and the status alone has told us neither. The body is
+  // where the answer is, and it has to survive into a single log line.
+  it('keeps the failing response body on one line of the reason', async () => {
+    const store = makeStore({
+      latest: 403,
+      latestBody:
+        '<html>\n  <head><title>403 Forbidden</title></head>\n' +
+        '  <body>blocked by the corporate proxy</body>\n</html>',
+    })
+    const outcome = await store.sync()
+    expect(outcome).toMatchObject({ kind: 'failed' })
+    const reason = (outcome as { reason: string }).reason
+    expect(reason).toContain('HTTP 403')
+    expect(reason).toContain('blocked by the corporate proxy')
+    expect(reason).not.toContain('\n')
+  })
+
   it('upgrades an older managed copy and records where it came from', async () => {
     mkdirSync(root, { recursive: true })
     placeVersion('0.1.9')
@@ -279,6 +322,53 @@ describe('p4delta store: install', () => {
   })
 })
 
+describe('p4delta store: the GitHub source', () => {
+  const github = (upstream: Upstream): P4deltaStore => makeStore(upstream, { source: GITHUB })
+
+  // The regression guard for the failure this source was changed over: the REST
+  // API allows 60 unauthenticated requests per hour PER IP, a budget every
+  // machine behind one office NAT shares, so the machines that had not installed
+  // yet were the ones answered with 403.
+  it('asks the release page, never the rate-limited API', async () => {
+    const zip = releaseZip()
+    await github({ sums: sumsFor(zip), zip }).sync()
+    expect(calls[0]).toBe('https://github.com/lovebirdsx/p4delta/releases/latest')
+    expect(calls.some((url) => url.includes('api.github.com'))).toBe(false)
+  })
+
+  it('reads the version off the redirect without following it', async () => {
+    const zip = releaseZip()
+    const outcome = await github({ sums: sumsFor(zip), zip }).sync()
+    expect(outcome).toEqual({ kind: 'installed', version: VERSION })
+    expect(redirects[0]).toBe('manual')
+    // The archive URLs are still constructed from the version, not read from a payload.
+    expect(calls.at(-1)).toBe(
+      `https://github.com/lovebirdsx/p4delta/releases/download/v${VERSION}/${ASSET}`,
+    )
+  })
+
+  it("refuses a redirect that does not land on this project's release tag", async () => {
+    const outcome = await github({ redirect: 'https://github.com/login' }).sync()
+    expect(outcome).toMatchObject({ kind: 'failed' })
+    expect(calls.some((url) => url.endsWith('.zip'))).toBe(false)
+    expect(existsSync(join(root, '.active'))).toBe(false)
+  })
+
+  it('fails when the redirect carries no Location at all', async () => {
+    const outcome = await github({ redirect: null }).sync()
+    expect(outcome).toMatchObject({ kind: 'failed' })
+    expect((outcome as { reason: string }).reason).toContain('did not redirect')
+  })
+
+  it('adopts a version already on disk without touching the network', async () => {
+    mkdirSync(root, { recursive: true })
+    placeVersion(VERSION)
+    const outcome = await github({}).sync()
+    expect(outcome).toEqual({ kind: 'installed', version: VERSION })
+    expect(calls.map((url) => url.split('/').at(-1))).toEqual(['latest'])
+  })
+})
+
 describe('p4delta store: adopting what is already on disk', () => {
   it('activates a version another window already downloaded, without re-downloading it', async () => {
     mkdirSync(root, { recursive: true })
@@ -324,6 +414,38 @@ describe('p4delta store: throttling', () => {
     await makeStore({ latest: 429, retryAfter: '7200' }).sync()
     const record = JSON.parse(readFileSync(join(root, '.check'), 'utf8')) as { nextCheckAt: number }
     expect(record.nextCheckAt).toBe(clock + 7200 * 1000)
+  })
+
+  // GitHub's primary limit sends no Retry-After — only this stamp — so a check
+  // that reads nothing but Retry-After can never learn when to come back.
+  it('honours the x-ratelimit-reset stamp and reports the counters', async () => {
+    const outcome = await makeStore({
+      latest: 403,
+      latestHeaders: {
+        'x-ratelimit-limit': '60',
+        'x-ratelimit-remaining': '0',
+        'x-ratelimit-reset': String(Math.floor((clock + 7200 * 1000) / 1000)),
+      },
+      latestBody: '{"message":"API rate limit exceeded for 192.0.2.9."}',
+    }).sync()
+    expect(outcome).toMatchObject({ kind: 'failed' })
+    const reason = (outcome as { reason: string }).reason
+    expect(reason).toContain('0/60')
+    expect(reason).toContain('192.0.2.9')
+    const record = JSON.parse(readFileSync(join(root, '.check'), 'utf8')) as { nextCheckAt: number }
+    expect(record.nextCheckAt).toBe(clock + 7200 * 1000)
+  })
+
+  // The stamp is a fact about the upstream, not an order to come back in five
+  // minutes: every failure keeps the one-hour floor, so a fleet of editors
+  // cannot turn a short window into a retry storm.
+  it('keeps the one-hour floor when the reset is sooner', async () => {
+    await makeStore({
+      latest: 403,
+      latestHeaders: { 'x-ratelimit-reset': String(Math.floor((clock + 60 * 1000) / 1000)) },
+    }).sync()
+    const record = JSON.parse(readFileSync(join(root, '.check'), 'utf8')) as { nextCheckAt: number }
+    expect(record.nextCheckAt).toBe(clock + 60 * 60 * 1000)
   })
 
   it('ignores the throttle when forced', async () => {

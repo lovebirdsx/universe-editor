@@ -28,13 +28,15 @@
 
 **四条并发不变量（不加锁文件，这是正确性承重条款不是容错润色）**：① 落盘前先 adopt（`<ver>/p4delta.exe` 已在盘 → 零网络直接成功）；② **rename 失败但目标已有 exe = 成功**（另一窗口抢先做完同一件事，两份字节相同——摘要已对同一 release 校验过），否则 5 次退避重试防杀软短锁；落盘时目标目录**移开而不是删除**、失败再移回——那份可能是另一窗口刚放好且 `.active` 已指向的副本，删了它再失败就留下悬空指针（＝整个会话静默回落原生）；③ 暂存目录带 `pid` + 进程内序号，两个 store 实例不互踩；④ 进程内 `inflightSyncs` 按 root 去重，并发 `sync()` 共享一个 promise，**但 `force` 调用例外**：等那次落定后自己再跑一遍——用户点「安装」时自带进度与取消，不能被别人的那次代答（节流决定与回调都不是他的）。指针写入一律 `写 <name>.<pid>.tmp → rename`。
 
-**下载流程**：查 latest（github `releases/latest` 读 `tag_name`；镜像 `<base>/latest.json`）→ 版本比较（`latest <= active` 即 `up-to-date`，零字节下载）→ **先取 `SHA256SUMS` 再下载**（缺清单/无该条目/摘要不符 = **拒绝安装**，fail-closed，不留目录不留指针）→ 流式下载（`Readable.fromWeb` + Transform 同时计量与 `createHash('sha256')`）+ `maxDownloadBytes`(64MB) 兜底 → adm-zip 只按**精确名字**取 `p4delta.exe` 一个 entry（zip-slip 不可达）→ rename 落盘 → 翻指针 → 删暂存。**URL 一律构造，不读 `assets[].browser_download_url`**（镜像那项的该字段会指回 github.com）；两条源的差异只落在 `p4deltaUpstream.ts` 的 `releaseBaseUrl()`。
+**下载流程**：查 latest（github 走发布页 `…/releases/latest` 的 302，`redirect:'manual'` 读 `Location` 解 `…/releases/tag/<tag>`；镜像读 `<base>/latest.json`）→ 版本比较（`latest <= active` 即 `up-to-date`，零字节下载）→ **先取 `SHA256SUMS` 再下载**（缺清单/无该条目/摘要不符 = **拒绝安装**，fail-closed，不留目录不留指针）→ 流式下载（`Readable.fromWeb` + Transform 同时计量与 `createHash('sha256')`）+ `maxDownloadBytes`(64MB) 兜底 → adm-zip 只按**精确名字**取 `p4delta.exe` 一个 entry（zip-slip 不可达）→ rename 落盘 → 翻指针 → 删暂存。**URL 一律构造，不读 `assets[].browser_download_url`**（镜像那项的该字段会指回 github.com）；**资产** URL 的两源差异只落在 `p4deltaUpstream.ts` 的 `releaseBaseUrl()`。
+
+**latest 为什么不查 api.github.com**：未认证 REST 配额是 **60 次/小时/IP**（按出口 IP，不按机器/用户），一个公司 NAT 后所有机器共享同一个桶——先装的把还没装的挤成 403 `API rate limit exceeded`（已实测复现：同请求第 60 发 200、第 61 发 403）。发布页 302 不占该配额，所以默认源只打 github.com；**别再"顺手"换回 API**。失败原因现在带响应体前 200 字符 + `x-ratelimit-*` 计数——只记 `HTTP 403` 时**限流与代理拦截无法区分**（两种都实测过）。
 
 **永不 throw**：每段 try/catch 把任何异常转成 `{kind:'failed', reason}`，`sync()` 再套一层 `.catch`；`finally` 必清暂存（失败不清会让状态永远卡住）。`failed` 的日志由 `ensureP4delta` 统一写（store 只上报）。
 
 **取消 ≠ 失败**：`{kind:'cancelled'}` 单列一支，**不写 `.check`**——用户取消是他自己的决定，不是对上流的判决；写成失败退避会让「取消一次手动安装」把后台自动检查静音一小时。
 
-**节流**（GitHub 未认证 60 req/h）：成功 24h、失败 1h、尊重 `Retry-After`（上限 24h）；`force` 绕过节流。
+**节流**（GitHub 未认证 60 req/h）：成功 24h、失败 1h、尊重 `Retry-After` 与 `x-ratelimit-reset`（下限 1h、上限 24h）；`force` 绕过节流。
 
 **保留集** = `{.active 指向的} ∪ {.check.version} ∪ {盘上最高版本}`，安装成功后每会话至多清一次；`.extract.*`/`.zip.*` 超 1h 才扫（别误删另一个进程正在写的）。
 

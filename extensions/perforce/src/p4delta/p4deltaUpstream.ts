@@ -1,5 +1,5 @@
 /**
- * Where a managed p4delta comes from, and how the three upstream documents are
+ * Where a managed p4delta comes from, and how the three upstream answers are
  * read: the "what is the latest release" answer, the release archive itself, and
  * the checksum list that has to vouch for it.
  *
@@ -11,6 +11,12 @@
  * in exactly one function ({@link releaseBaseUrl}) and a mirror holding
  * upstream's files verbatim needs no rewriting.
  *
+ * The latest-release question deliberately goes to the release PAGE rather than
+ * the REST API: `api.github.com` allows 60 unauthenticated requests per hour per
+ * IP, a budget every machine behind one office NAT shares, so the API answered
+ * 403 "rate limit exceeded" for exactly the machines that had not installed yet.
+ * `…/releases/latest` answers a 302 to the tag page and costs no API quota.
+ *
  * A mirror directory holds:
  *
  *     <base>/latest.json                               {"version":"0.1.10"}
@@ -18,7 +24,7 @@
  *     <base>/p4delta-0.1.10-x86_64-pc-windows-msvc.zip
  *
  * Everything here is a pure function over strings and parsed JSON: no I/O, and
- * no opinion on what to do when a document is missing or malformed. The store
+ * no opinion on what to do when an answer is missing or malformed. The store
  * refuses to install in those cases (see p4deltaStore).
  */
 import { parseP4deltaVersion, type P4deltaVersion } from './p4deltaVersion.js'
@@ -94,10 +100,14 @@ export function resolveP4deltaSource(
   return source
 }
 
-/** The document that names the latest release. */
+/**
+ * The document that names the latest release. GitHub answers with a redirect to
+ * the release's tag page; a mirror, with a file. See the module comment for why
+ * the page and not the API.
+ */
 export function latestUrl(source: P4deltaSource): string {
   return source.mode === 'github'
-    ? `https://api.github.com/repos/${source.repo}/releases/latest`
+    ? `https://github.com/${source.repo}/releases/latest`
     : `${source.baseUrl}/latest.json`
 }
 
@@ -112,19 +122,32 @@ export function assetUrl(base: string, name: string): string {
   return `${base}/${name}`
 }
 
+/** `https://github.com/<repo>/releases/tag/<tag>`, and nothing else. */
+const TAG_LOCATION_RE = /^https:\/\/github\.com\/(.+)\/releases\/tag\/([^/?#]+)$/
+
 /**
- * The version the latest-release document names, parsed and ready to compare.
- * GitHub spells it in the tag (`v0.1.10`), a mirror in its own field
- * (`{"version":"0.1.10"}`); both go through the same strict parser, so a
- * document that is not one — or names something that is not a version — comes
- * back undefined and the caller refuses to act on it.
+ * The version the answer to {@link latestUrl} names, parsed and ready to
+ * compare. The shapes differ by source and so does the argument: GitHub's
+ * `Location` header (a string, or null when the response redirected nowhere), a
+ * mirror's parsed `latest.json`.
+ *
+ * Both land in the same strict parser, so an answer that is not one — or names
+ * something that is not a version — comes back undefined and the caller refuses
+ * to act on it. For GitHub that also means the redirect must land on THIS
+ * repo's tag page: a 302 to a login page or to another project is not a release
+ * we may install a binary from.
  */
 export function latestVersionFrom(
   source: P4deltaSource,
-  json: unknown,
+  answer: unknown,
 ): P4deltaVersion | undefined {
-  const raw =
-    source.mode === 'github' ? stringField(json, 'tag_name') : stringField(json, 'version')
+  if (source.mode === 'github') {
+    if (typeof answer !== 'string') return undefined
+    const match = TAG_LOCATION_RE.exec(answer)
+    if (match === null || match[1] !== source.repo) return undefined
+    return parseP4deltaVersion(match[2] ?? '')
+  }
+  const raw = stringField(answer, 'version')
   return raw === undefined ? undefined : parseP4deltaVersion(raw)
 }
 

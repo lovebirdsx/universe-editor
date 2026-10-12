@@ -5,9 +5,9 @@
  * Deliberately strict: a version is exactly `[v]MAJOR.MINOR.PATCH`, with no
  * pre-release or build suffix. The only inputs are the two places upstream
  * spells a version (a release tag like `v0.1.10`, a mirror's `latest.json`), and
- * GitHub's `GET /releases/latest` never returns a pre-release — so anything else
- * means we are not looking at what we think we are, and the caller must refuse
- * to act on it rather than guess an ordering from it.
+ * the release `/releases/latest` points at is never a pre-release or draft — so
+ * anything else means we are not looking at what we think we are, and the caller
+ * must refuse to act on it rather than guess an ordering from it.
  *
  * Nothing here probes a binary or judges whether a build is usable: the δ
  * engine is admitted on existence alone (see `resolveP4deltaEngine`), and a

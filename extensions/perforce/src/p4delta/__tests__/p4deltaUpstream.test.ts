@@ -105,9 +105,10 @@ describe('resolveP4deltaSource', () => {
 
 describe('URL construction', () => {
   it('addresses the latest-release document per source', () => {
-    expect(latestUrl(GITHUB)).toBe(
-      'https://api.github.com/repos/lovebirdsx/p4delta/releases/latest',
-    )
+    // The web redirect, deliberately not the REST API: api.github.com allows 60
+    // unauthenticated requests per hour PER IP, so every machine behind one
+    // office NAT spends the same budget and the install starts 403ing.
+    expect(latestUrl(GITHUB)).toBe('https://github.com/lovebirdsx/p4delta/releases/latest')
     expect(latestUrl(MIRROR)).toBe('https://updates.example.com/p4delta/latest.json')
   })
 
@@ -129,18 +130,36 @@ describe('URL construction', () => {
 })
 
 describe('latestVersionFrom', () => {
-  it("reads GitHub's tag and a mirror's field through the same parser", () => {
-    expect(latestVersionFrom(GITHUB, { tag_name: 'v0.1.10' })).toEqual([0, 1, 10])
+  const TAG = 'https://github.com/lovebirdsx/p4delta/releases/tag/v0.1.10'
+
+  it("reads GitHub's redirect and a mirror's field through the same parser", () => {
+    expect(latestVersionFrom(GITHUB, TAG)).toEqual([0, 1, 10])
     expect(latestVersionFrom(MIRROR, { version: '0.1.10' })).toEqual([0, 1, 10])
   })
 
-  it('refuses a document that does not name a version', () => {
-    expect(latestVersionFrom(GITHUB, { tag_name: 'nightly' })).toBeUndefined()
-    expect(latestVersionFrom(GITHUB, {})).toBeUndefined()
+  it('refuses an answer that does not name a version', () => {
+    expect(
+      latestVersionFrom(GITHUB, 'https://github.com/lovebirdsx/p4delta/releases/tag/nightly'),
+    ).toBeUndefined()
     expect(latestVersionFrom(GITHUB, null)).toBeUndefined()
-    expect(latestVersionFrom(GITHUB, 'v0.1.10')).toBeUndefined()
+    expect(latestVersionFrom(GITHUB, undefined)).toBeUndefined()
+    expect(latestVersionFrom(GITHUB, '')).toBeUndefined()
     expect(latestVersionFrom(MIRROR, { version: '' })).toBeUndefined()
     expect(latestVersionFrom(MIRROR, { tag_name: 'v0.1.10' })).toBeUndefined()
+  })
+
+  // A 302 that lands on a login page, another repo, or anything else means we
+  // are not looking at the release we think we are — a version parsed out of it
+  // would be a guess, and the caller installs a binary off it.
+  it("refuses a redirect that is not this project's tag page", () => {
+    expect(
+      latestVersionFrom(GITHUB, 'https://github.com/login?return_to=%2Flovebirdsx'),
+    ).toBeUndefined()
+    expect(
+      latestVersionFrom(GITHUB, 'https://github.com/someone-else/p4delta/releases/tag/v0.1.10'),
+    ).toBeUndefined()
+    expect(latestVersionFrom(GITHUB, `${TAG}/../../latest`)).toBeUndefined()
+    expect(latestVersionFrom(GITHUB, { tag_name: 'v0.1.10' })).toBeUndefined()
   })
 })
 
