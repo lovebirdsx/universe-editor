@@ -30,6 +30,7 @@ import {
   test,
   expect,
   toPosix,
+  waitForP4deltaScan,
   writeScopeFile,
 } from '../fixtures/perforceApp.js'
 import type { SeedFile, ScopeResolution } from '../fixtures/perforceApp.js'
@@ -265,6 +266,8 @@ test.describe('@p1 perforce out-of-scope targets', () => {
         message: 'perforce extension should register a source control for the workspace',
       })
       .toBeGreaterThan(0)
+
+    await waitForP4deltaScan(confirmDeltaLog)
 
     await test.step('run as chosen: the target is confirmed explicitly and really gets', async () => {
       void page

@@ -40,6 +40,7 @@ import {
   test,
   expect,
   toPosix,
+  waitForP4deltaScan,
   writeScopeFile,
 } from '../fixtures/perforceApp.js'
 import type { SeedFile, ScopeResolution } from '../fixtures/perforceApp.js'
@@ -314,6 +315,8 @@ test.describe('@p1 perforce noise vs a directory clean', () => {
       })
       .toBeGreaterThan(0)
 
+    await waitForP4deltaScan(cleanDeltaLog)
+
     // Clean `sub` the way the Explorer context menu does (directory as the
     // primary arg and as the materialized selection); it blocks on its own
     // confirm dialog, so fire-and-forget then answer.
@@ -402,6 +405,8 @@ test.describe('@p1 perforce noise vs a directly named target', () => {
         message: 'perforce extension should register a source control for the workspace',
       })
       .toBeGreaterThan(0)
+
+    await waitForP4deltaScan(namedDeltaLog)
 
     const collectNamed = (relPath: string): void => {
       void page

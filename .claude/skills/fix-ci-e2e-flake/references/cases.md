@@ -650,6 +650,12 @@ g) 埋点要能回答「**哪一侧迟了**」：渲染器真相（`getConfigura
 教训：a) **「时间窗口」不能当恢复的截止时间**——窗口只应约束「启动几何沉降需要的额外校正」，恢复本身需要一个「未成功就保持」的状态（对照 `WorkbenchLayout.tsx` 的 `isInitializedRef` 用「首次 onChange」而非计时器，所以没有此缺口；同族组件对照是发现缺口的最快路径）。b) **两处锚点不同的超时相乘必出窗口**：500ms 从 app 起算、600ms 从容器起算，对「晚挂载的容器」实际预算可能为 0。c) `edge-triggered effect` + 内部 `return` 的组合是「永久丢失」的经典形状：effect 不重跑、key 又被提前消费，治法是「未应用不消费」。d) 差值恰为产品常量（步长 / 最小尺寸）时先怀疑「某一次操作整体没生效」，而不是「差了一点」——这条与案例 93（同 spec、同 50px、但形态是交互阶段被启动恢复撤销）区分开：93 的按键后立即错，本条的按键全对、只错在 reload 之后。e) 「restore 自己激活的容器」（SCM / 生成容器）与「启动默认容器」挂载时刻不同，测试与排障都要分开看。
 锚：`apps/editor/src/renderer/workbench/sidebar/ViewPaneContainer.tsx`（`correctToStoredSizes` 返回值 / `appliedStoredSizesKeyRef` / onChange 门控 / `RECONCILE_GRACE_MS`）；`apps/editor/src/renderer/services/views/cases-keyboard-resize.md`（坑条目）；`apps/editor/e2e/specs/smoke.viewSizes.spec.ts`（持久化诊断断言）；`apps/editor/src/renderer/workbench/sidebar/__tests__/ViewPaneContainer.test.tsx`（两条新回归）；对照 `apps/editor/src/renderer/workbench/layout/WorkbenchLayout.tsx`。
 
+**案例 106 — δ sync 日志恒 0、原生 sync 已落盘：SCM 注册不等于首轮扫描分派**
+信号：`perforceSyncP4delta` 的 `--sync -a` 次数恒 0，磁盘却已到目标版本；同轮越界同步、拒绝同步也偶发失败。δ 日志只有目录 scan / 逐文件 narrow query，原生日志出现 `sync`。CI run 38250729891 首次与 retry 均可失败，本地修复前两文件各重复 5 次共 25 次全过。
+根因：`PerforceClient._reconcileScanEngine` 初始为 native，首轮目录扫描分派到 δ 时才翻转；SCM provider 注册、扩展 activate 完成均早于这个后台任务。b6894070 删除命令注册轮询后，原先靠等待耗时掩盖的竞态显现。首轮前按原生执行是产品契约，不是应改为「配了 δ 就直接调用」的缺陷。
+修：fixture `waitForP4deltaScan` 只读轮询 δ argv 中目录目标且无 `-a/--clean/--sync/--force` 的扫描行，再执行要求 δ 路由的操作；这是扫描**分派**的证据，不是完成或成功的承诺，仅用于健康 δ 场景。同步、越界目标、图谱同步点、目录 clean/直接 collect 共用；已有扫描结果门控的不叠加，native/fallback/启动时序场景不加。保留真实落盘、拒绝保护、δ 调用形态和无原生 sync 的全部断言。
+锚：`extensions/perforce/e2e/fixtures/perforceApp.ts`（`waitForP4deltaScan`）；`perforceSyncP4delta.spec.ts`、`perforceScopeLayering.spec.ts`、`perforceGraphScopeSyncPoint.spec.ts`、`perforceReconcileNoise.spec.ts`；`extensions/perforce/src/client.ts`（`_p4deltaEngine` / `runReconcileScan`）。
+
 ---
 - `@parcel/watcher` Windows 多 worker 竞态的长期根治（升级 / 换 watcher / 进一步隔离），替代长期 `--workers=1`（案例 12/16/26/44 的 `@serial` 都是它的 workaround）。
 - DnD 用例稳定化（显式等待 drop 完成态），稳定后摘 `@flaky`（案例 46）。

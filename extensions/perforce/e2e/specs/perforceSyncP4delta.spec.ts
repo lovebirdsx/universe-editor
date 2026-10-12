@@ -33,6 +33,7 @@ import {
   test,
   expect,
   toPosix,
+  waitForP4deltaScan,
   writeScopeFile,
 } from '../fixtures/perforceApp.js'
 import type { P4SubmittedSeed, SeedFile } from '../fixtures/perforceApp.js'
@@ -159,11 +160,12 @@ const syncTargets = (scopeLog: string): string[] =>
     .flatMap((resolution) => resolution.targets)
     .map((entry) => toPosix(entry))
 
-/** Open the seeded workspace, wait for the provider + command registration. */
+/** 打开种子工作区，等待 provider 注册与 δ 初始扫描分派。 */
 async function openSyncWorkspace(
   page: Page,
   workbench: WorkbenchPO,
   openDir: string,
+  deltaLog: string,
 ): Promise<void> {
   await evaluateWhenRestored(page)
   await workbench.openWorkspace(openDir)
@@ -173,6 +175,7 @@ async function openSyncWorkspace(
       message: 'perforce extension should register a source control for the workspace',
     })
     .toBeGreaterThan(0)
+  await waitForP4deltaScan(deltaLog)
 }
 
 test.describe('@p1 perforce p4delta get', () => {
@@ -194,7 +197,7 @@ test.describe('@p1 perforce p4delta get', () => {
       perforce,
     }) => {
       test.setTimeout(120_000)
-      await openSyncWorkspace(page, workbench, perforce.openDir)
+      await openSyncWorkspace(page, workbench, perforce.openDir, logs.delta)
 
       await page.evaluate(
         (p) => void window.__E2E__!.runCommand('perforce.syncLatest', { resourceUri: p }),
@@ -266,7 +269,7 @@ test.describe('@p1 perforce p4delta get', () => {
       perforce,
     }) => {
       test.setTimeout(120_000)
-      await openSyncWorkspace(page, workbench, perforce.openDir)
+      await openSyncWorkspace(page, workbench, perforce.openDir, logs.delta)
 
       await page.evaluate(
         (p) => void window.__E2E__!.runCommand('perforce.syncLatest', { resourceUri: p }),
@@ -317,7 +320,7 @@ test.describe('@p1 perforce p4delta get', () => {
       // 让 δ 在这里有价值的范围：一个 include 内嵌一个排除。须在工作区打开前写好——
       // 扩展在激活时读它，δ 也会在它那侧读同一份文件。
       writeScopeFile(perforce.clientRoot, ['Content'], ['Content/gen'])
-      await openSyncWorkspace(page, workbench, perforce.openDir)
+      await openSyncWorkspace(page, workbench, perforce.openDir, logs.delta)
 
       // 确认框按按钮匹配：picker 也带 `role=dialog`，而它弹出来时 picker 的行已经没了。
       const forceDialog = page.getByRole('dialog').filter({

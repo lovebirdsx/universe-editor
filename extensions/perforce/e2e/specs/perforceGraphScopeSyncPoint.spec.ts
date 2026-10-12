@@ -27,6 +27,7 @@ import {
   test,
   expect,
   toPosix,
+  waitForP4deltaScan,
   waitForPerforceActivation,
   writeScopeFile,
 } from '../fixtures/perforceApp.js'
@@ -168,6 +169,8 @@ test.describe('@p1 perforce graph sync point, delta engine with a scope file', (
     const line = editor.getByTestId('perforceGraph-syncPoint')
     await expect(line).toHaveText(UNKNOWN)
 
+    await waitForP4deltaScan(logs.delta)
+
     // 工作区级的拉取（SCM 面板 / 状态栏 / 命令面板那条「无显式 scope」的 get）。
     await page.evaluate(() => void window.__E2E__!.runCommand('perforce.syncLatest'))
 
@@ -210,6 +213,8 @@ test.describe('@p1 perforce graph sync point, a graph row get with a scope file'
     const editor = page.locator('[data-testid="perforceGraph-editor"]')
     const line = editor.getByTestId('perforceGraph-syncPoint')
     await expect(line).toHaveText(UNKNOWN)
+
+    await waitForP4deltaScan(logs.delta)
 
     // 4521 是唯一一行（也是 head），所以这次 get 不带时间旅行的确认框。
     await editor.locator('[data-id="4521"]').click({ button: 'right' })
@@ -277,6 +282,8 @@ test.describe('@p1 perforce graph sync point, a force get with a scope file', ()
     const editor = page.locator('[data-testid="perforceGraph-editor"]')
     const line = editor.getByTestId('perforceGraph-syncPoint')
     await expect(line).toHaveText(UNKNOWN)
+
+    await waitForP4deltaScan(logs.delta)
 
     // 命令面板那条无参强制 get：选「按 changelist 强制获取」→ 填 4521 → 确认框。
     // 图谱编辑器没有「活动文件」（`getActiveEditorFile` 只认文件编辑器），所以这次

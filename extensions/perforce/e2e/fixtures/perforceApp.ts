@@ -14,7 +14,13 @@
  *  relaunches the extension host — main-process state a window reload won't reset.
  *--------------------------------------------------------------------------------------------*/
 
-import { test as base, type ElectronApplication, type Page, type TestInfo } from '@playwright/test'
+import {
+  test as base,
+  expect,
+  type ElectronApplication,
+  type Page,
+  type TestInfo,
+} from '@playwright/test'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
@@ -228,6 +234,19 @@ export function readArgvLog(file: string): string[] {
   } catch {
     return []
   }
+}
+
+// 健康 δ 场景：SCM 注册不代表引擎已启用；目录扫描分派后才切到 δ，不必等扫描完成。
+export async function waitForP4deltaScan(deltaLog: string): Promise<void> {
+  await expect
+    .poll(
+      () =>
+        readArgvLog(deltaLog).some(
+          (line) => line.includes('/...') && !/(^| )(-a|--clean|--sync|--force)( |$)/.test(line),
+        ),
+      { timeout: 60_000, message: '等待首轮 δ 目录扫描分派，启用后续操作的 δ 路由' },
+    )
+    .toBe(true)
 }
 
 /**
