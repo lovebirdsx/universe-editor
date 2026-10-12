@@ -2766,6 +2766,180 @@ describe('PerforceClient.runReconcileScan', () => {
     expect(specs.filter((s) => WILDCARD_SPEC.test(s))).toHaveLength(fired)
   })
 
+  it('serializes slow external flushes and coalesces events arriving while one is in flight', async () => {
+    const wt = makeFakeWatcher()
+    let hold = false
+    const client = await makeClient(
+      { reconcile: () => [], reconcileHold: () => hold },
+      fakeDisk(),
+      fakeClock(),
+      { createFileSystemWatcher: () => wt.watcher, watchRoot: ROOT, externalChangeDebounceMs: 0 },
+    )
+    client.scheduleReconcileScan()
+    await client.whenReconcileScanSettled()
+    hold = true
+    wt.fire('change', `${LOCAL}/a.txt`)
+    await vi.waitFor(() => expect(narrowScans()).toHaveLength(1))
+
+    for (const name of ['b', 'c', 'b']) {
+      wt.fire('change', `${LOCAL}/${name}.txt`)
+      await nextMacrotask()
+    }
+    expect(narrowScans()).toHaveLength(1)
+
+    hold = false
+    releaseHeld()
+    await client.whenExternalFlushSettled()
+    await nextMacrotask()
+    await client.whenExternalFlushSettled()
+    expect(narrowScans()).toHaveLength(2)
+    expect(reconcileSpecs(narrowScans()[1]!)).toEqual([
+      `${LOCAL}/b.txt`,
+      `${LOCAL}/b.txt/...`,
+      `${LOCAL}/c.txt`,
+      `${LOCAL}/c.txt/...`,
+    ])
+  })
+
+  it('applies the path budget across flushes until the external event stream goes quiet', async () => {
+    const disk = fakeDisk()
+    const wt = makeFakeWatcher()
+    const clock = fakeClock()
+    const client = await makeClient({ reconcile: () => [] }, disk, clock, {
+      createFileSystemWatcher: () => wt.watcher,
+      watchRoot: ROOT,
+      externalChangeDebounceMs: 0,
+    })
+    client.scheduleReconcileScan()
+    await client.whenReconcileScanSettled()
+
+    for (let batch = 0; batch < 4; batch++) {
+      for (let i = 0; i < 600; i++) wt.fire('change', `${LOCAL}/f${batch * 600 + i}.txt`)
+      await nextMacrotask()
+      await client.whenExternalFlushSettled()
+      clock.advance(150)
+    }
+    const queried = narrowScans().flatMap(reconcileSpecs)
+    expect(queried).toContain(`${LOCAL}/f1799.txt`)
+    expect(queried).not.toContain(`${LOCAL}/f1800.txt`)
+    expect([...disk.store.keys()].some((k) => k.endsWith(LOCAL))).toBe(false)
+    const before = narrowScans().length
+    wt.fire('change', `${LOCAL}/still-busy.txt`)
+    await nextMacrotask()
+    await client.whenExternalFlushSettled()
+    expect(narrowScans()).toHaveLength(before)
+
+    clock.advance(5001)
+    wt.fire('change', `${LOCAL}/after-quiet.txt`)
+    await nextMacrotask()
+    await client.whenExternalFlushSettled()
+    expect(narrowScans()).toHaveLength(before + 1)
+    expect(fullScanScans()).toHaveLength(1)
+  })
+
+  it('renews the rate budget for a long-lived low-rate event stream without five seconds of silence', async () => {
+    const wt = makeFakeWatcher()
+    const clock = fakeClock()
+    const client = await makeClient({ reconcile: () => [] }, fakeDisk(), clock, {
+      createFileSystemWatcher: () => wt.watcher,
+      watchRoot: ROOT,
+      externalChangeDebounceMs: 0,
+    })
+    client.scheduleReconcileScan()
+    await client.whenReconcileScanSettled()
+    for (let batch = 0; batch < 5; batch++) {
+      for (let i = 0; i < 600; i++) wt.fire('change', `${LOCAL}/f${batch * 600 + i}.txt`)
+      await nextMacrotask()
+      await client.whenExternalFlushSettled()
+      clock.advance(4000)
+    }
+    expect(narrowScans().flatMap(reconcileSpecs)).toContain(`${LOCAL}/f2999.txt`)
+  })
+
+  it('requeries a path changed during its slow query and keeps the latest checkpoint answer', async () => {
+    const wt = makeFakeWatcher()
+    const disk = fakeDisk()
+    let hold = false
+    const client = await makeClient(
+      {
+        reconcileHold: () => hold,
+        reconcile: (spec) => (spec.endsWith('a.txt') ? [{ rel: 'a.txt' }] : []),
+      },
+      disk,
+      fakeClock(),
+      { createFileSystemWatcher: () => wt.watcher, watchRoot: ROOT, externalChangeDebounceMs: 0 },
+    )
+    client.scheduleReconcileScan()
+    await client.whenReconcileScanSettled()
+    hold = true
+    wt.fire('change', `${LOCAL}/a.txt`)
+    await vi.waitFor(() => expect(narrowScans()).toHaveLength(1))
+    wt.fire('change', `${LOCAL}/a.txt`)
+    await nextMacrotask()
+    hold = false
+    releaseHeld()
+    await client.whenExternalFlushSettled()
+    await nextMacrotask()
+    await client.whenExternalFlushSettled()
+
+    expect(narrowScans()).toHaveLength(2)
+    expect(driftFiles(client)).toEqual([`${LOCAL}/a.txt`])
+    const entry = [...disk.store.entries()].find(([k]) => k.endsWith(LOCAL))
+    expect(JSON.parse(entry![1]).files.map((f: { clientFile: string }) => f.clientFile)).toEqual([
+      `${LOCAL}/a.txt`,
+    ])
+  })
+
+  it.each(['offline', 'dispose'] as const)(
+    'does not restart a queued flush after %s',
+    async (stop) => {
+      const wt = makeFakeWatcher()
+      let hold = false
+      const client = await makeClient(
+        { reconcile: () => [], reconcileHold: () => hold },
+        fakeDisk(),
+        fakeClock(),
+        { createFileSystemWatcher: () => wt.watcher, watchRoot: ROOT, externalChangeDebounceMs: 0 },
+      )
+      client.scheduleReconcileScan()
+      await client.whenReconcileScanSettled()
+      hold = true
+      wt.fire('change', `${LOCAL}/a.txt`)
+      await vi.waitFor(() => expect(narrowScans()).toHaveLength(1))
+      wt.fire('change', `${LOCAL}/b.txt`)
+      if (stop === 'dispose') client.dispose()
+      else (client as unknown as { _goOffline(kind: string): void })._goOffline('offline')
+      hold = false
+      releaseHeld()
+      await client.whenExternalFlushSettled()
+      await nextMacrotask()
+      expect(narrowScans()).toHaveLength(1)
+    },
+  )
+
+  it.each([false, true])(
+    'invalidates beyond the bounded queue only for new overflow paths (%s)',
+    async (newPath) => {
+      const wt = makeFakeWatcher()
+      const disk = fakeDisk()
+      const client = await makeClient({ reconcile: () => [] }, disk, fakeClock(), {
+        createFileSystemWatcher: () => wt.watcher,
+        watchRoot: ROOT,
+        externalChangeDebounceMs: 0,
+      })
+      client.setReconcileScope([`${LOCAL}/A`, `${LOCAL}/B`])
+      client.scheduleReconcileScan()
+      await client.whenReconcileScanSettled()
+      expect(scannedDirs(client)).toEqual([`${LOCAL}/A`, `${LOCAL}/B`])
+      for (let i = 0; i <= 2000; i++) wt.fire('change', `${LOCAL}/A/f${i}.txt`)
+      wt.fire('change', newPath ? `${LOCAL}/B/overflow.txt` : `${LOCAL}/A/f0.txt`)
+      await nextMacrotask()
+      await client.whenExternalFlushSettled()
+      expect(narrowScans()).toHaveLength(0)
+      expect([...disk.store.keys()].some((k) => k.endsWith(`${LOCAL}/B`))).toBe(!newPath)
+    },
+  )
+
   it('degrades to invalidate-only past the narrow-query budget', async () => {
     const disk = fakeDisk()
     const wt = makeFakeWatcher()

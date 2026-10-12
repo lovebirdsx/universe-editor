@@ -615,31 +615,12 @@ const DRIFT_APPLY_MIN_INTERVAL_MS = 300
 const DRIFT_APPLY_MAX_INTERVAL_MS = 5000
 const DRIFT_APPLY_MS_PER_ROW = 0.2
 
-/**
- * Debounce window for external working-tree file events feeding the background
- * reconcile scan. A bulk external change (a nested `git checkout`, another
- * editor's save-all, an unzip) floods thousands of events in a few ms and then
- * goes quiet, so 150ms of silence folds the whole burst into ONE narrow query —
- * matching git's watcher debounce and this file's other 150ms conventions. The
- * value is the *coalescing* window: one query per burst, never per event.
- */
+/** 固定合并窗口；在飞时只收集事件，下一轮必须等上一轮结束。 */
 const EXTERNAL_CHANGE_DEBOUNCE_MS = 150
+const EXTERNAL_CHANGE_QUIET_MS = 5000
+const EXTERNAL_CHANGE_BUDGET_WINDOW_MS = 10_000
 
-/**
- * How many external paths one flush will still answer with a narrow
- * `reconcile -n` query before it degrades to invalidate-only.
- *
- * The narrow query costs one p4 spawn per ~8000 argv chars ({@link chunkByLength}),
- * so a few hundred paths is a handful of spawns — far cheaper than the recursive
- * `<dir>/...` walk it replaced, which on a 450k-file workspace is minutes.
- * Switching a big branch is the pathological case: tens of thousands of paths
- * would become hundreds of spawns, so past this ceiling the flush only
- * invalidates the covering checkpoints (and says so in the log — never a silent
- * truncation) and leaves the folder tints to the next session's scan. That is
- * safe by the channel's existing contract: the folder aggregate is a monotonic
- * LOWER BOUND, and the file-level RC badge is not on this path at all — the
- * renderer's own file watcher re-asks for it (`ScmWorkingTreeHintService`).
- */
+/** 连续事件流的累计路径预算，静默后恢复；超限只失效 checkpoint，不重扫工作区。 */
 const MAX_EXTERNAL_NARROW_PATHS = 2000
 
 /**
@@ -1278,6 +1259,11 @@ export class PerforceClient {
   /** Local paths the watcher reported since the last debounce flush — drained by
    *  {@link _flushExternalChanges}. */
   private readonly _externalChangePending = new Set<string>()
+  private _externalChangeOverflow = false
+  private _externalReinvalidateAll = false
+  private _externalStreamPaths = 0
+  private _externalBudgetStartedAt = Number.NEGATIVE_INFINITY
+  private _externalLastEventAt = Number.NEGATIVE_INFINITY
   /** The pending debounce timer for {@link _externalChangePending}. */
   private _externalChangeTimer: ReturnType<typeof setTimeout> | undefined
   /** Set while a flush has been deferred once past a mutation's suppression
@@ -3575,6 +3561,11 @@ export class PerforceClient {
     // re-walks everything those paths would have invalidated. Keeping the latch
     // would just spend one doomed round on the way back.
     this._externalChangePending.clear()
+    this._externalChangeOverflow = false
+    this._externalReinvalidateAll = false
+    this._externalStreamPaths = 0
+    this._externalBudgetStartedAt = Number.NEGATIVE_INFINITY
+    this._externalLastEventAt = Number.NEGATIVE_INFINITY
     this._externalReinvalidatePaths.clear()
     this._externalPatchedPaths.clear()
     this._externalFlushDeferred = false
@@ -6377,6 +6368,10 @@ export class PerforceClient {
         for (const path of stale) {
           if (!patched.has(path)) this._invalidateReconcileScanFor(path)
         }
+        if (this._externalReinvalidateAll) {
+          this._cache.invalidateNamespace(P4CacheNs.reconcileScan)
+          this._externalReinvalidateAll = false
+        }
         // A scope change or an engine reconfiguration during the round disarmed
         // it ({@link _restartReconcileScan}, from
         // {@link _resetReconcileScanForScopeChange} / {@link setP4delta}); that
@@ -6466,16 +6461,35 @@ export class PerforceClient {
     }
     if (this._now() < this._suppressExternalUntil) return
     if (!this._mayAffectScope(path)) return
-    this._externalChangePending.add(path)
+    const now = this._now()
+    if (
+      now - this._externalLastEventAt >= EXTERNAL_CHANGE_QUIET_MS ||
+      (this._externalStreamPaths <= MAX_EXTERNAL_NARROW_PATHS &&
+        now - this._externalBudgetStartedAt >= EXTERNAL_CHANGE_BUDGET_WINDOW_MS)
+    ) {
+      this._externalStreamPaths = 0
+      this._externalBudgetStartedAt = now
+    }
+    this._externalLastEventAt = now
+    if (this._externalChangePending.has(path)) return
+    if (this._externalChangePending.size <= MAX_EXTERNAL_NARROW_PATHS) {
+      this._externalChangePending.add(path)
+    } else {
+      this._externalChangeOverflow = true
+    }
     this._scheduleExternalInvalidation()
   }
 
-  /** (Re)arm the single debounce timer for {@link _externalChangePending}. One
-   *  timer per burst: a bulk external change floods events for a few ms, and the
-   *  guard below means the whole burst coalesces into one flush — the flood
-   *  control that keeps it to one narrow query per batch. */
+  /** 在飞查询结束后才消费下一批，避免把持续事件流灌进并发门的等待队列。 */
   private _scheduleExternalInvalidation(): void {
-    if (this._externalChangeTimer !== undefined) return
+    if (
+      this._disposed ||
+      this._connection !== 'connected' ||
+      this._externalSuspendCount > 0 ||
+      this._externalFlushInFlight !== undefined ||
+      this._externalChangeTimer !== undefined
+    )
+      return
     this._externalChangeTimer = setTimeout(() => {
       this._externalChangeTimer = undefined
       // The catch is mandatory, not defensive: this promise is floating (only
@@ -6487,6 +6501,7 @@ export class PerforceClient {
         })
         .finally(() => {
           if (this._externalFlushInFlight === flush) this._externalFlushInFlight = undefined
+          if (this._externalChangePending.size > 0) this._scheduleExternalInvalidation()
         })
       this._externalFlushInFlight = flush
     }, this._externalChangeDebounceMs)
@@ -6560,15 +6575,26 @@ export class PerforceClient {
     this._externalChangePending.clear()
     if (paths.length === 0) return
 
-    // Above the budget the query itself is the expensive option, and without it
-    // there is no per-path state to merge — so this is the one case where
-    // dropping the checkpoints is right. The next session's re-walk is genuinely
-    // necessary: a branch switch really did change the whole tree's drift set.
-    if (paths.length > MAX_EXTERNAL_NARROW_PATHS) {
-      this._invalidateAndLatch(paths)
-      this._log?.(
-        `[perforce] ${paths.length} external changes exceed the ${MAX_EXTERNAL_NARROW_PATHS}-path narrow-query budget; checkpoints invalidated, folder tints deferred to the next scan`,
-      )
+    const overflow = this._externalChangeOverflow
+    this._externalChangeOverflow = false
+    const wasOverBudget = this._externalStreamPaths > MAX_EXTERNAL_NARROW_PATHS
+    this._externalStreamPaths = Math.min(
+      MAX_EXTERNAL_NARROW_PATHS + 1,
+      this._externalStreamPaths + paths.length,
+    )
+    if (this._externalStreamPaths > MAX_EXTERNAL_NARROW_PATHS) {
+      if (overflow) {
+        // 队列已经丢弃具体路径，不能只失效保留下来的前缀，更不能宣称剩余路径干净。
+        this._cache.invalidateNamespace(P4CacheNs.reconcileScan)
+        if (this._backgroundReconcileScan !== undefined) this._externalReinvalidateAll = true
+      } else {
+        this._invalidateAndLatch(paths)
+      }
+      if (!wasOverBudget) {
+        this._log?.(
+          `[perforce] external changes exceed the ${MAX_EXTERNAL_NARROW_PATHS}-path stream budget; checkpoints invalidated, narrow queries paused until ${EXTERNAL_CHANGE_QUIET_MS}ms quiet`,
+        )
+      }
       return
     }
 
@@ -6647,7 +6673,10 @@ export class PerforceClient {
 
   /** Drop the checkpoints covering `paths`, and latch for a settle-time replay. */
   private _invalidateAndLatch(paths: readonly string[]): void {
-    for (const path of paths) this._invalidateReconcileScanFor(path)
+    for (const path of paths) {
+      this._externalPatchedPaths.delete(path)
+      this._invalidateReconcileScanFor(path)
+    }
     this._latchForInFlightScan(paths)
   }
 
@@ -9297,6 +9326,11 @@ export class PerforceClient {
       this._externalChangeTimer = undefined
     }
     this._externalChangePending.clear()
+    this._externalChangeOverflow = false
+    this._externalReinvalidateAll = false
+    this._externalStreamPaths = 0
+    this._externalBudgetStartedAt = Number.NEGATIVE_INFINITY
+    this._externalLastEventAt = Number.NEGATIVE_INFINITY
     this._externalReinvalidatePaths.clear()
     this._externalPatchedPaths.clear()
     for (const sub of this._watcherSubscriptions.splice(0)) sub.dispose()
