@@ -14,7 +14,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { readFileSync } from 'node:fs'
-import { test, expect, waitForPerforceCommands, readHaveRev } from '../fixtures/perforceApp.js'
+import { test, expect, readHaveRev, waitForPerforceActivation } from '../fixtures/perforceApp.js'
 import { evaluateWhenRestored } from '@universe-editor/e2e-harness'
 import type { Locator } from '@playwright/test'
 import type { P4SubmittedSeed, SeedFile } from '../fixtures/perforceApp.js'
@@ -92,9 +92,7 @@ test.describe('@p1 perforce graph merged history', () => {
           message: 'perforce extension should register a source control for the workspace',
         })
         .toBeGreaterThan(0)
-      // The SCM-count gate flips before the contributed command handlers register,
-      // and the merged getChanges would resolve to no handler with no retry.
-      await waitForPerforceCommands(workbench)
+      await waitForPerforceActivation(workbench)
       // `workbench.view.explorer` is a toggle and would hide the Explorer when the
       // side bar already has focus — see WorkbenchPO.showExplorer.
       await workbench.showExplorer()

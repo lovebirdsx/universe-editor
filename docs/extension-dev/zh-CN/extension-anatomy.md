@@ -58,17 +58,17 @@ my-extension/
 |---|---|
 | `*` | 扩展系统启动即激活（eager，慎用，拖慢启动） |
 | `onStartupFinished` | 工作台完成初次恢复后 |
-| `onCommand:<commandId>` | 你贡献的命令首次被调用 |
+| `onCommand:<commandId>` | 你贡献的命令首次被调用（由 `contributes.commands` **自动派生**，无需声明） |
 | `onLanguage:<languageId>` | 该语言的文档首次打开 |
 | `onView:<viewId>` | 你贡献的视图首次显示 |
 | `onCustomEditor:<viewType>` | 该 viewType 的自定义编辑器首次打开 |
 
-两条硬规则：
+两条要点：
 
 - **未知事件直接拒载**。宿主扫描时用 `isValidActivationEvent` 校验，拼错（比如 `onComand:`）或冒号后为空（`onCommand:`）都会让整个 manifest 校验失败，扩展被跳过——而不是静默不激活。这是特意设计的护栏。
-- **宿主不会从 `contributes` 自动推导激活事件**——贡献了命令却没声明对应 `onCommand:`，扩展永远不会被唤醒。反向的错配（声明了 `onCommand:` 却在 `contributes.commands` 里找不到同名命令）会被 `uex package` 打 warning。
+- **命令的 `onCommand:` 由宿主派生，不用自己写**：宿主从 `contributes.commands` 隐式派生 `onCommand:<id>`（对齐 VSCode）。只有**运行期注册、未进 `contributes.commands`** 的命令才需要显式声明；反过来，声明了 `onCommand:` 而在 `contributes.commands` 里找不到同名命令时，`uex package` 会打 warning（这正是运行期命令的写法，warning 是提醒你别写错 id）。
 
-写代码时优先用构造器而不是手写字符串：`@universe-editor/extension-manifest` 导出 `ActivationEvents.onCommand(id)` / `onLanguage(lang)` / `onView(viewId)` / `onCustomEditor(viewType)` 及常量 `startup` / `startupFinished`，避免手滑。
+写代码时优先用构造器而不是手写字符串：`@universe-editor/extension-manifest` 导出 `ActivationEvents.onCommand(id)` / `onLanguage(lang)` / `onView(viewId)` / `onCustomEditor(viewType)` 及常量 `startup` / `startupFinished`，避免手滑。命令类扩展通常只需 `contributes.commands`；构造器留给**非命令类**事件（`onLanguage` / `onView` / `onCustomEditor`）与未贡献命令的 `onCommand`。
 
 ## capabilities.untrustedWorkspaces
 
@@ -167,7 +167,7 @@ export function activate(context: ExtensionContext) {
   "type": "module",                    // 入口产物为 ESM
   "main": "./dist/extension.js",       // 入口模块（相对扩展根）；无 main = 纯声明式扩展
 
-  // ---- 懒激活：命令首次被调用时唤醒（宿主不做自动推导，必须与 contributes 对应）----
+  // ---- 懒激活：命令首次被调用时唤醒（onCommand 由 contributes.commands 派生，这里显式写出便于对旧宿主）----
   "activationEvents": ["onCommand:my-extension.helloWorld"],
 
   // ---- 静态贡献点（详见 ./contribution-points.md）----

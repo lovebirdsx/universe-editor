@@ -40,7 +40,7 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 - sharedApp 多 ghost tab / 跨 spec 状态泄漏=reload 不拆 main 态 → 案例 21/40
 - 关闭编辑器后紧接 model 操作、修改静默丢失=dispose 竞态 → 案例 22
 - 某提交后多 spec 同红形态各异=`git show` 看时序变更波及面 → 案例 23；补了 `.catch` 仍挂=永久 pending → 案例 24
-- `Contributed command "<ext.cmd>" does not exist.`=激活竞态（贡献命令的 handler 尚未注册，宿主 reject）→ 案例 35；同一句也被「该扩展在本窗口整体不适用」触发，先看 spec 是否在非本家工作区里裸 fire 扩展命令
+- `Contributed command "<ext.cmd>" does not exist.`=激活竞态（贡献命令的 handler 尚未注册，宿主 reject；2026-10 已根治，残留 host-only 命令见案例 35）→ 案例 35；同一句也被「该扩展在本窗口整体不适用」触发，先看 spec 是否在非本家工作区里裸 fire 扩展命令
 - 拖拽 spec received 恒 0（稳定卡值）=drop 在 Monaco 就位前 fire → 案例 36
 - workspace 切换后紧接的命令 received 恒初值=host 异步 re-pin 窗口 → 案例 37；boot 后 `openWorkspace` 的 LSP spec provider poll 恒 0 / teardown 报 Disposable 泄漏（栈在 `_createProvider`）=双重启竞态，用 `workspaceSeeder` launch pin workspace → 案例 54
 - 等满 timeout 恒 not found 且该时长==产品放弃点=根本没就位（产品 bug）→ 案例 38

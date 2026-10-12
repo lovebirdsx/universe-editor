@@ -118,7 +118,7 @@ export function deactivate(): void {} // 通常空实现——subscriptions 已�
 - **jsonValidation** / **customEditors**：见各自专门 skill
 - 未知贡献点 / 未知字段被 zod `.passthrough()` 容忍（前向兼容）；但 `activationEvents`、`engines`、命令/菜单结构是**强校验**，不合法整插件被跳过
 
-**activationEvents** 合法值（`extension-manifest/src/activation.ts`）：`"*"`（eager，慎用）、`"onStartupFinished"`、`"onCommand:<id>"`、`"onLanguage:<id>"`、`"onView:<id>"`、`"onCustomEditor:<viewType>"`。懒激活优先（如命令型插件用 `onCommand:`），全局常驻才用 `onStartupFinished`。
+**activationEvents** 合法值（`extension-manifest/src/activation.ts`）：`"*"`（eager，慎用）、`"onStartupFinished"`、`"onCommand:<id>"`、`"onLanguage:<id>"`、`"onView:<id>"`、`"onCustomEditor:<viewType>"`。懒激活优先（如命令型插件用 `onCommand:`），全局常驻才用 `onStartupFinished`。**`onCommand:<id>` 可以省**：宿主从 `contributes.commands` 自动派生它（对齐 VSCode；只有运行期注册、未进 `contributes.commands` 的命令必须显式声明）。
 
 ### ⚠️ handler 在 renderer Action2 的命令：只写 `menus`，绝不写 `commands`
 
@@ -195,7 +195,7 @@ pnpm check       # lint + typecheck + test，仅看错误输出（被测错误�
 - `packages/extension-api/src/index.ts` —— 门面 namespace + `version` 常量（= host API 版本）+ `ExtensionContext`/`Memento` 类型
 - `packages/extension-api/COMPATIBILITY.md` —— API 版本承诺 + 破坏性变更流程（bump version 必同步内置插件 engines）
 - `packages/extension-manifest/src/manifest-schema.ts` —— contributes 全量 zod schema
-- `packages/extension-manifest/src/activation.ts` —— 合法 activationEvents + 构造器
+- `packages/extension-manifest/src/activation.ts` —— 合法 activationEvents + 构造器 + 命令派生判据（`matchesManifestActivationEvent`）
 - `packages/extension-manifest/src/semver.ts` —— 自研 `satisfies`（engines 检查用；不支持 `||`/hyphen）
 - `packages/extension-host/src/extensionScanner.ts` —— scanOne 校验顺序 + engines satisfies 检查（`:88`）
 - `packages/extension-host/src/bootstrap.ts` —— HOST_API_VERSION 来源 + scanExtensions 调用

@@ -602,6 +602,20 @@ async function attachPerforceForensics(
   }
 }
 
+/**
+ * Block until the perforce extension has finished activating. Only needed before
+ * driving something that reaches its **host-only** commands (`perforce-graph.*`
+ * and friends): those are not in `contributes.commands`, so nothing waits for
+ * activation on their behalf and an unregistered one resolves `undefined`
+ * instead of failing loudly (the graph then sticks on "unavailable" — `load()`
+ * has no retry). Contributed commands need no gate: their bootstrap proxy joins
+ * the in-flight `activate()`. `perforce.refresh` is one of those, which is what
+ * makes it a usable barrier.
+ */
+export function waitForPerforceActivation(workbench: WorkbenchPO): Promise<unknown> {
+  return workbench.runCommand('perforce.refresh')
+}
+
 export const test = base.extend<
   PerforceFixtures & {
     p4Seeds: P4SeedConfig
@@ -713,39 +727,3 @@ export const test = base.extend<
 })
 
 export { expect } from '@playwright/test'
-
-import { expect as playwrightExpect } from '@playwright/test'
-
-/**
- * Wait out the extension-host cold start before firing perforce.* commands.
- *
- * The SCM source control is created EARLY in the perforce extension's activate()
- * (PerforceClient.create → scm.createSourceControl), but the contributed command
- * handlers register LATER in the same activate(), in one synchronous
- * `context.subscriptions.push(...)` burst. getScmSourceControlCount() flips >0 in
- * that window, so a perforce.* command fired right after the SCM-count gate can
- * reach a host that has no handler yet: the renderer forwards the contributed
- * command and the host, owning none, rejects it ("Contributed command 'x' does
- * not exist."). Because all handlers register in one synchronous burst, polling
- * any one read-only command (perforce.refresh) until it stops rejecting gates
- * them all.
- */
-export async function waitForPerforceCommands(workbench: WorkbenchPO): Promise<void> {
-  await playwrightExpect
-    .poll(
-      async () => {
-        try {
-          await workbench.runCommand('perforce.refresh')
-          return true
-        } catch (err) {
-          if (/Contributed command .* does not exist/.test(String(err))) return false
-          throw err
-        }
-      },
-      {
-        timeout: 30_000,
-        message: 'perforce contributed commands should be registered in the host',
-      },
-    )
-    .toBe(true)
-}

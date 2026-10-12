@@ -12,8 +12,13 @@
  *  the robust way to prove the `contributes.keybindings` wiring (and the
  *  Ctrl+B / Alt+S conflict resolution) without simulating physical keystrokes.
  *
- *  Spawns the real extension-host subprocess, so the first edit polls until the
- *  host has booted and the extension has activated on `onLanguage:markdown`.
+ *  Spawns the real extension-host subprocess; the first edit waits out the host
+ *  boot and the `onLanguage:markdown` activation inside the contributed command's
+ *  bootstrap proxy. The three editing commands the extension registers at runtime
+ *  (`markdown.editing.onEnter` / `onTab` / `onShiftTab`, contributed via
+ *  `contributes.keybindings` only) have no proxy: an unregistered command resolves
+ *  `undefined` instead of throwing, so their polls below re-ask until the host has
+ *  registered them.
  *--------------------------------------------------------------------------------------------*/
 
 import { writeFileSync } from 'node:fs'
@@ -40,8 +45,11 @@ interface EditCase {
 /**
  * Run an editing command against a freshly-seeded document and return the
  * resulting text. Setup is idempotent (text + selection reset every call), so
- * wrapping the whole thing in expect.poll safely waits out the extension-host
- * cold start without compounding edits.
+ * wrapping the whole thing in expect.poll keeps retrying until the edit has
+ * landed without compounding edits. Note the poll only retries on a mismatched
+ * value, never on a throw: a rejecting command fails the test outright, which is
+ * the point — a contributed command's proxy has already waited for activation, so
+ * a rejection here is a real failure rather than cold-start noise.
  */
 async function runEdit(workbench: WorkbenchPO, c: EditCase): Promise<string | undefined> {
   await workbench.setActiveEditorText(c.text)
@@ -51,19 +59,7 @@ async function runEdit(workbench: WorkbenchPO, c: EditCase): Promise<string | un
     c.selection[2],
     c.selection[3],
   )
-  try {
-    await workbench.runCommand(c.command)
-  } catch (err) {
-    // The extension host hasn't registered the real command handler yet: the
-    // renderer forwards the contributed command to the host, which owns no
-    // handler until the extension has activated on `onLanguage:markdown`, and
-    // rejects it ("Contributed command 'x' does not exist.").
-    // Return an unmatched value so the surrounding expect.poll keeps retrying
-    // through the cold start instead of blowing up (Playwright's poll does NOT
-    // retry when its callback throws — a rejection punches straight through).
-    if (/Contributed command .* does not exist/.test(String(err))) return undefined
-    throw err
-  }
+  await workbench.runCommand(c.command)
   // Monaco picks CRLF on Windows when the seed has no line break; assertions are EOL-agnostic.
   return (await workbench.getActiveEditorText())?.replace(/\r\n/g, '\n')
 }
@@ -91,8 +87,9 @@ test.describe('@p1 markdown editing commands', () => {
       .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'), { timeout: 20000 })
       .toBe('markdown')
 
-    // The contributed commands must be registered (host booted + manifest scanned)
-    // before any direct execution can reach the extension's handlers.
+    // The contributed command must be translated into the renderer registry (host
+    // booted + manifest scanned) before direct execution can route to the extension;
+    // the bootstrap proxy then waits for activation on first invocation.
     await expect
       .poll(() => page.evaluate(() => window.__E2E__!.hasCommand('markdown.editing.toggleBold')), {
         timeout: 15000,

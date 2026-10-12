@@ -33,7 +33,6 @@ import {
   test,
   expect,
   toPosix,
-  waitForPerforceCommands,
   writeScopeFile,
 } from '../fixtures/perforceApp.js'
 import type { P4SubmittedSeed, SeedFile } from '../fixtures/perforceApp.js'
@@ -174,7 +173,6 @@ async function openSyncWorkspace(
       message: 'perforce extension should register a source control for the workspace',
     })
     .toBeGreaterThan(0)
-  await waitForPerforceCommands(workbench)
 }
 
 test.describe('@p1 perforce p4delta get', () => {

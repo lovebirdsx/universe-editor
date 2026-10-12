@@ -13,9 +13,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { readFileSync } from 'node:fs'
-import { test, expect, waitForPerforceCommands, readHaveRev } from '../fixtures/perforceApp.js'
-import { evaluateWhenRestored, type WorkbenchPO } from '@universe-editor/e2e-harness'
-import type { Page } from '@playwright/test'
+import { test, expect, readHaveRev, waitForPerforceActivation } from '../fixtures/perforceApp.js'
+import { evaluateWhenRestored } from '@universe-editor/e2e-harness'
 import type { P4SubmittedSeed, SeedFile } from '../fixtures/perforceApp.js'
 
 const V1 = 'v1\n'
@@ -69,7 +68,7 @@ test.describe('@p1 perforce graph file history get revision', () => {
         message: 'perforce extension should register a source control for the workspace',
       })
       .toBeGreaterThan(0)
-    await waitForPerforceCommands(workbench)
+    await waitForPerforceActivation(workbench)
 
     await workbench.runCommand('perforce-graph.viewFileHistory', {
       resource: perforce.fileUri('src/a.txt'),

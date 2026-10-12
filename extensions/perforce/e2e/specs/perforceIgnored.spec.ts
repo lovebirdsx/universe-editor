@@ -17,7 +17,7 @@
  *     whole regions of controlled content would go grey.
  *--------------------------------------------------------------------------------------------*/
 
-import { test, expect, waitForPerforceCommands } from '../fixtures/perforceApp.js'
+import { test, expect } from '../fixtures/perforceApp.js'
 import { evaluateWhenRestored } from '@universe-editor/e2e-harness'
 import type { SeedFile } from '../fixtures/perforceApp.js'
 
@@ -61,7 +61,6 @@ test.describe('@p1 perforce ignored files', () => {
         message: 'perforce extension should register a source control for the workspace',
       })
       .toBeGreaterThan(0)
-    await waitForPerforceCommands(workbench)
 
     // isIgnored is a pull-style cache: the first read enqueues and answers
     // undefined, so poll until the batch resolves.

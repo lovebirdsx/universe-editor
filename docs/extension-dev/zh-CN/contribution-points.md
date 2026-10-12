@@ -27,7 +27,7 @@
 
 ## commands
 
-注册一个命令。命令 id 同时是激活事件锚点：`onCommand:<command>`。
+注册一个命令。命令 id 同时是激活事件锚点：`onCommand:<command>`——宿主从本贡献点**自动派生**该事件，不必再写进 `activationEvents`（对齐 VSCode）。
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
@@ -48,7 +48,7 @@
 
 行为：
 
-- 声明的命令**默认出现在命令面板**里。首次调用走 bootstrap proxy：宿主先派发 `onCommand:<command>` 激活事件，等扩展激活并注册真正的 handler，再把调用路由过去。
+- 声明的命令**默认出现在命令面板**里。首次调用走 bootstrap proxy：宿主先派发 `onCommand:<command>` 激活事件，等扩展激活并注册真正的 handler，再把调用路由过去。**这次激活是等待式的**——扩展若正在 `activate()`（比如 `onStartupFinished` 那趟），首次调用会等它跑完，所以 `activate()` 里做长耗时/联网阻塞会直接拖慢用户点下的第一条命令。
 - 想**不进命令面板**（命令只从菜单/快捷键触发）：在 `menus.commandPalette` 里为该命令显式声明一条（通常配 `when` 条件），声明即覆盖默认条目。
 - 命令 id 与宿主内置命令冲突时，扩展的声明被忽略（内置优先）。
 

@@ -34,7 +34,7 @@
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { test, expect, waitForPerforceCommands } from '../fixtures/perforceApp.js'
+import { test, expect } from '../fixtures/perforceApp.js'
 import { evaluateWhenRestored } from '@universe-editor/e2e-harness'
 import type { SeedFile } from '../fixtures/perforceApp.js'
 
@@ -85,7 +85,6 @@ test.describe('@p1 explorer directory revert', () => {
           message: 'perforce extension should register a source control for the workspace',
         })
         .toBeGreaterThan(0)
-      await waitForPerforceCommands(workbench)
       await workbench.showExplorer()
 
       // The seeded open state must have materialized as a default-changelist row.
@@ -231,7 +230,6 @@ test.describe('@p1 explorer directory revert around an exclusion', () => {
           message: 'perforce extension should register a source control for the workspace',
         })
         .toBeGreaterThan(0)
-      await waitForPerforceCommands(workbench)
       await workbench.showExplorer()
 
       const groupsOf = (rel: string) =>

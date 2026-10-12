@@ -30,14 +30,7 @@
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { evaluateWhenRestored, mkTempDir } from '@universe-editor/e2e-harness'
-import {
-  readArgvLog,
-  readScopeLog,
-  test,
-  expect,
-  toPosix,
-  waitForPerforceCommands,
-} from '../fixtures/perforceApp.js'
+import { readArgvLog, readScopeLog, test, expect, toPosix } from '../fixtures/perforceApp.js'
 import type { SeedFile } from '../fixtures/perforceApp.js'
 
 const drifted: SeedFile = { relPath: 'drifted.txt', content: 'have revision\n' }
@@ -78,7 +71,6 @@ test.describe('@p1 perforce p4delta scan', () => {
         message: 'perforce extension should register a source control for the workspace',
       })
       .toBeGreaterThan(0)
-    await waitForPerforceCommands(workbench)
 
     // The SCAN call: the contract switches the extension always spells plus the
     // DIRECTORY target this round was asked for. `-a` is what turns δ into a

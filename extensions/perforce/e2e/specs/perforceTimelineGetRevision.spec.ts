@@ -11,13 +11,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { readFileSync } from 'node:fs'
-import {
-  test,
-  expect,
-  waitForPerforceCommands,
-  readHaveRev,
-  DEPOT_PREFIX,
-} from '../fixtures/perforceApp.js'
+import { test, expect, readHaveRev, DEPOT_PREFIX } from '../fixtures/perforceApp.js'
 import { evaluateWhenRestored } from '@universe-editor/e2e-harness'
 import type { SeedFile } from '../fixtures/perforceApp.js'
 
@@ -52,7 +46,6 @@ test.describe('@p1 perforce timeline get this revision', () => {
         message: 'perforce extension should register a source control for the workspace',
       })
       .toBeGreaterThan(0)
-    await waitForPerforceCommands(workbench)
 
     await workbench.runCommand('perforce.timeline.getThisRevision', {
       command: {

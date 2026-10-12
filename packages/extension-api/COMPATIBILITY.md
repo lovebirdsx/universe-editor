@@ -376,6 +376,10 @@ preflight 守护。扩展在自己的 `package.json` 里用 `engines.universe` �
   `commandActivationEvent` / `languageActivationEvent` / `viewActivationEvent`。
 - **manifest 校验兜底**：宿主扫描时用 `isValidActivationEvent` 校验，未知事件直接
   报 `invalid manifest` 跳过该扩展（而非静默不激活）。
+- **`onCommand:<id>` 可省**：宿主从 `contributes.commands` 隐式派生它（对齐 VSCode
+  1.74+），贡献了命令就不必再重复声明；只有运行期注册、未进 `contributes.commands`
+  的命令才需要显式写。派生**仅限命令**——`onLanguage:` / `onView:` /
+  `onCustomEditor:` 仍须显式声明。
 
 支持的事件：
 
@@ -383,7 +387,7 @@ preflight 守护。扩展在自己的 `package.json` 里用 `engines.universe` �
 |---|---|---|
 | `*` | 扩展系统启动即激活（eager，慎用） | `ActivationEvents.startup` |
 | `onStartupFinished` | 工作台完成初次恢复后 | `ActivationEvents.startupFinished` |
-| `onCommand:<id>` | 贡献的命令首次被调用 | `ActivationEvents.onCommand(id)` |
+| `onCommand:<id>` | 贡献的命令首次被调用（由 `contributes.commands` 自动派生） | `ActivationEvents.onCommand(id)` |
 | `onLanguage:<languageId>` | 该语言的文档首次打开 | `ActivationEvents.onLanguage(lang)` |
 | `onView:<viewId>` | 贡献的视图首次显示 | `ActivationEvents.onView(viewId)` |
 | `onCustomEditor:<viewType>` | 该 viewType 的自定义编辑器首次打开 | `ActivationEvents.onCustomEditor(viewType)` |

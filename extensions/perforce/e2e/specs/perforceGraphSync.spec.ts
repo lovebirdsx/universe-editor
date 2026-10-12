@@ -21,7 +21,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { readFileSync, writeFileSync } from 'node:fs'
-import { test, expect, waitForPerforceCommands, readHaveRev } from '../fixtures/perforceApp.js'
+import { test, expect, readHaveRev, waitForPerforceActivation } from '../fixtures/perforceApp.js'
 import { evaluateWhenRestored, type WorkbenchPO } from '@universe-editor/e2e-harness'
 import type { Locator, Page } from '@playwright/test'
 import type { P4SubmittedSeed, SeedFile } from '../fixtures/perforceApp.js'
@@ -74,7 +74,7 @@ async function openGraphWorkspace(
       message: 'perforce extension should register a source control for the workspace',
     })
     .toBeGreaterThan(0)
-  await waitForPerforceCommands(workbench)
+  await waitForPerforceActivation(workbench)
   await workbench.runCommand('perforce-graph.view')
   const editor = page.locator('[data-testid="perforceGraph-editor"]')
   await expect(editor).toBeVisible()

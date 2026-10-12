@@ -1,15 +1,15 @@
 /**
  * Drives lazy activation of extensions. Holds the activated / in-flight maps,
- * matches an activation event against each extension's declared events, imports
- * the entry module and calls its `activate` exactly once. Errors are isolated:
- * a failed `activate` is logged to stderr and never tears down the host or other
- * extensions.
+ * matches an activation event against each extension's declared or
+ * command-derived events, imports the entry module and calls its `activate`
+ * exactly once. Errors are isolated: a failed `activate` is logged to stderr and
+ * never tears down the host or other extensions.
  */
 import { pathToFileURL } from 'node:url'
 import type { ExtensionContext } from '@universe-editor/extension-api'
 import {
   getUntrustedWorkspaceSupportType,
-  matchesActivationEvent,
+  matchesManifestActivationEvent,
 } from '@universe-editor/extensions-common'
 import type { IScannedExtension } from './extensionScanner.js'
 import { createExtensionContext, type IExtensionStorage } from './apiFactory.js'
@@ -48,13 +48,17 @@ export class ExtensionActivationService {
     private readonly _onActivationError?: (report: IActivationErrorReport) => void,
   ) {}
 
-  /** Activate every extension whose declared events match `event`. */
+  /**
+   * Activate every extension whose declared or command-derived events match
+   * `event`, and wait for those activations to finish. An extension already
+   * activating for an earlier event (e.g. `onStartupFinished`) is joined rather
+   * than activated twice — so a contributed command's first invocation waits out
+   * the in-flight `activate()` instead of racing it.
+   */
   async activateByEvent(event: string): Promise<void> {
     this._firedEvents.add(event)
     const matched = this._extensions.filter(
-      (ext) =>
-        this._isActivatable(ext) &&
-        matchesActivationEvent(ext.manifest.activationEvents ?? [], event),
+      (ext) => this._isActivatable(ext) && matchesManifestActivationEvent(ext.manifest, event),
     )
     if (matched.length > 0) {
       console.info(
@@ -140,6 +144,8 @@ export class ExtensionActivationService {
     const inFlight = this._activating.get(ext.id)
     if (inFlight) return inFlight
 
+    // Registered before the activation's body can re-enter: _doActivate awaits
+    // before it calls back out, so a concurrent activateByEvent joins this promise.
     const promise = this._doActivate(ext).finally(() => {
       this._activating.delete(ext.id)
     })

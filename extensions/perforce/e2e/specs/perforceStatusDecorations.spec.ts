@@ -31,7 +31,7 @@
  *     assertion must come first.
  *--------------------------------------------------------------------------------------------*/
 
-import { test, expect, waitForPerforceCommands } from '../fixtures/perforceApp.js'
+import { test, expect } from '../fixtures/perforceApp.js'
 import { evaluateWhenRestored, type WorkbenchPO } from '@universe-editor/e2e-harness'
 import type { Page } from '@playwright/test'
 import type { SeedFile } from '../fixtures/perforceApp.js'
@@ -81,7 +81,6 @@ async function openStatusWorkspace(
       message: 'perforce extension should register a source control for the workspace',
     })
     .toBeGreaterThan(0)
-  await waitForPerforceCommands(workbench)
 }
 
 /** Open the Explorer and wait for the file row to actually render — the behind

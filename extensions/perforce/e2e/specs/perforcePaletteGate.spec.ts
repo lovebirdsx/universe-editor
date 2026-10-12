@@ -18,7 +18,7 @@
  *  hidden half just as well.
  *--------------------------------------------------------------------------------------------*/
 
-import { expect, test, toPosix, waitForPerforceCommands } from '../fixtures/perforceApp.js'
+import { expect, test, toPosix, waitForPerforceActivation } from '../fixtures/perforceApp.js'
 import { evaluateWhenRestored, mkTempDir } from '@universe-editor/e2e-harness'
 import type { WorkbenchPO } from '@universe-editor/e2e-harness'
 import type { Page } from '@playwright/test'
@@ -57,7 +57,7 @@ test.describe('@p1 perforce palette gate', () => {
         message: 'perforce extension should register a source control for the workspace',
       })
       .toBeGreaterThan(0)
-    await waitForPerforceCommands(workbench)
+    await waitForPerforceActivation(workbench)
 
     // The key `activate()` paints once a client is in hand. Waiting for the
     // command burst above already implies it, but assert it directly: it is the

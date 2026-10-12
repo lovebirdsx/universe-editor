@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { ActivationEvents, isValidActivationEvent, matchesActivationEvent } from '../activation.js'
+import {
+  ActivationEvents,
+  isValidActivationEvent,
+  matchesActivationEvent,
+  matchesManifestActivationEvent,
+} from '../activation.js'
 
 describe('isValidActivationEvent', () => {
   it('accepts the two standalone events', () => {
@@ -59,5 +64,77 @@ describe('matchesActivationEvent', () => {
     // double-count it via the fallback branch.
     expect(matchesActivationEvent(['*'], '*')).toBe(true)
     expect(matchesActivationEvent(['onStartupFinished'], '*')).toBe(false)
+  })
+})
+
+describe('matchesManifestActivationEvent', () => {
+  const commands = [{ command: 'ext.doIt', title: 'Do It' }]
+
+  it('matches an explicitly declared event', () => {
+    expect(
+      matchesManifestActivationEvent({ activationEvents: ['onCommand:x'] }, 'onCommand:x'),
+    ).toBe(true)
+    expect(
+      matchesManifestActivationEvent({ activationEvents: ['onLanguage:ts'] }, 'onView:v'),
+    ).toBe(false)
+  })
+
+  it('derives onCommand from contributes.commands', () => {
+    expect(
+      matchesManifestActivationEvent(
+        { activationEvents: ['onStartupFinished'], contributes: { commands } },
+        'onCommand:ext.doIt',
+      ),
+    ).toBe(true)
+  })
+
+  it('does not derive a command the manifest does not contribute', () => {
+    expect(
+      matchesManifestActivationEvent(
+        { activationEvents: ['onStartupFinished'], contributes: { commands } },
+        'onCommand:ext.other',
+      ),
+    ).toBe(false)
+  })
+
+  it('keeps the wildcard rule', () => {
+    expect(
+      matchesManifestActivationEvent(
+        { activationEvents: ['*'], contributes: { commands } },
+        'onCommand:ext.doIt',
+      ),
+    ).toBe(true)
+    expect(matchesManifestActivationEvent({ activationEvents: ['*'] }, 'onStartupFinished')).toBe(
+      true,
+    )
+  })
+
+  it('keeps an explicit onCommand for a runtime-registered command', () => {
+    expect(
+      matchesManifestActivationEvent(
+        { activationEvents: ['onCommand:ext.internal'], contributes: { commands: [] } },
+        'onCommand:ext.internal',
+      ),
+    ).toBe(true)
+  })
+
+  it('leaves non-command events on the declared path', () => {
+    const manifest = { activationEvents: ['onLanguage:ts'], contributes: { commands } }
+    expect(matchesManifestActivationEvent(manifest, 'onLanguage:ts')).toBe(true)
+    expect(matchesManifestActivationEvent(manifest, 'onLanguage:md')).toBe(false)
+    expect(matchesManifestActivationEvent(manifest, 'onView:v')).toBe(false)
+    expect(matchesManifestActivationEvent(manifest, 'onStartupFinished')).toBe(false)
+  })
+
+  it('handles a manifest with no contributes at all', () => {
+    expect(matchesManifestActivationEvent({}, 'onCommand:ext.doIt')).toBe(false)
+    expect(matchesManifestActivationEvent({}, 'onStartupFinished')).toBe(false)
+    expect(
+      matchesManifestActivationEvent(
+        { activationEvents: ['onCommand:ext.doIt'] },
+        'onCommand:ext.doIt',
+      ),
+    ).toBe(true)
+    expect(matchesManifestActivationEvent({ contributes: {} }, 'onCommand:ext.doIt')).toBe(false)
   })
 })

@@ -27,12 +27,7 @@
 import { dirname, join, resolve } from 'node:path'
 import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import {
-  test,
-  expect,
-  waitForPerforceCommands,
-  type SeedFile,
-} from '../fixtures/perforceApp.js'
+import { test, expect, type SeedFile } from '../fixtures/perforceApp.js'
 import { evaluateWhenRestored, type WorkbenchPO } from '@universe-editor/e2e-harness'
 import type { Locator, Page } from '@playwright/test'
 
@@ -87,7 +82,6 @@ async function openPerforceWorkspace(
       message: 'perforce extension should register a source control for the workspace',
     })
     .toBeGreaterThan(0)
-  await waitForPerforceCommands(workbench)
 }
 
 /** Fire a get and DON'T await it: for an applied run the command resolves only
@@ -243,7 +237,11 @@ test.describe('@p1 perforce sync history', () => {
       p4ExtraEnv: { UNIVERSE_P4_IO_PROBE: 'off' },
     })
 
-    test('read as unavailable instead of zero @regression', async ({ page, workbench, perforce }) => {
+    test('read as unavailable instead of zero @regression', async ({
+      page,
+      workbench,
+      perforce,
+    }) => {
       await openPerforceWorkspace(page, workbench, perforce.openDir)
 
       await startGet(page, perforce.file('src/a.txt'))
@@ -253,7 +251,10 @@ test.describe('@p1 perforce sync history', () => {
       await expect(view.getByTestId('perforce-sync-history-row')).toHaveCount(1)
       // The whole point of the column: a machine that cannot measure must say so.
       // `0B` here would claim the get transferred nothing.
-      for (const id of ['perforce-sync-history-detail-read', 'perforce-sync-history-detail-write']) {
+      for (const id of [
+        'perforce-sync-history-detail-read',
+        'perforce-sync-history-detail-write',
+      ]) {
         await expect(view.getByTestId(id)).toHaveText('unavailable (no sampler on this platform)')
       }
     })

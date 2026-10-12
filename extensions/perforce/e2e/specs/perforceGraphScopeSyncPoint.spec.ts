@@ -27,7 +27,7 @@ import {
   test,
   expect,
   toPosix,
-  waitForPerforceCommands,
+  waitForPerforceActivation,
   writeScopeFile,
 } from '../fixtures/perforceApp.js'
 import type { P4SubmittedSeed, SeedFile } from '../fixtures/perforceApp.js'
@@ -129,7 +129,7 @@ async function openGraphWorkspace(
       message: 'perforce extension should register a source control for the workspace',
     })
     .toBeGreaterThan(0)
-  await waitForPerforceCommands(workbench)
+  await waitForPerforceActivation(workbench)
   await workbench.runCommand('perforce-graph.view')
   await expect(page.locator('[data-testid="perforceGraph-editor"]')).toBeVisible()
 }
@@ -138,9 +138,10 @@ async function openGraphWorkspace(
 async function syncPointOf(page: Page): Promise<{ id: string; source: string } | null> {
   return page.evaluate(
     () =>
-      window.__E2E__!.runCommand('perforce-graph.getSyncPoint', { wholeRepo: false }) as Promise<
-        { id: string; source: string } | null
-      >,
+      window.__E2E__!.runCommand('perforce-graph.getSyncPoint', { wholeRepo: false }) as Promise<{
+        id: string
+        source: string
+      } | null>,
   )
 }
 
@@ -181,9 +182,9 @@ test.describe('@p1 perforce graph sync point, delta engine with a scope file', (
       .poll(() => deltaSyncLines(logs.delta).length, { timeout: 30_000 })
       .toBeGreaterThan(0)
     expect(nativeSyncLines(logs.p4)).toEqual([])
-    await expect.poll(() => syncRange(logs.scope), { timeout: 30_000 }).toContain(
-      `directory:${toPosix(perforce.file('Content'))}`,
-    )
+    await expect
+      .poll(() => syncRange(logs.scope), { timeout: 30_000 })
+      .toContain(`directory:${toPosix(perforce.file('Content'))}`)
 
     // 拉取把整个工作区的范围搬到了 4521：账本与工具栏都必须这么说。
     await expect.poll(() => syncPointOf(page), { timeout: 30_000 }).toMatchObject({ id: '4521' })
@@ -219,7 +220,9 @@ test.describe('@p1 perforce graph sync point, a graph row get with a scope file'
     await expect
       .poll(() => readFileSync(perforce.file(behind.relPath), 'utf8'), { timeout: 60_000 })
       .toBe(V2)
-    await expect.poll(() => deltaSyncLines(logs.delta).length, { timeout: 30_000 }).toBeGreaterThan(0)
+    await expect
+      .poll(() => deltaSyncLines(logs.delta).length, { timeout: 30_000 })
+      .toBeGreaterThan(0)
 
     await expect.poll(() => syncPointOf(page), { timeout: 30_000 }).toMatchObject({ id: '4521' })
     await expect(line).toHaveText('#4521', { timeout: 30_000 })

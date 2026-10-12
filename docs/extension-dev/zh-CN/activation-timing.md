@@ -22,7 +22,10 @@
 
 ⑤ activateByEvent 派发
     '*' → 'onStartupFinished' 在扩展系统启动阶段统一派发；
-    'onLanguage:<id>' 由文档镜像推送前触发（即上一步重推 open 之前）。
+    'onLanguage:<id>' 由文档镜像推送前触发（即上一步重推 open 之前）；
+    'onCommand:<id>' 由贡献命令的首次调用触发（含从 contributes.commands 派生的那些）。
+    同一扩展的这些事件会互相 join：事件到达时若该扩展的 activate() 正在跑，派发方等它跑完
+    才继续——所以首次调用贡献命令会等整段 activate()，别再叠加自己的轮询等待。
 
 ⑥ activate() 执行
 

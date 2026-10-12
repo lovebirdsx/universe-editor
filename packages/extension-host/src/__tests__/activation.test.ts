@@ -5,6 +5,7 @@ import {
   isValidActivationEvent,
   languageActivationEvent,
   matchesActivationEvent,
+  matchesManifestActivationEvent,
   viewActivationEvent,
 } from '@universe-editor/extensions-common'
 
@@ -56,5 +57,19 @@ describe('matchesActivationEvent', () => {
     expect(matchesActivationEvent(['*'], 'onCommand:anything')).toBe(true)
     // The '*' trigger only matches an explicit '*' declaration.
     expect(matchesActivationEvent(['onCommand:x'], '*')).toBe(false)
+  })
+})
+
+describe('matchesManifestActivationEvent', () => {
+  // The barrier the host's activateByEvent relies on: the extension-manifest
+  // build must reach the host through extensions-common's re-export.
+  it('is re-exported through extensions-common', () => {
+    expect(typeof matchesManifestActivationEvent).toBe('function')
+    expect(
+      matchesManifestActivationEvent(
+        { contributes: { commands: [{ command: 'git.refresh', title: 'Refresh' }] } },
+        'onCommand:git.refresh',
+      ),
+    ).toBe(true)
   })
 })

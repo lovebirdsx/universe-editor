@@ -9,7 +9,7 @@
  *  specs use the cold-launch perforce fixture rather than the shared instance.
  *--------------------------------------------------------------------------------------------*/
 
-import { expect, test, waitForPerforceCommands } from '../fixtures/perforceApp.js'
+import { expect, test } from '../fixtures/perforceApp.js'
 import { evaluateWhenRestored } from '@universe-editor/e2e-harness'
 import type { SeedFile } from '../fixtures/perforceApp.js'
 
@@ -51,10 +51,6 @@ test.describe('@p1 perforce view commit', () => {
         message: 'perforce extension should register a source control for the workspace',
       })
       .toBeGreaterThan(0)
-    // The SCM-count gate flips before the contributed command handlers register
-    // (same activate(), later burst) — viewCommit would reach a host that owns no
-    // handler and be rejected ("Contributed command 'x' does not exist.").
-    await waitForPerforceCommands(workbench)
 
     // `viewCommit` falls back to the graph's client when the uri resolves to
     // none, so this spec cannot catch a malformed uri on its own — the strict

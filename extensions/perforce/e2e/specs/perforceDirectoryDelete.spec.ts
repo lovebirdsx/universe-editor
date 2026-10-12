@@ -20,7 +20,7 @@
 
 import { readFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
-import { test, expect, waitForPerforceCommands } from '../fixtures/perforceApp.js'
+import { test, expect } from '../fixtures/perforceApp.js'
 import { evaluateWhenRestored, mkTempDir } from '@universe-editor/e2e-harness'
 import type { SeedFile } from '../fixtures/perforceApp.js'
 
@@ -88,7 +88,6 @@ test.describe('@p1 perforce directory delete', () => {
         message: 'perforce extension should register a source control for the workspace',
       })
       .toBeGreaterThan(0)
-    await waitForPerforceCommands(workbench)
 
     // Render the rows so the Explorer-side machinery is warm before the delete.
     await workbench.showExplorer()

@@ -20,14 +20,7 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { evaluateWhenRestored, mkTempDir } from '@universe-editor/e2e-harness'
-import {
-  readArgvLog,
-  readScopeLog,
-  test,
-  expect,
-  toPosix,
-  waitForPerforceCommands,
-} from '../fixtures/perforceApp.js'
+import { readArgvLog, readScopeLog, test, expect, toPosix } from '../fixtures/perforceApp.js'
 import type { SeedFile, ScopeResolution } from '../fixtures/perforceApp.js'
 
 const drifted: SeedFile = { relPath: 'drifted.txt', content: 'have drifted\n' }
@@ -82,7 +75,6 @@ test.describe('@p1 perforce p4delta writes', () => {
         message: 'perforce extension should register a source control for the workspace',
       })
       .toBeGreaterThan(0)
-    await waitForPerforceCommands(workbench)
 
     const groupIdsFor = (relPath: string) =>
       page.evaluate((s) => window.__E2E__!.getScmGroupIdsForResource(s), relPath)

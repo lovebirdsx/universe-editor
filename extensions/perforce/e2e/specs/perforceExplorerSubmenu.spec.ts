@@ -15,7 +15,7 @@
  *  (`perforce.explorerMenu`), which is why this lives in the perforce suite.
  *--------------------------------------------------------------------------------------------*/
 
-import { test, expect, waitForPerforceCommands } from '../fixtures/perforceApp.js'
+import { test, expect } from '../fixtures/perforceApp.js'
 import { evaluateWhenRestored } from '@universe-editor/e2e-harness'
 import type { SeedFile } from '../fixtures/perforceApp.js'
 
@@ -41,7 +41,6 @@ test.describe('@p1 explorer context menu submenus', () => {
           message: 'perforce extension should register a source control for the workspace',
         })
         .toBeGreaterThan(0)
-      await waitForPerforceCommands(workbench)
       // The activity-bar item is a toggle too: clicking it while the Explorer is
       // already active AND the side bar focused closes the side bar.
       await workbench.showExplorer()

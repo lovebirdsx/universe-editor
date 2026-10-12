@@ -40,7 +40,6 @@ import {
   test,
   expect,
   toPosix,
-  waitForPerforceCommands,
   writeScopeFile,
 } from '../fixtures/perforceApp.js'
 import type { SeedFile, ScopeResolution } from '../fixtures/perforceApp.js'
@@ -144,7 +143,6 @@ test.describe('@p1 perforce reconcile noise', () => {
         message: 'perforce extension should register a source control for the workspace',
       })
       .toBeGreaterThan(0)
-    await waitForPerforceCommands(workbench)
 
     const groupIdsFor = groupIdsFactory(page)
     const hiddenPath = `directory:${toPosix(perforce.file('gen'))}`
@@ -315,7 +313,6 @@ test.describe('@p1 perforce noise vs a directory clean', () => {
         message: 'perforce extension should register a source control for the workspace',
       })
       .toBeGreaterThan(0)
-    await waitForPerforceCommands(workbench)
 
     // Clean `sub` the way the Explorer context menu does (directory as the
     // primary arg and as the materialized selection); it blocks on its own
@@ -405,7 +402,6 @@ test.describe('@p1 perforce noise vs a directly named target', () => {
         message: 'perforce extension should register a source control for the workspace',
       })
       .toBeGreaterThan(0)
-    await waitForPerforceCommands(workbench)
 
     const collectNamed = (relPath: string): void => {
       void page
@@ -528,7 +524,6 @@ test.describe('@p1 perforce scope, focus and noise stay separate layers', () => 
         message: 'perforce extension should register a source control for the workspace',
       })
       .toBeGreaterThan(0)
-    await waitForPerforceCommands(workbench)
 
     await test.step('the scan is the intersection, minus the noise', async () => {
       // The focused directory is the round's target, and the noise rides along
@@ -653,7 +648,6 @@ test.describe('@p1 perforce noise configured before the hidden folder exists', (
         message: 'perforce extension should register a source control for the workspace',
       })
       .toBeGreaterThan(0)
-    await waitForPerforceCommands(workbench)
 
     const groupIdsFor = groupIdsFactory(page)
     const hiddenDir = `directory:${toPosix(perforce.file('sub/hidden'))}`
@@ -880,7 +874,6 @@ test.describe('@p1 perforce noise vs the native fallback', () => {
         message: 'perforce extension should register a source control for the workspace',
       })
       .toBeGreaterThan(0)
-    await waitForPerforceCommands(workbench)
 
     const groupIdsFor = groupIdsFactory(page)
     const rootPosix = toPosix(perforce.clientRoot)

@@ -41,14 +41,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { evaluateWhenRestored, mkTempDir } from '@universe-editor/e2e-harness'
-import {
-  readArgvLog,
-  readScopeLog,
-  test,
-  expect,
-  toPosix,
-  waitForPerforceCommands,
-} from '../fixtures/perforceApp.js'
+import { readArgvLog, readScopeLog, test, expect, toPosix } from '../fixtures/perforceApp.js'
 import type { SeedFile } from '../fixtures/perforceApp.js'
 
 const drifted: SeedFile = { relPath: 'drifted.txt', content: 'have revision\n' }
@@ -122,7 +115,6 @@ test.describe('@p1 perforce p4delta fallback', () => {
         message: 'perforce extension should register a source control for the workspace',
       })
       .toBeGreaterThan(0)
-    await waitForPerforceCommands(workbench)
 
     const groupIdsFor = (relPath: string) =>
       page.evaluate((s) => window.__E2E__!.getScmGroupIdsForResource(s), relPath)
@@ -321,7 +313,6 @@ test.describe('@p1 perforce p4delta disabled', () => {
         message: 'perforce extension should register a source control for the workspace',
       })
       .toBeGreaterThan(0)
-    await waitForPerforceCommands(workbench)
 
     // Liveness first, so a workspace that never came up cannot pass this spec:
     // the native engine answered the scan and the drift is visible. The scan line

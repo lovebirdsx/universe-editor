@@ -22,7 +22,7 @@
  *  changelists (change -i / changes / reopen). See fixtures/perforceApp.ts.
  *--------------------------------------------------------------------------------------------*/
 
-import { test, expect, DEFAULT_SEEDS, waitForPerforceCommands } from '../fixtures/perforceApp.js'
+import { test, expect, DEFAULT_SEEDS } from '../fixtures/perforceApp.js'
 import { evaluateWhenRestored, type WorkbenchPO } from '@universe-editor/e2e-harness'
 import { writeFileSync, readFileSync } from 'node:fs'
 import type { Page } from '@playwright/test'
@@ -44,7 +44,6 @@ async function openScmWorkspace(
     })
     .toBeGreaterThan(0)
   await workbench.runCommand('workbench.view.scm')
-  await waitForPerforceCommands(workbench)
 }
 
 test.describe('@p1 perforce changelist', () => {

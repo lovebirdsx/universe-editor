@@ -15,7 +15,7 @@
 
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { test, expect, waitForPerforceCommands } from '../fixtures/perforceApp.js'
+import { test, expect } from '../fixtures/perforceApp.js'
 import { evaluateWhenRestored } from '@universe-editor/e2e-harness'
 import type { Page } from '@playwright/test'
 import type { SeedFile } from '../fixtures/perforceApp.js'
@@ -58,7 +58,6 @@ test.describe('@p1 perforce working-tree hint', () => {
         message: 'perforce extension should register a source control for the workspace',
       })
       .toBeGreaterThan(0)
-    await waitForPerforceCommands(workbench)
 
     // Ensure both rows actually render — the hint channel is on-demand and only
     // queries rows that are on screen.
@@ -177,7 +176,6 @@ test.describe('@p1 perforce working-tree hint', () => {
         message: 'perforce extension should register a source control for the workspace',
       })
       .toBeGreaterThan(0)
-    await waitForPerforceCommands(workbench)
 
     // The focused file row renders (focus keeps it visible); its drift must be
     // discovered even though the scope entry is a file, not a directory.

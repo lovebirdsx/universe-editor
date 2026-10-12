@@ -9,30 +9,20 @@ test.describe('@p1 __name__', () => {
     test.slow()
     await workbench.waitForRestored()
 
-    // The contributed command must be registered (host booted + manifest scanned)
-    // before direct execution can reach the extension's handler.
+    // The contributed command must be translated into the renderer registry (host
+    // booted + manifest scanned) before direct execution can route to the extension;
+    // the bootstrap proxy then waits for activation on first invocation.
     await expect
       .poll(() => page.evaluate(() => window.__E2E__!.hasCommand('__name__.helloWorld')), {
         timeout: 15000,
       })
       .toBe(true)
 
-    // Run the command; the first invocation activates the extension (onCommand:),
-    // so poll through the cold-start window. Playwright's poll does not retry on
-    // a thrown callback, so swallow the "Contributed command 'x' does not exist."
-    // rejection the host emits until it has registered the real handler.
+    await page.evaluate(() => window.__E2E__!.runCommand('__name__.helloWorld'))
     await expect
-      .poll(
-        async () => {
-          try {
-            await page.evaluate(() => window.__E2E__!.runCommand('__name__.helloWorld'))
-          } catch (err) {
-            if (!/Contributed command .* does not exist/.test(String(err))) throw err
-          }
-          return page.evaluate(() => window.__E2E__!.getOutputChannelContent('__displayName__'))
-        },
-        { timeout: 20000 },
-      )
+      .poll(() => page.evaluate(() => window.__E2E__!.getOutputChannelContent('__displayName__')), {
+        timeout: 20000,
+      })
       .toContain('Hello from __displayName__!')
   })
 })

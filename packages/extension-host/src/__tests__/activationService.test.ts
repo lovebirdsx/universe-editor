@@ -15,6 +15,17 @@ export function activate() {
 }
 `
 
+// Same idea, but `activate` parks on a global the test releases by hand, so a
+// second event can be fired while this activation is provably still in flight.
+const BLOCKING_SOURCE = `
+globalThis.__blockingImports = (globalThis.__blockingImports ?? 0) + 1
+export async function activate() {
+  globalThis.__blockingEntered = (globalThis.__blockingEntered ?? 0) + 1
+  await new Promise((resolve) => { globalThis.__releaseBlocking = resolve })
+  globalThis.__blockingDone = (globalThis.__blockingDone ?? 0) + 1
+}
+`
+
 let dir: string
 let mainPath: string
 
@@ -26,8 +37,18 @@ beforeEach(async () => {
 })
 afterEach(async () => {
   removeDirWithRetry(dir)
-  delete (globalThis as Record<string, unknown>).__activated
+  for (const key of [
+    '__activated',
+    '__blockingImports',
+    '__blockingEntered',
+    '__blockingDone',
+    '__releaseBlocking',
+  ]) {
+    delete (globalThis as Record<string, unknown>)[key]
+  }
 })
+
+const g = globalThis as Record<string, unknown>
 
 function scanned(
   activationEvents: string[],
@@ -49,7 +70,36 @@ function scanned(
   }
 }
 
-const activatedCount = () => (globalThis as Record<string, unknown>).__activated as number
+/** An extension whose manifest contributes `commands` but declares no onCommand. */
+function contributes(
+  activationEvents: string[],
+  commands: string[],
+  overrides: Partial<IScannedExtension> = {},
+): IScannedExtension {
+  const ext = scanned(activationEvents, overrides)
+  return {
+    ...ext,
+    manifest: {
+      ...ext.manifest,
+      contributes: { commands: commands.map((command) => ({ command, title: command })) },
+    },
+  }
+}
+
+/** Let every promise that is already resolvable settle. */
+function settle(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0))
+}
+
+async function waitUntil(predicate: () => boolean): Promise<void> {
+  for (let i = 0; i < 200; i++) {
+    if (predicate()) return
+    await settle()
+  }
+  throw new Error('condition never became true')
+}
+
+const activatedCount = () => g.__activated as number
 
 describe('ExtensionActivationService', () => {
   it('does not activate until a matching event fires', async () => {
@@ -218,5 +268,88 @@ describe('ExtensionActivationService', () => {
     await expect(svc.activateById('no.such')).resolves.toBeUndefined()
     await expect(svc.activateById('test.ext')).resolves.toBeUndefined()
     expect(activatedCount()).toBe(0)
+  })
+})
+
+describe('ExtensionActivationService command-derived activation', () => {
+  it('activates on an onCommand event derived from contributes.commands', async () => {
+    const svc = new ExtensionActivationService(
+      [contributes(['onStartupFinished'], ['test.cmd'])],
+      () => true,
+    )
+    await svc.activateByEvent('onCommand:test.cmd')
+    expect(activatedCount()).toBe(1)
+  })
+
+  it('does not activate for a command the manifest does not contribute', async () => {
+    const svc = new ExtensionActivationService(
+      [contributes(['onStartupFinished'], ['test.cmd'])],
+      () => true,
+    )
+    await svc.activateByEvent('onCommand:test.other')
+    expect(activatedCount()).toBe(0)
+  })
+
+  it('joins an in-flight activation instead of resolving immediately', async () => {
+    const blockingMain = join(dir, 'blocking.mjs')
+    await writeFile(blockingMain, BLOCKING_SOURCE, 'utf8')
+    const svc = new ExtensionActivationService(
+      [contributes(['onStartupFinished'], ['test.cmd'], { mainPath: blockingMain })],
+      () => true,
+    )
+
+    // Startup activation (onStartupFinished) parks inside activate().
+    const startup = svc.activateByEvent('onStartupFinished')
+    await waitUntil(() => g.__blockingEntered === 1)
+    expect(svc.isActivating).toBe(true)
+
+    // The contributed command's event must wait for that activation, not race it.
+    let settled = false
+    const command = svc.activateByEvent('onCommand:test.cmd').then(() => {
+      settled = true
+    })
+    await settle()
+    expect(settled).toBe(false)
+    ;(g.__releaseBlocking as () => void)()
+    await Promise.all([startup, command])
+    expect(settled).toBe(true)
+    expect(g.__blockingImports).toBe(1) // joined the import, did not re-enter it
+    expect(g.__blockingDone).toBe(1) // activate() ran exactly once
+  })
+
+  it('resolves an event no extension matches without waiting for other activations', async () => {
+    const blockingMain = join(dir, 'blocking2.mjs')
+    await writeFile(blockingMain, BLOCKING_SOURCE, 'utf8')
+    const svc = new ExtensionActivationService(
+      [contributes(['onStartupFinished'], ['test.cmd'], { mainPath: blockingMain })],
+      () => true,
+    )
+    const startup = svc.activateByEvent('onStartupFinished')
+    await waitUntil(() => g.__blockingEntered === 1)
+
+    let settled = false
+    const unrelated = svc.activateByEvent('onCommand:no.such.command').then(() => {
+      settled = true
+    })
+    await settle()
+    expect(settled).toBe(true)
+    ;(g.__releaseBlocking as () => void)()
+    await Promise.all([startup, unrelated])
+  })
+
+  it('still resolves the derived command event when activate() throws', async () => {
+    const badMain = join(dir, 'bad-derived.mjs')
+    await writeFile(badMain, `export async function activate() { throw new Error('boom') }`, 'utf8')
+    const reports: IActivationErrorReport[] = []
+    const svc = new ExtensionActivationService(
+      [contributes(['onStartupFinished'], ['test.cmd'], { mainPath: badMain })],
+      () => true,
+      undefined,
+      undefined,
+      (r) => reports.push(r),
+    )
+    await expect(svc.activateByEvent('onCommand:test.cmd')).resolves.toBeUndefined()
+    expect(reports).toHaveLength(1)
+    expect(svc.isActivating).toBe(false)
   })
 })

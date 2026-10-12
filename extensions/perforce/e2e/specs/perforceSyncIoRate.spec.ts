@@ -34,7 +34,7 @@
 
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { test, expect, waitForPerforceCommands, type SeedFile } from '../fixtures/perforceApp.js'
+import { test, expect, type SeedFile } from '../fixtures/perforceApp.js'
 import { evaluateWhenRestored } from '@universe-editor/e2e-harness'
 
 const FAKE_IO_PROBE = resolve(
@@ -104,7 +104,6 @@ test.describe('@p1 perforce sync I/O rate', () => {
         message: 'perforce extension should register a source control for the workspace',
       })
       .toBeGreaterThan(0)
-    await waitForPerforceCommands(workbench)
 
     // The p4 status-bar entry: the client name plus its state, one button.
     const entry = page

@@ -135,7 +135,7 @@ export function checkManifestForPublish(
         issues.push({
           level: 'warning',
           message: `activation event "onCommand:${id}" has no matching contributes.commands entry`,
-          hint: 'the command will not show in the command palette — add it under contributes.commands',
+          hint: 'a contributed command derives this event on its own — keep the declaration only for a command registered at runtime, otherwise fix the id or list it under contributes.commands',
         })
       }
     }

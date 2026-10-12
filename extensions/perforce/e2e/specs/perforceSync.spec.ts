@@ -32,7 +32,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { readFileSync, writeFileSync } from 'node:fs'
-import { test, expect, waitForPerforceCommands } from '../fixtures/perforceApp.js'
+import { test, expect } from '../fixtures/perforceApp.js'
 import { evaluateWhenRestored, type WorkbenchPO } from '@universe-editor/e2e-harness'
 import type { Page } from '@playwright/test'
 import type { SeedFile } from '../fixtures/perforceApp.js'
@@ -95,7 +95,6 @@ async function openSyncWorkspace(
       message: 'perforce extension should register a source control for the workspace',
     })
     .toBeGreaterThan(0)
-  await waitForPerforceCommands(workbench)
 }
 
 test.describe('@p1 perforce sync', () => {
