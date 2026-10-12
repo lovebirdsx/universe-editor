@@ -52,6 +52,8 @@ export interface E2EUpdateState {
   readonly version?: string
   readonly percent?: number
   readonly error?: string
+  /** `'important'` when the release is flagged for background download. */
+  readonly urgency?: string
 }
 
 export interface E2ELayoutSizes {

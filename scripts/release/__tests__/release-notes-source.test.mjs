@@ -219,6 +219,34 @@ test('legacy is limited to the migration ceiling and must be reviewed', () => {
   )
 })
 
+test('urgency defaults to normal and rejects anything else', () => {
+  assert.equal(reviewed().urgency, 'normal')
+  assert.equal(reviewed({ urgency: 'normal' }).urgency, 'normal')
+  assert.equal(reviewed({ urgency: 'important' }).urgency, 'important')
+
+  assert.throws(() => reviewed({ urgency: 'critical' }), /urgency 必须是 normal \| important/)
+  assert.throws(() => reviewed({ urgency: '' }), /urgency 必须是 normal \| important/)
+
+  // Archived sections ship no urgency: historical versions must never auto-download.
+  assert.throws(
+    () =>
+      parseNote(
+        noteText(
+          {
+            version: LEGACY_MAX_VERSION,
+            legacy: 'true',
+            status: 'reviewed',
+            date: null,
+            urgency: 'important',
+          },
+          '## x\n',
+        ),
+        noteFile(LEGACY_MAX_VERSION),
+      ),
+    /legacy 归档稿不得标记 urgency/,
+  )
+})
+
 test('an empty body stays empty (never a lone newline)', () => {
   const { body } = parseFrontmatter('---\nversion: 0.1.3\n---\n', 'x.md')
   assert.equal(body, '')
@@ -394,8 +422,16 @@ test('runtime entries keep a fixed key order and drop an absent date', () => {
 
 test('site index carries metadata and page paths, never bodies', () => {
   const index = buildSiteIndex([reviewed()])
-  assert.deepEqual(Object.keys(index.versions[0]), ['version', 'date', 'title', 'summary', 'path'])
+  assert.deepEqual(Object.keys(index.versions[0]), [
+    'version',
+    'date',
+    'title',
+    'summary',
+    'urgency',
+    'path',
+  ])
   assert.equal(index.versions[0].path, 'v0.15.0.html')
+  assert.equal(index.versions[0].urgency, 'normal')
   assert.equal(index.schema, 1)
   assert.ok(!JSON.stringify(index).includes('本次重点'))
 })

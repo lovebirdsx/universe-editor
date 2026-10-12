@@ -7,7 +7,8 @@
  *  extra queries; `explicit` distinguishes a user-initiated check from a background
  *  one; `idle` carries one-shot `error` / `notAvailable` flags that are cleared the
  *  moment after they are broadcast (so a freshly-opened window never reads a stale
- *  "no update" / error prompt).
+ *  "no update" / error prompt). `urgency` rides along on the update-bearing states so
+ *  the UI can shout about an important fix without asking main again.
  *--------------------------------------------------------------------------------------------*/
 
 import { createDecorator } from '@universe-editor/platform'
@@ -23,6 +24,13 @@ export type UpdateStateType =
 
 /** Why auto-update is disabled — mirrors the `update.mode` semantics. */
 export type UpdateDisabledReason = 'manual' | 'none' | 'not-supported'
+
+/**
+ * How urgently a found update should reach the user. Comes from the release note's
+ * `urgency` frontmatter field via the feed's `notes/index.json`; anything the client
+ * cannot resolve (offline, 404, older feed) stays `normal`.
+ */
+export type UpdateUrgency = 'normal' | 'important'
 
 interface UpdateStateBase {
   /** App version currently running (`getAppVersion()`). Present on every state. */
@@ -53,6 +61,9 @@ export interface AvailableUpdateState extends UpdateStateBase {
   readonly type: 'available'
   readonly version: string
   readonly explicit: boolean
+  readonly urgency?: UpdateUrgency
+  /** Main is already downloading this — the UI must not offer a "Download" action. */
+  readonly autoDownload?: boolean
 }
 
 export interface DownloadingUpdateState extends UpdateStateBase {
@@ -60,11 +71,13 @@ export interface DownloadingUpdateState extends UpdateStateBase {
   readonly version: string
   /** Download progress 0–100. */
   readonly percent: number
+  readonly urgency?: UpdateUrgency
 }
 
 export interface DownloadedUpdateState extends UpdateStateBase {
   readonly type: 'downloaded'
   readonly version: string
+  readonly urgency?: UpdateUrgency
 }
 
 export type UpdateState =

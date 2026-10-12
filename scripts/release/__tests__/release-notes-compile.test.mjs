@@ -246,6 +246,31 @@ test('compileNotes ships only reviewed notes at or below the bound, bytes stable
   )
 })
 
+test('urgency reaches the site index but never the in-app runtime JSON', (t) => {
+  const { notesDir, root } = makeTree(t)
+  writeNote(
+    notesDir,
+    '0.15.0',
+    reviewedNote({ urgency: 'important' }, '## 问题修复\n\n- 修好了\n'),
+  )
+  writeNote(notesDir, '0.15.1', reviewedNote({ version: '0.15.1', sourceFrom: 'v0.15.0' }))
+  const notes = loadNotes(notesDir)
+
+  const { siteFiles, runtimeJson } = compileNotes({ notes, maxVersion: '0.15.1', repoRoot: root })
+  const index = JSON.parse(siteFiles.get('notes/index.json'))
+  assert.deepEqual(
+    index.versions.map((entry) => [entry.version, entry.urgency]),
+    [
+      ['0.15.1', 'normal'],
+      ['0.15.0', 'important'],
+    ],
+  )
+  assert.ok(
+    JSON.parse(runtimeJson).every((entry) => !('urgency' in entry)),
+    'the in-app runtime JSON must stay free of urgency',
+  )
+})
+
 test('raw HTML, images, indented code and reference links fail closed', (t) => {
   const { notesDir, root } = makeTree(t)
   const cases = [

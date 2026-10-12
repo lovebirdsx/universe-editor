@@ -21,6 +21,60 @@ import {
 import { IUpdateService, type UpdateState } from '../../shared/ipc/updateService.js'
 import { DownloadUpdateAction, InstallUpdateAction } from '../actions/updateActions.js'
 
+type StatusEntryType = 'available' | 'downloading' | 'downloaded'
+
+/**
+ * Status-bar wording. `downloading` is only ever shown for an unattended important
+ * download — a normal one is already visible in the title-bar indicator, and a status
+ * entry that re-renders on every progress tick would be pure noise.
+ */
+function statusEntryContent(
+  type: StatusEntryType,
+  version: string,
+  important: boolean,
+): { text: string; tooltip: string } {
+  if (type === 'downloading') {
+    const text = localize('update.important.downloading', 'Downloading an important update…')
+    return { text, tooltip: text }
+  }
+  if (type === 'downloaded') {
+    return important
+      ? {
+          text: localize('update.important.downloadedLabel', 'Restart to install important update'),
+          tooltip: localize(
+            'update.important.downloadedTooltip',
+            'Important update {version} downloaded — click to restart and install',
+            { version },
+          ),
+        }
+      : {
+          text: localize('update.statusbar.downloaded', 'Restart to install'),
+          tooltip: localize(
+            'update.statusbar.downloaded.tooltip',
+            'Version {version} downloaded — click to restart and install',
+            { version },
+          ),
+        }
+  }
+  return important
+    ? {
+        text: localize('update.important.statusbar', 'Important update available'),
+        tooltip: localize(
+          'update.important.statusbar.tooltip',
+          'Important update {version} is available — click to download',
+          { version },
+        ),
+      }
+    : {
+        text: localize('update.statusbar.available', 'Update available'),
+        tooltip: localize(
+          'update.statusbar.available.tooltip',
+          'Version {version} is available — click to download',
+          { version },
+        ),
+      }
+}
+
 export class UpdateContribution extends Disposable implements IWorkbenchContribution {
   private _notifiedAvailable: string | undefined
   private _notifiedDownloaded: string | undefined
@@ -39,14 +93,24 @@ export class UpdateContribution extends Disposable implements IWorkbenchContribu
 
   private _onState(state: UpdateState): void {
     switch (state.type) {
-      case 'available':
-        if (this._notifiedAvailable !== state.version) {
+      case 'available': {
+        const important = state.urgency === 'important'
+        // A silent download is already under way: a prompt whose primary action would
+        // be a no-op is worse than no prompt. If that download fails, main republishes
+        // `available` without the flag and the prompt does appear then.
+        if (!state.autoDownload && this._notifiedAvailable !== state.version) {
           this._notifiedAvailable = state.version
           this._notification.notify({
-            severity: Severity.Info,
-            message: localize('update.availableMsg', 'A new version ({version}) is available.', {
-              version: state.version,
-            }),
+            severity: important ? Severity.Warning : Severity.Info,
+            message: important
+              ? localize(
+                  'update.important.availableMsg',
+                  'An important update ({version}) is available — please update soon.',
+                  { version: state.version },
+                )
+              : localize('update.availableMsg', 'A new version ({version}) is available.', {
+                  version: state.version,
+                }),
             actions: [
               {
                 label: localize('update.download', 'Download'),
@@ -56,17 +120,34 @@ export class UpdateContribution extends Disposable implements IWorkbenchContribu
             ],
           })
         }
-        this._showStatusEntry('available', state.version)
+        this._showStatusEntry('available', state.version, important)
         return
-      case 'downloaded':
+      }
+      case 'downloading':
+        // A normal download is already visible in the title-bar indicator; only the
+        // unattended one — which the user never asked for — needs a status-bar sign.
+        if (state.urgency === 'important') {
+          this._showStatusEntry('downloading', state.version, true)
+        } else {
+          this._hideStatusEntry()
+        }
+        return
+      case 'downloaded': {
+        const important = state.urgency === 'important'
         if (this._notifiedDownloaded !== state.version) {
           this._notifiedDownloaded = state.version
           this._notification.notify({
-            severity: Severity.Info,
+            severity: important ? Severity.Warning : Severity.Info,
             sticky: true,
-            message: localize('update.downloadedMsg', 'Version {version} is ready to install.', {
-              version: state.version,
-            }),
+            message: important
+              ? localize(
+                  'update.important.downloadedMsg',
+                  'Important update {version} is ready — restart to install it.',
+                  { version: state.version },
+                )
+              : localize('update.downloadedMsg', 'Version {version} is ready to install.', {
+                  version: state.version,
+                }),
             actions: [
               {
                 label: localize('update.restartNow', 'Restart Now'),
@@ -76,8 +157,9 @@ export class UpdateContribution extends Disposable implements IWorkbenchContribu
             ],
           })
         }
-        this._showStatusEntry('downloaded', state.version)
+        this._showStatusEntry('downloaded', state.version, important)
         return
+      }
       case 'idle':
         this._hideStatusEntry()
         // Only user-initiated checks announce their (quiet) outcome.
@@ -106,25 +188,16 @@ export class UpdateContribution extends Disposable implements IWorkbenchContribu
     }
   }
 
-  private _showStatusEntry(type: 'available' | 'downloaded', version: string): void {
-    const isDownloaded = type === 'downloaded'
+  /**
+   * `kind: 'prominent'` stays reserved for states that need the user to click
+   * something. A download already running only needs to be noticeable, so it keeps
+   * the default kind — otherwise it competes with the restart prompt it precedes.
+   */
+  private _showStatusEntry(type: StatusEntryType, version: string, important: boolean): void {
     const entry = {
-      text: isDownloaded
-        ? localize('update.statusbar.downloaded', 'Restart to install')
-        : localize('update.statusbar.available', 'Update available'),
-      tooltip: isDownloaded
-        ? localize(
-            'update.statusbar.downloaded.tooltip',
-            'Version {version} downloaded — click to restart and install',
-            { version },
-          )
-        : localize(
-            'update.statusbar.available.tooltip',
-            'Version {version} is available — click to download',
-            { version },
-          ),
-      kind: isDownloaded ? ('prominent' as const) : ('default' as const),
-      command: isDownloaded ? InstallUpdateAction.ID : DownloadUpdateAction.ID,
+      ...statusEntryContent(type, version, important),
+      kind: type === 'downloaded' ? ('prominent' as const) : ('default' as const),
+      command: type === 'downloaded' ? InstallUpdateAction.ID : DownloadUpdateAction.ID,
       alignment: StatusBarAlignment.Left,
       priority: 300,
     }

@@ -183,6 +183,50 @@ pnpm release -- --version 0.1.5
 | `--package-script <script>`  | 覆盖默认打包脚本，默认 `package:win:installer`        |
 | `--env <mode>`               | 指定加载仓库根 `.env.<mode>` 分层文件，默认 `dev`      |
 
+### 补丁版本（hotfix）
+
+临时 bug 的修复按紧急度分三档，都**不做 release 分支**：仓库是 trunk-based，`main` 应当随时可发布，
+分支模型（VS Code 的 `release/1.x` recovery release）在单人 + 高频小步发版的场景下维护成本高于收益。
+代价是**每个补丁版都会带上自上个 tag 以来的全部提交**，所以复核这一步不能省。
+
+**档 1 · 常规补丁**（绝大多数临时 bug）
+
+1. 在 `main` 上修复。发行说明写**极简正式稿**即可：`summary` 一句话 + `## 问题修复` 一两条，
+   「本次重点」「按模块分组」都可以整节删掉（见 `docs/release-notes/README.md`）。
+   `status: reviewed` / `sourceFrom` / `sourceTo` 仍然强制——发版门禁要的是「有人确认过这个版本说什么」，
+   不是篇幅。
+2. 发版前复核变更集。`pnpm release` 的 notes 门禁会打印 `上一个 tag..HEAD` 的**完整提交清单**，
+   逐条确认每一条都能见人。
+3. `pnpm release --bump patch`。
+
+**档 2 · 紧急修复**（用户被阻塞，但不必当场重启）
+
+档 1，外加把正式稿标成 `urgency: important`（frontmatter 字段，见 `docs/release-notes/README.md`）。
+效果：客户端在 `update.mode` 为 `start` / `default` 时**后台静默下载**，下载完弹强提示；
+由于 `autoInstallOnAppQuit` 已开启，用户正常退出编辑器就会装上——所以群里说一句
+「重启一下编辑器」即可，不需要强制重启。
+
+**档 3 · 事故止血**（坏版本已经扩散）
+
+前滚，且用「先验后传」换一个验证窗口——feed 不移动，就没有人会升上去：
+
+```bash
+pnpm release --bump patch --no-upload      # 出包 + tag + push，但不推给用户
+#   本机（或一台同事机）手动装 apps/editor/release/*.exe 验证
+pnpm release:upload                        # 验证通过才推给全员
+```
+
+`--no-upload` 之后 `latest.yml` 仍是旧版本，任何人都不会升级；这是 20 人内网规模下最划算的「灰度」，
+不需要通道或放量基建。想让同事一起验，用现成的 feed 覆盖把测试机指向一个 staging 子目录即可——
+**必须取正式 feed 的子目录**（如 `/srv/universe-editor/staging/`，对应
+`http://<服务器IP>/universe-editor/staging/`），这样落在既有 nginx `location` 的服务根之内，不必改 nginx：
+
+```bash
+pnpm release:upload --dir /srv/universe-editor/staging
+#   测试机 <userData>/update-config.json 写 {"updateUrl": "http://<服务器IP>/universe-editor/staging/"}
+#   验证完删掉该文件，测试机即回到正式 feed
+```
+
 ### 三种模式（`--resume` / `--upload-only`）
 
 `--resume` 用于「release commit 已生成、tag 已指向 HEAD，但后续步骤中断」；`--upload-only` 用于「只重传已发布版本」。
@@ -230,8 +274,13 @@ node scripts/release/release-notes/compile.mjs --bundle apps/editor/release/rele
 客户端会在下次启动检查（或命令面板执行 **Check for Updates**）时，从
 `http://<服务器IP>/universe-editor/latest.yml` 发现新版本，弹提示 → 下载 → 重启安装。
 
-> **历史版本不要删**：保留旧的 `.exe` 与 `.blockmap`，electron-updater 的差分下载
-> 需要它们；同时也方便回滚（把 `latest.yml` 换回旧版本即可降级）。
+> **历史版本不要删**：保留旧的 `.exe` 与 `.blockmap`，electron-updater 的差分下载需要它们。
+>
+> ⚠️ **feed 回滚不是止血手段**。把 `latest.yml` 换回旧版本**只对尚未升级的客户端有效**——
+> `electron-updater` 的 `allowDowngrade` 默认为 `false`，已经装上新版本的客户端不会接受更低的
+> 版本号，它们会一直停在坏版本上。发出去之后发现问题的正确处置是**前滚**：修好并立刻发一个
+> `n+1` 补丁版（见下文「补丁版本（hotfix）」）。降级本身也不安全——配置与数据 schema 只向前
+> 兼容，回退会让用户数据不可用。
 
 ### GitHub Release 与 samples CI（自动）
 

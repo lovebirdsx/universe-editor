@@ -3,7 +3,9 @@
  *  Auto-update service backed by electron-updater (VSCode-style). Distribution is
  *  a generic provider pointing at an internal static server (see
  *  electron-builder.yml). autoDownload is off — the renderer prompts before
- *  downloading and again before restarting.
+ *  downloading and again before restarting. The one exception is a release flagged
+ *  `urgency: important` in the feed's notes/index.json: those are fetched in the
+ *  background so a fix users are blocked on does not sit behind an unclicked prompt.
  *
  *  This service owns the scheduling too (a single application-singleton, unlike the
  *  former per-window renderer contribution that would check once per window). It
@@ -32,8 +34,18 @@ import { compareVersions } from '@universe-editor/extensions-common'
 import { IEnvironmentMainService } from '../../environment/environmentMainService.js'
 import { IConfigLocationService } from '../../../shared/ipc/configLocationService.js'
 import type { ConfigLocationMainService } from '../configLocation/configLocationMainService.js'
-import type { IUpdateService, UpdateState } from '../../../shared/ipc/updateService.js'
+import type {
+  IUpdateService,
+  UpdateState,
+  UpdateUrgency,
+} from '../../../shared/ipc/updateService.js'
 import { beginShutdownTrace, recordShutdownMark } from './updateShutdownTrace.js'
+import {
+  feedUrlFromUpdateConfig,
+  fetchUrgencyFromSiteIndex,
+  siteIndexUrl,
+  updaterConfigPath,
+} from './updateUrgency.js'
 
 const { autoUpdater } = electronUpdater
 
@@ -42,6 +54,18 @@ const DEFAULT_MODE: UpdateMode = 'default'
 const DEFAULT_INTERVAL_MINUTES = 1440
 /** Delay before the first automatic check, so it doesn't compete with startup. */
 const FIRST_CHECK_DELAY_MS = 30_000
+
+/** Urgency as carried by a state, if that state carries one at all. */
+function urgencyOf(state: UpdateState): UpdateUrgency | undefined {
+  switch (state.type) {
+    case 'available':
+    case 'downloading':
+    case 'downloaded':
+      return state.urgency
+    default:
+      return undefined
+  }
+}
 
 /** Minimal view of EnvironmentMainService needed here; keeps the unit test light. */
 export interface IUpdateEnvironment {
@@ -62,6 +86,15 @@ export class UpdateMainService implements IUpdateService {
   private _configDirSub: IDisposable | undefined
   private _disposed = false
   private _rechecking = false
+  /** Feed base URL for the urgency lookup — resolved once, then cached. */
+  private _feedBaseUrlResolved = false
+  private _feedBaseUrl: string | undefined
+  /** Only successfully read answers are memoized; a failed fetch retries next check. */
+  private readonly _urgencyByVersion = new Map<string, UpdateUrgency>()
+  /** Versions whose silent download already ran this session (never loop on retry). */
+  private readonly _autoDownloadAttempted = new Set<string>()
+  /** The version an unattended download is currently fetching, if any. */
+  private _autoDownloadVersion: string | undefined
   /** Shutdown-veto gate run before installing (running-session guard). Wired by
    *  the app entry once WindowMainService exists; absent → install proceeds. */
   private _quitConfirmer: ((requestingWindowId?: number) => Promise<boolean>) | undefined
@@ -125,12 +158,13 @@ export class UpdateMainService implements IUpdateService {
   async downloadUpdate(): Promise<void> {
     if (this._state.type !== 'available') return
     const knownVersion = this._state.version
+    const urgency = this._state.urgency
     const latest = await this._recheckLatest()
     const targetVersion = latest ?? knownVersion
     if (latest && compareVersions(latest, knownVersion) > 0) {
       this._logger.info(`download: ${knownVersion} is stale, re-downloading ${latest}`)
     }
-    return this._download(targetVersion)
+    return this._download(targetVersion, { urgency })
   }
 
   async quitAndInstall(requestingWindowId?: number): Promise<void> {
@@ -139,13 +173,14 @@ export class UpdateMainService implements IUpdateService {
     // keeps measuring click → relaunch, not click + recheck latency.
     beginShutdownTrace()
     const downloadedVersion = this._state.version
+    const urgency = this._state.urgency
     const latest = await this._recheckLatest()
     if (latest && compareVersions(latest, downloadedVersion) > 0) {
       // The downloaded build is stale — re-download the newest one instead. The
       // ensuing update-downloaded event re-prompts "Version {latest} is ready to
       // install".
       this._logger.info(`install: ${downloadedVersion} is stale, re-downloading ${latest}`)
-      await this._download(latest)
+      await this._download(latest, { urgency })
       return
     }
     return this._doInstall(requestingWindowId)
@@ -169,18 +204,55 @@ export class UpdateMainService implements IUpdateService {
     }
   }
 
-  private async _download(version: string): Promise<void> {
+  /**
+   * `auto` marks a download nobody asked for (an important update fetched in the
+   * background). It only changes failure handling: an unattended download must not
+   * throw an error prompt at the user, but must still leave them a way to get the fix.
+   */
+  private async _download(
+    version: string,
+    opts: { auto?: boolean; urgency?: UpdateUrgency | undefined } = {},
+  ): Promise<void> {
+    const { auto = false, urgency } = opts
+    this._autoDownloadVersion = auto ? version : undefined
     this._setState({
       type: 'downloading',
       currentVersion: this._currentVersion,
       version,
       percent: 0,
+      ...(urgency !== undefined ? { urgency } : {}),
     })
     try {
       await autoUpdater.downloadUpdate()
     } catch (err) {
-      this._setIdle({ error: (err as Error).message, explicit: true })
+      // electron-updater both dispatches 'error' and rejects, so this may already
+      // have been settled by the event handler; `_settleDownloadFailure` is idempotent.
+      this._settleDownloadFailure((err as Error).message)
     }
+  }
+
+  /**
+   * Settle a failed download. A user-initiated one reports the error; an auto-download
+   * falls back to the `available` prompt instead — nobody asked for it, so an error
+   * toast is noise, but going quiet would hide the fix entirely.
+   */
+  private _settleDownloadFailure(message: string): void {
+    const prev = this._state
+    if (prev.type !== 'downloading') return
+    const auto =
+      this._autoDownloadVersion !== undefined && prev.version === this._autoDownloadVersion
+    if (!auto) {
+      this._setIdle({ error: message, explicit: true })
+      return
+    }
+    this._logger.warn(`auto-download of ${prev.version} failed: ${message}`)
+    this._setState({
+      type: 'available',
+      currentVersion: this._currentVersion,
+      version: prev.version,
+      explicit: false,
+      ...(prev.urgency !== undefined ? { urgency: prev.urgency } : {}),
+    })
   }
 
   private async _doInstall(requestingWindowId?: number): Promise<void> {
@@ -283,6 +355,113 @@ export class UpdateMainService implements IUpdateService {
     this._timers.clear()
   }
 
+  // --- important updates ------------------------------------------------------
+
+  /**
+   * Publish `available` only once the urgency is known: announcing first and upgrading
+   * the state afterwards would flash a normal prompt and then replace it. Waiting costs
+   * one local file read plus, at most, a 2s fetch — and only when there IS an update.
+   */
+  private async _onUpdateAvailable(version: string): Promise<void> {
+    if (this._rechecking) return
+    const explicit = this._state.type === 'checking' ? this._state.explicit : false
+    const urgency = await this._resolveUrgency(version)
+    if (this._disposed) return
+    // The await opens a window: a re-check may already have moved us on, or the user
+    // may have started the download. Never regress a state that is already ahead.
+    const current = this._state
+    if (
+      (current.type === 'downloading' || current.type === 'downloaded') &&
+      current.version === version
+    ) {
+      return
+    }
+    const auto = urgency === 'important' && !this._autoDownloadAttempted.has(version)
+    const autoDownload = auto && (await this._shouldAutoDownload())
+    if (this._disposed) return
+    this._setState({
+      type: 'available',
+      currentVersion: this._currentVersion,
+      version,
+      explicit,
+      urgency,
+      ...(autoDownload ? { autoDownload: true } : {}),
+    })
+    if (autoDownload) void this._autoDownload(version)
+  }
+
+  /**
+   * `none` / `manual` mean the user drives updates. Downloading behind their back would
+   * also silently install on the next normal quit (autoInstallOnAppQuit), which is
+   * precisely what those modes opt out of — so they keep the loud prompt instead.
+   */
+  private async _shouldAutoDownload(): Promise<boolean> {
+    const { mode } = await this._readConfig()
+    return mode === 'start' || mode === 'default'
+  }
+
+  private async _autoDownload(version: string): Promise<void> {
+    const current = this._state
+    if (current.type !== 'available' || current.version !== version) return
+    // Register before awaiting so a concurrent check cannot start a second download.
+    this._autoDownloadAttempted.add(version)
+    this._logger.info(`important update ${version}: downloading without waiting for a click`)
+    await this._download(version, { auto: true, urgency: 'important' })
+  }
+
+  private async _resolveUrgency(version: string): Promise<UpdateUrgency> {
+    const cached = this._urgencyByVersion.get(version)
+    if (cached !== undefined) return cached
+    const baseUrl = await this._feedBaseUrlForNotes()
+    const url = baseUrl === undefined ? undefined : siteIndexUrl(baseUrl)
+    if (url === undefined) {
+      this._logger.debug(`urgency: no usable feed url, treating ${version} as normal`)
+      return 'normal'
+    }
+    const urgency = await fetchUrgencyFromSiteIndex({ url, version })
+    if (urgency === undefined) {
+      this._logger.debug(`urgency: ${url} did not answer for ${version}, treating it as normal`)
+    } else {
+      // Only a readable index is worth remembering; a failed fetch gets another chance
+      // on the next check rather than being pinned to `normal` for the session.
+      this._urgencyByVersion.set(version, urgency)
+    }
+    return urgency ?? 'normal'
+  }
+
+  /**
+   * The feed the updater is actually pointed at. A runtime override only takes effect on
+   * packaged builds (dev / E2E always read dev-app-update.yml), so mirror that here —
+   * resolving a different URL than the one being checked would mislabel a version.
+   */
+  private async _feedBaseUrlForNotes(): Promise<string | undefined> {
+    if (this._feedBaseUrlResolved) return this._feedBaseUrl
+    const override = this._environment.updateUrl
+    if (app.isPackaged && override !== undefined && isHttpUrl(override)) {
+      this._feedBaseUrl = override
+      this._feedBaseUrlResolved = true
+      return this._feedBaseUrl
+    }
+    try {
+      const text = await fs.readFile(
+        updaterConfigPath({
+          isPackaged: app.isPackaged,
+          resourcesPath: process.resourcesPath,
+          appPath: app.getAppPath(),
+        }),
+        'utf8',
+      )
+      // A readable config is final even when it carries no `url:` line; an unreadable
+      // one is not cached, so a transient failure recovers on the next check.
+      this._feedBaseUrl = feedUrlFromUpdateConfig(text)
+      this._feedBaseUrlResolved = true
+    } catch (err) {
+      this._feedBaseUrl = undefined
+      this._logger.debug(`urgency: no feed config to read (${String(err)})`)
+    }
+    return this._feedBaseUrl
+  }
+
   // --- state ----------------------------------------------------------------
 
   private _wireEvents(): void {
@@ -292,16 +471,7 @@ export class UpdateMainService implements IUpdateService {
         this._setState({ type: 'checking', currentVersion: this._currentVersion, explicit: false })
       }
     })
-    autoUpdater.on('update-available', (info) => {
-      if (this._rechecking) return
-      const explicit = this._state.type === 'checking' ? this._state.explicit : false
-      this._setState({
-        type: 'available',
-        currentVersion: this._currentVersion,
-        version: info.version,
-        explicit,
-      })
-    })
+    autoUpdater.on('update-available', (info) => void this._onUpdateAvailable(info.version))
     autoUpdater.on('update-not-available', () => {
       if (this._rechecking) return
       const explicit = this._state.type === 'checking' ? this._state.explicit : false
@@ -309,24 +479,37 @@ export class UpdateMainService implements IUpdateService {
     })
     autoUpdater.on('download-progress', (progress) => {
       if (this._rechecking) return
-      const version = this._state.type === 'downloading' ? this._state.version : ''
+      const prev = this._state
+      const version = prev.type === 'downloading' ? prev.version : ''
+      const urgency = urgencyOf(prev)
       this._setState({
         type: 'downloading',
         currentVersion: this._currentVersion,
         version,
         percent: Math.round(progress.percent),
+        ...(urgency !== undefined ? { urgency } : {}),
       })
     })
     autoUpdater.on('update-downloaded', (info) => {
       if (this._rechecking) return
+      const prev = this._state
+      const urgency =
+        prev.type === 'downloading' && prev.version === info.version ? prev.urgency : undefined
+      this._autoDownloadVersion = undefined
       this._setState({
         type: 'downloaded',
         currentVersion: this._currentVersion,
         version: info.version,
+        ...(urgency !== undefined ? { urgency } : {}),
       })
     })
     autoUpdater.on('error', (err) => {
       if (this._rechecking) return
+      // A failure while downloading belongs to that download, not to a check.
+      if (this._state.type === 'downloading') {
+        this._settleDownloadFailure(err.message)
+        return
+      }
       const explicit = this._state.type === 'checking' ? this._state.explicit : true
       this._setIdle({ error: err.message, explicit })
     })

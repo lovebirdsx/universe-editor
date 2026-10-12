@@ -33,6 +33,13 @@ export const LEGACY_MAX_VERSION = '0.14.9'
 
 export const STATUSES = ['draft', 'reviewed']
 
+/**
+ * `important` is shipped to clients through `notes/index.json` only; the app reads it
+ * when an update is found and auto-downloads the build in the background. Reserve it
+ * for fixes users should pick up promptly — it reaches them without a click.
+ */
+export const URGENCIES = ['normal', 'important']
+
 const FRONTMATTER_KEYS = new Set([
   'version',
   'date',
@@ -41,6 +48,7 @@ const FRONTMATTER_KEYS = new Set([
   'status',
   'sourceFrom',
   'sourceTo',
+  'urgency',
   'legacy',
 ])
 
@@ -210,6 +218,15 @@ export function parseNote(text, { file, expectedVersion, lineOffset = 0 }) {
     fail(label, `status 必须是 ${STATUSES.join(' | ')}：${status || '(空)'}`)
   if (legacy && status !== 'reviewed') fail(label, 'legacy 归档必须标记 status: reviewed')
 
+  const urgencyRaw = fields.get('urgency')
+  if (urgencyRaw !== undefined && !URGENCIES.includes(urgencyRaw)) {
+    fail(label, `urgency 必须是 ${URGENCIES.join(' | ')}：${urgencyRaw}`)
+  }
+  const urgency = urgencyRaw ?? 'normal'
+  if (legacy && urgency !== 'normal') {
+    fail(label, 'legacy 归档稿不得标记 urgency（历史版本不参与紧急更新）')
+  }
+
   const date = fields.get('date')
   if (date === undefined || date === '') {
     if (!legacy) fail(label, '缺少必填字段 date（合法 YYYY-MM-DD）')
@@ -250,6 +267,7 @@ export function parseNote(text, { file, expectedVersion, lineOffset = 0 }) {
     date: date ? date : undefined,
     title,
     summary,
+    urgency,
     sourceFrom: sourceFrom ?? undefined,
     sourceTo: sourceTo ?? undefined,
     bodyLine,
@@ -370,7 +388,11 @@ export function serializeRuntimeJson(notes) {
   return `${JSON.stringify(buildRuntimeEntries(notes), null, 2)}\n`
 }
 
-/** Site index: metadata + page path only — the download page never fetches full bodies. */
+/**
+ * Site index: metadata + page path only — the download page never fetches full bodies.
+ * The app also reads it (via the update feed) to learn a new version's urgency, so this
+ * file is a runtime contract, not just a download-page detail.
+ */
 export function buildSiteIndex(notes) {
   return {
     schema: 1,
@@ -379,6 +401,7 @@ export function buildSiteIndex(notes) {
       date: note.date ?? '',
       title: note.title,
       summary: note.summary,
+      urgency: note.urgency,
       path: `v${note.version}.html`,
     })),
   }

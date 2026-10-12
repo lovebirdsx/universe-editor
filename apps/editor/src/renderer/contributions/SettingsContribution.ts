@@ -726,7 +726,7 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
             },
             description: localize(
               'settings.update.mode.description',
-              'Controls whether the editor checks for updates automatically. none: never; manual: only via the command; start: once shortly after launch; default: on launch and periodically.',
+              'Controls whether the editor checks for updates automatically. none: never; manual: only via the command; start: once shortly after launch; default: on launch and periodically. Releases marked as important download in the background under start / default and install on a normal quit.',
             ),
           },
           'update.checkIntervalMinutes': {

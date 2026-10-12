@@ -13,7 +13,11 @@ import { useCallback, useEffect, useState } from 'react'
 import { ICommandService, localize } from '@universe-editor/platform'
 import { CircleFadingArrowUp, Download, LoaderCircle, PackageCheck } from 'lucide-react'
 import { useService } from '../useService.js'
-import { IUpdateService, type UpdateState } from '../../../shared/ipc/updateService.js'
+import {
+  IUpdateService,
+  type UpdateState,
+  type UpdateUrgency,
+} from '../../../shared/ipc/updateService.js'
 import { CheckForUpdatesAction } from '../../actions/updateActions.js'
 import styles from './TitleBar.module.css'
 
@@ -55,42 +59,93 @@ export function present(state: UpdateState): Presentation | undefined {
         prominent: false,
       }
     case 'available':
+      // An important update is downloaded for the user, so by the time this renders
+      // there is nothing left to click — show it as the download it is about to be.
+      if (state.autoDownload) {
+        return {
+          glyph: 'downloading',
+          label: localize('update.important.downloadingLabel', 'Important update… {percent}%', {
+            percent: 0,
+          }),
+          tooltip: localize(
+            'update.important.downloadingTooltip',
+            'Downloading an important update… {percent}%',
+            { percent: 0 },
+          ),
+          prominent: false,
+          percent: 0,
+        }
+      }
       return {
         glyph: 'available',
-        label: localize('update.availableLabel', 'Update'),
-        tooltip: localize(
-          'update.availableTooltip',
-          'A new version ({version}) is available — click to download',
-          { version: state.version },
-        ),
+        label: importantLabel(state.urgency) ?? localize('update.availableLabel', 'Update'),
+        tooltip:
+          state.urgency === 'important'
+            ? localize(
+                'update.important.statusbar.tooltip',
+                'Important update {version} is available — click to download',
+                { version: state.version },
+              )
+            : localize(
+                'update.availableTooltip',
+                'A new version ({version}) is available — click to download',
+                { version: state.version },
+              ),
         prominent: true,
       }
     case 'downloading':
       return {
         glyph: 'downloading',
-        label: localize('update.downloadingLabel', 'Downloading… {percent}%', {
-          percent: state.percent,
-        }),
-        tooltip: localize('update.downloadingShort', 'Downloading update… {percent}%', {
-          percent: state.percent,
-        }),
+        label:
+          state.urgency === 'important'
+            ? localize('update.important.downloadingLabel', 'Important update… {percent}%', {
+                percent: state.percent,
+              })
+            : localize('update.downloadingLabel', 'Downloading… {percent}%', {
+                percent: state.percent,
+              }),
+        tooltip:
+          state.urgency === 'important'
+            ? localize(
+                'update.important.downloadingTooltip',
+                'Downloading an important update… {percent}%',
+                { percent: state.percent },
+              )
+            : localize('update.downloadingShort', 'Downloading update… {percent}%', {
+                percent: state.percent,
+              }),
         prominent: false,
         percent: state.percent,
       }
     case 'downloaded':
       return {
         glyph: 'downloaded',
-        label: localize('update.downloadedLabel', 'Restart to update'),
-        tooltip: localize(
-          'update.downloadedTooltip',
-          'Version {version} downloaded — click to restart and install',
-          { version: state.version },
-        ),
+        label:
+          importantLabel(state.urgency) ?? localize('update.downloadedLabel', 'Restart to update'),
+        tooltip:
+          state.urgency === 'important'
+            ? localize(
+                'update.important.downloadedTooltip',
+                'Important update {version} downloaded — click to restart and install',
+                { version: state.version },
+              )
+            : localize(
+                'update.downloadedTooltip',
+                'Version {version} downloaded — click to restart and install',
+                { version: state.version },
+              ),
         prominent: true,
       }
     default:
       return undefined
   }
+}
+
+/** Shared short label for the important variants; `undefined` means "not important". */
+function importantLabel(urgency: UpdateUrgency | undefined): string | undefined {
+  return urgency === 'important'
+    ? localize('update.important.label', 'Important update')
+    : undefined
 }
 
 function GlyphIcon({ glyph }: { glyph: Glyph }) {
@@ -117,7 +172,8 @@ export function UpdateIndicator() {
     if (!state) return
     switch (state.type) {
       case 'available':
-        void update.downloadUpdate()
+        // Already downloading itself — a second start would re-enter the failure path.
+        if (!state.autoDownload) void update.downloadUpdate()
         return
       case 'downloaded':
         void update.quitAndInstall()

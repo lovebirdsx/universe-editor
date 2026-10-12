@@ -95,6 +95,7 @@ summary: 一句话摘要（下载页列表用）
 status: draft
 sourceFrom: v0.14.9
 sourceTo: <40 位提交 SHA>
+urgency: normal
 ---
 
 ## 本次重点
@@ -104,6 +105,11 @@ sourceTo: <40 位提交 SHA>
 - 文件名 `<version>.md` 必须与 frontmatter `version` 一致（不带 `v` 前缀）。
 - `date` 由作者明确填写（编译器**不会**用「今天」补）——填与用户确认的计划发布日期。
 - `sourceTo` 用完整 SHA；它只是追溯线索，不声称覆盖完整。
+- `urgency` 默认 `normal`，**不要顺手改成 `important`**：它是唯一会改变客户端行为的字段（`start`/`default` 模式下后台静默下载）。只有阻塞性 bug / 数据损坏 / 安全事故才够格，且必须单独向用户点明这个后果再改。
+
+### 紧急补丁（hotfix）
+
+时间紧时不要为了凑结构拖时间——**只留 `summary` 与 `## 问题修复`（一两条）就是合法正式稿**，「本次重点」「按场景分组」整节删掉。步骤可以压缩：定范围只跑 `git log --oneline <上一个 tag>..HEAD` 逐条过一遍，表述只写「修好了什么、触发条件是什么」。`status: reviewed` / `sourceFrom` / `sourceTo` 仍然强制，不压缩。
 
 ## 6. 复核与确认
 

@@ -365,15 +365,24 @@ export function assertReleaseNotesPreflight({ version, previousTag, notesDir }) 
 }
 
 /**
- * Commits made after the note's `sourceTo` are not covered by the draft's review. Report
- * them (never block): the author decides whether the note needs another pass.
+ * Print what the release actually ships, then what review did not cover. The full
+ * `previousTag..HEAD` list is the review checklist — a patch release carries every commit
+ * landed since the last tag, so an author must be able to eyeball all of them. Commits made
+ * after the note's `sourceTo` are a separate signal (reviewed text no longer describes the
+ * tail of the range). Both report; neither blocks — the author decides.
  */
-function reportCommitsAfterSourceTo(note) {
+function reportChangeSet(note, previousTag) {
+  if (previousTag) {
+    const commits = commitSubjects(`${previousTag}..HEAD`)
+    log(`本次发布将包含 ${previousTag}..HEAD 的 ${commits.length} 个提交（请逐条复核）：`)
+    for (const line of commits) log(`  ${line}`)
+  }
+
   if (!note.sourceTo) return
-  const out = gitMaybe(['log', `${note.sourceTo}..HEAD`, '--no-merges', '--pretty=format:%h %s'])
-  if (!out) return
+  const after = commitSubjects(`${note.sourceTo}..HEAD`)
+  if (after.length === 0) return
   log(`注意: ${note.file} 的 sourceTo ${note.sourceTo} 之后还有提交（未纳入本次复核，仅提醒）：`)
-  for (const line of out.split('\n')) log(`  ${line}`)
+  for (const line of after) log(`  ${line}`)
 }
 
 /**
@@ -694,7 +703,7 @@ function releaseRunners({ state, args, dryRun }) {
       } catch (error) {
         die(error instanceof Error ? error.message : String(error))
       }
-      if (!state.note.legacy) reportCommitsAfterSourceTo(state.note)
+      if (!state.note.legacy) reportChangeSet(state.note, previousTag)
     },
     versionBump: () => updateEditorVersion(targetVersion, dryRun),
     compileNotes: () => compileReleaseNotes(targetVersion, args, dryRun),

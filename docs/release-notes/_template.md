@@ -6,6 +6,7 @@ summary: 一句话摘要，下载页列表会用到。
 status: draft
 sourceFrom: vPREVIOUS
 sourceTo: <40 位提交 SHA>
+urgency: normal
 ---
 
 ## 本次重点

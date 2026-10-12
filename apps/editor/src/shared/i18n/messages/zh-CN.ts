@@ -1024,7 +1024,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.update.checkIntervalMinutes.description':
     '运行时检查更新的频率（分钟）。0 表示禁用周期检查。',
   'settings.update.mode.description':
-    '控制编辑器是否自动检查更新。none：从不；manual：仅通过命令；start：启动后不久检查一次；default：启动时检查并周期检查。',
+    '控制编辑器是否自动检查更新。none：从不；manual：仅通过命令；start：启动后不久检查一次；default：启动时检查并周期检查。标记为紧急的版本会在 start / default 下于后台自动下载，正常退出时安装。',
   'settings.workbench.chat.virtualizationThreshold.description':
     'Agent 会话时间线项超过此数量时启用虚拟滚动。',
   'settings.workbench.colorTheme.description': '工作台颜色主题。',
@@ -1991,6 +1991,16 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'update.checkingLabel': '正在检查…',
   'update.downloadedLabel': '重启以更新',
   'update.downloadingLabel': '正在下载… {percent}%',
+  'update.important.availableMsg': '有重要更新（{version}）可用，建议尽快更新。',
+  'update.important.label': '重要更新',
+  'update.important.statusbar': '有重要更新',
+  'update.important.statusbar.tooltip': '重要更新 {version} 可用 —— 点击下载',
+  'update.important.downloading': '正在下载重要更新…',
+  'update.important.downloadingLabel': '重要更新… {percent}%',
+  'update.important.downloadingTooltip': '正在下载重要更新… {percent}%',
+  'update.important.downloadedMsg': '重要更新 {version} 已下载，建议尽快重启完成安装。',
+  'update.important.downloadedLabel': '重启安装重要更新',
+  'update.important.downloadedTooltip': '重要更新 {version} 已下载 —— 点击重启并安装',
   'update.statusbar.available': '有可用更新',
   'update.statusbar.available.tooltip': '版本 {version} 可用 —— 点击下载',
   'update.statusbar.downloaded': '重启以安装',

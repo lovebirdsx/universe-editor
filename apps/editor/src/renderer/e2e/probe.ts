@@ -668,6 +668,7 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
         ...('version' in s && s.version !== undefined && { version: s.version }),
         ...(s.type === 'downloading' && { percent: s.percent }),
         ...(s.type === 'idle' && s.error !== undefined && { error: s.error }),
+        ...('urgency' in s && s.urgency !== undefined && { urgency: s.urgency }),
       }
     },
     openWorkspace: (fsPath) => services.workspaceService.openFolder(URI.file(fsPath)),
