@@ -4,6 +4,7 @@
  *  (never a throw) so a missing marker can only ever degrade to "normal update".
  *--------------------------------------------------------------------------------------------*/
 
+import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import {
   feedUrlFromUpdateConfig,
@@ -15,15 +16,17 @@ import {
 
 describe('updaterConfigPath', () => {
   it('follows electron-updater dev / packaged convention', () => {
+    // Expected values go through join(): the contract is which directory each mode
+    // reads from, not the separator the running platform happens to use.
     expect(
       updaterConfigPath({
         isPackaged: false,
         resourcesPath: '/res',
         appPath: '/app',
       }),
-    ).toBe('/app/dev-app-update.yml')
+    ).toBe(join('/app', 'dev-app-update.yml'))
     expect(updaterConfigPath({ isPackaged: true, resourcesPath: '/res', appPath: '/app' })).toBe(
-      '/res/app-update.yml',
+      join('/res', 'app-update.yml'),
     )
   })
 })
