@@ -19,15 +19,15 @@ test.describe('@p1 __name__', () => {
 
     // Run the command; the first invocation activates the extension (onCommand:),
     // so poll through the cold-start window. Playwright's poll does not retry on
-    // a thrown callback, so swallow the "extension host may only execute" rejection
-    // the renderer emits until the host has registered the real handler.
+    // a thrown callback, so swallow the "Contributed command 'x' does not exist."
+    // rejection the host emits until it has registered the real handler.
     await expect
       .poll(
         async () => {
           try {
             await page.evaluate(() => window.__E2E__!.runCommand('__name__.helloWorld'))
           } catch (err) {
-            if (!/extension host may only execute/.test(String(err))) throw err
+            if (!/Contributed command .* does not exist/.test(String(err))) throw err
           }
           return page.evaluate(() => window.__E2E__!.getOutputChannelContent('__displayName__'))
         },

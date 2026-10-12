@@ -725,10 +725,10 @@ import { expect as playwrightExpect } from '@playwright/test'
  * `context.subscriptions.push(...)` burst. getScmSourceControlCount() flips >0 in
  * that window, so a perforce.* command fired right after the SCM-count gate can
  * reach a host that has no handler yet: the renderer forwards the contributed
- * command, the host has nothing to run and forwards it back, and the renderer
- * rejects it ("extension host may only execute _workbench.* commands"). Because
- * all handlers register in one synchronous burst, polling any one read-only
- * command (perforce.refresh) until it stops rejecting gates them all.
+ * command and the host, owning none, rejects it ("Contributed command 'x' does
+ * not exist."). Because all handlers register in one synchronous burst, polling
+ * any one read-only command (perforce.refresh) until it stops rejecting gates
+ * them all.
  */
 export async function waitForPerforceCommands(workbench: WorkbenchPO): Promise<void> {
   await playwrightExpect
@@ -738,7 +738,7 @@ export async function waitForPerforceCommands(workbench: WorkbenchPO): Promise<v
           await workbench.runCommand('perforce.refresh')
           return true
         } catch (err) {
-          if (/extension host may only execute/.test(String(err))) return false
+          if (/Contributed command .* does not exist/.test(String(err))) return false
           throw err
         }
       },

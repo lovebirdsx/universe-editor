@@ -722,6 +722,178 @@
         {
           "command": "perforce.viewCommit",
           "when": "false"
+        },
+        {
+          "command": "perforce.refresh",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.reconcile",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.reconcileIntoNewChangelist",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.syncLatest",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.sync",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.previewSync",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.copyDepotPath",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.login",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.logout",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.switchClient",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.showOutput",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.openFile",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.edit",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.add",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.delete",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.revert",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.revertUnchanged",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.revertChangelist",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.deleteChangelist",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.moveToReconcile",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.openShelvedFile",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.submitDefault",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.submitChangelist",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.newChangelist",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.reopen",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.moveToNewChangelist",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.editChangelist",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.shelve",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.unshelve",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.unshelveByNumber",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.deleteShelved",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.resolve",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.resolveChangelist",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.resolveAcceptYours",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.resolveAcceptTheirs",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.openMergeEditor",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.swarm.ping",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.swarm.requestReview",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.swarm.updateReviewFromChangelist",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.timeline.openDiff",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.timeline.copyChangelistNumber",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.timeline.openInGraph",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.p4delta.install",
+          "when": "perforceHasWorkspace"
         }
       ]
     },

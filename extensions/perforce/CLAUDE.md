@@ -9,10 +9,10 @@
 | Perforce Graph（历史图谱） | [`docs/graph.md`](docs/graph.md) |
 | Helix Swarm（代码审核） | [`src/swarm/CLAUDE.md`](src/swarm/CLAUDE.md) |
 | 工作区范围（daily scope）/ 收集修改 / Explorer 改动徽标 / 落后灰字 | [`docs/reconcile.md`](docs/reconcile.md) |
-| 菜单贡献 / when 子句 / 图标 / 多选拖放 | [`docs/menus.md`](docs/menus.md) |
+| 菜单贡献 / when / 命令面板可见性 / 图标 / 多选拖放 | [`docs/menus.md`](docs/menus.md) |
 | e2e / fake-p4 | [`e2e/CLAUDE.md`](e2e/CLAUDE.md) |
 | δ 引擎 / 自装副本（下载·校验·升级） | [`src/p4delta/CLAUDE.md`](src/p4delta/CLAUDE.md) |
-| 任何 p4 命令行为 / 解析 | [`docs/pitfalls.md`](docs/pitfalls.md)（踩坑完整叙事） |
+| 任何 p4 命令行为 / 解析 | [`docs/pitfalls.md`](docs/pitfalls.md) |
 
 > 先读 skill `create-extension`（插件通用骨架、manifest 贡献点、engines 红线、NLS）——本文档只讲 p4 特有的东西。
 

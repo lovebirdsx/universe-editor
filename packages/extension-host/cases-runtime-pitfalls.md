@@ -6,6 +6,14 @@
 
 runtime 命令由连接自带的 `MainThreadCommands` 闭包自己的 extHost proxy，天然正确。但**静态贡献命令**（manifest 声明的命令）的 bootstrap proxy 调的是 client service 的 `executeContributedCommand`，不闭包任何连接——所以需要账本：`_fetchAndIndex` 记账 + `MainThreadCommands` 的 ledger 回调。单 host 下账本仍保留：重启窗口期旧连接的命令要随 teardown 清掉，否则指向已死的连接。
 
+## 命令执行两个方向：未注册的贡献命令由宿主 reject，绝不回弹 renderer
+
+renderer → host（`$executeContributedCommand`，静态贡献命令的 bootstrap proxy 走这条）与 host → renderer（`IMainThreadCommands.$executeCommand`）是**两条路**，早先共用一个 `execute()`：宿主查不到 handler 就转发回 renderer。而 renderer 侧的 host→renderer **白名单**（`_workbench.*` + 逐个登记的 VSCode 兼容内建，`MainThreadCommands.ts`）是为另一条路设的护栏，于是正常路径命中它——用户看到 `extension host may only execute _workbench.* commands or allowlisted built-ins, not "perforce.p4delta.install"`，把「宿主没有这个命令」报成了内部不变量。触发面很宽：任何「manifest 有贡献命令、activate 早退不注册 handler」的扩展（perforce/git 在非本家工作区里就是），加上冷启动窗口期（handler 尚未注册，见 `.claude/skills/fix-ci-e2e-flake`）。
+
+VSCode 语义：renderer→host 方向宿主无 handler 即 reject `Contributed command 'X' does not exist.`（`api/common/extHostCommands.ts`），**从不回弹**；host→renderer 方向根本没有白名单（`api/browser/mainThreadCommands.ts`）。现 `ExtensionCommandRegistry.executeContributed` 只跑本宿主所持命令（缺失即 reject），`execute` 保留 renderer 回落——回落服务的是**扩展 API 的 `executeCommand`**（未注册 id 转 renderer 执行 Action2，VSCode 同样行为）与树视图的 `_workbench.*` 转发，别顺手删。白名单仍是命名空间边界：环路现在断在宿主侧，最多回弹一次，**贡献命令方向**不再撞它；但**扩展 API 方向仍会**——扩展调 `commands.executeCommand('workbench.action.files.save')` 这类非 `_workbench.*` 核心命令照样被拒（VSCode 无此限制，这里是**有意收紧**），所以那条消息对扩展作者仍然可见，只是不再是「用户点面板」的路径。
+
+**同型未修：git**。git 在非仓库窗口里同样是 `activate()` 只注册几个 stub 命令，54 条命令中 51 条还是**隐式无 `when`** 的面板条目（3 条 `when:false`）——非 git 窗口的面板里同样列着一批点了必失败的 `Git: …`，只是报错现在是准确的。perforce 的门控（键 + 逐条 `menus.commandPalette.when`）可直接照搬，但 git 的键要跟仓库增删事件联动（perforce 一次写死即可），属于独立一轮。
+
 ## treeKill 是 backstop 不是主路径
 
 host fork 出 grandchild（typescript 插件 → tsserver）。优雅停链路：`stop` 关 stdin / `stopAll` before-quit / renderer `beforeunload`，让 CLI 自己的 exit hook 回收 tsserver。**treeKill 只做 backstop**：硬 SIGKILL 会甩掉慢启动的 tsserver 成孤儿——卡 Playwright teardown、给真实用户留 stray electron.exe。改 host 退出路径务必保留优雅停链。

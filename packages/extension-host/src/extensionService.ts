@@ -1623,7 +1623,7 @@ export class ExtensionService implements IExtensionHostBridge {
 
   /** IExtHostCommands.$executeContributedCommand */
   executeContributedCommand(id: string, args: unknown[]): Promise<unknown> {
-    return this.executeCommand(id, args)
+    return this._commands.executeContributed(id, args)
   }
 
   /** IExtHostExtensions.$getContributions */

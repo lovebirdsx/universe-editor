@@ -31,6 +31,7 @@ import {
   OpenFileAtAction,
   OpenFolderFromExtensionAction,
   OpenFolderInNewWindowFromExtensionAction,
+  SetContextAction,
   UpdateConfigurationAction,
   WriteClipboardAction,
 } from './extensionApiActions.js'
@@ -781,6 +782,7 @@ registerAction2(OpenFolderFromExtensionAction)
 registerAction2(OpenFolderInNewWindowFromExtensionAction)
 registerAction2(GetConfigurationAction)
 registerAction2(UpdateConfigurationAction)
+registerAction2(SetContextAction)
 registerAction2(WriteClipboardAction)
 registerAction2(OpenGitGraphFromExtensionAction)
 registerAction2(OpenPerforceGraphFromExtensionAction)

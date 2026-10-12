@@ -534,6 +534,23 @@ export function resolveP4deltaEngine(
 }
 
 export async function activate(context: ExtensionContext): Promise<void> {
+  // The palette gate for every `perforce.*` command (manifest declares
+  // `when: perforceHasWorkspace`). Written unconditionally and awaited BEFORE
+  // anything can bail out: a setContext key outlives the activation that set it,
+  // so a restart in a folder that is not a p4 workspace has to clear whatever the
+  // previous activation left. The awaits also keep the two writes ordered.
+  //
+  // A write that fails is swallowed: the gate is cosmetic (it only hides palette
+  // rows), and taking activation down over it would cost the whole provider.
+  const setHasWorkspace = async (value: boolean): Promise<void> => {
+    try {
+      await commands.executeCommand('setContext', 'perforceHasWorkspace', value)
+    } catch (err) {
+      console.error('[perforce] setContext failed', err)
+    }
+  }
+  await setHasWorkspace(false)
+
   const root = workspace.rootPath
   if (!root) {
     console.info('[perforce] no workspace folder open; perforce source control disabled')
@@ -933,6 +950,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
     console.info(`[perforce] no Perforce workspace for ${root}; source control disabled`)
     return
   }
+  await setHasWorkspace(true)
 
   const mgr = new ClientManager()
   context.subscriptions.push(mgr)

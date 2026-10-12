@@ -224,10 +224,30 @@ describe('ExtensionService', () => {
 
     await service.activateByEvent('onCommand:unrelated')
     expect(mt.registered).toEqual([])
-    // Before activation the host doesn't own the command, so it forwards to the
-    // renderer rather than running a handler locally.
-    await service.executeContributedCommand('test.cmd', [])
-    expect(mt.executed).toEqual([{ id: 'test.cmd', args: [] }])
+    // Before activation the host owns no handler for it: the call is rejected
+    // rather than bounced back into the renderer that made it.
+    await expect(service.executeContributedCommand('test.cmd', [])).rejects.toThrow(
+      "Contributed command 'test.cmd' does not exist.",
+    )
+    expect(mt.executed).toEqual([])
+  })
+
+  it('still forwards an extension-initiated executeCommand to the renderer', async () => {
+    const mt = recordingMainThread()
+    const service = new ExtensionService(
+      [scanned(['onCommand:test.cmd'])],
+      mt.impl,
+      noopWindow,
+      noopScm,
+      noopTimeline,
+    )
+
+    // The extension API lane keeps its renderer fallback: `_workbench.*` and the
+    // allowlisted built-ins live there.
+    await expect(service.executeCommand('_workbench.openDiff', [])).resolves.toBe(
+      'forwarded:_workbench.openDiff',
+    )
+    expect(mt.executed).toEqual([{ id: '_workbench.openDiff', args: [] }])
   })
 
   it('activates lazily, registering the command and routing execution', async () => {

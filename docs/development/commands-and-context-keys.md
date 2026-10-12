@@ -85,6 +85,24 @@ f1: false,
 
 **做法**：只在 `contributes.menus`（scm / title 等）里写该命令项，菜单项自带 `icon` 即可显示图标、title/tooltip 由 Action2 提供（对照 git 扩展：`git-graph.view` 只出现在 menus）。细节与排查手法见 skill `create-extension`。
 
+## 扩展的上下文键（`setContext`）与命令可见性三层
+
+扩展写上下文键走 VSCode 的公开命令字面量 **`setContext`**（`SetContextAction`，`apps/editor/src/renderer/actions/extensionApiActions.ts`；同时登记在 `MainThreadCommands` 的 `HOST_INVOKABLE_BUILT_INS`，因为扩展宿主只能调 `_workbench.*` 或逐个登记的内建）。写入的域是 **root context key service**——菜单 `when` 走 per-group scoped ctx 而它继承 root，两边都能读到。
+
+**键不会自动回收**：`setContext` 写下的值随窗口存活，下一次激活（宿主因工作区切换而重启）读到的是上一次留下的值。所以写两态是扩展自己的责任：`activate()` 里**先无条件写 `false`、再在条件满足处写 `true`**（perforce 的 `perforceHasWorkspace` 即此形态，`extensions/perforce/src/extension.ts` 顶部——写在任何提前返回之前）。
+
+**每个键要有一个「谁写它」的单一事实源**：同一个键被两处写就会出现「谁最后写谁赢」的静默覆盖。写入的动作本身按 VSCode 语义把 URI 值转成字符串（`when` 只能比字符串）。
+
+命令可见性分三层，**不要混用**：
+
+| 层 | 作用 | 手段 |
+|---|---|---|
+| 引擎注册 | 命令能否被执行 | `contributes.commands` 在 renderer 注册 bootstrap proxy（宿主查不到 handler 也**不**从前端隐藏，执行时才由宿主 reject） |
+| 面板可见 | 命令是否出现在命令面板 | `contributes.menus.commandPalette` 的 `when`（**显式条目**才会取代翻译期的隐式无 `when` 条目）。本仓没有实现 VSCode 的 `commands[].enablement`，面板里唯一能收窄的旋钮就是它 |
+| 快捷键 | 何时触发 | `contributes.keybindings` 的 `when` |
+
+「这个命令在本窗口无意义」要落在**第二层**（隐藏），只在第一层拦是拦不住的——面板照列、点了报错。反例与完整叙事见 `extensions/perforce/CLAUDE.md` 的可见性红线。
+
 ## 为什么单测守不住
 
 菜单 `when` 走 per-group scoped ctx、keybinding 与 `precondition` 走 root ctx，而面板的求值时刻（焦点已被抢走）在单测里无法如实复现——手搓的 `ContextKeyService` 只能证明表达式本身对不对，证明不了"那一刻真实产物的取值"。这类分裂**只有 e2e 能守住**，参考 `apps/editor/e2e/specs/smoke.acpSideTask.spec.ts`（断言面板打开时该行可见/不可见）。

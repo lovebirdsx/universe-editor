@@ -4,7 +4,9 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  ContextKeyService,
   Emitter,
+  IContextKeyService,
   IEditorGroupsService,
   ILifecycleService,
   IUriIdentityService,
@@ -30,6 +32,7 @@ import {
   OpenFileAtAction,
   OpenFolderFromExtensionAction,
   OpenFolderInNewWindowFromExtensionAction,
+  SetContextAction,
 } from '../extensionApiActions.js'
 
 class WorkspaceStub implements IWorkspaceServiceType {
@@ -239,5 +242,49 @@ describe('extensionApiActions', () => {
     expect(input?.resource.scheme).toBe(REMOTE_SCHEME)
     expect(input?.resource.authority).toBe(REMOTE_AUTHORITY)
     expect(input?.resource.path).toBe(file)
+  })
+
+  it('publishes a context key for the extension (setContext)', async () => {
+    disposables.push(registerAction2(SetContextAction))
+
+    const contextKeys = new ContextKeyService()
+    const services = new ServiceCollection()
+    services.set(IContextKeyService, contextKeys)
+
+    await commandService(services).executeCommand(SetContextAction.ID, 'perforceHasWorkspace', true)
+
+    // Evaluated the way a when-clause consumer sees it, not just read back raw.
+    expect(contextKeys.evaluate('perforceHasWorkspace')).toBe(true)
+    expect(contextKeys.evaluate('!perforceHasWorkspace')).toBe(false)
+  })
+
+  it('stringifies URI values the way when-clauses compare them (setContext)', async () => {
+    disposables.push(registerAction2(SetContextAction))
+
+    const contextKeys = new ContextKeyService()
+    const services = new ServiceCollection()
+    services.set(IContextKeyService, contextKeys)
+
+    // A URI arg arrives here revived by the IPC codec (a real URI instance), and
+    // a when clause can only ever match a string.
+    await commandService(services).executeCommand(
+      SetContextAction.ID,
+      'activeResource',
+      URI.file('/repo/a.ts'),
+    )
+
+    expect(contextKeys.evaluate("activeResource == 'file:///repo/a.ts'")).toBe(true)
+  })
+
+  it('ignores setContext calls without a usable key', async () => {
+    disposables.push(registerAction2(SetContextAction))
+
+    const contextKeys = new ContextKeyService()
+    const services = new ServiceCollection()
+    services.set(IContextKeyService, contextKeys)
+
+    await commandService(services).executeCommand(SetContextAction.ID, '', true)
+
+    expect(contextKeys.get('')).toBeUndefined()
   })
 })

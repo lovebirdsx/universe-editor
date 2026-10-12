@@ -67,4 +67,21 @@ describe('ExtensionCommandRegistry', () => {
     )
     expect(mt.executed).toEqual([{ id: '_workbench.openDiff', args: [{ x: 1 }] }])
   })
+
+  it('rejects a contributed command this host does not hold, without asking the renderer', async () => {
+    const mt = recording()
+    const reg = new ExtensionCommandRegistry(mt.impl)
+    await expect(reg.executeContributed('perforce.p4delta.install', [])).rejects.toThrow(
+      "Contributed command 'perforce.p4delta.install' does not exist.",
+    )
+    expect(mt.executed).toEqual([])
+  })
+
+  it('runs an owned command for the renderer too', async () => {
+    const mt = recording()
+    const reg = new ExtensionCommandRegistry(mt.impl)
+    reg.register('test.cmd', (...args) => `ran:${args.join('|')}`)
+    await expect(reg.executeContributed('test.cmd', ['a'])).resolves.toBe('ran:a')
+    expect(mt.executed).toEqual([])
+  })
 })

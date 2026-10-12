@@ -45,6 +45,8 @@
 
 当 `p4 info` 报告不到客户端根目录（该文件夹不在任何 Perforce 工作区内），该文件夹就不会出现 Perforce 提供方。
 
+**命令面板同理**：`Perforce: …` 命令只在 Perforce 工作区窗口里出现——不是这个工作区时，`Ctrl+Shift+P` 搜不到它们，也不会留下任何报错提示（写进快捷键、或由别的扩展转发执行时，得到的是一句「该命令不存在」）。这条门控覆盖全部 Perforce 命令，包括**机器级**操作：想装 / 更新 p4delta，得先打开一个 Perforce 工作区窗口再运行 **Perforce: 安装或更新 p4delta**。（另有四条命令需要具体文件或参数才谈得上执行，它们任何窗口都不进面板，只在右键菜单、时间线等处出现。）
+
 > 打开的文件夹落在 client 的 **AltRoot**（client spec 里 `Root` 之外的备用根）里时不出现提供方：工作区范围（`.p4delta-scope`）归**固定的 `Root`** 管，多根布局下没有唯一归属，与其读错一份不如不启用——把文件夹换成该 client 的主 `Root` 即可。
 >
 > 同理，读不到 client spec 里固定的 `Root` 时（`p4 client -o` 失败、或 spec 里没有 `Root` 字段）也不启用：报来的根没被证实，可能是 AltRoot，猜一个不如不启用。可在 Perforce 输出通道看到一行 `provider disabled` 说明。

@@ -18,13 +18,17 @@ import {
 import { type IExtHostCommands, type IMainThreadCommands } from '@universe-editor/extensions-common'
 
 /**
- * Commands the host is allowed to invoke back in the renderer. The broad lane is
- * restricted to the `_workbench.` internal namespace; VSCode-compatible built-in
- * command IDs are added one by one so host→renderer execution cannot re-enter an
- * extension-contributed command and loop.
+ * Commands the host is allowed to invoke back in the renderer: the `_workbench.*`
+ * bridge namespace, plus VSCode-compatible built-in command ids added one by one.
+ * This is a namespace boundary — extensions talk to the workbench through
+ * `_workbench.*`, and an id outside it is either a bug or a capability this repo
+ * has not decided to expose. It is NOT the loop guard it started as: the host now
+ * rejects an unregistered contributed command itself
+ * (`ExtensionCommandRegistry.executeContributed`), so a host→renderer→host bounce
+ * ends on the first hop instead of spinning.
  */
 const HOST_INVOKABLE_PREFIX = '_workbench.'
-const HOST_INVOKABLE_BUILT_INS = new Set(['revealInExplorer'])
+const HOST_INVOKABLE_BUILT_INS = new Set(['revealInExplorer', 'setContext'])
 
 function isHostInvokableCommand(id: string): boolean {
   return id.startsWith(HOST_INVOKABLE_PREFIX) || HOST_INVOKABLE_BUILT_INS.has(id)

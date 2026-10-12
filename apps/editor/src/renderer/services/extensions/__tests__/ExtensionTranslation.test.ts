@@ -754,7 +754,7 @@ describe('MainThreadCommands', () => {
     expect(commandExecute).toHaveBeenCalledWith('_workbench.openDiff', { title: 't' })
   })
 
-  it('refuses to execute a non-_workbench command from the host (loop guard)', async () => {
+  it('refuses to execute a non-_workbench command from the host (namespace boundary)', async () => {
     const { mt, commandExecute } = make()
     await expect(mt.$executeCommand('git.commit', [])).rejects.toThrow(/_workbench/)
     expect(commandExecute).not.toHaveBeenCalled()

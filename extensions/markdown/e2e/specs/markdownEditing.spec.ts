@@ -55,13 +55,13 @@ async function runEdit(workbench: WorkbenchPO, c: EditCase): Promise<string | un
     await workbench.runCommand(c.command)
   } catch (err) {
     // The extension host hasn't registered the real command handler yet: the
-    // renderer forwards the contributed command to the host, and until the
-    // extension has activated on `onLanguage:markdown` the command routes back
-    // and is rejected ("extension host may only execute _workbench.* commands").
+    // renderer forwards the contributed command to the host, which owns no
+    // handler until the extension has activated on `onLanguage:markdown`, and
+    // rejects it ("Contributed command 'x' does not exist.").
     // Return an unmatched value so the surrounding expect.poll keeps retrying
     // through the cold start instead of blowing up (Playwright's poll does NOT
     // retry when its callback throws — a rejection punches straight through).
-    if (/extension host may only execute/.test(String(err))) return undefined
+    if (/Contributed command .* does not exist/.test(String(err))) return undefined
     throw err
   }
   // Monaco picks CRLF on Windows when the seed has no line break; assertions are EOL-agnostic.

@@ -1,15 +1,18 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Internal `_workbench.*` commands that back the extension API. The extension
- *  host can only invoke `_workbench.*` commands in the renderer (see
- *  MainThreadCommands), so anything an extension needs from the renderer that
- *  isn't a dedicated RPC channel is surfaced here as a command.
+ *  Internal bridge commands that back the extension API. The extension host can
+ *  invoke `_workbench.*` commands in the renderer plus the VSCode-compatible
+ *  built-in ids allowlisted in MainThreadCommands (`setContext` lives here for
+ *  that reason — extensions call it by the literal VSCode documents), so
+ *  anything an extension needs from the renderer that isn't a dedicated RPC
+ *  channel is surfaced here as a command.
  *--------------------------------------------------------------------------------------------*/
 
 import {
   Action2,
   ConfigurationTarget,
   IConfigurationService,
+  IContextKeyService,
   IEditorGroupsService,
   IInstantiationService,
   ILifecycleService,
@@ -42,7 +45,52 @@ function workspaceResourceUri(accessor: ServicesAccessor, fsPath: string): URI {
   return fsPathToWorkspaceUri(fsPath, authority)
 }
 
-/** Backs `workspace.getConfiguration(section).get(key, default)` for extensions. */ export class GetConfigurationAction extends Action2 {
+/**
+ * Backs `commands.executeCommand('setContext', key, value)` for extensions — the
+ * documented VSCode way to publish a context key that `when` clauses (menu
+ * visibility, keybinding gating) then evaluate. The id keeps VSCode's spelling
+ * instead of a `_workbench.` prefix because that literal IS the extension-facing
+ * API surface; MainThreadCommands allowlists it by name.
+ *
+ * The key is written to the root context service, so it survives until the window
+ * is reloaded or something writes it again — there is no per-extension cleanup on
+ * deactivate (VSCode behaves the same). An extension that means "off" must say so.
+ */
+/**
+ * VSCode's `stringifyURIs` (its `_setContext` handler): `when` clauses compare
+ * against strings (`key == 'file:///…'`), so a URI passed as the value is stored
+ * in its string form, at any depth. Our IPC codec already revives `$mid:1`
+ * components into `URI` instances on the way in, which is what this finds.
+ */
+function stringifyUris(value: unknown): unknown {
+  if (value instanceof URI) return value.toString()
+  if (Array.isArray(value)) return value.map(stringifyUris)
+  if (value !== null && typeof value === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(value)) out[k] = stringifyUris(v)
+    return out
+  }
+  return value
+}
+
+export class SetContextAction extends Action2 {
+  static readonly ID = 'setContext'
+
+  constructor() {
+    super({
+      id: SetContextAction.ID,
+      title: localize2('action.extensionApi.setContext', 'Set Context'),
+    })
+  }
+
+  override run(accessor: ServicesAccessor, key: string, value: unknown): void {
+    if (typeof key !== 'string' || key.length === 0) return
+    accessor.get(IContextKeyService).set(key, stringifyUris(value))
+  }
+}
+
+/** Backs `workspace.getConfiguration(section).get(key, default)` for extensions. */
+export class GetConfigurationAction extends Action2 {
   static readonly ID = '_workbench.getConfiguration'
 
   constructor() {

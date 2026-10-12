@@ -102,7 +102,9 @@ export type ExtHostChannelName = (typeof ExtHostChannels)[keyof typeof ExtHostCh
 export interface IExtHostCommands {
   /**
    * Run a command contributed by an activated extension and return its result.
-   * Routed to the per-extension handler registered during `activate`.
+   * Routed to the per-extension handler registered during `activate`; an id no
+   * handler answers is rejected here (the caller is the renderer, so falling back
+   * to it would just send the same id back).
    */
   $executeContributedCommand(id: string, args: unknown[]): Promise<unknown>
 }
@@ -214,8 +216,9 @@ export interface IMainThreadCommands {
   /**
    * Run a renderer-side built-in command (host → renderer direction). Used when
    * an extension's `commands.executeCommand` targets a command the host doesn't
-   * own — e.g. `_workbench.openDiff`. The renderer rejects re-entry into
-   * extension-contributed commands to avoid host↔renderer loops.
+   * own — e.g. `_workbench.openDiff`. Ids outside the host-invokable namespace
+   * are refused: that namespace is the extension↔workbench bridge, not a general
+   * command channel.
    */
   $executeCommand(id: string, args: unknown[]): Promise<unknown>
 }

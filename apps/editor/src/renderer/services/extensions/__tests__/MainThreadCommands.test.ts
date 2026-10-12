@@ -79,4 +79,16 @@ describe('MainThreadCommands', () => {
 
     expect(executeCommand).toHaveBeenCalledWith('revealInExplorer', { resourceUri: '/ws/a.ts' })
   })
+
+  it('allows setContext from the host — the extension-facing id, not a _workbench one', async () => {
+    const executeCommand = vi.fn().mockResolvedValue(undefined)
+    const mt = new MainThreadCommands(fakeExtHost().service, {
+      executeCommand,
+    } as unknown as ICommandService)
+
+    await expect(mt.$executeCommand('setContext', ['perforceHasWorkspace', true])).resolves.toBe(
+      undefined,
+    )
+    expect(executeCommand).toHaveBeenCalledWith('setContext', 'perforceHasWorkspace', true)
+  })
 })

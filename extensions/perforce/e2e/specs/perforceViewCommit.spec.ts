@@ -52,8 +52,8 @@ test.describe('@p1 perforce view commit', () => {
       })
       .toBeGreaterThan(0)
     // The SCM-count gate flips before the contributed command handlers register
-    // (same activate(), later burst) — viewCommit would reach a host with no
-    // handler and be rejected ("extension host may only execute _workbench.*").
+    // (same activate(), later burst) — viewCommit would reach a host that owns no
+    // handler and be rejected ("Contributed command 'x' does not exist.").
     await waitForPerforceCommands(workbench)
 
     // `viewCommit` falls back to the graph's client when the uri resolves to
