@@ -162,6 +162,10 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.sync.handoff': '{0} 个文件已交由 p4 同步',
   'perforce.sync.keptOpen': '{0} 个已跳过（正在签出中）',
   'perforce.sync.mustResolve': '{0} 个需要合并',
+  // 拉取结束后的系统通知：只新增标题，正文复用上面各终态的 toast 文案
+  'perforce.sync.notify.done': '拉取完成',
+  'perforce.sync.notify.failed': '拉取失败',
+  'perforce.sync.notify.unknown': '拉取结果未知',
   'perforce.btn.resolveNow': '解决冲突',
   'perforce.previewSync.failed': '无法预览将要拉取的内容。',
   'perforce.previewSync.placeholder': '共有 {0} 个文件将被拉取——选择一个可直接打开',

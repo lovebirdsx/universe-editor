@@ -108,6 +108,12 @@ export interface E2ENotification {
   readonly actions: readonly string[]
 }
 
+/** One desktop notification an extension asked the renderer bridge to raise. */
+export interface E2ESystemNotification {
+  readonly title: string
+  readonly body: string
+}
+
 /** One code action offered at a range (title + optional kind + whether it carries an edit). */
 export interface E2ECodeAction {
   readonly title: string
@@ -1961,6 +1967,14 @@ export interface E2EProbe {
   /** Diagnostic snapshot of the Swarm notification contribution's most recent poll:
    *  the actionable id set, so a spec can detect when the baseline has primed. */
   getSwarmNotifyDiag(): { lastActionable: readonly string[] }
+  /**
+   * Every desktop notification an extension asked the renderer bridge to raise
+   * (`_workbench.showSystemNotification`), in order. Observes the bridge crossing
+   * — the one thing the caller's job consists of — because the Toast itself is
+   * raised main-side and gated on window blur + user presence, neither of which
+   * holds in a headless run.
+   */
+  getSystemNotifications(): readonly E2ESystemNotification[]
   // -- Remote (remote-ssh) filesystem / search / watcher probe --------------
   /** Read a resource's UTF-8 text via IFileService (any scheme, incl. remote-ssh). */
   readFileText(uri: string): Promise<string>

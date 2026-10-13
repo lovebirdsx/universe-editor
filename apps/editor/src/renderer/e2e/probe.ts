@@ -95,6 +95,7 @@ import { revealOutputPanel } from '../services/output/revealOutputPanel.js'
 import { DirtyDiffPeekRegistry } from '../workbench/scm/dirtyDiff/DirtyDiffPeekRegistry.js'
 import { AcpPromptDraftCache } from '../services/acp/session/acpPromptDraftCache.js'
 import { swarmNotificationE2E } from '../services/swarm/swarmNotificationE2E.js'
+import { systemNotificationE2E } from '../services/extensions/systemNotificationE2E.js'
 import { memoryReminderE2E } from '../services/memory/memoryReminderE2E.js'
 import { applyViewDrop } from '../workbench/dnd/applyViewDrop.js'
 import {
@@ -2614,6 +2615,8 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     getSwarmNotifyDiag: () => ({
       lastActionable: [...swarmNotificationE2E.lastActionable],
     }),
+    getSystemNotifications: () =>
+      systemNotificationE2E.notified.map((n) => ({ title: n.title, body: n.body })),
     readFileText: (uri) => services.fileService.readFileText(URI.parse(uri)),
     writeFileText: (uri, text) => services.fileService.writeFile(URI.parse(uri), text),
     statResource: async (uri) => {

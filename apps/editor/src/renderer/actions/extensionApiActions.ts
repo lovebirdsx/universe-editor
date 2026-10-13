@@ -14,6 +14,7 @@ import {
   IConfigurationService,
   IContextKeyService,
   IEditorGroupsService,
+  IHostService,
   IInstantiationService,
   ILifecycleService,
   IUriIdentityService,
@@ -33,6 +34,8 @@ import {
   revealSelectionInInput,
 } from '../services/editor/revealEditorPosition.js'
 import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
+import { systemNotificationE2E } from '../services/extensions/systemNotificationE2E.js'
+import { E2E_PROBE_ENABLED_KEY } from '../../shared/e2e/contract.js'
 
 /**
  * Reattaches the current workspace's remote authority to a host fsPath, so
@@ -223,6 +226,47 @@ export class WriteClipboardAction extends Action2 {
   override async run(_accessor: ServicesAccessor, text: unknown): Promise<void> {
     if (typeof text !== 'string' || text === '') return
     await navigator.clipboard.writeText(text)
+  }
+}
+
+/**
+ * Raises an OS desktop notification for an extension. An extension runs in a
+ * child process with no `IHostService`, and `window.showInformationMessage` only
+ * reaches the in-app toast — so this is the one channel that can put a result in
+ * front of a user who has switched to another window (e.g. a long p4 get).
+ *
+ * Deliberately fire-and-forget on BOTH ends: `notify()` settles only when the
+ * toast is clicked, closed, or the main side's click grace expires — awaiting it
+ * here would hold this RPC (and the caller's `executeCommand`) open for minutes.
+ * The click needs no round trip: the main process focuses the window inside its
+ * own click handler. The main side also refuses to show anything while the window
+ * is focused and the user is present, so a caller that stays on screen keeps its
+ * own in-app reporting and must not rely on this action for a fallback.
+ */
+export class ShowSystemNotificationAction extends Action2 {
+  static readonly ID = '_workbench.showSystemNotification'
+
+  constructor() {
+    super({
+      id: ShowSystemNotificationAction.ID,
+      title: localize2('action.extensionApi.showSystemNotification', 'Show System Notification'),
+    })
+  }
+
+  override run(accessor: ServicesAccessor, options?: unknown): void {
+    const opts = options as { title?: unknown; body?: unknown } | undefined
+    const title = typeof opts?.title === 'string' ? opts.title.trim() : ''
+    // A headline-less toast is a bug on the caller's side; guessing one would
+    // ship the guess to every user of the extension.
+    if (title.length === 0) return
+    const body = typeof opts?.body === 'string' ? opts.body : ''
+    // Read synchronously: the accessor dies at the first await, so `run` stays
+    // sync and never has to answer that question.
+    const host = accessor.get(IHostService)
+    if (typeof window !== 'undefined' && window[E2E_PROBE_ENABLED_KEY] === true) {
+      systemNotificationE2E.notified.push({ title, body })
+    }
+    void host.notify({ title, body }).catch(() => undefined)
   }
 }
 

@@ -8,6 +8,7 @@ import {
   Emitter,
   IContextKeyService,
   IEditorGroupsService,
+  IHostService,
   ILifecycleService,
   IUriIdentityService,
   IWindowsService,
@@ -33,6 +34,7 @@ import {
   OpenFolderFromExtensionAction,
   OpenFolderInNewWindowFromExtensionAction,
   SetContextAction,
+  ShowSystemNotificationAction,
 } from '../extensionApiActions.js'
 
 class WorkspaceStub implements IWorkspaceServiceType {
@@ -286,5 +288,63 @@ describe('extensionApiActions', () => {
     await commandService(services).executeCommand(SetContextAction.ID, '', true)
 
     expect(contextKeys.get('')).toBeUndefined()
+  })
+
+  it('raises a desktop notification for an extension', async () => {
+    disposables.push(registerAction2(ShowSystemNotificationAction))
+
+    const notify = vi.fn(async () => ({ shown: true, clicked: false }))
+    const services = new ServiceCollection()
+    services.set(IHostService, {
+      _serviceBrand: undefined,
+      notify,
+    } as unknown as IHostService)
+
+    await commandService(services).executeCommand(ShowSystemNotificationAction.ID, {
+      title: 'Get complete',
+      body: 'Updated 3 file(s)',
+    })
+
+    expect(notify).toHaveBeenCalledWith({ title: 'Get complete', body: 'Updated 3 file(s)' })
+  })
+
+  it('does not hold the command open for a notification nobody answers', async () => {
+    disposables.push(registerAction2(ShowSystemNotificationAction))
+
+    // The host settles `notify` only on click, dismiss or its own click grace
+    // (minutes). An awaited call would hold the extension's `executeCommand` —
+    // and whatever awaited that — for the whole time.
+    const notify = vi.fn(() => new Promise<never>(() => {}))
+    const services = new ServiceCollection()
+    services.set(IHostService, {
+      _serviceBrand: undefined,
+      notify,
+    } as unknown as IHostService)
+
+    await expect(
+      commandService(services).executeCommand(ShowSystemNotificationAction.ID, {
+        title: 'Get complete',
+        body: 'Updated 3 file(s)',
+      }),
+    ).resolves.toBeUndefined()
+  })
+
+  it('drops a notification without a usable headline instead of inventing one', async () => {
+    disposables.push(registerAction2(ShowSystemNotificationAction))
+
+    const notify = vi.fn(async () => ({ shown: true, clicked: false }))
+    const services = new ServiceCollection()
+    services.set(IHostService, {
+      _serviceBrand: undefined,
+      notify,
+    } as unknown as IHostService)
+    const commands = commandService(services)
+
+    await commands.executeCommand(ShowSystemNotificationAction.ID, { body: 'orphaned' })
+    await commands.executeCommand(ShowSystemNotificationAction.ID, { title: 42 })
+    await commands.executeCommand(ShowSystemNotificationAction.ID)
+    await commands.executeCommand(ShowSystemNotificationAction.ID, { title: '   ' })
+
+    expect(notify).not.toHaveBeenCalled()
   })
 })

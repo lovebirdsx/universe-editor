@@ -960,6 +960,11 @@
           "minimum": 0,
           "description": "%perforce.config.syncParallelThreads.description%"
         },
+        "perforce.syncNotifications.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "%perforce.config.syncNotifications.enabled.description%"
+        },
         "perforce.refreshInterval": {
           "type": "number",
           "default": 0,

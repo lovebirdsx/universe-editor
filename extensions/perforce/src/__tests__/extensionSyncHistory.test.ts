@@ -55,11 +55,23 @@ const windowMock = vi.hoisted(() => ({
 }))
 
 const workspaceMock = vi.hoisted(() => {
-  const get = vi.fn(async (_key: string, def: unknown) => def)
+  /** Settings a test has overridden; anything else answers its declared default. */
+  const configValues = new Map<string, unknown>()
+  const configListeners: ((e: { affectsConfiguration(key: string): boolean }) => void)[] = []
+  const get = vi.fn(async (key: string, def: unknown) =>
+    configValues.has(key) ? configValues.get(key) : def,
+  )
   return {
     rootPath: ROOT,
+    configValues,
+    configListeners,
     getConfiguration: vi.fn(() => ({ get })),
-    onDidChangeConfiguration: vi.fn(() => ({ dispose: vi.fn() })),
+    onDidChangeConfiguration: vi.fn(
+      (listener: (e: { affectsConfiguration(key: string): boolean }) => void) => {
+        configListeners.push(listener)
+        return { dispose: vi.fn() }
+      },
+    ),
     registerTimelineProvider: vi.fn(() => ({ dispose: vi.fn() })),
     createFileSystemWatcher: vi.fn(() => ({
       onDidCreate: vi.fn(() => ({ dispose: vi.fn() })),
@@ -314,6 +326,10 @@ beforeEach(async () => {
   // answer must not hand it to the next one.
   commandsMock.executeCommand.mockReset()
   commandsMock.executeCommand.mockResolvedValue(undefined)
+  // Overrides and subscribers from the previous test would otherwise be re-read
+  // by this test's `activate()`.
+  workspaceMock.configValues.clear()
+  workspaceMock.configListeners.length = 0
   windowMock.showInformationMessage.mockClear()
   windowMock.showWarningMessage.mockClear()
   windowMock.showErrorMessage.mockClear()
@@ -671,5 +687,191 @@ describe('perforce-sync-history read commands', () => {
     // A non-string id is dropped to the same "no such record" answer rather than
     // coerced into a lookup.
     expect(await commandResult('perforce-sync-history.getRun', { id: 'nope' })).toBeNull()
+  })
+})
+
+/** A summary that reports no per-file outcome at all. */
+function emptySummary(upToDate: boolean): FakeRunResult {
+  return appliedRun({
+    summary: {
+      applied: 0,
+      keptOpen: 0,
+      mustResolve: 0,
+      refusedModified: 0,
+      refusedOverwrite: 0,
+      handoff: 0,
+      upToDate,
+    },
+  })
+}
+
+/** Flip a `perforce.*` setting the way the host does: the cached watch re-reads. */
+async function setConfig(fullKey: string, value: unknown): Promise<void> {
+  // `workspace.getConfiguration('perforce')` is mocked at the section boundary,
+  // so its `get` takes the section-relative key while `affectsConfiguration`
+  // takes the full one — the mock reproduces the API's own split.
+  workspaceMock.configValues.set(fullKey.replace(/^perforce\./, ''), value)
+  for (const listener of workspaceMock.configListeners) {
+    listener({ affectsConfiguration: (k) => k === fullKey })
+  }
+  // The change-driven re-read is async and deliberately unawaited by the watch.
+  await new Promise((resolve) => setTimeout(resolve, 0))
+}
+
+describe('a finished get reaches a user who left the window', () => {
+  /** Every desktop notification the command layer asked the bridge to raise. */
+  function notifications(): { title: string; body: string }[] {
+    return commandsMock.executeCommand.mock.calls
+      .filter((call) => call[0] === '_workbench.showSystemNotification')
+      .map((call) => call[1] as { title: string; body: string })
+  }
+
+  const TITLE_DONE = localize('perforce.sync.notify.done', 'Get complete')
+  const TITLE_FAILED = localize('perforce.sync.notify.failed', 'Get failed')
+  const TITLE_UNKNOWN = localize('perforce.sync.notify.unknown', 'Get result unclear')
+
+  it('reports an applied get with the counts the toast shows', async () => {
+    await runCommand('perforce.syncLatest')
+
+    expect(notifications()).toEqual([
+      {
+        title: TITLE_DONE,
+        body: localize('perforce.sync.applied', 'Updated {0} file(s)', { 0: '1' }),
+      },
+    ])
+  })
+
+  it('reports an up-to-date get instead of staying silent', async () => {
+    fake.sync.mockResolvedValue(emptySummary(true))
+
+    await runCommand('perforce.syncLatest')
+
+    expect(notifications()).toEqual([
+      {
+        title: TITLE_DONE,
+        body: localize('perforce.sync.upToDate', 'Already at the latest revision.'),
+      },
+    ])
+  })
+
+  it('reports a get p4 never made legible', async () => {
+    fake.sync.mockResolvedValue(emptySummary(false))
+
+    await runCommand('perforce.syncLatest')
+
+    expect(notifications()).toEqual([
+      {
+        title: TITLE_UNKNOWN,
+        body: localize(
+          'perforce.sync.unrecognized',
+          'Get revision returned no recognized result. Check the Perforce output for details.',
+        ),
+      },
+    ])
+  })
+
+  it('reports a failure before the dialog that would suppress it', async () => {
+    fake.sync.mockResolvedValue(
+      appliedRun({
+        ok: false,
+        summary: undefined,
+        error: { kind: 'other', suggestion: 'the server went away' },
+      }),
+    )
+
+    await runCommand('perforce.syncLatest')
+
+    expect(notifications()).toEqual([
+      {
+        title: TITLE_FAILED,
+        body: localize('perforce.sync.failed', 'Get revision failed. {0}', {
+          0: 'the server went away',
+        }).trim(),
+      },
+    ])
+    // The error toast waits for the user; if the notification were sent after it,
+    // the window would be focused again by then and the desktop toast suppressed
+    // — i.e. it would never be seen at the one moment it matters.
+    const notifyIndex = commandsMock.executeCommand.mock.calls.findIndex(
+      (call) => call[0] === '_workbench.showSystemNotification',
+    )
+    const notifyOrder = commandsMock.executeCommand.mock.invocationCallOrder[notifyIndex]
+    expect(notifyOrder).toBeLessThan(windowMock.showErrorMessage.mock.invocationCallOrder[0]!)
+  })
+
+  it('reports both halves of a clobbered get: the failure and its retry', async () => {
+    fake.sync
+      .mockResolvedValueOnce(
+        appliedRun({
+          ok: false,
+          summary: undefined,
+          error: { kind: 'clobber', suggestion: 'local changes' },
+        }),
+      )
+      .mockResolvedValueOnce(appliedRun())
+    windowMock.showErrorMessage.mockResolvedValue(BTN_FORCE)
+    windowMock.showWarningMessage.mockResolvedValue(BTN_FORCE)
+
+    await runCommand('perforce.syncLatest')
+
+    expect(notifications().map((n) => n.title)).toEqual([TITLE_FAILED, TITLE_DONE])
+  })
+
+  it('stays silent for a get the user cancelled', async () => {
+    fake.sync.mockResolvedValue(appliedRun({ ok: false, cancelled: true, summary: undefined }))
+
+    await runCommand('perforce.syncLatest')
+
+    expect(notifications()).toEqual([])
+  })
+
+  it('stays silent for a get the scope gate declined', async () => {
+    fake.checkScopeTargets.mockResolvedValue({
+      state: 'ready',
+      reason: undefined,
+      inside: [],
+      outside: [{ path: `${SRC}/a.cpp`, isDirectory: false }],
+    })
+    windowMock.showWarningMessage.mockResolvedValue(undefined)
+
+    await runCommand('perforce.syncLatest', { resourceUri: `${SRC}/a.cpp` })
+
+    expect(notifications()).toEqual([])
+  })
+
+  it('stays silent for the client’s own pre-flight refusal', async () => {
+    fake.sync.mockResolvedValue(
+      appliedRun({
+        ok: false,
+        notRun: true,
+        summary: undefined,
+        error: { kind: 'other', suggestion: 'the daily scope is not usable' },
+      }),
+    )
+
+    await runCommand('perforce.syncLatest')
+
+    expect(notifications()).toEqual([])
+  })
+
+  it('sends nothing while the setting is off, and resumes once it is back on', async () => {
+    await setConfig('perforce.syncNotifications.enabled', false)
+    await runCommand('perforce.syncLatest')
+    expect(notifications()).toEqual([])
+
+    await setConfig('perforce.syncNotifications.enabled', true)
+    await runCommand('perforce.syncLatest')
+    expect(notifications()).toHaveLength(1)
+  })
+
+  it('does not let a stalled bridge hold the get open', async () => {
+    // Fire-and-forget by contract: the host settles `notify` only on click,
+    // dismiss or its own click grace, so awaiting the bridge here would stall
+    // every caller that reads "the command resolved = the get is done".
+    commandsMock.executeCommand.mockImplementation(async (id: unknown) =>
+      id === '_workbench.showSystemNotification' ? new Promise<never>(() => {}) : undefined,
+    )
+
+    await expect(runCommand('perforce.syncLatest')).resolves.toBeUndefined()
   })
 })

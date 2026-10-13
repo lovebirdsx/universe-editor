@@ -658,6 +658,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.extensionApi.openFolder': '打开文件夹',
   'action.extensionApi.openFolderInNewWindow': '在新窗口中打开文件夹',
   'action.extensionApi.setContext': '设置上下文',
+  'action.extensionApi.showSystemNotification': '显示系统通知',
   'action.extensionApi.updateConfiguration': '更新配置',
   'action.extensionApi.writeClipboard': '写入剪贴板',
   'action.commitChanges.show': '显示提交变更',

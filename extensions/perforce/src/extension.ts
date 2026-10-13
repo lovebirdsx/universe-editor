@@ -1144,6 +1144,26 @@ export async function activate(context: ExtensionContext): Promise<void> {
   await watchSyncParallelThreads.ready
 
   /**
+   * Whether a finished get raises an OS notification. Kept in a cached watcher
+   * rather than read per run: `cfg.get` is an async round trip, and the
+   * completion path must not gain one.
+   */
+  let syncNotificationsEnabled = true
+  const watchSyncNotifications = watchConfig<boolean>({
+    read: () => cfg.get('syncNotifications.enabled', true),
+    apply: (enabled) => {
+      syncNotificationsEnabled = enabled
+    },
+    subscribe: (onChange) =>
+      workspace.onDidChangeConfiguration((e) => {
+        if (!e.affectsConfiguration('perforce.syncNotifications.enabled')) return
+        onChange()
+      }),
+  })
+  context.subscriptions.push(watchSyncNotifications)
+  await watchSyncNotifications.ready
+
+  /**
    * Background reconcile scan: the per-directory batch ceiling that drives the
    * adaptive split. Applied before the first refresh so the scan the refresh
    * tail schedules already sees the configured ceiling.
@@ -1706,6 +1726,30 @@ export async function activate(context: ExtensionContext): Promise<void> {
   }
 
   /**
+   * Tell a user who has switched windows that their get finished. The desktop
+   * toast is the only channel that follows them out of the window; the in-app
+   * toast each branch already shows covers the user who stayed (the main side
+   * suppresses the desktop one while the window is focused and the user is
+   * present, so the two never collide).
+   *
+   * Fire-and-forget, and NOT a place to await anything: `runSync` has to resolve
+   * the instant the get is done — callers read that resolution as "the get
+   * finished" (the graph revalidates on it, the e2e specs poll on it). The
+   * rejection path still matters (a down bridge): an escaping rejection would
+   * take down the extension host.
+   */
+  const notifySyncOutcome = (title: string, body: string): void => {
+    if (!syncNotificationsEnabled) return
+    void commands
+      .executeCommand('_workbench.showSystemNotification', { title, body })
+      .catch((err: unknown) => {
+        log(
+          `[perforce] sync notification failed: ${err instanceof Error ? err.message : String(err)}`,
+        )
+      })
+  }
+
+  /**
    * Run a sync and report the outcome.
    *
    * The whole run sits inside a cancellable notification progress. No pre-flight
@@ -1966,6 +2010,9 @@ export async function activate(context: ExtensionContext): Promise<void> {
       const message = localize('perforce.sync.failed', 'Get revision failed. {0}', {
         0: suggestion ?? '',
       }).trim()
+      // Before the dialog below: that one stays up until the user answers, and by
+      // then the window is focused and the desktop toast would be suppressed.
+      notifySyncOutcome(localize('perforce.sync.notify.failed', 'Get failed'), message)
       // A clobber refusal is the one failure with an obvious next step: the local
       // file has work in it that nobody has collected yet.
       if (res.error?.kind === 'clobber') {
@@ -2093,9 +2140,9 @@ export async function activate(context: ExtensionContext): Promise<void> {
       }
     }
     if (summary?.upToDate && nothingHappened) {
-      await window.showInformationMessage(
-        localize('perforce.sync.upToDate', 'Already at the latest revision.'),
-      )
+      const upToDate = localize('perforce.sync.upToDate', 'Already at the latest revision.')
+      notifySyncOutcome(localize('perforce.sync.notify.done', 'Get complete'), upToDate)
+      await window.showInformationMessage(upToDate)
       return
     }
     if (nothingHappened) {
@@ -2105,13 +2152,15 @@ export async function activate(context: ExtensionContext): Promise<void> {
       // success and sends the user away believing a stale file is fresh. Point at
       // the output channel, where `sync()` logged the raw text.
       const BTN_OUTPUT = localize('perforce.btn.openOutput', 'Open Perforce Output')
-      const picked = await window.showWarningMessage(
-        localize(
-          'perforce.sync.unrecognized',
-          'Get revision returned no recognized result. Check the Perforce output for details.',
-        ),
-        BTN_OUTPUT,
+      const unrecognized = localize(
+        'perforce.sync.unrecognized',
+        'Get revision returned no recognized result. Check the Perforce output for details.',
       )
+      notifySyncOutcome(
+        localize('perforce.sync.notify.unknown', 'Get result unclear'),
+        unrecognized,
+      )
+      const picked = await window.showWarningMessage(unrecognized, BTN_OUTPUT)
       if (picked === BTN_OUTPUT) out.show()
       return
     }
@@ -2174,6 +2223,9 @@ export async function activate(context: ExtensionContext): Promise<void> {
       )
     }
     const message = parts.join(' · ')
+    // Covers both exits below (clean success and the refusal buttons) from the
+    // one string the toast uses, so the two can never disagree.
+    notifySyncOutcome(localize('perforce.sync.notify.done', 'Get complete'), message)
     // Collecting first is the lossless way out — p4 then schedules a resolve and
     // neither side is dropped — so it leads. Force-get is offered too (some local
     // copies really are disposable), but it destroys uncollected work, so it sits
