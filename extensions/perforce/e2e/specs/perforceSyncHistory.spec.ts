@@ -178,6 +178,38 @@ test.describe('@p1 perforce sync history', () => {
     })
   })
 
+  test.describe('a get recorded while the page is open', () => {
+    test.use({ p4Seeds: { files: [behind] } })
+
+    test('shows the new row without pressing Refresh @regression', async ({
+      page,
+      workbench,
+      perforce,
+    }) => {
+      await openPerforceWorkspace(page, workbench, perforce.openDir)
+
+      // The page first, on an empty history: the empty state being visible IS the
+      // settled first load, so `state.loaded` is true before the get starts. From
+      // here the row can only appear by the page reloading itself — pressing
+      // Refresh is not in this journey, and neither is re-opening the tab.
+      const view = await openHistory(page, workbench)
+      const rows = view.getByTestId('perforce-sync-history-row')
+      await expect(view.getByTestId('perforce-sync-history-empty')).toBeVisible()
+      await expect(rows).toHaveCount(0)
+
+      await startGet(page, perforce.file('src/a.txt'))
+      // The record on disk is the steady signal, and the DOM below is the claim:
+      // if the poke never lands, this passes and the row assertion times out.
+      await waitForRecordCount(page, 1)
+
+      await expect(rows).toHaveCount(1, { timeout: 30_000 })
+      await expect(view.getByTestId('perforce-sync-history-count')).toHaveText('1 run(s)')
+      // The empty list had nothing selected, so the reload that brought the row
+      // in also selected it — the detail pane is describing the run just made.
+      await expect(view.getByTestId('perforce-sync-history-detail-outcome')).toHaveText('Updated')
+    })
+  })
+
   test.describe('a get that failed', () => {
     test.use({ p4Seeds: { files: [blocked] } })
 

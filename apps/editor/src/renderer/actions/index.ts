@@ -244,6 +244,7 @@ import {
 import {
   ViewPerforceSyncHistoryAction,
   ExportPerforceSyncHistoryAction,
+  WorkbenchPerforceSyncHistoryRecordedAction,
 } from './perforceSyncHistoryActions.js'
 import { SwitchScmRepoAction } from './scmActions.js'
 import { ScmOpenFileAction, ScmOpenPreviewAction } from './scmResourceActions.js'
@@ -707,6 +708,9 @@ registerAction2(ViewPerforceFileHistoryAction)
 // Perforce Sync History
 registerAction2(ViewPerforceSyncHistoryAction)
 registerAction2(ExportPerforceSyncHistoryAction)
+// Host poke answering "a sync record landed" (never declared in the extension's
+// package.json commands — see src/swarm/CLAUDE.md).
+registerAction2(WorkbenchPerforceSyncHistoryRecordedAction)
 
 // Source Control
 registerAction2(SwitchScmRepoAction)

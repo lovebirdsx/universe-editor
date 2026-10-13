@@ -22,7 +22,10 @@ import {
   type P4SyncHistoryLoadResult,
 } from '@universe-editor/extensions-common'
 import { PerforceSyncHistoryEditorInput } from '../services/editor/PerforceSyncHistoryEditorInput.js'
-import { SYNC_HISTORY_EXPORT_MAX } from '../services/perforceSyncHistory/syncHistoryViewState.js'
+import {
+  noteSyncHistoryRecorded,
+  SYNC_HISTORY_EXPORT_MAX,
+} from '../services/perforceSyncHistory/syncHistoryViewState.js'
 import { runsToCsv } from '../workbench/perforceSyncHistory/syncHistoryCsv.js'
 
 export class ViewPerforceSyncHistoryAction extends Action2 {
@@ -46,6 +49,30 @@ export class ViewPerforceSyncHistoryAction extends Action2 {
 }
 
 const EXPORT_FILE_NAME = 'perforce-sync-history.csv'
+
+/**
+ * Host-invokable poke: the perforce extension just wrote a sync record. Routes
+ * to the module-level view state, which reloads the page if it is mounted and
+ * marks it stale if it is not. Carries no argument on purpose — "a record
+ * landed" is the whole message; the page re-reads the history either way.
+ *
+ * Never appears in the extension's package.json `commands` — this is a
+ * host→renderer `_workbench.*` lane, like `_workbench.swarmPollTick`.
+ */
+export class WorkbenchPerforceSyncHistoryRecordedAction extends Action2 {
+  static readonly ID = '_workbench.perforceSyncHistoryRecorded'
+
+  constructor() {
+    super({
+      id: WorkbenchPerforceSyncHistoryRecordedAction.ID,
+      title: localize2('action.perforceSyncHistory.recorded', 'Perforce Sync History Recorded'),
+    })
+  }
+
+  override run(): void {
+    noteSyncHistoryRecorded()
+  }
+}
 
 /** Export the whole recorded history — not the page's current slice — so the
  *  file matches "every get this install ran", and re-reads the records instead

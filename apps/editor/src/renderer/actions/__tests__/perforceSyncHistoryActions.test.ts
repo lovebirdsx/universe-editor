@@ -6,7 +6,7 @@
  *  `max` it asks for, what lands in the file, and what the user is told.
  *--------------------------------------------------------------------------------------------*/
 
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   ICommandService,
   IFileDialogService,
@@ -19,7 +19,15 @@ import {
   URI,
 } from '@universe-editor/platform'
 import { PerforceSyncHistoryCommands, type P4SyncRunDto } from '@universe-editor/extensions-common'
-import { ExportPerforceSyncHistoryAction } from '../perforceSyncHistoryActions.js'
+import {
+  ExportPerforceSyncHistoryAction,
+  WorkbenchPerforceSyncHistoryRecordedAction,
+} from '../perforceSyncHistoryActions.js'
+import {
+  _resetForTests,
+  perforceSyncHistoryViewState,
+  SYNC_HISTORY_POKE_DEBOUNCE_MS,
+} from '../../services/perforceSyncHistory/syncHistoryViewState.js'
 
 const ROOT = 'X:/p4ws/main'
 
@@ -183,5 +191,45 @@ describe('ExportPerforceSyncHistoryAction', () => {
     expect(harness.showSaveDialog).toHaveBeenCalledTimes(1)
     const options = harness.showSaveDialog.mock.calls[0]?.[0] as Record<string, unknown>
     expect(options).not.toHaveProperty('defaultUri')
+  })
+})
+
+describe('WorkbenchPerforceSyncHistoryRecordedAction', () => {
+  afterEach(() => {
+    _resetForTests()
+    vi.useRealTimers()
+  })
+
+  it('answers to the exact id the perforce extension pokes', () => {
+    // The literal is written out here on purpose: the host side pins the same
+    // string in extensionSyncHistory.test.ts, and a rename on either side is
+    // otherwise silent (the host only sees a resolve, the renderer only warns).
+    expect(WorkbenchPerforceSyncHistoryRecordedAction.ID).toBe(
+      '_workbench.perforceSyncHistoryRecorded',
+    )
+  })
+
+  it('routes the poke to the module seam, which reloads a mounted page once', () => {
+    vi.useFakeTimers()
+    _resetForTests()
+    const refresh = vi.fn()
+    perforceSyncHistoryViewState.refresh = refresh
+
+    // The action takes no services (there is nothing to resolve — the seam owns
+    // the state), so no InstantiationService is needed here.
+    new WorkbenchPerforceSyncHistoryRecordedAction().run()
+    vi.advanceTimersByTime(SYNC_HISTORY_POKE_DEBOUNCE_MS)
+
+    expect(refresh).toHaveBeenCalledTimes(1)
+  })
+
+  it('marks an unmounted page stale instead of reloading nothing', () => {
+    vi.useFakeTimers()
+    _resetForTests()
+
+    new WorkbenchPerforceSyncHistoryRecordedAction().run()
+    vi.advanceTimersByTime(SYNC_HISTORY_POKE_DEBOUNCE_MS * 2)
+
+    expect(perforceSyncHistoryViewState.stale).toBe(true)
   })
 })

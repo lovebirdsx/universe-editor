@@ -1470,6 +1470,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   // --- Perforce Sync History ---
   'action.perforceSyncHistory.view': '查看同步历史',
   'action.perforceSyncHistory.exportCsv': '导出同步历史为 CSV',
+  'action.perforceSyncHistory.recorded': '同步历史有新记录',
   'perforceSyncHistory.title': 'Perforce 同步历史',
   'perforceSyncHistory.list': '已记录的同步',
   'perforceSyncHistory.count': '{0} 次同步',

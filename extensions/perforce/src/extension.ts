@@ -446,6 +446,16 @@ async function pickSyncSpec(): Promise<{ spec: string; force: boolean } | undefi
 const PROGRESS_REPORT_INTERVAL_MS = 150
 
 /**
+ * Host → renderer poke answering "a sync record just landed" — the Sync History
+ * page reloads itself off it instead of the user pressing Refresh.
+ *
+ * NEVER declare this id in this extension's `package.json` `commands`: a declared
+ * id shadows the renderer's Action2 and `executeCommand` silently resolves to
+ * `undefined` (same trap as `_workbench.swarmPollTick`, see src/swarm/CLAUDE.md).
+ */
+const SYNC_HISTORY_RECORDED_COMMAND = '_workbench.perforceSyncHistoryRecorded'
+
+/**
  * Where a get is known to have landed without asking p4 — the row's changelist.
  * `directSyncPoint` is the only producer: it decides this against the listing
  * scope the renderer echoed back, and consuming that scope is what the judgment
@@ -1511,6 +1521,40 @@ export async function activate(context: ExtensionContext): Promise<void> {
   }
 
   /**
+   * Tell the renderer's Sync History page a record landed. Fire and forget: this
+   * runs on the sync teardown path, where nothing may wait on a renderer round
+   * trip (a backgrounded window answers RPCs slowly). No ack watchdog either —
+   * unlike the Swarm poll driver there is no repeating schedule to protect and no
+   * missing-tick evidence to leave: a poke that never lands costs one refresh,
+   * and the next get pokes again.
+   */
+  const pokeSyncHistoryRecorded = (): void => {
+    // The output sink is not ours to trust (`SyncHistoryLog._warn` wraps it for
+    // the same reason), and this path may not throw in any of its three shapes:
+    // a synchronous throw while the channel is gone, a rejection, and a throw
+    // from inside the rejection handler — the last one would surface as an
+    // unhandled rejection with nobody left to catch it.
+    const warn = (msg: string): void => {
+      try {
+        log(msg)
+      } catch {
+        // Nothing left to report it to.
+      }
+    }
+    try {
+      commands.executeCommand(SYNC_HISTORY_RECORDED_COMMAND).then(undefined, (err: unknown) => {
+        warn(
+          `[perforce] sync history poke failed: ${err instanceof Error ? err.message : String(err)}`,
+        )
+      })
+    } catch (err) {
+      warn(
+        `[perforce] sync history poke threw: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
+  }
+
+  /**
    * Write one get into the sync history. Called from every path that ends a get —
    * including the ones that end it early (cancelled, failed, refused at the scope
    * gate) — and deliberately not awaited: the record is a synchronous small-file
@@ -1545,6 +1589,12 @@ export async function activate(context: ExtensionContext): Promise<void> {
         run: input.run,
       }),
     )
+    // `record` is synchronous, so the entry is already readable when this goes
+    // out. Poked unconditionally: a record whose FILE write failed still answers
+    // from the in-process copy, so the verdict of that I/O is not this call's to
+    // make — and the one place that decides a failed write stays invisible is
+    // `SyncHistoryLog` itself.
+    pokeSyncHistoryRecorded()
   }
 
   /**

@@ -12,6 +12,11 @@
  *  run is allowed not to have (a machine with no I/O sampler, a run that never
  *  spawned p4 at all).
  *
+ *  A record landing in the host pokes this page
+ *  (`_workbench.perforceSyncHistoryRecorded`): mounted → silent reload behind a
+ *  debounce, unmounted → `stale`, re-read on the way back. Only this window's
+ *  gets poke — another window writes the shared file without a word.
+ *
  *  The list keeps `useFlatListNavigation`'s house keyboard model — container
  *  focus, rows as data, selection follows focus — same as AI Debug, because
  *  "browse the recorded runs" is the same interaction.
@@ -97,11 +102,19 @@ export function PerforceSyncHistoryEditor(_props: { input: IEditorInput }) {
 
   const load = useCallback(
     async (limit: number): Promise<void> => {
+      // Claim the newest generation before the await: the answer that may write
+      // is the one dispatched last, whatever order the two RPCs resolve in. A
+      // poke-dispatched reload races the user's Refresh and Load more this way.
+      const seq = ++state.loadSeq
+      // Written at dispatch, so a reload dispatched later (a poke) reads the size
+      // the user asked for rather than the one before their "Load more".
+      state.limit = limit
       try {
         const page = await commands.executeCommand<P4SyncHistoryLoadResult>(
           PerforceSyncHistoryCommands.getRuns,
           { max: limit },
         )
+        if (seq !== state.loadSeq) return
         // The command answers `undefined` when the extension is not there at
         // all; a shape check keeps a half-built answer from rendering as a list
         // of nothing.
@@ -117,8 +130,10 @@ export function PerforceSyncHistoryEditor(_props: { input: IEditorInput }) {
         state.runs = [...page.runs]
         state.total = page.total
         state.hasMore = page.hasMore
-        state.limit = limit
         state.loaded = true
+        // This page is now the current view of the history; a poke that landed
+        // while this load was in flight has been answered by it.
+        state.stale = false
         // The next selection is decided from the MODULE state, not from React's:
         // a first load can settle after this component unmounted (the tab was
         // deactivated), and reading React state there would write back the
@@ -133,7 +148,7 @@ export function PerforceSyncHistoryEditor(_props: { input: IEditorInput }) {
         // A rejected command means no perforce extension in this install (or one
         // too old to know this id). The page states that instead of showing an
         // empty history, which would read as "you never synced anything".
-        setUnavailable(true)
+        if (seq === state.loadSeq) setUnavailable(true)
       }
     },
     [commands, state],
@@ -145,9 +160,9 @@ export function PerforceSyncHistoryEditor(_props: { input: IEditorInput }) {
 
   useEffect(() => {
     // The module-level view state survives this component's unmount, so a
-    // return to the tab shows the page it left — while the store still knows
-    // nothing about it.
-    if (!state.loaded) void load(state.limit)
+    // return to the tab shows the page it left. `stale` is the one thing that
+    // re-reads it: the host poked a record while this tab was away.
+    if (!state.loaded || state.stale) void load(state.limit)
   }, [load, state])
 
   useEffect(() => {
@@ -329,6 +344,11 @@ export function PerforceSyncHistoryEditor(_props: { input: IEditorInput }) {
               type="button"
               className={styles['loadMore']}
               data-testid="perforce-sync-history-load-more"
+              // One page past what has already been asked for. Clicking again
+              // while a load is in flight therefore asks for one page MORE rather
+              // than repeating the request — the price of `state.limit` advancing
+              // at dispatch, which is what keeps a poke-driven reload from
+              // shrinking the page (see `load`).
               onClick={() => void load(state.limit + SYNC_HISTORY_PAGE_SIZE)}
             >
               {localize('perforceSyncHistory.loadMore', 'Load more')}

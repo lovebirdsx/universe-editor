@@ -875,3 +875,87 @@ describe('a finished get reaches a user who left the window', () => {
     await expect(runCommand('perforce.syncLatest')).resolves.toBeUndefined()
   })
 })
+
+/** The renderer lane the Sync History page answers, so a record landing reloads
+ *  the page instead of waiting for a click on Refresh. Literal on purpose: the
+ *  renderer side pins the same string, and either side renaming it must fail
+ *  here (a mismatch is otherwise silent — the renderer only logs a warning). */
+const POKE = '_workbench.perforceSyncHistoryRecorded'
+
+const pokes = (): unknown[][] =>
+  commandsMock.executeCommand.mock.calls.filter((call) => call[0] === POKE)
+
+describe('the renderer poke', () => {
+  it('pokes once per get, after the record is readable', async () => {
+    let seenWhenPoked = -1
+    commandsMock.executeCommand.mockImplementation(async (id: unknown) => {
+      if (id === POKE) seenWhenPoked = records().length
+      return undefined
+    })
+
+    await runCommand('perforce.syncLatest')
+
+    expect(pokes()).toHaveLength(1)
+    // The page's reload is a file read: poking before the write would make it
+    // read the history without the very record that triggered it.
+    expect(seenWhenPoked).toBe(1)
+  })
+
+  it('pokes for a declined get too', async () => {
+    // The page has to show this row — "I clicked get and nothing happened" is
+    // exactly the record a stale list hides.
+    fake.checkScopeTargets.mockResolvedValue({
+      state: 'ready',
+      reason: undefined,
+      inside: [],
+      outside: [{ path: `${SRC}/a.cpp`, isDirectory: false }],
+    })
+    windowMock.showWarningMessage.mockResolvedValue(undefined)
+
+    await runCommand('perforce.syncLatest', { resourceUri: `${SRC}/a.cpp` })
+
+    expect(records()[0]?.outcome).toBe('declined')
+    expect(pokes()).toHaveLength(1)
+  })
+
+  it('keeps a rejected poke from failing the get', async () => {
+    // The renderer may be gone (a window closing mid-get). The record is already
+    // on disk, so the get is not the poke's hostage — and an escaping rejection
+    // here would surface as an unhandled rejection in the host process.
+    commandsMock.executeCommand.mockImplementation(async (id: unknown) => {
+      if (id === POKE) throw new Error('renderer gone')
+      return undefined
+    })
+
+    await runCommand('perforce.syncLatest')
+
+    expect(records()).toHaveLength(1)
+    expect(pokes()).toHaveLength(1)
+  })
+
+  it('keeps a synchronously throwing poke from escaping', async () => {
+    // The other failure shape: the IPC channel is already torn down, so the call
+    // throws before it can return a promise. This is what the try/catch (rather
+    // than only the rejection handler) is there for.
+    commandsMock.executeCommand.mockImplementation((id: unknown) => {
+      if (id === POKE) throw new Error('bridge gone')
+      return Promise.resolve(undefined)
+    })
+
+    await runCommand('perforce.syncLatest')
+
+    expect(records()).toHaveLength(1)
+    expect(pokes()).toHaveLength(1)
+  })
+
+  it('never declares the poke id in the extension manifest', () => {
+    // A command declared in package.json shadows the renderer's Action2 and
+    // `executeCommand` then resolves to `undefined` without an error — the
+    // silent-failure trap of src/swarm/CLAUDE.md, applied to this lane.
+    const manifest = JSON.parse(
+      readFileSync(join(import.meta.dirname, '..', '..', 'package.json'), 'utf8'),
+    ) as { contributes?: { commands?: { command?: string }[] } }
+    const declared = (manifest.contributes?.commands ?? []).map((c) => c.command)
+    expect(declared).not.toContain(POKE)
+  })
+})

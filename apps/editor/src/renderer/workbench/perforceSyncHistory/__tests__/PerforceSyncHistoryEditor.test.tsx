@@ -26,7 +26,9 @@ import {
 import { ServicesContext } from '../../useService.js'
 import {
   _resetForTests,
+  noteSyncHistoryRecorded,
   perforceSyncHistoryViewState,
+  SYNC_HISTORY_POKE_DEBOUNCE_MS,
 } from '../../../services/perforceSyncHistory/syncHistoryViewState.js'
 import { ExportPerforceSyncHistoryAction } from '../../../actions/perforceSyncHistoryActions.js'
 import { PerforceSyncHistoryEditor } from '../PerforceSyncHistoryEditor.js'
@@ -652,5 +654,226 @@ describe('PerforceSyncHistoryEditor', () => {
     expect(screen.getByTestId('perforce-sync-history-list-pane').getAttribute('style')).toContain(
       '420px',
     )
+  })
+})
+
+/** A command service whose `getRuns` answers from `pages` in order, repeating the
+ *  last — for a page that gains a record while the tab is open. */
+function makePagedCommandService(
+  pages: readonly P4SyncHistoryLoadResult[],
+  details: Map<string, P4SyncRunDetailDto>,
+): ICommandService {
+  let call = 0
+  return {
+    _serviceBrand: undefined,
+    executeCommand: vi.fn(async (id: string, arg?: unknown) => {
+      if (id === PerforceSyncHistoryCommands.getRuns) {
+        const page = pages[Math.min(call++, pages.length - 1)] ?? pages[0]
+        return page
+      }
+      if (id === PerforceSyncHistoryCommands.getRun) {
+        return details.get(String(arg)) ?? null
+      }
+      return undefined
+    }),
+    onWillExecuteCommand: Event.None,
+    onDidExecuteCommand: Event.None,
+  } as unknown as ICommandService
+}
+
+/** A command service that holds every `getRuns` open until the test answers it,
+ *  oldest first — the only way to place a poke inside a load that is still in
+ *  flight. */
+function makeHeldCommandService(details = new Map<string, P4SyncRunDetailDto>()): {
+  readonly service: ICommandService
+  readonly askedMax: number[]
+  readonly pending: ((page: P4SyncHistoryLoadResult) => void)[]
+} {
+  const askedMax: number[] = []
+  const pending: ((page: P4SyncHistoryLoadResult) => void)[] = []
+  const service = {
+    _serviceBrand: undefined,
+    executeCommand: vi.fn((id: string, arg?: unknown) => {
+      if (id === PerforceSyncHistoryCommands.getRuns) {
+        askedMax.push((arg as { max?: number } | undefined)?.max ?? 0)
+        return new Promise<P4SyncHistoryLoadResult>((resolve) => pending.push(resolve))
+      }
+      if (id === PerforceSyncHistoryCommands.getRun) {
+        return Promise.resolve(details.get(String(arg)) ?? null)
+      }
+      return Promise.resolve(undefined)
+    }),
+    onWillExecuteCommand: Event.None,
+    onDidExecuteCommand: Event.None,
+  } as unknown as ICommandService
+  return { service, askedMax, pending }
+}
+
+/** The debounce runs on real timers here (fake ones would break `flush`'s
+ *  macrotask rounds), so a poke-driven reload needs a real wait. */
+const waitForPoke = (): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, SYNC_HISTORY_POKE_DEBOUNCE_MS + 50))
+
+describe('a record landing while the tab is open', () => {
+  it('reloads the list on the poke, without moving the selection', async () => {
+    const older = makeRun({ id: 'run-1' })
+    const newer = makeRun({ id: 'run-2', at: Date.now() })
+    const commands = makePagedCommandService(
+      [makePage([older], 1), makePage([newer, older], 2)],
+      new Map([
+        ['run-1', makeDetail(older)],
+        ['run-2', makeDetail(newer)],
+      ]),
+    )
+    renderEditor(commands)
+    await flush()
+    expect(screen.getAllByTestId('perforce-sync-history-row')).toHaveLength(1)
+    expect(perforceSyncHistoryViewState.selectedId).toBe('run-1')
+
+    noteSyncHistoryRecorded()
+    await waitForPoke()
+    await flush()
+
+    expect(screen.getAllByTestId('perforce-sync-history-row')).toHaveLength(2)
+    // The row the user was reading keeps the highlight: a new run landing is not
+    // a reason to move them.
+    expect(perforceSyncHistoryViewState.selectedId).toBe('run-1')
+    expect(perforceSyncHistoryViewState.stale).toBe(false)
+  })
+
+  it('marks an unmounted page stale, and re-reads once on the way back', async () => {
+    const older = makeRun({ id: 'run-1' })
+    const newer = makeRun({ id: 'run-2', at: Date.now() })
+    const commands = makePagedCommandService(
+      [makePage([older], 1), makePage([newer, older], 2)],
+      new Map([
+        ['run-1', makeDetail(older)],
+        ['run-2', makeDetail(newer)],
+      ]),
+    )
+    const { unmount } = renderEditor(commands)
+    await flush()
+    unmount()
+
+    noteSyncHistoryRecorded()
+    await waitForPoke()
+
+    // Nothing to reload into — the record is remembered instead.
+    expect(perforceSyncHistoryViewState.stale).toBe(true)
+    expect(
+      (commands.executeCommand as ReturnType<typeof vi.fn>).mock.calls.filter(
+        (c) => c[0] === PerforceSyncHistoryCommands.getRuns,
+      ),
+    ).toHaveLength(1)
+
+    renderEditor(commands)
+    await flush()
+
+    expect(screen.getAllByTestId('perforce-sync-history-row')).toHaveLength(2)
+    expect(perforceSyncHistoryViewState.stale).toBe(false)
+  })
+
+  it('keeps the size the user asked for when the poke lands mid-Load more', async () => {
+    const held = makeHeldCommandService()
+    renderEditor(held.service)
+    // The mount load, answered so the page is on screen with a "Load more".
+    const first = makeRun({ id: 'run-1' })
+    held.pending[0]?.(makePage([first], 60, true))
+    await flush()
+
+    fireEvent.click(screen.getByTestId('perforce-sync-history-load-more'))
+    // A record lands while that larger page is still in flight.
+    noteSyncHistoryRecorded()
+    // Polled, not slept-then-asserted: the debounce runs on real timers here, and
+    // a loaded machine must not turn a late dispatch into a failure.
+    await vi.waitFor(() => expect(held.askedMax).toHaveLength(3))
+
+    // The reload asks for what the user asked for — a stale `limit` here would
+    // quietly drop the page back to 50 rows.
+    expect(held.askedMax).toEqual([50, 100, 100])
+    expect(perforceSyncHistoryViewState.limit).toBe(100)
+
+    // The poked reload answers first and is the one that may write; the held
+    // Load more settling afterwards must not shrink the page it asked for.
+    held.pending[2]?.(makePage([first], 60, true))
+    held.pending[1]?.(makePage([first], 1, false))
+    await flush()
+
+    expect(perforceSyncHistoryViewState.total).toBe(60)
+    expect(screen.getByTestId('perforce-sync-history-count').textContent).toBe('60 run(s)')
+  })
+
+  it('lets the newer dispatch write when two loads settle out of order', async () => {
+    const held = makeHeldCommandService()
+    renderEditor(held.service)
+    await flush()
+
+    // The poke's reload is dispatched second and answers first.
+    noteSyncHistoryRecorded()
+    await vi.waitFor(() => expect(held.pending).toHaveLength(2))
+
+    const newer = makeRun({ id: 'run-newer', spec: '@5000' })
+    const older = makeRun({ id: 'run-older', spec: '@4000' })
+    held.pending[1]?.(makePage([newer], 1))
+    await flush()
+    held.pending[0]?.(makePage([older], 1))
+    await flush()
+
+    // The late answer of the older dispatch is dropped rather than painted over
+    // the newer one.
+    expect(screen.getAllByTestId('perforce-sync-history-row')).toHaveLength(1)
+    expect(screen.getByTestId('perforce-sync-history-row').textContent).toContain('changelist 5000')
+    expect(perforceSyncHistoryViewState.runs.map((r) => r.id)).toEqual(['run-newer'])
+  })
+
+  it('answers a poke on the unavailable page by retrying, not by inventing history', async () => {
+    const commands = makeCommandService({} as P4SyncHistoryLoadResult, new Map())
+    ;(commands.executeCommand as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
+    renderEditor(commands)
+    await flush()
+    expect(screen.getByTestId('perforce-sync-history-unavailable')).toBeTruthy()
+
+    noteSyncHistoryRecorded()
+    await waitForPoke()
+    await flush()
+
+    // Asked again (the extension may have come up since), and still honest about
+    // not having an answer.
+    expect(
+      (commands.executeCommand as ReturnType<typeof vi.fn>).mock.calls.filter(
+        (c) => c[0] === PerforceSyncHistoryCommands.getRuns,
+      ),
+    ).toHaveLength(2)
+    expect(screen.getByTestId('perforce-sync-history-unavailable')).toBeTruthy()
+  })
+
+  it('stays stale when the poked reload fails, and re-reads on the way back', async () => {
+    const run = makeRun()
+    const commands = makeCommandService(makePage([run]), new Map([['run-1', makeDetail(run)]]))
+    const getRunsCalls = (): unknown[][] =>
+      (commands.executeCommand as ReturnType<typeof vi.fn>).mock.calls.filter(
+        (c) => c[0] === PerforceSyncHistoryCommands.getRuns,
+      )
+    const { unmount } = renderEditor(commands)
+    await flush()
+    expect(getRunsCalls()).toHaveLength(1)
+
+    // The extension is gone by the time the poke's reload asks — a host restart,
+    // which is exactly when the records it announced have not been seen yet.
+    ;(commands.executeCommand as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
+    noteSyncHistoryRecorded()
+    await vi.waitFor(() => expect(getRunsCalls()).toHaveLength(2))
+    await flush()
+
+    expect(screen.getByTestId('perforce-sync-history-unavailable')).toBeTruthy()
+    // A failed reload must NOT clear the flag: the page still is not current, and
+    // the next mount has to try again rather than show the page it left.
+    expect(perforceSyncHistoryViewState.stale).toBe(true)
+
+    unmount()
+    renderEditor(commands)
+    await flush()
+
+    expect(getRunsCalls()).toHaveLength(3)
   })
 })
