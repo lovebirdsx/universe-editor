@@ -168,6 +168,8 @@ pnpm release -- --version 0.1.5
 11. push `main` 与 tag。
 12. 上传 `.exe` / `.blockmap` → `release-notes/` 发布包 → **最后** `latest.yml`。
 
+打包入口一律走 `scripts/release/package-editor.mjs`，其第 1 步复用上面这份发版门禁（`package:win` / `package:win:dir` / `package:win:installer` 都带 `--version`）。仅 CI 的打包链路冒烟用 `package:win:ci`（= `--no-notes-gate`）：它只断言版本一致并编译快照，**不**要求目标版本已有 reviewed 稿——开发期版本号先于发行说明落地是常态（如 extension-api minor bump）。`pnpm release` 与发版 workflow 一律不带该开关。
+
 常用选项：
 
 | 参数                         | 说明                                                  |

@@ -16,11 +16,13 @@ test('splitArgs forwards electron-builder args and strips --env / --verify-root'
     builderArgs: ['--win', 'nsis', 'dir'],
     verifyRoot: undefined,
     bundleDir: undefined,
+    noNotesGate: false,
   })
   assert.deepEqual(splitArgs(['--win', 'nsis', '--env=prod']), {
     builderArgs: ['--win', 'nsis'],
     verifyRoot: undefined,
     bundleDir: undefined,
+    noNotesGate: false,
   })
   assert.deepEqual(
     splitArgs(['--win', 'dir', '--verify-root', 'release/linux-unpacked/resources']),
@@ -28,12 +30,14 @@ test('splitArgs forwards electron-builder args and strips --env / --verify-root'
       builderArgs: ['--win', 'dir'],
       verifyRoot: 'release/linux-unpacked/resources',
       bundleDir: undefined,
+      noNotesGate: false,
     },
   )
   assert.deepEqual(splitArgs(['--linux', 'dir', '--publish', 'never', '--verify-root=x/y']), {
     builderArgs: ['--linux', 'dir', '--publish', 'never'],
     verifyRoot: 'x/y',
     bundleDir: undefined,
+    noNotesGate: false,
   })
 })
 
@@ -42,6 +46,7 @@ test('splitArgs leaves electron-builder args untouched when no --env / --verify-
     builderArgs: ['--win', 'nsis'],
     verifyRoot: undefined,
     bundleDir: undefined,
+    noNotesGate: false,
   })
 })
 
@@ -52,6 +57,7 @@ test('splitArgs drops the separator pnpm forwards verbatim', () => {
     builderArgs: ['--win', 'dir'],
     verifyRoot: undefined,
     bundleDir: undefined,
+    noNotesGate: false,
   })
 })
 
@@ -60,8 +66,20 @@ test('splitArgs strips --bundle-dir in both spellings', () => {
     builderArgs: ['--linux', 'dir'],
     verifyRoot: undefined,
     bundleDir: 'out/notes',
+    noNotesGate: false,
   })
   assert.deepEqual(splitArgs(['--linux', 'dir', '--bundle-dir=out/notes']).bundleDir, 'out/notes')
+})
+
+test('splitArgs strips --no-notes-gate and reports it', () => {
+  // The flag only drops `--version` from the compile step, i.e. the release gate
+  // requiring the packaged version to already have a reviewed release note.
+  assert.deepEqual(splitArgs(['--win', 'nsis', 'dir', '--no-notes-gate']), {
+    builderArgs: ['--win', 'nsis', 'dir'],
+    verifyRoot: undefined,
+    bundleDir: undefined,
+    noNotesGate: true,
+  })
 })
 
 test('defaultBundleDir lands in the release dir, above the unpacked app', () => {

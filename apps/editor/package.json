@@ -35,6 +35,7 @@
     "package:win": "node ../../scripts/release/package-editor.mjs --win nsis dir",
     "package:win:dir": "node ../../scripts/release/package-editor.mjs --win dir",
     "package:win:installer": "node ../../scripts/release/package-editor.mjs --win nsis",
+    "package:win:ci": "node ../../scripts/release/package-editor.mjs --win nsis dir --no-notes-gate",
     "package:linux:dir": "node ../../scripts/release/package-editor.mjs --linux dir --publish never --verify-root apps/editor/release/linux-unpacked/resources"
   },
   "dependencies": {

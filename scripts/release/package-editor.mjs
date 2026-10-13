@@ -9,6 +9,8 @@
  *  再按固定顺序跑五步，使 `--env` 真正生效：
  *
  *    1. release:notes --version <package.json 的版本>   编译快照 + canonical（--check 语义相同）
+ *       带 --no-notes-gate 时只传 --expect-version：跳过「目标版本必须有 reviewed 稿」
+ *       的发版门禁（开发期版本号领先于发行说明是常态），版本一致与语法校验照常。
  *    2. runtime:stage                                    staging 从快照取 notes
  *    3. build
  *    4. package.mjs（electron-builder）
@@ -20,6 +22,7 @@
  *    --env <mode>         传给 loadEnv 选 .env.<mode>（可选，默认 dev）
  *    --verify-root <path> verify-packaged 的 resources 根（可选，默认 win-unpacked）
  *    --bundle-dir <path>  notes 发布包落点（可选，默认 apps/editor/release/release-notes）
+ *    --no-notes-gate      跳过 release notes 发版门禁（打包链路冒烟专用，勿用于发版）
  *    其余参数原样透传给 scripts/release/package.mjs（electron-builder 参数）。
  *--------------------------------------------------------------------------------------------*/
 
@@ -32,16 +35,21 @@ import { loadEnv } from '../lib/env.mjs'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(__dirname, '../..')
 
-// 剥离本入口自用的参数（--env 交给 loadEnv，--verify-root/--bundle-dir 交给收尾步骤），
-// 其余参数原样透传给 electron-builder。
+// 剥离本入口自用的参数（--env 交给 loadEnv，--verify-root/--bundle-dir 交给收尾步骤，
+// --no-notes-gate 交给 release:notes 步骤），其余参数原样透传给 electron-builder。
 export function splitArgs(argv) {
   const builderArgs = []
   let verifyRoot
   let bundleDir
+  let noNotesGate = false
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
     // `pnpm … package:win -- --env prod` forwards the separator verbatim (pnpm 11).
     if (arg === '--') continue
+    if (arg === '--no-notes-gate') {
+      noNotesGate = true
+      continue
+    }
     if (arg === '--env') {
       i++
       continue
@@ -65,7 +73,7 @@ export function splitArgs(argv) {
     }
     builderArgs.push(arg)
   }
-  return { builderArgs, verifyRoot, bundleDir }
+  return { builderArgs, verifyRoot, bundleDir, noNotesGate }
 }
 
 /** verifyRoot is repo-relative (see runtime-resources.mjs verify-packaged). */
@@ -97,13 +105,17 @@ function run(command, args) {
 }
 
 function main(argv) {
-  const { builderArgs, verifyRoot, bundleDir } = splitArgs(argv)
+  const { builderArgs, verifyRoot, bundleDir, noNotesGate } = splitArgs(argv)
 
   const version = editorVersion()
+  // --version 驱动发版门禁（目标版本必须有 reviewed 稿）；跳过时只留 --expect-version，
+  // 它同样决定编译上限，并在 compile.mjs 里断言与 package.json 版本一致。
+  if (noNotesGate) {
+    console.warn('⚠ 已跳过 release notes 发版门禁（--no-notes-gate，仅用于打包链路验证）')
+  }
   run(process.execPath, [
     join(__dirname, 'release-notes', 'compile.mjs'),
-    '--version',
-    version,
+    ...(noNotesGate ? [] : ['--version', version]),
     '--expect-version',
     version,
   ])

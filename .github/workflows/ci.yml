@@ -862,14 +862,21 @@ jobs:
       # A genuine compile error simply fails both attempts and still fails the
       # job — nothing is swallowed. `continue-on-error` only covers attempt 1, and
       # the `outcome == 'failure'` condition means a cancelled job skips attempt 2.
+      #
+      # `package:win:ci` (= `--no-notes-gate`) exists only for this job: it is a
+      # packaging smoke test, while the release-notes gate requires the packaged
+      # version to already have a reviewed note — false during development, where
+      # a version bump (e.g. an extension-API minor) lands long before the note.
+      # The gate stays enforced on the release paths: `pnpm release`
+      # (package:win:installer) and the tag-driven release-editor.yml.
       - name: Build Windows release artifacts
         id: package-win
         continue-on-error: true
-        run: pnpm --filter @universe-editor/editor package:win
+        run: pnpm --filter @universe-editor/editor package:win:ci
 
       - name: Build Windows release artifacts (retry)
         if: steps.package-win.outcome == 'failure'
-        run: pnpm --filter @universe-editor/editor package:win
+        run: pnpm --filter @universe-editor/editor package:win:ci
 
       - name: Upload Windows release artifacts
         uses: actions/upload-artifact@v6
