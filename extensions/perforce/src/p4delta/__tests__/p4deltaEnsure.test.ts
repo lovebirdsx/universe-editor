@@ -269,3 +269,65 @@ describe('ensureP4delta: running the store', () => {
     expect(result.changed).toBe(false)
   })
 })
+
+// 「机器已有副本」是省流规则不是正确性规则：只在本安装盘上一份自己的都没有时成立；托管副本是本安装要持续升级的那份，不能被机器上更旧的自装副本钉死（见 docs/reconcile.md）。
+describe('ensureP4delta: a managed copy keeps upgrading', () => {
+  beforeEach(() => {
+    mocks.named.mockReset().mockReturnValue(false)
+    mocks.resolve.mockReset().mockReturnValue({ exe: '/usr/bin/p4delta', source: 'path' })
+    storeMocks.activeManaged.mockReset()
+    storeMocks.open.mockReset()
+  })
+
+  it('runs the store even when the machine has its own copy', async () => {
+    storeMocks.activeManaged.mockReturnValue('/store/p4delta/0.1.11/p4delta.exe')
+    const fake = fakeStore({ kind: 'installed', version: '0.1.12', previousVersion: '0.1.11' })
+    storeMocks.open.mockReturnValue(fake.store)
+    const result = await ensureP4delta(options())
+    expect(result.outcome).toMatchObject({ kind: 'installed', version: '0.1.12' })
+    expect(result.changed).toBe(true)
+    expect(fake.sync).toHaveBeenCalledWith(false, undefined)
+  })
+
+  it('still stays out of the way when there is no managed copy behind the pointer', async () => {
+    storeMocks.activeManaged.mockReturnValue(undefined)
+    const result = await ensureP4delta(options())
+    expect(result.outcome).toEqual({
+      kind: 'skipped',
+      reason: 'this machine already has one (/usr/bin/p4delta)',
+    })
+    expect(storeMocks.open).not.toHaveBeenCalled()
+  })
+
+  it('still stays away when an engine was named explicitly', async () => {
+    mocks.named.mockReturnValue(true)
+    storeMocks.activeManaged.mockReturnValue('/store/p4delta/0.1.11/p4delta.exe')
+    const result = await ensureP4delta(options({ configuredPath: '/opt/p4delta' }))
+    expect(result.outcome).toEqual({ kind: 'skipped', reason: 'a p4delta was named explicitly' })
+    expect(storeMocks.open).not.toHaveBeenCalled()
+  })
+
+  it('still stays away under a p4 script override', async () => {
+    storeMocks.activeManaged.mockReturnValue('/store/p4delta/0.1.11/p4delta.exe')
+    const result = await ensureP4delta(options({ p4IsScriptOverride: true }))
+    expect(result.outcome).toEqual({
+      kind: 'skipped',
+      reason: "this session's p4 is a script override; a managed copy would go unused",
+    })
+    expect(storeMocks.open).not.toHaveBeenCalled()
+  })
+
+  it('still honors the master switch and the auto-install setting', async () => {
+    storeMocks.activeManaged.mockReturnValue('/store/p4delta/0.1.11/p4delta.exe')
+    expect((await ensureP4delta(options({ enabled: false }))).outcome.kind).toBe('skipped')
+    expect((await ensureP4delta(options({ autoInstall: false }))).outcome.kind).toBe('skipped')
+    expect(storeMocks.open).not.toHaveBeenCalled()
+  })
+
+  it('reports no change when the managed copy is already current', async () => {
+    storeMocks.activeManaged.mockReturnValue('/store/p4delta/0.1.12/p4delta.exe')
+    storeMocks.open.mockReturnValue(fakeStore({ kind: 'up-to-date', version: '0.1.12' }).store)
+    const result = await ensureP4delta(options())
+    expect(result.changed).toBe(false)
+  })
+})

@@ -486,10 +486,9 @@ interface KnownLanding {
  * caller.
  *
  * `managedRoot` is the managed copy's root (`<globalStoragePath>/p4delta`, see
- * p4deltaStore's `activeManagedP4delta`). It is the LAST tier of the lookup: a
- * machine that already has its own δ keeps using it, and the managed copy
- * answers only when nothing else did. Omitting it — or passing an empty string
- * — reproduces the order from before the managed tier existed, byte for byte.
+ * p4deltaStore's `activeManagedP4delta`). Omitting it — or passing an empty
+ * string — reproduces the order from before the managed tier existed, byte for byte.
+ * 托管副本排在操作者显式指定的两级之下、机器自带的两级之上：它是编辑器唯一能持续升级的那份，不能被机器上更旧的自装副本遮蔽（见 `resolveP4deltaCommand`）。
  */
 export function resolveP4deltaEngine(
   settings: { readonly enabled: boolean; readonly path: string },
@@ -902,11 +901,10 @@ export async function activate(context: ExtensionContext): Promise<void> {
   // (`P4_EXE` when this session's p4 is a script override).
   //
   // `managedRoot` is where the auto-installer keeps the copy this editor
-  // downloads for itself. It is the LAST tier of the lookup (see
-  // resolveP4deltaEngine): a machine that already has its own p4delta keeps
-  // using it untouched, and this exists so a machine without one still gets δ.
-  // Empty on a host with no global storage, which switches the installer off
-  // while leaving the lookup exactly as it was before that tier existed.
+  // downloads for itself. Empty on a host with no global storage, which switches
+  // the installer off while leaving the lookup exactly as it was before that
+  // tier existed.
+  // 托管副本压在机器自带的副本（PATH / %LOCALAPPDATA%）之上、操作者显式指定的两级之下，升级才不会被机器上更旧的副本遮蔽（见 resolveP4deltaEngine）。
   const managedRoot = context.globalStoragePath ? join(context.globalStoragePath, 'p4delta') : ''
   const resolveP4deltaOptions = async (): Promise<
     { exe: string; extraEnv?: Readonly<Record<string, string>> } | undefined

@@ -172,13 +172,13 @@ export interface P4deltaCandidate {
 /**
  * The p4delta executable to spawn, or undefined when this machine has none.
  *
- * Order — self-installed copies first, the editor's own copy last:
- * `UNIVERSE_P4DELTA_PATH` (the e2e / escape-hatch override, mirroring
- * `UNIVERSE_P4_PATH`), then the configured path, then `p4delta` on PATH, then
- * the Windows default install location, then the managed copy under
- * `managedRoot` (see p4deltaStore). A machine that already has its own δ keeps
- * using it; the managed one exists so that a machine without one still gets δ,
- * and it is only ever consulted when nothing else answered.
+ * Order — the two copies an operator named, the one this editor manages, then
+ * whatever the machine provides: `UNIVERSE_P4DELTA_PATH` (the e2e / escape-hatch
+ * override, mirroring `UNIVERSE_P4_PATH`), then the configured path, then the
+ * managed copy under `managedRoot` (see p4deltaStore), then `p4delta` on PATH,
+ * then the Windows default install location.
+ *
+ * 托管副本压在 PATH / `%LOCALAPPDATA%` 之上：它是编辑器唯一能持续升级的那份，被机器上更旧的自装副本遮蔽就永远升不上去。
  *
  * A non-empty override is returned verbatim: a configured path that does not
  * exist has to surface as a refusal at the gate (one clear log line), not
@@ -194,6 +194,10 @@ export function resolveP4deltaCommand(
   const override = process.env.UNIVERSE_P4DELTA_PATH
   if (override) return { exe: override, source: 'env' }
   if (configuredPath) return { exe: configuredPath, source: 'configured' }
+  if (managedRoot !== undefined && managedRoot !== '') {
+    const managed = activeManagedP4delta(managedRoot)
+    if (managed !== undefined) return { exe: managed, source: 'managed' }
+  }
   const exeName = process.platform === 'win32' ? 'p4delta.exe' : 'p4delta'
   const onPath = locateOnPath(exeName)
   if (onPath) return { exe: onPath, source: 'path' }
@@ -203,10 +207,6 @@ export function resolveP4deltaCommand(
       const installed = join(localAppData, 'Programs', 'p4delta', 'p4delta.exe')
       if (existsSync(installed)) return { exe: installed, source: 'localAppData' }
     }
-  }
-  if (managedRoot !== undefined && managedRoot !== '') {
-    const managed = activeManagedP4delta(managedRoot)
-    if (managed !== undefined) return { exe: managed, source: 'managed' }
   }
   return undefined
 }

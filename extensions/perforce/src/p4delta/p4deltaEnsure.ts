@@ -18,18 +18,19 @@
  *    managed copy could not be used by the session that paid for it. Not a
  *    correctness rule but a waste rule — no download for a binary that is
  *    guaranteed to sit unused;
- *  - never when the machine already has its own copy on PATH or in the Windows
- *    default location. Self-installed copies come first, and this module's whole
- *    job is to fill the gap for machines that have none;
  *  - and never more than once per throttle window (see p4deltaStore), because
  *    GitHub allows 60 unauthenticated API requests per hour per IP.
  *
- * `force` (the manual `perforce.p4delta.install` command) lifts the last four:
- * a user who asks for the managed copy gets it even if another one is on PATH,
- * even under a script override (where the copy is for the machine rather than
- * for this session), and even with automatic installation turned off — that
- * setting is precisely a request to do it by hand. Only the master switch still
- * stops it, because a switched-off engine makes the download pointless.
+ * 「机器已有副本」只在本安装盘上一份自己的都没有时成立：机器自带的副本（PATH / `%LOCALAPPDATA%`）是别人的、下载第二份是浪费；托管副本是本安装自己的、必须继续升级（解析器把它排在 PATH / `%LOCALAPPDATA%` 之上，正是为了让升级生效——见 p4deltaService）。
+ *
+ * `force` (the manual `perforce.p4delta.install` command) lifts the three
+ * refusals above (a named engine, a script override, a copy the machine already
+ * has), the `autoInstall` gate and the throttle: a user who asks for the managed
+ * copy gets it even if another one is on PATH, even under a script override
+ * (where the copy is for the machine rather than for this session), and even
+ * with automatic installation turned off — that setting is precisely a request
+ * to do it by hand. Only the master switch still stops it, because a switched-off
+ * engine makes the download pointless.
  */
 import type { P4deltaStore, P4deltaStoreOptions, P4deltaSyncOutcome } from './p4deltaStore.js'
 import { activeManagedP4delta, openP4deltaStore } from './p4deltaStore.js'
@@ -92,6 +93,8 @@ export async function ensureP4delta(
   if (!options.autoInstall && !force) {
     return skip('automatic installation is off; run the install command instead')
   }
+  // 托管副本是本安装自己的、必须继续升级；「机器已有副本」只在本安装盘上一份都没有时才算没事（同一判断还喂给下面的 changed）。
+  const hadManaged = activeManagedP4delta(options.root) !== undefined
   if (!force) {
     if (p4deltaNamedExplicitly(options.configuredPath)) {
       return skip('a p4delta was named explicitly')
@@ -99,9 +102,12 @@ export async function ensureP4delta(
     if (options.p4IsScriptOverride === true) {
       return skip("this session's p4 is a script override; a managed copy would go unused")
     }
-    const machine = resolveP4deltaCommand(options.configuredPath)
-    if (machine !== undefined) {
-      return skip(`this machine already has one (${machine.exe})`)
+    if (!hadManaged) {
+      // 只查系统自装副本（不传 managedRoot）：本安装已有托管副本时，机器自带的副本不该拦住升级。
+      const machine = resolveP4deltaCommand(options.configuredPath)
+      if (machine !== undefined) {
+        return skip(`this machine already has one (${machine.exe})`)
+      }
     }
   }
 
@@ -115,7 +121,6 @@ export async function ensureP4delta(
       ...(options.now !== undefined ? { now: options.now } : {}),
       ...(options.onProgress !== undefined ? { onProgress: options.onProgress } : {}),
     })
-    const hadManaged = activeManagedP4delta(options.root) !== undefined
     const outcome = await store.sync(
       force,
       options.signal !== undefined ? { signal: options.signal } : undefined,

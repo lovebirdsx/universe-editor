@@ -157,14 +157,13 @@ describe('resolveP4deltaCommand', () => {
   })
 })
 
-// The managed copy is the LAST tier: a machine that already has its own δ keeps
-// using it, and only a machine with nothing else falls through to the tree the
-// extension maintains. These read a real `.active` file (only `existsSync` is
-// faked in this suite), so they get a real directory.
+// 托管副本压在机器自带的两级之上（编辑器唯一能持续升级的那份，不能被更旧的自装副本遮蔽）；机器只有自带副本时仍用它。These read a real `.active` file (only `existsSync`
+// is faked in this suite), so they get a real directory.
 describe('resolveP4deltaCommand: the managed tier', () => {
   let root: string
   const savedPath = process.env.PATH
   const savedLocalAppData = process.env.LOCALAPPDATA
+  const savedPlatform = Object.getOwnPropertyDescriptor(process, 'platform')
 
   beforeEach(() => {
     root = mkTempDir('ue-p4delta-cmd-')
@@ -180,6 +179,7 @@ describe('resolveP4deltaCommand: the managed tier', () => {
     else process.env.PATH = savedPath
     if (savedLocalAppData === undefined) delete process.env.LOCALAPPDATA
     else process.env.LOCALAPPDATA = savedLocalAppData
+    if (savedPlatform) Object.defineProperty(process, 'platform', savedPlatform)
     fsState.existing.clear()
   })
 
@@ -190,17 +190,32 @@ describe('resolveP4deltaCommand: the managed tier', () => {
     return exe
   }
 
-  it('answers only after every self-installed tier came up empty', () => {
+  it('answers after every self-installed tier came up empty', () => {
     const managed = activate('0.1.10')
     expect(resolveP4deltaCommand('', root)).toEqual({ exe: managed, source: 'managed' })
   })
 
-  it('yields to a copy the machine already has', () => {
+  it('wins over a copy the machine already has on PATH', () => {
     process.env.PATH = ['/usr/bin'].join(delimiter)
     const onPath = join('/usr/bin', EXE_NAME)
     fsState.existing.add(onPath)
-    activate('0.1.10')
-    expect(resolveP4deltaCommand('', root)).toEqual({ exe: onPath, source: 'path' })
+    const managed = activate('0.1.12')
+    expect(resolveP4deltaCommand('', root)).toEqual({ exe: managed, source: 'managed' })
+  })
+
+  it('wins over the Windows default install location', () => {
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+    process.env.LOCALAPPDATA = '/Users/testuser/AppData/Local'
+    const installed = join('/Users/testuser/AppData/Local', 'Programs', 'p4delta', 'p4delta.exe')
+    fsState.existing.add(installed)
+    const managed = activate('0.1.12')
+    expect(resolveP4deltaCommand('', root)).toEqual({ exe: managed, source: 'managed' })
+  })
+
+  it('yields to the environment override', () => {
+    process.env.UNIVERSE_P4DELTA_PATH = '/opt/e2e/p4delta'
+    activate('0.1.12')
+    expect(resolveP4deltaCommand('', root)).toEqual({ exe: '/opt/e2e/p4delta', source: 'env' })
   })
 
   it('yields to a configured path', () => {
@@ -217,7 +232,16 @@ describe('resolveP4deltaCommand: the managed tier', () => {
     expect(resolveP4deltaCommand('', '')).toBeUndefined()
   })
 
-  it('reports nothing for a pointer with no copy behind it', () => {
+  // 指针背后没有副本 = 「没有托管副本」，绝不抛异常，查找与没有该级一样。
+  it('falls through to a copy the machine has when the pointer names no copy', () => {
+    process.env.PATH = ['/usr/bin'].join(delimiter)
+    const onPath = join('/usr/bin', EXE_NAME)
+    fsState.existing.add(onPath)
+    writeFileSync(join(root, '.active'), '0.1.10')
+    expect(resolveP4deltaCommand('', root)).toEqual({ exe: onPath, source: 'path' })
+  })
+
+  it('reports nothing when neither the managed copy nor the machine has one', () => {
     writeFileSync(join(root, '.active'), '0.1.10')
     expect(resolveP4deltaCommand('', root)).toBeUndefined()
   })

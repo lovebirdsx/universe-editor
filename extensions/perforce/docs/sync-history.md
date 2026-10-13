@@ -62,6 +62,8 @@ run 的时钟（`facts.startedAt`）在 `await this._noteSyncPreviewDrift(...)` 
 
 **δ 侧只有源码改了**：外部 `p4delta` 必须**重新构建并安装**才会上报；老版本 δ 不发 `p4CommandCount` / summary 无 `p4Calls` → `complete=false`，UI 说未完整采集。**没有版本门探测**——不识别的字段天然就是「未上报」。
 
+**排查未完整采集**：先核对 Perforce 输出中的实际引擎路径与来源。托管副本优先于 PATH / 系统安装目录，但显式环境变量或配置路径仍可覆盖它（见 [`../src/p4delta/CLAUDE.md`](../src/p4delta/CLAUDE.md)）。无论来源如何，实际运行的 δ 必须支持计数并给出合法的最终计数；旧引擎、进程中断或输出异常都可能导致 `complete=false`，不代表拉取失败。更新引擎只能改善后续操作的采集；已写入的历史不会补齐。
+
 ## 两个记录点（都在 `extension.ts` 的 `runSync` 收尾处）
 
 1. **落账点 A**：`const res = await window.withProgress(...)` 之后、`if (res.cancelled) return` **之前**。此刻 applied / upToDate / unrecognized / failed / cancelled 全部已定，而**任何 toast 与补救对话框都还没 await**——所以 `durationMs` 量的是拉取本身，不是你盯着弹窗读了多久。失败与取消也因此各留一条。

@@ -11,9 +11,10 @@
  *     there) degrades to native with a log line — never an error dialog, never a
  *     throw. The binary itself is taken as capable of the whole surface the
  *     extension drives: there is no version gate.
- *  4. The managed copy (p4deltaStore) is the LAST tier: `managedRoot` reaches the
- *     resolver, and whatever it answers is admitted on existence like any other
- *     source — a managed path that is not there degrades to native too.
+ *  4. The managed copy (p4deltaStore) sits between the named tiers and the
+ *     machine's own: `managedRoot` reaches the resolver, and whatever it answers
+ *     is admitted on existence like any other source — a managed path that is
+ *     not there degrades to native too. 托管副本压过 PATH / `%LOCALAPPDATA%`，升级才不会被机器上更旧的副本遮蔽（见 `resolveP4deltaCommand`）。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { P4deltaCandidate } from '../p4delta/p4deltaService.js'

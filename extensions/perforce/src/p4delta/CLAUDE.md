@@ -6,13 +6,13 @@
 
 ## 副本优先级（五级，`resolveP4deltaCommand`）
 
-`UNIVERSE_P4DELTA_PATH`(env) → `perforce.p4delta.path`(configured) → PATH → `%LOCALAPPDATA%\Programs\p4delta\p4delta.exe` → **托管副本**(managed)。返回 `P4deltaCandidate { exe, source }`，`source` 只用于日志与判定。**前四级命中即完全不联网**；地址门在 `extension.ts` 的 `resolveP4deltaEngine`（保持同步，只做一次 `existsSync`，**无版本地板**——见 [`../../docs/reconcile.md`](../../docs/reconcile.md) 的「无版本门槛」，别顺手加 `--version` 探测）。
+`UNIVERSE_P4DELTA_PATH`(env) → `perforce.p4delta.path`(configured) → **托管副本**(managed) → PATH → `%LOCALAPPDATA%\Programs\p4delta\p4delta.exe`。返回 `P4deltaCandidate { exe, source }`，`source` 只用于日志与判定。**托管副本排在 PATH / 系统安装目录之前**：它是编辑器唯一能持续升级的那份，被机器上更旧的自装副本遮蔽就永远升不上去。env / configured / PATH / `%LOCALAPPDATA%` 任一级命中即完全不联网（不查上游、不下载）；托管副本命中则进入后台升级（它归编辑器维护，`autoInstall` 关掉时只停这条后台升级、不改变解析顺序）。地址门在 `extension.ts` 的 `resolveP4deltaEngine`（保持同步，只做一次 `existsSync`，**无版本地板**——见 [`../../docs/reconcile.md`](../../docs/reconcile.md) 的「无版本门槛」，别顺手加 `--version` 探测）。
 
 `p4deltaNamedExplicitly(configuredPath)` = env 或配置路径非空，即「操作者说这份是我的」；`resolveP4deltaCommand(configuredPath)`（**不传 `managedRoot`**）非空 = 这台机器自带副本。这两个谓词是安装器的两条早退判据，**复用它们，别另造判断**。
 
 ## 自动安装（`p4deltaEnsure.ts` 编排，`p4deltaStore.ts` 承重）
 
-**该不该装**（`ensureP4delta`，六条零网络早退，各一行日志）：`root === ''` → 非 win32 → `!enabled`（总开关 `p4delta.enabled`）→ `!autoInstall && !force`（`autoInstall` 只约束后台路径）→ `namedExplicitly` → **本会话 p4 是脚本覆盖**（门在那种形状下根本不启用托管副本，装了只会闲置；注入 `p4IsScriptOverride`，`extension.ts` 从 `resolveP4Command()` 现算）→ 机器已有自装副本。`force=true`（手动命令）跳过中间第二条与最后三条，**只有总开关拦得住它**——关掉 `autoInstall` 的人正是这条命令的目标用户。
+**该不该装**（`ensureP4delta`，六条零网络早退，各一行日志）：`root === ''` → 非 win32 → `!enabled`（总开关 `p4delta.enabled`）→ `!autoInstall && !force`（`autoInstall` 只约束后台路径）→ `namedExplicitly` → **本会话 p4 是脚本覆盖**（门在那种形状下根本不启用托管副本，装了只会闲置；注入 `p4IsScriptOverride`，`extension.ts` 从 `resolveP4Command()` 现算）→ 机器已有自装副本**且本安装尚无托管副本**（本安装已有托管副本就继续走升级，否则机器上更旧的自装副本会把它钉死在首次下载的版本上）。`force=true`（手动命令）跳过中间第二条与最后三条，**只有总开关拦得住它**——关掉 `autoInstall` 的人正是这条命令的目标用户。
 
 **装成之后**（`result.changed` → `watchP4delta.refresh()` → 每个 client 的 `setP4delta`）：新的 exe 与「重排本会话扫描轮」是同一件事的两半——`setP4delta` 会撤回「δ 能答这个工作区」的扫描判定（证明属于跑过扫描的那个二进制），没有重排它就一直停在 native、装好也整会话用不上；升级（换 exe）同一条路径，且 δ 的 checkpoint 键带 exe 身份，旧 build 的快照不会被新 build 重放。见 [`../../docs/reconcile.md`](../../docs/reconcile.md) 的「扫描引擎按会话择一」。
 
