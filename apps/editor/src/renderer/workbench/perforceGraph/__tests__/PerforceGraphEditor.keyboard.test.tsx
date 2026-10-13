@@ -35,7 +35,7 @@ import {
   FocusCommitChangesAction,
   ShowCommitChangesAction,
 } from '../../../actions/commitChangesActions.js'
-import { SendCommitToAgentChatAction } from '../../../actions/agentContextActions.js'
+import { SendContextToAgentChatAction } from '../../../actions/agentContextActions.js'
 import { PerforceGraphEditor } from '../PerforceGraphEditor.js'
 
 const REPO: P4GraphRepoDto = { root: 'C:/ws/main', name: 'alice-ws' }
@@ -405,9 +405,10 @@ describe('PerforceGraphEditor Ctrl+Enter context menu', () => {
 
     fireEvent.keyDown(menu, { key: 'Enter' })
     await flush()
-    expect(executeCommand).toHaveBeenCalledWith(SendCommitToAgentChatAction.ID, {
-      hash: '4521',
-      message: 'Fix widget',
+    // The p4 graph injects p4-flavoured text through the shared context command —
+    // not the git one (whose `Commit <hash>: …` wording would be wrong here).
+    expect(executeCommand).toHaveBeenCalledWith(SendContextToAgentChatAction.ID, {
+      text: 'Perforce changelist 4521: Fix widget',
     })
     expect(openMenu()).toBeNull()
   })

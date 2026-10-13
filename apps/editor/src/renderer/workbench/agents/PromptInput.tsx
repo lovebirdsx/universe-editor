@@ -85,6 +85,7 @@ import {
 import { extractHashQuery, type ActiveHashQuery } from '../../services/acp/promptContextRef.js'
 import {
   CommitContextProvider,
+  ExtensionContextProvider,
   ScmChangeContextProvider,
   WorkspaceSymbolContextProvider,
   OpenEditorContextProvider,
@@ -93,6 +94,7 @@ import {
 } from '../../services/acp/contextSuggestions.js'
 import { CommitRefPicker } from '../../services/acp/commitRefPicker.js'
 import {
+  chatContextItemToRef,
   mentionEntryToRef,
   refCopyText,
   suggestionItemToRef,
@@ -225,7 +227,8 @@ export function PromptInput({
     readonly openEditor: readonly ContextSuggestionItem[]
     readonly docs: readonly ContextSuggestionItem[]
     readonly commit: readonly ContextSuggestionItem[]
-  }>({ symbol: [], scmChange: [], openEditor: [], docs: [], commit: [] })
+    readonly chatContext: readonly ContextSuggestionItem[]
+  }>({ symbol: [], scmChange: [], openEditor: [], docs: [], commit: [], chatContext: [] })
   const [hashLoading, setHashLoading] = useState(false)
   const editorHandleRef = useRef<PromptEditorHandle | null>(null)
   // The config bar's imperative handle: Alt+<n> arrives as a command, not as a
@@ -254,6 +257,7 @@ export function PromptInput({
     readonly openEditor: OpenEditorContextProvider
     readonly docs: DocsContextProvider
     readonly commit: CommitContextProvider
+    readonly chatContext: ExtensionContextProvider
   } | null>(null)
 
   const fileSearch = useService(IFileSearchService)
@@ -307,8 +311,8 @@ export function PromptInput({
   const collapseMode = useObservable(session.collapseMode)
   const totalRunningMs = useSessionTimer(session)
 
-  // Lazily instantiate the four `#`-context data sources on first use so
-  // sessions that never type `#` pay no DI/construction cost.
+  // Lazily instantiate the `#`-context data sources on first use so sessions
+  // that never type `#` pay no DI/construction cost.
   const ensureContextProviders = useCallback(() => {
     contextProvidersRef.current ??= {
       symbol: instantiation.createInstance(WorkspaceSymbolContextProvider),
@@ -316,6 +320,7 @@ export function PromptInput({
       openEditor: instantiation.createInstance(OpenEditorContextProvider),
       docs: instantiation.createInstance(DocsContextProvider),
       commit: instantiation.createInstance(CommitContextProvider),
+      chatContext: instantiation.createInstance(ExtensionContextProvider),
     }
     return contextProvidersRef.current
   }, [instantiation])
@@ -866,9 +871,10 @@ export function PromptInput({
       providers.openEditor.query(query),
       providers.docs.query(query),
       providers.commit.query(query),
-    ]).then(([scmChange, openEditor, docs, commit]) => {
+      providers.chatContext.query(query),
+    ]).then(([scmChange, openEditor, docs, commit, chatContext]) => {
       if (seq !== hashSeqRef.current) return
-      setHashSuggestions((prev) => ({ ...prev, scmChange, openEditor, docs, commit }))
+      setHashSuggestions((prev) => ({ ...prev, scmChange, openEditor, docs, commit, chatContext }))
       setHashLoading(false)
     })
     const timer = setTimeout(() => {
@@ -924,6 +930,9 @@ export function PromptInput({
       ],
       hashSuggestions.docs.map((item) => ({ kind: 'suggestion', item }) as const),
       hashSuggestions.commit.map((item) => ({ kind: 'suggestion', item }) as const),
+      // Extension entry points, like docs/commit, name no path of their own —
+      // never directory-scoped.
+      hashSuggestions.chatContext.map((item) => ({ kind: 'suggestion', item }) as const),
     ]
     return groups
       .filter((g) => g.length > 0)
@@ -993,6 +1002,26 @@ export function PromptInput({
         if (ref) editorHandleRef.current?.insertRef(ref, caret, caret)
         requestAnimationFrame(() => editorHandleRef.current?.focus())
       })
+      return
+    }
+    if (entry.item.kind === 'chatContext') {
+      // Same two-step shape as `commit`, except the follow-up picker runs inside
+      // the extension (over its own candidate space), so the renderer only ever
+      // sees the accepted item.
+      const handle = entry.item.meta?.chatContextHandle
+      const before = text.slice(0, q.startIndex)
+      const after = text.slice(q.endIndex)
+      const caret = before.length
+      editorHandleRef.current?.setText(before + after, caret)
+      setHashDismissed(true)
+      setHashIndex(0)
+      if (handle === undefined) return
+      void ensureContextProviders()
+        .chatContext.resolve(handle, q.query)
+        .then((item) => {
+          if (item) editorHandleRef.current?.insertRef(chatContextItemToRef(item), caret, caret)
+          requestAnimationFrame(() => editorHandleRef.current?.focus())
+        })
       return
     }
     editorHandleRef.current?.insertRef(suggestionItemToRef(entry.item), q.startIndex, q.endIndex)

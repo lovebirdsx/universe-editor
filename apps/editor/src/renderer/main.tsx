@@ -237,6 +237,10 @@ import { IScmService, ScmService } from './services/extensions/ScmService.js'
 import { IWebviewService, WebviewService } from './services/extensions/WebviewService.js'
 import { ITimelineService, TimelineService } from './services/timeline/TimelineService.js'
 import { ITreeViewsService, TreeViewsService } from './services/extensions/TreeViewsService.js'
+import {
+  IChatContextService,
+  ChatContextService,
+} from './services/extensions/ChatContextService.js'
 import { IScmBehindHintService, ScmBehindHintService } from './services/scm/ScmBehindHintService.js'
 import {
   IScmDecorationsService,
@@ -937,6 +941,13 @@ async function bootstrapWorkbench(): Promise<void> {
   services.set(
     ITreeViewsService,
     workbenchStore.add(instantiation.createInstance(TreeViewsService)),
+  )
+
+  // Extension-contributed chat context providers (`#` popover entries); each
+  // entry resolves host-side into the item that ends up in the prompt.
+  services.set(
+    IChatContextService,
+    workbenchStore.add(instantiation.createInstance(ChatContextService)),
   )
 
   // Git status decorations derived from the SCM model; colours Explorer rows and

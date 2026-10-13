@@ -70,6 +70,8 @@ import { ILanguageFeaturesService } from '../../../services/languageFeatures/Lan
 import type { ILanguageFeaturesService as ILanguageFeaturesServiceType } from '../../../services/languageFeatures/LanguageFeaturesService.js'
 import { IScmService } from '../../../services/extensions/ScmService.js'
 import type { IScmService as IScmServiceType } from '../../../services/extensions/ScmService.js'
+import { IChatContextService } from '../../../services/extensions/ChatContextService.js'
+import type { IChatContextService as IChatContextServiceType } from '../../../services/extensions/ChatContextService.js'
 import type {
   AcpMessage,
   AcpPendingPermission,
@@ -288,6 +290,18 @@ function makeScmService(paths: readonly string[]): IScmServiceType {
   } as unknown as IScmServiceType
 }
 
+function makeChatContextService(
+  providers: readonly { handle: number; provider: { label: string; description?: string } }[] = [],
+  item: { label: string; text: string } | undefined = undefined,
+): IChatContextServiceType {
+  return {
+    _serviceBrand: undefined,
+    onDidChangeProviders: Event.None,
+    getProviders: () => providers,
+    resolveItem: vi.fn(async () => item),
+  } as unknown as IChatContextServiceType
+}
+
 function makeDocsService(root = '/repo/docs'): IDocsServiceType {
   return {
     _serviceBrand: undefined,
@@ -418,6 +432,7 @@ function renderWithServices(
     dialog?: IDialogServiceType
     focus?: IFocusScopeService
     widget?: IAcpChatWidgetService
+    chatContext?: IChatContextServiceType
   } = {},
 ) {
   const services = new ServiceCollection()
@@ -437,6 +452,7 @@ function renderWithServices(
   services.set(IUriIdentityService, stubUriIdentity)
   services.set(IEditorGroupsService, stubEditorGroupsService)
   services.set(IScmService, opts.scm ?? makeScmService([]))
+  services.set(IChatContextService, opts.chatContext ?? makeChatContextService())
   services.set(IDocsService, opts.docs ?? makeDocsService())
   services.set(IEditorService, opts.editorService ?? makeEditorService())
   services.set(IContextKeyService, contextKeyService)
@@ -1792,6 +1808,103 @@ describe('PromptInput — # commit picker flow', () => {
     fireEvent.change(ta, { target: { value: 'hello' } })
     fireEvent.keyDown(ta, { key: 'Enter' })
     expect(session.sendPrompt).toHaveBeenCalledWith('hello', [], [], [])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// # extension chat-context flow — an extension-contributed entry is a trigger:
+// accepting it asks the extension (through IChatContextService) to run its own
+// picker, and only the returned item becomes a pill. Same two-step shape as the
+// # commit flow above; provider correctness lives in contextSuggestions.test.ts
+// and ChatContextService.test.ts.
+// ---------------------------------------------------------------------------
+
+describe('PromptInput — # extension chat-context flow', () => {
+  async function flush(): Promise<void> {
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+  }
+
+  const PROVIDERS = [
+    {
+      handle: 3,
+      provider: {
+        label: 'Perforce Changelist…',
+        description: 'Add a changelist',
+        keywords: ['changelist', 'cl', 'p4'],
+      },
+    },
+  ]
+  const ITEM = {
+    label: 'Perforce changelist 1234',
+    text: 'Perforce changelist 1234: fix the parser',
+  }
+
+  async function openEntry(ta: HTMLTextAreaElement): Promise<void> {
+    typeAt(ta, '#changelist')
+    await flush()
+    const option = screen
+      .getAllByRole('option')
+      .find((o) => o.textContent?.includes('Perforce Changelist'))
+    expect(option).toBeTruthy()
+    fireEvent.mouseDown(option!)
+  }
+
+  it('accepting an extension entry resolves it and inserts the returned item as a pill', async () => {
+    const session = makeSession()
+    const chatContext = makeChatContextService(PROVIDERS, ITEM)
+    renderWithServices(<PromptInput session={session} />, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+      chatContext,
+    })
+    const ta = getTextarea()
+    await openEntry(ta)
+    // The trigger token is consumed; the extension's picker runs out of band.
+    expect(ta.value).not.toContain('#changelist')
+
+    await waitFor(() => expect(ta.value).toContain('#Perforce changelist 1234'))
+    expect(chatContext.resolveItem).toHaveBeenCalledWith(3, 'changelist')
+
+    fireEvent.keyDown(ta, { key: 'Enter' })
+    const [, refs] = session.sendPrompt.mock.calls[0]!
+    expect(refs).toHaveLength(1)
+    expect(refs[0].ref).toMatchObject({
+      kind: 'chatContext',
+      label: ITEM.label,
+      meta: { text: ITEM.text },
+    })
+  })
+
+  it('a cancelled provider pick leaves the input clean with no stray ref', async () => {
+    const session = makeSession()
+    const chatContext = makeChatContextService(PROVIDERS, undefined)
+    renderWithServices(<PromptInput session={session} />, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+      chatContext,
+    })
+    const ta = getTextarea()
+    await openEntry(ta)
+    await waitFor(() => expect(chatContext.resolveItem).toHaveBeenCalled())
+    await flush()
+
+    expect(ta.value).toBe('')
+    typeAt(ta, 'hello')
+    fireEvent.keyDown(ta, { key: 'Enter' })
+    expect(session.sendPrompt).toHaveBeenCalledWith('hello', [], [], [])
+  })
+
+  it('an unrelated query never surfaces an extension entry', async () => {
+    const chatContext = makeChatContextService(PROVIDERS, ITEM)
+    renderWithServices(<PromptInput session={makeSession()} />, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+      chatContext,
+    })
+    typeAt(getTextarea(), '#zzz')
+    await flush()
+    expect(
+      screen.queryAllByRole('option').filter((o) => o.textContent?.includes('Perforce Changelist')),
+    ).toEqual([])
   })
 })
 

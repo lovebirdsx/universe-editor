@@ -10,12 +10,15 @@
   "icon": "icon.svg",
   "description": "Smart editing for Claude config files (settings.json) via the official JSON schema.",
   "engines": {
-    "universe": "^0.15.0"
+    "universe": "^0.16.0"
   },
   "contributes": {
     "jsonValidation": [
       {
-        "fileMatch": ["**/.claude/settings.json", "**/.claude/settings.local.json"],
+        "fileMatch": [
+          "**/.claude/settings.json",
+          "**/.claude/settings.local.json"
+        ],
         "url": "https://json.schemastore.org/claude-code-settings.json"
       }
     ]

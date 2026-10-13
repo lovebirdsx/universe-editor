@@ -7,6 +7,7 @@
 import type {
   AiApi,
   CancellationToken,
+  ChatContextProvider,
   CodeActionProvider,
   CodeLensProvider,
   CompletionItemProvider,
@@ -182,6 +183,7 @@ export interface IExtensionHostBridge {
   readonly onDidChangeTextEditorSelection: Event<TextEditorSelectionChangeEvent>
   createSourceControl(id: string, label: string, rootUri?: string): SourceControl
   registerTimelineProvider(scheme: string[], provider: TimelineProvider): Disposable
+  registerChatContextProvider(provider: ChatContextProvider): Disposable
   getActiveTextEditor(): Promise<TextEditor | undefined>
   readonly onDidChangeActiveTextEditor: Event<TextEditor | undefined>
   readonly visibleTextEditors: readonly TextEditor[]

@@ -29,9 +29,15 @@ function entryKey(entry: ContextPopoverEntry): string {
   // symbol/openEditor items can share the same file uri (multiple symbols per
   // file, or the same file counted once — but symbols still need a per-symbol
   // key), so fold in position + label to keep keys unique within a file.
-  return item.kind === 'symbol'
-    ? `suggestion:symbol:${item.uri}:${item.meta?.line ?? ''}:${item.meta?.column ?? ''}:${item.label}`
-    : `suggestion:${item.kind}:${item.uri}`
+  if (item.kind === 'symbol') {
+    return `suggestion:symbol:${item.uri}:${item.meta?.line ?? ''}:${item.meta?.column ?? ''}:${item.label}`
+  }
+  // Extension entry points carry no uri at all (one row per provider), so the
+  // handle — not the empty uri — is what keeps them distinct.
+  if (item.kind === 'chatContext') {
+    return `suggestion:chatContext:${item.meta?.chatContextHandle ?? item.label}`
+  }
+  return `suggestion:${item.kind}:${item.uri}`
 }
 
 function entryLabel(entry: ContextPopoverEntry): string {

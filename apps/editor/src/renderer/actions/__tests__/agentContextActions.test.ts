@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
+  ICommandService,
   IEditorGroupsService,
   IEditorService,
   IInstantiationService,
@@ -18,7 +19,9 @@ import {
 import {
   AddSelectionToExistingAgentChatAction,
   AddSelectionToNewAgentChatAction,
+  SendChangelistToAgentChatAction,
   SendCommitToAgentChatAction,
+  SendContextToAgentChatAction,
 } from '../agentContextActions.js'
 import {
   createChatTarget,
@@ -491,5 +494,133 @@ describe('SendCommitToAgentChatAction', () => {
     })
 
     expect(openEditor).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('SendContextToAgentChatAction', () => {
+  const session = { id: 'sess-1', agentId: 'claude' } as unknown as IAcpSession
+
+  async function runAction(arg: unknown, activeSession: IAcpSession | undefined): Promise<void> {
+    const services = new ServiceCollection()
+    services.set(IAcpSessionService, {
+      _serviceBrand: undefined,
+      activeSession: observableValue<IAcpSession | undefined>('t.active', activeSession),
+      createSession: vi.fn(),
+      getById: () => undefined,
+    } as unknown as IAcpSessionService)
+    services.set(IAcpAgentRegistry, {
+      _serviceBrand: undefined,
+      defaultAgentId: () => 'claude',
+    } as unknown as IAcpAgentRegistry)
+    services.set(IAcpChatWidgetService, {
+      _serviceBrand: undefined,
+      focusSessionInput: vi.fn(),
+      focusSession: vi.fn(),
+    } as unknown as IAcpChatWidgetService)
+    services.set(IEditorGroupsService, noopGroups())
+    services.set(IInstantiationService, {
+      _serviceBrand: undefined,
+      createInstance: vi.fn(),
+    } as unknown as IInstantiationService)
+    const accessor = { get: (id: unknown) => services.get(id as never) } as ServicesAccessor
+    await new SendContextToAgentChatAction().run(accessor, arg as never)
+  }
+
+  it('registers the command', () => {
+    disposables.push(registerAction2(SendContextToAgentChatAction))
+    expect(CommandsRegistry.getCommand(SendContextToAgentChatAction.ID)).toBeDefined()
+  })
+
+  it('deposits the caller-composed text verbatim', async () => {
+    await runAction({ text: 'Perforce changelist 1234: fix the parser' }, session)
+    expect(AcpPromptTextInbox.drain('sess-1')).toEqual(['Perforce changelist 1234: fix the parser'])
+  })
+
+  it('is a no-op without text', async () => {
+    await runAction({ text: '   ' }, session)
+    await runAction(undefined, session)
+    expect(AcpPromptTextInbox.drain('sess-1')).toEqual([])
+  })
+})
+
+describe('SendChangelistToAgentChatAction', () => {
+  const session = { id: 'sess-1', agentId: 'claude' } as unknown as IAcpSession
+  const CAPABILITY = 'perforce.getChangelistDescription'
+
+  async function runAction(
+    arg: unknown,
+    options: { readonly description?: string; readonly capability?: boolean } = {},
+  ): Promise<string[]> {
+    const executed: string[] = []
+    const services = new ServiceCollection()
+    services.set(IAcpSessionService, {
+      _serviceBrand: undefined,
+      activeSession: observableValue<IAcpSession | undefined>('t.active', session),
+      createSession: vi.fn(),
+      getById: () => undefined,
+    } as unknown as IAcpSessionService)
+    services.set(IAcpAgentRegistry, {
+      _serviceBrand: undefined,
+      defaultAgentId: () => 'claude',
+    } as unknown as IAcpAgentRegistry)
+    services.set(IAcpChatWidgetService, {
+      _serviceBrand: undefined,
+      focusSessionInput: vi.fn(),
+      focusSession: vi.fn(),
+    } as unknown as IAcpChatWidgetService)
+    services.set(IEditorGroupsService, noopGroups())
+    services.set(IInstantiationService, {
+      _serviceBrand: undefined,
+      createInstance: vi.fn(),
+    } as unknown as IInstantiationService)
+    services.set(ICommandService, {
+      _serviceBrand: undefined,
+      executeCommand: async (id: string) => {
+        executed.push(id)
+        return options.description
+      },
+    } as unknown as ICommandService)
+    if (options.capability !== false) {
+      disposables.push(
+        CommandsRegistry.registerCommand(CAPABILITY, () => options.description ?? ''),
+      )
+    }
+    const accessor = { get: (id: unknown) => services.get(id as never) } as ServicesAccessor
+    await new SendChangelistToAgentChatAction().run(accessor, arg as never)
+    return executed
+  }
+
+  it('registers the command on the SCM group-header menu', () => {
+    disposables.push(registerAction2(SendChangelistToAgentChatAction))
+    expect(CommandsRegistry.getCommand(SendChangelistToAgentChatAction.ID)).toBeDefined()
+  })
+
+  it('reads the description through the p4 capability and formats a changelist entry', async () => {
+    const executed = await runAction(
+      { sourceControlId: 'perforce', scmResourceGroupId: 'cl:1234' },
+      { description: 'fix the parser\n\nlong body' },
+    )
+    expect(executed).toEqual([CAPABILITY])
+    expect(AcpPromptTextInbox.drain('sess-1')).toEqual(['Perforce changelist 1234: fix the parser'])
+  })
+
+  it('handles a shelved group id like a plain changelist', async () => {
+    await runAction({ scmResourceGroupId: 'shelved:4321' }, { description: '' })
+    expect(AcpPromptTextInbox.drain('sess-1')).toEqual(['Perforce changelist 4321'])
+  })
+
+  it('stays out of the way when the p4 capability is missing (no p4 extension active)', async () => {
+    const executed = await runAction(
+      { scmResourceGroupId: 'cl:1234' },
+      { capability: false, description: 'unused' },
+    )
+    expect(executed).toEqual([])
+    expect(AcpPromptTextInbox.drain('sess-1')).toEqual([])
+  })
+
+  it('ignores a group id that wraps no changelist (the default group)', async () => {
+    const executed = await runAction({ scmResourceGroupId: 'default' }, { description: 'x' })
+    expect(executed).toEqual([])
+    expect(AcpPromptTextInbox.drain('sess-1')).toEqual([])
   })
 })

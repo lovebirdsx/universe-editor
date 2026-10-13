@@ -26,6 +26,7 @@ import {
   Uri,
   type AiApi,
   type CancellationToken,
+  type ChatContextProvider,
   type CodeActionProvider,
   type CodeLensProvider,
   type CompletionItemProvider,
@@ -115,6 +116,8 @@ import {
   type IMainThreadScm,
   type IMainThreadTimeline,
   type IMainThreadTreeViews,
+  type IMainThreadChat,
+  type IChatContextItemDto,
   type ITextDocumentShowOptionsDto,
   type ITimelineDto,
   type ITimelineOptionsDto,
@@ -161,6 +164,7 @@ import type {
   OpenDialogOptionsBridge,
   SaveDialogOptionsBridge,
 } from './apiFactory.js'
+import { HostChatContextRegistry } from './hostChat.js'
 import { HostSourceControl } from './hostScm.js'
 import { ExtHostTimelineRegistry } from './hostTimeline.js'
 import { HostTreeViewRegistry } from './hostTreeViews.js'
@@ -291,6 +295,7 @@ export class ExtensionService implements IExtensionHostBridge {
   private readonly _sourceControls = new Map<number, HostSourceControl>()
   private readonly _timelines: ExtHostTimelineRegistry
   private readonly _treeViews?: HostTreeViewRegistry
+  private readonly _chat?: HostChatContextRegistry
   private readonly _webviews?: HostWebviewManager
   private _statusBarHandle = 0
   private _scmHandle = 0
@@ -386,6 +391,7 @@ export class ExtensionService implements IExtensionHostBridge {
     private readonly _mainThreadExtensions?: IMainThreadExtensions,
     private readonly _mainThreadFileEvents?: IMainThreadFileEvents,
     private readonly _mainThreadTreeViews?: IMainThreadTreeViews,
+    private readonly _mainThreadChat?: IMainThreadChat,
     private readonly _uriTransformer?: IURITransformer,
   ) {
     this._commands = new ExtensionCommandRegistry(_mainThreadCommands)
@@ -409,6 +415,7 @@ export class ExtensionService implements IExtensionHostBridge {
         this._commands.execute(command, args),
       )
     }
+    if (_mainThreadChat) this._chat = new HostChatContextRegistry(_mainThreadChat)
     this._documents.onDidOpen((document) => this._onVisibleDocumentOpened(document))
     installApiBridge(this)
   }
@@ -704,6 +711,10 @@ export class ExtensionService implements IExtensionHostBridge {
     return this._timelines.registerTimelineProvider(scheme, provider)
   }
 
+  registerChatContextProvider(provider: ChatContextProvider): Disposable {
+    return this._chatRegistry().registerChatContextProvider(provider)
+  }
+
   /** IExtHostTimeline.$provideTimeline */
   provideTimeline(
     handle: number,
@@ -720,6 +731,13 @@ export class ExtensionService implements IExtensionHostBridge {
       throw new Error('tree view support is not available in this extension host')
     }
     return this._treeViews
+  }
+
+  private _chatRegistry(): HostChatContextRegistry {
+    if (!this._chat) {
+      throw new Error('chat context support is not available in this extension host')
+    }
+    return this._chat
   }
 
   registerTreeDataProvider(viewId: string, provider: TreeDataProvider<unknown>): Disposable {
@@ -753,6 +771,11 @@ export class ExtensionService implements IExtensionHostBridge {
   /** IExtHostTreeViews.$executeTreeItemCommand */
   executeTreeItemCommand(viewId: string, handle: number, commandId?: string): Promise<void> {
     return this._treeViews?.executeTreeItemCommand(viewId, handle, commandId) ?? Promise.resolve()
+  }
+
+  /** IExtHostChat.$resolveChatContextItem */
+  resolveChatContextItem(handle: number, query: string): Promise<IChatContextItemDto | undefined> {
+    return this._chat?.resolve(handle, query) ?? Promise.resolve(undefined)
   }
 
   // --- IExtensionHostBridge: workspace ---
@@ -1671,6 +1694,7 @@ export class ExtensionService implements IExtensionHostBridge {
     this._webviews?.dispose()
     this._timelines.dispose()
     this._treeViews?.dispose()
+    this._chat?.dispose()
     this._fileWatchers?.dispose()
     this._diagnostics?.dispose()
     this._activation.disposeAll()

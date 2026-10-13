@@ -116,6 +116,7 @@ import { resolveFocusScope } from './focusScope.js'
 import { scopeTargets, scopeTargetsWithin } from './scope.js'
 import { SCOPE_FILE_NAME } from './scopeConfig.js'
 import { registerSwarmCommands } from './swarm/swarmCommands.js'
+import { registerChangelistChatProvider } from './chatContext.js'
 import { createSwarmLogger } from './swarm/swarmLog.js'
 import { createPerforceTimelineCommands, PerforceTimelineProvider } from './timelineProvider.js'
 import { switchClient, wireSwitchedClient } from './switchClient.js'
@@ -2358,6 +2359,12 @@ export async function activate(context: ExtensionContext): Promise<void> {
   const swarmLogger = createSwarmLogger((line) => swarmOut.appendLine(line))
   context.subscriptions.push(registerSwarmCommands(mgr, swarmLogger, cacheEnabled))
 
+  // Agent chat context (`#` in the prompt input). Registered here — after client
+  // discovery — which is exactly the gate "only inside a Perforce workspace".
+  // Swarm's own entry is registered by `registerSwarmCommands` above (it owns
+  // the config / credential / cache that flow needs).
+  context.subscriptions.push(registerChangelistChatProvider(mgr))
+
   // When Swarm is enabled + configured, the commit bar defaults to "Request New
   // Swarm Review…" (P4V parity). Read the same config the swarm handlers use.
   const swarmEnabled = await cfg.get('swarm.enabled', true)
@@ -3634,6 +3641,17 @@ export async function activate(context: ExtensionContext): Promise<void> {
       })
       if (description === undefined) return
       await target.editChangelistDescription(changelist, description)
+    }),
+
+    // Capability (`perforce.getChangelistDescription`): read one changelist's
+    // description. The SCM group row hands the renderer only an id, so the
+    // "Send to Agent Chat" entry reads the text back through here — the SCM API
+    // has no description field of its own.
+    commands.registerCommand('perforce.getChangelistDescription', async (arg) => {
+      const target = mgr.resolveClient(arg) ?? mgr.active
+      const changelist = groupChangelistId(arg)
+      if (!target || !changelist || changelist === 'default') return ''
+      return target.getChangelistDescription(changelist)
     }),
 
     // --- Shelve / unshelve (Phase 3) --------------------------------------

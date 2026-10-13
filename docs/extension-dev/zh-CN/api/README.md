@@ -14,6 +14,7 @@
 | `languages` | 21 类语言特性 provider、诊断集合与全源诊断读取、语言服务状态上报、语言清单 |
 | `scm` | 源码管理集成（资源分组、提交输入框） |
 | `ai` | 推理模型访问（所有扩展可用，激活后即可调用） |
+| `chat` | 把自有数据源接进 AI 输入框的 `#` 上下文面板 |
 | `env` | 应用信息（名称/版本/语言/会话/机器 id/安装根/深链 scheme）、剪贴板、打开外部目标 |
 | `extensions` | 枚举与激活已安装的扩展 |
 
@@ -218,6 +219,44 @@ import { extensions } from '@universe-editor/extension-api'
 const ts = extensions.getExtension<{ getVersion(): string }>('@universe-editor/typescript')
 const api = await ts?.activate() // 未激活则先激活；已激活直接拿 exports
 ```
+
+## chat — AI 对话上下文来源（0.16.0 起）
+
+把扩展自己的数据源接进 Agent 输入框的 `#` 面板：`chat.registerChatContextProvider(provider)` 注册后，面板里出现**一条入口项**（`label` / `description?` / `iconId?` / `keywords`），用户敲 `#` 后的文本与 `keywords`、`label` 做大小写不敏感子串匹配（空查询列出全部）。`iconId` 取工作台图标名（如 `history` / `changelist` / `git-pull-request`），未知名字回退通用字形。
+
+采用**两步式**：接受入口项时宿主回调 `provider.resolve(query)`，候选项留在扩展侧——你自己弹 `window.showQuickPick` 选一个并返回 `ChatContextItem`（用户取消就返回 `undefined`，什么都不会插入），返回的 `label` 成为输入框里的引用药丸。因此候选集再大也只占面板一行。`query` 是**匹配上的那个片段**（本次命中的 keyword 或 label 的一部分，如敲 `#cl` 得到 `'cl'`）——入口项只在匹配时才出现，所以它不会是任意搜索串；要让用户挑具体条目，交给自己的 QuickPick。
+
+`ChatContextItem.text` 是**模型唯一能看到的内容**：内置 agent 会丢弃 `resource_link` 的 name/description/_meta，所以 id、路径、URL 等结构化信息必须写进 `text`（它作为一个 `text` 块发送）。
+
+```ts
+import { chat, window, type ExtensionContext } from '@universe-editor/extension-api'
+
+export function activate(context: ExtensionContext) {
+  context.subscriptions.push(
+    chat.registerChatContextProvider({
+      label: 'My Records…',
+      description: '把一条记录加入对话',
+      iconId: 'bookmark',
+      keywords: ['record', 'rec', '记录'],
+      async resolve(query) {
+        const picks = await listRecords(query) // 你自己的数据源
+        const picked = await window.showQuickPick(
+          picks.map((r) => ({ label: r.id, description: r.summary })),
+          { placeHolder: '选择一条记录' },
+        )
+        return (
+          picked && {
+            label: `Record ${picked.label}`,
+            text: `Record ${picked.label}: ${picked.description}`,
+          }
+        )
+      },
+    }),
+  )
+}
+```
+
+provider 存活到返回的 `Disposable` 被 dispose（惯例 push 进 `context.subscriptions`）；**没有新的激活事件**——在 `activate` 里注册即意味着「扩展生效时它才出现」。
 
 ## timeline — 文件历史
 

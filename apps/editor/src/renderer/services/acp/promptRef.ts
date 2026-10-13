@@ -32,6 +32,7 @@ export type PromptRefKind =
   | 'openEditor'
   | 'docs'
   | 'commit'
+  | 'chatContext'
 
 export interface PromptRef {
   /** Stable id (per insertion), used to key the tracked decoration. */
@@ -52,6 +53,11 @@ export interface PromptRef {
     readonly dirPath?: string
     /** `commit`: the full 40-char SHA (the label only carries a truncated short hash). */
     readonly commitHash?: string
+    /**
+     * `chatContext`: the agent-facing body an extension provider produced for
+     * this pick — the only thing the agent receives (the label is pill-only).
+     */
+    readonly text?: string
   }
 }
 
@@ -72,6 +78,7 @@ const PREFIX_BY_KIND: Record<PromptRefKind, '@' | '#'> = {
   openEditor: '#',
   docs: '#',
   commit: '#',
+  chatContext: '#',
 }
 
 /** The trigger char (`@` for mentions, `#` for structured context) for a ref kind. */
@@ -193,6 +200,10 @@ export function composeRefBlock(ref: PromptRef): ContentBlock {
         _meta: { commit: { hash, repoRoot: ref.uri } },
       }
     }
+    case 'chatContext':
+      // An extension provider already produced the agent-facing body; pass it
+      // through verbatim (adding a wrapper here would only dilute it).
+      return { type: 'text', text: ref.meta?.text ?? ref.label }
   }
 }
 
@@ -290,6 +301,30 @@ export function suggestionItemToRef(item: ContextSuggestionItem): PromptRef {
       // The commit entry is a picker trigger, not a directly convertible ref —
       // acceptContextRef intercepts it before it ever reaches this function.
       throw new Error('commit suggestions must be resolved via CommitRefPicker')
+    case 'chatContext':
+      // Same as `commit`: the entry is a trigger for an extension-side picker,
+      // so the ref only exists once the provider resolved an item.
+      throw new Error('chatContext suggestions must be resolved via IChatContextService')
+  }
+}
+
+/**
+ * Build a PromptRef from the item an extension chat-context provider returned
+ * for an accepted `#` entry (the two-step flow: the popover entry is only a
+ * trigger, the provider picks host-side and returns the final item).
+ */
+export function chatContextItemToRef(item: {
+  readonly label: string
+  readonly text: string
+}): PromptRef {
+  return {
+    id: generateUuid(),
+    kind: 'chatContext',
+    label: item.label,
+    // Extension items name no resource of their own (a changelist spans many
+    // files); the agent gets everything it needs from `meta.text`.
+    uri: '',
+    meta: { text: item.text },
   }
 }
 

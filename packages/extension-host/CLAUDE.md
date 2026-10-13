@@ -24,7 +24,7 @@
 4. renderer 侧：`MainThreadXxx.ts` 实现；`HostConnection.ts` `server.registerChannel(ExtHostChannels.mainThreadXxx, ProxyChannel.fromService(...))`（host→renderer 方向还要 `client.getChannel` 建 proxy）；依赖经 `HostConnectionDeps` 传入，**无条件注册**（单 host 无按 tier 分叉）。
 5. 建完重建 dist：`pnpm --filter @universe-editor/extensions-common --filter @universe-editor/extension-host build`（dev watcher 自动）。
 
-**已有通道**：commands/window/scm/fs/output/languages/editor/ai/storage/webviews（extHost*/mainThread* 成对；window 另有反向通道 extHostWindow）。加能力前先看能否复用。
+**已有通道**：commands/window/scm/fs/output/languages/editor/ai/storage/webviews/chat（extHost*/mainThread* 成对；window 另有反向通道 extHostWindow）。加能力前先看能否复用。
 
 ## 关键机制（坑结论）
 

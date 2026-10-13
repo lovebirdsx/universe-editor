@@ -19,14 +19,18 @@
 
 import {
   Action2,
+  CommandsRegistry,
+  ICommandService,
   IEditorService,
   IQuickInputService,
   IWorkspaceService,
   localize2,
+  MenuId,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { AcpPromptContextInbox } from '../services/acp/session/acpPromptContextInbox.js'
 import { AcpPromptTextInbox } from '../services/acp/session/acpPromptTextInbox.js'
+import { formatChangelistText } from '../services/acp/chatContextFormat.js'
 import {
   collectActiveSelectionContexts,
   type SelectionContext,
@@ -108,6 +112,18 @@ async function attachContexts(
   await revealChat(reveal, sessionId)
 }
 
+/**
+ * Resolve the chat to land in, deposit pre-composed text, then reveal it —
+ * the shared tail of every "send … to Agent Chat" command. Callers pass
+ * `captureRevealServices(accessor)` straight in: the ServicesAccessor dies at
+ * the first await, so nothing beyond this point may read it.
+ */
+async function depositPromptText(reveal: RevealServices, text: string): Promise<void> {
+  const target = await resolveActiveOrNewSession(reveal)
+  AcpPromptTextInbox.deposit(target.id, text)
+  await revealChat(reveal, target.id)
+}
+
 /** Payload for {@link SendCommitToAgentChatAction}: the Git Graph passes the
  *  clicked commit's hash and subject so the action can compose the context text. */
 export interface SendCommitToAgentChatArg {
@@ -137,13 +153,96 @@ export class SendCommitToAgentChatAction extends Action2 {
     const subject = arg.message.trim()
     const text = subject ? `Commit ${arg.hash}: ${subject}` : `Commit ${arg.hash}`
     // Capture services before the first await — the accessor dies past it.
-    const reveal = captureRevealServices(accessor)
-    const target = await resolveActiveOrNewSession(reveal)
+    await depositPromptText(captureRevealServices(accessor), text)
+  }
+}
 
-    // Deposit before revealing so a freshly-mounting PromptInput drains it, and an
-    // already-mounted one gets the onDidDeposit event — either way it lands.
-    AcpPromptTextInbox.deposit(target.id, text)
-    await revealChat(reveal, target.id)
+/** Payload for {@link SendContextToAgentChatAction}: text the caller composed. */
+export interface SendContextToAgentChatArg {
+  readonly text: string
+}
+
+/**
+ * Send a caller-composed context text (a Perforce changelist, a Swarm review)
+ * to the agent chat input. The views that offer these entries already hold the
+ * data, so the payload is the finished text — a new context source needs no new
+ * action, just a menu item that knows how to render its own entry.
+ */
+export class SendContextToAgentChatAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.sendContextToChat'
+  constructor() {
+    super({
+      id: SendContextToAgentChatAction.ID,
+      title: localize2('action.agent.sendContextToChat', 'Send to Agent Chat'),
+      category: CATEGORY,
+      f1: false,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor, arg?: SendContextToAgentChatArg): Promise<void> {
+    const text = arg?.text.trim()
+    if (!text) return
+    await depositPromptText(captureRevealServices(accessor), text)
+  }
+}
+
+/** Payload for {@link SendChangelistToAgentChatAction}: the argument the SCM view
+ *  hands a group-scoped command (`cl:<n>` / `shelved:<n>` groups). */
+export interface SendChangelistToAgentChatArg {
+  readonly rootUri?: string
+  readonly sourceControlId?: string
+  readonly scmResourceGroupId?: string
+}
+
+/** Provider capability id (`<providerId>.<capability>`, like `checkIgnore`):
+ *  reads a changelist's description from the p4 extension. */
+const CHANGELIST_DESCRIPTION_COMMAND = 'perforce.getChangelistDescription'
+
+/** The changelist a `cl:<n>` / `shelved:<n>` SCM group id wraps. */
+function changelistIdFromGroupId(groupId: string): string | undefined {
+  return /^(?:cl|shelved):(.+)$/.exec(groupId)?.[1]
+}
+
+/**
+ * Send a changelist to the agent chat from the SCM view's changelist group
+ * header. The group row carries only the id (the SCM API has no description
+ * field), so the text is completed with the description read back from the p4
+ * extension — the same shape the Perforce Graph's row entry sends.
+ */
+export class SendChangelistToAgentChatAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.sendChangelistToChat'
+  constructor() {
+    super({
+      id: SendChangelistToAgentChatAction.ID,
+      title: localize2('action.agent.sendChangelistToChat', 'Send to Agent Chat'),
+      category: CATEGORY,
+      icon: 'sparkle',
+      f1: false,
+      menu: {
+        id: MenuId.ScmResourceGroupContext,
+        group: '4_agent@1',
+        // A changelist id is what makes the entry meaningful — the default
+        // group (no description, not addressable as a change) is left out.
+        when: 'scmProvider == perforce && scmResourceGroup =~ /^(cl|shelved):/',
+      },
+    })
+  }
+
+  override async run(
+    accessor: ServicesAccessor,
+    arg?: SendChangelistToAgentChatArg,
+  ): Promise<void> {
+    const groupId = arg?.scmResourceGroupId
+    const changelist = groupId !== undefined ? changelistIdFromGroupId(groupId) : undefined
+    if (changelist === undefined) return
+    // The menu's when-clause already pins the provider, so the capability is
+    // registered — probing keeps a stale menu from rejecting in the handler.
+    if (CommandsRegistry.getCommand(CHANGELIST_DESCRIPTION_COMMAND) === undefined) return
+    // Capture services before the first await — the accessor dies past it.
+    const commands = accessor.get(ICommandService)
+    const reveal = captureRevealServices(accessor)
+    const description = await commands.executeCommand<string>(CHANGELIST_DESCRIPTION_COMMAND, arg)
+    await depositPromptText(reveal, formatChangelistText(changelist, description ?? ''))
   }
 }
 
@@ -151,4 +250,6 @@ export const agentContextActions: readonly (new () => Action2)[] = [
   AddSelectionToExistingAgentChatAction,
   AddSelectionToNewAgentChatAction,
   SendCommitToAgentChatAction,
+  SendContextToAgentChatAction,
+  SendChangelistToAgentChatAction,
 ]

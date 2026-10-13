@@ -9,6 +9,7 @@ Perforce 用 **changelist（变更列表）** 组织一组待提交的改动，�
 - [移出 changelist](#移出-changelist)
 - [删除 changelist](#删除-changelist)
 - [编辑描述](#编辑描述)
+- [发送到 Agent 聊天](#发送到-agent-聊天)
 - [搁置（shelve）](#搁置shelve)
 - [取出搁置（unshelve）](#取出搁置unshelve)
 - [删除搁置](#删除搁置)
@@ -59,6 +60,13 @@ Perforce 用 **changelist（变更列表）** 组织一组待提交的改动，�
 
 - **默认 changelist** 的描述就是面板输入框里的文字。
 - **编号 changelist** 的描述可在该组上选**编辑描述**修改。
+
+## 发送到 Agent 聊天
+
+在 changelist **组头**右键选 **发送到 Agent 聊天**，把这个 changelist 的编号与描述首行发到 AI 会话的输入框（没有活动会话时会自动新建一个），方便让 agent 结合这次改动回答问题。
+
+- 同样的入口也在 [Perforce 图谱](./perforce-graph.md#右键即操作)的行右键上。
+- 想让它自己挑，可以在 Agent 输入框里敲 `#cl`（或 `#changelist`），从待定与最近已提交的 changelist 里选一条，以引用药丸的形式随消息发送——见[你的第一次 Agent 会话 · 进阶技巧](../ai-agent/first-session.md#进阶技巧)。
 
 ## 搁置（shelve）
 

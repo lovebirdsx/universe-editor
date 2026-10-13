@@ -35,6 +35,7 @@ const RUNTIME_EXPORTS = [
   'TreeItemCollapsibleState',
   'Uri',
   'ai',
+  'chat',
   'commands',
   'env',
   'extensions',
@@ -86,6 +87,7 @@ const NAMESPACE_METHODS: Record<string, readonly string[]> = {
     'createTreeView',
   ],
   scm: ['createSourceControl'],
+  chat: ['registerChatContextProvider'],
   ai: [
     'getModels',
     'selectModels',

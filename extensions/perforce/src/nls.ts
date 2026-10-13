@@ -278,6 +278,17 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.swarm.updateReview.pickPlaceholder': '选择要用 changelist {0} 更新的 Swarm 审核',
   'perforce.swarm.updateReview.noneAuthored': '你没有进行中的审核——请输入要更新的审核编号',
   'perforce.swarm.updateReview.idPrompt': '要更新的 Swarm 审核编号',
+  // agent chat context（提示输入的 `#` 列表；changelist 部分在 chatContext.ts）
+  'perforce.chat.changelist.label': 'Perforce Changelist…',
+  'perforce.chat.changelist.description': '把一个待定或最近提交的 changelist 加入对话',
+  'perforce.chat.changelist.empty': '没有可加入的 changelist。',
+  'perforce.chat.changelist.placeholder': '选择 changelist',
+  'perforce.chat.state.pending': '待定',
+  'perforce.chat.state.submitted': '已提交',
+  'perforce.chat.swarm.label': 'Swarm Review…',
+  'perforce.chat.swarm.description': '把一个 Helix Swarm 代码审核加入对话',
+  'perforce.chat.swarm.empty': '没有可加入的 Swarm 审核。',
+  'perforce.chat.swarm.placeholder': '选择 Swarm 审核',
   // p4delta managed copy (perforce.p4delta.autoInstall / the install command)
   'perforce.p4delta.installed': '已安装 p4delta {0}。',
   'perforce.p4delta.updated': '已安装 p4delta {0}（原为 {1}）。',

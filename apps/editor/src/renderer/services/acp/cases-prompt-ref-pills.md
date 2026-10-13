@@ -14,7 +14,7 @@
 | `services/acp/promptRefTracker.ts` | 追踪（纯逻辑 + monaco 句柄） | `PromptRefTracker` 挂 model：`insert`（applyEdits 换文本 + 建 decoration + 存 snapshot）/`restore`（草稿恢复，只建 decoration 不改文本）/`list`（回读 decoration range → PlacedRef）/`reconcile`（range 内文本≠snapshot 则删该引用 + 清残余）/`clear`/`dispose` |
 | `workbench/agents/PromptMonacoEditor.tsx` | 编辑器句柄 | 内嵌 standalone Monaco，暴露 `PromptEditorHandle`；`insertRef` 调 tracker + 追加尾随空格；`onChange(text,caret,source)` 用 `runProgrammatic` 计数器分 `'user'|'program'` |
 | `workbench/agents/PromptInput.tsx` | UI 编排 | `acceptMention`/`acceptContextRef`/`openFilePicker`/`onPromptDrop` → `editorHandleRef.insertRef(...)`；提交读 `listRefs()` → `session.sendPrompt(text, refs, ...)` |
-| `services/acp/contextSuggestions.ts` | `#` 数据源 | 四个 provider（`WorkspaceSymbol`/`ScmChange`/`OpenEditor`/`Docs`）headless `query()` → `ContextSuggestionItem[]`；`toItem` 把 line/column 塞进 `meta` |
+| `services/acp/contextSuggestions.ts` | `#` 数据源 | 五个 provider（`WorkspaceSymbol`/`ScmChange`/`OpenEditor`/`Docs` 四个内置 + `ExtensionContextProvider` 转发扩展贡献，见下）headless `query()` → `ContextSuggestionItem[]`；`toItem` 把 line/column 塞进 `meta` |
 
 > `promptMentions.ts`（`extractMentionQuery`/`detectFilePickerTrigger`）与 `promptContextRef.ts`（`extractHashQuery` + `PromptContextRefKind`）只剩 **token 探测**；旧 by-name 序列化（applyMentionPick/composePromptBlocks/mergeRef/composeContextRefBlock/PromptMention/PromptContextRef）**已全删，别复活**。
 
@@ -50,6 +50,19 @@
 ⇒ 任何**需要 agent 精确消费的结构化位置信息（行/列/符号名）绝不能塞进 resource_link 的 name/description/_meta——只能进 `text` 块正文**。这是本仓库真实 bug 的根因（`#Student` 发过去退化成读整个 hello.ts，因为 line 全在被丢弃的 `_meta.symbol` 里）。修法：符号类 `composeRefBlock` 产 `text` 块，把 ``（`Student` (hello.ts:12:5)）`` 写进正文（`_meta.symbol` 可留作未来 agent 用，但当前逻辑不能依赖它）。指整文件的 kind（file/folder/openEditor）无所谓，仍用 resource_link。
 
 诊断辅助：`acpSession.ts` 的 `_dispatchPrompt` 有 `console.debug('[acp-prompt] dispatch', ...)` 打印发出块形状，复现时在 devtools 直接核对。
+
+### `#` 的扩展贡献来源：chatContext（两步式）
+
+扩展经 `chat.registerChatContextProvider`（`packages/extension-api/src/chat.ts`，0.16.0 起）贡献 `#` 来源；renderer 侧是 `ExtensionContextProvider` + `IChatContextService`（`services/extensions/ChatContextService.ts`，provider 注册表经 `mainThreadChat`/`extHostChat` 通道与扩展宿主同步）。
+
+**与四个内置 provider 的关键差异——它是「触发器」不是「数据源」**：
+
+- 面板里**一个 provider 只出一条入口项**（label/keywords 粗匹配，见 `matchesProviderQuery`），候选集永不进 renderer；用户接受后 renderer 回问扩展（`resolveItem(handle, query)`），**扩展自己弹 QuickPick** 选真正的条目，只有最终条目过河。因此 `ExtensionContextProvider.resolve` 忽略 query，也不走 `suggestionItemToRef`（那条路对它抛错，照 `commit` 的处理）。
+- 回来的 `IChatContextItemDto` 由 `chatContextItemToRef` 直接建 ref：`label` 是药丸文本、`meta.text` 是发给模型的正文，`composeRefBlock` 把它**逐字**包成一个 `text` 块（没有可放结构化字段的 `_meta`——按上面「序列化红线」，正文就是全部；无 `text` 时退化成 label）。`uri` 为空串。
+- 因此 `ContextPopover` 的 `entryKey` 对它按 `meta.chatContextHandle` 判身份（uri 为空会让同 provider 的行看起来一样），`PromptInput` 的 session 目录过滤对它豁免（没有落在工作区里的资源）。
+- 图标 `iconId` 走 `contextIcon.tsx` 的 `resolveIcon` 回退（扩展给的是工作台图标名，不是 symbol/resource 图标），查不到退 `BookOpen`。
+
+给 p4 的两个 provider（changelist / Swarm review）与三个右键入口的对照见 `extensions/perforce/docs/chat-context.md`。
 
 ### 易踩坑
 

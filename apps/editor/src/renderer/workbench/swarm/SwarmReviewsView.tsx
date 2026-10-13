@@ -120,6 +120,8 @@ import {
   type SwarmReviewContextMenuState,
   type SwarmReviewMenuItem,
 } from './SwarmReviewContextMenu.js'
+import { SendContextToAgentChatAction } from '../../actions/agentContextActions.js'
+import { formatSwarmReviewText } from '../../services/acp/chatContextFormat.js'
 import styles from './SwarmReviewsView.module.css'
 
 const KEYWORD_DEBOUNCE_MS = 300
@@ -779,6 +781,22 @@ export function SwarmReviewsView() {
         { kind: 'separator' },
         {
           kind: 'item',
+          id: 'sendToAgentChat',
+          icon: 'sparkle',
+          label: localize('swarm.menu.sendToAgentChat', 'Send to Agent Chat'),
+          run: () =>
+            void commands.executeCommand(SendContextToAgentChatAction.ID, {
+              text: formatSwarmReviewText({
+                id: review.id,
+                description: review.description,
+                stateLabel: review.stateLabel,
+                url,
+              }),
+            }),
+        },
+        { kind: 'separator' },
+        {
+          kind: 'item',
           id: 'obliterate',
           icon: 'trash',
           label: localize('swarm.obliterate.action', 'Obliterate Review'),
@@ -796,6 +814,7 @@ export function SwarmReviewsView() {
       reviewUrl,
       ignoreReview,
       unignoreReview,
+      commands,
     ],
   )
 

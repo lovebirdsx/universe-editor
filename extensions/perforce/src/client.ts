@@ -4646,9 +4646,12 @@ export class PerforceClient {
     return items
   }
 
-  /** Read a changelist's current description (from its `change -o` spec). */
+  /** Read a changelist's current description (from its `change -o` spec).
+   *  A user click (group-header menu / Send to Agent Chat) must not sit behind a
+   *  background batch — the spec carries the CL's whole Files list, hence
+   *  interactive priority without the tight timeout. */
   async getChangelistDescription(changelist: string): Promise<string> {
-    const res = await this._p4.exec(['change', '-o', changelist])
+    const res = await this._p4.exec(['change', '-o', changelist], INTERACTIVE_CONTENT_EXEC)
     if (res.exitCode !== 0) return ''
     return parseDescription(res.stdout)
   }
@@ -4659,7 +4662,7 @@ export class PerforceClient {
    * feeds it back through `p4 change -i`.
    */
   async editChangelistDescription(changelist: string, description: string): Promise<boolean> {
-    const current = await this._p4.exec(['change', '-o', changelist])
+    const current = await this._p4.exec(['change', '-o', changelist], INTERACTIVE_CONTENT_EXEC)
     if (current.exitCode !== 0) {
       await notifyP4Failure('edit changelist', current)
       return false

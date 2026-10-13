@@ -53,6 +53,7 @@ import {
   type IExtHostFileEvents,
   type IExtHostLanguages,
   type IExtHostScm,
+  type IExtHostChat,
   type IExtHostTimeline,
   type IExtHostTreeViews,
   type IExtHostWebviews,
@@ -82,6 +83,7 @@ import { MainThreadWindow } from './MainThreadWindow.js'
 import type { ILanguageFeaturesService } from '../languageFeatures/LanguageFeaturesService.js'
 import type { IScmService } from './ScmService.js'
 import type { ITimelineService } from '../timeline/TimelineService.js'
+import type { IChatContextService } from './ChatContextService.js'
 import type { ITreeViewsService } from './TreeViewsService.js'
 import type { IWebviewService } from './WebviewService.js'
 import type { IAiModelService, IpcMessage } from '@universe-editor/platform'
@@ -122,6 +124,8 @@ export interface HostConnectionDeps {
   readonly scm: IScmService
   readonly timeline: ITimelineService
   readonly treeViews: ITreeViewsService
+  /** Backs `chat.registerChatContextProvider` (the `#` popover's extension entries). */
+  readonly chatContext: IChatContextService
   readonly languageFeatures: ILanguageFeaturesService
   readonly editorService: IEditorService
   /** Wired with editorService so MainThreadEditor can compare resources. */
@@ -281,6 +285,14 @@ export class HostConnection extends Disposable {
     server.registerChannel(
       ExtHostChannels.mainThreadTreeViews,
       ProxyChannel.fromService(deps.treeViews),
+    )
+
+    deps.chatContext.setExtHost(
+      ProxyChannel.toService<IExtHostChat>(client.getChannel(ExtHostChannels.extHostChat)),
+    )
+    server.registerChannel(
+      ExtHostChannels.mainThreadChat,
+      ProxyChannel.fromService(deps.chatContext),
     )
 
     this.languages = ProxyChannel.toService<IExtHostLanguages>(

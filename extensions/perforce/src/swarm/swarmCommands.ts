@@ -21,6 +21,7 @@ import { SwarmStatusBarController } from './swarmStatusBar.js'
 import { SwarmNotificationPoller, resolveSwarmPollIntervalMs } from './swarmNotificationPoller.js'
 import type { SwarmLogger } from './swarmLog.js'
 import { buildReviewPicks } from './swarmReviewPick.js'
+import { registerSwarmChatProvider, SWARM_CHAT_PICKS } from '../chatContext.js'
 import { localize } from '../nls.js'
 
 /** Command ids. The wire-facing ids are declared canonically in extensions-common's
@@ -798,6 +799,20 @@ export function registerSwarmCommands(
         return { content: '', error: result.error } satisfies SwarmFileContentResult
       }
       return { content: result.bytes.toString('base64') } satisfies SwarmFileContentResult
+    }),
+
+    // Agent chat context (`#` in the prompt input): pick a review to hand to the
+    // agent. Goes through this module's own client + guard, so config / auth /
+    // error handling match the Swarm sidebar exactly.
+    registerSwarmChatProvider(async () => {
+      const config = await readSwarmConfig()
+      if (!config) return undefined
+      const reviews = await guard(
+        'chatContext.reviews',
+        async (c) => (await c.listReviews({ max: SWARM_CHAT_PICKS })).reviews,
+        [],
+      )
+      return { reviews, url: config.url }
     }),
   ]
 

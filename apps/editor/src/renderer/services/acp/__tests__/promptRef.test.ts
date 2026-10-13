@@ -9,6 +9,7 @@
 import { describe, expect, it } from 'vitest'
 import { URI } from '@universe-editor/platform'
 import {
+  chatContextItemToRef,
   composePromptBlocksFromRefs,
   composeRefBlock,
   extractActiveToken,
@@ -276,6 +277,25 @@ describe('composeRefBlock', () => {
       _meta: { commit: { hash: 'a1b2c3d fix', repoRoot: 'file:///repo' } },
     })
   })
+
+  it('passes an extension chat-context body through verbatim as a text block', () => {
+    const ref: PromptRef = {
+      id: 'x',
+      kind: 'chatContext',
+      label: 'Perforce changelist 1234',
+      uri: '',
+      meta: { text: 'Perforce changelist 1234: fix the parser' },
+    }
+    expect(composeRefBlock(ref)).toEqual({
+      type: 'text',
+      text: 'Perforce changelist 1234: fix the parser',
+    })
+  })
+
+  it('falls back to the chat-context label when the provider sent no body', () => {
+    const ref: PromptRef = { id: 'x', kind: 'chatContext', label: 'Swarm review 1001', uri: '' }
+    expect(composeRefBlock(ref)).toEqual({ type: 'text', text: 'Swarm review 1001' })
+  })
 })
 
 describe('suggestionItemToRef / mentionEntryToRef', () => {
@@ -316,6 +336,31 @@ describe('suggestionItemToRef / mentionEntryToRef', () => {
       iconId: 'git-commit',
     }
     expect(() => suggestionItemToRef(item)).toThrow()
+  })
+
+  it('rejects a chat-context suggestion — resolved via the extension provider instead', () => {
+    const item: ContextSuggestionItem = {
+      kind: 'chatContext',
+      label: 'Perforce Changelist…',
+      uri: '',
+      description: 'Add a pending or recently submitted changelist to the chat',
+      iconId: 'changelist',
+      meta: { chatContextHandle: 3 },
+    }
+    expect(() => suggestionItemToRef(item)).toThrow()
+  })
+})
+
+describe('chatContextItemToRef', () => {
+  it('carries the pill label and the agent-facing body', () => {
+    const ref = chatContextItemToRef({
+      label: 'Swarm review 1001',
+      text: 'Swarm review 1001 "fix the parser": Needs Review — https://swarm.example.com/reviews/1001',
+    })
+    expect(ref.kind).toBe('chatContext')
+    expect(ref.label).toBe('Swarm review 1001')
+    expect(ref.meta?.text).toContain('Needs Review')
+    expect(ref.id).toBeTruthy()
   })
 })
 

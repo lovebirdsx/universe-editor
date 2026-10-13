@@ -28,6 +28,7 @@ import {
 import {
   ExtHostChannels,
   StdioFramingProtocol,
+  type IExtHostChat,
   type IExtHostCommands,
   type IExtHostDocuments,
   type IExtHostEditor,
@@ -40,6 +41,7 @@ import {
   type IExtHostWebviews,
   type IExtHostWindow,
   type IMainThreadAi,
+  type IMainThreadChat,
   type IMainThreadCommands,
   type IMainThreadEditor,
   type IMainThreadFileEvents,
@@ -149,6 +151,9 @@ const mainThreadTimeline = ProxyChannel.toService<IMainThreadTimeline>(
 )
 const mainThreadTreeViews = ProxyChannel.toService<IMainThreadTreeViews>(
   client.getChannel(ExtHostChannels.mainThreadTreeViews),
+)
+const mainThreadChat = ProxyChannel.toService<IMainThreadChat>(
+  client.getChannel(ExtHostChannels.mainThreadChat),
 )
 const mainThreadFs = ProxyChannel.toService<IMainThreadFs>(
   client.getChannel(ExtHostChannels.mainThreadFs),
@@ -373,6 +378,10 @@ const extHostTreeViews: IExtHostTreeViews = {
     ;(await serviceReady).executeTreeItemCommand(viewId, handle, commandId)
   },
 }
+const extHostChat: IExtHostChat = {
+  $resolveChatContextItem: async (handle, query) =>
+    (await serviceReady).resolveChatContextItem(handle, query),
+}
 
 server.registerChannel(ExtHostChannels.extHostCommands, ProxyChannel.fromService(extHostCommands))
 server.registerChannel(
@@ -391,6 +400,7 @@ server.registerChannel(ExtHostChannels.extHostWindow, ProxyChannel.fromService(e
 server.registerChannel(ExtHostChannels.extHostWebviews, ProxyChannel.fromService(extHostWebviews))
 server.registerChannel(ExtHostChannels.extHostTimeline, ProxyChannel.fromService(extHostTimeline))
 server.registerChannel(ExtHostChannels.extHostTreeViews, ProxyChannel.fromService(extHostTreeViews))
+server.registerChannel(ExtHostChannels.extHostChat, ProxyChannel.fromService(extHostChat))
 
 async function main(): Promise<void> {
   const locale = process.env.UNIVERSE_DISPLAY_LOCALE || undefined
@@ -492,6 +502,7 @@ async function main(): Promise<void> {
       mainThreadExtensions,
       mainThreadFileEvents,
       mainThreadTreeViews,
+      mainThreadChat,
       uriTransformer,
     ),
   )

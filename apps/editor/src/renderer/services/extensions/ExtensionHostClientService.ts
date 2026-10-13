@@ -78,6 +78,7 @@ import { DEEP_LINK_PROTOCOL } from '../../../shared/deepLink.js'
 import { IScmService } from './ScmService.js'
 import { ITimelineService } from '../timeline/TimelineService.js'
 import { ITreeViewsService } from './TreeViewsService.js'
+import { IChatContextService } from './ChatContextService.js'
 import { IWebviewService } from './WebviewService.js'
 import { IExtensionEnablementService } from './ExtensionEnablementService.js'
 import { HostConnection, type HostConnectionDeps } from './HostConnection.js'
@@ -219,6 +220,7 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     @IScmService private readonly _scm: IScmService,
     @ITimelineService private readonly _timeline: ITimelineService,
     @ITreeViewsService private readonly _treeViews: ITreeViewsService,
+    @IChatContextService private readonly _chatContext: IChatContextService,
     @IWebviewService private readonly _webview: IWebviewService,
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
     @IFileService private readonly _files: IFileService,
@@ -380,6 +382,7 @@ export class ExtensionHostClientService extends Disposable implements IExtension
       scm: this._scm,
       timeline: this._timeline,
       treeViews: this._treeViews,
+      chatContext: this._chatContext,
       languageFeatures: this._languageFeatures,
       editorService: this._editorService,
       uriIdentity: this._uriIdentity,
@@ -637,11 +640,12 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     }
     // Fire-and-forget $unregisterSourceControl messages from the dying host may
     // be lost when the IPC channel closes. Reset SCM + timeline + tree-view +
-    // webview state eagerly so the views don't show stale providers from the
-    // previous workspace.
+    // chat-context + webview state eagerly so the views don't show stale
+    // providers from the previous workspace.
     this._scm.resetSourceControls()
     this._timeline.reset()
     this._treeViews.reset()
+    this._chatContext.reset()
     this._webview.reset(conn.kind)
     conn.dispose()
   }

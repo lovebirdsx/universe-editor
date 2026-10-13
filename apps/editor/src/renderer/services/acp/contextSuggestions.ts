@@ -5,7 +5,10 @@
  *  debounce, grouping and rendering — these are headless query() calls.
  *--------------------------------------------------------------------------------------------*/
 
-import type { ISourceControlResourceStateDto } from '@universe-editor/extensions-common'
+import type {
+  IChatContextItemDto,
+  ISourceControlResourceStateDto,
+} from '@universe-editor/extensions-common'
 import {
   CancellationToken,
   IEditorGroupsService,
@@ -24,6 +27,7 @@ import { resolveDocsLocale } from '../editor/docRegistry.js'
 import { MonacoLoader } from '../../workbench/editor/monaco/MonacoLoader.js'
 import { symbolIconId } from '../../workbench/symbols/symbolIcon.js'
 import { IScmService } from '../extensions/ScmService.js'
+import { IChatContextService } from '../extensions/ChatContextService.js'
 import { ILanguageFeaturesService } from '../languageFeatures/LanguageFeaturesService.js'
 import {
   workspaceSymbolsToEntries,
@@ -46,6 +50,8 @@ export interface ContextSuggestionItem {
     readonly scmStatus?: string
     /** `docs`: native fs path of the locale directory, forwarded to the agent. */
     readonly dirPath?: string
+    /** `chatContext`: which extension provider to resolve this entry against. */
+    readonly chatContextHandle?: number
   }
 }
 
@@ -397,5 +403,51 @@ export class CommitContextProvider {
     const trimmed = query.trim()
     if (trimmed && !matchesCommitQuery(trimmed)) return []
     return [toCommitPickerItem()]
+  }
+}
+
+/**
+ * Raw substring match, not fuzzy scoring: extension providers contribute a
+ * handful of *entry points* (one per registered provider), so there is nothing
+ * to rank — a query either names one or it doesn't. A provider's own label is
+ * matched too, so `#perforce` finds a provider that only declares `cl`/`swarm`
+ * keywords.
+ */
+function matchesProviderQuery(keywords: readonly string[], label: string, query: string): boolean {
+  if (!query) return true
+  const q = query.toLowerCase()
+  return label.toLowerCase().includes(q) || keywords.some((k) => k.toLowerCase().includes(q))
+}
+
+/**
+ * Entry points contributed by extensions (`chat.registerChatContextProvider`)
+ * for the `#` panel. Two-step by design: this surfaces one row per provider and
+ * the *provider* runs its own picker when the row is accepted — the candidate
+ * space (changelists, reviews, …) never reaches the renderer, so an extension
+ * with thousands of candidates costs one row here.
+ */
+export class ExtensionContextProvider {
+  constructor(@IChatContextService private readonly _chatContext: IChatContextService) {}
+
+  async query(query: string): Promise<readonly ContextSuggestionItem[]> {
+    const trimmed = query.trim()
+    return this._chatContext
+      .getProviders()
+      .filter(({ provider }) => matchesProviderQuery(provider.keywords, provider.label, trimmed))
+      .map(({ handle, provider }) => ({
+        kind: 'chatContext' as const,
+        label: provider.label,
+        // Extension entries name no resource of their own — the same reason they
+        // are exempt from the session-directory scope filter in PromptInput.
+        uri: '',
+        description: provider.description ?? '',
+        iconId: provider.iconId ?? '',
+        meta: { chatContextHandle: handle },
+      }))
+  }
+
+  /** Run the provider's own picker host-side; undefined when the user cancelled. */
+  resolve(handle: number, query: string): Promise<IChatContextItemDto | undefined> {
+    return this._chatContext.resolveItem(handle, query)
   }
 }

@@ -91,6 +91,10 @@ export const ExtHostChannels = {
   mainThreadTreeViews: 'mainThreadTreeViews',
   /** Renderer → ext host: tree children pulls + selection/expansion/visibility callbacks. */
   extHostTreeViews: 'extHostTreeViews',
+  /** Ext host → renderer: chat-context provider registrations feeding the agent input's `#` popover. */
+  mainThreadChat: 'mainThreadChat',
+  /** Renderer → ext host: resolves an accepted chat-context entry into the final item. */
+  extHostChat: 'extHostChat',
 } as const
 
 export type ExtHostChannelName = (typeof ExtHostChannels)[keyof typeof ExtHostChannels]

@@ -24,6 +24,7 @@ import {
   MenuId,
   MenuRegistry,
   ServiceCollection,
+  registerAction2,
   type IDisposable,
   type ICommandService as ICommandServiceType,
   type IEditorGroupsService as IEditorGroupsServiceType,
@@ -31,6 +32,7 @@ import {
   type IStorageService as IStorageServiceType,
 } from '@universe-editor/platform'
 import { ScmView } from '../ScmView.js'
+import { SendChangelistToAgentChatAction } from '../../../actions/agentContextActions.js'
 import { IScmService, ScmService } from '../../../services/extensions/ScmService.js'
 import { scmViewState } from '../scmViewState.js'
 import { ServicesContext } from '../../useService.js'
@@ -241,6 +243,71 @@ describe('ScmView — folder-row context menu (tree mode)', () => {
         expect.objectContaining({ resourceUri: 'D:/repo/src/b.txt' }),
       ]),
     )
+  })
+})
+
+describe('ScmView — changelist group-header context menu', () => {
+  let registered: IDisposable | undefined
+  const contributions: IDisposable[] = []
+  afterEach(() => {
+    registered?.dispose()
+    registered = undefined
+    contributions.splice(0).forEach((d) => d.dispose())
+  })
+
+  // The real Action2, so its `when` clause is what decides visibility.
+  it('offers Send to Agent Chat on a numbered changelist, carrying the group id', async () => {
+    registered = registerAction2(SendChangelistToAgentChatAction)
+    const { scm, executeCommand } = setup()
+    await act(async () => {
+      await scm.$registerSourceControl(0, 'perforce', 'Perforce', 'D:/repo')
+      await scm.$registerGroup(0, 1, 'cl:5', '#5: feature')
+      await scm.$updateGroupResourceStates(1, [
+        { resourceUri: 'D:/repo/foo.txt', contextValue: 'E' },
+      ])
+    })
+    const groupRow = (await screen.findByText('#5: feature')).closest(
+      '[role="treeitem"]',
+    ) as HTMLElement
+    fireEvent.contextMenu(groupRow)
+
+    const item = await screen.findByText('Send to Agent Chat')
+    expect(document.querySelector('[role="menuitem"][data-active]')).toBeNull()
+    fireEvent.click(item)
+
+    expect(executeCommand).toHaveBeenCalledWith(
+      SendChangelistToAgentChatAction.ID,
+      expect.objectContaining({ sourceControlId: 'perforce', scmResourceGroupId: 'cl:5' }),
+    )
+  })
+
+  it('stays off the default changelist group (no id, no description to send)', async () => {
+    registered = registerAction2(SendChangelistToAgentChatAction)
+    // A provider entry of our own, so the menu has something to show either way.
+    contributions.push(
+      MenuRegistry.addMenuItem(MenuId.ScmResourceGroupContext, {
+        command: 'perforce.submit',
+        title: 'Submit Changelist',
+        when: 'scmProvider == perforce',
+        group: '1_edit',
+        order: 1,
+      }),
+    )
+    const { scm } = setup()
+    await act(async () => {
+      await scm.$registerSourceControl(0, 'perforce', 'Perforce', 'D:/repo')
+      await scm.$registerGroup(0, 1, 'default', 'Default Changelist')
+      await scm.$updateGroupResourceStates(1, [
+        { resourceUri: 'D:/repo/foo.txt', contextValue: 'E' },
+      ])
+    })
+    const groupRow = (await screen.findByText('Default Changelist')).closest(
+      '[role="treeitem"]',
+    ) as HTMLElement
+    // The group still has a menu (provider commands live there) — just not this entry.
+    fireEvent.contextMenu(groupRow)
+    await screen.findByRole('menu')
+    expect(screen.queryByText('Send to Agent Chat')).toBeNull()
   })
 })
 

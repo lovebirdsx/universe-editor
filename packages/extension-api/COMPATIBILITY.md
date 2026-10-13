@@ -367,6 +367,26 @@ preflight 守护。扩展在自己的 `package.json` 里用 `engines.universe` �
     （勾选集，取消为 `undefined`）；`okLabel` 支持 `{0}` 计数占位随勾选实时
     替换。本地过滤的多选面板中 Enter/OK = 确认整个勾选集，全不勾时 OK 禁用。
 
+- `0.16.0` — 向后兼容的新增（minor，2026-10-13）：新 namespace `chat`（`src/chat.ts`），
+  让扩展把自有数据源接进 AI 输入框的 `#` 上下文面板。纯新增，不改既有签名：
+  - `chat.registerChatContextProvider(provider)` + `ChatContextProvider` /
+    `ChatContextItem` 类型。provider 只向 `#` 面板贡献**一条入口项**
+    （`label` / `description?` / `iconId?` / `keywords`），候选空间（changelist、
+    review 等）留在扩展侧：用户接受入口项后宿主回调
+    `provider.resolve(query)`，扩展自行弹 `window.showQuickPick` 选一个，
+    返回的 `ChatContextItem` 才成为输入框里的引用药丸。`keywords` 与 `label`
+    按大小写不敏感子串匹配用户敲在 `#` 后的文本（`query` 即匹配上的那个片段，
+    不是任意搜索串）；空查询列出所有已注册 provider。
+  - **`ChatContextItem.text` 是模型唯一能看到的内容**：内置 agent 会丢弃
+    `resource_link` 的 name/description/_meta，故 id / 路径 / URL 等结构化信息
+    必须写进 `text`（它会作为一个 `text` 块发送）。
+  - 生命周期：provider 存活到返回的 `Disposable` 被 dispose（通常挂
+    `context.subscriptions`）；**不新增激活事件**——注册发生在扩展自身激活时，
+    因此「插件生效时才出现」由扩展的激活条件天然门控。查询是懒的：面板只显示
+    入口项，不预先拉取候选。
+  - 宿主协议配套：新增 RPC 通道 `mainThreadChat` / `extHostChat`（内部实现细节，
+    不影响扩展侧表面）。
+
 ## 激活事件清单（activation events）
 
 扩展在 `package.json` 的 `activationEvents` 声明唤醒时机。手写字符串易拼错（拼错则

@@ -10,7 +10,13 @@
  *  block on submit by composePromptBlocksFromRefs (promptRef.ts).
  *--------------------------------------------------------------------------------------------*/
 
-export type PromptContextRefKind = 'symbol' | 'scmChange' | 'openEditor' | 'docs' | 'commit'
+export type PromptContextRefKind =
+  | 'symbol'
+  | 'scmChange'
+  | 'openEditor'
+  | 'docs'
+  | 'commit'
+  | 'chatContext'
 
 export interface ActiveHashQuery {
   readonly query: string

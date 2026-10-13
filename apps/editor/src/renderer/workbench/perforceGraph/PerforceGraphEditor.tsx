@@ -99,7 +99,8 @@ import {
 } from './PerforceGraphSyncDialog.js'
 import { useGraphKeyboardNav } from '../gitGraph/useGraphKeyboardNav.js'
 import { usePersistedGraphSelection } from '../gitGraph/usePersistedGraphSelection.js'
-import { SendCommitToAgentChatAction } from '../../actions/agentContextActions.js'
+import { SendContextToAgentChatAction } from '../../actions/agentContextActions.js'
+import { formatChangelistText } from '../../services/acp/chatContextFormat.js'
 import { ViewPerforceSyncHistoryAction } from '../../actions/perforceSyncHistoryActions.js'
 import styles from '../gitGraph/GitGraphEditor.module.css'
 
@@ -1310,11 +1311,10 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
           kind: 'item',
           id: 'sendToAgentChat',
           icon: 'sparkle',
-          label: localize('gitGraph.sendToAgentChat', 'Send to Agent Chat'),
+          label: localize('perforceGraph.sendToAgentChat', 'Send to Agent Chat'),
           run: () =>
-            void commands.executeCommand(SendCommitToAgentChatAction.ID, {
-              hash: id,
-              message: change.message,
+            void commands.executeCommand(SendContextToAgentChatAction.ID, {
+              text: formatChangelistText(id, change.message),
             }),
         },
       ]

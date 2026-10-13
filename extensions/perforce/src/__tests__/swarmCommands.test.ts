@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
 // The module is fully mocked below; importing `commands` here yields the mock's
 // registerCommand/executeCommand spies for the poller-driving assertions.
 import { commands, window, workspace } from '@universe-editor/extension-api'
@@ -29,10 +30,16 @@ const mocks = vi.hoisted(() => ({
   },
   /** Listeners captured from `workspace.onDidChangeConfiguration`. */
   configListeners: new Set<(e: { affectsConfiguration(key: string): boolean }) => void>(),
+  /** The `#` chat provider the module registers (agent prompt input). */
+  registerChatContextProvider: vi.fn(() => ({ dispose: vi.fn() })),
+  listReviews: vi.fn(),
+  /** Echoes the first row, mirroring `showQuickPick` handing back the picked item. */
+  showQuickPick: vi.fn(async (items: readonly unknown[]) => items[0]),
 }))
 
 vi.mock('@universe-editor/extension-api', () => ({
   StatusBarAlignment: { Left: 1 },
+  chat: { registerChatContextProvider: mocks.registerChatContextProvider },
   commands: {
     registerCommand: vi.fn((id: string, handler: (...args: unknown[]) => unknown) => {
       mocks.handlers.set(id, handler)
@@ -44,6 +51,7 @@ vi.mock('@universe-editor/extension-api', () => ({
     createStatusBarItem: vi.fn(() => mocks.statusItem),
     showErrorMessage: mocks.showErrorMessage,
     showInformationMessage: vi.fn(),
+    showQuickPick: mocks.showQuickPick,
     showWarningMessage: vi.fn(),
   },
   workspace: {
@@ -65,6 +73,7 @@ vi.mock('../swarm/swarmClient.js', () => ({
   SwarmClient: class {
     getTransitions = mocks.getTransitions
     obliterateReview = mocks.obliterateReview
+    listReviews = mocks.listReviews
     dashboard = mocks.dashboard
     invalidateCredential = mocks.invalidateCredential
     dispose = mocks.clientDispose
@@ -545,5 +554,55 @@ describe('registerSwarmCommands status bar availability vs config', () => {
     // them reaches swarm() — the startup read seeds the verdict instead of
     // leaving the undefined sentinel that would make the first one look like one.
     expect(mocks.clientDispose).toHaveBeenCalledTimes(0)
+  })
+})
+
+describe('registerSwarmCommands chat-context provider', () => {
+  beforeEach(() => {
+    mocks.handlers.clear()
+    mocks.registerChatContextProvider.mockClear()
+    mocks.listReviews.mockReset()
+    mocks.showQuickPick.mockClear()
+    registerSwarmCommands({ active: { user: 'devuser', p4Service: {} } } as never, logger)
+  })
+
+  function provider(): {
+    label: string
+    keywords: readonly string[]
+    resolve(query: string): Promise<unknown>
+  } {
+    const call = mocks.registerChatContextProvider.mock.calls.at(-1)
+    expect(call).toBeDefined()
+    return (call as unknown as [never])[0]
+  }
+
+  it('registers a `#` entry that picks from the newest reviews', async () => {
+    mocks.listReviews.mockResolvedValue({
+      reviews: [
+        { id: '1001', description: 'Fix the renderer', stateLabel: 'Needs Review' },
+        { id: '1002', description: '', stateLabel: 'Approved' },
+      ],
+      lastSeen: null,
+    })
+
+    const entry = provider()
+    expect(entry.label).toBe('Swarm Review…')
+    expect(entry.keywords).toContain('swarm')
+
+    const resolved = (await entry.resolve('')) as { label: string; text: string }
+    expect(mocks.listReviews).toHaveBeenCalledWith({ max: 50 })
+    const rows = mocks.showQuickPick.mock.calls.at(-1)?.[0] as readonly { label: string }[]
+    expect(rows.map((r) => r.label)).toEqual(['#1001 · Needs Review', '#1002 · Approved'])
+    // The picked row's payload — not the row label — is what reaches the input.
+    expect(resolved).toEqual({
+      label: 'Swarm review 1001',
+      text: 'Swarm review 1001 "Fix the renderer": Needs Review — https://swarm.example.com/reviews/1001',
+    })
+  })
+
+  it('reports an empty review list instead of opening a picker', async () => {
+    mocks.listReviews.mockResolvedValue({ reviews: [], lastSeen: null })
+    expect(await provider().resolve('')).toBeUndefined()
+    expect(mocks.showQuickPick).not.toHaveBeenCalled()
   })
 })

@@ -112,6 +112,7 @@ vi.mock('@universe-editor/extension-api', () => ({
   commands: commandsMock,
   window: windowMock,
   workspace: workspaceMock,
+  chat: { registerChatContextProvider: vi.fn(() => ({ dispose: vi.fn() })) },
   ProgressLocation: { Notification: 15 },
   FileType: { File: 1, Directory: 2 },
   RelativePattern: class {

@@ -41,6 +41,7 @@ import { swarmIgnoreStore } from '../../../services/swarm/swarmIgnoreStore.js'
 import { swarmApplyStore } from '../../../services/swarm/swarmApplyStore.js'
 import { swarmReviewsUiStore } from '../../../services/swarm/swarmReviewsUiStore.js'
 import { buildSwarmReviewUrl } from '../../../services/swarm/swarmReviewUrl.js'
+import { SendContextToAgentChatAction } from '../../../actions/agentContextActions.js'
 import { swarmChangesViewState } from '../swarmChangesViewState.js'
 import { canApproveReview, swarmReviewName, SwarmReviewsView } from '../SwarmReviewsView.js'
 
@@ -431,6 +432,22 @@ describe('SwarmReviewsView apply to local', () => {
     const ignoreIdx = labels.indexOf('Ignore Review')
     expect(applyIdx).toBeGreaterThan(browserIdx)
     expect(applyIdx).toBeLessThan(ignoreIdx)
+  })
+
+  it('sends the review to the agent chat from the row menu', async () => {
+    const executeCommand = hybridExecuteCommand()
+    render(
+      <ServicesContext.Provider value={createServices(executeCommand).instantiation}>
+        <SwarmReviewsView />
+      </ServicesContext.Provider>,
+    )
+    const row = await screen.findByTestId('swarm-review-row')
+    fireEvent.contextMenu(row, { clientX: 20, clientY: 30 })
+
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Send to Agent Chat' }))
+    expect(executeCommand).toHaveBeenCalledWith(SendContextToAgentChatAction.ID, {
+      text: 'Swarm review 1001 "Fix the renderer": Needs Review — https://swarm.example.test/reviews/1001',
+    })
   })
 
   it('applies the cached latest version without re-fetching the review', async () => {

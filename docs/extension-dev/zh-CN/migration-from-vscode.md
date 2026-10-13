@@ -142,6 +142,7 @@ Universe Editor **不提供 `vscode` 模块的兼容层（shim），也不承诺
 | `vscode.debug`（DAP） | 缺失（**无计划**。宿主内无替代；引导用户用外部调试器） |
 | `vscode.notebooks` | 缺失（**无计划**） |
 | `vscode.authentication` | 缺失（暂无计划） |
+| `vscode.chat`（chat participant / `lm` 语言模型工具） | 不等价（0.16.0 起）：Universe 的 `chat` namespace 是**自有表面**——`chat.registerChatContextProvider` 把扩展自有数据源接进 Agent 输入框的 `#` 上下文面板（两步式：面板出一条入口项，选中后由扩展自己弹 `showQuickPick` 选候选），与 VSCode 的 chat participant / 语言模型访问无关 |
 | `ExtensionContext.secrets` | 缺失（暂无计划。**不要**退而用 `globalState` 明文存密钥） |
 | `vscode.Uri` 类 | 对齐（0.9.0 起：`Uri.file/parse/from/joinPath`，`fsPath/toString/toJSON`）。注意既有表面里 `TextDocument.uri` 等仍是平面对象 `UriComponents`，两类并存 |
 | `vscode.env` | 部分对齐（0.9.0 起）：`appName/appVersion/language/sessionId/uriScheme`、`clipboard`（纯文本）、`openExternal`（http(s) 走浏览器，file 在工作台打开）；0.10.0 起另有 `machineId`（匿名随机 UUID 持久化，非 VSCode 的硬件指纹哈希）与 `appRoot`；无 `remoteName/uiKind` 等 |

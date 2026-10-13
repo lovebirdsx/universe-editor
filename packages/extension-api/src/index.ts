@@ -9,6 +9,7 @@
  * this module statically but every call is serviced by the host over RPC.
  */
 
+import type { ChatApi, ChatContextProvider } from './chat.js'
 import type { ScmApi, SourceControl } from './scm.js'
 import type { TimelineProvider } from './timeline.js'
 import type { TreeDataProvider, TreeView, TreeViewOptions } from './treeView.js'
@@ -48,6 +49,7 @@ import type {
   WorkspaceSymbol,
 } from 'vscode-languageserver-types'
 
+export * from './chat.js'
 export * from './scm.js'
 export * from './timeline.js'
 export * from './treeView.js'
@@ -106,7 +108,7 @@ export { InlayHintKind } from 'vscode-languageserver-types'
  *  version space); the host checks `engines.universe` against its own runtime
  *  version. Bumping is governed by COMPATIBILITY.md — keep in sync with
  *  package.json (release.mjs syncs both; publish preflight enforces it). */
-export const version = '0.15.2'
+export const version = '0.16.0'
 
 export { CancellationTokenSource, Disposable, EventEmitter } from './util.js'
 export type { CancellationToken, Event } from './util.js'
@@ -1532,6 +1534,7 @@ interface IExtensionHostBridge {
   readonly onDidChangeTextEditorSelection: Event<TextEditorSelectionChangeEvent>
   createSourceControl(id: string, label: string, rootUri?: string): SourceControl
   registerTimelineProvider(scheme: string[], provider: TimelineProvider): Disposable
+  registerChatContextProvider(provider: ChatContextProvider): Disposable
   getActiveTextEditor(): Promise<TextEditor | undefined>
   readonly visibleTextEditors: readonly TextEditor[]
   readonly onDidChangeVisibleTextEditors: Event<readonly TextEditor[]>
@@ -1812,6 +1815,10 @@ export const window: WindowApi = {
 
 export const scm: ScmApi = {
   createSourceControl: (id, label, rootUri) => bridge().createSourceControl(id, label, rootUri),
+}
+
+export const chat: ChatApi = {
+  registerChatContextProvider: (provider) => bridge().registerChatContextProvider(provider),
 }
 
 export const ai: AiApi = {

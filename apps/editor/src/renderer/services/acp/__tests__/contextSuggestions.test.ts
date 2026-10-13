@@ -8,7 +8,11 @@
  *  mocked here as identity to isolate the provider's own orchestration logic.
  *--------------------------------------------------------------------------------------------*/
 
-import type { ISourceControlResourceStateDto } from '@universe-editor/extensions-common'
+import type {
+  IChatContextItemDto,
+  IChatContextProviderDto,
+  ISourceControlResourceStateDto,
+} from '@universe-editor/extensions-common'
 import { URI } from '@universe-editor/platform'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FileEditorInput } from '../../editor/FileEditorInput.js'
@@ -30,6 +34,7 @@ const {
   OpenEditorContextProvider,
   DocsContextProvider,
   CommitContextProvider,
+  ExtensionContextProvider,
 } = await import('../contextSuggestions.js')
 
 function fileEditor(uri: string): FileEditorInput {
@@ -459,5 +464,79 @@ describe('CommitContextProvider', () => {
   it('returns [] for an unrelated query', async () => {
     const provider = makeCommitProvider([{ rootUri: '/workspace' }])
     expect(await provider.query('zzz')).toEqual([])
+  })
+})
+
+function makeExtensionProvider(
+  providers: readonly { handle: number; provider: IChatContextProviderDto }[],
+  resolveItem = vi.fn(async (): Promise<IChatContextItemDto | undefined> => undefined),
+) {
+  const chatContext = {
+    getProviders: () => providers,
+    resolveItem,
+  }
+  return { provider: new ExtensionContextProvider(chatContext as never), resolveItem }
+}
+
+describe('ExtensionContextProvider', () => {
+  const acme: IChatContextProviderDto = {
+    label: 'Acme Changelist…',
+    description: 'Add a changelist',
+    iconId: 'changelist',
+    keywords: ['acme', 'cl', '变更'],
+  }
+
+  it('returns [] when no extension registered a provider', async () => {
+    const { provider } = makeExtensionProvider([])
+    expect(await provider.query('')).toEqual([])
+    expect(await provider.query('acme')).toEqual([])
+  })
+
+  it('surfaces one entry per provider for an empty query, carrying its handle', async () => {
+    const { provider } = makeExtensionProvider([{ handle: 7, provider: acme }])
+    expect(await provider.query('')).toEqual([
+      {
+        kind: 'chatContext',
+        label: 'Acme Changelist…',
+        uri: '',
+        description: 'Add a changelist',
+        iconId: 'changelist',
+        meta: { chatContextHandle: 7 },
+      },
+    ])
+  })
+
+  it('matches the declared keywords and the label', async () => {
+    const { provider } = makeExtensionProvider([{ handle: 7, provider: acme }])
+    for (const query of ['acme', 'cl', '变更', 'Changelist']) {
+      expect(await provider.query(query)).toHaveLength(1)
+    }
+    expect(await provider.query('zzz')).toEqual([])
+  })
+
+  it('defaults a missing description/icon rather than omitting the keys', async () => {
+    const { provider } = makeExtensionProvider([
+      { handle: 1, provider: { label: 'Bare', keywords: ['bare'] } },
+    ])
+    expect(await provider.query('')).toEqual([
+      {
+        kind: 'chatContext',
+        label: 'Bare',
+        uri: '',
+        description: '',
+        iconId: '',
+        meta: { chatContextHandle: 1 },
+      },
+    ])
+  })
+
+  it('resolve() delegates the accepted entry to the service', async () => {
+    const item = { label: '#1234', text: 'Perforce changelist 1234' }
+    const { provider, resolveItem } = makeExtensionProvider(
+      [{ handle: 7, provider: acme }],
+      vi.fn(() => Promise.resolve(item)),
+    )
+    await expect(provider.resolve(7, 'acme')).resolves.toEqual(item)
+    expect(resolveItem).toHaveBeenCalledWith(7, 'acme')
   })
 })

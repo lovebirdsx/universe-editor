@@ -58,6 +58,7 @@ import type { IOutOfWorkspaceWatchService } from '../../files/outOfWorkspaceWatc
 import type { IScmService } from '../ScmService.js'
 import type { ITimelineService } from '../../timeline/TimelineService.js'
 import type { ITreeViewsService } from '../TreeViewsService.js'
+import type { IChatContextService } from '../ChatContextService.js'
 import type { IWebviewService } from '../WebviewService.js'
 import type { IExtensionEnablementService } from '../ExtensionEnablementService.js'
 
@@ -206,6 +207,7 @@ function makeServiceWith(
     installedIds?: string[]
     installedRemoteIds?: string[]
     notification?: INotificationService
+    chatContext?: IChatContextService
   },
   configChange: Event<IConfigurationChangeEvent> = Event.None,
 ) {
@@ -236,6 +238,7 @@ function makeServiceWith(
     { resetSourceControls } as unknown as IScmService,
     { reset: vi.fn() } as unknown as ITimelineService,
     { reset: vi.fn() } as unknown as ITreeViewsService,
+    (stubs?.chatContext ?? { reset: vi.fn() }) as unknown as IChatContextService,
     {
       setExtHost: vi.fn(),
       createMainThread: vi.fn(),
@@ -480,6 +483,28 @@ describe('ExtensionHostClientService', () => {
     expect(disposed).toContain('h1')
     expect(host.stop).toHaveBeenCalledWith('h1')
     expect(host.start).toHaveBeenCalledTimes(2)
+
+    svc.dispose()
+  })
+
+  it('drops chat-context providers when the old connection is torn down', async () => {
+    // Host-side handles restart at 1 per host process, so a provider left over
+    // from the previous connection can collide with a live one and resolve the
+    // wrong item for the `#` popover.
+    const host = fakeHost()
+    const workspaceChange = new Emitter<void>()
+    const ws: WorkspaceState = { current: undefined }
+    const chatContext = { reset: vi.fn() }
+    const svc = makeServiceWith(host, vi.fn(), workspaceChange.event, Event.None, ws, {
+      chatContext: chatContext as unknown as IChatContextService,
+    })
+
+    await svc.start()
+    expect(chatContext.reset).not.toHaveBeenCalled()
+
+    ws.current = { folder: { fsPath: '/new-ws' } }
+    workspaceChange.fire()
+    await vi.waitFor(() => expect(chatContext.reset).toHaveBeenCalled())
 
     svc.dispose()
   })
