@@ -108,7 +108,7 @@ export { InlayHintKind } from 'vscode-languageserver-types'
  *  version space); the host checks `engines.universe` against its own runtime
  *  version. Bumping is governed by COMPATIBILITY.md — keep in sync with
  *  package.json (release.mjs syncs both; publish preflight enforces it). */
-export const version = '0.16.0'
+export const version = '0.17.0'
 
 export { CancellationTokenSource, Disposable, EventEmitter } from './util.js'
 export type { CancellationToken, Event } from './util.js'
@@ -321,6 +321,32 @@ export interface WindowApi {
   ): Promise<T[] | undefined>
   showQuickPick<T extends QuickPickItem>(
     items: readonly T[],
+    options?: QuickPickOptions,
+  ): Promise<T | undefined>
+  /**
+   * Variant for items that are still being computed (a p4 / network round trip
+   * and the like): the picker opens right away and fills in when `items`
+   * settles, instead of leaving the user staring at nothing until the fetch
+   * returns. A load slow enough to be worth watching also shows an indeterminate
+   * progress bar (the host decides the threshold, so a fetch served from cache
+   * does not flash one).
+   *
+   * An empty result dismisses the picker and resolves undefined — say what you
+   * have to say (an information message) after the call, since the picker has
+   * nothing to offer. Dismissing it mid-load resolves undefined at once and
+   * discards the late items; a rejected `items` dismisses the picker and
+   * rethrows.
+   */
+  showQuickPick(
+    items: Promise<readonly string[]>,
+    options?: QuickPickOptions,
+  ): Promise<string | undefined>
+  showQuickPick<T extends QuickPickItem>(
+    items: Promise<readonly T[]>,
+    options: QuickPickOptions & { canPickMany: true },
+  ): Promise<T[] | undefined>
+  showQuickPick<T extends QuickPickItem>(
+    items: Promise<readonly T[]>,
     options?: QuickPickOptions,
   ): Promise<T | undefined>
   showInputBox(options?: InputBoxOptions): Promise<string | undefined>
@@ -1509,7 +1535,7 @@ interface IExtensionHostBridge {
     items: string[],
   ): Promise<string | undefined>
   showQuickPick(
-    items: readonly (string | QuickPickItem)[],
+    items: readonly (string | QuickPickItem)[] | Promise<readonly (string | QuickPickItem)[]>,
     options?: QuickPickOptions,
   ): Promise<string | QuickPickItem | (string | QuickPickItem)[] | undefined>
   showInputBox(options?: InputBoxOptions): Promise<string | undefined>
@@ -1761,8 +1787,10 @@ export const window: WindowApi = {
   showInformationMessage: (message, ...items) => bridge().showMessage('info', message, items),
   showWarningMessage: (message, ...items) => bridge().showMessage('warning', message, items),
   showErrorMessage: (message, ...items) => bridge().showMessage('error', message, items),
-  showQuickPick: ((items: readonly (string | QuickPickItem)[], options?: QuickPickOptions) =>
-    bridge().showQuickPick(items, options)) as WindowApi['showQuickPick'],
+  showQuickPick: ((
+    items: readonly (string | QuickPickItem)[] | Promise<readonly (string | QuickPickItem)[]>,
+    options?: QuickPickOptions,
+  ) => bridge().showQuickPick(items, options)) as WindowApi['showQuickPick'],
   showInputBox: (options) => bridge().showInputBox(options),
   createStatusBarItem: (alignment = StatusBarAlignment.Left, priority = 0) =>
     bridge().createStatusBarItem(alignment, priority),

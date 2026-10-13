@@ -33,8 +33,11 @@ const mocks = vi.hoisted(() => ({
   /** The `#` chat provider the module registers (agent prompt input). */
   registerChatContextProvider: vi.fn(() => ({ dispose: vi.fn() })),
   listReviews: vi.fn(),
-  /** Echoes the first row, mirroring `showQuickPick` handing back the picked item. */
-  showQuickPick: vi.fn(async (items: readonly unknown[]) => items[0]),
+  /** Echoes the first row, mirroring `showQuickPick` filling an async picker and
+   *  the user accepting its first entry. */
+  showQuickPick: vi.fn(
+    async (items: Promise<readonly unknown[]> | readonly unknown[]) => (await items)[0],
+  ),
 }))
 
 vi.mock('@universe-editor/extension-api', () => ({
@@ -561,8 +564,9 @@ describe('registerSwarmCommands chat-context provider', () => {
   beforeEach(() => {
     mocks.handlers.clear()
     mocks.registerChatContextProvider.mockClear()
-    mocks.listReviews.mockReset()
+    mocks.dashboard.mockReset()
     mocks.showQuickPick.mockClear()
+    vi.mocked(window.showInformationMessage).mockClear()
     registerSwarmCommands({ active: { user: 'devuser', p4Service: {} } } as never, logger)
   })
 
@@ -576,13 +580,16 @@ describe('registerSwarmCommands chat-context provider', () => {
     return (call as unknown as [never])[0]
   }
 
-  it('registers a `#` entry that picks from the newest reviews', async () => {
-    mocks.listReviews.mockResolvedValue({
-      reviews: [
+  it('registers a `#` entry that picks from the dashboard, needs-me-action first', async () => {
+    mocks.dashboard.mockResolvedValue({
+      needsAction: [{ id: '1001', description: 'Fix the renderer', stateLabel: 'Needs Review' }],
+      // 1001 is authored by me too: the two groups overlap by design, and the
+      // picker must not show it twice.
+      authored: [
         { id: '1001', description: 'Fix the renderer', stateLabel: 'Needs Review' },
         { id: '1002', description: '', stateLabel: 'Approved' },
       ],
-      lastSeen: null,
+      participating: [],
     })
 
     const entry = provider()
@@ -590,8 +597,9 @@ describe('registerSwarmCommands chat-context provider', () => {
     expect(entry.keywords).toContain('swarm')
 
     const resolved = (await entry.resolve('')) as { label: string; text: string }
-    expect(mocks.listReviews).toHaveBeenCalledWith({ max: 50 })
-    const rows = mocks.showQuickPick.mock.calls.at(-1)?.[0] as readonly { label: string }[]
+    // Same window + author set the sidebar groups use, so the two agree.
+    expect(mocks.dashboard).toHaveBeenCalledWith({ windowDays: 7 })
+    const rows = (await mocks.showQuickPick.mock.calls.at(-1)?.[0]) as readonly { label: string }[]
     expect(rows.map((r) => r.label)).toEqual(['#1001 · Needs Review', '#1002 · Approved'])
     // The picked row's payload — not the row label — is what reaches the input.
     expect(resolved).toEqual({
@@ -600,9 +608,70 @@ describe('registerSwarmCommands chat-context provider', () => {
     })
   })
 
-  it('reports an empty review list instead of opening a picker', async () => {
-    mocks.listReviews.mockResolvedValue({ reviews: [], lastSeen: null })
+  it('dismisses the empty picker and reports it instead of leaving it hanging', async () => {
+    mocks.dashboard.mockResolvedValue({ needsAction: [], authored: [], participating: [] })
     expect(await provider().resolve('')).toBeUndefined()
-    expect(mocks.showQuickPick).not.toHaveBeenCalled()
+    // The picker opens first (a busy one, while the query runs) — with nothing
+    // to show it has to be told to close, and the notice is what tells the user.
+    expect(mocks.showQuickPick).toHaveBeenCalledTimes(1)
+    expect(window.showInformationMessage).toHaveBeenCalledTimes(1)
+  })
+
+  it('opens the picker before the dashboard round trip, not after it', async () => {
+    let release: (value: unknown) => void = () => undefined
+    mocks.dashboard.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = resolve
+        }),
+    )
+
+    const pending = provider().resolve('')
+    for (let i = 0; i < 20; i++) await Promise.resolve()
+
+    // The list is still in flight — the picker must already be up, showing its
+    // progress bar over the network wait. Awaiting the dashboard first is the
+    // silent-pause bug this whole flow exists to avoid.
+    expect(mocks.showQuickPick).toHaveBeenCalledTimes(1)
+    expect(mocks.dashboard).toHaveBeenCalledTimes(1)
+
+    release({ needsAction: [], authored: [], participating: [] })
+    expect(await pending).toBeUndefined()
+  })
+
+  it('stays quiet when the picker is dismissed while the list is still loading', async () => {
+    let release: (value: unknown) => void = () => undefined
+    mocks.dashboard.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = resolve
+        }),
+    )
+    // Esc without waiting: the caller gets undefined, and must not then be told
+    // "no review to add" about a list they never saw.
+    mocks.showQuickPick.mockResolvedValueOnce(undefined)
+
+    const pending = provider().resolve('')
+    for (let i = 0; i < 20; i++) await Promise.resolve()
+    release({ needsAction: [], authored: [], participating: [] })
+
+    expect(await pending).toBeUndefined()
+    expect(window.showInformationMessage).not.toHaveBeenCalled()
+  })
+
+  it('tells the user Swarm is unconfigured without flashing a picker', async () => {
+    const saved = workspace.getConfiguration
+    ;(workspace.getConfiguration as unknown as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+      get: vi.fn(async (_key: string, fallback: unknown) => (fallback === true ? false : fallback)),
+    })
+    try {
+      expect(await provider().resolve('')).toBeUndefined()
+      expect(mocks.showQuickPick).not.toHaveBeenCalled()
+      expect(window.showInformationMessage).toHaveBeenCalledTimes(1)
+    } finally {
+      ;(workspace.getConfiguration as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+        saved as never,
+      )
+    }
   })
 })

@@ -272,3 +272,109 @@ describe('QuickInputService — onDidChangeState', () => {
     await expect(promise).resolves.toBeUndefined()
   })
 })
+
+describe('QuickInputService — one panel slot, one waiter', () => {
+  let svc: QuickInputService
+  let ctx: ContextKeyService
+
+  beforeEach(() => {
+    ;({ svc, ctx } = createService())
+  })
+
+  afterEach(() => {
+    svc.hide()
+  })
+
+  // A displaced panel used to silently drop its hide callback, leaving whoever
+  // was awaiting it hanging forever — for an extension's async showQuickPick
+  // that hang crosses RPC back into the extension.
+  it('settles a displaced pick() as dismissed instead of stranding it', async () => {
+    const first = svc.pick([{ id: 'a', label: 'A' }])
+    const second = svc.pick([{ id: 'b', label: 'B' }])
+    second.catch(() => undefined)
+
+    await expect(first).resolves.toBeUndefined()
+    expect(ctx.get('quickInputVisible')).toBe(true)
+  })
+
+  it('settles a displaced showInputBox the same way', async () => {
+    const first = svc.input({ value: 'x' })
+    const qp = svc.createQuickPick()
+    qp.show()
+
+    await expect(first).resolves.toBeUndefined()
+    qp.hide()
+  })
+
+  it('does not cancel a panel that re-shows itself', async () => {
+    const qp = svc.createQuickPick()
+    qp.show()
+    qp.busy = true
+    qp.show()
+
+    expect(ctx.get('quickInputVisible')).toBe(true)
+    let hidden = false
+    qp.onDidHide(() => {
+      hidden = true
+    })
+    expect(hidden).toBe(false)
+    qp.hide()
+    expect(hidden).toBe(true)
+  })
+
+  it('displacing a createQuickPick() panel fires its onDidHide', () => {
+    const qp = svc.createQuickPick()
+    const hidden = vi.fn()
+    qp.onDidHide(hidden)
+    qp.show()
+    expect(hidden).not.toHaveBeenCalled()
+
+    const other = svc.createQuickPick()
+    other.show()
+    expect(hidden).toHaveBeenCalledTimes(1)
+    other.hide()
+  })
+
+  // SimpleFileDialog hides its own picker from inside onDidHide (`finish` calls
+  // qp.hide()). If that synchronous call lands while the slot already belongs to
+  // the *new* panel, it fires the newcomer's callback and the newcomer is
+  // settled before it ever shows — Ctrl+P would silently do nothing.
+  it('does not let a self-hiding panel take the replacing panel down with it', () => {
+    const outgoing = svc.createQuickPick()
+    outgoing.onDidHide(() => outgoing.hide())
+    outgoing.show()
+
+    const incoming = svc.createQuickPick()
+    const incomingHidden = vi.fn()
+    incoming.onDidHide(incomingHidden)
+    incoming.show()
+
+    expect(incomingHidden).not.toHaveBeenCalled()
+    expect(ctx.get('quickInputVisible')).toBe(true)
+
+    incoming.busy = true
+    expect(ctx.get('quickInputVisible')).toBe(true)
+
+    incoming.hide()
+    expect(incomingHidden).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps a pick() dispatched during a self-hiding teardown alive', async () => {
+    const outgoing = svc.createQuickPick()
+    outgoing.onDidHide(() => outgoing.hide())
+    outgoing.show()
+
+    let settled = false
+    const picked = svc.pick([{ id: 'b', label: 'B' }]).then((item) => {
+      settled = true
+      return item
+    })
+    // Flush the async wrapper's adoption chain before asserting the panel is
+    // still open — one microtask is not enough to tell the two apart.
+    for (let i = 0; i < 10; i++) await Promise.resolve()
+    expect(settled).toBe(false)
+
+    svc.hide()
+    await expect(picked).resolves.toBeUndefined()
+  })
+})

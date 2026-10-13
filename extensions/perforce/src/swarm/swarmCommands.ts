@@ -21,7 +21,7 @@ import { SwarmStatusBarController } from './swarmStatusBar.js'
 import { SwarmNotificationPoller, resolveSwarmPollIntervalMs } from './swarmNotificationPoller.js'
 import type { SwarmLogger } from './swarmLog.js'
 import { buildReviewPicks } from './swarmReviewPick.js'
-import { registerSwarmChatProvider, SWARM_CHAT_PICKS } from '../chatContext.js'
+import { registerSwarmChatProvider } from '../chatContext.js'
 import { localize } from '../nls.js'
 
 /** Command ids. The wire-facing ids are declared canonically in extensions-common's
@@ -803,16 +803,37 @@ export function registerSwarmCommands(
 
     // Agent chat context (`#` in the prompt input): pick a review to hand to the
     // agent. Goes through this module's own client + guard, so config / auth /
-    // error handling match the Swarm sidebar exactly.
+    // error handling match the Swarm sidebar exactly — same `reviewWindowDays`
+    // window and `needsActionAuthors` set, and the same needs-my-action-first
+    // ordering, so the picker and the sidebar groups agree.
+    //
+    // Two stages: the config reads decide whether a picker opens at all (and
+    // must therefore finish first), while the dashboard fetch stays inside
+    // `loadReviews` so the picker can open its progress bar over it.
     registerSwarmChatProvider(async () => {
-      const config = await readSwarmConfig()
+      // Parallel, like the reads above: serial renderer RPCs stall on a
+      // backgrounded window.
+      const [config, needsActionAuthors, windowDays] = await Promise.all([
+        readSwarmConfig(),
+        readNeedsActionAuthors(),
+        readReviewWindowDays(),
+      ])
       if (!config) return undefined
-      const reviews = await guard(
-        'chatContext.reviews',
-        async (c) => (await c.listReviews({ max: SWARM_CHAT_PICKS })).reviews,
-        [],
-      )
-      return { reviews, url: config.url }
+      return {
+        url: config.url,
+        loadReviews: async () => {
+          const dashboard = await guard(
+            'chatContext.reviews',
+            (c) =>
+              c.dashboard({
+                ...(needsActionAuthors.length ? { needsActionAuthors } : {}),
+                ...(windowDays > 0 ? { windowDays } : {}),
+              }),
+            { needsAction: [], authored: [], participating: [] },
+          )
+          return { needsAction: dashboard.needsAction, authored: dashboard.authored }
+        },
+      }
     }),
   ]
 

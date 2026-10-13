@@ -128,7 +128,9 @@ export class CommitRefPicker {
       qp.items = (result?.commits ?? []).map(toQuickPickItem)
       qp.busy = false
     } catch {
-      qp.dispose()
+      // `hide()` — not `dispose()`, which only tears down the picker's emitters
+      // and would strand the panel on screen with dead handlers.
+      qp.hide()
       this._notification.notify({
         severity: Severity.Error,
         message: localize(

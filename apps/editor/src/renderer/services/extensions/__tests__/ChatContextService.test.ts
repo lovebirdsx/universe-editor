@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type {
   IChatContextItemDto,
   IChatContextProviderDto,
+  IChatContextResolveContextDto,
   IExtHostChat,
 } from '@universe-editor/extensions-common'
 import { ChatContextService } from '../ChatContextService.js'
@@ -12,7 +13,10 @@ function providerDto(label: string): IChatContextProviderDto {
 
 function fakeExtHost(item: IChatContextItemDto | undefined = undefined) {
   return {
-    $resolveChatContextItem: vi.fn((_handle: number, _query: string) => Promise.resolve(item)),
+    $resolveChatContextItem: vi.fn(
+      (_handle: number, _query: string, _context?: IChatContextResolveContextDto) =>
+        Promise.resolve(item),
+    ),
   } satisfies IExtHostChat
 }
 
@@ -41,7 +45,19 @@ describe('ChatContextService', () => {
       label: '#1234',
       text: 'Perforce changelist 1234',
     })
-    expect(extHost.$resolveChatContextItem).toHaveBeenCalledWith(7, 'acme')
+    expect(extHost.$resolveChatContextItem).toHaveBeenCalledWith(7, 'acme', undefined)
+  })
+
+  it('forwards the session scope to the host so the provider can narrow its candidates', async () => {
+    const service = new ChatContextService()
+    const extHost = fakeExtHost({ label: '#1234', text: 'Perforce changelist 1234' })
+    service.setExtHost(extHost)
+    await service.$registerChatContextProvider(7, providerDto('Acme'))
+
+    await service.resolveItem(7, 'acme', { sessionDir: 'X:/workspace/sub' })
+    expect(extHost.$resolveChatContextItem).toHaveBeenCalledWith(7, 'acme', {
+      sessionDir: 'X:/workspace/sub',
+    })
   })
 
   it('never calls the host for an unknown handle (provider vanished mid-flight)', async () => {

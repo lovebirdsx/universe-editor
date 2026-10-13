@@ -53,6 +53,22 @@ export interface IMainThreadChat {
 }
 
 /**
+ * Where the session that accepted the entry item is rooted. Lets a provider
+ * narrow a workspace-wide candidate space (changelists, changes) to the
+ * directory the user is actually working in.
+ */
+export interface IChatContextResolveContextDto {
+  /**
+   * Absolute path of the directory this session's prompt input is rooted at —
+   * the agent's working directory when the session is scoped to a
+   * subdirectory of the open folder, otherwise the folder itself. Undefined
+   * when no folder is open. A provider whose candidate source cannot contain
+   * it must fall back to its own default scope rather than invent one.
+   */
+  readonly sessionDir?: string
+}
+
+/**
  * Host ← renderer: resolving an accepted entry item into the final context
  * item. The renderer's ChannelClient calls these on the host's ChannelServer.
  */
@@ -62,5 +78,9 @@ export interface IExtHostChat {
    * when the user cancelled. `query` is the fragment the user typed after `#`
    * that matched this provider (one of its keywords, or part of its label).
    */
-  $resolveChatContextItem(handle: number, query: string): Promise<IChatContextItemDto | undefined>
+  $resolveChatContextItem(
+    handle: number,
+    query: string,
+    context?: IChatContextResolveContextDto,
+  ): Promise<IChatContextItemDto | undefined>
 }

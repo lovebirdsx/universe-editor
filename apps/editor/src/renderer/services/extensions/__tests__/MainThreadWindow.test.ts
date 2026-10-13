@@ -719,3 +719,209 @@ describe('MainThreadWindow window state', () => {
     }
   })
 })
+
+describe('MainThreadWindow busy quick pick', () => {
+  let tracker: DisposableTracker
+
+  beforeEach(() => {
+    tracker = new DisposableTracker()
+    setDisposableTracker(tracker)
+  })
+
+  afterEach(() => {
+    setDisposableTracker(null)
+  })
+
+  /**
+   * Stand-in for a `createQuickPick()` panel: real Emitters (the leak guard
+   * needs tracked disposables) plus the `items`/`busy`/`placeholder` setters and
+   * a `hide()` that fires onDidHide the way QuickInputService's does.
+   */
+  function fakePicker(): {
+    service: IQuickInputService
+    picks: Array<{
+      items: readonly IQuickPickItem[]
+      busy: boolean
+      placeholder: string | undefined
+      disposed: boolean
+      hidden: boolean
+    }>
+    accept: (picker: number, row?: number) => void
+    hide: (index: number) => void
+  } {
+    const picks: Array<{
+      items: readonly IQuickPickItem[]
+      busy: boolean
+      placeholder: string | undefined
+      disposed: boolean
+      hidden: boolean
+    }> = []
+    const emitters: Array<{ accept: Emitter<IQuickPickItem[]>; hide: Emitter<void> }> = []
+    const service = {
+      createQuickPick: () => {
+        const accept = new Emitter<IQuickPickItem[]>()
+        const hide = new Emitter<void>()
+        const record = {
+          items: [] as readonly IQuickPickItem[],
+          busy: false,
+          placeholder: undefined as string | undefined,
+          disposed: false,
+          hidden: false,
+        }
+        picks.push(record)
+        emitters.push({ accept, hide })
+        const index = picks.length - 1
+        // The real service keeps one panel at a time: opening this one dismisses
+        // whatever held the slot before (that is what settles a displaced busy
+        // picker). Modelling it here is what lets the overlap test below mean
+        // anything.
+        if (index > 0) emitters[index - 1]!.hide.fire()
+        return {
+          set placeholder(v: string | undefined) {
+            record.placeholder = v
+          },
+          get placeholder() {
+            return record.placeholder
+          },
+          set busy(v: boolean) {
+            record.busy = v
+          },
+          get busy() {
+            return record.busy
+          },
+          set items(v: readonly IQuickPickItem[]) {
+            record.items = v
+          },
+          get items() {
+            return record.items
+          },
+          onDidAccept: accept.event,
+          onDidHide: hide.event,
+          show: () => undefined,
+          hide: () => {
+            record.hidden = true
+            emitters[index]!.hide.fire()
+          },
+          dispose: () => {
+            record.disposed = true
+            accept.dispose()
+            hide.dispose()
+          },
+        }
+      },
+    } as unknown as IQuickInputService
+    return {
+      service,
+      picks,
+      // `picker` selects the panel (one per `$showQuickPickBusy`), `row` the
+      // entry the user accepts — the row index is what has to survive the trip.
+      accept: (picker, row = 0) => {
+        const record = picks[picker]!
+        emitters[picker]!.accept.fire([record.items[row]!])
+      },
+      hide: (index) => emitters[index]!.hide.fire(),
+    }
+  }
+
+  it('opens busy with the placeholder, fills later, and resolves the accepted index', async () => {
+    const { service, picks, accept } = fakePicker()
+    const mt = makeWindow({ quickInput: service })
+
+    const pending = mt.$showQuickPickBusy(3, { placeHolder: 'pick one' })
+    expect(picks).toHaveLength(1)
+    expect(picks[0]?.busy).toBe(true)
+    expect(picks[0]?.placeholder).toBe('pick one')
+
+    await mt.$setQuickPickItems(3, [{ label: 'a' }, { label: 'b', description: 'two' }])
+    expect(picks[0]?.busy).toBe(false)
+    expect(picks[0]?.items).toEqual([
+      { id: '0', label: 'a' },
+      { id: '1', label: 'b', description: 'two' },
+    ])
+
+    accept(0)
+    await expect(pending).resolves.toBe(0)
+    expect(picks[0]?.disposed).toBe(true)
+  })
+
+  it('keeps the row index the user picked, not the first one', async () => {
+    const { service, accept } = fakePicker()
+    const mt = makeWindow({ quickInput: service })
+
+    const pending = mt.$showQuickPickBusy(1)
+    await mt.$setQuickPickItems(1, [{ label: 'a' }, { label: 'b' }, { label: 'c' }])
+
+    accept(0, 2)
+    await expect(pending).resolves.toBe(2)
+  })
+
+  it('drops the displaced picker when a second one opens on top of it', async () => {
+    const { service, picks, accept } = fakePicker()
+    const mt = makeWindow({ quickInput: service })
+
+    const first = mt.$showQuickPickBusy(1)
+    const second = mt.$showQuickPickBusy(2)
+    // One panel at a time: B takes the slot, so A is dismissed — its waiter
+    // resolves undefined and its handle is gone.
+    await expect(first).resolves.toBeUndefined()
+
+    await mt.$setQuickPickItems(1, [{ label: 'late' }])
+    expect(picks[0]?.items).toEqual([])
+
+    await mt.$setQuickPickItems(2, [{ label: 'b0' }, { label: 'b1' }])
+    accept(1, 1)
+    await expect(second).resolves.toBe(1)
+  })
+
+  it('resolves undefined when the user dismisses it before the items arrive', async () => {
+    const { service, picks, hide } = fakePicker()
+    const mt = makeWindow({ quickInput: service })
+
+    const pending = mt.$showQuickPickBusy(1)
+    hide(0)
+    await expect(pending).resolves.toBeUndefined()
+
+    // The late fill lands on a dropped handle — no throw, no revival.
+    await mt.$setQuickPickItems(1, [{ label: 'late' }])
+    expect(picks[0]?.items).toEqual([])
+  })
+
+  it('dismisses itself when the items come back empty', async () => {
+    const { service, picks } = fakePicker()
+    const mt = makeWindow({ quickInput: service })
+
+    const pending = mt.$showQuickPickBusy(1, { placeHolder: 'none' })
+    await mt.$setQuickPickItems(1, [])
+    await expect(pending).resolves.toBeUndefined()
+    expect(picks[0]?.hidden).toBe(true)
+  })
+
+  it('$closeQuickPick dismisses the picker instead of stranding it', async () => {
+    const { service, picks } = fakePicker()
+    const mt = makeWindow({ quickInput: service })
+
+    const pending = mt.$showQuickPickBusy(7)
+    await mt.$closeQuickPick(7)
+    await expect(pending).resolves.toBeUndefined()
+    expect(picks[0]?.hidden).toBe(true)
+  })
+
+  it('ignores fills and closes for handles it does not know', async () => {
+    const { service } = fakePicker()
+    const mt = makeWindow({ quickInput: service })
+    await expect(mt.$setQuickPickItems(42, [{ label: 'x' }])).resolves.toBeUndefined()
+    await expect(mt.$closeQuickPick(42)).resolves.toBeUndefined()
+  })
+
+  it('tears live pickers down on dispose so their waiters settle', async () => {
+    const { service, picks } = fakePicker()
+    const root = markAsSingleton(new DisposableStore())
+    const mt = root.add(makeWindow({ quickInput: service }))
+
+    const pending = mt.$showQuickPickBusy(9)
+    mt.dispose()
+    await expect(pending).resolves.toBeUndefined()
+    expect(picks[0]?.hidden).toBe(true)
+    expect(tracker.computeLeakingDisposables()).toBeUndefined()
+  })
+})

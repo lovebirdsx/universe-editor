@@ -11,6 +11,7 @@ import {
   buildChangelistChatPicks,
   buildSwarmChatPicks,
   changelistChatText,
+  mergeSwarmPicks,
   swarmReviewChatText,
   swarmReviewUrl,
 } from '../chatContext.js'
@@ -129,5 +130,53 @@ describe('buildSwarmChatPicks', () => {
     expect(picks[1]?.item.text).toBe(
       'Swarm review 1002: Approved — https://swarm.example.com/reviews/1002',
     )
+  })
+})
+
+describe('mergeSwarmPicks', () => {
+  it('puts needs-my-action first and keeps each group in its own order', () => {
+    const merged = mergeSwarmPicks(
+      [review({ id: '1001' }), review({ id: '1002' })],
+      [review({ id: '2001' }), review({ id: '2002' })],
+    )
+    expect(merged.map((r) => r.id)).toEqual(['1001', '1002', '2001', '2002'])
+  })
+
+  it('drops the duplicate when a review I authored also needs my action', () => {
+    const merged = mergeSwarmPicks(
+      [review({ id: '1001', stateLabel: 'Needs Review' })],
+      [review({ id: '1001', stateLabel: 'Needs Review' }), review({ id: '1002' })],
+    )
+    expect(merged.map((r) => r.id)).toEqual(['1001', '1002'])
+  })
+
+  it('is a pass-through when one side is empty', () => {
+    expect(mergeSwarmPicks([], [review({ id: '1' })]).map((r) => r.id)).toEqual(['1'])
+    expect(mergeSwarmPicks([review({ id: '1' })], []).map((r) => r.id)).toEqual(['1'])
+  })
+})
+
+describe('buildChangelistChatPicks cap', () => {
+  const pendingOf = (n: number): { id: string; description: string }[] =>
+    Array.from({ length: n }, (_, i) => ({ id: String(9000 + i), description: `p${i}` }))
+  const submittedOf = (n: number): { id: string; message: string }[] =>
+    Array.from({ length: n }, (_, i) => ({ id: String(1000 + i), message: `s${i}` }))
+
+  it('caps the combined list at 100 rows', () => {
+    const picks = buildChangelistChatPicks(pendingOf(10), submittedOf(150))
+    expect(picks).toHaveLength(100)
+    expect(picks[0]?.label).toBe('#9000 · Pending')
+    // 10 pending + the first 90 submitted rows make the cut.
+    expect(picks.at(-1)?.label).toBe('#1089 · Submitted')
+  })
+
+  it('keeps every pending row when the two lists together overflow', () => {
+    const picks = buildChangelistChatPicks(pendingOf(30), submittedOf(120))
+    expect(picks.slice(0, 30).every((p) => p.label.endsWith('· Pending'))).toBe(true)
+    expect(picks).toHaveLength(100)
+  })
+
+  it('leaves a short list untouched', () => {
+    expect(buildChangelistChatPicks(pendingOf(2), submittedOf(3))).toHaveLength(5)
   })
 })

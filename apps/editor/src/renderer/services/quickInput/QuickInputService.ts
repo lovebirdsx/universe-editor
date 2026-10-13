@@ -37,6 +37,16 @@ export class QuickInputService implements IQuickInputService {
 
   private _currentState: QuickPickState | null = null
   private _currentOnHide: (() => void) | undefined
+  /**
+   * Owner of `_currentOnHide`. There is one panel at a time, so opening a new
+   * one used to just overwrite the previous hide callback — silently stranding
+   * whoever was waiting on it. That is a hung promise for `pick()`/`input()`,
+   * and for an extension's async `showQuickPick` it crosses RPC: the host (and
+   * so the extension's `resolve`) would never settle. Displacing a *different*
+   * owner now fires the old callback first; re-`show()`ing the same panel (the
+   * picker legitimately calls `show()` on itself) must not cancel it.
+   */
+  private _currentOwner: object | undefined
   private readonly _visibleKey: IContextKey<boolean>
 
   constructor(
@@ -56,10 +66,39 @@ export class QuickInputService implements IQuickInputService {
     this._onDidChangeState.fire(state)
   }
 
+  /**
+   * Take over the single panel slot, cancelling the previous owner's wait.
+   *
+   * The outgoing panel is detached *before* it is notified: its own onHide
+   * handler may call `hide()` on itself (SimpleFileDialog does), and that call
+   * must not find — and fire — the callback we are about to install. Same order
+   * as `hide()` itself, so the slot always belongs to the published panel.
+   */
+  private _claim(owner: object, onHide: () => void): void {
+    const previous = this._currentOnHide
+    const previousOwner = this._currentOwner
+    if (previous !== undefined && previousOwner !== owner) {
+      this._currentOnHide = undefined
+      this._currentOwner = undefined
+      this._setState(null)
+      previous()
+    }
+    this._currentOnHide = onHide
+    this._currentOwner = owner
+  }
+
+  /** Release the slot if `owner` still holds it (a newer panel may have taken over). */
+  private _release(owner: object): void {
+    if (this._currentOwner !== owner) return
+    this._currentOnHide = undefined
+    this._currentOwner = undefined
+  }
+
   hide(): void {
     if (!this._currentState) return
     const onHide = this._currentOnHide
     this._currentOnHide = undefined
+    this._currentOwner = undefined
     this._setState(null)
     onHide?.()
   }
@@ -317,7 +356,7 @@ export class QuickInputService implements IQuickInputService {
       onDidChangeSelection: onDidChangeSelection.event,
       show: () => {
         _visible = true
-        this._currentOnHide = () => onDidHide.fire()
+        this._claim(qp, () => onDidHide.fire())
         pushState()
       },
       hide: () => {
@@ -349,7 +388,8 @@ export class QuickInputService implements IQuickInputService {
     }
 
     return new Promise((resolve) => {
-      this._currentOnHide = () => resolve(undefined)
+      const owner = {}
+      this._claim(owner, () => resolve(undefined))
       this._setState({
         type: 'pick',
         items,
@@ -373,14 +413,14 @@ export class QuickInputService implements IQuickInputService {
         buttons: options?.buttons,
         onTriggerButton: options?.onDidTriggerButton
           ? (button) => {
-              this._currentOnHide = undefined
+              this._release(owner)
               this._setState(null)
               resolve(undefined)
               options.onDidTriggerButton?.(button)
             }
           : undefined,
         onAccept: (selected, mods) => {
-          this._currentOnHide = undefined
+          this._release(owner)
           this._setState(null)
           if (options?.keyMods && mods) {
             options.keyMods.ctrl = mods.ctrl
@@ -405,7 +445,8 @@ export class QuickInputService implements IQuickInputService {
     }
 
     return new Promise((resolve) => {
-      this._currentOnHide = () => resolve(undefined)
+      const owner = {}
+      this._claim(owner, () => resolve(undefined))
       this._setState({
         type: 'input',
         placeholder: options?.placeholder,
@@ -413,7 +454,7 @@ export class QuickInputService implements IQuickInputService {
         inputValue: options?.value ?? storedValue ?? '',
         validateInput: options?.validateInput,
         onInput: (value) => {
-          this._currentOnHide = undefined
+          this._release(owner)
           this._setState(null)
           if (id) void this._storage.set(`quickinput.lastValue.${id}`, value)
           resolve(value)

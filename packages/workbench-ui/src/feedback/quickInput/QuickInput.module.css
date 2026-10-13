@@ -450,28 +450,32 @@
 
 .progress {
   height: 2px;
-  background: var(--vscode-workbench-border, #2f2f35);
+  background: var(--vscode-progressBar-trackBackground, rgba(255, 255, 255, 0.12));
   position: relative;
   overflow: hidden;
   flex-shrink: 0;
 }
 
+/* VSCode's indeterminate bit (base/browser/ui/progressbar/progressbar.css): a 2%
+   sliver sweeping the full width over 4s with a gentle mid-sweep pulse. The
+   geometry is tuned for the default centre transform-origin — do not add one. */
 .progressBar {
   position: absolute;
-  inset: 0;
-  background: var(--vscode-workbench-accent, #0070e0);
-  animation: quick-input-indeterminate 1.4s ease infinite;
-  transform-origin: left;
+  left: 0;
+  width: 2%;
+  height: 2px;
+  background: var(--vscode-progressBar-background, #0e70c0);
+  animation: quick-input-indeterminate 4s linear infinite;
 }
 
 @keyframes quick-input-indeterminate {
-  0% {
-    transform: scaleX(0) translateX(0%);
+  from {
+    transform: translateX(0%) scaleX(1);
   }
   50% {
-    transform: scaleX(0.5) translateX(100%);
+    transform: translateX(2500%) scaleX(3);
   }
-  100% {
-    transform: scaleX(0) translateX(300%);
+  to {
+    transform: translateX(4900%) scaleX(1);
   }
 }

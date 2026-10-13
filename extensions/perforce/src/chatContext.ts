@@ -21,14 +21,14 @@ import type { PerforceClient } from './client.js'
 import type { SwarmReview } from './swarm/swarmParser.js'
 import { descriptionFirstLine } from './changelist.js'
 import { buildScopeFilespec } from './p4Filespec.js'
+import { isUnderAny } from './pathUtil.js'
 import { localize } from './nls.js'
 
-/** How many recently submitted changes the changelist pick offers below the
- *  pending ones (the graph lists 300; a chat reference is a targeted pick). */
-const RECENT_SUBMITTED_PICKS = 30
-
-/** How many reviews the Swarm pick offers (one Swarm page, newest-updated first). */
-export const SWARM_CHAT_PICKS = 50
+/** How many changelists the pick offers in total — the pending ones first (they
+ *  are what the user is working on), then the newest submitted ones. Also the
+ *  `p4 changes` cap, so one round trip can fill the whole list (the graph lists
+ *  300; a chat reference is a targeted pick). */
+const MAX_CHANGELIST_PICKS = 100
 
 /** A pick row plus the item the accepted row hands back to the renderer. Extra
  *  fields survive the `showQuickPick` round-trip, which is how the payload gets
@@ -74,7 +74,9 @@ function changelistPick(id: string, description: string, state: string): ChatPic
 
 /**
  * Pending changelists first (they are what the user is working on), then the
- * newest submitted ones. Pure — the caller supplies both lists.
+ * newest submitted ones, capped at {@link MAX_CHANGELIST_PICKS} overall — the
+ * pending rows are the ones kept when the two together overflow. Pure — the
+ * caller supplies both lists.
  */
 export function buildChangelistChatPicks(
   pending: readonly { readonly id: string; readonly description: string }[],
@@ -88,7 +90,7 @@ export function buildChangelistChatPicks(
     ...submitted
       .filter((c) => !seen.has(c.id))
       .map((c) => changelistPick(c.id, c.message, submittedState)),
-  ]
+  ].slice(0, MAX_CHANGELIST_PICKS)
 }
 
 /** One row per review, as Swarm returned them (newest-updated first). */
@@ -114,24 +116,66 @@ export function buildSwarmChatPicks(
   })
 }
 
-/** Run the provider's picker over `picks`; undefined when empty or cancelled. */
+/**
+ * Needs-my-action reviews first, then the ones I authored, deduped by id (a
+ * review can be both — Swarm lists it under whichever group the caller asked
+ * for first). Both inputs keep their own order; the caller's dashboard sort
+ * already puts the most relevant on top.
+ */
+export function mergeSwarmPicks(
+  needsAction: readonly SwarmReview[],
+  authored: readonly SwarmReview[],
+): readonly SwarmReview[] {
+  const seen = new Set(needsAction.map((r) => r.id))
+  return [...needsAction, ...authored.filter((r) => !seen.has(r.id))]
+}
+
+/**
+ * Run the provider's picker over `picks`; undefined when the list came back
+ * empty or the user cancelled.
+ *
+ * `load` is handed over *unawaited* so the picker opens (with a progress bar)
+ * while the p4 / Swarm round-trips are still in flight — a silent pause before
+ * the list appears reads as a hang. The accepted row is the item itself, so the
+ * resolved list is captured through the same promise for the empty case, where
+ * the (already dismissed) picker cannot tell us anything. `settled` narrows
+ * that further: a load that had not finished when the picker went away means
+ * the user cancelled, and "nothing to add" would be a message about a list they
+ * never saw.
+ */
 async function pickItem(
-  picks: readonly ChatPickItem[],
+  load: () => Promise<ChatPickItem[]>,
   emptyMessage: string,
   placeHolder: string,
 ): Promise<ChatContextItem | undefined> {
-  if (picks.length === 0) {
-    await window.showInformationMessage(emptyMessage)
-    return undefined
-  }
-  const picked = await window.showQuickPick([...picks], { placeHolder })
-  return picked?.item
+  let loaded: readonly ChatPickItem[] = []
+  let settled = false
+  const pending = load().then((picks) => {
+    loaded = picks
+    settled = true
+    return picks
+  })
+  const picked = await window.showQuickPick(pending, { placeHolder })
+  if (picked) return picked.item
+  if (settled && loaded.length === 0) await window.showInformationMessage(emptyMessage)
+  return undefined
+}
+
+/**
+ * The directory the candidates are scoped to: the session's own directory when
+ * it sits inside a Perforce client (the agent runs there, so that is what the
+ * user is looking at), otherwise the whole client root.
+ */
+function scopeDirFor(target: PerforceClient, sessionDir: string | undefined): string {
+  if (sessionDir && isUnderAny(sessionDir, [target.root])) return sessionDir
+  return target.root
 }
 
 /**
  * Changelist provider: pending changelists (from the last refresh, no p4 call)
- * followed by the newest submitted changes in the client's view. The default
- * changelist is left out — it has no number and no description of its own.
+ * followed by the newest submitted changes — both scoped to the session's
+ * directory. The default changelist is left out — it has no number and no
+ * description of its own.
  */
 export function registerChangelistChatProvider(mgr: ClientManager): Disposable {
   return chat.registerChatContextProvider({
@@ -152,15 +196,19 @@ export function registerChangelistChatProvider(mgr: ClientManager): Disposable {
       '变更',
       '提交',
     ],
-    async resolve() {
-      const target = mgr.active
+    async resolve(_query, context) {
+      // Everything cache-only resolves before `showQuickPick`: a lazy picker
+      // that opens and immediately closes looks like a glitch.
+      const target =
+        (context.sessionDir ? mgr.resolveContaining(context.sessionDir) : undefined) ?? mgr.active
       if (!target) return undefined
-      const [pending, submitted] = await Promise.all([
-        readPendingPicks(target),
-        readSubmittedPicks(target),
-      ])
+      const scopeDir = scopeDirFor(target, context.sessionDir)
       return pickItem(
-        buildChangelistChatPicks(pending, submitted),
+        async () =>
+          buildChangelistChatPicks(
+            readPendingPicks(target, scopeDir),
+            await readSubmittedPicks(target, scopeDir),
+          ),
         localize('perforce.chat.changelist.empty', 'No changelist to add.'),
         localize('perforce.chat.changelist.placeholder', 'Select a changelist'),
       )
@@ -169,14 +217,28 @@ export function registerChangelistChatProvider(mgr: ClientManager): Disposable {
 }
 
 /**
- * Swarm provider. `fetchReviews` (owned by the swarm module, which holds the
+ * What the swarm module hands the provider. Two stages on purpose: the config
+ * check behind {@link fetchSource} is cheap (a few configuration reads) and
+ * decides whether a picker should open at all, while `loadReviews` is the
+ * network round trip and runs *inside* the picker's loader so the progress bar
+ * covers it.
+ */
+export interface SwarmChatSource {
+  readonly url: string
+  readonly loadReviews: () => Promise<{
+    readonly needsAction: readonly SwarmReview[]
+    readonly authored: readonly SwarmReview[]
+  }>
+}
+
+/**
+ * Swarm provider. `fetchSource` (owned by the swarm module, which holds the
  * config / credential / cache) returns `undefined` when Swarm is off or
- * unconfigured — that is a notice, not an empty list.
+ * unconfigured — that is a notice, not an empty list, so it is answered
+ * *before* the picker opens rather than by closing one.
  */
 export function registerSwarmChatProvider(
-  fetchReviews: () => Promise<
-    { readonly reviews: readonly SwarmReview[]; readonly url: string } | undefined
-  >,
+  fetchSource: () => Promise<SwarmChatSource | undefined>,
 ): Disposable {
   return chat.registerChatContextProvider({
     label: localize('perforce.chat.swarm.label', 'Swarm Review…'),
@@ -187,8 +249,8 @@ export function registerSwarmChatProvider(
     iconId: 'git-pull-request',
     keywords: ['swarm', 'review', 'reviews', '审核', '评审', '代码评审'],
     async resolve() {
-      const fetched = await fetchReviews()
-      if (!fetched) {
+      const source = await fetchSource()
+      if (!source) {
         await window.showInformationMessage(
           localize(
             'perforce.swarm.notConfigured',
@@ -198,7 +260,10 @@ export function registerSwarmChatProvider(
         return undefined
       }
       return pickItem(
-        buildSwarmChatPicks(fetched.reviews, fetched.url),
+        async () => {
+          const { needsAction, authored } = await source.loadReviews()
+          return buildSwarmChatPicks(mergeSwarmPicks(needsAction, authored), source.url)
+        },
         localize('perforce.chat.swarm.empty', 'No Swarm review to add.'),
         localize('perforce.chat.swarm.placeholder', 'Select a Swarm review'),
       )
@@ -206,22 +271,28 @@ export function registerSwarmChatProvider(
   })
 }
 
-/** Pending numbered changelists, from the client's cached refresh. */
-async function readPendingPicks(
+/**
+ * Pending numbered changelists with an opened file under `scopeDir`, from the
+ * client's cached refresh (no p4 call). Shelved-only changelists drop out: the
+ * cache maps opened files, so a changelist whose files are all shelved has
+ * nothing pointing at it — narrow the session directory and it disappears.
+ */
+function readPendingPicks(
   target: PerforceClient,
-): Promise<readonly { readonly id: string; readonly description: string }[]> {
-  const picks = await target.changelistPicks()
-  return picks
-    .filter((p) => p.id !== 'default' && p.id !== 'new')
-    .map((p) => ({ id: p.id, description: p.description ?? '' }))
+  scopeDir: string,
+): readonly { readonly id: string; readonly description: string }[] {
+  return target
+    .pendingChangelistsUnder(scopeDir)
+    .map((cl) => ({ id: cl.id, description: cl.description ?? '' }))
 }
 
-/** Newest submitted changes in this client's view (one cached `p4 changes`). */
+/** Newest submitted changes under `scopeDir` (one cached `p4 changes`). */
 async function readSubmittedPicks(
   target: PerforceClient,
+  scopeDir: string,
 ): Promise<readonly { readonly id: string; readonly message: string }[]> {
-  const listing = await target.getGraphChanges(RECENT_SUBMITTED_PICKS, [
-    buildScopeFilespec(target.root, true),
+  const listing = await target.getGraphChanges(MAX_CHANGELIST_PICKS, [
+    buildScopeFilespec(scopeDir, true),
   ])
-  return listing?.changes.slice(0, RECENT_SUBMITTED_PICKS) ?? []
+  return listing?.changes.slice(0, MAX_CHANGELIST_PICKS) ?? []
 }

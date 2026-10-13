@@ -31,6 +31,7 @@ import {
   type IDisposable,
   type IProgress,
   type IProgressStep,
+  type IQuickPick,
   type IQuickPickItem,
   type IStatusBarEntry,
   type IStatusBarEntryAccessor,
@@ -63,10 +64,32 @@ interface ProgressEntry {
   readonly done: DeferredPromise<void>
 }
 
+/**
+ * Wire items → panel rows. The row id is the item's index in the source array,
+ * because the index is what crosses back to the host.
+ */
+function toQuickPickItems(items: Array<string | IExtHostQuickPickItemDto>): IQuickPickItem[] {
+  return items.map((it, index) =>
+    typeof it === 'string'
+      ? { id: String(index), label: it }
+      : {
+          id: String(index),
+          label: it.label,
+          ...(it.description !== undefined ? { description: it.description } : {}),
+          ...(it.detail !== undefined ? { detail: it.detail } : {}),
+          ...(it.iconId !== undefined ? { iconId: it.iconId } : {}),
+          ...(it.labelColor !== undefined ? { labelColor: it.labelColor } : {}),
+          ...(it.picked !== undefined ? { picked: it.picked } : {}),
+        },
+  )
+}
+
 export class MainThreadWindow extends Disposable implements IMainThreadWindow {
   private readonly _entries = this._register(new DisposableMap<number, IStatusBarEntryAccessor>())
   private readonly _progress = new Map<number, ProgressEntry>()
   private readonly _progressCancels = this._register(new DisposableMap<number, IDisposable>())
+  /** Live pickers from `$showQuickPickBusy`, keyed by their host handle. */
+  private readonly _busyPicks = new Map<number, IQuickPick<IQuickPickItem>>()
   private _focused = true
 
   constructor(
@@ -138,25 +161,77 @@ export class MainThreadWindow extends Disposable implements IMainThreadWindow {
     items: Array<string | IExtHostQuickPickItemDto>,
     options?: IExtHostQuickPickOptions,
   ): Promise<number | number[] | undefined> {
-    const picks: IQuickPickItem[] = items.map((it, index) =>
-      typeof it === 'string'
-        ? { id: String(index), label: it }
-        : {
-            id: String(index),
-            label: it.label,
-            ...(it.description !== undefined ? { description: it.description } : {}),
-            ...(it.detail !== undefined ? { detail: it.detail } : {}),
-            ...(it.iconId !== undefined ? { iconId: it.iconId } : {}),
-            ...(it.labelColor !== undefined ? { labelColor: it.labelColor } : {}),
-            ...(it.picked !== undefined ? { picked: it.picked } : {}),
-          },
-    )
+    const picks = toQuickPickItems(items)
     if (options?.canPickMany === true) {
       return this._pickMany(picks, options)
     }
     return this._quickInput
       .pick(picks, options?.placeHolder !== undefined ? { placeholder: options.placeHolder } : {})
       .then((selected) => (selected ? Number(selected.id) : undefined))
+  }
+
+  /**
+   * Open a picker whose items are still being fetched, so a slow load shows a
+   * progress bar instead of nothing. The items arrive later over
+   * `$setQuickPickItems`; dismissing the picker first is fine — the handle is
+   * dropped here and the late fill becomes a no-op.
+   */
+  $showQuickPickBusy(
+    handle: number,
+    options?: IExtHostQuickPickOptions,
+  ): Promise<number | undefined> {
+    // A dying host's in-flight request must not leave a picker whose promise
+    // nobody can settle (mirrors $startProgress).
+    if (this._store.isDisposed) return Promise.resolve(undefined)
+    const qp = this._quickInput.createQuickPick<IQuickPickItem>()
+    qp.placeholder = options?.placeHolder
+    qp.busy = true
+    this._busyPicks.set(handle, qp)
+
+    const result = new Promise<number | undefined>((resolve) => {
+      // `qp.dispose()` only disposes the QuickPick's own emitters — these two
+      // subscriptions are separate disposables, so they need their own store.
+      const subs = new DisposableStore()
+      const done = (value: number | undefined): void => {
+        subs.dispose()
+        this._busyPicks.delete(handle)
+        qp.dispose()
+        resolve(value)
+      }
+      subs.add(
+        qp.onDidAccept((accepted) => {
+          const first = accepted[0]
+          done(first ? Number(first.id) : undefined)
+        }),
+      )
+      subs.add(qp.onDidHide(() => done(undefined)))
+    })
+    qp.show()
+    return result
+  }
+
+  $setQuickPickItems(
+    handle: number,
+    items: Array<string | IExtHostQuickPickItemDto>,
+  ): Promise<void> {
+    const qp = this._busyPicks.get(handle)
+    if (!qp) return Promise.resolve()
+    if (items.length === 0) {
+      // Nothing to offer: drop the picker (resolving undefined) instead of
+      // leaving the user an empty "No results" panel. `hide()` — not
+      // `dispose()`, which only tears down the emitters and would strand the
+      // panel on screen with dead handlers.
+      qp.hide()
+      return Promise.resolve()
+    }
+    qp.items = toQuickPickItems(items)
+    qp.busy = false
+    return Promise.resolve()
+  }
+
+  $closeQuickPick(handle: number): Promise<void> {
+    this._busyPicks.get(handle)?.hide()
+    return Promise.resolve()
   }
 
   /**
@@ -352,6 +427,9 @@ export class MainThreadWindow extends Disposable implements IMainThreadWindow {
       this._progressCancels.deleteAndDispose(handle)
       entry.done.complete(undefined)
     }
+    // Same for pickers still loading: `hide()` resolves their promise (and so
+    // the host's `showQuickPick`), which disposing alone would not.
+    for (const [, qp] of this._busyPicks) qp.hide()
     super.dispose()
   }
 

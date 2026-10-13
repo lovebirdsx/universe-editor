@@ -327,6 +327,32 @@ export interface IMainThreadWindow {
     items: Array<string | IExtHostQuickPickItemDto>,
     options?: IExtHostQuickPickOptions,
   ): Promise<number | number[] | undefined>
+  /**
+   * The async counterpart of {@link $showQuickPick}: open the picker for a
+   * host-allocated `handle` right away, marked busy, before its items exist. The
+   * items arrive later over `$setQuickPickItems` (or the picker is torn down by
+   * `$closeQuickPick`). Resolves like `$showQuickPick` — the accepted index, or
+   * undefined when the user dismissed it, which can happen while it is still
+   * loading. `busy` is a state, not a visual: the panel decides when to paint
+   * the progress bar (it holds it back for a moment so a cached load shows no
+   * bar at all).
+   */
+  $showQuickPickBusy(
+    handle: number,
+    options?: IExtHostQuickPickOptions,
+  ): Promise<number | undefined>
+  /**
+   * Fill a picker opened by `$showQuickPickBusy` and drop its progress bar. An
+   * empty `items` dismisses the picker instead (nothing to offer). A no-op for
+   * an unknown `handle` — the user may have dismissed it before the items
+   * arrived.
+   */
+  $setQuickPickItems(handle: number, items: Array<string | IExtHostQuickPickItemDto>): Promise<void>
+  /**
+   * Tear down a picker opened by `$showQuickPickBusy` without a selection
+   * (its items could not be produced). No-op for an unknown `handle`.
+   */
+  $closeQuickPick(handle: number): Promise<void>
   $showInputBox(options?: IExtHostInputBoxOptions): Promise<string | undefined>
   /** Create or update the status-bar entry for `handle`. */
   $setStatusBarEntry(handle: number, entry: IExtHostStatusBarEntryDto): Promise<void>

@@ -15,6 +15,7 @@ import type {
 } from '@universe-editor/extension-api'
 import type {
   IActiveTextEditorDto,
+  IExtHostQuickPickItemDto,
   IMainThreadEditor,
   IMainThreadCommands,
   IMainThreadFileEvents,
@@ -88,6 +89,9 @@ function recordingMainThread(): {
 const noopWindow: IMainThreadWindow = {
   $showMessage: () => Promise.resolve(undefined),
   $showQuickPick: () => Promise.resolve(undefined),
+  $showQuickPickBusy: () => Promise.resolve(undefined),
+  $setQuickPickItems: () => Promise.resolve(),
+  $closeQuickPick: () => Promise.resolve(),
   $showInputBox: () => Promise.resolve(undefined),
   $setStatusBarEntry: () => Promise.resolve(),
   $disposeStatusBarEntry: () => Promise.resolve(),
@@ -137,6 +141,45 @@ function scanned(activationEvents: string[]): IScannedExtension {
       },
     },
   }
+}
+
+/**
+ * Drives the async `showQuickPick` lane: records the busy/fill/close RPC order
+ * and lets the test settle the user's pick when it wants to.
+ */
+function recordingWindow(): {
+  impl: IMainThreadWindow
+  calls: string[]
+  items: Array<string | IExtHostQuickPickItemDto>
+  settle(picked: number | undefined): void
+} {
+  const calls: string[] = []
+  const items: Array<string | IExtHostQuickPickItemDto> = []
+  let settle: (picked: number | undefined) => void = () => undefined
+  const impl: IMainThreadWindow = {
+    ...noopWindow,
+    $showQuickPick: (it) => {
+      calls.push('show')
+      items.push(...it)
+      return Promise.resolve(undefined)
+    },
+    $showQuickPickBusy: () => {
+      calls.push('busy')
+      return new Promise<number | undefined>((resolve) => {
+        settle = resolve
+      })
+    },
+    $setQuickPickItems: (_handle, it) => {
+      calls.push('fill')
+      items.push(...it)
+      return Promise.resolve()
+    },
+    $closeQuickPick: () => {
+      calls.push('close')
+      return Promise.resolve()
+    },
+  }
+  return { impl, calls, items, settle: (picked) => settle(picked) }
 }
 
 describe('ExtensionService', () => {
@@ -1718,6 +1761,136 @@ describe('ExtensionService language configuration / setTextDocumentLanguage', ()
     const doc = service.getTextDocuments()[0]!
     await expect(service.setTextDocumentLanguage(doc, 'plaintext')).resolves.toBe(doc)
     expect(rec.setTextDocumentLanguage).toHaveLength(0)
+    service.dispose()
+  })
+})
+
+describe('ExtensionService.showQuickPick with async items', () => {
+  function serviceWith(window: IMainThreadWindow): ExtensionService {
+    return new ExtensionService(
+      [scanned(['*'])],
+      recordingMainThread().impl,
+      window,
+      noopScm,
+      noopTimeline,
+    )
+  }
+
+  /** The busy lane races the picker against the load, which puts more microtask
+   *  hops in front of each RPC than counting `await Promise.resolve()` survives.
+   *  A macrotask boundary drains the whole chain, whatever its length. */
+  const settleAll = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
+
+  it('opens the picker busy, fills it, and maps the index back to the resolved item', async () => {
+    const rec = recordingWindow()
+    const service = serviceWith(rec.impl)
+    const pending = service.showQuickPick(
+      Promise.resolve([{ label: 'first' }, { label: 'second', description: 'two' }]),
+    )
+
+    // The picker is up before the items exist — that is the whole point.
+    await settleAll()
+    expect(rec.calls).toEqual(['busy', 'fill'])
+    rec.settle(1)
+    await expect(pending).resolves.toEqual({ label: 'second', description: 'two' })
+    expect(rec.items).toEqual([{ label: 'first' }, { label: 'second', description: 'two' }])
+    service.dispose()
+  })
+
+  it('tears the picker down and rethrows when the items cannot be produced', async () => {
+    const rec = recordingWindow()
+    const service = serviceWith(rec.impl)
+    const pending = service.showQuickPick(Promise.reject(new Error('boom')))
+    await expect(pending).rejects.toThrow('boom')
+    expect(rec.calls).toEqual(['busy', 'close'])
+    service.dispose()
+  })
+
+  it('settles the dismissal without waiting for the load', async () => {
+    const rec = recordingWindow()
+    const service = serviceWith(rec.impl)
+    const pending = service.showQuickPick(new Promise<readonly string[]>(() => undefined))
+    await settleAll()
+
+    rec.settle(undefined)
+    await expect(pending).resolves.toBeUndefined()
+    // Still loading: nothing was filled, nothing was torn down.
+    expect(rec.calls).toEqual(['busy'])
+    service.dispose()
+  })
+
+  it('drops the late fill once the picker is gone', async () => {
+    const rec = recordingWindow()
+    const service = serviceWith(rec.impl)
+    let load: (items: readonly string[]) => void = () => undefined
+    const pending = service.showQuickPick(
+      new Promise<readonly string[]>((resolve) => {
+        load = resolve
+      }),
+    )
+    await settleAll()
+
+    rec.settle(undefined)
+    load(['late'])
+    await settleAll()
+    await expect(pending).resolves.toBeUndefined()
+    expect(rec.calls).toEqual(['busy'])
+    expect(rec.items).toEqual([])
+    service.dispose()
+  })
+
+  it('swallows a load failure that lands after the dismissal', async () => {
+    const rec = recordingWindow()
+    const service = serviceWith(rec.impl)
+    let fail: (err: Error) => void = () => undefined
+    const pending = service.showQuickPick(
+      new Promise<readonly string[]>((_resolve, reject) => {
+        fail = reject
+      }),
+    )
+    await settleAll()
+
+    rec.settle(undefined)
+    fail(new Error('late boom'))
+    await settleAll()
+    // A picker the user already closed must not report an error about it.
+    await expect(pending).resolves.toBeUndefined()
+    expect(rec.calls).toEqual(['busy'])
+    service.dispose()
+  })
+
+  it('resolves undefined when the picker is dismissed after the items were filled', async () => {
+    const rec = recordingWindow()
+    const service = serviceWith(rec.impl)
+    const pending = service.showQuickPick(Promise.resolve([{ label: 'first' }]))
+    await settleAll()
+    expect(rec.calls).toEqual(['busy', 'fill'])
+
+    rec.settle(undefined)
+    await expect(pending).resolves.toBeUndefined()
+    service.dispose()
+  })
+
+  it('waits for the items before opening the multi-select picker', async () => {
+    const rec = recordingWindow()
+    const service = serviceWith(rec.impl)
+    const picked = await service.showQuickPick(Promise.resolve([{ label: 'a' }]), {
+      canPickMany: true,
+    })
+    expect(picked).toBeUndefined()
+    expect(rec.calls).toEqual(['show'])
+    service.dispose()
+  })
+
+  it('answers an empty multi-select list as a dismissal, without a panel', async () => {
+    const rec = recordingWindow()
+    const service = serviceWith(rec.impl)
+    // Same contract as the single-pick path: empty means dismissed, and the
+    // caller says whatever it has to say. An empty multi-select panel would
+    // just sit there with its OK button disabled.
+    const picked = await service.showQuickPick(Promise.resolve([]), { canPickMany: true })
+    expect(picked).toBeUndefined()
+    expect(rec.calls).toEqual([])
     service.dispose()
   })
 })

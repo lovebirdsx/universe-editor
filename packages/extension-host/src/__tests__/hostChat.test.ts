@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { IChatContextProviderDto, IMainThreadChat } from '@universe-editor/extensions-common'
-import type { ChatContextItem } from '@universe-editor/extension-api'
+import type { ChatContextItem, ChatContextResolveContext } from '@universe-editor/extension-api'
 import { HostChatContextRegistry } from '../hostChat.js'
 
 function fakeMainThread() {
@@ -13,13 +13,16 @@ function fakeMainThread() {
 }
 
 function fakeProvider(
-  resolve: (query: string) => ChatContextItem | undefined | Promise<ChatContextItem | undefined>,
+  resolve: (
+    query: string,
+    context: ChatContextResolveContext,
+  ) => ChatContextItem | undefined | Promise<ChatContextItem | undefined>,
 ) {
   return {
     label: 'Acme Changelists…',
     description: 'Pick one',
     keywords: ['acme', 'cl'],
-    resolve: (query: string) => resolve(query),
+    resolve: (query: string, context: ChatContextResolveContext) => resolve(query, context),
   }
 }
 
@@ -90,6 +93,21 @@ describe('HostChatContextRegistry', () => {
     const registry = new HostChatContextRegistry(fakeMainThread())
     registry.registerChatContextProvider(fakeProvider(() => undefined))
     await expect(registry.resolve(1, 'x')).resolves.toBeUndefined()
+  })
+
+  it('forwards the session context to the provider, and an empty one when absent', async () => {
+    const registry = new HostChatContextRegistry(fakeMainThread())
+    const seen: ChatContextResolveContext[] = []
+    registry.registerChatContextProvider(
+      fakeProvider((_query, context) => {
+        seen.push(context)
+        return { label: 'x', text: 'y' }
+      }),
+    )
+
+    await registry.resolve(1, 'cl', { sessionDir: 'X:/workspace/sub' })
+    await registry.resolve(1, 'cl')
+    expect(seen).toEqual([{ sessionDir: 'X:/workspace/sub' }, {}])
   })
 
   it('ignores handles that were never registered (or already disposed)', async () => {

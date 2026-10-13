@@ -4690,6 +4690,24 @@ export class PerforceClient {
     return out
   }
 
+  /**
+   * Pending numbered changelists with at least one opened file under `dir`,
+   * cache-only (`_changelistByPath` from the last refresh, no p4 call).
+   *
+   * A changelist whose opened files all sit outside `dir` is not listed, and
+   * neither is one that only holds shelved files — its files are not "opened",
+   * so the cached map has no entry pointing at it. The default changelist is
+   * never returned: it has no number and no description of its own.
+   */
+  pendingChangelistsUnder(dir: string): readonly PendingChangelist[] {
+    const ids = new Set<string>()
+    for (const [path, changelist] of this._changelistByPath) {
+      if (changelist !== 'default' && isUnderAny(path, [dir])) ids.add(changelist)
+    }
+    if (ids.size === 0) return []
+    return this._pending.filter((cl) => ids.has(cl.id))
+  }
+
   /** Shelve a changelist's open files (`p4 shelve -c <id>`), leaving them open.
    *  The default changelist can't be shelved directly (p4 requires a numbered CL);
    *  the command handler moves its files into a fresh numbered CL first. */

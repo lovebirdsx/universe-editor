@@ -769,6 +769,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'quickInput.filter.placeholder': '输入以筛选…',
   'quickInput.input.ariaLabel': '快速选择输入框',
   'quickInput.inputBox.ariaLabel': '输入框',
+  'quickInput.loading': '正在加载…',
   'quickInput.noResults': '没有结果',
   'quickInput.prefixHint': "输入 '{prefix}' 后接命令名称",
   'quickInput.quickNavigateHint': '松开 {modifier} 打开选中项 · 按 Enter 输入过滤',

@@ -11,7 +11,11 @@ import type {
   ChatContextProvider,
   Disposable,
 } from '@universe-editor/extension-api'
-import type { IChatContextItemDto, IMainThreadChat } from '@universe-editor/extensions-common'
+import type {
+  IChatContextItemDto,
+  IChatContextResolveContextDto,
+  IMainThreadChat,
+} from '@universe-editor/extensions-common'
 
 export class HostChatContextRegistry {
   private readonly _providers = new Map<number, ChatContextProvider>()
@@ -35,13 +39,17 @@ export class HostChatContextRegistry {
   }
 
   /** IExtHostChat.$resolveChatContextItem */
-  async resolve(handle: number, query: string): Promise<IChatContextItemDto | undefined> {
+  async resolve(
+    handle: number,
+    query: string,
+    context?: IChatContextResolveContextDto,
+  ): Promise<IChatContextItemDto | undefined> {
     const provider = this._providers.get(handle)
     if (!provider) {
       console.warn(`[ext-host] $resolveChatContextItem for unregistered provider: ${handle}`)
       return undefined
     }
-    const item: ChatContextItem | undefined = await provider.resolve(query)
+    const item: ChatContextItem | undefined = await provider.resolve(query, context ?? {})
     if (!item) return undefined
     return { label: item.label, text: item.text }
   }

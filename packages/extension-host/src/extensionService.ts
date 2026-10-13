@@ -118,6 +118,8 @@ import {
   type IMainThreadTreeViews,
   type IMainThreadChat,
   type IChatContextItemDto,
+  type IChatContextResolveContextDto,
+  type IExtHostQuickPickItemDto,
   type ITextDocumentShowOptionsDto,
   type ITimelineDto,
   type ITimelineOptionsDto,
@@ -256,6 +258,12 @@ const SET_TEXT_DOCUMENT_LANGUAGE_WAIT_MS = 5_000
  *  from center, so a very negative value keeps transient messages closest. */
 const STATUS_MESSAGE_PRIORITY = -1000
 
+/** `window.showQuickPick`'s two item shapes: a plain array, or a promise of one
+ *  for items that still have to be fetched. */
+function isPromiseLike<T>(value: T | Promise<T>): value is Promise<T> {
+  return typeof (value as { then?: unknown }).then === 'function'
+}
+
 /**
  * Glob → wire shape: a plain string crosses verbatim; a `RelativePattern` is
  * decomposed so the host never hands the renderer an extension's bundled
@@ -303,6 +311,8 @@ export class ExtensionService implements IExtensionHostBridge {
   private _decorationTypeHandle = 0
   private _languageConfigHandle = 0
   private _progressHandle = 0
+  /** Handles of busy quick picks opened for an async `showQuickPick` call. */
+  private _quickPickHandle = 0
   /** Cancellation sources of in-flight `withProgress` tasks, keyed by handle. */
   private readonly _progressCancels = new Map<number, CancellationTokenSource>()
   /** Bumped per active-editor change; a held-back (doc-pending) change only
@@ -488,10 +498,23 @@ export class ExtensionService implements IExtensionHostBridge {
   }
 
   showQuickPick(
-    items: readonly (string | QuickPickItem)[],
+    items: readonly (string | QuickPickItem)[] | Promise<readonly (string | QuickPickItem)[]>,
     options?: QuickPickOptions,
   ): Promise<string | QuickPickItem | (string | QuickPickItem)[] | undefined> {
-    const wireItems = items.map((it) =>
+    if (isPromiseLike(items)) return this._showQuickPickBusy(items, options)
+    return this._mainThreadWindow
+      .$showQuickPick(this._toWireQuickPickItems(items), options)
+      .then((result) => {
+        if (result === undefined) return undefined
+        if (Array.isArray(result)) return result.map((index) => items[index]!)
+        return items[result]
+      })
+  }
+
+  private _toWireQuickPickItems(
+    items: readonly (string | QuickPickItem)[],
+  ): Array<string | IExtHostQuickPickItemDto> {
+    return items.map((it) =>
       typeof it === 'string'
         ? it
         : {
@@ -503,11 +526,50 @@ export class ExtensionService implements IExtensionHostBridge {
             ...(it.labelColor !== undefined ? { labelColor: it.labelColor } : {}),
           },
     )
-    return this._mainThreadWindow.$showQuickPick(wireItems, options).then((result) => {
-      if (result === undefined) return undefined
-      if (Array.isArray(result)) return result.map((index) => items[index]!)
-      return items[result]
-    })
+  }
+
+  /**
+   * `window.showQuickPick` with items that are still being computed. The picker
+   * opens immediately (busy bar, host-allocated handle) so a fetch that takes
+   * seconds is visible instead of a dead input; the items then fill it in. A
+   * failed load tears the picker down and rethrows, so the extension's own
+   * error handling owns the message.
+   */
+  private async _showQuickPickBusy(
+    items: Promise<readonly (string | QuickPickItem)[]>,
+    options?: QuickPickOptions,
+  ): Promise<string | QuickPickItem | (string | QuickPickItem)[] | undefined> {
+    // Multi-select has no busy form: load first, then reuse the plain path
+    // rather than silently degrading to a single pick. An empty list has no
+    // picker to dismiss here, but resolves the same way the single-pick path
+    // documents it — as a dismissal — so callers see one contract.
+    if (options?.canPickMany === true) {
+      const resolved = await items
+      return resolved.length === 0 ? undefined : this.showQuickPick(resolved, options)
+    }
+    const handle = this._quickPickHandle++
+    const picked = this._mainThreadWindow.$showQuickPickBusy(handle, options)
+    let resolved: readonly (string | QuickPickItem)[]
+    try {
+      // Whoever lands first wins: a dismissal settles the call right away, so a
+      // load arriving afterwards is dropped instead of filling a panel nobody is
+      // looking at — which is also what keeps an empty-list notice from firing
+      // about a list the user never saw. Racing the load also swallows a late
+      // rejection (the race subscribes to both) instead of leaving it unhandled.
+      const outcome = await Promise.race([
+        picked.then(() => undefined),
+        items.then((list) => ({ list })),
+      ])
+      if (outcome === undefined) return undefined
+      resolved = outcome.list
+    } catch (err) {
+      await this._mainThreadWindow.$closeQuickPick(handle)
+      throw err
+    }
+    await this._mainThreadWindow.$setQuickPickItems(handle, this._toWireQuickPickItems(resolved))
+    // Map the index back against the *resolved* list — `items` is a promise.
+    const result = await picked
+    return result === undefined ? undefined : resolved[result]
   }
 
   showInputBox(options?: InputBoxOptions): Promise<string | undefined> {
@@ -774,8 +836,12 @@ export class ExtensionService implements IExtensionHostBridge {
   }
 
   /** IExtHostChat.$resolveChatContextItem */
-  resolveChatContextItem(handle: number, query: string): Promise<IChatContextItemDto | undefined> {
-    return this._chat?.resolve(handle, query) ?? Promise.resolve(undefined)
+  resolveChatContextItem(
+    handle: number,
+    query: string,
+    context?: IChatContextResolveContextDto,
+  ): Promise<IChatContextItemDto | undefined> {
+    return this._chat?.resolve(handle, query, context) ?? Promise.resolve(undefined)
   }
 
   // --- IExtensionHostBridge: workspace ---

@@ -49,7 +49,7 @@ export function activate(context: ExtensionContext) {
 与用户打交道的入口，全部经宿主渲染进程呈现：
 
 - **消息提示**：`showInformationMessage` / `showWarningMessage` / `showErrorMessage`，可附带按钮项，resolve 用户点中的那一项（未点则为 `undefined`）。
-- **`showQuickPick`**：两重重载——传 `string[]` 返回选中的字符串；传 `QuickPickItem[]`（带 `label` / `description` / `detail` / `iconId`）返回选中的那一项对象。
+- **`showQuickPick`**：两重重载——传 `string[]` 返回选中的字符串；传 `QuickPickItem[]`（带 `label` / `description` / `detail` / `iconId`）返回选中的那一项对象。`items` 也可以传 **Promise**（0.17.0 起）：picker 立即打开，promise 完成时填充——慢查询（网络、外部进程）期间界面不再静默；取数慢到值得等待时顶部还会出现不确定进度条（阈值由宿主定，命中缓存的那种快取回不会闪一条动画）。空数组会关闭 picker 并返回 `undefined`（与用户取消同形，调用方自己决定是否提示）；取数期间用户关掉面板会立刻返回 `undefined` 并丢弃迟到结果；promise 拒绝则关闭 picker 并把错误抛回调用方。**多选（`canPickMany: true`）没有忙碌形态**：先等 promise 落地再开面板（多选没有「填充」这一态），空数组同样返回 `undefined`、不弹面板。
 - **`showInputBox`**：单行文本输入。
 - **`createStatusBarItem`**：状态栏条目，`text` 里写 `$(icon)` 前缀可渲染图标；设好属性后调 `show()` 生效。
 - **`setStatusBarMessage`**：一次性状态栏消息，三重载——返回 `Disposable` 提前撤下、传毫秒数超时自动隐藏、传 Promise 待其 settle 后隐藏。每次调用相互独立共存，不是 VSCode 的消息栈。
@@ -72,6 +72,8 @@ const branch = await window.showQuickPick(
   [{ label: 'main', description: '当前分支' }, { label: 'dev' }],
   { placeHolder: '切换分支' },
 )
+// 慢查询：把 Promise 直接交给 picker，它立刻打开，数据到了再填充。
+const record = await window.showQuickPick(fetchRecords(), { placeHolder: '选择一条记录' })
 const name = await window.showInputBox({ prompt: '输入名字', value: '默认值' })
 
 const item = window.createStatusBarItem(StatusBarAlignment.Right, 100)
@@ -224,7 +226,11 @@ const api = await ts?.activate() // 未激活则先激活；已激活直接拿 e
 
 把扩展自己的数据源接进 Agent 输入框的 `#` 面板：`chat.registerChatContextProvider(provider)` 注册后，面板里出现**一条入口项**（`label` / `description?` / `iconId?` / `keywords`），用户敲 `#` 后的文本与 `keywords`、`label` 做大小写不敏感子串匹配（空查询列出全部）。`iconId` 取工作台图标名（如 `history` / `changelist` / `git-pull-request`），未知名字回退通用字形。
 
-采用**两步式**：接受入口项时宿主回调 `provider.resolve(query)`，候选项留在扩展侧——你自己弹 `window.showQuickPick` 选一个并返回 `ChatContextItem`（用户取消就返回 `undefined`，什么都不会插入），返回的 `label` 成为输入框里的引用药丸。因此候选集再大也只占面板一行。`query` 是**匹配上的那个片段**（本次命中的 keyword 或 label 的一部分，如敲 `#cl` 得到 `'cl'`）——入口项只在匹配时才出现，所以它不会是任意搜索串；要让用户挑具体条目，交给自己的 QuickPick。
+采用**两步式**：接受入口项时宿主回调 `provider.resolve(query, context)`，候选项留在扩展侧——你自己弹 `window.showQuickPick` 选一个并返回 `ChatContextItem`（用户取消就返回 `undefined`，什么都不会插入），返回的 `label` 成为输入框里的引用药丸。因此候选集再大也只占面板一行。`query` 是**匹配上的那个片段**（本次命中的 keyword 或 label 的一部分，如敲 `#cl` 得到 `'cl'`）——入口项只在匹配时才出现，所以它不会是任意搜索串；要让用户挑具体条目，交给自己的 QuickPick。
+
+`context.sessionDir`（0.17.0 起）是**当前会话的根目录**（agent 的 cwd；只有会话被限定到子目录时才与打开的文件夹不同），候选跨整个工作区时可按它收窄——例如只列出该目录下的变更。它可能缺席（没有工作区、或 cwd 在文件夹之外），按「不限定」处理。
+
+慢查询请把 **Promise 交给 `showQuickPick`**（0.17.0 起）而不是先 `await` 再弹：picker 立刻出现，用户看得见扩展在工作（慢查询顶部会有进度条，快取回没有）；列表为空时宿主会关掉它，此时自己 `showInformationMessage` 说明原因（空列表与用户取消在返回值上同形，可在 loader 闭包里记下结果区分；用户中途关掉面板时迟到的结果会被丢弃、不会触发这条提示）。同理，**需要同步判断的前置检查（未配置、未登录）要放在 `showQuickPick` 之前**，否则 picker 会一闪即关。
 
 `ChatContextItem.text` 是**模型唯一能看到的内容**：内置 agent 会丢弃 `resource_link` 的 name/description/_meta，所以 id、路径、URL 等结构化信息必须写进 `text`（它作为一个 `text` 块发送）。
 
@@ -238,18 +244,18 @@ export function activate(context: ExtensionContext) {
       description: '把一条记录加入对话',
       iconId: 'bookmark',
       keywords: ['record', 'rec', '记录'],
-      async resolve(query) {
-        const picks = await listRecords(query) // 你自己的数据源
+      async resolve(query, { sessionDir }) {
+        let loaded: Record[] = []
+        const picks = listRecords(query, sessionDir).then((r) => (loaded = r)) // 你自己的数据源
         const picked = await window.showQuickPick(
-          picks.map((r) => ({ label: r.id, description: r.summary })),
+          picks.then((r) => r.map((x) => ({ label: x.id, description: x.summary }))),
           { placeHolder: '选择一条记录' },
         )
-        return (
-          picked && {
-            label: `Record ${picked.label}`,
-            text: `Record ${picked.label}: ${picked.description}`,
-          }
-        )
+        if (picked) {
+          return { label: `Record ${picked.label}`, text: `Record ${picked.label}: ${picked.description}` }
+        }
+        if (loaded.length === 0) await window.showInformationMessage('没有可添加的记录。')
+        return undefined
       },
     }),
   )

@@ -158,7 +158,7 @@ export interface IExtensionHostBridge {
     items: string[],
   ): Promise<string | undefined>
   showQuickPick(
-    items: readonly (string | QuickPickItem)[],
+    items: readonly (string | QuickPickItem)[] | Promise<readonly (string | QuickPickItem)[]>,
     options?: QuickPickOptions,
   ): Promise<string | QuickPickItem | (string | QuickPickItem)[] | undefined>
   showInputBox(options?: InputBoxOptions): Promise<string | undefined>

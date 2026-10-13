@@ -446,8 +446,20 @@ export class ExtensionContextProvider {
       }))
   }
 
-  /** Run the provider's own picker host-side; undefined when the user cancelled. */
-  resolve(handle: number, query: string): Promise<IChatContextItemDto | undefined> {
-    return this._chatContext.resolveItem(handle, query)
+  /**
+   * Run the provider's own picker host-side; undefined when the user cancelled.
+   * `sessionDir` scopes a provider whose candidates span the workspace (see
+   * `ChatContextResolveContext`).
+   */
+  resolve(
+    handle: number,
+    query: string,
+    sessionDir?: string,
+  ): Promise<IChatContextItemDto | undefined> {
+    return this._chatContext.resolveItem(
+      handle,
+      query,
+      sessionDir !== undefined ? { sessionDir } : undefined,
+    )
   }
 }

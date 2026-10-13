@@ -1016,8 +1016,10 @@ export function PromptInput({
       setHashDismissed(true)
       setHashIndex(0)
       if (handle === undefined) return
+      // The session's own directory scopes the provider's candidate space — the
+      // same root the mention listing and the `#` entries are filtered by.
       void ensureContextProviders()
-        .chatContext.resolve(handle, q.query)
+        .chatContext.resolve(handle, q.query, mentionRoot?.fsPath)
         .then((item) => {
           if (item) editorHandleRef.current?.insertRef(chatContextItemToRef(item), caret, caret)
           requestAnimationFrame(() => editorHandleRef.current?.focus())

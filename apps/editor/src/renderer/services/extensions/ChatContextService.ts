@@ -15,6 +15,7 @@ import { createDecorator, Disposable } from '@universe-editor/platform'
 import type {
   IChatContextItemDto,
   IChatContextProviderDto,
+  IChatContextResolveContextDto,
   IExtHostChat,
   IMainThreadChat,
 } from '@universe-editor/extensions-common'
@@ -30,7 +31,11 @@ export interface IChatContextService {
   setExtHost(extHost: IExtHostChat): void
   getProviders(): readonly IChatContextProviderEntry[]
   /** Run the provider's own picker host-side and return the accepted item. */
-  resolveItem(handle: number, query: string): Promise<IChatContextItemDto | undefined>
+  resolveItem(
+    handle: number,
+    query: string,
+    context?: IChatContextResolveContextDto,
+  ): Promise<IChatContextItemDto | undefined>
   /** Drop every provider (extension host torn down). */
   reset(): void
 }
@@ -51,10 +56,14 @@ export class ChatContextService extends Disposable implements IChatContextServic
     return [...this._providers].map(([handle, provider]) => ({ handle, provider }))
   }
 
-  async resolveItem(handle: number, query: string): Promise<IChatContextItemDto | undefined> {
+  async resolveItem(
+    handle: number,
+    query: string,
+    context?: IChatContextResolveContextDto,
+  ): Promise<IChatContextItemDto | undefined> {
     if (!this._providers.has(handle) || !this._extHost) return undefined
     try {
-      return await this._extHost.$resolveChatContextItem(handle, query)
+      return await this._extHost.$resolveChatContextItem(handle, query, context)
     } catch (err) {
       console.warn(
         `[chatContext] $resolveChatContextItem(${handle}) failed: ${(err as Error).message}`,

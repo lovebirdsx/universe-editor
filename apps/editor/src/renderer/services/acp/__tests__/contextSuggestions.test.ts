@@ -537,6 +537,13 @@ describe('ExtensionContextProvider', () => {
       vi.fn(() => Promise.resolve(item)),
     )
     await expect(provider.resolve(7, 'acme')).resolves.toEqual(item)
-    expect(resolveItem).toHaveBeenCalledWith(7, 'acme')
+    expect(resolveItem).toHaveBeenCalledWith(7, 'acme', undefined)
+  })
+
+  it('resolve() passes the session directory through as the scope context', async () => {
+    const { provider, resolveItem } = makeExtensionProvider([{ handle: 7, provider: acme }])
+
+    await provider.resolve(7, 'acme', 'X:/workspace/sub')
+    expect(resolveItem).toHaveBeenLastCalledWith(7, 'acme', { sessionDir: 'X:/workspace/sub' })
   })
 })

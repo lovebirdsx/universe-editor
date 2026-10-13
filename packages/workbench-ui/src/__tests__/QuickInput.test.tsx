@@ -3,8 +3,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, createEvent, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, createEvent, fireEvent, render, screen } from '@testing-library/react'
 import { QuickPickPanel } from '../feedback/quickInput/QuickInputPanel.js'
+import { BUSY_BAR_DELAY_MS } from '../feedback/quickInput/QuickInputProgress.js'
 import type { QuickPickState } from '../feedback/quickInput/quickInputViewModel.js'
 import { IQuickInputButton, type QuickPickInput } from '@universe-editor/platform'
 
@@ -1848,5 +1849,146 @@ describe('QuickPickPanel toolbar buttons', () => {
     // handled on the input, so a button that keeps focus would swallow all three
     // — Enter would re-trigger the button instead of confirming.
     expect(document.activeElement).toBe(screen.getByTestId('quick-input-field'))
+  })
+})
+
+describe('QuickPickPanel empty list', () => {
+  it('says "no results" once a settled picker has nothing to show', () => {
+    render(
+      <QuickPickPanel
+        state={makeState({ prefix: undefined, items: [] })}
+        onClose={() => undefined}
+      />,
+    )
+    expect(screen.getByText('No results')).toBeTruthy()
+  })
+
+  it('shows a loading placeholder instead while a busy picker is still filling', () => {
+    render(
+      <QuickPickPanel
+        state={makeState({ prefix: undefined, items: [], busy: true })}
+        onClose={() => undefined}
+      />,
+    )
+    // "No results" would be a verdict the picker cannot give yet — the async
+    // items are still in flight (e.g. an extension querying p4/Swarm).
+    expect(screen.getByText('Loading…')).toBeTruthy()
+    expect(screen.queryByText('No results')).toBeNull()
+  })
+})
+
+describe('QuickPickPanel busy bar', () => {
+  // Scoped to this describe: the sibling ones keep real timers, and vitest runs
+  // the innermost afterEach first, so timers are real again before the file-level
+  // `cleanup()` unmounts anything.
+  afterEach(() => {
+    cleanup()
+    vi.useRealTimers()
+  })
+
+  function renderBusy(extra: Partial<QuickPickState> = {}) {
+    return render(
+      <QuickPickPanel
+        state={makeState({ prefix: undefined, items: [], busy: true, ...extra })}
+        onClose={() => undefined}
+      />,
+    )
+  }
+
+  function panel(state: Partial<QuickPickState>) {
+    return (
+      <QuickPickPanel
+        state={makeState({ prefix: undefined, ...state })}
+        onClose={() => undefined}
+      />
+    )
+  }
+
+  const bar = () => screen.queryByTestId('quick-input-busy')
+
+  it('holds the bar back until the load outlasts the threshold', () => {
+    vi.useFakeTimers()
+    renderBusy()
+
+    expect(bar()).toBeNull()
+    act(() => {
+      vi.advanceTimersByTime(BUSY_BAR_DELAY_MS - 1)
+    })
+    expect(bar()).toBeNull()
+
+    act(() => {
+      vi.advanceTimersByTime(1)
+    })
+    expect(bar()).toBeTruthy()
+  })
+
+  it('drops the bar as soon as busy clears, without waiting for a timer', () => {
+    vi.useFakeTimers()
+    const { rerender } = renderBusy()
+    act(() => {
+      vi.advanceTimersByTime(BUSY_BAR_DELAY_MS)
+    })
+    expect(bar()).toBeTruthy()
+
+    rerender(panel({ items: [{ id: 'a', label: 'A' }] }))
+    expect(bar()).toBeNull()
+  })
+
+  it('re-arms the delay on a fresh busy edge', () => {
+    vi.useFakeTimers()
+    const { rerender } = renderBusy()
+    act(() => {
+      vi.advanceTimersByTime(BUSY_BAR_DELAY_MS - 300)
+    })
+    expect(bar()).toBeNull()
+
+    rerender(panel({ items: [] }))
+    rerender(panel({ items: [], busy: true }))
+    act(() => {
+      vi.advanceTimersByTime(BUSY_BAR_DELAY_MS - 300)
+    })
+    // The second edge starts its own clock instead of inheriting the first one.
+    expect(bar()).toBeNull()
+
+    act(() => {
+      vi.advanceTimersByTime(300)
+    })
+    expect(bar()).toBeTruthy()
+  })
+
+  it('keeps the bar up while a busy picker is still filling in items', () => {
+    vi.useFakeTimers()
+    const { rerender } = renderBusy()
+    act(() => {
+      vi.advanceTimersByTime(BUSY_BAR_DELAY_MS)
+    })
+
+    rerender(panel({ items: [{ id: 'a', label: 'A' }], busy: true }))
+    expect(bar()).toBeTruthy()
+
+    rerender(panel({ items: [{ id: 'a', label: 'A' }] }))
+    expect(bar()).toBeNull()
+  })
+
+  it('marks the list busy from the first frame, before any bar is painted', () => {
+    vi.useFakeTimers()
+    renderBusy()
+
+    expect(screen.getByRole('listbox').getAttribute('aria-busy')).toBe('true')
+    expect(bar()).toBeNull()
+    // The loading row is the immediate signal; only the animation waits.
+    expect(screen.getByText('Loading…')).toBeTruthy()
+  })
+
+  it('clears the busy state once the picker has settled', () => {
+    vi.useFakeTimers()
+    const { rerender } = renderBusy()
+    act(() => {
+      vi.advanceTimersByTime(BUSY_BAR_DELAY_MS)
+    })
+    expect(screen.getByRole('listbox').getAttribute('aria-busy')).toBe('true')
+
+    rerender(panel({ items: [] }))
+    expect(screen.getByRole('listbox').hasAttribute('aria-busy')).toBe(false)
   })
 })

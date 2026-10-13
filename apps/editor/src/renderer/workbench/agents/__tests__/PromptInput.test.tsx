@@ -1864,7 +1864,8 @@ describe('PromptInput — # extension chat-context flow', () => {
     expect(ta.value).not.toContain('#changelist')
 
     await waitFor(() => expect(ta.value).toContain('#Perforce changelist 1234'))
-    expect(chatContext.resolveItem).toHaveBeenCalledWith(3, 'changelist')
+    // The workspace folder doubles as the session root, so it scopes the provider.
+    expect(chatContext.resolveItem).toHaveBeenCalledWith(3, 'changelist', { sessionDir: '/repo' })
 
     fireEvent.keyDown(ta, { key: 'Enter' })
     const [, refs] = session.sendPrompt.mock.calls[0]!
@@ -1892,6 +1893,22 @@ describe('PromptInput — # extension chat-context flow', () => {
     typeAt(ta, 'hello')
     fireEvent.keyDown(ta, { key: 'Enter' })
     expect(session.sendPrompt).toHaveBeenCalledWith('hello', [], [], [])
+  })
+
+  it('scopes the provider to the session subdirectory, not the workspace root', async () => {
+    const session = makeSession({ cwd: '/repo/sub' })
+    const chatContext = makeChatContextService(PROVIDERS, ITEM)
+    renderWithServices(<PromptInput session={session} />, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+      chatContext,
+    })
+    await openEntry(getTextarea())
+
+    await waitFor(() =>
+      expect(chatContext.resolveItem).toHaveBeenCalledWith(3, 'changelist', {
+        sessionDir: '/repo/sub',
+      }),
+    )
   })
 
   it('an unrelated query never surfaces an extension entry', async () => {

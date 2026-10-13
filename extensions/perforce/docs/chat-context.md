@@ -11,10 +11,12 @@
 
 两个 provider 在 `activate` 里注册（`extensions/perforce/src/extension.ts`）：无 workspace root / 无 client 时 `activate` 早已 return，所以**注册点本身就是「p4 插件生效时才出现」的门控**，不需要新 activation event。
 
-流程是**两步式**：`#` 面板只显示一条入口项（label + `keywords`，匹配为大小写不敏感子串），用户接受后宿主回调 `resolve()`，由扩展自己弹 `window.showQuickPick` 选真正的条目，返回的 `ChatContextItem` 才成为药丸——候选集（几千个 CL）因此永不离开扩展进程。`ChatPickItem.item` 挂在 pick 行上随 `showQuickPick` 往返，这是把载荷带出 picker 的手段。
+流程是**两步式**：`#` 面板只显示一条入口项（label + `keywords`，匹配为大小写不敏感子串），用户接受后宿主回调 `resolve(query, context)`，由扩展自己弹 `window.showQuickPick` 选真正的条目，返回的 `ChatContextItem` 才成为药丸——候选集（几千个 CL）因此永不离开扩展进程。`ChatPickItem.item` 挂在 pick 行上随 `showQuickPick` 往返，这是把载荷带出 picker 的手段。
 
-- **changelist**：待定 CL（`client.changelistPicks()`，取自上次 refresh 的缓存，**不发 p4 调用**，跳过 `default`/`new`）+ 最近已提交（`client.getGraphChanges(30, [buildScopeFilespec(root, true)])`，与 Graph 共用 `P4CacheNs.changesSubmitted` 缓存）；两段合并去重，待定在前。
-- **swarm review**：`listReviews({ max: 50 })`，注册函数由 `swarm/swarmCommands.ts` 调用，直接复用那里的 `readSwarmConfig()` / `guard()`（未配置 → 提示 `perforce.swarm.notConfigured`；未授权 → 登录流程；错误 → toast），**不绕命令层**，避免 ext-host → renderer → ext-host 的往返。URL 由 `swarmReviewUrl(baseUrl, id)` 拼。
+**取数期间不留白**：`pickItem` 把 loader **promise 交给 `showQuickPick`**（不是先 `await` 再弹），picker 立刻弹出，p4 / Swarm 的往返期间用户看得到东西（列表区立即显示「Loading…」；顶部进度条由 workbench-ui 的 `BUSY_BAR_DELAY_MS` 节流——**慢于 800ms 的加载才画**，快取回不留一条闪过的动画）；空列表由扩展关掉 picker 并弹 info 提示（`settled && loaded.length === 0` 判定——用户在加载期间按 Esc 不算「没有可添加的」，不会事后被弹一条空提示；面板一关，`showQuickPick` 立刻以 `undefined` 结算，不继续等取数）。因此**能同步（或只读配置）拿到的判断必须在 `showQuickPick` 之前做完**——例如 Swarm 未配置的提示若放进 loader，picker 会一闪即关。
+
+- **changelist**：范围是**当前 session 所在目录**（`context.sessionDir`，不在任何 client 内时回退整个 client root）——pending 用 `client.pendingChangelistsUnder(scopeDir)`（取自上次 refresh 的 `_changelistByPath` 缓存，**不发 p4 调用**；跳过 `default`），submitted 用 `client.getGraphChanges(100, [buildScopeFilespec(scopeDir, true)])`（与 Graph 共用 `P4CacheNs.changesSubmitted` 缓存）；两段合并去重后**整体截断到 100 条**（`MAX_CHANGELIST_PICKS`，pending 优先保留）。**只有 shelf、没有 opened 文件的 CL 不会出现在按目录过滤后的 pending 列表里**（缓存映射的是 opened 文件）。
+- **swarm review**：`SwarmClient.dashboard({ needsActionAuthors, windowDays })`——**同一份侧栏配置**（沿用 `perforce.swarm.reviewWindowDays` 与 `perforce.swarm.needsActionAuthors`），`needsAction` 在前、`authored` 在后，`mergeSwarmPicks` 按 id 去重（同一 review 两组都出现时只留一条）。注册函数由 `swarm/swarmCommands.ts` 调用，直接复用那里的 `readSwarmConfig()` / `guard()`（未配置 → 提示 `perforce.swarm.notConfigured`；未授权 → 登录流程；错误 → toast），**不绕命令层**，避免 ext-host → renderer → ext-host 的往返。URL 由 `swarmReviewUrl(baseUrl, id)` 拼。**两段式**：配置判断（便宜，只读配置）在 `showQuickPick` 之前决定要不要开 picker，`dashboard` 网络请求放在 `loadReviews`（loader）里，进度条覆盖它。
 - 候选为空（`pickItem`）与用户取消都返回 `undefined`——renderer 什么都不插入。
 - 文案在 `src/nls.ts` 的 `perforce.chat.*`（label / description / empty / placeholder + `state.pending` / `state.submitted`）。
 
@@ -41,4 +43,4 @@ pnpm --filter @universe-editor/perforce test    # chatContext.test.ts 钉住 pic
 pnpm check
 ```
 
-手测（dev + p4 workspace）：`#changelist` / `#cl` / `#swarm` → 扩展 QuickPick → 药丸；三个右键入口各注入一次，正文与 `#` 路径一致。
+手测（dev + p4 workspace，建议把 session cwd 放到 client root 的子目录）：`#changelist` / `#cl` / `#swarm` → picker **立即**出现（顶部进度条只在取数慢于 800ms 时出现）→ 填充后列表只含本目录相关的条目（≤100）→ 药丸；Swarm 列表「需要我处理」在前、「我发起的」在后且无重复；取数期间 Esc 立刻关闭且**立刻结束调用**（不等 dashboard 返回）、无残留面板、扩展侧无报错；三个右键入口各注入一次，正文与 `#` 路径一致。

@@ -344,6 +344,8 @@ describe('CommitRefPicker', () => {
     expect(ref).toBeUndefined()
     expect(notification.notified).toHaveLength(1)
     expect(notification.notified[0]?.severity).toBe(Severity.Error)
-    expect(quickInput.picker?.disposed).toBe(true)
+    // Hidden, not disposed: `dispose()` only tears down the emitters and would
+    // strand the busy panel on screen.
+    expect(quickInput.picker?.shown).toBe(false)
   })
 })

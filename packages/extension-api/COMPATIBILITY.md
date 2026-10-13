@@ -387,6 +387,29 @@ preflight 守护。扩展在自己的 `package.json` 里用 `engines.universe` �
   - 宿主协议配套：新增 RPC 通道 `mainThreadChat` / `extHostChat`（内部实现细节，
     不影响扩展侧表面）。
 
+- `0.17.0` — 向后兼容的新增（minor，2026-10-13）：`#` 上下文取数期间的忙碌
+  picker，以及 provider 的会话范围。纯新增，既有写法无需改动：
+  - **`window.showQuickPick` 接受 Promise**：`items` 可以是
+    `Promise<readonly (string | QuickPickItem)[]>`（三个新重载，与既有同步重载
+    一一对应，含 `canPickMany: true`）。picker **立即打开**，promise 完成时填充
+    列表；取数慢于绘制阈值（800ms）时顶部才出现不确定进度条，命中缓存的快取回
+    不闪动画。语义：
+    - 空数组 → **关闭 picker 并 resolve `undefined`**（调用方自己决定提示什么，
+      例如 `window.showInformationMessage`）——「空」与「用户取消」在返回值上
+      同形，需要区分的调用方在 loader 闭包里记下结果。
+    - promise 拒绝 → 关闭 picker 并把错误抛给调用方。
+    - 用户在数据到达前取消 → 同样 resolve `undefined`，且**立刻结算**：之后完成的
+      loader 结果被丢弃（不会再去填一个已关掉的面板），其失败也不再上抛。
+    - `canPickMany: true` 时先 `await` 再走多选面板（多选没有「填充」这一态）。
+  - **`ChatContextProvider.resolve(query, context)`** 增加第二参
+    `ChatContextResolveContext { readonly sessionDir?: string }`——当前 session
+    的根目录（agent 的 cwd；仅在 session 被限定到子目录时与打开的文件夹不同）。
+    provider 据此把自己的候选收窄到该目录；`sessionDir` 可能缺席（无 workspace
+    或 cwd 不在文件夹内），按「不限定」处理。只写一个参数的现有实现仍可赋值，
+    无需改动。
+  - 配套内部改动（不影响扩展侧表面）：宿主在中途接管 busy picker 时不会遗留挂起的
+    RPC；`QuickInputService` 的单面板槽位在换主时先触发前一位的 `onHide`。
+
 ## 激活事件清单（activation events）
 
 扩展在 `package.json` 的 `activationEvents` 声明唤醒时机。手写字符串易拼错（拼错则

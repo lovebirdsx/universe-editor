@@ -379,8 +379,8 @@ const extHostTreeViews: IExtHostTreeViews = {
   },
 }
 const extHostChat: IExtHostChat = {
-  $resolveChatContextItem: async (handle, query) =>
-    (await serviceReady).resolveChatContextItem(handle, query),
+  $resolveChatContextItem: async (handle, query, context) =>
+    (await serviceReady).resolveChatContextItem(handle, query, context),
 }
 
 server.registerChannel(ExtHostChannels.extHostCommands, ProxyChannel.fromService(extHostCommands))

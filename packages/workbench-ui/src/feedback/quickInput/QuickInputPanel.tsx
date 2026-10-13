@@ -32,6 +32,7 @@ import { localize } from '@universe-editor/platform'
 import { ctrlNavigationKey } from '../../keybinding/ctrlNavigation.js'
 import { fuzzyScore, wordMatchField } from '../../text/fuzzyMatch.js'
 import type { QuickPickState } from './quickInputViewModel.js'
+import { QuickInputProgress } from './QuickInputProgress.js'
 import styles from './QuickInput.module.css'
 
 /** Resolve an icon id to an element. Returns null to render nothing. */
@@ -1075,12 +1076,13 @@ export function QuickPickPanel({
           </button>
         )}
       </div>
-      {state.busy === true && (
-        <div className={styles['progress']} data-testid="quick-input-busy">
-          <div className={styles['progressBar']} />
-        </div>
-      )}
-      <div className={styles['list']} role="listbox" ref={listRef}>
+      <QuickInputProgress busy={state.busy === true} />
+      <div
+        className={styles['list']}
+        role="listbox"
+        aria-busy={state.busy === true || undefined}
+        ref={listRef}
+      >
         {prefixMissing ? (
           <p className={styles['empty']}>
             {localize('quickInput.prefixHint', "Type '{prefix}' followed by a command name", {
@@ -1088,7 +1090,13 @@ export function QuickPickPanel({
             })}
           </p>
         ) : sortedFiltered.length === 0 ? (
-          <p className={styles['empty']}>{localize('quickInput.noResults', 'No results')}</p>
+          // While busy the list is still being computed — "No results" would be
+          // a verdict the picker cannot give yet.
+          <p className={styles['empty']}>
+            {state.busy === true
+              ? localize('quickInput.loading', 'Loading…')
+              : localize('quickInput.noResults', 'No results')}
+          </p>
         ) : (
           <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
             {virtualizer.getVirtualItems().map((virtualRow) => {
@@ -1301,11 +1309,7 @@ function InputPanel({ state, onClose }: { state: QuickPickState; onClose: () => 
           spellCheck={false}
         />
       </div>
-      {state.busy === true && (
-        <div className={styles['progress']} data-testid="quick-input-busy">
-          <div className={styles['progressBar']} />
-        </div>
-      )}
+      <QuickInputProgress busy={state.busy === true} />
       {error && (
         <p className={styles['empty']} style={{ color: '#f14c4c' }}>
           {error}

@@ -21,6 +21,22 @@ export interface ChatContextItem {
   text: string
 }
 
+/** Where the session that accepted the entry item is rooted. */
+export interface ChatContextResolveContext {
+  /**
+   * Absolute path of the directory this session's prompt input is rooted at —
+   * the agent's working directory when the session is scoped to a
+   * subdirectory of the open folder, otherwise the folder itself. Undefined
+   * when no folder is open.
+   *
+   * A provider whose candidate space spans the whole workspace (changelists,
+   * changes, …) should narrow it to this directory: what the user wants to
+   * reference is what they are working on. A source that cannot contain it
+   * must fall back to its own default scope rather than invent one.
+   */
+  readonly sessionDir?: string
+}
+
 /** Contributes one `#` entry to the agent input's context popover. */
 export interface ChatContextProvider {
   /** Entry-item label shown in the `#` popover, e.g. `Perforce Changelist…`. */
@@ -46,8 +62,15 @@ export interface ChatContextProvider {
    * surfaced this entry — one of your keywords, or part of your label; it
    * cannot be an arbitrary search string, since the entry only appears on a
    * match (`#cl` arrives as `'cl'`, `#changelist` as `'changelist'`).
+   *
+   * `context` describes where the session is rooted. When the candidates need
+   * a fetch, pass a promise to `showQuickPick` so the picker opens immediately
+   * with a progress bar rather than after the round trip.
    */
-  resolve(query: string): Promise<ChatContextItem | undefined> | ChatContextItem | undefined
+  resolve(
+    query: string,
+    context: ChatContextResolveContext,
+  ): Promise<ChatContextItem | undefined> | ChatContextItem | undefined
 }
 
 /** The `chat` namespace. */
