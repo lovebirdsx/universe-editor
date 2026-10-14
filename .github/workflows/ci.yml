@@ -197,21 +197,29 @@ jobs:
             turbo-${{ runner.os }}-
 
       - name: Build toolchain packages
+        # sdk-build-filter: must cover the whole SDK_PACKAGE_SHORT_NAMES set
+        # (scripts/lib/sdk-packages.mjs) — template-smoke's assertDist needs every
+        # packed package's dist, and turbo's ^build only pulls in the ones the
+        # filtered packages depend on (e2e-contract/e2e-harness are in nobody's
+        # dependency tree here). Drift is caught by scripts/toolchain/__tests__/lib.test.mjs.
+        # TURBO_CONCURRENCY: same Windows spawn contention the other jobs document:
+        # turbo fans out one tsgo per package and a neighbour can die at DLL init
+        # (0xC0000142) before doing any work. 10 is turbo's own default, so the
+        # non-Windows leg is unchanged rather than silently serialised. Scoped to
+        # this step because it is the only turbo phase here — `pnpm test:templates`
+        # shells out to tsc/npm directly, never turbo.
         env:
-          # Same Windows spawn contention the other jobs document: turbo fans out
-          # one tsgo per package and a neighbour can die at DLL init (0xC0000142)
-          # before doing any work. 10 is turbo's own default, so the non-Windows
-          # leg is unchanged rather than silently serialised. Scoped to this step
-          # because it is the only turbo phase here — `pnpm test:templates` shells
-          # out to tsc/npm directly, never turbo.
           TURBO_CONCURRENCY: ${{ runner.os == 'Windows' && 2 || 10 }}
         run: >-
           pnpm build
+          --filter=@universe-editor/primitives
           --filter=@universe-editor/extension-api
           --filter=@universe-editor/extension-manifest
           --filter=@universe-editor/extension-packaging
           --filter=@universe-editor/uex
           --filter=@universe-editor/create-extension
+          --filter=@universe-editor/e2e-contract
+          --filter=@universe-editor/e2e-harness
 
       # Windows can kill the spawned process during DLL init (0xC0000142
       # STATUS_DLL_INIT_FAILED). Observed shape: ~27ms of runtime, zero output, the
@@ -219,6 +227,9 @@ jobs:
       # templates, SDK or CLI. Retry is the only real mitigation, and it is safe
       # here because template-smoke builds its own temp root (idempotent re-run).
       # A genuine template/SDK break fails both attempts and still reds the job.
+      # This DLL-init kill is now the *only* reason for the retry: the smoke no
+      # longer resolves @universe-editor/* from the registry, so it cannot red on
+      # a version that has not replicated yet.
       - name: External consumer smoke (scaffold/sample → npm i → build → uex package)
         id: template-smoke
         continue-on-error: true

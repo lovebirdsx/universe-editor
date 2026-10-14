@@ -1,7 +1,10 @@
 /*---------------------------------------------------------------------------------------------
  *  外部 SDK 发布集合清单（目录序 = 发布拓扑序：依赖先于被依赖）。
- *  scripts/ext-packages/publish.mjs 与 scripts/gallery/publish-sdk.mjs 共用；
- *  人读版清单在 docs/development/publishing-sdk.md 的「发布集合」节，改这里要同步改文档。
+ *  scripts/ext-packages/publish.mjs、scripts/gallery/publish-sdk.mjs 与
+ *  scripts/toolchain/template-smoke.mjs（pack 集合，脚手架依赖闭包由该脚本现算）共用；
+ *  人读版清单在 docs/development/publishing-sdk.md 的「发布集合」节，改这里要同步改文档
+ *  与 CI 的 toolchain build filter（.github/workflows/ci.yml，护栏见
+ *  scripts/toolchain/__tests__/lib.test.mjs）。
  *--------------------------------------------------------------------------------------------*/
 
 export const SDK_PACKAGE_DIRS = [

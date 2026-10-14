@@ -17,6 +17,8 @@
 | `@universe-editor/e2e-contract` | 独立 semver，有对外可见变更才发 | `window.__E2E__` 探针的类型/常量 |
 | `@universe-editor/e2e-harness` | **minor 跟随编辑器 minor** | Playwright fixtures / 页面对象 / launch 辅助 |
 
+**与冒烟 CI 的关系**：`scripts/toolchain/template-smoke.mjs` 的 pack 集合就是上表（`scripts/lib/sdk-packages.mjs` 的 `SDK_PACKAGE_DIRS`），脚手架工程的 SDK 依赖闭包由脚本从各包 `package.json` 现算，新增模板/SDK 依赖自动进闭包。闭包越出本表、或 CI 的 toolchain build filter 与本表不同步，都会被 `scripts/toolchain/__tests__/lib.test.mjs` 拦下。
+
 **版本联动注意**：`create-extension` 的 `src/sdkVersions.ts` 与 `uex` 的 `src/lib/sdkVersion.ts` 是**生成物**（`pnpm ext-packages:gen` 从 extension-api / uex / e2e-contract / e2e-harness 的 `package.json` 与 pnpm-workspace.yaml catalog 生成，勿手改）。由于 `create-extension` 内嵌 extension-api / uex / e2e-contract / e2e-harness 的版本号、`uex` 内嵌 extension-api 的版本号，bump 任一被内嵌包时必须同时 bump create-extension（bump extension-api 时还需同时 bump uex）——否则目标包 npm 发布物里仍是旧版本号，preflight 的版本耦合检查会强制拦截。
 
 `primitives` **不在上表的版本耦合里**：它不被任何包内嵌版本常量，`extension-api` 只是以 `workspace:^` **依赖**它（发布时展开为 `^0.1.0`）。纪律由此而来——**patch bump 随便发**（`^0.1.0` 仍覆盖 0.1.x），但 **minor/major bump 必须同发 extension-api**（`^0.1.0` 匹配不到 0.2.0，否则外部用户装 extension-api 时会按 npm 语义解析到旧 primitives，或直接装不上）。preflight 的依赖完整性检查只保证「被依赖的那个版本在 npm 上存在」，拦不住这种「装上了但语义不对」的漏发，靠这条纪律。
@@ -188,6 +190,6 @@ npm i https://<市场地址>/gallery/sdk/universe-editor-extension-manifest-0.1.
 
 ## 红线
 
-- **`npm` 是唯一真相源**：仓库内部继续 `workspace:*`，仓库外消费走 npm；两世界由"外部消费者冒烟 CI"（计划 Phase E）持续对齐，防漂移。
+- **`npm` 是唯一对外契约**：仓库内部继续 `workspace:*`，仓库外消费走 npm。外部消费者冒烟 CI（`pnpm test:templates`）证明的是**待发布产物 + 模板 + CLI 三者自洽**——它把所有 `@universe-editor/*` 依赖指向本地 `pnpm pack` 出的 tarball，并断言安装树里没有 registry 副本，因此**不**判定 npm 可见性（版本有没有发布、复制到没到位都不在范围内；让冒烟去拉 registry 只会在发布传播窗口内必红，或静默取到旧副本假绿）。npm 侧的真正对齐由发布链路负责：`ext-packages:publish` 的 preflight（依赖完整性 / 版本耦合 / 版本常量）在发布时强制，次序由 `SDK_PACKAGE_DIRS` 的拓扑序保证。
 - 包名、`engines.universe` 的语义解释（编辑器版本兼容区间）进了第三方代码即锁死，发布前按"不可再改"标准过目。
 - 扩展 API 的 `enum` 一律普通 enum（非 const enum，`isolatedModules` 下 TS2748）——已升级为 API 设计规则，见 COMPATIBILITY.md。

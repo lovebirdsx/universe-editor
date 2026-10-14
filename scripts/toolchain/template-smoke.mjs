@@ -9,6 +9,12 @@
  * Any drift between the SDK, the templates, and the CLI fails loudly here
  * instead of in a third-party author's terminal.
  *
+ * Deliberately NOT a registry check: every @universe-editor/* the scaffolded
+ * project asks for is repointed at a local tarball, and the install tree is
+ * asserted to hold no registry copy of any of them. Registry visibility is the
+ * publish pipeline's business — resolving from the registry here means an E404
+ * before a fresh version replicates, and a stale copy after (false green).
+ *
  * Usage: node scripts/toolchain/template-smoke.mjs [--keep]
  */
 import { spawnSync } from 'node:child_process'
@@ -16,18 +22,16 @@ import { existsSync, readFileSync, writeFileSync, rmSync, readdirSync } from 'no
 import * as path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { mkTempDir } from '../lib/temp-root.mjs'
+import { SDK_PACKAGE_SHORT_NAMES } from '../lib/sdk-packages.mjs'
+import { computeSdkClosure, findNonLocalSdkInstalls, localizeSdkDeps, sdkDepNames } from './lib.mjs'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const keep = process.argv.includes('--keep')
 
-const PACKAGES = [
-  'primitives',
-  'extension-api',
-  'extension-manifest',
-  'extension-packaging',
-  'uex',
-  'create-extension',
-]
+// One truth source: the publish set is the pack set. A hand-kept copy here once
+// drifted (missing e2e-contract/e2e-harness), silently sending the smoke back
+// to the registry — where it reds on every release that bumps those versions.
+const PACKAGES = SDK_PACKAGE_SHORT_NAMES
 
 function die(msg) {
   console.error(`error: ${msg}`)
@@ -57,7 +61,7 @@ const pnpmCmd = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
 
 function assertDist(pkg) {
   if (!existsSync(path.join(repoRoot, 'packages', pkg, 'dist', 'index.js'))) {
-    die(`packages/${pkg}/dist is missing — build first: pnpm --filter @universe-editor/${pkg} build`)
+    die(`packages/${pkg}/dist is missing — build first: pnpm build --filter=@universe-editor/${pkg}...`)
   }
 }
 
@@ -75,8 +79,35 @@ function pack(pkg, destDir) {
   return path.join(destDir, own)
 }
 
+/** Every SDK package must install from a local tarball — a registry copy of the same version is false green. */
+function assertLocalSdkInstall(projectDir, closure, manifests) {
+  const expected = new Map(
+    closure.map((short) => [`@universe-editor/${short}`, manifests.get(short).version]),
+  )
+  for (const [name, version] of expected) {
+    const installed = path.join(projectDir, 'node_modules', ...name.split('/'), 'package.json')
+    if (!existsSync(installed)) die(`${name} not installed at ${installed}`)
+    const actual = JSON.parse(readFileSync(installed, 'utf8')).version
+    if (actual !== version) {
+      die(`${name} installed as ${actual}, local version is ${version} — npm resolved a registry copy`)
+    }
+  }
+  // The lockfile covers nested copies and provenance, which the hoisted path above cannot see.
+  const lockPath = path.join(projectDir, 'package-lock.json')
+  if (!existsSync(lockPath)) die(`no ${lockPath} — cannot prove the SDK install stayed off the registry`)
+  const { packages = {} } = JSON.parse(readFileSync(lockPath, 'utf8'))
+  for (const issue of findNonLocalSdkInstalls(packages, expected)) die(issue)
+  ok(`${closure.length} SDK packages resolved from local tarballs (no registry copies)`)
+}
+
 async function main() {
   for (const pkg of PACKAGES) assertDist(pkg)
+  const manifests = new Map(
+    PACKAGES.map((pkg) => [
+      pkg,
+      JSON.parse(readFileSync(path.join(repoRoot, 'packages', pkg, 'package.json'), 'utf8')),
+    ]),
+  )
 
   const tmp = mkTempDir('ue-toolchain-smoke-')
   console.log(`smoke workspace: ${tmp}`)
@@ -102,6 +133,18 @@ async function main() {
     }
     ok('create-extension tarball installed with bin wiring intact')
 
+    // The scaffolder is not a consumer dependency, but a runtime @universe-editor/*
+    // dep of its own would still come off the registry — same trap, same rule.
+    const createLockPath = path.join(toolsDir, 'package-lock.json')
+    if (!existsSync(createLockPath)) {
+      die(`no ${createLockPath} — cannot prove the scaffolder install stayed off the registry`)
+    }
+    const { packages: createLockPackages = {} } = JSON.parse(readFileSync(createLockPath, 'utf8'))
+    const createExpected = new Map([['@universe-editor/create-extension', createPkg.version]])
+    for (const issue of findNonLocalSdkInstalls(createLockPackages, createExpected)) {
+      die(`scaffolder tree: ${issue}`)
+    }
+
     const createCli = path.join(
       toolsDir, 'node_modules', '@universe-editor', 'create-extension', 'dist', 'cli.js',
     )
@@ -126,18 +169,26 @@ async function main() {
       ok(`scaffolded ${template}`)
 
       // Point the generated project at the local tarballs instead of the
-      // (possibly not-yet-published) registry versions. primitives is renamed
-      // too because extension-api's tarball depends on it: on the registry it
-      // would be an E404 before its first publish, and a stale copy after —
-      // silently smoking an older codec (false green).
+      // (possibly not-yet-published) registry versions: on the registry a fresh
+      // version is an E404 until it replicates, and a stale copy after —
+      // silently smoking an older codec (false green). The set is computed from
+      // what the scaffold actually asks for (declared + transitive), so a new
+      // SDK dependency can never be forgotten here the way e2e-harness once was.
       const pkgPath = path.join(projectDir, 'package.json')
       const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'))
-      pkg.devDependencies['@universe-editor/primitives'] = `file:${tarballs.primitives}`
-      pkg.devDependencies['@universe-editor/extension-api'] = `file:${tarballs['extension-api']}`
-      pkg.devDependencies['@universe-editor/uex'] = `file:${tarballs.uex}`
+      const { closure, errors } = computeSdkClosure({
+        roots: sdkDepNames(pkg, { includeDev: true }),
+        manifests,
+        sdkOrder: PACKAGES,
+      })
+      for (const error of errors) die(error)
+      const { added, rewritten, missing } = localizeSdkDeps(pkg, closure, tarballs)
+      if (missing.length > 0) die(`${template}: no local tarball for ${missing.join(', ')}`)
       writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n')
+      ok(`${template}: localized ${rewritten.length} declared + ${added.length} transitive SDK deps`)
 
       run(npmCmd, ['install'], { cwd: projectDir, shell: true })
+      assertLocalSdkInstall(projectDir, closure, manifests)
       run(npmCmd, ['test'], { cwd: projectDir, shell: true })
       ok(`${template} unit tests passed`)
       run(npmCmd, ['run', 'build'], { cwd: projectDir, shell: true })
