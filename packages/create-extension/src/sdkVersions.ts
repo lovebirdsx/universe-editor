@@ -20,12 +20,12 @@ export interface SdkVersions {
 
 export const SDK_VERSIONS: SdkVersions = {
   extensionApi: '0.17.0',
-  uex: '0.3.2',
+  uex: '0.3.3',
   esbuild: '^0.25.0',
   typescript: '^5.8.0',
   nodeTypes: '^22.0.0',
   vitest: '^3.0.0',
   playwright: '^1.62.0',
-  e2eHarness: '0.1.0',
+  e2eHarness: '0.2.0',
   e2eContract: '0.1.0',
 }
