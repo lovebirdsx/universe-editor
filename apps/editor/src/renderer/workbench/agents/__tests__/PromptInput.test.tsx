@@ -1772,6 +1772,10 @@ describe('PromptInput — # commit picker flow', () => {
 
     await waitFor(() => expect(getPicker()?.items).toHaveLength(1))
     act(() => getPicker()!.accept(getPicker()!.items[0]!))
+    // `pick()`'s `.then` inserts the pill outside act; drain it so the Enter
+    // below reads the committed text (same hazard as openEntry in the
+    // extension chat-context flow).
+    await flush()
     await waitFor(() => expect(ta.value).toContain('#a1b2c3d fix login bug'))
 
     fireEvent.keyDown(ta, { key: 'Enter' })
@@ -1849,6 +1853,11 @@ describe('PromptInput — # extension chat-context flow', () => {
       .find((o) => o.textContent?.includes('Perforce Changelist'))
     expect(option).toBeTruthy()
     fireEvent.mouseDown(option!)
+    // resolveItem's `.then` inserts the pill outside any act scope, while
+    // `ta.value` mirrors the Monaco model synchronously — a `waitFor` on it can
+    // resolve before React commits that edit, and the caller's Enter would then
+    // read the stale render (empty `text` → submit bails out).
+    await flush()
   }
 
   it('accepting an extension entry resolves it and inserts the returned item as a pill', async () => {
@@ -1868,6 +1877,7 @@ describe('PromptInput — # extension chat-context flow', () => {
     expect(chatContext.resolveItem).toHaveBeenCalledWith(3, 'changelist', { sessionDir: '/repo' })
 
     fireEvent.keyDown(ta, { key: 'Enter' })
+    expect(session.sendPrompt).toHaveBeenCalledTimes(1)
     const [, refs] = session.sendPrompt.mock.calls[0]!
     expect(refs).toHaveLength(1)
     expect(refs[0].ref).toMatchObject({
