@@ -1,5 +1,12 @@
 [
   {
+    "version": "0.17.0",
+    "date": "2026-10-14",
+    "title": "Perforce 数据接入 AI 对话，拉取更省心",
+    "summary": "Agent 输入框可引用 Perforce 变更单与 Swarm 审核；拉取结束弹系统通知，同步历史自动刷新并记录 p4 调用次数。",
+    "body": "## 本次重点\n\nPerforce 数据接入 AI 对话：Agent 输入框敲 `#` 可引用变更单与 Swarm 审核，图谱、源代码管理侧栏与 Swarm 列表都有一键**发送到 Agent 聊天**。拉取侧补齐系统通知、历史自动刷新与 p4 调用次数统计。\n\n## 与 Agent 对话\n\n- **引用变更单 / Swarm 审核**：`#` 列表新增「Perforce Changelist…」与「Swarm Review…」（或敲 `#cl` / `#swarm`）。变更单只列当前会话目录下的（待定在前、最多 100 条），Swarm 需要你处理的在前；选择器立即弹出，取数慢时顶部出进度条。见[你的第一次 Agent 会话](doc:ai-agent/first-session)。\n- **发送到 Agent 聊天**：源代码管理侧栏的 changelist 组头、Swarm 审核行右键新增该入口（图谱行原有），发送编号与描述首行，Swarm 另带状态与审核链接。入口由 Perforce 插件提供，插件未生效时不出现。\n\n## Perforce 拉取\n\n- **拉取完成弹系统通知**：窗口不在前台时通知结果（更新 / 已是最新 / 失败 / 无法识别），点击回到编辑器；自己取消或未执行的不通知。`perforce.syncNotifications.enabled`（默认开）可关。\n- **同步历史自动刷新**：新记录自动出现在顶部；本机其它窗口发起的拉取仍需手动刷新。\n- **同步历史记录 p4 调用次数**：写明这次拉取起了几个 p4 进程（原生 / δ 分开），未完整采集时标为下界（`≥N`），旧记录显示「未采集」。命令面板 **Perforce: 查看同步历史**，见[拉取历史记录](doc:perforce/sync-history)。\n\n## Perforce 引擎与后台扫描\n\n- **编辑器自装的 p4delta 优先于系统自装副本**：系统旧副本此前会遮蔽它，导致升不了级、调用次数采集不全。查找顺序改为 环境变量 → 设置 → 编辑器自装 → `PATH` → `%LOCALAPPDATA%`。\n- **后台改动查询加预算窗口**：连续事件流 10 秒内超过 2,000 个路径次即暂停增量查询、静默 5 秒后恢复，避免反复拉起 p4 / p4delta；期间 Changes 列表与文件夹染色可能暂不完整。\n\n## 扩展开发\n\n- `extension-api` 0.17.0：新增 `chat.registerChatContextProvider`（扩展把自己的数据源接进 `#` 面板，`context.sessionDir` 给出会话根目录）；`window.showQuickPick` 的 `items` 支持传 Promise——面板立即打开、取数完成再填充。\n\n## 升级注意事项\n\n- **p4delta 查找顺序变化**：想继续用系统里自装的那份，用 `perforce.p4delta.path` 显式指向。\n- 关掉 `perforce.p4delta.autoInstall` 只停后台自动下载与升级，已有的托管副本照常生效；升级改用 **Perforce: 安装或更新 p4delta**。\n"
+  },
+  {
     "version": "0.15.1",
     "date": "2026-10-12",
     "title": "Perforce 拉取历史、p4delta 自装与扩展自动更新",
