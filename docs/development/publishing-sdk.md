@@ -62,11 +62,12 @@ pnpm ext-packages:publish [-- 选项] [pkg ...]
 它做了什么（顺序）：
 
 1. **preflight**：工作区白名单（SDK 目录外有未提交改动则拒绝）、main 分支、与 upstream 同步、`npm whoami` 登录态、各包本地版本高于 npm 已发布版（相同增量跳过、更低报错）、集合外 workspace 依赖已在 npm 发布（防发布出指向未发布版本的包）、git tag 未占用、extension-api 的 COMPATIBILITY.md 变更记录与 `src/index.ts` 版本常量、自动再生成 create-extension/uex 的版本常量（生成物，随发布 commit）、版本耦合检查（源包发布而目标包未 bump/未选则拒绝）、内网上传配置。
-2. **build**（拓扑序，连同 workspace 依赖）+ extension-api 契约测试（快照兜底）。
-3. **pack 内容检查**：无 `dist/__tests__/`、LICENSE / README.md 在列、bin 入口 `dist/cli.js` 与 templates/ 在列。
-4. **发布**（拓扑序逐个 `pnpm publish --no-git-checks`）。
-5. **git**：commit SDK 目录改动（`chore(release): publish ...`）、每个发布包打 annotated tag（`extension-api@0.13.0`，不带 scope）、push 到 main。
-6. **内网同步**（`--gallery-sync` 显式开启，默认不执行）：pack 发布集合 tarball 到市场 stage 并 scp 上传（保持内网 tarball 与 npm 一致）。
+2. **`files` 字段检查**：声明了 `dist` 就必须排除 `dist/__tests__`。不依赖构建产物，故先于 build 执行，也是 `--dry-run` 下唯一生效的一道发布物防线。
+3. **build**（拓扑序，连同 workspace 依赖）+ extension-api 契约测试（快照兜底）。
+4. **pack 内容检查**（构建后）：无 `dist/__tests__/`、LICENSE / README.md 在列、bin 入口 `dist/cli.js` 与 templates/ 在列。
+5. **发布**（拓扑序逐个 `pnpm publish --no-git-checks`）。
+6. **git**：commit SDK 目录改动（`chore(release): publish ...`）、每个发布包打 annotated tag（`extension-api@0.13.0`，不带 scope）、push 到 main。
+7. **内网同步**（`--gallery-sync` 显式开启，默认不执行）：pack 发布集合 tarball 到市场 stage 并 scp 上传（保持内网 tarball 与 npm 一致）。
 
 **幂等自愈**：npm 发布成功但 tag/push/gallery 中断时，重跑同一命令即可收敛（已发布版本增量跳过、缺失 tag 补打、gallery 重同步）。npm 版本不可变，同版本重跑不会重复发布。
 

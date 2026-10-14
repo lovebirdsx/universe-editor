@@ -30,6 +30,7 @@ import {
   apiVersionConstantMatches,
   assessExternalDeps,
   checkCoupledPublishes,
+  checkFilesTestExclusion,
   checkPackListing,
   checkVersionConstants,
   galleryConfigIssue,
@@ -385,6 +386,14 @@ async function main() {
     ok('npm 段: 全部已发布（增量跳过）；继续 git/gallery 段收敛半状态')
   } else {
     console.log(`\n待发布 (${toPublish.length}): ${toPublish.map((p) => `${p.name}@${p.version}`).join(', ')}`)
+
+    // files 字段静态防线：不依赖构建产物，故先于 build 执行（dry-run 下 pack 内容检查被跳过，这里是唯一拦截点）
+    const fileErrors = toPublishOrdered.flatMap((p) =>
+      checkFilesTestExclusion(p.manifest.files).map((e) => `${p.name}: ${e}`),
+    )
+    if (fileErrors.length > 0) {
+      die(`发布物 files 字段检查失败:\n${fileErrors.map((e) => `  - ${e}`).join('\n')}`)
+    }
 
     // build（`...` 后缀连同 workspace 依赖一起构建）
     run('pnpm', [...toPublishOrdered.flatMap((p) => ['--filter', `${p.name}...`]), 'build'], { dryRun })

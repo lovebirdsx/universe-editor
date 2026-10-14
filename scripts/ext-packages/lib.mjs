@@ -215,6 +215,18 @@ export function checkPackListing(files, { isBin, hasTemplates, hasCompatibility 
   return errors
 }
 
+/**
+ * files 字段静态防线：声明了 dist 就必须排除 dist/__tests__。
+ * 与 checkPackListing 的同名检查互补——那条查的是构建产物（dry-run 下 dist 未重建、被跳过），
+ * 这条只看 manifest，dry-run 时唯一能拦住测试产物混入发布物的时机。
+ */
+export function checkFilesTestExclusion(files = []) {
+  const normalized = files.map((f) => f.replace(/\\/g, '/'))
+  if (!normalized.some((f) => f === 'dist' || f.startsWith('dist/'))) return []
+  if (normalized.some((f) => f.startsWith('!') && f.includes('__tests__'))) return []
+  return ['files 字段声明了 dist 但未排除 dist/__tests__，测试编译产物会进入发布物（应加 "!dist/__tests__"）']
+}
+
 function escapeRegExp(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }

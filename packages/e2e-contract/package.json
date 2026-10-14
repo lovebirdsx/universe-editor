@@ -17,7 +17,8 @@
     "probe"
   ],
   "files": [
-    "dist"
+    "dist",
+    "!dist/__tests__"
   ],
   "exports": {
     ".": {

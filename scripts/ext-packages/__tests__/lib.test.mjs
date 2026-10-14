@@ -15,6 +15,7 @@ import {
   apiVersionConstantMatches,
   assessExternalDeps,
   checkCoupledPublishes,
+  checkFilesTestExclusion,
   checkPackListing,
   checkVersionConstants,
   compareVersions,
@@ -283,6 +284,17 @@ test('checkPackListing 各项硬性校验', () => {
   assert.deepEqual(checkPackListing([...good, 'COMPATIBILITY.md'], { hasCompatibility: true }), [])
 })
 
+test('checkFilesTestExclusion 只拦「声明了 dist 但未排除 __tests__」', () => {
+  assert.deepEqual(checkFilesTestExclusion(['dist', '!dist/__tests__']), [])
+  assert.deepEqual(checkFilesTestExclusion(['dist', 'templates', '!dist/__tests__']), [])
+  assert.deepEqual(checkFilesTestExclusion(['dist', '!dist/**/__tests__']), [])
+  assert.deepEqual(checkFilesTestExclusion(['dist', '!dist\\__tests__']), [])
+  assert.deepEqual(checkFilesTestExclusion(['src']), [], '不含 dist 的包不适用')
+  assert.deepEqual(checkFilesTestExclusion([]), [])
+  assert.match(checkFilesTestExclusion(['dist']).join('\n'), /未排除 dist\/__tests__/)
+  assert.match(checkFilesTestExclusion(['dist', 'COMPATIBILITY.md']).join('\n'), /未排除 dist\/__tests__/)
+})
+
 test('hasCompatibilityEntry 命中与版本号转义', () => {
   const text = ['- `0.12.0` — 向后兼容的新增（minor）：Tree View 表面。', '- `0.12.10` — 后续版本。'].join('\n')
   assert.equal(hasCompatibilityEntry(text, '0.12.0'), true)
@@ -402,6 +414,14 @@ test('共享清单防线：8 件套、拓扑合法、publish-sdk.mjs 引用共�
   const publishSdkText = readFileSync(join(repoRoot, 'scripts/gallery/publish-sdk.mjs'), 'utf8')
   assert.match(publishSdkText, /SDK_PACKAGE_DIRS/, 'publish-sdk.mjs 应引用共享清单而非本地副本')
   assert.doesNotMatch(publishSdkText, /SDK_PACKAGES\s*=/, 'publish-sdk.mjs 不应保留本地清单副本')
+})
+
+test('发布集合所有包的 files 字段都排除 dist/__tests__', () => {
+  const all = loadPackageManifests(repoRoot, SDK_PACKAGE_DIRS)
+  const errors = all.flatMap((p) =>
+    checkFilesTestExclusion(p.manifest.files).map((e) => `${p.name}: ${e}`),
+  )
+  assert.deepEqual(errors, [])
 })
 
 const FULL_GALLERY_ENV = { UE_RELEASE_HOST: 'h', UE_RELEASE_USER: 'u', UE_GALLERY_DIR: 'd' }
