@@ -207,6 +207,18 @@ describe('PerforceGraphEditor keyboard navigation', () => {
     expect(bridgeCalls(executeCommand)).toHaveLength(1)
   })
 
+  it('mirrors list focus into data-focused, which drives the inactive fill', async () => {
+    const { container } = renderEditor()
+    await flush()
+
+    const body = scrollBody(container)
+    expect(body.getAttribute('data-focused')).toBe('false')
+    fireEvent.focus(body)
+    expect(body.getAttribute('data-focused')).toBe('true')
+    fireEvent.blur(body)
+    expect(body.getAttribute('data-focused')).toBe('false')
+  })
+
   it('ArrowDown/ArrowUp move the selection and drive the Commit Changes bridge', async () => {
     const { container, executeCommand } = renderEditor()
     await flush()

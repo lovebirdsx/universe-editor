@@ -94,6 +94,7 @@ import {
   type GitGraphMenuState,
 } from './GitGraphContextMenu.js'
 import { useGraphKeyboardNav } from './useGraphKeyboardNav.js'
+import { useGraphListFocus } from './useGraphListFocus.js'
 import { useFullCommitMessages } from './useFullCommitMessages.js'
 import { usePersistedGraphSelection } from './usePersistedGraphSelection.js'
 import { useGitGraphAutoRefresh, useGitGraphEditorVisible } from './useGitGraphAutoRefresh.js'
@@ -1991,6 +1992,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
     rowAttribute: 'data-hash',
     rowHeight: ROW_HEIGHT,
   })
+  const listFocus = useGraphListFocus(scrollRef)
 
   // Go to Symbol / Outline bridge: publish the loaded commits (the unfiltered
   // display list, so a search filter can't shrink the symbol list) and select /
@@ -2168,8 +2170,8 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
 
       {result && layout && !loading && (
         <div
+          {...listFocus}
           className={styles['scrollBody']}
-          ref={scrollRef}
           tabIndex={0}
           role="listbox"
           aria-label={localize('gitGraph.commitList', 'Commits')}

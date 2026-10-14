@@ -8,7 +8,9 @@
  *  only place it is visible (the DOM and the row box are identical either way):
  *
  *    - hovering or selecting a row changes no pixel inside the lane column, and
- *    - the description area to its right does change (the fill still paints).
+ *    - the description area to its right does change (the fill still paints), and
+ *    - losing the list's focus repaints that fill to the inactive tint — still without
+ *      touching the lane column.
  *
  *  Not a @visual baseline on purpose: the invariant is structural, needs no
  *  cross-OS baseline image, and holds on every theme.
@@ -260,6 +262,48 @@ test.describe('git graph row highlight', () => {
         ),
         {
           message: 'selecting a row must leave its swimlane column untouched',
+        },
+      ).toBe(0)
+
+      // -- focus out (active → inactive) ------------------------------------
+      // The selection colour follows the *list's* focus, like the Explorer: while the
+      // listbox holds focus the row is the active fill (what the shots above pinned);
+      // once focus sits elsewhere — here the toolbar's own search box — the same row
+      // repaints to the inactive tint, and stays clipped at --graph-width just the same.
+      // This is also what pins "clicking a row focuses the list" (onRowClick): drop that
+      // focus() and the row would already be inactive when we get here.
+      //
+      // The repaint is read off `--row-background` — the custom property `.row`'s
+      // gradient consumes, i.e. the very value that paints (same read as `--graph-width`
+      // above). A pixel strip cannot answer this one: the description area also carries
+      // text, whose foreground flips with the focus state, so the strip would report a
+      // change even when the fill itself never moved (verified by falsifying the rule).
+      const body = editor.locator('[data-testid="gitGraph-scrollBody"]')
+      await expect(body).toHaveAttribute('data-focused', 'true')
+
+      const fill = () =>
+        row.evaluate((el) => getComputedStyle(el).getPropertyValue('--row-background').trim())
+      const activeFill = await fill()
+      expect(activeFill, 'the selected row must paint an active fill').not.toBe('')
+
+      await editor.getByRole('searchbox', { name: 'Search commits' }).focus()
+      await expect(body).toHaveAttribute('data-focused', 'false')
+      await expect
+        .poll(fill, {
+          timeout: 10_000,
+          message: 'losing list focus should repaint the selected row (active → inactive)',
+        })
+        .not.toBe(activeFill)
+
+      // The inactive fill is a row fill all the same: it must stay clipped at --graph-width.
+      expect(
+        changedPixels(
+          laneBaseline,
+          await shoot(page, (await geometry()).lane, dpr),
+          LANE_THRESHOLD,
+        ),
+        {
+          message: 'the inactive fill must stay out of the swimlane column too',
         },
       ).toBe(0)
     } finally {

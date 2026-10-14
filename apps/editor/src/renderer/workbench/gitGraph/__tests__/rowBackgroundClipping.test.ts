@@ -79,7 +79,16 @@ function backgroundProperties(rule: Rule): string[] {
     .filter((property) => BACKGROUND_PROPERTIES.includes(property))
 }
 
-const STATE_SELECTORS = ['.row:hover', '.rowSelected', '.rowSelected:hover']
+const STATE_SELECTORS = [
+  '.row:hover',
+  '.rowSelected',
+  '.rowSelected:hover',
+  // The unfocused (inactive) fill is a row state too, so it must hand the colour over
+  // through `--row-background` exactly like the active one — otherwise losing focus
+  // would silently start painting over the swimlane column. Covers both graphs.
+  ".scrollBody:not([data-focused='true']) .rowSelected",
+  ".scrollBody:not([data-focused='true']) .rowSelected:hover",
+]
 
 describe('git graph row fill stays out of the swimlane column', () => {
   it('paints the fill as a gradient hard-stopped at --graph-width', () => {
@@ -101,5 +110,12 @@ describe('git graph row fill stays out of the swimlane column', () => {
     const rule = ruleFor(selector)
     expect(backgroundProperties(rule)).toEqual([])
     expect(declarationValue(rule, '--row-background')).toMatch(/^var\(--vscode-/)
+  })
+
+  it('degrades the selection fill to the inactive token when the list is unfocused', () => {
+    const rule = ruleFor(".scrollBody:not([data-focused='true']) .rowSelected")
+    expect(declarationValue(rule, '--row-background')).toContain(
+      '--vscode-list-inactiveSelectionBackground',
+    )
   })
 })

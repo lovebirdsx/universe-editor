@@ -374,6 +374,29 @@
   color: var(--vscode-list-activeSelectionForeground, inherit);
 }
 
+/* Focus expression of the selection, shared with the Explorer: while the row list holds
+ * focus the selection is the active one; when focus sits elsewhere (the toolbar search
+ * box, another editor, the sidebar) it degrades to the inactive tint, so the selection
+ * stays visible without competing with whatever is focused. The mirror behind
+ * `[data-focused]` is `useGraphListFocus`.
+ *
+ * Still `--row-background` only — never `background`, which would reset the clipped
+ * gradient above and paint over the swimlane column. The Perforce graph reuses this
+ * stylesheet, so this lands in both graphs at once. */
+.scrollBody:not([data-focused='true']) .rowSelected,
+.scrollBody:not([data-focused='true']) .rowSelected:hover {
+  --row-background: var(--vscode-list-inactiveSelectionBackground, rgba(58, 61, 65, 0.6));
+  color: inherit;
+}
+
+/* Undo the active rule above. The Explorer's counterpart is a bare `color: inherit`
+ * because its rows carry no per-column colour; the graph's columns do. */
+.scrollBody:not([data-focused='true']) .rowSelected .author,
+.scrollBody:not([data-focused='true']) .rowSelected .date,
+.scrollBody:not([data-focused='true']) .rowSelected .hash {
+  color: var(--vscode-editor-mutedForeground);
+}
+
 .graphSpacer {
   flex: 0 0 auto;
   width: var(--graph-width, 0px);

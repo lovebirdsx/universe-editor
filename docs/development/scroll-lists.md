@@ -39,7 +39,8 @@
 
 约定：
 
-- **行高亮（hover / 选中 / 将来的 focus）只能画到装饰列为止**。本仓的实现是 `.row` 上一条在 `var(--graph-width)` 处硬停的 gradient：起始段透明的两个同 px 色标 = 硬边不插值，状态规则只下发 `--row-background` 这个自定义属性，**绝不写 `background` 简写**（简写会按源码序重置 `background-image`，静默退回整行铺满）。新增行状态照抄一行 `--row-background: <token>` 即自动获得同样的裁剪。
+- **行高亮（hover / 选中 / 失焦）只能画到装饰列为止**。本仓的实现是 `.row` 上一条在 `var(--graph-width)` 处硬停的 gradient：起始段透明的两个同 px 色标 = 硬边不插值，状态规则只下发 `--row-background` 这个自定义属性，**绝不写 `background` 简写**（简写会按源码序重置 `background-image`，静默退回整行铺满）。新增行状态照抄一行 `--row-background: <token>` 即自动获得同样的裁剪。
+- **选中行有焦点两态**（与 Explorer 同一个表达）：列表容器持 DOM 焦点 → `--vscode-list-activeSelectionBackground`，否则 → `--vscode-list-inactiveSelectionBackground` + 列文本回落 `--vscode-editor-mutedForeground`。焦点镜像在两个图谱共用的 `apps/editor/src/renderer/workbench/gitGraph/useGraphListFocus.ts`（容器 `data-focused`，与 `Tree` / `useFlatListNavigation` 同款口径：**判据是列表自己有没有焦点**，不是所在 part/编辑器有没有焦点）。
 - **装饰列的颜色由承载面显式给出**（图谱里是 `.canvas` 的编辑器底色，与 `.gitGraph` 同色）。挖洞节点（`nodeCurrent` / `stashInner` 用底色填出空心圆）也因此与列底色同源，任何行状态下都正确融合。
 - **不要用「底色填洞 + 抬升 SVG 层（z-index）」补救**：洞色是静态的，感知不到某一行是否被高亮，选中行上会露出一个不匹配的浅色圆盘。
 
@@ -84,7 +85,7 @@ document.querySelector('#root').style.opacity = '0.999'
 | reveal 在真浏览器里仍然有效 | `apps/editor/e2e/specs/smoke.explorerRevealScroll.spec.ts`（滚动到顶后 reveal 把已选中的行带回来） |
 | 行定位 / spacer 形状 | `packages/workbench-ui/src/__tests__/VirtualList.test.tsx`（`top` 断言、spacer 契约） |
 | 列表重排后仍是「一摞不重叠的行」 | `apps/editor/src/renderer/workbench/swarm/__tests__/SwarmReviewsView.test.tsx` 的 soft refresh 用例（key 唯一、offset 严格递增、换选中不调 `scrollIntoView`）；`extensions/perforce/e2e/specs/swarmReview.spec.ts` 的 dashboard journey 补了真布局版（行矩形互不重叠、`End` 把最后一行底对齐） |
-| 行高亮不画进装饰列 | `apps/editor/src/renderer/workbench/gitGraph/__tests__/rowBackgroundClipping.test.ts`（读 CSS 文本断言：裁剪 gradient 在位、状态规则只许下发 `--row-background`）；`apps/editor/e2e/specs/smoke.gitGraphRowHighlight.spec.ts`（像素级断言：hover / 选中时泳道列内 0 像素变化，同时描述区必须有变化——前半句单独看会被「什么都没画」骗过） |
+| 行高亮不画进装饰列 | `apps/editor/src/renderer/workbench/gitGraph/__tests__/rowBackgroundClipping.test.ts`（读 CSS 文本断言：裁剪 gradient 在位、状态规则只许下发 `--row-background`，含失焦态那两条）；`apps/editor/e2e/specs/smoke.gitGraphRowHighlight.spec.ts`（像素级断言：hover / 选中 / 失焦时泳道列内 0 像素变化，同时描述区必须有变化——前半句单独看会被「什么都没画」骗过；失焦那相改读 `--row-background`，因为描述区的像素变化分不清是填充变了还是行文字色变了） |
 
 ⚠️ e2e 那两条是**真布局护栏，不是复现**：残影本身没有可断言的信号（DOM 一直是干净的），而旧的 `scrollIntoView` 实现同样能通过「底对齐最后一行」这条断言。判断某条用例是否真的守住约定，唯一办法是**把实现改回去跑一遍**（`git checkout HEAD -- <file>` + rebuild），看它是否变红。
 

@@ -98,6 +98,7 @@ import {
   type PerforceGraphSyncDialogState,
 } from './PerforceGraphSyncDialog.js'
 import { useGraphKeyboardNav } from '../gitGraph/useGraphKeyboardNav.js'
+import { useGraphListFocus } from '../gitGraph/useGraphListFocus.js'
 import { usePersistedGraphSelection } from '../gitGraph/usePersistedGraphSelection.js'
 import { SendContextToAgentChatAction } from '../../actions/agentContextActions.js'
 import { formatChangelistText } from '../../services/acp/chatContextFormat.js'
@@ -1602,6 +1603,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
     rowAttribute: 'data-id',
     rowHeight: ROW_HEIGHT,
   })
+  const listFocus = useGraphListFocus(scrollRef)
 
   // Go to Symbol / Outline bridge: publish the loaded changes (the unfiltered
   // display list, so a search filter can't shrink the symbol list) and select /
@@ -1841,8 +1843,8 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
 
       {result && layout && !loading && (
         <div
+          {...listFocus}
           className={styles['scrollBody']}
-          ref={scrollRef}
           tabIndex={0}
           role="listbox"
           aria-label={localize('perforceGraph.changeList', 'Changes')}
