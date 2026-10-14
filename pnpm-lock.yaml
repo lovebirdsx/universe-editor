@@ -781,9 +781,6 @@ importers:
       '@universe-editor/e2e-contract':
         specifier: workspace:*
         version: link:../e2e-contract
-      '@universe-editor/temp-root':
-        specifier: workspace:*
-        version: link:../temp-root
     devDependencies:
       '@playwright/test':
         specifier: 'catalog:'
@@ -797,6 +794,9 @@ importers:
       '@universe-editor/config-ts':
         specifier: workspace:*
         version: link:../config-ts
+      '@universe-editor/temp-root':
+        specifier: workspace:*
+        version: link:../temp-root
       eslint:
         specifier: 'catalog:'
         version: 9.39.4(jiti@2.7.0)

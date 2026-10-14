@@ -1,6 +1,6 @@
 {
   "name": "@universe-editor/e2e-harness",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Playwright fixtures, page objects, and launch helpers for running E2E tests against Universe Editor.",
   "type": "module",
   "license": "Apache-2.0",
@@ -32,7 +32,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsgo --build",
+    "build": "tsgo --build && node vendor-temp-root.mjs",
     "typecheck": "tsgo --build",
     "lint": "eslint src --cache --cache-strategy content",
     "lint:fix": "eslint --fix src",
@@ -41,8 +41,7 @@
     "clean": "tsgo --build --clean"
   },
   "dependencies": {
-    "@universe-editor/e2e-contract": "workspace:*",
-    "@universe-editor/temp-root": "workspace:*"
+    "@universe-editor/e2e-contract": "workspace:*"
   },
   "peerDependencies": {
     "@playwright/test": "^1.62.0"
@@ -51,6 +50,7 @@
     "@playwright/test": "catalog:",
     "@universe-editor/config-eslint": "workspace:*",
     "@universe-editor/config-ts": "workspace:*",
+    "@universe-editor/temp-root": "workspace:*",
     "@types/node": "catalog:",
     "eslint": "catalog:",
     "typescript": "catalog:",
