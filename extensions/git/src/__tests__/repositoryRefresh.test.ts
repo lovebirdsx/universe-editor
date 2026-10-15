@@ -10,7 +10,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 
 const gitExecMock = vi.hoisted(() => vi.fn())
-vi.mock('../gitService.js', () => ({ gitExec: gitExecMock, gitExecBinary: vi.fn() }))
+vi.mock('../gitService.js', () => ({
+  gitExec: gitExecMock,
+  gitExecBinary: vi.fn(),
+  detectLinkedWorktree: async () => false,
+}))
 
 vi.mock('@universe-editor/extension-api', () => ({
   StatusBarAlignment: { Left: 1 },

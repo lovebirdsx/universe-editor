@@ -6,7 +6,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const gitExecMock = vi.hoisted(() => vi.fn())
-vi.mock('../gitService.js', () => ({ gitExec: gitExecMock, gitExecBinary: vi.fn() }))
+vi.mock('../gitService.js', () => ({
+  gitExec: gitExecMock,
+  gitExecBinary: vi.fn(),
+  detectLinkedWorktree: async () => false,
+}))
 
 const apiMock = vi.hoisted(() => ({
   windowState: { focused: true },

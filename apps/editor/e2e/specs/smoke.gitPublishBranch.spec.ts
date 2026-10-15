@@ -6,6 +6,9 @@
  *  git action button shows. Clicking it runs `git push -u`, after which the
  *  branch is published and in sync, so the button falls back to disabled Commit.
  *  Setup: a clone on a published default branch plus a fresh `feature` branch.
+ *
+ *  A linked worktree is the exception: its branches are throwaway task branches
+ *  that aren't meant to be pushed, so the bar never offers Publish Branch there.
  *--------------------------------------------------------------------------------------------*/
 
 import { test, expect } from '@playwright/test'
@@ -40,6 +43,26 @@ function makeRepoWithUnpublishedBranch(): string {
   git(local, 'push', '-u', 'origin', 'HEAD')
   git(local, 'checkout', '-b', 'feature')
   return local
+}
+
+/** A published clone plus a linked worktree on a fresh, unpublished `feature`
+ *  branch. Returns the worktree path (the workspace root the app opens). */
+function makeRepoWithUnpublishedWorktree(): string {
+  const root = realpathSync.native(mkTempDir('universe-editor-e2e-wt-'))
+  const remote = join(root, 'remote.git')
+  const local = join(root, 'local')
+  const worktree = join(root, 'wt')
+
+  git(root, 'init', '--bare', remote)
+  git(root, 'clone', remote, local)
+  git(local, 'config', 'user.email', 'e2e@example.com')
+  git(local, 'config', 'user.name', 'E2E')
+  writeFileSync(join(local, 'a.ts'), 'const a = 1\n', 'utf8')
+  git(local, 'add', '-A')
+  git(local, 'commit', '-m', 'initial')
+  git(local, 'push', '-u', 'origin', 'HEAD')
+  git(local, 'worktree', 'add', '-b', 'feature', worktree)
+  return worktree
 }
 
 test.describe('@p1 git publish branch', () => {
@@ -82,6 +105,44 @@ test.describe('@p1 git publish branch', () => {
         timeout: 30_000,
       })
       expect(git(repoDir, 'rev-parse', '--abbrev-ref', 'feature@{upstream}')).toBe('origin/feature')
+    } finally {
+      await closeApp(app)
+    }
+  })
+
+  test('never offers Publish Branch in a linked worktree', async () => {
+    test.setTimeout(120_000)
+
+    const userDataDir = mkTempDir('universe-editor-e2e-wt-ud-')
+    seedBaselineUserData(userDataDir)
+    const worktreeDir = makeRepoWithUnpublishedWorktree()
+
+    const app = await launchCoreGitApp({ userDataDir, extraArgs: [worktreeDir] })
+
+    try {
+      const page = await app.firstWindow()
+      await page.waitForLoadState('domcontentloaded')
+      await page.waitForFunction(() =>
+        Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
+      )
+      await evaluateWhenRestored(page)
+
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getScmSourceControlCount()), {
+          timeout: 60_000,
+          message: 'git extension should register a source control',
+        })
+        .toBeGreaterThan(0)
+
+      await page.evaluate(() => window.__E2E__!.runCommand('_workbench.revealScm'))
+
+      // Ordered on purpose: the disabled Commit button proves the bar rendered this
+      // repo's in-sync state, so the absence assertion below can't pass vacuously
+      // before the SCM view loaded.
+      await expect(page.getByRole('button', { name: 'Commit', exact: true })).toBeDisabled({
+        timeout: 30_000,
+      })
+      await expect(page.getByRole('button', { name: 'Publish Branch', exact: true })).toHaveCount(0)
     } finally {
       await closeApp(app)
     }

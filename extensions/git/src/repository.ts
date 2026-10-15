@@ -25,7 +25,7 @@ import {
   type SourceControlResourceGroup,
 } from '@universe-editor/extension-api'
 import { localize } from './nls.js'
-import { gitExec, gitExecBinary, type GitExecResult } from './gitService.js'
+import { detectLinkedWorktree, gitExec, gitExecBinary, type GitExecResult } from './gitService.js'
 import { selectHunkPatch } from './hunkPatch.js'
 import { notifyGitFailure } from './gitError.js'
 import { parseStatus } from './statusParser.js'
@@ -118,6 +118,9 @@ export class Repository {
   private _autofetchInitial: ReturnType<typeof setTimeout> | undefined
   /** Set when the latest `git status` exceeded `git.statusLimit`; gates the watcher chain. */
   private _isRepositoryHuge = false
+  /** One-shot linked-worktree probe started at construction; `_doRefresh` awaits it
+   *  so the very first button state is already worktree-correct. */
+  private readonly _linkedWorktreeProbe: Promise<boolean>
   private readonly _disposedPromise: Promise<void>
   private _resolveDisposed!: () => void
   private readonly _onSubmodulesUpdated: (() => void) | undefined
@@ -148,6 +151,7 @@ export class Repository {
   ) {
     this._onSubmodulesUpdated = opts.onSubmodulesUpdated
     this._disposedPromise = new Promise<void>((resolve) => (this._resolveDisposed = resolve))
+    this._linkedWorktreeProbe = detectLinkedWorktree(root, this._log)
     this._sc = scm.createSourceControl('git', opts.label ?? 'Git', root)
     this._sc.inputBox.placeholder = localize(
       'git.input.placeholder',
@@ -275,6 +279,7 @@ export class Repository {
     this._workingCount = working.length
     this._sc.count = staged.length + working.length
     const hasChanges = staged.length + working.length > 0
+    const isLinkedWorktree = await this._linkedWorktreeProbe
     this._sc.acceptInputCommand = gitPrimaryInputCommand({
       hasChanges,
       branch: status.branch,
@@ -282,6 +287,7 @@ export class Repository {
       headRevision: status.headRevision,
       ahead: status.ahead,
       behind: status.behind,
+      isLinkedWorktree,
     })
     // With changes, offer the full commit split-button (commit / amend / push /
     // sync). With none, the single primary (push/pull/sync) button suffices, so

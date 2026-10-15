@@ -173,8 +173,9 @@ function primaryCommand(
     upstream: string | undefined
     headRevision: string | undefined
   } = { branch: 'main', upstream: 'origin/main', headRevision: 'abc123' },
+  isLinkedWorktree = false,
 ): ReturnType<typeof gitPrimaryInputCommand> {
-  return gitPrimaryInputCommand({ ...sync, ...head })
+  return gitPrimaryInputCommand({ ...sync, ...head, isLinkedWorktree })
 }
 
 describe('gitPrimaryInputCommand', () => {
@@ -259,6 +260,36 @@ describe('gitPrimaryInputCommand', () => {
         { branch: 'main', upstream: undefined, headRevision: undefined },
       ),
     ).toEqual({ command: 'git.commit', title: 'Commit', disabled: true })
+  })
+
+  it('disables Commit instead of offering Publish in a linked worktree', () => {
+    expect(
+      primaryCommand(
+        { hasChanges: false, ahead: 0, behind: 0 },
+        { branch: 'feature/x', upstream: undefined, headRevision: 'abc123' },
+        true,
+      ),
+    ).toEqual({ command: 'git.commit', title: 'Commit', disabled: true })
+  })
+
+  it('keeps Commit ahead of Publish with local changes in a linked worktree', () => {
+    expect(
+      primaryCommand(
+        { hasChanges: true, ahead: 0, behind: 0 },
+        { branch: 'feature/x', upstream: undefined, headRevision: 'abc123' },
+        true,
+      ),
+    ).toEqual({ command: 'git.commit', title: 'Commit' })
+  })
+
+  it('keeps the sync states in a linked worktree once the branch has an upstream', () => {
+    expect(
+      primaryCommand(
+        { hasChanges: false, ahead: 1, behind: 0 },
+        { branch: 'feature/x', upstream: 'origin/feature/x', headRevision: 'abc123' },
+        true,
+      ),
+    ).toEqual({ command: 'git.push', title: 'Push' })
   })
 })
 
@@ -427,6 +458,42 @@ describe('Repository remote state refresh', () => {
       command: 'git.commit',
       title: 'Commit',
       disabled: true,
+    })
+  })
+
+  it('does not offer Publish in a linked worktree whose branch has no upstream', async () => {
+    const { root, local } = await createRemoteBackedRepo()
+    const worktree = join(root, 'wt')
+    await git(['worktree', 'add', '-b', 'task', worktree], local)
+
+    await expect(refreshCommandFor(worktree)).resolves.toEqual({
+      command: 'git.commit',
+      title: 'Commit',
+      disabled: true,
+    })
+  })
+
+  it('still offers Publish in the main checkout after a worktree is added', async () => {
+    const { root, local } = await createRemoteBackedRepo()
+    await git(['checkout', '-b', 'feature'], local)
+    await git(['worktree', 'add', '-b', 'task', join(root, 'wt')], local)
+
+    await expect(refreshCommandFor(local)).resolves.toEqual({
+      command: 'git.publishBranch',
+      title: 'Publish Branch',
+    })
+  })
+
+  it('offers Push in a linked worktree once its branch tracks an upstream', async () => {
+    const { root, local } = await createRemoteBackedRepo()
+    const worktree = join(root, 'wt')
+    await git(['worktree', 'add', '-b', 'task', worktree], local)
+    await git(['push', '-u', 'origin', 'task'], worktree)
+    await commitFile(worktree, 'worktree\n', 'worktree work')
+
+    await expect(refreshCommandFor(worktree)).resolves.toEqual({
+      command: 'git.push',
+      title: 'Push',
     })
   })
 })

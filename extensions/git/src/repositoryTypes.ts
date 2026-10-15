@@ -88,6 +88,7 @@ export function gitPrimaryInputCommand({
   headRevision,
   ahead,
   behind,
+  isLinkedWorktree,
 }: {
   readonly hasChanges: boolean
   readonly branch: string | undefined
@@ -95,12 +96,20 @@ export function gitPrimaryInputCommand({
   readonly headRevision: string | undefined
   readonly ahead: number
   readonly behind: number
+  readonly isLinkedWorktree: boolean
 }): Command {
   if (hasChanges) return GIT_COMMIT_INPUT_COMMAND
   // A named branch with a commit but no upstream is what `git push -u` publishes.
   // An unborn branch (no commit) has nothing to push, and porcelain reports no
   // ahead/behind without an upstream, so both fall through to the disabled Commit.
-  if (branch !== undefined && upstream === undefined && headRevision !== undefined) {
+  // A linked worktree's branches are throwaway task branches that aren't meant to
+  // be pushed, so publish is never offered there either.
+  if (
+    branch !== undefined &&
+    upstream === undefined &&
+    headRevision !== undefined &&
+    !isLinkedWorktree
+  ) {
     return {
       command: 'git.publishBranch',
       title: localize('git.command.publishBranch', 'Publish Branch'),

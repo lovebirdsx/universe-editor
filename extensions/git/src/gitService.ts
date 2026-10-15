@@ -7,6 +7,8 @@
  * isn't Node. The locale is pinned to English so diagnostics stay parseable.
  */
 import { spawn } from 'node:child_process'
+import { resolve } from 'node:path'
+import { samePath } from './pathUtil.js'
 
 export interface GitExecResult {
   readonly stdout: string
@@ -133,5 +135,46 @@ export async function detectRepoRoot(cwd: string): Promise<string | undefined> {
     return res.stdout.trim() || undefined
   } catch {
     return undefined
+  }
+}
+
+/**
+ * Compare `rev-parse --git-dir` / `--git-common-dir` output: a linked worktree
+ * (`git worktree add`) keeps its own git dir under `<main>/.git/worktrees/<name>`
+ * while sharing the main repo's common dir, so the two differ. The main checkout
+ * reports the same path twice, and so does a submodule (`.git/modules/<name>` is
+ * both its git dir and its common dir), so neither is misread as a worktree.
+ *
+ * git prints either line relative to the process cwd when it can (`.git` at the
+ * repo root, `../../../.git` from a nested subdirectory), so both are resolved
+ * against `cwd` before comparing.
+ */
+export function isLinkedWorktreeDirs(
+  gitDirLine: string,
+  commonDirLine: string,
+  cwd: string,
+): boolean {
+  const gitDir = gitDirLine.trim()
+  const commonDir = commonDirLine.trim()
+  if (!gitDir || !commonDir) return false
+  return !samePath(resolve(cwd, gitDir), resolve(cwd, commonDir))
+}
+
+/**
+ * Whether `cwd` is a linked worktree. Never rejects: git failing (not a repo, git
+ * not installed) reports false, which keeps the Publish Branch button — the
+ * behaviour from before worktrees were considered.
+ */
+export async function detectLinkedWorktree(
+  cwd: string,
+  log?: (msg: string) => void,
+): Promise<boolean> {
+  try {
+    const res = await gitExec(['rev-parse', '--git-dir', '--git-common-dir'], cwd, log)
+    if (res.exitCode !== 0) return false
+    const [gitDir, commonDir] = res.stdout.split('\n')
+    return isLinkedWorktreeDirs(gitDir ?? '', commonDir ?? '', cwd)
+  } catch {
+    return false
   }
 }
