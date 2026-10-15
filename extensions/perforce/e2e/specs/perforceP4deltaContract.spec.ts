@@ -121,6 +121,9 @@ const SUMMARY_KEYS = [
   // between `counts` and `scopeMatched` because that is where the engine emits
   // it (the list is compared against `Object.keys`, so the ORDER is part of it).
   'p4Calls',
+  // 同一把账的另一半：δ 起的那 N 个 p4 进程各是哪条子命令。与 `p4Calls` 相邻，因为它们必须
+  // 一起读——分类之和不等于总数就说明有一笔没被归类。
+  'p4CallsByCommand',
   'scopeMatched',
   'unmatched',
   'elapsedMs',
@@ -136,6 +139,10 @@ const kindsOf = (run: FakeRun): unknown[] => run.records.map((r) => r['kind'])
 /** The observed p4-call counts, in the order the run emitted them. */
 const p4CallCounts = (run: FakeRun): unknown[] =>
   run.records.filter((r) => r['kind'] === 'p4CommandCount').map((r) => r['count'])
+
+/** 同一批观测各自点名的 p4 子命令（流首那条是 `null`）。 */
+const p4CallCommands = (run: FakeRun): unknown[] =>
+  run.records.filter((r) => r['kind'] === 'p4CommandCount').map((r) => r['command'])
 
 /** The `error` record's message — looked up by kind, not by index, since the
  *  count observation sits ahead of it in the stream. */
@@ -613,6 +620,22 @@ test.describe('@p1 p4delta fake contract', () => {
     // The events are observations; the summary is the conclusion, and it agrees
     // with the final observation.
     expect(summaryOf(run)['p4Calls']).toBe(counts[counts.length - 1])
+
+    // 每笔观测说自己是谁（契约的 `command`）：流首那条 `count:0` 还没起过任何进程，故
+    // `null`；其后的每一条都必须点名一条 p4 子命令——分类账整个建立在这一点上。
+    const commands = p4CallCommands(run)
+    expect(commands[0]).toBeNull()
+    expect(commands.slice(1).every((c) => typeof c === 'string' && c !== '')).toBe(true)
+    // 分类账与总数是同一把账：各类别之和必须回到 `p4Calls`，且类别名就是子命令名。
+    const byCommand = summaryOf(run)['p4CallsByCommand'] as Record<string, number>
+    expect(Object.keys(byCommand).length).toBeGreaterThan(0)
+    expect(Object.values(byCommand).reduce((sum, n) => sum + n, 0)).toBe(summaryOf(run)['p4Calls'])
+    const tallied: Record<string, number> = {}
+    for (const command of commands.slice(1)) {
+      const name = String(command)
+      tallied[name] = (tallied[name] ?? 0) + 1
+    }
+    expect(byCommand).toEqual(tallied)
   })
 
   // Nothing to do: δ stops after the preview — no apply segment, no second p4

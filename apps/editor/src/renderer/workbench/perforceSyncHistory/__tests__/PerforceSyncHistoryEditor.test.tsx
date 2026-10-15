@@ -268,6 +268,81 @@ describe('PerforceSyncHistoryEditor', () => {
     expect(threads).not.toContain('6')
   })
 
+  it('shows the δ per-command breakdown, and says so when the engine reported none', async () => {
+    const delta = makeRun({
+      id: 'run-1',
+      engine: 'p4delta',
+      deltaRunId: 'p4d-1700000000000-4242-1-abcd1234',
+      p4Calls: {
+        native: 0,
+        p4delta: 1078,
+        complete: true,
+        p4deltaByCommand: { ignores: 332, sync: 740, fstat: 3, set: 3 },
+        p4deltaByCommandComplete: true,
+      },
+    })
+    const plain = makeRun({
+      id: 'run-2',
+      p4Calls: { native: 1, p4delta: 0, complete: true },
+    })
+    renderEditor(
+      makeCommandService(
+        makePage([delta, plain]),
+        new Map([
+          ['run-1', makeDetail(delta)],
+          ['run-2', makeDetail(plain)],
+        ]),
+      ),
+    )
+    await flush()
+
+    expect(screen.getByTestId('perforce-sync-history-detail-p4calls-bycommand').textContent).toBe(
+      'sync 740 · ignores 332 · fstat 3 · set 3',
+    )
+
+    fireEvent.click(screen.getAllByTestId('perforce-sync-history-row')[1]!)
+    await flush()
+
+    // 未采集 ≠ 0：老引擎不报分类，这一行必须说出来而不是留空。
+    expect(
+      screen.getByTestId('perforce-sync-history-detail-p4calls-bycommand').textContent,
+    ).toContain('not collected')
+  })
+
+  it('offers the p4delta log only for a run that has one, and opens it by record id', async () => {
+    const withLog = makeRun({
+      id: 'run-1',
+      engine: 'p4delta',
+      deltaRunId: 'p4d-1700000000000-4242-1-abcd1234',
+    })
+    const without = makeRun({ id: 'run-2', engine: 'p4' })
+    const commands = makeCommandService(
+      makePage([withLog, without]),
+      new Map([
+        ['run-1', makeDetail(withLog)],
+        ['run-2', makeDetail(without)],
+      ]),
+    )
+    renderEditor(commands)
+    await flush()
+
+    const button = screen.getByTestId('perforce-sync-history-detail-open-log')
+    fireEvent.click(button)
+    await flush()
+
+    // 递的是记录 id：runId 由扩展从那条记录自己身上取，页面给不了路径。
+    expect(commands.executeCommand).toHaveBeenCalledWith(
+      PerforceSyncHistoryCommands.openLog,
+      'run-1',
+    )
+
+    fireEvent.click(screen.getAllByTestId('perforce-sync-history-row')[1]!)
+    await flush()
+
+    // 纯原生的一次拉取没有 δ 日志可开，按钮就不该在（它会指向别人的日志）。
+    expect(screen.queryByTestId('perforce-sync-history-detail-open-log')).toBeNull()
+  })
+
   it('tells a failed run apart from one that never ran', async () => {
     // A clobber refusal, exactly as the e2e records one: p4 ran, exited 1, and
     // its summary is all zeroes. The engine facts ARE there (the client decorates

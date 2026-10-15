@@ -31,6 +31,7 @@ import type {
   P4GraphSyncRequest,
   P4GraphSyncScopeDto,
   P4GraphSyncPoint,
+  P4SyncLogOpenResult,
   WorkingTreeChangeDto,
 } from '@universe-editor/extensions-common'
 import { existsSync } from 'node:fs'
@@ -41,7 +42,13 @@ import { ConcurrencyGate } from './concurrency.js'
 import { watchConfig } from './configWatch.js'
 import { resolveP4Command, setP4CommandTimeoutSeconds, type P4Connection } from './p4Service.js'
 import { ensureP4delta, type P4deltaEnsureResult } from './p4delta/p4deltaEnsure.js'
-import { p4deltaNamedExplicitly, resolveP4deltaCommand } from './p4delta/p4deltaService.js'
+import { P4deltaRunLog } from './p4delta/p4deltaRunLog.js'
+import { createP4deltaLogSink } from './p4deltaLog.js'
+import {
+  p4deltaNamedExplicitly,
+  resolveP4deltaCommand,
+  type P4deltaSource as P4deltaEngineSource,
+} from './p4delta/p4deltaService.js'
 import type { P4deltaSyncOutcome } from './p4delta/p4deltaStore.js'
 import { resolveP4deltaSource, type P4deltaSource } from './p4delta/p4deltaUpstream.js'
 import { PerforceClient, SYNC_POINT_READBACK_SLOW_EXEC, type P4CacheOptions } from './client.js'
@@ -505,7 +512,13 @@ export function resolveP4deltaEngine(
   settings: { readonly enabled: boolean; readonly path: string },
   log: (msg: string) => void,
   managedRoot?: string,
-): { exe: string; extraEnv?: Readonly<Record<string, string>> } | undefined {
+):
+  | {
+      exe: string
+      source: P4deltaEngineSource
+      extraEnv?: Readonly<Record<string, string>>
+    }
+  | undefined {
   if (!settings.enabled) {
     log('[perforce] p4delta disabled via perforce.p4delta.enabled; using p4')
     return undefined
@@ -540,7 +553,11 @@ export function resolveP4deltaEngine(
   // lookup would find too, and forcing `P4_EXE=p4` would make δ require a FILE
   // by that name instead.
   const extraEnv = p4IsScript ? { P4_EXE: p4.prefixArgs[0] ?? p4.command } : undefined
-  return { exe: candidate.exe, ...(extraEnv !== undefined ? { extraEnv } : {}) }
+  return {
+    exe: candidate.exe,
+    source: candidate.source,
+    ...(extraEnv !== undefined ? { extraEnv } : {}),
+  }
 }
 
 export async function activate(context: ExtensionContext): Promise<void> {
@@ -577,6 +594,74 @@ export async function activate(context: ExtensionContext): Promise<void> {
   context.subscriptions.push(out)
   const log = (msg: string): void => out.appendLine(msg)
   setP4OutputShower(() => out.show())
+
+  // δ 的诊断出口。**独立频道**是这一版的重点：δ 一次运行会吐几千行阶段报告，混进 Perforce
+  // 频道会把 p4 自己的账（每条命令一行）埋掉；分开之后「这次 get 为什么慢」有自己的地方看，
+  // 而 Perforce 频道只留一次运行的开始/结束摘要与 runId（见 client.ts 里被删掉的四处回放）。
+  //
+  // 落盘那一半由 `P4deltaRunLog` 负责（专用目录、有界队列、保留策略）；这里只把它们接到宿主
+  // 能力上。没有 `globalStoragePath` 的主机降级为「只有频道」，并给一次明确警告 —— 静默丢掉
+  // 诊断才是真正的问题。
+  const deltaOut = window.createOutputChannel('P4delta')
+  context.subscriptions.push(deltaOut)
+  const p4deltaLogs = context.globalStoragePath
+    ? P4deltaRunLog.open(join(context.globalStoragePath, 'p4delta-logs'), log)
+    : undefined
+  const p4deltaLog = createP4deltaLogSink({
+    channel: deltaOut,
+    store: p4deltaLogs,
+    warn: log,
+    engineSource: () => p4deltaOptions?.source,
+  })
+
+  /**
+   * 打开一份 δ 运行日志的**快照**。`runId` 省略 = 时间上最近的那一次运行（「打开最近一次
+   * p4delta 日志」用的就是它）——**含此刻仍在写的那一次**，那次的内容只是还在长，读取会先做
+   * 一次有界 flush，并回一句「这是快照」。
+   *
+   * 内容走 `openTextDocument({ content })` 的 untitled 文档：日志文件在**执行扩展的 host** 上
+   * （远程开发时不在用户机器上），把它的 file URI 交给 UI 只会得到一个打不开的标签页。读的是
+   * 有界快照（见 `readSnapshot`），运行中的那一份会先做一次受控 flush——所以打开它时看到的是
+   * 「到现在为止」，不是空文件。
+   *
+   * 每一种失败都有一句明确的话：日志被保留策略清掉、目录里一份都没有、这个主机根本没有存储
+   * 目录，都不是「成功打开了一个空日志」。
+   */
+  const openP4deltaLog = async (runId: string | undefined): Promise<P4SyncLogOpenResult> => {
+    if (p4deltaLogs === undefined) {
+      await window.showWarningMessage(
+        localize(
+          'perforce.p4deltaLog.noStorage',
+          'This host has no storage directory, so p4delta run logs are not written to disk. The P4delta output channel still has the live diagnostics.',
+        ),
+      )
+      return { ok: false, reason: 'no-storage' }
+    }
+    const id = runId ?? p4deltaLogs.latest()?.runId
+    const snapshot = id === undefined ? undefined : await p4deltaLogs.readSnapshot(id)
+    if (snapshot === undefined) {
+      await window.showWarningMessage(
+        localize(
+          'perforce.p4deltaLog.missing',
+          'That p4delta run log is no longer on disk (it may have been cleaned up by the retention policy).',
+        ),
+      )
+      return { ok: false, reason: 'log-missing' }
+    }
+    const doc = await workspace.openTextDocument({ content: snapshot.text, language: 'log' })
+    await window.showTextDocument(doc)
+    if (snapshot.active) {
+      // 运行还没结束：这份文档是快照，不是一个会自己更新的视图。说清楚，免得用户对着一个不动的
+      // 标签页等新行。
+      await window.showInformationMessage(
+        localize(
+          'perforce.p4deltaLog.snapshot',
+          'This run is still in progress — the log is a snapshot taken just now.',
+        ),
+      )
+    }
+    return { ok: true, active: snapshot.active, truncated: snapshot.truncated }
+  }
 
   /** The whole selection sits inside the daily scope's exclusions, so there is
    *  nothing to run p4 on. */
@@ -917,9 +1002,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
   // tier existed.
   // 托管副本压在机器自带的副本（PATH / %LOCALAPPDATA%）之上、操作者显式指定的两级之下，升级才不会被机器上更旧的副本遮蔽（见 resolveP4deltaEngine）。
   const managedRoot = context.globalStoragePath ? join(context.globalStoragePath, 'p4delta') : ''
-  const resolveP4deltaOptions = async (): Promise<
-    { exe: string; extraEnv?: Readonly<Record<string, string>> } | undefined
-  > =>
+  const resolveP4deltaOptions = async (): Promise<ReturnType<typeof resolveP4deltaEngine>> =>
     resolveP4deltaEngine(
       {
         enabled: await cfg.get('p4delta.enabled', true),
@@ -946,6 +1029,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
       workspaceRoot: root,
       createFileSystemWatcher: (glob) => workspace.createFileSystemWatcher(glob),
       ...(p4deltaOptions !== undefined ? { p4delta: p4deltaOptions } : {}),
+      p4deltaLog,
     })
   } catch (err) {
     if (isMissingCli(err)) {
@@ -2513,6 +2597,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
               // The decision the initial client was built with (refreshed on
               // config changes): a switched workspace gets the same engine.
               ...(p4deltaOptions !== undefined ? { p4delta: p4deltaOptions } : {}),
+              p4deltaLog,
             },
           ),
         wire: wireClient,
@@ -2769,6 +2854,35 @@ export async function activate(context: ExtensionContext): Promise<void> {
       // spelling: conflating them reports a missing extension as a stale record.
       return entry === undefined ? null : toRunDetailDto(entry)
     }),
+
+    // 历史详情里的「打开 p4delta 日志」。**只收历史 id**，runId 从那条记录自己身上取——
+    // renderer 永远递不进一个路径，能打开的文件因此只可能是这个扩展自己写过的那几个（见
+    // `P4deltaRunLog.readSnapshot` 的目录前缀与符号链接拒绝）。
+    commands.registerCommand('perforce-sync-history.openLog', async (...args: unknown[]) => {
+      const entry = typeof args[0] === 'string' ? history?.get(args[0]) : undefined
+      const runId = entry?.deltaRunId
+      if (runId === undefined) {
+        // 三种情形共用这一条回答：历史里没有这个 id、记录写在运行引用上线之前、这一跑 δ 真的没起。
+        // 只有最后一种能说「没走 δ」，所以措辞中性——对一次缺字段的旧记录断言「这一跑没跑
+        // p4delta」是**假话**。仍然**绝不退化成「打开最近一份」**：那是别人的日志，用户会以为看到
+        // 的就是这一跑发生了什么。
+        await window.showInformationMessage(
+          localize(
+            'perforce.p4deltaLog.noRun',
+            'No p4delta run log is associated with this get, so there is nothing to open.',
+          ),
+        )
+        return { ok: false, reason: 'unknown-run' } satisfies P4SyncLogOpenResult
+      }
+      return openP4deltaLog(runId)
+    }),
+
+    // 非 sync 操作（收集 / 清理 / 后台扫描）没有历史记录可挂，但它们的诊断一样在 P4delta 频道里。
+    commands.registerCommand('perforce.showP4deltaOutput', () => {
+      deltaOut.show()
+    }),
+
+    commands.registerCommand('perforce.openLatestP4deltaLog', () => openP4deltaLog(undefined)),
 
     // Dry-run: what would a get bring in. Read-only, so no confirmation.
     commands.registerCommand('perforce.previewSync', async (...args: unknown[]) => {

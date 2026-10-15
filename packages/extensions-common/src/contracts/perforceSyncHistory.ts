@@ -93,6 +93,24 @@ export interface P4SyncCallCountsDto {
   readonly native: number
   readonly p4delta: number
   readonly complete: boolean
+  /**
+   * δ 侧的分类账：p4 命令类别 → 次数（`set` / `have` / `fstat` / `opened` /
+   * `ignores` / `add` / `edit` / `delete` / `revert` / `where` / `sync` /
+   * `reconcile` / `clean` / `info` / `client`），只出现非零项。
+   *
+   * 缺席 = **未采集**（这台机器上的 δ 是旧版本，不上报 `p4CallsByCommand`），渲染成
+   * 「未采集」而**绝不是 0 次调用**。它是否完整由 `p4deltaByCommandComplete` 单独说明，**不
+   * 跟 `complete` 绑定**：一次运行可能总数确数（`complete: true`）而分类仍是下界（老引擎只发
+   * 总数，分类退回事件流上已观测到的那一份）。只描述 δ 侧：原生那一半是编辑器自己起的一条命令。
+   */
+  readonly p4deltaByCommand?: Readonly<Record<string, number>>
+  /**
+   * `p4deltaByCommand` 是否是一份**完整**的分类账，与 `complete`（总数是否确数）**相互独立**：
+   * `true` = 来自一次通过验证的 summary 分类；`false` = 它是下界（summary 缺席、分类残缺/非法、
+   * 或分类来自事件流）。缺席（字段不存在）= 与 `p4deltaByCommand` 同类，渲染成未采集/下界，
+   * 绝不冒称完整。
+   */
+  readonly p4deltaByCommandComplete?: boolean
 }
 
 /**
@@ -136,6 +154,20 @@ export interface P4SyncRunDto {
    *  record predates the field; `complete: false` = the δ side is a lower
    *  bound. Never render an incomplete total as exact. */
   readonly p4Calls?: P4SyncCallCountsDto
+  /**
+   * The δ engine's log file for this run, as an opaque id — the record's own
+   * reference, NOT an argument for `openLog`: that command takes the HISTORY
+   * record's id (`id`) and reads this reference off the record, so the renderer
+   * never hands a run reference (let alone a path) to the log store.
+   *
+   * Absent when δ never ran for this get (a pure native one, or one δ refused
+   * before spawning) — and also on records written before this field existed.
+   * That second case is why an absent reference is not evidence that δ did not
+   * run, and why `openLog` words its refusal neutrally. What it is not: "the log
+   * was already cleaned up" — that is what `openLog` reports after finding the
+   * reference and failing to read it.
+   */
+  readonly deltaRunId?: string
   readonly error?: { readonly kind: string; readonly message: string }
   /** The scope gate narrowed the user's selection to the daily scope. */
   readonly scopeNarrowed: boolean
@@ -168,11 +200,12 @@ export interface P4SyncHistoryLoadResult {
 
 /**
  * Contributed-command ids the `perforce` extension registers for the sync
- * history page. Both are read-only, answer from a local JSON file, and make
- * zero p4 calls.
+ * history page. All are read-only, answer from a local JSON file (plus, for
+ * `openLog`, one bounded read of the δ run log), and make zero p4 calls.
  *
  * - `getRuns(options?: P4SyncHistoryLoadOptions) -> P4SyncHistoryLoadResult`
  * - `getRun(id: string) -> P4SyncRunDetailDto | null`
+ * - `openLog(historyId: string) -> P4SyncLogOpenResult`
  *
  * `getRun` answers `null` for "this history has no such record". The host must
  * keep that apart from `undefined`, which is what an UNREGISTERED command id
@@ -180,11 +213,34 @@ export interface P4SyncHistoryLoadResult {
  * extension here" (the extension registers these after its activation gates),
  * and rendering one as the other would blame a rotated-out record for a
  * missing extension.
+ *
+ * `openLog` takes a HISTORY RECORD id and nothing else — never a path. The
+ * extension reads the run reference off that record, checks it against its own
+ * run-file naming and reads from the fixed log directory, so the renderer cannot
+ * reach an arbitrary file. A record with no run reference answers `unknown-run`
+ * rather than falling back to the newest log on disk. It answers what happened
+ * instead of failing silently: the caller is a button whose whole job is to say
+ * why nothing opened.
  */
 export const PerforceSyncHistoryCommands = {
   getRuns: 'perforce-sync-history.getRuns',
   getRun: 'perforce-sync-history.getRun',
+  openLog: 'perforce-sync-history.openLog',
 } as const
+
+/** What `openLog` did. `active` = the run was still writing, so the document is
+ *  a snapshot that may grow. */
+export type P4SyncLogOpenResult =
+  | { readonly ok: true; readonly active: boolean; readonly truncated: boolean }
+  /** No δ run could be resolved for what the caller named: no such history
+   *  record, a record that predates the run reference, or a get that never ran
+   *  δ. The three are one answer because they cannot be told apart from the
+   *  outside — which is why the caller's message must not claim δ never ran. */
+  | { readonly ok: false; readonly reason: 'unknown-run' }
+  /** The run is known but its log is not on disk (cleaned up, or never written). */
+  | { readonly ok: false; readonly reason: 'log-missing' }
+  /** No log storage in this install (no global storage path). */
+  | { readonly ok: false; readonly reason: 'no-storage' }
 
 export type PerforceSyncHistoryCommandId =
   (typeof PerforceSyncHistoryCommands)[keyof typeof PerforceSyncHistoryCommands]

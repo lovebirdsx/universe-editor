@@ -22,6 +22,7 @@ const HEADER =
   'clientRoot,trigger,counts.applied,counts.refusedModified,counts.refusedOverwrite,' +
   'counts.keptOpen,counts.mustResolve,counts.handoff,io.readBytes,io.writeBytes,diskWrites,' +
   'p4Calls.total,p4Calls.native,p4Calls.p4delta,p4Calls.complete,' +
+  'p4Calls.p4deltaByCommand,p4Calls.p4deltaByCommandComplete,deltaRunId,' +
   'error.kind,error.message,scopeNarrowed,scopeCount,scopeFirst'
 
 function makeRun(overrides: Partial<P4SyncRunDto> = {}): P4SyncRunDto {
@@ -120,6 +121,9 @@ describe('runsToCsv', () => {
         'true',
         '',
         '',
+        '',
+        '',
+        '',
         'false',
         '1',
         `${ROOT}/src`,
@@ -157,8 +161,12 @@ describe('runsToCsv', () => {
     expect(cells.slice(12, 18)).toEqual(['', '', '', '', '', '']) // the six counts
     expect(cells[20]).toBe('') // diskWrites
     // A record written before the field existed: all four cells blank, never 0 —
-    // and `complete` blank too, so the count is not claimed exact either.
+    // and `complete` blank too, so the count is not claimed exact either. The
+    // classification and the δ run reference are blank for the same reason.
     expect(cells.slice(21, 25)).toEqual(['', '', '', ''])
+    expect(cells[25]).toBe('') // p4Calls.p4deltaByCommand
+    expect(cells[26]).toBe('') // p4Calls.p4deltaByCommandComplete
+    expect(cells[27]).toBe('') // deltaRunId
   })
 
   it('writes the p4-call total, its two sources and the completeness flag', () => {
@@ -167,6 +175,50 @@ describe('runsToCsv', () => {
     const run = makeRun({ p4Calls: { native: 2, p4delta: 5, complete: false } })
     const cells = (logicalLines(runsToCsv([run]))[1] ?? '').split(',')
     expect(cells.slice(21, 25)).toEqual(['7', '2', '5', 'false'])
+  })
+
+  it('writes the δ breakdown biggest-first and the run reference beside it', () => {
+    const run = makeRun({
+      deltaRunId: 'p4d-1700000000000-4242-1-abcd1234',
+      p4Calls: {
+        native: 0,
+        p4delta: 1078,
+        complete: true,
+        p4deltaByCommand: { sync: 740, ignores: 332, fstat: 3, set: 3 },
+        p4deltaByCommandComplete: true,
+      },
+    })
+    const line = logicalLines(runsToCsv([run]))[1] ?? ''
+    expect(line).toContain('sync=740; ignores=332; fstat=3; set=3')
+    expect(line).toContain('p4d-1700000000000-4242-1-abcd1234')
+  })
+
+  it('marks the classification column as a lower bound independently of the total', () => {
+    // 总数确数（complete: true）而分类只是下界：两列必须分开说，否则表格里会把下界读成确数。
+    const exact = makeRun({
+      p4Calls: {
+        native: 0,
+        p4delta: 3,
+        complete: true,
+        p4deltaByCommand: { sync: 3 },
+        p4deltaByCommandComplete: true,
+      },
+    })
+    const lower = makeRun({
+      p4Calls: {
+        native: 0,
+        p4delta: 3,
+        complete: true,
+        p4deltaByCommand: { sync: 3 },
+        p4deltaByCommandComplete: false,
+      },
+    })
+    const cellsOf = (run: P4SyncRunDto): string[] =>
+      (logicalLines(runsToCsv([run]))[1] ?? '').split(',')
+    expect(cellsOf(exact)[24]).toBe('true') // p4Calls.complete
+    expect(cellsOf(exact)[26]).toBe('true') // p4Calls.p4deltaByCommandComplete
+    expect(cellsOf(lower)[24]).toBe('true')
+    expect(cellsOf(lower)[26]).toBe('false')
   })
 
   it('quotes delimiters, quotes, line breaks and surrounding blanks', () => {

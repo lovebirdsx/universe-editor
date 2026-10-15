@@ -222,3 +222,11 @@
   color: var(--vscode-errorForeground, #f48771);
   font-family: var(--font-mono, monospace);
 }
+
+/* An action row under a section's key/value list (the δ run log button). */
+.actions {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 8px;
+}

@@ -292,6 +292,16 @@
         "command": "perforce.p4delta.install",
         "title": "%perforce.command.p4deltaInstall.title%",
         "category": "Perforce"
+      },
+      {
+        "command": "perforce.showP4deltaOutput",
+        "title": "%perforce.command.showP4deltaOutput.title%",
+        "category": "Perforce"
+      },
+      {
+        "command": "perforce.openLatestP4deltaLog",
+        "title": "%perforce.command.openLatestP4deltaLog.title%",
+        "category": "Perforce"
       }
     ],
     "languages": [
@@ -895,6 +905,14 @@
         },
         {
           "command": "perforce.p4delta.install",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.showP4deltaOutput",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.openLatestP4deltaLog",
           "when": "perforceHasWorkspace"
         }
       ]

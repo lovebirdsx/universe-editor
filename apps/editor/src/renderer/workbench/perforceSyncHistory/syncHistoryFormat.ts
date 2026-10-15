@@ -214,6 +214,35 @@ export function p4CallsRowLabel(run: P4SyncRunDto): string | undefined {
     : localize('perforceSyncHistory.p4Calls.rowAtLeast', '≥{0} p4 calls', { 0: String(total) })
 }
 
+/**
+ * δ 那半边的调用来路：契约里的命令类别 → 次数，按次数降序（同数按命令名）。
+ *
+ * 类别名**不翻译**：`sync` / `ignores` / `fstat` 就是命令行上的那些词，译名只会让这一行与
+ * p4delta 日志、与脚本对不上。缺席（老引擎不发 `p4CallsByCommand`，或这一跑一个 `command`
+ * 事件都没有）= 「未采集」，与「0 次」是两码事，所以返回 undefined 而不是空串。
+ *
+ * 是否下界看 `p4deltaByCommandComplete`，**不看 `complete`**：总数为确数时分类仍可能只是下界
+ * （老引擎只发总数，分类退回事件流已观测到的那一份），两者必须分开说——与 {@link p4CallsLabel}
+ * 是同一条口径。
+ */
+export function p4CommandBreakdown(run: P4SyncRunDto): string | undefined {
+  const calls = run.p4Calls
+  const byCommand = calls?.p4deltaByCommand
+  if (calls === undefined || byCommand === undefined) return undefined
+  const entries = Object.entries(byCommand)
+    .filter(([, count]) => count > 0)
+    .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+  if (entries.length === 0) return undefined
+  const joined = entries.map(([command, count]) => `${command} ${count}`).join(' · ')
+  return calls.p4deltaByCommandComplete === true
+    ? joined
+    : localize(
+        'perforceSyncHistory.p4Calls.byCommandLowerBound',
+        '{0} (lower bound — not a verified per-command tally)',
+        { 0: joined },
+      )
+}
+
 function countsTotal(counts: P4SyncCountsDto): number {
   return (
     counts.applied +

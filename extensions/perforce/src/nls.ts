@@ -300,6 +300,13 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.p4delta.install.noStorage': '此宿主没有扩展存储目录，无法安装托管的 p4delta。',
   'perforce.p4delta.install.unsupportedPlatform':
     'p4delta 没有为当前平台发布构建。请自行安装并设置 perforce.p4delta.path。',
+  // p4delta 运行日志（extension.ts 的 openLog / 打开最近一次日志）
+  'perforce.p4deltaLog.noRun':
+    '找不到与这次拉取关联的 p4delta 运行——没有这条历史记录，或这条记录里没有运行引用。',
+  'perforce.p4deltaLog.noStorage':
+    '此宿主没有扩展存储目录，p4delta 运行日志不会落盘。P4delta 输出频道里仍有实时诊断。',
+  'perforce.p4deltaLog.missing': '该 p4delta 运行日志已不在磁盘上（可能已被保留策略清理）。',
+  'perforce.p4deltaLog.snapshot': '这次运行尚未结束——打开的是刚刚抓取的快照。',
 }
 
 const useZhCn = (process.env.UNIVERSE_DISPLAY_LOCALE ?? '').toLowerCase().startsWith('zh')

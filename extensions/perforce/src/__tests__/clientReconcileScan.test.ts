@@ -3991,6 +3991,7 @@ function stubP4deltaRun(
     carried: { targets: ScopeEntryStub[]; excludes: ScopeEntryStub[] },
   ) => P4deltaReply,
 ): void {
+  let runSeq = 0
   p4deltaRunSpy = vi
     .spyOn(P4deltaService.prototype, 'run')
     // A plain function, not an arrow: `this` is the service instance the client
@@ -4006,7 +4007,10 @@ function stubP4deltaRun(
       const r = reply(argv, carried)
       if (r.hold) await r.hold
       const records = [...(r.records ?? [])]
+      runSeq += 1
       return {
+        runId: `p4d-mock-${runSeq}-1-1-aaaa`,
+        startedAt: 1_700_000_000_000,
         code: r.code ?? 0,
         records,
         progress: r.progress ?? [],

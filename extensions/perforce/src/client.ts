@@ -47,6 +47,7 @@ import {
 } from './p4Service.js'
 import {
   P4deltaService,
+  type P4deltaLogSink,
   type P4deltaRecord,
   type P4deltaRunResult,
 } from './p4delta/p4deltaService.js'
@@ -996,6 +997,17 @@ export interface PerforceClientOptions {
     readonly exe: string
     readonly extraEnv?: Readonly<Record<string, string>>
   }
+  /**
+   * δ's diagnostic outlet (the `P4delta` output channel plus the on-disk run
+   * log), built once by `extension.ts` and shared by every client of the
+   * session. `P4deltaService` streams each run's own report here with the run
+   * id stamped on every line, which is why the four call sites below no longer
+   * replay `result.log` into the Perforce channel one run at a time.
+   *
+   * Absent (tests, a synthetic client) → the service falls back to that channel
+   * rather than dropping the diagnostics.
+   */
+  readonly p4deltaLog?: P4deltaLogSink
 }
 
 export class PerforceClient {
@@ -1378,6 +1390,8 @@ export class PerforceClient {
   private _p4deltaParallelNoted: number | undefined
   /** Output-channel logger, from {@link PerforceClientOptions.log}. */
   private readonly _log: ((msg: string) => void) | undefined
+  /** δ's dedicated diagnostic outlet, from {@link PerforceClientOptions.p4deltaLog}. */
+  private readonly _p4deltaLog: P4deltaLogSink | undefined
 
   /** Set `p4 sync --parallel=threads=N` (`0` = serial). p4 itself falls back to
    *  serial when the server disallows parallel transfer, so no client-side
@@ -1430,6 +1444,7 @@ export class PerforceClient {
             this._log,
             getP4CommandTimeoutMs(),
             extraEnv,
+            this._p4deltaLog,
           )
     if (exe !== undefined) this._log?.(`[perforce] p4delta engine: ${exe}`)
     else if (had)
@@ -1475,6 +1490,9 @@ export class PerforceClient {
     options: PerforceClientOptions = {},
   ) {
     this._log = options.log
+    this._p4deltaLog = options.p4deltaLog
+    // Assigned before `setP4delta` below: that call builds the δ service, which
+    // takes this sink with it.
     this._createFileSystemWatcher = options.createFileSystemWatcher
     this._watchRoot = options.watchRoot
     this._externalChangeDebounceMs = options.externalChangeDebounceMs ?? EXTERNAL_CHANGE_DEBOUNCE_MS
@@ -3959,7 +3977,9 @@ export class PerforceClient {
       ...(execOptions?.priority !== undefined ? { priority: execOptions.priority } : {}),
       ...(execOptions?.timeoutMs !== undefined ? { timeoutMs: execOptions.timeoutMs } : {}),
     })
-    for (const line of result.log) this._log?.(`  p4delta: ${line}`)
+    // The engine's report went to the P4delta channel as it arrived (see
+    // `P4deltaService`); replaying `result.log` here would give every line the
+    // same timestamp at the END of the run and bury the per-run detail.
     // Killed under us — the user asked to stop. Not the engine failing to
     // answer; `_mutateVia` reads the abort and takes its cancel exit.
     if (signal.aborted) return none
@@ -5129,6 +5149,7 @@ export class PerforceClient {
           : {}),
         diskWrites: this._syncDiskWrites,
         p4Calls: calls.snapshot(),
+        ...(calls.deltaRunId !== undefined ? { deltaRunId: calls.deltaRunId } : {}),
       },
     }
   }
@@ -5597,13 +5618,21 @@ export class PerforceClient {
     // Counted before the cancel/failure branches: δ really did start those p4
     // processes, so a killed or failed run keeps what it observed (as a lower
     // bound when its stream never reached a valid summary).
-    calls.noteDelta({ spawned: deltaSpawned, ...readP4deltaCallCount(result) })
+    calls.noteDelta({
+      spawned: deltaSpawned,
+      // The reference to this attempt's log, taken from the run itself rather
+      // than from a "last run" field on the client (two overlapping gets would
+      // cross-bill). `runId` is minted per attempt, so a cancel, a crash or a
+      // fallback to native still points at the log that explains it — and a
+      // fallback never invents a second δ run.
+      runId: result.runId,
+      ...readP4deltaCallCount(result),
+    })
     // Clear as soon as the engine settles — the count belongs to the "Syncing"
     // label, and the follow-up refresh runs under its own busy label
     // ("Refreshing"). Same point on the run's timeline as the native path's
     // clear; `sync()`'s finally is the backstop for both engines.
     this._clearSyncProgress()
-    for (const line of result.log) this._log?.(`  p4delta: ${line}`)
     if (cancelled) {
       this._log?.(`[perforce] sync (p4delta)${specSuffix(spec)} cancelled by user`)
       // Same rule as the native cancel: whatever the server reported as applied
@@ -6068,7 +6097,8 @@ export class PerforceClient {
     const result = await engine.run(this._buildP4deltaSyncArgs(spec, targets, false), {
       ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
     })
-    for (const line of result.log) this._log?.(`  p4delta: ${line}`)
+    // No `result.log` replay: the diagnostics streamed to the P4delta channel
+    // while the preview ran (see `P4deltaService`).
     const outcome = result.sawNonJsonStdout ? undefined : toSyncOutcome(result, this.root, false)
     if (outcome === undefined) {
       this._log?.(`[perforce] sync -n: p4delta did not answer (exit ${result.code}); running on p4`)
@@ -7363,9 +7393,8 @@ export class PerforceClient {
     const result = await engine.run(args, { priority: 'background', signal })
     if (this._disposed || signal.aborted) return true
     // The human-readable report (and the engine's own warnings — including the
-    // timestamp-shortcut line) rides stderr; the service collects it, so it is
-    // replayed here into the Perforce output channel.
-    for (const line of result.log) this._log?.(`  p4delta: ${line}`)
+    // timestamp-shortcut line) streamed to the P4delta channel as it arrived;
+    // replaying it here would timestamp the whole report at the END of the run.
     this._applyP4deltaProgress(result.progress)
 
     const failure = this._p4deltaRunFailure(result)

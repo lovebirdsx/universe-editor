@@ -47,6 +47,8 @@
   "perforce.config.p4delta.autoInstall.description": "为这台机器下载并维护一份 p4delta（仅 Windows x64），无需手动安装即可获得加速。显式配置的路径、环境变量覆盖、PATH 与 %LOCALAPPDATA%\\Programs\\p4delta 会让编辑器不做首次安装；一旦已有托管副本，它会持续升级并优先于 PATH / %LOCALAPPDATA% 生效。关掉只停后台的自动下载与升级——已有的托管副本照常使用，之后靠「安装或更新 p4delta」命令手动升级。",
   "perforce.config.p4delta.downloadBaseUrl.description": "从该基址而非 GitHub Releases 下载 p4delta，供连不上 github.com 的机器使用。需提供 latest.json（{\"version\":\"x.y.z\"}）、SHA256SUMS 与 p4delta-<版本>-x86_64-pc-windows-msvc.zip。留空则用 GitHub。作用域为 machine，工作区设置无法改写下载源。",
   "perforce.command.p4deltaInstall.title": "安装或更新 p4delta",
+  "perforce.command.showP4deltaOutput.title": "显示 p4delta 输出",
+  "perforce.command.openLatestP4deltaLog.title": "打开最近一次 p4delta 日志",
   "perforce.config.maxConcurrent.description": "并发 p4 进程的最大数量。每个 p4 命令都是一次进程启动加一次服务器往返，较低的上限可保护服务器和本机。",
   "perforce.config.commandTimeout.description": "单个 p4 进程的最长存活秒数，超时将被强杀；0 表示不限制。约束的是“永久挂死”而非“执行慢”：否则一个卡死在冻结网络盘或半开网关连接上的 p4 会无限期占住并发槽位。内容传输命令（sync、submit、shelve、unshelve、revert、clean）不受此限——它们的耗时随传输字节数线性增长，且保持可取消。",
   "perforce.config.syncParallelThreads.description": "`p4 sync` 并行拉取文件的线程数（`--parallel=threads=N`）；0 表示不启用、走串行。需服务器允许并行传输（`net.parallel.max`），不支持时 p4 会静默回落为串行。对大量中小文件的拉取提速最明显。",

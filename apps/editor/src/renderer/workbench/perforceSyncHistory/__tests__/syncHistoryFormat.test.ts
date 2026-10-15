@@ -23,6 +23,7 @@ import {
   outcomeLabel,
   p4CallsLabel,
   p4CallsRowLabel,
+  p4CommandBreakdown,
   scopeLines,
   triggerLabel,
 } from '../syncHistoryFormat.js'
@@ -201,6 +202,74 @@ describe('p4CallsLabel', () => {
       'p4 calls unknown',
     )
     expect(p4CallsRowLabel(run())).toBeUndefined()
+  })
+})
+
+describe('p4CommandBreakdown', () => {
+  it('lists the δ breakdown biggest first, with the command names verbatim', () => {
+    // 命令名是命令行上的那些词，不翻译：译名会让这一行对不上 p4delta 日志与脚本。
+    expect(
+      p4CommandBreakdown(
+        run({
+          p4Calls: {
+            native: 0,
+            p4delta: 1078,
+            complete: true,
+            p4deltaByCommand: { ignores: 332, sync: 740, fstat: 3, set: 3 },
+            p4deltaByCommandComplete: true,
+          },
+        }),
+      ),
+    ).toBe('sync 740 · ignores 332 · fstat 3 · set 3')
+  })
+
+  it('states the lower bound from the classification flag, not the total', () => {
+    // `p4deltaByCommandComplete: false` —— 分类是事件流已观测到的那一份，总数却是确数；
+    // 两件事必须分开，所以这里看的是分类标志而不是 `complete`。
+    expect(
+      p4CommandBreakdown(
+        run({
+          p4Calls: {
+            native: 1,
+            p4delta: 37,
+            complete: true,
+            p4deltaByCommand: { have: 37 },
+            p4deltaByCommandComplete: false,
+          },
+        }),
+      ),
+    ).toBe('have 37 (lower bound — not a verified per-command tally)')
+    // 标志缺席（老记录）同样按下界说。
+    expect(
+      p4CommandBreakdown(
+        run({
+          p4Calls: { native: 1, p4delta: 37, complete: true, p4deltaByCommand: { have: 37 } },
+        }),
+      ),
+    ).toBe('have 37 (lower bound — not a verified per-command tally)')
+  })
+
+  it('reads an absent classification as not collected, never as an empty list', () => {
+    // 老引擎只报总数（或这一跑一个 command 事件都没有）：这与「0 次」是两码事。
+    expect(
+      p4CommandBreakdown(
+        run({ p4Calls: { native: 0, p4delta: 4, complete: true, p4deltaByCommandComplete: true } }),
+      ),
+    ).toBeUndefined()
+    expect(
+      p4CommandBreakdown(
+        run({
+          p4Calls: {
+            native: 0,
+            p4delta: 4,
+            complete: true,
+            p4deltaByCommand: {},
+            p4deltaByCommandComplete: true,
+          },
+        }),
+      ),
+    ).toBeUndefined()
+    expect(p4CommandBreakdown(run())).toBeUndefined()
   })
 })
 

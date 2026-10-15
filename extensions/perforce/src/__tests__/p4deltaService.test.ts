@@ -3,6 +3,7 @@ import { writeFileSync } from 'node:fs'
 import { delimiter, join } from 'node:path'
 import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { P4deltaLogSink, P4deltaRunEnd, P4deltaRunStart } from '../p4delta/p4deltaService.js'
 
 // `resolveP4deltaCommand` only ever asks the filesystem whether a candidate
 // exists, so the "installed" set is all the fs it needs.
@@ -33,8 +34,15 @@ class FakeChildProcess extends EventEmitter {
 const spawnMock = vi.fn<(...args: unknown[]) => FakeChildProcess>()
 vi.mock('node:child_process', () => ({ spawn: (...args: unknown[]) => spawnMock(...args) }))
 
-const { P4deltaService, p4deltaSpawnCommand, resolveP4deltaCommand } =
-  await import('../p4delta/p4deltaService.js')
+const {
+  P4deltaService,
+  P4deltaLogTail,
+  createP4deltaLineReader,
+  formatP4deltaSummaryFooter,
+  p4deltaSpawnCommand,
+  resolveP4deltaCommand,
+} = await import('../p4delta/p4deltaService.js')
+const { isSafeRunId } = await import('../p4delta/p4deltaRunLog.js')
 const { ConcurrencyGate } = await import('../concurrency.js')
 
 /** The executable name the resolver looks for on THIS platform. */
@@ -53,6 +61,7 @@ interface Connection {
 function makeService(
   connection?: Connection,
   log?: (msg: string) => void,
+  sink?: P4deltaLogSink,
 ): InstanceType<typeof P4deltaService> {
   return new P4deltaService(
     '/ws/main',
@@ -61,7 +70,36 @@ function makeService(
     '/opt/p4delta',
     '/ws/main',
     log,
+    undefined,
+    {},
+    sink,
   )
+}
+
+/** 一个把行收进数组的 sink，供流式 / runId / 终态相关的用例使用。 */
+function collectingSink(): {
+  sink: P4deltaLogSink
+  lines: string[]
+  starts: P4deltaRunStart[]
+  ends: P4deltaRunEnd[]
+} {
+  const lines: string[] = []
+  const starts: P4deltaRunStart[] = []
+  const ends: P4deltaRunEnd[] = []
+  return {
+    lines,
+    starts,
+    ends,
+    sink: {
+      open: (info) => {
+        starts.push(info)
+        return { line: (text) => lines.push(text) }
+      },
+      close: (info) => {
+        ends.push(info)
+      },
+    },
+  }
 }
 
 function spawnedEnv(): NodeJS.ProcessEnv {
@@ -601,5 +639,437 @@ describe('P4deltaService child env', () => {
     )
     expect(env.P4_EXE).toBe('/opt/perforce/p4')
     expect(env.P4CLIENT).toBe('override')
+  })
+})
+
+/**
+ * 流式诊断出口：这次改动的核心 seam。每一条都在钉「日志是**编辑器收到时**记下来的、
+ * 分块也读得对、丢东西有痕迹、结束只发生一次」。
+ */
+describe('P4deltaService.run: the streaming log outlet', () => {
+  let child: FakeChildProcess
+  beforeEach(() => {
+    child = new FakeChildProcess()
+    spawnMock.mockReturnValue(child)
+  })
+  afterEach(() => {
+    spawnMock.mockReset()
+  })
+
+  it('reports a per-run id before the child settles, on every outcome', async () => {
+    const collected = collectingSink()
+    const svc = makeService(undefined, undefined, collected.sink)
+    const p = svc.run(['--json', 'open'])
+    await flush()
+    // 起手就有 runId：取消 / 崩溃 / 无 summary 的运行也要能被引用到日志。
+    expect(collected.starts).toHaveLength(1)
+    const runId = collected.starts[0]?.runId ?? ''
+    expect(isSafeRunId(runId)).toBe(true)
+    child.emit('close', 1, null)
+    const result = await p
+    expect(result.runId).toBe(runId)
+    expect(result.startedAt).toBeLessThanOrEqual(Date.now())
+    expect(collected.ends).toHaveLength(1)
+    expect(collected.ends[0]?.status).toBe('failed')
+  })
+
+  it('gives each run its own id', async () => {
+    const collected = collectingSink()
+    const svc = makeService(undefined, undefined, collected.sink)
+    const first = svc.run(['--json', 'open'])
+    await flush()
+    child.emit('close', 0, null)
+    await first
+    const second = svc.run(['--json', 'open'])
+    await flush()
+    child.emit('close', 0, null)
+    await second
+    const ids = collected.starts.map((s) => s.runId)
+    expect(new Set(ids).size).toBe(2)
+  })
+
+  it('stamps every diagnostic line with local time, relative elapsed and the run id', async () => {
+    const collected = collectingSink()
+    const svc = makeService(undefined, undefined, collected.sink)
+    const p = svc.run(['--json', 'open'])
+    await flush()
+    child.stderr.emit('data', Buffer.from('Checking digests for 340 files.\n'))
+    child.emit('close', 0, null)
+    await p
+    const runId = collected.starts[0]?.runId ?? ''
+    const line = collected.lines[0] ?? ''
+    // 本地 ISO（带偏移）+ 单调相对耗时 + runId，三段都在同一行上。
+    expect(line).toMatch(
+      new RegExp(
+        `^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}[+-]\\d{2}:\\d{2} \\+\\d+\\.\\d{3}s ${runId} `,
+      ),
+    )
+    expect(line).toContain('Checking digests for 340 files.')
+  })
+
+  it('keeps per-file records and call-count events out of the log, but writes the summary', async () => {
+    const collected = collectingSink()
+    const svc = makeService(undefined, undefined, collected.sink)
+    const p = svc.run(['--json', '--sync', '-a'])
+    await flush()
+    child.stdout.emit(
+      'data',
+      Buffer.from(
+        FILE_LINE +
+          '{"kind":"p4CommandCount","count":7,"command":"fstat"}\n' +
+          SUMMARY_LINE +
+          '{"kind":"error","clientFile":"//main/a.ts","message":"boom"}\n',
+      ),
+    )
+    child.emit('close', 0, null)
+    await p
+    const body = collected.lines.join('\n')
+    expect(body).toContain('"kind":"summary"')
+    expect(body).toContain('"kind":"error"')
+    expect(body).not.toContain('"kind":"file"')
+    expect(body).not.toContain('p4CommandCount')
+  })
+
+  it('keeps structured progress records on the same outlet, verbatim', async () => {
+    const collected = collectingSink()
+    const svc = makeService(undefined, undefined, collected.sink)
+    const p = svc.run(['--json', 'open'])
+    await flush()
+    child.stderr.emit(
+      'data',
+      Buffer.from('{"kind":"progress","phase":"digest","step":3,"total":5}\n'),
+    )
+    child.emit('close', 0, null)
+    await p
+    expect(collected.lines.join('\n')).toContain('"step":3')
+  })
+
+  // 分块解码：一个中文文件名被 chunk 边界劈成两半时，逐块 toString 会得到替换字符。
+  it('reassembles a multi-byte line split across chunks', async () => {
+    const collected = collectingSink()
+    const svc = makeService(undefined, undefined, collected.sink)
+    const p = svc.run(['--json', 'open'])
+    await flush()
+    const bytes = Buffer.from('已更新 中文/路径.ts\n', 'utf8')
+    // 切在一个汉字的中间字节上，正是真实读取会切到的地方。
+    child.stderr.emit('data', bytes.subarray(0, 5))
+    child.stderr.emit('data', bytes.subarray(5))
+    child.emit('close', 0, null)
+    await p
+    expect(collected.lines.join('\n')).toContain('已更新 中文/路径.ts')
+    expect(collected.lines.join('\n')).not.toContain('�')
+  })
+
+  it('reads a record whose bytes are split across chunks', async () => {
+    const collected = collectingSink()
+    const svc = makeService(undefined, undefined, collected.sink)
+    const p = svc.run(['--json', 'open'])
+    await flush()
+    const bytes = Buffer.from('{"kind":"summary","ok":true,"mode":"open","reason":"混乱"}\n')
+    child.stdout.emit('data', bytes.subarray(0, 30))
+    child.stdout.emit('data', bytes.subarray(30))
+    child.emit('close', 0, null)
+    const result = await p
+    expect(result.records).toEqual([{ kind: 'summary', ok: true, mode: 'open', reason: '混乱' }])
+    expect(result.sawSummary).toBe(true)
+  })
+
+  // 超长残行不再无限累积：报一次前缀，丢掉这行剩下的部分，然后继续读下一行。
+  it('bounds an unterminated line and resumes at the next newline', async () => {
+    const collected = collectingSink()
+    const svc = makeService(undefined, undefined, collected.sink)
+    const p = svc.run(['--json', 'open'])
+    await flush()
+    child.stderr.emit('data', Buffer.from('x'.repeat(70_000)))
+    child.stderr.emit('data', Buffer.from('tail of that same line\nnext line\n'))
+    child.emit('close', 0, null)
+    const result = await p
+    const body = collected.lines.join('\n')
+    expect(body).toContain('exceeds 65536 chars')
+    expect(body).toContain('next line')
+    // 被丢掉的那段尾巴不会伪装成一条新日志行。
+    expect(body).not.toContain('tail of that same line')
+    expect(result.log).toContain('next line')
+  })
+
+  it('flushes an unterminated final line when the child dies', async () => {
+    const collected = collectingSink()
+    const svc = makeService(undefined, undefined, collected.sink)
+    const p = svc.run(['--json', 'open'])
+    await flush()
+    child.stderr.emit('data', Buffer.from('report without a trailing newline'))
+    child.emit('close', null, 'SIGTERM')
+    const result = await p
+    expect(result.log).toEqual(['report without a trailing newline'])
+    expect(collected.lines.join('\n')).toContain('report without a trailing newline')
+  })
+
+  // error 与 close 都会结束一次运行；双重结束会把同一个 run 的日志收尾写两遍。
+  it('settles exactly once when error is followed by close', async () => {
+    const collected = collectingSink()
+    const svc = makeService(undefined, undefined, collected.sink)
+    const p = svc.run(['--json', 'open'])
+    await flush()
+    child.emit('error', Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
+    child.emit('close', null, null)
+    const result = await p
+    expect(result.runId).toBe(collected.starts[0]?.runId)
+    expect(collected.ends).toHaveLength(1)
+    expect(collected.ends[0]?.status).toBe('spawn-failed')
+  })
+
+  it('reports cancel, timeout and overflow as their own terminal states', async () => {
+    const cancelled = collectingSink()
+    const svcA = makeService(undefined, undefined, cancelled.sink)
+    const controller = new AbortController()
+    const a = svcA.run(['--json', 'open'], { signal: controller.signal })
+    await flush()
+    controller.abort()
+    child.emit('close', null, 'SIGTERM')
+    await a
+    expect(cancelled.ends[0]?.status).toBe('cancelled')
+
+    const timed = collectingSink()
+    const svcB = makeService(undefined, undefined, timed.sink)
+    const b = svcB.run(['--json', 'open'], { timeoutMs: 20 })
+    await new Promise((r) => setTimeout(r, 40))
+    child.emit('close', null, 'SIGTERM')
+    await b
+    expect(timed.ends[0]?.status).toBe('timeout')
+
+    const over = collectingSink()
+    const svcC = makeService(undefined, undefined, over.sink)
+    const c = svcC.run(['--json', 'open'], { maxOutputBytes: 32 })
+    await flush()
+    child.stdout.emit('data', Buffer.from('y'.repeat(100) + '\n'))
+    child.emit('close', null, 'SIGTERM')
+    await c
+    expect(over.ends[0]?.status).toBe('overflow')
+  })
+
+  // exit 0 但没有 summary 不是结论——日志上说清楚，别让「一切正常」的推断成立。
+  it('calls out an exit-0 run with no summary', async () => {
+    const collected = collectingSink()
+    const svc = makeService(undefined, undefined, collected.sink)
+    const p = svc.run(['--json', 'open'])
+    await flush()
+    child.emit('close', 0, null)
+    const result = await p
+    expect(result.sawSummary).toBe(false)
+    expect(collected.ends[0]?.status).toBe('no-summary')
+    expect(collected.ends[0]?.note).toContain('no conclusion')
+  })
+
+  it('survives a sink that throws on every call', async () => {
+    const svc = makeService(undefined, undefined, {
+      open: () => {
+        throw new Error('channel exploded')
+      },
+      close: () => {
+        throw new Error('channel exploded')
+      },
+    })
+    const p = svc.run(['--json', 'open'])
+    await flush()
+    child.stderr.emit('data', Buffer.from('hello\n'))
+    child.emit('close', 0, null)
+    await expect(p).resolves.toMatchObject({ code: 0 })
+  })
+
+  // 没有注入 sink 时（单测、或没有存储目录的调用方），详细诊断退回 Perforce 频道——
+  // 「诊断丢了」不能是一种静默的失败模式。
+  it('falls back to the Perforce log when no outlet is injected', async () => {
+    const logs: string[] = []
+    const svc = makeService(undefined, (m) => logs.push(m))
+    const p = svc.run(['--json', 'open'])
+    await flush()
+    child.stderr.emit('data', Buffer.from('digest report\n'))
+    child.emit('close', 0, null)
+    await p
+    expect(logs.join('\n')).toContain('digest report')
+  })
+
+  it('keeps the start and exit summary on the Perforce log, with the run id', async () => {
+    const logs: string[] = []
+    const collected = collectingSink()
+    const svc = makeService(undefined, (m) => logs.push(m), collected.sink)
+    const p = svc.run(['--json', '--sync', '-a'])
+    await flush()
+    child.stderr.emit('data', Buffer.from('a long human report\n'))
+    child.emit('close', 0, null)
+    await p
+    const text = logs.join('\n')
+    const runId = collected.starts[0]?.runId ?? ''
+    expect(text).toContain(`[${runId}]`)
+    expect(text).toMatch(/exit 0 \(/)
+    // 详细报告只在 P4delta 频道里——Perforce 频道保留的是开始/结束摘要。
+    expect(text).not.toContain('a long human report')
+  })
+})
+
+/**
+ * 行读取器的封顶：上限对「完整行」与「残行」必须同一把尺子，任何一条回调抛异常都不能
+ * 从 data 处理器里逃出去（宿主崩溃红线 4）。
+ */
+describe('createP4deltaLineReader: bounded lines', () => {
+  it('caps a complete overlong line, not only an unterminated one', () => {
+    const lines: string[] = []
+    const long: string[] = []
+    const reader = createP4deltaLineReader(
+      (line) => lines.push(line),
+      (preview) => long.push(preview),
+    )
+    // 超长行与换行、下一行在同一个 chunk 里：旧实现只查 nl<0 的路径，会把 7 万字符整行原样
+    // 交出去，既没封顶也没留痕。
+    reader.push(Buffer.from(`${'x'.repeat(70_000)}\nnext line\n`))
+    reader.flush()
+    expect(long).toEqual(['x'.repeat(65_536)])
+    expect(lines).toEqual(['next line'])
+  })
+
+  it('does not let a throwing onLongLine escape the reader', () => {
+    const reader = createP4deltaLineReader(
+      () => {},
+      () => {
+        throw new Error('consumer exploded')
+      },
+    )
+    expect(() => reader.push(Buffer.from(`${'x'.repeat(70_000)}\n`))).not.toThrow()
+    expect(() => reader.push(Buffer.from('y'.repeat(70_000)))).not.toThrow()
+    expect(() => reader.flush()).not.toThrow()
+  })
+})
+
+/** 内存里的 stderr 尾必须**有界**：一次宽 get 的报告有几千行，不能一直挂到 run 结束。 */
+describe('P4deltaLogTail', () => {
+  it('drops from the head past the line cap and the byte cap', () => {
+    const byLines = new P4deltaLogTail(3, 1_000)
+    for (const line of ['a', 'b', 'c', 'd']) byLines.push(line)
+    expect(byLines.snapshot()).toEqual(['b', 'c', 'd'])
+
+    const byBytes = new P4deltaLogTail(100, 5)
+    byBytes.push('aaaa')
+    byBytes.push('bbbb')
+    expect(byBytes.snapshot()).toEqual(['bbbb'])
+  })
+
+  it('always keeps the newest line, even when it alone exceeds the byte cap', () => {
+    // 单行已由 reader 封顶；这里再超也只是保留它，绝不把整条 tail 清空。
+    const tail = new P4deltaLogTail(100, 2)
+    tail.push('xx')
+    tail.push('a line well beyond the tiny cap')
+    expect(tail.snapshot()).toEqual(['a line well beyond the tiny cap'])
+  })
+})
+
+describe('P4deltaLogTail in the service', () => {
+  let child: FakeChildProcess
+  beforeEach(() => {
+    child = new FakeChildProcess()
+    spawnMock.mockReturnValue(child)
+  })
+  afterEach(() => {
+    spawnMock.mockReset()
+  })
+
+  it('bounds result.log while still streaming every line to the sink', async () => {
+    const collected = collectingSink()
+    const svc = makeService(undefined, undefined, collected.sink)
+    const p = svc.run(['--json', 'open'])
+    await flush()
+    for (let i = 0; i < 500; i++) child.stderr.emit('data', Buffer.from(`line ${i}\n`))
+    child.emit('close', 0, null)
+    const result = await p
+    expect(result.log.length).toBeLessThanOrEqual(200)
+    expect(result.log.at(-1)).toBe('line 499')
+    expect(result.log).not.toContain('line 0')
+    // 逐行诊断一条不落——砍的只是内存里那份事后回读。
+    expect(collected.lines.filter((l) => l.endsWith('line 0'))).toHaveLength(1)
+    expect(collected.lines.filter((l) => l.endsWith('line 499'))).toHaveLength(1)
+  })
+})
+
+/**
+ * summary 的**有界摘要**：正文被截断后，终态页脚仍要答得出「这 N 次调用花在哪」。
+ */
+describe('formatP4deltaSummaryFooter', () => {
+  it('picks only the bounded command-stat fields', () => {
+    expect(
+      formatP4deltaSummaryFooter({
+        kind: 'summary',
+        mode: 'sync',
+        ok: true,
+        applied: true,
+        total: 12,
+        counts: { update: 12 },
+        elapsedMs: 1234,
+        p4Calls: 37,
+        p4CallsByCommand: { fstat: 30, sync: 7 },
+        reason: null,
+        scopeMatched: 12,
+        unmatched: 0,
+      }),
+    ).toBe(
+      '# summary: mode=sync ok=true applied=true total=12 elapsedMs=1234 p4Calls=37 ' +
+        'p4CallsByCommand=fstat 30 · sync 7 counts=update 12',
+    )
+  })
+
+  it('returns nothing when the record has no bounded field to report', () => {
+    expect(formatP4deltaSummaryFooter({ kind: 'summary' })).toBeUndefined()
+  })
+
+  it('leaves a throwing-free, truncated string for an over-long record', () => {
+    const footer = formatP4deltaSummaryFooter({
+      kind: 'summary',
+      mode: 'm'.repeat(20_000),
+      p4Calls: 1,
+    })
+    expect(footer).toBeDefined()
+    expect(footer!.length).toBe(8 * 1024 + 1) // cap + the '…' suffix
+  })
+})
+
+describe('P4deltaService: the summary footer reaches close()', () => {
+  let child: FakeChildProcess
+  beforeEach(() => {
+    child = new FakeChildProcess()
+    spawnMock.mockReturnValue(child)
+  })
+  afterEach(() => {
+    spawnMock.mockReset()
+  })
+
+  it('summarises the run’s command stats, not the raw record', async () => {
+    const collected = collectingSink()
+    const svc = makeService(undefined, undefined, collected.sink)
+    const p = svc.run(['--json', '--sync', '-a'])
+    await flush()
+    child.stdout.emit(
+      'data',
+      Buffer.from(
+        '{"kind":"summary","mode":"sync","ok":true,"applied":true,"total":12,' +
+          '"counts":{"update":12},"elapsedMs":1234,"p4Calls":37,' +
+          '"p4CallsByCommand":{"fstat":30,"sync":7},"reason":null}\n',
+      ),
+    )
+    child.emit('close', 0, null)
+    await p
+    const summary = collected.ends[0]?.summary ?? ''
+    expect(summary).toContain('mode=sync')
+    expect(summary).toContain('p4Calls=37')
+    expect(summary).toContain('p4CallsByCommand=fstat 30 · sync 7')
+    expect(summary).toContain('counts=update 12')
+    expect(summary).toContain('elapsedMs=1234')
+  })
+
+  it('carries no summary footer when the stream never concluded', async () => {
+    const collected = collectingSink()
+    const svc = makeService(undefined, undefined, collected.sink)
+    const p = svc.run(['--json', 'open'])
+    await flush()
+    child.emit('close', 1, null)
+    await p
+    expect(collected.ends[0]?.summary).toBeUndefined()
   })
 })

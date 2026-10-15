@@ -106,6 +106,27 @@ export interface SyncP4CallCounts {
   readonly native: number
   readonly p4delta: number
   readonly complete: boolean
+  /**
+   * δ 侧的分类账：`command` 类别 → 次数。「这 N 次调用花在哪」按契约的固定枚举给出
+   * （`set` / `have` / `fstat` / `opened` / `ignores` / `add` / `edit` / `delete` /
+   * `revert` / `where` / `sync` / `reconcile` / `clean` / `info` / `client`），只出现非零项。
+   *
+   * 缺席 = **未采集**（老引擎不发 `p4CallsByCommand`，或这一跑一个 `command` 事件都没有），
+   * 与「0 次」是两码事，UI 必须显示前者。`complete: false` 时它是一份**下界**：取的是事件流
+   * 上已经观测到的分类，而总数可能更大。
+   *
+   * 只描述 δ 侧：原生那一半是编辑器自己起的一条命令，没有分类可言。
+   */
+  readonly p4deltaByCommand?: Readonly<Record<string, number>>
+  /**
+   * `p4deltaByCommand` 是否是一份**完整**的分类账（与 `complete` 相互独立）。
+   *
+   * `true` = 它来自一次通过验证的 summary 分类（总和等于 `p4delta`、每类不小于事件流已观测
+   * 到的次数、键全在契约枚举内）；`false` = 它是**下界**（summary 缺席、分类残缺/非法、或
+   * summary 只有总数而分类来自事件流）。总数为确数（`complete: true`）时分类仍可能只是下界
+   * （老引擎只发总数），所以两者必须分开说。缺席（字段本身不存在）= 未采集，UI 绝不显示 0。
+   */
+  readonly p4deltaByCommandComplete?: boolean
 }
 
 /**
@@ -120,6 +141,9 @@ export class SyncP4CallCounter {
   private _native = 0
   private _p4delta = 0
   private _complete = true
+  private _byCommand: Record<string, number> | undefined
+  private _byCommandComplete = false
+  private _deltaRunId: string | undefined
 
   /** One p4 process the editor itself started for this run. Called from the
    *  spawn hook, so a command that never spawned (ENOENT, killed in the
@@ -140,19 +164,67 @@ export class SyncP4CallCounter {
    * observed value is kept and the run is marked incomplete (a lower bound).
    * Either way the count is kept for a cancelled or failed run — δ really did
    * start those processes.
+   *
+   * `runId` is the reference to this attempt's log file, taken from the attempt
+   * itself (not from a "last run" field on the client, which concurrent gets
+   * would cross-bill). It survives every outcome — a cancelled or crashed run
+   * still has its log on disk — and stays undefined when δ never started, so a
+   * pure native run never claims a δ log it does not have.
+   *
+   * The optional fields are spelled `?: T | undefined` on purpose: the caller
+   * spreads a parser result into this object, and `exactOptionalPropertyTypes`
+   * rejects an explicit `undefined` for a plain optional property. The
+   * alternative (a branchy spread at the call site) would hide which fields
+   * really are optional.
    */
-  noteDelta(attempt: { spawned: boolean; observed: number; reported: number | undefined }): void {
+  noteDelta(attempt: {
+    spawned: boolean
+    observed: number
+    reported: number | undefined
+    observedByCommand?: Readonly<Record<string, number>> | undefined
+    reportedByCommand?: Readonly<Record<string, number>> | undefined
+    reportedByCommandComplete?: boolean | undefined
+    runId?: string | undefined
+  }): void {
     if (!attempt.spawned) return
-    if (attempt.reported !== undefined && attempt.reported >= attempt.observed) {
-      this._p4delta = attempt.reported
-      return
+    const useReported = attempt.reported !== undefined && attempt.reported >= attempt.observed
+    if (useReported) {
+      this._p4delta = attempt.reported ?? 0
+    } else {
+      this._p4delta = attempt.observed
+      this._complete = false
     }
-    this._p4delta = attempt.observed
-    this._complete = false
+    this._deltaRunId = attempt.runId
+    // 分类的完整性**独立于**总数：只有一份通过验证的 summary 分类才算完整账；否则退回事件流上
+    // 已观测到的那一份（下界）。这正是「summary 只有总数、事件却有分类」时分类不能凭空消失的
+    // 原因——总数是谁给的与分类是否完整是两码事。
+    const classificationComplete =
+      useReported &&
+      attempt.reportedByCommandComplete === true &&
+      attempt.reportedByCommand !== undefined
+    const byCommand = classificationComplete ? attempt.reportedByCommand : attempt.observedByCommand
+    const entries = Object.entries(byCommand ?? {}).filter(([, n]) => n > 0)
+    this._byCommand = entries.length > 0 ? Object.fromEntries(entries) : undefined
+    this._byCommandComplete = this._byCommand !== undefined && classificationComplete
   }
 
   snapshot(): SyncP4CallCounts {
-    return { native: this._native, p4delta: this._p4delta, complete: this._complete }
+    return {
+      native: this._native,
+      p4delta: this._p4delta,
+      complete: this._complete,
+      ...(this._byCommand !== undefined
+        ? {
+            p4deltaByCommand: { ...this._byCommand },
+            p4deltaByCommandComplete: this._byCommandComplete,
+          }
+        : {}),
+    }
+  }
+
+  /** This run's δ log reference, or undefined when δ never ran (see `noteDelta`). */
+  get deltaRunId(): string | undefined {
+    return this._deltaRunId
   }
 }
 
@@ -198,6 +270,15 @@ export interface SyncRunFacts {
   /** p4 command processes this run started, split native / δ (see
    *  {@link SyncP4CallCounts}). Always present on a run that had facts. */
   readonly p4Calls: SyncP4CallCounts
+  /**
+   * The δ attempt's log file, for the history page's "open the run's log".
+   * Captured when the attempt STARTED, so it survives a cancel, a crash, a
+   * missing summary and a fallback to native — the cases where reading the log
+   * matters most. Undefined when δ was never attempted (a pure native run, or
+   * one δ refused before spawning): there is no δ log to point at, and a
+   * fallback never invents a second one.
+   */
+  readonly deltaRunId?: string
 }
 
 /** One get, as persisted. */
@@ -237,6 +318,8 @@ export interface SyncHistoryEntry {
   /** p4 command processes this run started, split native / δ. Absent on records
    *  written before the field existed, and on runs with no facts. */
   readonly p4Calls?: SyncP4CallCounts
+  /** The δ attempt's log file for this run (see {@link SyncRunFacts.deltaRunId}). */
+  readonly deltaRunId?: string
   readonly error?: { readonly kind: string; readonly message: string }
 }
 
@@ -342,6 +425,7 @@ export function buildSyncHistoryEntry(input: BuildSyncHistoryInput): SyncHistory
           ...(facts.io !== undefined ? { io: facts.io } : {}),
           diskWrites: facts.diskWrites,
           p4Calls: { ...facts.p4Calls },
+          ...(facts.deltaRunId !== undefined ? { deltaRunId: facts.deltaRunId } : {}),
         }
       : {}),
     ...(summary !== undefined ? { counts: countsOf(summary) } : {}),
@@ -416,7 +500,22 @@ function isP4Calls(value: unknown): value is SyncP4CallCounts {
   if (value === null || typeof value !== 'object') return false
   const c = value as Record<string, unknown>
   const count = (n: unknown): n is number => isCount(n) && Number.isSafeInteger(n)
-  return count(c['native']) && count(c['p4delta']) && typeof c['complete'] === 'boolean'
+  if (!count(c['native']) || !count(c['p4delta']) || typeof c['complete'] !== 'boolean')
+    return false
+  const byCommandComplete = c['p4deltaByCommandComplete']
+  if (byCommandComplete !== undefined && typeof byCommandComplete !== 'boolean') return false
+  const byCommand = c['p4deltaByCommand']
+  if (byCommand === undefined) return true
+  if (byCommand === null || typeof byCommand !== 'object' || Array.isArray(byCommand)) return false
+  return Object.entries(byCommand).every(
+    ([command, n]) => command.length > 0 && command.length <= 32 && count(n),
+  )
+}
+
+/** A δ log reference: the same filename-safe shape the log store accepts, so a
+ *  record can never point a read at anything but one of its own run files. */
+function isDeltaRunId(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value)
 }
 
 /**
@@ -449,6 +548,7 @@ export function isEntry(value: unknown): value is SyncHistoryEntry {
   if (e['io'] !== undefined && !isIo(e['io'])) return false
   if (e['diskWrites'] !== undefined && !isCount(e['diskWrites'])) return false
   if (e['p4Calls'] !== undefined && !isP4Calls(e['p4Calls'])) return false
+  if (e['deltaRunId'] !== undefined && !isDeltaRunId(e['deltaRunId'])) return false
   const err = e['error']
   if (err !== undefined) {
     if (err === null || typeof err !== 'object') return false
@@ -487,6 +587,7 @@ export function toRunDto(entry: SyncHistoryEntry): P4SyncRunDto {
     ...(entry.io !== undefined ? { io: { ...entry.io } } : {}),
     ...(entry.diskWrites !== undefined ? { diskWrites: entry.diskWrites } : {}),
     ...(entry.p4Calls !== undefined ? { p4Calls: { ...entry.p4Calls } } : {}),
+    ...(entry.deltaRunId !== undefined ? { deltaRunId: entry.deltaRunId } : {}),
     ...(entry.error !== undefined ? { error: { ...entry.error } } : {}),
     scopeNarrowed: entry.scopeNarrowed,
     scopeFirst: entry.scope.slice(0, SCOPE_FIRST).map(toScopeDto),

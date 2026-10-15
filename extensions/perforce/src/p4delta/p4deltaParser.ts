@@ -157,7 +157,8 @@ function readCounts(raw: unknown): Record<string, number> {
 
 /**
  * How many native p4 processes a δ run reported starting (contract:
- * `kind:"p4CommandCount"` on stdout, and the final number on `summary.p4Calls`).
+ * `kind:"p4CommandCount"` on stdout, and the final number on `summary.p4Calls`),
+ * plus the per-command breakdown (`p4CallsByCommand` / the event's `command`).
  *
  * `observed` is the highest count the event stream carried — a LOWER BOUND when
  * no summary arrived (the run was killed, cancelled or crashed). `reported` is
@@ -165,29 +166,141 @@ function readCounts(raw: unknown): Record<string, number> {
  * carried no valid one. Malformed values (negative, NaN, fractional, beyond the
  * safe-integer range, non-numbers) are ignored rather than trusted: this stream
  * is an engine's own output, and one bad event must not fabricate a count.
+ *
+ * 分类（`byCommand`）与总数是同一把账的两半：总数是「起了多少次 p4」，分类是「花在哪」。
+ * 事件流逐次带上 `command`，所以**没有 summary 时分类仍是一份可用的下界**——取消 / 崩溃
+ * 之后「这 37 次调用是什么」照样答得出来。两处取值都按 {@link P4DELTA_P4_COMMANDS} 收窄：
+ * 契约说新类别可以随时加进来、消费方按未知值忽略，所以白名单之外的键一律丢掉，而不是让它
+ * 变成一条谁都对不上账的账目。
  */
 export interface P4deltaCallCount {
   readonly observed: number
   readonly reported: number | undefined
+  /** Per-command tally from the event stream: a lower bound when no summary arrived. */
+  readonly observedByCommand: Readonly<Record<string, number>>
+  /** The summary's own final tally, or undefined when it stated none. */
+  readonly reportedByCommand: Readonly<Record<string, number>> | undefined
+  /**
+   * summary 的分类账是否**自洽可信**（与总数 `complete` 相互独立）：条目一个没被丢（键全在契约
+   * 枚举内、值都是非负安全整数）、各项之和恰好等于 `reported`、每类都不大于总数且不小于事件流
+   * 已观测到的次数。任一不成立都为 false——此时分类只是**下界**，消费方绝不能冒称完整。
+   */
+  readonly reportedByCommandComplete: boolean
 }
+
+/** 契约里固定的 p4 命令类别（`docs/json-contract.md` 的 `kind:"p4CommandCount"` 表）。 */
+const P4DELTA_P4_COMMANDS: ReadonlySet<string> = new Set([
+  'set',
+  'info',
+  'client',
+  'where',
+  'have',
+  'fstat',
+  'opened',
+  'ignores',
+  'add',
+  'edit',
+  'delete',
+  'revert',
+  'sync',
+  'reconcile',
+  'clean',
+])
 
 function asCallCount(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined
 }
 
+/** 受控读取分类账：只认契约枚举里的键与非负安全整数。`complete` 说的是「一个条目都没被丢」——
+ *  未知键（未来新增类别、伪造键）与非法值（负 / 小数 / 非安全整数 / 非数字）都会把它置 false，
+ *  因为它们让这份账对不上总数。合法的 `0` 不在此列：它是承诺范围内的非负计数，丢掉它既不改变
+ *  各项之和，也不该把一份与总数自洽的账降级成下界（内部输出仍只保留非零项）。 */
+function readCommandTally(
+  raw: unknown,
+): { tally: Record<string, number>; complete: boolean } | undefined {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const tally: Record<string, number> = {}
+  let complete = true
+  for (const [command, value] of Object.entries(raw)) {
+    const count = P4DELTA_P4_COMMANDS.has(command) ? asCallCount(value) : undefined
+    if (count === undefined) {
+      complete = false
+      continue
+    }
+    if (count === 0) continue
+    tally[command] = count
+  }
+  return { tally, complete }
+}
+
 export function readP4deltaCallCount(result: P4deltaRunResult): P4deltaCallCount {
   let observed = 0
   let reported: number | undefined
+  let reportedByCommand: Record<string, number> | undefined
+  let tallyComplete: boolean | undefined
+  const observedByCommand: Record<string, number> = {}
+  // 并发下 p4CommandCount 事件可能**乱序**抵达（count 大的先到），也可能重复。按 count 值去重，
+  // 而不是拿 `count <= observed` 过滤——后者会把乱序到达的合法事件整条丢掉，让分类凭空少一笔。
+  const seenCounts = new Set<number>()
   for (const record of result.records) {
     if (record['kind'] === 'p4CommandCount') {
       const count = asCallCount(record['count'])
-      if (count !== undefined && count > observed) observed = count
+      // 坏事件整条丢弃：计数不可信时它的 `command` 同样不可信，只留下类别会凭空多出一笔
+      // 对不上总数的账。
+      if (count === undefined) continue
+      if (count > observed) observed = count
+      // 0 事件（还没起任何进程）与重复 count 都不能给某个类别凭空加一笔。
+      if (count < 1 || seenCounts.has(count)) continue
+      seenCounts.add(count)
+      const command = record['command']
+      if (typeof command === 'string' && P4DELTA_P4_COMMANDS.has(command)) {
+        // 事件是累计值：同一类别上的观测次数就是该类别收到的自增事件数。按 count 去重后每条
+        // 事件恰好对应一次真实 spawn，所以这里就是计数。
+        observedByCommand[command] = (observedByCommand[command] ?? 0) + 1
+      }
     } else if (record['kind'] === 'summary') {
       // Last summary wins — same rule as {@link summarizeRun}.
       reported = asCallCount(record['p4Calls'])
+      const read = readCommandTally(record['p4CallsByCommand'])
+      reportedByCommand = read?.tally
+      tallyComplete = read?.complete
     }
   }
-  return { observed, reported }
+  return {
+    observed,
+    reported,
+    observedByCommand,
+    reportedByCommand,
+    reportedByCommandComplete: verifiesCommandTally(
+      reported,
+      reportedByCommand,
+      tallyComplete,
+      observedByCommand,
+    ),
+  }
+}
+
+/**
+ * summary 的分类账要**自洽**才可信：每一类都不大于总数、每一项都不小于事件流已观测到的次数
+ * （含 summary 一字未提、事件流却见过的类别——漏掉一整类与数值偏小同样是账不平）、各项之和
+ * 恰好等于总数、且读取时一个条目都没被丢。任一不成立都说明这份账缺了条目或与总数对不上，
+ * 消费方必须把它当**下界**，绝不能冒称完整。
+ */
+function verifiesCommandTally(
+  reported: number | undefined,
+  tally: Record<string, number> | undefined,
+  tallyComplete: boolean | undefined,
+  observedByCommand: Readonly<Record<string, number>>,
+): boolean {
+  if (tallyComplete !== true || reported === undefined || tally === undefined) return false
+  let sum = 0
+  // 两边的键都要遍历：只走 summary 的项，会漏掉「事件流见过、summary 一个字没提」的整类。
+  for (const command of new Set([...Object.keys(tally), ...Object.keys(observedByCommand)])) {
+    const count = tally[command] ?? 0
+    if (count > reported || count < (observedByCommand[command] ?? 0)) return false
+    sum += count
+  }
+  return sum === reported
 }
 
 /** A δ normal-sync run's answer, in the shapes the get pipeline already reads. */

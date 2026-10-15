@@ -13,8 +13,11 @@
  *  4. `facts` (engine, IO bytes, threads, watcher writes) reach the record.
  *  5. The two read commands answer from the file with zero p4 calls, and drop
  *     arguments that do not fit instead of coercing them.
+ *  6. `openLog` resolves the run reference off the RECORD and reads it from the
+ *     extension's own log directory — never a path the caller named, and never
+ *     "the latest log" for a get whose δ run does not exist.
  */
-import { readFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkTempDir } from '@universe-editor/temp-root'
@@ -41,18 +44,49 @@ const commandsMock = vi.hoisted(() => {
   }
 })
 
-const windowMock = vi.hoisted(() => ({
-  createOutputChannel: vi.fn(() => ({ appendLine: vi.fn(), show: vi.fn() })),
-  showInformationMessage: vi.fn(async () => undefined as string | undefined),
-  showWarningMessage: vi.fn(async () => undefined as string | undefined),
-  showErrorMessage: vi.fn(async () => undefined as string | undefined),
-  showQuickPick: vi.fn(async () => undefined),
-  showInputBox: vi.fn(async () => undefined as string | undefined),
-  withProgress: vi.fn(
-    async (_opts: unknown, fn: (progress: unknown, token: unknown) => Promise<unknown>) =>
-      fn({ report: vi.fn() }, { onCancellationRequested: vi.fn(() => ({ dispose: vi.fn() })) }),
-  ),
-}))
+const windowMock = vi.hoisted(() => {
+  /** 频道收到的行，按频道名分开：P4delta 与 Perforce 是两条独立的账。 */
+  const channels = new Map<string, string[]>()
+  /** 建出来的频道对象本身，供断言 `show()`。 */
+  const createdChannels = new Map<string, { show: ReturnType<typeof vi.fn> }>()
+  const channelsOf = (name: string): string[] => {
+    let lines = channels.get(name)
+    if (lines === undefined) {
+      lines = []
+      channels.set(name, lines)
+    }
+    return lines
+  }
+  return {
+    channels,
+    createdChannels,
+    channelsOf,
+    createOutputChannel: vi.fn((name: string) => {
+      const channel = {
+        name,
+        append: (text: string) => void channelsOf(name).push(text),
+        appendLine: (text: string) => void channelsOf(name).push(`${text}\n`),
+        replace: vi.fn(),
+        clear: vi.fn(),
+        show: vi.fn(),
+        hide: vi.fn(),
+        dispose: vi.fn(),
+      }
+      createdChannels.set(name, channel)
+      return channel
+    }),
+    showInformationMessage: vi.fn(async () => undefined as string | undefined),
+    showWarningMessage: vi.fn(async () => undefined as string | undefined),
+    showErrorMessage: vi.fn(async () => undefined as string | undefined),
+    showQuickPick: vi.fn(async () => undefined),
+    showInputBox: vi.fn(async () => undefined as string | undefined),
+    showTextDocument: vi.fn(async () => undefined),
+    withProgress: vi.fn(
+      async (_opts: unknown, fn: (progress: unknown, token: unknown) => Promise<unknown>) =>
+        fn({ report: vi.fn() }, { onCancellationRequested: vi.fn(() => ({ dispose: vi.fn() })) }),
+    ),
+  }
+})
 
 const workspaceMock = vi.hoisted(() => {
   /** Settings a test has overridden; anything else answers its declared default. */
@@ -66,6 +100,11 @@ const workspaceMock = vi.hoisted(() => {
     configValues,
     configListeners,
     getConfiguration: vi.fn(() => ({ get })),
+    openTextDocument: vi.fn(async (options?: { content?: string; language?: string }) => ({
+      uri: { toString: () => 'untitled:log' },
+      languageId: options?.language ?? 'plaintext',
+      getText: () => options?.content ?? '',
+    })),
     onDidChangeConfiguration: vi.fn(
       (listener: (e: { affectsConfiguration(key: string): boolean }) => void) => {
         configListeners.push(listener)
@@ -127,7 +166,13 @@ interface FakeRunResult {
     endedAt: number
     io?: { readBytes: number; writeBytes: number }
     diskWrites: number
-    p4Calls: { native: number; p4delta: number; complete: boolean }
+    p4Calls: {
+      native: number
+      p4delta: number
+      complete: boolean
+      p4deltaByCommand?: Record<string, number>
+    }
+    deltaRunId?: string
   }
 }
 
@@ -334,6 +379,10 @@ beforeEach(async () => {
   windowMock.showInformationMessage.mockClear()
   windowMock.showWarningMessage.mockClear()
   windowMock.showErrorMessage.mockClear()
+  windowMock.showTextDocument.mockClear()
+  windowMock.channels.clear()
+  windowMock.createdChannels.clear()
+  workspaceMock.openTextDocument.mockClear()
   // The default answer is "dismissed": no button, no override. Tests that need a
   // confirmation say yes explicitly.
   windowMock.showWarningMessage.mockResolvedValue(undefined)
@@ -688,6 +737,120 @@ describe('perforce-sync-history read commands', () => {
     // A non-string id is dropped to the same "no such record" answer rather than
     // coerced into a lookup.
     expect(await commandResult('perforce-sync-history.getRun', { id: 'nope' })).toBeNull()
+  })
+})
+
+/**
+ * 「打开 p4delta 日志」这条链路：runId 从记录上取、文件只从扩展自己的日志目录读、失败各有
+ * 一句明确的话。这里用真的 `P4deltaRunLog` 目录（`<globalStoragePath>/p4delta-logs`）——
+ * 命令层拿到的就是一个 runId，而不是一个路径。
+ */
+describe('opening a δ run log', () => {
+  const LOG_DIR = (): string => join(storage, 'p4delta-logs')
+  const RUN_ID = 'p4d-1700000000000-4242-1-abcd1234'
+
+  function deltaFacts(runId: string): FakeRunResult {
+    return appliedRun({
+      facts: {
+        engine: 'p4delta',
+        engineFallback: false,
+        parallelThreads: 4,
+        startedAt: Date.now() - 100,
+        endedAt: Date.now(),
+        diskWrites: 0,
+        p4Calls: { native: 0, p4delta: 7, complete: true },
+        deltaRunId: runId,
+      },
+    })
+  }
+
+  function writeLog(runId: string, text: string, at?: number): void {
+    mkdirSync(LOG_DIR(), { recursive: true })
+    const file = join(LOG_DIR(), `${runId}.log`)
+    writeFileSync(file, text, 'utf8')
+    if (at !== undefined) utimesSync(file, at / 1000, at / 1000)
+  }
+
+  it('opens the log the record points at, as a bounded snapshot document', async () => {
+    fake.sync.mockResolvedValue(deltaFacts(RUN_ID))
+    await runCommand('perforce.syncLatest')
+    const id = records()[0]!.id
+    expect(records()[0]?.deltaRunId).toBe(RUN_ID)
+    writeLog(RUN_ID, '=== p4delta run ===\nstaging 12 files\n')
+
+    const result = await commandResult('perforce-sync-history.openLog', id)
+
+    expect(result).toEqual({ ok: true, active: false, truncated: false })
+    // The content goes through an untitled document: on a remote host the log is
+    // not a file the UI could open by URI at all.
+    expect(workspaceMock.openTextDocument).toHaveBeenCalledWith({
+      content: '=== p4delta run ===\nstaging 12 files\n',
+      language: 'log',
+    })
+    expect(windowMock.showTextDocument).toHaveBeenCalled()
+  })
+
+  it('never opens the latest log for a record whose δ run does not exist', async () => {
+    // A plain native get: no δ log reference, and the directory happens to hold
+    // somebody else's run. Answering with that file would show diagnostics for a
+    // run the user never asked about.
+    await runCommand('perforce.syncLatest')
+    const id = records()[0]!.id
+    writeLog('p4d-1700000000000-1-1-ffffffff', 'another run entirely\n')
+
+    const result = await commandResult('perforce-sync-history.openLog', id)
+
+    expect(result).toEqual({ ok: false, reason: 'unknown-run' })
+    expect(workspaceMock.openTextDocument).not.toHaveBeenCalled()
+    expect(windowMock.showInformationMessage).toHaveBeenCalled()
+  })
+
+  it('says the log is gone instead of opening an empty document', async () => {
+    fake.sync.mockResolvedValue(deltaFacts(RUN_ID))
+    await runCommand('perforce.syncLatest')
+    const id = records()[0]!.id
+    // The retention policy (or a session on another machine) took it away.
+
+    const result = await commandResult('perforce-sync-history.openLog', id)
+
+    expect(result).toEqual({ ok: false, reason: 'log-missing' })
+    expect(workspaceMock.openTextDocument).not.toHaveBeenCalled()
+    expect(windowMock.showWarningMessage).toHaveBeenCalled()
+  })
+
+  it('answers an unknown history id with the same "no run" shape', async () => {
+    const result = await commandResult('perforce-sync-history.openLog', 'not-a-record')
+    expect(result).toEqual({ ok: false, reason: 'unknown-run' })
+    expect(workspaceMock.openTextDocument).not.toHaveBeenCalled()
+  })
+
+  it('opens the newest run log for the palette command', async () => {
+    writeLog('p4d-1700000000000-1-1-aaaaaaaa', 'older\n', 1_700_000_000_000)
+    writeLog('p4d-1700000000001-1-2-bbbbbbbb', 'newer\n', 1_700_000_100_000)
+
+    const result = await commandResult('perforce.openLatestP4deltaLog')
+
+    expect(result).toEqual({ ok: true, active: false, truncated: false })
+    expect(workspaceMock.openTextDocument).toHaveBeenCalledWith({
+      content: 'newer\n',
+      language: 'log',
+    })
+  })
+
+  it('has nothing to open before any run, and says so', async () => {
+    const result = await commandResult('perforce.openLatestP4deltaLog')
+
+    expect(result).toEqual({ ok: false, reason: 'log-missing' })
+    expect(workspaceMock.openTextDocument).not.toHaveBeenCalled()
+  })
+
+  it('shows the P4delta channel for the show-output command', async () => {
+    await runCommand('perforce.showP4deltaOutput')
+
+    const delta = windowMock.createdChannels.get('P4delta')
+    expect(delta?.show).toHaveBeenCalled()
+    // 两条账互不打扰：p4 自己的输出不会因为这次调用被翻出来。
+    expect(windowMock.createdChannels.get('Perforce')?.show).not.toHaveBeenCalled()
   })
 })
 

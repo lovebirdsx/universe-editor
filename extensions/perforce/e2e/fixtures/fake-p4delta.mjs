@@ -811,8 +811,30 @@ function typedExcludes(opts, clientRoot) {
  */
 let p4CallCount = 0
 
-function emitP4CommandCount() {
-  emit({ kind: 'p4CommandCount', count: p4CallCount })
+/** 按类别累计的同一个账户（契约的 `p4CallsByCommand`），键是 p4 的子命令名。 */
+const p4CallsByCommand = {}
+
+/**
+ * 一次委托调用跑的是哪条 p4 子命令：arg 数组里第一个非选项条目（`-G` / `-Mj` /
+ * `-c <client>` 这些排在前面）。这就是契约里 `p4CommandCount.command` 报的东西，也是
+ * 「这 N 次调用花在哪」可被推导出来的唯一依据。
+ */
+function delegatedCommand(args) {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]
+    if (arg === '-c' || arg === '-p' || arg === '-u') {
+      i++
+      continue
+    }
+    if (arg.startsWith('-')) continue
+    return arg
+  }
+  return null
+}
+
+/** `command` 为 null = 流开头那条「一次都还没起」的事件（契约如此）。 */
+function emitP4CommandCount(command = null) {
+  emit({ kind: 'p4CommandCount', count: p4CallCount, command })
 }
 
 /**
@@ -849,8 +871,10 @@ function delegate(args) {
   // contract's rule. Counted before parsing so the event rides the stream the
   // consumer actually reads.
   p4CallCount += 1
+  const command = delegatedCommand(args)
+  if (command !== null) p4CallsByCommand[command] = (p4CallsByCommand[command] ?? 0) + 1
   logP4Call(p4CallCount)
-  emitP4CommandCount()
+  emitP4CommandCount(command)
   if (res.stderr) writeErr(res.stderr)
   return { records: parseMj(res.stdout ?? '') }
 }
@@ -1382,6 +1406,8 @@ function emitSummary(mode, opts, state) {
     // The contract's final observation. Present on every summary, including a
     // failing one — it states a fact about the run, not its outcome.
     p4Calls: p4CallCount,
+    // 分类账：只有非零类别（契约如此），且与 `p4Calls` 是同一把账的两半。
+    p4CallsByCommand: { ...p4CallsByCommand },
     scopeMatched: state.scopeMatched,
     unmatched: state.unmatched,
     elapsedMs: Date.now() - state.started,

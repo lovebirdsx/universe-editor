@@ -292,6 +292,25 @@ describe('isEntry', () => {
     ).toBe(false)
     expect(isEntry({ ...entry, p4Calls: { native: 1, p4delta: 0 } })).toBe(false)
     expect(isEntry({ ...entry, p4Calls: { native: 1, p4delta: 0, complete: 'yes' } })).toBe(false)
+    // 分类完整性是独立的布尔：形状不对 / 非布尔都丢整条。
+    expect(
+      isEntry({
+        ...entry,
+        p4Calls: {
+          native: 0,
+          p4delta: 2,
+          complete: true,
+          p4deltaByCommand: { sync: 2 },
+          p4deltaByCommandComplete: true,
+        },
+      }),
+    ).toBe(true)
+    expect(
+      isEntry({
+        ...entry,
+        p4Calls: { native: 0, p4delta: 2, complete: true, p4deltaByCommandComplete: 'yes' },
+      }),
+    ).toBe(false)
   })
 })
 
@@ -344,6 +363,60 @@ describe('toRunDto / toRunDetailDto', () => {
     )
     expect(dto.p4Calls).toEqual({ native: 0, p4delta: 4, complete: true })
   })
+
+  it('carries the δ log reference and the classification through to the DTO', () => {
+    const dto = toRunDto(
+      build({
+        run: run({
+          facts: facts({
+            engine: 'p4delta',
+            deltaRunId: 'p4d-1-2-3-abcd1234',
+            p4Calls: {
+              native: 0,
+              p4delta: 5,
+              complete: true,
+              p4deltaByCommand: { set: 1, fstat: 4 },
+            },
+          }),
+        }),
+      }),
+    )
+    expect(dto.deltaRunId).toBe('p4d-1-2-3-abcd1234')
+    expect(dto.p4Calls?.p4deltaByCommand).toEqual({ set: 1, fstat: 4 })
+  })
+
+  it('omits the δ log reference and the classification rather than setting them undefined', () => {
+    const dto = toRunDto(build({ run: run({ facts: facts() }) }))
+    expect('deltaRunId' in dto).toBe(false)
+    expect('p4deltaByCommand' in dto.p4Calls!).toBe(false)
+  })
+})
+
+describe('the δ log reference on a record', () => {
+  it('is recorded from the run’s facts when δ ran', () => {
+    const entry = build({
+      run: run({ facts: facts({ engine: 'p4delta', deltaRunId: 'p4d-1-2-3-abcd1234' }) }),
+    })
+    expect(entry.deltaRunId).toBe('p4d-1-2-3-abcd1234')
+  })
+
+  it('is absent for a pure native run that has no δ log to point at', () => {
+    expect(build().deltaRunId).toBeUndefined()
+    expect(build({ run: undefined, outcome: 'declined' }).deltaRunId).toBeUndefined()
+  })
+
+  it('accepts the store’s own run-id shape and rejects anything else', () => {
+    const entry = build()
+    expect(isEntry({ ...entry, deltaRunId: 'p4d-1-2-3-abcd1234' })).toBe(true)
+    expect(isEntry({ ...entry, deltaRunId: undefined })).toBe(true)
+    // 一个能穿出日志目录的引用（分隔符 / 上级目录 / 隐藏文件）必须整条丢弃，
+    // 否则 history 能指使扩展去读目录外的文件。
+    expect(isEntry({ ...entry, deltaRunId: '../outside' })).toBe(false)
+    expect(isEntry({ ...entry, deltaRunId: 'a/b' })).toBe(false)
+    expect(isEntry({ ...entry, deltaRunId: '.hidden' })).toBe(false)
+    expect(isEntry({ ...entry, deltaRunId: '' })).toBe(false)
+    expect(isEntry({ ...entry, deltaRunId: 'x'.repeat(129) })).toBe(false)
+  })
 })
 
 describe('SyncP4CallCounter', () => {
@@ -392,5 +465,132 @@ describe('SyncP4CallCounter', () => {
     const counter = new SyncP4CallCounter()
     counter.noteDelta({ spawned: true, observed: 6, reported: undefined })
     expect(counter.snapshot()).toEqual({ native: 0, p4delta: 6, complete: false })
+  })
+
+  // 分类完整性独立于总数：只有一份**通过验证**的 summary 分类才算完整账。
+  it('keeps the verified summary’s classification beside its total', () => {
+    const counter = new SyncP4CallCounter()
+    counter.noteDelta({
+      spawned: true,
+      observed: 5,
+      reported: 5,
+      observedByCommand: { set: 1, fstat: 4 },
+      reportedByCommand: { set: 1, fstat: 4 },
+      reportedByCommandComplete: true,
+    })
+    expect(counter.snapshot()).toEqual({
+      native: 0,
+      p4delta: 5,
+      complete: true,
+      p4deltaByCommand: { set: 1, fstat: 4 },
+      p4deltaByCommandComplete: true,
+    })
+  })
+
+  // summary 只说了总数、事件流却有分类：总数是确数，但分类只能退回事件流那一份（下界），
+  // 绝不能因为「总数完整」就把分类也冒充成完整——更不能让分类凭空消失。
+  it('falls back to the event stream’s classification when the summary stated only a total', () => {
+    const counter = new SyncP4CallCounter()
+    counter.noteDelta({
+      spawned: true,
+      observed: 5,
+      reported: 5,
+      observedByCommand: { set: 1, fstat: 4 },
+    })
+    expect(counter.snapshot()).toEqual({
+      native: 0,
+      p4delta: 5,
+      complete: true,
+      p4deltaByCommand: { set: 1, fstat: 4 },
+      p4deltaByCommandComplete: false,
+    })
+  })
+
+  // summary 的分类没通过验证（残缺 / 与总数对不上）：连带退回事件流那一份。
+  it('ignores a summary classification that failed verification', () => {
+    const counter = new SyncP4CallCounter()
+    counter.noteDelta({
+      spawned: true,
+      observed: 5,
+      reported: 5,
+      observedByCommand: { set: 5 },
+      reportedByCommand: { sync: 4 },
+      reportedByCommandComplete: false,
+    })
+    expect(counter.snapshot()).toEqual({
+      native: 0,
+      p4delta: 5,
+      complete: true,
+      p4deltaByCommand: { set: 5 },
+      p4deltaByCommandComplete: false,
+    })
+  })
+
+  it('uses the observed classification when the summary’s total lost the tie', () => {
+    const counter = new SyncP4CallCounter()
+    counter.noteDelta({
+      spawned: true,
+      observed: 4,
+      reported: 2,
+      observedByCommand: { have: 4 },
+      reportedByCommand: { have: 1 },
+    })
+    expect(counter.snapshot()).toEqual({
+      native: 0,
+      p4delta: 4,
+      complete: false,
+      p4deltaByCommand: { have: 4 },
+      p4deltaByCommandComplete: false,
+    })
+  })
+
+  it('keeps the event stream’s classification for a cancelled run as a lower bound', () => {
+    // 取消 / 崩溃之后没有 summary，但「这 37 次调用花在哪」照样答得出来。
+    const counter = new SyncP4CallCounter()
+    counter.noteDelta({
+      spawned: true,
+      observed: 37,
+      reported: undefined,
+      observedByCommand: { fstat: 30, sync: 7 },
+    })
+    expect(counter.snapshot()).toEqual({
+      native: 0,
+      p4delta: 37,
+      complete: false,
+      p4deltaByCommand: { fstat: 30, sync: 7 },
+      p4deltaByCommandComplete: false,
+    })
+  })
+
+  it('reports no classification at all when neither side stated one', () => {
+    // 缺席 = 未采集，不是「0 次」：老引擎只说总数，UI 必须能区分这两件事。
+    const counter = new SyncP4CallCounter()
+    counter.noteDelta({ spawned: true, observed: 2, reported: 2 })
+    expect('p4deltaByCommand' in counter.snapshot()).toBe(false)
+    counter.noteDelta({ spawned: true, observed: 2, reported: 2, observedByCommand: {} })
+    expect('p4deltaByCommand' in counter.snapshot()).toBe(false)
+  })
+
+  it('records this attempt’s run reference and keeps it through a native fallback', () => {
+    const counter = new SyncP4CallCounter()
+    expect(counter.deltaRunId).toBeUndefined()
+    counter.noteDelta({
+      spawned: true,
+      observed: 1,
+      reported: undefined,
+      runId: 'p4d-1-2-3-abcd1234',
+    })
+    expect(counter.deltaRunId).toBe('p4d-1-2-3-abcd1234')
+    // The fallback adds native calls to the SAME run; the δ log it points at is
+    // still the log of what δ did before handing back.
+    counter.countNative()
+    expect(counter.deltaRunId).toBe('p4d-1-2-3-abcd1234')
+  })
+
+  it('never claims a δ log reference for a run that never started δ', () => {
+    const counter = new SyncP4CallCounter()
+    counter.noteDelta({ spawned: false, observed: 0, reported: undefined })
+    counter.countNative()
+    expect(counter.deltaRunId).toBeUndefined()
   })
 })

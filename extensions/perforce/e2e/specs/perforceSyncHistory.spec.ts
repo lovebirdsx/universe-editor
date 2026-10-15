@@ -69,7 +69,10 @@ interface RecordedRun {
     readonly native: number
     readonly p4delta: number
     readonly complete: boolean
+    readonly p4deltaByCommand?: Readonly<Record<string, number>>
   }
+  /** δ 运行引用：这一跑留下的日志文件的 runId（纯原生 get 没有）。 */
+  readonly deltaRunId?: string
 }
 
 async function openPerforceWorkspace(
@@ -175,6 +178,25 @@ test.describe('@p1 perforce sync history', () => {
       await expect(view.getByTestId('perforce-sync-history-detail-p4calls')).toHaveText(
         '1 p4 command(s) (1 native · 0 δ)',
       )
+      // 原生那一半没有按命令的分类可言，而这一跑根本没起 δ：不是「0 次」，是没这项账。
+      await expect(view.getByTestId('perforce-sync-history-detail-p4calls-bycommand')).toHaveText(
+        'not collected (this engine does not report a per-command split)',
+      )
+      // ……所以也没有日志可开：这个按钮在这一跑上不存在（它挂在 δ 运行引用上）。
+      await expect(view.getByTestId('perforce-sync-history-detail-open-log')).toHaveCount(0)
+
+      // 记录里没有运行引用，命令就必须这么回答——**绝不退化成「打开最近一份」**。这条断言
+      // 在这里能验红的前提是盘上确实没有这一跑的日志（纯原生会话里 δ 一次都没起）。
+      const record = (await recordedRuns(page))[0]!
+      expect(record.deltaRunId).toBeUndefined()
+      const activeBefore = await page.evaluate(() => window.__E2E__!.getActiveEditorUri())
+      const opened = await page.evaluate(
+        (id) => window.__E2E__!.runCommand('perforce-sync-history.openLog', id),
+        record.id,
+      )
+      expect(opened).toEqual({ ok: false, reason: 'unknown-run' })
+      // 没有开新标签页，也没有顶替当前那个：这一跑没有被打开的日志。
+      expect(await page.evaluate(() => window.__E2E__!.getActiveEditorUri())).toBe(activeBefore)
     })
   })
 

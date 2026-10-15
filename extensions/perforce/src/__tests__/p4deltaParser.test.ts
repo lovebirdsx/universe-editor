@@ -27,6 +27,8 @@ function file(overrides: Record<string, unknown> = {}): Record<string, unknown> 
 
 function runOf(records: Record<string, unknown>[]): P4deltaRunResult {
   return {
+    runId: 'p4d-test-1-1-aaaa',
+    startedAt: 1_700_000_000_000,
     code: 0,
     records,
     progress: [],
@@ -770,44 +772,185 @@ describe('appliedSyncFiles', () => {
 describe('readP4deltaCallCount', () => {
   it('takes the highest cumulative event and the summary’s final number', () => {
     const run = runOf([
-      { kind: 'p4CommandCount', count: 0 },
-      { kind: 'p4CommandCount', count: 1 },
-      { kind: 'p4CommandCount', count: 5 },
-      { kind: 'summary', p4Calls: 5 },
+      { kind: 'p4CommandCount', count: 0, command: null },
+      { kind: 'p4CommandCount', count: 1, command: 'set' },
+      { kind: 'p4CommandCount', count: 5, command: 'fstat' },
+      { kind: 'summary', p4Calls: 5, p4CallsByCommand: { set: 1, fstat: 4 } },
     ])
-    expect(readP4deltaCallCount(run)).toEqual({ observed: 5, reported: 5 })
+    expect(readP4deltaCallCount(run)).toEqual({
+      observed: 5,
+      reported: 5,
+      observedByCommand: { set: 1, fstat: 1 },
+      reportedByCommand: { set: 1, fstat: 4 },
+      reportedByCommandComplete: true,
+    })
   })
 
   it('keeps the high-water mark as a lower bound when no summary arrived', () => {
     // A killed / cancelled / crashed run: the events that made it out are all
     // the evidence there is, and the consumer must mark the total incomplete.
-    const run = runOf([{ kind: 'p4CommandCount', count: 3 }])
-    expect(readP4deltaCallCount(run)).toEqual({ observed: 3, reported: undefined })
+    const run = runOf([{ kind: 'p4CommandCount', count: 3, command: 'have' }])
+    expect(readP4deltaCallCount(run)).toEqual({
+      observed: 3,
+      reported: undefined,
+      observedByCommand: { have: 1 },
+      reportedByCommand: undefined,
+      reportedByCommandComplete: false,
+    })
   })
 
   it('drops malformed events instead of trusting them', () => {
     const run = runOf([
-      { kind: 'p4CommandCount', count: -1 },
-      { kind: 'p4CommandCount', count: Number.NaN },
-      { kind: 'p4CommandCount', count: 1.5 },
-      { kind: 'p4CommandCount', count: Number.MAX_SAFE_INTEGER + 1 },
-      { kind: 'p4CommandCount', count: '4' },
+      { kind: 'p4CommandCount', count: -1, command: 'set' },
+      { kind: 'p4CommandCount', count: Number.NaN, command: 'set' },
+      { kind: 'p4CommandCount', count: 1.5, command: 'set' },
+      { kind: 'p4CommandCount', count: Number.MAX_SAFE_INTEGER + 1, command: 'set' },
+      { kind: 'p4CommandCount', count: '4', command: 'set' },
       { kind: 'p4CommandCount' },
-      { kind: 'p4CommandCount', count: 2 },
+      { kind: 'p4CommandCount', count: 2, command: 'sync' },
     ])
-    expect(readP4deltaCallCount(run)).toEqual({ observed: 2, reported: undefined })
+    expect(readP4deltaCallCount(run)).toEqual({
+      observed: 2,
+      reported: undefined,
+      observedByCommand: { sync: 1 },
+      reportedByCommand: undefined,
+      reportedByCommandComplete: false,
+    })
+  })
+
+  // 并发下 count 大的事件可能先到：按 count 去重计已知事件，而不是拿 count<=observed 过滤
+  // （那会把乱序到达的合法事件整条丢掉，让分类凭空少一笔）。
+  it('counts an out-of-order event once and a repeated count not at all', () => {
+    const run = runOf([
+      { kind: 'p4CommandCount', count: 3, command: 'sync' },
+      { kind: 'p4CommandCount', count: 2, command: 'have' },
+      { kind: 'p4CommandCount', count: 1, command: 'set' },
+      // 重复的 count（同一事件被读了两遍）不能再给 have 加一笔。
+      { kind: 'p4CommandCount', count: 2, command: 'have' },
+    ])
+    expect(readP4deltaCallCount(run)).toEqual({
+      observed: 3,
+      reported: undefined,
+      observedByCommand: { set: 1, have: 1, sync: 1 },
+      reportedByCommand: undefined,
+      reportedByCommandComplete: false,
+    })
+  })
+
+  // 坏 0 事件（还没起任何进程）不能凭空给某个类别加一笔。
+  it('ignores a zero-count event for the classification', () => {
+    const run = runOf([
+      { kind: 'p4CommandCount', count: 0, command: 'set' },
+      { kind: 'p4CommandCount', count: 0, command: 'set' },
+    ])
+    expect(readP4deltaCallCount(run)).toEqual({
+      observed: 0,
+      reported: undefined,
+      observedByCommand: {},
+      reportedByCommand: undefined,
+      reportedByCommandComplete: false,
+    })
   })
 
   it('ignores a malformed summary count and keeps a valid later one', () => {
     const run = runOf([
-      { kind: 'p4CommandCount', count: 0 },
-      { kind: 'summary', p4Calls: 'many' },
+      { kind: 'p4CommandCount', count: 0, command: null },
+      { kind: 'summary', p4Calls: 'many', p4CallsByCommand: { sync: 2 } },
       { kind: 'summary', p4Calls: 4 },
     ])
-    expect(readP4deltaCallCount(run)).toEqual({ observed: 0, reported: 4 })
+    expect(readP4deltaCallCount(run)).toEqual({
+      observed: 0,
+      reported: 4,
+      observedByCommand: {},
+      // The last summary wins for the tally too — a stale classification must
+      // not survive beside the newer total it belongs to.
+      reportedByCommand: undefined,
+      // 只说了总数（4）、没说分类：分类不完整，退回事件流那一份。
+      reportedByCommandComplete: false,
+    })
+  })
+
+  // 受控键：契约说新类别可以加，消费方按未知值忽略；手写/伪造的键同样进不来。
+  it('rejects commands outside the contract’s fixed set', () => {
+    const run = runOf([
+      { kind: 'p4CommandCount', count: 1, command: 'rm -rf' },
+      { kind: 'p4CommandCount', count: 2, command: 'submit' },
+      { kind: 'p4CommandCount', count: 3, command: 'sync' },
+      { kind: 'summary', p4Calls: 3, p4CallsByCommand: { sync: 1, nonsense: 9, submit: 2 } },
+    ])
+    const counts = readP4deltaCallCount(run)
+    expect(counts.observedByCommand).toEqual({ sync: 1 })
+    expect(counts.reportedByCommand).toEqual({ sync: 1 })
+    // 丢掉的条目（nonsense / submit）让这份账对不上任何总数，绝不能冒称完整。
+    expect(counts.reportedByCommandComplete).toBe(false)
+  })
+
+  it('drops malformed classification entries', () => {
+    const run = runOf([
+      {
+        kind: 'summary',
+        p4Calls: 2,
+        p4CallsByCommand: { have: -3, fstat: 1.5, where: 2 },
+      },
+    ])
+    const counts = readP4deltaCallCount(run)
+    expect(counts.reportedByCommand).toEqual({ where: 2 })
+    expect(counts.reportedByCommandComplete).toBe(false)
+  })
+
+  // 合法的 0 是承诺范围内的**非负计数**：内部只保留非零项，所以它不进分类结果，但它不该把一份
+  // 与总数自洽的账降级成下界（把它当非法值会让「have 0 次」这一类的引擎永远只能答下界）。
+  it('skips a legitimate zero entry without downgrading the tally', () => {
+    const run = runOf([{ kind: 'summary', p4Calls: 2, p4CallsByCommand: { sync: 2, have: 0 } }])
+    const counts = readP4deltaCallCount(run)
+    expect(counts.reportedByCommand).toEqual({ sync: 2 })
+    expect(counts.reportedByCommandComplete).toBe(true)
+  })
+
+  // 分类完整性独立于总数：总和对得上但分类缺条目 / 对不上，都不能算完整。
+  it('does not claim a complete classification whose sum misses the total', () => {
+    const run = runOf([{ kind: 'summary', p4Calls: 9, p4CallsByCommand: { sync: 5, have: 3 } }])
+    expect(readP4deltaCallCount(run).reportedByCommandComplete).toBe(false)
+  })
+
+  it('refuses a classification whose category exceeds the total', () => {
+    // 「不能信大于总数的分类」：一笔对不上账的类别，整份不可信。
+    const run = runOf([{ kind: 'summary', p4Calls: 5, p4CallsByCommand: { sync: 9 } }])
+    expect(readP4deltaCallCount(run).reportedByCommandComplete).toBe(false)
+  })
+
+  it('refuses a classification below what the event stream observed', () => {
+    // summary 说 sync 只跑了 1 次，事件流却已经看到 2 次（单类 >= 已观测）。
+    const run = runOf([
+      { kind: 'p4CommandCount', count: 1, command: 'sync' },
+      { kind: 'p4CommandCount', count: 2, command: 'sync' },
+      { kind: 'summary', p4Calls: 2, p4CallsByCommand: { sync: 1, have: 1 } },
+    ])
+    const counts = readP4deltaCallCount(run)
+    expect(counts.observedByCommand).toEqual({ sync: 2 })
+    expect(counts.reportedByCommandComplete).toBe(false)
+  })
+
+  // summary 漏掉**一整类**、数目却与总数自洽（1 = 1）：只遍历 summary 的项就会把这份账冒称
+  // 完整，而事件流已经记下 sync 跑过一次。缺条目与数值偏小同样是账不平，所以两边的键都要走。
+  it('refuses a classification that omits a class the event stream observed', () => {
+    const run = runOf([
+      { kind: 'p4CommandCount', count: 1, command: 'sync' },
+      { kind: 'summary', p4Calls: 1, p4CallsByCommand: { fstat: 1 } },
+    ])
+    const counts = readP4deltaCallCount(run)
+    expect(counts.observedByCommand).toEqual({ sync: 1 })
+    expect(counts.reportedByCommand).toEqual({ fstat: 1 })
+    expect(counts.reportedByCommandComplete).toBe(false)
   })
 
   it('reports nothing observed and nothing reported for a bare stream', () => {
-    expect(readP4deltaCallCount(runOf([]))).toEqual({ observed: 0, reported: undefined })
+    expect(readP4deltaCallCount(runOf([]))).toEqual({
+      observed: 0,
+      reported: undefined,
+      observedByCommand: {},
+      reportedByCommand: undefined,
+      reportedByCommandComplete: false,
+    })
   })
 })

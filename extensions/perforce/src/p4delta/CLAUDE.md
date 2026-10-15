@@ -1,8 +1,18 @@
 # extensions/perforce/src/p4delta/CLAUDE.md
 
-δ 引擎（`p4delta`，外部 Rust 单文件 CLI）在本扩展里的一切：**spawn 封装 + 副本解析**（`p4deltaService.ts`）+ **记录的纯解析**（`p4deltaParser.ts`）+ **托管副本的自动安装/升级**（其余四个文件）。δ 是可选加速：任何一环出问题都回退原生 p4，绝不改变语义（叙事与契约硬条款见 [`../../docs/reconcile.md`](../../docs/reconcile.md)）。
+δ 引擎（`p4delta`，外部 Rust 单文件 CLI）在本扩展里的一切：**spawn 封装 + 副本解析**（`p4deltaService.ts`）+ **记录的纯解析**（`p4deltaParser.ts`）+ **运行日志的有界落盘**（`p4deltaRunLog.ts`）+ **托管副本的自动安装/升级**（其余四个文件）。δ 是可选加速：任何一环出问题都回退原生 p4，绝不改变语义（叙事与契约硬条款见 [`../../docs/reconcile.md`](../../docs/reconcile.md)）。
 
-> 本目录**除 `p4deltaService.ts` 外一律不 import `@universe-editor/extension-api`**：宿主能力（存储路径、日志、通知、进度）全部注入，所以四个新模块可纯单测、可整体上移成包。改这里时保持这条。
+> 本目录**除 `p4deltaService.ts` 外一律不 import `@universe-editor/extension-api`**：宿主能力（存储路径、日志、通知、进度）全部注入，所以这几个新模块可纯单测、可整体上移成包。改这里时保持这条。
+
+## 运行日志（`p4deltaRunLog.ts` + `extension.ts` 的 sink）
+
+一次真实尝试 = 一个 `runId`（时间 + pid + 进程内序号 + 随机，`_spawn` 里生成）+ 一个日志文件。`P4deltaService` 只把**已格式化**的行（接收时间 + 单调相对耗时 + runId + 正文）推给注入的 `P4deltaLogSink`；输出走两条——`P4delta` 输出频道（实时）与 `<globalStoragePath>/p4delta-logs/<runId>.log`（落盘）。Perforce 频道只留开始 / 结束摘要与 runId（`client.ts` 的四处全量回放已删——时间戳会全同，且把 p4 自己的账埋掉）。
+
+几条承重性质，改 `p4deltaRunLog.ts` 前先读 `__tests__/p4deltaRunLog.test.ts`：`append` 永不抛永不阻塞、异步串行写、正文预算耗尽后只留一次截断标记、**终态行有尾部预留**（`appendFooter`，截断也要留住结论）、`.writing` → `.log` 只在收尾时改名、清理只动已结束文件且**另一个窗口正在写的 `.writing` 不碰**（超期遗留才收）、更名/淘汰按 mtime 从新到旧。读取端（`readSnapshot`）先校验 runId 形状、再校验专用目录前缀、再拒绝符号链接：调用方给的 id 永远不能变成任意路径。
+
+服务侧另有两处**内存有界**（不落盘也生效）：`P4deltaService` 的 `result.log` 是**有界尾部**（`P4deltaLogTail`，最后 200 行 / 128 KiB；逐行诊断照旧实时送 sink），`P4deltaRunEnd.summary` 是 summary 记录的**有界摘要**（只摘 mode / ok / counts / elapsedMs / p4Calls / p4CallsByCommand，<= 8 KiB；由 sink 收尾时作为**页脚**写出，正文被截断也留得住「这 N 次调用花在哪」，且不与实时进频道的 summary 记录逐字重复）。
+
+落盘只在本机 / 远端 host，**不上传**；运行头不写环境变量、不探测引擎版本（路径与 argv 已经够定位）。日志里可能有工作区 / depot 路径，用户文档已声明。
 
 ## 副本优先级（五级，`resolveP4deltaCommand`）
 

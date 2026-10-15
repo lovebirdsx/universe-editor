@@ -238,12 +238,17 @@ interface DeltaReply {
 
 let syncDeltaReply: (argv: readonly string[]) => DeltaReply = () => ({})
 
+/** A distinct run reference per stub call: the client must report the id of the
+ *  attempt that actually ran, not a shared or last-write-wins value. */
+let deltaRunSeq = 0
+
 /** The pid a started δ run would have. Handed to the run's spawn hook, which is
  *  the evidence the client reads as "δ really started" — a stub that stayed
  *  silent would model a run that never spawned. */
 const DELTA_PID = 9001
 
 function stubP4deltaRun(): void {
+  deltaRunSeq = 0
   vi.spyOn(P4deltaService.prototype, 'run').mockImplementation(async (args, options) => {
     const isGet = args.includes('--sync')
     const r: DeltaReply = isGet
@@ -252,8 +257,11 @@ function stubP4deltaRun(): void {
     const records = [...(r.records ?? [])] as never[]
     for (const record of records) options?.onRecord?.(record)
     if (isGet) options?.onSpawn?.(DELTA_PID)
+    deltaRunSeq += 1
     return {
       code: r.code ?? 0,
+      runId: `p4d-mock-${deltaRunSeq}-1-abcd1234`,
+      startedAt: 1_700_000_000_000 + deltaRunSeq,
       records,
       progress: [],
       log: r.log ?? [],
@@ -544,5 +552,84 @@ describe('SyncRunResult.facts', () => {
 
     expect(res.facts?.engine).toBe('p4')
     expect(res.facts?.engineFallback).toBe(false)
+  })
+
+  it('carries the δ log reference of the run that served the get', async () => {
+    const client = await makeArmedClient()
+    syncDeltaReply = () => ({ records: [deltaFile('Content/a.cpp'), deltaSummary()] })
+
+    const res = await client.sync('#head')
+
+    // The reference is the attempt's own, minted when δ started — it is what
+    // "open this run's log" resolves against.
+    expect(res.facts?.deltaRunId).toMatch(/^p4d-mock-\d+-1-abcd1234$/)
+  })
+
+  it('keeps the δ log reference when δ died and the get was re-served natively', async () => {
+    const client = await makeArmedClient()
+    // δ started, did work, then died without a summary. There is no second δ
+    // run — but there IS a log, and the record must still point at it.
+    syncDeltaReply = () => ({ records: [{ kind: 'p4CommandCount', count: 3 }], code: 1 })
+
+    const res = await client.sync('#head')
+
+    expect(res.facts?.engine).toBe('p4')
+    expect(res.facts?.engineFallback).toBe(true)
+    expect(res.facts?.deltaRunId).toMatch(/^p4d-mock-\d+-1-abcd1234$/)
+  })
+
+  it('carries no δ log reference when δ never ran', async () => {
+    const client = await makeClient()
+
+    const res = await client.sync('#head')
+
+    // A pure native get has no δ log; claiming one would point the detail panel
+    // at another run's file.
+    expect(res.facts?.deltaRunId).toBeUndefined()
+  })
+
+  it('carries δ’s per-command classification out of the run', async () => {
+    const client = await makeArmedClient()
+    syncDeltaReply = () => ({
+      records: [
+        { kind: 'p4CommandCount', count: 1, command: 'set' },
+        { kind: 'p4CommandCount', count: 2, command: 'fstat' },
+        deltaFile('Content/a.cpp'),
+        deltaSummary({ p4Calls: 2, p4CallsByCommand: { set: 1, fstat: 1 } }),
+      ],
+    })
+
+    const res = await client.sync('#head')
+
+    expect(res.facts?.p4Calls).toEqual({
+      native: 0,
+      p4delta: 2,
+      complete: true,
+      p4deltaByCommand: { set: 1, fstat: 1 },
+      p4deltaByCommandComplete: true,
+    })
+  })
+
+  it('keeps the event stream’s classification as a lower bound when δ died', async () => {
+    const client = await makeArmedClient()
+    syncDeltaReply = () => ({
+      records: [
+        { kind: 'p4CommandCount', count: 1, command: 'set' },
+        { kind: 'p4CommandCount', count: 2, command: 'have' },
+      ],
+      code: 1,
+    })
+
+    const res = await client.sync('#head')
+
+    // No summary, so both halves are lower bounds — and the classification still
+    // answers "these two calls were a set and a have".
+    expect(res.facts?.p4Calls).toEqual({
+      native: 1,
+      p4delta: 2,
+      complete: false,
+      p4deltaByCommand: { set: 1, have: 1 },
+      p4deltaByCommandComplete: false,
+    })
   })
 })

@@ -28,9 +28,9 @@ const tracked: SeedFile = { relPath: 'tracked.txt', content: 'have tracked\n' }
 
 test.use({ p4Seeds: { files: [tracked] } })
 
-/** Typed into the palette after `openPalette`. 'p4delta' matches
- *  `perforce.p4delta.install` alone — the command id is one of its keywords, and
- *  no core command carries the word — so the row count is an exact 0-or-1. */
+/** Typed into the palette after `openPalette`. 'p4delta' 命中这一族全部三条命令：自装副本
+ *  `perforce.p4delta.install`（id 是它的关键词之一）与两条日志出口（标题里带 P4delta）。
+ *  无工作区时三条一起消失，所以这个查询的行数就是「闸门的两半」。 */
 const PALETTE_QUERY = 'p4delta'
 
 async function openPalette(page: Page, workbench: WorkbenchPO): Promise<void> {
@@ -69,7 +69,11 @@ test.describe('@p1 perforce palette gate', () => {
 
     await openPalette(page, workbench)
     await page.keyboard.type(PALETTE_QUERY)
-    await expect(workbench.quickInput.dialog.getByRole('option')).toHaveCount(1)
+    // 三条命令带这个词：自装副本一条 + 两条日志出口（实时频道 / 最近一份运行日志）。
+    // 查询词命中的是标题与命令 id，所以这一数就是「这一族命令都过闸了」。
+    const rows = workbench.quickInput.dialog.getByRole('option')
+    await expect(rows).toHaveCount(3)
+    await expect(rows.filter({ hasText: /p4delta/i })).toHaveCount(3)
     await page.keyboard.press('Escape')
     await workbench.quickInput.waitForHidden()
   })

@@ -61,6 +61,7 @@ import {
   outcomeLabel,
   p4CallsLabel,
   p4CallsRowLabel,
+  p4CommandBreakdown,
   scopeLines,
   triggerLabel,
 } from './syncHistoryFormat.js'
@@ -600,7 +601,38 @@ function RunDetail({ id }: { id: string }) {
           </dd>
           <dt>{localize('perforceSyncHistory.field.p4Calls', 'P4 calls')}</dt>
           <dd data-testid="perforce-sync-history-detail-p4calls">{p4CallsLabel(detail)}</dd>
+          <dt>{localize('perforceSyncHistory.field.p4CallsByCommand', 'Where they went')}</dt>
+          <dd data-testid="perforce-sync-history-detail-p4calls-bycommand">
+            {p4CommandBreakdown(detail) ?? (
+              <span className={styles['muted']}>
+                {localize(
+                  'perforceSyncHistory.p4Calls.byCommandUnavailable',
+                  'not collected (this engine does not report a per-command split)',
+                )}
+              </span>
+            )}
+          </dd>
         </dl>
+        {detail.deltaRunId !== undefined && (
+          <div className={styles['actions']}>
+            <Button
+              variant="secondary"
+              size="sm"
+              data-testid="perforce-sync-history-detail-open-log"
+              onClick={() =>
+                void commands.executeCommand(PerforceSyncHistoryCommands.openLog, detail.id)
+              }
+            >
+              {localize('perforceSyncHistory.openLog', 'Open the p4delta log')}
+            </Button>
+            <span className={styles['note']}>
+              {localize(
+                'perforceSyncHistory.openLogNote',
+                'The p4delta engine’s own run log — what it did step by step. It is read as a snapshot; the file itself stays on the machine that ran the get.',
+              )}
+            </span>
+          </div>
+        )}
       </Section>
 
       <Section title={localize('perforceSyncHistory.section.scope', 'Scope')}>

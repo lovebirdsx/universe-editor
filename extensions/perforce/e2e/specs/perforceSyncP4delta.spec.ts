@@ -130,12 +130,20 @@ function makeLogs(): { delta: string; p4: string; scope: string; p4calls: string
 /** The history command the Sync History page itself reads. */
 const GET_RUNS = 'perforce-sync-history.getRuns'
 
+/** `nextP4deltaRunId` 的形状：时间 + pid + 进程内序号 + 随机段。 */
+const RUN_ID_SHAPE = /^p4d-\d+-\d+-\d+-[0-9a-f]{8}$/
+
 interface RecordedRun {
+  readonly id: string
   readonly outcome: string
+  /** δ 运行引用：这一跑留下的那份日志文件的 runId（纯原生 get 没有）。 */
+  readonly deltaRunId?: string
   readonly p4Calls?: {
     readonly native: number
     readonly p4delta: number
     readonly complete: boolean
+    /** 分类账：δ 那部分调用按 p4 子命令拆开。 */
+    readonly p4deltaByCommand?: Readonly<Record<string, number>>
   }
 }
 
@@ -147,6 +155,11 @@ async function recordedRuns(page: Page): Promise<readonly RecordedRun[]> {
       | undefined
     return p?.runs ?? []
   }, GET_RUNS)
+}
+
+/** 一个 Output 频道的当前内容。 */
+async function readOutputChannel(page: Page, name: string): Promise<string> {
+  return page.evaluate((channel) => window.__E2E__!.getOutputChannelContent(channel), name)
 }
 
 /** δ's own gets, by the two flags that make one: `--sync` and the `-a` that
@@ -286,6 +299,31 @@ test.describe('@p1 perforce p4delta get', () => {
       const calls = (await recordedRuns(page))[0]!.p4Calls!
       expect(calls.p4delta).toBe(expectedP4Calls)
 
+      // 分类账：δ 起的每一笔 p4 都被按子命令归了类，所以各类别之和必须回到同一个总数——
+      // 两半是同一把账，少一笔就说明有一笔没被归类。类别名就是 p4 的命令名，不翻译。
+      const byCommand = calls.p4deltaByCommand
+      expect(byCommand).toBeDefined()
+      const commands = Object.entries(byCommand ?? {})
+      expect(commands.length).toBeGreaterThan(0)
+      for (const [command, count] of commands) {
+        expect(command).toMatch(/^[a-z][a-z0-9-]*$/)
+        expect(count).toBeGreaterThan(0)
+      }
+      expect(commands.reduce((sum, [, count]) => sum + count, 0)).toBe(calls.p4delta)
+      // 这次 get 自己就是 δ 反复委托的那条命令：预览一次、应用一次。
+      expect(byCommand?.['sync']).toBeGreaterThan(0)
+
+      // 运行引用：这一跑在盘上留了一份日志，详情里的「打开日志」才有依据。
+      const deltaRunId = (await recordedRuns(page))[0]?.deltaRunId
+      expect(deltaRunId).toMatch(RUN_ID_SHAPE)
+
+      // 实时频道：运行头（自证身份：id + 起跑时刻 + 引擎 + argv）与终态尾都在这里，逐行带
+      // runId；Perforce 频道只留开始 / 结束两行摘要，同样带 runId 供对账——不再有全量回放。
+      const deltaChannel = await readOutputChannel(page, 'P4delta')
+      expect(deltaChannel).toContain(`=== p4delta run ${deltaRunId} ===`)
+      expect(deltaChannel).toMatch(/# ok: exit 0, .*concluded \(summary received\)/)
+      expect(await readOutputChannel(page, 'Perforce')).toContain(`[${deltaRunId}]`)
+
       // …and the history page shows it, both as the row total and the detail.
       await workbench.runCommand('perforce-sync-history.view')
       const history = page.getByTestId('perforce-sync-history')
@@ -293,6 +331,36 @@ test.describe('@p1 perforce p4delta get', () => {
       await expect(history.getByTestId('perforce-sync-history-detail-p4calls')).toHaveText(
         `${calls.p4delta} p4 command(s) (0 native · ${calls.p4delta} δ)`,
       )
+      // 「花在哪」把同一份分类账摊在详情里：次数多的在前，类别名原样。
+      await expect(
+        history.getByTestId('perforce-sync-history-detail-p4calls-bycommand'),
+      ).toHaveText(/^sync \d+/)
+
+      // 「打开 p4delta 日志」：打开的是这一跑自己的日志文件（只读快照），不是重跑一次——
+      // 它既不该再起 δ，也不该再发任何一条 get，更不该多出一条历史记录。
+      const applyRunsBefore = deltaSyncLines(logs.delta).length
+      const recordsBefore = (await recordedRuns(page)).length
+      // 点之前不能已经有一个 untitled 标签页，否则下面那条只能证明「有」，证明不了是这次开的。
+      const activeBefore = await page.evaluate(() => window.__E2E__!.getActiveEditorUri())
+      expect(activeBefore ?? '').not.toMatch(/^untitled:/)
+      await history.getByTestId('perforce-sync-history-detail-open-log').click()
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorUri()), {
+          timeout: 30_000,
+          message: 'the run-log button should open the log as a snapshot document',
+        })
+        .toMatch(/^untitled:/)
+      expect(deltaSyncLines(logs.delta).length).toBe(applyRunsBefore)
+      expect(nativeSyncLines(logs.p4)).toEqual([])
+      expect((await recordedRuns(page)).length).toBe(recordsBefore)
+
+      // 命令自己回答「打开的是哪一跑」：ok + 这一跑已经结束。它读的是同一份磁盘快照，所以
+      // 同时证明日志真的落了盘（拿不到会回答 log-missing）、并且收尾把 `.writing` 改成了 `.log`。
+      const opened = await page.evaluate(
+        (id) => window.__E2E__!.runCommand('perforce-sync-history.openLog', id),
+        (await recordedRuns(page))[0]!.id,
+      )
+      expect(opened).toMatchObject({ ok: true, active: false })
 
       await expect(
         page
@@ -463,6 +531,7 @@ test.describe('@p1 perforce p4delta get', () => {
       await test.step('a per-file force spec has no δ form and stays on p4', async () => {
         // 日志在整次启动内是累积的，所以「这轮没新增」是与上一步的修复比较，而不是空日志。
         const repairsSoFar = deltaForceLines(logs.delta).length
+        const recordsBefore = (await recordedRuns(page)).length
         void page
           .evaluate(
             (p) => void window.__E2E__!.runCommand('perforce.sync', { resourceUri: p }),
@@ -505,6 +574,23 @@ test.describe('@p1 perforce p4delta get', () => {
           )
           .toBeGreaterThan(0)
         expect(deltaForceLines(logs.delta).length).toBe(repairsSoFar)
+
+        // 这一跑由编辑器直接交给 p4（逐文件 `#rev` 没有 δ 形式），所以记录里没有运行引用——
+        // 退回原生**不算**第二次 δ 运行。目录里此刻确实躺着一份日志（上一步的修复留下的），
+        // 所以「打开日志」若退化成「打开最近一份」，下面这条就会红。
+        await expect
+          .poll(async () => (await recordedRuns(page)).length, {
+            timeout: 30_000,
+            message: 'the native repair should have left its own record',
+          })
+          .toBeGreaterThan(recordsBefore)
+        const nativeRecord = (await recordedRuns(page))[0]!
+        expect(nativeRecord.deltaRunId).toBeUndefined()
+        const opened = await page.evaluate(
+          (id) => window.__E2E__!.runCommand('perforce-sync-history.openLog', id),
+          nativeRecord.id,
+        )
+        expect(opened).toEqual({ ok: false, reason: 'unknown-run' })
       })
     })
   })

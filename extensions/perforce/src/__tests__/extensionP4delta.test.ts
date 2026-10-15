@@ -113,7 +113,7 @@ describe('resolveP4deltaEngine', () => {
     // The engine must carry the pointer to THIS session's p4: δ resolves its own
     // `p4` when it needs to hand a file over, and under an override that lookup
     // would land on a different binary than the session runs against.
-    expect(engine).toEqual({ exe: EXE, extraEnv: { P4_EXE: P4_SCRIPT } })
+    expect(engine).toEqual({ exe: EXE, source: 'path', extraEnv: { P4_EXE: P4_SCRIPT } })
   })
 
   it('keeps the engine under a p4 script override when UNIVERSE_P4DELTA_PATH names it', () => {
@@ -124,7 +124,7 @@ describe('resolveP4deltaEngine', () => {
 
     const engine = resolveP4deltaEngine({ enabled: true, path: '' }, vi.fn())
 
-    expect(engine).toEqual({ exe: EXE, extraEnv: { P4_EXE: P4_SCRIPT } })
+    expect(engine).toEqual({ exe: EXE, source: 'path', extraEnv: { P4_EXE: P4_SCRIPT } })
   })
 
   it('returns the resolved executable', () => {
@@ -136,7 +136,7 @@ describe('resolveP4deltaEngine', () => {
 
     // A real p4 needs no pointer: δ's own lookup finds the same one, and forcing
     // P4_EXE would make it demand a file literally named `p4`.
-    expect(engine).toEqual({ exe: EXE })
+    expect(engine).toEqual({ exe: EXE, source: 'path' })
     expect(p4deltaMocks.resolveP4deltaCommand).toHaveBeenCalledWith('', undefined)
     expect(log).toHaveBeenCalledWith(expect.stringContaining(EXE))
   })
@@ -170,7 +170,7 @@ describe('resolveP4deltaEngine', () => {
 
     const engine = resolveP4deltaEngine({ enabled: true, path: '' }, log, MANAGED_ROOT)
 
-    expect(engine).toEqual({ exe: MANAGED_EXE })
+    expect(engine).toEqual({ exe: MANAGED_EXE, source: 'managed' })
     expect(p4deltaMocks.resolveP4deltaCommand).toHaveBeenCalledWith('', MANAGED_ROOT)
     expect(log).toHaveBeenCalledWith(expect.stringContaining('(managed)'))
   })

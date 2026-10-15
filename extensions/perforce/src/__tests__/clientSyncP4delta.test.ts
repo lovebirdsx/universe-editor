@@ -240,6 +240,9 @@ const DELTA_PID = 9001
  *  the service assembles it (`sawSummary` from the records), so "no summary" is
  *  expressed by leaving the summary record out. */
 function stubP4deltaRun(): void {
+  // Per-attempt ids, the way the real service mints them: the sync history's
+  // log reference comes from here, so two runs must not share one.
+  let runSeq = 0
   deltaRunSpy = vi
     .spyOn(P4deltaService.prototype, 'run')
     .mockImplementation(async (args, options) => {
@@ -259,7 +262,10 @@ function stubP4deltaRun(): void {
       // replaying them here is what lets a test observe the progress a get
       // publishes mid-run.
       for (const record of records) options?.onRecord?.(record)
+      runSeq += 1
       return {
+        runId: `p4d-mock-${runSeq}-1-1-aaaa`,
+        startedAt: 1_700_000_000_000,
         code: r.code ?? 0,
         records,
         progress: r.progress ?? [],
