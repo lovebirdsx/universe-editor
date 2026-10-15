@@ -391,11 +391,17 @@ describe('McpClientMainService over a real child process (stdio fixture)', () =>
     expect(event?.detail).not.toContain('super-secret-value')
   })
 
-  it('classifies a missing binary as MCP_SPAWN_FAILED', async () => {
+  it('classifies a missing binary by spawn outcome (platform-dependent)', async () => {
     const service = makeService({ stdioHost: new AcpHostService() })
+    // On Windows the default spawner wraps the command in `cmd.exe /c`, which itself
+    // always spawns successfully and then exits 1 with "not recognized" on stderr —
+    // the child's 'error' event never fires, so the transport cannot tell
+    // "missing binary" apart from "started and immediately exited". POSIX spawns the
+    // target directly and reports ENOENT via 'error', yielding MCP_SPAWN_FAILED.
+    const expectedCode = process.platform === 'win32' ? 'MCP_CONNECT_FAILED' : 'MCP_SPAWN_FAILED'
     await expect(
       service.connect({ kind: 'stdio', command: 'ue-mcp-fixture-does-not-exist', args: [] }, 5_000),
-    ).rejects.toMatchObject({ code: 'MCP_SPAWN_FAILED' })
+    ).rejects.toMatchObject({ code: expectedCode })
   })
 
   it('classifies a server that never answers as MCP_TIMEOUT', async () => {
