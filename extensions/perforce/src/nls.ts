@@ -300,6 +300,12 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.p4delta.install.noStorage': '此宿主没有扩展存储目录，无法安装托管的 p4delta。',
   'perforce.p4delta.install.unsupportedPlatform':
     'p4delta 没有为当前平台发布构建。请自行安装并设置 perforce.p4delta.path。',
+  // 「显示 p4delta 信息」命令：当前生效的副本（版本 / 来源 / 完整路径）
+  'perforce.p4delta.info.found': 'p4delta {0}（{1}）— {2}',
+  'perforce.p4delta.info.noVersion': 'p4delta 位于 {0}（{1}）；--version 没有给出答案。',
+  'perforce.p4delta.info.notFound':
+    '没有找到 p4delta，正在使用原生 p4 命令。原因见 Perforce 输出频道。',
+  'perforce.p4delta.info.disabled': 'p4delta 已被 perforce.p4delta.enabled 关闭。',
   // p4delta 运行日志（extension.ts 的 openLog / 打开最近一次日志）
   'perforce.p4deltaLog.noRun':
     '找不到与这次拉取关联的 p4delta 运行——没有这条历史记录，或这条记录里没有运行引用。',

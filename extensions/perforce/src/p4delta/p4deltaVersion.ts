@@ -30,6 +30,14 @@ export function formatP4deltaVersion(version: P4deltaVersion): string {
   return `${version[0]}.${version[1]}.${version[2]}`
 }
 
+/**
+ * `p4delta --version` 的 clap banner（`p4delta 0.1.6`）→ `'0.1.6'`。只服务**诊断显示**
+ * （命令「显示 p4delta 信息」），不参与任何判断——引擎的准入仍只看存在性。
+ */
+export function parseP4deltaVersionBanner(text: string): string | undefined {
+  return /v?(\d+\.\d+\.\d+)/.exec(text)?.[1]
+}
+
 /** Standard semantic ordering; `0` means equal. */
 export function compareP4deltaVersion(a: P4deltaVersion, b: P4deltaVersion): number {
   if (a[0] !== b[0]) return a[0] < b[0] ? -1 : 1

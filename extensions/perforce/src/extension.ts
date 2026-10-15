@@ -46,6 +46,7 @@ import { P4deltaRunLog } from './p4delta/p4deltaRunLog.js'
 import { createP4deltaLogSink } from './p4deltaLog.js'
 import {
   p4deltaNamedExplicitly,
+  probeP4deltaVersion,
   resolveP4deltaCommand,
   type P4deltaSource as P4deltaEngineSource,
 } from './p4delta/p4deltaService.js'
@@ -3040,6 +3041,49 @@ export async function activate(context: ExtensionContext): Promise<void> {
         showLog,
       )
       await showPerforceLogIfAsked(picked, showLog)
+    }),
+
+    // 当前生效的 δ 是哪一份——版本、来源、完整路径。**现算**（不是激活时的缓存），刚改完
+    // 配置就能看到结果；解析本身会把理由写进 Perforce 频道，所以「没找到」指向那里而不是
+    // 在这里复述查找顺序。
+    commands.registerCommand('perforce.p4delta.showInfo', async () => {
+      if (!(await cfg.get('p4delta.enabled', true))) {
+        await window.showInformationMessage(
+          localize(
+            'perforce.p4delta.info.disabled',
+            'p4delta is turned off by perforce.p4delta.enabled.',
+          ),
+        )
+        return
+      }
+      const engine = await resolveP4deltaOptions()
+      if (engine === undefined) {
+        const showLog = localize('perforce.p4delta.install.showLog', 'Show Log')
+        const picked = await window.showWarningMessage(
+          localize(
+            'perforce.p4delta.info.notFound',
+            'No p4delta was found; the native p4 commands are in use. See the Perforce output channel for why.',
+          ),
+          showLog,
+        )
+        await showPerforceLogIfAsked(picked, showLog)
+        return
+      }
+      // 引擎自报的版本，不是磁盘上的目录名：配置 / PATH / 自装副本这些来源没有目录可读。
+      const version = await probeP4deltaVersion(engine.exe)
+      await window.showInformationMessage(
+        version !== undefined
+          ? localize('perforce.p4delta.info.found', 'p4delta {0} ({1}) — {2}', {
+              0: version,
+              1: engine.source,
+              2: engine.exe,
+            })
+          : localize(
+              'perforce.p4delta.info.noVersion',
+              'p4delta at {0} ({1}); --version gave no answer.',
+              { 0: engine.exe, 1: engine.source },
+            ),
+      )
     }),
 
     // Stop whatever cancellable p4 operation is in flight. Wired to the

@@ -16,7 +16,7 @@
 
 ## 副本优先级（五级，`resolveP4deltaCommand`）
 
-`UNIVERSE_P4DELTA_PATH`(env) → `perforce.p4delta.path`(configured) → **托管副本**(managed) → PATH → `%LOCALAPPDATA%\Programs\p4delta\p4delta.exe`。返回 `P4deltaCandidate { exe, source }`，`source` 只用于日志与判定。**托管副本排在 PATH / 系统安装目录之前**：它是编辑器唯一能持续升级的那份，被机器上更旧的自装副本遮蔽就永远升不上去。env / configured / PATH / `%LOCALAPPDATA%` 任一级命中即完全不联网（不查上游、不下载）；托管副本命中则进入后台升级（它归编辑器维护，`autoInstall` 关掉时只停这条后台升级、不改变解析顺序）。地址门在 `extension.ts` 的 `resolveP4deltaEngine`（保持同步，只做一次 `existsSync`，**无版本地板**——见 [`../../docs/reconcile.md`](../../docs/reconcile.md) 的「无版本门槛」，别顺手加 `--version` 探测）。
+`UNIVERSE_P4DELTA_PATH`(env) → `perforce.p4delta.path`(configured) → **托管副本**(managed) → PATH → `%LOCALAPPDATA%\Programs\p4delta\p4delta.exe`。返回 `P4deltaCandidate { exe, source }`，`source` 只用于日志与判定。**托管副本排在 PATH / 系统安装目录之前**：它是编辑器唯一能持续升级的那份，被机器上更旧的自装副本遮蔽就永远升不上去。env / configured / PATH / `%LOCALAPPDATA%` 任一级命中即完全不联网（不查上游、不下载）；托管副本命中则进入后台升级（它归编辑器维护，`autoInstall` 关掉时只停这条后台升级、不改变解析顺序）。地址门在 `extension.ts` 的 `resolveP4deltaEngine`（保持同步，只做一次 `existsSync`，**无版本地板**——见 [`../../docs/reconcile.md`](../../docs/reconcile.md) 的「无版本门槛」，别顺手加 `--version` 探测；唯一的采样是「显示 p4delta 信息」命令里那次纯显示的 `probeP4deltaVersion`，不参与准入，且它自己 `existsSync` 兜底——脚本形态下 `node <不存在的脚本> --version` 会答 node 自己的版本）。
 
 `p4deltaNamedExplicitly(configuredPath)` = env 或配置路径非空，即「操作者说这份是我的」；`resolveP4deltaCommand(configuredPath)`（**不传 `managedRoot`**）非空 = 这台机器自带副本。这两个谓词是安装器的两条早退判据，**复用它们，别另造判断**。
 

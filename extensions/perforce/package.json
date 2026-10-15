@@ -294,6 +294,11 @@
         "category": "Perforce"
       },
       {
+        "command": "perforce.p4delta.showInfo",
+        "title": "%perforce.command.p4deltaInfo.title%",
+        "category": "Perforce"
+      },
+      {
         "command": "perforce.showP4deltaOutput",
         "title": "%perforce.command.showP4deltaOutput.title%",
         "category": "Perforce"
@@ -905,6 +910,10 @@
         },
         {
           "command": "perforce.p4delta.install",
+          "when": "perforceHasWorkspace"
+        },
+        {
+          "command": "perforce.p4delta.showInfo",
           "when": "perforceHasWorkspace"
         },
         {

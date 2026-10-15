@@ -45,6 +45,7 @@ import {
 } from '../p4Service.js'
 import { nextP4deltaRunId } from './p4deltaRunLog.js'
 import { activeManagedP4delta } from './p4deltaStore.js'
+import { parseP4deltaVersionBanner } from './p4deltaVersion.js'
 
 /** One parsed JSON line. Fields stay loose: the contract guarantees more than
  *  the readers assume, so every read validates (see p4deltaParser). */
@@ -317,6 +318,73 @@ function envForSpawn(command: string, base: NodeJS.ProcessEnv): NodeJS.ProcessEn
   // Electron binary would start a GUI app instead of running the script.
   if (command === process.execPath) base.ELECTRON_RUN_AS_NODE = '1'
   return base
+}
+
+/** `--version` 采样的默认超时：clap 的版本输出是毫秒级的事，卡住就是这份二进制有问题。 */
+const VERSION_PROBE_TIMEOUT_MS = 5000
+/** `--version` 的输出上限：答案是一行 banner，收满 4 KiB 就不再攒。 */
+const VERSION_PROBE_MAX_CHARS = 4 * 1024
+
+/**
+ * 采样一份 δ 的 `--version`，回答「这个 exe 自报什么版本」。**纯诊断**（命令面板的
+ * 「显示 p4delta 信息」）：引擎的准入仍然只看存在性（见 `resolveP4deltaEngine`），这里的结果
+ * 不参与任何判断，也**不进 δ 的运行日志**——它不是一次业务运行。
+ *
+ * 与真实运行同一形状地起进程（`p4deltaSpawnCommand` 的 `.mjs` 分支 + `envForSpawn`），所以
+ * e2e fixture 那种脚本引擎同样能被采样。永不 reject / 永不 throw：spawn 失败、超时、无输出、
+ * 输出里没有版本号，一律 resolve undefined。
+ */
+export function probeP4deltaVersion(
+  exe: string,
+  timeoutMs: number = VERSION_PROBE_TIMEOUT_MS,
+): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    let settled = false
+    const settle = (value: string | undefined): void => {
+      if (settled) return
+      settled = true
+      resolve(value)
+    }
+    let proc
+    try {
+      // 脚本形态下必须自己确认文件在：`node <不存在的脚本> --version` 会把 `--version` 当成
+      // node 自己的选项，答出 **node 的版本号**——一个看起来完全合理的错误答案。
+      if (!existsSync(exe)) {
+        settle(undefined)
+        return
+      }
+      const { command, prefixArgs } = p4deltaSpawnCommand(exe)
+      proc = spawn(command, [...prefixArgs, '--version'], {
+        env: envForSpawn(command, sanitizeEnv()),
+        windowsHide: true,
+        shell: false,
+      })
+    } catch {
+      settle(undefined)
+      return
+    }
+    let out = ''
+    const collect = (chunk: Buffer): void => {
+      if (out.length >= VERSION_PROBE_MAX_CHARS) return
+      out += chunk.toString('utf8')
+    }
+    proc.stdout?.on('data', collect)
+    proc.stderr?.on('data', collect)
+    const timer = setTimeout(() => {
+      killQuietly(proc)
+      // 不依赖 kill 之后的 close（Windows 上未必立刻到）：超时就是没有答案。
+      settle(undefined)
+    }, timeoutMs)
+    timer.unref?.()
+    proc.on('error', () => {
+      clearTimeout(timer)
+      settle(undefined)
+    })
+    proc.on('close', () => {
+      clearTimeout(timer)
+      settle(parseP4deltaVersionBanner(out.slice(0, VERSION_PROBE_MAX_CHARS)))
+    })
+  })
 }
 
 /**
