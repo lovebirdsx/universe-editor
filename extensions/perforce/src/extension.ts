@@ -1831,8 +1831,8 @@ export async function activate(context: ExtensionContext): Promise<void> {
 
   /**
    * Ask before stopping in-flight p4 work, then stop only if it is still the
-   * same work. Both stop entries — the status-bar spinner's click and the sync
-   * notification's cancel button — route through here, so the two can never
+   * same work. Both stop entries — the status-bar progress item's click and the
+   * sync notification's cancel button — route through here, so the two can never
    * disagree about what needs confirming.
    */
   const confirmAndCancelBusy = async (target: PerforceClient): Promise<void> => {
@@ -1994,9 +1994,9 @@ export async function activate(context: ExtensionContext): Promise<void> {
         cancellable: true,
       },
       async (progress, token) => {
-        // The status-bar spinner already owns stopping p4 operations; routing
-        // the notification's button through the same confirmation keeps one
-        // abort mechanism instead of two that can disagree. A declined
+        // The status-bar progress item already owns stopping p4 operations;
+        // routing the notification's button through the same confirmation keeps
+        // one abort mechanism instead of two that can disagree. A declined
         // confirmation leaves this run going: the token stays flipped, but the
         // get's result is decided by whether the p4 child was killed.
         const cancelSub = token.onCancellationRequested(() => {
@@ -3087,10 +3087,11 @@ export async function activate(context: ExtensionContext): Promise<void> {
     }),
 
     // Stop whatever cancellable p4 operation is in flight. Wired to the
-    // status-bar spinner's click while it's busy, so a slow operation doesn't
-    // have to be waited out. Runtime-only registration (deliberately NOT in
-    // `contributes.commands`) — declaring it there registers a handler-less
-    // duplicate that shadows this one.
+    // progress item's click while it's busy, so a slow operation doesn't have to
+    // be waited out — and deliberately NOT to the client-name item beside it,
+    // whose click always opens the graph. Runtime-only registration
+    // (deliberately NOT in `contributes.commands`) — declaring it there
+    // registers a handler-less duplicate that shadows this one.
     commands.registerCommand('perforce.cancelBusy', async (arg) => {
       const target = mgr.resolveClient(arg) ?? mgr.active
       if (target) await confirmAndCancelBusy(target)

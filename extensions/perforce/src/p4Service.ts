@@ -66,7 +66,7 @@ export interface P4ExecOptions {
   /**
    * Kill the child when this signal aborts, resolving a failure result whose
    * stderr says the command was cancelled. Lets a user abandon a long operation
-   * (the status-bar spinner offers this) instead of waiting out
+   * (the status-bar progress item offers this) instead of waiting out
    * `perforce.commandTimeout`. A command already finished when the signal fires is
    * unaffected; a command that never started is never spawned.
    */
@@ -208,7 +208,7 @@ export const INTERACTIVE_CONTENT_EXEC: P4ExecOptions = { priority: 'interactive'
  * misfiring on "slow but healthy".
  *
  * **Only commands reachable through `client._cancellable` may use this** — with
- * no watchdog, the user-facing cancel (status-bar spinner / progress
+ * no watchdog, the user-facing cancel (status-bar progress item / progress
  * notification → `cancelBusy` → `signal`) is the *only* way to stop a genuinely
  * stuck transfer. No `priority`: these are background mutations, and a large one
  * holding the gate's reserved interactive slot would starve interactive reads.

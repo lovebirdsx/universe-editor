@@ -5,8 +5,14 @@
  * form; a lower have than head renders the behind form and wires
  * `perforce.syncLatest`.
  *
+ * The graph and progress entries are separate items with separate clicks: the
+ * client-name item always opens the graph, while the progress item carries the
+ * busy readout and the cancel click (none at all when the run isn't
+ * cancellable). They once shared one item whose click swapped to cancel
+ * mid-run, which is the regression the "entry roles" suite guards.
+ *
  * `setVisible(false)` is the mixed-workspace gate (selection moved to another
- * provider): both items hide and stay hidden across refresh, tab switches and
+ * provider): every item hides and stays hidden across refresh, tab switches and
  * in-flight fstat completions.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -23,6 +29,7 @@ const mocks = vi.hoisted(() => {
   })
   return {
     item: makeItem(),
+    busyItem: makeItem(),
     revItem: makeItem(),
     activeEditor: undefined as { document: { uri: unknown } } | undefined,
     editorListener: undefined as ((e: unknown) => void) | undefined,
@@ -32,9 +39,21 @@ const mocks = vi.hoisted(() => {
 vi.mock('@universe-editor/extension-api', () => ({
   StatusBarAlignment: { Left: 1 },
   window: {
-    createStatusBarItem: vi.fn((_alignment: unknown, priority: number) =>
-      priority === 100 ? mocks.item : mocks.revItem,
-    ),
+    // One mock per role, keyed by the priorities the controller passes. An
+    // unknown priority fails loudly here; two roles aliased onto ONE priority
+    // would hand the same mock to both without throwing, which the role-separation
+    // suite below catches instead (its `mocks.item` assertions can only pass if
+    // the graph item really was created and driven on its own).
+    createStatusBarItem: vi.fn((_alignment: unknown, priority: number) => {
+      const byPriority: Record<number, (typeof mocks)['item'] | undefined> = {
+        101: mocks.item,
+        100: mocks.busyItem,
+        80: mocks.revItem,
+      }
+      const item = byPriority[priority]
+      if (item === undefined) throw new Error(`unexpected status-bar priority ${priority}`)
+      return item
+    }),
     onDidChangeActiveTextEditor: vi.fn((listener: (e: unknown) => void) => {
       mocks.editorListener = listener
       return { dispose: vi.fn() }
@@ -82,22 +101,25 @@ function fileEditor(path: string): { document: { uri: unknown } } {
   return { document: { uri: { scheme: 'file', path } } }
 }
 
+/** Reset every mock item and the editor stubs between tests. */
+function resetMocks(): void {
+  for (const item of [mocks.item, mocks.busyItem, mocks.revItem]) {
+    item.text = ''
+    item.tooltip = ''
+    item.command = ''
+    item.showProgress = undefined
+    item.show.mockClear()
+    item.hide.mockClear()
+    // Cleared too: else a test that disposes a mock item directly would leave
+    // the dispose assertions in later tests trivially green.
+    item.dispose.mockClear()
+  }
+  mocks.activeEditor = undefined
+  mocks.editorListener = undefined
+}
+
 describe('P4StatusBarController revision chip', () => {
-  beforeEach(() => {
-    mocks.item.text = ''
-    mocks.item.tooltip = ''
-    mocks.item.command = ''
-    mocks.item.showProgress = undefined
-    mocks.item.show.mockClear()
-    mocks.item.hide.mockClear()
-    mocks.revItem.text = ''
-    mocks.revItem.tooltip = ''
-    mocks.revItem.command = ''
-    mocks.revItem.show.mockClear()
-    mocks.revItem.hide.mockClear()
-    mocks.activeEditor = undefined
-    mocks.editorListener = undefined
-  })
+  beforeEach(resetMocks)
 
   it('hides the chip when no editor is active', async () => {
     const controller = new P4StatusBarController(makeManager() as never)
@@ -327,47 +349,45 @@ describe('P4StatusBarController revision chip', () => {
     controller.dispose()
   })
 
-  it('disposes the editor subscription and the chip', () => {
+  it('disposes the editor subscription and every item', () => {
     const controller = new P4StatusBarController(makeManager() as never)
     controller.dispose()
     expect(mocks.revItem.dispose).toHaveBeenCalled()
+    expect(mocks.busyItem.dispose).toHaveBeenCalled()
   })
 })
 
 describe('P4StatusBarController setVisible', () => {
-  beforeEach(() => {
-    mocks.item.text = ''
-    mocks.item.tooltip = ''
-    mocks.item.command = ''
-    mocks.item.showProgress = undefined
-    mocks.item.show.mockClear()
-    mocks.item.hide.mockClear()
-    mocks.revItem.text = ''
-    mocks.revItem.tooltip = ''
-    mocks.revItem.command = ''
-    mocks.revItem.show.mockClear()
-    mocks.revItem.hide.mockClear()
-    mocks.activeEditor = undefined
-    mocks.editorListener = undefined
-  })
+  beforeEach(resetMocks)
 
-  it('hides both items when the selection moves to another provider', () => {
+  it('hides every item when the selection moves to another provider', () => {
     const controller = new P4StatusBarController(makeManager() as never)
     controller.setVisible(false)
 
     expect(mocks.item.hide).toHaveBeenCalled()
+    expect(mocks.busyItem.hide).toHaveBeenCalled()
     expect(mocks.revItem.hide).toHaveBeenCalled()
     controller.dispose()
   })
 
   it('refresh and tab switches do not re-show the items while hidden', () => {
-    const controller = new P4StatusBarController(makeManager() as never)
+    // A busy client, so the progress item is a live candidate for re-showing —
+    // the guard would be vacuous on an idle one.
+    const controller = new P4StatusBarController({
+      active: makeClient({
+        busy: 'Syncing',
+        busyCancellable: true,
+        syncProgress: { done: 421, startedAt: Date.now() },
+      }),
+    } as never)
     controller.setVisible(false)
     mocks.item.show.mockClear()
+    mocks.busyItem.show.mockClear()
 
     controller.refresh()
     mocks.editorListener?.(fileEditor('/D:/p4ws/main/src/a.txt'))
     expect(mocks.item.show).not.toHaveBeenCalled()
+    expect(mocks.busyItem.show).not.toHaveBeenCalled()
     expect(mocks.revItem.show).not.toHaveBeenCalled()
     controller.dispose()
   })
@@ -400,32 +420,26 @@ describe('P4StatusBarController setVisible', () => {
   })
 
   it('setVisible(true) restores and re-renders the items', () => {
-    const controller = new P4StatusBarController(makeManager() as never)
+    const controller = new P4StatusBarController({
+      active: makeClient({
+        busy: 'Syncing',
+        busyCancellable: true,
+        syncProgress: { done: 421, startedAt: Date.now() },
+      }),
+    } as never)
     controller.setVisible(false)
     mocks.item.show.mockClear()
+    mocks.busyItem.show.mockClear()
 
     controller.setVisible(true)
     expect(mocks.item.show).toHaveBeenCalled()
+    expect(mocks.busyItem.show).toHaveBeenCalled()
     controller.dispose()
   })
 })
 
 describe('P4StatusBarController sync progress', () => {
-  beforeEach(() => {
-    mocks.item.text = ''
-    mocks.item.tooltip = ''
-    mocks.item.command = ''
-    mocks.item.showProgress = undefined
-    mocks.item.show.mockClear()
-    mocks.item.hide.mockClear()
-    mocks.revItem.text = ''
-    mocks.revItem.tooltip = ''
-    mocks.revItem.command = ''
-    mocks.revItem.show.mockClear()
-    mocks.revItem.hide.mockClear()
-    mocks.activeEditor = undefined
-    mocks.editorListener = undefined
-  })
+  beforeEach(resetMocks)
 
   it('renders the running count, current file and elapsed with the busy label', () => {
     const controller = new P4StatusBarController({
@@ -445,14 +459,17 @@ describe('P4StatusBarController sync progress', () => {
     // No total is ever shown: the pre-flight count that would produce one costs
     // a full server-side walk on a wide scope, so the sync starts downloading
     // immediately — a rising count + clock is the "it's alive" signal instead.
-    expect(mocks.item.text).toBe('$(server) …branch_xyz: Syncing 421 · 1m 13s $(sync~spin)')
-    expect(mocks.item.text.endsWith('$(sync~spin)')).toBe(true)
-    expect(mocks.item.tooltip).toContain('Syncing testuser_dev_branch_xyz')
-    expect(mocks.item.tooltip).toContain('Synced 421 files')
-    expect(mocks.item.tooltip).toContain('Current: a.cpp')
-    expect(mocks.item.tooltip).toContain('1m 13s elapsed')
-    expect(mocks.item.tooltip).toContain('\n\nClick to confirm cancel')
-    expect(mocks.item.command).toBe('perforce.cancelBusy')
+    expect(mocks.busyItem.text).toBe('Syncing 421 · 1m 13s $(sync~spin)')
+    expect(mocks.busyItem.text.endsWith('$(sync~spin)')).toBe(true)
+    expect(mocks.busyItem.tooltip).toContain('Syncing testuser_dev_branch_xyz')
+    expect(mocks.busyItem.tooltip).toContain('Synced 421 files')
+    expect(mocks.busyItem.tooltip).toContain('Current: a.cpp')
+    expect(mocks.busyItem.tooltip).toContain('1m 13s elapsed')
+    expect(mocks.busyItem.tooltip).toContain('\n\nClick to confirm cancel')
+    expect(mocks.busyItem.command).toBe('perforce.cancelBusy')
+    // The graph item beside it is untouched by the run: same click, idle shape.
+    expect(mocks.item.command).toBe('perforce-graph.view')
+    expect(mocks.item.text).toBe('$(server) …branch_xyz 2')
     controller.dispose()
   })
 
@@ -467,11 +484,13 @@ describe('P4StatusBarController sync progress', () => {
     } as never)
     controller.refresh()
 
-    expect(mocks.item.text).toBe('$(server) client-1: Syncing 421 · 5s $(sync~spin)')
-    expect(mocks.item.tooltip).toContain('Synced 421 files')
-    expect(mocks.item.tooltip).not.toContain('Current:')
-    expect(mocks.item.tooltip).not.toContain('Click to confirm cancel')
-    expect(mocks.item.command).toBe('perforce-graph.view')
+    expect(mocks.busyItem.text).toBe('Syncing 421 · 5s $(sync~spin)')
+    expect(mocks.busyItem.tooltip).toContain('Synced 421 files')
+    expect(mocks.busyItem.tooltip).not.toContain('Current:')
+    expect(mocks.busyItem.tooltip).not.toContain('Click to confirm cancel')
+    // No cancel click to offer, and no graph click either — this entry is the
+    // progress readout, so an uncancellable run simply isn't clickable.
+    expect(mocks.busyItem.command).toBeUndefined()
     controller.dispose()
   })
 
@@ -486,9 +505,9 @@ describe('P4StatusBarController sync progress', () => {
     } as never)
     controller.refresh()
 
-    expect(mocks.item.text).toBe('$(server) client-1: Syncing 421 · disk +567 · 5s $(sync~spin)')
-    expect(mocks.item.tooltip).toContain('Synced 421 files')
-    expect(mocks.item.tooltip).toContain('Disk writes seen by the file watcher: 567')
+    expect(mocks.busyItem.text).toBe('Syncing 421 · disk +567 · 5s $(sync~spin)')
+    expect(mocks.busyItem.tooltip).toContain('Synced 421 files')
+    expect(mocks.busyItem.tooltip).toContain('Disk writes seen by the file watcher: 567')
     controller.dispose()
   })
 
@@ -509,7 +528,7 @@ describe('P4StatusBarController sync progress', () => {
 
       // A pure repaint: p4 printed nothing, the data is unchanged, the disk
       // segment survives the tick alongside the advanced clock.
-      expect(mocks.item.text).toBe('$(server) client-1: Syncing 421 · disk +567 · 8s $(sync~spin)')
+      expect(mocks.busyItem.text).toBe('Syncing 421 · disk +567 · 8s $(sync~spin)')
       controller.dispose()
     } finally {
       vi.useRealTimers()
@@ -565,7 +584,7 @@ describe('P4StatusBarController sync progress', () => {
 
       // Attached but nothing measured yet: a real zero, and the token is already
       // full width so the body doesn't change shape when the first byte lands.
-      expect(mocks.item.text).toBe('$(server) client-1: Syncing 421 · 000KB/s · 5s $(sync~spin)')
+      expect(mocks.busyItem.text).toBe('Syncing 421 · 000KB/s · 5s $(sync~spin)')
 
       progress['ioReadBytes'] = 0
       progress['ioWriteBytes'] = 0
@@ -573,8 +592,8 @@ describe('P4StatusBarController sync progress', () => {
       progress['ioReadBytes'] = 42 * 1024 ** 2
       progress['ioWriteBytes'] = 4096
       fire()
-      expect(mocks.item.text).toBe('$(server) client-1: Syncing 421 · 042MB/s · 6s $(sync~spin)')
-      expect(mocks.item.tooltip).toContain('p4 process I/O: read 42MB, wrote 4KB')
+      expect(mocks.busyItem.text).toBe('Syncing 421 · 042MB/s · 6s $(sync~spin)')
+      expect(mocks.busyItem.tooltip).toContain('p4 process I/O: read 42MB, wrote 4KB')
       controller.dispose()
     } finally {
       vi.useRealTimers()
@@ -592,12 +611,12 @@ describe('P4StatusBarController sync progress', () => {
       // A rate that crosses a tier boundary is the case a growing string would
       // make visible: the segment must keep its 7 characters throughout, so the
       // entries beside it never move.
-      const bodies = [mocks.item.text.split(' · ')[1]!]
+      const bodies = [mocks.busyItem.text.split(' · ')[1]!]
       for (const read of [900 * 1024, 42 * 1024 ** 2, 300 * 1024 ** 2, 900 * 1024 ** 2]) {
         progress['ioReadBytes'] = read
         vi.advanceTimersByTime(1000)
-        bodies.push(mocks.item.text.split(' · ')[1]!)
-        expect(mocks.item.text).not.toContain('disk +')
+        bodies.push(mocks.busyItem.text.split(' · ')[1]!)
+        expect(mocks.busyItem.text).not.toContain('disk +')
       }
       expect(bodies.map((body) => body.length)).toEqual([7, 7, 7, 7, 7])
       // …and the segments were genuinely different rates, not one frozen token.
@@ -618,12 +637,12 @@ describe('P4StatusBarController sync progress', () => {
 
       progress['ioReadBytes'] = 8 * 1024 ** 2
       vi.advanceTimersByTime(1000)
-      expect(mocks.item.text).toContain('MB/s')
+      expect(mocks.busyItem.text).toContain('MB/s')
       // p4 goes quiet but the sync is still running: the window slides off the
       // stalled count with no new event from p4 at all — the heartbeat's repaint
       // is what moves it, exactly like the elapsed clock.
       vi.advanceTimersByTime(7000)
-      expect(mocks.item.text).toBe('$(server) client-1: Syncing 421 · 000KB/s · 8s $(sync~spin)')
+      expect(mocks.busyItem.text).toBe('Syncing 421 · 000KB/s · 8s $(sync~spin)')
       controller.dispose()
     } finally {
       vi.useRealTimers()
@@ -639,11 +658,11 @@ describe('P4StatusBarController sync progress', () => {
       const controller = new P4StatusBarController({ active: client } as never)
       controller.refresh()
 
-      expect(mocks.item.text).toContain('000KB/s')
-      expect(mocks.item.text).not.toContain('disk +567')
-      expect(mocks.item.tooltip).toContain('Disk writes seen by the file watcher: 567')
+      expect(mocks.busyItem.text).toContain('000KB/s')
+      expect(mocks.busyItem.text).not.toContain('disk +567')
+      expect(mocks.busyItem.tooltip).toContain('Disk writes seen by the file watcher: 567')
       fire()
-      expect(mocks.item.tooltip).toContain('Synced 421 files')
+      expect(mocks.busyItem.tooltip).toContain('Synced 421 files')
       controller.dispose()
     } finally {
       vi.useRealTimers()
@@ -660,7 +679,7 @@ describe('P4StatusBarController sync progress', () => {
       progress['ioReadBytes'] = 100 * 1024 ** 2
       fire()
       vi.advanceTimersByTime(1000)
-      expect(mocks.item.text).toContain('MB/s')
+      expect(mocks.busyItem.text).toContain('MB/s')
 
       // A second sync of the same client: fresh (small) totals under a new
       // startedAt. The window has to be re-anchored on the new run — keeping the
@@ -674,7 +693,7 @@ describe('P4StatusBarController sync progress', () => {
       // 50MB over the new run's own 1s of window. Differenced against the old
       // run's 100MB sample 2s back it would read 025MB/s instead — the bogus
       // first-window figure this guard exists to prevent.
-      expect(mocks.item.text).toBe('$(server) client-1: Syncing 421 · 050MB/s · 1s $(sync~spin)')
+      expect(mocks.busyItem.text).toBe('Syncing 421 · 050MB/s · 1s $(sync~spin)')
       controller.dispose()
     } finally {
       vi.useRealTimers()
@@ -697,7 +716,7 @@ describe('P4StatusBarController sync progress', () => {
     controller.refresh()
 
     // Position, not just presence: it has to be the SECOND line, above the counts.
-    expect(mocks.item.tooltip.split('\n')[1]).toBe('Target: changelist 4521')
+    expect(mocks.busyItem.tooltip.split('\n')[1]).toBe('Target: changelist 4521')
     controller.dispose()
   })
 
@@ -723,7 +742,7 @@ describe('P4StatusBarController sync progress', () => {
       } as never)
       controller.refresh()
 
-      expect(mocks.item.tooltip.split('\n')[1]).toBe(expected)
+      expect(mocks.busyItem.tooltip.split('\n')[1]).toBe(expected)
       controller.dispose()
     }
   })
@@ -740,8 +759,8 @@ describe('P4StatusBarController sync progress', () => {
     controller.refresh()
 
     // Nothing claims a target that never happened — the counts keep the slot.
-    expect(mocks.item.tooltip).not.toContain('Target:')
-    expect(mocks.item.tooltip.split('\n')[1]).toBe('Synced 421 files')
+    expect(mocks.busyItem.tooltip).not.toContain('Target:')
+    expect(mocks.busyItem.tooltip.split('\n')[1]).toBe('Synced 421 files')
     controller.dispose()
   })
 
@@ -752,7 +771,7 @@ describe('P4StatusBarController sync progress', () => {
       const { client, fire, progress } = rateClient(Date.now() - 5_000)
       const controller = new P4StatusBarController({ active: client } as never)
       controller.refresh()
-      expect(mocks.item.text).toContain('000KB/s')
+      expect(mocks.busyItem.text).toContain('000KB/s')
 
       // The second half of a sync: p4 has stopped pulling from the server and is
       // writing what it staged into the workspace. A read-only rate reads
@@ -762,10 +781,10 @@ describe('P4StatusBarController sync progress', () => {
       progress['ioWriteBytes'] = 8 * 1024 ** 2
       fire()
 
-      expect(mocks.item.text).toBe('$(server) client-1: Syncing 421 · 008MB/s · 6s $(sync~spin)')
+      expect(mocks.busyItem.text).toBe('Syncing 421 · 008MB/s · 6s $(sync~spin)')
       // The two sides are still reported apart: the body's sum is not a claim
       // about which counter moved.
-      expect(mocks.item.tooltip).toContain('p4 process I/O: read 0B, wrote 8MB')
+      expect(mocks.busyItem.tooltip).toContain('p4 process I/O: read 0B, wrote 8MB')
       controller.dispose()
     } finally {
       vi.useRealTimers()
@@ -784,7 +803,7 @@ describe('P4StatusBarController sync progress', () => {
       // there for the rest of the run.
       progress['ioReadBytes'] = 8 * 1024 ** 2
       vi.advanceTimersByTime(1000)
-      expect(mocks.item.text).toContain('MB/s')
+      expect(mocks.busyItem.text).toContain('MB/s')
 
       // Landing phase: only the write side moves. Read-only, the window would
       // have slid off the frozen read count and reached `000KB/s` right here.
@@ -794,12 +813,12 @@ describe('P4StatusBarController sync progress', () => {
       }
       // 8MB read + 28MB written = 36MB cumulative; the window still holds the
       // 12MB sample from 6s back, so 24MB / 6s.
-      expect(mocks.item.text).toBe('$(server) client-1: Syncing 421 · 004MB/s · 8s $(sync~spin)')
+      expect(mocks.busyItem.text).toBe('Syncing 421 · 004MB/s · 8s $(sync~spin)')
 
       // Both counters flat now — the sync is genuinely quiet, so the token goes
       // to zero on the heartbeat alone, exactly like the read-only case.
       vi.advanceTimersByTime(7000)
-      expect(mocks.item.text).toBe('$(server) client-1: Syncing 421 · 000KB/s · 15s $(sync~spin)')
+      expect(mocks.busyItem.text).toBe('Syncing 421 · 000KB/s · 15s $(sync~spin)')
       controller.dispose()
     } finally {
       vi.useRealTimers()
@@ -820,7 +839,7 @@ describe('P4StatusBarController sync progress', () => {
     } as never)
     controller.refresh()
 
-    expect(mocks.item.text).toBe('$(server) client-1: Syncing 7 · 0s $(sync~spin)')
+    expect(mocks.busyItem.text).toBe('Syncing 7 · 0s $(sync~spin)')
     controller.dispose()
   })
 
@@ -843,21 +862,21 @@ describe('P4StatusBarController sync progress', () => {
         active: { status, onDidChange: vi.fn(() => ({ dispose: vi.fn() })) },
       } as never)
       controller.refresh()
-      expect(mocks.item.text).toBe('$(server) client-1: Syncing 421 · 5s $(sync~spin)')
+      expect(mocks.busyItem.text).toBe('Syncing 421 · 5s $(sync~spin)')
 
       // No new line from p4 (the count stays at 421), but the heartbeat ticks —
       // the clock must advance on its own. advanceTimersByTime moves both the
       // interval timer and the fake Date clock.
       vi.advanceTimersByTime(3_000)
-      expect(mocks.item.text).toBe('$(server) client-1: Syncing 421 · 8s $(sync~spin)')
+      expect(mocks.busyItem.text).toBe('Syncing 421 · 8s $(sync~spin)')
 
       // Sync ends (syncProgress cleared): the next tick stops the heartbeat, so
       // no further renders happen on the timer.
       delete (status as Record<string, unknown>).syncProgress
       vi.advanceTimersByTime(1_000)
-      const textAfterClear = mocks.item.text
+      const textAfterClear = mocks.busyItem.text
       vi.advanceTimersByTime(6_000)
-      expect(mocks.item.text).toBe(textAfterClear)
+      expect(mocks.busyItem.text).toBe(textAfterClear)
       controller.dispose()
     } finally {
       vi.useRealTimers()
@@ -931,21 +950,7 @@ describe('syncTargetLabel', () => {
 })
 
 describe('P4StatusBarController scan progress', () => {
-  beforeEach(() => {
-    mocks.item.text = ''
-    mocks.item.tooltip = ''
-    mocks.item.command = ''
-    mocks.item.showProgress = undefined
-    mocks.item.show.mockClear()
-    mocks.item.hide.mockClear()
-    mocks.revItem.text = ''
-    mocks.revItem.tooltip = ''
-    mocks.revItem.command = ''
-    mocks.revItem.show.mockClear()
-    mocks.revItem.hide.mockClear()
-    mocks.activeEditor = undefined
-    mocks.editorListener = undefined
-  })
+  beforeEach(resetMocks)
 
   it('renders the scan counts with the spinner at the end and a full tooltip', () => {
     const controller = new P4StatusBarController({
@@ -964,15 +969,18 @@ describe('P4StatusBarController scan progress', () => {
     } as never)
     controller.refresh()
 
-    expect(mocks.item.text).toBe('$(server) …branch_xyz: 3/12 $(sync~spin)')
-    expect(mocks.item.text.endsWith('$(sync~spin)')).toBe(true)
-    expect(mocks.item.showProgress).toBeUndefined()
-    expect(mocks.item.tooltip).toContain('Scanning workspace testuser_dev_branch_xyz')
-    expect(mocks.item.tooltip).toContain('Scanned 3 directories / 9 pending')
-    expect(mocks.item.tooltip).toContain('Current: Content/Characters/Hero')
-    expect(mocks.item.tooltip).toContain('Found 47 drift files · 12s elapsed')
-    expect(mocks.item.tooltip).toContain('\n\nClick to confirm cancel')
-    expect(mocks.item.command).toBe('perforce.cancelBusy')
+    // The client name is gone from the body (the graph item right beside it
+    // already names the client), so the run's own label has to carry the entry.
+    expect(mocks.busyItem.text).toBe('Scanning workspace 3/12 $(sync~spin)')
+    expect(mocks.busyItem.text.endsWith('$(sync~spin)')).toBe(true)
+    expect(mocks.busyItem.showProgress).toBeUndefined()
+    expect(mocks.busyItem.tooltip).toContain('Scanning workspace testuser_dev_branch_xyz')
+    expect(mocks.busyItem.tooltip).toContain('Scanned 3 directories / 9 pending')
+    expect(mocks.busyItem.tooltip).toContain('Current: Content/Characters/Hero')
+    expect(mocks.busyItem.tooltip).toContain('Found 47 drift files · 12s elapsed')
+    expect(mocks.busyItem.tooltip).toContain('\n\nClick to confirm cancel')
+    expect(mocks.busyItem.command).toBe('perforce.cancelBusy')
+    expect(mocks.item.command).toBe('perforce-graph.view')
     controller.dispose()
   })
 
@@ -996,13 +1004,13 @@ describe('P4StatusBarController scan progress', () => {
 
     // One δ call covers the whole scope: there are no directories to print, so
     // the tooltip shows the phase ordinal δ itself reports (1-based).
-    expect(mocks.item.tooltip).toContain('Phase 3/5: digest')
-    expect(mocks.item.tooltip).not.toContain('Scanned 2 directories')
-    expect(mocks.item.tooltip).not.toContain('Current:')
+    expect(mocks.busyItem.tooltip).toContain('Phase 3/5: digest')
+    expect(mocks.busyItem.tooltip).not.toContain('Scanned 2 directories')
+    expect(mocks.busyItem.tooltip).not.toContain('Current:')
     controller.dispose()
   })
 
-  it('keeps the graph command and omits the cancel line when not cancellable', () => {
+  it('leaves the progress item unclickable and omits the cancel line when not cancellable', () => {
     const controller = new P4StatusBarController({
       active: makeClient({
         clientName: 'testuser_dev_branch_xyz',
@@ -1013,8 +1021,9 @@ describe('P4StatusBarController scan progress', () => {
     } as never)
     controller.refresh()
 
+    expect(mocks.busyItem.command).toBeUndefined()
+    expect(mocks.busyItem.tooltip).not.toContain('Click to confirm cancel')
     expect(mocks.item.command).toBe('perforce-graph.view')
-    expect(mocks.item.tooltip).not.toContain('Click to confirm cancel')
     controller.dispose()
   })
 
@@ -1035,7 +1044,7 @@ describe('P4StatusBarController scan progress', () => {
     } as never)
     controller.refresh()
 
-    expect(mocks.item.tooltip).toContain('Current: workspace root')
+    expect(mocks.busyItem.tooltip).toContain('Current: workspace root')
     controller.dispose()
   })
 
@@ -1050,7 +1059,7 @@ describe('P4StatusBarController scan progress', () => {
     } as never)
     controller.refresh()
 
-    expect(mocks.item.tooltip).not.toContain('Current:')
+    expect(mocks.busyItem.tooltip).not.toContain('Current:')
     controller.dispose()
   })
 
@@ -1064,21 +1073,25 @@ describe('P4StatusBarController scan progress', () => {
     } as never)
     controller.refresh()
 
-    expect(mocks.item.text).toBe('$(server) …branch_xyz: Syncing… $(sync~spin)')
-    expect(mocks.item.text.endsWith('$(sync~spin)')).toBe(true)
-    expect(mocks.item.showProgress).toBeUndefined()
-    expect(mocks.item.tooltip).toBe('Syncing')
+    expect(mocks.busyItem.text).toBe('Syncing… $(sync~spin)')
+    expect(mocks.busyItem.text.endsWith('$(sync~spin)')).toBe(true)
+    expect(mocks.busyItem.showProgress).toBeUndefined()
+    expect(mocks.busyItem.tooltip).toBe('Syncing')
     controller.dispose()
   })
 
-  it('idle state truncates the client name and clears showProgress', () => {
+  it('idle state truncates the client name and leaves no spinner on either item', () => {
     const controller = new P4StatusBarController({
       active: makeClient({ clientName: 'testuser_dev_branch_xyz' }),
     } as never)
     controller.refresh()
 
     expect(mocks.item.text).toBe('$(server) …branch_xyz 2')
+    // The busy spinner is an inline `$(sync~spin)`, so `showProgress` is never
+    // used — setting it would paint a second, left-hand spinner.
     expect(mocks.item.showProgress).toBeUndefined()
+    expect(mocks.busyItem.showProgress).toBeUndefined()
+    expect(mocks.busyItem.hide).toHaveBeenCalled()
     controller.dispose()
   })
 
@@ -1101,7 +1114,7 @@ describe('P4StatusBarController scan progress', () => {
 
     // The target deliberately outlives its run: the notification that announced
     // it is gone by the time the user asks "which changelist did I just get?".
-    // The action hint stays last, as in the sync branch.
+    // The action hint stays last — the graph item's tooltip never changes shape.
     expect(mocks.item.tooltip).toBe(
       'Perforce: client-1 · 2 opened\nLast pull: changelist 4521\nOpen Perforce Graph',
     )
@@ -1119,6 +1132,26 @@ describe('P4StatusBarController scan progress', () => {
     controller.dispose()
   })
 
+  it('keeps the last-pull line off the graph tooltip while that pull is running', () => {
+    const controller = new P4StatusBarController({
+      active: makeClient({
+        clientName: 'client-1',
+        lastSyncSpec: '@4521',
+        busy: 'Syncing',
+        busyCancellable: true,
+        syncProgress: { done: 7, startedAt: Date.now() },
+      }),
+    } as never)
+    controller.refresh()
+
+    // `lastSyncSpec` is written when the run STARTS, so mid-pull the graph item
+    // would repeat the target the progress item already names — and call it the
+    // "last" pull before it has landed.
+    expect(mocks.item.tooltip).toBe('Perforce: client-1 · 2 opened\nOpen Perforce Graph')
+    expect(mocks.busyItem.tooltip).toContain('Target: changelist 4521')
+    controller.dispose()
+  })
+
   it('offline and not-logged-in states truncate the client name', () => {
     const offline = new P4StatusBarController({
       active: makeClient({ clientName: 'testuser_dev_branch_xyz', connection: 'offline' }),
@@ -1133,5 +1166,96 @@ describe('P4StatusBarController scan progress', () => {
     notLoggedIn.refresh()
     expect(mocks.item.text).toBe('$(server) …branch_xyz (not logged in)')
     notLoggedIn.dispose()
+  })
+})
+
+describe('P4StatusBarController entry roles', () => {
+  beforeEach(resetMocks)
+
+  /** The busy shapes the controller distinguishes: a streaming sync, a scan and
+   *  a label-only operation, each cancellable or not. */
+  const shapes: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
+    [
+      'sync, cancellable',
+      { busy: 'Syncing', busyCancellable: true, syncProgress: { done: 7, startedAt: Date.now() } },
+    ],
+    [
+      'sync, not cancellable',
+      {
+        busy: 'Syncing',
+        busyCancellable: false,
+        syncProgress: { done: 7, startedAt: Date.now() },
+      },
+    ],
+    [
+      'scan, cancellable',
+      {
+        busy: 'Scanning workspace',
+        busyCancellable: true,
+        scanProgress: { done: 3, pending: 9, driftFound: 0, startedAt: Date.now() },
+      },
+    ],
+    [
+      'scan, not cancellable',
+      {
+        busy: 'Scanning workspace',
+        busyCancellable: false,
+        scanProgress: { done: 3, pending: 9, driftFound: 0, startedAt: Date.now() },
+      },
+    ],
+    ['label-only, cancellable', { busy: 'Submitting', busyCancellable: true }],
+    ['label-only, not cancellable', { busy: 'Refreshing', busyCancellable: false }],
+  ]
+
+  for (const [shape, override] of shapes) {
+    it(`keeps the graph click on the client-name item during ${shape}`, () => {
+      const cancellable = override['busyCancellable'] === true
+      const controller = new P4StatusBarController({
+        active: makeClient({ clientName: 'testuser_dev_branch_xyz', ...override }),
+      } as never)
+      controller.refresh()
+
+      // The regression this suite exists for: the busy states used to rewrite
+      // the client-name item's click to `perforce.cancelBusy`, so clicking the
+      // graph icon mid-pull popped the stop confirmation instead of the graph.
+      expect(mocks.item.command).toBe('perforce-graph.view')
+      expect(mocks.item.text).toBe('$(server) …branch_xyz 2')
+      expect(mocks.item.text).not.toContain('$(sync~spin)')
+      expect(mocks.item.tooltip).toContain('Open Perforce Graph')
+      // Still on screen: a busy render that hid the graph item would be a new
+      // bug (the entry vanishing mid-pull) the assertions above cannot see.
+      expect(mocks.item.hide).not.toHaveBeenCalled()
+
+      // …and the run shows up on the progress item beside it, spinner and all.
+      expect(mocks.busyItem.show).toHaveBeenCalled()
+      expect(mocks.busyItem.text.endsWith('$(sync~spin)')).toBe(true)
+      expect(mocks.busyItem.command).toBe(cancellable ? 'perforce.cancelBusy' : undefined)
+      controller.dispose()
+    })
+  }
+
+  it('collapses the progress item once the operation ends', () => {
+    const status: Record<string, unknown> = {
+      clientName: 'client-1',
+      connection: 'connected',
+      openedCount: 2,
+      busy: 'Syncing',
+      busyCancellable: true,
+      syncProgress: { done: 7, startedAt: Date.now() },
+    }
+    const controller = new P4StatusBarController({
+      active: { status, onDidChange: vi.fn(() => ({ dispose: vi.fn() })) },
+    } as never)
+    controller.refresh()
+    expect(mocks.busyItem.show).toHaveBeenCalled()
+
+    delete status['busy']
+    delete status['syncProgress']
+    controller.refresh()
+
+    expect(mocks.busyItem.hide).toHaveBeenCalled()
+    expect(mocks.item.text).toBe('$(server) client-1 2')
+    expect(mocks.item.command).toBe('perforce-graph.view')
+    controller.dispose()
   })
 })

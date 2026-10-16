@@ -1,10 +1,16 @@
 /**
- * The Perforce status-bar entries: the main client name + connection state item,
- * plus a revision chip (`#have / #head`) for the active editor's file. All
- * render whichever client is active — switching the SCM selection re-points
- * them, mirroring VSCode's single-repo status bar (and git's
- * GitStatusBarController). Clicking the main item opens the Perforce graph; the
- * revision chip syncs just the file it describes.
+ * The Perforce status-bar entries: the client name + connection state item, a
+ * progress item that appears only while a long p4 operation is in flight, and a
+ * revision chip (`#have / #head`) for the active editor's file. All render
+ * whichever client is active — switching the SCM selection re-points them,
+ * mirroring VSCode's single-repo status bar (and git's GitStatusBarController).
+ *
+ * The graph and the cancel affordance are two SEPARATE items by design: the
+ * client-name item's click is always `perforce-graph.view`, while the progress
+ * item carries the counts and the `perforce.cancelBusy` click (a runtime command
+ * the command layer gates behind a confirmation). They once shared one item
+ * whose click swapped to cancel mid-run, so clicking the graph during a pull
+ * popped the stop confirmation instead of the graph.
  *
  * The revision chip re-reads the active editor on every tab switch
  * (`onDidChangeActiveTextEditor`) and routes the file through
@@ -32,7 +38,12 @@ import { uriToFsPath } from './pathUtil.js'
 import { asRev, type FstatInfo } from './fstatParser.js'
 import { formatBytes, formatIoRate, RateWindow } from './processIo.js'
 import { localize } from './nls.js'
-import { scanPhaseOrdinal, type PerforceClient, type SyncProgress } from './client.js'
+import {
+  scanPhaseOrdinal,
+  type ClientStatus,
+  type PerforceClient,
+  type SyncProgress,
+} from './client.js'
 
 /** Truncate a long client name for the busy status-bar text: keep at most `max`
  *  chars of the tail, but never slice mid-word — when the cut lands inside a
@@ -86,6 +97,9 @@ export function syncTargetLabel(spec: string): string {
 
 export class P4StatusBarController {
   private readonly _item: StatusBarItem
+  /** Progress + cancel for the in-flight p4 operation, on its own item so the
+   *  graph entry beside it never changes meaning. Hidden while idle. */
+  private readonly _busyItem: StatusBarItem
   private readonly _revItem: StatusBarItem
   private _clientSub: Disposable | undefined
   private _editorSub: Disposable | undefined
@@ -110,10 +124,17 @@ export class P4StatusBarController {
   private _syncRateOwner: PerforceClient | undefined
 
   constructor(private readonly _mgr: ClientManager) {
-    this._item = window.createStatusBarItem(StatusBarAlignment.Left, 100)
+    // 101, not 100: the item and the progress item beside it must not share a
+    // priority — hide() drops the renderer entry and show() re-appends it, so
+    // equal priorities would let the two drift past each other on every flip.
+    this._item = window.createStatusBarItem(StatusBarAlignment.Left, 101)
     this._item.command = 'perforce-graph.view'
-    // Lower priority sits left of the main item: `#have / #head` for the active
-    // editor's file, its own signal next to (not merged into) the main item.
+    // Higher priority sits further left, so 100 places the progress readout
+    // immediately right of the client name (Swarm's item stays at 99, past both).
+    this._busyItem = window.createStatusBarItem(StatusBarAlignment.Left, 100)
+    // Lowest of the three, so it renders on the center side of the group:
+    // `#have / #head` for the active editor's file, its own signal beside (not
+    // merged into) the main item.
     this._revItem = window.createStatusBarItem(StatusBarAlignment.Left, 80)
     this._editorSub = window.onDidChangeActiveTextEditor((editor) => this._renderRev(editor))
     this._renderRev()
@@ -144,13 +165,14 @@ export class P4StatusBarController {
     this._renderRev()
   }
 
-  /** Show or hide both items. `false` is pushed via `perforce.setActiveRepo`
+  /** Show or hide every item. `false` is pushed via `perforce.setActiveRepo`
    *  when the SCM selection moved to another provider's repo; `true` restores
    *  and re-renders from the active client. */
   setVisible(visible: boolean): void {
     this._visible = visible
     if (!visible) {
       this._item.hide()
+      this._busyItem.hide()
       this._revItem.hide()
       return
     }
@@ -222,181 +244,194 @@ export class P4StatusBarController {
     if (!client) {
       this._setSyncHeartbeat(false)
       this._item.hide()
+      this._busyItem.hide()
       return
     }
-    const {
-      clientName,
-      connection,
-      openedCount,
-      busy,
-      busyCancellable,
-      scanProgress,
-      syncProgress,
-      lastSyncSpec,
-    } = client.status
-    this._setSyncHeartbeat(syncProgress !== undefined)
-    if (busy) {
-      // A long-running p4 operation is in flight — show a spinner + its label so
-      // the user sees the client isn't stalled (mirrors git's syncing indicator).
-      // While it's cancellable, clicking cancels instead of opening the graph:
-      // without this the only way out of a slow operation is to wait out
-      // `perforce.commandTimeout`. The spinner is an inline `$(sync~spin)` so it
-      // sits on the right — hence showProgress is cleared, else a lucide spinner
-      // would also appear on the left and we'd get one on each side.
-      this._item.showProgress = undefined
-      const short = truncateClientName(clientName)
-      if (syncProgress) {
-        // No total is ever shown: the pre-flight count that would produce one
-        // costs a full server-side walk on a wide scope, so a sync starts
-        // downloading immediately instead. The bare count alone reads as
-        // stalled, so the body pairs it with a live signal — under `--parallel`
-        // p4's stdout goes quiet for minutes at a time, and even before that it
-        // spends the first minutes server-side without touching a workspace file.
-        // Two sources fill that, in this order: the p4 process's own read rate
-        // when a sampler is attached (moves from the first server round-trip),
-        // else the watcher-observed disk count (moves only once files land).
-        const elapsed = formatScanElapsed(Date.now() - syncProgress.startedAt)
-        const disk = syncProgress.diskWrites
-        const rate = this._syncRateText(syncProgress)
-        const middle =
-          rate ??
-          (disk !== undefined && disk > 0
-            ? localize('perforce.status.syncDisk', 'disk +{0}', { 0: disk })
-            : undefined)
-        const count =
-          middle !== undefined
-            ? `${syncProgress.done} · ${middle} · ${elapsed}`
-            : `${syncProgress.done} · ${elapsed}`
-        this._item.text = `$(server) ${short}: ${busy} ${count} $(sync~spin)`
-        const lines = [
-          localize('perforce.status.syncing', 'Syncing {0}', { 0: clientName }),
-          // Which revision this run is pulling, right under the title line: the
-          // notification spells it out once and is gone, and "which changelist
-          // did I just get?" is exactly what a tooltip is asked afterwards.
-          ...(lastSyncSpec !== undefined
-            ? [
-                localize('perforce.status.syncTarget', 'Target: {0}', {
-                  0: syncTargetLabel(lastSyncSpec),
-                }),
-              ]
-            : []),
-          localize('perforce.status.syncCounts', 'Synced {0} files', { 0: syncProgress.done }),
-        ]
-        if (syncProgress.ioReadBytes !== undefined) {
-          lines.push(
-            localize(
-              'perforce.status.syncIoTooltip',
-              'p4 process I/O: read {0}, wrote {1} (OS process counters — includes network receive and staged temporary files, so not a disk-write figure)',
-              {
-                0: formatBytes(syncProgress.ioReadBytes),
-                1: formatBytes(syncProgress.ioWriteBytes ?? 0),
-              },
-            ),
-          )
-        }
-        if (disk !== undefined && disk > 0) {
-          lines.push(
-            localize(
-              'perforce.status.syncDiskTooltip',
-              'Disk writes seen by the file watcher: {0} (approximate; the watcher batches and may truncate events)',
-              { 0: disk },
-            ),
-          )
-        }
-        if (syncProgress.currentFile !== undefined) {
-          lines.push(
-            localize('perforce.status.syncCurrent', 'Current: {0}', {
-              0: syncProgress.currentFile,
-            }),
-          )
-        }
+    const status = client.status
+    this._setSyncHeartbeat(status.syncProgress !== undefined)
+    // Each item renders from its own half of the status: whatever `busy` does,
+    // it cannot change the graph item's click or its text.
+    const busy = status.busy
+    if (busy !== undefined) {
+      this._renderBusy(status, busy)
+    } else {
+      this._busyItem.hide()
+    }
+    this._renderMain(status)
+  }
+
+  /** The progress item: a spinner plus the run's label and counts, so the user
+   *  sees a long p4 operation isn't stalled, and — while it can be cancelled —
+   *  the click that asks to stop it (without it the only way out of a slow
+   *  operation is to wait out `perforce.commandTimeout`).
+   *
+   *  The spinner is an inline `$(sync~spin)` so it sits on the right;
+   *  `showProgress` stays unset, else a lucide spinner would also appear on the
+   *  left — one on each side. An uncancellable run gets no click target:
+   *  `command` is assigned `undefined` explicitly on every render (`hide()`
+   *  doesn't clear the field, so a stale `perforce.cancelBusy` would make the
+   *  next run look clickable), and never falls back to `perforce-graph.view` —
+   *  offering the graph from the progress readout is the very conflation this
+   *  item exists to undo. */
+  private _renderBusy(status: ClientStatus, busy: string): void {
+    const { clientName, busyCancellable, scanProgress, syncProgress, lastSyncSpec } = status
+    if (syncProgress) {
+      // No total is ever shown: the pre-flight count that would produce one
+      // costs a full server-side walk on a wide scope, so a sync starts
+      // downloading immediately instead. The bare count alone reads as
+      // stalled, so the body pairs it with a live signal — under `--parallel`
+      // p4's stdout goes quiet for minutes at a time, and even before that it
+      // spends the first minutes server-side without touching a workspace file.
+      // Two sources fill that, in this order: the p4 process's own read rate
+      // when a sampler is attached (moves from the first server round-trip),
+      // else the watcher-observed disk count (moves only once files land).
+      const elapsed = formatScanElapsed(Date.now() - syncProgress.startedAt)
+      const disk = syncProgress.diskWrites
+      const rate = this._syncRateText(syncProgress)
+      const middle =
+        rate ??
+        (disk !== undefined && disk > 0
+          ? localize('perforce.status.syncDisk', 'disk +{0}', { 0: disk })
+          : undefined)
+      const count =
+        middle !== undefined
+          ? `${syncProgress.done} · ${middle} · ${elapsed}`
+          : `${syncProgress.done} · ${elapsed}`
+      this._busyItem.text = `${busy} ${count} $(sync~spin)`
+      const lines = [
+        localize('perforce.status.syncing', 'Syncing {0}', { 0: clientName }),
+        // Which revision this run is pulling, right under the title line: the
+        // notification spells it out once and is gone, and "which changelist
+        // did I just get?" is exactly what a tooltip is asked afterwards.
+        ...(lastSyncSpec !== undefined
+          ? [
+              localize('perforce.status.syncTarget', 'Target: {0}', {
+                0: syncTargetLabel(lastSyncSpec),
+              }),
+            ]
+          : []),
+        localize('perforce.status.syncCounts', 'Synced {0} files', { 0: syncProgress.done }),
+      ]
+      if (syncProgress.ioReadBytes !== undefined) {
         lines.push(
-          localize('perforce.status.syncElapsed', '{0} elapsed', {
-            0: elapsed,
+          localize(
+            'perforce.status.syncIoTooltip',
+            'p4 process I/O: read {0}, wrote {1} (OS process counters — includes network receive and staged temporary files, so not a disk-write figure)',
+            {
+              0: formatBytes(syncProgress.ioReadBytes),
+              1: formatBytes(syncProgress.ioWriteBytes ?? 0),
+            },
+          ),
+        )
+      }
+      if (disk !== undefined && disk > 0) {
+        lines.push(
+          localize(
+            'perforce.status.syncDiskTooltip',
+            'Disk writes seen by the file watcher: {0} (approximate; the watcher batches and may truncate events)',
+            { 0: disk },
+          ),
+        )
+      }
+      if (syncProgress.currentFile !== undefined) {
+        lines.push(
+          localize('perforce.status.syncCurrent', 'Current: {0}', {
+            0: syncProgress.currentFile,
           }),
         )
-        if (busyCancellable) {
-          lines.push('', localize('perforce.status.clickToCancel', 'Click to confirm cancel'))
-          this._item.command = 'perforce.cancelBusy'
-        } else {
-          this._item.command = 'perforce-graph.view'
-        }
-        this._item.tooltip = lines.join('\n')
-        this._item.show()
-        return
       }
-      if (scanProgress) {
-        const total = scanProgress.done + scanProgress.pending
-        this._item.text = `$(server) ${short}: ${scanProgress.done}/${total} $(sync~spin)`
-        const lines = [
-          localize('perforce.status.scanning', 'Scanning workspace {0}', { 0: clientName }),
-        ]
-        if (scanProgress.phase !== undefined) {
-          // δ's readout: one whole-scope call, so its ordinals count the fixed
-          // phase ladder (start / analyze / digest / report / done) — there are
-          // no directories to count, and printing them as "scanned N
-          // directories" would be a fabricated number.
-          const phase = scanPhaseOrdinal(scanProgress)
-          lines.push(
-            localize('perforce.status.scanPhase', 'Phase {0}/{1}: {2}', {
-              0: phase.step,
-              1: phase.total,
-              2: scanProgress.phase,
-            }),
-          )
-        } else {
-          lines.push(
-            localize('perforce.status.scanCounts', 'Scanned {0} directories / {1} pending', {
-              0: scanProgress.done,
-              1: scanProgress.pending,
-            }),
-          )
-        }
-        if (scanProgress.currentDir !== undefined) {
-          lines.push(
-            scanProgress.currentDir === '.'
-              ? localize('perforce.status.scanCurrentRoot', 'Current: workspace root')
-              : localize('perforce.status.scanCurrent', 'Current: {0}', {
-                  0: scanProgress.currentDir,
-                }),
-          )
-        }
-        lines.push(
-          localize('perforce.status.scanDrift', 'Found {0} drift files · {1} elapsed', {
-            0: scanProgress.driftFound,
-            1: formatScanElapsed(Date.now() - scanProgress.startedAt),
-          }),
-        )
-        if (busyCancellable) {
-          lines.push('', localize('perforce.status.clickToCancel', 'Click to confirm cancel'))
-          this._item.command = 'perforce.cancelBusy'
-        } else {
-          this._item.command = 'perforce-graph.view'
-        }
-        this._item.tooltip = lines.join('\n')
-        this._item.show()
-        return
-      }
-      this._item.text = `$(server) ${short}: ${busy}… $(sync~spin)`
+      lines.push(
+        localize('perforce.status.syncElapsed', '{0} elapsed', {
+          0: elapsed,
+        }),
+      )
       if (busyCancellable) {
-        this._item.command = 'perforce.cancelBusy'
-        this._item.tooltip = localize(
-          'perforce.status.cancelTooltip',
-          '{0} — click to confirm cancel',
-          { 0: busy },
+        lines.push('', localize('perforce.status.clickToCancel', 'Click to confirm cancel'))
+        this._busyItem.command = 'perforce.cancelBusy'
+      } else {
+        this._busyItem.command = undefined
+      }
+      this._busyItem.tooltip = lines.join('\n')
+      this._busyItem.show()
+      return
+    }
+    if (scanProgress) {
+      const total = scanProgress.done + scanProgress.pending
+      this._busyItem.text = `${busy} ${scanProgress.done}/${total} $(sync~spin)`
+      const lines = [
+        localize('perforce.status.scanning', 'Scanning workspace {0}', { 0: clientName }),
+      ]
+      if (scanProgress.phase !== undefined) {
+        // δ's readout: one whole-scope call, so its ordinals count the fixed
+        // phase ladder (start / analyze / digest / report / done) — there are
+        // no directories to count, and printing them as "scanned N
+        // directories" would be a fabricated number.
+        const phase = scanPhaseOrdinal(scanProgress)
+        lines.push(
+          localize('perforce.status.scanPhase', 'Phase {0}/{1}: {2}', {
+            0: phase.step,
+            1: phase.total,
+            2: scanProgress.phase,
+          }),
         )
       } else {
-        this._item.command = 'perforce-graph.view'
-        this._item.tooltip = busy
+        lines.push(
+          localize('perforce.status.scanCounts', 'Scanned {0} directories / {1} pending', {
+            0: scanProgress.done,
+            1: scanProgress.pending,
+          }),
+        )
       }
-      this._item.show()
+      if (scanProgress.currentDir !== undefined) {
+        lines.push(
+          scanProgress.currentDir === '.'
+            ? localize('perforce.status.scanCurrentRoot', 'Current: workspace root')
+            : localize('perforce.status.scanCurrent', 'Current: {0}', {
+                0: scanProgress.currentDir,
+              }),
+        )
+      }
+      lines.push(
+        localize('perforce.status.scanDrift', 'Found {0} drift files · {1} elapsed', {
+          0: scanProgress.driftFound,
+          1: formatScanElapsed(Date.now() - scanProgress.startedAt),
+        }),
+      )
+      if (busyCancellable) {
+        lines.push('', localize('perforce.status.clickToCancel', 'Click to confirm cancel'))
+        this._busyItem.command = 'perforce.cancelBusy'
+      } else {
+        this._busyItem.command = undefined
+      }
+      this._busyItem.tooltip = lines.join('\n')
+      this._busyItem.show()
       return
     }
-    this._item.showProgress = undefined
+    this._busyItem.text = `${busy}… $(sync~spin)`
+    if (busyCancellable) {
+      this._busyItem.command = 'perforce.cancelBusy'
+      this._busyItem.tooltip = localize(
+        'perforce.status.cancelTooltip',
+        '{0} — click to confirm cancel',
+        { 0: busy },
+      )
+    } else {
+      this._busyItem.command = undefined
+      this._busyItem.tooltip = busy
+    }
+    this._busyItem.show()
+  }
+
+  /** The graph item's render: client name, connection state and open count —
+   *  the same click and the same text whether idle or mid-operation (see the
+   *  class header), so no render may repurpose it. */
+  private _renderMain(status: ClientStatus): void {
+    const { clientName, connection, openedCount, lastSyncSpec, syncProgress } = status
+    // Re-asserted on every render, not just at construction: the click is the
+    // graph no matter what happens around it.
     this._item.command = 'perforce-graph.view'
-    // Status bar truncates the client name in every state (busy and idle) so the
-    // entry width doesn't jump when an operation finishes; the tooltip below
-    // keeps the full name.
+    // Truncated rather than shown in full: the entry keeps a bounded width as
+    // clients are switched; the tooltip below keeps the full name.
     const short = truncateClientName(clientName)
     if (connection === 'offline') {
       this._item.text = `$(server) ${short} (${localize('perforce.status.offline', 'offline')})`
@@ -408,13 +443,16 @@ export class P4StatusBarController {
     // Spell the count out in words — plus the graph is what a click opens, which
     // the label alone doesn't say. The target line sits between them: it is the
     // only place a sync's target survives its run (the notification is gone by
-    // then), and the action hint stays last, as in the sync branch.
+    // then), and the action hint stays last. Skipped while a sync is in flight,
+    // though: `lastSyncSpec` is written when the run STARTS, so mid-pull this
+    // line would repeat the target the progress item already names — under a
+    // "Last pull" label that lies about a pull still on its way.
     this._item.tooltip = [
       localize('perforce.status.tooltip', 'Perforce: {0} · {1} opened', {
         0: clientName,
         1: String(openedCount),
       }),
-      ...(lastSyncSpec !== undefined
+      ...(lastSyncSpec !== undefined && syncProgress === undefined
         ? [
             localize('perforce.status.lastSyncTarget', 'Last pull: {0}', {
               0: syncTargetLabel(lastSyncSpec),
@@ -540,6 +578,7 @@ export class P4StatusBarController {
     this._clientSub?.dispose()
     this._editorSub?.dispose()
     this._item.dispose()
+    this._busyItem.dispose()
     this._revItem.dispose()
   }
 }

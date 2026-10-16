@@ -602,7 +602,7 @@ describe('P4Service._spawn command timeout', () => {
   })
 })
 
-// User-initiated cancellation (status-bar spinner click → `client.cancelBusy()`).
+// User-initiated cancellation (status-bar progress item click → `client.cancelBusy()`).
 // Same red line as the watchdog: the abort listener and `close` handler are async,
 // so cancelling must resolve a failure result and never reject — a rejection from
 // there has no catcher and takes the extension host down.

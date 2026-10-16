@@ -1,6 +1,6 @@
 /**
  * Command-layer tests for the confirmation that now guards stopping in-flight
- * p4 work. Both entries — the status bar's spinner click and the sync
+ * p4 work. Both entries — the status-bar progress item's click and the sync
  * notification's cancel button — route through one helper in `activate`, so
  * these drive the real handlers captured from `activate()` and assert on the
  * fake client rather than on the status bar's rendering.
@@ -297,7 +297,7 @@ async function runCommand(id: string, ...args: unknown[]): Promise<void> {
   await handler!(...args)
 }
 
-/** The status-bar entry's click, which carries no argument. */
+/** The progress item's click, which carries no argument. */
 const clickStatusBar = () => runCommand('perforce.cancelBusy')
 
 const syncToChange = (...args: unknown[]) => runCommand('perforce-graph.syncToChange', ...args)

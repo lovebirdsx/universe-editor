@@ -105,7 +105,8 @@ test.describe('@p1 perforce sync I/O rate', () => {
       })
       .toBeGreaterThan(0)
 
-    // The p4 status-bar entry: the client name plus its state, one button.
+    // The p4 status-bar progress entry: the run's own readout, one button —
+    // the client-name item beside it stays idle, so only this one matches.
     const entry = page
       .locator('[data-testid="part-statusbar"] button')
       .filter({ hasText: 'Syncing' })
