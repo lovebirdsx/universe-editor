@@ -72,6 +72,14 @@ function makeService(
   return { service, executeCommand, fileEvents, workspaceEvents, logger }
 }
 
+/**
+ * Declares rows as visible — the viewport-driven query entry point. A read no
+ * longer enqueues, so every "the first look queries it" setup goes through here.
+ */
+function show(service: ScmIgnoredResourcesService, ...resources: URI[]): void {
+  service.markVisible(resources)
+}
+
 describe('ScmIgnoredResourcesService', () => {
   beforeEach(() => {
     vi.useFakeTimers()
@@ -91,8 +99,15 @@ describe('ScmIgnoredResourcesService', () => {
       .mockResolvedValue(['D:/repo/node_modules', 'D:/repo/node_modules/x.js'])
     const { service, executeCommand: exec } = makeService(executeCommand)
 
-    expect(service.isIgnored(URI.file(`${ROOT}/a.txt`))).toBeUndefined()
-    expect(service.isIgnored(URI.file(`${ROOT}/a.txt`))).toBeUndefined()
+    const a = URI.file(`${ROOT}/a.txt`)
+    // The same path declared twice must collapse into one batch entry.
+    service.markVisible([
+      a,
+      a,
+      URI.file(`${ROOT}/node_modules`),
+      URI.file(`${ROOT}/node_modules/x.js`),
+    ])
+    expect(service.isIgnored(a)).toBeUndefined()
     expect(service.isIgnored(URI.file(`${ROOT}/node_modules`))).toBeUndefined()
     expect(service.isIgnored(URI.file(`${ROOT}/node_modules/x.js`))).toBeUndefined()
 
@@ -108,19 +123,35 @@ describe('ScmIgnoredResourcesService', () => {
     expect(service.isIgnored(URI.file(`${ROOT}/node_modules`))).toBe(true)
     expect(service.isIgnored(URI.file(`${ROOT}/node_modules/x.js`))).toBe(true)
 
-    // Cache hit: no further enqueue / command.
-    service.isIgnored(URI.file(`${ROOT}/a.txt`))
-    service.isIgnored(URI.file(`${ROOT}/node_modules`))
+    // Cache hit: re-declaring them fires no further command.
+    show(service, a, URI.file(`${ROOT}/node_modules`))
     await vi.advanceTimersByTimeAsync(200)
     expect(exec).toHaveBeenCalledTimes(1)
+  })
+
+  it('never queries from a read alone — only markVisible enqueues', async () => {
+    const executeCommand = vi.fn().mockResolvedValue([`${ROOT}/cache`])
+    const { service, executeCommand: exec } = makeService(executeCommand)
+
+    const cache = URI.file(`${ROOT}/cache`)
+    // Rendering a row reads its ignored state; that alone must never spawn a
+    // query. A non-windowed tree renders off-screen rows too, so "rendered" is
+    // not "visible" — only the viewport declaration is.
+    for (let i = 0; i < 3; i++) expect(service.isIgnored(cache)).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(200)
+    expect(exec).not.toHaveBeenCalled()
+
+    show(service, cache)
+    await vi.advanceTimersByTimeAsync(200)
+    expect(exec).toHaveBeenCalledTimes(1)
+    expect(service.isIgnored(cache)).toBe(true)
   })
 
   it('caches negative answers and paths outside any repo as not ignored', async () => {
     const executeCommand = vi.fn().mockResolvedValue(['D:/repo/dist'])
     const { service, executeCommand: exec } = makeService(executeCommand)
 
-    service.isIgnored(URI.file(`${ROOT}/src.ts`))
-    service.isIgnored(URI.file('D:/elsewhere/file.ts'))
+    show(service, URI.file(`${ROOT}/src.ts`), URI.file('D:/elsewhere/file.ts'))
     await vi.advanceTimersByTimeAsync(200)
 
     // Only the repo-owned path goes through the command; the outside path is
@@ -135,12 +166,15 @@ describe('ScmIgnoredResourcesService', () => {
     const executeCommand = vi.fn().mockResolvedValue(['D:/repo/cache'])
     const { service, fileEvents, executeCommand: exec } = makeService(executeCommand)
 
-    service.isIgnored(URI.file(`${ROOT}/cache`))
+    show(service, URI.file(`${ROOT}/cache`))
     await vi.advanceTimersByTimeAsync(200)
     expect(service.isIgnored(URI.file(`${ROOT}/cache`))).toBe(true)
 
     fileEvents.fire([{ type: 'modified', resource: URI.file(`${ROOT}/.gitignore`) }])
+    // The drop bumps `version`; the consumer re-declares on that re-render — the
+    // explicit declaration here stands in for it.
     expect(service.isIgnored(URI.file(`${ROOT}/cache`))).toBeUndefined()
+    show(service, URI.file(`${ROOT}/cache`))
     await vi.advanceTimersByTimeAsync(200)
     expect(exec).toHaveBeenCalledTimes(2)
   })
@@ -152,7 +186,7 @@ describe('ScmIgnoredResourcesService', () => {
       sourceControls: controls,
     } as unknown as IScmService)
 
-    service.isIgnored(URI.file(`${ROOT}/x`))
+    show(service, URI.file(`${ROOT}/x`))
     await vi.advanceTimersByTimeAsync(200)
     expect(service.isIgnored(URI.file(`${ROOT}/x`))).toBe(true)
 
@@ -164,11 +198,11 @@ describe('ScmIgnoredResourcesService', () => {
     const executeCommand = vi.fn().mockResolvedValue(undefined)
     const { service, executeCommand: exec } = makeService(executeCommand)
 
-    service.isIgnored(URI.file(`${ROOT}/x`))
+    show(service, URI.file(`${ROOT}/x`))
     await vi.advanceTimersByTimeAsync(200)
     expect(service.isIgnored(URI.file(`${ROOT}/x`))).toBe(false)
 
-    service.isIgnored(URI.file(`${ROOT}/x`))
+    show(service, URI.file(`${ROOT}/x`))
     await vi.advanceTimersByTimeAsync(200)
     expect(exec).toHaveBeenCalledTimes(1)
   })
@@ -177,7 +211,7 @@ describe('ScmIgnoredResourcesService', () => {
     const executeCommand = vi.fn().mockRejectedValue(new Error('boom'))
     const { service, logger } = makeService(executeCommand)
 
-    service.isIgnored(URI.file(`${ROOT}/x`))
+    show(service, URI.file(`${ROOT}/x`))
     await vi.advanceTimersByTimeAsync(200)
     expect(service.isIgnored(URI.file(`${ROOT}/x`))).toBe(false)
     expect(logger.warn).toHaveBeenCalled()
@@ -190,7 +224,7 @@ describe('ScmIgnoredResourcesService', () => {
     )
     const { service, fileEvents, executeCommand: exec } = makeService(executeCommand)
 
-    service.isIgnored(URI.file(`${ROOT}/cache`))
+    show(service, URI.file(`${ROOT}/cache`))
     // Start the flush; executeCommand hangs while the command is in flight.
     await vi.advanceTimersByTimeAsync(200)
     expect(exec).toHaveBeenCalledTimes(1)
@@ -202,11 +236,12 @@ describe('ScmIgnoredResourcesService', () => {
     resolveCmd!(['D:/repo/cache'])
     await vi.advanceTimersByTimeAsync(0)
 
-    // Cache stays empty, so the path re-enqueues instead of returning a stale true.
+    // Cache stays empty, so the path reads as unknown instead of a stale true.
     expect(service.isIgnored(URI.file(`${ROOT}/cache`))).toBeUndefined()
 
     // Re-query under the new rules: no longer ignored.
     executeCommand.mockResolvedValue([])
+    show(service, URI.file(`${ROOT}/cache`))
     await vi.advanceTimersByTimeAsync(200)
     expect(service.isIgnored(URI.file(`${ROOT}/cache`))).toBe(false)
     expect(exec).toHaveBeenCalledTimes(2)
@@ -227,6 +262,7 @@ describe('ScmIgnoredResourcesService', () => {
         scmOf([p4SourceControl(P4_ROOT)]),
       )
 
+      show(service, URI.file(`${P4_ROOT}/node_modules`))
       expect(service.isIgnored(URI.file(`${P4_ROOT}/node_modules`))).toBeUndefined()
       await vi.advanceTimersByTimeAsync(200)
 
@@ -239,7 +275,7 @@ describe('ScmIgnoredResourcesService', () => {
       const { service, executeCommand: exec } = makeService(executeCommand, scmOf(nestedControls()))
 
       scmViewState.setSelectedRepo(P4_ROOT)
-      service.isIgnored(URI.file(`${GIT_ROOT}/a.txt`))
+      show(service, URI.file(`${GIT_ROOT}/a.txt`))
       await vi.advanceTimersByTimeAsync(200)
 
       expect(exec).toHaveBeenCalledWith('perforce.checkIgnore', [`${GIT_ROOT}/a.txt`])
@@ -250,7 +286,7 @@ describe('ScmIgnoredResourcesService', () => {
       const { service, executeCommand: exec } = makeService(executeCommand, scmOf(nestedControls()))
 
       scmViewState.setSelectedRepo(GIT_ROOT)
-      service.isIgnored(URI.file(`${GIT_ROOT}/a.txt`))
+      show(service, URI.file(`${GIT_ROOT}/a.txt`))
       await vi.advanceTimersByTimeAsync(200)
 
       expect(exec).toHaveBeenCalledWith('git.checkIgnore', [`${GIT_ROOT}/a.txt`])
@@ -260,7 +296,7 @@ describe('ScmIgnoredResourcesService', () => {
       const executeCommand = vi.fn().mockResolvedValue([`${GIT_ROOT}/a.txt`])
       const { service, executeCommand: exec } = makeService(executeCommand, scmOf(nestedControls()))
 
-      service.isIgnored(URI.file(`${GIT_ROOT}/a.txt`))
+      show(service, URI.file(`${GIT_ROOT}/a.txt`))
       await vi.advanceTimersByTimeAsync(200)
 
       expect(exec).toHaveBeenCalledWith('git.checkIgnore', [`${GIT_ROOT}/a.txt`])
@@ -271,12 +307,13 @@ describe('ScmIgnoredResourcesService', () => {
       const { service, executeCommand: exec } = makeService(executeCommand, scmOf(nestedControls()))
 
       scmViewState.setSelectedRepo(GIT_ROOT)
-      service.isIgnored(URI.file(`${GIT_ROOT}/a.txt`))
+      show(service, URI.file(`${GIT_ROOT}/a.txt`))
       await vi.advanceTimersByTimeAsync(200)
       expect(service.isIgnored(URI.file(`${GIT_ROOT}/a.txt`))).toBe(true)
 
       scmViewState.setSelectedRepo(P4_ROOT)
       expect(service.isIgnored(URI.file(`${GIT_ROOT}/a.txt`))).toBeUndefined()
+      show(service, URI.file(`${GIT_ROOT}/a.txt`))
       await vi.advanceTimersByTimeAsync(200)
       expect(exec).toHaveBeenCalledTimes(2)
     })
@@ -289,12 +326,13 @@ describe('ScmIgnoredResourcesService', () => {
         executeCommand: exec,
       } = makeService(executeCommand, scmOf([p4SourceControl(P4_ROOT)]))
 
-      service.isIgnored(URI.file(`${P4_ROOT}/cache`))
+      show(service, URI.file(`${P4_ROOT}/cache`))
       await vi.advanceTimersByTimeAsync(200)
       expect(service.isIgnored(URI.file(`${P4_ROOT}/cache`))).toBe(true)
 
       fileEvents.fire([{ type: 'modified', resource: URI.file(`${P4_ROOT}/.p4ignore`) }])
       expect(service.isIgnored(URI.file(`${P4_ROOT}/cache`))).toBeUndefined()
+      show(service, URI.file(`${P4_ROOT}/cache`))
       await vi.advanceTimersByTimeAsync(200)
       expect(exec).toHaveBeenCalledTimes(2)
     })
@@ -307,12 +345,13 @@ describe('ScmIgnoredResourcesService', () => {
         executeCommand: exec,
       } = makeService(executeCommand, scmOf([p4SourceControl(P4_ROOT)]))
 
-      service.isIgnored(URI.file(`${P4_ROOT}/cache`))
+      show(service, URI.file(`${P4_ROOT}/cache`))
       await vi.advanceTimersByTimeAsync(200)
       expect(service.isIgnored(URI.file(`${P4_ROOT}/cache`))).toBe(true)
 
       fileEvents.fire([{ type: 'modified', resource: URI.file(`${P4_ROOT}/p4ignore.txt`) }])
       expect(service.isIgnored(URI.file(`${P4_ROOT}/cache`))).toBeUndefined()
+      show(service, URI.file(`${P4_ROOT}/cache`))
       await vi.advanceTimersByTimeAsync(200)
       expect(exec).toHaveBeenCalledTimes(2)
     })
@@ -334,6 +373,7 @@ describe('ScmIgnoredResourcesService', () => {
       const executeCommand = vi.fn().mockResolvedValue([`${REMOTE_ROOT}/node_modules`])
       const { service, executeCommand: exec } = makeRemote(executeCommand)
 
+      service.markVisible([remote(`${REMOTE_ROOT}/node_modules`), remote(`${REMOTE_ROOT}/src.ts`)])
       expect(service.isIgnored(remote(`${REMOTE_ROOT}/node_modules`))).toBeUndefined()
       expect(service.isIgnored(remote(`${REMOTE_ROOT}/src.ts`))).toBeUndefined()
       await vi.advanceTimersByTimeAsync(200)
@@ -351,6 +391,10 @@ describe('ScmIgnoredResourcesService', () => {
       const { service, executeCommand: exec } = makeRemote(executeCommand)
 
       // A client-local editor and another host's resource are both off-host.
+      service.markVisible([
+        URI.file(`${ROOT}/node_modules`),
+        remote(`${REMOTE_ROOT}/node_modules`, 'otherhost'),
+      ])
       expect(service.isIgnored(URI.file(`${ROOT}/node_modules`))).toBe(false)
       expect(service.isIgnored(remote(`${REMOTE_ROOT}/node_modules`, 'otherhost'))).toBe(false)
       await vi.advanceTimersByTimeAsync(200)
@@ -361,13 +405,14 @@ describe('ScmIgnoredResourcesService', () => {
       const executeCommand = vi.fn().mockResolvedValue([`${REMOTE_ROOT}/cache`])
       const { service, fileEvents, executeCommand: exec } = makeRemote(executeCommand)
 
-      service.isIgnored(remote(`${REMOTE_ROOT}/cache`))
+      show(service, remote(`${REMOTE_ROOT}/cache`))
       await vi.advanceTimersByTimeAsync(200)
       expect(service.isIgnored(remote(`${REMOTE_ROOT}/cache`))).toBe(true)
 
       // Remote watcher events arrive as remote-ssh URIs (authority reattached).
       fileEvents.fire([{ type: 'modified', resource: remote(`${REMOTE_ROOT}/.gitignore`) }])
       expect(service.isIgnored(remote(`${REMOTE_ROOT}/cache`))).toBeUndefined()
+      show(service, remote(`${REMOTE_ROOT}/cache`))
       await vi.advanceTimersByTimeAsync(200)
       expect(exec).toHaveBeenCalledTimes(2)
     })
@@ -376,7 +421,7 @@ describe('ScmIgnoredResourcesService', () => {
       const executeCommand = vi.fn().mockResolvedValue([`${REMOTE_ROOT}/cache`])
       const { service, fileEvents, executeCommand: exec } = makeRemote(executeCommand)
 
-      service.isIgnored(remote(`${REMOTE_ROOT}/cache`))
+      show(service, remote(`${REMOTE_ROOT}/cache`))
       await vi.advanceTimersByTimeAsync(200)
       expect(service.isIgnored(remote(`${REMOTE_ROOT}/cache`))).toBe(true)
 

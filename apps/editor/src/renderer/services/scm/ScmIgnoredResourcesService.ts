@@ -7,11 +7,14 @@
  *  reports them nowhere either), so the SCM decorations can't see them; instead
  *  we batch-resolve unknown paths through the owning provider's
  *  `<providerId>.checkIgnore` command (e.g. git check-ignore --stdin -z),
- *  mirroring VSCode's GitIgnoreDecorationProvider. Consumers (Explorer rows,
- *  editor tabs) call `isIgnored` during render: cached answers return
- *  synchronously, unknown paths are enqueued and return undefined, and a
- *  version observable bumps when the batch resolves so the next render picks up
- *  the cached answer.
+ *  mirroring VSCode's GitIgnoreDecorationProvider. Consumers declare the rows
+ *  their viewport covers through `markVisible` — unknown paths are then enqueued
+ *  for the next batch — and draw with the pure read `isIgnored`, which returns
+ *  undefined for a path no batch has answered yet. A version observable bumps
+ *  when the batch resolves, so consumers re-declare and pick up the answer.
+ *  Gating the query on the viewport rather than on rendering keeps its cost
+ *  proportional to the rows on screen: a non-windowed tree renders off-screen
+ *  rows too.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -46,8 +49,17 @@ export interface IScmIgnoredResourcesService {
   readonly _serviceBrand: undefined
   /** Bumps whenever a batch resolves or the cache is invalidated, so consumers re-render. */
   readonly version: IObservable<number>
-  /** Cached ignored status; undefined while unknown (the path is enqueued for a batch). */
+  /**
+   * Cached ignored status; undefined while unknown (not queried yet). A pure
+   * read: it never enqueues — declare rows through {@link markVisible}.
+   */
   isIgnored(resource: URI): boolean | undefined
+  /**
+   * Declares that these resources' rows are on screen: unknown paths are queried
+   * in the next batch. Callers re-declare whenever the visible window moves and
+   * when a cached answer is dropped (each drop bumps `version`).
+   */
+  markVisible(resources: readonly URI[]): void
 }
 
 export const IScmIgnoredResourcesService = createDecorator<IScmIgnoredResourcesService>(
@@ -122,12 +134,18 @@ export class ScmIgnoredResourcesService extends Disposable implements IScmIgnore
   isIgnored(resource: URI): boolean | undefined {
     const fsPath = this._hostPath(resource)
     if (fsPath === undefined) return false
-    const key = scmPathKey(fsPath)
-    const cached = this._cache.get(key)
-    if (cached !== undefined) return cached
-    if (!this._pending.has(key)) this._pending.set(key, fsPath)
-    this._scheduleFlush()
-    return undefined
+    return this._cache.get(scmPathKey(fsPath))
+  }
+
+  markVisible(resources: readonly URI[]): void {
+    for (const resource of resources) {
+      const fsPath = this._hostPath(resource)
+      if (fsPath === undefined) continue
+      const key = scmPathKey(fsPath)
+      if (this._cache.has(key) || this._pending.has(key)) continue
+      this._pending.set(key, fsPath)
+      this._scheduleFlush()
+    }
   }
 
   /** The path a resource has on the SCM host, or undefined when it is off-host. */
@@ -194,8 +212,8 @@ export class ScmIgnoredResourcesService extends Disposable implements IScmIgnore
       }
       // Invalidation fired while the command was in flight (e.g. an ignore-rule
       // file save): the cache/pending were cleared and the version bumped, so
-      // discard these now-stale answers — the consumer's next render re-enqueues
-      // them.
+      // discard these now-stale answers — the consumer's next declaration
+      // re-enqueues them.
       if (this._generation !== generation) return
       // undefined = command not registered (extension still activating / a
       // provider without checkIgnore) — treat the batch as not ignored so we

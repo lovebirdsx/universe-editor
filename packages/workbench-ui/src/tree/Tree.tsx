@@ -49,6 +49,8 @@ const DEFAULT_ROW_HEIGHT = 22
 const DEFAULT_THRESHOLD = 200
 const DEFAULT_INDENT_WIDTH = 12
 const DEFAULT_INDENT_BASE = 6
+/** Slack rows on each side of the viewport in the visible-window report; mirrors VirtualList's overscan. */
+const VISIBLE_OVERSCAN = 5
 
 /**
  * Row ids are opaque to this component and routinely carry characters CSS gives
@@ -120,6 +122,18 @@ export interface ITreeProps<T> {
   /** Called when the tree container receives DOM focus — before built-in focus state update. */
   readonly onFocus?: () => void
   /**
+   * Reports which rows the scroll viewport covers: the slice of `visibleNodes`
+   * spanning the viewport plus `VISIBLE_OVERSCAN` rows of slack on each side,
+   * or an empty array when there is no viewport (the tree is hidden or not yet
+   * laid out). Fires on scroll, container resize and structure changes, and
+   * only when the window actually moves.
+   *
+   * A side-effect channel for on-demand work (e.g. resolving per-row state
+   * through a query service) — NOT a render input: do not setState from it, or
+   * scrolling would re-render the tree.
+   */
+  readonly onVisibleNodesChange?: (nodes: readonly IVisibleNode<T>[]) => void
+  /**
    * Stable key identifying this logical view; when set, the tree's scroll
    * position is saved on unmount and restored on remount through
    * ScrollStateCache (survives container switches, not a window reload).
@@ -150,6 +164,7 @@ export function Tree<T>(props: ITreeProps<T>) {
     onShiftTab,
     onContextMenu,
     onFocus,
+    onVisibleNodesChange,
     activateNonLeafOnEnter = false,
     scrollStateKey,
     scrollStatePersister,
@@ -277,6 +292,110 @@ export function Tree<T>(props: ITreeProps<T>) {
     // sizeAt 身份恒定后必须显式依赖 structureVersion：只被展开带出来的目标行要等结构变化重跑；
     // 同一 id 的重复 reveal 仍由 revealRequest 里的 tick 触发。
   }, [revealRequest, structureVersion, sizeAt, rowHeight, getRowHeight])
+
+  // Visible-window reporting (see `onVisibleNodesChange`). The geometry is
+  // derived here rather than read off the virtualizer: in the non-windowed mode
+  // VirtualList renders every row and its total size is just the sum of
+  // `estimateSize`, so the virtualizer's window is not the viewport there.
+  const lastWindowRef = useRef<{
+    nodes: readonly IVisibleNode<T>[]
+    start: number
+    end: number
+  } | null>(null)
+  const windowRafRef = useRef(0)
+
+  const emitVisibleWindow = useStableCallback((): void => {
+    const scroller = containerRef.current
+    if (!scroller) return
+    const nodes = visibleRef.current
+    const viewport = scroller.clientHeight
+    let start = 0
+    let end = -1
+    if (viewport > 0 && nodes.length > 0) {
+      const top = scroller.scrollTop
+      const bottom = top + viewport
+      const { rowHeight: fallback, getRowHeight: resolve } = rowHeightRef.current
+      let first = -1
+      let last = -1
+      if (resolve === undefined) {
+        // Uniform rows: O(1).
+        first = Math.floor(top / fallback)
+        last = Math.min(nodes.length - 1, Math.ceil(bottom / fallback) - 1)
+      } else {
+        // Per-row heights: accumulate, same walk as the reveal path above.
+        let offset = 0
+        for (let i = 0; i < nodes.length; i++) {
+          const size = sizeAt(i)
+          if (first < 0 && offset + size > top) first = i
+          if (offset >= bottom) break
+          last = i
+          offset += size
+        }
+      }
+      if (first >= 0) {
+        start = Math.max(0, first - VISIBLE_OVERSCAN)
+        end = Math.min(nodes.length - 1, last + VISIBLE_OVERSCAN)
+      }
+    }
+    const previous = lastWindowRef.current
+    // The de-dupe key includes the nodes array identity: useTreeModel re-derives
+    // it per structure version, so an unchanged index range over a changed tree
+    // is a different window and must be re-reported.
+    if (
+      previous !== null &&
+      previous.nodes === nodes &&
+      previous.start === start &&
+      previous.end === end
+    ) {
+      return
+    }
+    lastWindowRef.current = { nodes, start, end }
+    onVisibleNodesChange?.(nodes.slice(start, end + 1))
+  })
+
+  const scheduleVisibleWindow = useStableCallback((): void => {
+    if (windowRafRef.current !== 0) return
+    windowRafRef.current = requestAnimationFrame(() => {
+      windowRafRef.current = 0
+      emitVisibleWindow()
+    })
+  })
+
+  const watchVisibleWindow = onVisibleNodesChange !== undefined
+
+  useEffect(() => {
+    if (!watchVisibleWindow) return
+    // The ref callback runs before effects, so the container is always there on
+    // the render that first asks for the window.
+    const scroller = containerRef.current
+    if (!scroller) return
+    scroller.addEventListener('scroll', scheduleVisibleWindow, { passive: true })
+    // A resize fires no scroll event, and it is the only signal when a hidden
+    // pane (clientHeight 0, reported as "no rows") comes back.
+    const observer = new ResizeObserver(scheduleVisibleWindow)
+    observer.observe(scroller)
+    // The first read is deferred a frame: layout is not committed at mount, and
+    // a pre-layout clientHeight can span the whole content (the trap the reveal
+    // path documents above).
+    scheduleVisibleWindow()
+    return () => {
+      scroller.removeEventListener('scroll', scheduleVisibleWindow)
+      observer.disconnect()
+      if (windowRafRef.current !== 0) {
+        cancelAnimationFrame(windowRafRef.current)
+        windowRafRef.current = 0
+      }
+      // Forget the last report: a host that toggles the prop off and on must not
+      // have the re-attached window suppressed by a stale de-dupe key.
+      lastWindowRef.current = null
+    }
+  }, [watchVisibleWindow, scheduleVisibleWindow])
+
+  // Structure changes move rows (and can add or remove them) — re-report. Row
+  // height props are treated as static; only the nodes are tracked here.
+  useEffect(() => {
+    if (watchVisibleWindow) scheduleVisibleWindow()
+  }, [watchVisibleWindow, visibleNodes, scheduleVisibleWindow])
 
   // Keyboard context menu (ContextMenu key / Shift+F10): anchored on the focused
   // row so each view's existing row handler opens the menu exactly like a mouse

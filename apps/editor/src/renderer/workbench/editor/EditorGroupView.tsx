@@ -336,8 +336,9 @@ const EditorTab = memo(function EditorTab({
   // Re-render the tab when the SCM model changes; the lookup goes through getFile.
   useObservable(scmDecorations?.decorations ?? EMPTY_DECORATIONS)
   const scmIgnoredResources = useOptionalService(IScmIgnoredResourcesService)
-  // Re-render the tab once a check-ignore batch resolves so the cached answer re-applies.
-  useObservable(scmIgnoredResources?.version ?? EMPTY_IGNORED_VERSION)
+  // Re-render the tab once a check-ignore batch resolves so the cached answer
+  // re-applies — and, through the declaration effect below, re-declares it.
+  const ignoredVersion = useObservable(scmIgnoredResources?.version ?? EMPTY_IGNORED_VERSION)
   // Folder badge next to the agent icon: re-renders when the session cwd /
   // workspace (and therefore the strict-subdirectory judgement) changes.
   const hasSubdirCwd = useObservable(
@@ -345,6 +346,14 @@ const EditorTab = memo(function EditorTab({
   )
   const deco = resource ? scmDecorations?.getFile(resource) : undefined
   // 无 SCM 状态装饰时，被 ignore 规则忽略的文件标签变暗（VSCode 对标，git / p4 通用）。
+  // A tab is on screen by definition, so it declares itself and then reads the
+  // cache (`isIgnored` never enqueues). Declaration — not rendering — drives the
+  // query, same rule as the Explorer's visible window, and it re-runs on every
+  // version bump so an answer dropped while the tab stays open is re-asked.
+  useEffect(() => {
+    if (resource === undefined || deco !== undefined) return
+    scmIgnoredResources?.markVisible([resource])
+  }, [scmIgnoredResources, ignoredVersion, resource, deco])
   const ignored =
     deco === undefined &&
     resource !== undefined &&

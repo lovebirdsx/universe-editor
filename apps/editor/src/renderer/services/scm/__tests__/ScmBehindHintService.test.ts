@@ -68,6 +68,14 @@ function makeService(executeCommand: ReturnType<typeof vi.fn>, scm?: IScmService
   return { service, executeCommand, fileEvents, workspaceEvents, decorations, logger }
 }
 
+/**
+ * Declares rows as visible — the viewport-driven probe entry point. A read no
+ * longer enqueues, so every "the first look probes it" setup goes through here.
+ */
+function show(service: ScmBehindHintService, ...resources: URI[]): void {
+  service.markVisible(resources)
+}
+
 describe('ScmBehindHintService', () => {
   beforeEach(() => {
     vi.useFakeTimers()
@@ -86,6 +94,7 @@ describe('ScmBehindHintService', () => {
     const { service, executeCommand: exec } = makeService(executeCommand)
 
     const a = URI.file(`${ROOT}/a.txt`)
+    show(service, a)
     expect(service.isBehind(a)).toBeUndefined()
     await vi.advanceTimersByTimeAsync(200)
 
@@ -94,13 +103,33 @@ describe('ScmBehindHintService', () => {
     expect(service.isBehind(a)).toBe(true)
   })
 
+  it('never probes from a read alone — only markVisible enqueues', async () => {
+    const executeCommand = vi.fn().mockResolvedValue([`${ROOT}/a.txt`])
+    const { service, executeCommand: exec } = makeService(executeCommand)
+
+    const a = URI.file(`${ROOT}/a.txt`)
+    // Rendering a row reads its status; that alone must never spawn a probe. A
+    // non-windowed tree renders off-screen rows too, so "rendered" is not
+    // "visible" — only the viewport declaration is.
+    for (let i = 0; i < 3; i++) expect(service.isBehind(a)).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(200)
+    expect(exec).not.toHaveBeenCalled()
+
+    show(service, a)
+    await vi.advanceTimersByTimeAsync(200)
+    expect(exec).toHaveBeenCalledTimes(1)
+    expect(service.isBehind(a)).toBe(true)
+  })
+
   it('batches a debounce window into one command per provider', async () => {
     const executeCommand = vi.fn().mockResolvedValue([])
     const { service, executeCommand: exec } = makeService(executeCommand)
 
-    service.isBehind(URI.file(`${ROOT}/a.txt`))
-    service.isBehind(URI.file(`${ROOT}/b.txt`))
-    service.isBehind(URI.file(`${ROOT}/c.txt`))
+    service.markVisible([
+      URI.file(`${ROOT}/a.txt`),
+      URI.file(`${ROOT}/b.txt`),
+      URI.file(`${ROOT}/c.txt`),
+    ])
     await vi.advanceTimersByTimeAsync(200)
 
     expect(exec).toHaveBeenCalledTimes(1)
@@ -117,16 +146,14 @@ describe('ScmBehindHintService', () => {
 
     const behind = URI.file(`${ROOT}/a.txt`)
     const clean = URI.file(`${ROOT}/clean.txt`)
-    service.isBehind(behind)
-    service.isBehind(clean)
+    show(service, behind, clean)
     await vi.advanceTimersByTimeAsync(200)
 
     expect(service.isBehind(behind)).toBe(true)
     expect(service.isBehind(clean)).toBe(false)
 
-    // Re-reading both stays a cache hit: no further command.
-    service.isBehind(behind)
-    service.isBehind(clean)
+    // Re-declaring both stays a cache hit: no further command.
+    show(service, behind, clean)
     await vi.advanceTimersByTimeAsync(200)
     expect(exec).toHaveBeenCalledTimes(1)
   })
@@ -136,13 +163,14 @@ describe('ScmBehindHintService', () => {
     const { service, executeCommand: exec } = makeService(executeCommand)
 
     const a = URI.file(`${ROOT}/a.txt`)
+    show(service, a)
     expect(service.isBehind(a)).toBeUndefined()
     await vi.advanceTimersByTimeAsync(200)
 
     expect(exec).toHaveBeenCalledTimes(1)
     expect(service.isBehind(a)).toBe(false)
 
-    service.isBehind(a)
+    show(service, a)
     await vi.advanceTimersByTimeAsync(200)
     expect(exec).toHaveBeenCalledTimes(1)
   })
@@ -152,13 +180,14 @@ describe('ScmBehindHintService', () => {
     const { service, executeCommand: exec, logger } = makeService(executeCommand)
 
     const a = URI.file(`${ROOT}/a.txt`)
+    show(service, a)
     expect(service.isBehind(a)).toBeUndefined()
     await vi.advanceTimersByTimeAsync(200)
 
     expect(service.isBehind(a)).toBe(false)
     expect(logger.warn).toHaveBeenCalled()
 
-    service.isBehind(a)
+    show(service, a)
     await vi.advanceTimersByTimeAsync(200)
     expect(exec).toHaveBeenCalledTimes(1)
   })
@@ -171,6 +200,7 @@ describe('ScmBehindHintService', () => {
     const { service, executeCommand: exec, workspaceEvents } = makeService(executeCommand)
 
     const a = URI.file(`${ROOT}/a.txt`)
+    show(service, a)
     expect(service.isBehind(a)).toBeUndefined()
     await vi.advanceTimersByTimeAsync(200)
     expect(exec).toHaveBeenCalledTimes(1)
@@ -185,6 +215,7 @@ describe('ScmBehindHintService', () => {
     expect(service.isBehind(a)).toBeUndefined()
 
     executeCommand.mockResolvedValue([])
+    show(service, a)
     await vi.advanceTimersByTimeAsync(200)
     expect(exec).toHaveBeenCalledTimes(2)
   })
@@ -199,6 +230,7 @@ describe('ScmBehindHintService', () => {
     const { service, executeCommand: exec, fileEvents } = makeService(executeCommand)
 
     const a = URI.file(`${ROOT}/a.txt`)
+    show(service, a)
     expect(service.isBehind(a)).toBeUndefined()
     await vi.advanceTimersByTimeAsync(200)
     expect(exec).toHaveBeenCalledTimes(1)
@@ -218,7 +250,7 @@ describe('ScmBehindHintService', () => {
     await vi.advanceTimersByTimeAsync(0)
 
     // Latest query wins. Accepting #1 would pin the file "not behind" for good:
-    // the cache holds an entry, so no render re-enqueues it.
+    // the cache holds an entry, so nothing re-probes it.
     expect(service.isBehind(a)).toBe(true)
   })
 
@@ -227,13 +259,15 @@ describe('ScmBehindHintService', () => {
     const { service, executeCommand: exec } = makeService(executeCommand)
 
     const a = URI.file(`${ROOT}/a.txt`)
+    show(service, a)
     expect(service.isBehind(a)).toBeUndefined()
     await vi.advanceTimersByTimeAsync(200)
     expect(exec).toHaveBeenCalledTimes(1)
 
-    // Still no answer, so the row keeps rendering as unknown. Re-reading it must
-    // not fire a second identical query — Explorer re-renders constantly, and
-    // each duplicate is another p4 spawn queued on the shared concurrency gate.
+    // Still no answer, so the row keeps rendering as unknown. Re-declaring it
+    // must not fire a second identical query — the viewport re-declares on every
+    // scroll, and each duplicate is another p4 spawn on the shared gate.
+    show(service, a)
     expect(service.isBehind(a)).toBeUndefined()
     await vi.advanceTimersByTimeAsync(200)
     expect(exec).toHaveBeenCalledTimes(1)
@@ -245,8 +279,7 @@ describe('ScmBehindHintService', () => {
 
     const a = URI.file(`${ROOT}/a.txt`)
     const b = URI.file(`${ROOT}/b.txt`)
-    service.isBehind(a)
-    service.isBehind(b)
+    show(service, a, b)
     await vi.advanceTimersByTimeAsync(200)
     expect(service.isBehind(a)).toBe(true)
     expect(service.isBehind(b)).toBe(true)
@@ -255,11 +288,31 @@ describe('ScmBehindHintService', () => {
     expect(service.isBehind(a)).toBeUndefined()
     expect(service.isBehind(b)).toBe(true)
 
-    // `a` re-enqueues on its own; `b` is not re-queried.
+    // `a` re-probes (the declaration above); `b` is not re-queried.
+    show(service, a)
     executeCommand.mockResolvedValue([])
     await vi.advanceTimersByTimeAsync(200)
     expect(exec).toHaveBeenCalledTimes(2)
     expect(exec).toHaveBeenLastCalledWith('perforce.checkBehind', [`${ROOT}/a.txt`])
+  })
+
+  it('keeps a file event from cancelling a probe that is still queued', async () => {
+    const executeCommand = vi.fn().mockResolvedValue([`${ROOT}/a.txt`])
+    const { service, fileEvents, executeCommand: exec } = makeService(executeCommand)
+
+    // Declared visible, then saved before the debounce elapses: the probe is
+    // queued but not out. Dropping it would leave the row permanently unknown —
+    // the query never goes out, nothing bumps (so no re-declaration follows) and
+    // nothing scrolled. It must keep its slot and read the post-save state.
+    const a = URI.file(`${ROOT}/a.txt`)
+    show(service, a)
+    fileEvents.fire([{ type: 'modified', resource: a } as unknown as IFileChangeEvent])
+
+    await vi.advanceTimersByTimeAsync(200)
+
+    expect(exec).toHaveBeenCalledTimes(1)
+    expect(exec).toHaveBeenCalledWith('perforce.checkBehind', [`${ROOT}/a.txt`])
+    expect(service.isBehind(a)).toBe(true)
   })
 
   it('fully invalidates when the workspace changes', async () => {
@@ -267,7 +320,7 @@ describe('ScmBehindHintService', () => {
     const { service, workspaceEvents } = makeService(executeCommand)
 
     const a = URI.file(`${ROOT}/a.txt`)
-    service.isBehind(a)
+    show(service, a)
     await vi.advanceTimersByTimeAsync(200)
     expect(service.isBehind(a)).toBe(true)
 
@@ -280,7 +333,7 @@ describe('ScmBehindHintService', () => {
     const { service, decorations } = makeService(executeCommand)
 
     const a = URI.file(`${ROOT}/a.txt`)
-    service.isBehind(a)
+    show(service, a)
     await vi.advanceTimersByTimeAsync(200)
     expect(service.isBehind(a)).toBe(true)
 
@@ -295,7 +348,7 @@ describe('ScmBehindHintService', () => {
     const { service, decorations } = makeService(executeCommand)
 
     const a = URI.file(`${ROOT}/a.txt`)
-    service.isBehind(a)
+    show(service, a)
     await vi.advanceTimersByTimeAsync(200)
     expect(service.isBehind(a)).toBe(true)
 
@@ -314,7 +367,7 @@ describe('ScmBehindHintService', () => {
     const { service } = makeService(executeCommand)
 
     const versionBefore = service.version.get()
-    service.isBehind(URI.file(`${ROOT}/a.txt`))
+    show(service, URI.file(`${ROOT}/a.txt`))
     await vi.advanceTimersByTimeAsync(200)
 
     expect(service.version.get()).toBeGreaterThan(versionBefore)
@@ -324,6 +377,7 @@ describe('ScmBehindHintService', () => {
     const executeCommand = vi.fn().mockResolvedValue([])
     const { service, executeCommand: exec } = makeService(executeCommand)
 
+    service.markVisible([URI.parse('markdown-preview://x/a.md'), URI.parse('untitled:Untitled-1')])
     expect(service.isBehind(URI.parse('markdown-preview://x/a.md'))).toBe(false)
     expect(service.isBehind(URI.parse('untitled:Untitled-1'))).toBe(false)
     await vi.advanceTimersByTimeAsync(200)

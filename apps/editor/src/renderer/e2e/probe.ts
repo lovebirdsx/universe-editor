@@ -1261,10 +1261,15 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       return out
     },
     // Cached git-ignored answer for a resource, exactly as the Explorer rows and
-    // editor tabs read it when deciding to dim a label. undefined while the batch
-    // check-ignore is still in flight, so specs poll until it settles.
-    isResourceGitIgnored: (uri: string): boolean | undefined =>
-      services.scmIgnoredResourcesService.isIgnored(URI.parse(uri)),
+    // editor tabs read it when deciding to dim a label. The probe declares the
+    // resource visible first — the read alone never queries — and returns
+    // undefined while the batch check-ignore is still in flight, so specs poll
+    // until it settles.
+    isResourceGitIgnored: (uri: string): boolean | undefined => {
+      const resource = URI.parse(uri)
+      services.scmIgnoredResourcesService.markVisible([resource])
+      return services.scmIgnoredResourcesService.isIgnored(resource)
+    },
     getScmDecorationForResource: (suffix: string): E2EScmDecoration | null => {
       const needle = normalizeScmPath(suffix)
       const { files, supplementary } = services.scmDecorationsService.decorations.get()
@@ -1288,6 +1293,11 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
         ...(deco?.color !== undefined ? { color: deco.color } : {}),
       }
     },
+    // Cached working-tree hint for a resource, read the way an Explorer row does.
+    // Deliberately does NOT declare the resource visible: this probe is the
+    // end-to-end guard for the viewport→query wiring, so a hint readable through
+    // it proves the row really was on screen and the tree really declared it. A
+    // spec needing an off-screen row's hint must reveal or scroll to it first.
     getScmWorkingTreeHintForResource: async (
       suffix: string,
     ): Promise<E2EWorkingTreeHint | null> => {

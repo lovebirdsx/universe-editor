@@ -7,6 +7,7 @@
 `<Tree>` 曾按 `visibleNodes.length > virtualizationThreshold`（默认 200，`tree/Tree.tsx:49` 的 `DEFAULT_THRESHOLD`、`:142` 的 prop）在两种渲染形态间切换，**滚动容器随之整体更换**（非虚拟 = 根 `[role="tree"]`，虚拟 = `VirtualList` 内层 div）。展开/折叠一个目录恰好跨阈值时视口跳回顶部。第一轮用「scroll 事件镜像 + 翻转后恢复」补救只治好了折叠方向，**展开方向仍漂移**——病根有两层，镜像只够第一层。
 
 **Why**：
+
 - 第一层：换容器丢的是 DOM 上的 scrollTop。
 - 第二层：`@tanstack/virtual-core` 的 `_willUpdate` 在检测到 `getScrollElement()` 身份变化时 `cleanup()` 后重新挂载，**最后一步是 `_scrollToOffset(getScrollOffset())`，而新实例的 `getScrollOffset()` 回落到 `initialOffset`（默认 0）**。于是虚拟器既把 DOM 写成 0，又按 offset=0 算错渲染窗口；镜像 effect 随后把 DOM 写回，但虚拟器内部 `scrollOffset` 仍是 0，要等原生 scroll 事件异步回灌才纠正——这个时间差就是残留漂移。折叠方向只走 `cleanup()`、无重新挂载、无 `_scrollToOffset`，所以干净：**「展开偏、折叠不偏」的不对称就是这一层的指纹**。
 
@@ -25,6 +26,16 @@
 ## 4. 测试纪律：断言 `scrollTop` 必须同时断言「树内没有嵌套 scroller」
 
 否则位置活在别的元素上，断言看着过、实际没测到（变异测试才暴露）。
+
+## 5. 视口窗口回调：`onVisibleNodesChange`（几何自算，与 `windowed` 正交）
+
+`Tree` 可选地上报「滚动视口覆盖了哪些行」——`visibleNodes` 里跨越视口的那一段，上下各加 `VISIBLE_OVERSCAN`（5）行松弛。用途是**按需工作**的副作用通道（逐行向服务声明可见性、驱动按需查询），**不是渲染输入**：在回调里 `setState` 会让每次滚动都重渲染整棵树。
+
+- **几何自算，不读 `virtualizer.getVirtualItems()`**：非 windowed 模式下 `VirtualList` 渲染全部行、虚拟器 `totalSize` 只是 `estimateSize` 累加，它算出的 window 不是视口（happy-dom 下还直接返回空）。这与第 3 节的「`windowed: false` 刻意保留」是同一件事的两面——两种模式上报同一个窗口，回调因此与 `windowed` 正交。
+- **`clientHeight <= 0` = 没有视口**（侧栏隐藏 / 未布局）→ 上报空数组，消费方据此停查。ResizeObserver 是「隐藏 → 显示」唯一的重算触发（那一次不产生 scroll 事件）；rAF 合帧；去重键 = `(visibleNodes 身份, start, end)`——nodes 身份入键让「结构变了但索引区间没变」也能重报（`useTreeModel` 按结构版本 `useMemo` 派生 `visibleNodes`，结构不变则身份稳定）。
+- 首报**推迟一帧**（等布局落定），与 reveal 同一条教训（见 CLAUDE.md 的 reveal 条目）。
+- 监听挂在唯一 scroller `[role="tree"]` 上（第 1 节）；未传 prop 时整个 effect 早退，其余 `Tree` 使用者零开销；卸载时摘监听、断 RO、cancel rAF。
+- 守护：`src/__tests__/Tree.visibleWindow.test.tsx`（窗口与两端夹紧 / 滚动去重 / 结构变化重报 / 零高度与 RO 恢复 / `getRowHeight` 累加路径 / 未传 prop 不挂 scroll 监听 / 卸载停止 / 纯 selection 变化不回调）。
 
 ## 相关
 

@@ -8,10 +8,13 @@
  *  (`p4 reconcile -n`) is a server round-trip too costly to run eagerly, so instead
  *  we resolve unknown paths on demand through the owning provider's
  *  `<providerId>.checkWorkingTree` command, mirroring ScmIgnoredResourcesService:
- *  consumers (Explorer rows) call `getHint` during render — cached answers return
- *  synchronously, unknown paths are enqueued and return undefined, and a version
- *  observable bumps when a batch resolves (or the cache is invalidated) so the next
- *  render picks up the answer.
+ *  consumers declare the rows their viewport covers via `markVisible` — unknown or
+ *  stale paths are enqueued in a debounced batch, cached answers come back
+ *  synchronously through the pure `getHint`, and a version observable bumps when a
+ *  batch resolves (or the cache is invalidated) so the next render picks up the
+ *  answer. Gating the query on the viewport (not on rendering) is what keeps the
+ *  cost proportional to the rows actually on screen: a tree that renders its whole
+ *  expanded self below the virtualization threshold never queries off-screen rows.
  *
  *  The owning provider is resolved among the ones that actually registered
  *  `checkWorkingTree` (capability-by-registration, like the dirty-diff Stage
@@ -22,8 +25,8 @@
  *  intent, and the other providers' slots are hidden while it is selected.
  *
  *  Folder tints fold the pull channel's file cache upward — a directory's
- *  colour is a lower bound on the drift already discovered under it: paths that
- *  were never rendered were never queried, and a save can still take a colour
+ *  colour is a lower bound on the drift already discovered under it: paths
+ *  outside the viewport were never queried, and a save can still take a colour
  *  away, so a folder's tint can change as the user expands and scrolls.
  *  Accepted trade-off: the alternative is eager discovery, i.e. exactly the
  *  whole-tree scan this service exists to avoid. The authoritative folder
@@ -92,23 +95,36 @@ export interface IScmWorkingTreeHintService {
   readonly _serviceBrand: undefined
   /** Bumps whenever a batch resolves or the cache is invalidated, so consumers re-render. */
   readonly version: IObservable<number>
-  /** Cached hint; undefined while unknown (enqueued for a batch) or clean/off-host. */
+  /**
+   * Cached hint; undefined while unknown (not queried yet) or clean/off-host.
+   * A pure read: it never enqueues a query — declare rows through
+   * {@link markVisible} so the queried set follows the viewport, not the render.
+   */
   getHint(resource: URI): IWorkingTreeHint | undefined
   /**
    * Colour derived from known descendants of the pull channel's file cache, or
    * undefined when none has been discovered. A lower bound: it can gain entries
-   * as the user expands/renders new paths, and lose them to a save or a
-   * workspace change. The authoritative folder colour is ScmDecorationsService;
-   * this fold only fills in during the first scan before those land.
+   * as the user expands/scrolls new paths into the viewport, and lose them to a
+   * save or a workspace change. The authoritative folder colour is
+   * ScmDecorationsService; this fold only fills in during the first scan before
+   * those land.
    */
   getFolderHint(resource: URI): IWorkingTreeFolderHint | undefined
+  /**
+   * Declares that these resources' rows are on screen: unknown or stale paths
+   * are enqueued for the next batch; cached ones are touched in the LRU. Callers
+   * re-declare whenever the visible window moves and when a cached answer is
+   * dropped (each drop bumps `version`), which is what keeps the query cost
+   * proportional to the viewport instead of the expanded tree.
+   */
+  markVisible(resources: readonly URI[]): void
 }
 
 export const IScmWorkingTreeHintService = createDecorator<IScmWorkingTreeHintService>(
   'scmWorkingTreeHintService',
 )
 
-/** Explorer is virtualised: fast scrolling touches thousands of paths, so bound the cache. */
+/** Scrolling declares every row it passes as visible, so bound the cache (LRU). */
 export const CACHE_LIMIT = 4096
 
 /** Folding file hints into a folder: a delete (strikeThrough) outranks any other drift. */
@@ -238,47 +254,57 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
     const fsPath = this._hostPath(resource)
     if (fsPath === undefined) return undefined
     const providerId = this._ownerProviderId(fsPath)
-    const visible = this._visibleProviderId()
-    if (providerId === undefined || (visible !== undefined && providerId !== visible)) {
-      return undefined
-    }
-    const key = scmPathKey(fsPath)
-    const slot = this._cache.get(providerId)
-    if (slot !== undefined) {
-      const cached = slot.get(key)
-      if (cached !== undefined) {
-        // Refresh LRU position: a visible row re-reads its hint every render.
+    if (providerId === undefined || !this._isVisibleProvider(providerId)) return undefined
+    return this._cache.get(providerId)?.get(scmPathKey(fsPath)) ?? undefined
+  }
+
+  markVisible(resources: readonly URI[]): void {
+    for (const resource of resources) {
+      const fsPath = this._hostPath(resource)
+      if (fsPath === undefined) continue
+      const providerId = this._ownerProviderId(fsPath)
+      // No capable owner: neither cache nor enqueue — the only way a late
+      // capability registration can heal (see the header and reconcile.md).
+      if (providerId === undefined || !this._isVisibleProvider(providerId)) continue
+      const key = scmPathKey(fsPath)
+      const slot = this._cache.get(providerId)
+      const cached = slot?.get(key)
+      if (slot !== undefined && cached !== undefined) {
+        // Refresh the LRU position: a row the user can see must not be the next
+        // entry evicted. Reads do not touch the cache — this is the touch.
         slot.delete(key)
         slot.set(key, cached)
-        // Revalidation is lazy on purpose. Being read is what proves a row is on
-        // screen, and the whole point of this channel is to cost what the user can
-        // see; re-querying the whole cache the moment it goes stale would put
-        // thousands of scrolled-past paths back on the wire on every provider
-        // refresh — worse than the eager scan this exists to avoid.
+        // Revalidation is lazy on purpose. Being declared visible is what proves
+        // a row is worth a round-trip, and re-querying the whole cache the moment
+        // it goes stale would put thousands of scrolled-past paths back on the
+        // wire on every provider refresh — worse than the eager scan this exists
+        // to avoid.
         if (this._stale.get(providerId)?.delete(key)) this._enqueue(providerId, key, fsPath)
-        return cached ?? undefined
+        continue
       }
+      this._enqueue(providerId, key, fsPath)
     }
-    this._enqueue(providerId, key, fsPath)
-    return undefined
   }
 
   getFolderHint(resource: URI): IWorkingTreeFolderHint | undefined {
     const fsPath = this._hostPath(resource)
     if (fsPath === undefined) return undefined
     const providerId = this._ownerProviderId(fsPath)
-    const visible = this._visibleProviderId()
-    if (providerId === undefined || (visible !== undefined && providerId !== visible)) {
+    const visibleProviderId = this._visibleProviderId()
+    if (
+      providerId === undefined ||
+      (visibleProviderId !== undefined && providerId !== visibleProviderId)
+    ) {
       return undefined
     }
     // Every content-changing path bumps `_version`: the pull cache (flush end,
     // file events, invalidation, and LRU eviction inside `_writeHint`), and repo
-    // switches (the arbitration autorun). `getHint`'s LRU touch only re-orders
+    // switches (the arbitration autorun). `markVisible`'s LRU touch only re-orders
     // entries, which the deterministic tie-break makes irrelevant — so the
     // version is a sound memo generation for the fold.
     const version = this._version.get()
     if (this._folderHints === undefined || this._folderHintsVersion !== version) {
-      const fold = this._buildFolderHints(visible)
+      const fold = this._buildFolderHints(visibleProviderId)
       const hints = new Map<string, IWorkingTreeFolderHint>()
       for (const [key, entry] of fold) hints.set(key, { color: entry.color })
       this._folderHints = hints
@@ -334,6 +360,15 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
   }
 
   /**
+   * Whether a provider's slot should be shown and queried: the SCM view's
+   * selected source control, or every provider when none is selected.
+   */
+  private _isVisibleProvider(providerId: string): boolean {
+    const visible = this._visibleProviderId()
+    return visible === undefined || providerId === visible
+  }
+
+  /**
    * Which provider currently owns `fsPath`, with the same arbitration as
    * `_flush`: among the owners that registered `checkWorkingTree`, the selected
    * repo wins, else the longest-prefix capable owner. An incapable owner (a git
@@ -363,9 +398,9 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
 
   /**
    * Queue a key for the next batch, unless a query for it is already on the wire
-   * or already queued. Explorer re-reads every visible row on every render, so
-   * without the in-flight guard one slow answer becomes a stream of duplicate
-   * queries on the provider's shared concurrency gate.
+   * or already queued. The viewport re-declares its rows on every scroll and on
+   * every re-render, so without the in-flight guard one slow answer becomes a
+   * stream of duplicate queries on the provider's shared concurrency gate.
    *
    * A key leaves `_inFlight` when its answer is written, when a newer query for
    * it supersedes the token, when a file event drops it, or when the cache is
@@ -543,8 +578,9 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
 
   /**
    * Mark every cached answer as possibly out of date without dropping it, so
-   * visible rows keep their current hint instead of flickering for the round-trip.
-   * The re-query happens in {@link getHint}, i.e. only for rows actually rendered.
+   * rows keep their current hint instead of flickering for the round-trip.
+   * The re-query happens in {@link markVisible}, i.e. only for rows the viewport
+   * re-declares.
    *
    * This leans on the autorun that calls it running *before* the Explorer's own
    * `decorations` subscription re-renders, which holds because the service is

@@ -6,11 +6,15 @@
  *  Split of labour with the push channel: the actual ↓ marker arrives as
  *  trailing grey text through the provider's `setSupplementaryDecorations` push
  *  (see ScmDecorationsService.getSupplementary, which the Explorer row renders).
- *  This service is only the pull channel — rendering a visible file row calls
- *  `isBehind` to (a) trigger the owning provider's `<providerId>.checkBehind`
- *  batch probe and (b) cache the answer so a known path is never probed twice.
- *  The return value is deliberately NOT rendered: consumers re-render on
- *  `version` only to feed the next render's enqueue, never to draw the marker.
+ *  This service is only the pull channel — the consumer declares the rows its
+ *  viewport covers through `markVisible`, which probes unknown paths through the
+ *  owning provider's `<providerId>.checkBehind` batch command and caches the
+ *  answer so a known path is never probed twice; `isBehind` is the pure read.
+ *  Gating the probe on the viewport (not on rendering) keeps its cost
+ *  proportional to the rows actually on screen — a non-windowed tree renders
+ *  off-screen rows too. The return value is deliberately NOT rendered: consumers
+ *  re-render on `version` only to re-declare the viewport, never to draw the
+ *  marker.
  *
  *  Caching mirrors ScmIgnoredResourcesService (one flat boolean map, full
  *  invalidation on repo/provider changes — behind is a cheap boolean resolved
@@ -22,7 +26,7 @@
  *  Invalidating on the decorations snapshot is cycle-safe: a fresh
  *  supplementary push (e.g. a sync cleared the markers) makes every cached
  *  behind answer suspect, so the cache clears and `version` bumps; the next
- *  render re-probes visible rows. The probe itself pushes no decoration, and
+ *  declaration re-probes visible rows. The probe itself pushes no decoration, and
  *  the provider's setSupplementaryDecorations delta-dedupes (an unchanged set
  *  fires no event), so probe → push → invalidate → probe settles the moment
  *  the supplementary set stops changing — it cannot loop forever.
@@ -57,8 +61,19 @@ export interface IScmBehindHintService {
   readonly _serviceBrand: undefined
   /** Bumps whenever a batch resolves or the cache is invalidated, so consumers re-render. */
   readonly version: IObservable<number>
-  /** Cached behind status; undefined while unknown (the path is enqueued for a batch). */
+  /**
+   * Cached behind status; undefined while unknown (not probed yet). A pure read:
+   * it never enqueues — declare rows through {@link markVisible}. Deliberately
+   * drawn by no view (the ↓ marker arrives through supplementary decorations);
+   * it stays as the read side of the contract for probes and tests.
+   */
   isBehind(resource: URI): boolean | undefined
+  /**
+   * Declares that these resources' rows are on screen: unknown paths are probed
+   * in the next batch. Callers re-declare whenever the visible window moves and
+   * when a cached answer is dropped (each drop bumps `version`).
+   */
+  markVisible(resources: readonly URI[]): void
 }
 
 export const IScmBehindHintService = createDecorator<IScmBehindHintService>('scmBehindHintService')
@@ -160,20 +175,26 @@ export class ScmBehindHintService extends Disposable implements IScmBehindHintSe
   isBehind(resource: URI): boolean | undefined {
     const fsPath = this._hostPath(resource)
     if (fsPath === undefined) return false
-    const key = scmPathKey(fsPath)
-    const cached = this._cache.get(key)
-    if (cached !== undefined) return cached
-    // The in-flight guard mirrors the pending one: a key whose query is on the
-    // wire must not be re-enqueued — Explorer re-reads every visible row on
-    // every render, and without the guard one slow batch becomes a stream of
-    // duplicate queries on the provider's shared concurrency gate. The token
-    // stamping in `_flush` still applies to what gets enqueued: a file event
-    // re-enqueues a key whose old answer is on the wire, and the newer stamp
-    // lets the old answer be recognised as superseded.
-    if (this._pending.has(key) || this._inFlight.has(key)) return undefined
-    this._pending.set(key, fsPath)
-    this._scheduleFlush()
-    return undefined
+    return this._cache.get(scmPathKey(fsPath))
+  }
+
+  markVisible(resources: readonly URI[]): void {
+    for (const resource of resources) {
+      const fsPath = this._hostPath(resource)
+      if (fsPath === undefined) continue
+      const key = scmPathKey(fsPath)
+      if (this._cache.has(key)) continue
+      // The in-flight guard mirrors the pending one: a key whose query is on the
+      // wire must not be re-enqueued — the viewport re-declares its rows on every
+      // scroll, and without the guard one slow batch becomes a stream of
+      // duplicate queries on the provider's shared concurrency gate. The token
+      // stamping in `_flush` still applies to what gets enqueued: a file event
+      // re-enqueues a key whose old answer is on the wire, and the newer stamp
+      // lets the old answer be recognised as superseded.
+      if (this._pending.has(key) || this._inFlight.has(key)) continue
+      this._pending.set(key, fsPath)
+      this._scheduleFlush()
+    }
   }
 
   /** The path a resource has on the SCM host, or undefined when it is off-host. */
@@ -193,7 +214,10 @@ export class ScmBehindHintService extends Disposable implements IScmBehindHintSe
       // a version of the file that no longer exists on disk — drop it on
       // arrival and re-enqueue now, otherwise the round-trip lands *after* this
       // event and installs the very answer the event was supposed to correct.
-      this._pending.delete(key)
+      // A merely *pending* key keeps its slot: its query has not gone out and
+      // will read the post-save state on its own, whereas dropping it here
+      // cancels the only probe that row gets — nothing scrolled and nothing
+      // bumped, so no re-declaration is coming.
       if (this._inFlight.delete(key)) reenqueue = true
       if (this._cache.delete(key)) dropped = true
       if (reenqueue) {

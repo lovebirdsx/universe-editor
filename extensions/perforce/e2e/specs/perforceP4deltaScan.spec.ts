@@ -127,6 +127,14 @@ test.describe('@p1 perforce p4delta scan', () => {
       )
       .toContain('reconcile')
 
+    // The hint channel is driven by the Explorer's visible window, so the row has
+    // to be on screen — not merely present in an expanded tree — before the narrow
+    // per-file query can run. The probe deliberately does not declare it visible.
+    await workbench.showExplorer()
+    await expect(page.locator('[role="treeitem"]', { hasText: drifted.relPath })).toBeVisible({
+      timeout: 30_000,
+    })
+
     let rearms = 0
     await expect
       .poll(

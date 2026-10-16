@@ -1364,6 +1364,8 @@ export interface E2EProbe {
   /**
    * Cached "is this resource git-ignored?" answer for a resource URI string, as
    * the Explorer rows and editor tabs read it when deciding to dim a label.
+   * Declares the resource visible first (the read alone never queries), so the
+   * answer can be produced regardless of what the tree's viewport covers.
    * `undefined` means the answer is still being batch-resolved — poll until it
    * settles. Off-host resources answer `false`.
    */
@@ -1385,9 +1387,13 @@ export interface E2EProbe {
    * `getScmDecorationForResource`): the badge an Explorer row shows for disk
    * changes the provider hasn't discovered yet. Reads the
    * `IScmWorkingTreeHintService.getHint` cache, which resolves asynchronously —
-   * the first call only enqueues the path, so specs must `expect.poll`. Returns
-   * null when the resource isn't in the workspace, or when the answer is clean /
-   * still unknown.
+   * the query is driven by the tree's visible window and the first call for a
+   * newly revealed row only enqueues it, so specs must `expect.poll`. Returns
+   * null when the resource isn't in the workspace, when the answer is clean /
+   * still unknown, or when the row was never on screen — it deliberately does
+   * not declare the resource visible, which makes a non-null answer proof that
+   * the viewport→query wiring ran; a spec needing an off-screen row's hint must
+   * reveal or scroll to it first (e.g. `showExplorer` + reveal).
    */
   getScmWorkingTreeHintForResource(suffix: string): Promise<E2EWorkingTreeHint | null>
   // -- Extension management probe -------------------------------------------

@@ -93,6 +93,14 @@ function makeService(
   return { service, executeCommand, fileEvents, workspaceEvents, decorations, logger }
 }
 
+/**
+ * Declares rows as visible — the viewport-driven enqueue entry point. A read no
+ * longer enqueues, so every "the first look queries it" setup goes through here.
+ */
+function show(service: ScmWorkingTreeHintService, ...resources: URI[]): void {
+  service.markVisible(resources)
+}
+
 describe('ScmWorkingTreeHintService', () => {
   let commandDisposables: IDisposable[] = []
 
@@ -123,11 +131,30 @@ describe('ScmWorkingTreeHintService', () => {
     const { service, executeCommand: exec } = makeService(executeCommand)
 
     const a = URI.file(`${ROOT}/a.txt`)
+    show(service, a)
     expect(service.getHint(a)).toBeUndefined()
     await vi.advanceTimersByTimeAsync(200)
 
     expect(exec).toHaveBeenCalledTimes(1)
     expect(service.getHint(a)).toEqual({ color: '#111111', letter: 'A' })
+  })
+
+  it('never queries from a read alone — only markVisible enqueues', async () => {
+    const executeCommand = vi.fn().mockResolvedValue([dto(`${ROOT}/a.txt`)])
+    const { service, executeCommand: exec } = makeService(executeCommand)
+
+    const a = URI.file(`${ROOT}/a.txt`)
+    // Rendering a row reads its hint; that alone must never spawn a query. A
+    // non-windowed tree renders off-screen rows too, so "rendered" is not
+    // "visible" — only the viewport declaration is.
+    for (let i = 0; i < 3; i++) expect(service.getHint(a)).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(200)
+    expect(exec).not.toHaveBeenCalled()
+
+    show(service, a)
+    await vi.advanceTimersByTimeAsync(200)
+    expect(exec).toHaveBeenCalledTimes(1)
+    expect(service.getHint(a)).toEqual({ color: '#e2c08d', letter: 'M' })
   })
 
   it('batches a debounce window and buckets paths by owning provider', async () => {
@@ -141,6 +168,11 @@ describe('ScmWorkingTreeHintService', () => {
     const gitCommand = CommandsRegistry.registerCommand('git.checkWorkingTree', () => undefined)
     const { service, executeCommand: exec } = makeService(executeCommand, scm)
     try {
+      service.markVisible([
+        URI.file(`${ROOT}/git/a.ts`),
+        URI.file(`${ROOT}/git/b.ts`),
+        URI.file(`${ROOT}/p4/c.ts`),
+      ])
       expect(service.getHint(URI.file(`${ROOT}/git/a.ts`))).toBeUndefined()
       expect(service.getHint(URI.file(`${ROOT}/git/b.ts`))).toBeUndefined()
       expect(service.getHint(URI.file(`${ROOT}/p4/c.ts`))).toBeUndefined()
@@ -163,6 +195,7 @@ describe('ScmWorkingTreeHintService', () => {
 
     const missing = URI.file(`${ROOT}/missing.txt`)
     const present = URI.file(`${ROOT}/a.txt`)
+    show(service, missing, present)
     expect(service.getHint(missing)).toBeUndefined()
     expect(service.getHint(present)).toBeUndefined()
     await vi.advanceTimersByTimeAsync(200)
@@ -184,13 +217,14 @@ describe('ScmWorkingTreeHintService', () => {
     const { service, executeCommand: exec } = makeService(executeCommand)
 
     const a = URI.file(`${ROOT}/a.ts`)
+    show(service, a)
     expect(service.getHint(a)).toBeUndefined()
     await vi.advanceTimersByTimeAsync(200)
 
     expect(exec).toHaveBeenCalledTimes(1)
     expect(service.getHint(a)).toBeUndefined()
 
-    service.getHint(a)
+    show(service, a)
     await vi.advanceTimersByTimeAsync(200)
     expect(exec).toHaveBeenCalledTimes(1)
   })
@@ -200,13 +234,14 @@ describe('ScmWorkingTreeHintService', () => {
     const { service, executeCommand: exec, logger } = makeService(executeCommand)
 
     const a = URI.file(`${ROOT}/a.ts`)
+    show(service, a)
     expect(service.getHint(a)).toBeUndefined()
     await vi.advanceTimersByTimeAsync(200)
 
     expect(service.getHint(a)).toBeUndefined()
     expect(logger.warn).toHaveBeenCalled()
 
-    service.getHint(a)
+    show(service, a)
     await vi.advanceTimersByTimeAsync(200)
     expect(exec).toHaveBeenCalledTimes(1)
   })
@@ -222,6 +257,7 @@ describe('ScmWorkingTreeHintService', () => {
     const { service, executeCommand: exec, workspaceEvents } = makeService(executeCommand)
 
     const a = URI.file(`${ROOT}/a.ts`)
+    show(service, a)
     expect(service.getHint(a)).toBeUndefined()
     await vi.advanceTimersByTimeAsync(200)
     expect(exec).toHaveBeenCalledTimes(1)
@@ -233,11 +269,13 @@ describe('ScmWorkingTreeHintService', () => {
     resolveCmd!([dto(`${ROOT}/a.ts`)])
     await vi.advanceTimersByTimeAsync(0)
 
-    // Cache stays empty, so the path re-enqueues instead of returning a stale hint.
+    // Cache stays empty, so a fresh declaration enqueues again instead of
+    // handing out a stale hint.
     expect(service.getHint(a)).toBeUndefined()
     expect(exec).toHaveBeenCalledTimes(1)
 
     executeCommand.mockResolvedValue([])
+    show(service, a)
     await vi.advanceTimersByTimeAsync(200)
     expect(exec).toHaveBeenCalledTimes(2)
   })
@@ -253,6 +291,7 @@ describe('ScmWorkingTreeHintService', () => {
     const { service, executeCommand: exec, fileEvents } = makeService(executeCommand)
 
     const a = URI.file(`${ROOT}/a.ts`)
+    show(service, a)
     expect(service.getHint(a)).toBeUndefined()
     await vi.advanceTimersByTimeAsync(200)
     expect(exec).toHaveBeenCalledTimes(1)
@@ -288,6 +327,7 @@ describe('ScmWorkingTreeHintService', () => {
     const { service, executeCommand: exec, fileEvents } = makeService(executeCommand)
 
     const a = URI.file(`${ROOT}/a.ts`)
+    show(service, a)
     expect(service.getHint(a)).toBeUndefined()
     await vi.advanceTimersByTimeAsync(200)
     expect(exec).toHaveBeenCalledTimes(1)
@@ -320,13 +360,15 @@ describe('ScmWorkingTreeHintService', () => {
     const { service, executeCommand: exec } = makeService(executeCommand)
 
     const a = URI.file(`${ROOT}/a.ts`)
+    show(service, a)
     expect(service.getHint(a)).toBeUndefined()
     await vi.advanceTimersByTimeAsync(200)
     expect(exec).toHaveBeenCalledTimes(1)
 
-    // Still no answer, so the row keeps rendering as unknown. Re-reading it must
-    // not fire a second identical query — Explorer re-renders constantly, and
-    // each duplicate is another p4 spawn queued on the shared concurrency gate.
+    // Still no answer, so the row keeps rendering as unknown. Re-declaring it
+    // must not fire a second identical query — the viewport re-declares on every
+    // scroll, and each duplicate is another p4 spawn on the shared gate.
+    show(service, a)
     expect(service.getHint(a)).toBeUndefined()
     await vi.advanceTimersByTimeAsync(200)
     expect(exec).toHaveBeenCalledTimes(1)
@@ -346,12 +388,13 @@ describe('ScmWorkingTreeHintService', () => {
     const { service, decorations, executeCommand: exec } = makeService(executeCommand)
 
     const a = URI.file(`${ROOT}/a.ts`)
-    service.getHint(a)
+    show(service, a)
     await vi.advanceTimersByTimeAsync(200)
     expect(exec).toHaveBeenCalledTimes(1)
 
-    // Stale → the next read re-queries while keeping the old hint on screen.
+    // Stale → the next declaration re-queries while keeping the old hint on screen.
     decorations.set(emptySnapshot(), undefined)
+    show(service, a)
     expect(service.getHint(a)).toEqual({ color: '#e2c08d', letter: 'M' })
     await vi.advanceTimersByTimeAsync(200)
     expect(exec).toHaveBeenCalledTimes(2)
@@ -360,6 +403,7 @@ describe('ScmWorkingTreeHintService', () => {
     // cached-and-stale path needs the same in-flight guard as the cache-miss one,
     // or this fires a third query that answers the question already on the wire.
     decorations.set(emptySnapshot(), undefined)
+    show(service, a)
     expect(service.getHint(a)).toEqual({ color: '#e2c08d', letter: 'M' })
     await vi.advanceTimersByTimeAsync(200)
     expect(exec).toHaveBeenCalledTimes(2)
@@ -375,6 +419,7 @@ describe('ScmWorkingTreeHintService', () => {
     const { service, workspaceEvents } = makeService(executeCommand)
 
     const a = URI.file(`${ROOT}/a.ts`)
+    show(service, a)
     expect(service.getHint(a)).toBeUndefined()
     await vi.advanceTimersByTimeAsync(200)
     expect(service.getHint(a)).toEqual({ color: '#e2c08d', letter: 'M' })
@@ -393,6 +438,7 @@ describe('ScmWorkingTreeHintService', () => {
     } as unknown as IScmService)
 
     const a = URI.file(`${ROOT}/a.ts`)
+    show(service, a)
     expect(service.getHint(a)).toBeUndefined()
     await vi.advanceTimersByTimeAsync(200)
     expect(service.getHint(a)).toEqual({ color: '#e2c08d', letter: 'M' })
@@ -421,6 +467,7 @@ describe('ScmWorkingTreeHintService', () => {
 
     const a = URI.file(`${ROOT}/a.ts`)
     const b = URI.file(`${ROOT}/b.ts`)
+    show(service, a, b)
     expect(service.getHint(a)).toBeUndefined()
     expect(service.getHint(b)).toBeUndefined()
     await vi.advanceTimersByTimeAsync(200)
@@ -429,10 +476,11 @@ describe('ScmWorkingTreeHintService', () => {
 
     fileEvents.fire([{ type: 'modified', resource: a }])
     // Only `a` is dropped; `b` still hits the cache.
+    show(service, a)
     expect(service.getHint(a)).toBeUndefined()
     expect(service.getHint(b)).toEqual({ color: '#e2c08d', letter: 'M' })
 
-    // `a` re-enqueues on its own; `b` is not re-queried.
+    // `a` re-queries (the declaration above); `b` is not re-queried.
     await vi.advanceTimersByTimeAsync(200)
     expect(exec).toHaveBeenCalledTimes(2)
     expect(exec).toHaveBeenLastCalledWith('perforce.checkWorkingTree', [`${ROOT}/a.ts`])
@@ -443,6 +491,7 @@ describe('ScmWorkingTreeHintService', () => {
     const { service, decorations } = makeService(executeCommand)
 
     const a = URI.file(`${ROOT}/a.ts`)
+    show(service, a)
     expect(service.getHint(a)).toBeUndefined()
     await vi.advanceTimersByTimeAsync(200)
     expect(service.getHint(a)).toEqual({ color: '#e2c08d', letter: 'M' })
@@ -458,13 +507,13 @@ describe('ScmWorkingTreeHintService', () => {
     const { service, decorations } = makeService(executeCommand)
 
     const a = URI.file(`${ROOT}/a.ts`)
-    service.getHint(a)
+    show(service, a)
     await vi.advanceTimersByTimeAsync(200)
     expect(service.getHint(a)).toEqual({ color: '#e2c08d', letter: 'M' })
     const versionBefore = service.version.get()
 
     decorations.set(emptySnapshot(), undefined)
-    service.getHint(a) // re-enqueues
+    show(service, a) // re-queries
     await vi.advanceTimersByTimeAsync(200)
 
     expect(service.version.get()).toBe(versionBefore)
@@ -476,7 +525,7 @@ describe('ScmWorkingTreeHintService', () => {
     const { service, decorations, executeCommand: exec } = makeService(executeCommand)
 
     const a = URI.file(`${ROOT}/a.ts`)
-    service.getHint(a)
+    show(service, a)
     await vi.advanceTimersByTimeAsync(200)
     expect(service.getHint(a)).toEqual({ color: '#e2c08d', letter: 'M' })
     const versionBefore = service.version.get()
@@ -484,7 +533,7 @@ describe('ScmWorkingTreeHintService', () => {
     executeCommand.mockResolvedValue([dto(`${ROOT}/a.ts`, { color: '#73c991', letter: 'A' })])
 
     decorations.set(emptySnapshot(), undefined)
-    service.getHint(a) // re-enqueues
+    show(service, a) // re-queries
     await vi.advanceTimersByTimeAsync(200)
 
     expect(exec).toHaveBeenCalledTimes(2)
@@ -492,22 +541,21 @@ describe('ScmWorkingTreeHintService', () => {
     expect(service.getHint(a)).toEqual({ color: '#73c991', letter: 'A' })
   })
 
-  it('revalidates lazily: only read paths are re-queried after a decorations change', async () => {
+  it('revalidates lazily: only re-declared paths are re-queried after a decorations change', async () => {
     const executeCommand = vi.fn().mockResolvedValue([dto(`${ROOT}/a.ts`), dto(`${ROOT}/b.ts`)])
     const { service, decorations, executeCommand: exec } = makeService(executeCommand)
 
     const a = URI.file(`${ROOT}/a.ts`)
     const b = URI.file(`${ROOT}/b.ts`)
-    service.getHint(a)
-    service.getHint(b)
+    show(service, a, b)
     await vi.advanceTimersByTimeAsync(200)
     expect(exec).toHaveBeenCalledTimes(1)
 
     // The decorations change marks the whole cache stale.
     decorations.set(emptySnapshot(), undefined)
 
-    // Only A is read, so only A re-enqueues.
-    service.getHint(a)
+    // Only A is declared visible again, so only A re-queries.
+    show(service, a)
     await vi.advanceTimersByTimeAsync(200)
 
     expect(exec).toHaveBeenCalledTimes(2)
@@ -519,7 +567,7 @@ describe('ScmWorkingTreeHintService', () => {
     const executeCommand = vi.fn().mockResolvedValue(paths.map((p) => dto(p)))
     const { service, executeCommand: exec } = makeService(executeCommand)
 
-    for (const p of paths) service.getHint(URI.file(p))
+    service.markVisible(paths.map((p) => URI.file(p)))
     await vi.advanceTimersByTimeAsync(200)
 
     // The oldest entry was evicted; the newest survived.
@@ -529,16 +577,60 @@ describe('ScmWorkingTreeHintService', () => {
       letter: 'M',
     })
 
-    // Reading the evicted entry again re-enqueues it.
+    // Declaring the evicted entry visible again re-enqueues it.
+    show(service, URI.file(paths[0]!))
     await vi.advanceTimersByTimeAsync(200)
     expect(exec).toHaveBeenCalledTimes(2)
     expect(exec).toHaveBeenLastCalledWith('perforce.checkWorkingTree', [paths[0]])
+  })
+
+  it('does not re-order the LRU on a plain read', async () => {
+    const paths = Array.from(
+      { length: CACHE_LIMIT },
+      (_, i) => `${ROOT}/f${String(i).padStart(5, '0')}.ts`,
+    )
+    const executeCommand = vi.fn().mockResolvedValue(paths.map((p) => dto(p)))
+    const { service } = makeService(executeCommand)
+
+    service.markVisible(paths.map((p) => URI.file(p)))
+    await vi.advanceTimersByTimeAsync(200)
+
+    // Rendering a row reads its hint — and a read must not re-order the cache,
+    // or every render would silently protect whatever it happened to show.
+    expect(service.getHint(URI.file(paths[0]!))).toEqual({ color: '#e2c08d', letter: 'M' })
+    service.markVisible([URI.file(`${ROOT}/new.ts`)])
+    await vi.advanceTimersByTimeAsync(200)
+
+    // paths[0] was still the head, so the insert evicted it.
+    expect(service.getHint(URI.file(paths[0]!))).toBeUndefined()
+    expect(service.getHint(URI.file(paths[1]!))).toEqual({ color: '#e2c08d', letter: 'M' })
+  })
+
+  it('moves a declared-visible entry to the LRU tail', async () => {
+    const paths = Array.from(
+      { length: CACHE_LIMIT },
+      (_, i) => `${ROOT}/f${String(i).padStart(5, '0')}.ts`,
+    )
+    const executeCommand = vi.fn().mockResolvedValue(paths.map((p) => dto(p)))
+    const { service } = makeService(executeCommand)
+
+    service.markVisible(paths.map((p) => URI.file(p)))
+    await vi.advanceTimersByTimeAsync(200)
+
+    // The row is on screen, so it must not be the next entry evicted.
+    show(service, URI.file(paths[0]!))
+    service.markVisible([URI.file(`${ROOT}/new.ts`)])
+    await vi.advanceTimersByTimeAsync(200)
+
+    expect(service.getHint(URI.file(paths[0]!))).toEqual({ color: '#e2c08d', letter: 'M' })
+    expect(service.getHint(URI.file(paths[1]!))).toBeUndefined()
   })
 
   it('returns undefined and never queries for an off-host resource', async () => {
     const executeCommand = vi.fn().mockResolvedValue([])
     const { service, executeCommand: exec } = makeService(executeCommand)
 
+    service.markVisible([URI.parse('markdown-preview://x/a.md'), URI.parse('untitled:Untitled-1')])
     expect(service.getHint(URI.parse('markdown-preview://x/a.md'))).toBeUndefined()
     expect(service.getHint(URI.parse('untitled:Untitled-1'))).toBeUndefined()
     await vi.advanceTimersByTimeAsync(200)
@@ -560,6 +652,7 @@ describe('ScmWorkingTreeHintService', () => {
       // The view is showing the p4 workspace, so a file the nested git repo also
       // owns must be routed to perforce — not to git by longest prefix.
       scmViewState.setSelectedRepo(ROOT)
+      show(service, URI.file(`${GIT_ROOT}/a.txt`))
       expect(service.getHint(URI.file(`${GIT_ROOT}/a.txt`))).toBeUndefined()
       await vi.advanceTimersByTimeAsync(200)
 
@@ -576,6 +669,7 @@ describe('ScmWorkingTreeHintService', () => {
 
       scmViewState.setSelectedRepo(ROOT)
       const a = URI.file(`${ROOT}/a.ts`)
+      show(service, a)
       expect(service.getHint(a)).toBeUndefined()
       await vi.advanceTimersByTimeAsync(200)
       expect(service.getHint(a)).toEqual({ color: '#e2c08d', letter: 'M' })
@@ -604,6 +698,7 @@ describe('ScmWorkingTreeHintService', () => {
 
       const x = URI.file(`${GIT_ROOT}/x.ts`)
       scmViewState.setSelectedRepo(ROOT)
+      show(service, x)
       expect(service.getHint(x)).toBeUndefined()
       await vi.advanceTimersByTimeAsync(200)
       expect(exec).toHaveBeenCalledWith('perforce.checkWorkingTree', [`${GIT_ROOT}/x.ts`])
@@ -612,6 +707,7 @@ describe('ScmWorkingTreeHintService', () => {
       // Switch to git: the cached p4 answer is hidden, and the re-query goes to
       // git — which has no checkWorkingTree — so the badge disappears for good.
       scmViewState.setSelectedRepo(GIT_ROOT)
+      show(service, x)
       expect(service.getHint(x)).toBeUndefined()
       await vi.advanceTimersByTimeAsync(200)
       expect(exec).toHaveBeenCalledTimes(2)
@@ -640,6 +736,7 @@ describe('ScmWorkingTreeHintService', () => {
       // slot, so the nested git repo's file — still owned by the outer Perforce
       // workspace — must surface its p4 drift as an RM badge.
       const a = URI.file(`${GIT_ROOT}/a.txt`)
+      show(service, a)
       expect(service.getHint(a)).toBeUndefined()
       await vi.advanceTimersByTimeAsync(200)
 
@@ -654,12 +751,14 @@ describe('ScmWorkingTreeHintService', () => {
         scmOf([scmSourceControl('git', ROOT)]),
       )
       const a = URI.file(`${ROOT}/a.ts`)
+      show(service, a)
       expect(service.getHint(a)).toBeUndefined()
       await vi.advanceTimersByTimeAsync(200)
       expect(exec).not.toHaveBeenCalled()
 
-      // Re-reading stays a miss that never enqueues: the path was not cached as
-      // clean, so it neither spawns nor re-queues every frame.
+      // Re-declaring stays a miss that never enqueues: the path was not cached
+      // as clean, so it neither spawns nor re-queues every frame.
+      show(service, a)
       expect(service.getHint(a)).toBeUndefined()
       await vi.advanceTimersByTimeAsync(200)
       expect(exec).not.toHaveBeenCalled()
@@ -675,15 +774,17 @@ describe('ScmWorkingTreeHintService', () => {
 
       // The source control is registered but its capability command is not yet:
       // no capable owner, so the path is left alone (zero spawn, nothing cached).
+      show(service, a)
       expect(service.getHint(a)).toBeUndefined()
       await vi.advanceTimersByTimeAsync(200)
       expect(exec).not.toHaveBeenCalled()
 
       // The extension registers the command after the source control, with no
-      // sourceControls change to invalidate on — the next read must re-arbitrate
-      // instead of staying stuck as "no owner".
+      // sourceControls change to invalidate on — the next declaration must
+      // re-arbitrate instead of staying stuck as "no owner".
       const command = CommandsRegistry.registerCommand('late.checkWorkingTree', () => undefined)
       try {
+        show(service, a)
         expect(service.getHint(a)).toBeUndefined()
         await vi.advanceTimersByTimeAsync(200)
         expect(exec).toHaveBeenCalledWith('late.checkWorkingTree', [`${ROOT}/a.ts`])
@@ -701,6 +802,7 @@ describe('ScmWorkingTreeHintService', () => {
         .mockResolvedValue([dto(`${ROOT}/src/deep/a.ts`, { color: '#111111' })])
       const { service, executeCommand: exec } = makeService(executeCommand)
 
+      show(service, URI.file(`${ROOT}/src/deep/a.ts`))
       expect(service.getHint(URI.file(`${ROOT}/src/deep/a.ts`))).toBeUndefined()
       await vi.advanceTimersByTimeAsync(200)
 
@@ -730,8 +832,7 @@ describe('ScmWorkingTreeHintService', () => {
         ])
       const { service } = makeService(executeCommand)
 
-      service.getHint(URI.file(`${ROOT}/src/edited.ts`))
-      service.getHint(URI.file(`${ROOT}/src/deleted.ts`))
+      service.markVisible([URI.file(`${ROOT}/src/edited.ts`), URI.file(`${ROOT}/src/deleted.ts`)])
       await vi.advanceTimersByTimeAsync(200)
 
       expect(service.getFolderHint(URI.file(`${ROOT}/src`))).toEqual({ color: '#c74e39' })
@@ -746,8 +847,7 @@ describe('ScmWorkingTreeHintService', () => {
         ])
       const { service } = makeService(executeCommand)
 
-      service.getHint(URI.file(`${ROOT}/src/aaa.ts`))
-      service.getHint(URI.file(`${ROOT}/src/bbb.ts`))
+      service.markVisible([URI.file(`${ROOT}/src/aaa.ts`), URI.file(`${ROOT}/src/bbb.ts`)])
       await vi.advanceTimersByTimeAsync(200)
 
       expect(service.getFolderHint(URI.file(`${ROOT}/src`))).toEqual({ color: '#111111' })
@@ -763,14 +863,14 @@ describe('ScmWorkingTreeHintService', () => {
       const { service, fileEvents } = makeService(executeCommand)
 
       const aaa = URI.file(`${ROOT}/src/aaa.ts`)
-      service.getHint(aaa)
-      service.getHint(URI.file(`${ROOT}/src/bbb.ts`))
+      show(service, aaa, URI.file(`${ROOT}/src/bbb.ts`))
       await vi.advanceTimersByTimeAsync(200)
       expect(service.getFolderHint(URI.file(`${ROOT}/src`))).toEqual({ color: '#111111' })
 
-      // A cache hit re-orders the LRU (aaa moves to the tail) without bumping
-      // `_version`; the next unrelated bump forces a rebuild on the new order.
-      service.getHint(aaa)
+      // Declaring a cached row visible re-orders the LRU (aaa moves to the tail)
+      // without bumping `_version`; the next unrelated bump rebuilds the fold on
+      // the new order.
+      show(service, aaa)
       fileEvents.fire([{ type: 'modified', resource: URI.file(`${ROOT}/elsewhere.ts`) }])
       await vi.advanceTimersByTimeAsync(200)
       expect(service.getFolderHint(URI.file(`${ROOT}/src`))).toEqual({ color: '#111111' })
@@ -781,8 +881,7 @@ describe('ScmWorkingTreeHintService', () => {
       const executeCommand = vi.fn().mockResolvedValue([])
       const { service } = makeService(executeCommand)
 
-      service.getHint(URI.file(`${ROOT}/src/a.ts`))
-      service.getHint(URI.file(`${ROOT}/src/b.ts`))
+      service.markVisible([URI.file(`${ROOT}/src/a.ts`), URI.file(`${ROOT}/src/b.ts`)])
       await vi.advanceTimersByTimeAsync(200)
 
       expect(service.getHint(URI.file(`${ROOT}/src/a.ts`))).toBeUndefined()
@@ -797,14 +896,16 @@ describe('ScmWorkingTreeHintService', () => {
       })
       const { service } = makeService(executeCommand)
 
-      service.getHint(URI.file(hinted.path))
+      show(service, URI.file(hinted.path))
       await vi.advanceTimersByTimeAsync(200)
       expect(service.getFolderHint(URI.file(`${ROOT}/00-target`))).toEqual({ color: '#111111' })
 
       // Fill the cache past CACHE_LIMIT; the `00-` keys sort first and evict first.
-      for (let i = 0; i < CACHE_LIMIT; i++) {
-        service.getHint(URI.file(`${ROOT}/filler/f${String(i).padStart(5, '0')}.ts`))
-      }
+      service.markVisible(
+        Array.from({ length: CACHE_LIMIT }, (_, i) =>
+          URI.file(`${ROOT}/filler/f${String(i).padStart(5, '0')}.ts`),
+        ),
+      )
       await vi.advanceTimersByTimeAsync(200)
       expect(service.getHint(URI.file(hinted.path))).toBeUndefined()
 
@@ -817,6 +918,7 @@ describe('ScmWorkingTreeHintService', () => {
       const { service, fileEvents } = makeService(executeCommand)
 
       const a = URI.file(`${ROOT}/src/a.ts`)
+      show(service, a)
       expect(service.getHint(a)).toBeUndefined()
       await vi.advanceTimersByTimeAsync(200)
       expect(service.getFolderHint(URI.file(`${ROOT}/src`))).toEqual({ color: '#e2c08d' })
@@ -829,6 +931,7 @@ describe('ScmWorkingTreeHintService', () => {
       const executeCommand = vi.fn().mockResolvedValue([dto(`${ROOT}/src/a.ts`)])
       const { service, workspaceEvents } = makeService(executeCommand)
 
+      show(service, URI.file(`${ROOT}/src/a.ts`))
       expect(service.getHint(URI.file(`${ROOT}/src/a.ts`))).toBeUndefined()
       await vi.advanceTimersByTimeAsync(200)
       expect(service.getFolderHint(URI.file(`${ROOT}/src`))).toEqual({ color: '#e2c08d' })
@@ -851,6 +954,7 @@ describe('ScmWorkingTreeHintService', () => {
       const executeCommand = vi.fn().mockResolvedValue([])
       const { service, executeCommand: exec } = makeRemote(executeCommand)
 
+      service.markVisible([URI.file(`${ROOT}/a.ts`), remote(`${REMOTE_ROOT}/a.ts`, 'otherhost')])
       expect(service.getHint(URI.file(`${ROOT}/a.ts`))).toBeUndefined()
       expect(service.getHint(remote(`${REMOTE_ROOT}/a.ts`, 'otherhost'))).toBeUndefined()
       await vi.advanceTimersByTimeAsync(200)

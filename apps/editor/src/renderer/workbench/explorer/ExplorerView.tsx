@@ -40,6 +40,7 @@ import {
   dragContainsResources,
   isKeyboardContextMenu,
   type ITreeRowRenderContext,
+  type IVisibleNode,
 } from '@universe-editor/workbench-ui'
 import {
   IExplorerTreeService,
@@ -87,16 +88,18 @@ export function ExplorerView() {
   const fileOps = useService(IExplorerFileOperationService)
   const scmDecorations = useOptionalService(IScmDecorationsService)
   // Re-render rows when the SCM model changes; renderRow reads via getFile/getFolder.
-  useObservable(scmDecorations?.decorations ?? EMPTY_DECORATIONS)
+  const decorations = useObservable(scmDecorations?.decorations ?? EMPTY_DECORATIONS)
   const scmIgnoredResources = useOptionalService(IScmIgnoredResourcesService)
   // Re-render rows once a check-ignore batch resolves so cached answers re-apply.
-  useObservable(scmIgnoredResources?.version ?? EMPTY_IGNORED_VERSION)
+  const ignoredVersion = useObservable(scmIgnoredResources?.version ?? EMPTY_IGNORED_VERSION)
   const scmWorkingTreeHints = useOptionalService(IScmWorkingTreeHintService)
-  // Same for the on-demand working-tree hints (see renderRow).
-  useObservable(scmWorkingTreeHints?.version ?? EMPTY_HINT_VERSION)
+  // Same for the on-demand working-tree hints (read in renderRow).
+  const hintVersion = useObservable(scmWorkingTreeHints?.version ?? EMPTY_HINT_VERSION)
   const scmBehindHints = useOptionalService(IScmBehindHintService)
-  // Same for the on-demand behind-head probe (see renderRow).
-  useObservable(scmBehindHints?.version ?? EMPTY_BEHIND_VERSION)
+  // Re-render on a behind batch only to re-declare the visible window (a drop
+  // bumps it); the answer itself is never drawn here — the ↓ marker arrives
+  // through supplementary decorations.
+  const behindVersion = useObservable(scmBehindHints?.version ?? EMPTY_BEHIND_VERSION)
 
   // Re-render when selection / active-editor change so renderRow closes over a
   // fresh active-editor key. Structure changes are handled inside <Tree>.
@@ -118,6 +121,45 @@ export function ExplorerView() {
     'workbench.view.explorer.tree',
     useCallback(() => containerRef.current, []),
   )
+
+  // The visible-window channel: <Tree> reports which rows its scroll viewport
+  // covers, and that — not rendering — drives every on-demand SCM query. A
+  // non-windowed tree renders its whole expanded structure, so a query per
+  // rendered row would probe the entire tree; here off-screen rows cost nothing.
+  const visibleFilesRef = useRef<readonly URI[]>([])
+  const visibleAllRef = useRef<readonly URI[]>([])
+
+  const applyVisibleWindow = useCallback(() => {
+    // Working-tree hints and the behind probe are file-only (the folder tint
+    // derives from cached file hints); ignored covers files and folders alike.
+    scmWorkingTreeHints?.markVisible(visibleFilesRef.current)
+    scmBehindHints?.markVisible(visibleFilesRef.current)
+    scmIgnoredResources?.markVisible(visibleAllRef.current)
+  }, [scmWorkingTreeHints, scmBehindHints, scmIgnoredResources])
+
+  const onVisibleNodesChange = useCallback(
+    (nodes: readonly IVisibleNode<IExplorerEntry>[]) => {
+      const files: URI[] = []
+      const all: URI[] = []
+      for (const node of nodes) {
+        all.push(node.element.resource)
+        if (!node.element.isDirectory) files.push(node.element.resource)
+      }
+      visibleFilesRef.current = files
+      visibleAllRef.current = all
+      applyVisibleWindow()
+    },
+    [applyVisibleWindow],
+  )
+
+  // Re-declare the window when something under it moved without scrolling. Two
+  // triggers, and both are load-bearing: every *dropped* answer bumps its
+  // service's version, and a working-tree reconciliation only *marks stale* on a
+  // decorations refresh (no bump) — `decorations` is in this list for that path,
+  // not as a render convenience. Dropping either leaves rows permanently blank.
+  useEffect(() => {
+    applyVisibleWindow()
+  }, [applyVisibleWindow, decorations, ignoredVersion, hintVersion, behindVersion])
 
   const openFile = useCallback(
     (resource: URI, options?: { preview?: boolean }) => {
@@ -196,6 +238,8 @@ export function ExplorerView() {
   const renderRow = (ctx: ITreeRowRenderContext<IExplorerEntry>) => {
     const entry = ctx.node.element
     const key = ctx.node.id
+    // Every read below is cache-only: queries are driven by the visible window
+    // (see onVisibleNodesChange), never by rendering.
     // getFile/getFolder resolve the row host-scopedly, so a remote workspace's
     // rows decorate from the remote git state while stray local editors don't.
     const deco = entry.isDirectory
@@ -205,7 +249,7 @@ export function ExplorerView() {
     const ignored = deco === undefined && scmIgnoredResources?.isIgnored(entry.resource) === true
     // 按需软信号：文件在磁盘上改了但 provider 还没发现它（p4 未收集的改动）。文件行
     // 出 RC 徽标；文件夹行只要有已发现的 RC 后代就染色（无字母徽章）——那是已发现
-    // 改动的下界，未展开的子树查不到，展开/缓存逐出都可能让颜色增减（已接受的权衡）。
+    // 改动的下界，视口外尚未查过，滚动/缓存逐出都可能让颜色增减（已接受的权衡）。
     const hint =
       deco === undefined && !ignored
         ? entry.isDirectory
@@ -214,12 +258,10 @@ export function ExplorerView() {
         : undefined
     const row = resolveRowDecoration(deco, ignored, hint)
     // 服务器侧状态（落后 / 他人占用）只给文件行，与上面的组派生装饰各占一套字段。
+    // The behind probe runs off the visible window; the ↓ marker itself arrives
+    // through the provider's supplementary-decoration push, and an opened file
+    // can be behind too — so it is deliberately not gated on `deco`.
     const supp = !entry.isDirectory ? scmDecorations?.getSupplementary(entry.resource) : undefined
-    // Visible-row behind probe: enqueue a checkBehind for every file row on screen.
-    // The returned boolean is NOT rendered — the actual ↓ marker arrives through the
-    // provider's supplementary-decoration push; this only feeds the ask-once cache.
-    // Not gated on `deco === undefined`: an opened file can also be behind.
-    if (!entry.isDirectory) scmBehindHints?.isBehind(entry.resource)
     return (
       <ExplorerTreeNode
         key={key}
@@ -267,6 +309,7 @@ export function ExplorerView() {
           className={styles['view'] ?? ''}
           virtualizationThreshold={threshold}
           renderRow={renderRow}
+          onVisibleNodesChange={onVisibleNodesChange}
           onActivate={(node, opts) => openFile(node.element.resource, { preview: opts.preview })}
           onFocus={() => {
             // Seeding a keyboard cursor is not a user request to jump: revealing

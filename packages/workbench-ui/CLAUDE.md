@@ -59,5 +59,5 @@ Workbench 风格 React UI 基础设施。**依赖 React，不依赖 Electron**�
 - 测试文件位于 `src/__tests__/`，环境 `happy-dom`
   - ⚠️ happy-dom **丢弃 inline style 里的 `var()`**：那条声明读回空串，若它还是该元素唯一的声明，`el.getAttribute('style')` 直接是 `null`（其余声明正常保留）。涉及 CSS 变量的样式写不成断言（`--view-background` 那条就因此只能靠审查 + 真机验证）。
 - **滚动列表的绘制约定**（滚动内容要不透明底衬 / 行定位用 `top` 不用 `transform` / reveal 只滚自己的 scroller、禁用 `scrollIntoView`）见 [docs/development/scroll-lists.md](../../docs/development/scroll-lists.md)。`Tree`/`VirtualList` 的行是透明底，底衬由 `VirtualList` 的 spacer 打、颜色取宿主 republish 的 `--view-background`——**part 根要设它，未走 portal 且自绘背景的浮层也要设它**：漏前者退回残影，漏后者会把宿主 part 的颜色涂到浮层上。手写虚拟化列表（`ChatBody` / `QuickInputPanel` / `useFlatListNavigation` 的 reveal）尚未跟上这套约定。
-- VirtualList/Tree 虚拟化/滚动容器约定见 [cases-virtualization-scroll.md](cases-virtualization-scroll.md)。
+- VirtualList/Tree 虚拟化/滚动/视口窗口约定见 [cases-virtualization-scroll.md](cases-virtualization-scroll.md)。
 - 相对导入带 `.js` 后缀（ESM only）
