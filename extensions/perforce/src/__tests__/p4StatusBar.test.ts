@@ -591,9 +591,12 @@ describe('P4StatusBarController sync progress', () => {
       vi.advanceTimersByTime(1000)
       progress['ioReadBytes'] = 42 * 1024 ** 2
       progress['ioWriteBytes'] = 4096
+      progress['ioOtherBytes'] = 2 * 1024 ** 2
       fire()
       expect(mocks.busyItem.text).toBe('Syncing 421 · 042MB/s · 6s $(sync~spin)')
-      expect(mocks.busyItem.tooltip).toContain('p4 process I/O: read 42MB, wrote 4KB')
+      // All three counters are named in the tooltip: the body shows one rate,
+      // and "which counter was that?" is exactly a tooltip question.
+      expect(mocks.busyItem.tooltip).toContain('p4 process I/O: read 42MB, wrote 4KB, other 2MB')
       controller.dispose()
     } finally {
       vi.useRealTimers()
@@ -694,6 +697,102 @@ describe('P4StatusBarController sync progress', () => {
       // run's 100MB sample 2s back it would read 025MB/s instead — the bogus
       // first-window figure this guard exists to prevent.
       expect(mocks.busyItem.text).toBe('Syncing 421 · 050MB/s · 1s $(sync~spin)')
+      controller.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // The δ engine's stage readout: its own segment in the body (on a wide repair
+  // it is the only thing that changes for minutes) and the ladder position in
+  // the tooltip, mirroring the scan readout's phase line.
+  it('renders the engine’s stage as its own segment, with the ladder position in the tooltip', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(1_000_000)
+      const { client, fire, progress } = rateClient(Date.now() - 5_000)
+      progress['phase'] = 'scan'
+      progress['phaseStep'] = 2
+      progress['phaseTotal'] = 6
+      const controller = new P4StatusBarController({ active: client } as never)
+      controller.refresh()
+
+      expect(mocks.busyItem.text).toBe('Syncing 421 · scan · 000KB/s · 5s $(sync~spin)')
+      expect(mocks.busyItem.tooltip).toContain('Phase 2/6: scan')
+
+      // The engine's own word, verbatim, and the newest record wins — a later
+      // stage replaces both the word and its position.
+      progress['phase'] = 'apply'
+      progress['phaseStep'] = 5
+      fire()
+      expect(mocks.busyItem.text).toContain(' · apply · ')
+      expect(mocks.busyItem.tooltip).toContain('Phase 5/6: apply')
+      controller.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps the stage word without inventing a ladder position for records missing one', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(1_000_000)
+      const { client, progress } = rateClient(Date.now() - 5_000)
+      // The contract marks progress as hints; a malformed record (no step/total)
+      // must not render a fabricated `Phase ?/?` — the body still carries the
+      // word, which is the honest part of the signal.
+      progress['phase'] = 'digest'
+      const controller = new P4StatusBarController({ active: client } as never)
+      controller.refresh()
+
+      expect(mocks.busyItem.text).toContain(' · digest · ')
+      expect(mocks.busyItem.tooltip).not.toContain('Phase ')
+      controller.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // The other-counter fallback: a scan moves nothing else on Windows (measured),
+  // and a run that reads `000KB/s` through it is the false stall this readout
+  // exists to remove.
+  it('falls back to the other-counter rate while read and write stay frozen', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(1_000_000)
+      const { client, progress } = rateClient(Date.now() - 5_000)
+      progress['ioOtherBytes'] = 0
+      const controller = new P4StatusBarController({ active: client } as never)
+      controller.refresh()
+      expect(mocks.busyItem.text).toContain('000KB/s')
+
+      progress['ioOtherBytes'] = 10 * 1024 ** 2
+      vi.advanceTimersByTime(1000)
+
+      expect(mocks.busyItem.text).toBe('Syncing 421 · 010MB/s · 6s $(sync~spin)')
+      expect(mocks.busyItem.tooltip).toContain('other 10MB')
+      controller.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('prefers the transfer rate whenever read or write is moving', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(1_000_000)
+      const { client, progress } = rateClient(Date.now() - 5_000)
+      progress['ioOtherBytes'] = 0
+      const controller = new P4StatusBarController({ active: client } as never)
+      controller.refresh()
+
+      // Both windows see growth; the body must show the transfer's, not the
+      // scanner's — read+write is the number that matches "what is syncing".
+      progress['ioReadBytes'] = 2 * 1024 ** 2
+      progress['ioOtherBytes'] = 50 * 1024 ** 2
+      vi.advanceTimersByTime(1000)
+
+      expect(mocks.busyItem.text).toBe('Syncing 421 · 002MB/s · 6s $(sync~spin)')
       controller.dispose()
     } finally {
       vi.useRealTimers()

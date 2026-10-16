@@ -366,18 +366,19 @@ export interface SyncProgress {
    */
   readonly diskWrites?: number
   /**
-   * Bytes the sync's p4 process tree has READ since this run armed — the
-   * "p4 is talking to the server" signal, sampled from the OS process I/O
-   * counters so it climbs from the first server round-trip, long before a single
-   * workspace file is touched (which is the window {@link diskWrites} cannot
-   * fill) and through every `--parallel` stdout gap.
+   * Bytes the sync's p4 process tree has READ since this run armed — sampled
+   * from the OS process I/O counters so it climbs from the first server
+   * round-trip (p4's own streams), long before a single workspace file is
+   * touched (which is the window {@link diskWrites} cannot fill) and through
+   * every `--parallel` stdout gap.
    *
    * Present — zero included — exactly while a sampler is running for this run;
    * omitted when there is none (macOS, no PowerShell/WMI, a sampler that died),
    * which is how the status bar tells "sampling, nothing yet" from "no sampler"
-   * and falls back to the watcher count. A LOWER BOUND like `diskWrites`: it
-   * counts every read the process makes (network receive plus anything p4 stages
-   * locally), so it is a liveness signal, not an on-disk transfer figure.
+   * and falls back to the watcher count. A LOWER BOUND: it counts the transfers
+   * the OS books as reads (pipes and file reads on Windows; `rchar` on Linux),
+   * not an on-disk figure — socket receive is NOT included on Windows, and
+   * neither is directory enumeration (see {@link ioOtherBytes}).
    *
    * Shared across overlapping syncs (one sampler each, summed) and reset on the
    * same 0 → 1 suspension transition as `diskWrites`.
@@ -389,6 +390,34 @@ export interface SyncProgress {
    *  server, writes while it lands the files in the workspace), so a read-only
    *  rate decays to zero exactly while the disk is busy. */
   readonly ioWriteBytes?: number
+  /**
+   * The same run's third Windows counter (`OtherTransferCount`) — directory
+   * enumeration and metadata scans land there, and neither `ioReadBytes` nor
+   * {@link ioWriteBytes} moves while they run. That is the window a force
+   * repair's scan phase spends minutes in, so the status bar falls back to this
+   * rate when read+write sits at zero. Zero on Linux (`rchar` already covers
+   * it), omitted together with the other two.
+   */
+  readonly ioOtherBytes?: number
+  /**
+   * Which stage the δ engine says it is in — the engine's own phase word
+   * (`scan` / `analyze` / `digest` / `apply`), published live from its stderr
+   * progress records. Native runs have no stage vocabulary, so this stays
+   * absent there; so does it until the first record arrives.
+   *
+   * Deliberately just the last signal, not a percentage: the ladder is sparse
+   * (`digest` is skipped when the mtime shortcut leaves nothing to hash) and
+   * the contract says progress records are hints, never conclusions. Reset with
+   * the run, like the byte totals.
+   */
+  readonly phase?: string
+  /** {@link phase}'s position in the engine's ladder (1-based), when the
+   *  record carried one. The ladder's length changes per mode, so it travels
+   *  with every record rather than being assumed. */
+  readonly phaseStep?: number
+  /** The length of the ladder {@link phaseStep} indexes (six for a force
+   *  repair), for rendering `Phase N/M`. */
+  readonly phaseTotal?: number
 }
 
 export interface P4CacheOptions {
@@ -807,6 +836,18 @@ function syncProgressTick(record: P4deltaRecord): { file: string | undefined } |
   const name =
     typeof depotFile === 'string' ? depotFile.slice(depotFile.lastIndexOf('/') + 1) : undefined
   return { file: name !== undefined && name !== '' ? name : undefined }
+}
+
+/** δ's `step`/`total` as an ordinal, or undefined unless the record carries
+ *  both as finite numbers: a lone `total` would render as `Phase ?/6`, and the
+ *  contract calls these records hints — the honest reading of a half-formed one
+ *  is "no ordinal", not a guess at the missing half. */
+function deltaPhaseOrdinal(record: P4deltaRecord): { step: number; total: number } | undefined {
+  const step = record['step']
+  const total = record['total']
+  if (typeof step !== 'number' || !Number.isFinite(step)) return undefined
+  if (typeof total !== 'number' || !Number.isFinite(total)) return undefined
+  return { step, total }
 }
 
 /** The revision suffix as a log fragment: `#head` is the default and says
@@ -1325,6 +1366,9 @@ export class PerforceClient {
    *  {@link _syncDiskWrites}. */
   private _syncIoReadBytes = 0
   private _syncIoWriteBytes = 0
+  /** The third (Windows) counter — see {@link SyncProgress.ioOtherBytes}. Same
+   *  reset points as the other two. */
+  private _syncIoOtherBytes = 0
   private _syncIoActive = false
   /** Whether any sample actually arrived for this run. {@link _syncIoActive}
    *  says a sampler exists; this says it reported — the difference is a get that
@@ -1379,6 +1423,13 @@ export class PerforceClient {
   private _syncProgress: SyncProgress | undefined
   /** Pending throttle timer for sync-progress change emits. */
   private _syncProgressTimer: ReturnType<typeof setTimeout> | undefined
+  /** The δ engine's last reported stage (see {@link SyncProgress.phase}) — run
+   *  scoped like the byte totals: reset on the 0 → 1 suspension arm and when the
+   *  progress clears. Only δ runs ever set them; a native run that takes over
+   *  after a δ fallback shows no stage, which is the truth. */
+  private _syncPhase: string | undefined
+  private _syncPhaseStep: number | undefined
+  private _syncPhaseTotal: number | undefined
   /** Clock shared with the cache, so a test that advances one advances both. */
   private readonly _now: () => number
   /** Threads for `sync --parallel=threads=N`; 0 syncs serially. Mutable so the
@@ -1842,7 +1893,18 @@ export class PerforceClient {
       startedAt,
       ...(this._syncDiskWrites > 0 ? { diskWrites: this._syncDiskWrites } : {}),
       ...(this._syncIoActive
-        ? { ioReadBytes: this._syncIoReadBytes, ioWriteBytes: this._syncIoWriteBytes }
+        ? {
+            ioReadBytes: this._syncIoReadBytes,
+            ioWriteBytes: this._syncIoWriteBytes,
+            ioOtherBytes: this._syncIoOtherBytes,
+          }
+        : {}),
+      ...(this._syncPhase !== undefined
+        ? {
+            phase: this._syncPhase,
+            ...(this._syncPhaseStep !== undefined ? { phaseStep: this._syncPhaseStep } : {}),
+            ...(this._syncPhaseTotal !== undefined ? { phaseTotal: this._syncPhaseTotal } : {}),
+          }
         : {}),
     }
     this._bumpSyncProgress()
@@ -1877,6 +1939,12 @@ export class PerforceClient {
   }
 
   private _clearSyncProgress(): void {
+    // Cleared before the early return: a phase can be set without the field
+    // ever being published (a record arriving between runs), and a stage that
+    // outlives its run would name the wrong thing under the next busy label.
+    this._syncPhase = undefined
+    this._syncPhaseStep = undefined
+    this._syncPhaseTotal = undefined
     // A non-streaming sync never sets the field — skip the emit so it doesn't
     // pay a redraw for a clear that changes nothing.
     if (this._syncProgress === undefined && this._syncProgressTimer === undefined) return
@@ -1921,6 +1989,27 @@ export class PerforceClient {
     this._syncIoSampled = true
     this._syncIoReadBytes += sample.read
     this._syncIoWriteBytes += sample.write
+    this._syncIoOtherBytes += sample.other
+    if (this._syncProgress === undefined) return
+    this._setSyncProgress(this._syncProgress.done, this._syncProgress.currentFile)
+  }
+
+  /** One δ stderr progress record (see {@link P4deltaService.run}'s
+   *  `onProgress`): publish its stage onto the sync progress. Runs from a
+   *  stderr data handler — never throws (red line 4).
+   *
+   *  A record whose shape is not what the contract promises is dropped rather
+   *  than half-applied: `total` without `step` (or vice versa) would render a
+   *  misleading `Phase ?/6`, and the contract marks these records as hints, so
+   *  the honest reading of a malformed one is "no signal". */
+  private _onSyncDeltaProgress(record: P4deltaRecord): void {
+    if (this._disposed) return
+    const phase = record['phase']
+    if (typeof phase !== 'string' || phase === '') return
+    const ordinal = deltaPhaseOrdinal(record)
+    this._syncPhase = phase
+    this._syncPhaseStep = ordinal?.step
+    this._syncPhaseTotal = ordinal?.total
     if (this._syncProgress === undefined) return
     this._setSyncProgress(this._syncProgress.done, this._syncProgress.currentFile)
   }
@@ -1972,6 +2061,7 @@ export class PerforceClient {
     this._syncIoSampled = false
     this._syncIoReadBytes = 0
     this._syncIoWriteBytes = 0
+    this._syncIoOtherBytes = 0
   }
 
   /**
@@ -5611,6 +5701,10 @@ export class PerforceClient {
           deltaSpawned = true
           this._onSyncP4Spawn(pid)
         },
+        // The engine's stage ladder (start / scan / analyze / digest / apply /
+        // done for a force repair), live off stderr — the bar names the stage
+        // the run is in, which for a wide repair is most of the elapsed time.
+        onProgress: (record) => this._onSyncDeltaProgress(record),
       })
     })
     const result = run.value
@@ -6799,8 +6893,12 @@ export class PerforceClient {
       this._syncDroppedEvents = 0
       this._syncIoReadBytes = 0
       this._syncIoWriteBytes = 0
+      this._syncIoOtherBytes = 0
       this._syncIoActive = false
       this._syncIoSampled = false
+      this._syncPhase = undefined
+      this._syncPhaseStep = undefined
+      this._syncPhaseTotal = undefined
     }
     this._externalSuspendCount++
   }

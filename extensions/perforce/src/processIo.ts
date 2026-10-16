@@ -7,7 +7,8 @@
  * without touching a single workspace file — p4 is walking the depot server-side
  * and staging downloads. During that window `done` and `disk +N` are both frozen
  * at 0 and the bar reads as stalled, which is exactly what this probe fixes: the
- * p4 process's own read counter climbs from the first server round-trip on.
+ * p4 process's own counters move from the first server round-trip on (the files
+ * it stages and lands, and the pipes to its own children).
  *
  * Sources, in preference order:
  * - `UNIVERSE_P4_IO_PROBE=off` disables sampling (e2e keeps it off); any other
@@ -19,6 +20,16 @@
  *   counter Task Manager shows) — reachable from Node only through WMI.
  * - linux: `/proc/<pid>/io` directly (no subprocess).
  * - darwin: unimplemented → no probe, and the bar falls back to the disk count.
+ *
+ * What the Windows counters actually cover (measured on Windows 10/11):
+ * `ReadTransferCount`/`WriteTransferCount` move for file I/O and pipe I/O (the
+ * files p4 stages and lands, and the pipes to its own children) but NOT for
+ * socket receive and NOT for directory enumeration / metadata scans — those book
+ * under `OtherTransferCount`. That second gap is why the third counter is
+ * sampled at all: a force-repair's scan phase (walking the tree, checking
+ * digests) spends minutes with read/write frozen while the disk is plainly busy,
+ * and a read+write-only rate reads `000KB/s` through all of it. Linux needs none
+ * of this — `/proc`'s `rchar` already includes socket and getdents traffic.
  *
  * Deliberately NOT `p4 -I`: the progress protocol disables `--parallel` (see
  * docs/pitfalls.md), and a serial transfer is unacceptable on a giant depot.
@@ -37,12 +48,15 @@
 import { spawn } from 'node:child_process'
 import { readFile, readdir } from 'node:fs/promises'
 
-/** One tick's transfer counts, in bytes. `read` is the receive side — socket
- *  reads plus anything p4 stages locally — which is what climbs during the
- *  transfer; `write` is the same tick's write side (kept for the tooltip). */
+/** One tick's transfer counts, in bytes. `read`/`write` are the counters the
+ *  status bar's rate is built from (pipes and files — see the header for what
+ *  Windows does and does not book there); `other` is the third Windows counter,
+ *  the one directory enumeration and metadata scans land in. Zero on Linux,
+ *  whose `rchar` already covers those. */
 export interface P4IoSample {
   readonly read: number
   readonly write: number
+  readonly other: number
 }
 
 export interface P4IoProbe {
@@ -98,8 +112,10 @@ export const RATE_WINDOW_MS = 5000
  * One line of the sampler's stdout, or `'error'` for its give-up line, or
  * undefined for anything unrecognized (which is ignored, never fatal).
  *
- * The protocol is two ASCII tokens (`S <readDelta> <writeDelta>`) so it parses
- * identically on every platform regardless of the sampler's own locale.
+ * The protocol is ASCII tokens (`S <readDelta> <writeDelta> <otherDelta>`) so it
+ * parses identically on every platform regardless of the sampler's own locale.
+ * The third token is optional — the Linux probe has no other-counter, and a
+ * two-token line simply reads as zero.
  */
 export function parseSamplerLine(line: string): P4IoSample | 'error' | undefined {
   const trimmed = line.trim()
@@ -107,12 +123,13 @@ export function parseSamplerLine(line: string): P4IoSample | 'error' | undefined
   // `E` alone or `E <reason>`, never `Exiting`: an unprefixed word that merely
   // starts with E (a PowerShell banner, a stray message) must stay ignored.
   if (trimmed === 'E' || trimmed.startsWith('E ')) return 'error'
-  const match = /^S\s+(\d+)\s+(\d+)$/.exec(trimmed)
+  const match = /^S\s+(\d+)\s+(\d+)(?:\s+(\d+))?$/.exec(trimmed)
   if (!match) return undefined
   const read = Number(match[1])
   const write = Number(match[2])
-  if (!Number.isFinite(read) || !Number.isFinite(write)) return undefined
-  return { read, write }
+  const other = match[3] === undefined ? 0 : Number(match[3])
+  if (!Number.isFinite(read) || !Number.isFinite(write) || !Number.isFinite(other)) return undefined
+  return { read, write, other }
 }
 
 /**
@@ -227,9 +244,16 @@ export class RateWindow {
 }
 
 /**
- * The Windows sampler script, run through `-EncodedCommand` so no part of it
- * ever reaches a command line (Windows argv quoting is a documented minefield
- * here — see the win32 cmd escaping section of docs/development/build-tooling.md).
+ * The Windows sampler script, fed to `powershell.exe -Command -` over stdin.
+ *
+ * Deliberately NOT `-EncodedCommand`: `powershell -EncodedCommand <base64>` is
+ * the shape malware droppers use, and Windows Defender will block the process
+ * outright on some machines — the probe then dies without printing a line and
+ * the session latches to the watcher count (observed: the child never ran at
+ * all). A plain script on stdin carries no such signature. The cost is that
+ * `-Command -` parses line by line, so the whole script must be ONE line: an
+ * unclosed `{}` block swallows what follows it SILENTLY — the statements inside
+ * and after the block simply never run, with no error on stderr.
  *
  * Exits on its own when the sampled process disappears, which is the normal end
  * of every sync — including the case where the editor crashed and nothing is
@@ -237,17 +261,17 @@ export class RateWindow {
  */
 export function buildWindowsSamplerScript(pid: number): string {
   return [
-    "$ErrorActionPreference = 'SilentlyContinue'",
-    `$root = ${pid}`,
-    '$prev = @{}',
-    '$fails = 0',
-    '$idleSince = [DateTime]::UtcNow',
+    "$ErrorActionPreference = 'SilentlyContinue';",
+    `$root = ${pid};`,
+    '$prev = @{};',
+    '$fails = 0;',
+    '$idleSince = [DateTime]::UtcNow;',
     // Emitted before the first query on purpose: it proves the script ran at all.
     // Without it, "closed having printed nothing" is ambiguous — a p4 that exited
     // before the first poll and a machine where PowerShell cannot execute the
     // script look identical — and the caller treats exactly that case as a broken
     // source it need not retry.
-    "[Console]::Out.WriteLine('S 0 0')",
+    "[Console]::Out.WriteLine('S 0 0 0');",
     // No wall-clock deadline: a whole-repo pull legitimately runs for tens of
     // minutes, and cutting the sampler off in the middle of one would freeze the
     // readout at `000KB/s` — the false "stalled" signal this probe exists to
@@ -257,49 +281,56 @@ export function buildWindowsSamplerScript(pid: number): string {
     // (nothing transferred for ${PROBE_IDLE_TIMEOUT_MS / 60000} minutes → either
     // the transfer is dead or nothing is left to watch).
     'while ($true) {',
-    '  if ($null -eq (Get-Process -Id $root -ErrorAction SilentlyContinue)) { break }',
-    '  $procs = Get-CimInstance -ClassName Win32_Process ' +
+    'if ($null -eq (Get-Process -Id $root -ErrorAction SilentlyContinue)) { break };',
+    '$procs = Get-CimInstance -ClassName Win32_Process ' +
       '-Filter "ProcessId=$root or ParentProcessId=$root" ' +
-      '-Property ProcessId,ReadTransferCount,WriteTransferCount -ErrorAction SilentlyContinue',
-    '  if ($null -eq $procs) {',
-    '    $fails = $fails + 1',
-    `    if ($fails -ge ${PROBE_MAX_QUERY_FAILURES}) { [Console]::Out.WriteLine('E wmi'); break }`,
-    "    [Console]::Out.WriteLine('S 0 0')",
-    `    Start-Sleep -Milliseconds ${PROBE_POLL_MS}`,
-    '    continue',
-    '  }',
-    '  $fails = 0',
-    '  $next = @{}',
-    '  $dr = [uint64]0',
-    '  $dw = [uint64]0',
-    '  foreach ($p in $procs) {',
-    '    $id = [int]$p.ProcessId',
-    '    $r = [uint64]$p.ReadTransferCount',
-    '    $w = [uint64]$p.WriteTransferCount',
-    '    $old = $prev[$id]',
-    '    if ($null -eq $old) { $dr = $dr + $r; $dw = $dw + $w }',
-    '    else {',
-    '      if ($r -gt $old[0]) { $dr = $dr + ($r - $old[0]) }',
-    '      if ($w -gt $old[1]) { $dw = $dw + ($w - $old[1]) }',
-    '    }',
-    '    $next[$id] = @($r, $w)',
-    '  }',
+      '-Property ProcessId,ReadTransferCount,WriteTransferCount,OtherTransferCount ' +
+      '-ErrorAction SilentlyContinue;',
+    'if ($null -eq $procs) {',
+    '$fails = $fails + 1;',
+    `if ($fails -ge ${PROBE_MAX_QUERY_FAILURES}) { [Console]::Out.WriteLine('E wmi'); break };`,
+    "[Console]::Out.WriteLine('S 0 0 0');",
+    `Start-Sleep -Milliseconds ${PROBE_POLL_MS};`,
+    'continue',
+    '};',
+    '$fails = 0;',
+    '$next = @{};',
+    '$dr = [uint64]0;',
+    '$dw = [uint64]0;',
+    '$do = [uint64]0;',
+    'foreach ($p in $procs) {',
+    '$id = [int]$p.ProcessId;',
+    '$r = [uint64]$p.ReadTransferCount;',
+    '$w = [uint64]$p.WriteTransferCount;',
+    '$o = [uint64]$p.OtherTransferCount;',
+    '$old = $prev[$id];',
+    'if ($null -eq $old) { $dr = $dr + $r; $dw = $dw + $w; $do = $do + $o }',
+    'else {',
+    'if ($r -gt $old[0]) { $dr = $dr + ($r - $old[0]) };',
+    'if ($w -gt $old[1]) { $dw = $dw + ($w - $old[1]) };',
+    'if ($o -gt $old[2]) { $do = $do + ($o - $old[2]) }',
+    '};',
+    '$next[$id] = @($r, $w, $o)',
+    '};',
     // Rebuilt every tick: only pids still in the tree keep an entry, so a pid
     // recycled after its process exited can't be differenced against the dead
     // process's totals.
-    '  $prev = $next',
-    '  if ($dr -eq 0 -and $dw -eq 0) {',
-    `    if (([DateTime]::UtcNow - $idleSince).TotalSeconds -ge ${PROBE_IDLE_TIMEOUT_MS / 1000}) {`,
-    "      [Console]::Out.WriteLine('E idle')",
-    '      break',
-    '    }',
-    '  } else {',
-    '    $idleSince = [DateTime]::UtcNow',
-    '  }',
-    '  [Console]::Out.WriteLine("S $dr $dw")',
-    `  Start-Sleep -Milliseconds ${PROBE_POLL_MS}`,
+    '$prev = $next;',
+    // The idle rule watches all three counters: a pure scan (enumeration and
+    // metadata) moves nothing but the other-counter, and killing the sampler
+    // mid-scan is exactly the frozen `000KB/s` this probe exists to prevent.
+    'if ($dr -eq 0 -and $dw -eq 0 -and $do -eq 0) {',
+    `if (([DateTime]::UtcNow - $idleSince).TotalSeconds -ge ${PROBE_IDLE_TIMEOUT_MS / 1000}) {`,
+    "[Console]::Out.WriteLine('E idle');",
+    'break',
     '}',
-  ].join('\n')
+    '} else {',
+    '$idleSince = [DateTime]::UtcNow',
+    '};',
+    '[Console]::Out.WriteLine("S $dr $dw $do");',
+    `Start-Sleep -Milliseconds ${PROBE_POLL_MS}`,
+    '}',
+  ].join(' ')
 }
 
 /**
@@ -348,19 +379,25 @@ function probeEnv(): NodeJS.ProcessEnv {
 }
 
 function createWindowsProbe(pid: number, options: P4IoProbeOptions): P4IoProbe | undefined {
-  const script = buildWindowsSamplerScript(pid)
-  const encoded = Buffer.from(script, 'utf16le').toString('base64')
+  // The script travels over stdin, not `-EncodedCommand` — see
+  // {@link buildWindowsSamplerScript} for why. `-NoProfile` is the flag that
+  // matters (a profile's output would land on the stream being parsed).
   return spawnSampler(
     'powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
+    ['-NoProfile', '-Command', '-'],
     options,
     probeEnv(),
+    buildWindowsSamplerScript(pid),
   )
 }
 
 /**
  * Run one sampler process and turn its stdout into samples. Shared by the
  * Windows and override paths.
+ *
+ * `stdinScript` is fed to the child's stdin and closed — the Windows probe's
+ * transport (see {@link buildWindowsSamplerScript}); every other probe gets an
+ * empty, closed stdin, which none of them read.
  *
  * Every async handler is wrapped: a throw here would escape into the extension
  * host's uncaughtException handler and take every extension down with it.
@@ -370,17 +407,35 @@ function spawnSampler(
   args: readonly string[],
   options: P4IoProbeOptions,
   env: NodeJS.ProcessEnv = probeEnv(),
+  stdinScript?: string,
 ): P4IoProbe | undefined {
   let child: ReturnType<typeof spawn>
   try {
     child = spawn(command, [...args], {
       windowsHide: true,
-      stdio: ['ignore', 'pipe', 'ignore'],
+      stdio: ['pipe', 'pipe', 'ignore'],
       env,
     })
   } catch (err) {
     options.log?.(`[perforce] sync io probe unavailable: ${String(err)}`)
     return undefined
+  }
+
+  // The write below is asynchronous, so a broken pipe arrives as an `'error'`
+  // event on the stream, not as a throw — and an unhandled stream error IS an
+  // uncaughtException, i.e. the whole extension host (the red line in this
+  // file's header). A sampler that dies before the write lands closes the pipe
+  // and triggers exactly that: PowerShell blocked by policy, a probe command
+  // that exits at once. The child's own lifecycle is already covered by
+  // `giveUp`; this listener exists so the stream's failure has somewhere to go.
+  child.stdin?.on('error', (err) => {
+    options.log?.(`[perforce] sync io probe stdin: ${String(err)}`)
+  })
+  try {
+    // Terminated with a newline, the way a script on disk would be.
+    child.stdin?.end(stdinScript === undefined ? '' : `${stdinScript}\n`)
+  } catch {
+    // best-effort: an already-dead child closes its stdin on its own
   }
 
   let disposed = false
@@ -494,7 +549,9 @@ async function readTreePids(pid: number): Promise<number[]> {
 
 /** Cumulative `rchar`/`wchar` for one process. `rchar` (not `read_bytes`) is the
  *  receive side: p4 pulls archives over the socket, and `read_bytes` counts only
- *  block-device reads, which stay near zero for a network fetch. */
+ *  block-device reads, which stay near zero for a network fetch. Unlike the
+ *  Windows counters, `rchar` also covers what Windows books as "other"
+ *  (getdents, socket traffic), so `other` is always 0 here. */
 async function readProcIo(pid: number): Promise<P4IoSample | undefined> {
   try {
     const text = await readFile(`/proc/${pid}/io`, 'utf8')
@@ -507,9 +564,22 @@ async function readProcIo(pid: number): Promise<P4IoSample | undefined> {
     }
     if (read === undefined || write === undefined) return undefined
     if (!Number.isFinite(read) || !Number.isFinite(write)) return undefined
-    return { read, write }
+    return { read, write, other: 0 }
   } catch {
     return undefined
+  }
+}
+
+/** Whether this kernel exposes `/proc/<pid>/io` at all. It is absent without
+ *  `CONFIG_TASKSTATS` (a WSL kernel can be built that way), which makes every
+ *  pid look "gone" to {@link readProcIo} — the caller must not mistake that for
+ *  a finished process. */
+async function procIoAvailable(): Promise<boolean> {
+  try {
+    await readFile('/proc/self/io', 'utf8')
+    return true
+  } catch {
+    return false
   }
 }
 
@@ -555,20 +625,33 @@ function createLinuxProbe(pid: number, options: P4IoProbeOptions): P4IoProbe {
       // than reporting on a run the caller has already torn down.
       if (disposed) return
       if (!sawRoot) {
-        // The process is gone (or its /proc entry is unreadable). No sample is
-        // ever produced from here on, so stop — but do NOT report the source as
-        // unusable: a sync that finished before this first tick is
-        // indistinguishable from an unreadable /proc, and the caller's latch
-        // would then cost every later sync in the session its rate readout.
+        // The root pid never showed up in /proc. Two very different causes:
+        // the process is gone (a sync that finished before this first tick —
+        // the normal end of life, nothing to report), or this kernel has no
+        // /proc/<pid>/io at all (CONFIG_TASKSTATS off — every pid looks gone
+        // forever). A completed sample already proves the source works, so
+        // probe /proc/self/io only when none ever arrived: unreadable then
+        // means the source is missing on this machine, and the caller's latch
+        // is exactly right.
         disposed = true
         stop()
+        if (!sampled && !(await procIoAvailable())) {
+          try {
+            options.onUnavailable(
+              'no /proc/<pid>/io (kernel built without CONFIG_TASKSTATS?)',
+              'missing',
+            )
+          } catch (handlerErr) {
+            options.log?.(`[perforce] sync io probe onUnavailable threw: ${String(handlerErr)}`)
+          }
+        }
         return
       }
       failures = 0
       sampled = true
       prev.clear()
       for (const [key, value] of next) prev.set(key, value)
-      options.onSample({ read, write })
+      options.onSample({ read, write, other: 0 })
     } catch (err) {
       failures++
       if (failures >= PROBE_MAX_QUERY_FAILURES && !sampled) {

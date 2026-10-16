@@ -250,6 +250,14 @@ export interface P4deltaRunOptions {
    * transfer hang off this pid.
    */
   readonly onSpawn?: (pid: number) => void
+  /**
+   * Every `kind:"progress"` stderr record as it arrives, in order — the same
+   * records `P4deltaRunResult.progress` collects for the post-run replay, but
+   * live: a consumer showing "which phase is it in right now" cannot wait for
+   * the run to end. Called inside a try/catch like `onRecord` (host-crash red
+   * line 4).
+   */
+  readonly onProgress?: (record: P4deltaRecord) => void
 }
 
 export interface P4deltaRunResult {
@@ -928,6 +936,13 @@ export class P4deltaService {
           // Structured progress is what a later reader can still make sense of
           // (phase / step / total); the raw JSON is kept verbatim, not reworded.
           detail(JSON.stringify(record))
+          // The collected array only serves the replay after the run; a live
+          // consumer reads the record here. Same red line as onRecord.
+          try {
+            options?.onProgress?.(record)
+          } catch {
+            // best-effort
+          }
           return
         }
         logTail.push(line)

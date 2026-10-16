@@ -19,8 +19,11 @@
  *  freezes where it stopped, which is what p4 does once it stops pulling from
  *  the server and starts landing the staged content in the workspace.
  *
- *  Speaks the same two ASCII tokens as the real samplers (`S <read> <write>`),
- *  plus the startup line: the extension latches the sampler off for the session
+ *  `UNIVERSE_P4_FAKE_IO_OTHER_FROM_TICK` is its scan-side twin (see below).
+ *
+ *  Speaks the same three ASCII tokens as the real samplers (`S <read> <write>
+ *  <other>`; the Linux one leaves the third at 0), plus the startup line: the
+ *  extension latches the sampler off for the session
  *  when one closes having printed nothing (that is a machine where PowerShell
  *  cannot run the script at all), so a well-behaved sampler always opens with a
  *  line even when it has nothing to report yet. Ignoring the pid is fine — the
@@ -33,9 +36,17 @@
 const STEP_BYTES = Number(process.env.UNIVERSE_P4_FAKE_IO_STEP ?? String(8 * 1024 * 1024))
 const TICK_MS = Number(process.env.UNIVERSE_P4_FAKE_IO_TICK_MS ?? '1000')
 const WRITE_FROM_TICK = Number(process.env.UNIVERSE_P4_FAKE_IO_WRITE_FROM_TICK ?? '0')
+/** `UNIVERSE_P4_FAKE_IO_OTHER_FROM_TICK` models the SCAN half — the shape a forced
+ *  repair (and any directory walk) spends most of its time in: from that tick on
+ *  BOTH the read and the write counters freeze and every delta goes to the third
+ *  (Windows-only) counter, because enumerating directories and reading metadata
+ *  moves bytes the read/write pair never sees. A rate read off those two counters
+ *  alone sits at a flat `000KB/s` here while the process is plainly working, which
+ *  is exactly the false "stalled" reading the third counter exists to remove. */
+const OTHER_FROM_TICK = Number(process.env.UNIVERSE_P4_FAKE_IO_OTHER_FROM_TICK ?? '0')
 const MAX_TICKS = 60
 
-process.stdout.write('S 0 0\n')
+process.stdout.write('S 0 0 0\n')
 let ticks = 0
 const timer = setInterval(() => {
   if (++ticks > MAX_TICKS) {
@@ -43,6 +54,11 @@ const timer = setInterval(() => {
     return
   }
   const delta = STEP_BYTES * ticks
-  const writing = WRITE_FROM_TICK > 0 && ticks >= WRITE_FROM_TICK
-  process.stdout.write(writing ? `S 0 ${delta}\n` : `S ${delta} 0\n`)
+  if (OTHER_FROM_TICK > 0 && ticks >= OTHER_FROM_TICK) {
+    process.stdout.write(`S 0 0 ${delta}\n`)
+  } else if (WRITE_FROM_TICK > 0 && ticks >= WRITE_FROM_TICK) {
+    process.stdout.write(`S 0 ${delta} 0\n`)
+  } else {
+    process.stdout.write(`S ${delta} 0 0\n`)
+  }
 }, TICK_MS)

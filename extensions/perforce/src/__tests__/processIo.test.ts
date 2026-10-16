@@ -6,12 +6,19 @@
  */
 import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { P4IoProbe } from '../processIo.js'
+import type { P4IoProbe, P4IoSample } from '../processIo.js'
+
+/** The child's stdin as a stream, not a bare stub: a real one is an
+ *  EventEmitter, and the probe has to survive the `'error'` it emits when the
+ *  write lands after the child is gone. */
+class FakeStdin extends EventEmitter {
+  end = vi.fn()
+}
 
 class FakeChildProcess extends EventEmitter {
   readonly stdout = new EventEmitter()
   readonly stderr = new EventEmitter()
-  readonly stdin = { end: vi.fn() }
+  readonly stdin = new FakeStdin()
   readonly killed: boolean[] = []
   kill = vi.fn(() => {
     this.killed.push(true)
@@ -67,10 +74,16 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 describe('parseSamplerLine', () => {
-  it('parses the two-token delta line', () => {
-    expect(parseSamplerLine('S 1024 64')).toEqual({ read: 1024, write: 64 })
-    expect(parseSamplerLine('S 0 0')).toEqual({ read: 0, write: 0 })
-    expect(parseSamplerLine('  S 7 9  \r')).toEqual({ read: 7, write: 9 })
+  it('parses the three-token delta line', () => {
+    expect(parseSamplerLine('S 1024 64 8')).toEqual({ read: 1024, write: 64, other: 8 })
+    expect(parseSamplerLine('S 0 0 0')).toEqual({ read: 0, write: 0, other: 0 })
+    expect(parseSamplerLine('  S 7 9 1  \r')).toEqual({ read: 7, write: 9, other: 1 })
+  })
+
+  it('reads a two-token line as zero other-counter', () => {
+    // The third token is optional by design: the Linux probe has no other-counter
+    // and a stale sampler shape must read as "nothing there", not as garbage.
+    expect(parseSamplerLine('S 1024 64')).toEqual({ read: 1024, write: 64, other: 0 })
   })
 
   it('reports the sampler giving up', () => {
@@ -84,6 +97,7 @@ describe('parseSamplerLine', () => {
       '   ',
       'S',
       'S 1',
+      'S 1 2 3 4',
       'S a b',
       'S -1 2',
       'progress 1/2',
@@ -225,26 +239,42 @@ describe('RateWindow', () => {
 })
 
 describe('buildWindowsSamplerScript', () => {
-  it('polls the tree of the given pid and reports per-tick deltas', () => {
+  it('polls the tree of the given pid and reports per-tick deltas of all three counters', () => {
     const script = buildWindowsSamplerScript(4242)
     expect(script).toContain('$root = 4242')
     expect(script).toContain('ProcessId=$root or ParentProcessId=$root')
     expect(script).toContain('ReadTransferCount')
     expect(script).toContain('WriteTransferCount')
-    expect(script).toContain('[Console]::Out.WriteLine("S $dr $dw")')
+    // The other-counter is the whole point of sampling a third value: a scan
+    // (directory enumeration / metadata) moves nothing else, and without it the
+    // status bar reads 000KB/s through a busy scan.
+    expect(script).toContain('OtherTransferCount')
+    expect(script).toContain('[Console]::Out.WriteLine("S $dr $dw $do")')
     // The startup line must come before the loop that can exit on a vanished
     // process: it is what separates "never ran" from "ran, nothing to report".
-    expect(script.indexOf("'S 0 0'")).toBeGreaterThan(-1)
-    expect(script.indexOf("'S 0 0'")).toBeLessThan(script.indexOf('while ('))
+    expect(script.indexOf("'S 0 0 0'")).toBeGreaterThan(-1)
+    expect(script.indexOf("'S 0 0 0'")).toBeLessThan(script.indexOf('while ('))
     // The sampled process disappearing is the normal end of every sync…
     expect(script).toContain('Get-Process -Id $root')
     // …and the only other exit is sustained silence, never a wall-clock cap: a
     // whole-repo pull legitimately runs for tens of minutes, and cutting the
-    // sampler off mid-transfer would freeze the readout at 000KB/s.
+    // sampler off mid-transfer would freeze the readout at 000KB/s. Silence
+    // watches all three counters — a pure scan moves only the other one, and
+    // killing the sampler mid-scan is the same frozen readout by another route.
     expect(script).toContain('$idleSince')
+    expect(script).toContain('$dr -eq 0 -and $dw -eq 0 -and $do -eq 0')
     expect(script).toContain("'E idle'")
     expect(script).toContain('while ($true)')
     expect(script).not.toMatch(/deadline|AddSeconds/)
+  })
+
+  it('is one physical line, because -Command - parses line by line', () => {
+    // The script travels over stdin to `powershell.exe -Command -`, which parses
+    // each line as a statement of its own — an unclosed {} block would swallow
+    // everything after it (measured: a multi-line for loop silently ate the rest
+    // of the script). One line is the transport's contract, not a style choice.
+    const script = buildWindowsSamplerScript(4242)
+    expect(script).not.toContain('\n')
   })
 })
 
@@ -280,7 +310,7 @@ describe('createP4IoProbe', () => {
 
   describe('win32 sampler process', () => {
     let child: FakeChildProcess
-    const samples: { read: number; write: number }[] = []
+    const samples: P4IoSample[] = []
     const unavailable: { reason: string; kind: string }[] = []
 
     beforeEach(() => {
@@ -300,28 +330,51 @@ describe('createP4IoProbe', () => {
       return probe!
     }
 
-    it('runs PowerShell with the script encoded out of the command line', () => {
+    it('feeds the script over stdin, never through the command line', () => {
       start()
       const [command, argv] = spawnMock.mock.calls[0] as [string, string[]]
       expect(command).toBe('powershell.exe')
-      // The invariant is that no part of the script reaches the command line —
-      // Windows argv quoting is a minefield and the script is full of them.
-      expect(argv).toHaveLength(4)
-      expect(argv.slice(0, 3)).toEqual(['-NoProfile', '-NonInteractive', '-EncodedCommand'])
-      expect(argv[3]).toMatch(/^[A-Za-z0-9+/]+=*$/)
-      const decoded = Buffer.from(argv[3]!, 'base64').toString('utf16le')
-      expect(decoded).toBe(buildWindowsSamplerScript(4242))
+      // `-EncodedCommand` is the shape Defender blocks on some machines (the
+      // child then never runs at all) — the script goes over stdin instead, and
+      // `-NonInteractive` stays off (its behavior together with `-Command -` was
+      // never established beyond doubt; `-NoProfile` is the flag that matters
+      // here, and the script prompts for nothing).
+      expect(argv).toEqual(['-NoProfile', '-Command', '-'])
+      // Trailing newline included, the way a script on disk would be.
+      expect(child.stdin.end).toHaveBeenCalledWith(`${buildWindowsSamplerScript(4242)}\n`)
+    })
+
+    it('survives a stdin write failure instead of taking the host down', () => {
+      const log: string[] = []
+      const probe = createP4IoProbe(4242, {
+        onSample: (sample) => samples.push(sample),
+        onUnavailable: (reason, kind) => unavailable.push({ reason, kind }),
+        log: (msg) => log.push(msg),
+      })
+      expect(probe).toBeDefined()
+      // A sampler that dies before the write lands — PowerShell blocked by
+      // policy, a probe command that exits at once — closes the pipe, and the
+      // failed write arrives as an `'error'` event on the stream. Unhandled,
+      // that is an uncaughtException: every extension in the host dies with it.
+      expect(() => child.stdin.emit('error', new Error('write EPIPE'))).not.toThrow()
+      expect(log.join('\n')).toMatch(/EPIPE/)
+      // The stream's failure says nothing about the source: a sampler that is
+      // merely slow to read its stdin is still a good source, so the child's own
+      // lifecycle keeps deciding (nothing sampled yet here, and it still works).
+      expect(unavailable).toEqual([])
+      emitLines(child, 'S 10 0 0\n')
+      expect(samples).toEqual([{ read: 10, write: 0, other: 0 }])
     })
 
     it('reports each parsed delta and survives a partial line', () => {
       start()
-      emitLines(child, 'S 1000 20\nS 2000 40\nS 30')
+      emitLines(child, 'S 1000 20 5\nS 2000 40 0\nS 30')
       expect(samples).toEqual([
-        { read: 1000, write: 20 },
-        { read: 2000, write: 40 },
+        { read: 1000, write: 20, other: 5 },
+        { read: 2000, write: 40, other: 0 },
       ])
-      emitLines(child, '00 60\n')
-      expect(samples.at(-1)).toEqual({ read: 3000, write: 60 })
+      emitLines(child, '00 60 9\n')
+      expect(samples.at(-1)).toEqual({ read: 3000, write: 60, other: 9 })
       expect(unavailable).toEqual([])
     })
 
@@ -411,7 +464,7 @@ describe('createP4IoProbe', () => {
   })
 
   describe('linux /proc polling', () => {
-    const samples: { read: number; write: number }[] = []
+    const samples: P4IoSample[] = []
     const unavailable: { reason: string; kind: string }[] = []
 
     const seedTree = (root: number, children: readonly number[]): void => {
@@ -442,12 +495,12 @@ describe('createP4IoProbe', () => {
       seedTree(100, [200])
       const probe = startLinux()
       await vi.advanceTimersByTimeAsync(1000)
-      expect(samples).toEqual([{ read: 3000, write: 300 }])
+      expect(samples).toEqual([{ read: 3000, write: 300, other: 0 }])
       fsState.files.set('/proc/100/io', 'rchar: 1100\nwchar: 100\n')
       fsState.files.set('/proc/200/io', 'rchar: 2500\nwchar: 200\n')
       await vi.advanceTimersByTimeAsync(1000)
       // Only the read counters moved: +100 on the root, +500 on the child.
-      expect(samples.at(-1)).toEqual({ read: 600, write: 0 })
+      expect(samples.at(-1)).toEqual({ read: 600, write: 0, other: 0 })
       probe.dispose()
       await vi.advanceTimersByTimeAsync(5000)
       expect(samples).toHaveLength(2)
@@ -487,9 +540,11 @@ describe('createP4IoProbe', () => {
       probe.dispose()
     })
 
-    it('goes quiet without latching when /proc never yields a sample', async () => {
-      // A sync that ended before the first tick looks exactly like an unreadable
-      // /proc from here, and the ambiguous case must not latch the source off.
+    it('goes quiet without latching when /proc never yields a sample but works', async () => {
+      // A sync that ended before the first tick looks exactly like this: no
+      // /proc/<pid>/io for the root, but the kernel does expose the file (proven
+      // by /proc/self/io) — the ambiguous case must not latch the source off.
+      fsState.files.set('/proc/self/io', 'rchar: 1\nwchar: 1\n')
       const probe = startLinux()
       await vi.advanceTimersByTimeAsync(1000)
       expect(samples).toEqual([])
@@ -497,6 +552,22 @@ describe('createP4IoProbe', () => {
       await vi.advanceTimersByTimeAsync(5000)
       expect(samples).toEqual([])
       probe.dispose()
+    })
+
+    it('latches the source off when the kernel has no /proc/<pid>/io at all', async () => {
+      // CONFIG_TASKSTATS off (a WSL kernel can be built that way): no
+      // /proc/<pid>/io for anybody, so nothing here can ever produce a sample.
+      // Silently stopping would leave the bar on a zeroed rate forever; this is
+      // a missing source, and the caller's session latch is the right answer.
+      const probe = startLinux()
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(samples).toEqual([])
+      expect(unavailable).toHaveLength(1)
+      expect(unavailable[0]!.kind).toBe('missing')
+      expect(unavailable[0]!.reason).toContain('CONFIG_TASKSTATS')
+      probe.dispose()
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(unavailable).toHaveLength(1)
     })
   })
 
@@ -523,8 +594,8 @@ describe('createP4IoProbe', () => {
         // or this "script" child starts a second editor window instead.
         expect(spawnOptions.env['ELECTRON_RUN_AS_NODE']).toBe('1')
         expect(spawnOptions.env['NODE_OPTIONS']).toBeUndefined()
-        emitLines(child, 'S 512 8\n')
-        expect(samples).toEqual([{ read: 512, write: 8 }])
+        emitLines(child, 'S 512 8 3\n')
+        expect(samples).toEqual([{ read: 512, write: 8, other: 3 }])
       } finally {
         if (originalNodeOptions === undefined) delete process.env.NODE_OPTIONS
         else process.env.NODE_OPTIONS = originalNodeOptions

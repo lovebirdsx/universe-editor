@@ -500,6 +500,54 @@ describe('P4deltaService.run', () => {
     ])
   })
 
+  // The live half of the same stream: a get's stage readout needs each record as
+  // its line lands (a phase known only at the end names a stage already over),
+  // while the collected array stays for the replays that read the ladder whole.
+  it('hands each progress record to onProgress as it arrives, keeping the replay', async () => {
+    const svc = makeService()
+    const seen: unknown[] = []
+    const p = svc.run(['--json', '--sync', '--force', '-a'], {
+      onProgress: (record) => seen.push(record),
+    })
+    await flush()
+    expect(seen).toEqual([])
+    child.stderr.emit(
+      'data',
+      Buffer.from('{"kind":"progress","phase":"scan","step":2,"total":6}\n'),
+    )
+    expect(seen).toEqual([{ kind: 'progress', phase: 'scan', step: 2, total: 6 }])
+    child.stderr.emit(
+      'data',
+      Buffer.from('{"kind":"progress","phase":"apply","step":5,"total":6}\n'),
+    )
+    child.emit('close', 0, null)
+    const result = await p
+    expect(seen).toHaveLength(2)
+    expect(result.progress).toEqual(seen)
+  })
+
+  // Red line 4 through the newest callback: the status bar's own handler runs on
+  // every progress line, so a throw in it must not stop the run or the parse.
+  it('swallows a throwing onProgress and keeps parsing', async () => {
+    const svc = makeService()
+    const p = svc.run(['--json', '--sync', '-a'], {
+      onProgress: () => {
+        throw new Error('consumer exploded')
+      },
+    })
+    await flush()
+    child.stderr.emit(
+      'data',
+      Buffer.from('{"kind":"progress","phase":"scan","step":2,"total":6}\n'),
+    )
+    child.stdout.emit('data', Buffer.from(FILE_LINE + SUMMARY_LINE))
+    child.emit('close', 0, null)
+    const result = await p
+    expect(result.progress).toHaveLength(1)
+    expect(result.records).toHaveLength(2)
+    expect(result.sawSummary).toBe(true)
+  })
+
   it('resolves a spawn failure as a failure result instead of rejecting', async () => {
     const svc = makeService()
     const p = svc.run(['--json', 'open'])

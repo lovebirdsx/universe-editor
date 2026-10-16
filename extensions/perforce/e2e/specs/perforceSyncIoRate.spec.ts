@@ -23,6 +23,13 @@
  *  is busiest — so the token is the SUM of both counters and this spec asserts it
  *  stays non-zero on a window that holds nothing but write growth.
  *
+ *  The third counter gets its own journey (`UNIVERSE_P4_FAKE_IO_OTHER_FROM_TICK`):
+ *  a scan-shaped run, where BOTH the read and the write counters stay frozen and
+ *  every byte the process moves shows up in `other` instead — what a forced repair
+ *  looks like for the minutes it spends enumerating the workspace. The rate falls
+ *  back to that counter, so the bar stays non-zero where the read/write pair alone
+ *  would read a flat `000KB/s` for the whole scan.
+ *
  *  The token is asserted to be exactly 7 characters wide at every sample — the
  *  status bar is a row, so a rate whose text grows a character as it crosses 10
  *  or 100 would shove every neighbouring entry sideways once a second.
@@ -119,11 +126,15 @@ test.describe('@p1 perforce sync I/O rate', () => {
       return token?.[1] !== undefined ? Number(token[1]) : -1
     }
 
-    /** The two counters as the tooltip reports them, split. */
-    const totals = async (): Promise<{ read: string | undefined; wrote: string | undefined }> => {
+    /** The three counters as the tooltip reports them, split. */
+    const totals = async (): Promise<{
+      read: string | undefined
+      wrote: string | undefined
+      other: string | undefined
+    }> => {
       const tip = (await entry.getAttribute('data-tooltip')) ?? ''
-      const match = /read (\S+), wrote (\S+) \(/.exec(tip)
-      return { read: match?.[1], wrote: match?.[2] }
+      const match = /read (\S+), wrote (\S+), other (\S+) \(/.exec(tip)
+      return { read: match?.[1], wrote: match?.[2], other: match?.[3] }
     }
 
     await test.step('a non-zero rate appears before any file has been applied', async () => {
@@ -195,6 +206,63 @@ test.describe('@p1 perforce sync I/O rate', () => {
           '[data-testid="part-statusbar"] button[data-tooltip*="Last pull: the latest revision"]',
         ),
       ).toHaveCount(1)
+    })
+  })
+
+  // 扫描形态：一次强制修复（或任何目录遍历）里，p4 进程的读/写计数器是不动的，动的是第三
+  // 个——目录枚举与元数据。只读前两个计数器的速率在这几分钟里恒为 `000KB/s`，而进程明明在
+  // 忙。这条 journey 就是那个现场：第三个计数器从第一拍起就是唯一的增量来源。
+  test.describe('a scan-shaped run', () => {
+    const SCAN_SILENT_START_MS = 30_000
+
+    test.use({
+      p4ExtraEnv: {
+        UNIVERSE_P4_IO_PROBE: FAKE_IO_PROBE,
+        UNIVERSE_P4_FAKE_IO_STEP: String(IO_STEP_BYTES),
+        // 第一拍起就换到第三个计数器：读/写这两个数在整个运行里都不动。
+        UNIVERSE_P4_FAKE_IO_OTHER_FROM_TICK: '1',
+        UNIVERSE_P4_FAKE_SYNC_START_MS: String(SCAN_SILENT_START_MS),
+      },
+    })
+
+    test('keeps a non-zero rate while the read/write counters stand still @regression', async ({
+      page,
+      workbench,
+      perforce,
+    }) => {
+      test.setTimeout(180_000)
+      await evaluateWhenRestored(page)
+      await workbench.openWorkspace(perforce.openDir)
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getScmSourceControlCount()), {
+          timeout: 60_000,
+          message: 'perforce extension should register a source control for the workspace',
+        })
+        .toBeGreaterThan(0)
+
+      const entry = page
+        .locator('[data-testid="part-statusbar"] button')
+        .filter({ hasText: 'Syncing' })
+
+      await page.evaluate(() => void window.__E2E__!.runCommand('perforce.syncLatest'))
+
+      // p4 一个字都没打印（`done` 仍是 0）、读/写两个计数器一个字节都没动，而速率在动：
+      // 它只能来自第三个计数器。少了这一路回落，这里就是 `000KB/s`——正是要修掉的假信号。
+      await expect(entry).toHaveText(LIVE_RATE, { timeout: 30_000 })
+      const counters = async (): Promise<readonly [string, string, string]> => {
+        const tip = (await entry.getAttribute('data-tooltip')) ?? ''
+        const match = /read (\S+), wrote (\S+), other (\S+) \(/.exec(tip)
+        return [match?.[1] ?? '', match?.[2] ?? '', match?.[3] ?? '']
+      }
+      const [read, wrote, other] = await counters()
+      expect([read, wrote]).toEqual(['0B', '0B'])
+      expect(other).toMatch(/^0*[1-9]\d*(KB|MB|GB|TB)$/)
+
+      // 逐拍确认「动的还是第三个」：这一段的读/写恒零，速率没有别的来源可回落。
+      await page.waitForTimeout(2500)
+      const [read2, wrote2, other2] = await counters()
+      expect([read2, wrote2]).toEqual(['0B', '0B'])
+      expect(other2).not.toBe(other)
     })
   })
 })

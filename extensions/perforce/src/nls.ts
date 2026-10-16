@@ -188,7 +188,8 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.status.syncTargetPicked': '所选文件',
   'perforce.status.syncTargetChangelist': 'changelist {0}',
   'perforce.status.syncIoTooltip':
-    'p4 进程 IO：读取 {0}，写入 {1} —— 速率取两者之和（取自操作系统进程计数器，含网络接收与中转临时文件，不等于落盘量）',
+    'p4 进程 IO：读取 {0}，写入 {1}，其他 {2}（取自操作系统进程计数器——读/写是 p4 自身的管道与工作区文件 IO，其他是前两者完全看不到的目录/元数据扫描，在不单列它的系统上恒为 0；均不等于落盘量）',
+  'perforce.status.syncPhase': '阶段 {0}/{1}：{2}',
   // graph 合并历史（多选查看历史，extension.ts 的 perforce-graph.getChanges）
   'perforce.graph.multiClient': '所选路径不属于同一个 Perforce 工作区，无法合并查看它们的历史。',
   // graph sync（sync to change，extension.ts 的 perforce-graph.syncToChange）

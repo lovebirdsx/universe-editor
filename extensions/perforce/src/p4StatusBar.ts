@@ -118,6 +118,11 @@ export class P4StatusBarController {
    *  repaint can move the number, so no new client event is needed to make it
    *  decay. */
   private readonly _syncRate = new RateWindow()
+  /** The fallback window: the third (Windows) counter, whose bytes are directory
+   *  enumeration and metadata scans. A force repair's scan phase moves nothing
+   *  else, and without this window the bar reads `000KB/s` through minutes of a
+   *  plainly busy disk (see {@link _syncRateText}). */
+  private readonly _syncOtherRate = new RateWindow()
   /** Which sync run {@link _syncRate} belongs to; a new run resets it. */
   private _syncRateRun: number | undefined
   /** Which client {@link _syncRate} was measured on (see {@link refresh}). */
@@ -194,15 +199,18 @@ export class P4StatusBarController {
     }
   }
 
-  /** The p4 process I/O rate for the sync body — READ + WRITE — or undefined
-   *  when this run has no sampler (the body then falls back to the watcher count).
+  /** The p4 process I/O rate for the sync body, or undefined when this run has
+   *  no sampler (the body then falls back to the watcher count).
    *
-   *  Both sides, because they move in different phases: reads climb while p4
-   *  pulls from the server, writes while it lands the files in the workspace. A
-   *  read-only rate decays to `000KB/s` in that second phase — the bar then reads
-   *  as stalled exactly while the disk is being written, the false signal this
-   *  readout exists to remove. The token is a sum, so it stays alive while either
-   *  side moves; the tooltip still reports the split.
+   *  Two windows, in a fallback chain: read+write first, the other-counter
+   *  second. Read and write move in different phases (reads climb while p4
+   *  pulls from the server, writes while it lands the files in the workspace),
+   *  so their sum stays alive across the transfer — but neither moves during a
+   *  directory scan, which is where a force repair spends most of its minutes:
+   *  the scan's bytes are booked as "other" by the OS, and a run that showed
+   *  `000KB/s` through it is exactly the false "stalled" signal this readout
+   *  exists to remove. Both at zero is a real zero (the run genuinely has
+   *  nothing in flight), and the token keeps its width there.
    *
    *  Computed here rather than in the client because it is a function of `now`:
    *  pushing the current cumulative byte count on every render is what lets the
@@ -217,22 +225,27 @@ export class P4StatusBarController {
     if (this._syncRateRun !== progress.startedAt) {
       this._syncRateRun = progress.startedAt
       this._syncRate.reset()
+      this._syncOtherRate.reset()
     }
     const now = Date.now()
     // Both sides are published together (see `_setSyncProgress`), so the `?? 0`
     // only covers a hand-built DTO. The sum is monotone as long as either side
     // is, so the window's difference still measures a rate.
     this._syncRate.push(now, read + (progress.ioWriteBytes ?? 0))
+    this._syncOtherRate.push(now, progress.ioOtherBytes ?? 0)
+    const transfer = this._syncRate.rateAt(now) ?? 0
     // One sample has no span to difference over yet. That is a real zero — the
     // run just started with a sampler attached — not "no rate at all", so the
     // token keeps its width instead of blinking out of the body.
-    return formatIoRate(this._syncRate.rateAt(now) ?? 0)
+    const rate = transfer > 0 ? transfer : (this._syncOtherRate.rateAt(now) ?? 0)
+    return formatIoRate(rate)
   }
 
   private _dropSyncRate(): void {
     if (this._syncRateRun === undefined) return
     this._syncRateRun = undefined
     this._syncRate.reset()
+    this._syncOtherRate.reset()
   }
 
   private _render(): void {
@@ -293,11 +306,16 @@ export class P4StatusBarController {
         (disk !== undefined && disk > 0
           ? localize('perforce.status.syncDisk', 'disk +{0}', { 0: disk })
           : undefined)
-      const count =
-        middle !== undefined
-          ? `${syncProgress.done} · ${middle} · ${elapsed}`
-          : `${syncProgress.done} · ${elapsed}`
-      this._busyItem.text = `${busy} ${count} $(sync~spin)`
+      // The δ engine's stage word sits as its own segment between the count and
+      // the liveness signal: on a wide repair it is the only thing that changes
+      // for minutes at a time, and it is the engine's own vocabulary (`scan`,
+      // `analyze`…) — a translated or embellished stage name would name
+      // something the engine never said.
+      const segments = [`${syncProgress.done}`]
+      if (syncProgress.phase !== undefined) segments.push(syncProgress.phase)
+      if (middle !== undefined) segments.push(middle)
+      segments.push(elapsed)
+      this._busyItem.text = `${busy} ${segments.join(' · ')} $(sync~spin)`
       const lines = [
         localize('perforce.status.syncing', 'Syncing {0}', { 0: clientName }),
         // Which revision this run is pulling, right under the title line: the
@@ -312,14 +330,30 @@ export class P4StatusBarController {
           : []),
         localize('perforce.status.syncCounts', 'Synced {0} files', { 0: syncProgress.done }),
       ]
+      if (syncProgress.phase !== undefined) {
+        // Mirrors the scan readout's phase line. Only when the record carried
+        // its ladder position — a bare stage name is already in the body, and
+        // inventing an ordinal the engine did not send would be a fabricated
+        // number (the ladder's length varies per mode).
+        if (syncProgress.phaseStep !== undefined && syncProgress.phaseTotal !== undefined) {
+          lines.push(
+            localize('perforce.status.syncPhase', 'Phase {0}/{1}: {2}', {
+              0: syncProgress.phaseStep,
+              1: syncProgress.phaseTotal,
+              2: syncProgress.phase,
+            }),
+          )
+        }
+      }
       if (syncProgress.ioReadBytes !== undefined) {
         lines.push(
           localize(
             'perforce.status.syncIoTooltip',
-            'p4 process I/O: read {0}, wrote {1} (OS process counters — includes network receive and staged temporary files, so not a disk-write figure)',
+            'p4 process I/O: read {0}, wrote {1}, other {2} (OS process counters — read/wrote are p4’s own streams and workspace file I/O, other is the directory/metadata scanning the other two never see and stays 0 where the OS books that as reads; none of them is a disk-write figure)',
             {
               0: formatBytes(syncProgress.ioReadBytes),
               1: formatBytes(syncProgress.ioWriteBytes ?? 0),
+              2: formatBytes(syncProgress.ioOtherBytes ?? 0),
             },
           ),
         )

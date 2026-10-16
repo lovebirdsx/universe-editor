@@ -195,7 +195,12 @@ const PHASES = ['start', 'analyze', 'digest', 'report', 'done']
  *  apply segments the other modes do not have. The real tool swaps its phase table
  *  per mode too, so `step`/`total` stay truthful. */
 const SYNC_PHASES = ['start', 'preview', 'filter', 'apply', 'done']
-const phasesFor = (mode, forceRun = false) => (mode === 'sync' && !forceRun ? SYNC_PHASES : PHASES)
+/** 强制修复（`--sync --force`）那张表：多一段 `scan`（查询与工作区扫描都在这里，一次宽
+ *  修复的墙钟大半花在它上面），没有 `report`（那一段就是 `apply` 自己）。真工具同样在
+ *  `start` 之前换表，所以 `start` 读作 1/6 而不是 1/5。 */
+const SYNC_FORCE_PHASES = ['start', 'scan', 'analyze', 'digest', 'apply', 'done']
+const phasesFor = (mode, forceRun = false) =>
+  mode === 'sync' ? (forceRun ? SYNC_FORCE_PHASES : SYNC_PHASES) : PHASES
 function emitProgress(phase, message = null, phases = PHASES) {
   writeErr(
     `${JSON.stringify({
@@ -207,6 +212,19 @@ function emitProgress(phase, message = null, phases = PHASES) {
     })}\n`,
   )
 }
+
+/** Blocking sleep, the same shape fake-p4 uses: progress lines are written
+ *  synchronously, so a hold after one is visible to the consumer as "still in
+ *  this phase" — which is what a real wide repair looks like from outside. */
+function sleepSync(ms) {
+  if (!(ms > 0)) return
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+/** `UNIVERSE_P4DELTA_FAKE_SCAN_HOLD_MS`: 强制修复的 `scan` 段在这里被拉长。真机上这一段
+ *  （四路查询 + 工作区扫描）是一整轮里最长的静默窗口，状态栏的阶段读数只有在它够长时才
+ *  观测得到；不拉长的话 fake 会毫秒级冲过整张表。 */
+const SCAN_HOLD_MS = Number(process.env.UNIVERSE_P4DELTA_FAKE_SCAN_HOLD_MS ?? '0')
 
 function usageError(message) {
   writeErr(`error: ${message}\n\nUsage: p4delta [OPTIONS] [--] [ENTRY]...\n`)
@@ -1154,12 +1172,23 @@ function askAndTranslate(state, opts, mode, phases) {
     if (forceRun) {
       // 强制修复无 preview/filter/apply 流水线，真工具本地算集合、只把精确到修订的规格交给 p4：
       // 先 `-f` 问缺什么（否则 have 在线的漂移文件被跳过），滤掉排除项后按 `//depot/f#rev` 下发（钉住修订，`--to <CL>` 不跑到 head）。
+      // 阶段的顺序与真工具一致：scan（四路查询与工作区扫描）→ analyze（算计划）→ digest（只在有
+      // 文件需要校验时）→ apply（真正开始写的那一刻）。
+      emitProgress('scan', null, phases)
+      sleepSync(SCAN_HOLD_MS)
       plan = delegate(['-G', 'sync', '-n', '-f', ...versioned])
+      emitProgress('analyze', null, phases)
       const pinned = plan.records
         .filter((record) => !isExcluded(state, record, opts.resolved.excludes))
         .map((record) => `${record.depotFile}#${record.rev}`)
-      if (opts.applied && pinned.length > 0) delegated = delegate(['-G', 'sync', '-f', ...pinned])
-      else delegated = plan
+      if (pinned.length > 0) {
+        // digest 不是必经的一格：真工具只在 mtime/大小没有短路时才算哈希，所以这一步可能整段消失。
+        emitProgress('digest', `Checking digests for ${pinned.length} files.`, phases)
+      }
+      if (opts.applied && pinned.length > 0) {
+        emitProgress('apply', null, phases)
+        delegated = delegate(['-G', 'sync', '-f', ...pinned])
+      } else delegated = plan
       classOfAction = (record) => syncForceClass(record.action)
     } else {
       emitProgress('preview', null, phases)

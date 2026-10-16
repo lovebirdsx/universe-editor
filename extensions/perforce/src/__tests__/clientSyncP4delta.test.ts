@@ -256,12 +256,17 @@ function stubP4deltaRun(): void {
       // the pid the status bar samples. Only get runs carry it (scans pass no
       // hook), so it is safe to model here.
       if (isGet) options?.onSpawn?.(DELTA_PID)
-      if (r.hold) await r.hold
       const records = [...(r.records ?? [])]
       // The real service hands each record to the caller as its line arrives;
       // replaying them here is what lets a test observe the progress a get
-      // publishes mid-run.
+      // publishes mid-run. Output precedes the exit `hold` models, so this
+      // happens before the wait.
       for (const record of records) options?.onRecord?.(record)
+      // Progress records travel on stderr, so they are replayed on the other hook
+      // — and, like the real service, while the run is still in flight: a bar
+      // that only learned the stage at the end would name a phase already over.
+      for (const record of r.progress ?? []) options?.onProgress?.(record)
+      if (r.hold) await r.hold
       runSeq += 1
       return {
         runId: `p4d-mock-${runSeq}-1-1-aaaa`,
@@ -797,6 +802,64 @@ describe('PerforceClient.sync — δ engine', () => {
     // inherits this run's `startedAt` (elapsed counts from the wrong origin), and
     // every later busy operation renders THIS run's count under its own label.
     expect(client.status.syncProgress).toBeUndefined()
+  })
+
+  it('names the engine stage on the bar while the get is still running', async () => {
+    const client = await makeArmedClient()
+    let release: () => void = () => {}
+    const held = new Promise<void>((r) => (release = r))
+    syncReply = () => ({
+      records: [deltaFile('Content/a.cpp'), deltaSummary()],
+      progress: [
+        { kind: 'progress', phase: 'start', step: 1, total: 6 },
+        { kind: 'progress', phase: 'scan', step: 2, total: 6 },
+      ],
+      hold: held,
+    })
+
+    const pending = client.sync('#head')
+    await flush()
+
+    // Live, not retrospective: a repair's scan runs for minutes before its first
+    // file record (or any p4 IO worth showing), so a stage learned only when the
+    // run ends would name a phase that is already over.
+    expect(client.status.syncProgress?.phase).toBe('scan')
+    expect(client.status.syncProgress?.phaseStep).toBe(2)
+    expect(client.status.syncProgress?.phaseTotal).toBe(6)
+
+    release()
+    await pending
+    // …and it leaves with the run, like every other field of the readout: a
+    // stage that outlived its get would sit under the next operation's label.
+    expect(client.status.syncProgress).toBeUndefined()
+  })
+
+  it('keeps the stage word when a progress record carries no usable ordinal', async () => {
+    const client = await makeArmedClient()
+    let release: () => void = () => {}
+    const held = new Promise<void>((r) => (release = r))
+    syncReply = () => ({
+      records: [deltaFile('Content/a.cpp'), deltaSummary()],
+      progress: [
+        { kind: 'progress', phase: 'apply', step: 2, total: 6 },
+        // Step without total: the pair is the contract, so half of it is no
+        // ordinal — but the stage word is still worth showing.
+        { kind: 'progress', phase: 'digest', step: 4 },
+        // No phase at all: nothing to name, so the previous stage stands.
+        { kind: 'progress', message: 'Applying the transfer with p4.' },
+      ],
+      hold: held,
+    })
+
+    const pending = client.sync('#head')
+    await flush()
+
+    expect(client.status.syncProgress?.phase).toBe('digest')
+    expect(client.status.syncProgress?.phaseStep).toBeUndefined()
+    expect(client.status.syncProgress?.phaseTotal).toBeUndefined()
+
+    release()
+    await pending
   })
 
   it('subtracts the applied rows from the drift set, keeping everything else', async () => {
