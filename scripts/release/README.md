@@ -334,6 +334,7 @@ pnpm release:upload --host <IP> --user <user> --dir <远程目录> [选项]
 | `--remote-os` | `UE_RELEASE_OS`   | 自动     | 远端系统 `linux`/`windows`，默认按 `--dir` 形态自动判断 |
 | `--dry-run`   | —                 | —        | 只打印将执行的命令，不实际上传                          |
 | `--no-mkdir`  | —                 | —        | 跳过远程建目录（目录已存在且账号无创建权限时用）        |
+| `--all-notes` | —                 | —        | 强制重传全部版本页（见下文「增量补缺」的修复入口）      |
 
 脚本依赖系统自带的 `ssh` / `scp`（Windows 10+、Ubuntu 均内置 OpenSSH），无第三方 npm 依赖。
 
@@ -344,14 +345,33 @@ pnpm release:upload --host <IP> --user <user> --dir <远程目录> [选项]
 **上传顺序与原子性**（`buildUploadPlan` / `assertPlanConsistency` 守护，单测在 `__tests__/upload.test.mjs`）：
 
 1. `.exe` / `.blockmap`（安装包，直传）
-2. `release-notes/` 发布包：`release-notes.json`、`notes/index.json`、`notes/index.html` 先传同目录临时名再原子替换
-   （Linux `mv -f`；Windows `cmd /c move /Y`，失败退化为 `copy /Y` + `del` 并告警），`notes/v<version>.html` 直传；
-   缺失的 `notes/` 子目录会先建
-3. **最后** `latest.yml`（同样原子替换）——它是 autoUpdater 读的清单，必须等安装包与新下载页内容全部落地后才覆盖
+2. `release-notes.json`（应用内更新说明，原子替换）
+3. `release-notes/` 发布包的**版本页** `notes/v<version>.html`（直传，缺失的 `notes/` 子目录会先建）
+4. `notes/index.json`、`notes/index.html` 先传同目录临时名再原子替换
+   （Linux `mv -f`；Windows `cmd /c move /Y`，失败退化为 `copy /Y` + `del` 并告警）
+5. **最后** `latest.yml`（同样原子替换）——它是 autoUpdater 读的清单，必须等安装包与新下载页内容全部落地后才覆盖
 
-上传前会逐产物核对 `release/release-notes/manifest.json` 里的 sha256 与字节数（对不上直接中止，一个字节都不发）；
-任一步失败即退出，**绝不会走到 `latest.yml`**，所以半截上传不会变成「客户端能看到但下载不到」的版本。
-`manifest.version` 与 `latest.yml` 的版本不一致会被拒绝（防止混用两次构建的产物）。
+版本页必须排在 `notes/index.*` 之前：索引页与下载页都链接每一张版本页，先换索引而进程中途失败，
+站点就会长期指向不存在的页面。上传前会逐产物核对 `release/release-notes/manifest.json` 里的 sha256
+与字节数（对不上直接中止，一个字节都不发）；任一步失败即退出，**绝不会走到 `latest.yml`**，所以半截
+上传不会变成「客户端能看到但下载不到」的版本。`manifest.version` 与 `latest.yml` 的版本不一致会被
+拒绝（防止混用两次构建的产物）。
+
+**增量补缺**（`resolveNotesUpload`）：服务器上已有的历史版本页不会每次发版都重传——上传前用一次
+`ls`/`dir` 列远端 `notes/`，只补远端缺的那几张。**必传页**永远传，判据来自编译器而不是路径约定：
+`manifest.json` 给每张版本页写 `requiredUpload`，本版内容落在的那张（常规发版 = 自己的页，补丁发版
+= 它 `notesVersion` 的主稿页，修复段并进那里）与**被 reviewed 补丁并稿的页**都算——补丁段只在那张页
+上呈现，漏传就成了「索引里有安装版本、页面里没有修复」。首装、换服务器、`--dir` 指向空目录时会自动
+补齐全部历史页，所以「全部版本介绍」索引页不会出现死链；列目录失败或输出不可解析时**退回全量上传**
+（告警一条，绝不少传）。
+
+`--all-notes` 是修复入口，用于：改了 `page.mjs` 的模板/CSS 想让历史页一起刷新、**事后修订某个已发布
+版本的正文**（历史页只在它自己那次发版/并稿时重传，增量不会察觉）、远端某张页面被删或上传中断留下
+截断文件、迁移发布目录后想强制对齐：
+
+```bash
+pnpm release:upload -- --all-notes          # 连接信息同 .env
+```
 
 环境变量方式（适合写进 CI 或本地 shell profile）：
 
@@ -381,6 +401,8 @@ pnpm release:upload --host 192.0.2.10 --user deploy --dir /srv/universe-editor -
 ## 五、常见问题
 
 - **产物文件名带空格**（`Universe Editor-0.1.1-win-x64.exe`）：脚本已正确处理（scp 目标为目录、参数数组传递，无需手动转义）。若想更省心，可把 `electron-builder.yml` 的 `artifactName` 改为无空格，例如 `universe-editor-${version}-${os}-${arch}.${ext}`。
+- **下载站某版介绍页 404 / 内容不对 / 只打开一半**：`pnpm release:upload -- --all-notes` 重传全部版本页。增量补缺只补远端缺的页，被手工删掉或上传中断留下的截断文件不会自愈，得用这个开关修。
+- **改了版本页模板（`page.mjs` 的 HTML/CSS）、或事后修订了某个历史版本的正文**：这类改动落在「不是本版必传」的页上，增量补缺不会察觉（那几张页在远端已有同名文件），发布后补一次 `--all-notes` 刷新全站。
 - **客户端检查不到更新**：确认 `electron-builder.yml` 的 `publish.url` 与 nginx `location` 路径一致；浏览器能否直接打开 `…/latest.yml`；客户端版本是否确实低于 `latest.yml` 里的 `version`。
 - **本地联调**（不必真有内网服务器）：`pnpm server:serve` 起本地服务器（`apps/editor/dev-app-update.yml` 已指向 `http://localhost:8788/`），跑未打包构建即可走完检查→下载→重启全链路。详见 [`../server/README.md`](../server/README.md) 第四节。
 - **GitHub Actions 推不进内网**：CI 只产出 `release/` artifact；上传这一步在能访问内网的机器上跑本脚本（或配置内网自托管 runner）。

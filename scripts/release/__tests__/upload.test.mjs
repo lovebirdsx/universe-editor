@@ -14,17 +14,24 @@ import { join } from 'node:path'
 import { mkTempDir } from '../../lib/temp-root.mjs'
 import {
   assertPlanConsistency,
+  buildRemoteListCommand,
   buildRemoteMkdirCommand,
   buildRemoteProbeCommand,
   buildRemoteReplaceCommand,
   buildRemoteReplaceFallback,
   buildUploadPlan,
   classifyReleaseDir,
+  createCaptureRunner,
   createExecutor,
   createRunner,
+  isNotePagePath,
+  listRemoteNoteNames,
   loadUploadBundle,
+  orderNotesFiles,
   parseArgs,
+  parseRemoteNoteNames,
   remoteDirs,
+  resolveNotesUpload,
   resolveUploadConfig,
   runUploadPlan,
   tempRemotePath,
@@ -108,6 +115,7 @@ function bundleFixture(overrides = {}) {
       kind: 'page',
       upload: true,
       mode: 'direct',
+      requiredUpload: true,
       bytes: Buffer.byteLength(page),
       sha256: sha256(page),
     },
@@ -145,6 +153,11 @@ test('loadUploadBundle verifies every uploadable artifact against the manifest',
     )
     assert.equal(files[0].mode, 'atomic')
     assert.equal(files[2].mode, 'direct')
+    // 没有 requiredUpload 标记的产物（共享文件、旧发布包）一律 false → 增量判断退回全量。
+    assert.deepEqual(
+      files.map((file) => file.requiredUpload),
+      [false, false, true],
+    )
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -178,13 +191,14 @@ test('loadUploadBundle reports a missing bundle instead of uploading half of it'
   }
 })
 
-test('buildUploadPlan orders payload → notes → latest.yml, notes on their site paths', () => {
+test('buildUploadPlan orders payload → notes（版本页先于索引）→ latest.yml', () => {
   const bundle = {
     manifest: { version: '0.15.0' },
     files: [
-      { path: 'release-notes.json', src: '/b/release-notes.json', mode: 'atomic' },
       { path: 'notes/index.html', src: '/b/notes/index.html', mode: 'atomic' },
+      { path: 'release-notes.json', src: '/b/release-notes.json', mode: 'atomic' },
       { path: 'notes/v0.15.0.html', src: '/b/notes/v0.15.0.html', mode: 'direct' },
+      { path: 'notes/index.json', src: '/b/notes/index.json', mode: 'atomic' },
     ],
   }
   const plan = buildUploadPlan({
@@ -198,12 +212,241 @@ test('buildUploadPlan orders payload → notes → latest.yml, notes on their si
       ['payload', 'Universe Editor Setup 0.15.0.exe', 'direct'],
       ['payload', 'Universe Editor Setup 0.15.0.exe.blockmap', 'direct'],
       ['notes', 'release-notes.json', 'atomic'],
-      ['notes', 'notes/index.html', 'atomic'],
       ['notes', 'notes/v0.15.0.html', 'direct'],
+      ['notes', 'notes/index.html', 'atomic'],
+      ['notes', 'notes/index.json', 'atomic'],
       ['manifest', 'latest.yml', 'atomic'],
     ],
   )
   assert.deepEqual(remoteDirs(plan), ['notes'])
+})
+
+test('orderNotesFiles keeps the rest first, then pages, then the index', () => {
+  const files = [
+    { path: 'notes/index.json' },
+    { path: 'release-notes.json' },
+    { path: 'notes/v0.13.0.html' },
+    { path: 'notes/index.html' },
+    { path: 'notes/v0.15.0.html' },
+  ]
+  assert.deepEqual(
+    orderNotesFiles(files).map((file) => file.path),
+    [
+      'release-notes.json',
+      'notes/v0.13.0.html',
+      'notes/v0.15.0.html',
+      'notes/index.json',
+      'notes/index.html',
+    ],
+  )
+})
+
+test('isNotePagePath 只认版本页', () => {
+  assert.equal(isNotePagePath('notes/v0.15.0.html'), true)
+  assert.equal(isNotePagePath('notes/index.html'), false)
+  assert.equal(isNotePagePath('notes/index.json'), false)
+  assert.equal(isNotePagePath('release-notes.json'), false)
+  assert.equal(isNotePagePath('notes/v0.15.0.html/x.html'), false)
+  assert.equal(isNotePagePath('notes/sub/v0.15.0.html'), false)
+})
+
+test('resolveNotesUpload skips history pages the remote already has', () => {
+  const files = [
+    { path: 'release-notes.json', requiredUpload: false },
+    { path: 'notes/index.json', requiredUpload: false },
+    { path: 'notes/v0.15.0.html', requiredUpload: true },
+    { path: 'notes/v0.14.0.html', requiredUpload: false },
+    { path: 'notes/v0.13.0.html', requiredUpload: false },
+  ]
+  const kept = (result) => result.files.map((file) => file.path)
+
+  // ① 远端只有必传页：老页补齐
+  const partial = resolveNotesUpload({
+    files,
+    listNoteNames: () => new Set(['v0.15.0.html']),
+  })
+  assert.equal(partial.source, 'incremental')
+  assert.deepEqual(kept(partial), [
+    'release-notes.json',
+    'notes/index.json',
+    'notes/v0.15.0.html',
+    'notes/v0.14.0.html',
+    'notes/v0.13.0.html',
+  ])
+  assert.deepEqual(partial.skipped, [])
+
+  // ② 远端有全部老页：只留必传页与共享文件（这就是每次发版的常态）
+  const full = resolveNotesUpload({
+    files,
+    listNoteNames: () =>
+      new Set(['v0.15.0.html', 'v0.14.0.html', 'v0.13.0.html', 'index.html', 'index.json']),
+  })
+  assert.equal(full.source, 'incremental')
+  assert.deepEqual(kept(full), ['release-notes.json', 'notes/index.json', 'notes/v0.15.0.html'])
+  assert.deepEqual(full.skipped, ['notes/v0.14.0.html', 'notes/v0.13.0.html'])
+  assert.deepEqual(full.requiredPaths, ['notes/v0.15.0.html'])
+
+  // ③ 远端连必传页都有（--upload-only 重跑）：仍必须传，否则补丁并稿 / 模板刷新上不去
+  const targetPresent = resolveNotesUpload({
+    files,
+    listNoteNames: () => new Set(files.map((file) => file.path.replace('notes/', ''))),
+  })
+  assert.ok(kept(targetPresent).includes('notes/v0.15.0.html'))
+  assert.deepEqual(targetPresent.skipped, ['notes/v0.14.0.html', 'notes/v0.13.0.html'])
+
+  // ⑤ 空目录（首装）：一张都不能省，且不告警
+  const warnings = []
+  const fresh = resolveNotesUpload({
+    files,
+    listNoteNames: () => new Set(),
+    warn: (message) => warnings.push(message),
+  })
+  assert.equal(fresh.source, 'incremental')
+  assert.deepEqual(
+    kept(fresh),
+    files.map((file) => file.path),
+  )
+  assert.deepEqual(warnings, [])
+})
+
+test('resolveNotesUpload always ships every page the manifest marked required', () => {
+  // 补丁并稿会让「不是当版」的页也变字节：两页都标了必传就必须都传。
+  const files = [
+    { path: 'notes/index.json', requiredUpload: false },
+    { path: 'notes/v0.16.0.html', requiredUpload: true },
+    { path: 'notes/v0.15.1.html', requiredUpload: true },
+    { path: 'notes/v0.15.0.html', requiredUpload: false },
+  ]
+  const result = resolveNotesUpload({
+    files,
+    listNoteNames: () => new Set(['v0.16.0.html', 'v0.15.1.html', 'v0.15.0.html']),
+  })
+  assert.deepEqual(result.requiredPaths, ['notes/v0.16.0.html', 'notes/v0.15.1.html'])
+  assert.deepEqual(
+    result.files.map((file) => file.path),
+    ['notes/index.json', 'notes/v0.16.0.html', 'notes/v0.15.1.html'],
+  )
+  assert.deepEqual(result.skipped, ['notes/v0.15.0.html'])
+})
+
+test('resolveNotesUpload falls back to a full upload whenever the remote is unknown', () => {
+  const files = [
+    { path: 'release-notes.json', requiredUpload: false },
+    { path: 'notes/index.json', requiredUpload: false },
+    { path: 'notes/v0.15.0.html', requiredUpload: true },
+    { path: 'notes/v0.14.0.html', requiredUpload: false },
+  ]
+  const allPaths = files.map((file) => file.path)
+  const warnings = []
+
+  // ④ 列目录失败 / dry-run → 全传
+  const unknown = resolveNotesUpload({
+    files,
+    listNoteNames: () => null,
+    warn: (message) => warnings.push(message),
+  })
+  assert.equal(unknown.source, 'unknown')
+  assert.deepEqual(
+    unknown.files.map((file) => file.path),
+    allPaths,
+  )
+  assert.deepEqual(unknown.skipped, [])
+  assert.deepEqual(warnings, [])
+
+  // ⑥ --all-notes：全传，且一条 ssh 都不发
+  let listed = 0
+  const forced = resolveNotesUpload({
+    files,
+    allNotes: true,
+    listNoteNames: () => {
+      listed++
+      return new Set()
+    },
+  })
+  assert.equal(forced.source, 'all')
+  assert.deepEqual(
+    forced.files.map((file) => file.path),
+    allPaths,
+  )
+  assert.equal(listed, 0)
+
+  // ⑦ 旧发布包没有 requiredUpload 标记：无从判断 → 告警 + 全传
+  const legacy = resolveNotesUpload({
+    files: files.map(({ path }) => ({ path })),
+    listNoteNames: () => new Set(['v0.14.0.html']),
+    warn: (message) => warnings.push(message),
+  })
+  assert.equal(legacy.source, 'unknown')
+  assert.deepEqual(
+    legacy.files.map((file) => file.path),
+    allPaths,
+  )
+  assert.equal(warnings.length, 1)
+  assert.match(warnings[0], /没有标出必传页/)
+})
+
+test('parseRemoteNoteNames trusts a plain file list and rejects anything else', () => {
+  assert.deepEqual(
+    [...parseRemoteNoteNames('v0.15.0.html\nindex.json\n')],
+    ['v0.15.0.html', 'index.json'],
+  )
+  assert.deepEqual(
+    [...parseRemoteNoteNames('v0.15.0.html\r\nindex.html\r\n')],
+    ['v0.15.0.html', 'index.html'],
+  )
+  assert.deepEqual([...parseRemoteNoteNames('')], [], '目录存在但为空是合法结果')
+  assert.deepEqual([...parseRemoteNoteNames('sub/\n')], [], 'ls -1p 的目录条目被忽略')
+  assert.deepEqual(
+    [...parseRemoteNoteNames('.ue-tmp-9-index.json\n.DS_Store\nv0.15.0.html\n')],
+    ['v0.15.0.html'],
+    '点文件（含本脚本自己的临时文件残留）被忽略，不会拖累成每次全量',
+  )
+  assert.equal(parseRemoteNoteNames('File Not Found\n'), null)
+  assert.equal(parseRemoteNoteNames(' v0.15.0.html\n'), null)
+  assert.equal(parseRemoteNoteNames('v0.15.0.html \n'), null)
+  assert.equal(parseRemoteNoteNames(`${'a'.repeat(129)}.html\n`), null)
+  assert.equal(parseRemoteNoteNames('notes/v0.15.0.html\n'), null)
+  assert.equal(parseRemoteNoteNames(undefined), null)
+})
+
+test('listRemoteNoteNames turns a failed or unparsable listing into "remote unknown"', () => {
+  const warnings = []
+  const warn = (message) => warnings.push(message)
+
+  assert.equal(
+    listRemoteNoteNames({
+      executor: {
+        listDir: () => {
+          throw new Error('命令返回非零退出码 (2)')
+        },
+      },
+      warn,
+    }),
+    null,
+  )
+  assert.equal(warnings.length, 1)
+  assert.match(warnings[0], /列目录失败/)
+
+  // dry-run：capture 返回 null，不该当成故障告警
+  assert.equal(listRemoteNoteNames({ executor: { listDir: () => null }, warn }), null)
+  assert.equal(warnings.length, 1)
+
+  assert.equal(listRemoteNoteNames({ executor: { listDir: () => 'File Not Found\n' }, warn }), null)
+  assert.equal(warnings.length, 2)
+  assert.match(warnings[1], /无法解析/)
+
+  const targets = []
+  const names = listRemoteNoteNames({
+    executor: {
+      listDir: (target) => {
+        targets.push(target)
+        return 'v0.15.0.html\n'
+      },
+    },
+    warn,
+  })
+  assert.deepEqual([...names], ['v0.15.0.html'])
+  assert.deepEqual(targets, ['notes'])
 })
 
 test('assertPlanConsistency keeps latest.yml last and pins the version', () => {
@@ -252,6 +495,42 @@ test('assertPlanConsistency keeps latest.yml last and pins the version', () => {
     () => assertPlanConsistency({ plan: [], latestYml: {}, payloads: [] }),
     /上传计划为空/,
   )
+
+  // 当版页面被增量过滤丢掉 = 内容静默不更新；版本页排到索引之后 = 先换索引留下一屏死链。
+  const withPages = [
+    { phase: 'notes', label: 'notes/v0.15.0.html', remotePath: 'notes/v0.15.0.html' },
+    { phase: 'notes', label: 'notes/index.json', remotePath: 'notes/index.json' },
+    { phase: 'manifest', label: 'latest.yml', remotePath: 'latest.yml' },
+  ]
+  assert.deepEqual(
+    assertPlanConsistency({
+      plan: withPages,
+      latestYml: { version: '0.15.0' },
+      payloads: [],
+      requiredPaths: ['notes/v0.15.0.html'],
+    }),
+    { version: '0.15.0' },
+  )
+  assert.throws(
+    () =>
+      assertPlanConsistency({
+        plan: withPages.slice(1),
+        latestYml: { version: '0.15.0' },
+        payloads: [],
+        requiredPaths: ['notes/v0.15.0.html'],
+      }),
+    /必传版本页 notes\/v0\.15\.0\.html 不在上传计划里/,
+  )
+  assert.throws(
+    () =>
+      assertPlanConsistency({
+        plan: [withPages[1], withPages[0], withPages[2]],
+        latestYml: { version: '0.15.0' },
+        payloads: [],
+        requiredPaths: ['notes/v0.15.0.html'],
+      }),
+    /版本页必须排在 notes\/index\.\* 之前/,
+  )
 })
 
 test('remote commands are POSIX on Linux and cmd on Windows', () => {
@@ -268,6 +547,14 @@ test('remote commands are POSIX on Linux and cmd on Windows', () => {
     "touch '/srv/site/.ue-write-probe' && rm -f '/srv/site/.ue-write-probe'",
   )
   assert.match(buildRemoteProbeCommand({ dir: 'D:\\site', isWindowsTarget: true }), /type nul > /)
+  assert.equal(
+    buildRemoteListCommand({ dir: '/srv/site/notes', isWindowsTarget: false }),
+    "ls -1p '/srv/site/notes'",
+  )
+  assert.equal(
+    buildRemoteListCommand({ dir: 'D:\\site\\notes', isWindowsTarget: true }),
+    'cmd /c dir /b /a-d "D:\\site\\notes"',
+  )
   assert.equal(
     buildRemoteReplaceCommand({
       tempPath: '/srv/site/.ue-tmp-1-latest.yml',
@@ -508,6 +795,75 @@ test('createRunner never spawns in dry-run', () => {
   assert.deepEqual(spawned, [])
   assert.equal(lines.length, 1)
   assert.match(lines[0], /\[dry-run\] ssh/)
+})
+
+test('createCaptureRunner returns stdout, null in dry-run, and throws on failure', () => {
+  const spawned = []
+  const lines = []
+  const capture = createCaptureRunner({
+    spawn: (cmd, args, opts) => {
+      spawned.push({ cmd, args, opts })
+      return { status: 0, signal: null, stdout: 'v0.15.0.html\n' }
+    },
+    log: (line) => lines.push(line),
+  })
+  assert.equal(
+    capture('ssh', ['-n', 'deploy@192.0.2.10', "ls -1p '/srv/x/notes'"], { timeoutMs: 15000 }),
+    'v0.15.0.html\n',
+  )
+  assert.equal(spawned[0].opts.encoding, 'utf8')
+  assert.equal(spawned[0].opts.timeout, 15000)
+  assert.equal(spawned[0].args.at(-1), "ls -1p '/srv/x/notes'")
+
+  const dry = createCaptureRunner({
+    dryRun: true,
+    spawn: () => assert.fail('dry-run 不该 spawn'),
+    log: (line) => lines.push(line),
+  })
+  assert.equal(dry('ssh', ['-n', 'x', 'ls']), null)
+  assert.match(lines[0], /\[dry-run\] ssh/)
+
+  const nonzero = createCaptureRunner({
+    spawn: () => ({ status: 2, signal: null, stdout: '' }),
+    log: () => {},
+  })
+  assert.throws(() => nonzero('ssh', ['x', 'ls']), /非零退出码 \(2\)/)
+  const killed = createCaptureRunner({
+    spawn: () => ({ status: null, signal: 'SIGTERM', stdout: '' }),
+    log: () => {},
+  })
+  assert.throws(() => killed('ssh', ['x', 'ls']), /被信号终止/)
+  const broken = createCaptureRunner({
+    spawn: () => ({ error: new Error('spawn ssh ENOENT'), status: null, signal: null }),
+    log: () => {},
+  })
+  assert.throws(() => broken('ssh', ['x', 'ls']), /spawn ssh ENOENT/)
+})
+
+test('an executor lists a remote dir under --dir on both platforms', () => {
+  const list = (config) => {
+    const commands = []
+    const executor = createExecutor({
+      config,
+      sshBase: [],
+      scpBase: [],
+      remote: 'deploy@192.0.2.10',
+      run: () => {},
+      capture: (cmd, args, opts) => {
+        commands.push({ command: args.at(-1), timeoutMs: opts.timeoutMs })
+        return ''
+      },
+      warn: () => {},
+    })
+    executor.listDir('notes')
+    return commands
+  }
+  assert.deepEqual(list({ dir: '/srv/site' }), [
+    { command: "ls -1p '/srv/site/notes'", timeoutMs: 15000 },
+  ])
+  assert.deepEqual(list({ dir: 'D:\\site', remoteOs: 'windows' }), [
+    { command: 'cmd /c dir /b /a-d "D:\\site\\notes"', timeoutMs: 15000 },
+  ])
 })
 
 test('createRunner throws on failure, warns on warnOnly failures', () => {

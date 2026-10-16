@@ -22,6 +22,7 @@ import {
   legacyOutcome,
   loadNotes,
   materializeBundle,
+  requiredUploadVersions,
   sha256,
   verifySnapshot,
   writeSnapshot,
@@ -567,6 +568,7 @@ test('compileAll produces a manifest with per-artifact hashes and source digests
   assert.equal(runtime.sha256, sha256(compiled.runtimeJson))
   const page = manifest.artifacts.find((artifact) => artifact.path === 'notes/v0.15.0.html')
   assert.equal(page.mode, 'direct')
+  assert.equal(page.requiredUpload, true)
   const github = manifest.artifacts.find((artifact) => artifact.kind === 'github')
   assert.equal(github.upload, false)
   assert.equal(github.path, 'github-release-0.15.0.md')
@@ -576,6 +578,67 @@ test('compileAll produces a manifest with per-artifact hashes and source digests
   const pageHtml = compiled.files.get('notes/v0.15.0.html')
   assert.ok(!pageHtml.includes('sourceFrom'))
   assert.ok(pageHtml.includes('一句话摘要。'))
+})
+
+test('every page this compile rewrites is marked requiredUpload', (t) => {
+  const { notesDir, root } = makeTree(t)
+  writeNote(notesDir, '0.14.0', reviewedNote({ version: '0.14.0' }, '## 本次重点\n\n- 旧版\n'))
+  writeNote(notesDir, '0.15.0', reviewedNote({}, '## 本次重点\n\n- 新版\n'))
+
+  const main = compileAll({ maxVersion: '0.15.0', notesDir, repoRoot: root }).manifest
+  const marked = (manifest) =>
+    manifest.artifacts.filter((a) => a.kind === 'page' && a.requiredUpload).map((a) => a.path)
+  assert.deepEqual(marked(main), ['notes/v0.15.0.html'])
+  assert.equal(main.artifacts.filter((a) => a.kind === 'page').length, 2)
+
+  // 补丁发版不生成自己的页面：修复段并进主稿页，必传页必须是主稿那张——按 manifest.version
+  // 拼路径会拼出一张不存在的页，让补丁内容被「远端已有」跳过（静默丢内容）。
+  writePatch(notesDir, '0.15.2', patchText({ version: '0.15.2', notesVersion: '0.15.0' }))
+  const patched = compileAll({ maxVersion: '0.15.2', notesDir, repoRoot: root }).manifest
+  assert.equal(patched.version, '0.15.2')
+  assert.deepEqual(marked(patched), ['notes/v0.15.0.html'])
+  assert.ok(!patched.artifacts.some((a) => a.path === 'notes/v0.15.2.html'))
+
+  // 上一步的补丁段仍在 v0.15.0 页上，所以它照旧是必传页；draft 补丁则不参与标记。
+  writePatch(
+    notesDir,
+    '0.15.3',
+    patchText({ version: '0.15.3', notesVersion: '0.15.0', status: 'draft' }),
+  )
+  const draft = compileAll({ maxVersion: '0.15.3', notesDir, repoRoot: root }).manifest
+  assert.deepEqual(marked(draft), ['notes/v0.15.0.html'])
+  assert.equal(draft.artifacts.filter((a) => a.kind === 'page' && !a.requiredUpload).length, 1)
+
+  // 目标版本没有正式稿（例如开发期版本打包）：推不出归属，但补丁并稿页仍必传。
+  const noTarget = compileAll({ maxVersion: '0.16.0', notesDir, repoRoot: root }).manifest
+  assert.deepEqual(marked(noTarget), ['notes/v0.15.0.html'])
+  assert.equal(noTarget.artifacts.filter((a) => a.kind === 'page' && !a.requiredUpload).length, 1)
+})
+
+test('a patch merged into an older page marks that page, not the release target', (t) => {
+  const { notesDir, root } = makeTree(t)
+  writeNote(notesDir, '0.15.0', reviewedNote({ version: '0.15.0' }, '## 本次重点\n\n- 主稿\n'))
+  writeNote(notesDir, '0.16.0', reviewedNote({ version: '0.16.0' }, '## 本次重点\n\n- 新版\n'))
+  // 补丁没按自己的版本发版，改在 0.16.0 那次编译里并进 0.15.0 的页：那张页的字节变了，
+  // 却不是本版目标页——只标目标页会让修复永远上不了站（索引里有安装版本、页面里没有修复）。
+  writePatch(notesDir, '0.15.1', patchText({ version: '0.15.1', notesVersion: '0.15.0' }))
+
+  const manifest = compileAll({ maxVersion: '0.16.0', notesDir, repoRoot: root }).manifest
+  assert.deepEqual(
+    manifest.artifacts
+      .filter((artifact) => artifact.kind === 'page' && artifact.requiredUpload)
+      .map((artifact) => artifact.path),
+    ['notes/v0.16.0.html', 'notes/v0.15.0.html'],
+  )
+})
+
+test('requiredUploadVersions maps a version to its page, patches to their main note', () => {
+  const notes = [{ version: '0.15.0' }]
+  const patches = [{ version: '0.15.2', notesVersion: '0.15.0' }]
+  assert.deepEqual([...requiredUploadVersions({ notes, patches, bound: '0.15.0' })], ['0.15.0'])
+  assert.deepEqual([...requiredUploadVersions({ notes, patches, bound: '0.15.2' })], ['0.15.0'])
+  assert.deepEqual([...requiredUploadVersions({ notes, patches, bound: '0.16.0' })], ['0.15.0'])
+  assert.deepEqual([...requiredUploadVersions({ notes: [], patches: [], bound: '0.16.0' })], [])
 })
 
 test('an archive compiles like any source and the manifest records it as one file', (t) => {

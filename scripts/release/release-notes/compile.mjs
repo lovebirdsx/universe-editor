@@ -423,6 +423,23 @@ function buildManifest({ notes, patches = [], artifacts, version, notesDir = NOT
   }
 }
 
+/**
+ * 本次编译后必须重传的版本页（upload.mjs 据此避开增量跳过）：
+ *  - 本版发布内容落在的那张——常规稿是自己的页；补丁稿没有独立页（修复段被并进主稿），
+ *    落在它 notesVersion 指向的主稿页。只按 manifest.version 拼路径会在补丁发版时一张页都不传；
+ *  - 任何被 reviewed 补丁并进正文的页——补丁只在这张页上呈现，漏传就成了「索引里有补丁版本、
+ *    页面里没有修复」。补丁没按自己的版本发版（在更晚的主稿发版里才被并进去）时就是这种情形。
+ */
+export function requiredUploadVersions({ notes, patches = [], bound }) {
+  const versions = new Set()
+  const current =
+    notes.find((note) => note.version === bound)?.version ??
+    patches.find((patch) => patch.version === bound)?.notesVersion
+  if (current !== undefined) versions.add(current)
+  for (const patch of patches) versions.add(patch.notesVersion)
+  return versions
+}
+
 function artifactEntry(path, kind, upload, mode, content) {
   return {
     path,
@@ -464,9 +481,19 @@ export function compileAll({ maxVersion, notesDir = NOTES_SOURCE_DIR, repoRoot =
     artifactEntry('notes/index.json', 'index', true, 'atomic', siteFiles.get('notes/index.json')),
     artifactEntry('notes/index.html', 'index', true, 'atomic', siteFiles.get('notes/index.html')),
   ]
+  // 用 releasable 集合推导：draft 补丁不并进页面，也就不该把某一页标成本版目标
+  // （归属推不出来时该页不标；若最终一张必传页都没有，upload.mjs 会退回全量，安全）。
+  const requiredVersions = requiredUploadVersions({
+    notes: selected,
+    patches: releasablePatches,
+    bound,
+  })
   for (const note of selected) {
     const path = `notes/v${note.version}.html`
-    artifacts.push(artifactEntry(path, 'page', true, 'direct', siteFiles.get(path)))
+    artifacts.push({
+      ...artifactEntry(path, 'page', true, 'direct', siteFiles.get(path)),
+      requiredUpload: requiredVersions.has(note.version),
+    })
   }
   if (githubBody !== undefined) {
     artifacts.push(

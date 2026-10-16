@@ -10,14 +10,20 @@
  *
  *  底层用系统自带的 ssh / scp（Windows 10+ 与 Ubuntu 均内置 OpenSSH），无第三方依赖。
  *
- *  关键顺序（assertPlanConsistency 守护）：安装包 → release-notes 发布包 → 最后 latest.yml。
- *  latest.yml 是 autoUpdater 读的清单，必须等安装包与新下载页内容全部落地后再覆盖，
- *  否则客户端会拉到半包 / 指向 404 的介绍页。共享文件（release-notes.json、notes/index.*、
- *  latest.yml）先传到同目录临时名再原子替换，避免读方看到半截文件。
+ *  关键顺序（assertPlanConsistency 守护）：安装包 → release-notes 发布包（版本页 → 索引）→
+ *  最后 latest.yml。latest.yml 是 autoUpdater 读的清单，必须等安装包与新下载页内容全部落地后
+ *  再覆盖，否则客户端会拉到半包 / 指向 404 的介绍页。共享文件（release-notes.json、
+ *  notes/index.*、latest.yml）先传到同目录临时名再原子替换，避免读方看到半截文件；版本页必须
+ *  排在 notes/index.* 之前——索引页链接每一张版本页，先换索引就等于先留下一屏死链。
  *
- *  纯函数部分（parseArgs/resolveUploadConfig/classifyReleaseDir/loadUploadBundle/
- *  buildUploadPlan/assertPlanConsistency/*Command/createExecutor/runUploadPlan）可单测；
- *  执行器注入，dry-run 下不触 ssh/scp。
+ *  增量补缺（resolveNotesUpload）：上传前用一次 ssh 列远端 notes/，只有 manifest 标了 requiredUpload
+ *  的必传页（本版内容落在的页 + 被补丁并稿的页）与共享文件必传，其余版本页在远端已有同名文件时跳过
+ *  （首装 / 换 --dir 自动补齐历史页）；--all-notes 强制全量。列目录失败 / 输出不可解析 / 发布包没有
+ *  必传标记一律退回「全传」——探测失败绝不导致少传，少传的后果是索引页死链。
+ *
+ *  纯函数部分（parseArgs/resolveUploadConfig/classifyReleaseDir/loadUploadBundle/buildUploadPlan/
+ *  assertPlanConsistency/resolveNotesUpload/parseRemoteNoteNames/*Command/createExecutor/
+ *  runUploadPlan）可单测；执行器注入，dry-run 下不触 ssh/scp。
  *--------------------------------------------------------------------------------------------*/
 
 import { spawnSync } from 'node:child_process'
@@ -73,6 +79,7 @@ export function resolveUploadConfig(args, env = process.env) {
     remoteOs: args['remote-os'] ?? env.UE_RELEASE_OS,
     dryRun: args.dryRun ?? false,
     mkdir: args.mkdir ?? true,
+    allNotes: args['all-notes'] ?? false,
   }
   const missing = []
   if (!config.host) missing.push('--host（或 UE_RELEASE_HOST）')
@@ -132,9 +139,70 @@ export function loadUploadBundle({ bundleDir = notesBundleDir } = {}) {
     if (statSync(src).size !== artifact.bytes) {
       throw new Error(`上传包产物 ${artifact.path} 字节数与 manifest 不符`)
     }
-    files.push({ path: artifact.path, src, mode: artifact.mode === 'atomic' ? 'atomic' : 'direct' })
+    files.push({
+      path: artifact.path,
+      src,
+      mode: artifact.mode === 'atomic' ? 'atomic' : 'direct',
+      // compile.mjs 给「本版必须重传的版本页」打标（本版内容落在的页 + 被补丁并稿的页）；
+      // 字段缺失（旧发布包）即无从判断，调用方据此退回全量。
+      requiredUpload: artifact.requiredUpload === true,
+    })
   }
   return { manifest, files }
+}
+
+/** 每版介绍页在发布包里的路径形态——唯一可增量的产物。 */
+export function isNotePagePath(path) {
+  return /^notes\/v[^/]+\.html$/.test(path)
+}
+
+function isNoteIndexPath(path) {
+  return path === 'notes/index.json' || path === 'notes/index.html'
+}
+
+/**
+ * 版本页排到索引之前：notes/index.* 链接每一张版本页，索引先落地而进程中途失败，站点就会
+ * 长期指向不存在的页面。release-notes.json 不含页面链接，保持最前。
+ */
+export function orderNotesFiles(files) {
+  const pages = files.filter((file) => isNotePagePath(file.path))
+  const indexes = files.filter((file) => isNoteIndexPath(file.path))
+  const rest = files.filter((file) => !isNotePagePath(file.path) && !isNoteIndexPath(file.path))
+  return [...rest, ...pages, ...indexes]
+}
+
+/**
+ * 决定 notes 阶段传哪些文件。必传页（manifest 标 requiredUpload）与共享文件永远传；其余版本页在
+ * 远端已有同名文件时跳过。三种情况一律退回「全量」：--all-notes、远端未知（探测失败 / dry-run）、
+ * 发布包没标出必传页（旧 manifest，或本版内容没落到任何页上）。
+ */
+export function resolveNotesUpload({
+  files,
+  allNotes = false,
+  listNoteNames,
+  warn: warnFn = warn,
+}) {
+  const requiredPaths = files
+    .filter((file) => file.requiredUpload === true)
+    .map((file) => file.path)
+  const keepAll = (source) => ({ files: [...files], skipped: [], requiredPaths, source })
+  if (allNotes) return keepAll('all')
+  if (requiredPaths.length === 0) {
+    warnFn('发布包没有标出必传页（manifest 缺少 requiredUpload 标记）；本次全量上传历史页面')
+    return keepAll('unknown')
+  }
+  const remoteNames = listNoteNames()
+  if (remoteNames === null || remoteNames === undefined) return keepAll('unknown')
+  const kept = []
+  const skipped = []
+  for (const file of files) {
+    const name = isNotePagePath(file.path) ? file.path.slice('notes/'.length) : ''
+    // 必传页无条件传：远端「已有」不代表内容对（补丁并稿、模板刷新、上一次半截上传）。
+    if (name !== '' && file.requiredUpload !== true && remoteNames.has(name))
+      skipped.push(file.path)
+    else kept.push(file)
+  }
+  return { files: kept, skipped, requiredPaths, source: 'incremental' }
 }
 
 /**
@@ -153,7 +221,7 @@ export function buildUploadPlan({ payloads, manifests, bundle }) {
       remotePath: file,
     })
   }
-  for (const file of bundle?.files ?? []) {
+  for (const file of orderNotesFiles(bundle?.files ?? [])) {
     steps.push({
       phase: 'notes',
       mode: file.mode,
@@ -189,8 +257,17 @@ export function remoteDirs(plan) {
  * Refuse to upload an inconsistent set: the notes bundle must describe the same version as
  * latest.yml, latest.yml must be last, and its `path:` must be one of the payloads we are
  * about to ship — otherwise clients would be pointed at a file that never lands.
+ *
+ * notes 段内部还要求「版本页在索引之前、必传页一张都不少」，于是整条计划是一个两段式
+ * 单调序：{安装包, 版本页} → {notes/index.*} → {latest.yml}。
  */
-export function assertPlanConsistency({ plan, latestYml, notesVersion, payloads }) {
+export function assertPlanConsistency({
+  plan,
+  latestYml,
+  notesVersion,
+  payloads,
+  requiredPaths = [],
+}) {
   if (plan.length === 0) throw new Error('上传计划为空：release/ 下没有可上传的产物')
   const last = plan[plan.length - 1]
   if (last.phase !== 'manifest' || last.label !== 'latest.yml') {
@@ -205,6 +282,20 @@ export function assertPlanConsistency({ plan, latestYml, notesVersion, payloads 
   }
   if (latestYml.path && !payloads.includes(latestYml.path)) {
     throw new Error(`latest.yml 指向 ${latestYml.path}，但 release/ 下没有这个产物`)
+  }
+  // 增量过滤只允许减少历史版本页；必传页被过滤掉就是「内容静默不更新」，必须当场失败。
+  for (const path of requiredPaths) {
+    if (!plan.some((step) => step.remotePath === path)) {
+      throw new Error(`必传版本页 ${path} 不在上传计划里（增量过滤丢掉了本版必传页面）`)
+    }
+  }
+  const lastPage = plan.reduce(
+    (acc, step, index) => (isNotePagePath(step.remotePath) ? index : acc),
+    -1,
+  )
+  const firstIndex = plan.findIndex((step) => isNoteIndexPath(step.remotePath))
+  if (firstIndex >= 0 && lastPage > firstIndex) {
+    throw new Error('版本页必须排在 notes/index.* 之前（索引页链接全部版本页，先换索引会留下死链）')
   }
   return { version: latestYml.version }
 }
@@ -229,6 +320,67 @@ export function buildRemoteProbeCommand({ dir, isWindowsTarget }) {
     : `touch '${probe}' && rm -f '${probe}'`
 }
 
+/**
+ * 列远端目录里的文件名（增量补缺的唯一探测）。`ls -1p` / `dir /b /a-d` 都只回文件名、不带
+ * 子目录条目；目录不存在时两者都是非零退出码，调用方据此降级，不去匹配报错文本——Windows 的
+ * 报错文案随系统语言变。`dir` 由调用方拼好（含 --dir，已去尾分隔符）：这里**不要**再补分隔符，
+ * `"D:\site\"` 会踩 cmd 吃引号的坑。
+ */
+export function buildRemoteListCommand({ dir, isWindowsTarget }) {
+  return isWindowsTarget ? `cmd /c dir /b /a-d "${dir}"` : `ls -1p '${dir}'`
+}
+
+const REMOTE_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
+const MAX_REMOTE_NAME_LENGTH = 128
+
+/**
+ * 把列表命令的 stdout 解析成文件名集合；任何一行不像裸文件名就让整次解析作废（null）。
+ * 少信一次输出只是多传页面，误信一行却会让索引页留下死链。空输出是合法结果（目录存在但为空）。
+ * 点文件（我们自己的 `.ue-tmp-*` 残留、`.DS_Store` 之类）直接忽略：页面名一律以 `v` 开头，
+ * 忽略它们不可能漏掉真页面，却能让一次中断留下的临时文件不至于永久拖累成「每次全量」。
+ * 名字逐字节比对、**不做大小写折叠**：两侧都出自同一份 manifest，而折叠在大小写敏感的
+ * Linux 目标上是错的方向（远端真有 V0.15.0.HTML 时折叠会让我们跳过 v0.15.0.html）。
+ */
+export function parseRemoteNoteNames(stdout) {
+  if (typeof stdout !== 'string') return null
+  const names = new Set()
+  for (const rawLine of stdout.split('\n')) {
+    // cmd 回显 CRLF；只剥行尾的 \r，不用 trim——前后有空白说明这行不是裸文件名。
+    const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine
+    if (line === '') continue
+    if (line !== line.trim()) return null
+    if (line.startsWith('.')) continue
+    if (line.endsWith('/') || line.endsWith('\\')) continue
+    if (line.length > MAX_REMOTE_NAME_LENGTH || !REMOTE_NAME_RE.test(line)) return null
+    names.add(line)
+  }
+  return names
+}
+
+/**
+ * 上传前一次性枚举远端 notes/。返回文件名集合，或 null 表示「远端未知」（dry-run、ssh 失败、
+ * 输出不可解析）——调用方在未知时必须上传全部页面。
+ */
+export function listRemoteNoteNames({ executor, target = 'notes', warn: warnFn = warn }) {
+  let stdout
+  try {
+    stdout = executor.listDir(target)
+  } catch (error) {
+    warnFn(
+      `远端 ${target}/ 列目录失败（${error instanceof Error ? error.message : String(error)}）；` +
+        '本次全量上传历史页面（首装 / 换 --dir 属正常，持续出现请检查目录对发布账号是否可读）',
+    )
+    return null
+  }
+  if (stdout === null || stdout === undefined) return null
+  const names = parseRemoteNoteNames(stdout)
+  if (names === null) {
+    warnFn(`远端 ${target}/ 列目录输出无法解析（目录里可能混入了非本站文件）；本次全量上传历史页面`)
+    return null
+  }
+  return names
+}
+
 export function buildRemoteReplaceCommand({ tempPath, targetPath, isWindowsTarget }) {
   if (!isWindowsTarget) return `mv -f '${tempPath}' '${targetPath}'`
   // move /Y 覆盖已存在文件；个别 Windows/杀软组合下 move 到被读文件会失败，退化 copy /Y + del。
@@ -243,7 +395,7 @@ export function buildRemoteReplaceFallback({ tempPath, targetPath }) {
  * Executor: the only place that talks to ssh/scp. Injected so the plan/order logic above
  * stays testable; `run` is what tests replace.
  */
-export function createExecutor({ config, sshBase, scpBase, remote, run, warn }) {
+export function createExecutor({ config, sshBase, scpBase, remote, run, capture, warn }) {
   const dir = (config.dir ?? '').replace(/[\\/]+$/, '')
   const isWin = isWindowsTarget(config)
   // plan 里的远端路径一律相对 --dir；scp / mv 收到相对路径会落在远端用户 home（2026-10 发版事故）。
@@ -258,6 +410,11 @@ export function createExecutor({ config, sshBase, scpBase, remote, run, warn }) 
       timeoutMs: TIMEOUT_MS.ssh,
       ...opts,
     })
+  const captureSsh = (command, opts = {}) =>
+    capture('ssh', buildSshArgs({ baseArgs: sshBase, remote, command }), {
+      timeoutMs: TIMEOUT_MS.probe,
+      ...opts,
+    })
   return {
     mkdir: (target) =>
       ssh(buildRemoteMkdirCommand({ dir: target, isWindowsTarget: isWin }), { warnOnly: true }),
@@ -266,6 +423,12 @@ export function createExecutor({ config, sshBase, scpBase, remote, run, warn }) 
       ssh(buildRemoteProbeCommand({ dir: target, isWindowsTarget: isWin }), {
         timeoutMs: TIMEOUT_MS.probe,
       }),
+    /**
+     * 唯一需要读 stdout 的命令（列目录），故走 capture 而不是 run。
+     * `target` 与 upload/move 一样是相对 --dir 的路径（如 `notes`），在这里拼成绝对路径。
+     */
+    listDir: (target) =>
+      captureSsh(buildRemoteListCommand({ dir: cmdPath(target), isWindowsTarget: isWin })),
     upload: (src, path) => {
       // scp 目标写绝对路径：源文件名带空格也不需要转义，且能落到子目录。
       run('scp', [...scpBase, src, `${remote}:${scpPath(path)}`], { timeoutMs: TIMEOUT_MS.scp })
@@ -335,6 +498,18 @@ function readLatestYml() {
   return { version, path: file }
 }
 
+function printableCommand(cmd, cmdArgs) {
+  return `${cmd} ${cmdArgs.map((a) => (a.includes(' ') ? `"${a}"` : a)).join(' ')}`
+}
+
+/** 两个 runner 共用的失败描述；成功返回 undefined。文案只此一份，别让两边走偏。 */
+function spawnFailure(res, printable) {
+  if (res.error) return `执行失败: ${printable}\n  ${res.error.message}`
+  if (res.status === null) return `命令被信号终止 (${res.signal}): ${printable}`
+  if (res.status !== 0) return `命令返回非零退出码 (${res.status}): ${printable}`
+  return undefined
+}
+
 /**
  * The only spawn site. Dry-run prints and returns without spawning; a warnOnly failure is
  * reported and swallowed (mkdir / fallback moves), everything else throws so the plan stops
@@ -347,22 +522,39 @@ export function createRunner({
   log = console.log,
 } = {}) {
   return (cmd, cmdArgs, opts = {}) => {
-    const printable = `${cmd} ${cmdArgs.map((a) => (a.includes(' ') ? `"${a}"` : a)).join(' ')}`
+    const printable = printableCommand(cmd, cmdArgs)
     if (dryRun) {
       log(`  [dry-run] ${printable}`)
       return
     }
     const res = spawn(cmd, cmdArgs, { stdio: 'inherit', timeout: opts.timeoutMs })
-    const failure = res.error
-      ? `执行失败: ${printable}\n  ${res.error.message}`
-      : res.status === null
-        ? `命令被信号终止 (${res.signal}): ${printable}`
-        : res.status !== 0
-          ? `命令返回非零退出码 (${res.status}): ${printable}`
-          : undefined
+    const failure = spawnFailure(res, printable)
     if (!failure) return
     if (opts.warnOnly) return warnFn(failure)
     throw new Error(failure)
+  }
+}
+
+/**
+ * Same shape as createRunner but returns stdout (that one inherits stdio to keep scp output
+ * live). Dry-run prints and returns null — "远端未知", so the caller plans the full upload
+ * instead of guessing.
+ */
+export function createCaptureRunner({ dryRun = false, spawn = spawnSync, log = console.log } = {}) {
+  return (cmd, cmdArgs, opts = {}) => {
+    const printable = printableCommand(cmd, cmdArgs)
+    if (dryRun) {
+      log(`  [dry-run] ${printable}`)
+      return null
+    }
+    const res = spawn(cmd, cmdArgs, {
+      encoding: 'utf8',
+      timeout: opts.timeoutMs,
+      maxBuffer: 1 << 20,
+    })
+    const failure = spawnFailure(res, printable)
+    if (failure) throw new Error(failure)
+    return res.stdout ?? ''
   }
 }
 
@@ -387,20 +579,6 @@ function main() {
     die(error instanceof Error ? error.message : String(error))
   }
 
-  const plan = buildUploadPlan({ payloads, manifests, bundle })
-  const latestYml = readLatestYml()
-  let version
-  try {
-    ;({ version } = assertPlanConsistency({
-      plan,
-      latestYml,
-      notesVersion: bundle.manifest.version,
-      payloads,
-    }))
-  } catch (error) {
-    die(error instanceof Error ? error.message : String(error))
-  }
-
   const remote = `${config.user}@${config.host}`
   const sshBase = ['-p', config.port]
   const scpBase = ['-P', config.port]
@@ -410,13 +588,9 @@ function main() {
   }
 
   const run = createRunner({ dryRun: config.dryRun })
-
-  console.log(`\n📦 Universe Editor ${version} → ${remote}:${config.dir}`)
-  console.log(`   产物: ${plan.map((step) => step.label).join(', ')}`)
-  console.log(config.dryRun ? '   (dry-run，不实际上传)\n' : '')
-
+  const capture = createCaptureRunner({ dryRun: config.dryRun })
   const nonce = `${process.pid}`
-  const executor = createExecutor({ config, sshBase, scpBase, remote, run, warn })
+  const executor = createExecutor({ config, sshBase, scpBase, remote, run, capture, warn })
 
   if (windowsTarget) {
     // Windows 远端命令全是 cmd 语法（不做 cmd/PowerShell 兼容封装，理由见 remoteShell.mjs）。
@@ -431,6 +605,49 @@ function main() {
       console.log(`  [dry-run] ssh ${remote} "${CMD_SHELL_PROBE}"   # 探测远端默认 shell`)
     }
   }
+
+  // 增量补缺：列一次远端 notes/（早于 mkdir——首装目录还不存在，会告警并按全量传，结果正确）。
+  // --all-notes 时 listNoteNames 根本不会被调用，一条 ssh 都不发。
+  const notes = resolveNotesUpload({
+    files: bundle.files,
+    allNotes: config.allNotes,
+    listNoteNames: () => listRemoteNoteNames({ executor, warn }),
+    warn,
+  })
+
+  const plan = buildUploadPlan({
+    payloads,
+    manifests,
+    bundle: { manifest: bundle.manifest, files: notes.files },
+  })
+  const latestYml = readLatestYml()
+  let version
+  try {
+    ;({ version } = assertPlanConsistency({
+      plan,
+      latestYml,
+      notesVersion: bundle.manifest.version,
+      payloads,
+      requiredPaths: notes.requiredPaths,
+    }))
+  } catch (error) {
+    die(error instanceof Error ? error.message : String(error))
+  }
+
+  const reason =
+    notes.source === 'all'
+      ? '（--all-notes：强制全量重传）'
+      : notes.source === 'unknown'
+        ? '（远端未知：全量上传）'
+        : notes.skipped.length > 0
+          ? `（跳过 ${notes.skipped.length} 个远端已有的历史页；--all-notes 可强制全量）`
+          : ''
+  console.log(`\n📦 Universe Editor ${version} → ${remote}:${config.dir}`)
+  console.log(`   产物: ${plan.map((step) => step.label).join(', ')}`)
+  console.log(
+    `   版本页: ${plan.filter((step) => isNotePagePath(step.remotePath)).length} 个${reason}`,
+  )
+  console.log(config.dryRun ? '   (dry-run，不实际上传)\n' : '')
 
   try {
     if (config.mkdir) {
