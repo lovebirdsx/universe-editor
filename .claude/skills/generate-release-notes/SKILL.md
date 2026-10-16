@@ -140,3 +140,7 @@ urgency: normal
 4. 改回 `reviewed` 只改源文件：派生物由发版流程（或 `pnpm release:notes -- --version <version>`）重建，**不要手工同步 JSON**。`pnpm release:notes:check` 的上界是 `apps/editor/package.json` 的当前版本，所以版本号还没 bump 时它是绿的——这不代表派生物已包含新稿。
 
 起草期间 `pnpm release:notes:check` 可随时跑（draft 不进产物），用来确认语法与链接没写错。
+
+## 其它
+
+- 保持用词的简洁，避免太过专业的用词，保持简明扼要
