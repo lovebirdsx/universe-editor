@@ -346,6 +346,23 @@ function nativeActionFor(klass: string): string | undefined {
   return 'updated'
 }
 
+/** One δ `kind:"conflict"` record — a normal sync's per-file refusal. */
+function deltaConflict(rel: string, overrides: Record<string, unknown> = {}): P4deltaRecord {
+  return {
+    kind: 'conflict',
+    mode: 'sync',
+    reason: 'update-modified',
+    action: 'not updated',
+    depotFile: `//depot/branch_x/${rel}`,
+    clientFile: `//${CLIENT}/${rel}`,
+    rev: '2',
+    stage: 'apply',
+    applied: true,
+    force: false,
+    ...overrides,
+  }
+}
+
 /** 强制修复档的一条 `kind:"file"` 记录：同样是 `mode:"sync"`，用修复档自己的类表
  *  （`update` / `revert` / `restore` / `delete`），且没有 `stage` / `nativeAction`。 */
 function deltaForceFile(rel: string, overrides: Record<string, unknown> = {}): P4deltaRecord {
@@ -383,6 +400,7 @@ function deltaSummary(overrides: Record<string, unknown> = {}): P4deltaRecord {
     force: false,
     total: 1,
     counts: { update: 1 },
+    conflicts: 0,
     // The real engine states a final p4 command count on its summary; a stub
     // that omitted it would read as an incomplete (lower-bound) run.
     p4Calls: 0,
@@ -614,8 +632,11 @@ describe('PerforceClient.sync — δ engine', () => {
       records: [
         deltaFile('Content/a.cpp'),
         deltaFile('Content/open.cpp', { class: 'resolve' }),
-        deltaSummary({ total: 2, counts: { update: 1, resolve: 1 } }),
+        deltaConflict('Content/mod.cpp', { rev: '3' }),
+        deltaConflict('Content/orphan.cpp', { reason: 'overwrite-existing', rev: '7' }),
+        deltaSummary({ total: 2, counts: { update: 1, resolve: 1 }, conflicts: 2 }),
       ],
+      // 原文仍由引擎转写，但编辑器只读上面的结构化记录。
       log: [
         `//depot/branch_x/Content/mod.cpp#3 - can't update modified file ${ROOT_FWD}/Content/mod.cpp`,
         `//depot/branch_x/Content/orphan.cpp#7 - can't overwrite existing file ${ROOT_FWD}/Content/orphan.cpp`,
@@ -1077,13 +1098,111 @@ describe('PerforceClient.sync — a force get over a scope δ can read', () => {
   })
 })
 
+describe('PerforceClient.sync — delete untracked (force repair only)', () => {
+  it('carries --delete-untracked on the repair argv and reports the deletions apart', async () => {
+    const client = await makeArmedClient()
+    syncReply = () => ({
+      records: [
+        deltaForceFile('Content/a.cpp'),
+        deltaForceFile('Content/junk.log', {
+          class: 'untracked',
+          action: 'deleting',
+          rev: undefined,
+        }),
+        deltaSummary({ force: true, total: 2, counts: { update: 1, untracked: 1 } }),
+      ],
+    })
+
+    const res = await client.sync('#head', { force: true, deleteUntracked: true })
+
+    // The flag rides immediately behind `--force`, the pairing δ's clap contract
+    // requires.
+    expect(getCalls()).toEqual([
+      [
+        '--json',
+        '--client-root',
+        ROOT,
+        '--sync',
+        '--force',
+        '--delete-untracked',
+        '-a',
+        `${ROOT_FWD}/...`,
+      ],
+    ])
+    expect(nativeSyncCalls()).toEqual([])
+    expect(res.ok).toBe(true)
+    // Deletions are not "files synced": the count keeps them apart so the
+    // history can say "1 updated · 1 untracked deleted" instead of "2 updated".
+    expect(res.summary).toMatchObject({ applied: 1, untrackedDeleted: 1 })
+  })
+
+  it('reports an untracked-only repair as work done, not as no-op', async () => {
+    const client = await makeArmedClient()
+    syncReply = () => ({
+      records: [
+        deltaForceFile('Content/junk.log', {
+          class: 'untracked',
+          action: 'deleting',
+          rev: undefined,
+        }),
+        deltaSummary({ force: true, total: 1, counts: { untracked: 1 } }),
+      ],
+    })
+
+    const res = await client.sync('#head', { force: true, deleteUntracked: true })
+
+    expect(res.ok).toBe(true)
+    expect(res.summary).toMatchObject({
+      applied: 0,
+      untrackedDeleted: 1,
+      upToDate: false,
+      unrecognized: false,
+    })
+  })
+
+  it('refuses delete-untracked without force instead of silently dropping it', async () => {
+    const client = await makeArmedClient()
+
+    const res = await client.sync('#head', { deleteUntracked: true })
+
+    expect(getCalls()).toEqual([])
+    expect(nativeSyncCalls()).toEqual([])
+    expect(res.notRun).toBe(true)
+    expect(res.ok).toBe(false)
+    expect(res.error?.kind).toBe('other')
+  })
+
+  it('refuses rather than falling back to native when the session is on p4', async () => {
+    const client = await makeClient()
+
+    const res = await client.sync('#head', { force: true, deleteUntracked: true })
+
+    expect(getCalls()).toEqual([])
+    expect(nativeSyncCalls()).toEqual([])
+    expect(res.notRun).toBe(true)
+    expect(res.error?.kind).toBe('other')
+  })
+
+  it('refuses rather than falling back when δ cannot read the spec', async () => {
+    const client = await makeArmedClient()
+
+    const res = await client.sync('#4', { force: true, deleteUntracked: true })
+
+    expect(getCalls()).toEqual([])
+    expect(nativeSyncCalls()).toEqual([])
+    expect(res.notRun).toBe(true)
+    expect(res.error?.kind).toBe('other')
+  })
+})
+
 describe('PerforceClient.previewSync — δ engine', () => {
   it('answers from the engine without -a, folding refusals in', async () => {
     const client = await makeArmedClient()
     syncReply = () => ({
       records: [
         deltaFile('Content/a.cpp', { stage: 'preview', applied: false }),
-        deltaSummary({ applied: false, total: 1 }),
+        deltaConflict('Content/mod.cpp', { rev: '3', stage: 'preview', applied: false }),
+        deltaSummary({ applied: false, total: 1, conflicts: 1 }),
       ],
       log: [
         `//depot/branch_x/Content/mod.cpp#3 - can't update modified file ${ROOT_FWD}/Content/mod.cpp`,

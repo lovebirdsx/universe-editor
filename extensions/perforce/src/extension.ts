@@ -115,6 +115,7 @@ import {
 import {
   effectiveSyncScope,
   forceConfirmMessage,
+  forceDeleteUntrackedConfirmMessage,
   scopeTextOf,
   syncPickItems,
   syncPromptOf,
@@ -340,14 +341,39 @@ export function refusedSyncButtons(state: {
  * and the remedy passes the very spec and scope the refused run used: a
  * confirmation never widens what the user already agreed to.
  *
+ * `allowDeleteUntracked` adds a second button for the tier only δ can execute
+ * ({@link PerforceClient.p4deltaDeleteUntrackedReject} decides whether it is
+ * worth offering). Its body names the extra loss — in-scope local files the
+ * depot does not track — so the two buttons are distinguishable before the
+ * click, not after it.
+ *
  * `scopeText` names what is about to be re-fetched. It matters most when the
  * scope is the entire client (`//...`): seeing that in the dialog is the user's
  * only chance to notice the click re-transfers the world.
  */
-async function confirmForceGet(spec: string, scopeText: string): Promise<boolean> {
+export type ForceGetChoice = 'force' | 'force-delete-untracked'
+
+async function confirmForceGet(
+  spec: string,
+  scopeText: string,
+  allowDeleteUntracked = false,
+): Promise<ForceGetChoice | undefined> {
   const BTN_FORCE = localize('perforce.btn.forceSync', 'Force Get')
-  const confirm = await window.showWarningMessage(forceConfirmMessage(spec, scopeText), BTN_FORCE)
-  return confirm === BTN_FORCE
+  if (!allowDeleteUntracked) {
+    const confirm = await window.showWarningMessage(forceConfirmMessage(spec, scopeText), BTN_FORCE)
+    return confirm === BTN_FORCE ? 'force' : undefined
+  }
+  const BTN_FORCE_DELETE = localize(
+    'perforce.btn.forceSyncDeleteUntracked',
+    'Force Get + Delete Untracked',
+  )
+  const confirm = await window.showWarningMessage(
+    forceDeleteUntrackedConfirmMessage(spec, scopeText),
+    BTN_FORCE,
+    BTN_FORCE_DELETE,
+  )
+  if (confirm === BTN_FORCE) return 'force'
+  return confirm === BTN_FORCE_DELETE ? 'force-delete-untracked' : undefined
 }
 
 /** 逐文件 force picker 的一行。 */
@@ -1654,6 +1680,8 @@ export async function activate(context: ExtensionContext): Promise<void> {
     spec: string
     trigger: SyncHistoryTrigger
     force: boolean
+    /** 这次强制拉取是否连未跟踪文件一起删了（见 `SyncHistoryEntry.deleteUntracked`）。 */
+    deleteUntracked?: boolean
     /** The range the get covered, as host paths (`ledgerScope`'s coordinates). */
     scope: readonly SyncScopeTarget[]
     scopeNarrowed: boolean
@@ -1668,6 +1696,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
         clientRoot: input.target.root,
         spec: input.spec,
         force: input.force,
+        deleteUntracked: input.deleteUntracked === true,
         trigger: input.trigger,
         scope: input.scope,
         scopeNarrowed: input.scopeNarrowed,
@@ -1904,6 +1933,11 @@ export async function activate(context: ExtensionContext): Promise<void> {
       scopeTargets?: readonly SyncScopeTarget[]
       force?: boolean
       /**
+       * 强制修复的附加档：连同未跟踪文件一起删掉。只有 δ 能执行，客户端在引擎
+       * 接不住这份 get 时会拒绝而不是回退原生；必须与 `force: true` 同时给出。
+       */
+      deleteUntracked?: boolean
+      /**
        * The scope as THIS CALL SITE names it — host paths plus directory-ness,
        * never the expanded filespecs (see `graphSyncLedger.ts` for why the
        * distinction matters). Recorded after a successful run so the graph can
@@ -1965,6 +1999,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
           spec,
           trigger: options.trigger,
           force: options.force === true,
+          deleteUntracked: options.deleteUntracked === true,
           scope: options.ledgerScope,
           scopeNarrowed: false,
           run: undefined,
@@ -2044,6 +2079,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
               ? { scopeTargets: ledgerScope }
               : {}),
             ...(options.force !== undefined ? { force: options.force } : {}),
+            ...(options.deleteUntracked === true ? { deleteUntracked: true } : {}),
             ...(overrideScope ? { overrideScope: true } : {}),
             onProgress: ({ done, file }) => {
               lastDone = done
@@ -2066,6 +2102,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
       spec,
       trigger: options.trigger,
       force: options.force === true,
+      deleteUntracked: options.deleteUntracked === true,
       scope: ledgerScope,
       scopeNarrowed,
       run: res,
@@ -2163,29 +2200,38 @@ export async function activate(context: ExtensionContext): Promise<void> {
           ? await window.showErrorMessage(message, BTN_COLLECT)
           : await window.showErrorMessage(message, BTN_COLLECT, BTN_FORCE)
         if (picked === BTN_COLLECT) await collectScope()
-        else if (
-          picked === BTN_FORCE &&
-          (await confirmForceGet(
+        else if (picked === BTN_FORCE) {
+          // 删除未跟踪档只有在 δ 接得住这份 get 时才作为第二个按钮出现：
+          // 请求它却回退原生，等于静默跳过用户刚确认的删除。
+          const choice = await confirmForceGet(
             spec,
             scopeTextOf(effectiveSyncScope(options.scope, target.syncScopes)),
-          ))
-        ) {
-          // The retry re-enters the same gate with the scope this call settled
-          // on — so a scope change between the two runs is re-checked rather
-          // than assumed — while the override the user already granted is
-          // carried over instead of asked for twice.
-          await runSync(target, spec, {
-            ...options,
-            force: true,
-            scopeTargets: ledgerScope,
-            ledgerScope,
-            ...(scope !== undefined ? { scope } : {}),
-            ...(overrideScope ? { overrideScope: true } : {}),
-            // A retry is its own get with its own record, and it is not the
-            // surface the user first clicked: `recovery` is what tells the two
-            // entries apart in the history.
-            trigger: 'recovery',
-          })
+            target.p4deltaDeleteUntrackedReject(spec, {
+              ...(scope !== undefined ? { scope } : {}),
+              ...(options.scopeTargets !== undefined && ledgerScope.length > 0
+                ? { scopeTargets: ledgerScope }
+                : {}),
+            }) === undefined,
+          )
+          if (choice !== undefined) {
+            // The retry re-enters the same gate with the scope this call settled
+            // on — so a scope change between the two runs is re-checked rather
+            // than assumed — while the override the user already granted is
+            // carried over instead of asked for twice.
+            await runSync(target, spec, {
+              ...options,
+              force: true,
+              ...(choice === 'force-delete-untracked' ? { deleteUntracked: true } : {}),
+              scopeTargets: ledgerScope,
+              ledgerScope,
+              ...(scope !== undefined ? { scope } : {}),
+              ...(overrideScope ? { overrideScope: true } : {}),
+              // A retry is its own get with its own record, and it is not the
+              // surface the user first clicked: `recovery` is what tells the two
+              // entries apart in the history.
+              trigger: 'recovery',
+            })
+          }
         }
         return
       }
@@ -2325,14 +2371,27 @@ export async function activate(context: ExtensionContext): Promise<void> {
       )
     }
     // "Updated 0 file(s)" is worth saying on its own, but next to a refusal it is
-    // noise — there the refusal already is the story.
+    // noise — there the refusal already is the story. Same for a deletion-only
+    // repair: the deleted-files line is the story.
     // 面对转交批次同理：那一行才是故事。
     if (
       summary.applied > 0 ||
-      (summary.refusedModified === 0 && summary.refusedOverwrite === 0 && summary.handoff === 0)
+      (summary.refusedModified === 0 &&
+        summary.refusedOverwrite === 0 &&
+        summary.handoff === 0 &&
+        (summary.untrackedDeleted ?? 0) === 0)
     ) {
       parts.push(
         localize('perforce.sync.applied', 'Updated {0} file(s)', { 0: String(summary.applied) }),
+      )
+    }
+    // 删除未跟踪文件是不可逆动作，不能让唯一一句即时反馈只说「更新了 0 个文件」——
+    // 纯删除的一轮也要明确告诉用户删了几个。
+    if ((summary.untrackedDeleted ?? 0) > 0) {
+      parts.push(
+        localize('perforce.sync.untrackedDeleted', '{0} untracked file(s) deleted', {
+          0: String(summary.untrackedDeleted),
+        }),
       )
     }
     // δ 自己处理不了、整批转交给原生 p4 的文件：只知其命令执行成功，逐文件结果未知，
@@ -2775,12 +2834,23 @@ export async function activate(context: ExtensionContext): Promise<void> {
         const filespecs = buildSyncFilespecs(selection)
         const spec = await pickSyncSpec()
         if (spec === undefined) return
-        if (spec.force && !(await confirmForceGet(spec.spec, scopeTextOf(filespecs)))) return
+        const choice = spec.force
+          ? await confirmForceGet(
+              spec.spec,
+              scopeTextOf(filespecs),
+              owner.p4deltaDeleteUntrackedReject(spec.spec, {
+                scope: filespecs,
+                scopeTargets: selection,
+              }) === undefined,
+            )
+          : 'force'
+        if (choice === undefined) return
         await runSync(owner, spec.spec, {
           scope: filespecs,
           scopeTargets: selection,
           ledgerScope: selection,
           ...(spec.force ? { force: true } : {}),
+          ...(choice === 'force-delete-untracked' ? { deleteUntracked: true } : {}),
           trigger,
         })
         return
@@ -2801,16 +2871,28 @@ export async function activate(context: ExtensionContext): Promise<void> {
           : undefined
       const spec = await pickSyncSpec()
       if (spec === undefined) return
+      let choice: ForceGetChoice | undefined = 'force'
       if (spec.force) {
         // The dialog names the range this get will really cover. A scope-less get
         // falls through to the client's configured scope, so name that rather
         // than leaving the user to guess what "no scope" meant.
         const scopeText = scopeTextOf(effectiveSyncScope(scoped?.scope, target.syncScopes))
-        if (!(await confirmForceGet(spec.spec, scopeText))) return
+        choice = await confirmForceGet(
+          spec.spec,
+          scopeText,
+          target.p4deltaDeleteUntrackedReject(
+            spec.spec,
+            scoped !== undefined
+              ? { scope: scoped.scope, scopeTargets: scoped.scopeTargets }
+              : undefined,
+          ) === undefined,
+        )
+        if (choice === undefined) return
       }
       await runSync(target, spec.spec, {
         ...(scoped !== undefined ? scoped : { ledgerScope: scopeLessLedgerScope(target) }),
         ...(spec.force ? { force: true } : {}),
+        ...(choice === 'force-delete-untracked' ? { deleteUntracked: true } : {}),
         trigger,
       })
     }),
@@ -4467,8 +4549,18 @@ export async function activate(context: ExtensionContext): Promise<void> {
             ...(req.confirmed !== undefined ? { confirmed: req.confirmed } : {}),
             ...(req.force !== undefined ? { force: req.force } : {}),
           })
+          let deleteUntracked = false
           if (confirmKind === 'force') {
-            if (!(await confirmForceGet(spec, scopeTextOf(filespecs)))) return
+            const choice = await confirmForceGet(
+              spec,
+              scopeTextOf(filespecs),
+              target.p4deltaDeleteUntrackedReject(spec, {
+                scope: filespecs,
+                ...(scopes !== undefined && scopes.length > 0 ? { scopeTargets: scopes } : {}),
+              }) === undefined,
+            )
+            if (choice === undefined) return
+            deleteUntracked = choice === 'force-delete-untracked'
           } else if (confirmKind === 'timeTravel') {
             const BTN_SYNC = localize('perforce.btn.confirmSync', 'Confirm Sync')
             const BTN_CANCEL = localize('perforce.btn.cancel', 'Cancel')
@@ -4537,6 +4629,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
             ledgerScope,
             ...(knownLanding !== undefined ? { knownLanding } : {}),
             ...(req.force === true ? { force: true } : {}),
+            ...(deleteUntracked ? { deleteUntracked: true } : {}),
             trigger: 'graph',
           })
         }),

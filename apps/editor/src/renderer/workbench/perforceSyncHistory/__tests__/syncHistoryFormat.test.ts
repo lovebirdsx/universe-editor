@@ -127,6 +127,26 @@ describe('formatCounts', () => {
   it('says so when a run transferred nothing', () => {
     expect(formatCounts(NO_COUNTS)).toBe('nothing to transfer')
   })
+
+  it('reports untracked deletions apart from the files it synced', () => {
+    // 删除的不是 depot 跟踪的文件，所以不能折进 "N updated"。
+    expect(formatCounts({ ...NO_COUNTS, applied: 2, untrackedDeleted: 3 })).toBe(
+      '2 updated · 3 untracked file(s) deleted',
+    )
+    // 旧记录没有这一项：按 0 处理，不显示。
+    expect(formatCounts({ ...NO_COUNTS, applied: 1 })).toBe('1 updated')
+  })
+
+  it('counts an untracked-only repair as work done, not as nothing', () => {
+    // `applied` 已扣掉删除数，所以只删了未跟踪文件的一轮是 `0 updated + N deleted`——
+    // 若不计入 untrackedDeleted，countsLine 会把它误判成「无需传输」。
+    const repair = run({
+      force: true,
+      deleteUntracked: true,
+      counts: { ...NO_COUNTS, untrackedDeleted: 2 },
+    })
+    expect(countsLine(repair)).toBe('2 untracked file(s) deleted')
+  })
 })
 
 describe('formatDiskWrites', () => {

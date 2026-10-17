@@ -12,6 +12,7 @@ import {
   parseSyncOverwriteRefused,
   parseSyncRefused,
   syncLineFile,
+  syncNothingHappened,
 } from '../syncParser.js'
 
 describe('parseSyncPreviewRecord', () => {
@@ -708,5 +709,30 @@ describe('parseResolveOutput', () => {
     expect(
       parseResolveOutput('X:/p4ws/main/a.cpp - vs //depot/branch_x/a.cpp#2\n').unrecognized,
     ).toBe(true)
+  })
+})
+
+describe('syncNothingHappened', () => {
+  const quiet = {
+    applied: 0,
+    keptOpen: 0,
+    mustResolve: 0,
+    refusedModified: 0,
+    refusedOverwrite: 0,
+    handoff: 0,
+    upToDate: false,
+    unrecognized: false,
+  }
+
+  it('treats an absent summary and an all-zero tally as nothing', () => {
+    expect(syncNothingHappened(undefined)).toBe(true)
+    expect(syncNothingHappened(quiet)).toBe(true)
+  })
+
+  // `--delete-untracked` 的一轮只可能体现在这个新计数上：它不计入 applied，漏掉它就会把
+  // 「删过文件」说成「无事可做」。
+  it('counts untracked deletions as work', () => {
+    expect(syncNothingHappened({ ...quiet, untrackedDeleted: 1 })).toBe(false)
+    expect(syncNothingHappened({ ...quiet, untrackedDeleted: 0 })).toBe(true)
   })
 })

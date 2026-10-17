@@ -151,7 +151,7 @@ describe('buildSyncHistoryEntry', () => {
     expect(entry.durationMs).toBe(0)
   })
 
-  it('copies the six counts and the error suggestion', () => {
+  it('copies the counts and the error suggestion', () => {
     const entry = build({
       outcome: 'failed',
       run: run({
@@ -167,6 +167,7 @@ describe('buildSyncHistoryEntry', () => {
         error: { kind: 'clobber', suggestion: 'collect first' },
       }),
     })
+    // 新记录恒带 `untrackedDeleted`（这次确实没删），旧记录才缺席。
     expect(entry.counts).toEqual({
       applied: 1,
       refusedModified: 2,
@@ -174,8 +175,23 @@ describe('buildSyncHistoryEntry', () => {
       keptOpen: 4,
       mustResolve: 5,
       handoff: 6,
+      untrackedDeleted: 0,
     })
     expect(entry.error).toEqual({ kind: 'clobber', message: 'collect first' })
+  })
+
+  it('records whether the force get also deleted untracked files', () => {
+    expect(build().deleteUntracked).toBe(false)
+    expect(build({ deleteUntracked: true }).deleteUntracked).toBe(true)
+  })
+
+  it('carries the untracked deletion count apart from applied', () => {
+    const entry = build({
+      force: true,
+      deleteUntracked: true,
+      run: run({ summary: summary({ applied: 3, untrackedDeleted: 2 }) }),
+    })
+    expect(entry.counts).toMatchObject({ applied: 3, untrackedDeleted: 2 })
   })
 
   it('omits io when the run had no sampler, keeping the other facts', () => {
@@ -276,6 +292,22 @@ describe('isEntry', () => {
     expect(isEntry({ ...entry, engine: 'git' })).toBe(false)
   })
 
+  it('accepts the delete-untracked fields, including their absence on old records', () => {
+    const entry = build()
+    expect(isEntry({ ...entry, deleteUntracked: true })).toBe(true)
+    expect(isEntry({ ...entry, deleteUntracked: 'yes' })).toBe(false)
+    // 旧记录：两个字段都不存在，必须照常可读。
+    const legacy = { ...entry } as Record<string, unknown>
+    delete legacy['deleteUntracked']
+    const counts = { ...(entry.counts ?? {}) } as Record<string, unknown>
+    delete counts['untrackedDeleted']
+    legacy['counts'] = counts
+    expect(isEntry(legacy)).toBe(true)
+    // 有就必须是合法的非负整数。
+    expect(isEntry({ ...entry, counts: { ...entry.counts!, untrackedDeleted: -1 } })).toBe(false)
+    expect(isEntry({ ...entry, counts: { ...entry.counts!, untrackedDeleted: 1.5 } })).toBe(false)
+  })
+
   it('rejects a malformed p4-call group but accepts an absent one', () => {
     const entry = build()
     expect(isEntry({ ...entry, p4Calls: undefined })).toBe(true)
@@ -362,6 +394,18 @@ describe('toRunDto / toRunDetailDto', () => {
       }),
     )
     expect(dto.p4Calls).toEqual({ native: 0, p4delta: 4, complete: true })
+  })
+
+  it('carries the delete-untracked flag and its count through to the DTO', () => {
+    const dto = toRunDto(
+      build({
+        force: true,
+        deleteUntracked: true,
+        run: run({ summary: summary({ applied: 1, untrackedDeleted: 2 }) }),
+      }),
+    )
+    expect(dto.deleteUntracked).toBe(true)
+    expect(dto.counts).toMatchObject({ applied: 1, untrackedDeleted: 2 })
   })
 
   it('carries the δ log reference and the classification through to the DTO', () => {

@@ -821,14 +821,16 @@ const P4DELTA_SYNC_CHANGELIST_SPEC = /^@[1-9]\d*$/
 function syncProgressTick(record: P4deltaRecord): { file: string | undefined } | undefined {
   if (record['kind'] !== 'file' || record['mode'] !== 'sync') return undefined
   const klass = record['class']
-  // revert / restore 是强制修复档的类（普通 get 不会发），同样要推进进度条。
+  // revert / restore 是强制修复档的类（普通 get 不会发）；untracked 是删除未跟踪档的类，
+  // 它也是逐文件动作，同样要推进进度条。
   if (
     klass !== 'add' &&
     klass !== 'update' &&
     klass !== 'delete' &&
     klass !== 'resolve' &&
     klass !== 'revert' &&
-    klass !== 'restore'
+    klass !== 'restore' &&
+    klass !== 'untracked'
   ) {
     return undefined
   }
@@ -1530,6 +1532,58 @@ export class PerforceClient {
    *  that lands native anyway, would hand p4 δ's uncarved target list). */
   get reconcileUsesP4delta(): boolean {
     return this._p4deltaEngine() !== undefined
+  }
+
+  /**
+   * Why a force get over this spec/range cannot offer the "delete untracked
+   * files" tier, or undefined when it can.
+   *
+   * Read while the confirmation dialog is built, so it must never spawn: the
+   * two questions are whether this session routes gets to δ at all
+   * ({@link _p4deltaEngine}) and whether the spec and targets have an argv its
+   * contract reads ({@link _p4deltaSyncReject}). The run re-asks both; an
+   * `undefined` here is an offer, not a promise.
+   */
+  p4deltaDeleteUntrackedReject(
+    spec: string,
+    options?: {
+      scope?: readonly string[]
+      scopeTargets?: readonly SyncScopeTarget[]
+    },
+  ): string | undefined {
+    if (this._p4deltaEngine() === undefined) {
+      return 'gets are not routed to p4delta in this session'
+    }
+    const targets = this._p4deltaGetTargets(options)
+    if (targets === undefined) return 'the range is not expressible as local targets'
+    return this._p4deltaSyncReject(spec, targets)
+  }
+
+  /**
+   * The result for a delete-untracked request this editor refuses to run.
+   *
+   * A refusal, not a failure: native p4 has no such capability, so falling back
+   * would silently skip the deletion the user just asked for — the one outcome
+   * the button must never produce. `notRun` keeps it out of the failure ladder
+   * and out of the history's engine accounting.
+   */
+  private _deleteUntrackedNotRun(reason: string): SyncRunResult {
+    return {
+      ok: false,
+      cancelled: false,
+      notRun: true,
+      summary: undefined,
+      refusedFiles: [],
+      refusedOverwriteFiles: [],
+      error: {
+        kind: 'other',
+        suggestion: localize(
+          'perforce.sync.deleteUntrackedUnavailable',
+          'Deleting untracked files requires a force get served by p4delta ({0}); nothing was run.',
+          { 0: reason },
+        ),
+      },
+    }
   }
 
   private constructor(
@@ -5098,6 +5152,12 @@ export class PerforceClient {
        */
       scopeTargets?: readonly SyncScopeTarget[]
       force?: boolean
+      /**
+       * 强制修复的附加档：把范围内 depot 不跟踪、且未被 p4ignore 保护的本地文件从磁盘删掉。
+       * 只有 δ 有这个能力，所以请求它时**绝不回退原生**——原生会静默少做一件事。
+       * 必须与 `force: true` 同时出现，单独出现是调用方错误。
+       */
+      deleteUntracked?: boolean
       onProgress?: (progress: { done: number; file: string | undefined }) => void
       /** The command layer's record of an explicit user choice to run this get
        *  over targets the daily scope does not cover ({@link checkScopeTargets}).
@@ -5105,6 +5165,20 @@ export class PerforceClient {
       overrideScope?: boolean
     },
   ): Promise<SyncRunResult> {
+    const force = options?.force === true
+    const deleteUntracked = options?.deleteUntracked === true
+    // 删除未跟踪文件只在强制档有意义（普通 get 不会走到「修复工作区」这一步）；
+    // 单独请求是调用方错误，按拒绝处理而不是悄悄忽略这个开关。
+    if (deleteUntracked && !force) {
+      const reason = 'deleting untracked files requires a force get'
+      this._log?.(`[perforce] sync${specSuffix(spec)}: refused — ${reason}`)
+      await window.showErrorMessage(
+        localize('perforce.sync.scopeRefused', 'The get was not run: {0}', {
+          0: this._deleteUntrackedNotRun(reason).error?.suggestion ?? reason,
+        }),
+      )
+      return this._deleteUntrackedNotRun(reason)
+    }
     // Recorded before the run starts, so the status bar can name the target from
     // the first frame — and still name it after the run ends. Last started wins:
     // the counters in SyncProgress are shared across overlapping syncs (see
@@ -5151,6 +5225,23 @@ export class PerforceClient {
             usedDelta = true
             return viaDelta
           }
+        }
+        // 删除未跟踪档只存在于 δ：原生没有这个能力，交给它只会静默少做一件事。
+        // 因此这里绝不回退——引擎没接这份 get 时如实拒绝。
+        if (deleteUntracked) {
+          const reason =
+            this.p4deltaDeleteUntrackedReject(spec, options) ??
+            'the p4delta engine is not in use for this workspace'
+          const rejection = this._deleteUntrackedNotRun(reason)
+          this._log?.(
+            `[perforce] sync${specSuffix(spec)}: refused — ${rejection.error?.suggestion ?? reason}`,
+          )
+          await window.showErrorMessage(
+            localize('perforce.sync.scopeRefused', 'The get was not run: {0}', {
+              0: rejection.error?.suggestion ?? reason,
+            }),
+          )
+          return rejection
         }
         const rejected = this._nativeGetReject(options)
         if (rejected !== undefined) {
@@ -5625,6 +5716,7 @@ export class PerforceClient {
           scope?: readonly string[]
           scopeTargets?: readonly SyncScopeTarget[]
           force?: boolean
+          deleteUntracked?: boolean
           onProgress?: (progress: { done: number; file: string | undefined }) => void
           overrideScope?: boolean
         }
@@ -5632,28 +5724,44 @@ export class PerforceClient {
     calls: SyncP4CallCounter,
   ): Promise<SyncRunResult | undefined> {
     const force = options?.force === true
+    const deleteUntracked = options?.deleteUntracked === true && force
     const override = options?.overrideScope === true
     const explicit = options?.scope !== undefined && options.scope.length > 0
+    // A requested delete-untracked tier may not fall back to native p4 — native
+    // has no such capability, and taking the fallback would silently skip the
+    // deletion while reporting a completed force repair. Undefined means
+    // "native may run this instead"; for this tier it becomes an explicit
+    // refusal carrying the same reason the log would have given.
+    const decline = (reason: string): SyncRunResult | undefined => {
+      if (deleteUntracked) {
+        this._log?.(`[perforce] sync: p4delta cannot serve this get — ${reason}`)
+        const rejection = this._deleteUntrackedNotRun(reason)
+        // `runSync` treats `notRun` as "the client already said why" and stays
+        // silent; this branch decides before spawning, so the saying is ours.
+        // A confirmed destructive get that never ran must not just vanish.
+        void window.showErrorMessage(
+          localize('perforce.sync.scopeRefused', 'The get was not run: {0}', {
+            0: rejection.error?.suggestion ?? reason,
+          }),
+        )
+        return rejection
+      }
+      this._log?.(`[perforce] sync: p4delta skipped — ${reason}; running on p4`)
+      return undefined
+    }
     // An override without an explicit scope would have to mean "the daily scope
     // is wrong, get everything" — which is a widening nobody asked for. The
     // command layer always carries the user's own selection with an override.
     if (override && !explicit && options?.scopeTargets === undefined) {
-      this._log?.(
-        '[perforce] sync: p4delta skipped — a scope override needs the explicit targets it overrides for; running on p4',
-      )
-      return undefined
+      return decline('a scope override needs the explicit targets it overrides for')
     }
     const targets = this._p4deltaGetTargets(options)
     if (targets === undefined) {
-      this._log?.(
-        '[perforce] sync: p4delta skipped — the scope is not expressible as local targets; running on p4',
-      )
-      return undefined
+      return decline('the scope is not expressible as local targets')
     }
     const rejected = this._p4deltaSyncReject(spec, targets)
     if (rejected !== undefined) {
-      this._log?.(`[perforce] sync: p4delta skipped — ${rejected}; running on p4`)
-      return undefined
+      return decline(rejected)
     }
     if (this._syncParallelThreads > 0 && this._p4deltaParallelNoted !== this._syncParallelThreads) {
       // δ spawns its own p4, so the native `--parallel` knob has nothing to
@@ -5666,7 +5774,7 @@ export class PerforceClient {
         `[perforce] sync (p4delta): perforce.syncParallelThreads=${this._syncParallelThreads} does not apply to this engine`,
       )
     }
-    const args = this._buildP4deltaSyncArgs(spec, targets, true, override, force)
+    const args = this._buildP4deltaSyncArgs(spec, targets, true, override, force, deleteUntracked)
     const onProgress = options?.onProgress
     // The engine emits its file records per apply batch, so the bar advances in
     // chunks instead of line by line. Same contract as the native streaming path
@@ -5911,7 +6019,8 @@ export class PerforceClient {
    * target changelist when there is one, `-a` for a real get (without it the run
    * is a preview), then this operation's targets, one argv per target.
    *
-   * `--force` 只在用户确认过的强制修复档出现。
+   * `--force` 只在用户确认过的强制修复档出现；`--delete-untracked` 只随它出现
+   * （δ 的 clap 契约也要求两者同现）。
    *
    * The paths are raw local paths, never p4-escaped specs — the engine escapes at
    * the boundary. `--no-scope-file` is the explicit scope override and travels
@@ -5923,6 +6032,7 @@ export class PerforceClient {
     apply: boolean,
     overrideScope = false,
     force = false,
+    deleteUntracked = false,
   ): string[] {
     return [
       '--json',
@@ -5930,6 +6040,7 @@ export class PerforceClient {
       this.root,
       '--sync',
       ...(force ? ['--force'] : []),
+      ...(force && deleteUntracked ? ['--delete-untracked'] : []),
       ...(spec === '#head' ? [] : ['--to', spec.slice(1)]),
       ...(apply ? ['-a'] : []),
       ...(overrideScope ? ['--no-scope-file'] : []),

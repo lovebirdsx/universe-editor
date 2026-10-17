@@ -72,10 +72,21 @@
  *     reports the four classes `add`/`update`/`delete`/`resolve` with `stage`
  *     (`preview` / `apply`) and p4's own `nativeAction` word, and `--force` runs
  *     the force repair（无 `stage`；排除项先于任何写入滤掉，委托调用只收精确到
- *     `//depot/f#rev` 的规格，故排除子树不受影响、`--to <CL>` 也跑不到 head）。What is
- *     NOT modelled: the `resolve` class for the opened-file follow-up query — the
- *     real tool finds those opened files through two bounded follow-up queries
- *     (`p4 opened` + `p4 fstat`); here they stay what fake-p4 prints for them.
+ *     `//depot/f#rev` 的规格，故排除子树不受影响、`--to <CL>` 也跑不到 head）。
+ *     `--delete-untracked`（只能与 `--sync --force` 同用）adds the fifth class
+ *     `untracked`: the disk walk happens here (real δ scans the workspace), then
+ *     `p4 where` maps the candidates into the client view and `p4 ignores -i`
+ *     protects p4ignore matches; `-a` unlinks the survivors and each one is a
+ *     `class:"untracked", action:"deleting", force:true` record with no `rev`.
+ *     Normal sync turns p4's refusal lines into `kind:"conflict"` records (the
+ *     real tool parses its preview's notices; this fake reads the plain lines
+ *     fake-p4 prints for them), counted in `summary.conflicts` but never in
+ *     `counts`/`total` — a refusal is not a file action.
+ *     What is NOT modelled: the `resolve` class for the opened-file follow-up
+ *     query — the real tool finds those opened files through two bounded
+ *     follow-up queries (`p4 opened` + `p4 fstat`); here they stay what fake-p4
+ *     prints for them. Nor is `p4 where`'s refusal mode: fake-p4 maps every path
+ *     under the client root, so no candidate is ever "outside the view".
  *
  *  Fault injection — `UNIVERSE_P4DELTA_FAKE_FAIL`, one mode per session:
  *   - `crash`      — emit a couple of file records, then exit 1 with NO summary
@@ -111,7 +122,15 @@
  *  sibling the same way, so the whole chain stays in Node.
  *--------------------------------------------------------------------------------------------*/
 
-import { appendFileSync, existsSync, readFileSync, readdirSync, statSync, writeSync } from 'node:fs'
+import {
+  appendFileSync,
+  existsSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeSync,
+} from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { dirname, join, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -664,6 +683,9 @@ function printHelp() {
       '      --force',
       '          force-repair instead of a normal sync',
       '',
+      '      --delete-untracked',
+      '          with --sync --force: also delete untracked workspace files',
+      '',
       '      --to <CHANGELIST>',
       '          target change for --sync',
       '',
@@ -691,6 +713,7 @@ const BOOLEAN_FLAGS = new Set([
   '--clean',
   '--sync',
   '--force',
+  '--delete-untracked',
 ])
 const VALUE_FLAGS = new Set([
   '--client-root',
@@ -710,6 +733,7 @@ function parseArgv(argv) {
     clean: false,
     sync: false,
     force: false,
+    deleteUntracked: false,
     help: false,
     version: false,
     noScopeFile: false,
@@ -755,6 +779,7 @@ function parseArgv(argv) {
       else if (arg === '--clean') opts.clean = true
       else if (arg === '--sync') opts.sync = true
       else if (arg === '--force') opts.force = true
+      else if (arg === '--delete-untracked') opts.deleteUntracked = true
       else if (arg === '-a') opts.applied = true
       else if (arg === '--no-scope-file') opts.noScopeFile = true
       else if (arg === '--verify-all') opts.verifyAll = true
@@ -894,7 +919,10 @@ function delegate(args) {
   logP4Call(p4CallCount)
   emitP4CommandCount(command)
   if (res.stderr) writeErr(res.stderr)
-  return { records: parseMj(res.stdout ?? '') }
+  // `stdout`/`stderr` ride along: the plain-text answers (refusal notices, the
+  // `ignores -i` verdicts) are not `-Mj` records, and the translation above is
+  // the one place that can still see them.
+  return { records: parseMj(res.stdout ?? ''), stdout: res.stdout ?? '', stderr: res.stderr ?? '' }
 }
 
 /** fake-p4's `-Mj` records: one JSON object per line. Non-JSON lines (its plain
@@ -934,6 +962,12 @@ function entryLocal(state, entry) {
 
 function depotLocal(state, depotFile) {
   return join(state.clientRoot, depotFile.slice(state.depotPrefix.length + 1))
+}
+
+/** depotFile → the client-syntax spelling the contract's `clientFile` carries
+ *  (`//clientName/rel`) — the same conversion real δ's `client_syntax` does. */
+function clientSyntaxOf(state, depotFile) {
+  return `//${state.client}/${depotFile.slice(state.depotPrefix.length + 1)}`
 }
 
 /**
@@ -1025,6 +1059,230 @@ function carveWriteSpecs(state, includes, excludes) {
     else specs.push(specOf(entry))
   }
   return specs
+}
+
+// ---- normal sync: p4's refusals become structured conflicts --------------------
+
+/** The three measured refusal phrases (see `p4delta/docs/json-contract.md`). A
+ *  line that does not match one of them stays a plain stderr notice. */
+const REFUSAL_REASONS = [
+  ['update modified file', 'update-modified'],
+  ['delete modified file', 'delete-modified'],
+  ['overwrite existing file', 'overwrite-existing'],
+]
+
+/** One refusal notice, parsed exactly like real δ's `parse_refusal_notice`:
+ *  a `//` depot spec with a numeric `#rev`, ` - can't `, a known verb and a
+ *  non-empty local path. Anything else is not a refusal (fail-closed). */
+function parseRefusalLine(line) {
+  const marker = " - can't "
+  const at = line.indexOf(marker)
+  if (at < 0) return undefined
+  const spec = line.slice(0, at)
+  const rest = line.slice(at + marker.length)
+  const hash = spec.lastIndexOf('#')
+  if (hash < 0) return undefined
+  const depotFile = spec.slice(0, hash)
+  const rev = spec.slice(hash + 1)
+  if (!depotFile.startsWith('//') || !/^\d+$/.test(rev)) return undefined
+  for (const [phrase, reason] of REFUSAL_REASONS) {
+    if (!rest.startsWith(`${phrase} `)) continue
+    const localPath = rest.slice(phrase.length + 1).trimEnd()
+    if (localPath === '') return undefined
+    return { depotFile, rev, localPath, reason }
+  }
+  return undefined
+}
+
+/** The real tool's `refusal_in_scope`: excludes win, includes bound the rest.
+ *  A refusal outside the range must not become a record a consumer cannot act on. */
+function localInScope(state, local, resolved) {
+  const key = pathKey(local)
+  const hits = (entry) =>
+    entry.kind === 'directory'
+      ? isUnderKey(key, pathKey(entryLocal(state, entry)))
+      : pathKey(entryLocal(state, entry)) === key
+  if (resolved.excludes.some(hits)) return false
+  return resolved.includes.some(hits)
+}
+
+/** The same refusal may appear in the preview and again in the apply run. Dedupe
+ *  by identity, keeping the first occurrence — one run emits one set of records. */
+function dedupeConflicts(refusals) {
+  const out = []
+  const seen = new Set()
+  for (const refusal of refusals) {
+    const key = [refusal.depotFile, refusal.localPath, refusal.rev, refusal.reason].join('\0')
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(refusal)
+  }
+  return out
+}
+
+/** The refusals of one delegated run: plain stderr lines (fake-p4 prints them
+ *  there under `-G`, which is how δ drives it), scope-filtered and deduped. */
+function conflictsFrom(state, run, resolved) {
+  const out = []
+  for (const line of run.stderr.split(/\r?\n/)) {
+    const refusal = parseRefusalLine(line)
+    if (refusal === undefined) continue
+    if (!localInScope(state, refusal.localPath, resolved)) continue
+    out.push(refusal)
+  }
+  return dedupeConflicts(out)
+}
+
+/** The contract's `kind:"conflict"` record. `applied` is the run's `-a`, not a
+ *  per-file success: a refusal is never applied, and the two stages say whether
+ *  this was the plan or the final word. */
+function conflictRecord(state, refusal, stage, applied) {
+  return {
+    kind: 'conflict',
+    mode: 'sync',
+    reason: refusal.reason,
+    action: refusal.reason === 'delete-modified' ? 'not deleted' : 'not updated',
+    depotFile: refusal.depotFile,
+    clientFile: clientSyntaxOrLocal(state, refusal.localPath),
+    rev: refusal.rev,
+    stage,
+    applied,
+    force: false,
+  }
+}
+
+/** Local path → client syntax, degrading to the local path when it is not under
+ *  the client root — the same fallback (and the same reason) as `client_syntax`. */
+function clientSyntaxOrLocal(state, local) {
+  // Both sides must go through pathKey: the temp root can carry upper-case
+  // characters while the key is lower-cased, and mixing the spellings silently
+  // turns every under-root path into the "outside the client view" fallback.
+  const root = pathKey(state.clientRoot)
+  const key = pathKey(local)
+  if (key === root || !isUnderKey(key, root)) return local
+  return `//${state.client}/${toPosix(local).slice(root.length + 1)}`
+}
+
+// ---- --delete-untracked: disk walk → client view → p4ignore --------------------
+
+/** Every file on disk inside the resolved includes, exclusions applied while
+ *  walking (a pruned subtree costs no readdir). The skip list is fake-p4's own
+ *  walk list — the two fakes have to agree about what the workspace contains. */
+function walkIncludedFiles(state, resolved) {
+  const out = []
+  const isExcluded = (key) =>
+    resolved.excludes.some((entry) =>
+      entry.kind === 'directory'
+        ? isUnderKey(key, pathKey(entryLocal(state, entry)))
+        : pathKey(entryLocal(state, entry)) === key,
+    )
+  const walk = (dir) => {
+    let entries
+    try {
+      entries = readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      if (WALK_SKIP_DIRS.has(entry.name)) continue
+      const full = join(dir, entry.name)
+      if (isExcluded(pathKey(full))) continue
+      if (entry.isDirectory()) walk(full)
+      else if (entry.isFile()) out.push(full)
+    }
+  }
+  for (const entry of resolved.includes) {
+    const local = entryLocal(state, entry)
+    if (isExcluded(pathKey(local))) continue
+    if (entry.kind === 'directory') walk(local)
+    else if (existsSync(local)) out.push(local)
+  }
+  return out
+}
+
+/**
+ * `--delete-untracked`'s candidates: on disk, not in the depot (including the
+ * opened set — an opened-for-add file is tracked), mapped into the client view,
+ * and not protected by a p4ignore rule.
+ *
+ * The two queries are delegated exactly as real δ runs them (`p4 where`,
+ * `p4 ignores -i`); an unmapped path is kept, never deleted, and a p4ignore
+ * match is kept and reported. The empty-depot refusal lives in `main()`, before
+ * any p4 starts — the run must not delete anything when it cannot tell
+ * "everything is untracked" apart from a broken scope.
+ */
+function discoverUntracked(state, resolved) {
+  const tracked = new Set()
+  for (const depotFile of Object.keys(state.files ?? {})) {
+    tracked.add(pathKey(depotLocal(state, depotFile)))
+  }
+  for (const depotFile of Object.keys(state.opened ?? {})) {
+    tracked.add(pathKey(depotLocal(state, depotFile)))
+  }
+  const candidates = walkIncludedFiles(state, resolved).filter(
+    (local) => !tracked.has(pathKey(local)),
+  )
+  if (candidates.length === 0) return []
+
+  const mapped = delegate(['where', ...candidates])
+  const depotOfLocal = new Map()
+  for (const record of mapped.records) {
+    const local = record.path ?? record.clientFile
+    if (typeof local === 'string' && typeof record.depotFile === 'string') {
+      depotOfLocal.set(pathKey(local), record.depotFile)
+    }
+  }
+  const untracked = []
+  for (const local of candidates) {
+    const depotFile = depotOfLocal.get(pathKey(local))
+    // Outside the client view: p4 cannot see it, so deleting it would reach into
+    // something the user deliberately mapped away.
+    if (depotFile === undefined) continue
+    // Second look: the mapped depot path already has a record even though the
+    // local key did not match (case/spelling drift). Keeping a tracked file is
+    // the only safe side of this comparison.
+    if (state.files?.[depotFile] !== undefined || state.opened?.[depotFile] !== undefined) continue
+    untracked.push({ clientFile: local, depotFile })
+  }
+  if (untracked.length === 0) return []
+
+  const ignoredRun = delegate(['ignores', '-i', ...untracked.map((file) => file.clientFile)])
+  const ignored = new Set()
+  for (const line of ignoredRun.stdout.split(/\r?\n/)) {
+    if (!line.endsWith(' ignored')) continue
+    ignored.add(pathKey(line.slice(0, -' ignored'.length)))
+  }
+  const survivors = untracked.filter((file) => !ignored.has(pathKey(file.clientFile)))
+  const kept = untracked.length - survivors.length
+  if (kept > 0) {
+    writeErr(`Kept ${kept} p4ignore-protected untracked file(s).\n`)
+  }
+  return survivors
+}
+
+/** `-a` 的写入段：删掉候选。真工具逐文件收集失败并在收尾一起报；fake 的现场不会
+ *  失败，失败时保留文件（记录仍按组发出，与真工具「先报告、后执行」一致）。 */
+function deleteUntrackedFiles(files) {
+  for (const file of files) {
+    try {
+      rmSync(file.clientFile)
+    } catch {
+      // 文件已经不在了 / 被占用：留着它，下一次运行会再看到。
+    }
+  }
+}
+
+/** p4's `where` mapped no in-scope depot file. Real δ refuses to delete then:
+ *  "no records at all" cannot be told apart from a broken scope / client mapping,
+ *  and under this flag that ambiguity would delete the whole workspace. */
+function depotRecordsInScope(state, resolved) {
+  const hits = (local) =>
+    resolved.includes.some((entry) =>
+      entry.kind === 'directory'
+        ? isUnderKey(pathKey(local), pathKey(entryLocal(state, entry)))
+        : pathKey(local) === pathKey(entryLocal(state, entry)),
+    )
+  return Object.keys(state.files ?? {}).filter((depotFile) => hits(depotLocal(state, depotFile)))
 }
 
 // ---- record translation --------------------------------------------------------
@@ -1142,6 +1400,12 @@ function askAndTranslate(state, opts, mode, phases) {
   let classOfAction
   let plan = { records: [] }
   let stage
+  /** `--delete-untracked` 的发现结果（其余模式下恒为空）。 */
+  let untracked = []
+  /** 不属于委托记录流的额外 file 记录（目前只有 untracked 组）。 */
+  let extraRecords = []
+  /** 普通同步的逐文件拒绝，最终翻成 `kind:"conflict"`。 */
+  let conflicts = []
   const forceRun = opts.force === true
   const openedOf = (record) => state.opened?.[record.depotFile] !== undefined
 
@@ -1181,6 +1445,11 @@ function askAndTranslate(state, opts, mode, phases) {
       const pinned = plan.records
         .filter((record) => !isExcluded(state, record, opts.resolved.excludes))
         .map((record) => `${record.depotFile}#${record.rev}`)
+      if (opts.deleteUntracked) {
+        // 真工具在工作区扫描之后、任何写入之前发现候选（`p4 where` + `p4 ignores -i`
+        // 都经由 delegate，因此也计入 p4 调用账）。
+        untracked = discoverUntracked(state, opts.resolved)
+      }
       if (pinned.length > 0) {
         // digest 不是必经的一格：真工具只在 mtime/大小没有短路时才算哈希，所以这一步可能整段消失。
         emitProgress('digest', `Checking digests for ${pinned.length} files.`, phases)
@@ -1188,7 +1457,22 @@ function askAndTranslate(state, opts, mode, phases) {
       if (opts.applied && pinned.length > 0) {
         emitProgress('apply', null, phases)
         delegated = delegate(['-G', 'sync', '-f', ...pinned])
-      } else delegated = plan
+      } else {
+        delegated = plan
+        // 只有未跟踪文件要删时，这一步才是真正的写入段。
+        if (opts.applied && untracked.length > 0) emitProgress('apply', null, phases)
+      }
+      if (opts.applied) deleteUntrackedFiles(untracked)
+      extraRecords = untracked.map((file) => ({
+        kind: 'file',
+        mode: 'sync',
+        class: 'untracked',
+        action: 'deleting',
+        depotFile: file.depotFile,
+        clientFile: clientSyntaxOf(state, file.depotFile),
+        applied: opts.applied,
+        force: true,
+      }))
       classOfAction = (record) => syncForceClass(record.action)
     } else {
       emitProgress('preview', null, phases)
@@ -1199,6 +1483,9 @@ function askAndTranslate(state, opts, mode, phases) {
       // BOTH stages: p4 moves its have and schedules the merge, and never writes
       // its content.
       plan = delegate(['-G', 'sync', '-n', ...versioned])
+      // 预演里的拒绝原文（fake-p4 在 `-G` 下写到 stderr）就是真工具从 notice 解析出的
+      // 那份冲突集。带 `-a` 时它随 apply 段发出，因为被拒文件不会进入 apply 的规格列表。
+      const previewConflicts = conflictsFrom(state, plan, opts.resolved)
       emitProgress('filter', null, phases)
       // δ hands p4 the plan's candidates as EXACT specs (`//depot/f#rev`) — which
       // is also why a file p4 refused in the preview is never mentioned again:
@@ -1222,6 +1509,12 @@ function askAndTranslate(state, opts, mode, phases) {
       } else {
         delegated = plan
       }
+      // 预演之后文件又被改了的竞态：apply 自己也会拒绝。两次的拒绝取并集、按身份去重——
+      // 一条运行只发一套冲突记录。
+      conflicts = dedupeConflicts([
+        ...previewConflicts,
+        ...(opts.applied ? conflictsFrom(state, delegated, opts.resolved) : []),
+      ])
       classOfAction = (record) => (openedOf(record) ? 'resolve' : syncClass(record.action))
       stage = opts.applied ? 'apply' : 'preview'
     }
@@ -1246,9 +1539,14 @@ function askAndTranslate(state, opts, mode, phases) {
     .map((record) =>
       fileRecord(mode, classOfAction, record, { applied: opts.applied, stage, force: forceRun }),
     )
+    // untracked 不是 p4 记录的回声，δ 自己造；组序排在最后，与 SYNC_GROUPS 一致。
+    .concat(extraRecords)
   const counts = {}
   for (const record of records) counts[record.class] = (counts[record.class] ?? 0) + 1
-  return { records, counts }
+  const conflictRecords = conflicts.map((conflict) =>
+    conflictRecord(state, conflict, stage, opts.applied),
+  )
+  return { records, counts, conflicts: conflictRecords }
 }
 
 function main() {
@@ -1265,6 +1563,11 @@ function main() {
     return 0
   }
   if (opts.clean && opts.sync) usageError('--clean and --sync are mutually exclusive')
+  // clap `requires_all`: the flag alone (or with only one of the pair) is a
+  // usage error, and it must never be read as a quietly narrower run.
+  if (opts.deleteUntracked && (!opts.sync || !opts.force)) {
+    usageError("the argument '--delete-untracked' requires '--sync' and '--force'")
+  }
 
   const fail = process.env.UNIVERSE_P4DELTA_FAKE_FAIL
   if (fail !== undefined && fail !== '' && !KNOWN_FAULTS.has(fail)) {
@@ -1344,13 +1647,35 @@ function main() {
     return 1
   }
 
+  // 空 depot 记录时删除未跟踪文件是 fail-closed 的：分不清「范围里真的一个文件都不被
+  // 跟踪」与「范围/client 映射坏了」，此时任何本地文件都会被看成未跟踪。真工具在算完
+  // 任何计划之前就 bail，这里同样一个文件都不碰。
+  if (opts.deleteUntracked && depotRecordsInScope(state, resolved).length === 0) {
+    emit({
+      kind: 'error',
+      message:
+        '--delete-untracked refused: p4 returned no depot records at all, so p4delta cannot ' +
+        'tell untracked files apart from a broken scope or client mapping. Nothing was deleted.',
+    })
+    emitSummary(mode, opts, {
+      ok: false,
+      reason: 'error',
+      counts: {},
+      scopeMatched: 0,
+      unmatched: 0,
+      started: Date.now(),
+      summary: fail !== 'nosummary',
+    })
+    return 1
+  }
+
   // The phase ladder follows the mode: normal sync's has preview/filter/apply,
   // the others have analyze/digest/report.
   const phases = phasesFor(mode, opts.force === true)
   const started = Date.now()
 
   emitProgress('start', null, phases)
-  const { records, counts } = askAndTranslate(state, opts, mode, phases)
+  const { records, counts, conflicts } = askAndTranslate(state, opts, mode, phases)
 
   // Crash: the stream ends mid-flight with no summary. A consumer that reads the
   // partial records as an answer is the bug hard rule 1 exists for.
@@ -1378,8 +1703,13 @@ function main() {
   // No 'report' segment on the sync ladder — the apply phase already closed the
   // writing half there, and the records below are its outcome.
   if (mode !== 'sync') emitProgress('report', null, phases)
-  if (opts.json) for (const record of records) emit(record)
-  else
+  if (opts.json) {
+    // 真工具的次序：预演先报文件、后报冲突；apply 先报冲突（预演种子）、再报文件。
+    // 消费方不依赖次序，但 fake 的形状要与契约文档里描述的那份输出一致。
+    if (opts.applied) for (const conflict of conflicts) emit(conflict)
+    for (const record of records) emit(record)
+    if (!opts.applied) for (const conflict of conflicts) emit(conflict)
+  } else
     writeOut(
       `${records.length} file(s) in ${mode} mode${opts.applied ? ' (applied)' : ' (preview)'}\n`,
     )
@@ -1400,6 +1730,7 @@ function main() {
       // everything else collapses to the catch-all `error`.
       reason: noEntryMatched ? 'no-entry-matched' : 'error',
       counts,
+      conflicts: conflicts.length,
       scopeMatched,
       unmatched: unmatchedPaths.length,
       started,
@@ -1413,6 +1744,7 @@ function main() {
     ok: true,
     reason: null,
     counts,
+    conflicts: conflicts.length,
     scopeMatched,
     unmatched: unmatchedPaths.length,
     started,
@@ -1432,6 +1764,9 @@ function emitSummary(mode, opts, state) {
     force: opts.force === true,
     total,
     counts: state.counts,
+    // 与 `counts` 分开：冲突没有逐文件动作，既不属于 `total` 也不属于任何类。恒在，
+    // 与真工具一样（普通同步为 0 时也发）。
+    conflicts: state.conflicts ?? 0,
     // The contract's final observation. Present on every summary, including a
     // failing one — it states a fact about the run, not its outcome.
     p4Calls: p4CallCount,

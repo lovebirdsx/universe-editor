@@ -181,3 +181,18 @@ export function forceConfirmMessage(spec: string, scopeText: string): string {
     { 0: spec, 1: scopeText },
   )
 }
+
+/**
+ * The force-get body when the delete-untracked tier is on offer. Same facts as
+ * {@link forceConfirmMessage} plus the second destruction layer, because the
+ * dialog now carries two buttons and the user has to be able to tell what the
+ * extra one adds: local files the depot does not track are removed from disk.
+ * Unlike a refused-file overwrite there is no depot copy behind them.
+ */
+export function forceDeleteUntrackedConfirmMessage(spec: string, scopeText: string): string {
+  return localize(
+    'perforce.sync.forceConfirmDeleteUntracked',
+    'Force-get overwrites local files even when Perforce thinks they are current — uncollected changes in them (including untracked same-name files) will be lost. The delete-untracked option ALSO DELETES local files in scope that the depot does not track and .p4ignore does not protect. Target: {0}; files that are not open for edit are reset to that revision. Scope: {1}. This cannot be undone.',
+    { 0: spec, 1: scopeText },
+  )
+}

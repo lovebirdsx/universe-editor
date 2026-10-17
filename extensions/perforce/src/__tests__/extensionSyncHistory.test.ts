@@ -233,6 +233,7 @@ interface FakeClient {
   isReconcileTargetExcluded: Mock
   driftGroupPaths: Mock
   reconcileUsesP4delta: boolean
+  p4deltaDeleteUntrackedReject: Mock
   checkScopeTargets: Mock
 }
 
@@ -278,6 +279,8 @@ function makeFakeClient(): FakeClient {
   fake.isReconcileTargetExcluded = vi.fn(() => false)
   fake.driftGroupPaths = vi.fn(() => [])
   fake.reconcileUsesP4delta = false
+  // 这份文件不测删除未跟踪档：默认按「δ 没在服务本会话」答，强制确认框只出一个按钮。
+  fake.p4deltaDeleteUntrackedReject = vi.fn(() => 'gets are not routed to p4delta in this session')
   // Everything a test names is in range, so the gate never opens a dialog and
   // the get runs as asked. The declined test below replaces this answer.
   fake.checkScopeTargets = vi.fn(async (targets: readonly { path: string }[]) => ({
@@ -401,6 +404,8 @@ describe('one record per get', () => {
       clientRoot: ROOT,
       spec: '#head',
       force: false,
+      // 新记录恒带这一项：普通的非强制 get 明确写「否」，与旧记录的「缺席」区分开。
+      deleteUntracked: false,
       trigger: 'command',
       outcome: 'applied',
       counts: {
@@ -410,6 +415,7 @@ describe('one record per get', () => {
         keptOpen: 0,
         mustResolve: 0,
         handoff: 0,
+        untrackedDeleted: 0,
       },
       // Host paths, not filespecs, and the DAILY scope rather than the client
       // root: a scope-less get is bounded by the scope, and recording the root

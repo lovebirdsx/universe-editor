@@ -249,6 +249,22 @@ describe('summarizeRun', () => {
   it('does not read a missing ok as success', () => {
     expect(summarizeRun(runOf([{ kind: 'summary', mode: 'open', total: 3 }]))?.ok).toBe(false)
   })
+
+  // `conflicts` 是普通同步专有的账目。契约保证每轮都发；读取器不替缺席的流补 0——
+  // undefined 是 `toSyncOutcome` 判定「这份流没有结论」的依据。
+  it('reads the conflict tally, and leaves an omitted field undefined', () => {
+    const summary = (conflicts?: number): Record<string, unknown> => ({
+      kind: 'summary',
+      mode: 'sync',
+      ok: true,
+      total: 0,
+      counts: {},
+      ...(conflicts === undefined ? {} : { conflicts }),
+    })
+    expect(summarizeRun(runOf([summary(2)]))?.conflicts).toBe(2)
+    expect(summarizeRun(runOf([summary(0)]))?.conflicts).toBe(0)
+    expect(summarizeRun(runOf([summary()]))?.conflicts).toBeUndefined()
+  })
 })
 
 // --- δ normal sync (`--sync`, no `--force`) ---------------------------------
@@ -272,6 +288,23 @@ function syncFile(overrides: Record<string, unknown> = {}): Record<string, unkno
   }
 }
 
+/** One `kind:"conflict"` record — a normal sync's per-file refusal, structurally. */
+function conflict(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    kind: 'conflict',
+    mode: 'sync',
+    reason: 'update-modified',
+    action: 'not updated',
+    depotFile: '//depot/main/src/a.ts',
+    clientFile: '//main/src/a.ts',
+    rev: '2',
+    stage: 'apply',
+    applied: true,
+    force: false,
+    ...overrides,
+  }
+}
+
 function syncSummary(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     kind: 'summary',
@@ -281,6 +314,7 @@ function syncSummary(overrides: Record<string, unknown> = {}): Record<string, un
     force: false,
     total: 0,
     counts: {},
+    conflicts: 0,
     scopeMatched: null,
     unmatched: 0,
     elapsedMs: 9,
@@ -375,35 +409,55 @@ describe('toSyncOutcome', () => {
     expect(outcome?.summary).toMatchObject({ applied: 0, keptOpen: 1, mustResolve: 1 })
   })
 
-  it('reads the refusal lines back from the engine log', () => {
+  it('reports a run with no work at all as up to date', () => {
+    const outcome = toSyncOutcome(syncRun([]), CLIENT_ROOT, true)
+    expect(outcome?.upToDate).toBe(true)
+    expect(outcome?.summary.unrecognized).toBe(false)
+  })
+
+  // 新引擎为每条拒绝发一条 `kind:"conflict"`。记录优先于 stderr 正则——两源合并会把同一条
+  // 拒绝算两遍，补救按钮也会重复。
+  it('reads structured conflict records instead of re-parsing the log', () => {
     const outcome = toSyncOutcome(
       syncRun(
-        [],
         [
-          `//depot/main/src/a.ts#3 - can't update modified file ${CLIENT_ROOT}/src/a.ts`,
-          `//depot/main/src/b.ts#7 - can't overwrite existing file ${CLIENT_ROOT}/src/b.ts`,
+          conflict(),
+          conflict({
+            reason: 'delete-modified',
+            action: 'not deleted',
+            depotFile: '//depot/main/src/gone.ts',
+            clientFile: '//main/src/gone.ts',
+            rev: '1',
+          }),
+          conflict({
+            reason: 'overwrite-existing',
+            depotFile: '//depot/main/src/b.ts',
+            clientFile: '//main/src/b.ts',
+            rev: '7',
+          }),
         ],
-        { total: 2 },
+        [
+          // 同一批拒绝也由引擎原样转写在 stderr 上：结构化记录存在时这里一条都不该读。
+          `//depot/main/src/a.ts#2 - can't update modified file ${CLIENT_ROOT}/src/a.ts`,
+          `//depot/main/src/gone.ts#1 - can't delete modified file ${CLIENT_ROOT}/src/gone.ts`,
+        ],
+        { total: 0, conflicts: 3 },
       ),
       CLIENT_ROOT,
       true,
     )
-    expect(outcome?.summary).toMatchObject({
-      applied: 0,
-      keptOpen: 0,
-      refusedModified: 1,
-      refusedOverwrite: 1,
-      upToDate: false,
-      // A refusal IS an account of what happened, so it is not "unrecognized"
-      // even though no file record explained the work.
-      unrecognized: false,
-    })
     expect(outcome?.refusedFiles).toEqual([
       {
         depotFile: '//depot/main/src/a.ts',
         clientFile: '/p4ws/main/src/a.ts',
         action: 'not updated',
-        rev: '3',
+        rev: '2',
+      },
+      {
+        depotFile: '//depot/main/src/gone.ts',
+        clientFile: '/p4ws/main/src/gone.ts',
+        action: 'not deleted',
+        rev: '1',
       },
     ])
     expect(outcome?.refusedOverwriteFiles).toEqual([
@@ -414,40 +468,82 @@ describe('toSyncOutcome', () => {
         rev: '7',
       },
     ])
+    expect(outcome?.summary).toMatchObject({
+      applied: 0,
+      refusedModified: 2,
+      refusedOverwrite: 1,
+      upToDate: false,
+      unrecognized: false,
+    })
   })
 
-  it('reports a run with no work at all as up to date', () => {
-    const outcome = toSyncOutcome(syncRun([]), CLIENT_ROOT, true)
-    expect(outcome?.upToDate).toBe(true)
-    expect(outcome?.summary.unrecognized).toBe(false)
+  // summary 说有几条冲突、记录流却少了一条：流是残缺的，不能拿它当结论。
+  it('has no conclusion when the summary conflict count disagrees with the records', () => {
+    expect(
+      toSyncOutcome(syncRun([conflict()], [], { conflicts: 2 }), CLIENT_ROOT, true),
+    ).toBeUndefined()
+    expect(
+      toSyncOutcome(syncRun([conflict()], [], { conflicts: 0 }), CLIENT_ROOT, true),
+    ).toBeUndefined()
   })
 
-  // δ 的账本只记 apply 的，所以全是拒绝的一轮收口时 `total:0`——拒绝只活在引擎的 stderr 转写上。
-  // 不读它们就会对着「落后且有未收集改动」的文件说「已是最新」，这是绝不能给用户的答案。delete
-  // 词与 update 词同族，一起计数。
-  it('does not call an all-refused run (update + delete) up to date', () => {
+  // 契约保证 summary 恒发 `conflicts`；缺席的流没有结论，stderr 文本救不回来。
+  it('has no conclusion when the summary omits the conflict tally', () => {
+    expect(
+      toSyncOutcome(
+        syncRun(
+          [],
+          [`//depot/main/src/a.ts#2 - can't update modified file ${CLIENT_ROOT}/src/a.ts`],
+          { total: 1, conflicts: undefined },
+        ),
+        CLIENT_ROOT,
+        true,
+      ),
+    ).toBeUndefined()
+  })
+
+  // 认不出的 reason 说明引擎引入了我们没有补救方案的拒绝形态；返回 undefined 让普通 get
+  // 回退原生，绝不按「没发生」处理。
+  it('has no conclusion for an unknown conflict reason', () => {
+    expect(
+      toSyncOutcome(
+        syncRun([conflict({ reason: 'future-shape' })], [], { conflicts: 1 }),
+        CLIENT_ROOT,
+        true,
+      ),
+    ).toBeUndefined()
+  })
+
+  // 强制修复不走原生逐文件保护：这一档里出现冲突记录说明流串了档。
+  it('has no conclusion for conflict records in a force run', () => {
+    expect(
+      toSyncOutcome(
+        runOf([conflict(), syncSummary({ force: true, conflicts: 1 })]),
+        CLIENT_ROOT,
+        true,
+        true,
+      ),
+    ).toBeUndefined()
+  })
+
+  // 契约保证每轮都发 `conflicts`（可以是 0）。范围过滤掉的拒绝仍留在 stderr 上，
+  // 但编辑器只读记录：文本里的行永远不能被重新算进来。
+  it('does not read stderr text even when the conflict count is zero', () => {
     const outcome = toSyncOutcome(
       syncRun(
         [],
-        [
-          `//depot/main/src/a.ts#3 - can't update modified file ${CLIENT_ROOT}/src/a.ts`,
-          `//depot/main/src/gone.ts#1 - can't delete modified file ${CLIENT_ROOT}/src/gone.ts`,
-        ],
-        { total: 0, counts: {} },
+        [`//depot/main/src/a.ts#3 - can't update modified file ${CLIENT_ROOT}/src/a.ts`],
+        { total: 0, counts: {}, conflicts: 0 },
       ),
       CLIENT_ROOT,
       true,
     )
-    expect(outcome?.upToDate).toBe(false)
+    expect(outcome?.refusedFiles).toEqual([])
     expect(outcome?.summary).toMatchObject({
       applied: 0,
-      refusedModified: 2,
-      unrecognized: false,
+      refusedModified: 0,
+      upToDate: true,
     })
-    expect(outcome?.refusedFiles.map((f) => [f.depotFile, f.action])).toEqual([
-      ['//depot/main/src/a.ts', 'not updated'],
-      ['//depot/main/src/gone.ts', 'not deleted'],
-    ])
   })
 
   // The summary claimed work and no record accounted for it — the caller must
@@ -711,6 +807,93 @@ describe('toSyncOutcome — force repair', () => {
     const outcome = toSyncOutcome(forceRun([]), CLIENT_ROOT, true, true)
     expect(outcome?.upToDate).toBe(true)
     expect(outcome?.summary.handoff).toBe(0)
+  })
+
+  // `--delete-untracked` 删掉的文件也进 appliedFiles（它们的漂移行同样作废），但汇总里
+  // 单独计数、从 applied 扣除——「同步了几个文件」与「清掉几个 depot 从不跟踪的文件」
+  // 不是同一件事，历史要分开显示。
+  it('reports untracked deletions apart from the files it synced', () => {
+    const outcome = toSyncOutcome(
+      forceRun(
+        [
+          forceFile(),
+          forceFile({
+            class: 'untracked',
+            action: 'deleting',
+            depotFile: '//depot/main/junk.log',
+            clientFile: '//main/junk.log',
+            rev: undefined,
+          }),
+        ],
+        [],
+        { total: 2, counts: { update: 1, untracked: 1 } },
+      ),
+      CLIENT_ROOT,
+      true,
+      true,
+    )
+    expect(outcome?.appliedFiles.map((file) => file.depotFile)).toEqual([
+      '//depot/main/src/a.ts',
+      '//depot/main/junk.log',
+    ])
+    expect(outcome?.summary).toMatchObject({
+      applied: 1,
+      untrackedDeleted: 1,
+      upToDate: false,
+      unrecognized: false,
+    })
+  })
+
+  // 只删未跟踪文件的一轮同样是「干了活」，不能报成已是最新或无法识别。
+  it('reports an untracked-only repair as work done', () => {
+    const outcome = toSyncOutcome(
+      forceRun(
+        [
+          forceFile({
+            class: 'untracked',
+            action: 'deleting',
+            depotFile: '//depot/main/junk.log',
+            clientFile: '//main/junk.log',
+            rev: undefined,
+          }),
+        ],
+        [],
+        { total: 1, counts: { untracked: 1 } },
+      ),
+      CLIENT_ROOT,
+      true,
+      true,
+    )
+    expect(outcome?.summary).toMatchObject({
+      applied: 0,
+      untrackedDeleted: 1,
+      upToDate: false,
+      unrecognized: false,
+    })
+  })
+
+  // 计数跟着行一起成立：一条记不出身份的 untracked 记录若只计数不建行，
+  // `applied - untrackedDeleted` 会变成负数并写进历史。这样的流回答不了问题。
+  it('has no conclusion for an untracked record without an identity', () => {
+    expect(
+      toSyncOutcome(
+        forceRun(
+          [
+            forceFile({
+              class: 'untracked',
+              action: 'deleting',
+              depotFile: undefined,
+              rev: undefined,
+            }),
+          ],
+          [],
+          { total: 1, counts: { untracked: 1 } },
+        ),
+        CLIENT_ROOT,
+        true,
+        true,
+      ),
+    ).toBeUndefined()
   })
 })
 

@@ -158,6 +158,15 @@ export function formatCounts(counts: P4SyncCountsDto): string {
       }),
     )
   }
+  // `--delete-untracked` 删掉的本地文件：它们不是「同步下来的文件」，所以单独一句，
+  // 且只在真的删过时出现（旧记录没有这一项，按 0 处理）。
+  if ((counts.untrackedDeleted ?? 0) > 0) {
+    parts.push(
+      localize('perforceSyncHistory.counts.untrackedDeleted', '{0} untracked file(s) deleted', {
+        0: String(counts.untrackedDeleted),
+      }),
+    )
+  }
   return parts.length > 0
     ? parts.join(' · ')
     : localize('perforceSyncHistory.counts.none', 'nothing to transfer')
@@ -250,7 +259,10 @@ function countsTotal(counts: P4SyncCountsDto): number {
     counts.refusedOverwrite +
     counts.keptOpen +
     counts.mustResolve +
-    counts.handoff
+    counts.handoff +
+    // 已从 `applied` 里扣掉，所以这里不会重复计数；算进来才能让「只删了未跟踪文件」的一轮
+    // 不被判成「什么也没发生」。
+    (counts.untrackedDeleted ?? 0)
   )
 }
 

@@ -138,6 +138,12 @@ export interface SyncRunSummary {
    */
   readonly handoff: number
   /**
+   * δ `--delete-untracked` 删掉的未跟踪文件数（`class:"untracked"`）。它们不是「同步下来的
+   * 文件」，所以**不计入** {@link applied}——历史要把「更新了几个文件」与「清掉几个 depot
+   * 从不跟踪的文件」分开显示。旧记录 / 原生路径没有这一项。
+   */
+  readonly untrackedDeleted?: number
+  /**
    * True when p4 reported `file(s) up-to-date.`. Measured on P4D 2024.2: this
    * arrives on **stderr with exit 0** — nothing to do, not a failure.
    */
@@ -250,7 +256,8 @@ export function syncNothingHappened(summary: SyncRunSummary | undefined): boolea
       summary.mustResolve === 0 &&
       summary.refusedModified === 0 &&
       summary.refusedOverwrite === 0 &&
-      summary.handoff === 0)
+      summary.handoff === 0 &&
+      (summary.untrackedDeleted ?? 0) === 0)
   )
 }
 

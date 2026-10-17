@@ -14,12 +14,7 @@ import type { P4Action } from '../changelist.js'
 import type { P4deltaRecord, P4deltaRunResult } from './p4deltaService.js'
 import { clientToLocalPath } from '../pathUtil.js'
 import type { ReconcileFile } from '../reconcileParser.js'
-import {
-  parseSyncOverwriteRefused,
-  parseSyncRefused,
-  type SyncPreviewFile,
-  type SyncRunSummary,
-} from '../syncParser.js'
+import { REFUSED_DELETE_ACTION, type SyncPreviewFile, type SyncRunSummary } from '../syncParser.js'
 
 /** The three actions δ's `open` mode shares with `p4 reconcile -a -e -d`. */
 type ReconcileAction = Extract<P4Action, 'add' | 'edit' | 'delete'>
@@ -110,6 +105,11 @@ export interface P4deltaSummary {
   /** `class` → count. Only non-zero classes are emitted; an absent class is 0. */
   readonly counts: Record<string, number>
   readonly total: number
+  /**
+   * 普通同步的逐文件拒绝条数（`kind:"conflict"` 记录数）。契约保证每轮都发；
+   * 缺席说明这份流没有结论，{@link toSyncOutcome} 返回 undefined——不回退、不猜。
+   */
+  readonly conflicts: number | undefined
   readonly unmatched: number
   /** `null` on success, `"no-entry-matched"` when every scope entry came up
    *  empty, `"error"` for any other failure. */
@@ -139,11 +139,16 @@ export function summarizeRun(result: P4deltaRunResult): P4deltaSummary | undefin
       force: record['force'] === true,
       counts: readCounts(record['counts']),
       total: asNumber(record['total']),
+      conflicts: asFiniteNumber(record['conflicts']),
       unmatched: asNumber(record['unmatched']),
       reason: asString(record['reason']) ?? null,
     }
   }
   return undefined
+}
+
+function asFiniteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
 function readCounts(raw: unknown): Record<string, number> {
@@ -323,9 +328,10 @@ export interface P4deltaSyncOutcome {
 /** 内容真正落盘的同步类；`resolve` 是它的第四个（已签出文件，have 前进但内容未动）。 */
 const APPLIED_SYNC_CLASSES = new Set(['add', 'update', 'delete'])
 
-/** 强制修复档的类表：与普通 get 共有 `update`/`delete`，另有 `revert`（漂移内容写回目标）与
- *  `restore`（本地缺失的文件补回）；没有 `add`（p4 把写回报成 `restore`）。 */
-const APPLIED_FORCE_CLASSES = new Set(['update', 'revert', 'restore', 'delete'])
+/** 强制修复档的类表：与普通 get 共有 `update`/`delete`，另有 `revert`（漂移内容写回目标）、
+ *  `restore`（本地缺失的文件补回）与 `untracked`（`--delete-untracked` 删掉的本地文件）；
+ *  没有 `add`（p4 把写回报成 `restore`）。 */
+const APPLIED_FORCE_CLASSES = new Set(['update', 'revert', 'restore', 'delete', 'untracked'])
 
 /** What one sync run's file records say, before any conclusion is drawn. */
 interface SyncRecordTally {
@@ -333,6 +339,10 @@ interface SyncRecordTally {
   readonly applied: SyncPreviewFile[]
   /** `class:"resolve"` records: opened files whose have moved to the target. */
   readonly resolve: number
+  /** `class:"untracked"` records: local files deleted by `--delete-untracked`. They
+   *  are rows in {@link applied} (their drift rows are gone), but the summary
+   *  reports them under their own count so history can tell the two apart. */
+  readonly untracked: number
   /** `class:"handoff"`：整批转交给原生 p4 的文件，只有强制修复档会发（见
    *  {@link SyncRunSummary.handoff}）。 */
   readonly handoff: number
@@ -348,16 +358,17 @@ function tallySyncRecords(
 ): SyncRecordTally {
   const applied: SyncPreviewFile[] = []
   let resolve = 0
+  let untracked = 0
   let handoff = 0
   for (const record of records) {
     if (record['kind'] !== 'file' || record['mode'] !== 'sync') continue
     const klass = asString(record['class'])
-    if (klass === undefined) return { applied, resolve, handoff, foreign: true }
+    if (klass === undefined) return { applied, resolve, untracked, handoff, foreign: true }
     if (klass === 'handoff') {
       // handoff 字段写明这批文件交给了哪条原生命令，修复档是 `sync`；
       // clean/reconcile 的属于别档的流，普通 get 根本不发。
       if (!force || record['handoff'] !== 'sync')
-        return { applied, resolve, handoff, foreign: true }
+        return { applied, resolve, untracked, handoff, foreign: true }
       handoff += 1
       continue
     }
@@ -365,12 +376,23 @@ function tallySyncRecords(
       resolve += 1
       continue
     }
+    if (force && klass === 'untracked') {
+      // 只删磁盘、不进 have：行仍进 applied（它的漂移行随文件一起消失），但单独计数，
+      // 汇总里从 applied 扣掉，历史才能把「同步了几个文件」与「删了几个未跟踪文件」分开。
+      const row = syncFileRow(record, clientRoot)
+      // 计数要跟着行一起成立：只计一条记不出身份的记录，会让 `applied - untrackedDeleted`
+      // 变成负数并写进历史。缺身份字段的流回答不了这个问题，按异类流处理。
+      if (row === undefined) return { applied, resolve, untracked, handoff, foreign: true }
+      applied.push(row)
+      untracked += 1
+      continue
+    }
     const allowed = force ? APPLIED_FORCE_CLASSES : APPLIED_SYNC_CLASSES
-    if (!allowed.has(klass)) return { applied, resolve, handoff, foreign: true }
+    if (!allowed.has(klass)) return { applied, resolve, untracked, handoff, foreign: true }
     const row = syncFileRow(record, clientRoot)
     if (row !== undefined) applied.push(row)
   }
-  return { applied, resolve, handoff, foreign: false }
+  return { applied, resolve, untracked, handoff, foreign: false }
 }
 
 /**
@@ -397,6 +419,71 @@ export function appliedSyncFiles(
   ).applied
 }
 
+/** 结构化冲突的已知 reason → 给 UI 读的 action 文案。`delete-modified` 与原生解析器
+ *  共用同一个常量：那个文件不能做逐文件 force（钉 have 版本会把已删的文件复活）。 */
+const CONFLICT_ACTIONS: Readonly<Record<string, string>> = {
+  'update-modified': 'not updated',
+  'delete-modified': REFUSED_DELETE_ACTION,
+  'overwrite-existing': 'not updated',
+}
+
+/** 一次 sync 记录流里的冲突，分成原生解析器已有的两个桶。 */
+interface SyncConflictTally {
+  readonly refused: SyncPreviewFile[]
+  readonly overwrite: SyncPreviewFile[]
+  /** 流里 `kind:"conflict"` 记录的**原始条数**；summary.conflicts 与它对账。 */
+  readonly count: number
+  /** 认不出 reason 或缺身份字段：这份流不是我们理解的那版契约。 */
+  readonly foreign: boolean
+}
+
+/**
+ * Read `kind:"conflict"` records (normal sync's per-file refusals) into the same
+ * {@link SyncPreviewFile} rows the native output parser produces, so remedies
+ * stay identical across engines.
+ *
+ * The reason decides the bucket: `overwrite-existing` means there is no local
+ * modification to collect or diff (the file is not in the have table), so it
+ * keeps its own list; the other two are "locally modified" refusals. An unknown
+ * reason is treated as a foreign stream rather than dropped — a newer engine
+ * may have introduced a refusal shape whose remedy we do not know yet.
+ */
+function collectSyncConflicts(
+  records: readonly P4deltaRecord[],
+  clientRoot: string,
+): SyncConflictTally {
+  const refused: SyncPreviewFile[] = []
+  const overwrite: SyncPreviewFile[] = []
+  const seen = new Set<string>()
+  let count = 0
+  for (const record of records) {
+    if (record['kind'] !== 'conflict' || record['mode'] !== 'sync') continue
+    count += 1
+    const reason = asString(record['reason'])
+    if (reason === undefined || CONFLICT_ACTIONS[reason] === undefined) {
+      return { refused, overwrite, count, foreign: true }
+    }
+    const depotFile = asString(record['depotFile'])
+    if (depotFile === undefined) return { refused, overwrite, count, foreign: true }
+    const clientFile = asString(record['clientFile'])
+    const row: SyncPreviewFile = {
+      depotFile,
+      // Client syntax by contract; `clientToLocalPath` passes degraded local
+      // paths through untouched, exactly like {@link syncFileRow}.
+      clientFile: clientFile === undefined ? undefined : clientToLocalPath(clientFile, clientRoot),
+      action: CONFLICT_ACTIONS[reason]!,
+      rev: asString(record['rev']) ?? '',
+    }
+    // 引擎已经去过重；这里再按身份去一次，因为这两个列表会被直接拿去拼补救按钮。
+    const key = `${row.depotFile}\u0000${row.clientFile ?? ''}\u0000${row.rev}\u0000${row.action}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    if (reason === 'overwrite-existing') overwrite.push(row)
+    else refused.push(row)
+  }
+  return { refused, overwrite, count, foreign: false }
+}
+
 /**
  * Read a δ sync run, or undefined when the stream has no conclusion. Undefined
  * is load-bearing and means the same thing it does for {@link summarizeRun}: the
@@ -411,10 +498,12 @@ export function appliedSyncFiles(
  * `expectForce` 是请求的另一半：两档共用 `mode:"sync"` 与部分类表，这个布尔是唯一区分——读错任
  * 一方向都会把「覆盖」与「普通拉取」互认，所以每档只认自己的类表。
  *
- * Refusals never reach the records: p4 reports them as per-file messages on
- * stderr (which the engine passes through verbatim under `--json`), so they are
- * read back with the native parser's own regexes. That is what keeps the
- * collect/force remedies identical across the two engines.
+ * Refusals are read only from the structural records (`kind:"conflict"`); the
+ * engine's stderr text is never parsed. Every sync summary carries a `conflicts`
+ * count by contract (normal or force, preview or apply), so a stream without it —
+ * or one whose count disagrees with the records — is incomplete and has no
+ * conclusion. A force run emits no conflicts; records in one are a stream from
+ * another mode.
  */
 export function toSyncOutcome(
   result: P4deltaRunResult,
@@ -429,10 +518,14 @@ export function toSyncOutcome(
   }
   const tally = tallySyncRecords(result.records, clientRoot, expectForce)
   if (tally.foreign) return undefined
+  const conflicts = collectSyncConflicts(result.records, clientRoot)
+  // 强制修复不走原生那套逐文件保护，冲突记录只属于普通同步；出现了说明流串档。
+  if (conflicts.foreign || (expectForce && conflicts.count > 0)) return undefined
+  // 契约保证 summary 恒发 conflicts：缺席即「这份流没有结论」，不回退 stderr、不猜。
+  if (summary.conflicts !== conflicts.count) return undefined
 
-  const logText = result.log.join('\n')
-  const refusedFiles = parseSyncRefused(logText, clientRoot)
-  const refusedOverwriteFiles = parseSyncOverwriteRefused(logText, clientRoot)
+  const refusedFiles = conflicts.refused
+  const refusedOverwriteFiles = conflicts.overwrite
   // An opened file whose have moved makes p4 print BOTH "is opened and not being
   // changed" (a skip) and "must resolve #N before submitting" (work left). The
   // engine collapses that pair into one `resolve` record, so it feeds both
@@ -443,10 +536,12 @@ export function toSyncOutcome(
   const refusedModified = refusedFiles.length
   const refusedOverwrite = refusedOverwriteFiles.length
   const handoff = tally.handoff
+  const untrackedDeleted = tally.untracked
   // `total` is the run's own ledger — in an applied run it counts exactly the
   // records above — so a zero total is the engine saying "no files to sync".
   // Refusals outrank it, same rule as the native parser's.
   // 转交出去的那批同样优先：账本刻意不记它，但它是真实发生的工作。
+  // 未跟踪删除也在 `tally.applied` 里（它的漂移行同样作废），所以这一条已覆盖它。
   const upToDate =
     summary.total === 0 &&
     tally.applied.length === 0 &&
@@ -456,12 +551,15 @@ export function toSyncOutcome(
     handoff === 0
   return {
     summary: {
-      applied: tally.applied.length,
+      // 未跟踪删除单独计数：它删的是 depot 从不跟踪的文件，与「同步了几个文件」不是
+      // 同一件事，历史里要分开显示。tally.applied 仍保留它，供漂移行作废使用。
+      applied: tally.applied.length - untrackedDeleted,
       keptOpen,
       mustResolve,
       refusedModified,
       refusedOverwrite,
       handoff,
+      ...(untrackedDeleted > 0 ? { untrackedDeleted } : {}),
       upToDate,
       // The ledger claimed work and nothing at all accounts for it — the caller
       // must log that rather than show "0 applied" as a finished get. A refusal

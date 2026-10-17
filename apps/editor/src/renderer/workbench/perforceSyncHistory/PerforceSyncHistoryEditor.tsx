@@ -589,6 +589,17 @@ function RunDetail({ id }: { id: string }) {
               ? localize('perforceSyncHistory.yes', 'yes')
               : localize('perforceSyncHistory.no', 'no')}
           </dd>
+          {/* 旧记录没有这个字段：那一行整行不出现，而不是把「当时还没有这个能力」写成「否」。 */}
+          {detail.deleteUntracked !== undefined && (
+            <>
+              <dt>{localize('perforceSyncHistory.field.deleteUntracked', 'Delete untracked')}</dt>
+              <dd data-testid="perforce-sync-history-detail-delete-untracked">
+                {detail.deleteUntracked
+                  ? localize('perforceSyncHistory.yes', 'yes')
+                  : localize('perforceSyncHistory.no', 'no')}
+              </dd>
+            </>
+          )}
           <dt>{localize('perforceSyncHistory.field.threads', 'Parallel threads')}</dt>
           <dd data-testid="perforce-sync-history-detail-threads">
             {detail.engine === 'p4delta'

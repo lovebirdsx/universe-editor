@@ -178,6 +178,30 @@ describe('PerforceSyncHistoryEditor', () => {
     expect(within(rows[1]!).getByTestId('perforce-sync-history-row-time')).toBeTruthy()
   })
 
+  it('shows the delete-untracked flag, and hides the row for records that predate it', async () => {
+    const withFlag = makeRun({ id: 'run-1', force: true, deleteUntracked: true })
+    const legacy = makeRun({ id: 'run-2', force: true })
+    renderEditor(
+      makeCommandService(
+        makePage([withFlag, legacy]),
+        new Map([
+          ['run-1', makeDetail(withFlag)],
+          ['run-2', makeDetail(legacy)],
+        ]),
+      ),
+    )
+    await flush()
+
+    expect(screen.getByTestId('perforce-sync-history-detail-delete-untracked').textContent).toBe(
+      'yes',
+    )
+
+    fireEvent.click(screen.getAllByTestId('perforce-sync-history-row')[1]!)
+    await flush()
+    // 旧记录的字段缺席 ≠ 「否」：整行不出现，而不是把“当时还没有这个能力”写成否定。
+    expect(screen.queryByTestId('perforce-sync-history-detail-delete-untracked')).toBeNull()
+  })
+
   it('renders a missing sampler as unavailable, never as zero bytes', async () => {
     // `exactOptionalPropertyTypes`: "no sampler" is an ABSENT key, so the record
     // is built by dropping it rather than by setting it to undefined.

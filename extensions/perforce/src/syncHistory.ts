@@ -236,6 +236,9 @@ export interface SyncHistoryCounts {
   readonly keptOpen: number
   readonly mustResolve: number
   readonly handoff: number
+  /** `--delete-untracked` 删掉的本地文件数。它不是「同步下来的文件」，所以不在
+   *  `applied` 里；旧记录没有这一项（缺席 = 该能力尚未存在，不是 0）。 */
+  readonly untrackedDeleted?: number
 }
 
 /**
@@ -296,6 +299,13 @@ export interface SyncHistoryEntry {
    *  `#4`, `@2026/08/01`, or `''` for a per-file get. */
   readonly spec: string
   readonly force: boolean
+  /**
+   * 这次强制拉取是否连未跟踪文件一起删了。
+   *
+   * 新记录恒有（未启用时写 `false`），旧记录缺席——两者必须能区分：UI 对缺席的旧记录
+   * 隐藏这一行，对新的 `false` 明确显示「否」。
+   */
+  readonly deleteUntracked?: boolean
   readonly trigger: SyncHistoryTrigger
   readonly outcome: SyncHistoryOutcome
   /** Host paths + directory-ness — the range the get actually covered. NOT
@@ -379,6 +389,7 @@ export interface BuildSyncHistoryInput {
   readonly clientRoot: string
   readonly spec: string
   readonly force: boolean
+  readonly deleteUntracked?: boolean
   readonly trigger: SyncHistoryTrigger
   /** The range the get covered, as the call site named it. */
   readonly scope: readonly SyncScopeTarget[]
@@ -412,6 +423,8 @@ export function buildSyncHistoryEntry(input: BuildSyncHistoryInput): SyncHistory
     clientRoot: input.clientRoot,
     spec: input.spec,
     force: input.force,
+    // 新记录恒写这一项（旧记录没有），否则 UI 分不清「这次没删」与「当时还没有这个能力」。
+    deleteUntracked: input.deleteUntracked === true,
     trigger: input.trigger,
     outcome: input.outcome,
     scope,
@@ -441,6 +454,8 @@ function countsOf(summary: SyncRunSummary): SyncHistoryCounts {
     keptOpen: summary.keptOpen,
     mustResolve: summary.mustResolve,
     handoff: summary.handoff,
+    // 新记录恒带这一项（0 表示这次确实没删），旧记录缺席。
+    untrackedDeleted: summary.untrackedDeleted ?? 0,
   }
 }
 
@@ -483,7 +498,9 @@ function isCounts(value: unknown): value is SyncHistoryCounts {
     isCount(c['refusedOverwrite']) &&
     isCount(c['keptOpen']) &&
     isCount(c['mustResolve']) &&
-    isCount(c['handoff'])
+    isCount(c['handoff']) &&
+    // 旧记录没有这一项；有就必须是一个合法的非负整数。
+    (c['untrackedDeleted'] === undefined || isCount(c['untrackedDeleted']))
   )
 }
 
@@ -532,6 +549,7 @@ export function isEntry(value: unknown): value is SyncHistoryEntry {
   if (typeof e['clientRoot'] !== 'string' || e['clientRoot'].length === 0) return false
   if (typeof e['spec'] !== 'string') return false
   if (typeof e['force'] !== 'boolean') return false
+  if (e['deleteUntracked'] !== undefined && typeof e['deleteUntracked'] !== 'boolean') return false
   if (typeof e['trigger'] !== 'string' || !TRIGGERS.includes(e['trigger'])) return false
   if (typeof e['outcome'] !== 'string' || !OUTCOMES.includes(e['outcome'])) return false
   // The module's own cap, not just the entry shape: a hand-written (or
@@ -578,6 +596,7 @@ export function toRunDto(entry: SyncHistoryEntry): P4SyncRunDto {
     clientRoot: entry.clientRoot,
     spec: entry.spec,
     force: entry.force,
+    ...(entry.deleteUntracked !== undefined ? { deleteUntracked: entry.deleteUntracked } : {}),
     trigger: entry.trigger,
     outcome: entry.outcome,
     ...(entry.engine !== undefined ? { engine: entry.engine } : {}),

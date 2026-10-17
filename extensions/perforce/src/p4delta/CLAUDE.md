@@ -2,6 +2,8 @@
 
 δ 引擎（`p4delta`，外部 Rust 单文件 CLI）在本扩展里的一切：**spawn 封装 + 副本解析**（`p4deltaService.ts`）+ **记录的纯解析**（`p4deltaParser.ts`）+ **运行日志的有界落盘**（`p4deltaRunLog.ts`）+ **托管副本的自动安装/升级**（其余四个文件）。δ 是可选加速：任何一环出问题都回退原生 p4，绝不改变语义（叙事与契约硬条款见 [`../../docs/reconcile.md`](../../docs/reconcile.md)）。
 
+解析契约的两处新形状：普通同步的逐文件拒绝以 `kind:"conflict"` 到达，summary **恒发** `conflicts`（普通/force、预演/apply 都发）——消费方**只读记录**并与计数对账，**字段缺失或对不上即无结论**，绝不回退 stderr（也没必要兼容旧引擎）；`--force` 可带 `--delete-untracked`（只能与 `--sync --force` 同用，**绝不回退原生**），`class:"untracked"` 是第五类，`applied` 已扣除删除数。字段表在 `p4delta/docs/json-contract.md`，消费语义在 [`../../docs/reconcile.md`](../../docs/reconcile.md)。
+
 > 本目录**除 `p4deltaService.ts` 外一律不 import `@universe-editor/extension-api`**：宿主能力（存储路径、日志、通知、进度）全部注入，所以这几个新模块可纯单测、可整体上移成包。改这里时保持这条。
 
 ## 运行日志（`p4deltaRunLog.ts` + `extension.ts` 的 sink）

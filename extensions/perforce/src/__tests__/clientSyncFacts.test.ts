@@ -281,6 +281,7 @@ function deltaSummary(overrides: Record<string, unknown> = {}): Record<string, u
     force: false,
     total: 1,
     counts: { update: 1 },
+    conflicts: 0,
     // The real engine always states a final p4 command count on its summary;
     // a stub that omitted it would read as an incomplete (lower-bound) run.
     p4Calls: 0,

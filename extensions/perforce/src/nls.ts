@@ -117,8 +117,13 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.syncPrompt.date': '日期（yyyy/mm/dd，可带时间）',
   'perforce.syncPrompt.rev': '修订号',
   'perforce.btn.forceSync': '强制拉取',
+  'perforce.btn.forceSyncDeleteUntracked': '强制拉取并删除未跟踪文件',
   'perforce.sync.forceConfirm':
     '强制拉取会覆盖本地文件——即使 Perforce 认为它们已是最新，其中未收集的改动（包括未被跟踪的同名文件）将丢失。目标版本：{0}；未签出的文件会被重置到该版本。范围：{1}。此操作不可撤销。',
+  'perforce.sync.forceConfirmDeleteUntracked':
+    '强制拉取会覆盖本地文件——即使 Perforce 认为它们已是最新，其中未收集的改动（包括未被跟踪的同名文件）将丢失。选择「删除未跟踪文件」还会删除范围内 depot 不跟踪、且未被 .p4ignore 保护的本地文件。目标版本：{0}；未签出的文件会被重置到该版本。范围：{1}。此操作不可撤销。',
+  'perforce.sync.deleteUntrackedUnavailable':
+    '删除未跟踪文件需要由 p4delta 执行强制拉取（{0}）；未执行任何操作。',
   'perforce.sync.forcePickTitle':
     '强制拉取将用 depot 版本覆盖勾选的文件，其中未收集的本地修改与未被跟踪的占位文件将丢失，且不可撤销。（黄色 = 有本地修改，紫色 = 未被跟踪的同名文件）',
   'perforce.sync.forcePickOk': '强制拉取所选 ({0})',
@@ -159,6 +164,7 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.sync.refusedNoLocalPath': '无法显示差异：被跳过的文件没有映射到当前工作区。',
   'perforce.sync.unrecognized': '拉取版本没有返回可识别的结果，详情请查看 Perforce 输出。',
   'perforce.sync.applied': '已更新 {0} 个文件',
+  'perforce.sync.untrackedDeleted': '已删除 {0} 个未跟踪文件',
   'perforce.sync.handoff': '{0} 个文件已交由 p4 同步',
   'perforce.sync.keptOpen': '{0} 个已跳过（正在签出中）',
   'perforce.sync.mustResolve': '{0} 个需要合并',

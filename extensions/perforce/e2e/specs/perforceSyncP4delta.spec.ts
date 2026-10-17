@@ -23,7 +23,7 @@
  *  原生 filespec 表达不了，「无目标 get 整仓」会被它直接拒绝。可观测性全靠 `refused` 种子（正向 get 带不带 `-f` 写的字节一样）。
  *--------------------------------------------------------------------------------------------*/
 
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { evaluateWhenRestored, mkTempDir, type WorkbenchPO } from '@universe-editor/e2e-harness'
 import {
@@ -104,6 +104,25 @@ const outside: SeedFile = {
   refused: true,
 }
 
+// `--delete-untracked` 的四类现场：范围内会被删的、p4ignore 保护的、排除子树里的、
+// 范围外的。后三类都必须原样活着——只断言「有一个文件被删」证明不了保护生效。
+const JUNK = 'junk to delete\n'
+const junk: SeedFile = { relPath: 'Content/junk.log', content: JUNK, untracked: true }
+const IGNORED_JUNK = 'build noise\n'
+const ignoredJunk: SeedFile = {
+  relPath: 'Content/build/output.log',
+  content: IGNORED_JUNK,
+  untracked: true,
+}
+const EXCLUDED_JUNK = 'excluded junk\n'
+const excludedJunk: SeedFile = {
+  relPath: 'Content/gen/tmp.log',
+  content: EXCLUDED_JUNK,
+  untracked: true,
+}
+const OUTSIDE_JUNK = 'outside junk\n'
+const outsideJunk: SeedFile = { relPath: 'Outside/junk.log', content: OUTSIDE_JUNK, untracked: true }
+
 const FORCE_SUBMITTED: readonly P4SubmittedSeed[] = [
   {
     changelist: '4521',
@@ -138,6 +157,13 @@ interface RecordedRun {
   readonly outcome: string
   /** δ 运行引用：这一跑留下的那份日志文件的 runId（纯原生 get 没有）。 */
   readonly deltaRunId?: string
+  /** 这一跑是否请求了「强制拉取并删除未跟踪文件」。老记录没有该字段。 */
+  readonly deleteUntracked?: boolean
+  readonly counts?: {
+    readonly applied?: number
+    readonly refusedModified?: number
+    readonly untrackedDeleted?: number
+  }
   readonly p4Calls?: {
     readonly native: number
     readonly p4delta: number
@@ -411,6 +437,15 @@ test.describe('@p1 perforce p4delta get', () => {
       // overwrites what the refusal just protected.
       expect(deltaSyncLines(logs.delta).length).toBeGreaterThan(0)
       expect(nativeSyncLines(logs.p4)).toEqual([])
+
+      // 结构化冲突（`kind:"conflict"`）没有改变结论：拒绝仍然进 `refusedModified`，
+      // 也就是「这一跑有东西没拉下来」这件事被记录下来了。
+      await expect
+        .poll(async () => (await recordedRuns(page))[0]?.counts?.refusedModified, {
+          timeout: 30_000,
+          message: 'the structured conflict should still be tallied as a refused file',
+        })
+        .toBe(1)
     })
   })
 
@@ -421,8 +456,10 @@ test.describe('@p1 perforce p4delta get', () => {
     const SCAN_HOLD_MS = 20_000
     test.use({
       p4Seeds: {
-        files: [forced, excludedDraft, outside],
+        files: [forced, excludedDraft, outside, junk, ignoredJunk, excludedJunk, outsideJunk],
         submitted: FORCE_SUBMITTED,
+        // p4ignore 规则（fake 的 `p4 ignores -i` 口径）：`Content/build` 整棵受保护。
+        ignored: ['Content/build'],
       },
       p4delta: {},
       p4ExtraEnv: {
@@ -604,6 +641,78 @@ test.describe('@p1 perforce p4delta get', () => {
           nativeRecord.id,
         )
         expect(opened).toEqual({ ok: false, reason: 'unknown-run' })
+      })
+
+      await test.step('the second button deletes untracked files, and every protection still wins', async () => {
+        // 前两条强制拉取都没请求删除档：未跟踪文件必须原样活着——这正是删除入口
+        // 必须是显式 opt-in 的证据。
+        expect(existsSync(perforce.file(junk.relPath))).toBe(true)
+        expect(existsSync(perforce.file(ignoredJunk.relPath))).toBe(true)
+        const repairsBefore = deltaForceLines(logs.delta).length
+        // 上一条 journey 的逐文件 `#rev` 强拉走的是原生 p4，日志里已经躺着它的一行；
+        // 这里要守的是「删除档没有另起原生 sync」，所以比增量而不是比空。
+        const nativeSyncsBefore = nativeSyncLines(logs.p4).length
+
+        void page.evaluate(() => void window.__E2E__!.runCommand('perforce.sync')).catch(() => {})
+        const quickInput = page.getByTestId('quick-input')
+        await expect(
+          quickInput.getByText('Force-get: as of a changelist…', { exact: true }),
+        ).toBeVisible({ timeout: 30_000 })
+        await quickInput.getByText('Force-get: as of a changelist…', { exact: true }).click()
+        const prompt = page.getByPlaceholder('12345', { exact: true })
+        await expect(prompt).toBeVisible({ timeout: 30_000 })
+        await prompt.fill('4521')
+        await prompt.press('Enter')
+
+        const dialog = forceDialog
+        await expect(dialog).toBeVisible({ timeout: 30_000 })
+        // 两个按钮：普通强制拉取与「连同未跟踪文件一起删」。
+        await expect(dialog.getByRole('button', { name: 'Force Get', exact: true })).toBeVisible()
+        await dialog
+          .getByRole('button', { name: 'Force Get + Delete Untracked', exact: true })
+          .click()
+
+        // 范围内、未被保护的未跟踪文件消失。
+        await expect
+          .poll(() => existsSync(perforce.file(junk.relPath)), {
+            timeout: 60_000,
+            message: 'the delete-untracked run should unlink the untracked file',
+          })
+          .toBe(false)
+        // 三类保护现场原样活着：p4ignore 覆盖的、排除子树里的、范围外的。
+        expect(readFileSync(perforce.file(ignoredJunk.relPath), 'utf8')).toBe(IGNORED_JUNK)
+        expect(readFileSync(perforce.file(excludedJunk.relPath), 'utf8')).toBe(EXCLUDED_JUNK)
+        expect(readFileSync(perforce.file(outsideJunk.relPath), 'utf8')).toBe(OUTSIDE_JUNK)
+
+        // 调用的形状：同一条 δ 修复多出一个 `--delete-untracked`；原生没有多跑一次。
+        await expect
+          .poll(() => deltaForceLines(logs.delta).length, {
+            timeout: 30_000,
+            message: 'the delete-untracked repair should be exactly one more δ run',
+          })
+          .toBe(repairsBefore + 1)
+        expect(
+          deltaForceLines(logs.delta).filter((l) => /(^| )--delete-untracked( |$)/.test(l)),
+        ).toHaveLength(1)
+        expect(nativeSyncLines(logs.p4).length).toBe(nativeSyncsBefore)
+
+        // 历史：删除档与删除数分开记；`applied` 里不含被删的未跟踪文件。
+        await expect
+          .poll(async () => (await recordedRuns(page))[0]?.deleteUntracked, {
+            timeout: 30_000,
+            message: 'the run should record that untracked files were deleted',
+          })
+          .toBe(true)
+        const run = (await recordedRuns(page))[0]!
+        expect(run.counts?.untrackedDeleted).toBe(1)
+        expect(run.counts?.applied).toBe(1)
+
+        // 删除是不可逆动作，结果提示必须点名删了几个——不能只说「已更新 1 个文件」。
+        await expect(
+          page
+            .locator('[data-testid="notification-toast-item"]')
+            .filter({ hasText: '1 untracked file(s) deleted' }),
+        ).toBeVisible({ timeout: 30_000 })
       })
     })
   })

@@ -67,6 +67,13 @@ export interface P4SyncCountsDto {
   readonly mustResolve: number
   /** Files δ handed to native p4 as a batch (per-file outcome unknown). */
   readonly handoff: number
+  /**
+   * Local files removed by `--delete-untracked`. Kept out of `applied`: those
+   * were never depot-tracked, so "N updated" and "N untracked deleted" answer
+   * different questions. Absent on records written before the capability
+   * existed — render that as "not recorded", never as 0.
+   */
+  readonly untrackedDeleted?: number
 }
 
 /** One host-path entry of a run's scope. */
@@ -134,6 +141,12 @@ export interface P4SyncRunDto {
    *  `@2026/08/01`, or `''` for a per-file get. Never re-derived. */
   readonly spec: string
   readonly force: boolean
+  /**
+   * Whether this force get also deleted untracked files. Present on every new
+   * record (`false` included), absent on records written before the field
+   * existed — the UI hides the row for those rather than claiming "no".
+   */
+  readonly deleteUntracked?: boolean
   readonly trigger: P4SyncTriggerDto
   readonly outcome: P4SyncOutcomeDto
   readonly engine?: P4SyncEngineDto

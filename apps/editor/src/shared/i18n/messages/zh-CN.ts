@@ -1531,6 +1531,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'perforceSyncHistory.field.engine': '引擎',
   'perforceSyncHistory.field.target': '目标修订',
   'perforceSyncHistory.field.force': '强制',
+  'perforceSyncHistory.field.deleteUntracked': '删除未跟踪文件',
   'perforceSyncHistory.field.threads': '并行线程',
   'perforceSyncHistory.field.p4Calls': 'p4 调用次数',
   'perforceSyncHistory.field.p4CallsByCommand': '花在哪',
@@ -1559,6 +1560,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'perforceSyncHistory.counts.keptOpen': '{0} 个已打开编辑',
   'perforceSyncHistory.counts.mustResolve': '{0} 个需要合并',
   'perforceSyncHistory.counts.handoff': '{0} 个整批转交 p4',
+  'perforceSyncHistory.counts.untrackedDeleted': '已删除 {0} 个未跟踪文件',
   'perforceSyncHistory.counts.none': '无需传输',
 
   // --- Swarm ---

@@ -28,7 +28,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { spawnSync } from 'node:child_process'
-import { readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { mkTempDir } from '@universe-editor/e2e-harness'
@@ -116,6 +116,9 @@ const SUMMARY_KEYS = [
   'force',
   'total',
   'counts',
+  // 拒绝不是逐文件动作：它不进 `counts`/`total`，单独计数。字段恒在（普通同步
+  // 没有拒绝时也是 0），与真工具的 summary 一致。
+  'conflicts',
   // The final native p4 process count. The per-call `p4CommandCount` events are
   // only observations; this key is the conclusion the editor reads. It sits
   // between `counts` and `scopeMatched` because that is where the engine emits
@@ -230,12 +233,19 @@ const syncArgs = (
   clientRoot: string,
   applied: boolean,
   targets: readonly string[],
-  options: { readonly spec?: string; readonly override?: boolean } = {},
+  options: {
+    readonly spec?: string
+    readonly override?: boolean
+    readonly force?: boolean
+    readonly deleteUntracked?: boolean
+  } = {},
 ): string[] => [
   '--json',
   '--client-root',
   clientRoot,
   '--sync',
+  ...(options.force === true ? ['--force'] : []),
+  ...(options.force === true && options.deleteUntracked === true ? ['--delete-untracked'] : []),
   ...(options.spec === undefined || options.spec === '#head'
     ? []
     : ['--to', options.spec.slice(1)]),
@@ -391,6 +401,55 @@ test.describe('@p1 p4delta fake contract — normal sync', () => {
     expect(state.opened['//depot/opened.txt']).toMatchObject({ rev: 4, unresolved: true })
   })
 
+  test('turns p4 refusals into structured conflicts, one per preview, tagged apply on a write', ({
+    p4Workspace,
+  }) => {
+    const preview = runFake(
+      syncArgs(p4Workspace.clientRoot, false, [dirTarget(p4Workspace.clientRoot)]),
+      { logs: makeLogs() },
+      p4Workspace.stateFile,
+    )
+    expect(preview.code).toBe(0)
+    expect(preview.unparsed).toEqual([])
+    const conflictsOf = (run: FakeRun): Record<string, unknown>[] =>
+      run.records.filter((r) => r['kind'] === 'conflict')
+    expect(conflictsOf(preview)).toEqual([
+      {
+        kind: 'conflict',
+        mode: 'sync',
+        reason: 'update-modified',
+        action: 'not updated',
+        depotFile: '//depot/refused.txt',
+        clientFile: '//e2e-client/refused.txt',
+        rev: '3',
+        stage: 'preview',
+        applied: false,
+        force: false,
+      },
+    ])
+    // A refusal is not an action: it stays out of `counts`/`total`, and only the
+    // dedicated summary field counts it.
+    expect(summaryOf(preview)).toMatchObject({
+      total: 3,
+      counts: { update: 2, resolve: 1 },
+      conflicts: 1,
+    })
+    // The raw notice still rides stderr for humans; the editor never parses it.
+    expect(refusalLines(preview)).toHaveLength(1)
+
+    const applied = runFake(
+      syncArgs(p4Workspace.clientRoot, true, [dirTarget(p4Workspace.clientRoot)]),
+      { logs: makeLogs() },
+      p4Workspace.stateFile,
+    )
+    expect(applied.code).toBe(0)
+    // 一轮只发一套：带 `-a` 时预演那份就是 apply 段的种子（被拒文件不进下发规格，
+    // apply 命令自己不会再报它）。
+    expect(conflictsOf(applied)).toEqual([expect.objectContaining({ stage: 'apply', applied: true })])
+    expect(summaryOf(applied)).toMatchObject({ conflicts: 1 })
+    expect(readFileSync(p4Workspace.file('refused.txt'), 'utf8')).toBe('draft to keep\n')
+  })
+
   test('a normal sync refuses the one-off exclusions, a force repair takes them', ({
     p4Workspace,
   }) => {
@@ -421,6 +480,131 @@ test.describe('@p1 p4delta fake contract — normal sync', () => {
     )
     expect(forced.code).toBe(0)
     expect(onlyScope(logs).mode).toBe('sync')
+  })
+})
+
+// ---- --delete-untracked: the fifth sync class ----
+
+test.describe('@p1 p4delta fake contract — delete untracked', () => {
+  const trackedOnly: SeedFile = { relPath: 'tracked.txt', content: 'have tracked\n' }
+  const junk: SeedFile = { relPath: 'junk.log', content: 'junk\n', untracked: true }
+  // A p4ignore match and a path outside the client root are the two categories
+  // the flag must NEVER delete.
+  const ignoredJunk: SeedFile = { relPath: 'build/output.log', content: 'noise\n', untracked: true }
+  test.use({
+    p4Seeds: { files: [trackedOnly, junk, ignoredJunk], ignored: ['build'] },
+  })
+
+  test('is a usage error unless it comes with --sync --force', ({ p4Workspace }) => {
+    const root = p4Workspace.clientRoot
+    for (const argv of [
+      ['--delete-untracked'],
+      ['--sync', '--delete-untracked'],
+      ['--clean', '--force', '--delete-untracked'],
+    ]) {
+      const run = runFake(
+        ['--json', '--client-root', root, ...argv, dirTarget(root)],
+        { logs: makeLogs() },
+        p4Workspace.stateFile,
+      )
+      // clap `requires_all`: the parse stage refuses it, writes NOTHING to
+      // stdout, and exits 2 — the one code the editor reads as "wrong argv".
+      expect(run.code, argv.join(' ')).toBe(2)
+      expect(run.stdout).toBe('')
+    }
+  })
+
+  test('previews the class without deleting, then unlinks only unignored untracked files', ({
+    p4Workspace,
+  }) => {
+    const preview = runFake(
+      syncArgs(p4Workspace.clientRoot, false, [dirTarget(p4Workspace.clientRoot)], {
+        force: true,
+        deleteUntracked: true,
+      }),
+      { logs: makeLogs() },
+      p4Workspace.stateFile,
+    )
+    expect(preview.code).toBe(0)
+    expect(preview.unparsed).toEqual([])
+    const untracked = filesOf(preview).filter((r) => r['class'] === 'untracked')
+    expect(untracked).toEqual([
+      expect.objectContaining({
+        kind: 'file',
+        mode: 'sync',
+        class: 'untracked',
+        action: 'deleting',
+        depotFile: '//depot/junk.log',
+        clientFile: '//e2e-client/junk.log',
+        applied: false,
+        force: true,
+      }),
+    ])
+    expect(untracked[0]).not.toHaveProperty('rev')
+    expect(untracked[0]).not.toHaveProperty('stage')
+    // The class is a file action like any other: it counts into `total`, and the
+    // ignored file is not in the stream at all.
+    expect(summaryOf(preview)).toMatchObject({
+      total: 2,
+      counts: { revert: 1, untracked: 1 },
+      conflicts: 0,
+    })
+    // Both protection queries are real p4 processes and ride the same account.
+    expect(summaryOf(preview)['p4CallsByCommand']).toMatchObject({ where: 1, ignores: 1 })
+    // A preview deletes nothing.
+    expect(readFileSync(p4Workspace.file(junk.relPath), 'utf8')).toBe('junk\n')
+    expect(readFileSync(p4Workspace.file(ignoredJunk.relPath), 'utf8')).toBe('noise\n')
+
+    const applied = runFake(
+      syncArgs(p4Workspace.clientRoot, true, [dirTarget(p4Workspace.clientRoot)], {
+        force: true,
+        deleteUntracked: true,
+      }),
+      { logs: makeLogs() },
+      p4Workspace.stateFile,
+    )
+    expect(applied.code).toBe(0)
+    expect(filesOf(applied).filter((r) => r['class'] === 'untracked')).toEqual([
+      expect.objectContaining({ applied: true, force: true }),
+    ])
+    expect(summaryOf(applied)).toMatchObject({ counts: { revert: 1, untracked: 1 }, total: 2 })
+    expect(existsSync(p4Workspace.file(junk.relPath))).toBe(false)
+    expect(readFileSync(p4Workspace.file(ignoredJunk.relPath), 'utf8')).toBe('noise\n')
+  })
+
+  test('a run without the flag leaves the same untracked file alone', ({ p4Workspace }) => {
+    const run = runFake(
+      syncArgs(p4Workspace.clientRoot, true, [dirTarget(p4Workspace.clientRoot)], {
+        force: true,
+      }),
+      { logs: makeLogs() },
+      p4Workspace.stateFile,
+    )
+    expect(run.code).toBe(0)
+    expect(filesOf(run).filter((r) => r['class'] === 'untracked')).toEqual([])
+    expect(existsSync(p4Workspace.file(junk.relPath))).toBe(true)
+  })
+})
+
+test.describe('@p1 p4delta fake contract — delete untracked refuses an empty depot', () => {
+  // Only untracked files: no depot record exists to tell them apart from a
+  // broken scope or client mapping, so the flag must refuse and touch nothing.
+  test.use({ p4Seeds: { files: [{ relPath: 'junk.log', content: 'junk\n', untracked: true }] } })
+
+  test('fails closed before deleting anything', ({ p4Workspace }) => {
+    const run = runFake(
+      syncArgs(p4Workspace.clientRoot, true, [dirTarget(p4Workspace.clientRoot)], {
+        force: true,
+        deleteUntracked: true,
+      }),
+      { logs: makeLogs() },
+      p4Workspace.stateFile,
+    )
+    expect(run.code).toBe(1)
+    expect(run.unparsed).toEqual([])
+    expect(errorMessageOf(run)).toContain('--delete-untracked refused')
+    expect(summaryOf(run)).toMatchObject({ ok: false, reason: 'error', conflicts: 0 })
+    expect(readFileSync(p4Workspace.file('junk.log'), 'utf8')).toBe('junk\n')
   })
 })
 

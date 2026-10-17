@@ -215,3 +215,33 @@ describe('forceConfirmMessage', () => {
     expect(body).toContain('… (2 filespecs)')
   })
 })
+
+describe('forceDeleteUntrackedConfirmMessage', () => {
+  const original = process.env.UNIVERSE_DISPLAY_LOCALE
+
+  afterEach(() => {
+    if (original === undefined) delete process.env.UNIVERSE_DISPLAY_LOCALE
+    else process.env.UNIVERSE_DISPLAY_LOCALE = original
+  })
+
+  async function load(locale: string) {
+    vi.resetModules()
+    process.env.UNIVERSE_DISPLAY_LOCALE = locale
+    return await import('../syncSpec.js')
+  }
+
+  // The dialog publishes two buttons, so the body must state both layers of
+  // destruction: the ordinary force overwrite AND the extra deletion of local
+  // files the depot does not track. A body that only repeated the force message
+  // would make the second button indistinguishable from the first.
+  it('names the extra untracked deletion and the p4ignore protection', async () => {
+    const { forceDeleteUntrackedConfirmMessage } = await load('en-US')
+    const body = forceDeleteUntrackedConfirmMessage('@4521', 'X:/ws/src/...')
+    expect(body).toContain('Perforce thinks they are current')
+    expect(body).toContain('untracked')
+    expect(body).toContain('.p4ignore')
+    expect(body).toContain('@4521')
+    expect(body).toContain('X:/ws/src/...')
+    expect(body).toContain('cannot be undone')
+  })
+})
