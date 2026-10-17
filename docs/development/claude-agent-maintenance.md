@@ -46,6 +46,7 @@ SHA 记录当前 P2 起点；下表测试结果保留为**首批验收历史**�
 | ID | 必须成立的行为 | 实现入口（fork `src/`） | fork 测试 | 主仓测试 | 验证层级 |
 |---|---|---|---|---|---|
 | CT-COMPACT-RESTORE | 已压缩会话恢复保留压缩前显示内容与 steering；跨 boundary 的父链在 `logicalParentUuid` 为 `null` / 悬空时经 `compactMetadata.preservedSegment.tailUuid` 兜底，不得截断压缩前历史；缺磁盘历史时正确降级 | `acp-agent.ts`（`loadSession` / `replaySessionHistory`）、`transcript-history.ts`（`rebuildTranscriptDisplayChain` / `displayParentOf`）、`resumed-session.ts` | `session-contract-guards.test.ts`（实际 load）、`acp-agent.test.ts`（replay across compaction）、`transcript-history.test.ts` | `apps/editor/src/renderer/services/acp/session/__tests__/AcpSession.timeline.test.ts` | 离线 + 真实 transcript 只读语料核对；真实 CLI 历史恢复未验证 |
+| CT-COMPACT-NOTIFY | 每次压缩只发一条 `_universe/compaction` start（同一次压缩的 CLI 30s 心跳不得重发）；无 `compact_result` 的结束帧之后，同 turn 的下一次压缩仍能开新卡；权限模式切换帧不当作压缩结束 | `acp-agent.ts`（`case "status"` / `currentCompactionId`） | `acp-agent.test.ts`（心跳折叠 / 同 turn 两轮各自一条 start / 无 result 结束后可再 start / `permissionMode` 帧不是结束 / `requesting` 帧不是结束 / `compact_boundary` 不清标记） | `AcpSessionService.test.ts`（孤儿合并、同 id 重复 start 的既有编辑器语义，未改动） | 离线；真实 CLI 长压缩（>30s 心跳）未验证 |
 | CT-FORK-ANCHOR | 指定位置分叉：活跃与休眠/新实例均正确定位；显式锚点不存在即报错，不退化成整份复制 | `session-anchor.ts`（`resolveForkAnchor`）、`acp-agent.ts`（`unstable_forkSession` / 薄壳 `forkSliceBefore`）、`transcript-history.ts`（`findFoldedPromptParent`） | `session-anchor.test.ts`、`fork-session-sdk.test.ts`（真实 SDK 文件操作）、`session-contract-guards.test.ts`、`acp-agent.test.ts`（rewind/fork）、`transcript-history.test.ts` | `apps/editor/integration/scenarios/acpForkContract.integration.test.ts`（合成 transcript 的真实 dist 腿）、`apps/editor/src/renderer/services/acp/session/__tests__/AcpSession.poolResume.integration.test.ts` | 离线 + 真实 SDK 文件改写（合成 transcript）；真实模型请求未验证 |
 | CT-SUBAGENT | 非 AIR 输出含 editor 可识别的子 Agent 信息；归属正确、完成即结束；自引用父 ID 不污染状态 | `tools.ts`、`subagent-history.ts`、`acp-agent.ts` | `session-contract-guards.test.ts`（实际 prompt）、`tool-call-contract.test.ts`、`tools.test.ts` | `apps/editor/src/renderer/services/acp/session/__tests__/acpSessionUpdateMeta.test.ts`、同目录 `AcpSession.timeline.test.ts` | 离线；真实子 Agent 业务未验证 |
 | CT-CONTROL-CHANNEL | 新会话首 turn 前不发阻塞性上下文查询；load 不等不必要控制请求；后台刷新只在合法阶段执行 | `acp-agent.ts`（`hasStartedTurn`、`refreshContextWindowInBackground`） | `create-session-options.test.ts`、`session-config-options.test.ts`（deferred 控制请求） | `apps/editor/integration/scenarios/acpForkContract.integration.test.ts` | 离线；真实 CLI 配置路由通过（见验收记录） |
@@ -160,6 +161,18 @@ SHA 记录当前 P2 起点；下表测试结果保留为**首批验收历史**�
 **测试与负向验证**：`transcript-history.test.ts` 6 例（悬空 lp / `null` lp / 优先级守卫 / 双坏降级锚 / tail 为 attachment / 两 boundary 且较新那个链接坏）、`session-contract-guards.test.ts` 走真 `session/load` 的 2 例（`it.each` 覆盖两种坏形态，断言 6 项顺序表）、`acp-agent.test.ts` 回放 1 例。**把第三候选删掉（等价旧码）→ 上述 7 例全红**，精确还原后 fork 全量 **2485 通过 / 31 跳过 / 0 失败**（较第二批基线 2476 增 9，即本批新增用例），`typecheck` / `lint` / `format:check` 通过。
 
 **已知限制**：① 链变长使回放字节预算更吃紧（本机增量 ≤3.39 MB/会话，对 `MAIN_REPLAY_TOTAL_CAP_BYTES` 96 MiB 余量充足）；预算触顶的现象是「丢最新尾部」，属独立话题，本批不改。② tail 若指向被 rewind 放弃的分支，回溯会顺它走进去、把 CLI 已丢弃的消息带回时间线（本机语料 0/180；lp 可解析时旧码本就有同一暴露面，文件内无法判别活/弃分支）。③ 链变长后 `backfillForkedToolResults` 与子代理 stats restamp 的扫描面变大，压缩前的分叉 tool_result / 子代理用量会被正确补上——属**期望**变化，不是回归。
+
+## P2 第四批：压缩卡片 30s 心跳去重（修复）
+
+起点为 P2 第三批之后的本地工作区。
+
+**症状**：编辑器会话里的上下文压缩卡片（进度条 + 秒表）在长压缩期间「进度条走满（99%）→ 秒表归零、进度条从 0 重走」，而压缩并未结束。**根因**：CLI 在压缩进行期间**每 30s** 重发心跳帧 `{type:"sdk_status",status:"compacting"}`（二进制证据：`var Gwo=30000` + `QB`/`zwo` 的 `setInterval`，挂载于 reactive auto、手动 `/compact`、precompute、retry 四条路径），SDK 翻成 `{type:"system",subtype:"status",status:"compacting"}`；`acp-agent.ts` 的 `case "status"` 对**每一帧**都铸新 uuid 并发 `_universe/compaction` 的 `phase:"start"`，编辑器只能把新 id 当作一次新压缩（合并 running 孤儿槽并重打 `startedAt`）→ 每 30s 重置。同 fork 的 ACP 层 `ContextCompactionLifecycle.start()` 本有幂等守卫，漏的只有 fork 私有的 ext 通道。
+
+**修法**：`currentCompactionId !== undefined` 时视为同一压缩的心跳——不铸 id、不发 start（仍调 `compaction.start`：ACP 层在其实体未达终态时自行去重）；补兜底清标记 `status === null && permissionMode === undefined`，覆盖 hookBlocked / 作废 precompute 的 `compact_end` 这类无 result 的结束帧；权限模式切换帧同为 `status:null` 但带 `permissionMode`（`SDKStatusMessage.permissionMode`），必须排除，否则「压缩中切模式」会让缺陷在窄窗口内复发；`requesting` 帧（`stream_request_start`）由 `status === null` 检查天然排除。`compact_boundary` 处**刻意不清标记**：流里可见的 boundary 都排在终态帧之后（清它是 no-op），而 retry 路径上一次尝试的 boundary 可能插在 retry 的 `compacting` 与其终态之间，清了反致一次秒表重开。
+
+**测试与负向验证**：`acp-agent.test.ts` 新增 6 例——心跳折叠（三个不同 uuid 只出 `[start, success]`）、同 turn 两轮压缩各发一条 start（防过度去重）、无 result 结束后下一次 start 不被吞、`permissionMode` 帧不当作结束、`requesting` 帧（每 turn 的 `stream_request_start`）不当作结束、`compact_boundary` 不清标记（防后人"顺手补上"）。改动前跑红 2 例（心跳折叠用例收到 `[start, start, start, success]`、permissionMode 用例收到 `[start, start, success]`，即复现证据），修后全绿；四条判据各有负向验证：只做去重不加兜底 → 第 3 例红；兜底漏 `permissionMode` 守卫 → 第 4 例红；兜底漏 `status === null` 检查（写成无条件 else）→ 第 4、5 例同时红；在 boundary 分支补清标记 → 第 6 例红。fork 全量 **2495 通过 / 31 跳过 / 0 失败**（含本批新增 6 例；须按维护原则剥离 `ANTHROPIC_BASE_URL` 等网关环境变量后运行），`typecheck` / `lint` / `format:check` 通过。
+
+**已知限制（勿写成"彻底解决"）**：① 若存在只发 `compacting`、不发任何终结帧的 CLI 路径（本 build 的站点枚举里没有），标记陈旧到下一次 turn 激活，代价是该 turn 后续压缩不开新卡；② precompute 与 retry 心跳真并发时可能多一次秒表重开（该 build 不可达）；③ 新 turn 的 `resetTurnScratch()` 在交错时序下可能清掉刚置的标记（一次重开，不改 turn 机制）。**未验证**：真实 CLI 的 >30s 长压缩（心跳实测）需真实凭据，未执行。
 
 ## 后续范围
 
