@@ -973,6 +973,20 @@ export interface E2EProbe {
    */
   getActiveEditorVisibleLineCount(): number | undefined
   /**
+   * The active editor's folding model: total regions, how many are collapsed,
+   * and whether a region covers the cursor line (the one `editor.toggleFold`
+   * would act on). Folding ranges reach the model asynchronously — the JSON
+   * worker debounces, and a language-configuration update restarts the
+   * computation — while monaco's fold actions resolve their model promise and
+   * then silently do nothing when it still holds no regions. Specs must wait
+   * for `regionAtCursor` (toggle) or `regionCount > 0` (fold-all) before a
+   * single key press, or a cold editor swallows the press. Undefined when no
+   * file editor is mounted.
+   */
+  getActiveEditorFoldingState():
+    | { regionCount: number; collapsedCount: number; regionAtCursor: boolean }
+    | undefined
+  /**
    * Full text of the active Monaco editor's model, or undefined when the active
    * editor isn't a file editor (or its Monaco instance isn't mounted). Used by
    * the markdown-editing spec to assert the result of each editing command.

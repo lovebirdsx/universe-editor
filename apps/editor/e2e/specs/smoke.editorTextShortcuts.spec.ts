@@ -206,6 +206,8 @@ const firstVisibleLine = (page: Page) =>
   page.evaluate(() => window.__E2E__!.getActiveEditorFirstVisibleLine())
 const visibleLineCount = (page: Page) =>
   page.evaluate(() => window.__E2E__!.getActiveEditorVisibleLineCount())
+const foldingState = (page: Page) =>
+  page.evaluate(() => window.__E2E__!.getActiveEditorFoldingState())
 
 async function setText(page: Page, body: string): Promise<void> {
   await expect
@@ -455,6 +457,15 @@ test.describe('@p1 editor text shortcuts', () => {
     await test.step('Ctrl+Shift+Alt+F folds', async () => {
       await setText(page, JSON_BODY)
       await page.evaluate(() => window.__E2E__!.setActiveEditorCursor(1, 1))
+      // Folding ranges reach the model asynchronously (the JSON worker debounces,
+      // and a language-configuration update restarts the computation). Monaco's
+      // toggle action silently no-ops when the model it gets back holds no region
+      // yet, so one press on a cold editor can be swallowed entirely.
+      await expect
+        .poll(() => foldingState(page), {
+          message: 'no foldable region at the cursor — the key press would be a silent no-op',
+        })
+        .toMatchObject({ regionAtCursor: true })
       const before = (await visibleLineCount(page)) ?? 0
       await page.keyboard.press('Control+Shift+Alt+f')
       // Folding is view state, so the buffer stays put either way — the visible
@@ -649,6 +660,13 @@ test.describe('@p1 editor text shortcuts', () => {
 
     await test.step('Ctrl+K Ctrl+0 resolves and runs the fold-all chord', async () => {
       await setText(page, JSON_BODY)
+      // Same cold-start gate as the toggle step: fold-all also resolves the async
+      // folding model and no-ops silently when it still has no regions.
+      await expect
+        .poll(async () => (await foldingState(page))?.regionCount ?? 0, {
+          message: 'the folding model has no regions yet — fold-all would be a silent no-op',
+        })
+        .toBeGreaterThan(0)
       const before = (await visibleLineCount(page)) ?? 0
       await page.keyboard.press('Control+k')
       await page.keyboard.press('Control+0')

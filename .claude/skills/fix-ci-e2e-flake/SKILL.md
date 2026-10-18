@@ -103,6 +103,7 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 - 等 fake CLI **盘上日志**的断言 60s 恒空 `[]`、而 SCM provider/refresh/探针全程健康（纯黑截图+aria 空壳是已知产物）=产品端「先 `await` 读配置、后 push 订阅」的毫秒窗口吞掉启动期异步载入的工作区设置层（该会话永久为空，retry 救得回但改断言无用）；修=抽 `watchConfig` 先订阅后读（seq 守卫），并给该 fixture 接失败取证（输出通道+fake 日志）。**压测（`--repeat-each=10 --workers=2`）再暴露更深一层**：取证里 `reconcile exclusions: 0 dir(s)` + `--exclude-dir` 全程 0 = 设置层**根本没载入**（跟消费方订阅顺序无关）——`UserSettingsSync` 把 `onDidChangeFile` 注册在 `initialize()` 末尾，而 main 在工作区变更时 fire 的那次「装槽 + 广播」正好落在「首读已发出、监听器未注册」的窗口里被丢（瞬态广播无 replay，之后无人 re-read）；修=订阅移到构造函数 + 可控读闸单测（变异验证）→ 案例 104
 - reload 后 pane 尺寸**回到等分**、差值**恰等于产品步长常量**（如 50 = `RESIZE_STEP`）、同 suite 其它 reload 用例与 Linux 恒绿（Windows 慢机偶发、retry 同形态）=恢复校正的两条路径都「一次性且不重试」（key effect 早退后永不重跑 + 600ms 窗口从**容器** mount 起算、而 reconcile 超时从 **app** mount 起算，对晚挂载容器实际预算为 0），等分被 `proportionalLayout` 锁死；先看截图两 pane 是否相等，再用探针 `getPersistedViewSize` 分开「没落盘」与「没恢复」；修=「未应用即保持武装」，别放宽断言或加 timeout → 案例 105
 - δ `--sync -a` 日志恒 0、磁盘已更新且原生日志出现 sync，删掉命令注册等待后暴露=SCM 注册不等于首轮 δ scan 分派；健康 δ 操作前只读等待目录扫描 argv，不改首轮前 native 契约 → 案例 106
+- 折叠键按下后 received **稳定等于按前可见行数**、同测试相邻按键全过=monaco fold action 解析异步折叠模型，模型尚无 region 时静默 no-op；按键前 poll 探针 `regionAtCursor`（fold-all 用 `regionCount > 0`），保持单次按键与断言强度 → 案例 107
 
 ## 关键参考路径
 - `apps/editor/e2e/specs/` —— 所有 e2e spec；`@p0` 阻塞 CI，`@p1` 次级

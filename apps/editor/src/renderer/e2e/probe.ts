@@ -443,6 +443,20 @@ interface InlineCompletionsControllerLike {
   readonly model?: { get?: () => InlineCompletionsModelLike | undefined }
 }
 
+/** Minimal shape of Monaco's folding controller (`editor.contrib.folding`). */
+interface FoldingRegionsLike {
+  readonly length: number
+  isCollapsed(index: number): boolean
+}
+interface FoldingModelLike {
+  readonly regions: FoldingRegionsLike
+  getRegionAtLine(lineNumber: number): unknown
+}
+interface FoldingControllerLike {
+  dispose(): void
+  readonly foldingModel?: FoldingModelLike | null
+}
+
 function phaseToName(phase: LifecyclePhase): E2ELifecyclePhase {
   switch (phase) {
     case LifecyclePhase.Starting:
@@ -799,6 +813,22 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       const ranges = monaco?.getVisibleRanges()
       if (!ranges) return undefined
       return ranges.reduce((n, r) => n + (r.endLineNumber - r.startLineNumber + 1), 0)
+    },
+    getActiveEditorFoldingState: () => {
+      const monaco = getActiveTextEditor(services.editorGroupsService)?.editor
+      if (!monaco) return undefined
+      const controller = monaco.getContribution<FoldingControllerLike>('editor.contrib.folding')
+      const model = controller?.foldingModel
+      const regions = model?.regions
+      if (!model || !regions) return { regionCount: 0, collapsedCount: 0, regionAtCursor: false }
+      let collapsedCount = 0
+      for (let i = 0; i < regions.length; i++) if (regions.isCollapsed(i)) collapsedCount++
+      const cursorLine = monaco.getPosition()?.lineNumber
+      return {
+        regionCount: regions.length,
+        collapsedCount,
+        regionAtCursor: cursorLine !== undefined && Boolean(model.getRegionAtLine(cursorLine)),
+      }
     },
     getActiveEditorText: () => {
       const monaco = getActiveTextEditor(services.editorGroupsService)?.editor
