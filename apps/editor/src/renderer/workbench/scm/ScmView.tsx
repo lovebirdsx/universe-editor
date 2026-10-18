@@ -401,7 +401,7 @@ function rowClick(
 ): void {
   if (e.shiftKey) {
     e.preventDefault()
-    model.selectRange(model.focused ?? node.id, node.id)
+    model.extendSelectionTo(node.id)
     return
   }
   if (e.ctrlKey || e.metaKey) {

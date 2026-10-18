@@ -533,7 +533,7 @@ export function OutlineView() {
             // (ctx.onClickRow would also toggle non-leaf rows; don't use it here.)
             const onClick = (e: ReactMouseEvent) => {
               if (e.shiftKey) {
-                model.selectRange(model.focused ?? node.id, node.id)
+                model.extendSelectionTo(node.id)
               } else if (e.ctrlKey || e.metaKey) {
                 model.toggleInSelection(node.id)
               } else {

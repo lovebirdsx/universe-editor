@@ -31,6 +31,8 @@ import {
   SelectPreviousAcpPromptSuggestionAction,
 } from '../agentTimelineActions.js'
 import { CancelAgentTurnAction } from '../agentSessionActions.js'
+import { CancelExplorerMultiSelectionAction } from '../explorerSelectionActions.js'
+import { MarkdownPreviewFindCloseAction } from '../markdownActions.js'
 import { OutlineNavigateDownAction, OutlineNavigateUpAction } from '../outlineActions.js'
 
 /**
@@ -150,6 +152,16 @@ const SCENARIOS: readonly Scenario[] = [
     scoped: OutlineNavigateUpAction,
     scopedId: OutlineNavigateUpAction.ID,
   },
+  {
+    name: 'Explorer cancel multi-selection (escape) beats global escape',
+    key: 'escape',
+    context: {
+      focusedView: 'workbench.view.explorer.tree',
+      explorerMultiSelection: true,
+    },
+    scoped: CancelExplorerMultiSelectionAction,
+    scopedId: CancelExplorerMultiSelectionAction.ID,
+  },
 ]
 
 describe('keybinding order independence — scoped weight beats registration order', () => {
@@ -209,6 +221,44 @@ describe('keybinding order independence — scoped weight beats registration ord
       })
     })
   }
+})
+
+describe('Explorer escape vs Markdown find close', () => {
+  const disposables: IDisposable[] = []
+
+  afterEach(() => {
+    while (disposables.length > 0) disposables.pop()?.dispose()
+  })
+
+  function findVisibleExplorerContext(): ContextKeyService {
+    const ctx = new ContextKeyService()
+    disposables.push(ctx)
+    ctx.set('focusedView', 'workbench.view.explorer.tree')
+    ctx.set('explorerMultiSelection', true)
+    ctx.set('markdownPreviewFindVisible', true)
+    return ctx
+  }
+
+  // The find-close binding is a default-weight global Escape binding whose
+  // condition does not follow DOM focus. The scoped Explorer binding must win
+  // by weight even when it was registered first.
+  it('cancel multi-selection wins when registered first', () => {
+    disposables.push(registerAction2(CancelExplorerMultiSelectionAction))
+    disposables.push(registerAction2(MarkdownPreviewFindCloseAction))
+
+    expect(
+      KeybindingsRegistry.resolveKeystroke('escape', findVisibleExplorerContext()),
+    ).toMatchObject({ kind: 'execute', command: CancelExplorerMultiSelectionAction.ID })
+  })
+
+  it('cancel multi-selection wins when registered last', () => {
+    disposables.push(registerAction2(MarkdownPreviewFindCloseAction))
+    disposables.push(registerAction2(CancelExplorerMultiSelectionAction))
+
+    expect(
+      KeybindingsRegistry.resolveKeystroke('escape', findVisibleExplorerContext()),
+    ).toMatchObject({ kind: 'execute', command: CancelExplorerMultiSelectionAction.ID })
+  })
 })
 
 describe('cancel-turn moved to shift+escape (bare escape stays with the widgets)', () => {

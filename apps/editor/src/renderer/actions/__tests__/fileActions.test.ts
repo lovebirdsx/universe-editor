@@ -78,6 +78,7 @@ import {
   MoveFileAction,
   PasteExplorerFileAction,
 } from '../fileClipboardActions.js'
+import { CancelExplorerMultiSelectionAction } from '../explorerSelectionActions.js'
 import {
   ExplorerTreeService,
   IExplorerTreeService,
@@ -834,6 +835,7 @@ beforeEach(() => {
   disposables.push(registerAction2(CopyExplorerFileAction))
   disposables.push(registerAction2(PasteExplorerFileAction))
   disposables.push(registerAction2(CancelCutExplorerFileAction))
+  disposables.push(registerAction2(CancelExplorerMultiSelectionAction))
   disposables.push(registerAction2(DuplicateFileAction))
   disposables.push(registerAction2(MoveFileAction))
 })
@@ -1449,6 +1451,20 @@ describe('fileActions', () => {
       expect(h.fileClipboard.clearCalls).toBe(1)
       expect(h.tree.hasClipboard).toBe(false)
       expect(h.tree.clipboardIsCut).toBe(false)
+    })
+
+    it('CancelExplorerMultiSelectionAction collapses the selection to the focused row', async () => {
+      const root = URI.file('/ws')
+      const a = URI.joinPath(root, 'a.txt')
+      const b = URI.joinPath(root, 'b.txt')
+      const c = URI.joinPath(root, 'c.txt')
+      const h = makeHarness({ root })
+      h.tree.setSelection([a, b, c], b)
+
+      await run(h, CancelExplorerMultiSelectionAction.ID)
+
+      expect(h.tree.selection.map((u) => u.toString())).toEqual([b.toString()])
+      expect(h.tree.focused?.toString()).toBe(b.toString())
     })
 
     it('DuplicateFileAction prompts with an incremental name and copies to it', async () => {

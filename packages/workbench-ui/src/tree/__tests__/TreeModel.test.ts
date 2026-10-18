@@ -301,6 +301,170 @@ describe('TreeModel', () => {
     })
   })
 
+  describe('range extension anchor', () => {
+    const flat = (): TreeModel<N> =>
+      new TreeModel({
+        dataSource: eagerSource([{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }]),
+      })
+
+    it('keeps the first anchor across repeated Shift+ArrowDown', () => {
+      const model = flat()
+      model.setSelection(['a'], 'a')
+      model.navigate('down', true)
+      model.navigate('down', true)
+      expect(model.selection).toEqual(['a', 'b', 'c'])
+      expect(model.focused).toBe('c')
+    })
+
+    it('retracts toward the anchor on Shift+ArrowUp', () => {
+      const model = flat()
+      model.setSelection(['a'], 'a')
+      model.navigate('down', true)
+      model.navigate('down', true)
+      model.navigate('up', true)
+      expect(model.selection).toEqual(['a', 'b'])
+      model.navigate('up', true)
+      expect(model.selection).toEqual(['a'])
+      expect(model.focused).toBe('a')
+    })
+
+    it('plain navigation re-anchors at the new focus', () => {
+      const model = flat()
+      model.setSelection(['a'], 'a')
+      model.navigate('down', true) // anchor a, focus b
+      model.navigate('down') // plain move to c
+      model.navigate('down', true)
+      expect(model.selection).toEqual(['c', 'd'])
+    })
+
+    it('toggleInSelection moves the anchor to the clicked row', () => {
+      const model = flat()
+      model.setSelection(['a'], 'a')
+      model.toggleInSelection('c')
+      model.navigate('down', true)
+      expect(model.selection).toEqual(['c', 'd'])
+    })
+
+    it('setFocus re-anchors even when the focus does not move', () => {
+      const model = flat()
+      model.selectRange('a', 'b')
+      model.setFocus('b')
+      model.navigate('down', true)
+      expect(model.selection).toEqual(['b', 'c'])
+    })
+
+    it('setSelection re-anchors even when selection and focus are unchanged', () => {
+      const model = flat()
+      model.selectRange('a', 'b')
+      model.setSelection(['a', 'b'], 'b')
+      model.navigate('down', true)
+      expect(model.selection).toEqual(['b', 'c'])
+    })
+
+    it('explicit selectRange accumulates from the anchor it is given', () => {
+      const model = flat()
+      model.selectRange('a', 'b')
+      model.selectRange('a', 'c')
+      expect(model.selection).toEqual(['a', 'b', 'c'])
+    })
+
+    it('falls back to the focus when a collapse hides the anchor', async () => {
+      const parent: N = { id: 'p', children: [{ id: 'a1' }, { id: 'a2' }] }
+      const model = new TreeModel({ dataSource: eagerSource([parent, { id: 'b' }, { id: 'c' }]) })
+      await model.expand(parent)
+      model.selectRange('a1', 'b')
+      model.collapse(parent)
+      model.extendSelectionTo('c')
+      expect(model.selection).toEqual(['b', 'c'])
+      // The effective anchor is persisted: re-expanding must not revive a1.
+      await model.expand(parent)
+      model.extendSelectionTo('b')
+      expect(model.selection).toEqual(['b'])
+    })
+
+    it('falls back to a single row when both ends are hidden', async () => {
+      const parent: N = { id: 'p', children: [{ id: 'a1' }, { id: 'a2' }] }
+      const model = new TreeModel({ dataSource: eagerSource([parent, { id: 'b' }]) })
+      await model.expand(parent)
+      model.selectRange('a1', 'a2')
+      model.collapse(parent)
+      model.extendSelectionTo('b')
+      expect(model.selection).toEqual(['b'])
+    })
+
+    it('drops the anchor when invalidateNodes removes it (no revival on re-create)', () => {
+      const roots: N[] = [{ id: 'a' }, { id: 'b' }, { id: 'c' }]
+      const model = new TreeModel({ dataSource: eagerSource(roots) })
+      model.setSelection(['a'], 'a')
+      model.navigate('down', true) // anchor a, focus b
+      roots.shift()
+      model.invalidateNodes(['a'])
+      // Re-create the row (undo) so a stale anchor would become visible again.
+      roots.unshift({ id: 'a' })
+      model.refresh()
+      model.extendSelectionTo('c')
+      expect(model.selection).toEqual(['b', 'c'])
+    })
+
+    it('drops a deleted anchor during refreshWithFocusRecovery (no revival)', () => {
+      const roots: N[] = [{ id: 'a' }, { id: 'b' }, { id: 'c' }]
+      const model = new TreeModel({ dataSource: eagerSource(roots) })
+      model.selectRange('a', 'b')
+      model.getVisibleNodes()
+      roots.shift()
+      model.refreshWithFocusRecovery()
+      roots.unshift({ id: 'a' })
+      model.refresh()
+      model.extendSelectionTo('c')
+      expect(model.selection).toEqual(['b', 'c'])
+    })
+
+    it('keeps the anchor across a refresh with no removals', () => {
+      const model = flat()
+      model.setSelection(['a'], 'a')
+      model.navigate('down', true) // anchor a, focus b
+      model.refreshWithFocusRecovery()
+      model.navigate('down', true)
+      expect(model.selection).toEqual(['a', 'b', 'c'])
+    })
+
+    it('reset clears the anchor', () => {
+      const model = flat()
+      model.selectRange('b', 'c')
+      model.reset()
+      model.extendSelectionTo('d')
+      expect(model.selection).toEqual(['d'])
+    })
+
+    it('collapseSelectionToFocus keeps only the focused row and re-anchors', () => {
+      const model = flat()
+      model.setSelection(['a'], 'a')
+      model.navigate('down', true)
+      model.navigate('down', true) // [a, b, c], focus c
+      model.collapseSelectionToFocus()
+      expect(model.selection).toEqual(['c'])
+      expect(model.focused).toBe('c')
+      model.extendSelectionTo('d')
+      expect(model.selection).toEqual(['c', 'd'])
+    })
+
+    it('collapseSelectionToFocus falls back to the first row without a focus', () => {
+      const model = flat()
+      model.setSelection(['a', 'b'], null)
+      model.collapseSelectionToFocus()
+      expect(model.selection).toEqual(['a'])
+      expect(model.focused).toBe('a')
+    })
+
+    it('collapseSelectionToFocus is a no-op for a single row', () => {
+      const model = flat()
+      model.setSelection(['b'], 'b')
+      model.collapseSelectionToFocus()
+      expect(model.selection).toEqual(['b'])
+      expect(model.focused).toBe('b')
+    })
+  })
+
   describe('getCollapsedIds', () => {
     const foldingModel = () => {
       const roots: N[] = [

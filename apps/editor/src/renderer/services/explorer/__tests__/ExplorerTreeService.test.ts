@@ -469,7 +469,7 @@ describe('ExplorerTreeService', () => {
     expect(tree.focused?.toString()).toBe(b.toString())
   })
 
-  it('selectRange spans the inclusive range between anchor and target in visible order', async () => {
+  it('extendSelectionTo spans the inclusive range from the current focus', async () => {
     const tree = inst.createInstance(ExplorerTreeService)
     await flush()
     await tree.expand(URI.joinPath(root, 'src'))
@@ -477,7 +477,8 @@ describe('ExplorerTreeService', () => {
     // [root, src, index.ts, README.md]
     const anchor = visible[1]!.resource // src
     const target = visible[3]!.resource // README.md
-    tree.selectRange(anchor, target)
+    tree.setSelection([anchor], anchor)
+    tree.extendSelectionTo(target)
     expect(tree.selection.map((u) => u.toString())).toEqual([
       visible[1]!.resource.toString(),
       visible[2]!.resource.toString(),
@@ -486,20 +487,35 @@ describe('ExplorerTreeService', () => {
     expect(tree.focused?.toString()).toBe(target.toString())
   })
 
-  it('selectRange works in reverse order too', async () => {
+  it('extendSelectionTo works in reverse order too', async () => {
     const tree = inst.createInstance(ExplorerTreeService)
     await flush()
     await tree.expand(URI.joinPath(root, 'src'))
     const visible = tree.getVisibleEntries()
     const anchor = visible[3]!.resource
     const target = visible[1]!.resource
-    tree.selectRange(anchor, target)
+    tree.setSelection([anchor], anchor)
+    tree.extendSelectionTo(target)
     expect(tree.selection.map((u) => u.toString())).toEqual([
       visible[1]!.resource.toString(),
       visible[2]!.resource.toString(),
       visible[3]!.resource.toString(),
     ])
     expect(tree.focused?.toString()).toBe(target.toString())
+  })
+
+  it('extendSelectionTo keeps the first anchor across repeated calls', async () => {
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    await tree.expand(URI.joinPath(root, 'src'))
+    const visible = tree.getVisibleEntries()
+    tree.setSelection([visible[0]!.resource], visible[0]!.resource)
+    tree.extendSelectionTo(visible[1]!.resource)
+    tree.extendSelectionTo(visible[2]!.resource)
+    expect(tree.selection.map((u) => u.toString())).toEqual(
+      visible.slice(0, 3).map((v) => v.resource.toString()),
+    )
+    expect(tree.focused?.toString()).toBe(visible[2]!.resource.toString())
   })
 
   it('setActiveEditorResource fires onDidChange and exposes the value', async () => {
@@ -826,6 +842,74 @@ describe('ExplorerTreeService — compact folders below a cached parent', () => 
     await Promise.all([tree.expand(source), tree.expand(source)])
 
     expect(fs.calls.list.filter((p) => p === config.toString())).toHaveLength(1)
+  })
+
+  it('keeps an in-progress Shift anchor when the chain shortens', async () => {
+    const fs = makeNestedFs()
+    const inst = makeInst(fs, new FakeWorkspaceService(root), new FakeWatcher())
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    await tree.expand(source)
+    const a = URI.joinPath(source, 'a.txt')
+    // Visible rows: root, source, leaf (compact chain), a.txt.
+    tree.setSelection([leaf], leaf)
+    tree.extendSelectionTo(a)
+
+    // A sibling under `raw` shortens the chain: the leaf row id becomes `raw`.
+    fs.dirs.set(raw.toString(), [
+      { name: 'tables', isFile: false, isDirectory: true },
+      { name: 'extra', isFile: false, isDirectory: true },
+    ])
+    fs.dirs.set(URI.joinPath(raw, 'extra').toString(), [])
+    await tree.refresh(raw)
+
+    // Extending again must start from the remapped anchor (raw), not from the
+    // focus (a.txt), which would collapse the range to a single row.
+    tree.extendSelectionTo(a)
+    expect(tree.selection.map((u) => u.toString())).toEqual([raw.toString(), a.toString()])
+  })
+
+  it('ignores a stale anchor snapshot when the user re-anchors mid-refresh', async () => {
+    const fs = makeNestedFs()
+    const inst = makeInst(fs, new FakeWorkspaceService(root), new FakeWatcher())
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    await tree.expand(source)
+    const a = URI.joinPath(source, 'a.txt')
+    tree.setSelection([leaf], leaf)
+    tree.extendSelectionTo(a)
+
+    // Pause the reload so the user can act between anchor capture and remap.
+    let releaseList!: () => void
+    const listGate = new Promise<void>((resolve) => (releaseList = resolve))
+    let markListStarted!: () => void
+    const listStarted = new Promise<void>((resolve) => (markListStarted = resolve))
+    const list = fs.list.bind(fs)
+    fs.list = async (resource: URI) => {
+      if (resource.toString() === raw.toString()) {
+        markListStarted()
+        await listGate
+      }
+      return list(resource)
+    }
+
+    fs.dirs.set(raw.toString(), [
+      { name: 'tables', isFile: false, isDirectory: true },
+      { name: 'extra', isFile: false, isDirectory: true },
+    ])
+    fs.dirs.set(URI.joinPath(raw, 'extra').toString(), [])
+    const refresh = tree.refresh(raw)
+    await listStarted
+
+    // A single click while the reload is paused re-anchors at a.txt.
+    tree.setSelection([a], a)
+    releaseList()
+    await refresh
+
+    // Extending to the same row stays a no-op range instead of resurrecting
+    // the pre-refresh anchor (leaf, remapped to raw).
+    tree.extendSelectionTo(a)
+    expect(tree.selection.map((u) => u.toString())).toEqual([a.toString()])
   })
 
   it('moves focus onto the new tail when the chain shortens', async () => {

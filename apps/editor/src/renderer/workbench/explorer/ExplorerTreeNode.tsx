@@ -125,8 +125,7 @@ function ExplorerTreeNodeImpl({
 
   const onClick = (e: ReactMouseEvent) => {
     if (e.shiftKey) {
-      const anchor = tree.focused ?? resource
-      tree.selectRange(anchor, resource)
+      tree.extendSelectionTo(resource)
       return
     }
     if (e.ctrlKey || e.metaKey) {

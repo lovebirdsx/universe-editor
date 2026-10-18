@@ -421,6 +421,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.deleteFile.title': '删除',
   'action.explorer.openPreview.title': '打开预览',
   'action.filesExplorer.cancelCut': '取消剪切',
+  'action.filesExplorer.cancelMultiSelection': '取消多选',
   'action.filesExplorer.copy': '复制',
   'action.filesExplorer.cut': '剪切',
   'action.filesExplorer.duplicate': '复制副本…',

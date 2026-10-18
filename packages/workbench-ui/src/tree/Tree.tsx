@@ -411,7 +411,7 @@ export function Tree<T>(props: ITreeProps<T>) {
   // 工厂自身不钉住产出旧一代行的渲染帧。
   const makeClickHandler = useStableCallback((node: IVisibleNode<T>) => (e: ReactMouseEvent) => {
     if (e.shiftKey) {
-      model.selectRange(model.focused ?? node.id, node.id)
+      model.extendSelectionTo(node.id)
       return
     }
     if (e.ctrlKey || e.metaKey) {
@@ -446,7 +446,7 @@ export function Tree<T>(props: ITreeProps<T>) {
         const clamped = Math.max(0, Math.min(vis.length - 1, index))
         const target = vis[clamped]
         if (!target) return
-        if (e.shiftKey && model.focused) model.selectRange(model.focused, target.id)
+        if (e.shiftKey) model.extendSelectionTo(target.id)
         else model.setSelection([target.id], target.id)
       }
 

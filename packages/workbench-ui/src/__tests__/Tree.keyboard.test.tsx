@@ -54,6 +54,7 @@ function renderTree(model: TreeModel<Node>, props: Partial<Parameters<typeof Tre
           data-row-key={ctx.node.id}
           data-selected={ctx.isSelected}
           data-expanded={ctx.node.hasChildren ? ctx.node.expanded : undefined}
+          onClick={ctx.onClickRow}
         >
           {ctx.node.id}
         </div>
@@ -118,6 +119,68 @@ describe('Tree — arrow navigation drives model.navigate', () => {
     expect(selected()).toEqual(['0/0'])
     fireEvent.keyDown(view(), { key: 'ArrowLeft' })
     expect(selected()).toEqual(['0'])
+    model.dispose()
+  })
+})
+
+describe('Tree — shift range extension', () => {
+  it('keeps the original anchor across repeated Shift+ArrowDown', () => {
+    const model = makeModel()
+    renderTree(model)
+    act(() => model.setSelection(['0'], '0'))
+
+    fireEvent.keyDown(view(), { key: 'ArrowDown', shiftKey: true })
+    fireEvent.keyDown(view(), { key: 'ArrowDown', shiftKey: true })
+    expect(selected()).toEqual(['0', '0/0', '1'])
+    model.dispose()
+  })
+
+  it('repeated Shift+End keeps the full range', () => {
+    const model = makeModel()
+    renderTree(model)
+    act(() => model.setSelection(['0'], '0'))
+
+    fireEvent.keyDown(view(), { key: 'End', shiftKey: true })
+    fireEvent.keyDown(view(), { key: 'End', shiftKey: true })
+    expect(selected()).toEqual(['0', '0/0', '1'])
+    model.dispose()
+  })
+
+  it('Shift+ArrowUp retracts toward the anchor', () => {
+    const model = makeModel()
+    renderTree(model)
+    act(() => model.setSelection(['0'], '0'))
+
+    fireEvent.keyDown(view(), { key: 'ArrowDown', shiftKey: true })
+    fireEvent.keyDown(view(), { key: 'ArrowDown', shiftKey: true })
+    fireEvent.keyDown(view(), { key: 'ArrowUp', shiftKey: true })
+    expect(selected()).toEqual(['0', '0/0'])
+    fireEvent.keyDown(view(), { key: 'ArrowUp', shiftKey: true })
+    expect(selected()).toEqual(['0'])
+    model.dispose()
+  })
+
+  it('plain ArrowUp re-anchors after a range selection', () => {
+    const model = makeModel()
+    renderTree(model)
+    act(() => model.setSelection(['0'], '0'))
+
+    fireEvent.keyDown(view(), { key: 'ArrowDown', shiftKey: true })
+    fireEvent.keyDown(view(), { key: 'ArrowDown', shiftKey: true })
+    fireEvent.keyDown(view(), { key: 'ArrowUp' })
+    fireEvent.keyDown(view(), { key: 'ArrowDown', shiftKey: true })
+    expect(selected()).toEqual(['0/0', '1'])
+    model.dispose()
+  })
+
+  it('built-in Shift+Click keeps the first anchor', () => {
+    const model = makeModel()
+    renderTree(model)
+    act(() => model.setSelection(['0'], '0'))
+
+    fireEvent.click(screen.getByText('0/0'), { shiftKey: true })
+    fireEvent.click(screen.getByText('1'), { shiftKey: true })
+    expect(selected()).toEqual(['0', '0/0', '1'])
     model.dispose()
   })
 })

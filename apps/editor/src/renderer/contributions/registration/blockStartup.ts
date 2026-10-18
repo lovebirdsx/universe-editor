@@ -34,6 +34,7 @@ import { WindowZoomConfigurationContribution } from '../WindowZoomConfigurationC
 import { ScmConfigurationContribution } from '../ScmConfigurationContribution.js'
 import { BuiltInEditorBindingsContribution } from '../BuiltInEditorBindingsContribution.js'
 import { ExplorerClipboardContextContribution } from '../ExplorerClipboardContextContribution.js'
+import { ExplorerSelectionContextContribution } from '../ExplorerSelectionContextContribution.js'
 import { CompareContextContribution } from '../CompareContextContribution.js'
 import { ExplorerFileConfigurationContribution } from '../ExplorerFileConfigurationContribution.js'
 import { ExplorerMenuContribution } from '../ExplorerMenuContribution.js'
@@ -290,6 +291,13 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.explorerClipboardContext',
   ExplorerClipboardContextContribution,
+  WorkbenchPhase.BlockStartup,
+)
+
+// Escape's "cancel multi-selection" keybinding reads this root context key.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.explorerSelectionContext',
+  ExplorerSelectionContextContribution,
   WorkbenchPhase.BlockStartup,
 )
 

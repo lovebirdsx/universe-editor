@@ -175,6 +175,7 @@ import {
   MoveFileAction,
   PasteExplorerFileAction,
 } from './fileClipboardActions.js'
+import { CancelExplorerMultiSelectionAction } from './explorerSelectionActions.js'
 import {
   NewTerminalAction,
   SplitTerminalAction,
@@ -612,6 +613,7 @@ registerAction2(CutFileAction)
 registerAction2(CopyExplorerFileAction)
 registerAction2(PasteExplorerFileAction)
 registerAction2(CancelCutExplorerFileAction)
+registerAction2(CancelExplorerMultiSelectionAction)
 registerAction2(DuplicateFileAction)
 registerAction2(MoveFileAction)
 

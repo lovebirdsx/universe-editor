@@ -40,6 +40,12 @@ export interface ISetSelectionOptions {
    * keyboard cursor, which must not yank the viewport to that row.
    */
   readonly reveal?: boolean
+  /**
+   * Keep a range anchor other than the new focus. Used when selection ids were
+   * remapped (e.g. compact-folder chain reshape) and the original Shift anchor
+   * must survive; defaults to the new focus.
+   */
+  readonly anchor?: string | null
 }
 
 interface NodeState {
@@ -67,6 +73,10 @@ export class TreeModel<T> extends Disposable {
   private _selection: string[] = []
   private _selectionKeys = new Set<string>()
   private _focused: string | null = null
+  // Fixed end of a Shift range; `_focused` is the moving end. Stored by id
+  // because row indices shift on expand/collapse/refresh.
+  private _anchor: string | null = null
+  private _selectionEpoch = 0
 
   // Visible-rows cache: invalidated only when the structure changes
   // (expand / collapse / refresh). Selection mutations never touch it.
@@ -106,6 +116,20 @@ export class TreeModel<T> extends Disposable {
 
   get focused(): string | null {
     return this._focused
+  }
+
+  /** Fixed end of the next Shift range extension; null before any selection. */
+  get anchor(): string | null {
+    return this._anchor
+  }
+
+  /**
+   * Monotonic counter bumped by every public selection mutation. Internal
+   * refresh/recovery writes leave it alone, so hosts can tell whether the user
+   * acted while an async reload was in flight.
+   */
+  get selectionEpoch(): number {
+    return this._selectionEpoch
   }
 
   /** True once dispose() has run — its emitters no longer fire or accept listeners. */
@@ -314,7 +338,7 @@ export class TreeModel<T> extends Disposable {
    */
   refreshWithFocusRecovery(): void {
     const previousFocus = this._focused
-    if (previousFocus === null && this._selection.length === 0) {
+    if (previousFocus === null && this._selection.length === 0 && this._anchor === null) {
       this.refresh()
       return
     }
@@ -329,6 +353,15 @@ export class TreeModel<T> extends Disposable {
     this._invalidateStructure()
     const next = this.getVisibleNodes()
     const nextIds = new Set(next.map((n) => n.id))
+
+    // A row that was visible and is gone was removed from the data source (the
+    // model's own refresh cannot hide rows; hosts that reshape ids, such as the
+    // Explorer compact chain, remap the anchor themselves). Drop the anchor so
+    // the next Shift gesture starts from the surviving focus; a hidden anchor
+    // is kept and extendSelectionTo falls back at gesture time.
+    if (this._anchor !== null && previousIds.has(this._anchor) && !nextIds.has(this._anchor)) {
+      this._anchor = null
+    }
 
     let nextFocus = previousFocus
     if (previousFocus !== null && focusIdx >= 0 && !nextIds.has(previousFocus)) {
@@ -383,6 +416,7 @@ export class TreeModel<T> extends Disposable {
       this._emitStructure()
       return
     }
+    if (this._anchor !== null && gone.has(this._anchor)) this._anchor = null
     // Read before pruning state: the cache still holds the pre-change rows, which
     // is what the neighbour calculation needs.
     const visible = this.getVisibleNodes()
@@ -429,9 +463,11 @@ export class TreeModel<T> extends Disposable {
   /** Drop all expansion + selection state (e.g. when the root changes). */
   reset(): void {
     this._state.clear()
+    this._selectionEpoch++
     this._selection = []
     this._selectionKeys = new Set()
     this._focused = null
+    this._anchor = null
     this._emitStructure()
     this._emitSelection()
   }
@@ -450,6 +486,10 @@ export class TreeModel<T> extends Disposable {
     const list = dedupeStrings(ids)
     const newFocus =
       focus === undefined ? (list.length > 0 ? (list[list.length - 1] ?? null) : null) : focus
+    // Re-anchor before the no-op return: a programmatic selection resets the
+    // range origin even when selection and focus are unchanged.
+    this._anchor = options?.anchor !== undefined ? options.anchor : newFocus
+    this._selectionEpoch++
     if (this._sameSelection(list) && this._focused === newFocus) return
     this._replaceSelection(list)
     this._focused = newFocus
@@ -458,6 +498,9 @@ export class TreeModel<T> extends Disposable {
   }
 
   setFocus(id: string | null): void {
+    // Same as setSelection: re-anchor even when the focus itself is unchanged.
+    this._anchor = id
+    this._selectionEpoch++
     if (this._focused === id) return
     this._focused = id
     this._emitSelection()
@@ -466,28 +509,69 @@ export class TreeModel<T> extends Disposable {
 
   /** Ctrl/Cmd+Click: add when absent, remove when present. */
   toggleInSelection(id: string): void {
+    this._selectionEpoch++
     const idx = this._selection.indexOf(id)
     const next = idx >= 0 ? this._selection.filter((_, i) => i !== idx) : [...this._selection, id]
     this._replaceSelection(next)
     this._focused = id
+    this._anchor = id
     this._emitSelection()
     this._onReveal.fire({ id })
   }
 
-  /** Shift+Click: inclusive range between anchor and target in visible order. */
+  /**
+   * Explicit-anchor range selection. Shift gestures should use
+   * extendSelectionTo(), which supplies the persistent anchor. An anchor that
+   * is not on screen (stale id / collapsed ancestor) degrades to a single-row
+   * selection here; extendSelectionTo() resolves the fallback first.
+   */
   selectRange(anchorId: string, targetId: string): void {
+    this._selectionEpoch++
     const visible = this.getVisibleNodes()
-    const aIdx = visible.findIndex((n) => n.id === anchorId)
-    const tIdx = visible.findIndex((n) => n.id === targetId)
-    if (aIdx < 0 || tIdx < 0) {
+    const anchorIdx = visible.findIndex((n) => n.id === anchorId)
+    const targetIdx = visible.findIndex((n) => n.id === targetId)
+    if (anchorIdx < 0 || targetIdx < 0) {
+      // setSelection also re-anchors at the target.
       this.setSelection([targetId], targetId)
       return
     }
-    const [lo, hi] = aIdx <= tIdx ? [aIdx, tIdx] : [tIdx, aIdx]
+    const [lo, hi] = anchorIdx <= targetIdx ? [anchorIdx, targetIdx] : [targetIdx, anchorIdx]
     this._replaceSelection(visible.slice(lo, hi + 1).map((n) => n.id))
+    this._anchor = anchorId
     this._focused = targetId
     this._emitSelection()
     this._onReveal.fire({ id: targetId })
+  }
+
+  /**
+   * Shift+Click / Shift+Arrow gesture: extend from the persistent anchor.
+   * The first extension anchors at the current focus; later calls keep that
+   * anchor instead of re-anchoring at the moving focus. A hidden anchor (row
+   * removed or collapsed away) falls back to the focused row, then to the
+   * target itself.
+   */
+  extendSelectionTo(targetId: string): void {
+    const visible = this.getVisibleNodes()
+    const isVisible = (id: string): boolean => visible.some((n) => n.id === id)
+    const anchorId = this._anchor
+    const focusedId = this._focused
+    const anchor =
+      anchorId !== null && isVisible(anchorId)
+        ? anchorId
+        : focusedId !== null && isVisible(focusedId)
+          ? focusedId
+          : targetId
+    this.selectRange(anchor, targetId)
+  }
+
+  /**
+   * Escape gesture: collapse a multi-selection onto the focused row and
+   * re-anchor there. No-op when at most one row is selected.
+   */
+  collapseSelectionToFocus(): void {
+    const focus = this._focused ?? this._selection[0] ?? null
+    if (focus === null || this._selection.length <= 1) return
+    this.setSelection([focus], focus)
   }
 
   /**
@@ -495,7 +579,8 @@ export class TreeModel<T> extends Disposable {
    * commands (e.g. Outline's emacs bindings): up/down move the selection,
    * right expands then steps into the first child, left collapses then steps
    * out to the parent — matching the Explorer tree. `extend` (Shift) grows the
-   * selection range instead of replacing it and applies only to up/down.
+   * selection range from the persistent anchor instead of replacing it and
+   * applies only to up/down.
    */
   navigate(direction: 'up' | 'down' | 'left' | 'right', extend = false): void {
     const vis = this.getVisibleNodes()
@@ -507,7 +592,7 @@ export class TreeModel<T> extends Disposable {
       const clamped = Math.max(0, Math.min(vis.length - 1, index))
       const target = vis[clamped]
       if (!target) return
-      if (extend && this._focused) this.selectRange(this._focused, target.id)
+      if (extend) this.extendSelectionTo(target.id)
       else this.setSelection([target.id], target.id)
     }
 

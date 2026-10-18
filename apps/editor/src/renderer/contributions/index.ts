@@ -30,6 +30,7 @@ export { SwarmReviewNotificationContribution } from './SwarmReviewNotificationCo
 export { BuiltInEditorBindingsContribution } from './BuiltInEditorBindingsContribution.js'
 export { ContextKeyContribution } from './ContextKeyContribution.js'
 export { ExplorerClipboardContextContribution } from './ExplorerClipboardContextContribution.js'
+export { ExplorerSelectionContextContribution } from './ExplorerSelectionContextContribution.js'
 export { CompareContextContribution } from './CompareContextContribution.js'
 export { ExplorerMenuContribution } from './ExplorerMenuContribution.js'
 export { EditorContextMenuContribution } from './EditorContextMenuContribution.js'

@@ -302,6 +302,11 @@ export class ExplorerTreeService extends Disposable {
     return this._model.selection.map((id) => URI.parse(id))
   }
 
+  /** Selection size without materializing URI objects (context-key hot path). */
+  get selectionCount(): number {
+    return this._model.selection.length
+  }
+
   get clipboardResources(): readonly IExplorerResourceOperation[] {
     return this._clipboardResources
   }
@@ -419,9 +424,14 @@ export class ExplorerTreeService extends Disposable {
     this._model.toggleInSelection(resource.toString())
   }
 
-  /** Shift+Click semantics: inclusive range between anchor and target in visible order. */
-  selectRange(anchor: URI, target: URI): void {
-    this._model.selectRange(anchor.toString(), target.toString())
+  /** Shift gesture: extend the range from the persistent selection anchor. */
+  extendSelectionTo(resource: URI): void {
+    this._model.extendSelectionTo(resource.toString())
+  }
+
+  /** Escape gesture: drop a multi-selection back to the focused row. */
+  collapseSelectionToFocus(): void {
+    this._model.collapseSelectionToFocus()
   }
 
   setActiveEditorResource(resource: URI | null): void {
@@ -1193,11 +1203,14 @@ export class ExplorerTreeService extends Disposable {
     readonly anchors: Map<string, string>
     readonly selection: readonly string[]
     readonly focused: string | null
+    readonly anchor: string | null
+    readonly selectionEpoch: number
     readonly visibleIds: ReadonlySet<string>
   } {
     const anchors = new Map<string, string>()
     const ids = [...this._model.selection]
     if (this._model.focused !== null) ids.push(this._model.focused)
+    if (this._model.anchor !== null) ids.push(this._model.anchor)
     for (const id of ids) {
       if (!anchors.has(id)) anchors.set(id, this._compactChainHead(URI.parse(id)).toString())
     }
@@ -1205,6 +1218,8 @@ export class ExplorerTreeService extends Disposable {
       anchors,
       selection: [...this._model.selection],
       focused: this._model.focused,
+      anchor: this._model.anchor,
+      selectionEpoch: this._model.selectionEpoch,
       visibleIds: new Set(this._model.getVisibleNodes().map((node) => node.id)),
     }
   }
@@ -1222,10 +1237,18 @@ export class ExplorerTreeService extends Disposable {
     readonly anchors: Map<string, string>
     readonly selection: readonly string[]
     readonly focused: string | null
+    readonly anchor: string | null
+    readonly selectionEpoch: number
     readonly visibleIds: ReadonlySet<string>
   }): void {
     const model = this._model
-    const { anchors, selection: previousSelection, focused: previousFocused, visibleIds } = state
+    const {
+      anchors,
+      selection: previousSelection,
+      focused: previousFocused,
+      anchor: previousAnchor,
+      visibleIds,
+    } = state
     if (
       model.focused === null &&
       model.selection.length === 0 &&
@@ -1251,6 +1274,13 @@ export class ExplorerTreeService extends Disposable {
       return visibleIds.has(id) ? null : id
     }
 
+    // A chain reshape must not silently reset an in-progress Shift range to
+    // the remapped focus; move the anchor the same way as any other id. If the
+    // user re-anchored while the reload was in flight, the snapshot is stale —
+    // omit the option so setSelection anchors at the live focus instead.
+    const anchorSnapshotCurrent = model.selectionEpoch === state.selectionEpoch
+    const remappedAnchor = previousAnchor === null ? null : keepPrevious(previousAnchor)
+
     const remappedPreviousFocus = previousFocused === null ? null : remap(previousFocused)
     // The old focus row survived under a new chain id: recovery guessed a
     // successor because the old id vanished, but the row itself is still there,
@@ -1275,7 +1305,12 @@ export class ExplorerTreeService extends Disposable {
       selection.length !== model.selection.length ||
       focused !== model.focused ||
       selection.some((id, i) => id !== model.selection[i])
-    if (changed) model.setSelection(selection, focused, { reveal: false })
+    if (changed) {
+      model.setSelection(selection, focused, {
+        reveal: false,
+        ...(anchorSnapshotCurrent ? { anchor: remappedAnchor } : {}),
+      })
+    }
   }
 
   private _computeCompactChildren(raw: readonly IExplorerEntry[]): readonly IExplorerEntry[] {

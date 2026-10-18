@@ -1,7 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Smoke spec: Explorer selection feedback (P1).
  *
- *  Two regressions this guards:
+ *  Three regressions this guards:
  *   A) Single-clicking a file previews it. The preview open must NOT steal DOM
  *      focus away from the Explorer, otherwise the tree loses `data-focused`
  *      and its selected row's blue highlight degrades to the grey inactive tint
@@ -10,6 +10,8 @@
  *      off, so it is the visual bug's direct signal.
  *   B) Right-clicking a row selects that row (VSCode parity) so the context menu
  *      operates on it — not on whatever was selected before.
+ *   C) Escape collapses a multi-selection to the focused row instead of being
+ *      swallowed by the global focus-editor-group binding.
  *--------------------------------------------------------------------------------------------*/
 
 import * as path from 'node:path'
@@ -93,6 +95,47 @@ test.describe('@p1 explorer selection feedback', () => {
 
     // Dismiss the context menu so teardown finds a clean overlay state.
     await page.keyboard.press('Escape')
+
+    await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
+  })
+
+  test('Escape collapses a multi-selection to the focused row @regression', async ({
+    workbench,
+    page,
+  }) => {
+    const tmpDir = mkTempDir('ue2-sel-esc-')
+    await fs.writeFile(path.join(tmpDir, 'alpha.txt'), 'a')
+    await fs.writeFile(path.join(tmpDir, 'beta.txt'), 'b')
+    await fs.writeFile(path.join(tmpDir, 'gamma.txt'), 'c')
+
+    await workbench.waitForRestored()
+    await workbench.openWorkspace(tmpDir)
+
+    await expect
+      .poll(() => workbench.getContextKey<boolean>('sideBarVisible'), { timeout: 5000 })
+      .toBe(true)
+
+    const alpha = page.locator('[role="treeitem"]', { hasText: 'alpha.txt' })
+    await expect(alpha).toBeVisible({ timeout: 5000 })
+    // Let the post-workspace focus-restore window elapse, then click once more:
+    // the initial preview must not leave keyboard focus in the editor.
+    await alpha.click()
+    await page.waitForTimeout(RESTORE_WINDOW_MS)
+    await alpha.click()
+    await expect(page.locator('[role="tree"][data-focused="true"]').first()).toBeVisible()
+
+    // alpha → beta → gamma; focus ends on gamma.
+    await page.keyboard.press('Shift+ArrowDown')
+    await page.keyboard.press('Shift+ArrowDown')
+    const selected = page.locator('[role="treeitem"][aria-selected="true"]')
+    await expect(selected).toHaveCount(3)
+
+    await page.keyboard.press('Escape')
+
+    // Exactly the focused row survives, and the tree keeps keyboard focus.
+    await expect(selected).toHaveCount(1)
+    await expect(selected).toContainText('gamma.txt')
+    await expect(page.locator('[role="tree"][data-focused="true"]').first()).toBeVisible()
 
     await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
   })
