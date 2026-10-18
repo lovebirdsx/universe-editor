@@ -24,13 +24,11 @@ import type {
   GitGraphFileDiffRequest as GitGraphFileDiffRequestDto,
 } from '@universe-editor/extensions-common'
 import { gitExec } from './gitService.js'
+import { FIELD, buildLogArgs, buildRefArgs, mapLogRecord, type LogRefs } from './gitLogStream.js'
 import { discoverRepos, type DiscoverOptions } from './repoDiscovery.js'
 import { normalizeUriArg } from './extension.js'
 import { parseWorktrees } from './worktreeParser.js'
 import { norm } from './pathUtil.js'
-
-/** Field separator inside a record; record separator is NUL (`git -z`). */
-const FIELD = '\x1f'
 
 export type GitGraphTag = GitGraphTagDto
 export type GitGraphRemote = GitGraphRemoteDto
@@ -98,28 +96,11 @@ const OPEN_FILE_DIFF_COMMAND = 'git-graph.openFileDiff'
 /** The empty tree object — diff base for the very first commit's added files. */
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
 
-type Log = ((msg: string) => void) | undefined
+export type Log = ((msg: string) => void) | undefined
 
-function orderFlag(order: GitGraphLoadOptions['order']): string {
-  switch (order) {
-    case 'author-date':
-      return '--author-date-order'
-    case 'topo':
-      return '--topo-order'
-    default:
-      return '--date-order'
-  }
-}
-
-interface Refs {
+export interface Refs extends LogRefs {
   head: string | null
   headName: string | null
-  /** commit hash → local branch names */
-  heads: Map<string, string[]>
-  /** commit hash → tags */
-  tags: Map<string, GitGraphTag[]>
-  /** commit hash → remote-tracking branches */
-  remotes: Map<string, GitGraphRemote[]>
 }
 
 function push<T>(map: Map<string, T[]>, key: string, value: T): void {
@@ -128,7 +109,7 @@ function push<T>(map: Map<string, T[]>, key: string, value: T): void {
   else map.set(key, [value])
 }
 
-async function getRefs(root: string, log: Log): Promise<Refs> {
+export async function getRefs(root: string, log: Log): Promise<Refs> {
   const heads = new Map<string, string[]>()
   const tags = new Map<string, GitGraphTag[]>()
   const remotes = new Map<string, GitGraphRemote[]>()
@@ -182,23 +163,17 @@ export async function getCommits(
   log?: (msg: string) => void,
 ): Promise<GitGraphLoadResult> {
   const max = opts.maxCommits ?? 300
-  const includeRemotes = opts.includeRemotes !== false
+  const args = buildLogArgs({
+    ...(opts.order !== undefined ? { order: opts.order } : {}),
+    includeRemotes: opts.includeRemotes !== false,
+    maxCount: max + 1,
+  })
 
-  const args = [
-    'log',
-    '-z',
-    `--format=%H${FIELD}%P${FIELD}%an${FIELD}%ae${FIELD}%at${FIELD}%s`,
-    `--max-count=${max + 1}`,
-    orderFlag(opts.order),
-    '--branches',
-    '--tags',
-  ]
-  if (includeRemotes) args.push('--remotes')
-  args.push('HEAD')
-
-  const res = await gitExec(args, root, log)
-  const refs = await getRefs(root, log)
-  const uncommittedChanges = await countUncommitted(root, log)
+  const [res, meta] = await Promise.all([
+    gitExec(args, root, log),
+    loadGraphMetadata(root, opts, log),
+  ])
+  const { refs, uncommittedChanges, stashes, worktrees } = meta
 
   if (res.exitCode !== 0) {
     // Unborn repo (no commits yet) or other failure — surface an empty graph.
@@ -213,40 +188,67 @@ export async function getCommits(
 
   const records = res.stdout.split('\0').filter(Boolean)
   const moreAvailable = records.length > max
-  const commits: GitGraphCommit[] = records.slice(0, max).map((record) => {
-    const [hash, parentsStr, author, email, at, ...subjectParts] = record.split(FIELD)
-    // `%s` never contains FIELD, but rejoin defensively.
-    const message = subjectParts.join(FIELD)
-    const h = hash ?? ''
-    return {
-      hash: h,
-      parents: parentsStr ? parentsStr.split(' ').filter(Boolean) : [],
-      author: author ?? '',
-      email: email ?? '',
-      date: Number(at ?? 0),
-      message,
-      heads: refs.heads.get(h) ?? [],
-      tags: refs.tags.get(h) ?? [],
-      remotes: refs.remotes.get(h) ?? [],
-      stash: null,
-      worktrees: [],
-    }
-  })
+  const commits: GitGraphCommit[] = records
+    .slice(0, max)
+    .map((record) => mapLogRecord(record, refs))
 
-  const stashes = await getStashes(root, log)
   for (const stash of stashes) mergeByDateDesc(commits, stash)
 
   // Attach linked working trees to the commit their HEAD points at. Only when the
   // repo actually uses worktrees (>1) — a plain repo shows no worktree badges.
-  const byHash = await getWorktreesByHash(root, opts.workspaceRoot ?? root, log)
-  if (byHash) {
+  if (worktrees) {
     for (const commit of commits) {
-      const wts = byHash.get(commit.hash)
+      const wts = worktrees.get(commit.hash)
       if (wts) commit.worktrees = wts
     }
   }
 
   return { commits, head: refs.head, headName: refs.headName, moreAvailable, uncommittedChanges }
+}
+
+/** Everything a commit page needs besides the log itself. */
+export interface GitGraphMetadata {
+  refs: Refs
+  uncommittedChanges: number
+  stashes: GitGraphCommit[]
+  worktrees: Map<string, GitGraphWorktree[]> | null
+}
+
+/**
+ * Fetch the metadata that decorates a commit page. The four commands are
+ * independent, so the stream can start `git log` immediately and await this
+ * once before emitting its first batch.
+ */
+export async function loadGraphMetadata(
+  root: string,
+  opts: GitGraphLoadOptions,
+  log?: Log,
+): Promise<GitGraphMetadata> {
+  const [refs, uncommittedChanges, stashes, worktrees] = await Promise.all([
+    getRefs(root, log),
+    countUncommitted(root, log),
+    getStashes(root, log),
+    getWorktreesByHash(root, opts.workspaceRoot ?? root, log),
+  ])
+  return { refs, uncommittedChanges, stashes, worktrees }
+}
+
+/** Total commits reachable from the graph's revset (`refs/stash` excluded). */
+export async function countCommits(
+  root: string,
+  opts: GitGraphLoadOptions,
+  log?: Log,
+): Promise<number> {
+  const verify = await gitExec(['rev-parse', '--verify', '-q', 'HEAD'], root, log)
+  if (verify.exitCode !== 0) return 0
+  const res = await gitExec(
+    ['rev-list', '--count', ...buildRefArgs(opts.includeRemotes !== false)],
+    root,
+    log,
+  )
+  if (res.exitCode !== 0) return 0
+  const total = Number(res.stdout.trim())
+  return Number.isFinite(total) ? total : 0
 }
 
 /**
@@ -255,7 +257,7 @@ export async function getCommits(
  * attaching badges to a plain repo. The worktree whose path matches the open
  * workspace folder is flagged `isCurrent`.
  */
-async function getWorktreesByHash(
+export async function getWorktreesByHash(
   root: string,
   currentRoot: string,
   log: Log,
@@ -310,14 +312,14 @@ export async function getBranches(root: string, log?: Log): Promise<string[]> {
 }
 
 /** Count changed files in the working tree (one porcelain line per path). */
-async function countUncommitted(root: string, log: Log): Promise<number> {
+export async function countUncommitted(root: string, log: Log): Promise<number> {
   const res = await gitExec(['status', '--porcelain'], root, log)
   if (res.exitCode !== 0) return 0
   return res.stdout.split('\n').filter((l) => l.length > 0).length
 }
 
 /** Stash entries as graph nodes, connected to the commit they were created on. */
-async function getStashes(root: string, log: Log): Promise<GitGraphCommit[]> {
+export async function getStashes(root: string, log: Log): Promise<GitGraphCommit[]> {
   const res = await gitExec(
     ['stash', 'list', '-z', `--format=%H${FIELD}%P${FIELD}%gd${FIELD}%ct${FIELD}%s`],
     root,
@@ -349,7 +351,7 @@ async function getStashes(root: string, log: Log): Promise<GitGraphCommit[]> {
 }
 
 /** Insert a node into a newest-first commit list, ordered by date. */
-function mergeByDateDesc(commits: GitGraphCommit[], node: GitGraphCommit): void {
+export function mergeByDateDesc(commits: GitGraphCommit[], node: GitGraphCommit): void {
   let i = 0
   while (i < commits.length && commits[i]!.date >= node.date) i++
   commits.splice(i, 0, node)

@@ -115,6 +115,43 @@ export interface GitGraphLoadResult {
   uncommittedChanges: number
 }
 
+/** Options for `git-graph.startCommitStream`. */
+export interface GitGraphStreamOptions {
+  /** Renderer-generated id; batches carrying another id are stale and dropped. */
+  streamId: string
+  /** Commit ordering. Defaults to `date`. */
+  order?: 'date' | 'author-date' | 'topo'
+  /** Include remote-tracking branches as starting refs. Defaults to true. */
+  includeRemotes?: boolean
+  /** Stop after this many commits (safety cap). Unlimited when omitted. */
+  maxCommits?: number
+}
+
+/** Metadata delivered with the first stream batch. */
+export interface GitGraphStreamMetaDto {
+  head: string | null
+  headName: string | null
+  uncommittedChanges: number
+}
+
+/** One batch pushed from the git extension to the renderer. */
+export interface GitGraphCommitBatchDto {
+  streamId: string
+  /** Monotonic per-stream sequence number (0-based). */
+  seq: number
+  commits: GitGraphCommitDto[]
+  /** Real log commits in this batch, excluding synthetic stash nodes. */
+  logCount: number
+  /** Present on the first batch only. */
+  meta?: GitGraphStreamMetaDto
+  /** Present on the terminal batch. */
+  done?: boolean
+  /** The stream stopped at `maxCommits` while older commits may still exist. */
+  moreAvailable?: boolean
+  /** Terminal failure message; already-pushed batches stay valid. */
+  error?: string
+}
+
 /** A single file changed by a commit (or between two commits). */
 export interface GitGraphFileChangeDto {
   /** Single-letter status: A/M/D/R/C/T/U. */
@@ -166,6 +203,9 @@ export const GitGraphCommands = {
   getRepos: 'git-graph.getRepos',
   setRepo: 'git-graph.setRepo',
   getCommits: 'git-graph.getCommits',
+  countCommits: 'git-graph.countCommits',
+  startCommitStream: 'git-graph.startCommitStream',
+  cancelCommitStream: 'git-graph.cancelCommitStream',
   getCommitDetails: 'git-graph.getCommitDetails',
   compareCommits: 'git-graph.compareCommits',
   getBranches: 'git-graph.getBranches',
@@ -200,3 +240,12 @@ export const GitGraphCommands = {
 } as const
 
 export type GitGraphCommandId = (typeof GitGraphCommands)[keyof typeof GitGraphCommands]
+
+/**
+ * Renderer commands the git extension invokes while streaming. They live under
+ * `_workbench.*` because the host→renderer command bridge only forwards that
+ * namespace (`MainThreadCommands`).
+ */
+export const GitGraphWorkbenchCommands = {
+  commitBatch: '_workbench.gitGraph.commitBatch',
+} as const

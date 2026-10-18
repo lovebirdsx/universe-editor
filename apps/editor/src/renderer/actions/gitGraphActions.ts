@@ -11,6 +11,10 @@ import {
   localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
+import {
+  GitGraphWorkbenchCommands,
+  type GitGraphCommitBatchDto,
+} from '@universe-editor/extensions-common'
 import { GitGraphEditorInput } from '../services/editor/GitGraphEditorInput.js'
 import { revealEditorInGroups } from '../services/editor/revealEditorInGroups.js'
 import { gitGraphViewState } from '../services/gitGraph/gitGraphViewState.js'
@@ -140,5 +144,45 @@ export class GitGraphToggleRemoteBranchesAction extends Action2 {
 
   override run(): void {
     gitGraphViewState.toggleRemoteBranches?.()
+  }
+}
+
+export class GitGraphLoadAllAction extends Action2 {
+  static readonly ID = 'git-graph.loadAll'
+
+  constructor() {
+    super({
+      id: GitGraphLoadAllAction.ID,
+      title: localize2('action.gitGraph.loadAll', 'Load All Commits'),
+      category: CATEGORY,
+      precondition: "activeEditorId == 'universe:/gitGraph'",
+      f1: true,
+    })
+  }
+
+  override run(): void {
+    gitGraphViewState.loadAll?.()
+  }
+}
+
+/**
+ * Bridge for the git extension's stream batches. Never declare this id in an
+ * extension manifest — it would shadow the renderer handler. Returning `false`
+ * tells the extension the view is gone and it should stop the stream.
+ */
+export class GitGraphCommitBatchAction extends Action2 {
+  static readonly ID = GitGraphWorkbenchCommands.commitBatch
+
+  constructor() {
+    super({
+      id: GitGraphCommitBatchAction.ID,
+      title: localize2('action.gitGraph.commitBatch', 'Git Graph Commit Batch'),
+    })
+  }
+
+  override async run(_accessor: ServicesAccessor, batch?: unknown): Promise<boolean> {
+    const sink = gitGraphViewState.commitBatch
+    if (!sink) return false
+    return sink(batch as GitGraphCommitBatchDto)
   }
 }

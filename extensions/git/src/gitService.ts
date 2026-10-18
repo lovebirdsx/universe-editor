@@ -6,7 +6,7 @@
  * stripped so a Node-shaped child can't be steered, even though `git` itself
  * isn't Node. The locale is pinned to English so diagnostics stay parseable.
  */
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { resolve } from 'node:path'
 import { samePath } from './pathUtil.js'
 
@@ -125,6 +125,57 @@ export function gitExecBinary(
       })
     })
   })
+}
+
+/**
+ * Spawn a long-running git command whose stdout is consumed incrementally.
+ * Callers iterate `child.stdout` with `for await`; awaiting a batch send inside
+ * that loop pauses the stream, which is the only backpressure path to git.
+ * `done` rejects only when the process cannot be spawned at all.
+ */
+export interface GitStreamProcess {
+  readonly child: ChildProcessWithoutNullStreams
+  readonly done: Promise<GitExecResult>
+}
+
+export function gitSpawnStream(
+  args: readonly string[],
+  cwd: string,
+  log?: (msg: string) => void,
+): GitStreamProcess {
+  log?.(`> git ${args.join(' ')}`)
+  const start = Date.now()
+  const child = spawn('git', [...args], {
+    cwd,
+    env: sanitizeEnv(),
+    windowsHide: true,
+    shell: false,
+  })
+  const stderr: Buffer[] = []
+  child.stderr.on('data', (chunk: Buffer) => stderr.push(chunk))
+  const done = new Promise<GitExecResult>((resolve, reject) => {
+    let settled = false
+    child.on('error', (err) => {
+      if (settled) return
+      settled = true
+      reject(err)
+    })
+    child.on('close', (code, signal) => {
+      if (settled) return
+      settled = true
+      const result: GitExecResult = {
+        stdout: '',
+        stderr: Buffer.concat(stderr).toString('utf8'),
+        // null code means killed by a signal (OOM, external kill, SIGPIPE);
+        // report it as a failure so a truncated log is not treated as complete.
+        exitCode: code ?? (signal ? -1 : 0),
+      }
+      const stderrNote = result.stderr.trim() ? `\n  stderr: ${result.stderr.trim()}` : ''
+      log?.(`  exit ${result.exitCode} (${Date.now() - start}ms)${stderrNote}`)
+      resolve(result)
+    })
+  })
+  return { child, done }
 }
 
 /** Absolute path of the repository containing `cwd`, or undefined if none. */

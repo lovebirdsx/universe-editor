@@ -289,7 +289,10 @@
 
 .loadMore {
   display: flex;
+  align-items: center;
   justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
   padding: 8px;
 }
 
@@ -304,6 +307,27 @@
 
 .loadMoreBtn:hover {
   background: var(--vscode-button-hoverBackground);
+}
+
+/* Secondary emphasis: Load all can pull tens of thousands of rows, so it must
+   not compete with the incremental Load more button. */
+.loadAllBtn {
+  background: transparent;
+  color: var(--vscode-textLink-foreground, var(--vscode-button-background));
+  border: 1px solid var(--vscode-workbench-border);
+}
+
+.loadAllBtn:hover {
+  background: var(--vscode-toolbar-hoverBackground, transparent);
+}
+
+.loadAllNotice,
+.loadAllError {
+  color: var(--vscode-editor-mutedForeground);
+}
+
+.loadAllError {
+  color: var(--vscode-errorForeground);
 }
 
 .canvas {

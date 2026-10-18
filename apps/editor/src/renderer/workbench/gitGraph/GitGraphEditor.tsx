@@ -61,6 +61,7 @@ import {
   createKeyboardContextMenuEvent,
   isKeyboardContextMenu,
 } from '@universe-editor/workbench-ui'
+import { useVirtualizer, type Virtualizer } from '@tanstack/react-virtual'
 import {
   useService,
   useObservable,
@@ -78,6 +79,7 @@ import {
 import {
   gitGraphViewState,
   GIT_GRAPH_PAGE_SIZE,
+  type GitGraphLoadMode,
   type GitGraphSettings,
 } from '../../services/gitGraph/gitGraphViewState.js'
 import { scmViewState } from '../scm/scmViewState.js'
@@ -98,6 +100,13 @@ import { useGraphListFocus } from './useGraphListFocus.js'
 import { useFullCommitMessages } from './useFullCommitMessages.js'
 import { usePersistedGraphSelection } from './usePersistedGraphSelection.js'
 import { useGitGraphAutoRefresh, useGitGraphEditorVisible } from './useGitGraphAutoRefresh.js'
+import {
+  GRAPH_HEADER_HEIGHT,
+  LOAD_ALL_MAX_COMMITS,
+  VIRTUALIZATION_THRESHOLD,
+  mergeShallowRefresh,
+} from './gitGraphLoadAll.js'
+import { useGitGraphCommitStream } from './useGitGraphCommitStream.js'
 import { SendCommitToAgentChatAction } from '../../actions/agentContextActions.js'
 import styles from './GitGraphEditor.module.css'
 
@@ -340,6 +349,9 @@ const CommitRow = memo(function CommitRow({
   selected,
   headName,
   fullMessage,
+  index,
+  total,
+  rowStyle,
   onRowClick,
   onCommitMenu,
   onBranchMenu,
@@ -354,6 +366,11 @@ const CommitRow = memo(function CommitRow({
   headName: string | null
   /** Lazily fetched full commit message; falls back to the subject. */
   fullMessage: string | undefined
+  /** Row position and list size, for assistive tech (windowed rows are sparse). */
+  index: number
+  total: number
+  /** Windowed rows are absolutely positioned inside the virtual canvas. */
+  rowStyle?: CSSProperties
   onRowClick: (hash: string, e: MouseEvent) => void
   onCommitMenu: (commit: GitGraphCommitDto, e: MouseEvent) => void
   onBranchMenu: (name: string, e: MouseEvent) => void
@@ -366,7 +383,11 @@ const CommitRow = memo(function CommitRow({
   return (
     <div
       className={`${styles['row']} ${selected ? styles['rowSelected'] : ''}`}
-      style={{ height: ROW_HEIGHT }}
+      style={{ height: ROW_HEIGHT, ...rowStyle }}
+      role="option"
+      aria-selected={selected}
+      aria-posinset={index + 1}
+      aria-setsize={total}
       data-hash={commit.hash}
       onClick={(e) => onRowClick(commit.hash, e)}
       onContextMenu={(e) => onCommitMenu(commit, e)}
@@ -474,6 +495,43 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
   const fetchSeqRef = useRef(0)
   // Commit hash the reveal still needs to scroll to, once its row is in the DOM.
   const pendingScrollRef = useRef<string | null>(null)
+  // A reveal requested while the full stream is running: the commit may not
+  // have arrived yet, so it waits for the batch that contains it.
+  const pendingStreamRevealRef = useRef<string | null>(null)
+
+  const [loadMode, setLoadMode] = useState<GitGraphLoadMode>(() => gitGraphViewState.loadMode)
+  // Read synchronously by callbacks that must branch on the mode before React
+  // has re-rendered (revalidate / settings-change reset / toolbar refresh).
+  const loadModeRef = useRef(loadMode)
+  loadModeRef.current = loadMode
+  const resultRef = useRef(result)
+  resultRef.current = result
+
+  // Destructured so the stable controller callbacks do not drag the whole
+  // (per-render) controller object into effect dependency arrays.
+  const {
+    state: streamState,
+    loadAll: loadAllCommits,
+    cancel: cancelLoadAllCommits,
+  } = useGitGraphCommitStream({
+    commands,
+    dialog,
+    order: settings.order,
+    includeRemotes: settings.includeRemotes,
+    result,
+    setResult,
+    setSelection,
+    setLoadMode,
+    logger,
+  })
+  const streamActive = streamState.phase === 'streaming' || streamState.phase === 'counting'
+  const streamActiveRef = useRef(streamActive)
+  streamActiveRef.current = streamActive
+  // Windowed rendering is decided after filtering; the reveal path (defined
+  // before that) reads these refs at call time so its identity stays stable.
+  const virtualizeRef = useRef(false)
+  const rowVirtualizerRef = useRef<Virtualizer<HTMLDivElement, Element> | null>(null)
+  const filteredCommitsRef = useRef<readonly GitGraphCommitDto[]>([])
 
   useEffect(() => {
     gitGraphViewState.focusSearch = () => {
@@ -552,6 +610,9 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
   useEffect(() => {
     gitGraphViewState.searchQuery = searchQuery
   }, [searchQuery])
+  useEffect(() => {
+    gitGraphViewState.loadMode = loadMode
+  }, [loadMode])
 
   const load = useCallback(() => {
     let cancelled = false
@@ -586,16 +647,17 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
     }
   }, [commands])
 
-  useEffect(() => {
-    gitGraphViewState.refresh = () => load()
-    return () => {
-      gitGraphViewState.refresh = null
-    }
-  }, [load])
-
   const scrollPendingReveal = useCallback(() => {
     const hash = pendingScrollRef.current
     if (!hash) return
+    // Windowed mode: the target row is usually not mounted, so scroll by index.
+    if (virtualizeRef.current) {
+      const index = filteredCommitsRef.current.findIndex((c) => c.hash === hash)
+      if (index < 0) return
+      pendingScrollRef.current = null
+      rowVirtualizerRef.current?.scrollToIndex(index, { align: 'center' })
+      return
+    }
     // getAttribute comparison instead of a `[data-hash="${CSS.escape(hash)}"]`
     // selector: attribute-string escape sequences are not honoured by every
     // selector engine (happy-dom in tests).
@@ -699,6 +761,32 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
         gitGraphViewState.pendingReveal.set(hash, undefined)
         return
       }
+      // The full stream is already pulling every commit; paging here would race
+      // it. Select now when the commit is loaded, otherwise wait for its batch.
+      if (streamActiveRef.current) {
+        setSearchQuery('')
+        if (result.commits.some((c) => c.hash === hash)) {
+          setSelection([hash])
+          followCommitChanges(hash)
+          pendingScrollRef.current = hash
+          scrollPendingReveal()
+        } else {
+          pendingStreamRevealRef.current = hash
+        }
+        return
+      }
+      // After Load all the streamed list is authoritative; paging here would
+      // replace it with a much shorter page and lose everything beyond it.
+      if (loadModeRef.current !== 'paged') {
+        setSearchQuery('')
+        if (result.commits.some((c) => c.hash === hash)) {
+          setSelection([hash])
+          followCommitChanges(hash)
+          pendingScrollRef.current = hash
+          scrollPendingReveal()
+        }
+        return
+      }
       void (async () => {
         revealingRef.current = true
         const seq = ++fetchSeqRef.current
@@ -741,6 +829,28 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
     [commands, result, limit, scrollPendingReveal, followCommitChanges],
   )
 
+  // Resolve a reveal that was queued while the stream was still running, as
+  // soon as the batch carrying the hash lands.
+  useEffect(() => {
+    const hash = pendingStreamRevealRef.current
+    if (!hash || !result) return
+    if (!result.commits.some((c) => c.hash === hash)) return
+    pendingStreamRevealRef.current = null
+    setSelection([hash])
+    followCommitChanges(hash)
+    pendingScrollRef.current = hash
+    scrollPendingReveal()
+  }, [result, followCommitChanges, scrollPendingReveal])
+
+  // A stream that ends without producing the queued commit (cancelled, failed,
+  // or history rewritten) leaves the request dangling; a later unrelated result
+  // must not suddenly select it.
+  useEffect(() => {
+    if (streamState.phase !== 'streaming' && streamState.phase !== 'counting') {
+      pendingStreamRevealRef.current = null
+    }
+  }, [streamState.phase])
+
   useEffect(() => {
     gitGraphViewState.revealCommit = revealCommit
     return () => {
@@ -765,31 +875,88 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
     // A reveal in progress drives its own paging; a mid-flight auto-refresh
     // would clobber the intermediate result and filter out the target.
     if (revealingRef.current) return
+    // The Load all stream owns the list while it runs; a fetch landing now would
+    // replace the partial stream with a 500-commit page.
+    if (streamActiveRef.current) return
     // The auto-refresh subscription (useGitGraphAutoRefresh) reacts to the SCM
     // provider appearing, which the git extension does BEFORE registering the
     // git-graph commands — querying here would warn "command not found" and drop
     // the refresh.
     if (!CommandsRegistry.getCommand(GitGraphCommands.getCommits)) return
     const seq = ++fetchSeqRef.current
+    // After a Load all, only the newest page is refetched and spliced onto the
+    // already-loaded tail; re-running the full query would throw the history away.
+    const shallow = loadModeRef.current !== 'paged'
+    const query = shallow
+      ? { ...queryRef.current, maxCommits: GIT_GRAPH_PAGE_SIZE }
+      : queryRef.current
     void commands
-      .executeCommand<GitGraphLoadResult>(GitGraphCommands.getCommits, queryRef.current)
+      .executeCommand<GitGraphLoadResult>(GitGraphCommands.getCommits, query)
       .then((r) => {
         if (!r || seq !== fetchSeqRef.current) return
         setError(null)
-        setResult(r)
+        const previous = resultRef.current
+        const next =
+          shallow && previous
+            ? { ...r, commits: mergeShallowRefresh(previous.commits, r.commits) }
+            : r
+        setResult(next)
         setSelection((prev) => {
-          const next = prev.filter(
-            (h) => h === UNCOMMITTED_HASH || r.commits.some((c) => c.hash === h),
+          const nextSelection = prev.filter(
+            (h) => h === UNCOMMITTED_HASH || next.commits.some((c) => c.hash === h),
           )
           // Keep the previous array reference when unchanged so memoised rows
           // don't re-render needlessly.
-          return next.length === prev.length && next.every((h, i) => h === prev[i]) ? prev : next
+          return nextSelection.length === prev.length &&
+            nextSelection.every((h, i) => h === prev[i])
+            ? prev
+            : nextSelection
         })
       })
       .catch(() => {
         // A transient failure (e.g. host restarting) leaves the stale view in place.
       })
   }, [commands])
+
+  // Toolbar ↺: paged mode keeps the original full reload (it resets paging);
+  // full/partial mode refreshes only the first page and keeps the loaded tail.
+  const refresh = useCallback(() => {
+    // The stream owns the list and publishes its own progress; a paged fetch
+    // landing after the terminal batch would permanently replace it with one page.
+    if (streamActiveRef.current) return
+    if (loadModeRef.current === 'paged') load()
+    else revalidate()
+  }, [load, revalidate])
+
+  useEffect(() => {
+    gitGraphViewState.refresh = refresh
+    return () => {
+      gitGraphViewState.refresh = null
+    }
+  }, [refresh])
+
+  const startLoadAll = useCallback(() => {
+    if (!CommandsRegistry.getCommand(GitGraphCommands.startCommitStream)) return
+    // The command stays palette-reachable after a complete load; running it
+    // again would re-stream the same history for no benefit.
+    if (loadModeRef.current === 'full') return
+    // The stream takes over the list: drop any page fetch still in flight and
+    // any pending scroll target from the paged list.
+    fetchSeqRef.current++
+    pendingScrollRef.current = null
+    pendingStreamRevealRef.current = null
+    setError(null)
+    loadAllCommits()
+  }, [loadAllCommits])
+
+  useEffect(() => {
+    gitGraphViewState.loadAll = startLoadAll
+    gitGraphViewState.cancelLoadAll = cancelLoadAllCommits
+    return () => {
+      gitGraphViewState.loadAll = null
+      gitGraphViewState.cancelLoadAll = null
+    }
+  }, [startLoadAll, cancelLoadAllCommits])
 
   // The git extension registers the git-graph commands only after it activates,
   // which races a startup-restored tab: executing earlier warns "command not
@@ -838,18 +1005,33 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
       firstQuery.current = false
       return
     }
+    // A new order / ref set invalidates the streamed list: stop the stream and
+    // start over from the paged view instead of splicing two orderings together.
+    // `streamActiveRef` is required because loadMode only leaves 'paged' when the
+    // stream terminates.
+    if (loadModeRef.current !== 'paged' || streamActiveRef.current) {
+      cancelLoadAllCommits()
+      pendingStreamRevealRef.current = null
+      setLoadMode('paged')
+      load()
+      return
+    }
     revalidate()
-  }, [settings.order, settings.includeRemotes, limit, revalidate])
+  }, [settings.order, settings.includeRemotes, limit, revalidate, load, cancelLoadAllCommits])
 
   const onSelectRepo = useCallback(
     (root: string) => {
+      cancelLoadAllCommits()
+      pendingStreamRevealRef.current = null
+      pendingScrollRef.current = null
+      setLoadMode('paged')
       setSelectedRepo(root)
       void (async () => {
         await commands.executeCommand(GitGraphCommands.setRepo, root)
         load()
       })()
     },
-    [commands, load],
+    [commands, load, cancelLoadAllCommits],
   )
 
   // Mirror the SCM-selected repo into the graph. Compare against the live
@@ -1896,6 +2078,80 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
   const effectiveGraphWidth = isCompact ? GRID.offsetX * 2 : graphWidth
   const selected = useMemo(() => new Set(selection), [selection])
 
+  // Window the rows only for large lists: the existing DOM-based reveal /
+  // keyboard paths stay authoritative below the threshold (and in tests).
+  const virtualize = filteredCommits.length > VIRTUALIZATION_THRESHOLD
+  filteredCommitsRef.current = filteredCommits
+  // Stable identities: TanStack drops its measurement cache whenever one of
+  // these options changes reference, and inline arrows change every render.
+  const estimateRowSize = useCallback(() => ROW_HEIGHT, [])
+  const getCommitKey = useCallback(
+    (index: number) => filteredCommitsRef.current[index]?.hash ?? index,
+    [],
+  )
+  const rowVirtualizer = useVirtualizer<HTMLDivElement, Element>({
+    count: virtualize ? filteredCommits.length : 0,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: estimateRowSize,
+    getItemKey: getCommitKey,
+    overscan: 12,
+    // The sticky header scrolls with the container but never with the rows; the
+    // margin rebases item.start to the canvas while getTotalSize() subtracts it
+    // again, so the canvas height stays exactly filteredCommits.length * ROW_HEIGHT.
+    scrollMargin: GRAPH_HEADER_HEIGHT,
+    scrollPaddingStart: GRAPH_HEADER_HEIGHT,
+    initialOffset: () => gitGraphViewState.scrollTop,
+  })
+  virtualizeRef.current = virtualize
+  rowVirtualizerRef.current = rowVirtualizer
+
+  const virtualItems = virtualize ? rowVirtualizer.getVirtualItems() : null
+  const visibleStart = virtualItems && virtualItems.length > 0 ? virtualItems[0]!.index : 0
+  // Before the first measurement (or in a hidden tab) the window is empty; render
+  // a small slice anyway so the graph column is not blank on the first paint.
+  const visibleEnd =
+    virtualItems && virtualItems.length > 0
+      ? virtualItems[virtualItems.length - 1]!.index + 1
+      : virtualize
+        ? Math.min(filteredCommits.length, 50)
+        : 0
+  const visibleVertices = virtualize
+    ? (layout?.vertices.slice(visibleStart, visibleEnd) ?? [])
+    : (layout?.vertices ?? [])
+  // A branch path can span thousands of rows; keep any path that crosses the
+  // window and let the browser clip the rest.
+  const visiblePaths =
+    layout === null
+      ? []
+      : virtualize
+        ? layout.paths.filter(
+            (p) =>
+              p.maxY >= (visibleStart - 1) * ROW_HEIGHT && p.minY <= (visibleEnd + 1) * ROW_HEIGHT,
+          )
+        : layout.paths
+
+  // Screen rect for a row, mounted or not: windowed rows off-screen need the
+  // synthetic position so keyboard context menus anchor to the right row.
+  const rowRect = useCallback((hash: string): { left: number; bottom: number } | null => {
+    const rowEl = scrollRef.current
+      ?.querySelectorAll('[data-hash]')
+      .values()
+      .find((el) => el.getAttribute('data-hash') === hash)
+    if (rowEl) {
+      const rect = rowEl.getBoundingClientRect()
+      return { left: rect.left, bottom: rect.bottom }
+    }
+    if (!virtualizeRef.current) return null
+    const index = filteredCommitsRef.current.findIndex((c) => c.hash === hash)
+    const scroller = scrollRef.current
+    if (index < 0 || !scroller) return null
+    const box = scroller.getBoundingClientRect()
+    return {
+      left: box.left,
+      bottom: box.top + GRAPH_HEADER_HEIGHT + (index + 1) * ROW_HEIGHT - scroller.scrollTop,
+    }
+  }, [])
+
   // ContextMenu key / Shift+F10 (or Ctrl+Enter) on the selected row: open the
   // same context menu a right-click would show, anchored at the row. A row can
   // carry several menu targets (the commit itself plus worktree / branch / tag /
@@ -1904,11 +2160,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
     (hash: string) => {
       const commit = filteredCommits.find((c) => c.hash === hash)
       if (!commit || hash === UNCOMMITTED_HASH) return
-      const rowEl = scrollRef.current
-        ?.querySelectorAll('[data-hash]')
-        .values()
-        .find((el) => el.getAttribute('data-hash') === hash)
-      const rect = rowEl?.getBoundingClientRect()
+      const rect = rowRect(hash)
       // A marked (but never dispatched) event: the per-target handlers below read
       // coordinates off it and ask `isKeyboardContextMenu` whether to open with
       // the first row highlighted, exactly as they do for a real right-click.
@@ -1957,6 +2209,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
     [
       filteredCommits,
       quickInput,
+      rowRect,
       openCommitMenu,
       openWorktreeMenu,
       openBranchMenu,
@@ -1991,6 +2244,9 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
     scrollRef,
     rowAttribute: 'data-hash',
     rowHeight: ROW_HEIGHT,
+    ...(virtualize
+      ? { scrollToRow: (index: number) => rowVirtualizer.scrollToIndex(index, { align: 'auto' }) }
+      : {}),
   })
   const listFocus = useGraphListFocus(scrollRef)
 
@@ -2003,20 +2259,47 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
     () => observableValue<readonly GraphOutlineCommit[]>('gitGraph.outlineCommits', []),
     [],
   )
+  // Rebuilding the outline for every streamed batch would allocate tens of
+  // thousands of objects per second; publish at most twice a second while the
+  // stream runs, then once more (immediately) when it finishes.
+  const outlineTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const displayCommitsRef = useRef(displayCommits)
+  displayCommitsRef.current = displayCommits
   useEffect(() => {
-    outlineCommits.set(
-      displayCommits.map((c) =>
-        c.hash === UNCOMMITTED_HASH
-          ? { hash: c.hash, label: c.message, detail: '', pending: true }
-          : {
-              hash: c.hash,
-              label: c.message,
-              detail: `${shortHash(c.hash)} · ${c.author} · ${formatDate(c.date)}`,
-            },
-      ),
-      undefined,
-    )
-  }, [outlineCommits, displayCommits])
+    const publish = () => {
+      outlineCommits.set(
+        displayCommitsRef.current.map((c) =>
+          c.hash === UNCOMMITTED_HASH
+            ? { hash: c.hash, label: c.message, detail: '', pending: true }
+            : {
+                hash: c.hash,
+                label: c.message,
+                detail: `${shortHash(c.hash)} · ${c.author} · ${formatDate(c.date)}`,
+              },
+        ),
+        undefined,
+      )
+    }
+    if (!streamActive) {
+      if (outlineTimerRef.current !== null) {
+        clearTimeout(outlineTimerRef.current)
+        outlineTimerRef.current = null
+      }
+      publish()
+      return
+    }
+    if (outlineTimerRef.current !== null) return
+    outlineTimerRef.current = setTimeout(() => {
+      outlineTimerRef.current = null
+      publish()
+    }, 500)
+  }, [outlineCommits, displayCommits, streamActive])
+  useEffect(
+    () => () => {
+      if (outlineTimerRef.current !== null) clearTimeout(outlineTimerRef.current)
+    },
+    [],
+  )
 
   const onDidChangeOutlineSelection = useMemo(() => new Emitter<void>(), [])
   useEffect(() => {
@@ -2050,20 +2333,75 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
     }
   }, [outlineCommits, onDidChangeOutlineSelection, applySelection, scrollPendingReveal])
 
+  const showLoadMore = result?.moreAvailable === true && loadMode === 'paged' && !streamActive
+  const canLoadAll = loadMode === 'paged' ? result?.moreAvailable === true : loadMode === 'partial'
+  const cappedNotice =
+    streamState.phase === 'idle' && streamState.capped && streamState.total !== null
+      ? localize('gitGraph.loadAll.capped', 'Loaded the first {max} of {total} commits.', {
+          max: LOAD_ALL_MAX_COMMITS.toLocaleString(),
+          total: streamState.total.toLocaleString(),
+        })
+      : null
+  const showLoadAll = canLoadAll && !streamActive && cappedNotice === null
+  const streamProgressText = streamActive
+    ? streamState.total === null
+      ? localize('gitGraph.loadAll.progressUnknown', 'Loading all commits… {loaded}', {
+          loaded: streamState.loaded.toLocaleString(),
+        })
+      : localize('gitGraph.loadAll.progress', 'Loading all commits… {loaded} / {total}', {
+          loaded: streamState.loaded.toLocaleString(),
+          total: streamState.total.toLocaleString(),
+        })
+    : null
+
+  const renderCommitRow = (commit: GitGraphCommitDto, index: number, rowStyle?: CSSProperties) => (
+    <CommitRow
+      key={commit.hash}
+      commit={commit}
+      selected={selected.has(commit.hash)}
+      headName={result?.headName ?? null}
+      fullMessage={fullMessages.get(commit.hash)}
+      index={index}
+      total={filteredCommits.length}
+      {...(rowStyle ? { rowStyle } : {})}
+      onRowClick={onRowClick}
+      onCommitMenu={openCommitMenu}
+      onBranchMenu={openBranchMenu}
+      onRemoteMenu={openRemoteMenu}
+      onTagMenu={openTagMenu}
+      onWorktreeMenu={openWorktreeMenu}
+      onOverflowMenu={openOverflowMenu}
+      onMessageHover={onMessageHover}
+    />
+  )
+
   return (
     <div className={styles['gitGraph']} data-testid="gitGraph-editor">
       <div className={styles['toolbar']}>
         <span className={styles['title']}>{localize('gitGraph.title', 'Git Graph')}</span>
         {result && (
-          <span className={styles['count']}>
-            {localize('gitGraph.commitCount', '{count} commits{more}', {
-              count: result.commits.length,
-              more: result.moreAvailable ? '+' : '',
-            })}
-            {result.headName
+          <span className={styles['count']} data-testid="gitGraph-commitCount">
+            {streamProgressText ??
+              localize('gitGraph.commitCount', '{count} commits{more}', {
+                count: result.commits.length,
+                more: result.moreAvailable ? '+' : '',
+              })}
+            {!streamProgressText && result.headName
               ? localize('gitGraph.onBranch', ' · on {branch}', { branch: result.headName })
               : ''}
           </span>
+        )}
+        {streamActive && (
+          <button
+            type="button"
+            className={styles['toolBtn']}
+            onClick={cancelLoadAllCommits}
+            data-tooltip={localize('gitGraph.loadAll.cancel', 'Cancel loading all commits')}
+            aria-label={localize('gitGraph.loadAll.cancel', 'Cancel loading all commits')}
+            data-testid="gitGraph-cancelLoadAll"
+          >
+            ✕
+          </button>
         )}
         <span className={styles['toolbarSpacer']} />
         <input
@@ -2114,7 +2452,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
         <button
           type="button"
           className={styles['toolBtn']}
-          onClick={() => load()}
+          onClick={refresh}
           data-tooltip={localize('common.refresh', 'Refresh')}
           aria-label={localize('common.refresh', 'Refresh')}
         >
@@ -2206,7 +2544,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
               aria-hidden="true"
             >
               {!isCompact &&
-                layout.paths.map((p, i) => (
+                visiblePaths.map((p, i) => (
                   <path
                     key={i}
                     d={p.d}
@@ -2216,7 +2554,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
                     {...(p.isCommitted ? {} : { strokeDasharray: '2' })}
                   />
                 ))}
-              {layout.vertices.map((v) => {
+              {visibleVertices.map((v) => {
                 const cx = isCompact ? GRID.offsetX : v.cx
                 const colour = colourOf(v.colour)
                 if (v.isUncommitted) {
@@ -2264,37 +2602,62 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
                   '--graph-width': `${effectiveGraphWidth}px`,
                   '--col-author': `${columnWidths.author}px`,
                   '--col-date': `${columnWidths.date}px`,
+                  ...(virtualize ? { height: filteredCommits.length * ROW_HEIGHT } : {}),
                 } as CSSProperties
               }
             >
-              {filteredCommits.map((c) => (
-                <CommitRow
-                  key={c.hash}
-                  commit={c}
-                  selected={selected.has(c.hash)}
-                  headName={result.headName}
-                  fullMessage={fullMessages.get(c.hash)}
-                  onRowClick={onRowClick}
-                  onCommitMenu={openCommitMenu}
-                  onBranchMenu={openBranchMenu}
-                  onRemoteMenu={openRemoteMenu}
-                  onTagMenu={openTagMenu}
-                  onWorktreeMenu={openWorktreeMenu}
-                  onOverflowMenu={openOverflowMenu}
-                  onMessageHover={onMessageHover}
-                />
-              ))}
+              {virtualize
+                ? virtualItems!.map((item) => {
+                    const commit = filteredCommits[item.index]
+                    if (!commit) return null
+                    return renderCommitRow(commit, item.index, {
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      transform: `translateY(${item.start - GRAPH_HEADER_HEIGHT}px)`,
+                    })
+                  })
+                : filteredCommits.map((commit, index) => renderCommitRow(commit, index))}
             </div>
           </div>
-          {result.moreAvailable && (
+          {(showLoadMore ||
+            showLoadAll ||
+            cappedNotice !== null ||
+            streamState.phase === 'error') && (
             <div className={styles['loadMore']}>
-              <button
-                type="button"
-                className={styles['loadMoreBtn']}
-                onClick={() => setLimit((l) => l + GIT_GRAPH_PAGE_SIZE)}
-              >
-                {localize('gitGraph.loadMore', 'Load more commits')}
-              </button>
+              {showLoadMore && (
+                <button
+                  type="button"
+                  className={styles['loadMoreBtn']}
+                  onClick={() => setLimit((l) => l + GIT_GRAPH_PAGE_SIZE)}
+                  data-testid="gitGraph-loadMore"
+                >
+                  {localize('gitGraph.loadMore', 'Load more commits')}
+                </button>
+              )}
+              {showLoadAll && (
+                <button
+                  type="button"
+                  className={`${styles['loadMoreBtn']} ${styles['loadAllBtn']}`}
+                  onClick={startLoadAll}
+                  data-testid="gitGraph-loadAll"
+                >
+                  {streamState.phase === 'error'
+                    ? localize('gitGraph.loadAll.retry', 'Retry loading all commits')
+                    : localize('gitGraph.loadAll', 'Load all commits')}
+                </button>
+              )}
+              {cappedNotice !== null && (
+                <span className={styles['loadAllNotice']} data-testid="gitGraph-loadAllCapped">
+                  {cappedNotice}
+                </span>
+              )}
+              {streamState.phase === 'error' && (
+                <span className={styles['loadAllError']} role="alert">
+                  {streamState.error}
+                </span>
+              )}
             </div>
           )}
         </div>

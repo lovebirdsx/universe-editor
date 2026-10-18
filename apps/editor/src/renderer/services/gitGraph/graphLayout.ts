@@ -56,6 +56,9 @@ export interface GraphPath {
   readonly d: string
   readonly colour: number
   readonly isCommitted: boolean
+  /** Vertical extent (px) of the path, used to window large graphs. */
+  readonly minY: number
+  readonly maxY: number
 }
 
 export interface GraphLayout {
@@ -459,6 +462,8 @@ function branchToPaths(
 
   const paths: GraphPath[] = []
   let curPath = ''
+  let curMinY = 0
+  let curMaxY = 0
   for (i = 0; i < placed.length; i++) {
     const line = placed[i]!
     const prev = i > 0 ? placed[i - 1]! : null
@@ -468,12 +473,28 @@ function branchToPaths(
     const y2 = line.p2.y
 
     if (curPath !== '' && prev && line.isCommitted !== prev.isCommitted) {
-      paths.push({ d: curPath, colour: branch.colour, isCommitted: prev.isCommitted })
+      paths.push({
+        d: curPath,
+        colour: branch.colour,
+        isCommitted: prev.isCommitted,
+        minY: curMinY,
+        maxY: curMaxY,
+      })
       curPath = ''
     }
 
     if (curPath === '' || (prev && (x1 !== prev.p2.x || y1 !== prev.p2.y))) {
+      if (curPath === '') {
+        curMinY = Math.min(y1, y2)
+        curMaxY = Math.max(y1, y2)
+      } else {
+        curMinY = Math.min(curMinY, y1, y2)
+        curMaxY = Math.max(curMaxY, y1, y2)
+      }
       curPath += 'M' + x1.toFixed(0) + ',' + y1.toFixed(1)
+    } else {
+      curMinY = Math.min(curMinY, y1, y2)
+      curMaxY = Math.max(curMaxY, y1, y2)
     }
 
     if (x1 === x2) {
@@ -509,6 +530,8 @@ function branchToPaths(
       d: curPath,
       colour: branch.colour,
       isCommitted: placed[placed.length - 1]!.isCommitted,
+      minY: curMinY,
+      maxY: curMaxY,
     })
   }
   return paths

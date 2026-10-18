@@ -45,6 +45,7 @@ function resetGitGraphViewState(): void {
   gitGraphViewState.scrollTop = 0
   gitGraphViewState.searchQuery = ''
   gitGraphViewState.limit = GIT_GRAPH_PAGE_SIZE
+  gitGraphViewState.loadMode = 'paged'
   gitGraphViewState.repos = []
   gitGraphViewState.selectedRepo = null
   gitGraphViewState.pendingReveal.set(null, undefined)

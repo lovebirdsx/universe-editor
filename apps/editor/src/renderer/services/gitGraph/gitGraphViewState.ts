@@ -12,7 +12,14 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { observableValue, type ISettableObservable } from '@universe-editor/platform'
-import type { GitGraphLoadResult, GitGraphRepoDto } from '@universe-editor/extensions-common'
+import type {
+  GitGraphCommitBatchDto,
+  GitGraphLoadResult,
+  GitGraphRepoDto,
+} from '@universe-editor/extensions-common'
+
+/** How the currently loaded commit list was produced. */
+export type GitGraphLoadMode = 'paged' | 'full' | 'partial'
 
 /** User-tunable view options, surfaced through the settings popover. */
 export interface GitGraphSettings {
@@ -41,6 +48,13 @@ export interface GitGraphViewState {
   toggleRemoteBranches: (() => void) | null
   /** Callback registered by the mounted editor to reload the graph (toolbar ↺). */
   refresh: (() => void) | null
+  /** Callback registered by the mounted editor to stream every commit. */
+  loadAll: (() => void) | null
+  /** Callback registered by the mounted editor to stop an in-flight stream. */
+  cancelLoadAll: (() => void) | null
+  /** Batch sink registered by the mounted editor; resolves false when the view
+   *  is gone, which tells the extension to stop streaming. */
+  commitBatch: ((batch: GitGraphCommitBatchDto) => Promise<boolean>) | null
   /** Callback registered by the mounted editor to select + scroll to a commit,
    *  paging in more history until the commit is loaded. */
   revealCommit: ((hash: string) => void) | null
@@ -62,6 +76,8 @@ export interface GitGraphViewState {
   settings: GitGraphSettings
   /** Upper bound on commits to load; raised by "Load more". */
   limit: number
+  /** Whether `result` came from paged loading or the streaming Load all. */
+  loadMode: GitGraphLoadMode
   /** Column widths, adjusted by dragging the header dividers. */
   columnWidths: GitGraphColumnWidths
   /** Repositories the view can switch between (main repo + submodules). */
@@ -81,6 +97,9 @@ export const gitGraphViewState: GitGraphViewState = {
   focusRows: null,
   toggleRemoteBranches: null,
   refresh: null,
+  loadAll: null,
+  cancelLoadAll: null,
+  commitBatch: null,
   revealCommit: null,
   pendingReveal: observableValue<string | null>('gitGraph.pendingReveal', null),
   result: null,
@@ -93,6 +112,7 @@ export const gitGraphViewState: GitGraphViewState = {
     onlyFollowFirstParent: false,
   },
   limit: GIT_GRAPH_PAGE_SIZE,
+  loadMode: 'paged',
   columnWidths: {
     author: 140,
     date: 160,
@@ -104,6 +124,9 @@ export const gitGraphViewState: GitGraphViewState = {
     this.focusRows = null
     this.toggleRemoteBranches = null
     this.refresh = null
+    this.loadAll = null
+    this.cancelLoadAll = null
+    this.commitBatch = null
     this.revealCommit = null
     this.pendingReveal.set(null, undefined)
     this.result = null
@@ -112,6 +135,7 @@ export const gitGraphViewState: GitGraphViewState = {
     this.searchQuery = ''
     this.settings = { order: 'date', includeRemotes: true, onlyFollowFirstParent: false }
     this.limit = GIT_GRAPH_PAGE_SIZE
+    this.loadMode = 'paged'
     this.columnWidths = { author: 140, date: 160 }
     this.repos = []
     this.selectedRepo = null

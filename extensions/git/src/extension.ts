@@ -44,10 +44,17 @@ import {
   compareCommits as compareGitGraphCommits,
   getFileDiffContent as getGitGraphFileDiffContent,
   buildCommitChangesPayload,
+  countCommits as countGitGraphCommits,
   revealPathForFile,
   type GitGraphLoadOptions,
   type GitGraphFileDiffRequest,
 } from './gitGraphSource.js'
+import {
+  cancelAllCommitStreams,
+  cancelCommitStream,
+  startCommitStream,
+  type StartCommitStreamOptions,
+} from './gitGraphStream.js'
 import * as gga from './gitGraphActions.js'
 import { updateSubmodulesIfPresent } from './submoduleSync.js'
 import { autoSyncWorktreesAfterPull } from './worktreeAutoSync.js'
@@ -127,6 +134,9 @@ function registerGitGraphStubs(): Disposable[] {
   return [
     commands.registerCommand('git-graph.getRepos', () => []),
     commands.registerCommand('git-graph.getCommits', () => null),
+    commands.registerCommand('git-graph.countCommits', () => 0),
+    commands.registerCommand('git-graph.startCommitStream', () => false),
+    commands.registerCommand('git-graph.cancelCommitStream', () => false),
     commands.registerCommand('git-graph.setRepo', () => undefined),
   ]
 }
@@ -213,6 +223,9 @@ function registerGitCommands(
     registry.set(id, handler)
     return commands.registerCommand(id, handler)
   }
+  // Mirrors `GitGraphWorkbenchCommands.commitBatch`; kept local so this
+  // esbuild-bundled extension doesn't import the shared package at runtime.
+  const commitBatchCommand = '_workbench.gitGraph.commitBatch'
 
   // Bring submodules to the commit a graph operation just moved HEAD to, then
   // refresh the SCM views of the submodule repos it moved behind their back.
@@ -374,12 +387,35 @@ function registerGitCommands(
     }),
     register('git-graph.setRepo', (...args: unknown[]) => {
       const next = args[0] as string
-      if (next) graph.current = next
+      if (next) {
+        cancelAllCommitStreams()
+        graph.current = next
+      }
       return true
     }),
     register('git-graph.getCommits', (...args: unknown[]) => {
       const opts = (args[0] ?? {}) as GitGraphLoadOptions
       return getGitGraphCommits(graph.current, { ...opts, workspaceRoot: root }, log)
+    }),
+    register('git-graph.countCommits', (...args: unknown[]) => {
+      const opts = (args[0] ?? {}) as GitGraphLoadOptions
+      return countGitGraphCommits(graph.current, { ...opts, workspaceRoot: root }, log)
+    }),
+    register('git-graph.startCommitStream', (...args: unknown[]) => {
+      const opts = (args[0] ?? {}) as StartCommitStreamOptions
+      return startCommitStream(
+        graph.current,
+        { ...opts, workspaceRoot: root },
+        async (batch) => {
+          const result = await commands.executeCommand(commitBatchCommand, batch)
+          return result === true
+        },
+        log,
+      )
+    }),
+    register('git-graph.cancelCommitStream', (...args: unknown[]) => {
+      const streamId = args[0]
+      return typeof streamId === 'string' ? cancelCommitStream(streamId) : false
     }),
     register('git-graph.getCommitDetails', (...args: unknown[]) => {
       const hash = args[0] as string
@@ -762,4 +798,5 @@ export async function activate(context: ExtensionContext): Promise<void> {
 
 export function deactivate(): void {
   // Disposables on context.subscriptions (repository, watcher, commands) handle teardown.
+  cancelAllCommitStreams()
 }

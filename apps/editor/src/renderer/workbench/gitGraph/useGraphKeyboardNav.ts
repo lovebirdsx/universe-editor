@@ -29,6 +29,9 @@ export interface GraphKeyboardNavOptions {
   /** Row attribute used to locate the row element for scroll-into-view. */
   readonly rowAttribute: 'data-hash' | 'data-id'
   readonly rowHeight: number
+  /** Windowed lists: scroll by index instead of looking the row up in the DOM
+   *  (off-screen rows are not rendered). Omit for plain DOM lists. */
+  readonly scrollToRow?: ((index: number) => void) | undefined
 }
 
 export function useGraphKeyboardNav({
@@ -40,6 +43,7 @@ export function useGraphKeyboardNav({
   scrollRef,
   rowAttribute,
   rowHeight,
+  scrollToRow,
 }: GraphKeyboardNavOptions): (e: KeyboardEvent<HTMLDivElement>) => void {
   return useCallback(
     (e: KeyboardEvent<HTMLDivElement>) => {
@@ -60,6 +64,10 @@ export function useGraphKeyboardNav({
         const clamped = Math.max(0, Math.min(rows.length - 1, index))
         const key = rows[clamped]!
         select(key)
+        if (scrollToRow) {
+          scrollToRow(clamped)
+          return
+        }
         // getAttribute comparison instead of a `[${rowAttribute}="${...}"]`
         // selector: attribute-string escapes are not honoured by every selector
         // engine (happy-dom in tests).

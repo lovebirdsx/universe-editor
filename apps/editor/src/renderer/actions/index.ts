@@ -232,6 +232,8 @@ import {
   GitGraphFocusSearchAction,
   GitGraphRefreshAction,
   GitGraphToggleRemoteBranchesAction,
+  GitGraphLoadAllAction,
+  GitGraphCommitBatchAction,
   OpenGitGraphFromExtensionAction,
 } from './gitGraphActions.js'
 import {
@@ -699,6 +701,8 @@ registerAction2(ViewGitGraphAction)
 registerAction2(GitGraphFocusSearchAction)
 registerAction2(GitGraphRefreshAction)
 registerAction2(GitGraphToggleRemoteBranchesAction)
+registerAction2(GitGraphLoadAllAction)
+registerAction2(GitGraphCommitBatchAction)
 
 // Perforce Graph
 registerAction2(ViewPerforceGraphAction)

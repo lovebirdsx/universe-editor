@@ -123,6 +123,7 @@
 | Git Graph: 查看 Git Graph       | 打开 Git 图谱                                            | 无                    |
 | Git Graph: 聚焦搜索             | 聚焦 Git 图谱搜索框；仅图谱激活时生效                     | 图谱内 `Ctrl+F`       |
 | Git Graph: 刷新                 | 刷新 Git 图谱；仅图谱激活时生效                           | 图谱内 `Ctrl+Shift+R` |
+| Git Graph: 加载全部提交         | 流式加载仓库全部历史（超过 2 万条先确认，最多 5 万条）；仅图谱激活时生效 | 无                    |
 | Git Graph: 切换远程分支显示     | 在图谱里开关远程分支显示                                  | 无                    |
 | 刷新                            | 刷新源代码管理状态                                        | `Ctrl+Alt+G`          |
 | 源代码管理：切换仓库…           | 在多个仓库之间切换源代码管理视图（Git 图谱会跟随）        | `Ctrl+Shift+Alt+G`    |
