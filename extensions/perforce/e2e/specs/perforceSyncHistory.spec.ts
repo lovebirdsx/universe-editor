@@ -125,6 +125,9 @@ async function openHistory(page: Page, workbench: WorkbenchPO): Promise<Locator>
   await workbench.runCommand('perforce-sync-history.view')
   const view = page.getByTestId('perforce-sync-history')
   await expect(view).toBeVisible({ timeout: 30_000 })
+  // Opening lands the editor's activation focus in the run list, so arrows
+  // work without a click first.
+  await expect(view.getByRole('listbox')).toBeFocused({ timeout: 30_000 })
   return view
 }
 
@@ -351,6 +354,7 @@ test.describe('@p1 perforce sync history', () => {
 
       const view = page.getByTestId('perforce-sync-history')
       await expect(view).toBeVisible({ timeout: 30_000 })
+      await expect(view.getByRole('listbox')).toBeFocused({ timeout: 30_000 })
       await expect(view.getByTestId('perforce-sync-history-row')).toHaveCount(1)
 
       await view.getByTestId('perforce-sync-history-export').click()

@@ -22,7 +22,7 @@
  *  "browse the recorded runs" is the same interaction.
  *--------------------------------------------------------------------------------------------*/
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   ICommandService,
   IStorageService,
@@ -168,15 +168,25 @@ export function PerforceSyncHistoryEditor(_props: { input: IEditorInput }) {
 
   useEffect(() => {
     state.refresh = refresh
+    return () => {
+      state.refresh = null
+    }
+  }, [state, refresh])
+
+  // Layout effect on purpose: EditorGroupView's activation focus runs in a
+  // layout effect too, and child layout effects run before the parent's. A
+  // passive registration would miss the first
+  // PerforceSyncHistoryEditorInput.focus() call on open.
+  useLayoutEffect(() => {
     // Focus routing only exists while the list does. In the unavailable state
     // there is no container to focus, and a `focusRows` that returns true while
     // focusing nothing would swallow the editor input's own fallback.
-    if (!unavailable) state.focusRows = () => listRef.current?.focus()
+    if (unavailable) return
+    state.focusRows = () => listRef.current?.focus()
     return () => {
       state.focusRows = null
-      state.refresh = null
     }
-  }, [state, refresh, unavailable])
+  }, [state, unavailable])
 
   useEffect(() => {
     state.selectedId = selectedId

@@ -7,6 +7,7 @@
  *  exactly as the wire contract states them.
  *--------------------------------------------------------------------------------------------*/
 
+import { useLayoutEffect, useRef, type ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import {
@@ -31,6 +32,7 @@ import {
   SYNC_HISTORY_POKE_DEBOUNCE_MS,
 } from '../../../services/perforceSyncHistory/syncHistoryViewState.js'
 import { ExportPerforceSyncHistoryAction } from '../../../actions/perforceSyncHistoryActions.js'
+import { PerforceSyncHistoryEditorInput } from '../../../services/editor/PerforceSyncHistoryEditorInput.js'
 import { PerforceSyncHistoryEditor } from '../PerforceSyncHistoryEditor.js'
 
 const ROOT = 'X:/p4ws/main'
@@ -116,6 +118,27 @@ function renderEditor(commandService: ICommandService, storage = makeStorageServ
   return { storage, ...utils }
 }
 
+/** Mimics EditorGroupView's activation focus: a parent layout effect runs after
+ *  the child's layout effects but before any passive effect, so a registration
+ *  that is still passive has not happened yet at this point. */
+function ActivationFocusProbe({
+  input,
+  onHandled,
+  children,
+}: {
+  input: PerforceSyncHistoryEditorInput
+  onHandled: (handled: boolean) => void
+  children: ReactNode
+}) {
+  const fired = useRef(false)
+  useLayoutEffect(() => {
+    if (fired.current) return
+    fired.current = true
+    onHandled(input.focus())
+  })
+  return <>{children}</>
+}
+
 /** Let the mount → getRuns → setState → getRun chain settle. The macrotask
  *  round is load-bearing: a state update arriving outside `act` is applied on
  *  React's scheduler, not on the microtask queue. */
@@ -152,6 +175,36 @@ describe('PerforceSyncHistoryEditor', () => {
     // list is on screen.
     expect(screen.getByTestId('perforce-sync-history-detail-target').textContent).toContain('#head')
     expect(screen.getByTestId('perforce-sync-history-load-more')).toBeTruthy()
+  })
+
+  it('focuses the run list during the opening activation, before passive effects', async () => {
+    const run = makeRun()
+    const services = new ServiceCollection()
+    services.set(
+      ICommandService,
+      makeCommandService(makePage([run]), new Map([['run-1', makeDetail(run)]])),
+    )
+    services.set(IStorageService, makeStorageService())
+    const input = new PerforceSyncHistoryEditorInput()
+    const handled: boolean[] = []
+
+    render(
+      <ServicesContext.Provider value={new InstantiationService(services)}>
+        <ActivationFocusProbe input={input} onHandled={(ok) => handled.push(ok)}>
+          <PerforceSyncHistoryEditor input={input} />
+        </ActivationFocusProbe>
+      </ServicesContext.Provider>,
+    )
+
+    // The listbox is on screen on the first render (loading is a row inside
+    // it), so the activation focus must already find a registered target.
+    expect(handled).toEqual([true])
+    expect(document.activeElement).toBe(screen.getByRole('listbox'))
+
+    // The first load resolves later and must not take focus away from the list.
+    await flush()
+    expect(document.activeElement).toBe(screen.getByRole('listbox'))
+    expect(screen.getAllByTestId('perforce-sync-history-row')).toHaveLength(1)
   })
 
   it('swaps the detail pane when another row is clicked', async () => {
