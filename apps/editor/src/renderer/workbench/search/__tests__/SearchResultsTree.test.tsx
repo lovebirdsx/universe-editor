@@ -3,6 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { useState } from 'react'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import {
   IConfigurationService,
@@ -10,6 +11,7 @@ import {
   ServiceCollection,
   URI,
   type IFileMatch,
+  type ITextSearchMatch,
 } from '@universe-editor/platform'
 import { SearchResultsTree } from '../SearchResultsTree.js'
 import { searchViewState } from '../searchViewState.js'
@@ -38,6 +40,18 @@ function makeMatchWithRanges(path: string, preview: string, count: number): IFil
       preview,
       // Full-line range so the whole preview is one highlighted span, keeping it
       // queryable by exact text (a partial range would split it across spans).
+      ranges: [{ startColumn: 1, endColumn: preview.length + 1 }],
+    })),
+  }
+}
+
+/** One file with several matches — the shape the search engine actually emits. */
+function makeFile(path: string, previews: readonly string[]): IFileMatch {
+  return {
+    resource: URI.file(path),
+    matches: previews.map((preview, i) => ({
+      lineNumber: i + 1,
+      preview,
       ranges: [{ startColumn: 1, endColumn: preview.length + 1 }],
     })),
   }
@@ -200,5 +214,132 @@ describe('SearchResultsTree', () => {
 
     await screen.findByRole('menu')
     expect(document.querySelector('[role="menuitem"][data-active]')).toBeNull()
+  })
+})
+
+/** Owns the result list and applies dismissals like SearchView/useSearchActions. */
+function StatefulSearchTree({ initial }: { initial: readonly IFileMatch[] }) {
+  const [results, setResults] = useState<readonly IFileMatch[]>(initial)
+  return (
+    <SearchResultsTree
+      results={results}
+      onActivateMatch={() => {}}
+      onDismissMatch={(resource, match, rangeIndex) => {
+        setResults((prev) =>
+          prev
+            .map((fm) => {
+              if (fm.resource.toString() !== resource.toString()) return fm
+              const matches = fm.matches
+                .map((m) => {
+                  if (m !== match) return m
+                  const ranges = m.ranges.filter((_, i) => i !== rangeIndex)
+                  return ranges.length === 0 ? null : { ...m, ranges }
+                })
+                .filter((m): m is ITextSearchMatch => m !== null)
+              return matches.length === 0 ? null : { ...fm, matches }
+            })
+            .filter((fm): fm is IFileMatch => fm !== null),
+        )
+      }}
+      onDismissFile={(resource) =>
+        setResults((prev) => prev.filter((fm) => fm.resource.toString() !== resource.toString()))
+      }
+    />
+  )
+}
+
+const selectedRowKey = (): string | null | undefined =>
+  document.querySelector('[role="treeitem"][aria-selected="true"]')?.getAttribute('data-row-key')
+
+describe('SearchResultsTree — focus recovery after Remove', () => {
+  it('deletes a middle match and lands on the next match', () => {
+    render(
+      <StatefulSearchTree
+        initial={[makeFile('/ws/a.ts', ['one', 'two', 'three']), makeFile('/ws/b.ts', ['four'])]}
+      />,
+    )
+    fireEvent.click(screen.getByText('two'))
+    fireEvent.keyDown(screen.getByRole('tree', { name: 'Search results' }), { key: 'Delete' })
+
+    expect(screen.queryByText('two')).toBeNull()
+    expect(selectedRowKey()).toBe('match:file:///ws/a.ts:1')
+  })
+
+  it('deletes the last match of a file and lands on the next row', () => {
+    render(
+      <StatefulSearchTree
+        initial={[makeFile('/ws/a.ts', ['one', 'two']), makeFile('/ws/b.ts', ['four'])]}
+      />,
+    )
+    fireEvent.click(screen.getByText('two'))
+    fireEvent.keyDown(screen.getByRole('tree', { name: 'Search results' }), { key: 'Delete' })
+
+    expect(screen.queryByText('two')).toBeNull()
+    // The file row still exists, so the next row is b.ts (its earlier slot).
+    expect(selectedRowKey()).toBe('file:file:///ws/b.ts')
+  })
+
+  it('deletes the last match of the last file and lands on the previous match', () => {
+    render(
+      <StatefulSearchTree
+        initial={[makeFile('/ws/a.ts', ['one']), makeFile('/ws/b.ts', ['two'])]}
+      />,
+    )
+    fireEvent.click(screen.getByText('two'))
+    fireEvent.keyDown(screen.getByRole('tree', { name: 'Search results' }), { key: 'Delete' })
+
+    expect(screen.queryByText('two')).toBeNull()
+    // b.ts vanishes with its last match, so the seat moves up one more row.
+    expect(selectedRowKey()).toBe('match:file:///ws/a.ts:0')
+  })
+
+  it('deletes a focused file row and lands on the next file', () => {
+    render(
+      <StatefulSearchTree
+        initial={[makeFile('/ws/a.ts', ['one', 'two']), makeFile('/ws/b.ts', ['four'])]}
+      />,
+    )
+    fireEvent.click(screen.getByText('a.ts'))
+    fireEvent.keyDown(screen.getByRole('tree', { name: 'Search results' }), { key: 'Delete' })
+
+    expect(screen.queryByText('a.ts')).toBeNull()
+    expect(selectedRowKey()).toBe('file:file:///ws/b.ts')
+  })
+
+  it('deletes a non-focused match above the cursor and keeps the same match focused', async () => {
+    render(<StatefulSearchTree initial={[makeFile('/ws/a.ts', ['one', 'two', 'three'])]} />)
+    fireEvent.click(screen.getByText('three'))
+    expect(selectedRowKey()).toBe('match:file:///ws/a.ts:2')
+
+    // The row menu acts on the clicked row, not on the cursor. Removing match
+    // 0 renumbers every id after it, so the cursor's old id would go stale.
+    fireEvent.contextMenu(screen.getByText('one'), { clientX: 10, clientY: 20 })
+    await screen.findByRole('menu')
+    fireEvent.click(screen.getByText('Remove'))
+
+    expect(screen.queryByText('one')).toBeNull()
+    expect(selectedRowKey()).toBe('match:file:///ws/a.ts:1')
+  })
+
+  it('new results that were not dismissed do not auto-select a row', () => {
+    const onActivateMatch = () => {}
+    const { rerender } = render(
+      <SearchResultsTree
+        results={[makeFile('/ws/a.ts', ['one', 'two'])]}
+        onActivateMatch={onActivateMatch}
+      />,
+    )
+    fireEvent.click(screen.getByText('two'))
+    expect(selectedRowKey()).toBe('match:file:///ws/a.ts:1')
+
+    rerender(
+      <SearchResultsTree
+        results={[makeFile('/ws/a.ts', ['one'])]}
+        onActivateMatch={onActivateMatch}
+      />,
+    )
+
+    expect(screen.queryByText('two')).toBeNull()
+    expect(selectedRowKey()).toBeUndefined()
   })
 })

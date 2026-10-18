@@ -177,7 +177,7 @@ export function SwarmReviewFiles({
 
   const snapshot = useMemo(() => buildSnapshot(files, viewMode), [files, viewMode])
   snapshotRef.current = snapshot
-  useLayoutEffect(() => treeModel.refresh(), [snapshot, treeModel])
+  useLayoutEffect(() => treeModel.refreshWithFocusRecovery(), [snapshot, treeModel])
 
   // Persist + restore the file-list scroll offset across tab switches. Listen in
   // the capture phase so both scroll modes are covered (the tree root itself when

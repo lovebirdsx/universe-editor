@@ -53,3 +53,26 @@ export function resolveIndexNavigation(
       return undefined
   }
 }
+
+/**
+ * Re-resolve a key-based list cursor after its rows changed.
+ *
+ * A key that survives keeps its cursor (its new index). A key that disappeared
+ * hands the cursor to the row that slid into its old slot, clamped to the new
+ * last row — the same successor rule as a tree. Returns -1 (no cursor) when
+ * nothing was focused, the list is empty, or the focused key was not in the
+ * previous rows either; it never falls back to row 0, which is the jump this
+ * exists to avoid.
+ */
+export function reconcileFocusedKeyIndex(
+  previousKeys: readonly string[],
+  nextKeys: readonly string[],
+  focusedKey: string | null | undefined,
+): number {
+  if (nextKeys.length === 0 || focusedKey === null || focusedKey === undefined) return -1
+  const nextIndex = nextKeys.indexOf(focusedKey)
+  if (nextIndex >= 0) return nextIndex
+  const previousIndex = previousKeys.indexOf(focusedKey)
+  if (previousIndex < 0) return -1
+  return Math.min(previousIndex, nextKeys.length - 1)
+}

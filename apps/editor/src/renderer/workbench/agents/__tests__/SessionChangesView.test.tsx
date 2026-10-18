@@ -156,10 +156,7 @@ function renderView(
       return Promise.resolve()
     },
   }
-  const changesObs: IObservable<readonly SessionFileChange[]> = observableValue(
-    'test.changes',
-    changes,
-  )
+  const changesObs = observableValue<readonly SessionFileChange[]>('test.changes', changes)
   const sessions = {
     _serviceBrand: undefined,
     activeSession: observableValue<
@@ -194,7 +191,7 @@ function renderView(
       <SessionChangesView />
     </ServicesContext.Provider>,
   )
-  return { ...result, editor, resolver, editorGroup, tracker }
+  return { ...result, editor, resolver, editorGroup, tracker, changesObs }
 }
 
 beforeEach(() => sessionChangesViewState._resetForTests())
@@ -403,6 +400,61 @@ describe('SessionChangesView — focus landing and keyboard navigation', () => {
     await waitFor(() => expect(editor.opened).toHaveLength(1))
     expect(editor.opened[0]?.options?.pinned).toBe(true)
     expect(editor.opened[0]?.options?.preserveFocus).not.toBe(true)
+  })
+
+  it('moves the cursor to the next row when the focused file leaves the change list', async () => {
+    const { changesObs } = renderView([change('/ws/a.ts'), change('/ws/b.ts'), change('/ws/c.ts')])
+    await screen.findByText('b.ts')
+    fireEvent.click(screen.getByText('b.ts'))
+    const row = (name: string) =>
+      document.querySelector(`[data-row-key="file:/ws/${name}.ts"]`) as HTMLElement
+    expect(row('b').getAttribute('aria-selected')).toBe('true')
+
+    act(() => changesObs.set([change('/ws/a.ts'), change('/ws/c.ts')], undefined))
+
+    await waitFor(() => expect(screen.queryByText('b.ts')).toBeNull())
+    expect(row('c').getAttribute('aria-selected')).toBe('true')
+  })
+
+  it('collapse-all does not move the cursor off a hidden file row', async () => {
+    renderView([change('/ws/src/a.ts'), change('/ws/lib/b.ts')])
+    act(() => sessionChangesViewState.setViewMode('tree'))
+    await screen.findByText('a.ts')
+    fireEvent.click(screen.getByText('a.ts'))
+    const focused = () =>
+      document.querySelector('[data-row-key="file:/ws/src/a.ts"]')?.getAttribute('aria-selected')
+    expect(focused()).toBe('true')
+
+    act(() => sessionChangesViewState.requestCollapseAll())
+    await waitFor(() => expect(screen.queryByText('a.ts')).toBeNull())
+
+    act(() => sessionChangesViewState.requestExpandAll())
+    await screen.findByText('a.ts')
+    expect(focused()).toBe('true')
+  })
+
+  it('switching tree/list mode keeps a hidden focus instead of moving it', async () => {
+    renderView([change('/ws/src/a.ts'), change('/ws/lib/b.ts')])
+    act(() => sessionChangesViewState.setViewMode('tree'))
+    await screen.findByText('a.ts')
+    act(() => sessionChangesViewState.requestCollapseAll())
+    await waitFor(() => expect(screen.queryByText('a.ts')).toBeNull())
+
+    // The file is visible again in list mode; focus it there.
+    act(() => sessionChangesViewState.setViewMode('list'))
+    fireEvent.click(await screen.findByText('a.ts'))
+    const focusedRow = () =>
+      document.querySelector('[data-row-key="file:/ws/src/a.ts"]')?.getAttribute('aria-selected')
+
+    // Back in tree mode the still-collapsed folders hide the cursor. That is a
+    // layout change, not a removal — the cursor must not move to another file.
+    act(() => sessionChangesViewState.setViewMode('tree'))
+    expect(focusedRow()).toBeUndefined()
+    expect(document.querySelector('[role="treeitem"][aria-selected="true"]')).toBeNull()
+
+    act(() => sessionChangesViewState.requestExpandAll())
+    await screen.findByText('a.ts')
+    expect(focusedRow()).toBe('true')
   })
 })
 

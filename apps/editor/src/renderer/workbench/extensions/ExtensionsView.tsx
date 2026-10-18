@@ -18,7 +18,7 @@
  *  which bodies are folded away.
  *--------------------------------------------------------------------------------------------*/
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, ShieldCheck, Settings } from 'lucide-react'
 import { IEditorService, INotificationService, Severity, localize } from '@universe-editor/platform'
 import {
@@ -29,6 +29,7 @@ import {
   cx,
   dragContainsResources,
   isKeyboardContextMenu,
+  reconcileFocusedKeyIndex,
   useFlatListNavigation,
   useScrollRestore,
   type IFlatListNavigation,
@@ -300,12 +301,60 @@ export function ExtensionsView() {
 
   // Keyed, not indexed: searching, collapsing a section, an install finishing or
   // an uninstall all shorten the list, and an index would silently hand the
-  // cursor to a different extension. A row that disappears takes the cursor with
-  // it (-1) instead of pointing at its neighbour.
+  // cursor to a different extension.
   const focusedIndex = useMemo(
     () => (focusedKey === undefined ? -1 : navigable.findIndex((row) => row.key === focusedKey)),
     [focusedKey, navigable],
   )
+
+  // A data refresh (uninstall, install completing) can remove the row under the
+  // cursor. Searching/collapsing are the user's own layout changes and keep the
+  // old behaviour — the cursor is simply gone — but an unrelated refresh must
+  // hand it to whatever slid into the removed row's seat instead of leaving it
+  // dangling, where the next arrow key jumps to the top of the list.
+  const layoutKey = `${query}\0${[...collapsed].sort().join('\0')}`
+  const previousRowsRef = useRef<{
+    query: string
+    layoutKey: string
+    rows: readonly ExtensionsNavRow[]
+  }>({ query, layoutKey, rows: [] })
+  const suppressRecoveryRef = useRef(false)
+  useLayoutEffect(() => {
+    const previous = previousRowsRef.current
+    const keys = navigable.map((row) => row.key)
+    previousRowsRef.current = { query, layoutKey, rows: navigable }
+    if (previous.layoutKey !== layoutKey) {
+      // Marketplace results land after the query render (and the old rows stay
+      // listed while the search runs), so a query change arms the suppression
+      // even when the old focused row is still visible. It stays armed until
+      // the user moves the cursor — only a fresh cursor may be recovered.
+      if (previous.query !== query) suppressRecoveryRef.current = true
+      else if (focusedKey !== undefined && !keys.includes(focusedKey))
+        suppressRecoveryRef.current = true
+    }
+    if (focusedKey !== undefined && !keys.includes(focusedKey)) {
+      // A layout change drops the cursor rather than handing it to a neighbour.
+      if (previous.layoutKey !== layoutKey || suppressRecoveryRef.current) {
+        setFocusedKey(undefined)
+        suppressRecoveryRef.current = false
+        return
+      }
+      // A finished install moves the row from Marketplace to Installed, so the
+      // same extension carries a new key — follow the entry before the seat.
+      const previousRow = previous.rows.find((row) => row.key === focusedKey)
+      const entryId = previousRow?.kind === 'entry' ? previousRow.entry.id : undefined
+      const moved =
+        entryId === undefined
+          ? undefined
+          : navigable.find((row) => row.kind === 'entry' && row.entry.id === entryId)
+      const index = reconcileFocusedKeyIndex(
+        previous.rows.map((row) => row.key),
+        keys,
+        focusedKey,
+      )
+      setFocusedKey((moved ?? (index >= 0 ? navigable[index] : undefined))?.key)
+    }
+  }, [navigable, focusedKey, layoutKey, query])
 
   // ArrowLeft/ArrowRight need to move the cursor, but the mover comes out of the
   // very hook this handler is passed to — read it through a ref rather than
@@ -316,7 +365,12 @@ export function ExtensionsView() {
     count: navigable.length,
     focusedIndex,
     onFocusChange: useCallback(
-      (index: number) => setFocusedKey(navigable[index]?.key),
+      (index: number) => {
+        // The user picked a row; a suppression armed by an earlier query no
+        // longer applies to this cursor.
+        suppressRecoveryRef.current = false
+        setFocusedKey(navigable[index]?.key)
+      },
       [navigable],
     ),
     getItemKey: useCallback((index: number) => navigable[index]?.key ?? '', [navigable]),

@@ -162,6 +162,126 @@ describe('Explorer 显式刷新', () => {
     expect(tree.focused?.toString()).toBe(platform.toString())
     expect(tree.selection.map((resource) => resource.toString())).toEqual([platform.toString()])
   })
+
+  it('compact 链改写时保留多选中被重键的行', async () => {
+    const { root, packages, platform, fs, tree } = await setup()
+    const leaf = URI.joinPath(platform, 'leaf')
+    const readme = URI.joinPath(packages, 'README.md')
+    await fs.delete(URI.joinPath(platform, 'index.ts'))
+    await fs.createDirectory(leaf)
+    await fs.writeFile(URI.joinPath(leaf, 'index.ts'), new Uint8Array())
+    await tree.refresh(packages, true)
+    // The compact row is keyed by the chain tail, so the refresh below re-keys
+    // it from `leaf` to `platform` — recovery prunes the old id, and the remap
+    // must still bring the selection entry back.
+    const compactRow = tree
+      .getVisibleEntries()
+      .find((entry) => entry.resource.toString() === leaf.toString())
+    expect(compactRow?.compactName).toBe('platform/leaf')
+    tree.setSelection([leaf, readme], readme)
+    await fs.writeFile(URI.joinPath(platform, 'README.md'), new Uint8Array())
+
+    await tree.refresh(root, true)
+
+    expect(tree.focused?.toString()).toBe(readme.toString())
+    expect(tree.selection.map((resource) => resource.toString()).sort()).toEqual(
+      [platform.toString(), readme.toString()].sort(),
+    )
+  })
+})
+
+/*
+ * 删除后焦点恢复：删除命令走 forgetSubtree + refreshParents，
+ * refreshWithFocusRecovery 必须把光标交给滑入被删行槽位的下一行。
+ */
+describe('Explorer 删除后的焦点', () => {
+  async function makeTree(initial: Record<string, IDirectoryEntry[]>, workspace = URI.file('/ws')) {
+    const fs = makeFs(initial)
+    const inst = disposables.add(
+      makeInst(fs, new FakeWorkspaceService(workspace), new FakeWatcher()),
+    )
+    const tree = disposables.add(inst.createInstance(ExplorerTreeService))
+    await flush()
+    return { fs, tree }
+  }
+
+  async function remove(fs: FakeFs, tree: ExplorerTreeService, target: URI) {
+    await fs.delete(target)
+    tree.forgetSubtree(target)
+    await tree.refreshParents([target])
+  }
+
+  it('删除中间行后聚焦下一行', async () => {
+    const root = URI.file('/ws')
+    const a = URI.joinPath(root, 'a.txt')
+    const b = URI.joinPath(root, 'b.txt')
+    const c = URI.joinPath(root, 'c.txt')
+    const { fs, tree } = await makeTree({
+      [root.toString()]: [file('a.txt'), file('b.txt'), file('c.txt')],
+    })
+    expect(tree.getVisibleEntries().map((entry) => entry.resource.toString())).toEqual(
+      [root, a, b, c].map((resource) => resource.toString()),
+    )
+    tree.setSelection([b], b)
+
+    await remove(fs, tree, b)
+
+    expect(tree.focused?.toString()).toBe(c.toString())
+    expect(tree.selection.map((resource) => resource.toString())).toEqual([c.toString()])
+  })
+
+  it('删除末行后聚焦上一行', async () => {
+    const root = URI.file('/ws')
+    const a = URI.joinPath(root, 'a.txt')
+    const b = URI.joinPath(root, 'b.txt')
+    const { fs, tree } = await makeTree({
+      [root.toString()]: [file('a.txt'), file('b.txt')],
+    })
+    tree.getVisibleEntries()
+    tree.setSelection([b], b)
+
+    await remove(fs, tree, b)
+
+    expect(tree.focused?.toString()).toBe(a.toString())
+    expect(tree.selection.map((resource) => resource.toString())).toEqual([a.toString()])
+  })
+
+  it('删除展开的文件夹（焦点在其子行）后聚焦文件夹后的下一行', async () => {
+    const root = URI.file('/ws')
+    const dir = URI.joinPath(root, 'dir')
+    const child = URI.joinPath(dir, 'x.txt')
+    const tail = URI.joinPath(root, 'tail.txt')
+    const { fs, tree } = await makeTree({
+      [root.toString()]: [directory('dir'), file('tail.txt')],
+      [dir.toString()]: [file('x.txt')],
+    })
+    await tree.expand(dir)
+    expect(tree.getVisibleEntries().map((entry) => entry.resource.toString())).toEqual(
+      [root, dir, child, tail].map((resource) => resource.toString()),
+    )
+    tree.setSelection([child], child)
+
+    await remove(fs, tree, dir)
+
+    expect(tree.focused?.toString()).toBe(tail.toString())
+    expect(tree.selection.map((resource) => resource.toString())).toEqual([tail.toString()])
+  })
+
+  it('删除非焦点行时保持焦点不变', async () => {
+    const root = URI.file('/ws')
+    const a = URI.joinPath(root, 'a.txt')
+    const c = URI.joinPath(root, 'c.txt')
+    const { fs, tree } = await makeTree({
+      [root.toString()]: [file('a.txt'), file('b.txt'), file('c.txt')],
+    })
+    tree.getVisibleEntries()
+    tree.setSelection([c], c)
+
+    await remove(fs, tree, a)
+
+    expect(tree.focused?.toString()).toBe(c.toString())
+    expect(tree.selection.map((resource) => resource.toString())).toEqual([c.toString()])
+  })
 })
 
 /*

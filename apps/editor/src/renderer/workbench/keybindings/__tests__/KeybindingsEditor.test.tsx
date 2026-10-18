@@ -59,7 +59,10 @@ vi.mock('@tanstack/react-virtual', async (importOriginal) => {
   }
 })
 
-function mount(userEntries: readonly IUserKeybindingEntry[] = []) {
+function mount(
+  userEntries: readonly IUserKeybindingEntry[] = [],
+  overrides: Partial<IUserKeybindingsServiceType> = {},
+) {
   const onDidChangeEmitter = new Emitter<void>()
   const userKeybindingsService: IUserKeybindingsServiceType = {
     _serviceBrand: undefined,
@@ -78,6 +81,7 @@ function mount(userEntries: readonly IUserKeybindingEntry[] = []) {
     removeKeybinding: vi.fn(),
     getUserEntries: () => [],
     diagnostics: { vscodeFilePath: undefined, vscodeParsedCount: 0, vscodeRegisteredCount: 0 },
+    ...overrides,
   }
 
   const services = new ServiceCollection()
@@ -274,6 +278,113 @@ describe('KeybindingsEditor', () => {
       when: undefined,
       isDefault: true,
     })
+  })
+
+  it('keeps the selection on the command when removing reveals its unbound row', () => {
+    registerTestCommands()
+    const entries: IUserKeybindingEntry[] = [
+      { command: 'test.kb.alpha', key: 'ctrl+alt+u' },
+      { command: 'test.kb.beta', key: 'ctrl+alt+v' },
+    ]
+    const emitter = new Emitter<void>()
+    const { container } = mount(entries, {
+      onDidChange: emitter.event,
+      removeKeybinding: (target) => {
+        const index = entries.findIndex((entry) => entry.command === target.command)
+        if (index < 0) return
+        entries.splice(index, 1)
+        emitter.fire()
+      },
+    })
+
+    const before = gridRows(container)
+    const alphaRow = before.find(
+      (el) => el.textContent?.includes('Alpha Command') && el.textContent?.includes('User'),
+    )
+    expect(alphaRow).toBeDefined()
+
+    fireEvent.contextMenu(alphaRow!)
+    const menu = document.querySelector<HTMLElement>('[role=menu]')!
+    fireEvent.click(
+      [...menu.querySelectorAll('[role=menuitem]')].find((el) =>
+        el.textContent?.includes('Remove Keybinding'),
+      )!,
+    )
+
+    const selected = gridRows(container).find((el) => el.getAttribute('aria-selected') === 'true')
+    // The command still has an unbound row; keep the user where they were
+    // instead of jumping to an unrelated neighbour.
+    expect(selected?.textContent).toContain('Alpha Command')
+    expect(selected?.textContent).toContain('System')
+  })
+
+  it('falls back to the row that took the removed row’s seat', () => {
+    registerTestCommands()
+    // An unregistered command has no unbound placeholder row, so removing its
+    // user binding removes the row outright.
+    const entries: IUserKeybindingEntry[] = [{ command: 'test.kb.zzz', key: 'ctrl+alt+z' }]
+    const emitter = new Emitter<void>()
+    const { container } = mount(entries, {
+      onDidChange: emitter.event,
+      removeKeybinding: (target) => {
+        const index = entries.findIndex((entry) => entry.command === target.command)
+        if (index < 0) return
+        entries.splice(index, 1)
+        emitter.fire()
+      },
+    })
+
+    const before = gridRows(container)
+    const zzzIndex = before.findIndex((el) => el.textContent?.includes('test.kb.zzz'))
+    expect(zzzIndex).toBeGreaterThanOrEqual(0)
+    // Last row clamps to the previous one; otherwise the next row slides up.
+    const expectedSuccessor =
+      zzzIndex === before.length - 1
+        ? before[zzzIndex - 1]?.textContent
+        : before[zzzIndex + 1]?.textContent
+
+    fireEvent.contextMenu(before[zzzIndex]!)
+    const menu = document.querySelector<HTMLElement>('[role=menu]')!
+    fireEvent.click(
+      [...menu.querySelectorAll('[role=menuitem]')].find((el) =>
+        el.textContent?.includes('Remove Keybinding'),
+      )!,
+    )
+
+    const selected = gridRows(container).find((el) => el.getAttribute('aria-selected') === 'true')
+    expect(selected?.textContent).toBe(expectedSuccessor)
+  })
+
+  it('follows the command to its default row when a user override is reset', () => {
+    registerTestCommands()
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({ key: 'ctrl+alt+t', command: 'test.kb.alpha' }),
+    )
+    const entries: IUserKeybindingEntry[] = [{ command: 'test.kb.alpha', key: 'ctrl+alt+u' }]
+    const emitter = new Emitter<void>()
+    const { container } = mount(entries, {
+      onDidChange: emitter.event,
+      resetKeybinding: (command) => {
+        const index = entries.findIndex((entry) => entry.command === command)
+        if (index < 0) return
+        entries.splice(index, 1)
+        emitter.fire()
+      },
+    })
+
+    const userRow = gridRows(container).find((el) => el.textContent?.includes('User'))
+    expect(userRow).toBeDefined()
+    fireEvent.contextMenu(userRow!)
+    const menu = document.querySelector<HTMLElement>('[role=menu]')!
+    fireEvent.click(
+      [...menu.querySelectorAll('[role=menuitem]')].find((el) =>
+        el.textContent?.includes('Reset Keybinding'),
+      )!,
+    )
+
+    const selected = gridRows(container).find((el) => el.getAttribute('aria-selected') === 'true')
+    expect(selected?.textContent).toContain('Alpha Command')
+    expect(selected?.textContent).not.toContain('User')
   })
 
   it('navigates the selection with arrow keys and maintains keybindingFocus', () => {

@@ -12,6 +12,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -710,13 +711,57 @@ export function SessionListBody({
   // row that is no longer there).
   const clampedFocusedIndex = focusedIndex >= visible.length ? -1 : focusedIndex
 
+  // Deleting/archiving the cursor row makes `visible` shrink under it. Like the
+  // tree's focus recovery, hand the cursor to the row that slid into its seat
+  // instead of clamping it away (which sent the next arrow key to row 0). Only
+  // user-initiated removals set this; filtering still drops the cursor as before.
+  const filterKey = `${query}\0${showArchived ? 1 : 0}\0${[...excludedAgents].sort().join('\0')}\0${[...excludedStatuses].sort().join('\0')}`
+  const pendingCursorRef = useRef<{
+    readonly id: string
+    readonly index: number
+    readonly filterKey: string
+  } | null>(null)
+  useLayoutEffect(() => {
+    const pending = pendingCursorRef.current
+    if (pending === null) return
+    // A filter change while an async delete is in flight is a layout change:
+    // the cursor is dropped, not moved to the seat of a row the user removed.
+    if (pending.filterKey !== filterKey) {
+      pendingCursorRef.current = null
+      return
+    }
+    if (visible.some((entry) => entry.id === pending.id)) return
+    pendingCursorRef.current = null
+    setFocusedIndex(visible.length === 0 ? -1 : Math.min(pending.index, visible.length - 1))
+  }, [visible, filterKey])
+  const onFocusChange = useCallback((index: number) => {
+    // A cursor move requested by the user or the pointer wins over a removal
+    // whose async tail has not landed yet.
+    pendingCursorRef.current = null
+    setFocusedIndex(index)
+  }, [])
+  // Read the live list at arm time: with a confirmation dialog the render-time
+  // index may be stale by the time the delete actually starts.
+  const visibleRef = useRef(visible)
+  visibleRef.current = visible
+  const clampedFocusedIndexRef = useRef(clampedFocusedIndex)
+  clampedFocusedIndexRef.current = clampedFocusedIndex
+  const filterKeyRef = useRef(filterKey)
+  filterKeyRef.current = filterKey
+  const rememberRemoval = useCallback((id: string) => {
+    const index = visibleRef.current.findIndex((entry) => entry.id === id)
+    if (index >= 0 && index === clampedFocusedIndexRef.current) {
+      pendingCursorRef.current = { id, index, filterKey: filterKeyRef.current }
+    }
+  }, [])
+
   const getItemKey = useCallback((index: number) => visible[index]?.id ?? '', [visible])
   const getContainer = useCallback(() => scrollRef.current, [])
 
   const nav = useFlatListNavigation({
     count: visible.length,
     focusedIndex: clampedFocusedIndex,
-    onFocusChange: setFocusedIndex,
+    onFocusChange,
     getItemKey,
     getContainer,
     ariaLabel: localize('acp.sessions.list', 'Sessions'),
@@ -741,6 +786,8 @@ export function SessionListBody({
         const isArchived = entry.archived === true
         if (e.key !== 'Delete' || e.shiftKey !== isArchived) return
         if (pendingIds.has(entry.id)) return
+        // Archiving with the archived band hidden removes the row.
+        if (!isArchived && !showArchived) rememberRemoval(entry.id)
         e.preventDefault()
         e.stopPropagation()
         void commandService.executeCommand(
@@ -750,7 +797,7 @@ export function SessionListBody({
           { sessionId: entry.id },
         )
       },
-      [visible, pendingIds, commandService],
+      [visible, pendingIds, commandService, showArchived, rememberRemoval],
     ),
   })
 
@@ -857,6 +904,10 @@ export function SessionListBody({
             const onToggleArchive = isPending
               ? () => {}
               : () => {
+                  // With the archived band hidden, archiving removes the row.
+                  if (entry.archived !== true && !showArchived) {
+                    rememberRemoval(entry.id)
+                  }
                   void commandService.executeCommand(
                     entry.archived === true
                       ? 'workbench.action.agent.unarchiveSession'
@@ -892,6 +943,7 @@ export function SessionListBody({
                     config.update('acp.sessions.confirmDelete', false, ConfigurationTarget.User)
                   }
                 }
+                rememberRemoval(entry.id)
                 if (liveSession) await service.closeSession(liveSession.id)
                 // A pending row has no agent-side session yet (session/new may
                 // still be in flight) and no history row — closing the live

@@ -6,9 +6,18 @@
  *  menu, context keys, and the runtime handle that T8's Action2s drive.
  *--------------------------------------------------------------------------------------------*/
 
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type JSX } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+  type JSX,
+} from 'react'
 import { CommandsRegistry, IContextKeyService, localize } from '@universe-editor/platform'
-import { Badge, IconButton, Input } from '@universe-editor/workbench-ui'
+import { Badge, IconButton, Input, reconcileFocusedKeyIndex } from '@universe-editor/workbench-ui'
 import { ArrowDownWideNarrow, CircleDot, X } from 'lucide-react'
 import { useService } from '../useService.js'
 import {
@@ -279,10 +288,25 @@ export function KeybindingsEditor(): JSX.Element {
   const stateRef = useRef({ rows, selectedRowId })
   stateRef.current = { rows, selectedRowId }
 
+  // Removing a row moves/rebuilds the list under the cursor. Remember where it
+  // was so the cursor can land on the row that took its seat — a dangling id
+  // renders no selection and sends the next arrow key to the top.
+  const pendingRemovalRef = useRef<{
+    readonly rowId: string
+    readonly command: string
+    readonly previousKeys: readonly string[]
+  } | null>(null)
+
   const handle = useMemo<IKeybindingsEditorHandle>(() => {
     const selectedRow = (): IKeybindingRow | undefined => {
       const { rows: currentRows, selectedRowId: currentId } = stateRef.current
       return currentRows.find((m) => m.row.id === currentId)?.row
+    }
+    const rememberRemoval = (row: IKeybindingRow): void => {
+      const { rows: currentRows } = stateRef.current
+      const previousKeys = currentRows.map((m) => m.row.id)
+      if (!previousKeys.includes(row.id)) return
+      pendingRemovalRef.current = { rowId: row.id, command: row.command, previousKeys }
     }
     return {
       getSelectedRow: selectedRow,
@@ -300,11 +324,13 @@ export function KeybindingsEditor(): JSX.Element {
       removeSelectedKeybinding: () => {
         const row = selectedRow()
         if (row?.keybinding === undefined) return
+        rememberRemoval(row)
         userKeybindingsService.removeKeybinding(rowTargetOf(row))
       },
       resetSelectedKeybinding: () => {
         const row = selectedRow()
         if (!row || row.isDefault) return
+        rememberRemoval(row)
         userKeybindingsService.resetKeybinding(row.command)
       },
       copyEntry: (kind) => {
@@ -353,8 +379,33 @@ export function KeybindingsEditor(): JSX.Element {
     return () => d.dispose()
   }, [handle])
 
+  useLayoutEffect(() => {
+    const pending = pendingRemovalRef.current
+    if (pending === null) return
+    // Still there: the removal was a no-op (or the model has not rebuilt).
+    if (rows.some((m) => m.row.id === pending.rowId)) {
+      pendingRemovalRef.current = null
+      return
+    }
+    pendingRemovalRef.current = null
+    // Removing an override reveals the command's default row, which is a new
+    // id for the same command — prefer following the command over the seat.
+    const sameCommand = rows.find((m) => m.row.command === pending.command)?.row.id
+    const index = reconcileFocusedKeyIndex(
+      pending.previousKeys,
+      rows.map((m) => m.row.id),
+      pending.rowId,
+    )
+    const target = sameCommand ?? (index >= 0 ? rows[index]?.row.id : undefined)
+    setSelectedRowId(target)
+    if (target !== undefined) setRevealRowId(target)
+  }, [rows])
+
   // -- row interactions ---------------------------------------------------------
-  const onSelect = useCallback((rowId: string | undefined) => setSelectedRowId(rowId), [])
+  const onSelect = useCallback((rowId: string | undefined) => {
+    pendingRemovalRef.current = null
+    setSelectedRowId(rowId)
+  }, [])
   const onRevealed = useCallback(() => setRevealRowId(undefined), [])
   const onDefineKeybinding = useCallback((row: IKeybindingRow) => {
     setSelectedRowId(row.id)

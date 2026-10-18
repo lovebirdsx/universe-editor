@@ -260,6 +260,56 @@ describe('ExtensionsView keyboard navigation', () => {
     expect(focusedLabels()[0]).toContain('acme.three')
   })
 
+  it('moves the cursor to the next row when the focused extension disappears', () => {
+    const { workbench, onDidChange } = setup({
+      installed: [entry('acme.one'), entry('acme.two'), entry('acme.three')],
+    })
+    fireEvent.keyDown(list(), { key: 'End' })
+    fireEvent.keyDown(list(), { key: 'ArrowUp' })
+    expect(focusedLabels()[0]).toContain('acme.two')
+
+    // acme.two is uninstalled: its row is gone under the cursor.
+    workbench.getInstalled.mockReturnValue([entry('acme.one'), entry('acme.three')])
+    act(() => onDidChange.fire())
+
+    expect(focusedLabels()[0]).toContain('acme.three')
+  })
+
+  it('falls back to the previous row when the focused last extension disappears', () => {
+    const { workbench, onDidChange } = setup({
+      installed: [entry('acme.one'), entry('acme.two')],
+    })
+    fireEvent.keyDown(list(), { key: 'End' })
+    expect(focusedLabels()[0]).toContain('acme.two')
+
+    workbench.getInstalled.mockReturnValue([entry('acme.one')])
+    act(() => onDidChange.fire())
+
+    expect(focusedLabels()[0]).toContain('acme.one')
+  })
+
+  it('drops the cursor when new search results replace the old rows', async () => {
+    const { workbench, onDidChange } = setup({
+      marketplace: true,
+      installed: [entry('acme.one')],
+      results: [entry('acme.market.one', { installed: false })],
+    })
+    await screen.findByText('Market Extensions')
+    fireEvent.keyDown(list(), { key: 'End' })
+    expect(focusedLabels()[0]).toContain('acme.market.one')
+
+    // While the query runs the facade keeps the old results listed, so the
+    // focused key survives the layout change. Its replacement landing later is
+    // still part of the search — it must not recover the cursor.
+    fireEvent.change(screen.getByLabelText('Search Extensions'), { target: { value: 'other' } })
+    expect(focusedLabels()[0]).toContain('acme.market.one')
+
+    workbench.getSearchResults.mockReturnValue([entry('acme.market.two', { installed: false })])
+    act(() => onDidChange.fire())
+
+    expect(focusedLabels()).toEqual([])
+  })
+
   it('drops the cursor when collapsing a section shortens the list past it', () => {
     setup({ installed: [entry('acme.one'), entry('acme.two')] })
     fireEvent.keyDown(list(), { key: 'End' })

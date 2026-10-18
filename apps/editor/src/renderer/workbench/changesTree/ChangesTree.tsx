@@ -331,9 +331,18 @@ export function ChangesTree<TEntry>({
     [items, collapsed, viewMode],
   )
   snapshotRef.current = snapshot
+  const prevLayoutRef = useRef({ collapsed, viewMode })
   useLayoutEffect(() => {
-    treeModel.refresh()
-  }, [snapshot, treeModel])
+    // Collapsing a folder or switching list/tree mode rebuilds the snapshot as
+    // well, but neither is a removal: keep the plain refresh so a row hidden by
+    // the layout never hands the cursor to a neighbour. Data changes recover the
+    // cursor like the Explorer.
+    const previous = prevLayoutRef.current
+    const layoutChanged = previous.collapsed !== collapsed || previous.viewMode !== viewMode
+    prevLayoutRef.current = { collapsed, viewMode }
+    if (layoutChanged) treeModel.refresh()
+    else treeModel.refreshWithFocusRecovery()
+  }, [snapshot, treeModel, collapsed, viewMode])
 
   // The tree container is the view's focus target (LayoutService.focusView
   // resolves it through FocusableRegistry); onFocus below then picks the row.

@@ -5,7 +5,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
-import { LIST_PAGE_STEP, resolveIndexNavigation } from '../list/listKeyboard.js'
+import {
+  LIST_PAGE_STEP,
+  reconcileFocusedKeyIndex,
+  resolveIndexNavigation,
+} from '../list/listKeyboard.js'
 
 describe('resolveIndexNavigation', () => {
   it('returns undefined for keys it does not own', () => {
@@ -58,5 +62,30 @@ describe('resolveIndexNavigation', () => {
   it('pages from the top when nothing is focused', () => {
     expect(resolveIndexNavigation('PageDown', { index: -1, count: 100 })).toBe(LIST_PAGE_STEP)
     expect(resolveIndexNavigation('PageUp', { index: -1, count: 100 })).toBe(0)
+  })
+})
+
+describe('reconcileFocusedKeyIndex', () => {
+  it('follows a surviving key to its new index', () => {
+    expect(reconcileFocusedKeyIndex(['a', 'b', 'c'], ['x', 'b', 'c'], 'b')).toBe(1)
+    expect(reconcileFocusedKeyIndex(['a', 'b', 'c'], ['c', 'a', 'b'], 'b')).toBe(2)
+  })
+
+  it('hands the cursor to the row that slid into the removed slot', () => {
+    expect(reconcileFocusedKeyIndex(['a', 'b', 'c'], ['a', 'c'], 'b')).toBe(1)
+  })
+
+  it('clamps to the last row when the removed key was last', () => {
+    expect(reconcileFocusedKeyIndex(['a', 'b'], ['a'], 'b')).toBe(0)
+  })
+
+  it('returns -1 instead of jumping to row 0 when the key was never listed', () => {
+    expect(reconcileFocusedKeyIndex(['a', 'b'], ['a', 'b'], 'missing')).toBe(-1)
+  })
+
+  it('returns -1 for an empty list or no cursor', () => {
+    expect(reconcileFocusedKeyIndex(['a'], [], 'a')).toBe(-1)
+    expect(reconcileFocusedKeyIndex(['a'], ['b'], null)).toBe(-1)
+    expect(reconcileFocusedKeyIndex(['a'], ['b'], undefined)).toBe(-1)
   })
 })

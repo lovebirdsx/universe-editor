@@ -294,6 +294,79 @@ export class TreeModel<T> extends Disposable {
   }
 
   /**
+   * `refresh()` that also hands the cursor to the row which slid into the
+   * focused row's place when the focused row disappeared from the data source.
+   *
+   * Views rebuild their data source and then call `refresh()`, leaving
+   * `_focused` on an id that is no longer there; the next ArrowDown reads that
+   * missing id as "nothing focused" and jumps to the first row. Unlike
+   * `invalidateNodes()`, the caller does not know the gone ids, so this reads
+   * the pre-refresh visible rows itself and treats a row that was on screen
+   * before and is gone after as removed. A focus hidden under a collapsed
+   * ancestor was not on screen and therefore gets no guessed successor.
+   *
+   * Expansion state is deliberately left alone: a row restored later (undo,
+   * re-create) should come back in the fold it had before.
+   *
+   * The old visible rows must already have been collected (a render happened):
+   * with an empty cache this recomputes both sides from the changed data source
+   * and silently degrades to `refresh()`.
+   */
+  refreshWithFocusRecovery(): void {
+    const previousFocus = this._focused
+    if (previousFocus === null && this._selection.length === 0) {
+      this.refresh()
+      return
+    }
+    // Read before invalidating: the old cache is what says which row used to
+    // occupy the seat the successor must take.
+    const previous = this.getVisibleNodes()
+    const focusIdx = previousFocus === null ? -1 : previous.findIndex((n) => n.id === previousFocus)
+    // -1 when the cursor was outside the selection (or not on screen).
+    const focusSeat = previousFocus === null ? -1 : this._selection.indexOf(previousFocus)
+    const previousIds = new Set(previous.map((n) => n.id))
+
+    this._invalidateStructure()
+    const next = this.getVisibleNodes()
+    const nextIds = new Set(next.map((n) => n.id))
+
+    let nextFocus = previousFocus
+    if (previousFocus !== null && focusIdx >= 0 && !nextIds.has(previousFocus)) {
+      // Rows deleted above the focus shift the successor left, so the old index
+      // must lose every removed row before it (a multi-row delete removes more
+      // than the focused row itself).
+      const removedBefore = previous
+        .slice(0, focusIdx)
+        .filter((node) => !nextIds.has(node.id)).length
+      nextFocus = next[Math.min(focusIdx - removedBefore, next.length - 1)]?.id ?? null
+    }
+
+    // Rows that were visible and are no longer there were removed from the
+    // data source (a structure refresh cannot collapse an ancestor), so they
+    // must not linger in the selection.
+    const nextSelection = this._selection.filter((id) => nextIds.has(id) || !previousIds.has(id))
+    let selectionChanged = nextSelection.length !== this._selection.length
+    // The successor takes the removed row's seat when the cursor was selected,
+    // so the new cursor carries the row highlight; a successor already in the
+    // selection must not be listed twice.
+    if (
+      nextFocus !== null &&
+      nextFocus !== previousFocus &&
+      focusSeat >= 0 &&
+      !nextSelection.includes(nextFocus)
+    ) {
+      nextSelection.splice(Math.min(focusSeat, nextSelection.length), 0, nextFocus)
+      selectionChanged = true
+    }
+
+    if (selectionChanged) this._replaceSelection(nextSelection)
+    const focusChanged = nextFocus !== previousFocus
+    if (focusChanged) this._focused = nextFocus
+    if (selectionChanged || focusChanged) this._emitSelection()
+    this._onDidChangeStructure.fire()
+  }
+
+  /**
    * Ids the data source no longer returns: drop their cached state (a row that
    * comes back later starts from `defaultExpanded` again rather than inheriting
    * a stale fold), prune them from the selection, and hand the keyboard cursor to
@@ -326,8 +399,13 @@ export class TreeModel<T> extends Disposable {
       // focusIdx < 0: the row is gone but was not on screen at all (a collapsed
       // ancestor hid it), so there is no "row that slid up" to hand the cursor to
       // — and picking the first row is the jump this method exists to avoid.
+      const removedBefore = visible
+        .slice(0, Math.max(focusIdx, 0))
+        .filter((n) => gone.has(n.id)).length
       nextFocus =
-        focusIdx < 0 ? null : (survivors[Math.min(focusIdx, survivors.length - 1)]?.id ?? null)
+        focusIdx < 0
+          ? null
+          : (survivors[Math.min(focusIdx - removedBefore, survivors.length - 1)]?.id ?? null)
     }
 
     const nextSelection = this._selection.filter((id) => !gone.has(id))
@@ -530,9 +608,13 @@ export class TreeModel<T> extends Disposable {
   }
 
   private _emitStructure(): void {
+    this._invalidateStructure()
+    this._onDidChangeStructure.fire()
+  }
+
+  private _invalidateStructure(): void {
     this._structureVersion++
     this._visibleCache = null
-    this._onDidChangeStructure.fire()
   }
 
   private _emitSelection(): void {

@@ -227,6 +227,23 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
     const nodeByIdRef = useRef(snapshot.nodeById)
     nodeByIdRef.current = snapshot.nodeById
 
+    // A dismissed row takes its node id with it, and match ids are positional
+    // (`match:<uri>:<n>`), so the successor cannot be found by id after the
+    // rebuild. Remember the seat the cursor was in instead and re-select it,
+    // corrected for rows that vanished before it.
+    const pendingFocusRef = useRef<{
+      readonly slot: number
+      readonly ancestorIds: readonly string[]
+      readonly dismissedIds: ReadonlySet<string>
+    } | null>(null)
+    const pendingFocusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+    useEffect(
+      () => () => {
+        if (pendingFocusTimerRef.current !== null) clearTimeout(pendingFocusTimerRef.current)
+      },
+      [],
+    )
+
     // Selected file URIs (deduped), read lazily at dragstart so a multi-selection
     // drags all of them. A match contributes its file; folders are skipped.
     const getSelectedUris = useCallback((): string[] => {
@@ -287,6 +304,29 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
         if (node) toSeed.push([id, resolveExpanded(node, collapseModeRef.current)] as const)
       }
       recordPerfPhase('search.seedExpansion', () => model.setExpansionAndRefresh(toSeed))
+
+      const pending = pendingFocusRef.current
+      if (pending === null) return
+      pendingFocusRef.current = null
+      if (pendingFocusTimerRef.current !== null) {
+        clearTimeout(pendingFocusTimerRef.current)
+        pendingFocusTimerRef.current = null
+      }
+      const visible = model.getVisibleNodes()
+      if (visible.length === 0) {
+        model.setSelection([], null)
+        return
+      }
+      // The focused row's ancestors are also about to disappear when this was
+      // their last child (file row, and folders that became empty); they all sat
+      // before the cursor, so each one shrinks the target seat by one.
+      let vanishedAncestors = 0
+      for (const id of pending.ancestorIds) {
+        if (!pending.dismissedIds.has(id) && !snapshot.nodeById.has(id)) vanishedAncestors++
+      }
+      const seat = Math.max(0, Math.min(pending.slot - vanishedAncestors, visible.length - 1))
+      const target = visible[seat]
+      if (target) model.setSelection([target.id], target.id, { reveal: false })
     }, [snapshot, model])
 
     // Switching search.collapseResults re-applies the new policy to nodes that
@@ -338,6 +378,47 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
     }, [model])
 
     const dismissNode = (n: SearchNode): void => {
+      // Record the cursor's seat before the results shrink: match ids are
+      // positional, so after a rebuild the id no longer identifies a row. The
+      // removed row need not be the focused one — removing one above it
+      // renumbers the cursor's own id just the same.
+      const focusedId = model.focused
+      if (focusedId !== null) {
+        const dismissedIds = new Set<string>()
+        if (n.kind === 'match') {
+          dismissedIds.add(n.id)
+        } else if (n.kind === 'file') {
+          dismissedIds.add(n.id)
+          for (const child of snapshot.childrenMap.get(n.id) ?? []) dismissedIds.add(child.id)
+        }
+        const visible = model.getVisibleNodes()
+        const focusIndex = visible.findIndex((row) => row.id === focusedId)
+        if (focusIndex >= 0) {
+          let removedBefore = 0
+          for (let i = 0; i < focusIndex; i++) {
+            const id = visible[i]?.id
+            if (id !== undefined && dismissedIds.has(id)) removedBefore++
+          }
+          const ancestorIds: string[] = []
+          let parent = snapshot.parentMap.get(focusedId)
+          while (parent) {
+            ancestorIds.push(parent.id)
+            parent = snapshot.parentMap.get(parent.id)
+          }
+          pendingFocusRef.current = {
+            slot: focusIndex - removedBefore,
+            ancestorIds,
+            dismissedIds,
+          }
+          // A dismiss callback that changes nothing (or a query that lands
+          // later) must not let this seat leak into an unrelated result set.
+          if (pendingFocusTimerRef.current !== null) clearTimeout(pendingFocusTimerRef.current)
+          pendingFocusTimerRef.current = setTimeout(() => {
+            pendingFocusRef.current = null
+            pendingFocusTimerRef.current = null
+          }, 0)
+        }
+      }
       if (n.kind === 'match') onDismissMatch?.(n.resource, n.match, n.rangeIndex)
       else if (n.kind === 'file') onDismissFile?.(n.resource)
     }
@@ -413,6 +494,7 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
             data-row-key={n.id}
             role="treeitem"
             aria-expanded={ctx.node.expanded}
+            aria-selected={ctx.isSelected}
             className={className}
             style={style}
             data-tooltip={n.relPath}
@@ -461,6 +543,7 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
             data-row-key={n.id}
             role="treeitem"
             aria-expanded={ctx.node.expanded}
+            aria-selected={ctx.isSelected}
             className={className}
             style={style}
             data-tooltip={n.relPath}
@@ -532,6 +615,7 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
           key={n.id}
           data-row-key={n.id}
           role="treeitem"
+          aria-selected={ctx.isSelected}
           className={className}
           style={style}
           data-tooltip={n.match.preview}

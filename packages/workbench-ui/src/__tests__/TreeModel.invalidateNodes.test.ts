@@ -85,6 +85,22 @@ describe('TreeModel.invalidateNodes', () => {
     expect(model.focused).toBe('a')
   })
 
+  it('lands after the whole removed range when rows above the focus are gone too', () => {
+    const { model } = makeModel([
+      { id: 'a' },
+      { id: 'b' },
+      { id: 'c' },
+      { id: 'd' },
+      { id: 'e' },
+      { id: 'f' },
+    ])
+    model.setSelection(['d'], 'd')
+
+    model.invalidateNodes(['b', 'c', 'd'])
+
+    expect(model.focused).toBe('e')
+  })
+
   it('follows the focused row when a row above it disappears', () => {
     const { model } = makeModel([{ id: 'a' }, { id: 'b' }, { id: 'c' }])
     model.setSelection(['c'], 'c')

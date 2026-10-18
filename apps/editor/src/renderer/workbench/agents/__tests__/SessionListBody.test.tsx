@@ -8,7 +8,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import {
   Emitter,
   Event,
@@ -670,6 +670,57 @@ describe('SessionListBody — keyboard navigation', () => {
     })
     expect(rowOrder()).toEqual(['b'])
     expect(focusedRowIds()).toEqual([])
+  })
+
+  it('moves the cursor to the next row after Delete archives the focused row', () => {
+    const { history } = harness
+    addEntry(history, 'a', 'alpha', 1000)
+    addEntry(history, 'b', 'bravo', 2000)
+    addEntry(history, 'c', 'charlie', 3000)
+    expect(rowOrder()).toEqual(['c', 'b', 'a'])
+    focusRowAt(1)
+    expect(focusedRowIds()).toEqual(['b'])
+
+    fireEvent.keyDown(list(), { key: 'Delete' })
+    act(() => {
+      history.setHistoryArchived('b', true)
+    })
+
+    expect(rowOrder()).toEqual(['c', 'a'])
+    expect(focusedRowIds()).toEqual(['a'])
+  })
+
+  it('falls back to the previous row when the archived row was last', () => {
+    const { history } = harness
+    addEntry(history, 'a', 'alpha', 1000)
+    addEntry(history, 'b', 'bravo', 2000)
+    addEntry(history, 'c', 'charlie', 3000)
+    focusRowAt(2)
+    expect(focusedRowIds()).toEqual(['a'])
+
+    fireEvent.keyDown(list(), { key: 'Delete' })
+    act(() => {
+      history.setHistoryArchived('a', true)
+    })
+
+    expect(rowOrder()).toEqual(['c', 'b'])
+    expect(focusedRowIds()).toEqual(['b'])
+  })
+
+  it('moves the cursor after removing the focused row', async () => {
+    const { history } = harness
+    addEntry(history, 'a', 'alpha', 1000)
+    addEntry(history, 'b', 'bravo', 2000)
+    addEntry(history, 'c', 'charlie', 3000)
+    focusRowAt(1)
+    expect(focusedRowIds()).toEqual(['b'])
+
+    fireEvent.click(
+      within(screen.getByTestId('session-row-b')).getByRole('button', { name: 'Remove session' }),
+    )
+
+    await waitFor(() => expect(rowOrder()).toEqual(['c', 'a']))
+    expect(focusedRowIds()).toEqual(['a'])
   })
 
   it('clicking a row moves the cursor to it', () => {

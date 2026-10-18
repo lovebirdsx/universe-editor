@@ -264,7 +264,7 @@ export function TimelineView() {
     const rows: TimelineRow[] = items.map((item) => ({ id: item.handle, item }))
     if (hasMore) rows.push({ id: LOAD_MORE_ID, item: undefined })
     rowsRef.current = rows
-    model.refresh()
+    model.refreshWithFocusRecovery()
   }, [items, hasMore, model])
 
   const runItem = useCallback(

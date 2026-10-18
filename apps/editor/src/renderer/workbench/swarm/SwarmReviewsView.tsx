@@ -968,7 +968,7 @@ export function SwarmReviewsView() {
   )
   snapshotRef.current = snapshot
   useLayoutEffect(() => {
-    treeModel.refresh()
+    treeModel.refreshWithFocusRecovery()
   }, [snapshot, treeModel])
 
   // Persisted folding, both ways. Only `onDidChangeExpansion` writes back — it

@@ -876,7 +876,7 @@ export class ExplorerTreeService extends Disposable {
 
   private async _reloadNodes(resources: readonly URI[]): Promise<void> {
     const generation = this._generation
-    const anchors = this._captureCompactAnchors()
+    const compactState = this._captureCompactAnchors()
     await Promise.all(resources.map((resource) => this._reloadNode(resource, generation)))
     if (generation !== this._generation) return
     await Promise.all(
@@ -885,8 +885,8 @@ export class ExplorerTreeService extends Disposable {
       ),
     )
     if (generation !== this._generation) return
-    this._model.refresh()
-    this._remapSelectionToCompact(anchors)
+    this._model.refreshWithFocusRecovery()
+    this._remapSelectionToCompact(compactState)
   }
 
   /**
@@ -1184,29 +1184,56 @@ export class ExplorerTreeService extends Disposable {
    * a chain moves the id out from under selection and focus. Snapshot each
    * selected id's chain head *before* the re-read — afterwards the cache holds
    * the new shape and walking up from a stale tail no longer reaches the head.
+   *
+   * Recovery also prunes ids that were visible before and are gone after; a
+   * chain reshape looks exactly like that, so keep the pre-refresh selection and
+   * the set of rows that were on screen for `_remapSelectionToCompact`.
    */
-  private _captureCompactAnchors(): Map<string, string> {
+  private _captureCompactAnchors(): {
+    readonly anchors: Map<string, string>
+    readonly selection: readonly string[]
+    readonly focused: string | null
+    readonly visibleIds: ReadonlySet<string>
+  } {
     const anchors = new Map<string, string>()
     const ids = [...this._model.selection]
     if (this._model.focused !== null) ids.push(this._model.focused)
     for (const id of ids) {
       if (!anchors.has(id)) anchors.set(id, this._compactChainHead(URI.parse(id)).toString())
     }
-    return anchors
+    return {
+      anchors,
+      selection: [...this._model.selection],
+      focused: this._model.focused,
+      visibleIds: new Set(this._model.getVisibleNodes().map((node) => node.id)),
+    }
   }
 
   /**
    * Re-resolve ids orphaned by a chain reshape onto the row that now covers
    * them, walking down from the anchor captured before the re-read.
    *
-   * Only ids that resolve back to a *visible* row are moved: a row hidden under
-   * a collapsed ancestor, or one whose resource is simply gone, is orphaned for
-   * reasons a chain walk cannot fix, and moving it would send focus somewhere
-   * the user never pointed at.
+   * Only ids that used to be on screen and resolve back to a *visible* row are
+   * moved: a row hidden under a collapsed ancestor, or one whose resource is
+   * simply gone, is orphaned for reasons a chain walk cannot fix, and moving it
+   * would send focus somewhere the user never pointed at.
    */
-  private _remapSelectionToCompact(anchors: Map<string, string>): void {
+  private _remapSelectionToCompact(state: {
+    readonly anchors: Map<string, string>
+    readonly selection: readonly string[]
+    readonly focused: string | null
+    readonly visibleIds: ReadonlySet<string>
+  }): void {
     const model = this._model
-    if (model.focused === null && model.selection.length === 0) return
+    const { anchors, selection: previousSelection, focused: previousFocused, visibleIds } = state
+    if (
+      model.focused === null &&
+      model.selection.length === 0 &&
+      previousFocused === null &&
+      previousSelection.length === 0
+    ) {
+      return
+    }
     const visible = new Set(model.getVisibleNodes().map((n) => n.id))
     const remap = (id: string): string => {
       if (visible.has(id)) return id
@@ -1215,8 +1242,35 @@ export class ExplorerTreeService extends Disposable {
       const tail = this._compactChainTail(URI.parse(anchor)).toString()
       return visible.has(tail) ? tail : id
     }
-    const selection = model.selection.map(remap)
-    const focused = model.focused === null ? null : remap(model.focused)
+    // A row that was on screen and is neither visible nor reshaped onto a
+    // visible tail was really removed (recovery already pruned it); anything
+    // that was not on screen before must stay selected, it may just be hidden.
+    const keepPrevious = (id: string): string | null => {
+      const mapped = remap(id)
+      if (visible.has(mapped)) return mapped
+      return visibleIds.has(id) ? null : id
+    }
+
+    const remappedPreviousFocus = previousFocused === null ? null : remap(previousFocused)
+    // The old focus row survived under a new chain id: recovery guessed a
+    // successor because the old id vanished, but the row itself is still there,
+    // so that guess (and its selection seat) has to be discarded.
+    const focusReshaped =
+      remappedPreviousFocus !== null &&
+      visible.has(remappedPreviousFocus) &&
+      remappedPreviousFocus !== previousFocused
+
+    const selection: string[] = []
+    const push = (id: string | null): void => {
+      if (id !== null && !selection.includes(id)) selection.push(id)
+    }
+    if (focusReshaped) {
+      for (const id of previousSelection) push(keepPrevious(id))
+    } else {
+      for (const id of model.selection) push(remap(id))
+      for (const id of previousSelection) push(keepPrevious(id))
+    }
+    const focused = focusReshaped ? remappedPreviousFocus : model.focused
     const changed =
       selection.length !== model.selection.length ||
       focused !== model.focused ||

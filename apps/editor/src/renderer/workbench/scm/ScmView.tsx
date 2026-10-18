@@ -252,6 +252,22 @@ function buildFolderTree(
   return rootNode
 }
 
+/**
+ * Resource URI of a file row in an older snapshot. Staging / unstaging moves a
+ * file between groups, which changes its id (`file:<groupId>/<uri>`) but not the
+ * resource — the URI is the identity to follow across the rebuild.
+ */
+function findScmFileResource(snapshot: ScmSnapshot, id: string): string | undefined {
+  const stack = [...snapshot.roots]
+  while (stack.length > 0) {
+    const node = stack.pop()!
+    if (node.kind === 'file' && node.id === id) return node.resource.resourceUri
+    const children = snapshot.childrenMap.get(node.id)
+    if (children) stack.push(...children)
+  }
+  return undefined
+}
+
 /** Materialise the provider's groups into a flat-navigable tree snapshot. A group
  *  with a `parentId` that matches another group renders nested under it (after the
  *  parent's own files), e.g. p4's shelved files under their changelist. */
@@ -855,6 +871,9 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
     parentMap: new Map(),
     collapsibleIds: [],
   })
+  // Last snapshot the model rendered, kept to resolve a vanished focus back to
+  // its resource after the rebuild.
+  const prevSnapshotRef = useRef<ScmSnapshot>(snapshotRef.current)
   // Key the persisted tree state by repository — rootUri is stable across
   // reconnects; fall back to the provider id when there is no workspace root.
   const repoKey = model.rootUri ?? model.id
@@ -927,8 +946,58 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
     [groups, dataRevision, viewMode, model.rootUri],
   )
   snapshotRef.current = snapshot
+  // Staging/unstaging can arrive as two snapshots — first the row leaves its
+  // group, then it appears in the other one. Keep following the resource for a
+  // short window while the cursor still sits on the recovery successor.
+  const pendingFollowRef = useRef<{
+    readonly resourceUri: string
+    readonly focusId: string | null
+    readonly expiresAt: number
+  } | null>(null)
   useLayoutEffect(() => {
-    treeModel.refresh()
+    const focusedBefore = treeModel.focused
+    const previousSnapshot = prevSnapshotRef.current
+    // Hand the cursor to the row that took the vanished row's place, then keep
+    // it on the same resource when only the group (and thus the id) changed.
+    treeModel.refreshWithFocusRecovery()
+
+    const movedTo = (resourceUri: string): boolean => {
+      const moved = treeModel
+        .getVisibleNodes()
+        .find(
+          (node) =>
+            node.element.kind === 'file' && node.element.resource.resourceUri === resourceUri,
+        )
+      if (!moved) return false
+      treeModel.setSelection([moved.id], moved.id, { reveal: false })
+      return true
+    }
+
+    const pending = pendingFollowRef.current
+    if (pending !== null) {
+      if (Date.now() > pending.expiresAt || treeModel.focused !== pending.focusId) {
+        pendingFollowRef.current = null
+      } else if (movedTo(pending.resourceUri)) {
+        pendingFollowRef.current = null
+        prevSnapshotRef.current = snapshot
+        return
+      }
+    }
+
+    if (focusedBefore !== null) {
+      const visible = treeModel.getVisibleNodes()
+      if (!visible.some((node) => node.id === focusedBefore)) {
+        const resourceUri = findScmFileResource(previousSnapshot, focusedBefore)
+        if (resourceUri !== undefined && !movedTo(resourceUri)) {
+          pendingFollowRef.current = {
+            resourceUri,
+            focusId: treeModel.focused,
+            expiresAt: Date.now() + 2000,
+          }
+        }
+      }
+    }
+    prevSnapshotRef.current = snapshot
   }, [snapshot, treeModel])
 
   const inputRef = useRef<HTMLTextAreaElement>(null)
