@@ -510,6 +510,7 @@ describe('PerforceClient.sync — δ engine', () => {
     expect(res.cancelled).toBe(false)
     expect(res.summary).toEqual({
       applied: 1,
+      trackedDeleted: 0,
       keptOpen: 0,
       mustResolve: 0,
       refusedModified: 0,
@@ -832,8 +833,8 @@ describe('PerforceClient.sync — δ engine', () => {
     syncReply = () => ({
       records: [deltaFile('Content/a.cpp'), deltaSummary()],
       progress: [
-        { kind: 'progress', phase: 'start', step: 1, total: 6 },
-        { kind: 'progress', phase: 'scan', step: 2, total: 6 },
+        { kind: 'progress', phase: 'start', step: 1, total: 7 },
+        { kind: 'progress', phase: 'scan', step: 2, total: 7 },
       ],
       hold: held,
     })
@@ -846,7 +847,7 @@ describe('PerforceClient.sync — δ engine', () => {
     // run ends would name a phase that is already over.
     expect(client.status.syncProgress?.phase).toBe('scan')
     expect(client.status.syncProgress?.phaseStep).toBe(2)
-    expect(client.status.syncProgress?.phaseTotal).toBe(6)
+    expect(client.status.syncProgress?.phaseTotal).toBe(7)
 
     release()
     await pending
@@ -862,7 +863,7 @@ describe('PerforceClient.sync — δ engine', () => {
     syncReply = () => ({
       records: [deltaFile('Content/a.cpp'), deltaSummary()],
       progress: [
-        { kind: 'progress', phase: 'apply', step: 2, total: 6 },
+        { kind: 'progress', phase: 'apply', step: 2, total: 7 },
         // Step without total: the pair is the contract, so half of it is no
         // ordinal — but the stage word is still worth showing.
         { kind: 'progress', phase: 'digest', step: 4 },
@@ -1134,6 +1135,23 @@ describe('PerforceClient.sync — delete untracked (force repair only)', () => {
     // Deletions are not "files synced": the count keeps them apart so the
     // history can say "1 updated · 1 untracked deleted" instead of "2 updated".
     expect(res.summary).toMatchObject({ applied: 1, untrackedDeleted: 1 })
+  })
+
+  it('reports a tracked deletion inside applied and as its own subset', async () => {
+    const client = await makeArmedClient()
+    syncReply = () => ({
+      records: [
+        deltaForceFile('Content/a.cpp'),
+        deltaForceFile('Content/gone.cpp', { class: 'delete' }),
+        deltaSummary({ force: true, total: 2, counts: { update: 1, delete: 1 } }),
+      ],
+    })
+
+    const res = await client.sync('#head', { force: true })
+
+    expect(res.ok).toBe(true)
+    // 删除仍计入 applied（磁盘上真的发生了），但历史/界面要靠子计数把它与更新分开。
+    expect(res.summary).toMatchObject({ applied: 2, trackedDeleted: 1 })
   })
 
   it('reports an untracked-only repair as work done, not as no-op', async () => {

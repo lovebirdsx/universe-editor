@@ -2374,15 +2374,25 @@ export async function activate(context: ExtensionContext): Promise<void> {
     // noise — there the refusal already is the story. Same for a deletion-only
     // repair: the deleted-files line is the story.
     // 面对转交批次同理：那一行才是故事。
+    const trackedDeleted = summary.trackedDeleted ?? 0
+    const updated = Math.max(0, summary.applied - trackedDeleted)
     if (
-      summary.applied > 0 ||
+      updated > 0 ||
       (summary.refusedModified === 0 &&
         summary.refusedOverwrite === 0 &&
         summary.handoff === 0 &&
-        (summary.untrackedDeleted ?? 0) === 0)
+        (summary.untrackedDeleted ?? 0) === 0 &&
+        trackedDeleted === 0)
     ) {
+      parts.push(localize('perforce.sync.applied', 'Updated {0} file(s)', { 0: String(updated) }))
+    }
+    // 同步删除的已跟踪文件仍计入 applied，但用户看到的是「更新」：把它单独说清楚，
+    // 纯删除的一轮就不会冒出「Updated 0 file(s)」。
+    if (trackedDeleted > 0) {
       parts.push(
-        localize('perforce.sync.applied', 'Updated {0} file(s)', { 0: String(summary.applied) }),
+        localize('perforce.sync.trackedDeleted', '{0} tracked file(s) deleted', {
+          0: String(trackedDeleted),
+        }),
       )
     }
     // 删除未跟踪文件是不可逆动作，不能让唯一一句即时反馈只说「更新了 0 个文件」——

@@ -137,6 +137,31 @@ describe('formatCounts', () => {
     expect(formatCounts({ ...NO_COUNTS, applied: 1 })).toBe('1 updated')
   })
 
+  // 已跟踪删除仍计入 `applied`，展示时必须先减掉，否则「更新」会把同步删除也算进去。
+  it('reports tracked deletions apart from the files it updated', () => {
+    expect(formatCounts({ ...NO_COUNTS, applied: 5, trackedDeleted: 2 })).toBe(
+      '3 updated · 2 tracked file(s) deleted',
+    )
+    // 纯删除：不显示 "0 updated"。
+    expect(formatCounts({ ...NO_COUNTS, applied: 2, trackedDeleted: 2 })).toBe(
+      '2 tracked file(s) deleted',
+    )
+    // 旧记录没有子计数：维持原样，不凭空造删除。
+    expect(formatCounts({ ...NO_COUNTS, applied: 2 })).toBe('2 updated')
+  })
+
+  it('keeps both deletion kinds and the update count separate', () => {
+    expect(formatCounts({ ...NO_COUNTS, applied: 4, trackedDeleted: 1, untrackedDeleted: 2 })).toBe(
+      '3 updated · 1 tracked file(s) deleted · 2 untracked file(s) deleted',
+    )
+    // 子计数已包含在 applied 里，不能再加一次：这一轮的总数仍是 4，不是 5。
+    expect(
+      countsLine(
+        run({ counts: { ...NO_COUNTS, applied: 4, trackedDeleted: 1, untrackedDeleted: 2 } }),
+      ),
+    ).toBe('3 updated · 1 tracked file(s) deleted · 2 untracked file(s) deleted')
+  })
+
   it('counts an untracked-only repair as work done, not as nothing', () => {
     // `applied` 已扣掉删除数，所以只删了未跟踪文件的一轮是 `0 updated + N deleted`——
     // 若不计入 untrackedDeleted，countsLine 会把它误判成「无需传输」。

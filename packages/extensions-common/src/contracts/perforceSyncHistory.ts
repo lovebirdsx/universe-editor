@@ -53,10 +53,18 @@ export type P4SyncOutcomeDto =
 /** The get engine that served the run. */
 export type P4SyncEngineDto = 'p4delta' | 'p4'
 
-/** The six per-file counts of a run (see `SyncRunSummary` in the extension). */
+/** The per-file counts of a run (see `SyncRunSummary` in the extension). */
 export interface P4SyncCountsDto {
-  /** Files updated/added/deleted on disk. */
+  /** Files updated/added/deleted on disk. Includes {@link trackedDeleted}. */
   readonly applied: number
+  /**
+   * Tracked files the target revision deleted. A SUBSET of `applied` (the file did
+   * disappear from disk), never added to it again: the UI shows `applied -
+   * trackedDeleted` as updates and this number as sync deletions. Absent on
+   * records written before the field existed — the split is unavailable, so the
+   * UI keeps the whole total under updates rather than inventing a deletion count.
+   */
+  readonly trackedDeleted?: number
   /** Per-file refusals: locally modified, uncollected work. */
   readonly refusedModified: number
   /** Per-file refusals: an untracked file already sits at the target path. */

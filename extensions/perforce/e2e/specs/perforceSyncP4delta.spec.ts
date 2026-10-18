@@ -161,6 +161,7 @@ interface RecordedRun {
   readonly deleteUntracked?: boolean
   readonly counts?: {
     readonly applied?: number
+    readonly trackedDeleted?: number
     readonly refusedModified?: number
     readonly untrackedDeleted?: number
   }
@@ -452,7 +453,7 @@ test.describe('@p1 perforce p4delta get', () => {
   test.describe('a force get runs on delta when the spec is expressible', () => {
     const logs = makeLogs()
     /** 修复的 `scan` 段被拉长到这么久：真机上这几分钟里 p4 既不打印也不落盘，状态栏的阶段
-     *  读数只有在它够长时才观测得到（fake 否则毫秒级冲过整张 6 段表）。 */
+     *  读数只有在它够长时才观测得到（fake 否则毫秒级冲过整张 7 段表）。 */
     const SCAN_HOLD_MS = 20_000
     test.use({
       p4Seeds: {
@@ -513,12 +514,12 @@ test.describe('@p1 perforce p4delta get', () => {
 
         // 阶段读数：修复大半的墙钟花在 scan 段（查询 + 工作区扫描），那里既没有文件记录也没
         // 有 p4 进程可看，状态栏此前一直停在「拉取中 0」——现在它说出引擎正处在哪一段。正文里
-        // 是一个词（δ 自己的词汇），tooltip 里带序号，序号来自引擎那张 6 段表。
+        // 是一个词（δ 自己的词汇），tooltip 里带序号，序号来自引擎那张 7 段表。
         const entry = page
           .locator('[data-testid="part-statusbar"] button')
           .filter({ hasText: 'Syncing' })
         await expect(entry).toHaveText(/Syncing 0 · scan/, { timeout: 30_000 })
-        await expect(entry).toHaveAttribute('data-tooltip', /Phase 2\/6: scan/)
+        await expect(entry).toHaveAttribute('data-tooltip', /Phase 2\/7: scan/)
 
         // #2 既不是草稿（v1）也不是 head（v3）：越过 p4 的拒绝要靠 `-f`，
         // 停在 #2（而非 head）则要靠用户所选的那条 spec。
@@ -705,6 +706,7 @@ test.describe('@p1 perforce p4delta get', () => {
           .toBe(true)
         const run = (await recordedRuns(page))[0]!
         expect(run.counts?.untrackedDeleted).toBe(1)
+        expect(run.counts?.trackedDeleted).toBe(0)
         expect(run.counts?.applied).toBe(1)
 
         // 删除是不可逆动作，结果提示必须点名删了几个——不能只说「已更新 1 个文件」。

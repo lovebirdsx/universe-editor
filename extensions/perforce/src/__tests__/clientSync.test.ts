@@ -307,6 +307,35 @@ describe('PerforceClient.sync', () => {
     })
   })
 
+  // 目标修订删掉了已跟踪文件：它仍是 applied（磁盘上真的少了这个文件），同时是
+  // trackedDeleted 子集。历史和 toast 靠这一份把「更新」与「同步删除」分开。
+  it('counts a tracked deletion inside applied and as its own subset', async () => {
+    const client = await makeClient(() => ({
+      stdout: [
+        `//depot/branch_x/a.cpp#3 - updated as ${ROOT_FWD}/a.cpp`,
+        `//depot/branch_x/gone.cpp#2 - deleted as ${ROOT_FWD}/gone.cpp`,
+      ].join('\n'),
+    }))
+
+    const res = await client.sync('#head')
+
+    expect(res.summary).toMatchObject({ applied: 2, trackedDeleted: 1 })
+  })
+
+  // 流式路径不重放 stdout（宽拉取时它根本不进内存），计数必须与缓冲解析同口径。
+  it('counts a tracked deletion on the streaming path', async () => {
+    const client = await makeClient(() => ({
+      stdout: [
+        `//depot/branch_x/a.cpp#3 - updated as ${ROOT_FWD}/a.cpp`,
+        `//depot/branch_x/gone.cpp#2 - deleted as ${ROOT_FWD}/gone.cpp`,
+      ].join('\n'),
+    }))
+
+    const res = await client.sync('#head', { onProgress: () => {} })
+
+    expect(res.summary).toMatchObject({ applied: 2, trackedDeleted: 1 })
+  })
+
   it('appends the revision spec to the daily scope', async () => {
     const client = await makeClient(() => ({ stdout: '' }), {
       readScope: scopeFixture([`${ROOT_FWD}/Content`]),

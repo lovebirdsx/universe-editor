@@ -1570,6 +1570,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'perforceSyncHistory.trigger.command': '命令面板',
   'perforceSyncHistory.trigger.recovery': '自动重试',
   'perforceSyncHistory.counts.applied': '已更新 {0} 个',
+  'perforceSyncHistory.counts.trackedDeleted': '已同步删除 {0} 个已跟踪文件',
   'perforceSyncHistory.counts.refusedModified': '{0} 个有未收集的本地修改',
   'perforceSyncHistory.counts.refusedOverwrite': '{0} 个被同名磁盘文件挡住',
   'perforceSyncHistory.counts.keptOpen': '{0} 个已打开编辑',

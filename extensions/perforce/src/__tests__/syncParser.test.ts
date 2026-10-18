@@ -169,6 +169,7 @@ describe('parseSyncOutput', () => {
   it('counts applied / keptOpen / mustResolve lines in a mixed run', () => {
     expect(parseSyncOutput(MIXED, '')).toEqual({
       applied: 4,
+      trackedDeleted: 1,
       keptOpen: 1,
       mustResolve: 1,
       refusedModified: 0,
@@ -182,6 +183,7 @@ describe('parseSyncOutput', () => {
   it('flags up-to-date reported on stderr with exit 0', () => {
     expect(parseSyncOutput('', 'X:/p4ws/main/... - file(s) up-to-date.')).toEqual({
       applied: 0,
+      trackedDeleted: 0,
       keptOpen: 0,
       mustResolve: 0,
       refusedModified: 0,
@@ -195,6 +197,7 @@ describe('parseSyncOutput', () => {
   it('treats empty stdout + stderr as nothing happened, not unrecognized', () => {
     expect(parseSyncOutput('', '')).toEqual({
       applied: 0,
+      trackedDeleted: 0,
       keptOpen: 0,
       mustResolve: 0,
       refusedModified: 0,
@@ -209,6 +212,7 @@ describe('parseSyncOutput', () => {
     const summary = parseSyncOutput('something unexpected\n//depot/branch_x/a.cpp - huh\n', '')
     expect(summary).toEqual({
       applied: 0,
+      trackedDeleted: 0,
       keptOpen: 0,
       mustResolve: 0,
       refusedModified: 0,
@@ -254,6 +258,7 @@ describe('parseSyncOutput', () => {
     const out = "//depot/branch_x/a.json#69 - can't update modified file X:/p4ws/main/a.json"
     expect(parseSyncOutput(out, '')).toEqual({
       applied: 0,
+      trackedDeleted: 0,
       keptOpen: 0,
       mustResolve: 0,
       refusedModified: 1,
@@ -272,6 +277,7 @@ describe('parseSyncOutput', () => {
     const out = "//depot/branch_x/b.uasset#1 - can't overwrite existing file X:/p4ws/main/b.uasset"
     expect(parseSyncOutput(out, '')).toEqual({
       applied: 0,
+      trackedDeleted: 0,
       keptOpen: 0,
       mustResolve: 0,
       refusedModified: 0,
@@ -289,6 +295,7 @@ describe('parseSyncOutput', () => {
     const out = "//depot/branch_x/gone.txt#1 - can't delete modified file X:/p4ws/main/gone.txt"
     expect(parseSyncOutput(out, '')).toEqual({
       applied: 0,
+      trackedDeleted: 0,
       keptOpen: 0,
       mustResolve: 0,
       refusedModified: 1,
@@ -297,6 +304,32 @@ describe('parseSyncOutput', () => {
       upToDate: false,
       unrecognized: false,
     })
+  })
+
+  // 已跟踪文件的同步删除仍计入 applied（它是磁盘上真实发生的动作），但要单独再计一份
+  // 子计数：历史与 toast 靠它把「更新了几个文件」与「目标修订删掉了几个文件」分开。
+  it('counts tracked deletions inside applied and as their own subset', () => {
+    const out = [
+      '//depot/branch_x/a.cpp#3 - updated as X:/p4ws/main/a.cpp',
+      '//depot/branch_x/c.txt#2 - deleted as X:/p4ws/main/c.txt',
+      '//depot/branch_x/d.cs#5 - refreshing X:/p4ws/main/d.cs',
+    ].join('\n')
+    const summary = parseSyncOutput(out, '')
+    expect(summary.applied).toBe(3)
+    expect(summary.trackedDeleted).toBe(1)
+    expect(summary.unrecognized).toBe(false)
+  })
+
+  // `refreshed` / `updating` 是同义动词，但只有 `deleted` 是删除；不要按前缀误计。
+  it('does not count refreshes or updates as tracked deletions', () => {
+    const summary = parseSyncOutput(
+      [
+        '//depot/branch_x/a.cpp#3 - refreshed X:/p4ws/main/a.cpp',
+        '//depot/branch_x/b.h#7 - updating X:/p4ws/main/b.h',
+      ].join('\n'),
+      '',
+    )
+    expect(summary.trackedDeleted).toBe(0)
   })
 
   it('counts refusals alongside applied lines in one run', () => {

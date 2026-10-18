@@ -99,7 +99,7 @@ describe('outcomeOfRun', () => {
     expect(outcomeOfRun(run({ summary: summary({ unrecognized: true }) }))).toBe('unrecognized')
   })
 
-  it('reports applied when any of the six counts is nonzero', () => {
+  it('reports applied when any action count is nonzero', () => {
     expect(outcomeOfRun(run({ summary: summary({ refusedModified: 1 }) }))).toBe('applied')
     expect(outcomeOfRun(run({ summary: summary({ handoff: 1 }) }))).toBe('applied')
   })
@@ -170,6 +170,7 @@ describe('buildSyncHistoryEntry', () => {
     // 新记录恒带 `untrackedDeleted`（这次确实没删），旧记录才缺席。
     expect(entry.counts).toEqual({
       applied: 1,
+      trackedDeleted: 0,
       refusedModified: 2,
       refusedOverwrite: 3,
       keptOpen: 4,
@@ -301,11 +302,34 @@ describe('isEntry', () => {
     delete legacy['deleteUntracked']
     const counts = { ...(entry.counts ?? {}) } as Record<string, unknown>
     delete counts['untrackedDeleted']
+    delete counts['trackedDeleted']
     legacy['counts'] = counts
     expect(isEntry(legacy)).toBe(true)
     // 有就必须是合法的非负整数。
     expect(isEntry({ ...entry, counts: { ...entry.counts!, untrackedDeleted: -1 } })).toBe(false)
     expect(isEntry({ ...entry, counts: { ...entry.counts!, untrackedDeleted: 1.5 } })).toBe(false)
+  })
+
+  // `trackedDeleted` 是 applied 的子集，不是另一笔账：负数、小数与大于 applied 的值都会让
+  // 「更新数 = applied - trackedDeleted」变成谎话，整条记录不可信。
+  it('accepts trackedDeleted only as a non-negative subset of applied', () => {
+    const entry = build()
+    expect(entry.counts?.trackedDeleted).toBe(0)
+    expect(isEntry({ ...entry, counts: { ...entry.counts!, applied: 3, trackedDeleted: 2 } })).toBe(
+      true,
+    )
+    expect(isEntry({ ...entry, counts: { ...entry.counts!, applied: 3, trackedDeleted: 3 } })).toBe(
+      true,
+    )
+    expect(
+      isEntry({ ...entry, counts: { ...entry.counts!, applied: 1, trackedDeleted: -1 } }),
+    ).toBe(false)
+    expect(
+      isEntry({ ...entry, counts: { ...entry.counts!, applied: 1, trackedDeleted: 0.5 } }),
+    ).toBe(false)
+    expect(isEntry({ ...entry, counts: { ...entry.counts!, applied: 1, trackedDeleted: 2 } })).toBe(
+      false,
+    )
   })
 
   it('rejects a malformed p4-call group but accepts an absent one', () => {
@@ -401,11 +425,11 @@ describe('toRunDto / toRunDetailDto', () => {
       build({
         force: true,
         deleteUntracked: true,
-        run: run({ summary: summary({ applied: 1, untrackedDeleted: 2 }) }),
+        run: run({ summary: summary({ applied: 3, trackedDeleted: 2, untrackedDeleted: 1 }) }),
       }),
     )
     expect(dto.deleteUntracked).toBe(true)
-    expect(dto.counts).toMatchObject({ applied: 1, untrackedDeleted: 2 })
+    expect(dto.counts).toMatchObject({ applied: 3, trackedDeleted: 2, untrackedDeleted: 1 })
   })
 
   it('carries the δ log reference and the classification through to the DTO', () => {

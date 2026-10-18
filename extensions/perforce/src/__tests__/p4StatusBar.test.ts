@@ -713,20 +713,20 @@ describe('P4StatusBarController sync progress', () => {
       const { client, fire, progress } = rateClient(Date.now() - 5_000)
       progress['phase'] = 'scan'
       progress['phaseStep'] = 2
-      progress['phaseTotal'] = 6
+      progress['phaseTotal'] = 7
       const controller = new P4StatusBarController({ active: client } as never)
       controller.refresh()
 
       expect(mocks.busyItem.text).toBe('Syncing 421 · scan · 000KB/s · 5s $(sync~spin)')
-      expect(mocks.busyItem.tooltip).toContain('Phase 2/6: scan')
+      expect(mocks.busyItem.tooltip).toContain('Phase 2/7: scan')
 
       // The engine's own word, verbatim, and the newest record wins — a later
       // stage replaces both the word and its position.
       progress['phase'] = 'apply'
-      progress['phaseStep'] = 5
+      progress['phaseStep'] = 6
       fire()
       expect(mocks.busyItem.text).toContain(' · apply · ')
-      expect(mocks.busyItem.tooltip).toContain('Phase 5/6: apply')
+      expect(mocks.busyItem.tooltip).toContain('Phase 6/7: apply')
       controller.dispose()
     } finally {
       vi.useRealTimers()

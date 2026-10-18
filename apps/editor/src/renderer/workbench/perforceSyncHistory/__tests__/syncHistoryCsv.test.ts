@@ -20,7 +20,8 @@ const STARTED_AT = Date.UTC(2026, 9, 10, 3, 32, 29)
 const HEADER =
   'id,at,startedAt,durationMs,outcome,spec,engine,engineFallback,force,deleteUntracked,' +
   'parallelThreads,' +
-  'clientRoot,trigger,counts.applied,counts.refusedModified,counts.refusedOverwrite,' +
+  'clientRoot,trigger,counts.applied,counts.trackedDeleted,counts.refusedModified,' +
+  'counts.refusedOverwrite,' +
   'counts.keptOpen,counts.mustResolve,counts.handoff,counts.untrackedDeleted,' +
   'io.readBytes,io.writeBytes,diskWrites,' +
   'p4Calls.total,p4Calls.native,p4Calls.p4delta,p4Calls.complete,' +
@@ -43,6 +44,7 @@ function makeRun(overrides: Partial<P4SyncRunDto> = {}): P4SyncRunDto {
     parallelThreads: 4,
     counts: {
       applied: 3,
+      trackedDeleted: 0,
       refusedModified: 0,
       refusedOverwrite: 0,
       keptOpen: 0,
@@ -115,6 +117,7 @@ describe('runsToCsv', () => {
         '0',
         '0',
         '0',
+        '0',
         '',
         '4096',
         '1024',
@@ -141,6 +144,7 @@ describe('runsToCsv', () => {
       deleteUntracked: true,
       counts: {
         applied: 1,
+        trackedDeleted: 0,
         refusedModified: 0,
         refusedOverwrite: 0,
         keptOpen: 0,
@@ -152,7 +156,25 @@ describe('runsToCsv', () => {
     const cells = (logicalLines(runsToCsv([run]))[1] ?? '').split(',')
     expect(cells[8]).toBe('true') // force
     expect(cells[9]).toBe('true') // deleteUntracked
-    expect(cells[19]).toBe('2') // counts.untrackedDeleted, apart from applied
+    expect(cells[14]).toBe('0') // counts.trackedDeleted
+    expect(cells[20]).toBe('2') // counts.untrackedDeleted, apart from applied
+  })
+
+  it('writes tracked deletions as their own column', () => {
+    const run = makeRun({
+      counts: {
+        applied: 4,
+        trackedDeleted: 1,
+        refusedModified: 0,
+        refusedOverwrite: 0,
+        keptOpen: 0,
+        mustResolve: 0,
+        handoff: 0,
+      },
+    })
+    const cells = (logicalLines(runsToCsv([run]))[1] ?? '').split(',')
+    expect(cells[13]).toBe('4') // applied includes the tracked deletion
+    expect(cells[14]).toBe('1') // and names it as a subset, not a second total
   })
 
   it('leaves both io cells empty when no sampler ran — never 0', () => {
@@ -161,9 +183,9 @@ describe('runsToCsv', () => {
     const { io: _sampler, ...unsampled } = makeRun()
     const line = logicalLines(runsToCsv([unsampled]))[1] ?? ''
     const cells = line.split(',')
-    // Columns 21/22 (0-based 20/21) are io.readBytes/io.writeBytes.
-    expect(cells[20]).toBe('')
+    // Columns 22/23 (0-based 21/22) are io.readBytes/io.writeBytes.
     expect(cells[21]).toBe('')
+    expect(cells[22]).toBe('')
   })
 
   it('leaves the columns a run never filled empty, not zero', () => {
@@ -183,15 +205,15 @@ describe('runsToCsv', () => {
     expect(cells[7]).toBe('') // engineFallback
     expect(cells[9]).toBe('') // deleteUntracked: the record predates the field
     expect(cells[10]).toBe('') // parallelThreads
-    expect(cells.slice(13, 20)).toEqual(['', '', '', '', '', '', '']) // the seven counts
-    expect(cells[22]).toBe('') // diskWrites
+    expect(cells.slice(13, 21)).toEqual(['', '', '', '', '', '', '', '']) // the eight counts
+    expect(cells[23]).toBe('') // diskWrites
     // A record written before the field existed: all four cells blank, never 0 —
     // and `complete` blank too, so the count is not claimed exact either. The
     // classification and the δ run reference are blank for the same reason.
-    expect(cells.slice(23, 27)).toEqual(['', '', '', ''])
-    expect(cells[27]).toBe('') // p4Calls.p4deltaByCommand
-    expect(cells[28]).toBe('') // p4Calls.p4deltaByCommandComplete
-    expect(cells[29]).toBe('') // deltaRunId
+    expect(cells.slice(24, 28)).toEqual(['', '', '', ''])
+    expect(cells[28]).toBe('') // p4Calls.p4deltaByCommand
+    expect(cells[29]).toBe('') // p4Calls.p4deltaByCommandComplete
+    expect(cells[30]).toBe('') // deltaRunId
   })
 
   it('writes the p4-call total, its two sources and the completeness flag', () => {
@@ -199,7 +221,7 @@ describe('runsToCsv', () => {
     // keeps it from reading as exact.
     const run = makeRun({ p4Calls: { native: 2, p4delta: 5, complete: false } })
     const cells = (logicalLines(runsToCsv([run]))[1] ?? '').split(',')
-    expect(cells.slice(23, 27)).toEqual(['7', '2', '5', 'false'])
+    expect(cells.slice(24, 28)).toEqual(['7', '2', '5', 'false'])
   })
 
   it('writes the δ breakdown biggest-first and the run reference beside it', () => {
@@ -240,10 +262,10 @@ describe('runsToCsv', () => {
     })
     const cellsOf = (run: P4SyncRunDto): string[] =>
       (logicalLines(runsToCsv([run]))[1] ?? '').split(',')
-    expect(cellsOf(exact)[26]).toBe('true') // p4Calls.complete
-    expect(cellsOf(exact)[28]).toBe('true') // p4Calls.p4deltaByCommandComplete
-    expect(cellsOf(lower)[26]).toBe('true')
-    expect(cellsOf(lower)[28]).toBe('false')
+    expect(cellsOf(exact)[27]).toBe('true') // p4Calls.complete
+    expect(cellsOf(exact)[29]).toBe('true') // p4Calls.p4deltaByCommandComplete
+    expect(cellsOf(lower)[27]).toBe('true')
+    expect(cellsOf(lower)[29]).toBe('false')
   })
 
   it('quotes delimiters, quotes, line breaks and surrounding blanks', () => {

@@ -401,9 +401,9 @@ export interface SyncProgress {
   readonly ioOtherBytes?: number
   /**
    * Which stage the δ engine says it is in — the engine's own phase word
-   * (`scan` / `analyze` / `digest` / `apply`), published live from its stderr
-   * progress records. Native runs have no stage vocabulary, so this stays
-   * absent there; so does it until the first record arrives.
+   * (`scan` / `analyze` / `untracked` / `digest` / `apply`), published live from
+   * its stderr progress records. Native runs have no stage vocabulary, so this
+   * stays absent there; so does it until the first record arrives.
    *
    * Deliberately just the last signal, not a percentage: the ladder is sparse
    * (`digest` is skipped when the mtime shortcut leaves nothing to hash) and
@@ -415,7 +415,7 @@ export interface SyncProgress {
    *  record carried one. The ladder's length changes per mode, so it travels
    *  with every record rather than being assumed. */
   readonly phaseStep?: number
-  /** The length of the ladder {@link phaseStep} indexes (six for a force
+  /** The length of the ladder {@link phaseStep} indexes (seven for a force
    *  repair), for rendering `Phase N/M`. */
   readonly phaseTotal?: number
 }
@@ -841,7 +841,7 @@ function syncProgressTick(record: P4deltaRecord): { file: string | undefined } |
 }
 
 /** δ's `step`/`total` as an ordinal, or undefined unless the record carries
- *  both as finite numbers: a lone `total` would render as `Phase ?/6`, and the
+ *  both as finite numbers: a lone `total` would render as `Phase ?/7`, and the
  *  contract calls these records hints — the honest reading of a half-formed one
  *  is "no ordinal", not a guess at the missing half. */
 function deltaPhaseOrdinal(record: P4deltaRecord): { step: number; total: number } | undefined {
@@ -2054,7 +2054,7 @@ export class PerforceClient {
    *
    *  A record whose shape is not what the contract promises is dropped rather
    *  than half-applied: `total` without `step` (or vice versa) would render a
-   *  misleading `Phase ?/6`, and the contract marks these records as hints, so
+   *  misleading `Phase ?/7`, and the contract marks these records as hints, so
    *  the honest reading of a malformed one is "no signal". */
   private _onSyncDeltaProgress(record: P4deltaRecord): void {
     if (this._disposed) return
@@ -5468,6 +5468,7 @@ export class PerforceClient {
     // and are counted, not stored — so the list is bounded by the run's
     // exceptional files, not its size.
     let applied = 0
+    let trackedDeleted = 0
     let keptOpen = 0
     let mustResolve = 0
     let refusedModified = 0
@@ -5508,7 +5509,10 @@ export class PerforceClient {
           if (kind === 'applied') {
             applied++
             const row = parseSyncAppliedLine(line, this.root)
-            if (row) appliedRows.push(row)
+            if (row) {
+              appliedRows.push(row)
+              if (row.action === 'deleted') trackedDeleted++
+            }
           } else {
             if (kind === 'keptOpen') keptOpen++
             else if (kind === 'mustResolve') mustResolve++
@@ -5583,6 +5587,7 @@ export class PerforceClient {
       const summary: SyncRunSummary = onStdoutLine
         ? {
             applied,
+            trackedDeleted,
             keptOpen,
             mustResolve,
             refusedModified,
@@ -5809,9 +5814,10 @@ export class PerforceClient {
           deltaSpawned = true
           this._onSyncP4Spawn(pid)
         },
-        // The engine's stage ladder (start / scan / analyze / digest / apply /
-        // done for a force repair), live off stderr — the bar names the stage
-        // the run is in, which for a wide repair is most of the elapsed time.
+        // The engine's stage ladder (start / scan / analyze / untracked / digest
+        // / apply / done for a force repair), live off stderr — the bar names the
+        // stage the run is in, which for a wide repair is most of the elapsed
+        // time. `untracked` only speaks when `--delete-untracked` is on.
         onProgress: (record) => this._onSyncDeltaProgress(record),
       })
     })

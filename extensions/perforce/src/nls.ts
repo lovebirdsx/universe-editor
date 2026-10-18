@@ -164,6 +164,7 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.sync.refusedNoLocalPath': '无法显示差异：被跳过的文件没有映射到当前工作区。',
   'perforce.sync.unrecognized': '拉取版本没有返回可识别的结果，详情请查看 Perforce 输出。',
   'perforce.sync.applied': '已更新 {0} 个文件',
+  'perforce.sync.trackedDeleted': '已同步删除 {0} 个已跟踪文件',
   'perforce.sync.untrackedDeleted': '已删除 {0} 个未跟踪文件',
   'perforce.sync.handoff': '{0} 个文件已交由 p4 同步',
   'perforce.sync.keptOpen': '{0} 个已跳过（正在签出中）',

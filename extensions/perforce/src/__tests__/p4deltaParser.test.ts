@@ -378,6 +378,7 @@ describe('toSyncOutcome', () => {
     ])
     expect(outcome?.summary).toEqual({
       applied: 3,
+      trackedDeleted: 1,
       keptOpen: 0,
       mustResolve: 0,
       refusedModified: 0,
@@ -693,6 +694,7 @@ describe('toSyncOutcome — force repair', () => {
     ])
     expect(outcome?.summary).toMatchObject({
       applied: 4,
+      trackedDeleted: 1,
       handoff: 0,
       upToDate: false,
       unrecognized: false,
@@ -838,6 +840,37 @@ describe('toSyncOutcome — force repair', () => {
     ])
     expect(outcome?.summary).toMatchObject({
       applied: 1,
+      untrackedDeleted: 1,
+      upToDate: false,
+      unrecognized: false,
+    })
+  })
+
+  // 强制修复里两类删除同时出现：已跟踪删除是 applied 的子集，未跟踪删除在 applied 之外。
+  // `applied` = 3 条 applied 记录减去 1 条 untracked = 2；`trackedDeleted` 只数 delete 类。
+  it('separates tracked deletions from untracked deletions', () => {
+    const outcome = toSyncOutcome(
+      forceRun(
+        [
+          forceFile(),
+          forceFile({ class: 'delete', action: 'deleting', depotFile: '//depot/main/src/gone.ts' }),
+          forceFile({
+            class: 'untracked',
+            action: 'deleting',
+            depotFile: '//depot/main/junk.log',
+            rev: undefined,
+          }),
+        ],
+        [],
+        { total: 3, counts: { update: 1, delete: 1, untracked: 1 } },
+      ),
+      CLIENT_ROOT,
+      true,
+      true,
+    )
+    expect(outcome?.summary).toMatchObject({
+      applied: 2,
+      trackedDeleted: 1,
       untrackedDeleted: 1,
       upToDate: false,
       unrecognized: false,

@@ -118,9 +118,22 @@ export function triggerLabel(trigger: P4SyncTriggerDto): string {
  *  literal rather than looped over, so the zh-CN coverage test can see it. */
 export function formatCounts(counts: P4SyncCountsDto): string {
   const parts: string[] = []
-  if (counts.applied > 0) {
+  // `applied` 含已跟踪的同步删除（它确实是 applied），但「更新」不该把删除算进去。
+  // 旧记录没有子计数：按 0 处理，保持原样。
+  const trackedDeleted = counts.trackedDeleted ?? 0
+  const updated = Math.max(0, counts.applied - trackedDeleted)
+  if (updated > 0) {
     parts.push(
-      localize('perforceSyncHistory.counts.applied', '{0} updated', { 0: String(counts.applied) }),
+      localize('perforceSyncHistory.counts.applied', '{0} updated', { 0: String(updated) }),
+    )
+  }
+  // 已跟踪删除：目标修订里没有了，同一次同步把它从磁盘上删掉。与未跟踪删除分两句，
+  // 因为「depot 要求的删除」和「清理 depot 从不跟踪的本地文件」是两件事。
+  if (trackedDeleted > 0) {
+    parts.push(
+      localize('perforceSyncHistory.counts.trackedDeleted', '{0} tracked file(s) deleted', {
+        0: String(trackedDeleted),
+      }),
     )
   }
   if (counts.refusedModified > 0) {
@@ -261,7 +274,7 @@ function countsTotal(counts: P4SyncCountsDto): number {
     counts.mustResolve +
     counts.handoff +
     // 已从 `applied` 里扣掉，所以这里不会重复计数；算进来才能让「只删了未跟踪文件」的一轮
-    // 不被判成「什么也没发生」。
+    // 不被判成「什么也没发生」。`trackedDeleted` 是 applied 的子集，**绝不能**再加一次。
     (counts.untrackedDeleted ?? 0)
   )
 }

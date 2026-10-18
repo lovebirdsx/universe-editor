@@ -138,6 +138,13 @@ export interface SyncRunSummary {
    */
   readonly handoff: number
   /**
+   * 目标修订删掉的**已跟踪**文件数（`deleted as` / `deleted` 行）。它是 {@link applied}
+   * 的**子集**：文件确实从磁盘上消失了，同步动作真实发生，所以仍计入 applied；历史与
+   * 通知再从这个子计数里把「更新」与「同步删除」分开显示。未跟踪删除不是这一项（见
+   * {@link untrackedDeleted}）。
+   */
+  readonly trackedDeleted?: number
+  /**
    * δ `--delete-untracked` 删掉的未跟踪文件数（`class:"untracked"`）。它们不是「同步下来的
    * 文件」，所以**不计入** {@link applied}——历史要把「更新了几个文件」与「清掉几个 depot
    * 从不跟踪的文件」分开显示。旧记录 / 原生路径没有这一项。
@@ -203,14 +210,18 @@ export function classifySyncLine(line: string): SyncLineKind | undefined {
 
 export function parseSyncOutput(stdout: string, stderr: string): SyncRunSummary {
   let applied = 0
+  let trackedDeleted = 0
   let keptOpen = 0
   let mustResolve = 0
   let refusedModified = 0
   let refusedOverwrite = 0
   for (const raw of stdout.split(/\r?\n/)) {
     const kind = classifySyncLine(raw)
-    if (kind === 'applied') applied++
-    else if (kind === 'keptOpen') keptOpen++
+    if (kind === 'applied') {
+      applied++
+      // 这一行已经判定为 applied，直接提取动作；不再走一遍分类。
+      if (appliedLineRow(raw.trim())?.action === 'deleted') trackedDeleted++
+    } else if (kind === 'keptOpen') keptOpen++
     else if (kind === 'mustResolve') mustResolve++
     else if (kind === 'refused') refusedModified++
     else if (kind === 'refusedOverwrite') refusedOverwrite++
@@ -226,6 +237,7 @@ export function parseSyncOutput(stdout: string, stderr: string): SyncRunSummary 
     !upToDate
   return {
     applied,
+    trackedDeleted,
     keptOpen,
     mustResolve,
     refusedModified,
@@ -238,8 +250,10 @@ export function parseSyncOutput(stdout: string, stderr: string): SyncRunSummary 
 }
 
 /**
- * Whether a run left nothing to report: no summary at all, or every one of the
- * six counts at zero.
+ * Whether a run left nothing to report: no summary at all, or every count that
+ * represents a distinct action is zero. `trackedDeleted` is deliberately absent
+ * from this check: it is a subset of `applied`, so a deletion-only run already
+ * has `applied > 0` and is not "nothing happened".
  *
  * Shared by `runSync`'s result branches and the sync history, because the two
  * must agree on what "nothing happened" means — the toast decides between
@@ -389,6 +403,13 @@ export function parseSyncAppliedLine(
   // a line the summary counted is never one this function declined (and the
   // caller's `appliedFiles.length < summary.applied` gap check stays honest).
   if (classifySyncLine(trimmed) !== 'applied') return undefined
+  return appliedLineRow(trimmed, clientRoot)
+}
+
+/** The extraction half of {@link parseSyncAppliedLine}. Callers that already
+ *  classified the line use this to avoid running the classification regexes a
+ *  second time; it must only be called for `applied` lines. */
+function appliedLineRow(trimmed: string, clientRoot?: string): SyncPreviewFile | undefined {
   const match = APPLIED_EXTRACT.exec(trimmed)
   if (!match) return undefined
   const depotFile = match[1]

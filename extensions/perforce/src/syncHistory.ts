@@ -228,9 +228,14 @@ export class SyncP4CallCounter {
   }
 }
 
-/** The six per-file counts, copied off {@link SyncRunSummary}. */
+/** The per-file counts, copied off {@link SyncRunSummary}. */
 export interface SyncHistoryCounts {
   readonly applied: number
+  /**
+   * 目标修订删掉的**已跟踪**文件数，是 {@link applied} 的**子集**（不是另一笔账）。
+   * 展示「更新」时要先减掉它；旧记录没有这一项（缺席 = 未记录，不是 0）。
+   */
+  readonly trackedDeleted?: number
   readonly refusedModified: number
   readonly refusedOverwrite: number
   readonly keptOpen: number
@@ -449,6 +454,8 @@ export function buildSyncHistoryEntry(input: BuildSyncHistoryInput): SyncHistory
 function countsOf(summary: SyncRunSummary): SyncHistoryCounts {
   return {
     applied: summary.applied,
+    // 新记录恒带这一项（0 表示这次没有同步删除），旧记录缺席。
+    trackedDeleted: summary.trackedDeleted ?? 0,
     refusedModified: summary.refusedModified,
     refusedOverwrite: summary.refusedOverwrite,
     keptOpen: summary.keptOpen,
@@ -492,16 +499,20 @@ function isScopeTarget(value: unknown): value is SyncScopeTarget {
 function isCounts(value: unknown): value is SyncHistoryCounts {
   if (value === null || typeof value !== 'object') return false
   const c = value as Record<string, unknown>
-  return (
-    isCount(c['applied']) &&
-    isCount(c['refusedModified']) &&
-    isCount(c['refusedOverwrite']) &&
-    isCount(c['keptOpen']) &&
-    isCount(c['mustResolve']) &&
-    isCount(c['handoff']) &&
-    // 旧记录没有这一项；有就必须是一个合法的非负整数。
-    (c['untrackedDeleted'] === undefined || isCount(c['untrackedDeleted']))
+  if (
+    !isCount(c['applied']) ||
+    !isCount(c['refusedModified']) ||
+    !isCount(c['refusedOverwrite']) ||
+    !isCount(c['keptOpen']) ||
+    !isCount(c['mustResolve']) ||
+    !isCount(c['handoff'])
   )
+    return false
+  // 旧记录没有这两项；有就必须是合法的非负整数。`trackedDeleted` 还是 applied 的子集：
+  // 大于 applied 会让「更新数 = applied - trackedDeleted」变成负数，整条记录不可信。
+  if (c['untrackedDeleted'] !== undefined && !isCount(c['untrackedDeleted'])) return false
+  if (c['trackedDeleted'] === undefined) return true
+  return isCount(c['trackedDeleted']) && c['trackedDeleted'] <= c['applied']
 }
 
 function isIo(value: unknown): value is { readBytes: number; writeBytes: number } {

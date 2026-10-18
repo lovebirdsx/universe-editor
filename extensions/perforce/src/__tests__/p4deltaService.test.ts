@@ -513,12 +513,12 @@ describe('P4deltaService.run', () => {
     expect(seen).toEqual([])
     child.stderr.emit(
       'data',
-      Buffer.from('{"kind":"progress","phase":"scan","step":2,"total":6}\n'),
+      Buffer.from('{"kind":"progress","phase":"scan","step":2,"total":7}\n'),
     )
-    expect(seen).toEqual([{ kind: 'progress', phase: 'scan', step: 2, total: 6 }])
+    expect(seen).toEqual([{ kind: 'progress', phase: 'scan', step: 2, total: 7 }])
     child.stderr.emit(
       'data',
-      Buffer.from('{"kind":"progress","phase":"apply","step":5,"total":6}\n'),
+      Buffer.from('{"kind":"progress","phase":"apply","step":6,"total":7}\n'),
     )
     child.emit('close', 0, null)
     const result = await p

@@ -64,7 +64,7 @@ interface RecordedRun {
   readonly outcome: string
   readonly spec: string
   readonly trigger: string
-  readonly counts?: { readonly applied: number }
+  readonly counts?: { readonly applied: number; readonly trackedDeleted?: number }
   readonly p4Calls?: {
     readonly native: number
     readonly p4delta: number
@@ -191,6 +191,7 @@ test.describe('@p1 perforce sync history', () => {
       // 记录里没有运行引用，命令就必须这么回答——**绝不退化成「打开最近一份」**。这条断言
       // 在这里能验红的前提是盘上确实没有这一跑的日志（纯原生会话里 δ 一次都没起）。
       const record = (await recordedRuns(page))[0]!
+      expect(record.counts).toMatchObject({ applied: 1, trackedDeleted: 0 })
       expect(record.deltaRunId).toBeUndefined()
       const activeBefore = await page.evaluate(() => window.__E2E__!.getActiveEditorUri())
       const opened = await page.evaluate(

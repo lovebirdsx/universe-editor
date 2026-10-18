@@ -145,6 +145,8 @@ interface FakeRunResult {
   summary:
     | {
         applied: number
+        trackedDeleted?: number
+        untrackedDeleted?: number
         keptOpen: number
         mustResolve: number
         refusedModified: number
@@ -909,6 +911,91 @@ describe('a finished get reaches a user who left the window', () => {
         body: localize('perforce.sync.applied', 'Updated {0} file(s)', { 0: '1' }),
       },
     ])
+  })
+
+  // 纯删除的一轮 applied == trackedDeleted：此时「Updated 0 file(s)」既刺眼又是谎话（磁盘上
+  // 确实少了文件），只报删除数。
+  it('reports a tracked-only deletion without claiming zero updates', async () => {
+    fake.sync.mockResolvedValue(
+      appliedRun({
+        summary: {
+          applied: 1,
+          trackedDeleted: 1,
+          keptOpen: 0,
+          mustResolve: 0,
+          refusedModified: 0,
+          refusedOverwrite: 0,
+          handoff: 0,
+          upToDate: false,
+        },
+      }),
+    )
+
+    await runCommand('perforce.syncLatest')
+
+    expect(notifications()).toEqual([
+      {
+        title: TITLE_DONE,
+        body: localize('perforce.sync.trackedDeleted', '{0} tracked file(s) deleted', {
+          0: '1',
+        }),
+      },
+    ])
+  })
+
+  it('reports updates and tracked deletions as separate numbers', async () => {
+    fake.sync.mockResolvedValue(
+      appliedRun({
+        summary: {
+          applied: 3,
+          trackedDeleted: 1,
+          keptOpen: 0,
+          mustResolve: 0,
+          refusedModified: 0,
+          refusedOverwrite: 0,
+          handoff: 0,
+          upToDate: false,
+        },
+      }),
+    )
+
+    await runCommand('perforce.syncLatest')
+
+    expect(notifications()[0]?.body).toBe(
+      `${localize('perforce.sync.applied', 'Updated {0} file(s)', { 0: '2' })} · ${localize(
+        'perforce.sync.trackedDeleted',
+        '{0} tracked file(s) deleted',
+        { 0: '1' },
+      )}`,
+    )
+  })
+
+  it('reports both deletion kinds alongside the update count', async () => {
+    fake.sync.mockResolvedValue(
+      appliedRun({
+        summary: {
+          applied: 3,
+          trackedDeleted: 1,
+          untrackedDeleted: 2,
+          keptOpen: 0,
+          mustResolve: 0,
+          refusedModified: 0,
+          refusedOverwrite: 0,
+          handoff: 0,
+          upToDate: false,
+        },
+      }),
+    )
+
+    await runCommand('perforce.syncLatest')
+
+    expect(notifications()[0]?.body).toBe(
+      [
+        localize('perforce.sync.applied', 'Updated {0} file(s)', { 0: '2' }),
+        localize('perforce.sync.trackedDeleted', '{0} tracked file(s) deleted', { 0: '1' }),
+        localize('perforce.sync.untrackedDeleted', '{0} untracked file(s) deleted', { 0: '2' }),
+      ].join(' · '),
+    )
   })
 
   it('reports an up-to-date get instead of staying silent', async () => {

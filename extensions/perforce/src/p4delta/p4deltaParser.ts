@@ -339,6 +339,10 @@ interface SyncRecordTally {
   readonly applied: SyncPreviewFile[]
   /** `class:"resolve"` records: opened files whose have moved to the target. */
   readonly resolve: number
+  /** `class:"delete"` records: tracked files removed because the target revision has no
+   *  such path. Rows in {@link applied}; the summary also reports them as an applied
+   *  SUBSET so history can split updates from sync deletions. */
+  readonly trackedDeleted: number
   /** `class:"untracked"` records: local files deleted by `--delete-untracked`. They
    *  are rows in {@link applied} (their drift rows are gone), but the summary
    *  reports them under their own count so history can tell the two apart. */
@@ -358,17 +362,19 @@ function tallySyncRecords(
 ): SyncRecordTally {
   const applied: SyncPreviewFile[] = []
   let resolve = 0
+  let trackedDeleted = 0
   let untracked = 0
   let handoff = 0
   for (const record of records) {
     if (record['kind'] !== 'file' || record['mode'] !== 'sync') continue
     const klass = asString(record['class'])
-    if (klass === undefined) return { applied, resolve, untracked, handoff, foreign: true }
+    if (klass === undefined)
+      return { applied, resolve, trackedDeleted, untracked, handoff, foreign: true }
     if (klass === 'handoff') {
       // handoff 字段写明这批文件交给了哪条原生命令，修复档是 `sync`；
       // clean/reconcile 的属于别档的流，普通 get 根本不发。
       if (!force || record['handoff'] !== 'sync')
-        return { applied, resolve, untracked, handoff, foreign: true }
+        return { applied, resolve, trackedDeleted, untracked, handoff, foreign: true }
       handoff += 1
       continue
     }
@@ -382,17 +388,23 @@ function tallySyncRecords(
       const row = syncFileRow(record, clientRoot)
       // 计数要跟着行一起成立：只计一条记不出身份的记录，会让 `applied - untrackedDeleted`
       // 变成负数并写进历史。缺身份字段的流回答不了这个问题，按异类流处理。
-      if (row === undefined) return { applied, resolve, untracked, handoff, foreign: true }
+      if (row === undefined)
+        return { applied, resolve, trackedDeleted, untracked, handoff, foreign: true }
       applied.push(row)
       untracked += 1
       continue
     }
     const allowed = force ? APPLIED_FORCE_CLASSES : APPLIED_SYNC_CLASSES
-    if (!allowed.has(klass)) return { applied, resolve, untracked, handoff, foreign: true }
+    if (!allowed.has(klass))
+      return { applied, resolve, trackedDeleted, untracked, handoff, foreign: true }
     const row = syncFileRow(record, clientRoot)
-    if (row !== undefined) applied.push(row)
+    if (row !== undefined) {
+      applied.push(row)
+      // 已跟踪删除是 applied 的子集；只有真正建出行、能对上身份的才计数。
+      if (klass === 'delete') trackedDeleted += 1
+    }
   }
-  return { applied, resolve, untracked, handoff, foreign: false }
+  return { applied, resolve, trackedDeleted, untracked, handoff, foreign: false }
 }
 
 /**
@@ -554,6 +566,8 @@ export function toSyncOutcome(
       // 未跟踪删除单独计数：它删的是 depot 从不跟踪的文件，与「同步了几个文件」不是
       // 同一件事，历史里要分开显示。tally.applied 仍保留它，供漂移行作废使用。
       applied: tally.applied.length - untrackedDeleted,
+      // 已跟踪删除仍是 applied 的一部分（不扣除），只作为子集上报。
+      trackedDeleted: tally.trackedDeleted,
       keptOpen,
       mustResolve,
       refusedModified,

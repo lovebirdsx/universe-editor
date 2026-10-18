@@ -215,9 +215,18 @@ const PHASES = ['start', 'analyze', 'digest', 'report', 'done']
  *  per mode too, so `step`/`total` stay truthful. */
 const SYNC_PHASES = ['start', 'preview', 'filter', 'apply', 'done']
 /** 强制修复（`--sync --force`）那张表：多一段 `scan`（查询与工作区扫描都在这里，一次宽
- *  修复的墙钟大半花在它上面），没有 `report`（那一段就是 `apply` 自己）。真工具同样在
- *  `start` 之前换表，所以 `start` 读作 1/6 而不是 1/5。 */
-const SYNC_FORCE_PHASES = ['start', 'scan', 'analyze', 'digest', 'apply', 'done']
+ *  修复的墙钟大半花在它上面）和一段 `untracked`（`--delete-untracked` 的候选保护，未启用
+ *  时整段跳过但编号不变），没有 `report`（那一段就是 `apply` 自己）。真工具同样在
+ *  `start` 之前换表，所以 `start` 读作 1/7 而不是 1/5。 */
+const SYNC_FORCE_PHASES = [
+  'start',
+  'scan',
+  'analyze',
+  'untracked',
+  'digest',
+  'apply',
+  'done',
+]
 const phasesFor = (mode, forceRun = false) =>
   mode === 'sync' ? (forceRun ? SYNC_FORCE_PHASES : SYNC_PHASES) : PHASES
 function emitProgress(phase, message = null, phases = PHASES) {
@@ -1447,8 +1456,18 @@ function askAndTranslate(state, opts, mode, phases) {
         .map((record) => `${record.depotFile}#${record.rev}`)
       if (opts.deleteUntracked) {
         // 真工具在工作区扫描之后、任何写入之前发现候选（`p4 where` + `p4 ignores -i`
-        // 都经由 delegate，因此也计入 p4 调用账）。
+        // 都经由 delegate，因此也计入 p4 调用账）。这一段内多条 message 共享同一个 step。
+        emitProgress(
+          'untracked',
+          'Screening untracked candidates against the ignore rules.',
+          phases,
+        )
         untracked = discoverUntracked(state, opts.resolved)
+        emitProgress(
+          'untracked',
+          'Cross-checking mapped candidates against the depot records.',
+          phases,
+        )
       }
       if (pinned.length > 0) {
         // digest 不是必经的一格：真工具只在 mtime/大小没有短路时才算哈希，所以这一步可能整段消失。
