@@ -346,10 +346,7 @@ export class ScrollAcpTimelineUpAction extends Action2 {
       id: ScrollAcpTimelineUpAction.ID,
       title: localize2('action.agent.scrollTimelineUp', 'Scroll Timeline Up'),
       category: CATEGORY,
-      keybinding: [
-        { primary: 'ctrl+alt+up', when: ACP_NAV_WHEN },
-        { primary: 'ctrl+alt+k', when: ACP_NAV_WHEN },
-      ],
+      keybinding: { primary: 'k', when: ACP_NAV_WHEN, weight: ACP_SCOPED_KEY_WEIGHT },
       precondition: ACP_NAV_WHEN,
       f1: true,
     })
@@ -366,10 +363,7 @@ export class ScrollAcpTimelineDownAction extends Action2 {
       id: ScrollAcpTimelineDownAction.ID,
       title: localize2('action.agent.scrollTimelineDown', 'Scroll Timeline Down'),
       category: CATEGORY,
-      keybinding: [
-        { primary: 'ctrl+alt+down', when: ACP_NAV_WHEN },
-        { primary: 'ctrl+alt+j', when: ACP_NAV_WHEN },
-      ],
+      keybinding: { primary: 'j', when: ACP_NAV_WHEN, weight: ACP_SCOPED_KEY_WEIGHT },
       precondition: ACP_NAV_WHEN,
       f1: true,
     })
@@ -387,7 +381,7 @@ export class ScrollAcpTimelinePageUpAction extends Action2 {
       id: ScrollAcpTimelinePageUpAction.ID,
       title: localize2('action.agent.scrollTimelinePageUp', 'Scroll Timeline Page Up'),
       category: CATEGORY,
-      keybinding: [{ primary: 'ctrl+alt+pageup', when: ACP_NAV_WHEN }],
+      keybinding: { primary: 'shift+k', when: ACP_NAV_WHEN, weight: ACP_SCOPED_KEY_WEIGHT },
       precondition: ACP_NAV_WHEN,
       f1: true,
     })
@@ -404,7 +398,7 @@ export class ScrollAcpTimelinePageDownAction extends Action2 {
       id: ScrollAcpTimelinePageDownAction.ID,
       title: localize2('action.agent.scrollTimelinePageDown', 'Scroll Timeline Page Down'),
       category: CATEGORY,
-      keybinding: [{ primary: 'ctrl+alt+pagedown', when: ACP_NAV_WHEN }],
+      keybinding: { primary: 'shift+j', when: ACP_NAV_WHEN, weight: ACP_SCOPED_KEY_WEIGHT },
       precondition: ACP_NAV_WHEN,
       f1: true,
     })
@@ -421,7 +415,7 @@ export class ScrollAcpTimelineToTopAction extends Action2 {
       id: ScrollAcpTimelineToTopAction.ID,
       title: localize2('action.agent.scrollTimelineToTop', 'Scroll Timeline to Top'),
       category: CATEGORY,
-      keybinding: { primary: 'ctrl+alt+home', when: ACP_NAV_WHEN },
+      keybinding: { primary: 'a', when: ACP_NAV_WHEN, weight: ACP_SCOPED_KEY_WEIGHT },
       precondition: ACP_NAV_WHEN,
       f1: true,
     })
@@ -438,7 +432,7 @@ export class ScrollAcpTimelineToBottomAction extends Action2 {
       id: ScrollAcpTimelineToBottomAction.ID,
       title: localize2('action.agent.scrollTimelineToBottom', 'Scroll Timeline to Bottom'),
       category: CATEGORY,
-      keybinding: { primary: 'ctrl+alt+end', when: ACP_NAV_WHEN },
+      keybinding: { primary: 'e', when: ACP_NAV_WHEN, weight: ACP_SCOPED_KEY_WEIGHT },
       precondition: ACP_NAV_WHEN,
       f1: true,
     })

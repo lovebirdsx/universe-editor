@@ -387,6 +387,8 @@ import {
   CycleAcpTimelineCollapseAction,
   ScrollAcpTimelineUpAction,
   ScrollAcpTimelineDownAction,
+  ScrollAcpTimelineToTopAction,
+  ScrollAcpTimelineToBottomAction,
   SwitchSessionAction,
   SwitchSessionReverseAction,
   CopyFocusedAcpMessageAction,
@@ -880,6 +882,8 @@ registerAction2(ScrollAcpTimelineUpAction)
 registerAction2(ScrollAcpTimelineDownAction)
 registerAction2(ScrollAcpTimelinePageUpAction)
 registerAction2(ScrollAcpTimelinePageDownAction)
+registerAction2(ScrollAcpTimelineToTopAction)
+registerAction2(ScrollAcpTimelineToBottomAction)
 registerAction2(ToggleAcpTimelineItemCollapseAction)
 registerAction2(ToggleAcpTimelineCardSubtreeAction)
 registerAction2(CycleAcpTimelineCollapseAction)

@@ -36,6 +36,10 @@ import {
   RevealAgentSessionInOSAction,
   ScrollAcpTimelinePageDownAction,
   ScrollAcpTimelinePageUpAction,
+  ScrollAcpTimelineDownAction,
+  ScrollAcpTimelineUpAction,
+  ScrollAcpTimelineToBottomAction,
+  ScrollAcpTimelineToTopAction,
   FocusBottomAcpTimelineAction,
   FocusTopAcpTimelineAction,
   FocusNextAcpTimelineItemAction,
@@ -223,14 +227,20 @@ describe('Agent timeline navigation actions', () => {
     expect(outer.moveTimeline).not.toHaveBeenCalled()
   })
 
-  it('binds Ctrl+Alt+PageUp/PageDown to page scroll without moving focus', () => {
+  it('binds Shift+K/Shift+J to page scroll without moving focus', () => {
     disposables.push(registerAction2(ScrollAcpTimelinePageUpAction))
     disposables.push(registerAction2(ScrollAcpTimelinePageDownAction))
     const ctx = focusedContext()
-    expect(KeybindingsRegistry.resolveKeybinding('ctrl+alt+pageup', ctx)).toBe(
+    expect(KeybindingsRegistry.resolveKeybinding('shift+k', ctx)).toBe(
       ScrollAcpTimelinePageUpAction.ID,
     )
-    expect(KeybindingsRegistry.resolveKeybinding('ctrl+alt+pagedown', ctx)).toBe(
+    expect(KeybindingsRegistry.resolveKeybinding('shift+j', ctx)).toBe(
+      ScrollAcpTimelinePageDownAction.ID,
+    )
+    expect(KeybindingsRegistry.resolveKeybinding('ctrl+alt+pageup', ctx)).not.toBe(
+      ScrollAcpTimelinePageUpAction.ID,
+    )
+    expect(KeybindingsRegistry.resolveKeybinding('ctrl+alt+pagedown', ctx)).not.toBe(
       ScrollAcpTimelinePageDownAction.ID,
     )
 
@@ -243,6 +253,64 @@ describe('Agent timeline navigation actions', () => {
     run(ScrollAcpTimelinePageDownAction.ID, pageDown.widget)
     expect(pageDown.scrollTimeline).toHaveBeenCalledWith('pageDown')
     expect(pageDown.moveTimeline).not.toHaveBeenCalled()
+  })
+
+  it('binds bare j/k to line scroll without moving focus', () => {
+    disposables.push(registerAction2(ScrollAcpTimelineUpAction))
+    disposables.push(registerAction2(ScrollAcpTimelineDownAction))
+    const ctx = focusedContext()
+    expect(KeybindingsRegistry.resolveKeybinding('k', ctx)).toBe(ScrollAcpTimelineUpAction.ID)
+    expect(KeybindingsRegistry.resolveKeybinding('j', ctx)).toBe(ScrollAcpTimelineDownAction.ID)
+    expect(KeybindingsRegistry.resolveKeybinding('shift+k', ctx)).not.toBe(
+      ScrollAcpTimelineUpAction.ID,
+    )
+    expect(KeybindingsRegistry.resolveKeybinding('shift+j', ctx)).not.toBe(
+      ScrollAcpTimelineDownAction.ID,
+    )
+
+    const down = makeWidget()
+    run(ScrollAcpTimelineDownAction.ID, down.widget)
+    expect(down.scrollTimeline).toHaveBeenCalledWith('down')
+    expect(down.moveTimeline).not.toHaveBeenCalled()
+
+    const up = makeWidget()
+    run(ScrollAcpTimelineUpAction.ID, up.widget)
+    expect(up.scrollTimeline).toHaveBeenCalledWith('up')
+    expect(up.moveTimeline).not.toHaveBeenCalled()
+  })
+
+  it('binds bare a/e to scroll to top/bottom without moving focus', () => {
+    disposables.push(registerAction2(ScrollAcpTimelineToTopAction))
+    disposables.push(registerAction2(ScrollAcpTimelineToBottomAction))
+    const ctx = focusedContext()
+    expect(KeybindingsRegistry.resolveKeybinding('a', ctx)).toBe(ScrollAcpTimelineToTopAction.ID)
+    expect(KeybindingsRegistry.resolveKeybinding('e', ctx)).toBe(ScrollAcpTimelineToBottomAction.ID)
+    expect(KeybindingsRegistry.resolveKeybinding('shift+a', ctx)).not.toBe(
+      ScrollAcpTimelineToTopAction.ID,
+    )
+    expect(KeybindingsRegistry.resolveKeybinding('shift+e', ctx)).not.toBe(
+      ScrollAcpTimelineToBottomAction.ID,
+    )
+
+    const top = makeWidget()
+    run(ScrollAcpTimelineToTopAction.ID, top.widget)
+    expect(top.scrollTimeline).toHaveBeenCalledWith('top')
+    expect(top.moveTimeline).not.toHaveBeenCalled()
+
+    const bottom = makeWidget()
+    run(ScrollAcpTimelineToBottomAction.ID, bottom.widget)
+    expect(bottom.scrollTimeline).toHaveBeenCalledWith('bottom')
+    expect(bottom.moveTimeline).not.toHaveBeenCalled()
+  })
+
+  it('binds bare j/k when a session editor is active and the editor area has focus', () => {
+    disposables.push(registerAction2(ScrollAcpTimelineUpAction))
+    disposables.push(registerAction2(ScrollAcpTimelineDownAction))
+    const ctx = new ContextKeyService()
+    ctx.createKey<string>('activeEditorTypeId', AcpSessionEditorInput.TYPE_ID)
+    ctx.createKey<boolean>('editorAreaFocus', true)
+    expect(KeybindingsRegistry.resolveKeybinding('j', ctx)).toBe(ScrollAcpTimelineDownAction.ID)
+    expect(KeybindingsRegistry.resolveKeybinding('k', ctx)).toBe(ScrollAcpTimelineUpAction.ID)
   })
 
   // The chat is reachable from the keyboard whenever a session editor is active

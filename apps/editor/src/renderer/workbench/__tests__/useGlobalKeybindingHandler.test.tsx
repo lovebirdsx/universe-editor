@@ -191,6 +191,7 @@ describe('useGlobalKeybindingHandler', () => {
     bind('delete', 'workbench.files.action.delete')
     bind('backspace', 'test.backspace')
     bind('b', 'test.bareB')
+    bind('j', 'test.timelineDown')
     const ck = instantiation.invokeFunction((a) => a.get(IContextKeyService))
     ck.createKey('acpPromptInputFocused', true)
     mountHost(instantiation)
@@ -206,6 +207,10 @@ describe('useGlobalKeybindingHandler', () => {
     const bare = dispatch({ key: 'b' })
     expect(executeCommand).not.toHaveBeenCalled()
     expect(bare.preventDefault).not.toHaveBeenCalled()
+
+    const timelineDown = dispatch({ key: 'j' })
+    expect(executeCommand).not.toHaveBeenCalled()
+    expect(timelineDown.preventDefault).not.toHaveBeenCalled()
   })
 
   it('still fires when ctrl is pressed inside editable target', () => {
