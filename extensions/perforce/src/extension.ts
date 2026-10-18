@@ -46,12 +46,18 @@ import { P4deltaRunLog } from './p4delta/p4deltaRunLog.js'
 import { createP4deltaLogSink } from './p4deltaLog.js'
 import {
   p4deltaNamedExplicitly,
+  probeP4deltaBuild,
   probeP4deltaVersion,
   resolveP4deltaCommand,
   type P4deltaSource as P4deltaEngineSource,
 } from './p4delta/p4deltaService.js'
 import type { P4deltaSyncOutcome } from './p4delta/p4deltaStore.js'
 import { resolveP4deltaSource, type P4deltaSource } from './p4delta/p4deltaUpstream.js'
+import {
+  compareP4deltaVersion,
+  formatP4deltaVersion,
+  P4DELTA_MIN_VERSION,
+} from './p4delta/p4deltaVersion.js'
 import { PerforceClient, SYNC_POINT_READBACK_SLOW_EXEC, type P4CacheOptions } from './client.js'
 import { isForceGettableRefusal, syncNothingHappened, type SyncPreviewFile } from './syncParser.js'
 import { P4CacheDisk } from './p4CacheDisk.js'
@@ -500,21 +506,71 @@ interface KnownLanding {
   readonly change: string
 }
 
+/** What the version gate refused, for the one warning the session shows about it. */
+export interface P4deltaVersionRefusal {
+  readonly exe: string
+  readonly source: P4deltaEngineSource
+  /** The version the engine reported; undefined when the probe could not read one. */
+  readonly version: string | undefined
+  /** The formatted admission floor, e.g. `0.1.19`. */
+  readonly required: string
+}
+
+/**
+ * Builds the once-per-build warning callback the gate calls on a version refusal.
+ * Dedup lives here rather than in the gate: activation, configuration changes
+ * and the info command each re-run the same decision. `warn` is called
+ * synchronously from the gate, so a throw is swallowed — a notification must
+ * never take activation down.
+ */
+export function createP4deltaVersionRefusalNotifier(
+  warn: (message: string, showLog: string) => void,
+): (info: P4deltaVersionRefusal) => void {
+  const seen = new Set<string>()
+  return (info) => {
+    const key = `${info.exe}\u0000${info.version ?? ''}`
+    if (seen.has(key)) return
+    seen.add(key)
+    const showLog = localize('perforce.p4delta.install.showLog', 'Show Log')
+    const message =
+      info.version !== undefined
+        ? localize(
+            'perforce.p4delta.version.older',
+            'p4delta {0} at {1} is older than the required {2}; using native p4. Update p4delta, or point perforce.p4delta.path at a newer build.',
+            { 0: info.version, 1: info.exe, 2: info.required },
+          )
+        : localize(
+            'perforce.p4delta.version.unreadable',
+            'p4delta at {0} did not report a usable version (requires {1}); using native p4. Update p4delta, or point perforce.p4delta.path at a newer build.',
+            { 0: info.exe, 1: info.required },
+          )
+    try {
+      warn(message, showLog)
+    } catch (error) {
+      console.error('[perforce] p4delta version warning failed', error)
+    }
+  }
+}
+
 /**
  * The δ engine decision for one session, from the two `perforce.p4delta.*`
  * settings: the executable (plus the env it must carry) to hand the client, or
  * undefined when every scan must run on p4.
  *
  * Read here (not in the client) because this is where workspace configuration
- * lives — the client only ever receives an already admitted executable. Every
- * refusal is a log line and nothing else: the engine is an optimization, so a
+ * lives — the client only ever receives an already admitted executable. Most
+ * refusals are a log line and nothing else: the engine is an optimization, so a
  * machine without it must not be interrupted about one, and the native scan is
- * a complete answer either way.
+ * a complete answer either way. The version refusal is the exception and also
+ * calls {@link P4deltaVersionRefusal}'s notifier once — an old build the
+ * operator pointed at is actionable in a way a missing one is not.
  *
  * `enabled: false` short-circuits before ANY lookup. A resolved path that is
- * not there is refused here too (one `existsSync` — the binary is never
- * version-checked), so the client never gets an executable it would only fail
- * on.
+ * not there is refused here too. Admission is `existsSync` plus one
+ * `probeP4deltaBuild` sample, **fail-closed** against `P4DELTA_MIN_VERSION`:
+ * a build below the floor, or one whose `--version` cannot be read as a p4delta
+ * banner, is refused and the session stays native. The sample is cached per
+ * path + file fingerprint, so configuration changes do not re-spawn it.
  *
  * The p4-script hedge: δ hands files it cannot digest over to `p4`, and it
  * resolves that `p4` on its own. Under a `UNIVERSE_P4_PATH` script override (the
@@ -535,17 +591,19 @@ interface KnownLanding {
  * string — reproduces the order from before the managed tier existed, byte for byte.
  * 托管副本排在操作者显式指定的两级之下、机器自带的两级之上：它是编辑器唯一能持续升级的那份，不能被机器上更旧的自装副本遮蔽（见 `resolveP4deltaCommand`）。
  */
-export function resolveP4deltaEngine(
+export async function resolveP4deltaEngine(
   settings: { readonly enabled: boolean; readonly path: string },
   log: (msg: string) => void,
   managedRoot?: string,
-):
+  onVersionRefused?: (info: P4deltaVersionRefusal) => void,
+): Promise<
   | {
       exe: string
       source: P4deltaEngineSource
       extraEnv?: Readonly<Record<string, string>>
     }
-  | undefined {
+  | undefined
+> {
   if (!settings.enabled) {
     log('[perforce] p4delta disabled via perforce.p4delta.enabled; using p4')
     return undefined
@@ -567,15 +625,44 @@ export function resolveP4deltaEngine(
     return undefined
   }
   if (!existsSync(candidate.exe)) {
-    // The whole admission test, now that no version gate exists: the file has
-    // to be there. A build on this path is taken as able to drive the entire
-    // surface this extension uses — a wrong or half-installed binary is left to
-    // the client's own failure ladder, which falls back within the round and
-    // disarms after three.
+    // A resolved path that is not there is refused here; the binary is never
+    // version-checked in that case. A wrong or half-installed build that DOES
+    // exist falls through to the version gate below.
     log(`[perforce] p4delta not found at ${candidate.exe}; using p4`)
     return undefined
   }
-  log(`[perforce] p4delta engine: ${candidate.exe} (${candidate.source})`)
+
+  const required = formatP4deltaVersion(P4DELTA_MIN_VERSION)
+  const found = await probeP4deltaBuild(candidate.exe)
+  if (found === undefined) {
+    log(
+      `[perforce] p4delta at ${candidate.exe} did not report a supported version (>= ${required}); using p4`,
+    )
+    onVersionRefused?.({
+      exe: candidate.exe,
+      source: candidate.source,
+      version: undefined,
+      required,
+    })
+    return undefined
+  }
+  if (compareP4deltaVersion(found, P4DELTA_MIN_VERSION) < 0) {
+    const foundText = formatP4deltaVersion(found)
+    log(
+      `[perforce] p4delta ${foundText} at ${candidate.exe} is older than the required ${required}; using p4`,
+    )
+    onVersionRefused?.({
+      exe: candidate.exe,
+      source: candidate.source,
+      version: foundText,
+      required,
+    })
+    return undefined
+  }
+
+  log(
+    `[perforce] p4delta engine: ${candidate.exe} (${candidate.source}, ${formatP4deltaVersion(found)})`,
+  )
   // Only a script override needs the pointer: a plain `p4` is what δ's own
   // lookup would find too, and forcing `P4_EXE=p4` would make δ require a FILE
   // by that name instead.
@@ -1029,7 +1116,19 @@ export async function activate(context: ExtensionContext): Promise<void> {
   // tier existed.
   // 托管副本压在机器自带的副本（PATH / %LOCALAPPDATA%）之上、操作者显式指定的两级之下，升级才不会被机器上更旧的副本遮蔽（见 resolveP4deltaEngine）。
   const managedRoot = context.globalStoragePath ? join(context.globalStoragePath, 'p4delta') : ''
-  const resolveP4deltaOptions = async (): Promise<ReturnType<typeof resolveP4deltaEngine>> =>
+  // 版本被拒时的唯一一次警告。`showInfo` 会显式关掉它（见下），否则旧版本会让那条命令
+  // 先 warning 再「没有可用 p4delta」两条 toast 重复。
+  const notifyP4deltaVersionRefused = createP4deltaVersionRefusalNotifier((message, showLog) => {
+    void window.showWarningMessage(message, showLog).then(
+      (picked) => {
+        if (picked === showLog) out.show()
+      },
+      (error: unknown) => console.error('[perforce] p4delta version warning failed', error),
+    )
+  })
+  const resolveP4deltaOptions = async (
+    notifyRefusal = true,
+  ): Promise<Awaited<ReturnType<typeof resolveP4deltaEngine>>> =>
     resolveP4deltaEngine(
       {
         enabled: await cfg.get('p4delta.enabled', true),
@@ -1037,12 +1136,17 @@ export async function activate(context: ExtensionContext): Promise<void> {
       },
       log,
       managedRoot,
+      notifyRefusal ? notifyP4deltaVersionRefused : undefined,
     )
 
   /** Shared by both client construction points (the initial one below and the
    *  workspace switch command), and refreshed by the config subscription so a
    *  newly built client inherits the current decision. */
-  let p4deltaOptions = await resolveP4deltaOptions()
+  // The window-visible half of the gate waits for `watchP4delta.ready`: the
+  // workspace configuration layer loads asynchronously, and only the read made
+  // after that subscription is guaranteed to see it. Warning from this first
+  // read could accuse a build the user already disabled/overrode.
+  let p4deltaOptions = await resolveP4deltaOptions(false)
 
   // Probe for a p4 CLI + a client for this folder. A missing binary or a folder
   // outside any Perforce workspace disables the provider without crashing.
@@ -1367,6 +1471,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
         configuredPath: await cfg.get('p4delta.path', ''),
         p4IsScriptOverride: resolveP4Command().prefixArgs.length > 0,
         source: await p4deltaSourceFrom(),
+        minimumVersion: P4DELTA_MIN_VERSION,
         log,
         ...(extra?.signal !== undefined ? { signal: extra.signal } : {}),
         ...(extra?.onProgress !== undefined ? { onProgress: extra.onProgress } : {}),
@@ -3148,13 +3253,15 @@ export async function activate(context: ExtensionContext): Promise<void> {
         )
         return
       }
-      const engine = await resolveP4deltaOptions()
+      // `false`: the version gate already warned once at activation/configuration
+      // time; this command only reports, it must not raise a second toast.
+      const engine = await resolveP4deltaOptions(false)
       if (engine === undefined) {
         const showLog = localize('perforce.p4delta.install.showLog', 'Show Log')
         const picked = await window.showWarningMessage(
           localize(
             'perforce.p4delta.info.notFound',
-            'No p4delta was found; the native p4 commands are in use. See the Perforce output channel for why.',
+            'No usable p4delta was found; the native p4 commands are in use. See the Perforce output channel for why.',
           ),
           showLog,
         )

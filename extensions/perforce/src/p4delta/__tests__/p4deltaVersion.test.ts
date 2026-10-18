@@ -3,6 +3,8 @@ import {
   compareP4deltaVersion,
   formatP4deltaVersion,
   parseP4deltaVersion,
+  parseP4deltaVersionBannerStrict,
+  P4DELTA_MIN_VERSION,
 } from '../p4deltaVersion.js'
 
 describe('parseP4deltaVersion', () => {
@@ -24,6 +26,37 @@ describe('parseP4deltaVersion', () => {
     expect(parseP4deltaVersion('v0.1.10-rc1')).toBeUndefined()
     expect(parseP4deltaVersion('0.1.x')).toBeUndefined()
     expect(parseP4deltaVersion('latest')).toBeUndefined()
+  })
+})
+
+describe('parseP4deltaVersionBannerStrict', () => {
+  it('reads the clap banner', () => {
+    expect(parseP4deltaVersionBannerStrict('p4delta 0.1.19\n')).toEqual([0, 1, 19])
+    expect(parseP4deltaVersionBannerStrict('p4delta\tv0.1.6\n')).toEqual([0, 1, 6])
+  })
+
+  it('finds the banner on a later line', () => {
+    expect(parseP4deltaVersionBannerStrict('note\np4delta 0.1.19\n')).toEqual([0, 1, 19])
+  })
+
+  it('refuses output that is not a p4delta banner', () => {
+    expect(parseP4deltaVersionBannerStrict('mytool 9.9.9\n')).toBeUndefined()
+    expect(parseP4deltaVersionBannerStrict('p4delta\n0.1.19\n')).toBeUndefined()
+    expect(parseP4deltaVersionBannerStrict('p4delta 0.1\n')).toBeUndefined()
+    expect(parseP4deltaVersionBannerStrict('p4delta 0.1.19junk\n')).toBeUndefined()
+    expect(parseP4deltaVersionBannerStrict('p4delta 0.1.19.5\n')).toBeUndefined()
+    expect(parseP4deltaVersionBannerStrict('')).toBeUndefined()
+  })
+
+  it('treats a pre-release or build suffix as the version it names', () => {
+    expect(parseP4deltaVersionBannerStrict('p4delta 0.1.19-rc1\n')).toEqual([0, 1, 19])
+    expect(parseP4deltaVersionBannerStrict('p4delta 0.1.19+build.1\r\n')).toEqual([0, 1, 19])
+  })
+})
+
+describe('P4DELTA_MIN_VERSION', () => {
+  it('is the product decision this build drives', () => {
+    expect(P4DELTA_MIN_VERSION).toEqual([0, 1, 19])
   })
 })
 

@@ -209,6 +209,13 @@ function makeFakeClient(): FakeClient {
   return fake
 }
 
+// `activate` runs the engine gate too; pin its probe so a real (old) p4delta on
+// the host PATH cannot raise the version warning into the dialog assertions.
+vi.mock('../p4delta/p4deltaService.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../p4delta/p4deltaService.js')>()
+  return { ...actual, probeP4deltaBuild: async () => [0, 1, 19] }
+})
+
 const clientMock = vi.hoisted(() => {
   const state = { current: undefined as unknown }
   return {

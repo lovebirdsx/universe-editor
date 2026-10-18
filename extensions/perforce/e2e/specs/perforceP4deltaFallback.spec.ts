@@ -64,6 +64,11 @@ const disabledDeltaLog = join(mkTempDir('ue2-p4delta-argv-'), 'p4delta.log')
 const disabledP4Log = join(mkTempDir('ue2-p4-argv-'), 'p4.log')
 
 const deltaLines = (log: string): string[] => readArgvLog(log)
+/** Spawns that are an actual run: the gate's admission `--version` sample is the
+ *  one line in this log that is not a round and must not count toward the
+ *  failure ladder. */
+const businessDeltaLines = (log: string): string[] =>
+  deltaLines(log).filter((l) => !/(^| )--version( |$)/.test(l))
 /** The δ SCAN spawns: the contract switches plus this round's directory target
  *  (the narrow per-file queries carry `--no-revert-groups` too but no `/...`). */
 const deltaScanLines = (log: string): string[] =>
@@ -234,17 +239,17 @@ test.describe('@p1 perforce p4delta fallback', () => {
       // not even for the settings file it just wrote. The log is sampled here,
       // with every earlier round settled on its own native end, so nothing in
       // flight can be mistaken for this round's spawn.
-      expect(deltaLines(fallbackDeltaLog).length).toBeGreaterThanOrEqual(3)
-      const deltaBefore = deltaLines(fallbackDeltaLog).length
+      expect(businessDeltaLines(fallbackDeltaLog).length).toBeGreaterThanOrEqual(3)
+      const deltaBefore = businessDeltaLines(fallbackDeltaLog).length
       await roundFromFocus('exA', exA)
       expect(
-        deltaLines(fallbackDeltaLog).length,
+        businessDeltaLines(fallbackDeltaLog).length,
         'the round after the ceiling must not spawn δ',
       ).toBe(deltaBefore)
     })
 
     await test.step('a collect after the disarm is a native write, and the δ log stays frozen', async () => {
-      const deltaBefore = deltaLines(fallbackDeltaLog).length
+      const deltaBefore = businessDeltaLines(fallbackDeltaLog).length
       // An explicit file-row collect (what the row's inline action runs) rather
       // than the group header: the row is a stable input for the one thing this
       // step must pin — the ENGINE the write lands on.
@@ -287,7 +292,7 @@ test.describe('@p1 perforce p4delta fallback', () => {
 
       // δ was not consulted for the write: the engine is disarmed, and the log
       // proves nothing was spawned behind the scenes.
-      expect(deltaLines(fallbackDeltaLog).length).toBe(deltaBefore)
+      expect(businessDeltaLines(fallbackDeltaLog).length).toBe(deltaBefore)
     })
   })
 })

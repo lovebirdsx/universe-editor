@@ -1572,9 +1572,10 @@ function main() {
   const opts = parseArgv(process.argv.slice(2))
   if (opts.version) {
     // Clap's `<crate name> <version>` shape (the crate name is compiled in).
-    // Nothing in the editor reads this — the version gate is gone — but a real
-    // CLI answers it, and a fake that exit-2'd here would be a false signal.
-    writeOut('p4delta 0.1.6\n')
+    // The editor's admission gate reads this banner and requires >= 0.1.19;
+    // `UNIVERSE_P4DELTA_FAKE_VERSION` lets a spec model an outdated or
+    // unreadable build.
+    writeOut(`p4delta ${process.env.UNIVERSE_P4DELTA_FAKE_VERSION ?? '0.1.19'}\n`)
     return 0
   }
   if (opts.help) {

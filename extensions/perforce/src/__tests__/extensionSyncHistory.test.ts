@@ -302,6 +302,13 @@ const clientMock = vi.hoisted(() => {
     createForClient: vi.fn(async () => state.current),
   }
 })
+// `activate` runs the engine gate too; pin its probe so a real (old) p4delta on
+// the host PATH cannot raise the version warning into these assertions.
+vi.mock('../p4delta/p4deltaService.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../p4delta/p4deltaService.js')>()
+  return { ...actual, probeP4deltaBuild: async () => [0, 1, 19] }
+})
+
 vi.mock('../client.js', () => ({
   PerforceClient: class {
     static create = clientMock.create

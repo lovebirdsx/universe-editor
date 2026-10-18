@@ -29,13 +29,15 @@
  * copy gets it even if another one is on PATH, even under a script override
  * (where the copy is for the machine rather than for this session), and even
  * with automatic installation turned off — that setting is precisely a request
- * to do it by hand. Only the master switch still stops it, because a switched-off
- * engine makes the download pointless.
+ * to do it by hand. The master switch still stops it (a switched-off engine
+ * makes the download pointless); the store additionally refuses an upstream
+ * release below the admission floor, since the gate would refuse it too.
  */
 import type { P4deltaStore, P4deltaStoreOptions, P4deltaSyncOutcome } from './p4deltaStore.js'
 import { activeManagedP4delta, openP4deltaStore } from './p4deltaStore.js'
 import { p4deltaNamedExplicitly, resolveP4deltaCommand } from './p4deltaService.js'
 import type { P4deltaSource } from './p4deltaUpstream.js'
+import type { P4deltaVersion } from './p4deltaVersion.js'
 
 export interface P4deltaEnsureOptions {
   /** `<globalStoragePath>/p4delta`; the empty string disables the whole feature. */
@@ -61,6 +63,13 @@ export interface P4deltaEnsureOptions {
   readonly platform?: NodeJS.Platform
   readonly arch?: string
   readonly now?: () => number
+  /**
+   * The admission floor (`P4DELTA_MIN_VERSION`). Lets the store bypass a 24h
+   * throttle that is hiding a stale managed copy, and refuse an upstream
+   * release below the floor. Optional so tests and older callers keep the
+   * pre-floor behavior.
+   */
+  readonly minimumVersion?: P4deltaVersion
   /** Injected by tests; defaults to the real store. */
   readonly makeStore?: (options: P4deltaStoreOptions) => P4deltaStore
 }
@@ -119,6 +128,7 @@ export async function ensureP4delta(
       ...(options.platform !== undefined ? { platform: options.platform } : {}),
       ...(options.arch !== undefined ? { arch: options.arch } : {}),
       ...(options.now !== undefined ? { now: options.now } : {}),
+      ...(options.minimumVersion !== undefined ? { minimumVersion: options.minimumVersion } : {}),
       ...(options.onProgress !== undefined ? { onProgress: options.onProgress } : {}),
     })
     const outcome = await store.sync(

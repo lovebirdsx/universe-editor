@@ -466,6 +466,210 @@ describe('p4delta store: throttling', () => {
   })
 })
 
+describe('p4delta store: the minimum version', () => {
+  const MIN: readonly [number, number, number] = [0, 1, 19]
+  const DAY = 24 * 60 * 60 * 1000
+  const assetFor = (version: string): string => `p4delta-${version}-${TRIPLE}.zip`
+  const sumsForVersion = (version: string, zip: Buffer): string =>
+    `${sha256(zip)}  ${assetFor(version)}\n`
+
+  const writeActive = (version: string): void => {
+    mkdirSync(root, { recursive: true })
+    placeVersion(version)
+    writeFileSync(join(root, '.active'), version)
+  }
+
+  const writeCheck = (record: {
+    nextCheckAt: number
+    ok: boolean
+    version?: string
+    floor?: string
+  }): void => {
+    mkdirSync(root, { recursive: true })
+    writeFileSync(join(root, '.check'), JSON.stringify(record))
+  }
+
+  const readCheck = (): unknown => JSON.parse(readFileSync(join(root, '.check'), 'utf8'))
+
+  it('bypasses a success throttle when the managed copy is below the floor', async () => {
+    writeActive('0.1.10')
+    writeCheck({ nextCheckAt: clock + DAY, ok: true, version: '0.1.19' })
+    const zip = releaseZip()
+
+    const outcome = await makeStore(
+      { latest: { version: '0.1.19' }, sums: sumsForVersion('0.1.19', zip), zip },
+      { minimumVersion: MIN },
+    ).sync()
+
+    expect(outcome).toEqual({ kind: 'installed', version: '0.1.19', previousVersion: '0.1.10' })
+    expect(calls.map((url) => url.split('/').at(-1))).toEqual([
+      'latest.json',
+      'SHA256SUMS',
+      assetFor('0.1.19'),
+    ])
+    expect(readActive()).toBe('0.1.19')
+  })
+
+  it('does not bypass when the last success already saw upstream below this floor', async () => {
+    writeActive('0.1.10')
+    writeCheck({ nextCheckAt: clock + DAY, ok: true, version: '0.1.18', floor: '0.1.19' })
+
+    const outcome = await makeStore({}, { minimumVersion: MIN }).sync()
+
+    expect(outcome.kind).toBe('throttled')
+    expect(calls).toEqual([])
+  })
+
+  // The editor update is the main reason the floor moves: the record's "upstream
+  // is also old" answer was about the previous floor and must be re-checked.
+  it('bypasses when the last success was written under an older floor', async () => {
+    writeActive('0.1.10')
+    writeCheck({ nextCheckAt: clock + DAY, ok: true, version: '0.1.18', floor: '0.1.6' })
+    const zip = releaseZip()
+
+    const outcome = await makeStore(
+      { latest: { version: '0.1.19' }, sums: sumsForVersion('0.1.19', zip), zip },
+      { minimumVersion: MIN },
+    ).sync()
+
+    expect(outcome).toEqual({ kind: 'installed', version: '0.1.19', previousVersion: '0.1.10' })
+  })
+
+  it('does not bypass a failure backoff', async () => {
+    writeActive('0.1.10')
+    writeCheck({ nextCheckAt: clock + DAY, ok: false, version: '0.1.19' })
+
+    const outcome = await makeStore({}, { minimumVersion: MIN }).sync()
+
+    expect(outcome.kind).toBe('throttled')
+    expect(calls).toEqual([])
+  })
+
+  it('bypasses once when the old check record names no version', async () => {
+    writeActive('0.1.10')
+    writeCheck({ nextCheckAt: clock + DAY, ok: true })
+    const zip = releaseZip()
+
+    const outcome = await makeStore(
+      { latest: { version: '0.1.19' }, sums: sumsForVersion('0.1.19', zip), zip },
+      { minimumVersion: MIN },
+    ).sync()
+
+    expect(outcome).toEqual({ kind: 'installed', version: '0.1.19', previousVersion: '0.1.10' })
+  })
+
+  it('keeps the normal throttle when the active copy meets the floor', async () => {
+    writeActive('0.1.19')
+    writeCheck({ nextCheckAt: clock + DAY, ok: true, version: '0.1.19' })
+
+    const outcome = await makeStore({}, { minimumVersion: MIN }).sync()
+
+    expect(outcome.kind).toBe('throttled')
+    expect(calls).toEqual([])
+  })
+
+  it('does not bypass without a minimum version', async () => {
+    writeActive('0.1.10')
+    writeCheck({ nextCheckAt: clock + DAY, ok: true, version: '0.1.19' })
+
+    const outcome = await makeStore({}).sync()
+
+    expect(outcome.kind).toBe('throttled')
+    expect(calls).toEqual([])
+  })
+
+  it('refuses to install an upstream release below the floor', async () => {
+    const outcome = await makeStore(
+      { latest: { version: '0.1.18' } },
+      { minimumVersion: MIN },
+    ).sync()
+
+    expect(outcome).toEqual({
+      kind: 'skipped',
+      reason: "upstream's latest 0.1.18 is below the required 0.1.19",
+    })
+    expect(calls.map((url) => url.split('/').at(-1))).toEqual(['latest.json'])
+    expect(readCheck()).toEqual({
+      nextCheckAt: clock + DAY,
+      ok: true,
+      version: '0.1.18',
+      floor: '0.1.19',
+    })
+    expect(existsSync(join(root, '.active'))).toBe(false)
+  })
+
+  it('does not query upstream again after recording the below-floor answer', async () => {
+    const store = makeStore({ latest: { version: '0.1.18' } }, { minimumVersion: MIN })
+
+    expect((await store.sync()).kind).toBe('skipped')
+    expect(calls).toHaveLength(1)
+
+    expect(await store.sync()).toEqual({ kind: 'throttled', nextCheckAt: clock + DAY })
+    expect(calls).toHaveLength(1)
+  })
+
+  it('reports a below-floor managed copy instead of "up to date"', async () => {
+    writeActive('0.1.18')
+
+    const outcome = await makeStore(
+      { latest: { version: '0.1.18' } },
+      { minimumVersion: MIN },
+    ).sync()
+
+    expect(outcome).toEqual({
+      kind: 'skipped',
+      reason:
+        "managed copy 0.1.18 is below the required 0.1.19 and upstream's latest 0.1.18 is not newer",
+    })
+    expect(readCheck()).toMatchObject({ ok: true, version: '0.1.18', floor: '0.1.19' })
+  })
+
+  it('does not adopt an already-downloaded release below the floor', async () => {
+    placeVersion('0.1.18')
+
+    const outcome = await makeStore(
+      { latest: { version: '0.1.18' } },
+      { minimumVersion: MIN },
+    ).sync()
+
+    expect(outcome.kind).toBe('skipped')
+    expect(existsSync(join(root, '.active'))).toBe(false)
+  })
+
+  it('reports up-to-date before the floor check when the active copy is ahead', async () => {
+    writeActive('0.1.20')
+
+    const outcome = await makeStore(
+      { latest: { version: '0.1.18' } },
+      { minimumVersion: MIN },
+    ).sync()
+
+    expect(outcome).toEqual({ kind: 'up-to-date', version: '0.1.20' })
+  })
+
+  it('applies the floor to a forced install too', async () => {
+    const outcome = await makeStore(
+      { latest: { version: '0.1.18' } },
+      { minimumVersion: MIN },
+    ).sync(true)
+
+    expect(outcome.kind).toBe('skipped')
+    expect(calls.map((url) => url.split('/').at(-1))).toEqual(['latest.json'])
+  })
+
+  it('installs a release exactly at the floor', async () => {
+    const zip = releaseZip()
+
+    const outcome = await makeStore(
+      { latest: { version: '0.1.19' }, sums: sumsForVersion('0.1.19', zip), zip },
+      { minimumVersion: MIN },
+    ).sync()
+
+    expect(outcome).toEqual({ kind: 'installed', version: '0.1.19' })
+    expect(readActive()).toBe('0.1.19')
+  })
+})
+
 describe('p4delta store: concurrency', () => {
   it('shares one run between concurrent callers', async () => {
     let release: () => void = () => {}

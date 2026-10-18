@@ -34,7 +34,7 @@
  *    {@link P4deltaRunOptions.extraEnv}).
  */
 import { spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, statSync } from 'node:fs'
 import { delimiter, join } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import type { ConcurrencyGate, P4Priority } from '../concurrency.js'
@@ -45,7 +45,11 @@ import {
 } from '../p4Service.js'
 import { nextP4deltaRunId } from './p4deltaRunLog.js'
 import { activeManagedP4delta } from './p4deltaStore.js'
-import { parseP4deltaVersionBanner } from './p4deltaVersion.js'
+import {
+  parseP4deltaVersionBanner,
+  parseP4deltaVersionBannerStrict,
+  type P4deltaVersion,
+} from './p4deltaVersion.js'
 
 /** One parsed JSON line. Fields stay loose: the contract guarantees more than
  *  the readers assume, so every read validates (see p4deltaParser). */
@@ -334,18 +338,11 @@ const VERSION_PROBE_TIMEOUT_MS = 5000
 const VERSION_PROBE_MAX_CHARS = 4 * 1024
 
 /**
- * 采样一份 δ 的 `--version`，回答「这个 exe 自报什么版本」。**纯诊断**（命令面板的
- * 「显示 p4delta 信息」）：引擎的准入仍然只看存在性（见 `resolveP4deltaEngine`），这里的结果
- * 不参与任何判断，也**不进 δ 的运行日志**——它不是一次业务运行。
- *
- * 与真实运行同一形状地起进程（`p4deltaSpawnCommand` 的 `.mjs` 分支 + `envForSpawn`），所以
- * e2e fixture 那种脚本引擎同样能被采样。永不 reject / 永不 throw：spawn 失败、超时、无输出、
- * 输出里没有版本号，一律 resolve undefined。
+ * 起一次 `--version` 并把原始输出带回来。诊断与准入共用这份采样，所以形状必须与真实运行
+ * 一致（`p4deltaSpawnCommand` 的 `.mjs` 分支 + `envForSpawn`），e2e fixture 那种脚本引擎
+ * 同样能被采样。永不 reject / 永不 throw：spawn 失败、超时、无输出，一律 resolve undefined。
  */
-export function probeP4deltaVersion(
-  exe: string,
-  timeoutMs: number = VERSION_PROBE_TIMEOUT_MS,
-): Promise<string | undefined> {
+function runP4deltaVersionProbe(exe: string, timeoutMs: number): Promise<string | undefined> {
   return new Promise((resolve) => {
     let settled = false
     const settle = (value: string | undefined): void => {
@@ -390,9 +387,78 @@ export function probeP4deltaVersion(
     })
     proc.on('close', () => {
       clearTimeout(timer)
-      settle(parseP4deltaVersionBanner(out.slice(0, VERSION_PROBE_MAX_CHARS)))
+      settle(out.slice(0, VERSION_PROBE_MAX_CHARS))
     })
   })
+}
+
+/**
+ * 采样一份 δ 的 `--version`，回答「这个 exe 自报什么版本」。**诊断**（命令面板的
+ * 「显示 p4delta 信息」）用宽松解析；引擎准入走 {@link probeP4deltaBuild} 的严格版。
+ * 结果**不进 δ 的运行日志**——它不是一次业务运行。
+ */
+export async function probeP4deltaVersion(
+  exe: string,
+  timeoutMs: number = VERSION_PROBE_TIMEOUT_MS,
+): Promise<string | undefined> {
+  const out = await runP4deltaVersionProbe(exe, timeoutMs)
+  return out === undefined ? undefined : parseP4deltaVersionBanner(out)
+}
+
+interface P4deltaBuildProbeEntry {
+  /** `mtimeMs:size` of the file the verdict came from; undefined when it could not be stat'ed. */
+  readonly fingerprint: string | undefined
+  readonly verdict: Promise<P4deltaVersion | undefined>
+}
+
+/**
+ * 准入 verdict 按 exe 路径缓存，并带上文件的 `mtimeMs:size`：同一个路径被换成另一份
+ * 二进制（尤其是**降级**）时必须重新采样。一次 stat 失败（Windows 上 AV/句柄占用）不能
+ * 读成「文件变了」，否则一次抖动会让同一个二进制被探测两次；但若当初就是 stat 失败、
+ * 之后又能读到指纹，则重新采样一次，避免一次抖动粘住整个会话。
+ */
+const buildProbeCache = new Map<string, P4deltaBuildProbeEntry>()
+
+/** 仅测试用。生产不需要清缓存：指纹变化会自己触发重新探测。 */
+export function clearP4deltaBuildProbeCache(): void {
+  buildProbeCache.clear()
+}
+
+function statFingerprint(exe: string): string | undefined {
+  try {
+    const stats = statSync(exe)
+    return `${stats.mtimeMs}:${stats.size}`
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * 引擎准入探测：严格解析 `p4delta <semver>` banner，**fail-closed**——超时、spawn 失败、
+ * 无输出、输出不是 p4delta banner，一律 undefined，调用方据此回退原生 p4。
+ * 一个指纹至多 spawn 一次（文件被替换、或 stat 从失败恢复时重探；见 {@link buildProbeCache}）。
+ */
+export function probeP4deltaBuild(
+  exe: string,
+  timeoutMs: number = VERSION_PROBE_TIMEOUT_MS,
+): Promise<P4deltaVersion | undefined> {
+  const fingerprint = statFingerprint(exe)
+  const cached = buildProbeCache.get(exe)
+  if (cached !== undefined) {
+    // A stat that failed BEFORE cannot rule out a replacement; re-probe once it
+    // starts answering again. A stat that fails NOW is not read as a change —
+    // one AV/handle blip must not spawn the binary twice.
+    const replaced =
+      fingerprint !== undefined &&
+      (cached.fingerprint === undefined || fingerprint !== cached.fingerprint)
+    if (!replaced) return cached.verdict
+  }
+  // 采样契约是永不 reject；catch 只是不让一个意外 reject 被缓存成后续调用的答案。
+  const verdict = runP4deltaVersionProbe(exe, timeoutMs)
+    .then((out) => (out === undefined ? undefined : parseP4deltaVersionBannerStrict(out)))
+    .catch(() => undefined)
+  buildProbeCache.set(exe, { fingerprint, verdict })
+  return verdict
 }
 
 /**

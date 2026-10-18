@@ -256,6 +256,21 @@ describe('ensureP4delta: running the store', () => {
     )
   })
 
+  it('passes the admission floor down to the store', async () => {
+    storeMocks.open.mockReturnValue(fakeStore({ kind: 'up-to-date', version: '0.1.19' }).store)
+    await ensureP4delta(options({ minimumVersion: [0, 1, 19] }))
+    expect(storeMocks.open).toHaveBeenCalledWith(
+      expect.objectContaining({ minimumVersion: [0, 1, 19] }),
+    )
+  })
+
+  it('omits the floor key when none is given', async () => {
+    storeMocks.open.mockReturnValue(fakeStore({ kind: 'up-to-date', version: '0.1.10' }).store)
+    await ensureP4delta(options())
+    const opened = storeMocks.open.mock.calls[0]?.[0] as Record<string, unknown>
+    expect(opened).not.toHaveProperty('minimumVersion')
+  })
+
   it('turns a store that throws into a failure outcome', async () => {
     storeMocks.open.mockReturnValue({
       sync: vi.fn(async () => {

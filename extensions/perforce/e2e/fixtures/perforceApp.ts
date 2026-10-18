@@ -214,6 +214,12 @@ export interface P4deltaFixtureConfig {
    * `unmatched` (see the fake's header); an unknown value makes the fake exit 2.
    */
   readonly fail?: string
+  /**
+   * What `--version` answers (`UNIVERSE_P4DELTA_FAKE_VERSION`). Defaults to the
+   * fake's own `0.1.19`, which is exactly the admission floor; a spec sets
+   * `0.1.6` or a non-banner string to model a build the gate refuses.
+   */
+  readonly version?: string
 }
 
 /**
@@ -720,6 +726,9 @@ export const test = base.extend<
           ? {
               UNIVERSE_P4DELTA_PATH: FAKE_P4DELTA,
               ...(p4delta.fail !== undefined ? { UNIVERSE_P4DELTA_FAKE_FAIL: p4delta.fail } : {}),
+              ...(p4delta.version !== undefined
+                ? { UNIVERSE_P4DELTA_FAKE_VERSION: p4delta.version }
+                : {}),
             }
           : {}),
         ...p4ExtraEnv,

@@ -75,6 +75,7 @@ function runFake(
   args: readonly string[],
   opts: {
     readonly fail?: string
+    readonly version?: string
     readonly logs: { delta: string; p4: string; scope: string }
   },
   stateFile: string,
@@ -87,6 +88,7 @@ function runFake(
       UNIVERSE_P4_FAKE_ARGV_LOG: opts.logs.p4,
       UNIVERSE_P4DELTA_SCOPE_LOG: opts.logs.scope,
       ...(opts.fail !== undefined ? { UNIVERSE_P4DELTA_FAKE_FAIL: opts.fail } : {}),
+      ...(opts.version !== undefined ? { UNIVERSE_P4DELTA_FAKE_VERSION: opts.version } : {}),
     },
     encoding: 'utf8',
   })
@@ -445,7 +447,9 @@ test.describe('@p1 p4delta fake contract — normal sync', () => {
     expect(applied.code).toBe(0)
     // 一轮只发一套：带 `-a` 时预演那份就是 apply 段的种子（被拒文件不进下发规格，
     // apply 命令自己不会再报它）。
-    expect(conflictsOf(applied)).toEqual([expect.objectContaining({ stage: 'apply', applied: true })])
+    expect(conflictsOf(applied)).toEqual([
+      expect.objectContaining({ stage: 'apply', applied: true }),
+    ])
     expect(summaryOf(applied)).toMatchObject({ conflicts: 1 })
     expect(readFileSync(p4Workspace.file('refused.txt'), 'utf8')).toBe('draft to keep\n')
   })
@@ -616,8 +620,19 @@ test.describe('@p1 p4delta fake contract', () => {
 
     expect(run.code).toBe(0)
     // `<crate name> <semver>`, the crate name compiled in — the shape a real
-    // p4delta prints. Nothing in the editor reads it any more (the version gate
-    // is gone); it is pinned so the fake stays a faithful CLI.
+    // p4delta prints, and what the admission gate parses. 0.1.19 is both the
+    // fake's default and the floor, so every δ spec passes the gate untouched.
+    expect(run.stdout.trim()).toBe('p4delta 0.1.19')
+  })
+
+  test('lets a spec override the version it reports', ({ p4Workspace }) => {
+    const run = runFake(
+      ['--version'],
+      { logs: makeLogs(), version: '0.1.6' },
+      p4Workspace.stateFile,
+    )
+
+    expect(run.code).toBe(0)
     expect(run.stdout.trim()).toBe('p4delta 0.1.6')
   })
 

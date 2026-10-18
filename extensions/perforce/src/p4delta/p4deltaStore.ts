@@ -29,11 +29,13 @@
  *  - **Never throws.** Every failure is a `failed` outcome with a reason. The
  *    caller runs this in the background of an optional optimization; there is
  *    nobody to catch an exception.
- *  - **No version floor.** Unlike the agent binaries, a binary that answers the
- *    contract is driven on existence alone (`resolveP4deltaEngine`); an old or
- *    half-installed build is left to the client's failure ladder. Do not add a
- *    `--version` probe here "while we are at it" — that decision was made
- *    deliberately in the extension, see `docs/reconcile.md`.
+ *  - **The version floor belongs to the gate.** `resolveP4deltaEngine` samples
+ *    the engine's `--version` once and refuses builds below
+ *    `P4DELTA_MIN_VERSION`. This store only learns that number so it can
+ *    (a) bypass the 24h check throttle when the managed copy is known to be
+ *    below it, and (b) refuse to install an upstream release that is itself
+ *    below it. Never spawn `--version` here — the admission decision lives in
+ *    the extension, see `docs/reconcile.md`.
  */
 import { createHash } from 'node:crypto'
 import {
@@ -115,6 +117,13 @@ export interface P4deltaStoreOptions {
   readonly log?: (msg: string) => void
   readonly connectTimeoutMs?: number
   readonly maxDownloadBytes?: number
+  /**
+   * The oldest version the extension drives. Used only to skip a 24h check
+   * throttle that is hiding a stale managed copy, and to refuse installing an
+   * upstream release below the floor. The admission decision itself is the
+   * extension's (`resolveP4deltaEngine`).
+   */
+  readonly minimumVersion?: P4deltaVersion
   /** Download progress, for the manual command's notification. Never called by the background path. */
   readonly onProgress?: (received: number, total: number | undefined) => void
 }
@@ -167,13 +176,25 @@ interface CheckRecord {
   readonly ok: boolean
   /** Last latest-release version seen — kept so the keep set can name it without network. */
   readonly version?: string
+  /**
+   * The admission floor in force when this record was written. A `version`
+   * below the CURRENT floor only proves upstream was below the OLD one; after
+   * an editor update moves the floor, that conclusion has to be re-checked
+   * once. Absent in records written before the floor existed — also re-check.
+   */
+  readonly floor?: string
 }
 
 function readCheckRecord(root: string): CheckRecord | undefined {
   try {
     const parsed = JSON.parse(readFileSync(join(root, CHECK_RECORD), 'utf8')) as unknown
     if (typeof parsed !== 'object' || parsed === null) return undefined
-    const record = parsed as { nextCheckAt?: unknown; ok?: unknown; version?: unknown }
+    const record = parsed as {
+      nextCheckAt?: unknown
+      ok?: unknown
+      version?: unknown
+      floor?: unknown
+    }
     if (typeof record.nextCheckAt !== 'number' || !Number.isFinite(record.nextCheckAt)) {
       return undefined
     }
@@ -181,6 +202,7 @@ function readCheckRecord(root: string): CheckRecord | undefined {
       nextCheckAt: record.nextCheckAt,
       ok: record.ok === true,
       ...(typeof record.version === 'string' ? { version: record.version } : {}),
+      ...(typeof record.floor === 'string' ? { floor: record.floor } : {}),
     }
   } catch {
     // Missing or corrupt: behave as "never checked", which only costs one query.
@@ -322,6 +344,7 @@ class P4deltaStoreImpl implements P4deltaStore {
   private readonly _log: (msg: string) => void
   private readonly _connectTimeoutMs: number
   private readonly _maxDownloadBytes: number
+  private readonly _minimumVersion: P4deltaVersion | undefined
   private readonly _onProgress: ((received: number, total: number | undefined) => void) | undefined
   /** Versions this session switched away from: still worth keeping until the process ends. */
   private readonly _retained = new Set<string>()
@@ -345,6 +368,7 @@ class P4deltaStoreImpl implements P4deltaStore {
     }
     this._connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS
     this._maxDownloadBytes = options.maxDownloadBytes ?? DEFAULT_MAX_DOWNLOAD_BYTES
+    this._minimumVersion = options.minimumVersion
     this._onProgress = options.onProgress
   }
 
@@ -387,10 +411,41 @@ class P4deltaStoreImpl implements P4deltaStore {
     const now = this._now()
     const check = readCheckRecord(this._root)
     if (!force && check !== undefined && now < check.nextCheckAt) {
-      this._log(
-        `p4delta: upstream check skipped until ${new Date(check.nextCheckAt).toISOString()}`,
-      )
-      return { kind: 'throttled', nextCheckAt: check.nextCheckAt }
+      // A managed copy below the floor must not sit behind a 24h stamp written
+      // before the floor moved (an editor update). Bypass when the last
+      // SUCCESSFUL check either predates the current floor (its "upstream is
+      // below the floor too" conclusion no longer applies) or already saw a
+      // release that qualifies. A failed check keeps its failure backoff, or
+      // every launch would retry.
+      let bypass = false
+      if (this._minimumVersion !== undefined) {
+        const minimum = this._minimumVersion
+        const floorText = formatP4deltaVersion(minimum)
+        const activeNow = readActiveVersion(this._root)
+        const activeNowVersion =
+          activeNow !== undefined ? parseP4deltaVersion(activeNow) : undefined
+        const seenLatest =
+          check.version !== undefined ? parseP4deltaVersion(check.version) : undefined
+        const activeBelow =
+          activeNowVersion !== undefined && compareP4deltaVersion(activeNowVersion, minimum) < 0
+        const upstreamMaySatisfy =
+          check.ok &&
+          (check.floor !== floorText ||
+            seenLatest === undefined ||
+            compareP4deltaVersion(seenLatest, minimum) >= 0)
+        bypass = activeBelow && upstreamMaySatisfy
+        if (bypass) {
+          this._log(
+            `p4delta: managed copy is below the required ${floorText}; checking upstream now`,
+          )
+        }
+      }
+      if (!bypass) {
+        this._log(
+          `p4delta: upstream check skipped until ${new Date(check.nextCheckAt).toISOString()}`,
+        )
+        return { kind: 'throttled', nextCheckAt: check.nextCheckAt }
+      }
     }
 
     let latest: P4deltaVersion
@@ -403,19 +458,59 @@ class P4deltaStoreImpl implements P4deltaStore {
       // failure backoff — the next background check should still go out.
       if (opts?.signal?.aborted === true) return { kind: 'cancelled' }
       const retryAfterMs = err instanceof HttpError ? err.retryAfterMs : undefined
-      this._writeCheck(now + this._backoffMs(retryAfterMs), false, check?.version)
+      this._writeCheck(now + this._backoffMs(retryAfterMs), false, check?.version, undefined)
       return { kind: 'failed', reason: describeError(err) }
     }
 
     const latestText = formatP4deltaVersion(latest)
     const active = readActiveVersion(this._root)
+    const floorText =
+      this._minimumVersion !== undefined ? formatP4deltaVersion(this._minimumVersion) : undefined
     if (active !== undefined) {
       const activeVersion = parseP4deltaVersion(active)
       if (activeVersion !== undefined && compareP4deltaVersion(latest, activeVersion) <= 0) {
+        // "Up to date" must not hide a managed copy the gate will refuse: the
+        // manual install command would say "already installed" about a build
+        // this editor cannot use.
+        if (
+          this._minimumVersion !== undefined &&
+          compareP4deltaVersion(activeVersion, this._minimumVersion) < 0
+        ) {
+          const required = formatP4deltaVersion(this._minimumVersion)
+          this._log(
+            `p4delta: managed copy ${active} is below the required ${required} and upstream's latest ${latestText} is not newer; not installing`,
+          )
+          this._writeCheck(now + SUCCESS_CHECK_INTERVAL_MS, true, latestText, floorText)
+          await this._cleanupOnce()
+          return {
+            kind: 'skipped',
+            reason: `managed copy ${active} is below the required ${required} and upstream's latest ${latestText} is not newer`,
+          }
+        }
         this._log(`p4delta: managed copy ${active} is up to date`)
-        this._writeCheck(now + SUCCESS_CHECK_INTERVAL_MS, true, latestText)
+        this._writeCheck(now + SUCCESS_CHECK_INTERVAL_MS, true, latestText, floorText)
         await this._cleanupOnce()
         return { kind: 'up-to-date', version: active }
+      }
+    }
+
+    if (
+      this._minimumVersion !== undefined &&
+      compareP4deltaVersion(latest, this._minimumVersion) < 0
+    ) {
+      const required = formatP4deltaVersion(this._minimumVersion)
+      this._log(
+        `p4delta: upstream's latest ${latestText} is below the required ${required}; not installing`,
+      )
+      // The check itself succeeded — the answer is "nothing qualifying".
+      // Stamping it as a success under THIS floor is what stops the
+      // stale-copy bypass above from querying again on every launch while
+      // upstream stays below it (a later floor move deliberately re-checks).
+      this._writeCheck(now + SUCCESS_CHECK_INTERVAL_MS, true, latestText, floorText)
+      await this._cleanupOnce()
+      return {
+        kind: 'skipped',
+        reason: `upstream's latest ${latestText} is below the required ${required}`,
       }
     }
 
@@ -424,7 +519,7 @@ class P4deltaStoreImpl implements P4deltaStore {
       // Another window (or an earlier session) already downloaded it.
       this._log(`p4delta: adopting ${latestText} already on disk`)
       this._activate(latestText, active)
-      this._writeCheck(now + SUCCESS_CHECK_INTERVAL_MS, true, latestText)
+      this._writeCheck(now + SUCCESS_CHECK_INTERVAL_MS, true, latestText, floorText)
       await this._cleanupOnce()
       return {
         kind: 'installed',
@@ -439,12 +534,12 @@ class P4deltaStoreImpl implements P4deltaStore {
     } catch (err) {
       if (opts?.signal?.aborted === true) return { kind: 'cancelled' }
       const retryAfterMs = err instanceof HttpError ? err.retryAfterMs : undefined
-      this._writeCheck(now + this._backoffMs(retryAfterMs), false, check?.version)
+      this._writeCheck(now + this._backoffMs(retryAfterMs), false, check?.version, undefined)
       return { kind: 'failed', reason: describeError(err) }
     }
 
     this._activate(latestText, active)
-    this._writeCheck(now + SUCCESS_CHECK_INTERVAL_MS, true, latestText)
+    this._writeCheck(now + SUCCESS_CHECK_INTERVAL_MS, true, latestText, floorText)
     this._log(`p4delta: activated ${latestText}${active !== undefined ? ` (was ${active})` : ''}`)
     await this._cleanupOnce()
     return {
@@ -459,8 +554,20 @@ class P4deltaStoreImpl implements P4deltaStore {
     return Math.min(Math.max(requested, FAILURE_RETRY_INTERVAL_MS), MAX_RETRY_AFTER_MS)
   }
 
-  private _writeCheck(nextCheckAt: number, ok: boolean, version: string | undefined): void {
-    const record: CheckRecord = { nextCheckAt, ok, ...(version !== undefined ? { version } : {}) }
+  private _writeCheck(
+    nextCheckAt: number,
+    ok: boolean,
+    version: string | undefined,
+    floor: string | undefined,
+  ): void {
+    const record: CheckRecord = {
+      nextCheckAt,
+      ok,
+      ...(version !== undefined ? { version } : {}),
+      // A failure record has no floor conclusion to protect (ok:false never
+      // bypasses), so callers leave it out there.
+      ...(floor !== undefined ? { floor } : {}),
+    }
     try {
       // A failed check on a machine that never installed anything has no root
       // yet; creating it here keeps the throttle record writable from the very

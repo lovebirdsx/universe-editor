@@ -5,11 +5,15 @@
  * stdout 与 stderr 都收、无输出 / 卡死 / 文件不存在一律答 undefined（采样是诊断，绝不能让
  * 一条命令把编辑器挂住或抛出）。
  */
-import { writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { probeP4deltaVersion } from '../p4delta/p4deltaService.js'
+import {
+  clearP4deltaBuildProbeCache,
+  probeP4deltaBuild,
+  probeP4deltaVersion,
+} from '../p4delta/p4deltaService.js'
 import { parseP4deltaVersionBanner } from '../p4delta/p4deltaVersion.js'
 
 describe('parseP4deltaVersionBanner', () => {
@@ -28,6 +32,7 @@ describe('probeP4deltaVersion', () => {
 
   beforeEach(() => {
     dir = mkTempDir('ue-p4delta-probe-')
+    clearP4deltaBuildProbeCache()
   })
 
   afterEach(() => {
@@ -65,5 +70,114 @@ describe('probeP4deltaVersion', () => {
 
   it('answers nothing when the file is not there', async () => {
     await expect(probeP4deltaVersion(join(dir, 'missing.mjs'))).resolves.toBeUndefined()
+  })
+})
+
+describe('probeP4deltaBuild', () => {
+  let dir: string
+
+  beforeEach(() => {
+    dir = mkTempDir('ue-p4delta-build-')
+    clearP4deltaBuildProbeCache()
+  })
+
+  afterEach(() => {
+    removeDirWithRetry(dir)
+  })
+
+  const writeScript = (name: string, source: string): string => {
+    const file = join(dir, name)
+    writeFileSync(file, source, 'utf8')
+    return file
+  }
+
+  const spawnCount = (name = 'spawns.log'): number => {
+    const file = join(dir, name)
+    if (!existsSync(file)) return 0
+    return readFileSync(file, 'utf8')
+      .split('\n')
+      .filter((line) => line !== '').length
+  }
+
+  /** A script that records each spawn before answering, so the cache is observable. */
+  const countingScript = (version: string): string =>
+    `import { appendFileSync } from 'node:fs'\n` +
+    `appendFileSync(new URL('./spawns.log', import.meta.url), 'x\\n')\n` +
+    `console.log('p4delta ${version}')\n`
+
+  it('reads a strict p4delta banner from stdout or stderr', async () => {
+    const stdout = writeScript('build.mjs', countingScript('0.1.19'))
+    await expect(probeP4deltaBuild(stdout)).resolves.toEqual([0, 1, 19])
+
+    const stderr = writeScript('build-stderr.mjs', "console.error('p4delta 1.2.3')\n")
+    await expect(probeP4deltaBuild(stderr)).resolves.toEqual([1, 2, 3])
+  })
+
+  it('is fail-closed when the output is not a p4delta banner', async () => {
+    const exe = writeScript('other-tool.mjs', "console.log('mytool 9.9.9')\n")
+    await expect(probeP4deltaBuild(exe)).resolves.toBeUndefined()
+  })
+
+  it('is fail-closed when the child gives no answer or hangs', async () => {
+    const silent = writeScript('silent.mjs', 'process.exit(3)\n')
+    await expect(probeP4deltaBuild(silent)).resolves.toBeUndefined()
+
+    const hang = writeScript('hang.mjs', 'setInterval(() => {}, 1000)\n')
+    await expect(probeP4deltaBuild(hang, 250)).resolves.toBeUndefined()
+  })
+
+  it('answers nothing when the file is not there', async () => {
+    await expect(probeP4deltaBuild(join(dir, 'missing.mjs'))).resolves.toBeUndefined()
+  })
+
+  it('probes one binary once per fingerprint, failures included', async () => {
+    const good = writeScript('good.mjs', countingScript('0.1.19'))
+    await expect(probeP4deltaBuild(good)).resolves.toEqual([0, 1, 19])
+    await expect(probeP4deltaBuild(good)).resolves.toEqual([0, 1, 19])
+    expect(spawnCount()).toBe(1)
+
+    clearP4deltaBuildProbeCache()
+    const silentLog = join(dir, 'spawns-silent.log')
+    const silent = writeScript(
+      'silent.mjs',
+      `import { appendFileSync } from 'node:fs'\n` +
+        `appendFileSync(new URL('./spawns-silent.log', import.meta.url), 'x\\n')\n` +
+        'process.exit(3)\n',
+    )
+    await expect(probeP4deltaBuild(silent)).resolves.toBeUndefined()
+    await expect(probeP4deltaBuild(silent)).resolves.toBeUndefined()
+    expect(
+      readFileSync(silentLog, 'utf8')
+        .split('\n')
+        .filter((line) => line !== '').length,
+    ).toBe(1)
+  })
+
+  it('shares one spawn between concurrent callers', async () => {
+    const exe = writeScript('concurrent.mjs', countingScript('0.1.19'))
+
+    const [first, second] = await Promise.all([probeP4deltaBuild(exe), probeP4deltaBuild(exe)])
+
+    expect(first).toEqual([0, 1, 19])
+    expect(second).toEqual([0, 1, 19])
+    expect(spawnCount()).toBe(1)
+  })
+
+  it('re-probes when the binary at the same path is replaced', async () => {
+    const exe = writeScript('replaced.mjs', countingScript('0.1.18'))
+    await expect(probeP4deltaBuild(exe)).resolves.toEqual([0, 1, 18])
+
+    // Different length (hence a different size fingerprint) with a different answer.
+    writeFileSync(exe, countingScript('0.1.19') + '// replaced\n', 'utf8')
+    await expect(probeP4deltaBuild(exe)).resolves.toEqual([0, 1, 19])
+    expect(spawnCount()).toBe(2)
+  })
+
+  it('re-probes after the test cache is cleared', async () => {
+    const exe = writeScript('clear.mjs', countingScript('0.1.19'))
+    await expect(probeP4deltaBuild(exe)).resolves.toEqual([0, 1, 19])
+    clearP4deltaBuildProbeCache()
+    await expect(probeP4deltaBuild(exe)).resolves.toEqual([0, 1, 19])
+    expect(spawnCount()).toBe(2)
   })
 })

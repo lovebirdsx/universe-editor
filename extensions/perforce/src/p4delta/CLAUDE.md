@@ -18,7 +18,7 @@
 
 ## 副本优先级（五级，`resolveP4deltaCommand`）
 
-`UNIVERSE_P4DELTA_PATH`(env) → `perforce.p4delta.path`(configured) → **托管副本**(managed) → PATH → `%LOCALAPPDATA%\Programs\p4delta\p4delta.exe`。返回 `P4deltaCandidate { exe, source }`，`source` 只用于日志与判定。**托管副本排在 PATH / 系统安装目录之前**：它是编辑器唯一能持续升级的那份，被机器上更旧的自装副本遮蔽就永远升不上去。env / configured / PATH / `%LOCALAPPDATA%` 任一级命中即完全不联网（不查上游、不下载）；托管副本命中则进入后台升级（它归编辑器维护，`autoInstall` 关掉时只停这条后台升级、不改变解析顺序）。地址门在 `extension.ts` 的 `resolveP4deltaEngine`（保持同步，只做一次 `existsSync`，**无版本地板**——见 [`../../docs/reconcile.md`](../../docs/reconcile.md) 的「无版本门槛」，别顺手加 `--version` 探测；唯一的采样是「显示 p4delta 信息」命令里那次纯显示的 `probeP4deltaVersion`，不参与准入，且它自己 `existsSync` 兜底——脚本形态下 `node <不存在的脚本> --version` 会答 node 自己的版本）。
+`UNIVERSE_P4DELTA_PATH`(env) → `perforce.p4delta.path`(configured) → **托管副本**(managed) → PATH → `%LOCALAPPDATA%\Programs\p4delta\p4delta.exe`。返回 `P4deltaCandidate { exe, source }`，`source` 只用于日志与判定。**托管副本排在 PATH / 系统安装目录之前**：它是编辑器唯一能持续升级的那份，被机器上更旧的自装副本遮蔽就永远升不上去。env / configured / PATH / `%LOCALAPPDATA%` 任一级命中即完全不联网（不查上游、不下载）；托管副本命中则进入后台升级（它归编辑器维护，`autoInstall` 关掉时只停这条后台升级、不改变解析顺序）。地址门在 `extension.ts` 的 `resolveP4deltaEngine`（**async**：`existsSync` 后 `await probeP4deltaBuild` 采样 `--version`，要求 `>= P4DELTA_MIN_VERSION`（0.1.19）；严格 banner、fail-closed，verdict 按路径 + `mtimeMs:size` 缓存，见 [`../../docs/reconcile.md`](../../docs/reconcile.md) 的「版本门槛」）。低于门槛 / 读不出版本 → 回退原生 + 输出频道日志 + 一次 warning。`probeP4deltaVersion` 仍是「显示 p4delta 信息」命令的宽松诊断采样，不参与准入，且它自己 `existsSync` 兜底——脚本形态下 `node <不存在的脚本> --version` 会答 node 自己的版本。
 
 `p4deltaNamedExplicitly(configuredPath)` = env 或配置路径非空，即「操作者说这份是我的」；`resolveP4deltaCommand(configuredPath)`（**不传 `managedRoot`**）非空 = 这台机器自带副本。这两个谓词是安装器的两条早退判据，**复用它们，别另造判断**。
 
@@ -48,7 +48,7 @@
 
 **取消 ≠ 失败**：`{kind:'cancelled'}` 单列一支，**不写 `.check`**——用户取消是他自己的决定，不是对上流的判决；写成失败退避会让「取消一次手动安装」把后台自动检查静音一小时。
 
-**节流**（GitHub 未认证 60 req/h）：成功 24h、失败 1h、尊重 `Retry-After` 与 `x-ratelimit-reset`（下限 1h、上限 24h）；`force` 绕过节流。
+**节流**（GitHub 未认证 60 req/h）：成功 24h、失败 1h、尊重 `Retry-After` 与 `x-ratelimit-reset`（下限 1h、上限 24h）；`force` 绕过节流。**版本门槛**（`extension.ts` 注入 `minimumVersion`）：托管副本已低于门槛时，若上次成功检查是在**同一门槛**下写出的且已看到上游也旧、或上次检查失败，则照常节流；否则（记录早于门槛、无 `floor`、无 `version`、或看到过合格版本）绕过成功节流立即查上游。`.check` 因此带 `floor`，上游 latest 低于门槛时不下载，并记一次成功检查（24h 内不再联网）。store 自己**不 spawn** `--version`。
 
 **保留集** = `{.active 指向的} ∪ {.check.version} ∪ {盘上最高版本}`，安装成功后每会话至多清一次；`.extract.*`/`.zip.*` 超 1h 才扫（别误删另一个进程正在写的）。
 
