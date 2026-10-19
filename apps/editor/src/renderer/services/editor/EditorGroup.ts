@@ -94,6 +94,9 @@ export class EditorGroup implements IEditorGroup, IGridView {
   detachEditor(editor: EditorInput): boolean {
     return this.model.detachEditor(editor)
   }
+  replaceEditor(oldEditor: EditorInput, newEditor: EditorInput): boolean {
+    return this.model.replaceEditor(oldEditor, newEditor)
+  }
   closeAllEditors(options?: { excludeSticky?: boolean }): void {
     this.model.closeAllEditors(options)
   }

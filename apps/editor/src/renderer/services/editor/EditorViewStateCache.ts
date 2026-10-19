@@ -69,6 +69,41 @@ class EditorViewStateCacheImpl {
     return line
   }
 
+  /**
+   * Move every cached entry for a resource (view state, shared cursor, one-shot
+   * reveal line) to another URI in the same group. Used when an open editor is
+   * retargeted after its file was renamed or moved.
+   */
+  move(groupId: number, fromUri: string, toUri: string): void {
+    if (fromUri === toUri) return
+    const pairs: [string, string][] = [
+      [this._key(groupId, fromUri), this._key(groupId, toUri)],
+      [this._cursorKey(groupId, fromUri), this._cursorKey(groupId, toUri)],
+      [this._revealKey(groupId, fromUri), this._revealKey(groupId, toUri)],
+    ]
+    for (const [from, to] of pairs) {
+      const value = this._map.get(from)
+      if (value === undefined) continue
+      this._map.delete(from)
+      this._map.set(to, value)
+    }
+  }
+
+  /**
+   * Move only the shared cursor entry. The diff editor stores its cursor under
+   * the modified file's real URI while its own view state lives under the
+   * virtual `diff:` resource, so retargeting a diff must migrate the two
+   * separately.
+   */
+  moveCursor(groupId: number, fromUri: string, toUri: string): void {
+    if (fromUri === toUri) return
+    const from = this._cursorKey(groupId, fromUri)
+    const value = this._map.get(from)
+    if (value === undefined) return
+    this._map.delete(from)
+    this._map.set(this._cursorKey(groupId, toUri), value)
+  }
+
   /** Bulk-load states for one group from persisted data (restore phase). */
   restoreGroup(groupId: number, states: Readonly<Record<string, unknown>>): void {
     for (const [uri, state] of Object.entries(states)) {

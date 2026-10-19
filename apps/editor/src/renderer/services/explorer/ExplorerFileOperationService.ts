@@ -33,6 +33,7 @@ import {
 } from './ExplorerTreeService.js'
 import { basenameOf, incrementFileName, targetInDirectory } from './explorerFileOperations.js'
 import { isDescendant, parentOf, sameUri } from './explorerTreeUtils.js'
+import { beginRenameIntent } from './renameIntent.js'
 
 /** Files larger than this (bytes) are not backed up for undo on delete. */
 const MAX_UNDO_FILE_SIZE = 10 * 1024 * 1024
@@ -109,13 +110,18 @@ export class ExplorerFileOperationService {
     if (!parent) throw new Error('Cannot rename the workspace root.')
     const target = URI.joinPath(parent, newName)
     const isDirectory = this._tree.isDirectory(source)
-    await this._fileService.rename(source, target, { overwrite: false })
-    this._tree.forgetSubtree(source)
-    await this._tree.refresh(parent)
-    this._tree.notifyDidRunFileOperation([{ oldUri: source, newUri: target, isDirectory }])
-    this._pushRename([{ oldUri: source, newUri: target, isDirectory }])
-    this._logger.info(`rename ${source.toString()} -> ${target.toString()}`)
-    return target
+    const intent = beginRenameIntent(source)
+    try {
+      await this._fileService.rename(source, target, { overwrite: false })
+      this._tree.forgetSubtree(source)
+      await this._tree.refresh(parent)
+      this._tree.notifyDidRunFileOperation([{ oldUri: source, newUri: target, isDirectory }])
+      this._pushRename([{ oldUri: source, newUri: target, isDirectory }])
+      this._logger.info(`rename ${source.toString()} -> ${target.toString()}`)
+      return target
+    } finally {
+      intent.dispose()
+    }
   }
 
   async delete(targets: readonly IExplorerResourceOperation[], useTrash: boolean): Promise<void> {
@@ -182,28 +188,42 @@ export class ExplorerFileOperationService {
   ): Promise<URI[]> {
     const overwrite = opts?.overwrite === true
     const renames: IFileRenameOperation[] = []
-    for (const source of resources) {
-      this._assertCanPlace(source, destinationDir)
-      const target = targetInDirectory(destinationDir, source.resource)
-      if (sameUri(source.resource, target)) continue
-      if (!overwrite && (await this._fileService.exists(target))) {
-        throw new Error(`A file or folder named "${basenameOf(target)}" already exists.`)
+    const intents = resources.map((resource) => beginRenameIntent(resource.resource))
+    let published = false
+    try {
+      for (const source of resources) {
+        this._assertCanPlace(source, destinationDir)
+        const target = targetInDirectory(destinationDir, source.resource)
+        if (sameUri(source.resource, target)) continue
+        if (!overwrite && (await this._fileService.exists(target))) {
+          throw new Error(`A file or folder named "${basenameOf(target)}" already exists.`)
+        }
+        await this._fileService.rename(source.resource, target, { overwrite })
+        this._tree.forgetSubtree(source.resource)
+        renames.push({ oldUri: source.resource, newUri: target, isDirectory: source.isDirectory })
       }
-      await this._fileService.rename(source.resource, target, { overwrite })
-      this._tree.forgetSubtree(source.resource)
-      renames.push({ oldUri: source.resource, newUri: target, isDirectory: source.isDirectory })
+      await this._tree.refreshParents([
+        ...resources.map((r) => r.resource),
+        ...renames.map((r) => r.newUri),
+      ])
+      this._tree.selectOperationTargets(renames.map((r) => r.newUri))
+      if (renames.length > 0) {
+        this._tree.notifyDidRunFileOperation(renames)
+        published = true
+        this._pushRename(renames)
+      }
+      this._logger.info(`move count=${renames.length} destination=${destinationDir.toString()}`)
+      return renames.map((r) => r.newUri)
+    } finally {
+      // A mid-batch failure leaves the already-moved files on disk. Retarget
+      // their open tabs before the rename intents expire, or the watcher will
+      // treat the old paths as deleted and close them.
+      if (!published && renames.length > 0) {
+        this._logger.warn(`partial move count=${renames.length}: notifying moved files`)
+        this._tree.notifyDidRunFileOperation(renames)
+      }
+      for (const intent of intents) intent.dispose()
     }
-    await this._tree.refreshParents([
-      ...resources.map((r) => r.resource),
-      ...renames.map((r) => r.newUri),
-    ])
-    this._tree.selectOperationTargets(renames.map((r) => r.newUri))
-    if (renames.length > 0) {
-      this._tree.notifyDidRunFileOperation(renames)
-      this._pushRename(renames)
-    }
-    this._logger.info(`move count=${renames.length} destination=${destinationDir.toString()}`)
-    return renames.map((r) => r.newUri)
   }
 
   // ---- undo/redo element construction ----
@@ -278,12 +298,24 @@ export class ExplorerFileOperationService {
 
   /** @internal Move source->target (undo/redo of a rename). */
   async applyRename(renames: readonly IFileRenameOperation[]): Promise<void> {
-    for (const rename of renames) {
-      await this._fileService.rename(rename.oldUri, rename.newUri, { overwrite: false })
-      this._tree.forgetSubtree(rename.oldUri)
+    const intents = renames.map((rename) => beginRenameIntent(rename.oldUri))
+    const performed: IFileRenameOperation[] = []
+    let published = false
+    try {
+      for (const rename of renames) {
+        await this._fileService.rename(rename.oldUri, rename.newUri, { overwrite: false })
+        this._tree.forgetSubtree(rename.oldUri)
+        performed.push(rename)
+      }
+      await this._tree.refreshParents(renames.flatMap((r) => [r.oldUri, r.newUri]))
+      this._tree.notifyDidRunFileOperation(renames)
+      published = true
+    } finally {
+      if (!published && performed.length > 0) {
+        this._tree.notifyDidRunFileOperation(performed)
+      }
+      for (const intent of intents) intent.dispose()
     }
-    await this._tree.refreshParents(renames.flatMap((r) => [r.oldUri, r.newUri]))
-    this._tree.notifyDidRunFileOperation(renames)
   }
 
   /** @internal Re-create files as backups (redo of a delete): read from disk into a new backup. */

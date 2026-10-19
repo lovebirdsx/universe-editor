@@ -230,6 +230,110 @@ describe('EditorGroupModel — move', () => {
   })
 })
 
+describe('EditorGroupModel — replaceEditor', () => {
+  it('swaps in place, preserves active slot and disposes the old input', () => {
+    const model = new EditorGroupModel()
+    const a = make('a')
+    const b = make('b')
+    model.openEditor(a)
+    model.openEditor(b)
+    const moved = make('a-renamed')
+
+    const events: IEditorGroupModelChangeEvent[] = []
+    model.onDidChangeModel((e) => events.push(e))
+    const activation = model.activationId
+
+    expect(model.replaceEditor(a, moved)).toBe(true)
+    expect(model.editors).toEqual([moved, b])
+    expect(model.activeEditor).toBe(b)
+    expect(model.activationId).toBe(activation)
+    expect(a.isDisposed).toBe(true)
+    expect(moved.isDisposed).toBe(false)
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({
+      kind: 'replace',
+      editor: moved,
+      oldIndex: 0,
+      newIndex: 0,
+      replacedEditor: a,
+    })
+  })
+
+  it('keeps the active pointer on the replacement without bumping activationId', () => {
+    const model = new EditorGroupModel()
+    const a = make('a')
+    model.openEditor(a)
+    const moved = make('a-renamed')
+    const onActive = vi.fn()
+    model.onDidActiveEditorChange(onActive)
+    const activation = model.activationId
+
+    model.replaceEditor(a, moved)
+
+    expect(model.activeEditor).toBe(moved)
+    expect(model.activationId).toBe(activation)
+    expect(model.lastActivationPreservedFocus).toBe(true)
+    expect(onActive).toHaveBeenCalledTimes(1)
+  })
+
+  it('preserves preview, sticky region and MRU order', () => {
+    const model = new EditorGroupModel()
+    const a = make('a')
+    const b = make('b')
+    const c = make('c')
+    const d = make('d')
+    model.openEditor(a, { sticky: true })
+    model.openEditor(b, { pinned: false })
+    model.openEditor(c)
+    model.openEditor(d) // d active; MRU d, c, b, a
+    const moved = make('b-renamed')
+
+    model.replaceEditor(b, moved)
+
+    expect(model.previewEditor).toBe(moved)
+    expect(model.isSticky(a)).toBe(true)
+    expect(model.isPinned(moved)).toBe(false)
+    // Activate a to inspect MRU-derived fallbacks: after replacing b in place,
+    // closing moved should still leave c/d ahead of a in MRU.
+    model.setActive(moved)
+    model.setActive(c)
+    model.closeEditor(c)
+    expect(model.activeEditor).toBe(moved)
+  })
+
+  it('rejects a duplicate identity already in the group', () => {
+    const model = new EditorGroupModel()
+    const a = make('a')
+    const b = make('b')
+    model.openEditor(a)
+    model.openEditor(b)
+
+    expect(model.replaceEditor(a, make('b'))).toBe(false)
+    expect(model.editors[0]).toBe(a)
+    expect(a.isDisposed).toBe(false)
+  })
+
+  it('returns false for an unknown or disposed replacement', () => {
+    const model = new EditorGroupModel()
+    const a = make('a')
+    model.openEditor(a)
+    expect(model.replaceEditor(make('x'), make('y'))).toBe(false)
+
+    const disposed = make('a-renamed')
+    disposed.dispose()
+    expect(model.replaceEditor(a, disposed)).toBe(false)
+    expect(model.editors[0]).toBe(a)
+  })
+
+  it('is a no-op when the replacement is the same instance', () => {
+    const model = new EditorGroupModel()
+    const a = make('a')
+    model.openEditor(a)
+    expect(model.replaceEditor(a, a)).toBe(true)
+    expect(model.editors[0]).toBe(a)
+  })
+})
+
 describe('EditorGroupModel — setActive', () => {
   it('setActive fires onDidActiveEditorChange', () => {
     const model = new EditorGroupModel()

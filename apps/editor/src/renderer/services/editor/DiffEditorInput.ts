@@ -22,6 +22,7 @@ import { MonacoModelRegistry } from '../../workbench/editor/monaco/MonacoModelRe
 import { SaveParticipant } from '../extensions/SaveParticipant.js'
 import { DidSaveNotification } from '../extensions/DidSaveNotification.js'
 import { noteSelfWrite } from './selfWriteRegistry.js'
+import { EditorViewStateCache } from './EditorViewStateCache.js'
 import { splitLeadingBom, UTF8_BOM } from './leadingBom.js'
 import { normalizeToModelEol } from './minimalModelEdit.js'
 import type { monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
@@ -70,7 +71,7 @@ export class DiffEditorInput extends EditorInput {
     private _originalContent: string,
     private _modifiedContent: string,
     private readonly _modifiedUri: URI | undefined,
-    private readonly _openableResource: URI | undefined,
+    private _openableResource: URI | undefined,
     private _liveModified: boolean,
     @IFileService private readonly _fileService: IFileService,
   ) {
@@ -309,6 +310,62 @@ export class DiffEditorInput extends EditorInput {
     if (other instanceof DiffEditorInput) {
       this.update(other._originalContent, other._modifiedContent, other._liveModified)
     }
+  }
+
+  /**
+   * Rebuild around renamed sides. The live modified buffer is captured before
+   * the old input is disposed and carried into the replacement; view state is
+   * keyed by the virtual `diff:` resource, while the cross-editor cursor is
+   * keyed by `originalUri` (what DiffEditor passes as `sharedCursorUri`), so
+   * the two move separately. A change confined to `openableResource` (the
+   * title-bar "Open File" target) is applied in place: the tab identity and
+   * rendered content do not change, so rebuilding would only churn React state.
+   */
+  override rename(
+    groupId: number,
+    retarget: (resource: URI) => URI | undefined,
+  ): EditorInput | undefined {
+    const nextOriginal = retarget(this._originalUri) ?? this._originalUri
+    const nextModified = this._modifiedUri
+      ? (retarget(this._modifiedUri) ?? this._modifiedUri)
+      : undefined
+    const nextOpenable = this._openableResource
+      ? (retarget(this._openableResource) ?? this._openableResource)
+      : undefined
+
+    const originalChanged = nextOriginal.toString() !== this._originalUri.toString()
+    const modifiedChanged = nextModified?.toString() !== this._modifiedUri?.toString()
+    if (!originalChanged && !modifiedChanged) {
+      if (nextOpenable?.toString() !== this._openableResource?.toString()) {
+        this._openableResource = nextOpenable
+      }
+      return undefined
+    }
+
+    const modifiedContent = this.modifiedEditable
+      ? (this.peekModifiedModel()?.getValue() ?? this._modifiedContent)
+      : this._modifiedContent
+    const moved = new DiffEditorInput(
+      nextOriginal,
+      this._originalContent,
+      modifiedContent,
+      nextModified,
+      nextOpenable,
+      this._liveModified,
+      this._fileService,
+    )
+    moved._hasLeadingBom = this._hasLeadingBom
+    if (this.isDirty) moved.setDirty(true)
+
+    EditorViewStateCache.move(groupId, this.resource.toString(), moved.resource.toString())
+    if (originalChanged) {
+      EditorViewStateCache.moveCursor(
+        groupId,
+        this._originalUri.toString(),
+        nextOriginal.toString(),
+      )
+    }
+    return moved
   }
 
   /**

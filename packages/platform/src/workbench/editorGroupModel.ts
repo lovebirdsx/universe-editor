@@ -24,6 +24,7 @@ export type EditorGroupModelChangeKind =
   | 'active'
   | 'pin'
   | 'previewReplace'
+  | 'replace'
   | 'lock'
   | 'sticky'
 
@@ -32,9 +33,9 @@ export interface IEditorGroupModelChangeEvent {
   editor: EditorInput | undefined
   oldIndex?: number
   newIndex?: number
-  /** On a `previewReplace`, the preview editor that was evicted (and is about to
-   *  be disposed). Lets listeners capture it — e.g. record it for reopen — while
-   *  it is still alive. Undefined for every other change kind. */
+  /** On a `previewReplace` or `replace`, the editor that was evicted (and is
+   *  about to be disposed). Lets listeners capture it — e.g. record it for
+   *  reopen — while it is still alive. Undefined for every other change kind. */
   replacedEditor?: EditorInput
 }
 
@@ -99,6 +100,14 @@ export interface IEditorGroupModel {
    * other-group). Fires the same 'close' model event as `closeEditor`.
    */
   detachEditor(editor: EditorInput): boolean
+  /**
+   * Swap one editor for another in the same slot, then dispose the old input.
+   * Used when a file is renamed/moved and its `EditorInput` is rebuilt around
+   * the new URI. Preserves index, sticky/preview/active pointers and MRU order;
+   * deliberately does NOT bump `activationId` (a rename driven from the
+   * Explorer must not pull keyboard focus into the editor).
+   */
+  replaceEditor(oldEditor: EditorInput, newEditor: EditorInput): boolean
   moveEditor(editor: EditorInput, toIndex: number): void
   setActive(editor: EditorInput, options?: { preserveFocus?: boolean }): void
   pinEditor(editor: EditorInput): void
@@ -305,6 +314,46 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
       const next = this._mru[0] ?? this._editors[Math.max(0, index - 1)]
       this._setActiveInternal(next)
     }
+
+    this._editorStore.delete(target)
+    return true
+  }
+
+  replaceEditor(oldEditor: EditorInput, newEditor: EditorInput): boolean {
+    const index = this._editors.indexOf(oldEditor)
+    if (index === -1) return false
+
+    const target = this._editors[index]!
+    if (newEditor === target) return true
+    if (newEditor.isDisposed) return false
+    if (this._editors.some((e) => e !== target && e.matches(newEditor))) return false
+
+    this._editors[index] = newEditor
+    this._editorStore.add(newEditor)
+
+    const mruIndex = this._mru.indexOf(target)
+    if (mruIndex !== -1) this._mru[mruIndex] = newEditor
+    if (this._previewEditor === target) this._previewEditor = newEditor
+
+    const wasActive = this._activeEditor === target
+    if (wasActive) {
+      this._activeEditor = newEditor
+      // The retarget is driven from the (usually focused) Explorer; the rebuilt
+      // editor input must not pull keyboard focus away on its next mount.
+      // Reuses the same gate as an open with `preserveFocus`.
+      this._lastActivationPreservedFocus = true
+    }
+
+    this._onDidChangeModel.fire({
+      kind: 'replace',
+      editor: newEditor,
+      oldIndex: index,
+      newIndex: index,
+      replacedEditor: target,
+    })
+    // Activation itself is unchanged (same slot, same tab); listeners that track
+    // the active input only need the pointer update, not a new activation.
+    if (wasActive) this._onDidActiveEditorChange.fire()
 
     this._editorStore.delete(target)
     return true

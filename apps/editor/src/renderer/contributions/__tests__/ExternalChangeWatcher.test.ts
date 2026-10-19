@@ -52,6 +52,10 @@ import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
 import { UntitledEditorInput } from '../../services/editor/UntitledEditorInput.js'
 import { MarkdownPreviewInput } from '../../services/editor/MarkdownPreviewInput.js'
+import {
+  _resetRenameIntentsForTests,
+  beginRenameIntent,
+} from '../../services/explorer/renameIntent.js'
 
 const fileServiceStub = {} as IFileServiceType
 
@@ -451,6 +455,72 @@ describe('ExternalChangeWatcher', () => {
     await flush()
     expect(groups.closed).toEqual([fileInput])
     expect(fileInput.checks).toHaveLength(0)
+  })
+
+  it('does not close a tab whose deletion belongs to an in-flight rename', async () => {
+    const uri = URI.file('/ws/a.txt')
+    const fileInput = makeFileInput(uri) as FileEditorInput & { checks: number[] }
+    const groups = makeGroups([fileInput])
+    const watcher = new FakeWatcher()
+    new ExternalChangeWatcher(
+      watcher,
+      makeOutOfWorkspaceWatch(watcher),
+      groups,
+      makeDialog(),
+      makeFileService(),
+      makeLoggerService(),
+      new FakeUserData(),
+      makeUriIdentity(),
+      makeNotifications(),
+    )
+
+    const intent = beginRenameIntent(uri)
+    try {
+      watcher.fire([{ type: 'deleted', resource: uri }])
+      await flush()
+      expect(groups.closed).toEqual([])
+    } finally {
+      intent.dispose()
+      _resetRenameIntentsForTests()
+    }
+
+    // Once the rename window is over, a genuine deletion closes as before.
+    watcher.fire([{ type: 'deleted', resource: uri }])
+    await flush()
+    expect(groups.closed).toEqual([fileInput])
+  })
+
+  it('skips closing when any matching deletion belongs to the rename intent', async () => {
+    const uri = URI.file('/ws/a.txt')
+    const fileInput = makeFileInput(uri) as FileEditorInput & { checks: number[] }
+    const groups = makeGroups([fileInput])
+    const watcher = new FakeWatcher()
+    new ExternalChangeWatcher(
+      watcher,
+      makeOutOfWorkspaceWatch(watcher),
+      groups,
+      makeDialog(),
+      makeFileService(),
+      makeLoggerService(),
+      new FakeUserData(),
+      makeUriIdentity(),
+      makeNotifications(),
+    )
+
+    const intent = beginRenameIntent(uri)
+    try {
+      // The parent directory is reported first; it also "contains" the file.
+      // Matching only the first candidate would miss the rename intent.
+      watcher.fire([
+        { type: 'deleted', resource: URI.file('/ws') },
+        { type: 'deleted', resource: uri },
+      ])
+      await flush()
+      expect(groups.closed).toEqual([])
+    } finally {
+      intent.dispose()
+      _resetRenameIntentsForTests()
+    }
   })
 
   it('reloads instead of closing when a "deleted" event hits a file still on disk', async () => {

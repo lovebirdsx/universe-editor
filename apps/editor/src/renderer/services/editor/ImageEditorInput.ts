@@ -47,6 +47,14 @@ export class ImageEditorInput extends EditorInput {
     return { resource: this._resource.toJSON() }
   }
 
+  override rename(
+    _groupId: number,
+    retarget: (resource: URI) => URI | undefined,
+  ): EditorInput | undefined {
+    const next = retarget(this._resource)
+    return next ? new ImageEditorInput(next) : undefined
+  }
+
   static deserialize(data: unknown): ImageEditorInput | null {
     const d = data as ISerializedImageEditor | null
     if (!d || !d.resource) return null

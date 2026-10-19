@@ -36,6 +36,7 @@ import { MonacoModelRegistry } from '../workbench/editor/monaco/MonacoModelRegis
 import { applyMinimalTextEdit, normalizeToModelEol } from '../services/editor/minimalModelEdit.js'
 import { splitLeadingBom } from '../services/editor/leadingBom.js'
 import { isDescendant } from '../services/explorer/explorerTreeUtils.js'
+import { isRenameIntentSource } from '../services/explorer/renameIntent.js'
 import { readForExternalReload } from '../services/files/externalReload.js'
 import { IOutOfWorkspaceWatchService } from '../services/files/outOfWorkspaceWatchService.js'
 import { basenameOfResource } from '../workbench/files/resourceInfo.js'
@@ -130,7 +131,9 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
     // id so _detachGroup can dispose early (the subscription is idempotent).
     const d = this._register(
       group.onDidChangeModel((e) => {
-        if (e.kind === 'open' || e.kind === 'close') this._scheduleWatchUpdate()
+        if (e.kind === 'open' || e.kind === 'close' || e.kind === 'replace') {
+          this._scheduleWatchUpdate()
+        }
       }),
     )
     this._groupDisposables.set(group.id, d)
@@ -542,11 +545,21 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
         }
         if (!target) continue
         const resource = target
-        if (
-          deletedResources.some(
-            (deleted) => isDescendant(deleted, resource) && deleted.scheme === resource.scheme,
-          )
-        ) {
+        const matches = deletedResources.filter(
+          (candidate) => isDescendant(candidate, resource) && candidate.scheme === resource.scheme,
+        )
+        if (matches.length > 0) {
+          // A rename surfaces as "old path deleted"; the rename contribution
+          // retargets the tab right after the operation completes. Closing it
+          // here would race that retarget and drop the tab. Check every
+          // matching deletion (a folder delete can be reported alongside its
+          // children): any rename intent means the tab is being moved.
+          if (matches.some(isRenameIntentSource)) {
+            this._logger.info(
+              `skipDeletedEditorDuringRename ${resource.toString()} group=${group.id}`,
+            )
+            continue
+          }
           group.closeEditor(editor)
           this._logger.info(`closeDeletedEditor ${resource.toString()} group=${group.id}`)
         }

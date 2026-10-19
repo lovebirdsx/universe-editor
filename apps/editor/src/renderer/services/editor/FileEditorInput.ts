@@ -24,6 +24,7 @@ import { DidSaveNotification } from '../extensions/DidSaveNotification.js'
 import { applyMinimalTextEdit, normalizeToModelEol } from './minimalModelEdit.js'
 import { isTooLargeForExternalReload, readFileTextForReload } from '../files/externalReload.js'
 import { noteSelfWrite } from './selfWriteRegistry.js'
+import { EditorViewStateCache } from './EditorViewStateCache.js'
 import { splitLeadingBom, UTF8_BOM } from './leadingBom.js'
 import type { monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
 
@@ -185,7 +186,26 @@ export class FileEditorInput extends EditorInput {
   override async save(): Promise<boolean> {
     if (this._isReadonly) return true
     const model = MonacoModelRegistry.peek(this._resource)
-    if (!model) return true
+    if (!model) {
+      // A retargeted (or hot-exit restored) tab can be dirty without a model:
+      // the input was rebuilt around a new URI and has not mounted yet. Writing
+      // the pending buffer here keeps Save/Save All/close-with-save from
+      // reporting success while silently dropping the edits.
+      if (this._pendingDirtyContent === undefined) return true
+      const text = this._pendingDirtyContent
+      noteSelfWrite(this._resource)
+      await this._fileService.writeFile(
+        this._resource,
+        this._hasLeadingBom ? UTF8_BOM + text : text,
+      )
+      this._pendingDirtyContent = undefined
+      this._backupContent = text
+      this._savedAlternativeVersionId = undefined
+      this.setDirty(false)
+      await this._refreshMtime()
+      DidSaveNotification.notify(this._resource)
+      return true
+    }
     // Let save participants (e.g. ESLint fix-all-on-save via
     // workspace.onWillSaveTextDocument) mutate the model before we read it.
     await SaveParticipant.participate(model, 1)
@@ -408,6 +428,39 @@ export class FileEditorInput extends EditorInput {
       ...(dirtyContent !== undefined && { dirtyContent }),
       ...(this._isReadonly && { isReadonly: true }),
     }
+  }
+
+  /**
+   * Rebuild this input around the renamed resource. The dirty buffer (if any)
+   * becomes the new input's pending content so it is applied on first resolve;
+   * the clean baseline/mtime/BOM carry over so a watcher `added` event cannot
+   * mistake the rename for an external modification before the new tab mounts.
+   */
+  override rename(
+    groupId: number,
+    retarget: (resource: URI) => URI | undefined,
+  ): EditorInput | undefined {
+    const next = retarget(this._resource)
+    if (!next) return undefined
+
+    const moved = new FileEditorInput(next, this._fileService)
+    moved._backupContent = this._backupContent
+    moved._hasLeadingBom = this._hasLeadingBom
+    moved._lastKnownMtime = this._lastKnownMtime
+    moved._isReadonly = this._isReadonly
+
+    let dirtyContent: string | undefined
+    if (this.isDirty) {
+      dirtyContent =
+        MonacoModelRegistry.peek(this._resource)?.getValue() ?? this._pendingDirtyContent
+    } else {
+      dirtyContent = this._pendingDirtyContent
+    }
+    if (dirtyContent !== undefined) moved._pendingDirtyContent = dirtyContent
+    if (this.isDirty) moved.setDirty(true)
+
+    EditorViewStateCache.move(groupId, this._resource.toString(), next.toString())
+    return moved
   }
 
   static deserialize(data: unknown, accessor?: ServicesAccessor): FileEditorInput | null {

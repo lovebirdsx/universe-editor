@@ -15,6 +15,7 @@
 import { EditorInput, localize, URI, type UriComponents } from '@universe-editor/platform'
 import { basenameOfResource } from '../../workbench/files/resourceInfo.js'
 import { MarkdownPreviewRegistry } from './MarkdownPreviewRegistry.js'
+import { MarkdownPreviewViewStateCache } from './MarkdownPreviewViewStateCache.js'
 import type { FileEditorInput } from './FileEditorInput.js'
 
 interface ISerializedMarkdownPreview {
@@ -114,6 +115,22 @@ export class MarkdownPreviewInput extends EditorInput {
 
   override serialize(): ISerializedMarkdownPreview {
     return { sourceResource: this._sourceUri.toJSON() }
+  }
+
+  override rename(
+    groupId: number,
+    retarget: (resource: URI) => URI | undefined,
+  ): EditorInput | undefined {
+    const nextSource = retarget(this._sourceUri)
+    if (!nextSource) return undefined
+
+    const movedSource = this._sourceInput?.rename(groupId, retarget)
+    const preview = movedSource
+      ? new MarkdownPreviewInput(movedSource as FileEditorInput)
+      : new MarkdownPreviewInput(nextSource)
+    preview.adoptSource()
+    MarkdownPreviewViewStateCache.move(this._sourceUri.toString(), nextSource.toString())
+    return preview
   }
 
   static deserialize(data: unknown): MarkdownPreviewInput | null {

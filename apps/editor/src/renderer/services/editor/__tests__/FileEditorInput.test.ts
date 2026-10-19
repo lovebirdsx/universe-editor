@@ -13,6 +13,7 @@ import {
   type IFileService as IFileServiceType,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../FileEditorInput.js'
+import { EditorViewStateCache } from '../EditorViewStateCache.js'
 import { MonacoModelRegistry } from '../../../workbench/editor/monaco/MonacoModelRegistry.js'
 
 function makeFs(initial: Record<string, string> = {}): IFileServiceType & {
@@ -81,6 +82,7 @@ describe('FileEditorInput', () => {
 
   afterEach(() => {
     MonacoModelRegistry._resetForTests()
+    EditorViewStateCache._resetForTests()
   })
 
   it('typeId is "file" and resource is the constructor URI', () => {
@@ -225,6 +227,119 @@ describe('FileEditorInput', () => {
     expect(ok).toBe(true)
     expect(fs.writes).toEqual([])
     input.dispose()
+  })
+
+  it('save writes pending dirty content when the retargeted input has no model yet', async () => {
+    const next = URI.file('/tmp/renamed-dirty.json')
+    const pending = inst.invokeFunction((accessor) =>
+      FileEditorInput.deserialize(
+        { resource: next.toJSON(), dirtyContent: '{"renamed":1}' },
+        accessor,
+      ),
+    )!
+    pending.setDirty(true)
+
+    await expect(pending.save()).resolves.toBe(true)
+
+    expect(fs.writes).toEqual([{ path: next.toString(), content: '{"renamed":1}' }])
+    expect(pending.isDirty).toBe(false)
+    expect(pending.serialize()).not.toHaveProperty('dirtyContent')
+    pending.dispose()
+  })
+
+  describe('rename', () => {
+    it('rebuilds on the new URI and migrates the cached view state', () => {
+      const input = inst.createInstance(FileEditorInput, uri)
+      const next = URI.file('/tmp/renamed.json')
+      EditorViewStateCache.save(7, uri.toString(), { cursorState: [] })
+      EditorViewStateCache.saveCursor(7, uri.toString(), { lineNumber: 4, column: 2 })
+
+      const moved = input.rename(7, (resource) =>
+        resource.toString() === uri.toString() ? next : undefined,
+      ) as FileEditorInput
+
+      expect(moved).toBeInstanceOf(FileEditorInput)
+      expect(moved).not.toBe(input)
+      expect(moved.resource.toString()).toBe(next.toString())
+      expect(moved.getName()).toBe('renamed.json')
+      expect(EditorViewStateCache.load(7, next.toString())).toEqual({ cursorState: [] })
+      expect(EditorViewStateCache.loadCursor(7, next.toString())).toEqual({
+        lineNumber: 4,
+        column: 2,
+      })
+      expect(EditorViewStateCache.load(7, uri.toString())).toBeUndefined()
+      moved.dispose()
+      input.dispose()
+    })
+
+    it('returns undefined when the rename does not touch the resource', () => {
+      const input = inst.createInstance(FileEditorInput, uri)
+      expect(input.rename(1, () => undefined)).toBeUndefined()
+      input.dispose()
+    })
+
+    it('carries the dirty buffer into the replacement', async () => {
+      const input = inst.createInstance(FileEditorInput, uri)
+      const model = await input.resolveModel()
+      model.setValue('{"a":2}')
+      input.setDirty(true)
+      const next = URI.file('/tmp/dirty-renamed.json')
+      fs.store[next.toString()] = '{"a":1}'
+
+      const moved = input.rename(1, () => next) as FileEditorInput
+
+      expect(moved.isDirty).toBe(true)
+      await expect(moved.resolve()).resolves.toBe('{"a":2}')
+      moved.dispose()
+      MonacoModelRegistry.release(uri)
+      input.dispose()
+    })
+
+    it('carries hot-exit pending content when the input was never resolved', async () => {
+      const pending = inst.invokeFunction((accessor) =>
+        FileEditorInput.deserialize(
+          { resource: uri.toJSON(), dirtyContent: '{"hot":1}' },
+          accessor,
+        ),
+      )!
+      const next = URI.file('/tmp/restored-renamed.json')
+      fs.store[next.toString()] = '{"clean":1}'
+
+      const moved = pending.rename(1, () => next) as FileEditorInput
+
+      expect(moved.serialize()).toMatchObject({ dirtyContent: '{"hot":1}' })
+      await expect(moved.resolve()).resolves.toBe('{"hot":1}')
+      moved.dispose()
+      pending.dispose()
+    })
+
+    it('re-derives the language from the new extension', () => {
+      const input = inst.createInstance(FileEditorInput, uri)
+      const moved = input.rename(1, () => URI.file('/tmp/renamed.md')) as FileEditorInput
+      expect(moved.language).toBe('markdown')
+      moved.dispose()
+      input.dispose()
+    })
+
+    it('saves the carried dirty buffer to the new path before the replacement mounts', async () => {
+      const input = inst.createInstance(FileEditorInput, uri)
+      const model = await input.resolveModel()
+      model.setValue('{"renamed":1}')
+      input.setDirty(true)
+      const next = URI.file('/tmp/background-renamed.json')
+      fs.store[next.toString()] = '{"a":1}'
+
+      const moved = input.rename(1, () => next) as FileEditorInput
+      // The old model dies with the replaced input; the new tab is still in the
+      // background and has not resolved/acquired its own model yet.
+      MonacoModelRegistry.release(uri)
+      input.dispose()
+
+      await expect(moved.save()).resolves.toBe(true)
+      expect(fs.writes).toContainEqual({ path: next.toString(), content: '{"renamed":1}' })
+      expect(moved.isDirty).toBe(false)
+      moved.dispose()
+    })
   })
 
   describe('language binding', () => {

@@ -63,6 +63,7 @@ import { DidSaveNotificationContribution } from '../DidSaveNotificationContribut
 import { MarkdownPasteContribution } from '../MarkdownPasteContribution.js'
 import { MarkdownDropContribution } from '../MarkdownDropContribution.js'
 import { MarkdownUpdateLinksOnRenameContribution } from '../MarkdownUpdateLinksOnRenameContribution.js'
+import { RetargetEditorsOnRenameContribution } from '../RetargetEditorsOnRenameContribution.js'
 import { EditorOpenerContribution } from '../EditorOpenerContribution.js'
 import { PeekNavigationContribution } from '../PeekNavigationContribution.js'
 import {
@@ -570,6 +571,13 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.markdownUpdateLinksOnRename',
   MarkdownUpdateLinksOnRenameContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Keep open editor tabs pointing at the new path after an Explorer rename/move.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.retargetEditorsOnRename',
+  RetargetEditorsOnRenameContribution,
   WorkbenchPhase.AfterRestore,
 )
 

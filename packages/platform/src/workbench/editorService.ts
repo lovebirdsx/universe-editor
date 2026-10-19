@@ -129,6 +129,18 @@ export abstract class EditorInput extends Disposable implements IEditorInput {
   updateFrom?(other: EditorInput): void
 
   /**
+   * Return the input that should take this one's slot after its backing
+   * resource(s) were renamed or moved in the file system. `retarget` maps an
+   * old URI to its new URI, or returns undefined when the rename does not
+   * touch it; return undefined when this input is unaffected. Implementations
+   * move their own cached view state using `groupId`.
+   *
+   * Callers invoke this for every group entry before applying any replacement,
+   * so an input shared by several groups can still read its live model.
+   */
+  rename?(groupId: number, retarget: (resource: URI) => URI | undefined): EditorInput | undefined
+
+  /**
    * Equality by stable identity. Two inputs match when their `id`s are equal.
    * `id` defaults to `resource.toString()`, so file-backed inputs still match by
    * URI — but an input that overrides `id` (e.g. a preview or an image viewer

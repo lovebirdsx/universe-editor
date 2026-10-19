@@ -71,6 +71,26 @@ class MarkdownPreviewViewStateCacheImpl {
     this._revealAnchors.delete(key)
   }
 
+  /** Move every cached entry to a new source URI (file renamed/moved). */
+  move(fromKey: string, toKey: string): void {
+    if (fromKey === toKey) return
+    const state = this._map.get(fromKey)
+    if (state !== undefined) {
+      this._map.delete(fromKey)
+      this._map.set(toKey, state)
+    }
+    const line = this._revealLines.get(fromKey)
+    if (line !== undefined) {
+      this._revealLines.delete(fromKey)
+      this._revealLines.set(toKey, line)
+    }
+    const anchor = this._revealAnchors.get(fromKey)
+    if (anchor !== undefined) {
+      this._revealAnchors.delete(fromKey)
+      this._revealAnchors.set(toKey, anchor)
+    }
+  }
+
   clear(key: string): void {
     this._map.delete(key)
     this._revealLines.delete(key)

@@ -50,6 +50,7 @@ import { processDirectoryEntries, type IExplorerEntry } from './explorerEntries.
 import { IExcludeService } from '../exclude/ExcludeService.js'
 import { IFocusScopeService } from '../focus/FocusScopeService.js'
 import { basenameOf, incrementFileName, targetInDirectory } from './explorerFileOperations.js'
+import { beginRenameIntent } from './renameIntent.js'
 import { IFileClipboardService } from '../../../shared/ipc/fileClipboardService.js'
 import { pushPerfPhaseSample } from '../performance/perfPhases.js'
 
@@ -583,8 +584,18 @@ export class ExplorerTreeService extends Disposable {
     const parent = parentOf(source)
     if (!parent) throw new Error('Cannot rename the workspace root.')
     const target = URI.joinPath(parent, newName)
-    const isDirectory = this.isDirectory(source)
+    const intent = beginRenameIntent(source)
     try {
+      // The tree only knows about materialized nodes; a rename can be invoked
+      // on one that was never expanded, where `isDirectory` is unreliable.
+      let isDirectory = this.isDirectory(source)
+      if (!isDirectory) {
+        try {
+          isDirectory = (await this._fileService.stat(source)).isDirectory
+        } catch {
+          // Stat is best-effort: the rename below reports the real failure.
+        }
+      }
       await this._fileService.rename(source, target, { overwrite: false })
       this._deleteNodeSubtree(source)
       if (this.isCut(source)) this.clearClipboard()
@@ -597,6 +608,8 @@ export class ExplorerTreeService extends Disposable {
     } catch (err) {
       this._logger.error(`rename failed ${source.toString()} -> ${target.toString()}`, err)
       throw err
+    } finally {
+      intent.dispose()
     }
   }
 
@@ -734,6 +747,8 @@ export class ExplorerTreeService extends Disposable {
     const clearsCutState = sources.some((source) => this.isCut(source.resource))
     const targets: URI[] = []
     const renames: IFileRenameOperation[] = []
+    const intents = sources.map((source) => beginRenameIntent(source.resource))
+    let published = false
     try {
       for (const source of sources) {
         this._assertCanPlace(source, destinationDir, 'move')
@@ -753,11 +768,19 @@ export class ExplorerTreeService extends Disposable {
         `move resources=${sources.length} destination=${destinationDir.toString()} overwrite=${overwrite}`,
       )
       this._selectOperationTargets(targets)
-      if (renames.length > 0) this._onDidRunFileOperation.fire(renames)
+      if (renames.length > 0) {
+        this._onDidRunFileOperation.fire(renames)
+        published = true
+      }
       return targets
     } catch (err) {
       this._logger.error(`move failed destination=${destinationDir.toString()}`, err)
       throw err
+    } finally {
+      // Already-moved files stay moved when a later source fails; retarget
+      // their tabs before the rename intents expire.
+      if (!published && renames.length > 0) this._onDidRunFileOperation.fire(renames)
+      for (const intent of intents) intent.dispose()
     }
   }
 

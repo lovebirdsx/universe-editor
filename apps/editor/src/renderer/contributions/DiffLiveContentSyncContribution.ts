@@ -72,7 +72,7 @@ export class DiffLiveContentSyncContribution extends Disposable implements IWork
     if (this._groupSubs.has(group.id)) return
     const d = this._register(
       group.onDidChangeModel((e) => {
-        if (e.kind === 'open' || e.kind === 'close') this._reconcile()
+        if (e.kind === 'open' || e.kind === 'close' || e.kind === 'replace') this._reconcile()
       }),
     )
     this._groupSubs.set(group.id, d)

@@ -100,6 +100,21 @@ export class HtmlPreviewInput extends EditorInput {
     return { sourceResource: this._sourceUri.toJSON() }
   }
 
+  override rename(
+    groupId: number,
+    retarget: (resource: URI) => URI | undefined,
+  ): EditorInput | undefined {
+    const nextSource = retarget(this._sourceUri)
+    if (!nextSource) return undefined
+
+    const movedSource = this._sourceInput?.rename(groupId, retarget)
+    const preview = movedSource
+      ? new HtmlPreviewInput(movedSource as FileEditorInput)
+      : new HtmlPreviewInput(nextSource)
+    preview.adoptSource()
+    return preview
+  }
+
   static deserialize(data: unknown): HtmlPreviewInput | null {
     const d = data as ISerializedHtmlPreview | null
     if (!d || !d.sourceResource) return null
