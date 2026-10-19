@@ -241,6 +241,8 @@ import {
   ViewPerforceGraphAction,
   PerforceGraphFocusSearchAction,
   PerforceGraphRefreshAction,
+  PerforceGraphQuerySyncPointAction,
+  PerforceGraphRevealSyncPointAction,
   OpenPerforceGraphFromExtensionAction,
   ViewPerforceFileHistoryAction,
 } from './perforceGraphActions.js'
@@ -712,6 +714,8 @@ registerAction2(GitGraphCommitBatchAction)
 registerAction2(ViewPerforceGraphAction)
 registerAction2(PerforceGraphFocusSearchAction)
 registerAction2(PerforceGraphRefreshAction)
+registerAction2(PerforceGraphQuerySyncPointAction)
+registerAction2(PerforceGraphRevealSyncPointAction)
 registerAction2(ViewPerforceFileHistoryAction)
 // Perforce Sync History
 registerAction2(ViewPerforceSyncHistoryAction)

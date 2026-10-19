@@ -1021,6 +1021,41 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
     }
   }, [revealCommit, view])
 
+  // Toolbar, context menu and the Action2 commands share these two entry points.
+  const querySyncPoint = useCallback((): void => {
+    refreshSyncPoint('query')
+  }, [refreshSyncPoint])
+
+  const revealSyncPoint = useCallback((): void => {
+    if (syncPoint === null) {
+      // Never start the expensive probe from a jump: the user asked to move,
+      // not to spend a whole-scope p4 round trip.
+      notification?.notify({
+        severity: Severity.Info,
+        message: localize(
+          'perforceGraph.syncPoint.revealUnavailable',
+          'There is no sync point to jump to. Run “Perforce Graph: Query Sync Point” first.',
+        ),
+      })
+      return
+    }
+    revealCommit(syncPoint.id, { onMiss: 'below' })
+  }, [notification, revealCommit, syncPoint])
+
+  useEffect(() => {
+    view.querySyncPoint = querySyncPoint
+    return () => {
+      view.querySyncPoint = null
+    }
+  }, [querySyncPoint, view])
+
+  useEffect(() => {
+    view.revealSyncPoint = revealSyncPoint
+    return () => {
+      view.revealSyncPoint = null
+    }
+  }, [revealSyncPoint, view])
+
   // Reveal requests land in the observable pendingReveal (the bridge action
   // writes it, possibly before this instance mounted); consume it reactively,
   // once the first page is in.
@@ -1434,7 +1469,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
           id: 'querySyncPoint',
           icon: 'sync',
           label: localize('perforceGraph.syncPoint.query', 'Query Sync Point'),
-          run: () => refreshSyncPoint('query'),
+          run: querySyncPoint,
         },
         ...(syncPoint
           ? [
@@ -1445,7 +1480,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
                 label: localize('perforceGraph.syncPoint.reveal', 'Go to Sync Point'),
                 // Same entry point as the toolbar's `#CL`: the point itself when
                 // this history has it, the newest change it covers otherwise.
-                run: () => revealCommit(syncPoint.id, { onMiss: 'below' }),
+                run: revealSyncPoint,
               },
             ]
           : []),
@@ -1467,9 +1502,9 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
       result,
       setSyncDialog,
       getThenRevalidate,
-      refreshSyncPoint,
+      querySyncPoint,
       syncPoint,
-      revealCommit,
+      revealSyncPoint,
     ],
   )
 
@@ -1693,7 +1728,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
                 className={styles['syncPointLink']}
                 data-testid="perforceGraph-syncPoint"
                 data-tooltip={syncPointTooltip(syncPoint)}
-                onClick={() => revealCommit(syncPoint.id, { onMiss: 'below' })}
+                onClick={revealSyncPoint}
               >
                 #{syncPoint.id}
               </button>
@@ -1720,7 +1755,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
                         'Where this workspace has been pulled to is not known. Click to ask Perforce — on a wide scope this can take a while.',
                       )
                 }
-                onClick={() => refreshSyncPoint('query')}
+                onClick={querySyncPoint}
               >
                 {localize('perforceGraph.syncedToUnknown', '#? (click to query)')}
               </button>
@@ -1733,7 +1768,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
             <button
               type="button"
               className={styles['syncQueryBtn']}
-              onClick={() => refreshSyncPoint('query')}
+              onClick={querySyncPoint}
               data-tooltip={
                 syncQuery && !syncQuery.done
                   ? localize('perforceGraph.syncPoint.querying', 'Querying the sync point…')

@@ -35,6 +35,7 @@ import { IScmService } from '../../../services/extensions/ScmService.js'
 import {
   perforceGraphViewState,
   _resetForTests,
+  getPerforceGraphViewState,
 } from '../../../services/perforceGraph/perforceGraphViewState.js'
 import { PerforceGraphEditorInput } from '../../../services/editor/PerforceGraphEditorInput.js'
 import {
@@ -1109,6 +1110,43 @@ describe('PerforceGraphEditor sync point', () => {
     expect(perforceGraphViewState.selection).toEqual(['4519'])
   })
 
+  it('exposes the toolbar query as a command callback', async () => {
+    const { commandService } = renderEditor(null, undefined, '4521')
+    await flush()
+    expect(syncPointText()).toBe(UNKNOWN_SYNC_POINT)
+
+    perforceGraphViewState.querySyncPoint?.()
+    await flush()
+
+    expect(commandService.executeCommand).toHaveBeenCalledWith(
+      PerforceGraphCommands.getHaveChange,
+      expect.objectContaining({ force: true }),
+    )
+    expect(syncLine()).toContain('Synced to #4521')
+  })
+
+  it('exposes the toolbar jump as a command callback', async () => {
+    renderEditor(ledgerPoint('4519'))
+    await flush()
+    expect(perforceGraphViewState.selection).toEqual(['4521'])
+
+    perforceGraphViewState.revealSyncPoint?.()
+    await flush()
+
+    expect(perforceGraphViewState.selection).toEqual(['4519'])
+  })
+
+  it('registers the command callbacks on the scoped tab bucket', async () => {
+    const input = new PerforceGraphEditorInput(normalizeGraphScopeSelection(SCOPED_PATHS))
+    renderEditor(ledgerPoint('4519'), input)
+    await flush()
+
+    expect(typeof getPerforceGraphViewState(input.id).querySyncPoint).toBe('function')
+    expect(typeof getPerforceGraphViewState(input.id).revealSyncPoint).toBe('function')
+    expect(perforceGraphViewState.querySyncPoint).toBeNull()
+    expect(perforceGraphViewState.revealSyncPoint).toBeNull()
+  })
+
   it('says where a recorded sync point came from, and what it cannot know', async () => {
     renderEditor(ledgerPoint('4519'))
     await flush()
@@ -1263,6 +1301,24 @@ describe('PerforceGraphEditor sync point races', () => {
     )
     return row?.querySelector('[data-tooltip]')?.getAttribute('data-tooltip') ?? ''
   }
+
+  it('tells the user to query first when a jump has no sync point', async () => {
+    const { ledger, queries, notify } = renderWithDeferredSyncPoints()
+    await flush()
+    ledger[0]!(null)
+    await flush()
+    expect(perforceGraphViewState.syncPoint).toBeNull()
+    const before = perforceGraphViewState.selection
+
+    perforceGraphViewState.revealSyncPoint?.()
+    await flush()
+
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining('Query Sync Point') }),
+    )
+    expect(queries.length).toBe(0)
+    expect(perforceGraphViewState.selection).toEqual(before)
+  })
 
   it('drops a ledger answer whose scope changed under it', async () => {
     const { container, ledger } = renderWithDeferredSyncPoints()

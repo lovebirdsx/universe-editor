@@ -223,3 +223,43 @@ export class PerforceGraphRefreshAction extends Action2 {
     getPerforceGraphViewState(active.id).refresh?.()
   }
 }
+
+export class PerforceGraphQuerySyncPointAction extends Action2 {
+  static readonly ID = 'perforce-graph.querySyncPoint'
+
+  constructor() {
+    super({
+      id: PerforceGraphQuerySyncPointAction.ID,
+      title: localize2('action.perforceGraph.querySyncPoint', 'Query Sync Point'),
+      category: CATEGORY,
+      precondition: "activeEditorTypeId == 'perforceGraph'",
+      f1: true,
+    })
+  }
+
+  override run(accessor: ServicesAccessor): void {
+    const active = accessor.get(IEditorService).activeEditor.get()
+    if (!(active instanceof PerforceGraphEditorInput)) return
+    getPerforceGraphViewState(active.id).querySyncPoint?.()
+  }
+}
+
+export class PerforceGraphRevealSyncPointAction extends Action2 {
+  static readonly ID = 'perforce-graph.revealSyncPoint'
+
+  constructor() {
+    super({
+      id: PerforceGraphRevealSyncPointAction.ID,
+      title: localize2('action.perforceGraph.revealSyncPoint', 'Go to Sync Point'),
+      category: CATEGORY,
+      precondition: "activeEditorTypeId == 'perforceGraph'",
+      f1: true,
+    })
+  }
+
+  override run(accessor: ServicesAccessor): void {
+    const active = accessor.get(IEditorService).activeEditor.get()
+    if (!(active instanceof PerforceGraphEditorInput)) return
+    getPerforceGraphViewState(active.id).revealSyncPoint?.()
+  }
+}

@@ -677,7 +677,9 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.merge.openMergeEditor': '打开合并编辑器',
   'action.perforceGraph.focusSearch': '聚焦搜索',
   'action.perforceGraph.open': '打开 Perforce Graph',
+  'action.perforceGraph.querySyncPoint': '查询同步点',
   'action.perforceGraph.refresh': '刷新',
+  'action.perforceGraph.revealSyncPoint': '跳转到同步点',
   'action.perforceGraph.view': '查看 Perforce Graph',
   'action.perforceGraph.viewFileHistory': '查看文件历史',
   'action.reopenWith': '重新打开方式…',
@@ -1440,6 +1442,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'perforceGraph.syncPoint.failed':
     '这次查询没有拿到答案（Perforce 失败或超时），同步点保持不变；详情见 Perforce 输出面板。',
   'perforceGraph.syncPoint.reveal': '跳转到同步点',
+  'perforceGraph.syncPoint.revealUnavailable':
+    '没有可跳转的同步点。请先运行「Perforce Graph: 查询同步点」向 Perforce 查询。',
   'perforceGraph.syncPoint.landedBelow':
     '同步点 #{point} 没有修改这个范围，所以这里没有它那一行；已跳到 #{row}——本范围内被这次同步覆盖到的最新变更。',
   'perforceGraph.syncPoint.notInScope':

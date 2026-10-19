@@ -40,6 +40,12 @@ export interface PerforceGraphViewState {
   /** Callback registered by the mounted editor to select + scroll to a change,
    *  paging in more history until the change is loaded. */
   revealCommit: ((id: string) => void) | null
+  /** Callback registered by the mounted editor to re-ask Perforce for the sync
+   *  point (toolbar icon / context menu / command). */
+  querySyncPoint: (() => void) | null
+  /** Callback registered by the mounted editor to select + scroll to the sync
+   *  point row. */
+  revealSyncPoint: (() => void) | null
   /** Change to reveal, consumed reactively by the mounted editor. Observable
    *  for the same reason as gitGraphViewState.pendingReveal: a reveal issued
    *  alongside the tab switch must reach the newly mounted instance. */
@@ -90,6 +96,8 @@ function createPerforceGraphViewState(): PerforceGraphViewState {
     focusRows: null,
     refresh: null,
     revealCommit: null,
+    querySyncPoint: null,
+    revealSyncPoint: null,
     pendingReveal: observableValue<string | null>('perforceGraph.pendingReveal', null),
     result: null,
     syncPoint: null,
