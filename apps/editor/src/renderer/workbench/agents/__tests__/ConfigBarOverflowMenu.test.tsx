@@ -489,6 +489,29 @@ describe('ConfigBarOverflowMenu — packing and panel', () => {
     expect(document.activeElement).toBe(opener)
   })
 
+  it('confirms the sub-agent current value with Enter and ends the panel', async () => {
+    // 130px keeps the model (100 + 26 button = 126) inline and folds the
+    // sub-agent entry — and everything after it — into the "…" panel.
+    setupNarrowBar(130)
+    await fireResize()
+    const opener = makeOpener()
+    openOverflowMenu()
+    const panel = screen.getByTestId('acp-config-overflow-panel')
+    const subagentRow = entryEl(panel, SUBAGENT_ENTRY_KEY)
+    fireEvent.click(subagentRow)
+    expect(subagentRow.getAttribute('aria-expanded')).toBe('true')
+
+    fireEvent.keyDown(subagentRow.parentElement!.querySelector<HTMLElement>('[role="listbox"]')!, {
+      key: 'Enter',
+    })
+    await settleHandback()
+
+    // Confirming the value in effect (the inherit row) is a committed pick:
+    // the whole panel ends and the caret goes back where it came from.
+    expect(screen.queryByTestId('acp-config-overflow-panel')).toBeNull()
+    expect(document.activeElement).toBe(opener)
+  })
+
   it('falls back to the ⋯ button when the opener is gone by commit time', async () => {
     setupNarrowBar()
     await fireResize()

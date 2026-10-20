@@ -10,7 +10,9 @@
  *
  *  The pick travels as CLAUDE_CODE_SUBAGENT_MODEL spawn env, so it only reaches
  *  a freshly spawned process; after the user changes it, a hint row appears and
- *  offers an inline restart of the agent process.
+ *  offers an inline restart of the agent process. Confirming the value already
+ *  in effect has nothing to write, so it dismisses the host instead of leaving
+ *  the surface open with no visible feedback.
  *
  *  Rows are the effective env ids straight from settings.json — the same
  *  strings the spawned process receives — so the highlighted row cannot
@@ -56,7 +58,8 @@ export function SubagentModelPicker({
   open: boolean
   anchor: ConfigBarAnchor | null
   onRequestOpen: (trigger: HTMLElement) => void
-  onClose: () => void
+  /** `restoreFocus: true` (a committed pick) hands the caret back where it came from. */
+  onClose: (restoreFocus?: boolean) => void
   onEscape: () => boolean
   onAltDigit: (digit: number) => void
 }) {
@@ -96,7 +99,11 @@ export function SubagentModelPicker({
             } as HTMLAttributes<HTMLDivElement>
           }
         >
-          <SubagentModelPanel session={session} onAltDigit={onAltDigit} />
+          <SubagentModelPanel
+            session={session}
+            onAltDigit={onAltDigit}
+            onConfirmCurrent={() => onClose(true)}
+          />
         </AnchoredSurface>
       ) : null}
     </div>
@@ -110,6 +117,7 @@ export function SubagentModelPanel({
   onExitUp,
   onExitDown,
   onExitLeft,
+  onConfirmCurrent,
 }: {
   session: IAcpSession
   onAltDigit?: (digit: number) => void
@@ -117,6 +125,8 @@ export function SubagentModelPanel({
   onExitDown?: () => void
   /** True = collapsed the hosting body; false leaves ← to whatever is underneath. */
   onExitLeft?: () => boolean
+  /** Activated the value already in effect (nothing to write): let the host dismiss. */
+  onConfirmCurrent?: () => void
 }) {
   const { activeAuth, subagentModelEnv, setSubagentModel } = useClaudeConfig()
   const { providers } = useProviderRegistry()
@@ -161,7 +171,10 @@ export function SubagentModelPanel({
   )
 
   const pick = (value: string): void => {
-    if (value === current) return
+    if (value === current) {
+      onConfirmCurrent?.()
+      return
+    }
     // A superseded write is nobody's awaited promise anymore, so swallow its
     // rejection here or it surfaces as an unhandled rejection; the write that
     // wins is the one `restart` reports on.

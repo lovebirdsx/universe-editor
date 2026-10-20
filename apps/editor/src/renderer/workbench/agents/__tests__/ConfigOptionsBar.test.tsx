@@ -783,6 +783,24 @@ describe('ConfigOptionsBar — entry activation (Alt+<n>)', () => {
     expect(screen.getByTestId('acp-subagent-panel')).toBeTruthy()
   })
 
+  it('confirms the sub-agent current value with Enter, closes and hands focus back', async () => {
+    // Alt+2 out of the prompt with the default "follow main model" value: Enter
+    // has nothing to write, but it must still dismiss the surface instead of
+    // leaving the user stuck in an unchanged picker.
+    const session = makeSession([MODEL_OPTION], { agentId: 'claude-code' })
+    const handle = renderWithHandle(session)
+    const opener = makeOpener()
+
+    expect(activate(handle, 1)).toBe(true)
+    const panel = screen.getByTestId('acp-subagent-panel')
+    fireEvent.keyDown(listOf(panel), { key: 'Enter' })
+    await settleHandback()
+
+    expect(screen.queryByTestId('acp-subagent-panel')).toBeNull()
+    expect(document.activeElement).toBe(opener)
+    expect(session.setConfigOption).not.toHaveBeenCalled()
+  })
+
   it('opens a folded-away entry inside the "…" panel with its row already expanded', async () => {
     globalThis.ResizeObserver = FakeResizeObserver as unknown as typeof ResizeObserver
     // 230px keeps model + subagent inline (200 <= 204) and folds mode away.

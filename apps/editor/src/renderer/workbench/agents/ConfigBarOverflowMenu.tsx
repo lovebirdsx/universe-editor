@@ -312,8 +312,9 @@ function OverflowRow({
 }) {
   // The MCP row gates itself on the service and the pool, so its hooks cannot
   // live here — each kind gets its own component rather than a conditional hook.
-  // Only the option row commits, so only it is handed `onCommitted`: MCP toggles
-  // in place and the sub-agent row restarts the session instead.
+  // The option row commits on every pick; the sub-agent row only when the value
+  // in effect is confirmed (a changed pick must stay open for its restart hint).
+  // MCP toggles in place and never commits.
   if (entry.kind === 'mcp') {
     return (
       <McpOverflowRow
@@ -336,6 +337,7 @@ function OverflowRow({
         active={active}
         expanded={expanded}
         onToggle={onToggle}
+        onCommitted={onCommitted}
         onAltDigit={onAltDigit}
         onExitUp={onExitUp}
         onExitDown={onExitDown}
@@ -430,6 +432,7 @@ function SubagentOverflowRow({
   active,
   expanded,
   onToggle,
+  onCommitted,
   onAltDigit,
   onExitUp,
   onExitDown,
@@ -439,6 +442,8 @@ function SubagentOverflowRow({
   active: boolean
   expanded: boolean
   onToggle: () => void
+  /** Confirming the current value ends the panel; a changed pick keeps it open. */
+  onCommitted: () => void
 }) {
   const { subagentModelEnv } = useClaudeConfig()
   return (
@@ -454,6 +459,7 @@ function SubagentOverflowRow({
           onExitUp={onExitUp}
           onExitDown={onExitDown}
           onExitLeft={onExitLeft}
+          onConfirmCurrent={onCommitted}
         />
       }
       active={active}

@@ -351,7 +351,32 @@ describe('SubagentModelPicker', () => {
 
     expect(screen.queryByTestId('acp-subagent-restart')).toBeNull()
     expect(claude.patches).toHaveLength(0)
+    // Confirming the value in effect is a dismissal, not a no-op: the picker
+    // ends exactly like it does for every config option.
+    expect(screen.queryByTestId('acp-subagent-panel')).toBeNull()
   })
+
+  it.each(['Enter', ' '])(
+    'dismisses the picker from the keyboard (%s) when the current value is confirmed',
+    async (key) => {
+      const { claude } = setup({
+        activeAuth: { kind: 'provider', providerId: 'gw' },
+        subagentModel: 'claude-sonnet-4-6',
+      })
+      openPicker()
+      // Wait until the async settings load has re-seeded the cursor onto the
+      // value in effect; before that it still sits on the inherit row.
+      await waitFor(() =>
+        expect(option('claude-sonnet-4-6').getAttribute('aria-selected')).toBe('true'),
+      )
+
+      const panel = screen.getByTestId('acp-subagent-panel')
+      fireEvent.keyDown(within(panel).getByRole('listbox'), { key })
+
+      expect(screen.queryByTestId('acp-subagent-panel')).toBeNull()
+      expect(claude.patches).toHaveLength(0)
+    },
+  )
 
   it('requests the process restart only after the pick write has resolved', async () => {
     const restart = vi.fn()
