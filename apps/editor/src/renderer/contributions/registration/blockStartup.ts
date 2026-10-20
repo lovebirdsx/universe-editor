@@ -31,6 +31,7 @@ import { InlineCompletionConfigurationContribution } from '../InlineCompletionCo
 import { MarkdownConfigurationContribution } from '../MarkdownConfigurationContribution.js'
 import { ExtensionsConfigurationContribution } from '../ExtensionsConfigurationContribution.js'
 import { WindowZoomConfigurationContribution } from '../WindowZoomConfigurationContribution.js'
+import { EditorWindowConfigurationContribution } from '../EditorWindowConfigurationContribution.js'
 import { ScmConfigurationContribution } from '../ScmConfigurationContribution.js'
 import { BuiltInEditorBindingsContribution } from '../BuiltInEditorBindingsContribution.js'
 import { ExplorerClipboardContextContribution } from '../ExplorerClipboardContextContribution.js'
@@ -257,6 +258,14 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.windowZoomConfiguration',
   WindowZoomConfigurationContribution,
+  WorkbenchPhase.BlockStartup,
+)
+
+// workbench.editor.* settings (drag-to-open-window). BlockStartup so the
+// Settings editor sees the schema and tab drag handlers read the default.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.editorWindowConfiguration',
+  EditorWindowConfigurationContribution,
   WorkbenchPhase.BlockStartup,
 )
 

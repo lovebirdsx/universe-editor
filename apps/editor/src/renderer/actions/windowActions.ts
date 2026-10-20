@@ -25,6 +25,21 @@ import { E2E_PROBE_ENABLED_KEY } from '../../shared/e2e/contract.js'
 import { IRendererDisposableLeakService } from '../services/disposableLeak/DisposableLeakService.js'
 import { currentRemoteAuthority } from '../services/remote/windowRemoteAuthority.js'
 import { REMOTE_MARKER, workspaceFullLabel } from '../services/workspace/workspaceLabel.js'
+import { IWorkbenchWindowService } from '../services/windows/workbenchWindowService.js'
+import {
+  IAuxiliaryEditorWindowService,
+  type IAuxiliaryEditorWindow,
+} from '../services/windows/auxiliaryEditorWindowService.js'
+
+/**
+ * The auxiliary owner of the focused window, if the command was invoked from
+ * one. Window commands (close) must act there instead of the main workspace.
+ */
+function activeAuxiliaryWindow(accessor: ServicesAccessor): IAuxiliaryEditorWindow | undefined {
+  const active = accessor.get(IWorkbenchWindowService).activeWindow
+  if (active.isMain || active.token === undefined) return undefined
+  return accessor.get(IAuxiliaryEditorWindowService).getWindowForToken(active.token)
+}
 
 export class NewWindowAction extends Action2 {
   static readonly ID = 'workbench.action.newWindow'
@@ -61,6 +76,13 @@ export class CloseWindowAction extends Action2 {
   }
 
   override run(accessor: ServicesAccessor): void {
+    const auxiliary = activeAuxiliaryWindow(accessor)
+    if (auxiliary) {
+      // Close the auxiliary window (protected editors migrate to the main
+      // window); never the main workspace that happens to be behind it.
+      void accessor.get(IAuxiliaryEditorWindowService).closeWindow(auxiliary)
+      return
+    }
     void accessor.get(IHostService).closeWindow()
   }
 }
@@ -173,6 +195,10 @@ export class ReloadWindowAction extends Action2 {
     // during invokeFunction's call, not across awaits.
     const hostService = accessor.get(IHostService)
     const lifecycleService = accessor.get(ILifecycleService)
+    // Every window shares one renderer, so "reload window" necessarily reloads
+    // the application: auxiliary windows are torn down by the restart and
+    // recreated from the persisted layout by the restore pass. Closing only the
+    // auxiliary window here would leave its shared runtime half-alive.
     // Label the leak report that the beforeunload handler will persist. The
     // detection itself runs there (main.tsx), which unmounts React *before*
     // snapshotting so active useEffect subscriptions aren't counted as false

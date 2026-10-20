@@ -31,6 +31,7 @@ interface Props {
   readonly sticky: boolean
   /** Raised with the ContextMenu key — the menu opens on its first entry. */
   readonly keyboard: boolean
+  readonly targetDocument?: Document | undefined
   readonly commandService: ICommandService
   readonly contextKeyService: IContextKeyService
   readonly onClose: () => void
@@ -45,6 +46,7 @@ export function EditorTabContextMenu({
   resource,
   sticky,
   keyboard,
+  targetDocument,
   commandService,
   contextKeyService,
   onClose,
@@ -73,6 +75,7 @@ export function EditorTabContextMenu({
       contextKeyService={scopedContext}
       renderIcon={renderMenuIcon}
       autoFocusFirst={keyboard}
+      {...(targetDocument ? { targetDocument } : {})}
       {...(memory ? { memory } : {})}
       // Text / diff / settings tabs expose different command sets; bucket the
       // memory per type so a diff tab doesn't restore onto a text-only entry.

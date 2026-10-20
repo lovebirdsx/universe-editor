@@ -87,6 +87,8 @@ export interface ContextMenuProps {
    * for the whole `menuId`.
    */
   contextTag?: string
+  /** Document the menu belongs to (an auxiliary workbench window). */
+  targetDocument?: Document | undefined
   onClose: () => void
 }
 
@@ -110,6 +112,7 @@ export function ContextMenu({
   autoFocusFirst = false,
   memory,
   contextTag,
+  targetDocument,
   onClose,
 }: ContextMenuProps) {
   const runCommand = useCallback(
@@ -220,7 +223,13 @@ export function ContextMenu({
   if (!hasRows) return null
 
   return (
-    <AnchoredSurface x={anchor.x} y={anchor.y} onClose={onClose} onEscape={onEscape}>
+    <AnchoredSurface
+      x={anchor.x}
+      y={anchor.y}
+      onClose={onClose}
+      onEscape={onEscape}
+      {...(targetDocument ? { targetDocument } : {})}
+    >
       <MenuRows
         uid={uid}
         rows={rows}

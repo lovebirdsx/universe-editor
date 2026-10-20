@@ -83,6 +83,20 @@ describe('EditorGroupModel — open', () => {
     expect(dup.isDisposed).toBe(true)
   })
 
+  it('preserves dirty state when a moved duplicate is migrated into the existing input', () => {
+    const model = new EditorGroupModel()
+    const existing = make('m')
+    const moved = make('m')
+    moved.setDirty(true)
+    model.openEditor(existing)
+    model.openEditor(moved)
+
+    expect(model.count).toBe(1)
+    expect(model.activeEditor).toBe(existing)
+    expect(existing.isDirty).toBe(true)
+    expect(moved.isDisposed).toBe(true)
+  })
+
   it('open with activate:false keeps the previous active', () => {
     const model = new EditorGroupModel()
     const a = make('a')

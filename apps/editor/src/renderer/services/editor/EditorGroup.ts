@@ -1,10 +1,9 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  EditorGroup — adapter that satisfies both IEditorGroup and IGridView for a
- *  single EditorGroupModel inside the grid. Kept separate from
- *  EditorGroupsService to break a circular dependency while still letting the
- *  group reach the active-group / activate APIs of its owning service via the
- *  IEditorGroupsService interface.
+ *  single EditorGroupModel inside a part's grid. Kept separate from
+ *  EditorGroupsService/EditorPart to break a circular dependency while still
+ *  letting the group reach the active-group / activate APIs of its owning part.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -13,7 +12,7 @@ import {
   EditorInput,
   GroupDirection,
   IEditorGroup,
-  IEditorGroupsService,
+  IEditorPart,
   IGridView,
   IOpenEditorOptions,
 } from '@universe-editor/platform'
@@ -26,7 +25,7 @@ export class EditorGroup implements IEditorGroup, IGridView {
 
   constructor(
     readonly model: EditorGroupModel,
-    private readonly _service: IEditorGroupsService,
+    readonly part: IEditorPart,
   ) {}
 
   get id(): number {
@@ -38,15 +37,15 @@ export class EditorGroup implements IEditorGroup, IGridView {
   }
 
   get isActive(): boolean {
-    return this._service.activeGroup === this
+    return this.part.isActive && this.part.activeGroup === this
   }
 
   get index(): number {
-    return this._service.groups.indexOf(this)
+    return this.part.groups.indexOf(this)
   }
 
   focus(): void {
-    this._service.activateGroup(this)
+    this.part.activateGroup(this)
   }
 
   // Delegated IEditorGroupModel surface ---------------------------------------

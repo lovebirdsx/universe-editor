@@ -5,7 +5,7 @@
  *  with transient status-bar feedback while a chord is pending.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useRef } from 'react'
+import { useLayoutEffect, useRef } from 'react'
 import {
   ICommandService,
   IContextKeyService,
@@ -124,7 +124,7 @@ function toDiagnostics(e: KeyboardEvent, builtKey: string): KeyEventDiagnostics 
   }
 }
 
-export function useGlobalKeybindingHandler(): void {
+export function useGlobalKeybindingHandler(targetDocument: Document = document): void {
   const commandService = useService(ICommandService)
   const contextKeyService = useService(IContextKeyService)
   const statusBarService = useService(IStatusBarService)
@@ -132,7 +132,9 @@ export function useGlobalKeybindingHandler(): void {
   const userKeybindings = useService(IUserKeybindingsService)
   const pendingRef = useRef<PendingChord | null>(null)
 
-  useEffect(() => {
+  // Layout effect: auxiliary windows must accept shortcuts as soon as their
+  // content commits, not one passive-effect flush later.
+  useLayoutEffect(() => {
     function clearChord() {
       const p = pendingRef.current
       if (!p) return
@@ -408,10 +410,21 @@ export function useGlobalKeybindingHandler(): void {
       runResolution(e)
     }
 
-    document.addEventListener('keydown', captureHandler, true)
+    const view = targetDocument.defaultView ?? window
+    const clearOnBlur = (): void => clearChord()
+    targetDocument.addEventListener('keydown', captureHandler, true)
+    view.addEventListener('blur', clearOnBlur)
     return () => {
-      document.removeEventListener('keydown', captureHandler, true)
+      targetDocument.removeEventListener('keydown', captureHandler, true)
+      view.removeEventListener('blur', clearOnBlur)
       clearChord()
     }
-  }, [commandService, contextKeyService, statusBarService, keyboardDebugService, userKeybindings])
+  }, [
+    commandService,
+    contextKeyService,
+    statusBarService,
+    keyboardDebugService,
+    userKeybindings,
+    targetDocument,
+  ])
 }

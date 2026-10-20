@@ -2666,6 +2666,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
       {menu && (
         <GitGraphContextMenu
           state={menu}
+          targetDocument={scrollRef.current?.ownerDocument}
           onClose={() => {
             setMenu(null)
             // The menu navigates by virtual focus, so the graph never lost DOM

@@ -90,6 +90,7 @@ export function KeybindingsEditor(): JSX.Element {
   const [modelVersion, bumpModel] = useReducer((n: number) => n + 1, 0)
 
   const searchInputRef = useRef<HTMLInputElement | null>(null)
+  const rootRef = useRef<HTMLDivElement | null>(null)
   const tableContainerRef = useRef<HTMLDivElement | null>(null)
 
   // Immediate echo in the input; the expensive re-filter trails by 300ms.
@@ -421,7 +422,7 @@ export function KeybindingsEditor(): JSX.Element {
   const hasQuery = query.trim() !== ''
 
   return (
-    <div className={styles['root']}>
+    <div ref={rootRef} className={styles['root']}>
       <div className={styles['header']}>
         <div className={styles['searchContainer']}>
           <Input
@@ -512,6 +513,7 @@ export function KeybindingsEditor(): JSX.Element {
           row={menuState.row}
           handle={handle}
           keyboard={menuState.keyboard}
+          targetDocument={rootRef.current?.ownerDocument}
           onClose={() => setMenuState(undefined)}
         />
       )}

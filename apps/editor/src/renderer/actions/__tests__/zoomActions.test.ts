@@ -19,6 +19,12 @@ import {
   type IHostService as IHostServiceType,
 } from '@universe-editor/platform'
 import { ResetZoomAction, ZoomInAction, ZoomOutAction } from '../zoomActions.js'
+import { IWorkbenchWindowService } from '../../services/windows/workbenchWindowService.js'
+import { IAuxiliaryEditorWindowService } from '../../services/windows/auxiliaryEditorWindowService.js'
+
+function mainWindowService(): never {
+  return { activeWindow: { isMain: true, token: undefined } } as never
+}
 
 function makeHostStub(): IHostServiceType & {
   zoomIn: ReturnType<typeof vi.fn>
@@ -42,9 +48,20 @@ function makeHostStub(): IHostServiceType & {
   } as never
 }
 
-function runCommand(commandId: string, host: IHostServiceType): Promise<unknown> {
+function runCommand(
+  commandId: string,
+  host: IHostServiceType,
+  overrides: {
+    windows?: unknown
+    auxiliary?: unknown
+  } = {},
+): Promise<unknown> {
   const services = new ServiceCollection()
   services.set(IHostService, host)
+  services.set(IWorkbenchWindowService, (overrides.windows ?? mainWindowService()) as never)
+  if (overrides.auxiliary) {
+    services.set(IAuxiliaryEditorWindowService, overrides.auxiliary as never)
+  }
   const inst = new InstantiationService(services)
   return inst.invokeFunction((accessor) => {
     const cmd = CommandsRegistry.getCommand(commandId)!
@@ -89,5 +106,30 @@ describe('zoomActions', () => {
     expect(host.zoomIn).toHaveBeenCalledTimes(1)
     expect(host.zoomOut).toHaveBeenCalledTimes(1)
     expect(host.resetZoom).toHaveBeenCalledTimes(1)
+  })
+
+  it('routes zoom to the focused auxiliary window instead of the main webContents', async () => {
+    disposables.push(registerAction2(ZoomInAction))
+    disposables.push(registerAction2(ZoomOutAction))
+    disposables.push(registerAction2(ResetZoomAction))
+    const host = makeHostStub()
+    const auxiliary = {
+      getWindowForToken: vi.fn(() => ({ token: 'aux-1' })),
+      zoomIn: vi.fn().mockResolvedValue(undefined),
+      zoomOut: vi.fn().mockResolvedValue(undefined),
+      resetZoom: vi.fn().mockResolvedValue(undefined),
+    }
+    const windows = { activeWindow: { isMain: false, token: 'aux-1' } }
+
+    await runCommand(ZoomInAction.ID, host, { windows, auxiliary })
+    await runCommand(ZoomOutAction.ID, host, { windows, auxiliary })
+    await runCommand(ResetZoomAction.ID, host, { windows, auxiliary })
+
+    expect(auxiliary.zoomIn).toHaveBeenCalledTimes(1)
+    expect(auxiliary.zoomOut).toHaveBeenCalledTimes(1)
+    expect(auxiliary.resetZoom).toHaveBeenCalledTimes(1)
+    expect(host.zoomIn).not.toHaveBeenCalled()
+    expect(host.zoomOut).not.toHaveBeenCalled()
+    expect(host.resetZoom).not.toHaveBeenCalled()
   })
 })

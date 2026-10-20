@@ -35,6 +35,8 @@ export interface KeybindingsContextMenuProps {
   readonly handle: IKeybindingsEditorHandle
   /** Raised with the ContextMenu key, so it opens with the first entry highlighted. */
   readonly keyboard: boolean
+  /** Document that owns the keybindings editor (auxiliary window). */
+  readonly targetDocument?: Document | undefined
   readonly onClose: () => void
 }
 
@@ -44,6 +46,7 @@ export function KeybindingsContextMenu({
   row,
   handle,
   keyboard,
+  targetDocument,
   onClose,
 }: KeybindingsContextMenuProps) {
   const memory = useContextMenuMemory()
@@ -136,6 +139,7 @@ export function KeybindingsContextMenu({
       {...(memory ? { memory } : {})}
       memoryKey="keybindings"
       renderIcon={renderMenuIcon}
+      {...(targetDocument ? { targetDocument } : {})}
       onClose={onClose}
     />
   )

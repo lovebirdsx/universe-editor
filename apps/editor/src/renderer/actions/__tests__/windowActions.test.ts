@@ -45,6 +45,8 @@ import {
   RendererDisposableLeakService,
 } from '../../services/disposableLeak/DisposableLeakService.js'
 import type { IDisposableLeakService } from '../../../shared/ipc/services.js'
+import { IWorkbenchWindowService } from '../../services/windows/workbenchWindowService.js'
+import { IAuxiliaryEditorWindowService } from '../../services/windows/auxiliaryEditorWindowService.js'
 
 const stubProxy: IDisposableLeakService = {
   _serviceBrand: undefined,
@@ -116,9 +118,20 @@ function makeHostStub(): IHostServiceType & {
   } as never
 }
 
-function runCommand(commandId: string, host: IHostServiceType): Promise<unknown> {
+function runCommand(
+  commandId: string,
+  host: IHostServiceType,
+  overrides: { windows?: unknown; auxiliary?: unknown } = {},
+): Promise<unknown> {
   const services = new ServiceCollection()
   services.set(IHostService, host)
+  services.set(
+    IWorkbenchWindowService,
+    (overrides.windows ?? { activeWindow: { isMain: true, token: undefined } }) as never,
+  )
+  if (overrides.auxiliary) {
+    services.set(IAuxiliaryEditorWindowService, overrides.auxiliary as never)
+  }
   services.set(ILifecycleService, new FakeLifecycleService())
   services.set(ILoggerService, {
     _serviceBrand: undefined,
@@ -183,6 +196,22 @@ describe('windowActions', () => {
     const host = makeHostStub()
     runCommand(CloseWindowAction.ID, host)
     expect(host.closeWindow).toHaveBeenCalledTimes(1)
+  })
+
+  it('CloseWindow.run closes the focused auxiliary window and leaves the main window alone', () => {
+    disposables.push(registerAction2(CloseWindowAction))
+    const host = makeHostStub()
+    const auxiliaryWindow = { token: 'aux-1' }
+    const auxiliary = {
+      getWindowForToken: vi.fn(() => auxiliaryWindow),
+      closeWindow: vi.fn().mockResolvedValue(undefined),
+    }
+    runCommand(CloseWindowAction.ID, host, {
+      windows: { activeWindow: { isMain: false, token: 'aux-1' } },
+      auxiliary,
+    })
+    expect(auxiliary.closeWindow).toHaveBeenCalledWith(auxiliaryWindow)
+    expect(host.closeWindow).not.toHaveBeenCalled()
   })
 
   it('registers ToggleDevTools with keybinding + Help menu wiring', () => {

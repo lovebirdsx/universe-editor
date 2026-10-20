@@ -13,6 +13,7 @@ import {
   type IDialogService,
   type IPromptOptions,
 } from '@universe-editor/platform'
+import { getActiveWorkbenchDocument } from '../windows/workbenchDocuments.js'
 
 type Resolver<T> = (value: T) => void
 
@@ -20,11 +21,13 @@ export interface ConfirmEntry {
   readonly kind: 'confirm'
   readonly opts: IConfirmOptions
   readonly resolve: Resolver<IConfirmResult>
+  readonly document: Document
 }
 export interface PromptEntry {
   readonly kind: 'prompt'
   readonly opts: IPromptOptions
   readonly resolve: Resolver<string | undefined>
+  readonly document: Document
 }
 export type DialogEntry = ConfirmEntry | PromptEntry
 
@@ -42,14 +45,24 @@ export class RendererDialogService extends Disposable implements IDialogService 
 
   confirm(opts: IConfirmOptions): Promise<IConfirmResult> {
     return new Promise<IConfirmResult>((resolve) => {
-      this._queue.push({ kind: 'confirm', opts, resolve })
+      this._queue.push({
+        kind: 'confirm',
+        opts,
+        resolve,
+        document: getActiveWorkbenchDocument(),
+      })
       this._onDidChange.fire()
     })
   }
 
   prompt(opts: IPromptOptions): Promise<string | undefined> {
     return new Promise<string | undefined>((resolve) => {
-      this._queue.push({ kind: 'prompt', opts, resolve })
+      this._queue.push({
+        kind: 'prompt',
+        opts,
+        resolve,
+        document: getActiveWorkbenchDocument(),
+      })
       this._onDidChange.fire()
     })
   }

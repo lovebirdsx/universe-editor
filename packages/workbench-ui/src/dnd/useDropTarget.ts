@@ -39,7 +39,18 @@ export function useDropTarget<T>(
   const handleDrop = useCallback(
     (e: DragEvent) => {
       e.preventDefault()
-      onDrop(ctx?.payload as T | undefined, e)
+      // A drop target owns the gesture from here on: mark it before invoking
+      // the handler because the handler may unmount the drag source (a tab
+      // move), which means its `dragend` never runs. Also clear the payload so
+      // a counterpart in another window cannot mistake a later gesture for this
+      // one. The handler receives the payload by value.
+      const payload = ctx?.payload as T | undefined
+      ctx?.markConsumed()
+      try {
+        onDrop(payload, e)
+      } finally {
+        ctx?.clearPayload()
+      }
     },
     [ctx, onDrop],
   )

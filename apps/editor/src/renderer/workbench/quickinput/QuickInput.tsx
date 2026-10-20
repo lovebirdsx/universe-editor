@@ -52,8 +52,9 @@ export function QuickInputPortal() {
 
   if (!panelState) return null
 
+  const targetDocument = svc.currentDocument ?? document
   return createPortal(
-    <FocusScopeOverlay visible onEscape={close}>
+    <FocusScopeOverlay visible onEscape={close} targetDocument={targetDocument}>
       <div className={styles['overlay']} data-testid="quick-input-overlay" {...backdropHandlers}>
         <QuickInputPanel
           state={panelState}
@@ -86,6 +87,6 @@ export function QuickInputPortal() {
         />
       </div>
     </FocusScopeOverlay>,
-    document.body,
+    targetDocument.body,
   )
 }

@@ -49,6 +49,8 @@ export interface TooltipProviderProps {
    * ("Ctrl+Shift+E") or undefined when unbound.
    */
   resolveShortcut?: ((commandId: string) => string | undefined) | undefined
+  /** Document this provider delegates for (auxiliary workbench windows). */
+  targetDocument?: Document | undefined
   children?: ReactNode
 }
 
@@ -96,7 +98,13 @@ function tooltipTargetFrom(
   return text ? { target: el, text } : null
 }
 
-export function TooltipProvider({ delay = 500, resolveShortcut, children }: TooltipProviderProps) {
+export function TooltipProvider({
+  delay = 500,
+  resolveShortcut,
+  targetDocument,
+  children,
+}: TooltipProviderProps) {
+  const doc = targetDocument ?? document
   const [tip, setTip] = useState<TooltipState | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const tipRef = useRef<TooltipState | null>(null)
@@ -174,26 +182,26 @@ export function TooltipProvider({ delay = 500, resolveShortcut, children }: Tool
       if (e.key === 'Escape') hide()
     }
 
-    document.addEventListener('mouseover', onMouseOver)
-    document.addEventListener('mouseout', onMouseOut)
-    document.addEventListener('focusin', onFocusIn)
-    document.addEventListener('focusout', onFocusOut)
-    document.addEventListener('mousedown', onMouseDown, true)
-    document.addEventListener('keydown', onKeyDown, true)
-    document.addEventListener('scroll', hide, true)
-    document.addEventListener('wheel', hide, true)
+    doc.addEventListener('mouseover', onMouseOver)
+    doc.addEventListener('mouseout', onMouseOut)
+    doc.addEventListener('focusin', onFocusIn)
+    doc.addEventListener('focusout', onFocusOut)
+    doc.addEventListener('mousedown', onMouseDown, true)
+    doc.addEventListener('keydown', onKeyDown, true)
+    doc.addEventListener('scroll', hide, true)
+    doc.addEventListener('wheel', hide, true)
     return () => {
       clear()
-      document.removeEventListener('mouseover', onMouseOver)
-      document.removeEventListener('mouseout', onMouseOut)
-      document.removeEventListener('focusin', onFocusIn)
-      document.removeEventListener('focusout', onFocusOut)
-      document.removeEventListener('mousedown', onMouseDown, true)
-      document.removeEventListener('keydown', onKeyDown, true)
-      document.removeEventListener('scroll', hide, true)
-      document.removeEventListener('wheel', hide, true)
+      doc.removeEventListener('mouseover', onMouseOver)
+      doc.removeEventListener('mouseout', onMouseOut)
+      doc.removeEventListener('focusin', onFocusIn)
+      doc.removeEventListener('focusout', onFocusOut)
+      doc.removeEventListener('mousedown', onMouseDown, true)
+      doc.removeEventListener('keydown', onKeyDown, true)
+      doc.removeEventListener('scroll', hide, true)
+      doc.removeEventListener('wheel', hide, true)
     }
-  }, [delay, resolveShortcut])
+  }, [delay, resolveShortcut, doc])
 
   // The host element can be unmounted by React while its tooltip is visible
   // (list re-render, tree collapse, …) — no mouseout fires in that case.
@@ -208,12 +216,18 @@ export function TooltipProvider({ delay = 500, resolveShortcut, children }: Tool
   return (
     <>
       {children}
-      {tip ? <TooltipSurface target={tip.target} text={tip.text} /> : null}
+      {tip ? (
+        <TooltipSurface target={tip.target} text={tip.text} targetDocument={targetDocument} />
+      ) : null}
     </>
   )
 }
 
-function TooltipSurface({ target, text }: TooltipState) {
+function TooltipSurface({
+  target,
+  text,
+  targetDocument,
+}: TooltipState & { targetDocument: Document | undefined }) {
   const { refs, floatingStyles } = useFloating({
     open: true,
     placement: 'top',
@@ -227,7 +241,7 @@ function TooltipSurface({ target, text }: TooltipState) {
   }, [refs, target])
 
   return (
-    <FloatingPortal>
+    <FloatingPortal root={targetDocument?.body ?? target.ownerDocument.body}>
       <div
         ref={refs.setFloating}
         role="tooltip"

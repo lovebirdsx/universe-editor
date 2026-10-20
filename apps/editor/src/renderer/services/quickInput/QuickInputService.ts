@@ -26,6 +26,7 @@ import type {
   QuickPickPresentation,
 } from '@universe-editor/platform'
 import type { QuickPickState } from '@universe-editor/workbench-ui'
+import { getActiveWorkbenchDocument } from '../windows/workbenchDocuments.js'
 
 export type { QuickPickState }
 
@@ -36,6 +37,7 @@ export class QuickInputService implements IQuickInputService {
   readonly onDidChangeState: Event<QuickPickState | null> = this._onDidChangeState.event
 
   private _currentState: QuickPickState | null = null
+  private _currentDocument: Document | undefined
   private _currentOnHide: (() => void) | undefined
   /**
    * Owner of `_currentOnHide`. There is one panel at a time, so opening a new
@@ -60,7 +62,19 @@ export class QuickInputService implements IQuickInputService {
     return this._currentState
   }
 
+  /** Document the visible panel belongs to; captured when it opens. */
+  get currentDocument(): Document | undefined {
+    return this._currentDocument
+  }
+
   private _setState(state: QuickPickState | null): void {
+    if (state !== null && this._currentState === null) {
+      // Renderer-node unit tests construct this service without a DOM.
+      this._currentDocument =
+        typeof document === 'undefined' ? undefined : getActiveWorkbenchDocument()
+    } else if (state === null) {
+      this._currentDocument = undefined
+    }
     this._currentState = state
     this._visibleKey.set(state !== null)
     this._onDidChangeState.fire(state)

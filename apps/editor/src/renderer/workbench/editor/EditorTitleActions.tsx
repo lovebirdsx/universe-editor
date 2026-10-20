@@ -99,6 +99,9 @@ export function EditorTitleActions({ group }: { group: IEditorGroup }) {
           {...(memory ? { memory } : {})}
           commandService={commandService}
           contextKeyService={ctx}
+          {...(btnRef.current?.ownerDocument
+            ? { targetDocument: btnRef.current.ownerDocument }
+            : {})}
           groupFilter={(g) => g !== NAVIGATION_GROUP}
           renderIcon={renderMenuIcon}
           onClose={() => setMenu(null)}

@@ -21,7 +21,12 @@
  *  would run before the parts it reads have mounted.
  *--------------------------------------------------------------------------------------------*/
 
-import { toDisposable, type IDisposable } from '@universe-editor/platform'
+import { markAsSingleton, toDisposable, type IDisposable } from '@universe-editor/platform'
+import {
+  getWorkbenchDocuments,
+  onDidAddWorkbenchDocument,
+  onDidRemoveWorkbenchDocument,
+} from '../windows/workbenchDocuments.js'
 
 export function installDocumentFocusReconcile(reconcile: () => void): IDisposable {
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -32,11 +37,30 @@ export function installDocumentFocusReconcile(reconcile: () => void): IDisposabl
       reconcile()
     }, 0)
   }
-  document.addEventListener('focusin', reconcile, true)
-  document.addEventListener('focusout', onFocusOut, true)
+  // Auxiliary windows are separate documents. Their focus events never reach the
+  // main document, so deriving DOM-based keys requires listening on each one.
+  const attached = new Set<Document>()
+  const attach = (doc: Document): void => {
+    if (attached.has(doc)) return
+    attached.add(doc)
+    doc.addEventListener('focusin', reconcile, true)
+    doc.addEventListener('focusout', onFocusOut, true)
+  }
+  const detach = (doc: Document): void => {
+    if (!attached.delete(doc)) return
+    doc.removeEventListener('focusin', reconcile, true)
+    doc.removeEventListener('focusout', onFocusOut, true)
+  }
+  // The main renderer document is the fallback owner even before (or without)
+  // the window registry publishing it — unit tests and early startup rely on it.
+  attach(document)
+  for (const doc of getWorkbenchDocuments()) attach(doc)
+  const addSub = markAsSingleton(onDidAddWorkbenchDocument(attach))
+  const removeSub = markAsSingleton(onDidRemoveWorkbenchDocument(detach))
   return toDisposable(() => {
-    document.removeEventListener('focusin', reconcile, true)
-    document.removeEventListener('focusout', onFocusOut, true)
+    addSub.dispose()
+    removeSub.dispose()
+    for (const doc of attached) detach(doc)
     if (timer !== undefined) clearTimeout(timer)
     timer = undefined
   })

@@ -134,6 +134,7 @@ function makeOpts() {
     extensionDevelopment: false,
     rendererDebug: false,
     preloadPath: '/preload/index.cjs',
+    auxiliaryPreloadPath: '/preload/auxiliary.cjs',
     rendererUrl: 'http://localhost:5173',
     getConfigDir: () => '/tmp/ue-state',
     getConfigurationDefaults: () => ({}),

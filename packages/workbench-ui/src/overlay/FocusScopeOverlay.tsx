@@ -17,10 +17,18 @@ export interface FocusScopeOverlayProps {
   visible: boolean
   /** Optional Escape handler — keeps the contract co-located with the trap. */
   onEscape?: () => void
+  /** Document hosting the overlay (an auxiliary workbench window). */
+  targetDocument?: Document | undefined
   children: ReactNode
 }
 
-export function FocusScopeOverlay({ visible, onEscape, children }: FocusScopeOverlayProps) {
+export function FocusScopeOverlay({
+  visible,
+  onEscape,
+  targetDocument,
+  children,
+}: FocusScopeOverlayProps) {
+  const doc = targetDocument ?? document
   useEffect(() => {
     if (!visible || !onEscape) return
     const handler = (e: KeyboardEvent) => {
@@ -33,14 +41,14 @@ export function FocusScopeOverlay({ visible, onEscape, children }: FocusScopeOve
       const target = e.target as Element | null
       if (target?.closest?.('[data-floating-ui-portal]')) return
       const controls = target?.getAttribute?.('aria-controls')
-      if (controls && document.getElementById(controls)?.closest('[data-floating-ui-portal]')) {
+      if (controls && doc.getElementById(controls)?.closest('[data-floating-ui-portal]')) {
         return
       }
       onEscape()
     }
-    document.addEventListener('keydown', handler)
-    return () => document.removeEventListener('keydown', handler)
-  }, [visible, onEscape])
+    doc.addEventListener('keydown', handler)
+    return () => doc.removeEventListener('keydown', handler)
+  }, [visible, onEscape, doc])
 
   if (!visible) return null
   return (

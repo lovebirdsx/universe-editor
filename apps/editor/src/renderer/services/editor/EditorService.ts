@@ -138,11 +138,11 @@ export class EditorService extends Disposable implements IEditorService {
         }
         if (input instanceof EditorInput && input !== existing) {
           // Caller handed us a fresh input for an already-open resource; the
-          // existing one wins. Let it absorb any newer content from the
-          // duplicate (e.g. a diff whose file changed again) before we release
-          // the discarded duplicate so the leak tracker doesn't see it as a
-          // dangling owner.
-          if (existing instanceof EditorInput) existing.updateFrom?.(input)
+          // existing one wins. Let it absorb any newer state from the duplicate
+          // (including unsaved state and, for model-backed inputs, the shared
+          // buffer reference) before we release the discarded duplicate so the
+          // leak tracker doesn't see it as a dangling owner.
+          if (existing instanceof EditorInput) existing.migrateFrom(input)
           input.dispose()
         }
       } else {

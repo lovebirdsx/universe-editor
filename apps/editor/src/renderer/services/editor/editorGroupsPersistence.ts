@@ -29,6 +29,12 @@ export interface ISerializedEditorGroupData {
 export interface ISerializedEditorGroupsState {
   readonly grid: ISerializedGrid<ISerializedEditorGroupData>
   readonly activeGroupId: number
+  /**
+   * Pre-order leaf index of the active group. Group ids are re-created on
+   * restore, so the persisted id can never match; the index is the stable
+   * identity across a restart.
+   */
+  readonly activeGroupIndex?: number
 }
 
 export interface ICollectedLeaf {

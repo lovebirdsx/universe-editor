@@ -25,6 +25,7 @@ export function DialogHost({ service }: { service: RendererDialogService }) {
       <ConfirmDialog
         key={`c-${service.queue.length}`}
         opts={head.opts}
+        targetDocument={head.document}
         onResolve={(r) => service._resolveHead<IConfirmResult>(r)}
       />
     ) : (
@@ -34,5 +35,5 @@ export function DialogHost({ service }: { service: RendererDialogService }) {
         onResolve={(v) => service._resolveHead<string | undefined>(v)}
       />
     )
-  return createPortal(node, document.body)
+  return createPortal(node, head.document.body)
 }

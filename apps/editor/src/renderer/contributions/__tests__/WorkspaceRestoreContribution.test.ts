@@ -10,6 +10,7 @@ import {
   EditorRegistry,
   IEditorGroupsService,
   IFileService,
+  ILifecycleService,
   ILoggerService,
   IStorageService,
   IWorkspaceService,
@@ -35,6 +36,10 @@ import {
   IRecentTargetsService,
   type IRecentTargetsService as IRecentTargetsServiceType,
 } from '../../services/editor/RecentTargetsService.js'
+import {
+  IAuxiliaryEditorWindowService,
+  type IAuxiliaryEditorWindowService as IAuxiliaryEditorWindowServiceType,
+} from '../../services/windows/auxiliaryEditorWindowService.js'
 import {
   WORKSPACE_STATE_STORAGE_KEY,
   WorkspaceRestoreContribution,
@@ -123,6 +128,60 @@ function makeWorkspaceStub(): IWorkspaceServiceType {
   } as IWorkspaceServiceType
 }
 
+function makeAuxWindowsStub(): IAuxiliaryEditorWindowServiceType {
+  return {
+    _serviceBrand: undefined,
+    windows: [],
+    onDidChangeWindows: Event.None,
+    async createEmptyWindow() {
+      return { window: undefined, reason: 'error' }
+    },
+    async moveEditorToNewWindow() {
+      return false
+    },
+    async copyEditorToNewWindow() {
+      return false
+    },
+    async moveGroupToNewWindow() {
+      return false
+    },
+    async copyGroupToNewWindow() {
+      return false
+    },
+    async requestClose() {},
+    async closeWindow() {
+      return false
+    },
+    async zoomIn() {},
+    async zoomOut() {},
+    async resetZoom() {},
+    restoreAllToMainWindow() {},
+    discardAllWindows() {},
+    serialize() {
+      return { windows: [] }
+    },
+    async restore() {
+      return []
+    },
+    getWindowForToken() {
+      return undefined
+    },
+  }
+}
+
+/** Mirrors the real service's scope-swap teardown: auxiliary parts go away. */
+function makeAuxWindowsStubFor(groups: EditorGroupsService): IAuxiliaryEditorWindowServiceType {
+  const stub = makeAuxWindowsStub()
+  return {
+    ...stub,
+    discardAllWindows() {
+      for (const part of [...groups.parts]) {
+        if (!part.isMain) groups.removePart(part, { force: true })
+      }
+    },
+  }
+}
+
 function makeLogger(): ILogger {
   return {
     level: LogLevel.Info,
@@ -143,6 +202,7 @@ function buildContribution(
   groups: EditorGroupsService,
   logger: ILogger = new NullLogger(),
   recentTargets: IRecentTargetsServiceType & { rebases: number } = makeRecentTargetsStub(),
+  auxWindows: IAuxiliaryEditorWindowServiceType = makeAuxWindowsStub(),
 ): {
   contribution: WorkspaceRestoreContribution
   inst: InstantiationService
@@ -152,6 +212,11 @@ function buildContribution(
   services.set(IStorageService, storage)
   services.set(IEditorGroupsService, groups)
   services.set(IRecentTargetsService, recentTargets)
+  services.set(IAuxiliaryEditorWindowService, auxWindows)
+  services.set(ILifecycleService, {
+    _serviceBrand: undefined,
+    onWillShutdown: Event.None,
+  } as never)
   services.set(IWorkspaceService, makeWorkspaceStub())
   services.set(IFileService, makeFs())
   services.set(ILoggerService, {
@@ -430,6 +495,212 @@ describe('WorkspaceRestoreContribution', () => {
     expect(groups.groups[0]?.count).toBe(2)
     expect(groups.groups[0]?.contains(newcomer)).toBe(true)
     expect(groups.groups[0]?.activeEditor).toBe(newcomer)
+    contribution.dispose()
+    groups.dispose()
+  })
+
+  it('keeps a newcomer opened in an auxiliary part across a restore', async () => {
+    const groups = new EditorGroupsService()
+    const auxPart = groups.createAuxiliaryPart({ activate: false })
+    const storage = makeStorage()
+    let resolveGet: ((v: unknown) => void) | undefined
+    vi.spyOn(storage, 'get').mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveGet = resolve
+        }),
+    )
+    const { contribution } = buildContribution(
+      storage,
+      groups,
+      new NullLogger(),
+      makeRecentTargetsStub(),
+      makeAuxWindowsStubFor(groups),
+    )
+
+    // Opened after the swap, inside the window that the restore is about to
+    // discard: the editor must be detached before `discardAllWindows`.
+    const newcomer = new SwapTestInput('/aux-newcomer')
+    auxPart.activeGroup.openEditor(newcomer)
+
+    resolveGet?.(undefined)
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(groups.parts).toHaveLength(1)
+    expect(newcomer.isDisposed).toBe(false)
+    expect(groups.groups.some((group) => group.contains(newcomer))).toBe(true)
+    contribution.dispose()
+    groups.dispose()
+  })
+
+  it('hands newcomers back when the storage read rejects', async () => {
+    const groups = new EditorGroupsService()
+    const storage = makeStorage()
+    let rejectGet: ((err: unknown) => void) | undefined
+    vi.spyOn(storage, 'get').mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectGet = reject
+        }),
+    )
+    const logger = makeLogger()
+    const { contribution } = buildContribution(storage, groups, logger)
+
+    const newcomer = new SwapTestInput('/reject-newcomer')
+    groups.activeGroup.openEditor(newcomer)
+
+    rejectGet?.(new Error('storage unavailable'))
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(logger.warn).toHaveBeenCalled()
+    expect(newcomer.isDisposed).toBe(false)
+    expect(groups.groups.some((group) => group.contains(newcomer))).toBe(true)
+    contribution.dispose()
+    groups.dispose()
+  })
+
+  it('hands newcomers back after a malformed snapshot throws', async () => {
+    const groups = new EditorGroupsService()
+    const storage = makeStorage()
+    let resolveGet: ((v: unknown) => void) | undefined
+    vi.spyOn(storage, 'get').mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveGet = resolve
+        }),
+    )
+    const logger = makeLogger()
+    const { contribution } = buildContribution(storage, groups, logger)
+
+    const newcomer = new SwapTestInput('/malformed-newcomer')
+    groups.activeGroup.openEditor(newcomer)
+
+    resolveGet?.({ groups: 'garbage' })
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(logger.warn).toHaveBeenCalled()
+    expect(newcomer.isDisposed).toBe(false)
+    expect(groups.groups.some((group) => group.contains(newcomer))).toBe(true)
+    contribution.dispose()
+    groups.dispose()
+  })
+
+  it('keeps a newcomer across consecutive scope changes in one batch', async () => {
+    const groups = new EditorGroupsService()
+    const storage = makeStorage()
+    const first = { resolve: undefined as ((v: unknown) => void) | undefined }
+    const second = { resolve: undefined as ((v: unknown) => void) | undefined }
+    vi.spyOn(storage, 'get')
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            first.resolve = resolve
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            second.resolve = resolve
+          }),
+      )
+    const { contribution } = buildContribution(storage, groups)
+
+    const newcomer = new SwapTestInput('/batch-newcomer')
+    groups.activeGroup.openEditor(newcomer)
+
+    storage.fireScopeChange()
+    storage.fireScopeChange()
+
+    first.resolve?.(undefined)
+    await Promise.resolve()
+    await Promise.resolve()
+    second.resolve?.(undefined)
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(groups.groups).toHaveLength(1)
+    expect(newcomer.isDisposed).toBe(false)
+    expect(groups.groups[0]?.count).toBe(1)
+    expect(groups.groups[0]?.contains(newcomer)).toBe(true)
+    contribution.dispose()
+    groups.dispose()
+  })
+
+  it("does not carry an earlier generation's restored editors into the incoming scope", async () => {
+    const groups = new EditorGroupsService()
+    const seedA = new EditorGroupsService()
+    seedA.activeGroup.openEditor(new SwapTestInput('/from-a'))
+    const stateA = seedA.toJSON()
+    seedA.dispose()
+    const seedB = new EditorGroupsService()
+    seedB.activeGroup.openEditor(new SwapTestInput('/from-b'))
+    const stateB = seedB.toJSON()
+    seedB.dispose()
+
+    const storage = makeStorage()
+    vi.spyOn(storage, 'get')
+      .mockResolvedValueOnce({
+        groups: stateA,
+        auxiliaryWindows: { windows: [{ state: stateA }] },
+      })
+      .mockResolvedValueOnce({ groups: stateB })
+
+    let resolveAuxRestore: (() => void) | undefined
+    const auxWindows: IAuxiliaryEditorWindowServiceType = {
+      ...makeAuxWindowsStub(),
+      restore() {
+        const part = groups.createAuxiliaryPart({ activate: false })
+        const restored = new SwapTestInput('/from-a-aux')
+        part.activeGroup.openEditor(restored)
+        return new Promise<readonly EditorInput[]>((resolve) => {
+          resolveAuxRestore = () => resolve([restored])
+        })
+      },
+      discardAllWindows() {
+        for (const part of [...groups.parts]) {
+          if (!part.isMain) groups.removePart(part, { force: true })
+        }
+      },
+    }
+    const findPath = (path: string): SwapTestInput | undefined =>
+      groups.groups
+        .flatMap((group) => group.editors)
+        .find(
+          (editor): editor is SwapTestInput =>
+            editor instanceof SwapTestInput && editor.path === path,
+        )
+    const { contribution } = buildContribution(
+      storage,
+      groups,
+      new NullLogger(),
+      makeRecentTargetsStub(),
+      auxWindows,
+    )
+
+    // Generation A applied its main layout and is parked inside the auxiliary
+    // restore when the user switches to scope B.
+    await expect.poll(() => findPath('/from-a')).toBeDefined()
+    await expect.poll(() => resolveAuxRestore !== undefined).toBe(true)
+
+    const newcomer = new SwapTestInput('/user-new')
+    groups.activeGroup.openEditor(newcomer)
+    storage.fireScopeChange()
+
+    resolveAuxRestore?.()
+    await expect.poll(() => findPath('/from-b')).toBeDefined()
+
+    // A's restored editors are outgoing; only the user's newcomer crosses.
+    expect(findPath('/from-a')).toBeUndefined()
+    expect(findPath('/from-a-aux')).toBeUndefined()
+    expect(findPath('/user-new')).toBe(newcomer)
+    expect(groups.parts).toHaveLength(1)
     contribution.dispose()
     groups.dispose()
   })

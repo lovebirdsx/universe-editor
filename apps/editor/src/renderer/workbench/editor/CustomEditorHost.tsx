@@ -2,8 +2,9 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  CustomEditorHost — renders a CustomEditorInput by opening a webview panel via
  *  the WebviewService (which asks the owning extension to resolve it) and mounting
- *  the resulting iframe. The panel is opened once per mounted editor and closed
- *  when the tab unmounts, so the host-side document/webview are torn down too.
+ *  the resulting iframe. Panels are reused per input and closed when the input is
+ *  disposed, not when this view unmounts, so moving a tab between groups/windows
+ *  never tells the extension its panel was closed.
  *--------------------------------------------------------------------------------------------*/
 
 import { useEffect, useState } from 'react'
@@ -126,7 +127,11 @@ export function CustomEditorHost({ input }: { input: IEditorInput }) {
       sub?.dispose()
       contribSub?.dispose()
       clearTimeout(timer)
-      if (opened) webviewService.closePanel(opened.panelHandle)
+      // Do NOT close the panel here: panel lifetime is tied to the input
+      // (`input.onWillDispose` in WebviewService). Moving the tab to another
+      // group/window unmounts this host and remounts it in the target — closing
+      // on unmount would tell the extension its editor was disposed and force a
+      // fresh resolve on every move.
       setPanel(null)
     }
   }, [webviewService, extensionHost, input])

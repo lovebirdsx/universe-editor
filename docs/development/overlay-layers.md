@@ -18,6 +18,16 @@ A 与 B 的共同点是**挂在窗口级容器上**，所以永远不会被某�
 
 C 曾经是缺口：monaco 的编辑器内容浮层不走 `ILayoutService`，默认 `fixedOverflowWidgets: false` 时 `position: absolute`，包含块是 `.monaco-editor`，于是被最近的 `overflow: auto` 祖先——编辑区的 `.editorContent`——在 editor group 边界切一刀。**所有 `editor.create` 必须走 `createWorkbenchEditor`**（`apps/editor/src/renderer/workbench/editor/monaco/workbenchEditorFactory.ts`），它把 `fixedOverflowWidgets: true` 作为不变式注入；`createDiffEditor` 不用改，monaco 已对其内嵌编辑器强制该选项。漏配由 `workbenchEditorFactory.test.ts` 的源码扫描拦截。
 
+## 多窗口：浮层属于 owner document
+
+辅助编辑器窗口共用同一 React 树与 Monaco 运行时，但每个窗口是独立的 `Document`。文档级事件与 portal 容器必须跟随**宿主窗口的 document**，不能落到模块作用域里的全局 `document`（那永远指向主窗口）：
+
+- `RendererDialogService` 在 `confirm()` / `prompt()` **被调用的那一刻**记录 `getActiveWorkbenchDocument()`；`DialogHost` 用该 document 作为 portal 容器，并把 `targetDocument` 传给 `FocusScopeOverlay`——否则 Escape 监听留在主窗口，辅助窗口里的对话框关不掉。
+- `TooltipProvider`、`useDragSessionDocument` 在辅助窗口挂载时显式传 `entry.window.document`；拖放终结事件（drop / dragend / Escape）不会回到主 document。
+- Monaco 的 `ILayoutService` 覆写与 overflow widget 容器按编辑器所在的窗口创建（`monacoWorkbenchLayoutService`），因此 hover / suggest / find 的 DOM 落在发起编辑的窗口。
+
+判据：新增任何 `document.addEventListener`、`createPortal`、focus trap 时，先确认"宿主的 document 是哪一个"，再把它显式传下去。完整架构见 [auxiliary-editor-windows.md](auxiliary-editor-windows.md)。
+
 ## 三段式分层
 
 `packages/workbench-ui/src/theme/tokens.css` 是 token 的单一真相（数值、取值理由、第三方占位都写在它的注释里），本文不复述数值。分层是三段：

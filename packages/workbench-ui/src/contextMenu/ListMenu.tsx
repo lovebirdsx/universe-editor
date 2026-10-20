@@ -85,6 +85,8 @@ export interface ListMenuProps {
    */
   readonly contextTag?: string | undefined
   readonly renderIcon?: ((icon: string | undefined) => ReactNode) | undefined
+  /** Document the menu belongs to (an auxiliary workbench window). */
+  readonly targetDocument?: Document | undefined
   readonly onClose: () => void
 }
 
@@ -134,6 +136,7 @@ export function ListMenu({
   memoryKey,
   contextTag,
   renderIcon,
+  targetDocument,
   onClose,
 }: ListMenuProps) {
   const recordPicked = useMemo(() => {
@@ -176,7 +179,13 @@ export function ListMenu({
   if (!hasRows) return null
 
   return (
-    <AnchoredSurface x={anchor.x} y={anchor.y} onClose={onClose} onEscape={onEscape}>
+    <AnchoredSurface
+      x={anchor.x}
+      y={anchor.y}
+      onClose={onClose}
+      onEscape={onEscape}
+      {...(targetDocument ? { targetDocument } : {})}
+    >
       <MenuRows
         uid={uid}
         rows={rows}

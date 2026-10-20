@@ -21,6 +21,7 @@ export const ServiceChannels = {
   Log: 'log',
   LogFiles: 'logFiles',
   Window: 'window',
+  AuxiliaryWindow: 'auxiliaryWindow',
   AcpHost: 'acpHost',
   AcpTerminal: 'acpTerminal',
   McpClient: 'mcpClient',

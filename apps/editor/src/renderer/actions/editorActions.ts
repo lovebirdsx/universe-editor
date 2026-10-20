@@ -668,8 +668,13 @@ function splitInDirection(accessor: ServicesAccessor, direction: GroupDirection)
   const source = groups.activeGroup
   const active = source.activeEditor
   if (!active) return
+  // Pre-check and clone before creating the target: an uncopyable input must
+  // leave the layout untouched instead of producing an empty split or sharing
+  // one input instance between two groups.
+  const clone = cloneEditorInputForSplit(active, accessor)
+  if (!clone) return
   const newGroup = groups.addGroup(source, direction)
-  groups.copyEditor(cloneEditorInputForSplit(active, accessor), newGroup, {
+  groups.copyEditor(clone, newGroup, {
     sticky: source.isSticky(active),
   })
   activateGroupAndFocus(
@@ -1028,7 +1033,7 @@ function moveEditorInDirection(accessor: ServicesAccessor, direction: GroupDirec
   if (!editor) return
   let target = groups.findGroup({ direction }, source)
   if (!target) target = groups.addGroup(source, direction)
-  groups.moveEditor(editor, target)
+  groups.moveEditor(editor, target, source)
   activateGroupAndFocus(
     groups,
     target,
@@ -1048,7 +1053,7 @@ function moveEditorByLocation(
   if (!editor) return
   const target = groups.findGroup({ location }, source, wrap)
   if (!target || target === source) return
-  groups.moveEditor(editor, target)
+  groups.moveEditor(editor, target, source)
   activateGroupAndFocus(
     groups,
     target,

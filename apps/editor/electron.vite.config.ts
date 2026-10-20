@@ -101,7 +101,11 @@ export default defineConfig({
     build: {
       outDir: resolve(outBase, 'preload'),
       rollupOptions: {
-        input: { index: resolve(__dirname, 'src/preload/index.ts') },
+        input: {
+          index: resolve(__dirname, 'src/preload/index.ts'),
+          // Auxiliary editor windows get a minimal preload with no IPC bridge.
+          auxiliary: resolve(__dirname, 'src/preload/auxiliary.ts'),
+        },
         external: nodeExternal,
         output: {
           format: 'cjs',

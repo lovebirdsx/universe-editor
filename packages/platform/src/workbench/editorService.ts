@@ -129,6 +129,22 @@ export abstract class EditorInput extends Disposable implements IEditorInput {
   updateFrom?(other: EditorInput): void
 
   /**
+   * Take over live state when an input is moved into a group that already has
+   * an input with the same identity. Unlike `updateFrom`, this also protects
+   * unsaved state: the default implementation forwards to `updateFrom` and
+   * keeps the source's dirty flag. Inputs that share an underlying buffer/model
+   * (file and untitled editors) override it to retain that shared resource
+   * before the source instance is disposed, so a not-yet-mounted target cannot
+   * drop the last model reference (and with it undo history / dirty content).
+   *
+   * Called before the source input is disposed.
+   */
+  migrateFrom(other: EditorInput): void {
+    this.updateFrom?.(other)
+    if (other.isDirty) this.setDirty(true)
+  }
+
+  /**
    * Return the input that should take this one's slot after its backing
    * resource(s) were renamed or moved in the file system. `retarget` maps an
    * old URI to its new URI, or returns undefined when the rename does not

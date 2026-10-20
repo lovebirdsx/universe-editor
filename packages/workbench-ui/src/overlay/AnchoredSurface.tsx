@@ -45,6 +45,11 @@ export interface AnchoredSurfaceProps {
   readonly onEscape?: () => boolean
   /** Extra props merged onto the floating element (className, role, style, …). */
   readonly surfaceProps?: React.HTMLAttributes<HTMLDivElement>
+  /**
+   * Document the surface belongs to (an auxiliary workbench window). Defaults to
+   * the main document; portalling and keyboard capture follow it.
+   */
+  readonly targetDocument?: Document | undefined
   readonly children: ReactNode
 }
 
@@ -57,6 +62,7 @@ export function AnchoredSurface({
   onClose,
   onEscape,
   surfaceProps,
+  targetDocument,
   children,
 }: AnchoredSurfaceProps) {
   const { refs, floatingStyles, context, isPositioned } = useFloating({
@@ -130,15 +136,16 @@ export function AnchoredSurface({
       if (onEscape?.() === true) return
       onClose()
     }
-    window.addEventListener('keydown', onKeyDown, true)
-    return () => window.removeEventListener('keydown', onKeyDown, true)
-  }, [onClose, onEscape])
+    const view = (targetDocument ?? document).defaultView ?? window
+    view.addEventListener('keydown', onKeyDown, true)
+    return () => view.removeEventListener('keydown', onKeyDown, true)
+  }, [onClose, onEscape, targetDocument])
   const { getFloatingProps } = useInteractions([dismiss])
 
   const { style: extraStyle, ...restSurfaceProps } = surfaceProps ?? {}
 
   return (
-    <FloatingPortal>
+    <FloatingPortal {...(targetDocument ? { root: targetDocument.body } : {})}>
       <div
         ref={refs.setFloating}
         style={{

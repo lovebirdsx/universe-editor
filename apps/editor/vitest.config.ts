@@ -48,6 +48,7 @@ const rendererDomTests = [
   'src/renderer/services/focus/__tests__/workbenchFocusRestorer.test.ts',
   'src/renderer/services/focus/__tests__/searchViewFocusLink.test.ts',
   'src/renderer/services/editor/__tests__/UntitledEditorInput.test.ts',
+  'src/renderer/services/windows/__tests__/auxiliaryEditorWindowService.test.ts',
   'src/renderer/services/extensions/__tests__/MainThreadEditor.untitled.test.ts',
   'src/renderer/services/extensions/__tests__/MainThreadEditor.decorations.test.ts',
   'src/renderer/services/extensions/__tests__/MainThreadWindow.test.ts',

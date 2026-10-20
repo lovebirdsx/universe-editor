@@ -21,7 +21,24 @@ import { IPC_PROTOCOL_CHANNEL } from '../../shared/ipc/channelNames.js'
 const senderProtocols = new Map<number, ElectronProtocol>()
 let dispatcherInstalled = false
 
+/**
+ * The workbench IPC channel is a main-frame channel. Subframes (preview iframes,
+ * custom-editor documents) must never be able to call workspace services directly,
+ * including the auxiliary-window reservation API. `senderFrame.parent === null` is
+ * the stable test for "this is the top frame"; a missing sender frame is rejected.
+ */
+export function isMainFrameSender(event: IpcMainEvent): boolean {
+  const senderFrame = event.senderFrame
+  if (!senderFrame) return false
+  try {
+    return senderFrame.parent === null
+  } catch {
+    return false
+  }
+}
+
 function onIncoming(_event: IpcMainEvent, payload: unknown): void {
+  if (!isMainFrameSender(_event)) return
   // Find which renderer sent this — the sender id is on the event object.
   const sender = (_event as IpcMainEvent & { sender: WebContents }).sender
   const protocol = senderProtocols.get(sender.id)

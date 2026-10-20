@@ -54,6 +54,7 @@ import { IConfigLocationService } from '../../shared/ipc/configLocationService.j
 import { IEnvironmentSnapshotService } from '../../shared/ipc/environmentSnapshotService.js'
 import { IProcessMonitorService } from '../../shared/ipc/processMonitorService.js'
 import { IFileClipboardService } from '../../shared/ipc/fileClipboardService.js'
+import { IAuxiliaryWindowsService } from '../../shared/ipc/auxiliaryWindowService.js'
 
 interface ProxyServiceBinding {
   readonly id: ServiceIdentifier<object>
@@ -96,6 +97,7 @@ export const PROXY_SERVICE_BINDINGS: readonly ProxyServiceBinding[] = [
   { id: IReleaseNotesService, channel: ServiceChannels.ReleaseNotes },
   { id: IDocsService, channel: ServiceChannels.Docs },
   { id: IWindowsService, channel: ServiceChannels.Window },
+  { id: IAuxiliaryWindowsService, channel: ServiceChannels.AuxiliaryWindow },
   { id: IPerformanceMarksService, channel: ServiceChannels.Performance },
   { id: ISessionSwitcherService, channel: ServiceChannels.SessionSwitcher },
   { id: IExchangeRateService, channel: ServiceChannels.ExchangeRate },

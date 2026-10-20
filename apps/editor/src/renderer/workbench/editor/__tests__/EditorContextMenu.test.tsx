@@ -164,6 +164,39 @@ describe('EditorContextMenu', () => {
     }
   })
 
+  it('portals into the clicked editor document, not the main document', () => {
+    const cmdId = 'test.editorContext.auxDoc'
+    const cmd = CommandsRegistry.registerCommand(cmdId, () => {}, { description: 'Aux Doc' })
+    const menu = MenuRegistry.addMenuItem(MenuId.EditorContext, {
+      command: cmdId,
+      title: 'Aux Doc',
+    })
+    const auxDoc = document.implementation.createHTMLDocument('aux')
+
+    try {
+      const commandService = new FakeCommandService()
+      render(
+        <EditorContextMenu
+          x={10}
+          y={20}
+          resource={URI.file('/ws/src/main.ts')}
+          editor={fakeEditor()}
+          isReadonly={false}
+          keyboard={false}
+          commandService={commandService as unknown as ICommandService}
+          contextKeyService={new ContextKeyService()}
+          targetDocument={auxDoc}
+          onClose={() => {}}
+        />,
+      )
+      expect(auxDoc.querySelector('[role="menu"]')).not.toBeNull()
+      expect(document.querySelector('[role="menu"]')).toBeNull()
+    } finally {
+      menu.dispose()
+      cmd.dispose()
+    }
+  })
+
   it('keyboard opens with the first entry highlighted; the mouse does not', () => {
     const cmdId = 'test.editorContext.autofocus'
     const cmd = CommandsRegistry.registerCommand(cmdId, () => {}, { description: 'First' })

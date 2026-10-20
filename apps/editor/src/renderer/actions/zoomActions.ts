@@ -12,8 +12,29 @@ import {
   localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
+import { IWorkbenchWindowService } from '../services/windows/workbenchWindowService.js'
+import { IAuxiliaryEditorWindowService } from '../services/windows/auxiliaryEditorWindowService.js'
 
 const CATEGORY = localize2('command.category.view', 'View')
+
+/**
+ * Zoom applies to the focused workbench window: auxiliary windows are separate
+ * Chromium webContents with their own zoom level.
+ */
+function zoomFocusedWindow(
+  accessor: ServicesAccessor,
+  action: 'zoomIn' | 'zoomOut' | 'resetZoom',
+): void {
+  const active = accessor.get(IWorkbenchWindowService).activeWindow
+  if (!active.isMain && active.token !== undefined) {
+    const auxiliary = accessor.get(IAuxiliaryEditorWindowService).getWindowForToken(active.token)
+    if (auxiliary) {
+      void accessor.get(IAuxiliaryEditorWindowService)[action](auxiliary)
+      return
+    }
+  }
+  void accessor.get(IHostService)[action]()
+}
 
 export class ZoomInAction extends Action2 {
   static readonly ID = 'workbench.action.zoomIn'
@@ -28,7 +49,7 @@ export class ZoomInAction extends Action2 {
     })
   }
   override run(accessor: ServicesAccessor): void {
-    void accessor.get(IHostService).zoomIn()
+    zoomFocusedWindow(accessor, 'zoomIn')
   }
 }
 
@@ -45,7 +66,7 @@ export class ZoomOutAction extends Action2 {
     })
   }
   override run(accessor: ServicesAccessor): void {
-    void accessor.get(IHostService).zoomOut()
+    zoomFocusedWindow(accessor, 'zoomOut')
   }
 }
 
@@ -62,6 +83,6 @@ export class ResetZoomAction extends Action2 {
     })
   }
   override run(accessor: ServicesAccessor): void {
-    void accessor.get(IHostService).resetZoom()
+    zoomFocusedWindow(accessor, 'resetZoom')
   }
 }

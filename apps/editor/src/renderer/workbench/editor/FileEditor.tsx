@@ -594,6 +594,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
           keyboard={contextMenu.keyboard}
           commandService={commandService}
           contextKeyService={contextKeyService}
+          targetDocument={containerRef.current?.ownerDocument}
           onClose={() => setContextMenu(null)}
         />
       )}

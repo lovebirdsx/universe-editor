@@ -43,6 +43,13 @@ class BodyDropInput extends EditorInput {
   getName() {
     return this._name
   }
+  override serialize(): { name: string; uri: string } {
+    return { name: this._name, uri: this._uri.toString() }
+  }
+  static deserialize(data: unknown): BodyDropInput {
+    const d = data as { name: string; uri: string }
+    return new BodyDropInput(d.name, URI.parse(d.uri))
+  }
 }
 
 const FakeEditor: ComponentType<{ input: IEditorInput }> = ({ input }) => (
@@ -116,6 +123,7 @@ beforeEach(() => {
   providerDisposable = EditorRegistry.registerEditorProvider({
     typeId: TYPE_ID,
     componentKey: COMPONENT_KEY,
+    deserialize: (data) => BodyDropInput.deserialize(data),
   })
 })
 
@@ -310,6 +318,68 @@ describe('EditorGroupView body drop', () => {
 
     fireDragWithCoords('dragOver', bodyA, { clientX: 50, clientY: 50 }) // center
     expect(screen.queryByTestId('editor-group-drop-overlay')).toBeNull()
+    svc.dispose()
+  })
+
+  it('Ctrl-drop copies across groups instead of moving (source tab stays)', () => {
+    const svc = new EditorGroupsService()
+    const a = new BodyDropInput('A', URI.file('/a.txt'))
+    const b = new BodyDropInput('B', URI.file('/b.txt'))
+    const groupA = svc.activeGroup
+    groupA.openEditor(a)
+    const groupB = svc.addGroup(groupA, GroupDirection.Right)
+    groupB.openEditor(b)
+
+    renderTwoGroups(svc)
+    const bodyB = stubBodyRect(groupB, { left: 200, top: 0, width: 100, height: 100 } as DOMRect)
+    const copySpy = vi.spyOn(svc, 'copyEditor')
+    const moveSpy = vi.spyOn(svc, 'moveEditor')
+
+    const tabA = within(screen.getByTestId(`group-wrapper-${groupA.id}`)).getByRole('tab')
+    fireEvent.dragStart(tabA)
+
+    const makeCopyDrag = (type: 'dragOver' | 'drop') => {
+      const event = createEvent[type](bodyB)
+      Object.defineProperty(event, 'clientX', { value: 250 })
+      Object.defineProperty(event, 'clientY', { value: 50 })
+      Object.defineProperty(event, 'ctrlKey', { value: true })
+      fireEvent(bodyB, event)
+    }
+    makeCopyDrag('dragOver')
+    makeCopyDrag('drop')
+
+    expect(copySpy).toHaveBeenCalled()
+    expect(moveSpy).not.toHaveBeenCalled()
+    // The source group keeps its tab; the target gains an independent copy.
+    expect(groupA.editors).toContain(a)
+    expect(groupB.editors.map((e) => e.label)).toEqual(['B', 'A'])
+    svc.dispose()
+  })
+
+  it('reorders a cross-group tab drop at the pointer position instead of appending', () => {
+    const svc = new EditorGroupsService()
+    const a = new BodyDropInput('A', URI.file('/a.txt'))
+    const b1 = new BodyDropInput('B1', URI.file('/b1.txt'))
+    const b2 = new BodyDropInput('B2', URI.file('/b2.txt'))
+    const groupA = svc.activeGroup
+    groupA.openEditor(a)
+    const groupB = svc.addGroup(groupA, GroupDirection.Right)
+    groupB.openEditor(b1)
+    groupB.openEditor(b2)
+
+    renderTwoGroups(svc)
+    const groupBWrapper = screen.getByTestId(`group-wrapper-${groupB.id}`)
+    const tabBarB = groupBWrapper.querySelector<HTMLElement>('[data-testid="editor-group-tabbar"]')!
+    const tabsB = within(groupBWrapper).getAllByRole('tab')
+    tabsB[0]!.getBoundingClientRect = () => ({ left: 200, width: 50 }) as DOMRect
+    tabsB[1]!.getBoundingClientRect = () => ({ left: 250, width: 50 }) as DOMRect
+
+    const tabA = within(screen.getByTestId(`group-wrapper-${groupA.id}`)).getByRole('tab')
+    fireEvent.dragStart(tabA)
+    fireDragWithCoords('dragOver', tabBarB, { clientX: 205 })
+    fireDragWithCoords('drop', tabBarB, { clientX: 205 })
+
+    expect(groupB.editors.map((e) => e.label)).toEqual(['A', 'B1', 'B2'])
     svc.dispose()
   })
 

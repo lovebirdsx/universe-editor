@@ -83,6 +83,7 @@ import {
 import { installEditorFocusDerivation } from '../services/editor/editorFocus.js'
 import { closestAttr } from '../services/focus/FocusStackService.js'
 import { installDocumentFocusReconcile } from '../services/focus/documentFocusReconcile.js'
+import { getActiveWorkbenchDocument } from '../services/windows/workbenchDocuments.js'
 
 const PART_KEY_BY_ID: Readonly<Record<PartId, string>> = {
   [PartId.ActivityBar]: 'activityBarFocus',
@@ -129,7 +130,7 @@ export class FocusContextKeyContribution extends Disposable implements IWorkbenc
     // true", so the two can never disagree, and a new PartId only has to be added
     // to PART_KEY_BY_ID (a Record<PartId, …>, so the compiler enforces it).
     const reconcile = (): void => {
-      const active = document.activeElement
+      const active = getActiveWorkbenchDocument().activeElement
       let currentPart = ''
       for (const [id, key] of perPart) {
         const focused = layoutService.getPart(id)?.isFocused() ?? false
@@ -160,7 +161,7 @@ export class FocusContextKeyContribution extends Disposable implements IWorkbenc
     this._register(
       autorun((r) => {
         layoutService.visible.read(r)
-        updateTerminalFocus(document.activeElement)
+        updateTerminalFocus(getActiveWorkbenchDocument().activeElement)
       }),
     )
 

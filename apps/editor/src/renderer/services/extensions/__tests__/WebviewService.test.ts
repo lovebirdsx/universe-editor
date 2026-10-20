@@ -212,6 +212,45 @@ describe('WebviewService', () => {
     expect(extHost.disposed).toEqual([panel.panelHandle])
   })
 
+  it('reuses the panel for the same editor input and closes it only when the input dies', () => {
+    const svc = new WebviewService()
+    const extHost = fakeExtHost()
+    svc.setExtHost('local', extHost)
+    const mainThread = svc.createMainThread('local')
+    void mainThread.$registerCustomEditorProvider(0, 'pdf.view')
+    const uri = URI.file('/a.pdf')
+    const input = new CustomEditorInput('pdf.view', uri)
+
+    const first = svc.openPanel('pdf.view', uri, undefined, input)!
+    // A move unmounts the old host and mounts a new one with the same input.
+    const second = svc.openPanel('pdf.view', uri, undefined, input)!
+    expect(second.panelHandle).toBe(first.panelHandle)
+    expect(extHost.resolves).toHaveLength(1)
+    expect(extHost.disposed).toEqual([])
+
+    input.dispose()
+    expect(extHost.disposed).toEqual([first.panelHandle])
+    expect(svc.getPanel(first.panelHandle)).toBeUndefined()
+  })
+
+  it('creates a distinct panel for a cloned (split) custom editor input', () => {
+    const svc = new WebviewService()
+    const extHost = fakeExtHost()
+    svc.setExtHost('local', extHost)
+    const mainThread = svc.createMainThread('local')
+    void mainThread.$registerCustomEditorProvider(0, 'pdf.view')
+    const uri = URI.file('/a.pdf')
+    const a = new CustomEditorInput('pdf.view', uri)
+    const b = new CustomEditorInput('pdf.view', uri)
+
+    const first = svc.openPanel('pdf.view', uri, undefined, a)!
+    const second = svc.openPanel('pdf.view', uri, undefined, b)!
+    expect(second.panelHandle).not.toBe(first.panelHandle)
+    expect(extHost.resolves).toHaveLength(2)
+    a.dispose()
+    b.dispose()
+  })
+
   it('reset(kind) drops the host’s providers and panels', () => {
     const svc = new WebviewService()
     svc.setExtHost('local', fakeExtHost())

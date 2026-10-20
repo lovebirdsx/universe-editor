@@ -12,6 +12,8 @@ import type { LifecycleService, InstantiationService, LayoutSizes } from '@unive
 import { PerfMarks } from '../../shared/perf/marks.js'
 import { ServicesContext, useService, useObservable } from './useService.js'
 import { useGlobalKeybindingHandler } from './useGlobalKeybindingHandler.js'
+import { DragSessionProvider } from '@universe-editor/workbench-ui'
+import { AuxiliaryWindowHost } from './windows/AuxiliaryWindowHost.js'
 import { WorkbenchLayout } from './layout/WorkbenchLayout.js'
 import { TitleBar } from './titlebar/TitleBar.js'
 import { ActivityBar } from './activitybar/ActivityBar.js'
@@ -54,7 +56,7 @@ function useFileIconsEnabledGate(): void {
 }
 
 function WorkbenchShell() {
-  useGlobalKeybindingHandler()
+  useGlobalKeybindingHandler(document)
   useFileIconsEnabledGate()
 
   const layoutService = useService(ILayoutService)
@@ -111,6 +113,7 @@ function WorkbenchShell() {
         panel={<PaneCompositePart part={panelPart} config={panelConfig} />}
         statusbar={<StatusBar part={statusBarPart} />}
       />
+      <AuxiliaryWindowHost />
       <QuickInputPortal />
       <DialogHost service={dialogService} />
       <NotificationsToast />
@@ -130,7 +133,11 @@ export function Workbench({ instantiation, lifecycle }: WorkbenchProps) {
 
   return (
     <ServicesContext.Provider value={instantiation}>
-      <WorkbenchShell />
+      {/* Tabs dragged across windows share one payload: auxiliary trees are
+          portals inside this provider, so the context reaches them. */}
+      <DragSessionProvider>
+        <WorkbenchShell />
+      </DragSessionProvider>
     </ServicesContext.Provider>
   )
 }

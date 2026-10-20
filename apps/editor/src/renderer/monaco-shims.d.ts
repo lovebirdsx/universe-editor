@@ -311,3 +311,12 @@ declare module 'monaco-editor/esm/vs/editor/contrib/codeAction/browser/codeActio
   ): Promise<CodeActionSetLike>
 }
 
+
+// Auxiliary windows register their Window with Monaco's main-window-only registry
+// (see monacoWindowRegistration). Both modules ship no .d.ts.
+declare module 'monaco-editor/esm/vs/base/browser/window.js' {
+  export function ensureCodeWindow(targetWindow: Window, windowId: number): void
+}
+declare module 'monaco-editor/esm/vs/base/browser/dom.js' {
+  export function registerWindow(targetWindow: Window): import('@universe-editor/platform').IDisposable
+}

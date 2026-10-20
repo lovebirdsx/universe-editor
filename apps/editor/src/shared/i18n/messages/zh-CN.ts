@@ -397,6 +397,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.clearOutput.title': '清空输出',
   'action.clearRecentFiles.title': '清除最近打开的文件',
   'action.clearRecentWorkspaces.title': '清除最近打开的项',
+  'action.copyEditorGroupToNewWindow.title': '将编辑器组复制到新窗口',
+  'action.copyEditorToNewWindow.title': '将编辑器复制到新窗口',
   'action.closeActiveEditor.title': '关闭编辑器',
   'action.closeActivePinnedEditor.title': '关闭固定的编辑器',
   'action.closeAllEditors.title': '关闭所有编辑器',
@@ -504,7 +506,15 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.newFile.title': '新建文件…',
   'action.newFolder.title': '新建文件夹…',
   'action.newTerminal.title': '新建终端',
+  'action.moveEditorGroupToNewWindow.title': '将编辑器组移到新窗口',
+  'action.moveEditorToNewWindow.title': '将编辑器移到新窗口',
+  'action.newEmptyEditorWindow.title': '新建编辑器窗口',
   'action.newUntitledFile.title': '新建文件',
+  'action.restoreEditorsToMainWindow.title': '将编辑器恢复到主窗口',
+  'auxiliaryWindow.copyUnsupported': '此编辑器无法复制到新窗口：{label}',
+  'auxiliaryWindow.restoreFailed':
+    '无法将“{label}”移回主窗口。该编辑器已保留在可访问的辅助窗口中；可使用“将编辑器恢复到主窗口”重试。',
+  'auxiliaryWindow.restoreFailed.action': '将编辑器恢复到主窗口',
   'action.newWindow.title': '新建窗口',
   'action.nextEditor.title': '打开下一个编辑器',
   'action.nextViewContainer.title': '打开下一个视图容器',
@@ -1083,6 +1093,9 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.markdown': 'Markdown',
   'settings.markdown.preview.renderYamlFrontmatter':
     '在 markdown 预览中将 YAML frontmatter（文件顶部的 `---` 块）渲染为表格。关闭时 frontmatter 会被隐藏。',
+  'settings.workbench.editor': '编辑器',
+  'settings.workbench.editor.dragToOpenWindow':
+    '将编辑器标签拖出所有编辑器窗口时，在新窗口中打开该编辑器。',
   'settings.scm': '源代码管理',
   'settings.scm.blame.editorDecoration.disableHover':
     '禁用指向行内 blame 标注时显示完整提交信息的悬浮提示。',

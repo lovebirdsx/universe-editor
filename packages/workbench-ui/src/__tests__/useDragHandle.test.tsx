@@ -4,11 +4,30 @@ import { useState } from 'react'
 import { DragSessionProvider } from '../dnd/DragSessionProvider.js'
 import { useDragHandle } from '../dnd/useDragHandle.js'
 import { useDropTarget } from '../dnd/useDropTarget.js'
+import { useDragSessionDocument } from '../dnd/useDragSessionDocument.js'
+import type { DragEndSnapshot } from '../dnd/useDragHandle.js'
 
 function DragSource({ payload }: { payload: string }) {
   const { dragHandleProps } = useDragHandle(payload)
   return (
     <div data-testid="source" {...dragHandleProps}>
+      drag me
+    </div>
+  )
+}
+
+function DragSourceWithEnd({
+  payload,
+  onEnd,
+}: {
+  payload: string
+  onEnd: (snapshot: DragEndSnapshot) => void
+}) {
+  const { dragHandleProps } = useDragHandle(payload, {
+    onDragEnd: (_e, snapshot) => onEnd(snapshot),
+  })
+  return (
+    <div data-testid="source-end" {...dragHandleProps}>
       drag me
     </div>
   )
@@ -165,5 +184,76 @@ describe('DnD hooks', () => {
     // 3. A brand-new, unrelated drop must see NO in-tree payload.
     fireEvent.drop(screen.getByTestId('target'))
     expect(onDrop).toHaveBeenLastCalledWith(undefined)
+  })
+
+  it('hands the terminal snapshot to onDragEnd before clearing (consumed drop)', () => {
+    const onDrop = vi.fn()
+    const onEnd = vi.fn()
+    render(
+      <DragSessionProvider>
+        <DragSourceWithEnd payload="tab" onEnd={onEnd} />
+        <DropTarget onDrop={onDrop} />
+      </DragSessionProvider>,
+    )
+
+    fireEvent.dragStart(screen.getByTestId('source-end'))
+    fireEvent.drop(screen.getByTestId('target'))
+    fireEvent.dragEnd(screen.getByTestId('source-end'))
+
+    expect(onEnd).toHaveBeenCalledWith({
+      // The drop hook clears the payload as it consumes the gesture.
+      payload: undefined,
+      consumed: true,
+      cancelled: false,
+    })
+    // The session is reset only after the snapshot was taken.
+    fireEvent.drop(screen.getByTestId('target'))
+    expect(onDrop).toHaveBeenLastCalledWith(undefined)
+  })
+
+  it('marks the gesture cancelled when Escape is pressed during the drag', () => {
+    const onEnd = vi.fn()
+    render(
+      <DragSessionProvider>
+        <DragSourceWithEnd payload="tab" onEnd={onEnd} />
+      </DragSessionProvider>,
+    )
+
+    fireEvent.dragStart(screen.getByTestId('source-end'))
+    fireEvent.keyDown(window, { key: 'Escape' })
+    fireEvent.dragEnd(screen.getByTestId('source-end'))
+
+    expect(onEnd).toHaveBeenCalledWith({
+      payload: 'tab',
+      consumed: false,
+      cancelled: true,
+    })
+  })
+
+  it('clears the payload on a drop in another workbench document', () => {
+    const otherDocument = document.implementation.createHTMLDocument('auxiliary')
+    const onDrop = vi.fn()
+
+    function OtherDocumentCleanup() {
+      useDragSessionDocument(otherDocument)
+      return null
+    }
+
+    render(
+      <DragSessionProvider>
+        <OtherDocumentCleanup />
+        <DragSource payload="cross-window" />
+        <DropTarget onDrop={onDrop} />
+      </DragSessionProvider>,
+    )
+
+    fireEvent.dragStart(screen.getByTestId('source'))
+    // The drop landed in the auxiliary document; its own listener clears the
+    // shared payload even though the main document saw no terminal event.
+    // (Testing-library cannot pick a window for a detached document's nodes.)
+    otherDocument.body.dispatchEvent(new Event('drop', { bubbles: true }))
+
+    fireEvent.drop(screen.getByTestId('target'))
+    expect(onDrop).toHaveBeenCalledWith(undefined)
   })
 })

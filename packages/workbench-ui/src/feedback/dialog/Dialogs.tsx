@@ -18,9 +18,12 @@ import styles from './Dialogs.module.css'
 export function ConfirmDialog({
   opts,
   onResolve,
+  targetDocument,
 }: {
   opts: IConfirmOptions
   onResolve: (r: IConfirmResult) => void
+  /** Owner document when the dialog is portaled into an auxiliary window. */
+  targetDocument?: Document | undefined
 }) {
   const primary = opts.primaryButton ?? localize('dialog.default.ok', 'OK')
   const cancel = opts.cancelButton ?? localize('dialog.default.cancel', 'Cancel')
@@ -49,7 +52,11 @@ export function ConfirmDialog({
     ...echoCheckboxes,
   })
   return (
-    <FocusScopeOverlay visible onEscape={() => onResolve(cancelResult)}>
+    <FocusScopeOverlay
+      visible
+      onEscape={() => onResolve(cancelResult)}
+      targetDocument={targetDocument}
+    >
       <div
         className={styles['backdrop']}
         role="dialog"

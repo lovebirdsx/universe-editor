@@ -34,6 +34,8 @@ interface Props {
   readonly keyboard: boolean
   readonly commandService: ICommandService
   readonly contextKeyService: IContextKeyService
+  /** Document that owns the clicked Monaco editor (auxiliary window). */
+  readonly targetDocument?: Document | undefined
   readonly onClose: () => void
 }
 
@@ -46,6 +48,7 @@ export function EditorContextMenu({
   keyboard,
   commandService,
   contextKeyService,
+  targetDocument,
   onClose,
 }: Props) {
   const resourceScheme = resource.scheme
@@ -74,6 +77,7 @@ export function EditorContextMenu({
       contextTag={selection !== null && !selection.isEmpty() ? 'selection' : 'noSelection'}
       commandService={commandService}
       contextKeyService={scopedContext}
+      {...(targetDocument ? { targetDocument } : {})}
       onClose={onClose}
     />
   )

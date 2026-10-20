@@ -160,6 +160,8 @@ import type { IExtensionsWorkbenchService } from '../services/extensionsWorkbenc
 import type { IExtensionsUpdateService } from '../services/extensionsUpdates/ExtensionsUpdateService.js'
 import { EnablementState } from '../services/extensions/ExtensionEnablementService.js'
 import type { IUserKeybindingsService } from '../services/keybindings/UserKeybindingsService.js'
+import type { IAuxiliaryEditorWindowService } from '../services/windows/auxiliaryEditorWindowService.js'
+import type { IWorkbenchWindowService } from '../services/windows/workbenchWindowService.js'
 import type { WorkbenchThemeService } from '../services/themes/workbenchThemeService.js'
 import { currentRemoteAuthority } from '../services/remote/windowRemoteAuthority.js'
 
@@ -169,6 +171,8 @@ export interface E2EProbeServices {
   readonly lifecycleService: ILifecycleService
   readonly editorService: IEditorService
   readonly editorGroupsService: IEditorGroupsService
+  readonly auxiliaryEditorWindowService: IAuxiliaryEditorWindowService
+  readonly workbenchWindowService: IWorkbenchWindowService
   readonly editorResolverService: IEditorResolverService
   readonly statusBarService: IStatusBarService
   readonly notificationService: INotificationService
@@ -719,6 +723,58 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
         })),
       }
     },
+    getAuxiliaryWindows: () =>
+      services.auxiliaryEditorWindowService.windows.map((entry) => {
+        const doc = entry.window.document
+        const child = entry.window.window as Window & {
+          ipc?: unknown
+          __universeAuxiliaryWindow?: unknown
+        }
+        return {
+          token: entry.token,
+          partId: entry.part.id,
+          title: doc.title,
+          active: services.workbenchWindowService.activeWindow === entry.window,
+          explicitEmpty: entry.explicitEmpty,
+          groups: entry.part.groups.map((group) => ({
+            id: group.id,
+            active: group === entry.part.activeGroup,
+            ...(group.activeEditor ? { activeEditorId: group.activeEditor.id } : {}),
+            activeEditorDirty: group.activeEditor?.isDirty ?? false,
+            editorUris: group.editors
+              .map((editor) => editor.resource?.toString())
+              .filter((uri): uri is string => uri !== undefined),
+          })),
+          hasRoot: doc.getElementById('root') !== null,
+          styleCount: doc.querySelectorAll('style,link[rel~="stylesheet"]').length,
+          baseHref: doc.baseURI,
+          theme: doc.documentElement.dataset['theme'],
+          hasIpc: child.ipc !== undefined,
+          hasAuxiliaryMarker:
+            child.__universeAuxiliaryWindow === true ||
+            (typeof child.__universeAuxiliaryWindow === 'object' &&
+              child.__universeAuxiliaryWindow !== null &&
+              (child.__universeAuxiliaryWindow as { marker?: unknown }).marker === true),
+        }
+      }),
+    getWorkbenchWindows: () =>
+      services.workbenchWindowService.windows.map((entry) => ({
+        id: entry.id,
+        isMain: entry.isMain,
+        active: services.workbenchWindowService.activeWindow.id === entry.id,
+        groupIds: entry.part.groups.map((group) => group.id),
+      })),
+    focusAuxiliaryWindow: async (token) => {
+      const entry = services.auxiliaryEditorWindowService.getWindowForToken(token)
+      if (!entry) return
+      services.editorGroupsService.activatePart(entry.part)
+      services.workbenchWindowService.setActiveWindow(entry.window)
+      entry.window.window.focus()
+    },
+    requestCloseAuxiliaryWindow: async (token) => {
+      const entry = services.auxiliaryEditorWindowService.getWindowForToken(token)
+      if (entry) await services.auxiliaryEditorWindowService.requestClose(entry)
+    },
     getFileIconThemeId: () => services.themeService.getFileIconTheme().id,
     getRegisteredFileIconThemeIds: () => services.themeService.getFileIconThemes().map((t) => t.id),
     getProductIconThemeId: () => services.themeService.getProductIconTheme().id,
@@ -835,6 +891,14 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       return monaco?.getModel()?.getValue()
     },
     isActiveEditorDirty: () => services.editorGroupsService.activeGroup?.activeEditor?.isDirty,
+    isEditorUriDirty: (uri) => {
+      for (const group of services.editorGroupsService.groups) {
+        for (const editor of group.editors) {
+          if (editor.resource?.toString() === uri) return editor.isDirty
+        }
+      }
+      return undefined
+    },
     // 只走一趟模型、不持有副本：调用方比的是两个数，而不是把上兆的正文搬过桥。
     getActiveEditorTextDigest: () => {
       const monaco = getActiveTextEditor(services.editorGroupsService)?.editor

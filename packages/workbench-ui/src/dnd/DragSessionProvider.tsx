@@ -1,41 +1,55 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { DragSessionContext } from './DragSessionContext.js'
+import { useRef, useState, type ReactNode } from 'react'
+import { DragSessionContext, type DragSessionState } from './DragSessionContext.js'
+import { useDragSessionDocument } from './useDragSessionDocument.js'
 
 /** Wrap any subtree that participates in DnD (ExplorerView, EditorArea, etc.). */
 export function DragSessionProvider({ children }: { children: ReactNode }) {
   const payloadRef = useRef<unknown>(undefined)
+  const consumedRef = useRef(false)
+  const cancelledRef = useRef(false)
   // Force re-render isn't needed for DnD — payload is read synchronously on drop.
   // We expose a stable object so hooks don't re-render on every drag move.
-  const [ctx] = useState(() => ({
+  const [ctx] = useState<DragSessionState>(() => ({
     get payload() {
       return payloadRef.current
     },
-    setPayload(p: unknown) {
+    get consumed() {
+      return consumedRef.current
+    },
+    get cancelled() {
+      return cancelledRef.current
+    },
+    begin(p: unknown) {
       payloadRef.current = p
+      consumedRef.current = false
+      cancelledRef.current = false
+    },
+    markConsumed() {
+      consumedRef.current = true
+    },
+    markCancelled() {
+      cancelledRef.current = true
     },
     clearPayload() {
       payloadRef.current = undefined
     },
   }))
 
-  // Safety net: `useDragHandle`'s onDragEnd clears the payload, but the drag
-  // source can be unmounted before the browser dispatches `dragend` to it — e.g.
-  // dropping an editor tab into a split moves (remounts) the source tab, so its
-  // dragend never fires and the payload lingers. A stale payload then makes the
-  // next unrelated drop (a file from the Explorer) look like an in-tree tab move,
-  // silently no-op-ing the open. Every gesture ends with a window-level `drop` or
-  // `dragend`, so clear there too — it can never be missed.
-  useEffect(() => {
-    const clear = (): void => {
-      payloadRef.current = undefined
-    }
-    window.addEventListener('drop', clear)
-    window.addEventListener('dragend', clear)
-    return () => {
-      window.removeEventListener('drop', clear)
-      window.removeEventListener('dragend', clear)
-    }
-  }, [])
+  // Workbench documents other than the main one attach their own cleanup (see
+  // useDragSessionDocument). Both `drop` and `dragend` are terminal events of a
+  // native drag, so clearing here can never be missed even if the source
+  // element unmounted before the browser delivered `dragend` to it. The hook
+  // consumes the context, so it must run in a child — the provider itself is
+  // outside the value it provides.
+  return (
+    <DragSessionContext.Provider value={ctx}>
+      <MainDocumentDragCleanup />
+      {children}
+    </DragSessionContext.Provider>
+  )
+}
 
-  return <DragSessionContext.Provider value={ctx}>{children}</DragSessionContext.Provider>
+function MainDocumentDragCleanup(): null {
+  useDragSessionDocument()
+  return null
 }

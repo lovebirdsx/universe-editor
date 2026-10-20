@@ -1,52 +1,39 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  EditorGroupsService — DI entry, grid coordination, and serialize/restore.
- *  The EditorGroup adapter lives in EditorGroup.ts and the serialization
- *  schema in editorGroupsPersistence.ts; both are re-exported from this file
- *  so existing imports keep working.
+ *  EditorGroupsService — global DI entry and cross-part aggregation.
+ *
+ *  Owns the collection of editor parts (one per workbench window). Each part
+ *  (`EditorPart`) keeps the single-grid algorithm, its local groups/active
+ *  group/MRU and serialization. This service keeps the global group enumeration
+ *  (Save All, dirty checks, extension enumeration), the global MRU and the
+ *  active-part/active-group events.
  *--------------------------------------------------------------------------------------------*/
 
 import {
-  Direction,
   Disposable,
-  EditorGroupModel,
+  DisposableStore,
   EditorInput,
-  EditorRegistry,
   Emitter,
   Event,
   GroupDirection,
-  GroupLocation,
   GroupOrientation,
   GroupsArrangement,
   GroupsOrder,
-  Grid,
-  type GridAxis,
-  type GridBranchNode,
-  type GridNode,
-  type GridLeafNode,
-  IEditorGroup,
-  IEditorGroupsService,
-  IFindGroupScope,
   NullLogger,
-  type ISerializedGrid,
-  Orientation,
-  type ServicesAccessor,
-  observableValue,
-  transaction,
+  type Grid,
+  type GridAxis,
+  type IEditorGroup,
+  type IEditorGroupsService,
+  type IEditorPart,
+  type IFindGroupScope,
   type ILogger,
-  type IDisposable,
+  type ServicesAccessor,
 } from '@universe-editor/platform'
-import { EditorGroup, directionToGridDirection } from './EditorGroup.js'
-import { DiffEditorInput } from './DiffEditorInput.js'
-import { EditorViewStateCache } from './EditorViewStateCache.js'
-import {
-  collectLeavesInOrder,
-  type ICollectedLeaf,
-  type ISerializedEditorGroupData,
-  type ISerializedEditorGroupsState,
-} from './editorGroupsPersistence.js'
+import { EditorPart } from './EditorPart.js'
+import type { ISerializedEditorGroupsState } from './editorGroupsPersistence.js'
 
 export { EditorGroup } from './EditorGroup.js'
+export { EditorPart } from './EditorPart.js'
 export type {
   ISerializedEditorGroupData,
   ISerializedEditorGroupsState,
@@ -56,13 +43,11 @@ export type {
 export class EditorGroupsService extends Disposable implements IEditorGroupsService {
   declare readonly _serviceBrand: undefined
 
-  private readonly _grid: Grid<EditorGroup>
-  private readonly _groups: EditorGroup[] = []
-  private readonly _mru: EditorGroup[] = []
-  private _orientation: GroupOrientation = GroupOrientation.Horizontal
-  private readonly _groupWatchers = new Map<number, IDisposable>()
-
-  private readonly _activeGroup: ReturnType<typeof observableValue<EditorGroup>>
+  private readonly _mainPart: EditorPart
+  private readonly _parts: EditorPart[] = []
+  private _activePart: EditorPart
+  private readonly _globalMru: IEditorGroup[] = []
+  private readonly _partStores = new Map<EditorPart, DisposableStore>()
 
   private readonly _onDidActiveGroupChange = this._register(new Emitter<IEditorGroup>())
   readonly onDidActiveGroupChange: Event<IEditorGroup> = this._onDidActiveGroupChange.event
@@ -76,62 +61,102 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
   private readonly _onDidMoveGroup = this._register(new Emitter<IEditorGroup>())
   readonly onDidMoveGroup: Event<IEditorGroup> = this._onDidMoveGroup.event
 
-  /** Public grid handle for the React layer to subscribe / introspect. */
-  get grid(): Grid<EditorGroup> {
-    return this._grid
+  private readonly _onDidActivePartChange = this._register(new Emitter<IEditorPart>())
+  readonly onDidActivePartChange: Event<IEditorPart> = this._onDidActivePartChange.event
+
+  private readonly _onDidAddPart = this._register(new Emitter<IEditorPart>())
+  readonly onDidAddPart: Event<IEditorPart> = this._onDidAddPart.event
+
+  private readonly _onDidRemovePart = this._register(new Emitter<IEditorPart>())
+  readonly onDidRemovePart: Event<IEditorPart> = this._onDidRemovePart.event
+
+  private readonly _host = {
+    activatePart: (part: IEditorPart): boolean => this._setActivePart(part as EditorPart, false),
+    isPartActive: (part: IEditorPart): boolean => this._activePart === part,
   }
 
   constructor(private readonly _logger: ILogger = new NullLogger()) {
     super()
-    const initial = new EditorGroup(this._register(new EditorGroupModel()), this)
-    this._groups.push(initial)
-    this._mru.push(initial)
-    this._grid = new Grid<EditorGroup>(initial, Orientation.Horizontal)
-    this._activeGroup = observableValue<EditorGroup>('activeGroup', initial)
-    this._watchGroup(initial)
-    this._register({
-      dispose: () => {
-        for (const d of this._groupWatchers.values()) d.dispose()
-        this._groupWatchers.clear()
-      },
-    })
+    // The parts own emitters/group watchers; registering them (and the per-part
+    // subscription store below) under this service keeps the whole tree rooted
+    // at the singleton DI service, so the renderer leak gate can resolve it.
+    this._mainPart = this._register(
+      new EditorPart(this._host, { isMain: true, logger: this._logger }),
+    )
+    this._parts.push(this._mainPart)
+    this._activePart = this._mainPart
+    this._trackPart(this._mainPart)
+    this._globalMru.push(this._mainPart.activeGroup)
   }
 
-  get activeGroup(): IEditorGroup {
-    return this._activeGroup.get()
+  get mainPart(): EditorPart {
+    return this._mainPart
   }
 
-  get activeGroupForOpen(): IEditorGroup {
-    const active = this._activeGroup.get()
-    if (!active.isLocked) return active
-    const unlocked = this._groups.find((g) => !g.isLocked)
-    if (unlocked) return unlocked
-    // Every group is locked — open into a fresh, unlocked group next to the
-    // active one and make it the active target (VSCode parity).
-    const created = this.addGroup(active, GroupDirection.Right)
-    this.activateGroup(created)
-    return created
+  get activePart(): EditorPart {
+    return this._activePart
   }
 
-  get groups(): readonly IEditorGroup[] {
-    return this._groups
+  get parts(): readonly EditorPart[] {
+    return this._parts
   }
 
-  get count(): number {
-    return this._groups.length
+  /** Compatibility handle: the main part's grid. Multi-window code uses `part.grid`. */
+  get grid(): Grid<IEditorGroup> {
+    return this._mainPart.grid
   }
 
   get orientation(): GroupOrientation {
-    return this._orientation
+    return this._mainPart.orientation
+  }
+
+  get activeGroup(): IEditorGroup {
+    return this._activePart.activeGroup
+  }
+
+  get activeGroupForOpen(): IEditorGroup {
+    return this._activePart.activeGroupForOpen
+  }
+
+  get groups(): readonly IEditorGroup[] {
+    const all: IEditorGroup[] = []
+    for (const part of this._parts) all.push(...part.groups)
+    // Group ids are globally monotonic, so sorting restores global creation
+    // order even when a newer group was added to an older part.
+    return all.sort((a, b) => a.id - b.id)
+  }
+
+  get count(): number {
+    let count = 0
+    for (const part of this._parts) count += part.count
+    return count
   }
 
   getGroup(id: number): IEditorGroup | undefined {
-    return this._groups.find((g) => g.id === id)
+    for (const part of this._parts) {
+      const group = part.getGroup(id)
+      if (group) return group
+    }
+    return undefined
   }
 
   getGroups(order: GroupsOrder = GroupsOrder.CreationTime): readonly IEditorGroup[] {
-    if (order === GroupsOrder.MostRecentlyActive) return this._mru.slice()
-    return this._groups.slice()
+    if (order === GroupsOrder.MostRecentlyActive) {
+      const present = new Set(this.groups)
+      const result = this._globalMru.filter((g) => present.has(g))
+      const seen = new Set(result)
+      for (const g of this.groups) {
+        if (!seen.has(g)) {
+          seen.add(g)
+          result.push(g)
+        }
+      }
+      return result
+    }
+    if (order === GroupsOrder.GridAppearance) {
+      return this._parts.flatMap((part) => part.getGroups(GroupsOrder.GridAppearance))
+    }
+    return this.groups
   }
 
   findGroup(
@@ -139,375 +164,300 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
     source: IEditorGroup = this.activeGroup,
     wrap = false,
   ): IEditorGroup | undefined {
-    const idx = this._groups.indexOf(source as EditorGroup)
-    if (idx === -1) return undefined
-    if (scope.location !== undefined) {
-      switch (scope.location) {
-        case GroupLocation.First:
-          return this._groups[0]
-        case GroupLocation.Last:
-          return this._groups[this._groups.length - 1]
-        case GroupLocation.Next: {
-          const next = idx + 1
-          if (next < this._groups.length) return this._groups[next]
-          return wrap ? this._groups[0] : undefined
-        }
-        case GroupLocation.Previous: {
-          const prev = idx - 1
-          if (prev >= 0) return this._groups[prev]
-          return wrap ? this._groups[this._groups.length - 1] : undefined
-        }
-      }
-    }
-    if (scope.direction !== undefined) {
-      return this._findSpatialNeighbor(source as EditorGroup, scope.direction)
-    }
-    return undefined
-  }
-
-  private _findSpatialNeighbor(
-    source: EditorGroup,
-    direction: GroupDirection,
-  ): EditorGroup | undefined {
-    const gridDir = directionToGridDirection(direction)
-    const wantedOrientation =
-      gridDir === Direction.Left || gridDir === Direction.Right
-        ? Orientation.Horizontal
-        : Orientation.Vertical
-    const goForward = gridDir === Direction.Right || gridDir === Direction.Down
-
-    function findLeaf(node: GridNode<EditorGroup>): GridLeafNode<EditorGroup> | undefined {
-      if (node.kind === 'leaf') return node.view === source ? node : undefined
-      for (const c of node.children) {
-        const f = findLeaf(c)
-        if (f) return f
-      }
-      return undefined
-    }
-
-    function nearestLeaf(
-      node: GridNode<EditorGroup>,
-      last: boolean,
-    ): GridLeafNode<EditorGroup> | undefined {
-      if (node.kind === 'leaf') return node
-      const children = node.children
-      if (children.length === 0) return undefined
-      return nearestLeaf(last ? children[children.length - 1]! : children[0]!, last)
-    }
-
-    const leaf = findLeaf(this._grid.root)
-    if (!leaf) return undefined
-
-    let cur: GridNode<EditorGroup> = leaf
-    while (cur.parent) {
-      const parent: GridBranchNode<EditorGroup> = cur.parent
-      if (parent.orientation === wantedOrientation) {
-        const idx = parent.children.indexOf(cur)
-        const sibIdx = goForward ? idx + 1 : idx - 1
-        if (sibIdx >= 0 && sibIdx < parent.children.length) {
-          return nearestLeaf(parent.children[sibIdx]!, goForward)?.view
-        }
-      }
-      cur = parent
-    }
-    return undefined
+    const owner = this._partForGroup(source) ?? this._activePart
+    return owner.findGroup(scope, source, wrap)
   }
 
   activateGroup(group: IEditorGroup | number): IEditorGroup {
-    const target = this._resolve(group)
+    const target = this._resolveGroup(group)
     if (!target) return this.activeGroup
-    if (this.activeGroup === target) return target
-    transaction((tx) => {
-      this._activeGroup.set(target, tx)
-    })
-    // MRU bump
-    const idx = this._mru.indexOf(target)
-    if (idx !== -1) this._mru.splice(idx, 1)
-    this._mru.unshift(target)
-    this._onDidActiveGroupChange.fire(target)
-    this._logger.debug(`activateGroup id=${target.id}`)
+    return (target.part as EditorPart).activateGroup(target)
+  }
+
+  activatePart(part: IEditorPart | number): IEditorPart {
+    const target = this._resolvePart(part)
+    if (!target) return this._activePart
+    this._setActivePart(target, true)
     return target
   }
 
+  getPart(id: number): IEditorPart | undefined {
+    return this._parts.find((part) => part.id === id)
+  }
+
   addGroup(location: IEditorGroup | number, direction: GroupDirection): IEditorGroup {
-    const target = this._resolve(location) ?? (this.activeGroup as EditorGroup)
-    const newGroup = new EditorGroup(this._register(new EditorGroupModel()), this)
-    this._grid.addView(newGroup, 200, target as EditorGroup, directionToGridDirection(direction))
-    this._groups.push(newGroup)
-    this._mru.push(newGroup)
-    this._onDidAddGroup.fire(newGroup)
-    this._watchGroup(newGroup)
-    this._logger.info(`addGroup id=${newGroup.id} target=${target.id} direction=${direction}`)
-    return newGroup
+    const locationGroup =
+      typeof location === 'number' ? this.getGroup(location) : this._resolveGroup(location)
+    const owner = locationGroup ? (locationGroup.part as EditorPart) : this._activePart
+    return owner.addGroup(location, direction)
   }
 
   removeGroup(group: IEditorGroup | number): void {
-    if (this._groups.length <= 1) return // protect: keep at least one group
-    const target = this._resolve(group)
+    const target = this._resolveGroup(group)
     if (!target) return
-    this._groupWatchers.get(target.id)?.dispose()
-    this._groupWatchers.delete(target.id)
-    this._grid.removeView(target)
-    const idx = this._groups.indexOf(target)
-    if (idx !== -1) this._groups.splice(idx, 1)
-    const mruIdx = this._mru.indexOf(target)
-    if (mruIdx !== -1) this._mru.splice(mruIdx, 1)
-    if (this.activeGroup === target) {
-      const next = this._mru[0] ?? this._groups[0]!
-      this._activeGroup.set(next, undefined)
-      this._onDidActiveGroupChange.fire(next)
-    }
-    target.model.dispose()
-    this._onDidRemoveGroup.fire(target)
-    this._logger.info(`removeGroup id=${target.id}`)
+    ;(target.part as EditorPart).removeGroup(target)
   }
 
   resizeGroup(group: IEditorGroup, axis: GridAxis, deltaPx: number): boolean {
-    const target = this._resolve(group)
+    const target = this._resolveGroup(group)
     if (!target) return false
-    const handled = this._grid.resizeViewByDelta(target, axis, deltaPx)
-    // Claiming the axis without a usable pixel size looks exactly like a dead
-    // shortcut, so say so: the React layer reports the container through
-    // `Grid.setContainerSize` and nothing can be converted before it does.
-    const container = this._grid.getContainerSize()
-    if (handled && (!container || container[axis] <= 0)) {
-      this._logger.warn(`resizeGroup: editor grid has no usable ${axis}; resize ignored`)
-    }
-    return handled
+    return (target.part as EditorPart).resizeGroup(target, axis, deltaPx)
   }
 
   moveGroup(group: IEditorGroup, location: IEditorGroup, direction: GroupDirection): IEditorGroup {
-    const src = group as EditorGroup
-    const dst = location as EditorGroup
-    if (src === dst) return src
-    this._grid.moveView(src, dst, directionToGridDirection(direction))
-    this._onDidMoveGroup.fire(src)
-    this._logger.info(`moveGroup id=${src.id} target=${dst.id} direction=${direction}`)
-    return src
+    const src = this._resolveGroup(group)
+    const dst = this._resolveGroup(location)
+    if (!src) return group
+    if (!dst) return src
+    if (src.part !== dst.part) {
+      // Groups own their part's grid; re-homing a group across windows is a
+      // separate migration flow (window service), not a layout operation.
+      this._logger.warn(
+        `moveGroup: refusing cross-part move id=${src.id} from=${src.part.id} to=${dst.part.id}`,
+      )
+      return src
+    }
+    return (src.part as EditorPart).moveGroup(src, dst, direction)
   }
 
-  moveEditor(editor: EditorInput, target: IEditorGroup): void {
-    const src = this._findGroupContaining(editor)
+  moveEditor(editor: EditorInput, target: IEditorGroup, source?: IEditorGroup): void {
+    const dst = this._resolveGroup(target)
+    if (!dst) return
+    const src = source ? this._resolveGroup(source) : this._findGroupContaining(editor)
     if (!src) return
-    if (src === target) return
-    const sticky = src.isSticky(editor)
-    src.detachEditor(editor)
-    // If the target already holds a same-id editor (e.g. a split clone),
-    // openEditor keeps the existing one and disposes this orphan for us — no
-    // extra guard needed here.
-    ;(target as EditorGroup).openEditor(editor, { sticky })
-    this._logger.info(`moveEditor id=${editor.id} from=${src.id} to=${target.id}`)
+    if (src === dst) return
+    const actual = src.findEditor(editor)
+    if (!actual) return
+    const sticky = src.isSticky(actual)
+    const index = src.indexOf(actual)
+    src.detachEditor(actual)
+    try {
+      // If the target already holds a same-id editor (e.g. a split clone),
+      // `openEditor` migrates its state into that target instance and disposes
+      // this one. Cross-part moves therefore keep model/dirty state alive.
+      dst.openEditor(actual, { sticky })
+    } catch (err) {
+      // The detach already happened, so a throwing migration hook would leave
+      // the input owned by nobody (and dirty state unreachable). Put it back in
+      // the source before surfacing the failure — unless the target did adopt
+      // it before a listener threw.
+      try {
+        if (!dst.contains(actual)) src.openEditor(actual, { index, sticky })
+      } catch (restoreErr) {
+        this._logger.error(
+          `moveEditor rollback failed id=${actual.id} source=${src.id}: ${String(restoreErr)}`,
+        )
+      }
+      throw err
+    }
+    this._logger.info(
+      `moveEditor id=${actual.id} from=part:${src.part.id}/group:${src.id} to=part:${dst.part.id}/group:${dst.id}`,
+    )
   }
 
   copyEditor(editor: EditorInput, target: IEditorGroup, options?: { sticky?: boolean }): void {
     // VSCode parity (issue #99035): a plain copy does NOT travel the sticky
     // flag — split/drag-drop paths that mean to preserve it pass
     // `options.sticky` explicitly (editorGroupView.ts copyForSplit precedent).
-    ;(target as EditorGroup).openEditor(editor, {
-      sticky: options?.sticky ?? false,
-    })
-    this._logger.info(`copyEditor id=${editor.id} to=${target.id}`)
+    const dst = this._resolveGroup(target)
+    if (!dst) return
+    dst.openEditor(editor, { sticky: options?.sticky ?? false })
+    this._logger.info(`copyEditor id=${editor.id} to=part:${dst.part.id}/group:${dst.id}`)
   }
 
   setGroupOrientation(orientation: GroupOrientation): void {
-    this._orientation = orientation
+    for (const part of this._parts) part.setGroupOrientation(orientation)
     this._logger.debug(`setGroupOrientation orientation=${orientation}`)
   }
 
-  arrangeGroups(_arrangement: GroupsArrangement, _group?: IEditorGroup): void {
+  arrangeGroups(arrangement: GroupsArrangement, group?: IEditorGroup): void {
     // No-op for the simplified renderer; the grid layout reflows automatically.
+    for (const part of this._parts) part.arrangeGroups(arrangement, group)
   }
 
-  // Helpers ------------------------------------------------------------------
-
-  private _watchGroup(group: EditorGroup): void {
-    const d = this._register(
-      group.model.onDidChangeModel(() => {
-        if (group.count === 0 && this._groups.length > 1) {
-          queueMicrotask(() => {
-            if (group.count === 0 && this._groups.includes(group)) {
-              this.removeGroup(group)
-            }
-          })
-        }
-        // A group that stays empty cannot stay locked: there is nothing left to
-        // protect, and `activeGroupForOpen` would route every open away from it
-        // into a brand-new group. Deferred one microtask — like the removal
-        // above — because "empty" is only meaningful once the current operation
-        // finished: a toggle-preview or resolver upgrade detaches and reopens in
-        // place within the same tick.
-        if (group.count === 0 && group.isLocked) {
-          queueMicrotask(() => {
-            if (group.count === 0 && this._groups.includes(group) && group.isLocked) {
-              group.lock(false)
-              this._logger.debug(`unlocked empty group id=${group.id}`)
-            }
-          })
-        }
-      }),
-    )
-    this._groupWatchers.set(group.id, d)
+  createAuxiliaryPart(options?: { activate?: boolean }): EditorPart {
+    const part = this._register(new EditorPart(this._host, { isMain: false, logger: this._logger }))
+    this._parts.push(part)
+    this._trackPart(part)
+    this._globalMru.push(part.activeGroup)
+    this._onDidAddPart.fire(part)
+    // The initial group is created by the part's constructor, which cannot
+    // fire before listeners are attached; announce it now so group trackers
+    // (Outline, focus restore, dirty checks) see the new part's group.
+    this._onDidAddGroup.fire(part.activeGroup)
+    if (options?.activate !== false) this._setActivePart(part, true)
+    this._logger.info(`createAuxiliaryPart id=${part.id} activate=${options?.activate !== false}`)
+    return part
   }
 
-  private _resolve(group: IEditorGroup | number): EditorGroup | undefined {
-    if (typeof group === 'number') return this._groups.find((g) => g.id === group)
-    return group as EditorGroup
-  }
-
-  private _findGroupContaining(editor: EditorInput): EditorGroup | undefined {
-    for (const g of this._groups) {
-      if (g.contains(editor)) return g
+  removePart(part: IEditorPart | number, options?: { force?: boolean }): boolean {
+    const target = this._resolvePart(part)
+    if (!target || target.isMain) return false
+    if (!options?.force && !target.isEmpty) {
+      this._logger.warn(`removePart: refusing non-empty part id=${target.id}`)
+      return false
     }
-    return undefined
+    this._destroyPart(target, options?.force === true)
+    return true
   }
 
   // Persistence --------------------------------------------------------------
 
+  /** Serializes the main part; per-part state is available through `part.toJSON()`. */
   toJSON(): ISerializedEditorGroupsState {
-    const grid = this._grid.serialize((group) => {
-      const persistable = group.editors
-      const activeIdx = group.activeEditor ? persistable.indexOf(group.activeEditor) : -1
-      const uris = persistable.map((e) => e.resource?.toString() ?? '').filter(Boolean)
-      const viewStates = EditorViewStateCache.snapshotGroup(group.id, uris)
-      return {
-        editors: persistable.map((e) => ({
-          typeId: e.typeId,
-          // Diff snapshots carry both sides' full text; routing them through
-          // the budgeted serializer keeps this write off the megabyte scale.
-          data:
-            e instanceof DiffEditorInput ? e.serializeForPersistence() : (e.serialize?.() ?? null),
-        })),
-        activeIndex: activeIdx >= 0 ? activeIdx : 0,
-        ...(group.stickyCount > 0 ? { sticky: group.stickyCount - 1 } : {}),
-        ...(group.isLocked ? { locked: true } : {}),
-        ...(Object.keys(viewStates).length > 0 && { viewStates }),
-      }
-    }) as ISerializedGrid<ISerializedEditorGroupData>
-    const activeId = this.activeGroup.id
-    return { grid, activeGroupId: activeId }
+    return this._mainPart.toJSON()
   }
 
   /**
-   * Replace the current grid + groups with the contents of `state`. Existing
-   * editors are closed and groups disposed; the React tree continues to track
-   * the same `_grid` object, since views are added/removed via the grid's
-   * public API so its `onDidChange` event keeps GridLayout in sync.
-   *
-   * Unknown editor `typeId`s are skipped silently (forward-compatibility with
-   * future editor providers that may not be registered on older builds).
-   *
-   * The optional `accessor` is forwarded to `EditorRegistry.deserialize` so
-   * providers that need to construct service-dependent inputs (e.g. the file
-   * editor needing `IFileService`) can reach the DI graph.
+   * Restore the main part from a workspace snapshot. Auxiliary parts belong to
+   * the window layout (coordinated separately) and are torn down here.
    */
   restore(state: ISerializedEditorGroupsState, accessor?: ServicesAccessor): void {
-    // 1. Tear down existing groups beyond the first; close all editors in the
-    //    first group so it can be reused as the seed leaf.  We do NOT call
-    //    grid.removeView here because the grid will be fully rebuilt in step 4.
-    for (let i = this._groups.length - 1; i >= 1; i--) {
-      const g = this._groups[i]!
-      this._groupWatchers.get(g.id)?.dispose()
-      this._groupWatchers.delete(g.id)
-      this._groups.splice(i, 1)
-      const mruIdx = this._mru.indexOf(g)
-      if (mruIdx !== -1) this._mru.splice(mruIdx, 1)
-      g.model.dispose()
-      this._onDidRemoveGroup.fire(g)
-    }
-    const seed = this._groups[0]!
-    seed.closeAllEditors()
-
-    // 2. Walk the serialized tree to collect all leaves in pre-order.
-    const visitOrder: ICollectedLeaf[] = []
-    collectLeavesInOrder(state.grid.root, undefined, visitOrder)
-
-    // 3. Create EditorGroup instances for each leaf (reuse the seed for the first).
-    const leafGroups: EditorGroup[] = []
-    for (let i = 0; i < visitOrder.length; i++) {
-      if (i === 0) {
-        leafGroups.push(seed)
-      } else {
-        const newGroup = new EditorGroup(this._register(new EditorGroupModel()), this)
-        leafGroups.push(newGroup)
-        this._groups.push(newGroup)
-        this._mru.push(newGroup)
-        this._watchGroup(newGroup)
-      }
-    }
-
-    // 4. Rebuild the grid tree from the serialized structure in one shot.
-    //    This correctly restores every level of nesting (branch orientations,
-    //    depths) unlike the previous sequential addView approach which could
-    //    not express trees where a branch node is the sibling of a leaf at
-    //    any nesting depth greater than one.
-    let leafIndex = 0
-    this._grid.rebuildFrom(state.grid.root, (_data: unknown) => leafGroups[leafIndex++]!)
-
-    // 5. Fire add events for new groups, then hydrate editors.
-    let restoredActive: EditorGroup | undefined
-    visitOrder.forEach((leaf, index) => {
-      const target = leafGroups[index]!
-      if (index > 0) this._onDidAddGroup.fire(target)
-      const hydrated: EditorInput[] = []
-      let restoredSticky = leaf.data.sticky
-      for (const e of leaf.data.editors) {
-        const input = EditorRegistry.deserialize(e.typeId, e.data, accessor)
-        if (input) {
-          hydrated.push(input)
-        } else if (restoredSticky !== undefined && hydrated.length <= restoredSticky) {
-          // A skipped entry inside the sticky region shifts the boundary.
-          // Compare against `hydrated.length` (survivors), not the serialized
-          // index — consecutive skips each collapse the region by one, which
-          // VSCode's own `index <= data.sticky` check gets wrong.
-          restoredSticky--
-        }
-      }
-      hydrated.forEach((input, i) =>
-        target.openEditor(input, {
-          activate: false,
-          sticky: restoredSticky !== undefined && i <= restoredSticky,
-        }),
-      )
-      const activeIdx = Math.min(leaf.data.activeIndex, hydrated.length - 1)
-      if (activeIdx >= 0 && hydrated[activeIdx]) target.setActive(hydrated[activeIdx]!)
-      // Apply the exact locked state (the reused seed group may carry a stale
-      // lock). A leaf that hydrated to zero editors never comes back locked — it
-      // would route every later open into a brand-new group. (An empty leaf is
-      // legitimate: a layout may hold empty groups, and unknown typeIds are
-      // skipped.)
-      if (leaf.data.locked === true && target.count === 0) {
-        this._logger.debug(`restore: dropping lock on empty group id=${target.id}`)
-      }
-      target.lock(leaf.data.locked === true && target.count > 0)
-      if (leaf.data.viewStates) EditorViewStateCache.restoreGroup(target.id, leaf.data.viewStates)
-      if (target.id === state.activeGroupId) restoredActive = target
-    })
-
-    // 6. Restore the active group (fall back to the first).
-    const nextActive = restoredActive ?? this._groups[0]!
-    this._activeGroup.set(nextActive, undefined)
-    this._onDidActiveGroupChange.fire(nextActive)
-    this._logger.info(`restoreEditorGroups groups=${this._groups.length} active=${nextActive.id}`)
+    this._removeAuxiliaryParts()
+    if (this._activePart !== this._mainPart) this._setActivePart(this._mainPart, true)
+    this._mainPart.restore(state, accessor)
+    this._rebuildGlobalMru()
   }
 
   /**
-   * Tear down all groups to a single empty seed group. Used when the active
-   * workspace changes and there's no persisted state for the new workspace.
+   * Tear down all parts to the main part's single empty seed group. Used when
+   * the active workspace changes and there's no persisted state for the new
+   * workspace.
    */
   clearAll(): void {
-    for (let i = this._groups.length - 1; i >= 1; i--) {
-      const g = this._groups[i]!
-      this._grid.removeView(g)
-      this._groups.splice(i, 1)
-      const mruIdx = this._mru.indexOf(g)
-      if (mruIdx !== -1) this._mru.splice(mruIdx, 1)
-      g.model.dispose()
-      this._onDidRemoveGroup.fire(g)
+    this._removeAuxiliaryParts()
+    if (this._activePart !== this._mainPart) this._setActivePart(this._mainPart, true)
+    this._mainPart.clearAll()
+    this._rebuildGlobalMru()
+  }
+
+  // Internals ----------------------------------------------------------------
+
+  private _trackPart(part: EditorPart): void {
+    // Registered under the service (not a bare store): on page unload the
+    // service is a singleton root, while an unparented store reads as a leak.
+    const store = this._register(new DisposableStore())
+    store.add(
+      part.onDidAddGroup((group) => {
+        this._globalMru.push(group)
+        this._onDidAddGroup.fire(group)
+      }),
+    )
+    store.add(
+      part.onDidRemoveGroup((group) => {
+        const idx = this._globalMru.indexOf(group)
+        if (idx !== -1) this._globalMru.splice(idx, 1)
+        this._onDidRemoveGroup.fire(group)
+      }),
+    )
+    store.add(part.onDidMoveGroup((group) => this._onDidMoveGroup.fire(group)))
+    store.add(
+      part.onDidActiveGroupChange((group) => {
+        // A part only announces an active-group change after focusing itself,
+        // so this is a global active-group change. Still guard: restore/clear
+        // may drive a background part directly.
+        if (this._activePart !== part) return
+        this._bumpGlobalMru(group)
+        this._onDidActiveGroupChange.fire(group)
+      }),
+    )
+    this._partStores.set(part, store)
+  }
+
+  private _setActivePart(part: EditorPart, fireGroupChange: boolean): boolean {
+    if (this._activePart === part) return false
+    this._activePart = part
+    this._onDidActivePartChange.fire(part)
+    if (fireGroupChange) {
+      const group = part.activeGroup
+      this._bumpGlobalMru(group)
+      this._onDidActiveGroupChange.fire(group)
     }
-    const seed = this._groups[0]!
-    seed.closeAllEditors()
-    seed.lock(false)
-    this._activeGroup.set(seed, undefined)
-    this._onDidActiveGroupChange.fire(seed)
+    this._logger.debug(`activatePart id=${part.id}`)
+    return true
+  }
+
+  private _destroyPart(part: EditorPart, force: boolean): void {
+    if (this._activePart === part) this._setActivePart(this._mainPart, true)
+    const index = this._parts.indexOf(part)
+    if (index === -1) return
+    this._parts.splice(index, 1)
+    const store = this._partStores.get(part)
+    if (store) {
+      store.dispose()
+      this._partStores.delete(part)
+    }
+    const groups = [...part.groups]
+    for (const group of groups) {
+      const mruIdx = this._globalMru.indexOf(group)
+      if (mruIdx !== -1) this._globalMru.splice(mruIdx, 1)
+      this._onDidRemoveGroup.fire(group)
+    }
+    this._onDidRemovePart.fire(part)
+    part.dispose()
+    this._logger.info(`removePart id=${part.id} force=${force}`)
+  }
+
+  private _removeAuxiliaryParts(): void {
+    for (let i = this._parts.length - 1; i >= 0; i--) {
+      const part = this._parts[i]!
+      if (!part.isMain) this._destroyPart(part, true)
+    }
+  }
+
+  private _rebuildGlobalMru(): void {
+    this._globalMru.length = 0
+    for (const part of this._parts) {
+      for (const group of part.getGroups(GroupsOrder.MostRecentlyActive)) {
+        this._globalMru.push(group)
+      }
+    }
+  }
+
+  private _bumpGlobalMru(group: IEditorGroup): void {
+    let idx = this._globalMru.indexOf(group)
+    while (idx !== -1) {
+      this._globalMru.splice(idx, 1)
+      idx = this._globalMru.indexOf(group)
+    }
+    this._globalMru.unshift(group)
+  }
+
+  private _resolvePart(part: IEditorPart | number): EditorPart | undefined {
+    if (typeof part === 'number') return this._parts.find((p) => p.id === part)
+    return this._parts.includes(part as EditorPart) ? (part as EditorPart) : undefined
+  }
+
+  private _resolveGroup(group: IEditorGroup | number): IEditorGroup | undefined {
+    if (typeof group === 'number') return this.getGroup(group)
+    const part = this._partForGroup(group)
+    return part ? part.getGroup(group.id) : undefined
+  }
+
+  private _partForGroup(group: IEditorGroup): EditorPart | undefined {
+    const candidate = group.part as EditorPart | undefined
+    if (candidate && this._parts.includes(candidate)) return candidate
+    for (const part of this._parts) {
+      if (part.getGroup(group.id) === group) return part
+    }
+    return undefined
+  }
+
+  private _findGroupContaining(editor: EditorInput): IEditorGroup | undefined {
+    for (const part of this._parts) {
+      for (const group of part.groups) {
+        if (group.contains(editor)) return group
+      }
+    }
+    return undefined
+  }
+
+  override dispose(): void {
+    for (const store of this._partStores.values()) store.dispose()
+    this._partStores.clear()
+    for (const part of this._parts) part.dispose()
+    this._parts.length = 0
+    this._globalMru.length = 0
+    super.dispose()
   }
 }

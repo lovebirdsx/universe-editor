@@ -46,4 +46,53 @@ describe('UntitledEditorInput', () => {
     input.dispose()
     expect(MonacoModelRegistry.peek(input.resource)).toBeUndefined()
   })
+
+  it('shares one model across two inputs with the same untitled name', async () => {
+    const source = new UntitledEditorInput()
+    const sourceModel = await source.resolveModel()
+    sourceModel.setValue('draft')
+
+    const copy = new UntitledEditorInput(source.getName())
+    expect(await copy.resolveModel()).toBe(sourceModel)
+
+    copy.dispose()
+    expect(MonacoModelRegistry.peek(source.resource)).toBe(sourceModel)
+    source.dispose()
+    expect(MonacoModelRegistry.peek(source.resource)).toBeUndefined()
+  })
+
+  it('starts dirty when restored with text, matching updateDirtyFromModel', () => {
+    const input = new UntitledEditorInput('Untitled-900', 'draft')
+    expect(input.isDirty).toBe(true)
+  })
+
+  it('stays clean when constructed/restored empty', () => {
+    expect(new UntitledEditorInput('Untitled-901').isDirty).toBe(false)
+    expect(new UntitledEditorInput('Untitled-902', '').isDirty).toBe(false)
+  })
+
+  it('deserialize marks a non-empty buffer dirty before its tab can mount', () => {
+    const input = UntitledEditorInput.deserialize({ name: 'Untitled-903', content: 'unsaved' })
+    expect(input?.isDirty).toBe(true)
+    const empty = UntitledEditorInput.deserialize({ name: 'Untitled-904', content: '' })
+    expect(empty?.isDirty).toBe(false)
+  })
+
+  it('migrateFrom retains the shared buffer before the source is disposed', async () => {
+    const source = new UntitledEditorInput()
+    const sourceModel = await source.resolveModel()
+    sourceModel.setValue('draft')
+    source.setDirty(true)
+
+    const target = new UntitledEditorInput(source.getName())
+    target.migrateFrom(source)
+    source.dispose()
+
+    expect(MonacoModelRegistry.peek(target.resource)).toBe(sourceModel)
+    expect(target.isDirty).toBe(true)
+    expect((await target.resolveModel()).getValue()).toBe('draft')
+
+    target.dispose()
+    expect(MonacoModelRegistry.peek(target.resource)).toBeUndefined()
+  })
 })

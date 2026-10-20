@@ -155,6 +155,15 @@ function grabMainFrameNavigationHandler(): (details: NavigationDetails) => void 
   return call[1] as (details: NavigationDetails) => void
 }
 
+function simulateInitialLoad(): void {
+  const win = vi.mocked(BrowserWindow).mock.results.at(-1)?.value as {
+    webContents: { on: { mock: { calls: Array<[string, (...args: never[]) => void]> } } }
+  }
+  const calls = win.webContents.on.mock.calls.filter(([event]) => event === 'did-finish-load')
+  if (calls.length === 0) throw new Error('no did-finish-load handler registered')
+  for (const [, handler] of calls) handler()
+}
+
 function grabWindowClosedHandler(): () => void {
   const win = vi.mocked(BrowserWindow).mock.results.at(-1)?.value as {
     on: { mock: { calls: Array<[string, (...args: never[]) => void]> } }
@@ -235,6 +244,7 @@ function makeOpts() {
     extensionDevelopment: false,
     rendererDebug: false,
     preloadPath: '/preload/index.cjs',
+    auxiliaryPreloadPath: '/preload/auxiliary.cjs',
     rendererUrl: 'http://localhost:5173',
     getConfigDir: () => join(getTempRoot(), 'ue-wintest'),
     getConfigurationDefaults: () => ({}),
@@ -348,6 +358,7 @@ describe('WindowMainService', () => {
         const svc = makeService(opts)
         const id = await svc.createWindow()
         expect(svc.getRendererEpoch(id)).toBe(0)
+        simulateInitialLoad()
 
         grabMainFrameNavigationHandler()({ isMainFrame: true, isSameDocument: false })
 
@@ -361,6 +372,7 @@ describe('WindowMainService', () => {
         const { opts, invalidateWindowRenderer } = makeDiagnosticsOpts()
         const svc = makeService(opts)
         const id = await svc.createWindow()
+        simulateInitialLoad()
         const navigate = grabMainFrameNavigationHandler()
 
         navigate({ isMainFrame: false, isSameDocument: false })
@@ -375,6 +387,7 @@ describe('WindowMainService', () => {
         const { opts } = makeDiagnosticsOpts()
         const svc = makeService(opts)
         const id = await svc.createWindow()
+        simulateInitialLoad()
         const navigate = grabMainFrameNavigationHandler()
         navigate({ isMainFrame: true, isSameDocument: false })
         const first = svc.getRendererEpoch(id)
@@ -386,6 +399,7 @@ describe('WindowMainService', () => {
         const { opts, invalidateWindowRenderer } = makeDiagnosticsOpts()
         const svc = makeService(opts)
         const id = await svc.createWindow()
+        simulateInitialLoad()
         grabMainFrameNavigationHandler()({ isMainFrame: true, isSameDocument: false })
 
         grabWindowClosedHandler()()

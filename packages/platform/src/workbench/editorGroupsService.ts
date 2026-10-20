@@ -3,10 +3,17 @@
  *  IEditorGroupsService — the multi-group editor container.
  *
  *  Inspired by VSCode's `vs/workbench/services/editor/common/editorGroupsService.ts`.
+ *
+ *  The service aggregates one or more editor *parts* (one per workbench window:
+ *  the main window plus any auxiliary editor windows). Layout operations are
+ *  scoped to the part that owns the target group, while enumeration
+ *  (`groups` / `getGroups` / `count` / `getGroup`) deliberately spans every
+ *  part so Save All, dirty checks, extension enumeration and restore cover
+ *  auxiliary windows too.
  *--------------------------------------------------------------------------------------------*/
 
 import type { Event } from '../base/event.js'
-import type { GridAxis } from '../base/grid.js'
+import type { Grid, GridAxis, IGridView } from '../base/grid.js'
 import { createDecorator } from '../di/instantiation.js'
 import type { EditorInput } from './editorService.js'
 import type { IEditorGroupModel, IOpenEditorOptions } from './editorGroupModel.js'
@@ -47,32 +54,61 @@ export interface IFindGroupScope {
   location?: GroupLocation
 }
 
+export interface ICreateEditorPartOptions {
+  /**
+   * Activate the new part immediately (default: true). Window services creating
+   * a background window pass `false`.
+   */
+  readonly activate?: boolean
+}
+
+export interface IRemoveEditorPartOptions {
+  /**
+   * Remove the part even when it still holds editors (default: false). This
+   * closes/disposes those editors, so callers that care about unsaved state
+   * must migrate them first.
+   */
+  readonly force?: boolean
+}
+
 /**
  * An IEditorGroup is the public-facing facade of one EditorGroupModel inside
  * an IEditorGroupsService. It exposes everything in IEditorGroupModel plus
  * grid-level placement information.
  */
-export interface IEditorGroup extends IEditorGroupModel {
+export interface IEditorGroup extends IEditorGroupModel, IGridView {
+  /** The part (window) this group belongs to. */
+  readonly part: IEditorPart
+  /** Whether this group is the active group of the currently active part. */
   readonly isActive: boolean
-  /** Position in `groups` array in `GridAppearance` order. */
+  /** Position in the owning part's `groups` array (creation order). */
   readonly index: number
   focus(): void
   openEditor(editor: EditorInput, options?: IOpenEditorOptions): void
 }
 
-export interface IEditorGroupsService {
-  readonly _serviceBrand: undefined
-
+/**
+ * One window's editor layout: its own grid, groups, active group and MRU.
+ *
+ * Group ids are globally unique; a group never migrates between parts. Layout
+ * operations (`findGroup`, `resizeGroup`, `addGroup`, ...) are part-scoped.
+ */
+export interface IEditorPart {
+  readonly id: number
+  readonly isMain: boolean
+  /** Whether this is the workbench's active (focused) part. */
+  readonly isActive: boolean
+  /** Whether every group in this part is empty. */
+  readonly isEmpty: boolean
+  readonly grid: Grid<IEditorGroup>
+  readonly groups: readonly IEditorGroup[]
   readonly activeGroup: IEditorGroup
   /**
-   * The group a freshly-opened editor should land in. Equals `activeGroup`
-   * unless it is locked, in which case the first unlocked group is returned
-   * (a new group is created + activated if every group is locked). Callers
-   * that open a *new* resource should prefer this over `activeGroup`; revealing
-   * an already-open editor should keep using `activeGroup`.
+   * The group a freshly-opened editor should land in within this part. Equals
+   * `activeGroup` unless it is locked, in which case the first unlocked group
+   * is returned (a new group is created + activated if every group is locked).
    */
   readonly activeGroupForOpen: IEditorGroup
-  readonly groups: readonly IEditorGroup[]
   readonly count: number
   readonly orientation: GroupOrientation
 
@@ -90,26 +126,116 @@ export interface IEditorGroupsService {
   removeGroup(group: IEditorGroup | number): void
   /**
    * Grow (`deltaPx` > 0) or shrink the group along `axis` by that many pixels,
-   * taking the space from an adjacent sibling group.
+   * taking the space from an adjacent sibling group in this part.
    *
-   * Returns whether the editor grid owns a split along that axis: `false` means
-   * the group has no neighbour to trade space with (a single group, or the axis
-   * is perpendicular to how the groups are arranged), so a caller driving this
-   * from the workbench chrome can fall back to resizing that instead. A request
-   * that gets clamped by the grid's minimum sizes still returns `true`; so does
-   * one made before the grid has been measured (nothing can move yet).
+   * Returns whether this part's editor grid owns a split along that axis.
    */
   resizeGroup(group: IEditorGroup, axis: GridAxis, deltaPx: number): boolean
   moveGroup(group: IEditorGroup, location: IEditorGroup, direction: GroupDirection): IEditorGroup
-  moveEditor(editor: EditorInput, target: IEditorGroup): void
+  /**
+   * Move `editor` into `target`. `source` disambiguates the source group when
+   * the same input identity is open in several groups (copies, split clones);
+   * without it the first group containing a matching input is used.
+   */
+  moveEditor(editor: EditorInput, target: IEditorGroup, source?: IEditorGroup): void
   /**
    * Copy `editor` into `target`. The copy is NOT sticky by default (VSCode
    * issue #99035); split/drag-drop callers that preserve the sticky state
    * pass `options.sticky` explicitly.
+   *
+   * The caller owns the input instance passed in: copying a shared instance
+   * would let either group dispose it. Split/window copy paths must clone it
+   * first (`cloneEditorInputForSplit`).
    */
   copyEditor(editor: EditorInput, target: IEditorGroup, options?: { sticky?: boolean }): void
   setGroupOrientation(orientation: GroupOrientation): void
   arrangeGroups(arrangement: GroupsArrangement, group?: IEditorGroup): void
+}
+
+export interface IEditorGroupsService {
+  readonly _serviceBrand: undefined
+
+  /** The main window's part. Always present, never removable. */
+  readonly mainPart: IEditorPart
+  /** The focused part. */
+  readonly activePart: IEditorPart
+  /** All parts in creation order; `parts[0] === mainPart`. */
+  readonly parts: readonly IEditorPart[]
+  /**
+   * Main part's grid. Kept for compatibility with single-grid consumers;
+   * multi-window code must render `part.grid` for the part it owns.
+   */
+  readonly grid: Grid<IEditorGroup>
+  readonly orientation: GroupOrientation
+
+  /**
+   * Global active group (the active group of `activePart`). Always points at a
+   * group in the focused window.
+   */
+  readonly activeGroup: IEditorGroup
+  /**
+   * The active part's lock-aware open target. A new resource opened through
+   * `IEditorService` lands in the focused window.
+   */
+  readonly activeGroupForOpen: IEditorGroup
+  /**
+   * Every group across every part, in creation order. Deliberately global:
+   * Save All, dirty checks, extension enumeration and close paths must see
+   * auxiliary-window editors too.
+   */
+  readonly groups: readonly IEditorGroup[]
+  readonly count: number
+
+  readonly onDidActiveGroupChange: Event<IEditorGroup>
+  readonly onDidAddGroup: Event<IEditorGroup>
+  readonly onDidRemoveGroup: Event<IEditorGroup>
+  readonly onDidMoveGroup: Event<IEditorGroup>
+
+  /** Fires when window focus moves to another part. */
+  readonly onDidActivePartChange: Event<IEditorPart>
+  readonly onDidAddPart: Event<IEditorPart>
+  readonly onDidRemovePart: Event<IEditorPart>
+
+  getGroup(id: number): IEditorGroup | undefined
+  getGroups(order?: GroupsOrder): readonly IEditorGroup[]
+  /**
+   * Spatial / sequential navigation is scoped to the part owning `source`.
+   * `First`/`Last`/`Next`/`Previous` therefore mean "within that window".
+   */
+  findGroup(scope: IFindGroupScope, source?: IEditorGroup, wrap?: boolean): IEditorGroup | undefined
+
+  activateGroup(group: IEditorGroup | number): IEditorGroup
+  activatePart(part: IEditorPart | number): IEditorPart
+  addGroup(location: IEditorGroup | number, direction: GroupDirection): IEditorGroup
+  removeGroup(group: IEditorGroup | number): void
+  /**
+   * Grow (`deltaPx` > 0) or shrink the group along `axis` by that many pixels,
+   * taking the space from a sibling group in the owner part.
+   *
+   * Returns whether the owner part's grid owns a split along that axis: `false`
+   * means the group has no neighbour to trade space with, so a caller driving
+   * this from the workbench chrome can fall back to resizing that instead.
+   */
+  resizeGroup(group: IEditorGroup, axis: GridAxis, deltaPx: number): boolean
+  moveGroup(group: IEditorGroup, location: IEditorGroup, direction: GroupDirection): IEditorGroup
+  moveEditor(editor: EditorInput, target: IEditorGroup, source?: IEditorGroup): void
+  copyEditor(editor: EditorInput, target: IEditorGroup, options?: { sticky?: boolean }): void
+  setGroupOrientation(orientation: GroupOrientation): void
+  arrangeGroups(arrangement: GroupsArrangement, group?: IEditorGroup): void
+
+  getPart(id: number): IEditorPart | undefined
+  /**
+   * Create a DOM-free auxiliary editor part (one window's layout). The part
+   * starts with one empty group. Window services own the actual BrowserWindow
+   * and React portal; this only creates the model.
+   */
+  createAuxiliaryPart(options?: ICreateEditorPartOptions): IEditorPart
+  /**
+   * Remove an auxiliary part. The main part cannot be removed. Unless
+   * `force` is set, the part must be empty — migrate its editors first so a
+   * failed window handoff cannot drop unsaved content.
+   */
+  removePart(part: IEditorPart | number, options?: IRemoveEditorPartOptions): boolean
 }
 
 export const IEditorGroupsService = createDecorator<IEditorGroupsService>('editorGroupsService')

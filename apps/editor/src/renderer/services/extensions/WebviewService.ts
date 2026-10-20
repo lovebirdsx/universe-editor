@@ -409,6 +409,13 @@ export class WebviewService extends Disposable implements IWebviewService {
     diff?: IWebviewDiffContextDto,
     editor?: EditorInput,
   ): IWebviewPanelModel | undefined {
+    // A custom editor moved between groups/windows keeps the same input
+    // instance; the old host unmounts and a new one mounts. Reuse the live panel
+    // so the extension does not see its editor disposed and re-resolved.
+    if (editor) {
+      const existing = this._findPanelForEditor(editor, viewType, resource)
+      if (existing) return existing
+    }
     const provider = this._providersByViewType.get(viewType)
     if (!provider) return undefined
     const extHost = this._extHosts.get(provider.kind)
@@ -424,6 +431,14 @@ export class WebviewService extends Disposable implements IWebviewService {
       kind: provider.kind,
       ...(editor ? { editor } : {}),
     })
+    if (editor) {
+      // The panel's lifetime follows the editor input, not React mount state:
+      // a move unmounts/remounts the host without disposing the tab.
+      this._hostPanelSubscriptions.set(
+        panelHandle,
+        editor.onWillDispose(() => this.closePanel(panelHandle)),
+      )
+    }
     void extHost
       .$resolveCustomEditor(provider.providerHandle, panelHandle, viewType, resource.toJSON(), diff)
       .catch((err: unknown) => {
@@ -444,6 +459,22 @@ export class WebviewService extends Disposable implements IWebviewService {
     // the host panel exists by the time the state arrives.
     this._recomputePanelViewStates()
     return panel
+  }
+
+  private _findPanelForEditor(
+    editor: EditorInput,
+    viewType: string,
+    resource: URI,
+  ): IWebviewPanelModel | undefined {
+    for (const [panelHandle, routing] of this._panelRouting) {
+      if (routing.editor !== editor) continue
+      const panel = this._panels.get(panelHandle)
+      if (!panel) continue
+      if (panel.viewType !== viewType) continue
+      if (panel.resource.toString() !== resource.toString()) continue
+      return panel
+    }
+    return undefined
   }
 
   closePanel(panelHandle: number): void {

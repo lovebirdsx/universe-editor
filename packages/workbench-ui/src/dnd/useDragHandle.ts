@@ -3,6 +3,13 @@ import { DragSessionContext } from './DragSessionContext.js'
 import { writeUriList } from './uriList.js'
 import { isResizeEdgeDrag } from './resizeEdgeGuard.js'
 
+/** Read-only snapshot handed to `onDragEnd` before the session is cleared. */
+export interface DragEndSnapshot {
+  readonly payload: unknown
+  readonly consumed: boolean
+  readonly cancelled: boolean
+}
+
 export interface UseDragHandleOptions {
   /**
    * Lazily-evaluated list of resource URIs to publish on `text/uri-list` so the
@@ -10,6 +17,12 @@ export interface UseDragHandleOptions {
    * at dragstart to capture the latest selection.
    */
   readonly uriList?: () => readonly string[]
+  /**
+   * Called from `dragend` before the shared payload is cleared. The snapshot
+   * carries the terminal flags so a tab can decide whether releasing outside
+   * every window should create a new one (see `decideTabDragOut`).
+   */
+  readonly onDragEnd?: (e: DragEvent, snapshot: DragEndSnapshot) => void
 }
 
 export interface UseDragHandleResult {
@@ -29,6 +42,7 @@ export interface UseDragHandleResult {
 export function useDragHandle<T>(payload: T, options?: UseDragHandleOptions): UseDragHandleResult {
   const ctx = useContext(DragSessionContext)
   const getUriList = options?.uriList
+  const onEnd = options?.onDragEnd
 
   const onDragStart = useCallback(
     (e: DragEvent) => {
@@ -47,16 +61,28 @@ export function useDragHandle<T>(payload: T, options?: UseDragHandleOptions): Us
           if (uris.length > 0) writeUriList(e.dataTransfer, uris)
         }
       }
-      ctx?.setPayload(payload)
+      ctx?.begin(payload)
     },
     [ctx, payload, getUriList],
   )
 
   const onDragEnd = useCallback(
-    (_e: DragEvent) => {
-      ctx?.clearPayload()
+    (e: DragEvent) => {
+      // Capture the terminal state before clearing: drag-out detection needs
+      // to know whether a drop target consumed the gesture or Escape cancelled
+      // it, and the payload itself.
+      if (ctx) {
+        onEnd?.(e, {
+          payload: ctx.payload,
+          consumed: ctx.consumed,
+          cancelled: ctx.cancelled,
+        })
+        ctx.clearPayload()
+      } else {
+        onEnd?.(e, { payload: undefined, consumed: false, cancelled: false })
+      }
     },
-    [ctx],
+    [ctx, onEnd],
   )
 
   return {

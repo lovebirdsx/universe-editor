@@ -27,6 +27,7 @@ App 本体的发布（版本 bump、打包、上传，及 push `vX.Y.Z` tag 后�
 ## 架构与约定
 
 - [浮层层级与裁剪](overlay-layers.md) — tooltip / 菜单 / 对话框的四条挂载链路（React portal、monaco 平台层、monaco 编辑器内容层、视图自绘）、`--z-*` 三段式分层与「该不该 token 化」的判据、外部占位层、浮层排查套路。
+- [辅助编辑器窗口](auxiliary-editor-windows.md) — 同 renderer + 每窗口独立 EditorPart 的架构、token 预登记与 window-open 策略、浮层的 owner-document 归属、跨窗口共享 DragSession 与拖出建窗、可移动终端的生命周期、窗口级命令与测试边界。
 - [滚动列表的渲染约定](scroll-lists.md) — 树 / 虚拟列表的三条绘制约定（滚动内容的不透明底衬 `--view-background`、行定位用 `top` 不用 `transform`、reveal 只滚自己的 scroller）、残影类故障的现场判据与护栏、动态测量下的内容锚点恢复与收敛循环。
 - [Allotment 分割布局](allotment-layout.md) — SplitView 重挂载空窗（未传 `defaultSizes` 时 viewItems 懒填充）、imperative `resize()` 的守卫纪律、`onChange` 构造期闭包与瞬态帧持久化、最大化重启宽度重置的复盘与 e2e 窗口尺寸约束。
 - [嵌入 Monaco](monaco-embedding.md) — 嵌入编辑器的四类陷阱：宿主 `automaticLayout` 经 `getRawOptions` 渗进所有嵌入编辑器（peek / hover / diff）与 `inline-block` 容器互相观察成环（Peek References 预览 blank 的根因与 CSS 断环）；`editContext` 下的输入事件派发边界（宿主元素 + capture）；嵌入实例的焦点桥接（专用 context key，勿冒充 `editorTextFocus`）；standalone `addCommand` 的跨编辑器键泄漏；0.55 升级（命名空间顶层化 / NLS 索引制英文桥接）。

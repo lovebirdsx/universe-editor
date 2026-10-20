@@ -67,6 +67,10 @@ export function bootstrapWindowIpc(
   )
   server.registerChannel(ServiceChannels.Terminal, ProxyChannel.fromService(window.terminal))
   server.registerChannel(ServiceChannels.Window, ProxyChannel.fromService(windows))
+  server.registerChannel(
+    ServiceChannels.AuxiliaryWindow,
+    ProxyChannel.fromService(window.auxiliaryWindows),
+  )
   server.registerChannel(ServiceChannels.LogFiles, ProxyChannel.fromService(window.logFiles))
   server.registerChannel(
     ServiceChannels.AcpHost,

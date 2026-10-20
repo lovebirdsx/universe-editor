@@ -447,7 +447,7 @@ if (!hasSingleInstanceLock) {
           }
         }
       }
-      if (!targetWin) targetWin = BrowserWindow.getAllWindows()[0]
+      if (!targetWin) targetWin = services.windows.getWindows()[0]
 
       if (targetWin) {
         if (targetWin.isMinimized()) targetWin.restore()
@@ -509,7 +509,11 @@ function routeDeepLink(target: DeepLinkTarget): void {
       }
     }
   }
-  if (!targetWin) targetWin = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+  if (!targetWin) {
+    const focusedId = services.windows.getFocusedWindowId()
+    targetWin = focusedId !== null ? services.windows.getWindowById(focusedId) : undefined
+  }
+  if (!targetWin) targetWin = services.windows.getWindows()[0]
 
   if (targetWin) {
     if (targetWin.isMinimized()) targetWin.restore()
@@ -617,6 +621,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       rendererDebug: environmentService.rendererDebug,
       ...(appIconPath ? { appIconPath } : {}),
       preloadPath: join(import.meta.dirname, '../preload/index.cjs'),
+      auxiliaryPreloadPath: join(import.meta.dirname, '../preload/auxiliary.cjs'),
       rendererUrl: environmentService.rendererUrl,
       getConfigDir: () => applicationServices!.configLocation.currentDir,
       getConfigurationDefaults: () => environmentService.configurationDefaults,

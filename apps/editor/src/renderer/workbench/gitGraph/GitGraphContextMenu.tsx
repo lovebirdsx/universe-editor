@@ -42,9 +42,12 @@ export interface GitGraphMenuState {
 
 export function GitGraphContextMenu({
   state,
+  targetDocument,
   onClose,
 }: {
   state: GitGraphMenuState
+  /** Document that owns the graph (auxiliary window). */
+  targetDocument?: Document | undefined
   onClose: () => void
 }) {
   const memory = useContextMenuMemory()
@@ -74,6 +77,7 @@ export function GitGraphContextMenu({
       memoryKey="gitGraph"
       contextTag={state.contextTag}
       renderIcon={renderMenuIcon}
+      {...(targetDocument ? { targetDocument } : {})}
       onClose={onClose}
     />
   )

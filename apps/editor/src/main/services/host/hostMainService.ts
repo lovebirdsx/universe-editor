@@ -41,17 +41,19 @@ import {
 import { version as EXTENSION_API_VERSION } from '@universe-editor/extension-api'
 import { type IRendererLifecycleService } from '../../../shared/ipc/lifecycleService.js'
 import { getMachineId } from './machineId.js'
+import {
+  ZOOM_STEP,
+  clampZoomLevel,
+  zoomFactorToLevel,
+  zoomLevelToFactor,
+} from '../../windowZoom.js'
+
+export { zoomFactorToLevel, zoomLevelToFactor }
 
 /** Hooks letting restart consult the renderer veto chain. */
 export interface RestartHooks {
   getRendererLifecycle?: () => IRendererLifecycleService | undefined
 }
-
-// Zoom level is Chromium's logarithmic step: each unit is a ~20% factor. Clamp to
-// the range Electron's webFrame accepts so repeated presses can't run off-scale.
-const ZOOM_STEP = 1
-const ZOOM_MIN = -8
-const ZOOM_MAX = 9
 
 /** No system input for this long ⇒ the user isn't looking at the focused window,
  *  so the focus gate in notify() stops applying. Two minutes: long enough that
@@ -67,24 +69,6 @@ const USER_AWAY_IDLE_SECONDS = 120
  *  a while so a click on a stale toast can't jump the user to a session they
  *  moved on from an hour ago. */
 const NOTIFICATION_CLICK_GRACE_MS = 5 * 60_000
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value))
-}
-
-// window.zoomLevel is stored as a display factor (1 = 100%, 1.25 = 125%) because
-// that's what users think in; Chromium's zoom level is logarithmic
-// (level = log(factor) / log(1.2)), so the two must be converted at the boundary.
-const ZOOM_FACTOR_BASE = 1.2
-
-export function zoomFactorToLevel(factor: number): number {
-  if (!Number.isFinite(factor) || factor <= 0) return 0
-  return Math.log(factor) / Math.log(ZOOM_FACTOR_BASE)
-}
-
-export function zoomLevelToFactor(level: number): number {
-  return Math.pow(ZOOM_FACTOR_BASE, level)
-}
 
 // nativeTheme is process-global while host services are per-window: subscribing
 // per window stacks one 'updated' listener per window and trips Node's
@@ -144,6 +128,8 @@ export class MainHostService implements IHostServiceWire, IDisposable {
     private readonly _logger: ILogger = new NullLogger(),
     private readonly _restartHooks?: RestartHooks,
     configuredZoomFactor = 1,
+    private readonly _getDialogParent: (fallback: BrowserWindow) => BrowserWindow = (fallback) =>
+      fallback,
   ) {
     this._configuredZoomFactor = configuredZoomFactor
     _win.on('maximize', this._onMaximize)
@@ -157,7 +143,7 @@ export class MainHostService implements IHostServiceWire, IDisposable {
   /** Apply the configured zoom factor ahead of first paint (called at did-finish-load). */
   applyConfiguredZoom(): void {
     if (this._win.isDestroyed()) return
-    const level = clamp(zoomFactorToLevel(this._configuredZoomFactor), ZOOM_MIN, ZOOM_MAX)
+    const level = clampZoomLevel(zoomFactorToLevel(this._configuredZoomFactor))
     this._win.webContents.setZoomLevel(level)
     this._logger.info(
       `applyConfiguredZoom factor=${this._configuredZoomFactor} level=${level} id=${this._win.id}`,
@@ -241,7 +227,7 @@ export class MainHostService implements IHostServiceWire, IDisposable {
   private _applyZoom(next: (current: number) => number): Promise<void> {
     if (!this._win.isDestroyed()) {
       const wc = this._win.webContents
-      const level = clamp(next(wc.getZoomLevel()), ZOOM_MIN, ZOOM_MAX)
+      const level = clampZoomLevel(next(wc.getZoomLevel()))
       wc.setZoomLevel(level)
       this._logger.debug(`setZoomLevel ${level} id=${this._win.id}`)
     }
@@ -260,7 +246,7 @@ export class MainHostService implements IHostServiceWire, IDisposable {
     if (opts?.canSelectFolders === true) properties.push('openDirectory')
     if (opts?.canSelectMany === true) properties.push('multiSelections')
     if (properties.length === 0) properties.push('openFile')
-    const result = await dialog.showOpenDialog(this._win, {
+    const result = await dialog.showOpenDialog(this._getDialogParent(this._win), {
       properties,
       ...(opts?.title !== undefined ? { title: opts.title } : {}),
       ...(opts?.defaultPath !== undefined ? { defaultPath: path.normalize(opts.defaultPath) } : {}),
@@ -280,7 +266,7 @@ export class MainHostService implements IHostServiceWire, IDisposable {
   }
 
   async showSaveFileDialog(opts?: IShowSaveFileOptions): Promise<UriComponents | null> {
-    const result = await dialog.showSaveDialog(this._win, {
+    const result = await dialog.showSaveDialog(this._getDialogParent(this._win), {
       ...(opts?.title !== undefined ? { title: opts.title } : {}),
       ...(opts?.defaultPath !== undefined ? { defaultPath: path.normalize(opts.defaultPath) } : {}),
       ...(opts?.buttonLabel !== undefined ? { buttonLabel: opts.buttonLabel } : {}),

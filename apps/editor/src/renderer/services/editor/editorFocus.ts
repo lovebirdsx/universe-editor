@@ -2,11 +2,12 @@ import type { EditorInput, IContextKeyService, IDisposable } from '@universe-edi
 import { autorun } from '@universe-editor/platform'
 import type { monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
 import { installDocumentFocusReconcile } from '../focus/documentFocusReconcile.js'
+import { getActiveWorkbenchDocument, getWorkbenchDocuments } from '../windows/workbenchDocuments.js'
 import { FileEditorRegistry } from './FileEditorRegistry.js'
 import { DiffEditorRegistry } from './DiffEditorRegistry.js'
 
 export function syncEditorFocusContext(contextKeyService: IContextKeyService): void {
-  const active = document.activeElement
+  const active = getActiveWorkbenchDocument().activeElement
   const hasEditorFocus = active instanceof HTMLElement && active.closest('.monaco-editor') !== null
   contextKeyService.set('editorFocus', hasEditorFocus)
   // `editorTextFocus` is set true by Monaco's onDidFocusEditorText and cleared by
@@ -345,7 +346,14 @@ function findGroupBody(groupId?: number): HTMLElement | null {
     groupId !== undefined
       ? `[data-group-id="${groupId}"] [data-testid="editor-group-body"]`
       : '[data-testid="editor-group-body"]'
-  return document.querySelector<HTMLElement>(selector)
+  // Groups can live in any workbench document; query the active one first.
+  const activeDoc = getActiveWorkbenchDocument()
+  const docs = [activeDoc, ...getWorkbenchDocuments().filter((doc) => doc !== activeDoc)]
+  for (const doc of docs) {
+    const found = doc.querySelector<HTMLElement>(selector)
+    if (found) return found
+  }
+  return null
 }
 
 export function focusStandaloneEditor(

@@ -30,6 +30,7 @@ export interface SashProps {
 export function Sash({ orientation, onStart, onResize, onEnd, style }: SashProps) {
   const [active, setActive] = useState(false)
   const startRef = useRef(0)
+  const containerRef = useRef<HTMLDivElement>(null)
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
@@ -54,17 +55,21 @@ export function Sash({ orientation, onStart, onResize, onEnd, style }: SashProps
       onEnd?.()
     }
     const cursor = orientation === 'vertical' ? 'ew-resize' : 'ns-resize'
-    const prevCursor = document.body.style.cursor
-    const prevUserSelect = document.body.style.userSelect
-    document.body.style.cursor = cursor
-    document.body.style.userSelect = 'none'
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
+    // A sash can live in an auxiliary window's document; drive that document's
+    // body and window listeners, not the main window's.
+    const doc = containerRef.current?.ownerDocument ?? document
+    const view = doc.defaultView ?? window
+    const prevCursor = doc.body.style.cursor
+    const prevUserSelect = doc.body.style.userSelect
+    doc.body.style.cursor = cursor
+    doc.body.style.userSelect = 'none'
+    view.addEventListener('mousemove', onMove)
+    view.addEventListener('mouseup', onUp)
     return () => {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-      document.body.style.cursor = prevCursor
-      document.body.style.userSelect = prevUserSelect
+      view.removeEventListener('mousemove', onMove)
+      view.removeEventListener('mouseup', onUp)
+      doc.body.style.cursor = prevCursor
+      doc.body.style.userSelect = prevUserSelect
     }
   }, [active, orientation, onResize, onEnd])
 
@@ -72,6 +77,7 @@ export function Sash({ orientation, onStart, onResize, onEnd, style }: SashProps
 
   return (
     <div
+      ref={containerRef}
       className={className}
       style={style}
       onMouseDown={handleMouseDown}

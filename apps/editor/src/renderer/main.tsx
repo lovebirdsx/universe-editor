@@ -120,6 +120,14 @@ import { CommandService } from './services/command/CommandService.js'
 import { BugRecorderClient, IBugRecorderClient } from './services/bugRecording/bugRecorderClient.js'
 import { EditorService } from './services/editor/EditorService.js'
 import { EditorGroupsService } from './services/editor/EditorGroupsService.js'
+import {
+  IWorkbenchWindowService,
+  WorkbenchWindowService,
+} from './services/windows/workbenchWindowService.js'
+import {
+  AuxiliaryEditorWindowService,
+  IAuxiliaryEditorWindowService,
+} from './services/windows/auxiliaryEditorWindowService.js'
 import { ViewsService } from './services/views/ViewsService.js'
 import { ViewDescriptorService } from './services/views/ViewDescriptorService.js'
 import { OutputService } from './services/output/OutputService.js'
@@ -695,6 +703,13 @@ async function bootstrapWorkbench(): Promise<void> {
       loggerService.createLogger({ id: 'editorGroups', name: 'Editor Groups' }),
     ),
   )
+  // Register the main workbench window before any contribution can render:
+  // focus derivation, dialog/quick-input targeting and overlays resolve windows
+  // through this registry. The main window's editor part is the groups service's
+  // main part (it owns the grid rendered by EditorArea).
+  const workbenchWindowService = workbenchStore.add(new WorkbenchWindowService())
+  workbenchWindowService.registerMainWindow(editorGroupsService.mainPart, document)
+  services.set(IWorkbenchWindowService, workbenchWindowService)
   const editorService = workbenchStore.add(
     new EditorService(
       editorGroupsService,
@@ -798,6 +813,14 @@ async function bootstrapWorkbench(): Promise<void> {
   // <NotificationsCenter /> are mounted as portals by Workbench.
   const notificationService = workbenchStore.add(instantiation.createInstance(NotificationService))
   services.set(INotificationService, notificationService)
+
+  // Auxiliary editor windows need the notification/logging services above plus
+  // the editor groups + window registries; construct before contributions so
+  // workspace restore can recreate them.
+  const auxiliaryEditorWindowService = workbenchStore.add(
+    instantiation.createInstance(AuxiliaryEditorWindowService),
+  )
+  services.set(IAuxiliaryEditorWindowService, auxiliaryEditorWindowService)
   // Route unhandled errors to the sticky Error toast so they're visible to users.
   // Same-fingerprint toasts are suppressed for a cooldown (VSCode dedups on
   // identical messages within 1s; fingerprinting survives line-noise better),
@@ -1084,6 +1107,8 @@ async function bootstrapWorkbench(): Promise<void> {
     lifecycleService: lifecycle,
     editorService,
     editorGroupsService,
+    auxiliaryEditorWindowService,
+    workbenchWindowService,
     editorResolverService,
     statusBarService: instantiation.invokeFunction((a) => a.get(IStatusBarService)),
     notificationService,

@@ -50,6 +50,7 @@ import { canonicalizeWorkspaceFolderUri } from '../remote/remoteUri.js'
 import { deriveWindowRemoteAuthority } from './windowRemoteAuthority.js'
 import { WindowSessionStore } from './windowSessionStore.js'
 import { createWindowScopedServices } from './windowScopeFactory.js'
+import { AuxiliaryWindowsMainService } from './auxiliaryWindowsMainService.js'
 import { processRoleRegistry } from '../process/processRoleRegistry.js'
 import type { ApplicationServices } from '../../window/scopedServicesFactory.js'
 
@@ -123,6 +124,8 @@ export interface WindowMainServiceOptions {
   readonly appIconPath?: string
   /** Absolute path to the preload script. */
   readonly preloadPath: string
+  /** Absolute path to the minimal, IPC-less preload for auxiliary editor windows. */
+  readonly auxiliaryPreloadPath: string
   /** electron-vite dev server URL (undefined in production). */
   readonly rendererUrl: string | undefined
   /** Resolved directory for user settings/keybindings (EnvironmentMainService.configDir). */
@@ -199,6 +202,8 @@ export class WindowMainService implements IWindowMainService {
   private _hasCreatedFirstWindow = false
   /** Window id that last had OS focus (or was programmatically focused). */
   private _lastFocusedWindowId: number | undefined
+  /** App-singleton registry for same-origin auxiliary editor windows. */
+  private readonly _auxiliaryWindows: AuxiliaryWindowsMainService
 
   private readonly _onDidChangeWindows = new Emitter<void>()
   readonly onDidChangeWindows: Event<void> = this._onDidChangeWindows.event
@@ -214,6 +219,12 @@ export class WindowMainService implements IWindowMainService {
         logger: _opts.logService.createLogger({ id: 'workspace', name: 'Workspace' }),
         getParentWindow: () => BrowserWindow.getFocusedWindow(),
       })
+    this._auxiliaryWindows = new AuxiliaryWindowsMainService({
+      preloadPath: _opts.auxiliaryPreloadPath,
+      silentE2E: _opts.silentE2E,
+      logService: _opts.logService,
+      appName: localize('app.name', 'Universe Editor'),
+    })
   }
 
   async createWindow(opts?: ICreateWindowOptions): Promise<number> {
@@ -297,11 +308,21 @@ export class WindowMainService implements IWindowMainService {
       },
     })
 
-    win.webContents.setWindowOpenHandler(({ url }) => {
-      if (url.startsWith('https://') || url.startsWith('http://')) {
-        void shell.openExternal(url)
+    win.webContents.setWindowOpenHandler((details) => {
+      // Auxiliary editor windows: only the exact about:blank + parent-bound token
+      // reserved through this window's IPC channel is admissible.
+      const auxiliary = this._auxiliaryWindows.handleWindowOpen(win, details.url, details.frameName)
+      if (auxiliary) return auxiliary
+      if (details.url.startsWith('https://') || details.url.startsWith('http://')) {
+        void shell.openExternal(details.url)
       }
       return { action: 'deny' }
+    })
+
+    // Registration only. Auxiliary windows never enter the workspace/session stacks.
+    this._auxiliaryWindows.registerParent(win)
+    win.webContents.on('did-create-window', (child, details) => {
+      this._auxiliaryWindows.adoptCreatedWindow(win, child, details)
     })
 
     // reload / 崩溃重建会换掉渲染进程（pid 变），load 完成后重登记；
@@ -371,6 +392,8 @@ export class WindowMainService implements IWindowMainService {
       const line = `render-process-gone id=${win.id} reason=${details.reason} exitCode=${details.exitCode ?? 'n/a'}`
       logger.error(line)
       appServices.errorSink.recordLocal('renderProcessGone', line, `renderer:${win.id}`)
+      // The portal owner is gone; auxiliary windows cannot be repainted or migrated.
+      this._auxiliaryWindows.disposeParent(win.id, 'parent-renderer-gone')
       // The renderer is dead, so its beforeunload/confirmShutdown stop() never
       // reached us — its agent and extension-host processes would otherwise
       // orphan (the host's tsserver tree keeps running too). Reclaim exactly
@@ -457,12 +480,22 @@ export class WindowMainService implements IWindowMainService {
     // A main-frame reload re-hydrates the renderer, which resumes sessions and
     // spawns fresh agents; the old frame's agents would otherwise orphan (no
     // confirmShutdown runs on reload). Reclaim on main-frame navigation only —
-    // subframe loads and same-document navigations keep their agents.
+    // subframe loads and same-document navigations keep their agents. The FIRST
+    // navigation is the window's initial load: there is no previous renderer to
+    // reclaim, and tearing the parent registration down here would make every
+    // auxiliary-window request look like it came from a closed parent.
+    let rendererLoadedOnce = false
+    win.webContents.on('did-finish-load', () => {
+      rendererLoadedOnce = true
+    })
     win.webContents.on('did-start-navigation', (details) => {
-      if (!details.isMainFrame || details.isSameDocument) return
+      if (!details.isMainFrame || details.isSameDocument || !rendererLoadedOnce) return
       // 先做这一件：这个窗口原来的 renderer 正在被替换，绑在它上面的东西（堆快照轮次）
       // 必须现在结束，而不是等下一个可能永远不来的样本。
       this._rendererEpochs.set(win.id, this.getRendererEpoch(win.id) + 1)
+      // A main-frame reload replaces the renderer that owns every portal; the child
+      // documents cannot survive it.
+      this._auxiliaryWindows.disposeParent(win.id, 'parent-reload')
       appServices.diagnostics.invalidateWindowRenderer(win.id, 'window-reloaded')
       void appServices.acpHost.stopAllForWindow(win.id)
       void appServices.mcpClient.stopAllForWindow(win.id)
@@ -503,6 +536,7 @@ export class WindowMainService implements IWindowMainService {
         ...(opts?.workspace !== undefined ? { restoreWorkspace: opts.workspace } : {}),
         folderGuard: this._folderGuard,
         windowsServiceHost: this,
+        auxiliaryWindows: this._auxiliaryWindows,
         callbacks: {
           createEmptyWindow: (options) => {
             void this.createWindow(
@@ -565,6 +599,9 @@ export class WindowMainService implements IWindowMainService {
         // gone, and process.exit fires before the `.finally` runs — leaking every
         // per-window Disposable. Flushing reads only already-captured in-memory
         // state, so it stays correct after dispose().
+        // The renderer already ran its shutdown transaction (moving protected editors
+        // back), so the child documents can be destroyed without another veto round-trip.
+        this._auxiliaryWindows.disposeParent(win.id, 'parent-close')
         void Promise.all(tasks)
         disposables.dispose()
         return
@@ -574,6 +611,7 @@ export class WindowMainService implements IWindowMainService {
     })
     win.on('closed', () => {
       roleRegistration?.dispose()
+      this._auxiliaryWindows.disposeParent(win.id, 'parent-closed')
       this._windows.delete(win.id)
       this._allowClose.delete(win.id)
       this._crashHandled.delete(win.id)
@@ -955,6 +993,9 @@ export class WindowMainService implements IWindowMainService {
    *  close handler bypass the per-window confirm. */
   markQuitConfirmed(): void {
     this._quitConfirmed = true
+    // Quit is final: auxiliary windows cannot be migrated and their veto would
+    // otherwise block app shutdown.
+    this._auxiliaryWindows.disposeAll('app-quit')
     for (const id of this._windows.keys()) this._allowClose.add(id)
   }
 
@@ -1052,6 +1093,7 @@ export class WindowMainService implements IWindowMainService {
     const logger = this._opts.logService.createLogger({ id: 'window', name: 'Window' })
     logger.info(`dispose windows=${this._windows.size}`)
     this._sessionStore.cancel()
+    this._auxiliaryWindows.dispose()
     for (const { disposables } of this._windows.values()) {
       disposables.dispose()
     }

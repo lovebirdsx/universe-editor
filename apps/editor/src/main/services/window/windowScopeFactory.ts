@@ -39,6 +39,10 @@ import type {
 import type { IWorkspace, IOpenNewWindowOptions } from '@universe-editor/platform'
 import type { IWorkspaceFolderOpenGuard } from '../workspace/folderOpenGuard.js'
 import type { WindowMainService } from './windowMainService.js'
+import {
+  WindowScopedAuxiliaryWindowsService,
+  type AuxiliaryWindowsMainService,
+} from './auxiliaryWindowsMainService.js'
 
 /** Facade couplings the per-window stack needs, without a back-reference to it. */
 export interface WindowScopeCallbacks {
@@ -90,6 +94,8 @@ export async function createWindowScopedServices(opts: {
   folderGuard: IWorkspaceFolderOpenGuard
   /** The owning service — needed only to back the cross-process IWindowsService adapter. */
   windowsServiceHost: WindowMainService
+  /** App-singleton auxiliary-window registry; this window gets a parent-scoped adapter. */
+  auxiliaryWindows: AuxiliaryWindowsMainService
 }): Promise<WindowScopeResult> {
   const {
     win,
@@ -101,6 +107,7 @@ export async function createWindowScopedServices(opts: {
     callbacks,
     folderGuard,
     windowsServiceHost,
+    auxiliaryWindows,
   } = opts
 
   const disposables = new DisposableStore()
@@ -136,6 +143,7 @@ export async function createWindowScopedServices(opts: {
         getRendererLifecycle: () => callbacks.getRendererLifecycle(win.id),
       },
       configuredZoomFactor,
+      (fallback) => auxiliaryWindows.getDialogParent(win.id, fallback),
     ),
   )
   // Apply the configured window.zoomLevel as soon as the renderer is ready, before
@@ -165,6 +173,7 @@ export async function createWindowScopedServices(opts: {
     userData,
     terminal,
     fileWatcher,
+    auxiliaryWindows: new WindowScopedAuxiliaryWindowsService(auxiliaryWindows, win.id),
   }
 
   const windowsService = disposables.add(

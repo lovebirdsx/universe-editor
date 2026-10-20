@@ -49,6 +49,11 @@ export class UntitledEditorInput extends EditorInput {
     this._name = restoredName ?? allocateUntitledName()
     this._resource = untitledResourceForName(this._name)
     this._content = restoredContent ?? ''
+    // A restored buffer with text is unsaved work even before its tab mounts
+    // (inactive restored tabs never load a Monaco model). Mark it here so both
+    // direct construction and `deserialize` agree with `updateDirtyFromModel`;
+    // window close then migrates it instead of treating it as clean.
+    if (this._content !== '') this.setDirty(true)
   }
 
   override get typeId(): string {
@@ -121,6 +126,28 @@ export class UntitledEditorInput extends EditorInput {
   override serialize(): { name: string; content: string } {
     const model = MonacoModelRegistry.peek(this._resource)
     return { name: this._name, content: model?.getValue() ?? this._content }
+  }
+
+  /**
+   * Take over the shared untitled buffer when a move lands in a group that
+   * already shows the same document. Acquiring the model before the source is
+   * disposed preserves text/undo even if this input never mounted; both input
+   * instances keep sharing the same `untitled:` URI/model.
+   */
+  override migrateFrom(other: EditorInput): void {
+    super.migrateFrom(other)
+    if (!(other instanceof UntitledEditorInput)) return
+    if (!this._modelRefAcquired) {
+      const model = MonacoModelRegistry.peek(this._resource)
+      if (model) {
+        MonacoModelRegistry.acquire(this._resource, model.getValue())
+        this._modelRefAcquired = true
+        this._content = model.getValue()
+      } else if (this._content === '') {
+        this._content = other._content
+      }
+    }
+    if (other.isDirty) this.setDirty(true)
   }
 
   static deserialize(data: unknown): UntitledEditorInput | null {

@@ -16,6 +16,8 @@ export const enum MenuId {
   EditorTitle = 'editorTitle',
   EditorContext = 'editorContext',
   EditorTabContext = 'editorTabContext',
+  /** Right-click on the tab bar background (operates on the whole group). */
+  EditorTabsBarContext = 'editorTabsBarContext',
   ExplorerContext = 'explorerContext',
   /** ACP chat timeline right-click menu. */
   AcpChatContext = 'acpChatContext',

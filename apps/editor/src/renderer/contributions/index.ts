@@ -34,6 +34,7 @@ export { ExplorerSelectionContextContribution } from './ExplorerSelectionContext
 export { CompareContextContribution } from './CompareContextContribution.js'
 export { ExplorerMenuContribution } from './ExplorerMenuContribution.js'
 export { EditorContextMenuContribution } from './EditorContextMenuContribution.js'
+export { EditorWindowConfigurationContribution } from './EditorWindowConfigurationContribution.js'
 export { RemoteExplorerMenuContribution } from './RemoteExplorerMenuContribution.js'
 export { SettingsContribution } from './SettingsContribution.js'
 export { FileEditorStatusContribution } from './FileEditorStatusContribution.js'

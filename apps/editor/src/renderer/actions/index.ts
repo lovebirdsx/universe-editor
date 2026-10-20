@@ -96,6 +96,14 @@ import {
   UnpinEditorAction,
 } from './editorActions.js'
 import {
+  CopyEditorGroupToNewWindowAction,
+  CopyEditorToNewWindowAction,
+  MoveEditorGroupToNewWindowAction,
+  MoveEditorToNewWindowAction,
+  NewEmptyEditorWindowAction,
+  RestoreEditorsToMainWindowAction,
+} from './auxiliaryEditorActions.js'
+import {
   ConfigureDisplayLanguageAction,
   OpenKeybindingsEditorAction,
   OpenKeybindingsJsonAction,
@@ -487,6 +495,12 @@ registerAction2(ChangeLanguageModeAction)
 
 // Editor — close
 registerAction2(CloseActiveEditorAction)
+registerAction2(MoveEditorToNewWindowAction)
+registerAction2(CopyEditorToNewWindowAction)
+registerAction2(MoveEditorGroupToNewWindowAction)
+registerAction2(CopyEditorGroupToNewWindowAction)
+registerAction2(NewEmptyEditorWindowAction)
+registerAction2(RestoreEditorsToMainWindowAction)
 registerAction2(CloseAllEditorsAction)
 registerAction2(CloseOtherEditorsAction)
 registerAction2(CloseEditorsToTheRightAction)

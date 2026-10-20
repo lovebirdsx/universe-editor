@@ -61,8 +61,9 @@ describe('WindowScopedServices type', () => {
       userData: {} as WindowScopedServices['userData'],
       terminal: {} as WindowScopedServices['terminal'],
       fileWatcher: {} as WindowScopedServices['fileWatcher'],
+      auxiliaryWindows: {} as WindowScopedServices['auxiliaryWindows'],
     }
-    expect(Object.keys(svc)).toHaveLength(8)
+    expect(Object.keys(svc)).toHaveLength(9)
   })
 })
 

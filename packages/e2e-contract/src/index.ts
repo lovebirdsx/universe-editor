@@ -753,6 +753,37 @@ export interface E2EKeybindingTrace {
   readonly candidates: readonly E2EKeybindingTraceCandidate[]
 }
 
+export interface E2EAuxiliaryWindowGroupSnapshot {
+  readonly id: number
+  readonly active: boolean
+  readonly activeEditorId?: string
+  readonly activeEditorDirty: boolean
+  readonly editorUris: readonly string[]
+}
+
+export interface E2EAuxiliaryWindowSnapshot {
+  readonly token: string
+  readonly partId: number
+  readonly title: string
+  readonly active: boolean
+  readonly explicitEmpty: boolean
+  readonly groups: readonly E2EAuxiliaryWindowGroupSnapshot[]
+  readonly hasRoot: boolean
+  readonly styleCount: number
+  readonly baseHref: string
+  readonly theme: string | undefined
+  /** The minimal auxiliary preload must not expose the IPC bridge. */
+  readonly hasIpc: boolean
+  readonly hasAuxiliaryMarker: boolean
+}
+
+export interface E2EWorkbenchWindowSnapshot {
+  readonly id: number
+  readonly isMain: boolean
+  readonly active: boolean
+  readonly groupIds: readonly number[]
+}
+
 export interface E2EProbe {
   /** Resolves once the workbench has reached LifecyclePhase.Ready. */
   whenReady(): Promise<void>
@@ -851,6 +882,14 @@ export interface E2EProbe {
    * without a spec reaching into the grid's flex weights or the DOM.
    */
   getEditorGroupsLayout(): E2EEditorGroupsLayout
+  /** Every auxiliary editor window, with its groups/editors and document chrome. */
+  getAuxiliaryWindows(): readonly E2EAuxiliaryWindowSnapshot[]
+  /** Every workbench window (main + auxiliary) and the groups it owns. */
+  getWorkbenchWindows(): readonly E2EWorkbenchWindowSnapshot[]
+  /** Marks an auxiliary window active without needing OS focus (offscreen E2E). */
+  focusAuxiliaryWindow(token: string): Promise<void>
+  /** Runs the real user-close path (main-process veto + renderer transaction). */
+  requestCloseAuxiliaryWindow(token: string): Promise<void>
   /**
    * Id of the active file icon theme ('' when None is selected — icons render
    * programmatically with the built-in Material SVGs). Backs the icon-theme
@@ -1969,6 +2008,12 @@ export interface E2EProbe {
   getDocumentSyncStats(): E2EDocumentSyncStats
   /** 活动编辑器缓冲区是否脏；没有活动编辑器（或它不支持 dirty）时 undefined。 */
   isActiveEditorDirty(): boolean | undefined
+  /**
+   * Dirty state of the first open editor whose resource matches `uri`, across
+   * all windows. Copies in auxiliary windows share a Monaco model, so this is
+   * how a spec proves the other window observes an edit.
+   */
+  isEditorUriDirty(uri: string): boolean | undefined
   /** 活动文件编辑器模型文本的长度与指纹；没有文件编辑器挂载时 undefined。见 {@link E2ETextDigest}。 */
   getActiveEditorTextDigest(): E2ETextDigest | undefined
   /**

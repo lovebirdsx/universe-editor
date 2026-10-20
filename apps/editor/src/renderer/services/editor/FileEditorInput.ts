@@ -431,6 +431,42 @@ export class FileEditorInput extends EditorInput {
   }
 
   /**
+   * Take over a live file buffer when a move lands in a group that already
+   * shows the same file. Acquiring the shared Monaco model *before* the source
+   * input is disposed keeps the last reference alive even when this input has
+   * not mounted yet — otherwise moving a dirty tab into an already-open (but
+   * not yet resolved) copy could dispose the model and lose dirty content and
+   * undo history.
+   */
+  override migrateFrom(other: EditorInput): void {
+    super.migrateFrom(other)
+    if (!(other instanceof FileEditorInput)) return
+
+    const wasResolved = this._resolved
+    if (!wasResolved) {
+      this._backupContent = other._backupContent
+      this._hasLeadingBom = other._hasLeadingBom
+      this._lastKnownMtime = other._lastKnownMtime
+      this._isReadonly = other._isReadonly
+      this._savedAlternativeVersionId = other._savedAlternativeVersionId
+    }
+    if (!this._modelRefAcquired) {
+      const model = MonacoModelRegistry.peek(this._resource)
+      if (model && !model.isDisposed()) {
+        MonacoModelRegistry.acquire(this._resource, model.getValue())
+        this._modelRefAcquired = true
+        this._bindModelLanguage(model)
+        this._resolved = true
+        this.updateDirtyFromModel(model)
+      }
+    }
+    if (this._pendingDirtyContent === undefined) {
+      this._pendingDirtyContent = other._pendingDirtyContent
+    }
+    if (other.isDirty) this.setDirty(true)
+  }
+
+  /**
    * Rebuild this input around the renamed resource. The dirty buffer (if any)
    * becomes the new input's pending content so it is applied on first resolve;
    * the clean baseline/mtime/BOM carry over so a watcher `added` event cannot
@@ -473,6 +509,11 @@ export class FileEditorInput extends EditorInput {
     if (d.isReadonly === true) input.markReadonly()
     if (d.dirtyContent !== undefined) {
       input._pendingDirtyContent = d.dirtyContent
+      // The snapshot only carries content when the source had unsaved edits.
+      // Marking dirty immediately closes the window between deserialize and the
+      // first model sync, where closing/saving would treat the tab as clean and
+      // silently drop the pending buffer.
+      input.setDirty(true)
     }
     return input
   }

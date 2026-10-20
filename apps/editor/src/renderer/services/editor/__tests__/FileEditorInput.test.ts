@@ -114,6 +114,28 @@ describe('FileEditorInput', () => {
     input.dispose()
   })
 
+  it('migrateFrom retains the shared buffer before the source is disposed', async () => {
+    const source = inst.createInstance(FileEditorInput, uri)
+    const sourceModel = await source.resolveModel()
+    sourceModel.setValue('{"a":2}')
+    source.updateDirtyFromModel(sourceModel)
+    expect(source.isDirty).toBe(true)
+
+    const target = inst.createInstance(FileEditorInput, uri)
+    target.migrateFrom(source)
+    source.dispose()
+
+    // The target never mounted; without migrateFrom acquiring its own model
+    // reference, disposing the source would drop the last reference and lose
+    // the dirty buffer / undo history.
+    expect(MonacoModelRegistry.peek(uri)).toBe(sourceModel)
+    expect(target.isDirty).toBe(true)
+    expect(await target.resolveModel()).toBe(sourceModel)
+
+    target.dispose()
+    expect(MonacoModelRegistry.peek(uri)).toBeUndefined()
+  })
+
   it('deserialize round-trip via accessor yields a new FileEditorInput on the same URI', () => {
     const original = inst.createInstance(FileEditorInput, uri)
     const data = original.serialize()
@@ -129,6 +151,18 @@ describe('FileEditorInput', () => {
     const data = input.serialize()
     expect(FileEditorInput.deserialize(data)).toBeNull()
     input.dispose()
+  })
+
+  it('deserialize marks a dirty snapshot as dirty before the first resolve', () => {
+    const restored = inst.invokeFunction((accessor) =>
+      FileEditorInput.deserialize(
+        { resource: uri.toJSON(), dirtyContent: '{"dirty":1}' },
+        accessor,
+      ),
+    )
+    expect(restored).toBeInstanceOf(FileEditorInput)
+    expect(restored!.isDirty).toBe(true)
+    restored?.dispose()
   })
 
   it('save writes the current model value through IFileService and clears dirty', async () => {

@@ -468,12 +468,14 @@ describe('Built-in editor Action2s', () => {
     expect(svc.activeGroup.activeEditor).toBe(b)
   })
 
-  it('SplitEditorRight adds a new group with the active editor copied', () => {
+  it('SplitEditorRight refuses to split an uncopyable editor instead of sharing its instance', () => {
     const svc = new EditorGroupsService()
     const a = new TestEditor('a')
     svc.activeGroup.openEditor(a)
     exec(SplitEditorRightAction, svc)
-    expect(svc.groups).toHaveLength(2)
+    // TestEditor has no serialize/deserialize provider: splitting would have to
+    // share one input instance across groups (either close disposing the other).
+    expect(svc.groups).toHaveLength(1)
     expect(svc.activeGroup.activeEditor).toBe(a)
   })
 
@@ -499,14 +501,23 @@ describe('Built-in editor Action2s', () => {
   })
 
   it('SplitEditorDown / Left / Up each create a new group', () => {
-    const svc = new EditorGroupsService()
-    svc.activeGroup.openEditor(new TestEditor('a'))
-    exec(SplitEditorDownAction, svc)
-    expect(svc.groups).toHaveLength(2)
-    exec(SplitEditorLeftAction, svc)
-    expect(svc.groups).toHaveLength(3)
-    exec(SplitEditorUpAction, svc)
-    expect(svc.groups).toHaveLength(4)
+    const reg = EditorRegistry.registerEditorProvider({
+      typeId: CloneableEditor.TYPE_ID,
+      componentKey: 'file',
+      deserialize: (data) => CloneableEditor.deserialize(data),
+    })
+    try {
+      const svc = new EditorGroupsService()
+      svc.activeGroup.openEditor(new CloneableEditor('a'))
+      exec(SplitEditorDownAction, svc)
+      expect(svc.groups).toHaveLength(2)
+      exec(SplitEditorLeftAction, svc)
+      expect(svc.groups).toHaveLength(3)
+      exec(SplitEditorUpAction, svc)
+      expect(svc.groups).toHaveLength(4)
+    } finally {
+      reg.dispose()
+    }
   })
 
   it('SplitEditorRight does nothing when active group has no editors', () => {
@@ -763,22 +774,31 @@ describe('FocusActiveEditorGroupAction', () => {
   })
 
   it('run() focuses an untitled editor after a newly split group is immediately closed', async () => {
-    const svc = new EditorGroupsService()
-    const input = new UntitledEditorInput()
-    svc.activeGroup.openEditor(input)
+    const reg = EditorRegistry.registerEditorProvider({
+      typeId: 'untitled',
+      componentKey: 'file',
+      deserialize: (data) => UntitledEditorInput.deserialize(data),
+    })
+    try {
+      const svc = new EditorGroupsService()
+      const input = new UntitledEditorInput()
+      svc.activeGroup.openEditor(input)
 
-    const focus = vi.fn()
-    FileEditorRegistry.register(input, { focus } as never)
-    exec(SplitEditorRightAction, svc)
-    exec(CloseActiveEditorAction, svc)
-    await Promise.resolve()
+      const focus = vi.fn()
+      FileEditorRegistry.register(input, { focus } as never)
+      exec(SplitEditorRightAction, svc)
+      exec(CloseActiveEditorAction, svc)
+      await Promise.resolve()
 
-    expect(svc.groups).toHaveLength(1)
-    expect(svc.activeGroup.activeEditor).toBe(input)
+      expect(svc.groups).toHaveLength(1)
+      expect(svc.activeGroup.activeEditor).toBe(input)
 
-    exec(FocusActiveEditorGroupAction, svc)
+      exec(FocusActiveEditorGroupAction, svc)
 
-    expect(focus).toHaveBeenCalledOnce()
+      expect(focus).toHaveBeenCalledOnce()
+    } finally {
+      reg.dispose()
+    }
   })
 
   it('run() does not throw when no Monaco editor is registered for the active input', () => {

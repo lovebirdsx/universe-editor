@@ -65,7 +65,8 @@ function BranchNode<T extends IGridView>({
     if (!el) return
     const report = () => grid.setContainerSize({ width: el.offsetWidth, height: el.offsetHeight })
     report()
-    const observer = new ResizeObserver(report)
+    const ObserverCtor = el.ownerDocument.defaultView?.ResizeObserver ?? ResizeObserver
+    const observer = new ObserverCtor(report)
     observer.observe(el)
     return () => observer.disconnect()
   }, [grid, isRoot])

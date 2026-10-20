@@ -28,6 +28,7 @@ import {
   EditorRegistry,
   GroupDirection,
   ICommandService,
+  IConfigurationService,
   IContextKeyService,
   IDialogService,
   IEditorResolverService,
@@ -59,11 +60,15 @@ import {
   useHover,
   useDragHandle,
   useDropTarget,
+  type DragEndSnapshot,
 } from '@universe-editor/workbench-ui'
 import { useService, useObservable, useOptionalService } from '../useService.js'
 import { closeEditorWithConfirm } from '../../services/editor/closeEditorWithConfirm.js'
 import { cloneEditorInputForSplit } from '../../services/editor/cloneEditorInput.js'
 import { focusEditorInput } from '../../services/editor/editorFocus.js'
+import { decideTabDragOut, isCopyDragOperation } from '../../services/editor/tabDragOut.js'
+import { IAuxiliaryEditorWindowService } from '../../services/windows/auxiliaryEditorWindowService.js'
+import { IWorkbenchWindowService } from '../../services/windows/workbenchWindowService.js'
 import { readDroppedResources } from '../../services/dnd/resourceDropTransfer.js'
 import { openDroppedResource } from '../../services/dnd/openDroppedResource.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
@@ -80,6 +85,7 @@ import {
 import { EditorGroupContext } from './EditorGroupContext.js'
 import { EditorTitleActions } from './EditorTitleActions.js'
 import { EditorTabContextMenu } from './EditorTabContextMenu.js'
+import { EditorGroupContextMenu } from './EditorGroupContextMenu.js'
 import { tabContextMenuResource } from './tabContextMenuResource.js'
 import { ToggleEditorGroupLockAction } from '../../actions/editorActions.js'
 import { FileIcon } from '../files/fileIconTheme.js'
@@ -109,6 +115,15 @@ interface TabMenuState {
   readonly sticky: boolean
   /** Raised with the ContextMenu key — the menu opens on its first entry. */
   readonly keyboard: boolean
+  /** Document the tab lives in (auxiliary windows portal their menus there). */
+  readonly document: Document
+}
+
+interface GroupMenuState {
+  readonly x: number
+  readonly y: number
+  readonly groupId: number
+  readonly document: Document
 }
 
 export interface EditorGroupViewProps {
@@ -304,6 +319,7 @@ const EditorTab = memo(function EditorTab({
   onClose,
   onContextMenu,
   onMenuKeyDown,
+  onDragEnd,
   groupId,
   showDropIndicator,
 }: {
@@ -319,6 +335,7 @@ const EditorTab = memo(function EditorTab({
   onClose: () => void
   onContextMenu: (e: ReactMouseEvent) => void
   onMenuKeyDown: (e: ReactKeyboardEvent) => void
+  onDragEnd: (e: ReactDragEvent, snapshot: DragEndSnapshot) => void
   groupId: number
   showDropIndicator: boolean
 }) {
@@ -374,6 +391,7 @@ const EditorTab = memo(function EditorTab({
     },
     {
       uriList: () => (resource && isFileSystemUri(resource) ? [resource.toString()] : []),
+      onDragEnd,
     },
   )
   const { hoverProps, HoverPopup } = useHover()
@@ -531,12 +549,17 @@ export const EditorGroupView = memo(function EditorGroupView({
   const instantiationService = useService(IInstantiationService)
   const notificationService = useOptionalService(INotificationService)
   const loggerService = useOptionalService(ILoggerService)
+  const configurationService = useOptionalService(IConfigurationService)
+  const workbenchWindows = useOptionalService(IWorkbenchWindowService)
+  const auxiliaryWindows = useOptionalService(IAuxiliaryEditorWindowService)
+  const host = useOptionalService(IHostService)
   const dndLogger = useMemo(
     () => loggerService?.createLogger({ id: 'editorDnd', name: 'Editor DnD' }),
     [loggerService],
   )
   const dragSession = useContext(DragSessionContext)
   const [tabMenu, setTabMenu] = useState<TabMenuState | null>(null)
+  const [groupMenu, setGroupMenu] = useState<GroupMenuState | null>(null)
   const [dropIndex, setDropIndex] = useState<number | null>(null)
   const [bodyZone, setBodyZone] = useState<BodyDropZone | null>(null)
   const tabBarRef = useRef<HTMLDivElement>(null)
@@ -557,6 +580,12 @@ export const EditorGroupView = memo(function EditorGroupView({
   /** Whether DOM focus is currently inside the editor body (Monaco). Drives tab highlight. */
   const [hasInputFocus, setHasInputFocus] = useState(false)
 
+  const isCopyDrop = (e: ReactDragEvent | DragEvent): boolean =>
+    isCopyDragOperation({ ctrlKey: e.ctrlKey, altKey: e.altKey }, host?.platform === 'darwin')
+
+  const cloneForCopy = (editor: EditorInput): EditorInput | undefined =>
+    instantiationService?.invokeFunction((accessor) => cloneEditorInputForSplit(editor, accessor))
+
   const { dropTargetProps } = useDropTarget<{ editor: EditorInput; sourceGroupId: number }>(
     (payload, e) => {
       if (!payload) {
@@ -564,21 +593,32 @@ export const EditorGroupView = memo(function EditorGroupView({
         return
       }
       const { editor, sourceGroupId } = payload
+      const tabBar = tabBarRef.current
+      if (!tabBar) return
+      const newIndex = calcInsertIndex(
+        tabBar.dataset['lastDropX'] ? Number(tabBar.dataset['lastDropX']) : 0,
+      )
       if (sourceGroupId === group.id) {
-        // Within same group: compute insertion index from the drop event's last known x.
-        const tabBar = tabBarRef.current
-        if (!tabBar) return
-        const newIndex = calcInsertIndex(
-          tabBar.dataset['lastDropX'] ? Number(tabBar.dataset['lastDropX']) : 0,
-        )
+        // Within same group: insertion index from the drop event's last known x.
         group.moveEditor(editor, newIndex)
         // Same guard as the keyboard move command: a preview tab must never
         // land inside the sticky region still holding the preview slot.
         group.pinEditor(editor)
-      } else {
-        const sourceGroup = groupsService.getGroup(sourceGroupId)
-        if (sourceGroup) groupsService.moveEditor(editor, group)
+        return
       }
+      const sourceGroup = groupsService.getGroup(sourceGroupId)
+      if (!sourceGroup) return
+      if (isCopyDrop(e)) {
+        const clone = cloneForCopy(editor)
+        if (!clone) return
+        groupsService.copyEditor(clone, group, { sticky: sourceGroup.isSticky(editor) })
+        group.moveEditor(clone, newIndex)
+        return
+      }
+      groupsService.moveEditor(editor, group, sourceGroup)
+      // Re-home the moved editor at the pointer's index (cross-group drops
+      // otherwise always append to the end of the target tab strip).
+      group.moveEditor(editor, newIndex)
     },
   )
 
@@ -599,25 +639,45 @@ export const EditorGroupView = memo(function EditorGroupView({
     const sourceGroup = groupsService.getGroup(sourceGroupId)
     if (!sourceGroup) return
     const zone = detectBodyDropZone(rect, pos.x, pos.y)
+    const copy = isCopyDrop(e)
     if (zone === 'center') {
       // Same group + center = no-op (cross-group drops here behave like a tab-bar drop).
       if (sourceGroupId === group.id) return
-      groupsService.moveEditor(editor, group)
+      if (copy) {
+        const clone = cloneForCopy(editor)
+        if (clone) {
+          groupsService.copyEditor(clone, group, { sticky: sourceGroup.isSticky(editor) })
+        }
+        return
+      }
+      groupsService.moveEditor(editor, group, sourceGroup)
       return
     }
-    const newGroup = groupsService.addGroup(group, zoneToDirection(zone))
     // Splitting a group's only editor onto an edge of itself: a plain move would
     // empty (and auto-remove) the source. Clone into the new group instead — same
     // semantics as the Split Editor command — so both groups stay populated.
+    // Clone first: an uncopyable input must not leave a freshly-created empty
+    // group behind.
     if (sourceGroupId === group.id && sourceGroup.editors.length === 1) {
       instantiationService.invokeFunction((accessor) => {
-        groupsService.copyEditor(cloneEditorInputForSplit(editor, accessor), newGroup, {
+        const clone = cloneEditorInputForSplit(editor, accessor)
+        if (!clone) return
+        const newGroup = groupsService.addGroup(group, zoneToDirection(zone))
+        groupsService.copyEditor(clone, newGroup, {
           sticky: sourceGroup.isSticky(editor),
         })
       })
       return
     }
-    groupsService.moveEditor(editor, newGroup)
+    if (copy) {
+      const clone = cloneForCopy(editor)
+      if (!clone) return
+      const newGroup = groupsService.addGroup(group, zoneToDirection(zone))
+      groupsService.copyEditor(clone, newGroup, { sticky: sourceGroup.isSticky(editor) })
+      return
+    }
+    const newGroup = groupsService.addGroup(group, zoneToDirection(zone))
+    groupsService.moveEditor(editor, newGroup, sourceGroup)
   })
 
   const openDroppedResources = (e: ReactDragEvent): void => {
@@ -649,8 +709,62 @@ export const EditorGroupView = memo(function EditorGroupView({
     }
   }
 
+  const handleTabDragEnd = (
+    e: ReactDragEvent,
+    snapshot: DragEndSnapshot,
+    editor: EditorInput,
+  ): void => {
+    // No payload means either the gesture never started on a tab or a drop
+    // target already cleared it (the `consumed` flag covers the latter).
+    if (snapshot.payload === undefined || !auxiliaryWindows) return
+    const windows = (workbenchWindows?.windows ?? []).map((entry) => ({
+      x: entry.window.screenX,
+      y: entry.window.screenY,
+      width: entry.window.outerWidth,
+      height: entry.window.outerHeight,
+    }))
+    const decision = decideTabDragOut({
+      enabled:
+        configurationService?.get<boolean>('workbench.editor.dragToOpenWindow', true) !== false,
+      consumed: snapshot.consumed,
+      cancelled: snapshot.cancelled,
+      screenX: e.screenX,
+      screenY: e.screenY,
+      windows,
+    })
+    if (!decision.create) {
+      dndLogger?.debug(`tab drag-out skipped: ${decision.reason}`)
+      return
+    }
+    const bounds = { x: decision.geometry.x, y: decision.geometry.y }
+    const copy = isCopyDragOperation(
+      { ctrlKey: e.ctrlKey, altKey: e.altKey },
+      host?.platform === 'darwin',
+    )
+    dndLogger?.info(
+      `tab drag-out ${copy ? 'copy' : 'move'} at ${bounds.x},${bounds.y} from group=${group.id}`,
+    )
+    void (copy
+      ? auxiliaryWindows.copyEditorToNewWindow(editor, group, bounds)
+      : auxiliaryWindows.moveEditorToNewWindow(editor, group, bounds))
+  }
+
+  const openGroupMenu = (ev: ReactMouseEvent<HTMLDivElement>): void => {
+    ev.preventDefault()
+    setTabMenu(null)
+    setGroupMenu({
+      x: ev.clientX,
+      y: ev.clientY,
+      groupId: group.id,
+      document: ev.currentTarget.ownerDocument,
+    })
+  }
+
   const handleBodyDragOver = (e: ReactDragEvent<HTMLDivElement>) => {
     bodyDropProps.onDragOver(e)
+    if (dragSession?.payload !== undefined && isCopyDrop(e) && e.dataTransfer) {
+      e.dataTransfer.dropEffect = 'copy'
+    }
     const rect = bodyRef.current?.getBoundingClientRect()
     if (!rect) return
     bodyDropPosRef.current = { x: e.clientX, y: e.clientY }
@@ -729,11 +843,12 @@ export const EditorGroupView = memo(function EditorGroupView({
       setDropIndex(null)
       bodyDropPosRef.current = null
     }
-    window.addEventListener('dragend', clear)
-    window.addEventListener('drop', clear)
+    const view = (bodyRef.current?.ownerDocument ?? document).defaultView ?? window
+    view.addEventListener('dragend', clear)
+    view.addEventListener('drop', clear)
     return () => {
-      window.removeEventListener('dragend', clear)
-      window.removeEventListener('drop', clear)
+      view.removeEventListener('dragend', clear)
+      view.removeEventListener('drop', clear)
     }
   }, [bodyZone, dropIndex])
 
@@ -811,7 +926,7 @@ export const EditorGroupView = memo(function EditorGroupView({
     el.addEventListener('focusin', onFocusIn)
     el.addEventListener('focusout', onFocusOut)
     // Initialize from current document state in case we mount with focus already inside.
-    setHasInputFocus(el.contains(document.activeElement))
+    setHasInputFocus(el.contains(el.ownerDocument.activeElement))
     return () => {
       el.removeEventListener('focusin', onFocusIn)
       el.removeEventListener('focusout', onFocusOut)
@@ -941,8 +1056,12 @@ export const EditorGroupView = memo(function EditorGroupView({
             className={styles['tabBar']}
             role="tablist"
             data-testid="editor-group-tabbar"
+            onContextMenu={openGroupMenu}
             onDragOver={(e) => {
               dropTargetProps.onDragOver(e)
+              if (dragSession?.payload !== undefined && isCopyDrop(e) && e.dataTransfer) {
+                e.dataTransfer.dropEffect = 'copy'
+              }
               if (tabBarRef.current) {
                 tabBarRef.current.dataset['lastDropX'] = String(e.clientX)
               }
@@ -983,6 +1102,9 @@ export const EditorGroupView = memo(function EditorGroupView({
                 }}
                 onContextMenu={(ev) => {
                   ev.preventDefault()
+                  // The tab bar background opens the group menu; a tab's menu
+                  // must never also trigger it.
+                  ev.stopPropagation()
                   // We opened the menu from keydown; swallow Chromium's keyup
                   // replay or the menu re-opens at the tab center with the
                   // keyboard flag flipped off.
@@ -996,6 +1118,7 @@ export const EditorGroupView = memo(function EditorGroupView({
                     resource: tabContextMenuResource(e),
                     sticky: group.isSticky(e),
                     keyboard: isKeyboardContextMenu(ev),
+                    document: ev.currentTarget.ownerDocument,
                   })
                 }}
                 onMenuKeyDown={(ev) => {
@@ -1006,6 +1129,7 @@ export const EditorGroupView = memo(function EditorGroupView({
                   // the keyboard mark rides along with no duplicate logic.
                   dispatchKeyboardContextMenu(ev.currentTarget as HTMLElement, true)
                 }}
+                onDragEnd={(ev, snapshot) => handleTabDragEnd(ev, snapshot, e)}
               />
             ))}
             {dropIndex === group.editors.length && (
@@ -1048,6 +1172,7 @@ export const EditorGroupView = memo(function EditorGroupView({
         className={styles['editorContent']}
         data-testid="editor-group-body"
         tabIndex={-1}
+        onContextMenu={group.editors.length === 0 ? openGroupMenu : undefined}
         onDragOver={handleBodyDragOver}
         onDragLeave={handleBodyDragLeave}
         onDrop={handleBodyDrop}
@@ -1072,9 +1197,22 @@ export const EditorGroupView = memo(function EditorGroupView({
           resource={tabMenu.resource}
           sticky={tabMenu.sticky}
           keyboard={tabMenu.keyboard}
+          targetDocument={tabMenu.document}
           commandService={commandService}
           contextKeyService={contextKeyService}
           onClose={() => setTabMenu(null)}
+        />
+      )}
+      {groupMenu && (
+        <EditorGroupContextMenu
+          x={groupMenu.x}
+          y={groupMenu.y}
+          groupId={groupMenu.groupId}
+          keyboard={false}
+          targetDocument={groupMenu.document}
+          commandService={commandService}
+          contextKeyService={contextKeyService}
+          onClose={() => setGroupMenu(null)}
         />
       )}
     </div>

@@ -55,6 +55,7 @@ import type { WatcherProcessClient } from '@universe-editor/node-services'
 import type { IRemoteConnectionService } from '../services/remote/remoteConnectionMainService.js'
 import type { RemoteStatusMainService } from '../services/remoteStatus/remoteStatusMainService.js'
 import type { IFileClipboardService } from '../../shared/ipc/fileClipboardService.js'
+import type { IAuxiliaryWindowsService } from '../../shared/ipc/auxiliaryWindowService.js'
 
 /** Services shared across all windows. Instantiated once at app startup. */
 export interface ApplicationServices {
@@ -157,4 +158,5 @@ export interface WindowScopedServices {
   readonly userData: IUserDataFilesService
   readonly terminal: ITerminalService
   readonly fileWatcher: IFileWatcherService
+  readonly auxiliaryWindows: IAuxiliaryWindowsService
 }

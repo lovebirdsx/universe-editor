@@ -220,12 +220,13 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
       }
       // The caller handed us ownership of `editor`; when it's a freshly-built
       // duplicate of an already-open input (same identity, different instance —
-      // e.g. Reopen Closed Editor deserializing a tab that's still open) the
-      // existing entry wins and this new instance is never adopted. Let the
-      // existing input absorb any newer state, then dispose the discarded
-      // duplicate so it doesn't leak. Mirrors EditorService.openEditor's dedup.
+      // e.g. a moved tab, or Reopen Closed Editor deserializing a tab that's
+      // still open) the existing entry wins and this new instance is never
+      // adopted. `migrateFrom` forwards to `updateFrom` and preserves unsaved
+      // state (and, for model-backed inputs, the shared model reference) before
+      // the discarded duplicate is disposed. Mirrors EditorService.openEditor.
       if (editor !== existing) {
-        existing.updateFrom?.(editor)
+        existing.migrateFrom(editor)
         editor.dispose()
       }
       return

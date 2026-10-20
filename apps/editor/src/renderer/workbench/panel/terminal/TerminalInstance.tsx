@@ -189,6 +189,9 @@ export function TerminalInstance({
           items={menuItems}
           anchor={{ x: contextMenu.x, y: contextMenu.y }}
           renderIcon={renderMenuIcon}
+          {...(hostRef.current?.ownerDocument
+            ? { targetDocument: hostRef.current.ownerDocument }
+            : {})}
           onClose={() => setContextMenu(null)}
         />
       )}

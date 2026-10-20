@@ -6,7 +6,7 @@
  *  as an indented flat table.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   ICommandService,
   IContextKeyService,
@@ -45,6 +45,7 @@ export function ProcessExplorerEditor(_props: { input: IEditorInput }) {
   const commandService = useService(ICommandService)
   const contextKeyService = useService(IContextKeyService)
   const memory = useContextMenuMemory()
+  const rootRef = useRef<HTMLDivElement | null>(null)
   const [snapshot, setSnapshot] = useState<IProcessSnapshot | null>(null)
   const [collapsed, setCollapsed] = useState<ReadonlySet<number>>(new Set())
   const [menu, setMenu] = useState<ContextMenuState | null>(null)
@@ -92,7 +93,7 @@ export function ProcessExplorerEditor(_props: { input: IEditorInput }) {
   const rows = flattenProcessTree(snapshot.root, collapsed)
 
   return (
-    <div className={styles['root']} data-testid="process-explorer">
+    <div ref={rootRef} className={styles['root']} data-testid="process-explorer">
       {snapshot.errorMessage !== undefined && (
         <div className={styles['error']}>{snapshot.errorMessage}</div>
       )}
@@ -177,6 +178,9 @@ export function ProcessExplorerEditor(_props: { input: IEditorInput }) {
           contextKeyService={contextKeyService}
           renderIcon={renderMenuIcon}
           autoFocusFirst={menu.keyboard}
+          {...(rootRef.current?.ownerDocument
+            ? { targetDocument: rootRef.current.ownerDocument }
+            : {})}
           {...(memory ? { memory } : {})}
           onClose={() => setMenu(null)}
         />

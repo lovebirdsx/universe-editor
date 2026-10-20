@@ -8,7 +8,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('electron', () => ({ ipcMain: { on: vi.fn() } }))
 
-const { ElectronProtocol, FRAME_UNREACHABLE_LATCH_MS } = await import('../electronProtocol.js')
+const { ElectronProtocol, FRAME_UNREACHABLE_LATCH_MS, isMainFrameSender } =
+  await import('../electronProtocol.js')
 
 type Handler = (...args: unknown[]) => void
 
@@ -77,6 +78,14 @@ function make(): { wc: FakeWebContents; protocol: InstanceType<typeof ElectronPr
 }
 
 afterEach(() => vi.clearAllMocks())
+
+describe('workbench IPC sender policy', () => {
+  it('accepts only the main frame', () => {
+    expect(isMainFrameSender({ senderFrame: { parent: null } } as never)).toBe(true)
+    expect(isMainFrameSender({ senderFrame: { parent: { id: 2 } } } as never)).toBe(false)
+    expect(isMainFrameSender({ senderFrame: null } as never)).toBe(false)
+  })
+})
 
 describe('ElectronProtocol dead-frame gate', () => {
   it('sends normally while the frame is alive', () => {
