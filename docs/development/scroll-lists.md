@@ -76,6 +76,7 @@ document.querySelector('#root').style.opacity = '0.999'
 
 - 行数 / key / y 全干净 → 像素残留，按上面第 1~3 条约定查。
 - 出现重复行、重复 y 或文本与数据不符 → 是 DOM 缺陷，去查 `TreeModel` 的可见节点与 `Tree` 的行 key 归属。
+- **折叠后行叠层 + 控制台报 "Encountered two children with the same key"** → 先查 `ITreeDataSource.getId` 是否在可见行里返回了重复 id（同一实体同时挂在两个父节点下时，id 必须带父维度）。React 19 的 `reconcileChildrenArray` 用 Map 按 key 索引旧 fiber，重复 key 后者覆盖前者，收尾 `deleteChild` 只遍历 Map 里的值——被覆盖的那个旧 fiber 永远不会删除，其 DOM 行会作为孤儿留在容器里（行是绝对定位，原地叠在滑入该位置的新行上），直到整棵树卸载。这与像素残影不同：DOM 里真的多一行，`dupKey` / `dupY` 会报，强制重栅格化也不会消失。
 
 ## 守护
 
@@ -85,6 +86,7 @@ document.querySelector('#root').style.opacity = '0.999'
 | reveal 在真浏览器里仍然有效 | `apps/editor/e2e/specs/smoke.explorerRevealScroll.spec.ts`（滚动到顶后 reveal 把已选中的行带回来） |
 | 行定位 / spacer 形状 | `packages/workbench-ui/src/__tests__/VirtualList.test.tsx`（`top` 断言、spacer 契约） |
 | 列表重排后仍是「一摞不重叠的行」 | `apps/editor/src/renderer/workbench/swarm/__tests__/SwarmReviewsView.test.tsx` 的 soft refresh 用例（key 唯一、offset 严格递增、换选中不调 `scrollIntoView`）；`extensions/perforce/e2e/specs/swarmReview.spec.ts` 的 dashboard journey 补了真布局版（行矩形互不重叠、`End` 把最后一行底对齐） |
+| 同一实体跨两个父节点时行 id 仍唯一 | 同文件的 `duplicate review across groups` 用例（同一 review 同时在 Needs My Action 与 Authored by Me，逐个折叠后断言 treeitem 数量、key 唯一、无孤儿 review 行、`top` 严格递增）。**这是真复现**：修复前折叠后 DOM 会多出一行 |
 | 行高亮不画进装饰列 | `apps/editor/src/renderer/workbench/gitGraph/__tests__/rowBackgroundClipping.test.ts`（读 CSS 文本断言：裁剪 gradient 在位、状态规则只许下发 `--row-background`，含失焦态那两条）；`apps/editor/e2e/specs/smoke.gitGraphRowHighlight.spec.ts`（像素级断言：hover / 选中 / 失焦时泳道列内 0 像素变化，同时描述区必须有变化——前半句单独看会被「什么都没画」骗过；失焦那相改读 `--row-background`，因为描述区的像素变化分不清是填充变了还是行文字色变了） |
 
 ⚠️ e2e 那两条是**真布局护栏，不是复现**：残影本身没有可断言的信号（DOM 一直是干净的），而旧的 `scrollIntoView` 实现同样能通过「底对齐最后一行」这条断言。判断某条用例是否真的守住约定，唯一办法是**把实现改回去跑一遍**（`git checkout HEAD -- <file>` + rebuild），看它是否变红。

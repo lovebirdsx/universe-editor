@@ -742,7 +742,7 @@ describe('SwarmReviewsView soft refresh', () => {
     const rows = rowsByOffset()
     const keys = rows.map((el) => el.dataset['rowKey'])
     expect(new Set(keys).size).toBe(keys.length)
-    expect(reviewRowKeys()).toEqual(['review:1003', 'review:1001'])
+    expect(reviewRowKeys()).toEqual(['review:needsAction:1003', 'review:needsAction:1001'])
   })
 
   it('stacks the rows at strictly increasing offsets', async () => {
@@ -784,5 +784,67 @@ describe('SwarmReviewsView soft refresh', () => {
 
     await waitFor(() => expect(swarmChangesViewState.selectedReviewId.get()).toBe('1001'))
     expect(scrollIntoView).not.toHaveBeenCalled()
+  })
+})
+
+describe('SwarmReviewsView duplicate review across groups', () => {
+  // An open review you authored is returned by the host in BOTH lists: the
+  // dashboard derives "needs my action" from the authored set, so the same id
+  // legitimately appears under two groups. Tree rows were keyed by the bare
+  // review id, so the two copies collided as React keys — and folding one group
+  // made the reconciler overwrite one duplicate in its key map, leaving the
+  // other copy's DOM row permanently orphaned on top of the header that slid
+  // into its place (the overlapping "ghost" row in the sidebar).
+  const authoredOpen: SwarmReviewDto = { ...review, id: '1001' }
+  const authoredOther: SwarmReviewDto = { ...review, id: '1002', description: 'Second review' }
+
+  function treeItems(): HTMLElement[] {
+    return Array.from(document.querySelectorAll<HTMLElement>('[role="treeitem"]'))
+  }
+
+  async function renderOverlappingGroups() {
+    const executeCommand = vi.fn(async (command: string) => {
+      if (command === SwarmCommands.dashboard) {
+        return {
+          needsAction: [authoredOpen],
+          authored: [authoredOpen, authoredOther],
+          participating: [],
+        } satisfies SwarmDashboardResult
+      }
+      if (command === SwarmCommands.getTransitions) return []
+      return undefined
+    })
+    render(
+      <ServicesContext.Provider value={createServices(executeCommand).instantiation}>
+        <SwarmReviewsView />
+      </ServicesContext.Provider>,
+    )
+    await screen.findAllByTestId('swarm-review-row')
+  }
+
+  it('leaves no orphaned review row after folding a group whose review is in two groups', async () => {
+    await renderOverlappingGroups()
+
+    // Expanded: the same review renders once under each group (intended).
+    expect(screen.getAllByText('Fix the renderer')).toHaveLength(2)
+
+    // Fold "Needs My Action" first. The needs-action copy of review 1001 shares
+    // its key with the still-visible Authored copy, which is exactly the update
+    // that used to orphan its DOM row.
+    fireEvent.click(screen.getByText('Needs My Action'))
+    await waitFor(() => expect(treeItems()).toHaveLength(4))
+    const keysAfterFirstFold = treeItems().map((el) => el.dataset['rowKey'])
+    expect(new Set(keysAfterFirstFold).size).toBe(keysAfterFirstFold.length)
+
+    // Fold "Authored by Me": only the two group headers may remain, stacked at
+    // the offsets the visible nodes dictate — no review row may survive.
+    fireEvent.click(screen.getByText('Authored by Me'))
+    await waitFor(() => expect(treeItems()).toHaveLength(2))
+    expect(screen.queryByTestId('swarm-review-row')).toBeNull()
+    expect(treeItems().map((el) => el.dataset['rowKey'])).toEqual([
+      'group:needsAction',
+      'group:authored',
+    ])
+    expect(treeItems().map((el) => Number.parseFloat(el.style.top))).toEqual([0, 22])
   })
 })

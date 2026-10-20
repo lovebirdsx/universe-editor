@@ -9,7 +9,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 export interface ITreeDataSource<T> {
-  /** Stable string identity for an element (used as map key / selection key). */
+  /**
+   * Stable string identity for an element (used as map key / selection key and
+   * as the row's React key). Must be unique among ALL rows visible in the same
+   * tree: the same entity rendered under two parents needs a parent-scoped id —
+   * duplicate ids make React orphan one copy's DOM row when it is removed.
+   */
   getId(element: T): string
 
   /** Whether the element can have children (drives the twistie). */

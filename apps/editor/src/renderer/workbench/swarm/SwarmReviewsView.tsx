@@ -160,13 +160,18 @@ const GROUP_LABELS: Record<GroupKey, string> = {
 const GROUP_KEYS: GroupKey[] = ['needsAction', 'ignored', 'authored']
 
 /** Tree nodes: a group header and its review rows. Ids are namespaced so a
- *  review id can never collide with a group key. */
+ *  review id can never collide with a group key, AND scoped by group: an open
+ *  review you authored is returned in both "Needs My Action" and "Authored by
+ *  Me" (an ignored one is in both "Ignored" and "Authored by Me"), so a bare
+ *  review id would appear twice in the visible rows. Tree node ids double as
+ *  React keys — a duplicate makes the reconciler orphan one copy's DOM row,
+ *  which then stays painted over whatever row slides into its place. */
 type SwarmReviewsNode =
   | { kind: 'group'; id: string; key: GroupKey; label: string; count: number }
   | { kind: 'review'; id: string; review: SwarmReviewDto; canApprove: boolean }
 
 const groupNodeId = (key: GroupKey): string => `group:${key}`
-const reviewNodeId = (reviewId: string): string => `review:${reviewId}`
+const reviewNodeId = (key: GroupKey, reviewId: string): string => `review:${key}:${reviewId}`
 
 interface SwarmReviewsSnapshot {
   readonly roots: readonly SwarmReviewsNode[]
@@ -203,7 +208,7 @@ function buildSwarmReviewsSnapshot(
     const children = reviews.map(
       (review): SwarmReviewsNode => ({
         kind: 'review',
-        id: reviewNodeId(review.id),
+        id: reviewNodeId(key, review.id),
         review,
         canApprove: canApproveReview(transitions[review.id]),
       }),
