@@ -86,6 +86,16 @@ SHA 记录当前 P2 起点；下表测试结果保留为**首批验收历史**�
 
 **验收保留项**：全量 E2E 的 `smoke.windows.spec.ts` 有 3 项首跑在 8 秒内未达到预期、重试后通过：新窗口加载目录、窗口列表数量、退出后关闭所有窗口。最后一项超时时仍有 2 个窗口。三项在本批冒烟中通过，但尚未定位全量运行的首跑超时原因，不能认定为既有 flake 或与本批无关；本批未修改窗口实现或放宽超时。真实模型请求、生产网关、真实 SDK 历史复制及 fork 后 effort 继承仍未验证；性能标签与独立 `e2ea` 回归套件不计入已验证范围。（此段保留为前批历史；该首跑超时已在后续批次定位候选成因并加启动门禁，见「窗口用例的启动竞争与门禁」。）
 
+#### 后续修复：网关模型目录同步（2026-10-20）
+
+上节保留历史定位。后续诊断包显示 `session/set_config_option` 多次在 5004–5079ms 返回 `Internal error`，但未保留底层错误文本与目标模型，因此不能从该包单独证明每次都是超时。锁定 CLI 2.1.287 的受控实验确认：自定义模型不在 CLI 目录时，`set_model` 额外发送 `max_tokens: 1` 的模型探测，5 秒未完成便拒绝；本地不响应 `/messages` 的网关复现为 5004ms。仅补齐 SDK `settings.modelPicker.options` 后，连续切换两个模型共 12ms、没有网关请求。
+
+修复把 `_meta.extraModels` 同步到 **会话级 CLI modelPicker**，而不止 ACP 候选列表。保留调用方目录的标签、`replaceBuiltInOptions` 与其它 settings；无调用方目录时沿用启用的 user 层目录，**不能使用合并后的 project/local 目录再提升至 SDK 受信任层**。settings 文件路径需要合并时读取为对象，不写回文件；provider 路由合并不得覆盖新目录。CLI 仍负责组织限制、Hook 与实际 `setModel` 成功判定；不能吞掉失败或只修改 ACP 状态。
+
+这是「声明模型可选」而不是证明服务可用，真实鉴权/额度/模型存在性仍由 prompt 检验。未被目录覆盖的校验失败若命中已实测 `Couldn't confirm model … with the API. Try again…`，仅返回固定可操作提示，不回显模型名、原始错误或凭据，失败保持旧模型与配置。Codex 的 `set_config_option` 本来不发模型探测，不需对应修改。
+
+回归覆盖：真实创建/恢复入口的目录合并、对象/文件设置、用户与项目层级隔离、禁用 user 来源；真实 fork + CLI 的离线切换及挂起网关连续切换（断言无 `/messages` 请求）；失败状态与脱敏测试。不使用生产网关或真实凭据。
+
 ## P2 第一批：纯历史解析边界整理
 
 本批从 `acp-agent.ts` 迁出 `RawTranscriptEntry`、transcript 分类、显示链重建、queued-command 合并与共享 origin 常量，集中到 `transcript-history.ts`。新模块仅有 SDK type-only 导入，不依赖文件 IO、SDK runtime、ACP 或 agent 类，也不加入 `lib.ts` 公共 API。folded steering 仅抽出同步 `findFoldedPromptParent`；原方法仍在同一位置读盘、await 并处理失败。

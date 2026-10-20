@@ -25,10 +25,8 @@
  *      fork-side rename the binary-gated routing leg would otherwise miss;
  *    - 客户端注入模型候选 leg（`_meta.extraModels`）：新会话会把客户端给的 id 显示进
  *      model 选项。claude leg 需真实原生 CLI（session/new 会拉起它），无二进制则自跳过。
- *      注入只是往 picker 追加一行，所以本 leg 还断言一次切换真正会发生什么：无凭据时
- *      原生 CLI 校验不了该 id，以 `authentication_failed` 拒绝，且不改会话状态。真正的
- *      成功切换由同一 leg 经 `ANTHROPIC_CUSTOM_MODEL_OPTION`（CLI 自己支持的方式）覆盖，
- *      无需网关或凭据。codex leg 的 set_config_option 是纯内存状态，dist 就绪即跑。
+ *      客户端声明同步到 CLI modelPicker；无凭据与慢网关均可切换，仍需 CLI 接受。
+ *      模型实际可用性由后续 prompt 判定；codex 的切换是纯内存状态。
  *
  *  The dist-dependent legs are OPT-IN via `UNIVERSE_FORK_CONTRACT=1` (set only by
  *  CI's dedicated `acp-contract` job, which runs `pnpm agent:build` first). Without
@@ -59,6 +57,7 @@ import type { NewSessionResponse, SessionConfigOption } from '@agentclientprotoc
 import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { createServer } from 'node:http'
 
 // Handshake + newSession over a real subprocess: allow generous headroom (fork
 // cold-start + SDK model list ~1.3s observed) so CI machines don't flake.
@@ -611,10 +610,7 @@ describe.skipIf(!claudeExtReady)('claude ext-method wire contract (real dist)', 
     expect(modeAfter?.currentValue).toBe('dontAsk')
   })
 
-  it('session/new offers a client-injected extra model, but the credential-less native CLI refuses the switch', async () => {
-    // 两半契约：`_meta.extraModels` 只把 id 追加进 picker；切它却要过原生 CLI 自己的
-    // 目录校验，本 leg 无凭据 → 校验不了，报缺认证（authentication_failed）而非模型不存在。
-    // 拒绝不能是未包装的 SDK 抛错变成的 Internal error——那会把 CLI 原文留在 details 里。
+  it('客户端注入模型经 CLI 目录声明后可离线切换', async () => {
     const ns = await withTimeout(
       connection.conn.newSession({
         cwd,
@@ -626,17 +622,11 @@ describe.skipIf(!claudeExtReady)('claude ext-method wire contract (real dist)', 
       }),
       INIT_TIMEOUT_MS,
       'claude newSession with extraModels',
-    ).catch((err: unknown) => {
-      throw new Error(`${String(err)}\n--- fork stderr ---\n${connection.stderr()}`)
-    })
-    const modelOption = ns.configOptions?.find((o) => o.id === 'model')
-    expect(configOptionValues(modelOption)).toContain(EXTRA_MODEL_ID)
-    const modelBefore = modelOption?.currentValue
-    expect(typeof modelBefore).toBe('string')
-    const originalModelId = typeof modelBefore === 'string' ? modelBefore : 'default'
-
-    const updatesBefore = connection.sessionUpdates.length
-    const err: { code?: number; message?: string; data?: unknown } = await withTimeout(
+    )
+    expect(configOptionValues(ns.configOptions?.find((o) => o.id === 'model'))).toContain(
+      EXTRA_MODEL_ID,
+    )
+    const switched = await withTimeout(
       connection.conn.setSessionConfigOption({
         sessionId: ns.sessionId,
         configId: 'model',
@@ -644,43 +634,106 @@ describe.skipIf(!claudeExtReady)('claude ext-method wire contract (real dist)', 
       }),
       CALL_TIMEOUT_MS,
       'claude setSessionConfigOption to extra model',
-    ).then(
-      () => {
-        throw new Error(
-          `the native CLI accepted "${EXTRA_MODEL_ID}", a model outside its catalogue — ` +
-            `the extraModels picker row is being mistaken for availability`,
-        )
-      },
-      (e: { code?: number; message?: string; data?: unknown }) => e,
     )
+    expect(switched.configOptions.find((o) => o.id === 'model')?.currentValue).toBe(EXTRA_MODEL_ID)
+    expect(configOptionValues(switched.configOptions.find((o) => o.id === 'effort'))).toEqual(
+      expect.arrayContaining(['low', 'high']),
+    )
+  })
 
-    expect(err.code).toBe(-32000)
-    expect(err.data).toMatchObject({ errorKind: 'authentication_failed' })
-    // ACP 兜底会把 CLI 原文塞进 details；fork 必须翻译，不能回显。
-    expect(err.data ?? {}).not.toHaveProperty('details')
-
-    // 被拒就不是成功：不能有任何通知宣告模型换了。
-    const advertised = connection.sessionUpdates
-      .slice(updatesBefore)
-      .filter((n) => n.update.sessionUpdate === 'config_option_update')
-    expect(advertised).toEqual([])
-
-    // 会话仍可继续、仍停在原模型：把原 currentValue 再设回去必须被接受并回读一致
-    // （currentValue 永远是合法目标），证明这次拒绝没把会话搞坏。
-    const reasserted = await withTimeout(
-      connection.conn.setSessionConfigOption({
-        sessionId: ns.sessionId,
-        configId: 'model',
-        value: originalModelId,
-      }),
-      CALL_TIMEOUT_MS,
-      'claude setSessionConfigOption back to the original model',
-    ).catch((e: unknown) => {
-      throw new Error(`${String(e)}\n--- fork stderr ---\n${connection.stderr()}`)
+  it('慢网关下连续切换注入模型不发额外校验请求', async () => {
+    const requests: string[] = []
+    const server = createServer((request, response) => {
+      if (request.url?.includes('/messages')) {
+        requests.push(request.url)
+        request.resume()
+        return
+      }
+      response.writeHead(404).end()
     })
-    expect(reasserted.configOptions.find((o) => o.id === 'model')?.currentValue).toBe(
-      originalModelId,
-    )
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    let gateway: RealForkConnection | undefined
+    try {
+      const address = server.address()
+      if (!address || typeof address === 'string') throw new Error('Missing local gateway port')
+      gateway = spawnForkConnection('claude', cwd, {
+        env: {
+          ...claudeNativeEnv(configDir),
+          ANTHROPIC_BASE_URL: `http://127.0.0.1:${address.port}`,
+          ANTHROPIC_API_KEY: 'ak-1',
+          ANTHROPIC_CUSTOM_MODEL_OPTION: undefined,
+        },
+      })
+      await withTimeout(gateway.conn.initialize(CLIENT_INIT_PARAMS), INIT_TIMEOUT_MS, 'initialize')
+      const models = ['acme-slow[1m]', 'acme-other[1m]']
+      const ns = await withTimeout(
+        gateway.conn.newSession({ cwd, mcpServers: [], _meta: { extraModels: models } }),
+        INIT_TIMEOUT_MS,
+        'newSession with slow gateway',
+      )
+      for (const value of [...models, models[0]!]) {
+        const result = await withTimeout(
+          gateway.conn.setSessionConfigOption({
+            sessionId: ns.sessionId,
+            configId: 'model',
+            value,
+          }),
+          CALL_TIMEOUT_MS,
+          'switch model without validation request',
+        )
+        expect(result.configOptions.find((o) => o.id === 'model')?.currentValue).toBe(value)
+      }
+      expect(requests).toEqual([])
+
+      // 旧式 allowlist 未声明 CLI picker，真实超时仍须返回脱敏提示而不是假报成功。
+      const unlistedModel = 'acme-unlisted[1m]'
+      writeFileSync(
+        join(configDir, 'settings.json'),
+        JSON.stringify({ availableModels: ['default', unlistedModel] }),
+      )
+      const legacy = await withTimeout(
+        gateway.conn.newSession({ cwd, mcpServers: [] }),
+        INIT_TIMEOUT_MS,
+        'newSession with legacy allowlist',
+      )
+      expect(configOptionValues(legacy.configOptions?.find((o) => o.id === 'model'))).toContain(
+        unlistedModel,
+      )
+      const updatesBefore = gateway.sessionUpdates.length
+      const failure = await withTimeout(
+        gateway.conn.setSessionConfigOption({
+          sessionId: legacy.sessionId,
+          configId: 'model',
+          value: unlistedModel,
+        }),
+        CALL_TIMEOUT_MS,
+        'model validation timeout',
+      ).then(
+        () => {
+          throw new Error('模型校验超时却报告切换成功')
+        },
+        (error: unknown) => error,
+      )
+      expect(failure).toMatchObject({
+        code: -32603,
+        message:
+          'Internal error: Model validation could not complete. Check the provider connection and try again; the model was not changed.',
+        data: { errorKind: 'unknown' },
+      })
+      expect(requests).toHaveLength(1)
+      expect(
+        gateway.sessionUpdates
+          .slice(updatesBefore)
+          .filter(
+            (n) =>
+              n.sessionId === legacy.sessionId && n.update.sessionUpdate === 'config_option_update',
+          ),
+      ).toEqual([])
+    } finally {
+      await gateway?.dispose()
+      server.closeAllConnections()
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
   })
 
   it('switches to a non-first-party model the CLI itself declares (ANTHROPIC_CUSTOM_MODEL_OPTION)', async () => {
