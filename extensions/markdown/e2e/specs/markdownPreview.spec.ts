@@ -238,6 +238,89 @@ test.describe('@p1 markdown preview', () => {
         .toBeGreaterThan(0)
     })
 
+    await test.step('表格保留代码宽度并横向滚动，表外代码仍正常换行', async () => {
+      const longType = 'GameplayAttribute'.repeat(20)
+      const description = '接取指定任务后同步更新剧情状态。'.repeat(12)
+      const table = [
+        '| 字段名 | 类型 | 说明 |',
+        '| --- | --- | --- |',
+        '| `ResetCamera` | `boolean` | 恢复镜头 |',
+        '| `Title` | `string` | ' + description + ' |',
+        '| `Items` | [`ITalkItem[]`](target.md) | 对话列表 |',
+        '| `Path` | `categories/gameplay/AcceptFishingEntrust.md` | 详情位置 |',
+      ].join('\n')
+      const wideTable = ['| 类型 |', '| --- |', '| `' + longType + '` |'].join('\n')
+      const file = join(ws.dir, 'table-layout.md')
+      writeFileSync(
+        file,
+        [
+          '# 表格布局',
+          table,
+          wideTable,
+          '- 列表内表格\n\n' + wideTable.replace(/^/gm, '  '),
+          '`' + longType + '`',
+        ].join('\n\n'),
+      )
+      await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), file)
+      await expect
+        .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'))
+        .toBe('markdown')
+      await workbench.runCommand('workbench.action.markdown.openPreview')
+      const preview = page.getByTestId('markdown-preview')
+      await expect(preview.locator('table')).toHaveCount(3)
+      await expect(preview.locator('li table')).toHaveCount(1)
+      await page.evaluate(() => document.fonts.ready.then(() => undefined))
+
+      const layout = await preview.evaluate((root) => {
+        const tables = Array.from(root.querySelectorAll('table'))
+        const normal = tables[0]!
+        const descriptionCell = normal.rows[2]!.cells[2]!
+        const paragraph = root.querySelector('p:last-child')!
+        return {
+          types: Array.from(normal.querySelectorAll('code')).map((code) => ({
+            text: code.textContent,
+            lines: code.getClientRects().length,
+          })),
+          descriptionHeight: descriptionCell.getBoundingClientRect().height,
+          lineHeight: parseFloat(getComputedStyle(descriptionCell).lineHeight),
+          pathLines: normal.querySelector('[data-testid="md-filepath"]')!.getClientRects().length,
+          wideTables: tables.slice(1).map((table) => {
+            table.scrollLeft = table.scrollWidth
+            return {
+              width: table.clientWidth,
+              scrollWidth: table.scrollWidth,
+              scrollLeft: table.scrollLeft,
+              codeLines: table.querySelector('code')!.getClientRects().length,
+              rowHeight: table.rows[1]!.getBoundingClientRect().height,
+            }
+          }),
+          paragraphLines: paragraph.querySelector('code')!.getClientRects().length,
+          paragraphOverflow: paragraph.scrollWidth - paragraph.clientWidth,
+          previewOverflow: root.scrollWidth - root.clientWidth,
+        }
+      })
+      expect(layout.types).toEqual([
+        { text: 'ResetCamera', lines: 1 },
+        { text: 'boolean', lines: 1 },
+        { text: 'Title', lines: 1 },
+        { text: 'string', lines: 1 },
+        { text: 'Items', lines: 1 },
+        { text: 'ITalkItem[]', lines: 1 },
+        { text: 'Path', lines: 1 },
+      ])
+      expect(layout.descriptionHeight).toBeGreaterThan(layout.lineHeight * 2)
+      expect(layout.pathLines).toBeLessThan(5)
+      for (const table of layout.wideTables) {
+        expect(table.scrollWidth).toBeGreaterThan(table.width)
+        expect(table.scrollLeft).toBeGreaterThan(0)
+        expect(table.codeLines).toBe(1)
+        expect(table.rowHeight).toBeLessThan(layout.lineHeight * 2)
+      }
+      expect(layout.paragraphLines).toBeGreaterThan(1)
+      expect(layout.paragraphOverflow).toBeLessThanOrEqual(1)
+      expect(layout.previewOverflow).toBeLessThanOrEqual(1)
+    })
+
     await test.step('Link hints (f) appear without a prior click and navigate to the target', async () => {
       await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), ws.index)
       await expect

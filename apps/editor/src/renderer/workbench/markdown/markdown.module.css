@@ -156,6 +156,13 @@
   border-collapse: collapse;
 }
 
+/* 保留单词的 min-content 宽度，让宽表格滚动而非把代码逐字拆行。 */
+.markdown table,
+.markdown table * {
+  word-break: normal;
+  overflow-wrap: break-word;
+}
+
 .markdown th,
 .markdown td {
   border: 1px solid var(--vscode-workbench-border, #333);
