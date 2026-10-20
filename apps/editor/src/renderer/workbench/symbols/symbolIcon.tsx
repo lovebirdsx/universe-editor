@@ -17,7 +17,7 @@ import {
   ACP_OUTLINE_LANGUAGE_ID,
   decodeAcpOutlineKind,
 } from '../../services/acp/session/acpTimelineOutline.js'
-import { outlineRowGlyphSpec, renderAcpGlyph } from './acpGlyphs.js'
+import { outlineRowGlyphSpec, renderAcpGlyph, subagentGlyphSpec } from './acpGlyphs.js'
 
 const CALLABLE = 'var(--vscode-symbolIcon-functionForeground)'
 const VARIABLE = 'var(--vscode-symbolIcon-variableForeground)'
@@ -109,6 +109,9 @@ export function SymbolIcon({
 /** Icon id encoding a markdown heading, so the quick pick can render a `#` for it. */
 export const SYMBOL_HEADING_ICON_ID = 'symbol-heading'
 
+/** Icon id for an agent-session sub-agent row in the Go to Symbol picker. */
+export const SYMBOL_SUBAGENT_ICON_ID = 'symbol-subagent'
+
 /** Build the quick pick icon id for a symbol, special-casing markdown headings. */
 export function symbolIconId(kind: number, languageId: string | undefined): string {
   return isMarkdownHeading(kind, languageId) ? SYMBOL_HEADING_ICON_ID : `symbol-kind-${kind}`
@@ -120,6 +123,7 @@ export function symbolIconId(kind: number, languageId: string | undefined): stri
  */
 export function renderSymbolIconById(iconId: string, size: number): ReactNode | undefined {
   if (iconId === SYMBOL_HEADING_ICON_ID) return <HashIcon size={size} />
+  if (iconId === SYMBOL_SUBAGENT_ICON_ID) return renderAcpGlyph(subagentGlyphSpec(), size)
   const match = /^symbol-kind-(\d+)$/.exec(iconId)
   if (!match) return undefined
   return <CodiconIcon spec={SYMBOL_ICONS[Number(match[1])] ?? FALLBACK} size={size} />

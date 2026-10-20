@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { CommandsRegistry } from '@universe-editor/platform'
 import {
+  FocusNextSubagentCardAction,
+  FocusPreviousSubagentCardAction,
   ScrollAcpTimelineDownAction,
   ScrollAcpTimelineToBottomAction,
   ScrollAcpTimelineToTopAction,
@@ -18,6 +20,8 @@ describe('timeline scroll action registration', () => {
       ScrollAcpTimelineDownAction,
       ScrollAcpTimelineToTopAction,
       ScrollAcpTimelineToBottomAction,
+      FocusNextSubagentCardAction,
+      FocusPreviousSubagentCardAction,
     ]
     for (const action of actions) {
       expect(CommandsRegistry.getCommand(action.ID), action.ID).toBeDefined()

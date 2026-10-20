@@ -3,6 +3,7 @@ import {
   CommandsRegistry,
   IEditorGroupsService,
   IEditorResolverService,
+  IEditorService,
   ILayoutService,
   IViewDescriptorService,
   IViewsService,
@@ -19,8 +20,11 @@ import {
 } from '@universe-editor/platform'
 import type { AcpToolCall, TimelineItem } from '../../services/acp/session/acpSessionService.js'
 import { IAcpSessionService } from '../../services/acp/session/acpSessionService.js'
+import { IAcpChatWidgetService } from '../../services/acp/session/acpChatWidgetService.js'
 import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
 import {
+  FocusNextSubagentCardAction,
+  FocusPreviousSubagentCardAction,
   FocusSessionChangesAction,
   OpenAcpToolCallFileAction,
   OpenAcpToolCallFileToSideAction,
@@ -280,5 +284,33 @@ describe('OpenAcpToolCall*Action', () => {
     // existing pair rather than opening a new section.
     expect(whenFor(OpenAcpToolCallPreviewAction.ID)).toBe('acpChatContextCreatedPreview')
     expect(whenFor(OpenAcpToolCallFileAction.ID)).toBe('acpChatContextCreatedFile')
+  })
+})
+
+describe('sub-agent card navigation actions', () => {
+  function invoke(action: { readonly ID: string }): ReturnType<typeof vi.fn> {
+    const moveSubagent = vi.fn()
+    const services = new ServiceCollection()
+    services.set(IAcpChatWidgetService, {
+      _serviceBrand: undefined,
+      lastFocusedWidget: { moveSubagent },
+    } as never)
+    services.set(IEditorService, {
+      _serviceBrand: undefined,
+      activeEditor: { get: () => undefined },
+    } as never)
+    const inst = new InstantiationService(services)
+    inst.invokeFunction((accessor) => CommandsRegistry.getCommand(action.ID)!.handler(accessor))
+    return moveSubagent
+  }
+
+  it('routes next to the last-focused widget', () => {
+    disposables.push(registerAction2(FocusNextSubagentCardAction))
+    expect(invoke(FocusNextSubagentCardAction)).toHaveBeenCalledWith('next')
+  })
+
+  it('routes prev to the last-focused widget', () => {
+    disposables.push(registerAction2(FocusPreviousSubagentCardAction))
+    expect(invoke(FocusPreviousSubagentCardAction)).toHaveBeenCalledWith('prev')
   })
 })

@@ -18,12 +18,18 @@ import {
   type IQuickPickItemButtonEvent,
   type IQuickPick,
   type IQuickPickItem,
+  type IQuickAccessProvider,
   type QuickPickInput,
   type QuickPickPresentation,
 } from '@universe-editor/platform'
 import type { monaco } from '../../../workbench/editor/monaco/MonacoLoader.js'
 import { IOutlineService, type OutlineModel } from '../../languageFeatures/OutlineService.js'
-import { FileSymbolQuickAccessProvider } from '../providers/FileSymbolQuickAccessProvider.js'
+import { timelineToOutline } from '../../acp/session/acpTimelineOutline.js'
+import type { AcpChildItem, AcpMessage, AcpToolCall } from '../../acp/session/acpSessionModel.js'
+import {
+  FileSymbolByCategoryQuickAccessProvider,
+  FileSymbolQuickAccessProvider,
+} from '../providers/FileSymbolQuickAccessProvider.js'
 
 class FakeQuickPick<T extends IQuickPickItem> implements IQuickPick<T> {
   private readonly _onDidAccept = new Emitter<T[]>()
@@ -109,8 +115,12 @@ function sym(
   } as monaco.languages.DocumentSymbol
 }
 
-function model(roots: readonly monaco.languages.DocumentSymbol[], version: number): OutlineModel {
-  return { uri: 'acp-session://1', roots, languageId: 'acp.session', version }
+function model(
+  roots: readonly monaco.languages.DocumentSymbol[],
+  version: number,
+  languageId = 'acp.session',
+): OutlineModel {
+  return { uri: 'acp-session://1', roots, languageId, version }
 }
 
 function makeOutline() {
@@ -131,8 +141,51 @@ function labels(picker: FakeQuickPick<IQuickPickItem>): string[] {
   return picker.items.map((i) => (i as IQuickPickItem).label)
 }
 
+/** Separator rows are marked so row-order assertions stay readable. */
+function rowLabels(picker: FakeQuickPick<IQuickPickItem>): (string | undefined)[] {
+  return picker.items.map((item) => ('type' in item ? `---${item.label ?? ''}` : item.label))
+}
+
+function acpMessage(id: string, role: AcpMessage['role'], text: string): AcpChildItem {
+  return {
+    kind: 'message',
+    id,
+    message: { id, role, text, blocks: [], streaming: false },
+  }
+}
+
+function acpTool(
+  id: string,
+  title: string,
+  kind: string,
+  children?: readonly AcpChildItem[],
+  subagent = false,
+): AcpChildItem {
+  const call: AcpToolCall = {
+    id,
+    title,
+    kind,
+    status: 'completed',
+    text: '',
+    blocks: [],
+    diffs: [],
+    ...(children ? { children } : {}),
+    ...(subagent ? { subagent: true as const } : {}),
+  }
+  return { kind: 'toolCall', id, call }
+}
+
+/** Q > (Task > sub work), grep — a sub-agent card nested in a user turn. */
+function acpRoots(): monaco.languages.DocumentSymbol[] {
+  return timelineToOutline([
+    acpMessage('m1', 'user', 'Q'),
+    acpTool('t1', 'Task', 'think', [acpMessage('c1', 'agent', 'sub work')], true),
+    acpTool('t2', 'grep', 'search'),
+  ]).roots
+}
+
 function run(
-  provider: FileSymbolQuickAccessProvider,
+  provider: IQuickAccessProvider,
   picker: FakeQuickPick<IQuickPickItem>,
 ): DisposableStore {
   const store = new DisposableStore()
@@ -206,5 +259,88 @@ describe('FileSymbolQuickAccessProvider', () => {
     // An empty detail stays off the item entirely (no stray description rendering).
     expect(plain!.description).toBeUndefined()
     expect(plain!.keywords).toBeUndefined()
+  })
+})
+
+// The agent-session outline encodes sub-agent cards with a sentinel symbol kind;
+// both pickers lift those rows above the document list without changing the
+// output for ordinary files (no sentinel → no separator).
+describe('FileSymbolQuickAccessProvider sub-agent section', () => {
+  it("pins sub-agent cards above the '@' document list", () => {
+    const roots = acpRoots()
+    const { outline, stub } = makeOutline()
+    outline.set(model(roots, 1), undefined)
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(new FileSymbolQuickAccessProvider(stub), picker)
+
+    expect(rowLabels(picker)).toEqual([
+      '---Sub Agents',
+      'Task',
+      '---Other symbols',
+      'Q',
+      '    sub work',
+      '  grep',
+    ])
+    const task = picker.items[1] as IQuickPickItem
+    expect(task.iconId).toBe('symbol-subagent')
+  })
+
+  it("reveals a pinned sub-agent card on accept ('@')", () => {
+    const roots = acpRoots()
+    const { outline, stub } = makeOutline()
+    outline.set(model(roots, 1), undefined)
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(new FileSymbolQuickAccessProvider(stub), picker)
+
+    picker.fireAccept([picker.items[1] as IQuickPickItem])
+    expect(stub.revealSymbol).toHaveBeenCalledWith(roots[0]!.children![0])
+  })
+
+  it("pins sub-agent cards in '@:' without leaking them into a kind group", () => {
+    const roots = acpRoots()
+    const { outline, stub } = makeOutline()
+    outline.set(model(roots, 1), undefined)
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(new FileSymbolByCategoryQuickAccessProvider(stub), picker)
+
+    expect(rowLabels(picker)).toEqual([
+      '---Sub Agents',
+      'Task',
+      '---files',
+      'Q',
+      '---modules',
+      'sub work',
+      '---other',
+      'grep',
+    ])
+  })
+
+  it("leaves the '@' output unchanged when there are no sub-agent cards", () => {
+    const { outline, stub } = makeOutline()
+    outline.set(model([sym('Q', [sym('grep')])], 1), undefined)
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(new FileSymbolQuickAccessProvider(stub), picker)
+
+    expect(rowLabels(picker)).toEqual(['Q', '  grep'])
+  })
+
+  it("leaves the '@:' output unchanged when there are no sub-agent cards", () => {
+    const { outline, stub } = makeOutline()
+    outline.set(model([sym('Q', [sym('grep')])], 1), undefined)
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(new FileSymbolByCategoryQuickAccessProvider(stub), picker)
+
+    expect(rowLabels(picker)).toEqual(['---variables', 'Q', 'grep'])
+  })
+
+  it('does not pin kind 110 outside the agent-session outline', () => {
+    const { outline, stub } = makeOutline()
+    const weird = { ...sym('weird'), kind: 110 as monaco.languages.SymbolKind }
+    outline.set(model([weird], 1, 'typescript'), undefined)
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(new FileSymbolQuickAccessProvider(stub), picker)
+
+    expect(rowLabels(picker)).toEqual(['weird'])
+    expect((picker.items[0] as IQuickPickItem).iconId).toBe('symbol-kind-110')
   })
 })

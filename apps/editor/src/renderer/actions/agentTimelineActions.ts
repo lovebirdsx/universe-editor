@@ -224,6 +224,38 @@ export class FocusOuterAcpTimelineItemAction extends Action2 {
   }
 }
 
+export class FocusNextSubagentCardAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.focusNextSubagentCard'
+  constructor() {
+    super({
+      id: FocusNextSubagentCardAction.ID,
+      title: localize2('action.agent.focusNextSubagentCard', 'Focus Next Sub-agent Card'),
+      category: CATEGORY,
+      keybinding: { primary: 'alt+shift+j', when: ACP_NAV_WHEN },
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    resolveNavWidget(accessor)?.moveSubagent('next')
+  }
+}
+
+export class FocusPreviousSubagentCardAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.focusPreviousSubagentCard'
+  constructor() {
+    super({
+      id: FocusPreviousSubagentCardAction.ID,
+      title: localize2('action.agent.focusPreviousSubagentCard', 'Focus Previous Sub-agent Card'),
+      category: CATEGORY,
+      keybinding: { primary: 'alt+shift+k', when: ACP_NAV_WHEN },
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    resolveNavWidget(accessor)?.moveSubagent('prev')
+  }
+}
+
 export class JumpToAcpPlanAction extends Action2 {
   static readonly ID = 'workbench.action.agent.jumpToPlan'
   constructor() {

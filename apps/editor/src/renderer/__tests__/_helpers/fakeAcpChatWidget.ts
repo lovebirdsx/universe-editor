@@ -15,6 +15,7 @@ export function makeFakeAcpChatWidget(overrides: Partial<AcpChatWidget> = {}): A
     container: document.createElement('div'),
     moveTimeline: vi.fn(),
     moveTimelineLevel: vi.fn(),
+    moveSubagent: vi.fn(),
     scrollTimeline: vi.fn(),
     focusInput: vi.fn(() => false),
     focusTimeline: vi.fn(() => false),

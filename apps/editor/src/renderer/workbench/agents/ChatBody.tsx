@@ -56,6 +56,7 @@ import { resolveChatContextTarget } from '../../services/acp/chatContextTarget.j
 import {
   IAcpChatWidgetService,
   type AcpChatWidget,
+  type AcpSubagentMoveDirection,
   type AcpTimelineLevelDirection,
   type AcpTimelineMoveDirection,
   type AcpTimelineScrollTarget,
@@ -111,6 +112,12 @@ import {
 import { ContentExpansionProvider, type ContentExpansionStore } from './chatContentExpansion.js'
 import { estimateWrappedLinesUpTo } from './contentOverflow.js'
 import { shouldAdjustTimelineScrollOnSizeChange } from './timelineVirtualScroll.js'
+import {
+  adjacentSubagentFromCardIndex,
+  currentSubagentIndex,
+  topLevelSubagentCards,
+} from './subagentNavigation.js'
+import { SubagentNavBar } from './SubagentNavBar.js'
 import { ChatFindWidget } from './ChatFindWidget.js'
 import { useChatFind } from './useChatFind.js'
 import { useEditorGroup } from '../editor/EditorGroupContext.js'
@@ -137,6 +144,8 @@ const PROMPT_SURFACE_SELECTOR = '[data-testid="acp-prompt"]'
 export interface WidgetHandle {
   move: (direction: AcpTimelineMoveDirection) => void
   moveLevel: (direction: AcpTimelineLevelDirection) => void
+  /** Move between top-level sub-agent cards without changing their collapse state. */
+  moveSubagent: (direction: AcpSubagentMoveDirection) => void
   scrollTimeline: (target: AcpTimelineScrollTarget) => void
   /** Pull keyboard focus into this widget. Returns whether focus actually landed
    *  so callers (Alt+T → focusEditorInput) can fall back when there's no target. */
@@ -213,6 +222,7 @@ function createNoopHandle(): WidgetHandle {
   return {
     move: noop,
     moveLevel: noop,
+    moveSubagent: noop,
     scrollTimeline: noop,
     focus: () => false,
     focusTimeline: () => false,
@@ -289,6 +299,9 @@ function ChatSessionBody({
   const isReplayingHistory = useObservable(session.isReplayingHistory)
   const hasTimelineContent = hasRenderableTimelineContent(timeline)
   const containerRef = useRef<HTMLDivElement | null>(null)
+  // Lifted out of ChatScroll so the floating sub-agent pill can listen to the
+  // real scroll element without subscribing to the timeline itself.
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null)
   const handleRef = useRef<WidgetHandle>(createNoopHandle())
   const widgetRef = useRef<AcpChatWidget | null>(null)
   // Focus decisions this chat makes once per mount, re-pointed during render when
@@ -360,6 +373,7 @@ function ChatSessionBody({
       container,
       moveTimeline: (d) => handleRef.current.move(d),
       moveTimelineLevel: (d) => handleRef.current.moveLevel(d),
+      moveSubagent: (d) => handleRef.current.moveSubagent(d),
       scrollTimeline: (t) => handleRef.current.scrollTimeline(t),
       focusInput: () => handleRef.current.focus(),
       focusTimeline: () => handleRef.current.focusTimeline(),
@@ -525,6 +539,12 @@ function ChatSessionBody({
             onFocusSlot={(key) => handleRef.current.setFocusedKey(key)}
           />
           <div className={styles['sideTaskChips']}>
+            <SubagentNavBar
+              key={`subagentNav:${session.id}`}
+              session={session}
+              scrollContainerRef={scrollContainerRef}
+              handleRef={handleRef}
+            />
             <SideTaskParentBar key={`parent:${session.id}`} session={session} />
             <SideTaskQuoteBar key={`quote:${session.id}`} session={session} />
             <SideTasksBar key={`sideTasks:${session.id}`} session={session} />
@@ -543,6 +563,7 @@ function ChatSessionBody({
             focusBridge={focusBridge}
             collapseBridge={collapseBridge}
             planBridge={planBridge}
+            scrollContainerRef={scrollContainerRef}
             onFindVisibleChange={handleFindVisibleChange}
             readOnly={readOnly ?? false}
             isSideTask={isSideTask}
@@ -601,6 +622,7 @@ function ChatScroll({
   focusBridge,
   collapseBridge,
   planBridge,
+  scrollContainerRef,
   onFindVisibleChange,
   readOnly,
   isSideTask,
@@ -610,6 +632,7 @@ function ChatScroll({
   focusBridge: FocusedKeyBridge
   collapseBridge: CollapseBridge
   planBridge: PlanBridge
+  scrollContainerRef: MutableRefObject<HTMLDivElement | null>
   onFindVisibleChange: (open: boolean) => void
   readOnly: boolean
   isSideTask: boolean
@@ -623,7 +646,17 @@ function ChatScroll({
   const hasPlan = useObservable(session.plan).length > 0
   const planKeyRef = useRef<string | null>(null)
   planKeyRef.current = hasPlan ? PLAN_SLOT_KEY : null
+  // Local ref for the callbacks below (exhaustive-deps treats useRef values as
+  // stable) while the same element is mirrored to the parent's scrollContainerRef
+  // for the floating sub-agent pill.
   const containerRef = useRef<HTMLDivElement | null>(null)
+  const setContainerRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      containerRef.current = el
+      scrollContainerRef.current = el
+    },
+    [scrollContainerRef],
+  )
   const saved = AcpChatViewStateCache.load(session.id)
   const stickRef = useRef(saved?.stuck ?? true)
   // True while we are re-applying a restored scrollTop as content settles, so
@@ -1652,6 +1685,30 @@ function ChatScroll({
       stickRef.current = false
       focusAndReveal(buildStickyKey(current, first))
     }
+    // Jump between top-level sub-agent cards. The current position comes from the
+    // shared resolver — the focused card while visible, else the viewport anchor —
+    // so the pill's counter and this command cannot disagree after a manual
+    // scroll. The reveal goes through handleStickyJump so an unmounted virtual
+    // row converges onto the real header instead of a rough estimate.
+    handle.moveSubagent = (direction) => {
+      const list = timelineRef.current
+      const cards = topLevelSubagentCards(list)
+      const currentIndex = currentSubagentIndex(
+        cards,
+        list,
+        focusedKeyRef.current,
+        containerRef.current,
+      )
+      // currentIndex is a position in `cards`; adjacentSubagentFromCardIndex
+      // translates it into a timeline walk so the two cannot be mixed up.
+      const target = adjacentSubagentFromCardIndex(cards, currentIndex, direction)
+      if (!target) return
+      setFocusedKey(target.key)
+      focusedKeyRef.current = target.key
+      focusTimeline()
+      handleStickyJump(target.key)
+      persist()
+    }
     handle.scrollTimeline = (target) => {
       const el = containerRef.current
       if (!el) return
@@ -1775,6 +1832,7 @@ function ChatScroll({
     return () => {
       handle.move = noop
       handle.moveLevel = noop
+      handle.moveSubagent = noop
       handle.scrollTimeline = noop
       handle.jumpToPlan = noop
       handle.toggleCollapse = noop
@@ -1789,6 +1847,7 @@ function ChatScroll({
     setCardCollapsed,
     planBridge,
     focusTimeline,
+    handleStickyJump,
     handleToggleCollapse,
     persist,
     scrollToBottomStable,
@@ -1832,7 +1891,7 @@ function ChatScroll({
   return (
     <ContentExpansionProvider value={contentExpansion}>
       <div
-        ref={containerRef}
+        ref={setContainerRef}
         className={styles['chatBody']}
         data-virtualized={virtualize ? 'true' : undefined}
         tabIndex={-1}

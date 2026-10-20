@@ -14,6 +14,7 @@ import {
   type IQuickAccessProviderRunOptions,
   type IQuickPick,
   type IQuickPickItem,
+  type IQuickPickSeparator,
   type QuickPickInput,
 } from '@universe-editor/platform'
 import { IOutlineService } from '../../languageFeatures/OutlineService.js'
@@ -22,7 +23,8 @@ import {
   groupSymbolsByKind,
   type FlatSymbol,
 } from '../../languageFeatures/outlineFlatten.js'
-import { symbolIconId } from '../../../workbench/symbols/symbolIcon.js'
+import { ACP_OUTLINE_LANGUAGE_ID, isAcpSubagentKind } from '../../acp/session/acpTimelineOutline.js'
+import { SYMBOL_SUBAGENT_ICON_ID, symbolIconId } from '../../../workbench/symbols/symbolIcon.js'
 import type { monaco } from '../../../workbench/editor/monaco/MonacoLoader.js'
 
 /** Plural category names for '@:' separators, keyed by Monaco 0-based SymbolKind. */
@@ -59,6 +61,12 @@ function symbolKindLabel(kind: number): string {
   return SYMBOL_KIND_PLURAL[kind] ?? localize('symbolKind.misc', 'other')
 }
 
+/** Sentinel kind 110 is reserved by the agent-session outline; gate on the
+ *  language too so a future outline source cannot get pinned by accident. */
+function isSubagentEntry(entry: FlatSymbol, languageId: string | undefined): boolean {
+  return languageId === ACP_OUTLINE_LANGUAGE_ID && isAcpSubagentKind(entry.symbol.kind)
+}
+
 function symbolPickItem(
   entry: FlatSymbol,
   languageId: string | undefined,
@@ -70,8 +78,50 @@ function symbolPickItem(
   return {
     id: entry.id,
     label: indent ? `${'  '.repeat(entry.depth)}${entry.symbol.name}` : entry.symbol.name,
-    iconId: symbolIconId(entry.symbol.kind, languageId),
+    iconId: isSubagentEntry(entry, languageId)
+      ? SYMBOL_SUBAGENT_ICON_ID
+      : symbolIconId(entry.symbol.kind, languageId),
     ...(detail !== '' ? { description: detail, keywords: [detail] } : {}),
+  }
+}
+
+const SUBAGENT_SECTION_ID = 'symbol-subagents'
+const SUBAGENT_SECTION_LABEL = localize('fileSymbol.subAgents', 'Sub Agents')
+const OTHER_SECTION_ID = 'symbol-other'
+const OTHER_SECTION_LABEL = localize('fileSymbol.otherSymbols', 'Other symbols')
+
+/** Split agent-session sub-agent cards out of the document-order list so both
+ *  pickers can pin them above the rest. */
+function splitSubagentSymbols(
+  flat: readonly FlatSymbol[],
+  languageId: string | undefined,
+): {
+  subagents: readonly FlatSymbol[]
+  rest: readonly FlatSymbol[]
+} {
+  const subagents: FlatSymbol[] = []
+  const rest: FlatSymbol[] = []
+  for (const entry of flat) {
+    ;(isSubagentEntry(entry, languageId) ? subagents : rest).push(entry)
+  }
+  return { subagents, rest }
+}
+
+function subagentSectionSeparator(): IQuickPickSeparator {
+  return {
+    type: 'separator',
+    id: SUBAGENT_SECTION_ID,
+    label: SUBAGENT_SECTION_LABEL,
+  }
+}
+
+/** Label the rest section too: an unlabelled separator at the top of a filtered
+ *  list would render as a blank 30px row when no sub-agent row matches. */
+function otherSectionSeparator(): IQuickPickSeparator {
+  return {
+    type: 'separator',
+    id: OTHER_SECTION_ID,
+    label: OTHER_SECTION_LABEL,
   }
 }
 
@@ -143,12 +193,28 @@ export class FileSymbolQuickAccessProvider implements IQuickAccessProvider {
   constructor(@IOutlineService private readonly _outline: IOutlineService) {}
 
   provide(picker: IQuickPick<IQuickPickItem>, options: IQuickAccessProviderRunOptions): void {
-    provideFileSymbols(picker, options, this._outline, (flat, languageId, byId) =>
-      flat.map((entry) => {
+    provideFileSymbols(picker, options, this._outline, (flat, languageId, byId) => {
+      const { subagents, rest } = splitSubagentSymbols(flat, languageId)
+      if (subagents.length === 0) {
+        return flat.map((entry) => {
+          byId.set(entry.id, entry.symbol)
+          return symbolPickItem(entry, languageId, true)
+        })
+      }
+      const rows: QuickPickInput<IQuickPickItem>[] = [subagentSectionSeparator()]
+      for (const entry of subagents) {
         byId.set(entry.id, entry.symbol)
-        return symbolPickItem(entry, languageId, true)
-      }),
-    )
+        rows.push(symbolPickItem(entry, languageId, false))
+      }
+      // The rest section gets its own header so an empty sub-agent section can
+      // drop out during filtering without leaving a blank divider at the top.
+      rows.push(otherSectionSeparator())
+      for (const entry of rest) {
+        byId.set(entry.id, entry.symbol)
+        rows.push(symbolPickItem(entry, languageId, true))
+      }
+      return rows
+    })
   }
 }
 
@@ -158,8 +224,16 @@ export class FileSymbolByCategoryQuickAccessProvider implements IQuickAccessProv
 
   provide(picker: IQuickPick<IQuickPickItem>, options: IQuickAccessProviderRunOptions): void {
     provideFileSymbols(picker, options, this._outline, (flat, languageId, byId) => {
+      const { subagents, rest } = splitSubagentSymbols(flat, languageId)
       const rows: QuickPickInput<IQuickPickItem>[] = []
-      for (const group of groupSymbolsByKind(flat)) {
+      if (subagents.length > 0) {
+        rows.push(subagentSectionSeparator())
+        for (const entry of subagents) {
+          byId.set(entry.id, entry.symbol)
+          rows.push(symbolPickItem(entry, languageId, false))
+        }
+      }
+      for (const group of groupSymbolsByKind(rest)) {
         rows.push({
           type: 'separator',
           id: `kind-${group.kind}`,

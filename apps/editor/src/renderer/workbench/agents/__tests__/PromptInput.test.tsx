@@ -390,6 +390,7 @@ function makeHandleRef(): { current: WidgetHandle } {
     current: {
       move: () => {},
       moveLevel: () => {},
+      moveSubagent: () => {},
       scrollTimeline: () => {},
       focus: () => false,
       focusTimeline: () => false,

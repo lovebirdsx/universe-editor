@@ -39,6 +39,7 @@ import type { monaco } from '../../../workbench/editor/monaco/MonacoLoader.js'
 import { blocksToText } from './acpSessionContent.js'
 import type { AcpChildItem, AcpMessageRole, TimelineItem } from './acpSessionModel.js'
 import { buildStickyKey, itemSlotKey } from '../../../workbench/agents/stickyScroll.js'
+import { isSubagentCard } from '../../../workbench/agents/timelineCollapse.js'
 import { deriveToolCallDisplay } from '../../../workbench/agents/toolCallDisplay.js'
 
 /** Language id published on the OutlineModel so symbolIcon can special-case agent-session rows. */
@@ -85,9 +86,14 @@ export type AcpOutlineRow =
   | { readonly type: 'tool'; readonly kind: string }
   | { readonly type: 'subagent' }
 
+/** Whether an acp.session symbol kind marks a sub-agent card. */
+export function isAcpSubagentKind(kind: number): boolean {
+  return kind === ACP_SUBAGENT_KIND
+}
+
 /** Decode an acp.session DocumentSymbol.kind back into the row it encodes. */
 export function decodeAcpOutlineKind(kind: number): AcpOutlineRow {
-  if (kind === ACP_SUBAGENT_KIND) return { type: 'subagent' }
+  if (isAcpSubagentKind(kind)) return { type: 'subagent' }
   if (kind >= TOOL_KIND_BASE) {
     return { type: 'tool', kind: TOOL_KIND_ORDER[kind - TOOL_KIND_BASE] ?? 'other' }
   }
@@ -121,7 +127,9 @@ function itemKind(item: TimelineItem | AcpChildItem): number {
   if (item.kind === 'message') return encodeMessageKind(item.message.role)
   if (item.kind === 'compaction') return encodeToolKind('other')
   if (item.kind === 'resurrection') return encodeToolKind('other')
-  if (item.call.subagent === true) return ACP_SUBAGENT_KIND
+  // Share the chat timeline's definition: replay of an older session may lack
+  // the `subagent` stamp while still carrying children.
+  if (isSubagentCard(item)) return ACP_SUBAGENT_KIND
   return encodeToolKind(item.call.kind)
 }
 

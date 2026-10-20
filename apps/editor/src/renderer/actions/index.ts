@@ -341,7 +341,9 @@ import {
   CopyAgentSessionPathAction,
   FocusAgentInputAction,
   FocusNextAcpTimelineItemAction,
+  FocusNextSubagentCardAction,
   FocusPreviousAcpTimelineItemAction,
+  FocusPreviousSubagentCardAction,
   ForkAgentSessionAction,
   GoToParentSessionAction,
   NewAgentSessionAction,
@@ -875,6 +877,8 @@ registerAction2(OpenSideTaskAction)
 registerAction2(GoToParentSessionAction)
 registerAction2(FocusNextAcpTimelineItemAction)
 registerAction2(FocusPreviousAcpTimelineItemAction)
+registerAction2(FocusNextSubagentCardAction)
+registerAction2(FocusPreviousSubagentCardAction)
 registerAction2(FocusTopAcpTimelineAction)
 registerAction2(FocusBottomAcpTimelineAction)
 registerAction2(FocusDeeperAcpTimelineItemAction)

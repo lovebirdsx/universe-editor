@@ -305,8 +305,10 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.agent.focusBottomTimelineItem': '聚焦时间线底部项',
   'action.agent.focusDeeperTimelineItem': '展开卡片或进入子时间线',
   'action.agent.focusInput': '聚焦 Agent 输入框',
+  'action.agent.focusNextSubagentCard': '聚焦下一个子 Agent 卡片',
   'action.agent.focusNextTimelineItem': '聚焦下一个时间线项',
   'action.agent.focusOuterTimelineItem': '折叠卡片或返回父级',
+  'action.agent.focusPreviousSubagentCard': '聚焦上一个子 Agent 卡片',
   'action.agent.focusPreviousTimelineItem': '聚焦上一个时间线项',
   'action.agent.focusTopTimelineItem': '聚焦时间线顶部项',
   'action.agent.forkSession': '分叉 Agent 会话',
@@ -740,6 +742,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'dialog.binaryFile.openAnyway': '仍然打开',
 
   // --- Quick input ---
+  'fileSymbol.subAgents': '子 Agent',
+  'fileSymbol.otherSymbols': '其它符号',
   'quickAccess.commands.placeholder': '输入命令名称…',
   'quickAccess.file.placeholder': '转到文件…',
   'quickAccess.fileSymbol.placeholder': '转到编辑器中的符号…',
@@ -2723,6 +2727,10 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.inlineDiff.expandLines': '… 展开 {count} 行',
   'acp.subagentStats.costTooltip': '本地按 token 估算，实际计费可能不同',
   'acp.subagent.label': '子 Agent',
+  'acp.subagentNav.position': '{index}/{total}',
+  'acp.subagentNav.positionUnknown': '–/{total}',
+  'acp.subagentNav.previous': '上一张子 Agent 卡片',
+  'acp.subagentNav.next': '下一张子 Agent 卡片',
   'acp.subagent.triggerInherit': '子 Agent：继承',
   'acp.subagent.panelDesc':
     '子 Agent 使用此模型运行 —— 所有子 Agent，包括原本跟随主模型的内置 Agent。该值在子进程启动时读取，修改后从下次会话开始生效。',

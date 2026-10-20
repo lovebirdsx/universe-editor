@@ -11,6 +11,7 @@ import {
 import type { TimelineItem } from '../../../services/acp/session/acpSessionModel.js'
 import {
   SYMBOL_HEADING_ICON_ID,
+  SYMBOL_SUBAGENT_ICON_ID,
   SymbolIcon,
   renderSymbolIconById,
   symbolIconId,
@@ -41,6 +42,12 @@ describe('renderSymbolIconById', () => {
   it('renders a known kind as a codicon glyph', () => {
     const { container } = render(<>{renderSymbolIconById('symbol-kind-5', 14)}</>)
     expect(container.querySelector('.codicon-symbol-method')).not.toBeNull()
+  })
+
+  it('renders the sub-agent id as the shared acp glyph, not a codicon', () => {
+    const { container } = render(<>{renderSymbolIconById(SYMBOL_SUBAGENT_ICON_ID, 14)}</>)
+    expect(container.querySelector('svg')).not.toBeNull()
+    expect(container.querySelector('.codicon')).toBeNull()
   })
 
   it('falls back to a misc codicon for an out-of-range kind', () => {

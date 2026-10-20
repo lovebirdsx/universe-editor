@@ -53,6 +53,8 @@ export type AcpTimelineMoveDirection = 'next' | 'prev' | 'first' | 'last'
 
 export type AcpTimelineLevelDirection = 'in' | 'out'
 
+export type AcpSubagentMoveDirection = 'next' | 'prev'
+
 export type AcpTimelineScrollTarget = 'top' | 'bottom' | 'pageUp' | 'pageDown' | 'up' | 'down'
 
 export interface AcpChatWidget {
@@ -64,6 +66,9 @@ export interface AcpChatWidget {
    *  first child; 'out' folds the card in place first, and only then steps back
    *  to its parent card. */
   moveTimelineLevel(direction: AcpTimelineLevelDirection): void
+  /** Move to the next/previous top-level sub-agent card. Focuses the card
+   *  header and reveals it; the target's collapse state is left untouched. */
+  moveSubagent(direction: AcpSubagentMoveDirection): void
   scrollTimeline(target: AcpTimelineScrollTarget): void
   /** Move keyboard focus into the prompt input. Returns whether focus landed. */
   focusInput(): boolean

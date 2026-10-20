@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 import {
   ACP_OUTLINE_LANGUAGE_ID,
   decodeAcpOutlineKind,
+  isAcpSubagentKind,
   timelineToOutline,
 } from '../acpTimelineOutline.js'
 import type { AcpChildItem, AcpMessage, AcpToolCall } from '../acpSessionModel.js'
@@ -178,9 +179,20 @@ describe('acpTimelineOutline', () => {
     // sets the sub-agent row apart.
     const { roots } = timelineToOutline([tool('t1', 'Task', 'think', undefined, true)])
     expect(decodeAcpOutlineKind(roots[0]!.kind)).toEqual({ type: 'subagent' })
+    expect(isAcpSubagentKind(roots[0]!.kind)).toBe(true)
 
     const { roots: markerless } = timelineToOutline([tool('t2', 'ponder', 'think')])
     expect(decodeAcpOutlineKind(markerless[0]!.kind)).toEqual({ type: 'tool', kind: 'think' })
+    expect(isAcpSubagentKind(markerless[0]!.kind)).toBe(false)
+  })
+
+  it('detects a markerless card with children as a sub-agent row', () => {
+    // Replay of an older session can omit the `subagent` stamp; the nested
+    // timeline is what makes the card a sub-agent card for chat navigation.
+    const { roots } = timelineToOutline([
+      tool('t1', 'Task', 'think', [msg('c1', 'agent', 'sub work')]),
+    ])
+    expect(decodeAcpOutlineKind(roots[0]!.kind)).toEqual({ type: 'subagent' })
   })
 
   it('returns empty maps and roots for an empty timeline', () => {

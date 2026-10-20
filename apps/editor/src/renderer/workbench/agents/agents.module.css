@@ -2302,6 +2302,52 @@
   color: inherit;
 }
 
+/* Floating sub-agent navigator (`‹ 2/5 ›`), sharing the top-right chip row with
+   side tasks. The counter is the only flexible part; the arrows stay square. */
+.subagentNav {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  padding: 2px 4px;
+  border: 1px solid var(--vscode-workbench-border, #333);
+  border-radius: 10px;
+  background: var(--vscode-agent-messageBackground, #2a2a2a);
+  color: var(--vscode-descriptionForeground, #999);
+  font-size: calc(var(--agent-font-size, 12px) - 1px);
+  box-shadow: 0 1px 4px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.4));
+}
+
+.subagentNavBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.subagentNavBtn:hover:not(:disabled) {
+  background: var(--vscode-list-hoverBackground, #2a2d2e);
+  color: inherit;
+}
+
+.subagentNavBtn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.subagentNavCount {
+  min-width: 34px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
 .sideTasksPopover {
   position: absolute;
   top: calc(100% + 4px);
