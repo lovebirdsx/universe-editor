@@ -2843,6 +2843,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.compaction.failedReason': '上下文压缩失败：{reason}',
   'acp.compaction.running': '正在压缩上下文…',
   'acp.compaction.success': '上下文已压缩',
+  'acp.compaction.tokenChange': '{pre} → {post} tokens',
   'acp.recovery.continueAfterInterrupt':
     '继续。注意：刚才连接中断导致上一轮被迫中止，并非我的操作；如果你当时有正在等待我回答的提问或确认，请不要视为我已回答、跳过或拒绝——请现在重新发起。',
   'acp.recovery.restarting': '正在重启 agent 进程…（{0}/{1}）',

@@ -2276,6 +2276,53 @@ describe('ChatBody — compaction slot', () => {
     expect(card?.textContent).toContain('boom')
   })
 
+  it('shows the token change inline on a successful compaction', () => {
+    const items: readonly TimelineItem[] = [
+      {
+        kind: 'compaction',
+        id: 'compaction:c10',
+        compaction: {
+          phase: 'success',
+          durationMs: 13_000,
+          preTokens: 168_000,
+          postTokens: 21_000,
+        },
+      },
+    ]
+    const { container } = renderChat(makeSession('s-cmp10', items))
+    const tokens = container.querySelector<HTMLElement>('[data-testid="acp-compaction-tokens"]')
+    expect(tokens?.textContent).toBe('168.0k → 21.0k tokens')
+    const card = container.querySelector<HTMLElement>('[data-testid="acp-compaction-card"]')
+    expect(card?.textContent).toContain('13s')
+  })
+
+  it('omits the token segment when the agent reported none or the run failed', () => {
+    const successWithoutTokens: readonly TimelineItem[] = [
+      {
+        kind: 'compaction',
+        id: 'compaction:c11',
+        compaction: { phase: 'success', durationMs: 1_000 },
+      },
+    ]
+    const { container } = renderChat(makeSession('s-cmp11', successWithoutTokens))
+    expect(container.querySelector('[data-testid="acp-compaction-tokens"]')).toBeNull()
+
+    const failed: readonly TimelineItem[] = [
+      {
+        kind: 'compaction',
+        id: 'compaction:c12',
+        compaction: {
+          phase: 'failed',
+          reason: 'boom',
+          preTokens: 168_000,
+          postTokens: 21_000,
+        },
+      },
+    ]
+    const { container: c2 } = renderChat(makeSession('s-cmp12', failed))
+    expect(c2.querySelector('[data-testid="acp-compaction-tokens"]')).toBeNull()
+  })
+
   it('shows a live stopwatch with estimated percent while running and freezes the total on settle', () => {
     const running: readonly TimelineItem[] = [
       {

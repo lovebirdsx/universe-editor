@@ -342,6 +342,15 @@ export interface AcpCompaction {
    * finish time instead of a fixed constant. Absent until enough samples exist.
    */
   readonly expectedDurationMs?: number
+  /**
+   * Context tokens before / after the summarization, when the agent reported
+   * them (claude's `compact_boundary` metadata). Arrives on the synthetic
+   * compaction tool call — usually after the extension notification already
+   * settled this slot — and is merged in place. Both are absent for agents
+   * that report no such metadata (codex), and the card then omits the segment.
+   */
+  readonly preTokens?: number
+  readonly postTokens?: number
 }
 
 export interface AcpPendingPermission {

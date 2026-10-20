@@ -11,6 +11,7 @@ import { CheckCircle2, CircleAlert, Loader2 } from 'lucide-react'
 import { localize } from '@universe-editor/platform'
 import type { AcpCompaction } from '../../services/acp/session/acpSession.js'
 import { formatElapsed } from './elapsedTime.js'
+import { formatTokens } from './SessionCostIndicator.js'
 import styles from './agents.module.css'
 
 const ICON_SIZE = 14
@@ -26,6 +27,15 @@ export function CompactionCard({
 }) {
   const { icon, text } = content(compaction)
   const { elapsed, percent } = useCompactionProgress(compaction)
+  const tokenChange =
+    compaction.phase === 'success' &&
+    compaction.preTokens !== undefined &&
+    compaction.postTokens !== undefined
+      ? localize('acp.compaction.tokenChange', '{pre} → {post} tokens', {
+          pre: formatTokens(compaction.preTokens),
+          post: formatTokens(compaction.postTokens),
+        })
+      : null
   return (
     <div
       className={styles['compactionCard']}
@@ -39,6 +49,11 @@ export function CompactionCard({
         {icon}
       </span>
       <span className={styles['compactionText']}>{text}</span>
+      {tokenChange !== null ? (
+        <span className={styles['compactionTokens']} data-testid="acp-compaction-tokens">
+          {tokenChange}
+        </span>
+      ) : null}
       {percent !== null ? (
         <span
           className={styles['compactionProgress']}

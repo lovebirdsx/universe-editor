@@ -1893,6 +1893,212 @@ describe('AcpSession.timeline', () => {
     s.endHistoryReplay()
   })
 
+  it('absorbs claude’s synthetic compaction tool call and keeps its token facts', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    if (!(s instanceof AcpSession)) throw new Error('expected a concrete AcpSession')
+    const conn = client.connected[0]!
+
+    s.applyCompaction('cmp-1', 'running')
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'uuid-1',
+        title: 'Compact conversation',
+        kind: 'think',
+        status: 'in_progress',
+        _meta: { claudeCode: { toolName: 'compact' } },
+      },
+    })
+
+    // The extension notification settles first; the boundary report carrying
+    // the token facts arrives afterwards, so the merge targets the settled slot.
+    s.applyCompaction('cmp-1', 'success')
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'uuid-1',
+        status: 'completed',
+        rawOutput: { preTokens: 168_000, postTokens: 21_000 },
+        _meta: { claudeCode: { toolName: 'compact' } },
+      },
+    })
+
+    const items = s.timeline.get()
+    expect(items.filter((it) => it.kind === 'toolCall')).toEqual([])
+    expect(items.filter((it) => it.kind === 'compaction')).toMatchObject([
+      {
+        kind: 'compaction',
+        compaction: { phase: 'success', preTokens: 168_000, postTokens: 21_000 },
+      },
+    ])
+  })
+
+  it('keeps token facts when the compaction boundary lands before the settle', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    if (!(s instanceof AcpSession)) throw new Error('expected a concrete AcpSession')
+    const conn = client.connected[0]!
+
+    s.applyCompaction('cmp-early', 'running')
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'uuid-early',
+        title: 'Compact conversation',
+        kind: 'think',
+        status: 'in_progress',
+        _meta: { claudeCode: { toolName: 'compact' } },
+      },
+    })
+    // The fork's scenarios also report the boundary between `compacting` and
+    // `compact_result`, i.e. while the native slot is still running.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'uuid-early',
+        status: 'completed',
+        rawOutput: { preTokens: 120_000, postTokens: 18_000 },
+        _meta: { claudeCode: { toolName: 'compact' } },
+      },
+    })
+    s.applyCompaction('cmp-early', 'success')
+
+    const items = s.timeline.get()
+    expect(items.filter((it) => it.kind === 'toolCall')).toEqual([])
+    expect(items.filter((it) => it.kind === 'compaction')).toMatchObject([
+      {
+        kind: 'compaction',
+        compaction: { phase: 'success', preTokens: 120_000, postTokens: 18_000 },
+      },
+    ])
+  })
+
+  it('keeps claude’s legacy card when no native compaction slot exists', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    // A terminal-only compact report (no `compacting` frame) has no native
+    // slot to absorb it; swallowing it would erase the compaction entirely.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'uuid-terminal-only',
+        title: 'Compact conversation',
+        kind: 'think',
+        status: 'completed',
+        rawOutput: { preTokens: 168_000, postTokens: 21_000 },
+        _meta: { claudeCode: { toolName: 'compact' } },
+      },
+    })
+
+    const items = s.timeline.get()
+    expect(items.filter((it) => it.kind === 'compaction')).toEqual([])
+    expect(items.filter((it) => it.kind === 'toolCall')).toHaveLength(1)
+  })
+
+  it('drives the native card from codex’s compaction tool call', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    // The bundled codex fork sends no `_meta` marker to plain (non-AIR)
+    // clients; the hardcoded title + `think` kind is the only wire signal.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'codex-cmp',
+        title: 'Compact conversation',
+        kind: 'think',
+        status: 'in_progress',
+      },
+    })
+    let items = s.timeline.get()
+    expect(items.filter((it) => it.kind === 'toolCall')).toEqual([])
+    expect(items.find((it) => it.kind === 'compaction')).toMatchObject({
+      kind: 'compaction',
+      compaction: { phase: 'running' },
+    })
+
+    // The terminal report carries no marker either; the remembered id keeps it
+    // absorbed instead of materializing a raw tool card.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'codex-cmp',
+        status: 'completed',
+      },
+    })
+    items = s.timeline.get()
+    expect(items.filter((it) => it.kind === 'toolCall')).toEqual([])
+    expect(items.filter((it) => it.kind === 'compaction')).toMatchObject([
+      { kind: 'compaction', compaction: { phase: 'success' } },
+    ])
+  })
+
+  it('settles a failed codex compaction without leaving a tool card', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'codex-cmp-failed',
+        title: 'Compact conversation',
+        kind: 'think',
+        status: 'in_progress',
+      },
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'codex-cmp-failed',
+        status: 'failed',
+      },
+    })
+
+    const items = s.timeline.get()
+    expect(items.filter((it) => it.kind === 'toolCall')).toEqual([])
+    expect(items.filter((it) => it.kind === 'compaction')).toMatchObject([
+      { kind: 'compaction', compaction: { phase: 'failed' } },
+    ])
+  })
+
+  it('does not absorb a tool call that only reuses the compaction title', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'plain',
+        title: 'Compact conversation',
+        kind: 'other',
+        status: 'completed',
+      },
+    })
+
+    const items = s.timeline.get()
+    expect(items.filter((it) => it.kind === 'compaction')).toEqual([])
+    expect(items.find((it) => it.kind === 'toolCall')).toMatchObject({
+      kind: 'toolCall',
+      call: { id: 'plain', title: 'Compact conversation' },
+    })
+  })
+
   it('drops the fork’s backfilled tool results for suppressed baseline calls', async () => {
     const s = await svc.createSession()
     await s.whenConnected()

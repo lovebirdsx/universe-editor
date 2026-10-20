@@ -102,8 +102,11 @@ import {
 } from './acpSessionContent.js'
 import {
   extractModelBreakdown,
+  isClaudeCompactionToolCall,
   readAgentToolName,
   readAgentToolNameForTelemetry,
+  readCompactionResult,
+  readContextCompaction,
   readFileChanges,
   readMcpServer,
   readMcpTool,
@@ -114,6 +117,7 @@ import {
   readSubagentTiming,
   readSyntheticDenial,
   readTerminalOutput,
+  type AcpCompactionResult,
 } from './acpSessionUpdateMeta.js'
 import { bumpHeapFlow } from '../../memory/heapFlowCounters.js'
 import { ACP_CAPABILITIES_META_KEY, type AcpUniverseCapabilities } from './acpExtMethods.js'
@@ -983,6 +987,32 @@ export class AcpSession extends Disposable implements IAcpSession {
    * so the ids have to outlive the gate itself. Reset per replay.
    */
   private readonly _suppressedToolCallIds = new Set<string>()
+
+  /**
+   * Codex's synthetic compaction tool call. Its opening `tool_call` carries a
+   * title/kind pair but — for the plain (non-AIR) clients the editor is — no
+   * `_meta` marker, and the terminal `tool_call_update` may omit both. The id
+   * has to be remembered to absorb the whole lifecycle instead of letting the
+   * update materialize a second `Compact conversation` card. Bounded by the
+   * session's compaction count (one id per compaction).
+   */
+  private readonly _codexCompactionToolCallIds = new Set<string>()
+
+  /**
+   * Claude's compaction tool call ids already absorbed into a native slot.
+   * Keeps later updates of the same call absorbed even after the slot settles
+   * and the "awaiting token facts" window closes.
+   */
+  private readonly _claudeCompactionToolCallIds = new Set<string>()
+
+  /**
+   * True after a successful native compaction settles without token facts.
+   * The claude fork reports `preTokens` / `postTokens` on the later
+   * `compact_boundary` report, which may arrive after the extension
+   * notification already settled the card; this window lets that report merge
+   * into the just-settled slot instead of scanning an arbitrary older card.
+   */
+  private _awaitingCompactionTokens = false
 
   /** Echoes dropped by the guard in {@link applyUpdate}, logged once per burst. */
   private _suppressedEchoCount = 0
@@ -3442,6 +3472,16 @@ export class AcpSession extends Disposable implements IAcpSession {
         return
       }
     }
+    // Compaction tool calls are the agents' legacy ACP presentation of an event
+    // the editor already renders as a native `compaction` slot. Absorb them
+    // before the generic tool-call path can create a second `Compact
+    // conversation` card (and before their file changes / timing are recorded).
+    if (
+      (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') &&
+      this._absorbCompactionToolCall(update)
+    ) {
+      return
+    }
     const parentId = readParentToolCallId(update)
     if (AGENT_OUTPUT_UPDATE_KINDS.has(update.sessionUpdate)) this._agentOutputCount++
     if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
@@ -4167,6 +4207,119 @@ export class AcpSession extends Disposable implements IAcpSession {
   }
 
   /**
+   * Absorb the agents' synthetic compaction tool call into the native
+   * compaction slot. Claude keeps `_universe/compaction` as the lifecycle
+   * source and only contributes the token facts carried by its boundary
+   * `rawOutput`; codex has no extension notification, so its tool-call
+   * lifecycle drives the native card directly.
+   *
+   * Returns true when the update belonged to a compaction call and must not
+   * reach the generic tool-call path. A claude call is absorbed only when a
+   * native slot exists to receive it — a terminal-only report (no `compacting`
+   * frame), a read-only preview, or a lost extension notification must keep
+   * the legacy card rather than vanish from the timeline.
+   *
+   * Identification uses protocol markers where they exist. The bundled codex
+   * fork sends no marker to plain ACP clients, so its hardcoded title/kind
+   * pair is the fallback; a user tool would have to reuse the exact
+   * `Compact conversation` title *and* the `think` kind to collide.
+   */
+  private _absorbCompactionToolCall(
+    update: Extract<SessionUpdate, { sessionUpdate: 'tool_call' | 'tool_call_update' }>,
+  ): boolean {
+    // A preview never runs compaction; leave its replayed legacy card alone.
+    if (this.readOnly) return false
+    // A compaction inside a sub-agent timeline belongs to that card, not to a
+    // new top-level status slot.
+    if (readParentToolCallId(update) !== undefined) return false
+    const claude = isClaudeCompactionToolCall(update)
+    const codex =
+      !claude &&
+      (readContextCompaction(update) ||
+        this._codexCompactionToolCallIds.has(update.toolCallId) ||
+        this._isCodexCompactionToolCall(update))
+    if (claude) {
+      const known = this._claudeCompactionToolCallIds.has(update.toolCallId)
+      if (!known && this._compactionMergeTargetIndex() === -1) return false
+      this._claudeCompactionToolCallIds.add(update.toolCallId)
+      const result = readCompactionResult(update)
+      if (result !== undefined) this._mergeCompactionResult(result)
+      this._agentOutputCount++
+      return true
+    }
+    if (!codex) return false
+    this._codexCompactionToolCallIds.add(update.toolCallId)
+    const status = update.status
+    if (status === 'pending' || status === 'in_progress') {
+      this.applyCompaction(update.toolCallId, 'running')
+    } else if (status === 'completed') {
+      this.applyCompaction(update.toolCallId, 'success')
+    } else if (status === 'failed') {
+      this.applyCompaction(update.toolCallId, 'failed')
+    }
+    this._agentOutputCount++
+    return true
+  }
+
+  /**
+   * The bundled codex fork reports compaction as a legacy tool call with no
+   * `_meta` marker for non-AIR clients. The title is a fork constant and the
+   * kind is always `think`; both are required so an ordinary tool cannot be
+   * swallowed by its title alone.
+   */
+  private _isCodexCompactionToolCall(
+    update: Extract<SessionUpdate, { sessionUpdate: 'tool_call' | 'tool_call_update' }>,
+  ): boolean {
+    return update.title === 'Compact conversation' && update.kind === 'think'
+  }
+
+  /**
+   * Index of the native slot that may receive token facts: a running slot
+   * (boundary before settle), or — only during the post-success window — the
+   * most recent settled slot (boundary after settle). Returns -1 when no slot
+   * belongs to the current call, which keeps callers from writing to an old
+   * compaction card.
+   */
+  private _compactionMergeTargetIndex(): number {
+    for (let i = this._timeline.length - 1; i >= 0; i--) {
+      const item = this._timeline[i]
+      if (item?.kind === 'compaction' && item.compaction.phase === 'running') return i
+    }
+    if (!this._awaitingCompactionTokens) return -1
+    for (let i = this._timeline.length - 1; i >= 0; i--) {
+      if (this._timeline[i]?.kind === 'compaction') return i
+    }
+    return -1
+  }
+
+  /**
+   * Merge token facts from a compaction tool call into its native slot. The
+   * claude fork reports them on `compact_boundary`, which can arrive before or
+   * after `compact_result`'s extension notification settles the card; both
+   * orders are handled by {@link _compactionMergeTargetIndex}.
+   */
+  private _mergeCompactionResult(result: AcpCompactionResult): void {
+    const idx = this._compactionMergeTargetIndex()
+    if (idx === -1) return
+    const item = this._timeline[idx]
+    if (item?.kind !== 'compaction') return
+    const { preTokens, postTokens } = result
+    if (preTokens === undefined && postTokens === undefined) return
+    const compaction: AcpCompaction = {
+      ...item.compaction,
+      ...(preTokens !== undefined ? { preTokens } : {}),
+      ...(postTokens !== undefined ? { postTokens } : {}),
+    }
+    this._awaitingCompactionTokens = false
+    this._timeline = this._timeline.map((it, i) =>
+      i === idx ? { kind: 'compaction', id: item.id, compaction } : it,
+    )
+    const tx = this._batchedTx()
+    this.timeline.set(this._timeline, tx)
+    this._commitBatchedTx()
+  }
+
+  /**
    * Surface a context-compaction lifecycle event on the timeline. The `running`
    * slot is appended when compaction starts; the terminal `success`/`failed`
    * event replaces it in place via the stable `id`, so a single compaction shows
@@ -4206,6 +4359,8 @@ export class AcpSession extends Disposable implements IAcpSession {
     const prevExpected =
       prev?.kind === 'compaction' ? prev.compaction.expectedDurationMs : undefined
     const prevModelId = prev?.kind === 'compaction' ? prev.compaction.modelId : undefined
+    const prevPreTokens = prev?.kind === 'compaction' ? prev.compaction.preTokens : undefined
+    const prevPostTokens = prev?.kind === 'compaction' ? prev.compaction.postTokens : undefined
     // The SDK compaction has no true progress; the card shows a live stopwatch
     // from `startedAt`. Stamp it when `running` begins, then settle a fixed
     // `durationMs` at the terminal phase so the elapsed time freezes. A start
@@ -4242,7 +4397,21 @@ export class AcpSession extends Disposable implements IAcpSession {
       ...(startedAt !== undefined ? { startedAt } : {}),
       ...(durationMs !== undefined ? { durationMs } : {}),
       ...(expectedDurationMs !== undefined ? { expectedDurationMs } : {}),
+      // Token facts ride the tool call's boundary report, which can land before
+      // or after this settle. Carry them into the terminal slot; a new
+      // `running` start is a new run (even when it merges an orphan) and must
+      // not inherit the previous run's counts.
+      ...(phase !== 'running' && prevPreTokens !== undefined ? { preTokens: prevPreTokens } : {}),
+      ...(phase !== 'running' && prevPostTokens !== undefined
+        ? { postTokens: prevPostTokens }
+        : {}),
     }
+    // Open the window that lets the later `compact_boundary` report merge its
+    // token facts into this just-settled card; a new run or a failed settle
+    // closes it (a running start may also be retried in place).
+    this._awaitingCompactionTokens =
+      phase === 'success' &&
+      (compaction.preTokens === undefined || compaction.postTokens === undefined)
     const slot: TimelineItem = { kind: 'compaction', id: slotId, compaction }
     if (targetIdx === -1) {
       this._timeline = [...this._timeline, slot]

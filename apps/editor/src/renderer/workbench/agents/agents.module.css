@@ -1449,6 +1449,18 @@
   white-space: nowrap;
 }
 
+.compactionTokens {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding-left: 8px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
+.compactionTokens + .compactionTimer {
+  margin-left: 0;
+}
+
 .compactionTimer {
   flex-shrink: 0;
   margin-left: auto;

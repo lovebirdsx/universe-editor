@@ -233,6 +233,60 @@ export function readAgentToolNameForTelemetry(update: SessionUpdate): string | u
 }
 
 /**
+ * Word the claude fork stamps on its synthetic compaction tool call. The call
+ * is the legacy ACP presentation of a compaction the editor already renders as
+ * a native `compaction` slot, so it must be absorbed rather than shown as a
+ * second card.
+ */
+const CLAUDE_COMPACTION_TOOL_NAME = 'compact'
+
+/** Whether this update is claude's synthetic compaction tool call. */
+export function isClaudeCompactionToolCall(update: {
+  _meta?: Record<string, unknown> | null | undefined
+}): boolean {
+  return readAgentToolName(update) === CLAUDE_COMPACTION_TOOL_NAME
+}
+
+/**
+ * Read the legacy codex compaction marker (`_meta.contextCompaction`). Older
+ * fork builds sent it to plain clients; the current fork's `standardMeta`
+ * drops it, so the session also matches the fork's hardcoded title/kind pair.
+ * Kept for older fork builds that still put the key on the wire.
+ */
+export function readContextCompaction(update: {
+  _meta?: Record<string, unknown> | null | undefined
+}): boolean {
+  return update._meta?.['contextCompaction'] != null
+}
+
+/** Token counts reported on a compaction tool call's terminal `rawOutput`. */
+export interface AcpCompactionResult {
+  readonly preTokens?: number
+  readonly postTokens?: number
+}
+
+/**
+ * Read the claude fork's compaction facts (`ContextCompactionMetadata`) from a
+ * `tool_call(_update)`'s `rawOutput`. The counts ride the `compact_boundary`
+ * report, which arrives after the extension notification has already settled
+ * the native card — the caller merges them into the latest compaction slot.
+ */
+export function readCompactionResult(update: {
+  rawOutput?: unknown
+}): AcpCompactionResult | undefined {
+  const raw = update.rawOutput
+  if (raw == null || typeof raw !== 'object') return undefined
+  const r = raw as Record<string, unknown>
+  const preTokens = nonNegativeOrUndefined(r['preTokens'])
+  const postTokens = nonNegativeOrUndefined(r['postTokens'])
+  if (preTokens === undefined && postTokens === undefined) return undefined
+  return {
+    ...(preTokens !== undefined ? { preTokens } : {}),
+    ...(postTokens !== undefined ? { postTokens } : {}),
+  }
+}
+
+/**
  * Resolve the source MCP server for a tool_call(_update) from the agent fork's
  * `_meta.claudeCode.toolName` (`mcp__<server>__<tool>`). Returns undefined for
  * built-in tools or malformed names.
