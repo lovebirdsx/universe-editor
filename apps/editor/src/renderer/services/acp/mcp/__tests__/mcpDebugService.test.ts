@@ -26,6 +26,7 @@ import type {
   McpToolInfoDto,
 } from '../../../../../shared/ipc/mcpClientService.js'
 import { StubLoggerService } from '../../../../__tests__/_helpers/stubLoggerService.js'
+import { FakeWindowFocusService } from '../../../windows/testing/fakeWindowFocusService.js'
 import type { AcpToolCall, IAcpSession } from '../../session/acpSessionModel.js'
 import type {
   IAcpSessionService,
@@ -221,6 +222,7 @@ function makeService(overrides: { sessions?: FakeSessions; client?: FakeClient }
     notifications as unknown as INotificationService,
     groups as unknown as IEditorGroupsService,
     inst,
+    new FakeWindowFocusService(),
     new StubLoggerService(),
   )
   return { service, sessions, client, dialogs, notifications, groups }

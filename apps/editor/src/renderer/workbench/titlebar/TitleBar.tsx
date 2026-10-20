@@ -148,7 +148,7 @@ export function TitleBar() {
   )
 
   return (
-    <header className={styles['titlebar']}>
+    <header className={styles['titlebar']} data-testid="titlebar">
       <div className={styles['drag-region']} aria-hidden="true" />
       <div className={styles['left']}>
         {isMac && <div className={styles['traffic-light-spacer']} />}

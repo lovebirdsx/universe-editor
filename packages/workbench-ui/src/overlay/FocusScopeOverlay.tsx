@@ -9,7 +9,7 @@
  *  focus from the underlying workbench Part and must restore it on close.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, type ReactNode } from 'react'
+import { useEffect, useRef, type ReactNode } from 'react'
 import { FocusScope } from '@react-aria/focus'
 
 export interface FocusScopeOverlayProps {
@@ -19,6 +19,13 @@ export interface FocusScopeOverlayProps {
   onEscape?: () => void
   /** Document hosting the overlay (an auxiliary workbench window). */
   targetDocument?: Document | undefined
+  /**
+   * Optional gate for the unmount restore. Without it focus is always restored;
+   * with it, returning false leaves focus wherever it went. QuickInput uses this
+   * to avoid yanking focus back after an accepted item revealed an editor in
+   * another window (react-aria restores after the pick handler already moved it).
+   */
+  shouldRestoreFocus?: (() => boolean) | undefined
   children: ReactNode
 }
 
@@ -26,9 +33,37 @@ export function FocusScopeOverlay({
   visible,
   onEscape,
   targetDocument,
+  shouldRestoreFocus,
   children,
 }: FocusScopeOverlayProps) {
   const doc = targetDocument ?? document
+  const conditionRef = useRef(shouldRestoreFocus)
+  conditionRef.current = shouldRestoreFocus
+
+  // Captured during render: react-aria's autoFocus runs in the child's layout
+  // effect, which would already point at the overlay's own input by the time
+  // this component's effects run.
+  const previousFocusRef = useRef<HTMLElement | null>(null)
+  const wasVisibleRef = useRef(false)
+  if (visible && !wasVisibleRef.current) {
+    const active = doc.activeElement
+    previousFocusRef.current = active instanceof HTMLElement ? active : null
+  }
+  wasVisibleRef.current = visible
+
+  useEffect(() => {
+    if (!visible || !shouldRestoreFocus) return
+    return () => {
+      const previous = previousFocusRef.current
+      previousFocusRef.current = null
+      if (conditionRef.current?.() === false) return
+      if (previous?.isConnected) previous.focus()
+    }
+    // `conditionRef` keeps the predicate out of the deps: an inline arrow would
+    // otherwise re-run this effect (and restore focus) on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, doc])
+
   useEffect(() => {
     if (!visible || !onEscape) return
     const handler = (e: KeyboardEvent) => {
@@ -52,7 +87,7 @@ export function FocusScopeOverlay({
 
   if (!visible) return null
   return (
-    <FocusScope contain restoreFocus autoFocus>
+    <FocusScope contain restoreFocus={shouldRestoreFocus === undefined} autoFocus>
       {children}
     </FocusScope>
   )

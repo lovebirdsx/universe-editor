@@ -106,6 +106,8 @@ export interface IAuxiliaryWindowsService {
   getWindows(): Promise<readonly AuxiliaryWindowState[]>
   getWindowState(token: string): Promise<AuxiliaryWindowState | null>
   focusWindow(token: string): Promise<void>
+  minimizeWindow(token: string): Promise<void>
+  toggleMaximizeWindow(token: string): Promise<void>
 
   /** Start the close flow (`win.close()`), which is vetoed and reported via the event. */
   requestClose(token: string): Promise<void>

@@ -38,6 +38,8 @@ import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
 import { MarkdownPreviewInput } from '../../services/editor/MarkdownPreviewInput.js'
 import { MarkdownPreviewViewStateCache } from '../../services/editor/MarkdownPreviewViewStateCache.js'
 import { MonacoModelRegistry } from '../../workbench/editor/monaco/MonacoModelRegistry.js'
+import { IWindowFocusService } from '../../services/windows/windowFocusService.js'
+import { FakeWindowFocusService } from '../../services/windows/testing/fakeWindowFocusService.js'
 import {
   MarkdownPreviewRegistry,
   type IMarkdownPreviewController,
@@ -82,6 +84,7 @@ function setup() {
   services.set(IEditorGroupsService, groups)
   services.set(IFileService, makeFakeFileService())
   services.set(IContextKeyService, new ContextKeyService())
+  services.set(IWindowFocusService, new FakeWindowFocusService())
   const inst = new InstantiationService(services)
   services.set(IInstantiationService, inst)
   return { groups, inst }

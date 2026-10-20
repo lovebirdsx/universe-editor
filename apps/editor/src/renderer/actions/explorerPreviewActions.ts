@@ -16,6 +16,7 @@ import {
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { openResourcePreviewInGroup } from '../services/resourcePreview/openResourcePreview.js'
+import { IWindowFocusService } from '../services/windows/windowFocusService.js'
 import { resolvePrimaryTarget } from './fileActionsCommon.js'
 
 export class ExplorerOpenPreviewAction extends Action2 {
@@ -39,6 +40,11 @@ export class ExplorerOpenPreviewAction extends Action2 {
     const resource = resolvePrimaryTarget(args)
     if (!resource) return
     const groups = accessor.get(IEditorGroupsService)
-    openResourcePreviewInGroup(groups, groups.activeGroup, resource)
+    openResourcePreviewInGroup(
+      groups,
+      groups.activeGroup,
+      resource,
+      accessor.get(IWindowFocusService),
+    )
   }
 }

@@ -20,6 +20,7 @@ import {
   type IWindowsService,
 } from '@universe-editor/platform'
 import { CommandOpener, FileOpener, parseTarget } from '../OpenerService.js'
+import { FakeWindowFocusService } from '../../windows/testing/fakeWindowFocusService.js'
 
 // The selection branch walks the editor stack (groups / FileEditorRegistry / Monaco
 // mount) that renderer-node lacks; stub its two module seams to test the gate alone.
@@ -153,6 +154,7 @@ describe('FileOpener scheme gate', () => {
       { stat: vi.fn().mockResolvedValue({ isDirectory: false }) } as unknown as IFileService,
       { openWindow: vi.fn() } as unknown as IWindowsService,
       { openEditor } as unknown as IEditorResolverService,
+      new FakeWindowFocusService(),
     )
     return { opener, openEditor }
   }

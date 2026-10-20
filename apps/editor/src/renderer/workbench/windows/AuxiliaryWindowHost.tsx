@@ -17,6 +17,8 @@ import { useService } from '../useService.js'
 import { useGlobalKeybindingHandler } from '../useGlobalKeybindingHandler.js'
 import { resolveShortcut } from '../titlebar/keybindingFormat.js'
 import { EditorArea } from '../editor/EditorArea.js'
+import { AuxiliaryTitleBar } from './AuxiliaryTitleBar.js'
+import styles from './AuxiliaryWindowHost.module.css'
 
 function AuxiliaryWindowContent({ entry }: { entry: IAuxiliaryEditorWindow }) {
   useGlobalKeybindingHandler(entry.window.document)
@@ -26,7 +28,12 @@ function AuxiliaryWindowContent({ entry }: { entry: IAuxiliaryEditorWindow }) {
   useDragSessionDocument(entry.window.document)
   return (
     <TooltipProvider targetDocument={entry.window.document} resolveShortcut={resolveShortcut}>
-      <EditorArea editorPart={entry.part} />
+      <div className={styles['root']}>
+        <AuxiliaryTitleBar entry={entry} />
+        <div className={styles['editor']}>
+          <EditorArea editorPart={entry.part} />
+        </div>
+      </div>
     </TooltipProvider>
   )
 }

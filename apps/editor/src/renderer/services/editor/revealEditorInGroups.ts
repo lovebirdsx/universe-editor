@@ -11,6 +11,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { EditorInput, IEditorGroupsService } from '@universe-editor/platform'
+import type { IWindowFocusService } from '../windows/windowFocusService.js'
 
 /**
  * Activate the first editor matching `predicate` across all groups, preferring
@@ -20,6 +21,7 @@ import type { EditorInput, IEditorGroupsService } from '@universe-editor/platfor
 export function revealEditorInGroups(
   groups: IEditorGroupsService,
   predicate: (editor: EditorInput) => boolean,
+  windowFocus?: IWindowFocusService,
 ): boolean {
   const active = groups.activeGroup
   const ordered = [active, ...groups.groups.filter((g) => g !== active)]
@@ -28,6 +30,7 @@ export function revealEditorInGroups(
     if (!editor) continue
     groups.activateGroup(group)
     group.setActive(editor)
+    windowFocus?.focusGroup(group)
     return true
   }
   return false

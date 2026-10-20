@@ -49,7 +49,7 @@ export class MainThreadOutput extends Disposable implements IMainThreadOutput {
     const ch = this._channels.get(handle)
     if (!ch) return
     this._outputService.setActiveChannel(ch.name)
-    revealOutputPanel(this._layoutService, this._viewsService)
+    revealOutputPanel(this._layoutService, this._viewsService, 'restore')
   }
 
   async $disposeOutputChannel(handle: number): Promise<void> {

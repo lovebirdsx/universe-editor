@@ -16,6 +16,7 @@ import {
   ViewRegistry,
 } from '@universe-editor/platform'
 import { LayoutService } from '../LayoutService.js'
+import { FakeWindowFocusService } from '../../windows/testing/fakeWindowFocusService.js'
 import {
   IViewContainerMemoryService,
   ViewContainerMemoryService,
@@ -91,6 +92,7 @@ function newSvc(storage: IStorageService = makeStorage()): LayoutService {
     makeContextKeyService(),
     makeWorkspace(),
     makeViewDescriptors(),
+    new FakeWindowFocusService(),
   )
 }
 
@@ -226,20 +228,89 @@ describe('LayoutService — focus routing', () => {
     registry: IFocusableRegistry,
     viewDescriptors: IViewDescriptorService,
     memory: ViewContainerMemoryService = new ViewContainerMemoryService(),
+    windowFocus: FakeWindowFocusService = new FakeWindowFocusService(),
+    editorGroups: IEditorGroupsService = makeEditorGroups(),
   ): LayoutService {
     const svc = new LayoutService(
       makeStorage(),
       makeProbeViews(),
       registry,
       memory as unknown as IViewContainerMemoryService,
-      makeEditorGroups(),
+      editorGroups,
       makeContextKeyService(),
       makeWorkspace(),
       viewDescriptors,
+      windowFocus,
     )
     svc.registerPart(makePart(PartId.SideBar))
     return svc
   }
+
+  it('focusView brings the main window forward only for command/user sources', async () => {
+    const registered = registerProbeView()
+    const focus = new FakeWindowFocusService()
+    const svc = newFocusSvc(
+      makeRegistryFor({ focus: vi.fn() }),
+      makeViewDescriptors(),
+      undefined,
+      focus,
+    )
+
+    await svc.focusView(VIEW_ID, { source: 'command', timeoutMs: 50 })
+    expect(focus.focusMainWindowCalls).toBe(1)
+
+    // Restore (and unspecified) must never steal native focus at startup.
+    await svc.focusView(VIEW_ID, { source: 'restore', timeoutMs: 50 })
+    await svc.focusView(VIEW_ID, { timeoutMs: 50 })
+    expect(focus.focusMainWindowCalls).toBe(1)
+
+    registered.dispose()
+  })
+
+  it('focusPart brings the main window forward except for the editor area', async () => {
+    const focus = new FakeWindowFocusService()
+    const svc = newFocusSvc(makeRegistryFor(undefined), makeViewDescriptors(), undefined, focus)
+
+    await svc.focusPart(PartId.SideBar, { source: 'command', timeoutMs: 50 })
+    expect(focus.focusMainWindowCalls).toBe(1)
+
+    // The active group may live in an auxiliary window; pulling focus back to
+    // main here would fight the group-level reveal that just ran.
+    await svc.focusPart(PartId.EditorArea, { source: 'command', timeoutMs: 50 })
+    expect(focus.focusMainWindowCalls).toBe(1)
+  })
+
+  it('focusPart(EditorArea) routes to the active group, which may live in another window', async () => {
+    const focus = new FakeWindowFocusService()
+    const editor = { focus: vi.fn(() => true) }
+    const group = {
+      id: 7,
+      activeEditor: editor,
+      part: { id: 7 },
+      setActive: vi.fn(),
+    }
+    const groups = {
+      _serviceBrand: undefined,
+      activeGroup: group,
+      activateGroup: vi.fn(),
+    } as unknown as IEditorGroupsService
+    const svc = newFocusSvc(
+      makeRegistryFor(undefined),
+      makeViewDescriptors(),
+      undefined,
+      focus,
+      groups,
+    )
+
+    await expect(
+      svc.focusPart(PartId.EditorArea, { source: 'command', timeoutMs: 50 }),
+    ).resolves.toBe(true)
+
+    expect(focus.focusedGroups).toEqual([group])
+    // The main window must not be pulled forward when the active group lives elsewhere.
+    expect(focus.focusMainWindowCalls).toBe(0)
+    expect(editor.focus).toHaveBeenCalled()
+  })
 
   it('focusView does not recurse when the part remembers that same view', async () => {
     // Regression: focusView -> focusPart -> "focus the part's last focused

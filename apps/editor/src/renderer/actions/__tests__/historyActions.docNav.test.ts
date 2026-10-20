@@ -25,12 +25,15 @@ import { EditorGroupsService } from '../../services/editor/EditorGroupsService.j
 import { HistoryService } from '../../services/history/HistoryService.js'
 import { DocEditorInput } from '../../services/editor/DocEditorInput.js'
 import { initUserDocsForTests } from '../../services/editor/docRegistry.js'
+import { IWindowFocusService } from '../../services/windows/windowFocusService.js'
+import { FakeWindowFocusService } from '../../services/windows/testing/fakeWindowFocusService.js'
 
 function setup() {
   const groups = new EditorGroupsService()
   const services = new ServiceCollection()
   services.set(IEditorGroupsService, groups)
   services.set(IContextKeyService, new ContextKeyService())
+  services.set(IWindowFocusService, new FakeWindowFocusService())
   const history = new HistoryService(new UriIdentityService('win32'))
   services.set(IHistoryService, history)
   const inst = new InstantiationService(services)

@@ -48,6 +48,7 @@ import { ensureSideGroup } from '../../services/editor/openToSide.js'
 import { IExcludeService } from '../../services/exclude/ExcludeService.js'
 import { IQuickAccessController } from '../../services/quickInput/QuickAccessController.js'
 import { stripFilePathLinkPrefix } from '../../services/acp/filePathLink.js'
+import { IWindowFocusService } from '../../services/windows/windowFocusService.js'
 import { useOptionalService } from '../useService.js'
 import { useWorkspaceHome } from '../useWorkspaceHome.js'
 import { markdownLinkCandidates, searchPatternFor } from './markdownLinkResolve.js'
@@ -112,6 +113,7 @@ export function useMarkdownFileLink(
   const lifecycleService = useOptionalService(ILifecycleService)
   const excludeService = useOptionalService(IExcludeService)
   const quickAccess = useOptionalService(IQuickAccessController)
+  const windowFocus = useOptionalService(IWindowFocusService)
   const cache = useRef(new Map<string, CacheEntry>())
   const inflight = useRef(new Map<string, Promise<Resolution>>())
   // Home for `~` expansion on the host the link lives on. `window.ipc.home` is the
@@ -237,7 +239,12 @@ export function useMarkdownFileLink(
         if (previewLinks && groupsService && line === undefined && isMarkdownResource(uri)) {
           const preview = new MarkdownPreviewInput(uri)
           const group = opts?.toSide ? ensureSideGroup(groupsService) : groupsService.activeGroup
-          openPreviewInGroup(groupsService, group, preview)
+          openPreviewInGroup(
+            groupsService,
+            group,
+            preview,
+            windowFocus ? { windowFocus } : undefined,
+          )
           if (opts?.fragment) MarkdownPreviewRegistry.revealAnchor(uri, opts.fragment)
           return
         }
@@ -278,6 +285,7 @@ export function useMarkdownFileLink(
       lifecycleService,
       quickAccess,
       previewLinks,
+      windowFocus,
     ],
   )
 }

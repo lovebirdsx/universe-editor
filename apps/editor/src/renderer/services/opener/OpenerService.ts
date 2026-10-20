@@ -43,6 +43,7 @@ import { openInLockAwareGroup } from '../editor/openInLockAwareGroup.js'
 import { findExistingFileEditor, revealSelectionInInput } from '../editor/revealEditorPosition.js'
 import { splitFilePathLocation } from '../acp/filePathLink.js'
 import { isFileSystemUri } from '../files/fileSystemScheme.js'
+import { IWindowFocusService } from '../windows/windowFocusService.js'
 
 const EXTERNAL_SCHEMES = new Set(['http', 'https', 'mailto'])
 
@@ -155,6 +156,7 @@ export class FileOpener implements IOpener {
     @IFileService private readonly _fileService: IFileService,
     @IWindowsService private readonly _windows: IWindowsService,
     @IEditorResolverService private readonly _resolver: IEditorResolverService,
+    @IWindowFocusService private readonly _windowFocus: IWindowFocusService,
   ) {}
 
   async open(target: URI): Promise<boolean> {
@@ -194,6 +196,7 @@ export class FileOpener implements IOpener {
     if (existing) {
       this._groups.activateGroup(existing.group)
       existing.group.setActive(existing.editor)
+      this._windowFocus.focusGroup(existing.group)
       return existing.editor
     }
     const input = this._instantiation.createInstance(FileEditorInput, uri)

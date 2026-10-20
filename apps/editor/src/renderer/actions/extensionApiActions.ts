@@ -34,6 +34,7 @@ import {
   revealSelectionInInput,
 } from '../services/editor/revealEditorPosition.js'
 import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
+import { IWindowFocusService } from '../services/windows/windowFocusService.js'
 import { systemNotificationE2E } from '../services/extensions/systemNotificationE2E.js'
 import { E2E_PROBE_ENABLED_KEY } from '../../shared/e2e/contract.js'
 
@@ -177,6 +178,7 @@ function revealExistingOrOpen(
   if (existing) {
     groups.activateGroup(existing.group)
     existing.group.setActive(existing.editor)
+    accessor.get(IWindowFocusService).focusGroup(existing.group)
     return existing.editor
   }
   const input = accessor.get(IInstantiationService).createInstance(FileEditorInput, uri)

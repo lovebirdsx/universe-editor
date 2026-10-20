@@ -23,6 +23,8 @@ import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
 import { MarkdownPreviewInput } from '../../services/editor/MarkdownPreviewInput.js'
 import { HistoryService } from '../../services/history/HistoryService.js'
+import { IWindowFocusService } from '../../services/windows/windowFocusService.js'
+import { FakeWindowFocusService } from '../../services/windows/testing/fakeWindowFocusService.js'
 
 function makeFakeFileService(): IFileServiceType {
   return {
@@ -66,6 +68,7 @@ function setup(historyOverride?: IHistoryService) {
   services.set(IHistoryService, history)
   services.set(IFileService, makeFakeFileService())
   services.set(IContextKeyService, new ContextKeyService())
+  services.set(IWindowFocusService, new FakeWindowFocusService())
   const inst = new InstantiationService(services)
   services.set(IInstantiationService, inst)
   return { groups, history, inst }

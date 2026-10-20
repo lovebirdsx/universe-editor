@@ -23,6 +23,8 @@ import {
   type IDisposable,
   type IFileService as IFileServiceType,
 } from '@universe-editor/platform'
+import { IWindowFocusService } from '../../services/windows/windowFocusService.js'
+import { FakeWindowFocusService } from '../../services/windows/testing/fakeWindowFocusService.js'
 import {
   OpenHtmlPreviewAction,
   OpenHtmlPreviewToSideAction,
@@ -72,6 +74,7 @@ function setup() {
   services.set(IEditorGroupsService, groups)
   services.set(IFileService, makeFakeFileService())
   services.set(IContextKeyService, new ContextKeyService())
+  services.set(IWindowFocusService, new FakeWindowFocusService())
   const inst = new InstantiationService(services)
   services.set(IInstantiationService, inst)
   return { groups, inst }

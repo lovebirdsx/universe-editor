@@ -12,6 +12,7 @@ import {
   type IWorkspaceService,
 } from '@universe-editor/platform'
 import { LayoutService } from '../LayoutService.js'
+import { FakeWindowFocusService } from '../../windows/testing/fakeWindowFocusService.js'
 import {
   IViewContainerMemoryService,
   ViewContainerMemoryService,
@@ -93,6 +94,7 @@ function newSvc(storage: IStorageService = makeStorage()): LayoutService {
     makeContextKeyService(),
     makeWorkspace(),
     makeViewDescriptors(),
+    new FakeWindowFocusService(),
   )
 }
 

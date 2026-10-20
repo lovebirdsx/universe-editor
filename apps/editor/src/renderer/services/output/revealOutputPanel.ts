@@ -10,8 +10,12 @@ export const OUTPUT_VIEW_ID = 'workbench.view.output.main'
 export function revealOutputPanel(
   layoutService: ILayoutService,
   viewsService: IViewsService,
+  // Only user-invoked reveals may pull the main window to the front. Extension
+  // calls and automatic error reveals must not steal native focus from another
+  // application/window.
+  source: 'command' | 'restore' = 'command',
 ): void {
   viewsService.openViewContainer(OUTPUT_VIEW_CONTAINER_ID)
   layoutService.setVisible(PartId.Panel, true)
-  void layoutService.focusView(OUTPUT_VIEW_ID)
+  void layoutService.focusView(OUTPUT_VIEW_ID, { source })
 }

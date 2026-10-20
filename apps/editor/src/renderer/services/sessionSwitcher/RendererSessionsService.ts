@@ -17,6 +17,7 @@ import { IAcpChatWidgetService } from '../acp/session/acpChatWidgetService.js'
 import { revealSessionChat } from '../acp/session/revealSessionChat.js'
 import { computeSessionDisplayStatus } from '../acp/session/acpSessionStatus.js'
 import { resolveLiveSessionTitle } from '../acp/session/acpSessionTitle.js'
+import { IWindowFocusService } from '../windows/windowFocusService.js'
 
 export class RendererSessionsService implements IRendererSessionsService {
   declare readonly _serviceBrand: undefined
@@ -27,6 +28,7 @@ export class RendererSessionsService implements IRendererSessionsService {
     @IEditorGroupsService private readonly _groups: IEditorGroupsService,
     @IInstantiationService private readonly _instantiation: IInstantiationService,
     @IAcpChatWidgetService private readonly _widgets: IAcpChatWidgetService,
+    @IWindowFocusService private readonly _windowFocus: IWindowFocusService,
   ) {}
 
   listSessions(): Promise<readonly RendererSessionSummary[]> {
@@ -53,7 +55,12 @@ export class RendererSessionsService implements IRendererSessionsService {
     // the other one active). Going through IEditorService would dedupe only
     // inside the active group and open a duplicate.
     revealSessionChat(
-      { groups: this._groups, inst: this._instantiation, widgets: this._widgets },
+      {
+        groups: this._groups,
+        inst: this._instantiation,
+        widgets: this._widgets,
+        windowFocus: this._windowFocus,
+      },
       session.id,
       session,
     )

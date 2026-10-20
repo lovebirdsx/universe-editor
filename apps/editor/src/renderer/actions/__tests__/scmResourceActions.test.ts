@@ -22,6 +22,8 @@ import {
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { openResourcePreviewInGroup } from '../../services/resourcePreview/openResourcePreview.js'
+import { IWindowFocusService } from '../../services/windows/windowFocusService.js'
+import { FakeWindowFocusService } from '../../services/windows/testing/fakeWindowFocusService.js'
 import { ScmOpenFileAction, ScmOpenPreviewAction } from '../scmResourceActions.js'
 
 // The preview plumbing has its own tests (openPreviewInGroup / EditorGroups); what
@@ -38,9 +40,11 @@ function makeAccessor(current: { folder: URI } | null): {
   accessor: ServicesAccessor
   openEditor: ReturnType<typeof vi.fn>
   activeGroup: object
+  windowFocus: FakeWindowFocusService
 } {
   const openEditor = vi.fn().mockResolvedValue(undefined)
   const activeGroup = { id: 'group' }
+  const windowFocus = new FakeWindowFocusService()
   const resolver: IEditorResolverServiceType = {
     _serviceBrand: undefined,
     registerEditor: () => ({ dispose() {} }),
@@ -51,6 +55,7 @@ function makeAccessor(current: { folder: URI } | null): {
     [IEditorResolverService, resolver],
     [IEditorGroupsService, { _serviceBrand: undefined, activeGroup }],
     [IWorkspaceService, { _serviceBrand: undefined, current, onDidChangeWorkspace: Event.None }],
+    [IWindowFocusService, windowFocus],
   ])
   const accessor = {
     get: (id: unknown) => {
@@ -59,7 +64,7 @@ function makeAccessor(current: { folder: URI } | null): {
       return service
     },
   } as unknown as ServicesAccessor
-  return { accessor, openEditor, activeGroup }
+  return { accessor, openEditor, activeGroup, windowFocus }
 }
 
 const remoteFolder = (): URI =>
@@ -119,20 +124,18 @@ describe('ScmOpenFileAction', () => {
 
 describe('ScmOpenPreviewAction', () => {
   it('opens the row preview in the active editor group with the same URI', () => {
-    const { accessor, activeGroup } = makeAccessor({ folder: remoteFolder() })
+    const { accessor, activeGroup, windowFocus } = makeAccessor({ folder: remoteFolder() })
 
     new ScmOpenPreviewAction().run(accessor, rowArg(ROW_PATH))
 
     expect(openResourcePreviewInGroup).toHaveBeenCalledTimes(1)
-    const [groups, group, uri] = vi.mocked(openResourcePreviewInGroup).mock.calls[0] as [
-      { activeGroup: object },
-      object,
-      URI,
-    ]
+    const [groups, group, uri, focus] = vi.mocked(openResourcePreviewInGroup).mock
+      .calls[0] as unknown as [{ activeGroup: object }, object, URI, unknown]
     expect(group).toBe(activeGroup)
     expect(groups.activeGroup).toBe(activeGroup)
     expect(uri.authority).toBe(REMOTE_AUTHORITY)
     expect(uri.path).toBe(ROW_PATH)
+    expect(focus).toBe(windowFocus)
   })
 
   it('ignores payloads that carry no resource path', () => {

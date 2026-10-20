@@ -80,6 +80,7 @@ import { IExtensionManagementService } from '../shared/ipc/extensionManagementSe
 import { IExtensionGalleryService } from '../shared/ipc/extensionGalleryService.js'
 import { type IAiModelMainService } from '../shared/ipc/aiModelService.js'
 import { IAiDebugService } from '../shared/ipc/aiDebugService.js'
+import { IAuxiliaryWindowsService } from '../shared/ipc/auxiliaryWindowService.js'
 import type { IBugRecorderService } from '../shared/ipc/bugRecorderService.js'
 import { ITimerService } from './services/performance/TimerService.js'
 import {
@@ -124,6 +125,7 @@ import {
   IWorkbenchWindowService,
   WorkbenchWindowService,
 } from './services/windows/workbenchWindowService.js'
+import { IWindowFocusService, WindowFocusService } from './services/windows/windowFocusService.js'
 import {
   AuxiliaryEditorWindowService,
   IAuxiliaryEditorWindowService,
@@ -710,6 +712,16 @@ async function bootstrapWorkbench(): Promise<void> {
   const workbenchWindowService = workbenchStore.add(new WorkbenchWindowService())
   workbenchWindowService.registerMainWindow(editorGroupsService.mainPart, document)
   services.set(IWorkbenchWindowService, workbenchWindowService)
+  // Cross-window reveal paths call this after activating a group in another
+  // window; registered before LayoutService/aux-window services consume it.
+  const windowFocusService = new WindowFocusService(
+    workbenchWindowService,
+    services.get(IWindowsService) as IWindowsService,
+    services.get(IAuxiliaryWindowsService) as IAuxiliaryWindowsService,
+    loggerService.createLogger({ id: 'windowFocus', name: 'Window Focus' }),
+  )
+  workbenchStore.add(windowFocusService)
+  services.set(IWindowFocusService, windowFocusService)
   const editorService = workbenchStore.add(
     new EditorService(
       editorGroupsService,
@@ -739,6 +751,7 @@ async function bootstrapWorkbench(): Promise<void> {
   )
   if (webviewServiceInstance instanceof WebviewService) {
     webviewServiceInstance.setEditorGroupsAccessor(() => editorGroupsService)
+    webviewServiceInstance.setWindowFocusAccessor(() => windowFocusService)
   }
   services.set(IOutputService, outputService)
   services.set(

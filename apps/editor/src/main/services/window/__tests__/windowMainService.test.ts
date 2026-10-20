@@ -186,6 +186,8 @@ function lastWindow(): {
   show: ReturnType<typeof vi.fn>
   showInactive: ReturnType<typeof vi.fn>
   focus: ReturnType<typeof vi.fn>
+  restore: ReturnType<typeof vi.fn>
+  isMinimized: ReturnType<typeof vi.fn>
 } {
   return vi.mocked(BrowserWindow).mock.results.at(-1)?.value as never
 }
@@ -700,6 +702,20 @@ describe('WindowMainService', () => {
       svc.focusWindow(id)
       expect(lastWindow().showInactive).toHaveBeenCalled()
       expect(lastWindow().focus).not.toHaveBeenCalled()
+    })
+
+    it('focusWindow restores a minimized window before focusing it', async () => {
+      const svc = makeService()
+      const id = await svc.createWindow()
+      const win = lastWindow()
+      win.isMinimized.mockReturnValue(true)
+
+      svc.focusWindow(id)
+
+      expect(win.restore).toHaveBeenCalledTimes(1)
+      expect(win.restore.mock.invocationCallOrder[0]).toBeLessThan(
+        win.focus.mock.invocationCallOrder[0]!,
+      )
     })
   })
 

@@ -75,6 +75,7 @@ import {
 } from '../services/acp/session/revealSessionEditorTab.js'
 import { reviveUri, type ITargetArg } from './fileActionsCommon.js'
 import { computeInitialSelectionIndex } from '../services/quickInput/quickNavigateSelection.js'
+import { IWindowFocusService } from '../services/windows/windowFocusService.js'
 import { relativeTime } from '../relativeTime.js'
 
 export class NewAgentSessionAction extends Action2 {
@@ -472,6 +473,7 @@ export class ResumeAgentSessionAction extends Action2 {
     const inst = accessor.get(IInstantiationService)
     const workspace = accessor.get(IWorkspaceService)
     const uriIdentity = accessor.get(IUriIdentityService)
+    const windowFocus = accessor.get(IWindowFocusService)
 
     // Side tasks stay out of the picker: they are reachable only from their
     // parent's side-task popover, same as the Sessions view (SessionListBody).
@@ -519,13 +521,13 @@ export class ResumeAgentSessionAction extends Action2 {
     const currentAuthority =
       folder && folder.scheme === REMOTE_SCHEME ? folder.authority || undefined : undefined
     if (entry && isForeignWorkspaceSession(entry, currentCwd, currentAuthority, uriIdentity)) {
-      revealSessionEditorTab(groups, inst, entry.id, entry)
+      revealSessionEditorTab(groups, inst, entry.id, entry, windowFocus)
       return
     }
 
     try {
       const session = await sessions.resumeSession(picked.id)
-      revealSessionEditorTab(groups, inst, session.id, session)
+      revealSessionEditorTab(groups, inst, session.id, session, windowFocus)
     } catch {
       // resumeSession publishes its own notification; nothing to do.
     }
@@ -1268,14 +1270,17 @@ export function revealSessionEditor(
   inst: IInstantiationService,
   session: { id: string; agentId: string | undefined },
   direction: GroupDirection,
+  windowFocus?: IWindowFocusService,
 ): void {
   const found = findSessionEditor(groups, session.id)
   if (found) {
     groups.activateGroup(found.group)
     found.group.setActive(found.editor)
+    windowFocus?.focusGroup(found.group)
     return
   }
   openSessionInSplit(groups, inst, session, direction)
+  windowFocus?.focusGroup(groups.activeGroup)
 }
 
 /** Hard cap for a captured selection; longer quotes are truncated (logged). */
@@ -1494,6 +1499,7 @@ export class GoToParentSessionAction extends Action2 {
     const editor = accessor.get(IEditorService)
     const groups = accessor.get(IEditorGroupsService)
     const inst = accessor.get(IInstantiationService)
+    const windowFocus = accessor.get(IWindowFocusService)
 
     const sessionId = resolveSessionTargetId(arg, editor, sessions)
     if (sessionId === undefined) return
@@ -1501,6 +1507,6 @@ export class GoToParentSessionAction extends Action2 {
     if (parent === undefined) return
     const target = sessionRowTarget(sessions, history, parent.id)
     if (target === undefined) return
-    revealSessionEditor(groups, inst, target, GroupDirection.Left)
+    revealSessionEditor(groups, inst, target, GroupDirection.Left, windowFocus)
   }
 }

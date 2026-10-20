@@ -34,6 +34,7 @@ import { EditorGroupsService } from '../../editor/EditorGroupsService.js'
 import { FileEditorInput } from '../../editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../editor/FileEditorRegistry.js'
 import { QuickTextSearchService } from '../QuickTextSearchService.js'
+import { FakeWindowFocusService } from '../../windows/testing/fakeWindowFocusService.js'
 
 class FakeQuickPick<T extends IQuickPickItem> implements IQuickPick<T> {
   private readonly _onDidAccept = new Emitter<T[]>()
@@ -253,6 +254,7 @@ function setup(root: URI | null = URI.file('/repo')) {
     groups,
     instantiation,
     new UriIdentityService('linux'),
+    new FakeWindowFocusService(),
   )
   return { service, quickInput, textSearch, workspace, groups, instantiation, root }
 }

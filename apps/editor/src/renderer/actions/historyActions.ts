@@ -11,13 +11,16 @@ import {
   Action2,
   EditorInput,
   EditorRegistry,
+  IContextKeyService,
   IEditorGroupsService,
   IHistoryEntry,
   IHistoryService,
   IInstantiationService,
   localize2,
+  type IEditorGroup,
   type ServicesAccessor,
 } from '@universe-editor/platform'
+import { activateGroupAndFocus } from '../services/editor/activateGroupAndFocus.js'
 import { DocEditorInput } from '../services/editor/DocEditorInput.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { MarkdownPreviewInput } from '../services/editor/MarkdownPreviewInput.js'
@@ -25,26 +28,31 @@ import { openDocInGroup } from '../services/editor/openDoc.js'
 import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
 import { openPreviewInGroup } from '../services/editor/openPreviewInGroup.js'
 import { revealSelectionInInput } from '../services/editor/revealEditorPosition.js'
+import { IWindowFocusService } from '../services/windows/windowFocusService.js'
 
 async function navigateTo(accessor: ServicesAccessor, entry: IHistoryEntry): Promise<void> {
   const groups = accessor.get(IEditorGroupsService)
   const inst = accessor.get(IInstantiationService)
   const history = accessor.get(IHistoryService)
+  const contextKeyService = accessor.get(IContextKeyService)
+  const windowFocus = accessor.get(IWindowFocusService)
   const target = entry.resource.toString()
 
   let opened: EditorInput | undefined
+  let openedGroup: IEditorGroup | undefined
   for (const group of groups.groups) {
     for (const editor of group.editors) {
       if (editor instanceof EditorInput && editor.resource?.toString() === target) {
-        groups.activateGroup(group)
-        group.setActive(editor)
         opened = editor
+        openedGroup = group
         break
       }
     }
     if (opened) break
   }
-  if (!opened) {
+  if (opened && openedGroup) {
+    activateGroupAndFocus(openedGroup, { groups, contextKeyService, windowFocus }, opened)
+  } else {
     // History navigation to an editor no longer in any group opens into the
     // preview slot — matches VSCode and prevents leaving a stale duplicate
     // alongside whatever previously replaced this entry. Non-text editors
@@ -61,7 +69,10 @@ async function navigateTo(accessor: ServicesAccessor, entry: IHistoryEntry): Pro
       // tab. History entries are built from a URI — no held source — so the slot
       // occupant may be replaced safely (a dirty occupant is pinned instead of
       // evicted — see the dirty guard in EditorGroupModel.openEditor).
-      openPreviewInGroup(groups, groups.activeGroupForOpen, input, { pinned: false })
+      openPreviewInGroup(groups, groups.activeGroupForOpen, input, {
+        pinned: false,
+        windowFocus,
+      })
     } else if (input instanceof DocEditorInput) {
       // Same for the built-in guide: reuse the current doc tab so H/L (and
       // Alt+←/→) walk the trail in place instead of opening a new tab.
@@ -70,6 +81,12 @@ async function navigateTo(accessor: ServicesAccessor, entry: IHistoryEntry): Pro
       openInLockAwareGroup(groups, input, { activate: true, pinned: false })
     }
     opened = input
+    // The preview/doc/lock-aware helpers may have routed the tab to a group in
+    // another window; find the host group so the window follows.
+    openedGroup = groups.groups.find((group) => group.editors.includes(input))
+    if (openedGroup) {
+      activateGroupAndFocus(openedGroup, { groups, contextKeyService, windowFocus }, opened)
+    }
   }
 
   const selection = entry.selection

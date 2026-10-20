@@ -39,6 +39,7 @@ import { SettingsEditorInput } from '../services/editor/SettingsEditorInput.js'
 import { KeybindingsEditorInput } from '../services/editor/KeybindingsEditorInput.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
+import { IWindowFocusService } from '../services/windows/windowFocusService.js'
 import {
   dispatchKeybindingsEditorFocusSearch,
   dispatchSettingsEditorFocusSearch,
@@ -67,12 +68,13 @@ async function openUserDataFile(
     groups: IEditorGroupsService
     instantiation: IInstantiationService
     uriIdentity: IUriIdentityService
+    windowFocus: IWindowFocusService
   },
   file: UserDataFile,
   template: string,
   options?: { readOnly?: boolean; seedTemplate?: boolean },
 ): Promise<void> {
-  const { files, groups, instantiation, uriIdentity } = services
+  const { files, groups, instantiation, uriIdentity, windowFocus } = services
 
   const uri = await files.getFileUri(file)
   if (!uri) return
@@ -93,6 +95,7 @@ async function openUserDataFile(
       if (editor instanceof FileEditorInput && uriIdentity.isEqual(editor.resource, uri)) {
         groups.activateGroup(group)
         group.setActive(editor)
+        windowFocus.focusGroup(group)
         return
       }
     }
@@ -108,12 +111,14 @@ function userDataFileServices(accessor: ServicesAccessor): {
   groups: IEditorGroupsService
   instantiation: IInstantiationService
   uriIdentity: IUriIdentityService
+  windowFocus: IWindowFocusService
 } {
   return {
     files: accessor.get(IUserDataFilesService),
     groups: accessor.get(IEditorGroupsService),
     instantiation: accessor.get(IInstantiationService),
     uriIdentity: accessor.get(IUriIdentityService),
+    windowFocus: accessor.get(IWindowFocusService),
   }
 }
 
@@ -165,6 +170,7 @@ export class OpenSettingsAction extends Action2 {
 
   override run(accessor: ServicesAccessor): void {
     const groups = accessor.get(IEditorGroupsService)
+    const windowFocus = accessor.get(IWindowFocusService)
 
     // De-dupe: if Settings is already open in any group, reactivate it instead
     // of opening a second copy.
@@ -173,6 +179,7 @@ export class OpenSettingsAction extends Action2 {
         if (editor instanceof SettingsEditorInput) {
           groups.activateGroup(group)
           group.setActive(editor)
+          windowFocus.focusGroup(group)
           dispatchSettingsEditorFocusSearch()
           return
         }
@@ -200,12 +207,14 @@ export class OpenKeybindingsEditorAction extends Action2 {
   override run(accessor: ServicesAccessor, ...args: unknown[]): void {
     const query = (args[0] as { query?: string } | undefined)?.query
     const groups = accessor.get(IEditorGroupsService)
+    const windowFocus = accessor.get(IWindowFocusService)
 
     for (const group of groups.groups) {
       for (const editor of group.editors) {
         if (editor instanceof KeybindingsEditorInput) {
           groups.activateGroup(group)
           group.setActive(editor)
+          windowFocus.focusGroup(group)
           dispatchKeybindingsEditorFocusSearch(query)
           return
         }
@@ -406,6 +415,7 @@ export class OpenWorkspaceSettingsAction extends Action2 {
 
   override run(accessor: ServicesAccessor): void {
     const groups = accessor.get(IEditorGroupsService)
+    const windowFocus = accessor.get(IWindowFocusService)
 
     // If Settings editor already open, activate it and switch to Workspace tab.
     for (const group of groups.groups) {
@@ -413,6 +423,7 @@ export class OpenWorkspaceSettingsAction extends Action2 {
         if (editor instanceof SettingsEditorInput) {
           groups.activateGroup(group)
           group.setActive(editor)
+          windowFocus.focusGroup(group)
           dispatchSettingsEditorSwitchTarget(ConfigurationTarget.Project)
           return
         }

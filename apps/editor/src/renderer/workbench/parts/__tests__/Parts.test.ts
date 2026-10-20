@@ -14,6 +14,8 @@ import {
   ServiceCollection,
 } from '@universe-editor/platform'
 import { LayoutService } from '../../../services/layout/LayoutService.js'
+import { IWindowFocusService } from '../../../services/windows/windowFocusService.js'
+import { FakeWindowFocusService } from '../../../services/windows/testing/fakeWindowFocusService.js'
 import {
   IViewContainerMemoryService,
   ViewContainerMemoryService,
@@ -74,6 +76,7 @@ function makeContainer() {
     _serviceBrand: undefined,
     current: {},
   } as unknown as IWorkspaceService)
+  services.set(IWindowFocusService, new FakeWindowFocusService())
   // Only the two reads focusView makes; nothing here exercises collapsing.
   services.set(IViewDescriptorService, {
     _serviceBrand: undefined,

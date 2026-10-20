@@ -23,6 +23,7 @@ import {
 } from '@universe-editor/platform'
 import { currentRemoteAuthority } from '../services/remote/windowRemoteAuthority.js'
 import { openResourcePreviewInGroup } from '../services/resourcePreview/openResourcePreview.js'
+import { IWindowFocusService } from '../services/windows/windowFocusService.js'
 import { scmResourceArgPath } from '../services/scm/scmResourceArg.js'
 import { SCM_OPEN_FILE_COMMAND, SCM_OPEN_PREVIEW_COMMAND } from '../services/scm/scmRowCommands.js'
 
@@ -98,6 +99,11 @@ export class ScmOpenPreviewAction extends Action2 {
     const fsPath = scmResourceArgPath(arg)
     if (fsPath === undefined) return
     const groups = accessor.get(IEditorGroupsService)
-    openResourcePreviewInGroup(groups, groups.activeGroup, rowUri(accessor, fsPath))
+    openResourcePreviewInGroup(
+      groups,
+      groups.activeGroup,
+      rowUri(accessor, fsPath),
+      accessor.get(IWindowFocusService),
+    )
   }
 }

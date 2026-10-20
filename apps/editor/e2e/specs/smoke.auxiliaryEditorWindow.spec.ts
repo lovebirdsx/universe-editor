@@ -41,6 +41,100 @@ async function auxWindows(page: Page) {
   return page.evaluate(() => window.__E2E__!.getAuxiliaryWindows())
 }
 
+interface FocusRequest {
+  readonly id: number
+  readonly auxiliary: boolean
+  readonly method: 'focus' | 'showInactive'
+}
+
+/**
+ * Record every native window-focus request made after installation. Auxiliary
+ * windows are `about:blank` popups, so the URL identifies the target without
+ * coupling the spec to window ids or creation order. Silent E2E routes focus
+ * through `showInactive`, but both methods are recorded so the probe also works
+ * when `UNIVERSE_E2E_SHOW=1` restores real focusing.
+ */
+async function installFocusProbe(electronApp: ElectronApplication): Promise<void> {
+  await electronApp.evaluate(({ BrowserWindow }) => {
+    const holder = globalThis as unknown as { __ueFocusRequests?: unknown[] }
+    holder.__ueFocusRequests = []
+    type WinLike = { id: number; webContents: { getURL(): string } }
+    const prototype = BrowserWindow.prototype as unknown as {
+      focus(this: WinLike): void
+      showInactive(this: WinLike): void
+    }
+    const originalFocus = prototype.focus
+    const originalShowInactive = prototype.showInactive
+    const record = (win: WinLike, method: 'focus' | 'showInactive'): void => {
+      holder.__ueFocusRequests!.push({
+        id: win.id,
+        auxiliary: win.webContents.getURL() === 'about:blank',
+        method,
+      })
+    }
+    prototype.focus = function (this: WinLike) {
+      record(this, 'focus')
+      return originalFocus.call(this)
+    }
+    prototype.showInactive = function (this: WinLike) {
+      record(this, 'showInactive')
+      return originalShowInactive.call(this)
+    }
+  })
+}
+
+async function clearFocusRequests(electronApp: ElectronApplication): Promise<void> {
+  await electronApp.evaluate(() => {
+    const holder = globalThis as unknown as { __ueFocusRequests?: unknown[] }
+    holder.__ueFocusRequests = []
+  })
+}
+
+async function focusRequests(electronApp: ElectronApplication): Promise<FocusRequest[]> {
+  return electronApp.evaluate(() => {
+    const holder = globalThis as unknown as { __ueFocusRequests?: unknown[] }
+    return (holder.__ueFocusRequests ?? []) as never
+  })
+}
+
+/** Clicking main chrome routes activation back to the main window without OS focus. */
+async function activateMainWindow(page: Page): Promise<void> {
+  await page.locator('[data-testid="part-activitybar"]').click({ position: { x: 4, y: 4 } })
+}
+
+/** Asserts a native focus request went to the auxiliary window and DOM focus followed. */
+async function expectAuxiliaryFocus(
+  electronApp: ElectronApplication,
+  child: Page,
+  workbench: { getActiveEditorUri(): Promise<string | undefined> },
+  fileName: string,
+): Promise<void> {
+  await expect
+    .poll(async () => (await focusRequests(electronApp)).some((request) => request.auxiliary))
+    .toBe(true)
+  await expect.poll(() => workbench.getActiveEditorUri()).toContain(fileName)
+  await expect
+    .poll(() =>
+      child.evaluate(
+        () => document.activeElement?.closest('[data-testid="part-editorArea"]') !== null,
+      ),
+    )
+    .toBe(true)
+}
+
+/**
+ * Playwright enables focus emulation, so `document.hasFocus()` reports true for
+ * every page it drives — including a background auxiliary window. The focus
+ * service deliberately skips the native request when the target document is
+ * already focused, so make the auxiliary document look unfocused like a real
+ * background window before asserting that a request happens.
+ */
+async function markDocumentUnfocused(window: Page): Promise<void> {
+  await window.evaluate(() => {
+    Document.prototype.hasFocus = () => false
+  })
+}
+
 /**
  * Synthetic HTML5 drag events, dispatched into the live React tree.
  *
@@ -640,6 +734,182 @@ test.describe('@p0 auxiliary editor windows', () => {
     await page.evaluate(() => window.__E2E__!.runCommand('workbench.action.closeWindow'))
     await expect.poll(async () => (await auxWindows(page)).length).toBe(0)
     expect(await page.evaluate(() => window.__E2E__!.getWorkbenchWindows().length)).toBe(1)
+  })
+
+  test.describe('cross-window focus follows activation', () => {
+    test('Ctrl+P selecting a file already open in an auxiliary window focuses it', async ({
+      electronApp,
+      workbench,
+      page,
+    }) => {
+      await workbench.waitForRestored()
+      await workbench.waitForBootstrapFocusSettled()
+      const file = seedFile('quick-open-aux.txt', 'aux target\n')
+      await page.evaluate((p) => window.__E2E__!.openFileUri(p), file)
+      await expect(workbench.editor.monacoEditor).toBeVisible()
+
+      const child = await waitForAuxWindow(
+        electronApp,
+        workbench,
+        'workbench.action.moveEditorToNewWindow',
+      )
+      await expect
+        .poll(async () => (await auxWindows(page))[0]?.groups.flatMap((g) => g.editorUris) ?? [])
+        .toContainEqual(expect.stringContaining('quick-open-aux.txt'))
+      await markDocumentUnfocused(child)
+      await activateMainWindow(page)
+
+      await installFocusProbe(electronApp)
+      await clearFocusRequests(electronApp)
+
+      await page.evaluate(() => {
+        void window.__E2E__!.runCommand('workbench.action.quickOpen')
+      })
+      await workbench.quickInput.waitForVisible()
+      await workbench.quickInput.input.fill('quick-open-aux')
+      await expect(
+        workbench.quickInput.dialog.getByRole('option', { name: /quick-open-aux\.txt/ }),
+      ).toBeVisible()
+      await page.keyboard.press('Enter')
+      await workbench.quickInput.waitForHidden()
+
+      // Renderer-side group activation alone would leave native focus in main.
+      await expectAuxiliaryFocus(electronApp, child, workbench, 'quick-open-aux.txt')
+    })
+
+    test('going back to an editor in an auxiliary window focuses that window', async ({
+      electronApp,
+      workbench,
+      page,
+    }) => {
+      await workbench.waitForRestored()
+      await workbench.waitForBootstrapFocusSettled()
+      const alpha = seedFile('history-aux-alpha.txt', 'alpha\n')
+      const beta = seedFile('history-aux-beta.txt', 'beta\n')
+      await page.evaluate((p) => window.__E2E__!.openFileUri(p), alpha)
+      await expect(workbench.editor.monacoEditor).toBeVisible()
+      const child = await waitForAuxWindow(
+        electronApp,
+        workbench,
+        'workbench.action.moveEditorToNewWindow',
+      )
+      await expect
+        .poll(async () => (await auxWindows(page))[0]?.groups.flatMap((g) => g.editorUris) ?? [])
+        .toContainEqual(expect.stringContaining('history-aux-alpha.txt'))
+      await markDocumentUnfocused(child)
+
+      await activateMainWindow(page)
+      await page.evaluate((p) => window.__E2E__!.openFileUri(p), beta)
+      await expect.poll(() => workbench.getActiveEditorUri()).toContain('history-aux-beta.txt')
+
+      await installFocusProbe(electronApp)
+      await clearFocusRequests(electronApp)
+      await page.evaluate(() => {
+        void window.__E2E__!.runCommand('workbench.action.goBack')
+      })
+
+      await expectAuxiliaryFocus(electronApp, child, workbench, 'history-aux-alpha.txt')
+    })
+
+    test('Ctrl+Tab switching to an editor in an auxiliary window focuses that window', async ({
+      electronApp,
+      workbench,
+      page,
+    }) => {
+      await workbench.waitForRestored()
+      await workbench.waitForBootstrapFocusSettled()
+      const alpha = seedFile('switch-aux-alpha.txt', 'alpha\n')
+      const beta = seedFile('switch-aux-beta.txt', 'beta\n')
+      await page.evaluate((p) => window.__E2E__!.openFileUri(p), alpha)
+      await expect(workbench.editor.monacoEditor).toBeVisible()
+      const child = await waitForAuxWindow(
+        electronApp,
+        workbench,
+        'workbench.action.moveEditorToNewWindow',
+      )
+      await expect
+        .poll(async () => (await auxWindows(page))[0]?.groups.flatMap((g) => g.editorUris) ?? [])
+        .toContainEqual(expect.stringContaining('switch-aux-alpha.txt'))
+      await markDocumentUnfocused(child)
+
+      await activateMainWindow(page)
+      await page.evaluate((p) => window.__E2E__!.openFileUri(p), beta)
+      await expect.poll(() => workbench.getActiveEditorUri()).toContain('switch-aux-beta.txt')
+
+      await installFocusProbe(electronApp)
+      await clearFocusRequests(electronApp)
+
+      await page.evaluate(() => {
+        void window.__E2E__!.runCommand('workbench.action.quickOpenRecentEditor')
+      })
+      await workbench.quickInput.waitForVisible()
+      // Enter unlocks the read-only switcher; typing then narrows it to alpha.
+      await page.keyboard.press('Enter')
+      await workbench.quickInput.input.fill('switch-aux-alpha')
+      await expect(
+        workbench.quickInput.dialog.getByRole('option', { name: /switch-aux-alpha\.txt/ }),
+      ).toBeVisible()
+      await page.keyboard.press('Enter')
+      await workbench.quickInput.waitForHidden()
+
+      await expectAuxiliaryFocus(electronApp, child, workbench, 'switch-aux-alpha.txt')
+    })
+
+    test('auxiliary title bar tracks the main title bar theme', async ({
+      electronApp,
+      workbench,
+      page,
+    }) => {
+      await workbench.waitForRestored()
+      await workbench.waitForBootstrapFocusSettled()
+      const child = await waitForAuxWindow(
+        electronApp,
+        workbench,
+        'workbench.action.newEmptyEditorWindow',
+      )
+      const auxiliaryTitlebar = child.locator('[data-testid="auxiliary-titlebar"]')
+      const mainTitlebar = page.locator('[data-testid="titlebar"]')
+      await expect(auxiliaryTitlebar).toBeVisible()
+
+      const backgrounds = async () => ({
+        main: await mainTitlebar.evaluate((el) => getComputedStyle(el).backgroundColor),
+        auxiliary: await auxiliaryTitlebar.evaluate((el) => getComputedStyle(el).backgroundColor),
+      })
+      await expect
+        .poll(async () => {
+          const colors = await backgrounds()
+          return colors.main === colors.auxiliary && colors.main !== 'rgba(0, 0, 0, 0)'
+        })
+        .toBe(true)
+      const dark = await backgrounds()
+
+      await page.evaluate(() => window.__E2E__!.whenUserSettingsInitialized())
+      await page.evaluate(() =>
+        window.__E2E__!.updateConfigValue('workbench.colorTheme', 'Universe Light'),
+      )
+      await expect
+        .poll(async () => {
+          const colors = await backgrounds()
+          return colors.main === colors.auxiliary && colors.main !== dark.main
+        })
+        .toBe(true)
+
+      // Frameless on Windows/Linux: the renderer draws the window buttons too.
+      const platform = await electronApp.evaluate(() => process.platform)
+      if (platform !== 'darwin') {
+        await expect(
+          auxiliaryTitlebar.getByRole('button', { name: /Minimize|最小化/ }),
+        ).toBeVisible()
+        await expect(
+          auxiliaryTitlebar.getByRole('button', { name: /Maximize|最大化/ }),
+        ).toBeVisible()
+        await expect(auxiliaryTitlebar.getByRole('button', { name: /Close|关闭/ })).toBeVisible()
+      }
+
+      const token = (await auxWindows(page))[0]!.token
+      await page.evaluate((t) => window.__E2E__!.requestCloseAuxiliaryWindow(t), token)
+      await expect.poll(async () => (await auxWindows(page)).length).toBe(0)
+    })
   })
 
   test.describe('tab drag and drop across windows', () => {

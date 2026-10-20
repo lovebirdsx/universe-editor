@@ -14,6 +14,7 @@ import {
   useBackdropDismiss,
 } from '@universe-editor/workbench-ui'
 import { useService } from '../useService.js'
+import { getActiveWorkbenchDocument } from '../../services/windows/workbenchDocuments.js'
 import { resolveAgentIcon } from '../agents/agentIcon.js'
 import { resolveSessionStatusIcon } from '../agents/sessionStatusIcon.js'
 import { resolveIcon } from '../icons/icon-map.js'
@@ -54,7 +55,15 @@ export function QuickInputPortal() {
 
   const targetDocument = svc.currentDocument ?? document
   return createPortal(
-    <FocusScopeOverlay visible onEscape={close} targetDocument={targetDocument}>
+    <FocusScopeOverlay
+      visible
+      onEscape={close}
+      targetDocument={targetDocument}
+      // An accepted item may reveal an editor in another workbench window and
+      // move activation there before React unmounts this overlay; restoring
+      // focus into this (now inactive) document would activate it right back.
+      shouldRestoreFocus={() => getActiveWorkbenchDocument() === targetDocument}
+    >
       <div className={styles['overlay']} data-testid="quick-input-overlay" {...backdropHandlers}>
         <QuickInputPanel
           state={panelState}

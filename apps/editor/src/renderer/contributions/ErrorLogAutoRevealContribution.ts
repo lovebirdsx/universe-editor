@@ -109,7 +109,8 @@ export class ErrorLogAutoRevealContribution extends Disposable implements IWorkb
     }
 
     this._output.setActiveChannel(descriptor.name)
-    revealOutputPanel(this._layout, this._views)
+    // Automatic reveal: never pull the main window to the foreground.
+    revealOutputPanel(this._layout, this._views, 'restore')
     return true
   }
 

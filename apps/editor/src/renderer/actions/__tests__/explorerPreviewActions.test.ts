@@ -11,16 +11,24 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { IEditorGroupsService, URI, type ServicesAccessor } from '@universe-editor/platform'
 import { openResourcePreviewInGroup } from '../../services/resourcePreview/openResourcePreview.js'
+import { IWindowFocusService } from '../../services/windows/windowFocusService.js'
+import { FakeWindowFocusService } from '../../services/windows/testing/fakeWindowFocusService.js'
 import { ExplorerOpenPreviewAction } from '../explorerPreviewActions.js'
 
 vi.mock('../../services/resourcePreview/openResourcePreview.js', () => ({
   openResourcePreviewInGroup: vi.fn(() => true),
 }))
 
-function makeAccessor(): { accessor: ServicesAccessor; activeGroup: object } {
+function makeAccessor(): {
+  accessor: ServicesAccessor
+  activeGroup: object
+  windowFocus: FakeWindowFocusService
+} {
   const activeGroup = { id: 'group' }
+  const windowFocus = new FakeWindowFocusService()
   const byId = new Map<unknown, unknown>([
     [IEditorGroupsService, { _serviceBrand: undefined, activeGroup }],
+    [IWindowFocusService, windowFocus],
   ])
   const accessor = {
     get: (id: unknown) => {
@@ -29,7 +37,7 @@ function makeAccessor(): { accessor: ServicesAccessor; activeGroup: object } {
       return service
     },
   } as unknown as ServicesAccessor
-  return { accessor, activeGroup }
+  return { accessor, activeGroup, windowFocus }
 }
 
 /** The first arg ExplorerContextMenu builds: a `URI`, before it crosses IPC. */
@@ -48,19 +56,17 @@ beforeEach(() => {
 
 describe('ExplorerOpenPreviewAction', () => {
   it('opens the clicked resource preview in the active editor group', () => {
-    const { accessor, activeGroup } = makeAccessor()
+    const { accessor, activeGroup, windowFocus } = makeAccessor()
 
     new ExplorerOpenPreviewAction().run(accessor, explorerArg(md()))
 
     expect(openResourcePreviewInGroup).toHaveBeenCalledTimes(1)
-    const [groups, group, uri] = vi.mocked(openResourcePreviewInGroup).mock.calls[0] as [
-      { activeGroup: object },
-      object,
-      URI,
-    ]
+    const [groups, group, uri, focus] = vi.mocked(openResourcePreviewInGroup).mock
+      .calls[0] as unknown as [{ activeGroup: object }, object, URI, unknown]
     expect(groups.activeGroup).toBe(activeGroup)
     expect(group).toBe(activeGroup)
     expect(uri.path).toBe('/ws/README.md')
+    expect(focus).toBe(windowFocus)
   })
 
   // Explorer args come back from the command service as UriComponents, not URIs.

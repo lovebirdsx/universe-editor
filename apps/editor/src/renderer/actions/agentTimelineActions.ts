@@ -28,6 +28,7 @@ import { subAgentTranscriptToText } from '../services/acp/session/acpSessionCont
 import { AcpSessionEditorInput } from '../services/acp/session/acpSessionEditorInput.js'
 import { readChatContextArg, readContextTarget } from '../services/acp/chatContextTarget.js'
 import { openResourceForRead } from '../services/resourcePreview/openResourcePreview.js'
+import { IWindowFocusService } from '../services/windows/windowFocusService.js'
 import { ensureSideGroup } from '../services/editor/openToSide.js'
 import { toPngBase64 } from '../services/acp/promptImage.js'
 import { findByStickyKey } from '../workbench/agents/stickyScroll.js'
@@ -991,7 +992,7 @@ function openCreatedToolCallFile(accessor: ServicesAccessor, arg: unknown, toSid
   if (path === undefined) return
   const uri = toolCallPathUri(path, folder)
   const group = toSide ? ensureSideGroup(editorGroups) : editorGroups.activeGroup
-  openResourceForRead(editorGroups, group, uri, editorResolver)
+  openResourceForRead(editorGroups, group, uri, editorResolver, accessor.get(IWindowFocusService))
 }
 
 export class OpenAcpToolCallPreviewAction extends Action2 {

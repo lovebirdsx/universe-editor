@@ -36,6 +36,7 @@ import { IAcpAgentRegistry } from '../services/acp/acpAgentRegistry.js'
 import { IAcpChatWidgetService } from '../services/acp/session/acpChatWidgetService.js'
 import { AcpPromptTextInbox } from '../services/acp/session/acpPromptTextInbox.js'
 import { revealSessionEditorTab } from '../services/acp/session/revealSessionEditorTab.js'
+import { IWindowFocusService } from '../services/windows/windowFocusService.js'
 import {
   IAcpSessionService,
   type IAcpCreateSessionOptions,
@@ -53,6 +54,7 @@ export class DeepLinkContribution extends Disposable implements IWorkbenchContri
     @IInstantiationService private readonly _instantiation: IInstantiationService,
     @INotificationService private readonly _notification: INotificationService,
     @IUserSettingsSyncService private readonly _userSettings: IUserSettingsSyncService,
+    @IWindowFocusService private readonly _windowFocus: IWindowFocusService,
   ) {
     super()
     const ipc = (window as { ipc?: IpcBridge }).ipc
@@ -143,6 +145,7 @@ export class DeepLinkContribution extends Disposable implements IWorkbenchContri
       this._instantiation,
       sessionId,
       this._sessions.getById(sessionId),
+      this._windowFocus,
     )
     this._widgets.focusSessionInput(sessionId)
   }

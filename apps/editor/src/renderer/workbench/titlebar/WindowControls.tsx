@@ -3,27 +3,25 @@ import { IHostService, localize, markAsSingleton } from '@universe-editor/platfo
 import { useService } from '../useService.js'
 import styles from './TitleBar.module.css'
 
-export function WindowControls() {
-  const host = useService(IHostService)
-  const [isMaximized, setIsMaximized] = useState(false)
+export interface WindowControlsViewProps {
+  readonly isMaximized: boolean
+  readonly onMinimize: () => void
+  readonly onToggleMaximize: () => void
+  readonly onClose: () => void
+}
 
-  useEffect(() => {
-    let cancelled = false
-    void host.isMaximized().then((v) => {
-      if (!cancelled) setIsMaximized(v)
-    })
-    const sub = markAsSingleton(host.onDidChangeMaximized((v) => setIsMaximized(v)))
-    return () => {
-      cancelled = true
-      sub.dispose()
-    }
-  }, [host])
-
+/** Presentational window buttons shared by the main and auxiliary title bars. */
+export function WindowControlsView({
+  isMaximized,
+  onMinimize,
+  onToggleMaximize,
+  onClose,
+}: WindowControlsViewProps) {
   return (
     <div className={styles['controls']}>
       <button
         className={styles['ctrl-btn']}
-        onClick={() => void host.minimizeWindow()}
+        onClick={onMinimize}
         data-tooltip={localize('windowControls.minimize', 'Minimize')}
         aria-label={localize('windowControls.minimize', 'Minimize')}
       >
@@ -33,7 +31,7 @@ export function WindowControls() {
       </button>
       <button
         className={styles['ctrl-btn']}
-        onClick={() => void host.toggleMaximizeWindow()}
+        onClick={onToggleMaximize}
         data-tooltip={
           isMaximized
             ? localize('windowControls.restore', 'Restore Down')
@@ -62,7 +60,7 @@ export function WindowControls() {
       </button>
       <button
         className={`${styles['ctrl-btn']} ${styles['close']}`}
-        onClick={() => void host.closeWindow()}
+        onClick={onClose}
         data-tooltip={localize('common.close', 'Close')}
         aria-label={localize('common.close', 'Close')}
       >
@@ -71,5 +69,31 @@ export function WindowControls() {
         </svg>
       </button>
     </div>
+  )
+}
+
+export function WindowControls() {
+  const host = useService(IHostService)
+  const [isMaximized, setIsMaximized] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    void host.isMaximized().then((v) => {
+      if (!cancelled) setIsMaximized(v)
+    })
+    const sub = markAsSingleton(host.onDidChangeMaximized((v) => setIsMaximized(v)))
+    return () => {
+      cancelled = true
+      sub.dispose()
+    }
+  }, [host])
+
+  return (
+    <WindowControlsView
+      isMaximized={isMaximized}
+      onMinimize={() => void host.minimizeWindow()}
+      onToggleMaximize={() => void host.toggleMaximizeWindow()}
+      onClose={() => void host.closeWindow()}
+    />
   )
 }

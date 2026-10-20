@@ -11,6 +11,7 @@ import {
   type ISystemNotificationResult,
 } from '@universe-editor/platform'
 import { AgentNotificationContribution } from '../AgentNotificationContribution.js'
+import { FakeWindowFocusService } from '../../services/windows/testing/fakeWindowFocusService.js'
 import type {
   IAcpSessionService,
   IAcpSession,
@@ -92,6 +93,7 @@ function setup(opts?: { enabled?: boolean; clicked?: boolean; workspaceName?: st
     inst,
     widgets,
     workspace,
+    new FakeWindowFocusService(),
   )
 
   return {

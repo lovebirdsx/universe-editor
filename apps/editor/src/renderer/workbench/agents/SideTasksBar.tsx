@@ -28,6 +28,7 @@ import {
 } from '@universe-editor/platform'
 import { CornerUpLeft, GitBranch, TextQuote, Trash2 } from 'lucide-react'
 import { useObservable, useService } from '../useService.js'
+import { IWindowFocusService } from '../../services/windows/windowFocusService.js'
 import {
   IAcpSessionService,
   type IAcpSession,
@@ -232,6 +233,7 @@ export function SideTaskParentBar({ session }: { session: IAcpSession }) {
   const sessions = useService(IAcpSessionService)
   const groups = useService(IEditorGroupsService)
   const inst = useService(IInstantiationService)
+  const windowFocus = useService(IWindowFocusService)
   const entries = useObservable(history.entries)
   const sid = useObservable(session.sessionIdOnAgent) ?? session.id
   const parent = sideTaskParentOf(entries, sid)
@@ -245,7 +247,7 @@ export function SideTaskParentBar({ session }: { session: IAcpSession }) {
       onClick={() => {
         const target = sessionRowTarget(sessions, history, parent.id)
         if (target === undefined) return
-        revealSessionEditor(groups, inst, target, GroupDirection.Left)
+        revealSessionEditor(groups, inst, target, GroupDirection.Left, windowFocus)
       }}
     >
       <CornerUpLeft size={12} strokeWidth={1.75} aria-hidden="true" />

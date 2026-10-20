@@ -36,6 +36,7 @@ import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { HtmlPreviewInput } from '../services/editor/HtmlPreviewInput.js'
 import { openPreviewInGroup, togglePreviewInGroup } from '../services/editor/openPreviewInGroup.js'
 import { ensureSideGroup } from '../services/editor/openToSide.js'
+import { IWindowFocusService } from '../services/windows/windowFocusService.js'
 
 const HTML_PRECONDITION = 'activeEditorLanguageId == html'
 const HTML_PREVIEW_PRECONDITION = `activeEditorTypeId == '${HtmlPreviewInput.TYPE_ID}'`
@@ -46,6 +47,7 @@ const HTML_PREVIEW_MENU_WHEN = `activeEditorType == '${HtmlPreviewInput.TYPE_ID}
 
 function openPreview(accessor: ServicesAccessor, toSide: boolean): void {
   const groups = accessor.get(IEditorGroupsService)
+  const windowFocus = accessor.get(IWindowFocusService)
   const source = groups.activeGroup
   const active = source.activeEditor
   if (!(active instanceof FileEditorInput)) return
@@ -57,12 +59,13 @@ function openPreview(accessor: ServicesAccessor, toSide: boolean): void {
     // pinned preview.
     openPreviewInGroup(groups, target, new HtmlPreviewInput(active.resource), {
       pinned: source.isPinned(active) || active.isDirty,
+      windowFocus,
     })
     return
   }
 
   // Ctrl+Shift+V: replace the source tab with the preview tab in the same group.
-  togglePreviewInGroup(groups, source, new HtmlPreviewInput(active), active)
+  togglePreviewInGroup(groups, source, new HtmlPreviewInput(active), active, windowFocus)
 }
 
 export class OpenHtmlPreviewAction extends Action2 {
@@ -119,6 +122,7 @@ export class OpenHtmlSourceAction extends Action2 {
   override run(accessor: ServicesAccessor): void {
     const groups = accessor.get(IEditorGroupsService)
     const inst = accessor.get(IInstantiationService)
+    const windowFocus = accessor.get(IWindowFocusService)
     const group = groups.activeGroup
     const active = group.activeEditor
     if (!(active instanceof HtmlPreviewInput)) return
@@ -145,6 +149,7 @@ export class OpenHtmlSourceAction extends Action2 {
       if (found) {
         groups.activateGroup(g)
         g.setActive(found)
+        windowFocus.focusGroup(g)
         return
       }
     }

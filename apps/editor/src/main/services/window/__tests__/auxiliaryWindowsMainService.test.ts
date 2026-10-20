@@ -60,6 +60,7 @@ class FakeWindow extends EventEmitter {
   destroyed = false
   visible = false
   focused = false
+  minimized = false
   maximized = false
   fullscreen = false
   menu: unknown = 'default'
@@ -123,16 +124,30 @@ class FakeWindow extends EventEmitter {
     return this.maximized
   }
 
+  isMinimized(): boolean {
+    return this.minimized
+  }
+
   isFullScreen(): boolean {
     return this.fullscreen
   }
 
+  minimize(): void {
+    this.minimized = true
+  }
+
+  restore(): void {
+    this.minimized = false
+  }
+
   maximize(): void {
     this.maximized = true
+    this.emit('maximize')
   }
 
   unmaximize(): void {
     this.maximized = false
+    this.emit('unmaximize')
   }
 
   setFullScreen(value: boolean): void {
@@ -157,12 +172,13 @@ type Scoped = InstanceType<typeof WindowScopedAuxiliaryWindowsService>
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
 
-function createService(silentE2E = false): Service {
+function createService(silentE2E = false, platform: NodeJS.Platform = 'linux'): Service {
   return new AuxiliaryWindowsMainService({
     preloadPath: '/preload/auxiliary.cjs',
     silentE2E,
     logService: { createLogger: () => logger } as never,
     appName: 'Universe Editor',
+    platform,
   })
 }
 
@@ -234,9 +250,12 @@ describe('AuxiliaryWindowsMainService', () => {
       width: 1920,
       height: 1040,
       show: false,
-      frame: true,
+      frame: false,
       title: 'Aux',
     })
+    // The renderer draws the title bar so it can follow the theme; a native
+    // frame would be OS-colored.
+    expect(options).not.toHaveProperty('titleBarStyle')
     expect(options?.webPreferences).toMatchObject({
       preload: '/preload/auxiliary.cjs',
       contextIsolation: true,
@@ -252,6 +271,21 @@ describe('AuxiliaryWindowsMainService', () => {
       service.adoptCreatedWindow(parent as never, child as never, details(prepared.frameName)),
     ).toBe(true)
     expect(child.webContents.openHandler?.()).toEqual({ action: 'deny' })
+  })
+
+  it('keeps the traffic lights on macOS instead of using a native frame', () => {
+    const mac = createService(false, 'darwin')
+    const parent = makeParent(mac)
+    const prepared = mac.prepareOpen(parent.id)
+    const response = mac.handleWindowOpen(parent as never, 'about:blank', prepared.frameName)
+    const options = response?.overrideBrowserWindowOptions
+
+    expect(options).toMatchObject({
+      titleBarStyle: 'hidden',
+      trafficLightPosition: { x: 8, y: 8 },
+    })
+    expect(options).not.toHaveProperty('frame')
+    mac.dispose()
   })
 
   it('denies about:blank without a token and leaves other URLs to the caller', () => {
@@ -410,6 +444,38 @@ describe('AuxiliaryWindowsMainService', () => {
     expect(child.isVisible()).toBe(true)
     expect(child.isFocused()).toBe(false)
     silent.dispose()
+  })
+
+  it('forwards minimize and maximize toggles, repainting state immediately', async () => {
+    const parent = makeParent(service)
+    const scoped = new WindowScopedAuxiliaryWindowsService(service, parent.id)
+    const maximizedStates: boolean[] = []
+    scoped.onDidChangeWindowState((state) => maximizedStates.push(state.geometry.isMaximized))
+    const { token, child } = createWindow(service, parent)
+
+    await scoped.minimizeWindow(token)
+    expect(child.isMinimized()).toBe(true)
+
+    await scoped.toggleMaximizeWindow(token)
+    expect(child.isMaximized()).toBe(true)
+    expect(maximizedStates.at(-1)).toBe(true)
+
+    await scoped.toggleMaximizeWindow(token)
+    expect(child.isMaximized()).toBe(false)
+    expect(maximizedStates.at(-1)).toBe(false)
+  })
+
+  it('restores a minimized auxiliary window before focusing it', async () => {
+    const parent = makeParent(service)
+    const scoped = new WindowScopedAuxiliaryWindowsService(service, parent.id)
+    const { token, child } = createWindow(service, parent)
+    child.minimize()
+    expect(child.isMinimized()).toBe(true)
+
+    await scoped.focusWindow(token)
+
+    expect(child.isMinimized()).toBe(false)
+    expect(child.isFocused()).toBe(true)
   })
 
   it('follows a focused auxiliary window when choosing a native dialog parent', () => {

@@ -40,6 +40,7 @@ import { mcpServerToTarget, mcpServerTransport } from '../acpMcpServers.js'
 import { IAcpSessionService } from '../session/acpSessionService.js'
 import type { AcpToolCall, IAcpSession } from '../session/acpSessionModel.js'
 import { revealMcpDebugEditor } from './mcpDebugEditorInput.js'
+import { IWindowFocusService } from '../../windows/windowFocusService.js'
 import {
   buildConfirmDetail,
   buildParamsSkeleton,
@@ -115,6 +116,7 @@ export class McpDebugService extends Disposable implements IMcpDebugService {
     @INotificationService private readonly _notifications: INotificationService,
     @IEditorGroupsService private readonly _groups: IEditorGroupsService,
     @IInstantiationService private readonly _inst: IInstantiationService,
+    @IWindowFocusService private readonly _windowFocus: IWindowFocusService,
     @ILoggerService loggerService: ILoggerService,
   ) {
     super()
@@ -219,7 +221,7 @@ export class McpDebugService extends Disposable implements IMcpDebugService {
         'Calls made here go straight to the MCP server and skip the agent’s permission prompts.',
       ),
     })
-    const input = revealMcpDebugEditor(this._groups, this._inst, key, serverName)
+    const input = revealMcpDebugEditor(this._groups, this._inst, key, serverName, this._windowFocus)
     // State lives exactly as long as the tab does. `clear()` first: re-opening the
     // same debugger from another card hands back the same input, and its old
     // subscription would otherwise fire alongside the new one.

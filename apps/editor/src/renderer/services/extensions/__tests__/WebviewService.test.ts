@@ -18,6 +18,7 @@ import { WebviewService } from '../WebviewService.js'
 import { WebviewPanelInput } from '../../editor/WebviewPanelInput.js'
 import { EditorGroupsService } from '../../editor/EditorGroupsService.js'
 import { CustomEditorInput } from '../../editor/CustomEditorInput.js'
+import { FakeWindowFocusService } from '../../windows/testing/fakeWindowFocusService.js'
 
 function fakeExtHost(): IExtHostWebviews & {
   resolves: Array<{ providerHandle: number; panelHandle: number; viewType: string }>
@@ -390,6 +391,43 @@ describe('WebviewService', () => {
 
     void mainThread.$createWebviewPanel(-2, 'cat.view', 'Bg', {}, { preserveFocus: true })
     expect(activations).toEqual([false])
+  })
+
+  it('createWebviewPanel requests window focus unless preserveFocus is set', () => {
+    const svc = new WebviewService()
+    svc.setExtHost('local', fakeExtHost())
+    const mainThread = svc.createMainThread('local')
+    const group = fakeGroup()
+    const windowFocus = new FakeWindowFocusService()
+    svc.setEditorGroupsAccessor(() => fakeEditorGroups(group))
+    svc.setWindowFocusAccessor(() => windowFocus)
+
+    void mainThread.$createWebviewPanel(-1, 'cat.view', 'Foreground', {}, undefined)
+    expect(windowFocus.focusedGroups).toEqual([group])
+
+    const backgroundFocus = new FakeWindowFocusService()
+    svc.setWindowFocusAccessor(() => backgroundFocus)
+    void mainThread.$createWebviewPanel(-2, 'cat.view', 'Background', {}, { preserveFocus: true })
+    expect(backgroundFocus.focusedGroups).toEqual([])
+  })
+
+  it('$revealWebviewPanel requests window focus unless preserveFocus is set', () => {
+    const svc = new WebviewService()
+    svc.setExtHost('local', fakeExtHost())
+    const mainThread = svc.createMainThread('local')
+    const group = fakeGroup()
+    const windowFocus = new FakeWindowFocusService()
+    svc.setEditorGroupsAccessor(() => fakeEditorGroups(group))
+    svc.setWindowFocusAccessor(() => windowFocus)
+    void mainThread.$createWebviewPanel(-1, 'cat.view', 'Cat', {}, undefined)
+    expect(windowFocus.focusedGroups).toEqual([group])
+
+    windowFocus.focusedGroups.length = 0
+    void mainThread.$revealWebviewPanel(-1, true)
+    expect(windowFocus.focusedGroups).toEqual([])
+
+    void mainThread.$revealWebviewPanel(-1)
+    expect(windowFocus.focusedGroups).toEqual([group])
   })
 
   it('ignores a duplicate createWebviewPanel for the same handle', () => {

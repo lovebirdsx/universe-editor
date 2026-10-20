@@ -19,6 +19,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { EditorInput, IEditorGroup, IEditorGroupsService } from '@universe-editor/platform'
+import type { IWindowFocusService } from '../windows/windowFocusService.js'
 import type { FileEditorInput } from './FileEditorInput.js'
 import { HtmlPreviewInput } from './HtmlPreviewInput.js'
 import { MarkdownPreviewInput } from './MarkdownPreviewInput.js'
@@ -50,9 +51,11 @@ function focusExistingPreview(
   groups: IEditorGroupsService,
   found: { group: IEditorGroup; editor: EditorInput },
   preview: SourcePreviewInput,
+  windowFocus?: IWindowFocusService,
 ): void {
   groups.activateGroup(found.group)
   found.group.setActive(found.editor)
+  windowFocus?.focusGroup(found.group)
   // The caller built `preview` speculatively; dropping it on the floor would
   // leak it (and the source it may hold) as a parentless disposable. A toggle-
   // built instance has not called adoptSource yet, so disposing it cannot
@@ -70,11 +73,15 @@ export function openPreviewInGroup(
   groups: IEditorGroupsService,
   group: IEditorGroup,
   preview: SourcePreviewInput,
-  opts?: { pinned?: boolean; index?: number },
+  opts?: {
+    pinned?: boolean
+    index?: number
+    windowFocus?: IWindowFocusService
+  },
 ): void {
   const existing = findExistingPreview(groups, group, preview)
   if (existing) {
-    focusExistingPreview(groups, existing, preview)
+    focusExistingPreview(groups, existing, preview, opts?.windowFocus)
     return
   }
   group.openEditor(preview, {
@@ -86,6 +93,7 @@ export function openPreviewInGroup(
   // group may not be the active one, and without this the preview would land
   // in a background group, invisible.
   if (group !== groups.activeGroup) groups.activateGroup(group)
+  opts?.windowFocus?.focusGroup(group)
 }
 
 /**
@@ -101,10 +109,11 @@ export function togglePreviewInGroup(
   group: IEditorGroup,
   preview: SourcePreviewInput,
   source: FileEditorInput,
+  windowFocus?: IWindowFocusService,
 ): void {
   const existing = findExistingPreview(groups, group, preview)
   if (existing) {
-    focusExistingPreview(groups, existing, preview)
+    focusExistingPreview(groups, existing, preview, windowFocus)
     return
   }
 

@@ -19,6 +19,7 @@ import {
   type IEditorGroup,
   type IEditorGroupsService,
 } from '@universe-editor/platform'
+import type { IWindowFocusService } from '../../windows/windowFocusService.js'
 
 export class McpDebugEditorInput extends EditorInput {
   static readonly TYPE_ID = 'mcp.debug'
@@ -79,16 +80,19 @@ export function revealMcpDebugEditor(
   inst: IInstantiationService,
   key: string,
   serverName: string,
+  windowFocus?: IWindowFocusService,
 ): McpDebugEditorInput {
   const found = findMcpDebugEditor(groups, key)
   if (found) {
     groups.activateGroup(found.group)
     found.group.setActive(found.editor)
+    windowFocus?.focusGroup(found.group)
     return found.editor
   }
   const input = inst.createInstance(McpDebugEditorInput, key, serverName)
   const target = groups.activeGroupForOpen
   target.openEditor(input, { activate: true, pinned: true })
   if (target !== groups.activeGroup) groups.activateGroup(target)
+  windowFocus?.focusGroup(target)
   return input
 }

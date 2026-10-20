@@ -81,7 +81,9 @@ describe('MainThreadOutput', () => {
     // when it was hidden. show() must also reveal the panel.
     expect(views.openViewContainer).toHaveBeenCalled()
     expect(layout.setVisible).toHaveBeenCalledWith(PartId.Panel, true)
-    expect(layout.focusView).toHaveBeenCalledWith('workbench.view.output.main')
+    expect(layout.focusView).toHaveBeenCalledWith('workbench.view.output.main', {
+      source: 'restore',
+    })
   })
 
   it('$showOutputChannel on an unknown handle does nothing', async () => {

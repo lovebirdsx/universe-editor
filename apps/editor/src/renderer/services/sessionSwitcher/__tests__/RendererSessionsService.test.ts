@@ -15,6 +15,7 @@ import {
   type IInstantiationService,
 } from '@universe-editor/platform'
 import { RendererSessionsService } from '../RendererSessionsService.js'
+import { FakeWindowFocusService } from '../../windows/testing/fakeWindowFocusService.js'
 import { EditorGroupsService } from '../../editor/EditorGroupsService.js'
 import {
   IAcpSessionHistoryService,
@@ -146,6 +147,7 @@ function makeHarness(): Harness {
     groups,
     instantiation,
     widgets as unknown as IAcpChatWidgetServiceType,
+    new FakeWindowFocusService(),
   )
   return { svc, sessions, groups, widgets, instantiation }
 }

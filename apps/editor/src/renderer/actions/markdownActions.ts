@@ -37,6 +37,7 @@ import { MarkdownPreviewRegistry } from '../services/editor/MarkdownPreviewRegis
 import { MarkdownPreviewViewStateCache } from '../services/editor/MarkdownPreviewViewStateCache.js'
 import { openPreviewInGroup, togglePreviewInGroup } from '../services/editor/openPreviewInGroup.js'
 import { ensureSideGroup } from '../services/editor/openToSide.js'
+import { IWindowFocusService } from '../services/windows/windowFocusService.js'
 import { MonacoModelRegistry } from '../workbench/editor/monaco/MonacoModelRegistry.js'
 import type { IMarkdownPreviewController } from '../services/editor/MarkdownPreviewRegistry.js'
 
@@ -57,6 +58,7 @@ const MARKDOWN_READER_MENU_WHEN = `activeEditorType == '${MarkdownPreviewInput.T
 
 function openPreview(accessor: ServicesAccessor, toSide: boolean): void {
   const groups = accessor.get(IEditorGroupsService)
+  const windowFocus = accessor.get(IWindowFocusService)
   const source = groups.activeGroup
   const active = source.activeEditor
   if (!(active instanceof FileEditorInput)) return
@@ -85,12 +87,13 @@ function openPreview(accessor: ServicesAccessor, toSide: boolean): void {
     // pinned preview.
     openPreviewInGroup(groups, target, new MarkdownPreviewInput(active.resource), {
       pinned: source.isPinned(active) || active.isDirty,
+      windowFocus,
     })
     return
   }
 
   // Ctrl+Shift+V: replace the source tab with the preview tab in the same group.
-  togglePreviewInGroup(groups, source, new MarkdownPreviewInput(active), active)
+  togglePreviewInGroup(groups, source, new MarkdownPreviewInput(active), active, windowFocus)
 }
 
 export class OpenMarkdownPreviewAction extends Action2 {
@@ -150,6 +153,7 @@ export class OpenMarkdownSourceAction extends Action2 {
   }
   override run(accessor: ServicesAccessor): void {
     const groups = accessor.get(IEditorGroupsService)
+    const windowFocus = accessor.get(IWindowFocusService)
     const group = groups.activeGroup
     const active = group.activeEditor
     if (!(active instanceof MarkdownPreviewInput)) return
@@ -198,6 +202,7 @@ export class OpenMarkdownSourceAction extends Action2 {
         // reveal request — activating the existing tab must not jump it.
         groups.activateGroup(g)
         g.setActive(found)
+        windowFocus.focusGroup(g)
         return
       }
     }

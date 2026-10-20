@@ -14,6 +14,7 @@ import { IEditorGroupsService, localize, type URI } from '@universe-editor/platf
 import { useService } from '../useService.js'
 import { previewLanguageForResource } from '../../services/resourcePreview/resourcePreviewSupport.js'
 import { openResourcePreviewInGroup } from '../../services/resourcePreview/openResourcePreview.js'
+import { IWindowFocusService } from '../../services/windows/windowFocusService.js'
 import styles from './ResourcePreviewButton.module.css'
 
 const TITLE = localize('resourcePreview.openPreview', 'Open Preview')
@@ -27,6 +28,7 @@ export const ResourcePreviewButton = memo(function ResourcePreviewButton({
   readonly testId?: string
 }) {
   const groups = useService(IEditorGroupsService)
+  const windowFocus = useService(IWindowFocusService)
   if (previewLanguageForResource(resource) === undefined) return null
   return (
     <button
@@ -37,7 +39,7 @@ export const ResourcePreviewButton = memo(function ResourcePreviewButton({
       {...(testId !== undefined ? { 'data-testid': testId } : {})}
       onClick={(e) => {
         e.stopPropagation()
-        openResourcePreviewInGroup(groups, groups.activeGroup, resource)
+        openResourcePreviewInGroup(groups, groups.activeGroup, resource, windowFocus)
       }}
     >
       <Eye size={16} strokeWidth={1.6} />

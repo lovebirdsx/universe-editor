@@ -38,6 +38,7 @@ import {
   waitForFileEditor,
 } from '../services/editor/revealEditorPosition.js'
 import { isImageResource } from '../services/editor/imageFileTypes.js'
+import { IWindowFocusService } from '../services/windows/windowFocusService.js'
 
 export class EditorOpenerContribution extends Disposable implements IWorkbenchContribution {
   constructor(
@@ -47,6 +48,7 @@ export class EditorOpenerContribution extends Disposable implements IWorkbenchCo
     @IFileService private readonly _fileService: IFileService,
     @IWindowsService private readonly _windowsService: IWindowsService,
     @IEditorResolverService private readonly _editorResolver: IEditorResolverService,
+    @IWindowFocusService private readonly _windowFocus: IWindowFocusService,
   ) {
     super()
     void MonacoLoader.registerCodeEditorOpenHandler((input, source) =>
@@ -110,12 +112,14 @@ export class EditorOpenerContribution extends Disposable implements IWorkbenchCo
     if (existing) {
       this._groupsService.activateGroup(existing.group)
       existing.group.setActive(existing.editor)
+      this._windowFocus.focusGroup(existing.group)
       return existing.editor
     }
     const input = this._instantiation.createInstance(FileEditorInput, uri)
     const target = this._groupsService.activeGroupForOpen
     target.openEditor(input, { activate: true, pinned: true })
     if (target !== this._groupsService.activeGroup) this._groupsService.activateGroup(target)
+    this._windowFocus.focusGroup(target)
     return input
   }
 }

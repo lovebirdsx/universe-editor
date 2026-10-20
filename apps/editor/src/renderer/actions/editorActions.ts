@@ -24,14 +24,15 @@ import {
   type IQuickPickItem,
   IViewDescriptorService,
   MenuId,
-  PartId,
   localize,
   localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { closeEditorWithConfirm } from '../services/editor/closeEditorWithConfirm.js'
 import { cloneEditorInputForSplit } from '../services/editor/cloneEditorInput.js'
+import { activateGroupAndFocus } from '../services/editor/activateGroupAndFocus.js'
 import { focusEditorInput } from '../services/editor/editorFocus.js'
+import { IWindowFocusService } from '../services/windows/windowFocusService.js'
 import { IClosedEditorsService } from '../services/editor/ClosedEditorsService.js'
 import { HtmlPreviewInput } from '../services/editor/HtmlPreviewInput.js'
 import { MarkdownPreviewInput } from '../services/editor/MarkdownPreviewInput.js'
@@ -49,20 +50,26 @@ import { createViewPickItem } from '../services/quickInput/viewQuickPick.js'
 import { resolveTargetEditor } from './editorActionHelpers.js'
 
 // ---------------------------------------------------------------------------
-// Shared helper: activate a group and transfer DOM focus to its active editor
+// Shared helper: activate a group, move window focus, transfer DOM focus
 // ---------------------------------------------------------------------------
 
-function activateGroupAndFocus(
+/** Accessor-bound adapter for the synchronous action paths in this file. */
+function focusGroupAndEditor(
+  accessor: ServicesAccessor,
   groups: IEditorGroupsService,
   group: IEditorGroup,
-  contextKeyService: IContextKeyService,
-  focusStack?: IFocusStackService,
+  editor?: EditorInput,
 ): void {
-  groups.activateGroup(group)
-  focusStack?.push({ partId: PartId.EditorArea, groupId: group.id })
-  const ae = group.activeEditor
-  if (!ae) return
-  focusEditorInput(ae, contextKeyService, group.id)
+  activateGroupAndFocus(
+    group,
+    {
+      groups,
+      contextKeyService: accessor.get(IContextKeyService),
+      windowFocus: accessor.get(IWindowFocusService),
+      focusStack: accessor.get(IFocusStackService),
+    },
+    editor,
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -134,13 +141,7 @@ function activateNextNonStickyEditor(accessor: ServicesAccessor, group: IEditorG
     if (g === group) continue
     const candidate = g.getNextNonStickyMruEditor()
     if (candidate) {
-      activateGroupAndFocus(
-        groups,
-        g,
-        accessor.get(IContextKeyService),
-        accessor.get(IFocusStackService),
-      )
-      g.setActive(candidate)
+      focusGroupAndEditor(accessor, groups, g, candidate)
       return
     }
   }
@@ -546,6 +547,7 @@ async function runQuickOpenRecentEditor(
   const focusStack = accessor.get(IFocusStackService)
   const dialogService = accessor.get(IDialogService)
   const contextKeyService = accessor.get(IContextKeyService)
+  const windowFocus = accessor.get(IWindowFocusService)
 
   const items = buildRecentTargetPickItems(recentService, viewDescriptors)
   if (items.length <= 1) return
@@ -579,13 +581,17 @@ async function runQuickOpenRecentEditor(
   if (target.kind === 'view') {
     // focusView owns the whole reveal: active container, hosting part, and the
     // view's own collapsed state — no need to expand anything here first.
+    // Views live in the main window, so bring it forward before focusing.
+    windowFocus.focusMainWindow()
     await layoutService.focusView(target.viewId, { source: 'command' })
     return
   }
 
-  groups.activateGroup(target.group)
-  target.group.setActive(target.editor)
-  activateGroupAndFocus(groups, target.group, contextKeyService, focusStack)
+  activateGroupAndFocus(
+    target.group,
+    { groups, contextKeyService, windowFocus, focusStack },
+    target.editor,
+  )
 }
 
 export class QuickOpenRecentEditorAction extends Action2 {
@@ -677,12 +683,7 @@ function splitInDirection(accessor: ServicesAccessor, direction: GroupDirection)
   groups.copyEditor(clone, newGroup, {
     sticky: source.isSticky(active),
   })
-  activateGroupAndFocus(
-    groups,
-    newGroup,
-    accessor.get(IContextKeyService),
-    accessor.get(IFocusStackService),
-  )
+  focusGroupAndEditor(accessor, groups, newGroup)
 }
 
 export class SplitEditorRightAction extends Action2 {
@@ -812,13 +813,7 @@ export class FocusNextGroupAction extends Action2 {
   override run(accessor: ServicesAccessor): void {
     const groups = accessor.get(IEditorGroupsService)
     const next = groups.findGroup({ location: GroupLocation.Next }, undefined, true)
-    if (next)
-      activateGroupAndFocus(
-        groups,
-        next,
-        accessor.get(IContextKeyService),
-        accessor.get(IFocusStackService),
-      )
+    if (next) focusGroupAndEditor(accessor, groups, next)
   }
 }
 
@@ -837,13 +832,7 @@ export class FocusPreviousGroupAction extends Action2 {
   override run(accessor: ServicesAccessor): void {
     const groups = accessor.get(IEditorGroupsService)
     const prev = groups.findGroup({ location: GroupLocation.Previous }, undefined, true)
-    if (prev)
-      activateGroupAndFocus(
-        groups,
-        prev,
-        accessor.get(IContextKeyService),
-        accessor.get(IFocusStackService),
-      )
+    if (prev) focusGroupAndEditor(accessor, groups, prev)
   }
 }
 
@@ -861,13 +850,7 @@ export class FocusFirstGroupAction extends Action2 {
   override run(accessor: ServicesAccessor): void {
     const groups = accessor.get(IEditorGroupsService)
     const first = groups.findGroup({ location: GroupLocation.First })
-    if (first)
-      activateGroupAndFocus(
-        groups,
-        first,
-        accessor.get(IContextKeyService),
-        accessor.get(IFocusStackService),
-      )
+    if (first) focusGroupAndEditor(accessor, groups, first)
   }
 }
 
@@ -885,13 +868,7 @@ export class FocusLastGroupAction extends Action2 {
   override run(accessor: ServicesAccessor): void {
     const groups = accessor.get(IEditorGroupsService)
     const last = groups.findGroup({ location: GroupLocation.Last })
-    if (last)
-      activateGroupAndFocus(
-        groups,
-        last,
-        accessor.get(IContextKeyService),
-        accessor.get(IFocusStackService),
-      )
+    if (last) focusGroupAndEditor(accessor, groups, last)
   }
 }
 
@@ -937,13 +914,7 @@ export class FocusLeftGroupAction extends Action2 {
   override run(accessor: ServicesAccessor): void {
     const groups = accessor.get(IEditorGroupsService)
     const target = groups.findGroup({ direction: GroupDirection.Left })
-    if (target)
-      activateGroupAndFocus(
-        groups,
-        target,
-        accessor.get(IContextKeyService),
-        accessor.get(IFocusStackService),
-      )
+    if (target) focusGroupAndEditor(accessor, groups, target)
   }
 }
 
@@ -962,13 +933,7 @@ export class FocusRightGroupAction extends Action2 {
   override run(accessor: ServicesAccessor): void {
     const groups = accessor.get(IEditorGroupsService)
     const target = groups.findGroup({ direction: GroupDirection.Right })
-    if (target)
-      activateGroupAndFocus(
-        groups,
-        target,
-        accessor.get(IContextKeyService),
-        accessor.get(IFocusStackService),
-      )
+    if (target) focusGroupAndEditor(accessor, groups, target)
   }
 }
 
@@ -987,13 +952,7 @@ export class FocusAboveGroupAction extends Action2 {
   override run(accessor: ServicesAccessor): void {
     const groups = accessor.get(IEditorGroupsService)
     const target = groups.findGroup({ direction: GroupDirection.Up })
-    if (target)
-      activateGroupAndFocus(
-        groups,
-        target,
-        accessor.get(IContextKeyService),
-        accessor.get(IFocusStackService),
-      )
+    if (target) focusGroupAndEditor(accessor, groups, target)
   }
 }
 
@@ -1012,13 +971,7 @@ export class FocusBelowGroupAction extends Action2 {
   override run(accessor: ServicesAccessor): void {
     const groups = accessor.get(IEditorGroupsService)
     const target = groups.findGroup({ direction: GroupDirection.Down })
-    if (target)
-      activateGroupAndFocus(
-        groups,
-        target,
-        accessor.get(IContextKeyService),
-        accessor.get(IFocusStackService),
-      )
+    if (target) focusGroupAndEditor(accessor, groups, target)
   }
 }
 
@@ -1034,12 +987,7 @@ function moveEditorInDirection(accessor: ServicesAccessor, direction: GroupDirec
   let target = groups.findGroup({ direction }, source)
   if (!target) target = groups.addGroup(source, direction)
   groups.moveEditor(editor, target, source)
-  activateGroupAndFocus(
-    groups,
-    target,
-    accessor.get(IContextKeyService),
-    accessor.get(IFocusStackService),
-  )
+  focusGroupAndEditor(accessor, groups, target)
 }
 
 function moveEditorByLocation(
@@ -1054,12 +1002,7 @@ function moveEditorByLocation(
   const target = groups.findGroup({ location }, source, wrap)
   if (!target || target === source) return
   groups.moveEditor(editor, target, source)
-  activateGroupAndFocus(
-    groups,
-    target,
-    accessor.get(IContextKeyService),
-    accessor.get(IFocusStackService),
-  )
+  focusGroupAndEditor(accessor, groups, target)
 }
 
 export class MoveEditorToLeftGroupAction extends Action2 {
@@ -1186,16 +1129,14 @@ export class ReopenClosedEditorAction extends Action2 {
       // file open elsewhere wins — focus it instead of duplicating.
       // openPreviewInGroup activates the owning group itself (which may differ
       // from `group`), so don't re-activate here.
-      openPreviewInGroup(groups, group, input, { pinned: true })
+      openPreviewInGroup(groups, group, input, {
+        pinned: true,
+        windowFocus: accessor.get(IWindowFocusService),
+      })
       return
     }
     group.openEditor(input, { activate: true, pinned: true })
-    activateGroupAndFocus(
-      groups,
-      group,
-      accessor.get(IContextKeyService),
-      accessor.get(IFocusStackService),
-    )
+    focusGroupAndEditor(accessor, groups, group, input)
   }
 }
 

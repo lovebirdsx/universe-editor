@@ -26,6 +26,7 @@ import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
 import { revealEditorInGroups } from '../services/editor/revealEditorInGroups.js'
 import { AiSettingsEditorInput } from '../services/editor/AiSettingsEditorInput.js'
+import { IWindowFocusService } from '../services/windows/windowFocusService.js'
 import { buildModelPickItems } from './aiModelPickItems.js'
 
 const CATEGORY = localize2('command.category.ai', 'AI')
@@ -82,7 +83,14 @@ export class ManageModelsAction extends Action2 {
   }
   override run(accessor: ServicesAccessor): void {
     const groups = accessor.get(IEditorGroupsService)
-    if (revealEditorInGroups(groups, (e) => e instanceof AiSettingsEditorInput)) return
+    if (
+      revealEditorInGroups(
+        groups,
+        (e) => e instanceof AiSettingsEditorInput,
+        accessor.get(IWindowFocusService),
+      )
+    )
+      return
     openInLockAwareGroup(groups, new AiSettingsEditorInput())
   }
 }

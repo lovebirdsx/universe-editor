@@ -28,6 +28,7 @@ import { ILogFilesService, type LogFileDescriptor } from '../../shared/ipc/servi
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
 import { OUTPUT_VIEW_ID, revealOutputPanel } from '../services/output/revealOutputPanel.js'
+import { IWindowFocusService } from '../services/windows/windowFocusService.js'
 import { sortOutputChannelNames } from '../services/output/outputChannelSort.js'
 import { IOutputModelService } from '../services/output/OutputModelService.js'
 
@@ -264,6 +265,8 @@ export class OpenActiveLogFileAction extends Action2 {
     const outputService = accessor.get(IOutputService)
     const groups = accessor.get(IEditorGroupsService)
     const instantiation = accessor.get(IInstantiationService)
+    const uriIdentity = accessor.get(IUriIdentityService)
+    const windowFocus = accessor.get(IWindowFocusService)
     const currentName = activeLogChannelName(outputService)
     if (!currentName) return
     const descriptors = await logFilesService.listLogFiles()
@@ -273,7 +276,8 @@ export class OpenActiveLogFileAction extends Action2 {
       logFilesService,
       groups,
       instantiation,
-      accessor.get(IUriIdentityService),
+      uriIdentity,
+      windowFocus,
       descriptor,
     )
   }
@@ -296,6 +300,8 @@ export class OpenLogFileAction extends Action2 {
     const quickInputService = accessor.get(IQuickInputService)
     const groups = accessor.get(IEditorGroupsService)
     const instantiation = accessor.get(IInstantiationService)
+    const uriIdentity = accessor.get(IUriIdentityService)
+    const windowFocus = accessor.get(IWindowFocusService)
     const descriptors = await logFilesService.listLogFiles()
     if (descriptors.length === 0) return
     const descriptor = await pickLogFileDescriptor(
@@ -309,7 +315,8 @@ export class OpenLogFileAction extends Action2 {
       logFilesService,
       groups,
       instantiation,
-      accessor.get(IUriIdentityService),
+      uriIdentity,
+      windowFocus,
       descriptor,
     )
   }
@@ -320,6 +327,7 @@ async function openLogDescriptorInEditor(
   groups: IEditorGroupsService,
   instantiation: IInstantiationService,
   uriIdentity: IUriIdentityService,
+  windowFocus: IWindowFocusService,
   descriptor: LogFileDescriptor,
 ): Promise<void> {
   const fsPath = await logFilesService.resolveLogPath(descriptor.id)
@@ -330,6 +338,7 @@ async function openLogDescriptorInEditor(
       if (editor instanceof FileEditorInput && uriIdentity.isEqual(editor.resource, uri)) {
         groups.activateGroup(group)
         group.setActive(editor)
+        windowFocus.focusGroup(group)
         return
       }
     }
@@ -406,7 +415,7 @@ export class ToggleOutputAction extends Action2 {
       // Focus the Output view itself (its registered focusable is the Monaco
       // editor), not just the panel container — otherwise arrow keys / text
       // selection stay dead until the user clicks into the log.
-      void layout.focusView(OUTPUT_VIEW_ID)
+      void layout.focusView(OUTPUT_VIEW_ID, { source: 'command' })
     }
   }
 }

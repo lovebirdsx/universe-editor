@@ -34,6 +34,7 @@ import {
   isResidentLive,
 } from '../services/acp/session/acpSessionStatus.js'
 import { revealSessionChat } from '../services/acp/session/revealSessionChat.js'
+import { IWindowFocusService } from '../services/windows/windowFocusService.js'
 import { sessionDirectoryName } from './_agentShared.js'
 
 // Services revealChat / resolveExistingChatTarget need, snapshotted while the
@@ -44,6 +45,7 @@ export interface RevealServices {
   readonly widgets: IAcpChatWidgetService
   readonly groups: IEditorGroupsService
   readonly inst: IInstantiationService
+  readonly windowFocus?: IWindowFocusService
 }
 
 export function captureRevealServices(accessor: ServicesAccessor): RevealServices {
@@ -53,6 +55,7 @@ export function captureRevealServices(accessor: ServicesAccessor): RevealService
     widgets: accessor.get(IAcpChatWidgetService),
     groups: accessor.get(IEditorGroupsService),
     inst: accessor.get(IInstantiationService),
+    windowFocus: accessor.get(IWindowFocusService),
   }
 }
 
@@ -126,7 +129,16 @@ export async function resolveActiveOrNewSession(services: RevealServices) {
 // the freshly-attached chips and can keep typing. Focus is best-effort (the
 // widget may still be mounting; the inbox drain covers that case).
 export async function revealChat(services: RevealServices, sessionId: string): Promise<void> {
-  revealSessionChat(services, sessionId, services.sessions.getById(sessionId))
+  revealSessionChat(
+    {
+      groups: services.groups,
+      inst: services.inst,
+      widgets: services.widgets,
+      ...(services.windowFocus ? { windowFocus: services.windowFocus } : {}),
+    },
+    sessionId,
+    services.sessions.getById(sessionId),
+  )
 }
 
 interface ChatTargetPickItem extends IQuickPickItem {

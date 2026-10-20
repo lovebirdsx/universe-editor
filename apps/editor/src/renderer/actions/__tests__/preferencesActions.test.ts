@@ -28,10 +28,13 @@ import { SettingsEditorInput } from '../../services/editor/SettingsEditorInput.j
 import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
 import { consumePendingKeybindingsSearchQuery } from '../../workbench/preferences/preferencesFocus.js'
 import { DISPLAY_LANGUAGE_SETTING_KEY } from '../../../shared/i18n/availableLocales.js'
+import { IWindowFocusService } from '../../services/windows/windowFocusService.js'
+import { FakeWindowFocusService } from '../../services/windows/testing/fakeWindowFocusService.js'
 
 function runAction(groups: EditorGroupsService, id: string = OpenSettingsAction.ID): void {
   const services = new ServiceCollection()
   services.set(IEditorGroupsService, groups)
+  services.set(IWindowFocusService, new FakeWindowFocusService())
   const inst = new InstantiationService(services)
   inst.invokeFunction((accessor) => {
     const cmd = CommandsRegistry.getCommand(id)!
@@ -42,6 +45,7 @@ function runAction(groups: EditorGroupsService, id: string = OpenSettingsAction.
 function runActionWithArgs(groups: EditorGroupsService, id: string, ...args: unknown[]): void {
   const services = new ServiceCollection()
   services.set(IEditorGroupsService, groups)
+  services.set(IWindowFocusService, new FakeWindowFocusService())
   const inst = new InstantiationService(services)
   inst.invokeFunction((accessor) => {
     const cmd = CommandsRegistry.getCommand(id)!

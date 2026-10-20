@@ -16,6 +16,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { IEditorGroupsService, IInstantiationService } from '@universe-editor/platform'
+import type { IWindowFocusService } from '../../windows/windowFocusService.js'
 import { revealSessionEditorTab } from './revealSessionEditorTab.js'
 import { IAcpChatWidgetService } from './acpChatWidgetService.js'
 
@@ -23,6 +24,7 @@ export interface RevealSessionChatTarget {
   readonly groups: IEditorGroupsService
   readonly inst: IInstantiationService
   readonly widgets: IAcpChatWidgetService
+  readonly windowFocus?: IWindowFocusService
 }
 
 export function revealSessionChat(
@@ -30,7 +32,7 @@ export function revealSessionChat(
   sessionId: string,
   live: { readonly agentId: string | undefined } | undefined,
 ): void {
-  revealSessionEditorTab(target.groups, target.inst, sessionId, live)
+  revealSessionEditorTab(target.groups, target.inst, sessionId, live, target.windowFocus)
   target.widgets.focusSessionInput(sessionId)
   // Second pass on the next frame: activating a group or opening the tab makes
   // the chat mount on this frame, so the first call can find no widget yet.

@@ -24,6 +24,7 @@ import {
 import { EditorGroupsService } from '../../editor/EditorGroupsService.js'
 import { WorkbenchWindowService } from '../workbenchWindowService.js'
 import { AuxiliaryEditorWindowService } from '../auxiliaryEditorWindowService.js'
+import { FakeWindowFocusService } from '../testing/fakeWindowFocusService.js'
 import { getWorkbenchDocuments } from '../workbenchDocuments.js'
 
 vi.mock('../monacoWindowRegistration.js', () => ({
@@ -103,6 +104,8 @@ function makeAux(): FakeAux {
     zoomIn: vi.fn(async () => {}),
     zoomOut: vi.fn(async () => {}),
     resetZoom: vi.fn(async () => {}),
+    minimizeWindow: vi.fn(async () => {}),
+    toggleMaximizeWindow: vi.fn(async () => {}),
   }
 }
 
@@ -130,6 +133,7 @@ function setup() {
   const windows = new WorkbenchWindowService()
   windows.registerMainWindow(groups.mainPart, mainDoc)
   const aux = makeAux()
+  const windowFocus = new FakeWindowFocusService()
   const instantiation = new InstantiationService(new ServiceCollection())
   const notifications = {
     _serviceBrand: undefined,
@@ -146,6 +150,7 @@ function setup() {
     groups as IEditorGroupsService,
     windows,
     aux,
+    windowFocus,
     instantiation,
     notifications,
     loggerService,
@@ -157,6 +162,7 @@ function setup() {
     groups,
     windows,
     aux,
+    windowFocus,
     instantiation,
     service,
     openSpy,
@@ -202,9 +208,15 @@ describe('AuxiliaryEditorWindowService failure paths', () => {
     const part = ctx.groups.createAuxiliaryPart({ activate: false })
     const input = new TestInput('/kept')
     part.activeGroup.openEditor(input)
-    ctx.aux.focusWindow.mockRejectedValueOnce(new Error('focus failed'))
+    // Any post-registration failure must preserve a caller-provided part. Window
+    // focus is fire-and-forget in the real service, so simulate the unlikely
+    // synchronous throw (e.g. a disposed DI service) to exercise that path.
+    const focusSpy = vi.spyOn(ctx.windowFocus, 'focusWindow').mockImplementationOnce(() => {
+      throw new Error('focus failed')
+    })
 
-    const result = await ctx.service.createEmptyWindow({ part, activate: false })
+    const result = await ctx.service.createEmptyWindow({ part })
+    expect(focusSpy).toHaveBeenCalledTimes(1)
     expect(result.window).toBeUndefined()
     // The restore path salvages this part's editors; it must not be destroyed
     // by the failure cleanup.
@@ -289,6 +301,30 @@ describe('AuxiliaryEditorWindowService failure paths', () => {
     expect(ctx.groups.parts).toHaveLength(1)
     // The retry used an independent main group rather than the conflicting target.
     expect(ctx.groups.mainPart.groups.some((group) => group.contains(input))).toBe(true)
+  })
+
+  it('requests native focus for a newly created window', async () => {
+    const window = (await ctx.service.createEmptyWindow({ explicitEmpty: true })).window!
+
+    expect(ctx.windowFocus.focusedWindows).toContain(window.window)
+    // Creation must go through the cross-window service, never the raw IPC
+    // channel — the service is the only place that dedupes DOM-focused windows.
+    expect(ctx.aux.focusWindow).not.toHaveBeenCalled()
+  })
+
+  it('does not request native focus for activate:false windows (restore path)', async () => {
+    const result = await ctx.service.createEmptyWindow({ explicitEmpty: true, activate: false })
+
+    expect(result.window).toBeDefined()
+    expect(ctx.windowFocus.focusedWindows).toHaveLength(0)
+  })
+
+  it('restore-all ends by requesting main-window focus', async () => {
+    await ctx.service.createEmptyWindow({ explicitEmpty: true })
+
+    ctx.service.restoreAllToMainWindow()
+
+    expect(ctx.windowFocus.focusMainWindowCalls).toBe(1)
   })
 
   it('syncs the active part and window in both directions', async () => {

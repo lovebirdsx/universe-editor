@@ -737,6 +737,9 @@ export class WindowMainService implements IWindowMainService {
     const entry = this._windows.get(id)
     if (entry && !entry.win.isDestroyed()) {
       this._noteFocused(id)
+      // focus() on a minimized window is a no-op on Windows; restore first so
+      // "reveal this editor" can bring a minimized workspace window back.
+      if (entry.win.isMinimized()) entry.win.restore()
       if (this._opts.silentE2E) entry.win.showInactive()
       else entry.win.focus()
       this._opts.logService.createLogger({ id: 'window', name: 'Window' }).debug(`focus id=${id}`)

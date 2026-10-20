@@ -18,6 +18,7 @@ import type {
 import { MarkdownPreviewInput } from '../editor/MarkdownPreviewInput.js'
 import { HtmlPreviewInput } from '../editor/HtmlPreviewInput.js'
 import { openPreviewInGroup } from '../editor/openPreviewInGroup.js'
+import type { IWindowFocusService } from '../windows/windowFocusService.js'
 import { previewLanguageForResource } from './resourcePreviewSupport.js'
 
 /**
@@ -30,14 +31,16 @@ export function openResourcePreviewInGroup(
   groups: IEditorGroupsService,
   group: IEditorGroup,
   resource: URI,
+  windowFocus?: IWindowFocusService,
 ): boolean {
   const kind = previewLanguageForResource(resource)
+  const focusOpts = windowFocus ? { windowFocus } : {}
   if (kind === 'markdown') {
-    openPreviewInGroup(groups, group, new MarkdownPreviewInput(resource))
+    openPreviewInGroup(groups, group, new MarkdownPreviewInput(resource), focusOpts)
     return true
   }
   if (kind === 'html') {
-    openPreviewInGroup(groups, group, new HtmlPreviewInput(resource))
+    openPreviewInGroup(groups, group, new HtmlPreviewInput(resource), focusOpts)
     return true
   }
   return false
@@ -55,7 +58,8 @@ export function openResourceForRead(
   group: IEditorGroup,
   resource: URI,
   resolver: IEditorResolverService,
+  windowFocus?: IWindowFocusService,
 ): void {
-  if (openResourcePreviewInGroup(groups, group, resource)) return
+  if (openResourcePreviewInGroup(groups, group, resource, windowFocus)) return
   void resolver.openEditor(resource, { pinned: true })
 }

@@ -26,6 +26,7 @@ import {
 } from '../services/acp/session/acpSessionStatus.js'
 import { IAcpChatWidgetService } from '../services/acp/session/acpChatWidgetService.js'
 import { revealSessionChat } from '../services/acp/session/revealSessionChat.js'
+import { IWindowFocusService } from '../services/windows/windowFocusService.js'
 import { truncateTitle } from '../services/acp/session/sessionTitleFormat.js'
 import {
   getAgentNotificationIcon,
@@ -45,6 +46,7 @@ export class AgentNotificationContribution extends Disposable implements IWorkbe
     @IInstantiationService private readonly _inst: IInstantiationService,
     @IAcpChatWidgetService private readonly _widgets: IAcpChatWidgetService,
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
+    @IWindowFocusService private readonly _windowFocus: IWindowFocusService,
   ) {
     super()
 
@@ -155,7 +157,12 @@ export class AgentNotificationContribution extends Disposable implements IWorkbe
     if (!res.clicked) return
     this._sessions.setActive(sessionId)
     revealSessionChat(
-      { groups: this._groups, inst: this._inst, widgets: this._widgets },
+      {
+        groups: this._groups,
+        inst: this._inst,
+        widgets: this._widgets,
+        windowFocus: this._windowFocus,
+      },
       sessionId,
       this._sessions.getById(sessionId),
     )

@@ -18,6 +18,7 @@ import {
   IInstantiationService,
   type IEditorGroup,
 } from '@universe-editor/platform'
+import type { IWindowFocusService } from '../../windows/windowFocusService.js'
 import { AcpSessionEditorInput } from './acpSessionEditorInput.js'
 
 export interface FoundSessionEditor {
@@ -51,11 +52,13 @@ export function revealSessionEditorTab(
   inst: IInstantiationService,
   sessionId: string,
   live: { agentId: string | undefined } | undefined,
+  windowFocus?: IWindowFocusService,
 ): void {
   const found = findSessionEditor(groups, sessionId)
   if (found) {
     groups.activateGroup(found.group)
     found.group.setActive(found.editor)
+    windowFocus?.focusGroup(found.group)
     return
   }
   if (!live) return
@@ -65,4 +68,5 @@ export function revealSessionEditorTab(
     { activate: true, pinned: true },
   )
   if (target !== groups.activeGroup) groups.activateGroup(target)
+  windowFocus?.focusGroup(target)
 }

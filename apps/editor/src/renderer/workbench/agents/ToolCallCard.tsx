@@ -35,6 +35,7 @@ import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
 import { useMarkdownFileLink } from '../markdown/useMarkdownFileLink.js'
 import { previewLanguageForResource } from '../../services/resourcePreview/resourcePreviewSupport.js'
 import { openResourceForRead } from '../../services/resourcePreview/openResourcePreview.js'
+import { IWindowFocusService } from '../../services/windows/windowFocusService.js'
 import { ensureSideGroup } from '../../services/editor/openToSide.js'
 import { CollapsibleSlot } from '@universe-editor/workbench-ui'
 import { InlineDiffPreview } from './InlineDiffPreview.js'
@@ -136,6 +137,7 @@ export const ToolCallCard = memo(function ToolCallCard({
   const editorService = useService(IEditorService)
   const editorResolver = useService(IEditorResolverService)
   const editorGroups = useService(IEditorGroupsService)
+  const windowFocus = useService(IWindowFocusService)
   const configService = useService(IConfigurationService)
   const workspaceService = useOptionalService(IWorkspaceService)
   const inst = useService(IInstantiationService)
@@ -406,7 +408,7 @@ export const ToolCallCard = memo(function ToolCallCard({
   const openCreated = (toSide: boolean): void => {
     if (createdUri === undefined) return
     const group = toSide ? ensureSideGroup(editorGroups) : editorGroups.activeGroup
-    openResourceForRead(editorGroups, group, createdUri, editorResolver)
+    openResourceForRead(editorGroups, group, createdUri, editorResolver, windowFocus)
   }
   // The header is itself a <button>; nesting one inside it is invalid HTML that
   // the browser silently re-parents, so this affordance is a span acting as one.

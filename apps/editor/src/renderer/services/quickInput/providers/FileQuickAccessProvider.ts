@@ -34,6 +34,7 @@ import {
   CancellationTokenSource,
   EditorRegistry,
   GroupDirection,
+  IContextKeyService,
   IEditorGroupsService,
   IEditorResolverService,
   IFileSearchService,
@@ -78,6 +79,8 @@ import {
   type RecentTarget,
 } from '../../editor/RecentTargetsService.js'
 import { IClosedEditorsService } from '../../editor/ClosedEditorsService.js'
+import { activateGroupAndFocus } from '../../editor/activateGroupAndFocus.js'
+import { IWindowFocusService } from '../../windows/windowFocusService.js'
 import { resourceIconId } from '../quickPickResourceIcon.js'
 import { createViewPickItem } from '../viewQuickPick.js'
 
@@ -237,6 +240,8 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     @IViewDescriptorService private readonly _viewDescriptors: IViewDescriptorService,
     @ILayoutService private readonly _layout: ILayoutService,
     @IInstantiationService private readonly _inst: IInstantiationService,
+    @IWindowFocusService private readonly _windowFocus: IWindowFocusService,
+    @IContextKeyService private readonly _contextKeys: IContextKeyService,
     @ILoggerService loggerService: ILoggerService,
     @IFocusScopeService private readonly _focus: IFocusScopeService,
   ) {
@@ -380,14 +385,24 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       const active = this._groups.activeGroup
       let side = this._groups.findGroup({ direction: GroupDirection.Right }, active, true)
       if (!side || side === active) side = this._groups.addGroup(active, GroupDirection.Right)
-      this._groups.activateGroup(side)
       for (const editor of side.editors) {
         if (editor.resource && this._uriIdentity.isEqual(editor.resource, uri)) {
-          side.setActive(editor)
+          activateGroupAndFocus(
+            side,
+            {
+              groups: this._groups,
+              contextKeyService: this._contextKeys,
+              windowFocus: this._windowFocus,
+            },
+            editor,
+          )
           return
         }
       }
       if (this._restoreClosed(uri, side, true)) return
+      // The resolver routes through activeGroupForOpen, so the side group must
+      // be active before a brand-new file lands there.
+      this._groups.activateGroup(side)
       this._openThroughResolver(uri, true)
       return
     }
@@ -399,8 +414,15 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     for (const group of this._groups.groups) {
       for (const editor of group.editors) {
         if (editor.resource && this._uriIdentity.isEqual(editor.resource, uri)) {
-          this._groups.activateGroup(group)
-          group.setActive(editor)
+          activateGroupAndFocus(
+            group,
+            {
+              groups: this._groups,
+              contextKeyService: this._contextKeys,
+              windowFocus: this._windowFocus,
+            },
+            editor,
+          )
           return
         }
       }
@@ -440,8 +462,14 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     )
     if (!input) return false
     const group = targetGroup ?? this._groups.activeGroup
-    this._groups.activateGroup(group)
     group.openEditor(input, { activate: true, pinned })
+    // No explicit editor: the open above made `input` the group's active editor,
+    // so the helper focuses it without an extra setActive round trip.
+    activateGroupAndFocus(group, {
+      groups: this._groups,
+      contextKeyService: this._contextKeys,
+      windowFocus: this._windowFocus,
+    })
     return true
   }
 
@@ -454,6 +482,8 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     if (viewId !== undefined) {
       // focusView owns the whole reveal: active container, hosting part, and the
       // view's own collapsed state — no need to expand anything here first.
+      // Views live in the main window, so bring it forward before focusing.
+      this._windowFocus.focusMainWindow()
       void this._layout.focusView(viewId, { source: 'command' })
       return
     }
@@ -462,8 +492,15 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       const group = this._groups.getGroup(decoded.groupId)
       const editor = group?.editors.find((e) => e.id === decoded.editorId)
       if (group && editor) {
-        this._groups.activateGroup(group)
-        group.setActive(editor)
+        activateGroupAndFocus(
+          group,
+          {
+            groups: this._groups,
+            contextKeyService: this._contextKeys,
+            windowFocus: this._windowFocus,
+          },
+          editor,
+        )
       }
       return
     }

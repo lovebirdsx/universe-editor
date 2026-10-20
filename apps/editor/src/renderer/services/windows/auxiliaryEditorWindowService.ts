@@ -41,6 +41,18 @@ import { AUXILIARY_WINDOW_MARKER_KEY } from '../../../shared/ipc/auxiliaryWindow
 import { ensureAuxiliaryRoot, mirrorDocumentChrome } from './mirrorDocumentChrome.js'
 import { registerMonacoWindow } from './monacoWindowRegistration.js'
 import { IWorkbenchWindowService, type IWorkbenchWindow } from './workbenchWindowService.js'
+import { IWindowFocusService } from './windowFocusService.js'
+
+/** Window pre-paint color: the theme's title bar background (main draws it too). */
+function readTitleBarBackground(doc: Document): string | undefined {
+  const view = doc.defaultView
+  if (!view) return undefined
+  const value = view
+    .getComputedStyle(doc.documentElement)
+    .getPropertyValue('--vscode-titleBar-activeBackground')
+    .trim()
+  return value.length > 0 ? value : undefined
+}
 
 export interface IAuxiliaryEditorWindow {
   readonly token: string
@@ -192,6 +204,7 @@ export class AuxiliaryEditorWindowService
     @IEditorGroupsService private readonly _groups: IEditorGroupsService,
     @IWorkbenchWindowService private readonly _workbenchWindows: IWorkbenchWindowService,
     @IAuxiliaryWindowsService private readonly _aux: IAuxiliaryWindowsService,
+    @IWindowFocusService private readonly _windowFocus: IWindowFocusService,
     @IInstantiationService private readonly _instantiation: IInstantiationService,
     @INotificationService private readonly _notifications: INotificationService,
     @ILoggerService loggerService: ILoggerService,
@@ -528,6 +541,7 @@ export class AuxiliaryEditorWindowService
     }
     this._workbenchWindows.setActiveWindow(this._workbenchWindows.mainWindow)
     this._groups.activatePart(this._groups.mainPart)
+    this._windowFocus.focusMainWindow()
   }
 
   serialize(): ISerializedAuxiliaryWindowsState {
@@ -826,9 +840,11 @@ export class AuxiliaryEditorWindowService
       options.part ?? (this._groups.createAuxiliaryPart({ activate: false }) as EditorPart)
     try {
       const initialGeometry = options.geometry ?? options.bounds
+      const themeBackground = readTitleBarBackground(this._workbenchWindows.mainWindow.document)
       const prepared = await this._aux.prepareOpen({
         ...(initialGeometry ? { geometry: initialGeometry } : {}),
         ...(options.title ? { title: options.title } : {}),
+        ...(themeBackground ? { backgroundColor: themeBackground } : {}),
       })
       token = prepared.token
       // A workspace scope swap can clear every auxiliary part while the native
@@ -887,11 +903,14 @@ export class AuxiliaryEditorWindowService
       this._onDidChangeWindows.fire()
       this._watchEmpty(entry)
       // about:blank fires ready-to-show almost immediately; focus explicitly so
-      // activation is deterministic (E2E windows use showInactive).
-      await this._aux.focusWindow(token)
+      // activation is deterministic (E2E windows use showInactive). Restore
+      // creates windows with `activate: false` and activates the saved window
+      // once at the end — flipping the active document per window mid-restore
+      // would leave overlays/dialogs momentarily pointing at the wrong one.
+      if (options.activate !== false) this._windowFocus.focusWindow(workbenchWindow)
       // An external close (or a scope swap) may have torn the entry/part down
-      // while we were awaiting; returning it would leave callers acting on a
-      // dead window.
+      // before callers observe the result; returning it would leave callers
+      // acting on a dead window.
       if (this.getEntry(token) !== entry || !this._isPartLive(part)) {
         this._logger.warn('auxiliary window disappeared during creation')
         return undefined

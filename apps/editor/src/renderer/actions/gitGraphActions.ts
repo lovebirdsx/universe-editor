@@ -18,6 +18,7 @@ import {
 import { GitGraphEditorInput } from '../services/editor/GitGraphEditorInput.js'
 import { revealEditorInGroups } from '../services/editor/revealEditorInGroups.js'
 import { gitGraphViewState } from '../services/gitGraph/gitGraphViewState.js'
+import { IWindowFocusService } from '../services/windows/windowFocusService.js'
 
 const CATEGORY = localize2('command.category.gitGraph', 'Git Graph')
 
@@ -28,7 +29,14 @@ const CATEGORY = localize2('command.category.gitGraph', 'Git Graph')
  */
 async function openGitGraph(accessor: ServicesAccessor): Promise<void> {
   const groups = accessor.get(IEditorGroupsService)
-  if (revealEditorInGroups(groups, (e) => e instanceof GitGraphEditorInput)) return
+  if (
+    revealEditorInGroups(
+      groups,
+      (e) => e instanceof GitGraphEditorInput,
+      accessor.get(IWindowFocusService),
+    )
+  )
+    return
   await accessor.get(IEditorService).openEditor(new GitGraphEditorInput())
 }
 

@@ -70,4 +70,46 @@ describe('FocusScopeOverlay', () => {
     fireEvent.keyDown(screen.getByTestId('sel'), { key: 'Escape' })
     expect(onEscape).toHaveBeenCalledTimes(1)
   })
+
+  describe('restoreFocus gate', () => {
+    function focusOutside(): HTMLButtonElement {
+      const outside = document.createElement('button')
+      outside.textContent = 'outside'
+      document.body.appendChild(outside)
+      outside.focus()
+      return outside
+    }
+
+    afterEach(() => {
+      document.body.querySelectorAll('button').forEach((node) => {
+        if (node.textContent === 'outside') node.remove()
+      })
+    })
+
+    it('restores focus when the gate allows it at unmount time', () => {
+      const outside = focusOutside()
+      const { unmount } = render(
+        <FocusScopeOverlay visible shouldRestoreFocus={() => true}>
+          <button data-testid="inside">inside</button>
+        </FocusScopeOverlay>,
+      )
+
+      unmount()
+      expect(document.activeElement).toBe(outside)
+    })
+
+    it('leaves focus alone when the gate declines at unmount time', () => {
+      const outside = focusOutside()
+      const { unmount } = render(
+        <FocusScopeOverlay visible shouldRestoreFocus={() => false}>
+          <button data-testid="inside">inside</button>
+        </FocusScopeOverlay>,
+      )
+      const inside = screen.getByTestId('inside')
+
+      unmount()
+      expect(document.activeElement).not.toBe(outside)
+      expect(document.activeElement).not.toBe(inside)
+    })
+  })
 })

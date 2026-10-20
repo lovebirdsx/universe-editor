@@ -62,6 +62,8 @@ import { IRecentTargetsService, type RecentTarget } from '../../editor/RecentTar
 import { IClosedEditorsService, type ClosedEditorEntry } from '../../editor/ClosedEditorsService.js'
 import { invalidateMentionFileCache } from '../../acp/mentionFileSearch.js'
 import { resourceIconId } from '../quickPickResourceIcon.js'
+import { IWindowFocusService } from '../../windows/windowFocusService.js'
+import { FakeWindowFocusService } from '../../windows/testing/fakeWindowFocusService.js'
 
 class FakeQuickPick<T extends IQuickPickItem> implements IQuickPick<T> {
   private readonly _onDidAccept = new Emitter<T[]>()
@@ -490,12 +492,23 @@ function setup(
   services.set(IUriIdentityService, new UriIdentityService(opts.platform ?? 'linux'))
   services.set(ILoggerService, { createLogger: () => new NullLogger() } as never)
   services.set(IFileService, makeFileService(opts.existingFiles))
+  const windowFocus = new FakeWindowFocusService()
+  services.set(IWindowFocusService, windowFocus)
   const resolver = new FakeEditorResolverService()
   services.set(IEditorResolverService, resolver)
   const inst = new InstantiationService(services)
   services.set(IInstantiationService, inst as unknown as IInstantiationService)
   const provider = inst.createInstance(FileQuickAccessProvider)
-  return { provider, fileSearch, workspace, resolver, groupsFake, closedEditors, layout }
+  return {
+    provider,
+    fileSearch,
+    workspace,
+    resolver,
+    groupsFake,
+    closedEditors,
+    layout,
+    windowFocus,
+  }
 }
 
 function run(
@@ -823,6 +836,40 @@ describe('FileQuickAccessProvider', () => {
     picker.fireAccept([picker.items[0] as IQuickPickItem])
 
     expect(groupsFake.setActiveLog).toEqual([fileEditor])
+    expect(resolver.opened).toHaveLength(0)
+  })
+
+  it('accepting a file already open in another window focuses the group that owns it', async () => {
+    const fileEditor = new FakeEditorInput('file', URI.file('/ws/src/a.ts'), 'a.ts')
+    const { provider, groupsFake, resolver, windowFocus } = setup({ sideEditors: [fileEditor] })
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    const row = picker.items.find((item) => (item as IQuickPickItem).label === 'a.ts')
+    expect(row).toBeDefined()
+    picker.fireAccept([row as IQuickPickItem])
+
+    const owningGroup = groupsFake.all[1]!
+    expect(groupsFake.activatedGroupIds).toEqual([owningGroup.id])
+    // Activating the group is renderer-only; the window that owns it must be
+    // brought forward explicitly, or keyboard input stays in the old window.
+    expect(windowFocus.focusedGroups).toEqual([owningGroup])
+    expect(resolver.opened).toHaveLength(0)
+  })
+
+  it('accepting a virtual editor pick in another window focuses its owning group', async () => {
+    const settings = new FakeEditorInput('settings', undefined, 'Settings')
+    const { provider, groupsFake, resolver, windowFocus } = setup({ sideEditors: [settings] })
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    picker.fireAccept([picker.items[0] as IQuickPickItem])
+
+    const owningGroup = groupsFake.all[1]!
+    expect(groupsFake.setActiveLog).toEqual([settings])
+    expect(windowFocus.focusedGroups).toEqual([owningGroup])
     expect(resolver.opened).toHaveLength(0)
   })
 
@@ -1977,7 +2024,7 @@ describe('FileQuickAccessProvider — views as switch targets', () => {
   })
 
   it('accepting a view row focuses that view instead of opening a resource', async () => {
-    const { provider, layout, resolver } = setup({
+    const { provider, layout, resolver, windowFocus } = setup({
       views: [makeView('workbench.view.terminal.main', 'Terminal')],
     })
     const picker = new FakeQuickPick<IQuickPickItem>()
@@ -1988,6 +2035,9 @@ describe('FileQuickAccessProvider — views as switch targets', () => {
     await flushPromises()
     picker.fireAccept([rows(picker).find((i) => i.label === 'Terminal')!])
 
+    // Views live in the main window; accepting from an auxiliary window must
+    // bring the main window forward before focusing the view.
+    expect(windowFocus.focusMainWindowCalls).toBe(1)
     expect(layout.focusedViews).toEqual(['workbench.view.terminal.main'])
     // Never routed through the editor resolver — a view id is not a URI.
     expect(resolver.opened).toHaveLength(0)

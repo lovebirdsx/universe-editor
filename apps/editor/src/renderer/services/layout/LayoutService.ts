@@ -30,7 +30,9 @@ import type {
 } from '@universe-editor/platform'
 import { PartId } from '@universe-editor/platform'
 import { IViewContainerMemoryService } from '../focus/ViewContainerMemoryService.js'
+import { activateGroupAndFocus } from '../editor/activateGroupAndFocus.js'
 import { focusEditorInput } from '../editor/editorFocus.js'
+import { IWindowFocusService } from '../windows/windowFocusService.js'
 
 const STORAGE_KEY = 'workbench.layout'
 const SAVE_DEBOUNCE_MS = 200
@@ -87,6 +89,7 @@ export class LayoutService extends Disposable implements ILayoutService {
     @IContextKeyService private readonly _contextKeyService: IContextKeyService,
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
     @IViewDescriptorService private readonly _viewDescriptors: IViewDescriptorService,
+    @IWindowFocusService private readonly _windowFocus: IWindowFocusService,
   ) {
     super()
     // Reload from the new workspace's storage whenever the WORKSPACE scope swaps.
@@ -306,7 +309,32 @@ export class LayoutService extends Disposable implements ILayoutService {
   // -- Focus routing --------------------------------------------------------
 
   async focusPart(id: PartId, opts: IFocusPartOptions = {}): Promise<boolean> {
+    if (id === PartId.EditorArea && LayoutService._requestedFocus(opts)) {
+      // The active editor group may live in an auxiliary window. Route through
+      // the group (and its window) instead of the main EditorAreaPart, which
+      // only exists in the main window.
+      const group = this._editorGroups.activeGroup
+      if (group.activeEditor) {
+        activateGroupAndFocus(group, {
+          groups: this._editorGroups,
+          contextKeyService: this._contextKeyService,
+          windowFocus: this._windowFocus,
+        })
+        return true
+      }
+    }
+    // Views and the panel live in the main window; a command that came from an
+    // auxiliary window must bring it to the front before focusing DOM there.
+    if (id !== PartId.EditorArea && LayoutService._requestedFocus(opts)) {
+      this._windowFocus.focusMainWindow()
+    }
     return this._focusPart(id, opts, undefined)
+  }
+
+  private static _requestedFocus(opts: IFocusPartOptions): boolean {
+    // `restore` (and no source) is startup layout restoration — never steal
+    // native focus from whatever window the user is actually in.
+    return opts.source === 'command' || opts.source === 'user'
   }
 
   /**
@@ -377,6 +405,7 @@ export class LayoutService extends Disposable implements ILayoutService {
       this._viewDescriptors.setViewCollapsed(viewId, false)
     }
     const partId = LayoutService._partIdForLocation(container.location)
+    if (LayoutService._requestedFocus(opts)) this._windowFocus.focusMainWindow()
     const ok = await this._focusPart(partId, opts, viewId)
     if (!ok) return false
 

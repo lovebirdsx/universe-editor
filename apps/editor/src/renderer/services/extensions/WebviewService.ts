@@ -43,6 +43,7 @@ import type {
 } from '@universe-editor/extensions-common'
 import type { ExtHostKind } from '../../../shared/ipc/extensionHostService.js'
 import { hostPanelResource, WebviewPanelInput } from '../editor/WebviewPanelInput.js'
+import type { IWindowFocusService } from '../windows/windowFocusService.js'
 
 /** The renderer's live view of one webview panel, consumed by CustomEditorHost. */
 export interface IWebviewPanelModel {
@@ -265,6 +266,8 @@ export class WebviewService extends Disposable implements IWebviewService {
    * right after the editor services are set.
    */
   private _getEditorGroups: () => IEditorGroupsService | undefined = () => undefined
+  /** Wired by main.tsx next to the editor-groups hook (same bootstrap timing). */
+  private _getWindowFocus: () => IWindowFocusService | undefined = () => undefined
   private _resolveWhenEditorGroupsWired: (() => void) | undefined
   private readonly _whenEditorGroupsWired = new Promise<void>((resolve) => {
     this._resolveWhenEditorGroupsWired = resolve
@@ -313,6 +316,10 @@ export class WebviewService extends Disposable implements IWebviewService {
       this._panelViewStateTracking = this._trackPanelViewStates(groups)
       this._recomputePanelViewStates()
     }
+  }
+
+  setWindowFocusAccessor(accessor: () => IWindowFocusService | undefined): void {
+    this._getWindowFocus = accessor
   }
 
   /**
@@ -540,6 +547,9 @@ export class WebviewService extends Disposable implements IWebviewService {
       activate: showOptions?.preserveFocus !== true,
       preserveFocus: showOptions?.preserveFocus === true,
     })
+    if (showOptions?.preserveFocus !== true) {
+      this._getWindowFocus?.()?.focusGroup(groups.activeGroupForOpen)
+    }
     console.debug(`[webview] host panel created handle=${panelHandle} viewType=${viewType}`)
   }
 
@@ -579,6 +589,7 @@ export class WebviewService extends Disposable implements IWebviewService {
       if (group.contains(routing.input)) {
         group.setActive(routing.input, { preserveFocus: preserveFocus === true })
         if (!group.isActive && preserveFocus !== true) groups.activateGroup(group)
+        if (preserveFocus !== true) this._getWindowFocus?.()?.focusGroup(group)
         return
       }
     }

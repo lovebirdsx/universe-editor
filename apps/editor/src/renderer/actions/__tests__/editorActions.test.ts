@@ -54,6 +54,8 @@ import { EditorGroupsService } from '../../services/editor/EditorGroupsService.j
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
 import { UntitledEditorInput } from '../../services/editor/UntitledEditorInput.js'
+import { IWindowFocusService } from '../../services/windows/windowFocusService.js'
+import { FakeWindowFocusService } from '../../services/windows/testing/fakeWindowFocusService.js'
 import type {
   IRecentTargetsService,
   RecentTarget,
@@ -133,6 +135,7 @@ function makeAccessor(groups: EditorGroupsService, dialog?: FakeDialog) {
   const services = new ServiceCollection()
   services.set(IEditorGroupsService, groups)
   services.set(IContextKeyService, new ContextKeyService())
+  services.set(IWindowFocusService, new FakeWindowFocusService())
   if (dialog) services.set(IDialogService, dialog as unknown as IDialogService)
   return new InstantiationService(services)
 }

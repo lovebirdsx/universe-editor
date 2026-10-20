@@ -60,6 +60,7 @@ import {
 } from '@universe-editor/workbench-ui'
 import { useObservable, useService } from '../useService.js'
 import { useViewFocusable } from '../useViewFocusable.js'
+import { IWindowFocusService } from '../../services/windows/windowFocusService.js'
 import { useSessionDisplayStatus } from './useSessionStatus.js'
 import { relativeTime } from '../../relativeTime.js'
 import {
@@ -518,6 +519,7 @@ export function SessionListBody({
   const groups = useService(IEditorGroupsService)
   const instantiation = useService(IInstantiationService)
   const widgets = useService(IAcpChatWidgetService)
+  const windowFocus = useService(IWindowFocusService)
   const commandService = useService(ICommandService)
   const host = useService(IHostService)
   const entries = useObservable(history.entries)
@@ -685,13 +687,17 @@ export function SessionListBody({
         // in another group, and the activeSession autorun bails in exactly that
         // case (it must not duplicate the tab). Reveal it ourselves, then hand
         // the chat input the focus.
-        revealSessionChat({ groups, inst: instantiation, widgets }, liveNow.id, liveNow)
+        revealSessionChat(
+          { groups, inst: instantiation, widgets, windowFocus },
+          liveNow.id,
+          liveNow,
+        )
       } else if (isForeignWorkspaceSession(entry, currentCwd, currentAuthority, uriIdentity)) {
         // Foreign worktree / cross-host: don't resume (would spawn the agent
         // against another worktree or host behind this window's UI). Open a
         // read-only preview tab; the user activates from there. A subdirectory
         // row is the same workspace, so it falls through to resumeSession below.
-        revealSessionEditorTab(groups, instantiation, entry.id, entry)
+        revealSessionEditorTab(groups, instantiation, entry.id, entry, windowFocus)
       } else {
         service.resumeSession(entry.id).catch(() => {
           // resumeSession publishes its own notification.
@@ -699,7 +705,17 @@ export function SessionListBody({
       }
       onPick?.(entry)
     },
-    [service, currentCwd, currentAuthority, uriIdentity, groups, instantiation, widgets, onPick],
+    [
+      service,
+      currentCwd,
+      currentAuthority,
+      uriIdentity,
+      groups,
+      instantiation,
+      widgets,
+      windowFocus,
+      onPick,
+    ],
   )
 
   // The keyboard cursor. Deliberately separate from `activeId`: the active

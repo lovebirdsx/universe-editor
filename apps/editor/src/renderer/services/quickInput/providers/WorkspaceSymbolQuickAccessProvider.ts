@@ -35,6 +35,7 @@ import { FileEditorInput } from '../../editor/FileEditorInput.js'
 import { openInLockAwareGroup } from '../../editor/openInLockAwareGroup.js'
 import { FileEditorRegistry } from '../../editor/FileEditorRegistry.js'
 import { revealSelectionInInput } from '../../editor/revealEditorPosition.js'
+import { IWindowFocusService } from '../../windows/windowFocusService.js'
 import { ILanguageFeaturesService } from '../../languageFeatures/LanguageFeaturesService.js'
 import {
   workspaceSymbolsToEntries,
@@ -116,6 +117,7 @@ export class WorkspaceSymbolQuickAccessProvider implements IQuickAccessProvider 
     @IInstantiationService private readonly _instantiation: IInstantiationService,
     @ILanguageFeaturesService private readonly _langFeatures: ILanguageFeaturesService,
     @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
+    @IWindowFocusService private readonly _windowFocus: IWindowFocusService,
     @ILoggerService loggerService: ILoggerService,
   ) {
     this._logger = loggerService.createLogger({
@@ -322,6 +324,7 @@ export class WorkspaceSymbolQuickAccessProvider implements IQuickAccessProvider 
           ) {
             this._groups.activateGroup(group)
             group.setActive(editor)
+            this._windowFocus.focusGroup(group)
             input = editor
             break
           }

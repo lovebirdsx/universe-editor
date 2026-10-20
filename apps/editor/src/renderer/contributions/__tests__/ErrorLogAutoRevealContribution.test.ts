@@ -219,7 +219,9 @@ describe('ErrorLogAutoRevealContribution', () => {
     expect(output.activeChannel?.getText()).toBe('[10:00:00] [error] boom\n')
     expect(views.openViewContainer).toHaveBeenCalledWith('workbench.view.output')
     expect(layout.setVisible).toHaveBeenCalledWith(PartId.Panel, true)
-    expect(layout.focusView).toHaveBeenCalledWith('workbench.view.output.main')
+    expect(layout.focusView).toHaveBeenCalledWith('workbench.view.output.main', {
+      source: 'restore',
+    })
     contribution.dispose()
   })
 

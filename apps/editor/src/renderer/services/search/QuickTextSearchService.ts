@@ -31,6 +31,7 @@ import { getActiveTextEditor } from '../editor/activeTextEditor.js'
 import { openInLockAwareGroup } from '../editor/openInLockAwareGroup.js'
 import { FileEditorRegistry } from '../editor/FileEditorRegistry.js'
 import { applyEditorSelection } from '../editor/revealEditorPosition.js'
+import { IWindowFocusService } from '../windows/windowFocusService.js'
 
 export interface IQuickTextSearchService {
   readonly _serviceBrand: undefined
@@ -239,6 +240,7 @@ export class QuickTextSearchService implements IQuickTextSearchService {
     @IEditorGroupsService private readonly _groups: IEditorGroupsService,
     @IInstantiationService private readonly _instantiation: IInstantiationService,
     @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
+    @IWindowFocusService private readonly _windowFocus: IWindowFocusService,
   ) {}
 
   async show(): Promise<void> {
@@ -513,6 +515,7 @@ export class QuickTextSearchService implements IQuickTextSearchService {
         if (matches) {
           this._groups.activateGroup(group)
           group.setActive(editor)
+          this._windowFocus.focusGroup(group)
           if (pinned) group.pinEditor(editor)
           return editor
         }

@@ -62,6 +62,8 @@ export interface AuxiliaryWindowsMainServiceOptions {
   readonly silentE2E: boolean
   readonly logService: LogMainService
   readonly appName: string
+  /** Override for deterministic window-option tests; defaults to `process.platform`. */
+  readonly platform?: NodeJS.Platform
 }
 
 export interface CreatedAuxiliaryWindowDetails {
@@ -250,8 +252,24 @@ export class AuxiliaryWindowsMainService implements IDisposable {
   focusWindow(parentWindowId: number, token: string): void {
     const entry = this._requireEntry(parentWindowId, token)
     if (entry.win.isDestroyed()) return
+    // A minimized window ignores focus() on Windows; restore first so commands
+    // that reveal an editor there actually bring it back.
+    if (entry.win.isMinimized()) entry.win.restore()
     if (this._options.silentE2E) entry.win.showInactive()
     else entry.win.focus()
+  }
+
+  minimizeWindow(parentWindowId: number, token: string): void {
+    const entry = this._requireEntry(parentWindowId, token)
+    if (entry.win.isDestroyed()) return
+    entry.win.minimize()
+  }
+
+  toggleMaximizeWindow(parentWindowId: number, token: string): void {
+    const entry = this._requireEntry(parentWindowId, token)
+    if (entry.win.isDestroyed()) return
+    if (entry.win.isMaximized()) entry.win.unmaximize()
+    else entry.win.maximize()
   }
 
   requestClose(parentWindowId: number, token: string): void {
@@ -333,14 +351,18 @@ export class AuxiliaryWindowsMainService implements IDisposable {
   }
 
   private _browserWindowOptions(prepared: PreparedEntry): BrowserWindowConstructorOptions {
+    const platform = this._options.platform ?? process.platform
     return {
       x: prepared.state.x,
       y: prepared.state.y,
       width: prepared.state.width,
       height: prepared.state.height,
       show: false,
-      // Native frame: the OS draws the window buttons; the renderer owns the content.
-      frame: true,
+      // Match the main window's chrome: the renderer draws the title bar so it
+      // follows the theme (a native frame is OS-colored and cannot).
+      ...(platform === 'darwin'
+        ? { titleBarStyle: 'hidden' as const, trafficLightPosition: { x: 8, y: 8 } }
+        : { frame: false }),
       autoHideMenuBar: true,
       title: prepared.title,
       backgroundColor: prepared.backgroundColor,
@@ -403,6 +425,12 @@ export class AuxiliaryWindowsMainService implements IDisposable {
     win.on('blur', emitState)
     win.on('show', emitState)
     win.on('hide', emitState)
+    // trackWindowState debounces resize; maximize toggles must repaint the
+    // renderer-drawn title bar's restore icon immediately.
+    win.on('maximize', emitState)
+    win.on('unmaximize', emitState)
+    win.on('enter-full-screen', emitState)
+    win.on('leave-full-screen', emitState)
     disposables.add(trackWindowState(win, emitState))
 
     this._wireShow(entry)
@@ -613,6 +641,14 @@ export class WindowScopedAuxiliaryWindowsService implements IAuxiliaryWindowsSer
 
   async focusWindow(token: string): Promise<void> {
     this._service.focusWindow(this._parentWindowId, token)
+  }
+
+  async minimizeWindow(token: string): Promise<void> {
+    this._service.minimizeWindow(this._parentWindowId, token)
+  }
+
+  async toggleMaximizeWindow(token: string): Promise<void> {
+    this._service.toggleMaximizeWindow(this._parentWindowId, token)
   }
 
   async requestClose(token: string): Promise<void> {

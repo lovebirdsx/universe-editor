@@ -25,6 +25,8 @@ import {
   type PartId,
 } from '@universe-editor/platform'
 import { EditorGroupsService } from '../EditorGroupsService.js'
+import { IWindowFocusService } from '../../windows/windowFocusService.js'
+import { FakeWindowFocusService } from '../../windows/testing/fakeWindowFocusService.js'
 import {
   ClosedEditorsService,
   IClosedEditorsService,
@@ -822,6 +824,7 @@ describe('ReopenClosedEditorAction', () => {
     services.set(IClosedEditorsService, closedSvc)
     services.set(IFocusStackService, focusSvc)
     services.set(IContextKeyService, new ContextKeyService())
+    services.set(IWindowFocusService, new FakeWindowFocusService())
     const inst = new InstantiationService(services)
 
     return { groups, closedSvc, inst }
@@ -956,6 +959,7 @@ describe('ReopenClosedEditorAction', () => {
     services.set(IClosedEditorsService, new FakeClosedEditorsService(entry))
     services.set(IFocusStackService, new FakeFocusStackService())
     services.set(IContextKeyService, new ContextKeyService())
+    services.set(IWindowFocusService, new FakeWindowFocusService())
     const inst = new InstantiationService(services)
 
     const cmd = CommandsRegistry.getCommand(ReopenClosedEditorAction.ID)
