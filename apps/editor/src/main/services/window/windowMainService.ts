@@ -37,6 +37,11 @@ import { APP_PROTOCOL_SCHEME, APP_SHELL_URL } from '../../ipc/resourceProtocol.j
 import { type IRendererLifecycleService } from '../../../shared/ipc/lifecycleService.js'
 import { type LogMainService } from '../log/logMainService.js'
 import { WorkspaceMainService } from '../workspace/workspaceMainService.js'
+import {
+  handleFolderOpenFailure,
+  type IWorkspaceFolderOpenGuard,
+} from '../workspace/folderOpenGuard.js'
+import { ElectronFolderOpenGuard } from '../workspace/electronFolderOpenGuard.js'
 import { applyWindowState, trackWindowState, type IWindowState } from '../../windowState.js'
 import { observeDevToolsState } from '../../devToolsState.js'
 import { getDefaultStorage, workspaceIdFromUri } from '../../storage.js'
@@ -124,6 +129,8 @@ export interface WindowMainServiceOptions {
   readonly getConfigDir: () => string
   /** Shipped settings.json defaults forwarded to the renderer (EnvironmentMainService.configurationDefaults). */
   readonly getConfigurationDefaults: () => ConfigurationDefaults
+  /** Test seam; production builds the Electron-backed guard in the constructor. */
+  readonly folderOpenGuard?: IWorkspaceFolderOpenGuard
 }
 
 // Upper bound on the renderer's shutdown-veto round-trip. Long enough for a busy
@@ -197,8 +204,17 @@ export class WindowMainService implements IWindowMainService {
   readonly onDidChangeWindows: Event<void> = this._onDidChangeWindows.event
   private readonly _onDidChangeFocusedWindow = new Emitter<number>()
   readonly onDidChangeFocusedWindow: Event<number> = this._onDidChangeFocusedWindow.event
+  private readonly _folderGuard: IWorkspaceFolderOpenGuard
 
-  constructor(private readonly _opts: WindowMainServiceOptions) {}
+  constructor(private readonly _opts: WindowMainServiceOptions) {
+    this._folderGuard =
+      _opts.folderOpenGuard ??
+      new ElectronFolderOpenGuard({
+        e2eEnabled: _opts.e2eEnabled,
+        logger: _opts.logService.createLogger({ id: 'workspace', name: 'Workspace' }),
+        getParentWindow: () => BrowserWindow.getFocusedWindow(),
+      })
+  }
 
   async createWindow(opts?: ICreateWindowOptions): Promise<number> {
     const {
@@ -485,6 +501,7 @@ export class WindowMainService implements IWindowMainService {
         configDir: this._opts.getConfigDir(),
         isFirstWindow,
         ...(opts?.workspace !== undefined ? { restoreWorkspace: opts.workspace } : {}),
+        folderGuard: this._folderGuard,
         windowsServiceHost: this,
         callbacks: {
           createEmptyWindow: (options) => {
@@ -756,6 +773,7 @@ export class WindowMainService implements IWindowMainService {
     sessionToOpen?: string,
     deepLink?: string,
   ): Promise<void> {
+    const logger = this._opts.logService.createLogger({ id: 'window', name: 'Window' })
     let resolved = folder ?? null
     if (!resolved) {
       const parent = BrowserWindow.getFocusedWindow()
@@ -767,6 +785,20 @@ export class WindowMainService implements IWindowMainService {
       resolved = URI.file(picked)
     }
     resolved = canonicalizeWorkspaceFolderUri(resolved)
+    if (resolved.scheme === 'file') {
+      const failure = await this._folderGuard.probe(resolved)
+      if (failure) {
+        await handleFolderOpenFailure({
+          action: 'openWindowForFolder',
+          folder: resolved,
+          failure,
+          guard: this._folderGuard,
+          recents: this._opts.appServices.recentWorkspaces,
+          logger,
+        })
+        return
+      }
+    }
     const workspace: IWorkspace = {
       folder: resolved,
       name: basename(resolved.fsPath) || resolved.fsPath,

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { join } from 'node:path'
 import { combinedDisposable, ShutdownReason, URI } from '@universe-editor/platform'
 import { getTempRoot } from '@universe-editor/temp-root'
+import type { IWorkspaceFolderOpenGuard } from '../../workspace/folderOpenGuard.js'
 
 // --- Mock IPC bootstrap ---
 vi.mock('../../../ipc/registerMainServices.js', () => ({
@@ -237,6 +238,12 @@ function makeOpts() {
     rendererUrl: 'http://localhost:5173',
     getConfigDir: () => join(getTempRoot(), 'ue-wintest'),
     getConfigurationDefaults: () => ({}),
+    folderOpenGuard: {
+      async probe() {
+        return null
+      },
+      async report() {},
+    } as IWorkspaceFolderOpenGuard,
   }
 }
 
@@ -703,6 +710,59 @@ describe('WindowMainService', () => {
       { workspace: { folder: URI.file('/tmp/dup'), name: 'dup' }, devToolsOpen: false },
       { workspace: { folder: URI.file('/tmp/dup'), name: 'dup' }, devToolsOpen: false },
     ])
+    expect(svc.getWindows()).toHaveLength(1)
+  })
+
+  it('openWindowForFolder aborts on a missing local folder and drops the recent entry', async () => {
+    const remove = vi.fn().mockResolvedValue(undefined)
+    const report = vi.fn().mockResolvedValue(undefined)
+    const probe = vi.fn(async () => ({ problem: 'not-found' as const }))
+    const opts = makeOpts()
+    opts.folderOpenGuard = { probe, report }
+    ;(opts.appServices as { recentWorkspaces: unknown }).recentWorkspaces = { remove }
+    const svc = makeService(opts)
+
+    await svc.openWindowForFolder(URI.file('/tmp/gone'))
+
+    expect(probe).toHaveBeenCalledTimes(1)
+    expect(remove).toHaveBeenCalledTimes(1)
+    expect(String(remove.mock.calls[0]?.[0])).toContain('/tmp/gone')
+    expect(report).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ problem: 'not-found' }),
+    )
+    expect(svc.getWindows()).toHaveLength(0)
+  })
+
+  it('openWindowForFolder keeps the recent entry when the folder is unavailable', async () => {
+    const remove = vi.fn().mockResolvedValue(undefined)
+    const report = vi.fn().mockResolvedValue(undefined)
+    const opts = makeOpts()
+    opts.folderOpenGuard = {
+      async probe() {
+        return { problem: 'unavailable', error: new Error('EACCES') }
+      },
+      report,
+    }
+    ;(opts.appServices as { recentWorkspaces: unknown }).recentWorkspaces = { remove }
+    const svc = makeService(opts)
+
+    await svc.openWindowForFolder(URI.file('/tmp/locked'))
+
+    expect(remove).not.toHaveBeenCalled()
+    expect(report).toHaveBeenCalledTimes(1)
+    expect(svc.getWindows()).toHaveLength(0)
+  })
+
+  it('openWindowForFolder skips the guard for remote folders', async () => {
+    const probe = vi.fn(async () => ({ problem: 'not-found' as const }))
+    const opts = makeOpts()
+    opts.folderOpenGuard = { probe, async report() {} }
+    const svc = makeService(opts)
+
+    await svc.openWindowForFolder(URI.parse('remote-ssh://e2e-local/home/dev/project'))
+
+    expect(probe).not.toHaveBeenCalled()
     expect(svc.getWindows()).toHaveLength(1)
   })
 

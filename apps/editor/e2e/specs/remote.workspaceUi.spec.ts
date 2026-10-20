@@ -204,4 +204,35 @@ test.describe('remote workspace ui', () => {
       )
       .toBe(true)
   })
+
+  test('a missing remote folder opens without a pre-check, then is silently pruned from recents @regression', async ({
+    workbench,
+    scratchDir,
+  }) => {
+    await workbench.waitForRestored()
+    const tmpDir = scratchDir('ue2-remote-missing-')
+    const goneUri = remoteUri(path.join(tmpDir, 'gone'))
+
+    // No pre-open probe: the window switches to the missing folder anyway (a
+    // connection failure must never be mistaken for "folder missing").
+    await workbench.page.evaluate((uri) => window.__E2E__!.openWorkspaceUri(uri), goneUri)
+    await expect
+      .poll(() => workbench.page.evaluate(() => window.__E2E__!.getCurrentWorkspaceUri()), {
+        timeout: 20_000,
+      })
+      .toBe(goneUri)
+
+    // Once the remote file system authoritatively answers ENOENT, the renderer
+    // pruner drops the recent entry.
+    await expect
+      .poll(() => workbench.page.evaluate(() => window.__E2E__!.getRecentWorkspaceUris()), {
+        timeout: 20_000,
+      })
+      .not.toContain(goneUri)
+
+    // Pruning only touches recents: the window still shows the remote folder.
+    expect(await workbench.page.evaluate(() => window.__E2E__!.getCurrentWorkspaceUri())).toBe(
+      goneUri,
+    )
+  })
 })

@@ -10,6 +10,7 @@ import { AgentBinaryPrefetchContribution } from '../AgentBinaryPrefetchContribut
 import { ExtensionsContribution } from '../ExtensionsContribution.js'
 import { LanguageServicePrewarmContribution } from '../LanguageServicePrewarmContribution.js'
 import { LegacyMcpBridgeCleanupContribution } from '../LegacyMcpBridgeCleanupContribution.js'
+import { RemoteRecentFolderPrunerContribution } from '../RemoteRecentFolderPrunerContribution.js'
 import { StartupTimingLogContribution } from '../StartupTimingLogContribution.js'
 import { WorkspaceFileListingContribution } from '../WorkspaceFileListingContribution.js'
 import { WorkspaceWatchContribution } from '../WorkspaceWatchContribution.js'
@@ -76,5 +77,14 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.legacyMcpBridgeCleanup',
   LegacyMcpBridgeCleanupContribution,
+  WorkbenchPhase.Eventually,
+)
+
+// Once the remote workspace is up, drop the recent entry if the remote file
+// system authoritatively says the folder is gone. Eventually so startup never
+// waits on a remote round trip; transient connection errors keep the entry.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.remoteRecentFolderPruner',
+  RemoteRecentFolderPrunerContribution,
   WorkbenchPhase.Eventually,
 )

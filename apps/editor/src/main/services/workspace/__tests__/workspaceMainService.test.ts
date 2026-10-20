@@ -5,6 +5,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { Emitter, URI, type IRecentWorkspace } from '@universe-editor/platform'
 import type { Storage } from '../../../storage.js'
+import { type FolderOpenProbeFailure, type IWorkspaceFolderOpenGuard } from '../folderOpenGuard.js'
 import { RecentWorkspacesMainService } from '../recentWorkspacesMainService.js'
 import {
   WorkspaceMainService,
@@ -80,6 +81,21 @@ function makeDialog(result: URI | null = null): IFolderDialog & { calls: number 
   } as IFolderDialog & { calls: number }
 }
 
+function makeGuard(failure: FolderOpenProbeFailure | null) {
+  const probes: string[] = []
+  const reports: Array<{ folder: string; problem: string }> = []
+  const guard: IWorkspaceFolderOpenGuard = {
+    async probe(folder) {
+      probes.push(folder.toString())
+      return failure
+    },
+    async report(folder, f) {
+      reports.push({ folder: folder.toString(), problem: f.problem })
+    },
+  }
+  return { guard, probes, reports }
+}
+
 describe('WorkspaceMainService', () => {
   it('starts with no current workspace and empty recent list', async () => {
     const svc = new WorkspaceMainService(makeStorage(), makeRecents(), makeDialog())
@@ -133,6 +149,166 @@ describe('WorkspaceMainService', () => {
     await svc.openFolder(null as any)
     expect(dialog.calls).toBe(1)
     await expect(svc.getCurrent()).resolves.toMatchObject({ name: 'ipc-picked' })
+    svc.dispose()
+  })
+
+  it('openFolder proceeds normally when the guard accepts the folder', async () => {
+    const storage = makeStorage()
+    const recents = makeRecents()
+    const folder = URI.file('/tmp/usable')
+    const { guard, probes, reports } = makeGuard(null)
+    const svc = new WorkspaceMainService(
+      storage,
+      recents,
+      makeDialog(),
+      undefined,
+      undefined,
+      guard,
+    )
+
+    await svc.openFolder(folder)
+
+    expect(probes).toEqual([folder.toString()])
+    expect(reports).toEqual([])
+    expect(svc.current?.folder.toString()).toBe(folder.toString())
+    await expect(svc.getRecent()).resolves.toHaveLength(1)
+    // First open hydrates (switches to the empty scope), then the workspace scope.
+    expect(storage.switchCalls.at(-1)).not.toBeNull()
+    svc.dispose()
+  })
+
+  it.each(['not-found', 'not-a-directory'] as const)(
+    'openFolder aborts and drops the recent entry on %s',
+    async (problem) => {
+      const storage = makeStorage()
+      const recents = makeRecents()
+      const folder = URI.file('/tmp/gone')
+      await recents.add({ folder, name: 'gone' })
+      const { guard, probes, reports } = makeGuard({ problem })
+      const svc = new WorkspaceMainService(
+        storage,
+        recents,
+        makeDialog(),
+        undefined,
+        undefined,
+        guard,
+      )
+      const workspaceEvents: unknown[] = []
+      svc.onDidChangeWorkspace((w) => workspaceEvents.push(w))
+
+      await svc.openFolder(folder)
+
+      expect(probes).toEqual([folder.toString()])
+      expect(svc.current).toBeNull()
+      await expect(svc.getRecent()).resolves.toEqual([])
+      expect(reports).toEqual([{ folder: folder.toString(), problem }])
+      expect(workspaceEvents).toEqual([])
+      expect(storage.switchCalls).toEqual([])
+      svc.dispose()
+    },
+  )
+
+  it('openFolder keeps the recent entry when the folder is unavailable', async () => {
+    const recents = makeRecents()
+    const folder = URI.file('/tmp/locked')
+    await recents.add({ folder, name: 'locked' })
+    const { guard, reports } = makeGuard({
+      problem: 'unavailable',
+      error: Object.assign(new Error('EACCES'), { code: 'EACCES' }),
+    })
+    const svc = new WorkspaceMainService(
+      makeStorage(),
+      recents,
+      makeDialog(),
+      undefined,
+      undefined,
+      guard,
+    )
+
+    await svc.openFolder(folder)
+
+    expect(svc.current).toBeNull()
+    await expect(svc.getRecent()).resolves.toHaveLength(1)
+    expect(reports).toEqual([{ folder: folder.toString(), problem: 'unavailable' }])
+    svc.dispose()
+  })
+
+  it('openFolder probes before focusing an already-open window', async () => {
+    const interceptor = vi.fn(() => true)
+    const { guard } = makeGuard({ problem: 'not-found' })
+    const svc = new WorkspaceMainService(
+      makeStorage(),
+      makeRecents(),
+      makeDialog(),
+      undefined,
+      interceptor,
+      guard,
+    )
+
+    await svc.openFolder(URI.file('/tmp/gone'))
+
+    expect(interceptor).not.toHaveBeenCalled()
+    expect(svc.current).toBeNull()
+    svc.dispose()
+  })
+
+  it('openFolder skips the guard for remote folders', async () => {
+    const { guard, probes } = makeGuard({ problem: 'not-found' })
+    const folder = URI.parse('remote-ssh://e2e-local/home/dev/project')
+    const svc = new WorkspaceMainService(
+      makeStorage(),
+      makeRecents(),
+      makeDialog(),
+      undefined,
+      undefined,
+      guard,
+    )
+
+    await svc.openFolder(folder)
+
+    expect(probes).toEqual([])
+    expect(svc.current?.folder.toString()).toBe(folder.toString())
+    svc.dispose()
+  })
+
+  it('openFolder still resolves when the guard report rejects', async () => {
+    const guard: IWorkspaceFolderOpenGuard = {
+      async probe() {
+        return { problem: 'not-found' }
+      },
+      async report() {
+        throw new Error('dialog exploded')
+      },
+    }
+    const svc = new WorkspaceMainService(
+      makeStorage(),
+      makeRecents(),
+      makeDialog(),
+      undefined,
+      undefined,
+      guard,
+    )
+
+    await expect(svc.openFolder(URI.file('/tmp/gone'))).resolves.toBeUndefined()
+    expect(svc.current).toBeNull()
+    svc.dispose()
+  })
+
+  it('openFolder still resolves when removing the dead recent entry rejects', async () => {
+    const recents = makeRecents()
+    recents.remove = () => Promise.reject(new Error('persist failed'))
+    const { guard, reports } = makeGuard({ problem: 'not-found' })
+    const svc = new WorkspaceMainService(
+      makeStorage(),
+      recents,
+      makeDialog(),
+      undefined,
+      undefined,
+      guard,
+    )
+
+    await expect(svc.openFolder(URI.file('/tmp/gone'))).resolves.toBeUndefined()
+    expect(reports).toHaveLength(1)
     svc.dispose()
   })
 

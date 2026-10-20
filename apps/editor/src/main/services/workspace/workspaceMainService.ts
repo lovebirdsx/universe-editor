@@ -24,6 +24,7 @@ import {
 } from '@universe-editor/platform'
 import { workspaceIdFromUri } from '../../storage.js'
 import { canonicalizeWorkspaceFolderUri } from '../remote/remoteUri.js'
+import { handleFolderOpenFailure, type IWorkspaceFolderOpenGuard } from './folderOpenGuard.js'
 import type { RecentWorkspacesMainService } from './recentWorkspacesMainService.js'
 
 export interface IFolderDialog {
@@ -77,6 +78,9 @@ export class WorkspaceMainService implements IWorkspaceServiceWire, IDisposable 
     private readonly _folderDialog: IFolderDialog,
     private readonly _logger: ILogger = new NullLogger(),
     private readonly _onBeforeOpen?: OpenFolderInterceptor,
+    // Optional so unit tests / embedding callers keep the pre-guard behaviour;
+    // production wires the Electron guard in windowScopeFactory.
+    private readonly _guard?: IWorkspaceFolderOpenGuard,
   ) {
     this._recentRelay.input = _recents.onDidChangeRecent
   }
@@ -130,6 +134,23 @@ export class WorkspaceMainService implements IWorkspaceServiceWire, IDisposable 
       resolved = reviveUri(folder)
     }
     resolved = canonicalizeWorkspaceFolderUri(resolved)
+    // Probe before _hydrate/focus-existing: a folder that no longer exists must
+    // not swap the storage scope or focus a stale window. Remote folders are
+    // skipped by the guard (see folderOpenGuard.ts).
+    if (resolved.scheme === 'file' && this._guard) {
+      const failure = await this._guard.probe(resolved)
+      if (failure) {
+        await handleFolderOpenFailure({
+          action: 'openFolder',
+          folder: resolved,
+          failure,
+          guard: this._guard,
+          recents: this._recents,
+          logger: this._logger,
+        })
+        return
+      }
+    }
     await this._hydrate()
     const workspace = makeWorkspace(resolved)
     const workspaceId = workspaceIdFromUri(workspace.folder.toString())

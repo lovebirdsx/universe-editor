@@ -37,6 +37,7 @@ import type {
   WindowScopedServices,
 } from '../../window/scopedServicesFactory.js'
 import type { IWorkspace, IOpenNewWindowOptions } from '@universe-editor/platform'
+import type { IWorkspaceFolderOpenGuard } from '../workspace/folderOpenGuard.js'
 import type { WindowMainService } from './windowMainService.js'
 
 /** Facade couplings the per-window stack needs, without a back-reference to it. */
@@ -85,6 +86,8 @@ export async function createWindowScopedServices(opts: {
   isFirstWindow: boolean
   restoreWorkspace?: IWorkspace | null
   callbacks: WindowScopeCallbacks
+  /** Shared open-time folder guard; also used by WindowMainService's new-window path. */
+  folderGuard: IWorkspaceFolderOpenGuard
   /** The owning service — needed only to back the cross-process IWindowsService adapter. */
   windowsServiceHost: WindowMainService
 }): Promise<WindowScopeResult> {
@@ -96,6 +99,7 @@ export async function createWindowScopedServices(opts: {
     isFirstWindow,
     restoreWorkspace,
     callbacks,
+    folderGuard,
     windowsServiceHost,
   } = opts
 
@@ -109,6 +113,7 @@ export async function createWindowScopedServices(opts: {
       folderDialog,
       logService.createLogger({ id: 'workspace', name: 'Workspace' }),
       (workspaceId) => callbacks.focusWindowForWorkspace(workspaceId),
+      folderGuard,
     ),
   )
   // Restore the workspace before loadURL so the renderer's getCurrent() at

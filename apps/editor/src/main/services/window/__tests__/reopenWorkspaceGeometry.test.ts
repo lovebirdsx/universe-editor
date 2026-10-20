@@ -155,6 +155,9 @@ function makeOpts() {
     rendererUrl: 'http://localhost:5173',
     getConfigDir: () => '/tmp/ue-state',
     getConfigurationDefaults: () => ({}),
+    // These folders are fake paths; skip the real fs probe the production
+    // guard would run (it aborts on a missing folder before creating a window).
+    folderOpenGuard: { probe: async () => null, report: async () => {} },
   }
 }
 
