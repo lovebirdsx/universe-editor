@@ -2293,6 +2293,9 @@
   background: var(--vscode-agent-messageBackground, #2a2a2a);
   color: var(--vscode-descriptionForeground, #999);
   font-size: calc(var(--agent-font-size, 12px) - 1px);
+  /* Explicit line box so the sub-agent pill (whose count text inherits the
+     agent font instead of the button's UA font) matches this pill's height. */
+  line-height: 1.2;
   cursor: pointer;
   box-shadow: 0 1px 4px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.4));
 }
@@ -2303,7 +2306,8 @@
 }
 
 /* Floating sub-agent navigator (`‹ 2/5 ›`), sharing the top-right chip row with
-   side tasks. The counter is the only flexible part; the arrows stay square. */
+   side tasks. Same padding/border as the chips, with an explicit line box so
+   both pills end up the same height at every `acp.fontSize`. */
 .subagentNav {
   display: inline-flex;
   align-items: center;
@@ -2314,6 +2318,7 @@
   background: var(--vscode-agent-messageBackground, #2a2a2a);
   color: var(--vscode-descriptionForeground, #999);
   font-size: calc(var(--agent-font-size, 12px) - 1px);
+  line-height: 1.2;
   box-shadow: 0 1px 4px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.4));
 }
 
@@ -2321,8 +2326,10 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  /* Stretch to the pill's line box instead of a fixed height: the buttons are
+     flex items, so their UA font metrics never leak into the pill height. */
+  align-self: stretch;
   width: 18px;
-  height: 18px;
   padding: 0;
   border: none;
   border-radius: 4px;
@@ -2331,14 +2338,9 @@
   cursor: pointer;
 }
 
-.subagentNavBtn:hover:not(:disabled) {
+.subagentNavBtn:hover {
   background: var(--vscode-list-hoverBackground, #2a2d2e);
   color: inherit;
-}
-
-.subagentNavBtn:disabled {
-  opacity: 0.35;
-  cursor: default;
 }
 
 .subagentNavCount {
@@ -2440,6 +2442,7 @@
   background: var(--vscode-agent-messageBackground, #2a2a2a);
   color: var(--vscode-descriptionForeground, #999);
   font-size: calc(var(--agent-font-size, 12px) - 1px);
+  line-height: 1.2;
   cursor: default;
   box-shadow: 0 1px 4px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.4));
 }

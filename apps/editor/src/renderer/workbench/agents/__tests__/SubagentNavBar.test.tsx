@@ -1,7 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Tests for the floating `‹ 2/5 ›` pill: which card the counter names, when the
- *  arrows are enabled, and that clicks route through the widget handle.
+ *  Tests for the floating `‹ 2/5 ›` pill: which card the counter names, that the
+ *  arrows stay enabled at both ends, and that clicks route through the widget
+ *  handle.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -158,11 +159,13 @@ describe('SubagentNavBar', () => {
     renderBar([subagent('g0'), subagent('g1')], handle)
 
     expect(screen.getByTestId('acp-subagent-count').textContent).toBe('1/2')
-    expect((screen.getByTestId('acp-subagent-prev') as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByTestId('acp-subagent-prev') as HTMLButtonElement).disabled).toBe(false)
     expect((screen.getByTestId('acp-subagent-next') as HTMLButtonElement).disabled).toBe(false)
 
     fireEvent.click(screen.getByTestId('acp-subagent-next'))
     expect(moveSubagent).toHaveBeenCalledWith('next')
+    fireEvent.click(screen.getByTestId('acp-subagent-prev'))
+    expect(moveSubagent).toHaveBeenCalledWith('prev')
   })
 
   it('prefers the focused card while it is still on screen', () => {
@@ -171,10 +174,27 @@ describe('SubagentNavBar', () => {
 
     expect(screen.getByTestId('acp-subagent-count').textContent).toBe('2/2')
     expect((screen.getByTestId('acp-subagent-prev') as HTMLButtonElement).disabled).toBe(false)
-    expect((screen.getByTestId('acp-subagent-next') as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByTestId('acp-subagent-next') as HTMLButtonElement).disabled).toBe(false)
 
     fireEvent.click(screen.getByTestId('acp-subagent-prev'))
     expect(moveSubagent).toHaveBeenCalledWith('prev')
+    fireEvent.click(screen.getByTestId('acp-subagent-next'))
+    expect(moveSubagent).toHaveBeenCalledWith('next')
+  })
+
+  it('keeps both arrows enabled with a single card', () => {
+    const { handle, moveSubagent } = makeHandle(null)
+    renderBar([subagent('only')], handle)
+
+    expect(screen.getByTestId('acp-subagent-count').textContent).toBe('1/1')
+    const prev = screen.getByTestId('acp-subagent-prev') as HTMLButtonElement
+    const next = screen.getByTestId('acp-subagent-next') as HTMLButtonElement
+    expect(prev.disabled).toBe(false)
+    expect(next.disabled).toBe(false)
+
+    fireEvent.click(prev)
+    fireEvent.click(next)
+    expect(moveSubagent.mock.calls).toEqual([['prev'], ['next']])
   })
 
   it('shows an unknown position with both arrows enabled above every card', () => {

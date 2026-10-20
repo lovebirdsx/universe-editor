@@ -141,16 +141,31 @@ describe('adjacentSubagent', () => {
     expect(adjacentSubagent(cards, 0, 'next')?.key).toBe('t:task-a')
     expect(adjacentSubagent(cards, 1, 'next')?.key).toBe('t:task-b')
     expect(adjacentSubagent(cards, 3, 'next')?.key).toBe('t:task-b')
-    expect(adjacentSubagent(cards, 5, 'next')).toBeUndefined()
+    expect(adjacentSubagent(cards, 5, 'next')?.key).toBe('t:task-a')
 
     expect(adjacentSubagent(cards, 2, 'prev')?.key).toBe('t:task-a')
     expect(adjacentSubagent(cards, 5, 'prev')?.key).toBe('t:task-b')
-    expect(adjacentSubagent(cards, 1, 'prev')).toBeUndefined()
+    expect(adjacentSubagent(cards, 1, 'prev')?.key).toBe('t:task-b')
+  })
+
+  it('wraps at both ends', () => {
+    expect(adjacentSubagent(cards, 4, 'next')?.key).toBe('t:task-a')
+    expect(adjacentSubagent(cards, 5, 'next')?.key).toBe('t:task-a')
+    expect(adjacentSubagent(cards, 1, 'prev')?.key).toBe('t:task-b')
+    expect(adjacentSubagent(cards, 0, 'prev')?.key).toBe('t:task-b')
   })
 
   it('starts at the first / last card when there is no current position', () => {
     expect(adjacentSubagent(cards, -1, 'next')?.key).toBe('t:task-a')
     expect(adjacentSubagent(cards, -1, 'prev')?.key).toBe('t:task-b')
+  })
+
+  it('returns the only card from either direction', () => {
+    const only = topLevelSubagentCards([subagent('task-a')])
+    for (const index of [-1, only[0]!.timelineIndex]) {
+      expect(adjacentSubagent(only, index, 'next')?.key).toBe('t:task-a')
+      expect(adjacentSubagent(only, index, 'prev')?.key).toBe('t:task-a')
+    }
   })
 
   it('returns undefined for an empty sequence', () => {
@@ -172,9 +187,17 @@ describe('adjacentSubagentFromCardIndex', () => {
     expect(adjacentSubagentFromCardIndex(cards, -1, 'prev')?.key).toBe('t:task-b')
   })
 
-  it('stops at the last / first card', () => {
-    expect(adjacentSubagentFromCardIndex(cards, 1, 'next')).toBeUndefined()
-    expect(adjacentSubagentFromCardIndex(cards, 0, 'prev')).toBeUndefined()
+  it('wraps from the last / first card', () => {
+    expect(adjacentSubagentFromCardIndex(cards, 1, 'next')?.key).toBe('t:task-a')
+    expect(adjacentSubagentFromCardIndex(cards, 0, 'prev')?.key).toBe('t:task-b')
+  })
+
+  it('keeps the only card from either direction', () => {
+    const only = topLevelSubagentCards([subagent('task-a')])
+    for (const index of [-1, 0]) {
+      expect(adjacentSubagentFromCardIndex(only, index, 'next')?.key).toBe('t:task-a')
+      expect(adjacentSubagentFromCardIndex(only, index, 'prev')?.key).toBe('t:task-a')
+    }
   })
 })
 

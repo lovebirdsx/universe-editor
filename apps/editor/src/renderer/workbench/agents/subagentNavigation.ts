@@ -62,9 +62,10 @@ export function subagentIndexAtOrBefore(
 }
 
 /**
- * The card strictly after / before `timelineIndex`. A negative index means
- * "no current position": next starts at the first card and prev at the last,
- * mirroring the existing timeline walk's restart behaviour.
+ * The card after / before `timelineIndex`, wrapping at both ends (next after
+ * the last returns the first; prev before the first returns the last). A
+ * negative index means "no current position": next starts at the first card
+ * and prev at the last. Only an empty sequence returns undefined.
  */
 export function adjacentSubagent(
   cards: readonly SubagentCardRef[],
@@ -76,20 +77,21 @@ export function adjacentSubagent(
     return direction === 'next' ? cards[0] : cards[cards.length - 1]
   }
   if (direction === 'next') {
-    return cards.find((card) => card.timelineIndex > timelineIndex)
+    return cards.find((card) => card.timelineIndex > timelineIndex) ?? cards[0]
   }
   for (let i = cards.length - 1; i >= 0; i--) {
     const card = cards[i]!
     if (card.timelineIndex < timelineIndex) return card
   }
-  return undefined
+  return cards[cards.length - 1]
 }
 
 /**
  * Next/previous card from a card index — the counterpart of
  * {@link currentSubagentIndex}, which returns an index into `cards` rather than
  * a timeline index. Keeping the translation here stops callers from feeding a
- * card index into {@link adjacentSubagent}'s timeline-index parameter.
+ * card index into {@link adjacentSubagent}'s timeline-index parameter. Wrapping
+ * (including a single-card sequence) is inherited from that function.
  */
 export function adjacentSubagentFromCardIndex(
   cards: readonly SubagentCardRef[],

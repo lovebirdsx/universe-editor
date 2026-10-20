@@ -2,7 +2,8 @@
  *  Sub-agent card navigation smoke (@p1).
  *
  *  子 Agent 卡片（Task / Agent 工具调用）散落在时间线里后，需要三种快速定位入口：
- *   1. Alt+Shift+J / K 在顶层子 Agent 卡片间前后跳转（只聚焦卡头，不改折叠态）；
+ *   1. Alt+Shift+J / K 在顶层子 Agent 卡片间前后跳转（只聚焦卡头，不改折叠态），
+ *      首尾环绕——末尾继续向后回到第一张，第一张继续向前回到最后一张；
  *   2. 右上角 `‹ 2/5 ›` 胶囊随滚动/键盘更新，箭头复用同一条跳转路径；
  *   3. Go to Symbol（@ / @:）把子 Agent 调用分区置顶，接受后聚焦对应卡片。
  *
@@ -19,11 +20,13 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const ECHO_AGENT_PATH = resolve(__dirname, '..', '..', 'src', 'test-fixtures', 'echoAgent.cjs')
 
 const SUBAGENT_CARDS = '[data-timeline-key^="t:tcSub"]'
+const TWO_CARDS = ['emit-subagent-mixed:2x1', 'emit-subagent-mixed:2x1'] as const
 
-/** Start a fresh echo session with two top-level sub-agent cards. */
-async function openSessionWithTwoCards(
+/** Start a fresh echo session, send each prompt, and wait for one card per prompt. */
+async function openSessionWithCards(
   page: Page,
   workbench: { waitForRestored: () => Promise<void> },
+  prompts: readonly string[],
 ): Promise<readonly string[]> {
   await workbench.waitForRestored()
 
@@ -38,13 +41,14 @@ async function openSessionWithTwoCards(
     .poll(() => page.evaluate(() => window.__E2E__!.getAcpSessionCount()), { timeout: 10000 })
     .toBe(1)
 
-  // Both prompts are dispatched; the wait below is on the rendered cards, not on
-  // the dispatch promise (ACP streaming keeps the turn alive after sendPrompt).
-  await page.evaluate(() => window.__E2E__!.sendAcpPrompt('emit-subagent-mixed:2x1'))
-  await page.evaluate(() => window.__E2E__!.sendAcpPrompt('emit-subagent-mixed:2x1'))
+  // Prompts are dispatched; the wait below is on the rendered cards, not on the
+  // dispatch promise (ACP streaming keeps the turn alive after sendPrompt).
+  for (const prompt of prompts) {
+    await page.evaluate((text) => window.__E2E__!.sendAcpPrompt(text), prompt)
+  }
 
   const cards = page.locator(SUBAGENT_CARDS)
-  await expect(cards).toHaveCount(2, { timeout: 10000 })
+  await expect(cards).toHaveCount(prompts.length, { timeout: 10000 })
   return cards.evaluateAll((els) => els.map((el) => el.getAttribute('data-timeline-key') ?? ''))
 }
 
@@ -82,7 +86,7 @@ test.describe('@p1 sub-agent card navigation', () => {
     page,
     workbench,
   }) => {
-    const keys = await openSessionWithTwoCards(page, workbench)
+    const keys = await openSessionWithCards(page, workbench, TWO_CARDS)
     const count = page.getByTestId('acp-subagent-count')
     await expect(page.getByTestId('acp-subagent-nav')).toBeVisible()
     await expect(count).toHaveText(/\/2$/)
@@ -96,25 +100,58 @@ test.describe('@p1 sub-agent card navigation', () => {
     await page.keyboard.press('Alt+Home')
 
     // The pill already names the first card visible at the top, so one step
-    // forward lands on the second card; back returns to the first.
+    // forward lands on the second card.
     await page.keyboard.press('Alt+Shift+J')
     await expect.poll(() => focusedSubagentKey(page), { timeout: 5000 }).toBe(keys[1])
     await expect(count).toHaveText('2/2')
-    await expect(page.getByTestId('acp-subagent-next')).toBeDisabled()
+    await expect(page.getByTestId('acp-subagent-next')).toBeEnabled()
+    await expect(page.getByTestId('acp-subagent-prev')).toBeEnabled()
 
-    await page.keyboard.press('Alt+Shift+K')
+    // Past the last card wraps to the first; before the first wraps to the last.
+    await page.keyboard.press('Alt+Shift+J')
     await expect.poll(() => focusedSubagentKey(page), { timeout: 5000 }).toBe(keys[0])
     await expect(count).toHaveText('1/2')
-    await expect(page.getByTestId('acp-subagent-prev')).toBeDisabled()
 
-    // The pill's arrows share the widget command, not a parallel scroll path.
-    await page.getByTestId('acp-subagent-next').click()
+    await page.keyboard.press('Alt+Shift+K')
     await expect.poll(() => focusedSubagentKey(page), { timeout: 5000 }).toBe(keys[1])
     await expect(count).toHaveText('2/2')
 
-    await page.getByTestId('acp-subagent-prev').click()
+    // The pill's arrows share the widget command, not a parallel scroll path,
+    // and wrap the same way.
+    await page.getByTestId('acp-subagent-next').click()
     await expect.poll(() => focusedSubagentKey(page), { timeout: 5000 }).toBe(keys[0])
     await expect(count).toHaveText('1/2')
+
+    await page.getByTestId('acp-subagent-prev').click()
+    await expect.poll(() => focusedSubagentKey(page), { timeout: 5000 }).toBe(keys[1])
+    await expect(count).toHaveText('2/2')
+    await expectCardsCollapsed(page, keys)
+  })
+
+  test('a single card is focused from either direction', async ({ page, workbench }) => {
+    const keys = await openSessionWithCards(page, workbench, ['emit-subagent:1x1'])
+    const count = page.getByTestId('acp-subagent-count')
+    await expect(page.getByTestId('acp-subagent-nav')).toBeVisible()
+    await expect(count).toHaveText('1/1')
+    await expect(page.getByTestId('acp-subagent-prev')).toBeEnabled()
+    await expect(page.getByTestId('acp-subagent-next')).toBeEnabled()
+
+    await page.evaluate(() => {
+      const timeline = document.querySelector('[data-testid="acp-timeline"]')
+      ;(timeline?.parentElement as HTMLElement | null)?.focus()
+    })
+
+    await page.keyboard.press('Alt+Shift+J')
+    await expect.poll(() => focusedSubagentKey(page), { timeout: 5000 }).toBe(keys[0])
+
+    await page.keyboard.press('Alt+Shift+K')
+    await expect.poll(() => focusedSubagentKey(page), { timeout: 5000 }).toBe(keys[0])
+
+    // Arrows take the same wrap-around path.
+    await page.getByTestId('acp-subagent-next').click()
+    await expect.poll(() => focusedSubagentKey(page), { timeout: 5000 }).toBe(keys[0])
+    await page.getByTestId('acp-subagent-prev').click()
+    await expect.poll(() => focusedSubagentKey(page), { timeout: 5000 }).toBe(keys[0])
     await expectCardsCollapsed(page, keys)
   })
 
@@ -122,7 +159,7 @@ test.describe('@p1 sub-agent card navigation', () => {
     page,
     workbench,
   }) => {
-    const keys = await openSessionWithTwoCards(page, workbench)
+    const keys = await openSessionWithCards(page, workbench, TWO_CARDS)
 
     await page.evaluate(() => {
       void window.__E2E__!.runCommand('workbench.action.gotoSymbol')
@@ -142,7 +179,7 @@ test.describe('@p1 sub-agent card navigation', () => {
   })
 
   test('the @: category view pins the same sub-agent section', async ({ page, workbench }) => {
-    await openSessionWithTwoCards(page, workbench)
+    await openSessionWithCards(page, workbench, TWO_CARDS)
 
     await page.evaluate(() => {
       void window.__E2E__!.runCommand('workbench.action.quickOpen')

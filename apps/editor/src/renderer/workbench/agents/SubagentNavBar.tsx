@@ -2,7 +2,8 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  SubagentNavBar — the floating `‹ 2/5 ›` pill above the chat timeline. It walks
  *  the top-level sub-agent cards via the same widget command Alt+Shift+J/K uses
- *  and tracks the viewport so the counter follows manual scrolling. Kept separate
+ *  and tracks the viewport so the counter follows manual scrolling. Both arrows
+ *  stay enabled and wrap around the ends, so navigation never dead-ends. Kept separate
  *  from ChatBody's own subscriptions so streaming timeline updates re-render only
  *  this small pill (and only when the displayed index actually changes).
  *--------------------------------------------------------------------------------------------*/
@@ -114,10 +115,9 @@ export function SubagentNavBar({ session, scrollContainerRef, handleRef }: Subag
         data-testid="acp-subagent-prev"
         data-tooltip={localize('acp.subagentNav.previous', 'Previous sub-agent card')}
         aria-label={localize('acp.subagentNav.previous', 'Previous sub-agent card')}
-        disabled={active === 0}
         onClick={() => handleRef.current.moveSubagent('prev')}
       >
-        <ChevronLeft size={14} aria-hidden="true" />
+        <ChevronLeft size={13} strokeWidth={1.75} aria-hidden="true" />
       </button>
       <span className={styles['subagentNavCount']} data-testid="acp-subagent-count">
         {position}
@@ -128,10 +128,9 @@ export function SubagentNavBar({ session, scrollContainerRef, handleRef }: Subag
         data-testid="acp-subagent-next"
         data-tooltip={localize('acp.subagentNav.next', 'Next sub-agent card')}
         aria-label={localize('acp.subagentNav.next', 'Next sub-agent card')}
-        disabled={active === total - 1}
         onClick={() => handleRef.current.moveSubagent('next')}
       >
-        <ChevronRight size={14} aria-hidden="true" />
+        <ChevronRight size={13} strokeWidth={1.75} aria-hidden="true" />
       </button>
     </div>
   )
