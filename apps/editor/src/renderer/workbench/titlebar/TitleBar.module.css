@@ -1,5 +1,10 @@
 .titlebar {
   height: 30px;
+  /* Auxiliary windows stack this header directly in a column flex container;
+     without this the editor's content-sized flex basis (a Git Graph canvas can
+     exceed 10000px) shrinks it to min-content. Inert in the main window, where
+     the header sits inside a fixed-height block wrapper. */
+  flex: 0 0 auto;
   background: var(--vscode-titleBar-activeBackground, #0f0f11);
   display: flex;
   align-items: center;
