@@ -54,6 +54,7 @@ import {
   type GitGraphLoadResult,
   type GitGraphRepoDto,
   type GitGraphWorktreeDto,
+  type GitGraphWorktreeRef,
   type GitGraphWorktreeSyncResult,
   type ShowCommitChangesPayload,
 } from '@universe-editor/extensions-common'
@@ -166,6 +167,49 @@ interface WorktreeSyncItem extends IQuickPickItem {
 
 function toWorktreeSyncItem(wt: GitGraphWorktreeDto): WorktreeSyncItem {
   return { id: wt.path, label: wt.name, description: wt.branch ?? wt.path, path: wt.path }
+}
+
+/** The combined worktree action always pushes this branch to this remote,
+ *  independent of the branch the worktrees are synced to. */
+const WORKTREE_SYNC_PUSH_BRANCH = 'main'
+const WORKTREE_SYNC_PUSH_REMOTE = 'origin'
+
+function worktreeSyncSummaryLines(
+  targetBranch: string,
+  summary: GitGraphWorktreeSyncResult,
+): string[] {
+  const lines: string[] = []
+  if (summary.synced.length > 0) {
+    lines.push(
+      localize('gitGraph.worktree.sync.summarySynced', 'Synced: {names}', {
+        names: summary.synced.join(', '),
+      }),
+    )
+  }
+  if (summary.skippedDirty.length > 0) {
+    lines.push(
+      localize('gitGraph.worktree.sync.summarySkipped', 'Skipped (uncommitted changes): {names}', {
+        names: summary.skippedDirty.join(', '),
+      }),
+    )
+  }
+  if (summary.skippedUnmatchedMessages.length > 0) {
+    lines.push(
+      localize(
+        'gitGraph.worktree.sync.summaryUnmatched',
+        'Skipped (no matching commit message in {branch}): {names}',
+        { branch: targetBranch, names: summary.skippedUnmatchedMessages.join(', ') },
+      ),
+    )
+  }
+  if (summary.failed.length > 0) {
+    lines.push(
+      localize('gitGraph.worktree.sync.summaryFailed', 'Failed: {items}', {
+        items: summary.failed.map((f) => `${f.name} (${f.error})`).join('; '),
+      }),
+    )
+  }
+  return lines
 }
 
 function formatDate(unixSeconds: number): string {
@@ -1700,6 +1744,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
       targetBranch: string,
       candidates: readonly GitGraphWorktreeDto[],
       force: boolean,
+      andPush = false,
     ): Promise<string[] | undefined> => {
       if (!quickInput) return Promise.resolve(undefined)
       const items = candidates.map(toWorktreeSyncItem)
@@ -1711,9 +1756,13 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
           ? localize('gitGraph.worktree.forceSync.confirm', 'Force sync ({count})', {
               count: qp.selectedItems.length,
             })
-          : localize('gitGraph.worktree.sync.confirm', 'Sync ({count})', {
-              count: qp.selectedItems.length,
-            })
+          : andPush
+            ? localize('gitGraph.worktree.syncAndPush.confirm', 'Sync & push ({count})', {
+                count: qp.selectedItems.length,
+              })
+            : localize('gitGraph.worktree.sync.confirm', 'Sync ({count})', {
+                count: qp.selectedItems.length,
+              })
         qp.buttons = [
           allChecked()
             ? {
@@ -1734,9 +1783,15 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
         ? localize('gitGraph.worktree.forceSync.title', 'Force sync worktrees to {branch}', {
             branch: targetBranch,
           })
-        : localize('gitGraph.worktree.sync.title', 'Sync worktrees to {branch}', {
-            branch: targetBranch,
-          })
+        : andPush
+          ? localize(
+              'gitGraph.worktree.syncAndPush.title',
+              'Sync worktrees to {branch} and push main',
+              { branch: targetBranch },
+            )
+          : localize('gitGraph.worktree.sync.title', 'Sync worktrees to {branch}', {
+              branch: targetBranch,
+            })
       qp.items = items
       // Everything starts checked, so "sync them all" stays one Enter away.
       qp.selectedItems = items
@@ -1779,6 +1834,29 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
     [quickInput],
   )
 
+  const worktreeSyncRefs = useCallback(
+    (selectedPaths: readonly string[]): GitGraphWorktreeRef[] =>
+      allWorktrees
+        .filter((wt) => selectedPaths.includes(wt.path))
+        .map((wt) => ({ path: wt.path, name: wt.name })),
+    [allWorktrees],
+  )
+
+  const executeWorktreeSync = useCallback(
+    (
+      targetBranch: string,
+      refs: readonly GitGraphWorktreeRef[],
+      force: boolean,
+    ): Promise<GitGraphWorktreeSyncResult | undefined> =>
+      commands.executeCommand<GitGraphWorktreeSyncResult>(
+        GitGraphCommands.syncWorktrees,
+        targetBranch,
+        refs,
+        force,
+      ),
+    [commands],
+  )
+
   // Reset the picked worktrees' branches to the target, then report a summary and
   // reload the graph. Dirty worktrees are always skipped by the extension side;
   // without `force` it also skips any worktree holding a commit whose subject the
@@ -1787,15 +1865,8 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
   // it runs we surface a sticky spinner notification instead of staying silent.
   const runWorktreeSync = useCallback(
     async (targetBranch: string, selectedPaths: string[], force: boolean) => {
-      const selected = allWorktrees.filter((wt) => selectedPaths.includes(wt.path))
-      const refs = selected.map((wt) => ({ path: wt.path, name: wt.name }))
-      const execute = () =>
-        commands.executeCommand<GitGraphWorktreeSyncResult>(
-          GitGraphCommands.syncWorktrees,
-          targetBranch,
-          refs,
-          force,
-        )
+      const refs = worktreeSyncRefs(selectedPaths)
+      const execute = () => executeWorktreeSync(targetBranch, refs, force)
       const summary = progressService
         ? await progressService.withProgress(
             {
@@ -1812,49 +1883,108 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
         : await execute()
       revalidate()
       if (!summary) return
-      const lines: string[] = []
-      if (summary.synced.length > 0) {
-        lines.push(
-          localize('gitGraph.worktree.sync.summarySynced', 'Synced: {names}', {
-            names: summary.synced.join(', '),
-          }),
-        )
-      }
-      if (summary.skippedDirty.length > 0) {
-        lines.push(
-          localize(
-            'gitGraph.worktree.sync.summarySkipped',
-            'Skipped (uncommitted changes): {names}',
-            { names: summary.skippedDirty.join(', ') },
-          ),
-        )
-      }
-      if (summary.skippedUnmatchedMessages.length > 0) {
-        lines.push(
-          localize(
-            'gitGraph.worktree.sync.summaryUnmatched',
-            'Skipped (no matching commit message in {branch}): {names}',
-            { branch: targetBranch, names: summary.skippedUnmatchedMessages.join(', ') },
-          ),
-        )
-      }
-      if (summary.failed.length > 0) {
-        lines.push(
-          localize('gitGraph.worktree.sync.summaryFailed', 'Failed: {items}', {
-            items: summary.failed.map((f) => `${f.name} (${f.error})`).join('; '),
-          }),
-        )
-      }
       await dialog.confirm({
         message: localize('gitGraph.worktree.sync.summaryTitle', 'Worktree sync to {branch}', {
           branch: targetBranch,
         }),
         detail:
-          lines.join('\n') || localize('gitGraph.worktree.sync.summaryNone', 'Nothing to do.'),
+          worktreeSyncSummaryLines(targetBranch, summary).join('\n') ||
+          localize('gitGraph.worktree.sync.summaryNone', 'Nothing to do.'),
         primaryButton: localize('common.ok', 'OK'),
       })
     },
-    [allWorktrees, commands, dialog, progressService, revalidate],
+    [dialog, executeWorktreeSync, progressService, revalidate, worktreeSyncRefs],
+  )
+
+  // Sync the picked worktrees, then always push the fixed branch: the sync's
+  // per-worktree skips and failures must not block the push. Both steps share one
+  // progress notification and one result dialog.
+  const runWorktreeSyncAndPush = useCallback(
+    async (targetBranch: string, selectedPaths: string[]): Promise<void> => {
+      const refs = worktreeSyncRefs(selectedPaths)
+      const execute = async (): Promise<{
+        summary: GitGraphWorktreeSyncResult | undefined
+        syncFailed: boolean
+        syncError: unknown
+        pushed: boolean
+      }> => {
+        let summary: GitGraphWorktreeSyncResult | undefined
+        let syncFailed = false
+        let syncError: unknown
+        try {
+          summary = await executeWorktreeSync(targetBranch, refs, false)
+        } catch (error) {
+          syncFailed = true
+          syncError = error
+        }
+        let pushed = false
+        try {
+          pushed =
+            (await commands.executeCommand<boolean>(
+              GitGraphCommands.pushBranch,
+              WORKTREE_SYNC_PUSH_BRANCH,
+              WORKTREE_SYNC_PUSH_REMOTE,
+            )) === true
+        } catch {
+          // The extension reports git failures itself; a rejection here means the
+          // command could not run, which the summary line covers.
+        }
+        return { summary, syncFailed, syncError, pushed }
+      }
+      const outcome = progressService
+        ? await progressService.withProgress(
+            {
+              location: ProgressLocation.Notification,
+              title: localize(
+                'gitGraph.worktree.syncAndPush.progress',
+                'Syncing {count} worktree(s) to {branch} and pushing main…',
+                { count: refs.length, branch: targetBranch },
+              ),
+              source: 'git-graph',
+            },
+            execute,
+          )
+        : await execute()
+      revalidate()
+      const lines = outcome.summary ? worktreeSyncSummaryLines(targetBranch, outcome.summary) : []
+      if (outcome.syncFailed) {
+        lines.push(
+          localize('gitGraph.worktree.syncAndPush.syncFailed', 'Sync failed: {error}', {
+            error:
+              outcome.syncError instanceof Error
+                ? outcome.syncError.message
+                : String(outcome.syncError),
+          }),
+        )
+      } else if (!outcome.summary) {
+        lines.push(
+          localize('gitGraph.worktree.syncAndPush.syncUnavailable', 'Sync result unavailable.'),
+        )
+      }
+      lines.push(
+        outcome.pushed
+          ? localize(
+              'gitGraph.worktree.syncAndPush.pushSucceeded',
+              'Pushed {branch} to {remote}.',
+              { branch: WORKTREE_SYNC_PUSH_BRANCH, remote: WORKTREE_SYNC_PUSH_REMOTE },
+            )
+          : localize(
+              'gitGraph.worktree.syncAndPush.pushFailed',
+              'Push failed: {branch} to {remote}.',
+              { branch: WORKTREE_SYNC_PUSH_BRANCH, remote: WORKTREE_SYNC_PUSH_REMOTE },
+            ),
+      )
+      await dialog.confirm({
+        message: localize(
+          'gitGraph.worktree.syncAndPush.summaryTitle',
+          'Worktree sync to {branch} and push main',
+          { branch: targetBranch },
+        ),
+        detail: lines.join('\n'),
+        primaryButton: localize('common.ok', 'OK'),
+      })
+    },
+    [commands, dialog, executeWorktreeSync, progressService, revalidate, worktreeSyncRefs],
   )
 
   // Prompt for the worktrees to sync, then run the sync. The picker opens
@@ -1873,6 +2003,16 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
       await runWorktreeSync(targetBranch, paths, force)
     },
     [pickWorktreesToSync, runWorktreeSync],
+  )
+
+  const openWorktreeSyncAndPushPicker = useCallback(
+    async (targetBranch: string, candidates: readonly GitGraphWorktreeDto[]): Promise<void> => {
+      const paths = await pickWorktreesToSync(targetBranch, candidates, false, true)
+      // Defence in depth: the panel already disables confirm on an empty set.
+      if (!paths || paths.length === 0) return
+      await runWorktreeSyncAndPush(targetBranch, paths)
+    },
+    [pickWorktreesToSync, runWorktreeSyncAndPush],
   )
 
   const openWorktreeMenu = useCallback(
@@ -1929,6 +2069,17 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
           },
           {
             kind: 'item',
+            id: 'syncToThisAndPush',
+            icon: 'push',
+            label: localize(
+              'gitGraph.worktree.syncToThisAndPush',
+              'Sync worktrees to {branch} and push main…',
+              { branch },
+            ),
+            run: () => void openWorktreeSyncAndPushPicker(branch, others),
+          },
+          {
+            kind: 'item',
             id: 'forceSyncToThis',
             icon: 'sync',
             label: localize(
@@ -1979,7 +2130,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
         contextTag: 'worktree',
       })
     },
-    [allWorktrees, commands, dialog, openWorktreeSyncPicker, runOp],
+    [allWorktrees, commands, dialog, openWorktreeSyncAndPushPicker, openWorktreeSyncPicker, runOp],
   )
 
   // Folded refs (the `+N` badge): list each hidden ref; clicking one re-dispatches
