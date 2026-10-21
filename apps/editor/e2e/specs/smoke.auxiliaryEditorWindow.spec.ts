@@ -662,6 +662,12 @@ test.describe('@p0 auxiliary editor windows', () => {
     page,
   }) => {
     await workbench.waitForRestored()
+    await electronApp.evaluate(({ BrowserWindow }) => {
+      const main = BrowserWindow.getAllWindows().find(
+        (window) => window.webContents.getURL() !== 'about:blank',
+      )!
+      main.setBounds({ ...main.getBounds(), width: 1024, height: 768 })
+    })
     const first = seedFile('menu-group-a.txt', 'A\n')
     const second = seedFile('menu-group-b.txt', 'B\n')
     await page.evaluate((p) => window.__E2E__!.openFileUri(p), first)
@@ -691,7 +697,17 @@ test.describe('@p0 auxiliary editor windows', () => {
     const tabBar = page.locator(
       `[data-group-id="${clickedGroup}"] [data-testid="editor-group-tabbar"]`,
     )
-    await tabBar.click({ button: 'right', position: { x: 400, y: 12 } })
+    const position = await tabBar.evaluate((bar) => {
+      const rect = bar.getBoundingClientRect()
+      const y = rect.top + rect.height / 2
+      for (let x = rect.right - 4; x > rect.left; x -= 4) {
+        if (bar.ownerDocument.elementFromPoint(x, y) === bar) {
+          return { x: x - rect.left, y: y - rect.top }
+        }
+      }
+      throw new Error(`No tab bar background within ${rect.width}px`)
+    })
+    await tabBar.click({ button: 'right', position })
     const menu = page.locator('[role="menu"]').first()
     await expect(menu).toBeVisible()
     await expect(menu).toContainText(/Move Group into New Window/)

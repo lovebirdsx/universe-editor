@@ -663,6 +663,18 @@ g) 埋点要能回答「**哪一侧迟了**」：渲染器真相（`getConfigura
 教训：a) **异步就绪 + 静默 no-op 的命令**（fold 家族、以及任何 `await` 后 `if (!model) return` 的 action）不能用「按一次 + poll 结果」验证，必须在按键前 poll「被作用对象已就位」；重按/加 timeout 都不对——重按可能与第一次成对的 toggle 叠加成展开，timeout 只是把吞键窗口等过去。b) `expect.poll` 的 received **稳定等于初值**（不是波动）时先怀疑「动作根本没作用到对象上」，而不是命令没派发；同文件相邻按键刚通过即可排除派发链路。c) **同族扫描**：同一 spec 的 fold-all chord 是同一缺陷形状，一并加门控；全仓折叠断言的 e2e 仅此一个 spec（grep `VisibleLineCount|foldAll|toggleFold` 确认）。
 锚：`packages/e2e-contract/src/index.ts`（`getActiveEditorFoldingState` 契约）；`apps/editor/src/renderer/e2e/probe.ts`（`FoldingControllerLike` / `FoldingModelLike`）；`apps/editor/e2e/specs/smoke.editorTextShortcuts.spec.ts`（两处门控）；monaco `vs/editor/contrib/folding/browser/folding.js` 的 `FoldingAction.runEditorCommand` 与 `foldingModel.js` 的 `toggleCollapseState`。
 
+**案例 108 — 窄窗口分组后背景右键坐标越界**
+信号：Windows CI 点击 tabBar 超时，call log 连续出现另一个 `grid-leaf` 的 tab/SVG `intercepts pointer events`，最终因 fixture 关闭显示 `Target page ... closed`。
+根因：`position.x=400` 超过 1024 宽主窗口分组后的 tabBar 宽度，点击落到相邻组。将窗口设为 1024×768 可复现，非产品菜单回归。
+修法：按 tabBar 几何从右向左找 `ownerDocument.elementFromPoint(x,y) === bar` 的背景点，再真实右键点击；无背景点明确失败，不用 force/合成事件。保留被点击组而非活动组的迁移断言。全仓同类 `tabBar.click` 固定 400 坐标仅此处。
+锚：`apps/editor/e2e/specs/smoke.auxiliaryEditorWindow.spec.ts` 的背景菜单用例；窄窗口旧坐标 initial/retry 失败，几何取点后通过。
+
+**案例 109 — CDP 虚拟时间暂停连辅助窗口一起冻结**
+信号：辅助窗口 shrink/grow 后 layout 偏差稳定为两步之和（300），仅 Windows CI initial/retry 同挂；诊断显示主/辅助 rAF 同停、辅助窗口原生 bounds 已变但 innerWidth 未变。
+根因：主/辅助窗口共享 renderer 进程，CDP `Emulation.setVirtualTimePolicy: pause` 不是只暂停主窗口，不能作为「主窗口遮挡、辅助窗口继续布局」的模拟。不能凭 300 推断 Monaco 帧节流闩故障并删除节流逻辑。
+修法：初始化脚本在编辑器挂载前包裹真实 ResizeObserver，记录 observe 的文档归属（不伪造尺寸或回调）；断言辅助编辑器被辅助 realm 观察且未被主 realm 观察。暂停守卫之后恢复调度，再验证 shrink/grow 两次布局。临时改回裸 `new ResizeObserver` 后归属断言必失败，保住原 bug 覆盖。探针不能等 popup 事件后才安装，否则与 React 挂载竞速。
+锚：`apps/editor/e2e/specs/smoke.auxiliaryEditorWindowResize.spec.ts`；主/子 realm rAF、`getOSProcessId()` 与原生 bounds/innerWidth 对照。原实现本地单次可通过，重复/诊断暴露错误前提。
+
 ---
 - `@parcel/watcher` Windows 多 worker 竞态的长期根治（升级 / 换 watcher / 进一步隔离），替代长期 `--workers=1`（案例 12/16/26/44 的 `@serial` 都是它的 workaround）。
 - DnD 用例稳定化（显式等待 drop 完成态），稳定后摘 `@flaky`（案例 46）。

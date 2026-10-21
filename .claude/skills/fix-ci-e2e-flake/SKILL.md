@@ -105,6 +105,9 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 - δ `--sync -a` 日志恒 0、磁盘已更新且原生日志出现 sync，删掉命令注册等待后暴露=SCM 注册不等于首轮 δ scan 分派；健康 δ 操作前只读等待目录扫描 argv，不改首轮前 native 契约 → 案例 106
 - 折叠键按下后 received **稳定等于按前可见行数**、同测试相邻按键全过=monaco fold action 解析异步折叠模型，模型尚无 region 时静默 no-op；按键前 poll 探针 `regionAtCursor`（fold-all 用 `regionCount > 0`），保持单次按键与断言强度 → 案例 107
 
+- 窄窗口分组后 tabBar 背景右键被相邻 `grid-leaf` 拦截=固定相对坐标超出元素宽度，按实际几何与 ownerDocument 命中背景后真实点击 → 案例 108
+- CDP 暂停主窗口后辅助 resize 偏差恰为 shrink+grow、主/子 rAF 同停=共享 renderer 的虚拟时间一起冻结；记录 RO 文档归属守护根因，恢复调度后验证真实缩放 → 案例 109
+
 ## 关键参考路径
 - `apps/editor/e2e/specs/` —— 所有 e2e spec；`@p0` 阻塞 CI，`@p1` 次级
 - `apps/editor/e2e/fixtures/electronApp.ts` —— `workbench` fixture、`runCommand`/`waitForRestored`/`statusBar` 封装、`closeApp`

@@ -76,6 +76,10 @@ platform 的 `part.ts` 不依赖 DOM 类型，因此只读容器的 `ownerDocume
 
 **ResizeObserver 必须用元素所属 window 的构造器**（`el.ownerDocument.defaultView.ResizeObserver`）。Blink 在构造时把 observer 注册到该 window 的 `ResizeObserverController`，而 `LocalFrameView::NotifyResizeObservers` 只取**本 frame** `DomWindow` 的 controller：主 realm 构造的 observer 观察辅助 document 元素时，回调只在主窗口的渲染生命周期里投递。辅助窗口最大化遮住主窗口后主 frame 停帧，回调永不触发，Monaco 的内联 px 尺寸停在最大化前，画布只剩旧矩形。已修复 `GridLayout`（`packages/workbench-ui`）与 Monaco `ElementSizeObserver`（monaco patch，覆盖所有 `automaticLayout` 编辑器）；回归用例 `apps/editor/e2e/specs/smoke.auxiliaryEditorWindowResize.spec.ts`。新增任何驱动布局的 RO 时照此取 owner window。
 
+### 缩放回归测试的冻结边界
+
+Windows 下主/辅助窗口可共享 renderer 进程，CDP `Emulation.setVirtualTimePolicy: pause` 会连辅助窗口的 rAF 与 resize 一起冻结，不能用它模拟「主窗口被遮挡、辅助窗口仍布局」。缩放回归先记录真实 ResizeObserver 的窗口归属（初始化脚本须在辅助编辑器挂载前安装），再于恢复调度后检查 shrink/grow 两次尺寸同步；把 Monaco 改回主 realm 的裸构造器时，归属断言必须失败。
+
 ### 文档级全局监听
 
 需要挂 `window`/`document` 监听的功能（鼠标侧键、全局拖放安全网、peek 导航）不能只挂主窗口。`installPerWorkbenchDocument(attach)`（`services/windows/workbenchDocumentEvents.ts`）对当前已注册文档和之后新增的文档各调用一次 `attach(doc)`，文档注销时自动 `dispose`，没有注册文档时回落全局 `document`。新增此类监听一律用它，不要自己维护文档集合。

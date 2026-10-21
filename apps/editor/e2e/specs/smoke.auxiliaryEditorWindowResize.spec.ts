@@ -8,11 +8,21 @@
  *  取的是本 frame DomWindow 的 controller），所以主窗口停止渲染后，辅助窗口自身的布局
  *  变化再也送不到主 realm 的 observer，Monaco 的内联 px 尺寸停在最大化前。
  *
- *  复现条件：主窗口必须停止渲染。生产里由辅助窗口最大化后的遮挡触发；e2e 的 xvfb 下
- *  hide() 不会让 WebContents 进入 hidden（实测 visibilityState 恒为 VISIBLE），CDP
- *  Page.setWebLifecycleState 同样无效。改用 CDP 虚拟时间暂停主页面调度：rAF 计数守卫
- *  确认主 frame 真的停帧，否则用例会假绿。尺寸变化用 setBounds 确定性触发（xvfb 下
- *  maximize() 是 no-op）。辅助窗口不在该暂停范围内，仍会正常布局。
+ *  停止主窗口渲染的机制：生产里由辅助窗口最大化后的遮挡触发。e2e 里 hide()/minimize()
+ *  在 backgroundThrottling=false 下不会让 WebContents 进入 hidden（实测 visibilityState
+ *  恒为 VISIBLE），Page.setWebLifecycleState('frozen') 同样不停帧。CDP 虚拟时间暂停是唯一
+ *  能可靠停掉主 frame 的手段，但它是 renderer 进程级的：Windows 上主/辅助窗口共享同一个
+ *  renderer 进程（`webContents.getOSProcessId()` 相同），暂停后辅助窗口的 rAF、ResizeObserver
+ *  投递与窗口 resize 也一起冻结（实测主 realm/子 realm rAF 计数同时停住；aux 容器在 grow
+ *  后不再更新）。因此「暂停期间让辅助窗口继续布局」是非法的前提，不能用它断言尺寸同步。
+ *
+ *  本用例因此分两层守护：
+ *    1. realm 归属（根因，旧 patch 必挂）：移动编辑器前给主 realm 的 ResizeObserver 装上探针，
+ *       断言它从未 observe 辅助 document 里的 `[data-testid="file-editor"]`（旧代码会在这里
+ *       观察到该元素）；同时断言辅助 realm 的探针观察到了它。
+ *    2. 主帧停止守卫 + 功能回归：CDP 暂停并确认主 frame 真的停帧；恢复后对辅助窗口
+ *       shrink/grow，断言 Monaco layout 跟随容器。
+ *  尺寸变化用 setBounds 确定性触发（xvfb 下 maximize() 是 no-op）。
  *--------------------------------------------------------------------------------------------*/
 
 import { writeFileSync } from 'node:fs'
@@ -24,6 +34,21 @@ import { test, expect } from '../fixtures/electronApp.js'
 const FRAME_GUARD_MS = 400
 
 type RafProbeWindow = Window & { __ueRafTicks?: number; __ueRafStop?: boolean }
+
+interface RoObservation {
+  /** True when the observed element belongs to the document of the probing realm. */
+  ownerIsSameDocument: boolean
+  testId: string
+}
+
+interface RoProbe {
+  observed: RoObservation[]
+}
+
+type RoProbeWindow = Window & {
+  __ueRo?: RoProbe
+  __ueRoNative?: typeof ResizeObserver
+}
 
 function getWindowId(electronApp: ElectronApplication, auxiliary: boolean): Promise<number> {
   return electronApp.evaluate(({ BrowserWindow }, aux) => {
@@ -79,6 +104,47 @@ function layoutMismatch(page: Page, groupId: string): Promise<number> {
   }, groupId)
 }
 
+// 必须在编辑器挂载前于目标 realm 执行，document 才能标识 observer 的归属。
+function installResizeObserverProbe(): void {
+  const probe = window as RoProbeWindow
+  const Native = window.ResizeObserver
+  probe.__ueRoNative = Native
+  probe.__ueRo = { observed: [] }
+  class TrackingResizeObserver extends Native {
+    override observe(target: Element, options?: ResizeObserverOptions): void {
+      probe.__ueRo!.observed.push({
+        ownerIsSameDocument: target.ownerDocument === document,
+        testId: target.getAttribute('data-testid') ?? '',
+      })
+      super.observe(target, options)
+    }
+  }
+  window.ResizeObserver = TrackingResizeObserver
+
+  // 即使之后没有主 realm observer，也必须证明探针已安装。
+  const selfTarget = document.createElement('div')
+  selfTarget.setAttribute('data-testid', 'ro-probe-self')
+  const selfObserver = new window.ResizeObserver(() => {})
+  selfObserver.observe(selfTarget)
+  selfObserver.disconnect()
+  selfTarget.remove()
+}
+
+async function readResizeObserverProbe(page: Page): Promise<RoProbe> {
+  return page.evaluate(() => (window as RoProbeWindow).__ueRo ?? { observed: [] })
+}
+
+async function restoreResizeObserverProbe(page: Page): Promise<void> {
+  await page
+    .evaluate(() => {
+      const probe = window as RoProbeWindow
+      if (probe.__ueRoNative) window.ResizeObserver = probe.__ueRoNative
+      delete probe.__ueRoNative
+      delete probe.__ueRo
+    })
+    .catch(() => undefined)
+}
+
 test.describe('@p1 auxiliary editor window resize', () => {
   test('moved editor keeps its Monaco layout in sync after a native resize @regression', async ({
     electronApp,
@@ -116,6 +182,10 @@ test.describe('@p1 auxiliary editor window resize', () => {
     await expect.poll(() => layoutMismatch(page, mainGroupId)).toBeLessThanOrEqual(1)
     await setSize(electronApp, mainWindowId, mainBounds)
 
+    // 在弹窗脚本运行前安装，避免 window 事件后的 CDP 调用与编辑器挂载竞速。
+    await page.context().addInitScript(installResizeObserverProbe)
+    await page.evaluate(installResizeObserverProbe)
+
     const windowPromise = electronApp.waitForEvent('window')
     await workbench.runCommand('workbench.action.moveEditorToNewWindow')
     const child = await windowPromise
@@ -146,9 +216,8 @@ test.describe('@p1 auxiliary editor window resize', () => {
 
     let cdp: CDPSession | undefined
     try {
-      // Stop the main frame's rendering. If rAF kept advancing in the paused
-      // page, the test would go green before the fix, so the guard below fails
-      // hard rather than letting the reproduction degrade silently.
+      // Stop the main frame. The guard below fails hard if it keeps ticking,
+      // otherwise the reproduction precondition would silently disappear.
       await page.evaluate(() => {
         const probe = window as RafProbeWindow
         probe.__ueRafTicks = 0
@@ -174,8 +243,45 @@ test.describe('@p1 auxiliary editor window resize', () => {
         'main window kept rendering after virtual-time pause; the reproduction would be a false green',
       ).toBe(ticks)
 
-      // Shrink first: the auxiliary document's own (child-realm) layout must
-      // still react, proving the window itself is live while main is paused.
+      // Root-cause guard: the auxiliary editor's container must be observed by
+      // the auxiliary realm's ResizeObserver, never by the (now stopped) main
+      // realm's. The old bare `new ResizeObserver(...)` fails this assertion.
+      const mainProbe = await readResizeObserverProbe(page)
+      const childProbe = await readResizeObserverProbe(child)
+      expect(
+        mainProbe.observed.some(
+          (observation) =>
+            observation.testId === 'ro-probe-self' && observation.ownerIsSameDocument,
+        ),
+        'main-realm ResizeObserver probe must be active',
+      ).toBe(true)
+      expect(
+        childProbe.observed.some(
+          (observation) =>
+            observation.testId === 'ro-probe-self' && observation.ownerIsSameDocument,
+        ),
+        'auxiliary-realm ResizeObserver probe must be active',
+      ).toBe(true)
+      expect(
+        mainProbe.observed.filter(
+          (observation) => observation.testId === 'file-editor' && !observation.ownerIsSameDocument,
+        ),
+        'Monaco must not observe the auxiliary editor container with the main realm ResizeObserver',
+      ).toEqual([])
+      expect(
+        childProbe.observed.some(
+          (observation) => observation.testId === 'file-editor' && observation.ownerIsSameDocument,
+        ),
+        'the auxiliary realm ResizeObserver must observe the editor container',
+      ).toBe(true)
+
+      // Resume before the functional resize: virtual-time pause freezes the
+      // shared renderer process (on Windows the aux window has the same pid), so
+      // aux layout cannot progress while main is paused.
+      await cdp.send('Emulation.setVirtualTimePolicy', { policy: 'advance' })
+
+      // Shrink first, then grow past the original size. Both must be reflected
+      // by Monaco's layout, not just by the container box.
       await setSize(electronApp, auxWindowId, {
         width: auxBounds.width - 140,
         height: auxBounds.height - 120,
@@ -183,9 +289,12 @@ test.describe('@p1 auxiliary editor window resize', () => {
       await expect
         .poll(async () => (await layoutInfo(page, auxGroupId))?.container.width ?? 0)
         .toBeLessThan(initial.container.width - 80)
+      await expect
+        .poll(() => layoutMismatch(page, auxGroupId), {
+          message: 'Monaco layout must follow the auxiliary editor container after shrinking',
+        })
+        .toBeLessThanOrEqual(1)
 
-      // Grow past the original size. Before the fix, Monaco's layout stays at
-      // the pre-pause size while the container grows.
       await setSize(electronApp, auxWindowId, {
         width: auxBounds.width + 160,
         height: auxBounds.height + 120,
@@ -215,6 +324,8 @@ test.describe('@p1 auxiliary editor window resize', () => {
           ;(window as RafProbeWindow).__ueRafStop = true
         })
         .catch(() => undefined)
+      await restoreResizeObserverProbe(page)
+      await restoreResizeObserverProbe(child)
       await page
         .evaluate((token) => window.__E2E__!.requestCloseAuxiliaryWindow(token), auxSnapshot.token)
         .catch(() => undefined)

@@ -251,7 +251,8 @@ export class WebviewService extends Disposable implements IWebviewService {
 
   private readonly _providersByViewType = new Map<string, RegisteredProvider>()
   private readonly _extHosts = new Map<ExtHostKind, IExtHostWebviews>()
-  private readonly _panels = new Map<number, WebviewPanelModel>()
+  // 面板跨 React 卸载存活，必须由服务持有 Disposable 父链。
+  private readonly _panels = this._register(new DisposableMap<number, WebviewPanelModel>())
   /** viewType + owning tier, keyed by panelHandle, so resolve/close route home. */
   private readonly _panelRouting = new Map<number, PanelRouting>()
   private _panelHandle = 0
@@ -487,8 +488,7 @@ export class WebviewService extends Disposable implements IWebviewService {
   closePanel(panelHandle: number): void {
     this._hostPanelSubscriptions.deleteAndDispose(panelHandle)
     const routing = this._panelRouting.get(panelHandle)
-    const panel = this._panels.get(panelHandle)
-    this._panels.delete(panelHandle)
+    this._panels.deleteAndDispose(panelHandle)
     this._panelRouting.delete(panelHandle)
     this._reportedViewStates.delete(panelHandle)
     if (routing?.input) {
@@ -500,7 +500,6 @@ export class WebviewService extends Disposable implements IWebviewService {
     } else if (routing) {
       void this._extHosts.get(routing.kind)?.$disposeWebviewPanel(panelHandle)
     }
-    panel?.dispose()
   }
 
   /** The tab is closed by the user → input.onWillDispose → closePanel → `$acceptPanelDisposed`. */
@@ -634,13 +633,12 @@ export class WebviewService extends Disposable implements IWebviewService {
     for (const [panelHandle, routing] of [...this._panelRouting]) {
       if (routing.kind !== kind) continue
       if (routing.input) {
-        // Extension-owned panel: close its tab. The dying host needs no
-        // $acceptPanelDisposed echo.
+        // 关闭扩展面板标签并清理订阅；退出中的宿主无需接收 disposed 回执。
         this._closeHostPanelTab(routing, routing.input)
         continue
       }
-      this._panels.get(panelHandle)?.dispose()
-      this._panels.delete(panelHandle)
+      this._hostPanelSubscriptions.deleteAndDispose(panelHandle)
+      this._panels.deleteAndDispose(panelHandle)
       this._panelRouting.delete(panelHandle)
       this._reportedViewStates.delete(panelHandle)
     }
@@ -654,8 +652,6 @@ export class WebviewService extends Disposable implements IWebviewService {
     this._panelViewStateTracking?.dispose()
     this._panelViewStateTracking = undefined
     this._reportedViewStates.clear()
-    for (const panel of this._panels.values()) panel.dispose()
-    this._panels.clear()
     this._panelRouting.clear()
     this._providersByViewType.clear()
     super.dispose()

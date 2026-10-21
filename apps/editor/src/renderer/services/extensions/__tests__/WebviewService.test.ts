@@ -4,11 +4,15 @@
  *  extension-owned `createWebviewPanel` lifecycle (create/reveal/title/dispose).
  *--------------------------------------------------------------------------------------------*/
 
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  DisposableStore,
+  DisposableTracker,
   EditorInput,
   Emitter,
   GroupDirection,
+  markAsSingleton,
+  setDisposableTracker,
   URI,
   type IEditorGroup,
   type IEditorGroupsService,
@@ -678,5 +682,96 @@ describe('WebviewService panel view state tracking', () => {
       active: false,
       visible: false,
     })
+  })
+})
+
+// 门禁快照时服务仍存活；面板必须挂到服务父链，而非只在最终 dispose 时释放。
+describe('WebviewService — leak tracking', () => {
+  let tracker: DisposableTracker
+
+  beforeEach(() => {
+    tracker = new DisposableTracker()
+    setDisposableTracker(tracker)
+  })
+
+  afterEach(() => {
+    setDisposableTracker(null)
+  })
+
+  it('leaves no leak for a still-open custom-editor panel under a live singleton service', () => {
+    const root = markAsSingleton(new DisposableStore())
+    const svc = root.add(new WebviewService())
+    svc.setExtHost('local', fakeExtHost())
+    const mainThread = svc.createMainThread('local')
+    void mainThread.$registerCustomEditorProvider(0, 'pdf.view')
+    const uri = URI.file('/docs/a.pdf')
+    const input = new CustomEditorInput('pdf.view', uri)
+    // 模拟编辑器组持有的存活 input，只检查面板到服务的父链。
+    markAsSingleton(input)
+
+    const panel = svc.openPanel('pdf.view', uri, undefined, input)!
+    expect(svc.getPanel(panel.panelHandle)).toBe(panel)
+    expect(tracker.computeLeakingDisposables()).toBeUndefined()
+
+    root.dispose()
+    input.dispose()
+  })
+
+  it('leaves no leak for a still-open host-created panel under a live singleton service', () => {
+    const group = fakeGroup()
+    const groups = fakeEditorGroups(group)
+    const root = markAsSingleton(new DisposableStore())
+    const svc = root.add(new WebviewService())
+    svc.setEditorGroupsAccessor(() => groups)
+    svc.setExtHost('local', fakeExtHost())
+    const mainThread = svc.createMainThread('local')
+
+    void mainThread.$createWebviewPanel(-1, 'excel.view', 'Sheet', {}, undefined)
+    expect(svc.getPanel(-1)).toBeDefined()
+    // 模拟编辑器组对已打开 input 的单例父链。
+    markAsSingleton(group.opened[0]!)
+
+    expect(tracker.computeLeakingDisposables()).toBeUndefined()
+
+    root.dispose()
+    group.opened[0]!.dispose()
+  })
+
+  it('service dispose releases open custom-editor and host-created panels', () => {
+    const group = fakeGroup()
+    const groups = fakeEditorGroups(group)
+    const svc = new WebviewService()
+    svc.setEditorGroupsAccessor(() => groups)
+    svc.setExtHost('local', fakeExtHost())
+    const mainThread = svc.createMainThread('local')
+    void mainThread.$registerCustomEditorProvider(0, 'pdf.view')
+    const uri = URI.file('/docs/a.pdf')
+    const input = new CustomEditorInput('pdf.view', uri)
+    const custom = svc.openPanel('pdf.view', uri, undefined, input)!
+    void mainThread.$createWebviewPanel(-1, 'excel.view', 'Sheet', {}, undefined)
+
+    svc.dispose()
+    input.dispose()
+    group.opened[0]?.dispose()
+
+    expect(svc.getPanel(custom.panelHandle)).toBeUndefined()
+    expect(svc.getPanel(-1)).toBeUndefined()
+    expect(tracker.computeLeakingDisposables()).toBeUndefined()
+  })
+
+  it('disposing a custom-editor input releases its panel and host subscription', () => {
+    const svc = new WebviewService()
+    svc.setExtHost('local', fakeExtHost())
+    const mainThread = svc.createMainThread('local')
+    void mainThread.$registerCustomEditorProvider(0, 'pdf.view')
+    const uri = URI.file('/docs/a.pdf')
+    const input = new CustomEditorInput('pdf.view', uri)
+    const panel = svc.openPanel('pdf.view', uri, undefined, input)!
+
+    input.dispose()
+    expect(svc.getPanel(panel.panelHandle)).toBeUndefined()
+    svc.dispose()
+
+    expect(tracker.computeLeakingDisposables()).toBeUndefined()
   })
 })

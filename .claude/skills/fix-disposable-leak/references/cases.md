@@ -27,3 +27,10 @@ useEffect(() => { const e = ref.current; return () => e.dispose() }, [])  // 空
 re-mount 后 ref 仍指向**已 dispose 的 E1**，`.fire()` 落死对象，订阅方永不收到通知。好例 = 惰性创建且**不 dispose**（`useRef<Emitter<void> | null>(null)` + 首次赋值；emitter 无 OS 资源靠 GC，订阅方 dispose 自己的订阅），消费处一律 `ref.current?.fire()`（可空）。
 通用教训：**`useRef(new X())` 持有的 disposable 绝不要在 effect cleanup 里 dispose**——要么惰性创建 + 不 dispose，要么用 `markAsSingleton` 兜底泄漏检测（案例 2）。
 回归防护：单测 `apps/editor/src/renderer/workbench/agents/__tests__/ChatBody.test.tsx:2193` 的 `'still fires onDidChangeActive under StrictMode (dev double-invoke)'`。同型姐妹坑（cleanup 里**置位**的 ref 必须在 setup 里复位）见 `extensions/perforce/docs/graph.md`「这个闩必须在 effect 的 setup 里复位」。
+
+**案例 4 — 普通 Map 持有的存活 Webview 面板缺失父链**
+信号：PDF/Excel 预览功能断言通过，teardown 固定报告 `WebviewPanelModel` 及内部 store 两条连续 idx；面板仍开着，服务本身已在单例根下。
+根因：面板从 React 卸载释放改为跟随 input 生命周期后，服务中的普通 Map 只保存引用、不建立 Disposable 父链。不能恢复 unmount 时 closePanel，否则跨组/跨窗口移动会销毁仍使用的面板。
+修法：`_panels = this._register(new DisposableMap<number, WebviewPanelModel>())`；close/reset 用 `deleteAndDispose`，服务销毁走注册容器级联释放；reset 同时清理 input dispose 订阅。不改全局快照、不标记 panel 单例、不在 E2E 末尾补 closeAll 掩盖。
+复现：对单例服务创建仍打开的 custom/host-created panel，两条 tracker 测试修前失败、修后通过；另测 service/input 销毁的级联释放。此处必须在服务存活时检查父链，仅测最终 dispose 抓不住遗漏。
+锚：`apps/editor/src/renderer/services/extensions/WebviewService.ts` 与同目录 `__tests__/WebviewService.test.ts`；外部 PDF、Excel suite 各两项通过泄漏门禁。
