@@ -81,6 +81,18 @@ export interface E2EEditorGroupsLayout {
   readonly groups: readonly E2EEditorGroupLayout[]
 }
 
+export interface E2EEditorLayoutInfo {
+  /** String form of the group id, matching `getEditorGroupEditorUris`. */
+  readonly groupId: string
+  readonly uri?: string
+  /** Monaco's last applied layout size (what it writes to `.monaco-editor`). */
+  readonly layout: { readonly width: number; readonly height: number }
+  /** The container ElementSizeObserver measures (the `editor.create` container). */
+  readonly container: { readonly width: number; readonly height: number }
+  /** True when the editor's DOM lives in an auxiliary document. */
+  readonly auxiliary: boolean
+}
+
 export interface E2EOpenWindow {
   readonly id: number
   /** Workspace folder fsPath, or null for an empty window. */
@@ -882,6 +894,12 @@ export interface E2EProbe {
    * without a spec reaching into the grid's flex weights or the DOM.
    */
   getEditorGroupsLayout(): E2EEditorGroupsLayout
+  /**
+   * Monaco layout + container box for a group's active editor, whichever
+   * window/part owns the group. Exists so auxiliary-window relayout can be
+   * asserted without reading Monaco's internal DOM from a spec.
+   */
+  getEditorLayoutInfo(groupId?: string): E2EEditorLayoutInfo | undefined
   /** Every auxiliary editor window, with its groups/editors and document chrome. */
   getAuxiliaryWindows(): readonly E2EAuxiliaryWindowSnapshot[]
   /** Every workbench window (main + auxiliary) and the groups it owns. */

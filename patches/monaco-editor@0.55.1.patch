@@ -1,3 +1,36 @@
+diff --git a/esm/vs/base/browser/dom.js b/esm/vs/base/browser/dom.js
+index 8cee36eff190659b5544edda32ca1d206cc20977..30d4189521c06ce0bd8fe937141008285e0ac45d 100644
+--- a/esm/vs/base/browser/dom.js
++++ b/esm/vs/base/browser/dom.js
+@@ -19,7 +19,7 @@ import { derived, derivedOpts } from '../common/observableInternal/observables/d
+  *  Licensed under the MIT License. See License.txt in the project root for license information.
+  *--------------------------------------------------------------------------------------------*/
+ //# region Multi-Window Support Utilities
+-const { getWindow, getDocument, getWindows, getWindowsCount, getWindowId, getWindowById, onDidRegisterWindow, onWillUnregisterWindow, onDidUnregisterWindow } = (function () {
++const { getWindow, getDocument, getWindows, getWindowsCount, getWindowId, getWindowById, registerWindow, onDidRegisterWindow, onWillUnregisterWindow, onDidUnregisterWindow } = (function () {
+     const windows = new Map();
+     ensureCodeWindow(mainWindow, 1);
+     const mainWindowRegistration = { window: mainWindow, disposables: new DisposableStore() };
+@@ -1451,4 +1451,4 @@ function isObservable(obj) {
+     return !!obj && obj.read !== undefined && obj.reportChanges !== undefined;
+ }
+ 
+-export { $, Dimension, DragAndDropObserver, EventHelper, EventType, LiveElement, ModifierKeyEmitter, Namespace, ObserverNode, ObserverNodeWithElement, WindowIdleValue, WindowIntervalTimer, addDisposableGenericMouseDownListener, addDisposableGenericMouseMoveListener, addDisposableGenericMouseUpListener, addDisposableListener, addStandardDisposableGenericMouseDownListener, addStandardDisposableListener, after, animate, append, clearNode, computeScreenAwareSize, findParentWithClass, getActiveDocument, getActiveElement, getActiveWindow, getClientArea, getComputedStyle, getContentHeight, getContentWidth, getDocument, getDomNodePagePosition, getDomNodeZoomLevel, getShadowRoot, getTopLeftOffset, getTotalHeight, getTotalWidth, getWindow, getWindowById, getWindowId, getWindows, getWindowsCount, h, hasParentWithClass, hide, isActiveElement, isAncestor, isAncestorOfActiveElement, isEditableElement, isEventLike, isHTMLAnchorElement, isHTMLElement, isInShadowDOM, isKeyboardEvent, isMouseEvent, isSVGElement, isShadowRoot, n, onDidRegisterWindow, onDidUnregisterWindow, onWillUnregisterWindow, prepend, reset, restoreParentsScrollTop, runAtThisOrScheduleAtNextAnimationFrame, runWhenWindowIdle, saveParentsScrollTop, scheduleAtNextAnimationFrame, setVisibility, sharedMutationObserver, show, size, trackFocus, windowOpenNoOpener };
++export { $, Dimension, DragAndDropObserver, EventHelper, EventType, LiveElement, ModifierKeyEmitter, Namespace, ObserverNode, ObserverNodeWithElement, WindowIdleValue, WindowIntervalTimer, addDisposableGenericMouseDownListener, addDisposableGenericMouseMoveListener, addDisposableGenericMouseUpListener, addDisposableListener, addStandardDisposableGenericMouseDownListener, addStandardDisposableListener, after, animate, append, clearNode, computeScreenAwareSize, findParentWithClass, getActiveDocument, getActiveElement, getActiveWindow, getClientArea, getComputedStyle, getContentHeight, getContentWidth, getDocument, getDomNodePagePosition, getDomNodeZoomLevel, getShadowRoot, getTopLeftOffset, getTotalHeight, getTotalWidth, getWindow, getWindowById, getWindowId, getWindows, getWindowsCount, h, hasParentWithClass, hide, isActiveElement, isAncestor, isAncestorOfActiveElement, isEditableElement, isEventLike, isHTMLAnchorElement, isHTMLElement, isInShadowDOM, isKeyboardEvent, isMouseEvent, isSVGElement, isShadowRoot, n, onDidRegisterWindow, onDidUnregisterWindow, onWillUnregisterWindow, prepend, registerWindow, reset, restoreParentsScrollTop, runAtThisOrScheduleAtNextAnimationFrame, runWhenWindowIdle, saveParentsScrollTop, scheduleAtNextAnimationFrame, setVisibility, sharedMutationObserver, show, size, trackFocus, windowOpenNoOpener };
+diff --git a/esm/vs/editor/browser/config/elementSizeObserver.js b/esm/vs/editor/browser/config/elementSizeObserver.js
+index 193c4cb6da737184beff065c366b0c99be65a714..fec1183f046907f755dc71f4f35ee647ff061847 100644
+--- a/esm/vs/editor/browser/config/elementSizeObserver.js
++++ b/esm/vs/editor/browser/config/elementSizeObserver.js
+@@ -59,7 +59,8 @@ class ElementSizeObserver extends Disposable {
+                     }
+                 }
+             };
+-            this._resizeObserver = new ResizeObserver((entries) => {
++            const ownerWindow = getWindow(this._referenceDomElement);
++            this._resizeObserver = new ownerWindow.ResizeObserver((entries) => {
+                 if (entries && entries[0] && entries[0].contentRect) {
+                     observedDimenstion = { width: entries[0].contentRect.width, height: entries[0].contentRect.height };
+                 }
 diff --git a/esm/vs/editor/contrib/stickyScroll/browser/stickyScrollWidget.js b/esm/vs/editor/contrib/stickyScroll/browser/stickyScrollWidget.js
 index add9b6ae422ce73d5e08edfd32d823d955cadd24..86bd1190ca0401aafd72b2f6e88a8f8fe80987c6 100644
 --- a/esm/vs/editor/contrib/stickyScroll/browser/stickyScrollWidget.js
@@ -24,21 +57,3 @@ index add9b6ae422ce73d5e08edfd32d823d955cadd24..86bd1190ca0401aafd72b2f6e88a8f8f
              top += stickyLine.height;
              this._linesDomNode.appendChild(stickyLine.lineDomNode);
              this._lineNumbersDomNode.appendChild(stickyLine.lineNumberDomNode);
-diff --git a/esm/vs/base/browser/dom.js b/esm/vs/base/browser/dom.js
---- a/esm/vs/base/browser/dom.js
-+++ b/esm/vs/base/browser/dom.js
-@@ -19,7 +19,7 @@
-  *  Licensed under the MIT License. See License.txt in the project root for license information.
-  *--------------------------------------------------------------------------------------------*/
- //# region Multi-Window Support Utilities
--const { getWindow, getDocument, getWindows, getWindowsCount, getWindowId, getWindowById, onDidRegisterWindow, onWillUnregisterWindow, onDidUnregisterWindow } = (function () {
-+const { getWindow, getDocument, getWindows, getWindowsCount, getWindowId, getWindowById, registerWindow, onDidRegisterWindow, onWillUnregisterWindow, onDidUnregisterWindow } = (function () {
-     const windows = new Map();
-     ensureCodeWindow(mainWindow, 1);
-     const mainWindowRegistration = { window: mainWindow, disposables: new DisposableStore() };
-@@ -1451,4 +1451,4 @@
-     return !!obj && obj.read !== undefined && obj.reportChanges !== undefined;
- }
- 
--export { $, Dimension, DragAndDropObserver, EventHelper, EventType, LiveElement, ModifierKeyEmitter, Namespace, ObserverNode, ObserverNodeWithElement, WindowIdleValue, WindowIntervalTimer, addDisposableGenericMouseDownListener, addDisposableGenericMouseMoveListener, addDisposableGenericMouseUpListener, addDisposableListener, addStandardDisposableGenericMouseDownListener, addStandardDisposableListener, after, animate, append, clearNode, computeScreenAwareSize, findParentWithClass, getActiveDocument, getActiveElement, getActiveWindow, getClientArea, getComputedStyle, getContentHeight, getContentWidth, getDocument, getDomNodePagePosition, getDomNodeZoomLevel, getShadowRoot, getTopLeftOffset, getTotalHeight, getTotalWidth, getWindow, getWindowById, getWindowId, getWindows, getWindowsCount, h, hasParentWithClass, hide, isActiveElement, isAncestor, isAncestorOfActiveElement, isEditableElement, isEventLike, isHTMLAnchorElement, isHTMLElement, isInShadowDOM, isKeyboardEvent, isMouseEvent, isSVGElement, isShadowRoot, n, onDidRegisterWindow, onDidUnregisterWindow, onWillUnregisterWindow, prepend, reset, restoreParentsScrollTop, runAtThisOrScheduleAtNextAnimationFrame, runWhenWindowIdle, saveParentsScrollTop, scheduleAtNextAnimationFrame, setVisibility, sharedMutationObserver, show, size, trackFocus, windowOpenNoOpener };
-+export { $, Dimension, DragAndDropObserver, EventHelper, EventType, LiveElement, ModifierKeyEmitter, Namespace, ObserverNode, ObserverNodeWithElement, WindowIdleValue, WindowIntervalTimer, addDisposableGenericMouseDownListener, addDisposableGenericMouseMoveListener, addDisposableGenericMouseUpListener, addDisposableListener, addStandardDisposableGenericMouseDownListener, addStandardDisposableListener, after, animate, append, clearNode, computeScreenAwareSize, findParentWithClass, getActiveDocument, getActiveElement, getActiveWindow, getClientArea, getComputedStyle, getContentHeight, getContentWidth, getDocument, getDomNodePagePosition, getDomNodeZoomLevel, getShadowRoot, getTopLeftOffset, getTotalHeight, getTotalWidth, getWindow, getWindowById, getWindowId, getWindows, getWindowsCount, h, hasParentWithClass, hide, isActiveElement, isAncestor, isAncestorOfActiveElement, isEditableElement, isEventLike, isHTMLAnchorElement, isHTMLElement, isInShadowDOM, isKeyboardEvent, isMouseEvent, isSVGElement, isShadowRoot, n, onDidRegisterWindow, onDidUnregisterWindow, onWillUnregisterWindow, prepend, registerWindow, reset, restoreParentsScrollTop, runAtThisOrScheduleAtNextAnimationFrame, runWhenWindowIdle, saveParentsScrollTop, scheduleAtNextAnimationFrame, setVisibility, sharedMutationObserver, show, size, trackFocus, windowOpenNoOpener };

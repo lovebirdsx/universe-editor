@@ -41,7 +41,7 @@ renderer（主窗口，唯一运行时）
 - React portal 宿主（`DialogHost` / `ProgressDialogHost` / `QuickInput` / tooltip）以目标窗口的 `document.body` 为容器；`RendererDialogService` 在**发起操作时**捕获活跃窗口的 Document，而不是在服务构造时固定。
 - `DialogHost` 把该 Document 传给 `ConfirmDialog` → `FocusScopeOverlay targetDocument`，否则 Escape 监听会留在主窗口的 document 上。
 - `TooltipProvider` 与 `useDragSessionDocument` 在辅助窗口内按 `entry.window.document` 注册监听。
-- Monaco 的布局服务与 overflow widget 容器按编辑区所在 Document 创建；hover、suggest、find 因此落在发起编辑的窗口（见 [overlay-layers.md](overlay-layers.md)）。
+- Monaco 的 overflow widget 容器按编辑区所在 Document 创建；hover、suggest、find 因此落在发起编辑的窗口（见 [overlay-layers.md](overlay-layers.md)）。但 `monacoWorkbenchLayoutService` 的 `ILayoutService` 仍锚定主窗口 `#root`（已知限制）：辅助窗口里的 context view / hover 会渲染到主窗口。
 
 通用规则：**浮层跟随宿主文档，不跟随全局 `document`**。新增 overlay 时先问"它渲染进哪个 document"，再把该 document 显式传给 portal / FocusScope / 事件监听。
 
@@ -53,6 +53,8 @@ renderer（主窗口，唯一运行时）
 - 对话框 Enter 判定、菜单/浮层的祖先遍历、焦点恢复的 `previousFocus` 捕获同理。
 
 platform 的 `part.ts` 不依赖 DOM 类型，因此只读容器的 `ownerDocument` 形状（`{ activeElement: unknown }`），不引入 `instanceof`。单测里 `new Window()` 与主 realm 共享构造函数，**造不出真正的独立 realm**——跨 realm 语义只能由真实 Electron e2e 守护。
+
+**ResizeObserver 必须用元素所属 window 的构造器**（`el.ownerDocument.defaultView.ResizeObserver`）。Blink 在构造时把 observer 注册到该 window 的 `ResizeObserverController`，而 `LocalFrameView::NotifyResizeObservers` 只取**本 frame** `DomWindow` 的 controller：主 realm 构造的 observer 观察辅助 document 元素时，回调只在主窗口的渲染生命周期里投递。辅助窗口最大化遮住主窗口后主 frame 停帧，回调永不触发，Monaco 的内联 px 尺寸停在最大化前，画布只剩旧矩形。已修复 `GridLayout`（`packages/workbench-ui`）与 Monaco `ElementSizeObserver`（monaco patch，覆盖所有 `automaticLayout` 编辑器）；回归用例 `apps/editor/e2e/specs/smoke.auxiliaryEditorWindowResize.spec.ts`。新增任何驱动布局的 RO 时照此取 owner window。
 
 ### 文档级焦点跟踪
 

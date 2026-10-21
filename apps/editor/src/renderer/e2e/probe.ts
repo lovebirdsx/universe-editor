@@ -723,6 +723,25 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
         })),
       }
     },
+    getEditorLayoutInfo: (groupId) => {
+      const groups = services.editorGroupsService
+      const group = groupId === undefined ? groups.activeGroup : groups.getGroup(Number(groupId))
+      const input = group?.activeEditor
+      if (!group || !input) return undefined
+      // Qualify by group: the same input can be mounted in another window, and
+      // the unqualified lookup would silently measure that other instance.
+      const editor = FileEditorRegistry.get(input, group.id)
+      if (!editor) return undefined
+      const container = editor.getContainerDomNode()
+      const layout = editor.getLayoutInfo()
+      return {
+        groupId: String(group.id),
+        ...(input.resource ? { uri: input.resource.toString() } : {}),
+        layout: { width: layout.width, height: layout.height },
+        container: { width: container.clientWidth, height: container.clientHeight },
+        auxiliary: container.ownerDocument !== document,
+      }
+    },
     getAuxiliaryWindows: () =>
       services.auxiliaryEditorWindowService.windows.map((entry) => {
         const doc = entry.window.document

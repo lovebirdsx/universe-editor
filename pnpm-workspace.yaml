@@ -164,6 +164,9 @@ patchedDependencies:
   # sticky scroll 崩溃修复(vscode #325642):陈旧 showEndForLine 索引造稀疏数组,
   # NaN 绕过边界检查后读 isVisible 崩溃。移植上游 PR #325646 + #326669;
   # monaco 0.56.0 仍未携带,升级时须按上方流程处理。
+  # ElementSizeObserver 的 ResizeObserver 必须用元素所属 window 的构造器:裸构造
+  # 把 observer 绑在主窗口渲染生命周期上,辅助窗口(同 renderer、独立 Document)
+  # 最大化后回调停摆,Monaco 画布停在旧尺寸。上游 0.56.0/main 未修,升级时重新核对。
   monaco-editor@0.55.1: patches/monaco-editor@0.55.1.patch
   # electron.launch 进程早夭时(CI 文件锁窗口),内部 4 个 waitForLine promise 全部
   # reject 同一个 "Process failed to launch!",仅 nodeMatchPromise 被 await——其余
