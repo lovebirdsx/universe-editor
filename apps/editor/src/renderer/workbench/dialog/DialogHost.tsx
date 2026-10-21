@@ -20,17 +20,20 @@ export function DialogHost({ service }: { service: RendererDialogService }) {
     () => service.queue[0],
   )
   if (!head) return null
+  // Key by enqueue identity, not queue position: resolving the head and enqueueing
+  // its successor in the same batch keeps queue.length unchanged, so a length-derived
+  // key would make React reuse the old instance and carry its checkbox state over.
   const node =
     head.kind === 'confirm' ? (
       <ConfirmDialog
-        key={`c-${service.queue.length}`}
+        key={head.id}
         opts={head.opts}
         targetDocument={head.document}
         onResolve={(r) => service._resolveEntry<IConfirmResult>(head, r)}
       />
     ) : (
       <PromptDialog
-        key={`p-${service.queue.length}`}
+        key={head.id}
         opts={head.opts}
         targetDocument={head.document}
         onResolve={(v) => service._resolveEntry<string | undefined>(head, v)}

@@ -18,6 +18,8 @@ import { getActiveWorkbenchDocument } from '../windows/workbenchDocuments.js'
 type Resolver<T> = (value: T) => void
 
 export interface ConfirmEntry {
+  /** 入队时分配，服务实例内单调递增；DialogHost 用它作为 React key。 */
+  readonly id: number
   readonly kind: 'confirm'
   readonly opts: IConfirmOptions
   readonly resolve: Resolver<IConfirmResult>
@@ -26,6 +28,7 @@ export interface ConfirmEntry {
   settled?: boolean
 }
 export interface PromptEntry {
+  readonly id: number
   readonly kind: 'prompt'
   readonly opts: IPromptOptions
   readonly resolve: Resolver<string | undefined>
@@ -38,6 +41,8 @@ export class RendererDialogService extends Disposable implements IDialogService 
   declare readonly _serviceBrand: undefined
 
   private readonly _queue: DialogEntry[] = []
+  /** 每次入队分配一个身份；宿主按它做 key，不能按队列位置派生。 */
+  private _nextId = 0
   private readonly _onDidChange = this._register(new Emitter<void>())
   readonly onDidChange = this._onDidChange.event
 
@@ -49,6 +54,7 @@ export class RendererDialogService extends Disposable implements IDialogService 
   confirm(opts: IConfirmOptions): Promise<IConfirmResult> {
     return new Promise<IConfirmResult>((resolve) => {
       this._queue.push({
+        id: this._nextId++,
         kind: 'confirm',
         opts,
         resolve,
@@ -61,6 +67,7 @@ export class RendererDialogService extends Disposable implements IDialogService 
   prompt(opts: IPromptOptions): Promise<string | undefined> {
     return new Promise<string | undefined>((resolve) => {
       this._queue.push({
+        id: this._nextId++,
         kind: 'prompt',
         opts,
         resolve,

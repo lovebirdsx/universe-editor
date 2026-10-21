@@ -66,4 +66,27 @@ describe('RendererDialogService', () => {
     svc.dispose()
     registration.dispose()
   })
+
+  it('assigns a fresh monotonic id to every enqueued entry', async () => {
+    const registration = withDocument()
+    const svc = new RendererDialogService()
+    const first = svc.confirm({ message: 'first' })
+    const second = svc.prompt({ title: 'second' })
+    const [firstEntry, secondEntry] = svc.queue
+    expect(firstEntry!.id).not.toBe(secondEntry!.id)
+    expect(secondEntry!.id).toBeGreaterThan(firstEntry!.id)
+
+    svc._resolveEntry(firstEntry!, FIRST)
+    const third = svc.confirm({ message: 'third' })
+    const thirdEntry = svc.queue[1]!
+    expect(thirdEntry.id).toBeGreaterThan(secondEntry!.id)
+
+    svc._resolveEntry(secondEntry!, 'answer')
+    svc._resolveEntry(thirdEntry, SECOND)
+    await expect(first).resolves.toBe(FIRST)
+    await expect(second).resolves.toBe('answer')
+    await expect(third).resolves.toBe(SECOND)
+    svc.dispose()
+    registration.dispose()
+  })
 })
