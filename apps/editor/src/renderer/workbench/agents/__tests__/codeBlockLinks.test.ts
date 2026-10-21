@@ -5,7 +5,8 @@
  * @vitest-environment happy-dom
  *--------------------------------------------------------------------------------------------*/
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { Window } from 'happy-dom'
 import {
   escapeHtmlText,
   linkifyFilePathsInCode,
@@ -68,6 +69,31 @@ describe('linkifyFilePathsInCode', () => {
     linkifyFilePathsInCode(el, 'lnk')
     expect(el.querySelectorAll('a')).toHaveLength(1)
   })
+
+  it("walks and builds nodes from the block's own document", () => {
+    // An auxiliary-window block is owned by that window's document; using the
+    // main document's walker/nodes left the foreign block unlinkified.
+    const win = new Window()
+    const doc = win.document as unknown as Document
+    const el = doc.createElement('code') as HTMLElement
+    el.textContent = 'see src/a/b.ts'
+    doc.body.appendChild(el)
+
+    const mainWalker = vi.spyOn(document, 'createTreeWalker')
+    const mainFragment = vi.spyOn(document, 'createDocumentFragment')
+    try {
+      linkifyFilePathsInCode(el, 'lnk')
+    } finally {
+      mainWalker.mockRestore()
+      mainFragment.mockRestore()
+    }
+
+    expect(mainWalker).not.toHaveBeenCalled()
+    expect(mainFragment).not.toHaveBeenCalled()
+    const a = el.querySelector('a')
+    expect(a?.dataset['path']).toBe('src/a/b.ts')
+    expect(a?.ownerDocument).toBe(doc)
+  })
 })
 
 describe('resolveCodeBlockLinkClick', () => {
@@ -81,5 +107,21 @@ describe('resolveCodeBlockLinkClick', () => {
   it('returns null for a click that missed any link', () => {
     const el = makeCode(escapeHtmlText('plain text'))
     expect(resolveCodeBlockLinkClick(el.firstChild as EventTarget)).toBeNull()
+  })
+
+  it('resolves a foreign-realm anchor by shape', () => {
+    // Auxiliary-window anchors fail `instanceof Element` in the main realm.
+    const anchor = {
+      nodeType: 1,
+      tagName: 'A',
+      dataset: { path: 'src/foo/bar.ts', line: '8', col: '2', endline: '10' },
+      closest: (selector: string) => (selector.includes('a[data-codelink]') ? anchor : null),
+    } as unknown as EventTarget
+    expect(resolveCodeBlockLinkClick(anchor)).toEqual({
+      path: 'src/foo/bar.ts',
+      line: 8,
+      col: 2,
+      endLine: 10,
+    })
   })
 })

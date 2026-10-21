@@ -49,6 +49,7 @@ export function SubagentModelPicker({
   session,
   open,
   anchor,
+  targetDocument,
   onRequestOpen,
   onClose,
   onEscape,
@@ -57,6 +58,7 @@ export function SubagentModelPicker({
   session: IAcpSession
   open: boolean
   anchor: ConfigBarAnchor | null
+  targetDocument?: Document | undefined
   onRequestOpen: (trigger: HTMLElement) => void
   /** `restoreFocus: true` (a committed pick) hands the caret back where it came from. */
   onClose: (restoreFocus?: boolean) => void
@@ -90,6 +92,7 @@ export function SubagentModelPicker({
           y={anchor.y}
           placement="top-start"
           offset={4}
+          targetDocument={targetDocument}
           onClose={onClose}
           onEscape={onEscape}
           surfaceProps={

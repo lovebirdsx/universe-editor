@@ -8,9 +8,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { Window } from 'happy-dom'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import type { P4GraphSyncScopeDto } from '@universe-editor/extensions-common'
 import {
+  isButtonTarget,
+  isCheckboxInputTarget,
   PerforceGraphSyncDialog,
   type PerforceGraphSyncDialogState,
 } from '../PerforceGraphSyncDialog.js'
@@ -162,5 +165,107 @@ describe('PerforceGraphSyncDialog', () => {
     expect(confirm.disabled).toBe(true)
     fireEvent.click(confirm)
     expect(onConfirm).not.toHaveBeenCalled()
+  })
+})
+
+describe('PerforceGraphSyncDialog — auxiliary document', () => {
+  it('portals into the host document and handles Escape there', () => {
+    const win = new Window()
+    const doc = win.document as unknown as Document
+    const onConfirm = vi.fn()
+    const onCancel = vi.fn()
+    render(
+      <PerforceGraphSyncDialog
+        state={makeState()}
+        onConfirm={onConfirm}
+        onCancel={onCancel}
+        targetDocument={doc}
+      />,
+      { container: doc.body },
+    )
+
+    // The dialog lives in the graph editor's document, not the main one.
+    expect(doc.querySelector('[data-testid="perforceGraph-syncDialog"]')).toBeTruthy()
+    expect(document.querySelector('[data-testid="perforceGraph-syncDialog"]')).toBeNull()
+    // Explicit on-mount focus also follows the dialog's document.
+    expect(doc.activeElement?.tagName).toBe('INPUT')
+
+    act(() => {
+      doc.dispatchEvent(
+        new win.KeyboardEvent('keydown', {
+          key: 'Escape',
+          bubbles: true,
+          cancelable: true,
+        }) as unknown as Event,
+      )
+    })
+    expect(onCancel).toHaveBeenCalledTimes(1)
+    expect(onConfirm).not.toHaveBeenCalled()
+  })
+
+  it('recognizes foreign-realm checkbox and button targets by shape', () => {
+    const checkbox = {
+      nodeType: 1,
+      tagName: 'INPUT',
+      type: 'checkbox',
+    } as unknown as EventTarget
+    expect(isCheckboxInputTarget(checkbox)).toBe(true)
+    expect(
+      isCheckboxInputTarget({
+        nodeType: 1,
+        tagName: 'INPUT',
+        type: 'text',
+      } as unknown as EventTarget),
+    ).toBe(false)
+    expect(isCheckboxInputTarget(null)).toBe(false)
+
+    const button = {
+      nodeType: 1,
+      tagName: 'BUTTON',
+      closest: (selector: string) => (selector === 'button' ? button : null),
+    } as unknown as EventTarget
+    expect(isButtonTarget(button)).toBe(true)
+    expect(
+      isButtonTarget({
+        nodeType: 1,
+        tagName: 'SPAN',
+        closest: (selector: string) => (selector === 'button' ? button : null),
+      } as unknown as EventTarget),
+    ).toBe(true)
+    expect(
+      isButtonTarget({
+        nodeType: 1,
+        tagName: 'DIV',
+        closest: () => null,
+      } as unknown as EventTarget),
+    ).toBe(false)
+    expect(isButtonTarget(null)).toBe(false)
+  })
+
+  it('restores focus into the auxiliary document and leaves the main one alone', () => {
+    const win = new Window()
+    const doc = win.document as unknown as Document
+    const opener = doc.createElement('button')
+    doc.body.appendChild(opener)
+    opener.focus()
+    const mount = doc.createElement('div')
+    doc.body.appendChild(mount)
+    const mainActive = document.activeElement
+
+    const { unmount } = render(
+      <PerforceGraphSyncDialog
+        state={makeState()}
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+        targetDocument={doc}
+      />,
+      { container: mount },
+    )
+    // The dialog traps focus inside its own document.
+    expect(doc.activeElement?.tagName).toBe('INPUT')
+
+    unmount()
+    expect(doc.activeElement).toBe(opener)
+    expect(document.activeElement).toBe(mainActive)
   })
 })

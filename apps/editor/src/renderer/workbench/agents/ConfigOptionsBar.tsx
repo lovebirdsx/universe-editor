@@ -46,6 +46,7 @@ import {
 import {
   AnchoredSurface,
   findRowElement,
+  isHTMLElementLike,
   useOverlayListNavigation,
   type IOverlayListNavigation,
 } from '@universe-editor/workbench-ui'
@@ -140,6 +141,10 @@ export function ConfigOptionsBar({
   const [anchor, setAnchor] = useState<ConfigBarAnchor | null>(null)
   const [overflowOpen, setOverflowOpen] = useState(false)
   const [overflowExpandedKey, setOverflowExpandedKey] = useState<string | null>(null)
+  // Document the open surface must portal into and listen on. Captured from the
+  // trigger when opening so the bar follows its host window (auxiliary editor
+  // windows have their own document); defaults to the main document.
+  const [surfaceDocument, setSurfaceDocument] = useState<Document | undefined>(undefined)
   const entries = buildConfigBarEntries(options, {
     includeSubagent: session.agentId === 'claude-code',
     includeMcp: !isMcpPickerHidden(session, pool),
@@ -174,9 +179,9 @@ export function ConfigOptionsBar({
    * with a surface up re-opens through this same path, and recording it would
    * hand the caret to a node that unmounts right after.
    */
-  const captureOpener = useCallback((): void => {
-    const active = document.activeElement
-    if (!(active instanceof HTMLElement)) return
+  const captureOpener = useCallback((doc: Document): void => {
+    const active = doc.activeElement
+    if (!isHTMLElementLike(active)) return
     if (active.closest('[data-floating-ui-portal]') !== null) return
     openerRef.current = active
   }, [])
@@ -198,14 +203,16 @@ export function ConfigOptionsBar({
     // that focus, dropping the caret on <body>. One microtask later the press
     // has finished and the caret is ours to place.
     queueMicrotask(() => {
+      const doc = opener?.ownerDocument
       if (
         opener !== null &&
+        doc !== undefined &&
         opener.isConnected &&
-        opener !== document.body &&
-        opener !== document.documentElement
+        opener !== doc.body &&
+        opener !== doc.documentElement
       ) {
         opener.focus({ preventScroll: true })
-        if (document.activeElement === opener) return
+        if (doc.activeElement === opener) return
       }
       fallback()
     })
@@ -275,7 +282,8 @@ export function ConfigOptionsBar({
   const openInline = useCallback(
     (key: string, trigger: HTMLElement | null) => {
       if (!trigger) return
-      captureOpener()
+      captureOpener(trigger.ownerDocument)
+      setSurfaceDocument(trigger.ownerDocument)
       const rect = trigger.getBoundingClientRect()
       // The inline popover and the overflow panel are mutually exclusive: the
       // sub-agent panel keeps local `changed`/`pendingWrite` state, so its two
@@ -315,7 +323,8 @@ export function ConfigOptionsBar({
         // and out of the flex line, so a popover hung off it would land offscreen.
         const button = overflowRef.current
         if (!button) return false
-        captureOpener()
+        captureOpener(button.ownerDocument)
+        setSurfaceDocument(button.ownerDocument)
         const rect = button.getBoundingClientRect()
         setOpenId(null)
         setOverflowExpandedKey(entry.key)
@@ -415,6 +424,7 @@ export function ConfigOptionsBar({
                   option={entry.option}
                   open={openId === entry.key}
                   anchor={anchor}
+                  targetDocument={surfaceDocument}
                   onRequestOpen={openEntryAt(entry.key)}
                   onClose={closeInline}
                   onEscape={escapeInline}
@@ -425,6 +435,7 @@ export function ConfigOptionsBar({
                   session={session}
                   open={openId === SUBAGENT_ENTRY_KEY}
                   anchor={anchor}
+                  targetDocument={surfaceDocument}
                   onRequestOpen={openEntryAt(SUBAGENT_ENTRY_KEY)}
                   onClose={closeInline}
                   onEscape={escapeInline}
@@ -435,6 +446,7 @@ export function ConfigOptionsBar({
                   session={session}
                   open={openId === MCP_ENTRY_KEY}
                   anchor={anchor}
+                  targetDocument={surfaceDocument}
                   onRequestOpen={openEntryAt(MCP_ENTRY_KEY)}
                   onClose={closeInline}
                   onEscape={escapeInline}
@@ -450,10 +462,12 @@ export function ConfigOptionsBar({
           overflowedKeys={overflowedKeys}
           open={overflowOpen}
           anchor={anchor}
+          targetDocument={surfaceDocument}
           expandedKey={overflowExpandedKey}
           onExpandedKeyChange={setOverflowExpandedKey}
           onOpen={(trigger) => {
-            captureOpener()
+            captureOpener(trigger.ownerDocument)
+            setSurfaceDocument(trigger.ownerDocument)
             const rect = trigger.getBoundingClientRect()
             setOpenId(null)
             // Reopening starts from the rows: a dismissal (outside press) does
@@ -615,6 +629,7 @@ function ConfigOptionTrigger({
   option,
   open,
   anchor,
+  targetDocument,
   onRequestOpen,
   onClose,
   onEscape,
@@ -624,6 +639,7 @@ function ConfigOptionTrigger({
   option: SessionConfigOption & { type: 'select' }
   open: boolean
   anchor: ConfigBarAnchor | null
+  targetDocument?: Document | undefined
   onRequestOpen: (trigger: HTMLElement) => void
   /** `restoreFocus: true` (a committed pick) hands the caret back where it came from. */
   onClose: (restoreFocus?: boolean) => void
@@ -663,6 +679,7 @@ function ConfigOptionTrigger({
           onEscape={onEscape}
           onAltDigit={onAltDigit}
           testKey={testKey}
+          targetDocument={targetDocument}
           x={anchor.x}
           y={anchor.y}
         />
@@ -679,6 +696,7 @@ function ConfigOptionPopover({
   onEscape,
   onAltDigit,
   testKey,
+  targetDocument,
   x,
   y,
 }: {
@@ -690,6 +708,7 @@ function ConfigOptionPopover({
   onEscape: () => boolean
   onAltDigit: (digit: number) => void
   testKey: string
+  targetDocument?: Document | undefined
   x: number
   y: number
 }) {
@@ -699,6 +718,7 @@ function ConfigOptionPopover({
       y={y}
       placement="top-start"
       offset={4}
+      targetDocument={targetDocument}
       onClose={() => onDismiss()}
       onEscape={onEscape}
       surfaceProps={

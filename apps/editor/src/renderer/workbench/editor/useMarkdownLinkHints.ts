@@ -13,6 +13,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react'
+import { isElementLike } from '@universe-editor/workbench-ui'
 import { DEFAULT_HINT_CHARS, generateHintLabels } from './markdownLinkHints.js'
 
 export interface LinkHintMarker {
@@ -32,12 +33,17 @@ export interface MarkdownLinkHintsState {
   hide(): void
 }
 
-function collectVisibleLinks(root: HTMLElement): HTMLAnchorElement[] {
+/** Exported for tests: the shape check also accepts anchors from an auxiliary
+ *  window's realm, where `instanceof HTMLAnchorElement` would be false. */
+export function collectVisibleLinks(root: HTMLElement): HTMLAnchorElement[] {
   const containerRect = root.getBoundingClientRect()
   const out: HTMLAnchorElement[] = []
   for (const a of root.querySelectorAll('a[href]')) {
-    if (!(a instanceof HTMLAnchorElement)) continue
-    const r = a.getBoundingClientRect()
+    if (!isElementLike(a)) continue
+    // The selector already established HTMLAnchorElement; the shape predicate
+    // narrows to Element, so re-assert the static type for the overlay below.
+    const anchor = a as HTMLAnchorElement
+    const r = anchor.getBoundingClientRect()
     if (r.width <= 0 || r.height <= 0) continue
     // Keep only links whose box intersects the visible scroll viewport.
     if (
@@ -48,7 +54,7 @@ function collectVisibleLinks(root: HTMLElement): HTMLAnchorElement[] {
     ) {
       continue
     }
-    out.push(a)
+    out.push(anchor)
   }
   return out
 }
@@ -162,17 +168,21 @@ export function useMarkdownLinkHints<T extends HTMLElement>(
     }
 
     // Stale positions are worse than no hints: dismiss on scroll/resize/blur.
+    // Listen on the root's own document/window: the preview may live in an
+    // auxiliary window, whose events never reach the main document.
     const dismiss = (): void => hide()
-    document.addEventListener('keydown', onKeyDown, true)
     const root = rootRef.current
+    const doc = root?.ownerDocument ?? document
+    const view = doc.defaultView ?? window
+    doc.addEventListener('keydown', onKeyDown, true)
     root?.addEventListener('scroll', dismiss, { passive: true })
-    window.addEventListener('resize', dismiss)
-    window.addEventListener('blur', dismiss)
+    view.addEventListener('resize', dismiss)
+    view.addEventListener('blur', dismiss)
     return () => {
-      document.removeEventListener('keydown', onKeyDown, true)
+      doc.removeEventListener('keydown', onKeyDown, true)
       root?.removeEventListener('scroll', dismiss)
-      window.removeEventListener('resize', dismiss)
-      window.removeEventListener('blur', dismiss)
+      view.removeEventListener('resize', dismiss)
+      view.removeEventListener('blur', dismiss)
     }
   }, [active, hide, rootRef])
 

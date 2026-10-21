@@ -13,6 +13,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useState, type FocusEvent, type RefObject } from 'react'
+import { isElementLike } from '@universe-editor/workbench-ui'
 
 export interface GraphListFocusProps {
   /** `'true'` while the listbox subtree holds DOM focus; the row fill keys off it. */
@@ -46,7 +47,7 @@ export function useGraphListFocus(
     // React's onBlur bubbles (focusout): moving focus onto a descendant — the listbox's
     // own "Load more" button — is still the list being focused.
     const next = event.relatedTarget
-    if (next instanceof Node && event.currentTarget.contains(next)) return
+    if (isElementLike(next) && event.currentTarget.contains(next)) return
     setHasFocus(false)
   }, [])
 

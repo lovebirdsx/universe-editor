@@ -12,7 +12,12 @@ import type {
   AcpToolCall,
   TimelineItem,
 } from '../../../services/acp/session/acpSession.js'
-import { describeAcpChatSlot, slotKeyFromEvent } from '../chatContextSlot.js'
+import {
+  describeAcpChatSlot,
+  focusSurfaceFromEvent,
+  PROMPT_SURFACE_SELECTOR,
+  slotKeyFromEvent,
+} from '../chatContextSlot.js'
 
 function makeCall(overrides: Partial<AcpToolCall>): AcpToolCall {
   return {
@@ -72,6 +77,40 @@ describe('slotKeyFromEvent', () => {
     expect(slotKeyFromEvent(null)).toBeUndefined()
     expect(slotKeyFromEvent(document)).toBeUndefined()
     orphan.remove()
+  })
+
+  it('reads the key from a foreign-realm element by shape', () => {
+    // Auxiliary-window nodes fail `instanceof Element`, but are still elements.
+    const target = {
+      nodeType: 1,
+      tagName: 'DIV',
+      closest: () => target,
+      getAttribute: (name: string) => (name === 'data-sticky-key' ? 't:foreign' : null),
+    } as unknown as EventTarget
+    expect(slotKeyFromEvent(target)).toBe('t:foreign')
+  })
+})
+
+describe('focusSurfaceFromEvent', () => {
+  function shapedTarget(closest: (selector: string) => Element | null): EventTarget {
+    return { nodeType: 1, tagName: 'DIV', closest } as unknown as EventTarget
+  }
+
+  it('reports the prompt surface for a foreign-realm node inside the prompt form', () => {
+    expect(
+      focusSurfaceFromEvent(
+        shapedTarget((selector) => (selector === PROMPT_SURFACE_SELECTOR ? ({} as Element) : null)),
+      ),
+    ).toBe('prompt')
+  })
+
+  it('reports the timeline for a foreign-realm node elsewhere in the chat', () => {
+    expect(focusSurfaceFromEvent(shapedTarget(() => null))).toBe('timeline')
+  })
+
+  it('reports undefined for a non-element target', () => {
+    expect(focusSurfaceFromEvent(null)).toBeUndefined()
+    expect(focusSurfaceFromEvent(document)).toBeUndefined()
   })
 })
 

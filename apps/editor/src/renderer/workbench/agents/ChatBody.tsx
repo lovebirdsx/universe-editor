@@ -75,7 +75,7 @@ import {
   isKeyupContextMenuSupplement,
 } from '@universe-editor/workbench-ui'
 import { MessageContent } from './MessageContent.js'
-import { describeAcpChatSlot, slotKeyFromEvent } from './chatContextSlot.js'
+import { describeAcpChatSlot, focusSurfaceFromEvent, slotKeyFromEvent } from './chatContextSlot.js'
 import { PermissionCard } from './PermissionCard.js'
 import { ElicitationCard } from './ElicitationCard.js'
 import { RecoveryBar } from './RecoveryBar.js'
@@ -135,11 +135,6 @@ const selectionSyncEmitter = new Emitter<{
 }>()
 
 const STICK_THRESHOLD_PX = 32
-
-/** The prompt input's root element (PromptInput's `<form>`): DOM focus inside it
- *  means the session input is the focused surface, anything else inside the chat
- *  counts as the timeline. */
-const PROMPT_SURFACE_SELECTOR = '[data-testid="acp-prompt"]'
 
 export interface WidgetHandle {
   move: (direction: AcpTimelineMoveDirection) => void
@@ -415,14 +410,12 @@ function ChatSessionBody({
     const container = containerRef.current
     if (!container) return
     const onFocusIn = (e: FocusEvent): void => {
-      const target = e.target
-      if (!(target instanceof Element)) return
       // Anything inside the prompt form (input, config bar, send button) is the
       // prompt surface; the rest of the chat is the timeline.
-      AcpChatViewStateCache.setFocusSurface(
-        session.id,
-        target.closest(PROMPT_SURFACE_SELECTOR) ? 'prompt' : 'timeline',
-      )
+      const surface = focusSurfaceFromEvent(e.target)
+      if (surface !== undefined) {
+        AcpChatViewStateCache.setFocusSurface(session.id, surface)
+      }
     }
     container.addEventListener('focusin', onFocusIn)
     return () => container.removeEventListener('focusin', onFocusIn)

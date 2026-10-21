@@ -81,6 +81,7 @@ export function ConfigBarOverflowMenu({
   overflowedKeys,
   open,
   anchor,
+  targetDocument,
   expandedKey,
   onExpandedKeyChange,
   onOpen,
@@ -93,6 +94,7 @@ export function ConfigBarOverflowMenu({
   overflowedKeys: ReadonlySet<string>
   open: boolean
   anchor: ConfigBarAnchor | null
+  targetDocument?: Document | undefined
   /** Controlled: which row shows its body inline, if any. */
   expandedKey: string | null
   onExpandedKeyChange: (key: string | null) => void
@@ -244,6 +246,7 @@ export function ConfigBarOverflowMenu({
           y={anchor.y}
           placement="top-start"
           offset={4}
+          targetDocument={targetDocument}
           onClose={onClose}
           onEscape={escapePanel}
           surfaceProps={

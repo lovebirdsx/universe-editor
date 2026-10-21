@@ -388,6 +388,52 @@ describe('AcpChatWidgetService', () => {
     expect(cks.get('acpPromptContextChipText')).toBe(false)
   })
 
+  // Auxiliary-window containers and their children fail the main realm's
+  // `instanceof Node`; focus tracking must use shape checks so a chat moved to
+  // another window keeps `acpChatFocused` in sync.
+  function makeForeignContainer(seedActive: boolean): {
+    container: HTMLElement
+    node: Node
+    listeners: Map<string, EventListener>
+  } {
+    const listeners = new Map<string, EventListener>()
+    const node = { nodeType: 1, tagName: 'DIV' } as unknown as Node
+    const container = {
+      ownerDocument: { activeElement: seedActive ? node : null },
+      addEventListener: (type: string, listener: EventListener) => {
+        listeners.set(type, listener)
+      },
+      removeEventListener: (type: string, listener: EventListener) => {
+        if (listeners.get(type) === listener) listeners.delete(type)
+      },
+      contains: (candidate: Node | null) => candidate === node,
+    } as unknown as HTMLElement
+    return { container, node, listeners }
+  }
+
+  it('seeds focused state from a foreign-realm activeElement at registration', () => {
+    const { container, node } = makeForeignContainer(true)
+    svc.register(makeFakeAcpChatWidget({ container }))
+    // The container's ownerDocument.activeElement is the shape-only node.
+    expect(container.ownerDocument.activeElement).toBe(node)
+    expect(cks.get('acpChatFocused')).toBe(true)
+  })
+
+  it('keeps focused state when focusout moves to a foreign-realm descendant', () => {
+    const { container, node, listeners } = makeForeignContainer(false)
+    svc.register(makeFakeAcpChatWidget({ container }))
+    listeners.get('focusin')!(new FocusEvent('focusin'))
+    expect(cks.get('acpChatFocused')).toBe(true)
+
+    listeners.get('focusout')!(
+      new FocusEvent('focusout', { relatedTarget: node as unknown as EventTarget }),
+    )
+    expect(cks.get('acpChatFocused')).toBe(true)
+
+    listeners.get('focusout')!(new FocusEvent('focusout', { relatedTarget: null }))
+    expect(cks.get('acpChatFocused')).toBe(false)
+  })
+
   it('disposing the service detaches listeners', () => {
     const a = makeWidget('a')
     svc.register(a.widget)

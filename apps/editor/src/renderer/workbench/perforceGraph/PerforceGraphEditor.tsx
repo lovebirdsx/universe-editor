@@ -2011,6 +2011,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
       {syncDialog && (
         <PerforceGraphSyncDialog
           state={syncDialog}
+          targetDocument={scrollRef.current?.ownerDocument}
           onConfirm={(paths) => {
             const d = syncDialog
             setSyncDialog(null)

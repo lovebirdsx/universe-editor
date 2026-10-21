@@ -8,10 +8,28 @@
  *  The read side (menu arg validation) lives in chatContextTarget.ts.
  *--------------------------------------------------------------------------------------------*/
 
+import { isElementLike } from '@universe-editor/workbench-ui'
 import type { AcpChatSlot } from '../../services/acp/chatContextTarget.js'
 import type { AcpChildItem, TimelineItem } from '../../services/acp/session/acpSession.js'
 import { isPreviewablePath } from '../../services/resourcePreview/resourcePreviewSupport.js'
 import { createdFilePath } from './toolCallDisplay.js'
+
+/** The prompt input's root element (PromptInput's `<form>`): DOM focus inside it
+ *  means the session input is the focused surface, anything else inside the chat
+ *  counts as the timeline. */
+export const PROMPT_SURFACE_SELECTOR = '[data-testid="acp-prompt"]'
+
+/**
+ * Which chat surface owns the focus event. Uses the shared shape check because
+ * ChatBody also runs inside auxiliary windows, whose elements come from another
+ * realm and fail the main realm's `instanceof Element`.
+ */
+export function focusSurfaceFromEvent(
+  target: EventTarget | null,
+): 'prompt' | 'timeline' | undefined {
+  if (!isElementLike(target)) return undefined
+  return target.closest(PROMPT_SURFACE_SELECTOR) ? 'prompt' : 'timeline'
+}
 
 /**
  * The deepest card under the pointer. `data-sticky-key` wins over
@@ -21,7 +39,7 @@ import { createdFilePath } from './toolCallDisplay.js'
  * `findByStickyKey`, which walks the segments.
  */
 export function slotKeyFromEvent(target: EventTarget | null): string | undefined {
-  if (!(target instanceof Element)) return undefined
+  if (!isElementLike(target)) return undefined
   const el = target.closest('[data-sticky-key], [data-timeline-key]')
   if (!el) return undefined
   return el.getAttribute('data-sticky-key') ?? el.getAttribute('data-timeline-key') ?? undefined

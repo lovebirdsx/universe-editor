@@ -69,4 +69,15 @@ describe('shouldDeferDropToMarkdownEditor', () => {
   it('does not defer for a null event target', () => {
     expect(shouldDeferDropToMarkdownEditor(null, mdInput(), true)).toBe(false)
   })
+
+  // Auxiliary windows have their own realm: the node is a real element there,
+  // but fails the main realm's `instanceof HTMLElement`.
+  it('defers for a foreign-realm target inside the monaco text area', () => {
+    const foreign = {
+      nodeType: 1,
+      tagName: 'DIV',
+      closest: (selector: string) => (selector === '.monaco-editor' ? ({} as Element) : null),
+    } as unknown as EventTarget
+    expect(shouldDeferDropToMarkdownEditor(foreign, mdInput(), true)).toBe(true)
+  })
 })

@@ -47,19 +47,27 @@ renderer（主窗口，唯一运行时）
 
 ### 跨 realm 的 DOM 判定
 
-辅助窗口是独立 JS realm：主 realm 的 `element instanceof HTMLElement` / `Element` 对辅助窗口元素**恒为 false**（两者的构造函数不是同一对象）。因此所有"这是不是可编辑元素 / 是不是浮层祖先"的判定都必须按形状（`nodeType === 1` + `tagName` + `isContentEditable`）实现，唯一入口是 workbench-ui 的 `isElementLike` / `isHTMLElementLike` / `isEditableElement`（`dom/domRealm.ts`）。典型后果：
+辅助窗口是独立 JS realm：主 realm 的 `element instanceof HTMLElement` / `Element` / `Node` 对辅助窗口元素**恒为 false**（两者的构造函数不是同一对象）。因此所有"这是不是可编辑元素 / 是不是浮层祖先"的判定都必须按形状（`nodeType === 1` + `tagName` + `isContentEditable`）实现，唯一入口是 workbench-ui 的 `isElementLike` / `isHTMLElementLike` / `isEditableElement`（`dom/domRealm.ts`）。典型后果：
 
 - `isEditableTarget` 若是主 realm 判定，辅助窗口里的 Quick Input 输入框不算可编辑元素，全局 keybinding dispatcher 会先手吞掉 `Ctrl+N` / `Ctrl+P`（新建文件 / 快速打开），quick-navigate 的列表导航失效。
 - 对话框 Enter 判定、菜单/浮层的祖先遍历、焦点恢复的 `previousFocus` 捕获同理。
+- **事件字段同样跨 realm**：`ev.target`、`ev.relatedTarget`、`document.activeElement`、`focusin/focusout` 的 `relatedTarget` 都可能是辅助窗口节点，不要写 `target instanceof Node/Element/HTMLElement`；用 `isElementLike`。这一条同时覆盖 click 委派、dragover 落点、tooltip 的宿主体内移动判定、焦点是否仍在容器内（`relatedTarget` 在容器内时不能当作移出）。
 
-platform 的 `part.ts` 不依赖 DOM 类型，因此只读容器的 `ownerDocument` 形状（`{ activeElement: unknown }`），不引入 `instanceof`。单测里 `new Window()` 与主 realm 共享构造函数，**造不出真正的独立 realm**——跨 realm 语义只能由真实 Electron e2e 守护。
+**创建 DOM 时优先跟随宿主 document**：Chromium 允许主文档方法遍历并插入辅助文档节点（会自动 adopt，通常不抛 `WrongDocumentError`），但 wrapper 的 prototype 仍属创建它的 realm，`instanceof` 结果与节点所在窗口不一致。辅助窗口里的代码块后处理等应先用 `root.ownerDocument` 建 walker / fragment / 节点，使 realm 与宿主一致（参考 `useFindInContainer.ts`、`codeBlockLinks.ts`）。反过来，**主 document 创建、随后被 adopt 进辅助 document 的节点，其 JS wrapper 仍属于主 realm**（React 异步提交、Swarm inline comment 的 zone 即此类），不要依赖 realm 判定来区分它。
+
+**焦点恢复也要按 document 捕获**：react-aria 的 `FocusScope` 在 render 阶段用全局 `document.activeElement` 播种恢复目标，辅助窗口里会指向主窗口。`FocusScopeOverlay` 在 `targetDocument !== document`（或显式传了 `shouldRestoreFocus`）时禁用 react-aria 的恢复，改用自己从宿主 `doc.activeElement` 捕获的 previous focus；新增模态浮层不要再绕过它直接使用 `FocusScope`。
+
+本轮已加固的判定点：`TooltipProvider`（显示与宿主体内移动）、`EditorGroupView` 的 Shift-drop / prompt drop host、`chatContextSlot` / `ChatBody` 的 focus surface、代码块链接的解析与 linkify 创建、markdown link hints / reader nav、Git/Perforce 列表焦点、`AcpChatWidgetService` 的 focusin/focusout、`ConfigOptionsBar` 与 `PerforceGraphSyncDialog` 的浮层文档归属（含 `targetDocument` 透传）。
+
+已知仍挂主 document 的浮层/监听（未在辅助窗口内验证，后续按同一模式修）：`AgentChatContextMenu`、`ChatImage` 预览、`SideTasksBar` / `SessionCostIndicator` / `UsageIndicator` 弹层；`PeekNavigationContribution` 的 keydown 仍只绑主 document（辅助窗口内 peek 键盘不生效，是监听注册问题而非 realm 判定）；`SessionsFilterPopover` 的 `instanceof Node` 仅服务主窗口侧栏；`workbenchFocusRestorer` 读 `globalThis.document.activeElement`，辅助窗口激活时的恢复语义尚未验证。
+
+platform 的 `part.ts` 不依赖 DOM 类型，因此只读容器的 `ownerDocument` 形状（`{ activeElement: unknown }`），不引入 `instanceof`。单测里 `new Window()` 与主 realm 共享构造函数，**造不出真正的独立 realm**——跨 realm 语义只能由真实 Electron e2e 守护（`smoke.auxiliaryEditorWindow.realm.spec.ts`）。
 
 **ResizeObserver 必须用元素所属 window 的构造器**（`el.ownerDocument.defaultView.ResizeObserver`）。Blink 在构造时把 observer 注册到该 window 的 `ResizeObserverController`，而 `LocalFrameView::NotifyResizeObservers` 只取**本 frame** `DomWindow` 的 controller：主 realm 构造的 observer 观察辅助 document 元素时，回调只在主窗口的渲染生命周期里投递。辅助窗口最大化遮住主窗口后主 frame 停帧，回调永不触发，Monaco 的内联 px 尺寸停在最大化前，画布只剩旧矩形。已修复 `GridLayout`（`packages/workbench-ui`）与 Monaco `ElementSizeObserver`（monaco patch，覆盖所有 `automaticLayout` 编辑器）；回归用例 `apps/editor/e2e/specs/smoke.auxiliaryEditorWindowResize.spec.ts`。新增任何驱动布局的 RO 时照此取 owner window。
 
 ### 文档级焦点跟踪
 
 `RendererFocusTrackerService` 在构造时订阅主文档，并对之后 `registerWorkbenchDocument` 的每个辅助文档挂 `focusin`/`focusout`，注销时解绑。只盯主文档会让辅助窗口的焦点事件完全缺席，焦点历史与 `settled` 当前项永远停在主窗口。
-
 
 ## 标签拖放与拖出建窗
 
@@ -106,7 +114,6 @@ platform 的 `part.ts` 不依赖 DOM 类型，因此只读容器的 `ownerDocume
 - **后台文档的 Part 不算聚焦**：Part 容器的 `isFocused()` 读自己的 `ownerDocument.activeElement`，但失去 OS 焦点的文档会保留最后的 activeElement。凡是"当前是否聚焦在某 Part/视图"的产品判定（context key、`Ctrl+Shift+E` 等 toggle 命令）必须在 `isFocused()` 之外再要求该 Part 的 document 等于当前 active workbench document（`services/focus/partFocus.ts` 的 `isPartFocusedInActiveDocument`），否则在辅助窗口打字时主窗口会误判侧栏仍聚焦，命令执行成"关闭侧栏"而不是"显示 Explorer"。
 - **焦点竞争还来自两处细节**：`LayoutService.focusView` 的落点确认读元素自己的 `ownerDocument.activeElement`（主文档判定对辅助元素恒 false）；`_focusPart` 只在没有显式目标视图时才委派给该 Part 上次记住的视图，显式 `focusView(A)` 不能先打开/聚焦记住的视图 B。
 
-
 两个关键细节：
 
 - **判定"已有焦点"只读目标 `document.hasFocus()`**，不能读 `WorkbenchWindowService.activeWindow`——pointerdown/focusin 会把 activeWindow 提前写成目标窗口，但原生焦点未必已过去；读错会在 Windows 上触发 always-on-top 窗口闪烁。
@@ -114,7 +121,7 @@ platform 的 `part.ts` 不依赖 DOM 类型，因此只读容器的 `ownerDocume
 
 ## 测试与已知限制
 
-- 核心 E2E：`apps/editor/e2e/specs/smoke.auxiliaryEditorWindow.spec.ts` 覆盖建窗、移动/复制、关闭、恢复、菜单归属、dialog 归属、窗口命令、标题栏主题跟随、跨窗口焦点（Ctrl+P / Alt+← / Ctrl+Tab）、辅助窗口内 `Ctrl+Shift+E` 不误关侧栏、quick-navigate 的改键释放与 `Ctrl+N/P` 归属、原生标题随编辑器更新，以及 DnD；`smoke.auxiliaryEditorWindow.monaco.spec.ts` 用真实 tsserver 验证 hover 落在辅助文档。
+- 核心 E2E：`apps/editor/e2e/specs/smoke.auxiliaryEditorWindow.spec.ts` 覆盖建窗、移动/复制、关闭、恢复、菜单归属、dialog 归属、窗口命令、标题栏主题跟随、跨窗口焦点（Ctrl+P / Alt+← / Ctrl+Tab）、辅助窗口内 `Ctrl+Shift+E` 不误关侧栏、quick-navigate 的改键释放与 `Ctrl+N/P` 归属、原生标题随编辑器更新，以及 DnD；`smoke.auxiliaryEditorWindow.monaco.spec.ts` 用真实 tsserver 验证 hover 落在辅助文档；`smoke.auxiliaryEditorWindow.realm.spec.ts` 用真实辅助窗口守护跨 realm 判定（tooltip、markdown Shift-drop、prompt drop overlay、配置浮层文档归属与焦点交还、代码块文件链接）。
 - 跨窗口焦点用例在 main 进程猴补 `BrowserWindow.prototype.focus/showInactive` 记录焦点请求，再断言最后一次请求指向辅助窗口（`about:blank`）。silent E2E 下窗口不真正抢焦点，所以断言"请求了哪个窗口"而不是 OS 焦点状态。
 - Playwright/CDP 不能发起跨两个 BrowserWindow 的原生 OS 拖拽。跨窗口 DnD 用例把 `DragEvent` 合成进真实 React 树：处理器、共享 DragSession、screen 几何、IPC 建窗与编辑器迁移都真实执行，但**不是**原生 OS 拖拽测试；没有用探针直接调 `moveEditorToNewWindow` 冒充拖拽。
 - 拖出建窗的落点断言按 main 侧同样的"工作区可达范围"公式校验，避免把窗口管理器的边缘裁剪误判为产品错误。

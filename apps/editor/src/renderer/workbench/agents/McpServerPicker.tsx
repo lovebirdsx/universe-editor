@@ -77,6 +77,7 @@ export function McpServerPicker({
   session,
   open,
   anchor,
+  targetDocument,
   onRequestOpen,
   onClose,
   onEscape,
@@ -85,6 +86,7 @@ export function McpServerPicker({
   session: IAcpSession
   open: boolean
   anchor: ConfigBarAnchor | null
+  targetDocument?: Document | undefined
   onRequestOpen: (trigger: HTMLElement) => void
   onClose: () => void
   onEscape: () => boolean
@@ -100,6 +102,7 @@ export function McpServerPicker({
       service={service}
       open={open}
       anchor={anchor}
+      targetDocument={targetDocument}
       onRequestOpen={onRequestOpen}
       onClose={onClose}
       onEscape={onEscape}
@@ -113,6 +116,7 @@ function McpServerPickerInner({
   service,
   open,
   anchor,
+  targetDocument,
   onRequestOpen,
   onClose,
   onEscape,
@@ -122,6 +126,7 @@ function McpServerPickerInner({
   service: IAcpSessionServiceType
   open: boolean
   anchor: ConfigBarAnchor | null
+  targetDocument?: Document | undefined
   onRequestOpen: (trigger: HTMLElement) => void
   onClose: () => void
   onEscape: () => boolean
@@ -163,6 +168,7 @@ function McpServerPickerInner({
           y={anchor.y}
           placement="top-start"
           offset={4}
+          targetDocument={targetDocument}
           onClose={onClose}
           onEscape={onEscape}
           surfaceProps={

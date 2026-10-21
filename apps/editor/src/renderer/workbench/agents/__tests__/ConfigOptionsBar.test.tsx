@@ -20,6 +20,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
+import { Window } from 'happy-dom'
 import { render, screen, cleanup, fireEvent, act, within } from '@testing-library/react'
 import {
   Event,
@@ -121,6 +122,7 @@ function renderWithServices(
   dialogService?: IDialogServiceType,
   notificationService: INotificationService = stubNotificationService,
   autoReviewGuard?: IAcpCodexAutoReviewGuard,
+  container?: HTMLElement,
 ) {
   const services = new ServiceCollection()
   services.set(IFileService, stubFileService)
@@ -140,6 +142,7 @@ function renderWithServices(
   )
   const inst = new InstantiationService(services)
   return render(node, {
+    ...(container !== undefined ? { container } : {}),
     wrapper: ({ children }) => (
       <ServicesContext.Provider value={inst}>{children}</ServicesContext.Provider>
     ),
@@ -1003,5 +1006,80 @@ describe('ConfigOptionsBar — entry activation (Alt+<n>)', () => {
     expect(screen.queryByTestId('acp-config-overflow-panel')).toBeNull()
     expect(document.activeElement).toBe(opener)
     expect(session.setConfigOption).toHaveBeenCalledWith('mode', 'plan')
+  })
+})
+
+// happy-dom's `new Window()` shares DOM constructors with the main realm, so
+// these cases prove document ownership (portal target / focus hand-back), not
+// cross-realm shape checks; the latter is covered by the auxiliary-window e2e.
+describe('ConfigOptionsBar — auxiliary document', () => {
+  function makeAuxDocument(): Document {
+    const win = new Window()
+    return win.document as unknown as Document
+  }
+
+  it('opens the inline popover in the trigger document and restores focus there', async () => {
+    const doc = makeAuxDocument()
+    const session = makeSession([MODEL_OPTION])
+    const handle: { current: ConfigOptionsBarHandle | null } = { current: null }
+    renderWithServices(
+      <ConfigOptionsBar session={session} handleRef={handle} />,
+      undefined,
+      stubNotificationService,
+      undefined,
+      doc.body as unknown as HTMLElement,
+    )
+
+    const opener = doc.createElement('button')
+    doc.body.appendChild(opener)
+    opener.focus()
+    expect(doc.activeElement).toBe(opener)
+
+    act(() => {
+      expect(handle.current!.activateEntry(0)).toBe(true)
+    })
+    const popover = doc.querySelector(
+      '[data-testid="acp-config-model-popover"]',
+    ) as HTMLElement | null
+    expect(popover).toBeTruthy()
+    // The surface follows the trigger's document, not the main one.
+    expect(document.querySelector('[data-testid="acp-config-model-popover"]')).toBeNull()
+
+    const opus = [...popover!.querySelectorAll('[role="option"]')].find(
+      (n) => n.textContent === 'Opus 4.7',
+    )
+    expect(opus).toBeTruthy()
+    fireEvent.mouseDown(opus!)
+    await act(async () => {})
+
+    expect(session.setConfigOption).toHaveBeenCalledWith('model', 'opus')
+    expect(doc.activeElement).toBe(opener)
+  })
+
+  it('opens the overflow panel in the trigger document', async () => {
+    globalThis.ResizeObserver = FakeResizeObserver as unknown as typeof ResizeObserver
+    const doc = makeAuxDocument()
+    const session = makeSession([MODEL_OPTION, MODE_OPTION])
+    renderWithServices(
+      <ConfigOptionsBar session={session} />,
+      undefined,
+      stubNotificationService,
+      undefined,
+      doc.body as unknown as HTMLElement,
+    )
+
+    const bar = doc.querySelector('[data-testid="acp-config-options"]') as HTMLElement
+    const items = doc.querySelector('[data-testid="acp-config-options-items"]') as HTMLElement
+    stubClientWidth(items, 150)
+    for (const el of bar.querySelectorAll('[data-entry-key]')) stubWidth(el, 100)
+    stubWidth(doc.querySelector('[data-testid="acp-config-overflow-trigger"]') as HTMLElement, 26)
+    await fireResize()
+    expect(bar.querySelector('[data-entry-key="mode"]')?.getAttribute('data-overflowed')).toBe(
+      'true',
+    )
+
+    fireEvent.click(doc.querySelector('[data-testid="acp-config-overflow-trigger"]') as HTMLElement)
+    expect(doc.querySelector('[data-testid="acp-config-overflow-panel"]')).toBeTruthy()
+    expect(document.querySelector('[data-testid="acp-config-overflow-panel"]')).toBeNull()
   })
 })

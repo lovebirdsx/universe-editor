@@ -15,6 +15,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useFloating, autoUpdate, offset, flip, shift, FloatingPortal } from '@floating-ui/react'
+import { isElementLike } from '../dom/domRealm.js'
 import styles from './tooltipSurface.module.css'
 
 export const TOOLTIP_ATTRIBUTE = 'data-tooltip'
@@ -79,7 +80,7 @@ function tooltipTargetFrom(
   node: EventTarget | null,
   resolveShortcut?: (commandId: string) => string | undefined,
 ): { target: Element; text: string } | null {
-  if (!(node instanceof Element)) return null
+  if (!isElementLike(node)) return null
   const el = node.closest(`[${TOOLTIP_ATTRIBUTE}],[${NATIVE_TITLE_STASH}],[title]`)
   if (!el) return null
   // A native `title` on the resolved element would pop the OS bubble alongside
@@ -164,7 +165,7 @@ export function TooltipProvider({
         return
       }
       const movingTo = e.relatedTarget
-      if (movingTo instanceof Node && current.target.contains(movingTo)) return
+      if (isElementLike(movingTo) && current.target.contains(movingTo)) return
       hide()
     }
     const onFocusIn = (e: FocusEvent) => {

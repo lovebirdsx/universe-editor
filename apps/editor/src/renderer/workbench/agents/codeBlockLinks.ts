@@ -13,6 +13,7 @@
  *  fences) while never breaking span structure.
  *--------------------------------------------------------------------------------------------*/
 
+import { isElementLike } from '@universe-editor/workbench-ui'
 import { FILE_PATH_PATTERN, parseFilePathLocation } from '../../services/acp/filePathLink.js'
 
 // `u` flag: FILE_PATH_PATTERN embeds Unicode property classes (\p{L}\p{N}) so
@@ -33,7 +34,10 @@ export function escapeHtmlText(s: string): string {
  * double effect invocation) won't double-wrap.
  */
 export function linkifyFilePathsInCode(root: HTMLElement, linkClass: string): void {
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+  // The block may live in an auxiliary window's document; the walker and every
+  // replacement node must belong to that document, not the main realm's.
+  const doc = root.ownerDocument
+  const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT)
   // Collect first — mutating the tree while walking it is unsafe.
   const textNodes: Text[] = []
   let node: Node | null
@@ -43,10 +47,10 @@ export function linkifyFilePathsInCode(root: HTMLElement, linkClass: string): vo
     if (text.parentElement?.closest(`a[data-${LINK_MARKER}]`)) continue
     textNodes.push(text)
   }
-  for (const textNode of textNodes) replaceTextNode(textNode, linkClass)
+  for (const textNode of textNodes) replaceTextNode(textNode, linkClass, doc)
 }
 
-function replaceTextNode(textNode: Text, linkClass: string): void {
+function replaceTextNode(textNode: Text, linkClass: string, doc: Document): void {
   const text = textNode.data
   FILE_LINK_RE.lastIndex = 0
   let frag: DocumentFragment | null = null
@@ -58,20 +62,25 @@ function replaceTextNode(textNode: Text, linkClass: string): void {
       FILE_LINK_RE.lastIndex++
       continue
     }
-    if (frag === null) frag = document.createDocumentFragment()
+    if (frag === null) frag = doc.createDocumentFragment()
     const before = text.slice(lastIndex, m.index)
-    if (before.length > 0) frag.appendChild(document.createTextNode(before))
-    frag.appendChild(makeAnchor(full, m, linkClass))
+    if (before.length > 0) frag.appendChild(doc.createTextNode(before))
+    frag.appendChild(makeAnchor(full, m, linkClass, doc))
     lastIndex = m.index + full.length
   }
   if (frag === null) return
   const rest = text.slice(lastIndex)
-  if (rest.length > 0) frag.appendChild(document.createTextNode(rest))
+  if (rest.length > 0) frag.appendChild(doc.createTextNode(rest))
   textNode.parentNode?.replaceChild(frag, textNode)
 }
 
-function makeAnchor(full: string, m: RegExpExecArray, linkClass: string): HTMLAnchorElement {
-  const a = document.createElement('a')
+function makeAnchor(
+  full: string,
+  m: RegExpExecArray,
+  linkClass: string,
+  doc: Document,
+): HTMLAnchorElement {
+  const a = doc.createElement('a')
   a.className = linkClass
   a.href = full
   a.textContent = full
@@ -98,8 +107,9 @@ export interface CodeBlockLinkTarget {
  * any), reading the path/line/col stashed on the anchor by {@link makeAnchor}.
  */
 export function resolveCodeBlockLinkClick(target: EventTarget | null): CodeBlockLinkTarget | null {
-  const anchor =
-    target instanceof Element ? target.closest<HTMLElement>(`a[data-${LINK_MARKER}]`) : null
+  const anchor = isElementLike(target)
+    ? target.closest<HTMLElement>(`a[data-${LINK_MARKER}]`)
+    : null
   const path = anchor?.dataset['path']
   if (!path) return null
   const line = anchor.dataset['line']

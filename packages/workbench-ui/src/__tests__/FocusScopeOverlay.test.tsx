@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { Window } from 'happy-dom'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { FocusScopeOverlay } from '../overlay/FocusScopeOverlay.js'
 import { Select } from '../atoms/Select.js'
@@ -133,6 +134,32 @@ describe('FocusScopeOverlay', () => {
 
       unmount()
       expect(outside.focus).toHaveBeenCalledTimes(1)
+    })
+
+    it('restores into an auxiliary document without an explicit gate', () => {
+      // react-aria's own restore target is seeded from the global document, so
+      // an ungated overlay in another window used to hand focus back to main.
+      const win = new Window()
+      const doc = win.document as unknown as Document
+      const outside = doc.createElement('button')
+      outside.textContent = 'outside'
+      doc.body.appendChild(outside)
+      outside.focus()
+      expect(doc.activeElement).toBe(outside)
+
+      // Keep the restore target outside the React container: rendering into
+      // `doc.body` directly would clear its existing children.
+      const mount = doc.createElement('div')
+      doc.body.appendChild(mount)
+      const { unmount } = render(
+        <FocusScopeOverlay visible targetDocument={doc}>
+          <button data-testid="inside">inside</button>
+        </FocusScopeOverlay>,
+        { container: mount },
+      )
+
+      unmount()
+      expect(doc.activeElement).toBe(outside)
     })
   })
 })

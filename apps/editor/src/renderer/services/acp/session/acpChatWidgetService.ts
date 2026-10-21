@@ -46,6 +46,7 @@ import {
   type IContextKey,
   type IDisposable,
 } from '@universe-editor/platform'
+import { isElementLike } from '@universe-editor/workbench-ui'
 import type { AcpChatSlot } from '../chatContextTarget.js'
 import { AcpChatViewStateCache, type AcpFocusSurface } from './acpChatViewStateCache.js'
 
@@ -296,7 +297,7 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
       // Descendant→descendant focus shift within the same container: keep
       // focused=true. Only flip to false when focus exits the container.
       const next = e.relatedTarget
-      if (next instanceof Node && widget.container.contains(next)) return
+      if (isElementLike(next) && widget.container.contains(next)) return
       this._setFocused(widget, false)
     }
     const entry: Entry = {
@@ -315,7 +316,7 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
     // mid-stream after PromptInput auto-focused), seed the focused state.
     const doc = widget.container.ownerDocument
     const active = doc?.activeElement
-    if (active instanceof Node && widget.container.contains(active)) {
+    if (isElementLike(active) && widget.container.contains(active)) {
       this._setFocused(widget, true)
     }
     const sub = toDisposable(() => {

@@ -38,6 +38,11 @@ export function FocusScopeOverlay({
   children,
 }: FocusScopeOverlayProps) {
   const doc = targetDocument ?? document
+  // react-aria seeds its restore target during render from the *global*
+  // document; inside an auxiliary window that would be the main window's active
+  // element. Use the document-aware restore below whenever the overlay is not
+  // hosted by the main document, not just when a caller supplies a gate.
+  const ownsRestore = shouldRestoreFocus !== undefined || doc !== document
   const conditionRef = useRef(shouldRestoreFocus)
   conditionRef.current = shouldRestoreFocus
 
@@ -53,7 +58,7 @@ export function FocusScopeOverlay({
   wasVisibleRef.current = visible
 
   useEffect(() => {
-    if (!visible || !shouldRestoreFocus) return
+    if (!visible || !ownsRestore) return
     return () => {
       const previous = previousFocusRef.current
       previousFocusRef.current = null
@@ -63,7 +68,7 @@ export function FocusScopeOverlay({
     // `conditionRef` keeps the predicate out of the deps: an inline arrow would
     // otherwise re-run this effect (and restore focus) on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, doc])
+  }, [visible, doc, ownsRestore])
 
   useEffect(() => {
     if (!visible || !onEscape) return
@@ -88,7 +93,7 @@ export function FocusScopeOverlay({
 
   if (!visible) return null
   return (
-    <FocusScope contain restoreFocus={shouldRestoreFocus === undefined} autoFocus>
+    <FocusScope contain restoreFocus={!ownsRestore} autoFocus>
       {children}
     </FocusScope>
   )

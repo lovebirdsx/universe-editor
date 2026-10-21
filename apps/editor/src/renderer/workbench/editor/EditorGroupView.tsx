@@ -57,6 +57,7 @@ import {
   isContextMenuKey,
   isKeyboardContextMenu,
   isKeyupContextMenuSupplement,
+  isHTMLElementLike,
   useHover,
   useDragHandle,
   useDropTarget,
@@ -260,7 +261,7 @@ export function shouldDeferDropToMarkdownEditor(
   if (!(activeEditor instanceof FileEditorInput) || activeEditor.language !== 'markdown') {
     return false
   }
-  return target instanceof HTMLElement && target.closest('.monaco-editor') !== null
+  return isHTMLElementLike(target) && target.closest('.monaco-editor') !== null
 }
 
 /**
@@ -269,9 +270,9 @@ export function shouldDeferDropToMarkdownEditor(
  * host owns resource drops itself, so the surrounding editor group must not also
  * paint its body overlay while the pointer is over it.
  */
-function isWithinPromptDropHost(target: EventTarget | null): boolean {
+export function isWithinPromptDropHost(target: EventTarget | null): boolean {
   return (
-    target instanceof HTMLElement && target.closest('[data-testid="acp-prompt-drop-host"]') !== null
+    isHTMLElementLike(target) && target.closest('[data-testid="acp-prompt-drop-host"]') !== null
   )
 }
 

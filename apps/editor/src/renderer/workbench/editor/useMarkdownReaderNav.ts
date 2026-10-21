@@ -16,6 +16,7 @@
 
 import { useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 import { Emitter, ICommandService, IContextKeyService, type URI } from '@universe-editor/platform'
+import { isElementLike } from '@universe-editor/workbench-ui'
 import {
   MarkdownPreviewRegistry,
   type IMarkdownPreviewController,
@@ -158,7 +159,7 @@ export function useMarkdownReaderNav<T extends HTMLElement>({
     }
     const onFocusOut = (e: FocusEvent) => {
       const next = e.relatedTarget
-      if (next instanceof Node && el.contains(next)) return
+      if (isElementLike(next) && el.contains(next)) return
       focusedKey.set(false)
       MarkdownPreviewRegistry.clearActive(controller)
     }

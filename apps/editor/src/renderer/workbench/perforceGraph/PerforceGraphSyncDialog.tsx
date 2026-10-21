@@ -12,7 +12,7 @@
 import { useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { localize } from '@universe-editor/platform'
-import { FocusScopeOverlay } from '@universe-editor/workbench-ui'
+import { FocusScopeOverlay, isHTMLElementLike } from '@universe-editor/workbench-ui'
 import type { P4GraphSyncScopeDto } from '@universe-editor/extensions-common'
 import styles from '../gitGraph/GitGraphEditor.module.css'
 
@@ -29,10 +29,13 @@ export function PerforceGraphSyncDialog({
   state,
   onConfirm,
   onCancel,
+  targetDocument,
 }: {
   state: PerforceGraphSyncDialogState
   onConfirm: (selectedPaths: string[]) => void
   onCancel: () => void
+  /** Document hosting the graph editor (an auxiliary workbench window). */
+  targetDocument?: Document | undefined
 }) {
   const [selected, setSelected] = useState<Set<string>>(
     () => new Set(state.candidates.map((c) => c.path)),
@@ -82,7 +85,7 @@ export function PerforceGraphSyncDialog({
     // keyup activation) so the behavior is identical across browsers/tests.
     if (e.key === ' ') {
       const target = e.target
-      if (target instanceof HTMLInputElement && target.type === 'checkbox') {
+      if (isCheckboxInputTarget(target)) {
         e.preventDefault()
         const idx = itemRefs.current.findIndex((el) => el === target)
         if (idx === 0) toggleAll()
@@ -94,11 +97,11 @@ export function PerforceGraphSyncDialog({
       return
     }
     // Enter confirms from anywhere except the buttons (those activate natively).
-    if (e.key === 'Enter' && !(e.target instanceof HTMLButtonElement)) confirm()
+    if (e.key === 'Enter' && !isButtonTarget(e.target)) confirm()
   }
 
   return createPortal(
-    <FocusScopeOverlay visible onEscape={onCancel}>
+    <FocusScopeOverlay visible onEscape={onCancel} targetDocument={targetDocument}>
       <div className={styles['pickerBackdrop']} onClick={onCancel} />
       <div
         role="dialog"
@@ -171,6 +174,20 @@ export function PerforceGraphSyncDialog({
         </div>
       </div>
     </FocusScopeOverlay>,
-    document.body,
+    (targetDocument ?? document).body,
   )
+}
+
+/** Shape checks: the dialog can live in an auxiliary window, whose inputs and
+ *  buttons fail the main realm's `instanceof HTMLInputElement` checks. */
+export function isCheckboxInputTarget(target: EventTarget | null): boolean {
+  return (
+    isHTMLElementLike(target) &&
+    target.tagName === 'INPUT' &&
+    (target as HTMLInputElement).type === 'checkbox'
+  )
+}
+
+export function isButtonTarget(target: EventTarget | null): boolean {
+  return isHTMLElementLike(target) && target.closest('button') !== null
 }

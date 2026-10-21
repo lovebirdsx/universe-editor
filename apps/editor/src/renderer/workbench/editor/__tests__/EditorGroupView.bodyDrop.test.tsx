@@ -21,7 +21,7 @@ import {
 } from '@universe-editor/platform'
 import { DragSessionProvider } from '@universe-editor/workbench-ui'
 import { EditorGroupsService } from '../../../services/editor/EditorGroupsService.js'
-import { EditorGroupView, detectBodyDropZone } from '../EditorGroupView.js'
+import { EditorGroupView, detectBodyDropZone, isWithinPromptDropHost } from '../EditorGroupView.js'
 import { ServicesContext } from '../../useService.js'
 
 const TYPE_ID = 'body-drop-test'
@@ -444,5 +444,28 @@ describe('EditorGroupView body drop', () => {
     fireEvent(window, createEvent.dragEnd(window))
     expect(screen.queryByTestId('editor-group-drop-overlay')).toBeNull()
     svc.dispose()
+  })
+})
+
+describe('isWithinPromptDropHost', () => {
+  function shapedTarget(closest: (selector: string) => Element | null): EventTarget {
+    return { nodeType: 1, tagName: 'DIV', closest } as unknown as EventTarget
+  }
+
+  it('recognizes a foreign-realm target inside the prompt drop host', () => {
+    // The main realm's `instanceof HTMLElement` is false for auxiliary-window
+    // nodes; the shape check must still find the host.
+    expect(
+      isWithinPromptDropHost(
+        shapedTarget((selector) =>
+          selector.includes('acp-prompt-drop-host') ? ({} as Element) : null,
+        ),
+      ),
+    ).toBe(true)
+  })
+
+  it('rejects a target outside the host and non-element targets', () => {
+    expect(isWithinPromptDropHost(shapedTarget(() => null))).toBe(false)
+    expect(isWithinPromptDropHost(null)).toBe(false)
   })
 })
