@@ -75,7 +75,7 @@ export class WindowFocusService extends Disposable implements IWindowFocusServic
     void this._aux
       .focusWindow(token)
       .catch((err: unknown) => {
-        this._logger?.debug(`focus auxiliary window ${token} failed: ${String(err)}`)
+        this._logger?.debug(`focus auxiliary window ${win.id} failed: ${String(err)}`)
       })
       .finally(settle)
   }

@@ -473,7 +473,7 @@ export class AuxiliaryEditorWindowService
 
       const target = protectedEditors.length > 0 ? this._mainTargetGroup() : undefined
       if (protectedEditors.length > 0 && !target) {
-        this._logger.warn(`close vetoed: no unlocked main group for token=${entry.token}`)
+        this._logger.warn(`close vetoed: no unlocked main group for part=${entry.part.id}`)
         entry.closing = false
         return false
       }
@@ -493,10 +493,10 @@ export class AuxiliaryEditorWindowService
 
       this._teardownEntry(entry)
       await this._aux.finalizeClose(entry.token)
-      this._logger.info(`closed token=${entry.token}`)
+      this._logger.info(`closed part=${entry.part.id}`)
       return true
     } catch (err) {
-      this._logger.warn(`close failed token=${entry.token}: ${String(err)}`)
+      this._logger.warn(`close failed part=${entry.part.id}: ${String(err)}`)
       entry.closing = false
       return false
     }
@@ -1023,7 +1023,7 @@ export class AuxiliaryEditorWindowService
     if (options.removePart !== false) {
       this._groups.removePart(entry.part, { force: true })
     }
-    this._logger.info(`torn down token=${entry.token} part=${entry.part.id}`)
+    this._logger.info(`torn down part=${entry.part.id}`)
   }
 
   /** Persistable state of every auxiliary part, for debugging/E2E symmetry. */

@@ -96,18 +96,20 @@ interface FakeWin {
   }
   __fire(event: 'maximize' | 'unmaximize'): void
   __setFocused(focused: boolean): void
+  __setDestroyed(destroyed: boolean): void
 }
 
-function makeFakeWin(): FakeWin & { calls: string[] } {
+function makeFakeWin(id = 1): FakeWin & { calls: string[] } {
   const calls: string[] = []
   const listeners: Record<string, (() => void)[]> = { maximize: [], unmaximize: [] }
   let maximized = false
   let focused = false
   let minimized = false
+  let destroyed = false
   let zoomLevel = 0
   const fake: FakeWin & { calls: string[] } = {
     calls,
-    id: 1,
+    id,
     isMaximized() {
       return maximized
     },
@@ -180,7 +182,7 @@ function makeFakeWin(): FakeWin & { calls: string[] } {
       if (idx >= 0) arr.splice(idx, 1)
     },
     isDestroyed() {
-      return false
+      return destroyed
     },
     __fire(event) {
       listeners[event]?.forEach((h) => h())
@@ -188,8 +190,29 @@ function makeFakeWin(): FakeWin & { calls: string[] } {
     __setFocused(value) {
       focused = value
     },
+    __setDestroyed(value) {
+      destroyed = value
+    },
   }
   return fake
+}
+
+function makeHost(
+  win: FakeWin,
+  opts?: {
+    dialogParent?: FakeWin
+    auxiliaryWindow?: (token: string) => FakeWin | undefined
+  },
+): MainHostService {
+  return new MainHostService(
+    win as never,
+    undefined,
+    undefined,
+    undefined,
+    1,
+    () => (opts?.dialogParent ?? win) as never,
+    (token) => opts?.auxiliaryWindow?.(token) as never,
+  )
 }
 
 describe('MainHostService', () => {
@@ -433,6 +456,146 @@ describe('MainHostService', () => {
       notificationState.instances[0]!.emit('click')
       await expect(pending).resolves.toEqual({ shown: true, clicked: true })
       service.dispose()
+    })
+
+    // Auxiliary editor windows share the parent renderer's host service. These
+    // cases pin that a notification raised by a session living there is gated,
+    // flashed and focused on the auxiliary window instead of the workspace one.
+    describe('origin window', () => {
+      const auxOrigin = { kind: 'auxiliary', token: 'aux-token' } as const
+
+      it('is suppressed while the auxiliary origin window is focused', async () => {
+        const main = makeFakeWin(1)
+        const aux = makeFakeWin(2)
+        main.__setFocused(false)
+        aux.__setFocused(true)
+        const service = makeHost(main, { auxiliaryWindow: () => aux })
+
+        const result = await service.notify({
+          title: 'Done',
+          body: 'finished',
+          originWindow: auxOrigin,
+        })
+
+        expect(result).toEqual({ shown: false, clicked: false })
+        expect(notificationState.instances).toHaveLength(0)
+        service.dispose()
+      })
+
+      it('flashes only the auxiliary origin window while the workspace window is blurred', () => {
+        const main = makeFakeWin(1)
+        const aux = makeFakeWin(2)
+        const service = makeHost(main, { auxiliaryWindow: () => aux })
+
+        void service.notify({ title: 'Done', body: 'finished', originWindow: auxOrigin })
+
+        expect(aux.calls).toContain('flashFrame:true')
+        expect(main.calls).not.toContain('flashFrame:true')
+        service.dispose()
+      })
+
+      it('focuses the auxiliary origin window when the toast is clicked', async () => {
+        const main = makeFakeWin(1)
+        const aux = makeFakeWin(2)
+        const service = makeHost(main, { auxiliaryWindow: () => aux })
+
+        const pending = service.notify({
+          title: 'Done',
+          body: 'finished',
+          originWindow: auxOrigin,
+        })
+        notificationState.instances[0]!.emit('click')
+
+        await expect(pending).resolves.toEqual({ shown: true, clicked: true })
+        expect(aux.calls).toContain('focus')
+        expect(main.calls).not.toContain('focus')
+        service.dispose()
+      })
+
+      it('falls back to the workspace window when the auxiliary window is gone at click time', async () => {
+        const main = makeFakeWin(1)
+        const aux = makeFakeWin(2)
+        let lookups = 0
+        const service = makeHost(main, {
+          auxiliaryWindow: () => (lookups++ === 0 ? aux : undefined),
+        })
+
+        const pending = service.notify({
+          title: 'Done',
+          body: 'finished',
+          originWindow: auxOrigin,
+        })
+        notificationState.instances[0]!.emit('click')
+
+        await expect(pending).resolves.toEqual({ shown: true, clicked: true })
+        expect(main.calls).toContain('focus')
+        expect(aux.calls).not.toContain('focus')
+        service.dispose()
+      })
+
+      it('pins an explicit workspace origin even while an auxiliary window is focused', () => {
+        const main = makeFakeWin(1)
+        const aux = makeFakeWin(2)
+        main.__setFocused(false)
+        aux.__setFocused(true)
+        const service = makeHost(main, { dialogParent: aux })
+
+        void service.notify({
+          title: 'Done',
+          body: 'finished',
+          originWindow: { kind: 'workspace' },
+        })
+
+        expect(notificationState.instances).toHaveLength(1)
+        expect(main.calls).toContain('flashFrame:true')
+        expect(aux.calls).not.toContain('flashFrame:true')
+        service.dispose()
+      })
+
+      it('follows the focused window of this workspace when no origin is given', async () => {
+        const main = makeFakeWin(1)
+        const aux = makeFakeWin(2)
+        main.__setFocused(false)
+        aux.__setFocused(true)
+        const service = makeHost(main, { dialogParent: aux })
+
+        const result = await service.notify({ title: 'Done', body: 'finished' })
+
+        expect(result).toEqual({ shown: false, clicked: false })
+        expect(notificationState.instances).toHaveLength(0)
+        service.dispose()
+      })
+
+      it('falls back to the workspace window for an unknown token', () => {
+        const main = makeFakeWin(1)
+        main.__setFocused(false)
+        const service = makeHost(main, { auxiliaryWindow: () => undefined })
+
+        void service.notify({ title: 'Done', body: 'finished', originWindow: auxOrigin })
+
+        expect(notificationState.instances).toHaveLength(1)
+        expect(main.calls).toContain('flashFrame:true')
+        service.dispose()
+      })
+
+      it('shows and flashes the auxiliary origin when onlyWhenBlurred is false', () => {
+        const main = makeFakeWin(1)
+        const aux = makeFakeWin(2)
+        aux.__setFocused(true)
+        const service = makeHost(main, { auxiliaryWindow: () => aux })
+
+        void service.notify({
+          title: 'Done',
+          body: 'finished',
+          originWindow: auxOrigin,
+          onlyWhenBlurred: false,
+        })
+
+        expect(notificationState.instances).toHaveLength(1)
+        expect(aux.calls).toContain('flashFrame:true')
+        expect(main.calls).not.toContain('flashFrame:true')
+        service.dispose()
+      })
     })
 
     it('degrades gracefully when notifications are unsupported', async () => {

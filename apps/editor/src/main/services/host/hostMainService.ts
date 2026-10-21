@@ -35,6 +35,7 @@ import {
   type IShowSaveFileOptions,
   type ISystemNotificationOptions,
   type ISystemNotificationResult,
+  type SystemNotificationOrigin,
   type IVersionInfo,
   type UriComponents,
 } from '@universe-editor/platform'
@@ -130,6 +131,8 @@ export class MainHostService implements IHostServiceWire, IDisposable {
     configuredZoomFactor = 1,
     private readonly _getDialogParent: (fallback: BrowserWindow) => BrowserWindow = (fallback) =>
       fallback,
+    private readonly _getAuxiliaryWindow: (token: string) => BrowserWindow | undefined = () =>
+      undefined,
   ) {
     this._configuredZoomFactor = configuredZoomFactor
     _win.on('maximize', this._onMaximize)
@@ -381,12 +384,21 @@ export class MainHostService implements IHostServiceWire, IDisposable {
   }
 
   notify(opts: ISystemNotificationOptions): Promise<ISystemNotificationResult> {
+    // Auxiliary windows share this host service; when the caller names one, the
+    // focus gate, taskbar attention and click focus all belong to it. Without an
+    // origin, follow the workspace's focused window (auxiliary included) so a
+    // toast never flashes the workspace window while the user is elsewhere in
+    // the same workspace.
+    const origin = opts.originWindow
+    const target = this._resolveNotificationWindow(origin)
     const gated = opts.onlyWhenBlurred !== false
-    if (gated && !this._win.isDestroyed() && this._win.isFocused() && !this._isUserAway()) {
+    if (gated && !target.isDestroyed() && target.isFocused() && !this._isUserAway()) {
       // info, not debug: this branch swallowing a toast is exactly what field
       // diagnosis needs to see in host.log (the overnight bug was proven by the
       // ABSENCE of "notify shown" lines — make the decision explicit instead).
-      this._logger.info(`notify skipped (window focused, user present) title=${opts.title}`)
+      this._logger.info(
+        `notify skipped (window focused, user present) title=${opts.title} target=${target.id}`,
+      )
       return Promise.resolve({ shown: false, clicked: false })
     }
     if (!Notification.isSupported()) {
@@ -400,8 +412,10 @@ export class MainHostService implements IHostServiceWire, IDisposable {
       body: opts.body,
       ...(icon && !icon.isEmpty() ? { icon } : {}),
     })
-    this._requestAttention()
-    this._logger.info(`notify shown title=${opts.title}`)
+    this._requestAttention(target)
+    this._logger.info(
+      `notify shown title=${opts.title} target=${target.id}${target === this._win ? '' : ' auxiliary'}`,
+    )
 
     return new Promise<ISystemNotificationResult>((resolve) => {
       let settled = false
@@ -430,7 +444,11 @@ export class MainHostService implements IHostServiceWire, IDisposable {
         // forward within the OS-granted input grace window — a renderer
         // round-trip would step outside it and Windows would refuse foreground.
         this._logger.info(`notify clicked title=${opts.title}`)
-        void this.focusWindow()
+        // The auxiliary window may have closed while the toast sat in Action
+        // Center: re-resolve instead of focusing a destroyed native window.
+        const clickTarget =
+          origin?.kind === 'auxiliary' ? this._resolveNotificationWindow(origin) : target
+        void this._focusWindow(clickTarget)
         finish({ shown: true, clicked: true })
       })
       // 'close' deliberately does NOT settle: on Windows it fires when the toast
@@ -465,23 +483,40 @@ export class MainHostService implements IHostServiceWire, IDisposable {
   }
 
   focusWindow(): Promise<void> {
-    if (this._win.isDestroyed()) return Promise.resolve()
-    this._clearAttention()
-    if (this._win.isMinimized()) this._win.restore()
+    return this._focusWindow(this._win)
+  }
+
+  /** Which native window owns a notification: the caller-named auxiliary window,
+   *  the workspace window, or (no origin) the focused window of this workspace. */
+  private _resolveNotificationWindow(origin: SystemNotificationOrigin | undefined): BrowserWindow {
+    if (origin?.kind === 'auxiliary') {
+      const auxiliary = this._getAuxiliaryWindow(origin.token)
+      return auxiliary !== undefined && !auxiliary.isDestroyed() ? auxiliary : this._win
+    }
+    if (origin?.kind === 'workspace') return this._win
+    const focused = this._getDialogParent(this._win)
+    return focused.isDestroyed() ? this._win : focused
+  }
+
+  private _focusWindow(target: BrowserWindow): Promise<void> {
+    const win = target.isDestroyed() ? this._win : target
+    if (win.isDestroyed()) return Promise.resolve()
+    this._clearAttention(win)
+    if (win.isMinimized()) win.restore()
     if (process.platform === 'win32') {
       // Toggle always-on-top to defeat Windows' SetForegroundWindow lock —
       // a plain focus() is silently ignored when another process owns the
       // foreground, leaving the window flashing in the taskbar instead.
-      this._win.setAlwaysOnTop(true)
-      this._win.show()
-      this._win.focus()
-      this._win.moveTop()
-      this._win.setAlwaysOnTop(false)
+      win.setAlwaysOnTop(true)
+      win.show()
+      win.focus()
+      win.moveTop()
+      win.setAlwaysOnTop(false)
     } else {
-      this._win.show()
-      this._win.focus()
+      win.show()
+      win.focus()
     }
-    this._logger.debug(`focusWindow id=${this._win.id}`)
+    this._logger.debug(`focusWindow id=${win.id}`)
     return Promise.resolve()
   }
 
@@ -546,19 +581,20 @@ export class MainHostService implements IHostServiceWire, IDisposable {
     }
   }
 
-  private _requestAttention(): void {
-    if (this._win.isDestroyed()) return
+  private _requestAttention(target: BrowserWindow): void {
+    if (target.isDestroyed()) return
     if (process.platform === 'darwin') {
+      // Dock bounce is process-wide; Electron has no per-window counterpart.
       app.dock?.bounce('informational')
     } else {
-      this._win.flashFrame(true)
+      target.flashFrame(true)
     }
   }
 
-  private _clearAttention(): void {
-    if (this._win.isDestroyed()) return
+  private _clearAttention(target: BrowserWindow): void {
+    if (target.isDestroyed()) return
     if (process.platform !== 'darwin') {
-      this._win.flashFrame(false)
+      target.flashFrame(false)
     }
   }
 

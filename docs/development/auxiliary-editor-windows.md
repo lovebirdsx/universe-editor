@@ -56,6 +56,8 @@ VSCode 的 `INotificationService` / `IProgressService` 是每个 workbench 窗�
 - 文档关闭后 origin 被清理，尚未处理的条目回落主窗口（`workbenchDocumentOrMain`）；通知**不会**跟着之后切换的活跃窗口漂移。
 - `ProgressService.withProgress()` 在**进入时**捕获 origin（不是延迟 mount 时），notification 走 `notifyWithOrigin`，dialog 同时发布 `dialogDocument`；`ProgressDialogHost` portal 到该文档。来源文档注销时服务立即清空 `dialogDocument`，宿主回落主窗口；`QuickInputService` 在来源文档注销时直接 `hide()`，让挂起的 `pick()` / `input()` 结算，避免继续 portal 到死文档。
 - 通知的已读状态、`unreadCount`、清空/全部已读仍是应用级全局状态——只有"画在哪个窗口"按 origin 路由。
+- **OS 桌面通知按来源窗口归属**：辅助窗口共享父 renderer 的 `IHostService`，`notify()` 的焦点门控、任务栏闪烁与点击聚焦默认会落在父工作区窗口。`ISystemNotificationOptions.originWindow` 三态声明归属：`workspace` 钉在主窗口、`auxiliary` 携带 token（主进程经 `AuxiliaryWindowsMainService.getWindowForToken` 解析为真实 BrowserWindow，并在点击时重新解析、窗口已关则回落主窗口），缺省跟随本 workspace 当前聚焦窗口。Agent 通知在 renderer 用 `findSessionEditor` 定位 session tab 所在 part 后传 token（tab 用 durable id 时再按 `sessionIdOnAgent` 查一次）；没有打开 tab 的后台会话显式钉主窗口，避免归属到用户碰巧聚焦的辅助窗口。macOS 的 `app.dock.bounce` 是进程级 API，无法按窗口。
+- **主窗口标题只反映主 part**：`WindowTitleContribution` 读 `IEditorGroupsService.mainPart.activeGroup.activeEditor`，不读全局 `activeSession`——后者随焦点跨窗口漂移，会把辅助窗口的会话标题写进主窗口（Alt+Tab 里看起来像是主窗口的会话）。辅助窗口标题由 `AuxiliaryTitleBar` 按自己的 active editor 维护。
 
 语义边界：origin 是"调用 `notify()` 时活跃的窗口"，不是"任务发起窗口"。后台任务完成时用户已切窗口，会落在当前窗口；需要固定归属的调用点应显式传 origin。
 

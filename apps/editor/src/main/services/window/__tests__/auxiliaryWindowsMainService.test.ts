@@ -502,4 +502,18 @@ describe('AuxiliaryWindowsMainService', () => {
     child.destroy()
     expect(service.getParentWindowId(child.id)).toBeUndefined()
   })
+
+  it('resolves a notification target only for the owning parent', () => {
+    const parent = makeParent(service)
+    const otherParent = makeParent(service)
+    const { token, child } = createWindow(service, parent)
+
+    expect(service.getWindowForToken(parent.id, token)).toBe(child)
+    // A renderer must not be able to name another workspace's auxiliary window.
+    expect(service.getWindowForToken(otherParent.id, token)).toBeUndefined()
+    expect(service.getWindowForToken(parent.id, 'unknown')).toBeUndefined()
+
+    child.destroy()
+    expect(service.getWindowForToken(parent.id, token)).toBeUndefined()
+  })
 })

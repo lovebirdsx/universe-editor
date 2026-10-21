@@ -130,8 +130,11 @@ export interface IHostService {
 
   /**
    * Show an OS-level desktop notification. By default it is suppressed while the
-   * window is focused (`onlyWhenBlurred`), so callers can fire it unconditionally
-   * and rely on the host to avoid interrupting an active user. The returned
+   * owning window is focused (`onlyWhenBlurred`), so callers can fire it
+   * unconditionally and rely on the host to avoid interrupting an active user.
+   * `originWindow` selects that owning window: auxiliary editor windows share
+   * their parent's host service, so without it taskbar attention and
+   * click-to-focus would always land on the workspace window. The returned
    * promise settles when the user clicks the notification or it is dismissed.
    */
   notify(opts: ISystemNotificationOptions): Promise<ISystemNotificationResult>
@@ -213,13 +216,28 @@ export interface IVersionInfo {
   readonly appRoot: string
 }
 
+/**
+ * Which workbench window owns a system notification. Auxiliary editor windows
+ * have no host service of their own (they share the parent renderer's), so the
+ * caller must name them explicitly when the notification belongs to one.
+ */
+export type SystemNotificationOrigin =
+  | { readonly kind: 'workspace' }
+  | { readonly kind: 'auxiliary'; readonly token: string }
+
 export interface ISystemNotificationOptions {
   readonly title: string
   readonly body: string
-  /** Only show while the window is blurred (default true). */
+  /** Only show while the owning window is blurred (default true). */
   readonly onlyWhenBlurred?: boolean
   /** Optional PNG data URL rendered as the notification icon. */
   readonly icon?: string
+  /**
+   * Window that owns this notification (focus gating, taskbar attention and
+   * click-to-focus). Omitted ⇒ the workspace's currently focused window;
+   * `workspace` pins it to the host workspace window.
+   */
+  readonly originWindow?: SystemNotificationOrigin
 }
 
 export interface ISystemNotificationResult {

@@ -192,7 +192,7 @@ export class AuxiliaryWindowsMainService implements IDisposable {
     this._prepared.delete(prepared.token)
     const entry = this._registerWindow(prepared, child)
     this._logger.info(
-      `created token=${entry.token} parent=${parent.id} id=${child.id} bounds=${prepared.state.x},${prepared.state.y},${prepared.state.width},${prepared.state.height}`,
+      `created parent=${parent.id} id=${child.id} bounds=${prepared.state.x},${prepared.state.y},${prepared.state.width},${prepared.state.height}`,
     )
     this._onDidCreateWindow.fire({
       parentWindowId: entry.parentWindowId,
@@ -226,7 +226,7 @@ export class AuxiliaryWindowsMainService implements IDisposable {
       approved: false,
     })
     this._logger.info(
-      `prepared token=${token} parent=${parentWindowId} bounds=${state.x},${state.y},${state.width},${state.height}`,
+      `prepared parent=${parentWindowId} bounds=${state.x},${state.y},${state.width},${state.height}`,
     )
     return { token, frameName: token }
   }
@@ -235,7 +235,7 @@ export class AuxiliaryWindowsMainService implements IDisposable {
     const prepared = this._prepared.get(token)
     if (!prepared || prepared.parentWindowId !== parentWindowId) return
     this._prepared.delete(token)
-    this._logger.info(`cancelled prepared token=${token} parent=${parentWindowId}`)
+    this._logger.info(`cancelled prepared parent=${parentWindowId}`)
   }
 
   getWindows(parentWindowId: number): AuxiliaryWindowState[] {
@@ -247,6 +247,16 @@ export class AuxiliaryWindowsMainService implements IDisposable {
   getWindowState(parentWindowId: number, token: string): AuxiliaryWindowState | null {
     const entry = this._entryFor(parentWindowId, token)
     return entry && !entry.win.isDestroyed() ? this._captureState(entry) : null
+  }
+
+  /**
+   * Native window for a token owned by `parentWindowId`. Used to target OS
+   * notifications (focus gate, taskbar attention, click focus) at the
+   * auxiliary window whose session raised them.
+   */
+  getWindowForToken(parentWindowId: number, token: string): BrowserWindow | undefined {
+    const entry = this._entryFor(parentWindowId, token)
+    return entry !== undefined && !entry.win.isDestroyed() ? entry.win : undefined
   }
 
   focusWindow(parentWindowId: number, token: string): void {
@@ -559,9 +569,7 @@ export class AuxiliaryWindowsMainService implements IDisposable {
 
   private _destroyEntry(entry: AuxiliaryWindowEntry, reason: string): void {
     entry.destroying = true
-    this._logger.info(
-      `destroy token=${entry.token} parent=${entry.parentWindowId} reason=${reason}`,
-    )
+    this._logger.info(`destroy parent=${entry.parentWindowId} reason=${reason}`)
     if (!entry.win.isDestroyed()) entry.win.destroy()
     this._cleanupEntry(entry)
   }
@@ -574,7 +582,7 @@ export class AuxiliaryWindowsMainService implements IDisposable {
     if (!this._windows.has(entry.token)) return
     this._windows.delete(entry.token)
     entry.disposables.dispose()
-    this._logger.info(`closed token=${entry.token} parent=${entry.parentWindowId}`)
+    this._logger.info(`closed parent=${entry.parentWindowId}`)
     this._onDidCloseWindow.fire({
       parentWindowId: entry.parentWindowId,
       token: entry.token,

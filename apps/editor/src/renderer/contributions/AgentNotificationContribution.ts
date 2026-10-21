@@ -18,6 +18,7 @@ import {
   localize,
   toDisposable,
   type IDisposable,
+  type SystemNotificationOrigin,
 } from '@universe-editor/platform'
 import { IAcpSessionService, type IAcpSession } from '../services/acp/session/acpSessionService.js'
 import {
@@ -26,7 +27,10 @@ import {
 } from '../services/acp/session/acpSessionStatus.js'
 import { IAcpChatWidgetService } from '../services/acp/session/acpChatWidgetService.js'
 import { revealSessionChat } from '../services/acp/session/revealSessionChat.js'
+import type { FoundSessionEditor } from '../services/acp/session/revealSessionEditorTab.js'
+import { AcpSessionEditorInput } from '../services/acp/session/acpSessionEditorInput.js'
 import { IWindowFocusService } from '../services/windows/windowFocusService.js'
+import { IWorkbenchWindowService } from '../services/windows/workbenchWindowService.js'
 import { truncateTitle } from '../services/acp/session/sessionTitleFormat.js'
 import {
   getAgentNotificationIcon,
@@ -47,6 +51,7 @@ export class AgentNotificationContribution extends Disposable implements IWorkbe
     @IAcpChatWidgetService private readonly _widgets: IAcpChatWidgetService,
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
     @IWindowFocusService private readonly _windowFocus: IWindowFocusService,
+    @IWorkbenchWindowService private readonly _windows: IWorkbenchWindowService,
   ) {
     super()
 
@@ -143,7 +148,46 @@ export class AgentNotificationContribution extends Disposable implements IWorkbe
     const lines = [truncateTitle(session.title)]
     const workspaceName = this._workspace.current?.name
     if (workspaceName !== undefined && workspaceName.length > 0) lines.push(workspaceName)
-    void this._notifyAndMaybeFocus(session.id, session.agentId, title, lines.join('\n'))
+    void this._notifyAndMaybeFocus(
+      session.id,
+      session.agentId,
+      title,
+      lines.join('\n'),
+      this._originWindowFor(session),
+    )
+  }
+
+  /**
+   * Auxiliary windows share this renderer and therefore this host service, so
+   * the notification must name the window that holds the session's tab — the
+   * main-side host gates, flashes and focuses that window instead of the
+   * parent workspace window. A session with no open tab is background work:
+   * pin it to the workspace window rather than to whatever window happens to
+   * be focused.
+   */
+  private _originWindowFor(session: IAcpSession): SystemNotificationOrigin {
+    const found = this._findSessionEditor(session)
+    if (found === undefined || found.group.part.isMain) return { kind: 'workspace' }
+    const token = this._windows.getWindowForPart(found.group.part)?.token
+    return token !== undefined ? { kind: 'auxiliary', token } : { kind: 'workspace' }
+  }
+
+  private _findSessionEditor(session: IAcpSession): FoundSessionEditor | undefined {
+    // A tab's id may be the local uuid, the current durable id, or an id kept
+    // across a reconnect (hot reconnect issues a new session id). Resolving the
+    // tab's session through getById covers all aliases, so compare identities
+    // instead of running exact-id lookups.
+    for (const group of this._groups.groups) {
+      for (const editor of group.editors) {
+        if (
+          editor instanceof AcpSessionEditorInput &&
+          this._sessions.getById(editor.sessionId)?.id === session.id
+        ) {
+          return { group, editor }
+        }
+      }
+    }
+    return undefined
   }
 
   private async _notifyAndMaybeFocus(
@@ -151,9 +195,15 @@ export class AgentNotificationContribution extends Disposable implements IWorkbe
     agentId: string | undefined,
     title: string,
     body: string,
+    origin: SystemNotificationOrigin,
   ): Promise<void> {
     const icon = getAgentNotificationIcon(agentId)
-    const res = await this._host.notify({ title, body, ...(icon ? { icon } : {}) })
+    const res = await this._host.notify({
+      title,
+      body,
+      originWindow: origin,
+      ...(icon ? { icon } : {}),
+    })
     if (!res.clicked) return
     this._sessions.setActive(sessionId)
     revealSessionChat(

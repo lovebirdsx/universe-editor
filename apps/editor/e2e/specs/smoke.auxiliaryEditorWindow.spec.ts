@@ -122,6 +122,56 @@ async function focusRequests(electronApp: ElectronApplication): Promise<FocusReq
   })
 }
 
+interface FlashRequest {
+  readonly id: number
+  readonly auxiliary: boolean
+  readonly flag: boolean
+}
+
+/** Record taskbar attention requests per native window (same realm test as the focus probe). */
+async function installFlashProbe(electronApp: ElectronApplication): Promise<void> {
+  await electronApp.evaluate(({ BrowserWindow }) => {
+    const holder = globalThis as unknown as { __ueFlashRequests?: unknown[] }
+    holder.__ueFlashRequests = []
+    type WinLike = { id: number; webContents: { getURL(): string } }
+    const prototype = BrowserWindow.prototype as unknown as {
+      flashFrame(this: WinLike, flag: boolean): void
+    }
+    const original = prototype.flashFrame
+    prototype.flashFrame = function (this: WinLike, flag: boolean) {
+      holder.__ueFlashRequests!.push({
+        id: this.id,
+        auxiliary: this.webContents.getURL() === 'about:blank',
+        flag,
+      })
+      return original.call(this, flag)
+    }
+  })
+}
+
+async function clearFlashRequests(electronApp: ElectronApplication): Promise<void> {
+  await electronApp.evaluate(() => {
+    const holder = globalThis as unknown as { __ueFlashRequests?: unknown[] }
+    holder.__ueFlashRequests = []
+  })
+}
+
+async function flashRequests(electronApp: ElectronApplication): Promise<FlashRequest[]> {
+  return electronApp.evaluate(() => {
+    const holder = globalThis as unknown as { __ueFlashRequests?: unknown[] }
+    return (holder.__ueFlashRequests ?? []) as never
+  })
+}
+
+/** Whether any auxiliary group holds an ACP session tab. */
+async function auxiliaryHasSessionTab(page: Page): Promise<boolean> {
+  return (await auxWindows(page))[0]?.groups
+    .flatMap((group) => group.editorUris)
+    .some((uri) => uri.includes('/acp/session/'))
+    ? true
+    : false
+}
+
 /** Clicking main chrome routes activation back to the main window without OS focus. */
 async function activateMainWindow(page: Page): Promise<void> {
   await page.locator('[data-testid="part-activitybar"]').click({ position: { x: 4, y: 4 } })
@@ -1706,5 +1756,97 @@ test.describe('@p0 auxiliary editor windows', () => {
       await page.evaluate((t) => window.__E2E__!.requestCloseAuxiliaryWindow(t), entry.token)
       await expect.poll(async () => (await auxWindows(page)).length).toBe(0)
     })
+  })
+})
+
+/**
+ * Regression guard for the window a session belongs to. The workspace title is
+ * driven by the main part's active editor (not the global activeSession, which
+ * follows focus across windows), and OS notifications name the auxiliary window
+ * that holds the session's tab so Alt+Tab / the taskbar light up the right one.
+ */
+test.describe('session window attribution', () => {
+  test.describe('window title', () => {
+    // The session segment only renders once a workspace is open.
+    test.use({
+      workspaceSeeder: {
+        seed(dir: string) {
+          writeFileSync(join(dir, 'attribution-seed.txt'), 'seed\n')
+        },
+      },
+    })
+
+    test('a session moved to an auxiliary window leaves the main title and names the auxiliary one @regression', async ({
+      electronApp,
+      workbench,
+      page,
+    }) => {
+      await workbench.waitForRestored()
+      await openEchoSession(page)
+
+      await expect.poll(async () => page.title(), { timeout: 10_000 }).toContain(' — ')
+      const suffix = (await page.title()).split(' — ')[1]!
+      const sessionLabel = suffix.replace(/^\S+\s+/, '')
+      expect(sessionLabel.length).toBeGreaterThan(0)
+
+      const child = await waitForAuxWindow(
+        electronApp,
+        workbench,
+        'workbench.action.moveEditorToNewWindow',
+      )
+      await expect.poll(() => auxiliaryHasSessionTab(page)).toBe(true)
+
+      // The auxiliary window names its own session...
+      await expect
+        .poll(() => child.evaluate(() => document.title), { timeout: 10_000 })
+        .toContain(sessionLabel)
+      // ...while the main window must not keep showing a session that is no
+      // longer in its main part (the old global-activeSession leak).
+      await expect.poll(() => page.title()).not.toContain(sessionLabel)
+      expect(await page.title()).not.toContain(' — ')
+
+      await page.evaluate(() =>
+        window.__E2E__!.runCommand('workbench.action.restoreEditorsToMainWindow'),
+      )
+      await expect.poll(async () => (await auxWindows(page)).length).toBe(0)
+      await expect.poll(async () => page.title(), { timeout: 10_000 }).toContain(sessionLabel)
+    })
+  })
+
+  test('a session in an auxiliary window requests attention for that window, not the main one @regression', async ({
+    electronApp,
+    workbench,
+    page,
+  }) => {
+    // macOS attention is app.dock.bounce, a process-wide API the probe cannot
+    // attribute to a window; keep the assertion to platforms using flashFrame.
+    test.skip(process.platform === 'darwin', 'dock bounce is process-wide on macOS')
+    await workbench.waitForRestored()
+    await workbench.waitForBootstrapFocusSettled()
+    const supported = await electronApp.evaluate(({ Notification }) => Notification.isSupported())
+    test.skip(!supported, 'OS notifications are unsupported in this environment')
+
+    await openEchoSession(page)
+    await waitForAuxWindow(electronApp, workbench, 'workbench.action.moveEditorToNewWindow')
+    await expect.poll(() => auxiliaryHasSessionTab(page)).toBe(true)
+
+    await installFlashProbe(electronApp)
+    await clearFlashRequests(electronApp)
+    // The focus gate skips a focused target; drop OS focus from the auxiliary
+    // window so the completion toast is decided (E2E runs in silent mode).
+    await electronApp.evaluate(({ BrowserWindow }) => {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (win.webContents.getURL() === 'about:blank') win.blur()
+      }
+    })
+
+    await page.evaluate(() => window.__E2E__!.sendAcpPrompt('notify attribution'))
+
+    await expect
+      .poll(async () => (await flashRequests(electronApp)).some((r) => r.flag && r.auxiliary), {
+        timeout: 15_000,
+      })
+      .toBe(true)
+    expect((await flashRequests(electronApp)).filter((r) => r.flag && !r.auxiliary)).toHaveLength(0)
   })
 })

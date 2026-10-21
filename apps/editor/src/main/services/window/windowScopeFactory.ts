@@ -146,6 +146,7 @@ export async function createWindowScopedServices(opts: {
       },
       configuredZoomFactor,
       (fallback) => auxiliaryWindows.getDialogParent(win.id, fallback),
+      (token) => auxiliaryWindows.getWindowForToken(win.id, token),
     ),
   )
   // Apply the configured window.zoomLevel as soon as the renderer is ready, before
