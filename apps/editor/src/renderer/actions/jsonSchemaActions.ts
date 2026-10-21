@@ -18,6 +18,7 @@ import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js
 import { SchemaViewerInput } from '../services/editor/SchemaViewerInput.js'
 import { matchSchemasForUri } from '../services/preferences/schemaMatch.js'
 import { basenameOfResource } from '../workbench/files/resourceInfo.js'
+import { resolveTargetEditor } from './editorActionHelpers.js'
 
 const PRECONDITION = 'activeEditorLanguageId == json && activeEditorHasJsonSchema'
 
@@ -36,9 +37,11 @@ export class ShowJsonSchemaAction extends Action2 {
     })
   }
 
-  override run(accessor: ServicesAccessor): void {
+  override run(accessor: ServicesAccessor, arg?: unknown): void {
     const groups = accessor.get(IEditorGroupsService)
-    const active = groups.activeGroup.activeEditor
+    const target = resolveTargetEditor(accessor, arg)
+    if (!target) return
+    const active = target.editor
     if (!(active instanceof FileEditorInput)) return
 
     const schemas = matchSchemasForUri(active.resource)
@@ -60,9 +63,11 @@ export class ShowJsonSchemaAction extends Action2 {
 
     const name = basenameOfResource(active.resource)
     const content = JSON.stringify(schemas[0]!.schema, null, 2)
-    openInLockAwareGroup(groups, new SchemaViewerInput(name, content), {
-      activate: true,
-      pinned: true,
-    })
+    openInLockAwareGroup(
+      groups,
+      new SchemaViewerInput(name, content),
+      { activate: true, pinned: true },
+      target.group,
+    )
   }
 }

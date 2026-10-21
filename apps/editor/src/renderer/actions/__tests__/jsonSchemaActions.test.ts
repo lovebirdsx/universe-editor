@@ -43,10 +43,10 @@ function makeServices(activeEditor: unknown): {
   return { services, openEditor }
 }
 
-async function run(services: ServiceCollection): Promise<void> {
+async function run(services: ServiceCollection, arg?: unknown): Promise<void> {
   const inst = new InstantiationService(services)
   await inst.invokeFunction(async (accessor) => {
-    await CommandsRegistry.getCommand(ShowJsonSchemaAction.ID)!.handler(accessor)
+    await CommandsRegistry.getCommand(ShowJsonSchemaAction.ID)!.handler(accessor, arg)
   })
 }
 
@@ -92,5 +92,53 @@ describe('ShowJsonSchemaAction', () => {
     await run(services)
 
     expect(openEditor).not.toHaveBeenCalled()
+  })
+
+  it('opens the schema in the named group instead of the active group', async () => {
+    disposables.push(registerAction2(ShowJsonSchemaAction))
+    disposables.push(
+      JSONContributionRegistry.registerSchema({
+        uri: 'test://settings',
+        fileMatch: ['**/.claude/settings.json'],
+        schema: { type: 'object', description: 'claude' },
+      }),
+    )
+    const target = asFileInput(fakeFileEditorInput('C:/u/.claude/settings.json', 'json'))
+    const active = asFileInput(fakeFileEditorInput('D:/repo/.claude/settings.json', 'json'))
+    const targetOpen = vi.fn()
+    const activeOpen = vi.fn()
+    const g1 = {
+      id: 1,
+      activeEditor: target,
+      editors: [target],
+      isLocked: false,
+      openEditor: targetOpen,
+    }
+    const g2 = {
+      id: 2,
+      activeEditor: active,
+      editors: [active],
+      isLocked: false,
+      openEditor: activeOpen,
+    }
+    const groups = {
+      activeGroup: g2,
+      groups: [g1, g2],
+      getGroup: (id: number) => (id === 1 ? g1 : id === 2 ? g2 : undefined),
+      activeGroupForOpen: g2,
+      activateGroup: vi.fn(),
+    }
+
+    const services = new ServiceCollection()
+    services.set(IEditorGroupsService, groups as never)
+    services.set(ILoggerService, {
+      createLogger: () => new NullLogger(),
+    } as unknown as ILoggerService)
+
+    await run(services, { groupId: 1 })
+
+    expect(targetOpen).toHaveBeenCalledTimes(1)
+    expect(targetOpen.mock.calls[0]![0]).toBeInstanceOf(SchemaViewerInput)
+    expect(activeOpen).not.toHaveBeenCalled()
   })
 })

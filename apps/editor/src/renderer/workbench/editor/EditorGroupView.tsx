@@ -48,7 +48,6 @@ import {
   type IEditorGroupsService,
   type IEditorInput,
   type IObservable,
-  URI,
 } from '@universe-editor/platform'
 import {
   DragSessionContext,
@@ -91,7 +90,6 @@ import { EditorGroupContext } from './EditorGroupContext.js'
 import { EditorTitleActions } from './EditorTitleActions.js'
 import { EditorTabContextMenu } from './EditorTabContextMenu.js'
 import { EditorGroupContextMenu } from './EditorGroupContextMenu.js'
-import { tabContextMenuResource } from './tabContextMenuResource.js'
 import { ToggleEditorGroupLockAction } from '../../actions/editorActions.js'
 import { FileIcon } from '../files/fileIconTheme.js'
 import { resolveAgentIcon } from '../agents/agentIcon.js'
@@ -113,11 +111,8 @@ const PATH_LIKE_TOOLTIP_SCHEMES = new Set(['file', 'diff', 'merge', 'markdown-pr
 interface TabMenuState {
   readonly x: number
   readonly y: number
-  readonly groupId: number
-  readonly editorId: string
-  readonly editorType: string
-  readonly resource: URI | null
-  readonly sticky: boolean
+  readonly group: IEditorGroup
+  readonly editor: EditorInput
   /** Raised with the ContextMenu key — the menu opens on its first entry. */
   readonly keyboard: boolean
   /** Document the tab lives in (auxiliary windows portal their menus there). */
@@ -127,7 +122,7 @@ interface TabMenuState {
 interface GroupMenuState {
   readonly x: number
   readonly y: number
-  readonly groupId: number
+  readonly group: IEditorGroup
   readonly document: Document
 }
 
@@ -760,7 +755,7 @@ export const EditorGroupView = memo(function EditorGroupView({
     setGroupMenu({
       x: ev.clientX,
       y: ev.clientY,
-      groupId: group.id,
+      group,
       document: ev.currentTarget.ownerDocument,
     })
   }
@@ -1128,11 +1123,8 @@ export const EditorGroupView = memo(function EditorGroupView({
                   setTabMenu({
                     x: ev.clientX,
                     y: ev.clientY,
-                    groupId: group.id,
-                    editorId: e.id,
-                    editorType: e.typeId,
-                    resource: tabContextMenuResource(e),
-                    sticky: group.isSticky(e),
+                    group,
+                    editor: e,
                     keyboard: isKeyboardContextMenu(ev),
                     document: ev.currentTarget.ownerDocument,
                   })
@@ -1207,11 +1199,8 @@ export const EditorGroupView = memo(function EditorGroupView({
         <EditorTabContextMenu
           x={tabMenu.x}
           y={tabMenu.y}
-          groupId={tabMenu.groupId}
-          editorId={tabMenu.editorId}
-          editorType={tabMenu.editorType}
-          resource={tabMenu.resource}
-          sticky={tabMenu.sticky}
+          group={tabMenu.group}
+          editor={tabMenu.editor}
           keyboard={tabMenu.keyboard}
           targetDocument={tabMenu.document}
           commandService={commandService}
@@ -1223,11 +1212,10 @@ export const EditorGroupView = memo(function EditorGroupView({
         <EditorGroupContextMenu
           x={groupMenu.x}
           y={groupMenu.y}
-          groupId={groupMenu.groupId}
+          group={groupMenu.group}
           keyboard={false}
           targetDocument={groupMenu.document}
           commandService={commandService}
-          contextKeyService={contextKeyService}
           onClose={() => setGroupMenu(null)}
         />
       )}

@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
+  Emitter,
+  GroupDirection,
   IEditorGroupsService,
   IEditorResolverService,
   IEditorService,
   ILayoutService,
+  IUriIdentityService,
   IViewDescriptorService,
   IViewsService,
   IWorkspaceService,
@@ -14,6 +17,7 @@ import {
   PartId,
   ServiceCollection,
   URI,
+  UriIdentityService,
   observableValue,
   registerAction2,
   type IDisposable,
@@ -21,8 +25,11 @@ import {
 import type { AcpToolCall, TimelineItem } from '../../services/acp/session/acpSessionService.js'
 import { IAcpSessionService } from '../../services/acp/session/acpSessionService.js'
 import { IAcpChatWidgetService } from '../../services/acp/session/acpChatWidgetService.js'
+import { IAcpSessionHistoryService } from '../../services/acp/session/acpSessionHistory.js'
+import { AcpSessionEditorInput } from '../../services/acp/session/acpSessionEditorInput.js'
 import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
 import {
+  FocusNextAcpTimelineItemAction,
   FocusNextSubagentCardAction,
   FocusPreviousSubagentCardAction,
   FocusSessionChangesAction,
@@ -312,5 +319,60 @@ describe('sub-agent card navigation actions', () => {
   it('routes prev to the last-focused widget', () => {
     disposables.push(registerAction2(FocusPreviousSubagentCardAction))
     expect(invoke(FocusPreviousSubagentCardAction)).toHaveBeenCalledWith('prev')
+  })
+})
+
+// The timeline navigation buttons in a session editor's title bar carry
+// `{ groupId }`. They must drive that group's session — not whichever chat last
+// held focus, which may belong to a different split.
+describe('ACP timeline title actions follow the { groupId } of a non-active group', () => {
+  it('moves the named group session, not the last-focused widget', () => {
+    const groups = new EditorGroupsService()
+    const s1Widget = { moveTimeline: vi.fn() }
+    const s2Widget = { moveTimeline: vi.fn() }
+    const services = new ServiceCollection()
+    services.set(IEditorGroupsService, groups)
+    services.set(IAcpChatWidgetService, {
+      _serviceBrand: undefined,
+      widgetForSession: (id: string) =>
+        id === 's1' ? s1Widget : id === 's2' ? s2Widget : undefined,
+      lastFocusedWidget: s2Widget,
+    } as never)
+    services.set(IAcpSessionHistoryService, {
+      entries: observableValue('history', []),
+      get: () => undefined,
+    } as never)
+    services.set(IAcpSessionService, { getById: () => undefined } as never)
+    services.set(IWorkspaceService, {
+      current: undefined,
+      onDidChangeWorkspace: new Emitter<void>().event,
+    } as never)
+    services.set(IUriIdentityService, new UriIdentityService('linux'))
+    services.set(IEditorService, {
+      activeEditor: { get: () => groups.activeGroup.activeEditor },
+    } as never)
+    const inst = new InstantiationService(services)
+
+    const g1 = groups.activeGroup
+    g1.openEditor(inst.createInstance(AcpSessionEditorInput, 's1', undefined, undefined), {
+      activate: true,
+      pinned: true,
+    })
+    const g2 = groups.addGroup(g1, GroupDirection.Right)
+    g2.openEditor(inst.createInstance(AcpSessionEditorInput, 's2', undefined, undefined), {
+      activate: true,
+      pinned: true,
+    })
+    groups.activateGroup(g2)
+
+    disposables.push(registerAction2(FocusNextAcpTimelineItemAction))
+    inst.invokeFunction((accessor) =>
+      CommandsRegistry.getCommand(FocusNextAcpTimelineItemAction.ID)!.handler(accessor, {
+        groupId: g1.id,
+      }),
+    )
+
+    expect(s1Widget.moveTimeline).toHaveBeenCalledWith('next')
+    expect(s2Widget.moveTimeline).not.toHaveBeenCalled()
   })
 })

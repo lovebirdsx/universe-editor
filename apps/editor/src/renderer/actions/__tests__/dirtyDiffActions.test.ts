@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  GroupDirection,
   ICommandService,
   IEditorGroupsService,
   InstantiationService,
@@ -360,5 +361,77 @@ describe('OpenChangesAction', () => {
     )
 
     expect(commandService.executeCommand).not.toHaveBeenCalled()
+  })
+
+  it('does nothing for a stale explicit group id instead of retargeting the active editor', async () => {
+    const groups = new EditorGroupsService()
+    groups.activeGroup.openEditor(new FileEditorInput(URI.file('D:/repo/file.ts'), {} as never))
+
+    const commandService: ICommandServiceType = {
+      _serviceBrand: undefined,
+      executeCommand: vi.fn(async () => null) as ICommandServiceType['executeCommand'],
+    }
+
+    await runActionWithServices(
+      new ServiceCollection(
+        [IEditorGroupsService, groups],
+        [ICommandService, commandService],
+        [IScmDecorationsService, scmDecorations(true)],
+        [IScmService, scmService()],
+        [IWorkspaceService, localWorkspace()],
+      ),
+      { groupId: 999 },
+    )
+
+    expect(commandService.executeCommand).not.toHaveBeenCalled()
+  })
+
+  it('uses the named group buffer for the editor-title action on a non-active group', async () => {
+    const groups = new EditorGroupsService()
+    const g1 = groups.activeGroup
+    const resource = URI.file('D:/repo/file.ts')
+    const input = new FileEditorInput(resource, {} as never)
+    g1.openEditor(input)
+    FileEditorRegistry.register(
+      input,
+      { getModel: () => ({ getValue: () => 'g1 buffer\n' }) } as never,
+      g1.id,
+    )
+    const g2 = groups.addGroup(g1, GroupDirection.Right)
+    const other = new FileEditorInput(URI.file('D:/repo/other.ts'), {} as never)
+    g2.openEditor(other)
+    groups.activateGroup(g2)
+
+    let payload: unknown
+    const commandService: ICommandServiceType = {
+      _serviceBrand: undefined,
+      executeCommand: vi.fn(async (id: string, ...args: unknown[]) => {
+        if (id === GET_HEAD) return 'head content\n'
+        if (id === '_workbench.openDiff') {
+          payload = args[0]
+          return undefined
+        }
+        return undefined
+      }) as ICommandServiceType['executeCommand'],
+    }
+
+    await runActionWithServices(
+      new ServiceCollection(
+        [IEditorGroupsService, groups],
+        [ICommandService, commandService],
+        [IScmDecorationsService, scmDecorations(true)],
+        [IScmService, scmService()],
+        [IWorkspaceService, localWorkspace()],
+      ),
+      { groupId: g1.id },
+    )
+
+    expect(commandService.executeCommand).toHaveBeenCalledWith(GET_HEAD, resource.fsPath)
+    expect(commandService.executeCommand).not.toHaveBeenCalledWith(GET_HEAD, other.resource.fsPath)
+    expect(payload).toMatchObject({
+      original: 'head content\n',
+      modified: 'g1 buffer\n',
+      originalUri: resource.toString(),
+    })
   })
 })

@@ -133,4 +133,8 @@ export function togglePreviewInGroup(
   // detachEditor cut `source` from the group store without disposing it; the
   // preview now owns its lifecycle.
   preview.adoptSource()
+  // Surface the tab the command just created: an editor-title button may target
+  // a non-active split, and without this the toggle would happen off-screen.
+  if (group !== groups.activeGroup) groups.activateGroup(group)
+  windowFocus?.focusGroup(group)
 }

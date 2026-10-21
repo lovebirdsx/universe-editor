@@ -40,6 +40,7 @@ import { ensureSideGroup } from '../services/editor/openToSide.js'
 import { IWindowFocusService } from '../services/windows/windowFocusService.js'
 import { MonacoModelRegistry } from '../workbench/editor/monaco/MonacoModelRegistry.js'
 import type { IMarkdownPreviewController } from '../services/editor/MarkdownPreviewRegistry.js'
+import { hasTabActionTarget, resolveTargetEditor } from './editorActionHelpers.js'
 
 const MARKDOWN_PRECONDITION = 'activeEditorLanguageId == markdown'
 // Command precondition gates *executability* against the globally-active editor,
@@ -56,11 +57,13 @@ const MARKDOWN_PREVIEW_MENU_WHEN = `activeEditorType == '${MarkdownPreviewInput.
 // backing file, so it keeps MARKDOWN_PREVIEW_MENU_WHEN.)
 const MARKDOWN_READER_MENU_WHEN = `activeEditorType == '${MarkdownPreviewInput.TYPE_ID}' || activeEditorType == '${DocEditorInput.TYPE_ID}'`
 
-function openPreview(accessor: ServicesAccessor, toSide: boolean): void {
+function openPreview(accessor: ServicesAccessor, toSide: boolean, arg?: unknown): void {
   const groups = accessor.get(IEditorGroupsService)
   const windowFocus = accessor.get(IWindowFocusService)
-  const source = groups.activeGroup
-  const active = source.activeEditor
+  const target = resolveTargetEditor(accessor, arg)
+  if (!target) return
+  const source = target.group
+  const active = target.editor
   if (!(active instanceof FileEditorInput)) return
 
   // Open the preview aligned to the source editor's *viewport top*, so it lands
@@ -73,7 +76,7 @@ function openPreview(accessor: ServicesAccessor, toSide: boolean): void {
   // which carries the preview's top-visible line back to the source. Stash a
   // one-shot reveal request the MarkdownPreviewEditor consumes on mount (it maps
   // the source line to a pixel offset as the content lays out).
-  const editor = FileEditorRegistry.get(active)
+  const editor = FileEditorRegistry.get(active, source.id)
   const revealLine =
     editor?.getVisibleRanges()[0]?.startLineNumber ?? editor?.getPosition()?.lineNumber
   if (revealLine !== undefined) {
@@ -81,11 +84,11 @@ function openPreview(accessor: ServicesAccessor, toSide: boolean): void {
   }
 
   if (toSide) {
-    const target = ensureSideGroup(groups, source)
+    const sideGroup = ensureSideGroup(groups, source)
     // The preview inherits the source tab's pin state — a preview-slot source
     // (still in the source group here) yields a slot preview, a pinned one a
     // pinned preview.
-    openPreviewInGroup(groups, target, new MarkdownPreviewInput(active.resource), {
+    openPreviewInGroup(groups, sideGroup, new MarkdownPreviewInput(active.resource), {
       pinned: source.isPinned(active) || active.isDirty,
       windowFocus,
     })
@@ -110,8 +113,8 @@ export class OpenMarkdownPreviewAction extends Action2 {
       f1: true,
     })
   }
-  override run(accessor: ServicesAccessor): void {
-    openPreview(accessor, false)
+  override run(accessor: ServicesAccessor, arg?: unknown): void {
+    openPreview(accessor, false, arg)
   }
 }
 
@@ -129,8 +132,8 @@ export class OpenMarkdownPreviewToSideAction extends Action2 {
       f1: true,
     })
   }
-  override run(accessor: ServicesAccessor): void {
-    openPreview(accessor, true)
+  override run(accessor: ServicesAccessor, arg?: unknown): void {
+    openPreview(accessor, true, arg)
   }
 }
 
@@ -151,11 +154,13 @@ export class OpenMarkdownSourceAction extends Action2 {
       f1: true,
     })
   }
-  override run(accessor: ServicesAccessor): void {
+  override run(accessor: ServicesAccessor, arg?: unknown): void {
     const groups = accessor.get(IEditorGroupsService)
     const windowFocus = accessor.get(IWindowFocusService)
-    const group = groups.activeGroup
-    const active = group.activeEditor
+    const target = resolveTargetEditor(accessor, arg)
+    if (!target) return
+    const group = target.group
+    const active = target.editor
     if (!(active instanceof MarkdownPreviewInput)) return
 
     const previewIndex = group.indexOf(active)
@@ -189,17 +194,32 @@ export class OpenMarkdownSourceAction extends Action2 {
       stashRevealLine()
       group.openEditor(sourceInput, { activate: true, pinned, index: previewIndex })
       group.closeEditor(active)
+      if (group !== groups.activeGroup) {
+        groups.activateGroup(group)
+        windowFocus.focusGroup(group)
+      }
       return
     }
 
     // Side-by-side mode, or a preview opened from a link (no held source):
     // activate an already-open source tab if there is one, else open the source
-    // file in place of the preview tab (matching the toggle-back UX).
+    // file in place of the preview tab (matching the toggle-back UX). Prefer the
+    // clicked group so a same-file tab in another split is not stolen.
+    const sourceInGroup = group.editors.find((e) => e.resource?.toString() === sourceUri.toString())
+    if (sourceInGroup) {
+      // An already-mounted source (side-by-side) kept its scroll synced live; no
+      // reveal request — activating the existing tab must not jump it.
+      group.setActive(sourceInGroup)
+      if (group !== groups.activeGroup) {
+        groups.activateGroup(group)
+        windowFocus.focusGroup(group)
+      }
+      return
+    }
     for (const g of groups.getGroups()) {
+      if (g === group) continue
       const found = g.editors.find((e) => e.resource?.toString() === sourceUri.toString())
       if (found) {
-        // An already-mounted source (side-by-side) kept its scroll synced live; no
-        // reveal request — activating the existing tab must not jump it.
         groups.activateGroup(g)
         g.setActive(found)
         windowFocus.focusGroup(g)
@@ -212,6 +232,10 @@ export class OpenMarkdownSourceAction extends Action2 {
     stashRevealLine()
     group.openEditor(source, { activate: true, pinned, index: previewIndex })
     group.closeEditor(active)
+    if (group !== groups.activeGroup) {
+      groups.activateGroup(group)
+      windowFocus.focusGroup(group)
+    }
   }
 }
 
@@ -228,15 +252,27 @@ export class OpenMarkdownSourceAction extends Action2 {
 // Fall back to the active editor group's preview so the buttons work too.
 // ---------------------------------------------------------------------------
 
-function activePreviewController(
-  accessor: ServicesAccessor,
-): IMarkdownPreviewController | undefined {
-  const active = MarkdownPreviewRegistry.getActive()
-  if (active) return active
-  const editor = accessor.get(IEditorGroupsService).activeGroup.activeEditor
+function previewControllerFor(editor: unknown): IMarkdownPreviewController | undefined {
   if (editor instanceof MarkdownPreviewInput) return MarkdownPreviewRegistry.get(editor.sourceUri)
   if (editor instanceof DocEditorInput) return MarkdownPreviewRegistry.get(editor.resource)
   return undefined
+}
+
+function activePreviewController(
+  accessor: ServicesAccessor,
+  arg?: unknown,
+): IMarkdownPreviewController | undefined {
+  // A title-bar invocation carries the owning group. Resolve against that
+  // editor only: falling back to `getActive()`/the active group could show the
+  // find bar in a different group's preview when the button is clicked while
+  // another group holds keyboard focus.
+  if (hasTabActionTarget(arg)) {
+    const target = resolveTargetEditor(accessor, arg)
+    return target ? previewControllerFor(target.editor) : undefined
+  }
+  const active = MarkdownPreviewRegistry.getActive()
+  if (active) return active
+  return previewControllerFor(accessor.get(IEditorGroupsService).activeGroup.activeEditor)
 }
 
 const FIND_CATEGORY = localize2('command.category.markdown', 'Markdown')
@@ -260,8 +296,8 @@ export class MarkdownPreviewFindAction extends Action2 {
       f1: true,
     })
   }
-  override run(accessor: ServicesAccessor): void {
-    activePreviewController(accessor)?.openFind()
+  override run(accessor: ServicesAccessor, arg?: unknown): void {
+    activePreviewController(accessor, arg)?.openFind()
   }
 }
 
@@ -275,8 +311,8 @@ export class MarkdownPreviewFindNextAction extends Action2 {
       keybinding: { primary: 'f3', when: 'markdownPreviewFindVisible' },
     })
   }
-  override run(accessor: ServicesAccessor): void {
-    activePreviewController(accessor)?.findNext()
+  override run(accessor: ServicesAccessor, arg?: unknown): void {
+    activePreviewController(accessor, arg)?.findNext()
   }
 }
 
@@ -290,8 +326,8 @@ export class MarkdownPreviewFindPreviousAction extends Action2 {
       keybinding: { primary: 'shift+f3', when: 'markdownPreviewFindVisible' },
     })
   }
-  override run(accessor: ServicesAccessor): void {
-    activePreviewController(accessor)?.findPrev()
+  override run(accessor: ServicesAccessor, arg?: unknown): void {
+    activePreviewController(accessor, arg)?.findPrev()
   }
 }
 
@@ -305,8 +341,8 @@ export class MarkdownPreviewFindCloseAction extends Action2 {
       keybinding: { primary: 'escape', when: 'markdownPreviewFindVisible' },
     })
   }
-  override run(accessor: ServicesAccessor): void {
-    activePreviewController(accessor)?.closeFind()
+  override run(accessor: ServicesAccessor, arg?: unknown): void {
+    activePreviewController(accessor, arg)?.closeFind()
   }
 }
 
@@ -330,8 +366,8 @@ export class MarkdownPreviewLinkHintsAction extends Action2 {
       keybinding: { primary: 'f', when: LINK_HINTS_WHEN },
     })
   }
-  override run(accessor: ServicesAccessor): void {
-    activePreviewController(accessor)?.showLinkHints(false)
+  override run(accessor: ServicesAccessor, arg?: unknown): void {
+    activePreviewController(accessor, arg)?.showLinkHints(false)
   }
 }
 
@@ -345,8 +381,8 @@ export class MarkdownPreviewLinkHintsToSideAction extends Action2 {
       keybinding: { primary: 'shift+f', when: LINK_HINTS_WHEN },
     })
   }
-  override run(accessor: ServicesAccessor): void {
-    activePreviewController(accessor)?.showLinkHints(true)
+  override run(accessor: ServicesAccessor, arg?: unknown): void {
+    activePreviewController(accessor, arg)?.showLinkHints(true)
   }
 }
 
@@ -379,7 +415,7 @@ export class MarkdownPreviewHelpAction extends Action2 {
       f1: true,
     })
   }
-  override run(accessor: ServicesAccessor): void {
-    activePreviewController(accessor)?.toggleHelp()
+  override run(accessor: ServicesAccessor, arg?: unknown): void {
+    activePreviewController(accessor, arg)?.toggleHelp()
   }
 }

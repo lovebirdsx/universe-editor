@@ -21,14 +21,12 @@ interface GroupArg {
   readonly groupId?: number
 }
 
-function resolveTargetGroup(accessor: ServicesAccessor, arg: unknown): IEditorGroup {
+function resolveTargetGroup(accessor: ServicesAccessor, arg: unknown): IEditorGroup | undefined {
   const groups = accessor.get(IEditorGroupsService)
   if (typeof arg === 'object' && arg !== null && 'groupId' in arg) {
     const groupId = (arg as GroupArg).groupId
-    if (typeof groupId === 'number') {
-      const group = groups.getGroup(groupId)
-      if (group) return group
-    }
+    // An explicit but stale group id is a no-op — never retarget the active group.
+    return typeof groupId === 'number' ? groups.getGroup(groupId) : undefined
   }
   return groups.activeGroup
 }
@@ -45,6 +43,7 @@ function runMoveEditor(accessor: ServicesAccessor, arg: unknown, copy: boolean):
 
 function runMoveGroup(accessor: ServicesAccessor, arg: unknown, copy: boolean): void {
   const group = resolveTargetGroup(accessor, arg)
+  if (!group) return
   const service = accessor.get(IAuxiliaryEditorWindowService)
   void (copy ? service.copyGroupToNewWindow(group) : service.moveGroupToNewWindow(group))
 }

@@ -84,13 +84,14 @@ async function runCommand(
   inst: InstantiationService,
   ctor: new () => unknown,
   disposables: IDisposable[],
+  arg?: unknown,
 ): Promise<void> {
   disposables.push(registerAction2(ctor as never))
   const id = (ctor as unknown as { ID: string }).ID
   const cmd = CommandsRegistry.getCommand(id)
   if (!cmd) throw new Error(`command not registered: ${id}`)
   await inst.invokeFunction(async (accessor) => {
-    await cmd.handler(accessor)
+    await cmd.handler(accessor, arg)
   })
 }
 
@@ -227,5 +228,53 @@ describe('OpenHtmlPreviewToSideAction', () => {
 
     expect(groups.count).toBe(2)
     expect(side.activeEditor).toBeInstanceOf(HtmlPreviewInput)
+  })
+})
+
+// Editor-title buttons pass `{ groupId }`; a non-active split's HTML preview /
+// source toggle must stay in that group instead of hitting the active tab.
+describe('HTML title actions follow the { groupId } of a non-active group', () => {
+  const disposables: IDisposable[] = []
+
+  afterEach(() => {
+    while (disposables.length > 0) disposables.pop()?.dispose()
+    FileEditorRegistry._resetForTests()
+  })
+
+  function twoGroups() {
+    const { groups, inst } = setup()
+    const g1 = groups.activeGroup
+    const sourceA = inst.createInstance(FileEditorInput, URI.file('/repo/a.html'))
+    g1.openEditor(sourceA, { activate: true, pinned: true })
+    const g2 = groups.addGroup(g1, GroupDirection.Right)
+    const sourceB = inst.createInstance(FileEditorInput, URI.file('/repo/b.html'))
+    g2.openEditor(sourceB, { activate: true, pinned: true })
+    groups.activateGroup(g2)
+    return { groups, inst, g1, g2, sourceB }
+  }
+
+  it('Open Preview toggles the source tab in the named group', async () => {
+    const { inst, g1, g2, sourceB } = twoGroups()
+
+    await runCommand(inst, OpenHtmlPreviewAction, disposables, { groupId: g1.id })
+
+    expect(g1.activeEditor).toBeInstanceOf(HtmlPreviewInput)
+    expect((g1.activeEditor as HtmlPreviewInput).sourceUri.toString()).toBe(
+      URI.file('/repo/a.html').toString(),
+    )
+    expect(g2.activeEditor).toBe(sourceB)
+    expect(g2.editors).toEqual([sourceB])
+  })
+
+  it('Open Source toggles the preview in the named group', async () => {
+    const { inst, g1, g2, sourceB } = twoGroups()
+    const uriA = URI.file('/repo/a.html')
+    g1.openEditor(new HtmlPreviewInput(uriA), { activate: true, pinned: true })
+
+    await runCommand(inst, OpenHtmlSourceAction, disposables, { groupId: g1.id })
+
+    expect(g1.activeEditor).toBeInstanceOf(FileEditorInput)
+    expect(g1.activeEditor?.resource?.toString()).toBe(uriA.toString())
+    expect(g2.activeEditor).toBe(sourceB)
   })
 })

@@ -32,6 +32,7 @@ import { currentRemoteAuthority } from '../services/remote/windowRemoteAuthority
 import { IScmService, resolveScmProviderId } from '../services/extensions/ScmService.js'
 import { scmViewState } from '../workbench/scm/scmViewState.js'
 import { DirtyDiffPeekRegistry } from '../workbench/scm/dirtyDiff/DirtyDiffPeekRegistry.js'
+import { resolveTargetEditor } from './editorActionHelpers.js'
 
 const WHEN = "editorTextFocus && !isInDiffEditor && quickDiffDecorationCount != '0'"
 
@@ -144,14 +145,25 @@ export class OpenChangesAction extends Action2 {
     const options = Array.isArray(rawOptions) ? undefined : rawOptions
     // Everything the accessor provides has to be read before the first await —
     // a ServicesAccessor is only valid for the synchronous part of run().
-    const group = accessor.get(IEditorGroupsService).activeGroup
+    const groups = accessor.get(IEditorGroupsService)
     const commandService = accessor.get(ICommandService)
     const scmDecorations = accessor.get(IScmDecorationsService)
     const scm = accessor.get(IScmService)
     const uriIdentity = accessor.get(IUriIdentityService)
     const remoteAuthority = currentRemoteAuthority(accessor.get(IWorkspaceService).current)
 
-    const active = group.activeEditor
+    // Only an editor-title invocation passes `groupId`. Explorer passes
+    // `{ resource }` for a file that may not be open at all, so it must keep
+    // targeting the active group + provider path rather than being resolved
+    // (and no-op'd) against open editors.
+    const groupId = (arg as { groupId?: unknown } | undefined)?.groupId
+    const hasGroupTarget = typeof groupId === 'number'
+    const resolved = hasGroupTarget ? resolveTargetEditor(accessor, arg) : undefined
+    // An explicit group id that no longer resolves (closed group / empty group)
+    // is a no-op — never retarget the active group.
+    if (hasGroupTarget && !resolved) return
+    const group = resolved?.group ?? groups.activeGroup
+    const active = resolved?.editor ?? group.activeEditor
     const target =
       resolveOpenChangesTarget(arg) ??
       (active instanceof FileEditorInput ? active.resource : undefined)
@@ -177,9 +189,10 @@ export class OpenChangesAction extends Action2 {
         passThrough,
       )
 
-    // Only the active editor has a live buffer to diff against; anything else
-    // (an Explorer target, a spreadsheet opened in a webview) goes to the owning
-    // provider, which knows how to render its own special cases.
+    // Only the targeted group's active editor has a live buffer to diff
+    // against; anything else (an Explorer target, a spreadsheet opened in a
+    // webview) goes to the owning provider, which knows how to render its own
+    // special cases.
     const isActiveFile =
       active instanceof FileEditorInput && uriIdentity.isEqual(active.resource, target)
     if (!isActiveFile) {

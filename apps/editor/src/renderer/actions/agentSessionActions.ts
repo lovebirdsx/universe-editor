@@ -142,6 +142,7 @@ export class NewAgentSessionInCurrentEditorAction extends Action2 {
     const inst = accessor.get(IInstantiationService)
 
     const group = resolveEditorGroup(arg, groups)
+    if (!group) return
     const current = resolveTargetSessionEditor(arg, group) ?? group.activeEditor
     const agentId = resolveSessionEditorAgentId(current, sessions) ?? registry.defaultAgentId()
     const cwd = resolveSessionEditorCwd(current, sessions, history)
@@ -1117,11 +1118,11 @@ async function resolveSessionTranscriptPath(
 function resolveEditorGroup(
   arg: { groupId?: unknown; sessionId?: unknown } | undefined,
   groups: IEditorGroupsService,
-): IEditorGroup {
+): IEditorGroup | undefined {
   const groupId = typeof arg?.groupId === 'number' ? arg.groupId : undefined
   if (groupId !== undefined) {
-    const group = groups.getGroup(groupId)
-    if (group !== undefined) return group
+    // An explicit but stale group id is a no-op — never retarget the active group.
+    return groups.getGroup(groupId)
   }
   const sessionId = typeof arg?.sessionId === 'string' ? arg.sessionId : undefined
   if (sessionId !== undefined) {

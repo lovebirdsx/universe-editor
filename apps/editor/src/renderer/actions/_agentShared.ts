@@ -18,6 +18,7 @@ import {
 } from '../services/acp/session/acpChatWidgetService.js'
 import { AcpSessionEditorInput } from '../services/acp/session/acpSessionEditorInput.js'
 import { basenameOfPath } from '../workbench/files/resourceInfo.js'
+import { hasTabActionTarget, resolveTargetEditor } from './editorActionHelpers.js'
 
 export const CATEGORY = localize2('command.category.agents', 'Agents')
 
@@ -78,8 +79,18 @@ export const ACP_SESSION_EDITOR_ACTIVE_WHEN = `activeEditorTypeId == '${AcpSessi
 // Resolve which chat widget a session command should target. Prefer the widget
 // behind the active session editor (so commands work even when DOM focus never
 // landed in its timeline); otherwise fall back to whichever chat last held focus.
-export function resolveNavWidget(accessor: ServicesAccessor): AcpChatWidget | undefined {
+// An explicit editor-title target (e.g. a non-active split's title bar) skips
+// both fallbacks: it must answer for that editor only, never another chat.
+export function resolveNavWidget(
+  accessor: ServicesAccessor,
+  arg?: unknown,
+): AcpChatWidget | undefined {
   const widgets = accessor.get(IAcpChatWidgetService)
+  if (hasTabActionTarget(arg)) {
+    const target = resolveTargetEditor(accessor, arg)
+    if (!(target?.editor instanceof AcpSessionEditorInput)) return undefined
+    return widgets.widgetForSession(target.editor.sessionId)
+  }
   const active = accessor.get(IEditorService).activeEditor.get()
   if (active instanceof AcpSessionEditorInput) {
     const w = widgets.widgetForSession(active.sessionId)
@@ -107,7 +118,8 @@ export function resolveEditorNavWidget(accessor: ServicesAccessor): AcpChatWidge
 export function resolveSessionWidget(
   accessor: ServicesAccessor,
   sessionId: string | undefined,
+  arg?: unknown,
 ): AcpChatWidget | undefined {
-  if (sessionId === undefined) return resolveNavWidget(accessor)
+  if (sessionId === undefined) return resolveNavWidget(accessor, arg)
   return accessor.get(IAcpChatWidgetService).widgetForSession(sessionId)
 }

@@ -50,9 +50,9 @@ export class ReopenWithAction extends Action2 {
     )
     if (!pick) return
 
-    const group =
-      (args?.groupId !== undefined ? groups.getGroup(args.groupId) : undefined) ??
-      groups.activeGroup
+    const group = args?.groupId !== undefined ? groups.getGroup(args.groupId) : groups.activeGroup
+    // A stale explicit group id is a no-op — never retarget the active group.
+    if (!group) return
     // Prefer the exact tab (two editors can share one URI, e.g. image + text);
     // fall back to the first editor with this resource for resource-only callers.
     const existing =

@@ -38,6 +38,7 @@ import { findByStickyKey } from '../workbench/agents/stickyScroll.js'
 import { subtreeCardKeys } from '../workbench/agents/timelineCollapse.js'
 import { createdFilePath } from '../workbench/agents/toolCallDisplay.js'
 import { toolCallPathUri } from '../workbench/agents/toolCallPaths.js'
+import { hasTabActionTarget, resolveTargetEditor } from './editorActionHelpers.js'
 import {
   ACP_CHAT_CARD_GROUP,
   ACP_COPY_GROUP,
@@ -81,8 +82,8 @@ export class FocusNextAcpTimelineItemAction extends Action2 {
       f1: true,
     })
   }
-  override run(accessor: ServicesAccessor): void {
-    resolveNavWidget(accessor)?.moveTimeline('next')
+  override run(accessor: ServicesAccessor, arg?: unknown): void {
+    resolveNavWidget(accessor, arg)?.moveTimeline('next')
   }
 }
 
@@ -109,8 +110,8 @@ export class FocusPreviousAcpTimelineItemAction extends Action2 {
       f1: true,
     })
   }
-  override run(accessor: ServicesAccessor): void {
-    resolveNavWidget(accessor)?.moveTimeline('prev')
+  override run(accessor: ServicesAccessor, arg?: unknown): void {
+    resolveNavWidget(accessor, arg)?.moveTimeline('prev')
   }
 }
 
@@ -137,8 +138,8 @@ export class FocusTopAcpTimelineAction extends Action2 {
       f1: true,
     })
   }
-  override run(accessor: ServicesAccessor): void {
-    resolveNavWidget(accessor)?.moveTimeline('first')
+  override run(accessor: ServicesAccessor, arg?: unknown): void {
+    resolveNavWidget(accessor, arg)?.moveTimeline('first')
   }
 }
 
@@ -165,8 +166,8 @@ export class FocusBottomAcpTimelineAction extends Action2 {
       f1: true,
     })
   }
-  override run(accessor: ServicesAccessor): void {
-    resolveNavWidget(accessor)?.moveTimeline('last')
+  override run(accessor: ServicesAccessor, arg?: unknown): void {
+    resolveNavWidget(accessor, arg)?.moveTimeline('last')
   }
 }
 
@@ -284,7 +285,7 @@ export class JumpToAcpPlanAction extends Action2 {
     })
   }
   override run(accessor: ServicesAccessor, arg?: unknown): void {
-    resolveSessionWidget(accessor, readChatContextArg(arg).sessionId)?.jumpToPlan()
+    resolveSessionWidget(accessor, readChatContextArg(arg).sessionId, arg)?.jumpToPlan()
   }
 }
 
@@ -310,11 +311,19 @@ export class ShowAcpSessionChangesAction extends Action2 {
       f1: true,
     })
   }
-  override async run(accessor: ServicesAccessor): Promise<void> {
+  override async run(accessor: ServicesAccessor, arg?: unknown): Promise<void> {
     // Snapshot every service synchronously — the accessor dies past the first await.
     const layoutService = accessor.get(ILayoutService)
     const viewsService = accessor.get(IViewsService)
     const viewDescriptorService = accessor.get(IViewDescriptorService)
+    // The view lists changes for the active session. An editor-title click on a
+    // non-active group must select that group's session first, or the view would
+    // show another split's session.
+    if (hasTabActionTarget(arg)) {
+      const target = resolveTargetEditor(accessor, arg)
+      if (!(target?.editor instanceof AcpSessionEditorInput)) return
+      accessor.get(IAcpSessionService).setActive(target.editor.sessionId)
+    }
 
     // Explorer-style toggle: re-invoking while the view holds focus hides the sidebar.
     if (
@@ -715,7 +724,7 @@ export class ChatFindAction extends Action2 {
     })
   }
   override run(accessor: ServicesAccessor, arg?: unknown): void {
-    resolveSessionWidget(accessor, readChatContextArg(arg).sessionId)?.openFind()
+    resolveSessionWidget(accessor, readChatContextArg(arg).sessionId, arg)?.openFind()
   }
 }
 

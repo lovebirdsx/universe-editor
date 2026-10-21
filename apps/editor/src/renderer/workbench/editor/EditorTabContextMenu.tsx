@@ -1,34 +1,38 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  EditorTabContextMenu — the right-click menu on an editor tab. Wraps the
- *  workbench-ui ContextMenu with a scoped ContextKeyService that mirrors the
- *  *clicked* tab (its editor type + resource scheme), so `when`-clauses gate
- *  each entry against the tab under the cursor rather than showing everything
- *  unconditionally. Reads fall back to the root context, so Close-group
- *  preconditions (hasActiveEditor / editorIsOpen / …) still resolve correctly.
+ *  workbench-ui ContextMenu with a scoped ContextKeyService seeded from the
+ *  *clicked* tab (editor type, resource scheme, position in the group, pin and
+ *  dirty state, …), so every `when`/precondition gates each entry against the
+ *  tab under the cursor rather than the workbench-active editor.
  *--------------------------------------------------------------------------------------------*/
 
 import { useMemo } from 'react'
 import {
+  IUriIdentityService,
   MenuId,
+  type EditorInput,
   type ICommandService,
   type IContextKeyService,
-  type URI,
+  type IEditorGroup,
 } from '@universe-editor/platform'
 import { ContextMenu } from '@universe-editor/workbench-ui'
 import { renderMenuIcon } from '../icons/menuIcon.js'
 import { useContextMenuMemory } from '../contextMenu/useContextMenuMemory.js'
+import { useRemoteAuthority } from '../useRemoteAuthority.js'
+import { useOptionalService } from '../useService.js'
 import { useScopedContextKey } from '../useScopedContextKey.js'
+import { IDirtyDiffNavigationService } from '../../services/scm/DirtyDiffNavigationService.js'
+import { IScmDecorationsService } from '../../services/scm/ScmDecorationsService.js'
+import { IScmService } from '../../services/extensions/ScmService.js'
+import { editorScopedContextValues } from './editorScopedContext.js'
+import { tabContextMenuResource } from './tabContextMenuResource.js'
 
 interface Props {
   readonly x: number
   readonly y: number
-  readonly groupId: number
-  readonly editorId: string
-  readonly editorType: string
-  readonly resource: URI | null
-  /** Whether the clicked tab is sticky — gates the Pin/Unpin menu entry pair. */
-  readonly sticky: boolean
+  readonly group: IEditorGroup
+  readonly editor: EditorInput
   /** Raised with the ContextMenu key — the menu opens on its first entry. */
   readonly keyboard: boolean
   readonly targetDocument?: Document | undefined
@@ -40,30 +44,37 @@ interface Props {
 export function EditorTabContextMenu({
   x,
   y,
-  groupId,
-  editorId,
-  editorType,
-  resource,
-  sticky,
+  group,
+  editor,
   keyboard,
   targetDocument,
   commandService,
   contextKeyService,
   onClose,
 }: Props) {
-  const resourceScheme = resource?.scheme ?? ''
-  const scopedContext = useScopedContextKey(contextKeyService, {
-    activeEditorType: editorType,
-    resourceScheme,
-    // Explicit boolean both ways: the clicked tab's pin state, not whatever the
-    // root context last synced for the active editor.
-    activeEditorIsPinned: sticky,
-  })
+  const resource = tabContextMenuResource(editor)
+  const editorType = editor.typeId
+  const uriIdentity = useOptionalService(IUriIdentityService)
+  const dirtyDiff = useOptionalService(IDirtyDiffNavigationService)
+  const scmDecorations = useOptionalService(IScmDecorationsService)
+  const scmService = useOptionalService(IScmService)
+  const remoteAuthority = useRemoteAuthority()
+  const scopedContext = useScopedContextKey(
+    contextKeyService,
+    editorScopedContextValues(group, editor, {
+      resource,
+      uriIdentity,
+      dirtyDiff,
+      scmDecorations,
+      scmService,
+      remoteAuthority,
+    }),
+  )
   const memory = useContextMenuMemory()
 
   const args = useMemo(
-    () => [{ groupId, editorId, resource: resource?.toJSON() ?? undefined }],
-    [groupId, editorId, resource],
+    () => [{ groupId: group.id, editorId: editor.id, resource: resource?.toJSON() ?? undefined }],
+    [group.id, editor.id, resource],
   )
 
   return (

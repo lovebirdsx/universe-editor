@@ -14,6 +14,7 @@ import { StrictMode, useRef, useState } from 'react'
 import { act, fireEvent, render, screen, cleanup } from '@testing-library/react'
 import {
   ContextKeyService,
+  EditorInput,
   ICommandService,
   IContextKeyService,
   InstantiationService,
@@ -31,6 +32,22 @@ import {
   CopyFileRelativePathAction,
 } from '../../../actions/fileCopyActions.js'
 import { RevealInExplorerAction, RevealInOSExplorerAction } from '../../../actions/revealActions.js'
+import { EditorGroupsService } from '../../../services/editor/EditorGroupsService.js'
+
+class FakeEditor extends EditorInput {
+  constructor(private readonly _name: string) {
+    super()
+  }
+  get typeId() {
+    return 'file'
+  }
+  get resource() {
+    return URI.file(`D:/${this._name}`)
+  }
+  getName() {
+    return this._name
+  }
+}
 
 const stubCommand: ICommandServiceType = {
   _serviceBrand: undefined,
@@ -61,15 +78,25 @@ function register(): void {
 // after the menu has mounted.
 function Harness() {
   const [, force] = useState(0)
-  const instRef = useRef<{ inst: InstantiationService; ctx: ContextKeyService } | null>(null)
+  const instRef = useRef<{
+    inst: InstantiationService
+    ctx: ContextKeyService
+    group: ReturnType<EditorGroupsService['addGroup']>
+    editor: FakeEditor
+  } | null>(null)
   if (!instRef.current) {
     const contextKeyService = new ContextKeyService()
     const services = new ServiceCollection()
     services.set(ICommandService, stubCommand)
     services.set(IContextKeyService, contextKeyService)
-    instRef.current = { inst: new InstantiationService(services), ctx: contextKeyService }
+    const inst = new InstantiationService(services)
+    const groups = new EditorGroupsService()
+    disposables.push(groups)
+    const editor = new FakeEditor('foo.txt')
+    groups.activeGroup.openEditor(editor, { activate: true, pinned: true })
+    instRef.current = { inst, ctx: contextKeyService, group: groups.activeGroup, editor }
   }
-  const { inst, ctx } = instRef.current
+  const { inst, ctx, group, editor } = instRef.current
   return (
     <ServicesContext.Provider value={inst}>
       <button data-testid="rerender" onClick={() => force((n) => n + 1)}>
@@ -78,11 +105,8 @@ function Harness() {
       <EditorTabContextMenu
         x={10}
         y={10}
-        groupId={1}
-        editorId="editor-1"
-        editorType="file"
-        resource={URI.file('D:/foo.txt')}
-        sticky={false}
+        group={group}
+        editor={editor}
         keyboard={false}
         commandService={stubCommand}
         contextKeyService={ctx}

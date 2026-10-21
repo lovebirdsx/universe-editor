@@ -9,6 +9,7 @@
 
 import type {
   EditorInput,
+  IEditorGroup,
   IEditorGroupsService,
   IOpenEditorOptions,
 } from '@universe-editor/platform'
@@ -17,10 +18,16 @@ export function openInLockAwareGroup(
   groups: IEditorGroupsService,
   editor: EditorInput,
   options?: IOpenEditorOptions,
+  preferredGroup?: IEditorGroup,
 ): void {
-  // Fall back to activeGroup for minimal test doubles that predate the
-  // lock-aware getter; production always provides activeGroupForOpen.
-  const target = groups.activeGroupForOpen ?? groups.activeGroup
+  // A caller that names its owning group (e.g. an editor-title button on a
+  // non-active split) opens there unless that group is locked.
+  const target =
+    preferredGroup !== undefined && !preferredGroup.isLocked
+      ? preferredGroup
+      : // Fall back to activeGroup for minimal test doubles that predate the
+        // lock-aware getter; production always provides activeGroupForOpen.
+        (groups.activeGroupForOpen ?? groups.activeGroup)
   target.openEditor(editor, options)
   if (target !== groups.activeGroup && options?.activate !== false) {
     groups.activateGroup(target)

@@ -49,7 +49,7 @@ import {
   SplitEditorUpAction,
   UnpinEditorAction,
 } from '../editorActions.js'
-import { resolveTargetEditor } from '../editorActionHelpers.js'
+import { hasTabActionTarget, resolveTargetEditor } from '../editorActionHelpers.js'
 import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
@@ -380,6 +380,48 @@ describe('Built-in editor Action2s', () => {
       resolveTargetEditor(accessor, { resource: a.resource.toJSON() }),
     )
     expect(result?.editor).toBe(a)
+  })
+
+  it('resolveTargetEditor returns undefined for a stale editorId instead of the active editor', () => {
+    const svc = new EditorGroupsService()
+    svc.activeGroup.openEditor(new TestEditor('active'))
+    const inst = makeAccessor(svc)
+    const result = inst.invokeFunction((accessor) =>
+      resolveTargetEditor(accessor, { editorId: 'closed-editor-id' }),
+    )
+    expect(result).toBeUndefined()
+  })
+
+  it('resolveTargetEditor returns undefined for a stale resource instead of the active editor', () => {
+    const svc = new EditorGroupsService()
+    svc.activeGroup.openEditor(new TestEditor('active'))
+    const inst = makeAccessor(svc)
+    const result = inst.invokeFunction((accessor) =>
+      resolveTargetEditor(accessor, { resource: URI.file('D:/closed.txt').toJSON() }),
+    )
+    expect(result).toBeUndefined()
+  })
+
+  it('resolveTargetEditor returns undefined for a missing or empty group', () => {
+    const svc = new EditorGroupsService()
+    svc.activeGroup.openEditor(new TestEditor('active'))
+    const emptyGroup = svc.addGroup(svc.activeGroup, 3)
+    const inst = makeAccessor(svc)
+    expect(
+      inst.invokeFunction((accessor) => resolveTargetEditor(accessor, { groupId: 999 })),
+    ).toBeUndefined()
+    expect(
+      inst.invokeFunction((accessor) => resolveTargetEditor(accessor, { groupId: emptyGroup.id })),
+    ).toBeUndefined()
+  })
+
+  it('hasTabActionTarget distinguishes editor menu args from unrelated payloads', () => {
+    expect(hasTabActionTarget(undefined)).toBe(false)
+    expect(hasTabActionTarget({ sessionId: 's1', slotKey: 'main' })).toBe(false)
+    expect(hasTabActionTarget({ resource: null })).toBe(false)
+    expect(hasTabActionTarget({ groupId: 1 })).toBe(true)
+    expect(hasTabActionTarget({ editorId: 'e1' })).toBe(true)
+    expect(hasTabActionTarget({ resource: URI.file('D:/a.txt').toJSON() })).toBe(true)
   })
 
   it('NextEditor wraps to first editor', () => {

@@ -22,6 +22,7 @@ import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
 import { DiffEditorRegistry } from '../services/editor/DiffEditorRegistry.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { WebviewDiffInput } from '../services/editor/WebviewDiffInput.js'
+import { resolveTargetEditor } from './editorActionHelpers.js'
 
 export interface OpenDiffPayload {
   readonly title: string
@@ -233,9 +234,11 @@ export class OpenDiffSourceFileAction extends Action2 {
     })
   }
 
-  override run(accessor: ServicesAccessor): void {
-    const group = accessor.get(IEditorGroupsService).activeGroup
-    const active = group.activeEditor
+  override run(accessor: ServicesAccessor, arg?: unknown): void {
+    const target = resolveTargetEditor(accessor, arg)
+    if (!target) return
+    const group = target.group
+    const active = target.editor
     if (!(active instanceof DiffEditorInput)) return
     const resource = active.openableResource
     if (!resource) return
@@ -244,11 +247,12 @@ export class OpenDiffSourceFileAction extends Action2 {
   }
 }
 
-function goToDiff(accessor: ServicesAccessor, target: 'next' | 'previous'): void {
-  const group = accessor.get(IEditorGroupsService).activeGroup
-  const active = group.activeEditor
+function goToDiff(accessor: ServicesAccessor, direction: 'next' | 'previous', arg?: unknown): void {
+  const target = resolveTargetEditor(accessor, arg)
+  if (!target) return
+  const { group, editor: active } = target
   if (!(active instanceof DiffEditorInput)) return
-  DiffEditorRegistry.get(active, group.id)?.goToDiff(target)
+  DiffEditorRegistry.get(active, group.id)?.goToDiff(direction)
 }
 
 export class GoToNextDifferenceAction extends Action2 {
@@ -267,8 +271,8 @@ export class GoToNextDifferenceAction extends Action2 {
     })
   }
 
-  override run(accessor: ServicesAccessor): void {
-    goToDiff(accessor, 'next')
+  override run(accessor: ServicesAccessor, arg?: unknown): void {
+    goToDiff(accessor, 'next', arg)
   }
 }
 
@@ -288,7 +292,7 @@ export class GoToPreviousDifferenceAction extends Action2 {
     })
   }
 
-  override run(accessor: ServicesAccessor): void {
-    goToDiff(accessor, 'previous')
+  override run(accessor: ServicesAccessor, arg?: unknown): void {
+    goToDiff(accessor, 'previous', arg)
   }
 }

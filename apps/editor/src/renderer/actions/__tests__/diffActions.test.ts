@@ -4,6 +4,8 @@ import {
   Emitter,
   GroupDirection,
   IEditorGroupsService,
+  IFileService,
+  IInstantiationService,
   IWorkspaceService,
   InstantiationService,
   ServiceCollection,
@@ -13,8 +15,11 @@ import {
   type IWorkspaceService as IWorkspaceServiceType,
 } from '@universe-editor/platform'
 import { OpenDiffAction, OpenWebviewDiffAction, type OpenDiffPayload } from '../diffActions.js'
+import { GoToNextDifferenceAction, OpenDiffSourceFileAction } from '../diffActions.js'
 import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
 import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
+import { DiffEditorRegistry } from '../../services/editor/DiffEditorRegistry.js'
+import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { WebviewDiffInput } from '../../services/editor/WebviewDiffInput.js'
 
 function makeWorkspaceService(folder?: URI): IWorkspaceServiceType {
@@ -37,7 +42,10 @@ function buildServices(groups: EditorGroupsService, folder?: URI): Instantiation
   const services = new ServiceCollection()
   services.set(IEditorGroupsService, groups)
   services.set(IWorkspaceService, makeWorkspaceService(folder))
-  return new InstantiationService(services)
+  services.set(IFileService, {} as never)
+  const inst = new InstantiationService(services)
+  services.set(IInstantiationService, inst)
+  return inst
 }
 
 function payload(overrides?: Partial<OpenDiffPayload>): OpenDiffPayload {
@@ -208,5 +216,75 @@ describe('OpenDiffAction — lock-aware routing', () => {
     expect(input).toBeInstanceOf(WebviewDiffInput)
     expect((input as WebviewDiffInput).leftUri.toString()).toBe('remote-ssh://ws/home/x/a.xlsx')
     expect((input as WebviewDiffInput).rightUri.toString()).toBe('remote-ssh://ws/home/x/a.xlsx')
+  })
+})
+
+// A diff's title-bar buttons carry `{ groupId }`. They must act on the diff in
+// that group even when another split is active.
+describe('diff title actions follow the { groupId } of a non-active group', () => {
+  const disposables: Array<{ dispose(): void }> = []
+
+  afterEach(() => {
+    while (disposables.length > 0) disposables.pop()?.dispose()
+    DiffEditorRegistry._resetForTests()
+  })
+
+  function twoGroups() {
+    const groups = new EditorGroupsService()
+    const inst = buildServices(groups)
+    const g1 = groups.activeGroup
+    const resource = URI.file('/ws/a.txt')
+    const diff = inst.createInstance(
+      DiffEditorInput,
+      resource,
+      'before',
+      'after',
+      undefined,
+      resource,
+      false,
+    )
+    g1.openEditor(diff, { activate: true, pinned: true })
+    const g2 = groups.addGroup(g1, GroupDirection.Right)
+    const other = inst.createInstance(FileEditorInput, URI.file('/ws/b.txt'))
+    g2.openEditor(other, { activate: true, pinned: true })
+    groups.activateGroup(g2)
+    return { groups, inst, g1, g2, diff, other, resource }
+  }
+
+  it('Open File opens the source in the named group', () => {
+    const { inst, g1, g2, other, resource } = twoGroups()
+    disposables.push(registerAction2(OpenDiffSourceFileAction))
+
+    inst.invokeFunction((accessor) =>
+      CommandsRegistry.getCommand(OpenDiffSourceFileAction.ID)!.handler(accessor, {
+        groupId: g1.id,
+      }),
+    )
+
+    const opened = g1.editors.find(
+      (e) => e instanceof FileEditorInput && e.resource?.toString() === resource.toString(),
+    )
+    expect(opened).toBeDefined()
+    expect(g2.editors).toEqual([other])
+  })
+
+  it('Go to Next Difference drives the named group diff editor', () => {
+    const { inst, g1, g2, diff, other } = twoGroups()
+    const calls: string[] = []
+    DiffEditorRegistry.register(
+      diff,
+      { goToDiff: (target: string) => calls.push(target) } as never,
+      g1.id,
+    )
+    disposables.push(registerAction2(GoToNextDifferenceAction))
+
+    inst.invokeFunction((accessor) =>
+      CommandsRegistry.getCommand(GoToNextDifferenceAction.ID)!.handler(accessor, {
+        groupId: g1.id,
+      }),
+    )
+
+    expect(calls).toEqual(['next'])
+    expect(g2.editors).toEqual([other])
   })
 })

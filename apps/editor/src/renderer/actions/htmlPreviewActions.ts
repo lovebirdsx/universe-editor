@@ -37,6 +37,7 @@ import { HtmlPreviewInput } from '../services/editor/HtmlPreviewInput.js'
 import { openPreviewInGroup, togglePreviewInGroup } from '../services/editor/openPreviewInGroup.js'
 import { ensureSideGroup } from '../services/editor/openToSide.js'
 import { IWindowFocusService } from '../services/windows/windowFocusService.js'
+import { resolveTargetEditor } from './editorActionHelpers.js'
 
 const HTML_PRECONDITION = 'activeEditorLanguageId == html'
 const HTML_PREVIEW_PRECONDITION = `activeEditorTypeId == '${HtmlPreviewInput.TYPE_ID}'`
@@ -45,11 +46,13 @@ const HTML_PREVIEW_PRECONDITION = `activeEditorTypeId == '${HtmlPreviewInput.TYP
 // preview's title button whenever another group became active.
 const HTML_PREVIEW_MENU_WHEN = `activeEditorType == '${HtmlPreviewInput.TYPE_ID}'`
 
-function openPreview(accessor: ServicesAccessor, toSide: boolean): void {
+function openPreview(accessor: ServicesAccessor, toSide: boolean, arg?: unknown): void {
   const groups = accessor.get(IEditorGroupsService)
   const windowFocus = accessor.get(IWindowFocusService)
-  const source = groups.activeGroup
-  const active = source.activeEditor
+  const resolved = resolveTargetEditor(accessor, arg)
+  if (!resolved) return
+  const source = resolved.group
+  const active = resolved.editor
   if (!(active instanceof FileEditorInput)) return
 
   if (toSide) {
@@ -82,8 +85,8 @@ export class OpenHtmlPreviewAction extends Action2 {
       f1: true,
     })
   }
-  override run(accessor: ServicesAccessor): void {
-    openPreview(accessor, false)
+  override run(accessor: ServicesAccessor, arg?: unknown): void {
+    openPreview(accessor, false, arg)
   }
 }
 
@@ -101,8 +104,8 @@ export class OpenHtmlPreviewToSideAction extends Action2 {
       f1: true,
     })
   }
-  override run(accessor: ServicesAccessor): void {
-    openPreview(accessor, true)
+  override run(accessor: ServicesAccessor, arg?: unknown): void {
+    openPreview(accessor, true, arg)
   }
 }
 
@@ -119,12 +122,14 @@ export class OpenHtmlSourceAction extends Action2 {
       f1: true,
     })
   }
-  override run(accessor: ServicesAccessor): void {
+  override run(accessor: ServicesAccessor, arg?: unknown): void {
     const groups = accessor.get(IEditorGroupsService)
     const inst = accessor.get(IInstantiationService)
     const windowFocus = accessor.get(IWindowFocusService)
-    const group = groups.activeGroup
-    const active = group.activeEditor
+    const resolved = resolveTargetEditor(accessor, arg)
+    if (!resolved) return
+    const group = resolved.group
+    const active = resolved.editor
     if (!(active instanceof HtmlPreviewInput)) return
 
     const previewIndex = group.indexOf(active)
@@ -139,12 +144,27 @@ export class OpenHtmlSourceAction extends Action2 {
       // the close below is a no-op.
       group.openEditor(sourceInput, { activate: true, pinned, index: previewIndex })
       group.closeEditor(active)
+      if (group !== groups.activeGroup) {
+        groups.activateGroup(group)
+        windowFocus.focusGroup(group)
+      }
       return
     }
 
     // Side-by-side or link-opened preview (no held source): activate an already
     // open source tab if present, else open the source file in the preview's slot.
+    // Prefer the clicked group so a same-file tab in another split is not stolen.
+    const sourceInGroup = group.editors.find((e) => e.resource?.toString() === sourceUri.toString())
+    if (sourceInGroup) {
+      group.setActive(sourceInGroup)
+      if (group !== groups.activeGroup) {
+        groups.activateGroup(group)
+        windowFocus.focusGroup(group)
+      }
+      return
+    }
     for (const g of groups.getGroups()) {
+      if (g === group) continue
       const found = g.editors.find((e) => e.resource?.toString() === sourceUri.toString())
       if (found) {
         groups.activateGroup(g)
@@ -156,5 +176,9 @@ export class OpenHtmlSourceAction extends Action2 {
     const source = inst.createInstance(FileEditorInput, sourceUri)
     group.openEditor(source, { activate: true, pinned, index: previewIndex })
     group.closeEditor(active)
+    if (group !== groups.activeGroup) {
+      groups.activateGroup(group)
+      windowFocus.focusGroup(group)
+    }
   }
 }
